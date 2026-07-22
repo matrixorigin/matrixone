@@ -10803,16 +10803,22 @@ func makeTimeCheck(overloads []overload, inputs []types.Type) checkResult {
 		return newCheckResultWithFailure(failedFunctionParametersWrong)
 	}
 	exactSecond := isMakeTimeTextType(inputs[2].Oid) || inputs[2].Oid.IsDecimal()
-	if !isMakeTimeTextType(inputs[0].Oid) && !isMakeTimeTextType(inputs[1].Oid) && !exactSecond {
+	exactHour := inputs[0].Oid.IsDecimal()
+	exactMinute := inputs[1].Oid.IsDecimal()
+	if !isMakeTimeTextType(inputs[0].Oid) && !isMakeTimeTextType(inputs[1].Oid) && !exactHour && !exactMinute && !exactSecond {
 		return fixedTypeMatch(overloads, inputs)
 	}
 
 	targetOids := []types.T{types.T_float64, types.T_float64, types.T_float64}
 	if isMakeTimeTextType(inputs[0].Oid) {
 		targetOids[0] = types.T_varchar
+	} else if exactHour {
+		targetOids[0] = types.T_decimal128
 	}
 	if isMakeTimeTextType(inputs[1].Oid) {
 		targetOids[1] = types.T_varchar
+	} else if exactMinute {
+		targetOids[1] = types.T_decimal128
 	}
 	if exactSecond {
 		targetOids[2] = types.T_varchar
@@ -11397,6 +11403,66 @@ var supportedControlBuiltIns = []FuncNew{
 				newOp: func() executeLogicOfOverload {
 					return MakeTime
 				},
+			},
+			{
+				overloadId: 12,
+				args:       []types.T{types.T_decimal128, types.T_float64, types.T_float64},
+				retType:    makeTimeReturnType,
+				newOp:      func() executeLogicOfOverload { return MakeTime },
+			},
+			{
+				overloadId: 13,
+				args:       []types.T{types.T_decimal128, types.T_varchar, types.T_float64},
+				retType:    makeTimeReturnType,
+				newOp:      func() executeLogicOfOverload { return MakeTime },
+			},
+			{
+				overloadId: 14,
+				args:       []types.T{types.T_decimal128, types.T_decimal128, types.T_float64},
+				retType:    makeTimeReturnType,
+				newOp:      func() executeLogicOfOverload { return MakeTime },
+			},
+			{
+				overloadId: 15,
+				args:       []types.T{types.T_decimal128, types.T_float64, types.T_varchar},
+				retType:    makeTimeReturnType,
+				newOp:      func() executeLogicOfOverload { return MakeTime },
+			},
+			{
+				overloadId: 16,
+				args:       []types.T{types.T_decimal128, types.T_varchar, types.T_varchar},
+				retType:    makeTimeReturnType,
+				newOp:      func() executeLogicOfOverload { return MakeTime },
+			},
+			{
+				overloadId: 17,
+				args:       []types.T{types.T_decimal128, types.T_decimal128, types.T_varchar},
+				retType:    makeTimeReturnType,
+				newOp:      func() executeLogicOfOverload { return MakeTime },
+			},
+			{
+				overloadId: 18,
+				args:       []types.T{types.T_float64, types.T_decimal128, types.T_float64},
+				retType:    makeTimeReturnType,
+				newOp:      func() executeLogicOfOverload { return MakeTime },
+			},
+			{
+				overloadId: 19,
+				args:       []types.T{types.T_varchar, types.T_decimal128, types.T_float64},
+				retType:    makeTimeReturnType,
+				newOp:      func() executeLogicOfOverload { return MakeTime },
+			},
+			{
+				overloadId: 20,
+				args:       []types.T{types.T_float64, types.T_decimal128, types.T_varchar},
+				retType:    makeTimeReturnType,
+				newOp:      func() executeLogicOfOverload { return MakeTime },
+			},
+			{
+				overloadId: 21,
+				args:       []types.T{types.T_varchar, types.T_decimal128, types.T_varchar},
+				retType:    makeTimeReturnType,
+				newOp:      func() executeLogicOfOverload { return MakeTime },
 			},
 		},
 	},

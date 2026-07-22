@@ -385,6 +385,36 @@ func TestMakeTimeReturnScale(t *testing.T) {
 	require.Equal(t, types.T_time.ToTypeWithScale(6), defaultFloatResult.retType)
 }
 
+func TestMakeTimeDecimalHourMinuteUseExactOverloads(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	decimalType := types.New(types.T_decimal128, 30, 20)
+
+	tests := []struct {
+		inputs []types.Type
+		args   []types.T
+	}{
+		{[]types.Type{decimalType, types.T_int64.ToType(), types.T_int64.ToType()}, []types.T{types.T_decimal128, types.T_float64, types.T_float64}},
+		{[]types.Type{decimalType, types.T_varchar.ToType(), types.T_int64.ToType()}, []types.T{types.T_decimal128, types.T_varchar, types.T_float64}},
+		{[]types.Type{decimalType, decimalType, types.T_int64.ToType()}, []types.T{types.T_decimal128, types.T_decimal128, types.T_float64}},
+		{[]types.Type{decimalType, types.T_int64.ToType(), types.T_varchar.ToType()}, []types.T{types.T_decimal128, types.T_float64, types.T_varchar}},
+		{[]types.Type{decimalType, types.T_varchar.ToType(), types.T_varchar.ToType()}, []types.T{types.T_decimal128, types.T_varchar, types.T_varchar}},
+		{[]types.Type{types.T_int64.ToType(), decimalType, types.T_int64.ToType()}, []types.T{types.T_float64, types.T_decimal128, types.T_float64}},
+		{[]types.Type{types.T_varchar.ToType(), decimalType, types.T_int64.ToType()}, []types.T{types.T_varchar, types.T_decimal128, types.T_float64}},
+		{[]types.Type{types.T_int64.ToType(), decimalType, types.T_varchar.ToType()}, []types.T{types.T_float64, types.T_decimal128, types.T_varchar}},
+		{[]types.Type{types.T_varchar.ToType(), decimalType, types.T_varchar.ToType()}, []types.T{types.T_varchar, types.T_decimal128, types.T_varchar}},
+		{[]types.Type{decimalType, decimalType, types.New(types.T_decimal128, 20, 6)}, []types.T{types.T_decimal128, types.T_decimal128, types.T_varchar}},
+	}
+
+	for _, test := range tests {
+		result, err := GetFunctionByName(proc.Ctx, "maketime", test.inputs)
+		require.NoError(t, err)
+		require.True(t, result.needCast)
+		selected, err := GetFunctionById(proc.Ctx, result.GetEncodedOverloadID())
+		require.NoError(t, err)
+		require.Equal(t, test.args, selected.args)
+	}
+}
+
 func TestMakeTimeStringSecondUsesExactOverload(t *testing.T) {
 	proc := testutil.NewProcess(t)
 

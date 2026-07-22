@@ -7376,6 +7376,38 @@ func makeTimeFloatGetter[T constraints.Float](vec *vector.Vector) func(uint64) (
 	}
 }
 
+func makeTimeDecimalIntegerGetter(vec *vector.Vector) func(uint64) (int64, bool) {
+	param := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](vec)
+	scale := vec.GetType().Scale
+	return func(i uint64) (int64, bool) {
+		value, null := param.GetValue(i)
+		if null {
+			return 0, true
+		}
+		exact, ok := new(big.Rat).SetString(value.Format(scale))
+		if !ok {
+			return 0, true
+		}
+		negative := exact.Sign() < 0
+		numerator := new(big.Int).Abs(exact.Num())
+		rounded, remainder := new(big.Int), new(big.Int)
+		rounded.QuoRem(numerator, exact.Denom(), remainder)
+		if new(big.Int).Lsh(remainder, 1).Cmp(exact.Denom()) >= 0 {
+			rounded.Add(rounded, big.NewInt(1))
+		}
+		if negative {
+			rounded.Neg(rounded)
+		}
+		if rounded.IsInt64() {
+			return rounded.Int64(), false
+		}
+		if negative {
+			return math.MinInt64, false
+		}
+		return math.MaxInt64, false
+	}
+}
+
 func makeTimeStringIntegerGetter(vec *vector.Vector) func(uint64) (int64, bool) {
 	param := vector.GenerateFunctionStrParameter(vec)
 	isBinary := vec.GetIsBin()
@@ -7489,6 +7521,8 @@ func MakeTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *pr
 
 	if ivecs[0].GetType().Oid.IsMySQLString() {
 		getHourValue = makeTimeStringIntegerGetter(ivecs[0])
+	} else if ivecs[0].GetType().Oid == types.T_decimal128 {
+		getHourValue = makeTimeDecimalIntegerGetter(ivecs[0])
 	} else if getter, ok := makeTimeIntegerGetter(ivecs[0]); ok {
 		getHourValue = getter
 	} else {
@@ -7519,6 +7553,8 @@ func MakeTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *pr
 
 	if ivecs[1].GetType().Oid.IsMySQLString() {
 		getMinuteValue = makeTimeStringIntegerGetter(ivecs[1])
+	} else if ivecs[1].GetType().Oid == types.T_decimal128 {
+		getMinuteValue = makeTimeDecimalIntegerGetter(ivecs[1])
 	} else if getter, ok := makeTimeIntegerGetter(ivecs[1]); ok {
 		getMinuteValue = getter
 	} else {

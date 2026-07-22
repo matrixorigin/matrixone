@@ -100,6 +100,9 @@ varchar_at_half_microsecond
 SELECT CAST(MAKETIME(12, 59, CAST('59.99999949999999999' AS DECIMAL(30,20))) AS VARCHAR) AS decimal_below_half_microsecond;
 decimal_below_half_microsecond
 12:59:59.999999
+SELECT CAST(MAKETIME(12, CAST('59.49999999999999999999' AS DECIMAL(30,20)), CAST('0' AS DECIMAL(2,1))) AS VARCHAR) AS decimal_minute_below_half;
+decimal_minute_below_half
+12:59:00.0
 SELECT CAST(MAKETIME(X'0102', 0, 0) AS VARCHAR) AS binary_hour;
 binary_hour
 258:00:00

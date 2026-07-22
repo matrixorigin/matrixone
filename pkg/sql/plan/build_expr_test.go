@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -429,6 +430,14 @@ func TestMakeTimeBinaryLiteralBindAndExecute(t *testing.T) {
 		{name: "nonnumeric string second coerces to zero", sql: "select cast(maketime(12, 34, 'foo') as varchar)", want: "12:34:00.000000"},
 		{name: "plain strings", sql: "select cast(maketime('12.7', '15.8', '30.9') as varchar)", want: "12:15:30.900000"},
 		{name: "decimal second", sql: "select cast(maketime(12, 34, cast('56.789012' as decimal(20, 6))) as varchar)", want: "12:34:56.789012"},
+		{name: "decimal minute below half", sql: "select cast(maketime(12, cast('59.49999999999999999999' as decimal(30, 20)), cast('0' as decimal(2, 1))) as varchar)", want: "12:59:00.0"},
+		{name: "decimal minute at half", sql: "select cast(maketime(12, cast('58.5' as decimal(3, 1)), 0) as varchar)", want: "12:59:00"},
+		{name: "decimal64 minute below half", sql: "select cast(maketime(12, cast('58.499999999999999' as decimal(17, 15)), 0) as varchar)", want: "12:58:00"},
+		{name: "decimal minute rounds out of range", sql: "select maketime(12, cast('59.5' as decimal(3, 1)), 0)", wantNull: true},
+		{name: "decimal hour below half", sql: "select cast(maketime(cast('12.49999999999999999999' as decimal(30, 20)), 0, 0) as varchar)", want: "12:00:00"},
+		{name: "negative decimal hour at half", sql: "select cast(maketime(cast('-12.5' as decimal(3, 1)), 0, 0) as varchar)", want: "-13:00:00"},
+		{name: "decimal hour positive overflow", sql: "select cast(maketime(cast('99999999999999999999999999999999999999' as decimal(38, 0)), 0, 0) as varchar)", want: "838:59:59"},
+		{name: "decimal hour negative overflow", sql: "select cast(maketime(cast('-99999999999999999999999999999999999999' as decimal(38, 0)), 0, 0) as varchar)", want: "-838:59:59"},
 	}
 
 	for _, test := range tests {
@@ -454,6 +463,34 @@ func TestMakeTimeBinaryLiteralBindAndExecute(t *testing.T) {
 			}
 			require.False(t, result.GetNulls().Contains(0))
 			require.Equal(t, test.want, result.GetStringAt(0))
+		})
+	}
+}
+
+func TestMakeTimeExtremeExactSecondBindAndExecute(t *testing.T) {
+	tests := []struct {
+		name string
+		sql  string
+	}{
+		{"exponent", "select maketime(12, 34, '1e" + strings.Repeat("9", 8192) + "')"},
+		{"mantissa", "select maketime(12, 34, '" + strings.Repeat("9", 4097) + "')"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			pl, err := runOneExprStmt(mock, t, test.sql)
+			require.NoError(t, err)
+
+			expr := pl.GetQuery().Nodes[1].ProjectList[0]
+			proc := testutil.NewProc(t)
+			defer proc.Free()
+			executor, err := colexec.NewExpressionExecutor(proc, expr)
+			require.NoError(t, err)
+			defer executor.Free()
+			result, err := executor.Eval(proc, nil, nil)
+			require.NoError(t, err)
+			require.True(t, result.GetNulls().Contains(0))
 		})
 	}
 }

@@ -49,6 +49,9 @@ SELECT CAST(MAKETIME(12, 59, '59.99999949999999999') AS VARCHAR) AS varchar_belo
 SELECT CAST(MAKETIME(12, 59, '59.9999995') AS VARCHAR) AS varchar_at_half_microsecond;
 SELECT CAST(MAKETIME(12, 59, CAST('59.99999949999999999' AS DECIMAL(30,20))) AS VARCHAR) AS decimal_below_half_microsecond;
 
+# DECIMAL hour/minute round exactly without crossing a half boundary through FLOAT64
+SELECT CAST(MAKETIME(12, CAST('59.49999999999999999999' AS DECIMAL(30,20)), CAST('0' AS DECIMAL(2,1))) AS VARCHAR) AS decimal_minute_below_half;
+
 # Binary literals retain numeric byte semantics instead of being parsed as text
 SELECT CAST(MAKETIME(X'0102', 0, 0) AS VARCHAR) AS binary_hour;
 SELECT CAST(MAKETIME(12, 0, X'01') AS VARCHAR) AS binary_second;
