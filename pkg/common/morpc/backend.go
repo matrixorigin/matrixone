@@ -159,6 +159,7 @@ type remoteBackend struct {
 	stopper         *stopper.Stopper
 	readStopper     *stopper.Stopper
 	closeOnce       sync.Once
+	closeDone       chan struct{}
 	ctx             context.Context
 	cancel          context.CancelFunc
 	cancelOnce      sync.Once
@@ -195,6 +196,7 @@ type remoteBackend struct {
 	atomic struct {
 		id             uint64
 		lastActiveTime atomic.Value //time.Time
+		unavailable    atomic.Bool
 	}
 
 	pool struct {
@@ -216,6 +218,7 @@ func NewRemoteBackend(
 		codec:       codec,
 		resetConnC:  make(chan error, 1),
 		stopWriteC:  make(chan struct{}),
+		closeDone:   make(chan struct{}),
 	}
 
 	for _, opt := range options {
@@ -350,7 +353,10 @@ func (rb *remoteBackend) NewStream(unlockAfterClose bool) (Stream, error) {
 	st := rb.acquireStream()
 	st.init(rb.nextID(), unlockAfterClose)
 	rb.mu.activeStreams[st.ID()] = st
-	rb.active()
+	// stateMu is already read-locked here. Keep the activity update in the
+	// same state snapshot so Close cannot publish stateStopped between the
+	// state check and the timestamp write.
+	rb.activeLocked()
 	return st, nil
 }
 
@@ -404,13 +410,31 @@ func (rb *remoteBackend) Close() {
 	})
 	rb.stateMu.Lock()
 	if rb.stateMu.state == stateStopped {
+		// stateStopped seals admission, but teardown may still be running. Join
+		// the owner so every successful Close observes the same physical cleanup
+		// completion.
+		closeDone := rb.closeDone
+		rb.atomic.unavailable.Store(true)
+		rb.inactive()
 		rb.stateMu.Unlock()
+		<-closeDone
 		return
 	}
 	rb.stateMu.state = stateStopped
+	// Publish the terminal flag before clearing activity. active() rechecks the
+	// flag after its timestamp store, so every interleaving ends at zero without
+	// adding a state mutex to the per-message hot path.
+	rb.atomic.unavailable.Store(true)
+	rb.inactive()
 	rb.stopWriteLoop()
+	closeDone := rb.closeDone
 	rb.stateMu.Unlock()
+	defer close(closeDone)
 
+	// Seal every active stream before waiting for transport workers. This makes
+	// receiver termination independent of network I/O and prevents a late read
+	// callback from publishing after the terminal notification.
+	rb.cancelActiveStreams()
 	rb.stopper.Stop()
 	rb.doClose()
 	rb.makeAllWaitingFutureFailed(backendClosed)
@@ -451,8 +475,25 @@ func (rb *remoteBackend) Locked() bool {
 }
 
 func (rb *remoteBackend) active() {
-	now := time.Now()
-	rb.atomic.lastActiveTime.Store(now)
+	if rb.atomic.unavailable.Load() {
+		return
+	}
+	rb.atomic.lastActiveTime.Store(time.Now())
+	// Close may publish unavailable between the first check and the timestamp
+	// store. Repair that ordering here; if Close happens after this check, its
+	// own inactive store wins instead.
+	if rb.atomic.unavailable.Load() {
+		rb.inactive()
+	}
+}
+
+// activeLocked records activity only for the running generation. The caller
+// must hold stateMu for reading or writing.
+func (rb *remoteBackend) activeLocked() {
+	if rb.stateMu.state != stateRunning {
+		return
+	}
+	rb.atomic.lastActiveTime.Store(time.Now())
 }
 
 func (rb *remoteBackend) inactive() {
@@ -464,6 +505,8 @@ func (rb *remoteBackend) changeToStopping() {
 	defer rb.stateMu.Unlock()
 	if rb.stateMu.state == stateRunning {
 		rb.stateMu.state = stateStopping
+		rb.atomic.unavailable.Store(true)
+		rb.inactive()
 	}
 }
 
@@ -845,11 +888,18 @@ func (rb *remoteBackend) acquireStream() *stream {
 }
 
 func (rb *remoteBackend) cancelActiveStreams() {
-	rb.mu.Lock()
-	defer rb.mu.Unlock()
-
+	// Snapshot under rb.mu, then enter each stream without holding rb.mu. Stream
+	// Close unregisters through s.mu -> rb.mu, so retaining rb.mu here would
+	// reintroduce the inverse lock order that terminal delivery must avoid.
+	rb.mu.RLock()
+	streams := make([]*stream, 0, len(rb.mu.activeStreams))
 	for _, st := range rb.mu.activeStreams {
-		st.done(context.TODO(), RPCMessage{}, true)
+		streams = append(streams, st)
+	}
+	rb.mu.RUnlock()
+
+	for _, st := range streams {
+		st.terminate()
 	}
 }
 
@@ -1160,6 +1210,7 @@ func (rb *remoteBackend) notifyWaitWrite() {
 func (rb *remoteBackend) waitWrite(ctx context.Context) {
 	select {
 	case <-rb.waitWriteC:
+	case <-rb.stopWriteC:
 	case <-ctx.Done():
 	}
 }
@@ -1200,7 +1251,8 @@ type stream struct {
 	lastReceivedSequence uint32
 	mu                   struct {
 		sync.RWMutex
-		closed bool
+		closed   bool
+		terminal bool
 	}
 }
 
@@ -1232,6 +1284,7 @@ func (s *stream) init(id uint64, unlockAfterClose bool) {
 	s.sequence = 0
 	s.lastReceivedSequence = 0
 	s.mu.closed = false
+	s.mu.terminal = false
 	for {
 		select {
 		case <-s.c:
@@ -1261,14 +1314,12 @@ func (s *stream) Send(ctx context.Context, request Message) error {
 	if _, ok := ctx.Deadline(); !ok {
 		panic("deadline not set in context")
 	}
-	s.activeFunc()
-
 	f := s.newFutureFunc()
 	f.ref()
 	defer f.Close()
 
 	s.mu.RLock()
-	if s.mu.closed {
+	if s.mu.closed || s.mu.terminal {
 		s.mu.RUnlock()
 		s.rb.logger.Warn("stream is closed on send", append(s.rb.logFields(), zap.Uint64("stream-id", s.id))...)
 		return moerr.NewStreamClosedNoCtx()
@@ -1285,6 +1336,7 @@ func (s *stream) Send(ctx context.Context, request Message) error {
 	if err != nil {
 		return err
 	}
+	s.activeFunc()
 	// stream only wait send completed
 	return f.waitSendCompleted()
 }
@@ -1307,7 +1359,7 @@ func (s *stream) doSendLocked(
 func (s *stream) Receive() (chan Message, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if s.mu.closed {
+	if s.mu.closed || s.mu.terminal {
 		s.rb.logger.Warn("stream is closed on receive", append(s.rb.logFields(), zap.Uint64("stream-id", s.id))...)
 		return nil, moerr.NewStreamClosedNoCtx()
 	}
@@ -1330,6 +1382,15 @@ func (s *stream) Close(closeConn bool) error {
 	s.mu.closed = true
 	s.mu.Unlock()
 	s.unregisterFunc(s)
+	// cancel makes every in-flight done stop independently, and unregister
+	// observes an empty channel. Publish one terminal response for both close
+	// modes so a receiver that obtained the channel before Close is always
+	// released. Stream handles/channels are generation-private and never pooled.
+	select {
+	case s.c <- nil:
+	default:
+		panic("BUG: stream close notification channel is full")
+	}
 	return nil
 }
 
@@ -1344,7 +1405,7 @@ func (s *stream) done(
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	if s.mu.closed {
+	if s.mu.closed || s.mu.terminal {
 		return
 	}
 
@@ -1373,6 +1434,25 @@ func (s *stream) done(
 		case <-s.ctx.Done():
 		}
 	})
+}
+
+// terminate seals response delivery and publishes exactly one terminal value
+// for receivers that already obtained the channel. It deliberately leaves
+// unregister ownership with Stream.Close, as required by the Stream contract.
+func (s *stream) terminate() {
+	s.cancel()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.mu.closed || s.mu.terminal {
+		return
+	}
+	s.cleanCLocked()
+	s.mu.terminal = true
+	select {
+	case s.c <- nil:
+	default:
+		panic("BUG: stream terminal notification channel is full")
+	}
 }
 
 func (s *stream) cleanCLocked() {
