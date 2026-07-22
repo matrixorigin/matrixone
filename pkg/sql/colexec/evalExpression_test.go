@@ -30,6 +30,46 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type failingExpressionExecutor struct {
+	calls int
+}
+
+func (e *failingExpressionExecutor) Eval(_ *process.Process, _ []*batch.Batch, _ []bool) (*vector.Vector, error) {
+	e.calls++
+	return nil, moerr.NewInvalidInputNoCtx("unexpected branch evaluation")
+}
+
+func (e *failingExpressionExecutor) EvalWithoutResultReusing(proc *process.Process, batches []*batch.Batch, selectList []bool) (*vector.Vector, error) {
+	return e.Eval(proc, batches, selectList)
+}
+
+func (e *failingExpressionExecutor) ResetForNextQuery() {}
+func (e *failingExpressionExecutor) Free()              {}
+func (e *failingExpressionExecutor) IsColumnExpr() bool { return false }
+func (e *failingExpressionExecutor) TypeName() string   { return "failing" }
+
+type failAfterFirstExpressionExecutor struct {
+	calls    int
+	delegate ExpressionExecutor
+}
+
+func (e *failAfterFirstExpressionExecutor) Eval(proc *process.Process, batches []*batch.Batch, selectList []bool) (*vector.Vector, error) {
+	e.calls++
+	if e.calls > 1 {
+		return nil, moerr.NewInvalidInputNoCtx("inactive branch evaluated after batch shrink")
+	}
+	return e.delegate.Eval(proc, batches, selectList)
+}
+
+func (e *failAfterFirstExpressionExecutor) EvalWithoutResultReusing(proc *process.Process, batches []*batch.Batch, selectList []bool) (*vector.Vector, error) {
+	return e.Eval(proc, batches, selectList)
+}
+
+func (e *failAfterFirstExpressionExecutor) ResetForNextQuery() { e.delegate.ResetForNextQuery() }
+func (e *failAfterFirstExpressionExecutor) Free()              { e.delegate.Free() }
+func (e *failAfterFirstExpressionExecutor) IsColumnExpr() bool { return false }
+func (e *failAfterFirstExpressionExecutor) TypeName() string   { return "failAfterFirst" }
+
 func TestListExpressionExecutor(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
@@ -91,6 +131,168 @@ func TestListExpressionExecutor(t *testing.T) {
 	listExprExecutor.Free()
 
 	require.Equal(t, curr, proc.Mp().CurrNB())
+}
+
+func TestEvalIffSkipsUnselectedBranch(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	bat := batch.New(nil)
+	bat.SetRowCount(3)
+
+	condition, err := vector.NewConstFixed(types.T_bool.ToType(), false, 1, proc.Mp())
+	require.NoError(t, err)
+	elseValue, err := vector.NewConstFixed(types.T_int64.ToType(), int64(42), 1, proc.Mp())
+	require.NoError(t, err)
+	thenExecutor := &failingExpressionExecutor{}
+
+	expr := &FunctionExpressionExecutor{}
+	require.NoError(t, expr.Init(proc, 3, types.T_int64.ToType()))
+	expr.SetParameter(0, NewFixedVectorExpressionExecutor(proc.Mp(), false, condition))
+	expr.SetParameter(1, thenExecutor)
+	expr.SetParameter(2, NewFixedVectorExpressionExecutor(proc.Mp(), false, elseValue))
+
+	require.NoError(t, expr.EvalIff(proc, []*batch.Batch{bat}, nil))
+	require.Zero(t, thenExecutor.calls)
+	require.Equal(t, 3, expr.parameterResults[1].Length())
+	require.True(t, expr.parameterResults[1].IsConstNull())
+}
+
+func TestEvalIffPropagatesSelectedBranchError(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	bat := batch.New(nil)
+	bat.SetRowCount(3)
+
+	condition, err := vector.NewConstFixed(types.T_bool.ToType(), true, 1, proc.Mp())
+	require.NoError(t, err)
+	thenExecutor := &failingExpressionExecutor{}
+	elseValue, err := vector.NewConstFixed(types.T_int64.ToType(), int64(42), 1, proc.Mp())
+	require.NoError(t, err)
+
+	expr := &FunctionExpressionExecutor{}
+	require.NoError(t, expr.Init(proc, 3, types.T_int64.ToType()))
+	expr.SetParameter(0, NewFixedVectorExpressionExecutor(proc.Mp(), false, condition))
+	expr.SetParameter(1, thenExecutor)
+	expr.SetParameter(2, NewFixedVectorExpressionExecutor(proc.Mp(), false, elseValue))
+
+	err = expr.EvalIff(proc, []*batch.Batch{bat}, nil)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+	require.Equal(t, 1, thenExecutor.calls)
+}
+
+func TestEvalIffUsesStatementCompatibilityMode(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	bat := batch.New(nil)
+	bat.SetRowCount(2)
+
+	condition := testutil.MakeVarlenaVector(
+		[][]byte{[]byte("1abc"), []byte("abc")}, nil, types.T_varchar.ToType(), proc.Mp())
+	defer condition.Free(proc.Mp())
+	thenValue, err := vector.NewConstFixed(types.T_int64.ToType(), int64(11), 2, proc.Mp())
+	require.NoError(t, err)
+	defer thenValue.Free(proc.Mp())
+	elseValue, err := vector.NewConstFixed(types.T_int64.ToType(), int64(22), 2, proc.Mp())
+	require.NoError(t, err)
+	defer elseValue.Free(proc.Mp())
+
+	expr := NewFunctionExpressionExecutor()
+	require.NoError(t, expr.Init(proc, 3, types.T_int64.ToType()))
+	defer expr.Free()
+	expr.SetParameter(0, NewFixedVectorExpressionExecutor(proc.Mp(), false, condition))
+	expr.SetParameter(1, NewFixedVectorExpressionExecutor(proc.Mp(), false, thenValue))
+	expr.SetParameter(2, NewFixedVectorExpressionExecutor(proc.Mp(), false, elseValue))
+
+	require.NoError(t, expr.EvalIff(proc, []*batch.Batch{bat}, nil))
+	require.Equal(t, []bool{true, false}, expr.selectList1)
+	require.Equal(t, []bool{false, true}, expr.selectList2)
+
+	proc.GetSessionInfo().MatrixOneNativeMode = true
+	err = expr.EvalIff(proc, []*batch.Batch{bat}, nil)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+}
+
+func TestEvalIffShrinkingBatchDoesNotReuseStaleBranchSelection(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	newConditionBatch := func(values []bool) *batch.Batch {
+		bat := batch.NewWithSize(1)
+		bat.Vecs[0] = vector.NewVec(types.T_bool.ToType())
+		require.NoError(t, vector.AppendFixedList(bat.Vecs[0], values, nil, proc.Mp()))
+		bat.SetRowCount(len(values))
+		return bat
+	}
+	largeBatch := newConditionBatch([]bool{true, true, true})
+	smallBatch := newConditionBatch([]bool{false})
+	defer largeBatch.Clean(proc.Mp())
+	defer smallBatch.Clean(proc.Mp())
+
+	conditionExecutor, err := NewExpressionExecutor(proc, &plan.Expr{
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0}},
+		Typ:  plan.Type{Id: int32(types.T_bool), NotNullable: true},
+	})
+	require.NoError(t, err)
+	thenValue, err := vector.NewConstFixed(types.T_int64.ToType(), int64(11), 1, proc.Mp())
+	require.NoError(t, err)
+	elseValue, err := vector.NewConstFixed(types.T_int64.ToType(), int64(22), 1, proc.Mp())
+	require.NoError(t, err)
+	thenExecutor := &failAfterFirstExpressionExecutor{
+		delegate: NewFixedVectorExpressionExecutor(proc.Mp(), false, thenValue),
+	}
+
+	expr := NewFunctionExpressionExecutor()
+	require.NoError(t, expr.Init(proc, 3, types.T_int64.ToType()))
+	defer expr.Free()
+	expr.SetParameter(0, conditionExecutor)
+	expr.SetParameter(1, thenExecutor)
+	expr.SetParameter(2, NewFixedVectorExpressionExecutor(proc.Mp(), false, elseValue))
+
+	require.NoError(t, expr.EvalIff(proc, []*batch.Batch{largeBatch}, nil))
+	require.NoError(t, expr.EvalIff(proc, []*batch.Batch{smallBatch}, nil))
+	require.Equal(t, 1, thenExecutor.calls)
+}
+
+func TestIffConstantFoldingSkipsUnselectedBranch(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	bat := batch.New(nil)
+	bat.SetRowCount(1)
+
+	condition, err := vector.NewConstFixed(types.T_bool.ToType(), false, 1, proc.Mp())
+	require.NoError(t, err)
+	elseValue, err := vector.NewConstFixed(types.T_int64.ToType(), int64(42), 1, proc.Mp())
+	require.NoError(t, err)
+
+	failingBranch := &FunctionExpressionExecutor{}
+	require.NoError(t, failingBranch.Init(proc, 0, types.T_int64.ToType()))
+	foldCalls := 0
+	failingBranch.evalFn = func(_ []*vector.Vector, _ vector.FunctionResultWrapper, _ *process.Process, _ int, _ *function.FunctionSelectList) error {
+		foldCalls++
+		return moerr.NewInvalidInputNoCtx("unexpected constant-fold evaluation")
+	}
+	failingBranch.folded.needFoldingCheck = true
+
+	expr := &FunctionExpressionExecutor{}
+	require.NoError(t, expr.Init(proc, 3, types.T_int64.ToType()))
+	expr.fid = function.IFF
+	expr.evalFn = func(params []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, _ *function.FunctionSelectList) error {
+		elseParam := vector.GenerateFunctionFixedTypeParameter[int64](params[2])
+		rs := vector.MustFunctionResult[int64](result)
+		for i := 0; i < length; i++ {
+			if err := rs.Append(elseParam.GetValue(uint64(i))); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	expr.folded.needFoldingCheck = true
+	expr.SetParameter(0, NewFixedVectorExpressionExecutor(proc.Mp(), false, condition))
+	expr.SetParameter(1, failingBranch)
+	expr.SetParameter(2, NewFixedVectorExpressionExecutor(proc.Mp(), false, elseValue))
+
+	vec, err := expr.Eval(proc, []*batch.Batch{bat}, nil)
+	require.NoError(t, err)
+	require.Zero(t, foldCalls)
+	require.Equal(t, int64(42), vector.GetFixedAtNoTypeCheck[int64](vec, 0))
+
 }
 
 func TestParamExpressionExecutorPreservesBinaryFlagPerParameter(t *testing.T) {
