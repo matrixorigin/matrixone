@@ -152,6 +152,29 @@ func TestCollectPrepareDdlSchemasCollectsForeignKeyParents(t *testing.T) {
 	require.Equal(t, "parent", schemas[1].ObjName)
 }
 
+func TestCollectPrepareDdlSchemasCollectsExpandedForeignKeyParents(t *testing.T) {
+	statements, err := mysql.Parse(context.Background(), "create table child like src", 1)
+	require.NoError(t, err)
+	defer statements[0].Free()
+	mock := NewMockCompilerContext(false)
+	for i, name := range []string{"src", "parent"} {
+		mock.objects[name] = &planpb.ObjectRef{SchemaName: "tpch", ObjName: name}
+		mock.tables[name] = &planpb.TableDef{Name: name, DbId: 10, TblId: uint64(20 + i), Version: 30}
+	}
+	createPlan := &planpb.Plan{Plan: &planpb.Plan_Ddl{Ddl: &planpb.DataDefinition{
+		Definition: &planpb.DataDefinition_CreateTable{CreateTable: &planpb.CreateTable{
+			FkDbs: []string{"tpch"}, FkTables: []string{"parent"},
+		}},
+	}}}
+
+	schemas, err := collectPrepareDdlSchemas(mock, statements[0], createPlan)
+	require.NoError(t, err)
+	require.Len(t, schemas, 3)
+	require.Equal(t, "child", schemas[0].ObjName)
+	require.Equal(t, "src", schemas[1].ObjName)
+	require.Equal(t, "parent", schemas[2].ObjName)
+}
+
 func TestCollectPrepareDdlSchemasCollectsForwardReferenceChildren(t *testing.T) {
 	statements, err := mysql.Parse(context.Background(), "create table parent (id int primary key)", 1)
 	require.NoError(t, err)
@@ -209,6 +232,18 @@ func TestAppendPrepareSchemasDeduplicatesByNameWithoutObjectID(t *testing.T) {
 		&planpb.ObjectRef{SchemaName: "db", ObjName: "tbl"},
 	)
 	require.Len(t, schemas, 1)
+}
+
+func TestAppendPrepareSchemasKeepsSameNameFromDifferentPublishers(t *testing.T) {
+	schemas := appendPrepareSchemas(nil,
+		&planpb.ObjectRef{
+			SchemaName: "db", ObjName: "tbl", PubInfo: &planpb.PubInfo{TenantId: 1},
+		},
+		&planpb.ObjectRef{
+			SchemaName: "db", ObjName: "tbl", PubInfo: &planpb.PubInfo{TenantId: 2},
+		},
+	)
+	require.Len(t, schemas, 2)
 }
 
 func TestResetPreparePlanCollectsDdlQuerySchemas(t *testing.T) {

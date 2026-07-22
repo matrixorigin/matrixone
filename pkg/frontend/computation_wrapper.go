@@ -24,12 +24,12 @@ import (
 	"github.com/mohae/deepcopy"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/models"
@@ -525,17 +525,15 @@ func initExecuteStmtParam(execCtx *ExecCtx, ses *Session, cwft *TxnComputationWr
 
 	var change bool
 	for _, obj := range preparePlan.GetSchemas() {
-		accountId := ses.GetAccountId()
-		if ShouldSwitchToSysAccount(obj.SchemaName, obj.ObjName) {
-			accountId = uint32(sysAccountID)
-		}
+		accountId := prepareSchemaAccountID(ses.GetAccountId(), obj)
 		tblKey := &cache.TableChangeQuery{
-			AccountId:  accountId,
-			DatabaseId: uint64(obj.Db),
-			Name:       obj.ObjName,
-			Version:    uint32(obj.Server),
-			TableId:    uint64(obj.Obj),
-			Ts:         prepareStmt.Ts,
+			AccountId:    accountId,
+			DatabaseId:   uint64(obj.Db),
+			DatabaseName: obj.SchemaName,
+			Name:         obj.ObjName,
+			Version:      uint32(obj.Server),
+			TableId:      uint64(obj.Obj),
+			Ts:           prepareStmt.Ts,
 		}
 
 		change = CheckTableDefChange(catalogCache, tblKey)
@@ -565,7 +563,7 @@ func initExecuteStmtParam(execCtx *ExecCtx, ses *Session, cwft *TxnComputationWr
 		}
 		preparePlan = newPlan.GetDcl().GetPrepare()
 		prepareStmt.PreparePlan = newPlan
-		prepareStmt.Ts = timestamp.Timestamp{PhysicalTime: time.Now().Unix()}
+		prepareStmt.Ts, _ = runtime.ServiceRuntime(ses.GetService()).Clock().Now()
 	}
 
 	// Recreate the cached compile only when the schema changed. Without a
@@ -623,6 +621,16 @@ func initExecuteStmtParam(execCtx *ExecCtx, ses *Session, cwft *TxnComputationWr
 		}
 	}
 	return prepareStmt.compile, preparePlan.Plan, prepareStmt.PrepareStmt, originSQL, nil
+}
+
+func prepareSchemaAccountID(currentAccountID uint32, obj *plan.ObjectRef) uint32 {
+	if obj.GetPubInfo() != nil {
+		return uint32(obj.GetPubInfo().GetTenantId())
+	}
+	if ShouldSwitchToSysAccount(obj.SchemaName, obj.ObjName) {
+		return uint32(sysAccountID)
+	}
+	return currentAccountID
 }
 
 func preparedDDLNeedsCatalogRefresh(stmt tree.Statement) bool {

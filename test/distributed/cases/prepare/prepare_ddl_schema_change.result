@@ -216,4 +216,41 @@ prepared_drop_database
 deallocate prepare drop_database_stmt;
 drop publication prepared_publication;
 drop database prepared_drop_database;
+create database recreated_dependency_db;
+prepare recreated_drop_stmt from 'drop table if exists recreated_dependency_db.t';
+drop database recreated_dependency_db;
+create database recreated_dependency_db;
+create table recreated_dependency_db.t (a int);
+execute recreated_drop_stmt;
+select count(*)
+from information_schema.tables
+where table_schema = 'recreated_dependency_db' and table_name = 't';
+➤ count(*)[-5,64,0]  𝄀
+0
+deallocate prepare recreated_drop_stmt;
+drop database recreated_dependency_db;
+prepare temporary_stmt from 'create temporary table prepared_temporary (a int)';
+execute temporary_stmt;
+execute temporary_stmt;
+table prepared_temporary already exists
+show tables like 'prepared_temporary';
+➤ Tables_in_prepare_ddl_schema_change[12,-1,0]
+deallocate prepare temporary_stmt;
+set foreign_key_checks = 0;
+create table expanded_parent (id int primary key);
+create table expanded_src (
+pid int,
+foreign key (pid) references expanded_parent(id)
+);
+prepare expanded_like_stmt from 'create table expanded_like like expanded_src';
+alter table expanded_parent drop primary key;
+execute expanded_like_stmt;
+internal error: failed to add the foreign key constraint
+select count(*)
+from information_schema.referential_constraints
+where constraint_schema = 'prepare_ddl_schema_change' and table_name = 'expanded_like';
+➤ count(*)[-5,64,0]  𝄀
+0
+deallocate prepare expanded_like_stmt;
+set foreign_key_checks = 1;
 drop database prepare_ddl_schema_change;

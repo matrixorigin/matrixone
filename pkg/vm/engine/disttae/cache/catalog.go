@@ -386,6 +386,25 @@ func (cc *CatalogCache) GetStartTS() types.TS {
 
 func (cc *CatalogCache) HasNewerVersion(qry *TableChangeQuery) bool {
 	var find bool
+	if qry.DatabaseName != "" {
+		key := &DatabaseItem{
+			AccountId: qry.AccountId,
+			Name:      qry.DatabaseName,
+			Ts:        types.MaxTs().ToTimestamp(),
+		}
+		cc.databases.data.Ascend(key, func(item *DatabaseItem) bool {
+			if item.AccountId != qry.AccountId || item.Name != qry.DatabaseName {
+				return false
+			}
+			if item.Ts.Greater(qry.Ts) && (item.deleted || item.Id != qry.DatabaseId) {
+				find = true
+			}
+			return false
+		})
+		if find {
+			return true
+		}
+	}
 
 	key := &TableItem{
 		AccountId:  qry.AccountId,

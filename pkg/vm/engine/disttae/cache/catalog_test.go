@@ -130,6 +130,21 @@ func TestHasNewerVersion(t *testing.T) {
 	}))
 }
 
+func TestHasNewerVersionDetectsDatabaseRecreation(t *testing.T) {
+	cc := NewCatalog()
+	cc.databases.data.Set(&DatabaseItem{
+		AccountId: 1, Name: "db", Id: 20, Ts: timestamp.Timestamp{PhysicalTime: 200},
+	})
+	require.True(t, cc.HasNewerVersion(&TableChangeQuery{
+		AccountId: 1, DatabaseId: 10, DatabaseName: "db", Name: "missing",
+		Ts: timestamp.Timestamp{PhysicalTime: 100},
+	}))
+	require.False(t, cc.HasNewerVersion(&TableChangeQuery{
+		AccountId: 1, DatabaseId: 20, DatabaseName: "db", Name: "missing",
+		Ts: timestamp.Timestamp{PhysicalTime: 300},
+	}))
+}
+
 func TestTables(t *testing.T) {
 	mp := mpool.MustNewZero()
 	cc := NewCatalog()

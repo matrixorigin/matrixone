@@ -317,6 +317,13 @@ func TestPreparedDDLNeedsCatalogRefresh(t *testing.T) {
 	}
 }
 
+func TestPrepareSchemaAccountID(t *testing.T) {
+	require.Equal(t, uint32(7), prepareSchemaAccountID(7, &plan.ObjectRef{SchemaName: "db", ObjName: "t"}))
+	require.Equal(t, uint32(11), prepareSchemaAccountID(7, &plan.ObjectRef{
+		SchemaName: "db", ObjName: "t", PubInfo: &plan.PubInfo{TenantId: 11},
+	}))
+}
+
 func TestInitExecuteStmtParamSkipsPrepareCompileWithoutCache(t *testing.T) {
 	_, prepareStmt, cw, execCtx := newPreparedExecuteEnv(t, 100)
 	defer prepareStmt.Close()

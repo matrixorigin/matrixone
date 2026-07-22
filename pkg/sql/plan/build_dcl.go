@@ -261,6 +261,20 @@ func collectPrepareDdlSchemas(ctx CompilerContext, stmt tree.Statement, prepareP
 		createTable = clone.GetCreateTable().GetDdl().GetCreateTable()
 	}
 	if createTable != nil {
+		for i, tableName := range createTable.GetFkTables() {
+			if i >= len(createTable.GetFkDbs()) {
+				return nil, moerr.NewInternalError(ctx.GetContext(), "foreign key table is missing its database")
+			}
+			databaseName := createTable.GetFkDbs()[i]
+			objRef, tableDef, err := ctx.Resolve(databaseName, tableName, nil)
+			if err != nil {
+				return nil, err
+			}
+			if objRef == nil || tableDef == nil {
+				return nil, moerr.NewNoSuchTable(ctx.GetContext(), databaseName, tableName)
+			}
+			schemas = appendPrepareSchemas(schemas, prepareSchemaRef(objRef, tableDef))
+		}
 		for _, fk := range createTable.GetFksReferToMe() {
 			objRef, tableDef, err := ctx.Resolve(fk.GetDb(), fk.GetTable(), nil)
 			if err != nil {
@@ -301,8 +315,11 @@ func appendPrepareSchemas(schemas []*plan.ObjectRef, refs ...*plan.ObjectRef) []
 		}
 		duplicate := false
 		for _, schema := range schemas {
-			sameID := schema.Obj != 0 && ref.Obj != 0 && schema.Db == ref.Db && schema.Obj == ref.Obj
-			sameName := schema.SchemaName == ref.SchemaName && schema.ObjName == ref.ObjName
+			sameTenant := (schema.PubInfo == nil && ref.PubInfo == nil) ||
+				(schema.PubInfo != nil && ref.PubInfo != nil &&
+					schema.PubInfo.GetTenantId() == ref.PubInfo.GetTenantId())
+			sameID := sameTenant && schema.Obj != 0 && ref.Obj != 0 && schema.Db == ref.Db && schema.Obj == ref.Obj
+			sameName := sameTenant && schema.SchemaName == ref.SchemaName && schema.ObjName == ref.ObjName
 			if sameID || sameName {
 				duplicate = true
 				break

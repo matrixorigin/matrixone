@@ -43,12 +43,13 @@ const (
 )
 
 type TableChangeQuery struct {
-	AccountId  uint32
-	DatabaseId uint64
-	Name       string
-	Version    uint32
-	TableId    uint64
-	Ts         timestamp.Timestamp
+	AccountId    uint32
+	DatabaseId   uint64
+	DatabaseName string
+	Name         string
+	Version      uint32
+	TableId      uint64
+	Ts           timestamp.Timestamp
 }
 
 // catalog cache

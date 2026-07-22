@@ -1325,6 +1325,41 @@ func (s *Scope) CreateTable(c *Compile) error {
 			return moerr.NewTableAlreadyExists(c.proc.Ctx, aliasName)
 		}
 
+		type tempIndexTableState struct {
+			def         *plan.TableDef
+			name        string
+			tableType   string
+			isTemporary bool
+			tableID     uint64
+		}
+		type tempIndexState struct {
+			def            *plan.IndexDef
+			indexTableName string
+		}
+		originalTableName := qry.TableDef.Name
+		indexTableStates := make([]tempIndexTableState, 0, len(qry.IndexTables))
+		for _, def := range qry.IndexTables {
+			indexTableStates = append(indexTableStates, tempIndexTableState{
+				def: def, name: def.Name, tableType: def.TableType, isTemporary: def.IsTemporary, tableID: def.TblId,
+			})
+		}
+		indexStates := make([]tempIndexState, 0, len(qry.TableDef.Indexes))
+		for _, idx := range qry.TableDef.Indexes {
+			indexStates = append(indexStates, tempIndexState{def: idx, indexTableName: idx.IndexTableName})
+		}
+		defer func() {
+			qry.TableDef.Name = originalTableName
+			for _, state := range indexTableStates {
+				state.def.Name = state.name
+				state.def.TableType = state.tableType
+				state.def.IsTemporary = state.isTemporary
+				state.def.TblId = state.tableID
+			}
+			for _, state := range indexStates {
+				state.def.IndexTableName = state.indexTableName
+			}
+		}()
+
 		realName := defines.GenTempTableName(c.proc.Base.SessionInfo.SessionId, dbName, aliasName)
 		qry.TableDef.Name = realName
 		indexNameMap := make(map[string]string, len(qry.IndexTables))
