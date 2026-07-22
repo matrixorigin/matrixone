@@ -29,11 +29,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/testutil/testengine"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/prashantv/gostub"
@@ -419,6 +421,134 @@ func TestIndexConsumerSendSqlReturnsContextErrorWhenBlocked(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 }
 
+func TestIndexConsumerSendSqlCtxFaultReturnsContextError(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	fault.Enable()
+	defer fault.Disable()
+	require.NoError(t, fault.AddFaultPoint(ctx, objectio.FJ_ISCPCancelLongBeforeSend, ":::", "wait", 0, "", false))
+	require.NoError(t, fault.AddFaultPoint(ctx, "get-send-waiters", ":::", "getwaiters", 0, objectio.FJ_ISCPCancelLongBeforeSend, false))
+
+	consumer := &IndexConsumer{
+		info:         newTestIvfConsumerInfo(),
+		sqlBufSendCh: make(chan []byte),
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- consumer.sendSql(ctx, make(chan error, 1), &flushEveryRowWriter{rows: 1})
+	}()
+
+	require.Eventually(t, func() bool {
+		cnt, _, ok := fault.TriggerFault("get-send-waiters")
+		return ok && cnt == 1
+	}, time.Second, 10*time.Millisecond)
+
+	cancel()
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(2 * time.Second):
+		t.Fatal("sendSql stayed blocked in ctx-aware fault wait after context cancellation")
+	}
+}
+
+func TestIndexConsumerSendSqlCtxFaultMatchesIndexName(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	info := newTestIvfConsumerInfo()
+	key := objectio.FJ_ISCPCancelLongBeforeSend + ":" + info.IndexName
+	waitersKey := "get-send-index-waiters"
+
+	fault.Enable()
+	defer fault.Disable()
+	require.NoError(t, fault.AddFaultPoint(ctx, key, ":::", "wait", 0, "", false))
+	require.NoError(t, fault.AddFaultPoint(ctx, waitersKey, ":::", "getwaiters", 0, key, false))
+
+	consumer := &IndexConsumer{
+		info:         info,
+		sqlBufSendCh: make(chan []byte),
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- consumer.sendSql(ctx, make(chan error, 1), &flushEveryRowWriter{rows: 1})
+	}()
+
+	require.Eventually(t, func() bool {
+		cnt, _, ok := fault.TriggerFault(waitersKey)
+		return ok && cnt == 1
+	}, time.Second, 10*time.Millisecond)
+
+	cancel()
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(2 * time.Second):
+		t.Fatal("sendSql stayed blocked in index-specific ctx-aware fault wait after context cancellation")
+	}
+}
+
+func TestRunIndexBeforeExecCtxFaultReturnsContextError(t *testing.T) {
+	for _, dtype := range []int8{ISCPDataType_Snapshot, ISCPDataType_Tail} {
+		t.Run(fmt.Sprintf("type-%d", dtype), func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			info := newTestIvfConsumerInfo()
+			key := objectio.FJ_ISCPCancelLongBeforeExec + ":" + info.IndexName
+			waitersKey := fmt.Sprintf("get-before-exec-waiters-%d", dtype)
+
+			fault.Enable()
+			defer fault.Disable()
+			require.NoError(t, fault.AddFaultPoint(ctx, key, ":::", "wait", 0, "", false))
+			require.NoError(t, fault.AddFaultPoint(ctx, waitersKey, ":::", "getwaiters", 0, key, false))
+
+			stubRunTxn := gostub.Stub(&runTxnWithSqlContext, func(
+				ctx context.Context,
+				_ engine.Engine,
+				_ client.TxnClient,
+				cnUUID string,
+				accountID uint32,
+				_ time.Duration,
+				resolveVariableFunc func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error),
+				cbdata any,
+				f func(sqlproc *sqlexec.SqlProcess, data any) error,
+			) error {
+				sqlproc := sqlexec.NewSqlProcessWithContext(sqlexec.NewSqlContext(ctx, cnUUID, nil, accountID, resolveVariableFunc))
+				return f(sqlproc, cbdata)
+			})
+			defer stubRunTxn.Reset()
+
+			consumer := &IndexConsumer{
+				info:         info,
+				sqlBufSendCh: make(chan []byte),
+			}
+			retriever := &MockRetriever{dtype: dtype}
+			errch := make(chan error, 2)
+			done := make(chan struct{})
+			go func() {
+				runIndex(consumer, ctx, errch, retriever)
+				close(done)
+			}()
+
+			consumer.sqlBufSendCh <- []byte("select 1")
+			require.Eventually(t, func() bool {
+				cnt, _, ok := fault.TriggerFault(waitersKey)
+				return ok && cnt == 1
+			}, time.Second, 10*time.Millisecond)
+
+			cancel()
+			select {
+			case <-done:
+			case <-time.After(2 * time.Second):
+				t.Fatal("runIndex stayed blocked in before-exec ctx-aware fault wait after context cancellation")
+			}
+			require.ErrorIs(t, <-errch, context.Canceled)
+		})
+	}
+}
+
 func TestIndexConsumerWorkerErrorCancelsBlockedNext(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -626,7 +756,7 @@ func TestIndexConsumerTailFinalizationUsesParentContext(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 }
 
-func TestDataRetrieverSetNextBatchReleasesRejectedData(t *testing.T) {
+func TestDataRetrieverSetNextBatchRejectsCanceledRetriever(t *testing.T) {
 	ctx := context.Background()
 	status := &JobStatus{}
 	retriever := NewDataRetriever(ctx, 0, 0, "job", 0, status, 0, ISCPDataType_Snapshot)
@@ -639,8 +769,129 @@ func TestDataRetrieverSetNextBatchReleasesRejectedData(t *testing.T) {
 	}
 	data.Set(1)
 
-	retriever.SetNextBatch(data)
+	accepted := retriever.SetNextBatch(data)
+	require.False(t, accepted)
+	data.Done()
 	require.Nil(t, data.insertBatch)
+}
+
+func TestDataRetrieverCanceledWatermarkAndIsCanceledErrorPath(t *testing.T) {
+	ctx := context.Background()
+	retriever := NewDataRetriever(ctx, 0, 0, "job", 0, &JobStatus{}, 0, ISCPDataType_Tail)
+	cancelErr := errors.New("consumer canceled")
+	retriever.Cancel(cancelErr)
+
+	require.True(t, retriever.IsCanceled())
+	require.ErrorIs(t, retriever.UpdateWatermark(ctx, "", nil), cancelErr)
+}
+
+func TestDataRetrieverStatusJSONAndAccessors(t *testing.T) {
+	status := &JobStatus{
+		LSN:       7,
+		Stage:     JobStage_Running,
+		ErrorCode: 1,
+		ErrorMsg:  "failed",
+	}
+	statusJSON, err := MarshalJobStatus(status)
+	require.NoError(t, err)
+	statusByteJSON, err := types.ParseStringToByteJson(statusJSON)
+	require.NoError(t, err)
+	encodedStatusJSON, err := types.EncodeJson(statusByteJSON)
+	require.NoError(t, err)
+
+	decoded, err := UnmarshalJobStatus(encodedStatusJSON)
+	require.NoError(t, err)
+	require.Equal(t, status.LSN, decoded.LSN)
+	require.Equal(t, status.Stage, decoded.Stage)
+	require.Equal(t, status.ErrorCode, decoded.ErrorCode)
+	require.Equal(t, status.ErrorMsg, decoded.ErrorMsg)
+
+	retriever := NewDataRetriever(context.Background(), 42, 99, "job", 3, status, 11, ISCPDataType_Tail)
+	require.Equal(t, int8(ISCPDataType_Tail), retriever.GetDataType())
+	require.Equal(t, uint32(42), retriever.GetAccountID())
+	require.Equal(t, uint64(99), retriever.GetTableID())
+}
+
+func TestDataRetrieverUpdateWatermarkSnapshotNoop(t *testing.T) {
+	retriever := NewDataRetriever(context.Background(), 0, 0, "job", 0, &JobStatus{}, 0, ISCPDataType_Snapshot)
+	require.NoError(t, retriever.UpdateWatermark(context.Background(), "", nil))
+}
+
+func TestDataRetrieverUpdateWatermarkTailUsesExecWithResult(t *testing.T) {
+	ctx := context.Background()
+	status := &JobStatus{To: types.BuildTS(10, 1)}
+	retriever := NewDataRetriever(ctx, 7, 8, "job", 9, status, 11, ISCPDataType_Tail)
+
+	var execSQL string
+	stubExec := gostub.Stub(&ExecWithResult, func(execCtx context.Context, sql string, cnUUID string, txn client.TxnOperator) (executor.Result, error) {
+		execSQL = sql
+		require.Equal(t, "cn", cnUUID)
+		require.Equal(t, catalog.System_Account, execCtx.Value(defines.TenantIDKey{}))
+		return executor.Result{}, nil
+	})
+	defer stubExec.Reset()
+
+	require.NoError(t, retriever.UpdateWatermark(ctx, "cn", nil))
+	require.Equal(t, uint64(11), status.LSN)
+	require.Contains(t, execSQL, "UPDATE mo_catalog.mo_iscp_log")
+	require.Contains(t, execSQL, "job")
+}
+
+func TestDataRetrieverUpdateWatermarkTailExecError(t *testing.T) {
+	expected := errors.New("watermark update failed")
+	retriever := NewDataRetriever(context.Background(), 7, 8, "job", 9, &JobStatus{}, 11, ISCPDataType_Tail)
+	stubExec := gostub.Stub(&ExecWithResult, func(context.Context, string, string, client.TxnOperator) (executor.Result, error) {
+		return executor.Result{}, expected
+	})
+	defer stubExec.Reset()
+
+	require.ErrorIs(t, retriever.UpdateWatermark(context.Background(), "cn", nil), expected)
+}
+
+func TestISCPDataCloseReleasesBothBatches(t *testing.T) {
+	data := &ISCPData{
+		insertBatch: &AtomicBatch{
+			Rows:    btree.NewBTreeGOptions(AtomicBatchRow.Less, btree.Options{Degree: 64}),
+			Batches: []*batch.Batch{},
+		},
+		deleteBatch: &AtomicBatch{
+			Rows:    btree.NewBTreeGOptions(AtomicBatchRow.Less, btree.Options{Degree: 64}),
+			Batches: []*batch.Batch{},
+		},
+	}
+
+	data.Close()
+
+	require.Nil(t, data.insertBatch)
+	require.Nil(t, data.deleteBatch)
+
+	var nilData *ISCPData
+	require.NotPanics(t, nilData.Close)
+}
+
+func TestDataRetrieverSetNextBatchDoesNotQueueAfterContextCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	status := &JobStatus{}
+	retriever := NewDataRetriever(ctx, 0, 0, "job", 0, status, 0, ISCPDataType_Snapshot)
+	cancel()
+
+	data := &ISCPData{
+		insertBatch: &AtomicBatch{
+			Rows: btree.NewBTreeGOptions(AtomicBatchRow.Less, btree.Options{Degree: 64}),
+		},
+	}
+	data.Set(1)
+
+	accepted := retriever.SetNextBatch(data)
+
+	require.False(t, accepted)
+	data.Done()
+	require.Nil(t, data.insertBatch)
+	select {
+	case queued := <-retriever.insertDataCh:
+		require.Nil(t, queued)
+	default:
+	}
 }
 
 func TestIndexConsumerTerminalFlushErrorDoesNotCloseChannel(t *testing.T) {

@@ -767,9 +767,37 @@ func (tbl *txnTableDelegate) PrimaryKeysMayBeModified(
 		},
 	)
 	if err != nil {
-		return false, err
+		return false, normalizePKCheckError(err)
 	}
 	return modify, nil
+}
+
+func normalizePKCheckError(err error) error {
+	if cause := findPKCheckRollingRestart(err); cause != nil {
+		// shardservice aggregates replica errors with errors.Join, while frontend
+		// classifies whole-txn rollback errors by their concrete moerr type.
+		return cause
+	}
+	return err
+}
+
+func findPKCheckRollingRestart(err error) *moerr.Error {
+	if cause, ok := err.(*moerr.Error); ok &&
+		cause.ErrorCode() == moerr.ErrRetryForCNRollingRestart {
+		return cause
+	}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		for _, child := range joined.Unwrap() {
+			if cause := findPKCheckRollingRestart(child); cause != nil {
+				return cause
+			}
+		}
+		return nil
+	}
+	if wrapped, ok := err.(interface{ Unwrap() error }); ok {
+		return findPKCheckRollingRestart(wrapped.Unwrap())
+	}
+	return nil
 }
 
 func (tbl *txnTableDelegate) PrimaryKeysMayBeUpserted(

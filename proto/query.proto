@@ -102,6 +102,9 @@ enum CmdMethod {
   WorkspaceThreshold = 34;
   MinTimestamp = 35;
   CtlPrefetchOnSubscribed = 36;
+  ISCPDrainConsumer = 37;
+  // IcebergCacheInvalidate invalidates Iceberg metadata/manifest cache after commit.
+  IcebergCacheInvalidate = 38;
 }
 
 // QueryRequest is the common query request. It contains the query
@@ -242,6 +245,8 @@ message Request {
   CtlMoTableStatsRequest CtlMoTableStatsRequest = 36 [ (gogoproto.nullable) = false ];
   WorkspaceThresholdRequest WorkspaceThresholdRequest = 37;
   CtlPrefetchOnSubscribedRequest CtlPrefetchOnSubscribedRequest = 38;
+  ISCPDrainConsumerRequest ISCPDrainConsumerRequest = 39;
+  IcebergCacheInvalidateRequest IcebergCacheInvalidateRequest = 40 [ (gogoproto.nullable) = false ];
 }
 
 // ShowProcessListResponse is the response of command ShowProcessList.
@@ -307,6 +312,8 @@ message Response {
   WorkspaceThresholdResponse WorkspaceThresholdResponse = 37;
   MinTimestampResponse MinTimestampResponse = 38;
   CtlPrefetchOnSubscribedResponse CtlPrefetchOnSubscribedResponse = 39;
+  ISCPDrainConsumerResponse ISCPDrainConsumerResponse = 40;
+  IcebergCacheInvalidateResponse IcebergCacheInvalidateResponse = 41 [ (gogoproto.nullable) = false ];
 }
 
 // AlterAccountRequest is the "alter account restricted" query request.
@@ -350,6 +357,19 @@ message CtlPrefetchOnSubscribedRequest {
 
 message CtlPrefetchOnSubscribedResponse {
   string Resp = 1;
+}
+
+message ISCPDrainConsumerRequest {
+  uint32 AccountID = 1;
+  uint64 TableID = 2;
+  string JobName = 3;
+  uint64 JobID = 4;
+  bool RemoveFenceOnly = 5;
+  bool RenewFenceOnly = 6;
+}
+
+message ISCPDrainConsumerResponse {
+  bool Success = 1;
 }
 
 message TraceSpanRequest {
@@ -629,6 +649,19 @@ message MetadataCacheResponse {
   int64 CacheCapacity = 1;
 }
 
+message IcebergCacheInvalidateRequest {
+  uint32 AccountID = 1;
+  uint64 CatalogID = 2;
+  string Namespace = 3;
+  string Table = 4;
+  int64 SnapshotID = 5;
+  string MetadataLocationHash = 6;
+  string CommitID = 7;
+}
+
+message IcebergCacheInvalidateResponse {
+  int64 RemovedEntries = 1;
+}
 
 message GoGCPercentRequest {
   int32 Percent = 1;

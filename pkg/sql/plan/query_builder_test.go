@@ -20,15 +20,19 @@ import (
 	"math"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/iceberg/model"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -1647,6 +1651,244 @@ func collectReachableSortNodes(query *plan.Query) []*plan.Node {
 	}
 
 	return sortNodes
+}
+
+type icebergTestCompilerContext struct {
+	*MockCompilerContext
+	proc *process.Process
+}
+
+func (c *icebergTestCompilerContext) GetProcess() *process.Process {
+	return c.proc
+}
+
+func newIcebergTestCompilerContext(t *testing.T, loc *time.Location) *icebergTestCompilerContext {
+	t.Helper()
+	if loc == nil {
+		loc = time.UTC
+	}
+	base := NewMockCompilerContext(true)
+	base.objects["gold_orders"] = &plan.ObjectRef{
+		DbName:  "tpch",
+		ObjName: "gold_orders",
+		Obj:     4242,
+	}
+	base.tables["gold_orders"] = &plan.TableDef{
+		Name:      "gold_orders",
+		TableType: catalog.SystemExternalRel,
+		Createsql: sqliceberg.BuildCreateSQLEnvelope(model.TableMapping{
+			Namespace:  "sales",
+			TableName:  "orders",
+			DefaultRef: model.DefaultRefMain,
+			ReadMode:   model.ReadModeAppendOnly,
+			WriteMode:  model.WriteModeReadOnly,
+		}, "ksa_gold"),
+		Cols: []*plan.ColDef{
+			{
+				Name:    "id",
+				Typ:     plan.Type{Id: int32(types.T_int64), Width: 64, Table: "gold_orders"},
+				Default: &plan.Default{NullAbility: true},
+			},
+		},
+		Pkey: &plan.PrimaryKeyDef{},
+	}
+	base.objects["dim_orders"] = &plan.ObjectRef{
+		DbName:  "tpch",
+		ObjName: "dim_orders",
+		Obj:     4343,
+	}
+	base.tables["dim_orders"] = &plan.TableDef{
+		Name:      "dim_orders",
+		TableType: catalog.SystemOrdinaryRel,
+		Cols: []*plan.ColDef{
+			{
+				Name:    "id",
+				Typ:     plan.Type{Id: int32(types.T_int64), Width: 64, Table: "dim_orders"},
+				Default: &plan.Default{NullAbility: true},
+			},
+		},
+		Pkey: &plan.PrimaryKeyDef{},
+	}
+	proc := testutil.NewProc(t)
+	proc.Base.SessionInfo.TimeZone = loc
+	return &icebergTestCompilerContext{
+		MockCompilerContext: base,
+		proc:                proc,
+	}
+}
+
+func buildIcebergTestPlan(t *testing.T, ctx CompilerContext, sql string) (*Plan, error) {
+	t.Helper()
+	stmts, err := parsers.Parse(ctx.GetContext(), dialect.MYSQL, sql, 1)
+	require.NoError(t, err)
+	return BuildPlan(ctx, stmts[0], false)
+}
+
+func mustMarshalLegacyExternParam(t *testing.T, param *tree.ExternParam) string {
+	t.Helper()
+	data, err := json.Marshal(param)
+	require.NoError(t, err)
+	return string(data)
+}
+
+func requireIcebergScan(t *testing.T, p *Plan) *plan.IcebergScan {
+	t.Helper()
+	require.NotNil(t, p)
+	require.NotNil(t, p.GetQuery())
+	for _, node := range p.GetQuery().Nodes {
+		if node.GetExternScan().GetIcebergScan() != nil {
+			return node.GetExternScan().GetIcebergScan()
+		}
+	}
+	t.Fatalf("expected an Iceberg external scan")
+	return nil
+}
+
+func TestQueryBuilderLegacyExternalTableNotDispatchedAsIceberg(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	ctx.objects["legacy_orders"] = &plan.ObjectRef{
+		DbName:  "tpch",
+		ObjName: "legacy_orders",
+		Obj:     4343,
+	}
+	ctx.tables["legacy_orders"] = &plan.TableDef{
+		Name:      "legacy_orders",
+		TableType: catalog.SystemExternalRel,
+		Createsql: mustMarshalLegacyExternParam(t, &tree.ExternParam{
+			ExParamConst: tree.ExParamConst{
+				ScanType: tree.INFILE,
+				Filepath: "/data/legacy/orders/*.parquet",
+				Format:   tree.PARQUET,
+				Option:   []string{"format", "parquet"},
+			},
+		}),
+		Cols: []*plan.ColDef{
+			{
+				Name:    "id",
+				Typ:     plan.Type{Id: int32(types.T_int64), Width: 64, Table: "legacy_orders"},
+				Default: &plan.Default{NullAbility: true},
+			},
+		},
+	}
+
+	p, err := buildIcebergTestPlan(t, ctx, "select id from legacy_orders")
+	require.NoError(t, err)
+
+	foundExternal := false
+	for _, node := range p.GetQuery().GetNodes() {
+		if node.GetNodeType() != plan.Node_EXTERNAL_SCAN {
+			continue
+		}
+		foundExternal = true
+		require.NotNil(t, node.GetExternScan())
+		require.Equal(t, int32(plan.ExternType_EXTERNAL_TB), node.GetExternScan().GetType())
+		require.Nil(t, node.GetExternScan().GetIcebergScan())
+	}
+	require.True(t, foundExternal, "expected a legacy external scan")
+}
+
+func TestQueryBuilderIcebergPersistentMappingCurrentSnapshot(t *testing.T) {
+	ctx := newIcebergTestCompilerContext(t, time.UTC)
+
+	p, err := buildIcebergTestPlan(t, ctx, "select id from gold_orders")
+	require.NoError(t, err)
+
+	scan := requireIcebergScan(t, p)
+	require.Equal(t, uint64(4242), scan.MappingId)
+	require.Equal(t, "sales", scan.Namespace)
+	require.Equal(t, "orders", scan.Table)
+	require.Equal(t, "main", scan.Ref)
+	require.Zero(t, scan.SnapshotId)
+	require.Zero(t, scan.TimestampAsOf)
+	require.Equal(t, "append_only", scan.ReadMode)
+}
+
+func TestQueryBuilderIcebergComposesWithProjectionFilterJoinAggregate(t *testing.T) {
+	ctx := newIcebergTestCompilerContext(t, time.UTC)
+
+	p, err := buildIcebergTestPlan(t, ctx,
+		"select g.id, count(d.id) from gold_orders g join dim_orders d on g.id = d.id where g.id > 10 group by g.id")
+	require.NoError(t, err)
+
+	query := p.GetQuery()
+	require.NotNil(t, query)
+	var hasIcebergScan, hasJoin, hasFilter, hasAgg, hasProject bool
+	for _, node := range query.GetNodes() {
+		switch node.GetNodeType() {
+		case plan.Node_EXTERNAL_SCAN:
+			if node.GetExternScan().GetIcebergScan() != nil {
+				hasIcebergScan = true
+			}
+		case plan.Node_JOIN:
+			hasJoin = true
+		case plan.Node_FILTER:
+			hasFilter = true
+		case plan.Node_AGG:
+			hasAgg = true
+		case plan.Node_PROJECT:
+			hasProject = true
+		}
+	}
+	require.True(t, hasIcebergScan, "expected Iceberg persistent mapping scan")
+	require.True(t, hasJoin, "expected join with ordinary table")
+	require.True(t, hasFilter, "expected SQL filter to remain in MO plan")
+	require.True(t, hasAgg, "expected aggregate over Iceberg scan")
+	require.True(t, hasProject, "expected projection over Iceberg scan")
+}
+
+func TestQueryBuilderIcebergTimeTravelSnapshot(t *testing.T) {
+	ctx := newIcebergTestCompilerContext(t, time.UTC)
+
+	p, err := buildIcebergTestPlan(t, ctx, "select id from gold_orders for iceberg snapshot 78124581230123")
+	require.NoError(t, err)
+
+	scan := requireIcebergScan(t, p)
+	require.Equal(t, int64(78124581230123), scan.SnapshotId)
+	require.Zero(t, scan.TimestampAsOf)
+	require.Equal(t, "main", scan.Ref)
+}
+
+func TestQueryBuilderIcebergTimeTravelTimestampUsesSessionTimezone(t *testing.T) {
+	loc := time.FixedZone("KSA", 3*60*60)
+	ctx := newIcebergTestCompilerContext(t, loc)
+
+	p, err := buildIcebergTestPlan(t, ctx, "select id from gold_orders for iceberg timestamp as of timestamp '2026-06-01 00:00:00'")
+	require.NoError(t, err)
+
+	ts, err := types.ParseTimestamp(loc, "2026-06-01 00:00:00", 6)
+	require.NoError(t, err)
+	expectedMS := (int64(ts) - int64(types.UnixToTimestamp(0))) / 1000
+	scan := requireIcebergScan(t, p)
+	require.Zero(t, scan.SnapshotId)
+	require.Equal(t, expectedMS, scan.TimestampAsOf)
+}
+
+func TestQueryBuilderIcebergNamedRef(t *testing.T) {
+	ctx := newIcebergTestCompilerContext(t, time.UTC)
+
+	p, err := buildIcebergTestPlan(t, ctx, "select id from gold_orders for iceberg ref audit_branch")
+	require.NoError(t, err)
+
+	scan := requireIcebergScan(t, p)
+	require.Zero(t, scan.SnapshotId)
+	require.Zero(t, scan.TimestampAsOf)
+	require.Equal(t, "audit_branch", scan.Ref)
+}
+
+func TestQueryBuilderIcebergTimeTravelRejectsNativeSnapshotMix(t *testing.T) {
+	ctx := newIcebergTestCompilerContext(t, time.UTC)
+
+	_, err := buildIcebergTestPlan(t, ctx, "select id from gold_orders {timestamp = '2026-06-01 00:00:00'} for iceberg snapshot 1")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "cannot combine MO snapshot hint with FOR ICEBERG time travel")
+}
+
+func TestQueryBuilderIcebergTimeTravelRequiresIcebergTable(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+
+	_, err := buildIcebergTestPlan(t, ctx, "select n_name from nation for iceberg snapshot 1")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "FOR ICEBERG requires an Iceberg external table")
 }
 
 func TestQueryBuilder_bindOrderByEnum(t *testing.T) {

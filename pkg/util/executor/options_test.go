@@ -16,6 +16,7 @@ package executor
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -30,4 +31,19 @@ func TestOptionsStreaming(t *testing.T) {
 	require.True(t, ret == ch)
 	require.True(t, streaming)
 	require.True(t, err_chan == errors)
+}
+
+func TestOptionsLockWaitTimeout(t *testing.T) {
+	var opts Options
+	require.False(t, opts.HasLockWaitTimeout())
+
+	opts = opts.WithLockWaitTimeout(1500 * time.Millisecond)
+	require.True(t, opts.HasLockWaitTimeout())
+	require.Equal(t, 1500*time.Millisecond, opts.LockWaitTimeout())
+	require.Len(t, opts.ExtraTxnOptions(), 1)
+
+	opts = opts.WithLockWaitTimeout(0)
+	require.True(t, opts.HasLockWaitTimeout())
+	require.Zero(t, opts.LockWaitTimeout())
+	require.Len(t, opts.ExtraTxnOptions(), 2)
 }
