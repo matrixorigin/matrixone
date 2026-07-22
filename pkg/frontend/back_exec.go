@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -53,6 +54,11 @@ type backExec struct {
 	statsArray *statistic.StatsArray
 }
 
+type backgroundExecRowCount interface {
+	GetLastAffectedRows() int64
+	SetLastAffectedRows(int64)
+}
+
 func (back *backExec) init(ses FeSession, txnOp TxnOperator, db string, callBack outputCallBackFunc) {
 	back.backSes = newBackSession(ses, txnOp, db, callBack)
 	if back.statsArray != nil {
@@ -64,6 +70,14 @@ func (back *backExec) init(ses FeSession, txnOp TxnOperator, db string, callBack
 
 func (back *backExec) Service() string {
 	return back.backSes.GetService()
+}
+
+func (back *backExec) GetLastAffectedRows() int64 {
+	return back.backSes.lastAffectedRows
+}
+
+func (back *backExec) SetLastAffectedRows(rows int64) {
+	back.backSes.lastAffectedRows = rows
 }
 
 func (back *backExec) Close() {
@@ -94,8 +108,24 @@ func (back *backExec) GetExecStatsArray() statistic.StatsArray {
 var restoreSqlRegx = regexp.MustCompile("MO_TS.*=")
 
 func (back *backExec) Exec(ctx context.Context, sql string) (retErr error) {
+	return back.exec(ctx, sql, "", false)
+}
+
+// ExecWithSQLMode executes sql using sqlMode to parse it. The original SQL text
+// is retained so DDL which persists its source text, such as CREATE VIEW, is
+// not rewritten during execution.
+func (back *backExec) ExecWithSQLMode(ctx context.Context, sql string, sqlMode string) (retErr error) {
+	return back.exec(ctx, sql, sqlMode, true)
+}
+
+func (back *backExec) exec(ctx context.Context, sql string, sqlMode string, useSQLMode bool) (retErr error) {
 	back.backSes.EnterFPrint(FPBackExecExec)
 	defer back.backSes.ExitFPrint(FPBackExecExec)
+	defer func() {
+		if retErr != nil {
+			back.SetLastAffectedRows(-1)
+		}
+	}()
 	if ctx == nil {
 		return moerr.NewInternalError(context.Background(), "context is nil")
 	}
@@ -115,7 +145,12 @@ func (back *backExec) Exec(ctx context.Context, sql string) (retErr error) {
 		v = int64(1)
 	}
 
-	statements, err := mysql.Parse(ctx, sql, v.(int64))
+	var statements []tree.Statement
+	if useSQLMode {
+		statements, err = parsers.ParseWithSQLMode(ctx, dialect.MYSQL, sql, v.(int64), sqlMode)
+	} else {
+		statements, err = mysql.Parse(ctx, sql, v.(int64))
+	}
 	if err != nil {
 		return err
 	}
@@ -169,8 +204,10 @@ func (back *backExec) Exec(ctx context.Context, sql string) (retErr error) {
 	}
 
 	userInput := &UserInput{
-		sql:       sql,
-		isRestore: isRestore,
+		sql:              sql,
+		parserSQLMode:    sqlMode,
+		useParserSQLMode: useSQLMode,
+		isRestore:        isRestore,
 	}
 	execCtx := ExecCtx{
 		reqCtx: ctx,
@@ -359,6 +396,7 @@ func doComQueryInBack(
 		StorageEngine: pu.StorageEngine,
 		Buf:           backSes.buf,
 	}
+	proc.SetAffectedRows(backSes.lastAffectedRows)
 	proc.SetStmtProfile(&backSes.stmtProfile)
 	proc.SetResolveVariableFunc(backSes.txnCompileCtx.ResolveVariable)
 	// Frontend back-exec — session-bound resolver. backSession is a
@@ -490,9 +528,42 @@ func doComQueryInBack(
 		if err != nil {
 			return err
 		}
+		if _, ok := stmt.(*tree.CallStmt); ok {
+			if err = appendNestedCallResults(execCtx.reqCtx, backSes, execCtx.results); err != nil {
+				return err
+			}
+		}
+		backSes.lastAffectedRows = affectedRowsForStatement(execCtx)
 	} // end of for
 
 	return nil
+}
+
+func appendNestedCallResults(ctx context.Context, backSes *backSession, results []ExecResult) error {
+	for _, result := range results {
+		mrs, ok := result.(*MysqlResultSet)
+		if !ok {
+			return moerr.NewInternalError(ctx, "nested CALL returned an unsupported result type")
+		}
+		backSes.allResultSet = append(backSes.allResultSet, mrs)
+	}
+	return nil
+}
+
+func affectedRowsForStatement(execCtx *ExecCtx) int64 {
+	switch execCtx.stmt.StmtKind().OutputType() {
+	case tree.OUTPUT_RESULT_ROW:
+		return -1
+	case tree.OUTPUT_STATUS:
+		if execCtx.runResult != nil {
+			return int64(execCtx.runResult.AffectRows)
+		}
+	case tree.OUTPUT_UNDEFINED:
+		if _, ok := execCtx.stmt.(*tree.CallStmt); ok && execCtx.runResult != nil {
+			return int64(execCtx.runResult.AffectRows)
+		}
+	}
+	return 0
 }
 
 func executeStmtInBack(backSes *backSession,
@@ -657,7 +728,17 @@ var GetComputationWrapperInBack = func(execCtx *ExecCtx, db string, input *UserI
 		}
 		stmts = append(stmts, cmdCheckSnapshotFlushedStmt)
 	} else {
-		stmts, err = parseSql(execCtx, ses.GetMySQLParser())
+		if input.useParserSQLMode {
+			stmts, err = parsers.ParseWithSQLMode(
+				execCtx.reqCtx,
+				dialect.MYSQL,
+				input.getSql(),
+				parserLowerCaseTableNames(ses),
+				input.parserSQLMode,
+			)
+		} else {
+			stmts, err = parseSql(execCtx, ses.GetMySQLParser())
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -864,7 +945,9 @@ func getResultSet(ctx context.Context, bh BackgroundExec) ([]ExecResult, error) 
 
 type backSession struct {
 	feSessionImpl
-	//ep *ExportConfig
+	// lastAffectedRows carries the previous statement's ROW_COUNT() value into
+	// the next process created by this background executor.
+	lastAffectedRows int64
 }
 
 func newBackSession(ses FeSession, txnOp TxnOperator, db string, callBack outputCallBackFunc) *backSession {
@@ -898,7 +981,7 @@ func (backSes *backSession) initFeSes(
 	backSes.resultBatches = nil
 	backSes.derivedStmt = false
 	backSes.label = make(map[string]string)
-	backSes.timeZone = time.Local
+	backSes.timeZone = ses.GetTimeZone()
 	backSes.respr = defResper
 	backSes.service = ses.GetService()
 	return backSes

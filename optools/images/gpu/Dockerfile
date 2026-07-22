@@ -39,9 +39,15 @@ ENV LD_LIBRARY_PATH="${LD_LIBRARY_PATH}:${CONDA_PREFIX}/lib"
 
 # goproxy
 ARG GOPROXY="https://proxy.golang.org,direct"
+ENV GOWORK=off
 RUN go env -w GOPROXY=${GOPROXY}
 
-RUN go mod download
+RUN module_files="$(sha256sum go.mod go.sum)" && \
+    go mod download && \
+    if [ "$module_files" != "$(sha256sum go.mod go.sum)" ]; then \
+        echo "go mod download changed go.mod/go.sum; run make mod-tidy"; \
+        exit 1; \
+    fi
 
 ENV MO_CL_CUDA=1
 RUN make clean && make
@@ -74,4 +80,3 @@ WORKDIR /
 EXPOSE 6001
 
 ENTRYPOINT [ "/mo-service", "-debug-http=:12345", "-launch", "/etc/quickstart/launch.toml"]
-

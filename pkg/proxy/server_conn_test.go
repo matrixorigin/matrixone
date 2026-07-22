@@ -19,6 +19,7 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"strings"
@@ -29,6 +30,7 @@ import (
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/lni/goutils/leaktest"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/config"
@@ -592,6 +594,175 @@ func TestServerConn_Connect(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestCNServerConnectClosesSessionOnInvalidSalt(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer listener.Close()
+
+	accepted := make(chan net.Conn, 1)
+	acceptErr := make(chan error, 1)
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			acceptErr <- err
+			return
+		}
+		accepted <- conn
+	}()
+
+	cn := &CNServer{
+		addr: listener.Addr().String(),
+		salt: []byte("invalid"),
+	}
+	session, err := cn.Connect(nil, time.Second)
+	require.Nil(t, session)
+	require.ErrorContains(t, err, "salt is empty")
+
+	var backend net.Conn
+	select {
+	case backend = <-accepted:
+	case err := <-acceptErr:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		require.FailNow(t, "backend did not accept proxy connection")
+	}
+	defer backend.Close()
+	require.NoError(t, backend.SetReadDeadline(time.Now().Add(time.Second)))
+	n, readErr := backend.Read(make([]byte, 1))
+	require.Zero(t, n)
+	require.ErrorIs(t, readErr, io.EOF)
+}
+
+func TestServerConnExecStmtContextInterruptsSessionTimeout(t *testing.T) {
+	local, remote := net.Pipe()
+	defer remote.Close()
+	frontend.InitServerLevelVars("test")
+	fp := config.FrontendParameters{}
+	fp.SetDefaultValues()
+	pu := config.NewParameterUnit(&fp, nil, nil, nil)
+	allocator := frontend.NewLeakCheckAllocator()
+	ios, err := frontend.NewIOSessionWithOptions(
+		local,
+		pu,
+		"test",
+		frontend.WithIOSessionBufferSize(proxyIOSessionBufferSize),
+		frontend.WithIOSessionAllocator(allocator),
+	)
+	require.NoError(t, err)
+	sc := &serverConn{
+		conn:       local,
+		mysqlProto: frontend.NewMysqlClientProtocol("test", 1, ios, 0, &fp),
+	}
+	defer func() {
+		require.NoError(t, sc.Close())
+		require.True(t, allocator.CheckBalance())
+	}()
+
+	requestRead := make(chan error, 1)
+	go func() {
+		header := make([]byte, frontend.PacketHeaderLength)
+		if _, err := io.ReadFull(remote, header); err != nil {
+			requestRead <- err
+			return
+		}
+		length := int(uint32(header[0]) | uint32(header[1])<<8 | uint32(header[2])<<16)
+		_, err := io.ReadFull(remote, make([]byte, length))
+		requestRead <- err
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	_, err = sc.ExecStmtContext(ctx, internalStmt{cmdType: cmdQuery, s: "set transferred=1"}, nil)
+	require.Error(t, err)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Less(t, time.Since(started), time.Second,
+		"context must override frontend's default 24-hour session read timeout")
+	require.NoError(t, <-requestRead)
+}
+
+func TestServerConnRejectsOversizedBackendPacket(t *testing.T) {
+	local, remote := net.Pipe()
+	defer remote.Close()
+	frontend.InitServerLevelVars("test")
+	fp := config.FrontendParameters{}
+	fp.SetDefaultValues()
+	pu := config.NewParameterUnit(&fp, nil, nil, nil)
+	allocator := frontend.NewLeakCheckAllocator()
+	ios, err := frontend.NewIOSessionWithOptions(
+		local,
+		pu,
+		"test",
+		frontend.WithIOSessionBufferSize(proxyIOSessionBufferSize),
+		frontend.WithIOSessionAllowedPacketSize(proxyBackendPacketLimit),
+		frontend.WithIOSessionAllocator(allocator),
+	)
+	require.NoError(t, err)
+	sc := &serverConn{
+		conn:       local,
+		mysqlProto: frontend.NewMysqlClientProtocol("test", 1, ios, 0, &fp),
+	}
+	defer func() {
+		require.NoError(t, sc.Close())
+		require.True(t, allocator.CheckBalance())
+	}()
+
+	peerDone := make(chan error, 1)
+	go func() {
+		header := []byte{
+			byte((proxyBackendPacketLimit + 1) & 0xff),
+			byte(((proxyBackendPacketLimit + 1) >> 8) & 0xff),
+			byte(((proxyBackendPacketLimit + 1) >> 16) & 0xff),
+			0,
+		}
+		packetPrefix := append(header, make([]byte, proxyIOSessionBufferSize-len(header))...)
+		if _, err := remote.Write(packetPrefix); err != nil {
+			peerDone <- err
+			return
+		}
+		peerDone <- nil
+	}()
+
+	_, err = sc.readPacket()
+	require.Error(t, err)
+	require.NoError(t, <-peerDone)
+}
+
+func TestInterruptConnectionOnDoneOwnershipHandoff(t *testing.T) {
+	t.Run("cancellation closes phase-owned transport", func(t *testing.T) {
+		local, remote := net.Pipe()
+		defer remote.Close()
+		ctx, cancel := context.WithCancel(context.Background())
+		join := interruptConnectionOnDone(ctx, local)
+		cancel()
+		join()
+		_, err := remote.Write([]byte{1})
+		require.Error(t, err)
+	})
+
+	t.Run("successful handoff stops late cancellation", func(t *testing.T) {
+		local, remote := net.Pipe()
+		defer local.Close()
+		defer remote.Close()
+		ctx, cancel := context.WithCancel(context.Background())
+		join := interruptConnectionOnDone(ctx, local)
+		join()
+		cancel()
+
+		writeDone := make(chan error, 1)
+		go func() {
+			_, err := remote.Write([]byte{1})
+			writeDone <- err
+		}()
+		require.NoError(t, local.SetReadDeadline(time.Now().Add(time.Second)))
+		buf := make([]byte, 1)
+		_, err := io.ReadFull(local, buf)
+		require.NoError(t, err)
+		require.Equal(t, byte(1), buf[0])
+		require.NoError(t, <-writeDone)
+	})
+}
+
 func TestServerConn_HandleHandshakeEarlyReadFailureIsNotTimeout(t *testing.T) {
 	defer leaktest.AfterTest(t)
 	temp := os.TempDir()
@@ -600,23 +771,113 @@ func TestServerConn_HandleHandshakeEarlyReadFailureIsNotTimeout(t *testing.T) {
 	cn1 := testMakeCNServer("cn11", addr, 0, "", labelInfo{})
 	tp := newTestProxyHandler(t)
 	defer tp.closeFn()
+	backendAccepted := make(chan struct{})
+	allowBackendClose := make(chan struct{})
+	backendClosed := make(chan struct{})
 	stopFn := startTestCNServer(t, tp.ctx, addr, nil, withHandle(func(h *testHandler) {
-		// Simulate an immediate post-dial backend failure before the CN sends
-		// its initial handshake.
+		// startTestCNServer probes readiness without sending ExtraInfo. The
+		// connection opened by newServerConn does send it, so decode the wire
+		// protocol instead of relying on handler goroutine scheduling order.
+		rawConn := h.conn.RawConn()
+		if err := rawConn.SetReadDeadline(time.Now().Add(3 * time.Second)); err != nil {
+			h.close()
+			return
+		}
+		reader := bufio.NewReader(rawConn)
+		extraInfo := proxy.ExtraInfo{}
+		if err := extraInfo.Decode(reader); err != nil {
+			h.close()
+			return
+		}
+		if err := rawConn.SetReadDeadline(time.Time{}); err != nil {
+			h.close()
+			return
+		}
+
+		close(backendAccepted)
+		select {
+		case <-allowBackendClose:
+		case <-tp.ctx.Done():
+		}
 		h.close()
+		close(backendClosed)
 	}))
+	var releaseBackendOnce sync.Once
+	releaseBackend := func() {
+		releaseBackendOnce.Do(func() {
+			close(allowBackendClose)
+		})
+	}
 	defer func() {
+		releaseBackend()
 		require.NoError(t, stopFn())
 	}()
+	waitSignal := func(c <-chan struct{}, message string) {
+		t.Helper()
+		select {
+		case <-c:
+		case <-time.After(5 * time.Second):
+			require.FailNow(t, message)
+		}
+	}
 
 	sc, err := newServerConn(cn1, nil, tp.re, 0)
 	require.NoError(t, err)
 	require.NotNil(t, sc)
 	defer sc.Close()
 
+	// Close only after newServerConn has sent ExtraInfo successfully, then make
+	// HandleHandshake observe the intended pre-handshake backend failure.
+	waitSignal(backendAccepted, "timed out waiting for test CN connection")
+	releaseBackend()
+	waitSignal(backendClosed, "timed out closing test CN connection")
 	_, err = sc.HandleHandshake(&frontend.Packet{Payload: []byte{1}}, time.Second)
 	require.Error(t, err)
 	require.False(t, isTimeoutErr(err), "early backend close must not be reclassified as timeout/busy")
+}
+
+func TestServerConn_HandleHandshakeTimeoutStopsWorker(t *testing.T) {
+	local, remote := net.Pipe()
+	defer remote.Close()
+	frontend.InitServerLevelVars("test")
+	require.NoError(t, remote.SetWriteDeadline(time.Now().Add(time.Second)))
+	fp := config.FrontendParameters{}
+	fp.SetDefaultValues()
+	pu := config.NewParameterUnit(&fp, nil, nil, nil)
+	allocator := frontend.NewLeakCheckAllocator()
+	ios, err := frontend.NewIOSessionWithOptions(
+		local,
+		pu,
+		"test",
+		frontend.WithIOSessionBufferSize(proxyIOSessionBufferSize),
+		frontend.WithIOSessionAllowedPacketSize(proxyBackendPacketLimit),
+		frontend.WithIOSessionAllocator(allocator),
+	)
+	require.NoError(t, err)
+	sc := &serverConn{
+		cnServer: &CNServer{addr: "pipe"},
+		conn:     local,
+		connID:   1,
+		mysqlProto: frontend.NewMysqlClientProtocol(
+			"test", 1, ios, 0, &fp,
+		),
+	}
+	defer func() {
+		require.NoError(t, sc.Close())
+		require.True(t, allocator.CheckBalance())
+	}()
+
+	_, err = sc.HandleHandshake(
+		&frontend.Packet{Payload: []byte("auth")},
+		20*time.Millisecond,
+	)
+	require.Error(t, err)
+	require.True(t, isTimeoutErr(err))
+
+	// HandleHandshake may return only after its worker has stopped. Closing the
+	// transport is the termination edge that makes that guarantee observable.
+	_, err = remote.Write([]byte{1})
+	require.Error(t, err)
 }
 
 func TestFakeCNServer(t *testing.T) {
@@ -723,4 +984,98 @@ func TestServerConnParseConnID(t *testing.T) {
 		err := s.parseConnID(p)
 		require.NoError(t, err)
 	})
+}
+
+func TestCachedServerConnRebindsManagerAcrossReuseGenerations(t *testing.T) {
+	manager := newConnManager()
+	rebalancer := &rebalancer{connManager: manager}
+	newTestTunnel := func() *tunnel {
+		tun := newTunnel(context.Background(), runtime.DefaultRuntime().Logger(), nil)
+		t.Cleanup(func() { require.NoError(t, tun.Close()) })
+		return tun
+	}
+	newTracked := func(id uint32, origin *tunnel) (*serverConn, *CNServer) {
+		cn := testMakeCNServer(
+			fmt.Sprintf("cn-%d", id),
+			fmt.Sprintf("backend-%d", id),
+			id,
+			LabelHash(fmt.Sprintf("tenant-%d", id)),
+			labelInfo{},
+		)
+		sc := &serverConn{
+			cnServer:   cn,
+			connID:     id,
+			rebalancer: rebalancer,
+		}
+		sc.tunnelOwner.tun = origin
+		manager.connect(cn, origin)
+		return sc, cn
+	}
+	contains := func(cn *CNServer, tun *tunnel) bool {
+		manager.Lock()
+		defer manager.Unlock()
+		return manager.cnTunnels[cn.uuid].exists(tun)
+	}
+
+	origin1 := newTestTunnel()
+	active1 := newTestTunnel()
+	sc1, cn1 := newTracked(1, origin1)
+	require.True(t, sc1.rebindTunnel(active1))
+	require.False(t, contains(cn1, origin1))
+	require.True(t, contains(cn1, active1))
+
+	// Replenish the cache while the first reused backend stays active, then pop
+	// that replacement too. Manager ownership must remain active-current plus
+	// cached-origin; prior origins must not accumulate with every reuse cycle.
+	origin2 := newTestTunnel()
+	active2 := newTestTunnel()
+	sc2, cn2 := newTracked(2, origin2)
+	require.True(t, contains(cn1, active1))
+	require.True(t, contains(cn2, origin2))
+	require.True(t, sc2.rebindTunnel(active2))
+	require.False(t, contains(cn2, origin2))
+	require.True(t, contains(cn2, active2))
+
+	origin3 := newTestTunnel()
+	sc3, cn3 := newTracked(3, origin3)
+	require.Equal(t, 3, manager.count())
+	require.True(t, contains(cn1, active1))
+	require.True(t, contains(cn2, active2))
+	require.True(t, contains(cn3, origin3))
+	require.False(t, contains(cn1, origin1))
+	require.False(t, contains(cn2, origin2))
+
+	require.NoError(t, sc1.Close())
+	require.False(t, sc1.rebindTunnel(origin1),
+		"a terminal backend generation must not be rebound")
+	require.False(t, contains(cn1, active1))
+	require.NoError(t, sc2.Close())
+	require.NoError(t, sc3.Close())
+
+	for i := uint32(0); i < 32; i++ {
+		origin := newTestTunnel()
+		next := newTestTunnel()
+		sc, cn := newTracked(100+i, origin)
+		start := make(chan struct{})
+		closeErr := make(chan error, 1)
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			<-start
+			_ = sc.rebindTunnel(next)
+		}()
+		go func() {
+			defer wg.Done()
+			<-start
+			closeErr <- sc.Close()
+		}()
+		close(start)
+		wg.Wait()
+		require.NoError(t, <-closeErr)
+		require.False(t, contains(cn, origin))
+		require.False(t, contains(cn, next),
+			"Close must remove whichever tunnel generation won publication")
+	}
+	require.Zero(t, manager.count())
 }

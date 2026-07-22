@@ -198,7 +198,6 @@ type remoteBackend struct {
 	}
 
 	pool struct {
-		streams *sync.Pool
 		futures *sync.Pool
 	}
 }
@@ -229,17 +228,6 @@ func NewRemoteBackend(
 	rb.pool.futures = &sync.Pool{
 		New: func() interface{} {
 			return newFuture(rb.releaseFuture)
-		},
-	}
-	rb.pool.streams = &sync.Pool{
-		New: func() any {
-			return newStream(
-				rb,
-				make(chan Message, rb.options.streamBufferSize),
-				rb.newFuture,
-				rb.doSend,
-				rb.removeActiveStream,
-				rb.active)
 		},
 	}
 	rb.waitWriteC = make(chan struct{}, 1)
@@ -332,6 +320,7 @@ func (rb *remoteBackend) SendInternal(ctx context.Context, request Message) (*Fu
 func (rb *remoteBackend) send(ctx context.Context, request Message, internal bool) (*Future, error) {
 	f := rb.getFuture(ctx, request, internal)
 	if err := rb.doSend(f); err != nil {
+		f.messageSent(err)
 		f.Close()
 		return nil, err
 	}
@@ -424,6 +413,8 @@ func (rb *remoteBackend) Close() {
 
 	rb.stopper.Stop()
 	rb.doClose()
+	rb.makeAllWaitingFutureFailed(backendClosed)
+	rb.clean()
 	rb.inactive()
 }
 
@@ -615,6 +606,7 @@ func (rb *remoteBackend) doWrite(id uint64, f *Future) time.Duration {
 			zap.String("request", f.send.Message.DebugString()))...)
 	}
 	if err := rb.conn.Write(f.send, goetty.WriteOptions{}); err != nil {
+		rb.metrics.observeBackendError(rb.remote, "write", err)
 		rb.rateLimitLogger.Error("write-conn",
 			"write request failed",
 			append(rb.logFields(), zap.Uint64("request-id", id), zap.Error(err))...)
@@ -654,7 +646,6 @@ func (rb *remoteBackend) readLoop(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			normalExit = true
-			rb.clean()
 			return
 		default:
 			msg, err := rb.conn.Read(goetty.ReadOptions{Timeout: rb.options.readTimeout})
@@ -670,6 +661,7 @@ func (rb *remoteBackend) readLoop(ctx context.Context) {
 					// Per specification: io.EOF is a normal connection closure signal,
 					// do not log it to avoid unnecessary noise
 				} else {
+					rb.metrics.observeBackendError(rb.remote, "read", err)
 					rb.rateLimitLogger.Error("read-loop",
 						"read from backend failed",
 						append(rb.logFields(), zap.Error(err))...)
@@ -805,6 +797,7 @@ func (rb *remoteBackend) makeAllWaitingFutureFailed(err error) {
 	}()
 
 	for i, f := range waitings {
+		rb.metrics.observeBackendError(rb.remote, "wait_response", err)
 		f.error(ids[i], err, nil)
 	}
 }
@@ -842,7 +835,13 @@ func (rb *remoteBackend) clean() {
 }
 
 func (rb *remoteBackend) acquireStream() *stream {
-	return rb.pool.streams.Get().(*stream)
+	return newStream(
+		rb,
+		make(chan Message, rb.options.streamBufferSize),
+		rb.newFuture,
+		rb.doSend,
+		rb.removeActiveStream,
+		rb.active)
 }
 
 func (rb *remoteBackend) cancelActiveStreams() {
@@ -856,25 +855,16 @@ func (rb *remoteBackend) cancelActiveStreams() {
 
 func (rb *remoteBackend) removeActiveStream(s *stream) {
 	rb.mu.Lock()
-	defer rb.mu.Unlock()
-
 	delete(rb.mu.activeStreams, s.id)
 	delete(rb.mu.futures, s.id)
-	if s.unlockAfterClose {
-		rb.Unlock()
-	}
-	if len(s.c) > 0 {
+	channelNotEmpty := len(s.c) > 0
+	rb.mu.Unlock()
+	if channelNotEmpty {
 		panic("BUG: stream channel is not empty")
 	}
-	// When backend is already stopped (e.g. stream closed with closeConn=true), do not Put
-	// the stream back into the pool. Otherwise backend->pool->stream->backend forms a cycle
-	// and the backend (and its goetty session / newCounters) can never be GC'd after removal
-	// from the client, so heap inuse for newCounters stays high.
-	rb.stateMu.RLock()
-	stopped := rb.stateMu.state == stateStopped
-	rb.stateMu.RUnlock()
-	if !stopped {
-		rb.pool.streams.Put(s)
+
+	if s.unlockAfterClose {
+		rb.Unlock()
 	}
 }
 
@@ -999,20 +989,25 @@ func (rb *remoteBackend) resetConn() error {
 		canRetry := false
 		if ne, ok := err.(net.Error); ok && ne.Timeout() {
 			canRetry = true
+			rb.metrics.observeBackendError(rb.remote, "connect", err)
 		}
 		rb.rateLimitLogger.Error("connect-retry",
 			"init remote connection failed, retry later",
 			append(rb.logFields(), zap.Bool("can-retry", canRetry), zap.Error(err))...)
 
 		if !canRetry {
-			return moerr.NewBackendCannotConnectNoCtx(err)
+			err = moerr.NewBackendCannotConnectNoCtx(err)
+			rb.metrics.observeBackendError(rb.remote, "connect", err)
+			return err
 		}
 		duration := time.Duration(0)
 		for {
 			time.Sleep(sleep)
 			duration += sleep
 			if time.Since(start) > rb.options.connectTimeout {
-				return moerr.NewRPCTimeoutNoCtx()
+				err := moerr.NewRPCTimeoutNoCtx()
+				rb.metrics.observeBackendError(rb.remote, "connect", err)
+				return err
 			}
 			select {
 			case <-rb.ctx.Done():
@@ -1026,7 +1021,8 @@ func (rb *remoteBackend) resetConn() error {
 		wait += wait / 2
 
 		// reconnect failed, notify all future failed
-		rb.notifyAllWaitWritesFailed(moerr.NewBackendCannotConnectNoCtx())
+		backendErr := moerr.NewBackendCannotConnectNoCtx()
+		rb.notifyAllWaitWritesFailed(backendErr)
 	}
 }
 
@@ -1253,7 +1249,9 @@ func (s *stream) setFinalizer() {
 
 func (s *stream) destroy() {
 	close(s.c)
-	s.cancel()
+	if s.cancel != nil {
+		s.cancel()
+	}
 }
 
 func (s *stream) Send(ctx context.Context, request Message) error {
@@ -1317,19 +1315,20 @@ func (s *stream) Receive() (chan Message, error) {
 }
 
 func (s *stream) Close(closeConn bool) error {
+	s.cancel()
 	if closeConn {
 		s.rb.logger.Info("stream call closed on client", append(s.rb.logFields(), zap.Uint64("stream-id", s.id))...)
 		s.rb.Close()
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	if s.mu.closed {
+		s.mu.Unlock()
 		return nil
 	}
 
 	s.cleanCLocked()
 	s.mu.closed = true
+	s.mu.Unlock()
 	s.unregisterFunc(s)
 	return nil
 }
@@ -1371,6 +1370,7 @@ func (s *stream) done(
 		select {
 		case s.c <- response:
 		case <-ctx.Done():
+		case <-s.ctx.Done():
 		}
 	})
 }

@@ -17,6 +17,7 @@ package lockop
 import (
 	"bytes"
 	"context"
+	"errors"
 	"math"
 	"testing"
 	"time"
@@ -30,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	mock_lock "github.com/matrixorigin/matrixone/pkg/frontend/test/mock_lock"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
@@ -39,6 +41,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -97,6 +100,7 @@ func TestLockWaitTimeoutUsesCurrentSessionValue(t *testing.T) {
 		nil,
 		nil,
 		nil)
+	proc.Base.IsFrontend = true
 	proc.SetResolveVariableFunc(func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
 		require.Equal(t, "lock_wait_timeout", varName)
 		require.True(t, isSystemVar)
@@ -111,6 +115,26 @@ func TestLockWaitTimeoutUsesCurrentSessionValue(t *testing.T) {
 
 	proc.GetSessionInfo().LockWaitTimeout = 0
 	require.Equal(t, 60*time.Second, lockWaitTimeout(proc, txnOp))
+
+	proc.Base.IsFrontend = false
+	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+		return int64(2), nil
+	})
+	require.Equal(t, 60*time.Second, lockWaitTimeout(proc, txnOp),
+		"background per-execution txn option must override the default resolver")
+	proc.GetSessionInfo().LockWaitTimeout = 4
+	require.Equal(t, 4*time.Second, lockWaitTimeout(proc, txnOp),
+		"background process-level per-execution option must have highest priority")
+
+	proc.GetSessionInfo().LockWaitTimeout = 0
+	proc.GetSessionInfo().LockWaitTimeoutSet = true
+	require.Equal(t, 2*time.Second, lockWaitTimeout(proc, txnOp),
+		"clearing an existing transaction override must fall back to the resolver")
+	proc.SetResolveVariableFunc(nil)
+	require.Equal(t,
+		time.Duration(defines.DefaultLockWaitTimeoutSeconds)*time.Second,
+		lockWaitTimeout(proc, txnOp),
+		"clearing without a resolver must use the rolling-upgrade-safe fallback, not the existing transaction timeout")
 }
 
 func TestLockOpHelpers(t *testing.T) {
@@ -155,6 +179,10 @@ func TestRefreshLockWaitOptionsReturnsTimeoutAfterDeadline(t *testing.T) {
 
 	_, err := refreshLockWaitOptions(options)
 	require.ErrorIs(t, err, lockservice.ErrLockTimeout)
+}
+
+func TestLockWaitTimeoutIsNotRetryable(t *testing.T) {
+	require.False(t, isRetryLockError(lockservice.ErrLockTimeout))
 }
 
 func TestLockOpTargetHelpers(t *testing.T) {
@@ -1376,12 +1404,48 @@ func TestLockOpResetClearsLockCount(t *testing.T) {
 	arg.ctr.lockCount = 7
 	arg.ctr.defChanged = true
 	arg.ctr.retryError = moerr.NewTxnNeedRetryNoCtx()
+	arg.ctr.relations = []engine.Relation{nil}
 
 	arg.Reset(nil, false, nil)
 
 	require.Equal(t, int64(0), arg.ctr.lockCount)
 	require.False(t, arg.ctr.defChanged)
 	require.Nil(t, arg.ctr.retryError)
+	require.Len(t, arg.ctr.relations, 1)
+}
+
+func TestLockOpPrepareRecoversFromPartialRelationInitialization(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	eng := mock_frontend.NewMockEngine(ctrl)
+	database := mock_frontend.NewMockDatabase(ctrl)
+	relation1 := mock_frontend.NewMockRelation(ctrl)
+	relation2 := mock_frontend.NewMockRelation(ctrl)
+	lookupErr := errors.New("lookup t2")
+
+	eng.EXPECT().Database(gomock.Any(), "db", gomock.Any()).Return(database, nil).AnyTimes()
+	database.EXPECT().Relation(gomock.Any(), "t1", gomock.Any()).Return(relation1, nil).Times(1)
+	database.EXPECT().Relation(gomock.Any(), "t2", gomock.Any()).Return(nil, lookupErr).Times(1)
+	database.EXPECT().Relation(gomock.Any(), "t2", gomock.Any()).Return(relation2, nil).Times(1)
+	relation1.EXPECT().Reset(gomock.Any()).Return(nil).Times(1)
+
+	arg := NewArgumentByEngine(eng)
+	arg.AddLockTarget(1, &plan.ObjectRef{SchemaName: "db", ObjName: "t1"}, 0, types.T_int64.ToType(), -1, -1, nil, false)
+	arg.AddLockTarget(2, &plan.ObjectRef{SchemaName: "db", ObjName: "t2"}, 0, types.T_int64.ToType(), -1, -1, nil, false)
+	proc := testutil.NewProc(t)
+
+	require.ErrorIs(t, arg.Prepare(proc), lookupErr)
+	require.Same(t, relation1, arg.ctr.relations[0])
+	require.Nil(t, arg.ctr.relations[1])
+
+	require.NoError(t, arg.Prepare(proc))
+	require.Same(t, relation1, arg.ctr.relations[0])
+	require.Same(t, relation2, arg.ctr.relations[1])
+
+	arg.Free(proc, true, lookupErr)
+	arg.Release()
+	proc.Free()
 }
 
 func runLockNonBlockingOpTest(

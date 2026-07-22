@@ -617,6 +617,7 @@ message UpdateCtx {
   repeated ColRef partition_cols = 9 [(gogoproto.nullable) = false];
   bool skip_insert_on_null_pk = 10;
   int32 insert_pk_col_idx = 11;
+  bool count_delete_affect_rows = 12;
 }
 
 message InsertCtx {
@@ -715,6 +716,8 @@ message IndexReaderParam {
   Expr limit = 2;
   string orig_func_name = 3;
   DistRange dist_range = 4;
+  int32 partition_cn_cnt = 5;
+  int32 partition_cn_idx = 6;
 }
 
 message Node {
@@ -938,6 +941,17 @@ message Node {
   int64 spill_mem = 70;
   repeated string origin_views = 71;
   string direct_view = 72;
+
+  // TIME_WINDOW only: the GROUP BY columns other than the window's own
+  // timestamp key. The operator restarts its window state whenever these
+  // change, so each group gets its own windows instead of one global stream.
+  repeated Expr time_window_partition_by = 73;
+
+  // FILL only: positions of the partition keys inside this node's input batch
+  // (the child TIME_WINDOW's projection). fill(prev/next/linear) must not
+  // carry values across a partition boundary, so the operator compares these
+  // columns to find where one group ends and the next begins.
+  repeated int32 time_window_partition_col_pos = 74;
 }
 
 message SnapshotExtraInfo {
@@ -966,6 +980,7 @@ enum ExternType {
   LOAD = 0;
   EXTERNAL_TB = 1;
   RESULT_SCAN = 2;
+  ICEBERG_TB = 3;
 }
 
 message ExternScan {
@@ -979,6 +994,20 @@ message ExternScan {
   string json_type = 8;
   bytes escaped_by = 9;
   map<string, int32> TbColToDataCol = 10;
+  IcebergScan iceberg_scan = 11;
+}
+
+message IcebergScan {
+  uint64 mapping_id = 1;
+  uint64 catalog_id = 2;
+  string namespace = 3;
+  string table = 4;
+  string ref = 5;
+  int64 snapshot_id = 6;
+  int64 timestamp_as_of = 7;
+  string read_mode = 8;
+  repeated int32 projected_field_ids = 9;
+  string filter_digest = 10;
 }
 
 message ExternAttr {
@@ -1117,6 +1146,9 @@ message Query {
 
   // run time config that can change query behaviors
   int64 maxDop = 10;
+
+  // True when the planner generated recursive FK side-effect DML for this query.
+  bool has_foreign_key_action = 11;
 }
 
 message TransationControl {

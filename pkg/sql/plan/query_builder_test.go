@@ -20,18 +20,236 @@ import (
 	"math"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/iceberg/model"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestChooseRowCarrier(t *testing.T) {
+	makeExpr := func(typ types.T, width int32) *plan.Expr {
+		return &plan.Expr{Typ: plan.Type{Id: int32(typ), Width: width}}
+	}
+	makeAgg := func(name string, typ types.T, width int32, args ...*plan.Expr) *plan.Expr {
+		return &plan.Expr{
+			Typ: plan.Type{Id: int32(typ), Width: width},
+			Expr: &plan.Expr_F{F: &plan.Function{
+				Func: &plan.ObjectRef{ObjName: name},
+				Args: args,
+			}},
+		}
+	}
+
+	t.Run("fixed width before varlen", func(t *testing.T) {
+		exprs := []*plan.Expr{
+			makeExpr(types.T_varchar, 8),
+			makeExpr(types.T_int64, 0),
+			makeExpr(types.T_int32, 0),
+		}
+		require.Equal(t, 2, chooseRowCarrier(exprs, false))
+	})
+
+	t.Run("short varlen before long varlen", func(t *testing.T) {
+		exprs := []*plan.Expr{
+			makeExpr(types.T_varchar, 1024),
+			makeExpr(types.T_varchar, 32),
+		}
+		require.Equal(t, 1, chooseRowCarrier(exprs, false))
+	})
+
+	t.Run("stable tie break", func(t *testing.T) {
+		exprs := []*plan.Expr{
+			makeExpr(types.T_int32, 0),
+			makeExpr(types.T_int32, 0),
+		}
+		require.Equal(t, 0, chooseRowCarrier(exprs, false))
+	})
+
+	t.Run("table columns use the same cost model", func(t *testing.T) {
+		cols := []*plan.ColDef{
+			{Name: "payload", Typ: plan.Type{Id: int32(types.T_varchar), Width: 4096}},
+			{Name: "id", Typ: plan.Type{Id: int32(types.T_int8)}},
+		}
+		require.Equal(t, 1, chooseTableRowCarrier(plan.Node_TABLE_SCAN, cols))
+	})
+
+	t.Run("external scan excludes hidden columns", func(t *testing.T) {
+		cols := []*plan.ColDef{
+			{Name: "payload", Typ: plan.Type{Id: int32(types.T_varchar), Width: 4096}},
+			{Name: "__mo_fake_pk_col", Hidden: true, Typ: plan.Type{Id: int32(types.T_uint64)}},
+		}
+		require.Equal(t, 0, chooseTableRowCarrier(plan.Node_EXTERNAL_SCAN, cols))
+		require.Equal(t, 1, chooseTableRowCarrier(plan.Node_TABLE_SCAN, cols))
+	})
+
+	t.Run("internal and unknown types are conservative", func(t *testing.T) {
+		for _, typ := range []int32{
+			-1,
+			int32(types.T_any),
+			int32(types.T_interval),
+			int32(types.T_tuple),
+			256,
+			999,
+		} {
+			exprs := []*plan.Expr{
+				{Typ: plan.Type{Id: typ}},
+				makeExpr(types.T_int8, 0),
+			}
+			require.Equal(t, 1, chooseRowCarrier(exprs, false), "type %d", typ)
+		}
+	})
+
+	t.Run("cheap aggregate before expensive varlen aggregate", func(t *testing.T) {
+		exprs := []*plan.Expr{
+			makeAgg("group_concat", types.T_text, 0),
+			makeAgg("sum", types.T_int64, 0),
+			makeAgg("starcount", types.T_int64, 0),
+		}
+		require.Equal(t, 2, chooseRowCarrier(exprs, true))
+	})
+
+	t.Run("aggregate input width affects cost", func(t *testing.T) {
+		exprs := []*plan.Expr{
+			makeAgg("count", types.T_int64, 0, makeExpr(types.T_varchar, 4096)),
+			makeAgg("sum", types.T_int64, 0, makeExpr(types.T_int32, 0)),
+		}
+		require.Equal(t, 1, chooseRowCarrier(exprs, true))
+	})
+
+	t.Run("union combines both inputs", func(t *testing.T) {
+		left := []*plan.Expr{
+			makeExpr(types.T_int16, 0),
+			makeExpr(types.T_int32, 0),
+		}
+		right := []*plan.Expr{
+			makeExpr(types.T_varchar, 8),
+			makeExpr(types.T_int32, 0),
+		}
+		require.Equal(t, 1, chooseUnionRowCarrier(left, right, 2))
+	})
+}
+
+func TestCanPruneSampleExprs(t *testing.T) {
+	makeCol := func(tag, pos int32, notNullable bool) *plan.Expr {
+		return &plan.Expr{
+			Typ:  plan.Type{Id: int32(types.T_int64), NotNullable: notNullable},
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: tag, ColPos: pos}},
+		}
+	}
+	makeScan := func(tag int32, notNullable ...bool) *plan.Node {
+		cols := make([]*plan.ColDef, len(notNullable))
+		for i := range notNullable {
+			cols[i] = &plan.ColDef{Typ: plan.Type{Id: int32(types.T_int64), NotNullable: notNullable[i]}}
+		}
+		return &plan.Node{
+			NodeType:    plan.Node_TABLE_SCAN,
+			BindingTags: []int32{tag},
+			TableDef:    &plan.TableDef{Cols: cols},
+		}
+	}
+
+	t.Run("single expression needs no cross-expression proof", func(t *testing.T) {
+		node := &plan.Node{AggList: []*plan.Expr{{Expr: &plan.Expr_F{F: &plan.Function{}}}}}
+		require.True(t, canPruneSampleExprs(node, &plan.Node{NodeType: plan.Node_PROJECT}))
+	})
+
+	t.Run("direct not null table columns", func(t *testing.T) {
+		node := &plan.Node{AggList: []*plan.Expr{makeCol(7, 0, true), makeCol(7, 1, true)}}
+		require.True(t, canPruneSampleExprs(node, makeScan(7, true, true)))
+	})
+
+	t.Run("function inference is not runtime proof", func(t *testing.T) {
+		functionExpr := &plan.Expr{
+			Typ:  plan.Type{Id: int32(types.T_json), NotNullable: true},
+			Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{ObjName: "json_extract"}}},
+		}
+		node := &plan.Node{AggList: []*plan.Expr{functionExpr, makeCol(7, 1, true)}}
+		require.False(t, canPruneSampleExprs(node, makeScan(7, true, true)))
+	})
+
+	t.Run("derived projection is not runtime proof", func(t *testing.T) {
+		node := &plan.Node{AggList: []*plan.Expr{makeCol(7, 0, true), makeCol(7, 1, true)}}
+		child := makeScan(7, true, true)
+		child.NodeType = plan.Node_PROJECT
+		require.False(t, canPruneSampleExprs(node, child))
+	})
+
+	t.Run("nullable table column", func(t *testing.T) {
+		node := &plan.Node{AggList: []*plan.Expr{makeCol(7, 0, true), makeCol(7, 1, true)}}
+		require.False(t, canPruneSampleExprs(node, makeScan(7, true, false)))
+	})
+}
+
+func TestExprCanRemoveProjectFunctionMetadata(t *testing.T) {
+	bind := func(name string, args ...*plan.Expr) *plan.Expr {
+		expr, err := BindFuncExprImplByPlanExpr(context.Background(), name, args)
+		require.NoError(t, err)
+		return expr
+	}
+	sequence := func(name string) *plan.Expr {
+		return MakePlan2StringConstExprWithType(name)
+	}
+
+	require.True(t, exprCanRemoveProject(bind("abs", MakePlan2Int64ConstExprWithType(1))))
+	require.False(t, exprCanRemoveProject(bind("sleep", MakePlan2Int64ConstExprWithType(0))))
+	require.False(t, exprCanRemoveProject(bind("nextval", sequence("sample_seq"))))
+	require.False(t, exprCanRemoveProject(bind("setval", sequence("sample_seq"), sequence("10"))))
+
+	nested := bind("isnull", bind("nextval", sequence("sample_seq")))
+	require.False(t, exprCanRemoveProject(nested))
+
+	unknown := &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{Obj: -1}}}}
+	require.False(t, exprCanRemoveProject(unknown))
+}
+
+func TestRemoveSimpleProjectionsVolatileRefCount(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		refCnt      int
+		parentType  plan.Node_NodeType
+		wantProject bool
+	}{
+		{name: "unused", refCnt: 0, parentType: plan.Node_PROJECT, wantProject: true},
+		{name: "single project consumer", refCnt: 1, parentType: plan.Node_PROJECT, wantProject: true},
+		{name: "single sort consumer", refCnt: 1, parentType: plan.Node_SORT, wantProject: true},
+		{name: "single join consumer", refCnt: 1, parentType: plan.Node_JOIN, wantProject: true},
+		{name: "multiple consumers", refCnt: 2, parentType: plan.Node_PROJECT, wantProject: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			builder, bindCtx := genBuilderAndCtx()
+			volatileExpr, err := BindFuncExprImplByPlanExpr(
+				context.Background(),
+				"nextval",
+				[]*plan.Expr{MakePlan2StringConstExprWithType("sample_seq")},
+			)
+			require.NoError(t, err)
+
+			scanID := builder.appendNode(&plan.Node{NodeType: plan.Node_TABLE_SCAN}, bindCtx)
+			projectTag := builder.genNewBindTag()
+			projectID := builder.appendNode(&plan.Node{
+				NodeType:    plan.Node_PROJECT,
+				Children:    []int32{scanID},
+				BindingTags: []int32{projectTag},
+				ProjectList: []*plan.Expr{volatileExpr},
+			}, bindCtx)
+			refCnts := map[[2]int32]int{{projectTag, 0}: test.refCnt}
+
+			newNodeID, _ := builder.removeSimpleProjections(projectID, test.parentType, false, refCnts)
+			require.Equal(t, test.wantProject, newNodeID == projectID)
+		})
+	}
+}
 
 func TestBuildTable_AlterView(t *testing.T) {
 	ctrl := gomock.NewController(t)
@@ -97,6 +315,134 @@ func TestBuildTable_AlterView(t *testing.T) {
 	bc := NewBindContext(qb, nil)
 	_, err = qb.buildTable(tb, bc, -1, nil)
 	assert.Error(t, err)
+}
+
+func TestBindViewUsesStoredSQLModeForPipesAsConcat(t *testing.T) {
+	sqlMode := "PIPES_AS_CONCAT"
+	builder, nodeID := buildViewForSQLModeTest(t, "v_pipe", ViewData{
+		Stmt:            "create view v_pipe as select a||b as c from t",
+		DefaultDatabase: "db",
+		SQLMode:         &sqlMode,
+		SecurityType:    "DEFINER",
+	})
+
+	projectExpr := builder.qry.Nodes[nodeID].ProjectList[0]
+	require.True(t, exprContainsFunc(projectExpr, "concat"))
+	require.False(t, exprContainsFunc(projectExpr, "or"))
+}
+
+func TestBindViewUsesStoredSQLModeForANSIQuotes(t *testing.T) {
+	sqlMode := "ANSI_QUOTES"
+	builder, nodeID := buildViewForSQLModeTest(t, "v_ansi", ViewData{
+		Stmt:            `create view v_ansi as select "a" as c from t`,
+		DefaultDatabase: "db",
+		SQLMode:         &sqlMode,
+		SecurityType:    "DEFINER",
+	})
+
+	projectExpr := builder.qry.Nodes[nodeID].ProjectList[0]
+	require.NotNil(t, projectExpr.GetCol())
+	require.Equal(t, "a", projectExpr.GetCol().Name)
+}
+
+func TestBindViewWithoutStoredSQLModeUsesLegacyPipeConcat(t *testing.T) {
+	builder, nodeID := buildViewForSQLModeTest(t, "v_legacy_pipe", ViewData{
+		Stmt:            "create view v_legacy_pipe as select a||b as c from t",
+		DefaultDatabase: "db",
+		SecurityType:    "DEFINER",
+	})
+
+	projectExpr := builder.qry.Nodes[nodeID].ProjectList[0]
+	require.True(t, exprContainsFunc(projectExpr, "concat"))
+	require.False(t, exprContainsFunc(projectExpr, "or"))
+}
+
+func buildViewForSQLModeTest(t *testing.T, viewName string, viewData ViewData) (*QueryBuilder, int32) {
+	t.Helper()
+	ctrl := gomock.NewController(t)
+	t.Cleanup(ctrl.Finish)
+
+	type arg struct {
+		obj   *ObjectRef
+		table *TableDef
+	}
+	viewJSON, err := json.Marshal(viewData)
+	require.NoError(t, err)
+
+	store := map[string]arg{
+		"db.t": {
+			obj: &plan.ObjectRef{SchemaName: "db", ObjName: "t"},
+			table: &plan.TableDef{
+				DbName:    "db",
+				Name:      "t",
+				TableType: catalog.SystemOrdinaryRel,
+				Cols: []*ColDef{
+					{Name: "a", Typ: plan.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen, Table: "t"}},
+					{Name: "b", Typ: plan.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen, Table: "t"}},
+				},
+			},
+		},
+		"db." + viewName: {
+			obj: &plan.ObjectRef{SchemaName: "db", ObjName: viewName},
+			table: &plan.TableDef{
+				DbName:    "db",
+				Name:      viewName,
+				TableType: catalog.SystemViewRel,
+				ViewSql:   &plan.ViewDef{View: string(viewJSON)},
+			},
+		},
+	}
+
+	ctx := NewMockCompilerContext2(ctrl)
+	ctx.EXPECT().ResolveVariable(gomock.Any(), gomock.Any(), gomock.Any()).Return("", nil).AnyTimes()
+	ctx.EXPECT().Resolve(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
+		func(schemaName string, tableName string, snapshot *Snapshot) (*ObjectRef, *TableDef, error) {
+			if schemaName == "" {
+				schemaName = "db"
+			}
+			x := store[schemaName+"."+tableName]
+			return x.obj, x.table, nil
+		}).AnyTimes()
+	ctx.EXPECT().GetContext().Return(context.Background()).AnyTimes()
+	ctx.EXPECT().GetProcess().Return(nil).AnyTimes()
+	ctx.EXPECT().Stats(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
+	ctx.EXPECT().GetBuildingAlterView().Return(false, "", "").AnyTimes()
+	ctx.EXPECT().DatabaseExists(gomock.Any(), gomock.Any()).Return(true).AnyTimes()
+	ctx.EXPECT().GetLowerCaseTableNames().Return(int64(1)).AnyTimes()
+	ctx.EXPECT().GetSubscriptionMeta(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
+	ctx.EXPECT().DefaultDatabase().Return("db").AnyTimes()
+	ctx.EXPECT().GetAccountId().Return(uint32(0), nil).AnyTimes()
+	ctx.EXPECT().GetQueryingSubscription().Return(nil).AnyTimes()
+
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, false)
+	bindCtx := NewBindContext(builder, nil)
+	tableName := &tree.TableName{}
+	tableName.SchemaName = "db"
+	tableName.ObjectName = tree.Identifier(viewName)
+	nodeID, err := builder.buildTable(tableName, bindCtx, -1, nil)
+	require.NoError(t, err)
+	require.Equal(t, plan.Node_PROJECT, builder.qry.Nodes[nodeID].NodeType)
+	require.Len(t, builder.qry.Nodes[nodeID].ProjectList, 1)
+	return builder, nodeID
+}
+
+func exprContainsFunc(expr *plan.Expr, name string) bool {
+	if expr == nil {
+		return false
+	}
+	fn := expr.GetF()
+	if fn == nil {
+		return false
+	}
+	if fn.Func.GetObjName() == name {
+		return true
+	}
+	for _, arg := range fn.Args {
+		if exprContainsFunc(arg, name) {
+			return true
+		}
+	}
+	return false
 }
 
 func TestTempTableAliasBindingUsesOriginName(t *testing.T) {
@@ -941,6 +1287,261 @@ func TestQueryBuilder_bindOrderByNullDistinctRejectsFollowingMissingSelectExpr(t
 	require.Contains(t, err.Error(), "for SELECT DISTINCT, ORDER BY expressions must appear in select list")
 }
 
+func bindDistinctOrderByForTest(sql string) (*QueryBuilder, *BindContext, []*plan.OrderBySpec, int, error) {
+	builder, bindCtx := genBuilderAndCtx()
+	return bindDistinctOrderByWithTestContext(sql, builder, bindCtx)
+}
+
+func bindDistinctOrderByWithTestContext(
+	sql string,
+	builder *QueryBuilder,
+	bindCtx *BindContext,
+) (*QueryBuilder, *BindContext, []*plan.OrderBySpec, int, error) {
+	bindCtx.isDistinct = true
+	bindCtx.projectTag = builder.genNewBindTag()
+
+	stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, sql, 1)
+	if err != nil {
+		return nil, nil, nil, 0, err
+	}
+	selectStmt := stmts[0].(*tree.Select)
+	selectClause := selectStmt.Select.(*tree.SelectClause)
+
+	for i := range selectClause.Exprs {
+		selectExpr := &selectClause.Exprs[i]
+		_, columnLike := unwrapParenExpr(selectExpr.Expr).(*tree.UnresolvedName)
+		selectExpr.Expr, err = bindCtx.qualifyColumnNames(selectExpr.Expr, NoAlias)
+		if err != nil {
+			return nil, nil, nil, 0, err
+		}
+		field := SelectField{ast: selectExpr.Expr, pos: int32(i)}
+		if columnLike {
+			key := windowExprAstKey(selectExpr.Expr)
+			if _, exists := bindCtx.projectColByAst[key]; !exists {
+				bindCtx.projectColByAst[key] = int32(i)
+			}
+		}
+		if selectExpr.As != nil && !selectExpr.As.Empty() {
+			field.aliasName = selectExpr.As.Compare()
+			bindCtx.aliasMap[field.aliasName] = &aliasItem{idx: int32(i), astExpr: selectExpr.Expr}
+			bindCtx.aliasFrequency[field.aliasName]++
+		}
+		bindCtx.projectByAst = append(bindCtx.projectByAst, field)
+	}
+
+	havingBinder := NewHavingBinder(builder, bindCtx)
+	projectionBinder := NewProjectionBinder(builder, bindCtx, havingBinder)
+	resultLen, _, err := builder.bindProjection(bindCtx, projectionBinder, selectClause.Exprs, false)
+	if err != nil {
+		return nil, nil, nil, 0, err
+	}
+
+	boundOrderBys, err := builder.bindOrderBy(bindCtx, selectStmt.OrderBy, projectionBinder, selectClause.Exprs)
+	return builder, bindCtx, boundOrderBys, resultLen, err
+}
+
+func TestQueryBuilder_bindOrderByDistinctDerivedSelectedColumns(t *testing.T) {
+	_, bindCtx, boundOrderBys, _, err := bindDistinctOrderByForTest(
+		"select distinct a, b from select_test.bind_select order by abs(a) + b desc, a",
+	)
+	require.NoError(t, err)
+
+	require.Len(t, boundOrderBys, 2)
+	derived := boundOrderBys[0].Expr.GetF()
+	require.NotNil(t, derived)
+	require.Equal(t, "+", derived.Func.ObjName)
+	require.True(t, containsOnlyTags(boundOrderBys[0].Expr, map[int32]bool{bindCtx.projectTag: true}))
+	require.Equal(t, plan.OrderBySpec_DESC, boundOrderBys[0].Flag)
+	require.Equal(t, bindCtx.projectTag, boundOrderBys[1].Expr.GetCol().RelPos)
+	require.Len(t, bindCtx.projects, 2, "derived ordering key must not enter the DISTINCT projection")
+}
+
+func TestQueryBuilder_bindOrderByDistinctDerivedAlias(t *testing.T) {
+	_, bindCtx, boundOrderBys, _, err := bindDistinctOrderByForTest(
+		"select distinct a + 1 as x from select_test.bind_select order by x * 2",
+	)
+	require.NoError(t, err)
+
+	require.Len(t, boundOrderBys, 1)
+	require.NotNil(t, boundOrderBys[0].Expr.GetF())
+	require.True(t, containsOnlyTags(boundOrderBys[0].Expr, map[int32]bool{bindCtx.projectTag: true}))
+	require.Len(t, bindCtx.projects, 1)
+}
+
+func TestQueryBuilder_bindOrderByDistinctDerivedNameResolution(t *testing.T) {
+	t.Run("selected FROM column wins over colliding alias", func(t *testing.T) {
+		_, bindCtx, boundOrderBys, _, err := bindDistinctOrderByForTest(
+			"select distinct a as b, b from select_test.bind_select order by abs(b)",
+		)
+		require.NoError(t, err)
+		require.Len(t, boundOrderBys, 1)
+
+		absExpr := boundOrderBys[0].Expr.GetF()
+		require.NotNil(t, absExpr)
+		require.Len(t, absExpr.Args, 1)
+		col := absExpr.Args[0].GetCol()
+		require.NotNil(t, col)
+		require.Equal(t, bindCtx.projectTag, col.RelPos)
+		require.Equal(t, int32(1), col.ColPos)
+	})
+
+	t.Run("unselected FROM column does not fall back to colliding alias", func(t *testing.T) {
+		_, _, _, _, err := bindDistinctOrderByForTest(
+			"select distinct a as b from select_test.bind_select order by abs(b)",
+		)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "for SELECT DISTINCT, ORDER BY expressions must appear in select list")
+	})
+
+	t.Run("parenthesized root preserves output ambiguity", func(t *testing.T) {
+		_, _, _, _, err := bindDistinctOrderByForTest(
+			"select distinct a as b, b from select_test.bind_select order by (b)",
+		)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "Column 'b' in order clause is ambiguous")
+	})
+
+	t.Run("nested name falls back to noncolliding alias", func(t *testing.T) {
+		_, bindCtx, boundOrderBys, _, err := bindDistinctOrderByForTest(
+			"select distinct a as x from select_test.bind_select order by abs(x)",
+		)
+		require.NoError(t, err)
+		require.Len(t, boundOrderBys, 1)
+
+		absExpr := boundOrderBys[0].Expr.GetF()
+		require.NotNil(t, absExpr)
+		require.Len(t, absExpr.Args, 1)
+		col := absExpr.Args[0].GetCol()
+		require.NotNil(t, col)
+		require.Equal(t, bindCtx.projectTag, col.RelPos)
+		require.Equal(t, int32(0), col.ColPos)
+	})
+
+	t.Run("qualified selected FROM column remains available", func(t *testing.T) {
+		_, bindCtx, boundOrderBys, _, err := bindDistinctOrderByForTest(
+			"select distinct a as b, b from select_test.bind_select order by abs(bind_select.b)",
+		)
+		require.NoError(t, err)
+		require.Len(t, boundOrderBys, 1)
+
+		col := boundOrderBys[0].Expr.GetF().Args[0].GetCol()
+		require.NotNil(t, col)
+		require.Equal(t, bindCtx.projectTag, col.RelPos)
+		require.Equal(t, int32(1), col.ColPos)
+	})
+
+	t.Run("qualified unselected FROM column is rejected", func(t *testing.T) {
+		_, _, _, _, err := bindDistinctOrderByForTest(
+			"select distinct a as x from select_test.bind_select order by abs(bind_select.b)",
+		)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "for SELECT DISTINCT, ORDER BY expressions must appear in select list")
+	})
+}
+
+func TestQueryBuilder_bindOrderByDistinctDerivedAggregateAliasDoesNotRebind(t *testing.T) {
+	_, bindCtx, boundOrderBys, _, err := bindDistinctOrderByForTest(
+		"select distinct count(distinct a) as x from select_test.bind_select order by x + 1",
+	)
+	require.NoError(t, err)
+
+	require.Len(t, boundOrderBys, 1)
+	require.Len(t, bindCtx.aggregates, 1, "derived aliases must not bind their projected aggregate again")
+	require.True(t, containsOnlyTags(boundOrderBys[0].Expr, map[int32]bool{bindCtx.projectTag: true}))
+}
+
+func TestQueryBuilder_bindOrderByDistinctDerivedSubqueryAliasDoesNotRebind(t *testing.T) {
+	builder, bindCtx, boundOrderBys, _, err := bindDistinctOrderByForTest(
+		"select distinct (select 1) as x from select_test.bind_select order by x + 1",
+	)
+	require.NoError(t, err)
+
+	require.Len(t, boundOrderBys, 1)
+	require.Len(t, builder.qry.Nodes, 2, "derived aliases must not build their projected subquery again")
+	require.True(t, containsOnlyTags(boundOrderBys[0].Expr, map[int32]bool{bindCtx.projectTag: true}))
+}
+
+func TestQueryBuilder_bindOrderByDistinctDerivedFullTextReturnsSyntaxError(t *testing.T) {
+	builder, bindCtx := genBuilderAndCtxWithColumnType(types.T_varchar, "body")
+	_, _, _, _, err := bindDistinctOrderByWithTestContext(
+		"select distinct body from select_test.bind_select order by match(body) against('database')",
+		builder,
+		bindCtx,
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "for SELECT DISTINCT, ORDER BY expressions must appear in select list")
+	require.NotContains(t, err.Error(), "escaped projection scope")
+
+	builder, bindCtx = genBuilderAndCtxWithColumnType(types.T_varchar, "body")
+	_, _, _, _, err = bindDistinctOrderByWithTestContext(
+		"select distinct match(body) against('database') as score from select_test.bind_select order by match(body) against('database')",
+		builder,
+		bindCtx,
+	)
+	require.NoError(t, err, "an exact projected full-text expression must remain orderable")
+
+	builder, bindCtx = genBuilderAndCtxWithColumnType(types.T_varchar, "body")
+	_, bindCtx, boundOrderBys, _, err := bindDistinctOrderByWithTestContext(
+		"select distinct match(body) against('database') as score from select_test.bind_select order by not score",
+		builder,
+		bindCtx,
+	)
+	require.NoError(t, err, "a derived expression over a projected full-text alias must remain orderable")
+	require.Len(t, boundOrderBys, 1)
+	require.True(t, containsOnlyTags(boundOrderBys[0].Expr, map[int32]bool{bindCtx.projectTag: true}))
+}
+
+func TestQueryBuilder_bindOrderByDistinctDerivedRejectsUnselectedInputs(t *testing.T) {
+	tests := []string{
+		"select distinct a from select_test.bind_select order by a + b",
+		"select distinct a + 1 as x from select_test.bind_select order by a + 2",
+		"select distinct a from select_test.bind_select order by count(*) + 1",
+	}
+	for _, sql := range tests {
+		t.Run(sql, func(t *testing.T) {
+			_, _, _, _, err := bindDistinctOrderByForTest(sql)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "for SELECT DISTINCT, ORDER BY expressions must appear in select list")
+		})
+	}
+}
+
+func TestQueryBuilder_appendDistinctOrderProjectionNode(t *testing.T) {
+	builder, bindCtx, boundOrderBys, resultLen, err := bindDistinctOrderByForTest(
+		"select distinct a, b from select_test.bind_select order by abs(a), abs(a), b",
+	)
+	require.NoError(t, err)
+	require.Len(t, boundOrderBys, 3)
+
+	inputID := builder.appendNode(&plan.Node{NodeType: plan.Node_VALUE_SCAN}, bindCtx)
+	projectID, err := builder.appendProjectionNode(bindCtx, inputID, false)
+	require.NoError(t, err)
+	distinctID := builder.appendDistinctNode(bindCtx, projectID)
+	orderProjectID, orderTag, err := builder.appendDistinctOrderProjectionNode(bindCtx, distinctID, boundOrderBys)
+	require.NoError(t, err)
+	require.NotEqual(t, bindCtx.projectTag, orderTag)
+
+	orderProject := builder.qry.Nodes[orderProjectID]
+	require.Equal(t, plan.Node_PROJECT, orderProject.NodeType)
+	require.Equal(t, distinctID, orderProject.Children[0])
+	require.Len(t, orderProject.ProjectList, resultLen+1, "duplicate derived keys should share one hidden column")
+	require.True(t, containsOnlyTags(orderProject.ProjectList[resultLen], map[int32]bool{bindCtx.projectTag: true}))
+	for _, orderBy := range boundOrderBys {
+		col := orderBy.Expr.GetCol()
+		require.NotNil(t, col)
+		require.Equal(t, orderTag, col.RelPos)
+	}
+	require.Equal(t, boundOrderBys[0].Expr.GetCol().ColPos, boundOrderBys[1].Expr.GetCol().ColPos)
+
+	sortID := builder.appendSortNode(bindCtx, orderProjectID, boundOrderBys)
+	resultID := builder.appendResultProjectionNode(bindCtx, sortID, resultLen, orderTag)
+	resultProject := builder.qry.Nodes[resultID]
+	require.Len(t, resultProject.ProjectList, resultLen)
+	for _, expr := range resultProject.ProjectList {
+		require.Equal(t, orderTag, expr.GetCol().RelPos)
+	}
+}
+
 func TestQueryBuilder_bindOrderByOrdinalPosition(t *testing.T) {
 	builder, bindCtx := genBuilderAndCtx()
 
@@ -1050,6 +1651,244 @@ func collectReachableSortNodes(query *plan.Query) []*plan.Node {
 	}
 
 	return sortNodes
+}
+
+type icebergTestCompilerContext struct {
+	*MockCompilerContext
+	proc *process.Process
+}
+
+func (c *icebergTestCompilerContext) GetProcess() *process.Process {
+	return c.proc
+}
+
+func newIcebergTestCompilerContext(t *testing.T, loc *time.Location) *icebergTestCompilerContext {
+	t.Helper()
+	if loc == nil {
+		loc = time.UTC
+	}
+	base := NewMockCompilerContext(true)
+	base.objects["gold_orders"] = &plan.ObjectRef{
+		DbName:  "tpch",
+		ObjName: "gold_orders",
+		Obj:     4242,
+	}
+	base.tables["gold_orders"] = &plan.TableDef{
+		Name:      "gold_orders",
+		TableType: catalog.SystemExternalRel,
+		Createsql: sqliceberg.BuildCreateSQLEnvelope(model.TableMapping{
+			Namespace:  "sales",
+			TableName:  "orders",
+			DefaultRef: model.DefaultRefMain,
+			ReadMode:   model.ReadModeAppendOnly,
+			WriteMode:  model.WriteModeReadOnly,
+		}, "ksa_gold"),
+		Cols: []*plan.ColDef{
+			{
+				Name:    "id",
+				Typ:     plan.Type{Id: int32(types.T_int64), Width: 64, Table: "gold_orders"},
+				Default: &plan.Default{NullAbility: true},
+			},
+		},
+		Pkey: &plan.PrimaryKeyDef{},
+	}
+	base.objects["dim_orders"] = &plan.ObjectRef{
+		DbName:  "tpch",
+		ObjName: "dim_orders",
+		Obj:     4343,
+	}
+	base.tables["dim_orders"] = &plan.TableDef{
+		Name:      "dim_orders",
+		TableType: catalog.SystemOrdinaryRel,
+		Cols: []*plan.ColDef{
+			{
+				Name:    "id",
+				Typ:     plan.Type{Id: int32(types.T_int64), Width: 64, Table: "dim_orders"},
+				Default: &plan.Default{NullAbility: true},
+			},
+		},
+		Pkey: &plan.PrimaryKeyDef{},
+	}
+	proc := testutil.NewProc(t)
+	proc.Base.SessionInfo.TimeZone = loc
+	return &icebergTestCompilerContext{
+		MockCompilerContext: base,
+		proc:                proc,
+	}
+}
+
+func buildIcebergTestPlan(t *testing.T, ctx CompilerContext, sql string) (*Plan, error) {
+	t.Helper()
+	stmts, err := parsers.Parse(ctx.GetContext(), dialect.MYSQL, sql, 1)
+	require.NoError(t, err)
+	return BuildPlan(ctx, stmts[0], false)
+}
+
+func mustMarshalLegacyExternParam(t *testing.T, param *tree.ExternParam) string {
+	t.Helper()
+	data, err := json.Marshal(param)
+	require.NoError(t, err)
+	return string(data)
+}
+
+func requireIcebergScan(t *testing.T, p *Plan) *plan.IcebergScan {
+	t.Helper()
+	require.NotNil(t, p)
+	require.NotNil(t, p.GetQuery())
+	for _, node := range p.GetQuery().Nodes {
+		if node.GetExternScan().GetIcebergScan() != nil {
+			return node.GetExternScan().GetIcebergScan()
+		}
+	}
+	t.Fatalf("expected an Iceberg external scan")
+	return nil
+}
+
+func TestQueryBuilderLegacyExternalTableNotDispatchedAsIceberg(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	ctx.objects["legacy_orders"] = &plan.ObjectRef{
+		DbName:  "tpch",
+		ObjName: "legacy_orders",
+		Obj:     4343,
+	}
+	ctx.tables["legacy_orders"] = &plan.TableDef{
+		Name:      "legacy_orders",
+		TableType: catalog.SystemExternalRel,
+		Createsql: mustMarshalLegacyExternParam(t, &tree.ExternParam{
+			ExParamConst: tree.ExParamConst{
+				ScanType: tree.INFILE,
+				Filepath: "/data/legacy/orders/*.parquet",
+				Format:   tree.PARQUET,
+				Option:   []string{"format", "parquet"},
+			},
+		}),
+		Cols: []*plan.ColDef{
+			{
+				Name:    "id",
+				Typ:     plan.Type{Id: int32(types.T_int64), Width: 64, Table: "legacy_orders"},
+				Default: &plan.Default{NullAbility: true},
+			},
+		},
+	}
+
+	p, err := buildIcebergTestPlan(t, ctx, "select id from legacy_orders")
+	require.NoError(t, err)
+
+	foundExternal := false
+	for _, node := range p.GetQuery().GetNodes() {
+		if node.GetNodeType() != plan.Node_EXTERNAL_SCAN {
+			continue
+		}
+		foundExternal = true
+		require.NotNil(t, node.GetExternScan())
+		require.Equal(t, int32(plan.ExternType_EXTERNAL_TB), node.GetExternScan().GetType())
+		require.Nil(t, node.GetExternScan().GetIcebergScan())
+	}
+	require.True(t, foundExternal, "expected a legacy external scan")
+}
+
+func TestQueryBuilderIcebergPersistentMappingCurrentSnapshot(t *testing.T) {
+	ctx := newIcebergTestCompilerContext(t, time.UTC)
+
+	p, err := buildIcebergTestPlan(t, ctx, "select id from gold_orders")
+	require.NoError(t, err)
+
+	scan := requireIcebergScan(t, p)
+	require.Equal(t, uint64(4242), scan.MappingId)
+	require.Equal(t, "sales", scan.Namespace)
+	require.Equal(t, "orders", scan.Table)
+	require.Equal(t, "main", scan.Ref)
+	require.Zero(t, scan.SnapshotId)
+	require.Zero(t, scan.TimestampAsOf)
+	require.Equal(t, "append_only", scan.ReadMode)
+}
+
+func TestQueryBuilderIcebergComposesWithProjectionFilterJoinAggregate(t *testing.T) {
+	ctx := newIcebergTestCompilerContext(t, time.UTC)
+
+	p, err := buildIcebergTestPlan(t, ctx,
+		"select g.id, count(d.id) from gold_orders g join dim_orders d on g.id = d.id where g.id > 10 group by g.id")
+	require.NoError(t, err)
+
+	query := p.GetQuery()
+	require.NotNil(t, query)
+	var hasIcebergScan, hasJoin, hasFilter, hasAgg, hasProject bool
+	for _, node := range query.GetNodes() {
+		switch node.GetNodeType() {
+		case plan.Node_EXTERNAL_SCAN:
+			if node.GetExternScan().GetIcebergScan() != nil {
+				hasIcebergScan = true
+			}
+		case plan.Node_JOIN:
+			hasJoin = true
+		case plan.Node_FILTER:
+			hasFilter = true
+		case plan.Node_AGG:
+			hasAgg = true
+		case plan.Node_PROJECT:
+			hasProject = true
+		}
+	}
+	require.True(t, hasIcebergScan, "expected Iceberg persistent mapping scan")
+	require.True(t, hasJoin, "expected join with ordinary table")
+	require.True(t, hasFilter, "expected SQL filter to remain in MO plan")
+	require.True(t, hasAgg, "expected aggregate over Iceberg scan")
+	require.True(t, hasProject, "expected projection over Iceberg scan")
+}
+
+func TestQueryBuilderIcebergTimeTravelSnapshot(t *testing.T) {
+	ctx := newIcebergTestCompilerContext(t, time.UTC)
+
+	p, err := buildIcebergTestPlan(t, ctx, "select id from gold_orders for iceberg snapshot 78124581230123")
+	require.NoError(t, err)
+
+	scan := requireIcebergScan(t, p)
+	require.Equal(t, int64(78124581230123), scan.SnapshotId)
+	require.Zero(t, scan.TimestampAsOf)
+	require.Equal(t, "main", scan.Ref)
+}
+
+func TestQueryBuilderIcebergTimeTravelTimestampUsesSessionTimezone(t *testing.T) {
+	loc := time.FixedZone("KSA", 3*60*60)
+	ctx := newIcebergTestCompilerContext(t, loc)
+
+	p, err := buildIcebergTestPlan(t, ctx, "select id from gold_orders for iceberg timestamp as of timestamp '2026-06-01 00:00:00'")
+	require.NoError(t, err)
+
+	ts, err := types.ParseTimestamp(loc, "2026-06-01 00:00:00", 6)
+	require.NoError(t, err)
+	expectedMS := (int64(ts) - int64(types.UnixToTimestamp(0))) / 1000
+	scan := requireIcebergScan(t, p)
+	require.Zero(t, scan.SnapshotId)
+	require.Equal(t, expectedMS, scan.TimestampAsOf)
+}
+
+func TestQueryBuilderIcebergNamedRef(t *testing.T) {
+	ctx := newIcebergTestCompilerContext(t, time.UTC)
+
+	p, err := buildIcebergTestPlan(t, ctx, "select id from gold_orders for iceberg ref audit_branch")
+	require.NoError(t, err)
+
+	scan := requireIcebergScan(t, p)
+	require.Zero(t, scan.SnapshotId)
+	require.Zero(t, scan.TimestampAsOf)
+	require.Equal(t, "audit_branch", scan.Ref)
+}
+
+func TestQueryBuilderIcebergTimeTravelRejectsNativeSnapshotMix(t *testing.T) {
+	ctx := newIcebergTestCompilerContext(t, time.UTC)
+
+	_, err := buildIcebergTestPlan(t, ctx, "select id from gold_orders {timestamp = '2026-06-01 00:00:00'} for iceberg snapshot 1")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "cannot combine MO snapshot hint with FOR ICEBERG time travel")
+}
+
+func TestQueryBuilderIcebergTimeTravelRequiresIcebergTable(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+
+	_, err := buildIcebergTestPlan(t, ctx, "select n_name from nation for iceberg snapshot 1")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "FOR ICEBERG requires an Iceberg external table")
 }
 
 func TestQueryBuilder_bindOrderByEnum(t *testing.T) {
@@ -1224,6 +2063,43 @@ func TestQueryBuilder_bindLimit(t *testing.T) {
 	countExpr, ok := boundCountExpr.Expr.(*plan.Expr_Lit)
 	require.True(t, ok)
 	require.Equal(t, uint64(5), countExpr.Lit.Value.(*plan.Literal_U64Val).U64Val)
+}
+
+func TestQueryBuilderBindLimitFoldsAndNormalizesConstants(t *testing.T) {
+	builder, bindCtx := genBuilderAndCtx()
+
+	stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, "select a from select_test.bind_select limit 2 + 3 offset 0 + 0", 1)
+	require.NoError(t, err)
+	astLimit := stmts[0].(*tree.Select).Limit
+
+	offset, limit, _, err := builder.bindLimit(bindCtx, astLimit, nil)
+	require.NoError(t, err)
+	require.Nil(t, offset, "constant OFFSET 0 should not disable no-offset optimization paths")
+	require.Equal(t, uint64(5), limit.GetLit().GetU64Val())
+}
+
+func TestQueryBuilderBindLimitReportsConstantOverflow(t *testing.T) {
+	builder, bindCtx := genBuilderAndCtx()
+
+	stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, "select a from select_test.bind_select limit 18446744073709551615 + 1", 1)
+	require.NoError(t, err)
+	astLimit := stmts[0].(*tree.Select).Limit
+
+	_, _, _, err = builder.bindLimit(bindCtx, astLimit, nil)
+	require.Error(t, err)
+}
+
+func TestQueryBuilderBindLimitKeepsVariableDynamic(t *testing.T) {
+	builder, bindCtx := genBuilderAndCtx()
+
+	stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, "select a from select_test.bind_select limit @page_size", 1)
+	require.NoError(t, err)
+	astLimit := stmts[0].(*tree.Select).Limit
+
+	_, limit, _, err := builder.bindLimit(bindCtx, astLimit, nil)
+	require.NoError(t, err)
+	require.NotNil(t, limit.GetF())
+	require.True(t, containsDynamicParam(limit))
 }
 
 func TestQueryBuilder_bindValues(t *testing.T) {
@@ -1475,7 +2351,7 @@ func TestQueryBuilder_appendResultProjectionNode(t *testing.T) {
 	// append sort node
 	nodeID = builder.appendSortNode(bindCtx, nodeID, boundOrderBys)
 	// append result projection node
-	nodeID = builder.appendResultProjectionNode(bindCtx, nodeID, resultLen)
+	nodeID = builder.appendResultProjectionNode(bindCtx, nodeID, resultLen, bindCtx.projectTag)
 	require.Equal(t, int32(3), nodeID)
 
 	resultProjectionNode := builder.qry.Nodes[3]

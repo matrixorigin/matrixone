@@ -97,13 +97,18 @@ const (
 	LockOp
 
 	Shuffle
-	ShuffleV2
+	_ // reserved: former ShuffleV2 opcode; keep later wire values stable
 
 	Sample
 	ProductL2
 	Mock
 	Apply
 	PostDml
+	IcebergWrite
+	TableClone
+	// OpTypeEnd is the exclusive upper bound for executable operator types.
+	// New operator types must be added before it.
+	OpTypeEnd
 )
 
 var OperatorToStrMap map[OpType]string
@@ -131,6 +136,8 @@ func init() {
 		HashJoin:                "HashJoin",
 		LoopJoin:                "LoopJoin",
 		IndexJoin:               "IndexJoin",
+		DedupJoin:               "DedupJoin",
+		RightDedupJoin:          "RightDedupJoin",
 		IndexBuild:              "IndexBuild",
 		Merge:                   "Merge",
 		MergeTop:                "MergeTop",
@@ -145,6 +152,10 @@ func init() {
 		Insert:                  "Insert",
 		External:                "External",
 		Source:                  "Source",
+		MultiUpdate:             "MultiUpdate",
+		PartitionInsert:         "PartitionInsert",
+		PartitionDelete:         "PartitionDelete",
+		PartitionMultiUpdate:    "PartitionMultiUpdate",
 		Minus:                   "Minus",
 		Intersect:               "Intersect",
 		IntersectAll:            "IntersectAll",
@@ -167,6 +178,8 @@ func init() {
 		Mock:                    "Mock",
 		Apply:                   "Apply",
 		PostDml:                 "PostDml",
+		IcebergWrite:            "IcebergWrite",
+		TableClone:              "TableClone",
 	}
 
 	// Initialize StrToOperatorMap

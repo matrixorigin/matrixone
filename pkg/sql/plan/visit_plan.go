@@ -82,6 +82,35 @@ func (vq *VisitPlan) exploreNode(ctx context.Context, rule VisitPlanRule, node *
 		}
 	}
 
+	if param := node.IndexReaderParam; param != nil {
+		if param.Limit != nil {
+			param.Limit, err = rule.ApplyExpr(param.Limit)
+			if err != nil {
+				return err
+			}
+		}
+		for i := range param.OrderBy {
+			param.OrderBy[i].Expr, err = rule.ApplyExpr(param.OrderBy[i].Expr)
+			if err != nil {
+				return err
+			}
+		}
+		if param.DistRange != nil {
+			if param.DistRange.LowerBound != nil {
+				param.DistRange.LowerBound, err = rule.ApplyExpr(param.DistRange.LowerBound)
+				if err != nil {
+					return err
+				}
+			}
+			if param.DistRange.UpperBound != nil {
+				param.DistRange.UpperBound, err = rule.ApplyExpr(param.DistRange.UpperBound)
+				if err != nil {
+					return err
+				}
+			}
+		}
+	}
+
 	for i := range node.OnList {
 		node.OnList[i], err = rule.ApplyExpr(node.OnList[i])
 		if err != nil {
@@ -98,6 +127,13 @@ func (vq *VisitPlan) exploreNode(ctx context.Context, rule VisitPlanRule, node *
 
 	for i := range node.OrderBy {
 		node.OrderBy[i].Expr, err = rule.ApplyExpr(node.OrderBy[i].Expr)
+		if err != nil {
+			return err
+		}
+	}
+
+	for i := range node.TimeWindowPartitionBy {
+		node.TimeWindowPartitionBy[i], err = rule.ApplyExpr(node.TimeWindowPartitionBy[i])
 		if err != nil {
 			return err
 		}

@@ -327,6 +327,41 @@ func UnregisterJob(
 	)
 }
 
+func LookupJobLog(
+	ctx context.Context,
+	cnUUID string,
+	txn client.TxnOperator,
+	jobID *JobID,
+) (accountID uint32, tableID uint64, internalJobID uint64, exists bool, dropped bool, err error) {
+	ctxWithSysAccount := context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+	ctxWithSysAccount, cancel := context.WithTimeout(ctxWithSysAccount, time.Minute*5)
+	defer cancel()
+	accountID, err = defines.GetAccountId(ctx)
+	if err != nil {
+		return
+	}
+	tableID, _, err = getTableID(
+		ctxWithSysAccount,
+		cnUUID,
+		txn,
+		accountID,
+		jobID.DBName,
+		jobID.TableName,
+	)
+	if err != nil {
+		return
+	}
+	exists, dropped, internalJobID, err = queryIndexLog(
+		ctxWithSysAccount,
+		cnUUID,
+		txn,
+		accountID,
+		tableID,
+		jobID.JobName,
+	)
+	return
+}
+
 func RenameSrcTable(
 	ctx context.Context,
 	cnUUID string,
@@ -621,15 +656,18 @@ func getTableID(
 		return
 	}
 	defer result.Close()
+	totalRows := 0
 	result.ReadRows(func(rows int, cols []*vector.Vector) bool {
-		if rows != 1 {
-			err = moerr.NewInternalErrorNoCtx(fmt.Sprintf("invalid rows %d", rows))
+		if rows == 0 {
+			return true
+		}
+		totalRows += rows
+		if totalRows > 1 {
+			err = moerr.NewInternalErrorNoCtx(fmt.Sprintf("invalid rows %d", totalRows))
 			return false
 		}
-		for i := 0; i < rows; i++ {
-			tableID = vector.MustFixedColWithTypeCheck[uint64](cols[0])[i]
-			dbID = vector.MustFixedColWithTypeCheck[uint64](cols[1])[i]
-		}
+		tableID = vector.MustFixedColWithTypeCheck[uint64](cols[0])[0]
+		dbID = vector.MustFixedColWithTypeCheck[uint64](cols[1])[0]
 		return true
 	})
 	if err != nil {

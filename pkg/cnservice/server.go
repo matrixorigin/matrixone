@@ -43,6 +43,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/gossip"
+	icebergapi "github.com/matrixorigin/matrixone/pkg/iceberg/api"
+	icebergcatalog "github.com/matrixorigin/matrixone/pkg/iceberg/catalog"
+	icebergmaintenance "github.com/matrixorigin/matrixone/pkg/iceberg/maintenance"
+	icebergwritecore "github.com/matrixorigin/matrixone/pkg/iceberg/write"
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
@@ -55,7 +59,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/shardservice"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
+	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
@@ -117,6 +123,9 @@ func NewService(
 
 	//set frontend parameters
 	cfg.Frontend.SetDefaultValues()
+	if err := cfg.Frontend.Iceberg.Validate(ctx); err != nil {
+		return nil, err
+	}
 	cfg.Frontend.SetMaxMessageSize(uint64(cfg.RPC.MaxMessageSize))
 
 	configKVMap, _ := dumpCnConfig(*cfg)
@@ -152,6 +161,7 @@ func NewService(
 		addressMgr:  address.NewAddressManager(cfg.ServiceHost, cfg.PortBase),
 		gossipNode:  gossipNode,
 	}
+	srv.colexecServer = colexec.NewServer(cfg.UUID)
 
 	srv.requestHandler = func(ctx context.Context,
 		cnAddr string,
@@ -288,10 +298,88 @@ func NewService(
 	}
 	srv.pipelines.client = c
 
-	runtime.ServiceRuntime(cfg.UUID).SetGlobalVariables(runtime.PipelineClient, c)
-	runtime.ServiceRuntime(cfg.UUID).SetGlobalVariables(runtime.CNMemoryThrottler, srv.CNMemoryThrottler)
+	rt := runtime.ServiceRuntime(cfg.UUID)
+	rt.SetGlobalVariables("parameter-unit", pu)
+	rt.SetGlobalVariables(runtime.PipelineClient, c)
+	rt.SetGlobalVariables(runtime.CNMemoryThrottler, srv.CNMemoryThrottler)
+	if err := compile.RegisterDefaultIcebergScanPlanner(ctx, cfg.UUID, pu.SV.Iceberg); err != nil {
+		return nil, err
+	}
+	if err := srv.registerDefaultIcebergMaintenanceExecutor(ctx); err != nil {
+		return nil, err
+	}
 
 	return srv, nil
+}
+
+func (s *service) registerDefaultIcebergMaintenanceExecutor(ctx context.Context) error {
+	cfg, err := icebergapi.NewConfigFromParameters(ctx, s.cfg.Frontend.Iceberg)
+	if err != nil {
+		return err
+	}
+	restOptions := []icebergcatalog.RESTClientOption{
+		icebergcatalog.WithTokenProvider(compile.NewRuntimeIcebergTokenProvider(s.cfg.UUID)),
+	}
+	if compile.IcebergAllowPlainHTTPFromEnv() {
+		restOptions = append(restOptions, icebergcatalog.WithAllowPlainHTTP(true))
+	}
+	catalogFactory := icebergcatalog.NewFactory(
+		icebergcatalog.WithNativeRESTOptions(restOptions...),
+		icebergcatalog.WithAdapter(
+			icebergcatalog.AdapterIcebergGo,
+			icebergcatalog.UnsupportedAdapterFactory{Name: icebergcatalog.AdapterIcebergGo},
+		),
+	)
+	executor := sqliceberg.NewMaintenanceProcedureExecutorFromInternalSQLExecutor(
+		s.sqlExecutor,
+		sqliceberg.MaintenanceProcedureExecutorOptions{
+			Config:                    cfg,
+			Account:                   sqliceberg.AccountConfigForFeatureGate(cfg, 0),
+			CatalogFactory:            catalogFactory,
+			CommitVerifier:            icebergmaintenance.CatalogFactoryCommitVerifier{CatalogFactory: catalogFactory},
+			OrphanTTL:                 cfg.Write.OrphanTTL,
+			UseNativeRewriteManifests: true,
+			UseNativeRewriteDataFiles: true,
+			UseNativeExpireSnapshots:  true,
+		},
+	)
+	var tableCache icebergwritecore.TableCache
+	if rt := runtime.ServiceRuntime(s.cfg.UUID); rt != nil {
+		if value, ok := rt.GetGlobalVariables(icebergapi.CacheInvalidatorRuntimeKey); ok {
+			tableCache, _ = value.(icebergwritecore.TableCache)
+		}
+	}
+	cacheInvalidator := icebergwritecore.MetadataCacheInvalidator{Cache: tableCache}
+	dmlFactory := sqliceberg.NewDMLDeleteRuntimeCoordinatorFactoryFromInternalSQLExecutor(
+		s.sqlExecutor,
+		sqliceberg.DMLDeleteRuntimeCoordinatorFactoryOptions{
+			Config:           cfg,
+			Account:          sqliceberg.AccountConfigForFeatureGate(cfg, 0),
+			CatalogFactory:   catalogFactory,
+			CacheInvalidator: cacheInvalidator,
+		},
+	)
+	appendFactory := sqliceberg.NewAppendRuntimeCoordinatorFactoryFromInternalSQLExecutor(
+		s.sqlExecutor,
+		sqliceberg.AppendRuntimeCoordinatorFactoryOptions{
+			Config:           cfg,
+			Account:          sqliceberg.AccountConfigForFeatureGate(cfg, 0),
+			CatalogFactory:   catalogFactory,
+			CacheInvalidator: cacheInvalidator,
+		},
+	)
+	runtime.ServiceRuntime(s.cfg.UUID).SetGlobalVariables(
+		compile.IcebergAppendCoordinatorFactoryRuntimeKey,
+		sqliceberg.WriteRuntimeCoordinatorFactory{
+			Append: appendFactory,
+			DML:    dmlFactory,
+		},
+	)
+	runtime.ServiceRuntime(s.cfg.UUID).SetGlobalVariables(
+		frontend.IcebergMaintenanceCallExecutorRuntimeKey,
+		frontend.IcebergMaintenanceProcedureExecutor{Executor: executor},
+	)
+	return nil
 }
 
 func (s *service) Start() error {
@@ -806,8 +894,13 @@ func (s *service) initLockService() {
 	cfg := s.getLockServiceConfig()
 	s.lockService = lockservice.NewLockService(
 		cfg,
-		lockservice.WithWait(func() {
-			<-s.hakeeperConnected
+		lockservice.WithWait(func(ctx context.Context) error {
+			select {
+			case <-s.hakeeperConnected:
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
+			}
 		}))
 	runtime.ServiceRuntime(s.cfg.UUID).SetGlobalVariables(runtime.LockService, s.lockService)
 	lockservice.SetLockServiceByServiceID(s.cfg.UUID, s.lockService)
@@ -903,9 +996,10 @@ func handleWaitingNextMsg(ctx context.Context, message morpc.Message, cs morpc.C
 		if cache, err = cs.CreateCache(ctx, message.GetID()); err != nil {
 			return err
 		}
-		cache.Add(message)
+		return cache.Add(message)
+	default:
+		return moerr.NewInvalidInputNoCtx("only pipeline messages may be fragmented")
 	}
-	return nil
 }
 
 func handleAssemblePipeline(ctx context.Context, message morpc.Message, cs morpc.ClientSession) error {
@@ -915,19 +1009,27 @@ func handleAssemblePipeline(ctx context.Context, message morpc.Message, cs morpc
 	if err != nil {
 		return err
 	}
+	// CreateCache also returns a cache for an unfragmented message. Always
+	// remove the map entry on every terminal assembly path, not just close the
+	// queue object.
+	defer cs.DeleteCache(message.GetID())
+	finalMessage := message.(*pipeline.Message)
 	for {
-		msg, ok, err := cache.Pop()
+		cached, ok, err := cache.Pop()
 		if err != nil {
 			return err
 		}
 		if !ok {
-			cache.Close()
 			break
 		}
-		data = append(data, msg.(*pipeline.Message).GetData()...)
+		fragment, ok := cached.(*pipeline.Message)
+		if !ok || fragment.GetCmd() != finalMessage.GetCmd() ||
+			fragment.GetRequestedTeardownMode() != finalMessage.GetRequestedTeardownMode() {
+			return moerr.NewInvalidInputNoCtx("inconsistent pipeline message fragments")
+		}
+		data = append(data, fragment.GetData()...)
 	}
-	msg := message.(*pipeline.Message)
-	msg.SetData(append(data, msg.GetData()...))
+	finalMessage.SetData(append(data, finalMessage.GetData()...))
 	return nil
 }
 

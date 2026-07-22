@@ -142,9 +142,22 @@ id10    additional entry    1.0718208321544391
 WITH q AS (SELECT id, text, l2_distance(vec, '[0.1,-0.2,0.3,0.4,-0.1,0.2,0.0,0.5]') AS dist FROM mini_vector_data) SELECT * FROM q ORDER BY dist LIMIT 3 OFFSET 2 by rank with option 'mode=pre';
 id    text    dist
 id10    additional entry    1.0718208321544391
+id2    greeting message    1.1550324705439516
+id3    vector search test    1.1828778308075465
 WITH q AS (SELECT id, text, l2_distance(vec, '[0.1,-0.2,0.3,0.4,-0.1,0.2,0.0,0.5]') AS dist FROM mini_vector_data) SELECT * FROM q ORDER BY dist LIMIT 3 OFFSET 2 by rank with option 'mode=post';
 id    text    dist
 id10    additional entry    1.0718208321544391
+id2    greeting message    1.1550324705439516
+id3    vector search test    1.1828778308075465
+SELECT id FROM mini_vector_data
+WHERE l2_distance(vec, '[0.1,-0.2,0.3,0.4,-0.1,0.2,0.0,0.5]') < 1.1
+AND l2_distance(vec, '[0.1,-0.2,0.3,0.4,-0.1,0.2,0.0,0.5]') < 1.2
+ORDER BY l2_distance(vec, '[0.1,-0.2,0.3,0.4,-0.1,0.2,0.0,0.5]')
+LIMIT 10 by rank with option 'mode=pre';
+id
+id8
+id1
+id10
 CREATE TABLE vec_with_regular_idx (
 id INT PRIMARY KEY,
 category VARCHAR(50),

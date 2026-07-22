@@ -434,6 +434,18 @@ func (mr *MockLockTableAllocatorMockRecorder) Close() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Close", reflect.TypeOf((*MockLockTableAllocator)(nil).Close))
 }
 
+// FinishCommit mocks base method.
+func (m *MockLockTableAllocator) FinishCommit(serviceID string, txnID []byte) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "FinishCommit", serviceID, txnID)
+}
+
+// FinishCommit indicates an expected call of FinishCommit.
+func (mr *MockLockTableAllocatorMockRecorder) FinishCommit(serviceID, txnID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FinishCommit", reflect.TypeOf((*MockLockTableAllocator)(nil).FinishCommit), serviceID, txnID)
+}
+
 // Get mocks base method.
 func (m *MockLockTableAllocator) Get(serviceID string, group uint32, tableID, originTableID uint64, sharding lock.Sharding) lock.LockTable {
 	m.ctrl.T.Helper()
@@ -491,18 +503,31 @@ func (mr *MockLockTableAllocatorMockRecorder) KeepLockTableBind(serviceID any) *
 }
 
 // Valid mocks base method.
-func (m *MockLockTableAllocator) Valid(serviceID string, txnID []byte, binds []lock.LockTable) ([]uint64, error) {
+func (m *MockLockTableAllocator) Valid(
+	serviceID string,
+	txnID []byte,
+	binds []lock.LockTable,
+	commitMeta ...lockservice.CommitRequestMeta,
+) ([]uint64, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Valid", serviceID, txnID, binds)
+	varargs := []any{serviceID, txnID, binds}
+	for _, meta := range commitMeta {
+		varargs = append(varargs, meta)
+	}
+	ret := m.ctrl.Call(m, "Valid", varargs...)
 	ret0, _ := ret[0].([]uint64)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // Valid indicates an expected call of Valid.
-func (mr *MockLockTableAllocatorMockRecorder) Valid(serviceID, txnID, binds any) *gomock.Call {
+func (mr *MockLockTableAllocatorMockRecorder) Valid(
+	serviceID, txnID, binds any,
+	commitMeta ...any,
+) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Valid", reflect.TypeOf((*MockLockTableAllocator)(nil).Valid), serviceID, txnID, binds)
+	varargs := append([]any{serviceID, txnID, binds}, commitMeta...)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Valid", reflect.TypeOf((*MockLockTableAllocator)(nil).Valid), varargs...)
 }
 
 // MockLockTableKeeper is a mock of LockTableKeeper interface.

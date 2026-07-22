@@ -80,6 +80,16 @@ func withConnCacheEnabled(v bool) tunnelOption {
 	}
 }
 
+// withCacheReuseBarrier prevents a cached backend from being reused until the
+// originating handler has finished all of its tunnel cleanup. Closing the
+// tunnel is only the terminal linearization point; pipe and handler defers may
+// still hold references to that generation afterwards.
+func withCacheReuseBarrier() tunnelOption {
+	return func(t *tunnel) {
+		t.cacheReuseReady = make(chan struct{})
+	}
+}
+
 type transferType int
 
 const (
@@ -103,6 +113,12 @@ type tunnel struct {
 	respC chan []byte
 	// closeOnce controls the close function to close tunnel only once.
 	closeOnce sync.Once
+	// cacheReuseReady is closed by the owning handler after all work from this
+	// tunnel generation has stopped. A cached backend must not execute commands
+	// for its next client before this barrier, or stale pipes can access the
+	// reused transport concurrently.
+	cacheReuseReady     chan struct{}
+	cacheReuseReadyOnce sync.Once
 	// counterSet counts the events in proxy.
 	counterSet *counterSet
 	// the global rebalancer.
@@ -128,9 +144,31 @@ type tunnel struct {
 	// for connection caching, so the follow-up client EOF should not tear down
 	// the backend session that is being cached.
 	expectedCacheQuit atomic.Bool
+	// expectedClientQuit indicates the client sent COM_QUIT. It covers both
+	// the conn-cache path above and the non-cache path where COM_QUIT is
+	// forwarded to CN.
+	expectedClientQuit atomic.Bool
+	// requestBoundary is the authoritative request/response ownership state.
+	// It deliberately becomes permanently unsafe for this tunnel generation if
+	// a client pipelines commands: the MySQL command protocol is sequential and
+	// retaining a queue here would let an unauthenticated peer grow proxy memory.
+	requestBoundary struct {
+		sync.Mutex
+		inFlight                 bool
+		ambiguous                bool
+		command                  frontend.CommandType
+		phase                    responsePhase
+		legacyResultEOFSeen      bool
+		prepareMetadataRemaining uint32
+	}
+	clientDeprecatesEOF bool
 
 	mu struct {
 		sync.Mutex
+		// closed is the terminal generation state. It shares this lock with
+		// backend publication so a replacement can never become reachable after
+		// Close has selected the resources it owns.
+		closed bool
 		// started indicates that the tunnel has started.
 		started bool
 		// inTransfer means a transfer of server connection is in progress.
@@ -180,6 +218,9 @@ func newTunnel(ctx context.Context, logger *log.MOLogger, cs *counterSet, opts .
 
 // run starts the tunnel, make the data between client and server flow in it.
 func (t *tunnel) run(cc ClientConn, sc ServerConn) error {
+	if provider, ok := cc.(interface{ GetCapability() uint32 }); ok {
+		t.clientDeprecatesEOF = provider.GetCapability()&frontend.CLIENT_DEPRECATE_EOF != 0
+	}
 	digThrough := func() error {
 		t.mu.Lock()
 		defer t.mu.Unlock()
@@ -256,11 +297,199 @@ func (t *tunnel) getServerConn() ServerConn {
 func (t *tunnel) markExpectedCacheQuit() {
 	if t != nil {
 		t.expectedCacheQuit.Store(true)
+		t.markExpectedClientQuit()
 	}
 }
 
 func (t *tunnel) hasExpectedCacheQuit() bool {
 	return t != nil && t.expectedCacheQuit.Load()
+}
+
+func (t *tunnel) markExpectedClientQuit() {
+	if t != nil {
+		t.expectedClientQuit.Store(true)
+	}
+}
+
+func (t *tunnel) hasExpectedClientQuit() bool {
+	return t != nil && t.expectedClientQuit.Load()
+}
+
+func (t *tunnel) waitCacheReuseReady(ctx context.Context) error {
+	if t == nil || t.cacheReuseReady == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	select {
+	case <-t.cacheReuseReady:
+		return nil
+	case <-ctx.Done():
+		return context.Cause(ctx)
+	}
+}
+
+func (t *tunnel) markCacheReuseReady() {
+	if t == nil || t.cacheReuseReady == nil {
+		return
+	}
+	t.cacheReuseReadyOnce.Do(func() {
+		close(t.cacheReuseReady)
+	})
+}
+
+type responsePhase uint8
+
+const (
+	responsePhaseFirst responsePhase = iota
+	responsePhaseResult
+	responsePhaseLocalInfile
+	responsePhasePrepareMetadata
+)
+
+func commandHasNoResponse(cmd frontend.CommandType) bool {
+	return cmd == frontend.COM_QUIT ||
+		cmd == frontend.COM_STMT_SEND_LONG_DATA ||
+		cmd == frontend.COM_STMT_CLOSE
+}
+
+func (t *tunnel) trackClientRequest(msg []byte) {
+	msg = firstMySQLPacketPrefix(msg)
+	if t == nil || len(msg) < preRecvLen || msg[3] != 0 {
+		return
+	}
+	cmd := frontend.CommandType(msg[4])
+	if commandHasNoResponse(cmd) {
+		return
+	}
+
+	t.requestBoundary.Lock()
+	defer t.requestBoundary.Unlock()
+	if t.requestBoundary.inFlight {
+		// MySQL commands are sequential. Once a peer pipelines two commands we
+		// keep this generation non-cacheable instead of retaining an unbounded
+		// command queue or guessing which response belongs to which request.
+		t.requestBoundary.ambiguous = true
+		return
+	}
+	t.requestBoundary.inFlight = true
+	t.requestBoundary.command = cmd
+	t.requestBoundary.phase = responsePhaseFirst
+	t.requestBoundary.legacyResultEOFSeen = false
+	t.requestBoundary.prepareMetadataRemaining = 0
+}
+
+func (t *tunnel) hasInFlightClientRequest() bool {
+	if t == nil {
+		return false
+	}
+	t.requestBoundary.Lock()
+	defer t.requestBoundary.Unlock()
+	return t.requestBoundary.inFlight
+}
+
+func (t *tunnel) finishTrackedResponseLocked(status uint16) {
+	if status&frontend.SERVER_MORE_RESULTS_EXISTS != 0 {
+		t.requestBoundary.phase = responsePhaseFirst
+		t.requestBoundary.legacyResultEOFSeen = false
+		return
+	}
+	t.requestBoundary.inFlight = false
+	t.requestBoundary.command = 0
+	t.requestBoundary.phase = responsePhaseFirst
+	t.requestBoundary.legacyResultEOFSeen = false
+	t.requestBoundary.prepareMetadataRemaining = 0
+}
+
+func (t *tunnel) trackServerResponse(msg []byte) {
+	if t == nil {
+		return
+	}
+	msg = firstMySQLPacketPrefix(msg)
+	if len(msg) < preRecvLen {
+		return
+	}
+	t.requestBoundary.Lock()
+	defer t.requestBoundary.Unlock()
+	s := &t.requestBoundary
+	if !s.inFlight || s.ambiguous {
+		return
+	}
+	if isErrPacket(msg) {
+		t.finishTrackedResponseLocked(0)
+		return
+	}
+
+	switch s.phase {
+	case responsePhasePrepareMetadata:
+		if s.prepareMetadataRemaining > 0 {
+			s.prepareMetadataRemaining--
+		}
+		if s.prepareMetadataRemaining == 0 {
+			t.finishTrackedResponseLocked(0)
+		}
+		return
+	case responsePhaseLocalInfile:
+		if status, ok := okPacketStatus(msg); ok {
+			t.finishTrackedResponseLocked(status)
+		}
+		return
+	case responsePhaseResult:
+		if t.clientDeprecatesEOF {
+			if status, ok := eofOKPacketStatus(msg); ok {
+				t.finishTrackedResponseLocked(status)
+			}
+			return
+		}
+		status, ok := legacyEOFPacketStatus(msg)
+		if !ok {
+			return
+		}
+		if !s.legacyResultEOFSeen {
+			s.legacyResultEOFSeen = true
+			return
+		}
+		t.finishTrackedResponseLocked(status)
+		return
+	}
+
+	if s.command == frontend.COM_STMT_PREPARE && len(msg) > 4 && msg[4] == 0 {
+		remaining, ok := prepareMetadataPacketCount(msg, t.clientDeprecatesEOF)
+		if !ok {
+			return
+		}
+		if remaining == 0 {
+			t.finishTrackedResponseLocked(0)
+		} else {
+			s.phase = responsePhasePrepareMetadata
+			s.prepareMetadataRemaining = remaining
+		}
+		return
+	}
+	if status, ok := okPacketStatus(msg); ok {
+		t.finishTrackedResponseLocked(status)
+		return
+	}
+	if s.command == frontend.COM_STATISTICS {
+		t.finishTrackedResponseLocked(0)
+		return
+	}
+	if s.command == frontend.COM_FIELD_LIST || s.command == frontend.COM_STMT_FETCH {
+		if status, ok := legacyEOFPacketStatus(msg); ok {
+			t.finishTrackedResponseLocked(status)
+		} else if status, ok := eofOKPacketStatus(msg); ok {
+			t.finishTrackedResponseLocked(status)
+		}
+		return
+	}
+	if isLoadDataLocalInfileRespPacket(msg) {
+		s.phase = responsePhaseLocalInfile
+		return
+	}
+	// All other first packets begin a result set. Its terminal packet depends
+	// on CLIENT_DEPRECATE_EOF; row packets cannot release request ownership.
+	s.phase = responsePhaseResult
 }
 
 func wrapPipeSendError(name string, err error) error {
@@ -321,17 +550,31 @@ func (t *tunnel) kickoff() error {
 }
 
 // replaceServerConn replaces the CN server.
-func (t *tunnel) replaceServerConn(newServerConn *MySQLConn, newSC ServerConn, sync bool) {
+func (t *tunnel) replaceServerConn(newServerConn *MySQLConn, newSC ServerConn, sync bool) error {
 	t.mu.Lock()
+	if t.mu.closed {
+		t.mu.Unlock()
+		// newSC owns the raw backend transport, connManager registration and
+		// transient protocol-memory lease. The unpublished MySQL wrapper owns
+		// only Go-heap buffers and becomes unreachable on return.
+		if newSC != nil {
+			_ = newSC.Close()
+		} else if newServerConn != nil {
+			_ = newServerConn.Close()
+		}
+		return errPipeClosed
+	}
 	defer t.mu.Unlock()
 
 	oldServerConn := t.mu.serverConn
 
-	// Flush and preserve bufDst before closing old connection.
-	// bufDst wraps the client conn (unchanged), so it stays valid.
+	// Preserve bufDst before closing the old connection. It targets the client
+	// connection, which is unchanged, and may already contain ordered response
+	// bytes from the old backend. Moving the writer preserves those bytes and
+	// avoids a blocking network flush while t.mu is held; otherwise Close could
+	// queue behind the data path it is supposed to terminate.
 	var savedBufDst *bufio.Writer
 	if oldServerConn != nil && oldServerConn.msgBuf != nil && oldServerConn.msgBuf.bufDst != nil {
-		_ = oldServerConn.flushBufDst()
 		savedBufDst = oldServerConn.msgBuf.bufDst
 		oldServerConn.msgBuf.bufDst = nil // detach before close
 	}
@@ -343,18 +586,27 @@ func (t *tunnel) replaceServerConn(newServerConn *MySQLConn, newSC ServerConn, s
 	// set the new ones.
 	t.mu.serverConn = newServerConn
 	t.mu.sc = newSC
+	// The writer targets the unchanged client connection, so it is safe to move
+	// for both transfer modes. Reusing it avoids a 64 KiB allocation and leaves
+	// no detached writer for the GC after every non-sync migration.
+	if savedBufDst != nil {
+		t.mu.serverConn.msgBuf.bufDst = savedBufDst
+	}
 
 	if sync {
 		t.mu.csp.dst = t.mu.serverConn
 		t.mu.scp.src = t.mu.serverConn
-		// Transfer the write buffer to the new server conn's msgBuf.
-		if savedBufDst != nil {
-			t.mu.serverConn.msgBuf.bufDst = savedBufDst
-		}
 	} else {
 		t.mu.csp = t.newPipe(pipeClientToServer, t.mu.clientConn, t.mu.serverConn)
 		t.mu.scp = t.newPipe(pipeServerToClient, t.mu.serverConn, t.mu.clientConn)
 	}
+	// The new backend is now the one steady backend reserved for this client.
+	// Release transient overlap only after the old backend has been closed and
+	// every tunnel pointer has been switched.
+	if leased, ok := newSC.(interface{ promoteProtocolMemory() }); ok {
+		leased.promoteProtocolMemory()
+	}
+	return nil
 }
 
 // canStartTransfer checks whether the transfer can be started.
@@ -363,7 +615,7 @@ func (t *tunnel) canStartTransfer(sync bool) bool {
 	defer t.mu.Unlock()
 
 	// The tunnel has not started.
-	if !t.mu.started {
+	if t.mu.closed || !t.mu.started {
 		return false
 	}
 
@@ -461,7 +713,9 @@ func (t *tunnel) doReplaceConnection(ctx context.Context, sync bool) error {
 		t.logger.Error("failed to get a new connection", zap.Error(err))
 		return err
 	}
-	t.replaceServerConn(newConn, newSC, sync)
+	if err := t.replaceServerConn(newConn, newSC, sync); err != nil {
+		return err
+	}
 	t.counterSet.connMigrationSuccess.Add(1)
 	t.logger.Info("transfer to a new CN server",
 		zap.String("addr", newConn.RemoteAddr().String()))
@@ -544,7 +798,7 @@ func (t *tunnel) getNewServerConn(ctx context.Context) (ServerConn, *MySQLConn, 
 	}
 	prevAddr := t.mu.serverConn.RemoteAddr().String()
 	t.logger.Info("build connection with new server", zap.String("prev addr", prevAddr))
-	newConn, err := t.cc.BuildConnWithServer(prevAddr)
+	newConn, err := t.cc.BuildConnWithServer(ctx, prevAddr)
 	if err != nil {
 		t.logger.Error("failed to build connection with new server",
 			zap.String("prev addr", prevAddr),
@@ -574,6 +828,14 @@ func (t *tunnel) setTransferType(typ transferType) {
 // Close closes the tunnel.
 func (t *tunnel) Close() error {
 	t.closeOnce.Do(func() {
+		// Select the terminal generation and its cleanup resources before any
+		// cancellation can race a replacement into publishing new state.
+		t.mu.Lock()
+		t.mu.closed = true
+		cc, sc := t.mu.clientConn, t.mu.serverConn
+		serverC := t.mu.sc
+		t.mu.Unlock()
+
 		if t.ctxCancel != nil {
 			t.ctxCancel()
 		}
@@ -581,7 +843,6 @@ func (t *tunnel) Close() error {
 		close(t.reqC)
 		// close(t.respC)
 
-		cc, sc := t.getConns()
 		// cc.Close() just only close the raw net connection, and it
 		// is closed in goetty module, so do NOT need to close it here:
 		// cc, sc := t.getConns()
@@ -590,7 +851,6 @@ func (t *tunnel) Close() error {
 		}
 		if !t.connCacheEnabled {
 			// close the server connection
-			serverC := t.getServerConn()
 			if serverC != nil {
 				_ = serverC.Close()
 			} else if sc != nil {
@@ -659,7 +919,7 @@ func (t *tunnel) newPipe(name string, src, dst *MySQLConn) *pipe {
 	// Enable write batching for the server-to-client direction.
 	// Result sets flow s2c and generate many small write syscalls;
 	// bufDst accumulates them and flushes when the read buffer drains.
-	if name == pipeServerToClient {
+	if name == pipeServerToClient && src.msgBuf.bufDst == nil {
 		src.msgBuf.bufDst = bufio.NewWriterSize(dst.Conn, writeBufLen)
 	}
 	return p
@@ -702,7 +962,9 @@ func (p *pipe) kickoff(ctx context.Context, peer *pipe) (e error) {
 	var currSeq int16
 	var lastSeq int16 = -1
 	var rotated bool
+	var stopAfterSend bool
 	prepareNextMessage := func() (terminate bool, err error) {
+		stopAfterSend = false
 		if terminate := func() bool {
 			p.mu.Lock()
 			defer p.mu.Unlock()
@@ -715,7 +977,20 @@ func (p *pipe) kickoff(ctx context.Context, peer *pipe) (e error) {
 		}(); terminate {
 			return true, nil
 		}
-		_, re := p.src.preRecv()
+		packetSize, re := p.src.preRecv()
+		// A fragmented packet may leave only its four-byte header in the buffer.
+		// c2s needs the command byte for event detection. s2c needs a bounded
+		// prefix containing both length-encoded OK fields and its status flags;
+		// otherwise a fragmented terminal response would never release request
+		// ownership and every later clean QUIT would unnecessarily miss cache.
+		if re == nil && packetSize >= preRecvLen {
+			prefixLen := preRecvLen
+			if p.name == pipeServerToClient {
+				const responseTrackingPrefixLen = mysqlHeadLen + 1 + 9 + 9 + 2
+				prefixLen = min(packetSize, responseTrackingPrefixLen)
+			}
+			re = p.src.receiveAtLeast(prefixLen)
+		}
 		p.mu.Lock()
 		defer p.mu.Unlock()
 		p.mu.inPreRecv = false
@@ -778,6 +1053,7 @@ func (p *pipe) kickoff(ctx context.Context, peer *pipe) (e error) {
 			if ok {
 				p.mu.inTxn = inTxn
 			}
+			p.tun.trackServerResponse(tempBuf)
 			if !p.mu.inTxn && p.tun.transferIntent.Load() && !rotated {
 				peer.wg.Add(1)
 				p.transferred = true
@@ -790,7 +1066,14 @@ func (p *pipe) kickoff(ctx context.Context, peer *pipe) (e error) {
 			if isEmptyPacket(tempBuf) {
 				p.logger.Warn("there comes an empty packet from client")
 			}
+			if isCmdQuit(tempBuf) {
+				p.tun.markExpectedClientQuit()
+				stopAfterSend = true
+			}
 			if !isEmptyPacket(tempBuf) && !isDeallocatePacket(tempBuf) {
+				if !isCmdQuit(tempBuf) {
+					p.tun.trackClientRequest(tempBuf)
+				}
 				p.mu.lastCmdTime = time.Now()
 			}
 		}
@@ -825,6 +1108,12 @@ func (p *pipe) kickoff(ctx context.Context, peer *pipe) (e error) {
 		if err = p.src.sendTo(p.dst); err != nil {
 			return wrapPipeSendError(p.name, err)
 		}
+		if stopAfterSend {
+			// COM_QUIT is terminal even when another complete packet is already
+			// buffered. Reporting a client disconnect lets the owning handler run
+			// its normal cleanup after cache publication has completed.
+			return withCode(io.EOF, codeClientDisconnect)
+		}
 	}
 	return ctx.Err()
 }
@@ -851,6 +1140,66 @@ func (p *pipe) waitReady(ctx context.Context) error {
 		}
 		if p.mu.closed {
 			return errPipeClosed
+		}
+		p.mu.cond.Wait()
+	}
+	return nil
+}
+
+// seal makes a pipe generation terminal without waiting for its goroutine.
+// This is used by COM_QUIT while c2s is synchronously blocked on its event: the
+// caller can publish the reset backend knowing the old pipe cannot restart or
+// advance to another packet after notification.
+func (p *pipe) seal() error {
+	if p == nil {
+		return nil
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.mu.closed = true
+	p.mu.paused = true
+	if p.mu.inPreRecv && p.src != nil {
+		if err := p.src.SetReadDeadline(time.Unix(1, 0)); err != nil {
+			return err
+		}
+	}
+	if p.mu.cond != nil {
+		p.mu.cond.Broadcast()
+	}
+	return nil
+}
+
+// waitStopped joins a pipe after seal. Unlike pause, a closed pipe is a valid
+// terminal state here and can never be restarted by a later generation.
+func (p *pipe) waitStopped(ctx context.Context) error {
+	if p == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if !p.mu.started {
+		return nil
+	}
+	if p.mu.cond == nil {
+		return errPipeClosed
+	}
+	stopCtxWatcher := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			p.mu.Lock()
+			p.mu.cond.Broadcast()
+			p.mu.Unlock()
+		case <-stopCtxWatcher:
+		}
+	}()
+	defer close(stopCtxWatcher)
+	for p.mu.started {
+		if ctx.Err() != nil {
+			return context.Cause(ctx)
 		}
 		p.mu.cond.Wait()
 	}
@@ -940,25 +1289,101 @@ func txnStatus(status uint16) bool {
 
 // handleOKPacket handles the OK packet from server to update the txn state.
 func handleOKPacket(msg []byte, mustOK bool) bool {
-	var mp *frontend.MysqlProtocolImpl
 	// if the mustOK is false, then the sequence ID should be 1 for OK packet.
 	if !mustOK && msg[3] != 1 {
 		return txnStatus(0)
 	}
+	status, ok := okPacketStatus(msg)
+	if !ok {
+		return txnStatus(0)
+	}
+	return txnStatus(status)
+}
+
+func okPacketStatus(msg []byte) (uint16, bool) {
+	msg = firstMySQLPacketPrefix(msg)
+	if !isOKPacket(msg) {
+		return 0, false
+	}
+	var mp *frontend.MysqlProtocolImpl
 	pos := 5
 	_, pos, ok := mp.ReadIntLenEnc(msg, pos)
 	if !ok {
-		return txnStatus(0)
+		return 0, false
 	}
 	_, pos, ok = mp.ReadIntLenEnc(msg, pos)
 	if !ok {
-		return txnStatus(0)
+		return 0, false
 	}
 	if len(msg[pos:]) < 2 {
-		return txnStatus(0)
+		return 0, false
 	}
-	status := binary.LittleEndian.Uint16(msg[pos:])
-	return txnStatus(status)
+	return binary.LittleEndian.Uint16(msg[pos:]), true
+}
+
+func eofOKPacketStatus(msg []byte) (uint16, bool) {
+	msg = firstMySQLPacketPrefix(msg)
+	payloadLen := mysqlPacketPayloadLength(msg)
+	if len(msg) < 5 || msg[4] != 0xfe || payloadLen < 7 || payloadLen >= 9 {
+		return 0, false
+	}
+	var mp *frontend.MysqlProtocolImpl
+	pos := 5
+	_, pos, ok := mp.ReadIntLenEnc(msg, pos)
+	if !ok {
+		return 0, false
+	}
+	_, pos, ok = mp.ReadIntLenEnc(msg, pos)
+	if !ok || len(msg[pos:]) < 2 {
+		return 0, false
+	}
+	return binary.LittleEndian.Uint16(msg[pos:]), true
+}
+
+func legacyEOFPacketStatus(msg []byte) (uint16, bool) {
+	msg = firstMySQLPacketPrefix(msg)
+	if len(msg) < 9 || mysqlPacketPayloadLength(msg) != 5 || msg[4] != 0xfe {
+		return 0, false
+	}
+	return binary.LittleEndian.Uint16(msg[7:9]), true
+}
+
+func mysqlPacketPayloadLength(msg []byte) int {
+	if len(msg) < mysqlHeadLen {
+		return -1
+	}
+	return int(uint32(msg[0]) | uint32(msg[1])<<8 | uint32(msg[2])<<16)
+}
+
+func firstMySQLPacketPrefix(msg []byte) []byte {
+	payloadLen := mysqlPacketPayloadLength(msg)
+	if payloadLen < 0 {
+		return nil
+	}
+	packetLen := mysqlHeadLen + payloadLen
+	if packetLen < len(msg) {
+		return msg[:packetLen]
+	}
+	return msg
+}
+
+func prepareMetadataPacketCount(msg []byte, deprecateEOF bool) (uint32, bool) {
+	msg = firstMySQLPacketPrefix(msg)
+	if len(msg) < 16 || mysqlPacketPayloadLength(msg) < 12 || msg[4] != 0 {
+		return 0, false
+	}
+	columns := uint32(binary.LittleEndian.Uint16(msg[9:11]))
+	params := uint32(binary.LittleEndian.Uint16(msg[11:13]))
+	remaining := columns + params
+	if !deprecateEOF {
+		if params > 0 {
+			remaining++
+		}
+		if columns > 0 {
+			remaining++
+		}
+	}
+	return remaining, true
 }
 
 // handleEOFPacket handles the EOF packet from server to update the txn state.

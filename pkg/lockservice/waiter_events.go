@@ -76,9 +76,10 @@ func (l *localLockTable) newLockContext(
 	c.cb = cb
 	c.result = pb.Result{LockedOn: bind}
 	c.createAt = time.Now()
-	if opts.async {
-		c.lockWaitDeadline, c.lockWaitTimeoutErr = getAsyncLockWaitDeadline(c.createAt, opts)
-	}
+	// Compute the deadline for both sync and async paths. Once an absolute
+	// LockWaitDeadline crosses a service/RPC boundary it is authoritative; no
+	// later hop may restart it from the rounded relative timeout.
+	c.lockWaitDeadline, c.lockWaitTimeoutErr = getLockWaitDeadline(c.createAt, opts)
 	return c
 }
 
@@ -116,12 +117,15 @@ func (c *lockContext) getLockWaitTimeoutErr() error {
 	return ErrLockTimeout
 }
 
-func getAsyncLockWaitDeadline(createAt time.Time, opts LockOptions) (time.Time, error) {
+func getLockWaitDeadline(createAt time.Time, opts LockOptions) (time.Time, error) {
 	var (
 		deadline time.Time
 		err      error
 	)
-	if opts.LockWaitTimeout > 0 {
+	if opts.LockWaitDeadline > 0 {
+		deadline = time.Unix(0, opts.LockWaitDeadline)
+		err = ErrLockTimeout
+	} else if opts.LockWaitTimeout > 0 {
 		deadline = createAt.Add(time.Duration(opts.LockWaitTimeout) * time.Second)
 		err = ErrLockTimeout
 	}
@@ -209,6 +213,8 @@ func (mw *waiterEvents) close() {
 	for _, w := range mw.mu.blockedWaiters {
 		w.close("waiterEvents close", mw.logger)
 	}
+	clear(mw.mu.blockedWaiters)
+	mw.mu.blockedWaiters = nil
 	mw.mu.Unlock()
 }
 
@@ -250,6 +256,24 @@ func (mw *waiterEvents) addToLazyCheckDeadlockC(w *waiter) {
 	mw.mu.Lock()
 	defer mw.mu.Unlock()
 	mw.mu.blockedWaiters = append(mw.mu.blockedWaiters, w)
+}
+
+// removeBlockedWaiter stops the background checker from retaining a waiter
+// that the synchronous lock path is about to reuse.
+func (mw *waiterEvents) removeBlockedWaiter(w *waiter) {
+	mw.mu.Lock()
+	defer mw.mu.Unlock()
+
+	blocked := mw.mu.blockedWaiters[:0]
+	for _, current := range mw.mu.blockedWaiters {
+		if current == w {
+			current.close("waiterEvents remove blocked waiter", mw.logger)
+			continue
+		}
+		blocked = append(blocked, current)
+	}
+	clear(mw.mu.blockedWaiters[len(blocked):])
+	mw.mu.blockedWaiters = blocked
 }
 
 func (mw *waiterEvents) wakeCheck() {
@@ -295,12 +319,13 @@ func (mw *waiterEvents) handle(ctx context.Context) {
 
 func (mw *waiterEvents) check(timeout time.Duration) {
 	mw.mu.Lock()
-	defer mw.mu.Unlock()
 	if len(mw.mu.blockedWaiters) == 0 {
+		mw.mu.Unlock()
 		return
 	}
 
 	now := time.Now()
+	var timedOut []*lockContext
 	newBlockedWaiters := mw.mu.blockedWaiters[:0]
 	for i, w := range mw.mu.blockedWaiters {
 		// remove if not in blocking state
@@ -338,7 +363,9 @@ func (mw *waiterEvents) check(timeout time.Duration) {
 					zap.Duration("wait", wait),
 					zap.Duration("timeout", w.lockWaitTimeout))
 			}
-			w.notify(notifyValue{err: err}, mw.logger)
+			if w.notifyWithoutEvent(notifyValue{err: err}, mw.logger) && w.event.c != nil {
+				timedOut = append(timedOut, w.event.c)
+			}
 			w.close("waiterEvents check timeout", mw.logger)
 			mw.mu.blockedWaiters[i] = nil
 			continue
@@ -350,6 +377,17 @@ func (mw *waiterEvents) check(timeout time.Duration) {
 		newBlockedWaiters = append(newBlockedWaiters, w)
 	}
 	mw.mu.blockedWaiters = newBlockedWaiters
+	mw.mu.Unlock()
+
+	// Complete timed-out async waits outside mw.mu. doLock removes the waiter
+	// from the checker and may acquire mw.mu again, and it also takes txn locks;
+	// neither is safe while the checker mutex is held.
+	for _, c := range timedOut {
+		txn := c.txn
+		txn.Lock()
+		c.doLock()
+		txn.Unlock()
+	}
 }
 
 func (mw *waiterEvents) addToDeadlockCheck(w *waiter) error {
@@ -366,7 +404,7 @@ func (mw *waiterEvents) checkOrphan(v checkOrphan) {
 		return
 	}
 
-	if v.wait >= waitTooLong {
+	if v.logWaitTooLong {
 		lockDetail := ""
 		v.lt.mu.RLock()
 		lock, ok := v.lt.mu.store.Get(v.key)
@@ -403,7 +441,8 @@ func (mw *waiterEvents) checkOrphan(v checkOrphan) {
 
 	for _, h := range holders {
 		if !mw.txnHolder.hasRemoteLockBind(h.CreatedOn, v.lt.bind, mw.remoteLockTimeout) {
-			if !mw.txnHolder.canUnlockRemoteTxn(h) {
+			canUnlock, fenceTS := mw.txnHolder.canUnlockRemoteTxn(h)
+			if !canUnlock {
 				mw.logger.Warn("found stale remote lock without bind heartbeat, but txn may still commit",
 					zap.String("bind", v.lt.bind.DebugString()),
 					bytesArrayField("txns", [][]byte{h.TxnID}))
@@ -411,17 +450,26 @@ func (mw *waiterEvents) checkOrphan(v checkOrphan) {
 			}
 			mw.logger.Warn("found stale remote lock without bind heartbeat",
 				zap.String("bind", v.lt.bind.DebugString()),
+				zap.String("fence-ts", fenceTS.DebugString()),
 				bytesArrayField("txns", [][]byte{h.TxnID}))
-			_ = mw.unlock(context.Background(), h.TxnID, timestamp.Timestamp{})
+			_ = mw.unlock(context.Background(), h.TxnID, fenceTS)
 			continue
 		}
 		// When you have determined that a remote transaction is an orphaned transaction, you
 		// can release the lock that the remote transaction has placed on the current cn.
 		if !mw.txnHolder.isValidRemoteTxn(h) {
-			mw.logger.Warn("found orphans txns",
+			canUnlock, fenceTS := mw.txnHolder.canUnlockRemoteTxn(h)
+			if !canUnlock {
+				mw.logger.Warn("remote txn is inactive but cannot be confirmed safe to unlock",
+					zap.String("bind", v.lt.bind.DebugString()),
+					bytesArrayField("txns", [][]byte{h.TxnID}))
+				continue
+			}
+			mw.logger.Warn("found orphan remote txn, unlock with fence timestamp",
+				zap.String("bind", v.lt.bind.DebugString()),
+				zap.String("fence-ts", fenceTS.DebugString()),
 				bytesArrayField("txns", [][]byte{h.TxnID}))
-			// ignore error. If failed will retry until lock removed
-			_ = mw.unlock(context.Background(), h.TxnID, timestamp.Timestamp{})
+			_ = mw.unlock(context.Background(), h.TxnID, fenceTS)
 		}
 	}
 }
@@ -431,16 +479,22 @@ func (mw *waiterEvents) addToOrphanCheck(
 	wait time.Duration,
 ) {
 	ck := *w.conflictKey.Load()
+	logWaitTooLong := wait >= waitTooLong && w.waitTooLongLogged.CompareAndSwap(false, true)
 	v := checkOrphan{
-		wait: wait,
-		key:  ck,
-		lt:   w.lt.Load(),
-		txn:  w.txn,
+		wait:           wait,
+		key:            ck,
+		lt:             w.lt.Load(),
+		txn:            w.txn,
+		logWaitTooLong: logWaitTooLong,
 	}
 
 	select {
 	case mw.checkOrphanC <- v:
 	default:
+		if logWaitTooLong {
+			// The warning was not queued. Let a later check retry it.
+			w.waitTooLongLogged.Store(false)
+		}
 	}
 }
 
@@ -449,4 +503,7 @@ type checkOrphan struct {
 	key  []byte
 	lt   *localLockTable
 	txn  pb.WaitTxn
+	// logWaitTooLong controls only the diagnostic; every event still performs
+	// the orphan check regardless of this flag.
+	logWaitTooLong bool
 }

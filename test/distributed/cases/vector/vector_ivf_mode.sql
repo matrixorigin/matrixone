@@ -83,6 +83,15 @@ WITH q AS (SELECT id, text, l2_distance(vec, '[0.1,-0.2,0.3,0.4,-0.1,0.2,0.0,0.5
 -- Test Case: mode=post with OFFSET
 WITH q AS (SELECT id, text, l2_distance(vec, '[0.1,-0.2,0.3,0.4,-0.1,0.2,0.0,0.5]') AS dist FROM mini_vector_data) SELECT * FROM q ORDER BY dist LIMIT 3 OFFSET 2 by rank with option 'mode=post';
 
+-- A one-sided reader range must not dereference the unbounded side, and two
+-- upper bounds must fold into the tightest bound (< 1.1), independent of order,
+-- so the index enforces the intersection instead of the first predicate seen.
+SELECT id FROM mini_vector_data
+WHERE l2_distance(vec, '[0.1,-0.2,0.3,0.4,-0.1,0.2,0.0,0.5]') < 1.1
+  AND l2_distance(vec, '[0.1,-0.2,0.3,0.4,-0.1,0.2,0.0,0.5]') < 1.2
+ORDER BY l2_distance(vec, '[0.1,-0.2,0.3,0.4,-0.1,0.2,0.0,0.5]')
+LIMIT 10 by rank with option 'mode=pre';
+
 -- ============================================================================
 -- Test Cases: Vector Index + Regular Index Combination
 -- ============================================================================

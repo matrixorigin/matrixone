@@ -161,6 +161,11 @@ type Session struct {
 
 	lastInsertID uint64
 
+	// lastAffectedRows records the rows affected by the previous statement,
+	// consumed by the ROW_COUNT() builtin. MySQL semantics: -1 after a
+	// result-set statement (SELECT/SHOW...), 0 after DDL, affected rows after DML.
+	lastAffectedRows int64
+
 	// tStmt is used only to record the StatementInfo
 	// QueryResult please use feSessionImpl.stmtProfile instead.
 	tStmt *motrace.StatementInfo
@@ -727,6 +732,7 @@ func NewSession(
 
 	ses.proc.SetStmtProfile(&ses.stmtProfile)
 	ses.proc.Session = ses
+	setRowCount(ses, ses.proc, -1)
 	// ses.proc.SetResolveVariableFunc(ses.txnCompileCtx.ResolveVariable)
 
 	runtime.SetFinalizer(ses, func(ss *Session) {
@@ -829,6 +835,7 @@ func (ses *Session) Close() {
 	ses.rs = nil
 	ses.queryId = nil
 	ses.p = nil
+	ses.releasePlanCache()
 	ses.planCache = nil
 	ses.seqCurValues = nil
 	ses.seqLastValue = nil
@@ -885,6 +892,10 @@ func (ses *Session) cachePlan(sql string, stmts []tree.Statement, plans []*plan.
 	}
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
+	if ses.planCache == nil {
+		freeStmts(stmts)
+		return
+	}
 	ses.planCache.cache(sql, stmts, plans)
 }
 
@@ -894,6 +905,9 @@ func (ses *Session) getCachedPlan(sql string) *cachedPlan {
 	}
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
+	if ses.planCache == nil {
+		return nil
+	}
 	return ses.planCache.get(sql)
 }
 
@@ -903,13 +917,26 @@ func (ses *Session) isCached(sql string) bool {
 	}
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
+	if ses.planCache == nil {
+		return false
+	}
 	return ses.planCache.isCached(sql)
 }
 
 func (ses *Session) cleanCache() {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	ses.planCache.clean()
+	if ses.planCache != nil {
+		ses.planCache.clean()
+	}
+}
+
+// releasePlanCache is an internal method. The caller MUST hold ses.mu
+// (currently only called from Session.Close which holds the lock).
+func (ses *Session) releasePlanCache() {
+	if ses.planCache != nil {
+		ses.planCache.clean()
+	}
 }
 
 func (ses *Session) UpdateDebugString() {
@@ -1112,6 +1139,18 @@ func (ses *Session) GetLastInsertID() uint64 {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	return ses.lastInsertID
+}
+
+func (ses *Session) SetLastAffectedRows(num int64) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ses.lastAffectedRows = num
+}
+
+func (ses *Session) GetLastAffectedRows() int64 {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.lastAffectedRows
 }
 
 func (ses *Session) SetCmd(cmd CommandType) {
@@ -2020,6 +2059,10 @@ type prepareStmtMigration struct {
 	commitFn   func(*Session, error) error
 }
 
+func quotePrepareStmtName(name string) string {
+	return "`" + strings.ReplaceAll(name, "`", "``") + "`"
+}
+
 func newPrepareStmtMigration(name string, sql string, paramTypes []byte) *prepareStmtMigration {
 	return &prepareStmtMigration{
 		name:       name,
@@ -2033,7 +2076,7 @@ func (p *prepareStmtMigration) Migrate(ctx context.Context, ses *Session) error 
 	ses.EnterFPrint(FPMigratePrepareStmt)
 	defer ses.ExitFPrint(FPMigratePrepareStmt)
 	if !strings.HasPrefix(strings.ToLower(p.sql), "prepare") {
-		p.sql = fmt.Sprintf("prepare %s from %s", p.name, p.sql)
+		p.sql = fmt.Sprintf("prepare %s from %s", quotePrepareStmtName(p.name), p.sql)
 	}
 
 	tempExecCtx := &ExecCtx{
@@ -2049,6 +2092,9 @@ func (p *prepareStmtMigration) Migrate(ctx context.Context, ses *Session) error 
 func Migrate(ses *Session, req *query.MigrateConnToRequest) error {
 	ses.EnterFPrint(FPMigrate)
 	defer ses.ExitFPrint(FPMigrate)
+	// USE and PREPARE are replayed as internal statements and update ROW_COUNT().
+	// Restore the source session value after all replay work has finished.
+	defer restoreRowCount(ses, ses.GetProc(), req.LastAffectedRows)
 	parameters := getPu(ses.GetService()).SV
 
 	//all offspring related to the request inherit the txnCtx

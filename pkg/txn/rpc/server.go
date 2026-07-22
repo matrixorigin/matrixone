@@ -146,6 +146,16 @@ type server struct {
 	// cpu's number.
 	queue   chan executor
 	stopper *stopper.Stopper
+
+	stoppingC        chan struct{}
+	producers        sync.WaitGroup
+	producerAdmitted func()
+	closeOnce        sync.Once
+	closeErr         error
+	lifecycle        struct {
+		sync.Mutex
+		stopping bool
+	}
 }
 
 // NewTxnServer create a txn server. One DNStore corresponds to one TxnServer
@@ -155,8 +165,9 @@ func NewTxnServer(
 	opts ...ServerOption,
 ) (TxnServer, error) {
 	s := &server{
-		rt:       rt,
-		handlers: make(map[txn.TxnMethod]TxnRequestHandleFunc),
+		rt:        rt,
+		handlers:  make(map[txn.TxnMethod]TxnRequestHandleFunc),
+		stoppingC: make(chan struct{}),
 		stopper: stopper.NewStopper("txn rpc server",
 			stopper.WithLogger(rt.Logger().RawLogger())),
 	}
@@ -209,8 +220,29 @@ func (s *server) Start() error {
 }
 
 func (s *server) Close() error {
-	s.stopper.Stop()
-	return s.rpc.Close()
+	s.closeOnce.Do(func() {
+		s.lifecycle.Lock()
+		s.lifecycle.stopping = true
+		close(s.stoppingC)
+		s.lifecycle.Unlock()
+
+		s.closeErr = s.rpc.Close()
+		s.producers.Wait()
+		s.stopper.Stop()
+
+		for {
+			select {
+			case req, ok := <-s.queue:
+				if !ok {
+					return
+				}
+				s.cleanupExecutor(req)
+			default:
+				return
+			}
+		}
+	})
+	return s.closeErr
 }
 
 func (s *server) RegisterMethodHandler(m txn.TxnMethod, h TxnRequestHandleFunc) {
@@ -251,19 +283,27 @@ func (s *server) onMessage(
 	}
 	handler, ok := s.handlers[m.Method]
 	if !ok {
+		s.cleanupRequest(m, msg.Cancel)
 		return moerr.NewNotSupportedf(ctx, "unknown txn request method: %s", m.Method.String())
 	}
 
 	select {
 	case <-ctx.Done():
-		s.releaseRequest(m)
-		msg.Cancel()
+		s.cleanupRequest(m, msg.Cancel)
 		return nil
 	default:
 	}
+	if !s.beginProducer() {
+		s.cleanupRequest(m, msg.Cancel)
+		return moerr.NewStreamClosedNoCtx()
+	}
+	defer s.finishProducer()
+	if s.producerAdmitted != nil {
+		s.producerAdmitted()
+	}
 
 	t := time.Now()
-	s.queue <- executor{
+	req := executor{
 		t:       t,
 		ctx:     ctx,
 		cancel:  msg.Cancel,
@@ -271,6 +311,15 @@ func (s *server) onMessage(
 		cs:      cs,
 		handler: handler,
 		s:       s,
+	}
+	select {
+	case s.queue <- req:
+	case <-ctx.Done():
+		s.cleanupRequest(m, msg.Cancel)
+		return nil
+	case <-s.stoppingC:
+		s.cleanupRequest(m, msg.Cancel)
+		return moerr.NewStreamClosedNoCtx()
 	}
 	n := len(s.queue)
 	v2.TxnCommitQueueSizeGauge.Set(float64(n))
@@ -280,6 +329,29 @@ func (s *server) onMessage(
 			zap.Int("max", s.options.maxChannelBufferSize))
 	}
 	return nil
+}
+
+func (s *server) beginProducer() bool {
+	s.lifecycle.Lock()
+	defer s.lifecycle.Unlock()
+	if s.lifecycle.stopping {
+		return false
+	}
+	s.producers.Add(1)
+	return true
+}
+
+func (s *server) finishProducer() {
+	s.producers.Done()
+}
+
+func (s *server) cleanupRequest(req *txn.TxnRequest, cancel context.CancelFunc) {
+	s.releaseRequest(req)
+	cancel()
+}
+
+func (s *server) cleanupExecutor(req executor) {
+	s.cleanupRequest(req.req, req.cancel)
 }
 
 func (s *server) acquireResponse() *txn.TxnResponse {

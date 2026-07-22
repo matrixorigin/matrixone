@@ -329,7 +329,7 @@ func (tTxnOp *testTxnOperator) NextSequence() uint64 {
 
 func (tTxnOp *testTxnOperator) EnterRunSqlWithTokenAndSQL(_ context.CancelFunc, _ string) uint64 {
 	//TODO implement me
-	panic("implement me")
+	return 1
 }
 
 func (tTxnOp *testTxnOperator) ExitRunSqlWithToken(_ uint64) {
@@ -400,7 +400,7 @@ func Test_Allocate(t *testing.T) {
 						memRes := executor.NewMemResult(
 							typs,
 							mpool.MustNewZero())
-						memRes.NewBatch()
+						memRes.NewBatchWithRowCount(1)
 						executor.AppendFixedRows(memRes, 0, []uint64{1})
 						executor.AppendFixedRows(memRes, 1, []uint64{1})
 						return memRes.GetResult(), nil
@@ -458,7 +458,7 @@ func TestAllocateWithEmptyCommitTS(t *testing.T) {
 						memRes := executor.NewMemResult(
 							typs,
 							mpool.MustNewZero())
-						memRes.NewBatch()
+						memRes.NewBatchWithRowCount(1)
 						executor.AppendFixedRows(memRes, 0, []uint64{1})
 						executor.AppendFixedRows(memRes, 1, []uint64{1})
 						return memRes.GetResult(), nil
@@ -519,7 +519,7 @@ func TestAllocateWithValidCommitTS(t *testing.T) {
 						memRes := executor.NewMemResult(
 							typs,
 							mpool.MustNewZero())
-						memRes.NewBatch()
+						memRes.NewBatchWithRowCount(1)
 						executor.AppendFixedRows(memRes, 0, []uint64{1})
 						executor.AppendFixedRows(memRes, 1, []uint64{1})
 						return memRes.GetResult(), nil
@@ -584,7 +584,7 @@ func Test_Allocate_Retry_When_Rows_Count_Invalid(t *testing.T) {
 				memRes := executor.NewMemResult(
 					typs,
 					mpool.MustNewZero())
-				memRes.NewBatch()
+				memRes.NewBatchWithRowCount(1)
 				executor.AppendFixedRows(memRes, 0, []uint64{1})
 				executor.AppendFixedRows(memRes, 1, []uint64{1})
 				return memRes.GetResult(), nil
@@ -630,7 +630,7 @@ func Test_Allocate_Retry_When_AffectedRows_Invalid(t *testing.T) {
 				memRes := executor.NewMemResult(
 					typs,
 					mpool.MustNewZero())
-				memRes.NewBatch()
+				memRes.NewBatchWithRowCount(1)
 				executor.AppendFixedRows(memRes, 0, []uint64{1})
 				executor.AppendFixedRows(memRes, 1, []uint64{1})
 				return memRes.GetResult(), nil

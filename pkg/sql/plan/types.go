@@ -172,7 +172,8 @@ type BaseOptimizer struct {
 type ViewData struct {
 	Stmt            string
 	DefaultDatabase string
-	SecurityType    string `json:"security_type,omitempty"`
+	SQLMode         *string `json:"sql_mode,omitempty"`
+	SecurityType    string  `json:"security_type,omitempty"`
 }
 
 type QueryBuilder struct {
@@ -183,6 +184,8 @@ type QueryBuilder struct {
 	nameByColRef         map[[2]int32]string
 	protectedScans       map[int32]int
 	projectSpecialGuards map[int32]*specialIndexGuard
+	indexHintsByScan     map[int32]*indexHintSet
+	indexHintOwnerByNode map[int32]int32
 
 	tag2Table  map[int32]*TableDef
 	tag2NodeID map[int32]int32
@@ -267,6 +270,7 @@ type OptimizerHints struct {
 	forceOneCN                 int
 	execType                   int
 	disableRightJoin           int
+	disableRightSingleRF       int
 	printShuffle               int
 	skipDedup                  int
 }
@@ -351,6 +355,8 @@ type BindContext struct {
 	windowByAst    map[string]int32
 	projectByExpr  map[string]int32
 	timeByAst      map[string]int32
+
+	projectColByAst map[string]int32
 
 	projectByAst []SelectField
 
@@ -440,17 +446,33 @@ type Binder interface {
 }
 
 type baseBinder struct {
-	sysCtx    context.Context
-	builder   *QueryBuilder
-	ctx       *BindContext
-	impl      Binder
-	boundCols []string
+	sysCtx           context.Context
+	builder          *QueryBuilder
+	ctx              *BindContext
+	impl             Binder
+	boundCols        []string
+	numericParamType *Type
 }
 
 type DefaultBinder struct {
 	baseBinder
 	typ  Type
 	cols []string
+}
+
+// ReplaceValueBinder binds the RHS value expressions of a `REPLACE ... SET`
+// statement. MySQL evaluates an RHS reference to a target-table column as
+// DEFAULT(col), so this binder resolves every column reference to that
+// column's default expression instead of an actual row value.
+//
+// The typ field carries the destination column type so that literal values
+// (especially DECIMAL / scientific-notation) bind with the same precision as
+// DefaultBinder. BindExpr delegates to baseBindExpr which uses this typ to
+// drive type-aware numeric binding.
+type ReplaceValueBinder struct {
+	baseBinder
+	typ      plan.Type
+	tableDef *plan.TableDef
 }
 
 type UpdateBinder struct {
@@ -467,6 +489,7 @@ type OndupUpdateBinder struct {
 
 type TableBinder struct {
 	baseBinder
+	allowSubquery bool
 }
 
 type WhereBinder struct {
@@ -480,7 +503,8 @@ type GroupBinder struct {
 
 type HavingBinder struct {
 	baseBinder
-	insideAgg bool
+	insideAgg    bool
+	rollupHaving bool
 }
 
 type ProjectionBinder struct {
@@ -490,7 +514,8 @@ type ProjectionBinder struct {
 
 type OrderBinder struct {
 	*ProjectionBinder
-	selectList tree.SelectExprs
+	selectList     tree.SelectExprs
+	distinctBinder *distinctOrderBinder
 }
 
 type LimitBinder struct {
@@ -515,6 +540,7 @@ var _ Binder = (*ProjectionBinder)(nil)
 var _ Binder = (*LimitBinder)(nil)
 var _ Binder = (*UpdateBinder)(nil)
 var _ Binder = (*OndupUpdateBinder)(nil)
+var _ Binder = (*ReplaceValueBinder)(nil)
 
 var Sequence_cols_name = []string{"last_seq_num", "min_value", "max_value", "start_value", "increment_value", "cycle", "is_called"}
 

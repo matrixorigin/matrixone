@@ -17,7 +17,6 @@ package frontend
 import (
 	"bytes"
 	"context"
-	"encoding/hex"
 	"encoding/json"
 	"reflect"
 	"regexp"
@@ -302,17 +301,10 @@ func shouldUseLCAReaderFallback(err error) bool {
 		moerr.IsMoErrCode(err, moerr.ErrParseError)
 }
 
-// scanSnapshotRelationByID scans a relation with a split-view strategy:
-//   - current relation: resolved at the current transaction view to collect
-//     only currently valid physical objects (avoid stale/GC'ed object names).
-//   - snapshot reader: rebuilt directly from the requested snapshot timestamp
-//     and the current relation's stable table handle, without re-resolving the
-//     historical relation through catalog name lookup.
-//
-// After GC, time travelling by account/db/table name can fail if no snapshot or
-// PITR history was created for the corresponding account/db/table. This helper
-// keeps object selection and row visibility decoupled so data-branch fallback
-// paths can still probe old snapshots without requiring snapshotRelation lookup.
+// scanSnapshotRelationByID scans a relation at an explicit snapshot using its
+// stable table ID. Both the relation handle and its ranges must be resolved at
+// that snapshot: current catalog ranges no longer contain a table-definition
+// row after the table has been altered, dropped, or recreated.
 func scanSnapshotRelationByID(
 	ctx context.Context,
 	caller string,
@@ -338,7 +330,11 @@ func scanSnapshotRelationByID(
 
 	storage := ses.GetTxnHandler().GetStorage()
 	baseTxnOp := ses.GetTxnHandler().GetTxn()
-	rangeTS := types.TimestampToTS(baseTxnOp.SnapshotTS())
+	rangeTxnOp := baseTxnOp
+	if !snapshotTS.IsEmpty() {
+		rangeTxnOp = baseTxnOp.CloneSnapshotOp(snapshotTS.ToTimestamp())
+	}
+	rangeTS := types.TimestampToTS(rangeTxnOp.SnapshotTS())
 	logutil.Info(
 		"DataBranch-SnapshotScan-Start",
 		zap.String("caller", caller),
@@ -350,14 +346,14 @@ func scanSnapshotRelationByID(
 		zap.Int("scan-parallelism", scanParallelism),
 	)
 
-	_, _, rangeRel, err := storage.GetRelationById(ctx, baseTxnOp, tableID)
+	_, _, rangeRel, err := storage.GetRelationById(ctx, rangeTxnOp, tableID)
 	if err != nil {
 		return err
 	}
 	if rangeRel == nil {
 		return moerr.NewInternalErrorNoCtxf(
-			"scanSnapshotRelationByID: cannot resolve range relation by id %d at current txn view",
-			tableID,
+			"scanSnapshotRelationByID: cannot resolve range relation by id %d at snapshot %s",
+			tableID, rangeTS.ToString(),
 		)
 	}
 
@@ -464,7 +460,7 @@ func formatValIntoString(ses *Session, val any, t types.Type, buf *bytes.Buffer)
 
 	switch t.Oid {
 	case types.T_varchar, types.T_text, types.T_json, types.T_char, types.
-		T_varbinary, types.T_binary:
+		T_varbinary, types.T_binary, types.T_blob:
 		if t.Oid == types.T_json {
 			var strVal string
 			switch x := val.(type) {
@@ -489,14 +485,65 @@ func formatValIntoString(ses *Session, val any, t types.Type, buf *bytes.Buffer)
 			writeEscapedSQLString(buf, jsonLiteral)
 			return nil
 		}
+		writeBytes := writeEscapedSQLString
+		if t.Oid == types.T_binary || t.Oid == types.T_varbinary || t.Oid == types.T_blob {
+			writeBytes = writeSQLHexLiteral
+		}
+		switch x := val.(type) {
+		case []byte:
+			writeBytes(buf, x)
+		case string:
+			writeBytes(buf, []byte(x))
+		default:
+			return moerr.NewInternalErrorNoCtxf("formatValIntoString: unexpected string type %T", val)
+		}
+	case types.T_datalink:
+		buf.WriteString("cast(")
 		switch x := val.(type) {
 		case []byte:
 			writeEscapedSQLString(buf, x)
 		case string:
 			writeEscapedSQLString(buf, []byte(x))
 		default:
-			return moerr.NewInternalErrorNoCtxf("formatValIntoString: unexpected string type %T", val)
+			return moerr.NewInternalErrorNoCtxf("formatValIntoString: unexpected datalink type %T", val)
 		}
+		buf.WriteString(" as datalink)")
+	case types.T_geometry, types.T_geometry32:
+		// Geometry cells hold bare WKB; an explicitly declared SRID is carried
+		// by the expression type in Width as srid+1. Reconstruct it with the
+		// two-argument constructor. Casting to generic geometry/geometry32 would
+		// replace that type with an unspecified-SRID type before INSERT.
+		buf.WriteString("st_geomfromtext(")
+		switch x := val.(type) {
+		case []byte:
+			writeEscapedSQLString(buf, x)
+		case string:
+			writeEscapedSQLString(buf, []byte(x))
+		default:
+			return moerr.NewInternalErrorNoCtxf("formatValIntoString: unexpected geometry type %T", val)
+		}
+		if t.Width > 0 {
+			buf.WriteString(", ")
+			writeInt(int64(t.Width - 1))
+		}
+		buf.WriteByte(')')
+	case types.T_uuid:
+		var uuid string
+		switch x := val.(type) {
+		case types.Uuid:
+			uuid = x.String()
+		case string:
+			uuid = x
+		case []byte:
+			uuid = string(x)
+		default:
+			return moerr.NewInternalErrorNoCtxf("formatValIntoString: unexpected uuid type %T", val)
+		}
+		writeEscapedSQLString(buf, []byte(uuid))
+	case types.T_enum:
+		writeUint(uint64(val.(types.Enum)))
+	case types.T_bit:
+		writeUint(val.(uint64))
 	case types.T_timestamp:
 		buf.WriteString("'")
 		buf.WriteString(val.(types.Timestamp).String2(ses.timeZone, t.Scale))
@@ -558,6 +605,19 @@ func formatValIntoString(ses *Session, val any, t types.Type, buf *bytes.Buffer)
 	return nil
 }
 
+func writeSQLHexLiteral(buf *bytes.Buffer, b []byte) {
+	const hexDigits = "0123456789abcdef"
+
+	// Hex literals preserve every byte; SQL string escapes are not reversible for all control bytes.
+	buf.Grow(2*len(b) + 3)
+	buf.WriteString("x'")
+	for _, c := range b {
+		buf.WriteByte(hexDigits[c>>4])
+		buf.WriteByte(hexDigits[c&0x0f])
+	}
+	buf.WriteByte('\'')
+}
+
 func extractDataBranchSQLRowValue(
 	ctx context.Context,
 	ses *Session,
@@ -581,7 +641,10 @@ func extractDataBranchSQLRowValue(
 	}
 }
 
-// writeEscapedSQLString escapes special and control characters for SQL literal output.
+// writeEscapedSQLString emits a SQL literal that MatrixOne's default MySQL
+// scanner reads byte-for-byte. It uses the scanner's named escapes where
+// available and leaves all other control bytes raw: the scanner has no \xNN
+// escape syntax.
 func writeEscapedSQLString(buf *bytes.Buffer, b []byte) {
 	buf.WriteByte('\'')
 	for _, c := range b {
@@ -605,12 +668,7 @@ func writeEscapedSQLString(buf *bytes.Buffer, b []byte) {
 		case 0x1A:
 			buf.WriteString("\\Z")
 		default:
-			if c < 0x20 || c == 0x7f {
-				buf.WriteString("\\x")
-				buf.WriteString(hex.EncodeToString([]byte{c}))
-			} else {
-				buf.WriteByte(c)
-			}
+			buf.WriteByte(c)
 		}
 	}
 	buf.WriteByte('\'')
@@ -732,7 +790,7 @@ func compareValueFromVector(vec *vector.Vector, rowIdx int) (any, error) {
 		return vector.GetFixedAtNoTypeCheck[float32](vec, rowIdx), nil
 	case types.T_float64:
 		return vector.GetFixedAtNoTypeCheck[float64](vec, rowIdx), nil
-	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink, types.T_geometry:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink, types.T_geometry, types.T_geometry32:
 		return vec.GetBytesAt(rowIdx), nil
 	case types.T_array_float32:
 		return vector.GetArrayAt[float32](vec, rowIdx), nil
@@ -778,7 +836,7 @@ func normalizeCompareValue(typ types.Type, val any) (any, error) {
 		case []byte:
 			return types.DecodeJson(v), nil
 		}
-	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink, types.T_geometry:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink, types.T_geometry, types.T_geometry32:
 		switch v := val.(type) {
 		case []byte:
 			return v, nil

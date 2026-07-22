@@ -60,9 +60,10 @@ INSERT INTO t_sum_overflow VALUES (9223372036854775807);
 INSERT INTO t_sum_overflow VALUES (9223372036854775807);
 INSERT INTO t_sum_overflow VALUES (9223372036854775807);
 SELECT SUM(val) FROM t_sum_overflow;
-Data truncation: data out of range: data type int64, (9223372036854775807 + 9223372036854775807)
+➤ SUM(val)[3,38,0]  𝄀
+27670116110564327421
 SELECT SUM(CAST(val AS DECIMAL(38,0))) FROM t_sum_overflow;
-➤ SUM(cast(val as decimal(38)))[3,39,0]  𝄀
+➤ SUM(cast(val as decimal(38)))[3,38,0]  𝄀
 27670116110564327421
 DROP TABLE t_sum_overflow;
 DROP TABLE IF EXISTS t_float;
@@ -520,7 +521,7 @@ ROUND(val, 2) AS round_2,
 FLOOR(val) AS floor_val,
 CEIL(val) AS ceil_val
 FROM t_round ORDER BY id;
-➤ id[4,32,0]  ¦  val[3,10,5]  ¦  round_2[3,10,2]  ¦  floor_val[3,11,0]  ¦  ceil_val[3,11,0]  𝄀
+➤ id[4,32,0]  ¦  val[3,10,5]  ¦  round_2[3,10,2]  ¦  floor_val[3,10,0]  ¦  ceil_val[3,10,0]  𝄀
 1  ¦  123.45678  ¦  123.46  ¦  123  ¦  124  𝄀
 2  ¦  -123.45678  ¦  -123.46  ¦  -124  ¦  -123
 DROP TABLE t_round;

@@ -38,15 +38,7 @@ func (b *ProjectionBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool)
 		if astStr != TimeWindowEnd && astStr != TimeWindowStart {
 			b.ctx.timeAsts = append(b.ctx.timeAsts, astExpr)
 		}
-		return &plan.Expr{
-			Typ: b.ctx.times[colPos].Typ,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: b.ctx.timeTag,
-					ColPos: colPos,
-				},
-			},
-		}, nil
+		return makeTimeWindowProjectionExpr(b.GetContext(), b.ctx, astExpr, colPos)
 	}
 
 	if colPos, ok := b.ctx.groupByAst[astStr]; ok {
@@ -101,7 +93,15 @@ func (b *ProjectionBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool)
 }
 
 func (b *ProjectionBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isRoot bool) (*plan.Expr, error) {
-	return b.baseBindColRef(astExpr, depth, isRoot)
+	boundColCount := len(b.boundCols)
+	expr, err := b.baseBindColRef(astExpr, depth, isRoot)
+	if depth > 0 && b.havingBinder != nil && b.havingBinder.insideAgg {
+		// A correlated reference from a scalar subquery used as an aggregate
+		// argument belongs to that aggregate input. Do not classify it as a
+		// bare projection column for ONLY_FULL_GROUP_BY validation.
+		b.boundCols = b.boundCols[:boundColCount]
+	}
+	return expr, err
 }
 
 func (b *ProjectionBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {

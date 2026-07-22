@@ -250,8 +250,11 @@ func CalculateStorageUsage(
 		// +-----------------+------------+---------------------+--------+----------------+----------+-------------+-----------+-------+----------------+
 		logger.Debug("query storage size")
 		showAccounts := func(ctx context.Context) ie.InternalExecResult {
-			ctx, spanQ := trace.Start(ctx, "QueryStorageStorage", trace.WithHungThreshold(time.Minute))
-			defer spanQ.End()
+			// WithHungThreshold used to add this deadline as a side effect of
+			// starting a Span. Keep the query bound independent of the retired
+			// Span runtime.
+			ctx, cancel := context.WithTimeoutCause(ctx, time.Minute, moerr.CauseNewMOHungSpan)
+			defer cancel()
 			return sqlExecutor().Query(ctx, ShowAllAccountSQL, queryOpts)
 		}
 		result := showAccounts(ctx)
