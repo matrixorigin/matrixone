@@ -5737,7 +5737,7 @@ func (builder *QueryBuilder) bindGroupBy(
 			return
 		}
 
-		colPos := groupBinder.ctx.groupByAst[tree.String(helpFunc.truncate, dialect.MYSQL)]
+		colPos := groupBinder.ctx.groupByAst[semanticAstKey(helpFunc.truncate)]
 		boundTimeWindowGroupBy = &plan.Expr{
 			Typ: groupBinder.ctx.groups[colPos].Typ,
 			Expr: &plan.Expr_Col{

@@ -40,14 +40,18 @@ type windowFuncExprBinder interface {
 func windowExprAstKey(astExpr tree.Expr) string {
 	funcExpr, ok := astExpr.(*tree.FuncExpr)
 	if !ok || funcExpr.WindowSpec == nil || funcExpr.WindowSpec.Frame == nil || funcExpr.WindowSpec.HasFrame {
-		return tree.String(astExpr, dialect.MYSQL)
+		return semanticAstKey(astExpr)
 	}
 
 	funcExprCopy := *funcExpr
 	windowSpecCopy := *funcExpr.WindowSpec
 	windowSpecCopy.HasFrame = true
 	funcExprCopy.WindowSpec = &windowSpecCopy
-	return tree.String(&funcExprCopy, dialect.MYSQL)
+	return semanticAstKey(&funcExprCopy)
+}
+
+func semanticAstKey(astExpr tree.Expr) string {
+	return tree.StringWithOpts(astExpr, dialect.MYSQL, tree.WithParamExprOffset())
 }
 
 func windowFuncAstName(astExpr *tree.FuncExpr) string {
