@@ -353,6 +353,7 @@ func (s *mysqlSinker2) processCommand(ctx context.Context, cmd *Command) {
 			zap.String("table", s.dbTblInfo.String()),
 			zap.String("command", cmd.String()),
 			zap.Error(err))
+		cmd.Close()
 		s.SetError(err)
 		return
 	}
