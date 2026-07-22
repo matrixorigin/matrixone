@@ -366,9 +366,14 @@ func (c *cluster) Refresh(ctx context.Context) error {
 }
 
 func (c *cluster) Close() {
-	c.waitReady()
 	c.stopper.Stop()
-	close(c.forceRefreshC)
+	// A failed initial refresh leaves readiness waiters blocked. Once the
+	// refresh task has stopped, release them so shutdown does not depend on
+	// HAKeeper becoming available.
+	c.readyOnce.Do(func() {
+		c.ready.Store(true)
+		close(c.readyC)
+	})
 }
 
 // DebugUpdateCNLabel implements the MOCluster interface.

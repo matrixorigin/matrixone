@@ -389,6 +389,66 @@ func TestStoreCloseCancelsRecoveryBeforeStoppingReplicaTask(t *testing.T) {
 	}
 }
 
+type neverReadyHAKeeperClient struct {
+	*testHAKeeperClient
+	called chan struct{}
+	once   sync.Once
+}
+
+func (c *neverReadyHAKeeperClient) GetClusterDetails(
+	context.Context,
+) (logservicepb.ClusterDetails, error) {
+	c.once.Do(func() { close(c.called) })
+	return logservicepb.ClusterDetails{}, errors.New("injected hakeeper failure")
+}
+
+func TestStoreCloseWhenClusterNeverBecomesReady(t *testing.T) {
+	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
+	runtime.SetupServiceBasedRuntime("u1", runtime.ServiceRuntime(""))
+	fsFactory := func(name string) (*fileservice.FileServices, error) {
+		fs, err := fileservice.NewMemoryFS(name, fileservice.DisabledCacheConfig, nil)
+		if err != nil {
+			return nil, err
+		}
+		return fileservice.NewFileServices(name, fs)
+	}
+	hakeeper := &neverReadyHAKeeperClient{
+		testHAKeeperClient: newTestHAKeeperClient(),
+		called:             make(chan struct{}),
+	}
+	s := newTestStore(
+		t,
+		"u1",
+		fsFactory,
+		WithHAKeeperClientFactory(func() (logservice.TNHAKeeperClient, error) {
+			return hakeeper, nil
+		}),
+		WithLogServiceClientFactory(func(metadata.TNShard) (logservice.Client, error) {
+			return mem.NewMemLog(), nil
+		}),
+		WithConfigAdjust(func(c *Config) {
+			c.Cluster.RefreshInterval.Duration = 10 * time.Millisecond
+			c.HAKeeper.HeatbeatInterval.Duration = 10 * time.Millisecond
+			c.Txn.Storage.Backend = StorageMEMKV
+		}),
+	)
+	require.NoError(t, s.Start())
+	select {
+	case <-hakeeper.called:
+	case <-time.After(time.Second):
+		t.Fatal("cluster refresh did not start")
+	}
+
+	closed := make(chan error, 1)
+	go func() { closed <- s.Close() }()
+	select {
+	case err := <-closed:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("store Close waited forever for cluster readiness")
+	}
+}
+
 type blockingCancelRecoveryTxnService struct {
 	service.TxnService
 	entered chan struct{}
