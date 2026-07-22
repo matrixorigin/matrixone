@@ -121,7 +121,7 @@ func simulateScramble(password string, salt []byte) []byte {
 	return scrambled
 }
 
-type blockingCacheServerConn struct {
+type blockingContextServerConn struct {
 	*mockServerConn
 	enteredOnce sync.Once
 	closeOnce   sync.Once
@@ -129,21 +129,77 @@ type blockingCacheServerConn struct {
 	closed      chan struct{}
 }
 
-func newBlockingCacheServerConn(conn net.Conn) *blockingCacheServerConn {
-	return &blockingCacheServerConn{
+type cacheReuseBarrierServerConn struct {
+	*mockServerConn
+	waitEntered chan struct{}
+	ready       chan struct{}
+	closed      chan struct{}
+	enteredOnce sync.Once
+	readyOnce   sync.Once
+	closeOnce   sync.Once
+}
+
+func newCacheReuseBarrierServerConn() *cacheReuseBarrierServerConn {
+	return &cacheReuseBarrierServerConn{
+		mockServerConn: newMockServerConn(nil),
+		waitEntered:    make(chan struct{}),
+		ready:          make(chan struct{}),
+		closed:         make(chan struct{}),
+	}
+}
+
+func (s *cacheReuseBarrierServerConn) waitCacheReuseReady(ctx context.Context) error {
+	s.enteredOnce.Do(func() { close(s.waitEntered) })
+	select {
+	case <-s.ready:
+		return nil
+	case <-ctx.Done():
+		return context.Cause(ctx)
+	}
+}
+
+func (s *cacheReuseBarrierServerConn) rebindTunnel(*tunnel) bool {
+	return true
+}
+
+func (s *cacheReuseBarrierServerConn) releaseOrigin() {
+	s.readyOnce.Do(func() { close(s.ready) })
+}
+
+func (s *cacheReuseBarrierServerConn) Close() error {
+	s.closeOnce.Do(func() { close(s.closed) })
+	return s.mockServerConn.Close()
+}
+
+func newBlockingContextServerConn(conn net.Conn) *blockingContextServerConn {
+	return &blockingContextServerConn{
 		mockServerConn: newMockServerConn(conn),
 		entered:        make(chan struct{}),
 		closed:         make(chan struct{}),
 	}
 }
 
-func (s *blockingCacheServerConn) ExecStmt(internalStmt, chan<- []byte) (bool, error) {
+func (s *blockingContextServerConn) ExecStmt(internalStmt, chan<- []byte) (bool, error) {
 	s.enteredOnce.Do(func() { close(s.entered) })
 	<-s.closed
 	return false, net.ErrClosed
 }
 
-func (s *blockingCacheServerConn) Close() error {
+func (s *blockingContextServerConn) ExecStmtContext(
+	ctx context.Context,
+	_ internalStmt,
+	_ chan<- []byte,
+) (bool, error) {
+	s.enteredOnce.Do(func() { close(s.entered) })
+	select {
+	case <-ctx.Done():
+		return false, context.Cause(ctx)
+	case <-s.closed:
+		return false, net.ErrClosed
+	}
+}
+
+func (s *blockingContextServerConn) Close() error {
 	s.closeOnce.Do(func() {
 		close(s.closed)
 		_ = s.mockServerConn.Close()
@@ -245,17 +301,19 @@ func TestConnCache(t *testing.T) {
 			assert.True(t, cc.Push("k100", mockConn1))
 			assert.Equal(t, 1, cc.Count())
 
-			sc := cc.Pop("k100", 1, nil, nil)
+			sc := cc.Pop("k100", 1, nil, nil, clientInfo{})
 			assert.NotNil(t, sc)
 			assert.Equal(t, 0, cc.Count())
 		})
 	})
 
-	t.Run("pop - skip unhealthy cn before reuse", func(t *testing.T) {
+	t.Run("pop - skip route-ineligible cn before reuse", func(t *testing.T) {
 		runTestWithNewConnCacheWithAuthConstructor(t, nil, func(cc ConnCache) {
 			ccc := cc.(*connCache)
-			ccc.canReuseCN = func(cn *CNServer) bool {
-				return cn == nil || cn.uuid != "bad-cn"
+			var checkedClient clientInfo
+			ccc.canReuseCN = func(cn *CNServer, client clientInfo) bool {
+				checkedClient = client
+				return cn == nil || cn.uuid != "bad-cn" || client.username == "root"
 			}
 
 			c1, _ := net.Pipe()
@@ -264,9 +322,11 @@ func TestConnCache(t *testing.T) {
 			assert.True(t, cc.Push("k100", mockConn1))
 			assert.Equal(t, 1, cc.Count())
 
-			sc := cc.Pop("k100", 1, nil, nil)
+			login := clientInfo{username: "ordinary"}
+			sc := cc.Pop("k100", 1, nil, nil, login)
 			assert.Nil(t, sc)
 			assert.Equal(t, 0, cc.Count())
+			assert.Equal(t, login.username, checkedClient.username)
 		})
 	})
 
@@ -279,7 +339,7 @@ func TestConnCache(t *testing.T) {
 			assert.True(t, cc.Push("k100", mockConn1))
 			assert.Equal(t, 1, cc.Count())
 
-			sc := cc.Pop("k100", 1, nil, nil)
+			sc := cc.Pop("k100", 1, nil, nil, clientInfo{})
 			assert.Nil(t, sc)
 			assert.Equal(t, 0, cc.Count())
 		})
@@ -292,7 +352,7 @@ func TestConnCache(t *testing.T) {
 			assert.True(t, cc.Push("k100", mockConn1))
 			assert.Equal(t, 1, cc.Count())
 
-			sc := cc.Pop("k100", 1, nil, nil)
+			sc := cc.Pop("k100", 1, nil, nil, clientInfo{})
 			assert.Nil(t, sc)
 			assert.Equal(t, 1, cc.Count())
 		})
@@ -305,7 +365,7 @@ func TestConnCache(t *testing.T) {
 			assert.True(t, cc.Push("k100", mockConn1))
 			assert.Equal(t, 1, cc.Count())
 
-			sc := cc.Pop("k100", 1, nil, nil)
+			sc := cc.Pop("k100", 1, nil, nil, clientInfo{})
 			// cannot get conn as timeout.
 			assert.Nil(t, sc)
 			// count is 0 because the connection has been removed.
@@ -323,7 +383,7 @@ func TestConnCache(t *testing.T) {
 			assert.NoError(t, cc.Close())
 			assert.Equal(t, 0, cc.Count())
 
-			sc := cc.Pop("k100", 1, nil, nil)
+			sc := cc.Pop("k100", 1, nil, nil, clientInfo{})
 			assert.Nil(t, sc)
 
 			c2, _ := net.Pipe()
@@ -343,12 +403,12 @@ func TestConnCacheBlockedPopDoesNotBlockOtherTenantsOrClose(t *testing.T) {
 
 	clientSide, serverSide := net.Pipe()
 	defer clientSide.Close()
-	blocked := newBlockingCacheServerConn(serverSide)
+	blocked := newBlockingContextServerConn(serverSide)
 	require.True(t, cache.Push("tenant-a", blocked))
 
 	popDone := make(chan ServerConn, 1)
 	go func() {
-		popDone <- cache.Pop("tenant-a", 1, nil, nil)
+		popDone <- cache.Pop("tenant-a", 1, nil, nil, clientInfo{})
 	}()
 	select {
 	case <-blocked.entered:
@@ -386,6 +446,37 @@ func TestConnCacheBlockedPopDoesNotBlockOtherTenantsOrClose(t *testing.T) {
 	case <-time.After(time.Second):
 		require.FailNow(t, "cache Close did not terminate in-flight Pop")
 	}
+}
+
+func TestConnCachePopContextCancelsBackendValidation(t *testing.T) {
+	cache := newConnCache(context.Background(), "", runtime.DefaultRuntime().Logger(),
+		withResetSessionFunc(func(ServerConn) ([]byte, error) { return nil, nil }),
+		withAuthConstructor(nil),
+	)
+	clientSide, serverSide := net.Pipe()
+	defer clientSide.Close()
+	blocked := newBlockingContextServerConn(serverSide)
+	require.True(t, cache.Push("tenant-a", &protocolMemoryServerConn{ServerConn: blocked}))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	popDone := make(chan ServerConn, 1)
+	go func() {
+		popDone <- cache.(*connCache).PopContext(ctx, "tenant-a", 1, nil, nil, clientInfo{})
+	}()
+	select {
+	case <-blocked.entered:
+	case <-time.After(time.Second):
+		t.Fatal("PopContext did not enter backend validation")
+	}
+	cancel()
+	select {
+	case sc := <-popDone:
+		require.Nil(t, sc)
+	case <-time.After(time.Second):
+		t.Fatal("PopContext ignored lifecycle cancellation")
+	}
+	require.Zero(t, cache.Count())
+	require.NoError(t, cache.Close())
 }
 
 func TestConnCacheCloseDoesNotWaitForPushReset(t *testing.T) {
@@ -434,6 +525,76 @@ func TestConnCacheCloseDoesNotWaitForPushReset(t *testing.T) {
 		require.FailNow(t, "Push did not recheck the closed cache after reset")
 	}
 	require.NoError(t, conn.Close())
+}
+
+func TestConnCachePopWaitsForOriginGenerationCleanup(t *testing.T) {
+	cache := newConnCache(
+		context.Background(),
+		"",
+		runtime.DefaultRuntime().Logger(),
+		withResetSessionFunc(func(ServerConn) ([]byte, error) { return nil, nil }),
+		withAuthConstructor(nil),
+	)
+	defer cache.Close()
+
+	backend := newCacheReuseBarrierServerConn()
+	t.Cleanup(backend.releaseOrigin)
+	require.True(t, cache.Push("tenant-a", backend))
+
+	result := make(chan ServerConn, 1)
+	go func() {
+		result <- cache.(*connCache).PopContext(
+			context.Background(), "tenant-a", 1, nil, nil, clientInfo{},
+		)
+	}()
+	select {
+	case <-backend.waitEntered:
+	case <-time.After(time.Second):
+		require.FailNow(t, "PopContext did not wait for the originating tunnel")
+	}
+	select {
+	case <-result:
+		require.FailNow(t, "cached backend was reused before origin cleanup")
+	default:
+	}
+
+	backend.releaseOrigin()
+	select {
+	case popped := <-result:
+		require.Same(t, backend, popped)
+		require.NoError(t, popped.Close())
+	case <-time.After(time.Second):
+		require.FailNow(t, "cached backend did not become reusable after cleanup")
+	}
+
+	blocked := newCacheReuseBarrierServerConn()
+	t.Cleanup(blocked.releaseOrigin)
+	require.True(t, cache.Push("tenant-b", blocked))
+	cancelCtx, cancel := context.WithCancel(context.Background())
+	canceledResult := make(chan ServerConn, 1)
+	go func() {
+		canceledResult <- cache.(*connCache).PopContext(
+			cancelCtx, "tenant-b", 2, nil, nil, clientInfo{},
+		)
+	}()
+	select {
+	case <-blocked.waitEntered:
+	case <-time.After(time.Second):
+		require.FailNow(t, "PopContext did not enter the cancelable origin wait")
+	}
+	cancel()
+	select {
+	case popped := <-canceledResult:
+		require.Nil(t, popped)
+	case <-time.After(time.Second):
+		require.FailNow(t, "cancellation did not terminate cache reuse wait")
+	}
+	select {
+	case <-blocked.closed:
+	case <-time.After(time.Second):
+		require.FailNow(t, "canceled cache reuse did not close the backend")
+	}
+	require.Zero(t, cache.Count())
 }
 
 func TestResetSession(t *testing.T) {

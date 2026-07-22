@@ -36,6 +36,15 @@ const (
 	// in the server-to-client direction. 64KB reduces write syscalls by ~100x
 	// for typical MySQL result set rows (~200-500 bytes each).
 	writeBufLen = 65536
+	// proxyTunnelBufferSize is the Go-heap memory retained by an established
+	// tunnel: one message buffer in each direction and one batched writer for
+	// server-to-client traffic.
+	proxyTunnelBufferSize = 2*(defaultBufLen+defaultExtraBufLen) + writeBufLen
+	// proxyMigrationTunnelBufferSize is the additional Go-heap overlap while a
+	// replacement backend is installed. The new backend message buffer is
+	// allocated before the old one becomes unreachable; the writer is moved
+	// because its client-side destination is unchanged.
+	proxyMigrationTunnelBufferSize = defaultBufLen + defaultExtraBufLen
 	// MySQL header length is 4 bytes, with 3 bytes data length
 	// and 1 byte sequence number.
 	mysqlHeadLen = 4

@@ -17,6 +17,7 @@ package lockservice
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -42,6 +43,37 @@ type unlockBeforeApplyErrorTable struct {
 type recordingUnlockTable struct {
 	lockTable
 	mutations []pb.ExtraMutation
+}
+
+type blockingProxyLockTable struct {
+	lockTable
+	bind    pb.LockTable
+	started chan struct{}
+	release chan struct{}
+	err     error
+}
+
+func (t *blockingProxyLockTable) lock(
+	ctx context.Context,
+	_ *activeTxn,
+	_ [][]byte,
+	_ LockOptions,
+	cb func(pb.Result, error),
+) {
+	select {
+	case t.started <- struct{}{}:
+	default:
+	}
+	select {
+	case <-t.release:
+		cb(pb.Result{}, t.err)
+	case <-ctx.Done():
+		cb(pb.Result{}, ctx.Err())
+	}
+}
+
+func (t *blockingProxyLockTable) getBind() pb.LockTable {
+	return t.bind
 }
 
 func (t *recordingUnlockTable) unlockWithContext(
@@ -84,6 +116,107 @@ func (t *unlockBeforeApplyErrorTable) unlockWithContext(
 	_ ...pb.ExtraMutation,
 ) error {
 	return t.err
+}
+
+func TestProxySharedLockCancellationWhileFirstRemoteLockInFlight(t *testing.T) {
+	for _, remoteErr := range []error{nil, errors.New("remote lock failed")} {
+		name := "remote-success"
+		if remoteErr != nil {
+			name = "remote-failure"
+		}
+		t.Run(name, func(t *testing.T) {
+			bind := pb.LockTable{
+				Group:     0,
+				Table:     1,
+				ServiceID: "remote",
+				Valid:     true,
+			}
+			remote := &blockingProxyLockTable{
+				bind:    bind,
+				started: make(chan struct{}, 1),
+				release: make(chan struct{}),
+				err:     remoteErr,
+			}
+			proxy := newLockTableProxy("local", remote, getLogger("")).(*localLockTableProxy)
+			rows := [][]byte{[]byte("row")}
+			options := LockOptions{LockOptions: newTestRowSharedOptions()}
+			firstTxn := newActiveTxn([]byte("first"), "first", newFixedSlicePool(4), "")
+			secondTxn := newActiveTxn([]byte("second"), "second", newFixedSlicePool(4), "")
+
+			firstDone := make(chan error, 1)
+			go func() {
+				firstTxn.Lock()
+				defer firstTxn.Unlock()
+				proxy.lock(context.Background(), firstTxn, rows, options, func(_ pb.Result, err error) {
+					firstDone <- err
+				})
+			}()
+			select {
+			case <-remote.started:
+			case <-time.After(time.Second):
+				t.Fatal("first remote lock did not start")
+			}
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			var secondCallbacks atomic.Int32
+			var secondLockAdded atomic.Int32
+			secondTxn.beforeLockAdded = func([]byte, [][]byte) error {
+				secondLockAdded.Add(1)
+				return nil
+			}
+			secondDone := make(chan error, 2)
+			go func() {
+				secondTxn.Lock()
+				defer secondTxn.Unlock()
+				proxy.lock(ctx, secondTxn, rows, options, func(_ pb.Result, err error) {
+					secondCallbacks.Add(1)
+					secondDone <- err
+				})
+			}()
+
+			require.Eventually(t, func() bool {
+				proxy.mu.Lock()
+				defer proxy.mu.Unlock()
+				ops := proxy.mu.holders[string(rows[0])]
+				return ops != nil && len(ops.txns) == 2 && ops.waiters[1] != nil
+			}, time.Second, time.Millisecond, "second shared lock was not admitted")
+
+			cancel()
+			select {
+			case err := <-secondDone:
+				require.ErrorIs(t, err, context.Canceled)
+			case <-time.After(time.Second):
+				t.Fatal("second shared lock ignored cancellation")
+			}
+			require.Equal(t, int32(1), secondCallbacks.Load())
+			require.Zero(t, secondLockAdded.Load())
+			proxy.mu.Lock()
+			ops := proxy.mu.holders[string(rows[0])]
+			require.Len(t, ops.txns, 1)
+			require.Same(t, firstTxn, ops.txns[0])
+			proxy.mu.Unlock()
+
+			close(remote.release)
+			select {
+			case err := <-firstDone:
+				if remoteErr == nil {
+					require.NoError(t, err)
+				} else {
+					require.ErrorIs(t, err, remoteErr)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("first remote lock did not finish")
+			}
+			require.Equal(t, int32(1), secondCallbacks.Load())
+			require.Zero(t, secondLockAdded.Load())
+			select {
+			case err := <-secondDone:
+				t.Fatalf("second callback ran more than once: %v", err)
+			default:
+			}
+		})
+	}
 }
 
 func TestProxySharedLock(t *testing.T) {
