@@ -45,6 +45,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 )
@@ -1144,6 +1145,7 @@ func TestWaitCanServeTableSnapshotWaitsForPendingUpdate(t *testing.T) {
 	snapshot := timestamp.Timestamp{PhysicalTime: 100, LogicalTime: 1}
 	pendingTo := timestamp.Timestamp{PhysicalTime: 100, LogicalTime: 0}
 	e.pClient.subscribed.setTablePendingUpdate(10, 42, pendingTo)
+	initial, pending := e.pClient.getSubscribedSnapshotAndPending(ctx, 0, 10, 42)
 
 	go func() {
 		time.Sleep(10 * time.Millisecond)
@@ -1152,13 +1154,95 @@ func TestWaitCanServeTableSnapshotWaitsForPendingUpdate(t *testing.T) {
 		done()
 	}()
 
-	ps, ok, err := e.pClient.waitCanServeTableSnapshot(ctx, 0, 10, 42, snapshot)
+	ps, ok, err := e.pClient.waitCanServeTableSnapshot(
+		ctx, 0, 10, 42, initial, pending, snapshot,
+	)
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.NotNil(t, ps)
 	expectedApplied := types.TimestampToTS(snapshot.Prev())
 	applied := ps.GetAppliedTo()
 	assert.True(t, applied.EQ(&expectedApplied))
+}
+
+func TestWaitCanServeTableSnapshotUsesInitialCaptureWithoutRetry(t *testing.T) {
+	ctx := context.Background()
+	e := &Engine{partitions: make(map[[2]uint64]*logtailreplay.Partition)}
+	e.pClient.eng = e
+	e.pClient.subscribed = subscribedTable{
+		eng: e,
+		m: map[uint64]*subEntry{
+			42: {dbID: 10, state: Subscribed},
+		},
+	}
+
+	part := e.GetOrCreateLatestPart(ctx, 0, 10, 42)
+	state, done := part.MutateState()
+	state.UpdateDuration(types.TS{}, types.MaxTs())
+	done()
+	initial := part.Snapshot()
+
+	// A later partition state makes an accidental first-iteration recapture
+	// observable by pointer identity. No pending update means the initial
+	// coupled capture is already sufficient to serve this snapshot.
+	state, done = part.MutateState()
+	state.UpdateAppliedTo(types.BuildTS(200, 0))
+	done()
+	recaptured := part.Snapshot()
+	require.NotSame(t, initial, recaptured)
+
+	ps, ok, err := e.pClient.waitCanServeTableSnapshot(
+		ctx,
+		0,
+		10,
+		42,
+		initial,
+		false,
+		timestamp.Timestamp{PhysicalTime: 100, LogicalTime: 1},
+	)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Same(t, initial, ps)
+}
+
+func TestToSubscribeTableReturnsCoupledPendingSnapshot(t *testing.T) {
+	ctx := context.Background()
+	e := &Engine{partitions: make(map[[2]uint64]*logtailreplay.Partition)}
+	e.pClient.eng = e
+	e.pClient.subscribed = subscribedTable{
+		eng: e,
+		m: map[uint64]*subEntry{
+			42: {dbID: 10, state: Subscribed},
+		},
+	}
+
+	part := e.GetOrCreateLatestPart(ctx, 0, 10, 42)
+	state, done := part.MutateState()
+	state.UpdateDuration(types.TS{}, types.MaxTs())
+	done()
+	e.pClient.subscribed.setTablePendingUpdate(
+		10, 42, timestamp.Timestamp{PhysicalTime: 100, LogicalTime: 0},
+	)
+
+	pending := false
+	ps, err := e.pClient.toSubscribeTable(ctx, 0, 42, "t", 10, "db", &pending)
+	require.NoError(t, err)
+	require.NotNil(t, ps)
+	require.True(t, pending)
+}
+
+func TestToSubscribeTableReturnsInjectedFailure(t *testing.T) {
+	ctx := context.Background()
+	fault.Enable()
+	t.Cleanup(func() { fault.Disable() })
+	rmFault, err := objectio.InjectLogging(
+		objectio.FJ_CNSubscribeTableFail, "db", "t", 0, true,
+	)
+	require.NoError(t, err)
+	t.Cleanup(rmFault)
+
+	_, err = (&PushClient{}).toSubscribeTable(ctx, 0, 42, "t", 10, "db")
+	require.ErrorContains(t, err, "injected subscribe table err")
 }
 
 func TestWaitCanServeTableSnapshotRefreshesAfterPendingApply(t *testing.T) {
@@ -1188,7 +1272,7 @@ func TestWaitCanServeTableSnapshotRefreshesAfterPendingApply(t *testing.T) {
 	done()
 	e.pClient.subscribed.clearTablePendingUpdate(10, 42, snapshot.Prev())
 
-	ps, ok, err := e.pClient.waitCanServeTableSnapshot(ctx, 0, 10, 42, snapshot)
+	ps, ok, err := e.pClient.waitCanServeTableSnapshot(ctx, 0, 10, 42, stale, true, snapshot)
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.NotNil(t, ps)

@@ -2460,6 +2460,7 @@ func (tbl *txnTable) getPartitionState(
 	var (
 		eng          = tbl.eng.(*Engine)
 		createdInTxn bool
+		pending      bool
 	)
 
 	createdInTxn, err = tbl.isCreatedInTxn(ctx)
@@ -2487,6 +2488,7 @@ func (tbl *txnTable) getPartitionState(
 		tbl.tableName,
 		tbl.db.databaseId,
 		tbl.db.databaseName,
+		&pending,
 	); err != nil {
 		logutil.Error(
 			"Txn-Table-ToSubscribeTable-Failed",
@@ -2511,6 +2513,8 @@ func (tbl *txnTable) getPartitionState(
 			uint64(tbl.accountId),
 			tbl.db.databaseId,
 			tbl.tableId,
+			ps,
+			pending,
 			tbl.db.op.SnapshotTS(),
 		)
 		if err != nil {
