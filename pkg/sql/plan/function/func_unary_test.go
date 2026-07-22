@@ -7245,6 +7245,7 @@ type userLevelLockTestService struct {
 	state            *userLevelLockTestState
 	lockErrAfterHold error
 	unlockErr        error
+	unlockErrOnce    atomic.Bool
 	unlockErrByTxnID map[string]error
 	blockUnlock      atomic.Bool
 	unlockStarted    chan struct{}
@@ -7323,6 +7324,9 @@ func (s *userLevelLockTestService) Unlock(ctx context.Context, txnID []byte, com
 	}
 	if s.unlockErr != nil {
 		return s.unlockErr
+	}
+	if s.unlockErrOnce.CompareAndSwap(true, false) {
+		return moerr.NewInternalErrorNoCtx("unlock failed once")
 	}
 	if s.unlockErrByTxnID != nil {
 		if err := s.unlockErrByTxnID[string(txnID)]; err != nil {
@@ -8002,20 +8006,22 @@ func TestIsUsedLockReturnsConnectionIDForLegacyHolderTxnID(t *testing.T) {
 	})
 }
 
-func TestIsUsedLockReturnsConnectionIDForPreGenerationLegacyHolderTxnID(t *testing.T) {
+func TestIsUsedLockReturnsNullForPreGenerationLegacyUUIDHolderTxnID(t *testing.T) {
 	runUserLevelLockTest(t, func(services []lockservice.LockService) {
-		proc := newUserLevelLockTestProcess(t, services[0], "acc")
-		proc.GetSessionInfo().ConnectionID = 1001
-		legacyOwner := fmt.Sprintf("%s:%s", proc.GetSessionInfo().Account, proc.GetSessionInfo().SessionId.String())
+		holderProc := newUserLevelLockTestProcess(t, services[0], "acc")
+		holderProc.GetSessionInfo().ConnectionID = 1001
+		observerProc := newUserLevelLockTestProcess(t, services[1], "acc")
+		observerProc.GetSessionInfo().ConnectionID = 2002
+		legacyOwner := fmt.Sprintf("%s:%s", holderProc.GetSessionInfo().Account, holderProc.GetSessionInfo().SessionId.String())
 		state := services[0].(*userLevelLockTestService).state
 		state.Lock()
-		state.locks[string(userLevelLockRow(proc, "legacy_uuid_holder"))] = string(userLevelLockTxnIDOld(legacyOwner, "legacy_uuid_holder"))
+		state.locks[string(userLevelLockRow(holderProc, "legacy_uuid_holder"))] = string(userLevelLockTxnIDOld(legacyOwner, "legacy_uuid_holder"))
 		state.Unlock()
 
-		holder, isNull, err := isUserLevelLockUsed("legacy_uuid_holder", proc)
+		holder, isNull, err := isUserLevelLockUsed("legacy_uuid_holder", observerProc)
 		require.NoError(t, err)
-		require.False(t, isNull)
-		require.Equal(t, uint64(1001), holder)
+		require.True(t, isNull)
+		require.Equal(t, uint64(0), holder)
 	})
 }
 
@@ -8327,6 +8333,29 @@ func TestReleaseUserLevelLocksOnSessionCloseTimeoutDetachesLocalState(t *testing
 		require.Empty(t, userLevelLocks.ownerSessions)
 		userLevelLocks.Unlock()
 		require.Equal(t, 3, detachedUserLevelLockCleanupCount())
+	})
+}
+
+func TestReleaseUserLevelLocksOnSessionCloseErrorTransfersCleanup(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		service := services[0].(*userLevelLockTestService)
+		holder := newUserLevelLockTestProcess(t, services[0], "acc")
+		contender := newUserLevelLockTestProcess(t, services[1], "acc")
+		service.unlockErrOnce.Store(true)
+
+		v, err := getUserLevelLock("close_error_cleanup", 0, holder)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+		require.NotEmpty(t, UserLevelLocksForMigration(holder))
+
+		releaseUserLevelLocksOnSessionCloseWithTimeout(holder, time.Second)
+		require.Empty(t, UserLevelLocksForMigration(holder))
+		require.Greater(t, detachedUserLevelLockCleanupCount(), 0)
+
+		require.Eventually(t, func() bool {
+			v, err := getUserLevelLock("close_error_cleanup", 0, contender)
+			return err == nil && v == 1
+		}, 2*time.Second, 10*time.Millisecond)
 	})
 }
 

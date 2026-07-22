@@ -497,11 +497,27 @@ func TestSessionCloseReleasesUserLevelLocksWhenNotMigrated(t *testing.T) {
 	}
 	ses.Close()
 	require.Empty(t, function.UserLevelLocksForMigration(proc))
-	require.Len(t, lockService.unlockedTxnIDs, 2)
-	require.Equal(t, uint64(1009), lockService.unlockedConnectionID(t, 0))
+	require.Len(t, lockService.unlockedTxnIDs, 4)
+	var currentTxnIDs int
+	var legacyTxnIDs int
 	for _, txnID := range lockService.unlockedTxnIDs {
-		require.NotContains(t, string(txnID), "1010")
+		txnIDText := string(txnID)
+		require.NotContains(t, txnIDText, "1010")
+		parts := strings.Split(txnIDText, "\x00")
+		switch len(parts) {
+		case 4:
+			connID, err := strconv.ParseUint(parts[3], 10, 64)
+			require.NoError(t, err)
+			require.Equal(t, uint64(1009), connID)
+			currentTxnIDs++
+		case 3:
+			legacyTxnIDs++
+		default:
+			require.Failf(t, "unexpected user lock txnID format", "txnID=%q", txnIDText)
+		}
 	}
+	require.Equal(t, 2, currentTxnIDs)
+	require.Equal(t, 2, legacyTxnIDs)
 	owner, connID := proc.GetUserLevelLockIdentity()
 	require.NotEmpty(t, owner)
 	require.Equal(t, uint64(1009), connID)
@@ -520,15 +536,6 @@ func (s *userLockCloseTestLockService) Unlock(
 ) error {
 	s.unlockedTxnIDs = append(s.unlockedTxnIDs, append([]byte(nil), txnID...))
 	return nil
-}
-
-func (s *userLockCloseTestLockService) unlockedConnectionID(t *testing.T, idx int) uint64 {
-	t.Helper()
-	parts := strings.Split(string(s.unlockedTxnIDs[idx]), "\x00")
-	require.Len(t, parts, 4)
-	connID, err := strconv.ParseUint(parts[3], 10, 64)
-	require.NoError(t, err)
-	return connID
 }
 
 func TestRoutineManagerContextAndConnectionInfoHelpers(t *testing.T) {

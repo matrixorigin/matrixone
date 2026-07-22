@@ -7079,6 +7079,10 @@ func userLevelLockConnectionID(proc *process.Process) uint64 {
 
 func userLevelLockOwnerCandidates(proc *process.Process) []string {
 	owner := userLevelLockOwner(proc)
+	pinnedOwner, pinnedConnID := "", uint64(0)
+	if proc != nil {
+		pinnedOwner, pinnedConnID = proc.GetUserLevelLockIdentity()
+	}
 	candidates := make([]string, 0, 3)
 	add := func(v string) {
 		if v == "" {
@@ -7097,8 +7101,12 @@ func userLevelLockOwnerCandidates(proc *process.Process) []string {
 		if sessionID := si.SessionId.String(); sessionID != "" && sessionID != "00000000-0000-0000-0000-000000000000" {
 			add(fmt.Sprintf("%s:%s", si.Account, sessionID))
 		}
-		if si.GetConnectionID() != 0 {
-			add(fmt.Sprintf("%s:%d", si.Account, si.GetConnectionID()))
+		connID := si.GetConnectionID()
+		if pinnedOwner != "" && pinnedConnID != 0 {
+			connID = pinnedConnID
+		}
+		if connID != 0 {
+			add(fmt.Sprintf("%s:%d", si.Account, connID))
 		}
 	}
 	return candidates
@@ -7268,10 +7276,6 @@ func userLevelLockTxnIDsForOwners(owners []string, connID uint64, name string) [
 		}
 	}
 	return txnIDs
-}
-
-func unlockUserLevelLockByName(ctx context.Context, ls lockservice.LockService, owner string, connID uint64, name string) error {
-	return unlockUserLevelLockTxnIDs(ctx, ls, userLevelLockTxnIDs(owner, connID, name))
 }
 
 func unlockUserLevelLockByNameForOwners(ctx context.Context, ls lockservice.LockService, owners []string, connID uint64, name string) error {
@@ -7503,7 +7507,8 @@ func enqueueDetachedUserLevelLockTxnCleanup(ls lockservice.LockService, key deta
 		rollbackDetachedUserLevelLockEntriesLocked(touched)
 		return false
 	}
-	return enqueueDetachedUserLevelLockEntryLocked(entry)
+	_ = enqueueDetachedUserLevelLockEntryLocked(entry)
+	return true
 }
 
 func enqueueDetachedUserLevelLockCleanupLocked(entry *detachedUserLevelLockCleanupEntry) bool {
@@ -8105,7 +8110,7 @@ func isUserLevelLockUsed(name string, proc *process.Process) (uint64, bool, erro
 	if !ok {
 		return 0, true, nil
 	}
-	holderConnID, ok := userLevelLockConnectionIDFromTxnIDWithFallback(holder.TxnID, userLevelLockConnectionID(proc), true)
+	holderConnID, ok := userLevelLockConnectionIDFromTxnID(holder.TxnID)
 	if !ok {
 		return 0, true, nil
 	}
@@ -8156,16 +8161,22 @@ func ReleaseUserLevelLocksOnSessionClose(proc *process.Process) {
 func releaseUserLevelLocksOnSessionCloseWithTimeout(proc *process.Process, timeout time.Duration) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	if _, err := releaseAllUserLevelLocksWithContext(ctx, proc); err != nil && ctx.Err() != nil {
+	if _, err := releaseAllUserLevelLocksWithContext(ctx, proc); err != nil {
 		owner := userLevelLockOwner(proc)
 		connID := userLevelLockConnectionID(proc)
 		states := userLevelLocksForOwnerSession(owner, userLevelLockSessionID(proc))
 		if enqueueDetachedUserLevelLockCleanups(proc.GetLockService(), userLevelLockOwnerCandidates(proc), connID, states) {
 			detached := detachUserLevelLocksForOwner(owner, userLevelLockSessionID(proc))
 			logutil.Warn(fmt.Sprintf(
-				"ReleaseUserLevelLocksOnSessionClose transferred cleanup ownership after timeout: owner=%s locks=%d err=%v",
+				"ReleaseUserLevelLocksOnSessionClose transferred cleanup ownership after release failure: owner=%s locks=%d err=%v",
 				owner,
 				detached,
+				err,
+			))
+		} else {
+			logutil.Warn(fmt.Sprintf(
+				"ReleaseUserLevelLocksOnSessionClose retained local cleanup state after release failure: owner=%s err=%v",
+				owner,
 				err,
 			))
 		}
