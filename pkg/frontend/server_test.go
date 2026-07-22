@@ -39,22 +39,25 @@ func (l closeErrorListener) Close() error {
 }
 
 func TestMOServerStopCompletesCleanupAfterListenerCloseError(t *testing.T) {
+	service := t.Name()
 	listenerErr := errors.New("listener close failed")
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	rm, err := NewRoutineManager(ctx, "")
-	require.NoError(t, err)
-
 	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 	pu.SV.SetDefaultValues()
-	setSessionAlloc("", NewLeakCheckAllocator())
+	setPu(service, pu)
+	setSessionAlloc(service, NewLeakCheckAllocator())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rm, err := NewRoutineManager(ctx, service)
+	require.NoError(t, err)
+
 	serverConn, clientConn := net.Pipe()
 	defer clientConn.Close()
 
-	rs, err := NewIOSession(serverConn, pu, "")
+	rs, err := NewIOSession(serverConn, pu, service)
 	require.NoError(t, err)
 	rm.setRoutine(rs, 1, &Routine{})
 
