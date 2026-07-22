@@ -39,6 +39,23 @@ type cacheLimitWriter struct {
 	remaining int64
 }
 
+type cacheReservationWriter struct {
+	w       io.Writer
+	cache   *lazyCacheFS
+	path    string
+	written int64
+}
+
+func (w *cacheReservationWriter) Write(p []byte) (int, error) {
+	needed := w.written + int64(len(p))
+	if err := w.cache.reserveCacheSpace(needed, w.path); err != nil {
+		return 0, err
+	}
+	n, err := w.w.Write(p)
+	w.written += int64(n)
+	return n, err
+}
+
 func (w *cacheLimitWriter) Write(p []byte) (int, error) {
 	if int64(len(p)) > w.remaining {
 		return 0, moerr.NewInvalidInputNoCtx("lazy cache object exceeds reserved capacity")
@@ -251,9 +268,11 @@ func (l *lazyCacheFS) cacheFile(
 			l.releaseCacheReservation(normalized)
 		}
 	}()
-	reservation := l.maxBytes
+	reservation := int64(0)
+	knownSize := false
 	if stat, err := l.remote.StatFile(ctx, normalized); err == nil && stat != nil {
 		reservation = stat.Size
+		knownSize = true
 	}
 	if err := l.reserveCacheSpace(reservation, normalized); err != nil {
 		return err
@@ -273,7 +292,11 @@ func (l *lazyCacheFS) cacheFile(
 
 	writer := io.Writer(tmp)
 	if l.maxBytes > 0 {
-		writer = &cacheLimitWriter{w: tmp, remaining: reservation}
+		if knownSize {
+			writer = &cacheLimitWriter{w: tmp, remaining: reservation}
+		} else {
+			writer = &cacheReservationWriter{w: tmp, cache: l, path: normalized}
+		}
 	}
 	vec := &fileservice.IOVector{
 		FilePath: normalized,

@@ -34,10 +34,90 @@ const objectIOMagic = 0xFFFFFFFF
 type readHookFileService struct {
 	fileservice.FileService
 	read func(context.Context, *fileservice.IOVector) error
+	stat func(context.Context, string) (*fileservice.DirEntry, error)
 }
 
 func (f *readHookFileService) Read(ctx context.Context, vector *fileservice.IOVector) error {
 	return f.read(ctx, vector)
+}
+
+func (f *readHookFileService) StatFile(ctx context.Context, filePath string) (*fileservice.DirEntry, error) {
+	if f.stat != nil {
+		return f.stat(ctx, filePath)
+	}
+	return f.FileService.StatFile(ctx, filePath)
+}
+
+func TestLazyCacheFSStatFailureReservesActualBytesIncrementally(t *testing.T) {
+	ctx := context.Background()
+	memory, err := fileservice.NewMemoryFS("SHARED", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	for _, name := range []string{"first", "second"} {
+		require.NoError(t, memory.Write(ctx, fileservice.IOVector{
+			FilePath: name,
+			Entries:  []fileservice.IOEntry{{Offset: 0, Size: 8, Data: bytes.Repeat([]byte(name[:1]), 8)}},
+		}))
+	}
+
+	firstWritten := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	remote := &readHookFileService{FileService: memory}
+	remote.stat = func(context.Context, string) (*fileservice.DirEntry, error) {
+		return nil, assert.AnError
+	}
+	remote.read = func(ctx context.Context, vector *fileservice.IOVector) error {
+		if vector.FilePath == "first" {
+			_, err := vector.Entries[0].WriterForRead.Write(bytes.Repeat([]byte("f"), 8))
+			close(firstWritten)
+			<-releaseFirst
+			return err
+		}
+		return memory.Read(ctx, vector)
+	}
+
+	fs, _, err := newLazyCacheFS(ctx, remote)
+	require.NoError(t, err)
+	defer fs.Close(ctx)
+	lazy := fs.(*lazyCacheFS)
+	lazy.maxBytes = 32
+
+	firstDone := make(chan error, 1)
+	go func() { firstDone <- fs.PrefetchFile(ctx, "first") }()
+	<-firstWritten
+	require.Equal(t, int64(8), lazy.usedBytes)
+	require.NoError(t, fs.PrefetchFile(ctx, "second"))
+	require.LessOrEqual(t, lazy.usedBytes, lazy.maxBytes)
+	close(releaseFirst)
+	require.NoError(t, <-firstDone)
+	require.Equal(t, int64(16), lazy.usedBytes)
+}
+
+func TestLazyCacheFSStatFailureRejectsOversizedObjectBeforeWrite(t *testing.T) {
+	ctx := context.Background()
+	memory, err := fileservice.NewMemoryFS("SHARED", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	require.NoError(t, memory.Write(ctx, fileservice.IOVector{
+		FilePath: "oversized",
+		Entries:  []fileservice.IOEntry{{Offset: 0, Size: 64, Data: bytes.Repeat([]byte("x"), 64)}},
+	}))
+	remote := &readHookFileService{
+		FileService: memory,
+		read:        memory.Read,
+		stat: func(context.Context, string) (*fileservice.DirEntry, error) {
+			return nil, assert.AnError
+		},
+	}
+	fs, root, err := newLazyCacheFS(ctx, remote)
+	require.NoError(t, err)
+	defer fs.Close(ctx)
+	lazy := fs.(*lazyCacheFS)
+	lazy.maxBytes = 32
+
+	err = fs.PrefetchFile(ctx, "oversized")
+	require.ErrorContains(t, err, "exceeds configured limit")
+	require.Zero(t, lazy.usedBytes)
+	require.Empty(t, lazy.reservations)
+	require.NoFileExists(t, filepath.Join(root, "oversized"))
 }
 
 func TestLazyCacheFSConcurrentFailureIsSharedAndRetryable(t *testing.T) {

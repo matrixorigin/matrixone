@@ -384,7 +384,8 @@ func (a *QCloudSDK) WriteMultipartParallel(
 		return err
 	}
 	if firstPart == nil && errors.Is(err, io.EOF) {
-		return nil
+		size := int64(0)
+		return a.Write(ctx, key, bytes.NewReader(nil), &size, options.Expire)
 	}
 	if errors.Is(err, io.EOF) && int64(firstPart.n) < minMultipartPartSize {
 		data := make([]byte, firstPart.n)

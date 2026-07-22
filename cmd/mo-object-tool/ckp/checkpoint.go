@@ -455,6 +455,31 @@ func (w *fileServiceWriteCloser) Close() error {
 	return w.closeErr
 }
 
+// Abort propagates a producer failure into the pipe and waits for the remote
+// write to unwind without completing a partial object.
+func (w *fileServiceWriteCloser) Abort(cause error) {
+	w.closeOnce.Do(func() {
+		pipeErr := w.pw.CloseWithError(cause)
+		writeErr := <-w.done
+		w.closeErr = errors.Join(pipeErr, writeErr)
+	})
+}
+
+type abortableWriteCloser interface {
+	io.WriteCloser
+	Abort(error)
+}
+
+func finishDumpWrite(w io.WriteCloser, writeErr error) error {
+	if writeErr != nil {
+		if abortable, ok := w.(abortableWriteCloser); ok {
+			abortable.Abort(writeErr)
+			return writeErr
+		}
+	}
+	return dumpTableError(writeErr, w.Close())
+}
+
 func cleanObjectPath(filePath string) string {
 	filePath = filepath.ToSlash(filePath)
 	return strings.TrimPrefix(path.Clean(filePath), "/")
@@ -586,6 +611,11 @@ Examples:
 				return fmt.Errorf("resolve --ts: %w", err)
 			}
 
+			parsedRowOrder, err := checkpointtool.ParseCSVRowOrder(rowOrder)
+			if err != nil {
+				return err
+			}
+
 			var w = cmd.OutOrStdout()
 			var outFile io.WriteCloser
 			if output != "" && !loadScript {
@@ -593,17 +623,7 @@ Examples:
 				if err != nil {
 					return fmt.Errorf("create output file: %w", err)
 				}
-				defer func() {
-					if outFile != nil {
-						_ = outFile.Close()
-					}
-				}()
 				w = outFile
-			}
-
-			parsedRowOrder, err := checkpointtool.ParseCSVRowOrder(rowOrder)
-			if err != nil {
-				return err
 			}
 
 			effectiveHeader := header || (loadScript && !noLoad)
@@ -699,7 +719,7 @@ Examples:
 				checkpointtool.WithCSVRowOrder(parsedRowOrder),
 			)
 			if outFile != nil {
-				dumpErr = errors.Join(dumpErr, outFile.Close())
+				dumpErr = finishDumpWrite(outFile, dumpErr)
 				outFile = nil
 			}
 			if dumpErr != nil {
@@ -970,11 +990,8 @@ func writeRestoreScript(
 		return "", fmt.Errorf("create restore script: %w", err)
 	}
 	_, writeErr := io.Copy(f, &script)
-	if err := f.Close(); err != nil {
-		return "", fmt.Errorf("close restore script: %w", err)
-	}
-	if writeErr != nil {
-		return "", fmt.Errorf("write restore script: %w", writeErr)
+	if err := finishDumpWrite(f, writeErr); err != nil {
+		return "", fmt.Errorf("write restore script: %w", err)
 	}
 	return scriptPath, nil
 }
@@ -1547,11 +1564,7 @@ func copyLocalFileToDumpOutput(ctx context.Context, dumpOut *dumpOutput, sourceP
 		return err
 	}
 	_, copyErr := io.Copy(out, in)
-	closeErr := out.Close()
-	if copyErr != nil {
-		return copyErr
-	}
-	return closeErr
+	return finishDumpWrite(out, copyErr)
 }
 
 func externalSourcePath(outputDir string, table checkpointtool.TableCatalogEntry, sourceName string) string {
@@ -2416,8 +2429,7 @@ func dumpOneTable(
 		checkpointtool.WithCSVHeader(header),
 		checkpointtool.WithCSVRowOrder(rowOrder),
 	)
-	closeErr := outFile.Close()
-	if combinedErr := dumpTableError(err, closeErr); combinedErr != nil {
+	if combinedErr := finishDumpWrite(outFile, err); combinedErr != nil {
 		return fmt.Errorf("dump table %d (%s.%s): %w", table.TableID, table.DatabaseName, table.TableName, combinedErr)
 	}
 	outMu.Lock()

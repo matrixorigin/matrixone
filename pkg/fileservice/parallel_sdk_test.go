@@ -404,8 +404,11 @@ func TestAwsMultipartEmptyReader(t *testing.T) {
 	if err := sdk.WriteMultipartParallel(context.Background(), "object", bytes.NewReader(nil), nil, nil); err != nil {
 		t.Fatalf("expected nil error for empty reader, got %v", err)
 	}
-	if state.putCount != 0 && len(state.parts) != 0 {
-		t.Fatalf("no upload should happen for empty reader")
+	if state.putCount != 1 || len(state.putBody) != 0 {
+		t.Fatalf("expected one empty PUT, got count=%d body=%q", state.putCount, state.putBody)
+	}
+	if len(state.parts) != 0 {
+		t.Fatalf("multipart upload should not happen for empty reader")
 	}
 }
 
@@ -1053,8 +1056,11 @@ func TestCOSMultipartEmptyReader(t *testing.T) {
 	if err := sdk.WriteMultipartParallel(context.Background(), "object", bytes.NewReader(nil), nil, nil); err != nil {
 		t.Fatalf("expected nil error for empty reader, got %v", err)
 	}
-	if state.putCount != 0 && len(state.parts) != 0 {
-		t.Fatalf("no upload should happen for empty reader")
+	if state.putCount != 1 || len(state.putBody) != 0 {
+		t.Fatalf("expected one empty PUT, got count=%d body=%q", state.putCount, state.putBody)
+	}
+	if len(state.parts) != 0 {
+		t.Fatalf("multipart upload should not happen for empty reader")
 	}
 }
 

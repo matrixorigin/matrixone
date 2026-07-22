@@ -481,6 +481,16 @@ func TestOpenReaderResolveSnapshotAndFileServiceWriteCloser(t *testing.T) {
 	require.NoError(t, fs.Read(ctx, vec))
 	require.Equal(t, []byte("a,b\n"), vec.Entries[0].CachedData.Bytes())
 	vec.Release()
+
+	abortedPath := "/remote/aborted.csv"
+	aborted, err := newFileServiceWriteCloser(ctx, fs, abortedPath)
+	require.NoError(t, err)
+	_, err = aborted.Write([]byte("partial"))
+	require.NoError(t, err)
+	require.ErrorIs(t, finishDumpWrite(aborted, assert.AnError), assert.AnError)
+	_, err = fs.StatFile(ctx, abortedPath)
+	require.Error(t, err)
+	require.Error(t, aborted.Close())
 	(&dumpOutput{fs: fs}).Close(ctx)
 
 	_, err = openReader(ctx, ".", toolfs.StorageOptions{Backend: "GCS"}, objectio.OfflineKindLocal)
