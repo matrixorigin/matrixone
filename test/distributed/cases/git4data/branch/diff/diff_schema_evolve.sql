@@ -126,14 +126,17 @@ drop table t1;
 
 -- =====================================================
 -- Case 6: composite primary key + extra column
---   base:   [a, b, c]   PK(a, b)
---   target: [a, b, c, d]
+--   base:   [`select`, `line item`, c]   composite PK with quoted/reserved names
+--   target: [`select`, `line item`, c, d]
 -- =====================================================
-create table t0(a int, b int, c int, primary key(a,b));
+create table t0(`select` int, `line item` int, c int, primary key(`select`,`line item`));
 insert into t0 values(1,1,10),(2,2,20);
 create snapshot sp0 for table test t0;
 
 data branch create table t1 from t0{snapshot="sp0"};
+-- The UPDATE belongs to the pre-ALTER physical generation. COPY ALTER rebuilds
+-- __mo_cpkey_col with a new Seqnum; DIFF must still map that derived key.
+update t1 set c=11 where `select`=1 and `line item`=1;
 alter table t1 add column d int default 0;
 insert into t1 values(3,3,30,300);
 create snapshot sp1 for table test t1;

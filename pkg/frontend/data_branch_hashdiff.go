@@ -122,11 +122,23 @@ func lcaProbeColumnLayout(
 			)
 		}
 		lcaCol := dataBranchColumnDefByIdentity(lcaDef, targetCol)
+		candidate := dataBranchColumnDefByName(lcaDef, targetCol.Name)
+		if candidate != nil &&
+			isDataBranchDerivedCompositePKColumn(lcaDef, targetDef, candidate, targetCol) {
+			// A rebuilt composite-key column can reuse the former RowID's
+			// numeric ColId/Seqnum pair. Prefer its canonical derived identity
+			// over that accidental positional collision.
+			lcaCol = candidate
+		}
 		if lcaCol == nil {
 			continue
 		}
+		derivedCompositePK := isDataBranchDerivedCompositePKColumn(
+			lcaDef, targetDef, lcaCol, targetCol,
+		)
 		if lcaCol.Name == catalog.Row_ID ||
-			!isDataBranchLogicalTypeEquivalent(lcaCol.Typ, targetCol.Typ) {
+			(!isDataBranchLogicalTypeEquivalent(lcaCol.Typ, targetCol.Typ) &&
+				!(derivedCompositePK && lcaCol.Typ.Id == targetCol.Typ.Id)) {
 			return lcaProbeLayout{}, moerr.NewNotSupportedNoCtxf(
 				"LCA data branch column %s has a different type from the endpoint schema",
 				targetCol.Name,
@@ -267,15 +279,16 @@ func handleDelsOnLCA(
 		)
 		sqlBuf.WriteString(fmt.Sprintf(
 			"right join (values %s) as pks(__idx_,%s) on ",
-			valsBuf.String(), strings.Join(pkNames, ",")),
+			valsBuf.String(), joinQuotedColumnNames(pkNames)),
 		)
 
 		for i := range pkNames {
-			sqlBuf.WriteString(fmt.Sprintf("lca.%s = ", pkNames[i]))
+			quotedPKName := quoteIdentifierForSQL(pkNames[i])
+			sqlBuf.WriteString(fmt.Sprintf("lca.%s = ", quotedPKName))
 			if castType, ok := lcaProbeJoinCastType(colTypes[expandedPKColIdxes[i]]); ok {
-				sqlBuf.WriteString(fmt.Sprintf("cast(pks.%s as %s)", pkNames[i], castType))
+				sqlBuf.WriteString(fmt.Sprintf("cast(pks.%s as %s)", quotedPKName, castType))
 			} else {
-				sqlBuf.WriteString(fmt.Sprintf("pks.%s", pkNames[i]))
+				sqlBuf.WriteString(fmt.Sprintf("pks.%s", quotedPKName))
 			}
 			if i != len(pkNames)-1 {
 				sqlBuf.WriteString(" AND ")
@@ -2713,8 +2726,12 @@ func dataBranchSourceColToTargetIdx(
 			continue
 		}
 		targetCol, ok := targetCols[strings.ToLower(col.Name)]
-		if !ok || col.Typ.Id != targetCol.Typ.Id ||
-			!dataBranchColumnTypeAttributesEqual(col.Typ, targetCol.Typ) {
+		derivedCompositePK := ok &&
+			isDataBranchDerivedCompositePKColumn(sourceDef, targetDef, col, targetCol)
+		sameIdentity := ok && (col.Seqnum == targetCol.Seqnum || derivedCompositePK)
+		sameType := ok && col.Typ.Id == targetCol.Typ.Id &&
+			(dataBranchColumnTypeAttributesEqual(col.Typ, targetCol.Typ) || derivedCompositePK)
+		if !sameIdentity || !sameType {
 			if _, isTargetOnly := targetOnly[targetIdx]; isTargetOnly {
 				// This column does not exist on the base endpoint and is excluded
 				// from comparison and MERGE apply. Its old physical representation
@@ -2723,6 +2740,12 @@ func dataBranchSourceColToTargetIdx(
 				mapping[len(mapping)-1] = -1
 				continue
 			}
+			if ok && !sameIdentity {
+				return nil, moerr.NewNotSupportedNoCtxf(
+					"historical data branch column %s has a different identity from the endpoint schema",
+					col.Name,
+				)
+			}
 			return nil, moerr.NewNotSupportedNoCtxf(
 				"historical data branch column %s has a different type from the endpoint schema",
 				col.Name,
@@ -2730,6 +2753,42 @@ func dataBranchSourceColToTargetIdx(
 		}
 	}
 	return mapping, nil
+}
+
+// isDataBranchDerivedCompositePKColumn reports whether the two columns are the
+// hidden serialization of the same logical composite primary key. COPY ALTER
+// rebuilds this derived column and may assign it a new Seqnum even though the
+// component-column identities, which checkDataBranchPrimaryKeyCompatibility
+// has already validated, remain unchanged.
+func isDataBranchDerivedCompositePKColumn(
+	sourceDef, targetDef *plan2.TableDef,
+	sourceCol, targetCol *plan2.ColDef,
+) bool {
+	if sourceDef == nil || targetDef == nil || sourceCol == nil || targetCol == nil ||
+		sourceDef.Pkey == nil || targetDef.Pkey == nil ||
+		!strings.EqualFold(sourceDef.Pkey.PkeyColName, catalog.CPrimaryKeyColName) ||
+		!strings.EqualFold(targetDef.Pkey.PkeyColName, catalog.CPrimaryKeyColName) ||
+		!strings.EqualFold(sourceCol.Name, catalog.CPrimaryKeyColName) ||
+		!strings.EqualFold(targetCol.Name, catalog.CPrimaryKeyColName) ||
+		len(sourceDef.Pkey.Names) != len(targetDef.Pkey.Names) {
+		return false
+	}
+	for i, sourceName := range sourceDef.Pkey.Names {
+		targetName := targetDef.Pkey.Names[i]
+		if !strings.EqualFold(sourceName, targetName) {
+			return false
+		}
+		sourcePart := dataBranchColumnDefByName(sourceDef, sourceName)
+		targetPart := dataBranchColumnDefByName(targetDef, targetName)
+		if sourcePart == nil || targetPart == nil ||
+			sourcePart.Seqnum != targetPart.Seqnum ||
+			sourcePart.Typ.Id != targetPart.Typ.Id ||
+			!dataBranchColumnTypeAttributesEqual(sourcePart.Typ, targetPart.Typ) ||
+			sourcePart.NotNull != targetPart.NotNull {
+			return false
+		}
+	}
+	return true
 }
 
 // dataBranchNeedsHistoricalProjection reports whether change rows from an

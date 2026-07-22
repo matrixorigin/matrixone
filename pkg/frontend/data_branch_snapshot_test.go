@@ -27,12 +27,15 @@ import (
 	"time"
 
 	"github.com/golang/mock/gomock"
+	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
 // ---------------------------------------------------------------------------
@@ -198,6 +201,58 @@ func TestCompactHistoricalAlterLineageWithBHPropagatesDeleteError(t *testing.T) 
 		context.Background(), bh, time.Unix(0, 1_000).UTC(),
 	)
 	require.ErrorIs(t, err, wantErr)
+	require.NotContains(t, bh.executedSQLs,
+		"delete from mo_catalog.mo_branch_metadata where table_id in (2) and (level = 'alter' or level like 'alter:%')",
+	)
+}
+
+func TestDoDropSnapshotRollsBackCompactionFailure(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+
+	bh := newHistoricalLineageBackgroundExec(
+		[][]interface{}{{uint64(2), uint64(1), int64(100), uint64(0), "alter", false}},
+		[][]interface{}{{"__mo_branch_2", int64(100), "acc", "db", "t", uint64(1)}},
+		nil,
+		nil,
+	)
+	bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+	defer bhStub.Reset()
+
+	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+	pu.SV.SetDefaultValues()
+	pu.SV.KillRountinesInterval = 0
+	setPu("", pu)
+	ctx := context.WithValue(context.Background(), config.ParameterUnitKey, pu)
+	rm, _ := NewRoutineManager(ctx, "")
+	ses.rm = rm
+	ses.SetTenantInfo(&TenantInfo{
+		Tenant:        sysAccountName,
+		User:          rootName,
+		DefaultRole:   moAdminRoleName,
+		TenantID:      sysAccountID,
+		UserID:        rootID,
+		DefaultRoleID: moAdminRoleID,
+	})
+
+	stmt := &tree.DropSnapShot{Name: tree.Identifier("snapshot_test")}
+	checkSQL, _ := getSqlForCheckSnapshot(ctx, "snapshot_test")
+	bh.sql2result[checkSQL] = newMrsForPasswordOfUser([][]interface{}{{0, 0}})
+	kindSQL := "select kind from mo_catalog.mo_snapshots where sname = 'snapshot_test' order by snapshot_id limit 1"
+	bh.sql2result[kindSQL] = newMrsForPasswordOfUser([][]interface{}{{"user"}})
+	userDeleteSQL := getSqlForDropSnapshot("snapshot_test")
+	branchDeleteSQL := "delete from mo_catalog.mo_snapshots where kind = 'branch' and sname in ('__mo_branch_2')"
+	wantErr := errors.New("branch snapshot delete failed")
+	bh.sql2err[branchDeleteSQL] = wantErr
+
+	err := doDropSnapshot(ctx, ses, stmt)
+	require.ErrorIs(t, err, wantErr)
+	require.Contains(t, bh.executedSQLs, "begin;")
+	require.Contains(t, bh.executedSQLs, userDeleteSQL)
+	require.Contains(t, bh.executedSQLs, branchDeleteSQL)
+	require.Contains(t, bh.executedSQLs, "rollback;")
+	require.NotContains(t, bh.executedSQLs, "commit;")
 	require.NotContains(t, bh.executedSQLs,
 		"delete from mo_catalog.mo_branch_metadata where table_id in (2) and (level = 'alter' or level like 'alter:%')",
 	)

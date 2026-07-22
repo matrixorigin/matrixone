@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"errors"
+	"math"
 	"testing"
 	"time"
 
@@ -43,6 +44,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -179,6 +181,20 @@ func TestShouldAdvanceAlterDataBranchLineageSnapshot(t *testing.T) {
 	require.False(t, shouldAdvanceAlterDataBranchLineageSnapshot(true, false))
 	require.False(t, shouldAdvanceAlterDataBranchLineageSnapshot(false, true))
 	require.False(t, shouldAdvanceAlterDataBranchLineageSnapshot(false, false))
+}
+
+func TestAdvanceAlterDataBranchLineageSnapshotRejectsOverflow(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().SnapshotTS().Return(timestamp.Timestamp{
+		PhysicalTime: math.MaxInt64 - int64(time.Microsecond) + 1,
+	})
+
+	proc := testutil.NewProcess(t)
+	proc.Base.TxnOperator = txnOp
+	c := &Compile{proc: proc}
+	_, err := c.advanceAlterDataBranchLineageSnapshot()
+	require.ErrorContains(t, err, "timestamp limit")
 }
 
 type alterCopyInsertSpyExecutor struct {

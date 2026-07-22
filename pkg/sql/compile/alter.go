@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+	"math"
 	"slices"
 	"strings"
 	"time"
@@ -240,7 +241,13 @@ func shouldAdvanceAlterDataBranchLineageSnapshot(pessimistic, rcIsolation bool) 
 
 func (c *Compile) advanceAlterDataBranchLineageSnapshot() (int64, error) {
 	op := c.proc.GetTxnOperator()
-	requested := op.SnapshotTS().PhysicalTime + int64(time.Microsecond)
+	physicalTime := op.SnapshotTS().PhysicalTime
+	if physicalTime > math.MaxInt64-int64(time.Microsecond) {
+		return 0, moerr.NewInternalErrorNoCtx(
+			"cannot advance ALTER data-branch lineage snapshot past the timestamp limit",
+		)
+	}
+	requested := physicalTime + int64(time.Microsecond)
 	if err := op.UpdateSnapshot(c.proc.Ctx, timestamp.Timestamp{PhysicalTime: requested}); err != nil {
 		return 0, err
 	}

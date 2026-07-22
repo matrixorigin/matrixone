@@ -2646,6 +2646,110 @@ func TestDataBranchSourceColToTargetIdxSkipsTargetOnlyHistoricalTypeDrift(t *tes
 	require.Equal(t, baseline, mp.CurrNB())
 }
 
+func TestDataBranchSourceColToTargetIdxRejectsHistoricalIdentityDrift(t *testing.T) {
+	sourceDef := &plan.TableDef{
+		Cols: []*plan.ColDef{
+			{Name: "a", Seqnum: 0, Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "b", Seqnum: 1, Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+		Pkey: &plan.PrimaryKeyDef{PkeyColName: "a", Names: []string{"a"}},
+	}
+	targetDef := &plan.TableDef{
+		Cols: []*plan.ColDef{
+			{Name: "a", Seqnum: 0, Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "b", Seqnum: 2, Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+		Pkey: &plan.PrimaryKeyDef{PkeyColName: "a", Names: []string{"a"}},
+	}
+
+	_, err := dataBranchSourceColToTargetIdx(sourceDef, targetDef, []string{"a", "b"}, nil)
+	require.ErrorContains(t, err, "column b has a different identity")
+
+	mapping, err := dataBranchSourceColToTargetIdx(sourceDef, targetDef, []string{"a", "b"}, []int{1})
+	require.NoError(t, err)
+	require.Equal(t, []int{0, -1}, mapping,
+		"target-only historical identity drift must be projected as NULL")
+}
+
+func TestDataBranchSourceColToTargetIdxPreservesRebuiltCompositePrimaryKey(t *testing.T) {
+	compositePK := func(seqnum uint32) (*plan.ColDef, *plan.PrimaryKeyDef) {
+		col := &plan.ColDef{
+			Name: catalog.CPrimaryKeyColName, Hidden: true, Seqnum: seqnum,
+			Typ: plan.Type{Id: int32(types.T_varchar)},
+		}
+		return col, &plan.PrimaryKeyDef{
+			PkeyColName: catalog.CPrimaryKeyColName,
+			Names:       []string{"select", "line item"},
+			CompPkeyCol: col,
+		}
+	}
+	sourceCPK, sourcePK := compositePK(2)
+	targetCPK, targetPK := compositePK(3)
+	sourceCPK.Typ.Width = 100
+	targetCPK.Typ.Width = 200
+	sourceDef := &plan.TableDef{
+		Cols: []*plan.ColDef{
+			{Name: "select", Seqnum: 0, Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "line item", Seqnum: 1, Typ: plan.Type{Id: int32(types.T_int64)}},
+			sourceCPK,
+			{Name: catalog.Row_ID, Hidden: true, Seqnum: 3, Typ: plan.Type{Id: int32(types.T_Rowid)}},
+		},
+		Pkey: sourcePK,
+	}
+	targetDef := &plan.TableDef{
+		Cols: []*plan.ColDef{
+			{Name: "select", Seqnum: 0, Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "line item", Seqnum: 1, Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "payload", Seqnum: 2, Typ: plan.Type{Id: int32(types.T_int64)}},
+			targetCPK,
+		},
+		Pkey: targetPK,
+	}
+
+	mapping, err := dataBranchSourceColToTargetIdx(
+		sourceDef, targetDef,
+		[]string{"select", "line item", "payload", catalog.CPrimaryKeyColName},
+		[]int{2},
+	)
+	require.NoError(t, err)
+	require.Equal(t, []int{0, 1, 3}, mapping)
+	layout, err := lcaProbeColumnLayout(
+		sourceDef, targetDef,
+		[]string{"select", "line item", "payload", catalog.CPrimaryKeyColName},
+		[]types.Type{
+			types.T_int64.ToType(), types.T_int64.ToType(),
+			types.T_int64.ToType(), types.T_varchar.ToType(),
+		},
+		[]int{2},
+	)
+	require.NoError(t, err)
+	require.Equal(t, []string{"select", "line item", catalog.CPrimaryKeyColName}, layout.attrs)
+	require.Equal(t, []int{0, 1, 3}, layout.targetIdxes)
+
+	targetDef.Pkey.Names = []string{"select", "other"}
+	require.False(t, isDataBranchDerivedCompositePKColumn(sourceDef, targetDef, sourceCPK, targetCPK))
+	_, err = dataBranchSourceColToTargetIdx(
+		sourceDef, targetDef,
+		[]string{"select", "line item", "payload", catalog.CPrimaryKeyColName},
+		[]int{2},
+	)
+	require.ErrorContains(t, err, "primary key is incompatible")
+
+	targetDef.Pkey.Names = []string{"select", "line item"}
+	targetDef.Cols[1].Seqnum = 4
+	require.False(t, isDataBranchDerivedCompositePKColumn(sourceDef, targetDef, sourceCPK, targetCPK))
+	_, err = dataBranchSourceColToTargetIdx(
+		sourceDef, targetDef,
+		[]string{"select", "line item", "payload", catalog.CPrimaryKeyColName},
+		[]int{2},
+	)
+	require.ErrorContains(t, err, "column line item has a different identity")
+
+	targetDef.Cols[1].Seqnum = 1
+	targetDef.Cols[1].Typ.Id = int32(types.T_varchar)
+	require.False(t, isDataBranchDerivedCompositePKColumn(sourceDef, targetDef, sourceCPK, targetCPK))
+}
+
 func TestDataBranchSourceColToTargetIdxPreservesCompatibleAndReorderedColumns(t *testing.T) {
 	sourceDef := &plan.TableDef{
 		Cols: []*plan.ColDef{

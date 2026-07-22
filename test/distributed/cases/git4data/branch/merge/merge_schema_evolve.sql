@@ -77,23 +77,25 @@ drop table t1;
 
 -- =====================================================
 -- Case 4: merge with composite PK + extra column
---   base:   [a, b, c]   PK(a, b)
---   target: [a, b, c, d]
+--   base:   [`select`, `line item`, c]   composite PK with quoted/reserved names
+--   target: [`select`, `line item`, c, d]
 -- =====================================================
-create table t0(a int, b int, c int, primary key(a,b));
+create table t0(`select` int, `line item` int, c int, primary key(`select`,`line item`));
 insert into t0 values(1,1,10),(2,2,20);
 create snapshot sp0 for table test t0;
 
 data branch create table t1 from t0{snapshot="sp0"};
+-- Keep this UPDATE in the pre-ALTER generation so MERGE exercises historical
+-- mapping after COPY ALTER rebuilds the hidden composite-key column.
+update t1 set c=99 where `select`=1 and `line item`=1;
 alter table t1 add column d int default 0;
-update t1 set c=99 where a=1 and b=1;
 insert into t1 values(3,3,30,300);
 create snapshot sp1 for table test t1;
 
 data branch merge t1 into t0 when conflict accept;
 
 -- t0: (1,1) c updated to 99, (3,3) inserted, d is not written
-select * from t0 order by a;
+select * from t0 order by `select`;
 
 drop snapshot sp1;
 drop snapshot sp0;
