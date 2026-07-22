@@ -324,6 +324,11 @@ func (c *Conn) RawConn() net.Conn {
 	return c.conn
 }
 
+// GetSequenceID returns the sequence expected for the next MySQL packet.
+func (c *Conn) GetSequenceID() uint8 {
+	return c.sequenceId
+}
+
 func (c *Conn) UseConn(conn net.Conn) {
 	c.conn = conn
 }

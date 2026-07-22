@@ -284,6 +284,37 @@ func (m *connManager) disconnect(cn *CNServer, t *tunnel) {
 	logutil.Infof("disconnect from CN server %s, the conn ID is %d", cn.uuid, cn.connID)
 }
 
+// rebind moves an already-established backend from one tunnel generation to
+// another without changing the physical connection count. Unlike connect, it
+// must not consume a route-selection placeholder.
+func (m *connManager) rebind(cn *CNServer, old, next *tunnel) {
+	m.Lock()
+	defer m.Unlock()
+	if cn == nil || old == next {
+		return
+	}
+	if old != nil {
+		if ci, ok := m.conns[cn.hash]; ok {
+			ci.cnTunnels.del(cn.uuid, old)
+		}
+		if tunnels, ok := m.cnTunnels[cn.uuid]; ok {
+			delete(tunnels, old)
+		}
+	}
+	if next != nil {
+		ci, ok := m.conns[cn.hash]
+		if !ok {
+			ci = newConnInfo(cn.reqLabel)
+			m.conns[cn.hash] = ci
+		}
+		ci.cnTunnels.add(cn.uuid, next)
+		if m.cnTunnels[cn.uuid] == nil {
+			m.cnTunnels[cn.uuid] = make(tunnelSet)
+		}
+		m.cnTunnels[cn.uuid][next] = struct{}{}
+	}
+}
+
 // count returns the total connection count.
 func (m *connManager) count() int {
 	m.Lock()

@@ -38,7 +38,7 @@ func TestForwardLock(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 			defer cancel()
 
-			_, err := l2.getLockTableWithCreate(0, tableID, nil, pb.Sharding_None)
+			_, err := l2.getLockTableWithCreate(context.Background(), 0, tableID, nil, pb.Sharding_None)
 			require.NoError(t, err)
 
 			txn1 := []byte("txn1")
@@ -71,7 +71,7 @@ func TestForwardLockUsesEffectiveLockDeadline(t *testing.T) {
 			origin := services[0]
 			owner := services[1]
 			const tableID = uint64(11)
-			_, err := owner.getLockTableWithCreate(0, tableID, nil, pb.Sharding_None)
+			_, err := owner.getLockTableWithCreate(context.Background(), 0, tableID, nil, pb.Sharding_None)
 			require.NoError(t, err)
 
 			options := newTestRowExclusiveOptions()

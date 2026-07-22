@@ -1184,6 +1184,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 	type pendingCheckDef struct {
 		name           string
 		expr           tree.Expr
+		column         *ColDef
 		enforced       bool
 		enforcementSet bool
 	}
@@ -1385,6 +1386,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				pendingChecks = append(pendingChecks, pendingCheckDef{
 					name:           checkAttr.Name,
 					expr:           checkAttr.Expr,
+					column:         col,
 					enforced:       checkAttr.Enforced,
 					enforcementSet: checkAttr.EnforcementSet,
 				})
@@ -1586,6 +1588,14 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 	}
 
 	for _, check := range pendingChecks {
+		if check.column != nil {
+			// A column-level CHECK may reference only the column where it is
+			// defined. Validate that scope separately, then bind against the
+			// complete table below so the persisted ColPos remains correct.
+			if _, err := bindCheckExpr(ctx, check.expr, []*ColDef{check.column}); err != nil {
+				return err
+			}
+		}
 		if err := appendCheckDef(ctx, createTable.TableDef, check.name, check.expr); err != nil {
 			return err
 		}
@@ -1840,10 +1850,9 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 }
 
 func appendCheckDef(ctx CompilerContext, tableDef *TableDef, name string, astExpr tree.Expr) error {
-	// Column-level and table-level CHECKs share the same row-level scope: the
-	// expression may reference any column of the table, not just the defining
-	// one (e.g. `b INT CHECK (a > 0)`). Binding is deferred until every column
-	// is collected, so `tableDef.Cols` is the complete column list here.
+	// Scope validation for column-level CHECKs happens before this call. Bind
+	// against the complete column list here so persisted column positions match
+	// the table row layout; table-level CHECKs may reference any table column.
 	checkExpr, err := bindCheckExpr(ctx, astExpr, tableDef.Cols)
 	if err != nil {
 		return err

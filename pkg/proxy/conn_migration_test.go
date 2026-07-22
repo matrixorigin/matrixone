@@ -146,3 +146,29 @@ func TestQueryServiceMigrateTo(t *testing.T) {
 		assert.NoError(t, err)
 	})
 }
+
+func TestMigrateConnToContextCancelsReplay(t *testing.T) {
+	local, remote := net.Pipe()
+	defer remote.Close()
+	blocked := newBlockingContextServerConn(local)
+	defer blocked.Close()
+	cc := &clientConn{}
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		result <- cc.migrateConnToContext(ctx, blocked, &pb.MigrateConnFromResponse{})
+	}()
+
+	select {
+	case <-blocked.entered:
+	case <-time.After(time.Second):
+		t.Fatal("migration replay did not enter backend ExecStmt")
+	}
+	cancel()
+	select {
+	case err := <-result:
+		assert.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("migration replay ignored transfer cancellation")
+	}
+}

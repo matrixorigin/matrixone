@@ -1187,7 +1187,6 @@ func Test_service_handleGetCacheData(t *testing.T) {
 	require.NoError(t, err)
 
 	mockQuery := mock_query.NewMockQueryService(ctl)
-	mockQuery.EXPECT().SetReleaseFunc(gomock.Any(), gomock.Any()).Return().AnyTimes()
 
 	type fields struct {
 		fileService  fileservice.FileService
@@ -1230,7 +1229,7 @@ func Test_service_handleGetCacheData(t *testing.T) {
 			want:    &query.Response{},
 		},
 		{
-			name: "read_empty",
+			name: "missing_cache_key",
 			fields: fields{
 				fileService:  fs,
 				queryService: mockQuery,
@@ -1249,7 +1248,7 @@ func Test_service_handleGetCacheData(t *testing.T) {
 				},
 				resp: &query.Response{},
 			},
-			wantErr: nil,
+			wantErr: dummyBadRequestErr,
 			want:    &query.Response{GetCacheDataResponse: nil},
 		},
 	}
