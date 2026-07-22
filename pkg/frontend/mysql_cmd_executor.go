@@ -1626,7 +1626,13 @@ func handlePrepareVar(ses *Session, execCtx *ExecCtx, st *tree.PrepareVar) (*Pre
 	if err != nil {
 		return nil, err
 	}
-	wrapper.Sql = p.Value.(string)
+	// MySQL converts numeric and NULL user variables to statement text so that
+	// the SQL parser reports the invalid statement consistently.
+	if p.Value == nil {
+		wrapper.Sql = "NULL"
+	} else {
+		wrapper.Sql = fmt.Sprint(p.Value)
+	}
 
 	return doPrepareString(ses, execCtx, wrapper)
 }
@@ -2092,14 +2098,37 @@ func handleDropProcedure(ses FeSession, execCtx *ExecCtx, dp *tree.DropProcedure
 }
 
 func handleCallProcedure(ses FeSession, execCtx *ExecCtx, call *tree.CallStmt, bg bool) error {
-	results, err := doInterpretCall(execCtx.reqCtx, ses, call, bg)
+	var affectedRows int64
+	results, err := doInterpretCall(
+		execCtx.reqCtx,
+		ses,
+		call,
+		bg,
+		procedureCallerAffectedRows(execCtx),
+		&affectedRows,
+	)
 	if err != nil {
 		return err
 	}
+	execCtx.runResult = &util.RunResult{AffectRows: normalizeProcedureAffectedRows(affectedRows)}
 
 	ses.SetMysqlResultSet(nil)
 	execCtx.results = results
 	return nil
+}
+
+func procedureCallerAffectedRows(execCtx *ExecCtx) int64 {
+	if execCtx.proc == nil {
+		return 0
+	}
+	return execCtx.proc.GetAffectedRows()
+}
+
+func normalizeProcedureAffectedRows(affectedRows int64) uint64 {
+	if affectedRows < 0 {
+		return 0
+	}
+	return uint64(affectedRows)
 }
 
 // handleGrantRole grants the role

@@ -677,7 +677,7 @@ func TestCacheQuitDoesNotLeakPostQuitCommandIntoReusedBackend(t *testing.T) {
 	require.NoError(t, <-clientWriteDone)
 	require.NoError(t, <-eventDone)
 
-	reused := cache.Pop("", 3, nil, nil)
+	reused := cache.Pop("", 3, nil, nil, clientInfo{})
 	require.Same(t, cached, reused)
 	_, err := backendProxy.Write(setConnectionID)
 	require.NoError(t, err)
