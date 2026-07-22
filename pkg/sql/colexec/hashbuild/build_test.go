@@ -724,6 +724,30 @@ func TestShuffleHashBuildResizeRejectReleasesPartialMapAndSpills(t *testing.T) {
 	require.Zero(t, tc.proc.Mp().CurrNB())
 }
 
+func TestObserveHashBuildBudgetUsesGenerationSnapshot(t *testing.T) {
+	budget := process.MustNewHashBuildBudget(1024, 1024)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	reservation, err := generation.Reserve(128)
+	require.NoError(t, err)
+	_, err = generation.Reserve(1024)
+	require.ErrorIs(t, err, process.ErrHashBuildBudgetAdmission)
+	reservation.Release()
+
+	analyzer := process.NewAnalyzer(0, false, false, "hash build")
+	observeHashBuildBudget(analyzer, generation)
+	extra := analyzer.GetOpStats().ExtraStats
+	require.Equal(t, int64(1024), extra["QueryHashBudgetCapBytes"])
+	require.Equal(t, int64(128), extra["QueryHashBudgetPeakBytes"])
+	require.Equal(t, int64(1), extra["QueryHashBudgetRejects"])
+	require.Equal(t, int64(1), extra["QueryHashBudgetReserves"])
+
+	// Sampling the same cumulative generation again must not double count.
+	observeHashBuildBudget(analyzer, generation)
+	require.Equal(t, int64(1), extra["QueryHashBudgetRejects"])
+	generation.Close()
+}
+
 func TestShuffleHashBuildSpillFailureReleasesEmergencyResources(t *testing.T) {
 	tc := newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()}, []*plan.Expr{newExpr(0, types.T_int32.ToType())})
 	tc.arg.IsShuffle = true

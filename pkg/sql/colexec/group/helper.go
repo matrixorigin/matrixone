@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common"
@@ -190,7 +191,7 @@ func (ctr *container) computeBucketIndex(hashCodes []uint64, myLv uint64) {
 	}
 }
 
-func (ctr *container) spillDataToDisk(proc *process.Process, parentBkt *spillBucket) (int64, int64, error) {
+func (ctr *container) spillDataToDisk(proc *process.Process, opAnalyzer process.Analyzer, parentBkt *spillBucket) (int64, int64, error) {
 	var totalBytes, totalRows int64
 	var parentLv int
 	if parentBkt != nil {
@@ -232,9 +233,20 @@ func (ctr *container) spillDataToDisk(proc *process.Process, parentBkt *spillBuc
 	if ctr.hr.IsEmpty() {
 		return 0, 0, nil
 	}
+	spillStart := time.Now()
+	opStats := opAnalyzer.GetOpStats()
+	opStats.AddExtraStat("GroupSpillWriteCalls", 1)
+	opStats.SetMaxExtraStat("GroupSpillMaxLevel", int64(myLv))
+	defer func() {
+		opStats.AddExtraStat("GroupSpillWriteNanos", time.Since(spillStart).Nanoseconds())
+	}()
 
 	// compute spill bucket.
 	n := int(ctr.hr.Hash.GroupCount())
+	opStats.SetMaxExtraStat("GroupSpillMaxGroups", int64(n))
+	if uint64(n) > ctr.spillHashPreAllocSize {
+		ctr.spillHashPreAllocSize = uint64(n)
+	}
 	if cap(ctr.spillHashCodes) < n {
 		ctr.spillHashCodes = make([]uint64, n)
 	}
@@ -361,12 +373,14 @@ func (ctr *container) spillDataToDisk(proc *process.Process, parentBkt *spillBuc
 			// Lazy file + buffered writer creation.
 			bkt := ctr.currentSpillBkt[i]
 			if bkt.file == nil {
+				opStats.AddExtraStat("GroupSpillBucketsCreated", 1)
 				if bkt.file, err = spillfs.CreateAndRemoveFile(
 					proc.Ctx, bkt.name); err != nil {
 					return 0, 0, err
 				}
 				bkt.writer = bufio.NewWriterSize(bkt.file, spillWrBufSize)
 			}
+			opStats.AddExtraStat("GroupSpillRecords", 1)
 			bkt.cnt += cnt
 			written, err := bkt.writer.Write(buf.Bytes())
 			totalBytes += int64(written)
@@ -422,6 +436,20 @@ func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.
 		}
 		ctr.freeSpillAggList()
 	}()
+	opStats := opAnalyzer.GetOpStats()
+	opStats.AddExtraStat("GroupSpillReloadBuckets", 1)
+	opStats.AddExtraStat("GroupSpillReloadRows", bkt.cnt)
+	opStats.SetMaxExtraStat("GroupSpillMaxBucketRows", bkt.cnt)
+	opStats.SetMaxExtraStat("GroupSpillMaxLevel", int64(bkt.lv))
+	reloadStart := time.Now()
+	reloadRecorded := false
+	recordReloadTime := func() {
+		if !reloadRecorded {
+			opStats.AddExtraStat("GroupSpillReloadNanos", time.Since(reloadStart).Nanoseconds())
+			reloadRecorded = true
+		}
+	}
+	defer recordReloadTime()
 
 	// reposition to the start of the file.
 	if _, err := bkt.file.Seek(0, io.SeekStart); err != nil {
@@ -524,13 +552,24 @@ func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.
 		}
 
 		if ctr.hr.IsEmpty() {
-			if err = ctr.buildHashTable(proc.Ctx); err != nil {
+			// bkt.cnt is an upper bound: records from different spill waves can
+			// contain duplicate keys. Cap the reload allocation at a hash-table
+			// cardinality this operator has already held under the same spill
+			// limit, so skew cannot turn metadata into an unbounded allocation.
+			rawPreAllocated := min(uint64(bkt.cnt), ctr.spillHashPreAllocSize)
+			preAllocated := ctr.boundedSpillReloadPreAlloc(bkt.cnt)
+			opStats.SetMaxExtraStat("GroupSpillPreallocRows", int64(preAllocated))
+			if preAllocated < rawPreAllocated {
+				opStats.AddExtraStat("GroupSpillPreallocCapped", 1)
+			}
+			if err = ctr.buildHashTable(proc.Ctx, preAllocated); err != nil {
 				return false, err
 			}
 		}
 
 		// insert group by batch into the hash table.
 		rowCount := gbBatch.RowCount()
+		hashBytesBefore := ctr.hr.Hash.Size()
 		for i := 0; i < rowCount; i += hashmap.UnitLimit {
 			n := min(rowCount-i, hashmap.UnitLimit)
 			originGroupCount := ctr.hr.Hash.GroupCount()
@@ -561,12 +600,13 @@ func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.
 				}
 			}
 		}
+		observeHashGrowth(opStats, "GroupHashReload", hashBytesBefore, ctr.hr.Hash.Size())
 
 		// free spill agg list after merging.
 		ctr.freeSpillAggList()
 
 		if ctr.needSpill(opAnalyzer) {
-			if bytes, rows, err := ctr.spillDataToDisk(proc, bkt); err != nil {
+			if bytes, rows, err := ctr.spillDataToDisk(proc, opAnalyzer, bkt); err != nil {
 				return false, err
 			} else {
 				opAnalyzer.Spill(bytes)
@@ -574,10 +614,12 @@ func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.
 			}
 		}
 	}
+	recordReloadTime()
 
 	// respilling happened, so we finish the last batch and recursive down
 	if ctr.isSpilling() {
-		if bytes, rows, err := ctr.spillDataToDisk(proc, bkt); err != nil {
+		opStats.AddExtraStat("GroupSpillRespills", 1)
+		if bytes, rows, err := ctr.spillDataToDisk(proc, opAnalyzer, bkt); err != nil {
 			return false, err
 		} else {
 			opAnalyzer.Spill(bytes)

@@ -25,11 +25,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
 )
 
 var _ vm.Operator = new(HashBuild)
@@ -52,6 +55,7 @@ type container struct {
 	terminalPublished uint32
 	terminalMu        sync.Mutex
 	runtimeFilterDone bool
+	diagnosticsLogged bool
 	hashmapBuilder    HashmapBuilder
 	spilledFds        []*os.File // anonymous build-side spill fds (ownership transferred to JoinMap)
 	// spillBundle keeps the resource reservations associated with spilledFds.
@@ -84,9 +88,9 @@ type container struct {
 	// consuming the scratch required to recover from hard-budget rejection.
 	spillScratchReservation *process.HashBuildReservation
 	// spillScratchEmergency marks a lease pre-admitted by
-	// ensureSpillScratchReservation. During retained-batch draining, a batch
-	// larger than that lease must preserve the historical hard-admission reject
-	// rather than growing into memory occupied by retained copies.
+	// ensureSpillScratchReservation. An uncharged upstream batch may not grow
+	// beyond this lease. A retained batch may grow it because its source memory
+	// remains charged separately while the batch is drained.
 	spillScratchEmergency bool
 	// spillScratchBase is the transient emergency floor. Coalesce-buffer
 	// growth is charged on top and must never be mistaken for this floor.
@@ -302,6 +306,7 @@ func (hashBuild *HashBuild) Release() {
 func (hashBuild *HashBuild) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	hashBuild.ctr.terminalMu.Lock()
 	defer hashBuild.ctr.terminalMu.Unlock()
+	hashBuild.logDiagnostics(proc, pipelineFailed, err)
 	runtimeSucceed := hashBuild.ctr.state > HandleRuntimeFilter
 	mapSucceed := hashBuild.ctr.state == SendSucceed
 
@@ -347,6 +352,7 @@ func (hashBuild *HashBuild) Reset(proc *process.Process, pipelineFailed bool, er
 func (hashBuild *HashBuild) Free(proc *process.Process, pipelineFailed bool, err error) {
 	hashBuild.ctr.terminalMu.Lock()
 	defer hashBuild.ctr.terminalMu.Unlock()
+	hashBuild.logDiagnostics(proc, pipelineFailed, err)
 	// Normally Reset runs before Free.  Keep Free as a safe fallback for
 	// cancellation/error cleanup paths that bypass Reset, while preserving the
 	// exactly-once generation gate.
@@ -361,6 +367,34 @@ func (hashBuild *HashBuild) Free(proc *process.Process, pipelineFailed bool, err
 	hashBuild.ctr.freeSpillExprExecs()
 	hashBuild.ctr.dropSpillScratchBuffers()
 	hashBuild.ctr.releaseSpillScratchReservation()
+}
+
+func (hashBuild *HashBuild) logDiagnostics(proc *process.Process, pipelineFailed bool, err error) {
+	if hashBuild.ctr.diagnosticsLogged {
+		return
+	}
+	hashBuild.ctr.diagnosticsLogged = true
+	if proc == nil || hashBuild.OpAnalyzer == nil {
+		return
+	}
+	extra := hashBuild.OpAnalyzer.GetOpStats().ExtraStats
+	if extra["HashBuildSpillStarts"] == 0 &&
+		extra["QueryHashBudgetRejects"] == 0 &&
+		extra["HashBuildEmergencyScratchGrowRejects"] == 0 &&
+		extra["HashBuildSpillScratchGrowRejects"] == 0 &&
+		extra["HashBuildRetainedEmergencyGrowCount"] == 0 &&
+		extra["HashBuildRetainedEmergencyGrowRejects"] == 0 {
+		return
+	}
+	logutil.Info("operator diagnostic summary",
+		trace.ContextField(proc.Ctx),
+		zap.String("query_id", proc.QueryId()),
+		zap.String("operator", opName),
+		zap.Int("node_idx", hashBuild.GetIdx()),
+		zap.Int32("shuffle_idx", hashBuild.ShuffleIdx),
+		zap.Bool("pipeline_failed", pipelineFailed),
+		zap.Error(err),
+		zap.Any("extra_stats", extra))
 }
 
 func (hashBuild *HashBuild) publishJoinMap(proc *process.Process, jm *message.JoinMap) bool {

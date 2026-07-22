@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -761,6 +762,115 @@ func TestSpillWriteCoalescesAcrossBatches(t *testing.T) {
 	ctr.dropSpillScratchBuffers()
 	ctr.releaseSpillScratchReservation()
 	require.Zero(t, generation.Used())
+}
+
+func TestRetainedSpillGrowsEmergencyLeaseWithoutDoubleChargingSource(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	bat := batch.NewWithSize(1)
+	values := make([]int32, colexec.DefaultBatchSize)
+	for i := range values {
+		values[i] = int32(i)
+	}
+	bat.Vecs[0] = testutil.MakeInt32Vector(values, nil, proc.Mp())
+	bat.SetRowCount(len(values))
+	defer bat.Clean(proc.Mp())
+
+	fullNeed, err := spillScratchBudgetBytes(bat, false)
+	require.NoError(t, err)
+	retainedNeed, err := spillScratchBudgetBytes(bat, true)
+	require.NoError(t, err)
+	source := uint64(bat.Allocated())
+	require.Equal(t, source, fullNeed-retainedNeed)
+	require.Positive(t, retainedNeed)
+
+	// With the retained source already charged, admitting the old full scratch
+	// estimate fails at a cap where the incremental estimate still fits.
+	proofCap := source + fullNeed - 1
+	proofBudget := process.MustNewHashBuildBudget(proofCap, proofCap)
+	proofGeneration, err := proofBudget.OpenGeneration(1)
+	require.NoError(t, err)
+	proofSource, err := proofGeneration.Reserve(source)
+	require.NoError(t, err)
+	_, err = proofGeneration.Reserve(fullNeed)
+	require.ErrorIs(t, err, process.ErrHashBuildBudgetAdmission)
+	proofScratch, err := proofGeneration.Reserve(retainedNeed)
+	require.NoError(t, err)
+	proofScratch.Release()
+	proofSource.Release()
+	require.Zero(t, proofGeneration.Used())
+
+	// The retained path may grow only through normal admission. If even the
+	// incremental byte is unavailable, it still fails closed without changing
+	// either token.
+	blockedCap := source + retainedNeed - 1
+	blockedBudget := process.MustNewHashBuildBudget(blockedCap, blockedCap)
+	blockedGeneration, err := blockedBudget.OpenGeneration(1)
+	require.NoError(t, err)
+	blockedSource, err := blockedGeneration.Reserve(source)
+	require.NoError(t, err)
+	blockedScratch, err := blockedGeneration.Reserve(retainedNeed - 1)
+	require.NoError(t, err)
+	blockedCtr := &container{
+		spillScratchReservation: blockedScratch,
+		spillScratchEmergency:   true,
+		spillScratchBase:        retainedNeed - 1,
+	}
+	blockedCtr.hashmapBuilder.setBudget(blockedGeneration)
+	blockedAnalyzer := process.NewAnalyzer(0, false, false, "blocked")
+	err = blockedCtr.spillBatchBounded(proc, bat, nil, nil, blockedAnalyzer, true)
+	require.ErrorIs(t, err, process.ErrHashBuildBudgetAdmission)
+	require.Equal(t, int64(1), blockedAnalyzer.GetOpStats().ExtraStats["HashBuildRetainedEmergencyGrowRejects"])
+	require.Equal(t, retainedNeed-1, blockedScratch.Size())
+	require.Equal(t, source+retainedNeed-1, blockedGeneration.Used())
+	blockedCtr.releaseSpillScratchReservation()
+	blockedSource.Release()
+	require.Zero(t, blockedGeneration.Used())
+
+	const slack = uint64(2 << 20)
+	capBytes := source + retainedNeed + slack
+	budget := process.MustNewHashBuildBudget(capBytes, capBytes)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	defer generation.Close()
+	retainedToken, err := generation.Reserve(source)
+	require.NoError(t, err)
+	defer retainedToken.Release()
+	scratchToken, err := generation.Reserve(retainedNeed - 1)
+	require.NoError(t, err)
+
+	files := make([]*os.File, spillNumBuckets)
+	defer func() {
+		for _, file := range files {
+			if file != nil {
+				_ = file.Close()
+			}
+		}
+	}()
+	conditions := []*plan.Expr{{
+		Typ:  plan.Type{Id: int32(types.T_int32)},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
+	}}
+	ctr := &container{
+		spillUUID:               t.Name(),
+		spillScratchReservation: scratchToken,
+		spillScratchEmergency:   true,
+		spillScratchBase:        retainedNeed - 1,
+	}
+	ctr.hashmapBuilder.setBudget(generation)
+	_, err = ctr.initSpillExprExecs(proc, conditions)
+	require.NoError(t, err)
+	defer ctr.freeSpillExprExecs()
+	defer ctr.dropSpillScratchBuffers()
+	defer ctr.releaseSpillScratchReservation()
+
+	analyzer := process.NewAnalyzer(0, false, false, "test")
+	require.NoError(t, ctr.spillBatchBounded(proc, bat, files, ctr.spillExprExecs, analyzer, true))
+	require.Equal(t, retainedNeed, ctr.spillScratchBase)
+	require.Equal(t, int64(1), analyzer.GetOpStats().ExtraStats["HashBuildRetainedEmergencyGrowCount"])
+	require.Equal(t, int64(1), analyzer.GetOpStats().ExtraStats["HashBuildRetainedEmergencyGrowBytes"])
+	require.NoError(t, ctr.flushSpillBuffers(files, analyzer))
 }
 
 func TestEnsureSpillFile(t *testing.T) {

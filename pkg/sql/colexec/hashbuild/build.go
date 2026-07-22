@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"sync/atomic"
 
@@ -48,6 +49,7 @@ func (hashBuild *HashBuild) Prepare(proc *process.Process) (err error) {
 	hashBuild.ctr.terminalMu.Lock()
 	atomic.StoreUint32(&hashBuild.ctr.terminalPublished, 0)
 	hashBuild.ctr.runtimeFilterDone = false
+	hashBuild.ctr.diagnosticsLogged = false
 	hashBuild.ctr.terminalMu.Unlock()
 
 	if hashBuild.OpAnalyzer == nil {
@@ -193,6 +195,7 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 	bundleTransferred := false
 
 	defer func() {
+		observeHashBuildBudget(analyzer, ctr.hashmapBuilder.budget)
 		for _, f := range spillFiles {
 			if f != nil {
 				f.Close()
@@ -219,6 +222,7 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 			spillFiles = make([]*os.File, spillNumBuckets)
 		}
 		spillMode = true
+		analyzer.GetOpStats().AddExtraStat("HashBuildSpillStarts", 1)
 		// Drain retained copies oldest-first.  Each successful partition is
 		// followed immediately by reservation and mpool release, so the source
 		// batch and one partition scratch are the only simultaneous peaks.
@@ -230,7 +234,7 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 				}
 				continue
 			}
-			if err := ctr.spillBatchBounded(proc, bat, spillFiles, execs, analyzer); err != nil {
+			if err := ctr.spillBatchBounded(proc, bat, spillFiles, execs, analyzer, true); err != nil {
 				return err
 			}
 			if err := ctr.hashmapBuilder.CleanCopiedBatchAt(0, proc); err != nil {
@@ -259,7 +263,7 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 		// same upstream batch a second time when it is spilled directly.
 		ctr.hashmapBuilder.InputBatchRowCount += result.Batch.RowCount()
 		if hashBuild.IsShuffle {
-			if err := ctr.ensureSpillScratchReservation(result.Batch); err != nil {
+			if err := ctr.ensureSpillScratchReservation(result.Batch, analyzer); err != nil {
 				// A larger ingress batch may require growing the emergency lease.
 				// If retained copies are consuming the missing headroom, drain them
 				// under the already-admitted lease, then retry for the current batch.
@@ -269,7 +273,7 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 				if err := startSpill(); err != nil {
 					return err
 				}
-				if err := ctr.ensureSpillScratchReservation(result.Batch); err != nil {
+				if err := ctr.ensureSpillScratchReservation(result.Batch, analyzer); err != nil {
 					return err
 				}
 			}
@@ -277,7 +281,7 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 
 		// If in spill mode, spill this batch directly to open files.
 		if spillMode {
-			err := ctr.spillBatchBounded(proc, result.Batch, spillFiles, ctr.spillExprExecs, analyzer)
+			err := ctr.spillBatchBounded(proc, result.Batch, spillFiles, ctr.spillExprExecs, analyzer, false)
 			if err != nil {
 				return err
 			}
@@ -294,7 +298,7 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 				if err := startSpill(); err != nil {
 					return err
 				}
-				if err := ctr.spillBatchBounded(proc, result.Batch, spillFiles, ctr.spillExprExecs, analyzer); err != nil {
+				if err := ctr.spillBatchBounded(proc, result.Batch, spillFiles, ctr.spillExprExecs, analyzer, false); err != nil {
 					return err
 				}
 				continue
@@ -357,6 +361,30 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 
 	analyzer.Alloc(ctr.hashmapBuilder.GetSize())
 	return nil
+}
+
+func observeHashBuildBudget(analyzer process.Analyzer, budget *process.HashBuildBudgetGeneration) {
+	if analyzer == nil || budget == nil {
+		return
+	}
+	snapshot := budget.Snapshot()
+	stats := analyzer.GetOpStats()
+	// These are query-CN generation snapshots, not operator-local sums. Keep
+	// maxima so repeated sampling by one operator cannot double count them.
+	stats.SetMaxExtraStat("QueryHashBudgetCapBytes", hashBuildStatInt64(snapshot.Cap))
+	stats.SetMaxExtraStat("QueryHashBudgetPeakBytes", hashBuildStatInt64(snapshot.PeakUsed))
+	stats.SetMaxExtraStat("QueryHashBudgetRejects", hashBuildStatInt64(snapshot.RejectCount))
+	stats.SetMaxExtraStat("QueryHashBudgetReserves", hashBuildStatInt64(snapshot.ReserveCount))
+	stats.SetMaxExtraStat("QueryHashBudgetReconciles", hashBuildStatInt64(snapshot.ReconcileCount))
+	stats.SetMaxExtraStat("QuerySpillDiskUsedBytes", hashBuildStatInt64(snapshot.SpillDiskUsed))
+	stats.SetMaxExtraStat("QuerySpillFDUsed", hashBuildStatInt64(snapshot.SpillFDUsed))
+}
+
+func hashBuildStatInt64(value uint64) int64 {
+	if value > math.MaxInt64 {
+		return math.MaxInt64
+	}
+	return int64(value)
 }
 
 // calculateBloomFilterProbability calculates the false positive rate for bloom filter

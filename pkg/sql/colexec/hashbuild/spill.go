@@ -58,6 +58,24 @@ func spillBudgetBytes(bat *batch.Batch) (uint64, error) {
 	return spillBudgetFor(rows, source)
 }
 
+// spillScratchBudgetBytes returns the incremental spill charge. A copied
+// build batch remains covered by HashmapBuilder.batchReservations while it is
+// drained, so charging its source footprint again would double count it. An
+// upstream batch has no HashBuild-owned reservation and keeps the full charge.
+func spillScratchBudgetBytes(bat *batch.Batch, sourceAlreadyCharged bool) (uint64, error) {
+	need, err := spillBudgetBytes(bat)
+	if err != nil || !sourceAlreadyCharged || bat == nil || bat.RowCount() <= 0 {
+		return need, err
+	}
+	// copyBuildBatch reconciles its retained reservation against Allocated
+	// (plus metadata), so only that proven charge may be subtracted here.
+	source := uint64(bat.Allocated())
+	if source > need {
+		return 0, process.ErrHashBuildBudgetInvalid
+	}
+	return need - source, nil
+}
+
 func spillBudgetFor(rows, source uint64) (uint64, error) {
 	if rows > math.MaxUint64/12 {
 		return 0, process.ErrHashBuildBudgetInvalid
@@ -136,7 +154,7 @@ func (ctr *container) reserveSpillScratch(bat *batch.Batch) (*process.HashBuildR
 	return ctr.hashmapBuilder.budget.Reserve(bytes)
 }
 
-func (ctr *container) ensureSpillScratchReservation(bat *batch.Batch) error {
+func (ctr *container) ensureSpillScratchReservation(bat *batch.Batch, analyzer process.Analyzer) error {
 	if ctr.hashmapBuilder.budget == nil {
 		return nil
 	}
@@ -147,6 +165,7 @@ func (ctr *container) ensureSpillScratchReservation(bat *batch.Batch) error {
 	if ctr.spillScratchReservation == nil {
 		ctr.spillScratchReservation, err = ctr.hashmapBuilder.budget.Reserve(need)
 		if err == nil {
+			analyzer.GetOpStats().SetMaxExtraStat("HashBuildEmergencyScratchBytes", hashBuildStatInt64(need))
 			ctr.spillScratchEmergency = true
 			ctr.spillScratchBase = need
 		}
@@ -156,9 +175,13 @@ func (ctr *container) ensureSpillScratchReservation(bat *batch.Batch) error {
 		ctr.spillScratchEmergency = true
 		return nil
 	}
-	if err := ctr.spillScratchReservation.Grow(need - ctr.spillScratchBase); err != nil {
+	grow := need - ctr.spillScratchBase
+	if err := ctr.spillScratchReservation.Grow(grow); err != nil {
+		analyzer.GetOpStats().AddExtraStat("HashBuildEmergencyScratchGrowRejects", 1)
 		return err
 	}
+	analyzer.GetOpStats().AddExtraStat("HashBuildEmergencyScratchGrowCount", 1)
+	analyzer.GetOpStats().AddExtraStat("HashBuildEmergencyScratchGrowBytes", hashBuildStatInt64(grow))
 	ctr.spillScratchBase = need
 	ctr.spillScratchEmergency = true
 	return nil
@@ -329,11 +352,11 @@ func (ctr *container) ensureSpillFile(proc *process.Process, files []*os.File, b
 // bucket. One selected batch is reused as each bucket is materialized and
 // marshaled before advancing; serialized records are coalesced until the
 // bounded buffers or final handoff flush.
-func (ctr *container) spillBatchBounded(proc *process.Process, bat *batch.Batch, files []*os.File, executors []colexec.ExpressionExecutor, analyzer process.Analyzer) error {
+func (ctr *container) spillBatchBounded(proc *process.Process, bat *batch.Batch, files []*os.File, executors []colexec.ExpressionExecutor, analyzer process.Analyzer, sourceAlreadyCharged bool) error {
 	if bat == nil || bat.RowCount() == 0 {
 		return nil
 	}
-	need, err := spillBudgetBytes(bat)
+	need, err := spillScratchBudgetBytes(bat, sourceAlreadyCharged)
 	if err != nil {
 		return err
 	}
@@ -350,11 +373,22 @@ func (ctr *container) spillBatchBounded(proc *process.Process, bat *batch.Batch,
 			}
 			ctr.spillScratchBase = need
 		} else if need > ctr.spillScratchBase {
-			if ctr.spillScratchEmergency {
+			if ctr.spillScratchEmergency && !sourceAlreadyCharged {
 				return process.ErrHashBuildBudgetAdmission
 			}
-			if err := ctr.spillScratchReservation.Grow(need - ctr.spillScratchBase); err != nil {
+			grow := need - ctr.spillScratchBase
+			if err := ctr.spillScratchReservation.Grow(grow); err != nil {
+				analyzer.GetOpStats().AddExtraStat("HashBuildSpillScratchGrowRejects", 1)
+				if ctr.spillScratchEmergency && sourceAlreadyCharged {
+					analyzer.GetOpStats().AddExtraStat("HashBuildRetainedEmergencyGrowRejects", 1)
+				}
 				return err
+			}
+			analyzer.GetOpStats().AddExtraStat("HashBuildSpillScratchGrowCount", 1)
+			analyzer.GetOpStats().AddExtraStat("HashBuildSpillScratchGrowBytes", hashBuildStatInt64(grow))
+			if ctr.spillScratchEmergency && sourceAlreadyCharged {
+				analyzer.GetOpStats().AddExtraStat("HashBuildRetainedEmergencyGrowCount", 1)
+				analyzer.GetOpStats().AddExtraStat("HashBuildRetainedEmergencyGrowBytes", hashBuildStatInt64(grow))
 			}
 			ctr.spillScratchBase = need
 		}
@@ -489,7 +523,7 @@ func (ctr *container) appendSpillRecord(file *os.File, bucket int, bat *batch.Ba
 		return ctr.writeSpillPayload(file, payload, cnt, analyzer)
 	}
 	if buf.Len() == 0 {
-		if !ctr.ensureSpillCoalesceCapacity(buf) {
+		if !ctr.ensureSpillCoalesceCapacity(buf, analyzer) {
 			return ctr.writeSpillPayload(file, payload, cnt, analyzer)
 		}
 		buf.Grow(spillWriteCoalesceSize)
@@ -502,7 +536,7 @@ func (ctr *container) appendSpillRecord(file *os.File, bucket int, bat *batch.Ba
 	return nil
 }
 
-func (ctr *container) ensureSpillCoalesceCapacity(buf *bytes.Buffer) bool {
+func (ctr *container) ensureSpillCoalesceCapacity(buf *bytes.Buffer, analyzer process.Analyzer) bool {
 	if buf == nil || buf.Cap() >= spillWriteCoalesceSize {
 		return true
 	}
@@ -511,8 +545,11 @@ func (ctr *container) ensureSpillCoalesceCapacity(buf *bytes.Buffer) bool {
 	}
 	additional := uint64(spillWriteCoalesceSize-buf.Cap()) * 2
 	if err := ctr.spillScratchReservation.Grow(additional); err != nil {
+		analyzer.GetOpStats().AddExtraStat("HashBuildCoalesceGrowRejects", 1)
 		return false
 	}
+	analyzer.GetOpStats().AddExtraStat("HashBuildCoalesceGrowCount", 1)
+	analyzer.GetOpStats().AddExtraStat("HashBuildCoalesceGrowBytes", hashBuildStatInt64(additional))
 	return true
 }
 
@@ -575,7 +612,7 @@ func (ctr *container) appendBuildBatchToSpillFiles(proc *process.Process, bat *b
 	// every non-empty bucket is selected and flushed before the next bucket is
 	// materialized, so no persistent fanout-sized vector set can grow.
 	_ = buffers
-	return ctr.spillBatchBounded(proc, bat, files, executors, analyzer)
+	return ctr.spillBatchBounded(proc, bat, files, executors, analyzer, false)
 }
 
 // initSpillExprExecs initializes or validates spill expression executors.
