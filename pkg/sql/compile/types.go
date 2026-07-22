@@ -288,10 +288,11 @@ type Compile struct {
 
 	MessageBoard *message.MessageBoard
 
-	cnList            engine.Nodes
-	queryPlacement    schedule.QueryDecision
-	schedulingTrace   *schedule.TraceRecorder
-	schedulingAttempt schedule.TraceAttemptID
+	cnList                engine.Nodes
+	queryPlacement        schedule.QueryDecision
+	querySchedulingIntent schedule.SchedulingIntent
+	schedulingTrace       *schedule.TraceRecorder
+	schedulingAttempt     schedule.TraceAttemptID
 	// ast
 	stmt tree.Statement
 

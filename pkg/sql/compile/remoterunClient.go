@@ -154,7 +154,7 @@ func checkPipelineStandaloneExecutableAtRemote(s *Scope) bool {
 					if _, ok := regs[t.LocalRegs[i]]; !ok {
 						s.Proc.Infof(
 							s.Proc.Ctx,
-							"txn id : %s, the pipeline %p convert to execute locally because it holds a dispatch operator will send data to other local pipeline tree.",
+							"txn id : %s, the pipeline %p cannot execute remotely because its dispatch operator targets another local pipeline tree.",
 							s.Proc.GetTxnOperator().Txn().ID, s)
 
 						return false
@@ -167,7 +167,7 @@ func checkPipelineStandaloneExecutableAtRemote(s *Scope) bool {
 				if _, ok := regs[t.Reg]; !ok {
 					s.Proc.Infof(
 						s.Proc.Ctx,
-						"txn id : %s, the pipeline %p convert to execute locally because it holds a connector operator will send data to other local pipeline tree.",
+						"txn id : %s, the pipeline %p cannot execute remotely because its connector targets another local pipeline tree.",
 						s.Proc.GetTxnOperator().Txn().ID, s)
 
 					return false
