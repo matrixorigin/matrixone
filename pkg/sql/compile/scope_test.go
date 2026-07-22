@@ -1868,13 +1868,17 @@ func TestCleanPipelineWitchStartFail(t *testing.T) {
 
 func TestRemoteRunMalformedAddressTerminatesReceiver(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	proc.BuildPipelineContext(context.Background())
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	proc.Ctx = ctx
+	proc.BuildPipelineContext(ctx)
 	reg := process.NewPipelineEdge(1, 0)
+	dispatchOp := dispatch.NewArgument()
+	dispatchOp.LocalRegs = []*process.WaitRegister{reg}
 	s := &Scope{
 		Magic:    Remote,
 		NodeInfo: engine.Node{Addr: "malformed-remote-address"},
 		Proc:     proc,
-		RootOp:   connector.NewArgument().WithReg(reg),
+		RootOp:   dispatchOp,
 	}
 	c := &Compile{proc: proc, addr: "local:6001"}
 
@@ -1887,6 +1891,37 @@ func TestRemoteRunMalformedAddressTerminatesReceiver(t *testing.T) {
 		require.ErrorIs(t, signalErr, err)
 	case <-time.After(time.Second):
 		t.Fatal("malformed remote start failure did not terminate its receiver")
+	}
+}
+
+func TestRemoteRunNonStandalonePipelineFailsInsteadOfExecutingOnWrongCN(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	proc.Ctx = ctx
+	proc.BuildPipelineContext(ctx)
+	proc.Base.TxnOperator = fakeTxnOperator{}
+	reg := process.NewPipelineEdge(1, 0)
+	rootProc := proc.NewContextChildProc(1)
+	preProc := proc.NewContextChildProc(0)
+	preDispatch := dispatch.NewArgument()
+	preDispatch.LocalRegs = []*process.WaitRegister{reg}
+	pre := &Scope{Magic: Remote, NodeInfo: engine.Node{Addr: "remote:6001"}, Proc: preProc, RootOp: preDispatch}
+	s := &Scope{
+		Magic:     Remote,
+		NodeInfo:  engine.Node{Addr: "remote:6001"},
+		Proc:      rootProc,
+		RootOp:    dispatch.NewArgument(),
+		PreScopes: []*Scope{pre},
+	}
+	c := &Compile{proc: proc, addr: "local:6001"}
+
+	err := s.RemoteRun(c)
+	require.ErrorContains(t, err, "not standalone executable")
+	select {
+	case <-proc.Ctx.Done():
+		require.ErrorIs(t, context.Cause(proc.Ctx), err)
+	case <-time.After(time.Second):
+		t.Fatal("non-standalone remote start failure did not cancel sibling pipelines")
 	}
 }
 

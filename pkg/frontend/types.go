@@ -311,6 +311,11 @@ type PrepareStmt struct {
 
 	compile *compile.Compile
 	Ts      timestamp.Timestamp
+
+	// schedulingSQLMode freezes the lexical mode used when Sql was prepared.
+	// EXECUTE must not reinterpret optimizer comments after session sql_mode
+	// changes.
+	schedulingSQLMode string
 }
 
 /*

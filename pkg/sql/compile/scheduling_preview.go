@@ -38,6 +38,7 @@ type SchedulingPreviewRequest struct {
 	Tenant     string
 	Username   string
 	CNLabel    map[string]string
+	Intent     schedule.SchedulingIntent
 	TxnHasDDL  bool
 }
 
@@ -54,15 +55,16 @@ func PreviewQueryScheduling(req SchedulingPreviewRequest) schedule.Trace {
 	}
 
 	c := &Compile{
-		e:          req.Engine,
-		proc:       req.Process,
-		addr:       req.Address,
-		isInternal: req.IsInternal,
-		tenant:     req.Tenant,
-		uid:        req.Username,
-		cnLabel:    req.CNLabel,
-		ncpu:       system.GoMaxProcs(),
-		execType:   plan2.GetExecType(req.Query, req.TxnHasDDL, false),
+		e:                     req.Engine,
+		proc:                  req.Process,
+		addr:                  req.Address,
+		isInternal:            req.IsInternal,
+		tenant:                req.Tenant,
+		uid:                   req.Username,
+		cnLabel:               req.CNLabel,
+		querySchedulingIntent: req.Intent,
+		ncpu:                  system.GoMaxProcs(),
+		execType:              plan2.GetExecType(req.Query, req.TxnHasDDL, false),
 	}
 	ctx := req.Context
 	if ctx == nil {
