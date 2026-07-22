@@ -889,10 +889,6 @@ func shouldActivateWeakDecimal(strong []types.Type, outer *types.Type) bool {
 	return outer != nil && (outer.Oid.IsInteger() || outer.Oid.IsDecimal() || outer.Oid == types.T_bit)
 }
 
-func (b *baseBinder) numericAstTypes(astExpr tree.Expr, depth int32) (numericAstTypeScan, error) {
-	return b.numericAstTypesWithHint(astExpr, depth, nil)
-}
-
 func (b *baseBinder) numericAstTypesWithHint(
 	astExpr tree.Expr,
 	depth int32,
