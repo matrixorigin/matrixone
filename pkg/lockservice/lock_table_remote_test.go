@@ -251,6 +251,73 @@ func TestDeadlockDetectorCloseCancelsRemoteGetLockRetry(t *testing.T) {
 	require.Empty(t, d.mu.activeCheckTxn)
 }
 
+func TestDeadlockDetectorRemoteGetLockTimeoutReleasesWorkers(t *testing.T) {
+	oldTimeout := remoteLockSnapshotTimeout
+	remoteLockSnapshotTimeout = 100 * time.Millisecond
+	defer func() { remoteLockSnapshotTimeout = oldTimeout }()
+
+	client := &blockingGetLockClient{started: make(chan struct{}, deadlockCheckTaskCount+1)}
+	remote := newRemoteLockTable(
+		"s1",
+		time.Second,
+		pb.LockTable{ServiceID: "s2", Table: 1, Valid: true},
+		client,
+		func(pb.LockTable) {},
+		getLogger(""),
+	)
+	type result struct {
+		txnID string
+		err   error
+	}
+	finished := make(chan result, deadlockCheckTaskCount+1)
+	abortCalled := make(chan struct{}, 1)
+	d := newDeadlockDetector(
+		getLogger(""),
+		func(ctx context.Context, txn pb.WaitTxn, _ *waiters) (bool, error) {
+			err := remote.getLock(ctx, []byte("row"), txn, func(Lock) {})
+			finished <- result{txnID: string(txn.TxnID), err: err}
+			return false, err
+		},
+		func(pb.WaitTxn, error) { abortCalled <- struct{}{} },
+	)
+	defer d.close()
+
+	for i := 0; i < deadlockCheckTaskCount; i++ {
+		txnID := []byte{byte(i + 1)}
+		require.NoError(t, d.check([]byte("holder"), pb.WaitTxn{TxnID: txnID}))
+	}
+	for i := 0; i < deadlockCheckTaskCount; i++ {
+		select {
+		case <-client.started:
+		case <-time.After(time.Second):
+			t.Fatal("deadlock detector worker did not start remote snapshot lookup")
+		}
+	}
+
+	require.NoError(t, d.check([]byte("holder"), pb.WaitTxn{TxnID: []byte("next")}))
+	seenNext := false
+	for i := 0; i < deadlockCheckTaskCount+1; i++ {
+		select {
+		case r := <-finished:
+			require.ErrorIs(t, r.err, context.DeadlineExceeded)
+			seenNext = seenNext || r.txnID == "next"
+		case <-time.After(time.Second):
+			t.Fatal("remote snapshot timeout did not release detector workers")
+		}
+	}
+	require.True(t, seenNext, "queued deadlock check was not processed")
+	require.Eventually(t, func() bool {
+		d.mu.Lock()
+		defer d.mu.Unlock()
+		return len(d.mu.activeCheckTxn) == 0
+	}, time.Second, time.Millisecond)
+	select {
+	case <-abortCalled:
+		t.Fatal("deadlock abort callback ran after a snapshot timeout")
+	default:
+	}
+}
+
 func TestRemoteUnlockWithContextStopsOnCancellation(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 
