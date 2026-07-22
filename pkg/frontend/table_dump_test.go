@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"net/url"
 	"path"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -197,21 +198,37 @@ func TestResolveTableName(t *testing.T) {
 
 func TestTableDumpPrivileges(t *testing.T) {
 	table := tree.NewTableName("orders", tree.ObjectNamePrefix{SchemaName: "tpch", ExplicitSchema: true}, nil)
-	for _, tc := range []struct {
-		stmt tree.Statement
-		want PrivilegeType
-	}{
-		{stmt: &tree.DumpTable{Table: table}, want: PrivilegeTypeSelect},
-		{stmt: &tree.LoadTable{Table: table}, want: PrivilegeTypeInsert},
-	} {
-		priv := determinePrivilegeSetOfStatement(tc.stmt)
-		require.Equal(t, objectTypeTable, priv.objType)
-		require.True(t, priv.writeDatabaseAndTableDirectly)
-		require.Equal(t, []string{"tpch"}, priv.writeDatabaseTargets)
-		require.Len(t, priv.entries, 3)
-		require.Equal(t, tc.want, priv.entries[0].privilegeId)
-		require.Equal(t, "tpch", priv.entries[0].databaseName)
-	}
+	dump := &tree.DumpTable{Table: table}
+	dumpPriv := determinePrivilegeSetOfStatement(dump)
+	require.Equal(t, objectTypeNone, dumpPriv.objType)
+	require.Equal(t, privilegeKindSpecial, dumpPriv.kind)
+	require.Equal(t, specialTagAdmin, dumpPriv.special)
+	require.True(t, dumpPriv.writeDatabaseAndTableDirectly)
+	require.Equal(t, []string{"tpch"}, dumpPriv.writeDatabaseTargets)
+	require.Empty(t, dumpPriv.entries)
+
+	ctrl := gomock.NewController(t)
+	ses := newSes(dumpPriv, ctrl)
+	defer ses.Close()
+	allowed, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(context.Background(), ses, dump)
+	require.NoError(t, err)
+	require.True(t, allowed)
+	ses.GetTenantInfo().SetDefaultRole("readonly")
+	allowed, _, err = authenticateUserCanExecuteStatementWithObjectTypeNone(context.Background(), ses, dump)
+	require.NoError(t, err)
+	require.False(t, allowed)
+	ses.SetTenantInfo(&TenantInfo{Tenant: "tenant", DefaultRole: accountAdminRoleName})
+	allowed, _, err = authenticateUserCanExecuteStatementWithObjectTypeNone(context.Background(), ses, dump)
+	require.NoError(t, err)
+	require.True(t, allowed)
+
+	loadPriv := determinePrivilegeSetOfStatement(&tree.LoadTable{Table: table})
+	require.Equal(t, objectTypeTable, loadPriv.objType)
+	require.True(t, loadPriv.writeDatabaseAndTableDirectly)
+	require.Equal(t, []string{"tpch"}, loadPriv.writeDatabaseTargets)
+	require.Len(t, loadPriv.entries, 3)
+	require.Equal(t, PrivilegeTypeInsert, loadPriv.entries[0].privilegeId)
+	require.Equal(t, "tpch", loadPriv.entries[0].databaseName)
 }
 
 func TestExecInFrontendRoutesTableDumpAndLoad(t *testing.T) {
@@ -246,6 +263,12 @@ func TestGetTableDumpRelations(t *testing.T) {
 	master.EXPECT().GetTableDef(gomock.Any()).Return(masterDef).AnyTimes()
 	master.EXPECT().GetTableName().Return("orders")
 	db.EXPECT().Relation(gomock.Any(), "__idx", nil).Return(indexRel, nil)
+	indexRel.EXPECT().GetTableDef(gomock.Any()).Return(&plan.TableDef{
+		Name: "__idx",
+		Cols: []*plan.ColDef{{
+			Name: "index_key", Typ: plan.Type{Id: int32(types.T_varchar)}, Default: &plan.Default{},
+		}},
+	})
 
 	refs, err := getTableDumpRelations(context.Background(), ses, "tpch", master)
 	require.NoError(t, err)
@@ -254,6 +277,7 @@ func TestGetTableDumpRelations(t *testing.T) {
 	require.Equal(t, "index", refs[1].Role)
 	require.Equal(t, "idx", refs[1].IndexName)
 	require.NotEmpty(t, refs[0].SchemaHash)
+	require.NotEmpty(t, refs[1].SchemaHash)
 	require.Equal(t, tableDumpRelationKey("index", "idx", "regular"), "index\x00idx\x00regular")
 }
 
@@ -314,6 +338,10 @@ func TestGetTableDumpRelationsRejectsDuplicateMapping(t *testing.T) {
 	ses.txnHandler.storage = eng
 	eng.EXPECT().Database(gomock.Any(), "tpch", gomock.Any()).Return(db, nil)
 	db.EXPECT().Relation(gomock.Any(), "__idx", nil).Return(indexRel, nil)
+	indexRel.EXPECT().GetTableDef(gomock.Any()).Return(&plan.TableDef{
+		Name: "__idx",
+		Cols: []*plan.ColDef{{Name: "a", Typ: plan.Type{Id: int32(types.T_int64)}, Default: &plan.Default{}}},
+	})
 	rel.EXPECT().GetTableName().Return("orders")
 	rel.EXPECT().GetTableDef(gomock.Any()).Return(&plan.TableDef{
 		Name: "orders",
@@ -519,6 +547,8 @@ func TestHandleDumpTableRejectsUnsupportedSchemas(t *testing.T) {
 	for _, def := range []*plan.TableDef{
 		{Name: "orders", Partition: &plan.Partition{}},
 		{Name: "orders", Cols: []*plan.ColDef{{Typ: plan.Type{AutoIncr: true}}}},
+		{Name: "orders", Fkeys: []*plan.ForeignKeyDef{{Name: "fk_parent"}}},
+		{Name: "orders", RefChildTbls: []uint64{42}},
 	} {
 		t.Run(fmt.Sprintf("%p", def), func(t *testing.T) {
 			ctrl := gomock.NewController(t)
@@ -546,10 +576,12 @@ func TestHandleLoadTableRejectsInvalidFixture(t *testing.T) {
 		writeReady    bool
 		wrongHash     bool
 		emptyTopology bool
+		foreignKey    bool
 	}{
 		{name: "missing-ready"},
 		{name: "schema-mismatch", writeReady: true, wrongHash: true},
 		{name: "topology-mismatch", writeReady: true, emptyTopology: true},
+		{name: "foreign-key", writeReady: true, foreignKey: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctrl := gomock.NewController(t)
@@ -563,6 +595,9 @@ func TestHandleLoadTableRejectsInvalidFixture(t *testing.T) {
 			eng.EXPECT().Database(gomock.Any(), "tpch", gomock.Any()).Return(db, nil).AnyTimes()
 			db.EXPECT().Relation(gomock.Any(), "orders", nil).Return(rel, nil)
 			def := &plan.TableDef{Name: "orders", Cols: []*plan.ColDef{{Name: "a", Typ: plan.Type{Id: int32(types.T_int64)}, Default: &plan.Default{}}}}
+			if tc.foreignKey {
+				def.Fkeys = []*plan.ForeignKeyDef{{Name: "fk_parent"}}
+			}
 			rel.EXPECT().GetTableDef(gomock.Any()).Return(def).AnyTimes()
 			rel.EXPECT().GetTableName().Return("orders").AnyTimes()
 			hash, err := tableSchemaHash(def)
@@ -653,6 +688,36 @@ func TestReadTableDumpManifestRejectsInvalidInput(t *testing.T) {
 	_, err = readTableDumpManifest(ctx, fs)
 	require.Error(t, err)
 	require.Error(t, writeTableDumpJSON(ctx, fs, "bad.json", make(chan int)))
+}
+
+func TestDecodeTableDumpManifestBoundsCollectionsBeforeMaterializing(t *testing.T) {
+	emptyObjects := func(count int) string {
+		var builder strings.Builder
+		builder.Grow(count*3 + 2)
+		builder.WriteByte('[')
+		for i := range count {
+			if i != 0 {
+				builder.WriteByte(',')
+			}
+			builder.WriteString("{}")
+		}
+		builder.WriteByte(']')
+		return builder.String()
+	}
+
+	_, err := decodeTableDumpManifest([]byte(fmt.Sprintf(
+		`{"version":%d,"relations":%s}`,
+		tableDumpFormatVersion,
+		emptyObjects(tableDumpMaxRelations+1),
+	)))
+	require.ErrorContains(t, err, "more than 4096 relations")
+
+	_, err = decodeTableDumpManifest([]byte(fmt.Sprintf(
+		`{"version":%d,"relations":[{"objects":%s}]}`,
+		tableDumpFormatVersion,
+		emptyObjects(tableDumpMaxObjects+1),
+	)))
+	require.ErrorContains(t, err, "more than 250000 objects")
 }
 
 func TestCopyTableDumpFilePrefersObjectCopier(t *testing.T) {

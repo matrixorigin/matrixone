@@ -114,6 +114,48 @@ func TestObjectCopyRejectsIncompatibleEndpoints(t *testing.T) {
 	require.False(t, copied)
 }
 
+func TestObjectCopyRejectsDifferentCredentialDomains(t *testing.T) {
+	left := newObjectStorageCopyCredentialDomain("left-id", "left-secret")
+	right := newObjectStorageCopyCredentialDomain("right-id", "right-secret")
+
+	copied, err := (&AwsSDKv2{
+		endpoint: "https://s3.example.com", copyCredentialDomain: left,
+	}).CopyObject(context.Background(), &AwsSDKv2{
+		endpoint: "https://s3.example.com", copyCredentialDomain: right,
+	}, "src", "dst")
+	require.NoError(t, err)
+	require.False(t, copied)
+
+	copied, err = (&MinioSDK{
+		endpoint: "minio.example.com", copyCredentialDomain: left,
+	}).CopyObject(context.Background(), &MinioSDK{
+		endpoint: "minio.example.com", copyCredentialDomain: right,
+	}, "src", "dst")
+	require.NoError(t, err)
+	require.False(t, copied)
+
+	copied, err = (&AliyunSDK{
+		endpoint: "oss.example.com", copyCredentialDomain: left,
+	}).CopyObject(context.Background(), &AliyunSDK{
+		endpoint: "oss.example.com", copyCredentialDomain: right,
+	}, "src", "dst")
+	require.NoError(t, err)
+	require.False(t, copied)
+
+	copied, err = (&QCloudSDK{copyCredentialDomain: left}).CopyObject(
+		context.Background(), &QCloudSDK{copyCredentialDomain: right}, "src", "dst",
+	)
+	require.NoError(t, err)
+	require.False(t, copied)
+}
+
+func TestObjectStorageCopyCredentialDomain(t *testing.T) {
+	first := newObjectStorageCopyCredentialDomain("id", "secret", "token")
+	require.True(t, first.matches(newObjectStorageCopyCredentialDomain("id", "secret", "token")))
+	require.False(t, first.matches(newObjectStorageCopyCredentialDomain("id", "other", "token")))
+	require.False(t, first.matches(newObjectStorageCopyCredentialDomain("", "", "")))
+}
+
 type readRangeRecordingObjectStorage struct {
 	ObjectStorage
 	mu    sync.Mutex

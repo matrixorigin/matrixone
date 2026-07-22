@@ -41,11 +41,12 @@ import (
 )
 
 type AliyunSDK struct {
-	name            string
-	endpoint        string
-	bucket          *oss.Bucket
-	perfCounterSets []*perfcounter.CounterSet
-	listMaxKeys     int
+	name                 string
+	endpoint             string
+	bucket               *oss.Bucket
+	copyCredentialDomain objectStorageCopyCredentialDomain
+	perfCounterSets      []*perfcounter.CounterSet
+	listMaxKeys          int
 }
 
 var _ objectStorageCopier = new(AliyunSDK)
@@ -57,7 +58,8 @@ func (a *AliyunSDK) CopyObject(
 	dstKey string,
 ) (bool, error) {
 	s, ok := src.(*AliyunSDK)
-	if !ok || !strings.EqualFold(a.endpoint, s.endpoint) {
+	if !ok || !strings.EqualFold(a.endpoint, s.endpoint) ||
+		!a.copyCredentialDomain.matches(s.copyCredentialDomain) {
 		return false, nil
 	}
 	_, err := a.bucket.CopyObjectFrom(s.bucket.BucketName, srcKey, dstKey)
@@ -133,9 +135,12 @@ func NewAliyunSDK(
 	}
 
 	return &AliyunSDK{
-		name:            args.Name,
-		endpoint:        args.Endpoint,
-		bucket:          bucket,
+		name:     args.Name,
+		endpoint: args.Endpoint,
+		bucket:   bucket,
+		copyCredentialDomain: newObjectStorageCopyCredentialDomain(
+			args.KeyID, args.KeySecret, args.SecurityToken, args.RoleARN, args.ExternalID,
+		),
 		perfCounterSets: perfCounterSets,
 	}, nil
 }

@@ -51,6 +51,7 @@ const (
 	tableDumpManifestName  = "manifest.json"
 	tableDumpReadyName     = "READY"
 	tableDumpMaxManifest   = 64 << 20
+	tableDumpMaxRelations  = 4_096
 	tableDumpMaxObjects    = 250_000
 )
 
@@ -190,6 +191,10 @@ func getTableDumpRelations(
 		if err != nil {
 			return nil, err
 		}
+		indexHash, err := tableSchemaHash(indexRel.GetTableDef(ctx))
+		if err != nil {
+			return nil, err
+		}
 		seen[key] = struct{}{}
 		refs = append(refs, tableDumpRelationRef{
 			tableDumpRelation: tableDumpRelation{
@@ -197,6 +202,7 @@ func getTableDumpRelations(
 				IndexName:          index.IndexName,
 				IndexAlgoTableType: index.IndexAlgoTableType,
 				SourceTable:        index.IndexTableName,
+				SchemaHash:         indexHash,
 			},
 			relation: indexRel,
 		})
@@ -267,6 +273,24 @@ func tableSchemaHash(def *plan.TableDef) (string, error) {
 	}
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:]), nil
+}
+
+func validateTableDumpSchema(def *plan.TableDef) error {
+	if def == nil {
+		return moerr.NewInternalErrorNoCtx("table definition is unavailable")
+	}
+	if def.Partition != nil {
+		return moerr.NewNotSupportedNoCtx("DUMP TABLE and LOAD TABLE with partitions")
+	}
+	for _, col := range def.Cols {
+		if col != nil && col.Typ.AutoIncr {
+			return moerr.NewNotSupportedNoCtx("DUMP TABLE and LOAD TABLE with auto-increment columns")
+		}
+	}
+	if len(def.Fkeys) != 0 || len(def.RefChildTbls) != 0 {
+		return moerr.NewNotSupportedNoCtx("DUMP TABLE and LOAD TABLE with foreign key constraints")
+	}
+	return nil
 }
 
 func copyTableDumpFile(ctx context.Context, srcFS, dstFS fileservice.FileService, src, dst string) (int64, string, error) {
@@ -445,23 +469,219 @@ func readTableDumpManifest(ctx context.Context, fs fileservice.FileService) (*ta
 	if err = fs.Read(ctx, vec); err != nil {
 		return nil, err
 	}
-	var manifest tableDumpManifest
-	if err = json.Unmarshal(vec.Entries[0].Data, &manifest); err != nil {
+	manifest, err := decodeTableDumpManifest(vec.Entries[0].Data)
+	if err != nil {
 		return nil, moerr.NewInvalidInputNoCtxf("invalid table dump manifest: %v", err)
 	}
 	if manifest.Version != tableDumpFormatVersion {
 		return nil, moerr.NewInvalidInputNoCtxf("unsupported table dump format version %d", manifest.Version)
 	}
+	return manifest, nil
+}
+
+func decodeTableDumpManifest(data []byte) (*tableDumpManifest, error) {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	start, err := decoder.Token()
+	if err != nil {
+		return nil, err
+	}
+	if start != json.Delim('{') {
+		return nil, moerr.NewInvalidInputNoCtx("table dump manifest must be a JSON object")
+	}
+
+	manifest := new(tableDumpManifest)
+	relationCount := 0
 	objectCount := 0
-	for i := range manifest.Relations {
-		objectCount += len(manifest.Relations[i].Objects)
-		if objectCount > tableDumpMaxObjects {
+	for decoder.More() {
+		name, err := decodeTableDumpFieldName(decoder)
+		if err != nil {
+			return nil, err
+		}
+		switch name {
+		case "version":
+			err = decoder.Decode(&manifest.Version)
+		case "source_database":
+			err = decoder.Decode(&manifest.SourceDatabase)
+		case "source_table":
+			err = decoder.Decode(&manifest.SourceTable)
+		case "create_sql":
+			err = decoder.Decode(&manifest.CreateSQL)
+		case "schema_hash":
+			err = decoder.Decode(&manifest.SchemaHash)
+		case "metadata_only":
+			err = decoder.Decode(&manifest.MetadataOnly)
+		case "relations":
+			manifest.Relations, err = decodeTableDumpRelations(decoder, &relationCount, &objectCount)
+		default:
+			err = skipTableDumpJSONValue(decoder)
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+	if end, err := decoder.Token(); err != nil || end != json.Delim('}') {
+		if err != nil {
+			return nil, err
+		}
+		return nil, moerr.NewInvalidInputNoCtx("invalid table dump manifest object")
+	}
+	if _, err = decoder.Token(); err != io.EOF {
+		if err == nil {
+			return nil, moerr.NewInvalidInputNoCtx("table dump manifest contains trailing JSON data")
+		}
+		return nil, err
+	}
+	return manifest, nil
+}
+
+func decodeTableDumpRelations(decoder *json.Decoder, relationCount, objectCount *int) ([]tableDumpRelation, error) {
+	start, err := decoder.Token()
+	if err != nil {
+		return nil, err
+	}
+	if start == nil {
+		return nil, nil
+	}
+	if start != json.Delim('[') {
+		return nil, moerr.NewInvalidInputNoCtx("table dump relations must be a JSON array")
+	}
+	relations := make([]tableDumpRelation, 0)
+	for decoder.More() {
+		if *relationCount >= tableDumpMaxRelations {
+			return nil, moerr.NewInvalidInputNoCtxf(
+				"table dump contains more than %d relations", tableDumpMaxRelations,
+			)
+		}
+		(*relationCount)++
+		relation, err := decodeTableDumpRelation(decoder, objectCount)
+		if err != nil {
+			return nil, err
+		}
+		relations = append(relations, relation)
+	}
+	if end, err := decoder.Token(); err != nil || end != json.Delim(']') {
+		if err != nil {
+			return nil, err
+		}
+		return nil, moerr.NewInvalidInputNoCtx("invalid table dump relations array")
+	}
+	return relations, nil
+}
+
+func decodeTableDumpRelation(decoder *json.Decoder, objectCount *int) (tableDumpRelation, error) {
+	var relation tableDumpRelation
+	start, err := decoder.Token()
+	if err != nil {
+		return relation, err
+	}
+	if start != json.Delim('{') {
+		return relation, moerr.NewInvalidInputNoCtx("table dump relation must be a JSON object")
+	}
+	for decoder.More() {
+		name, err := decodeTableDumpFieldName(decoder)
+		if err != nil {
+			return relation, err
+		}
+		switch name {
+		case "role":
+			err = decoder.Decode(&relation.Role)
+		case "index_name":
+			err = decoder.Decode(&relation.IndexName)
+		case "index_algo_table_type":
+			err = decoder.Decode(&relation.IndexAlgoTableType)
+		case "source_table":
+			err = decoder.Decode(&relation.SourceTable)
+		case "schema_hash":
+			err = decoder.Decode(&relation.SchemaHash)
+		case "objects":
+			relation.Objects, err = decodeTableDumpObjects(decoder, objectCount)
+		default:
+			err = skipTableDumpJSONValue(decoder)
+		}
+		if err != nil {
+			return relation, err
+		}
+	}
+	if end, err := decoder.Token(); err != nil || end != json.Delim('}') {
+		if err != nil {
+			return relation, err
+		}
+		return relation, moerr.NewInvalidInputNoCtx("invalid table dump relation object")
+	}
+	return relation, nil
+}
+
+func decodeTableDumpObjects(decoder *json.Decoder, objectCount *int) ([]tableDumpObject, error) {
+	start, err := decoder.Token()
+	if err != nil {
+		return nil, err
+	}
+	if start == nil {
+		return nil, nil
+	}
+	if start != json.Delim('[') {
+		return nil, moerr.NewInvalidInputNoCtx("table dump objects must be a JSON array")
+	}
+	objects := make([]tableDumpObject, 0)
+	for decoder.More() {
+		if *objectCount >= tableDumpMaxObjects {
 			return nil, moerr.NewInvalidInputNoCtxf(
 				"table dump contains more than %d objects", tableDumpMaxObjects,
 			)
 		}
+		(*objectCount)++
+		var object tableDumpObject
+		if err = decoder.Decode(&object); err != nil {
+			return nil, err
+		}
+		objects = append(objects, object)
 	}
-	return &manifest, nil
+	if end, err := decoder.Token(); err != nil || end != json.Delim(']') {
+		if err != nil {
+			return nil, err
+		}
+		return nil, moerr.NewInvalidInputNoCtx("invalid table dump objects array")
+	}
+	return objects, nil
+}
+
+func decodeTableDumpFieldName(decoder *json.Decoder) (string, error) {
+	token, err := decoder.Token()
+	if err != nil {
+		return "", err
+	}
+	name, ok := token.(string)
+	if !ok {
+		return "", moerr.NewInvalidInputNoCtx("table dump object field name must be a string")
+	}
+	return name, nil
+}
+
+func skipTableDumpJSONValue(decoder *json.Decoder) error {
+	token, err := decoder.Token()
+	if err != nil {
+		return err
+	}
+	delim, ok := token.(json.Delim)
+	if !ok || (delim != '{' && delim != '[') {
+		return nil
+	}
+	depth := 1
+	for depth > 0 {
+		token, err = decoder.Token()
+		if err != nil {
+			return err
+		}
+		if delim, ok = token.(json.Delim); ok {
+			switch delim {
+			case '{', '[':
+				depth++
+			case '}', ']':
+				depth--
+			}
+		}
+	}
+	return nil
 }
 
 func dumpTableRelationObjects(
@@ -538,16 +758,8 @@ func handleDumpTable(ctx context.Context, ses *Session, stmt *tree.DumpTable) er
 		return err
 	}
 	def := rel.GetTableDef(ctx)
-	if def == nil {
-		return moerr.NewInternalErrorNoCtx("table definition is unavailable")
-	}
-	if def.Partition != nil {
-		return moerr.NewNotSupportedNoCtx("DUMP TABLE with partitions")
-	}
-	for _, col := range def.Cols {
-		if col.Typ.AutoIncr {
-			return moerr.NewNotSupportedNoCtx("DUMP TABLE with auto-increment columns")
-		}
+	if err = validateTableDumpSchema(def); err != nil {
+		return err
 	}
 	schemaHash, err := tableSchemaHash(def)
 	if err != nil {
@@ -776,6 +988,10 @@ func handleLoadTable(ctx context.Context, ses *Session, stmt *tree.LoadTable) (e
 	if err != nil {
 		return err
 	}
+	targetDef := rel.GetTableDef(ctx)
+	if err = validateTableDumpSchema(targetDef); err != nil {
+		return err
+	}
 	dumpFS, closeDumpFS, err := openTableDumpFS(ctx, ses, stmt.Path)
 	if err != nil {
 		return err
@@ -790,7 +1006,7 @@ func handleLoadTable(ctx context.Context, ses *Session, stmt *tree.LoadTable) (e
 			return moerr.NewInvalidInputNoCtx("table dump is incomplete: READY marker is missing")
 		}
 	}
-	targetHash, err := tableSchemaHash(rel.GetTableDef(ctx))
+	targetHash, err := tableSchemaHash(targetDef)
 	if err != nil {
 		return err
 	}

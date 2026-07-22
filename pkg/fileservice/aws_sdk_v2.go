@@ -51,13 +51,14 @@ import (
 )
 
 type AwsSDKv2 struct {
-	name               string
-	endpoint           string
-	bucket             string
-	client             *s3.Client
-	perfCounterSets    []*perfcounter.CounterSet
-	listMaxKeys        int32
-	disableMultiDelete atomic.Bool
+	name                 string
+	endpoint             string
+	bucket               string
+	client               *s3.Client
+	copyCredentialDomain objectStorageCopyCredentialDomain
+	perfCounterSets      []*perfcounter.CounterSet
+	listMaxKeys          int32
+	disableMultiDelete   atomic.Bool
 }
 
 var _ objectStorageCopier = new(AwsSDKv2)
@@ -69,7 +70,8 @@ func (a *AwsSDKv2) CopyObject(
 	dstKey string,
 ) (bool, error) {
 	s, ok := src.(*AwsSDKv2)
-	if !ok || !strings.EqualFold(a.endpoint, s.endpoint) {
+	if !ok || !strings.EqualFold(a.endpoint, s.endpoint) ||
+		!a.copyCredentialDomain.matches(s.copyCredentialDomain) {
 		return false, nil
 	}
 	_, err := a.client.CopyObject(ctx, &s3.CopyObjectInput{
@@ -121,11 +123,16 @@ func NewAwsSDKv2(
 	}
 
 	// validate
+	var copyCredentialDomain objectStorageCopyCredentialDomain
 	if credentialProvider != nil {
-		_, err := credentialProvider.Retrieve(ctx)
+		credential, retrieveErr := credentialProvider.Retrieve(ctx)
+		err = retrieveErr
 		if err != nil {
 			return nil, moerr.AttachCause(ctx, err)
 		}
+		copyCredentialDomain = newObjectStorageCopyCredentialDomain(
+			credential.AccessKeyID, credential.SecretAccessKey, credential.SessionToken,
+		)
 	}
 
 	// load configs
@@ -210,11 +217,12 @@ func NewAwsSDKv2(
 	}
 
 	return &AwsSDKv2{
-		name:            args.Name,
-		endpoint:        args.Endpoint,
-		bucket:          args.Bucket,
-		client:          client,
-		perfCounterSets: perfCounterSets,
+		name:                 args.Name,
+		endpoint:             args.Endpoint,
+		bucket:               args.Bucket,
+		client:               client,
+		copyCredentialDomain: copyCredentialDomain,
+		perfCounterSets:      perfCounterSets,
 	}, nil
 
 }

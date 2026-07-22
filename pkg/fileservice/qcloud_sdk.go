@@ -40,11 +40,12 @@ import (
 )
 
 type QCloudSDK struct {
-	name            string
-	copySourceHost  string
-	client          *cos.Client
-	perfCounterSets []*perfcounter.CounterSet
-	listMaxKeys     int
+	name                 string
+	copySourceHost       string
+	client               *cos.Client
+	copyCredentialDomain objectStorageCopyCredentialDomain
+	perfCounterSets      []*perfcounter.CounterSet
+	listMaxKeys          int
 }
 
 func NewQCloudSDK(
@@ -129,9 +130,12 @@ func NewQCloudSDK(
 	}
 
 	return &QCloudSDK{
-		name:            args.Name,
-		copySourceHost:  baseURL.Host,
-		client:          client,
+		name:           args.Name,
+		copySourceHost: baseURL.Host,
+		client:         client,
+		copyCredentialDomain: newObjectStorageCopyCredentialDomain(
+			keyID, keySecret, sessionToken,
+		),
 		perfCounterSets: perfCounterSets,
 	}, nil
 }
@@ -145,7 +149,7 @@ func (a *QCloudSDK) CopyObject(
 	dstKey string,
 ) (bool, error) {
 	s, ok := src.(*QCloudSDK)
-	if !ok {
+	if !ok || !a.copyCredentialDomain.matches(s.copyCredentialDomain) {
 		return false, nil
 	}
 	_, _, err := a.client.Object.Copy(ctx, dstKey, s.copySourceHost+"/"+srcKey, nil)
