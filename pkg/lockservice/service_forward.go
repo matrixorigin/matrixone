@@ -52,7 +52,7 @@ func (s *service) forwardLock(
 
 	req.Method = pb.Method_ForwardLock
 	req.LockTable = l.getBind()
-	req.Lock.Options = opts
+	req.Lock.Options = carryEarlierContextDeadline(ctx, opts)
 	req.Lock.TxnID = txnID
 	req.Lock.ServiceID = s.serviceID
 	req.Lock.Rows = rows

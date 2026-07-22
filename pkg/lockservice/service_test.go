@@ -4751,8 +4751,37 @@ func TestRowLockWithConflictAndUnlock(t *testing.T) {
 			require.NoError(t, s.Unlock(ctx, txn2, timestamp.Timestamp{}))
 
 			<-c
-			checkLock(t, lt, rows[0], [][]byte{txn1}, [][]byte{txn2}, []int32{1})
+			checkLock(t, lt, rows[0], [][]byte{txn1}, nil, nil)
 			require.NoError(t, s.Unlock(ctx, txn1, timestamp.Timestamp{}))
+		})
+}
+
+func TestRangeLockWaitTimeoutRemovesWaiterImmediately(t *testing.T) {
+	table := uint64(0)
+	getRunner(false)(
+		t,
+		table,
+		func(
+			ctx context.Context,
+			s *service,
+			lt *localLockTable) {
+			holderRows := newTestRows(1, 10)
+			waiterRows := newTestRows(2, 3)
+			holderTxn := newTestTxnID(1)
+			waiterTxn := newTestTxnID(2)
+
+			_, err := s.Lock(ctx, table, holderRows, holderTxn, newTestRangeExclusiveOptions())
+			require.NoError(t, err)
+
+			options := newTestRangeExclusiveOptions()
+			options.LockWaitTimeout = 60
+			options.LockWaitDeadline = time.Now().Add(100 * time.Millisecond).UnixNano()
+			_, err = s.Lock(ctx, table, waiterRows, waiterTxn, options)
+			require.ErrorIs(t, err, ErrLockTimeout)
+
+			checkLock(t, lt, holderRows[0], [][]byte{holderTxn}, nil, nil)
+			require.NoError(t, s.Unlock(ctx, waiterTxn, timestamp.Timestamp{}))
+			require.NoError(t, s.Unlock(ctx, holderTxn, timestamp.Timestamp{}))
 		})
 }
 
@@ -5517,14 +5546,16 @@ func TestLockWaitTimeoutExpiredDeadlineFailsBeforeQueueAdmission(t *testing.T) {
 }
 
 func TestLockWaitTimeoutExpiresDuringServiceAdmission(t *testing.T) {
-	var once sync.Once
+	ready := make(chan struct{})
+	defer close(ready)
 	runLockServiceTests(
 		t,
 		[]string{"s1"},
 		func(_ *lockTableAllocator, services []*service) {
 			options := newTestRowExclusiveOptions()
 			options.LockWaitTimeout = 60
-			options.LockWaitDeadline = time.Now().Add(10 * time.Millisecond).UnixNano()
+			options.LockWaitDeadline = time.Now().Add(100 * time.Millisecond).UnixNano()
+			start := time.Now()
 			_, err := services[0].Lock(
 				context.Background(),
 				0,
@@ -5532,10 +5563,89 @@ func TestLockWaitTimeoutExpiresDuringServiceAdmission(t *testing.T) {
 				[]byte("waiter"),
 				options)
 			require.ErrorIs(t, err, ErrLockTimeout)
+			require.Less(t, time.Since(start), time.Second,
+				"readiness must not have to open before the lock budget can expire")
 		},
-		WithWait(func() {
-			once.Do(func() { time.Sleep(50 * time.Millisecond) })
+		WithWait(func(ctx context.Context) error {
+			select {
+			case <-ready:
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
+			}
 		}),
+	)
+}
+
+func TestLockWaitTimeoutExpiresWhileWaitingForLocalTableMutex(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(_ *lockTableAllocator, services []*service) {
+			s := services[0]
+			const tableID = uint64(24918)
+			l, err := s.getLockTableWithCreate(0, tableID, nil, pb.Sharding_None)
+			require.NoError(t, err)
+			local := l.(*localLockTable)
+
+			entered := make(chan struct{})
+			var enteredOnce sync.Once
+			local.options.beforeAcquire = func(*lockContext) {
+				enteredOnce.Do(func() { close(entered) })
+			}
+			defer func() { local.options.beforeAcquire = nil }()
+
+			local.mu.Lock()
+			mutexReleased := false
+			defer func() {
+				if !mutexReleased {
+					local.mu.Unlock()
+				}
+			}()
+
+			deadline := time.Now().Add(100 * time.Millisecond)
+			options := newTestRowExclusiveOptions()
+			options.LockWaitTimeout = 60
+			options.LockWaitDeadline = deadline.UnixNano()
+			resultC := make(chan error, 1)
+			go func() {
+				_, err := s.Lock(
+					context.Background(),
+					tableID,
+					[][]byte{{1}},
+					[]byte("local-mutex-waiter"),
+					options)
+				resultC <- err
+			}()
+
+			select {
+			case <-entered:
+			case <-time.After(time.Second):
+				require.FailNow(t, "lock request did not reach local-table admission")
+			}
+			if wait := time.Until(deadline.Add(20 * time.Millisecond)); wait > 0 {
+				timer := time.NewTimer(wait)
+				<-timer.C
+			}
+			local.mu.Unlock()
+			mutexReleased = true
+
+			select {
+			case err := <-resultC:
+				require.ErrorIs(t, err, ErrLockTimeout)
+			case <-time.After(time.Second):
+				require.FailNow(t, "expired request did not leave local-table admission")
+			}
+
+			local.mu.RLock()
+			_, acquired := local.mu.store.Get([]byte{1})
+			local.mu.RUnlock()
+			require.False(t, acquired, "an expired uncontended request must not acquire the row")
+			require.NoError(t, s.Unlock(
+				context.Background(),
+				[]byte("local-mutex-waiter"),
+				timestamp.Timestamp{}))
+		},
 	)
 }
 

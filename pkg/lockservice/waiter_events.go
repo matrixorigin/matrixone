@@ -79,7 +79,7 @@ func (l *localLockTable) newLockContext(
 	// Compute the deadline for both sync and async paths. Once an absolute
 	// LockWaitDeadline crosses a service/RPC boundary it is authoritative; no
 	// later hop may restart it from the rounded relative timeout.
-	c.lockWaitDeadline, c.lockWaitTimeoutErr = getLockWaitDeadline(c.createAt, opts)
+	c.lockWaitDeadline, c.lockWaitTimeoutErr = getLockWaitDeadline(c.createAt, ctx, opts)
 	return c
 }
 
@@ -117,7 +117,26 @@ func (c *lockContext) getLockWaitTimeoutErr() error {
 	return ErrLockTimeout
 }
 
-func getLockWaitDeadline(createAt time.Time, opts LockOptions) (time.Time, error) {
+// checkLockWaitDeadline is the final admission guard used while the local lock
+// table mutex is held. No row/range ownership may be mutated after it fails.
+func (c *lockContext) checkLockWaitDeadline() error {
+	if err := c.ctx.Err(); err != nil {
+		if cause := context.Cause(c.ctx); cause != nil {
+			return cause
+		}
+		return err
+	}
+	if !c.lockWaitDeadline.IsZero() && !time.Now().Before(c.lockWaitDeadline) {
+		return c.getLockWaitTimeoutErr()
+	}
+	return nil
+}
+
+func getLockWaitDeadline(
+	createAt time.Time,
+	ctx context.Context,
+	opts LockOptions,
+) (time.Time, error) {
 	var (
 		deadline time.Time
 		err      error
@@ -137,6 +156,19 @@ func getLockWaitDeadline(createAt time.Time, opts LockOptions) (time.Time, error
 		if deadline.IsZero() || remoteDeadline.Before(deadline) {
 			deadline = remoteDeadline
 			err = ErrRemoteLockWaitTimeout
+		}
+	}
+	// An async owner does not block in waiter.wait(ctx), so its timer must also
+	// consume an earlier MORPC request deadline. Otherwise the origin can leave
+	// while the owner retains and may later promote an abandoned waiter.
+	if ctx != nil {
+		if ctxDeadline, ok := ctx.Deadline(); ok &&
+			(deadline.IsZero() || ctxDeadline.Before(deadline)) {
+			deadline = ctxDeadline
+			err = context.DeadlineExceeded
+			if ctx.Err() != nil {
+				err = context.Cause(ctx)
+			}
 		}
 	}
 	return deadline, err
