@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -584,7 +585,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		}
 
 		tag := node.BindingTags[0]
-		newTableDef := DeepCopyTableDef(node.TableDef, false)
+		newTableDef := CloneTableDefForPlan(node.TableDef, false)
 
 		for i, col := range node.TableDef.Cols {
 			globalRef := [2]int32{tag, int32(i)}
@@ -594,14 +595,14 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 
 			internalRemapping.addColRef(globalRef)
 
-			newTableDef.Cols = append(newTableDef.Cols, DeepCopyColDef(col))
+			newTableDef.Cols = append(newTableDef.Cols, col)
 		}
 
 		if remapping.preserveRowCount && len(newTableDef.Cols) == 0 {
 			carrier := chooseTableRowCarrier(node.NodeType, node.TableDef.Cols)
 			if carrier >= 0 {
 				internalRemapping.addColRef([2]int32{tag, int32(carrier)})
-				newTableDef.Cols = append(newTableDef.Cols, DeepCopyColDef(node.TableDef.Cols[carrier]))
+				newTableDef.Cols = append(newTableDef.Cols, node.TableDef.Cols[carrier])
 			}
 		}
 
@@ -708,7 +709,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		}
 
 		colTag := node.BindingTags[0]
-		newTableDef := DeepCopyTableDef(node.TableDef, false)
+		newTableDef := CloneTableDefForPlan(node.TableDef, false)
 
 		for i, col := range node.TableDef.Cols {
 			globalRef := [2]int32{colTag, int32(i)}
@@ -717,7 +718,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			}
 
 			internalRemapping.addColRef(globalRef)
-			newTableDef.Cols = append(newTableDef.Cols, DeepCopyColDef(col))
+			newTableDef.Cols = append(newTableDef.Cols, col)
 		}
 
 		if len(node.BindingTags) > 1 {
@@ -730,7 +731,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			carrier := chooseTableRowCarrier(node.NodeType, node.TableDef.Cols)
 			if carrier >= 0 {
 				internalRemapping.addColRef([2]int32{colTag, int32(carrier)})
-				newTableDef.Cols = append(newTableDef.Cols, DeepCopyColDef(node.TableDef.Cols[carrier]))
+				newTableDef.Cols = append(newTableDef.Cols, node.TableDef.Cols[carrier])
 			}
 		}
 
@@ -1499,126 +1500,171 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		}
 
 	case plan.Node_TIME_WINDOW:
-		for _, expr := range node.AggList {
+		timeTag := node.BindingTags[0]
+
+		// Decide what survives before touching colRefCnt: a `_wstart`/`_wend`
+		// entry of AggList is a column reference to its own {timeTag, k}, so
+		// counting the AggList as a consumer would make every boundary look
+		// referenced by itself.
+		retained := make([]bool, len(node.AggList))
+		anyRetained := false
+		for k, expr := range node.AggList {
+			if colRefCnt[[2]int32{timeTag, int32(k)}] > 0 || !exprCanRemoveProject(expr) {
+				retained[k] = true
+				anyRetained = true
+			}
+		}
+		// calRes sizes the output off Vecs[0], so the operator cannot emit a
+		// zero-column batch, and the window count is the row count an outer
+		// constant projection still depends on. Keep one carrier: a boundary
+		// first, since it runs no aggregate.
+		if !anyRetained && len(node.AggList) > 0 {
+			carrier := 0
+			for k, expr := range node.AggList {
+				if isBoundary, _ := isTimeWindowBoundary(expr); isBoundary {
+					carrier = k
+					break
+				}
+			}
+			retained[carrier] = true
+		}
+
+		// The partition keys decide which rows share a window, so they are
+		// never pruned: dropping one would merge groups that must stay apart.
+		// Record where each one came from before remapping rewrites it to a
+		// child-local reference.
+		partitionSrc := make([]int32, len(node.TimeWindowPartitionBy))
+		for p, expr := range node.TimeWindowPartitionBy {
+			partitionSrc[p] = -1
+			if col := expr.GetCol(); col != nil {
+				partitionSrc[p] = col.ColPos
+			}
+		}
+
+		// Only retained aggregates consume child columns. Withholding the
+		// pruned ones here is what lets the child AGG drop their inputs too.
+		for k, expr := range node.AggList {
+			if isBoundary, _ := isTimeWindowBoundary(expr); isBoundary || !retained[k] {
+				continue
+			}
 			increaseRefCnt(expr, 1, colRefCnt)
 		}
-		increaseRefCnt(node.OrderBy[0].Expr, 1, colRefCnt)
+		increaseRefCnt(node.GroupBy[0], 1, colRefCnt)
+		for _, orderBy := range node.OrderBy {
+			increaseRefCnt(orderBy.Expr, 1, colRefCnt)
+		}
+		for _, expr := range node.TimeWindowPartitionBy {
+			increaseRefCnt(expr, 1, colRefCnt)
+		}
 
 		childRemapping, err := builder.remapAllColRefs(node.Children[0], step, colRefCnt, colRefBool, sinkColRef)
 		if err != nil {
 			return nil, err
 		}
 
-		timeTag := node.BindingTags[0]
-		groupTag := node.BindingTags[1]
-
-		// order by
-		idx := 0
-		increaseRefCnt(node.OrderBy[0].Expr, -1, colRefCnt)
-		remapInfo.tip = "OrderBy[0].Expr"
+		increaseRefCnt(node.GroupBy[0], -1, colRefCnt)
+		remapInfo.tip = "GroupBy[0]"
 		remapInfo.srcExprIdx = 0
-		err = builder.remapColRefForExpr(node.OrderBy[0].Expr, childRemapping.globalToLocal, &remapInfo)
+		err = builder.remapColRefForExpr(node.GroupBy[0], childRemapping.globalToLocal, &remapInfo)
 		if err != nil {
 			return nil, err
 		}
-		globalRef := [2]int32{groupTag, int32(0)}
-		if colRefCnt[globalRef] != 0 {
-			remapping.addColRef(globalRef)
 
-			node.ProjectList = append(node.ProjectList, &plan.Expr{
-				Typ: node.OrderBy[0].Expr.Typ,
-				Expr: &plan.Expr_Col{
-					Col: &ColRef{
-						RelPos: -1,
-						ColPos: int32(idx),
-						Name:   builder.nameByColRef[globalRef],
-					},
-				},
-			})
-			idx++
+		remapInfo.tip = "OrderBy"
+		for idx, orderBy := range node.OrderBy {
+			increaseRefCnt(orderBy.Expr, -1, colRefCnt)
+			remapInfo.srcExprIdx = idx
+			err = builder.remapColRefForExpr(orderBy.Expr, childRemapping.globalToLocal, &remapInfo)
+			if err != nil {
+				return nil, err
+			}
 		}
 
-		var wstart, wend *plan.Expr
-		var i, j int
-		remapInfo.tip = "AggList"
-		for k, expr := range node.AggList {
-			if e, ok := expr.Expr.(*plan.Expr_Col); ok {
-				if e.Col.Name == TimeWindowStart {
-					wstart = expr
-					i = k
-				}
-				if e.Col.Name == TimeWindowEnd {
-					wend = expr
-					j = k
-				}
-				continue
-			}
+		remapInfo.tip = "TimeWindowPartitionBy"
+		for idx, expr := range node.TimeWindowPartitionBy {
 			increaseRefCnt(expr, -1, colRefCnt)
-			remapInfo.srcExprIdx = k
+			remapInfo.srcExprIdx = idx
 			err = builder.remapColRefForExpr(expr, childRemapping.globalToLocal, &remapInfo)
 			if err != nil {
 				return nil, err
 			}
+		}
 
-			globalRef := [2]int32{timeTag, int32(k)}
+		remapInfo.tip = "AggList"
+		newAggList := make([]*plan.Expr, 0, len(node.AggList))
+		// The outer query still addresses these values by their original
+		// AggList position, so keep the compacted index's origin.
+		newToOld := make([]int32, 0, len(node.AggList))
+		for k, expr := range node.AggList {
+			if !retained[k] {
+				continue
+			}
+			if isBoundary, _ := isTimeWindowBoundary(expr); !isBoundary {
+				increaseRefCnt(expr, -1, colRefCnt)
+				remapInfo.srcExprIdx = k
+				err = builder.remapColRefForExpr(expr, childRemapping.globalToLocal, &remapInfo)
+				if err != nil {
+					return nil, err
+				}
+			}
+			newAggList = append(newAggList, expr)
+			newToOld = append(newToOld, int32(k))
+		}
+		node.AggList = newAggList
+
+		// Address slots through the same layout the operator is built from,
+		// and emit in slot order so the aggregates stay a prefix -- FILL reads
+		// this projection positionally.
+		layout := BuildTimeWindowLayout(node)
+		for slot := int32(0); slot < layout.ColCnt; slot++ {
+			for k, expr := range node.AggList {
+				if layout.Slot[k] != slot {
+					continue
+				}
+				globalRef := [2]int32{timeTag, newToOld[k]}
+				if colRefCnt[globalRef] == 0 {
+					continue
+				}
+				remapping.addColRef(globalRef)
+
+				typ := expr.Typ
+				if isBoundary, _ := isTimeWindowBoundary(expr); isBoundary {
+					typ = node.Timestamp.Typ
+				}
+				node.ProjectList = append(node.ProjectList, &plan.Expr{
+					Typ: typ,
+					Expr: &plan.Expr_Col{
+						Col: &ColRef{
+							RelPos: -1,
+							ColPos: slot,
+							Name:   builder.nameByColRef[globalRef],
+						},
+					},
+				})
+			}
+		}
+
+		// Partition keys are carried through so a GROUP BY column stays
+		// selectable next to the window's aggregates. The operator always
+		// evaluates them to find its boundaries, so only their output is
+		// optional.
+		groupTag := node.BindingTags[1]
+		for p, slot := range layout.PartitionSlot {
+			if partitionSrc[p] < 0 {
+				continue
+			}
+			globalRef := [2]int32{groupTag, partitionSrc[p]}
 			if colRefCnt[globalRef] == 0 {
 				continue
 			}
-
 			remapping.addColRef(globalRef)
 
 			node.ProjectList = append(node.ProjectList, &plan.Expr{
-				Typ: expr.Typ,
+				Typ: node.TimeWindowPartitionBy[p].Typ,
 				Expr: &plan.Expr_Col{
 					Col: &ColRef{
 						RelPos: -1,
-						ColPos: int32(idx),
-						Name:   builder.nameByColRef[globalRef],
-					},
-				},
-			})
-			idx++
-		}
-
-		if wstart != nil {
-			increaseRefCnt(wstart, -1, colRefCnt)
-
-			globalRef := [2]int32{timeTag, int32(i)}
-			if colRefCnt[globalRef] == 0 {
-				break
-			}
-
-			remapping.addColRef(globalRef)
-
-			node.ProjectList = append(node.ProjectList, &plan.Expr{
-				Typ: node.Timestamp.Typ,
-				Expr: &plan.Expr_Col{
-					Col: &ColRef{
-						RelPos: -1,
-						ColPos: int32(idx),
-						Name:   builder.nameByColRef[globalRef],
-					},
-				},
-			})
-			idx++
-		}
-
-		if wend != nil {
-			increaseRefCnt(wend, -1, colRefCnt)
-
-			globalRef := [2]int32{timeTag, int32(j)}
-			if colRefCnt[globalRef] == 0 {
-				break
-			}
-
-			remapping.addColRef(globalRef)
-
-			node.ProjectList = append(node.ProjectList, &plan.Expr{
-				Typ: node.Timestamp.Typ,
-				Expr: &plan.Expr_Col{
-					Col: &ColRef{
-						RelPos: -1,
-						ColPos: int32(idx),
+						ColPos: slot,
 						Name:   builder.nameByColRef[globalRef],
 					},
 				},
@@ -1785,6 +1831,76 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 
 	case plan.Node_FILL:
 
+		// The fill operator addresses its input positionally: it fills
+		// Vecs[0..ColLen), which must line up with the aggregates the child
+		// TIME_WINDOW projects. That child prunes the aggregates the outer
+		// query does not reference, so drop the matching fill columns here or
+		// the operator walks off the end of the batch.
+		//
+		// The decision has to be made before the FillVal refcounts below,
+		// because fill(linear) builds its FillVal out of references to those
+		// very aggregates and would otherwise keep every one of them alive.
+		var sideEffectRefs [][2]int32
+		// fill(prev/next/linear) must not carry values across a partition
+		// boundary, so the operator needs the partition keys in its input.
+		// Force the child window to project them -- the count is dropped after
+		// the child is remapped, exactly like the side-effect refs below -- and
+		// resolve their positions once the child's projection exists.
+		var fillPartitionRefs [][2]int32
+		child := builder.qry.Nodes[node.Children[0]]
+		fillNeedsPartitions := node.FillType == plan.Node_PREV ||
+			node.FillType == plan.Node_NEXT || node.FillType == plan.Node_LINEAR
+		if child.NodeType == plan.Node_TIME_WINDOW && len(child.TimeWindowPartitionBy) > 0 && fillNeedsPartitions {
+			childGroupTag := child.BindingTags[1]
+			for _, expr := range child.TimeWindowPartitionBy {
+				if col := expr.GetCol(); col != nil {
+					ref := [2]int32{childGroupTag, col.ColPos}
+					colRefCnt[ref]++
+					fillPartitionRefs = append(fillPartitionRefs, ref)
+				}
+			}
+		}
+		if child.NodeType == plan.Node_TIME_WINDOW && len(node.AggList) > 0 {
+			timeTag := child.BindingTags[0]
+			childLayout := BuildTimeWindowLayout(child)
+
+			newAggList := node.AggList[:0]
+			newFillVal := node.FillVal[:0]
+			for i := range node.AggList {
+				if i >= len(childLayout.AggIdx) {
+					break
+				}
+				// node.AggList[i] is the i'th real aggregate of the child's
+				// AggList: both were built from the same ctx.times, skipping
+				// the `_wstart`/`_wend` carriers.
+				if colRefCnt[[2]int32{timeTag, childLayout.AggIdx[i]}] == 0 {
+					// A side-effecting fill value (e.g. fill(value, sleep(1)))
+					// is observable even when the filled column is discarded.
+					// Keep the column and register this node as its consumer,
+					// so the child window retains the matching aggregate slot.
+					// The count is released after the child is remapped: no
+					// one above reads the column, so FILL must not project it.
+					if i < len(node.FillVal) && !exprCanRemoveProject(node.FillVal[i]) {
+						ref := [2]int32{timeTag, childLayout.AggIdx[i]}
+						colRefCnt[ref]++
+						sideEffectRefs = append(sideEffectRefs, ref)
+					} else {
+						continue
+					}
+				}
+				newAggList = append(newAggList, node.AggList[i])
+				if i < len(node.FillVal) {
+					newFillVal = append(newFillVal, node.FillVal[i])
+				}
+			}
+			clear(node.AggList[len(newAggList):])
+			node.AggList = newAggList
+			if node.FillVal != nil {
+				clear(node.FillVal[len(newFillVal):])
+				node.FillVal = newFillVal
+			}
+		}
+
 		for _, expr := range node.FillVal {
 			increaseRefCnt(expr, 1, colRefCnt)
 		}
@@ -1792,6 +1908,19 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		childRemapping, err := builder.remapAllColRefs(node.Children[0], step, colRefCnt, colRefBool, sinkColRef)
 		if err != nil {
 			return nil, err
+		}
+		for _, ref := range sideEffectRefs {
+			colRefCnt[ref]--
+		}
+		node.TimeWindowPartitionColPos = node.TimeWindowPartitionColPos[:0]
+		for _, ref := range fillPartitionRefs {
+			colRefCnt[ref]--
+			localRef, ok := childRemapping.globalToLocal[ref]
+			if !ok {
+				return nil, moerr.NewInternalError(builder.GetContext(),
+					"fill: partition key missing from the time window's projection")
+			}
+			node.TimeWindowPartitionColPos = append(node.TimeWindowPartitionColPos, localRef[1])
 		}
 
 		for _, expr := range node.FillVal {
@@ -2620,6 +2749,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		builder.optimizeDistinctAgg(rootID)
 		ReCalcNodeStats(rootID, builder, true, false, true)
 		builder.determineBuildAndProbeSide(rootID, true)
+		builder.disableMemoryUnsafeRightDedup(rootID)
 
 		builder.qry.Steps[i] = rootID
 
@@ -3639,6 +3769,18 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 	// FIXME: delete this when SINGLE join is ready
 	if len(ctx.groups) == 0 && len(ctx.aggregates) > 0 {
 		ctx.hasSingleRow = true
+	}
+
+	// Flatten aggregate argument subqueries before adding any physical ordering
+	// required by ordered aggregates. The resulting joins may not preserve their
+	// input order (for example when a hash join spills), so the Sort must remain
+	// above those joins and directly below the AGG node.
+	if !ctx.sampleFunc.hasSampleFunc && !ctx.bindingRecurStmt() {
+		for i, agg := range ctx.aggregates {
+			if nodeID, ctx.aggregates[i], err = builder.flattenSubqueries(nodeID, agg, ctx); err != nil {
+				return
+			}
+		}
 	}
 
 	// For group_concat with ORDER BY, we need to sort the data before aggregation.
@@ -4894,8 +5036,11 @@ func (builder *QueryBuilder) bindTimeWindow(
 		}
 	}
 
+	// Copy rather than alias the group expression: remapping walks OrderBy and
+	// GroupBy separately, and rewriting one shared pointer twice would resolve
+	// an already-local column reference a second time.
 	boundTimeWindowOrderBy = &plan.OrderBySpec{
-		Expr: timeWindowGroup,
+		Expr: DeepCopyExpr(timeWindowGroup),
 		Flag: plan.OrderBySpec_INTERNAL | plan.OrderBySpec_ASC | plan.OrderBySpec_NULLS_FIRST,
 	}
 
@@ -5312,17 +5457,49 @@ func (builder *QueryBuilder) appendTimeWindowNode(
 		return
 	}
 
+	// A GROUP BY alongside the window puts extra keys in ctx.groups next to the
+	// window's own truncated timestamp. Those keys partition the window: each
+	// group gets its own window sequence rather than one stream shared by all.
+	// Ordering by them first is what makes each partition contiguous for the
+	// operator.
+	var partitionBy []*plan.Expr
+	orderBy := []*plan.OrderBySpec{boundTimeWindowOrderBy}
+	if tsCol := boundTimeWindowGroupBy.GetCol(); tsCol != nil {
+		partitionOrderBy := make([]*plan.OrderBySpec, 0, len(ctx.groups))
+		for i := range ctx.groups {
+			if int32(i) == tsCol.ColPos {
+				continue
+			}
+			partitionCol := &plan.Expr{
+				Typ: ctx.groups[i].Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: ctx.groupTag,
+						ColPos: int32(i),
+					},
+				},
+			}
+			partitionBy = append(partitionBy, partitionCol)
+			partitionOrderBy = append(partitionOrderBy, &plan.OrderBySpec{
+				Expr: DeepCopyExpr(partitionCol),
+				Flag: plan.OrderBySpec_INTERNAL | plan.OrderBySpec_ASC | plan.OrderBySpec_NULLS_FIRST,
+			})
+		}
+		orderBy = append(partitionOrderBy, orderBy...)
+	}
+
 	nodeID = builder.appendNode(&plan.Node{
-		NodeType:    plan.Node_TIME_WINDOW,
-		Children:    []int32{nodeID},
-		AggList:     ctx.times,
-		BindingTags: []int32{ctx.timeTag, ctx.groupTag},
-		OrderBy:     []*plan.OrderBySpec{boundTimeWindowOrderBy},
-		Interval:    interval,
-		Sliding:     sliding,
-		GroupBy:     []*plan.Expr{boundTimeWindowGroupBy},
-		Timestamp:   ts,
-		WEnd:        wEnd,
+		NodeType:              plan.Node_TIME_WINDOW,
+		Children:              []int32{nodeID},
+		AggList:               ctx.times,
+		BindingTags:           []int32{ctx.timeTag, ctx.groupTag},
+		OrderBy:               orderBy,
+		Interval:              interval,
+		Sliding:               sliding,
+		GroupBy:               []*plan.Expr{boundTimeWindowGroupBy},
+		TimeWindowPartitionBy: partitionBy,
+		Timestamp:             ts,
+		WEnd:                  wEnd,
 	}, ctx)
 
 	for name, id := range ctx.timeByAst {
@@ -6195,6 +6372,9 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 		}
 
 		if tbl.AtTsExpr != nil {
+			if tbl.IcebergRef != nil {
+				return 0, moerr.NewInvalidInput(builder.GetContext(), "cannot combine MO snapshot hint with FOR ICEBERG time travel")
+			}
 			old := ctx.snapshot
 			defer func() {
 				ctx.snapshot = old
@@ -6259,19 +6439,45 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 		var externScan *plan.ExternScan
 		if tableDef.TableType == catalog.SystemExternalRel {
 			nodeType = plan.Node_EXTERNAL_SCAN
+			externType := plan.ExternType_EXTERNAL_TB
+			var icebergEnv sqliceberg.CreateSQLEnvelope
+			if env, found, err := sqliceberg.ParseCreateSQLEnvelope(builder.GetContext(), tableDef.Createsql); err != nil {
+				return 0, err
+			} else if found {
+				icebergEnv = env
+				externType = plan.ExternType_ICEBERG_TB
+			}
 			externScan = &plan.ExternScan{
-				Type:           int32(plan.ExternType_EXTERNAL_TB),
+				Type:           int32(externType),
 				TbColToDataCol: tbColToDataCol,
 			}
-			col := &ColDef{
-				Name: catalog.ExternalFilePath,
-				Typ: plan.Type{
-					Id:    int32(types.T_varchar),
-					Width: types.MaxVarcharLen,
-					Table: table,
-				},
+			if externType == plan.ExternType_ICEBERG_TB {
+				icebergScan := &plan.IcebergScan{
+					MappingId: uint64(obj.Obj),
+					CatalogId: icebergEnv.CatalogID,
+					Namespace: icebergEnv.Namespace,
+					Table:     icebergEnv.Table,
+					Ref:       icebergEnv.DefaultRef,
+					ReadMode:  icebergEnv.ReadMode,
+				}
+				if err = builder.applyIcebergRefToScan(icebergScan, tbl.IcebergRef); err != nil {
+					return 0, err
+				}
+				externScan.IcebergScan = icebergScan
+			} else if tbl.IcebergRef != nil {
+				return 0, moerr.NewInvalidInput(builder.GetContext(), "FOR ICEBERG requires an Iceberg external table")
 			}
-			tableDef.Cols = append(tableDef.Cols, col)
+			if externType == plan.ExternType_EXTERNAL_TB {
+				col := &ColDef{
+					Name: catalog.ExternalFilePath,
+					Typ: plan.Type{
+						Id:    int32(types.T_varchar),
+						Width: types.MaxVarcharLen,
+						Table: table,
+					},
+				}
+				tableDef.Cols = append(tableDef.Cols, col)
+			}
 		} else if tableDef.TableType == catalog.SystemSourceRel {
 			nodeType = plan.Node_SOURCE_SCAN
 		} else if tableDef.TableType == catalog.SystemViewRel {
@@ -6288,6 +6494,8 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 			if nodeID != 0 {
 				return nodeID, nil
 			}
+		} else if tbl.IcebergRef != nil {
+			return 0, moerr.NewInvalidInput(builder.GetContext(), "FOR ICEBERG requires an Iceberg external table")
 		}
 
 		nodeID = builder.appendNode(&plan.Node{
@@ -6830,7 +7038,7 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 	case "unnest":
 		nodeId, err = builder.buildUnnest(tbl, ctx, exprs, children)
 	case "generate_series":
-		nodeId = builder.buildGenerateSeries(tbl, ctx, exprs, children)
+		nodeId, err = builder.buildGenerateSeries(tbl, ctx, exprs, children)
 	case "generate_random_int64":
 		nodeId = builder.buildGenerateRandomInt64(tbl, ctx, exprs, children)
 	case "generate_random_float64":
@@ -7074,6 +7282,86 @@ func (builder *QueryBuilder) ResolveTsHint(tsExpr *tree.AtTimeStamp) (snapshot *
 	}
 
 	return
+}
+
+func (builder *QueryBuilder) applyIcebergRefToScan(scan *plan.IcebergScan, ref *tree.IcebergRefSpec) error {
+	if scan == nil || ref == nil || ref.Type == tree.IcebergRefNone {
+		return nil
+	}
+
+	switch ref.Type {
+	case tree.IcebergRefSnapshot:
+		snapshotID, err := parseIcebergSnapshotID(builder.GetContext(), ref.Snapshot)
+		if err != nil {
+			return err
+		}
+		scan.SnapshotId = snapshotID
+	case tree.IcebergRefTimestamp:
+		timestampMS, err := builder.parseIcebergTimestampAsOfMS(ref.Timestamp)
+		if err != nil {
+			return err
+		}
+		scan.TimestampAsOf = timestampMS
+	case tree.IcebergRefNamedRef:
+		refName := string(ref.RefName)
+		if refName == "" {
+			return moerr.NewInvalidInput(builder.GetContext(), "FOR ICEBERG REF requires a ref name")
+		}
+		scan.Ref = refName
+	default:
+		return moerr.NewInvalidInput(builder.GetContext(), "unknown FOR ICEBERG ref type")
+	}
+	return nil
+}
+
+func parseIcebergSnapshotID(ctx context.Context, expr tree.Expr) (int64, error) {
+	raw, err := icebergRefLiteralText(ctx, expr, "snapshot")
+	if err != nil {
+		return 0, err
+	}
+	snapshotID, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || snapshotID <= 0 {
+		return 0, moerr.NewInvalidInputf(ctx, "FOR ICEBERG SNAPSHOT requires a positive int64 snapshot id: %s", raw)
+	}
+	return snapshotID, nil
+}
+
+func (builder *QueryBuilder) parseIcebergTimestampAsOfMS(expr tree.Expr) (int64, error) {
+	raw, err := icebergRefLiteralText(builder.GetContext(), expr, "timestamp")
+	if err != nil {
+		return 0, err
+	}
+
+	loc := time.UTC
+	if proc := builder.compCtx.GetProcess(); proc != nil && proc.GetSessionInfo() != nil && proc.GetSessionInfo().TimeZone != nil {
+		loc = proc.GetSessionInfo().TimeZone
+	}
+	ts, err := types.ParseTimestamp(loc, raw, 6)
+	if err != nil {
+		return 0, moerr.NewInvalidInputf(builder.GetContext(), "invalid FOR ICEBERG TIMESTAMP AS OF value: %s", raw)
+	}
+	epochMicros := int64(ts) - int64(types.UnixToTimestamp(0))
+	if epochMicros < 0 {
+		return 0, moerr.NewInvalidInputf(builder.GetContext(), "FOR ICEBERG TIMESTAMP AS OF must be at or after Unix epoch: %s", raw)
+	}
+	return epochMicros / 1000, nil
+}
+
+func icebergRefLiteralText(ctx context.Context, expr tree.Expr, kind string) (string, error) {
+	numVal, ok := expr.(*tree.NumVal)
+	if !ok {
+		return "", moerr.NewInvalidInputf(ctx, "FOR ICEBERG %s requires a literal", kind)
+	}
+	switch numVal.ValType {
+	case tree.P_int64, tree.P_uint64, tree.P_char:
+		raw := strings.TrimSpace(numVal.String())
+		if raw == "" {
+			return "", moerr.NewInvalidInputf(ctx, "FOR ICEBERG %s literal cannot be empty", kind)
+		}
+		return raw, nil
+	default:
+		return "", moerr.NewInvalidInputf(ctx, "FOR ICEBERG %s requires an integer or string literal", kind)
+	}
 }
 
 func IsSnapshotValid(snapshot *Snapshot) bool {

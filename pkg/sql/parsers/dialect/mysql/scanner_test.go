@@ -474,11 +474,12 @@ func TestScannerPoolCleanupAndThreshold(t *testing.T) {
 	s := NewScanner(dialect.MYSQL, "select 1")
 	// grow strBuilder a little to ensure it is cleared on Put
 	s.strBuilder.WriteString("abc")
+	s.executableCommentEnd = 42
 	PutScanner(s)
 
 	// Fetch again to see if we receive a cleared scanner from pool
 	s2 := NewScanner(dialect.MYSQL, "select 2")
-	if s2.LastToken != "" || s2.LastError != nil || s2.MysqlSpecialComment != nil || s2.Pos != 0 || s2.Line != 0 || s2.Col != 0 || s2.PrePos != 0 {
+	if s2.LastToken != "" || s2.LastError != nil || s2.MysqlSpecialComment != nil || s2.Pos != 0 || s2.Line != 0 || s2.Col != 0 || s2.PrePos != 0 || s2.executableCommentEnd != 0 {
 		t.Fatalf("pooled scanner should be reset: %+v", s2)
 	}
 	if s2.strBuilder.Len() != 0 {
@@ -502,6 +503,31 @@ func TestScannerPoolCleanupAndThreshold(t *testing.T) {
 		t.Fatalf("unexpected scanner buf after Get")
 	}
 	PutScanner(s3)
+}
+
+func TestExecutableCommentEndSkipsQuotedTerminator(t *testing.T) {
+	const sql = "prepare fromx /*! from select 'x*/y' */"
+	s := NewScanner(dialect.MYSQL, sql)
+	defer PutScanner(s)
+
+	for i := 0; i < 3; i++ {
+		if token, _ := s.Scan(); token == LEX_ERROR || token == EofChar() {
+			t.Fatalf("unexpected token %d", token)
+		}
+	}
+	s.TakeExecutableCommentEnd()
+	for {
+		token, _ := s.Scan()
+		if end := s.TakeExecutableCommentEnd(); end != 0 {
+			if end != len(sql) {
+				t.Fatalf("comment end = %d, want %d", end, len(sql))
+			}
+			return
+		}
+		if token == LEX_ERROR || token == EofChar() {
+			t.Fatal("executable comment terminator not found")
+		}
+	}
 }
 
 func TestPutScannerSmallKeepsBuffers(t *testing.T) {

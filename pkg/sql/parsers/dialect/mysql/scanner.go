@@ -45,12 +45,13 @@ type Scanner struct {
 	sqlMode             SQLModeFlags
 	MysqlSpecialComment *Scanner
 
-	CommentFlag bool
-	Pos         int
-	Line        int
-	Col         int
-	PrePos      int
-	buf         string
+	CommentFlag          bool
+	Pos                  int
+	Line                 int
+	Col                  int
+	PrePos               int
+	buf                  string
+	executableCommentEnd int
 
 	strBuilder bytes.Buffer
 }
@@ -66,6 +67,7 @@ func (s *Scanner) reset(clearLargeOnly bool, oversized bool) {
 	s.Line = 0
 	s.Col = 0
 	s.PrePos = 0
+	s.executableCommentEnd = 0
 	s.sqlMode = 0
 
 	if clearLargeOnly {
@@ -266,6 +268,9 @@ func (s *Scanner) Scan() (int, string) {
 		case '/':
 			s.CommentFlag = false
 			s.inc()
+			if s.executableCommentEnd == 0 {
+				s.executableCommentEnd = s.Pos
+			}
 			return s.Scan()
 		default:
 			return s.stepBackOneChar(ch)
@@ -307,6 +312,14 @@ func (s *Scanner) Scan() (int, string) {
 	default:
 		return s.stepBackOneChar(ch)
 	}
+}
+
+// TakeExecutableCommentEnd returns the byte offset immediately after the first
+// executable-comment terminator scanned since the previous call.
+func (s *Scanner) TakeExecutableCommentEnd() int {
+	end := s.executableCommentEnd
+	s.executableCommentEnd = 0
+	return end
 }
 
 func (s *Scanner) isCollate() bool {

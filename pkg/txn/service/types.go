@@ -33,6 +33,8 @@ type TxnService interface {
 	Shard() metadata.TNShard
 	// Start start the txn service
 	Start() error
+	// CancelRecovery interrupts a Start blocked in recovery without closing storage.
+	CancelRecovery()
 	// Close close the txn service. Destroy TxnStorage if destroy is true.
 	Close(destroy bool) error
 
