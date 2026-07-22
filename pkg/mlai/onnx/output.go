@@ -15,8 +15,6 @@
 package onnx
 
 import (
-	"encoding/binary"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	ort "github.com/yalue/onnxruntime_go"
 )
@@ -60,8 +58,8 @@ func reshape(flat []any, dims []int64) (any, int) {
 	return out, consumed
 }
 
-// flatData reads an output tensor Value as a flat []any of json-encodable
-// scalars, dispatching on the caller-declared dtype.
+// flatData reads an output tensor Value as a flat []any of normalized json
+// scalars (int64/uint64/float64/bool), dispatching on the caller-declared dtype.
 func flatData(v ort.Value, dt DType) ([]any, error) {
 	switch dt {
 	case DTFloat16:
@@ -69,50 +67,66 @@ func flatData(v ort.Value, dt DType) ([]any, error) {
 		if !ok {
 			return nil, typeMismatch(v, dt)
 		}
-		raw := ct.GetData()
-		out := make([]any, len(raw)/2)
-		for i := range out {
-			out[i] = float16ToFloat32(binary.LittleEndian.Uint16(raw[2*i:]))
-		}
-		return out, nil
+		return f16BytesToAny(ct.GetData())
 	case DTFloat32:
-		return numericFlat[float32](v, dt)
+		data, err := tensorData[float32](v, dt)
+		if err != nil {
+			return nil, err
+		}
+		return f32sToAny(data)
 	case DTFloat64:
-		return numericFlat[float64](v, dt)
+		data, err := tensorData[float64](v, dt)
+		if err != nil {
+			return nil, err
+		}
+		return f64sToAny(data)
 	case DTInt8:
-		return numericFlat[int8](v, dt)
+		return intFlat[int8](v, dt)
 	case DTUint8:
-		return numericFlat[uint8](v, dt)
+		return uintFlat[uint8](v, dt)
 	case DTInt16:
-		return numericFlat[int16](v, dt)
+		return intFlat[int16](v, dt)
 	case DTUint16:
-		return numericFlat[uint16](v, dt)
+		return uintFlat[uint16](v, dt)
 	case DTInt32:
-		return numericFlat[int32](v, dt)
+		return intFlat[int32](v, dt)
 	case DTUint32:
-		return numericFlat[uint32](v, dt)
+		return uintFlat[uint32](v, dt)
 	case DTInt64:
-		return numericFlat[int64](v, dt)
+		return intFlat[int64](v, dt)
 	case DTUint64:
-		return numericFlat[uint64](v, dt)
+		return uintFlat[uint64](v, dt)
 	case DTBool:
-		return numericFlat[bool](v, dt)
+		data, err := tensorData[bool](v, dt)
+		if err != nil {
+			return nil, err
+		}
+		return boolsToAny(data), nil
 	default:
 		return nil, moerr.NewInvalidInputNoCtxf("onnx: unsupported output dtype %q", string(dt))
 	}
 }
 
-func numericFlat[T ort.TensorData](v ort.Value, dt DType) ([]any, error) {
-	t, ok := v.(*ort.Tensor[T])
-	if !ok {
-		return nil, typeMismatch(v, dt)
+func intFlat[T interface {
+	signed
+	ort.TensorData
+}](v ort.Value, dt DType) ([]any, error) {
+	data, err := tensorData[T](v, dt)
+	if err != nil {
+		return nil, err
 	}
-	data := t.GetData()
-	out := make([]any, len(data))
-	for i, x := range data {
-		out[i] = x
+	return intsToAny(data), nil
+}
+
+func uintFlat[T interface {
+	unsigned
+	ort.TensorData
+}](v ort.Value, dt DType) ([]any, error) {
+	data, err := tensorData[T](v, dt)
+	if err != nil {
+		return nil, err
 	}
-	return out, nil
+	return uintsToAny(data), nil
 }
 
 // valueToJSON renders an arbitrary output Value (tensor, sequence, or map) into

@@ -42,6 +42,13 @@ type opOnnxRun struct {
 	sess    *onnx.Session
 	lastArg []byte // raw model argument (datalink string or bytes) of the cached session
 	hasArg  bool
+
+	// Parsed-shape caches: the shape arguments are almost always constant
+	// literals, so avoid re-parsing their json on every row.
+	inShapeRaw  []byte
+	inShape     *onnx.Shape
+	outShapeRaw []byte
+	outShape    *onnx.Shape
 }
 
 func newOpOnnxRun() *opOnnxRun {
@@ -52,12 +59,29 @@ func newOpOnnxRun() *opOnnxRun {
 func (op *opOnnxRun) Close() error {
 	op.lastArg = nil
 	op.hasArg = false
+	op.inShapeRaw, op.inShape = nil, nil
+	op.outShapeRaw, op.outShape = nil, nil
 	if op.sess != nil {
 		err := op.sess.Close()
 		op.sess = nil
 		return err
 	}
 	return nil
+}
+
+// cachedShape parses a shape json, memoizing on the raw bytes. raw/shape are
+// the op's cache slots for this argument position.
+func cachedShape(raw *[]byte, shape **onnx.Shape, js []byte) (*onnx.Shape, error) {
+	if *shape != nil && bytes.Equal(*raw, js) {
+		return *shape, nil
+	}
+	s, err := onnx.ParseShape(js)
+	if err != nil {
+		return nil, err
+	}
+	*raw = append((*raw)[:0], js...) // copy: GetStrValue bytes are not owned
+	*shape = s
+	return s, nil
 }
 
 // Reset drops the cached session so the next query rebuilds it (resetFn).
@@ -67,12 +91,15 @@ func (op *opOnnxRun) Reset() error {
 
 // ensureSession (re)builds the cached session when the raw model argument
 // changes. The common case is a constant model argument (a datalink literal or
-// a constant varbinary): the model file is resolved and loaded once on the
-// first row and the session is reused for every subsequent row. Only when the
-// argument bytes differ from the cached one do we resolve/reload.
-func (op *opOnnxRun) ensureSession(proc *process.Process, rawArg []byte, isDatalink bool) error {
-	if op.sess != nil && op.hasArg && bytes.Equal(op.lastArg, rawArg) {
-		return nil
+// a constant varbinary): the session is built once on the first row and reused
+// for every subsequent row. When the argument vector is const we skip the
+// per-row bytes.Equal entirely (it is O(model size) — meaningful for a large
+// varbinary model) and also skip retaining a copy of the argument.
+func (op *opOnnxRun) ensureSession(proc *process.Process, rawArg []byte, isDatalink, isConst bool) error {
+	if op.sess != nil {
+		if isConst || (op.hasArg && bytes.Equal(op.lastArg, rawArg)) {
+			return nil
+		}
 	}
 	model := rawArg
 	if isDatalink {
@@ -92,8 +119,10 @@ func (op *opOnnxRun) ensureSession(proc *process.Process, rawArg []byte, isDatal
 		return err
 	}
 	op.sess = sess
-	op.lastArg = append([]byte(nil), rawArg...) // copy: GetStrValue bytes are not owned
-	op.hasArg = true
+	if !isConst {
+		op.lastArg = append([]byte(nil), rawArg...) // copy: GetStrValue bytes are not owned
+		op.hasArg = true
+	}
 	return nil
 }
 
@@ -116,6 +145,7 @@ func (op *opOnnxRun) onnxRun(params []*vector.Vector, result vector.FunctionResu
 	// its URL scheme as well; a real ONNX model (protobuf) never begins with
 	// one of these ASCII schemes.
 	declaredDatalink := params[0].GetType().Oid == types.T_datalink
+	modelIsConst := params[0].IsConst()
 
 	if selectList.IgnoreAllRow() {
 		rs.AddNullRange(0, uint64(length))
@@ -140,7 +170,7 @@ func (op *opOnnxRun) onnxRun(params []*vector.Vector, result vector.FunctionResu
 			continue
 		}
 
-		inShape, err := onnx.ParseShape(inShapeJSON)
+		inShape, err := cachedShape(&op.inShapeRaw, &op.inShape, inShapeJSON)
 		if err != nil {
 			return err
 		}
@@ -148,22 +178,23 @@ func (op *opOnnxRun) onnxRun(params []*vector.Vector, result vector.FunctionResu
 		// model produced.
 		var outShape *onnx.Shape
 		if outShapeJSON, onull := pOutShape.GetStrValue(i); !onull {
-			outShape, err = onnx.ParseShape(outShapeJSON)
+			outShape, err = cachedShape(&op.outShapeRaw, &op.outShape, outShapeJSON)
 			if err != nil {
 				return err
 			}
 		}
 
 		isDatalink := declaredDatalink || looksLikeDatalink(modelArg)
-		if err := op.ensureSession(proc, modelArg, isDatalink); err != nil {
+		if err := op.ensureSession(proc, modelArg, isDatalink, modelIsConst); err != nil {
 			return err
 		}
 		out, err := op.sess.Run(inputJSON, inShape, outShape)
 		if err != nil {
 			return err
 		}
-		// out is json text; store it as a proper T_json (ByteJson) value.
-		bj, err := bytejson.ParseFromByteSlice(out)
+		// Run returns a value tree of ByteJson-native scalars; encode it
+		// directly as a T_json (ByteJson) value — no json-text round-trip.
+		bj, err := bytejson.CreateByteJSON(out)
 		if err != nil {
 			return err
 		}

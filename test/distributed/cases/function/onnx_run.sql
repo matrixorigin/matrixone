@@ -93,6 +93,20 @@ select onnx_run(
     '{"dim":[1,1,4],"dtype":"float32"}',
     '{"dim":[1,1,2],"dtype":"float32"}');
 
+-- non-integer input for an integer dtype is an error, not silently 0
+select onnx_run(
+    cast('file://$resources/onnx/sum_and_difference.onnx' as datalink),
+    '[1.5,2,3,4]',
+    '{"dim":[1,1,4],"dtype":"int32"}',
+    '{"dim":[1,1,2],"dtype":"float32"}');
+
+-- out-of-range input for the declared integer width is an error, not a wrap
+select onnx_run(
+    cast('file://$resources/onnx/sum_and_difference.onnx' as datalink),
+    '[300,0,0,0]',
+    '{"dim":[1,1,4],"dtype":"int8"}',
+    '{"dim":[1,1,2],"dtype":"float32"}');
+
 -- NULL model / input -> NULL result
 select onnx_run(
     cast(NULL as datalink),

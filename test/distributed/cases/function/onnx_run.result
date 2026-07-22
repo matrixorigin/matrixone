@@ -70,6 +70,18 @@ cast('file://$resources/onnx/sum_and_difference.onnx' as datalink),
 '{"dim":[1,1,2],"dtype":"float32"}');
 invalid input: onnx: input has 3 elements, shape needs 4
 select onnx_run(
+cast('file://$resources/onnx/sum_and_difference.onnx' as datalink),
+'[1.5,2,3,4]',
+'{"dim":[1,1,4],"dtype":"int32"}',
+'{"dim":[1,1,2],"dtype":"float32"}');
+invalid input: onnx: invalid integer input "1.5" for dtype "int32"
+select onnx_run(
+cast('file://$resources/onnx/sum_and_difference.onnx' as datalink),
+'[300,0,0,0]',
+'{"dim":[1,1,4],"dtype":"int8"}',
+'{"dim":[1,1,2],"dtype":"float32"}');
+invalid input: onnx: input "300" out of range for dtype "int8"
+select onnx_run(
 cast(NULL as datalink),
 '[0.2,0.3,0.6,0.9]',
 '{"dim":[1,1,4],"dtype":"float32"}',

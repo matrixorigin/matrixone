@@ -18,6 +18,8 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
+	"io"
 	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -109,21 +111,21 @@ func buildOutputTensor(s *Shape) (ort.Value, error) {
 func numericTensor(shape ort.Shape, dt DType, nums []json.Number) (ort.Value, error) {
 	switch dt {
 	case DTInt8:
-		return ort.NewTensor(shape, convInts[int8](nums))
+		return intTensor[int8](shape, dt, nums, 8)
 	case DTUint8:
-		return ort.NewTensor(shape, convUints[uint8](nums))
+		return uintTensor[uint8](shape, dt, nums, 8)
 	case DTInt16:
-		return ort.NewTensor(shape, convInts[int16](nums))
+		return intTensor[int16](shape, dt, nums, 16)
 	case DTUint16:
-		return ort.NewTensor(shape, convUints[uint16](nums))
+		return uintTensor[uint16](shape, dt, nums, 16)
 	case DTInt32:
-		return ort.NewTensor(shape, convInts[int32](nums))
+		return intTensor[int32](shape, dt, nums, 32)
 	case DTUint32:
-		return ort.NewTensor(shape, convUints[uint32](nums))
+		return uintTensor[uint32](shape, dt, nums, 32)
 	case DTInt64:
-		return ort.NewTensor(shape, convInts[int64](nums))
+		return intTensor[int64](shape, dt, nums, 64)
 	case DTUint64:
-		return ort.NewTensor(shape, convUints[uint64](nums))
+		return uintTensor[uint64](shape, dt, nums, 64)
 	case DTFloat32:
 		out := make([]float32, len(nums))
 		for i, num := range nums {
@@ -152,31 +154,53 @@ func numericTensor(shape ort.Shape, dt DType, nums []json.Number) (ort.Value, er
 type signed interface{ ~int8 | ~int16 | ~int32 | ~int64 }
 type unsigned interface{ ~uint8 | ~uint16 | ~uint32 | ~uint64 }
 
-func convInts[T signed](nums []json.Number) []T {
+// intTensor / uintTensor parse json numbers as integers of the declared width.
+// Parse and range errors are reported, never silently truncated: "1.5" as an
+// int dtype is an error (not 0), and 300 as int8 is an error (not a wrap to 44).
+func intTensor[T signed](shape ort.Shape, dt DType, nums []json.Number, bitSize int) (ort.Value, error) {
 	out := make([]T, len(nums))
 	for i, num := range nums {
-		v, _ := strconv.ParseInt(string(num), 10, 64)
+		v, err := strconv.ParseInt(string(num), 10, bitSize)
+		if err != nil {
+			return nil, badIntInput(num, dt, err)
+		}
 		out[i] = T(v)
 	}
-	return out
+	return ort.NewTensor(shape, out)
 }
 
-func convUints[T unsigned](nums []json.Number) []T {
+func uintTensor[T unsigned](shape ort.Shape, dt DType, nums []json.Number, bitSize int) (ort.Value, error) {
 	out := make([]T, len(nums))
 	for i, num := range nums {
-		v, _ := strconv.ParseUint(string(num), 10, 64)
+		v, err := strconv.ParseUint(string(num), 10, bitSize)
+		if err != nil {
+			return nil, badIntInput(num, dt, err)
+		}
 		out[i] = T(v)
 	}
-	return out
+	return ort.NewTensor(shape, out)
+}
+
+func badIntInput(num json.Number, dt DType, err error) error {
+	if errors.Is(err, strconv.ErrRange) {
+		return moerr.NewInvalidInputNoCtxf(
+			"onnx: input %q out of range for dtype %q", string(num), string(dt))
+	}
+	return moerr.NewInvalidInputNoCtxf(
+		"onnx: invalid integer input %q for dtype %q", string(num), string(dt))
 }
 
 // decodeNumbers decodes a flat json array of numbers and checks its length.
+// Trailing content after the array (e.g. "[1,2]junk") is rejected.
 func decodeNumbers(js []byte, want int64) ([]json.Number, error) {
 	dec := json.NewDecoder(bytes.NewReader(js))
 	dec.UseNumber()
 	var arr []json.Number
 	if err := dec.Decode(&arr); err != nil {
 		return nil, moerr.NewInvalidInputNoCtxf("onnx: invalid input json: %v", err)
+	}
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
+		return nil, moerr.NewInvalidInputNoCtx("onnx: trailing data after input json array")
 	}
 	if int64(len(arr)) != want {
 		return nil, moerr.NewInvalidInputNoCtxf(

@@ -15,6 +15,7 @@
 package onnx
 
 import (
+	"encoding/json"
 	"os"
 	"testing"
 
@@ -68,8 +69,12 @@ func TestSumAndDifference(t *testing.T) {
 	out := ParseShapeMust(t, `{"dim":[1,1,2],"dtype":"float32"}`)
 	got, err := sess.Run([]byte(`[0.2,0.3,0.6,0.9]`), in, out)
 	require.NoError(t, err)
-	t.Logf("sum_and_difference output: %s", got)
-	require.Contains(t, string(got), "[[[")
+	js := mustJSON(t, got)
+	t.Logf("sum_and_difference output: %s", js)
+	require.Contains(t, js, "[[[")
+	// The normalized float64 must render as the shortest float32 repr.
+	require.Contains(t, js, "1.9999883")
+	require.NotContains(t, js, "1.99998830") // no widened-float64 noise
 }
 
 func TestNonTensorOutputs(t *testing.T) {
@@ -82,8 +87,9 @@ func TestNonTensorOutputs(t *testing.T) {
 	input := `[5.9,3.0,5.1,1.8, 6.8,2.8,4.8,1.4, 6.3,2.3,4.4,1.3, 6.5,3.0,5.5,1.8, 7.7,2.8,6.7,2.0, 5.5,2.5,4.0,1.3]`
 	got, err := sess.Run([]byte(input), in, nil) // NULL output_shape
 	require.NoError(t, err)
-	t.Logf("non_tensor_outputs: %s", got)
-	require.NotEmpty(t, got)
+	js := mustJSON(t, got)
+	t.Logf("non_tensor_outputs: %s", js)
+	require.Contains(t, js, `"output_label":[2,1,1,2,2,1]`)
 }
 
 func TestMnistFloat16(t *testing.T) {
@@ -107,8 +113,52 @@ func TestMnistFloat16(t *testing.T) {
 	out := ParseShapeMust(t, `{"dim":[1,10],"dtype":"float16"}`)
 	got, err := sess.Run(buf, in, out)
 	require.NoError(t, err)
-	t.Logf("mnist_float16 logits: %s", got)
-	require.Contains(t, string(got), "[[")
+	js := mustJSON(t, got)
+	t.Logf("mnist_float16 logits: %s", js)
+	require.Contains(t, js, "[[")
+}
+
+// TestIntegerInputValidation covers the integer dtype conversion paths:
+// valid values build a tensor; non-integer and out-of-range values must error,
+// never silently become 0 or wrap.
+func TestIntegerInputValidation(t *testing.T) {
+	skipIfNoRuntime(t) // NewTensor allocates through the runtime
+	shape := &Shape{Dim: []int64{4}, Dtype: DTInt32}
+
+	v, err := buildInputTensor([]byte(`[1, -2, 3, 2147483647]`), shape)
+	require.NoError(t, err)
+	require.NoError(t, v.Destroy())
+
+	// Non-integer input for an int dtype: error, not 0.
+	_, err = buildInputTensor([]byte(`[1.5, 2, 3, 4]`), shape)
+	require.ErrorContains(t, err, "invalid integer input")
+
+	// Out of range for the declared width: error, not a wrap.
+	_, err = buildInputTensor([]byte(`[300]`), &Shape{Dim: []int64{1}, Dtype: DTInt8})
+	require.ErrorContains(t, err, "out of range")
+
+	// Negative value for an unsigned dtype: error.
+	_, err = buildInputTensor([]byte(`[-1]`), &Shape{Dim: []int64{1}, Dtype: DTUint16})
+	require.ErrorContains(t, err, "invalid integer input")
+}
+
+func TestTrailingGarbageRejected(t *testing.T) {
+	_, err := buildInputTensor([]byte(`[1,2,3,4]junk`),
+		&Shape{Dim: []int64{4}, Dtype: DTFloat32})
+	require.ErrorContains(t, err, "trailing data")
+}
+
+func TestCorruptModel(t *testing.T) {
+	skipIfNoRuntime(t)
+	_, err := NewSession([]byte("this is not an onnx protobuf"))
+	require.ErrorContains(t, err, "cannot read model")
+}
+
+func mustJSON(t *testing.T, v any) string {
+	t.Helper()
+	b, err := json.Marshal(v)
+	require.NoError(t, err)
+	return string(b)
 }
 
 func ParseShapeMust(t *testing.T, s string) *Shape {
