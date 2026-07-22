@@ -123,9 +123,9 @@ func (r *pluginRouter) RouteForTransfer(
 	}
 }
 
-func (r *pluginRouter) CanReuseCachedCN(cn *CNServer) bool {
+func (r *pluginRouter) CanReuseCachedCN(cn *CNServer, client clientInfo) bool {
 	if rr, ok := r.Router.(cacheReuseChecker); ok {
-		return rr.CanReuseCachedCN(cn)
+		return rr.CanReuseCachedCN(cn, client)
 	}
 	return true
 }
