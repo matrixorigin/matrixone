@@ -71,7 +71,17 @@ func (lp *localLockTableProxy) lock(
 		panic("local lock table proxy can only support on single row")
 	}
 
+	lockBudgetCtx, cancelLockBudget := newLockWaitContext(ctx, options.LockOptions)
+	if cancelLockBudget != nil {
+		defer cancelLockBudget()
+	}
+
 	lp.mu.Lock()
+	if err := lockBudgetCtx.Err(); err != nil {
+		lp.mu.Unlock()
+		cb(pb.Result{}, lockWaitContextError(lockBudgetCtx, err))
+		return
+	}
 	key := util.UnsafeBytesToString(rows[0])
 	if _, ok := lp.mu.pendingLastHolderUnlocks[key]; ok {
 		// The owner may already have applied the last-holder Unlock even
@@ -93,7 +103,6 @@ func (lp *localLockTableProxy) lock(
 	}
 
 	first := v.isEmpty()
-	r := v.result
 	w := v.add(
 		lp.serviceID,
 		txn,
@@ -113,27 +122,67 @@ func (lp *localLockTableProxy) lock(
 			options,
 			func(r pb.Result, e error) {
 				lp.mu.Lock()
-				defer lp.mu.Unlock()
-				if e == nil {
+				if e == nil && !v.isEmpty() {
 					lp.mu.currentHolder[key] = v.txns[0].txnID
 				}
-				v.done(r, e, lp.logger)
+				firstCB := v.done(r, e, lp.logger)
+				if e != nil && v.isEmpty() && lp.mu.holders[key] == v {
+					delete(lp.mu.holders, key)
+					delete(lp.mu.currentHolder, key)
+				}
+				lp.mu.Unlock()
+				if firstCB != nil {
+					firstCB(r, e)
+				}
 			})
 		return
 	}
 
-	defer func() {
-		bind := lp.getBind()
-		err := txn.lockAdded(bind.Group, bind, rows, lp.logger)
-		cb(r, err)
-	}()
-
-	// wait first done
+	// A coalesced request owns its callback. The first owner RPC only publishes
+	// the result and wakes this waiter; it must never invoke the callback on the
+	// waiter's behalf, otherwise timeout and completion can both report a
+	// terminal result.
+	removeTxn := func() {
+		lp.mu.Lock()
+		v.remove(txn)
+		if v.isEmpty() && lp.mu.holders[key] == v {
+			delete(lp.mu.holders, key)
+			delete(lp.mu.currentHolder, key)
+		}
+		lp.mu.Unlock()
+	}
 	if w != nil {
-		w.wait(ctx, lp.logger)
-		return
+		result := w.wait(lockBudgetCtx, lp.logger)
+		if result.err == nil {
+			if ctxErr := lockBudgetCtx.Err(); ctxErr != nil {
+				result.err = lockWaitContextError(lockBudgetCtx, ctxErr)
+			}
+		}
+		if result.err != nil {
+			err := result.err
+			if ctxErr := lockBudgetCtx.Err(); ctxErr != nil {
+				err = lockWaitContextError(lockBudgetCtx, ctxErr)
+			}
+			removeTxn()
+			cb(pb.Result{}, err)
+			return
+		}
 	}
 
+	lp.mu.RLock()
+	r := v.result
+	lp.mu.RUnlock()
+	if ctxErr := lockBudgetCtx.Err(); ctxErr != nil {
+		removeTxn()
+		cb(pb.Result{}, lockWaitContextError(lockBudgetCtx, ctxErr))
+		return
+	}
+	bind := lp.getBind()
+	err := txn.lockAdded(bind.Group, bind, rows, lp.logger)
+	if err != nil {
+		removeTxn()
+	}
+	cb(r, err)
 }
 
 func (lp *localLockTableProxy) unlock(
@@ -345,11 +394,13 @@ func (s *sharedOps) done(
 	r pb.Result,
 	err error,
 	logger *log.MOLogger,
-) {
+) func(pb.Result, error) {
+	var firstCB func(pb.Result, error)
 	for idx, cb := range s.cbs {
-		cb(r, err)
-		if idx > 0 {
-			s.waiters[idx].notify(notifyValue{}, logger)
+		if idx == 0 {
+			firstCB = cb
+		} else if s.waiters[idx] != nil {
+			s.waiters[idx].notify(notifyValue{err: err}, logger)
 		}
 		s.cbs[idx] = nil
 		s.waiters[idx] = nil
@@ -361,6 +412,7 @@ func (s *sharedOps) done(
 	} else {
 		s.result = r
 	}
+	return firstCB
 }
 
 func (s *sharedOps) isEmpty() bool {
@@ -396,6 +448,11 @@ func (s *sharedOps) add(
 		w.setStatus(blocking)
 	}
 	if hasHolder {
+		cb = nil
+	}
+	if w != nil {
+		// Coalesced requests retain callback ownership in their waiting
+		// goroutine. sharedOps.done only wakes them with the owner result.
 		cb = nil
 	}
 

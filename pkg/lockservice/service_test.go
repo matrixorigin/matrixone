@@ -15,6 +15,7 @@
 package lockservice
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -5647,6 +5648,110 @@ func TestLockWaitTimeoutExpiresWhileWaitingForLocalTableMutex(t *testing.T) {
 				timestamp.Timestamp{}))
 		},
 	)
+}
+
+func TestNotifiedWaiterDeadlineDetachesSync(t *testing.T) {
+	testCases := []struct {
+		name        string
+		rows        [][]byte
+		granularity pb.Granularity
+	}{
+		{name: "row", rows: [][]byte{{1}}, granularity: pb.Granularity_Row},
+		{name: "range", rows: [][]byte{{1}, {10}}, granularity: pb.Granularity_Range},
+	}
+
+	for idx, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			runLockServiceTests(
+				t,
+				[]string{"s1"},
+				func(_ *lockTableAllocator, services []*service) {
+					s := services[0]
+					tableID := uint64(24920 + idx)
+					holderTxn := []byte("post-notify-sync-holder")
+					waiterTxn := []byte("post-notify-sync-waiter")
+					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+					defer cancel()
+
+					options := newTestRowExclusiveOptions()
+					if testCase.granularity == pb.Granularity_Range {
+						options = newTestRangeExclusiveOptions()
+					}
+					_, err := s.Lock(ctx, tableID, testCase.rows, holderTxn, options)
+					require.NoError(t, err)
+					local := s.tableGroups.get(0, tableID).(*localLockTable)
+
+					var attempts atomic.Int32
+					reacquireEntered := make(chan struct{})
+					resumeReacquire := make(chan struct{})
+					var resumeOnce sync.Once
+					defer resumeOnce.Do(func() { close(resumeReacquire) })
+					local.options.beforeAcquire = func(c *lockContext) {
+						if !bytes.Equal(c.txn.txnID, waiterTxn) || attempts.Add(1) != 2 {
+							return
+						}
+						close(reacquireEntered)
+						<-resumeReacquire
+					}
+					defer func() { local.options.beforeAcquire = nil }()
+
+					deadline := time.Now().Add(500 * time.Millisecond)
+					waitOptions := options
+					waitOptions.LockWaitTimeout = 60
+					waitOptions.LockWaitDeadline = deadline.UnixNano()
+					resultC := make(chan error, 1)
+					go func() {
+						_, err := s.Lock(ctx, tableID, testCase.rows, waiterTxn, waitOptions)
+						resultC <- err
+					}()
+
+					require.Eventually(t, func() bool {
+						txn := s.activeTxnHolder.getActiveTxn(waiterTxn, false, "")
+						if txn == nil {
+							return false
+						}
+						txn.Lock()
+						defer txn.Unlock()
+						return len(txn.blockedWaiters) == 1
+					}, time.Second, time.Millisecond)
+					require.NoError(t, s.Unlock(ctx, holderTxn, timestamp.Timestamp{}))
+
+					select {
+					case <-reacquireEntered:
+					case <-ctx.Done():
+						require.NoError(t, ctx.Err())
+					}
+					if wait := time.Until(deadline.Add(20 * time.Millisecond)); wait > 0 {
+						timer := time.NewTimer(wait)
+						<-timer.C
+					}
+					resumeOnce.Do(func() { close(resumeReacquire) })
+
+					select {
+					case err := <-resultC:
+						require.ErrorIs(t, err, ErrLockTimeout)
+					case <-ctx.Done():
+						require.NoError(t, ctx.Err())
+					}
+
+					waiter := s.activeTxnHolder.getActiveTxn(waiterTxn, false, "")
+					require.NotNil(t, waiter)
+					waiter.Lock()
+					require.Empty(t, waiter.blockedWaiters)
+					waiter.Unlock()
+					local.mu.RLock()
+					require.Zero(t, local.mu.store.Len())
+					require.Empty(t, local.mu.ownerLocalWaits)
+					local.mu.RUnlock()
+					nextTxn := []byte("post-notify-sync-next")
+					_, err = s.Lock(ctx, tableID, testCase.rows, nextTxn, options)
+					require.NoError(t, err)
+					require.NoError(t, s.Unlock(ctx, nextTxn, timestamp.Timestamp{}))
+					require.NoError(t, s.Unlock(ctx, waiterTxn, timestamp.Timestamp{}))
+				},
+			)
+		})
+	}
 }
 
 func TestLockWaitTimeoutExpiresWhileWaitingForLockTableAllocation(t *testing.T) {

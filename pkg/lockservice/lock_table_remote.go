@@ -143,19 +143,26 @@ func (l *remoteLockTable) lock(
 	req := acquireRequest()
 	defer releaseRequest(req)
 
+	effectiveOptions := carryEarlierContextDeadline(ctx, opts.LockOptions)
+	lockBudgetCtx, cancelLockBudget := newLockWaitContext(ctx, effectiveOptions)
+	if cancelLockBudget != nil {
+		defer cancelLockBudget()
+	}
+
 	req.LockTable = l.bind
 	req.Method = pb.Method_Lock
-	req.Lock.Options = carryEarlierContextDeadline(ctx, opts.LockOptions)
+	req.Lock.Options = effectiveOptions
 	req.Lock.TxnID = txn.txnID
 	req.Lock.ServiceID = l.serviceID
 	req.Lock.Rows = rows
 
-	if err := ctx.Err(); err != nil {
+	if err := lockBudgetCtx.Err(); err != nil {
+		err = lockWaitContextError(lockBudgetCtx, err)
 		logRemoteLockFailed(l.logger, txn, rows, opts, l.bind, err)
 		cb(pb.Result{}, err)
 		return
 	}
-	if lockWaitDeadlineExpired(opts.LockOptions, time.Now()) {
+	if lockWaitDeadlineExpired(effectiveOptions, time.Now()) {
 		cb(pb.Result{}, ErrLockTimeout)
 		return
 	}
@@ -170,7 +177,7 @@ func (l *remoteLockTable) lock(
 	// Service entry points also use this field for the safety ceiling. A zero
 	// value is possible only for direct lock-table callers and tests, where the
 	// caller context remains the fallback.
-	rpcCtx, rpcCancel := newLockRPCContext(ctx, opts.LockOptions)
+	rpcCtx, rpcCancel := newLockRPCContext(ctx, effectiveOptions)
 	defer func() {
 		if rpcCancel != nil {
 			rpcCancel()
@@ -194,7 +201,12 @@ func (l *remoteLockTable) lock(
 		defer releaseResponse(resp)
 		if resp.NewBind != nil {
 			txn.Unlock()
-			err = l.maybeHandleBindChanged(ctx, resp)
+			err = l.maybeHandleBindChanged(lockBudgetCtx, resp)
+			if ctx.Err() == nil {
+				if ctxErr := lockBudgetCtx.Err(); ctxErr != nil {
+					err = lockWaitContextError(lockBudgetCtx, ctxErr)
+				}
+			}
 			txn.Lock()
 			if !bytes.Equal(req.Lock.TxnID, txn.txnID) {
 				cb(pb.Result{}, ErrTxnNotFound)
@@ -228,10 +240,6 @@ func (l *remoteLockTable) lock(
 		cb(pb.Result{}, err)
 		return
 	}
-	if lockWaitDeadlineExpired(opts.LockOptions, time.Now()) {
-		cb(pb.Result{}, ErrLockTimeout)
-		return
-	}
 	if ctx.Err() != nil {
 		// Preserve the historical transport error while still skipping bind
 		// recovery. The failed RPC may have acquired remotely, so the transaction
@@ -242,12 +250,28 @@ func (l *remoteLockTable) lock(
 		cb(pb.Result{}, err)
 		return
 	}
+	if lockWaitDeadlineExpired(opts.LockOptions, time.Now()) {
+		cb(pb.Result{}, ErrLockTimeout)
+		return
+	}
+	if ctxErr := lockBudgetCtx.Err(); ctxErr != nil {
+		cb(pb.Result{}, lockWaitContextError(lockBudgetCtx, ctxErr))
+		return
+	}
 	// encounter any error, we need try to check bind is valid.
 	// And use origin error to return, because once handlerError
 	// swallows the error, the transaction will not be abort.
 	originalErr := err
 	txn.Unlock()
-	e := l.handleError(err, true)
+	e := l.handleErrorWithContext(lockBudgetCtx, err, true)
+	if ctx.Err() != nil {
+		e = originalErr
+		if retryRemoteLockError(e) {
+			e = moerr.NewBackendCannotConnectNoCtx(e.Error())
+		}
+	} else if ctxErr := lockBudgetCtx.Err(); ctxErr != nil {
+		e = lockWaitContextError(lockBudgetCtx, ctxErr)
+	}
 	txn.Lock()
 	if !bytes.Equal(req.Lock.TxnID, txn.txnID) {
 		cb(pb.Result{}, ErrTxnNotFound)
