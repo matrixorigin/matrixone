@@ -63,7 +63,8 @@ func (ts *TestTxnStorage) Shard() metadata.TNShard {
 	return GetDefaultTNShard()
 }
 
-func (ts *TestTxnStorage) Start() error { return nil }
+func (ts *TestTxnStorage) Start() error    { return nil }
+func (ts *TestTxnStorage) CancelRecovery() {}
 func (ts *TestTxnStorage) Close(destroy bool) error {
 	var firstErr error
 	if err := ts.GetDB().Close(); err != nil {
