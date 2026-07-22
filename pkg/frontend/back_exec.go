@@ -400,6 +400,10 @@ func doComQueryInBack(
 	bindBackExecSession(proc, backSes)
 	proc.SetStmtProfile(&backSes.stmtProfile)
 	proc.SetResolveVariableFunc(backSes.txnCompileCtx.ResolveVariable)
+	proc.SetResolveVariableIsBinFunc(backSes.txnCompileCtx.ResolveVariableIsBin)
+	// backExec.Exec and ExecRestore reject multi-statement SQL before reaching
+	// this path, so one snapshot here covers the complete background statement.
+	refreshBackgroundStatementScopedSessionInfo(backSes, input, proc)
 	// Frontend back-exec — session-bound resolver. backSession is a
 	// frontend session without a client connection (NOT a system
 	// background task); all callers go through ses.GetBackgroundExec(...)
@@ -538,6 +542,16 @@ func doComQueryInBack(
 	} // end of for
 
 	return nil
+}
+
+func refreshBackgroundStatementScopedSessionInfo(backSes *backSession, input *UserInput, proc *process.Process) {
+	nativeMode := backSes.currentMatrixOneNativeMode()
+	if input != nil && input.useParserSQLMode {
+		nativeMode = mysql.HasMatrixOneNativeSQLMode(input.parserSQLMode)
+	}
+	backSes.effectiveMatrixOneNativeMode = nativeMode
+	backSes.hasEffectiveMatrixOneNativeMode = true
+	refreshStatementScopedSessionInfoWithNativeMode(nativeMode, proc)
 }
 
 func appendNestedCallResults(ctx context.Context, backSes *backSession, results []ExecResult) error {
@@ -958,6 +972,9 @@ func getResultSet(ctx context.Context, bh BackgroundExec) ([]ExecResult, error) 
 
 type backSession struct {
 	feSessionImpl
+	parentBackSession               *backSession
+	effectiveMatrixOneNativeMode    bool
+	hasEffectiveMatrixOneNativeMode bool
 	// lastAffectedRows carries the previous statement's ROW_COUNT() value into
 	// the next process created by this background executor.
 	lastAffectedRows int64
@@ -997,7 +1014,27 @@ func (backSes *backSession) initFeSes(
 	backSes.timeZone = ses.GetTimeZone()
 	backSes.respr = defResper
 	backSes.service = ses.GetService()
+	if parent, ok := ses.(*backSession); ok {
+		backSes.parentBackSession = parent
+	}
 	return backSes
+}
+
+func (backSes *backSession) currentMatrixOneNativeMode() bool {
+	if backSes.parentBackSession != nil {
+		parent := backSes.parentBackSession
+		if parent.hasEffectiveMatrixOneNativeMode {
+			return parent.effectiveMatrixOneNativeMode
+		}
+		return parent.currentMatrixOneNativeMode()
+	}
+	if backSes.upstream != nil {
+		return backSes.upstream.sqlModeHasMatrixOneNative()
+	}
+	if backSes.hasEffectiveMatrixOneNativeMode {
+		return backSes.effectiveMatrixOneNativeMode
+	}
+	return false
 }
 
 func (backSes *backSession) InitBackExec(txnOp TxnOperator, db string, callBack outputCallBackFunc, opts ...*BackgroundExecOption) BackgroundExec {
@@ -1261,6 +1298,8 @@ func (backSes *backSession) GetSessionSysVar(name string) (interface{}, error) {
 			return int64(0), nil
 		}
 		return int64(1), nil
+	case "sql_mode":
+		return "", nil
 	case "mo_table_stats.force_update", "mo_table_stats.use_old_impl", "mo_table_stats.reset_update_time":
 		return backSes.upstream.GetSessionSysVar(name)
 	}
