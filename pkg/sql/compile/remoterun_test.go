@@ -3241,9 +3241,9 @@ func newDispatchSrcScopeForTest(proc *process.Process, addr string, localBuckets
 //
 //	before regrouping, the bucket that carries a cross-CN shuffle dispatch is wrongly
 //	judged non-standalone-executable (its dispatch LocalRegs point to a sibling bucket
-//	that lives in a separate send tree) -> RemoteRun converts it to local -> the dispatch
-//	lands on the coordinator, mispaired with the compile-time cross-CN receiver FromAddr
-//	-> hang.
+//	that lives in a separate send tree) -> the remote tree is not independently executable.
+//	Historically RemoteRun converted it to local, mispaired the dispatch with the compile-time
+//	cross-CN receiver FromAddr, and hung; now RemoteRun rejects that topology before start.
 //
 //	after regrouping, the dop same-CN buckets (and the nested dispatch) become one per-CN
 //	send unit, so checkPipelineStandaloneExecutableAtRemote returns true and the whole
