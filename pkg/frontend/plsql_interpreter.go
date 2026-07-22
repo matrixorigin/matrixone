@@ -47,6 +47,22 @@ type Interpreter struct {
 	argsAttr    map[string]tree.InOutArgType // used for IN, OUT, IN/OUT check
 	argsMap     map[string]tree.Expr         // used for argument to parameter mapping
 	outParamMap map[string]interface{}       // used for storing and updating OUT type arg
+
+	lastAffectedRows    int64
+	initialAffectedRows int64
+}
+
+func (interpreter *Interpreter) recordAffectedRows() {
+	if provider, ok := interpreter.bh.(backgroundExecRowCount); ok {
+		interpreter.lastAffectedRows = provider.GetLastAffectedRows()
+	}
+}
+
+func (interpreter *Interpreter) setAffectedRows(rows int64) {
+	interpreter.lastAffectedRows = rows
+	if provider, ok := interpreter.bh.(backgroundExecRowCount); ok {
+		provider.SetLastAffectedRows(rows)
+	}
 }
 
 func (interpreter *Interpreter) GetResult() []ExecResult {
@@ -201,6 +217,9 @@ func (interpreter *Interpreter) MatchExpr(expr tree.Expr) (tree.Expr, error) {
 
 // Evaluate condition by sending it to bh with a select
 func (interpreter *Interpreter) EvalCond(cond string) (int, error) {
+	savedAffectedRows := interpreter.lastAffectedRows
+	defer interpreter.setAffectedRows(savedAffectedRows)
+
 	interpreter.bh.ClearExecResultSet()
 	interpreter.ctx = context.WithValue(interpreter.ctx, defines.VarScopeKey{}, interpreter.varScope)
 	interpreter.ctx = context.WithValue(interpreter.ctx, defines.InSp{}, true)
@@ -223,7 +242,7 @@ func (interpreter *Interpreter) EvalCond(cond string) (int, error) {
 	return 0, nil
 }
 
-func (interpreter *Interpreter) ExecuteSp(stmt tree.Statement, dbName string) (err error) {
+func (interpreter *Interpreter) ExecuteSp(stmt tree.Statement, dbName string, bg bool) (err error) {
 	curScope := make(map[string]interface{})
 	interpreter.bh.ClearExecResultSet()
 
@@ -233,13 +252,16 @@ func (interpreter *Interpreter) ExecuteSp(stmt tree.Statement, dbName string) (e
 		return err
 	}
 
-	// make sure the entire sp is in a single transaction
-	err = interpreter.bh.Exec(interpreter.ctx, "begin;")
-	defer func() {
-		err = finishTxn(interpreter.ctx, interpreter.bh, err)
-	}()
-	if err != nil {
-		return err
+	// A top-level procedure owns its transaction. A nested CALL already runs
+	// through a shared-transaction background executor and must reuse it.
+	if !bg {
+		err = interpreter.bh.Exec(interpreter.ctx, "begin;")
+		defer func() {
+			err = finishTxn(interpreter.ctx, interpreter.bh, err)
+		}()
+		if err != nil {
+			return err
+		}
 	}
 
 	// save parameters as local variables
@@ -275,6 +297,7 @@ func (interpreter *Interpreter) ExecuteSp(stmt tree.Statement, dbName string) (e
 		}
 	}
 
+	interpreter.setAffectedRows(interpreter.initialAffectedRows)
 	_, err = interpreter.interpret(stmt)
 
 	if err != nil {
@@ -519,6 +542,7 @@ func (interpreter *Interpreter) interpret(stmt tree.Statement) (SpStatus, error)
 				if err != nil {
 					return SpNotOk, err
 				}
+				interpreter.recordAffectedRows()
 			} else {
 				// custom defined variable
 				var value interface{}
@@ -545,12 +569,13 @@ func (interpreter *Interpreter) interpret(stmt tree.Statement) (SpStatus, error)
 		if err != nil {
 			return SpNotOk, err
 		}
+		interpreter.recordAffectedRows()
 		erArray, err := getResultSet(interpreter.ctx, interpreter.bh)
 		if err != nil {
 			return SpNotOk, err
 		}
 		if execResultArrayHasData(erArray) {
-			interpreter.result = append(interpreter.result, erArray[0])
+			interpreter.result = append(interpreter.result, erArray...)
 		}
 		return SpOk, nil
 	}

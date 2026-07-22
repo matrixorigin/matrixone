@@ -33,6 +33,17 @@ import (
 
 var _ Router = (*pluginRouter)(nil)
 
+type cacheReuseTestRouter struct {
+	routeErrRouter
+	client clientInfo
+	result bool
+}
+
+func (r *cacheReuseTestRouter) CanReuseCachedCN(_ *CNServer, client clientInfo) bool {
+	r.client = client
+	return r.result
+}
+
 type mockPlugin struct {
 	mockRecommendCNFn func(ctx context.Context, clientInfo clientInfo) (*plugin.Recommendation, error)
 }
@@ -131,6 +142,15 @@ func TestPluginRouter_PropagatesConnectionContext(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 2, legacy.connectCount)
 	require.Equal(t, 1, legacy.routeSelectedCount)
+}
+
+func TestPluginRouterCanReuseCachedCNDelegatesClientInfo(t *testing.T) {
+	delegate := &cacheReuseTestRouter{result: false}
+	router := newPluginRouter("", delegate, nil)
+	client := clientInfo{labelInfo: labelInfo{Tenant: "tenant1"}}
+
+	require.False(t, router.CanReuseCachedCN(&CNServer{uuid: "cn1"}, client))
+	require.Equal(t, client, delegate.client)
 }
 
 func TestPluginRouter_SelectHonorsBreaker(t *testing.T) {
