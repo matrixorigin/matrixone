@@ -708,6 +708,26 @@ func TestColumnPruneSemanticBoundaries(t *testing.T) {
 }
 
 func TestColumnPruneOperatorShape(t *testing.T) {
+	t.Run("discarded wide scan output uses narrow carrier", func(t *testing.T) {
+		buildColumns := func(sql string) []Entry[string, []string] {
+			logicPlan, err := buildOneStmt(plan2.NewMockOptimizer(false), t, sql)
+			require.NoError(t, err)
+			columns, err := getPrunedTableColumns(logicPlan)
+			require.NoError(t, err)
+			return columns
+		}
+
+		consumed := buildColumns("select n_name, n_regionkey from nation")
+		discarded := buildColumns("select 1 from (select n_name, n_regionkey from nation) s")
+
+		require.Equal(t, []Entry[string, []string]{
+			{tableName: "nation", colNames: []string{"n_name", "n_regionkey"}},
+		}, consumed)
+		require.Equal(t, []Entry[string, []string]{
+			{tableName: "nation", colNames: []string{"n_nationkey"}},
+		}, discarded)
+	})
+
 	t.Run("scan chooses deterministic row carrier", func(t *testing.T) {
 		logicPlan, err := buildOneStmt(
 			plan2.NewMockOptimizer(false),

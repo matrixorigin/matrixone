@@ -140,6 +140,42 @@ func TestChooseRowCarrier(t *testing.T) {
 	})
 }
 
+func TestChooseRowCarrierWideVarlenDoesNotAllocate(t *testing.T) {
+	const candidateCount = 1024
+	exprs := make([]*plan.Expr, candidateCount)
+	for i := range exprs {
+		exprs[i] = &plan.Expr{Typ: plan.Type{Id: int32(types.T_text), Width: 1 << 20}}
+	}
+	exprs[candidateCount-1] = &plan.Expr{Typ: plan.Type{Id: int32(types.T_int8)}}
+
+	require.Equal(t, candidateCount-1, chooseRowCarrier(exprs, false))
+	require.Zero(t, testing.AllocsPerRun(100, func() {
+		_ = chooseRowCarrier(exprs, false)
+	}))
+}
+
+var benchmarkRowCarrier int
+
+func BenchmarkChooseRowCarrierWideVarlen(b *testing.B) {
+	const (
+		candidateCount = 1024
+		wideBytes      = 1 << 20
+	)
+	exprs := make([]*plan.Expr, candidateCount)
+	for i := range exprs {
+		exprs[i] = &plan.Expr{Typ: plan.Type{Id: int32(types.T_text), Width: wideBytes}}
+	}
+	exprs[candidateCount-1] = &plan.Expr{Typ: plan.Type{Id: int32(types.T_int8)}}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		benchmarkRowCarrier = chooseRowCarrier(exprs, false)
+	}
+	b.ReportMetric(float64((candidateCount-1)*wideBytes)/(1<<20), "candidate-MiB")
+	b.ReportMetric(1, "retained-B")
+}
+
 func TestCanPruneSampleExprs(t *testing.T) {
 	makeCol := func(tag, pos int32, notNullable bool) *plan.Expr {
 		return &plan.Expr{
