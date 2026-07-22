@@ -276,17 +276,33 @@ func (s *service) handleRemoteLock(
 	cs morpc.ClientSession) {
 	req.Lock.Options = s.applyLockWaitTimeoutCeiling(req.Lock.Options)
 	logFields := remoteLockResponseLogFields(req)
+	if lockWaitDeadlineExpired(req.Lock.Options, time.Now()) {
+		_ = writeResponseWithDeadline(s.logger, cancel, resp, ErrLockTimeout, cs, defaultRPCWriteTimeout, logFields)
+		return
+	}
 	if !s.canLockOnServiceStatus(req.Lock.TxnID, req.Lock.Options, req.LockTable.Table, req.Lock.Rows) {
 		_ = writeResponseWithDeadline(s.logger, cancel, resp, moerr.NewRetryForCNRollingRestart(), cs, defaultRPCWriteTimeout, logFields)
 		return
 	}
 
-	l, err := s.getLocalLockTable(req, resp)
+	bindCtx, cancelBind := newLockWaitContext(ctx, req.Lock.Options)
+	if cancelBind != nil {
+		defer cancelBind()
+	}
+	l, err := s.getLocalLockTableWithContext(bindCtx, req, resp)
 	if err != nil ||
 		l == nil {
 		// means that the lockservice sending the lock request holds a stale
 		// lock table binding.
 		_ = writeResponseWithDeadline(s.logger, cancel, resp, err, cs, defaultRPCWriteTimeout, logFields)
+		return
+	}
+	if err := bindCtx.Err(); err != nil {
+		_ = writeResponseWithDeadline(s.logger, cancel, resp, lockWaitContextError(bindCtx, err), cs, defaultRPCWriteTimeout, logFields)
+		return
+	}
+	if lockWaitDeadlineExpired(req.Lock.Options, time.Now()) {
+		_ = writeResponseWithDeadline(s.logger, cancel, resp, ErrLockTimeout, cs, defaultRPCWriteTimeout, logFields)
 		return
 	}
 
@@ -380,12 +396,21 @@ func (s *service) handleForwardLock(
 	cs morpc.ClientSession) {
 	req.Lock.Options = s.applyLockWaitTimeoutCeiling(req.Lock.Options)
 	logFields := remoteLockResponseLogFields(req)
+	if lockWaitDeadlineExpired(req.Lock.Options, time.Now()) {
+		_ = writeResponseWithDeadline(s.logger, cancel, resp, ErrLockTimeout, cs, defaultRPCWriteTimeout, logFields)
+		return
+	}
 	if !s.canLockOnServiceStatus(req.Lock.TxnID, req.Lock.Options, req.LockTable.Table, req.Lock.Rows) {
 		_ = writeResponseWithDeadline(s.logger, cancel, resp, moerr.NewRetryForCNRollingRestart(), cs, defaultRPCWriteTimeout, logFields)
 		return
 	}
 
-	l, err := s.getLockTable(
+	bindCtx, cancelBind := newLockWaitContext(ctx, req.Lock.Options)
+	if cancelBind != nil {
+		defer cancelBind()
+	}
+	l, err := s.getLockTableWithContext(
+		bindCtx,
 		req.LockTable.Group,
 		req.LockTable.Table)
 	if err != nil ||
@@ -393,6 +418,14 @@ func (s *service) handleForwardLock(
 		// means that the lockservice sending the lock request holds a stale
 		// lock table binding.
 		_ = writeResponseWithDeadline(s.logger, cancel, resp, err, cs, defaultRPCWriteTimeout, logFields)
+		return
+	}
+	if err := bindCtx.Err(); err != nil {
+		_ = writeResponseWithDeadline(s.logger, cancel, resp, lockWaitContextError(bindCtx, err), cs, defaultRPCWriteTimeout, logFields)
+		return
+	}
+	if lockWaitDeadlineExpired(req.Lock.Options, time.Now()) {
+		_ = writeResponseWithDeadline(s.logger, cancel, resp, ErrLockTimeout, cs, defaultRPCWriteTimeout, logFields)
 		return
 	}
 
@@ -668,7 +701,15 @@ func (s *service) handleKeepRemoteLock(
 func (s *service) getLocalLockTable(
 	req *pb.Request,
 	resp *pb.Response) (lockTable, error) {
-	l, err := s.getLockTable(
+	return s.getLocalLockTableWithContext(context.Background(), req, resp)
+}
+
+func (s *service) getLocalLockTableWithContext(
+	ctx context.Context,
+	req *pb.Request,
+	resp *pb.Response) (lockTable, error) {
+	l, err := s.getLockTableWithContext(
+		ctx,
 		req.LockTable.Group,
 		req.LockTable.Table)
 	if err != nil {
@@ -676,12 +717,22 @@ func (s *service) getLocalLockTable(
 	}
 	if l == nil {
 		rows, sharding := lockTableLookupInputsFromRequest(req)
-		l, err = s.getLockTableWithCreate(
+		l, err = s.getLockTableWithCreateContext(
+			ctx,
 			req.LockTable.Group,
 			req.LockTable.Table,
 			rows,
 			sharding)
-		if err != nil || l.getBind().Changed(req.LockTable) {
+		if err != nil {
+			// Preserve caller/lock-budget cancellation so the client receives
+			// the correct terminal error. Other allocator failures keep the
+			// historical stale-bind signal used by remote retry handling.
+			if ctx.Err() != nil || err == ErrLockTimeout {
+				return nil, err
+			}
+			return nil, ErrLockTableNotFound
+		}
+		if l.getBind().Changed(req.LockTable) {
 			return nil, ErrLockTableNotFound
 		}
 	}

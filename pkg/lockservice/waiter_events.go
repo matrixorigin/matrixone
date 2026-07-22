@@ -76,9 +76,10 @@ func (l *localLockTable) newLockContext(
 	c.cb = cb
 	c.result = pb.Result{LockedOn: bind}
 	c.createAt = time.Now()
-	if opts.async {
-		c.lockWaitDeadline, c.lockWaitTimeoutErr = getAsyncLockWaitDeadline(c.createAt, opts)
-	}
+	// Compute the deadline for both sync and async paths. Once an absolute
+	// LockWaitDeadline crosses a service/RPC boundary it is authoritative; no
+	// later hop may restart it from the rounded relative timeout.
+	c.lockWaitDeadline, c.lockWaitTimeoutErr = getLockWaitDeadline(c.createAt, opts)
 	return c
 }
 
@@ -116,7 +117,7 @@ func (c *lockContext) getLockWaitTimeoutErr() error {
 	return ErrLockTimeout
 }
 
-func getAsyncLockWaitDeadline(createAt time.Time, opts LockOptions) (time.Time, error) {
+func getLockWaitDeadline(createAt time.Time, opts LockOptions) (time.Time, error) {
 	var (
 		deadline time.Time
 		err      error

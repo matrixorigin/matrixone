@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	mock_lock "github.com/matrixorigin/matrixone/pkg/frontend/test/mock_lock"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
@@ -124,6 +125,16 @@ func TestLockWaitTimeoutUsesCurrentSessionValue(t *testing.T) {
 	proc.GetSessionInfo().LockWaitTimeout = 4
 	require.Equal(t, 4*time.Second, lockWaitTimeout(proc, txnOp),
 		"background process-level per-execution option must have highest priority")
+
+	proc.GetSessionInfo().LockWaitTimeout = 0
+	proc.GetSessionInfo().LockWaitTimeoutSet = true
+	require.Equal(t, 2*time.Second, lockWaitTimeout(proc, txnOp),
+		"clearing an existing transaction override must fall back to the resolver")
+	proc.SetResolveVariableFunc(nil)
+	require.Equal(t,
+		time.Duration(defines.DefaultLockWaitTimeoutSeconds)*time.Second,
+		lockWaitTimeout(proc, txnOp),
+		"clearing without a resolver must use the rolling-upgrade-safe fallback, not the existing transaction timeout")
 }
 
 func TestLockOpHelpers(t *testing.T) {

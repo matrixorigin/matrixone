@@ -621,19 +621,22 @@ func (exec *txnExecutor) LockTable(table string) error {
 
 // applyExecutorLockWaitTimeout copies a per-execution background budget into
 // SessionInfo, whose background lock-timeout precedence is above the default
-// variable resolver. SessionInfo stores whole seconds, so positive fractions
-// are rounded up rather than silently becoming an unbounded zero.
+// variable resolver. LockWaitTimeoutSet preserves an explicit zero so reusing
+// a transaction does not resurrect its stale timeout. SessionInfo stores whole
+// seconds, so positive fractions are rounded up rather than becoming zero.
 func applyExecutorLockWaitTimeout(proc *process.Process, opts executor.Options) {
 	if proc == nil || !opts.HasLockWaitTimeout() {
 		return
 	}
 	timeout := opts.LockWaitTimeout()
+	proc.Base.SessionInfo.LockWaitTimeoutSet = true
+	if timeout <= 0 {
+		proc.Base.SessionInfo.LockWaitTimeout = 0
+		return
+	}
 	seconds := int64(timeout / time.Second)
 	if timeout%time.Second != 0 {
 		seconds++
-	}
-	if seconds <= 0 {
-		seconds = 1
 	}
 	proc.Base.SessionInfo.LockWaitTimeout = seconds
 }

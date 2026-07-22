@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -789,6 +790,7 @@ type lockRetryState struct {
 
 func lockWaitTimeout(proc *process.Process, txnOp client.TxnOperator) time.Duration {
 	txnTimeout := client.LockWaitTimeoutFromTxn(txnOp)
+	var explicitProcessTimeout bool
 	// Background/internal execution may carry a per-execution value in the
 	// process or txn options while its resolver only exposes compiled global
 	// defaults. Prefer the caller-owned budget in that case. Frontend execution
@@ -796,11 +798,12 @@ func lockWaitTimeout(proc *process.Process, txnOp client.TxnOperator) time.Durat
 	// observed even after a transaction has started.
 	if proc != nil && proc.Base != nil && !proc.Base.IsFrontend {
 		if proc.GetSessionInfo() != nil {
+			explicitProcessTimeout = proc.GetSessionInfo().LockWaitTimeoutSet
 			if seconds := proc.GetSessionInfo().LockWaitTimeout; seconds > 0 {
 				return time.Duration(seconds) * time.Second
 			}
 		}
-		if txnTimeout > 0 {
+		if !explicitProcessTimeout && txnTimeout > 0 {
 			return txnTimeout
 		}
 	}
@@ -826,6 +829,13 @@ func lockWaitTimeout(proc *process.Process, txnOp client.TxnOperator) time.Durat
 		if seconds := proc.GetSessionInfo().LockWaitTimeout; seconds > 0 {
 			return time.Duration(seconds) * time.Second
 		}
+	}
+	if explicitProcessTimeout {
+		// Explicit zero means "clear this execution's override", not
+		// "wait forever". Use the shared product fallback when no resolver is
+		// installed. This also matches the positive legacy value serialized for
+		// old pipeline peers that do not understand LockWaitTimeoutSet.
+		return time.Duration(defines.DefaultLockWaitTimeoutSeconds) * time.Second
 	}
 	return txnTimeout
 }

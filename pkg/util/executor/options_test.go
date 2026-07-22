@@ -43,7 +43,7 @@ func TestOptionsLockWaitTimeout(t *testing.T) {
 	require.Len(t, opts.ExtraTxnOptions(), 1)
 
 	opts = opts.WithLockWaitTimeout(0)
-	require.False(t, opts.HasLockWaitTimeout())
+	require.True(t, opts.HasLockWaitTimeout())
 	require.Zero(t, opts.LockWaitTimeout())
 	require.Len(t, opts.ExtraTxnOptions(), 2)
 }

@@ -112,6 +112,7 @@ type SessionInfo struct {
 	Version              string
 	TimeZone             *time.Location
 	LockWaitTimeout      int64
+	LockWaitTimeoutSet   bool // distinguishes an explicit zero from an unset value
 	StorageEngine        engine.Engine
 	QueryId              []string
 	ResultColTypes       []types.Type
