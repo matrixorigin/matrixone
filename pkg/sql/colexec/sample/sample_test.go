@@ -16,6 +16,8 @@ package sample
 
 import (
 	"bytes"
+	"runtime"
+	"runtime/debug"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -66,28 +68,30 @@ func makeSampleMemoryBatch(tb testing.TB, includeWide bool) (*batch.Batch, *mpoo
 	return bat, mp
 }
 
-func initializeOffHeapSampleResult(pool *sPool, input *batch.Batch) {
-	result := batch.NewWithSize(len(input.Vecs))
-	for i, vec := range input.Vecs {
-		result.Vecs[i] = vector.NewOffHeapVecWithType(*vec.GetType())
-	}
-
-	if len(input.Vecs) > 1 {
-		pool.growMulPool(1, len(input.Vecs))
-		pool.mPools[0].data.validBatch = result
-	} else {
-		pool.growSiPool(1)
-		pool.sPools[0].data.validBatch = result
-	}
-}
-
 func executeSampleMemoryCase(tb testing.TB, proc *process.Process, input *batch.Batch) sampleMemoryStats {
 	tb.Helper()
+
+	benchmark, isBenchmark := tb.(*testing.B)
+	if isBenchmark {
+		benchmark.StopTimer()
+	}
+	runtime.GC()
+	previousGCPercent := debug.SetGCPercent(-1)
+	gcRestored := false
+	defer func() {
+		if !gcRestored {
+			debug.SetGCPercent(previousGCPercent)
+		}
+	}()
+	var before runtime.MemStats
+	runtime.ReadMemStats(&before)
+	if isBenchmark {
+		benchmark.StartTimer()
+	}
 
 	mp := proc.Mp()
 	pool := newSamplePoolByRows(proc, input.RowCount(), len(input.Vecs), false)
 	defer pool.Free()
-	initializeOffHeapSampleResult(pool, input)
 	if err := pool.Sample(1, input.Vecs, nil, input); err != nil {
 		tb.Fatal(err)
 	}
@@ -98,14 +102,24 @@ func executeSampleMemoryCase(tb testing.TB, proc *process.Process, input *batch.
 	if result.RowCount() != input.RowCount() {
 		tb.Fatalf("expected %d sampled rows, got %d", input.RowCount(), result.RowCount())
 	}
+	if isBenchmark {
+		benchmark.StopTimer()
+	}
+	var after runtime.MemStats
+	runtime.ReadMemStats(&after)
 
 	stats := sampleMemoryStats{
 		retainedBytes: int64(result.Allocated()),
-		peakBytes:     mp.Stats().HighWaterMark.Load(),
+		peakBytes:     int64(after.HeapAlloc - before.HeapAlloc),
 	}
 	result.Clean(mp)
 	if curr := mp.CurrNB(); curr != 0 {
 		tb.Fatalf("sample execution leaked %d mpool bytes", curr)
+	}
+	debug.SetGCPercent(previousGCPercent)
+	gcRestored = true
+	if isBenchmark {
+		benchmark.StartTimer()
 	}
 	return stats
 }
@@ -152,15 +166,16 @@ func BenchmarkSamplePrunedWideVarlenMemory(b *testing.B) {
 			proc := testutil.NewProcessWithMPool(b, "", outputMP)
 			defer proc.Free()
 
-			var retainedBytes int64
+			var peakBytes, retainedBytes int64
 			b.ReportAllocs()
 			b.ResetTimer()
 			for range b.N {
 				stats := executeSampleMemoryCase(b, proc, input)
+				peakBytes += stats.peakBytes
 				retainedBytes += stats.retainedBytes
 			}
+			b.ReportMetric(float64(peakBytes)/float64(b.N), "heap-peak-B/op")
 			b.ReportMetric(float64(retainedBytes)/float64(b.N), "vector-retained-B/op")
-			b.ReportMetric(float64(outputMP.Stats().HighWaterMark.Load()), "mpool-peak-B")
 		})
 	}
 }
