@@ -16,7 +16,7 @@ package compute
 
 import (
 	"bytes"
-	"sort"
+	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -32,8 +32,14 @@ func SortAndDedup[T any](
 	if len(vals) < 1 {
 		return vals
 	}
-	sort.Slice(vals, func(i, j int) bool {
-		return lessFn(&vals[i], &vals[j])
+	slices.SortFunc(vals, func(a, b T) int {
+		if lessFn(&a, &b) {
+			return -1
+		}
+		if lessFn(&b, &a) {
+			return 1
+		}
+		return 0
 	})
 	pos := 1
 	for start, end := 1, len(vals); start < end; start++ {

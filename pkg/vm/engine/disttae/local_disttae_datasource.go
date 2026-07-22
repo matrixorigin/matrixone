@@ -19,7 +19,6 @@ import (
 	"context"
 	"fmt"
 	"slices"
-	"sort"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -138,7 +137,21 @@ type LocalDisttaeDataSource struct {
 
 	filterZM        objectio.ZoneMap
 	tombstonePolicy engine.TombstoneApplyPolicy
+
+	workspaceDeletes struct {
+		initialized bool
+		txnOffset   int
+		entries     []workspaceDeleteEntry
+		byBlock     map[objectio.Blockid][]workspaceDeleteEntry
+	}
 }
+
+type workspaceDeleteEntry struct {
+	rowIds []objectio.Rowid
+	sorted bool
+}
+
+const mergeWorkspaceDeleteEntriesThreshold = 1024
 
 func (ls *LocalDisttaeDataSource) String() string {
 	blks := make([]*objectio.BlockInfo, ls.rangeSlice.Len())
@@ -323,29 +336,37 @@ func (ls *LocalDisttaeDataSource) sortBlockList() {
 	}
 	ls.rangeSlice = make(objectio.BlockInfoSlice, ls.rangeSlice.Size())
 
+	// compareInit orders uninitialized zone maps before initialized ones and
+	// treats two uninitialized zone maps as equal, so the comparator is a valid
+	// strict weak ordering (unlike a bare min/max compare, which is undefined for
+	// uninitialized zone maps). It returns (result, done): done is false only when
+	// both zone maps are initialized and the caller must compare values.
+	compareInit := func(a, b *blockSortHelper) (int, bool) {
+		ai, bi := a.zm.IsInited(), b.zm.IsInited()
+		if ai && bi {
+			return 0, false
+		}
+		if ai == bi {
+			return 0, true // both uninitialized: equal
+		}
+		if !ai {
+			return -1, true // uninitialized sorts first
+		}
+		return 1, true
+	}
 	if ls.desc {
-		sort.Slice(helper, func(i, j int) bool {
-			zm1 := helper[i].zm
-			if !zm1.IsInited() {
-				return true
+		slices.SortFunc(helper, func(a, b *blockSortHelper) int {
+			if r, done := compareInit(a, b); done {
+				return r
 			}
-			zm2 := helper[j].zm
-			if !zm2.IsInited() {
-				return false
-			}
-			return zm1.CompareMax(zm2) > 0
+			return b.zm.CompareMax(a.zm) // descending by max
 		})
 	} else {
-		sort.Slice(helper, func(i, j int) bool {
-			zm1 := helper[i].zm
-			if !zm1.IsInited() {
-				return true
+		slices.SortFunc(helper, func(a, b *blockSortHelper) int {
+			if r, done := compareInit(a, b); done {
+				return r
 			}
-			zm2 := helper[j].zm
-			if !zm2.IsInited() {
-				return false
-			}
-			return zm1.CompareMin(zm2) < 0
+			return a.zm.CompareMin(b.zm) // ascending by min
 		})
 	}
 
@@ -647,11 +668,6 @@ func (ls *LocalDisttaeDataSource) filterInMemUnCommittedInserts(
 			break
 		}
 
-		if writes[ls.wsCursor].bat == nil || writes[ls.wsCursor].bat.RowCount() == 0 {
-			ls.wsCursor++
-			continue
-		}
-
 		entry := writes[ls.wsCursor]
 
 		if ok := checkWorkspaceEntryType(ls.table, entry, true); !ok {
@@ -759,10 +775,9 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 		if !ls.memPKFilter.Valid() {
 			ls.pStateRows.insIter = ls.pState.NewRowsIter(ls.snapshotTS, nil, false)
 		} else {
-			ls.pStateRows.insIter = ls.pState.NewPrimaryKeyIter(
+			ls.pStateRows.insIter = ls.pState.NewPrimaryKeyIterWithFilters(
 				ls.memPKFilter.TS,
-				ls.memPKFilter.Op(),
-				ls.memPKFilter.Keys())
+				ls.memPKFilter.Specs())
 		}
 		if summaryBuf != nil {
 			summaryBuf.WriteString(fmt.Sprintf("[PScan] insIter created %v\n", ls.memPKFilter.String()))
@@ -1079,18 +1094,8 @@ func (ls *LocalDisttaeDataSource) applyWorkspaceEntryDeletes(
 		defer ls.table.getTxn().Unlock()
 	}
 
-	//done := false
-	writes := ls.table.getTxn().writes[:ls.txnOffset]
-
-	for idx := range writes {
-		if ok := checkWorkspaceEntryType(ls.table, writes[idx], false); !ok {
-			continue
-		}
-
-		sorted := writes[idx].bat.Vecs[0].GetSorted()
-		rowIds := vector.MustFixedColNoTypeCheck[objectio.Rowid](writes[idx].bat.Vecs[0])
-
-		readutil.FastApplyDeletesByRowIds(bid, &leftRows, deletedRows, rowIds, sorted)
+	for _, entry := range ls.workspaceDeleteEntriesForBlockLocked(bid) {
+		readutil.FastApplyDeletesByRowIds(bid, &leftRows, deletedRows, entry.rowIds, entry.sorted)
 
 		if leftRows != nil && len(leftRows) == 0 {
 			break
@@ -1098,6 +1103,99 @@ func (ls *LocalDisttaeDataSource) applyWorkspaceEntryDeletes(
 	}
 
 	return leftRows
+}
+
+func (ls *LocalDisttaeDataSource) workspaceDeleteEntriesForBlockLocked(
+	bid *objectio.Blockid,
+) []workspaceDeleteEntry {
+	entries := ls.workspaceDeleteEntriesLocked()
+	if len(entries) == 0 {
+		return nil
+	}
+	if ls.workspaceDeletes.byBlock == nil {
+		ls.workspaceDeletes.byBlock = make(map[objectio.Blockid][]workspaceDeleteEntry)
+		for idx := range entries {
+			ls.addWorkspaceDeleteEntryByBlock(entries[idx])
+		}
+	}
+	return ls.workspaceDeletes.byBlock[*bid]
+}
+
+func (ls *LocalDisttaeDataSource) addWorkspaceDeleteEntryByBlock(entry workspaceDeleteEntry) {
+	if len(entry.rowIds) == 0 {
+		return
+	}
+	// workspaceDeleteEntriesLocked normalizes every cached entry to sorted rowids,
+	// so equal block ids are contiguous and can be indexed by slicing.
+	start := 0
+	current := entry.rowIds[0].CloneBlockID()
+	for idx := 1; idx < len(entry.rowIds); idx++ {
+		blockID := entry.rowIds[idx].CloneBlockID()
+		if blockID == current {
+			continue
+		}
+		ls.workspaceDeletes.byBlock[current] = append(
+			ls.workspaceDeletes.byBlock[current],
+			workspaceDeleteEntry{rowIds: entry.rowIds[start:idx], sorted: true})
+		start = idx
+		current = blockID
+	}
+	ls.workspaceDeletes.byBlock[current] = append(
+		ls.workspaceDeletes.byBlock[current],
+		workspaceDeleteEntry{rowIds: entry.rowIds[start:], sorted: true})
+}
+
+func (ls *LocalDisttaeDataSource) workspaceDeleteEntriesLocked() []workspaceDeleteEntry {
+	if ls.workspaceDeletes.initialized && ls.workspaceDeletes.txnOffset == ls.txnOffset {
+		return ls.workspaceDeletes.entries
+	}
+
+	entries := ls.workspaceDeletes.entries[:0]
+	writes := ls.table.getTxn().writes[:ls.txnOffset]
+	for idx := range writes {
+		if ok := checkWorkspaceEntryType(ls.table, writes[idx], false); !ok {
+			continue
+		}
+
+		entryRowIds := vector.MustFixedColNoTypeCheck[objectio.Rowid](writes[idx].bat.Vecs[0])
+		sorted := writes[idx].bat.Vecs[0].GetSorted()
+		if !sorted {
+			if len(entryRowIds) <= 1 {
+				sorted = true
+			} else {
+				entryRowIds = slices.Clone(entryRowIds)
+				slices.SortFunc(entryRowIds, func(a, b objectio.Rowid) int { return a.Compare(&b) })
+				sorted = true
+			}
+		}
+		entries = append(entries, workspaceDeleteEntry{
+			rowIds: entryRowIds,
+			sorted: sorted,
+		})
+	}
+
+	if len(entries) > mergeWorkspaceDeleteEntriesThreshold {
+		totalRows := 0
+		for _, entry := range entries {
+			totalRows += len(entry.rowIds)
+		}
+		rowIds := make([]objectio.Rowid, 0, totalRows)
+		for _, entry := range entries {
+			rowIds = append(rowIds, entry.rowIds...)
+		}
+		slices.SortFunc(rowIds, func(a, b objectio.Rowid) int { return a.Compare(&b) })
+		entries = entries[:0]
+		entries = append(entries, workspaceDeleteEntry{
+			rowIds: rowIds,
+			sorted: true,
+		})
+	}
+
+	ls.workspaceDeletes.initialized = true
+	ls.workspaceDeletes.txnOffset = ls.txnOffset
+	ls.workspaceDeletes.entries = entries
+	ls.workspaceDeletes.byBlock = nil
+	return entries
 }
 
 func (ls *LocalDisttaeDataSource) applyWorkspaceFlushedS3Deletes(
@@ -1187,6 +1285,14 @@ func (ls *LocalDisttaeDataSource) getInMemDelIter(
 	if offsetCnt <= logtailreplay.IndexScaleTiny ||
 		ls.memPKFilter == nil || !ls.memPKFilter.Valid() {
 		return ls.pState.NewRowsIter(ls.snapshotTS, bid, true), false
+	}
+	filterSpecs := ls.memPKFilter.Specs()
+	if len(filterSpecs) > 1 {
+		return ls.pState.NewPrimaryKeyDelIterWithFilters(
+			&ls.memPKFilter.TS,
+			bid,
+			filterSpecs,
+		), false
 	}
 
 	inValCnt, ok := ls.memPKFilter.InKind()

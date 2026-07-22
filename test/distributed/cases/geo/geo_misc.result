@@ -1,0 +1,30 @@
+select st_longitude(st_geomfromtext('POINT(3 4)')) as lon;
+lon
+3.0
+select st_latitude(st_geomfromtext('POINT(3 4)')) as lat;
+lat
+4.0
+select st_astext(st_swapxy(st_geomfromtext('POINT(1 2)'))) as swap_point;
+swap_point
+POINT(2 1)
+select st_astext(st_swapxy(st_geomfromtext('LINESTRING(0 1,2 3)'))) as swap_line;
+swap_line
+LINESTRING(1 0,3 2)
+select st_astext(st_swapxy(st_geomfromtext('POLYGON((0 0,4 0,4 2,0 0))'))) as swap_poly;
+swap_poly
+POLYGON((0 0,0 4,2 4,0 0))
+select st_astext(st_validate(st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0))'))) as valid;
+valid
+POLYGON((0 0,4 0,4 4,0 4,0 0))
+select st_astext(st_validate(st_geomfromtext('POLYGON((0 0,4 4,4 0,0 4,0 0))'))) as invalid_bowtie;
+invalid_bowtie
+null
+select st_astext(st_makeenvelope(st_geomfromtext('POINT(0 0)'), st_geomfromtext('POINT(2 3)'))) as envelope;
+envelope
+POLYGON((0 0,2 0,2 3,0 3,0 0))
+select st_astext(st_makeenvelope(st_geomfromtext('POINT(5 7)'), st_geomfromtext('POINT(1 2)'))) as envelope_unordered;
+envelope_unordered
+POLYGON((1 2,5 2,5 7,1 7,1 2))
+select st_distance_sphere(st_geomfromtext('POINT(0 0)'), st_geomfromtext('POINT(1 0)')) as one_degree_m;
+one_degree_m
+111195.0802335329

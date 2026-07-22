@@ -387,6 +387,117 @@ func TestPauseAndCancelTaskHandleBranchesDirect(t *testing.T) {
 	require.ErrorContains(t, cancelH.Handle(context.Background()), "cancel failed")
 }
 
+func TestPauseTaskHandleCallsCompleteHookForNonLocalTask(t *testing.T) {
+	r, store := newDaemonHandleTestRunner(t)
+
+	completed := make(chan task.DaemonTask, 1)
+	r.options.pauseTaskCompleted = func(ctx context.Context, tk task.DaemonTask) error {
+		completed <- tk
+		return nil
+	}
+
+	dt := newDaemonTaskForTest(1, task.TaskStatus_PauseRequested, "r2")
+	dt.Metadata.ID = "pause-non-local-1"
+	mustAddTestDaemonTask(t, store, 1, dt)
+
+	pauseH := newPauseTask(r, &daemonTask{task: dt})
+	require.NoError(t, pauseH.Handle(context.Background()))
+
+	select {
+	case tk := <-completed:
+		require.Equal(t, dt.ID, tk.ID)
+		require.Equal(t, task.TaskStatus_Paused, tk.TaskStatus)
+	case <-time.After(time.Second):
+		t.Fatal("pause complete hook was not called")
+	}
+
+	tasks := mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, dt.ID))
+	require.Len(t, tasks, 1)
+	require.Equal(t, task.TaskStatus_Paused, tasks[0].TaskStatus)
+}
+
+func TestPauseTaskHandleKeepsPauseRequestedWhenActivePauseFails(t *testing.T) {
+	r, store := newDaemonHandleTestRunner(t)
+
+	dt := newDaemonTaskForTest(1, task.TaskStatus_PauseRequested, r.runnerID)
+	dt.Metadata.ID = "pause-active-fail-1"
+	mustAddTestDaemonTask(t, store, 1, dt)
+	taskRef := &daemonTask{task: dt}
+	r.addDaemonTask(taskRef)
+
+	ar := ActiveRoutine(&mockErrActiveRoutine{pauseErr: errors.New("pause failed")})
+	taskRef.activeRoutine.Store(&ar)
+
+	pauseH := newPauseTask(r, taskRef)
+	require.ErrorContains(t, pauseH.Handle(context.Background()), "pause failed")
+
+	tasks := mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, dt.ID))
+	require.Equal(t, task.TaskStatus_PauseRequested, tasks[0].TaskStatus)
+}
+
+func TestPauseTasksRetriesPausedCDCFinalize(t *testing.T) {
+	r, store := newDaemonHandleTestRunner(t)
+
+	calls := atomic.Int32{}
+	r.options.pauseTaskCompleted = func(ctx context.Context, tk task.DaemonTask) error {
+		if calls.Add(1) == 1 {
+			return errors.New("finalize failed")
+		}
+		return nil
+	}
+
+	dt := newDaemonTaskForTest(1, task.TaskStatus_PauseRequested, "r2")
+	dt.Metadata.ID = "pause-finalize-retry-1"
+	dt.Metadata.Executor = task.TaskCode_InitCdc
+	dt.LastHeartbeat = time.Time{}
+	mustAddTestDaemonTask(t, store, 1, dt)
+
+	pauseH := newPauseTask(r, &daemonTask{task: dt})
+	require.ErrorContains(t, pauseH.Handle(context.Background()), "finalize failed")
+	require.Equal(t, int32(1), calls.Load())
+
+	tasks := mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, dt.ID))
+	require.Equal(t, task.TaskStatus_Paused, tasks[0].TaskStatus)
+
+	retryTasks := r.pauseTasks(context.Background())
+	require.Len(t, retryTasks, 1)
+	require.Equal(t, dt.ID, retryTasks[0].ID)
+	require.Equal(t, task.TaskStatus_Paused, retryTasks[0].TaskStatus)
+
+	retryH := newPauseTask(r, &daemonTask{task: retryTasks[0]})
+	require.NoError(t, retryH.Handle(context.Background()))
+	require.Equal(t, int32(2), calls.Load())
+	require.Empty(t, r.pauseTasks(context.Background()))
+}
+
+func TestPauseCompletedTasksClearedByLifecycle(t *testing.T) {
+	r, store := newDaemonHandleTestRunner(t)
+
+	resumeDT := newDaemonTaskForTest(1, task.TaskStatus_ResumeRequested, r.runnerID)
+	resumeDT.Metadata.ID = "pause-completed-resume-1"
+	mustAddTestDaemonTask(t, store, 1, resumeDT)
+	resumeRef := &daemonTask{task: resumeDT}
+	resumeAR := ActiveRoutine(newMockActiveRoutine())
+	resumeRef.activeRoutine.Store(&resumeAR)
+	r.markPauseTaskCompleted(resumeDT.ID)
+	require.NoError(t, newResumeTask(r, resumeRef).Handle(context.Background()))
+	require.False(t, r.isPauseTaskCompleted(resumeDT.ID))
+
+	cancelDT := newDaemonTaskForTest(2, task.TaskStatus_CancelRequested, r.runnerID)
+	cancelDT.Metadata.ID = "pause-completed-cancel-1"
+	mustAddTestDaemonTask(t, store, 1, cancelDT)
+	r.markPauseTaskCompleted(cancelDT.ID)
+	require.NoError(t, newCancelTask(r, &daemonTask{task: cancelDT}).Handle(context.Background()))
+	require.False(t, r.isPauseTaskCompleted(cancelDT.ID))
+
+	removeDT := newDaemonTaskForTest(3, task.TaskStatus_Paused, r.runnerID)
+	removeDT.Metadata.ID = "pause-completed-remove-1"
+	r.addDaemonTask(&daemonTask{task: removeDT})
+	r.markPauseTaskCompleted(removeDT.ID)
+	r.removeDaemonTask(removeDT.ID)
+	require.False(t, r.isPauseTaskCompleted(removeDT.ID))
+}
+
 func TestRunDaemonTask(t *testing.T) {
 	runTaskRunnerTest(t, func(r *taskRunner, s TaskService, store TaskStorage) {
 		c := make(chan struct{})
@@ -477,17 +588,26 @@ func waitStarted(started *atomic.Bool, timeout time.Duration) {
 }
 
 func TestPauseResumeDaemonTask(t *testing.T) {
-	runTaskRunnerTest(t, func(r *taskRunner, s TaskService, store TaskStorage) {
-		dt := newDaemonTaskForTest(1, task.TaskStatus_Created, r.runnerID)
-		mustAddTestDaemonTask(t, store, 1, dt)
-		var started atomic.Bool
-		r.testRegisterExecutor(t, task.TaskCode_ConnectorKafkaSink, &started)
-		waitStarted(&started, time.Second*5)
+	for _, code := range []task.TaskCode{
+		task.TaskCode_ConnectorKafkaSink,
+		task.TaskCode_ISCPExecutor,
+		task.TaskCode_PublicationExecutor,
+	} {
+		t.Run(code.String(), func(t *testing.T) {
+			runTaskRunnerTest(t, func(r *taskRunner, s TaskService, store TaskStorage) {
+				dt := newDaemonTaskForTest(1, task.TaskStatus_Created, r.runnerID)
+				dt.Metadata.Executor = code
+				mustAddTestDaemonTask(t, store, 1, dt)
+				var started atomic.Bool
+				r.testRegisterExecutor(t, code, &started)
+				waitStarted(&started, time.Second*5)
 
-		expectTaskStatus(t, store, dt, task.TaskStatus_PauseRequested, task.TaskStatus_Paused)
-		expectTaskStatus(t, store, dt, task.TaskStatus_ResumeRequested, task.TaskStatus_Running)
-	}, WithRunnerParallelism(1),
-		WithRunnerFetchInterval(time.Millisecond))
+				expectTaskStatus(t, store, dt, task.TaskStatus_PauseRequested, task.TaskStatus_Paused)
+				expectTaskStatus(t, store, dt, task.TaskStatus_ResumeRequested, task.TaskStatus_Running)
+			}, WithRunnerParallelism(1),
+				WithRunnerFetchInterval(time.Millisecond))
+		})
+	}
 }
 
 func TestPauseTaskHandleIdempotent(t *testing.T) {

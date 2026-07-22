@@ -15,10 +15,12 @@
 package ivfflat
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
@@ -40,6 +42,142 @@ func mock_runSql_parser_error(
 	sql string,
 ) (executor.Result, error) {
 	return executor.Result{}, moerr.NewInternalErrorNoCtx("sql parser error")
+}
+
+func TestIvfflatSearchDoesNotAddRowPartitionFilterToEntriesSQL(t *testing.T) {
+	oldRunSql := runSql
+	defer func() { runSql = oldRunSql }()
+
+	var statements []string
+	runSql = func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+		statements = append(statements, sql)
+		return executor.Result{}, nil
+	}
+
+	m := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", m)
+	sqlproc := sqlexec.NewSqlProcess(proc)
+	sqlproc.IndexReaderParam = &plan.IndexReaderParam{
+		PartitionCnCnt: 2,
+		PartitionCnIdx: 1,
+	}
+
+	idxcfg := vectorindex.IndexConfig{}
+	idxcfg.Ivfflat.Metric = uint16(metric.Metric_L2Distance)
+	idxcfg.Ivfflat.Version = 7
+
+	tblcfg := vectorindex.IndexTableConfig{
+		DbName:       "db1",
+		EntriesTable: "entries1",
+	}
+	idx := &IvfflatSearchIndex[float32]{Version: 7}
+
+	_, _, err := idx.Search(sqlproc, idxcfg, tblcfg, []float32{0, 1, 2}, vectorindex.RuntimeConfig{Limit: 4}, 1)
+	require.NoError(t, err)
+	require.Len(t, statements, 1)
+	require.NotContains(t, statements[0], "crc32")
+	require.NotContains(t, statements[0], "mod(")
+	require.Contains(t, statements[0], "ORDER BY vec_dist LIMIT 4")
+}
+
+func TestIvfflatSearchDoesNotAddRowPartitionFilterToExactPkSQL(t *testing.T) {
+	oldRunSql := runSql
+	defer func() { runSql = oldRunSql }()
+
+	var statement string
+	runSql = func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+		statement = sql
+		return executor.Result{}, nil
+	}
+
+	m := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", m)
+	sqlproc := sqlexec.NewSqlProcess(proc)
+	sqlproc.ExactPkFilter = "1,2,3"
+	sqlproc.IndexReaderParam = &plan.IndexReaderParam{
+		PartitionCnCnt: 4,
+		PartitionCnIdx: 3,
+	}
+
+	idxcfg := vectorindex.IndexConfig{}
+	idxcfg.Ivfflat.Metric = uint16(metric.Metric_L2Distance)
+	idxcfg.Ivfflat.Version = 9
+
+	tblcfg := vectorindex.IndexTableConfig{
+		DbName:       "db1",
+		EntriesTable: "entries1",
+	}
+	idx := &IvfflatSearchIndex[float32]{Version: 9}
+
+	_, _, err := idx.Search(sqlproc, idxcfg, tblcfg, []float32{0, 1, 2}, vectorindex.RuntimeConfig{Limit: 4}, 1)
+	require.NoError(t, err)
+	require.Contains(t, statement, "`__mo_index_pri_col` IN (1,2,3)")
+	require.NotContains(t, statement, "crc32")
+	require.NotContains(t, statement, "mod(")
+	require.False(t, strings.Contains(statement, "ORDER BY vec_dist"), statement)
+}
+
+func TestIvfflatSearchFloat32(t *testing.T) {
+	runSql = mock_runSql
+
+	var idxcfg vectorindex.IndexConfig
+	var tblcfg vectorindex.IndexTableConfig
+
+	m := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", m)
+	sqlproc := sqlexec.NewSqlProcess(proc)
+
+	idxcfg.Ivfflat.Metric = uint16(metric.Metric_L2Distance)
+	idxcfg.Ivfflat.Dimensions = 3
+
+	v := []float32{0, 1, 2}
+	rt := vectorindex.RuntimeConfig{Limit: 1}
+
+	s := &IvfflatSearch[float32]{
+		Idxcfg: idxcfg,
+		Tblcfg: tblcfg,
+		Index:  &IvfflatSearchIndex[float32]{},
+	}
+
+	// 1. Test with nil/empty results (no centroids loaded)
+	outKeys := make([]int64, 1)
+	outDists := make([]float32, 1)
+	err := s.SearchFloat32(sqlproc, v, rt, outKeys, outDists)
+	require.NoError(t, err)
+
+	// Since we are mocking everything, we can't easily run a full Ivf search without more mocks
+	// But we've verified it doesn't crash on nil keys and calls the underlying Search.
+}
+
+func TestIvfflatSearchFloat32_BadQueryType(t *testing.T) {
+	runSql = mock_runSql
+
+	var idxcfg vectorindex.IndexConfig
+	var tblcfg vectorindex.IndexTableConfig
+
+	m := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", m)
+	sqlproc := sqlexec.NewSqlProcess(proc)
+
+	idxcfg.Ivfflat.Metric = uint16(metric.Metric_L2Distance)
+	idxcfg.Ivfflat.Dimensions = 3
+
+	rt := vectorindex.RuntimeConfig{Limit: 1}
+
+	s := &IvfflatSearch[float32]{
+		Idxcfg: idxcfg,
+		Tblcfg: tblcfg,
+		Index:  &IvfflatSearchIndex[float32]{},
+	}
+
+	// non-[]float32 query → Search returns error and SearchFloat32 propagates it
+	err := s.SearchFloat32(sqlproc, "wrong", rt, nil, nil)
+	require.Error(t, err)
+}
+
+func TestIvfflatUpdateConfig(t *testing.T) {
+	s := &IvfflatSearch[float32]{}
+	require.NoError(t, s.UpdateConfig(nil))
 }
 
 func TestIvfSearchRace(t *testing.T) {

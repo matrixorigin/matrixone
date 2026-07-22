@@ -84,7 +84,7 @@ select * from table03;
 
 drop table if exists table04;
 create table table04 as select * from table03;
--- @bvt:issue#14792
+-- @bvt:issue#24436
 show create table table04;
 -- @bvt:issue
 select * from table04;
@@ -96,7 +96,7 @@ select * from table05;
 
 drop table if exists table06;
 create table table06(col10 binary) as select col2, col4, col6, col8, col9 from table03;
--- @bvt:issue#14792
+-- @bvt:issue#24436
 show create table table06;
 -- @bvt:issue
 desc table06;
@@ -132,7 +132,7 @@ select * from table07;
 
 drop table if exists table08;
 create table table08(col6 int, col7 bigint, col8 char) as select * from table07;
--- @bvt:issue#14792
+-- @bvt:issue#24436
 show create table table08;
 -- @bvt:issue
 select * from table08;
@@ -140,7 +140,7 @@ drop table table08;
 
 drop table if exists table09;
 create table table09 as select col1, col2, col4 as newCol4 from table07;
--- @bvt:issue#14792
+-- @bvt:issue#24436
 show create table table09;
 -- @bvt:issue
 select * from table09;
@@ -149,7 +149,7 @@ drop table table09;
 -- column duplication
 drop table if exists table12;
 create table table12 (col1 date) as select * from table07;
--- @bvt:issue#14792
+-- @bvt:issue#24436
 show create table table12;
 -- @bvt:issue
 select * from table12;
@@ -278,7 +278,7 @@ show create table table05;
 select * from table05;
 drop table if exists table06;
 create table table06 (d char not null default 'a') as select a from table03;
--- @bvt:issue#14792
+-- @bvt:issue#24436
 show create table table06;
 -- @bvt:issue
 select * from table06;
@@ -296,7 +296,7 @@ insert into math01 values (22813, -241, 932342.4324, -0.1);
 insert into math01 values (null, null, null, 10);
 
 drop table if exists agg01;
--- @bvt:issue#14792
+-- @bvt:issue#24436
 create table agg01 as select avg(col1) as avgCol, sum(col2) as sumcol, count(col3) as countCol, max(col4) as maxCol, min(col4) as minCol from math01;
 show create table agg01;
 select * from agg01;
@@ -310,7 +310,7 @@ select * from bit01;
 
 drop table if exists bit02;
 create table bit02 as select bit_and(col2), bit_or(col2), bit_xor(col2), stddev_pop(col2) from bit01;
--- @bvt:issue#14792
+-- @bvt:issue#24436
 desc bit02;
 show create table bit02;
 -- @bvt:issue
@@ -356,7 +356,7 @@ insert into string01 values ('test create table as select', '0', null);
 
 drop table if exists string02;
 create table string02 as select concat_ws(',', col1, 'abcde') from string01;
--- @bvt:issue#14792
+-- @bvt:issue#24436
 show create table string02;
 -- @bvt:issue
 select * from string02;
@@ -364,7 +364,7 @@ drop table string02;
 
 drop table if exists string03;
 create table string03 as select find_in_set(col2, col1) from string01;
--- @bvt:issue#14792
+-- @bvt:issue#24436
 show create table string03;
 -- @bvt:issue
 select * from string03;
@@ -372,7 +372,7 @@ drop table string03;
 
 drop table if exists string04;
 create table string04 as select oct(col2), empty(col3), length(col1) from string01;
--- @bvt:issue#14792
+-- @bvt:issue#24436
 show create table string04;
 -- @bvt:issue
 select * from string04;
@@ -386,7 +386,7 @@ drop table string05;
 
 drop table if exists string06;
 create table string06 as select lpad(col1, 5, '-'), rpad(col1, 1, '-') from string01;
--- @bvt:issue#14792
+-- @bvt:issue#24436
 show create table string06;
 -- @bvt:issue
 select * from string06;
@@ -443,7 +443,7 @@ select * from time01;
 
 drop table if exists time02;
 create table time02 as select date_format(col2, '%W %M %Y') from time01;
--- @bvt:issue#14792
+-- @bvt:issue#24436
 show create table time02;
 desc time02;
 -- @bvt:issue
@@ -452,7 +452,7 @@ drop table time02;
 
 drop table if exists time03;
 create table time03 as select date(col1), date(col2), year(col1), day(col1), weekday(col1), dayofyear(col1) as dya from time01;
--- @bvt:issue#14792
+-- @bvt:issue#24436
 desc time03;
 show create table time03;
 -- @bvt:issue
@@ -473,7 +473,7 @@ drop table time05;
 
 drop table if exists time06;
 create table time06 as select datediff('2007-12-31 23:59:59', col1) as timedifferent from time01;
--- @bvt:issue#14792
+-- @bvt:issue#24436
 show create table time06;
 -- @bvt:issue
 select * from time06;
@@ -552,14 +552,14 @@ select * from orders;
 
 drop table if exists customer_totals;
 create table customer_totals as select customer_id, count(order_id) as total_orders, sum(total_amount) as total_amount from orders group by customer_id having count(order_id) > 1 and sum(total_amount) > 150.0;
--- @bvt:issue#14792
+-- @bvt:issue#24436
 show create table customer_totals;
 -- @bvt:issue
 select * from customer_totals;
 
 drop table if exists max_totals;
 create table max_totals as select customer_id, total_orders from customer_totals order by total_orders desc limit 1;
--- @bvt:issue#14792
+-- @bvt:issue#24436
 desc max_totals;
 -- @bvt:issue
 select * from max_totals;
@@ -676,7 +676,7 @@ left join
 left join
     courses c ON e.course_id = c.course_id;
 select * from student_course_enrollments;
--- @bvt:issue#14792
+-- @bvt:issue#24436
 show create table student_course_enrollments;
 -- @bvt:issue
 
@@ -693,7 +693,7 @@ inner join
     enrollments e on s.student_id = e.student_id
 inner join
     courses c on e.course_id = c.course_id;
--- @bvt:issue#14792
+-- @bvt:issue#24436
 show create table student_course_enrollments_inner;
 -- @bvt:issue
 select * from student_course_enrollments;
@@ -711,7 +711,7 @@ right join
     enrollments e on s.student_id = e.student_id
 right join
     courses c on e.course_id = c.course_id;
--- @bvt:issue#14792
+-- @bvt:issue#24436
 show create table student_course_enrollments_right;
 -- @bvt:issue
 select * from student_course_enrollments_right;
@@ -729,7 +729,7 @@ right join
     enrollments e on s.student_id = e.student_id
 right join
     courses c on e.course_id = c.course_id;
--- @bvt:issue#14792
+-- @bvt:issue#24436
 show create table student_course_enrollments_full;
 -- @bvt:issue
 select * from student_course_enrollments_full;
@@ -833,7 +833,7 @@ show create table test01;
 drop table if exists test06;
 create table test06 (col1 int not null default 100) as select col1 from test01;
 create table test06 (col1 int not null default 100) as select newcol from test01;
--- @bvt:issue#14792
+-- @bvt:issue#24436
 show create table test06;
 -- @bvt:issue
 select * from test06;
@@ -880,14 +880,14 @@ select * from orders;
 
 drop table if exists customer_totals;
 create temporary table customer_totals as select customer_id, count(order_id) as total_orders, sum(total_amount) as total_amount from orders group by customer_id having count(order_id) > 1 and sum(total_amount) > 150.0;
--- @bvt:issue#14792
+-- @bvt:issue#24436
 show create table customer_totals;
 -- @bvt:issue
 select * from customer_totals;
 
 drop table if exists max_totals;
 create temporary table max_totals as select customer_id, total_orders from customer_totals order by total_orders desc limit 1;
--- @bvt:issue#14792
+-- @bvt:issue#24436
 desc max_totals;
 -- @bvt:issue
 select * from max_totals;
@@ -1111,8 +1111,82 @@ drop table if exists alias02;
 create table alias02 (NewCol int) as select * from alias01;
 show create table alias02;
 select * from alias02;
+drop table if exists ctas_non_ascii_alias;
+create table ctas_non_ascii_alias as select col1 as `中文别名` from alias01;
+desc ctas_non_ascii_alias;
+select `中文别名` from ctas_non_ascii_alias order by `中文别名`;
+drop table ctas_non_ascii_alias;
+drop table if exists ctas_reserved_alias;
+create table ctas_reserved_alias as select `order`.col1 as `select` from alias01 as `order`;
+select `select` from ctas_reserved_alias order by `select`;
+drop table ctas_reserved_alias;
+drop table if exists ctas_cte_alias;
+create table ctas_cte_alias as with `select` (`from`) as (select col1 from alias01) select `from` from `select`;
+select `from` from ctas_cte_alias order by `from`;
+drop table ctas_cte_alias;
+drop table if exists ctas_join_alias;
+create table ctas_join_alias as
+select `left`.`a b`
+from (select col1 as `a b` from alias01) as `left` (`a b`)
+join (select col1 as `a b` from alias01) as `right` (`a b`) using (`a b`);
+select `a b` from ctas_join_alias order by `a b`;
+drop table ctas_join_alias;
+drop table if exists `src``table`;
+drop table if exists `dst``table`;
+create table `src``table` (`a``b` int);
+insert into `src``table` values (1), (2);
+create table `dst``table` as select `s``x`.`a``b` as `x``y` from `src``table` as `s``x`;
+select `x``y` from `dst``table` order by `x``y`;
+drop table `dst``table`;
+drop table `src``table`;
+drop table if exists ctas_index_hint_src;
+drop table if exists ctas_index_hint_dst;
+create table ctas_index_hint_src (
+    col1 int,
+    index `select` (col1),
+    index `a b` (col1),
+    index `x``y` (col1)
+);
+insert into ctas_index_hint_src values (1), (2);
+create table ctas_index_hint_dst as
+select * from ctas_index_hint_src force index (`select`, `a b`, `x``y`);
+select * from ctas_index_hint_dst order by col1;
+drop table ctas_index_hint_dst;
+drop table ctas_index_hint_src;
+drop table if exists ctas_interval_identifier_src;
+drop table if exists ctas_interval_identifier_dst;
+create table ctas_interval_identifier_src (`interval(x,day)` int);
+insert into ctas_interval_identifier_src values (1), (2);
+create table ctas_interval_identifier_dst as
+select `interval(x,day)` from ctas_interval_identifier_src;
+desc ctas_interval_identifier_dst;
+select `interval(x,day)` from ctas_interval_identifier_dst order by `interval(x,day)`;
+drop table ctas_interval_identifier_dst;
+drop table ctas_interval_identifier_src;
+drop table if exists ctas_interval_string;
+create table ctas_interval_string as
+select 'interval(1,day)' as single_quoted, "interval(2,month)" as double_quoted;
+select * from ctas_interval_string;
+drop table ctas_interval_string;
+set @`a b` = 1;
+set @`select` = 2;
+set @`x``y` = 3;
+drop table if exists ctas_user_variable;
+create table ctas_user_variable as
+select @`a b` as space_name, @`select` as reserved_name, @`x``y` as backtick_name;
+select * from ctas_user_variable;
+drop table ctas_user_variable;
 drop table alias01;
 -- @session
+set global autocommit = off;
+set session autocommit = on;
+select @@global.autocommit, @@session.autocommit;
+drop table if exists ctas_system_variable_scope;
+create table ctas_system_variable_scope as
+select @@global.autocommit as global_value, @@session.autocommit as session_value;
+select * from ctas_system_variable_scope;
+drop table ctas_system_variable_scope;
+set global autocommit = on;
 drop database test;
 
 -- privilege

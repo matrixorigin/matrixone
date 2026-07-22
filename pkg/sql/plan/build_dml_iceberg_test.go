@@ -1,0 +1,983 @@
+// Copyright 2026 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package plan
+
+import (
+	"context"
+	"strings"
+	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	icebergapi "github.com/matrixorigin/matrixone/pkg/iceberg/api"
+	"github.com/matrixorigin/matrixone/pkg/iceberg/model"
+	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+)
+
+func TestIcebergDeleteBuildsDMLWriteIntent(t *testing.T) {
+	stmt, err := mysql.ParseOne(context.Background(), "delete from gold_orders where id = 1", 1)
+	if err != nil {
+		t.Fatalf("parse delete: %v", err)
+	}
+	p, err := BuildPlan(newIcebergTestCompilerContext(t, nil), stmt, false)
+	if err != nil {
+		t.Fatalf("build Iceberg delete plan: %v", err)
+	}
+	query := p.GetQuery()
+	if query == nil || query.StmtType != planpb.Query_DELETE {
+		t.Fatalf("expected DELETE query, got %+v", query)
+	}
+	var dmlSink *planpb.Node
+	var scan *planpb.Node
+	for _, node := range query.Nodes {
+		if node.GetExtraOptions() == icebergapi.DMLDeletePlanExtraOptions {
+			dmlSink = node
+		}
+		if node.GetExternScan() != nil && node.GetExternScan().GetType() == int32(planpb.ExternType_ICEBERG_TB) {
+			scan = node
+		}
+	}
+	if dmlSink == nil {
+		t.Fatalf("expected Iceberg DELETE DML sink node")
+	}
+	if dmlSink.NodeType != planpb.Node_INSERT || dmlSink.GetInsertCtx() == nil {
+		t.Fatalf("expected INSERT-shaped Iceberg DML sink, got %+v", dmlSink)
+	}
+	if !tableDefHasCol(dmlSink.GetTableDef(), icebergapi.DMLDataFilePathColumnName) ||
+		!tableDefHasCol(dmlSink.GetTableDef(), icebergapi.DMLRowOrdinalColumnName) {
+		t.Fatalf("DML sink table def is missing metadata columns: %+v", dmlSink.GetTableDef())
+	}
+	if scan == nil {
+		t.Fatalf("expected Iceberg external scan")
+	}
+	if !tableDefHasCol(scan.GetTableDef(), icebergapi.DMLDataFilePathColumnName) ||
+		!tableDefHasCol(scan.GetTableDef(), icebergapi.DMLRowOrdinalColumnName) {
+		t.Fatalf("scan table def is missing DML metadata columns: %+v", scan.GetTableDef())
+	}
+	if _, ok := scan.GetExternScan().GetTbColToDataCol()[icebergapi.DMLDataFilePathColumnName]; !ok {
+		t.Fatalf("scan TbColToDataCol missing data-file metadata column: %+v", scan.GetExternScan().GetTbColToDataCol())
+	}
+	if _, ok := scan.GetExternScan().GetTbColToDataCol()[icebergapi.DMLRowOrdinalColumnName]; !ok {
+		t.Fatalf("scan TbColToDataCol missing row-ordinal metadata column: %+v", scan.GetExternScan().GetTbColToDataCol())
+	}
+	pathInputPos := tableDefColIndex(scan.GetTableDef(), icebergapi.DMLDataFilePathColumnName)
+	rowInputPos := tableDefColIndex(scan.GetTableDef(), icebergapi.DMLRowOrdinalColumnName)
+	if pathInputPos < 0 || rowInputPos < 0 {
+		t.Fatalf("scan table def missing metadata input positions: %+v", scan.GetTableDef())
+	}
+	if got := projectColPosByName(scan.GetProjectList(), icebergapi.DMLDataFilePathColumnName); got != pathInputPos {
+		t.Fatalf("data-file metadata projection colpos = %d, want scan input colpos %d", got, pathInputPos)
+	}
+	if got := projectColPosByName(scan.GetProjectList(), icebergapi.DMLRowOrdinalColumnName); got != rowInputPos {
+		t.Fatalf("row-ordinal metadata projection colpos = %d, want scan input colpos %d", got, rowInputPos)
+	}
+}
+
+func TestIcebergUpdateBuildsDMLWriteIntent(t *testing.T) {
+	ctx := newIcebergTestCompilerContext(t, nil)
+	ctx.tables["gold_orders"].Cols = append(ctx.tables["gold_orders"].Cols,
+		&planpb.ColDef{
+			Name:    "balance",
+			Typ:     planpb.Type{Id: int32(types.T_int64), Width: 64, Table: "gold_orders"},
+			Default: &planpb.Default{NullAbility: true},
+		},
+		&planpb.ColDef{
+			Name:    "region",
+			Typ:     planpb.Type{Id: int32(types.T_varchar), Width: 32, Table: "gold_orders"},
+			Default: &planpb.Default{NullAbility: true},
+		},
+	)
+
+	stmt, err := mysql.ParseOne(context.Background(), "update gold_orders set balance = balance + 1, region = 'ksa' where balance = 10", 1)
+	if err != nil {
+		t.Fatalf("parse update: %v", err)
+	}
+	p, err := BuildPlan(ctx, stmt, false)
+	if err != nil {
+		t.Fatalf("build Iceberg update plan: %v", err)
+	}
+	query := p.GetQuery()
+	if query == nil || query.StmtType != planpb.Query_UPDATE {
+		t.Fatalf("expected UPDATE query, got %+v", query)
+	}
+	var dmlSink *planpb.Node
+	var scan *planpb.Node
+	for _, node := range query.Nodes {
+		if node.GetExtraOptions() == icebergapi.DMLUpdatePlanExtraOptions {
+			dmlSink = node
+		}
+		if node.GetExternScan() != nil && node.GetExternScan().GetType() == int32(planpb.ExternType_ICEBERG_TB) {
+			scan = node
+		}
+	}
+	if dmlSink == nil {
+		t.Fatalf("expected Iceberg UPDATE DML sink node")
+	}
+	if dmlSink.NodeType != planpb.Node_INSERT || dmlSink.GetInsertCtx() == nil {
+		t.Fatalf("expected INSERT-shaped Iceberg UPDATE DML sink, got %+v", dmlSink)
+	}
+	if !tableDefHasCol(dmlSink.GetTableDef(), icebergapi.DMLDataFilePathColumnName) ||
+		!tableDefHasCol(dmlSink.GetTableDef(), icebergapi.DMLRowOrdinalColumnName) {
+		t.Fatalf("UPDATE DML sink table def is missing metadata columns: %+v", dmlSink.GetTableDef())
+	}
+	updateProject := icebergDMLSinkChildProject(t, query, dmlSink)
+	if len(updateProject.GetProjectList()) != len(dmlSink.GetTableDef().GetCols()) {
+		t.Fatalf("UPDATE child project/table shape mismatch: projects=%d cols=%d", len(updateProject.GetProjectList()), len(dmlSink.GetTableDef().GetCols()))
+	}
+	if len(updateProject.GetChildren()) != 1 || updateProject.GetChildren()[0] < 0 || int(updateProject.GetChildren()[0]) >= len(query.GetNodes()) {
+		t.Fatalf("UPDATE replacement project should have one valid input child: %+v", updateProject.GetChildren())
+	}
+	inputProject := query.GetNodes()[updateProject.GetChildren()[0]]
+	if inputProject == nil || inputProject.GetNodeType() != planpb.Node_PROJECT {
+		t.Fatalf("UPDATE replacement input should be the old-row project, got %+v", inputProject)
+	}
+	if len(inputProject.GetProjectList()) != len(dmlSink.GetTableDef().GetCols()) {
+		t.Fatalf("UPDATE old-row input project must preserve every replacement column plus metadata: projects=%d cols=%d output=%v",
+			len(inputProject.GetProjectList()), len(dmlSink.GetTableDef().GetCols()), inputProject.GetProjectList())
+	}
+	balanceIdx := tableDefColIndex(dmlSink.GetTableDef(), "balance")
+	if balanceIdx < 0 {
+		t.Fatalf("UPDATE DML sink table def is missing assigned column balance: %+v", dmlSink.GetTableDef())
+	}
+	if got := inputProject.GetProjectList()[balanceIdx]; got.GetCol() == nil || got.GetF() != nil {
+		t.Fatalf("UPDATE old-row input project must keep assigned column balance as a passthrough for filter/binder stability, got %+v", got)
+	}
+	if got := updateProject.GetProjectList()[balanceIdx]; got.GetF() == nil {
+		t.Fatalf("assigned balance column should retain its bound expression, got %+v", got)
+	} else if !icebergDMLExprContainsColumn(got, "balance") {
+		t.Fatalf("assigned balance expression should reference the input balance column, got %+v", got)
+	}
+	regionIdx := tableDefColIndex(dmlSink.GetTableDef(), "region")
+	if regionIdx < 0 {
+		t.Fatalf("UPDATE DML sink table def is missing assigned column region: %+v", dmlSink.GetTableDef())
+	}
+	if got := inputProject.GetProjectList()[regionIdx]; got.GetCol() == nil || got.GetLit() != nil {
+		t.Fatalf("UPDATE old-row input project must keep assigned column region as a passthrough, got %+v", got)
+	}
+	if got := updateProject.GetProjectList()[regionIdx]; !icebergDMLExprContainsStringLiteral(got, "ksa") {
+		t.Fatalf("assigned region column should retain literal replacement value, got %+v", got)
+	}
+	if scan == nil {
+		t.Fatalf("expected Iceberg external scan")
+	}
+	if !tableDefHasCol(scan.GetTableDef(), icebergapi.DMLDataFilePathColumnName) ||
+		!tableDefHasCol(scan.GetTableDef(), icebergapi.DMLRowOrdinalColumnName) {
+		t.Fatalf("scan table def is missing DML metadata columns: %+v", scan.GetTableDef())
+	}
+	for _, name := range []string{"id", "balance", "region"} {
+		if !tableDefHasCol(scan.GetTableDef(), name) {
+			t.Fatalf("UPDATE scan table def must retain target column %s: %+v", name, scan.GetTableDef())
+		}
+		if _, ok := scan.GetExternScan().GetTbColToDataCol()[name]; !ok {
+			t.Fatalf("UPDATE scan TbColToDataCol must retain target column %s: %+v", name, scan.GetExternScan().GetTbColToDataCol())
+		}
+	}
+	if len(scan.GetProjectList()) < 5 {
+		t.Fatalf("UPDATE scan project list must include target columns and metadata, got %d projects", len(scan.GetProjectList()))
+	}
+	balanceFilterPos := filterColPosByName(scan.GetFilterList(), "balance")
+	if balanceFilterPos != balanceIdx {
+		t.Fatalf("UPDATE non-leading filter column balance uses colpos %d, want %d; filters=%+v scan cols=%+v",
+			balanceFilterPos, balanceIdx, scan.GetFilterList(), scan.GetTableDef().GetCols())
+	}
+}
+
+func TestIcebergUpdateRewritesDMLScanFilterColumnPositions(t *testing.T) {
+	ctx := newIcebergTestCompilerContext(t, nil)
+	ctx.tables["gold_orders"].Cols = []*planpb.ColDef{
+		{Name: "vendor_id", Typ: planpb.Type{Id: int32(types.T_int32), Width: 32, Table: "gold_orders"}, Default: &planpb.Default{NullAbility: true}},
+		{Name: "tpep_pickup_datetime", Typ: planpb.Type{Id: int32(types.T_timestamp), Width: 6, Table: "gold_orders"}, Default: &planpb.Default{NullAbility: true}},
+		{Name: "tpep_dropoff_datetime", Typ: planpb.Type{Id: int32(types.T_timestamp), Width: 6, Table: "gold_orders"}, Default: &planpb.Default{NullAbility: true}},
+		{Name: "passenger_count", Typ: planpb.Type{Id: int32(types.T_int32), Width: 32, Table: "gold_orders"}, Default: &planpb.Default{NullAbility: true}},
+		{Name: "trip_distance", Typ: planpb.Type{Id: int32(types.T_float64), Width: 64, Table: "gold_orders"}, Default: &planpb.Default{NullAbility: true}},
+		{Name: "rate_code_id", Typ: planpb.Type{Id: int32(types.T_int32), Width: 32, Table: "gold_orders"}, Default: &planpb.Default{NullAbility: true}},
+		{Name: "store_and_fwd_flag", Typ: planpb.Type{Id: int32(types.T_text), Width: types.MaxVarcharLen, Table: "gold_orders"}, Default: &planpb.Default{NullAbility: true}},
+		{Name: "pu_location_id", Typ: planpb.Type{Id: int32(types.T_int32), Width: 32, Table: "gold_orders"}, Default: &planpb.Default{NullAbility: true}},
+		{Name: "do_location_id", Typ: planpb.Type{Id: int32(types.T_int32), Width: 32, Table: "gold_orders"}, Default: &planpb.Default{NullAbility: true}},
+		{Name: "payment_type", Typ: planpb.Type{Id: int32(types.T_int32), Width: 32, Table: "gold_orders"}, Default: &planpb.Default{NullAbility: true}},
+		{Name: "fare_amount", Typ: planpb.Type{Id: int32(types.T_decimal64), Width: 12, Scale: 2, Table: "gold_orders"}, Default: &planpb.Default{NullAbility: true}},
+		{Name: "extra", Typ: planpb.Type{Id: int32(types.T_decimal64), Width: 12, Scale: 2, Table: "gold_orders"}, Default: &planpb.Default{NullAbility: true}},
+		{Name: "mta_tax", Typ: planpb.Type{Id: int32(types.T_decimal64), Width: 12, Scale: 2, Table: "gold_orders"}, Default: &planpb.Default{NullAbility: true}},
+		{Name: "tip_amount", Typ: planpb.Type{Id: int32(types.T_decimal64), Width: 12, Scale: 2, Table: "gold_orders"}, Default: &planpb.Default{NullAbility: true}},
+		{Name: "tolls_amount", Typ: planpb.Type{Id: int32(types.T_decimal64), Width: 12, Scale: 2, Table: "gold_orders"}, Default: &planpb.Default{NullAbility: true}},
+		{Name: "improvement_surcharge", Typ: planpb.Type{Id: int32(types.T_decimal64), Width: 12, Scale: 2, Table: "gold_orders"}, Default: &planpb.Default{NullAbility: true}},
+		{Name: "total_amount", Typ: planpb.Type{Id: int32(types.T_decimal64), Width: 12, Scale: 2, Table: "gold_orders"}, Default: &planpb.Default{NullAbility: true}},
+		{Name: "congestion_surcharge", Typ: planpb.Type{Id: int32(types.T_decimal64), Width: 12, Scale: 2, Table: "gold_orders"}, Default: &planpb.Default{NullAbility: true}},
+		{Name: "airport_fee", Typ: planpb.Type{Id: int32(types.T_decimal64), Width: 12, Scale: 2, Table: "gold_orders"}, Default: &planpb.Default{NullAbility: true}},
+	}
+
+	stmt, err := mysql.ParseOne(context.Background(), "update gold_orders set store_and_fwd_flag = 'R' where payment_type = 3", 1)
+	if err != nil {
+		t.Fatalf("parse update: %v", err)
+	}
+	p, err := BuildPlan(ctx, stmt, false)
+	if err != nil {
+		t.Fatalf("build Iceberg update plan: %v", err)
+	}
+	query := p.GetQuery()
+	var scan *planpb.Node
+	for _, node := range query.GetNodes() {
+		if node.GetExternScan() != nil && node.GetExternScan().GetType() == int32(planpb.ExternType_ICEBERG_TB) {
+			scan = node
+			break
+		}
+	}
+	if scan == nil {
+		t.Fatalf("expected Iceberg external scan")
+	}
+	paymentTypeIdx := tableDefColIndex(scan.GetTableDef(), "payment_type")
+	if paymentTypeIdx < 0 {
+		t.Fatalf("scan table def missing payment_type: %+v", scan.GetTableDef())
+	}
+	if got := filterColPosByName(scan.GetFilterList(), "payment_type"); got != paymentTypeIdx {
+		t.Fatalf("payment_type filter colpos = %d, want %d; filters=%+v scan cols=%+v",
+			got, paymentTypeIdx, scan.GetFilterList(), scan.GetTableDef().GetCols())
+	}
+}
+
+func TestIcebergMergeMatchedUpdateBuildsDMLWriteIntent(t *testing.T) {
+	stmt, err := mysql.ParseOne(context.Background(), "merge into gold_orders as t using dim_orders as s on t.id = s.id when matched then update set id = s.id", 1)
+	if err != nil {
+		t.Fatalf("parse merge: %v", err)
+	}
+	p, err := BuildPlan(newIcebergTestCompilerContext(t, nil), stmt, false)
+	if err != nil {
+		t.Fatalf("build Iceberg merge plan: %v", err)
+	}
+	query := p.GetQuery()
+	if query == nil || query.StmtType != planpb.Query_MERGE {
+		t.Fatalf("expected MERGE query, got %+v", query)
+	}
+	var dmlSink *planpb.Node
+	var scan *planpb.Node
+	for _, node := range query.Nodes {
+		if node.GetExtraOptions() == icebergapi.DMLMergePlanExtraOptions {
+			dmlSink = node
+		}
+		if node.GetExternScan() != nil && node.GetExternScan().GetType() == int32(planpb.ExternType_ICEBERG_TB) {
+			scan = node
+		}
+	}
+	if dmlSink == nil {
+		t.Fatalf("expected Iceberg MERGE DML sink node")
+	}
+	if dmlSink.NodeType != planpb.Node_INSERT || dmlSink.GetInsertCtx() == nil {
+		t.Fatalf("expected INSERT-shaped Iceberg MERGE sink, got %+v", dmlSink)
+	}
+	if !tableDefHasCol(dmlSink.GetTableDef(), icebergapi.DMLDataFilePathColumnName) ||
+		!tableDefHasCol(dmlSink.GetTableDef(), icebergapi.DMLRowOrdinalColumnName) ||
+		!tableDefHasCol(dmlSink.GetTableDef(), icebergapi.DMLMergeActionColumnName) {
+		t.Fatalf("MERGE DML sink table def is missing metadata/action columns: %+v", dmlSink.GetTableDef())
+	}
+	if scan == nil {
+		t.Fatalf("expected Iceberg external scan")
+	}
+	if !tableDefHasCol(scan.GetTableDef(), icebergapi.DMLDataFilePathColumnName) ||
+		!tableDefHasCol(scan.GetTableDef(), icebergapi.DMLRowOrdinalColumnName) {
+		t.Fatalf("scan table def is missing DML metadata columns: %+v", scan.GetTableDef())
+	}
+	if tableDefHasCol(scan.GetTableDef(), icebergapi.DMLMergeActionColumnName) {
+		t.Fatalf("merge action column should be sink-local, scan table def: %+v", scan.GetTableDef())
+	}
+}
+
+func TestIcebergMergeMatchedDeleteBuildsDMLWriteIntent(t *testing.T) {
+	stmt, err := mysql.ParseOne(context.Background(), "merge into gold_orders as t using dim_orders as s on t.id = s.id when matched then delete", 1)
+	if err != nil {
+		t.Fatalf("parse merge delete: %v", err)
+	}
+	p, err := BuildPlan(newIcebergTestCompilerContext(t, nil), stmt, false)
+	if err != nil {
+		t.Fatalf("build Iceberg merge delete plan: %v", err)
+	}
+	query := p.GetQuery()
+	if query == nil || query.StmtType != planpb.Query_MERGE {
+		t.Fatalf("expected MERGE query, got %+v", query)
+	}
+	found := false
+	for _, node := range query.Nodes {
+		if node.GetExtraOptions() == icebergapi.DMLMergePlanExtraOptions {
+			found = true
+			if !tableDefHasCol(node.GetTableDef(), icebergapi.DMLMergeActionColumnName) {
+				t.Fatalf("MERGE DELETE sink table def is missing action column: %+v", node.GetTableDef())
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("expected Iceberg MERGE DELETE DML sink")
+	}
+}
+
+func TestIcebergMergeMatchedUpdateAndNotMatchedInsertBuildsDMLWriteIntent(t *testing.T) {
+	stmt, err := mysql.ParseOne(context.Background(), "merge into gold_orders as t using dim_orders as s on t.id = s.id when matched then update set id = s.id when not matched then insert (id) values (s.id)", 1)
+	if err != nil {
+		t.Fatalf("parse merge: %v", err)
+	}
+	p, err := BuildPlan(newIcebergTestCompilerContext(t, nil), stmt, false)
+	if err != nil {
+		t.Fatalf("build Iceberg merge with insert plan: %v", err)
+	}
+	query := p.GetQuery()
+	if query == nil || query.StmtType != planpb.Query_MERGE {
+		t.Fatalf("expected MERGE query, got %+v", query)
+	}
+	var dmlSink *planpb.Node
+	var sourceDrivenJoin *planpb.Node
+	joinSummary := ""
+	for _, node := range query.Nodes {
+		if node.GetExtraOptions() == icebergapi.DMLMergePlanExtraOptions {
+			dmlSink = node
+		}
+		if node.GetNodeType() == planpb.Node_JOIN {
+			joinSummary += node.GetJoinType().String() + " "
+		}
+		if node.GetNodeType() == planpb.Node_JOIN && (node.GetJoinType() == planpb.Node_LEFT || node.GetJoinType() == planpb.Node_RIGHT) {
+			sourceDrivenJoin = node
+		}
+	}
+	if dmlSink == nil {
+		t.Fatalf("expected Iceberg MERGE DML sink node")
+	}
+	if sourceDrivenJoin == nil {
+		t.Fatalf("expected source-driven outer join for matched/not-matched MERGE, joins=%s", joinSummary)
+	}
+	if !tableDefHasCol(dmlSink.GetTableDef(), icebergapi.DMLDataFilePathColumnName) ||
+		!tableDefHasCol(dmlSink.GetTableDef(), icebergapi.DMLRowOrdinalColumnName) ||
+		!tableDefHasCol(dmlSink.GetTableDef(), icebergapi.DMLMergeActionColumnName) {
+		t.Fatalf("MERGE DML sink table def is missing metadata/action columns: %+v", dmlSink.GetTableDef())
+	}
+	if len(dmlSink.GetProjectList()) != len(dmlSink.GetTableDef().GetCols()) {
+		t.Fatalf("MERGE sink project/table shape mismatch: projects=%d cols=%d", len(dmlSink.GetProjectList()), len(dmlSink.GetTableDef().GetCols()))
+	}
+	project := icebergDMLSinkChildProject(t, query, dmlSink)
+	if len(project.GetProjectList()) != len(dmlSink.GetProjectList()) {
+		t.Fatalf("MERGE sink child project shape mismatch: child projects=%d sink projects=%d", len(project.GetProjectList()), len(dmlSink.GetProjectList()))
+	}
+	preProject := icebergDMLSinkChildProject(t, query, project)
+	metadataStart := len(project.GetProjectList()) - 3
+	preMetadataStart := len(preProject.GetProjectList()) - 2
+	if got := colRefPositions(project.GetProjectList()[metadataStart]); len(got) != 1 || got[0] != int32(preMetadataStart) {
+		t.Fatalf("MERGE data-file metadata should reference pre-project tail column %d, got %v", preMetadataStart, got)
+	}
+	if got := colRefPositions(project.GetProjectList()[metadataStart+1]); len(got) != 1 || got[0] != int32(preMetadataStart+1) {
+		t.Fatalf("MERGE row-ordinal metadata should reference pre-project tail column %d, got %v", preMetadataStart+1, got)
+	}
+}
+
+func TestIcebergMergeDefaultValuesAreExpanded(t *testing.T) {
+	ctx := newIcebergTestCompilerContext(t, nil)
+	ctx.tables["gold_orders"].Cols[0].Default = &planpb.Default{
+		Expr: &planpb.Expr{
+			Typ: planpb.Type{Id: int32(types.T_int64), Width: 64, Table: "gold_orders"},
+			Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{
+				Value: &planpb.Literal_I64Val{I64Val: 99},
+			}},
+		},
+	}
+	stmt, err := mysql.ParseOne(context.Background(), "merge into gold_orders as t using dim_orders as s on t.id = s.id when matched then update set id = default", 1)
+	if err != nil {
+		t.Fatalf("parse merge default: %v", err)
+	}
+	p, err := BuildPlan(ctx, stmt, false)
+	if err != nil {
+		t.Fatalf("build Iceberg merge default plan: %v", err)
+	}
+	query := p.GetQuery()
+	if query == nil {
+		t.Fatalf("expected MERGE query")
+	}
+	foundDefaultValue := false
+	reachable := reachablePlanNodes(query)
+	for nodeIdx, node := range query.GetNodes() {
+		if !reachable[int32(nodeIdx)] {
+			continue
+		}
+		for _, expr := range node.GetProjectList() {
+			if icebergDMLExprContainsDefaultValue(expr) {
+				t.Fatalf("MERGE DEFAULT must be expanded before DML projection rewrite: steps=%v node=%d type=%s children=%v expr=%+v", query.GetSteps(), nodeIdx, node.GetNodeType(), node.GetChildren(), expr)
+			}
+			if icebergDMLExprContainsI64Literal(expr, 99) {
+				foundDefaultValue = true
+			}
+		}
+	}
+	if !foundDefaultValue {
+		t.Fatalf("expected expanded column default literal in MERGE projection")
+	}
+}
+
+func TestIcebergMergeEmbeddedFourColumnProjectionShape(t *testing.T) {
+	ctx := newIcebergTestCompilerContext(t, nil)
+	ctx.tables["gold_orders"].Cols = []*planpb.ColDef{
+		{Name: "id", Typ: planpb.Type{Id: int32(types.T_int64), Width: 64, Table: "gold_orders"}, Default: &planpb.Default{NullAbility: true}},
+		{Name: "hidden_key", Typ: planpb.Type{Id: int32(types.T_int64), Width: 64, Table: "gold_orders"}, Default: &planpb.Default{NullAbility: true}},
+		{Name: "bucket", Typ: planpb.Type{Id: int32(types.T_int64), Width: 64, Table: "gold_orders"}, Default: &planpb.Default{NullAbility: true}},
+		{Name: "amount", Typ: planpb.Type{Id: int32(types.T_int64), Width: 64, Table: "gold_orders"}, Default: &planpb.Default{NullAbility: true}},
+	}
+	ctx.tables["dim_orders"].Cols = []*planpb.ColDef{
+		{Name: "id", Typ: planpb.Type{Id: int32(types.T_int64), Width: 64, Table: "dim_orders"}, Default: &planpb.Default{NullAbility: true}},
+		{Name: "hidden_key", Typ: planpb.Type{Id: int32(types.T_int64), Width: 64, Table: "dim_orders"}, Default: &planpb.Default{NullAbility: true}},
+		{Name: "bucket", Typ: planpb.Type{Id: int32(types.T_int64), Width: 64, Table: "dim_orders"}, Default: &planpb.Default{NullAbility: true}},
+		{Name: "amount", Typ: planpb.Type{Id: int32(types.T_int64), Width: 64, Table: "dim_orders"}, Default: &planpb.Default{NullAbility: true}},
+	}
+	ctx.tables["gold_orders"].Createsql = sqliceberg.BuildCreateSQLEnvelope(model.TableMapping{
+		Namespace:  "sales",
+		TableName:  "orders",
+		DefaultRef: model.DefaultRefMain,
+		ReadMode:   model.ReadModeMergeOnRead,
+		WriteMode:  model.WriteModeMergeOnRead,
+	}, "ksa_gold")
+
+	stmt, err := mysql.ParseOne(context.Background(), "merge into gold_orders as t using dim_orders as s on t.id = s.id when matched then update set hidden_key = s.hidden_key, bucket = s.bucket, amount = s.amount when not matched then insert (id, hidden_key, bucket, amount) values (s.id, s.hidden_key, s.bucket, s.amount)", 1)
+	if err != nil {
+		t.Fatalf("parse merge: %v", err)
+	}
+	p, err := BuildPlan(ctx, stmt, false)
+	if err != nil {
+		t.Fatalf("build Iceberg merge plan: %v", err)
+	}
+	query := p.GetQuery()
+	var dmlSink *planpb.Node
+	for _, node := range query.GetNodes() {
+		if node.GetExtraOptions() == icebergapi.DMLMergePlanExtraOptions {
+			dmlSink = node
+			break
+		}
+	}
+	if dmlSink == nil {
+		t.Fatalf("expected Iceberg MERGE DML sink")
+	}
+	assertLocalProjectRefsWithinChildShape(t, query, dmlSink.GetChildren()[0])
+}
+
+func TestIcebergMergeWithIcebergSourceAnnotatesOnlyTargetScan(t *testing.T) {
+	ctx := newIcebergTestCompilerContext(t, nil)
+	ctx.tables["dim_orders"].TableType = catalog.SystemExternalRel
+	ctx.tables["dim_orders"].Createsql = sqliceberg.BuildCreateSQLEnvelope(model.TableMapping{
+		Namespace:  "sales",
+		TableName:  "dim_orders",
+		DefaultRef: model.DefaultRefMain,
+		ReadMode:   model.ReadModeAppendOnly,
+		WriteMode:  model.WriteModeReadOnly,
+	}, "ksa_gold")
+
+	stmt, err := mysql.ParseOne(context.Background(), "merge into gold_orders as t using dim_orders as s on t.id = s.id when matched then update set id = s.id when not matched then insert (id) values (s.id)", 1)
+	if err != nil {
+		t.Fatalf("parse merge: %v", err)
+	}
+	p, err := BuildPlan(ctx, stmt, false)
+	if err != nil {
+		t.Fatalf("build Iceberg merge with Iceberg source plan: %v", err)
+	}
+	query := p.GetQuery()
+	var targetAnnotated, sourceAnnotated bool
+	for _, node := range query.GetNodes() {
+		if node.GetExternScan() == nil || node.GetExternScan().GetType() != int32(planpb.ExternType_ICEBERG_TB) {
+			continue
+		}
+		if node.GetObjRef().GetObjName() == "gold_orders" {
+			targetAnnotated = tableDefHasCol(node.GetTableDef(), icebergapi.DMLDataFilePathColumnName) &&
+				tableDefHasCol(node.GetTableDef(), icebergapi.DMLRowOrdinalColumnName)
+		}
+		if node.GetObjRef().GetObjName() == "dim_orders" {
+			sourceAnnotated = tableDefHasCol(node.GetTableDef(), icebergapi.DMLDataFilePathColumnName) ||
+				tableDefHasCol(node.GetTableDef(), icebergapi.DMLRowOrdinalColumnName)
+		}
+	}
+	if !targetAnnotated {
+		t.Fatalf("expected MERGE target Iceberg scan to carry DML metadata columns")
+	}
+	if sourceAnnotated {
+		t.Fatalf("source Iceberg scan must not carry target DML metadata columns")
+	}
+}
+
+func TestIcebergMergeInsertColumnListMarksMissingColumnsAsDefault(t *testing.T) {
+	ctx := newIcebergTestCompilerContext(t, nil)
+	target := icebergDeleteTarget{
+		tableName: "accounts",
+		tableDef: &planpb.TableDef{
+			Cols: []*planpb.ColDef{
+				{Name: "account_id", Typ: planpb.Type{NotNullable: true}},
+				{Name: "balance", Typ: planpb.Type{NotNullable: true}},
+				{Name: "region"},
+				{Name: "quota", Typ: planpb.Type{NotNullable: true}},
+			},
+		},
+	}
+	values, err := icebergMergeInsertExprMap(ctx, target, target.tableDef.Cols, &tree.MergeClause{
+		Action:        tree.MergeActionInsert,
+		InsertColumns: tree.IdentifierList{"account_id", "balance"},
+		InsertValues: tree.Exprs{
+			tree.NewNumVal("1", "1", false, tree.P_int64),
+			tree.NewNumVal("220", "220", false, tree.P_int64),
+		},
+	})
+	if err != nil {
+		t.Fatalf("merge insert map: %v", err)
+	}
+	if len(values) != 4 {
+		t.Fatalf("expected all target columns after default fill, got %+v", values)
+	}
+	for _, col := range []string{"region", "quota"} {
+		if _, ok := values[col].(*tree.DefaultVal); !ok {
+			t.Fatalf("expected missing column %s to use DEFAULT sentinel, got %T %s", col, values[col], tree.String(values[col], dialect.MYSQL))
+		}
+	}
+}
+
+func TestIcebergMergeInsertColumnListExpandsOmittedColumnDefaults(t *testing.T) {
+	ctx := newIcebergTestCompilerContext(t, nil)
+	ctx.tables["gold_orders"].Cols = []*planpb.ColDef{
+		{
+			Name: "id",
+			Typ:  planpb.Type{Id: int32(types.T_int64), Width: 64, Table: "gold_orders", NotNullable: true},
+			Default: &planpb.Default{
+				NullAbility: false,
+			},
+		},
+		{
+			Name: "region",
+			Typ:  planpb.Type{Id: int32(types.T_varchar), Width: 32, Table: "gold_orders"},
+			Default: &planpb.Default{
+				Expr:         makeStringConstExpr(planpb.Type{Id: int32(types.T_varchar), Width: 32, Table: "gold_orders"}, "me-central"),
+				OriginString: "me-central",
+				NullAbility:  true,
+			},
+		},
+		{
+			Name: "quota",
+			Typ:  planpb.Type{Id: int32(types.T_int64), Width: 64, Table: "gold_orders", NotNullable: true},
+			Default: &planpb.Default{
+				Expr: &planpb.Expr{
+					Typ: planpb.Type{Id: int32(types.T_int64), Width: 64, Table: "gold_orders", NotNullable: true},
+					Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{
+						Value: &planpb.Literal_I64Val{I64Val: 7},
+					}},
+				},
+				OriginString: "7",
+				NullAbility:  false,
+			},
+		},
+		{
+			Name:    "comment",
+			Typ:     planpb.Type{Id: int32(types.T_varchar), Width: 64, Table: "gold_orders"},
+			Default: &planpb.Default{NullAbility: true},
+		},
+	}
+
+	stmt, err := mysql.ParseOne(context.Background(), "merge into gold_orders as t using dim_orders as s on t.id = s.id when not matched then insert (id) values (s.id)", 1)
+	if err != nil {
+		t.Fatalf("parse merge insert defaults: %v", err)
+	}
+	p, err := BuildPlan(ctx, stmt, false)
+	if err != nil {
+		t.Fatalf("build Iceberg merge insert defaults plan: %v", err)
+	}
+	query := p.GetQuery()
+	if query == nil {
+		t.Fatalf("expected MERGE query")
+	}
+	foundNullableDefault := false
+	foundNotNullDefault := false
+	foundNullableNull := false
+	reachable := reachablePlanNodes(query)
+	for nodeIdx, node := range query.GetNodes() {
+		if !reachable[int32(nodeIdx)] {
+			continue
+		}
+		for _, expr := range node.GetProjectList() {
+			if icebergDMLExprContainsDefaultValue(expr) {
+				t.Fatalf("MERGE omitted INSERT column DEFAULT must be expanded before DML projection rewrite: node=%d expr=%+v", nodeIdx, expr)
+			}
+			if icebergDMLExprContainsStringLiteral(expr, "me-central") {
+				foundNullableDefault = true
+			}
+			if icebergDMLExprContainsI64Literal(expr, 7) {
+				foundNotNullDefault = true
+			}
+			if icebergDMLExprContainsNullLiteral(expr) {
+				foundNullableNull = true
+			}
+		}
+	}
+	if !foundNullableDefault || !foundNotNullDefault || !foundNullableNull {
+		t.Fatalf("expected nullable default, NOT NULL default, and nullable NULL expansion, got nullableDefault=%v notNullDefault=%v nullableNull=%v", foundNullableDefault, foundNotNullDefault, foundNullableNull)
+	}
+}
+
+func TestIcebergMergeMatchedAndNotMatchedConditionsBuildNoopGuard(t *testing.T) {
+	stmt, err := mysql.ParseOne(context.Background(), "merge into gold_orders as t using dim_orders as s on t.id = s.id when matched and s.id > 10 then update set id = s.id when not matched and s.id > 20 then insert (id) values (s.id)", 1)
+	if err != nil {
+		t.Fatalf("parse merge: %v", err)
+	}
+	p, err := BuildPlan(newIcebergTestCompilerContext(t, nil), stmt, false)
+	if err != nil {
+		t.Fatalf("build conditional Iceberg merge plan: %v", err)
+	}
+	query := p.GetQuery()
+	if query == nil || query.StmtType != planpb.Query_MERGE {
+		t.Fatalf("expected MERGE query, got %+v", query)
+	}
+	var dmlSink *planpb.Node
+	for _, node := range query.Nodes {
+		if node.GetExtraOptions() == icebergapi.DMLMergePlanExtraOptions {
+			dmlSink = node
+			break
+		}
+	}
+	if dmlSink == nil {
+		t.Fatalf("expected Iceberg MERGE DML sink node")
+	}
+	if !tableDefHasCol(dmlSink.GetTableDef(), icebergapi.DMLMergeActionColumnName) {
+		t.Fatalf("MERGE DML sink table def is missing action column: %+v", dmlSink.GetTableDef())
+	}
+	if len(dmlSink.GetProjectList()) != len(dmlSink.GetTableDef().GetCols()) {
+		t.Fatalf("MERGE sink project/table shape mismatch: projects=%d cols=%d", len(dmlSink.GetProjectList()), len(dmlSink.GetTableDef().GetCols()))
+	}
+	project := icebergDMLSinkChildProject(t, query, dmlSink)
+	if len(project.GetProjectList()) != len(dmlSink.GetProjectList()) {
+		t.Fatalf("MERGE sink child project shape mismatch: child projects=%d sink projects=%d", len(project.GetProjectList()), len(dmlSink.GetProjectList()))
+	}
+	actionExpr := dmlSink.GetProjectList()[len(dmlSink.GetProjectList())-1]
+	if !icebergDMLExprContainsStringLiteral(actionExpr, icebergapi.DMLMergeActionNoop) {
+		t.Fatalf("conditional MERGE action expression should include noop guard: %+v", actionExpr)
+	}
+}
+
+func TestIcebergMergeNotMatchedOnlyBuildsInsertWithNoopGuard(t *testing.T) {
+	stmt, err := mysql.ParseOne(context.Background(), "merge into gold_orders as t using dim_orders as s on t.id = s.id when not matched then insert (id) values (s.id)", 1)
+	if err != nil {
+		t.Fatalf("parse merge: %v", err)
+	}
+	p, err := BuildPlan(newIcebergTestCompilerContext(t, nil), stmt, false)
+	if err != nil {
+		t.Fatalf("build not-matched Iceberg merge plan: %v", err)
+	}
+	query := p.GetQuery()
+	if query == nil || query.StmtType != planpb.Query_MERGE {
+		t.Fatalf("expected MERGE query, got %+v", query)
+	}
+	var dmlSink *planpb.Node
+	for _, node := range query.Nodes {
+		if node.GetExtraOptions() == icebergapi.DMLMergePlanExtraOptions {
+			dmlSink = node
+			break
+		}
+	}
+	if dmlSink == nil {
+		t.Fatalf("expected Iceberg MERGE DML sink node")
+	}
+	actionExpr := dmlSink.GetProjectList()[len(dmlSink.GetProjectList())-1]
+	if !icebergDMLExprContainsStringLiteral(actionExpr, icebergapi.DMLMergeActionNoop) {
+		t.Fatalf("not-matched MERGE action expression should include noop guard: %+v", actionExpr)
+	}
+}
+
+func TestIcebergMergeMultipleActionClausesBuildFirstMatchChain(t *testing.T) {
+	stmt, err := mysql.ParseOne(context.Background(), "merge into gold_orders as t using dim_orders as s on t.id = s.id when matched and s.id < 0 then delete when matched and s.id > 10 then update set id = s.id when not matched and s.id > 20 then insert (id) values (s.id) when not matched and s.id < -10 then insert (id) values (s.id)", 1)
+	if err != nil {
+		t.Fatalf("parse merge: %v", err)
+	}
+	p, err := BuildPlan(newIcebergTestCompilerContext(t, nil), stmt, false)
+	if err != nil {
+		t.Fatalf("build multi-clause Iceberg merge plan: %v", err)
+	}
+	query := p.GetQuery()
+	if query == nil || query.StmtType != planpb.Query_MERGE {
+		t.Fatalf("expected MERGE query, got %+v", query)
+	}
+	var dmlSink *planpb.Node
+	for _, node := range query.Nodes {
+		if node.GetExtraOptions() == icebergapi.DMLMergePlanExtraOptions {
+			dmlSink = node
+			break
+		}
+	}
+	if dmlSink == nil {
+		t.Fatalf("expected Iceberg MERGE DML sink node")
+	}
+	if len(dmlSink.GetProjectList()) != len(dmlSink.GetTableDef().GetCols()) {
+		t.Fatalf("MERGE sink project/table shape mismatch: projects=%d cols=%d", len(dmlSink.GetProjectList()), len(dmlSink.GetTableDef().GetCols()))
+	}
+	actionExpr := dmlSink.GetProjectList()[len(dmlSink.GetProjectList())-1]
+	for _, want := range []string{
+		icebergapi.DMLMergeActionDelete,
+		icebergapi.DMLMergeActionUpdate,
+		icebergapi.DMLMergeActionInsert,
+		icebergapi.DMLMergeActionNoop,
+	} {
+		if !icebergDMLExprContainsStringLiteral(actionExpr, want) {
+			t.Fatalf("multi-clause MERGE action expression should include %q: %+v", want, actionExpr)
+		}
+	}
+}
+
+func TestIcebergReplaceStillFailsBeforeNativeFallback(t *testing.T) {
+	stmt, err := mysql.ParseOne(context.Background(), "replace into gold_orders values (1)", 1)
+	if err != nil {
+		t.Fatalf("parse replace: %v", err)
+	}
+	_, err = BuildPlan(newIcebergTestCompilerContext(t, nil), stmt, false)
+	if err == nil || !strings.Contains(err.Error(), "Iceberg row-level DML is not implemented") {
+		t.Fatalf("expected Iceberg row-level DML error, got %v", err)
+	}
+	if strings.Contains(err.Error(), "cannot insert/update/delete from external table") {
+		t.Fatalf("Iceberg DML should not fall back to generic external table error: %v", err)
+	}
+}
+
+func tableDefHasCol(tableDef *planpb.TableDef, name string) bool {
+	if tableDef == nil {
+		return false
+	}
+	for _, col := range tableDef.Cols {
+		if col != nil && strings.EqualFold(col.Name, name) {
+			return true
+		}
+	}
+	return false
+}
+
+func tableDefColIndex(tableDef *planpb.TableDef, name string) int32 {
+	if tableDef == nil {
+		return -1
+	}
+	for idx, col := range tableDef.GetCols() {
+		if col != nil && strings.EqualFold(col.Name, name) {
+			return int32(idx)
+		}
+	}
+	return -1
+}
+
+func projectColPosByName(projectList []*planpb.Expr, name string) int32 {
+	for _, expr := range projectList {
+		if expr.GetCol() == nil || !strings.EqualFold(expr.GetCol().Name, name) {
+			continue
+		}
+		return expr.GetCol().ColPos
+	}
+	return -1
+}
+
+func filterColPosByName(filters []*planpb.Expr, name string) int32 {
+	for _, filter := range filters {
+		for _, pos := range colRefPositionsByName(filter, name) {
+			return pos
+		}
+	}
+	return -1
+}
+
+func icebergDMLSinkChildProject(t *testing.T, query *planpb.Query, sink *planpb.Node) *planpb.Node {
+	t.Helper()
+	if query == nil || sink == nil || len(sink.GetChildren()) != 1 {
+		t.Fatalf("expected MERGE DML sink to have one child, sink=%+v", sink)
+	}
+	childID := sink.GetChildren()[0]
+	if childID < 0 || int(childID) >= len(query.GetNodes()) {
+		t.Fatalf("MERGE DML sink child id is invalid: %d", childID)
+	}
+	project := query.GetNodes()[childID]
+	if project.GetNodeType() != planpb.Node_PROJECT {
+		t.Fatalf("MERGE DML sink child must materialize rewritten projection, got %s", project.GetNodeType())
+	}
+	return project
+}
+
+func assertLocalProjectRefsWithinChildShape(t *testing.T, query *planpb.Query, nodeID int32) {
+	t.Helper()
+	if query == nil || nodeID < 0 || int(nodeID) >= len(query.GetNodes()) {
+		t.Fatalf("invalid node id %d", nodeID)
+	}
+	node := query.GetNodes()[nodeID]
+	for _, childID := range node.GetChildren() {
+		assertLocalProjectRefsWithinChildShape(t, query, childID)
+	}
+	if node.GetNodeType() != planpb.Node_PROJECT || len(node.GetChildren()) != 1 {
+		return
+	}
+	childCols := planNodeOutputColumnCount(query, node.GetChildren()[0])
+	for idx, expr := range node.GetProjectList() {
+		for _, pos := range colRefPositions(expr) {
+			if int(pos) >= childCols {
+				t.Fatalf("project node %d expr %d references child column %d, but child %d outputs %d columns: expr=%+v",
+					nodeID, idx, pos, node.GetChildren()[0], childCols, expr)
+			}
+		}
+	}
+}
+
+func planNodeOutputColumnCount(query *planpb.Query, nodeID int32) int {
+	if query == nil || nodeID < 0 || int(nodeID) >= len(query.GetNodes()) {
+		return 0
+	}
+	node := query.GetNodes()[nodeID]
+	if len(node.GetProjectList()) > 0 {
+		return len(node.GetProjectList())
+	}
+	if node.GetTableDef() != nil {
+		return len(node.GetTableDef().GetCols())
+	}
+	return 0
+}
+
+func reachablePlanNodes(query *planpb.Query) map[int32]bool {
+	reachable := make(map[int32]bool)
+	if query == nil {
+		return reachable
+	}
+	var visit func(int32)
+	visit = func(nodeID int32) {
+		if nodeID < 0 || int(nodeID) >= len(query.GetNodes()) || reachable[nodeID] {
+			return
+		}
+		reachable[nodeID] = true
+		for _, childID := range query.GetNodes()[nodeID].GetChildren() {
+			visit(childID)
+		}
+	}
+	for _, stepID := range query.GetSteps() {
+		visit(stepID)
+	}
+	return reachable
+}
+
+func colRefPositions(expr *planpb.Expr) []int32 {
+	if expr == nil {
+		return nil
+	}
+	if col := expr.GetCol(); col != nil {
+		return []int32{col.GetColPos()}
+	}
+	var out []int32
+	if f := expr.GetF(); f != nil {
+		for _, arg := range f.GetArgs() {
+			out = append(out, colRefPositions(arg)...)
+		}
+	}
+	return out
+}
+
+func colRefPositionsByName(expr *planpb.Expr, name string) []int32 {
+	if expr == nil {
+		return nil
+	}
+	if col := expr.GetCol(); col != nil {
+		if strings.EqualFold(col.GetName(), name) ||
+			strings.EqualFold(icebergDMLUnqualifiedColumnName(col.GetName()), name) {
+			return []int32{col.GetColPos()}
+		}
+		return nil
+	}
+	var out []int32
+	if f := expr.GetF(); f != nil {
+		for _, arg := range f.GetArgs() {
+			out = append(out, colRefPositionsByName(arg, name)...)
+		}
+	}
+	return out
+}
+
+func icebergDMLExprContainsStringLiteral(expr *planpb.Expr, value string) bool {
+	if expr == nil {
+		return false
+	}
+	if lit := expr.GetLit(); lit != nil && lit.GetSval() == value {
+		return true
+	}
+	if fn := expr.GetF(); fn != nil {
+		for _, arg := range fn.Args {
+			if icebergDMLExprContainsStringLiteral(arg, value) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func icebergDMLExprContainsI64Literal(expr *planpb.Expr, value int64) bool {
+	if expr == nil {
+		return false
+	}
+	if lit := expr.GetLit(); lit != nil && lit.GetI64Val() == value {
+		return true
+	}
+	if fn := expr.GetF(); fn != nil {
+		for _, arg := range fn.Args {
+			if icebergDMLExprContainsI64Literal(arg, value) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func icebergDMLExprContainsNullLiteral(expr *planpb.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	if lit := expr.GetLit(); lit != nil && lit.Isnull {
+		return true
+	}
+	if fn := expr.GetF(); fn != nil {
+		for _, arg := range fn.Args {
+			if icebergDMLExprContainsNullLiteral(arg) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func icebergDMLExprContainsDefaultValue(expr *planpb.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	if lit := expr.GetLit(); lit != nil {
+		_, ok := lit.GetValue().(*planpb.Literal_Defaultval)
+		return ok
+	}
+	if fn := expr.GetF(); fn != nil {
+		for _, arg := range fn.Args {
+			if icebergDMLExprContainsDefaultValue(arg) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func icebergDMLExprContainsColumn(expr *planpb.Expr, name string) bool {
+	if expr == nil {
+		return false
+	}
+	if col := expr.GetCol(); col != nil && strings.EqualFold(col.GetName(), name) {
+		return true
+	}
+	if fn := expr.GetF(); fn != nil {
+		for _, arg := range fn.Args {
+			if icebergDMLExprContainsColumn(arg, name) {
+				return true
+			}
+		}
+	}
+	return false
+}

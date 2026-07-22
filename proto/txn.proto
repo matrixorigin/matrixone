@@ -275,6 +275,14 @@ message TxnResponse {
 message TxnCommitRequest {
     repeated TxnRequest       Payload = 1;
     bool                      Disable1PCOpt = 2;
+    // DeadlineUnixNano is the absolute deadline of the client Commit request.
+    // TN must reject an expired request before lockservice admission. This makes
+    // an unknown Commit fence safely collectible once the deadline has passed.
+    int64                     DeadlineUnixNano = 3;
+    // CommitSequence is source-CN-local and monotonically increases for a
+    // lockservice incarnation. It distinguishes a new Commit from a delayed
+    // Commit that was created before an unknown outcome was fenced.
+    uint64                    CommitSequence = 4;
 }
 
 // TxnCommitResponse response of TxnCommitRequest. 
@@ -380,4 +388,5 @@ message TxnOptions {
     bool autocommit = 15;//AUTOCOMMIT
     bool inIncrStmt = 16;
     bool inRollbackStmt = 17;
+    int64 lockWaitTimeout = 18;
 }

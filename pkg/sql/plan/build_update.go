@@ -15,13 +15,38 @@
 package plan
 
 import (
+	"sort"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
+
+// isSyncMaintainedIrregularIndex reports whether idxDef is an irregular (full-text / vector)
+// index that is maintained SYNCHRONOUSLY — inline in the DML rather than asynchronously via CDC.
+// Such an index keys its hidden table(s) by the source primary key, so an in-place primary-key
+// change would strand those entries and go stale (#25617). Routed through the plugin registry so
+// no per-algo list is hardcoded here: an always-async algorithm (HNSW/CAGRA/IVFPQ) is never
+// synchronous; otherwise async-ness comes from the index's `async` param (IVFFLAT/FULLTEXT are
+// synchronous by default).
+func isSyncMaintainedIrregularIndex(idxDef *plan.IndexDef) bool {
+	if catalog.IsRegularIndexAlgo(idxDef.IndexAlgo) {
+		return false
+	}
+	p, ok := indexplugin.Get(catalog.ToLower(idxDef.IndexAlgo))
+	if !ok {
+		return false
+	}
+	if p.Catalog().SyncDescriptor().AlwaysAsync {
+		return false
+	}
+	async, _ := catalog.IsIndexAsync(idxDef.IndexAlgoParams)
+	return !async
+}
 
 func buildTableUpdate(stmt *tree.Update, ctx CompilerContext, isPrepareStmt bool) (p *Plan, err error) {
 	start := time.Now()
@@ -32,6 +57,35 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext, isPrepareStmt bool
 	if err != nil {
 		return nil, err
 	}
+
+	// A synchronously-maintained FULLTEXT/IVF index keys its hidden table(s) by the source
+	// primary key but is updated inline; an UPDATE that changes a primary key column would
+	// leave those entries stranded at the old key, so the index goes stale / exposes dead rows
+	// (#25617). HNSW and async IVF reconcile through CDC and are unaffected. Reject the PK
+	// update here in the table-update path (the only path that maintains irregular indexes;
+	// bindUpdate bails to it) rather than silently corrupting the index. Treat an index whose
+	// async-ness cannot be determined as synchronous (fail safe).
+	for i, tableDef := range tblInfo.tableDefs {
+		if tableDef.Pkey == nil || len(tblInfo.updateKeys[i]) == 0 {
+			continue
+		}
+		hasSyncIrregularIndex := false
+		for _, idxDef := range tableDef.Indexes {
+			if isSyncMaintainedIrregularIndex(idxDef) {
+				hasSyncIrregularIndex = true
+				break
+			}
+		}
+		if !hasSyncIrregularIndex {
+			continue
+		}
+		for _, pkColName := range tableDef.Pkey.Names {
+			if _, ok := tblInfo.updateKeys[i][pkColName]; ok {
+				return nil, moerr.NewUnsupportedDML(ctx.GetContext(), "update primary key on a table with a synchronous full-text/vector index")
+			}
+		}
+	}
+
 	// new logic
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt, false)
 	queryBindCtx := NewBindContext(builder, nil)
@@ -46,6 +100,27 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext, isPrepareStmt bool
 	err = rewriteGeneratedColumnsForUpdate(builder, updatePlanCtxs, lastNodeId)
 	if err != nil {
 		return nil, err
+	}
+	if stmt.From != nil && len(stmt.From.Tables) > 0 && tblInfo.needAggFilter {
+		lastNode := builder.qry.Nodes[lastNodeId]
+		lastNodeId, _, _, err = builder.appendRowNumberDedupNode(
+			queryBindCtx,
+			lastNodeId,
+			lastNode,
+			lastNode.BindingTags[0],
+			fallbackUpdateFromDedupPartitionCols(updatePlanCtxs),
+		)
+		if err != nil {
+			return nil, err
+		}
+		// Duplicate source matches are now deduped by the row_number() window
+		// above, so the per-table plan must skip the any_value aggregation. Keep
+		// needAggFilter set, though: it also drives the join-target NULL-row
+		// filter (row_id IS NOT NULL) that must survive for joined-target
+		// UPDATE ... FROM.
+		for _, updatePlanCtx := range updatePlanCtxs {
+			updatePlanCtx.dedupByRowNumber = true
+		}
 	}
 
 	sourceStep := builder.appendStep(lastNodeId)
@@ -149,7 +224,7 @@ func rewriteUpdateQueryLastNode(builder *QueryBuilder, planCtxs []*dmlPlanCtx, l
 						return err
 					}
 				} else {
-					lastNode.ProjectList[pos], err = forceCastExpr(builder.GetContext(), posExpr, col.Typ)
+					lastNode.ProjectList[pos], err = forceAssignmentCastExpr(builder.GetContext(), posExpr, col.Typ)
 					if err != nil {
 						return err
 					}
@@ -182,7 +257,7 @@ func rewriteUpdateQueryLastNode(builder *QueryBuilder, planCtxs []*dmlPlanCtx, l
 						return err
 					}
 				} else {
-					lastNode.ProjectList[pos], err = forceCastExpr(builder.GetContext(), lastNode.ProjectList[pos], col.Typ)
+					lastNode.ProjectList[pos], err = forceAssignmentCastExpr(builder.GetContext(), lastNode.ProjectList[pos], col.Typ)
 					if err != nil {
 						return err
 					}
@@ -256,6 +331,24 @@ func rewriteGeneratedColumnsForUpdate(builder *QueryBuilder, planCtxs []*dmlPlan
 	return nil
 }
 
+// fallbackUpdateFromDedupPartitionCols returns the projection positions used to
+// dedup duplicate source matches on the fallback (buildTableUpdate) path. The
+// key is each updated target table's row_id, a stable row identity, rather than
+// the whole old target row: partitioning on every old column would crash on
+// GEOMETRY32 (no comparator), miss dedup on float columns holding NaN
+// (NaN != NaN), and wrongly merge distinct rows whose columns happen to match.
+func fallbackUpdateFromDedupPartitionCols(planCtxs []*dmlPlanCtx) []int32 {
+	partitionCols := make([]int32, 0)
+	offset := int32(0)
+	for _, planCtx := range planCtxs {
+		if planCtx.updateColLength > 0 && planCtx.rowIdPos >= 0 {
+			partitionCols = append(partitionCols, offset+int32(planCtx.rowIdPos))
+		}
+		offset += int32(len(planCtx.tableDef.Cols) + planCtx.updateColLength)
+	}
+	return partitionCols
+}
+
 func selectUpdateTables(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Update, tableInfo *dmlTableInfo) (int32, []*dmlPlanCtx, error) {
 	// Merge target table list with PostgreSQL-style FROM sources so that the
 	// inner SELECT can resolve column references against both. tableInfo only
@@ -308,7 +401,21 @@ func selectUpdateTables(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.
 			}
 		}
 
-		for colName, updateKey := range updateKeys {
+		// Emit the update columns in a deterministic order. updateKeys is a Go
+		// map, so ranging it directly appended the update exprs to the project
+		// list (and recorded updateColPosMap) in random order across runs — the
+		// per-target column-block half of the same nondeterministic-layout bug
+		// the table-order fix in getUpdateTableInfo addresses. Sorting the column
+		// names emits exactly the same set in a stable order. (Order only affects
+		// layout, not correctness: downstream looks columns up by name via
+		// updateColPosMap, not by position.)
+		updateColNames := make([]string, 0, len(updateKeys))
+		for colName := range updateKeys {
+			updateColNames = append(updateColNames, colName)
+		}
+		sort.Strings(updateColNames)
+		for _, colName := range updateColNames {
+			updateKey := updateKeys[colName]
 			for _, coldef := range tableDef.Cols {
 				if coldef.Name == colName && isEnumOrSetPlanType(&coldef.Typ) {
 					updateKey, err = wrapAstExprForMySQLSpecialType(builder.GetContext(), coldef.Typ, updateKey)

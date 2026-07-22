@@ -266,9 +266,13 @@ select cast(col10 as varchar) from t8;
 this is a char type  𝄀
 this is a varchar type
 select cast(col10 as char(1)) from t8;
-internal error: Can't cast column from TEXT type to CHAR type because of one or more values in that column. Src length 19 is larger than Dest length 1
+cast(col10 as char(1))
+t
+t
 select cast(col10 as varchar(1)) from t8;
-internal error: Can't cast column from TEXT type to VARCHAR type because of one or more values in that column. Src length 19 is larger than Dest length 1
+cast(col10 as varchar(1))
+t
+t
 delete from t8 where col10 is not NULL;
 insert into t8(col11) values ('2020-01-01');
 insert into t8(col11) values ('2020-01-01 13:10:10');
@@ -324,11 +328,17 @@ delete from t8 where col12 is not NULL;
 insert into t8(col13) values ('12345.123456789');
 insert into t8(col13) values (12345.123456789);
 select cast(col13 as decimal(5,3)) from t8;
-invalid input: 12345.123456789 beyond the range, can't be converted to Decimal64(5,3).
+➤ cast(col13 as decimal(5, 3))[3,5,3]  𝄀
+99.999  𝄀
+99.999
 insert into t8(col13) values ('1.234567');
 insert into t8(col13) values (1.234567);
 select cast(col13 as decimal(5,3)) from t8;
-invalid input: 12345.123456789 beyond the range, can't be converted to Decimal64(5,3).
+➤ cast(col13 as decimal(5, 3))[3,5,3]  𝄀
+99.999  𝄀
+99.999  𝄀
+1.235  𝄀
+1.235
 select cast(col13 as decimal(20,15)) from t8;
 ➤ cast(col13 as decimal(20, 15))[3,20,15]  𝄀
 12345.123456789000000  𝄀

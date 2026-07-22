@@ -1,0 +1,69 @@
+select st_issimple(st_geomfromtext('POINT(1 2)')) as simple_point;
+simple_point
+1
+select st_issimple(st_geomfromtext('LINESTRING(0 0,1 0,2 0)')) as simple_line;
+simple_line
+1
+select st_issimple(st_geomfromtext('LINESTRING(0 0,2 0,1 1,0 0)')) as simple_closed_triangle;
+simple_closed_triangle
+1
+select st_issimple(st_geomfromtext('LINESTRING(0 0,2 2,0 2,2 0)')) as not_simple_crossing;
+not_simple_crossing
+0
+select st_issimple(st_geomfromtext('LINESTRING(0 0,1 0,0 0)')) as not_simple_backtrack;
+not_simple_backtrack
+0
+select st_issimple(st_geomfromtext(null)) as simple_null;
+simple_null
+null
+select st_isring(st_geomfromtext('LINESTRING(0 0,2 0,1 1,0 0)')) as ring_yes;
+ring_yes
+1
+select st_isring(st_geomfromtext('LINESTRING(0 0,1 0,2 0)')) as ring_not_closed;
+ring_not_closed
+0
+select st_isring(st_geomfromtext('LINESTRING(0 0,1 0,0 0)')) as ring_closed_not_simple;
+ring_closed_not_simple
+0
+select st_isring(st_geomfromtext(null)) as ring_null;
+ring_null
+null
+select st_isring(st_geomfromtext('POINT(1 2)'));
+invalid input: geometry is not a LINESTRING
+select st_isvalid(st_geomfromtext('POINT(1 2)')) as valid_point;
+valid_point
+1
+select st_isvalid(st_geomfromtext('LINESTRING(0 0,1 1)')) as valid_line;
+valid_line
+1
+select st_isvalid(st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0))')) as valid_polygon;
+valid_polygon
+1
+select st_isvalid(st_geomfromtext('POLYGON((0 0,4 4,4 0,0 4,0 0))')) as invalid_bowtie;
+invalid_bowtie
+0
+select st_isvalid(st_geomfromtext('POLYGON((0 0,6 0,6 6,0 6,0 0),(1 1,2 1,2 2,1 2,1 1))')) as valid_with_hole;
+valid_with_hole
+1
+select st_isvalid(st_geomfromtext('POLYGON((0 0,6 0,6 6,0 6,0 0),(0 1,2 1,2 2,0 2,0 1))')) as invalid_hole_touches;
+invalid_hole_touches
+0
+select st_isvalid(st_geomfromtext('GEOMETRYCOLLECTION EMPTY')) as valid_empty_collection;
+invalid input: geometry type is not supported by ST_IsValid
+select st_isvalid(st_geomfromtext(null)) as valid_null;
+valid_null
+null
+drop database if exists geo_valid;
+create database geo_valid;
+use geo_valid;
+drop table if exists rings;
+create table rings(id int, g geometry);
+insert into rings values
+(1, st_geomfromtext('LINESTRING(0 0,2 0,1 1,0 0)')),
+(2, st_geomfromtext('LINESTRING(0 0,1 0,2 0)'));
+select id, st_isring(g) as is_ring, st_issimple(g) as is_simple from rings order by id;
+id    is_ring    is_simple
+1    1    1
+2    0    1
+drop table rings;
+drop database geo_valid;

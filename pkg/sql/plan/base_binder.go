@@ -53,20 +53,19 @@ var kAlwaysFalseExpr = &plan.Expr{
 }
 
 func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (expr *Expr, err error) {
+	if b.numericParamType != nil && !isNumericContextNode(astExpr) {
+		paramType := b.numericParamType
+		b.numericParamType = nil
+		defer func() { b.numericParamType = paramType }()
+		return b.impl.BindExpr(astExpr, depth, isRoot)
+	}
+
 	switch exprImpl := astExpr.(type) {
 	case *tree.NumVal:
-		if d, ok := b.impl.(*DefaultBinder); ok {
-			expr, err = b.bindNumVal(exprImpl, d.typ)
-		} else {
-			expr, err = b.bindNumVal(exprImpl, plan.Type{})
-		}
+		expr, err = b.bindNumVal(exprImpl, b.defaultValueBindType())
 	case *tree.TimeUnitExpr:
 		numVal := tree.NewNumVal(exprImpl.Unit, exprImpl.Unit, false, tree.P_char)
-		if d, ok := b.impl.(*DefaultBinder); ok {
-			expr, err = b.bindNumVal(numVal, d.typ)
-		} else {
-			expr, err = b.bindNumVal(numVal, plan.Type{})
-		}
+		expr, err = b.bindNumVal(numVal, b.defaultValueBindType())
 	case *tree.ParenExpr:
 		expr, err = b.impl.BindExpr(exprImpl.Expr, depth, isRoot)
 
@@ -140,16 +139,27 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		expr, err = b.bindFuncExprImplByAstExpr("serial_extract", []tree.Expr{astExpr}, depth)
 
 	case *tree.CastExpr:
-		expr, err = b.impl.BindExpr(exprImpl.Expr, depth, false)
-		if err != nil {
-			return
-		}
 		var typ Type
 		typ, err = getTypeFromAst(b.GetContext(), exprImpl.Type)
 		if err != nil {
 			return
 		}
-		expr, err = appendCastBeforeExpr(b.GetContext(), expr, typ)
+		parentParamType := b.numericParamType
+		b.numericParamType = nil
+		if isNumericArithmeticRoot(exprImpl.Expr) {
+			expr, err = b.bindNumericExprWithContext(exprImpl.Expr, depth, &typ)
+		} else {
+			expr, err = b.impl.BindExpr(exprImpl.Expr, depth, false)
+		}
+		b.numericParamType = parentParamType
+		if err != nil {
+			return
+		}
+		if useExplicitCastOverload(exprImpl.Type) {
+			expr, err = appendExplicitCastBeforeExpr(b.GetContext(), expr, typ)
+		} else {
+			expr, err = appendCastBeforeExpr(b.GetContext(), expr, typ)
+		}
 
 	case *tree.BitCastExpr:
 		expr, err = b.bindFuncExprImplByAstExpr("bit_cast", []tree.Expr{astExpr}, depth)
@@ -275,6 +285,24 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 	return
 }
 
+func useExplicitCastOverload(typ tree.ResolvableTypeReference) bool {
+	t, ok := typ.(*tree.T)
+	if !ok {
+		return false
+	}
+	internal := t.InternalType
+	switch defines.MysqlType(internal.Oid) {
+	case defines.MYSQL_TYPE_DECIMAL, defines.MYSQL_TYPE_NEWDECIMAL:
+		return true
+	case defines.MYSQL_TYPE_LONGLONG:
+		family := strings.ToLower(internal.FamilyString)
+		return family == "signed" || family == "integer" ||
+			(internal.Unsigned && (family == "" || family == "unsigned"))
+	default:
+		return false
+	}
+}
+
 func unwrapParenExpr(astExpr tree.Expr) tree.Expr {
 	for {
 		paren, ok := astExpr.(*tree.ParenExpr)
@@ -287,14 +315,18 @@ func unwrapParenExpr(astExpr tree.Expr) tree.Expr {
 
 func (b *baseBinder) baseBindParam(astExpr *tree.ParamExpr, depth int32, isRoot bool) (expr *plan.Expr, err error) {
 	typ := types.T_text.ToType()
-	return &Expr{
+	param := &Expr{
 		Typ: makePlan2Type(&typ),
 		Expr: &plan.Expr_P{
 			P: &plan.ParamRef{
 				Pos: int32(astExpr.Offset),
 			},
 		},
-	}, nil
+	}
+	if b.numericParamType != nil {
+		return appendCastBeforeExpr(b.GetContext(), param, *b.numericParamType)
+	}
+	return param, nil
 }
 
 func (b *baseBinder) baseBindVar(astExpr *tree.VarExpr, depth int32, isRoot bool) (expr *plan.Expr, err error) {
@@ -423,6 +455,23 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 		}
 	}
 
+	if groupPos, ok := b.correlatedGroupByColPos(depth, name, table, col); ok {
+		expr = &plan.Expr{
+			Typ: b.ctx.groups[groupPos].Typ,
+			Expr: &plan.Expr_Corr{
+				Corr: &plan.CorrColRef{
+					RelPos: b.ctx.groupTag,
+					ColPos: groupPos,
+					Depth:  depth,
+				},
+			},
+		}
+		if err != nil {
+			errutil.ReportError(b.GetContext(), err)
+		}
+		return
+	}
+
 	if isEnumOrSetPlanType(typ) {
 		if err != nil {
 			errutil.ReportError(b.GetContext(), err)
@@ -511,6 +560,36 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 	}
 
 	return
+}
+
+func (b *baseBinder) correlatedGroupByColPos(depth int32, astName, table, col string) (int32, bool) {
+	if depth == 0 || b.ctx == nil || len(b.ctx.groupByAst) == 0 {
+		return 0, false
+	}
+	if pos, ok := b.ctx.groupByAst[astName]; ok && int(pos) < len(b.ctx.groups) {
+		return pos, true
+	}
+	if table != "" {
+		if pos, ok := b.ctx.groupByAst[table+"."+col]; ok && int(pos) < len(b.ctx.groups) {
+			return pos, true
+		}
+	}
+	return 0, false
+}
+
+func (b *baseBinder) corrColRefTargetsGroup(corr *plan.CorrColRef) bool {
+	if corr == nil {
+		return false
+	}
+	ctx := b.ctx
+	for depth := int32(0); depth < corr.Depth && ctx != nil; depth++ {
+		ctx = ctx.parent
+	}
+	return ctx != nil && ctx.groupTag > 0 && corr.RelPos == ctx.groupTag
+}
+
+func (b *baseBinder) corrColRefTargetsCurrentGroup(corr *plan.CorrColRef) bool {
+	return corr != nil && b.ctx != nil && b.ctx.groupTag > 0 && corr.RelPos == b.ctx.groupTag
 }
 
 func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Expr, error) {
@@ -615,6 +694,13 @@ func (b *baseBinder) bindRangeCond(astExpr *tree.RangeCond, depth int32, isRoot 
 }
 
 func (b *baseBinder) bindUnaryExpr(astExpr *tree.UnaryExpr, depth int32, isRoot bool) (*Expr, error) {
+	if (astExpr.Op == tree.UNARY_MINUS || astExpr.Op == tree.UNARY_PLUS) && b.numericParamType == nil {
+		return b.bindNumericExprWithContext(astExpr, depth, b.defaultNumericOuterType())
+	}
+	return b.bindUnaryExprWithCurrentContext(astExpr, depth)
+}
+
+func (b *baseBinder) bindUnaryExprWithCurrentContext(astExpr *tree.UnaryExpr, depth int32) (*Expr, error) {
 	switch astExpr.Op {
 	case tree.UNARY_MINUS:
 		return b.bindFuncExprImplByAstExpr("unary_minus", []tree.Expr{astExpr.Expr}, depth)
@@ -629,6 +715,13 @@ func (b *baseBinder) bindUnaryExpr(astExpr *tree.UnaryExpr, depth int32, isRoot 
 }
 
 func (b *baseBinder) bindBinaryExpr(astExpr *tree.BinaryExpr, depth int32, isRoot bool) (*Expr, error) {
+	if isNumericBinaryOp(astExpr.Op) && b.numericParamType == nil {
+		return b.bindNumericExprWithContext(astExpr, depth, b.defaultNumericOuterType())
+	}
+	return b.bindBinaryExprWithCurrentContext(astExpr, depth)
+}
+
+func (b *baseBinder) bindBinaryExprWithCurrentContext(astExpr *tree.BinaryExpr, depth int32) (*Expr, error) {
 	switch astExpr.Op {
 	case tree.PLUS:
 		return b.bindFuncExprImplByAstExpr("+", []tree.Expr{astExpr.Left, astExpr.Right}, depth)
@@ -654,6 +747,271 @@ func (b *baseBinder) bindBinaryExpr(astExpr *tree.BinaryExpr, depth int32, isRoo
 		return b.bindFuncExprImplByAstExpr(">>", []tree.Expr{astExpr.Left, astExpr.Right}, depth)
 	}
 	return nil, moerr.NewNYIf(b.GetContext(), "'%v' operator", astExpr.Op.ToString())
+}
+
+func isNumericBinaryOp(op tree.BinaryOp) bool {
+	switch op {
+	case tree.PLUS, tree.MINUS, tree.MULTI, tree.MOD, tree.DIV, tree.INTEGER_DIV:
+		return true
+	default:
+		return false
+	}
+}
+
+func isNumericContextNode(astExpr tree.Expr) bool {
+	switch expr := astExpr.(type) {
+	case *tree.ParamExpr, *tree.NumVal, *tree.ParenExpr, *tree.CastExpr:
+		return true
+	case *tree.BinaryExpr:
+		return isNumericBinaryOp(expr.Op)
+	case *tree.UnaryExpr:
+		return expr.Op == tree.UNARY_PLUS || expr.Op == tree.UNARY_MINUS
+	case *tree.FuncExpr:
+		return numericAstFunctionName(expr) == "mod"
+	default:
+		return false
+	}
+}
+
+func isNumericArithmeticRoot(astExpr tree.Expr) bool {
+	switch expr := astExpr.(type) {
+	case *tree.ParenExpr:
+		return isNumericArithmeticRoot(expr.Expr)
+	case *tree.BinaryExpr:
+		return isNumericBinaryOp(expr.Op)
+	case *tree.UnaryExpr:
+		return expr.Op == tree.UNARY_PLUS || expr.Op == tree.UNARY_MINUS
+	case *tree.FuncExpr:
+		return numericAstFunctionName(expr) == "mod" && len(expr.Exprs) == 2
+	default:
+		return false
+	}
+}
+
+func (b *baseBinder) bindNumericExprWithContext(astExpr tree.Expr, depth int32, outer *Type) (*Expr, error) {
+	if b.numericParamType != nil {
+		return b.impl.BindExpr(astExpr, depth, false)
+	}
+	if b.builder == nil || !b.builder.isPrepareStatement {
+		return b.bindNumericExprWithoutNewContext(astExpr, depth)
+	}
+
+	scan, err := b.numericAstTypes(astExpr, depth)
+	if err != nil || !scan.hasParam || scan.incompatible {
+		if err != nil {
+			return nil, err
+		}
+		return b.bindNumericExprWithoutNewContext(astExpr, depth)
+	}
+
+	typesKnown := make([]types.Type, 0, len(scan.strong)+len(scan.weakDecimals))
+	for i := range scan.strong {
+		typesKnown = append(typesKnown, makeTypeByPlan2Type(scan.strong[i]))
+	}
+	var outerType *types.Type
+	if outer != nil {
+		typ := makeTypeByPlan2Type(*outer)
+		outerType = &typ
+	}
+	if len(scan.weakDecimals) > 0 && shouldActivateWeakDecimal(typesKnown, outerType) {
+		for i := range scan.weakDecimals {
+			typesKnown = append(typesKnown, makeTypeByPlan2Type(scan.weakDecimals[i]))
+		}
+	}
+	paramType, ok := function.InferNumericParameterType(typesKnown, outerType)
+	if !ok {
+		return b.bindNumericExprWithoutNewContext(astExpr, depth)
+	}
+	planType := makePlan2Type(&paramType)
+	b.numericParamType = &planType
+	defer func() { b.numericParamType = nil }()
+
+	return b.bindNumericExprWithCurrentContext(astExpr, depth)
+}
+
+func (b *baseBinder) bindNumericExprWithoutNewContext(astExpr tree.Expr, depth int32) (*Expr, error) {
+	return b.bindNumericExprWithCurrentContext(astExpr, depth)
+}
+
+func (b *baseBinder) bindNumericExprWithCurrentContext(astExpr tree.Expr, depth int32) (*Expr, error) {
+	if binary, ok := astExpr.(*tree.BinaryExpr); ok {
+		return b.bindBinaryExprWithCurrentContext(binary, depth)
+	}
+	if unary, ok := astExpr.(*tree.UnaryExpr); ok {
+		return b.bindUnaryExprWithCurrentContext(unary, depth)
+	}
+	if function, ok := astExpr.(*tree.FuncExpr); ok && numericAstFunctionName(function) == "mod" {
+		return b.bindFuncExprImplByAstExpr("mod", function.Exprs, depth)
+	}
+	return b.impl.BindExpr(astExpr, depth, false)
+}
+
+type numericAstTypeScan struct {
+	strong       []Type
+	weakDecimals []Type
+	hasParam     bool
+	incompatible bool
+}
+
+func (s numericAstTypeScan) merge(other numericAstTypeScan) numericAstTypeScan {
+	s.strong = append(s.strong, other.strong...)
+	s.weakDecimals = append(s.weakDecimals, other.weakDecimals...)
+	s.hasParam = s.hasParam || other.hasParam
+	s.incompatible = s.incompatible || other.incompatible
+	return s
+}
+
+func numericAstTypedOperand(typ Type) numericAstTypeScan {
+	oid := types.T(typ.Id)
+	if oid == types.T_any {
+		return numericAstTypeScan{}
+	}
+	if !makeTypeByPlan2Type(typ).IsNumeric() {
+		return numericAstTypeScan{incompatible: true}
+	}
+	return numericAstTypeScan{strong: []Type{typ}}
+}
+
+func shouldActivateWeakDecimal(strong []types.Type, outer *types.Type) bool {
+	for _, typ := range strong {
+		if typ.IsNumeric() {
+			return true
+		}
+	}
+	return outer != nil && (outer.Oid.IsInteger() || outer.Oid.IsDecimal() || outer.Oid == types.T_bit)
+}
+
+func (b *baseBinder) numericAstTypes(astExpr tree.Expr, depth int32) (numericAstTypeScan, error) {
+	switch expr := astExpr.(type) {
+	case *tree.ParamExpr:
+		return numericAstTypeScan{hasParam: true}, nil
+	case *tree.ParenExpr:
+		return b.numericAstTypes(expr.Expr, depth)
+	case *tree.BinaryExpr:
+		if !isNumericBinaryOp(expr.Op) {
+			return numericAstTypeScan{}, nil
+		}
+		left, err := b.numericAstTypes(expr.Left, depth)
+		if err != nil {
+			return numericAstTypeScan{}, err
+		}
+		right, err := b.numericAstTypes(expr.Right, depth)
+		if err != nil {
+			return numericAstTypeScan{}, err
+		}
+		return left.merge(right), nil
+	case *tree.UnaryExpr:
+		if expr.Op == tree.UNARY_PLUS || expr.Op == tree.UNARY_MINUS {
+			return b.numericAstTypes(expr.Expr, depth)
+		}
+		return numericAstTypeScan{}, nil
+	case *tree.CastExpr:
+		typ, err := getTypeFromAst(b.GetContext(), expr.Type)
+		if err != nil {
+			return numericAstTypeScan{}, err
+		}
+		return numericAstTypedOperand(typ), nil
+	case *tree.NumVal:
+		bound, err := b.bindNumVal(expr, Type{})
+		if err != nil {
+			return numericAstTypeScan{}, err
+		}
+		if types.T(bound.Typ.Id).IsDecimal() {
+			return numericAstTypeScan{weakDecimals: []Type{bound.Typ}}, nil
+		}
+		return numericAstTypedOperand(bound.Typ), nil
+	case *tree.FuncExpr:
+		if numericAstFunctionName(expr) != "mod" || len(expr.Exprs) != 2 {
+			return numericAstTypeScan{}, nil
+		}
+		left, err := b.numericAstTypes(expr.Exprs[0], depth)
+		if err != nil {
+			return numericAstTypeScan{}, err
+		}
+		right, err := b.numericAstTypes(expr.Exprs[1], depth)
+		if err != nil {
+			return numericAstTypeScan{}, err
+		}
+		return left.merge(right), nil
+	case *tree.UnresolvedName:
+		if typ, ok := b.numericColumnType(expr); ok {
+			return numericAstTypedOperand(typ), nil
+		}
+		return numericAstTypeScan{}, nil
+	default:
+		return numericAstTypeScan{}, nil
+	}
+}
+
+func numericAstFunctionName(astExpr *tree.FuncExpr) string {
+	funcRef, ok := astExpr.Func.FunctionReference.(*tree.UnresolvedName)
+	if !ok {
+		return ""
+	}
+	return strings.ToLower(funcRef.ColName())
+}
+
+func (b *baseBinder) numericColumnType(astExpr *tree.UnresolvedName) (Type, bool) {
+	if b.ctx == nil {
+		return Type{}, false
+	}
+	ctx := b.ctx
+	for ctx != nil {
+		if typ, found, stop := b.numericColumnTypeInContext(ctx, astExpr); found || stop {
+			return typ, found
+		}
+		ctx = ctx.parent
+		for ctx != nil && ctx.binder == nil {
+			ctx = ctx.parent
+		}
+	}
+	return Type{}, false
+}
+
+func (b *baseBinder) numericColumnTypeInContext(
+	ctx *BindContext,
+	astExpr *tree.UnresolvedName,
+) (typ Type, found bool, stop bool) {
+	col := astExpr.ColName()
+	table := astExpr.TblName()
+	if table == "" {
+		if binding, ok := ctx.bindingByCol[col]; ok {
+			if binding == nil {
+				return Type{}, false, true
+			}
+			typ, found = bindingColumnType(binding, col)
+			return typ, found, true
+		}
+		if alias, ok := ctx.aliasMap[col]; ok && int(alias.idx) < len(ctx.projects) {
+			return ctx.projects[alias.idx].Typ, true, true
+		}
+		return Type{}, false, false
+	}
+
+	binding, ok := ctx.bindingByTable[table]
+	if !ok && ctx.remapOption != nil {
+		db := astExpr.DbName()
+		if db == "" && b.builder != nil {
+			db = b.builder.compCtx.DefaultDatabase()
+		}
+		binding, ok = ctx.bindingByTable[db+"."+table]
+	}
+	if !ok {
+		return Type{}, false, false
+	}
+	typ, found = bindingColumnType(binding, col)
+	return typ, found, false
+}
+
+func bindingColumnType(binding *Binding, col string) (Type, bool) {
+	if binding == nil {
+		return Type{}, false
+	}
+	colPos, ok := binding.colIdByName[col]
+	if !ok || colPos < 0 || int(colPos) >= len(binding.types) || binding.types[colPos] == nil {
+		return Type{}, false
+	}
+	return *DeepCopyType(binding.types[colPos]), true
 }
 
 func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int32, isRoot bool) (*Expr, error) {
@@ -1085,7 +1443,7 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 }
 
 func (b *baseBinder) bindTupleInByAst(leftTuple *tree.Tuple, rightTuple *tree.Tuple, depth int32, isNot bool) (*plan.Expr, error) {
-	var newExpr *plan.Expr
+	candidates := make([]*plan.Expr, 0, len(rightTuple.Exprs))
 
 	for _, rightVal := range rightTuple.Exprs {
 		rightTupleVal, ok := unwrapParenExpr(rightVal).(*tree.Tuple)
@@ -1096,31 +1454,25 @@ func (b *baseBinder) bindTupleInByAst(leftTuple *tree.Tuple, rightTuple *tree.Tu
 			return nil, moerr.NewInternalError(b.GetContext(), "tuple length mismatch")
 		}
 
-		var andExpr *plan.Expr
+		equalities := make([]*plan.Expr, 0, len(leftTuple.Exprs))
 		for i := 0; i < len(leftTuple.Exprs); i++ {
 			eqExpr, err := b.bindFuncExprImplByAstExpr("=", []tree.Expr{leftTuple.Exprs[i], rightTupleVal.Exprs[i]}, depth)
 			if err != nil {
 				return nil, err
 			}
-			if andExpr == nil {
-				andExpr = eqExpr
-			} else {
-				andExpr, err = BindFuncExprImplByPlanExpr(b.GetContext(), "and", []*plan.Expr{andExpr, eqExpr})
-				if err != nil {
-					return nil, err
-				}
-			}
+			equalities = append(equalities, eqExpr)
 		}
 
-		if newExpr == nil {
-			newExpr = andExpr
-		} else {
-			var err error
-			newExpr, err = BindFuncExprImplByPlanExpr(b.GetContext(), "or", []*plan.Expr{newExpr, andExpr})
-			if err != nil {
-				return nil, err
-			}
+		candidate, err := combinePlanExprsBalanced(b.GetContext(), "and", equalities)
+		if err != nil {
+			return nil, err
 		}
+		candidates = append(candidates, candidate)
+	}
+
+	newExpr, err := combinePlanExprsBalanced(b.GetContext(), "or", candidates)
+	if err != nil {
+		return nil, err
 	}
 
 	if isNot {
@@ -1129,12 +1481,44 @@ func (b *baseBinder) bindTupleInByAst(leftTuple *tree.Tuple, rightTuple *tree.Tu
 	return newExpr, nil
 }
 
+// combinePlanExprsBalanced preserves the input order while building a
+// logarithmic-depth boolean tree. Large tuple or mixed-type IN lists used to
+// create a left-deep tree, amplifying binder/optimizer recursion and making
+// otherwise valid statements vulnerable to stack growth.
+func combinePlanExprsBalanced(ctx context.Context, op string, exprs []*plan.Expr) (*plan.Expr, error) {
+	if len(exprs) == 0 {
+		return nil, nil
+	}
+
+	level := exprs
+	for len(level) > 1 {
+		next := make([]*plan.Expr, 0, (len(level)+1)/2)
+		for i := 0; i < len(level); i += 2 {
+			if i+1 == len(level) {
+				next = append(next, level[i])
+				continue
+			}
+
+			combined, err := BindFuncExprImplByPlanExpr(ctx, op, []*plan.Expr{level[i], level[i+1]})
+			if err != nil {
+				return nil, err
+			}
+			next = append(next, combined)
+		}
+		level = next
+	}
+	return level[0], nil
+}
+
 func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32, isRoot bool) (*Expr, error) {
 	funcRef, ok := astExpr.Func.FunctionReference.(*tree.UnresolvedName)
 	if !ok {
 		return nil, moerr.NewNYIf(b.GetContext(), "function expr '%v'", astExpr)
 	}
 	funcName := funcRef.ColName()
+	if strings.EqualFold(funcName, "mod") && b.numericParamType == nil {
+		return b.bindNumericExprWithContext(astExpr, depth, b.defaultNumericOuterType())
+	}
 
 	if function.GetFunctionIsAggregateByName(funcName) && astExpr.WindowSpec == nil {
 
@@ -1158,7 +1542,18 @@ func (b *baseBinder) bindFullTextMatchExpr(astExpr *tree.FullTextMatchExpr, dept
 	args := make([]*Expr, 2+len(astExpr.KeyParts))
 
 	mode := int64(astExpr.Mode)
-	args[0] = makePlan2StringConstExprWithType(astExpr.Pattern, false)
+	pattern, err := b.impl.BindExpr(astExpr.Pattern, depth, false)
+	if err != nil {
+		return nil, err
+	}
+	if pattern.Typ.Id != int32(types.T_varchar) {
+		varcharTyp := types.T_varchar.ToType()
+		pattern, err = makePlan2CastExpr(b.GetContext(), pattern, makePlan2Type(&varcharTyp))
+		if err != nil {
+			return nil, err
+		}
+	}
+	args[0] = pattern
 	args[1] = makePlan2Int64ConstExprWithType(mode)
 	for i, k := range astExpr.KeyParts {
 		c, err := b.baseBindColRef(k.ColName, depth, isRoot)
@@ -1295,6 +1690,41 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 			args[idx] = expr
 		}
 	}
+	if b.numericParamType != nil {
+		var err error
+		args, err = b.resolvePreparedNumericArgs(name, args)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	//promote interval expr rewrite here
+	if name == "interval" {
+		if len(astArgs) == 2 {
+			//interval expr like 'interval 5 day'
+			if _, ok := astArgs[1].(*tree.TimeUnitExpr); ok {
+				// rewrite interval function to ListExpr, and return directly
+				return &plan.Expr{
+					Typ: plan.Type{
+						Id: int32(types.T_interval),
+					},
+					Expr: &plan.Expr_List{
+						List: &plan.ExprList{
+							List: args,
+						},
+					},
+				}, nil
+			}
+		}
+	}
+	if name == "name_const" {
+		if !validNameConstNameAst(astArgs) || !validNameConstValueAst(astArgs) {
+			return nil, moerr.NewInvalidArg(b.GetContext(), "NAME_CONST", "")
+		}
+		if err := validateNameConstArgs(b.GetContext(), args); err != nil {
+			return nil, err
+		}
+	}
 
 	if b.builder != nil {
 		e, err := bindFuncExprAndConstFold(b.GetContext(), b.builder.compCtx.GetProcess(), name, args)
@@ -1326,6 +1756,35 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 	return bindFuncExprImplUdf(b, name, udf, astArgs, depth)
 }
 
+func (b *baseBinder) resolvePreparedNumericArgs(name string, args []*Expr) ([]*Expr, error) {
+	if len(args) != 2 {
+		return args, nil
+	}
+
+	left, right, _, ok := function.ResolveNumericBinaryTypes(
+		name,
+		makeTypeByPlan2Expr(args[0]),
+		makeTypeByPlan2Expr(args[1]),
+		nil,
+	)
+	if !ok {
+		return args, nil
+	}
+
+	targets := []types.Type{left, right}
+	for i := range args {
+		if makeTypeByPlan2Expr(args[i]).Eq(targets[i]) {
+			continue
+		}
+		cast, err := appendCastBeforeExpr(b.GetContext(), args[i], makePlan2Type(&targets[i]))
+		if err != nil {
+			return nil, err
+		}
+		args[i] = cast
+	}
+	return args, nil
+}
+
 func bindFuncExprImplUdf(b *baseBinder, name string, udf *function.Udf, args []tree.Expr, depth int32) (*plan.Expr, error) {
 	if udf == nil {
 		return nil, moerr.NewNotSupportedf(b.GetContext(), "function '%s'", name)
@@ -1334,6 +1793,10 @@ func bindFuncExprImplUdf(b *baseBinder, name string, udf *function.Udf, args []t
 	switch udf.Language {
 	case string(tree.SQL):
 		sql := udf.Body
+		parserSQLMode := "PIPES_AS_CONCAT"
+		if udf.SQLMode != nil {
+			parserSQLMode = *udf.SQLMode
+		}
 		// replace sql with actual arg value
 		fmtctx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
 		for i := 0; i < len(args); i++ {
@@ -1349,19 +1812,29 @@ func bindFuncExprImplUdf(b *baseBinder, name string, udf *function.Udf, args []t
 
 		if !strings.Contains(sql, "select") {
 			sql = "select " + sql
-			substmts, err := parsers.Parse(b.GetContext(), dialect.MYSQL, sql, 1)
+			substmts, err := parsers.ParseWithSQLMode(b.GetContext(), dialect.MYSQL, sql, 1, parserSQLMode)
 			if err != nil {
 				return nil, err
 			}
+			defer func() {
+				for _, stmt := range substmts {
+					stmt.Free()
+				}
+			}()
 			expr, err = b.impl.BindExpr(substmts[0].(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr, depth, false)
 			if err != nil {
 				return nil, err
 			}
 		} else {
-			substmts, err := parsers.Parse(b.GetContext(), dialect.MYSQL, sql, 1)
+			substmts, err := parsers.ParseWithSQLMode(b.GetContext(), dialect.MYSQL, sql, 1, parserSQLMode)
 			if err != nil {
 				return nil, err
 			}
+			defer func() {
+				for _, stmt := range substmts {
+					stmt.Free()
+				}
+			}()
 			subquery := tree.NewSubquery(substmts[0], false)
 			expr, err = b.impl.BindSubquery(subquery, false)
 			if err != nil {
@@ -1421,6 +1894,14 @@ func bindFuncExprAndConstFold(ctx context.Context, proc *process.Process, name s
 			if tmpexpr != nil {
 				retExpr = tmpexpr
 			}
+		}
+
+	case "name_const":
+		if proc == nil {
+			return nil, moerr.NewInvalidInput(ctx, "can't use name_const without proc")
+		}
+		if err := foldNameConstArgs(ctx, proc, retExpr.GetF().Args); err != nil {
+			return nil, err
 		}
 
 	case "between":
@@ -1550,36 +2031,46 @@ between_fallback:
 	return retExpr, nil
 }
 
+func bindSerialFuncOverExprList(ctx context.Context, name string, args []*Expr) (*plan.Expr, bool, error) {
+	if name != function.SerialFunctionName && name != function.SerialFullFunctionName {
+		return nil, false, nil
+	}
+	if len(args) != 1 {
+		return nil, false, nil
+	}
+
+	listExpr, ok := args[0].Expr.(*plan.Expr_List)
+	if !ok {
+		return nil, false, nil
+	}
+	if listExpr.List == nil || len(listExpr.List.List) == 0 {
+		return args[0], true, nil
+	}
+
+	// An IN-list is a set of scalar candidates, not one row-wise vector argument.
+	// Bind serial(v0, v1, ...) as list(serial(v0), serial(v1), ...).
+	for i, subExpr := range listExpr.List.List {
+		newSubExpr, err := BindFuncExprImplByPlanExpr(ctx, name, []*Expr{subExpr})
+		if err != nil {
+			return nil, true, err
+		}
+		listExpr.List.List[i] = newSubExpr
+		if i == 0 {
+			args[0].Typ = newSubExpr.Typ
+		}
+	}
+	return args[0], true, nil
+}
+
 func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) (*plan.Expr, error) {
 	var err error
 
 	// deal with some special function
+	if listExpr, ok, err := bindSerialFuncOverExprList(ctx, name, args); ok || err != nil {
+		return listExpr, err
+	}
+
 	switch name {
-	case "serial":
-		if len(args) == 1 {
-			if listExpr, ok := args[0].Expr.(*plan.Expr_List); ok {
-				for i, subExpr := range listExpr.List.List {
-					newSubExpr, err := BindFuncExprImplByPlanExpr(ctx, "serial", []*Expr{subExpr})
-					if err != nil {
-						return nil, err
-					}
-					listExpr.List.List[i] = newSubExpr
-				}
-				return args[0], nil
-			}
-		}
-	case "interval":
-		// rewrite interval function to ListExpr, and return directly
-		return &plan.Expr{
-			Typ: plan.Type{
-				Id: int32(types.T_interval),
-			},
-			Expr: &plan.Expr_List{
-				List: &plan.ExprList{
-					List: args,
-				},
-			},
-		}, nil
 	case "and", "or", "not", "xor":
 		// why not append cast function?
 		// for i := 0; i < len(args); i++ {
@@ -1599,6 +2090,9 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 	case "=", "<", "<=", ">", ">=", "<>":
 		// why not append cast function?
 		if err := convertValueIntoBool(name, args, false); err != nil {
+			return nil, err
+		}
+		if err := adjustJsonOrderingDynamicParamType(ctx, name, args); err != nil {
 			return nil, err
 		}
 
@@ -1764,6 +2258,9 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		if len(args) == 0 {
 			return nil, moerr.NewInvalidArg(ctx, name+" function have invalid input args length", len(args))
 		}
+		if argLit := args[0].GetLit(); args[0].Typ.Id == int32(types.T_uint64) && argLit != nil && argLit.GetU64Val() == 1<<63 {
+			return makePlan2Int64ConstExprWithType(math.MinInt64), nil
+		}
 		if args[0].Typ.Id == int32(types.T_uint64) {
 			args[0], err = appendCastBeforeExpr(ctx, args[0], plan.Type{
 				Id:          int32(types.T_decimal128),
@@ -1835,11 +2332,12 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 
 		if args[1].Typ.Id == int32(types.T_varchar) || args[1].Typ.Id == int32(types.T_char) {
 			var tp = types.T_date
+			var fsp int
 			if exprC := args[1].GetLit(); exprC != nil {
 				sval := exprC.Value.(*plan.Literal_Sval)
-				tp, _ = ExtractToDateReturnType(sval.Sval)
+				tp, fsp = ExtractToDateReturnType(sval.Sval)
 			}
-			args = append(args, makePlan2DateConstNullExpr(tp))
+			args = append(args, makePlan2DateConstNullExprWithScale(tp, int32(fsp)))
 
 		} else if args[1].Typ.Id == int32(types.T_any) {
 			args = append(args, makePlan2DateConstNullExpr(types.T_datetime))
@@ -1897,9 +2395,17 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		//if all the expr in the in list can safely cast to left type, we call it safe
 		if rightList := args[1].GetList(); rightList != nil {
 			typLeft := makeTypeByPlan2Expr(args[0])
+			leftIsConstNull := typLeft.Oid == types.T_any && args[0].GetLit() != nil && args[0].GetLit().Isnull
 			var inExprList, orExprList []*plan.Expr
 
 			for _, rightVal := range rightList.List {
+				if _, ok := rightVal.Expr.(*plan.Expr_List); ok && !partitionIn {
+					return nil, moerr.NewOperandColumns(ctx, 1)
+				}
+				if leftIsConstNull && !partitionIn {
+					orExprList = append(orExprList, rightVal)
+					continue
+				}
 				if checkNoNeedCast(makeTypeByPlan2Expr(rightVal), typLeft, rightVal) || partitionIn {
 					inExpr, err := appendCastBeforeExpr(ctx, rightVal, args[0].Typ)
 					if err != nil {
@@ -1939,40 +2445,32 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 				orExprList = append(inExprList, orExprList...)
 			}
 
-			//expand the in list to col=a or col=b or ......
+			// Expand values that cannot safely share the typed IN vector. Keep
+			// the expansion balanced so mixed-type lists do not create an
+			// O(N)-deep OR/AND expression tree.
+			expanded := make([]*plan.Expr, 0, len(orExprList)+1)
+			if newExpr != nil {
+				expanded = append(expanded, newExpr)
+			}
 			if name == "in" {
 				for _, expr := range orExprList {
 					tmpExpr, err := BindFuncExprImplByPlanExpr(ctx, "=", []*Expr{DeepCopyExpr(args[0]), expr})
 					if err != nil {
 						return nil, err
 					}
-					if newExpr == nil {
-						newExpr = tmpExpr
-					} else {
-						newExpr, err = BindFuncExprImplByPlanExpr(ctx, "or", []*Expr{newExpr, tmpExpr})
-						if err != nil {
-							return nil, err
-						}
-					}
+					expanded = append(expanded, tmpExpr)
 				}
+				return combinePlanExprsBalanced(ctx, "or", expanded)
 			} else {
 				for _, expr := range orExprList {
 					tmpExpr, err := BindFuncExprImplByPlanExpr(ctx, "!=", []*Expr{DeepCopyExpr(args[0]), expr})
 					if err != nil {
 						return nil, err
 					}
-					if newExpr == nil {
-						newExpr = tmpExpr
-					} else {
-						newExpr, err = BindFuncExprImplByPlanExpr(ctx, "and", []*Expr{newExpr, tmpExpr})
-						if err != nil {
-							return nil, err
-						}
-					}
+					expanded = append(expanded, tmpExpr)
 				}
+				return combinePlanExprsBalanced(ctx, "and", expanded)
 			}
-
-			return newExpr, nil
 		}
 	case "last_day":
 		if len(args) != 1 {
@@ -1982,6 +2480,8 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		if len(args) != 2 {
 			return nil, moerr.NewInvalidArg(ctx, name+" function have invalid input args length", len(args))
 		}
+	case "pow":
+		name = "power"
 	}
 
 	// get args(exprs) & types
@@ -2106,6 +2606,39 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 					if returnType.Scale < 0 {
 						returnType.Scale = 0
 					}
+				}
+			}
+		}
+	}
+
+	// Geometry constructors with an explicit constant SRID argument record the
+	// SRID in the result type's Width (geometry cells store bare WKB, so SRID
+	// lives in the type). A non-constant SRID cannot be represented this way.
+	if returnType.Oid == types.T_geometry || returnType.Oid == types.T_geometry32 {
+		switch name {
+		case "st_geomfromtext", "st_geomfromwkb", "st_geometryfromtext", "st_pointfromtext",
+			"st_linefromtext", "st_polygonfromtext", "st_mpointfromtext", "st_mlinefromtext",
+			"st_mpolyfromtext", "st_geomcollfromtext", "st_pointfromgeohash",
+			"st_geomfromgeojson":
+			if len(args) >= 2 {
+				// The SRID is carried in the result type's Width, so it must be
+				// a constant known at bind time. A non-constant SRID (column,
+				// parameter, or CAST/arithmetic expression) cannot be
+				// represented this way and is rejected rather than being
+				// silently dropped.
+				lit, ok := args[len(args)-1].Expr.(*plan.Expr_Lit)
+				if !ok || lit.Lit == nil {
+					return nil, moerr.NewInvalidInput(ctx, "the SRID argument of a geometry constructor must be a constant integer")
+				}
+				if !lit.Lit.Isnull {
+					iv, ok := lit.Lit.GetValue().(*plan.Literal_I64Val)
+					if !ok {
+						return nil, moerr.NewInvalidInput(ctx, "the SRID argument of a geometry constructor must be a constant integer")
+					}
+					if err := validateGeometrySRID(iv.I64Val); err != nil {
+						return nil, err
+					}
+					returnType.Width = encodeGeometrySRIDWidth(uint32(iv.I64Val), true)
 				}
 			}
 		}
@@ -2267,6 +2800,34 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 	}, nil
 }
 
+func adjustJsonOrderingDynamicParamType(ctx context.Context, name string, args []*Expr) error {
+	switch name {
+	case "<", "<=", ">", ">=":
+	default:
+		return nil
+	}
+	if len(args) != 2 {
+		return nil
+	}
+
+	if args[0].Typ.Id == int32(types.T_json) && isDirectDynamicParam(args[1]) {
+		var err error
+		args[1], err = BindFuncExprImplByPlanExpr(ctx, function.JsonOrderingParamFunctionName, []*Expr{args[1]})
+		return err
+	}
+	if args[1].Typ.Id == int32(types.T_json) && isDirectDynamicParam(args[0]) {
+		var err error
+		args[0], err = BindFuncExprImplByPlanExpr(ctx, function.JsonOrderingParamFunctionName, []*Expr{args[0]})
+		return err
+	}
+	return nil
+}
+
+func isDirectDynamicParam(expr *Expr) bool {
+	_, ok := expr.Expr.(*plan.Expr_P)
+	return ok
+}
+
 func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ Type) (*Expr, error) {
 	// over_int64_err := moerr.NewInternalError(b.GetContext(), "", "Constants over int64 will support in future version.")
 	// rewrite the hexnum process logic
@@ -2423,8 +2984,21 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ Type) (*Expr, error) {
 		}
 		bytes, _ := hex.DecodeString(s)
 		return returnHexNumExpr(string(bytes), true)
+	case tree.P_ScoreBinaryHexnum:
+		s := astExpr.String()[2:]
+		if len(s)%2 != 0 {
+			s = string('0') + s
+		}
+		bytes, _ := hex.DecodeString(s)
+		if !typ.IsEmpty() {
+			return appendCastBeforeExpr(b.GetContext(), makePlan2VarBinaryConstExprWithType(string(bytes)), typ)
+		}
+		return makePlan2VarBinaryConstExprWithType(string(bytes)), nil
 	case tree.P_ScoreBinary:
-		return returnHexNumExpr(astExpr.String(), true)
+		if !typ.IsEmpty() {
+			return appendCastBeforeExpr(b.GetContext(), makePlan2VarBinaryConstExprWithType(astExpr.String()), typ)
+		}
+		return makePlan2VarBinaryConstExprWithType(astExpr.String()), nil
 	case tree.P_bit:
 		s := astExpr.String()[2:]
 		bytes, _ := util.DecodeBinaryString(s)
@@ -2448,12 +3022,22 @@ func (b *baseBinder) GetContext() context.Context { return b.sysCtx }
 // --- util functions ----
 
 func appendCastBeforeExpr(ctx context.Context, expr *Expr, toType Type, isBin ...bool) (*Expr, error) {
+	return appendCastBeforeExprWithOverload(ctx, expr, toType, 0, isBin...)
+}
+
+func appendExplicitCastBeforeExpr(ctx context.Context, expr *Expr, toType Type) (*Expr, error) {
+	return appendCastBeforeExprWithOverload(ctx, expr, toType, 1)
+}
+
+func appendCastBeforeExprWithOverload(
+	ctx context.Context, expr *Expr, toType Type, overloadID int32, isBin ...bool,
+) (*Expr, error) {
 	toType.NotNullable = expr.Typ.NotNullable
 	argsType := []types.Type{
 		makeTypeByPlan2Expr(expr),
 		makeTypeByPlan2Type(toType),
 	}
-	fGet, err := function.GetFunctionByName(ctx, "cast", argsType)
+	fGet, err := function.GetFunctionByNameWithOverload(ctx, "cast", argsType, overloadID)
 	if err != nil {
 		return nil, err
 	}
@@ -2828,8 +3412,7 @@ func intervalUnitIsDayOrLarger(intervalExpr *Expr) bool {
 }
 
 func handleTupleIn(ctx context.Context, name string, leftList *plan.Expr_List, rightList *plan.ExprList) (*plan.Expr, error) {
-	var newExpr *plan.Expr
-	var err error
+	candidates := make([]*plan.Expr, 0, len(rightList.List))
 
 	for _, rightVal := range rightList.List {
 		if rightTuple, ok := rightVal.Expr.(*plan.Expr_List); ok {
@@ -2837,7 +3420,7 @@ func handleTupleIn(ctx context.Context, name string, leftList *plan.Expr_List, r
 				return nil, moerr.NewInternalError(ctx, "tuple length mismatch")
 			}
 
-			var andExpr *plan.Expr
+			equalities := make([]*plan.Expr, 0, len(leftList.List.List))
 			for i := 0; i < len(leftList.List.List); i++ {
 				leftElem := leftList.List.List[i]
 				rightElem := rightTuple.List.List[i]
@@ -2846,34 +3429,160 @@ func handleTupleIn(ctx context.Context, name string, leftList *plan.Expr_List, r
 				if err != nil {
 					return nil, err
 				}
-
-				if andExpr == nil {
-					andExpr = eqExpr
-				} else {
-					andExpr, err = BindFuncExprImplByPlanExpr(ctx, "and", []*plan.Expr{andExpr, eqExpr})
-					if err != nil {
-						return nil, err
-					}
-				}
-
+				equalities = append(equalities, eqExpr)
 			}
 
-			if newExpr == nil {
-				newExpr = andExpr
-			} else {
-				newExpr, err = BindFuncExprImplByPlanExpr(ctx, "or", []*plan.Expr{newExpr, andExpr})
-				if err != nil {
-					return nil, err
-				}
+			candidate, err := combinePlanExprsBalanced(ctx, "and", equalities)
+			if err != nil {
+				return nil, err
 			}
+			candidates = append(candidates, candidate)
 
 		} else {
 			return nil, moerr.NewInternalError(ctx, "IN list must contain tuples")
 		}
 	}
 
+	newExpr, err := combinePlanExprsBalanced(ctx, "or", candidates)
+	if err != nil {
+		return nil, err
+	}
 	if name == "not_in" {
 		return BindFuncExprImplByPlanExpr(ctx, "not", []*plan.Expr{newExpr})
 	}
 	return newExpr, nil
+}
+
+func foldNameConstArgs(ctx context.Context, proc *process.Process, args []*plan.Expr) error {
+	if err := validateNameConstArgs(ctx, args); err != nil {
+		return err
+	}
+
+	foldedArg, err := ConstantFold(batch.EmptyForConstFoldBatch, args[1], proc, false, true)
+	if err != nil {
+		return err
+	}
+	args[1] = foldedArg
+
+	if args[1].GetLit() == nil {
+		return moerr.NewInvalidArg(ctx, "NAME_CONST", "")
+	}
+	return nil
+}
+
+func validateNameConstArgs(ctx context.Context, args []*plan.Expr) error {
+	if len(args) != 2 {
+		return moerr.NewInvalidArg(ctx, "NAME_CONST", len(args))
+	}
+
+	nameLit := args[0].GetLit()
+	if nameLit == nil || nameLit.Isnull || !validNameConstValueExpr(args[1]) {
+		return moerr.NewInvalidArg(ctx, "NAME_CONST", "")
+	}
+	return nil
+}
+
+func validNameConstValueExpr(arg *plan.Expr) bool {
+	if arg == nil {
+		return false
+	}
+	if arg.GetLit() != nil {
+		return true
+	}
+	if isDecimalLiteralCast(arg) {
+		return true
+	}
+	fn := arg.GetF()
+	if fn == nil || fn.Func == nil || len(fn.Args) != 1 {
+		return false
+	}
+	if fn.Func.GetObjName() != "unary_minus" && fn.Func.GetObjName() != "unary_plus" {
+		return false
+	}
+	return fn.Args[0].GetLit() != nil || isDecimalLiteralCast(fn.Args[0])
+}
+
+func validNameConstNameAst(args []tree.Expr) bool {
+	if len(args) != 2 {
+		return false
+	}
+	name := stripNameConstParens(args[0])
+	nameLit, ok := name.(*tree.NumVal)
+	return ok && validNameConstNameLiteral(nameLit)
+}
+
+func validNameConstValueAst(args []tree.Expr) bool {
+	if len(args) != 2 {
+		return false
+	}
+	return validNameConstLiteralValueAst(args[1])
+}
+
+func validNameConstLiteralValueAst(expr tree.Expr) bool {
+	expr = stripNameConstParens(expr)
+	switch value := expr.(type) {
+	case *tree.NumVal:
+		return true
+	case *tree.UnaryExpr:
+		if value.Op != tree.UNARY_PLUS && value.Op != tree.UNARY_MINUS {
+			return false
+		}
+		_, ok := stripNameConstParens(value.Expr).(*tree.NumVal)
+		return ok
+	default:
+		return false
+	}
+}
+
+func stripNameConstParens(expr tree.Expr) tree.Expr {
+	for {
+		paren, ok := expr.(*tree.ParenExpr)
+		if !ok {
+			break
+		}
+		expr = paren.Expr
+	}
+	return expr
+}
+
+func isDecimalLiteralCast(arg *plan.Expr) bool {
+	fn := arg.GetF()
+	if fn == nil || fn.Func == nil || fn.Func.GetObjName() != "cast" || len(fn.Args) != 2 {
+		return false
+	}
+	if !types.T(arg.Typ.Id).IsDecimal() || fn.Args[0].GetLit() == nil || fn.Args[1].GetT() == nil {
+		return false
+	}
+	lit := fn.Args[0].GetLit()
+	if lit.Isnull || lit.GetSval() == "" {
+		return false
+	}
+	if _, _, err := types.Parse128(lit.GetSval()); err == nil {
+		return true
+	}
+	if _, _, err := types.Parse256(lit.GetSval()); err == nil {
+		return true
+	}
+	return false
+}
+
+// defaultValueBindType returns the target column type carried by a
+// DefaultBinder or ReplaceValueBinder. For other binder implementations it
+// returns an empty Type so literal binding falls back to the generic path.
+func (b *baseBinder) defaultValueBindType() plan.Type {
+	if d, ok := b.impl.(*DefaultBinder); ok {
+		return d.typ
+	}
+	if r, ok := b.impl.(*ReplaceValueBinder); ok {
+		return r.typ
+	}
+	return plan.Type{}
+}
+
+func (b *baseBinder) defaultNumericOuterType() *plan.Type {
+	typ := b.defaultValueBindType()
+	if types.T(typ.Id).ToType().IsNumeric() {
+		return &typ
+	}
+	return nil
 }

@@ -17,6 +17,7 @@ package lockservice
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -49,6 +50,7 @@ type localLockTable struct {
 		closed           bool
 		store            LockStorage
 		tableCommittedAt timestamp.Timestamp
+		ownerLocalWaits  map[ownerLocalTxnKey][]ownerLocalWaitEdge
 	}
 
 	options struct {
@@ -75,6 +77,7 @@ func newLocalLockTable(
 		logger:    logger,
 	}
 	l.mu.store = newBtreeBasedStorage()
+	l.mu.ownerLocalWaits = make(map[ownerLocalTxnKey][]ownerLocalWaitEdge)
 	l.mu.tableCommittedAt, _ = clock.Now()
 	return l
 }
@@ -102,6 +105,9 @@ func (l *localLockTable) doLock(
 	var oldOffset int
 	var err error
 	table := l.bind.Table
+	// Session-level SET lock_wait_timeout takes highest priority (passed via
+	// pb.LockOptions). The budget only counts time actually spent waiting.
+	leftTimeout := time.Duration(c.opts.LockWaitTimeout) * time.Second
 	for {
 		// blocked used for async callback, waiter is created, and added to wait list.
 		// So only need wait notify.
@@ -163,10 +169,46 @@ func (l *localLockTable) doLock(
 			l.options.beforeWait(c)()
 		}
 
-		v := c.w.wait(c.ctx, l.logger)
+		waitCtx := c.ctx
+		var cancel context.CancelFunc
+		if !c.lockWaitDeadline.IsZero() {
+			waitCtx, cancel = context.WithDeadlineCause(
+				c.ctx,
+				c.lockWaitDeadline,
+				c.getLockWaitTimeoutErr())
+		} else if leftTimeout > 0 {
+			waitCtx, cancel = context.WithTimeoutCause(c.ctx, leftTimeout, ErrLockTimeout)
+		}
+		waitStart := time.Now()
+		v := c.w.wait(waitCtx, l.logger)
+		l.events.removeBlockedWaiter(c.w)
+		lockWaitTimeoutHit := cancel != nil &&
+			errors.Is(v.err, context.DeadlineExceeded) &&
+			context.Cause(waitCtx) == c.getLockWaitTimeoutErr()
+		if cancel != nil {
+			cancel()
+		}
 
 		if l.options.afterWait != nil {
 			l.options.afterWait(c)()
+		}
+
+		// Update the remaining lock_wait_timeout budget using only wait time.
+		if c.lockWaitDeadline.IsZero() && leftTimeout > 0 {
+			waited := time.Since(waitStart)
+			if waited < leftTimeout {
+				leftTimeout -= waited
+			} else {
+				leftTimeout = 0
+			}
+			if lockWaitTimeoutHit {
+				// lock_wait_timeout expired: return ErrLockTimeout directly
+				// (not errors.Join) so upper layers can recognize it via
+				// moerr.IsMoErrCode(err, moerr.ErrLockWaitTimeout).
+				v.err = c.getLockWaitTimeoutErr()
+			}
+		} else if lockWaitTimeoutHit {
+			v.err = c.getLockWaitTimeoutErr()
 		}
 
 		c.txn.Lock()
@@ -199,8 +241,13 @@ func (l *localLockTable) doLock(
 				// by other txn and readd into store. So c.w.conflictWith is
 				// invalid.
 				conflictWith, ok := l.mu.store.Get(ck)
-				if ok && conflictWith.closeWaiter(c.w, l.logger) {
-					l.mu.store.Delete(ck)
+				if ok {
+					l.removeOwnerLocalWaitEdgeLocked(c.w)
+					if conflictWith.closeWaiter(c.w, l.logger) {
+						l.mu.store.Delete(ck)
+					} else {
+						l.removeInactiveOwnerLocalWaitEdgesLocked(conflictWith)
+					}
 				}
 				l.mu.Unlock()
 			}
@@ -284,6 +331,15 @@ func (l *localLockTable) unlock(
 			}
 
 			if !lock.holders.contains(txn.txnID) {
+				// A remote proxy retries ReplaceTo after an RPC response is lost.
+				// The first request may already have replaced the holder, so make
+				// a stale handoff idempotent instead of treating it as a stale
+				// ordinary unlock. A replacement can itself finish before the
+				// original proxy holder retries, in which case the conditional
+				// handoff is also a safe no-op.
+				if idx != -1 {
+					return true
+				}
 				// 1. txn1 hold key1 on bind version 0
 				// 2. txn1 commit success
 				// 3. dn restart
@@ -305,7 +361,7 @@ func (l *localLockTable) unlock(
 				panic("BUG: missing range end key")
 			}
 
-			if idx != -1 {
+			if idx != -1 && len(mutations[idx].ReplaceTo) > 0 {
 				replaceTo := mutations[idx].ReplaceTo
 				lock.holders.replace(txn.txnID,
 					pb.WaitTxn{TxnID: replaceTo, CreatedOn: txn.remoteService})
@@ -320,6 +376,7 @@ func (l *localLockTable) unlock(
 			lockCanRemoved := lock.closeTxn(
 				txn,
 				notifyValue{ts: commitTS})
+			l.removeInactiveOwnerLocalWaitEdgesLocked(lock)
 			logLockUnlocked(l.logger, txn, key, lock)
 
 			if lockCanRemoved {
@@ -340,18 +397,49 @@ func (l *localLockTable) unlock(
 }
 
 func (l *localLockTable) getLock(
+	ctx context.Context,
 	key []byte,
 	txn pb.WaitTxn,
-	fn func(Lock)) {
+	fn func(Lock)) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	l.mu.RLock()
 	defer l.mu.RUnlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if l.mu.closed {
-		return
+		return nil
 	}
 	lock, ok := l.mu.store.Get(key)
 	if ok {
 		fn(lock)
 	}
+	return nil
+}
+
+func (l *localLockTable) getLockHolder(ctx context.Context, key []byte) (pb.WaitTxn, bool, error) {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	if err := ctx.Err(); err != nil {
+		return pb.WaitTxn{}, false, err
+	}
+	if l.mu.closed {
+		return pb.WaitTxn{}, false, nil
+	}
+	lock, ok := l.mu.store.Get(key)
+	if !ok {
+		return pb.WaitTxn{}, false, nil
+	}
+	var holder pb.WaitTxn
+	var found bool
+	lock.IterHolders(func(v pb.WaitTxn) bool {
+		holder = v
+		found = true
+		return false
+	})
+	return holder, found, nil
 }
 
 func (l *localLockTable) getBind() pb.LockTable {
@@ -372,6 +460,7 @@ func (l *localLockTable) close(reason closeReason) {
 		}
 		return true
 	})
+	clear(l.mu.ownerLocalWaits)
 	l.mu.store.Clear()
 	logLockTableClosed(l.logger, l.bind, false, reason)
 }
@@ -382,6 +471,9 @@ func (l *localLockTable) doAcquireLock(c *lockContext) error {
 
 	if l.mu.closed {
 		return moerr.NewInvalidStateNoCtx("local lock table closed")
+	}
+	if err := c.ctx.Err(); err != nil {
+		return err
 	}
 
 	switch c.opts.Granularity {
@@ -410,6 +502,7 @@ func (l *localLockTable) acquireRowLockLocked(c *lockContext) error {
 			hold, newHolder := lock.tryHold(l.logger, c)
 			if hold {
 				if c.w != nil {
+					l.removeOwnerLocalWaitEdgeLocked(c.w)
 					c.w = nil
 				}
 				// only new holder can added lock into txn.
@@ -514,6 +607,12 @@ func (l *localLockTable) handleLockConflictLocked(
 	if c.opts.Policy == pb.WaitPolicy_FastFail {
 		return ErrLockConflict
 	}
+	if !c.lockWaitDeadline.IsZero() && !time.Now().Before(c.lockWaitDeadline) {
+		return c.getLockWaitTimeoutErr()
+	}
+	if l.detectOwnerLocalDeadlockLocked(c, conflictWith) {
+		return ErrDeadLockDetected
+	}
 
 	if c.opts.Granularity == pb.Granularity_Range {
 		l.closeRangeLastWaiterLocked(c)
@@ -539,6 +638,7 @@ func (l *localLockTable) handleLockConflictLocked(
 	// Set waiter to blocking before adding to events.mu.blockedWaiters so
 	// waiter_events.check() won't remove it (check removes only non-blocking).
 	c.txn.setBlocked(c.w, l.logger)
+	l.addOwnerLocalWaitEdgeLocked(c, conflictWith)
 	l.events.add(c)
 
 	// find conflict, and wait prev txn completed, and a new
@@ -558,6 +658,8 @@ func (l *localLockTable) closeRangeLastWaiterLocked(c *lockContext) {
 	if ok {
 		removed, empty := v.removeWaiter(c.w, l.logger)
 		if removed {
+			l.removeOwnerLocalWaitEdgeLocked(c.w)
+			l.removeInactiveOwnerLocalWaitEdgesLocked(v)
 			if empty {
 				l.mu.store.Delete(c.rangeLastWaitKey)
 			}
@@ -578,6 +680,10 @@ func (l *localLockTable) closeRangeLastWaiterLocked(c *lockContext) {
 	var deleteKeys [][]byte
 	l.mu.store.Iter(func(key []byte, lock Lock) bool {
 		removed, empty := lock.removeWaiter(c.w, l.logger)
+		if removed {
+			l.removeOwnerLocalWaitEdgeLocked(c.w)
+			l.removeInactiveOwnerLocalWaitEdgesLocked(lock)
+		}
 		if removed && empty {
 			deleteKeys = append(deleteKeys, append([]byte(nil), key...))
 		}

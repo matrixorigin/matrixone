@@ -28,6 +28,7 @@ import (
 	"github.com/detailyang/go-fallocate"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -48,6 +49,13 @@ type HnswModel[T types.RealNumbers] struct {
 	// info required for build
 	MaxCapacity uint
 	NThread     uint
+
+	// inflight counts adds that have been ASSIGNED to this index (a slot reserved
+	// under HnswBuild.mutex) but not yet completed. A concurrent capacity rollover
+	// must wait for this to drain before SaveToFile() saves+destroys the index, so an
+	// in-flight worker never adds to a destroyed usearch index or persists a partial
+	// one. Build-only; unused for Search/Sync.
+	inflight sync.WaitGroup
 
 	// from metadata.  info required for search
 	Timestamp int64
@@ -140,6 +148,10 @@ func (idx *HnswModel[T]) Destroy() error {
 }
 
 // Save the index to file
+// saveToFileCheckSum computes the on-disk checksum in SaveToFile. Indirected as a var so tests
+// can stub it to exercise the failure/cleanup path (#25630).
+var saveToFileCheckSum = vectorindex.CheckSum
+
 func (idx *HnswModel[T]) SaveToFile() error {
 
 	if idx.Index == nil {
@@ -189,27 +201,36 @@ func (idx *HnswModel[T]) SaveToFile() error {
 	if err != nil {
 		return err
 	}
+	// os.CreateTemp opens the file; we only need its (now reserved) name — usearch's
+	// Index.Save and CheckSum reopen the path themselves. Close our handle immediately,
+	// otherwise every save leaks a file descriptor (#25630). The deferred cleanup removes the
+	// temp file on any failure below (idx.Path is set to fpath only on success), so a partial
+	// file is never orphaned on disk.
+	fpath := f.Name()
+	_ = f.Close()
+	defer func() {
+		if idx.Path != fpath {
+			os.Remove(fpath)
+		}
+	}()
 
-	err = idx.Index.Save(f.Name())
-	if err != nil {
-		os.Remove(f.Name())
+	if err = idx.Index.Save(fpath); err != nil {
 		return err
 	}
 
 	// get new checksum
-	chksum, err := vectorindex.CheckSum(f.Name())
+	chksum, err := saveToFileCheckSum(fpath)
 	if err != nil {
 		return err
 	}
 	idx.Checksum = chksum
 
 	// free memory
-	err = idx.Index.Destroy()
-	if err != nil {
+	if err = idx.Index.Destroy(); err != nil {
 		return err
 	}
 	idx.Index = nil
-	idx.Path = f.Name()
+	idx.Path = fpath
 
 	// Do NOT set filesize here. filesize == 0 means file didn't save to database yet
 	/*
@@ -257,7 +278,7 @@ func (idx *HnswModel[T]) ToSql(cfg vectorindex.IndexTableConfig) ([]string, erro
 
 	sqls := make([]string, 0, 5)
 
-	sql := fmt.Sprintf("INSERT INTO `%s`.`%s` VALUES ", cfg.DbName, cfg.IndexTable)
+	sql := fmt.Sprintf("INSERT INTO %s VALUES ", sqlquote.QualifiedIdent(cfg.DbName, cfg.IndexTable))
 	values := make([]string, 0, int64(math.Ceil(float64(filesz)/float64(vectorindex.MaxChunkSize))))
 	n := 0
 	for offset = 0; offset < filesz; {
@@ -298,9 +319,9 @@ func (idx *HnswModel[T]) ToSql(cfg vectorindex.IndexTableConfig) ([]string, erro
 func (idx *HnswModel[T]) ToDeleteSql(cfg vectorindex.IndexTableConfig) ([]string, error) {
 	sqls := make([]string, 0, 2)
 
-	sql := fmt.Sprintf("DELETE FROM `%s`.`%s` WHERE %s = '%s'", cfg.DbName, cfg.IndexTable, catalog.Hnsw_TblCol_Storage_Index_Id, idx.Id)
+	sql := fmt.Sprintf("DELETE FROM %s WHERE %s = %s", sqlquote.QualifiedIdent(cfg.DbName, cfg.IndexTable), catalog.Hnsw_TblCol_Storage_Index_Id, sqlquote.String(idx.Id))
 	sqls = append(sqls, sql)
-	sql = fmt.Sprintf("DELETE FROM `%s`.`%s` WHERE %s = '%s'", cfg.DbName, cfg.MetadataTable, catalog.Hnsw_TblCol_Metadata_Index_Id, idx.Id)
+	sql = fmt.Sprintf("DELETE FROM %s WHERE %s = %s", sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable), catalog.Hnsw_TblCol_Metadata_Index_Id, sqlquote.String(idx.Id))
 	sqls = append(sqls, sql)
 
 	return sqls, nil
@@ -464,7 +485,7 @@ func (idx *HnswModel[T]) LoadIndexFromBuffer(
 		}
 
 		// run streaming sql
-		sql := fmt.Sprintf("SELECT chunk_id, data from `%s`.`%s` WHERE index_id = '%s'", tblcfg.DbName, tblcfg.IndexTable, idx.Id)
+		sql := fmt.Sprintf("SELECT chunk_id, data from %s WHERE index_id = %s", sqlquote.QualifiedIdent(tblcfg.DbName, tblcfg.IndexTable), sqlquote.String(idx.Id))
 
 		ctx, cancel := context.WithCancelCause(sqlproc.GetTopContext())
 		defer cancel(nil)
@@ -691,7 +712,7 @@ func (idx *HnswModel[T]) LoadIndex(
 		}
 
 		// run streaming sql
-		sql := fmt.Sprintf("SELECT chunk_id, data from `%s`.`%s` WHERE index_id = '%s'", tblcfg.DbName, tblcfg.IndexTable, idx.Id)
+		sql := fmt.Sprintf("SELECT chunk_id, data from %s WHERE index_id = %s", sqlquote.QualifiedIdent(tblcfg.DbName, tblcfg.IndexTable), sqlquote.String(idx.Id))
 
 		ctx, cancel := context.WithCancelCause(sqlproc.GetTopContext())
 		defer cancel(nil)
@@ -791,7 +812,7 @@ func (idx *HnswModel[T]) LoadIndex(
 		if err != nil {
 			return err
 		}
-		err = usearchidx.Reserve(uint(tblcfg.IndexCapacity))
+		err = usearchidx.Reserve(uint(idxcfg.IndexCapacity))
 		if err != nil {
 			return err
 		}
@@ -814,8 +835,8 @@ func (idx *HnswModel[T]) LoadIndex(
 
 	if !view {
 		// sometimes Reserve() will give bigger capacity than requested
-		if idx.MaxCapacity > uint(tblcfg.IndexCapacity) {
-			idx.MaxCapacity = uint(tblcfg.IndexCapacity)
+		if idx.MaxCapacity > uint(idxcfg.IndexCapacity) {
+			idx.MaxCapacity = uint(idxcfg.IndexCapacity)
 		}
 	}
 

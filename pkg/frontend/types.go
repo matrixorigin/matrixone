@@ -106,6 +106,8 @@ const (
 	FPShowVariables
 	FPShowErrors
 	FPAnalyzeStmt
+	FPCheckTableStmt
+	FPShowProfileStmt
 	FPExplainStmt
 	FPInternalCmdFieldList
 	FPInternalCmdGetSnapshotTs
@@ -200,6 +202,8 @@ const (
 	FPInternalExecutorExec
 	FPInternalExecutorQuery
 	FPHandleAnalyzeStmt
+	FPHandleCheckTableStmt
+	FPHandleShowProfileStmt
 	FPShowPublications
 	FPCreateCDC
 	FPPauseCDC
@@ -300,6 +304,7 @@ type PrepareStmt struct {
 	ColDefData     [][]byte
 	IsCloudNonuser bool
 	proc           *process.Process
+	remapDb        map[string]string
 
 	params              *vector.Vector
 	getFromSendLongData map[int]struct{}
@@ -607,6 +612,7 @@ type BackgroundExecOption struct {
 type BackgroundExec interface {
 	Close()
 	Exec(context.Context, string) error
+	ExecWithSQLMode(context.Context, string, string) error
 	ExecRestore(context.Context, string, uint32, uint32) error
 	ExecStmt(context.Context, tree.Statement) error
 	GetExecResultSet() []interface{}
@@ -664,6 +670,7 @@ func (prepareStmt *PrepareStmt) Close() {
 	if prepareStmt.ColDefData != nil {
 		prepareStmt.ColDefData = nil
 	}
+	prepareStmt.remapDb = nil
 }
 
 func (prepareStmt *PrepareStmt) resetBinaryParamState() {
@@ -894,6 +901,17 @@ type ExecCtx struct {
 	results           []ExecResult
 	prepareColDef     [][]byte
 	isIssue3482       bool
+	// remapDb is the effective database remap (role/session/inline merged) for
+	// this statement. It is applied at the AST level to qualified references by
+	// applyRemapDb, and to the current database (for unqualified references) by
+	// TxnCompilerContext.DefaultDatabase. nil when the rewrite feature is off or
+	// no remapdb is configured.
+	remapDb map[string]string
+	// rewriteEnabled is captured once when the request is parsed. It keeps
+	// nested SQL (notably PREPARE ... FROM 'sql'/@var) on the same policy
+	// snapshot even if an earlier statement in the request changes the session
+	// switch before the nested SQL is planned.
+	rewriteEnabled bool
 }
 
 func (execCtx *ExecCtx) Close() {
@@ -915,6 +933,7 @@ func (execCtx *ExecCtx) Close() {
 	execCtx.resper = nil
 	execCtx.results = nil
 	execCtx.prepareColDef = nil
+	execCtx.rewriteEnabled = false
 }
 
 // outputCallBackFunc is the callback function to send the result to the client.
@@ -1333,11 +1352,6 @@ func (ses *Session) SetGlobalSysVar(ctx context.Context, name string, val interf
 		return moerr.NewInternalErrorNoCtx(errorSystemVariableDoesNotExist())
 	}
 
-	// Cloud policy: forbid setting global wait_timeout/interactive_timeout.
-	if name == "wait_timeout" || name == "interactive_timeout" {
-		return moerr.NewInternalErrorNoCtx(errorSystemVariableIsReadOnly())
-	}
-
 	if def.Scope == ScopeSession {
 		return moerr.NewInternalErrorNoCtx(errorSystemVariableIsSession())
 	}
@@ -1367,6 +1381,21 @@ func (ses *Session) SetGlobalSysVar(ctx context.Context, name string, val interf
 
 	if val, err = def.GetType().Convert(val); err != nil {
 		return err
+	}
+
+	if name == "wait_timeout" || name == "interactive_timeout" {
+		if err = validateTimeoutLimits(ctx, ses, name, val); err != nil {
+			return err
+		}
+	}
+
+	if name == ProtectedDatabases {
+		if newValue, ok := val.(string); ok && len(protectedDatabaseSetFromString(ses, newValue)) == 0 {
+			oldValue, _ := ses.GetGlobalSysVar(name)
+			if oldString, ok := oldValue.(string); ok && len(protectedDatabaseSetFromString(ses, oldString)) != 0 {
+				return moerr.NewInternalErrorNoCtx("protected_databases cannot be cleared directly")
+			}
+		}
 	}
 
 	// save to table first
@@ -1431,7 +1460,17 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 	}
 
 	if name == "wait_timeout" || name == "interactive_timeout" {
-		if err = validateSessionTimeoutLimits(ctx, ses, name, val); err != nil {
+		if err = validateTimeoutLimits(ctx, ses, name, val); err != nil {
+			return err
+		}
+	}
+
+	// Validate remap_rewrites at SET time so an invalid value is rejected up
+	// front and can never be stored. Without this the value would only fail
+	// later in rewriteSQL, which runs on every statement and would make the
+	// session unable to even clear the bad value.
+	if name == "remap_rewrites" {
+		if err = validateRemapRewrites(ctx, val); err != nil {
 			return err
 		}
 	}
@@ -1460,10 +1499,18 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 			ses.rewriteEnabled.Store(on)
 		}
 	}
+
+	// A prepared statement bakes in the rewrite/remap state captured at PREPARE
+	// time (the injected hint and the remapdb applied to its AST). Changing that
+	// state must invalidate the cached prepared statements, otherwise a later
+	// EXECUTE would run with a stale remap. Drop them so they re-prepare.
+	if err == nil && (name == "remap_rewrites" || name == "enable_remap_hint") {
+		ses.RemoveAllPrepareStmts()
+	}
 	return
 }
 
-func validateSessionTimeoutLimits(ctx context.Context, ses *Session, name string, val interface{}) error {
+func validateTimeoutLimits(ctx context.Context, ses *Session, name string, val interface{}) error {
 	v, ok := val.(int64)
 	if !ok {
 		return moerr.NewInvalidInputf(ctx, "invalid %s value type", name)

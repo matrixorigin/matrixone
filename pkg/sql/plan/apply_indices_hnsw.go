@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
+	hnswplan "github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 )
 
@@ -121,13 +122,12 @@ func (builder *QueryBuilder) prepareHnswIndexContext(vecCtx *vectorSortContext, 
 
 func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, vecCtx *vectorSortContext, multiTableIndex *MultiTableIndex) (int32, error) {
 
-	if vecCtx == nil || vecCtx.sortNode == nil || vecCtx.scanNode == nil {
+	if !hasCompleteVectorPagination(vecCtx) || vecCtx.sortNode == nil || vecCtx.scanNode == nil {
 		return nodeID, nil
 	}
 
 	ctx := builder.ctxByNode[nodeID]
 	projNode := vecCtx.projNode
-	sortNode := vecCtx.sortNode
 	scanNode := vecCtx.scanNode
 	childNode := vecCtx.childNode
 	orderExpr := vecCtx.orderExpr
@@ -155,10 +155,10 @@ func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, vecCtx *
 			TableType: "func_table", //test if ok
 			//Name:               tbl.String(),
 			TblFunc: &plan.TableFunction{
-				Name:  kHNSWSearchFuncName,
+				Name:  hnswplan.HNSWSearchFuncName,
 				Param: []byte(hnswCtx.params),
 			},
-			Cols: DeepCopyColDefList(kHNSWSearchColDefs),
+			Cols: DeepCopyColDefList(hnswplan.HNSWSearchColDefs),
 		},
 		BindingTags: []int32{tableFuncTag},
 		Children:    vectorSearchProviderChildren(vecCtx),
@@ -197,7 +197,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, vecCtx *
 			// Use shared function to calculate over-fetch factor
 			overFetchFactor := calculatePostFilterOverFetchFactor(originalLimit)
 
-			newLimit := max(uint64(float64(originalLimit)*overFetchFactor), originalLimit+10)
+			newLimit := calculateOverFetchLimit(originalLimit, overFetchFactor)
 			tableFuncNode.Limit = &Expr{
 				Typ: limit.Typ,
 				Expr: &plan.Expr_Lit{
@@ -268,13 +268,15 @@ func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, vecCtx *
 			Flag: vecCtx.sortDirection,
 		},
 	}
+	resultLimit, resultOffset := vectorResultPagination(vecCtx)
 
 	sortByID := builder.appendNode(&plan.Node{
 		NodeType: plan.Node_SORT,
 		Children: []int32{joinNodeID},
 		OrderBy:  orderByScore,
-		Limit:    limit,                         // Apply LIMIT after sorting
-		Offset:   DeepCopyExpr(sortNode.Offset), // Apply OFFSET after sorting
+		Limit:    resultLimit,
+		Offset:   resultOffset,
+		SpillMem: builder.sortSpillMem,
 	}, ctx)
 
 	projNode.Children[0] = sortByID

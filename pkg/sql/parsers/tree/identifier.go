@@ -14,6 +14,8 @@
 
 package tree
 
+import "strings"
+
 // IdentifierName is referenced in the expression
 type IdentifierName interface {
 	Expr
@@ -40,8 +42,18 @@ func (node *IdentifierList) Format(ctx *FmtCtx) {
 		if i > 0 {
 			ctx.WriteString(", ")
 		}
-		ctx.WriteString(string((*node)[i]))
+		ctx.WriteIdentifier((*node)[i])
 	}
+}
+
+func (ctx *FmtCtx) WriteIdentifier(identifier Identifier) {
+	if ctx.quoteIdentifier {
+		ctx.WriteByte('`')
+		ctx.WriteString(strings.ReplaceAll(string(identifier), "`", "``"))
+		ctx.WriteByte('`')
+		return
+	}
+	ctx.WriteString(string(identifier))
 }
 
 type ColumnItem struct {
@@ -107,19 +119,10 @@ func (node *UnresolvedName) ColNameOrigin() string {
 }
 
 func (node *UnresolvedName) Format(ctx *FmtCtx) {
-	if ctx.quoteIdentifier {
-		for i := node.NumParts - 1; i >= 0; i-- {
-			ctx.WriteString("`" + node.CStrParts[i].Origin() + "`")
-			if i > 0 {
-				ctx.WriteByte('.')
-			}
-		}
-	} else {
-		for i := node.NumParts - 1; i >= 0; i-- {
-			ctx.WriteString(node.CStrParts[i].Origin())
-			if i > 0 {
-				ctx.WriteByte('.')
-			}
+	for i := node.NumParts - 1; i >= 0; i-- {
+		ctx.WriteIdentifier(Identifier(node.CStrParts[i].Origin()))
+		if i > 0 {
+			ctx.WriteByte('.')
 		}
 	}
 	if node.Star && node.NumParts > 0 {

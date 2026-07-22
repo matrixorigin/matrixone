@@ -91,6 +91,18 @@ func TestNew_MyErrorCode(t *testing.T) {
 	require.Equal(t, ER_DATA_OUT_OF_RANGE, err.MySQLCode())
 }
 
+func TestLockWaitTimeoutMySQLError(t *testing.T) {
+	err := NewLockWaitTimeout(context.Background())
+	require.Equal(t, ErrLockWaitTimeout, err.ErrorCode())
+	require.Equal(t, ER_LOCK_WAIT_TIMEOUT, err.MySQLCode())
+	require.Equal(t, MySQLDefaultSqlState, err.SqlState())
+	require.Equal(t, "Lock wait timeout exceeded; try restarting transaction", err.Error())
+
+	noCtxErr := NewLockWaitTimeoutNoCtx()
+	require.Equal(t, ErrLockWaitTimeout, noCtxErr.ErrorCode())
+	require.Equal(t, ER_LOCK_WAIT_TIMEOUT, noCtxErr.MySQLCode())
+}
+
 func TestIsMoErrCode(t *testing.T) {
 	err := NewDivByZero(context.TODO())
 	require.True(t, IsMoErrCode(err, ErrDivByZero))
@@ -109,6 +121,21 @@ func TestEncoding(t *testing.T) {
 	err = e2.UnmarshalBinary(data)
 	require.Nil(t, err)
 	require.Equal(t, e, e2)
+}
+
+func TestErrSubqueryNo1RowContract(t *testing.T) {
+	err := NewErrSubqueryNo1Row(context.Background())
+	require.Equal(t, ErrSubqueryNo1Row, err.ErrorCode())
+	require.Equal(t, ER_SUBQUERY_NO_1_ROW, err.MySQLCode())
+	require.Equal(t, "21000", err.SqlState())
+	require.Equal(t, "Subquery returns more than 1 row", err.Error())
+
+	data, marshalErr := err.MarshalBinary()
+	require.NoError(t, marshalErr)
+
+	decoded := new(Error)
+	require.NoError(t, decoded.UnmarshalBinary(data))
+	require.Equal(t, err, decoded)
 }
 
 type fakeErr struct {

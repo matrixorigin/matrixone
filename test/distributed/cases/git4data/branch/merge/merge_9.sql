@@ -1,36 +1,30 @@
-drop database if exists test;
-create database test;
-use test;
+-- Regression for issue #24927: merge must preserve BLOB values while applying
+-- changes to other columns in the same rows.
+drop database if exists data_branch_blob_merge;
+create database data_branch_blob_merge;
+use data_branch_blob_merge;
 
--- ================================================================
--- MERGE Test 9: transactions are rejected
--- ================================================================
+create table t_src (
+    id bigint primary key,
+    v int,
+    bin binary(5),
+    vbin varbinary(5),
+    b blob
+);
 
-create table t1 (a int, b int, primary key(a));
-insert into t1 values (1,1);
+insert into t_src values
+    (1, 10, x'61005c27ff', x'61005c27ff', x'61005c27ff'),
+    (2, 20, x'000102', x'000102', x'000102'),
+    (3, 30, null, null, null),
+    (4, 40, x'', x'', x'');
 
-create table t2 (a int, b int, primary key(a));
-insert into t2 values (1,1),(2,2);
+data branch create table t_branch from t_src;
+update t_branch set v = v + 1 where id in (1, 2, 4);
 
--- MERGE inside an explicit transaction must be rejected with a clear error
-begin;
-data branch merge t2 into t1 when conflict accept;
-rollback;
+data branch diff t_branch against t_src output count;
+data branch merge t_branch into t_src when conflict accept;
 
--- t1 stays unchanged, only (1,1)
-select * from t1 order by a;
+select id, v, hex(bin), hex(vbin), hex(b), ifnull(length(b), -1) as b_len from t_src order by id;
+data branch diff t_branch against t_src output count;
 
--- MERGE inside an implicit transaction (autocommit=0) is also rejected
-set autocommit = 0;
-insert into t1 values (3,3);
-data branch merge t2 into t1 when conflict accept;
-rollback;
-set autocommit = 1;
-
--- t1 stays unchanged, only (1,1)
-select * from t1 order by a;
-
-drop table t1;
-drop table t2;
-
-drop database test;
+drop database data_branch_blob_merge;

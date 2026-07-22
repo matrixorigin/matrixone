@@ -16,6 +16,7 @@ package lockservice
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"sync"
 
@@ -54,6 +55,16 @@ type activeTxn struct {
 
 	// test-only hook: called before lockAdded; return non-nil to abort
 	beforeLockAdded func(txnID []byte, locks [][]byte) error
+}
+
+type contextUnlocker interface {
+	unlockWithContext(
+		context.Context,
+		*activeTxn,
+		*cowSlice,
+		timestamp.Timestamp,
+		...pb.ExtraMutation,
+	) error
 }
 
 func newActiveTxn(
@@ -142,11 +153,39 @@ func (txn *activeTxn) lockAdded(
 	return nil
 }
 
-func (txn *activeTxn) lockTableBindTouched(bind pb.LockTable) {
+func (txn *activeTxn) lockTableBindTouched(bind pb.LockTable) bool {
 	h := txn.getHoldLocksLocked(bind.Group)
-	if _, ok := h.tableBindIntents[bind.Table]; !ok {
-		h.tableBindIntents[bind.Table] = bind
+	if _, ok := h.tableBindIntents[bind.Table]; ok {
+		return false
 	}
+	h.tableBindIntents[bind.Table] = bind
+	return true
+}
+
+// iterLockTableBindsLocked visits every table touched by the transaction once.
+// Acquired binds take precedence over intents because they are authoritative.
+// The caller must hold txn's mutex.
+func (txn *activeTxn) iterLockTableBindsLocked(
+	fn func(group uint32, table uint64, bind pb.LockTable),
+) {
+	for group, h := range txn.lockHolders {
+		for table, bind := range h.tableBinds {
+			fn(group, table, bind)
+		}
+		for table, bind := range h.tableBindIntents {
+			if _, ok := h.tableBinds[table]; !ok {
+				fn(group, table, bind)
+			}
+		}
+	}
+}
+
+func (txn *activeTxn) lockTableBindsLocked() []pb.LockTable {
+	binds := make([]pb.LockTable, 0, len(txn.lockHolders))
+	txn.iterLockTableBindsLocked(func(_ uint32, _ uint64, bind pb.LockTable) {
+		binds = append(binds, bind)
+	})
+	return binds
 }
 
 func (txn *activeTxn) close(
@@ -154,6 +193,63 @@ func (txn *activeTxn) close(
 	commitTS timestamp.Timestamp,
 	lockTableFunc func(uint32, uint64) (lockTable, error),
 	logger *log.MOLogger,
+	mutations ...pb.ExtraMutation,
+) error {
+	return txn.closeWithContext(
+		context.Background(),
+		txnID,
+		commitTS,
+		lockTableFunc,
+		logger,
+		mutations...,
+	)
+}
+
+func (txn *activeTxn) closeWithContext(
+	ctx context.Context,
+	txnID []byte,
+	commitTS timestamp.Timestamp,
+	lockTableFunc func(uint32, uint64) (lockTable, error),
+	logger *log.MOLogger,
+	mutations ...pb.ExtraMutation,
+) error {
+	return txn.closeWithContextInternal(
+		ctx,
+		txnID,
+		commitTS,
+		lockTableFunc,
+		logger,
+		true,
+		mutations...,
+	)
+}
+
+func (txn *activeTxn) closeWithoutFreeWithContext(
+	ctx context.Context,
+	txnID []byte,
+	commitTS timestamp.Timestamp,
+	lockTableFunc func(uint32, uint64) (lockTable, error),
+	logger *log.MOLogger,
+	mutations ...pb.ExtraMutation,
+) error {
+	return txn.closeWithContextInternal(
+		ctx,
+		txnID,
+		commitTS,
+		lockTableFunc,
+		logger,
+		false,
+		mutations...,
+	)
+}
+
+func (txn *activeTxn) closeWithContextInternal(
+	ctx context.Context,
+	txnID []byte,
+	commitTS timestamp.Timestamp,
+	lockTableFunc func(uint32, uint64) (lockTable, error),
+	logger *log.MOLogger,
+	release bool,
 	mutations ...pb.ExtraMutation,
 ) error {
 	logTxnReadyToClose(logger, txn)
@@ -172,12 +268,22 @@ func (txn *activeTxn) close(
 	}
 
 	n := len(txn.lockHolders)
+	// Unknown-commit cleanup can be retried after a bounded remote RPC attempt
+	// expires. Keep that path sequential and remove every table only after its
+	// unlock succeeds, so a retry never replays a successful local unlock.
+	// Normal transaction cleanup retains its existing parallel behavior.
+	parallelUnlock := release && n > parallelUnlockTables && ctx.Done() == nil
 	var wg sync.WaitGroup
+	var firstErr error
+	var errMu sync.Mutex
 	v2.TxnUnlockTableTotalHistogram.Observe(float64(n))
 	for group, h := range txn.lockHolders {
 		for table, cs := range h.tableKeys {
 			l, err := lockTableFunc(group, table)
 			if err != nil {
+				if ctxErr := ctx.Err(); ctxErr != nil {
+					return ctxErr
+				}
 				// if a remote transaction, then the corresponding locktable should be local
 				// and cannot return an error.
 				//
@@ -186,6 +292,9 @@ func (txn *activeTxn) close(
 				panic(err)
 			}
 			if l == nil || canSkipTable(isRemoteTable, l) {
+				if !release {
+					txn.removeClosedLockTable(group, table, cs)
+				}
 				continue
 			}
 
@@ -196,20 +305,34 @@ func (txn *activeTxn) close(
 						txn,
 						table,
 					)
-					l.unlock(txn, cs, commitTS, mutations...)
+					var err error
+					if unlocker, ok := l.(contextUnlocker); ok {
+						err = unlocker.unlockWithContext(ctx, txn, cs, commitTS, mutations...)
+					} else {
+						l.unlock(txn, cs, commitTS, mutations...)
+					}
+					if err != nil {
+						errMu.Lock()
+						if firstErr == nil {
+							firstErr = err
+						}
+						errMu.Unlock()
+					} else if !release {
+						txn.removeClosedLockTable(group, table, cs)
+					}
 					logTxnUnlockTableCompleted(
 						logger,
 						txn,
 						table,
 						cs,
 					)
-					if n > parallelUnlockTables {
+					if parallelUnlock {
 						wg.Done()
 					}
 				}
 			}
 
-			if n > parallelUnlockTables {
+			if parallelUnlock {
 				wg.Add(1)
 				ants.Submit(fn(table, cs, l))
 			} else {
@@ -218,12 +341,37 @@ func (txn *activeTxn) close(
 		}
 	}
 
-	if n > parallelUnlockTables {
+	if parallelUnlock {
 		wg.Wait()
 	}
 
-	reuse.Free(txn, nil)
-	return nil
+	if release {
+		reuse.Free(txn, nil)
+	}
+	return firstErr
+}
+
+// removeClosedLockTable forgets a successfully released table while an
+// unknown-commit cleanup is still retryable. activeTxn is held by the caller.
+func (txn *activeTxn) removeClosedLockTable(
+	group uint32,
+	table uint64,
+	cs *cowSlice,
+) {
+	h, ok := txn.lockHolders[group]
+	if !ok || h.tableKeys[table] != cs {
+		return
+	}
+	delete(h.tableKeys, table)
+	delete(h.tableBinds, table)
+	// Keep the intent until the whole transaction closes. It owns the service
+	// drain reference even after this table was successfully released during a
+	// retryable, multi-table cleanup.
+	cs.close()
+	if len(h.tableKeys) == 0 && len(h.tableBinds) == 0 &&
+		len(h.tableBindIntents) == 0 {
+		delete(txn.lockHolders, group)
+	}
 }
 
 func (txn *activeTxn) reset() {
@@ -345,16 +493,14 @@ func (txn *activeTxn) isRemoteLocked() bool {
 func (txn *activeTxn) incLockTableRef(m map[uint32]map[uint64]uint64, serviceID string) {
 	txn.RLock()
 	defer txn.RUnlock()
-	for _, h := range txn.lockHolders {
-		for _, l := range h.tableBinds {
-			if serviceID == l.ServiceID {
-				if _, ok := m[l.Group]; !ok {
-					m[l.Group] = make(map[uint64]uint64, 1024)
-				}
-				m[l.Group][l.Table]++
+	txn.iterLockTableBindsLocked(func(_ uint32, _ uint64, l pb.LockTable) {
+		if serviceID == l.ServiceID {
+			if _, ok := m[l.Group]; !ok {
+				m[l.Group] = make(map[uint64]uint64, 1024)
 			}
+			m[l.Group][l.Table]++
 		}
-	}
+	})
 }
 
 // ============================================================================================================================
@@ -363,15 +509,19 @@ func (txn *activeTxn) incLockTableRef(m map[uint32]map[uint64]uint64, serviceID 
 // ============================================================================================================================
 
 func (txn *activeTxn) fetchWhoWaitingMe(
+	ctx context.Context,
 	serviceID string,
 	txnID []byte,
 	waiters func(pb.WaitTxn, string) bool,
-	lockTableFunc func(uint32, uint64) (lockTable, error)) bool {
+	lockTableFunc func(context.Context, uint32, uint64) (lockTable, error)) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
 	txn.RLock()
 	// txn already closed
 	if !bytes.Equal(txn.txnID, txnID) {
 		txn.RUnlock()
-		return true
+		return true, nil
 	}
 	// if this is a remote transaction, meaning that all the information is in the
 	// remote, we need to execute the logic.
@@ -401,14 +551,17 @@ func (txn *activeTxn) fetchWhoWaitingMe(
 	}()
 
 	for idx, table := range tables {
-		l, err := lockTableFunc(groups[idx], table)
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
+		l, err := lockTableFunc(ctx, groups[idx], table)
 		if err != nil {
 			// if a remote transaction, then the corresponding locktable should be local
 			// and cannot return an error.
 			//
 			// or a local transaction holds a lock on remote lock table, but can not get
 			// the remote LockTable, it is a bug.
-			panic(err)
+			return false, err
 		}
 		if l == nil {
 			continue
@@ -416,25 +569,47 @@ func (txn *activeTxn) fetchWhoWaitingMe(
 
 		locks := lockKeys[idx]
 		hasDeadLock := false
+		var fetchErr error
 		waiterAddress := l.getBind().ServiceID
 		locks.iter(func(lockKey []byte) bool {
-			l.getLock(
+			if err := ctx.Err(); err != nil {
+				fetchErr = err
+				return false
+			}
+			if err := l.getLock(
+				ctx,
 				lockKey,
 				wt,
 				func(lock Lock) {
 					lock.waiters.iter(func(w *waiter) bool {
+						// Completed or already-notified waiters can remain in the
+						// lock queue until the holder releases the lock. They no
+						// longer represent wait-for edges and must not participate
+						// in deadlock detection.
+						if !w.isBlocking() {
+							return true
+						}
 						hasDeadLock = !waiters(w.txn, waiterAddress)
 						return !hasDeadLock
 					})
-				})
+				}); err != nil {
+				fetchErr = err
+				return false
+			}
 			return !hasDeadLock
 		})
+		if fetchErr != nil {
+			return false, fetchErr
+		}
 
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
 		if hasDeadLock {
-			return false
+			return false, nil
 		}
 	}
-	return true
+	return true, nil
 }
 
 func (txn *activeTxn) toWaitTxn(serviceID string, locked bool) pb.WaitTxn {

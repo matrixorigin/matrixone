@@ -15,9 +15,10 @@
 package checkpointtool
 
 import (
+	"cmp"
 	"context"
 	"fmt"
-	"sort"
+	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -25,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/ckputil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
@@ -35,6 +37,7 @@ type CheckpointReader struct {
 	ctx     context.Context
 	fs      fileservice.FileService
 	dir     string
+	kind    string
 	entries []*checkpoint.CheckpointEntry
 	mp      *mpool.MPool
 }
@@ -49,21 +52,36 @@ func WithMPool(mp *mpool.MPool) Option {
 	}
 }
 
+// WithKind selects the on-disk format of the data dir: "local" (default,
+// DISK/CRC), "local2" (DISK-V2/raw) or "s3" (S3FS-on-disk/raw).
+func WithKind(kind string) Option {
+	return func(r *CheckpointReader) {
+		r.kind = kind
+	}
+}
+
+// Kind returns the offline fs kind the reader was opened with.
+func (r *CheckpointReader) Kind() string {
+	return r.kind
+}
+
 // Open opens checkpoint data from a directory
 func Open(ctx context.Context, dir string, opts ...Option) (*CheckpointReader, error) {
-	fs, err := fileservice.NewLocalFS(ctx, "local", dir, fileservice.DisabledCacheConfig, nil)
-	if err != nil {
-		return nil, moerr.NewInternalErrorf(ctx, "create file service: %v", err)
-	}
-
 	r := &CheckpointReader{
-		ctx: ctx,
-		fs:  fs,
-		dir: dir,
+		ctx:  ctx,
+		dir:  dir,
+		kind: objectio.OfflineKindLocal,
 	}
 	for _, opt := range opts {
 		opt(r)
 	}
+
+	fs, err := objectio.NewOfflineFS(ctx, dir, r.kind)
+	if err != nil {
+		return nil, moerr.NewInternalErrorf(ctx, "create file service: %v", err)
+	}
+	r.fs = fs
+
 	if r.mp == nil {
 		r.mp = mpool.MustNewZero()
 	}
@@ -106,9 +124,9 @@ func (r *CheckpointReader) loadEntries() error {
 	r.entries = unique
 
 	// Sort by end timestamp (newest first)
-	sort.Slice(r.entries, func(i, j int) bool {
-		ei, ej := r.entries[i].GetEnd(), r.entries[j].GetEnd()
-		return ei.GT(&ej)
+	slices.SortFunc(r.entries, func(a, b *checkpoint.CheckpointEntry) int {
+		ai, bi := a.GetEnd(), b.GetEnd()
+		return bi.Compare(&ai)
 	})
 	return nil
 }
@@ -241,8 +259,8 @@ func (r *CheckpointReader) GetAccounts(entry *checkpoint.CheckpointEntry) ([]*Ac
 	for _, acc := range accountMap {
 		accounts = append(accounts, acc)
 	}
-	sort.Slice(accounts, func(i, j int) bool {
-		return accounts[i].AccountID < accounts[j].AccountID
+	slices.SortFunc(accounts, func(a, b *AccountInfo) int {
+		return cmp.Compare(a.AccountID, b.AccountID)
 	})
 	return accounts, nil
 }
@@ -294,8 +312,8 @@ func (r *CheckpointReader) rangesToTables(ranges []ckputil.TableRange) []*TableI
 	for _, tbl := range tableMap {
 		tables = append(tables, tbl)
 	}
-	sort.Slice(tables, func(i, j int) bool {
-		return tables[i].TableID < tables[j].TableID
+	slices.SortFunc(tables, func(a, b *TableInfo) int {
+		return cmp.Compare(a.TableID, b.TableID)
 	})
 	return tables
 }

@@ -18,16 +18,20 @@ import (
 	"bufio"
 	"context"
 	"io"
+	"strings"
 
 	"github.com/parquet-go/parquet-go"
 
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/iceberg/api"
+	icebergio "github.com/matrixorigin/matrixone/pkg/iceberg/io"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/icebergdelete"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util/csvparser"
@@ -39,6 +43,13 @@ var _ vm.Operator = new(External)
 
 const (
 	ColumnCntLargerErrorInfo = "the table column is larger than input data column"
+
+	// IcebergDMLDataFilePathAttr and IcebergDMLRowOrdinalAttr are internal
+	// scan-only columns used by Iceberg row-level DML collectors. They are
+	// materialized from the Parquet reader side channel and must never be
+	// exposed by ordinary SELECT projection.
+	IcebergDMLDataFilePathAttr = api.DMLDataFilePathColumnName
+	IcebergDMLRowOrdinalAttr   = api.DMLRowOrdinalColumnName
 )
 
 // Use for External table scan param
@@ -66,15 +77,32 @@ type ExParamConst struct {
 	FileSize        []int64
 	FileOffset      []int64
 	FileOffsetTotal []*pipeline.FileOffset
-	Ctx             context.Context
-	Extern          *tree.ExternParam
-	ClusterTable    *plan.ClusterTable
+	// Optional Parquet row group shards. Empty means whole-file scan.
+	ParquetRowGroupShards       []*pipeline.ParquetRowGroupShard
+	IcebergDataTasks            []*pipeline.IcebergDataFileTask
+	IcebergDeleteTasks          []*pipeline.IcebergDeleteFileTask
+	IcebergColumns              []*pipeline.IcebergColumnMapping
+	IcebergSnapshot             *pipeline.IcebergSnapshotRuntime
+	IcebergObjectIORef          string
+	IcebergHiddenReadCols       []int32
+	IcebergPlanningStats        process.ParquetProfileStats
+	NeedRowOrdinal              bool
+	IcebergDeleteMaxMemoryBytes int64
+	IcebergDeleteSpillEnabled   bool
+	Ctx                         context.Context
+	Extern                      *tree.ExternParam
+	ClusterTable                *plan.ClusterTable
 }
 
 type ExParam struct {
-	Fileparam         *ExFileparam
-	Filter            *FilterParam
-	currentPartValues map[string]string
+	Fileparam                   *ExFileparam
+	Filter                      *FilterParam
+	currentPartValues           map[string]string
+	parquetProfile              process.ParquetProfileStats
+	icebergDeleteStates         map[string]*icebergdelete.ApplyState
+	icebergDeleteLoaded         bool
+	IcebergBatchDataFile        string
+	IcebergBatchStartRowOrdinal int64
 }
 
 type ExFileparam struct {
@@ -156,6 +184,69 @@ func NewArgument() *External {
 	return reuse.Alloc[External](nil)
 }
 
+func (param *ExternalParam) addParquetProfile(stats process.ParquetProfileStats) {
+	if param == nil || param.Extern == nil || !strings.EqualFold(param.Extern.Format, tree.PARQUET) || stats.Empty() {
+		return
+	}
+	param.parquetProfile.Add(stats)
+}
+
+func (param *ExternalParam) takeParquetProfile() process.ParquetProfileStats {
+	if param == nil {
+		return process.ParquetProfileStats{}
+	}
+	stats := param.parquetProfile
+	param.parquetProfile = process.ParquetProfileStats{}
+	return stats
+}
+
+func (param *ExternalParam) flushParquetProfile(analyzer process.Analyzer) {
+	if analyzer == nil {
+		return
+	}
+	stats := param.takeParquetProfile()
+	if !stats.Empty() {
+		analyzer.AddParquetProfile(stats)
+	}
+}
+
+func icebergParquetProfileStats(param *ExternalParam) process.ParquetProfileStats {
+	if param == nil || !isIcebergParquetScan(param) {
+		return process.ParquetProfileStats{}
+	}
+	var stats process.ParquetProfileStats
+	stats.Add(param.IcebergPlanningStats)
+	for _, col := range param.Cols {
+		if col != nil && !col.Hidden {
+			stats.TotalColumns++
+		}
+	}
+	for _, mapping := range param.IcebergColumns {
+		if mapping != nil && !mapping.IsHidden && !mapping.DefaultNullFill {
+			stats.ProjectedColumns++
+		}
+	}
+	if stats.ProjectedColumns == 0 && len(param.Attrs) > 0 {
+		stats.ProjectedColumns = int64(len(param.Attrs))
+	}
+	if len(param.IcebergDataTasks) > 0 {
+		stats.SelectedFiles = int64(len(param.IcebergDataTasks))
+		for _, task := range param.IcebergDataTasks {
+			if task != nil && task.FileSize > 0 {
+				stats.SelectedFileBytes += task.FileSize
+			}
+		}
+		return stats
+	}
+	stats.SelectedFiles = int64(len(param.FileList))
+	for _, size := range param.FileSize {
+		if size > 0 {
+			stats.SelectedFileBytes += size
+		}
+	}
+	return stats
+}
+
 func (external *External) WithEs(es *ExternalParam) *External {
 	external.Es = es
 	return external
@@ -178,6 +269,17 @@ func (external *External) Reset(proc *process.Process, pipelineFailed bool, err 
 	if external.ctr.buf != nil {
 		external.ctr.buf.CleanOnlyData()
 	}
+	if external.Es != nil {
+		// Release Iceberg-only execution state without changing External's legacy
+		// terminal file cursor contract. Cached prepared Iceberg scans are rejected
+		// at the compile-cache boundary and receive a freshly planned operator.
+		external.Es.currentPartValues = nil
+		external.Es.icebergDeleteStates = nil
+		external.Es.icebergDeleteLoaded = false
+		external.Es.IcebergBatchDataFile = ""
+		external.Es.IcebergBatchStartRowOrdinal = 0
+		external.Es.parquetProfile = process.ParquetProfileStats{}
+	}
 
 	allocSize := int64(external.ctr.maxAllocSize)
 	if external.ProjectList != nil {
@@ -197,6 +299,9 @@ func (external *External) Free(proc *process.Process, pipelineFailed bool, err e
 		external.reader = nil
 		external.fileOpened = false
 	}
+	if external.Es != nil {
+		external.Es.releaseIcebergObjectIORef()
+	}
 	if external.ctr.buf != nil {
 		external.ctr.buf.Clean(proc.Mp())
 		external.ctr.buf = nil
@@ -204,11 +309,25 @@ func (external *External) Free(proc *process.Process, pipelineFailed bool, err e
 	external.FreeProjection(proc)
 }
 
+func (param *ExternalParam) releaseIcebergObjectIORef() {
+	if param == nil {
+		return
+	}
+	ref := strings.TrimSpace(param.IcebergObjectIORef)
+	if ref == "" {
+		return
+	}
+	icebergio.ReleaseObjectIORef(ref)
+	param.IcebergObjectIORef = ""
+}
+
 func (external *External) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
 	batch := input
 	var err error
 	if external.ProjectList != nil {
 		batch, err = external.EvalProjection(input, proc)
+	} else if external.Es != nil {
+		maskIcebergHiddenReadColumns(external.Es, batch)
 	}
 	return batch, err
 }
@@ -267,33 +386,45 @@ func newCSVParserFromReader(extern *tree.ExternParam, r io.Reader) (*csvparser.C
 		NotNull:            false,
 		Null:               []string{`\N`},
 		UnescapedQuote:     true,
-		Comment:            '#',
+		// Comment marker comes from the table's COMMENT option; empty (the
+		// default) means no marker, so every line is data. A configured marker
+		// skips lines whose raw prefix matches it (checked before unquoting).
+		Comment: plan.GetCSVComment(extern),
 	}
 
 	return csvparser.NewCSVParser(&config, bufio.NewReader(r), csvparser.ReadBlockSize, false)
 }
 
 type ParquetHandler struct {
-	file        *parquet.File
-	offset      int64
-	batchCnt    int64
-	cols        []*parquet.Column
-	mappers     []*columnMapper
-	pages       []parquet.Pages // cached pages iterators for each column
-	currentPage []parquet.Page  // cached current page for each column
-	pageOffset  []int64         // current offset within each cached page
+	file           *parquet.File
+	rowGroup       parquet.RowGroup
+	rowGroups      []parquet.RowGroup
+	rowGroupRows   int64
+	rowOrdinalBase int64
+	offset         int64
+	batchCnt       int64
+	cols           []*parquet.Column
+	mappers        []*columnMapper
+	pages          []parquet.Pages // cached pages iterators for each column
+	currentPage    []parquet.Page  // cached current page for each column
+	pageOffset     []int64         // current offset within each cached page
+	// Iceberg optional columns added after an older data file was written are
+	// materialized as NULL when the file has no matching field id.
+	icebergNullFill []bool
 
 	// for nested types support
 	hasNestedCols bool
-	rowReader     *parquet.Reader
+	rowReader     parquet.Rows
 
 	// virtual column support (hive partitions + __mo_filepath)
-	partitionColIndices []int
-	filepathColIndex    int // -1 = not projected
-	hasPhysicalCol      bool
-	rowCountOnly        bool
-	currentRowGroup     int
-	rowCountRemaining   int
+	partitionColIndices            []int
+	filepathColIndex               int // -1 = not projected
+	icebergDMLDataFilePathColIndex int // -1 = not projected
+	icebergDMLRowOrdinalColIndex   int // -1 = not projected
+	hasPhysicalCol                 bool
+	rowCountOnly                   bool
+	currentRowGroup                int
+	rowCountRemaining              int
 }
 
 type columnMapper struct {

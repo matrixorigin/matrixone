@@ -124,7 +124,8 @@ select cast(10000002383263201056 as decimal) mod 50 as result;
 ➤ result[3,39,0]  𝄀
 6
 select cast(cast(19999999999999999999 as decimal) as unsigned);
-Data truncation: data out of range: data type uint64, value '19999999999999999999'
+➤ cast(cast(19999999999999999999 as decimal(38)) as unsigned)[-5,64,0]  𝄀
+18446744073709551615
 CREATE TABLE t1 (id INT PRIMARY KEY,
 a decimal(20),
 b VARCHAR(20));
@@ -757,7 +758,7 @@ SELECT a, a - b - b FROM decimal07;
 3  ¦  7459  𝄀
 4  ¦  -24691357819753086424691357819753086482
 SELECT a, b DIV a FROM decimal07;
-invalid input: Decimal128 Div overflow: 12345678909876543212345678909876543243/4
+Data truncation: data out of range: data type DECIMAL, invalid input: Decimal128 Div overflow: 12345678909876543212345678909876543243/4
 SELECT a, ABS(b) FROM decimal07;
 ➤ a[4,32,0]  ¦  ABS(b)[3,39,0]  𝄀
 1  ¦  3728193  𝄀
@@ -777,7 +778,7 @@ SELECT a, POWER(b,2) FROM decimal07;
 3  ¦  1.3897984E7  𝄀
 4  ¦  1.5241578774577047E74
 SELECT a, b / a FROM decimal07;
-invalid input: Decimal128 Div overflow: 12345678909876543212345678909876543243/4
+Data truncation: data out of range: data type DECIMAL, invalid input: Decimal128 Div overflow: 12345678909876543212345678909876543243/4
 SELECT b + pi() FROM decimal07;
 ➤ b + pi()[8,54,0]  𝄀
 3728196.1415926535  𝄀
@@ -827,9 +828,9 @@ SELECT a + 1 FROM decimal08;
 1  𝄀
 -99999999999999999999999999999999999998
 SELECT a * 2 FROM decimal08;
-invalid input: Decimal128 Mul overflow: 99999999999999999999999999999999999999*2
+Data truncation: data out of range: data type DECIMAL, invalid input: Decimal128 Mul overflow: 99999999999999999999999999999999999999*2
 SELECT a / 3 FROM decimal08;
-invalid input: Decimal128 Div overflow: 21737187383787273829839184932843922131/3
+Data truncation: data out of range: data type DECIMAL, invalid input: Decimal128 Div overflow: 21737187383787273829839184932843922131/3
 DROP TABLE decimal08;
 DROP TABLE IF EXISTS decimal09;
 CREATE TABLE decimal09 (d decimal DEFAULT NULL);
@@ -998,10 +999,10 @@ INSERT INTO decimal10 VALUES(NULL,9,2819323242,2);
 constraint violation: Column 'a' cannot be null
 SELECT CAST(b AS DECIMAL(10,9)) FROM decimal10;
 ➤ cast(b as decimal(10, 9))[3,10,9]  𝄀
-155.000000000  𝄀
-78.000000000  𝄀
+9.999999999  𝄀
+9.999999999  𝄀
 0E-9  𝄀
-111.000000000
+9.999999999
 SELECT CAST(b AS DECIMAL(10)) FROM decimal10;
 ➤ cast(b as decimal(10))[3,11,0]  𝄀
 155  𝄀
@@ -1094,7 +1095,9 @@ SELECT * FROM decimal11;
 1234567890981.1112311464210  ¦  1.232143214321  𝄀
 32838293.3387298323000  ¦  -37827.382983283022
 SELECT CAST((a * b) AS DECIMAL(20,10)) FROM decimal11;
-invalid input: 1521164449490.9642986411848 beyond the range, can't be converted to Decimal128(20,10).
+➤ cast((a * b) as decimal(20, 10))[3,20,10]  𝄀
+9999999999.9999999999  𝄀
+-9999999999.9999999999
 SELECT a * b FROM decimal11;
 ➤ a * b[3,38,13]  𝄀
 1521164449490.9642986411848  𝄀
@@ -1264,7 +1267,7 @@ null  𝄀
 0.0372837842743762000000000000000000000  𝄀
 0.0397390309077671402515333872954184457
 SELECT 12345678965412365478965444565896532145 / col1 FROM decimal18;
-invalid input: Decimal128 Div overflow: 12345678965412365478965444565896532145/0.1221212134567890987654321333546543213
+Data truncation: data out of range: data type DECIMAL, invalid input: Decimal128 Div overflow: 12345678965412365478965444565896532145/0.1221212134567890987654321333546543213
 SELECT col2/522222222225456987.23212654569987523654 FROM decimal18;
 ➤ col2 / 522222222225456987.23212654569987523654[3,38,37]  𝄀
 1.9148936170094153026E-18  𝄀
@@ -1283,11 +1286,11 @@ SELECT col1 / col2 FROM decimal19;
 -32015808253987387864.171828  𝄀
 -17600769189777557874.214320
 SELECT col1 * col2 FROM decimal19;
-invalid input: Decimal128 Mul overflow: 12345645678978945612312345678885229999*1235467899687894561
+Data truncation: data out of range: data type DECIMAL, invalid input: Decimal128 Mul overflow: 12345645678978945612312345678885229999*1235467899687894561
 SELECT col1 * 0.2871438217498217489217843728134214212143 FROM decimal19;
-invalid input: Decimal128 Mul overflow: 12345645678978945612312345678885229999*0.2871438217498217489217843728134214212
+Data truncation: data out of range: data type DECIMAL, invalid input: Decimal128 Mul overflow: 12345645678978945612312345678885229999*0.2871438217498217489217843728134214212
 SELECT col2 * -2733892455124775.7851878942123454 FROM decimal19;
-invalid input: Decimal128 Mul overflow: 1235467899687894561*-2733892455124775.7851878942123454
+Data truncation: data out of range: data type DECIMAL, invalid input: Decimal128 Mul overflow: 1235467899687894561*-2733892455124775.7851878942123454
 SELECT col1 / 0;
 invalid input: column col1 does not exist
 SELECT col2 / 0;
@@ -1308,7 +1311,7 @@ SELECT 1e18 * CAST('1.2' as decimal(3,2));
 ➤ 1e18 * cast(1.2 as decimal(3, 2))[8,54,0]  𝄀
 1.2E18
 SELECT CAST(CAST('1.234221421' AS decimal(3,2)) AS signed);
-➤ cast(cast(1.234221421 as decimal(3, 2)) as as)[-5,64,0]  𝄀
+➤ cast(cast(1.234221421 as decimal(3, 2)) as signed)[-5,64,0]  𝄀
 1
 set @v1=null;
 SELECT CAST(@v1 as decimal(22, 2));
@@ -1332,7 +1335,7 @@ SELECT CAST('0101010' AS decimal);
 ➤ cast(0101010 as decimal(38))[3,39,0]  𝄀
 101010
 SELECT CAST('' AS decimal);
-invalid input: can't cast empty string to Decimal128
+invalid input: "" is invalid numeric string
 DROP TABLE IF EXISTS decimal20;
 CREATE TABLE decimal20(v varchar(40), tt tinytext, t text, mt mediumtext, lt longtext);
 INSERT INTO decimal20 VALUES('1.01415', '2.02115', '-3.03', '444.04', '4515.05');
@@ -1674,3 +1677,63 @@ SELECT * FROM float_precision_test WHERE f64_col = 1000000;
 ➤ id[4,32,0]  ¦  f32_col[7,24,0]  ¦  f64_col[8,54,0]  𝄀
 1  ¦  1000000.0  ¦  1000000.0
 DROP TABLE float_precision_test;
+SELECT CAST(8000.00 AS DECIMAL(12,2)) - 1299 AS dec_minus_int_positive;
+➤ dec_minus_int_positive[3,38,2]  𝄀
+6701.00
+SELECT CAST(300.00 AS DECIMAL(12,2)) - 300 AS dec_minus_int_zero;
+➤ dec_minus_int_zero[3,38,2]  𝄀
+0.00
+SELECT CAST(300.00 AS DECIMAL(12,2)) - 301 AS dec_minus_int_negative_one;
+➤ dec_minus_int_negative_one[3,38,2]  𝄀
+-1.00
+SELECT CAST(100.00 AS DECIMAL(12,2)) - 200 AS dec_minus_int_negative_hundred;
+➤ dec_minus_int_negative_hundred[3,38,2]  𝄀
+-100.00
+SELECT CAST(300.00 AS DECIMAL(12,2)) - 3999 AS dec_minus_int_large_negative;
+➤ dec_minus_int_large_negative[3,38,2]  𝄀
+-3699.00
+SELECT CAST(300.00 AS DECIMAL(12,2)) - 3999.00 AS dec_minus_decimal_large_negative;
+➤ dec_minus_decimal_large_negative[3,18,2]  𝄀
+-3699.00
+DROP TABLE IF EXISTS decimal_minus_int_regression;
+CREATE TABLE decimal_minus_int_regression(bal DECIMAL(12,2));
+INSERT INTO decimal_minus_int_regression VALUES (300.00);
+SELECT bal - 3999 AS bal_minus_int FROM decimal_minus_int_regression;
+➤ bal_minus_int[3,38,2]  𝄀
+-3699.00
+DROP TABLE decimal_minus_int_regression;
+DROP TABLE IF EXISTS decimal_minus_int_rhs_vector;
+CREATE TABLE decimal_minus_int_rhs_vector(i INT);
+INSERT INTO decimal_minus_int_rhs_vector VALUES (300), (301), (3999);
+SELECT CAST(300.00 AS DECIMAL(12,2)) - i AS dec_minus_int_col
+FROM decimal_minus_int_rhs_vector
+ORDER BY i;
+➤ dec_minus_int_col[3,38,2]  𝄀
+0.00  𝄀
+-1.00  𝄀
+-3699.00
+DROP TABLE decimal_minus_int_rhs_vector;
+DROP TABLE IF EXISTS decimal_minus_int_rhs_null;
+CREATE TABLE decimal_minus_int_rhs_null(id INT, i INT);
+INSERT INTO decimal_minus_int_rhs_null VALUES (1, 300), (2, NULL), (3, 301), (4, 3999);
+SELECT id, CAST(300.00 AS DECIMAL(12,2)) - i AS dec_minus_nullable_int_col
+FROM decimal_minus_int_rhs_null
+ORDER BY id;
+➤ id[4,32,0]  ¦  dec_minus_nullable_int_col[3,38,2]  𝄀
+1  ¦  0.00  𝄀
+2  ¦  null  𝄀
+3  ¦  -1.00  𝄀
+4  ¦  -3699.00
+DROP TABLE decimal_minus_int_rhs_null;
+SELECT CAST(300.00 AS DECIMAL(20,2)) - 301 AS dec128_minus_int_negative_one;
+➤ dec128_minus_int_negative_one[3,38,2]  𝄀
+-1.00
+SELECT CAST(300.00 AS DECIMAL(20,2)) - 3999 AS dec128_minus_int_large_negative;
+➤ dec128_minus_int_large_negative[3,38,2]  𝄀
+-3699.00
+SELECT 301 - CAST(300.00 AS DECIMAL(12,2)) AS int_minus_decimal_positive_one;
+➤ int_minus_decimal_positive_one[3,38,2]  𝄀
+1.00
+SELECT 200 - CAST(300.00 AS DECIMAL(12,2)) AS int_minus_decimal_negative_hundred;
+➤ int_minus_decimal_negative_hundred[3,38,2]  𝄀
+-100.00

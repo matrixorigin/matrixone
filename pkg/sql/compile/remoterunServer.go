@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -37,12 +38,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/models"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/matrixorigin/matrixone/pkg/util/debug/goroutine"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -75,10 +78,15 @@ func CnServerMessageHandler(
 	messageAcquirer func() morpc.Message) (err error) {
 
 	startTime := time.Now()
+	var lifecycle *pipelineStreamLifecycle
 	defer func() {
 		v2.PipelineServerDurationHistogram.Observe(time.Since(startTime).Seconds())
 
 		if e := recover(); e != nil {
+			if lifecycle != nil {
+				lifecycle.remove()
+				lifecycle.markCleaned()
+			}
 			err = moerr.ConvertPanicError(ctx, e)
 			getLogger(lockService.GetConfig().ServiceID).Error("panic in CnServerMessageHandler",
 				zap.String("error", err.Error()))
@@ -95,20 +103,49 @@ func CnServerMessageHandler(
 	if msg.DebugMsg != "" {
 		logutil.Infof("%s, goRoutineId=%d", msg.GetDebugMsg(), goroutine.GetRoutineId())
 	}
+	colexecServer := colexec.GetServer(lockService.GetConfig().ServiceID)
+	if colexecServer == nil {
+		return moerr.NewInternalErrorf(ctx, "colexec server is not initialized for CN %s", lockService.GetConfig().ServiceID)
+	}
+	if msg.GetCmd() == pipeline.Method_PipelineStreamFinish {
+		return handlePipelineStreamFinish(ctx, msg, cs, messageAcquirer)
+	}
 
 	// prepare the receiver structure, just for easy using the `send` method.
-	receiver := newMessageReceiverOnServer(ctx, serverAddress, msg,
-		cs, messageAcquirer, storageEngine, fileService, lockService, queryClient, HaKeeper, udfService, txnClient, autoIncreaseCM)
+	receiver, err := newMessageReceiverOnServer(ctx, serverAddress, msg,
+		cs, messageAcquirer, storageEngine, fileService, lockService, queryClient, HaKeeper, udfService, txnClient, autoIncreaseCM, colexecServer)
+	if err != nil {
+		if sendErr := receiver.sendError(err); sendErr != nil {
+			return errors.Join(err, sendErr)
+		}
+		return nil
+	}
 
-	// how to handle the *pipeline.Message.
-	err = handlePipelineMessage(&receiver)
+	finishNegotiated := false
+	if receiver.supportsFinishAck() {
+		lifecycle, err = registerPipelineStreamLifecycle(receiver.clientSession, receiver.messageId)
+		finishNegotiated = err == nil
+		if err != nil {
+			return err
+		}
+		receiver.acceptedTeardownMode = pipeline.StreamTeardownMode_FinishAck
+	}
+
+	// Register negotiated lifecycle ownership before execution. A locally
+	// requested StopSending may make execution return an error, but its terminal
+	// response and FIN still need the same cleanup barrier.
+	handlerErr := handlePipelineMessage(&receiver)
+	responseSent := false
 	if receiver.messageTyp != pipeline.Method_StopSending {
 		// stop message only close a running pipeline, there is no need to reply the finished-message.
-		if err != nil {
-			err = receiver.sendError(err)
+		if handlerErr != nil {
+			err = receiver.sendError(handlerErr)
 		} else {
 			err = receiver.sendEndMessage()
 		}
+		responseSent = err == nil
+	} else {
+		err = handlerErr
 	}
 
 	// if this message is responsible for the execution of certain pipelines, they should be ended after message processing is completed.
@@ -116,12 +153,36 @@ func CnServerMessageHandler(
 		// keep listening until connection was closed
 		// to prevent some strange handle order between 'stop sending message' and others.
 		// todo: it is tcp connection now. should be very careful, we should listen to stream context next day.
-		if err == nil {
-			<-receiver.connectionCtx.Done()
+		if responseSent && finishNegotiated {
+			finishReceived := lifecycle.waitForFinish(receiver.messageCtx, receiver.connectionCtx)
+			receiver.colexecServer.RemoveRelatedPipeline(receiver.clientSession, receiver.messageId)
+			lifecycle.markCleaned()
+			if !finishReceived {
+				_ = receiver.clientSession.Close()
+			}
+			return nil
 		}
-		colexec.Get().RemoveRelatedPipeline(receiver.clientSession, receiver.messageId)
+		if lifecycle != nil {
+			lifecycle.remove()
+		}
+		if handlerErr == nil && err == nil {
+			receiver.waitUntilDisconnectedOrCancelled()
+		}
+		receiver.colexecServer.RemoveRelatedPipeline(receiver.clientSession, receiver.messageId)
 	}
 	return err
+}
+
+// waitUntilDisconnectedOrCancelled blocks until either the client connection is
+// closed or the message context is cancelled (e.g. the query was killed). It
+// keeps listening so a remote dispatch can still stream data back, but no longer
+// hangs forever on the TCP connection alone when the query is cancelled
+// (issue #25025).
+func (receiver *messageReceiverOnServer) waitUntilDisconnectedOrCancelled() {
+	select {
+	case <-receiver.connectionCtx.Done():
+	case <-receiver.messageCtx.Done():
+	}
 }
 
 func handlePipelineMessage(receiver *messageReceiverOnServer) error {
@@ -129,7 +190,15 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 	switch receiver.messageTyp {
 	case pipeline.Method_PrepareDoneNotifyMessage:
 		dispatchProc, dispatchNotifyCh, err := receiver.GetProcByUuid(receiver.messageUuid)
-		if err != nil || dispatchProc == nil {
+		if err != nil {
+			return err
+		}
+		if dispatchProc == nil || dispatchNotifyCh == nil {
+			err = moerr.NewInvalidStateNoCtxf(
+				"remote dispatch receiver %s attached with incomplete registration",
+				receiver.messageUuid.String(),
+			)
+			receiver.cancelConsumedDispatchRegistration(dispatchProc, err)
 			return err
 		}
 
@@ -140,24 +209,33 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 			Cs:           receiver.clientSession,
 			Err:          make(chan error, 1),
 		}
-		colexec.Get().RecordDispatchPipeline(receiver.clientSession, receiver.messageId, infoToDispatchOperator)
+		receiver.colexecServer.RecordDispatchPipeline(receiver.clientSession, receiver.messageId, infoToDispatchOperator)
 
 		succeed := false
 		select {
 		case dispatchNotifyCh <- infoToDispatchOperator:
 			succeed = true
-		case <-receiver.connectionCtx.Done():
-			dispatchProc.Cancel(moerr.NewInternalError(receiver.messageCtx, "remote receiver connection closed"))
-		case <-dispatchProc.Ctx.Done():
+		case <-contextDone(receiver.connectionCtx):
+			err = moerr.NewStreamClosed(receiver.getMessageContext())
+			dispatchProc.Cancel(err)
+		case <-contextDone(receiver.messageCtx):
+			err = remoteRegistrationContextError(receiver.messageCtx)
+			dispatchProc.Cancel(err)
+		case <-contextDone(dispatchProc.Ctx):
+			err = remoteRegistrationContextError(dispatchProc.Ctx)
 		}
 
 		if !succeed {
-			return nil
+			return err
 		}
 
 		select {
-		case <-receiver.connectionCtx.Done():
-			dispatchProc.Cancel(moerr.NewInternalError(receiver.messageCtx, "remote receiver connection closed"))
+		case <-contextDone(receiver.connectionCtx):
+			err = moerr.NewStreamClosed(receiver.getMessageContext())
+			dispatchProc.Cancel(err)
+		case <-contextDone(receiver.messageCtx):
+			err = remoteRegistrationContextError(receiver.messageCtx)
+			dispatchProc.Cancel(err)
 
 		// there is no need to check the dispatchProc.Ctx.Done() here.
 		// because we need to receive the error from dispatchProc.DispatchNotifyCh.
@@ -170,6 +248,10 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 		if errBuildCompile != nil {
 			return errBuildCompile
 		}
+		defer func() {
+			runCompile.clear()
+			runCompile.Release()
+		}()
 
 		// decode and running the pipeline.
 		s, err := decodeScope(receiver.scopeData, runCompile.proc, true, runCompile.e)
@@ -194,15 +276,18 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 
 		runCompile.scopes = []*Scope{s}
 		runCompile.InitPipelineContextToExecuteQuery()
-		defer func() {
-			runCompile.clear()
-			runCompile.Release()
-		}()
 
-		colexec.Get().RecordBuiltPipeline(receiver.clientSession, receiver.messageId, runCompile.proc)
+		registrations, err := registerRemoteDispatchReceivers(s)
+		if err != nil {
+			return err
+		}
+		defer registrations.cleanup()
+		receiver.colexecServer.RecordBuiltPipeline(receiver.clientSession, receiver.messageId, runCompile.proc)
 
 		// running pipeline.
-		MarkQueryRunning(runCompile, runCompile.proc.GetTxnOperator())
+		if err = TryMarkQueryRunning(runCompile, runCompile.proc.GetTxnOperator()); err != nil {
+			return err
+		}
 		defer func() {
 			MarkQueryDone(runCompile, runCompile.proc.GetTxnOperator())
 		}()
@@ -215,12 +300,176 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 		return err
 
 	case pipeline.Method_StopSending:
-		colexec.Get().CancelPipelineSending(receiver.clientSession, receiver.messageId)
+		receiver.colexecServer.CancelPipelineSending(receiver.clientSession, receiver.messageId)
 
 	default:
 		panic(fmt.Sprintf("unknown pipeline message type %d.", receiver.messageTyp))
 	}
 	return nil
+}
+
+type remoteDispatchReceiverRegistrations struct {
+	once          sync.Once
+	registrations []*dispatch.RemoteReceiverRegistration
+}
+
+func (r *remoteDispatchReceiverRegistrations) cleanup() {
+	if r == nil {
+		return
+	}
+	r.once.Do(func() {
+		for i := len(r.registrations) - 1; i >= 0; i-- {
+			r.registrations[i].Cleanup()
+		}
+	})
+}
+
+func (r *remoteDispatchReceiverRegistrations) rollback(err error) {
+	if r == nil {
+		return
+	}
+	for i := range r.registrations {
+		registration := r.registrations[i]
+		if registration != nil {
+			registration.Cancel(err)
+		}
+	}
+	r.cleanup()
+}
+
+func registerRemoteDispatchReceivers(s *Scope) (*remoteDispatchReceiverRegistrations, error) {
+	return registerDispatchReceivers([]*Scope{s}, func(*Scope) dispatchReceiverRegistrationMode {
+		return registerDispatchReceiverTree
+	})
+}
+
+func registerLocalDispatchReceivers(scopes []*Scope, localAddr string) (*remoteDispatchReceiverRegistrations, error) {
+	return registerDispatchReceivers(scopes, func(s *Scope) dispatchReceiverRegistrationMode {
+		if s.Magic != Remote || s.ipAddrMatch(localAddr) {
+			return registerDispatchReceiverTree
+		}
+		if validateRemoteRunAddress(s.NodeInfo.Addr, localAddr) != nil || s.holdAnyCannotRemoteOperator() != nil {
+			return skipDispatchReceivers
+		}
+		if !checkPipelineStandaloneExecutableAtRemote(s) {
+			return registerDispatchReceiverTree
+		}
+		if _, ok := s.RootOp.(*dispatch.Dispatch); ok {
+			return registerDispatchReceiverRoot
+		}
+		// The tree runs on another CN, so its own operators must not be
+		// registered here. Its descendants can still RemoteRun back to this CN;
+		// visit them to publish those local return dispatches early.
+		return traverseDispatchReceiverChildren
+	})
+}
+
+type dispatchReceiverRegistrationMode uint8
+
+const (
+	skipDispatchReceivers dispatchReceiverRegistrationMode = iota
+	registerDispatchReceiverRoot
+	registerDispatchReceiverTree
+	traverseDispatchReceiverChildren
+)
+
+func registerDispatchReceivers(
+	scopes []*Scope,
+	registrationMode func(*Scope) dispatchReceiverRegistrationMode,
+) (*remoteDispatchReceiverRegistrations, error) {
+	registrations := &remoteDispatchReceiverRegistrations{}
+	visitedScopes := make(map[*Scope]struct{})
+	visitedDispatches := make(map[*dispatch.Dispatch]struct{})
+
+	var registerScope func(*Scope) error
+	registerScope = func(s *Scope) error {
+		if s == nil {
+			return nil
+		}
+		if _, ok := visitedScopes[s]; ok {
+			return nil
+		}
+		visitedScopes[s] = struct{}{}
+		mode := registrationMode(s)
+		if mode == skipDispatchReceivers {
+			return nil
+		}
+
+		registerDispatch := func(d *dispatch.Dispatch) error {
+			if d == nil || len(d.RemoteRegs) == 0 {
+				return nil
+			}
+			if _, ok := visitedDispatches[d]; ok {
+				return nil
+			}
+			visitedDispatches[d] = struct{}{}
+			if s.Proc == nil {
+				return moerr.NewInternalErrorNoCtx("cannot register remote receiver without its scope process")
+			}
+			registration, err := d.RegisterRemoteReceiversWithHandle(s.Proc)
+			if err != nil {
+				return err
+			}
+			if registration != nil {
+				registrations.registrations = append(registrations.registrations, registration)
+			}
+			return nil
+		}
+
+		if mode == registerDispatchReceiverRoot {
+			if err := registerDispatch(s.RootOp.(*dispatch.Dispatch)); err != nil {
+				return err
+			}
+		} else if mode == registerDispatchReceiverTree && s.RootOp != nil {
+			if err := vm.HandleAllOp(s.RootOp, func(_ vm.Operator, op vm.Operator) error {
+				d, ok := op.(*dispatch.Dispatch)
+				if !ok {
+					return nil
+				}
+				return registerDispatch(d)
+			}); err != nil {
+				return err
+			}
+		}
+		for _, pre := range s.PreScopes {
+			if err := registerScope(pre); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	for _, s := range scopes {
+		if err := registerScope(s); err != nil {
+			cancelScopeProcesses(scopes, err)
+			registrations.rollback(err)
+			return nil, err
+		}
+	}
+	return registrations, nil
+}
+
+func cancelScopeProcesses(scopes []*Scope, err error) {
+	visited := make(map[*Scope]struct{})
+	var cancelScope func(*Scope)
+	cancelScope = func(s *Scope) {
+		if s == nil {
+			return
+		}
+		if _, ok := visited[s]; ok {
+			return
+		}
+		visited[s] = struct{}{}
+		if s.Proc != nil && s.Proc.Cancel != nil {
+			s.Proc.Cancel(err)
+		}
+		for _, pre := range s.PreScopes {
+			cancelScope(pre)
+		}
+	}
+	for _, s := range scopes {
+		cancelScope(s)
+	}
 }
 
 const (
@@ -251,6 +500,7 @@ type processHelper struct {
 	//analysisNodeList []int32
 	StmtId        uuid.UUID
 	prepareParams *vector.Vector
+	affectedRows  int64
 }
 
 // messageReceiverOnServer supported a series methods to write back results.
@@ -273,6 +523,11 @@ type messageReceiverOnServer struct {
 
 	needNotReply bool
 
+	requestedTeardownMode pipeline.StreamTeardownMode
+	acceptedTeardownMode  pipeline.StreamTeardownMode
+
+	colexecServer *colexec.Server
+
 	// result.
 	phyPlan *models.PhyPlan
 }
@@ -290,17 +545,20 @@ func newMessageReceiverOnServer(
 	hakeeper logservice.CNHAKeeperClient,
 	udfService udf.Service,
 	txnClient client.TxnClient,
-	aicm *defines.AutoIncrCacheManager) messageReceiverOnServer {
-
+	aicm *defines.AutoIncrCacheManager,
+	colexecServer *colexec.Server) (messageReceiverOnServer, error) {
+	connectionCtx := cs.SessionCtx()
 	receiver := messageReceiverOnServer{
-		messageCtx:      ctx,
-		connectionCtx:   cs.SessionCtx(),
-		messageId:       m.GetId(),
-		messageTyp:      m.GetCmd(),
-		clientSession:   cs,
-		messageAcquirer: messageAcquirer,
-		maxMessageSize:  maxMessageSizeToMoRpc,
-		needNotReply:    m.NeedNotReply,
+		messageCtx:            ctx,
+		connectionCtx:         connectionCtx,
+		messageId:             m.GetId(),
+		messageTyp:            m.GetCmd(),
+		clientSession:         cs,
+		messageAcquirer:       messageAcquirer,
+		maxMessageSize:        maxMessageSizeToMoRpc,
+		needNotReply:          m.NeedNotReply,
+		requestedTeardownMode: m.GetRequestedTeardownMode(),
+		colexecServer:         colexecServer,
 	}
 	receiver.cnInformation = cnInformation{
 		cnAddr:      cnAddr,
@@ -317,22 +575,37 @@ func newMessageReceiverOnServer(
 	case pipeline.Method_PrepareDoneNotifyMessage:
 		opUuid, err := uuid.FromBytes(m.GetUuid())
 		if err != nil {
-			logutil.Errorf("decode uuid from pipeline.Message failed, bytes are %v", m.GetUuid())
-			panic("cn receive a message with wrong uuid bytes")
+			return receiver, err
 		}
 		receiver.messageUuid = opUuid
 
 	case pipeline.Method_PipelineMessage:
 		var err error
-		receiver.procBuildHelper, err = generateProcessHelper(m.GetProcInfoData(), txnClient)
+		// The morpc message context carries query cancellation and deadlines,
+		// while the session context observes an early client disconnect. Either
+		// event must release a remote snapshot logtail wait.
+		processCtx, cancelProcess := context.WithCancel(ctx)
+		stopConnectionCancel := context.AfterFunc(connectionCtx, cancelProcess)
+		func() {
+			defer cancelProcess()
+			defer stopConnectionCancel()
+			receiver.procBuildHelper, err = generateProcessHelper(processCtx, m.GetProcInfoData(), txnClient)
+		}()
 		if err != nil {
-			logutil.Errorf("decode process info from pipeline.Message failed, bytes are %v", m.GetProcInfoData())
-			panic("cn receive a message with wrong process bytes")
+			return receiver, err
 		}
 		receiver.scopeData = m.Data
 	}
 
-	return receiver
+	return receiver, nil
+}
+
+func (receiver *messageReceiverOnServer) supportsFinishAck() bool {
+	if receiver.requestedTeardownMode != pipeline.StreamTeardownMode_FinishAck {
+		return false
+	}
+	return receiver.messageTyp == pipeline.Method_PipelineMessage ||
+		receiver.messageTyp == pipeline.Method_PrepareDoneNotifyMessage
 }
 
 func (receiver *messageReceiverOnServer) acquireMessage() (*pipeline.Message, error) {
@@ -373,6 +646,9 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 	proc.Base.SessionInfo = pHelper.sessionInfo
 	proc.Base.SessionInfo.StorageEngine = cnInfo.storeEngine
 	proc.SetPrepareParams(pHelper.prepareParams)
+	// Carry ROW_COUNT() state so row_count() pushed down to this remote CN reads
+	// the previous statement's affected rows instead of the default 0.
+	proc.SetAffectedRows(pHelper.affectedRows)
 	{
 		txn := proc.GetTxnOperator().Txn()
 		txnId := txn.GetID()
@@ -404,6 +680,8 @@ func (receiver *messageReceiverOnServer) sendError(
 	}
 	message.SetID(receiver.messageId)
 	message.SetSid(pipeline.Status_MessageEnd)
+	message.SetMessageType(receiver.messageTyp)
+	message.AcceptedTeardownMode = receiver.acceptedTeardownMode
 	if errInfo != nil {
 		message.SetMoError(receiver.messageCtx, errInfo)
 	}
@@ -464,6 +742,7 @@ func (receiver *messageReceiverOnServer) sendEndMessage() error {
 	message.SetSid(pipeline.Status_MessageEnd)
 	message.SetID(receiver.messageId)
 	message.SetMessageType(receiver.messageTyp)
+	message.AcceptedTeardownMode = receiver.acceptedTeardownMode
 
 	jsonData, err := json.MarshalIndent(receiver.phyPlan, "", "  ")
 	if err != nil {
@@ -474,7 +753,7 @@ func (receiver *messageReceiverOnServer) sendEndMessage() error {
 	return receiver.clientSession.Write(receiver.messageCtx, message)
 }
 
-func generateProcessHelper(data []byte, cli client.TxnClient) (processHelper, error) {
+func generateProcessHelper(ctx context.Context, data []byte, cli client.TxnClient) (processHelper, error) {
 	procInfo := &pipeline.ProcessInfo{}
 	err := procInfo.Unmarshal(data)
 	if err != nil {
@@ -482,11 +761,12 @@ func generateProcessHelper(data []byte, cli client.TxnClient) (processHelper, er
 	}
 
 	result := processHelper{
-		id:        procInfo.Id,
-		lim:       process.ConvertToProcessLimitation(procInfo.Lim),
-		unixTime:  procInfo.UnixTime,
-		accountId: procInfo.AccountId,
-		txnClient: cli,
+		id:           procInfo.Id,
+		lim:          process.ConvertToProcessLimitation(procInfo.Lim),
+		unixTime:     procInfo.UnixTime,
+		accountId:    procInfo.AccountId,
+		txnClient:    cli,
+		affectedRows: procInfo.AffectedRows,
 	}
 	if procInfo.PrepareParams.Length > 0 {
 		result.prepareParams = vector.NewVecWithData(
@@ -501,7 +781,7 @@ func generateProcessHelper(data []byte, cli client.TxnClient) (processHelper, er
 			}
 		}
 	}
-	result.txnOperator, err = cli.NewWithSnapshot(procInfo.Snapshot)
+	result.txnOperator, err = cli.NewWithSnapshot(ctx, procInfo.Snapshot)
 	if err != nil {
 		return processHelper{}, err
 	}
@@ -519,32 +799,160 @@ func generateProcessHelper(data []byte, cli client.TxnClient) (processHelper, er
 	return result, nil
 }
 
-// waitRegistrationTimeout bounds how long we wait for the dispatch operator
-// to register itself via PutProcIntoUuidMap. Under normal operation this
-// happens within seconds. A 5-minute timeout detects a fundamentally broken
-// remote CN (crash, network partition) without the false positives of a short
-// timeout, while avoiding the 24h hang of the unbounded RPC stream lifetime.
-const waitRegistrationTimeout = 30 * time.Second
+func newRemoteDispatchNotRegisteredYetError(_ context.Context, uid uuid.UUID) error {
+	// Registration lag is an expected, retryable protocol state. Keep the
+	// typed wire error without reporting every receiver attempt as an ERROR.
+	return moerr.NewRemoteDispatchNotRegistered(moerr.NoReportContext(), uid.String())
+}
+
+func isRemoteDispatchNotRegisteredYetError(err error) bool {
+	return moerr.IsMoErrCode(err, moerr.ErrRemoteDispatchNotRegistered)
+}
+
+func (receiver *messageReceiverOnServer) TryGetProcByUuid(uid uuid.UUID) (*process.Process, process.RemotePipelineInformationChannel, error) {
+	dispatchProc, notifyChannel, state, waiter := receiver.colexecServer.AttachProcByUuidOrWait(uid)
+	waiter.Close()
+	switch state {
+	case colexec.RemoteReceiverAttachedNow:
+		return dispatchProc, notifyChannel, nil
+	case colexec.RemoteReceiverAlreadyAttached:
+		return nil, nil, moerr.NewInvalidStateNoCtxf(
+			"remote dispatch receiver %s is already attached", uid.String())
+	case colexec.RemoteReceiverAlreadyClosed:
+		return nil, nil, moerr.NewInvalidStateNoCtxf(
+			"remote dispatch receiver %s is already closed", uid.String())
+	}
+	// A PrepareDoneNotify stream is one retry attempt. Its connection can be
+	// closed after a NotRegistered response, so it must not own or tombstone the
+	// query-wide receiver UUID while registration is still pending.
+	return nil, nil, newRemoteDispatchNotRegisteredYetError(receiver.getMessageContext(), uid)
+}
 
 func (receiver *messageReceiverOnServer) GetProcByUuid(uid uuid.UUID) (*process.Process, process.RemotePipelineInformationChannel, error) {
-	deadline := time.NewTimer(waitRegistrationTimeout)
-	defer deadline.Stop()
-
+	connectionDone := contextDone(receiver.connectionCtx)
+	messageDone := contextDone(receiver.messageCtx)
+	start := time.Now()
+	var publishedWaiter *colexec.RemoteReceiverWaiter
+	releasePublishedWaiter := func() {
+		if publishedWaiter != nil {
+			publishedWaiter.Close()
+			publishedWaiter = nil
+		}
+	}
+	handleAttachState := func(
+		dispatchProc *process.Process,
+		notifyChannel process.RemotePipelineInformationChannel,
+		state colexec.RemoteReceiverAttachState,
+	) (
+		*process.Process,
+		process.RemotePipelineInformationChannel,
+		bool,
+		error,
+	) {
+		switch state {
+		case colexec.RemoteReceiverAttachedNow:
+			releasePublishedWaiter()
+			select {
+			case <-connectionDone:
+				err := moerr.NewStreamClosed(receiver.getMessageContext())
+				receiver.cancelConsumedDispatchRegistration(dispatchProc, err)
+				v2.PipelineRemoteReceiverWaitConnectionClosedHistogram.Observe(time.Since(start).Seconds())
+				return nil, nil, true, err
+			case <-messageDone:
+				err := remoteRegistrationContextError(receiver.getMessageContext())
+				receiver.cancelConsumedDispatchRegistration(dispatchProc, err)
+				v2.PipelineRemoteReceiverWaitMessageCanceledHistogram.Observe(time.Since(start).Seconds())
+				return nil, nil, true, err
+			default:
+			}
+			v2.PipelineRemoteReceiverWaitReadyHistogram.Observe(time.Since(start).Seconds())
+			return dispatchProc, notifyChannel, true, nil
+		case colexec.RemoteReceiverAlreadyAttached:
+			releasePublishedWaiter()
+			v2.PipelineRemoteReceiverWaitAlreadyAttachedHistogram.Observe(time.Since(start).Seconds())
+			return nil, nil, true, moerr.NewInvalidStateNoCtxf(
+				"remote dispatch receiver %s is already attached", uid.String())
+		case colexec.RemoteReceiverAlreadyClosed:
+			releasePublishedWaiter()
+			v2.PipelineRemoteReceiverWaitAlreadyClosedHistogram.Observe(time.Since(start).Seconds())
+			return nil, nil, true, moerr.NewInvalidStateNoCtxf(
+				"remote dispatch receiver %s is already closed", uid.String())
+		default:
+			return nil, nil, false, nil
+		}
+	}
 	for {
-		dispatchProc, notifyChannel, ok, changed := colexec.Get().GetProcByUuidOrWait(uid)
-		if ok {
-			return dispatchProc, notifyChannel, nil
+		select {
+		case <-connectionDone:
+			releasePublishedWaiter()
+			v2.PipelineRemoteReceiverWaitConnectionClosedHistogram.Observe(time.Since(start).Seconds())
+			return nil, nil, moerr.NewStreamClosed(receiver.getMessageContext())
+		case <-messageDone:
+			releasePublishedWaiter()
+			v2.PipelineRemoteReceiverWaitMessageCanceledHistogram.Observe(time.Since(start).Seconds())
+			return nil, nil, remoteRegistrationContextError(receiver.getMessageContext())
+		default:
+		}
+
+		dispatchProc, notifyChannel, state, waiter := receiver.colexecServer.AttachProcByUuidOrWait(uid)
+		if proc, ch, done, err := handleAttachState(dispatchProc, notifyChannel, state); done {
+			waiter.Close()
+			return proc, ch, err
+		}
+		if publishedWaiter != nil {
+			waiter.Close()
+			releasePublishedWaiter()
+			return nil, nil, moerr.NewInvalidStateNoCtxf(
+				"remote dispatch receiver %s disappeared after publication", uid.String())
 		}
 
 		select {
-		case <-receiver.connectionCtx.Done():
-			colexec.Get().GetProcByUuid(uid, true)
-			return nil, nil, nil
-		case <-deadline.C:
-			colexec.Get().GetProcByUuid(uid, true)
-			return nil, nil, moerr.NewInternalErrorf(receiver.messageCtx,
-				"dispatch process not registered within %s, remote CN may have failed", waitRegistrationTimeout)
-		case <-changed:
+		case <-connectionDone:
+			waiter.Close()
+			v2.PipelineRemoteReceiverWaitConnectionClosedHistogram.Observe(time.Since(start).Seconds())
+			return nil, nil, moerr.NewStreamClosed(receiver.getMessageContext())
+		case <-messageDone:
+			waiter.Close()
+			v2.PipelineRemoteReceiverWaitMessageCanceledHistogram.Observe(time.Since(start).Seconds())
+			return nil, nil, remoteRegistrationContextError(receiver.getMessageContext())
+		case <-waiter.Done():
+			publishedWaiter = waiter
 		}
+	}
+}
+
+func contextDone(ctx context.Context) <-chan struct{} {
+	if ctx == nil {
+		return nil
+	}
+	return ctx.Done()
+}
+
+func remoteRegistrationContextError(ctx context.Context) error {
+	if ctx == nil {
+		return context.Canceled
+	}
+	if err := context.Cause(ctx); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return context.Canceled
+}
+
+func (receiver *messageReceiverOnServer) getMessageContext() context.Context {
+	if receiver.messageCtx != nil {
+		return receiver.messageCtx
+	}
+	return context.Background()
+}
+
+func (receiver *messageReceiverOnServer) cancelConsumedDispatchRegistration(
+	dispatchProc *process.Process,
+	err error,
+) {
+	if dispatchProc != nil && dispatchProc.Cancel != nil {
+		dispatchProc.Cancel(err)
 	}
 }

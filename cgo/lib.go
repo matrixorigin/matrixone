@@ -15,8 +15,8 @@
 package cgo
 
 /*
-#cgo CFLAGS: -O3 -std=c99
+#cgo CFLAGS: -O3 -std=c11
 #cgo LDFLAGS: -lm
-#cgo LDFLAGS: -L${SRCDIR}/../thirdparties/install/lib -Wl,-rpath,${SRCDIR}/../thirdparties/install/lib -lusearch_c
+#cgo LDFLAGS: -L${SRCDIR}/../thirdparties/install/lib -Wl,-rpath,${SRCDIR}/../thirdparties/install/lib -lusearch_c -lroaring
 */
 import "C"

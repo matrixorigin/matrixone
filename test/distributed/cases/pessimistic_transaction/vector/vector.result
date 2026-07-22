@@ -47,7 +47,6 @@ id    title    category    price    emb
 1    doc-1    a    10.5    [0.12, 0.22, 0.32, 0.42]
 3    doc-3    a    11.1    [0.2, 0.12, 0.01, 0.55]
 drop index if exists idx_items_emb on items;
-internal error: not found index: idx_items_emb
 create index idx_items_emb using hnsw on items (emb) op_type "vector_l2_ops" m 48 ef_construction 64 ef_search 64;
 show create table items;
 Table    Create Table

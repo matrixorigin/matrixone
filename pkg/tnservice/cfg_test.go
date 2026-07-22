@@ -17,8 +17,18 @@ package tnservice
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/util/toml"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/stretchr/testify/assert"
 )
+
+func TestValidateRejectsInvalidLogtailRPCMessageSize(t *testing.T) {
+	for _, size := range []toml.ByteSize{1, 101 * 1024 * 1024} {
+		c := &Config{UUID: "tn1"}
+		c.LogtailServer.RpcMaxMessageSize = size
+		assert.Error(t, c.Validate())
+	}
+}
 
 func TestValidate(t *testing.T) {
 	c := &Config{}
@@ -33,10 +43,12 @@ func TestValidate(t *testing.T) {
 	assert.Equal(t, defaultHeatbeatInterval, c.HAKeeper.HeatbeatInterval.Duration)
 	assert.Equal(t, defaultHeatbeatTimeout, c.HAKeeper.HeatbeatTimeout.Duration)
 	assert.Equal(t, defaultConnectTimeout, c.LogService.ConnectTimeout.Duration)
+	assert.Equal(t, options.DefaultCheckpointIncrementalInterval, c.Ckp.IncrementalInterval.Duration)
 	assert.Equal(t, "true", c.Txn.IncrementalDedup)
 }
 
 func TestDefaulValue(t *testing.T) {
 	c := Config{}
 	c.SetDefaultValue()
+	assert.Equal(t, options.DefaultCheckpointIncrementalInterval, c.Ckp.IncrementalInterval.Duration)
 }

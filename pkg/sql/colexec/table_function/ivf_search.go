@@ -23,6 +23,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	catalogplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/catalog"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
@@ -118,10 +120,17 @@ func ivfSearchPrepare(proc *process.Process, arg *TableFunction) (tvfState, erro
 	var err error
 	st := &ivfSearchState{}
 
+	st.limit, err = evalLimitExpression(proc, arg.IndexReaderParam.GetLimit(), 1)
+	if err != nil {
+		return nil, err
+	}
+
 	arg.ctr.executorsForArgs, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, arg.Args)
 	arg.ctr.argVecs = make([]*vector.Vector, len(arg.Args))
+	if err != nil {
+		return nil, err
+	}
 
-	st.limit = max(arg.IndexReaderParam.GetLimit().GetLit().GetU64Val(), uint64(1))
 	st.indexReaderParam = arg.IndexReaderParam
 
 	return st, err
@@ -176,7 +185,7 @@ func (u *ivfSearchState) start(tf *TableFunction, proc *process.Process, nthRow 
 
 		// f32vec
 		faVec := tf.ctr.argVecs[1]
-		if faVec.GetType().Oid != types.T_array_float32 && faVec.GetType().Oid != types.T_array_float64 {
+		if !catalogplugin.SupportsVectorType(ivfflatCatalogHooks, faVec.GetType().Oid) {
 			return moerr.NewInvalidInput(proc.Ctx, "Second argument (vector must be a vecf32 or vecf64 type")
 		}
 
@@ -239,7 +248,7 @@ func runIvfSearchVector[T types.RealNumbers](tf *TableFunction, u *ivfSearchStat
 	if err != nil {
 		return err
 	}
-	key := fmt.Sprintf("%s:%d", u.tblcfg.IndexTable, u.idxcfg.Ivfflat.Version)
+	key := ivfSearchCacheKey(u.tblcfg.IndexTable, u.idxcfg.Ivfflat.Version, u.indexReaderParam)
 	rt := vectorindex.RuntimeConfig{
 		Limit:             uint(u.limit),
 		Probe:             uint(u.tblcfg.Nprobe),
@@ -256,7 +265,34 @@ func runIvfSearchVector[T types.RealNumbers](tf *TableFunction, u *ivfSearchStat
 	}
 
 	opStats := tf.OpAnalyzer.GetOpStats()
-	opStats.BackgroundQueries = append(opStats.BackgroundQueries, rt.BackgroundQueries...)
+	if shouldRecordIvfSearchBackgroundQueries(proc, u.indexReaderParam) {
+		opStats.BackgroundQueries = append(opStats.BackgroundQueries, rt.BackgroundQueries...)
+	}
 
 	return nil
+}
+
+func isRemoteRunContext(proc *process.Process) bool {
+	if proc == nil || proc.Ctx == nil {
+		return false
+	}
+	v, _ := proc.Ctx.Value(defines.RemoteRunContext{}).(bool)
+	return v
+}
+
+func shouldRecordIvfSearchBackgroundQueries(proc *process.Process, param *plan.IndexReaderParam) bool {
+	// A Multi-CN query has one partition executing on its coordinator. Record
+	// that local plan as the representative entries scan, regardless of its
+	// partition index. Remote physical plans use JSON for operator statistics;
+	// plan.Expr contains protobuf oneofs that cannot be decoded through that
+	// JSON path, so remote partitions must not carry background query plans.
+	return !isRemoteRunContext(proc)
+}
+
+func ivfSearchCacheKey(indexTable string, version int64, param *plan.IndexReaderParam) string {
+	key := fmt.Sprintf("%s:%d", indexTable, version)
+	if param.GetPartitionCnCnt() > 1 {
+		key = fmt.Sprintf("%s:%d/%d", key, param.GetPartitionCnIdx(), param.GetPartitionCnCnt())
+	}
+	return key
 }

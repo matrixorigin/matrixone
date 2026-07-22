@@ -34,6 +34,7 @@ const (
 	JoinSideBoth            = JoinSideLeft | JoinSideRight
 	JoinSideMark            = 1 << 3
 	JoinSideCorrelated      = 1 << 4
+	JoinSideOuter           = 1 << 5
 )
 
 type ExpandAliasMode int8
@@ -171,7 +172,8 @@ type BaseOptimizer struct {
 type ViewData struct {
 	Stmt            string
 	DefaultDatabase string
-	SecurityType    string `json:"security_type,omitempty"`
+	SQLMode         *string `json:"sql_mode,omitempty"`
+	SecurityType    string  `json:"security_type,omitempty"`
 }
 
 type QueryBuilder struct {
@@ -182,6 +184,8 @@ type QueryBuilder struct {
 	nameByColRef         map[[2]int32]string
 	protectedScans       map[int32]int
 	projectSpecialGuards map[int32]*specialIndexGuard
+	indexHintsByScan     map[int32]*indexHintSet
+	indexHintOwnerByNode map[int32]int32
 
 	tag2Table  map[int32]*TableDef
 	tag2NodeID map[int32]int32
@@ -191,7 +195,6 @@ type QueryBuilder struct {
 
 	isPrepareStatement    bool
 	mysqlCompatible       bool
-	haveOnDuplicateKey    bool // if it's a plan contain onduplicate key node, we can not use some optmize rule
 	isForUpdate           bool // if it's a query plan for update
 	isRestore             bool
 	isRestoreByTs         bool
@@ -206,11 +209,45 @@ type QueryBuilder struct {
 	// spill memory for join
 	joinSpillMem int64
 
+	// spill memory for sort / merge order
+	sortSpillMem int64
+
 	optimizerHints *OptimizerHints
 
 	// optimizationHistory records key optimization steps for debugging remap errors
 	// Only records when optimizations actually change the plan structure
 	optimizationHistory []string
+
+	// Irregular index (IVF/fulltext) synchronous maintenance for the modern DML
+	// path. The modern dedup+MULTI_UPDATE handles the base table and regular
+	// indexes (1:1 row mapping); irregular indexes need computed 1:N maintenance
+	// (tokenize / nearest-centroid) that cannot fit the UpdateCtx model. So the
+	// new-row image is materialized into irregularMaintSourceStep, and the
+	// maintenance sub-plans are appended after createQuery() (post-optimizer
+	// form), mirroring how regular insert maintenance is built.
+	//
+	// For ON DUPLICATE KEY UPDATE the conflicting rows must also drop their old
+	// index entries: irregularMaintDeleteStep holds the old-row image (keyed by
+	// the immutable PK) from which delete sub-plans are built. It is -1 (unset)
+	// for plain INSERT/LOAD where no old rows exist.
+	irregularMaintSourceStep int32
+	irregularMaintDeleteStep int32
+	// irregularMaintDeletePkPos / Typ identify, inside the materialized maintenance
+	// step, the base-table PK column the stale index entries are keyed by. For ODKU
+	// this is the (immutable) final PK; for REPLACE it is the matched old row's PK,
+	// which can differ from the new PK when the conflict is on a non-PK unique key.
+	irregularMaintDeletePkPos int32
+	irregularMaintDeletePkTyp plan.Type
+	irregularMaintIndexes     []*plan.IndexDef
+	irregularMaintTableDef    *plan.TableDef
+	irregularMaintObjRef      *plan.ObjectRef
+	// sinkColRef records, per materialized step, the post-pruning column remap
+	// produced by createQuery's final remapAllColRefs pass: {step, originalColPos}
+	// -> newColPos. The irregular-index maintenance sub-plans are appended after
+	// createQuery and read the (already column-pruned) materialized sink directly,
+	// so positions recorded pre-prune (e.g. the REPLACE old-PK key) must be remapped
+	// through this map before use.
+	sinkColRef map[[2]int32]int
 }
 
 type OptimizerHints struct {
@@ -233,6 +270,7 @@ type OptimizerHints struct {
 	forceOneCN                 int
 	execType                   int
 	disableRightJoin           int
+	disableRightSingleRF       int
 	printShuffle               int
 	skipDedup                  int
 }
@@ -317,6 +355,8 @@ type BindContext struct {
 	windowByAst    map[string]int32
 	projectByExpr  map[string]int32
 	timeByAst      map[string]int32
+
+	projectColByAst map[string]int32
 
 	projectByAst []SelectField
 
@@ -406,17 +446,33 @@ type Binder interface {
 }
 
 type baseBinder struct {
-	sysCtx    context.Context
-	builder   *QueryBuilder
-	ctx       *BindContext
-	impl      Binder
-	boundCols []string
+	sysCtx           context.Context
+	builder          *QueryBuilder
+	ctx              *BindContext
+	impl             Binder
+	boundCols        []string
+	numericParamType *Type
 }
 
 type DefaultBinder struct {
 	baseBinder
 	typ  Type
 	cols []string
+}
+
+// ReplaceValueBinder binds the RHS value expressions of a `REPLACE ... SET`
+// statement. MySQL evaluates an RHS reference to a target-table column as
+// DEFAULT(col), so this binder resolves every column reference to that
+// column's default expression instead of an actual row value.
+//
+// The typ field carries the destination column type so that literal values
+// (especially DECIMAL / scientific-notation) bind with the same precision as
+// DefaultBinder. BindExpr delegates to baseBindExpr which uses this typ to
+// drive type-aware numeric binding.
+type ReplaceValueBinder struct {
+	baseBinder
+	typ      plan.Type
+	tableDef *plan.TableDef
 }
 
 type UpdateBinder struct {
@@ -433,6 +489,7 @@ type OndupUpdateBinder struct {
 
 type TableBinder struct {
 	baseBinder
+	allowSubquery bool
 }
 
 type WhereBinder struct {
@@ -446,7 +503,8 @@ type GroupBinder struct {
 
 type HavingBinder struct {
 	baseBinder
-	insideAgg bool
+	insideAgg    bool
+	rollupHaving bool
 }
 
 type ProjectionBinder struct {
@@ -456,7 +514,8 @@ type ProjectionBinder struct {
 
 type OrderBinder struct {
 	*ProjectionBinder
-	selectList tree.SelectExprs
+	selectList     tree.SelectExprs
+	distinctBinder *distinctOrderBinder
 }
 
 type LimitBinder struct {
@@ -481,6 +540,7 @@ var _ Binder = (*ProjectionBinder)(nil)
 var _ Binder = (*LimitBinder)(nil)
 var _ Binder = (*UpdateBinder)(nil)
 var _ Binder = (*OndupUpdateBinder)(nil)
+var _ Binder = (*ReplaceValueBinder)(nil)
 
 var Sequence_cols_name = []string{"last_seq_num", "min_value", "max_value", "start_value", "increment_value", "cycle", "is_called"}
 

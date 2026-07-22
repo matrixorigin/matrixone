@@ -1,0 +1,87 @@
+drop database if exists geo32;
+create database geo32;
+use geo32;
+drop table if exists t32;
+create table t32(id int, g geometry32, p point32, l linestring32);
+show create table t32;
+Table    Create Table
+t32    CREATE TABLE `t32` (\n  `id` int DEFAULT NULL,\n  `g` geometry32 DEFAULT NULL,\n  `p` point32 DEFAULT NULL,\n  `l` linestring32 DEFAULT NULL\n)
+drop table t32;
+drop table if exists g32;
+create table g32(id int, g geometry32);
+insert into g32 values (1, st_geomfromtext('POINT(1 2)'));
+insert into g32 values (2, st_geomfromtext('LINESTRING(0 0,3 4)'));
+insert into g32 values (3, st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))'));
+select id, st_astext(g) as wkt from g32 order by id;
+id    wkt
+1    POINT(1 2)
+2    LINESTRING(0 0,3 4)
+3    POLYGON((0 0,2 0,2 2,0 2,0 0))
+select length(cast(g as varbinary)) as f32_point_bytes from g32 where id = 1;
+f32_point_bytes
+13
+select id, st_geometrytype(g) as gtype from g32 order by id;
+id    gtype
+1    POINT
+2    LINESTRING
+3    POLYGON
+select st_x(g) as x, st_y(g) as y from g32 where id = 1;
+x    y
+1.0    2.0
+select st_area(g) as area from g32 where id = 3;
+area
+4.0
+select st_length(g) as len from g32 where id = 2;
+len
+5.0
+select st_astext(st_centroid(g)) as centroid from g32 where id = 3;
+centroid
+POINT(1 1)
+drop table g32;
+select st_astext(cast(st_geomfromtext('POINT(1.5 2.25)') as geometry32)) as to32;
+to32
+POINT(1.5 2.25)
+select st_astext(cast(cast(st_geomfromtext('POINT(1.5 2.25)') as geometry32) as geometry)) as roundtrip;
+roundtrip
+POINT(1.5 2.25)
+select st_astext(cast('LINESTRING(0 0,1 1)' as geometry32)) as text_to_32;
+text_to_32
+LINESTRING(0 0,1 1)
+drop table if exists g32p;
+create table g32p(id int, g geometry32);
+insert into g32p values
+(1, st_geomfromtext('POINT(1.5 2.5)')),
+(2, st_geomfromtext('LINESTRING(0 0, 3 4)')),
+(3, st_geomfromtext('POLYGON((0 0, 4 0, 4 4, 0 4, 0 0))'));
+select st_x(g) as x, st_y(g) as y from g32p where id = 1;
+x    y
+1.5    2.5
+select length(cast(st_centroid(g) as varbinary)) as centroid_bytes from g32p where id = 3;
+centroid_bytes
+13
+select length(cast(st_startpoint(g) as varbinary)) as start_bytes from g32p where id = 2;
+start_bytes
+13
+select st_astext(st_swapxy(g)) as swapped from g32p where id = 1;
+swapped
+POINT(2.5 1.5)
+select st_astext(st_envelope(g)) as env from g32p where id = 2;
+env
+POLYGON((0 0,3 0,3 4,0 4,0 0))
+select st_astext(st_convexhull(g)) as hull from g32p where id = 3;
+hull
+POLYGON((0 0,4 0,4 4,0 4,0 0))
+select length(cast(st_buffer(g, 1) as varbinary)) > 0 as buffered from g32p where id = 1;
+buffered
+1
+select st_length(g) as len from g32p where id = 2;
+len
+5.0
+select st_area(g) as area from g32p where id = 3;
+area
+16.0
+select st_distance(a.g, b.g) as dist from g32p a, g32p b where a.id = 1 and b.id = 1;
+dist
+0.0
+drop table g32p;
+drop database geo32;

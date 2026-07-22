@@ -18,7 +18,6 @@ import (
 	"context"
 	"math/rand"
 	"reflect"
-	"strconv"
 	"strings"
 	"testing"
 	"testing/quick"
@@ -28,6 +27,7 @@ import (
 	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -475,7 +475,7 @@ func TestLoadRuleCacheIncludesSecondaryRoles(t *testing.T) {
 	rules, err := loadRuleCache(context.Background(), ses)
 	require.NoError(t, err)
 	require.Equal(t, map[string]string{
-		"db1.t1": "(select a, age from db1.t1 where age < 3) union distinct (select A, Age from db1.t1 where age > 28)",
+		"db1.t1": "select a, age from db1.t1 where (age < 3) or (age > 28)",
 		"db2.t2": "select a from db2.t2 where a = 20",
 	}, rules)
 }
@@ -546,6 +546,220 @@ func TestRewriteSQLPropagatesRuleCacheLoadError(t *testing.T) {
 	require.Equal(t, sql, rewritten)
 }
 
+func TestRewriteSQLMaterializesPolicyPerStatement(t *testing.T) {
+	ctx := context.Background()
+	newSession := func(t *testing.T, roleRule, sessionRule string) *Session {
+		t.Helper()
+		ctrl := gomock.NewController(t)
+		ses := newTestSession(t, ctrl)
+		ses.rewriteEnabled.Store(true)
+		if sessionRule != "" {
+			require.NoError(t, ses.SetSessionSysVar(ctx, "remap_rewrites",
+				`{"rewrites":{"db.t":"`+sessionRule+`"}}`))
+		}
+		ses.ruleCache = make(map[string]string)
+		if roleRule != "" {
+			ses.ruleCache["db.t"] = roleRule
+		}
+		return ses
+	}
+	decodeChain := func(t *testing.T, fragment string) []string {
+		t.Helper()
+		content, ok := leadingHintContent(fragment)
+		require.True(t, ok, "fragment has no materialized hint: %q", fragment)
+		chains, _, err := parsers.DecodeRewriteHint(ctx, content)
+		require.NoError(t, err)
+		return chains["db.t"]
+	}
+
+	t.Run("parser boundary errors keep parse classification", func(t *testing.T) {
+		ses := newSession(t, "", "")
+		sql := "/*! {\n" +
+			"  \"rewrites\": {\"hint_test.users\": \"select * from users\"}\n" +
+			"} */ drop table if exists users"
+
+		rewritten, err := rewriteSQL(ctx, ses, sql)
+		require.Equal(t, sql, rewritten)
+		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrParseError),
+			"expected parse error, got %T: %v", err, err)
+		require.True(t, strings.HasPrefix(err.Error(), "SQL parser error:"),
+			"expected parser error prefix, got %q", err.Error())
+	})
+
+	t.Run("role and session policy reach later statement", func(t *testing.T) {
+		ses := newSession(t,
+			"select * from db.t where role_keep = 1",
+			"select * from db.t where session_keep = 1")
+		rewritten, err := rewriteSQL(ctx, ses, "select 1; analyze table db.t(id)")
+		require.NoError(t, err)
+		fragments := parsers.SplitSqlBySemicolon(rewritten)
+		require.Len(t, fragments, 2)
+		require.Equal(t, []string{
+			"select * from db.t where role_keep = 1",
+			"select * from db.t where session_keep = 1",
+		}, decodeChain(t, fragments[1]))
+	})
+
+	t.Run("later inline layers after role and session", func(t *testing.T) {
+		ses := newSession(t,
+			"select * from db.t where role_keep = 1",
+			"select * from db.t where session_keep = 1")
+		sql := `select 1; /*+ {"rewrites":{"db.t":"select * from db.t where inline_keep = 1"}} */ analyze table db.t(id)`
+		rewritten, err := rewriteSQL(ctx, ses, sql)
+		require.NoError(t, err)
+		fragments := parsers.SplitSqlBySemicolon(rewritten)
+		require.Len(t, fragments, 2)
+		require.Equal(t, []string{
+			"select * from db.t where role_keep = 1",
+			"select * from db.t where session_keep = 1",
+			"select * from db.t where inline_keep = 1",
+		}, decodeChain(t, fragments[1]))
+	})
+
+	t.Run("strings comments blanks and trailing comment stay aligned", func(t *testing.T) {
+		ses := newSession(t, "select * from db.t where role_keep = 1", "")
+		sql := "select ';' as semi /* block ; */;; -- comment ;\nanalyze table db.t(id); /* tail ; comment */"
+		rewritten, err := rewriteSQL(ctx, ses, sql)
+		require.NoError(t, err)
+		fragments := parsers.SplitSqlBySemicolon(rewritten)
+		require.Len(t, fragments, 4)
+		require.Contains(t, fragments[0], "select ';' as semi /* block ; */")
+		require.Empty(t, fragments[1])
+		require.Contains(t, fragments[2], "analyze table db.t(id)")
+		require.Equal(t, []string{"select * from db.t where role_keep = 1"}, decodeChain(t, fragments[2]))
+		require.Equal(t, "/* tail ; comment */", fragments[3])
+
+		stmts, err := parsers.Parse(ctx, dialect.MYSQL, rewritten, 1)
+		require.NoError(t, err)
+		require.Len(t, stmts, 2)
+		records, err := sqlForRecordByStatement(ctx, rewritten)
+		require.NoError(t, err)
+		require.Len(t, records, 2)
+		require.Contains(t, records[0], "select ';' as semi /* block ; */")
+		require.Contains(t, records[1], "analyze table db.t(id)")
+		require.Equal(t, []string{"select * from db.t where role_keep = 1"}, decodeChain(t, records[1]))
+	})
+
+	t.Run("single statement behavior stays unchanged", func(t *testing.T) {
+		ses := newSession(t, "select * from db.t where role_keep = 1", "")
+		rewritten, err := rewriteSQL(ctx, ses, "  analyze table db.t(id)  ")
+		require.NoError(t, err)
+		require.Equal(t, []string{"select * from db.t where role_keep = 1"}, decodeChain(t, rewritten))
+		require.True(t, strings.HasSuffix(rewritten, "  analyze table db.t(id)  "))
+	})
+
+	t.Run("single synthetic blank record stays available", func(t *testing.T) {
+		records, err := sqlForRecordByStatement(ctx, "")
+		require.NoError(t, err)
+		require.Equal(t, []string{""}, records)
+	})
+
+	t.Run("multi blank and comment fragments keep empty statement record", func(t *testing.T) {
+		for _, sql := range []string{";;", "/* comment */; -- another comment"} {
+			records, err := sqlForRecordByStatement(ctx, sql)
+			require.NoError(t, err)
+			require.Equal(t, []string{""}, records, sql)
+		}
+	})
+
+	t.Run("compound create task is one policy boundary", func(t *testing.T) {
+		ses := newSession(t, "select * from db.t where role_keep = 1", "")
+		sql := "create task task_quotes when ('gate' = 'gate') as begin\n" +
+			"  insert into gate_sink select 'gate-ok';\n" +
+			"  select case when 1 = 1 then 'PASS' else 'FAIL' end;\n" +
+			"end"
+
+		rewritten, err := rewriteSQL(ctx, ses, sql)
+		require.NoError(t, err)
+		require.Equal(t, 1, strings.Count(rewritten, `/*+ {"rewrites"`))
+
+		stmts, err := parsers.Parse(ctx, dialect.MYSQL, rewritten, 1)
+		require.NoError(t, err)
+		defer func() {
+			for _, stmt := range stmts {
+				stmt.Free()
+			}
+		}()
+		require.Len(t, stmts, 1)
+		require.IsType(t, &tree.CreateSQLTask{}, stmts[0])
+		require.NoError(t, parsers.AddRewriteHints(ctx, stmts, rewritten))
+	})
+
+	t.Run("compound boundary preserves following remap", func(t *testing.T) {
+		ses := newSession(t, "select * from db.t where role_keep = 1", "")
+		compound := "create task task_quotes when ('gate' = 'gate') as begin\n" +
+			"  insert into gate_sink select 'gate-ok';\n" +
+			"  select case when 1 = 1 then 'PASS' else 'FAIL' end;\n" +
+			"end"
+		sql := compound + `; /*+ {"remapdb":{"src":"dst"}} */ select * from src.t`
+
+		rewritten, err := rewriteSQL(ctx, ses, sql)
+		require.NoError(t, err)
+		remaps, err := extractRemapDbByStatement(ctx, rewritten)
+		require.NoError(t, err)
+		require.Len(t, remaps, 2)
+		require.Empty(t, remaps[0])
+		require.Equal(t, "dst", remaps[1]["src"])
+
+		records, err := sqlForRecordByStatement(ctx, rewritten)
+		require.NoError(t, err)
+		require.Len(t, records, 2)
+		require.Contains(t, records[0], "insert into gate_sink")
+		require.Contains(t, records[0], "select case when")
+	})
+}
+
+func TestRewritePolicySnapshotUsesCurrentSQLModeAndFrozenEnablement(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	ses.rewriteEnabled.Store(true)
+	ses.ruleCache = map[string]string{}
+	require.NoError(t, ses.SetSessionSysVar(ctx, "remap_rewrites", `{"remapdb":{"src":"dst"}}`))
+
+	policy, err := captureRewritePolicy(ctx, ses)
+	require.NoError(t, err)
+
+	// Earlier statements in the same COM_QUERY may mutate both values. The
+	// request must retain the original policy while parsing the next fragment
+	// with the SQL mode that is current at that point in staged execution.
+	ses.rewriteEnabled.Store(false)
+	require.NoError(t, ses.SetSessionSysVar(ctx, "remap_rewrites", ""))
+	rewritten, err := policy.rewrite(ctx, `select 'a\'; select * from src.t`, "NO_BACKSLASH_ESCAPES")
+	require.NoError(t, err)
+
+	fragments, err := parsers.SplitSqlByStatementWithSQLMode(ctx, rewritten, "NO_BACKSLASH_ESCAPES")
+	require.NoError(t, err)
+	require.Len(t, fragments, 2)
+	for _, fragment := range fragments {
+		content, ok := leadingHintContent(fragment)
+		require.True(t, ok)
+		_, remapDb, err := parsers.DecodeRewriteHint(ctx, content)
+		require.NoError(t, err)
+		require.Equal(t, map[string]string{"src": "dst"}, remapDb)
+	}
+}
+
+func TestRewriteSQLFromMaterializedPolicy(t *testing.T) {
+	ctx := context.Background()
+	outer := `/*+ {"rewrites":{"src.t":["select * from src.t where role_keep = 1","select * from src.t where session_keep = 1"]},"remapdb":{"src":"session_db"}} */ prepare s from 'select 1'`
+	inner := `/*+ {"rewrites":{"src.t":"select * from src.t where inline_keep = 1"},"remapdb":{"src":"inline_db"}} */ select * from src.t`
+
+	rewritten, err := rewriteSQLFromMaterializedPolicy(ctx, outer, inner)
+	require.NoError(t, err)
+	content, ok := leadingHintContent(rewritten)
+	require.True(t, ok)
+	chains, remapDb, err := parsers.DecodeRewriteHint(ctx, content)
+	require.NoError(t, err)
+	require.Equal(t, []string{
+		"select * from src.t where role_keep = 1",
+		"select * from src.t where session_keep = 1",
+		"select * from src.t where inline_keep = 1",
+	}, chains["src.t"])
+	require.Equal(t, "inline_db", remapDb["src"])
+}
+
 func TestValidateRewriteRuleSQL(t *testing.T) {
 	ctx := context.Background()
 
@@ -604,6 +818,283 @@ func TestHandleAlterRoleAddRuleRejectsInvalidRuleSQLBeforeWriting(t *testing.T) 
 		require.NotContains(t, strings.ToLower(sql), "delete from mo_catalog.mo_role_rule")
 		require.NotContains(t, strings.ToLower(sql), "insert into mo_catalog.mo_role_rule")
 	}
+}
+
+// TestParseSessionRewrites covers the remap_rewrites value parser: the bare map
+// form, the wrapped {"rewrites": {...}} form, empty/blank input, and malformed
+// JSON.
+func TestParseSessionRewrites(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("empty", func(t *testing.T) {
+		rules, remap, err := parseSessionRewrites(ctx, "")
+		require.NoError(t, err)
+		require.Len(t, rules, 0)
+		require.Len(t, remap, 0)
+	})
+	t.Run("blank", func(t *testing.T) {
+		rules, remap, err := parseSessionRewrites(ctx, "   ")
+		require.NoError(t, err)
+		require.Len(t, rules, 0)
+		require.Len(t, remap, 0)
+	})
+	t.Run("bare map", func(t *testing.T) {
+		rules, remap, err := parseSessionRewrites(ctx, `{"db1.t1": "select a, b from db2.t1"}`)
+		require.NoError(t, err)
+		require.Equal(t, map[string]string{"db1.t1": "select a, b from db2.t1"}, rules)
+		require.Len(t, remap, 0)
+	})
+	t.Run("wrapped rewrites form", func(t *testing.T) {
+		rules, remap, err := parseSessionRewrites(ctx, `{"rewrites": {"db1.t1": "select a from db2.t1"}}`)
+		require.NoError(t, err)
+		require.Equal(t, map[string]string{"db1.t1": "select a from db2.t1"}, rules)
+		require.Len(t, remap, 0)
+	})
+	t.Run("remapdb only", func(t *testing.T) {
+		rules, remap, err := parseSessionRewrites(ctx, `{"remapdb": {"dbxxx": "dbyyy"}}`)
+		require.NoError(t, err)
+		require.Len(t, rules, 0)
+		require.Equal(t, map[string]string{"dbxxx": "dbyyy"}, remap)
+	})
+	t.Run("rewrites and remapdb", func(t *testing.T) {
+		rules, remap, err := parseSessionRewrites(ctx,
+			`{"rewrites": {"db.t1": "select * from db.t1"}, "remapdb": {"dbxxx": "dbyyy"}}`)
+		require.NoError(t, err)
+		require.Equal(t, map[string]string{"db.t1": "select * from db.t1"}, rules)
+		require.Equal(t, map[string]string{"dbxxx": "dbyyy"}, remap)
+	})
+	t.Run("two keys", func(t *testing.T) {
+		rules, _, err := parseSessionRewrites(ctx, `{"db.t1": "select * from t1", "db.t2": "select * from t2"}`)
+		require.NoError(t, err)
+		require.Len(t, rules, 2)
+	})
+	t.Run("malformed json", func(t *testing.T) {
+		_, _, err := parseSessionRewrites(ctx, `{not json}`)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "invalid remap_rewrites value")
+	})
+	t.Run("array (chain) rewrite value is rejected", func(t *testing.T) {
+		// A table must map to a single SQL string, not a list.
+		_, _, err := parseSessionRewrites(ctx,
+			`{"rewrites": {"db.t": ["select * from db.t", "select * from db.t where x > 0"]}}`)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "must be a single SQL string")
+	})
+	t.Run("rewrite value of wrong type is rejected", func(t *testing.T) {
+		_, _, err := parseSessionRewrites(ctx, `{"rewrites": {"db.t": 123}}`)
+		require.Error(t, err)
+	})
+}
+
+// TestExtractInlineRemapDb covers reading back remapdb from the merged hint,
+// which must stay correct even when rewrites are present in array (chain) form.
+func TestExtractInlineRemapDb(t *testing.T) {
+	t.Run("remapdb alongside chained rewrites", func(t *testing.T) {
+		remap := extractInlineRemapDb(
+			`/*+ {"rewrites": {"db.t": ["s1", "s2"]}, "remapdb": {"dbx": "dby"}} */ select * from dbx.t`)
+		require.Equal(t, "dby", remap["dbx"])
+	})
+	t.Run("no remapdb", func(t *testing.T) {
+		require.Nil(t, extractInlineRemapDb(`/*+ {"rewrites": {"db.t": "s1"}} */ select 1`))
+	})
+	t.Run("no hint", func(t *testing.T) {
+		require.Nil(t, extractInlineRemapDb(`select 1`))
+	})
+}
+
+// TestValidateRemapRewrites covers the SET-time validation of the
+// remap_rewrites session variable.
+func TestValidateRemapRewrites(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("empty is valid", func(t *testing.T) {
+		require.NoError(t, validateRemapRewrites(ctx, ""))
+	})
+	t.Run("valid bare map", func(t *testing.T) {
+		require.NoError(t, validateRemapRewrites(ctx, `{"db.t1": "select a from db2.t1"}`))
+	})
+	t.Run("valid wrapped form", func(t *testing.T) {
+		require.NoError(t, validateRemapRewrites(ctx, `{"rewrites": {"db.t1": "select a from db2.t1"}}`))
+	})
+	t.Run("non-string rejected", func(t *testing.T) {
+		err := validateRemapRewrites(ctx, int64(1))
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "must be a string")
+	})
+	t.Run("malformed json rejected", func(t *testing.T) {
+		err := validateRemapRewrites(ctx, `{not json}`)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "invalid remap_rewrites value")
+	})
+	t.Run("non-select rule rejected", func(t *testing.T) {
+		err := validateRemapRewrites(ctx, `{"db.t1": "delete from t1"}`)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "only accept SELECT-like statements")
+	})
+	t.Run("empty key rejected", func(t *testing.T) {
+		err := validateRemapRewrites(ctx, `{"  ": "select 1"}`)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "table key must not be empty")
+	})
+	t.Run("unqualified key rejected (issue #25188)", func(t *testing.T) {
+		err := validateRemapRewrites(ctx, `{"t": "select * from t where i < 10"}`)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "must be qualified as database.table")
+	})
+	t.Run("over-qualified key rejected", func(t *testing.T) {
+		err := validateRemapRewrites(ctx, `{"a.b.c": "select 1"}`)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "must be qualified as database.table")
+	})
+	t.Run("empty db part rejected", func(t *testing.T) {
+		err := validateRemapRewrites(ctx, `{".t": "select 1"}`)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "must be qualified as database.table")
+	})
+	t.Run("valid remapdb multi", func(t *testing.T) {
+		require.NoError(t, validateRemapRewrites(ctx, `{"remapdb": {"a": "b", "x": "y"}}`))
+	})
+	t.Run("remapdb invalid identifier rejected", func(t *testing.T) {
+		err := validateRemapRewrites(ctx, `{"remapdb": {"a.b": "c"}}`)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "valid identifiers")
+	})
+	t.Run("remapdb chaining rejected (x->y, y->z)", func(t *testing.T) {
+		err := validateRemapRewrites(ctx, `{"remapdb": {"x": "y", "y": "z"}}`)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "must not be both a source and a destination")
+	})
+	t.Run("remapdb self-map rejected (x->x)", func(t *testing.T) {
+		err := validateRemapRewrites(ctx, `{"remapdb": {"x": "x"}}`)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "must not be both a source and a destination")
+	})
+	t.Run("remapdb system database source rejected", func(t *testing.T) {
+		err := validateRemapRewrites(ctx, `{"remapdb": {"mysql": "y"}}`)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "must not remap a system database")
+	})
+	t.Run("remapdb mo_ prefix destination rejected", func(t *testing.T) {
+		err := validateRemapRewrites(ctx, `{"remapdb": {"x": "mo_secret"}}`)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "must not remap a system database")
+	})
+	t.Run("remapdb multiple sources to one dest allowed", func(t *testing.T) {
+		require.NoError(t, validateRemapRewrites(ctx, `{"remapdb": {"a": "z", "b": "z"}}`))
+	})
+}
+
+// TestLeadingHintContent covers extraction of the inner content of a leading
+// /*+ ... */ hint.
+func TestLeadingHintContent(t *testing.T) {
+	cases := []struct {
+		name   string
+		sql    string
+		want   string
+		wantOk bool
+	}{
+		{"plus hint", `/*+ {"rewrites": {}} */ select 1`, ` {"rewrites": {}} `, true},
+		{"bang plus hint", `/*!+ {"a":1} */ select 1`, ` {"a":1} `, true},
+		{"leading spaces", "  \n/*+ {} */ select 1", " {} ", true},
+		{"no hint", "select 1", "", false},
+		{"plain comment not a hint", "/* normal */ select 1", "", false},
+		{"unterminated", "/*+ {oops select 1", "", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, ok := leadingHintContent(c.sql)
+			require.Equal(t, c.wantOk, ok)
+			if c.wantOk {
+				require.Equal(t, c.want, got)
+			}
+		})
+	}
+}
+
+// TestExtractInlineRewrites covers pulling rewrite rules out of an inline hint.
+func TestExtractInlineRewrites(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("no hint", func(t *testing.T) {
+		rules, remap, err := extractInlineRewrites(ctx, "select * from t")
+		require.NoError(t, err)
+		require.Len(t, rules, 0)
+		require.Len(t, remap, 0)
+	})
+	t.Run("non-json hint ignored", func(t *testing.T) {
+		rules, remap, err := extractInlineRewrites(ctx, "/*+ NO_INDEX(t) */ select * from t")
+		require.NoError(t, err)
+		require.Len(t, rules, 0)
+		require.Len(t, remap, 0)
+	})
+	t.Run("rewrites hint (single string value)", func(t *testing.T) {
+		rules, _, err := extractInlineRewrites(ctx, `/*+ {"rewrites": {"db.t1": "select a from db.t1"}} */ select * from db.t1`)
+		require.NoError(t, err)
+		require.Equal(t, map[string]string{"db.t1": "select a from db.t1"}, rules)
+	})
+	t.Run("array (chain) value rejected: user input must be a string", func(t *testing.T) {
+		_, _, err := extractInlineRewrites(ctx, `/*+ {"rewrites": {"db.t1": ["select a from db.t1", "select a from db.t1 where a > 0"]}} */ select * from db.t1`)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "must be a single SQL string")
+	})
+	t.Run("object value rejected", func(t *testing.T) {
+		_, _, err := extractInlineRewrites(ctx, `/*+ {"rewrites": {"db.t1": {"x": "y"}}} */ select * from db.t1`)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "must be a single SQL string")
+	})
+	t.Run("remapdb hint", func(t *testing.T) {
+		_, remap, err := extractInlineRewrites(ctx, `/*+ {"remapdb": {"dbxxx": "dbyyy"}} */ select * from dbxxx.t`)
+		require.NoError(t, err)
+		require.Equal(t, map[string]string{"dbxxx": "dbyyy"}, remap)
+	})
+	t.Run("malformed json hint is deferred to the parser (no error here)", func(t *testing.T) {
+		// extractInlineRewrites only rejects array/object values; other parse
+		// problems are left to AddRewriteHints so the error is reported there.
+		rules, remap, err := extractInlineRewrites(ctx, `/*+ {not json} */ select 1`)
+		require.NoError(t, err)
+		require.Len(t, rules, 0)
+		require.Len(t, remap, 0)
+	})
+}
+
+// TestFormatRewriteHintChains verifies that a single-layer chain is emitted as
+// a plain string (backward compatible) and a multi-layer chain is emitted as an
+// ordered JSON array (innermost first, outermost last).
+func TestFormatRewriteHintChains(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("single layer is a string", func(t *testing.T) {
+		hint, err := formatRewriteHintChains(ctx, map[string][]string{
+			"db.t1": {"select * from db.t1 where a > 1"},
+		}, nil)
+		require.NoError(t, err)
+		require.Contains(t, hint, `"db.t1":"select * from db.t1 where a > 1"`)
+		require.NotContains(t, hint, "[")
+	})
+
+	t.Run("multi layer is an ordered array", func(t *testing.T) {
+		hint, err := formatRewriteHintChains(ctx, map[string][]string{
+			"db.t1": {"role_sql", "session_sql", "inline_sql"},
+		}, nil)
+		require.NoError(t, err)
+		require.Contains(t, hint, `"db.t1":["role_sql","session_sql","inline_sql"]`)
+	})
+
+	t.Run("remapdb included", func(t *testing.T) {
+		hint, err := formatRewriteHintChains(ctx, map[string][]string{
+			"db.t1": {"select * from db.t1"},
+		}, map[string]string{"dbxxx": "dbyyy"})
+		require.NoError(t, err)
+		require.Contains(t, hint, `"remapdb":{"dbxxx":"dbyyy"}`)
+	})
+
+	t.Run("empty chain skipped", func(t *testing.T) {
+		hint, err := formatRewriteHintChains(ctx, map[string][]string{
+			"db.t1": {},
+		}, nil)
+		require.NoError(t, err)
+		require.Contains(t, hint, `"rewrites":{}`)
+	})
 }
 
 func TestHandleAlterRoleAddRuleWritesValidRuleAndInvalidatesCache(t *testing.T) {
@@ -687,11 +1178,22 @@ func TestMergeRewriteRules(t *testing.T) {
 	right := "select a from db1.t1 where a = 2"
 	merged, err := mergeRewriteRules(ctx, left, right)
 	require.NoError(t, err)
-	require.Equal(t, "(select a from db1.t1 where a = 1) union distinct (select a from db1.t1 where a = 2)", merged)
+	require.Equal(t, "select a from db1.t1 where (a = 1) or (a = 2)", merged)
+
+	// Role rule merging is a base-row visibility union, not UNION DISTINCT over
+	// projected values. Partial projections are intentionally OR-merged so two
+	// visible rows with the same projected value are not collapsed here.
+	rowUnionMerged, err := mergeRewriteRules(
+		ctx,
+		"select a from db1.t1 where role_marker = 1",
+		"select a from db1.t1 where role_marker = 2",
+	)
+	require.NoError(t, err)
+	require.Equal(t, "select a from db1.t1 where (role_marker = 1) or (role_marker = 2)", rowUnionMerged)
 
 	merged, err = mergeRewriteRules(ctx, merged, "select a from db1.t1 where a = 3")
 	require.NoError(t, err)
-	require.Equal(t, "((select a from db1.t1 where a = 1) union distinct (select a from db1.t1 where a = 2)) union distinct (select a from db1.t1 where a = 3)", merged)
+	require.Equal(t, "select a from db1.t1 where ((a = 1) or (a = 2)) or (a = 3)", merged)
 
 	merged, err = mergeRewriteRules(ctx, "select a, age from db1.t1 where age > 28", "select a from db1.t1 where a = 2")
 	require.NoError(t, err)
@@ -703,14 +1205,14 @@ func TestMergeRewriteRules(t *testing.T) {
 	merged, err = mergeRewriteRules(ctx, "select * from db1.t1 where age > 28", "select * from db1.t1 where age < 3")
 	require.NoError(t, err)
 	require.Equal(t,
-		"select * from db1.t1 where age < 3",
+		"select * from db1.t1 where (age > 28) or (age < 3)",
 		merged,
 	)
 
 	merged, err = mergeRewriteRules(ctx, "select t.* from db1.t1 as t where age > 28", "select t.* from db1.t1 as t where age < 3")
 	require.NoError(t, err)
 	require.Equal(t,
-		"select t.* from db1.t1 as t where age < 3",
+		"select t.* from db1.t1 as t where (age > 28) or (age < 3)",
 		merged,
 	)
 
@@ -775,11 +1277,11 @@ func TestMergeRewriteRules(t *testing.T) {
 
 	merged, err = mergeRewriteRules(ctx, "select a as x from db1.t1 where age > 28", "select a as x from db1.t1 where age < 3")
 	require.NoError(t, err)
-	require.Equal(t, "(select a as x from db1.t1 where age > 28) union distinct (select a as x from db1.t1 where age < 3)", merged)
+	require.Equal(t, "select a as x from db1.t1 where (age > 28) or (age < 3)", merged)
 
 	merged, err = mergeRewriteRules(ctx, "select a + 1 as b from db1.t1 where age > 28", "select a + 1 as b from db1.t1 where age < 3")
 	require.NoError(t, err)
-	require.Equal(t, "(select a + 1 as b from db1.t1 where age > 28) union distinct (select a + 1 as b from db1.t1 where age < 3)", merged)
+	require.Equal(t, "select a + 1 as b from db1.t1 where (age > 28) or (age < 3)", merged)
 
 	_, err = mergeRewriteRules(ctx, "select a from", "select a from db1.t1")
 	require.Error(t, err)
@@ -829,301 +1331,131 @@ func TestMergeRewriteRulesFallbackWhenEitherSideIsUnmergeable(t *testing.T) {
 	}
 }
 
-func TestRewriteRuleOutputColumns(t *testing.T) {
-	ctx := context.Background()
+func TestTrimRewriteRuleForMerge(t *testing.T) {
+	require.Equal(t, "select a from db1.t1", trimRewriteRuleForMerge("  select a from db1.t1  ;;  ; "))
+	require.Equal(t, "select a from db1.t1", trimRewriteRuleForMerge("select a from db1.t1"))
+	require.Equal(t, "", trimRewriteRuleForMerge(" ; ; "))
+}
 
-	columns, ok, err := rewriteRuleOutputColumns(ctx, "select A as x, a + 1 as b from db1.t1")
-	require.NoError(t, err)
-	require.True(t, ok)
-	require.Equal(t, []rewriteRuleOutputColumn{
-		{name: "x", expr: "a"},
-		{name: "b", expr: "a + 1"},
-	}, columns)
-
+func TestRewriteRuleMergeShapeForRule(t *testing.T) {
 	cases := []struct {
-		name string
-		rule string
-	}{
-		{name: "top-level order by", rule: "select a from db1.t1 order by a"},
-		{name: "top-level limit", rule: "select a from db1.t1 limit 1"},
-		{name: "union order by", rule: "select a from db1.t1 union select a from db1.t2 order by a"},
-		{name: "distinct", rule: "select distinct a from db1.t1"},
-		{name: "group by", rule: "select a from db1.t1 group by a"},
-		{name: "having", rule: "select a from db1.t1 having a > 1"},
-		{name: "star", rule: "select * from db1.t1"},
-		{name: "qualified star", rule: "select t.* from db1.t1 as t"},
-		{name: "aggregate projection", rule: "select sum(a) as s from db1.t1"},
-		{name: "window projection", rule: "select row_number() over () as rn from db1.t1"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			columns, ok, err := rewriteRuleOutputColumns(ctx, tc.rule)
-			require.NoError(t, err)
-			require.False(t, ok)
-			require.Nil(t, columns)
-		})
-	}
-}
-
-func TestTrimRewriteRuleForUnion(t *testing.T) {
-	require.Equal(t, "select a from db1.t1", trimRewriteRuleForUnion("  select a from db1.t1  ;;  ; "))
-	require.Equal(t, "select a from db1.t1", trimRewriteRuleForUnion("select a from db1.t1"))
-	require.Equal(t, "", trimRewriteRuleForUnion(" ; ; "))
-}
-
-func TestOutputColumnsFromRewriteStatementASTBranches(t *testing.T) {
-	selectClause := &tree.SelectClause{
-		Exprs: tree.SelectExprs{{Expr: tree.NewUnresolvedColName("a")}},
-	}
-
-	columns, ok := outputColumnsFromRewriteStatement(&tree.ParenSelect{
-		Select: &tree.Select{Select: selectClause},
-	})
-	require.True(t, ok)
-	require.Equal(t, []rewriteRuleOutputColumn{{name: "a", expr: "a"}}, columns)
-
-	columns, ok = outputColumnsFromRewriteStatement(&tree.ParenSelect{})
-	require.False(t, ok)
-	require.Nil(t, columns)
-
-	columns, ok = outputColumnsFromRewriteStatement(&tree.Delete{})
-	require.False(t, ok)
-	require.Nil(t, columns)
-}
-
-func TestOutputColumnsFromRewriteSelectStatementASTBranches(t *testing.T) {
-	selectClause := &tree.SelectClause{
-		Exprs: tree.SelectExprs{{Expr: tree.NewUnresolvedColName("a")}},
-	}
-
-	columns, ok := outputColumnsFromRewriteSelectStatement(&tree.UnionClause{
-		Left:  selectClause,
-		Right: &tree.SelectClause{Exprs: tree.SelectExprs{{Expr: tree.NewUnresolvedColName("b")}}},
-	})
-	require.True(t, ok)
-	require.Equal(t, []rewriteRuleOutputColumn{{name: "a", expr: "a"}}, columns)
-
-	columns, ok = outputColumnsFromRewriteSelectStatement(&tree.ParenSelect{})
-	require.False(t, ok)
-	require.Nil(t, columns)
-
-	columns, ok = outputColumnsFromRewriteSelectStatement(&tree.Select{
-		Select:  selectClause,
-		OrderBy: tree.OrderBy{&tree.Order{Expr: tree.NewUnresolvedColName("a")}},
-	})
-	require.False(t, ok)
-	require.Nil(t, columns)
-
-	columns, ok = outputColumnsFromRewriteSelectStatement(&tree.Select{Select: selectClause})
-	require.True(t, ok)
-	require.Equal(t, []rewriteRuleOutputColumn{{name: "a", expr: "a"}}, columns)
-
-	columns, ok = outputColumnsFromRewriteSelectStatement(&tree.ValuesStatement{})
-	require.False(t, ok)
-	require.Nil(t, columns)
-}
-
-func TestOutputColumnFromRewriteSelectExprBranches(t *testing.T) {
-	column, ok := outputColumnFromRewriteSelectExpr(tree.SelectExpr{
-		Expr: tree.NewBinaryExpr(tree.PLUS, tree.NewUnresolvedColName("a"), rewriteRuleNumVal(1)),
-	})
-	require.True(t, ok)
-	require.Equal(t, rewriteRuleOutputColumn{name: "a + 1", expr: "a + 1"}, column)
-
-	column, ok = outputColumnFromRewriteSelectExpr(tree.SelectExpr{
-		Expr: tree.NewUnresolvedColName("A"),
-		As:   tree.NewCStr("AliasA", 1),
-	})
-	require.True(t, ok)
-	require.Equal(t, rewriteRuleOutputColumn{name: "aliasa", expr: "a"}, column)
-
-	column, ok = outputColumnFromRewriteSelectExpr(tree.SelectExpr{
-		Expr: tree.NewUnresolvedNameWithStar(tree.NewCStr("t", 1)),
-	})
-	require.False(t, ok)
-	require.Equal(t, rewriteRuleOutputColumn{}, column)
-}
-
-func TestMergeableRewriteSelectClauseRejectsDistinctOptions(t *testing.T) {
-	require.False(t, mergeableRewriteSelectClause(&tree.SelectClause{Distinct: true}))
-	require.False(t, mergeableRewriteSelectClause(&tree.SelectClause{Option: tree.QuerySpecOptionDistinct}))
-	require.False(t, mergeableRewriteSelectClause(&tree.SelectClause{Option: tree.QuerySpecOptionDistinctRow}))
-}
-
-func TestSameRewriteOutputColumnsComparesNamesAndExpressions(t *testing.T) {
-	cases := []struct {
-		name  string
-		left  string
-		right string
-		same  bool
+		name       string
+		rule       string
+		ok         bool
+		selectList string
+		table      string
 	}{
 		{
-			name:  "same aliases and same column expression",
-			left:  "select A as x, age as y from db1.t1",
-			right: "select a as x, age as y from db1.t1",
-			same:  true,
+			name:       "simple select",
+			rule:       "select A, Age from db1.t1 where age > 28",
+			ok:         true,
+			selectList: "a, age",
+			table:      "db1.t1",
 		},
 		{
-			name:  "same aliases but swapped column expressions",
-			left:  "select a as x, age as y from db1.t1",
-			right: "select age as x, a as y from db1.t1",
-			same:  false,
+			name:       "star projection",
+			rule:       "select * from db1.t1 where age > 28",
+			ok:         true,
+			selectList: "*",
+			table:      "db1.t1",
 		},
 		{
-			name:  "same aliases but different scalar expressions",
-			left:  "select a + 1 as x from db1.t1",
-			right: "select a + 2 as x from db1.t1",
-			same:  false,
+			name:       "qualified star with alias",
+			rule:       "select t.* from db1.t1 as t where age > 28",
+			ok:         true,
+			selectList: "t.*",
+			table:      "db1.t1 as t",
 		},
 		{
-			name:  "same expressions but different aliases",
-			left:  "select a + 1 as x from db1.t1",
-			right: "select a + 1 as y from db1.t1",
-			same:  false,
+			name:       "aliased column",
+			rule:       "select a as x from db1.t1 where age > 28",
+			ok:         true,
+			selectList: "a as x",
+			table:      "db1.t1",
+		},
+		{
+			name:       "where subquery with order by and limit",
+			rule:       "select a from db1.t1 where a in (select a from db1.t2 order by a limit 1)",
+			ok:         true,
+			selectList: "a",
+			table:      "db1.t1",
+		},
+		{
+			name:       "parenthesized single table",
+			rule:       "select a from (db1.t1) where age > 28",
+			ok:         true,
+			selectList: "a",
+			table:      "db1.t1",
+		},
+		{
+			name:       "scalar expression",
+			rule:       "select a + 1 from db1.t1 where age > 28",
+			ok:         true,
+			selectList: "a + 1",
+			table:      "db1.t1",
+		},
+		{
+			name: "aggregate",
+			rule: "select count(*) from db1.t1 where age > 28",
+			ok:   false,
+		},
+		{
+			name: "window",
+			rule: "select row_number() over () from db1.t1 where age > 28",
+			ok:   false,
+		},
+		{
+			name: "top-level order by",
+			rule: "select a from db1.t1 where age > 28 order by a",
+			ok:   false,
+		},
+		{
+			name: "top-level limit",
+			rule: "select a from db1.t1 where age > 28 limit 1",
+			ok:   false,
+		},
+		{
+			name: "distinct",
+			rule: "select distinct a from db1.t1 where age > 28",
+			ok:   false,
+		},
+		{
+			name: "group by",
+			rule: "select a from db1.t1 where age > 28 group by a",
+			ok:   false,
+		},
+		{
+			name: "having",
+			rule: "select a from db1.t1 where age > 28 having a > 1",
+			ok:   false,
+		},
+		{
+			name: "union",
+			rule: "select a from db1.t1 where age > 28 union all select a from db1.t1 where age < 3",
+			ok:   false,
+		},
+		{
+			name: "join",
+			rule: "select t1.a from db1.t1 join db1.t2 on t1.a = t2.a where t1.age > 28",
+			ok:   false,
 		},
 	}
 
 	ctx := context.Background()
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			left, ok, err := rewriteRuleOutputColumns(ctx, tc.left)
+			shape, ok, err := rewriteRuleMergeShapeForRule(ctx, tc.rule)
 			require.NoError(t, err)
-			require.True(t, ok)
-			right, ok, err := rewriteRuleOutputColumns(ctx, tc.right)
-			require.NoError(t, err)
-			require.True(t, ok)
-			require.Equal(t, tc.same, sameRewriteOutputColumns(left, right))
+			require.Equal(t, tc.ok, ok)
+			if !tc.ok {
+				require.Nil(t, shape)
+				return
+			}
+			require.NotNil(t, shape)
+			require.Equal(t, tc.selectList, shape.selectList)
+			require.Equal(t, tc.table, shape.table)
 		})
 	}
-}
-
-func TestRewriteExprIsMergeSafe(t *testing.T) {
-	cases := []struct {
-		name string
-		sql  string
-		safe bool
-	}{
-		{name: "simple column", sql: "select a from db1.t1", safe: true},
-		{name: "binary expression", sql: "select a + age from db1.t1", safe: true},
-		{name: "comparison expression", sql: "select a > age from db1.t1", safe: true},
-		{name: "case expression", sql: "select case when a > 0 then age else 0 end from db1.t1", safe: true},
-		{name: "scalar function", sql: "select abs(a) from db1.t1", safe: true},
-		{name: "cast expression", sql: "select cast(a as signed) from db1.t1", safe: true},
-		{name: "between expression", sql: "select a between 1 and 3 from db1.t1", safe: true},
-		{name: "aggregate function", sql: "select count(*) from db1.t1", safe: false},
-		{name: "window function", sql: "select row_number() over () from db1.t1", safe: false},
-		{name: "subquery expression", sql: "select exists (select a from db1.t1) from db1.t1", safe: false},
-		{name: "system variable expression", sql: "select @@sql_mode from db1.t1", safe: false},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			exprs := parseRewriteRuleSelectExprs(t, tc.sql)
-			require.Len(t, exprs, 1)
-			require.Equal(t, tc.safe, rewriteExprIsMergeSafe(exprs[0].Expr))
-		})
-	}
-}
-
-func TestRewriteExprIsMergeSafeASTBranches(t *testing.T) {
-	safeColumn := tree.NewUnresolvedColName("a")
-	safeNumber := rewriteRuleNumVal(1)
-	unsafeExpr := rewriteRuleUnsafeSubqueryExpr()
-
-	cases := []struct {
-		name string
-		expr tree.Expr
-		safe bool
-	}{
-		{name: "nil expression", expr: nil, safe: true},
-		{name: "string literal", expr: tree.NewStrVal("'x'"), safe: true},
-		{name: "unqualified star", expr: tree.UnqualifiedStar{}, safe: true},
-		{name: "unary expression", expr: tree.NewUnaryExpr(tree.UNARY_MINUS, safeNumber), safe: true},
-		{name: "comparison with escape", expr: tree.NewComparisonExprWithEscape(tree.LIKE, safeColumn, tree.NewStrVal("'a%'"), tree.NewStrVal("'\\'")), safe: true},
-		{name: "and expression", expr: tree.NewAndExpr(safeColumn, safeNumber), safe: true},
-		{name: "xor expression", expr: tree.NewXorExpr(safeColumn, safeNumber), safe: true},
-		{name: "or expression", expr: tree.NewOrExpr(safeColumn, safeNumber), safe: true},
-		{name: "not expression", expr: tree.NewNotExpr(safeColumn), safe: true},
-		{name: "is null expression", expr: tree.NewIsNullExpr(safeColumn), safe: true},
-		{name: "is not null expression", expr: tree.NewIsNotNullExpr(safeColumn), safe: true},
-		{name: "is unknown expression", expr: tree.NewIsUnknownExpr(safeColumn), safe: true},
-		{name: "is not unknown expression", expr: tree.NewIsNotUnknownExpr(safeColumn), safe: true},
-		{name: "is true expression", expr: tree.NewIsTrueExpr(safeColumn), safe: true},
-		{name: "is not true expression", expr: tree.NewIsNotTrueExpr(safeColumn), safe: true},
-		{name: "is false expression", expr: tree.NewIsFalseExpr(safeColumn), safe: true},
-		{name: "is not false expression", expr: tree.NewIsNotFalseExpr(safeColumn), safe: true},
-		{name: "paren expression", expr: tree.NewParentExpr(safeColumn), safe: true},
-		{name: "function with table type", expr: rewriteRuleFuncExpr("abs", tree.FUNC_TYPE_TABLE, nil, safeColumn), safe: false},
-		{name: "function without a resolvable name", expr: &tree.FuncExpr{}, safe: false},
-		{name: "function with unsafe argument", expr: rewriteRuleFuncExpr("abs", tree.FUNC_TYPE_DEFAULT, nil, unsafeExpr), safe: false},
-		{name: "function with unsafe order by", expr: rewriteRuleFuncExpr("abs", tree.FUNC_TYPE_DEFAULT, tree.OrderBy{&tree.Order{Expr: unsafeExpr}}, safeColumn), safe: false},
-		{name: "serial extract expression", expr: &tree.SerialExtractExpr{SerialExpr: safeColumn, IndexExpr: safeNumber}, safe: true},
-		{name: "serial extract with unsafe index", expr: &tree.SerialExtractExpr{SerialExpr: safeColumn, IndexExpr: unsafeExpr}, safe: false},
-		{name: "bit cast expression", expr: &tree.BitCastExpr{Expr: safeColumn}, safe: true},
-		{name: "tuple expression", expr: &tree.Tuple{Exprs: tree.Exprs{safeColumn, safeNumber}}, safe: true},
-		{name: "tuple with unsafe member", expr: &tree.Tuple{Exprs: tree.Exprs{safeColumn, unsafeExpr}}, safe: false},
-		{name: "case with unsafe else", expr: &tree.CaseExpr{Expr: safeColumn, Else: unsafeExpr}, safe: false},
-		{name: "case with nil when", expr: &tree.CaseExpr{Whens: []*tree.When{nil, tree.NewWhen(safeColumn, safeNumber)}, Else: safeNumber}, safe: true},
-		{name: "case with unsafe when", expr: &tree.CaseExpr{Whens: []*tree.When{tree.NewWhen(unsafeExpr, safeNumber)}, Else: safeNumber}, safe: false},
-		{name: "interval expression", expr: &tree.IntervalExpr{Expr: safeNumber}, safe: true},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			require.Equal(t, tc.safe, rewriteExprIsMergeSafe(tc.expr))
-		})
-	}
-}
-
-func TestRewriteExprsAndOrderByAreMergeSafe(t *testing.T) {
-	safeColumn := tree.NewUnresolvedColName("a")
-	unsafeExpr := rewriteRuleUnsafeSubqueryExpr()
-
-	require.True(t, rewriteExprsAreMergeSafe(nil))
-	require.True(t, rewriteExprsAreMergeSafe(tree.Exprs{safeColumn}))
-	require.False(t, rewriteExprsAreMergeSafe(tree.Exprs{safeColumn, unsafeExpr}))
-
-	require.True(t, rewriteOrderByIsMergeSafe(tree.OrderBy{nil, &tree.Order{Expr: safeColumn}}))
-	require.False(t, rewriteOrderByIsMergeSafe(tree.OrderBy{&tree.Order{Expr: unsafeExpr}}))
-}
-
-func TestRewriteFuncExprName(t *testing.T) {
-	require.Equal(t, "abs", rewriteFuncExprName(&tree.FuncExpr{FuncName: tree.NewCStr("ABS", 1)}))
-	require.Equal(t, "lower", rewriteFuncExprName(&tree.FuncExpr{
-		Func: tree.FuncName2ResolvableFunctionReference(tree.NewUnresolvedColName("LOWER")),
-	}))
-	require.Equal(t, "", rewriteFuncExprName(&tree.FuncExpr{}))
-}
-
-func parseRewriteRuleSelectExprs(t *testing.T, sql string) tree.SelectExprs {
-	t.Helper()
-
-	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
-	require.NoError(t, err)
-	selectStmt, ok := stmt.(*tree.Select)
-	require.True(t, ok)
-	selectClause, ok := selectStmt.Select.(*tree.SelectClause)
-	require.True(t, ok)
-	return selectClause.Exprs
-}
-
-func rewriteRuleNumVal(v int64) *tree.NumVal {
-	return tree.NewNumVal[int64](v, strconv.FormatInt(v, 10), false, tree.P_int64)
-}
-
-func rewriteRuleFuncExpr(name string, typ tree.FuncType, orderBy tree.OrderBy, exprs ...tree.Expr) *tree.FuncExpr {
-	return &tree.FuncExpr{
-		FuncName: tree.NewCStr(name, 1),
-		Type:     typ,
-		Exprs:    exprs,
-		OrderBy:  orderBy,
-	}
-}
-
-func rewriteRuleUnsafeSubqueryExpr() tree.Expr {
-	return tree.NewSubquery(&tree.SelectClause{
-		Exprs: tree.SelectExprs{{Expr: tree.NewUnresolvedColName("a")}},
-	}, true)
 }
 
 func newMrsForRewriteRules(rows [][]interface{}) *MysqlResultSet {

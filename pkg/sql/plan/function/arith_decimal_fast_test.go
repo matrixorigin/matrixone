@@ -1289,6 +1289,288 @@ func TestD128Sub(t *testing.T) {
 	})
 }
 
+func TestD128SubDiffScaleDecimalMinusIntLiteralCases(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		left     int64
+		right    int64
+		want     int64
+		wantText string
+	}{
+		{name: "positive result", left: 800000, right: 1299, want: 670100, wantText: "6701.00"},
+		{name: "zero result", left: 30000, right: 300, want: 0, wantText: "0.00"},
+		{name: "negative by one", left: 30000, right: 301, want: -100, wantText: "-1.00"},
+		{name: "negative by hundred", left: 10000, right: 200, want: -10000, wantText: "-100.00"},
+		{name: "large negative", left: 30000, right: 3999, want: -369900, wantText: "-3699.00"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			v1 := []types.Decimal128{types.Decimal128FromInt64(tc.left)}
+			v2 := []types.Decimal128{types.Decimal128FromInt64(tc.right)}
+			rs := make([]types.Decimal128, 1)
+			nul := nulls.NewWithSize(1)
+
+			idx, err := d128SubDiffScale(v1, v2, rs, 2, 0, nul)
+			require.NoError(t, err)
+			require.Equal(t, -1, idx)
+			require.Equal(t, types.Decimal128FromInt64(tc.want), rs[0])
+			require.Equal(t, tc.wantText, rs[0].Format(2))
+		})
+	}
+
+	t.Run("left scalar right vector with null", func(t *testing.T) {
+		v1 := []types.Decimal128{types.Decimal128FromInt64(30000)}
+		v2 := []types.Decimal128{
+			types.Decimal128FromInt64(300),
+			types.Decimal128FromInt64(301),
+			types.Decimal128FromInt64(777),
+			types.Decimal128FromInt64(3999),
+		}
+		rs := make([]types.Decimal128, len(v2))
+		nul := nulls.NewWithSize(len(v2))
+		nul.Add(2)
+
+		idx, err := d128SubDiffScale(v1, v2, rs, 2, 0, nul)
+		require.NoError(t, err)
+		require.Equal(t, -1, idx)
+		require.True(t, nul.Contains(2))
+		require.Equal(t, types.Decimal128FromInt64(0), rs[0])
+		require.Equal(t, types.Decimal128FromInt64(-100), rs[1])
+		require.Equal(t, types.Decimal128FromInt64(-369900), rs[3])
+		require.Equal(t, "0.00", rs[0].Format(2))
+		require.Equal(t, "-1.00", rs[1].Format(2))
+		require.Equal(t, "-3699.00", rs[3].Format(2))
+	})
+}
+
+func TestD128SameScaleAliasOverflowChecks(t *testing.T) {
+	max := types.Decimal128{B0_63: ^uint64(0), B64_127: ^uint64(0) >> 1}
+
+	t.Run("add same length no null", func(t *testing.T) {
+		rs := []types.Decimal128{types.Decimal128FromInt64(1)}
+		nul := nulls.NewWithSize(1)
+
+		idx := d128AddSameScale([]types.Decimal128{max}, rs, rs, nul)
+		require.Equal(t, 0, idx)
+	})
+
+	t.Run("add same length with null", func(t *testing.T) {
+		rs := []types.Decimal128{types.Decimal128FromInt64(1), types.Decimal128FromInt64(1)}
+		nul := nulls.NewWithSize(2)
+		nul.Add(0)
+
+		idx := d128AddSameScale([]types.Decimal128{max, max}, rs, rs, nul)
+		require.Equal(t, 1, idx)
+	})
+
+	t.Run("add left scalar no null", func(t *testing.T) {
+		rs := []types.Decimal128{types.Decimal128FromInt64(1), types.Decimal128FromInt64(1)}
+		nul := nulls.NewWithSize(2)
+
+		idx := d128AddSameScale([]types.Decimal128{max}, rs, rs, nul)
+		require.Equal(t, 0, idx)
+	})
+
+	t.Run("add left scalar with null", func(t *testing.T) {
+		rs := []types.Decimal128{types.Decimal128FromInt64(1), types.Decimal128FromInt64(1)}
+		nul := nulls.NewWithSize(2)
+		nul.Add(0)
+
+		idx := d128AddSameScale([]types.Decimal128{max}, rs, rs, nul)
+		require.Equal(t, 1, idx)
+	})
+
+	t.Run("add right scalar no null", func(t *testing.T) {
+		rs := []types.Decimal128{max, max}
+		nul := nulls.NewWithSize(2)
+
+		idx := d128AddSameScale(rs, []types.Decimal128{types.Decimal128FromInt64(1)}, rs, nul)
+		require.Equal(t, 0, idx)
+	})
+
+	t.Run("add right scalar with null", func(t *testing.T) {
+		rs := []types.Decimal128{max, max}
+		nul := nulls.NewWithSize(2)
+		nul.Add(0)
+
+		idx := d128AddSameScale(rs, []types.Decimal128{types.Decimal128FromInt64(1)}, rs, nul)
+		require.Equal(t, 1, idx)
+	})
+
+	t.Run("sub same length no null", func(t *testing.T) {
+		rs := []types.Decimal128{types.Decimal128FromInt64(30100)}
+		nul := nulls.NewWithSize(1)
+
+		idx := d128SubSameScale([]types.Decimal128{types.Decimal128FromInt64(30000)}, rs, rs, nul)
+		require.Equal(t, -1, idx)
+		require.Equal(t, types.Decimal128FromInt64(-100), rs[0])
+	})
+
+	t.Run("sub same length with null", func(t *testing.T) {
+		rs := []types.Decimal128{types.Decimal128FromInt64(30100), types.Decimal128FromInt64(30100)}
+		nul := nulls.NewWithSize(2)
+		nul.Add(0)
+
+		idx := d128SubSameScale(
+			[]types.Decimal128{types.Decimal128FromInt64(30000), types.Decimal128FromInt64(30000)},
+			rs,
+			rs,
+			nul,
+		)
+		require.Equal(t, -1, idx)
+		require.Equal(t, types.Decimal128FromInt64(-100), rs[1])
+	})
+
+	t.Run("sub left scalar no null", func(t *testing.T) {
+		rs := []types.Decimal128{types.Decimal128FromInt64(30100), types.Decimal128FromInt64(30100)}
+		nul := nulls.NewWithSize(2)
+
+		idx := d128SubSameScale([]types.Decimal128{types.Decimal128FromInt64(30000)}, rs, rs, nul)
+		require.Equal(t, -1, idx)
+		require.Equal(t, types.Decimal128FromInt64(-100), rs[0])
+	})
+
+	t.Run("sub left scalar with null", func(t *testing.T) {
+		rs := []types.Decimal128{types.Decimal128FromInt64(30100), types.Decimal128FromInt64(30100)}
+		nul := nulls.NewWithSize(2)
+		nul.Add(0)
+
+		idx := d128SubSameScale([]types.Decimal128{types.Decimal128FromInt64(30000)}, rs, rs, nul)
+		require.Equal(t, -1, idx)
+		require.Equal(t, types.Decimal128FromInt64(-100), rs[1])
+	})
+
+	t.Run("sub right scalar no null", func(t *testing.T) {
+		rs := []types.Decimal128{max, max}
+		nul := nulls.NewWithSize(2)
+
+		idx := d128SubSameScale(rs, []types.Decimal128{types.Decimal128FromInt64(-1)}, rs, nul)
+		require.Equal(t, 0, idx)
+	})
+
+	t.Run("sub right scalar with null", func(t *testing.T) {
+		rs := []types.Decimal128{max, max}
+		nul := nulls.NewWithSize(2)
+		nul.Add(0)
+
+		idx := d128SubSameScale(rs, []types.Decimal128{types.Decimal128FromInt64(-1)}, rs, nul)
+		require.Equal(t, 1, idx)
+	})
+}
+
+func TestD64SameScaleAliasOverflowChecks(t *testing.T) {
+	max := types.Decimal64(1<<63 - 1)
+	one := types.Decimal64(1)
+	negHundred := int64(-100)
+	negOne := int64(-1)
+	wantNegHundred := types.Decimal64(uint64(negHundred))
+
+	t.Run("add same length no null", func(t *testing.T) {
+		rs := []types.Decimal64{one}
+		nul := nulls.NewWithSize(1)
+
+		idx := d64AddSameScale([]types.Decimal64{max}, rs, rs, nul)
+		require.Equal(t, 0, idx)
+	})
+
+	t.Run("add same length with null", func(t *testing.T) {
+		rs := []types.Decimal64{one, one}
+		nul := nulls.NewWithSize(2)
+		nul.Add(0)
+
+		idx := d64AddSameScale([]types.Decimal64{max, max}, rs, rs, nul)
+		require.Equal(t, 1, idx)
+	})
+
+	t.Run("add left scalar no null", func(t *testing.T) {
+		rs := []types.Decimal64{one, one}
+		nul := nulls.NewWithSize(2)
+
+		idx := d64AddSameScale([]types.Decimal64{max}, rs, rs, nul)
+		require.Equal(t, 0, idx)
+	})
+
+	t.Run("add left scalar with null", func(t *testing.T) {
+		rs := []types.Decimal64{one, one}
+		nul := nulls.NewWithSize(2)
+		nul.Add(0)
+
+		idx := d64AddSameScale([]types.Decimal64{max}, rs, rs, nul)
+		require.Equal(t, 1, idx)
+	})
+
+	t.Run("add right scalar no null", func(t *testing.T) {
+		rs := []types.Decimal64{max, max}
+		nul := nulls.NewWithSize(2)
+
+		idx := d64AddSameScale(rs, []types.Decimal64{one}, rs, nul)
+		require.Equal(t, 0, idx)
+	})
+
+	t.Run("add right scalar with null", func(t *testing.T) {
+		rs := []types.Decimal64{max, max}
+		nul := nulls.NewWithSize(2)
+		nul.Add(0)
+
+		idx := d64AddSameScale(rs, []types.Decimal64{one}, rs, nul)
+		require.Equal(t, 1, idx)
+	})
+
+	t.Run("sub same length no null", func(t *testing.T) {
+		rs := []types.Decimal64{30100}
+		nul := nulls.NewWithSize(1)
+
+		idx := d64SubSameScale([]types.Decimal64{30000}, rs, rs, nul)
+		require.Equal(t, -1, idx)
+		require.Equal(t, wantNegHundred, rs[0])
+	})
+
+	t.Run("sub same length with null", func(t *testing.T) {
+		rs := []types.Decimal64{30100, 30100}
+		nul := nulls.NewWithSize(2)
+		nul.Add(0)
+
+		idx := d64SubSameScale([]types.Decimal64{30000, 30000}, rs, rs, nul)
+		require.Equal(t, -1, idx)
+		require.Equal(t, wantNegHundred, rs[1])
+	})
+
+	t.Run("sub left scalar no null", func(t *testing.T) {
+		rs := []types.Decimal64{30100, 30100}
+		nul := nulls.NewWithSize(2)
+
+		idx := d64SubSameScale([]types.Decimal64{30000}, rs, rs, nul)
+		require.Equal(t, -1, idx)
+		require.Equal(t, wantNegHundred, rs[0])
+	})
+
+	t.Run("sub left scalar with null", func(t *testing.T) {
+		rs := []types.Decimal64{30100, 30100}
+		nul := nulls.NewWithSize(2)
+		nul.Add(0)
+
+		idx := d64SubSameScale([]types.Decimal64{30000}, rs, rs, nul)
+		require.Equal(t, -1, idx)
+		require.Equal(t, wantNegHundred, rs[1])
+	})
+
+	t.Run("sub right scalar no null", func(t *testing.T) {
+		rs := []types.Decimal64{max, max}
+		nul := nulls.NewWithSize(2)
+
+		idx := d64SubSameScale(rs, []types.Decimal64{types.Decimal64(uint64(negOne))}, rs, nul)
+		require.Equal(t, 0, idx)
+	})
+
+	t.Run("sub right scalar with null", func(t *testing.T) {
+		rs := []types.Decimal64{max, max}
+		nul := nulls.NewWithSize(2)
+		nul.Add(0)
+
+		idx := d64SubSameScale(rs, []types.Decimal64{types.Decimal64(uint64(negOne))}, rs, nul)
+		require.Equal(t, 1, idx)
+	})
+}
+
 func TestD128MulPow10Carry(t *testing.T) {
 	// x = {B0_63: MaxUint64, B64_127: 1} = 2^65 - 1 ≈ 3.69e19.
 	// x * 10^19 ≈ 3.69e38 > 2^127 ≈ 1.70e38 → must overflow.
@@ -2950,14 +3232,17 @@ func BenchmarkD256IntDiv_Generic(b *testing.B) {
 
 // refD128IntDiv computes the reference result for D128 integer division.
 func refD128IntDiv(x, y types.Decimal128, scale1, scale2 int32) (int64, error) {
-	r, rScale, err := x.Div(y, scale1, scale2)
-	if err != nil {
-		return 0, err
+	signx := x.Sign()
+	signy := y.Sign()
+	if signx {
+		x = x.Minus()
 	}
-	if rScale > 0 {
-		r, _ = r.Scale(-rScale)
+	if signy {
+		y = y.Minus()
 	}
-	return decimal128ToInt64(r)
+	x256 := types.Decimal256{B0_63: x.B0_63, B64_127: x.B64_127}
+	y256 := types.Decimal256{B0_63: y.B0_63, B64_127: y.B64_127}
+	return refD256IntDivUnsigned(x256, y256, signx != signy, scale1, scale2)
 }
 
 func TestD64IntDiv(t *testing.T) {
@@ -3169,12 +3454,34 @@ func TestD128IntDiv(t *testing.T) {
 
 // refD256IntDiv computes the reference result for D256 integer division.
 func refD256IntDiv(x, y types.Decimal256, scale1, scale2 int32) (int64, error) {
-	r, rScale, err := x.Div(y, scale1, scale2)
+	signx := x.Sign()
+	signy := y.Sign()
+	if signx {
+		x = x.Minus()
+	}
+	if signy {
+		y = y.Minus()
+	}
+	return refD256IntDivUnsigned(x, y, signx != signy, scale1, scale2)
+}
+
+func refD256IntDivUnsigned(x, y types.Decimal256, neg bool, scale1, scale2 int32) (int64, error) {
+	scaleAdj := scale2 - scale1
+	var err error
+	if scaleAdj > 0 {
+		x, err = x.Scale(scaleAdj)
+	} else if scaleAdj < 0 {
+		y, err = y.Scale(-scaleAdj)
+	}
 	if err != nil {
 		return 0, err
 	}
-	if rScale > 0 {
-		r, _ = r.Scale(-rScale)
+	r, err := x.Div256Trunc(y)
+	if err != nil {
+		return 0, err
+	}
+	if neg {
+		r = r.Minus()
 	}
 	return decimal256ToInt64(r)
 }
@@ -3197,6 +3504,18 @@ func TestD256IntDiv(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, want, rs[i], "d256IntDiv[%d]", i)
 		}
+	})
+
+	t.Run("GenericPathTruncates", func(t *testing.T) {
+		x := types.Decimal256{B128_191: 5}
+		y := types.Decimal256{B128_191: 2}
+		v1 := []types.Decimal256{x, x.Minus()}
+		v2 := []types.Decimal256{y, y}
+		rs := make([]int64, len(v1))
+		nul := nulls.NewWithSize(len(v1))
+
+		require.NoError(t, d256IntDiv(v1, v2, rs, 0, 0, nul, true))
+		require.Equal(t, []int64{2, -2}, rs)
 	})
 
 	t.Run("ScalarVec", func(t *testing.T) {

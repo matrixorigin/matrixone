@@ -377,6 +377,81 @@ func (c *PushClient) validLogTailMustApplied(snapshotTS timestamp.Timestamp) {
 		ts))
 }
 
+func (c *PushClient) canServeTableSnapshot(
+	dbId, tblId uint64,
+	ps *logtailreplay.PartitionState,
+	snapshot timestamp.Timestamp,
+) bool {
+	canServe, _ := c.canServeTableSnapshotNoWait(dbId, tblId, ps, snapshot)
+	return canServe
+}
+
+func (c *PushClient) waitCanServeTableSnapshot(
+	ctx context.Context,
+	accId, dbId, tblId uint64,
+	ps *logtailreplay.PartitionState,
+	snapshot timestamp.Timestamp,
+) (*logtailreplay.PartitionState, bool, error) {
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		canServe, needWait := c.canServeTableSnapshotNoWait(dbId, tblId, ps, snapshot)
+		if canServe || !needWait {
+			return ps, canServe, nil
+		}
+
+		select {
+		case <-ctx.Done():
+			return nil, false, ctx.Err()
+		case <-ticker.C:
+			ps = c.eng.GetOrCreateLatestPart(ctx, accId, dbId, tblId).Snapshot()
+		}
+	}
+}
+
+func (c *PushClient) canServeTableSnapshotNoWait(
+	dbId, tblId uint64,
+	ps *logtailreplay.PartitionState,
+	snapshot timestamp.Timestamp,
+) (canServe bool, needWait bool) {
+	return canServeTableSnapshotWithPending(
+		ps,
+		snapshot,
+		c.subscribed.hasPendingUpdate(dbId, tblId),
+	)
+}
+
+func canServeTableSnapshotWithPending(
+	ps *logtailreplay.PartitionState,
+	snapshot timestamp.Timestamp,
+	pending bool,
+) (canServe bool, needWait bool) {
+	snapshotTS := types.TimestampToTS(snapshot)
+	if ps == nil || !ps.CanServe(snapshotTS) {
+		return false, false
+	}
+	if snapshot.IsEmpty() {
+		return true, false
+	}
+
+	visibleTS := types.TimestampToTS(snapshot.Prev())
+	appliedTo := ps.GetAppliedTo()
+	if !appliedTo.IsEmpty() && appliedTo.GE(&visibleTS) {
+		return true, false
+	}
+
+	// If no update for this table is queued or being applied, the global
+	// logtail waiter already proves this snapshot is within the CN applied
+	// waterline. Only block the latest-state fast path when this table has a
+	// known pending update and the current state has not applied up to the
+	// statement snapshot yet.
+	if pending {
+		return false, true
+	}
+	return true, false
+}
+
 func (c *PushClient) skipSubIfSubscribed(
 	ctx context.Context,
 	acctId uint64,
@@ -1193,9 +1268,10 @@ type subscribedTable struct {
 
 // subEntry holds subscription state with atomic timestamp for lock-free updates.
 type subEntry struct {
-	dbID   uint64
-	state  SubscribeState
-	lastTs atomic.Int64 // UnixNano, for GC to check if table is still in use
+	dbID      uint64
+	state     SubscribeState
+	lastTs    atomic.Int64 // UnixNano, for GC to check if table is still in use
+	pendingTo atomic.Pointer[timestamp.Timestamp]
 }
 
 // SubTableStatus is used for external API compatibility (e.g., GetState).
@@ -1235,6 +1311,46 @@ func (c *PushClient) isSubscribed(
 	s.rw.RUnlock()
 
 	return ps, true, Subscribed
+}
+
+// getSubscribedSnapshotForPKCheck requires an open push-client admission gate
+// and captures the pending marker before the immutable partition snapshot while
+// holding the subscription generation.
+// If there is no pending update, the later snapshot includes every table
+// update known when the global logtail waterline reached the lock timestamp.
+func (c *PushClient) getSubscribedSnapshotForPKCheck(
+	ctx context.Context,
+	accId, dbId, tId uint64,
+) (*logtailreplay.PartitionState, bool, SubscribeState, bool) {
+	if !c.receivedLogTailTime.ready.Load() {
+		return nil, false, InvalidSubState, false
+	}
+
+	s := &c.subscribed
+	s.rw.RLock()
+	ent, exist := s.m[tId]
+	if !exist {
+		s.rw.RUnlock()
+		return nil, false, Unsubscribed, false
+	}
+	if ent.dbID != dbId || ent.state != Subscribed {
+		state := ent.state
+		s.rw.RUnlock()
+		return nil, false, state, false
+	}
+
+	now := time.Now().UnixNano()
+	if now-ent.lastTs.Load() > int64(time.Minute) {
+		ent.lastTs.Store(now)
+	}
+	pending := ent.pendingTo.Load() != nil
+	ps := c.eng.GetOrCreateLatestPart(ctx, accId, dbId, tId).Snapshot()
+	if !c.receivedLogTailTime.ready.Load() {
+		s.rw.RUnlock()
+		return nil, false, InvalidSubState, false
+	}
+	s.rw.RUnlock()
+	return ps, true, Subscribed, pending
 }
 
 func (c *PushClient) toSubIfUnsubscribed(ctx context.Context, dbId, tblId uint64) (SubscribeState, error) {
@@ -1284,6 +1400,54 @@ func (s *subscribedTable) isSubscribed(dbId, tblId uint64) bool {
 	}
 	s.rw.RUnlock()
 	return false
+}
+
+func (s *subscribedTable) setTablePendingUpdate(dbId, tblId uint64, to timestamp.Timestamp) {
+	if to.IsEmpty() {
+		return
+	}
+	s.rw.RLock()
+	ent, exist := s.m[tblId]
+	if exist && ent.dbID == dbId && ent.state == Subscribed {
+		ts := to
+		ent.pendingTo.Store(&ts)
+	}
+	s.rw.RUnlock()
+}
+
+func (s *subscribedTable) clearTablePendingUpdate(dbId, tblId uint64, applied timestamp.Timestamp) {
+	if applied.IsEmpty() {
+		return
+	}
+	s.rw.RLock()
+	ent, exist := s.m[tblId]
+	if !exist || ent.dbID != dbId {
+		s.rw.RUnlock()
+		return
+	}
+	s.rw.RUnlock()
+
+	for {
+		pending := ent.pendingTo.Load()
+		if pending == nil || pending.Greater(applied) {
+			return
+		}
+		if ent.pendingTo.CompareAndSwap(pending, nil) {
+			return
+		}
+	}
+}
+
+func (s *subscribedTable) hasPendingUpdate(dbId, tblId uint64) bool {
+	s.rw.RLock()
+	ent, exist := s.m[tblId]
+	if !exist || ent.dbID != dbId || ent.state != Subscribed {
+		s.rw.RUnlock()
+		return false
+	}
+	pending := ent.pendingTo.Load()
+	s.rw.RUnlock()
+	return pending != nil
 }
 
 // consumeLatestCkp consume the latest checkpoint of the table if not consumed, and return the latest partition state.
@@ -1705,6 +1869,12 @@ func (s *logTailSubscriber) ready() bool {
 func (s *logTailSubscriber) waitReady(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	stop := context.AfterFunc(ctx, func() {
+		s.mu.Lock()
+		s.mu.cond.Broadcast()
+		s.mu.Unlock()
+	})
+	defer stop()
 	for !s.mu.ready {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -1893,7 +2063,7 @@ func dispatchUpdateResponse(
 	for i := 0; i < len(list); i++ {
 		table := list[i].Table
 		if table.TbId == catalog.MO_DATABASE_ID {
-			if err := e.consumeUpdateLogTail(ctx, list[i], false, receiveAt); err != nil {
+			if err := e.consumeUpdateLogTail(ctx, list[i], false, receiveAt, *response.To); err != nil {
 				return err
 			}
 		}
@@ -1901,7 +2071,7 @@ func dispatchUpdateResponse(
 	for i := 0; i < len(list); i++ {
 		table := list[i].Table
 		if table.TbId == catalog.MO_TABLES_ID {
-			if err := e.consumeUpdateLogTail(ctx, list[i], false, receiveAt); err != nil {
+			if err := e.consumeUpdateLogTail(ctx, list[i], false, receiveAt, *response.To); err != nil {
 				return err
 			}
 		}
@@ -1909,7 +2079,7 @@ func dispatchUpdateResponse(
 	for i := 0; i < len(list); i++ {
 		table := list[i].Table
 		if table.TbId == catalog.MO_COLUMNS_ID {
-			if err := e.consumeUpdateLogTail(ctx, list[i], false, receiveAt); err != nil {
+			if err := e.consumeUpdateLogTail(ctx, list[i], false, receiveAt, *response.To); err != nil {
 				return err
 			}
 		}
@@ -1937,6 +2107,7 @@ func dispatchUpdateResponse(
 		}
 		recIndex := table.TbId % consumerNumber
 		hasLogtail[recIndex] = true
+		e.pClient.subscribed.setTablePendingUpdate(table.DbId, table.TbId, *response.To)
 		recRoutines[recIndex].sendTableLogTailWithTimestamp(
 			list[index],
 			*response.To,
@@ -2169,8 +2340,12 @@ func (cmd *cmdToConsumeLog) action(ctx context.Context, e *Engine, ctrl *routine
 		ctrl.cmdLogPool.Put(cmd)
 	}()
 	response := cmd.log
-	if err := e.consumeUpdateLogTail(ctx, response, true, cmd.receiveAt); err != nil {
+	if err := e.consumeUpdateLogTail(ctx, response, true, cmd.receiveAt, cmd.applied); err != nil {
 		return err
+	}
+	table := response.GetTable()
+	if table != nil {
+		e.pClient.subscribed.clearTablePendingUpdate(table.DbId, table.TbId, cmd.applied)
 	}
 	if cmd.notifyApplied {
 		e.pClient.receivedLogTailTime.updateTimestamp(ctrl.routineId, cmd.applied, cmd.receiveAt)
@@ -2197,15 +2372,20 @@ func (e *Engine) consumeSubscribeResponse(
 	lazyLoad bool,
 	receiveAt time.Time) error {
 	lt := rp.GetLogtail()
-	return updatePartitionOfPush(ctx, e, &lt, lazyLoad, receiveAt, true)
+	applied := timestamp.Timestamp{}
+	if lt.Ts != nil {
+		applied = *lt.Ts
+	}
+	return updatePartitionOfPush(ctx, e, &lt, lazyLoad, receiveAt, true, applied)
 }
 
 func (e *Engine) consumeUpdateLogTail(
 	ctx context.Context,
 	rp logtail.TableLogtail,
 	lazyLoad bool,
-	receiveAt time.Time) error {
-	return updatePartitionOfPush(ctx, e, &rp, lazyLoad, receiveAt, false)
+	receiveAt time.Time,
+	applied timestamp.Timestamp) error {
+	return updatePartitionOfPush(ctx, e, &rp, lazyLoad, receiveAt, false, applied)
 }
 
 // updatePartitionOfPush is the partition update method of log tail push model.
@@ -2215,7 +2395,8 @@ func updatePartitionOfPush(
 	tl *logtail.TableLogtail,
 	lazyLoad bool,
 	receiveAt time.Time,
-	isSub bool) (err error) {
+	isSub bool,
+	applied timestamp.Timestamp) (err error) {
 	start := time.Now()
 	v2.LogTailApplyLatencyDurationHistogram.Observe(start.Sub(receiveAt).Seconds())
 	defer func() {
@@ -2324,6 +2505,11 @@ func updatePartitionOfPush(
 			// }
 		}
 	}
+
+	if applied.IsEmpty() && tl.Ts != nil {
+		applied = *tl.Ts
+	}
+	state.UpdateAppliedTo(types.TimestampToTS(applied))
 
 	doneMutate()
 

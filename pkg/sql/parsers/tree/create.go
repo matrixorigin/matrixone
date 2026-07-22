@@ -942,6 +942,7 @@ type CreateTable struct {
 	PartitionOption    *PartitionOption
 	ClusterByOption    *ClusterByOption
 	Param              *ExternParam
+	IcebergParam       *IcebergTableParam
 	AsSource           *Select
 	IsDynamicTable     bool
 	DTOptions          []TableOption
@@ -963,7 +964,7 @@ func (node *CreateTable) Format(ctx *FmtCtx) {
 	if node.IsClusterTable {
 		ctx.WriteString(" cluster")
 	}
-	if node.Param != nil {
+	if node.Param != nil || node.IcebergParam != nil {
 		ctx.WriteString(" external")
 	}
 	if node.IsDynamicTable {
@@ -1002,7 +1003,7 @@ func (node *CreateTable) Format(ctx *FmtCtx) {
 		}
 	} else {
 
-		if !node.IsAsSelect {
+		if !node.IsAsSelect && !(node.IcebergParam != nil && len(node.Defs) == 0) {
 			ctx.WriteString(" (")
 			for i, def := range node.Defs {
 				if i != 0 {
@@ -1026,6 +1027,11 @@ func (node *CreateTable) Format(ctx *FmtCtx) {
 			ctx.WriteString(prefix)
 			t.Format(ctx)
 		}
+	}
+
+	if node.IcebergParam != nil {
+		ctx.WriteByte(' ')
+		node.IcebergParam.Format(ctx)
 	}
 
 	if node.PartitionOption != nil {
@@ -2063,6 +2069,10 @@ func (it IndexType) ToString() string {
 		return "fulltext"
 	case INDEX_TYPE_HNSW:
 		return "hnsw"
+	case INDEX_TYPE_CAGRA:
+		return "cagra"
+	case INDEX_TYPE_IVFPQ:
+		return "ivfpq"
 	case INDEX_TYPE_INVALID:
 		return ""
 	default:
@@ -2081,6 +2091,8 @@ const (
 	INDEX_TYPE_MASTER
 	INDEX_TYPE_FULLTEXT
 	INDEX_TYPE_HNSW
+	INDEX_TYPE_CAGRA
+	INDEX_TYPE_IVFPQ
 )
 
 type VisibleType int
@@ -2113,14 +2125,24 @@ type IndexOption struct {
 	SecondaryEngineAttribute string
 	AlgoParamList            int64
 	AlgoParamVectorOpType    string
-	HnswM                    int64
+	AlgoParamM               int64
 	HnswEfConstruction       int64
 	HnswEfSearch             int64
+	BitsPerCode              int64
 	Async                    bool
 	ForceSync                bool
 	AutoUpdate               bool
 	Day                      int64
 	Hour                     int64
+	IntermediateGraphDegree  int64
+	GraphDegree              int64
+	Quantization             string
+	DistributionMode         string
+	ITopkSize                int64
+	KmeansTrainPercent       int64
+	KmeansMaxIteration       int64
+	MaxIndexCapacity         int64
+	IncludeColumns           []*UnresolvedName
 }
 
 // Must follow the following sequence when test
@@ -2128,9 +2150,15 @@ func (node *IndexOption) Format(ctx *FmtCtx) {
 	if node.KeyBlockSize != 0 || node.ParserName != "" ||
 		node.Comment != "" || node.Visible != VISIBLE_TYPE_INVALID ||
 		node.AlgoParamList != 0 || node.AlgoParamVectorOpType != "" ||
-		node.HnswM != 0 || node.HnswEfConstruction != 0 ||
+		node.AlgoParamM != 0 || node.HnswEfConstruction != 0 ||
 		node.HnswEfSearch != 0 || node.AutoUpdate || node.Day != 0 ||
-		node.Hour != 0 {
+		node.Hour != 0 ||
+		node.IntermediateGraphDegree != 0 || node.GraphDegree != 0 ||
+		node.Quantization != "" || node.DistributionMode != "" ||
+		node.BitsPerCode != 0 || node.ITopkSize != 0 ||
+		node.KmeansTrainPercent != 0 || node.KmeansMaxIteration != 0 ||
+		node.MaxIndexCapacity != 0 ||
+		len(node.IncludeColumns) != 0 {
 		ctx.WriteByte(' ')
 	}
 	if node.KeyBlockSize != 0 {
@@ -2153,9 +2181,9 @@ func (node *IndexOption) Format(ctx *FmtCtx) {
 		ctx.WriteString(strconv.FormatInt(node.AlgoParamList, 10))
 		ctx.WriteByte(' ')
 	}
-	if node.HnswM != 0 {
+	if node.AlgoParamM != 0 {
 		ctx.WriteString("M ")
-		ctx.WriteString(strconv.FormatInt(node.HnswM, 10))
+		ctx.WriteString(strconv.FormatInt(node.AlgoParamM, 10))
 		ctx.WriteByte(' ')
 	}
 	if node.HnswEfConstruction != 0 {
@@ -2194,6 +2222,61 @@ func (node *IndexOption) Format(ctx *FmtCtx) {
 		ctx.WriteString("HOUR ")
 		ctx.WriteString(strconv.FormatInt(node.Hour, 10))
 		ctx.WriteByte(' ')
+	}
+	if node.IntermediateGraphDegree != 0 {
+		ctx.WriteString("INTERMEDIATE_GRAPH_DEGREE ")
+		ctx.WriteString(strconv.FormatInt(node.IntermediateGraphDegree, 10))
+		ctx.WriteByte(' ')
+	}
+	if node.GraphDegree != 0 {
+		ctx.WriteString("GRAPH_DEGREE ")
+		ctx.WriteString(strconv.FormatInt(node.GraphDegree, 10))
+		ctx.WriteByte(' ')
+	}
+	if node.Quantization != "" {
+		ctx.WriteString("QUANTIZATION ")
+		ctx.WriteString(node.Quantization)
+		ctx.WriteByte(' ')
+	}
+	if node.DistributionMode != "" {
+		ctx.WriteString("DISTRIBUTION_MODE ")
+		ctx.WriteString(node.DistributionMode)
+		ctx.WriteByte(' ')
+	}
+	if node.BitsPerCode != 0 {
+		ctx.WriteString("BITS_PER_CODE ")
+		ctx.WriteString(strconv.FormatInt(node.BitsPerCode, 10))
+		ctx.WriteByte(' ')
+	}
+	if node.ITopkSize != 0 {
+		ctx.WriteString("ITOPK_SIZE ")
+		ctx.WriteString(strconv.FormatInt(node.ITopkSize, 10))
+		ctx.WriteByte(' ')
+	}
+	if node.KmeansTrainPercent != 0 {
+		ctx.WriteString("KMEANS_TRAIN_PERCENT ")
+		ctx.WriteString(strconv.FormatInt(node.KmeansTrainPercent, 10))
+		ctx.WriteByte(' ')
+	}
+	if node.KmeansMaxIteration != 0 {
+		ctx.WriteString("KMEANS_MAX_ITERATION ")
+		ctx.WriteString(strconv.FormatInt(node.KmeansMaxIteration, 10))
+		ctx.WriteByte(' ')
+	}
+	if node.MaxIndexCapacity != 0 {
+		ctx.WriteString("MAX_INDEX_CAPACITY ")
+		ctx.WriteString(strconv.FormatInt(node.MaxIndexCapacity, 10))
+		ctx.WriteByte(' ')
+	}
+	if len(node.IncludeColumns) != 0 {
+		ctx.WriteString("INCLUDE (")
+		for i, c := range node.IncludeColumns {
+			if i > 0 {
+				ctx.WriteString(", ")
+			}
+			c.Format(ctx)
+		}
+		ctx.WriteString(") ")
 	}
 
 }
@@ -3812,7 +3895,7 @@ type Partition struct {
 
 func (node *Partition) Format(ctx *FmtCtx) {
 	ctx.WriteString("partition ")
-	ctx.WriteString(string(node.Name))
+	ctx.WriteIdentifier(node.Name)
 	if node.Values != nil {
 		ctx.WriteByte(' ')
 		node.Values.Format(ctx)
@@ -3957,7 +4040,7 @@ type SubPartition struct {
 
 func (node *SubPartition) Format(ctx *FmtCtx) {
 	ctx.WriteString("subpartition ")
-	ctx.WriteString(string(node.Name))
+	ctx.WriteIdentifier(node.Name)
 
 	if node.Options != nil {
 		prefix := " "

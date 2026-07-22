@@ -16,6 +16,8 @@ package lockservice
 
 import (
 	"context"
+	"fmt"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -26,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -57,6 +60,222 @@ func TestLockBlockedOnRemote(t *testing.T) {
 			waitWaiters(t, l1, tableID, row1, 1)
 			require.NoError(t, l1.Unlock(ctx, txn1, timestamp.Timestamp{}))
 			<-c
+		},
+	)
+}
+
+func TestFetchWhoWaitingMeUsesActiveRemoteWaiterSnapshots(t *testing.T) {
+	const tableID = uint64(10)
+	row := []byte("row")
+	seedTxn := []byte("seed")
+	holderTxn := []byte("remote-holder")
+	activeWaiterTxn := []byte("active-waiter")
+
+	runLockServiceTestsWithAdjustConfig(
+		t,
+		[]string{"s1", "s2", "s3"},
+		10*time.Second,
+		func(_ *lockTableAllocator, s []*service) {
+			owner := s[0]
+			holderService := s[1]
+			waiterService := s[2]
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+
+			// Bind the table to owner, then acquire it through holderService so
+			// fetchWhoWaitingMe has to query a remote lock table.
+			mustAddTestLock(t, ctx, owner, tableID, seedTxn, [][]byte{row}, pb.Granularity_Row)
+			require.NoError(t, owner.Unlock(ctx, seedTxn, timestamp.Timestamp{}))
+			mustAddTestLock(t, ctx, holderService, tableID, holderTxn, [][]byte{row}, pb.Granularity_Row)
+
+			// The waiter must remain live until the holder is explicitly released.
+			// Reusing ctx here couples queue admission to all setup RPCs above: once
+			// that deadline expires, Lock returns before it can enter owner's queue
+			// and the old unbounded waitWaiters call spins forever.
+			// Lock may cross MORPC, whose Future contract requires a deadline.
+			// Give the waiter a budget independent from and larger than setup while
+			// retaining a hard bound if admission or cleanup regresses.
+			waiterCtx, cancelWaiter := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancelWaiter()
+			waitResult := make(chan error, 1)
+			holderReleased := false
+			waiterDone := false
+			go func() {
+				_, err := waiterService.Lock(
+					waiterCtx,
+					tableID,
+					[][]byte{row},
+					activeWaiterTxn,
+					newTestRowExclusiveOptions(),
+				)
+				waitResult <- err
+			}()
+			// Public Unlock deliberately retries remote cleanup with a background
+			// context. This liveness test uses the internal context-aware path so its
+			// release and failure cleanup remain bounded by their test deadlines.
+			defer func() {
+				cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cleanupCancel()
+				if !holderReleased {
+					_ = holderService.unlockWithContext(cleanupCtx, holderTxn, timestamp.Timestamp{})
+				}
+				cancelWaiter()
+				if !waiterDone {
+					select {
+					case <-waitResult:
+					case <-cleanupCtx.Done():
+						t.Errorf("remote waiter did not exit during cleanup: %v", cleanupCtx.Err())
+					}
+				}
+				// A failed remote Lock can still have reached the owner and is recorded
+				// locally for exactly this compensating unlock. It is also safe after a
+				// successful unlock, where the transaction is already absent.
+				_ = waiterService.unlockWithContext(cleanupCtx, activeWaiterTxn, timestamp.Timestamp{})
+			}()
+
+			// This is test admission synchronization, not part of the behavior under
+			// test. Keep it bounded so an unexpected routing failure produces a
+			// useful failure instead of consuming the package's 40-minute timeout.
+			require.Eventually(t, func() bool {
+				lt, err := owner.getLockTable(context.Background(), 0, tableID)
+				if err != nil {
+					return false
+				}
+				local, ok := lt.(*localLockTable)
+				if !ok {
+					return false
+				}
+				local.mu.Lock()
+				defer local.mu.Unlock()
+				lock, ok := local.mu.store.Get(row)
+				return ok && lock.waiters.size() == 1
+			}, 10*time.Second, 10*time.Millisecond, "active remote waiter did not reach owner queue")
+			lt, err := owner.getLockTable(context.Background(), 0, tableID)
+			require.NoError(t, err)
+			local := lt.(*localLockTable)
+			logger := getLogger("")
+
+			completedWaiter := acquireWaiter(pb.WaitTxn{TxnID: []byte("completed")}, "test", logger)
+			completedWaiter.setStatus(completed)
+			notifiedWaiter := acquireWaiter(pb.WaitTxn{TxnID: []byte("notified")}, "test", logger)
+			notifiedWaiter.setStatus(notified)
+			local.mu.Lock()
+			lock, ok := local.mu.store.Get(row)
+			if !ok {
+				local.mu.Unlock()
+				t.Fatal("owner lock disappeared before remote snapshot")
+			}
+			lock.addWaiter(logger, completedWaiter)
+			lock.addWaiter(logger, notifiedWaiter)
+			local.mu.Unlock()
+			defer func() {
+				local.mu.Lock()
+				lock, ok := local.mu.store.Get(row)
+				if ok {
+					removed, _ := lock.waiters.remove(completedWaiter)
+					require.True(t, removed)
+					removed, _ = lock.waiters.remove(notifiedWaiter)
+					require.True(t, removed)
+				}
+				local.mu.Unlock()
+				completedWaiter.close("test", logger)
+				notifiedWaiter.close("test", logger)
+			}()
+
+			txn := holderService.activeTxnHolder.getActiveTxn(holderTxn, false, "")
+			require.NotNil(t, txn)
+			var waitingTxnIDs [][]byte
+			ok, err = txn.fetchWhoWaitingMe(
+				context.Background(),
+				holderService.serviceID,
+				holderTxn,
+				func(waitTxn pb.WaitTxn, waiterAddress string) bool {
+					waitingTxnIDs = append(waitingTxnIDs, waitTxn.TxnID)
+					require.Equal(t, owner.serviceID, waiterAddress)
+					return true
+				},
+				func(ctx context.Context, group uint32, table uint64) (lockTable, error) {
+					return holderService.getLockTable(ctx, group, table)
+				},
+			)
+			require.NoError(t, err)
+			require.True(t, ok)
+			require.Equal(t, [][]byte{activeWaiterTxn}, waitingTxnIDs)
+
+			releaseCtx, releaseCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer releaseCancel()
+			require.NoError(t, holderService.unlockWithContext(releaseCtx, holderTxn, timestamp.Timestamp{}))
+			holderReleased = true
+			select {
+			case err := <-waitResult:
+				waiterDone = true
+				require.NoError(t, err)
+			case <-releaseCtx.Done():
+				t.Fatalf("remote waiter did not acquire after holder release: %v", releaseCtx.Err())
+			}
+			require.NoError(t, waiterService.unlockWithContext(releaseCtx, activeWaiterTxn, timestamp.Timestamp{}))
+		},
+		func(cfg *Config) {
+			// CheckActiveTxn gets its authoritative transaction liveness from
+			// TxnIterFunc in production. Keep the synthetic remote transactions
+			// visible so the orphan checker cannot legitimately remove the lock
+			// before this test snapshots its waiters.
+			cfg.TxnIterFunc = func(fn func([]byte) bool) {
+				for _, txnID := range [][]byte{holderTxn, activeWaiterTxn} {
+					if !fn(txnID) {
+						return
+					}
+				}
+			}
+		},
+	)
+}
+
+func TestWaitLocalWaitersIsBounded(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(_ *lockTableAllocator, s []*service) {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+
+			const tableID = uint64(10)
+			row := []byte("row")
+			txnID := []byte("holder")
+			mustAddTestLock(t, ctx, s[0], tableID, txnID, [][]byte{row}, pb.Granularity_Row)
+
+			lt, err := s[0].getLockTable(ctx, 0, tableID)
+			require.NoError(t, err)
+			err = waitLocalWaitersWithTimeout(lt.(*localLockTable), row, 1, 20*time.Millisecond)
+			require.EqualError(t, err, "internal error: timed out waiting for 1 local lock waiters, observed 0")
+
+			require.NoError(t, s[0].Unlock(ctx, txnID, timestamp.Timestamp{}))
+		},
+	)
+}
+
+func TestGetLocalLockTableUsesGetLockHolderLookupInputs(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(alloc *lockTableAllocator, s []*service) {
+			l := s[0]
+			originTableID := uint64(10)
+			row := []byte("row1")
+			tableID := ShardingByRow(row)
+			bind := alloc.Get(l.serviceID, 0, tableID, originTableID, pb.Sharding_ByRow)
+			req := &pb.Request{
+				Method:    pb.Method_GetLockHolder,
+				LockTable: bind,
+			}
+			req.GetLockHolder.Row = row
+			req.GetLockHolder.Sharding = pb.Sharding_ByRow
+			resp := &pb.Response{}
+
+			lt, err := l.getLocalLockTable(context.Background(), req, resp)
+			require.NoError(t, err)
+			require.NotNil(t, lt)
+			require.Equal(t, bind, lt.getBind())
 		},
 	)
 }
@@ -248,6 +467,167 @@ func TestHandleForwardLockRejectsWhenServiceCannotLock(t *testing.T) {
 	)
 }
 
+func TestHandleForwardLockDoesNotHoldBindChangeLockWhileWaitingForBind(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(alloc *lockTableAllocator, services []*service) {
+			s := services[0]
+			group := uint32(0)
+			table := uint64(24905)
+			bind := pb.LockTable{
+				Group:       group,
+				Table:       table,
+				OriginTable: table,
+				ServiceID:   s.serviceID,
+				Valid:       true,
+				Version:     alloc.version,
+				AllocatorID: alloc.allocatorID,
+			}
+			waitC := make(chan struct{})
+			s.mu.Lock()
+			s.mu.allocating[group] = map[uint64]chan struct{}{table: waitC}
+			s.mu.Unlock()
+
+			req := &pb.Request{
+				RequestID: 1,
+				Method:    pb.Method_ForwardLock,
+				LockTable: bind,
+				Lock: pb.LockRequest{
+					TxnID:     []byte("forward-waiting-bind"),
+					ServiceID: "remote-service",
+					Rows:      [][]byte{{1}},
+					Options:   newTestRowExclusiveOptions(),
+				},
+			}
+			resp := acquireResponse()
+			defer releaseResponse(resp)
+			cs := &testClientSession{ctx: context.Background()}
+
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				s.handleForwardLock(context.Background(), nil, req, resp, cs)
+			}()
+			time.Sleep(20 * time.Millisecond)
+
+			published := make(chan struct{})
+			go func() {
+				defer close(published)
+				s.bindChangeMu.Lock()
+				s.tableGroups.set(group, table, s.createLockTableByBind(bind))
+				s.bindChangeMu.Unlock()
+				s.mu.Lock()
+				delete(s.mu.allocating[group], table)
+				s.mu.Unlock()
+				close(waitC)
+			}()
+
+			select {
+			case <-published:
+			case <-time.After(time.Second):
+				require.Fail(t, "bind publish blocked while forwarded lock waited for allocation")
+			}
+			select {
+			case <-done:
+			case <-time.After(time.Second):
+				require.Fail(t, "forwarded lock did not finish after bind publish")
+			}
+			require.True(t, cs.writeCalled)
+			require.NoError(t, resp.UnwrapError())
+		},
+	)
+}
+
+func TestRemoteLockHandlersDeadlineCancelsLockTableAllocationWait(t *testing.T) {
+	tests := []struct {
+		name   string
+		method pb.Method
+		handle func(*service, context.Context, *pb.Request, *pb.Response, morpc.ClientSession)
+	}{
+		{
+			name:   "remote lock",
+			method: pb.Method_Lock,
+			handle: func(s *service, ctx context.Context, req *pb.Request, resp *pb.Response, cs morpc.ClientSession) {
+				s.handleRemoteLock(ctx, nil, req, resp, cs)
+			},
+		},
+		{
+			name:   "forward lock",
+			method: pb.Method_ForwardLock,
+			handle: func(s *service, ctx context.Context, req *pb.Request, resp *pb.Response, cs morpc.ClientSession) {
+				s.handleForwardLock(ctx, nil, req, resp, cs)
+			},
+		},
+	}
+
+	for i, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			runLockServiceTests(
+				t,
+				[]string{"s1"},
+				func(alloc *lockTableAllocator, services []*service) {
+					s := services[0]
+					group := uint32(0)
+					tableID := uint64(24918 + i)
+					waitC := make(chan struct{})
+					s.mu.Lock()
+					if s.mu.allocating[group] == nil {
+						s.mu.allocating[group] = make(map[uint64]chan struct{})
+					}
+					s.mu.allocating[group][tableID] = waitC
+					s.mu.Unlock()
+					defer func() {
+						s.mu.Lock()
+						delete(s.mu.allocating[group], tableID)
+						s.mu.Unlock()
+						close(waitC)
+					}()
+
+					options := newTestRowExclusiveOptions()
+					options.LockWaitTimeout = 60
+					options.LockWaitDeadline = time.Now().Add(100 * time.Millisecond).UnixNano()
+					req := &pb.Request{
+						RequestID: 1,
+						Method:    tc.method,
+						LockTable: pb.LockTable{
+							Group:       group,
+							Table:       tableID,
+							OriginTable: tableID,
+							ServiceID:   s.serviceID,
+							Valid:       true,
+							Version:     alloc.version,
+							AllocatorID: alloc.allocatorID,
+						},
+						Lock: pb.LockRequest{
+							TxnID:     []byte("owner-bind-waiter"),
+							ServiceID: "remote-service",
+							Rows:      [][]byte{{1}},
+							Options:   options,
+						},
+					}
+					resp := acquireResponse()
+					defer releaseResponse(resp)
+					cs := &testClientSession{ctx: context.Background()}
+					done := make(chan struct{})
+					go func() {
+						defer close(done)
+						tc.handle(s, context.Background(), req, resp, cs)
+					}()
+
+					select {
+					case <-done:
+						require.True(t, cs.writeCalled)
+						require.True(t, moerr.IsMoErrCode(resp.UnwrapError(), moerr.ErrLockWaitTimeout))
+					case <-time.After(2 * time.Second):
+						require.Fail(t, "owner lock budget did not cancel the allocation wait")
+					}
+				},
+			)
+		})
+	}
+}
+
 func TestGetActiveTxnWithRemote(t *testing.T) {
 	reuse.RunReuseTests(func() {
 		hold := newMapBasedTxnHandler(
@@ -255,7 +635,7 @@ func TestGetActiveTxnWithRemote(t *testing.T) {
 			getLogger(""),
 			newFixedSlicePool(16),
 			func(sid string) (bool, error) { return true, nil },
-			func(ot []pb.OrphanTxn) ([][]byte, error) { return nil, nil },
+			func(ot []pb.OrphanTxn) (pb.CannotCommitResponse, error) { return pb.CannotCommitResponse{}, nil },
 			func(txn pb.WaitTxn) (bool, error) { return true, nil },
 		).(*mapBasedTxnHolder)
 		defer hold.close()
@@ -273,6 +653,404 @@ func TestGetActiveTxnWithRemote(t *testing.T) {
 	})
 }
 
+func TestMapBasedTxnHolderConcurrentGetAndDelete(t *testing.T) {
+	reuse.RunReuseTests(func() {
+		hold := newMapBasedTxnHandler(
+			"s1",
+			getLogger(""),
+			newFixedSlicePool(16),
+			func(string) (bool, error) { return true, nil },
+			func([]pb.OrphanTxn) (pb.CannotCommitResponse, error) { return pb.CannotCommitResponse{}, nil },
+			func(pb.WaitTxn) (bool, error) { return true, nil },
+		).(*mapBasedTxnHolder)
+		defer hold.close()
+
+		const workers = 100
+		start := make(chan struct{})
+		results := make(chan *activeTxn, workers)
+		var wg sync.WaitGroup
+		for range workers {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-start
+				results <- hold.getActiveTxn([]byte("same-txn"), true, "")
+			}()
+		}
+		close(start)
+		wg.Wait()
+		close(results)
+		var first *activeTxn
+		for txn := range results {
+			if first == nil {
+				first = txn
+			}
+			require.Same(t, first, txn)
+		}
+		require.Equal(t, int64(1), hold.activeTxnCount.Load())
+
+		created := make(chan []byte, workers)
+		start = make(chan struct{})
+		for i := range workers {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				<-start
+				txnID := []byte(fmt.Sprintf("txn-%d", i))
+				if hold.getActiveTxn(txnID, true, "") != nil {
+					created <- txnID
+				}
+			}(i)
+		}
+		close(start)
+		wg.Wait()
+		close(created)
+		txnIDs := make([][]byte, 0, workers)
+		for txnID := range created {
+			txnIDs = append(txnIDs, txnID)
+		}
+		require.Len(t, txnIDs, workers)
+		require.Equal(t, int64(workers+1), hold.activeTxnCount.Load())
+
+		deleted := make(chan *activeTxn, workers)
+		start = make(chan struct{})
+		for _, txnID := range txnIDs {
+			wg.Add(1)
+			go func(txnID []byte) {
+				defer wg.Done()
+				<-start
+				deleted <- hold.deleteActiveTxn(txnID)
+			}(txnID)
+		}
+		close(start)
+		wg.Wait()
+		close(deleted)
+		for txn := range deleted {
+			require.NotNil(t, txn)
+			reuse.Free(txn, nil)
+		}
+		for _, txnID := range txnIDs {
+			require.Nil(t, hold.deleteActiveTxn(txnID))
+		}
+		require.Equal(t, int64(1), hold.activeTxnCount.Load())
+	})
+}
+
+func TestMapBasedTxnHolderVisitsAndClosesAllShards(t *testing.T) {
+	reuse.RunReuseTests(func() {
+		hold := newMapBasedTxnHandler(
+			"s1",
+			getLogger(""),
+			newFixedSlicePool(16),
+			func(string) (bool, error) { return true, nil },
+			func([]pb.OrphanTxn) (pb.CannotCommitResponse, error) { return pb.CannotCommitResponse{}, nil },
+			func(pb.WaitTxn) (bool, error) { return true, nil },
+		).(*mapBasedTxnHolder)
+
+		idsByShard := make(map[*activeTxnShard][]byte, activeTxnHolderShards)
+		for i := 0; len(idsByShard) < activeTxnHolderShards; i++ {
+			txnID := []byte(fmt.Sprintf("sharded-txn-%d", i))
+			shard := hold.getActiveTxnShard(string(txnID))
+			if _, ok := idsByShard[shard]; !ok {
+				idsByShard[shard] = txnID
+			}
+		}
+
+		expected := make(map[string]struct{}, activeTxnHolderShards)
+		for _, txnID := range idsByShard {
+			expected[string(txnID)] = struct{}{}
+			require.NotNil(t, hold.getActiveTxn(txnID, true, ""))
+		}
+		require.False(t, hold.empty())
+		require.Equal(t, int64(activeTxnHolderShards), hold.activeTxnCount.Load())
+
+		actual := make(map[string]struct{}, activeTxnHolderShards)
+		for _, txnID := range hold.getAllTxnID() {
+			actual[string(txnID)] = struct{}{}
+		}
+		require.Equal(t, expected, actual)
+
+		hold.close()
+		require.True(t, hold.empty())
+		require.Empty(t, hold.getAllTxnID())
+		for _, txnID := range idsByShard {
+			require.False(t, hold.hasActiveTxn(txnID))
+		}
+	})
+}
+
+func BenchmarkMapBasedTxnHolderConcurrent(b *testing.B) {
+	hold := newMapBasedTxnHandler(
+		"s1",
+		getLogger(""),
+		newFixedSlicePool(16),
+		func(string) (bool, error) { return true, nil },
+		func([]pb.OrphanTxn) (pb.CannotCommitResponse, error) { return pb.CannotCommitResponse{}, nil },
+		func(pb.WaitTxn) (bool, error) { return true, nil },
+	).(*mapBasedTxnHolder)
+	b.Cleanup(hold.close)
+
+	var next atomic.Uint64
+	b.ReportAllocs()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			txnID := []byte(fmt.Sprintf("txn-%d", next.Add(1)))
+			hold.getActiveTxn(txnID, true, "")
+			reuse.Free(hold.deleteActiveTxn(txnID), nil)
+		}
+	})
+}
+
+func TestHandleCheckActiveTxn(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(_ *lockTableAllocator, services []*service) {
+			s := services[0]
+			visited := 0
+			s.cfg.TxnIterFunc = func(fn func([]byte) bool) {
+				for _, txnID := range [][]byte{
+					[]byte("txn1"),
+					[]byte("txn2"),
+					[]byte("txn3"),
+				} {
+					visited++
+					if !fn(txnID) {
+						return
+					}
+				}
+			}
+
+			req := &pb.Request{
+				Method: pb.Method_CheckActiveTxn,
+				CheckActiveTxn: pb.CheckActiveTxnRequest{
+					ServiceID: s.serviceID,
+					Txn:       []byte("txn2"),
+				},
+			}
+			resp := acquireResponse()
+			defer releaseResponse(resp)
+			cs := &testClientSession{ctx: context.Background()}
+
+			s.handleCheckActiveTxn(context.Background(), nil, req, resp, cs)
+
+			require.True(t, cs.writeCalled)
+			require.True(t, resp.CheckActiveTxn.Valid)
+			require.True(t, resp.CheckActiveTxn.Active)
+			require.Equal(t, 2, visited)
+		},
+	)
+}
+
+func TestHandleCheckActiveTxnKeepsOnlyUnknownCommitCleanupActive(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(_ *lockTableAllocator, services []*service) {
+			s := services[0]
+			txnID := []byte("txn1")
+			s.activeTxnHolder.getActiveTxn(txnID, true, "")
+
+			req := &pb.Request{
+				Method: pb.Method_CheckActiveTxn,
+				CheckActiveTxn: pb.CheckActiveTxnRequest{
+					ServiceID: s.serviceID,
+					Txn:       txnID,
+				},
+			}
+			cs := &testClientSession{ctx: context.Background()}
+
+			resp := acquireResponse()
+			s.handleCheckActiveTxn(context.Background(), nil, req, resp, cs)
+			require.True(t, resp.CheckActiveTxn.Valid)
+			require.False(t, resp.CheckActiveTxn.Active)
+			releaseResponse(resp)
+
+			s.unknownCommitResolver.mu.Lock()
+			s.unknownCommitResolver.mu.pending[string(txnID)] = unknownCommitTxn{id: txnID}
+			s.unknownCommitResolver.mu.Unlock()
+
+			resp = acquireResponse()
+			defer releaseResponse(resp)
+			s.handleCheckActiveTxn(context.Background(), nil, req, resp, cs)
+			require.True(t, resp.CheckActiveTxn.Valid)
+			require.True(t, resp.CheckActiveTxn.Active)
+		},
+	)
+}
+
+func TestValidRemoteTxnUsesCheckActiveTxn(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1", "s2"},
+		func(_ *lockTableAllocator, services []*service) {
+			source := services[0]
+			target := services[1]
+			target.cfg.TxnIterFunc = func(fn func([]byte) bool) {
+				require.False(t, fn([]byte("txn1")))
+			}
+
+			valid := source.activeTxnHolder.isValidRemoteTxn(pb.WaitTxn{
+				TxnID:     []byte("txn1"),
+				CreatedOn: target.serviceID,
+			})
+			require.True(t, valid)
+		},
+	)
+}
+
+type scriptedActiveTxnClient struct {
+	Client
+	calls      atomic.Int32
+	resets     atomic.Int32
+	resetErr   error
+	afterReset pb.CheckActiveTxnResponse
+}
+
+func (c *scriptedActiveTxnClient) Send(
+	_ context.Context,
+	req *pb.Request,
+) (*pb.Response, error) {
+	if req.Method != pb.Method_CheckActiveTxn {
+		return nil, moerr.NewInternalErrorNoCtx("unexpected active-txn method")
+	}
+	resp := acquireResponse()
+	if c.calls.Add(1) == 1 {
+		// The stale endpoint belongs to a different CN incarnation.
+		resp.CheckActiveTxn.Valid = false
+		return resp, nil
+	}
+	resp.CheckActiveTxn = c.afterReset
+	return resp, nil
+}
+
+func (c *scriptedActiveTxnClient) ResetBackend(context.Context, string) error {
+	c.resets.Add(1)
+	return c.resetErr
+}
+
+func (c *scriptedActiveTxnClient) Close() error { return nil }
+
+func TestValidRemoteTxnRecoversStaleCheckActiveTxnEndpoint(t *testing.T) {
+	client := &scriptedActiveTxnClient{
+		afterReset: pb.CheckActiveTxnResponse{Valid: true, Active: true},
+	}
+	var notified atomic.Int32
+	holder := newMapBasedTxnHandler(
+		"source",
+		getLogger(""),
+		newFixedSlicePool(16),
+		func(string) (bool, error) { return true, nil },
+		func([]pb.OrphanTxn) (pb.CannotCommitResponse, error) {
+			notified.Add(1)
+			return pb.CannotCommitResponse{}, nil
+		},
+		func(txn pb.WaitTxn) (bool, error) {
+			return checkRemoteActiveTxn(client, txn)
+		},
+	).(*mapBasedTxnHolder)
+	defer holder.close()
+
+	require.True(t, holder.isValidRemoteTxn(pb.WaitTxn{
+		TxnID:     []byte("live"),
+		CreatedOn: "target",
+	}))
+	require.Equal(t, int32(2), client.calls.Load())
+	require.Equal(t, int32(1), client.resets.Load())
+	require.Zero(t, notified.Load(), "recovered live txn reached unlock fencing")
+}
+
+func TestValidRemoteTxnStaysLiveWhenEndpointResetFails(t *testing.T) {
+	client := &scriptedActiveTxnClient{resetErr: moerr.NewBackendClosedNoCtx()}
+	var notified atomic.Int32
+	holder := newMapBasedTxnHandler(
+		"source",
+		getLogger(""),
+		newFixedSlicePool(16),
+		func(string) (bool, error) { return true, nil },
+		func([]pb.OrphanTxn) (pb.CannotCommitResponse, error) {
+			notified.Add(1)
+			return pb.CannotCommitResponse{}, nil
+		},
+		func(txn pb.WaitTxn) (bool, error) {
+			return checkRemoteActiveTxn(client, txn)
+		},
+	).(*mapBasedTxnHolder)
+	defer holder.close()
+
+	require.True(t, holder.isValidRemoteTxn(pb.WaitTxn{
+		TxnID:     []byte("live"),
+		CreatedOn: "target",
+	}))
+	require.Equal(t, int32(1), client.calls.Load())
+	require.Equal(t, int32(1), client.resets.Load())
+	require.Zero(t, notified.Load(), "unknown routing must not reach unlock fencing")
+}
+
+func TestValidRemoteTxnFallsBackToGetActiveTxn(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1", "s2"},
+		func(_ *lockTableAllocator, services []*service) {
+			source := services[0]
+			target := services[1]
+			target.cfg.TxnIterFunc = func(fn func([]byte) bool) {
+				require.True(t, fn([]byte("txn1")))
+			}
+			target.remote.server.RegisterMethodHandler(
+				pb.Method_CheckActiveTxn,
+				func(_ context.Context, cancel context.CancelFunc, req *pb.Request, resp *pb.Response, cs morpc.ClientSession) {
+					writeResponse(
+						target.logger,
+						cancel,
+						resp,
+						moerr.NewNotSupportedNoCtx("check active txn"),
+						cs,
+					)
+				},
+			)
+
+			valid := source.activeTxnHolder.isValidRemoteTxn(pb.WaitTxn{
+				TxnID:     []byte("txn1"),
+				CreatedOn: target.serviceID,
+			})
+			require.True(t, valid)
+		},
+	)
+}
+
+func TestValidRemoteTxnFallsBackToGetActiveTxnMiss(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1", "s2"},
+		func(_ *lockTableAllocator, services []*service) {
+			source := services[0]
+			target := services[1]
+			target.cfg.TxnIterFunc = func(fn func([]byte) bool) {
+				require.True(t, fn([]byte("txn2")))
+			}
+			target.remote.server.RegisterMethodHandler(
+				pb.Method_CheckActiveTxn,
+				func(_ context.Context, cancel context.CancelFunc, req *pb.Request, resp *pb.Response, cs morpc.ClientSession) {
+					writeResponse(
+						target.logger,
+						cancel,
+						resp,
+						moerr.NewNotSupportedNoCtx("check active txn"),
+						cs,
+					)
+				},
+			)
+
+			valid := source.activeTxnHolder.isValidRemoteTxn(pb.WaitTxn{
+				TxnID:     []byte("txn1"),
+				CreatedOn: target.serviceID,
+			})
+			require.False(t, valid)
+		},
+	)
+}
+
 func TestKeepRemoteActiveTxn(t *testing.T) {
 	reuse.RunReuseTests(func() {
 		hold := newMapBasedTxnHandler(
@@ -280,7 +1058,7 @@ func TestKeepRemoteActiveTxn(t *testing.T) {
 			getLogger(""),
 			newFixedSlicePool(16),
 			func(sid string) (bool, error) { return false, nil },
-			func(ot []pb.OrphanTxn) ([][]byte, error) { return nil, nil },
+			func(ot []pb.OrphanTxn) (pb.CannotCommitResponse, error) { return pb.CannotCommitResponse{}, nil },
 			func(txn pb.WaitTxn) (bool, error) { return true, nil },
 		).(*mapBasedTxnHolder)
 		defer hold.close()
@@ -313,7 +1091,7 @@ func TestLockWithBindIsStale(t *testing.T) {
 		func(
 			ctx context.Context,
 			alloc *lockTableAllocator,
-			l1, l2 *service,
+			l1, l2, _ *service,
 			table uint64) {
 			txnID2 := []byte("txn2")
 			_, err := l2.Lock(ctx, table, [][]byte{{3}}, txnID2, pb.LockOptions{
@@ -327,7 +1105,7 @@ func TestLockWithBindIsStale(t *testing.T) {
 
 			checkBind(
 				t,
-				pb.LockTable{ServiceID: l1.serviceID, Version: alloc.version + 1, Table: table, OriginTable: table, Valid: true},
+				pb.LockTable{ServiceID: l1.serviceID, Version: alloc.version + 1, Table: table, OriginTable: table, Valid: true, AllocatorID: alloc.allocatorID},
 				l2)
 		},
 	)
@@ -340,7 +1118,7 @@ func TestUnlockWithBindIsStable(t *testing.T) {
 		func(
 			ctx context.Context,
 			alloc *lockTableAllocator,
-			l1, l2 *service,
+			l1, l2, _ *service,
 			table uint64) {
 
 			txnID2 := []byte("txn2")
@@ -366,17 +1144,17 @@ func TestGetLockWithBindIsStable(t *testing.T) {
 		func(
 			ctx context.Context,
 			alloc *lockTableAllocator,
-			l1, l2 *service,
+			l1, l2, _ *service,
 			table uint64) {
 
 			txnID2 := []byte("txn2")
-			lt, err := l2.getLockTable(0, table)
+			lt, err := l2.getLockTable(context.Background(), 0, table)
 			require.NoError(t, err)
-			lt.getLock(txnID2, pb.WaitTxn{TxnID: []byte{1}}, func(l Lock) {})
+			_ = lt.getLock(context.Background(), txnID2, pb.WaitTxn{TxnID: []byte{1}}, func(l Lock) {})
 
 			checkBind(
 				t,
-				pb.LockTable{ServiceID: l1.serviceID, Version: alloc.version + 1, Table: table, OriginTable: table, Valid: true},
+				pb.LockTable{ServiceID: l1.serviceID, Version: alloc.version + 1, Table: table, OriginTable: table, Valid: true, AllocatorID: alloc.allocatorID},
 				l2)
 		},
 	)
@@ -389,7 +1167,7 @@ func TestLockWithBindTimeout(t *testing.T) {
 		func(
 			ctx context.Context,
 			alloc *lockTableAllocator,
-			l1, l2 *service,
+			l1, l2, _ *service,
 			table uint64) {
 			// stop l1 let old bind invalid
 			require.NoError(t, l1.Close())
@@ -436,7 +1214,7 @@ func TestUnlockWithBindTimeout(t *testing.T) {
 		func(
 			ctx context.Context,
 			alloc *lockTableAllocator,
-			l1, l2 *service,
+			l1, l2, _ *service,
 			table uint64) {
 			// stop l1 let old bind invalid
 			require.NoError(t, l1.Close())
@@ -459,7 +1237,7 @@ func TestGetLockWithBindTimeout(t *testing.T) {
 		func(
 			ctx context.Context,
 			alloc *lockTableAllocator,
-			l1, l2 *service,
+			l1, l2, _ *service,
 			table uint64) {
 			// stop l1 let old bind invalid
 			require.NoError(t, l1.Close())
@@ -467,9 +1245,9 @@ func TestGetLockWithBindTimeout(t *testing.T) {
 			waitBindDisabled(t, alloc, l1.serviceID)
 
 			txnID2 := []byte("txn2")
-			lt, err := l2.getLockTable(0, table)
+			lt, err := l2.getLockTable(context.Background(), 0, table)
 			require.NoError(t, err)
-			lt.getLock(txnID2, pb.WaitTxn{TxnID: []byte{1}}, func(l Lock) {})
+			_ = lt.getLock(context.Background(), txnID2, pb.WaitTxn{TxnID: []byte{1}}, func(l Lock) {})
 			// l2 get the bind
 			l := l2.tableGroups.get(0, table)
 			assert.Equal(t, l2.serviceID, l.getBind().ServiceID)
@@ -484,11 +1262,17 @@ func TestLockWithBindNotFound(t *testing.T) {
 		func(
 			ctx context.Context,
 			alloc *lockTableAllocator,
-			l1, l2 *service,
+			l1, l2, l3 *service,
 			table uint64) {
 
 			// change l2's bind to s3, no bind in s3
-			l2.handleBindChanged(pb.LockTable{Table: table, ServiceID: "s3", Valid: true, Version: alloc.version + 1})
+			l2.handleBindChanged(pb.LockTable{
+				Table:       table,
+				ServiceID:   l3.serviceID,
+				Valid:       true,
+				Version:     alloc.version + 1,
+				OriginTable: table,
+			})
 
 			txnID2 := []byte("txn2")
 			_, err := l2.Lock(ctx, table, [][]byte{{3}}, txnID2, pb.LockOptions{
@@ -501,7 +1285,9 @@ func TestLockWithBindNotFound(t *testing.T) {
 			require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged))
 
 			txnID3 := []byte("txn3")
-			_, err = l2.Lock(ctx, table, [][]byte{{3}}, txnID3, pb.LockOptions{
+			lockCtx, cancel := context.WithTimeout(ctx, time.Millisecond*200)
+			defer cancel()
+			_, err = l2.Lock(lockCtx, table, [][]byte{{3}}, txnID3, pb.LockOptions{
 				Granularity: pb.Granularity_Row,
 				Mode:        pb.LockMode_Exclusive,
 				Policy:      pb.WaitPolicy_Wait,
@@ -510,19 +1296,11 @@ func TestLockWithBindNotFound(t *testing.T) {
 
 			checkBind(
 				t,
-				pb.LockTable{ServiceID: l1.serviceID, Version: alloc.version, Table: table, OriginTable: table, Valid: true},
+				pb.LockTable{ServiceID: l1.serviceID, Version: alloc.version, Table: table, OriginTable: table, Valid: true, AllocatorID: alloc.allocatorID},
 				l2)
 
-			txnID4 := []byte("txn4")
-			_, err = l2.Lock(ctx, table, [][]byte{{3}}, txnID4, pb.LockOptions{
-				Granularity: pb.Granularity_Row,
-				Mode:        pb.LockMode_Exclusive,
-				Policy:      pb.WaitPolicy_Wait,
-			})
-			require.NoError(t, err)
-			require.NoError(t, l2.Unlock(ctx, txnID2, timestamp.Timestamp{}))
 			require.NoError(t, l2.Unlock(ctx, txnID3, timestamp.Timestamp{}))
-			require.NoError(t, l2.Unlock(ctx, txnID4, timestamp.Timestamp{}))
+			require.NoError(t, l2.Unlock(ctx, txnID2, timestamp.Timestamp{}))
 		},
 	)
 }
@@ -534,18 +1312,24 @@ func TestUnlockWithBindNotFound(t *testing.T) {
 		func(
 			ctx context.Context,
 			alloc *lockTableAllocator,
-			l1, l2 *service,
+			l1, l2, l3 *service,
 			table uint64) {
 
 			// change l2's bind to s3, no bind in s3
-			l2.handleBindChanged(pb.LockTable{Table: table, ServiceID: "s3", Valid: true, Version: alloc.version})
+			l2.handleBindChanged(pb.LockTable{
+				Table:       table,
+				ServiceID:   l3.serviceID,
+				Valid:       true,
+				Version:     alloc.version,
+				OriginTable: table,
+			})
 
 			txnID2 := []byte("txn2")
 			l2.Unlock(ctx, txnID2, timestamp.Timestamp{})
 
 			checkBind(
 				t,
-				pb.LockTable{Table: table, ServiceID: "s3", Valid: true, Version: alloc.version},
+				pb.LockTable{Table: table, ServiceID: l3.serviceID, Valid: true, Version: alloc.version, OriginTable: table},
 				l2)
 		},
 	)
@@ -558,20 +1342,26 @@ func TestGetLockWithBindNotFound(t *testing.T) {
 		func(
 			ctx context.Context,
 			alloc *lockTableAllocator,
-			l1, l2 *service,
+			l1, l2, l3 *service,
 			table uint64) {
 
 			// change l2's bind to s3, no bind in s3
-			l2.handleBindChanged(pb.LockTable{Table: table, ServiceID: "s3", Valid: true, Version: alloc.version})
+			l2.handleBindChanged(pb.LockTable{
+				Table:       table,
+				ServiceID:   l3.serviceID,
+				Valid:       true,
+				Version:     alloc.version,
+				OriginTable: table,
+			})
 
 			txnID2 := []byte("txn2")
-			lt, err := l2.getLockTable(0, table)
+			lt, err := l2.getLockTable(context.Background(), 0, table)
 			require.NoError(t, err)
-			lt.getLock(txnID2, pb.WaitTxn{TxnID: []byte{1}}, func(l Lock) {})
+			_ = lt.getLock(context.Background(), txnID2, pb.WaitTxn{TxnID: []byte{1}}, func(l Lock) {})
 
 			checkBind(
 				t,
-				pb.LockTable{ServiceID: l1.serviceID, Version: alloc.version, Table: table, OriginTable: table, Valid: true},
+				pb.LockTable{ServiceID: l1.serviceID, Version: alloc.version, Table: table, OriginTable: table, Valid: true, AllocatorID: alloc.allocatorID},
 				l2)
 		},
 	)
@@ -614,6 +1404,49 @@ func TestIssue12554(t *testing.T) {
 	)
 }
 
+func TestRemoteLockRechecksBindChangedAfterGetLocalLockTable(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1", "s2"},
+		func(alloc *lockTableAllocator, s []*service) {
+			l1 := s[0]
+			l2 := s[1]
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+
+			table := uint64(12555)
+			option := newTestRowExclusiveOptions()
+			_, err := l1.Lock(ctx, table, newTestRows(1), newTestTxnID(1), option)
+			require.NoError(t, err)
+			require.NoError(t, l1.Unlock(ctx, newTestTxnID(1), timestamp.Timestamp{}))
+
+			oldBind := l1.tableGroups.get(0, table).getBind()
+			newBind := oldBind
+			newBind.ServiceID = "new-lock-owner"
+			newBind.Version++
+
+			var changed atomic.Bool
+			l1.option.beforeRemoteLockBindCheck = func() {
+				if changed.CompareAndSwap(false, true) {
+					alloc.mu.Lock()
+					alloc.getLockTablesLocked(newBind.Group)[newBind.Table] = newBind
+					alloc.mu.Unlock()
+					l1.handleBindChanged(newBind)
+				}
+			}
+			defer func() {
+				l1.option.beforeRemoteLockBindCheck = nil
+			}()
+
+			_, err = l2.Lock(ctx, table, newTestRows(2), newTestTxnID(2), option)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged))
+			require.True(t, changed.Load())
+			checkBind(t, newBind, l1)
+			checkBind(t, newBind, l2)
+		},
+	)
+}
+
 func TestIssue14346(t *testing.T) {
 	runLockServiceTests(
 		t,
@@ -647,7 +1480,7 @@ func TestIssue14346(t *testing.T) {
 				case <-ctx.Done():
 					t.Fatal("timeout waiting for bind removal on s2")
 				default:
-					v, err := s2.getLockTable(0, table)
+					v, err := s2.getLockTable(context.Background(), 0, table)
 					require.NoError(t, err)
 					if v == nil {
 						return
@@ -665,7 +1498,7 @@ func runBindChangedTests(
 	fn func(
 		ctx context.Context,
 		alloc *lockTableAllocator,
-		l1, l2 *service,
+		l1, l2, l3 *service,
 		table uint64)) {
 	var skip atomic.Bool
 	runLockServiceTestsWithAdjustConfig(
@@ -686,14 +1519,14 @@ func runBindChangedTests(
 
 			// l2 get the table1's bind
 			mustAddTestLock(t, ctx, l2, table1, txnID2, [][]byte{{2}}, pb.Granularity_Row)
-			v, err := l2.getLockTable(0, table1)
+			v, err := l2.getLockTable(context.Background(), 0, table1)
 			require.NoError(t, err)
 			require.Equal(t, l1.serviceID, v.getBind().ServiceID)
 
 			if makeBindChanged {
 				// stop l1 keep lock bind
 				skip.Store(true)
-				lt, err := l1.getLockTable(0, table1)
+				lt, err := l1.getLockTable(context.Background(), 0, table1)
 				require.NoError(t, err)
 				old := lt.getBind()
 				waitBindDisabled(t, alloc, l1.serviceID)
@@ -705,7 +1538,7 @@ func runBindChangedTests(
 				time.Sleep(time.Millisecond * 100)
 			}
 
-			fn(ctx, alloc, l1, l2, table1)
+			fn(ctx, alloc, l1, l2, s[2], table1)
 		},
 		func(c *Config) {
 			c.KeepBindDuration.Duration = time.Second
@@ -737,7 +1570,7 @@ func waitBindChanged(
 	old pb.LockTable,
 	l *service) {
 	for {
-		lt, err := l.getLockTableWithCreate(0, old.Table, nil, pb.Sharding_None)
+		lt, err := l.getLockTableWithCreate(context.Background(), 0, old.Table, nil, pb.Sharding_None)
 		require.NoError(t, err)
 		new := lt.getBind()
 		if new.Changed(old) {
@@ -753,4 +1586,198 @@ func checkBind(
 	s *service) {
 	l := s.tableGroups.get(0, bind.Table)
 	assert.Equal(t, bind, l.getBind())
+}
+
+// TestRemoteLockWaitTimeout_PrecisionIndependentOfLazyCheck verifies that
+// the async lock_wait_timeout fires at the waiter's own deadline, NOT on
+// the coarse defaultLazyCheckDuration tick.  It temporarily sets the
+// global lazy-check interval to 10s, so without the precise AfterFunc
+// timer the test would timeout or take >10s.
+func TestRemoteLockWaitTimeout_PrecisionIndependentOfLazyCheck(t *testing.T) {
+	// Force the lazy-check interval to 10s so any enforcement that relies
+	// only on the periodic check() tick would take ≥10s.
+	orig := defaultLazyCheckDuration.Load().(time.Duration)
+	defaultLazyCheckDuration.Store(10 * time.Second)
+	defer defaultLazyCheckDuration.Store(orig)
+
+	runLockServiceTests(
+		t,
+		[]string{"s1", "s2"},
+		func(alloc *lockTableAllocator, s []*service) {
+			tableID := uint64(10)
+			l1 := s[0] // lock-table owner
+			l2 := s[1] // remote CN
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
+			defer cancel()
+
+			txn1 := []byte("txn1")
+			txn2 := []byte("txn2")
+			row1 := []byte{1}
+
+			// txn1 holds the lock.
+			mustAddTestLock(t, ctx, l1, tableID, txn1, [][]byte{row1}, pb.Granularity_Row)
+
+			// txn2 on remote CN requests with 1-second timeout.
+			// With the check tick at 10s, a coarse-tick-only approach
+			// would need >10s.  The precise AfterFunc timer must fire at ~1s.
+			start := time.Now()
+			_, err := l2.Lock(
+				ctx, tableID, [][]byte{row1}, txn2,
+				pb.LockOptions{
+					Granularity:     pb.Granularity_Row,
+					Mode:            pb.LockMode_Exclusive,
+					Policy:          pb.WaitPolicy_Wait,
+					LockWaitTimeout: 1,
+				})
+			elapsed := time.Since(start)
+
+			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockWaitTimeout),
+				"expected lock-timeout, got %v", err)
+			// Must fire well before the 10s coarse tick.
+			require.Less(t, elapsed, 3*time.Second,
+				"precise timer should fire at ~1s, elapsed=%v", elapsed)
+		},
+	)
+}
+
+func TestRemoteOwnerLocalDeadlockFastPathBreaksPartialLockRing(t *testing.T) {
+	txn1 := []byte("txn1")
+	txn2 := []byte("txn2")
+	runLockServiceTestsWithAdjustConfig(
+		t,
+		[]string{"s1", "s2"},
+		time.Second*10,
+		func(alloc *lockTableAllocator, s []*service) {
+			tableID := uint64(10)
+			owner := s[0]
+			origin := s[1]
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+
+			// Pin the lock table to s1, then use s2 as the remote origin.
+			mustAddTestLock(t, ctx, owner, tableID, []byte("pin"), [][]byte{{0}}, pb.Granularity_Row)
+			require.NoError(t, owner.Unlock(ctx, []byte("pin"), timestamp.Timestamp{}))
+
+			row1 := []byte{1}
+			row2 := []byte{2}
+			opt := newTestRowExclusiveOptions()
+
+			mustAddTestLock(t, ctx, origin, tableID, txn1, [][]byte{row1}, pb.Granularity_Row)
+			mustAddTestLock(t, ctx, origin, tableID, txn2, [][]byte{row2}, pb.Granularity_Row)
+
+			errC := make(chan error, 1)
+			go func() {
+				_, err := origin.Lock(ctx, tableID, [][]byte{row2}, txn1, opt)
+				errC <- err
+			}()
+			require.NoError(t, WaitWaiters(owner, 0, tableID, row2, 1))
+
+			_, err := origin.Lock(ctx, tableID, [][]byte{row1}, txn2, opt)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrDeadLockDetected), "got %v", err)
+			require.NoError(t, origin.Unlock(ctx, txn2, timestamp.Timestamp{}))
+
+			require.NoError(t, <-errC)
+			require.NoError(t, origin.Unlock(ctx, txn1, timestamp.Timestamp{}))
+		},
+		func(cfg *Config) {
+			cfg.TxnIterFunc = func(fn func([]byte) bool) {
+				fn(txn1)
+				fn(txn2)
+			}
+		},
+	)
+}
+
+func TestRemoteLockOwnerWaitTimeoutReturnsDedicatedError(t *testing.T) {
+	runLockServiceTestsWithAdjustConfig(
+		t,
+		[]string{"s1", "s2"},
+		time.Second*10,
+		func(alloc *lockTableAllocator, s []*service) {
+			tableID := uint64(10)
+			owner := s[0]
+			origin := s[1]
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+			defer cancel()
+
+			txn1 := []byte("txn1")
+			txn2 := []byte("txn2")
+			row1 := []byte{1}
+			mustAddTestLock(t, ctx, owner, tableID, txn1, [][]byte{row1}, pb.Granularity_Row)
+
+			opt := newTestRowExclusiveOptions()
+			opt.LockWaitTimeout = 0
+			start := time.Now()
+			_, err := origin.Lock(ctx, tableID, [][]byte{row1}, txn2, opt)
+			elapsed := time.Since(start)
+
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrRemoteLockWaitTimeout), "got %v", err)
+			require.GreaterOrEqual(t, elapsed, 100*time.Millisecond)
+			require.Less(t, elapsed, 2*time.Second)
+			require.NoError(t, origin.Unlock(ctx, txn2, timestamp.Timestamp{}))
+			require.NoError(t, owner.Unlock(ctx, txn1, timestamp.Timestamp{}))
+		},
+		func(cfg *Config) {
+			cfg.RemoteLockOwnerWaitTimeout = &toml.Duration{Duration: 100 * time.Millisecond}
+		},
+	)
+}
+
+// TestRemoteLockWaitTimeout_ReturnsLockTimeout ensures that in a multi-CN
+// deployment, when txn2 on a remote CN waits on a lock held by txn1 on the
+// lock-table owner CN, txn2 receives ErrLockTimeout (lock timeout) after
+// LockWaitTimeout elapses, NOT a retryable connectivity/backend error.
+//
+// Before the fix, the client-side RPC deadline was set to exactly
+// LockWaitTimeout. The lock-table owner started its own wait budget only
+// after receiving the RPC, so the client deadline could fire before the
+// owner returned ErrLockTimeout.  When that happened the client saw a
+// retryable error instead of lock-timeout.
+func TestRemoteLockWaitTimeout_ReturnsLockTimeout(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1", "s2"},
+		func(alloc *lockTableAllocator, s []*service) {
+			tableID := uint64(10)
+			l1 := s[0] // lock-table owner
+			l2 := s[1] // remote CN
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+
+			txn1 := []byte("txn1")
+			txn2 := []byte("txn2")
+			row1 := []byte{1}
+
+			// txn1 acquires and holds the lock on the owner.
+			mustAddTestLock(t, ctx, l1, tableID, txn1, [][]byte{row1}, pb.Granularity_Row)
+
+			// txn2 on the remote CN tries to lock the same row with a 1-second
+			// LockWaitTimeout.
+			opt := pb.LockOptions{
+				Granularity:     pb.Granularity_Row,
+				Mode:            pb.LockMode_Exclusive,
+				Policy:          pb.WaitPolicy_Wait,
+				LockWaitTimeout: 1, // 1 second
+			}
+
+			start := time.Now()
+			_, err := l2.Lock(ctx, tableID, [][]byte{row1}, txn2, opt)
+			elapsed := time.Since(start)
+
+			require.Error(t, err)
+			// Must receive lock-timeout, not connectivity/backend error.
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockWaitTimeout),
+				"expected ErrLockWaitTimeout, got %v", err)
+			require.Contains(t, err.Error(), "Lock wait timeout exceeded",
+				"expected lock timeout message, got %v", err)
+			require.GreaterOrEqual(t, elapsed, time.Second,
+				"should have waited at least LockWaitTimeout")
+			// With the lazy check interval at 50ms in tests, the async timeout
+			// should be detected very close to LockWaitTimeout.  Allow a
+			// generous upper bound to absorb scheduling jitter.
+			require.Less(t, elapsed, 5*time.Second,
+				"should not wait beyond LockWaitTimeout + check interval")
+		},
+	)
 }

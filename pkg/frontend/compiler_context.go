@@ -15,12 +15,12 @@
 package frontend
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -179,8 +179,20 @@ func (tcc *TxnCompilerContext) GetDatabase() string {
 
 func (tcc *TxnCompilerContext) DefaultDatabase() string {
 	tcc.mu.Lock()
-	defer tcc.mu.Unlock()
-	return tcc.dbName
+	db := tcc.dbName
+	execCtx := tcc.execCtx
+	tcc.mu.Unlock()
+	// remapdb: when the current database is a remap source, unqualified names
+	// (tables, views, ...) resolve against the destination. USE is deliberately
+	// NOT remapped, so the session's actual current database (database()) stays
+	// the source; only name resolution is redirected. Qualified references are
+	// remapped separately at the AST level by applyRemapDb.
+	if execCtx != nil && len(execCtx.remapDb) > 0 {
+		if dst, ok := execCtx.remapDb[db]; ok {
+			return dst
+		}
+	}
+	return db
 }
 
 func (tcc *TxnCompilerContext) GetRootSql() string {
@@ -431,7 +443,7 @@ func (tcc *TxnCompilerContext) ResolveById(tableId uint64, snapshot *plan2.Snaps
 		ObjName:    tableName,
 		Obj:        returnTableID,
 	}
-	tableDef := table.CopyTableDef(tempCtx)
+	tableDef := plan2.CloneTableDefForPlan(table.GetTableDef(tempCtx), true)
 	return obj, tableDef, nil
 }
 
@@ -456,7 +468,7 @@ func (tcc *TxnCompilerContext) ResolveSubscriptionTableById(tableId uint64, subM
 		ObjName:    tableName,
 		Obj:        returnTableID,
 	}
-	tableDef := table.CopyTableDef(pubContext)
+	tableDef := plan2.CloneTableDefForPlan(table.GetTableDef(pubContext), true)
 	return obj, tableDef, nil
 }
 
@@ -502,7 +514,7 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string, snapshot
 	if table == nil {
 		return nil, nil, nil
 	}
-	tableDef := table.CopyTableDef(ctx)
+	tableDef := plan2.CloneTableDefForPlan(table.GetTableDef(ctx), true)
 	tableDef.IsTemporary = isTmpTable
 
 	// convert
@@ -573,7 +585,7 @@ func (tcc *TxnCompilerContext) ResolveIndexTableByRef(
 		PubInfo:          ref.PubInfo,
 	}
 
-	tableDef := table.CopyTableDef(ctx)
+	tableDef := plan2.CloneTableDefForPlan(table.GetTableDef(ctx), true)
 	if tableDef.IsTemporary {
 		tableDef.Name = tblName
 	}
@@ -618,7 +630,7 @@ func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (udf *
 		return nil, err
 	}
 
-	sql = fmt.Sprintf(`select args, body, language, rettype, db, modified_time from mo_catalog.mo_user_defined_function where name = "%s" and db = "%s";`, name, tcc.DefaultDatabase())
+	sql = fmt.Sprintf(`select args, body, language, rettype, db, modified_time, sql_mode from mo_catalog.mo_user_defined_function where name = "%s" and db = "%s";`, name, tcc.DefaultDatabase())
 	bh.ClearExecResultSet()
 	err = bh.Exec(ctx, sql)
 	if err != nil {
@@ -681,6 +693,11 @@ func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (udf *
 			}
 			udf.ModifiedTime = strings.ReplaceAll(udf.ModifiedTime, " ", "_")
 			udf.ModifiedTime = strings.ReplaceAll(udf.ModifiedTime, ":", "-")
+			mode, getErr := erArray[0].GetString(ctx, i, 6)
+			if getErr != nil {
+				return nil, getErr
+			}
+			udf.SQLMode = &mode
 			// arg type check
 			argList := make([]*function.Arg, 0)
 			err = json.Unmarshal([]byte(argstr), &argList)
@@ -717,8 +734,8 @@ func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (udf *
 			return nil, err
 		}
 
-		sort.Slice(matchedList, func(i, j int) bool {
-			return matchedList[i].Cost < matchedList[j].Cost
+		slices.SortFunc(matchedList, func(a, b *MatchUdf) int {
+			return cmp.Compare(a.Cost, b.Cost)
 		})
 
 		minCost := matchedList[0].Cost

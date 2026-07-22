@@ -62,6 +62,7 @@ func (hashBuild *HashBuild) Prepare(proc *process.Process) (err error) {
 	hashBuild.ctr.hashmapBuilder.OnDuplicateAction = hashBuild.OnDuplicateAction
 	hashBuild.ctr.hashmapBuilder.DedupColName = hashBuild.DedupColName
 	hashBuild.ctr.hashmapBuilder.DedupColTypes = hashBuild.DedupColTypes
+	hashBuild.ctr.hashmapBuilder.TrackNullKeys = hashBuild.TrackNullKeys
 
 	return hashBuild.ctr.hashmapBuilder.Prepare(
 		hashBuild.Conditions,
@@ -113,6 +114,7 @@ func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 					jm.SetPushedRuntimeFilterIn(ctr.runtimeFilterIn)
 				}
 				jm.SetRowCount(int64(ctr.hashmapBuilder.InputBatchRowCount))
+				jm.SetHasNullKey(ctr.hashmapBuilder.HasNullKey)
 				jm.IncRef(hashBuild.JoinMapRefCnt)
 			}
 
@@ -202,7 +204,7 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 			logutil.Infof("entering spill mode, uid: %s", ctr.spillUUID)
 
 			spillFiles = make([]*os.File, spillNumBuckets)
-			spillBuffers = ctr.acquireSpillBuffers(proc)
+			spillBuffers = make([]*batch.Batch, spillNumBuckets)
 
 			// Spill all batches collected so far
 			for _, bat := range ctr.hashmapBuilder.Batches.Buf {
@@ -303,9 +305,9 @@ func (hashBuild *HashBuild) handleRuntimeFilter(proc *process.Process) error {
 
 	spec := hashBuild.RuntimeFilterSpec
 
-	// use bloom filter runtime filter when requested
-	if spec.UseBloomFilter {
-		// currently only support single-column key for bloom runtime filter
+	// send the unique join keys (doc_id membership pushdown) when requested
+	if spec.UseMembershipFilter {
+		// currently only support single-column key for this runtime filter;
 		// composite key still uses original IN / PASS logic
 		if spec.Expr != nil && spec.Expr.GetF() != nil {
 			runtimeFilter.Typ = message.RuntimeFilter_PASS
@@ -325,10 +327,10 @@ func (hashBuild *HashBuild) handleRuntimeFilter(proc *process.Process) error {
 		keyVec := ctr.hashmapBuilder.UniqueJoinKeys[0]
 		rowCount := keyVec.Length()
 
-		// Always send BLOOMFILTER with the serialized unique join keys.
-		// The consumer (ivfflat search) decides whether to use them as
-		// an exact pk IN filter or a bloom filter based on its own threshold.
-		runtimeFilter.Typ = message.RuntimeFilter_BLOOMFILTER
+		// Always send the unique join keys; the consumer (ivfflat / fulltext
+		// search) decides whether to use them as an exact pk IN filter or to
+		// build a membership filter, based on its own threshold.
+		runtimeFilter.Typ = message.RuntimeFilter_UNIQUEJOINKEYS
 
 		data, err := keyVec.MarshalBinary()
 		if err != nil {

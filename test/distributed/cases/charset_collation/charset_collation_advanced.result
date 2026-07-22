@@ -153,7 +153,8 @@ SELECT id, LOCATE('测试', data) as pos FROM t_locate_test WHERE id = 3;
 ➤ id[4,32,0]  ¦  pos[-5,64,0]  𝄀
 3  ¦  5
 SELECT id, POSITION('测试' IN data) as pos FROM t_locate_test WHERE id = 3;
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 36 near " data) as pos FROM t_locate_test WHERE id = 3;";
+id	pos
+3	5
 SELECT INSTR('Hello World', 'World');
 ➤ INSTR(Hello World, World)[-5,64,0]  𝄀
 7

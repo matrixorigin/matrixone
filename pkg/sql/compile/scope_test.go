@@ -15,19 +15,26 @@
 package compile
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"os"
 	"path"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/golang/mock/gomock"
+	"github.com/parquet-go/parquet-go"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
@@ -41,9 +48,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -51,6 +61,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil/testengine"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -113,11 +124,85 @@ func TestScopeSerialization(t *testing.T) {
 
 }
 
+func TestCompileOrderByLimitOffsetUsesTopCandidateBudget(t *testing.T) {
+	catalog.SetupDefines("")
+	scope := generateScopeCases(t, []string{
+		"select uid from R order by uid limit 2 + 3 offset 0 + 2",
+	})[0]
+
+	var topLimits []uint64
+	var offsets []uint64
+	var opTypes []vm.OpType
+	var visitOperator func(vm.Operator)
+	visitOperator = func(operator vm.Operator) {
+		if operator == nil {
+			return
+		}
+		base := operator.GetOperatorBase()
+		for i := 0; i < base.NumChildren(); i++ {
+			visitOperator(base.GetChildren(i))
+		}
+		opTypes = append(opTypes, operator.OpType())
+		switch op := operator.(type) {
+		case *top.Top:
+			topLimits = append(topLimits, op.Limit.GetLit().GetU64Val())
+		case *mergetop.MergeTop:
+			topLimits = append(topLimits, op.Limit.GetLit().GetU64Val())
+		case *offset.Offset:
+			offsets = append(offsets, op.OffsetExpr.GetLit().GetU64Val())
+		}
+	}
+	var visitScope func(*Scope)
+	visitScope = func(current *Scope) {
+		visitOperator(current.RootOp)
+		for _, preScope := range current.PreScopes {
+			visitScope(preScope)
+		}
+	}
+	visitScope(scope)
+
+	require.NotEmpty(t, topLimits)
+	for _, candidateLimit := range topLimits {
+		require.Equal(t, uint64(7), candidateLimit)
+	}
+	require.Contains(t, offsets, uint64(2))
+	require.NotContains(t, opTypes, vm.Order)
+	require.NotContains(t, opTypes, vm.MergeOrder)
+}
+
 func checkScopeRoot(t *testing.T, s *Scope) {
 	require.NotEqual(t, nil, s.RootOp)
 	for i := range s.PreScopes {
 		checkScopeRoot(t, s.PreScopes[i])
 	}
+}
+
+func TestScopeResetKeepsReusableRelationHandle(t *testing.T) {
+	rel := &mockRelationForMembershipFilter{}
+	s := &Scope{
+		RootOp: colexec.NewMockOperator(),
+		DataSource: &Source{
+			R:   &struct{ engine.Reader }{},
+			Rel: rel,
+		},
+	}
+
+	require.NoError(t, s.Reset(NewMockCompile(t)))
+	require.Nil(t, s.DataSource.R)
+	require.Same(t, rel, s.DataSource.Rel)
+}
+
+func TestLockMetaResetKeepsReusableRelationHandles(t *testing.T) {
+	l := NewLockMeta()
+	databaseRel := &mockRelationForMembershipFilter{}
+	tableRel := &mockRelationForMembershipFilter{}
+	l.database_rel = databaseRel
+	l.table_rel = tableRel
+
+	l.reset(nil)
+
+	require.Same(t, databaseRel, l.database_rel)
+	require.Same(t, tableRel, l.table_rel)
 }
 
 func TestScopeSerialization2(t *testing.T) {
@@ -146,6 +231,24 @@ func TestScopeSerialization2(t *testing.T) {
 	scope, err := decodeScope(scopeData, testCompile.proc, true, nil)
 	require.NoError(t, err)
 	checkScopeRoot(t, scope)
+}
+
+func TestDecodeRemoteScopePreservesRemoteRunContextDuringPipelineInit(t *testing.T) {
+	testCompile := NewMockCompile(t)
+	testCompile.counterSet = &perfcounter.CounterSet{}
+	sourceScope := generateScopeWithRootOperator(
+		testCompile.proc,
+		[]vm.OpType{vm.TableScan, vm.Projection})
+	scopeData, err := encodeScope(sourceScope)
+	require.NoError(t, err)
+
+	remoteScope, err := decodeScope(scopeData, testCompile.proc, true, nil)
+	require.NoError(t, err)
+	testCompile.scopes = []*Scope{remoteScope}
+	testCompile.InitPipelineContextToExecuteQuery()
+
+	require.Equal(t, true, testCompile.proc.Ctx.Value(defines.RemoteRunContext{}))
+	require.Equal(t, true, remoteScope.Proc.Ctx.Value(defines.RemoteRunContext{}))
 }
 
 func generateScopeCases(t *testing.T, testCases []string) []*Scope {
@@ -325,6 +428,21 @@ func TestMessageSenderOnClientReceiveBatchContextDone(t *testing.T) {
 	})
 }
 
+func TestMessageSenderOnClientReceiveBatchReturnsStreamClosed(t *testing.T) {
+	sender := new(messageSenderOnClient)
+	sender.ctx = context.Background()
+	sender.receiveCh = make(chan morpc.Message)
+	close(sender.receiveCh)
+
+	bat, over, err := sender.receiveBatch()
+	require.Nil(t, bat)
+	require.False(t, over)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrStreamClosed))
+	require.True(t, sender.safeToClose)
+	require.True(t, sender.receiveClosed)
+}
+
 func TestNewParallelScope(t *testing.T) {
 	// function `newParallelScope` will dispatch one scope's work into n scopes.
 	testCompile := NewMockCompile(t)
@@ -368,11 +486,22 @@ func TestNewParallelScope(t *testing.T) {
 			[]vm.OpType{vm.HashJoin, vm.Shuffle, vm.Dispatch})
 
 		scopeToParallel.NodeInfo.Mcpu = 3
+		templateShuffle := scopeToParallel.RootOp.GetOperatorBase().GetChildren(0).(*shuffle.Shuffle)
+		templateShuffle.BucketNum = 3
 
 		_, ss := newParallelScope(scopeToParallel)
 		require.NoError(t, checkScopeWithExpectedList(ss[0], []vm.OpType{vm.HashJoin, vm.Shuffle, vm.Dispatch}))
 		require.NoError(t, checkScopeWithExpectedList(ss[1], []vm.OpType{vm.HashJoin, vm.Shuffle, vm.Dispatch}))
 		require.NoError(t, checkScopeWithExpectedList(ss[2], []vm.OpType{vm.HashJoin, vm.Shuffle, vm.Dispatch}))
+		firstPool := ss[0].RootOp.GetOperatorBase().GetChildren(0).(*shuffle.Shuffle).GetShufflePool()
+		require.Same(t, firstPool, ss[1].RootOp.GetOperatorBase().GetChildren(0).(*shuffle.Shuffle).GetShufflePool())
+		require.Same(t, firstPool, ss[2].RootOp.GetOperatorBase().GetChildren(0).(*shuffle.Shuffle).GetShufflePool())
+		require.Nil(t, templateShuffle.GetShufflePool())
+
+		_, nextGeneration := newParallelScope(scopeToParallel)
+		nextPool := nextGeneration[0].RootOp.GetOperatorBase().GetChildren(0).(*shuffle.Shuffle).GetShufflePool()
+		require.NotSame(t, firstPool, nextPool)
+		require.Nil(t, templateShuffle.GetShufflePool())
 	}
 }
 
@@ -417,6 +546,185 @@ func TestCompileExternScanParallelWrite(t *testing.T) {
 	require.NoError(t, checkScopeWithExpectedList(rs[0].PreScopes[0], []vm.OpType{vm.External, vm.Dispatch}))
 }
 
+// TestCompileExternScanParallelWriteSourceScopeHasCorrectAddr verifies the
+// regression fix for #25554: compileExternScanParallelWrite constructs the
+// source scope with the current CN address so sameExecutionNode correctly
+// identifies it as local in constructDispatchLocalAndRemote. Without this
+// fix the empty address causes RemoteRegs to be generated with an empty
+// NodeAddr, leading to "SendToAnyLocalFunc should not send to remote" and
+// infinite morpc retry to an empty address.
+func TestCompileExternScanParallelWriteSourceScopeHasCorrectAddr(t *testing.T) {
+	testCompile := NewMockCompile(t)
+	testCompile.cnList = engine.Nodes{{Addr: "cn1:6001", Mcpu: 4}}
+	testCompile.addr = "cn1:6001"
+	testCompile.execType = plan2.ExecTypeAP_ONECN
+	testCompile.anal = &AnalyzeModule{qry: &plan.Query{}}
+	param := &tree.ExternParam{
+		ExParamConst: tree.ExParamConst{
+			Filepath: "test.csv",
+		},
+	}
+	// Use explicit stats to guarantee mcpu >= 2 regardless of GOMAXPROCS.
+	n := &plan.Node{
+		TableDef:   &plan.TableDef{},
+		ExternScan: &plan.ExternScan{},
+		Stats:      &plan.Stats{Cost: 1000000, Rowsize: 2000},
+	}
+	rs, err := testCompile.compileExternScanParallelWrite(n, param, []string{"a"}, []int64{100000}, true)
+	require.NoError(t, err)
+
+	// The source scope (pre-scope of the first returned scope) must have
+	// the current CN address so sameExecutionNode matches the merge scopes.
+	sourceScope := rs[0].PreScopes[0]
+	require.Equal(t, testCompile.addr, sourceScope.NodeInfo.Addr,
+		"source scope address must match current CN so dispatch stays local")
+
+	// Dispatch must be SendToAnyLocalFunc with zero RemoteRegs.
+	dispatchOp, ok := sourceScope.RootOp.(*dispatch.Dispatch)
+	require.True(t, ok, "source scope must have a dispatch root operator")
+	require.Equal(t, dispatch.SendToAnyLocalFunc, dispatchOp.FuncId)
+	require.Empty(t, dispatchOp.RemoteRegs,
+		"RemoteRegs must be empty; a non-empty RemoteRegs with SendToAnyLocalFunc causes 'should not send to remote' error")
+	require.Len(t, dispatchOp.LocalRegs, len(rs),
+		"all merge scopes are on the current CN so LocalRegs must cover every merge scope")
+}
+
+func TestConstructLocalDispatchFromScopesRejectsRemoteTarget(t *testing.T) {
+	testCompile := NewMockCompile(t)
+	source := &Scope{NodeInfo: engine.Node{Addr: "cn1:6001", Mcpu: 2}}
+	localTarget := &Scope{
+		NodeInfo: engine.Node{Addr: "cn1:6001", Mcpu: 1},
+		Proc:     testCompile.proc.NewNoContextChildProc(1),
+	}
+	remoteTarget := &Scope{
+		NodeInfo: engine.Node{Addr: "cn2:6001", Mcpu: 1},
+		Proc:     testCompile.proc.NewNoContextChildProc(1),
+	}
+
+	arg, err := constructLocalDispatchFromScopes(0, []*Scope{localTarget}, source)
+	require.NoError(t, err)
+	require.Len(t, arg.LocalRegs, 1)
+	require.Empty(t, arg.RemoteRegs)
+	require.Equal(t, []int{0}, arg.ShuffleRegIdxLocal)
+
+	untouchedTarget := &Scope{
+		NodeInfo: engine.Node{Addr: "cn1:6001", Mcpu: 1},
+		Proc:     testCompile.proc.NewNoContextChildProc(1),
+	}
+	beforeNilBatchCnt := untouchedTarget.Proc.Reg.MergeReceivers[0].NilBatchCnt
+	_, err = constructLocalDispatchFromScopes(0, []*Scope{untouchedTarget, remoteTarget}, source)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "different CN")
+	require.Equal(t, beforeNilBatchCnt, untouchedTarget.Proc.Reg.MergeReceivers[0].NilBatchCnt,
+		"validation failure must not partially mutate earlier targets")
+	require.Empty(t, remoteTarget.RemoteReceivRegInfos)
+}
+
+func TestConstructLocalDispatchFromScopesRejectsInvalidInputs(t *testing.T) {
+	testCompile := NewMockCompile(t)
+	source := &Scope{NodeInfo: engine.Node{Addr: "cn1:6001", Mcpu: 2}}
+	validTarget := &Scope{
+		NodeInfo: engine.Node{Addr: "cn1:6001", Mcpu: 1},
+		Proc:     testCompile.proc.NewNoContextChildProc(1),
+	}
+
+	tests := []struct {
+		name    string
+		idx     int
+		targets []*Scope
+		source  *Scope
+		errText string
+	}{
+		{
+			name:    "nil source",
+			targets: []*Scope{validTarget},
+			errText: "source scope is nil",
+		},
+		{
+			name:    "empty targets",
+			source:  source,
+			targets: nil,
+			errText: "requires at least one target scope",
+		},
+		{
+			name:    "nil target",
+			source:  source,
+			targets: []*Scope{nil},
+			errText: "target scope 0 is nil",
+		},
+		{
+			name:   "target without process",
+			source: source,
+			targets: []*Scope{{
+				NodeInfo: engine.Node{Addr: "cn1:6001", Mcpu: 1},
+			}},
+			errText: "target scope 0 has no process",
+		},
+		{
+			name:    "merge receiver index out of range",
+			idx:     1,
+			source:  source,
+			targets: []*Scope{validTarget},
+			errText: "has no merge receiver at index 1",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := constructLocalDispatchFromScopes(tt.idx, tt.targets, tt.source)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), tt.errText)
+		})
+	}
+}
+
+// A prepared statement's cached compile reuses its scope tree across
+// executions. The previous run's cleanup delivers End into the pipeline edges
+// and marks them done; a done edge silently rejects both data and End, so
+// without clearing that state the next run's receivers would wait forever.
+// Scope.Reset must clear the terminal state on the whole scope tree.
+func TestScopeResetClearsPipelineEdgeTerminalState(t *testing.T) {
+	testCompile := NewMockCompile(t)
+
+	child := &Scope{
+		Magic: Normal,
+		Proc:  testCompile.proc.NewNoContextChildProc(1),
+	}
+	s := &Scope{
+		Magic:     Merge,
+		Proc:      testCompile.proc.NewNoContextChildProc(2),
+		PreScopes: []*Scope{child},
+	}
+
+	var regs []*process.WaitRegister
+	regs = append(regs, s.Proc.Reg.MergeReceivers...)
+	regs = append(regs, child.Proc.Reg.MergeReceivers...)
+	for _, reg := range regs {
+		require.True(t, reg.SendEnd())
+		select {
+		case <-reg.Done():
+		default:
+			t.Fatal("edge should be done after SendEnd")
+		}
+	}
+
+	require.NoError(t, s.Reset(testCompile))
+
+	for _, reg := range regs {
+		select {
+		case <-reg.Done():
+			t.Fatal("Reset must clear edge terminal state for reuse")
+		default:
+		}
+		select {
+		case <-reg.Ch2:
+			t.Fatal("Reset must drain stale buffered signals")
+		default:
+		}
+		require.True(t, reg.SendEnd(), "edge must accept End again after Reset")
+	}
+}
+
 func TestCompileExternScanParallelReadWrite(t *testing.T) {
 	testCompile := NewMockCompile(t)
 	testCompile.cnList = engine.Nodes{engine.Node{Addr: "cn1:6001", Mcpu: 4}, engine.Node{Addr: "cn2:6001", Mcpu: 4}}
@@ -455,6 +763,99 @@ func TestCompileExternScanParallelReadWrite(t *testing.T) {
 	gzPath = path.Clean("/" + gzPath)
 	_, err = testCompile.compileExternScanParallelReadWrite(n, param, []string{gzPath}, fileSize, false)
 	require.Error(t, err)
+}
+
+func TestCompileExternScanParallelReadWriteRejectsParquet(t *testing.T) {
+	testCompile := NewMockCompile(t)
+	testCompile.proc.Ctx = context.Background()
+	testCompile.cnList = engine.Nodes{{Addr: "cn1:6001", Mcpu: 4}}
+	testCompile.addr = "cn1:6001"
+	testCompile.anal = &AnalyzeModule{qry: &plan.Query{}}
+	param := &tree.ExternParam{
+		ExParamConst: tree.ExParamConst{
+			Format:   tree.PARQUET,
+			Filepath: "test.parq",
+			Tail:     &tree.TailParameter{},
+		},
+		ExParam: tree.ExParam{
+			Parallel: true,
+		},
+	}
+	n := &plan.Node{
+		TableDef:   &plan.TableDef{},
+		ExternScan: &plan.ExternScan{},
+	}
+
+	_, err := testCompile.compileExternScanParallelReadWrite(n, param, []string{"test.parq"}, []int64{int64(colexec.WriteS3Threshold) * 2}, true)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInternal))
+	require.Contains(t, err.Error(), "parquet load cannot use byte-offset parallel read")
+}
+
+func TestGetReadWriteParallelFlagDisablesParquetReadSplit(t *testing.T) {
+	testCompile := NewMockCompile(t)
+	fileList := []string{"test.parq"}
+
+	readParallel, writeParallel := testCompile.getReadWriteParallelFlag(
+		&tree.ExternParam{
+			ExParamConst: tree.ExParamConst{Format: tree.PARQUET},
+			ExParam:      tree.ExParam{Parallel: true},
+		},
+		fileList,
+	)
+	require.False(t, readParallel)
+	require.True(t, writeParallel)
+
+	readParallel, writeParallel = testCompile.getReadWriteParallelFlag(
+		&tree.ExternParam{
+			ExParamConst: tree.ExParamConst{Format: tree.PARQUET},
+			ExParam: tree.ExParam{
+				Local:    true,
+				Parallel: true,
+			},
+		},
+		fileList,
+	)
+	require.False(t, readParallel)
+	require.True(t, writeParallel)
+
+	readParallel, writeParallel = testCompile.getReadWriteParallelFlag(
+		&tree.ExternParam{
+			ExParamConst: tree.ExParamConst{
+				Format:       tree.PARQUET,
+				CompressType: tree.GZIP,
+			},
+			ExParam: tree.ExParam{
+				Parallel: true,
+			},
+		},
+		[]string{"test.parq.gz"},
+	)
+	require.False(t, readParallel)
+	require.True(t, writeParallel)
+
+	readParallel, writeParallel = testCompile.getReadWriteParallelFlag(
+		&tree.ExternParam{
+			ExParamConst: tree.ExParamConst{Format: tree.CSV},
+			ExParam:      tree.ExParam{Parallel: true},
+		},
+		[]string{"test.csv"},
+	)
+	require.True(t, readParallel)
+	require.True(t, writeParallel)
+
+	readParallel, writeParallel = testCompile.getReadWriteParallelFlag(
+		&tree.ExternParam{
+			ExParamConst: tree.ExParamConst{Format: tree.PARQUET},
+			ExParam: tree.ExParam{
+				Parallel:              false,
+				ParallelLoadRequested: true,
+			},
+		},
+		fileList,
+	)
+	require.False(t, readParallel)
+	require.False(t, writeParallel)
 }
 
 func TestCompileExternScanHiveFileFanout(t *testing.T) {
@@ -511,6 +912,712 @@ func TestCompileExternScanHiveFileFanout(t *testing.T) {
 		totalFiles += len(ext.Es.FileList)
 	}
 	require.Equal(t, len(fileList), totalFiles)
+}
+
+func TestCompileExternScanParquetLoadFileFanout(t *testing.T) {
+	testCompile := NewMockCompile(t)
+	testCompile.cnList = engine.Nodes{{Addr: "cn1:6001", Mcpu: 2}, {Addr: "cn2:6001", Mcpu: 2}}
+	testCompile.addr = "cn1:6001"
+	testCompile.execType = plan2.ExecTypeAP_MULTICN
+	testCompile.anal = &AnalyzeModule{qry: &plan.Query{}}
+
+	param := &tree.ExternParam{
+		ExParamConst: tree.ExParamConst{
+			ScanType: tree.S3,
+			Filepath: "warehouse/load/*.parquet",
+			Format:   tree.PARQUET,
+			Tail:     &tree.TailParameter{},
+		},
+		ExParam: tree.ExParam{
+			ExternType: int32(plan.ExternType_LOAD),
+			Parallel:   true,
+		},
+	}
+	n := &plan.Node{
+		TableDef: &plan.TableDef{},
+		ExternScan: &plan.ExternScan{
+			Type:           int32(plan.ExternType_LOAD),
+			TbColToDataCol: map[string]int32{},
+		},
+	}
+	fileList := []string{
+		"warehouse/load/part-000.parquet",
+		"warehouse/load/part-001.parquet",
+		"warehouse/load/part-002.parquet",
+	}
+	fileSize := []int64{30, 10, 20}
+
+	ss, err := testCompile.compileExternScanParquetLoadFileFanout(n, param, fileList, fileSize, true)
+	require.NoError(t, err)
+	require.Len(t, ss, 3)
+	require.Equal(t, "warehouse/load/*.parquet", param.Filepath)
+	require.True(t, param.Parallel)
+	require.False(t, param.HivePartitioning)
+
+	totalFiles := 0
+	for _, scope := range ss {
+		require.NoError(t, checkScopeWithExpectedList(scope, []vm.OpType{vm.External}))
+		require.Equal(t, 1, scope.NodeInfo.Mcpu)
+		ext, ok := scope.RootOp.(*external.External)
+		require.True(t, ok)
+		require.False(t, ext.Es.Extern.Parallel)
+		require.False(t, ext.Es.Extern.HivePartitioning)
+		require.Equal(t, "warehouse/load/*.parquet", ext.Es.Extern.Filepath)
+		require.Len(t, ext.Es.FileOffsetTotal, len(ext.Es.FileList))
+		for _, off := range ext.Es.FileOffsetTotal {
+			require.Equal(t, []int64{0, -1}, off.Offset)
+		}
+		totalFiles += len(ext.Es.FileList)
+	}
+	require.Equal(t, len(fileList), totalFiles)
+}
+
+func TestSplitIcebergDataFileShardsBalancesFiles(t *testing.T) {
+	tasks := []*pipeline.IcebergDataFileTask{
+		{FilePath: "warehouse/iceberg/part-0.parquet", FileSize: 100, RecordCount: 10},
+		{FilePath: "warehouse/iceberg/part-1.parquet", FileSize: 60, RecordCount: 6},
+		{FilePath: "warehouse/iceberg/part-2.parquet", FileSize: 40, RecordCount: 4},
+		{FilePath: "warehouse/iceberg/part-3.parquet", FileSize: 20, RecordCount: 2},
+	}
+	nodes := engine.Nodes{{Addr: "cn1:6001", Mcpu: 1}, {Addr: "cn2:6001", Mcpu: 1}}
+
+	shards := splitIcebergDataFileShards(tasks, nodes)
+	require.Len(t, shards, 2)
+
+	seen := make(map[string]bool)
+	loads := make(map[string]int64)
+	for _, shard := range shards {
+		require.NotEmpty(t, shard.dataTasks)
+		require.Len(t, shard.fileList, len(shard.dataTasks))
+		require.Len(t, shard.fileSize, len(shard.dataTasks))
+		for i, task := range shard.dataTasks {
+			require.Equal(t, task.FilePath, shard.fileList[i])
+			require.Equal(t, task.FileSize, shard.fileSize[i])
+			seen[task.FilePath] = true
+			loads[shard.node.Addr] += task.FileSize
+		}
+	}
+	require.Equal(t, map[string]bool{
+		"warehouse/iceberg/part-0.parquet": true,
+		"warehouse/iceberg/part-1.parquet": true,
+		"warehouse/iceberg/part-2.parquet": true,
+		"warehouse/iceberg/part-3.parquet": true,
+	}, seen)
+	require.Equal(t, int64(120), loads["cn1:6001"])
+	require.Equal(t, int64(100), loads["cn2:6001"])
+}
+
+func TestCompileExternScanIcebergFileFanout(t *testing.T) {
+	testCompile := NewMockCompile(t)
+	enableProtectedIcebergCNToCNForTest(t, testCompile)
+	testCompile.cnList = engine.Nodes{{Addr: "cn1:6001", Mcpu: 2}, {Addr: "cn2:6001", Mcpu: 2}}
+	testCompile.addr = "cn1:6001"
+	testCompile.execType = plan2.ExecTypeAP_MULTICN
+	testCompile.anal = &AnalyzeModule{qry: &plan.Query{}}
+
+	param := &tree.ExternParam{
+		ExParamConst: tree.ExParamConst{
+			ScanType: tree.S3,
+			Filepath: "warehouse/iceberg/orders",
+			Format:   tree.PARQUET,
+			Tail:     &tree.TailParameter{},
+		},
+		ExParam: tree.ExParam{
+			ExternType: int32(plan.ExternType_ICEBERG_TB),
+			Parallel:   true,
+		},
+	}
+	n := &plan.Node{
+		TableDef: &plan.TableDef{},
+		ExternScan: &plan.ExternScan{
+			Type:           int32(plan.ExternType_ICEBERG_TB),
+			TbColToDataCol: map[string]int32{},
+		},
+	}
+	dataTasks := []*pipeline.IcebergDataFileTask{
+		{FilePath: "warehouse/iceberg/orders/part-0.parquet", FileSize: 100, RecordCount: 10, RowGroupStart: 0, RowGroupEnd: 1, HasResidualFilter: true, ResidualFilterHash: "filter_digest:part0"},
+		{FilePath: "warehouse/iceberg/orders/part-1.parquet", FileSize: 60, RecordCount: 6, RowGroupStart: 1, RowGroupEnd: 2, HasResidualFilter: true, ResidualFilterHash: "filter_digest:part1"},
+		{FilePath: "warehouse/iceberg/orders/part-2.parquet", FileSize: 40, RecordCount: 4, RowGroupStart: 2, RowGroupEnd: 3, HasResidualFilter: true, ResidualFilterHash: "filter_digest:part2"},
+	}
+	deleteTasks := []*pipeline.IcebergDeleteFileTask{
+		{DeleteType: "position", DeleteFilePath: "warehouse/iceberg/orders/delete-0.parquet", ReferencedDataFile: dataTasks[0].FilePath},
+		{DeleteType: "equality", DeleteFilePath: "warehouse/iceberg/orders/delete-all.parquet"},
+		{DeleteType: "position", DeleteFilePath: "warehouse/iceberg/orders/delete-other.parquet", ReferencedDataFile: "warehouse/iceberg/orders/other.parquet"},
+	}
+	columns := []*pipeline.IcebergColumnMapping{{MoColIndex: 0, IcebergFieldId: 1, CurrentFieldName: "order_id"}}
+	snapshot := &pipeline.IcebergSnapshotRuntime{SnapshotId: 42, SchemaId: 7}
+	runtime := icebergExternalScanRuntime{
+		dataTasks:      dataTasks,
+		deleteTasks:    deleteTasks,
+		columns:        columns,
+		snapshot:       snapshot,
+		objectIORef:    registerCompileTestObjectIO(t),
+		hiddenReadCols: []int32{3},
+		needRowOrdinal: true,
+	}
+
+	ss, err := testCompile.compileExternScanIcebergFileFanout(n, param, runtime, true)
+	require.NoError(t, err)
+	require.Len(t, ss, 1)
+	require.True(t, param.Parallel)
+
+	seen := make(map[string]bool)
+	for _, scope := range ss {
+		require.NoError(t, checkScopeWithExpectedList(scope, []vm.OpType{vm.External}))
+		require.Equal(t, "cn1:6001", scope.NodeInfo.Addr)
+		require.Equal(t, 1, scope.NodeInfo.Mcpu)
+		require.True(t, scope.IsLoad)
+		ext, ok := scope.RootOp.(*external.External)
+		require.True(t, ok)
+		require.False(t, ext.Es.Extern.Parallel)
+		require.Equal(t, int32(plan.ExternType_ICEBERG_TB), ext.Es.Extern.ExternType)
+		require.Len(t, ext.Es.FileList, len(ext.Es.IcebergDataTasks))
+		require.Len(t, ext.Es.FileSize, len(ext.Es.IcebergDataTasks))
+		require.Len(t, ext.Es.FileOffsetTotal, len(ext.Es.IcebergDataTasks))
+		require.Equal(t, columns, ext.Es.IcebergColumns)
+		require.Equal(t, snapshot, ext.Es.IcebergSnapshot)
+		require.Equal(t, runtime.objectIORef, ext.Es.IcebergObjectIORef)
+		require.Equal(t, []int32{3}, ext.Es.IcebergHiddenReadCols)
+		require.True(t, ext.Es.NeedRowOrdinal)
+		for i, task := range ext.Es.IcebergDataTasks {
+			require.Equal(t, task.FilePath, ext.Es.FileList[i])
+			require.Equal(t, task.FileSize, ext.Es.FileSize[i])
+			require.Equal(t, []int64{0, -1}, ext.Es.FileOffsetTotal[i].Offset)
+			require.True(t, task.HasResidualFilter)
+			require.NotEmpty(t, task.ResidualFilterHash)
+			require.Greater(t, task.RowGroupEnd, task.RowGroupStart)
+			seen[task.FilePath] = true
+		}
+		deletePaths := make(map[string]bool)
+		for _, task := range ext.Es.IcebergDeleteTasks {
+			deletePaths[task.DeleteFilePath] = true
+		}
+		require.True(t, deletePaths["warehouse/iceberg/orders/delete-all.parquet"])
+		require.True(t, deletePaths["warehouse/iceberg/orders/delete-0.parquet"])
+		require.False(t, deletePaths["warehouse/iceberg/orders/delete-other.parquet"])
+	}
+	require.Equal(t, map[string]bool{
+		"warehouse/iceberg/orders/part-0.parquet": true,
+		"warehouse/iceberg/orders/part-1.parquet": true,
+		"warehouse/iceberg/orders/part-2.parquet": true,
+	}, seen)
+}
+
+func TestIcebergProjectedAttrsKeepsMappedAndHiddenReadColumns(t *testing.T) {
+	attrs := []plan.ExternAttr{
+		{ColName: "id", ColIndex: 0},
+		{ColName: "__mo_iceberg_data_file_path", ColIndex: 1},
+		{ColName: "__mo_iceberg_row_ordinal", ColIndex: 2},
+		{ColName: "new_optional", ColIndex: 3},
+		{ColName: "__mo_iceberg_delete_key", ColIndex: 4},
+		{ColName: "unused", ColIndex: 5},
+	}
+	got := icebergProjectedAttrs(attrs, []*pipeline.IcebergColumnMapping{
+		{MoColIndex: 0, IcebergFieldId: 1, CurrentFieldName: "id"},
+		{MoColIndex: 3, IcebergFieldId: 5, CurrentFieldName: "new_optional", DefaultNullFill: true},
+	}, []int32{4})
+
+	require.Equal(t, []plan.ExternAttr{
+		{ColName: "id", ColIndex: 0},
+		{ColName: "__mo_iceberg_data_file_path", ColIndex: 1},
+		{ColName: "__mo_iceberg_row_ordinal", ColIndex: 2},
+		{ColName: "new_optional", ColIndex: 3},
+		{ColName: "__mo_iceberg_delete_key", ColIndex: 4},
+	}, got)
+}
+
+func TestEnsureIcebergHiddenReadColumnsAddsSyntheticScanInput(t *testing.T) {
+	param := &external.ExternalParam{
+		ExParamConst: external.ExParamConst{
+			Attrs: []plan.ExternAttr{
+				{ColName: "id", ColIndex: 0},
+				{ColName: "amount", ColIndex: 1},
+			},
+			Cols: []*plan.ColDef{
+				{Name: "id"},
+				{Name: "amount"},
+			},
+		},
+	}
+	ensureIcebergHiddenReadColumns(param, []*pipeline.IcebergColumnMapping{
+		{MoColIndex: 0, CurrentFieldName: "id"},
+		{MoColIndex: 2, CurrentFieldName: "hidden_key", IsHidden: true},
+		{MoColIndex: 1, CurrentFieldName: "amount"},
+	})
+
+	require.Len(t, param.Cols, 3)
+	require.Equal(t, "hidden_key", param.Cols[2].Name)
+	require.Equal(t, []plan.ExternAttr{
+		{ColName: "id", ColIndex: 0},
+		{ColName: "amount", ColIndex: 1},
+		{ColName: "hidden_key", ColIndex: 2},
+	}, param.Attrs)
+}
+
+func TestConstructExternalLegacyPathDoesNotSetIcebergRuntime(t *testing.T) {
+	node := &plan.Node{
+		TableDef: &plan.TableDef{},
+		ExternScan: &plan.ExternScan{
+			Type:           int32(plan.ExternType_EXTERNAL_TB),
+			TbColToDataCol: map[string]int32{},
+		},
+	}
+	param := &tree.ExternParam{
+		ExParamConst: tree.ExParamConst{
+			ScanType: tree.S3,
+			Filepath: "warehouse/plain/*.parquet",
+			Format:   tree.PARQUET,
+			Tail:     &tree.TailParameter{},
+		},
+		ExParam: tree.ExParam{
+			ExternType: int32(plan.ExternType_EXTERNAL_TB),
+		},
+	}
+
+	op := constructExternal(
+		node, param, context.Background(),
+		[]string{"warehouse/plain/part-0.parquet"},
+		[]int64{128},
+		makeWholeFileOffsets(1),
+		true,
+	)
+
+	require.Equal(t, int32(plan.ExternType_EXTERNAL_TB), op.Es.Extern.ExternType)
+	require.Nil(t, op.Es.IcebergDataTasks)
+	require.Nil(t, op.Es.IcebergDeleteTasks)
+	require.Nil(t, op.Es.IcebergColumns)
+	require.Nil(t, op.Es.IcebergSnapshot)
+	require.Empty(t, op.Es.IcebergObjectIORef)
+	require.Empty(t, op.Es.IcebergHiddenReadCols)
+	require.False(t, op.Es.NeedRowOrdinal)
+	require.Equal(t, []string{"warehouse/plain/part-0.parquet"}, op.Es.FileList)
+	require.Equal(t, []int64{128}, op.Es.FileSize)
+}
+
+func TestSplitParquetRowGroupShardsBalancesAndReindexesFiles(t *testing.T) {
+	fileList := []string{"warehouse/load/part-000.parquet", "warehouse/load/part-001.parquet"}
+	fileSize := []int64{190, 30}
+	rowGroups := []parquetRowGroupMeta{
+		{fileIndex: 0, rowGroupIndex: 0, numRows: 10, bytes: 100},
+		{fileIndex: 0, rowGroupIndex: 1, numRows: 9, bytes: 90},
+		{fileIndex: 1, rowGroupIndex: 0, numRows: 1, bytes: 10},
+		{fileIndex: 1, rowGroupIndex: 1, numRows: 2, bytes: 20},
+	}
+	nodes := engine.Nodes{{Addr: "cn1:6001", Mcpu: 1}, {Addr: "cn2:6001", Mcpu: 1}}
+
+	shards, err := splitParquetRowGroupShards(fileList, fileSize, rowGroups, nodes)
+	require.NoError(t, err)
+	require.Len(t, shards, 2)
+
+	loads := make(map[string]int64)
+	seen := make(map[string]bool)
+	for _, shard := range shards {
+		require.NotEmpty(t, shard.fileList)
+		require.Len(t, shard.fileList, len(shard.fileSize))
+		require.Nil(t, shard.originalToLocal)
+		for _, rowGroupShard := range shard.rowGroupShards {
+			require.GreaterOrEqual(t, rowGroupShard.FileIndex, int32(0))
+			require.Less(t, int(rowGroupShard.FileIndex), len(shard.fileList))
+			file := shard.fileList[rowGroupShard.FileIndex]
+			for rowGroupIdx := rowGroupShard.RowGroupStart; rowGroupIdx < rowGroupShard.RowGroupEnd; rowGroupIdx++ {
+				seen[fmt.Sprintf("%s:%d", file, rowGroupIdx)] = true
+			}
+			loads[shard.node.Addr] += rowGroupShard.Bytes
+		}
+	}
+	require.Equal(t, map[string]bool{
+		"warehouse/load/part-000.parquet:0": true,
+		"warehouse/load/part-000.parquet:1": true,
+		"warehouse/load/part-001.parquet:0": true,
+		"warehouse/load/part-001.parquet:1": true,
+	}, seen)
+	require.Equal(t, int64(110), loads["cn1:6001"])
+	require.Equal(t, int64(110), loads["cn2:6001"])
+}
+
+func TestCompileExternScanParquetRowGroupFanout(t *testing.T) {
+	testCompile := NewMockCompile(t)
+	testCompile.cnList = engine.Nodes{{Addr: "cn1:6001", Mcpu: 2}, {Addr: "cn2:6001", Mcpu: 2}}
+	testCompile.addr = "cn1:6001"
+	testCompile.execType = plan2.ExecTypeAP_MULTICN
+	testCompile.anal = &AnalyzeModule{qry: &plan.Query{}}
+
+	param := &tree.ExternParam{
+		ExParamConst: tree.ExParamConst{
+			ScanType: tree.S3,
+			Filepath: "warehouse/load/big.parquet",
+			Format:   tree.PARQUET,
+			Tail:     &tree.TailParameter{},
+		},
+		ExParam: tree.ExParam{
+			ExternType: int32(plan.ExternType_LOAD),
+			Parallel:   true,
+		},
+	}
+	n := &plan.Node{
+		TableDef: &plan.TableDef{},
+		ExternScan: &plan.ExternScan{
+			Type:           int32(plan.ExternType_LOAD),
+			TbColToDataCol: map[string]int32{},
+		},
+	}
+	fileList := []string{"warehouse/load/big.parquet"}
+	fileSize := []int64{220}
+	rowGroups := []parquetRowGroupMeta{
+		{fileIndex: 0, rowGroupIndex: 0, numRows: 10, bytes: 100},
+		{fileIndex: 0, rowGroupIndex: 1, numRows: 9, bytes: 90},
+		{fileIndex: 0, rowGroupIndex: 2, numRows: 2, bytes: 20},
+		{fileIndex: 0, rowGroupIndex: 3, numRows: 1, bytes: 10},
+	}
+
+	ss, err := testCompile.compileExternScanParquetRowGroupFanout(n, param, fileList, fileSize, rowGroups, true)
+	require.NoError(t, err)
+	require.Len(t, ss, 4)
+	require.True(t, param.Parallel)
+
+	seen := make(map[int32]bool)
+	var totalRows int64
+	for _, scope := range ss {
+		require.NoError(t, checkScopeWithExpectedList(scope, []vm.OpType{vm.External}))
+		require.Equal(t, 1, scope.NodeInfo.Mcpu)
+		require.True(t, scope.IsLoad)
+		ext, ok := scope.RootOp.(*external.External)
+		require.True(t, ok)
+		require.False(t, ext.Es.Extern.Parallel)
+		require.Equal(t, []string{"warehouse/load/big.parquet"}, ext.Es.FileList)
+		require.Equal(t, []int64{int64(220)}, ext.Es.FileSize)
+		require.Equal(t, []*pipeline.FileOffset{{Offset: []int64{0, -1}}}, ext.Es.FileOffsetTotal)
+		require.NotEmpty(t, ext.Es.ParquetRowGroupShards)
+		for _, shard := range ext.Es.ParquetRowGroupShards {
+			require.Equal(t, int32(0), shard.FileIndex)
+			for rowGroupIdx := shard.RowGroupStart; rowGroupIdx < shard.RowGroupEnd; rowGroupIdx++ {
+				seen[rowGroupIdx] = true
+			}
+			totalRows += shard.NumRows
+		}
+	}
+	require.Equal(t, map[int32]bool{0: true, 1: true, 2: true, 3: true}, seen)
+	require.Equal(t, int64(22), totalRows)
+}
+
+func TestReadLoadParquetRowGroupMetadataLocalFile(t *testing.T) {
+	testCompile := NewMockCompile(t)
+	data := writeCompileInt32ParquetWithRowGroups(t, []int32{0, 1, 2, 3, 4, 5}, 2)
+	filePath := filepath.Join(t.TempDir(), "rg.parquet")
+	require.NoError(t, os.WriteFile(filePath, data, 0o600))
+
+	param := &tree.ExternParam{
+		ExParamConst: tree.ExParamConst{
+			ScanType: tree.INFILE,
+			Filepath: filePath,
+			Format:   tree.PARQUET,
+		},
+		ExParam: tree.ExParam{
+			Ctx: context.Background(),
+		},
+	}
+
+	metas, stats, err := testCompile.readLoadParquetRowGroupMetadata(
+		&plan.Node{}, param, []string{filePath}, []int64{int64(len(data))})
+	require.NoError(t, err)
+	require.Len(t, metas, 3)
+	t.Logf("parquet footer metadata stats: files=%d row_groups=%d rows=%d bytes=%d read_calls=%d read_bytes=%d duration=%s",
+		stats.Files, stats.RowGroups, stats.Rows, stats.Bytes, stats.ReadCalls, stats.ReadBytes, stats.Duration)
+	require.Equal(t, parquetFooterStats{
+		Files:     1,
+		RowGroups: 3,
+		Rows:      6,
+		Bytes:     int64(len(data)),
+		ReadCalls: stats.ReadCalls,
+		ReadBytes: stats.ReadBytes,
+		Duration:  stats.Duration,
+	}, stats)
+	require.Positive(t, stats.ReadCalls)
+	require.Positive(t, stats.ReadBytes)
+	require.Positive(t, stats.Duration)
+	for i, meta := range metas {
+		require.Equal(t, int32(0), meta.fileIndex)
+		require.Equal(t, int32(i), meta.rowGroupIndex)
+		require.Equal(t, int64(2), meta.numRows)
+		require.Positive(t, meta.bytes)
+	}
+}
+
+func TestCompileExternScanParquetLoadUsesRowGroupMetadata(t *testing.T) {
+	testCompile := NewMockCompile(t)
+	testCompile.addr = "cn1:6001"
+	testCompile.anal = &AnalyzeModule{qry: &plan.Query{}}
+	testCompile.proc.SetResolveVariableFunc(func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+		if varName == "sql_mode" {
+			return "", nil
+		}
+		return nil, nil
+	})
+
+	data := writeCompileInt32ParquetWithRowGroups(t, []int32{0, 1, 2, 3, 4, 5}, 2)
+	filePath := filepath.Join(t.TempDir(), "rg.parquet")
+	require.NoError(t, os.WriteFile(filePath, data, 0o600))
+
+	param := &tree.ExternParam{
+		ExParamConst: tree.ExParamConst{
+			ScanType: tree.INFILE,
+			Filepath: filePath,
+			Format:   tree.PARQUET,
+			FileSize: int64(len(data)),
+			Tail:     &tree.TailParameter{},
+		},
+		ExParam: tree.ExParam{
+			ExternType: int32(plan.ExternType_LOAD),
+			Parallel:   true,
+		},
+	}
+	createSQL, err := json.Marshal(param)
+	require.NoError(t, err)
+	node := &plan.Node{
+		Stats: &plan.Stats{Cost: float64(len(data)), Rowsize: 1},
+		TableDef: &plan.TableDef{
+			Createsql: string(createSQL),
+			Cols:      []*plan.ColDef{{Name: "c"}},
+		},
+		ExternScan: &plan.ExternScan{
+			Type:           int32(plan.ExternType_LOAD),
+			TbColToDataCol: map[string]int32{},
+		},
+	}
+
+	ss, err := testCompile.compileExternScan(node)
+	require.NoError(t, err)
+	require.Len(t, ss, 3)
+
+	seen := make(map[int32]bool)
+	for _, scope := range ss {
+		require.NoError(t, checkScopeWithExpectedList(scope, []vm.OpType{vm.External}))
+		ext := scope.RootOp.(*external.External)
+		require.False(t, ext.Es.Extern.Parallel)
+		require.Equal(t, []string{filePath}, ext.Es.FileList)
+		require.Equal(t, []*pipeline.FileOffset{{Offset: []int64{0, -1}}}, ext.Es.FileOffsetTotal)
+		require.NotEmpty(t, ext.Es.ParquetRowGroupShards)
+		for _, shard := range ext.Es.ParquetRowGroupShards {
+			require.Equal(t, int32(0), shard.FileIndex)
+			for rowGroupIdx := shard.RowGroupStart; rowGroupIdx < shard.RowGroupEnd; rowGroupIdx++ {
+				seen[rowGroupIdx] = true
+			}
+		}
+	}
+	require.Equal(t, map[int32]bool{0: true, 1: true, 2: true}, seen)
+}
+
+func TestCompileExternScanParquetLoadUsesRowGroupFanoutWithEmptyFiles(t *testing.T) {
+	testCompile := NewMockCompile(t)
+	testCompile.addr = "cn1:6001"
+	testCompile.anal = &AnalyzeModule{qry: &plan.Query{}}
+	testCompile.proc.SetResolveVariableFunc(func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+		if varName == "sql_mode" {
+			return "", nil
+		}
+		return nil, nil
+	})
+
+	dir := t.TempDir()
+	emptyData := writeCompileInt32ParquetWithRowGroups(t, nil, 2)
+	data := writeCompileInt32ParquetWithRowGroups(t, []int32{0, 1, 2, 3}, 2)
+	emptyFile := filepath.Join(dir, "part-0.parquet")
+	dataFile := filepath.Join(dir, "part-1.parquet")
+	require.NoError(t, os.WriteFile(emptyFile, emptyData, 0o600))
+	require.NoError(t, os.WriteFile(dataFile, data, 0o600))
+	pattern := filepath.Join(dir, "part-*.parquet")
+
+	param := &tree.ExternParam{
+		ExParamConst: tree.ExParamConst{
+			ScanType: tree.INFILE,
+			Filepath: pattern,
+			Format:   tree.PARQUET,
+			FileSize: int64(len(emptyData) + len(data)),
+			Tail:     &tree.TailParameter{},
+		},
+		ExParam: tree.ExParam{
+			ExternType: int32(plan.ExternType_LOAD),
+			Parallel:   true,
+		},
+	}
+	createSQL, err := json.Marshal(param)
+	require.NoError(t, err)
+	node := &plan.Node{
+		Stats: &plan.Stats{Cost: float64(len(emptyData) + len(data)), Rowsize: 1},
+		TableDef: &plan.TableDef{
+			Createsql: string(createSQL),
+			Cols:      []*plan.ColDef{{Name: "c"}},
+		},
+		ExternScan: &plan.ExternScan{
+			Type:           int32(plan.ExternType_LOAD),
+			TbColToDataCol: map[string]int32{},
+		},
+	}
+
+	ss, err := testCompile.compileExternScan(node)
+	require.NoError(t, err)
+	require.Len(t, ss, 2)
+
+	seen := make(map[int32]bool)
+	for _, scope := range ss {
+		require.NoError(t, checkScopeWithExpectedList(scope, []vm.OpType{vm.External}))
+		ext := scope.RootOp.(*external.External)
+		require.False(t, ext.Es.Extern.Parallel)
+		require.Equal(t, []string{dataFile}, ext.Es.FileList)
+		require.NotEmpty(t, ext.Es.ParquetRowGroupShards)
+		for _, shard := range ext.Es.ParquetRowGroupShards {
+			require.Equal(t, int32(0), shard.FileIndex)
+			for rowGroupIdx := shard.RowGroupStart; rowGroupIdx < shard.RowGroupEnd; rowGroupIdx++ {
+				seen[rowGroupIdx] = true
+			}
+		}
+	}
+	require.Equal(t, map[int32]bool{0: true, 1: true}, seen)
+}
+
+func TestCompileExternScanParquetRowGroupFanoutValidatesEmptyFileColumnCount(t *testing.T) {
+	testCompile := NewMockCompile(t)
+	testCompile.addr = "cn1:6001"
+	testCompile.anal = &AnalyzeModule{qry: &plan.Query{}}
+	testCompile.proc.SetResolveVariableFunc(func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+		if varName == "sql_mode" {
+			return "", nil
+		}
+		return nil, nil
+	})
+
+	dir := t.TempDir()
+	emptyData := writeCompileEmptyParquet(t, parquet.Group{
+		"c":     parquet.Leaf(parquet.Int32Type),
+		"extra": parquet.Leaf(parquet.Int32Type),
+	})
+	data := writeCompileInt32ParquetWithRowGroups(t, []int32{0, 1, 2, 3}, 2)
+	emptyFile := filepath.Join(dir, "part-0.parquet")
+	dataFile := filepath.Join(dir, "part-1.parquet")
+	require.NoError(t, os.WriteFile(emptyFile, emptyData, 0o600))
+	require.NoError(t, os.WriteFile(dataFile, data, 0o600))
+	pattern := filepath.Join(dir, "part-*.parquet")
+
+	param := &tree.ExternParam{
+		ExParamConst: tree.ExParamConst{
+			ScanType: tree.INFILE,
+			Filepath: pattern,
+			Format:   tree.PARQUET,
+			FileSize: int64(len(emptyData) + len(data)),
+			Tail:     &tree.TailParameter{},
+		},
+		ExParam: tree.ExParam{
+			ExternType: int32(plan.ExternType_LOAD),
+			Parallel:   true,
+		},
+	}
+	createSQL, err := json.Marshal(param)
+	require.NoError(t, err)
+	node := &plan.Node{
+		Stats: &plan.Stats{Cost: float64(len(emptyData) + len(data)), Rowsize: 1},
+		TableDef: &plan.TableDef{
+			Createsql: string(createSQL),
+			Cols:      []*plan.ColDef{{Name: "c"}},
+		},
+		ExternScan: &plan.ExternScan{
+			Type:           int32(plan.ExternType_LOAD),
+			TbColToDataCol: map[string]int32{},
+		},
+	}
+
+	_, err = testCompile.compileExternScan(node)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "column count mismatch")
+}
+
+func TestCompileExternScanParquetLoadUsesFileFanoutMainPath(t *testing.T) {
+	testCompile := NewMockCompile(t)
+	testCompile.addr = "cn1:6001"
+	testCompile.anal = &AnalyzeModule{qry: &plan.Query{}}
+	testCompile.proc.SetResolveVariableFunc(func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+		if varName == "sql_mode" {
+			return "", nil
+		}
+		return nil, nil
+	})
+
+	dir := t.TempDir()
+	data0 := writeCompileInt32ParquetWithRowGroups(t, []int32{0, 1}, 10)
+	data1 := writeCompileInt32ParquetWithRowGroups(t, []int32{2, 3}, 10)
+	file0 := filepath.Join(dir, "part-0.parquet")
+	file1 := filepath.Join(dir, "part-1.parquet")
+	require.NoError(t, os.WriteFile(file0, data0, 0o600))
+	require.NoError(t, os.WriteFile(file1, data1, 0o600))
+	pattern := filepath.Join(dir, "part-*.parquet")
+
+	param := &tree.ExternParam{
+		ExParamConst: tree.ExParamConst{
+			ScanType: tree.INFILE,
+			Filepath: pattern,
+			Format:   tree.PARQUET,
+			FileSize: int64(len(data0) + len(data1)),
+			Tail:     &tree.TailParameter{},
+		},
+		ExParam: tree.ExParam{
+			ExternType: int32(plan.ExternType_LOAD),
+			Parallel:   true,
+		},
+	}
+	createSQL, err := json.Marshal(param)
+	require.NoError(t, err)
+	node := &plan.Node{
+		Stats: &plan.Stats{Cost: float64(len(data0) + len(data1)), Rowsize: 1},
+		TableDef: &plan.TableDef{
+			Createsql: string(createSQL),
+		},
+		ExternScan: &plan.ExternScan{
+			Type:           int32(plan.ExternType_LOAD),
+			TbColToDataCol: map[string]int32{},
+		},
+	}
+
+	ss, err := testCompile.compileExternScan(node)
+	require.NoError(t, err)
+	require.Len(t, ss, 2)
+
+	seen := make(map[string]bool)
+	for _, scope := range ss {
+		require.NoError(t, checkScopeWithExpectedList(scope, []vm.OpType{vm.External}))
+		ext := scope.RootOp.(*external.External)
+		require.False(t, ext.Es.Extern.Parallel)
+		require.Empty(t, ext.Es.ParquetRowGroupShards)
+		require.Len(t, ext.Es.FileList, 1)
+		require.Len(t, ext.Es.FileOffsetTotal, 1)
+		require.Equal(t, []int64{0, -1}, ext.Es.FileOffsetTotal[0].Offset)
+		seen[ext.Es.FileList[0]] = true
+	}
+	require.Equal(t, map[string]bool{file0: true, file1: true}, seen)
+}
+
+func writeCompileInt32ParquetWithRowGroups(t *testing.T, values []int32, rowsPerGroup int64) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	schema := parquet.NewSchema("x", parquet.Group{"c": parquet.Leaf(parquet.Int32Type)})
+	w := parquet.NewWriter(&buf, schema, parquet.MaxRowsPerRowGroup(rowsPerGroup))
+	rows := make([]parquet.Row, len(values))
+	for i, value := range values {
+		rows[i] = parquet.Row{parquet.Int32Value(value).Level(0, 0, 0)}
+	}
+	_, err := w.WriteRows(rows)
+	require.NoError(t, err)
+	require.NoError(t, w.Close())
+	f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	require.NoError(t, err)
+	require.Len(t, f.RowGroups(), (len(values)+int(rowsPerGroup)-1)/int(rowsPerGroup))
+	return buf.Bytes()
+}
+
+func writeCompileEmptyParquet(t *testing.T, group parquet.Group) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	w := parquet.NewWriter(&buf, parquet.NewSchema("x", group))
+	require.NoError(t, w.Close())
+	return buf.Bytes()
 }
 
 func TestCompileBuildSideForBroadcastJoinSkipsEmptyCN(t *testing.T) {
@@ -683,7 +1790,7 @@ func TestNotifyMessageClean(t *testing.T) {
 		streamSender: ff,
 		safeToClose:  true,
 	}
-	// no matter error happens or not, clean method should close the sender.
+	// Repeated cleanup attempts must retire a sender exactly once.
 	n1 := notifyMessageResult{
 		sender: sender,
 		err:    moerr.NewInternalErrorNoCtx("there is an error."),
@@ -697,7 +1804,7 @@ func TestNotifyMessageClean(t *testing.T) {
 	require.Equal(t, 1, ff.number)
 
 	n2.clean(proc)
-	require.Equal(t, 2, ff.number)
+	require.Equal(t, 1, ff.number)
 }
 
 func TestSuppressRemoteRunCancelError(t *testing.T) {
@@ -759,6 +1866,63 @@ func TestCleanPipelineWitchStartFail(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestRemoteRunMalformedAddressTerminatesReceiver(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.BuildPipelineContext(context.Background())
+	reg := process.NewPipelineEdge(1, 0)
+	s := &Scope{
+		Magic:    Remote,
+		NodeInfo: engine.Node{Addr: "malformed-remote-address"},
+		Proc:     proc,
+		RootOp:   connector.NewArgument().WithReg(reg),
+	}
+	c := &Compile{proc: proc, addr: "local:6001"}
+
+	err := s.RemoteRun(c)
+	require.ErrorContains(t, err, "malformed remote CN address")
+
+	select {
+	case signal := <-reg.Ch2:
+		_, signalErr := signal.Action()
+		require.ErrorIs(t, signalErr, err)
+	case <-time.After(time.Second):
+		t.Fatal("malformed remote start failure did not terminate its receiver")
+	}
+}
+
+func TestMergeRunReturnsWhenRemotePreScopeAddressIsMalformed(t *testing.T) {
+	c := NewMockCompile(t)
+	c.execType = plan2.ExecTypeAP_MULTICN
+	c.hasMergeOp = true
+
+	parent := &Scope{
+		Magic:  Merge,
+		Proc:   c.proc.NewContextChildProc(1),
+		RootOp: merge.NewArgument(),
+	}
+	child := &Scope{
+		Magic:    Remote,
+		NodeInfo: engine.Node{Addr: "malformed-remote-address"},
+		Proc:     c.proc.NewContextChildProc(0),
+		RootOp:   connector.NewArgument().WithReg(parent.Proc.Reg.MergeReceivers[0]),
+	}
+	parent.PreScopes = []*Scope{child}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- parent.MergeRun(c)
+	}()
+
+	select {
+	case err := <-done:
+		require.ErrorContains(t, err, "malformed remote CN address")
+		require.ErrorIs(t, context.Cause(parent.Proc.Ctx), err)
+	case <-time.After(2 * time.Second):
+		parent.Proc.Cancel(moerr.NewInternalErrorNoCtx("test timeout"))
+		t.Fatal("merge run hung after malformed remote pre-scope failed")
+	}
+}
+
 func TestScopeGetRelDataError(t *testing.T) {
 	// Create a new scope
 	s := newScope(Normal)
@@ -779,6 +1943,7 @@ func TestScopeGetRelDataError(t *testing.T) {
 	}
 
 	// Create a mock compile with engine
+	catalog.SetupDefines("")
 	e, _, _ := testengine.New(defines.AttachAccountId(context.Background(), catalog.System_Account))
 	c := NewMockCompile(t)
 	c.proc = s.Proc
@@ -790,12 +1955,12 @@ func TestScopeGetRelDataError(t *testing.T) {
 }
 
 // mockRelation is a mock Relation that captures the FilterHint passed to BuildReaders
-type mockRelationForBloomFilter struct {
+type mockRelationForMembershipFilter struct {
 	engine.Relation
 	capturedHint engine.FilterHint
 }
 
-func (m *mockRelationForBloomFilter) BuildReaders(
+func (m *mockRelationForMembershipFilter) BuildReaders(
 	ctx context.Context,
 	proc any,
 	expr *plan.Expr,
@@ -855,14 +2020,14 @@ func (m *mockRelationForParallelOrderBy) BuildReaders(
 	return m.readers, nil
 }
 
-func TestBuildReadersBloomFilterHint(t *testing.T) {
-	t.Run("BloomFilter set when node is IVFFLAT Entries and context has bloom filter", func(t *testing.T) {
+func TestBuildReadersMembershipFilterHint(t *testing.T) {
+	t.Run("MembershipFilter set when node is IVFFLAT Entries and context has membership filter", func(t *testing.T) {
 		proc := testutil.NewProcess(t)
-		expectedBloomFilter := []byte{1, 2, 3, 4, 5}
-		ctx := context.WithValue(proc.Ctx, defines.IvfBloomFilter{}, expectedBloomFilter)
+		expectedMembershipFilter := []byte{1, 2, 3, 4, 5}
+		ctx := context.WithValue(proc.Ctx, defines.IvfMembershipFilter{}, expectedMembershipFilter)
 		proc.Ctx = ctx
 
-		mockRel := &mockRelationForBloomFilter{}
+		mockRel := &mockRelationForMembershipFilter{}
 		s := &Scope{
 			Proc: proc,
 			DataSource: &Source{
@@ -889,16 +2054,16 @@ func TestBuildReadersBloomFilterHint(t *testing.T) {
 		readers, err := s.buildReaders(c)
 		require.NoError(t, err)
 		require.NotNil(t, readers)
-		require.Equal(t, expectedBloomFilter, mockRel.capturedHint.BloomFilter)
+		require.Equal(t, expectedMembershipFilter, mockRel.capturedHint.MembershipFilterBytes)
 	})
 
-	t.Run("BloomFilter not set when node is nil", func(t *testing.T) {
+	t.Run("MembershipFilter not set when node is nil", func(t *testing.T) {
 		proc := testutil.NewProcess(t)
-		expectedBloomFilter := []byte{1, 2, 3, 4, 5}
-		ctx := context.WithValue(proc.Ctx, defines.IvfBloomFilter{}, expectedBloomFilter)
+		expectedMembershipFilter := []byte{1, 2, 3, 4, 5}
+		ctx := context.WithValue(proc.Ctx, defines.IvfMembershipFilter{}, expectedMembershipFilter)
 		proc.Ctx = ctx
 
-		mockRel := &mockRelationForBloomFilter{}
+		mockRel := &mockRelationForMembershipFilter{}
 		s := &Scope{
 			Proc: proc,
 			DataSource: &Source{
@@ -921,16 +2086,16 @@ func TestBuildReadersBloomFilterHint(t *testing.T) {
 		readers, err := s.buildReaders(c)
 		require.NoError(t, err)
 		require.NotNil(t, readers)
-		require.Nil(t, mockRel.capturedHint.BloomFilter)
+		require.Nil(t, mockRel.capturedHint.MembershipFilterBytes)
 	})
 
-	t.Run("BloomFilter not set when TableDef is nil", func(t *testing.T) {
+	t.Run("MembershipFilter not set when TableDef is nil", func(t *testing.T) {
 		proc := testutil.NewProcess(t)
-		expectedBloomFilter := []byte{1, 2, 3, 4, 5}
-		ctx := context.WithValue(proc.Ctx, defines.IvfBloomFilter{}, expectedBloomFilter)
+		expectedMembershipFilter := []byte{1, 2, 3, 4, 5}
+		ctx := context.WithValue(proc.Ctx, defines.IvfMembershipFilter{}, expectedMembershipFilter)
 		proc.Ctx = ctx
 
-		mockRel := &mockRelationForBloomFilter{}
+		mockRel := &mockRelationForMembershipFilter{}
 		s := &Scope{
 			Proc: proc,
 			DataSource: &Source{
@@ -955,16 +2120,16 @@ func TestBuildReadersBloomFilterHint(t *testing.T) {
 		readers, err := s.buildReaders(c)
 		require.NoError(t, err)
 		require.NotNil(t, readers)
-		require.Nil(t, mockRel.capturedHint.BloomFilter)
+		require.Nil(t, mockRel.capturedHint.MembershipFilterBytes)
 	})
 
-	t.Run("BloomFilter not set when TableType is not IVFFLAT Entries", func(t *testing.T) {
+	t.Run("MembershipFilter not set when TableType is not IVFFLAT Entries", func(t *testing.T) {
 		proc := testutil.NewProcess(t)
-		expectedBloomFilter := []byte{1, 2, 3, 4, 5}
-		ctx := context.WithValue(proc.Ctx, defines.IvfBloomFilter{}, expectedBloomFilter)
+		expectedMembershipFilter := []byte{1, 2, 3, 4, 5}
+		ctx := context.WithValue(proc.Ctx, defines.IvfMembershipFilter{}, expectedMembershipFilter)
 		proc.Ctx = ctx
 
-		mockRel := &mockRelationForBloomFilter{}
+		mockRel := &mockRelationForMembershipFilter{}
 		s := &Scope{
 			Proc: proc,
 			DataSource: &Source{
@@ -991,14 +2156,14 @@ func TestBuildReadersBloomFilterHint(t *testing.T) {
 		readers, err := s.buildReaders(c)
 		require.NoError(t, err)
 		require.NotNil(t, readers)
-		require.Nil(t, mockRel.capturedHint.BloomFilter)
+		require.Nil(t, mockRel.capturedHint.MembershipFilterBytes)
 	})
 
-	t.Run("BloomFilter not set when context has no IvfBloomFilter", func(t *testing.T) {
+	t.Run("MembershipFilter not set when context has no IvfMembershipFilter", func(t *testing.T) {
 		proc := testutil.NewProcess(t)
-		// No IvfBloomFilter in context
+		// No IvfMembershipFilter in context
 
-		mockRel := &mockRelationForBloomFilter{}
+		mockRel := &mockRelationForMembershipFilter{}
 		s := &Scope{
 			Proc: proc,
 			DataSource: &Source{
@@ -1025,15 +2190,15 @@ func TestBuildReadersBloomFilterHint(t *testing.T) {
 		readers, err := s.buildReaders(c)
 		require.NoError(t, err)
 		require.NotNil(t, readers)
-		require.Nil(t, mockRel.capturedHint.BloomFilter)
+		require.Nil(t, mockRel.capturedHint.MembershipFilterBytes)
 	})
 
-	t.Run("BloomFilter not set when context value is not []byte", func(t *testing.T) {
+	t.Run("MembershipFilter not set when context value is not []byte", func(t *testing.T) {
 		proc := testutil.NewProcess(t)
-		ctx := context.WithValue(proc.Ctx, defines.IvfBloomFilter{}, "not a byte slice")
+		ctx := context.WithValue(proc.Ctx, defines.IvfMembershipFilter{}, "not a byte slice")
 		proc.Ctx = ctx
 
-		mockRel := &mockRelationForBloomFilter{}
+		mockRel := &mockRelationForMembershipFilter{}
 		s := &Scope{
 			Proc: proc,
 			DataSource: &Source{
@@ -1060,15 +2225,15 @@ func TestBuildReadersBloomFilterHint(t *testing.T) {
 		readers, err := s.buildReaders(c)
 		require.NoError(t, err)
 		require.NotNil(t, readers)
-		require.Nil(t, mockRel.capturedHint.BloomFilter)
+		require.Nil(t, mockRel.capturedHint.MembershipFilterBytes)
 	})
 
-	t.Run("BloomFilter not set when context value is empty []byte", func(t *testing.T) {
+	t.Run("MembershipFilter not set when context value is empty []byte", func(t *testing.T) {
 		proc := testutil.NewProcess(t)
-		ctx := context.WithValue(proc.Ctx, defines.IvfBloomFilter{}, []byte{}) // empty byte slice
+		ctx := context.WithValue(proc.Ctx, defines.IvfMembershipFilter{}, []byte{}) // empty byte slice
 		proc.Ctx = ctx
 
-		mockRel := &mockRelationForBloomFilter{}
+		mockRel := &mockRelationForMembershipFilter{}
 		s := &Scope{
 			Proc: proc,
 			DataSource: &Source{
@@ -1095,7 +2260,7 @@ func TestBuildReadersBloomFilterHint(t *testing.T) {
 		readers, err := s.buildReaders(c)
 		require.NoError(t, err)
 		require.NotNil(t, readers)
-		require.Nil(t, mockRel.capturedHint.BloomFilter)
+		require.Nil(t, mockRel.capturedHint.MembershipFilterBytes)
 	})
 }
 
@@ -1124,5 +2289,94 @@ func TestBuildScanParallelRunSetsOrderByOnParallelReaders(t *testing.T) {
 	for _, reader := range []*mockReaderForParallelOrderBy{reader1, reader2} {
 		require.Equal(t, 1, reader.orderByCalls)
 		require.Equal(t, orderBy, reader.orderBy)
+	}
+}
+
+func TestLocalRangesPolicyForPartitionedIvfEntries(t *testing.T) {
+	ivfNode := &plan.Node{
+		NodeType: plan.Node_TABLE_SCAN,
+		TableDef: &plan.TableDef{TableType: catalog.SystemSI_IVFFLAT_TblType_Entries},
+		IndexReaderParam: &plan.IndexReaderParam{
+			Limit:        &plan.Expr{},
+			OrigFuncName: "l2_distance",
+		},
+	}
+	ordinaryNode := &plan.Node{NodeType: plan.Node_TABLE_SCAN, TableDef: &plan.TableDef{}}
+
+	require.Equal(t, engine.DataCollectPolicy(engine.Policy_CollectAllData), localRangesPolicy(ivfNode, 0))
+	require.Equal(t, engine.DataCollectPolicy(engine.Policy_CollectCommittedPersistedData), localRangesPolicy(ivfNode, 1))
+	require.Equal(t, engine.DataCollectPolicy(engine.Policy_CollectAllData), localRangesPolicy(ordinaryNode, 1))
+}
+
+func TestRuntimeFilterResultKeepsItsOriginatingSpec(t *testing.T) {
+	probeType := plan.Type{Id: int32(types.T_int64), NotNullable: true}
+
+	tests := []struct {
+		name            string
+		passingNotOnPK  bool
+		acceptedNotOnPK bool
+	}{
+		{
+			name:            "PASS on PK before non-PK IN",
+			passingNotOnPK:  false,
+			acceptedNotOnPK: true,
+		},
+		{
+			name:            "PASS on non-PK before PK IN",
+			passingNotOnPK:  true,
+			acceptedNotOnPK: false,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			board := message.NewMessageBoard()
+			defer board.Reset()
+			proc.SetMessageBoard(board)
+
+			passingSpec := plan2.MakeRuntimeFilter(
+				101, false, 1, plan2.GetColExpr(probeType, 1, 0), test.passingNotOnPK)
+			acceptedSpec := plan2.MakeRuntimeFilter(
+				102, false, 1, plan2.GetColExpr(probeType, 1, 0), test.acceptedNotOnPK)
+			tableScan := table_scan.NewArgument()
+			defer tableScan.Release()
+			scope := &Scope{
+				Proc:   proc,
+				RootOp: tableScan,
+				DataSource: &Source{
+					RuntimeFilterSpecs: []*plan.RuntimeFilterSpec{passingSpec, acceptedSpec},
+				},
+			}
+			compile := &Compile{proc: proc}
+
+			message.SendMessage(message.RuntimeFilterMessage{
+				Tag: passingSpec.Tag,
+				Typ: message.RuntimeFilter_PASS,
+			}, board)
+			message.SendMessage(message.RuntimeFilterMessage{
+				Tag:  acceptedSpec.Tag,
+				Typ:  message.RuntimeFilter_IN,
+				Card: 1,
+			}, board)
+
+			runtimeFilters, emptyScan, err := scope.waitForRuntimeFilters(compile)
+			require.NoError(t, err)
+			require.False(t, emptyScan)
+			require.Len(t, runtimeFilters, 1)
+			require.Same(t, acceptedSpec, runtimeFilters[0].spec)
+
+			blockFilters, err := scope.handleRuntimeFilters(compile, runtimeFilters)
+			require.NoError(t, err)
+			require.Len(t, blockFilters, 1)
+			require.Same(t, runtimeFilters[0].expr, blockFilters[0])
+			if test.acceptedNotOnPK {
+				require.Equal(t, runtimeFilters[0].expr, tableScan.RuntimeFilterExprs[0])
+				require.Nil(t, scope.DataSource.FilterExpr)
+			} else {
+				require.Empty(t, tableScan.RuntimeFilterExprs)
+				require.NotNil(t, scope.DataSource.FilterExpr)
+			}
+		})
 	}
 }

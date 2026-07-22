@@ -1,0 +1,168 @@
+select json_merge_patch('{"a":1,"b":2}', '{"b":3,"c":4}');
+➤ json_merge_patch({"a":1,"b":2}, {"b":3,"c":4})[-1,2147483647,0]  𝄀
+{"a": 1, "b": 3, "c": 4}
+select json_merge_patch('{"a":1,"b":2}', '{"b":null}');
+➤ json_merge_patch({"a":1,"b":2}, {"b":null})[-1,2147483647,0]  𝄀
+{"a": 1}
+select json_merge_patch('{"a":{"x":1}}', '{"a":{"y":2}}');
+➤ json_merge_patch({"a":{"x":1}}, {"a":{"y":2}})[-1,2147483647,0]  𝄀
+{"a": {"x": 1, "y": 2}}
+select json_merge_patch('{}', '{"a":{"b":null}}');
+➤ json_merge_patch({}, {"a":{"b":null}})[-1,2147483647,0]  𝄀
+{"a": {}}
+select json_merge_patch('[1,2]', '[true,false]');
+➤ json_merge_patch([1,2], [true,false])[-1,2147483647,0]  𝄀
+[true, false]
+select json_merge_patch('[1,2]', '{"id":47}');
+➤ json_merge_patch([1,2], {"id":47})[-1,2147483647,0]  𝄀
+{"id": 47}
+select json_merge_patch('1', 'true');
+➤ json_merge_patch(1, true)[-1,2147483647,0]  𝄀
+true
+select json_merge_patch('{"a":1}', '{"a":2}', '{"a":3,"b":4}');
+➤ json_merge_patch({"a":1}, {"a":2}, {"a":3,"b":4})[-1,2147483647,0]  𝄀
+{"a": 3, "b": 4}
+select json_merge_patch('null', '{"a":1}');
+➤ json_merge_patch(null, {"a":1})[-1,2147483647,0]  𝄀
+{"a": 1}
+select json_merge_patch('{"a":["b"]}', '{"a":"c"}');
+➤ json_merge_patch({"a":["b"]}, {"a":"c"})[-1,2147483647,0]  𝄀
+{"a": "c"}
+select json_merge_patch('{"a":"c"}', '{"a":["b"]}');
+➤ json_merge_patch({"a":"c"}, {"a":["b"]})[-1,2147483647,0]  𝄀
+{"a": ["b"]}
+select json_merge_patch('{"a":[{"b":"c"}]}', '{"a":[1]}');
+➤ json_merge_patch({"a":[{"b":"c"}]}, {"a":[1]})[-1,2147483647,0]  𝄀
+{"a": [1]}
+select json_merge_patch('{"a":"foo"}', 'null') is null, json_type(json_merge_patch('{"a":"foo"}', 'null'));
+➤ json_merge_patch({"a":"foo"}, null) is null[-7,1,0]  ¦  json_type(json_merge_patch({"a":"foo"}, null))[12,-1,0]  𝄀
+0  ¦  NULL
+select json_merge_patch('[1,2]', '{"a":"b","c":null}');
+➤ json_merge_patch([1,2], {"a":"b","c":null})[-1,2147483647,0]  𝄀
+{"a": "b"}
+select json_merge_patch(null, '[1,2]');
+➤ json_merge_patch(null, [1,2])[-1,2147483647,0]  𝄀
+[1, 2]
+select json_merge_patch(null, '{}');
+➤ json_merge_patch(null, {})[-1,2147483647,0]  𝄀
+null
+select json_merge_patch('{"a":"b"}', null, '{"c":"d"}');
+➤ json_merge_patch({"a":"b"}, null, {"c":"d"})[-1,2147483647,0]  𝄀
+null
+select json_merge_patch('{"a":"b"}', null, '[1,2,3]', '{"c":null,"d":"e"}');
+➤ json_merge_patch({"a":"b"}, null, [1,2,3], {"c":null,"d":"e"})[-1,2147483647,0]  𝄀
+{"d": "e"}
+select json_merge_patch(null, '{}') is null,
+json_type(json_merge_patch(null, '{}'));
+➤ json_merge_patch(null, {}) is null[-7,1,0]  ¦  json_type(json_merge_patch(null, {}))[12,-1,0]  𝄀
+1  ¦  null
+select json_merge_patch('{"a":"b"}', null, '[1,2,3]') is null,
+json_type(json_merge_patch('{"a":"b"}', null, '[1,2,3]'));
+➤ json_merge_patch({"a":"b"}, null, [1,2,3]) is null[-7,1,0]  ¦  json_type(json_merge_patch({"a":"b"}, null, [1,2,3]))[12,-1,0]  𝄀
+0  ¦  ARRAY
+select json_merge_patch('{"a":"b"}', null, '{"c":"d"}') is null,
+json_type(json_merge_patch('{"a":"b"}', null, '{"c":"d"}'));
+➤ json_merge_patch({"a":"b"}, null, {"c":"d"}) is null[-7,1,0]  ¦  json_type(json_merge_patch({"a":"b"}, null, {"c":"d"}))[12,-1,0]  𝄀
+1  ¦  null
+select json_merge_preserve('[1,2]', '[true,false]');
+➤ json_merge_preserve([1,2], [true,false])[-1,2147483647,0]  𝄀
+[1, 2, true, false]
+select json_merge_preserve('1', 'true');
+➤ json_merge_preserve(1, true)[-1,2147483647,0]  𝄀
+[1, true]
+select json_merge_preserve('[1,2]', '{"id":47}');
+➤ json_merge_preserve([1,2], {"id":47})[-1,2147483647,0]  𝄀
+[1, 2, {"id": 47}]
+select json_merge_preserve('{"a":1,"b":2}', '{"a":3,"c":4}', '{"a":5,"d":6}');
+➤ json_merge_preserve({"a":1,"b":2}, {"a":3,"c":4}, {"a":5,"d":6})[-1,2147483647,0]  𝄀
+{"a": [1, 3, 5], "b": 2, "c": 4, "d": 6}
+select json_merge_preserve('{"a":{"x":1}}', '{"a":{"y":2}}');
+➤ json_merge_preserve({"a":{"x":1}}, {"a":{"y":2}})[-1,2147483647,0]  𝄀
+{"a": {"x": 1, "y": 2}}
+select json_merge_preserve('{"a":[1]}', '{"a":[2]}');
+➤ json_merge_preserve({"a":[1]}, {"a":[2]})[-1,2147483647,0]  𝄀
+{"a": [1, 2]}
+select json_merge_preserve('{"a":null}', '{"a":1}');
+➤ json_merge_preserve({"a":null}, {"a":1})[-1,2147483647,0]  𝄀
+{"a": [null, 1]}
+select json_merge_preserve('null', '1');
+➤ json_merge_preserve(null, 1)[-1,2147483647,0]  𝄀
+[null, 1]
+select json_merge_preserve('{"a":1}', null);
+➤ json_merge_preserve({"a":1}, null)[-1,2147483647,0]  𝄀
+null
+select json_merge_preserve('{"a":1}', null) is null,
+json_type(json_merge_preserve('{"a":1}', null));
+➤ json_merge_preserve({"a":1}, null) is null[-7,1,0]  ¦  json_type(json_merge_preserve({"a":1}, null))[12,-1,0]  𝄀
+1  ¦  null
+select json_merge_preserve('true', '[1,2]');
+➤ json_merge_preserve(true, [1,2])[-1,2147483647,0]  𝄀
+[true, 1, 2]
+select json_merge_preserve('[1,2]', 'true');
+➤ json_merge_preserve([1,2], true)[-1,2147483647,0]  𝄀
+[1, 2, true]
+select json_merge_preserve('{"a":["x","y"]}', '{"a":"b","c":"d"}');
+➤ json_merge_preserve({"a":["x","y"]}, {"a":"b","c":"d"})[-1,2147483647,0]  𝄀
+{"a": ["x", "y", "b"], "c": "d"}
+select json_merge_preserve('{"a":"b","c":"d"}', '{"a":["x","y"]}');
+➤ json_merge_preserve({"a":"b","c":"d"}, {"a":["x","y"]})[-1,2147483647,0]  𝄀
+{"a": ["b", "x", "y"], "c": "d"}
+select json_merge_patch(cast('{"a":1}' as json), '{"b":2}');
+➤ json_merge_patch(cast({"a":1} as json), {"b":2})[-1,2147483647,0]  𝄀
+{"a": 1, "b": 2}
+select json_merge_preserve(json_object('a', 1), '{"a":2}');
+➤ json_merge_preserve(json_object(a, 1), {"a":2})[-1,2147483647,0]  𝄀
+{"a": [1, 2]}
+select json_merge_patch('{}');
+invalid argument function json_merge_patch, bad value [VARCHAR]
+select json_merge_preserve('{}');
+invalid argument function json_merge_preserve, bad value [VARCHAR]
+select json_merge_patch(1, '2');
+invalid argument function json_merge_patch, bad value [BIGINT VARCHAR]
+select json_merge_preserve('{', '{}');
+invalid input: json text {
+select json_merge_patch('{"a":"b"}', '[1,');
+invalid input: json text [1,
+select json_length(json_merge_patch(
+concat(repeat('{"a":', 100), '1', repeat('}', 100)),
+'{}'
+)) as merge_patch_depth_100_length;
+➤ merge_patch_depth_100_length[-5,64,0]  𝄀
+1
+select json_merge_patch(
+concat(repeat('{"a":', 101), '1', repeat('}', 101)),
+'{}'
+);
+-- @regex("json document nesting depth exceeds 100", true)
+invalid input: json document nesting depth exceeds 100
+select json_merge_preserve(
+concat(repeat('{"a":', 100), '1', repeat('}', 100)),
+concat(repeat('{"a":', 100), '2', repeat('}', 100))
+);
+-- @regex("json document nesting depth exceeds 100", true)
+invalid input: json document nesting depth exceeds 100
+drop table if exists json_merge_docs;
+create table json_merge_docs (
+id int primary key,
+doc json,
+patch_doc varchar(200),
+preserve_doc varchar(200)
+);
+insert into json_merge_docs values
+(1, '{"a":1,"nested":{"x":1}}', '{"nested":{"x":null,"y":2}}', '{"a":2,"nested":{"z":3}}'),
+(2, '[1,2]', '{"id":47}', '[3,4]'),
+(3, 'null', '{"a":1}', '1'),
+(4, null, '[1,2]', null);
+select id, json_merge_patch(doc, patch_doc) from json_merge_docs order by id;
+➤ id[4,32,0]  ¦  json_merge_patch(doc, patch_doc)[-1,2147483647,0]  𝄀
+1  ¦  {"a": 1, "nested": {"y": 2}}  𝄀
+2  ¦  {"id": 47}  𝄀
+3  ¦  {"a": 1}  𝄀
+4  ¦  [1, 2]
+select id, json_merge_preserve(doc, preserve_doc) from json_merge_docs order by id;
+➤ id[4,32,0]  ¦  json_merge_preserve(doc, preserve_doc)[-1,2147483647,0]  𝄀
+1  ¦  {"a": [1, 2], "nested": {"x": 1, "z": 3}}  𝄀
+2  ¦  [1, 2, 3, 4]  𝄀
+3  ¦  [null, 1]  𝄀
+4  ¦  null
+drop table json_merge_docs;

@@ -114,79 +114,8 @@ func escape(src string) string {
 	return strings.ReplaceAll(s, "'", `\'`)
 }
 
-func singleKeywordPattern(ps []*Pattern, mode int64) (*Pattern, bool) {
-	if mode != int64(tree.FULLTEXT_NL) && mode != int64(tree.FULLTEXT_DEFAULT) {
-		return nil, false
-	}
-	if len(ps) != 1 {
-		return nil, false
-	}
-	p := ps[0]
-	switch p.Operator {
-	case TEXT, STAR:
-		return p, true
-	case PLUS:
-		if len(p.Children) == 1 {
-			switch p.Children[0].Operator {
-			case TEXT, STAR:
-				return p.Children[0], true
-			}
-		}
-	}
-	return nil, false
-}
-
 func cappedTfExpr() string {
 	return "CASE WHEN COUNT(*) > 255 THEN 255 ELSE COUNT(*) END"
-}
-
-func singleKeywordWhereClause(p *Pattern) (string, error) {
-	switch p.Operator {
-	case TEXT:
-		return fmt.Sprintf("word = '%s'", escape(p.Text)), nil
-	case STAR:
-		if p.Text[len(p.Text)-1] != '*' {
-			return "", moerr.NewInternalErrorNoCtx("wildcard search without character *")
-		}
-		return fmt.Sprintf("prefix_eq(word,'%s')", escape(p.Text[:len(p.Text)-1])), nil
-	default:
-		return "", moerr.NewInternalErrorNoCtx("single keyword optimization only supports text/star patterns")
-	}
-}
-
-func SingleKeywordTopKSQL(ps []*Pattern, mode int64, idxTable string, limit uint64) (string, bool, error) {
-	p, ok := singleKeywordPattern(ps, mode)
-	if !ok {
-		return "", false, nil
-	}
-	whereClause, err := singleKeywordWhereClause(p)
-	if err != nil {
-		return "", false, err
-	}
-	return fmt.Sprintf(
-		"SELECT doc_id, tf, nmatch FROM (SELECT doc_id, tf, COUNT(*) OVER() AS nmatch FROM (SELECT doc_id, %s AS tf FROM %s WHERE %s GROUP BY doc_id) a) ranked ORDER BY tf DESC LIMIT %d",
-		cappedTfExpr(), idxTable, whereClause, limit,
-	), true, nil
-}
-
-func SingleKeywordTopKBM25SQL(ps []*Pattern, mode int64, idxTable string, avgDocLen float64, limit uint64) (string, bool, error) {
-	p, ok := singleKeywordPattern(ps, mode)
-	if !ok {
-		return "", false, nil
-	}
-	whereClause, err := singleKeywordWhereClause(p)
-	if err != nil {
-		return "", false, err
-	}
-
-	scoreExpr := fmt.Sprintf(
-		"(a.tf * (%.17g + 1) / (a.tf + %.17g * (1 - %.17g + %.17g * (CAST(COALESCE(dl.pos, 0) AS INT) / %.17g))))",
-		BM25_K1, BM25_K1, BM25_B, BM25_B, avgDocLen,
-	)
-	return fmt.Sprintf(
-		"SELECT doc_id, score, nmatch FROM (SELECT a.doc_id, %s AS score, COUNT(*) OVER() AS nmatch FROM (SELECT doc_id, %s AS tf FROM %s WHERE %s GROUP BY doc_id) a LEFT JOIN %s dl ON a.doc_id = dl.doc_id AND dl.word = '%s') ranked ORDER BY score DESC LIMIT %d",
-		scoreExpr, cappedTfExpr(), idxTable, whereClause, idxTable, DOC_LEN_WORD, limit,
-	), true, nil
 }
 
 func PhraseCountSQL(ps []*Pattern, mode int64, idxTable string) (string, bool, error) {
@@ -568,47 +497,49 @@ func SqlPhrase(ps []*Pattern, mode int64, idxtbl string, withIndex bool) (string
 		}
 	} else {
 
-		oncond := make([]string, len(ps)-1)
-		tables := make([]string, len(ps))
-		for i, tp := range ps {
-			var subsql string
+		// Phrase match without an N-way self-join.  A phrase occurrence is a set
+		// of positions where every word i sits at pos = anchor + offset_i for one
+		// common anchor (offset_i is the word's distance from the first word).
+		// Normalize each word's hit to its anchor (anchor = pos - offset_i),
+		// UNION ALL the per-word hits, then group by (doc_id, anchor): a group
+		// holding all len(ps) words is one phrase occurrence.  This is linear in
+		// the per-word posting lists instead of the combinatorial blow-up of
+		// joining all len(ps) words pairwise on doc_id + pos.  Including anchor in
+		// the group key keeps it correct when a word repeats in a document: each
+		// occurrence falls into a distinct anchor bucket and every slot
+		// contributes at most one row per anchor, so COUNT(*) = len(ps) holds.
+		base := ps[0].Position
+		for _, tp := range ps {
+			var cond string
 			kw := tp.Text
-			tblname := fmt.Sprintf("kw%d", i)
-			tables[i] = tblname
 			if tp.Operator == TEXT {
-				subsql = fmt.Sprintf("%s AS (SELECT doc_id, pos FROM %s WHERE word = '%s')",
-					tblname, idxtbl, escape(kw))
+				cond = fmt.Sprintf("word = '%s'", escape(kw))
 			} else {
 				if kw[len(kw)-1] != '*' {
 					return "", moerr.NewInternalErrorNoCtx("wildcard search without character *")
 				}
 				prefix := kw[0 : len(kw)-1]
-				subsql = fmt.Sprintf("%s AS (SELECT doc_id, pos FROM %s WHERE prefix_eq(word,'%s'))",
-					tblname, idxtbl, escape(prefix))
-
+				cond = fmt.Sprintf("prefix_eq(word,'%s')", escape(prefix))
 			}
-			union = append(union, subsql)
-			if i > 0 {
-				oncond[i-1] = fmt.Sprintf("%s.doc_id = %s.doc_id AND %s.pos - %s.pos = %d",
-					tables[0], tables[i], tables[i], tables[0], ps[i].Position-ps[0].Position)
-			}
+			union = append(union, fmt.Sprintf("SELECT doc_id, pos - %d AS anchor FROM %s WHERE %s",
+				tp.Position-base, idxtbl, cond))
 		}
-		sql = "WITH "
-		sql += strings.Join(union, ", ")
+
+		innerUnion := strings.Join(union, " UNION ALL ")
+		proj := "doc_id"
 		if withIndex {
-			sql += fmt.Sprintf(" SELECT %s.doc_id, CAST(0 as int) FROM ", tables[0])
-		} else {
-			sql += fmt.Sprintf(" SELECT %s.doc_id FROM ", tables[0])
+			proj = "doc_id, CAST(0 as int)"
 		}
-
-		sql += strings.Join(tables, ", ")
-		sql += " WHERE "
-		sql += strings.Join(oncond, " AND ")
 
 		if mode == int64(tree.FULLTEXT_BOOLEAN) {
-			// in boolean mode, we ignore the word occurrence.  GROUP BY will remove the duplicate doc_id and
-			// hence avoid a huge number of records produced after JOIN.
-			sql += fmt.Sprintf(" GROUP BY %s.doc_id", tables[0])
+			// in boolean mode we ignore the occurrence count: collapse to one
+			// row per doc_id, the same dedup the old GROUP BY kw0.doc_id did.
+			sql = fmt.Sprintf("SELECT %s FROM (SELECT doc_id FROM (%s) anchors GROUP BY doc_id, anchor HAVING COUNT(*) = %d) phrase GROUP BY doc_id",
+				proj, innerUnion, len(ps))
+		} else {
+			// NL mode keeps one row per phrase occurrence so tf is preserved.
+			sql = fmt.Sprintf("SELECT %s FROM (%s) anchors GROUP BY doc_id, anchor HAVING COUNT(*) = %d",
+				proj, innerUnion, len(ps))
 		}
 	}
 
@@ -619,6 +550,9 @@ func SqlPhrase(ps []*Pattern, mode int64, idxtbl string, withIndex bool) (string
 
 // API for generate SQL from pattern
 func PatternToSql(ps []*Pattern, mode int64, idxTable string, parser string, algo FullTextScoreAlgo) (string, error) {
+	if len(ps) == 0 {
+		return "", moerr.NewInvalidInputNoCtx("fulltext search pattern must not be empty")
+	}
 	sql, err := patternToSql(ps, mode, idxTable, parser)
 	if err != nil {
 		return "", err

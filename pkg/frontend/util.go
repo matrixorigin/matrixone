@@ -19,7 +19,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"math"
 	"math/rand"
 	"os"
 	"strconv"
@@ -31,7 +30,6 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/google/uuid"
-	"github.com/petermattis/goid"
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/cdc"
@@ -54,6 +52,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/util/debug/goroutine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
@@ -92,17 +91,9 @@ func Max(a int, b int) int {
 	}
 }
 
-const (
-	invalidGoroutineId = math.MaxInt64
-)
-
 // GetRoutineId gets the routine id
 func GetRoutineId() uint64 {
-	id := goid.Get()
-	if id == 0 {
-		id = invalidGoroutineId
-	}
-	return uint64(id)
+	return goroutine.GetRoutineId()
 }
 
 /*
@@ -1030,6 +1021,20 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 					return nil, nil, err
 				}
 			}
+		case types.T_year:
+			for rowIdx, row := range rows {
+				var val types.MoYear
+				if row[colIndex] == nil {
+					nsp.Add(uint64(rowIdx))
+				} else {
+					val = row[colIndex].(types.MoYear)
+				}
+
+				err := vector.AppendFixed[types.MoYear](bat.Vecs[colIndex], val, false, pool)
+				if err != nil {
+					return nil, nil, err
+				}
+			}
 		case types.T_int32:
 			for rowIdx, row := range rows {
 				var val int32
@@ -1152,6 +1157,48 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 					return nil, nil, err
 				}
 			}
+		case types.T_decimal64:
+			for rowIdx, row := range rows {
+				var val types.Decimal64
+				if row[colIndex] == nil {
+					nsp.Add(uint64(rowIdx))
+				} else if val, err = getDecimal64FromRowValue(row[colIndex], typ); err != nil {
+					return nil, nil, err
+				}
+
+				err := vector.AppendFixed[types.Decimal64](bat.Vecs[colIndex], val, false, pool)
+				if err != nil {
+					return nil, nil, err
+				}
+			}
+		case types.T_decimal128:
+			for rowIdx, row := range rows {
+				var val types.Decimal128
+				if row[colIndex] == nil {
+					nsp.Add(uint64(rowIdx))
+				} else if val, err = getDecimal128FromRowValue(row[colIndex], typ); err != nil {
+					return nil, nil, err
+				}
+
+				err := vector.AppendFixed[types.Decimal128](bat.Vecs[colIndex], val, false, pool)
+				if err != nil {
+					return nil, nil, err
+				}
+			}
+		case types.T_decimal256:
+			for rowIdx, row := range rows {
+				var val types.Decimal256
+				if row[colIndex] == nil {
+					nsp.Add(uint64(rowIdx))
+				} else if val, err = getDecimal256FromRowValue(row[colIndex], typ); err != nil {
+					return nil, nil, err
+				}
+
+				err := vector.AppendFixed[types.Decimal256](bat.Vecs[colIndex], val, false, pool)
+				if err != nil {
+					return nil, nil, err
+				}
+			}
 		case types.T_enum:
 			for rowIdx, row := range rows {
 				var val types.Enum
@@ -1173,6 +1220,45 @@ func convertRowsIntoBatch(pool *mpool.MPool, cols []Column, rows [][]any) (*batc
 		bat.Vecs[colIndex].SetNulls(nsp)
 	}
 	return bat, planColDefs, nil
+}
+
+func getDecimal64FromRowValue(v any, typ types.Type) (types.Decimal64, error) {
+	switch val := v.(type) {
+	case types.Decimal64:
+		return val, nil
+	case string:
+		return types.ParseDecimal64(val, typ.Width, typ.Scale)
+	case []byte:
+		return types.ParseDecimal64(string(val), typ.Width, typ.Scale)
+	default:
+		return 0, moerr.NewInternalErrorNoCtxf("%v can't convert to decimal64 type", v)
+	}
+}
+
+func getDecimal128FromRowValue(v any, typ types.Type) (types.Decimal128, error) {
+	switch val := v.(type) {
+	case types.Decimal128:
+		return val, nil
+	case string:
+		return types.ParseDecimal128(val, typ.Width, typ.Scale)
+	case []byte:
+		return types.ParseDecimal128(string(val), typ.Width, typ.Scale)
+	default:
+		return types.Decimal128{}, moerr.NewInternalErrorNoCtxf("%v can't convert to decimal128 type", v)
+	}
+}
+
+func getDecimal256FromRowValue(v any, typ types.Type) (types.Decimal256, error) {
+	switch val := v.(type) {
+	case types.Decimal256:
+		return val, nil
+	case string:
+		return types.ParseDecimal256(val, typ.Width, typ.Scale)
+	case []byte:
+		return types.ParseDecimal256(string(val), typ.Width, typ.Scale)
+	default:
+		return types.Decimal256{}, moerr.NewInternalErrorNoCtxf("%v can't convert to decimal256 type", v)
+	}
 }
 
 func cleanBatch(pool *mpool.MPool, data ...*batch.Batch) {
@@ -1219,6 +1305,12 @@ func mysqlColDef2PlanResultColDef(cols []Column) (*plan.ResultColDef, []types.Ty
 				Id: int32(types.T_int16),
 			}
 			tType = types.New(types.T_int16, 0, 0)
+		case defines.MYSQL_TYPE_YEAR:
+			pType = plan.Type{
+				Id:    int32(types.T_year),
+				Width: 4,
+			}
+			tType = types.T_year.ToType()
 		case defines.MYSQL_TYPE_LONG:
 			pType = plan.Type{
 				Id: int32(types.T_int32),
@@ -1264,6 +1356,17 @@ func mysqlColDef2PlanResultColDef(cols []Column) (*plan.ResultColDef, []types.Ty
 				Id: int32(types.T_enum),
 			}
 			tType = types.New(types.T_enum, 0, 0)
+		case defines.MYSQL_TYPE_DECIMAL, defines.MYSQL_TYPE_NEWDECIMAL:
+			var err error
+			tType, err = mysqlDecimalColType(col)
+			if err != nil {
+				return nil, nil, nil, err
+			}
+			pType = plan.Type{
+				Id:    int32(tType.Oid),
+				Width: tType.Width,
+				Scale: tType.Scale,
+			}
 		default:
 			return nil, nil, nil, moerr.NewInternalErrorNoCtxf("unsupported mysql type %d", col.ColumnType())
 		}
@@ -1275,6 +1378,104 @@ func mysqlColDef2PlanResultColDef(cols []Column) (*plan.ResultColDef, []types.Ty
 	}, resultColTypes, resultColNames, nil
 }
 
+const mysqlDecimalExtraLength uint32 = 1
+
+type mysqlDecimalColumn interface {
+	Column
+	Decimal() uint8
+}
+
+func mysqlDecimalColType(col Column) (types.Type, error) {
+	decimalCol, ok := col.(mysqlDecimalColumn)
+	if !ok {
+		return types.Type{}, moerr.NewInternalErrorNoCtxf("missing decimal scale for mysql type %d", col.ColumnType())
+	}
+
+	scale := int32(decimalCol.Decimal())
+	precision, err := mysqlDecimalPrecisionFromColumn(col, scale)
+	if err != nil {
+		return types.Type{}, err
+	}
+
+	return mysqlDecimalType(precision, scale), nil
+}
+
+func mysqlDecimalPrecisionFromColumn(col Column, scale int32) (int32, error) {
+	length := col.Length()
+	if length == 0 {
+		return 0, moerr.NewInternalErrorNoCtxf("missing decimal precision for mysql type %d", col.ColumnType())
+	}
+
+	// MySQL DECIMAL display length includes the sign and decimal point when present.
+	metadataExtraLength := uint32(0)
+	if scale > 0 {
+		metadataExtraLength += mysqlDecimalExtraLength
+	}
+	if col.IsSigned() {
+		metadataExtraLength += mysqlDecimalExtraLength
+	}
+
+	if length <= metadataExtraLength {
+		return 0, moerr.NewInternalErrorNoCtxf("invalid decimal metadata length %d scale %d for mysql type %d", length, scale, col.ColumnType())
+	}
+
+	precision := length - metadataExtraLength
+	if precision < uint32(scale) {
+		return 0, moerr.NewInternalErrorNoCtxf("invalid decimal precision %d scale %d for mysql type %d", precision, scale, col.ColumnType())
+	}
+	if precision > uint32(types.T_decimal256.ToType().Width) {
+		return 0, moerr.NewInternalErrorNoCtxf("invalid decimal precision %d for mysql type %d", precision, col.ColumnType())
+	}
+
+	return int32(precision), nil
+}
+
+func mysqlDecimalDisplayLength(precision, scale int32, signed bool) uint32 {
+	length := uint32(precision)
+	if scale > 0 {
+		length += mysqlDecimalExtraLength
+	}
+	if signed && precision > 0 {
+		length += mysqlDecimalExtraLength
+	}
+	if length == 0 {
+		return 1
+	}
+	return length
+}
+
+func mysqlDecimalType(precision, scale int32) types.Type {
+	switch {
+	case precision > types.T_decimal128.ToType().Width:
+		return types.New(types.T_decimal256, precision, scale)
+	case precision > types.T_decimal64.ToType().Width:
+		return types.New(types.T_decimal128, precision, scale)
+	default:
+		return types.New(types.T_decimal64, precision, scale)
+	}
+}
+
+func setMysqlColumnTypeInfo(ctx context.Context, typ types.Type, col *MysqlColumn) error {
+	if err := convertEngineTypeToMysqlType(ctx, typ.Oid, col); err != nil {
+		return err
+	}
+	setMysqlColumnTypeMetadata(col, typ)
+	return nil
+}
+
+func setMysqlColumnTypeMetadata(col *MysqlColumn, typ types.Type) {
+	if typ.IsDecimal() {
+		// DECIMAL display length depends on scale and signedness, not just precision.
+		col.SetLength(mysqlDecimalDisplayLength(typ.Width, typ.Scale, col.IsSigned()))
+	} else if typ.Oid == types.T_year {
+		// Keep YEAR metadata consistent with regular query result columns.
+		col.SetLength(uint32(types.MaxVarcharLen))
+	} else {
+		setColLength(col, typ.Width)
+	}
+	col.SetDecimal(typ.Scale)
+}
+
 // errCodeRollbackWholeTxn denotes that the error code
 // that should rollback the whole txn
 var errCodeRollbackWholeTxn = map[uint16]bool{
@@ -1284,6 +1485,8 @@ var errCodeRollbackWholeTxn = map[uint16]bool{
 	moerr.ErrLockTableNotFound:        false,
 	moerr.ErrDeadlockCheckBusy:        false,
 	moerr.ErrLockConflict:             false,
+	moerr.ErrRemoteLockWaitTimeout:    false,
+	moerr.ErrLockWaitTimeout:          false,
 	moerr.ErrTxnUnknown:               false,
 	moerr.ErrBackendClosed:            false,
 	moerr.ErrNoAvailableBackend:       false,
@@ -1306,13 +1509,19 @@ func isErrorRollbackWholeTxn(inputErr error) bool {
 }
 
 func getRandomErrorRollbackWholeTxn() error {
-	rand.NewSource(time.Now().UnixNano())
 	x := rand.Intn(len(errCodeRollbackWholeTxn))
 	arr := make([]uint16, 0, len(errCodeRollbackWholeTxn))
 	for k := range errCodeRollbackWholeTxn {
 		arr = append(arr, k)
 	}
-	switch arr[x] {
+	return newErrorRollbackWholeTxn(arr[x])
+}
+
+// newErrorRollbackWholeTxn keeps the test error factory in sync with
+// errCodeRollbackWholeTxn. Its deterministic input lets tests cover every map
+// entry instead of relying on getRandomErrorRollbackWholeTxn to select it.
+func newErrorRollbackWholeTxn(code uint16) error {
+	switch code {
 	case moerr.ErrRetryForCNRollingRestart:
 		return moerr.NewRetryForCNRollingRestart()
 	case moerr.ErrDeadLockDetected:
@@ -1325,6 +1534,10 @@ func getRandomErrorRollbackWholeTxn() error {
 		return moerr.NewDeadlockCheckBusyNoCtx()
 	case moerr.ErrLockConflict:
 		return moerr.NewLockConflictNoCtx()
+	case moerr.ErrRemoteLockWaitTimeout:
+		return moerr.NewRemoteLockWaitTimeoutNoCtx()
+	case moerr.ErrLockWaitTimeout:
+		return moerr.NewLockWaitTimeoutNoCtx()
 	case moerr.ErrTxnUnknown:
 		return moerr.NewTxnUnknown(context.Background(), "test")
 	case moerr.ErrBackendClosed:
@@ -1334,7 +1547,7 @@ func getRandomErrorRollbackWholeTxn() error {
 	case moerr.ErrBackendCannotConnect:
 		return moerr.NewBackendCannotConnectNoCtx("test")
 	default:
-		panic(fmt.Sprintf("usp error code %d", arr[x]))
+		panic(fmt.Sprintf("unsupported error code %d", code))
 	}
 }
 
@@ -1347,14 +1560,21 @@ func skipClientQuit(info string) bool {
 // for some special statement, like 'set_var', we need to use the stmt.
 // if the stmt is not nil, we neglect the sql.
 type UserInput struct {
-	sql                 string
-	hashedSql           string
-	stmtName            string
-	stmt                tree.Statement
-	preparePlan         *plan.Plan // binary protocol execute
-	sqlSourceType       []string
-	isRestore           bool
-	isBinaryProtExecute bool
+	sql              string
+	hashedSql        string
+	stmtName         string
+	stmt             tree.Statement
+	parserSQLMode    string
+	useParserSQLMode bool
+	rewritePolicy    *rewritePolicySnapshot
+	// rewritePolicyMaterialized means sql already carries the frozen policy as
+	// a leading hint. Nested ANALYZE queries use it to enable hint decoding
+	// without injecting the same rules a second time.
+	rewritePolicyMaterialized bool
+	preparePlan               *plan.Plan // binary protocol execute
+	sqlSourceType             []string
+	isRestore                 bool
+	isBinaryProtExecute       bool
 	// isInternalInput mark this UserInput is come from mo internal.
 	// replace old logic: (stmt != nil)
 	// cc isInternal()
@@ -1364,6 +1584,10 @@ type UserInput struct {
 	isRestoreByTs bool
 	opAccount     uint32
 	toAccount     uint32
+	// remapDb carries the policy captured when a prepared statement was built.
+	// EXECUTE text has no original rewrite hint, so the policy must be restored
+	// explicitly before authorization and planning.
+	remapDb map[string]string
 }
 
 func (ui *UserInput) getSql() string {
@@ -1670,12 +1894,11 @@ func colDef2MysqlColumn(ctx context.Context, col *plan.ColDef) (*MysqlColumn, er
 	c.SetOrgTable(col.TblName)
 	c.SetAutoIncr(col.Typ.AutoIncr)
 	c.SetSchema(col.DbName)
-	err = convertEngineTypeToMysqlType(ctx, types.T(col.Typ.Id), c)
-	if err != nil {
+	typ := types.New(types.T(col.Typ.Id), col.Typ.Width, col.Typ.Scale)
+	if err = setMysqlColumnTypeInfo(ctx, typ, c); err != nil {
 		return nil, err
 	}
 	setColFlag(c)
-	setColLength(c, col.Typ.Width)
 	setCharacter(c)
 
 	// For binary/varbinary with mysql_type_varchar.Change the charset.

@@ -64,7 +64,9 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 				Producing the data row and sending the data row
 			*/
 			// todo: add trace
-			if _, err = execCtx.runner.Run(0); err != nil {
+			// Keep runResult so ROW_COUNT()/the OK packet report this statement's
+			// affected rows instead of leaking the previous statement's value.
+			if execCtx.runResult, err = execCtx.runner.Run(0); err != nil {
 				return
 			}
 
@@ -118,7 +120,9 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 		case *tree.DropTable, *tree.DropDatabase:
 			ses.InvalidatePrivilegeCache()
 			// must execute before run to get database id or table id
-			doRevokePrivilegeImplicitly(execCtx.reqCtx, ses, st)
+			if err = doRevokePrivilegeImplicitly(execCtx.reqCtx, ses, st); err != nil {
+				return
+			}
 
 		case *tree.DropIndex, *tree.DropView, *tree.DropSequence,
 			*tree.CreateUser, *tree.DropUser, *tree.AlterUser,

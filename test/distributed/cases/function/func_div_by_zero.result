@@ -205,8 +205,7 @@ SELECT CAST(9223372036854775807 AS BIGINT) DIV CAST(1 AS BIGINT);
 ➤ cast(9223372036854775807 as bigint) div cast(1 as bigint)[-5,64,0]  𝄀
 9223372036854775807
 SELECT CAST(-9223372036854775808 AS BIGINT) DIV CAST(1 AS BIGINT);
-➤ cast(-9223372036854775808 as bigint) div cast(1 as bigint)[-5,64,0]  𝄀
--9223372036854775808
+Data truncation: data out of range: data type BIGINT, (-9223372036854775808 DIV 1)
 SELECT CAST(100 AS BIGINT) DIV CAST(0 AS BIGINT);
 ➤ cast(100 as bigint) div cast(0 as bigint)[-5,64,0]  𝄀
 null
@@ -286,13 +285,13 @@ SELECT CAST(10 AS DECIMAL(5,0)) DIV CAST(0 AS DECIMAL(5,0));
 null
 SELECT CAST(10.50 AS DECIMAL(10,2)) DIV CAST(3.00 AS DECIMAL(10,2));
 ➤ cast(10.50 as decimal(10, 2)) div cast(3.00 as decimal(10, 2))[-5,64,0]  𝄀
-4
+3
 SELECT CAST(-10.50 AS DECIMAL(10,2)) DIV CAST(3.00 AS DECIMAL(10,2));
 ➤ cast(-10.50 as decimal(10, 2)) div cast(3.00 as decimal(10, 2))[-5,64,0]  𝄀
--4
+-3
 SELECT CAST(10.50 AS DECIMAL(10,2)) DIV CAST(-3.00 AS DECIMAL(10,2));
 ➤ cast(10.50 as decimal(10, 2)) div cast(-3.00 as decimal(10, 2))[-5,64,0]  𝄀
--4
+-3
 SELECT CAST(10.50 AS DECIMAL(10,2)) DIV CAST(0.00 AS DECIMAL(10,2));
 ➤ cast(10.50 as decimal(10, 2)) div cast(0.00 as decimal(10, 2))[-5,64,0]  𝄀
 null

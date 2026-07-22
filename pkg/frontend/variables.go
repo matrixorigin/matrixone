@@ -30,7 +30,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fulltext"
+	"github.com/matrixorigin/matrixone/pkg/util/gpumode"
 )
+
+// defaultLockWaitTimeoutSeconds is the transitional frontend fallback. Long
+// internal jobs should supply a task-owned deadline instead of relying on it.
+const defaultLockWaitTimeoutSeconds int64 = defines.DefaultLockWaitTimeoutSeconds
 
 var (
 	errorConvertToBoolFailed                   = moerr.NewInternalError(context.Background(), "convert to the system variable bool type failed")
@@ -1049,6 +1054,8 @@ func (sv *SystemVariables) Set(name string, value interface{}) {
 }
 
 // definitions of system variables
+const enableExplainScheduling = "enable_explain_scheduling"
+
 var gSysVarsDefs = map[string]SystemVariable{
 	"port": {
 		Name:              "port",
@@ -1129,6 +1136,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("testsessionvar_nodyn", 0, 100, false),
 		Default:           int64(0),
+	},
+	ProtectedDatabases: {
+		Name:              ProtectedDatabases,
+		Scope:             ScopeGlobal,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableStringType(ProtectedDatabases),
+		Default:           "",
 	},
 	"testbothvar_dyn": {
 		Name:              "testbothvar_dyn",
@@ -1845,7 +1860,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemSystemEnumType("event_scheduler", "ON", "OFF", "DISABLED"),
-		Default:           "ON",
+		Default:           "DISABLED",
 	},
 	"explain_format": {
 		Name:              "explain_format",
@@ -2157,7 +2172,9 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: true,
 		Type:              InitSystemVariableIntType("lock_wait_timeout", 1, 31536000, false),
-		Default:           int64(31536000),
+		// Keep the default bounded so a single abandoned or slow transaction
+		// cannot stall every waiter behind the same row lock for hours.
+		Default: defaultLockWaitTimeoutSeconds,
 	},
 	"locked_in_memory": {
 		Name:              "locked_in_memory",
@@ -3575,6 +3592,31 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableBoolType("enable_remap_hint"),
 		Default:           int64(0),
 	},
+	enableExplainScheduling: {
+		Name:              enableExplainScheduling,
+		Scope:             ScopeSession,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableBoolType(enableExplainScheduling),
+		Default:           int64(0),
+	},
+	// remap_rewrites holds a JSON object of table-rewrite rules that apply to
+	// every query in the session (gated by enable_remap_hint). The value is the
+	// same payload as the /*+ {"rewrites": {...}} */ hint, e.g.
+	//   set remap_rewrites = '{"db1.t1": "select a, b from db2.t1"}';
+	// The bare map form above and the wrapped {"rewrites": {...}} form are both
+	// accepted. Setting it to '' clears the session rules.
+	"remap_rewrites": {
+		Name: "remap_rewrites",
+		// Session-only: the value is validated at SET time by validateRemapRewrites
+		// via SetSessionSysVar. ScopeGlobal/ScopeBoth would allow SET GLOBAL to
+		// store an unvalidated value that later breaks per-query rewriting.
+		Scope:             ScopeSession,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableStringType("remap_rewrites"),
+		Default:           "",
+	},
 	"experimental_ivf_index": {
 		Name:              "experimental_ivf_index",
 		Scope:             ScopeBoth,
@@ -3668,7 +3710,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Scope:             ScopeBoth,
 		Dynamic:           true,
 		SetVarHintApplies: false,
-		Type:              InitSystemVariableIntType("probe_limit", 1, 1024, false),
+		Type:              InitSystemVariableIntType("probe_limit", 1, 80000, false),
 		Default:           int64(5),
 	},
 	"kmeans_train_percent": {
@@ -3742,6 +3784,98 @@ var gSysVarsDefs = map[string]SystemVariable{
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("hnsw_max_index_capacity", 1, 5000000000, false),
 		Default:           int64(1000000),
+	},
+	"experimental_cagra_index": {
+		Name:              "experimental_cagra_index",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableBoolType("experimental_cagra_index"),
+		Default:           int8(0),
+	},
+	"cagra_threads_build": {
+		Name:              "cagra_threads_build",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("cagra_threads_build", 0, 1024, false),
+		Default:           int64(0),
+	},
+	"cagra_threads_search": {
+		Name:              "cagra_threads_search",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("cagra_threads_search", 0, 1024, false),
+		Default:           int64(0),
+	},
+	"cagra_max_index_capacity": {
+		Name:              "cagra_max_index_capacity",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("cagra_max_index_capacity", 0, 5000000000, false),
+		Default:           int64(0),
+	},
+	"cagra_batch_window": {
+		Name:              "cagra_batch_window",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("cagra_batch_window", 0, 5000000000, false),
+		Default:           int64(0),
+	},
+	// gpu_multi_simulation is a test-only seam: when >= 2 it makes the GPU vector
+	// index present N logical GPUs (all mapped to physical device 0) so SHARDED /
+	// REPLICATED distribution modes can be exercised on a single-GPU machine.
+	// 0 (default) / 1 use the real device list. See pkg/vectorindex.SimulateDevices.
+	"gpu_multi_simulation": {
+		Name:              "gpu_multi_simulation",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("gpu_multi_simulation", 0, 8, false),
+		Default:           int64(0),
+	},
+	"experimental_ivfpq_index": {
+		Name:              "experimental_ivfpq_index",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableBoolType("experimental_ivfpq_index"),
+		Default:           int8(0),
+	},
+	"ivfpq_threads_build": {
+		Name:              "ivfpq_threads_build",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("ivfpq_threads_build", 0, 1024, false),
+		Default:           int64(0),
+	},
+	"ivfpq_threads_search": {
+		Name:              "ivfpq_threads_search",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("ivfpq_threads_search", 0, 1024, false),
+		Default:           int64(0),
+	},
+	"ivfpq_max_index_capacity": {
+		Name:              "ivfpq_max_index_capacity",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("ivfpq_max_index_capacity", 0, 5000000000, false),
+		Default:           int64(0),
+	},
+	"ivfpq_batch_window": {
+		Name:              "ivfpq_batch_window",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("ivfpq_batch_window", 0, 5000000000, false),
+		Default:           int64(0),
 	},
 	"validate_password": {
 		Name:              "validate_password",
@@ -3911,12 +4045,36 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableIntType("agg_spill_mem", 0, common.TiB, false),
 		Default:           int64(0),
 	},
+	"gpu_mode": {
+		// gpu_mode toggles vector-index dispatch (brute force,
+		// kmeans, adhoc brute force, pairwise distance) between
+		// the cuvs GPU path and the CPU fallback. The Default
+		// reads gpumode.GpuMode, which is flipped to true at
+		// init() in -tags gpu builds and stays false otherwise —
+		// so the sysvar default matches the binary's build tag.
+		// Per-session `SET gpu_mode = 0/1` overrides the default;
+		// dispatch sites consult gpumode.EffectiveGpuMode.
+		Name:              "gpu_mode",
+		Scope:             ScopeSession,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableBoolType("gpu_mode"),
+		Default:           gpumode.GpuModeDefaultInt8(),
+	},
 	"join_spill_mem": {
 		Name:              "join_spill_mem",
 		Scope:             ScopeBoth,
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("join_spill_mem", 0, common.TiB, false),
+		Default:           int64(0),
+	},
+	"sort_spill_mem": {
+		Name:              "sort_spill_mem",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("sort_spill_mem", 0, common.TiB, false),
 		Default:           int64(0),
 	},
 	"max_dop": {

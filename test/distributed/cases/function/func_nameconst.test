@@ -1,0 +1,47 @@
+-- @suit
+-- @case
+-- @desc:test for function name_const
+-- @label:bvt
+
+select name_const('myname', 14);
+select name_const('neg_int_name', -1);
+select name_const('pos_int_name', +1);
+select name_const('uint64_name', 18446744073709551615);
+select name_const('str_name', 'abc');
+select name_const('charset_str_name', _utf8mb4'test');
+select name_const('collate_str_name', _utf8mb4'test' collate utf8mb4_unicode_ci);
+select name_const('null_name', null);
+select name_const('decimal_name', 12.34);
+select name_const('neg_decimal_name', -12.34);
+select name_const('pos_decimal_name', +12.34);
+select name_const('sci_float_name', 1.5e0);
+select name_const('neg_sci_float_name', -1.5e0);
+select name_const('pos_sci_float_name', +1.5e0);
+select name_const(123, -456);
+select name_const(('paren_name'), (14));
+select name_const(((123)), ((-456)));
+select name_const('myname', 14) as alias_name;
+select name_const(('paren_alias_name'), (14)) as paren_alias;
+select t.myname from (select name_const('myname', 42)) t;
+select * from (select name_const('v', 'hello'), name_const('n', 99)) sub;
+select sub.collate_str_name from (select name_const('collate_str_name', _utf8mb4'test' collate utf8mb4_unicode_ci)) sub;
+select name_const('expr_name', 14) + 1;
+select name_const('bad_folded_expr', abs(-1));
+select name_const('bad_expr', now());
+select name_const('bad_cast_expr', cast(14 as signed));
+select name_const(null, 1);
+select name_const((null), 1);
+select name_const(-123, -456);
+select name_const((-123), -456);
+select name_const('bad_args');
+select name_const('xxx_name', -18446744073709551616);
+
+drop table if exists name_const_t;
+create table name_const_t(a int, b varchar(10));
+insert into name_const_t values (1, 'x'), (2, 'y'), (null, null);
+select name_const('col_a', a) from name_const_t order by a;
+select name_const(b, 1) from name_const_t order by a;
+drop table name_const_t;
+
+drop table if exists name_const_generated_t;
+create table name_const_generated_t(a int, b int generated always as (name_const('x', a)) stored);

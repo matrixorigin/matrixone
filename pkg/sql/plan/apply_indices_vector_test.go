@@ -1,0 +1,487 @@
+// Copyright 2026 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package plan
+
+import (
+	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/stretchr/testify/require"
+)
+
+func TestIsDescendingVectorSort(t *testing.T) {
+	require.True(t, isDescendingVectorSort(plan.OrderBySpec_DESC))
+	require.False(t, isDescendingVectorSort(plan.OrderBySpec_ASC))
+	require.False(t, isDescendingVectorSort(plan.OrderBySpec_INTERNAL))
+}
+
+func TestPickVectorLimit(t *testing.T) {
+	// Sort.Limit takes precedence over scan and project.
+	limA := i64Lit(10)
+	limB := i64Lit(20)
+	limC := i64Lit(30)
+	rankA := &plan.RankOption{}
+	sort := &plan.Node{Limit: limA, RankOption: rankA}
+	scan := &plan.Node{Limit: limB}
+	proj := &plan.Node{Limit: limC}
+	got, gotRank := pickVectorLimit(sort, scan, proj)
+	require.Equal(t, limA, got)
+	require.Equal(t, rankA, gotRank)
+
+	// Sort has no limit → fall back to scan.
+	sort2 := &plan.Node{}
+	got, _ = pickVectorLimit(sort2, scan, proj)
+	require.Equal(t, limB, got)
+
+	// Sort+scan have no limit → fall back to project.
+	scan2 := &plan.Node{}
+	got, _ = pickVectorLimit(sort2, scan2, proj)
+	require.Equal(t, limC, got)
+
+	// None have a limit → nil, nil.
+	got, gotRank = pickVectorLimit(sort2, scan2, &plan.Node{})
+	require.Nil(t, got)
+	require.Nil(t, gotRank)
+}
+
+func TestVectorResultPaginationIsSeparateFromCandidateBudget(t *testing.T) {
+	candidate := makePlan2Uint64ConstExprWithType(5)
+	resultLimit := makePlan2Uint64ConstExprWithType(3)
+	resultOffset := makePlan2Uint64ConstExprWithType(2)
+	ctx := &vectorSortContext{
+		limit:        candidate,
+		resultLimit:  resultLimit,
+		resultOffset: resultOffset,
+	}
+
+	limit, offset := vectorResultPagination(ctx)
+	require.Equal(t, uint64(3), limit.GetLit().GetU64Val())
+	require.Equal(t, uint64(2), offset.GetLit().GetU64Val())
+	require.Equal(t, uint64(5), ctx.limit.GetLit().GetU64Val())
+}
+
+func TestVectorResultPaginationRejectsMissingResultLimit(t *testing.T) {
+	ctx := &vectorSortContext{
+		limit:    makePlan2Uint64ConstExprWithType(15),
+		sortNode: &plan.Node{Offset: makePlan2Uint64ConstExprWithType(5)},
+	}
+	limit, offset := vectorResultPagination(ctx)
+	require.Nil(t, limit)
+	require.Nil(t, offset)
+	require.False(t, hasCompleteVectorPagination(ctx))
+}
+
+func TestVectorRewritesRejectMissingResultPagination(t *testing.T) {
+	builder := &QueryBuilder{}
+	ctx := &vectorSortContext{
+		sortNode: &plan.Node{},
+		scanNode: &plan.Node{},
+		limit:    makePlan2Uint64ConstExprWithType(15),
+	}
+
+	tests := []struct {
+		name  string
+		apply func() (int32, error)
+	}{
+		{name: "hnsw", apply: func() (int32, error) { return builder.applyIndicesForSortUsingHnsw(7, ctx, nil) }},
+		{name: "cagra", apply: func() (int32, error) { return builder.applyIndicesForSortUsingCagra(7, ctx, nil) }},
+		{name: "ivfpq", apply: func() (int32, error) { return builder.applyIndicesForSortUsingIvfpq(7, ctx, nil) }},
+		{name: "ivfflat", apply: func() (int32, error) { return builder.applyIndicesForSortUsingIvfflat(7, ctx, nil, nil, nil) }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := tt.apply()
+			require.NoError(t, err)
+			require.Equal(t, int32(7), got)
+		})
+	}
+}
+
+func TestVectorPaginationSurvivesPluginRoundTrip(t *testing.T) {
+	ctx := &vectorSortContext{
+		limit:        makePlan2Uint64ConstExprWithType(3),
+		resultLimit:  makePlan2Uint64ConstExprWithType(2),
+		resultOffset: makePlan2Uint64ConstExprWithType(1),
+	}
+
+	pluginCtx, _ := toPlanplugin(ctx, nil)
+	roundTrip, _ := fromPlanplugin(pluginCtx, nil)
+	limit, offset := vectorResultPagination(roundTrip)
+
+	require.Equal(t, uint64(3), roundTrip.limit.GetLit().GetU64Val())
+	require.Equal(t, uint64(2), limit.GetLit().GetU64Val())
+	require.Equal(t, uint64(1), offset.GetLit().GetU64Val())
+}
+
+func TestValidateVectorIndexSortRewrite(t *testing.T) {
+	// nil context: rewrite is allowed (no-op path).
+	b := &QueryBuilder{}
+	ok, err := b.validateVectorIndexSortRewrite(nil)
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	// ASC ordering with complete pagination ownership: allowed.
+	asc := &vectorSortContext{
+		sortDirection: plan.OrderBySpec_ASC,
+		limit:         makePlan2Uint64ConstExprWithType(15),
+		resultLimit:   makePlan2Uint64ConstExprWithType(10),
+		resultOffset:  makePlan2Uint64ConstExprWithType(5),
+	}
+	ok, err = b.validateVectorIndexSortRewrite(asc)
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	// DESC ordering: rewrite blocked, no error (caller leaves the original
+	// exact path in place rather than failing the query).
+	desc := &vectorSortContext{
+		sortDirection: plan.OrderBySpec_DESC,
+		limit:         makePlan2Uint64ConstExprWithType(10),
+		resultLimit:   makePlan2Uint64ConstExprWithType(10),
+	}
+	ok, err = b.validateVectorIndexSortRewrite(desc)
+	require.NoError(t, err)
+	require.False(t, ok)
+}
+
+func TestReplaceDistFnInExpr_Substitutes(t *testing.T) {
+	const scanTag int32 = 11
+	const tfTag int32 = 22
+	const partPos int32 = 1
+
+	vecLit := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_array_float32)},
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_VecVal{VecVal: "[1,2,3]"}}},
+	}
+	// Build l2_distance(col[scanTag, partPos], vecLit).
+	distFn := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_float64)},
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &ObjectRef{ObjName: "l2_distance"},
+			Args: []*plan.Expr{
+				{
+					Typ: plan.Type{Id: int32(types.T_array_float32)},
+					Expr: &plan.Expr_Col{Col: &plan.ColRef{
+						RelPos: scanTag, ColPos: partPos, Name: "vec",
+					}},
+				},
+				vecLit,
+			},
+		}},
+	}
+
+	scoreType := plan.Type{Id: int32(types.T_float64)}
+	out := replaceDistFnInExpr(distFn, scanTag, partPos, "l2_distance", vecLit, tfTag, scoreType)
+	col := out.GetCol()
+	require.NotNil(t, col, "expected substitution to a ColRef into the table function")
+	require.Equal(t, tfTag, col.RelPos)
+	require.Equal(t, int32(1), col.ColPos)
+	require.Equal(t, "score", col.Name)
+}
+
+func TestReplaceDistFnInExpr_NoMatch(t *testing.T) {
+	const scanTag int32 = 11
+	const tfTag int32 = 22
+
+	vecLit := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_array_float32)},
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: "[1,2]"}}},
+	}
+	// nil expression — short circuit
+	out := replaceDistFnInExpr(nil, scanTag, 0, "l2_distance", vecLit, tfTag, plan.Type{})
+	require.Nil(t, out)
+
+	// Wrong fn name → tree should walk into args but leave them unchanged here.
+	other := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_bool)},
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &ObjectRef{ObjName: "="},
+			Args: []*plan.Expr{i64Lit(1), i64Lit(2)},
+		}},
+	}
+	out = replaceDistFnInExpr(other, scanTag, 0, "l2_distance", vecLit, tfTag, plan.Type{})
+	require.NotNil(t, out)
+	// Outer is still the same "=" function.
+	require.Equal(t, "=", out.GetF().Func.ObjName)
+}
+
+// makeDistFnFilter builds a comparison filter `cmpOp(distFn(col[scanTag,partPos], vecLit), bound)`.
+func makeDistFnFilter(cmpOp, distFn string, scanTag, partPos int32, vecVal string, bound *plan.Expr) *plan.Expr {
+	return &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_bool)},
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &ObjectRef{ObjName: cmpOp},
+			Args: []*plan.Expr{
+				{
+					Typ: plan.Type{Id: int32(types.T_float64)},
+					Expr: &plan.Expr_F{F: &plan.Function{
+						Func: &ObjectRef{ObjName: distFn},
+						Args: []*plan.Expr{
+							{
+								Typ: plan.Type{Id: int32(types.T_array_float32)},
+								Expr: &plan.Expr_Col{Col: &plan.ColRef{
+									RelPos: scanTag, ColPos: partPos, Name: "vec",
+								}},
+							},
+							{
+								Typ:  plan.Type{Id: int32(types.T_array_float32)},
+								Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_VecVal{VecVal: vecVal}}},
+							},
+						},
+					}},
+				},
+				bound,
+			},
+		}},
+	}
+}
+
+func TestGetDistRangeFromFilters_AllOps(t *testing.T) {
+	const scanTag int32 = 11
+	const partPos int32 = 1
+	vecVal := "[1,2,3]"
+	vecLitArg := &plan.Expr{
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_VecVal{VecVal: vecVal}}},
+	}
+
+	cases := []struct {
+		op        string
+		lower     bool
+		exclusive bool
+	}{
+		{"<", false, true},
+		{"<=", false, false},
+		{">", true, true},
+		{">=", true, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.op, func(t *testing.T) {
+			f := makeDistFnFilter(tc.op, "l2_distance", scanTag, partPos, vecVal, f32Lit(0.5))
+			var b *QueryBuilder
+			rem, dr := b.getDistRangeFromFilters([]*plan.Expr{f}, partPos, "l2_distance", vecLitArg)
+			require.Empty(t, rem)
+			require.NotNil(t, dr)
+			if tc.lower {
+				if tc.exclusive {
+					require.Equal(t, plan.BoundType_EXCLUSIVE, dr.LowerBoundType)
+				} else {
+					require.Equal(t, plan.BoundType_INCLUSIVE, dr.LowerBoundType)
+				}
+				require.NotNil(t, dr.LowerBound)
+			} else {
+				if tc.exclusive {
+					require.Equal(t, plan.BoundType_EXCLUSIVE, dr.UpperBoundType)
+				} else {
+					require.Equal(t, plan.BoundType_INCLUSIVE, dr.UpperBoundType)
+				}
+				require.NotNil(t, dr.UpperBound)
+			}
+		})
+	}
+}
+
+func TestGetDistRangeFromFilters_NonMatching(t *testing.T) {
+	const scanTag int32 = 11
+	const partPos int32 = 1
+	vecLitArg := &plan.Expr{
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_VecVal{VecVal: "[1,2,3]"}}},
+	}
+	var b *QueryBuilder
+
+	// Wrong distfn name → kept as residual.
+	bad := makeDistFnFilter("<", "cosine_distance", scanTag, partPos, "[1,2,3]", f32Lit(0.5))
+	rem, dr := b.getDistRangeFromFilters([]*plan.Expr{bad}, partPos, "l2_distance", vecLitArg)
+	require.Len(t, rem, 1)
+	require.Nil(t, dr)
+
+	// Wrong column position → kept.
+	bad2 := makeDistFnFilter("<", "l2_distance", scanTag, partPos+1, "[1,2,3]", f32Lit(0.5))
+	rem, dr = b.getDistRangeFromFilters([]*plan.Expr{bad2}, partPos, "l2_distance", vecLitArg)
+	require.Len(t, rem, 1)
+	require.Nil(t, dr)
+
+	// Mismatched vec literal → kept.
+	bad3 := makeDistFnFilter("<", "l2_distance", scanTag, partPos, "[9,9,9]", f32Lit(0.5))
+	rem, dr = b.getDistRangeFromFilters([]*plan.Expr{bad3}, partPos, "l2_distance", vecLitArg)
+	require.Len(t, rem, 1)
+	require.Nil(t, dr)
+
+	// Unsupported operator → kept.
+	bad4 := makeDistFnFilter("=", "l2_distance", scanTag, partPos, "[1,2,3]", f32Lit(0.5))
+	rem, dr = b.getDistRangeFromFilters([]*plan.Expr{bad4}, partPos, "l2_distance", vecLitArg)
+	require.Len(t, rem, 1)
+	require.Nil(t, dr)
+
+	// Filter is not a function call (just a literal) → kept.
+	rem, dr = b.getDistRangeFromFilters([]*plan.Expr{f32Lit(0.5)}, partPos, "l2_distance", vecLitArg)
+	require.Len(t, rem, 1)
+	require.Nil(t, dr)
+}
+
+// Multiple same-side distance bounds must fold into the tightest bound (the
+// intersection), independent of filter order, so the index enforces the correct
+// range and does not depend on which predicate happens to appear first. See
+// issue #25639.
+func TestGetDistRangeFromFiltersKeepsTightestBound(t *testing.T) {
+	const scanTag int32 = 11
+	const partPos int32 = 1
+	const vecVal = "[1,2,3]"
+	vecLitArg := &plan.Expr{
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_VecVal{VecVal: vecVal}}},
+	}
+	var builder *QueryBuilder
+
+	// Two lower bounds: `> 1 AND >= 10` is `>= 10`; keep the tighter (larger).
+	{
+		loose := makeDistFnFilter(">", "l2_distance", scanTag, partPos, vecVal, f32Lit(1))
+		tight := makeDistFnFilter(">=", "l2_distance", scanTag, partPos, vecVal, f32Lit(10))
+		remaining, distRange := builder.getDistRangeFromFilters(
+			[]*plan.Expr{loose, tight}, partPos, "l2_distance", vecLitArg,
+		)
+		require.Empty(t, remaining)
+		require.Equal(t, plan.BoundType_INCLUSIVE, distRange.LowerBoundType)
+		require.Equal(t, tight.GetF().Args[1], distRange.LowerBound)
+	}
+
+	// Two upper bounds, both orders: `< 1.1 AND < 1.2` is `< 1.1`; the tighter
+	// (smaller) upper bound wins regardless of input order (the #25639 case).
+	for _, order := range [][2]float32{{1.1, 1.2}, {1.2, 1.1}} {
+		fa := makeDistFnFilter("<", "l2_distance", scanTag, partPos, vecVal, f32Lit(order[0]))
+		fb := makeDistFnFilter("<", "l2_distance", scanTag, partPos, vecVal, f32Lit(order[1]))
+		remaining, distRange := builder.getDistRangeFromFilters(
+			[]*plan.Expr{fa, fb}, partPos, "l2_distance", vecLitArg,
+		)
+		require.Empty(t, remaining)
+		require.Equal(t, plan.BoundType_EXCLUSIVE, distRange.UpperBoundType)
+		v, ok := plan.GetLiteralFloat64(distRange.UpperBound)
+		require.True(t, ok)
+		require.InDelta(t, 1.1, v, 1e-6)
+	}
+
+	// A non-literal bound must never be peeled into the range (the reader can't
+	// evaluate it): it stays a residual filter, in both orders, while a literal
+	// bound of the same side still becomes the range. Regression for the
+	// "first bound accepted without validation" case.
+	nonLit := func() *plan.Expr {
+		return &plan.Expr{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: scanTag, ColPos: 7}}}
+	}
+	for _, nonLitFirst := range []bool{true, false} {
+		bad := makeDistFnFilter("<", "l2_distance", scanTag, partPos, vecVal, nonLit())
+		good := makeDistFnFilter("<", "l2_distance", scanTag, partPos, vecVal, f32Lit(1.1))
+		input := []*plan.Expr{bad, good}
+		if !nonLitFirst {
+			input = []*plan.Expr{good, bad}
+		}
+		remaining, distRange := builder.getDistRangeFromFilters(
+			input, partPos, "l2_distance", vecLitArg,
+		)
+		require.Equal(t, []*plan.Expr{bad}, remaining) // non-literal kept as residual
+		require.Equal(t, plan.BoundType_EXCLUSIVE, distRange.UpperBoundType)
+		v, ok := plan.GetLiteralFloat64(distRange.UpperBound)
+		require.True(t, ok)
+		require.InDelta(t, 1.1, v, 1e-6)
+	}
+}
+
+func TestPeelAndRewriteDistFnFilters_AllOps(t *testing.T) {
+	const scanTag int32 = 11
+	const partPos int32 = 1
+	const tfTag int32 = 22
+	vecVal := "[1,2,3]"
+	vecLitArg := &plan.Expr{
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_VecVal{VecVal: vecVal}}},
+	}
+	scoreType := plan.Type{Id: int32(types.T_float64)}
+	var b *QueryBuilder
+
+	for _, op := range []string{"<", "<=", ">", ">="} {
+		t.Run(op, func(t *testing.T) {
+			f := makeDistFnFilter(op, "l2_distance", scanTag, partPos, vecVal, f32Lit(0.4))
+			rem, peeled := b.peelAndRewriteDistFnFilters(
+				[]*plan.Expr{f}, partPos, "l2_distance", vecLitArg, tfTag, scoreType)
+			require.Empty(t, rem)
+			require.Len(t, peeled, 1)
+
+			peeledFn := peeled[0].GetF()
+			require.NotNil(t, peeledFn)
+			require.Equal(t, op, peeledFn.Func.ObjName)
+			// Args[0] now references the table function's score column.
+			col := peeledFn.Args[0].GetCol()
+			require.NotNil(t, col)
+			require.Equal(t, tfTag, col.RelPos)
+			require.Equal(t, int32(1), col.ColPos)
+			require.Equal(t, "score", col.Name)
+		})
+	}
+}
+
+func TestPeelAndRewriteDistFnFilters_KeepsNonMatching(t *testing.T) {
+	const scanTag int32 = 11
+	const partPos int32 = 1
+	const tfTag int32 = 22
+	vecLitArg := &plan.Expr{
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_VecVal{VecVal: "[1,2,3]"}}},
+	}
+	scoreType := plan.Type{Id: int32(types.T_float64)}
+	var b *QueryBuilder
+
+	// "=" comparison isn't peeled.
+	eq := makeDistFnFilter("=", "l2_distance", scanTag, partPos, "[1,2,3]", f32Lit(0.4))
+	// Wrong distance fn name.
+	wrongFn := makeDistFnFilter("<", "cosine_distance", scanTag, partPos, "[1,2,3]", f32Lit(0.4))
+	// Wrong column position.
+	wrongCol := makeDistFnFilter("<", "l2_distance", scanTag, partPos+1, "[1,2,3]", f32Lit(0.4))
+	// Mismatched vec literal.
+	wrongVec := makeDistFnFilter("<", "l2_distance", scanTag, partPos, "[9,9,9]", f32Lit(0.4))
+	// Bare literal (not a function).
+	bare := f32Lit(0.4)
+
+	rem, peeled := b.peelAndRewriteDistFnFilters(
+		[]*plan.Expr{eq, wrongFn, wrongCol, wrongVec, bare}, partPos, "l2_distance", vecLitArg, tfTag, scoreType)
+	require.Empty(t, peeled)
+	require.Len(t, rem, 5)
+}
+
+func TestReplaceDistFnExprsWithScoreCol(t *testing.T) {
+	const scanTag int32 = 11
+	const tfTag int32 = 22
+	const partPos int32 = 1
+
+	vecLit := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_array_float32)},
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_VecVal{VecVal: "[1,2,3]"}}},
+	}
+	distFn := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_float64)},
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &ObjectRef{ObjName: "l2_distance"},
+			Args: []*plan.Expr{
+				{
+					Typ: plan.Type{Id: int32(types.T_array_float32)},
+					Expr: &plan.Expr_Col{Col: &plan.ColRef{
+						RelPos: scanTag, ColPos: partPos, Name: "vec",
+					}},
+				},
+				vecLit,
+			},
+		}},
+	}
+	exprs := []*plan.Expr{distFn}
+	scoreType := plan.Type{Id: int32(types.T_float64)}
+	replaceDistFnExprsWithScoreCol(exprs, scanTag, partPos, "l2_distance", vecLit, tfTag, scoreType)
+	col := exprs[0].GetCol()
+	require.NotNil(t, col)
+	require.Equal(t, tfTag, col.RelPos)
+}

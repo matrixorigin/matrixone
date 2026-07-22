@@ -138,12 +138,22 @@ func (tls *testLockService) GetWaitingList(ctx context.Context, txnID []byte) (b
 	panic("implement me")
 }
 
+func (tls *testLockService) GetLockHolder(ctx context.Context, tableID uint64, row []byte, options lock.LockOptions) (lock.WaitTxn, bool, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
 func (tls *testLockService) ForceRefreshLockTableBinds(targets []uint64, matcher func(bind lock.LockTable) bool) {
 	//TODO implement me
 	panic("implement me")
 }
 
 func (tls *testLockService) GetLockTableBind(group uint32, tableID uint64) (lock.LockTable, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (tls *testLockService) GetLatestLockTableBind(bind lock.LockTable) (lock.LockTable, error) {
 	//TODO implement me
 	panic("implement me")
 }
@@ -268,6 +278,10 @@ func (tTxnOp *testTxnOperator) HasLockTable(table uint64) bool {
 	panic("implement me")
 }
 
+func (tTxnOp *testTxnOperator) CheckLockTableBinds(ctx context.Context) error {
+	return nil
+}
+
 func (tTxnOp *testTxnOperator) AddWaitLock(tableID uint64, rows [][]byte, opt lock.LockOptions) uint64 {
 	//TODO implement me
 	panic("implement me")
@@ -315,7 +329,7 @@ func (tTxnOp *testTxnOperator) NextSequence() uint64 {
 
 func (tTxnOp *testTxnOperator) EnterRunSqlWithTokenAndSQL(_ context.CancelFunc, _ string) uint64 {
 	//TODO implement me
-	panic("implement me")
+	return 1
 }
 
 func (tTxnOp *testTxnOperator) ExitRunSqlWithToken(_ uint64) {
@@ -386,7 +400,7 @@ func Test_Allocate(t *testing.T) {
 						memRes := executor.NewMemResult(
 							typs,
 							mpool.MustNewZero())
-						memRes.NewBatch()
+						memRes.NewBatchWithRowCount(1)
 						executor.AppendFixedRows(memRes, 0, []uint64{1})
 						executor.AppendFixedRows(memRes, 1, []uint64{1})
 						return memRes.GetResult(), nil
@@ -444,7 +458,7 @@ func TestAllocateWithEmptyCommitTS(t *testing.T) {
 						memRes := executor.NewMemResult(
 							typs,
 							mpool.MustNewZero())
-						memRes.NewBatch()
+						memRes.NewBatchWithRowCount(1)
 						executor.AppendFixedRows(memRes, 0, []uint64{1})
 						executor.AppendFixedRows(memRes, 1, []uint64{1})
 						return memRes.GetResult(), nil
@@ -505,7 +519,7 @@ func TestAllocateWithValidCommitTS(t *testing.T) {
 						memRes := executor.NewMemResult(
 							typs,
 							mpool.MustNewZero())
-						memRes.NewBatch()
+						memRes.NewBatchWithRowCount(1)
 						executor.AppendFixedRows(memRes, 0, []uint64{1})
 						executor.AppendFixedRows(memRes, 1, []uint64{1})
 						return memRes.GetResult(), nil
@@ -570,7 +584,7 @@ func Test_Allocate_Retry_When_Rows_Count_Invalid(t *testing.T) {
 				memRes := executor.NewMemResult(
 					typs,
 					mpool.MustNewZero())
-				memRes.NewBatch()
+				memRes.NewBatchWithRowCount(1)
 				executor.AppendFixedRows(memRes, 0, []uint64{1})
 				executor.AppendFixedRows(memRes, 1, []uint64{1})
 				return memRes.GetResult(), nil
@@ -616,7 +630,7 @@ func Test_Allocate_Retry_When_AffectedRows_Invalid(t *testing.T) {
 				memRes := executor.NewMemResult(
 					typs,
 					mpool.MustNewZero())
-				memRes.NewBatch()
+				memRes.NewBatchWithRowCount(1)
 				executor.AppendFixedRows(memRes, 0, []uint64{1})
 				executor.AppendFixedRows(memRes, 1, []uint64{1})
 				return memRes.GetResult(), nil

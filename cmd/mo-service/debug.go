@@ -16,6 +16,7 @@ package main
 
 import (
 	"bytes"
+	"cmp"
 	"compress/gzip"
 	"context"
 	"flag"
@@ -28,7 +29,7 @@ import (
 	"path"
 	"runtime"
 	"runtime/pprof"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 	"unsafe"
@@ -175,9 +176,7 @@ func init() {
 			allInfos = append(allInfos, infos)
 		}
 
-		sort.Slice(allInfos, func(i, j int) bool {
-			aInfos := allInfos[i]
-			bInfos := allInfos[j]
+		slices.SortFunc(allInfos, func(aInfos, bInfos []positionInfo) int {
 			aNumMOFrame := 0
 			for _, info := range aInfos {
 				if strings.Contains(info.PackagePath, "matrixone") ||
@@ -193,14 +192,14 @@ func init() {
 				}
 			}
 			if aNumMOFrame != bNumMOFrame {
-				return aNumMOFrame > bNumMOFrame
+				return cmp.Compare(bNumMOFrame, aNumMOFrame)
 			}
 			a := aInfos[len(aInfos)-1]
 			b := bInfos[len(bInfos)-1]
 			if a.FileOnDisk != b.FileOnDisk {
-				return a.FileOnDisk < b.FileOnDisk
+				return cmp.Compare(a.FileOnDisk, b.FileOnDisk)
 			}
-			return a.Line < b.Line
+			return cmp.Compare(a.Line, b.Line)
 		})
 
 		for i, infos := range allInfos {
@@ -253,10 +252,10 @@ func init() {
 			}
 			liveBytes[sum] += record.AllocBytes - record.FreeBytes
 		}
-		sort.Slice(positions, func(i, j int) bool {
-			_, sum1 := getStackInfo(positions[i][:])
-			_, sum2 := getStackInfo(positions[j][:])
-			return liveBytes[sum1] > liveBytes[sum2]
+		slices.SortFunc(positions, func(a, b position) int {
+			_, sum1 := getStackInfo(a[:])
+			_, sum2 := getStackInfo(b[:])
+			return cmp.Compare(liveBytes[sum2], liveBytes[sum1])
 		})
 
 		for i, pos := range positions {

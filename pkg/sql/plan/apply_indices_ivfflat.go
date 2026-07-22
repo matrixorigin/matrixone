@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	ivfflatplan "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 )
 
@@ -339,88 +340,9 @@ func (builder *QueryBuilder) prepareIvfIndexContext(vecCtx *vectorSortContext, m
 	}, nil
 }
 
-func (builder *QueryBuilder) getDistRangeFromFilters(filters []*plan.Expr, ivfCtx *ivfIndexContext) ([]*plan.Expr, *plan.DistRange) {
-	var distRange *plan.DistRange
-
-	currIdx := 0
-	for _, filter := range filters {
-		var (
-			vecLit string
-			fdist  *plan.Function
-		)
-
-		f := filter.GetF()
-		if f == nil || len(f.Args) != 2 {
-			goto NO_RANGE
-		}
-
-		fdist = f.Args[0].GetF()
-		if fdist == nil || len(fdist.Args) != 2 {
-			goto NO_RANGE
-		}
-
-		if partCol := fdist.Args[0].GetCol(); partCol == nil || partCol.ColPos != ivfCtx.partPos {
-			goto NO_RANGE
-		}
-
-		if fdist.Func.ObjName != ivfCtx.origFuncName {
-			goto NO_RANGE
-		}
-
-		if fdist.Args[1].GetLit() == nil || ivfCtx.vecLitArg.GetLit() == nil {
-			goto NO_RANGE
-		}
-		vecLit = fdist.Args[1].GetLit().GetVecVal()
-		if vecLit == "" || vecLit != ivfCtx.vecLitArg.GetLit().GetVecVal() {
-			goto NO_RANGE
-		}
-
-		switch f.Func.ObjName {
-		case "<":
-			if distRange == nil {
-				distRange = &plan.DistRange{}
-			}
-			distRange.UpperBoundType = plan.BoundType_EXCLUSIVE
-			distRange.UpperBound = f.Args[1]
-
-		case "<=":
-			if distRange == nil {
-				distRange = &plan.DistRange{}
-			}
-			distRange.UpperBoundType = plan.BoundType_INCLUSIVE
-			distRange.UpperBound = f.Args[1]
-
-		case ">":
-			if distRange == nil {
-				distRange = &plan.DistRange{}
-			}
-			distRange.LowerBoundType = plan.BoundType_EXCLUSIVE
-			distRange.LowerBound = f.Args[1]
-
-		case ">=":
-			if distRange == nil {
-				distRange = &plan.DistRange{}
-			}
-			distRange.LowerBoundType = plan.BoundType_INCLUSIVE
-			distRange.LowerBound = f.Args[1]
-
-		default:
-			goto NO_RANGE
-		}
-
-		continue
-
-	NO_RANGE:
-		filters[currIdx] = filter
-		currIdx++
-	}
-
-	return filters[:currIdx], distRange
-}
-
 func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCtx *vectorSortContext, multiTableIndex *MultiTableIndex, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
 
-	if vecCtx == nil || vecCtx.sortNode == nil || vecCtx.scanNode == nil {
+	if !hasCompleteVectorPagination(vecCtx) || vecCtx.sortNode == nil || vecCtx.scanNode == nil {
 		return nodeID, nil
 	}
 
@@ -481,10 +403,10 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 			TableType: "func_table", //test if ok
 			//Name:               tbl.String(),
 			TblFunc: &plan.TableFunction{
-				Name:  kIVFSearchFuncName,
+				Name:  ivfflatplan.IVFFLATSearchFuncName,
 				Param: []byte(ivfCtx.params),
 			},
-			Cols: DeepCopyColDefList(kIVFSearchColDefs),
+			Cols: DeepCopyColDefList(ivfflatplan.IVFFLATSearchColDefs),
 		},
 		BindingTags: []int32{tableFuncTag},
 		Children:    vectorSearchProviderChildren(vecCtx),
@@ -514,7 +436,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 	// change doc_id type to the primary type here
 	tableFuncNode.TableDef.Cols[0].Typ = ivfCtx.pkType
 
-	newFilterList, distRange := builder.getDistRangeFromFilters(scanNode.FilterList, ivfCtx)
+	newFilterList, distRange := builder.getDistRangeFromFilters(scanNode.FilterList, ivfCtx.partPos, ivfCtx.origFuncName, ivfCtx.vecLitArg)
 	scanNode.FilterList = newFilterList
 
 	// pushdown limit to Table Function
@@ -531,7 +453,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 			// default, but we keep it as fixed buckets so the plan is predictable.
 			overFetchFactor := calculateFilteredPostModeOverFetchFactor(originalLimit)
 
-			newLimit := max(uint64(float64(originalLimit)*overFetchFactor), originalLimit+10)
+			newLimit := calculateOverFetchLimit(originalLimit, overFetchFactor)
 
 			if ivfCtx.isAutoMode {
 				logutil.Debugf(
@@ -686,7 +608,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 			},
 		}
 		buildSpec := MakeRuntimeFilter(rfTag, false, 0, buildExpr, false)
-		buildSpec.UseBloomFilter = true
+		buildSpec.UseMembershipFilter = true
 		innerJoinNode := builder.qry.Nodes[innerJoinNodeID]
 		innerJoinNode.RuntimeFilterBuildList = []*plan.RuntimeFilterSpec{buildSpec}
 
@@ -701,7 +623,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 			},
 		}
 		probeSpec := MakeRuntimeFilter(rfTag, false, 0, probeExpr, false)
-		probeSpec.UseBloomFilter = true
+		probeSpec.UseMembershipFilter = true
 		tableFuncNode.RuntimeFilterProbeList = []*plan.RuntimeFilterSpec{probeSpec}
 
 		// The original scan was guarded during the recursive planner pass so the vector rewrite
@@ -843,14 +765,16 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 			Flag: vecCtx.sortDirection,
 		},
 	}
+	resultLimit, resultOffset := vectorResultPagination(vecCtx)
 
 	sortByID := builder.appendNode(&plan.Node{
 		NodeType:   plan.Node_SORT,
 		Children:   []int32{joinRootID},
 		OrderBy:    orderByScore,
-		Limit:      limit,                         // Apply LIMIT after sorting
-		Offset:     DeepCopyExpr(sortNode.Offset), // Apply OFFSET after sorting
+		Limit:      resultLimit,
+		Offset:     resultOffset,
 		RankOption: DeepCopyRankOption(vecCtx.rankOption),
+		SpillMem:   builder.sortSpillMem,
 	}, ctx)
 
 	projNode.Children[0] = sortByID

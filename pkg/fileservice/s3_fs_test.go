@@ -19,19 +19,102 @@ import (
 	"context"
 	"encoding/csv"
 	"encoding/xml"
+	"errors"
+	"io"
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
+
+type objectStorageReadRange struct {
+	key string
+	min *int64
+	max *int64
+}
+
+type readRangeRecordingObjectStorage struct {
+	ObjectStorage
+	mu    sync.Mutex
+	reads []objectStorageReadRange
+}
+
+type blockingReadObjectStorage struct {
+	ObjectStorage
+	readStarted chan struct{}
+	releaseRead chan struct{}
+	readCount   atomic.Int64
+}
+
+type blockingDataCache struct {
+	fscache.DataCache
+	updateStarted chan struct{}
+	releaseUpdate chan struct{}
+	updateCount   atomic.Int64
+}
+
+func (b *blockingReadObjectStorage) Read(ctx context.Context, key string, min *int64, max *int64) (io.ReadCloser, error) {
+	if b.readCount.Add(1) == 1 {
+		close(b.readStarted)
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-b.releaseRead:
+		}
+	}
+	return b.ObjectStorage.Read(ctx, key, min, max)
+}
+
+func (b *blockingDataCache) Set(ctx context.Context, key fscache.CacheKey, data fscache.Data) error {
+	if b.updateCount.Add(1) == 1 {
+		close(b.updateStarted)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-b.releaseUpdate:
+		}
+	}
+	return b.DataCache.Set(ctx, key, data)
+}
+
+func (r *readRangeRecordingObjectStorage) Read(ctx context.Context, key string, min *int64, max *int64) (io.ReadCloser, error) {
+	r.mu.Lock()
+	r.reads = append(r.reads, objectStorageReadRange{
+		key: key,
+		min: cloneInt64Pointer(min),
+		max: cloneInt64Pointer(max),
+	})
+	r.mu.Unlock()
+	return r.ObjectStorage.Read(ctx, key, min, max)
+}
+
+func (r *readRangeRecordingObjectStorage) lastRead() (objectStorageReadRange, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(r.reads) == 0 {
+		return objectStorageReadRange{}, false
+	}
+	return r.reads[len(r.reads)-1], true
+}
+
+func cloneInt64Pointer(v *int64) *int64 {
+	if v == nil {
+		return nil
+	}
+	ret := *v
+	return &ret
+}
 
 func TestS3FS(
 	t *testing.T,
@@ -609,6 +692,630 @@ func TestS3PrefetchFile(t *testing.T) {
 
 }
 
+func TestS3FSFullObjectDiskCacheFillDoesNotRetainWholeObjectBuffer(t *testing.T) {
+	ctx := context.Background()
+	var pcSet perfcounter.CounterSet
+	ctx = perfcounter.WithCounterSet(ctx, &pcSet)
+
+	fs, err := NewS3FS(
+		ctx,
+		ObjectStorageArguments{
+			Name:      "s3",
+			Endpoint:  "disk",
+			Bucket:    t.TempDir(),
+			KeyPrefix: time.Now().Format("2006-01-02.15:04:05.000000"),
+		},
+		CacheConfig{
+			DiskPath:     ptrTo(t.TempDir()),
+			DiskCapacity: ptrTo[toml.ByteSize](1 << 30),
+		},
+		nil,
+		false,
+		false,
+	)
+	assert.Nil(t, err)
+	defer fs.Close(ctx)
+
+	data := bytes.Repeat([]byte("abcd"), 1<<18)
+	err = fs.Write(ctx, IOVector{
+		FilePath: "foo/bar",
+		Entries: []IOEntry{
+			{
+				Size: int64(len(data)),
+				Data: data,
+			},
+		},
+		Policy: SkipDiskCache | SkipMemoryCache,
+	})
+	assert.Nil(t, err)
+
+	vec := &IOVector{
+		FilePath: "foo/bar",
+		Entries: []IOEntry{
+			{
+				Offset: 12345,
+				Size:   7,
+			},
+		},
+	}
+	err = fs.Read(ctx, vec)
+	assert.Nil(t, err)
+	assert.Equal(t, data[12345:12352], vec.Entries[0].Data)
+	assert.Less(t, cap(vec.Entries[0].Data), len(data)/16)
+	assert.Equal(t, int64(1), pcSet.FileService.S3.Get.Load())
+	vec.Release()
+
+	hitVec := &IOVector{
+		FilePath: "foo/bar",
+		Entries: []IOEntry{
+			{
+				Offset: 54321,
+				Size:   11,
+			},
+		},
+	}
+	err = fs.Read(ctx, hitVec)
+	assert.Nil(t, err)
+	assert.Equal(t, data[54321:54332], hitVec.Entries[0].Data)
+	assert.Equal(t, int64(1), pcSet.FileService.S3.Get.Load())
+	assert.Equal(t, int64(1), pcSet.FileService.Cache.Disk.Hit.Load())
+	hitVec.Release()
+}
+
+func TestS3FSFullObjectDiskCacheFillDoesNotReturnWholeObjectDataWithCachedData(t *testing.T) {
+	ctx := context.Background()
+	var pcSet perfcounter.CounterSet
+	ctx = perfcounter.WithCounterSet(ctx, &pcSet)
+
+	fs, err := NewS3FS(
+		ctx,
+		ObjectStorageArguments{
+			Name:      "s3",
+			Endpoint:  "disk",
+			Bucket:    t.TempDir(),
+			KeyPrefix: time.Now().Format("2006-01-02.15:04:05.000000"),
+		},
+		CacheConfig{
+			DiskPath:     ptrTo(t.TempDir()),
+			DiskCapacity: ptrTo[toml.ByteSize](1 << 30),
+		},
+		nil,
+		false,
+		false,
+	)
+	assert.Nil(t, err)
+	defer fs.Close(ctx)
+
+	data := bytes.Repeat([]byte("abcd"), 1<<18)
+	err = fs.Write(ctx, IOVector{
+		FilePath: "foo/bar",
+		Entries: []IOEntry{
+			{
+				Size: int64(len(data)),
+				Data: data,
+			},
+		},
+		Policy: SkipDiskCache | SkipMemoryCache,
+	})
+	assert.Nil(t, err)
+
+	vec := &IOVector{
+		FilePath: "foo/bar",
+		Entries: []IOEntry{
+			{
+				Size:        int64(len(data)),
+				ToCacheData: CacheOriginalData,
+			},
+		},
+	}
+	err = fs.Read(ctx, vec)
+	assert.Nil(t, err)
+	assert.NotNil(t, vec.Entries[0].CachedData)
+	if vec.Entries[0].CachedData != nil {
+		assert.Equal(t, data, vec.Entries[0].CachedData.Bytes())
+	}
+	assert.Nil(t, vec.Entries[0].Data)
+	assert.Equal(t, int64(1), pcSet.FileService.S3.Get.Load())
+	vec.Release()
+}
+
+func TestS3FSRangeReadSkipsFullObjectDiskCacheUpdate(t *testing.T) {
+	ctx := context.Background()
+	fs, err := NewS3FS(
+		ctx,
+		ObjectStorageArguments{
+			Name:      "s3",
+			Endpoint:  "disk",
+			Bucket:    t.TempDir(),
+			KeyPrefix: time.Now().Format("2006-01-02.15:04:05.000000"),
+		},
+		CacheConfig{
+			DiskPath:     ptrTo(t.TempDir()),
+			DiskCapacity: ptrTo[toml.ByteSize](1 << 30),
+		},
+		nil,
+		false,
+		false,
+	)
+	assert.Nil(t, err)
+	defer fs.Close(ctx)
+
+	data := bytes.Repeat([]byte("abcd"), 1<<10)
+	err = fs.Write(ctx, IOVector{
+		FilePath: "foo/bar",
+		Entries: []IOEntry{
+			{
+				Size: int64(len(data)),
+				Data: data,
+			},
+		},
+		Policy: SkipDiskCache | SkipMemoryCache,
+	})
+	assert.Nil(t, err)
+
+	updatingPath := fs.diskCache.pathForFile("foo/bar")
+	doneUpdate := fs.diskCache.startUpdate(updatingPath)
+	released := false
+	release := func() {
+		if !released {
+			doneUpdate()
+			released = true
+		}
+	}
+	defer release()
+
+	fullObjectVec := &IOVector{
+		FilePath: "foo/bar",
+		Entries: []IOEntry{
+			{
+				Size: int64(len(data)),
+			},
+		},
+	}
+	doneMerge, waitMerge := fs.ioMerger.Merge(fullObjectVec.ioMergeKey(), maxIOWaitDuration)
+	assert.NotNil(t, doneMerge)
+	assert.Nil(t, waitMerge)
+	releasedMerge := false
+	releaseMerge := func() {
+		if !releasedMerge {
+			doneMerge()
+			releasedMerge = true
+		}
+	}
+	defer releaseMerge()
+
+	type readResult struct {
+		data []byte
+		err  error
+	}
+	readDone := make(chan readResult, 1)
+	go func() {
+		vec := &IOVector{
+			FilePath: "foo/bar",
+			Entries: []IOEntry{
+				{
+					Offset: 123,
+					Size:   7,
+				},
+			},
+		}
+		err := fs.Read(ctx, vec)
+		defer vec.Release()
+		if err != nil {
+			readDone <- readResult{err: err}
+			return
+		}
+		readDone <- readResult{data: append([]byte(nil), vec.Entries[0].Data...)}
+	}()
+
+	select {
+	case result := <-readDone:
+		assert.Nil(t, result.err)
+		assert.Equal(t, data[123:130], result.data)
+		assert.True(t, fs.diskCache.isUpdating(updatingPath))
+	case <-time.After(2 * time.Second):
+		releaseMerge()
+		release()
+		result := <-readDone
+		t.Fatalf("range read waited for full-object disk cache update or io merge: %v", result.err)
+	}
+}
+
+func TestS3FSRangeReadSkipsFullObjectIOMergeBeforeDiskCacheUpdate(t *testing.T) {
+	ctx := context.Background()
+	fs, err := NewS3FS(
+		ctx,
+		ObjectStorageArguments{
+			Name:      "s3",
+			Endpoint:  "disk",
+			Bucket:    t.TempDir(),
+			KeyPrefix: time.Now().Format("2006-01-02.15:04:05.000000"),
+		},
+		CacheConfig{
+			DiskPath:     ptrTo(t.TempDir()),
+			DiskCapacity: ptrTo[toml.ByteSize](1 << 30),
+		},
+		nil,
+		false,
+		false,
+	)
+	assert.Nil(t, err)
+	defer fs.Close(ctx)
+
+	data := bytes.Repeat([]byte("abcd"), 1<<10)
+	err = fs.Write(ctx, IOVector{
+		FilePath: "foo/bar",
+		Entries: []IOEntry{
+			{
+				Size: int64(len(data)),
+				Data: data,
+			},
+		},
+		Policy: SkipDiskCache | SkipMemoryCache,
+	})
+	assert.Nil(t, err)
+
+	recorder := &readRangeRecordingObjectStorage{
+		ObjectStorage: fs.storage,
+	}
+	fs.storage = recorder
+
+	fullObjectVec := &IOVector{
+		FilePath: "foo/bar",
+		Entries: []IOEntry{
+			{
+				Size: int64(len(data)),
+			},
+		},
+	}
+	doneMerge, waitMerge := fs.ioMerger.Merge(fullObjectVec.ioMergeKey(), maxIOWaitDuration)
+	assert.NotNil(t, doneMerge)
+	assert.Nil(t, waitMerge)
+	releasedMerge := false
+	releaseMerge := func() {
+		if !releasedMerge {
+			doneMerge()
+			releasedMerge = true
+		}
+	}
+	defer releaseMerge()
+
+	type readResult struct {
+		data []byte
+		err  error
+	}
+	readDone := make(chan readResult, 1)
+	go func() {
+		vec := &IOVector{
+			FilePath: "foo/bar",
+			Entries: []IOEntry{
+				{
+					Offset: 123,
+					Size:   7,
+				},
+			},
+		}
+		err := fs.Read(ctx, vec)
+		defer vec.Release()
+		if err != nil {
+			readDone <- readResult{err: err}
+			return
+		}
+		readDone <- readResult{data: append([]byte(nil), vec.Entries[0].Data...)}
+	}()
+
+	select {
+	case result := <-readDone:
+		assert.Nil(t, result.err)
+		assert.Equal(t, data[123:130], result.data)
+		assert.True(t, fs.ioMerger.IsMerging(fullObjectVec.ioMergeKey()))
+		assert.False(t, fs.diskCache.isUpdating(fs.diskCache.pathForFile("foo/bar")))
+		read, ok := recorder.lastRead()
+		assert.True(t, ok)
+		if assert.NotNil(t, read.min) {
+			assert.Equal(t, int64(123), *read.min)
+		}
+		if assert.NotNil(t, read.max) {
+			assert.Equal(t, int64(130), *read.max)
+		}
+	case <-time.After(2 * time.Second):
+		releaseMerge()
+		result := <-readDone
+		t.Fatalf("range read waited for full-object io merge before disk cache update: %v", result.err)
+	}
+}
+
+func TestS3FSRangeReadSkipsPrefetchFullObjectIOMerge(t *testing.T) {
+	ctx := context.Background()
+	fs, err := NewS3FS(
+		ctx,
+		ObjectStorageArguments{
+			Name:      "s3",
+			Endpoint:  "disk",
+			Bucket:    t.TempDir(),
+			KeyPrefix: time.Now().Format("2006-01-02.15:04:05.000000"),
+		},
+		CacheConfig{
+			DiskPath:     ptrTo(t.TempDir()),
+			DiskCapacity: ptrTo[toml.ByteSize](1 << 30),
+		},
+		nil,
+		false,
+		false,
+	)
+	assert.Nil(t, err)
+	defer fs.Close(ctx)
+
+	data := bytes.Repeat([]byte("abcd"), 1<<10)
+	err = fs.Write(ctx, IOVector{
+		FilePath: "foo/bar",
+		Entries: []IOEntry{
+			{
+				Size: int64(len(data)),
+				Data: data,
+			},
+		},
+		Policy: SkipDiskCache | SkipMemoryCache,
+	})
+	assert.Nil(t, err)
+
+	doneMerge, waitMerge := fs.ioMerger.Merge(IOMergeKey{
+		Path:       "foo/bar",
+		FullObject: true,
+	}, maxIOWaitDuration)
+	assert.NotNil(t, doneMerge)
+	assert.Nil(t, waitMerge)
+	releasedMerge := false
+	releaseMerge := func() {
+		if !releasedMerge {
+			doneMerge()
+			releasedMerge = true
+		}
+	}
+	defer releaseMerge()
+
+	type readResult struct {
+		data []byte
+		err  error
+	}
+	readDone := make(chan readResult, 1)
+	go func() {
+		vec := &IOVector{
+			FilePath: "foo/bar",
+			Entries: []IOEntry{
+				{
+					Offset: 5,
+					Size:   9,
+				},
+			},
+		}
+		err := fs.Read(ctx, vec)
+		defer vec.Release()
+		if err != nil {
+			readDone <- readResult{err: err}
+			return
+		}
+		readDone <- readResult{data: append([]byte(nil), vec.Entries[0].Data...)}
+	}()
+
+	select {
+	case result := <-readDone:
+		assert.Nil(t, result.err)
+		assert.Equal(t, data[5:14], result.data)
+	case <-time.After(2 * time.Second):
+		releaseMerge()
+		result := <-readDone
+		t.Fatalf("range read waited for prefetch full-object io merge: %v", result.err)
+	}
+}
+
+func TestS3FSReadFullObjectToDiskCacheStreamingDoesNotOpenReaderWhenCacheExists(t *testing.T) {
+	ctx := context.Background()
+	cache, err := NewDiskCache(ctx, t.TempDir(), fscache.ConstCapacity(1<<20), nil, false, nil, "")
+	assert.Nil(t, err)
+	defer cache.Close(ctx)
+
+	err = cache.SetFile(ctx, "foo/bar", func(context.Context) (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader([]byte("hello world"))), nil
+	})
+	assert.Nil(t, err)
+
+	fs := &S3FS{
+		diskCache: cache,
+	}
+	vector := &IOVector{
+		FilePath: "foo/bar",
+		Entries: []IOEntry{
+			{
+				Offset: 1,
+				Size:   4,
+			},
+		},
+	}
+
+	getReaderCalls := 0
+	done, err := fs.readFullObjectToDiskCacheStreaming(
+		ctx,
+		vector,
+		"foo/bar",
+		func(context.Context, *int64, *int64) (io.ReadCloser, error) {
+			getReaderCalls++
+			return io.NopCloser(bytes.NewReader([]byte("backend"))), nil
+		},
+	)
+	assert.Nil(t, err)
+	assert.False(t, done)
+	assert.Zero(t, getReaderCalls)
+}
+
+func TestS3FSReadFullObjectToDiskCacheStreamingReturnsReaderError(t *testing.T) {
+	ctx := context.Background()
+	cache, err := NewDiskCache(ctx, t.TempDir(), fscache.ConstCapacity(1<<20), nil, false, nil, "")
+	assert.Nil(t, err)
+	defer cache.Close(ctx)
+
+	fs := &S3FS{
+		diskCache: cache,
+	}
+	vector := &IOVector{
+		FilePath: "foo/bar",
+		Entries: []IOEntry{
+			{
+				Offset: 1,
+				Size:   3,
+			},
+		},
+	}
+	readerErr := errors.New("reader failed")
+
+	done, err := fs.readFullObjectToDiskCacheStreaming(
+		ctx,
+		vector,
+		"foo/bar",
+		func(context.Context, *int64, *int64) (io.ReadCloser, error) {
+			return &errorReadCloser{
+				reader: bytes.NewReader([]byte("hello world")),
+				err:    readerErr,
+			}, nil
+		},
+	)
+
+	assert.True(t, done)
+	assert.ErrorIs(t, err, readerErr)
+	assert.False(t, vector.Entries[0].done)
+	assert.Nil(t, vector.Entries[0].Data)
+	assert.Equal(t, int64(3), vector.Entries[0].Size)
+}
+
+func TestS3FSReadFullObjectToDiskCacheStreamingReadToEnd(t *testing.T) {
+	ctx := context.Background()
+	cache, err := NewDiskCache(ctx, t.TempDir(), fscache.ConstCapacity(1<<20), nil, false, nil, "")
+	assert.Nil(t, err)
+	defer cache.Close(ctx)
+
+	fs := &S3FS{
+		diskCache: cache,
+	}
+	vector := &IOVector{
+		FilePath: "foo/bar",
+		Entries: []IOEntry{
+			{
+				Offset: 6,
+				Size:   -1,
+			},
+		},
+	}
+
+	done, err := fs.readFullObjectToDiskCacheStreaming(
+		ctx,
+		vector,
+		"foo/bar",
+		func(context.Context, *int64, *int64) (io.ReadCloser, error) {
+			return io.NopCloser(bytes.NewReader([]byte("hello world"))), nil
+		},
+	)
+
+	assert.True(t, done)
+	assert.Nil(t, err)
+	assert.False(t, vector.Entries[0].done)
+	assert.Equal(t, []byte("world"), vector.Entries[0].Data)
+	assert.Equal(t, int64(5), vector.Entries[0].Size)
+}
+
+func TestS3FSReadFullObjectToDiskCacheStreamingUnexpectedEOF(t *testing.T) {
+	ctx := context.Background()
+	cache, err := NewDiskCache(ctx, t.TempDir(), fscache.ConstCapacity(1<<20), nil, false, nil, "")
+	assert.Nil(t, err)
+	defer cache.Close(ctx)
+
+	fs := &S3FS{
+		diskCache: cache,
+	}
+	vector := &IOVector{
+		FilePath: "foo/bar",
+		Entries: []IOEntry{
+			{
+				Offset: 6,
+				Size:   20,
+			},
+		},
+	}
+
+	done, err := fs.readFullObjectToDiskCacheStreaming(
+		ctx,
+		vector,
+		"foo/bar",
+		func(context.Context, *int64, *int64) (io.ReadCloser, error) {
+			return io.NopCloser(bytes.NewReader([]byte("hello world"))), nil
+		},
+	)
+
+	assert.True(t, done)
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrUnexpectedEOF))
+	assert.False(t, vector.Entries[0].done)
+	assert.Nil(t, vector.Entries[0].Data)
+	assert.Equal(t, int64(20), vector.Entries[0].Size)
+}
+
+func TestS3FSShouldStreamFullObjectToDiskCacheExclusions(t *testing.T) {
+	ctx := context.Background()
+	cache, err := NewDiskCache(ctx, t.TempDir(), fscache.ConstCapacity(1<<20), nil, false, nil, "")
+	assert.Nil(t, err)
+	defer cache.Close(ctx)
+
+	fs := &S3FS{
+		diskCache: cache,
+	}
+
+	assert.False(t, fs.shouldStreamFullObjectToDiskCache(&IOVector{
+		FilePath: "foo/bar",
+		Entries: []IOEntry{
+			{
+				Size: 0,
+			},
+		},
+	}))
+
+	buf := new(bytes.Buffer)
+	assert.False(t, fs.shouldStreamFullObjectToDiskCache(&IOVector{
+		FilePath: "foo/bar",
+		Entries: []IOEntry{
+			{
+				Size:          3,
+				WriterForRead: buf,
+			},
+		},
+	}))
+
+	var reader io.ReadCloser
+	assert.False(t, fs.shouldStreamFullObjectToDiskCache(&IOVector{
+		FilePath: "foo/bar",
+		Entries: []IOEntry{
+			{
+				Size:              3,
+				ReadCloserForRead: &reader,
+			},
+		},
+	}))
+}
+
+type errorReadCloser struct {
+	reader *bytes.Reader
+	err    error
+}
+
+func (e *errorReadCloser) Read(p []byte) (int, error) {
+	n, err := e.reader.Read(p)
+	if err != nil {
+		return n, e.err
+	}
+	return n, nil
+}
+
+func (e *errorReadCloser) Close() error {
+	return nil
+}
+
 type S3CredentialTestCase struct {
 	Skip bool
 	ObjectStorageArguments
@@ -708,19 +1415,12 @@ func TestS3FSIOMerger(t *testing.T) {
 		},
 		CacheConfig{
 			MemoryCapacity: ptrTo(toml.ByteSize(1 << 20)),
-			DiskPath:       ptrTo(t.TempDir()),
-			DiskCapacity:   ptrTo(toml.ByteSize(10 * (1 << 20))),
-			CheckOverlaps:  false,
 		},
 		nil,
 		false,
 		false,
 	)
-	assert.Nil(t, err)
-	defer fs.Close(ctx)
-
-	var counterSet perfcounter.CounterSet
-	ctx = perfcounter.WithCounterSet(context.Background(), &counterSet)
+	require.NoError(t, err)
 
 	err = fs.Write(ctx, IOVector{
 		FilePath: "foo",
@@ -732,34 +1432,102 @@ func TestS3FSIOMerger(t *testing.T) {
 			},
 		},
 	})
-	assert.Nil(t, err)
+	require.NoError(t, err)
 
-	nThreads := 256
-	wg := new(sync.WaitGroup)
-	wg.Add(nThreads)
-	for range nThreads {
+	cache := &blockingDataCache{
+		DataCache:     fs.memCache.cache,
+		updateStarted: make(chan struct{}),
+		releaseUpdate: make(chan struct{}),
+	}
+	fs.memCache.cache = cache
+	storage := &blockingReadObjectStorage{
+		ObjectStorage: fs.storage,
+		readStarted:   make(chan struct{}),
+		releaseRead:   make(chan struct{}),
+	}
+	fs.storage = storage
+	readCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	releaseRead := sync.OnceFunc(func() { close(storage.releaseRead) })
+	releaseUpdate := sync.OnceFunc(func() { close(cache.releaseUpdate) })
+	var wg sync.WaitGroup
+	t.Cleanup(func() {
+		cancel()
+		releaseRead()
+		releaseUpdate()
+		wg.Wait()
+		fs.Close(ctx)
+	})
+
+	newReadVector := func() *IOVector {
+		return &IOVector{
+			FilePath: "foo",
+			Policy:   SkipFullFilePreloads,
+			Entries: []IOEntry{
+				{
+					Size:        3,
+					ToCacheData: CacheOriginalData,
+				},
+			},
+		}
+	}
+	read := func(ctx context.Context) error {
+		vec := newReadVector()
+		defer vec.Release()
+		if err := fs.Read(ctx, vec); err != nil {
+			return err
+		}
+		if !bytes.Equal([]byte("foo"), vec.Entries[0].CachedData.Bytes()) {
+			return errors.New("unexpected read data")
+		}
+		return nil
+	}
+
+	results := make(chan error, 2)
+	startRead := func(ctx context.Context) {
+		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			vec := &IOVector{
-				FilePath: "foo",
-				Entries: []IOEntry{
-					{
-						Size:        3,
-						ToCacheData: CacheOriginalData,
-					},
-				},
-			}
-			err := fs.Read(ctx, vec)
-			assert.Nil(t, err)
-			assert.Equal(t, []byte("foo"), vec.Entries[0].CachedData.Bytes())
-			vec.Release()
+			results <- read(ctx)
 		}()
 	}
-	wg.Wait()
+	waitForSignal := func(ch <-chan struct{}, name string) {
+		t.Helper()
+		select {
+		case <-ch:
+		case <-readCtx.Done():
+			t.Fatalf("timed out waiting for %s: %v", name, readCtx.Err())
+		}
+	}
 
-	assert.Equal(t, int64(1), counterSet.FileService.S3.Put.Load())
-	assert.True(t, counterSet.FileService.S3.Get.Load() < int64(nThreads))
+	startRead(readCtx)
+	waitForSignal(storage.readStarted, "object read")
+	releaseRead()
+	waitForSignal(cache.updateStarted, "cache update")
 
+	// The cache update is deliberately blocked. The merge must still be active
+	// at this point, otherwise a waiter can become a second merge leader before
+	// the first leader's cache contents are visible. This assertion is
+	// deterministically false with defer done() at the Merge call site.
+	require.True(t, fs.ioMerger.IsMerging(newReadVector().ioMergeKey()))
+
+	waiterCtx := WithEventLogger(readCtx)
+	startRead(waiterCtx)
+	waiterLogger := waiterCtx.Value(EventLoggerKey).(*eventLogger)
+	require.Eventually(t, func() bool {
+		waiterLogger.mu.Lock()
+		defer waiterLogger.mu.Unlock()
+		for _, ev := range *waiterLogger.events {
+			if ev.ev == str_ioMerger_Merge_wait {
+				return true
+			}
+		}
+		return false
+	}, 5*time.Second, time.Millisecond)
+
+	releaseUpdate()
+	require.NoError(t, <-results)
+	require.NoError(t, <-results)
+	require.Equal(t, int64(1), storage.readCount.Load())
 }
 
 func BenchmarkS3FSAllocateCacheData(b *testing.B) {

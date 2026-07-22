@@ -19,7 +19,8 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
-	"sort"
+	"math"
+	"slices"
 	"strings"
 	"time"
 
@@ -30,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -101,23 +103,19 @@ func (lockOp *LockOp) Prepare(proc *process.Process) error {
 	}
 	if len(lockOp.ctr.relations) == 0 {
 		lockOp.ctr.relations = make([]engine.Relation, len(lockOp.targets))
-		for i, target := range lockOp.targets {
-			if target.objRef != nil {
-				rel, err := colexec.GetRelAndPartitionRelsByObjRef(proc.Ctx, proc, lockOp.engine, target.objRef)
-				if err != nil {
-					return err
-				}
-				lockOp.ctr.relations[i] = rel
-			}
+	}
+	for i, target := range lockOp.targets {
+		if target.objRef == nil {
+			continue
 		}
-	} else {
-		for i, target := range lockOp.targets {
-			if target.objRef != nil {
-				err := lockOp.ctr.relations[i].Reset(proc.GetTxnOperator())
-				if err != nil {
-					return err
-				}
+		if lockOp.ctr.relations[i] == nil {
+			rel, err := colexec.GetRelAndPartitionRelsByObjRef(proc.Ctx, proc, lockOp.engine, target.objRef)
+			if err != nil {
+				return err
 			}
+			lockOp.ctr.relations[i] = rel
+		} else if err := lockOp.ctr.relations[i].Reset(proc.GetTxnOperator()); err != nil {
+			return err
 		}
 	}
 	if lockOp.ctr.parker == nil {
@@ -551,6 +549,15 @@ func doLock(
 		}
 	}
 
+	// Attach the current statement/session lock_wait_timeout to the lock options.
+	if d := lockWaitTimeout(proc, txnOp); d > 0 {
+		options.LockWaitDeadline = time.Now().Add(d).UnixNano()
+		options, err = refreshLockWaitOptions(options)
+		if err != nil {
+			return false, false, timestamp.Timestamp{}, err
+		}
+	}
+
 	start := time.Now()
 	key := txnOp.AddWaitLock(tableID, rows, options)
 	defer txnOp.RemoveWaitLock(key)
@@ -781,6 +788,73 @@ type lockRetryState struct {
 	useMemoryRetrySlot   bool
 }
 
+func lockWaitTimeout(proc *process.Process, txnOp client.TxnOperator) time.Duration {
+	txnTimeout := client.LockWaitTimeoutFromTxn(txnOp)
+	var explicitProcessTimeout bool
+	// Background/internal execution may carry a per-execution value in the
+	// process or txn options while its resolver only exposes compiled global
+	// defaults. Prefer the caller-owned budget in that case. Frontend execution
+	// keeps resolver-first semantics so SET SESSION and statement overrides are
+	// observed even after a transaction has started.
+	if proc != nil && proc.Base != nil && !proc.Base.IsFrontend {
+		if proc.GetSessionInfo() != nil {
+			explicitProcessTimeout = proc.GetSessionInfo().LockWaitTimeoutSet
+			if seconds := proc.GetSessionInfo().LockWaitTimeout; seconds > 0 {
+				return time.Duration(seconds) * time.Second
+			}
+		}
+		if !explicitProcessTimeout && txnTimeout > 0 {
+			return txnTimeout
+		}
+	}
+	if proc != nil && proc.GetResolveVariableFunc() != nil {
+		if v, err := proc.GetResolveVariableFunc()("lock_wait_timeout", true, false); err == nil {
+			switch n := v.(type) {
+			case int64:
+				if n > 0 {
+					return time.Duration(n) * time.Second
+				}
+			case int:
+				if n > 0 {
+					return time.Duration(n) * time.Second
+				}
+			case uint64:
+				if n > 0 {
+					return time.Duration(n) * time.Second
+				}
+			}
+		}
+	}
+	if proc != nil && proc.GetSessionInfo() != nil {
+		if seconds := proc.GetSessionInfo().LockWaitTimeout; seconds > 0 {
+			return time.Duration(seconds) * time.Second
+		}
+	}
+	if explicitProcessTimeout {
+		// Explicit zero means "clear this execution's override", not
+		// "wait forever". Use the shared product fallback when no resolver is
+		// installed. This also matches the positive legacy value serialized for
+		// old pipeline peers that do not understand LockWaitTimeoutSet.
+		return time.Duration(defines.DefaultLockWaitTimeoutSeconds) * time.Second
+	}
+	return txnTimeout
+}
+
+func refreshLockWaitOptions(options lock.LockOptions) (lock.LockOptions, error) {
+	if options.LockWaitDeadline <= 0 {
+		return options, nil
+	}
+	remaining := time.Until(time.Unix(0, options.LockWaitDeadline))
+	if remaining <= 0 {
+		return options, lockservice.ErrLockTimeout
+	}
+	options.LockWaitTimeout = int64(math.Ceil(remaining.Seconds()))
+	if options.LockWaitTimeout <= 0 {
+		options.LockWaitTimeout = 1
+	}
+	return options, nil
+}
+
 func lockWithRetry(
 	ctx context.Context,
 	lockService lockservice.LockService,
@@ -798,12 +872,20 @@ func lockWithRetry(
 	var err error
 	retryState := lockRetryState{}
 
+	options, err = refreshLockWaitOptions(options)
+	if err != nil {
+		return result, err
+	}
 	result, err = LockWithMayUpgrade(ctx, lockService, tableID, rows, txnID, options, fetchFunc, vec, opts, pkType)
 	if !canRetryLock(ctx, tableID, txnOp, err, &retryState) {
 		return result, getLockRetryExitError(ctx, err)
 	}
 
 	for {
+		options, err = refreshLockWaitOptions(options)
+		if err != nil {
+			return result, err
+		}
 		result, err = lockService.Lock(ctx, tableID, rows, txnID, options)
 		if !canRetryLock(ctx, tableID, txnOp, err, &retryState) {
 			return result, getLockRetryExitError(ctx, err)
@@ -823,6 +905,11 @@ func LockWithMayUpgrade(
 	opts LockOptions,
 	pkType types.Type,
 ) (lock.Result, error) {
+	var err error
+	options, err = refreshLockWaitOptions(options)
+	if err != nil {
+		return lock.Result{}, err
+	}
 	result, err := lockService.Lock(ctx, tableID, rows, txnID, options)
 	if !moerr.IsMoErrCode(err, moerr.ErrLockNeedUpgrade) {
 		return result, err
@@ -841,6 +928,10 @@ func LockWithMayUpgrade(
 		opts.filterCols,
 	)
 	options.Granularity = ng
+	options, err = refreshLockWaitOptions(options)
+	if err != nil {
+		return lock.Result{}, err
+	}
 	return lockService.Lock(ctx, tableID, nrows, txnID, options)
 }
 
@@ -1213,6 +1304,39 @@ func (lockOp *LockOp) AddLockTargetWithMode(
 	return lockOp
 }
 
+func (lockOp *LockOp) GetLockRowsExpressions() []*plan.Expr {
+	exprs := make([]*plan.Expr, 0, len(lockOp.targets))
+	for i := range lockOp.targets {
+		if lockOp.targets[i].lockRows != nil {
+			exprs = append(exprs, lockOp.targets[i].lockRows)
+		}
+	}
+	return exprs
+}
+
+func (lockOp *LockOp) RewriteLockRowsExpressions(rewrite func(*plan.Expr) (*plan.Expr, bool, error)) (bool, error) {
+	folded := false
+	targets := make([]lockTarget, len(lockOp.targets))
+	copy(targets, lockOp.targets)
+	for i := range targets {
+		if targets[i].lockRows == nil {
+			continue
+		}
+		expr, exprFolded, err := rewrite(targets[i].lockRows)
+		if err != nil {
+			return false, err
+		}
+		if exprFolded {
+			targets[i].lockRows = expr
+			folded = true
+		}
+	}
+	if folded {
+		lockOp.targets = targets
+	}
+	return folded, nil
+}
+
 // LockTable lock all table, used for delete, truncate and drop table
 func (lockOp *LockOp) LockTable(
 	tableID uint64,
@@ -1346,8 +1470,8 @@ func dedupLockRows(rows [][]byte) [][]byte {
 	if len(rows) <= 1 {
 		return rows
 	}
-	sort.Slice(rows, func(i, j int) bool {
-		return bytes.Compare(rows[i], rows[j]) < 0
+	slices.SortFunc(rows, func(a, b []byte) int {
+		return bytes.Compare(a, b)
 	})
 	deduped := rows[:1]
 	for i := 1; i < len(rows); i++ {

@@ -18,8 +18,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func Test_operatorAnalyzer_AddWaitLockTime(t *testing.T) {
@@ -497,4 +499,335 @@ func Test_operatorAnalyzer_AddReadSizeInfo(t *testing.T) {
 			}
 		})
 	}
+}
+
+func Test_operatorAnalyzer_AddParquetProfile(t *testing.T) {
+	opAlyzr := NewTempAnalyzer()
+	opAlyzr.AddParquetProfile(ParquetProfileStats{
+		Files:                             1,
+		RowGroups:                         2,
+		RowsRead:                          100,
+		BytesRead:                         1024,
+		PrefetchBytes:                     512,
+		ProjectedColumns:                  2,
+		TotalColumns:                      4,
+		SelectedFiles:                     1,
+		SelectedFileBytes:                 1024,
+		IcebergMetadataBytes:              10,
+		IcebergManifestListBytes:          20,
+		IcebergManifestBytes:              30,
+		IcebergManifestsSelected:          2,
+		IcebergManifestsPruned:            1,
+		IcebergDataFilesSelected:          2,
+		IcebergDataFilesPruned:            3,
+		IcebergDataFileBytesSelected:      100,
+		IcebergDataFileBytesPruned:        200,
+		IcebergPlanningCacheHits:          4,
+		IcebergPlanningCacheMiss:          5,
+		IcebergDeleteFilesRead:            1,
+		IcebergDeleteRowsFiltered:         6,
+		IcebergPositionDeleteRowsFiltered: 2,
+		IcebergEqualityDeleteRowsFiltered: 4,
+		IcebergDeleteApplyPeakMemoryBytes: 2048,
+		OpenTime:                          10,
+		ReadPageTime:                      20,
+		MapTime:                           30,
+		RowModeTime:                       40,
+		PeakBatchBytes:                    4096,
+	})
+	opAlyzr.AddParquetProfile(ParquetProfileStats{
+		Files:                             2,
+		RowGroups:                         3,
+		RowsRead:                          200,
+		BytesRead:                         2048,
+		PrefetchBytes:                     256,
+		ProjectedColumns:                  3,
+		TotalColumns:                      4,
+		SelectedFiles:                     2,
+		SelectedFileBytes:                 2048,
+		IcebergMetadataBytes:              11,
+		IcebergManifestListBytes:          21,
+		IcebergManifestBytes:              31,
+		IcebergManifestsSelected:          3,
+		IcebergManifestsPruned:            2,
+		IcebergDataFilesSelected:          3,
+		IcebergDataFilesPruned:            4,
+		IcebergDataFileBytesSelected:      300,
+		IcebergDataFileBytesPruned:        400,
+		IcebergPlanningCacheHits:          6,
+		IcebergPlanningCacheMiss:          7,
+		IcebergDeleteFilesRead:            2,
+		IcebergDeleteRowsFiltered:         8,
+		IcebergPositionDeleteRowsFiltered: 3,
+		IcebergEqualityDeleteRowsFiltered: 5,
+		IcebergDeleteApplyPeakMemoryBytes: 1024,
+		OpenTime:                          11,
+		ReadPageTime:                      21,
+		MapTime:                           31,
+		RowModeTime:                       41,
+		PeakBatchBytes:                    1024,
+	})
+
+	stats := opAlyzr.GetOpStats()
+	assert.Equal(t, int64(3), stats.ParquetFiles)
+	assert.Equal(t, int64(5), stats.ParquetRowGroups)
+	assert.Equal(t, int64(300), stats.ParquetRowsRead)
+	assert.Equal(t, int64(3072), stats.ParquetBytesRead)
+	assert.Equal(t, int64(768), stats.ParquetPrefetchBytes)
+	assert.Equal(t, int64(5), stats.ParquetProjectedColumns)
+	assert.Equal(t, int64(8), stats.ParquetTotalColumns)
+	assert.Equal(t, int64(3), stats.ParquetSelectedFiles)
+	assert.Equal(t, int64(3072), stats.ParquetSelectedFileBytes)
+	assert.Equal(t, int64(21), stats.IcebergMetadataBytes)
+	assert.Equal(t, int64(41), stats.IcebergManifestListBytes)
+	assert.Equal(t, int64(61), stats.IcebergManifestBytes)
+	assert.Equal(t, int64(5), stats.IcebergManifestsSelected)
+	assert.Equal(t, int64(3), stats.IcebergManifestsPruned)
+	assert.Equal(t, int64(5), stats.IcebergDataFilesSelected)
+	assert.Equal(t, int64(7), stats.IcebergDataFilesPruned)
+	assert.Equal(t, int64(400), stats.IcebergDataFileBytesSelected)
+	assert.Equal(t, int64(600), stats.IcebergDataFileBytesPruned)
+	assert.Equal(t, int64(10), stats.IcebergPlanningCacheHits)
+	assert.Equal(t, int64(12), stats.IcebergPlanningCacheMiss)
+	assert.Equal(t, int64(3), stats.IcebergDeleteFilesRead)
+	assert.Equal(t, int64(14), stats.IcebergDeleteRowsFiltered)
+	assert.Equal(t, int64(5), stats.IcebergPositionDeleteRowsFiltered)
+	assert.Equal(t, int64(9), stats.IcebergEqualityDeleteRowsFiltered)
+	assert.Equal(t, int64(2048), stats.IcebergDeleteApplyPeakMemoryBytes)
+	assert.Equal(t, int64(21), stats.ParquetOpenTime)
+	assert.Equal(t, int64(41), stats.ParquetReadPageTime)
+	assert.Equal(t, int64(61), stats.ParquetMapTime)
+	assert.Equal(t, int64(81), stats.ParquetRowModeTime)
+	assert.Equal(t, int64(4096), stats.ParquetPeakBatchBytes)
+
+	got := stats.String()
+	assert.Contains(t, got, "ParquetFiles:3 ")
+	assert.Contains(t, got, "ParquetRowGroups:5 ")
+	assert.Contains(t, got, "ParquetRowsRead:300 ")
+	assert.Contains(t, got, "ParquetBytesRead:3072bytes ")
+	assert.Contains(t, got, "ParquetPrefetchBytes:768bytes ")
+	assert.Contains(t, got, "ParquetProjectedColumns:5 ")
+	assert.Contains(t, got, "ParquetTotalColumns:8 ")
+	assert.Contains(t, got, "ParquetSelectedFiles:3 ")
+	assert.Contains(t, got, "ParquetSelectedFileBytes:3072bytes ")
+	assert.Contains(t, got, "IcebergMetadataBytes:21bytes ")
+	assert.Contains(t, got, "IcebergManifestListBytes:41bytes ")
+	assert.Contains(t, got, "IcebergManifestBytes:61bytes ")
+	assert.Contains(t, got, "IcebergManifestsSelected:5 ")
+	assert.Contains(t, got, "IcebergManifestsPruned:3 ")
+	assert.Contains(t, got, "IcebergDataFilesSelected:5 ")
+	assert.Contains(t, got, "IcebergDataFilesPruned:7 ")
+	assert.Contains(t, got, "IcebergDataFileBytesSelected:400bytes ")
+	assert.Contains(t, got, "IcebergDataFileBytesPruned:600bytes ")
+	assert.Contains(t, got, "IcebergPlanningCacheHits:10 ")
+	assert.Contains(t, got, "IcebergPlanningCacheMiss:12 ")
+	assert.Contains(t, got, "IcebergDeleteFilesRead:3 ")
+	assert.Contains(t, got, "IcebergDeleteRowsFiltered:14 ")
+	assert.Contains(t, got, "IcebergPositionDeleteRowsFiltered:5 ")
+	assert.Contains(t, got, "IcebergEqualityDeleteRowsFiltered:9 ")
+	assert.Contains(t, got, "IcebergDeleteApplyPeakMemoryBytes:2048bytes ")
+	assert.Contains(t, got, "ParquetOpenTime:21ns ")
+	assert.Contains(t, got, "ParquetReadPageTime:41ns ")
+	assert.Contains(t, got, "ParquetMapTime:61ns ")
+	assert.Contains(t, got, "ParquetRowModeTime:81ns ")
+	assert.Contains(t, got, "ParquetPeakBatchBytes:4096bytes ")
+	assert.NotContains(t, got, "s3://")
+	assert.NotContains(t, got, "warehouse")
+	assert.NotContains(t, got, "secret")
+	assert.NotContains(t, got, "CredentialScope")
+}
+
+func TestParquetProfileStatsEmptyAndAdd(t *testing.T) {
+	var stats ParquetProfileStats
+	require.True(t, stats.Empty())
+
+	stats.Add(ParquetProfileStats{
+		Files:                             1,
+		RowGroups:                         2,
+		RowsRead:                          3,
+		BytesRead:                         4,
+		PrefetchBytes:                     5,
+		ProjectedColumns:                  6,
+		TotalColumns:                      7,
+		SelectedFiles:                     8,
+		SelectedFileBytes:                 9,
+		IcebergMetadataBytes:              10,
+		IcebergManifestListBytes:          11,
+		IcebergManifestBytes:              12,
+		IcebergManifestsSelected:          13,
+		IcebergManifestsPruned:            14,
+		IcebergDataFilesSelected:          15,
+		IcebergDataFilesPruned:            16,
+		IcebergDataFileBytesSelected:      17,
+		IcebergDataFileBytesPruned:        18,
+		IcebergPlanningCacheHits:          19,
+		IcebergPlanningCacheMiss:          20,
+		IcebergDeleteFilesRead:            21,
+		IcebergDeleteRowsFiltered:         22,
+		IcebergPositionDeleteRowsFiltered: 23,
+		IcebergEqualityDeleteRowsFiltered: 24,
+		IcebergDeleteApplyPeakMemoryBytes: 25,
+		OpenTime:                          26,
+		ReadPageTime:                      27,
+		MapTime:                           28,
+		RowModeTime:                       29,
+		PeakBatchBytes:                    30,
+	})
+	stats.Add(ParquetProfileStats{
+		Files:                             2,
+		IcebergDeleteApplyPeakMemoryBytes: 24,
+		PeakBatchBytes:                    31,
+	})
+
+	require.False(t, stats.Empty())
+	require.Equal(t, int64(3), stats.Files)
+	require.Equal(t, int64(2), stats.RowGroups)
+	require.Equal(t, int64(3), stats.RowsRead)
+	require.Equal(t, int64(4), stats.BytesRead)
+	require.Equal(t, int64(5), stats.PrefetchBytes)
+	require.Equal(t, int64(6), stats.ProjectedColumns)
+	require.Equal(t, int64(7), stats.TotalColumns)
+	require.Equal(t, int64(8), stats.SelectedFiles)
+	require.Equal(t, int64(9), stats.SelectedFileBytes)
+	require.Equal(t, int64(10), stats.IcebergMetadataBytes)
+	require.Equal(t, int64(11), stats.IcebergManifestListBytes)
+	require.Equal(t, int64(12), stats.IcebergManifestBytes)
+	require.Equal(t, int64(13), stats.IcebergManifestsSelected)
+	require.Equal(t, int64(14), stats.IcebergManifestsPruned)
+	require.Equal(t, int64(15), stats.IcebergDataFilesSelected)
+	require.Equal(t, int64(16), stats.IcebergDataFilesPruned)
+	require.Equal(t, int64(17), stats.IcebergDataFileBytesSelected)
+	require.Equal(t, int64(18), stats.IcebergDataFileBytesPruned)
+	require.Equal(t, int64(19), stats.IcebergPlanningCacheHits)
+	require.Equal(t, int64(20), stats.IcebergPlanningCacheMiss)
+	require.Equal(t, int64(21), stats.IcebergDeleteFilesRead)
+	require.Equal(t, int64(22), stats.IcebergDeleteRowsFiltered)
+	require.Equal(t, int64(23), stats.IcebergPositionDeleteRowsFiltered)
+	require.Equal(t, int64(24), stats.IcebergEqualityDeleteRowsFiltered)
+	require.Equal(t, int64(25), stats.IcebergDeleteApplyPeakMemoryBytes)
+	require.Equal(t, int64(26), stats.OpenTime)
+	require.Equal(t, int64(27), stats.ReadPageTime)
+	require.Equal(t, int64(28), stats.MapTime)
+	require.Equal(t, int64(29), stats.RowModeTime)
+	require.Equal(t, int64(31), stats.PeakBatchBytes)
+}
+
+func TestOperatorAnalyzerAggregatesCountersAndStats(t *testing.T) {
+	analyzer := NewAnalyzer(1, true, false, "scan")
+	stats := analyzer.GetOpStats()
+	require.Equal(t, "scan", stats.OperatorName)
+
+	analyzer.Start()
+	waitStart := time.Now().Add(-time.Millisecond)
+	analyzer.WaitStop(waitStart)
+	childStart := time.Now().Add(-time.Millisecond)
+	analyzer.ChildrenCallStop(childStart)
+	analyzer.Stop()
+
+	analyzer.Alloc(10)
+	analyzer.SetMemUsed(8)
+	analyzer.SetMemUsed(16)
+	analyzer.Spill(32)
+	analyzer.SpillRows(4)
+	analyzer.InputBlock()
+	analyzer.AddWrittenRows(5)
+	analyzer.AddDeletedRows(6)
+	analyzer.AddScanTime(time.Now().Add(-time.Millisecond))
+	analyzer.AddInsertTime(time.Now().Add(-time.Millisecond))
+	analyzer.AddIncrementTime(time.Now().Add(-time.Millisecond))
+	analyzer.AddWaitLockTime(time.Now().Add(-time.Millisecond))
+
+	bat := batch.NewWithSize(0)
+	bat.SetRowCount(3)
+	analyzer.Input(bat)
+	analyzer.Output(bat)
+	analyzer.ScanBytes(bat)
+	analyzer.Network(bat)
+
+	counter := &perfcounter.CounterSet{}
+	counter.FileService.S3.List.Add(1)
+	counter.FileService.S3.Head.Add(2)
+	counter.FileService.S3.Put.Add(3)
+	counter.FileService.S3.Get.Add(4)
+	counter.FileService.S3.Delete.Add(5)
+	counter.FileService.S3.DeleteMulti.Add(6)
+	counter.FileService.Cache.Read.Add(7)
+	counter.FileService.Cache.Hit.Add(8)
+	counter.FileService.Cache.Memory.Read.Add(9)
+	counter.FileService.Cache.Memory.Hit.Add(10)
+	counter.FileService.Cache.Disk.Read.Add(11)
+	counter.FileService.Cache.Disk.Hit.Add(12)
+	counter.FileService.Cache.Remote.Read.Add(13)
+	counter.FileService.Cache.Remote.Hit.Add(14)
+	counter.FileService.ReadSize.Add(15)
+	counter.FileService.S3ReadSize.Add(16)
+	counter.FileService.DiskReadSize.Add(17)
+	analyzer.AddS3RequestCount(counter)
+	analyzer.AddFileServiceCacheInfo(counter)
+	analyzer.AddDiskIO(counter)
+	analyzer.AddReadSizeInfo(counter)
+
+	stats = analyzer.GetOpStats()
+	require.Equal(t, 1, stats.CallNum)
+	require.GreaterOrEqual(t, stats.WaitTimeConsumed, int64(0))
+	require.GreaterOrEqual(t, stats.TimeConsumed, int64(0))
+	require.Equal(t, int64(16), stats.MemorySize)
+	require.Equal(t, int64(32), stats.SpillSize)
+	require.Equal(t, int64(4), stats.SpillRows)
+	require.Equal(t, int64(1), stats.InputBlocks)
+	require.Equal(t, int64(3), stats.InputRows)
+	require.Equal(t, int64(3), stats.OutputRows)
+	require.Equal(t, int64(0), stats.ScanBytes)
+	require.Equal(t, int64(0), stats.NetworkIO)
+	require.Equal(t, int64(5), stats.WrittenRows)
+	require.Equal(t, int64(6), stats.DeletedRows)
+	require.Greater(t, stats.GetMetricByKey(OpScanTime), int64(0))
+	require.Greater(t, stats.GetMetricByKey(OpInsertTime), int64(0))
+	require.Greater(t, stats.GetMetricByKey(OpIncrementTime), int64(0))
+	require.Greater(t, stats.GetMetricByKey(OpWaitLockTime), int64(0))
+	require.Equal(t, int64(1), stats.S3List)
+	require.Equal(t, int64(2), stats.S3Head)
+	require.Equal(t, int64(3), stats.S3Put)
+	require.Equal(t, int64(4), stats.S3Get)
+	require.Equal(t, int64(5), stats.S3Delete)
+	require.Equal(t, int64(6), stats.S3DeleteMul)
+	require.Equal(t, int64(7), stats.CacheRead)
+	require.Equal(t, int64(8), stats.CacheHit)
+	require.Equal(t, int64(9), stats.CacheMemoryRead)
+	require.Equal(t, int64(10), stats.CacheMemoryHit)
+	require.Equal(t, int64(11), stats.CacheDiskRead)
+	require.Equal(t, int64(12), stats.CacheDiskHit)
+	require.Equal(t, int64(13), stats.CacheRemoteRead)
+	require.Equal(t, int64(14), stats.CacheRemoteHit)
+	require.Equal(t, int64(15), stats.ReadSize)
+	require.Equal(t, int64(16), stats.S3ReadSize)
+	require.Equal(t, int64(17), stats.DiskReadSize)
+
+	opCounter := analyzer.GetOpCounterSet()
+	opCounter.FileService.S3.List.Store(99)
+	require.Same(t, opCounter, analyzer.GetOpCounterSet())
+	require.Zero(t, opCounter.FileService.S3.List.Load())
+
+	analyzer.Reset()
+	stats = analyzer.GetOpStats()
+	require.Zero(t, stats.CallNum)
+	require.Zero(t, stats.MemorySize)
+	require.Zero(t, stats.S3List)
+	require.Zero(t, stats.GetMetricByKey(OpScanTime))
+}
+
+func TestOperatorStatsMetricHelpers(t *testing.T) {
+	stats := NewOperatorStats("metrics")
+	require.Equal(t, "metrics", stats.OperatorName)
+	require.Zero(t, stats.GetMetricByKey(OpScanTime))
+
+	stats.AddOpMetric(OpScanTime, 10)
+	stats.AddOpMetric(OpScanTime, 5)
+	stats.AddOpMetric(OpWaitLockTime, 3)
+	require.Equal(t, int64(15), stats.GetMetricByKey(OpScanTime))
+	require.Equal(t, int64(3), stats.GetMetricByKey(OpWaitLockTime))
+
+	stats.Reset()
+	require.Empty(t, stats.OperatorName)
+	require.Zero(t, stats.GetMetricByKey(OpScanTime))
 }

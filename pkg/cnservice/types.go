@@ -46,6 +46,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/shardservice"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
@@ -157,6 +158,9 @@ type Config struct {
 		BatchRows int64 `toml:"batch-rows"`
 		// BatchSize is the memory limit for one batch
 		BatchSize int64 `toml:"batch-size"`
+		// DisableStreamReuse is an emergency rollback gate for negotiated
+		// FIN/FIN_ACK pipeline teardown. It is enabled by default when false.
+		DisableStreamReuse bool `toml:"disable-stream-reuse"`
 	}
 
 	// Frontend parameters for the frontend
@@ -453,6 +457,10 @@ func (c *Config) Validate() error {
 		moruntime.EnableCheckInvalidRCErrors,
 		c.Txn.EnableCheckRCInvalidError,
 	)
+	moruntime.ServiceRuntime(c.UUID).SetGlobalVariables(
+		moruntime.EnablePipelineStreamReuse,
+		!c.Pipeline.DisableStreamReuse,
+	)
 	return nil
 }
 
@@ -593,9 +601,7 @@ func (s *service) getLockServiceConfig() lockservice.Config {
 			return
 		}
 
-		tc.IterTxns(func(to client.TxnOverview) bool {
-			return f(to.Meta.ID)
-		})
+		tc.IterTxnIDs(f)
 	}
 	return s.cfg.LockService
 }
@@ -642,6 +648,7 @@ type service struct {
 	_txnClient             client.TxnClient
 	timestampWaiter        client.TimestampWaiter
 	storeEngine            engine.Engine
+	colexecServer          *colexec.Server
 	distributeTaeMp        *mpool.MPool
 	metadataFS             fileservice.ReplaceableFileService
 	etlFS                  fileservice.FileService

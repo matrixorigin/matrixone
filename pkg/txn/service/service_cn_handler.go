@@ -24,6 +24,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/util"
@@ -53,7 +54,9 @@ func (s *service) Read(ctx context.Context, request *txn.TxnRequest, response *t
 		return nil
 	}
 
-	s.waitClockTo(request.Txn.SnapshotTS)
+	if err := s.waitClockTo(ctx, request.Txn.SnapshotTS); err != nil {
+		return err
+	}
 
 	// We do not write transaction information to sync.Map during read operations because commit and abort
 	// for read-only transactions are not sent to the TN node, so there is no way to clean up the transaction
@@ -198,12 +201,31 @@ func (s *service) Commit(ctx context.Context, request *txn.TxnRequest, response 
 	if len(request.Txn.TNShards) == 0 {
 		s.logger.Fatal("commit with empty tn shards")
 	}
+	var commitMeta lockservice.CommitRequestMeta
+	if request.CommitRequest != nil {
+		commitMeta.DeadlineUnixNano = request.CommitRequest.DeadlineUnixNano
+		commitMeta.Sequence = request.CommitRequest.CommitSequence
+	}
+	// MORPC transports the timeout as a duration. A request delayed in a
+	// server queue would otherwise receive a fresh relative timeout when it is
+	// decoded. The absolute deadline is checked before lockservice admission so
+	// an expired Commit cannot be admitted after its unknown-result fence has
+	// been collected. The sender and TN have different wall clocks, so account
+	// for the configured HLC offset before declaring a request expired.
+	if commitRequestExpired(request, time.Now(), s.commitDeadlineClockOffset()) {
+		response.TxnError = txn.WrapError(
+			moerr.NewTxnNotActive(ctx, "commit request expired"),
+			0,
+		)
+		return nil
+	}
 
 	if len(request.Txn.LockTables) > 0 {
 		invalidBinds, err := s.allocator.Valid(
 			request.Txn.LockService,
 			request.Txn.ID,
 			request.Txn.LockTables,
+			commitMeta,
 		)
 		if err != nil {
 			response.TxnError = txn.WrapError(err, 0)
@@ -214,6 +236,7 @@ func (s *service) Commit(ctx context.Context, request *txn.TxnRequest, response 
 			response.TxnError = txn.WrapError(moerr.NewLockTableBindChanged(ctx), 0)
 			return nil
 		}
+		defer s.allocator.FinishCommit(request.Txn.LockService, request.Txn.ID)
 	}
 
 	txnID := request.Txn.ID
@@ -350,6 +373,24 @@ func (s *service) Commit(ctx context.Context, request *txn.TxnRequest, response 
 	return s.startAsyncCommitTask(txnCtx)
 }
 
+func (s *service) commitDeadlineClockOffset() time.Duration {
+	rt := runtime.ServiceRuntime(s.sid)
+	if rt == nil || rt.Clock() == nil {
+		return 0
+	}
+	return rt.Clock().MaxOffset()
+}
+
+func commitRequestExpired(
+	request *txn.TxnRequest,
+	now time.Time,
+	clockOffset time.Duration,
+) bool {
+	return request.CommitRequest != nil &&
+		request.CommitRequest.DeadlineUnixNano > 0 &&
+		!now.Before(time.Unix(0, request.CommitRequest.DeadlineUnixNano).Add(clockOffset))
+}
+
 func (s *service) Rollback(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
 	s.waitRecoveryCompleted()
 
@@ -444,7 +485,9 @@ func (s *service) startAsyncCommitTask(txnCtx *txnContext) error {
 				}
 				util.LogTxnCommittingFailed(s.logger, txnMeta, err)
 				// TODO: make config
-				time.Sleep(time.Second)
+				if !waitRetryBackoff(ctx, time.Second) {
+					return
+				}
 			}
 		}
 
@@ -494,12 +537,22 @@ func (s *service) checkCNRequest(request *txn.TxnRequest) {
 	}
 }
 
-func (s *service) waitClockTo(ts timestamp.Timestamp) {
+func (s *service) waitClockTo(ctx context.Context, ts timestamp.Timestamp) error {
 	for {
 		now, _ := runtime.ServiceRuntime(s.sid).Clock().Now()
 		if now.GreaterEq(ts) {
-			return
+			return nil
 		}
-		time.Sleep(time.Duration(ts.PhysicalTime + 1 - now.PhysicalTime))
+		wait := time.Duration(ts.PhysicalTime - now.PhysicalTime)
+		if wait < time.Duration(math.MaxInt64) {
+			wait++
+		}
+		timer := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return context.Cause(ctx)
+		case <-timer.C:
+		}
 	}
 }

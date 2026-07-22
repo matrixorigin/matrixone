@@ -17,7 +17,9 @@ package gossip
 import (
 	"fmt"
 	"testing"
+	"time"
 
+	"github.com/hashicorp/memberlist"
 	"github.com/matrixorigin/matrixone/pkg/pb/gossip"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
@@ -54,6 +56,7 @@ func TestDelegate_DataCache_GetBroadcastsAndNotify(t *testing.T) {
 
 	data = d.GetBroadcasts(4, 32*1024)
 	assert.NotNil(t, data)
+	assert.Len(t, data, 10)
 
 	t.Run("self", func(t *testing.T) {
 		for _, single := range data {
@@ -113,6 +116,7 @@ func TestDelegate_StatsInfo_GetBroadcastsAndNotify(t *testing.T) {
 
 	data = d.GetBroadcasts(4, 32*1024)
 	assert.NotNil(t, data)
+	assert.Len(t, data, 10)
 
 	t.Run("self", func(t *testing.T) {
 		for _, single := range data {
@@ -148,6 +152,97 @@ func TestDelegate_StatsInfo_GetBroadcastsAndNotify(t *testing.T) {
 			}
 		}
 	})
+}
+
+func TestDelegateNotifyLeaveRemovesRoutesOwnedByDepartedNode(t *testing.T) {
+	const (
+		receiverAddr  = "127.0.0.1:7778"
+		departingAddr = "127.0.0.1:8888"
+		survivingAddr = "127.0.0.1:9998"
+	)
+	receiver := newDelegate(zap.NewNop(), receiverAddr)
+	departing := newDelegate(zap.NewNop(), departingAddr)
+	surviving := newDelegate(zap.NewNop(), survivingAddr)
+
+	departingDataKey := query.CacheKey{Path: "departing"}
+	survivingDataKey := query.CacheKey{Path: "surviving"}
+	departingStatsKey := statsinfo.StatsInfoKey{DatabaseID: 1, TableID: 1}
+	overwrittenStatsKey := statsinfo.StatsInfoKey{DatabaseID: 2, TableID: 2}
+	survivingStatsKey := statsinfo.StatsInfoKey{DatabaseID: 3, TableID: 3}
+
+	departing.getDataCacheKey().AddItem(gossip.CommonItem{
+		Operation: gossip.Operation_Set,
+		Key: &gossip.CommonItem_CacheKey{
+			CacheKey: &departingDataKey,
+		},
+	})
+	for _, key := range []*statsinfo.StatsInfoKey{&departingStatsKey, &overwrittenStatsKey} {
+		departing.getStatsInfoKey().AddItem(gossip.CommonItem{
+			Operation: gossip.Operation_Set,
+			Key: &gossip.CommonItem_StatsInfoKey{
+				StatsInfoKey: key,
+			},
+		})
+	}
+	for _, data := range departing.GetBroadcasts(4, 32*1024) {
+		receiver.NotifyMsg(data)
+	}
+
+	surviving.getDataCacheKey().AddItem(gossip.CommonItem{
+		Operation: gossip.Operation_Set,
+		Key: &gossip.CommonItem_CacheKey{
+			CacheKey: &survivingDataKey,
+		},
+	})
+	for _, key := range []*statsinfo.StatsInfoKey{&overwrittenStatsKey, &survivingStatsKey} {
+		surviving.getStatsInfoKey().AddItem(gossip.CommonItem{
+			Operation: gossip.Operation_Set,
+			Key: &gossip.CommonItem_StatsInfoKey{
+				StatsInfoKey: key,
+			},
+		})
+	}
+	for _, data := range surviving.GetBroadcasts(4, 32*1024) {
+		receiver.NotifyMsg(data)
+	}
+
+	assert.Equal(t, departingAddr, receiver.getDataCacheKey().Target(departingDataKey))
+	assert.Equal(t, survivingAddr, receiver.getDataCacheKey().Target(survivingDataKey))
+	assert.Equal(t, departingAddr, receiver.getStatsInfoKey().Target(departingStatsKey))
+	assert.Equal(t, survivingAddr, receiver.getStatsInfoKey().Target(overwrittenStatsKey))
+	assert.Equal(t, survivingAddr, receiver.getStatsInfoKey().Target(survivingStatsKey))
+
+	receiver.NotifyLeave(&memberlist.Node{Meta: []byte(departingAddr)})
+
+	assert.Empty(t, receiver.getDataCacheKey().Target(departingDataKey))
+	assert.Equal(t, survivingAddr, receiver.getDataCacheKey().Target(survivingDataKey))
+	assert.Empty(t, receiver.getStatsInfoKey().Target(departingStatsKey))
+	assert.Equal(t, survivingAddr, receiver.getStatsInfoKey().Target(overwrittenStatsKey))
+	assert.Equal(t, survivingAddr, receiver.getStatsInfoKey().Target(survivingStatsKey))
+}
+
+func TestDelegateStatsInfoStateDoesNotUseDataCacheMutex(t *testing.T) {
+	d := newDelegate(&zap.Logger{}, "127.0.0.1:8889")
+	d.dataCacheKey.mu.Lock()
+	d.statsInfoKey.mu.Lock()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		d.statsInfoState()
+	}()
+
+	d.statsInfoKey.mu.Unlock()
+	timer := time.NewTimer(10 * time.Second)
+	defer timer.Stop()
+	select {
+	case <-done:
+		d.dataCacheKey.mu.Unlock()
+	case <-timer.C:
+		d.dataCacheKey.mu.Unlock()
+		<-done
+		t.Fatal("statsInfoState blocked on dataCacheKey")
+	}
 }
 
 func TestDelegate_DataCache_LocalStateAndMergeRemoteState(t *testing.T) {

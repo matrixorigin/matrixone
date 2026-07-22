@@ -204,5 +204,13 @@ INSERT INTO t1 VALUES(1),(2),(3);
 SELECT CASE WHEN id = 1 THEN 'string' WHEN id = 2 THEN 123 ELSE 'mixed' END AS mixed_case FROM t1 ORDER BY id;
 DROP TABLE t1;
 
+-- @bvt:issue#25314
+SET SESSION sql_mode = '';
+SELECT IF(0, CAST('bad' AS SIGNED), 7) AS if_skip_true_branch,
+       CASE WHEN 0 THEN CAST('bad' AS SIGNED) ELSE 7 END AS case_skip_then,
+       COALESCE(5, CAST('bad' AS SIGNED)) AS coalesce_skip_later,
+       IFNULL(5, CAST('bad' AS SIGNED)) AS ifnull_skip_later;
+-- @bvt:issue
+
 # reset
 SET TIME_ZONE = "SYSTEM";

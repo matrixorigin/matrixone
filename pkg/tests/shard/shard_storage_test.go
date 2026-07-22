@@ -185,34 +185,14 @@ func mustCreatePartitionTable(
 	table string,
 	cn embed.ServiceOperator,
 ) uint64 {
-	accountID := uint32(0)
-	ctx, cancel := context.WithTimeout(
-		defines.AttachAccountId(context.Background(), accountID),
-		time.Second*60,
-	)
-	defer cancel()
-
 	sql := getPartitionTableSQL(table, n)
-
-	tableID := uint64(0)
-	exec := testutils.GetSQLExecutor(cn)
-	err := exec.ExecTxn(
-		ctx,
-		func(txn executor.TxnExecutor) error {
-			res, err := txn.Exec(sql, executor.StatementOption{})
-			if err != nil {
-				return err
-			}
-			res.Close()
-
-			tableID = mustGetTableID(t, db, table, txn)
-			return nil
-		},
-		executor.Options{}.
-			WithDatabase(db),
+	testutils.ExecSQL(
+		t,
+		db,
+		cn,
+		sql,
 	)
-	require.NoError(t, err)
-	return tableID
+	return mustGetTableIDByCN(t, db, table, cn)
 }
 
 func checkPartitionBasedShardMetadata(

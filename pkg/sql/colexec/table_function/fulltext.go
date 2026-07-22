@@ -18,11 +18,10 @@ import (
 	"container/heap"
 	"context"
 	"fmt"
-	"math"
 	"sync"
 
 	"github.com/bytedance/sonic"
-	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
+	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -66,8 +65,8 @@ type fulltextState struct {
 	resbuf           []*vectorindex.SearchResultAnyKey
 	ranking          bool
 
-	// Serialized CBloomFilter bytes for reader-level doc_id filtering
-	fulltextBloomFilter []byte
+	// Serialized membership-filter (docfilter) bytes for reader-level doc_id filtering
+	fulltextMembershipFilter []byte
 
 	// holding output batch
 	batch *batch.Batch
@@ -196,7 +195,7 @@ func (u *fulltextState) returnResultFromBuffer(proc *process.Process, limit uint
 	blocksz := 8192
 	nres := len(u.resbuf)
 	n := nres
-	if n > int(limit) {
+	if uint64(n) > limit {
 		n = int(limit)
 	}
 	if n > blocksz {
@@ -254,11 +253,9 @@ func (u *fulltextState) call(tf *TableFunction, proc *process.Process) (vm.CallR
 	var err error
 	u.batch.CleanOnlyData()
 	limit := u.limit
-	topk := limit
+	topk := fulltextTopKLimit(limit, u.ranking)
 
-	if u.ranking {
-		topk = 3 * limit
-	} else {
+	if !u.ranking {
 
 		// number of result more than pushdown limit and exit
 		if limit > 0 && u.n_result >= limit {
@@ -330,7 +327,13 @@ func (u *fulltextState) start(tf *TableFunction, proc *process.Process, nthRow i
 	if v.GetType().Oid != types.T_varchar {
 		return moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("Third argument (pattern) must be string, but got %s", v.GetType().String()))
 	}
+	if v.IsConstNull() || v.GetNulls().Contains(uint64(nthRow)) {
+		return moerr.NewInvalidInput(proc.Ctx, "fulltext search pattern must not be NULL")
+	}
 	pattern := v.GetStringAt(nthRow)
+	if len(pattern) == 0 {
+		return moerr.NewInvalidInput(proc.Ctx, "fulltext search pattern must not be empty")
+	}
 
 	v = tf.ctr.argVecs[3]
 	if v.GetType().Oid != types.T_int64 {
@@ -352,13 +355,13 @@ func fulltextIndexScanPrepare(proc *process.Process, tableFunction *TableFunctio
 	st := &fulltextState{}
 	tableFunction.ctr.executorsForArgs, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, tableFunction.Args)
 	tableFunction.ctr.argVecs = make([]*vector.Vector, len(tableFunction.Args))
+	if err != nil {
+		return nil, err
+	}
 
-	if tableFunction.Limit != nil {
-		if cExpr, ok := tableFunction.Limit.Expr.(*plan.Expr_Lit); ok {
-			if c, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
-				st.limit = c.U64Val
-			}
-		}
+	st.limit, err = evalLimitExpression(proc, tableFunction.Limit, 0)
+	if err != nil {
+		return nil, err
 	}
 
 	// TODO: LIMIT BY RANK should set ranking to true
@@ -382,91 +385,14 @@ func runWordStats(
 	}
 
 	sqlProc := sqlexec.NewSqlProcess(proc)
-	// Attach CBloomFilter for reader-level doc_id filtering on fulltext index table.
-	if len(u.fulltextBloomFilter) > 0 {
-		sqlProc.FulltextBloomFilter = u.fulltextBloomFilter
+	// Attach the membership filter for reader-level doc_id filtering on the fulltext index table.
+	if len(u.fulltextMembershipFilter) > 0 {
+		sqlProc.FulltextMembershipFilter = u.fulltextMembershipFilter
 	}
 
 	result, err = ft_runSql_streaming(ctx, sqlProc, sql, u.streamCh, u.errCh)
 
 	return
-}
-
-func runSqlWithFulltextFilter(proc *process.Process, fulltextBloomFilter []byte, sql string) (executor.Result, error) {
-	sqlProc := sqlexec.NewSqlProcess(proc)
-	if len(fulltextBloomFilter) > 0 {
-		sqlProc.FulltextBloomFilter = fulltextBloomFilter
-	}
-	return ft_runSql(sqlProc, sql)
-}
-
-func runSingleKeywordTopK(
-	u *fulltextState,
-	proc *process.Process,
-	s *fulltext.SearchAccum,
-) (bool, error) {
-	if u.limit == 0 || u.ranking {
-		return false, nil
-	}
-
-	var topKSQL string
-	var ok bool
-	var err error
-	switch s.ScoreAlgo {
-	case fulltext.ALGO_TFIDF:
-		topKSQL, ok, err = fulltext.SingleKeywordTopKSQL(s.Pattern, s.Mode, s.TblName, u.limit)
-	case fulltext.ALGO_BM25:
-		topKSQL, ok, err = fulltext.SingleKeywordTopKBM25SQL(s.Pattern, s.Mode, s.TblName, s.AvgDocLen, u.limit)
-	default:
-		return false, nil
-	}
-	if err != nil || !ok {
-		return false, err
-	}
-
-	topKRes, err := runSqlWithFulltextFilter(proc, u.fulltextBloomFilter, topKSQL)
-	if err != nil {
-		return false, err
-	}
-	defer topKRes.Close()
-
-	results := make([]*vectorindex.SearchResultAnyKey, 0, u.limit)
-	var nmatch int64
-	for _, bat := range topKRes.Batches {
-		if nmatch == 0 && bat.RowCount() > 0 {
-			nmatch = vector.GetFixedAtWithTypeCheck[int64](bat.Vecs[2], 0)
-			// Guard against zero nmatch (COUNT(*) OVER() on a non-empty
-			// result set should never be 0, but be defensive anyway).
-			if nmatch == 0 || s.Nrow == 0 {
-				return true, nil
-			}
-		}
-		for i := 0; i < bat.RowCount(); i++ {
-			docID := u.normalizeDocID(vector.GetAny(bat.Vecs[0], i, false))
-			var score float64
-			switch s.ScoreAlgo {
-			case fulltext.ALGO_TFIDF:
-				tf := vector.GetFixedAtWithTypeCheck[int64](bat.Vecs[1], i)
-				idf := math.Log10(float64(s.Nrow) / float64(nmatch))
-				score = float64(float32(tf) * float32(idf*idf))
-			case fulltext.ALGO_BM25:
-				idf := math.Log10(float64(s.Nrow) / float64(nmatch))
-				idfSq := idf * idf
-				score = vector.GetFixedAtWithTypeCheck[float64](bat.Vecs[1], i) * idfSq
-			default:
-				return false, nil
-			}
-			results = append(results, &vectorindex.SearchResultAnyKey{Id: docID, Distance: score})
-		}
-	}
-	if nmatch == 0 || s.Nrow == 0 {
-		return true, nil
-	}
-
-	for i := len(results) - 1; i >= 0; i-- {
-		u.resbuf = append(u.resbuf, results[i])
-	}
-	return true, nil
 }
 
 // evaluate the score for all document vectors in Agg hashtable.
@@ -518,10 +444,14 @@ func evaluate(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum) 
 }
 
 func sort_topk(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum, limit uint64) (err error) {
+	if limit == 0 {
+		return nil
+	}
 	aggcnt := u.aggcnt
 	if u.minheap == nil {
-		u.minheap = make(vectorindex.SearchResultHeap, 0, limit)
-		u.resbuf = make([]*vectorindex.SearchResultAnyKey, 0, limit)
+		capacity := vectorindex.SearchResultPreallocate(limit)
+		u.minheap = make(vectorindex.SearchResultHeap, 0, capacity)
+		u.resbuf = make([]*vectorindex.SearchResultAnyKey, 0, capacity)
 	}
 	heap.Init(&u.minheap)
 
@@ -544,7 +474,7 @@ func sort_topk(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum,
 
 		if len(score) > 0 {
 			scoref64 := float64(score[0])
-			if len(u.minheap) >= int(limit) {
+			if uint64(len(u.minheap)) >= limit {
 				if u.minheap[0].GetDistance() < scoref64 {
 					if u.ranking {
 						// In ranking mode, free the evicted document's resources immediately
@@ -606,6 +536,16 @@ func sort_topk(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum,
 	}
 
 	return nil
+}
+
+func fulltextTopKLimit(limit uint64, ranking bool) uint64 {
+	if !ranking {
+		return limit
+	}
+	if limit > ^uint64(0)/3 {
+		return ^uint64(0)
+	}
+	return 3 * limit
 }
 
 // result from SQL is (doc_id, index constant (refer to Pattern.Index))
@@ -771,14 +711,14 @@ func fulltextIndexMatch(
 
 	opStats := tableFunction.OpAnalyzer.GetOpStats()
 
-	// Wait for BloomFilter runtime filter if configured (pre-filter pushdown)
-	if u.fulltextBloomFilter == nil && len(tableFunction.RuntimeFilterSpecs) > 0 {
-		bfResult, bfErr := waitFulltextBloomFilter(proc, tableFunction.RuntimeFilterSpecs)
+	// Wait for the unique-join-keys runtime filter if configured (pre-filter pushdown)
+	if u.fulltextMembershipFilter == nil && len(tableFunction.RuntimeFilterSpecs) > 0 {
+		bfResult, bfErr := waitFulltextMembershipFilter(proc, tableFunction.RuntimeFilterSpecs)
 		if bfErr != nil {
 			return bfErr
 		}
 		if bfResult != nil {
-			u.fulltextBloomFilter = bfResult.bloomFilterBytes
+			u.fulltextMembershipFilter = bfResult.membershipFilterBytes
 		}
 	}
 
@@ -802,14 +742,6 @@ func fulltextIndexMatch(
 		u.sacc = s
 
 		opStats.BackgroundQueries = append(opStats.BackgroundQueries, res.LogicalPlan)
-
-		ok, err := runSingleKeywordTopK(u, proc, s)
-		if err != nil {
-			return err
-		}
-		if ok {
-			return nil
-		}
 
 	}
 
@@ -878,28 +810,26 @@ func fulltextIndexMatch(
 	return
 }
 
-const fulltextBfProbability = 0.001
-
-// fulltextBloomFilterResult holds the result from waiting for a BloomFilter runtime filter.
-type fulltextBloomFilterResult struct {
-	bloomFilterBytes []byte // serialized CBloomFilter for reader-level filtering
+// fulltextMembershipFilterResult holds the result from waiting for a unique-join-keys runtime filter.
+type fulltextMembershipFilterResult struct {
+	membershipFilterBytes []byte // serialized membership-filter payload for reader-level filtering
 }
 
-// waitFulltextBloomFilter waits for a BloomFilter runtime filter message,
-// deserializes the PK vector, and builds a CBloomFilter for reader-level doc_id filtering.
-func waitFulltextBloomFilter(proc *process.Process, specs []*plan.RuntimeFilterSpec) (*fulltextBloomFilterResult, error) {
+// waitFulltextMembershipFilter waits for a unique-join-keys runtime filter message,
+// deserializes the PK vector, and builds the doc_id membership filter for reader-level filtering.
+func waitFulltextMembershipFilter(proc *process.Process, specs []*plan.RuntimeFilterSpec) (*fulltextMembershipFilterResult, error) {
 	if len(specs) == 0 {
 		return nil, nil
 	}
 	spec := specs[0]
-	if !spec.UseBloomFilter {
+	if !spec.UseMembershipFilter {
 		return nil, nil
 	}
 
 	sqlProc := sqlexec.NewSqlProcess(proc)
 	sqlProc.RuntimeFilterSpecs = specs
 
-	vecbytes, err := sqlexec.WaitBloomFilter(sqlProc)
+	vecbytes, err := sqlexec.WaitUniqueJoinKeys(sqlProc)
 	if err != nil || len(vecbytes) == 0 {
 		return nil, err
 	}
@@ -908,16 +838,18 @@ func waitFulltextBloomFilter(proc *process.Process, specs []*plan.RuntimeFilterS
 	if err = keyvec.UnmarshalBinary(vecbytes); err != nil {
 		return nil, err
 	}
-	defer keyvec.Free(proc.Mp())
+	// No keyvec.Free here on purpose: UnmarshalBinary aliases vecbytes (it sets
+	// cantFreeData/cantFreeArea), so keyvec owns no mpool memory — the struct and
+	// the aliased bytes are reclaimed by GC. Calling Free(mp) would be a no-op for
+	// this zero-copy path, and tying its release to a specific mpool would be a
+	// cross-pool free hazard if the deserialization ever became owning.
 
-	// Build CBloomFilter for reader-level doc_id filtering
-	bf := bloomfilter.NewCBloomFilterWithProbability(int64(keyvec.Length()), fulltextBfProbability)
-	bf.AddVector(keyvec)
-	bfBytes, marshalErr := bf.Marshal()
-	bf.Free()
-	if marshalErr != nil {
-		return nil, marshalErr
+	// docfilter picks and tags the doc_id filter structure (exact bitset for
+	// integer PKs, CBloomFilter otherwise); the reader's docfilter.New
+	// reconstructs it. The caller need not know which structure is used.
+	payload, err := docfilter.Build(keyvec)
+	if err != nil {
+		return nil, err
 	}
-
-	return &fulltextBloomFilterResult{bloomFilterBytes: bfBytes}, nil
+	return &fulltextMembershipFilterResult{membershipFilterBytes: payload}, nil
 }

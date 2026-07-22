@@ -82,8 +82,19 @@ func NewSelect(s SelectStatement, o OrderBy, l *Limit) *Select {
 }
 
 type RewriteOption struct {
-	// key: db.table or table
-	Rewrites map[string]*Rewrite
+	// key: db.table or table.
+	// Each key maps to an ordered chain of rewrites applied as stacked views:
+	// element 0 is the innermost layer (closest to the base table) and the last
+	// element is the outermost layer (what the query's table reference resolves
+	// to). A reference to the same table inside one layer's body resolves to the
+	// next inner layer; once the chain is exhausted it resolves to the base
+	// table.
+	Rewrites map[string][]*Rewrite
+	// RemapDb maps a source database name to a target database name. It is
+	// applied before the table Rewrites: a reference to <src>.t (or an
+	// unqualified table when the current database is <src>) is resolved against
+	// <dst> instead.
+	RemapDb map[string]string
 }
 
 type Rewrite struct {
@@ -483,7 +494,7 @@ func (node *SelectExpr) Format(ctx *FmtCtx) {
 	node.Expr.Format(ctx)
 	if node.As != nil && !node.As.Empty() {
 		ctx.WriteString(" as ")
-		ctx.WriteString(node.As.Origin())
+		ctx.WriteIdentifier(Identifier(node.As.Origin()))
 	}
 }
 
@@ -681,7 +692,7 @@ type AliasClause struct {
 
 func (node *AliasClause) Format(ctx *FmtCtx) {
 	if node.Alias != "" {
-		ctx.WriteString(string(node.Alias))
+		ctx.WriteIdentifier(node.Alias)
 	}
 	if node.Cols != nil {
 		ctx.WriteByte('(')
@@ -816,7 +827,7 @@ func (node *IndexHint) Format(ctx *FmtCtx) {
 			if i > 0 {
 				ctx.WriteString(", ")
 			}
-			ctx.WriteString(value)
+			ctx.WriteIdentifier(Identifier(value))
 		}
 	}
 	ctx.WriteString(")")

@@ -16,6 +16,7 @@ package clusterservice
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -46,6 +47,39 @@ func TestClusterReady(t *testing.T) {
 		})
 }
 
+func TestGetMOClusterWithContextHonorsCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := GetMOClusterWithContext(ctx, t.Name())
+	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestCNServiceSnapshotHonorsCancellationWhileClusterStarts(t *testing.T) {
+	c := &cluster{readyC: make(chan struct{})}
+	c.services.Store(&services{})
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+
+	err := GetCNServiceWithoutWorkingStateWithContext(
+		ctx,
+		c,
+		NewSelector(),
+		func(metadata.CNService) bool { return true },
+	)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+}
+
+func TestTNServiceSnapshotHonorsCancellationWhileClusterStarts(t *testing.T) {
+	c := &cluster{readyC: make(chan struct{})}
+	c.services.Store(&services{})
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+
+	_, err := GetAllTNServicesWithContext(ctx, c)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+}
+
 func TestClusterForceRefresh(t *testing.T) {
 	runClusterTest(
 		time.Hour,
@@ -64,6 +98,61 @@ func TestClusterForceRefresh(t *testing.T) {
 			c.GetCNService(NewServiceIDSelector("cn0"), apply)
 			assert.Equal(t, 1, cnt)
 		})
+}
+
+func TestClusterRefreshReportsFailureAndPreservesSnapshot(t *testing.T) {
+	runClusterTest(
+		time.Hour,
+		func(hc *testHAKeeperClient, c *cluster) {
+			hc.addCN("cn-old")
+			require.NoError(t, c.Refresh(context.Background()))
+
+			refreshErr := errors.New("injected hakeeper failure")
+			hc.Lock()
+			hc.err = refreshErr
+			hc.value.CNStores = nil
+			hc.Unlock()
+
+			require.ErrorIs(t, c.Refresh(context.Background()), refreshErr)
+			var ids []string
+			c.GetCNServiceWithoutWorkingState(
+				NewSelector(),
+				func(service metadata.CNService) bool {
+					ids = append(ids, service.ServiceID)
+					return true
+				},
+			)
+			require.Equal(t, []string{"cn-old"}, ids)
+		},
+	)
+}
+
+func TestClusterRefreshHonorsCanceledContext(t *testing.T) {
+	runClusterTest(
+		time.Hour,
+		func(_ *testHAKeeperClient, c *cluster) {
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			require.ErrorIs(t, c.Refresh(ctx), context.Canceled)
+		},
+	)
+}
+
+func TestClusterRefreshWaitHonorsContext(t *testing.T) {
+	runClusterTest(
+		time.Hour,
+		func(_ *testHAKeeperClient, c *cluster) {
+			require.NoError(t, c.acquireRefresh(context.Background()))
+			defer c.releaseRefresh()
+
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+			defer cancel()
+			started := time.Now()
+			err := c.Refresh(ctx)
+			require.ErrorIs(t, err, context.DeadlineExceeded)
+			require.Less(t, time.Since(started), time.Second)
+		},
+	)
 }
 
 func TestClusterRefresh(t *testing.T) {

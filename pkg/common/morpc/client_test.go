@@ -16,7 +16,9 @@ package morpc
 
 import (
 	"context"
+	"fmt"
 	"runtime"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -38,6 +40,27 @@ func (f *createNotifyFactory) Create(backend string, opts ...BackendOption) (Bac
 	default:
 	}
 	return b, err
+}
+
+type blockingCreateFactory struct {
+	entered chan struct{}
+	release chan struct{}
+	backend *testBackend
+}
+
+type failingCreateFactory struct {
+	attempts atomic.Int32
+}
+
+func (f *failingCreateFactory) Create(string, ...BackendOption) (Backend, error) {
+	f.attempts.Add(1)
+	return nil, fmt.Errorf("create failed")
+}
+
+func (f *blockingCreateFactory) Create(string, ...BackendOption) (Backend, error) {
+	close(f.entered)
+	<-f.release
+	return f.backend, nil
 }
 
 func TestCreateBackendLocked(t *testing.T) {
@@ -81,6 +104,259 @@ func TestGetBackendLockedWithEmptyBackends(t *testing.T) {
 	b, err := c.getBackendLocked("b1", false)
 	assert.NoError(t, err)
 	assert.Nil(t, b)
+}
+
+func TestNewStreamDoesNotSleepPastBackendCreation(t *testing.T) {
+	factory := &blockingCreateFactory{
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+		backend: &testBackend{id: 1, activeTime: time.Now()},
+	}
+	rc, err := NewClient(
+		"event-driven-create-wait",
+		factory,
+		WithClientMaxBackendPerHost(1),
+		WithClientEnableAutoCreateBackend(),
+		WithClientDisableCircuitBreaker(),
+		WithClientRetryPolicy(RetryPolicy{
+			InitialBackoff: 5 * time.Second,
+			MaxBackoff:     5 * time.Second,
+			Multiplier:     1,
+		}),
+	)
+	require.NoError(t, err)
+	c := rc.(*client)
+	defer func() {
+		select {
+		case <-factory.release:
+		default:
+			close(factory.release)
+		}
+		require.NoError(t, c.Close())
+	}()
+
+	type result struct {
+		stream Stream
+		err    error
+	}
+	resultC := make(chan result, 1)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	go func() {
+		stream, err := c.NewStream(ctx, "remote", true)
+		resultC <- result{stream: stream, err: err}
+	}()
+
+	select {
+	case <-factory.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("backend create did not reach the factory")
+	}
+	close(factory.release)
+
+	select {
+	case result := <-resultC:
+		require.NoError(t, result.err)
+		require.NotNil(t, result.stream)
+		require.NoError(t, result.stream.Close(false))
+	case <-time.After(time.Second):
+		t.Fatal("NewStream slept on retry backoff after the backend was ready")
+	}
+}
+
+func TestNewStreamRetainsBackoffAfterBackendCreateFailure(t *testing.T) {
+	factory := &failingCreateFactory{}
+	rc, err := NewClient(
+		"failed-create-backoff",
+		factory,
+		WithClientMaxBackendPerHost(1),
+		WithClientEnableAutoCreateBackend(),
+		WithClientDisableCircuitBreaker(),
+		WithClientRetryPolicy(RetryPolicy{
+			InitialBackoff: 5 * time.Second,
+			MaxBackoff:     5 * time.Second,
+			Multiplier:     1,
+		}),
+	)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, rc.Close()) }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	_, err = rc.NewStream(ctx, "remote", true)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Equal(t, int32(1), factory.attempts.Load(),
+		"a failed factory call must not trigger an immediate retry loop")
+}
+
+func TestCloseBackendForSynchronouslyDetachesOnlyTarget(t *testing.T) {
+	rc, err := NewClient("", newTestBackendFactory(), WithClientMaxBackendPerHost(1))
+	require.NoError(t, err)
+	c := rc.(*client)
+	defer func() { require.NoError(t, c.Close()) }()
+
+	target := &testBackend{id: 1, activeTime: time.Now()}
+	other := &testBackend{id: 2, activeTime: time.Now()}
+	c.mu.Lock()
+	c.mu.backends["target"] = []Backend{target}
+	c.mu.backends["other"] = []Backend{other}
+	c.mu.ops["target"] = &op{}
+	c.mu.ops["other"] = &op{}
+	c.mu.Unlock()
+	c.circuitBreakers.RecordFailure("target")
+
+	require.NoError(t, c.CloseBackendFor("target"))
+
+	c.mu.Lock()
+	targetBackends := append([]Backend(nil), c.mu.backends["target"]...)
+	targetOp := c.mu.ops["target"]
+	otherBackends := append([]Backend(nil), c.mu.backends["other"]...)
+	c.mu.Unlock()
+	require.Empty(t, targetBackends)
+	require.Nil(t, targetOp)
+	require.Equal(t, []Backend{other}, otherBackends)
+	require.NotContains(t, c.circuitBreakers.Stats(), "target")
+
+	target.RWMutex.RLock()
+	targetClosed := target.closed
+	target.RWMutex.RUnlock()
+	other.RWMutex.RLock()
+	otherClosed := other.closed
+	other.RWMutex.RUnlock()
+	require.True(t, targetClosed)
+	require.False(t, otherClosed)
+
+	c.mu.Lock()
+	replacement, err := c.createBackendLocked("target")
+	c.mu.Unlock()
+	require.NoError(t, err)
+	require.NotNil(t, replacement)
+}
+
+func TestCloseBackendForRejectsConcurrentSynchronousCreate(t *testing.T) {
+	factory := &blockingCreateFactory{
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+		backend: &testBackend{id: 1, activeTime: time.Now()},
+	}
+	defer func() {
+		select {
+		case <-factory.release:
+		default:
+			close(factory.release)
+		}
+	}()
+	rc, err := NewClient("", factory, WithClientMaxBackendPerHost(1))
+	require.NoError(t, err)
+	c := rc.(*client)
+	defer func() { require.NoError(t, c.Close()) }()
+
+	result := make(chan error, 1)
+	go func() {
+		_, err := c.createBackendWithBookkeeping("target", false)
+		result <- err
+	}()
+	select {
+	case <-factory.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("backend creation did not start")
+	}
+
+	require.NoError(t, c.CloseBackendFor("target"))
+	close(factory.release)
+	select {
+	case err := <-result:
+		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrBackendClosed))
+	case <-time.After(5 * time.Second):
+		t.Fatal("backend creation did not finish")
+	}
+
+	c.mu.Lock()
+	targetBackends := append([]Backend(nil), c.mu.backends["target"]...)
+	c.mu.Unlock()
+	factory.backend.RWMutex.RLock()
+	backendClosed := factory.backend.closed
+	factory.backend.RWMutex.RUnlock()
+	require.Empty(t, targetBackends)
+	require.True(t, backendClosed)
+}
+
+func TestQueueFullFallbackRejectsGenerationCapturedBeforeReset(t *testing.T) {
+	factory := &createNotifyFactory{
+		inner:   newTestBackendFactory(),
+		created: make(chan struct{}, 1),
+	}
+	rc, err := NewClient("", factory, WithClientMaxBackendPerHost(1))
+	require.NoError(t, err)
+	c := rc.(*client)
+	defer func() { require.NoError(t, c.Close()) }()
+
+	c.mu.Lock()
+	staleGeneration := c.backendGenerationLocked("target")
+	c.mu.Unlock()
+	require.NoError(t, c.CloseBackendFor("target"))
+
+	_, err = c.createBackendWithBookkeepingAtGeneration(
+		"target",
+		false,
+		staleGeneration,
+	)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrBackendClosed))
+	select {
+	case <-factory.created:
+		t.Fatal("stale queue-full fallback reached backend factory")
+	default:
+	}
+	c.mu.Lock()
+	targetBackends := append([]Backend(nil), c.mu.backends["target"]...)
+	c.mu.Unlock()
+	require.Empty(t, targetBackends)
+}
+
+func TestBackendGenerationIsBoundedAndDoesNotABA(t *testing.T) {
+	rc, err := NewClient("", newTestBackendFactory(), WithClientMaxBackendPerHost(1))
+	require.NoError(t, err)
+	c := rc.(*client)
+	defer func() { require.NoError(t, c.Close()) }()
+
+	c.mu.Lock()
+	old := c.backendGenerationLocked("target")
+	c.mu.Unlock()
+	require.NoError(t, c.CloseBackendFor("target"))
+	c.mu.Lock()
+	current := c.backendGenerationLocked("target")
+	c.mu.backendGeneration = make(map[string]*backendGeneration)
+	generations := make(map[string]*backendGeneration, maxBackendGenerationEntries)
+	for i := 0; i < maxBackendGenerationEntries; i++ {
+		remote := fmt.Sprintf("remote-%d", i)
+		generations[remote] = c.backendGenerationLocked(remote)
+	}
+	c.backendGenerationLocked("overflow")
+	generationCount := len(c.mu.backendGeneration)
+	var evictedRemote string
+	var evictedGeneration *backendGeneration
+	for remote, generation := range generations {
+		if c.mu.backendGeneration[remote] != generation {
+			evictedRemote = remote
+			evictedGeneration = generation
+			break
+		}
+	}
+	c.mu.Unlock()
+	require.NotSame(t, old, current)
+	require.LessOrEqual(t, generationCount, maxBackendGenerationEntries)
+	require.NotEmpty(t, evictedRemote)
+
+	_, err = c.createBackendWithBookkeepingAtGeneration(
+		evictedRemote,
+		false,
+		evictedGeneration,
+	)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrBackendClosed),
+		"evicted generation was re-admitted")
 }
 
 // TestGetBackendLockedDoesNotCreateWhenAvailable covers the fix: maybeCreateLocked must only
@@ -357,12 +633,9 @@ func TestGetBackendWithCreateBackend(t *testing.T) {
 }
 
 func TestCloseIdleBackends(t *testing.T) {
-	// Event-driven: factory signals on Create so we wait for 2 backends without Sleep.
-	created := make(chan struct{}, 2)
-	factory := &createNotifyFactory{inner: newTestBackendFactory(), created: created}
 	rc, err := NewClient(
 		"",
-		factory,
+		newTestBackendFactory(),
 		WithClientMaxBackendPerHost(2),
 		WithClientMaxBackendMaxIdleDuration(time.Millisecond*100),
 		WithClientCreateTaskChanSize(1),
@@ -387,35 +660,23 @@ func TestCloseIdleBackends(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, b, "timeout waiting for first backend")
 
-	// Trigger second create; wait for two Create() completions (event-driven, with timeout)
-	_, _ = c.getBackend("b1", false)
-	for _, ch := range []chan struct{}{created, created} {
-		select {
-		case <-ch:
-		case <-time.After(10 * time.Second):
-			t.Fatal("timeout waiting for backend create (second backend may not have been created)")
-		}
-	}
+	// Create the second backend synchronously through the complete bookkeeping
+	// path. A factory-level Create notification is too early for this assertion:
+	// the backend is published to the pool only after Create returns and the
+	// client re-acquires c.mu.
+	activeBackend, err := c.createBackendWithBookkeeping("b1", false)
+	require.NoError(t, err)
+	require.NotNil(t, activeBackend)
+	require.NotSame(t, b, activeBackend)
 	c.mu.Lock()
-	require.Equal(t, 2, len(c.mu.backends["b1"]), "second backend must be created")
-	// b is the locked backend returned by getBackend; find the active (non-b) backend
-	// without assuming slice order, since concurrent creation may append in any order.
-	var activeBackend Backend
-	for _, bk := range c.mu.backends["b1"] {
-		if bk != b {
-			activeBackend = bk
-			break
-		}
-	}
+	backendCount := len(c.mu.backends["b1"])
 	c.mu.Unlock()
-	require.NotNil(t, activeBackend, "active backend not found")
+	require.Equal(t, 2, backendCount, "second backend must be created")
 
 	// b is the idle backend: unlock it and zero activeTime so GC will close it
 	b.Unlock()
 	tb := b.(*testBackend)
-	tb.Lock()
-	tb.activeTime = time.Time{}
-	tb.Unlock()
+	tb.setActiveTime(time.Time{})
 
 	gcDeadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(gcDeadline) {
@@ -450,32 +711,26 @@ func TestLockedBackendCannotClosedWithGCIdleTask(t *testing.T) {
 		"",
 		newTestBackendFactory(),
 		WithClientMaxBackendPerHost(2),
-		WithClientMaxBackendMaxIdleDuration(time.Millisecond*100),
-		WithClientCreateTaskChanSize(1),
-		WithClientEnableAutoCreateBackend())
+		WithClientMaxBackendMaxIdleDuration(time.Millisecond*100))
 	assert.NoError(t, err)
 	c := rc.(*client)
 	defer func() {
 		assert.NoError(t, c.Close())
 	}()
+	// This unit test exercises idle GC directly. Do not let the independent
+	// global inactive-GC loop remove the zero-active-time backend first.
+	globalClientGC.unregister(c)
 
-	// Get backend with lock, may need retry
-	var b Backend
-	for i := 0; i < 10; i++ {
-		b, err = c.getBackend("b1", true)
-		if err == nil && b != nil {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	c.mu.Lock()
+	b, err := c.createBackendLocked("b1")
+	c.mu.Unlock()
 	assert.NoError(t, err)
 	assert.NotNil(t, b)
+	b.Lock()
 	assert.True(t, b.Locked())
-	b.(*testBackend).RWMutex.Lock()
-	b.(*testBackend).activeTime = time.Time{}
-	b.(*testBackend).RWMutex.Unlock()
+	b.(*testBackend).setActiveTime(time.Time{})
 
-	time.Sleep(time.Second * 1)
+	assert.Zero(t, c.closeIdleBackends())
 	c.mu.Lock()
 	assert.Equal(t, 1, len(c.mu.backends["b1"]))
 	c.mu.Unlock()
@@ -504,7 +759,7 @@ func TestGetBackendsWithAllInactiveAndWillCreateNew(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, b)
 
-	b.(*testBackend).activeTime = time.Time{}
+	b.(*testBackend).setActiveTime(time.Time{})
 
 	// Backend is now inactive, next call triggers async recreation
 	b, err = c.getBackend("b1", false)

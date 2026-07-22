@@ -16,7 +16,7 @@ package plan
 
 import (
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -246,7 +246,9 @@ func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 		}
 	}
 
-	sort.Slice(subTrees, func(i, j int) bool { return compareStats(subTrees[i].Stats, subTrees[j].Stats) })
+	slices.SortFunc(subTrees, func(a, b *plan.Node) int {
+		return compareStats(a.Stats, b.Stats)
+	})
 
 	leafByTag := make(map[int32]int32)
 
@@ -468,7 +470,10 @@ func (builder *QueryBuilder) getJoinGraph(leaves []*plan.Node, conds []*plan.Exp
 }
 
 func setParent(child, parent int32, vertices []*joinVertex) {
-	if child == -1 || parent == -1 {
+	if child == -1 || parent == -1 || child == parent {
+		return
+	}
+	if findParent(parent, child, vertices) {
 		return
 	}
 	unsetParent(child, vertices[child].parent, vertices)
@@ -487,11 +492,22 @@ func unsetParent(child, parent int32, vertices []*joinVertex) {
 }
 
 func findSelectivityInChildren(self int32, vertices []*joinVertex) bool {
+	return findSelectivityInChildrenWithVisited(self, vertices, make([]bool, len(vertices)))
+}
+
+func findSelectivityInChildrenWithVisited(self int32, vertices []*joinVertex, visited []bool) bool {
+	if !validVertex(self, vertices) {
+		return false
+	}
+	if visited[self] {
+		return false
+	}
+	visited[self] = true
 	if vertices[self].node.Stats.Selectivity < 0.9 {
 		return true
 	}
 	for child := range vertices[self].children {
-		if findSelectivityInChildren(child, vertices) {
+		if findSelectivityInChildrenWithVisited(child, vertices, visited) {
 			return true
 		}
 	}
@@ -499,13 +515,27 @@ func findSelectivityInChildren(self int32, vertices []*joinVertex) bool {
 }
 
 func findParent(self, target int32, vertices []*joinVertex) bool {
-	parent := vertices[self].parent
-	if parent == target {
-		return true
-	} else if parent != -1 {
-		return findParent(parent, target, vertices)
+	visited := make([]bool, len(vertices))
+	for self != -1 {
+		if !validVertex(self, vertices) {
+			return false
+		}
+		if visited[self] {
+			return false
+		}
+		visited[self] = true
+
+		parent := vertices[self].parent
+		if parent == target {
+			return true
+		}
+		self = parent
 	}
 	return false
+}
+
+func validVertex(id int32, vertices []*joinVertex) bool {
+	return id >= 0 && int(id) < len(vertices)
 }
 
 func shouldChangeParent(self, currentParent, nextParent int32, vertices []*joinVertex) bool {
@@ -531,7 +561,7 @@ func shouldChangeParent(self, currentParent, nextParent int32, vertices []*joinV
 		}
 	}
 	// self is the biggest node
-	return compareStats(nextParentStats, currentParentStats)
+	return compareStats(nextParentStats, currentParentStats) < 0
 }
 
 // buildSubJoinTree build sub- join tree for a fact table and all its dimension tables
@@ -551,7 +581,9 @@ func (builder *QueryBuilder) buildSubJoinTree(vertices []*joinVertex, vid int32)
 		builder.buildSubJoinTree(vertices, child)
 		dimensions = append(dimensions, vertices[child])
 	}
-	sort.Slice(dimensions, func(i, j int) bool { return compareStats(dimensions[i].node.Stats, dimensions[j].node.Stats) })
+	slices.SortFunc(dimensions, func(a, b *joinVertex) int {
+		return compareStats(a.node.Stats, b.node.Stats)
+	})
 
 	for _, child := range dimensions {
 

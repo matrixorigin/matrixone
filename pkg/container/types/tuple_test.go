@@ -22,6 +22,7 @@ import (
 	"sort"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/stretchr/testify/require"
 )
 
@@ -37,6 +38,7 @@ func TestSimpleTupleAllTypes(t *testing.T) {
 				DateFromCalendar(2000, 1, 1), DatetimeFromClock(2000, 1, 1, 1, 1, 0, 0),
 				FromClockUTC(2000, 2, 2, 2, 2, 0, 0), Decimal64(123),
 				Decimal128{123, 0},
+				Decimal256{123, 0, 0, 0},
 				[]byte{1, 2, 3},
 				uuid,
 			},
@@ -53,6 +55,8 @@ func TestSimpleTupleAllTypes(t *testing.T) {
 				DateFromCalendar(2000, 1, 1), DatetimeFromClock(2000, 1, 1, 1, 1, 0, 0),
 				uuid,
 				Decimal128{123, 0},
+				uuid,
+				Decimal256{123, 0, 0, 0},
 				uuid,
 				[]byte{1, 2, 3},
 			},
@@ -115,6 +119,9 @@ func TestSingleTypeTuple(t *testing.T) {
 		},
 		{
 			randomTuple(decimal128Code, 100),
+		},
+		{
+			randomTuple(decimal256Code, 100),
 		},
 		{
 			randomTuple(stringTypeCode, 100),
@@ -224,6 +231,59 @@ func TestDecimalOrderTuple(t *testing.T) {
 	}
 }
 
+func TestDecimal256OrderTuple(t *testing.T) {
+	tests := []struct {
+		args Tuple
+	}{
+		{
+			args: Tuple{
+				Decimal256{uint64(rand.Int()), uint64(rand.Int()), uint64(rand.Int()), uint64(rand.Int())},
+				Decimal256{uint64(rand.Int()), uint64(rand.Int()), uint64(rand.Int()), uint64(rand.Int())},
+				Decimal256{uint64(rand.Int()), uint64(rand.Int()), uint64(rand.Int()), uint64(rand.Int())},
+				Decimal256{uint64(rand.Int()), uint64(rand.Int()), uint64(rand.Int()), uint64(rand.Int())},
+				Decimal256{uint64(rand.Int()), uint64(rand.Int()), uint64(rand.Int()), uint64(rand.Int())},
+				Decimal256{uint64(rand.Int()), uint64(rand.Int()), uint64(rand.Int()), uint64(rand.Int())},
+				Decimal256{uint64(rand.Int()), uint64(rand.Int()), uint64(rand.Int()), uint64(rand.Int())},
+				Decimal256{uint64(rand.Int()), uint64(rand.Int()), uint64(rand.Int()), uint64(rand.Int())},
+				Decimal256{uint64(rand.Int()), uint64(rand.Int()), uint64(rand.Int()), uint64(rand.Int())},
+				Decimal256{uint64(rand.Int()), uint64(rand.Int()), uint64(rand.Int()), uint64(rand.Int())},
+			},
+		},
+	}
+	for _, test := range tests {
+		tuple := test.args
+		packer := NewPacker()
+		encodeBufToPacker(tuple, packer)
+		for i := 1; i < 10; i++ {
+			for j := i; j > 0; j-- {
+				left := make([]byte, 33)
+				right := make([]byte, 33)
+				copy(left, packer.buffer[(j-1)*33:j*33])
+				copy(right, packer.buffer[j*33:(j+1)*33])
+				if bytes.Compare(left, right) > 0 {
+					copy(packer.buffer[(j-1)*33:j*33], right)
+					copy(packer.buffer[j*33:(j+1)*33], left)
+				}
+			}
+		}
+		tt, _ := Unpack(packer.GetBuf())
+		sort.Slice(tuple, func(i, j int) bool {
+			switch left := tuple[i].(type) {
+			case Decimal256:
+				switch right := tuple[j].(type) {
+				case Decimal256:
+					return left.Less(right)
+				}
+			}
+			return false
+		})
+		require.Equal(t, tuple.String(), tt.String())
+		for i := range tuple {
+			require.Equal(t, tuple[i], tt[i])
+		}
+	}
+}
+
 func randomTuple(code int, si int) Tuple {
 	var tuple Tuple
 	switch code {
@@ -310,6 +370,10 @@ func randomTuple(code int, si int) Tuple {
 	case decimal128Code:
 		for i := 0; i < si; i++ {
 			tuple = addTupleElement(tuple, randDecimal128())
+		}
+	case decimal256Code:
+		for i := 0; i < si; i++ {
+			tuple = addTupleElement(tuple, randDecimal256())
 		}
 	case stringTypeCode:
 		for i := 0; i < si; i++ {
@@ -479,6 +543,11 @@ func randDecimal128() Decimal128 {
 	return decimal
 }
 
+func randDecimal256() Decimal256 {
+	decimal := Decimal256{uint64(rand.Int() % 10000000000), uint64(rand.Int()), 0, 0}
+	return decimal
+}
+
 func randStringType() []byte {
 	b := make([]byte, 1024)
 	crand.Read(b)
@@ -530,12 +599,44 @@ func encodeBufToPacker(tuple Tuple, p *Packer) {
 			p.EncodeDecimal64(e)
 		case Decimal128:
 			p.EncodeDecimal128(e)
+		case Decimal256:
+			p.EncodeDecimal256(e)
 		case []byte:
 			p.EncodeStringType(e)
 		case Uuid:
 			p.EncodeUuid(e)
+		case Enum:
+			p.EncodeEnum(e)
 		}
 	}
+}
+
+func TestTupleEnumRoundTrip(t *testing.T) {
+	// EncodeEnum emits [enumCode, uint16Code, <len>, <value>]: EncodeUint16 writes its
+	// own uint16Code byte after the enumCode byte. Every decode/stringify path must skip
+	// that nested uint16Code byte. This guards the composite unique index key path
+	// (e.g. UNIQUE KEY(note, status) with status ENUM), whose duplicate-key error renders
+	// the tuple via StringifyTuple - previously panicking with slice bounds out of range.
+	tuple := Tuple{[]byte("n1"), Enum(2)}
+	packer := NewPacker()
+	encodeBufToPacker(tuple, packer)
+	buf := packer.GetBuf()
+
+	// Unpack round-trip: the ENUM value must survive the extra code byte.
+	tt, err := Unpack(buf)
+	require.NoError(t, err)
+	require.Equal(t, []byte("n1"), tt[0])
+	require.IsType(t, Enum(0), tt[1])
+	require.Equal(t, Enum(2), tt[1])
+
+	// StringifyTuple renders duplicate-key errors; it must not panic and must print
+	// the ENUM index value.
+	strs, err := StringifyTuple(buf, []plan.Type{
+		{Id: int32(T_varchar)},
+		{Id: int32(T_enum)},
+	})
+	require.NoError(t, err)
+	require.Equal(t, []string{"n1", "2"}, strs)
 }
 
 func TestTupleSQLStrings(t *testing.T) {
@@ -624,6 +725,12 @@ func TestTupleSQLStrings(t *testing.T) {
 			expected: []string{"8.30"},
 		},
 		{
+			name:     "decimal256 with scale 2",
+			tuple:    Tuple{Decimal256{830, 0, 0, 0}},
+			scales:   []int32{2},
+			expected: []string{"8.30"},
+		},
+		{
 			name:     "uuid",
 			tuple:    Tuple{uuid},
 			scales:   []int32{0},
@@ -649,9 +756,9 @@ func TestTupleSQLStrings(t *testing.T) {
 		},
 		{
 			name:     "decimal with nil scales",
-			tuple:    Tuple{Decimal64(1250), Decimal128{830, 0}},
+			tuple:    Tuple{Decimal64(1250), Decimal128{830, 0}, Decimal256{640, 0, 0, 0}},
 			scales:   nil,
-			expected: []string{"1250", "830"},
+			expected: []string{"1250", "830", "640"},
 		},
 		{
 			name:     "decimal with empty scales",
@@ -668,6 +775,12 @@ func TestTupleSQLStrings(t *testing.T) {
 		{
 			name:     "negative decimal128",
 			tuple:    Tuple{Decimal128{830, 0}.Minus()},
+			scales:   []int32{2},
+			expected: []string{"-8.30"},
+		},
+		{
+			name:     "negative decimal256",
+			tuple:    Tuple{Decimal256{830, 0, 0, 0}.Minus()},
 			scales:   []int32{2},
 			expected: []string{"-8.30"},
 		},
@@ -718,6 +831,12 @@ func TestTupleSQLStringsWithEncodeDecode(t *testing.T) {
 			tuple:    Tuple{[]byte("Fruit"), Decimal64(10)},
 			scales:   []int32{0, 2},
 			expected: []string{"Fruit", "0.10"},
+		},
+		{
+			name:     "composite index decimal256+varchar",
+			tuple:    Tuple{Decimal256{123456, 0, 0, 0}, []byte("Fruit")},
+			scales:   []int32{4, 0},
+			expected: []string{"12.3456", "Fruit"},
 		},
 	}
 
@@ -1057,8 +1176,8 @@ func TestDecodeTupleWithSchema(t *testing.T) {
 		},
 		{
 			name:           "all numeric types",
-			tuple:          Tuple{int8(1), int16(2), int32(3), int64(4), uint8(5), uint16(6), uint32(7), uint64(8)},
-			expectedSchema: []T{T_int8, T_int16, T_int32, T_int64, T_uint8, T_uint16, T_uint32, T_uint64},
+			tuple:          Tuple{int8(1), int16(2), int32(3), int64(4), uint8(5), uint16(6), uint32(7), uint64(8), Decimal64(9), Decimal128{10, 0}, Decimal256{11, 0, 0, 0}},
+			expectedSchema: []T{T_int8, T_int16, T_int32, T_int64, T_uint8, T_uint16, T_uint32, T_uint64, T_decimal64, T_decimal128, T_decimal256},
 		},
 		{
 			name:           "date/time types",
@@ -1106,8 +1225,14 @@ func TestUnpackNthElement(t *testing.T) {
 		Timestamp(300),
 		Decimal64(999),
 		Decimal128{1, 2},
+		Decimal256{3, 4, 5, 6},
 		[]byte("hello"),
 		uuid,
+		// ENUM in a non-trailing position: extracting the element after it exercises
+		// UnpackNthElement's enum-skip (nested uint16Code byte), the path used by
+		// serial_extract's constant-index fast path.
+		Enum(2),
+		[]byte("world"),
 	}
 	p := NewPacker()
 	encodeBufToPacker(tuple, p)

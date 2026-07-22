@@ -30,6 +30,15 @@ func NewTableBinder(builder *QueryBuilder, ctx *BindContext) *TableBinder {
 	return b
 }
 
+// NewJoinOnBinder creates the table-expression binder used only for INNER JOIN
+// ON predicates. Other TableBinder callers must continue rejecting subqueries
+// because they do not lower Expr_Sub before execution.
+func NewJoinOnBinder(builder *QueryBuilder, ctx *BindContext) *TableBinder {
+	b := NewTableBinder(builder, ctx)
+	b.allowSubquery = true
+	return b
+}
+
 func (b *TableBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*plan.Expr, error) {
 	return b.baseBindExpr(astExpr, depth, isRoot)
 }
@@ -47,6 +56,9 @@ func (b *TableBinder) BindWinFunc(funcName string, astExpr *tree.FuncExpr, depth
 }
 
 func (b *TableBinder) BindSubquery(astExpr *tree.Subquery, isRoot bool) (*plan.Expr, error) {
+	if b.allowSubquery {
+		return b.baseBindSubquery(astExpr, isRoot)
+	}
 	return nil, moerr.NewNYI(b.GetContext(), "subquery in JOIN condition")
 }
 
