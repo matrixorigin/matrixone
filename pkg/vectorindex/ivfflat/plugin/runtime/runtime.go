@@ -164,10 +164,21 @@ func (CatalogHooks) ValidQuantization(quant, op string) error {
 			"ivfflat quantization %q (supported: float32, float16, bf16, int8, uint8)", quant)
 	}
 	if vt == types.T_array_int8 || vt == types.T_array_uint8 {
+		// ALLOWLIST, not a denylist. Rejecting only IP/cosine let L1 through,
+		// and search then divides every quantized score by QuantMul^2 — correct
+		// for squared L2 (||q(a)-q(b)||^2 = mul^2*||a-b||^2) but wrong for L1,
+		// which scales linearly (|q(a)-q(b)| = mul*|a-b|, so the inverse is
+		// 1/mul). With [min,max]=[0,1] a true L1 distance near 0.5 was reported
+		// near 0.5/255: ordering stayed monotonic, so it looked fine, while
+		// returned distances and any range predicate in source units were
+		// silently wrong. Fail at DDL instead — and any op_type added later is
+		// rejected until someone works out its inverse scale, rather than
+		// inheriting the L2 one by default.
 		switch strings.ToLower(strings.TrimSpace(op)) {
-		case metric.OpType_InnerProduct, metric.OpType_CosineDistance:
+		case metric.OpType_L2Distance, metric.OpType_L2sqDistance:
+		default:
 			return moerr.NewNotSupportedNoCtxf(
-				"ivfflat quantization %q is only supported with L2 (op_type 'vector_l2_ops'); the int8/uint8 affine quantizer does not preserve inner-product / cosine geometry", quant)
+				"ivfflat quantization %q is only supported with L2 (op_type 'vector_l2_ops' or 'vector_l2sq_ops'); the int8/uint8 affine quantizer preserves L2 geometry only, and the quantized-score rescale assumes it", quant)
 		}
 	}
 	return nil

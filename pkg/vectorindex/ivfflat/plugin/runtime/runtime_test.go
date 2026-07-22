@@ -190,4 +190,29 @@ func TestIvfflatValidQuantization(t *testing.T) {
 	// unknown quantization is rejected regardless of op
 	require.Error(t, h.ValidQuantization("float64", metric.OpType_L2Distance))
 	require.Error(t, h.ValidQuantization("garbage", metric.OpType_L2Distance))
+
+	// L1 must be rejected for int8/uint8. The gate used to be a DENYLIST naming
+	// only IP/cosine, so L1 was accepted and search then divided the quantized
+	// score by QuantMul^2 — the squared-L2 inverse. L1 scales linearly, so its
+	// inverse is 1/QuantMul: ordering stayed monotonic (hiding the bug) while
+	// returned distances were off by a factor of QuantMul.
+	for _, q := range []string{"int8", "uint8"} {
+		err := h.ValidQuantization(q, metric.OpType_L1Distance)
+		require.Errorf(t, err, "quant=%s L1 must be rejected", q)
+		require.Contains(t, err.Error(), "only supported with L2")
+	}
+
+	// L2sq is the other metric whose inverse IS QuantMul^2, so it stays allowed.
+	for _, q := range []string{"int8", "uint8"} {
+		require.NoErrorf(t, h.ValidQuantization(q, metric.OpType_L2sqDistance), "quant=%s L2sq", q)
+	}
+
+	// An op_type this gate has never seen must be REJECTED, not silently given
+	// the L2 rescale. This is what makes it an allowlist: adding a metric to
+	// pkg/vectorindex/metric without working out its inverse scale fails here
+	// rather than returning wrong distances.
+	for _, q := range []string{"int8", "uint8"} {
+		require.Errorf(t, h.ValidQuantization(q, "vector_future_ops"),
+			"quant=%s unknown op must be rejected", q)
+	}
 }
