@@ -898,6 +898,18 @@ func TestColumnPruneOperatorShape(t *testing.T) {
 	})
 
 	t.Run("sample chooses low-cost discarded carrier", func(t *testing.T) {
+		consumedPlan, err := buildOneStmt(
+			plan2.NewMockOptimizer(false),
+			t,
+			"select n_name, n_regionkey from (select sample(n_name, n_regionkey, 2 rows) from nation) s",
+		)
+		require.NoError(t, err)
+		consumedColumns, err := getPrunedTableColumns(consumedPlan)
+		require.NoError(t, err)
+		require.Equal(t, []Entry[string, []string]{
+			{tableName: "nation", colNames: []string{"n_name", "n_regionkey"}},
+		}, consumedColumns)
+
 		logicPlan, err := buildOneStmt(
 			plan2.NewMockOptimizer(false),
 			t,
