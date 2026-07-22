@@ -1,5 +1,3 @@
-# syntax=docker/dockerfile:1
-
 FROM matrixorigin/golang:1.26.4-ubuntu22.04 AS builder
 
 # goproxy
