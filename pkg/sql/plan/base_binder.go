@@ -53,7 +53,7 @@ var kAlwaysFalseExpr = &plan.Expr{
 }
 
 func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (expr *Expr, err error) {
-	if b.numericParamType != nil && !isNumericContextNode(astExpr) {
+	if b.numericParamType != nil && !b.isNumericContextNode(astExpr, depth) {
 		paramType := b.numericParamType
 		b.numericParamType = nil
 		defer func() { b.numericParamType = paramType }()
@@ -676,7 +676,7 @@ func (b *baseBinder) bindRangeCond(astExpr *tree.RangeCond, depth int32, isRoot 
 
 func (b *baseBinder) bindUnaryExpr(astExpr *tree.UnaryExpr, depth int32, isRoot bool) (*Expr, error) {
 	if (astExpr.Op == tree.UNARY_MINUS || astExpr.Op == tree.UNARY_PLUS) && b.numericParamType == nil {
-		return b.bindNumericExprWithContext(astExpr, depth, b.defaultNumericOuterType())
+		return b.bindNumericExprWithDefaultContext(astExpr, depth, b.defaultNumericOuterType())
 	}
 	return b.bindUnaryExprWithCurrentContext(astExpr, depth)
 }
@@ -697,7 +697,7 @@ func (b *baseBinder) bindUnaryExprWithCurrentContext(astExpr *tree.UnaryExpr, de
 
 func (b *baseBinder) bindBinaryExpr(astExpr *tree.BinaryExpr, depth int32, isRoot bool) (*Expr, error) {
 	if isNumericBinaryOp(astExpr.Op) && b.numericParamType == nil {
-		return b.bindNumericExprWithContext(astExpr, depth, b.defaultNumericOuterType())
+		return b.bindNumericExprWithDefaultContext(astExpr, depth, b.defaultNumericOuterType())
 	}
 	return b.bindBinaryExprWithCurrentContext(astExpr, depth)
 }
@@ -756,6 +756,23 @@ func isNumericContextNode(astExpr tree.Expr) bool {
 	}
 }
 
+func (b *baseBinder) isNumericContextNode(astExpr tree.Expr, depth int32) bool {
+	if isNumericContextNode(astExpr) {
+		return true
+	}
+	if paren, ok := astExpr.(*tree.ParenExpr); ok {
+		return b.isNumericContextNode(paren.Expr, depth)
+	}
+	functionExpr, ok := astExpr.(*tree.FuncExpr)
+	if !ok || b.numericParamType == nil || !b.numericFunctionTarget {
+		return false
+	}
+	_, ok = b.resolveNumericFunctionContext(
+		functionExpr, depth, b.numericAstColumnResolver(), b.numericParamType,
+	)
+	return ok
+}
+
 func isNumericArithmeticRoot(astExpr tree.Expr) bool {
 	switch expr := astExpr.(type) {
 	case *tree.ParenExpr:
@@ -772,6 +789,23 @@ func isNumericArithmeticRoot(astExpr tree.Expr) bool {
 }
 
 func (b *baseBinder) bindNumericExprWithContext(astExpr tree.Expr, depth int32, outer *Type) (*Expr, error) {
+	return b.bindNumericExprWithContextMode(astExpr, depth, outer, true)
+}
+
+func (b *baseBinder) bindNumericExprWithDefaultContext(
+	astExpr tree.Expr,
+	depth int32,
+	outer *Type,
+) (*Expr, error) {
+	return b.bindNumericExprWithContextMode(astExpr, depth, outer, false)
+}
+
+func (b *baseBinder) bindNumericExprWithContextMode(
+	astExpr tree.Expr,
+	depth int32,
+	outer *Type,
+	functionTarget bool,
+) (*Expr, error) {
 	if b.numericParamType != nil {
 		return b.impl.BindExpr(astExpr, depth, false)
 	}
@@ -779,7 +813,7 @@ func (b *baseBinder) bindNumericExprWithContext(astExpr tree.Expr, depth int32, 
 		return b.bindNumericExprWithoutNewContext(astExpr, depth)
 	}
 
-	scan, err := b.numericAstTypes(astExpr, depth)
+	scan, err := b.numericAstTypesWithHint(astExpr, depth, outer)
 	if err != nil || !scan.hasParam || scan.incompatible {
 		if err != nil {
 			return nil, err
@@ -793,6 +827,9 @@ func (b *baseBinder) bindNumericExprWithContext(astExpr tree.Expr, depth int32, 
 	}
 	b.numericParamType = &planType
 	defer func() { b.numericParamType = nil }()
+	previousFunctionTarget := b.numericFunctionTarget
+	b.numericFunctionTarget = functionTarget
+	defer func() { b.numericFunctionTarget = previousFunctionTarget }()
 	previousSubqueryTarget := b.numericSubqueryTarget
 	b.numericSubqueryTarget = &planType
 	defer func() { b.numericSubqueryTarget = previousSubqueryTarget }()
@@ -853,10 +890,22 @@ func shouldActivateWeakDecimal(strong []types.Type, outer *types.Type) bool {
 }
 
 func (b *baseBinder) numericAstTypes(astExpr tree.Expr, depth int32) (numericAstTypeScan, error) {
-	return b.numericAstTypesInternal(astExpr, depth, func(name *tree.UnresolvedName) (numericAstTypeScan, bool) {
+	return b.numericAstTypesWithHint(astExpr, depth, nil)
+}
+
+func (b *baseBinder) numericAstTypesWithHint(
+	astExpr tree.Expr,
+	depth int32,
+	hint *Type,
+) (numericAstTypeScan, error) {
+	return b.numericAstTypesInternalWithHint(astExpr, depth, b.numericAstColumnResolver(), hint)
+}
+
+func (b *baseBinder) numericAstColumnResolver() numericAstColumnResolver {
+	return func(name *tree.UnresolvedName) (numericAstTypeScan, bool) {
 		typ, ok := b.numericColumnType(name)
 		return numericAstTypedOperand(typ), ok
-	})
+	}
 }
 
 type numericAstColumnResolver func(*tree.UnresolvedName) (numericAstTypeScan, bool)
@@ -865,6 +914,15 @@ func (b *baseBinder) numericAstTypesInternal(
 	astExpr tree.Expr,
 	depth int32,
 	resolveColumn numericAstColumnResolver,
+) (numericAstTypeScan, error) {
+	return b.numericAstTypesInternalWithHint(astExpr, depth, resolveColumn, nil)
+}
+
+func (b *baseBinder) numericAstTypesInternalWithHint(
+	astExpr tree.Expr,
+	depth int32,
+	resolveColumn numericAstColumnResolver,
+	hint *Type,
 ) (numericAstTypeScan, error) {
 	switch expr := astExpr.(type) {
 	case *tree.ParamExpr:
@@ -881,23 +939,23 @@ func (b *baseBinder) numericAstTypesInternal(
 		scan.hasParam = true
 		return scan, err
 	case *tree.ParenExpr:
-		return b.numericAstTypesInternal(expr.Expr, depth, resolveColumn)
+		return b.numericAstTypesInternalWithHint(expr.Expr, depth, resolveColumn, hint)
 	case *tree.BinaryExpr:
 		if !isNumericBinaryOp(expr.Op) {
 			return numericAstTypeScan{}, nil
 		}
-		left, err := b.numericAstTypesInternal(expr.Left, depth, resolveColumn)
+		left, err := b.numericAstTypesInternalWithHint(expr.Left, depth, resolveColumn, hint)
 		if err != nil {
 			return numericAstTypeScan{}, err
 		}
-		right, err := b.numericAstTypesInternal(expr.Right, depth, resolveColumn)
+		right, err := b.numericAstTypesInternalWithHint(expr.Right, depth, resolveColumn, hint)
 		if err != nil {
 			return numericAstTypeScan{}, err
 		}
 		return left.merge(right), nil
 	case *tree.UnaryExpr:
 		if expr.Op == tree.UNARY_PLUS || expr.Op == tree.UNARY_MINUS {
-			return b.numericAstTypesInternal(expr.Expr, depth, resolveColumn)
+			return b.numericAstTypesInternalWithHint(expr.Expr, depth, resolveColumn, hint)
 		}
 		return numericAstTypeScan{}, nil
 	case *tree.CastExpr:
@@ -921,7 +979,7 @@ func (b *baseBinder) numericAstTypesInternal(
 		if ok {
 			var scan numericAstTypeScan
 			for _, idx := range indexes {
-				value, err := b.numericAstTypesInternal(expr.Exprs[idx], depth, resolveColumn)
+				value, err := b.numericAstTypesInternalWithHint(expr.Exprs[idx], depth, resolveColumn, hint)
 				if err != nil {
 					return numericAstTypeScan{}, err
 				}
@@ -931,7 +989,30 @@ func (b *baseBinder) numericAstTypesInternal(
 		}
 		typ, known, err := b.numericAstStaticType(expr, depth, resolveColumn)
 		if err != nil || !known {
-			return numericAstTypeScan{}, err
+			if err != nil {
+				return numericAstTypeScan{}, err
+			}
+			resolved, ok := b.resolveNumericFunctionContext(expr, depth, resolveColumn, hint)
+			if ok {
+				scan := numericAstTypedOperand(resolved.returnType)
+				for _, arg := range expr.Exprs {
+					argScan, scanErr := b.numericAstTypesInternalWithHint(arg, depth, resolveColumn, hint)
+					if scanErr != nil {
+						return numericAstTypeScan{}, scanErr
+					}
+					scan.hasParam = scan.hasParam || argScan.hasParam
+				}
+				return scan, nil
+			}
+			var scan numericAstTypeScan
+			for _, arg := range expr.Exprs {
+				argScan, scanErr := b.numericAstTypesInternalWithHint(arg, depth, resolveColumn, hint)
+				if scanErr != nil {
+					return numericAstTypeScan{}, scanErr
+				}
+				scan.hasParam = scan.hasParam || argScan.hasParam
+			}
+			return scan, nil
 		}
 		if !makeTypeByPlan2Type(typ).IsNumeric() {
 			return numericAstTypeScan{}, nil
@@ -943,14 +1024,14 @@ func (b *baseBinder) numericAstTypesInternal(
 			if when == nil || when.Val == nil {
 				continue
 			}
-			value, err := b.numericAstTypesInternal(when.Val, depth, resolveColumn)
+			value, err := b.numericAstTypesInternalWithHint(when.Val, depth, resolveColumn, hint)
 			if err != nil {
 				return numericAstTypeScan{}, err
 			}
 			scan = scan.merge(value)
 		}
 		if expr.Else != nil {
-			value, err := b.numericAstTypesInternal(expr.Else, depth, resolveColumn)
+			value, err := b.numericAstTypesInternalWithHint(expr.Else, depth, resolveColumn, hint)
 			if err != nil {
 				return numericAstTypeScan{}, err
 			}
@@ -1397,6 +1478,84 @@ func numericAstFunctionName(astExpr *tree.FuncExpr) string {
 		return ""
 	}
 	return strings.ToLower(funcRef.ColName())
+}
+
+type numericFunctionContext struct {
+	returnType Type
+	argTypes   []Type
+	dynamic    []bool
+}
+
+func (b *baseBinder) resolveNumericFunctionContext(
+	expr *tree.FuncExpr,
+	depth int32,
+	resolveColumn numericAstColumnResolver,
+	hint *Type,
+) (numericFunctionContext, bool) {
+	return b.resolveNumericFunctionArgs(
+		numericAstFunctionName(expr), expr.Exprs, depth, resolveColumn, hint,
+	)
+}
+
+func (b *baseBinder) resolveNumericFunctionArgs(
+	name string,
+	args []tree.Expr,
+	depth int32,
+	resolveColumn numericAstColumnResolver,
+	hint *Type,
+) (numericFunctionContext, bool) {
+	name = strings.ToLower(name)
+	if !supportsGenericNumericFunctionContext(name) || hint == nil || function.GetFunctionIsAggregateByName(name) ||
+		function.GetFunctionIsWinFunByName(name) {
+		return numericFunctionContext{}, false
+	}
+
+	argTypes := make([]types.Type, len(args))
+	dynamic := make([]bool, len(args))
+	for i, arg := range args {
+		typ, known, err := b.numericAstStaticType(arg, depth, resolveColumn)
+		if err != nil {
+			return numericFunctionContext{}, false
+		}
+		if known {
+			argTypes[i] = makeTypeByPlan2Type(typ)
+			continue
+		}
+		argTypes[i] = makeTypeByPlan2Type(*hint)
+		dynamic[i] = true
+	}
+
+	resolved, err := function.GetFunctionByName(b.GetContext(), name, argTypes)
+	if err != nil || !resolved.GetReturnType().IsNumeric() {
+		return numericFunctionContext{}, false
+	}
+	if targets, shouldCast := resolved.ShouldDoImplicitTypeCast(); shouldCast {
+		if len(targets) != len(argTypes) {
+			return numericFunctionContext{}, false
+		}
+		argTypes = targets
+	}
+
+	returnType := resolved.GetReturnType()
+	context := numericFunctionContext{
+		returnType: makePlan2Type(&returnType),
+		argTypes:   make([]Type, len(argTypes)),
+		dynamic:    dynamic,
+	}
+	for i := range argTypes {
+		context.argTypes[i] = makePlan2Type(&argTypes[i])
+	}
+	return context, true
+}
+
+func supportsGenericNumericFunctionContext(name string) bool {
+	switch name {
+	case "", "+", "-", "*", "/", "%", "div", "^", "unary_plus", "unary_minus", "mod",
+		"case", "if", "coalesce", "ifnull", "nullif":
+		return false
+	default:
+		return true
+	}
 }
 
 func isNumericContextFunction(name string) bool {
@@ -2030,7 +2189,7 @@ func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32, isRoot bo
 	}
 	funcName := funcRef.ColName()
 	if strings.EqualFold(funcName, "mod") && b.numericParamType == nil {
-		return b.bindNumericExprWithContext(astExpr, depth, b.defaultNumericOuterType())
+		return b.bindNumericExprWithDefaultContext(astExpr, depth, b.defaultNumericOuterType())
 	}
 
 	if function.GetFunctionIsAggregateByName(funcName) && astExpr.WindowSpec == nil {
@@ -2194,6 +2353,13 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		args = []*Expr{serialExpr, idxExpr, typeExpr}
 	} else {
 		args = make([]*Expr, len(astArgs))
+		var functionContext numericFunctionContext
+		hasFunctionContext := false
+		if b.numericFunctionTarget {
+			functionContext, hasFunctionContext = b.resolveNumericFunctionArgs(
+				name, astArgs, depth, b.numericAstColumnResolver(), b.numericParamType,
+			)
+		}
 		for idx, arg := range astArgs {
 			paramType := b.numericParamType
 			subqueryTarget := b.numericSubqueryTarget
@@ -2201,6 +2367,16 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 				!numericFunctionArgKeepsContext(name, idx, len(astArgs)) {
 				b.numericParamType = nil
 				b.numericSubqueryTarget = nil
+			} else if paramType != nil && hasFunctionContext {
+				if functionContext.dynamic[idx] &&
+					makeTypeByPlan2Type(functionContext.argTypes[idx]).IsNumeric() {
+					argTarget := functionContext.argTypes[idx]
+					b.numericParamType = &argTarget
+					b.numericSubqueryTarget = &argTarget
+				} else {
+					b.numericParamType = nil
+					b.numericSubqueryTarget = nil
+				}
 			}
 			expr, err := b.impl.BindExpr(arg, depth, false)
 			b.numericParamType = paramType

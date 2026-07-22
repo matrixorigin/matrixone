@@ -459,6 +459,7 @@ type baseBinder struct {
 	boundCols             []string
 	numericParamType      *Type
 	numericSubqueryTarget *Type
+	numericFunctionTarget bool
 }
 
 type DefaultBinder struct {

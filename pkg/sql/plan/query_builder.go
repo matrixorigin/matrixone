@@ -3837,7 +3837,8 @@ func seedNumericTableProjectionTypes(builder *QueryBuilder, stmt *tree.Select, c
 				if target, ok := numericProjectionExprTarget(
 					builder, ctx, expr, ctx.numericProjectionTypes[targetPos],
 				); ok {
-					seedNumericExprColumnTargets(sources, expr, target)
+					binder := NewProjectionBinder(builder, ctx, nil)
+					seedNumericExprColumnTargets(binder, sources, expr, target)
 				}
 			}
 			targetPos++
@@ -3873,60 +3874,82 @@ func numericProjectionExprTarget(
 	expr tree.Expr,
 	outer Type,
 ) (Type, bool) {
-	if outer.Id == 0 || !isNumericProjectionContextRoot(expr) {
+	if outer.Id == 0 {
 		return Type{}, false
 	}
 	binder := NewProjectionBinder(builder, ctx, nil)
-	scan, err := binder.numericAstTypesInternal(expr, 0, nil)
+	if !isNumericProjectionContextRoot(binder, expr, outer) {
+		return Type{}, false
+	}
+	scan, err := binder.numericAstTypesInternalWithHint(expr, 0, nil, &outer)
 	if err != nil || scan.incompatible {
 		return Type{}, false
 	}
 	return numericTypeFromAstScan(scan, &outer)
 }
 
-func isNumericProjectionContextRoot(expr tree.Expr) bool {
+func isNumericProjectionContextRoot(binder *ProjectionBinder, expr tree.Expr, outer Type) bool {
 	switch item := expr.(type) {
 	case *tree.ParenExpr:
-		return isNumericProjectionContextRoot(item.Expr)
+		return isNumericProjectionContextRoot(binder, item.Expr, outer)
 	case *tree.CaseExpr:
 		return true
 	case *tree.FuncExpr:
 		_, ok := numericFunctionResultArgs(numericAstFunctionName(item), len(item.Exprs))
+		if ok {
+			return true
+		}
+		_, ok = binder.resolveNumericFunctionContext(item, 0, nil, &outer)
 		return ok
 	default:
 		return isNumericArithmeticRoot(expr)
 	}
 }
 
-func seedNumericExprColumnTargets(sources []numericProjectionSourceInfo, expr tree.Expr, target Type) {
+func seedNumericExprColumnTargets(
+	binder *ProjectionBinder,
+	sources []numericProjectionSourceInfo,
+	expr tree.Expr,
+	target Type,
+) {
 	switch item := expr.(type) {
 	case *tree.ParenExpr:
-		seedNumericExprColumnTargets(sources, item.Expr, target)
+		seedNumericExprColumnTargets(binder, sources, item.Expr, target)
 	case *tree.BinaryExpr:
 		if isNumericBinaryOp(item.Op) {
-			seedNumericExprColumnTargets(sources, item.Left, target)
-			seedNumericExprColumnTargets(sources, item.Right, target)
+			seedNumericExprColumnTargets(binder, sources, item.Left, target)
+			seedNumericExprColumnTargets(binder, sources, item.Right, target)
 		}
 	case *tree.UnaryExpr:
 		if item.Op == tree.UNARY_PLUS || item.Op == tree.UNARY_MINUS {
-			seedNumericExprColumnTargets(sources, item.Expr, target)
+			seedNumericExprColumnTargets(binder, sources, item.Expr, target)
 		}
 	case *tree.FuncExpr:
 		indexes, ok := numericFunctionResultArgs(numericAstFunctionName(item), len(item.Exprs))
+		if ok {
+			for _, idx := range indexes {
+				seedNumericExprColumnTargets(binder, sources, item.Exprs[idx], target)
+			}
+			return
+		}
+		context, ok := binder.resolveNumericFunctionContext(item, 0, nil, &target)
 		if !ok {
 			return
 		}
-		for _, idx := range indexes {
-			seedNumericExprColumnTargets(sources, item.Exprs[idx], target)
+		for idx, argType := range context.argTypes {
+			if !context.dynamic[idx] || !makeTypeByPlan2Type(argType).IsNumeric() {
+				continue
+			}
+			seedNumericExprColumnTargets(binder, sources, item.Exprs[idx], argType)
 		}
 	case *tree.CaseExpr:
 		for _, when := range item.Whens {
 			if when != nil {
-				seedNumericExprColumnTargets(sources, when.Val, target)
+				seedNumericExprColumnTargets(binder, sources, when.Val, target)
 			}
 		}
 		if item.Else != nil {
-			seedNumericExprColumnTargets(sources, item.Else, target)
+			seedNumericExprColumnTargets(binder, sources, item.Else, target)
 		}
 	case *tree.UnresolvedName:
 		if !item.Star {

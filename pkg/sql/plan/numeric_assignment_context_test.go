@@ -85,6 +85,24 @@ func TestPreparedNumericContextUsesInsertSelectTarget(t *testing.T) {
 			paramCount: 2,
 		},
 		{
+			name:       "dynamic abs inherits target",
+			sql:        "insert into constraint_test.emp (sal) select abs(?)",
+			want:       types.T_decimal64,
+			paramCount: 1,
+		},
+		{
+			name:       "parenthesized dynamic abs inherits target",
+			sql:        "insert into constraint_test.emp (sal) select (abs(?))",
+			want:       types.T_decimal64,
+			paramCount: 1,
+		},
+		{
+			name:       "dynamic floor inherits target",
+			sql:        "insert into constraint_test.emp (sal) select floor(?)",
+			want:       types.T_decimal64,
+			paramCount: 1,
+		},
+		{
 			name:       "parenthesized select",
 			sql:        "insert into constraint_test.emp (sal) (select ? + ?)",
 			want:       types.T_decimal64,
@@ -306,6 +324,12 @@ func TestPreparedNumericContextUsesInsertSelectTarget(t *testing.T) {
 			paramCount: 2,
 		},
 		{
+			name:       "derived dynamic abs passthrough",
+			sql:        "insert into constraint_test.emp (sal) select abs(d.x) from (select ? + ? as x) d",
+			want:       types.T_decimal64,
+			paramCount: 2,
+		},
+		{
 			name: "derived if root passthrough",
 			sql: "insert into constraint_test.emp (sal) select if(1 = 1, d.x, 0) " +
 				"from (select ? + ? as x) d",
@@ -368,6 +392,13 @@ func TestPreparedNumericContextUsesInsertSelectTarget(t *testing.T) {
 			name: "cte arithmetic passthrough",
 			sql: "insert into constraint_test.emp (sal) with c as (select ? + ? as x) " +
 				"select x + 0 from c",
+			want:       types.T_decimal64,
+			paramCount: 2,
+		},
+		{
+			name: "cte dynamic abs passthrough",
+			sql: "insert into constraint_test.emp (sal) with c as (select ? + ? as x) " +
+				"select abs(c.x) from c",
 			want:       types.T_decimal64,
 			paramCount: 2,
 		},
@@ -489,6 +520,23 @@ func TestPreparedNumericContextUsesInsertSelectTarget(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestPreparedNumericFunctionControlArgUsesOverloadType(t *testing.T) {
+	optimizer := NewMockOptimizer(false)
+	stmts, err := mysql.Parse(
+		optimizer.CurrentContext().GetContext(),
+		"insert into constraint_test.emp (sal) select round(?, ?)",
+		1,
+	)
+	require.NoError(t, err)
+
+	queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true)
+	require.NoError(t, err)
+
+	paramTypes := collectUniquePlanParamTypes(t, queryPlan)
+	require.Equal(t, planpb.Type{Id: int32(types.T_decimal64), Width: 7, Scale: 2}, paramTypes[1])
+	require.Equal(t, int32(types.T_int64), paramTypes[2].Id)
 }
 
 func TestSeedNumericSourceTargetKeepsAmbiguousPositionEmpty(t *testing.T) {
@@ -1095,6 +1143,12 @@ func TestPreparedNumericContextUsesUpdateTarget(t *testing.T) {
 			want: planpb.Type{Id: int32(types.T_decimal64), Width: 7, Scale: 2},
 		},
 		{
+			name:       "update dynamic abs inherits target",
+			sql:        "update constraint_test.emp set sal = abs(?) where empno = 1",
+			want:       planpb.Type{Id: int32(types.T_decimal64), Width: 7, Scale: 2},
+			paramCount: 1,
+		},
+		{
 			name: "update double sibling overrides target",
 			sql:  "update constraint_test.emp set sal = (? + ?) + cast(1 as double) where empno = 1",
 			want: planpb.Type{Id: int32(types.T_float64)},
@@ -1139,6 +1193,13 @@ func TestPreparedNumericContextUsesUpdateTarget(t *testing.T) {
 			sql: "insert into constraint_test.emp (empno, sal) values (1, 1) " +
 				"on duplicate key update sal = ? + ?",
 			want: planpb.Type{Id: int32(types.T_decimal64), Width: 7, Scale: 2},
+		},
+		{
+			name: "on duplicate key update dynamic abs inherits target",
+			sql: "insert into constraint_test.emp (empno, sal) values (1, 1) " +
+				"on duplicate key update sal = abs(?)",
+			want:       planpb.Type{Id: int32(types.T_decimal64), Width: 7, Scale: 2},
+			paramCount: 1,
 		},
 		{
 			name: "on duplicate key update scalar subquery",
@@ -1241,6 +1302,12 @@ func TestPreparedNumericContextUsesUpdateTarget(t *testing.T) {
 		{
 			name: "update from derived conditional root",
 			sql: "update constraint_test.emp set sal = if(1 = 1, d.x, 0) " +
+				"from (select ? + ? as x) d where emp.empno = 1",
+			want: planpb.Type{Id: int32(types.T_decimal64), Width: 7, Scale: 2},
+		},
+		{
+			name: "update from derived dynamic abs root",
+			sql: "update constraint_test.emp set sal = abs(d.x) " +
 				"from (select ? + ? as x) d where emp.empno = 1",
 			want: planpb.Type{Id: int32(types.T_decimal64), Width: 7, Scale: 2},
 		},
