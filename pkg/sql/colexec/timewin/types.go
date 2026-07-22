@@ -49,6 +49,14 @@ type container struct {
 	aggExe []colexec.ExpressionExecutor
 	aggVec [][]*vector.Vector
 
+	partExe []colexec.ExpressionExecutor
+	partVec [][]*vector.Vector
+	// partSet broadcasts one input row's partition key across a whole flushed
+	// batch: every window in a flush belongs to a single partition, because
+	// the operator flushes at each boundary.
+	partSet []func(v, w *vector.Vector, sel int64, length int) error
+	partOut []*vector.Vector
+
 	tsExe colexec.ExpressionExecutor
 	tsVec []*vector.Vector
 	tsOid types.T
@@ -83,6 +91,26 @@ type container struct {
 
 	last    bool
 	lastVal types.Datetime
+
+	// partIdx / partRow locate the row whose partition key the window
+	// currently being accumulated belongs to; -1 before the first window.
+	partIdx int
+	partRow int
+	// partEnd mirrors `end` but for one partition: its rows are exhausted, so
+	// windows keep sliding until they pass the partition's last value.
+	partEnd bool
+	// breakVecIdx / breakRowIdx hold the first row of the next partition, the
+	// row the restart re-anchors on.
+	breakVecIdx int
+	breakRowIdx int
+	// partLast* track the last row seen inside the current partition, playing
+	// the role `lastVal` and the final buffered row play for the whole stream.
+	partLastVal    types.Datetime
+	partLastVecIdx int
+	partLastRowIdx int
+	// partitionBreak marks that the pending flush ends a partition, so the
+	// next window must restart rather than slide.
+	partitionBreak bool
 }
 
 type TimeWin struct {
@@ -90,6 +118,11 @@ type TimeWin struct {
 
 	Types []types.Type
 	Aggs  []aggexec.AggFuncExecExpression
+
+	// PartitionBy holds the GROUP BY keys other than the window's timestamp.
+	// Each distinct key value gets its own window sequence, so input must
+	// arrive ordered by these keys first.
+	PartitionBy []*plan.Expr
 
 	TsType  plan.Type
 	Ts      *plan.Expr
@@ -138,6 +171,20 @@ func (timeWin *TimeWin) Release() {
 func (timeWin *TimeWin) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &timeWin.ctr
 	ctr.resetExes()
+	// The last flushed batch and the aggregate executors belong to the finished
+	// generation. In the sliding path the batch owns its aggregate prefix (the
+	// boundaries belong to their expression executors and the partition keys to
+	// partOut); in the interval path every vector is a buffer that outlives the
+	// batch, so only the reference is dropped. Aggregates cannot be rewound
+	// once Flush has run (see makeAggExecutors), so they are discarded here and
+	// rebuilt by Prepare. The tsVec/aggVec/partVec buffers stay allocated: with
+	// the cursors back at zero the next generation reuses them from index 0.
+	if timeWin.EndExpr == nil {
+		ctr.freeFlushedAggVecs(proc.Mp())
+	}
+	ctr.bat = nil
+	ctr.freeAgg()
+	ctr.aggs = nil
 	ctr.resetParam(timeWin)
 }
 
@@ -208,6 +255,11 @@ func (ctr *container) resetExes() {
 			exe.ResetForNextQuery()
 		}
 	}
+	for _, exe := range ctr.partExe {
+		if exe != nil {
+			exe.ResetForNextQuery()
+		}
+	}
 	if ctr.tsExe != nil {
 		ctr.tsExe.ResetForNextQuery()
 	}
@@ -219,20 +271,52 @@ func (ctr *container) resetExes() {
 	}
 }
 
+// resetParam rewinds every piece of per-generation state, so a Reset/Prepare
+// cycle starts from the same blank slate as a fresh operator. Any cursor left
+// over from the previous run would either read stale buffered rows or, worse,
+// route receive into nextWindow with window bounds that no longer exist.
 func (ctr *container) resetParam(timeWin *TimeWin) {
 	if timeWin.EndExpr != nil {
 		ctr.status = interval
 	} else {
 		ctr.status = receive
 	}
+	ctr.i = 0
 	ctr.end = false
 	ctr.group = -1
 	ctr.wStart = nil
 	ctr.wEnd = nil
+
+	ctr.curVecIdx = 0
+	ctr.curRowIdx = 0
+	ctr.preVecIdx = 0
+	ctr.preRowIdx = 0
+	ctr.left = 0
+	ctr.right = 0
+	ctr.nextLeft = 0
+	ctr.nextRight = 0
+	ctr.withoutFill = false
+	ctr.last = false
+	ctr.lastVal = 0
+
+	ctr.partIdx = -1
+	ctr.partRow = 0
+	ctr.partEnd = false
+	ctr.breakVecIdx = 0
+	ctr.breakRowIdx = 0
+	ctr.partLastVal = 0
+	ctr.partLastVecIdx = 0
+	ctr.partLastRowIdx = 0
+	ctr.partitionBreak = false
 }
 
 func (ctr *container) freeExes() {
 	for _, exe := range ctr.aggExe {
+		if exe != nil {
+			exe.Free()
+		}
+	}
+	for _, exe := range ctr.partExe {
 		if exe != nil {
 			exe.Free()
 		}
@@ -278,4 +362,36 @@ func (ctr *container) freeVector(mp *mpool.MPool) {
 		}
 	}
 	ctr.aggVec = nil
+
+	for _, vecs := range ctr.partVec {
+		for _, vec := range vecs {
+			if vec != nil {
+				vec.Free(mp)
+			}
+		}
+	}
+	ctr.partVec = nil
+
+	ctr.freePartOut(mp)
+
+	// calRes only ever hands the *cast results* of these two to the output
+	// batch; the datetime staging vectors themselves are owned here and were
+	// never released before.
+	if ctr.startVec != nil {
+		ctr.startVec.Free(mp)
+		ctr.startVec = nil
+	}
+	if ctr.endVec != nil {
+		ctr.endVec.Free(mp)
+		ctr.endVec = nil
+	}
+}
+
+func (ctr *container) freePartOut(mp *mpool.MPool) {
+	for _, vec := range ctr.partOut {
+		if vec != nil {
+			vec.Free(mp)
+		}
+	}
+	ctr.partOut = nil
 }

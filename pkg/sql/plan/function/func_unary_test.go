@@ -7233,6 +7233,7 @@ type userLevelLockTestService struct {
 	unlockErrByTxnID map[string]error
 	blockUnlock      atomic.Bool
 	unlockStarted    chan struct{}
+	unlockResume     chan struct{}
 	unlockMu         sync.Mutex
 	unlockedTxnIDs   [][]byte
 }
@@ -7294,8 +7295,16 @@ func (s *userLevelLockTestService) Unlock(ctx context.Context, txnID []byte, com
 			default:
 			}
 		}
-		<-ctx.Done()
-		return ctx.Err()
+		if s.unlockResume != nil {
+			select {
+			case <-s.unlockResume:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		} else {
+			<-ctx.Done()
+			return ctx.Err()
+		}
 	}
 	if s.unlockErr != nil {
 		return s.unlockErr
@@ -8235,6 +8244,32 @@ func TestFailedFastFailUserLevelLockAttemptsAreUnlocked(t *testing.T) {
 	})
 }
 
+func TestFailedUserLevelLockAttemptsCleanupUnexpectedErrors(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		service := services[0].(*userLevelLockTestService)
+		holder := newUserLevelLockTestProcess(t, services[0], "acc")
+		lockName := "unexpected_error_cleanup"
+		lockErr := moerr.NewInternalErrorNoCtx("synthetic lock failed after registration")
+
+		service.lockErrAfterHold = lockErr
+		v, err := getUserLevelLock(lockName, 0, holder)
+		require.ErrorIs(t, err, lockErr)
+		require.Equal(t, int64(0), v)
+		owner, connID := holder.GetUserLevelLockIdentity()
+		requireUserLevelLockTxnUnlocked(t, service, userLevelLockTxnID(owner, connID, lockName))
+		require.Empty(t, UserLevelLocksForMigration(holder))
+
+		_, isNull, err := releaseUserLevelLock("release_"+lockName, holder)
+		require.ErrorIs(t, err, lockErr)
+		require.False(t, isNull)
+		requireUserLevelLockTxnUnlocked(t, service, userLevelLockProbeTxnID(owner, connID, "release_"+lockName, "release"))
+
+		_, err = isUserLevelLockFree("free_"+lockName, holder)
+		require.ErrorIs(t, err, lockErr)
+		requireUserLevelLockTxnUnlocked(t, service, userLevelLockProbeTxnID(owner, connID, "free_"+lockName, "is_free"))
+	})
+}
+
 func TestReleaseUserLevelLocksOnSessionCloseTimeoutDetachesLocalState(t *testing.T) {
 	runUserLevelLockTest(t, func(services []lockservice.LockService) {
 		service := services[0].(*userLevelLockTestService)
@@ -8371,6 +8406,62 @@ func TestReleaseUserLevelLocksOnSessionCloseFencesReusedConnectionGeneration(t *
 	})
 }
 
+func TestDetachedUserLevelLockCleanupPreservesConcurrentTxnIDs(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		service := services[0].(*userLevelLockTestService)
+		service.blockUnlock.Store(true)
+		service.unlockStarted = make(chan struct{}, 1)
+		service.unlockResume = make(chan struct{})
+
+		key := detachedUserLevelLockCleanupKey{
+			serviceID: service.GetServiceID(),
+			owner:     "owner-concurrent",
+			name:      "lock-concurrent",
+			connID:    1001,
+			kind:      "lock",
+		}
+		txn1 := []byte("cleanup-concurrent-1")
+		txn2 := []byte("cleanup-concurrent-2")
+		service.unlockErrByTxnID = map[string]error{string(txn2): context.DeadlineExceeded}
+
+		detachedUserLevelLockCleanups.Lock()
+		detachedUserLevelLockCleanups.entries[key] = &detachedUserLevelLockCleanupEntry{
+			key:     key,
+			ls:      service,
+			txnIDs:  [][]byte{txn1},
+			queued:  true,
+			backoff: userLevelLockDetachedCleanupInitialBackoff,
+		}
+		detachedUserLevelLockCleanups.Unlock()
+
+		done := make(chan struct{})
+		go func() {
+			runDetachedUserLevelLockCleanupAttempt(key)
+			close(done)
+		}()
+
+		select {
+		case <-service.unlockStarted:
+		case <-time.After(time.Second):
+			t.Fatal("cleanup attempt did not start")
+		}
+		require.True(t, enqueueDetachedUserLevelLockTxnCleanup(service, key, [][]byte{txn2}))
+		close(service.unlockResume)
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Fatal("cleanup attempt did not finish")
+		}
+
+		require.Eventually(t, func() bool {
+			detachedUserLevelLockCleanups.Lock()
+			defer detachedUserLevelLockCleanups.Unlock()
+			entry := detachedUserLevelLockCleanups.entries[key]
+			return entry != nil && len(entry.txnIDs) == 1 && bytes.Equal(entry.txnIDs[0], txn2)
+		}, 2*time.Second, 10*time.Millisecond)
+	})
+}
+
 func TestDetachedUserLevelLockCleanupQueueIsBoundedAndDeduped(t *testing.T) {
 	runUserLevelLockTest(t, func(services []lockservice.LockService) {
 		service := services[0].(*userLevelLockTestService)
@@ -8381,7 +8472,7 @@ func TestDetachedUserLevelLockCleanupQueueIsBoundedAndDeduped(t *testing.T) {
 		}
 		require.Equal(t, userLevelLockDetachedCleanupMaxEntries, detachedUserLevelLockCleanupCount())
 		require.True(t, enqueueDetachedUserLevelLockCleanup(service, "owner-bounded-extra", 1001, "overflow_lock"))
-		require.Equal(t, userLevelLockDetachedCleanupMaxEntries+1, detachedUserLevelLockCleanupCount())
+		require.LessOrEqual(t, detachedUserLevelLockCleanupCount(), userLevelLockDetachedCleanupMaxEntries+userLevelLockDetachedCleanupOverflowShards)
 		require.Equal(t, 1, detachedUserLevelLockCleanupCountForKind("overflow"))
 
 		states := []UserLevelLockState{
@@ -8389,8 +8480,8 @@ func TestDetachedUserLevelLockCleanupQueueIsBoundedAndDeduped(t *testing.T) {
 			{Name: "close_overload_b", Count: 1},
 		}
 		require.True(t, enqueueDetachedUserLevelLockCleanups(service, "owner-close-overload", 1001, states))
-		require.Equal(t, userLevelLockDetachedCleanupMaxEntries+1, detachedUserLevelLockCleanupCount())
-		require.Equal(t, 1, detachedUserLevelLockCleanupCountForKind("overflow"))
+		require.LessOrEqual(t, detachedUserLevelLockCleanupCount(), userLevelLockDetachedCleanupMaxEntries+userLevelLockDetachedCleanupOverflowShards)
+		require.LessOrEqual(t, detachedUserLevelLockCleanupCountForKind("overflow"), userLevelLockDetachedCleanupOverflowShards)
 
 		holder := newUserLevelLockTestProcess(t, services[0], "acc")
 		contender := newUserLevelLockTestProcess(t, services[1], "acc")
@@ -8401,7 +8492,7 @@ func TestDetachedUserLevelLockCleanupQueueIsBoundedAndDeduped(t *testing.T) {
 		}
 		releaseUserLevelLocksOnSessionCloseWithTimeout(holder, 10*time.Millisecond)
 		require.Empty(t, UserLevelLocksForMigration(holder))
-		require.Equal(t, 1, detachedUserLevelLockCleanupCountForKind("overflow"))
+		require.LessOrEqual(t, detachedUserLevelLockCleanupCountForKind("overflow"), userLevelLockDetachedCleanupOverflowShards)
 
 		v, err := getUserLevelLock("close_overload_a", 0, contender)
 		require.NoError(t, err)
@@ -8413,6 +8504,16 @@ func TestDetachedUserLevelLockCleanupQueueIsBoundedAndDeduped(t *testing.T) {
 			return err == nil && v == 1
 		}, 3*time.Second, 10*time.Millisecond)
 	})
+}
+
+func TestDetachedUserLevelLockCleanupEntryPayloadIsBounded(t *testing.T) {
+	entry := &detachedUserLevelLockCleanupEntry{}
+	for i := 0; i < userLevelLockDetachedCleanupMaxTxnIDsPerEntry; i++ {
+		require.True(t, mergeDetachedUserLevelLockTxnIDs(entry, [][]byte{[]byte(fmt.Sprintf("txn-%d", i))}))
+	}
+	require.Len(t, entry.txnIDs, userLevelLockDetachedCleanupMaxTxnIDsPerEntry)
+	require.False(t, mergeDetachedUserLevelLockTxnIDs(entry, [][]byte{[]byte("txn-overflow")}))
+	require.Len(t, entry.txnIDs, userLevelLockDetachedCleanupMaxTxnIDsPerEntry)
 }
 
 func TestReleaseAndIsFreeProbeUnlocksHonorCancellationAndCleanupAfterRecovery(t *testing.T) {

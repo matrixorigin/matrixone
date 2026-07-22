@@ -6982,6 +6982,8 @@ const userLevelLockDetachedCleanupAttemptTimeout = time.Second
 const userLevelLockDetachedCleanupInitialBackoff = 10 * time.Millisecond
 const userLevelLockDetachedCleanupMaxBackoff = time.Second
 const userLevelLockDetachedCleanupMaxEntries = 1024
+const userLevelLockDetachedCleanupOverflowShards = 16
+const userLevelLockDetachedCleanupMaxTxnIDsPerEntry = 2048
 const userLevelLockDetachedCleanupWorkers = 4
 
 type userLevelLockKey struct {
@@ -7002,6 +7004,7 @@ type detachedUserLevelLockCleanupEntry struct {
 	ls      lockservice.LockService
 	txnIDs  [][]byte
 	queued  bool
+	running bool
 	backoff time.Duration
 }
 
@@ -7262,20 +7265,29 @@ func userLevelLockCleanupAttemptContext(ctx context.Context) (context.Context, c
 	return context.WithTimeout(ctx, userLevelLockDetachedCleanupAttemptTimeout)
 }
 
-func detachedUserLevelLockOverflowCleanupKey(key detachedUserLevelLockCleanupKey) detachedUserLevelLockCleanupKey {
+func detachedUserLevelLockOverflowCleanupKey(key detachedUserLevelLockCleanupKey, shard uint64) detachedUserLevelLockCleanupKey {
 	return detachedUserLevelLockCleanupKey{
 		serviceID: key.serviceID,
 		owner:     key.serviceID,
-		name:      key.serviceID,
+		name:      fmt.Sprintf("%s:%d", key.serviceID, shard),
+		connID:    shard,
 		kind:      "overflow",
 	}
 }
 
-func mergeDetachedUserLevelLockTxnIDs(entry *detachedUserLevelLockCleanupEntry, txnIDs [][]byte) {
-	if len(txnIDs) == 0 {
-		return
+func detachedUserLevelLockOverflowShard(key detachedUserLevelLockCleanupKey, txnIDs [][]byte) uint64 {
+	h := crc32.ChecksumIEEE([]byte(fmt.Sprintf("%s/%s/%s/%d/%s", key.serviceID, key.owner, key.name, key.connID, key.kind)))
+	for _, txnID := range txnIDs {
+		h = crc32.Update(h, crc32.IEEETable, txnID)
 	}
-	seen := make(map[string]struct{}, len(entry.txnIDs)+len(txnIDs))
+	return uint64(h % userLevelLockDetachedCleanupOverflowShards)
+}
+
+func mergeDetachedUserLevelLockTxnIDs(entry *detachedUserLevelLockCleanupEntry, txnIDs [][]byte) bool {
+	if len(txnIDs) == 0 {
+		return true
+	}
+	seen := make(map[string]struct{}, len(entry.txnIDs))
 	for _, txnID := range entry.txnIDs {
 		if len(txnID) == 0 {
 			continue
@@ -7289,9 +7301,42 @@ func mergeDetachedUserLevelLockTxnIDs(entry *detachedUserLevelLockCleanupEntry, 
 		if _, ok := seen[string(txnID)]; ok {
 			continue
 		}
+		if len(entry.txnIDs) >= userLevelLockDetachedCleanupMaxTxnIDsPerEntry {
+			return false
+		}
 		entry.txnIDs = append(entry.txnIDs, append([]byte(nil), txnID...))
 		seen[string(txnID)] = struct{}{}
 	}
+	return true
+}
+
+func removeDetachedUserLevelLockTxnIDs(entry *detachedUserLevelLockCleanupEntry, txnIDs [][]byte) {
+	if len(txnIDs) == 0 || len(entry.txnIDs) == 0 {
+		return
+	}
+	done := make(map[string]struct{}, len(txnIDs))
+	for _, txnID := range txnIDs {
+		done[string(txnID)] = struct{}{}
+	}
+	dst := entry.txnIDs[:0]
+	for _, txnID := range entry.txnIDs {
+		if _, ok := done[string(txnID)]; ok {
+			continue
+		}
+		dst = append(dst, txnID)
+	}
+	for i := len(dst); i < len(entry.txnIDs); i++ {
+		entry.txnIDs[i] = nil
+	}
+	entry.txnIDs = dst
+}
+
+func enqueueDetachedUserLevelLockEntryLocked(entry *detachedUserLevelLockCleanupEntry) bool {
+	if entry.queued || entry.running || len(entry.txnIDs) == 0 {
+		return true
+	}
+	_ = enqueueDetachedUserLevelLockCleanupLocked(entry)
+	return true
 }
 
 func enqueueDetachedUserLevelLockTxnCleanup(ls lockservice.LockService, key detachedUserLevelLockCleanupKey, txnIDs [][]byte) bool {
@@ -7302,30 +7347,65 @@ func enqueueDetachedUserLevelLockTxnCleanup(ls lockservice.LockService, key deta
 
 	detachedUserLevelLockCleanups.Lock()
 	defer detachedUserLevelLockCleanups.Unlock()
-	if overflow := detachedUserLevelLockOverflowCleanupKey(key); detachedUserLevelLockCleanups.entries[overflow] != nil {
-		key = overflow
-	} else if _, ok := detachedUserLevelLockCleanups.entries[key]; !ok && len(detachedUserLevelLockCleanups.entries) >= userLevelLockDetachedCleanupMaxEntries {
-		key = overflow
-	}
 	if entry, ok := detachedUserLevelLockCleanups.entries[key]; ok {
-		mergeDetachedUserLevelLockTxnIDs(entry, txnIDs)
-		if !entry.queued {
-			_ = enqueueDetachedUserLevelLockCleanupLocked(entry)
+		if mergeDetachedUserLevelLockTxnIDs(entry, txnIDs) {
+			return enqueueDetachedUserLevelLockEntryLocked(entry)
 		}
-		return true
+		shard := detachedUserLevelLockOverflowShard(key, txnIDs)
+		for i := uint64(0); i < userLevelLockDetachedCleanupOverflowShards; i++ {
+			overflowKey := detachedUserLevelLockOverflowCleanupKey(key, (shard+i)%userLevelLockDetachedCleanupOverflowShards)
+			if overflowKey == key {
+				continue
+			}
+			overflowEntry := detachedUserLevelLockCleanups.entries[overflowKey]
+			if overflowEntry == nil {
+				overflowEntry = &detachedUserLevelLockCleanupEntry{
+					key:     overflowKey,
+					ls:      ls,
+					backoff: userLevelLockDetachedCleanupInitialBackoff,
+				}
+				detachedUserLevelLockCleanups.entries[overflowKey] = overflowEntry
+			}
+			if mergeDetachedUserLevelLockTxnIDs(overflowEntry, txnIDs) {
+				return enqueueDetachedUserLevelLockEntryLocked(overflowEntry)
+			}
+		}
+		return false
 	}
-	if key.kind != "overflow" && len(detachedUserLevelLockCleanups.entries) >= userLevelLockDetachedCleanupMaxEntries {
+
+	if _, ok := detachedUserLevelLockCleanups.entries[key]; !ok && len(detachedUserLevelLockCleanups.entries) >= userLevelLockDetachedCleanupMaxEntries {
+		shard := detachedUserLevelLockOverflowShard(key, txnIDs)
+		for i := uint64(0); i < userLevelLockDetachedCleanupOverflowShards; i++ {
+			overflowKey := detachedUserLevelLockOverflowCleanupKey(key, (shard+i)%userLevelLockDetachedCleanupOverflowShards)
+			entry := detachedUserLevelLockCleanups.entries[overflowKey]
+			if entry == nil {
+				entry = &detachedUserLevelLockCleanupEntry{
+					key:     overflowKey,
+					ls:      ls,
+					backoff: userLevelLockDetachedCleanupInitialBackoff,
+				}
+				detachedUserLevelLockCleanups.entries[overflowKey] = entry
+			}
+			if mergeDetachedUserLevelLockTxnIDs(entry, txnIDs) {
+				return enqueueDetachedUserLevelLockEntryLocked(entry)
+			}
+		}
+		return false
+	}
+	if len(txnIDs) > userLevelLockDetachedCleanupMaxTxnIDsPerEntry {
 		return false
 	}
 	entry := &detachedUserLevelLockCleanupEntry{
 		key:     key,
 		ls:      ls,
-		txnIDs:  txnIDs,
 		backoff: userLevelLockDetachedCleanupInitialBackoff,
 	}
-	_ = enqueueDetachedUserLevelLockCleanupLocked(entry)
 	detachedUserLevelLockCleanups.entries[key] = entry
-	return true
+	if !mergeDetachedUserLevelLockTxnIDs(entry, txnIDs) {
+		delete(detachedUserLevelLockCleanups.entries, key)
+		return false
+	}
+	return enqueueDetachedUserLevelLockEntryLocked(entry)
 }
 
 func enqueueDetachedUserLevelLockCleanupLocked(entry *detachedUserLevelLockCleanupEntry) bool {
@@ -7393,23 +7473,50 @@ func runDetachedUserLevelLockCleanupAttempt(key detachedUserLevelLockCleanupKey)
 		detachedUserLevelLockCleanups.Unlock()
 		return
 	}
+	if entry.running {
+		entry.queued = false
+		detachedUserLevelLockCleanups.Unlock()
+		return
+	}
 	entry.queued = false
+	entry.running = true
 	backoff := entry.backoff
 	ls := entry.ls
 	txnIDs := append([][]byte(nil), entry.txnIDs...)
 	detachedUserLevelLockCleanups.Unlock()
 
 	attemptCtx, cancel := context.WithTimeout(context.Background(), userLevelLockDetachedCleanupAttemptTimeout)
-	err := unlockUserLevelLockTxnIDs(attemptCtx, ls, txnIDs)
+	processed := make([][]byte, 0, len(txnIDs))
+	var err error
+	for _, txnID := range txnIDs {
+		if len(txnID) == 0 {
+			continue
+		}
+		if err = unlockUserLevelLockTxnID(attemptCtx, ls, txnID); err != nil {
+			break
+		}
+		processed = append(processed, txnID)
+	}
 	cancel()
+
+	detachedUserLevelLockCleanups.Lock()
+	if detachedUserLevelLockCleanups.entries[key] != entry {
+		detachedUserLevelLockCleanups.Unlock()
+		return
+	}
+	removeDetachedUserLevelLockTxnIDs(entry, processed)
+	entry.running = false
 	if err == nil {
-		detachedUserLevelLockCleanups.Lock()
-		if detachedUserLevelLockCleanups.entries[key] == entry {
+		entry.backoff = userLevelLockDetachedCleanupInitialBackoff
+		if len(entry.txnIDs) == 0 {
 			delete(detachedUserLevelLockCleanups.entries, key)
+		} else {
+			_ = enqueueDetachedUserLevelLockEntryLocked(entry)
 		}
 		detachedUserLevelLockCleanups.Unlock()
 		return
 	}
+	detachedUserLevelLockCleanups.Unlock()
 
 	logutil.Warn(fmt.Sprintf(
 		"detached user-level lock cleanup failed: owner=%s lock=%s kind=%s err=%v",
@@ -7428,7 +7535,7 @@ func runDetachedUserLevelLockCleanupAttempt(key detachedUserLevelLockCleanupKey)
 				entry.backoff = userLevelLockDetachedCleanupMaxBackoff
 			}
 		}
-		_ = enqueueDetachedUserLevelLockCleanupLocked(entry)
+		_ = enqueueDetachedUserLevelLockEntryLocked(entry)
 	}
 	queueDetachedUserLevelLockCleanupLocked()
 	detachedUserLevelLockCleanups.Unlock()
@@ -7436,7 +7543,7 @@ func runDetachedUserLevelLockCleanupAttempt(key detachedUserLevelLockCleanupKey)
 
 func queueDetachedUserLevelLockCleanupLocked() {
 	for _, entry := range detachedUserLevelLockCleanups.entries {
-		if entry.queued {
+		if entry.queued || entry.running {
 			continue
 		}
 		if !enqueueDetachedUserLevelLockCleanupLocked(entry) {
@@ -7707,38 +7814,25 @@ func getUserLevelLock(name string, timeout float64, proc *process.Process) (int6
 		txnID,
 		userLevelLockOptions(policy))
 	if err != nil {
+		cleanupErr := cleanupFailedUserLevelLockTxn(
+			ctx,
+			ls,
+			detachedUserLevelLockCleanupKey{
+				serviceID: ls.GetServiceID(),
+				owner:     owner,
+				name:      name,
+				connID:    connID,
+				kind:      "get_lock_failed",
+			},
+			txnID,
+		)
+		if cleanupErr != nil {
+			return 0, cleanupErr
+		}
 		if userLevelLockTimedOut(err) {
-			if err := cleanupFailedUserLevelLockTxn(
-				ctx,
-				ls,
-				detachedUserLevelLockCleanupKey{
-					serviceID: ls.GetServiceID(),
-					owner:     owner,
-					name:      name,
-					connID:    connID,
-					kind:      "get_lock_timeout",
-				},
-				txnID,
-			); err != nil {
-				return 0, err
-			}
 			return 0, nil
 		}
 		if moerr.IsMoErrCode(err, moerr.ErrLockConflict) || errors.Is(err, lockservice.ErrLockConflict) {
-			if err := cleanupFailedUserLevelLockTxn(
-				ctx,
-				ls,
-				detachedUserLevelLockCleanupKey{
-					serviceID: ls.GetServiceID(),
-					owner:     owner,
-					name:      name,
-					connID:    connID,
-					kind:      "get_lock_conflict",
-				},
-				txnID,
-			); err != nil {
-				return 0, err
-			}
 			return 0, nil
 		}
 		return 0, err
@@ -7775,21 +7869,22 @@ func releaseUserLevelLock(name string, proc *process.Process) (int64, bool, erro
 			probeTxnID,
 			userLevelLockOptions(lockpb.WaitPolicy_FastFail))
 		if probeErr != nil {
+			cleanupErr := cleanupFailedUserLevelLockTxn(
+				proc.Ctx,
+				ls,
+				detachedUserLevelLockCleanupKey{
+					serviceID: ls.GetServiceID(),
+					owner:     owner,
+					name:      name,
+					connID:    connID,
+					kind:      "probe_release_failed",
+				},
+				probeTxnID,
+			)
+			if cleanupErr != nil {
+				return 0, false, cleanupErr
+			}
 			if userLevelLockConflictOrTimeout(probeErr) {
-				if err := cleanupFailedUserLevelLockTxn(
-					proc.Ctx,
-					ls,
-					detachedUserLevelLockCleanupKey{
-						serviceID: ls.GetServiceID(),
-						owner:     owner,
-						name:      name,
-						connID:    connID,
-						kind:      "probe_release_conflict",
-					},
-					probeTxnID,
-				); err != nil {
-					return 0, false, err
-				}
 				// Lock exists but is held by another session.
 				return 0, false, nil
 			}
@@ -7832,21 +7927,22 @@ func isUserLevelLockFree(name string, proc *process.Process) (int64, error) {
 		probeTxnID,
 		userLevelLockOptions(lockpb.WaitPolicy_FastFail))
 	if err != nil {
+		cleanupErr := cleanupFailedUserLevelLockTxn(
+			proc.Ctx,
+			ls,
+			detachedUserLevelLockCleanupKey{
+				serviceID: ls.GetServiceID(),
+				owner:     owner,
+				name:      name,
+				connID:    connID,
+				kind:      "probe_is_free_failed",
+			},
+			probeTxnID,
+		)
+		if cleanupErr != nil {
+			return 0, cleanupErr
+		}
 		if userLevelLockConflictOrTimeout(err) {
-			if cleanupErr := cleanupFailedUserLevelLockTxn(
-				proc.Ctx,
-				ls,
-				detachedUserLevelLockCleanupKey{
-					serviceID: ls.GetServiceID(),
-					owner:     owner,
-					name:      name,
-					connID:    connID,
-					kind:      "probe_is_free_conflict",
-				},
-				probeTxnID,
-			); cleanupErr != nil {
-				return 0, cleanupErr
-			}
 			return 0, nil
 		}
 		return 0, err
