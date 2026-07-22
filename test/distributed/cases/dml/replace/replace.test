@@ -392,6 +392,15 @@ update t_chk_update_fail set a = -1;
 select * from t_chk_update_fail;
 drop table t_chk_update_fail;
 
+-- UPDATE IGNORE skips CHECK violations while applying valid row updates
+drop table if exists t_chk_update_ignore;
+create table t_chk_update_ignore(id int primary key, a int, check (a > 0));
+insert into t_chk_update_ignore values (1, 1), (2, 2);
+update ignore t_chk_update_ignore
+set a = case when id = 1 then -1 else 3 end;
+select * from t_chk_update_ignore order by id;
+drop table t_chk_update_ignore;
+
 -- legacy multi-table UPDATE fallback must enforce CHECK on the final row image
 drop table if exists t_chk_update_multi;
 drop table if exists t_chk_update_multi_src;
@@ -405,6 +414,20 @@ where t_chk_update_multi.id = t_chk_update_multi_src.id;
 select * from t_chk_update_multi;
 drop table t_chk_update_multi;
 drop table t_chk_update_multi_src;
+
+-- legacy multi-table UPDATE IGNORE also skips only CHECK-violating rows
+drop table if exists t_chk_update_multi_ignore;
+drop table if exists t_chk_update_multi_ignore_src;
+create table t_chk_update_multi_ignore(id int primary key, a int, check (a > 0));
+create table t_chk_update_multi_ignore_src(id int primary key);
+insert into t_chk_update_multi_ignore values (1, 1), (2, 2);
+insert into t_chk_update_multi_ignore_src values (1), (2);
+update ignore t_chk_update_multi_ignore, t_chk_update_multi_ignore_src
+set t_chk_update_multi_ignore.a = case when t_chk_update_multi_ignore.id = 1 then -1 else 3 end
+where t_chk_update_multi_ignore.id = t_chk_update_multi_ignore_src.id;
+select * from t_chk_update_multi_ignore order by id;
+drop table t_chk_update_multi_ignore;
+drop table t_chk_update_multi_ignore_src;
 
 -- REPLACE must enforce CHECK
 drop table if exists t_chk_replace;

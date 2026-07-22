@@ -3255,6 +3255,15 @@ func TestUpdatePlanChecksTableCheckConstraints(t *testing.T) {
 	assertPlanHasCheckConstraintAssert(t, logicPlan.GetQuery(), "UPDATE")
 }
 
+func TestUpdateIgnoreFiltersCheckConstraintViolations(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	addSingleIdxTPositiveCheck(t, mock)
+
+	logicPlan, err := runOneStmt(mock, t, "UPDATE IGNORE single_idx_t SET val = -1 WHERE id = 1")
+	require.NoError(t, err)
+	assertPlanUsesIgnoreCheckFilter(t, logicPlan.GetQuery(), "UPDATE IGNORE")
+}
+
 func TestLegacyMultiTableUpdateFallbackChecksTableCheckConstraints(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	addPositiveCheck(t, mock.ctxt.tables["dept"], "deptno")
@@ -3266,6 +3275,16 @@ func TestLegacyMultiTableUpdateFallbackChecksTableCheckConstraints(t *testing.T)
 	}
 
 	assertPlanHasCheckConstraintAssert(t, logicPlan.GetQuery(), "legacy multi-table UPDATE fallback")
+}
+
+func TestLegacyMultiTableUpdateIgnoreFiltersCheckConstraintViolations(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	addPositiveCheck(t, mock.ctxt.tables["dept"], "deptno")
+
+	logicPlan, err := runOneStmt(mock, t,
+		"UPDATE IGNORE emp, dept SET dept.deptno = -1 WHERE emp.deptno = dept.deptno")
+	require.NoError(t, err)
+	assertPlanUsesIgnoreCheckFilter(t, logicPlan.GetQuery(), "legacy multi-table UPDATE IGNORE fallback")
 }
 
 func TestAppendCheckConstraintPlanFromLastNodeSkipsTablesWithoutChecks(t *testing.T) {
@@ -3561,6 +3580,24 @@ func assertPlanHasCheckConstraintAssert(t *testing.T, query *Query, stmt string)
 		}
 	}
 	assert.True(t, hasCheckAssert, "%s plan should assert table CHECK constraints before writing", stmt)
+}
+
+func assertPlanUsesIgnoreCheckFilter(t *testing.T, query *Query, stmt string) {
+	t.Helper()
+	hasIgnoreFilter := false
+	for _, node := range query.Nodes {
+		if node.NodeType != plan.Node_FILTER {
+			continue
+		}
+		for _, expr := range node.FilterList {
+			require.False(t, exprContainsFuncName(expr, "check_constraint_assert"),
+				"%s must not abort on a CHECK violation", stmt)
+			if exprContainsFuncName(expr, "coalesce") {
+				hasIgnoreFilter = true
+			}
+		}
+	}
+	require.True(t, hasIgnoreFilter, "%s should filter rows that violate CHECK constraints", stmt)
 }
 
 func TestInsertOnDupFakePKUsesModernPath(t *testing.T) {

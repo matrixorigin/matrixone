@@ -505,6 +505,16 @@ select * from t_chk_update_fail;
 ➤ a[4,32,0]  𝄀
 1
 drop table t_chk_update_fail;
+drop table if exists t_chk_update_ignore;
+create table t_chk_update_ignore(id int primary key, a int, check (a > 0));
+insert into t_chk_update_ignore values (1, 1), (2, 2);
+update ignore t_chk_update_ignore
+set a = case when id = 1 then -1 else 3 end;
+select * from t_chk_update_ignore order by id;
+➤ id[4,32,0]  ¦  a[4,32,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  3
+drop table t_chk_update_ignore;
 drop table if exists t_chk_update_multi;
 drop table if exists t_chk_update_multi_src;
 create table t_chk_update_multi(id int primary key, a int, check (a > 0));
@@ -520,6 +530,21 @@ select * from t_chk_update_multi;
 1  ¦  1
 drop table t_chk_update_multi;
 drop table t_chk_update_multi_src;
+drop table if exists t_chk_update_multi_ignore;
+drop table if exists t_chk_update_multi_ignore_src;
+create table t_chk_update_multi_ignore(id int primary key, a int, check (a > 0));
+create table t_chk_update_multi_ignore_src(id int primary key);
+insert into t_chk_update_multi_ignore values (1, 1), (2, 2);
+insert into t_chk_update_multi_ignore_src values (1), (2);
+update ignore t_chk_update_multi_ignore, t_chk_update_multi_ignore_src
+set t_chk_update_multi_ignore.a = case when t_chk_update_multi_ignore.id = 1 then -1 else 3 end
+where t_chk_update_multi_ignore.id = t_chk_update_multi_ignore_src.id;
+select * from t_chk_update_multi_ignore order by id;
+➤ id[4,32,0]  ¦  a[4,32,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  3
+drop table t_chk_update_multi_ignore;
+drop table t_chk_update_multi_ignore_src;
 drop table if exists t_chk_replace;
 create table t_chk_replace(id int primary key, a int, check (a > 0));
 replace into t_chk_replace values (1, 1);

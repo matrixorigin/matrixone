@@ -95,20 +95,22 @@ func TestSplitCheckConstraintsFromConfigsKeepsVisibleConfigsOnDecodeError(t *tes
 	require.Equal(t, check.Name, checks[0].Name)
 }
 
-func TestSplitCheckConstraintsFromConfigsReadsLegacyUnprefixedPayload(t *testing.T) {
-	check := &plan.CheckDef{Name: "legacy_check"}
-	value, err := MarshalCheckConstraints([]*plan.CheckDef{check})
+func TestSplitCheckConstraintsFromConfigsKeepsDecodableUntaggedUserProperty(t *testing.T) {
+	value, err := MarshalCheckConstraints([]*plan.CheckDef{{Name: "must_stay_user_data"}})
 	require.NoError(t, err)
-	legacyValue := strings.TrimPrefix(value, checkConstraintsValuePrefix)
+	userValue := strings.TrimPrefix(value, checkConstraintsValuePrefix)
 
 	visibleConfigs, checks, err := SplitCheckConstraintsFromConfigs([]*plan.Property{{
 		Key:   CheckConstraintsConfigKey,
-		Value: legacyValue,
+		Value: userValue,
 	}})
 	require.NoError(t, err)
-	require.Empty(t, visibleConfigs)
-	require.Len(t, checks, 1)
-	require.Equal(t, check.Name, checks[0].Name)
+	require.Len(t, visibleConfigs, 1)
+	require.Equal(t, userValue, visibleConfigs[0].Value)
+	require.Empty(t, checks)
+
+	_, err = UnmarshalCheckConstraints(userValue)
+	require.ErrorContains(t, err, "missing its version prefix")
 }
 
 func TestSplitCheckConstraintsFromConfigsDropsDamagedTaggedPayload(t *testing.T) {

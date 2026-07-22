@@ -159,7 +159,11 @@ func MarshalCheckConstraints(checks []*plan.CheckDef) (string, error) {
 }
 
 func UnmarshalCheckConstraints(value string) ([]*plan.CheckDef, error) {
-	value = strings.TrimPrefix(value, checkConstraintsValuePrefix)
+	var ok bool
+	value, ok = strings.CutPrefix(value, checkConstraintsValuePrefix)
+	if !ok {
+		return nil, moerr.NewInternalErrorNoCtx("check constraint metadata is missing its version prefix")
+	}
 	data, err := base64.StdEncoding.DecodeString(value)
 	if err != nil {
 		return nil, err
@@ -179,23 +183,17 @@ func SplitCheckConstraintsFromConfigs(configs []*plan.Property) ([]*plan.Propert
 			visibleConfigs = append(visibleConfigs, config)
 			continue
 		}
-		decodedChecks, err := UnmarshalCheckConstraints(config.Value)
-		if err != nil {
-			if strings.HasPrefix(config.Value, checkConstraintsValuePrefix) {
-				// A tagged value is internal metadata. Drop only the damaged CHECK
-				// payload so the rest of the table definition remains usable.
-				continue
-			}
+		if !strings.HasPrefix(config.Value, checkConstraintsValuePrefix) {
 			// Before CHECK metadata used this key, PROPERTIES accepted it as an
-			// arbitrary user key. An undecodable value is therefore a visible
-			// legacy property, not a reason to make the whole table unavailable.
+			// arbitrary user key. Untagged values are always legacy user data;
+			// old CHECK tables are recovered from Createsql instead.
 			visibleConfigs = append(visibleConfigs, config)
 			continue
 		}
-		if len(decodedChecks) == 0 && !strings.HasPrefix(config.Value, checkConstraintsValuePrefix) {
-			// Legacy internal payloads always contained at least one CHECK. An
-			// untagged empty TableDef is more safely treated as a user property.
-			visibleConfigs = append(visibleConfigs, config)
+		decodedChecks, err := UnmarshalCheckConstraints(config.Value)
+		if err != nil {
+			// A tagged value is internal metadata. Drop only the damaged CHECK
+			// payload so the rest of the table definition remains usable.
 			continue
 		}
 		checks = append(checks, decodedChecks...)
