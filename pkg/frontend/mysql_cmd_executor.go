@@ -105,7 +105,12 @@ func dataBranchMergePickTxnErrorInfo() string {
 	return "DATA BRANCH MERGE/PICK is not supported in transactions"
 }
 
-func dataBranchMergePickTxnNotAllowed(ses *Session) bool {
+func dataBranchMergeTxnNotAllowed(ses *Session) bool {
+	return ses.GetTxnHandler().OptionBitsIsSet(OPTION_NOT_AUTOCOMMIT) &&
+		!ses.proc.GetTxnOperator().TxnOptions().ByBegin
+}
+
+func dataBranchPickTxnNotAllowed(ses *Session) bool {
 	return ses.GetTxnHandler().InMultiStmtTransactionMode() ||
 		ses.proc.GetTxnOperator().TxnOptions().ByBegin
 }

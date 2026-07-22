@@ -891,7 +891,7 @@ func handleBranchMerge(
 	ses *Session,
 	stmt *tree.DataBranchMerge,
 ) (err error) {
-	if dataBranchMergePickTxnNotAllowed(ses) {
+	if dataBranchMergeTxnNotAllowed(ses) {
 		return moerr.NewInternalError(execCtx.reqCtx, dataBranchMergePickTxnErrorInfo())
 	}
 

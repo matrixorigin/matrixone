@@ -97,7 +97,7 @@ func validateDataBranchPickOptions(
 	ses *Session,
 	stmt *tree.DataBranchPick,
 ) error {
-	if dataBranchMergePickTxnNotAllowed(ses) {
+	if dataBranchPickTxnNotAllowed(ses) {
 		return moerr.NewInternalError(ctx, dataBranchMergePickTxnErrorInfo())
 	}
 

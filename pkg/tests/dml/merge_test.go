@@ -48,8 +48,8 @@ func TestDataBranchMerge(t *testing.T) {
 			t.Log("merge simple LCA regression")
 			runMergeSimpleLCARegression(t, ctx, sqlDB)
 
-			t.Log("merge and pick reject explicit transactions")
-			runDataBranchMergePickExplicitTxnError(t, ctx, sqlDB)
+			t.Log("merge reuses explicit transactions while pick rejects them")
+			runDataBranchMergePickExplicitTxn(t, ctx, sqlDB)
 
 			t.Log("merge and pick reject autocommit off implicit transactions")
 			runDataBranchMergePickAutocommitOff(t, ctx, sqlDB)
@@ -102,7 +102,7 @@ func runMergeSimpleLCARegression(t *testing.T, parentCtx context.Context, db *sq
 	)
 }
 
-func runDataBranchMergePickExplicitTxnError(t *testing.T, parentCtx context.Context, db *sql.DB) {
+func runDataBranchMergePickExplicitTxn(t *testing.T, parentCtx context.Context, db *sql.DB) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(parentCtx, 90*time.Second)
 	defer cancel()
@@ -120,15 +120,21 @@ func runDataBranchMergePickExplicitTxnError(t *testing.T, parentCtx context.Cont
 
 	execSQLDB(t, ctx, db, "data branch create table src from base")
 	execSQLDB(t, ctx, db, "update src set v = 9 where id = 1")
+
 	execSQLDB(t, ctx, db, "begin")
-	errMsg := execExpectError(t, ctx, db, "data branch merge src into base when conflict accept")
-	require.Contains(t, errMsg, dataBranchMergePickTxnError)
+	execSQLDB(t, ctx, db, "data branch merge src into base when conflict accept")
 	execSQLDB(t, ctx, db, "rollback")
+	require.Equal(t, [][]string{{"1", "1"}, {"2", "2"}}, queryStringRows(t, ctx, db, "select id, v from base order by id"))
+
+	execSQLDB(t, ctx, db, "begin")
+	execSQLDB(t, ctx, db, "data branch merge src into base when conflict accept")
+	execSQLDB(t, ctx, db, "commit")
+	require.Equal(t, [][]string{{"1", "9"}, {"2", "2"}}, queryStringRows(t, ctx, db, "select id, v from base order by id"))
 
 	execSQLDB(t, ctx, db, "data branch create table pick_src from base")
 	execSQLDB(t, ctx, db, "insert into pick_src values (3,3)")
 	execSQLDB(t, ctx, db, "begin")
-	errMsg = execExpectError(t, ctx, db, "data branch pick pick_src into base keys(3)")
+	errMsg := execExpectError(t, ctx, db, "data branch pick pick_src into base keys(3)")
 	require.Contains(t, errMsg, dataBranchMergePickTxnError)
 	execSQLDB(t, ctx, db, "rollback")
 }
