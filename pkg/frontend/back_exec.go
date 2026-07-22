@@ -927,7 +927,7 @@ func (backSes *backSession) initFeSes(
 	backSes.resultBatches = nil
 	backSes.derivedStmt = false
 	backSes.label = make(map[string]string)
-	backSes.timeZone = time.Local
+	backSes.timeZone = ses.GetTimeZone()
 	backSes.respr = defResper
 	backSes.service = ses.GetService()
 	return backSes

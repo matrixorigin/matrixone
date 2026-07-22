@@ -69,6 +69,61 @@ func Test_LRU(t *testing.T) {
 	require.False(t, pc.isCached("3"))
 }
 
+func Test_DuplicateKeyReplacesCachedPlan(t *testing.T) {
+	pc := newPlanCache(2)
+	oldStmt := &trackedStatement{}
+	newStmt := &trackedStatement{}
+	oldPlan := &plan.Plan{}
+	newPlan := &plan.Plan{}
+
+	pc.cache("A", []tree.Statement{oldStmt}, []*plan.Plan{oldPlan})
+	pc.cache("A", []tree.Statement{newStmt}, []*plan.Plan{newPlan})
+	invalidStmt := &trackedStatement{}
+	pc.cache("A", []tree.Statement{invalidStmt}, []*plan.Plan{nil})
+	pc.cache("B", nil, nil)
+
+	require.True(t, pc.isCached("A"))
+	require.True(t, pc.isCached("B"))
+	require.Len(t, pc.cachePool, 2)
+	require.Equal(t, 2, pc.lruList.Len())
+	require.Equal(t, 1, oldStmt.freed)
+	require.Zero(t, newStmt.freed)
+	require.Equal(t, 1, invalidStmt.freed)
+	require.Same(t, newStmt, pc.get("A").stmts[0])
+	require.Same(t, newPlan, pc.get("A").plans[0])
+
+	pc.clean()
+	require.Equal(t, 1, oldStmt.freed)
+	require.Equal(t, 1, newStmt.freed)
+}
+
+func Test_DuplicateKeyRefreshesLRU(t *testing.T) {
+	pc := newPlanCache(2)
+	firstA := &trackedStatement{}
+	secondA := &trackedStatement{}
+	b := &trackedStatement{}
+	c := &trackedStatement{}
+
+	pc.cache("A", []tree.Statement{firstA}, []*plan.Plan{{}})
+	pc.cache("B", []tree.Statement{b}, []*plan.Plan{{}})
+	pc.cache("A", []tree.Statement{secondA}, []*plan.Plan{{}})
+	pc.cache("C", []tree.Statement{c}, []*plan.Plan{{}})
+
+	require.True(t, pc.isCached("A"))
+	require.False(t, pc.isCached("B"))
+	require.True(t, pc.isCached("C"))
+	require.Len(t, pc.cachePool, 2)
+	require.Equal(t, 2, pc.lruList.Len())
+	require.Equal(t, 1, firstA.freed)
+	require.Equal(t, 1, b.freed)
+	require.Zero(t, secondA.freed)
+	require.Zero(t, c.freed)
+
+	pc.clean()
+	require.Equal(t, 1, secondA.freed)
+	require.Equal(t, 1, c.freed)
+}
+
 func Test_CleanCache(t *testing.T) {
 	pc := newPlanCache(3)
 
