@@ -502,8 +502,9 @@ func determineShuffleForJoin(node *plan.Node, builder *QueryBuilder) {
 			}
 		} else {
 			rightChild := builder.qry.Nodes[node.Children[1]]
-			if rightChild.Stats.Outcnt > 320000 {
-				//dedup join always go hash shuffle, optimize this in the future
+			if rightChild.Stats.Outcnt > 320000 && !dedupJoinUsesUnsupportedFloatShuffle(node) {
+				// Large DEDUP joins normally use hash shuffle. FLOAT hash shuffle is
+				// not supported yet, so those joins stay single-CN and spill locally.
 				node.Stats.HashmapStats.Shuffle = true
 				node.Stats.HashmapStats.ShuffleColIdx = 0
 				node.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Hash
@@ -624,6 +625,18 @@ func determineShuffleForJoin(node *plan.Node, builder *QueryBuilder) {
 			rightChild.Stats.HashmapStats.Ranges = node.Stats.HashmapStats.Ranges
 		}
 	}
+}
+
+func dedupJoinUsesUnsupportedFloatShuffle(node *plan.Node) bool {
+	if len(node.OnList) == 0 {
+		return false
+	}
+	condition := node.OnList[0].GetF()
+	if condition == nil || len(condition.Args) == 0 {
+		return false
+	}
+	keyType := types.T(condition.Args[0].Typ.Id)
+	return keyType == types.T_float32 || keyType == types.T_float64
 }
 
 // find mergegroup or mergegroup->filter node
