@@ -91,19 +91,26 @@ func TestQuoteIdentifierForSQLEscapesBackticks(t *testing.T) {
 	require.Equal(t, "`acc``branch`", quoteIdentifierForSQL("acc`branch"))
 }
 
-func TestDataBranchDiffOutputAsNotSupported(t *testing.T) {
-	stmt := &tree.DataBranchDiff{
-		OutputOpt: &tree.DiffOutputOpt{
-			As: *tree.NewTableName(
-				tree.Identifier("diff_out"),
-				tree.ObjectNamePrefix{},
-				nil,
-			),
-		},
+func TestValidateDataBranchDiffOutputAs(t *testing.T) {
+	newStmt := func(atTsExpr *tree.AtTimeStamp) *tree.DataBranchDiff {
+		return &tree.DataBranchDiff{
+			OutputOpt: &tree.DiffOutputOpt{
+				As: *tree.NewTableName(
+					tree.Identifier("diff_out"),
+					tree.ObjectNamePrefix{},
+					atTsExpr,
+				),
+			},
+		}
 	}
 
-	err := validate(context.Background(), nil, stmt)
+	t.Run("accepts ordinary destination", func(t *testing.T) {
+		require.NoError(t, validate(context.Background(), nil, newStmt(nil)))
+	})
 
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "DATA BRANCH DIFF OUTPUT AS")
+	t.Run("rejects destination snapshot", func(t *testing.T) {
+		err := validate(context.Background(), nil, newStmt(&tree.AtTimeStamp{SnapshotName: "sp"}))
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "destination snapshot option is not supported")
+	})
 }

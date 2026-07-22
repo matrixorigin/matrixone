@@ -16,7 +16,10 @@ package service
 
 import (
 	"context"
+	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/util"
 	"go.uber.org/zap"
@@ -27,14 +30,17 @@ func (s *service) startRecovery() {
 		s.logger.Fatal("start recover task failed",
 			zap.Error(err))
 	}
-	s.storage.StartRecovery(context.TODO(), s.txnC)
+	s.storage.StartRecovery(s.recoveryCtx, s.txnC)
 	s.waitRecoveryCompleted()
 }
 
 func (s *service) doRecovery(ctx context.Context) {
+	defer s.finishRecovery()
 	for {
 		select {
 		case <-ctx.Done():
+			return
+		case <-s.recoveryCtx.Done():
 			return
 		case txn, ok := <-s.txnC:
 			if !ok {
@@ -44,6 +50,130 @@ func (s *service) doRecovery(ctx context.Context) {
 			s.addLog(txn)
 		}
 	}
+}
+
+type recoveryRouteResolver struct {
+	cluster     clusterservice.MOCluster
+	services    []metadata.TNService
+	initialized bool
+}
+
+func (r *recoveryRouteResolver) refresh(
+	ctx context.Context,
+	s *service,
+) bool {
+	const retryInterval = 100 * time.Millisecond
+	for r.cluster == nil {
+		var err error
+		r.cluster, err = clusterservice.GetMOClusterWithContext(ctx, s.sid)
+		if err == nil {
+			break
+		}
+		if !waitRecoveryRouteRetry(ctx, retryInterval) {
+			return false
+		}
+	}
+
+	for {
+		// A complete cached route can still name a replaced replica. Establish
+		// freshness before accepting ReplicaID and Address for recovery RPCs.
+		if refresher, ok := r.cluster.(clusterservice.AuthoritativeRefresher); ok {
+			if err := refresher.Refresh(ctx); err != nil {
+				if ctx.Err() != nil || !waitRecoveryRouteRetry(ctx, retryInterval) {
+					return false
+				}
+				continue
+			}
+		}
+		services, err := clusterservice.GetAllTNServicesWithContext(ctx, r.cluster)
+		if err != nil {
+			if !waitRecoveryRouteRetry(ctx, retryInterval) {
+				return false
+			}
+			continue
+		}
+		r.services = services
+		r.initialized = true
+		return true
+	}
+}
+
+func (s *service) resolveRecoveryTNShards(
+	ctx context.Context,
+	txnMeta txn.TxnMeta,
+	resolver *recoveryRouteResolver,
+) (txn.TxnMeta, bool) {
+	const retryInterval = 100 * time.Millisecond
+	if !resolver.initialized && !resolver.refresh(ctx, s) {
+		return txnMeta, false
+	}
+
+	for {
+		if shards, ok := s.resolveRecoveryTNShardsFromSnapshot(txnMeta.TNShards, resolver.services); ok {
+			txnMeta.TNShards = shards
+			return txnMeta, true
+		}
+
+		if !waitRecoveryRouteRetry(ctx, retryInterval) || !resolver.refresh(ctx, s) {
+			return txnMeta, false
+		}
+	}
+}
+
+func waitRecoveryRouteRetry(ctx context.Context, interval time.Duration) bool {
+	timer := time.NewTimer(interval)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
+func (s *service) resolveRecoveryTNShardsFromSnapshot(
+	participants []metadata.TNShard,
+	services []metadata.TNService,
+) ([]metadata.TNShard, bool) {
+	routes := make(map[uint64]metadata.TNShard)
+	for _, service := range services {
+		for _, shard := range service.Shards {
+			shard.Address = service.TxnServiceAddress
+			if recoveryTNShardRouteComplete(shard) {
+				routes[shard.ShardID] = shard
+			}
+		}
+	}
+
+	resolved := make([]metadata.TNShard, len(participants))
+	for i, participant := range participants {
+		if participant.ShardID == s.shard.ShardID {
+			if !recoveryTNShardRouteComplete(s.shard) {
+				return nil, false
+			}
+			resolved[i] = s.shard
+			continue
+		}
+		route, ok := routes[participant.ShardID]
+		if !ok {
+			return nil, false
+		}
+		if route.LogShardID == 0 {
+			route.LogShardID = participant.LogShardID
+		}
+		resolved[i] = route
+	}
+	return resolved, true
+}
+
+func recoveryTNShardRouteComplete(shard metadata.TNShard) bool {
+	// LogShardID is storage metadata, not part of txn RPC routing or TN shard
+	// identity. Dynamic HAKeeper TN snapshots currently expose only ShardID and
+	// ReplicaID, so preserve LogShardID when supplied but do not wait forever
+	// when a current route legitimately has it unset.
+	return shard.ShardID != 0 &&
+		shard.ReplicaID != 0 &&
+		shard.Address != ""
 }
 
 func (s *service) addLog(txnMeta txn.TxnMeta) {
@@ -91,12 +221,22 @@ func (s *service) addLog(txnMeta txn.TxnMeta) {
 
 func (s *service) end() {
 	defer s.finishRecovery()
+	resolver := new(recoveryRouteResolver)
 	s.transactions.Range(func(_, value any) bool {
 		txnCtx := value.(*txnContext)
 		txnMeta := txnCtx.getTxn()
-		if !s.shard.Equal(txnMeta.TNShards[0]) {
+		if len(txnMeta.TNShards) == 0 ||
+			txnMeta.TNShards[0].ShardID != s.shard.ShardID {
 			return true
 		}
+		// Fold the complete log stream before waiting for live routes. A later
+		// terminal record may remove an obsolete prepared transaction entirely.
+		var resolved bool
+		txnMeta, resolved = s.resolveRecoveryTNShards(s.recoveryCtx, txnMeta, resolver)
+		if !resolved {
+			return false
+		}
+		txnCtx.updateTxn(txnMeta)
 
 		switch txnMeta.Status {
 		case txn.TxnStatus_Prepared:
@@ -106,6 +246,7 @@ func (s *service) end() {
 					util.TxnField(txnMeta))
 			}
 		case txn.TxnStatus_Committing:
+			s.validTNShard(txnMeta.TNShards[0])
 			if err := s.startAsyncCommitTask(txnCtx); err != nil {
 				s.logger.Error("start commit task failed during recovery",
 					zap.Error(err),
@@ -180,7 +321,4 @@ func (s *service) checkRecoveryStatus(txnMeta txn.TxnMeta) {
 			util.TxnField(txnMeta))
 	}
 
-	if txnMeta.Status == txn.TxnStatus_Committing {
-		s.validTNShard(txnMeta.TNShards[0])
-	}
 }

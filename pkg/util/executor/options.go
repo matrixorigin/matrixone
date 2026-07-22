@@ -362,10 +362,14 @@ func (opts StatementOption) Params(
 	mp *mpool.MPool,
 ) *vector.Vector {
 	vec := vector.NewVec(types.T_varchar.ToType())
+	nulls := opts.paramNulls
+	if len(nulls) != len(opts.params) {
+		nulls = make([]bool, len(opts.params))
+	}
 	vector.AppendStringList(
 		vec,
 		opts.params,
-		make([]bool, len(opts.params)),
+		nulls,
 		mp,
 	)
 	return vec
@@ -375,6 +379,16 @@ func (opts StatementOption) WithParams(
 	values []string,
 ) StatementOption {
 	opts.params = values
+	opts.paramNulls = nil
+	return opts
+}
+
+func (opts StatementOption) WithParamsAndNulls(
+	values []string,
+	nulls []bool,
+) StatementOption {
+	opts.params = values
+	opts.paramNulls = nulls
 	return opts
 }
 
