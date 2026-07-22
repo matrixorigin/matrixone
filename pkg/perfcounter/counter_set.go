@@ -19,7 +19,8 @@ import (
 )
 
 type CounterSet struct {
-	FileService FileServiceCounterSet
+	FileService          FileServiceCounterSet
+	ProtocolOutputWaitNS atomic.Int64 // time blocked in physical client socket writes
 }
 
 type FileServiceCounterSet struct {
@@ -83,4 +84,5 @@ func (c *CounterSet) Reset() {
 	c.FileService.S3ReadSize.Store(0)
 	c.FileService.S3WriteSize.Store(0)
 	c.FileService.DiskReadSize.Store(0)
+	c.ProtocolOutputWaitNS.Store(0)
 }

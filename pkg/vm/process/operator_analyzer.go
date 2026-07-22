@@ -142,13 +142,6 @@ func MeasureFilesystemWaitErr(analyzer Analyzer, fn func() error) error {
 	return err
 }
 
-// MeasureOutputWaitErr records a protocol/output callback boundary.
-func MeasureOutputWaitErr(analyzer Analyzer, fn func() error) error {
-	start := time.Now()
-	defer stopAnalyzerWait(analyzer, start, resource.WaitOutput)
-	return fn()
-}
-
 // MeasureTerminalFilesystemWait records cleanup I/O that runs after the
 // operator's final Call interval. It must not feed opAlyzr.wait because Stop has
 // already subtracted and published that interval.
@@ -598,6 +591,17 @@ func (opAlyzr *operatorAnalyzer) harvestCounterSet() {
 	// S3WriteSize has no legacy manual-harvest method and is always terminally
 	// harvested exactly once.
 	opAlyzr.opStats.S3WriteSize += counter.FileService.S3WriteSize.Load()
+	outputWaitNS := counter.ProtocolOutputWaitNS.Load()
+	if outputWaitNS < 0 || opAlyzr.wait > time.Duration(math.MaxInt64-outputWaitNS) {
+		opAlyzr.opStats.ResourceQuality |= resource.QualityInvariantFailure
+	} else {
+		opAlyzr.wait += time.Duration(outputWaitNS)
+		opAlyzr.opStats.ResourceWaitNS[resource.WaitOutput] = addResourceInt64(
+			opAlyzr.opStats.ResourceWaitNS[resource.WaitOutput],
+			uint64(outputWaitNS),
+			&opAlyzr.opStats.ResourceQuality,
+		)
+	}
 	counter.Reset()
 	opAlyzr.crsActive = false
 	opAlyzr.crsConsumed = 0

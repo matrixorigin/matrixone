@@ -29,6 +29,7 @@ import (
 	"slices"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -479,6 +480,7 @@ func (a *QCloudSDK) WriteMultipartParallel(
 				ContentLength: int64(job.part.n),
 			}
 			resp, uploadErr := DoWithRetry("cos upload part", func() (*cos.Response, error) {
+				recordS3PutRequest(ctx, a.perfCounterSets...)
 				return a.client.Object.UploadPart(ctx, key, output.UploadID, int(job.num), bytes.NewReader(job.part.buf[:job.part.n]), uploadOpt)
 			}, maxRetryAttemps, IsRetryableError)
 			if uploadErr != nil {
@@ -486,6 +488,7 @@ func (a *QCloudSDK) WriteMultipartParallel(
 				releasePartBuffer(job.part)
 				return
 			}
+			recordS3AcceptedBytes(ctx, int64(job.part.n), a.perfCounterSets...)
 			etag := ""
 			if resp != nil && resp.Header != nil {
 				etag = resp.Header.Get("ETag")
@@ -726,9 +729,9 @@ func (a *QCloudSDK) putObject(
 	ctx, task := gotrace.NewTask(ctx, "QCloudSDK.putObject")
 	defer task.End()
 
-	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
-		counter.FileService.S3.Put.Add(1)
-	}, a.perfCounterSets...)
+	recordS3PutRequest(ctx, a.perfCounterSets...)
+	var n atomic.Int64
+	r = &countingReader{R: r, C: &n}
 
 	// not retryable because Reader may be half consumed
 	opts := &cos.ObjectPutOptions{}
@@ -741,6 +744,7 @@ func (a *QCloudSDK) putObject(
 	if err != nil {
 		return err
 	}
+	recordS3AcceptedBytes(ctx, n.Load(), a.perfCounterSets...)
 	return nil
 }
 

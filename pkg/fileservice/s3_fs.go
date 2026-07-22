@@ -503,11 +503,6 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (bytesWritten int, er
 		metric.FSWriteDurationStorage.Observe(time.Since(storageStart).Seconds())
 	}
 	bytesWritten = int(n.Load())
-	if bytesWritten > 0 {
-		perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
-			counter.FileService.S3WriteSize.Add(int64(bytesWritten))
-		})
-	}
 
 	// write to disk cache
 	if writeDiskCache {

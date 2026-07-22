@@ -420,7 +420,7 @@ func (mp *MysqlProtocolImpl) Write(execCtx *ExecCtx, crs *perfcounter.CounterSet
 			ses.AppendData(row2)
 		}
 	} else {
-		if err = mp.WriteResultSetRow2(&mrs, colSlices, uint64(n)); err != nil {
+		if err = mp.writeResultSetRow2(&mrs, colSlices, uint64(n), crs); err != nil {
 			execCtx.ses.Error(execCtx.reqCtx,
 				"Flush error",
 				zap.Error(err))
@@ -3513,6 +3513,15 @@ func (mp *MysqlProtocolImpl) WriteResultSetRow(mrs *MysqlResultSet, cnt uint64) 
 }
 
 func (mp *MysqlProtocolImpl) WriteResultSetRow2(mrs *MysqlResultSet, colSlices *ColumnSlices, cnt uint64) error {
+	return mp.writeResultSetRow2(mrs, colSlices, cnt, nil)
+}
+
+func (mp *MysqlProtocolImpl) writeResultSetRow2(
+	mrs *MysqlResultSet,
+	colSlices *ColumnSlices,
+	cnt uint64,
+	counter *perfcounter.CounterSet,
+) error {
 	if cnt == 0 {
 		return nil
 	}
@@ -3525,25 +3534,30 @@ func (mp *MysqlProtocolImpl) WriteResultSetRow2(mrs *MysqlResultSet, colSlices *
 	// XXX now we known COM_QUERY will use textRow, COM_STMT_EXECUTE use binaryRow
 	useBinaryRow := cmd == COM_STMT_EXECUTE
 
-	//make rows into the batch
-	for i := uint64(0); i < cnt; i++ {
-		//begin1 := time.Now()
-		if useBinaryRow {
-			err = mp.appendResultSetBinaryRow2(mrs, colSlices, i)
-		} else {
-			err = mp.appendResultSetTextRow2(mrs, colSlices, i)
-		}
-		if err != nil {
-			//ERR_Packet in case of error
-			err1 := mp.sendErrPacket(moerr.ER_UNKNOWN_ERROR, DefaultMySQLState, err.Error())
-			if err1 != nil {
-				return err1
+	writeRows := func() error {
+		//make rows into the batch
+		for i := uint64(0); i < cnt; i++ {
+			//begin1 := time.Now()
+			if useBinaryRow {
+				err = mp.appendResultSetBinaryRow2(mrs, colSlices, i)
+			} else {
+				err = mp.appendResultSetTextRow2(mrs, colSlices, i)
 			}
-			return err
+			if err != nil {
+				//ERR_Packet in case of error
+				err1 := mp.sendErrPacket(moerr.ER_UNKNOWN_ERROR, DefaultMySQLState, err.Error())
+				if err1 != nil {
+					return err1
+				}
+				return err
+			}
 		}
+		return nil
 	}
-
-	return err
+	if counter != nil {
+		return mp.tcpConn.withOutputCounter(counter, writeRows)
+	}
+	return writeRows()
 }
 
 func (mp *MysqlProtocolImpl) WriteColumnDefBytes(payload []byte) error {

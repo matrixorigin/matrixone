@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 )
 
 const (
@@ -240,6 +241,15 @@ type Conn struct {
 	ses                   atomic.Pointer[holder[*Session]]
 	closeFunc             sync.Once
 	service               string
+	outputCounter         atomic.Pointer[perfcounter.CounterSet]
+}
+
+func (c *Conn) withOutputCounter(counter *perfcounter.CounterSet, fn func() error) error {
+	// MysqlProtocolImpl serializes these scopes with its protocol mutex. The
+	// atomic pointer lets the lower socket-write boundary observe the owner.
+	previous := c.outputCounter.Swap(counter)
+	defer c.outputCounter.Store(previous)
+	return fn()
 }
 
 // SetTimeout updates the read timeout used by ReadFromConn.
@@ -920,7 +930,11 @@ func (c *Conn) Write(payload []byte) error {
 func (c *Conn) WriteToConn(buf []byte) error {
 	sendLength := 0
 	for sendLength < len(buf) {
+		start := time.Now()
 		n, err := c.conn.Write(buf[sendLength:])
+		if counter := c.outputCounter.Load(); counter != nil {
+			counter.ProtocolOutputWaitNS.Add(time.Since(start).Nanoseconds())
+		}
 		if n > 0 {
 			sendLength += n
 			c.CountOutputBytes(n)

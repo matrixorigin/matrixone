@@ -189,8 +189,10 @@ func testS3FS(
 			},
 		})
 		assert.Nil(t, err)
-		assert.Equal(t, int64(3), counterSet.FileService.S3WriteSize.Load())
-		assert.Equal(t, int64(3), counterSet2.FileService.S3WriteSize.Load())
+		// The disk-backed test object store is not a physical S3 boundary, so it
+		// must not publish S3 accepted-byte facts.
+		assert.Zero(t, counterSet.FileService.S3WriteSize.Load())
+		assert.Zero(t, counterSet2.FileService.S3WriteSize.Load())
 
 		entries, err := SortedList(fs.List(ctx, ""))
 		assert.Nil(t, err)

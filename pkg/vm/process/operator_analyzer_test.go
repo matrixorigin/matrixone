@@ -429,11 +429,14 @@ func TestOperatorAnalyzerHarvestsTerminalCounterIntervals(t *testing.T) {
 	assert.Equal(t, int64(1024), opAlyzr.opStats.ReadSize)
 	second.FileService.S3.Put.Add(2)
 	second.FileService.S3WriteSize.Add(256)
+	second.ProtocolOutputWaitNS.Add(11)
 
 	// Stop is the terminal owner, including error and panic return paths.
 	opAlyzr.Stop()
 	assert.Equal(t, int64(2), opAlyzr.opStats.S3Put)
 	assert.Equal(t, int64(256), opAlyzr.opStats.S3WriteSize)
+	assert.Equal(t, int64(11), opAlyzr.opStats.ResourceWaitNS[resource.WaitOutput])
+	assert.Equal(t, int64(11), opAlyzr.opStats.WaitTimeConsumed)
 }
 
 func TestOperatorAnalyzerLegacyAndTerminalHarvestExactlyOnce(t *testing.T) {

@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 )
 
 func ReadPacketForTest(c *Conn) ([]byte, error) {
@@ -197,6 +198,24 @@ func TestConnCountsPartialWriteFacts(t *testing.T) {
 	assert.ErrorIs(t, conn.WriteToConn(data), io.ErrUnexpectedEOF)
 	assert.Equal(t, 5, ses.GetOutputBytes())
 	assert.Equal(t, int64(1), ses.GetFlushPacketCnt())
+}
+
+func TestConnMeasuresOnlyPhysicalOutputWrite(t *testing.T) {
+	underlying := &partialWriteConn{limit: 5}
+	sv, err := getSystemVariables("test/system_vars_config.toml")
+	assert.NoError(t, err)
+	setSessionAlloc("", NewLeakCheckAllocator())
+	conn, err := NewIOSession(underlying, config.NewParameterUnit(sv, nil, nil, nil), "")
+	assert.NoError(t, err)
+	defer conn.Close()
+
+	counter := new(perfcounter.CounterSet)
+	err = conn.withOutputCounter(counter, func() error {
+		return conn.WriteToConn([]byte("physical-write"))
+	})
+	assert.ErrorIs(t, err, io.ErrUnexpectedEOF)
+	assert.Positive(t, counter.ProtocolOutputWaitNS.Load())
+	assert.Nil(t, conn.outputCounter.Load())
 }
 
 func TestMySQLProtocolRead(t *testing.T) {
