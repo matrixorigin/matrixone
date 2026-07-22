@@ -216,6 +216,13 @@ func TestConnMeasuresOnlyPhysicalOutputWrite(t *testing.T) {
 	assert.ErrorIs(t, err, io.ErrUnexpectedEOF)
 	assert.Positive(t, counter.ProtocolOutputWaitNS.Load())
 	assert.Nil(t, conn.outputCounter.Load())
+
+	outer := new(perfcounter.CounterSet)
+	conn.outputCounter.Store(outer)
+	err = conn.withOutputCounter(counter, func() error { return assert.AnError })
+	assert.ErrorIs(t, err, assert.AnError)
+	assert.Same(t, outer, conn.outputCounter.Load())
+	conn.outputCounter.Store(nil)
 }
 
 func TestMySQLProtocolRead(t *testing.T) {

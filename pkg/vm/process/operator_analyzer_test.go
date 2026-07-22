@@ -439,6 +439,18 @@ func TestOperatorAnalyzerHarvestsTerminalCounterIntervals(t *testing.T) {
 	assert.Equal(t, int64(11), opAlyzr.opStats.WaitTimeConsumed)
 }
 
+func TestOperatorAnalyzerRejectsInvalidProtocolOutputWait(t *testing.T) {
+	opAlyzr := NewAnalyzer(0, false, false, "test").(*operatorAnalyzer)
+	opAlyzr.Start()
+	counter := opAlyzr.GetOpCounterSet()
+	counter.ProtocolOutputWaitNS.Store(-1)
+	opAlyzr.Stop()
+
+	assert.NotZero(t, opAlyzr.opStats.ResourceQuality&resource.QualityInvariantFailure)
+	assert.Zero(t, opAlyzr.opStats.ResourceWaitNS[resource.WaitOutput])
+	assert.Zero(t, counter.ProtocolOutputWaitNS.Load())
+}
+
 func TestOperatorAnalyzerLegacyAndTerminalHarvestExactlyOnce(t *testing.T) {
 	opAlyzr := NewAnalyzer(0, false, false, "test").(*operatorAnalyzer)
 	opAlyzr.Start()
