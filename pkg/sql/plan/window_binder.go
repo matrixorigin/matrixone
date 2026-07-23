@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"math"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -40,14 +41,30 @@ type windowFuncExprBinder interface {
 func windowExprAstKey(astExpr tree.Expr) string {
 	funcExpr, ok := astExpr.(*tree.FuncExpr)
 	if !ok || funcExpr.WindowSpec == nil || funcExpr.WindowSpec.Frame == nil || funcExpr.WindowSpec.HasFrame {
-		return tree.String(astExpr, dialect.MYSQL)
+		return semanticAstKey(astExpr)
 	}
 
 	funcExprCopy := *funcExpr
 	windowSpecCopy := *funcExpr.WindowSpec
 	windowSpecCopy.HasFrame = true
 	funcExprCopy.WindowSpec = &windowSpecCopy
-	return tree.String(&funcExprCopy, dialect.MYSQL)
+	return semanticAstKey(&funcExprCopy)
+}
+
+func semanticAstKey(astExpr tree.Expr) string {
+	display := tree.String(astExpr, dialect.MYSQL)
+	identity := tree.StringWithOpts(astExpr, dialect.MYSQL, tree.WithParamExprOffset())
+	if identity == display {
+		return display
+	}
+	return identity + "\x00" + display
+}
+
+func semanticAstDisplayName(key string) string {
+	if separator := strings.LastIndexByte(key, 0); separator >= 0 {
+		return key[separator+1:]
+	}
+	return key
 }
 
 func windowFuncAstName(astExpr *tree.FuncExpr) string {
