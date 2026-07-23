@@ -34,6 +34,7 @@ import (
 type windowFuncExprBinder interface {
 	BindExpr(tree.Expr, int32, bool) (*plan.Expr, error)
 	bindFuncExprImplByAstExpr(string, []tree.Expr, int32) (*plan.Expr, error)
+	bindPreparedRowsFrameBound(tree.Expr) (*plan.Expr, error)
 	makeFrameConstValue(tree.Expr, *plan.Type) (*plan.Expr, error)
 	GetContext() context.Context
 }
@@ -368,8 +369,16 @@ func bindWindowFuncExpr(b windowFuncExprBinder, ctx *BindContext, funcName strin
 	case tree.Groups:
 		return nil, moerr.NewNYI(b.GetContext(), "GROUPS in WINDOW FUNCTION condition")
 	}
+	if ws.Frame.Type == tree.Range &&
+		(isWindowFrameParam(ws.Frame.Start.Expr) || isWindowFrameParam(ws.Frame.End.Expr)) {
+		return nil, moerr.NewNotSupported(b.GetContext(), "prepared parameter markers in RANGE window frames")
+	}
 	if ws.Frame.Start.Expr != nil {
-		w.Frame.Start.Val, err = b.makeFrameConstValue(ws.Frame.Start.Expr, typ)
+		if isWindowFrameParam(ws.Frame.Start.Expr) {
+			w.Frame.Start.Val, err = b.bindPreparedRowsFrameBound(ws.Frame.Start.Expr)
+		} else {
+			w.Frame.Start.Val, err = b.makeFrameConstValue(ws.Frame.Start.Expr, typ)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -378,7 +387,11 @@ func bindWindowFuncExpr(b windowFuncExprBinder, ctx *BindContext, funcName strin
 		}
 	}
 	if ws.Frame.End.Expr != nil {
-		w.Frame.End.Val, err = b.makeFrameConstValue(ws.Frame.End.Expr, typ)
+		if isWindowFrameParam(ws.Frame.End.Expr) {
+			w.Frame.End.Val, err = b.bindPreparedRowsFrameBound(ws.Frame.End.Expr)
+		} else {
+			w.Frame.End.Val, err = b.makeFrameConstValue(ws.Frame.End.Expr, typ)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -399,6 +412,23 @@ func bindWindowFuncExpr(b windowFuncExprBinder, ctx *BindContext, funcName strin
 	ctx.windowByAst[astStr] = colPos
 
 	return buildWindowColRefExpr(ctx, w.WindowFunc.Typ, colPos), nil
+}
+
+func isWindowFrameParam(expr tree.Expr) bool {
+	_, ok := expr.(*tree.ParamExpr)
+	return ok
+}
+
+func (b *baseBinder) bindPreparedRowsFrameBound(expr tree.Expr) (*plan.Expr, error) {
+	if b.builder == nil || !b.builder.isPrepareStatement {
+		return nil, moerr.NewInvalidInput(b.GetContext(), "only prepare statement can use ? expr")
+	}
+	bound, err := b.impl.BindExpr(expr, 0, true)
+	if err != nil {
+		return nil, err
+	}
+	typ := types.T_uint64.ToType()
+	return appendCastBeforeExpr(b.GetContext(), bound, makePlan2Type(&typ))
 }
 
 func buildWindowColRefExpr(ctx *BindContext, typ plan.Type, colPos int32) *plan.Expr {

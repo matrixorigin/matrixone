@@ -29,9 +29,10 @@ import (
 )
 
 type stubWindowBinder struct {
-	bindExprFunc       func(tree.Expr, int32, bool) (*planpb.Expr, error)
-	bindFuncExprFunc   func(string, []tree.Expr, int32) (*planpb.Expr, error)
-	makeFrameValueFunc func(tree.Expr, *planpb.Type) (*planpb.Expr, error)
+	bindExprFunc                   func(tree.Expr, int32, bool) (*planpb.Expr, error)
+	bindFuncExprFunc               func(string, []tree.Expr, int32) (*planpb.Expr, error)
+	bindPreparedRowsFrameBoundFunc func(tree.Expr) (*planpb.Expr, error)
+	makeFrameValueFunc             func(tree.Expr, *planpb.Type) (*planpb.Expr, error)
 }
 
 func (b *stubWindowBinder) BindExpr(expr tree.Expr, depth int32, isRoot bool) (*planpb.Expr, error) {
@@ -40,6 +41,10 @@ func (b *stubWindowBinder) BindExpr(expr tree.Expr, depth int32, isRoot bool) (*
 
 func (b *stubWindowBinder) bindFuncExprImplByAstExpr(name string, args []tree.Expr, depth int32) (*planpb.Expr, error) {
 	return b.bindFuncExprFunc(name, args, depth)
+}
+
+func (b *stubWindowBinder) bindPreparedRowsFrameBound(expr tree.Expr) (*planpb.Expr, error) {
+	return b.bindPreparedRowsFrameBoundFunc(expr)
 }
 
 func (b *stubWindowBinder) makeFrameConstValue(expr tree.Expr, typ *planpb.Type) (*planpb.Expr, error) {
@@ -151,6 +156,59 @@ func testWindowValidationBinder() *stubWindowBinder {
 			return makePlan2Int64ConstExprWithType(1), nil
 		},
 	}
+}
+
+const preparedWindowFrameSQL = "select sum(n_nationkey) over (order by n_nationkey rows between ? preceding and ? following) from nation"
+
+func TestPreparedWindowFrameMarkers(t *testing.T) {
+	optimizer := NewMockOptimizer(false)
+	stmts, err := parsers.Parse(optimizer.CurrentContext().GetContext(), dialect.MYSQL, preparedWindowFrameSQL, 1)
+	require.NoError(t, err)
+
+	queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true)
+	require.NoError(t, err)
+	window := firstWindowSpec(t, queryPlan)
+	requirePreparedRowsFrameParam(t, window.Frame.Start.Val, 1)
+	requirePreparedRowsFrameParam(t, window.Frame.End.Val, 2)
+}
+
+func TestPreparedWindowRangeFrameMarkersAreUnsupported(t *testing.T) {
+	optimizer := NewMockOptimizer(false)
+	stmts, err := parsers.Parse(
+		optimizer.CurrentContext().GetContext(),
+		dialect.MYSQL,
+		"select sum(n_nationkey) over (order by n_nationkey range between ? preceding and ? following) from nation",
+		1,
+	)
+	require.NoError(t, err)
+
+	_, err = BuildPlan(optimizer.CurrentContext(), stmts[0], true)
+	require.ErrorContains(t, err, "prepared parameter markers in RANGE window frames")
+}
+
+func firstWindowSpec(t *testing.T, queryPlan *planpb.Plan) *planpb.WindowSpec {
+	t.Helper()
+	for _, node := range queryPlan.GetQuery().Nodes {
+		for _, window := range node.WinSpecList {
+			if window.GetW() != nil {
+				return window.GetW()
+			}
+		}
+	}
+	require.Fail(t, "expected window spec in query plan")
+	return nil
+}
+
+func requirePreparedRowsFrameParam(t *testing.T, expr *planpb.Expr, pos int32) {
+	t.Helper()
+	require.Equal(t, int32(types.T_uint64), expr.Typ.Id)
+	cast := expr.GetF()
+	require.NotNil(t, cast)
+	require.Equal(t, "cast", cast.Func.ObjName)
+	require.NotEmpty(t, cast.Args)
+	param := cast.Args[0].GetP()
+	require.NotNil(t, param)
+	require.Equal(t, pos, param.Pos)
 }
 
 func TestProjectionAndHavingBinderBindExprOnWindowAlias(t *testing.T) {
