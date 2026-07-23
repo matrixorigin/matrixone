@@ -2174,7 +2174,7 @@ func (c *Compile) reclaimBranchProtectSnapshots(deadTIDs []uint64) (bool, error)
 		// above already confirmed the drop touches mo_branch_metadata,
 		// so the lock scope is limited to real branch drops.
 		querySql := fmt.Sprintf(
-			"select table_id, p_table_id, clone_ts, table_deleted from %s.%s for update",
+			"select table_id, p_table_id, clone_ts, level, table_deleted from %s.%s for update",
 			catalog.MO_CATALOG, catalog.MO_BRANCH_METADATA,
 		)
 		res, err := c.runSqlWithResult(querySql, int32(catalog.System_Account))
@@ -2190,13 +2190,15 @@ func (c *Compile) reclaimBranchProtectSnapshots(deadTIDs []uint64) (bool, error)
 			tableIDs := vector.MustFixedColWithTypeCheck[uint64](cols[0])
 			parentIDs := vector.MustFixedColWithTypeCheck[uint64](cols[1])
 			cloneTSs := vector.MustFixedColWithTypeCheck[int64](cols[2])
+			levels := executor.GetStringRows(cols[3])
 			for i := 0; i < n; i++ {
-				deleted := !cols[3].IsNull(uint64(i)) &&
-					vector.GetFixedAtWithTypeCheck[bool](cols[3], i)
+				deleted := !cols[4].IsNull(uint64(i)) &&
+					vector.GetFixedAtWithTypeCheck[bool](cols[4], i)
 				rows = append(rows, databranchutils.DataBranchMetadata{
 					TableID:      tableIDs[i],
 					CloneTS:      cloneTSs[i],
 					PTableID:     parentIDs[i],
+					Level:        levels[i],
 					TableDeleted: deleted,
 				})
 			}

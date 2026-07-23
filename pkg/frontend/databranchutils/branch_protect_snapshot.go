@@ -475,7 +475,15 @@ func ComputeBranchReclaimDropList(dag BranchReclaimDag, deadTIDs []uint64) []str
 	visited := make(map[uint64]struct{}, len(dag.Info))
 	var drops []string
 	for tid := range candidates {
-		if _, ok := dag.Info[tid]; !ok {
+		meta, ok := dag.Info[tid]
+		if !ok {
+			continue
+		}
+		// ALTER generations are reclaimed by ComputeAlterLineageCompactionPlan,
+		// which also accounts for user snapshots and PITRs. Deleting their
+		// identity snapshots here would discard the account/database scope
+		// evidence before that historical-owner check runs.
+		if IsAlterLineageLevel(meta.Level) {
 			continue
 		}
 		if dag.subtreeAllDeletedMemo(tid, memo, visited) {

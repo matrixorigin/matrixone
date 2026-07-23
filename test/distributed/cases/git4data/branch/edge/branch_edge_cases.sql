@@ -85,9 +85,10 @@ data branch diff type_left against type_right;
 data branch create table rename_left from base;
 data branch create table rename_right from base;
 alter table rename_left rename column b to bb;
--- A one-sided rename removes base-visible column b from the target schema.
--- @regex("schema compatibility check: base column 'b' is not present in target schema",true)
-data branch diff rename_left against rename_right;
+update rename_left set bb = 99 where a = 1;
+-- The rename keeps stable lineage even when the endpoint definition no
+-- longer carries OriginName. LCA probing must read ancestor column b.
+data branch diff rename_left against rename_right columns (a, bb);
 
 -- Case 3: historical ALTER lineage has explicit owners and is reclaimed
 -- synchronously when the last owner disappears.
@@ -135,8 +136,8 @@ select count(*) as multi_lineage_after_owner_drop from mo_catalog.mo_branch_meta
 select count(*) as multi_snapshots_after_owner_drop from mo_catalog.mo_snapshots where sname in (concat('__mo_branch_', cast(@history_multi_t2 as char)), concat('__mo_branch_', cast(@history_multi_t3 as char))) and kind = 'branch';
 drop table history_multi;
 
--- If the current table is dropped first, ordinary DROP reclaims the branch
--- snapshots. The later owner drop must still reclaim the orphaned metadata.
+-- If the current table is dropped first, ALTER snapshots stay until the
+-- historical owner disappears so its scope remains available to compaction.
 drop snapshot if exists history_drop_current_s;
 create table history_drop_current(a int primary key, b int);
 create snapshot history_drop_current_s for table br_schema_drift history_drop_current;

@@ -320,7 +320,7 @@ func loadBranchDAGWithBH(
 	// reclaim `__mo_branch_<A>` — leaking the snapshot forever (review
 	// PR#24313 blocking issue #1).
 	sql := fmt.Sprintf(
-		"select table_id, p_table_id, clone_ts, table_deleted from %s.%s for update",
+		"select table_id, p_table_id, clone_ts, level, table_deleted from %s.%s for update",
 		catalog.MO_CATALOG, catalog.MO_BRANCH_METADATA,
 	)
 	if err := bh.Exec(sysCtx, sql); err != nil {
@@ -352,7 +352,11 @@ func loadBranchDAGWithBH(
 			if gerr != nil {
 				return databranchutils.BranchReclaimDag{}, gerr
 			}
-			deletedInt, gerr := er.GetInt64(sysCtx, row, 3)
+			level, gerr := er.GetString(sysCtx, row, 3)
+			if gerr != nil {
+				return databranchutils.BranchReclaimDag{}, gerr
+			}
+			deletedInt, gerr := er.GetInt64(sysCtx, row, 4)
 			if gerr != nil {
 				return databranchutils.BranchReclaimDag{}, gerr
 			}
@@ -360,6 +364,7 @@ func loadBranchDAGWithBH(
 				TableID:      tableID,
 				CloneTS:      cloneTS,
 				PTableID:     parentID,
+				Level:        level,
 				TableDeleted: deletedInt != 0,
 			})
 		}

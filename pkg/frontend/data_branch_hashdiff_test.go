@@ -1099,6 +1099,7 @@ func TestLCAProbeColumnLayoutExcludesTargetOnlyColumns(t *testing.T) {
 		[]string{"id", "name", "added"},
 		[]types.Type{types.T_int64.ToType(), types.T_varchar.ToType(), types.T_int64.ToType()},
 		[]int{2},
+		nil,
 	)
 
 	require.NoError(t, err)
@@ -1114,11 +1115,53 @@ func TestLCAProbeColumnLayoutExcludesTargetOnlyColumnsWithoutLCAMetadata(t *test
 		[]string{"a", "c"},
 		[]types.Type{types.T_int64.ToType(), types.T_int32.ToType()},
 		[]int{1},
+		nil,
 	)
 
 	require.NoError(t, err)
 	require.Equal(t, []string{"a"}, layout.attrs)
 	require.Equal(t, []int{0}, layout.targetIdxes)
+}
+
+func TestLCAProbeColumnLayoutUsesLineageResolvedRename(t *testing.T) {
+	lcaDef := &plan.TableDef{Cols: []*plan.ColDef{
+		{Name: "a", ColId: 1, Seqnum: 0, Typ: plan.Type{Id: int32(types.T_int64)}},
+		{Name: "b", ColId: 2, Seqnum: 1, Typ: plan.Type{Id: int32(types.T_int64)}},
+	}}
+	targetDef := &plan.TableDef{Cols: []*plan.ColDef{
+		{Name: "a", ColId: 1, Seqnum: 0, Typ: plan.Type{Id: int32(types.T_int64)}},
+		{Name: "bb", ColId: 2, Seqnum: 1, Typ: plan.Type{Id: int32(types.T_int64)}},
+	}}
+
+	layout, err := lcaProbeColumnLayout(
+		lcaDef,
+		targetDef,
+		[]string{"a", "bb"},
+		[]types.Type{types.T_int64.ToType(), types.T_int64.ToType()},
+		nil,
+		[]string{"a", "b"},
+	)
+
+	require.NoError(t, err)
+	require.Equal(t, []string{"a", "b"}, layout.attrs)
+	require.Equal(t, []int{0, 1}, layout.targetIdxes)
+}
+
+func TestDataBranchHistoricalProbeStuffUsesEndpointRenameMapping(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	targetRel := mock_frontend.NewMockRelation(ctrl)
+	baseRel := mock_frontend.NewMockRelation(ctrl)
+	targetRel.EXPECT().GetTableID(gomock.Any()).Return(uint64(2)).AnyTimes()
+	baseRel.EXPECT().GetTableID(gomock.Any()).Return(uint64(3)).AnyTimes()
+	tblStuff := tableStuff{tarRel: targetRel, baseRel: baseRel}
+	tblStuff.def.baseColNames = []string{"a", "base_name"}
+	tblStuff.def.lcaColNames = []string{"a", "ancestor_name"}
+
+	targetProbe := dataBranchHistoricalProbeStuff(context.Background(), tblStuff, targetRel)
+	require.Nil(t, targetProbe.def.lcaColNames)
+
+	baseProbe := dataBranchHistoricalProbeStuff(context.Background(), tblStuff, baseRel)
+	require.Equal(t, []string{"a", "base_name"}, baseProbe.def.lcaColNames)
 }
 
 func TestLCAProbeColumnLayoutExcludesIncompatibleTargetOnlyColumn(t *testing.T) {
@@ -1138,6 +1181,7 @@ func TestLCAProbeColumnLayoutExcludesIncompatibleTargetOnlyColumn(t *testing.T) 
 		[]string{"a", "c"},
 		[]types.Type{types.T_int64.ToType(), types.New(types.T_varchar, 20, 0)},
 		[]int{1},
+		nil,
 	)
 
 	require.NoError(t, err)
@@ -1161,6 +1205,7 @@ func TestLCAProbeColumnLayoutRejectsIncompatibleCommonColumn(t *testing.T) {
 		[]string{"a", "b"},
 		[]types.Type{types.T_int64.ToType(), types.New(types.T_varchar, 20, 0)},
 		nil,
+		nil,
 	)
 
 	require.ErrorContains(t, err, "column b has a different type")
@@ -1182,6 +1227,7 @@ func TestLCAProbeColumnLayoutIgnoresTargetOnlyRowIDCollision(t *testing.T) {
 		[]string{"a", "c"},
 		[]types.Type{types.T_int64.ToType(), types.T_int32.ToType()},
 		[]int{1},
+		nil,
 	)
 
 	require.NoError(t, err)
@@ -1204,6 +1250,7 @@ func TestLCAProbeColumnLayoutIgnoresUnrelatedIdentityCollision(t *testing.T) {
 		targetDef,
 		[]string{"a", "c"},
 		[]types.Type{types.T_int64.ToType(), types.T_int64.ToType()},
+		nil,
 		nil,
 	)
 
@@ -2775,6 +2822,7 @@ func TestDataBranchSourceColToTargetIdxPreservesRebuiltCompositePrimaryKey(t *te
 			types.T_int64.ToType(), types.T_varchar.ToType(),
 		},
 		[]int{2},
+		nil,
 	)
 	require.NoError(t, err)
 	require.Equal(t, []string{"select", "line item", catalog.CPrimaryKeyColName}, layout.attrs)

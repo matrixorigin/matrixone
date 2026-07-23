@@ -89,6 +89,7 @@ func lcaProbeColumnLayout(
 	targetColNames []string,
 	targetColTypes []types.Type,
 	targetOnlyIdxes []int,
+	lcaColNames []string,
 ) (lcaProbeLayout, error) {
 	targetOnly := make(map[int]struct{}, len(targetOnlyIdxes))
 	for _, idx := range targetOnlyIdxes {
@@ -122,7 +123,13 @@ func lcaProbeColumnLayout(
 				"DATA BRANCH target column %q is unavailable", name,
 			)
 		}
-		lcaCol := dataBranchColumnDefByLogicalName(lcaDef, targetCol)
+		var lcaCol *plan2.ColDef
+		if targetIdx < len(lcaColNames) && lcaColNames[targetIdx] != "" {
+			lcaCol = dataBranchColumnDefByName(lcaDef, lcaColNames[targetIdx])
+		}
+		if lcaCol == nil {
+			lcaCol = dataBranchColumnDefByLogicalName(lcaDef, targetCol)
+		}
 		candidate := dataBranchColumnDefByName(lcaDef, targetCol.Name)
 		if candidate != nil &&
 			isDataBranchDerivedCompositePKColumn(lcaDef, targetDef, candidate, targetCol) {
@@ -181,7 +188,7 @@ func handleDelsOnLCA(
 	)
 	lcaLayout, err := lcaProbeColumnLayout(
 		lcaTblDef, targetTblDef, tblStuff.def.colNames, tblStuff.def.colTypes,
-		tblStuff.def.tarOnlyIdxes,
+		tblStuff.def.tarOnlyIdxes, tblStuff.def.lcaColNames,
 	)
 	if err != nil {
 		return nil, err
@@ -603,7 +610,7 @@ func runLCAProbeWithReaderFallback(
 	targetTblDef := tblStuff.tarRel.GetTableDef(ctx)
 	lcaLayout, err := lcaProbeColumnLayout(
 		lcaTblDef, targetTblDef, tblStuff.def.colNames, tblStuff.def.colTypes,
-		tblStuff.def.tarOnlyIdxes,
+		tblStuff.def.tarOnlyIdxes, tblStuff.def.lcaColNames,
 	)
 	if err != nil {
 		return executor.Result{}, err
@@ -2907,6 +2914,9 @@ func dataBranchHistoricalProbeStuff(
 		// were absent or incompatible in an older physical generation.
 		probeStuff.tarRel = endpointRel
 		probeStuff.def.tarOnlyIdxes = nil
+		probeStuff.def.lcaColNames = nil
+	} else {
+		probeStuff.def.lcaColNames = probeStuff.def.baseColNames
 	}
 	return probeStuff
 }

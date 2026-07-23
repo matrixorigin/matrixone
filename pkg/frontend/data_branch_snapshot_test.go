@@ -444,6 +444,25 @@ func TestReclaimCore_DropList(t *testing.T) {
 	// Drops are sorted lexicographically: __mo_branch_2 < __mo_branch_4.
 	require.Equal(t, []string{"__mo_branch_2", "__mo_branch_4"}, got)
 
+	// ALTER-only generations are owned by the historical-lineage compactor.
+	// The generic drop path must leave their identity snapshots in place so
+	// account/database snapshot scope remains available to that compactor.
+	got = nil
+	err = databranchutils.ReclaimBranchSnapshotsCore(
+		[]uint64{2},
+		func() (databranchutils.BranchReclaimDag, error) {
+			return databranchutils.NewBranchReclaimDag([]databranchutils.DataBranchMetadata{
+				{TableID: 2, PTableID: 1, CloneTS: 100, Level: "alter", TableDeleted: true},
+			}), nil
+		},
+		func(snames []string) error {
+			got = append([]string(nil), snames...)
+			return nil
+		},
+	)
+	require.NoError(t, err)
+	require.Empty(t, got)
+
 	// ---- No dead tids: loader / deleter must not run.
 	loadCalls := 0
 	deleteCalls := 0

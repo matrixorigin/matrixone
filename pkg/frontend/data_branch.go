@@ -981,6 +981,9 @@ func getTableStuff(
 
 	tarTblDef = tblStuff.tarRel.GetTableDef(ctx)
 	baseTblDef = tblStuff.baseRel.GetTableDef(ctx)
+	if err = checkDataBranchPrimaryKeyCompatibility(tarTblDef, baseTblDef); err != nil {
+		return
+	}
 
 	for _, col := range tarTblDef.Cols {
 		if col.Name == catalog.Row_ID {
@@ -1086,6 +1089,22 @@ func reconcileDataBranchEndpointSchema(
 		if err != nil {
 			return err
 		}
+		tables.def.lcaColNames = make([]string, len(tables.def.colNames))
+		for _, tarCol := range tarDef.Cols {
+			if tarCol.Name == catalog.Row_ID {
+				continue
+			}
+			reachesLCA, lcaCol, redefined := dataBranchColumnReachesLCA(
+				tarDefs, dagInfo.pathFromLCAToTarLineageOnly, tarCol,
+			)
+			if !reachesLCA || redefined || lcaCol == nil {
+				continue
+			}
+			idx := dataBranchColumnIndexByName(tables.def.colNames, tarCol.Name)
+			if idx >= 0 {
+				tables.def.lcaColNames[idx] = lcaCol.Name
+			}
+		}
 		resolveBaseColumn = func(tarCol *plan.ColDef) *plan.ColDef {
 			if baseCol := endpointColumns[strings.ToLower(tarCol.Name)]; baseCol != nil {
 				return baseCol
@@ -1116,6 +1135,7 @@ func reconcileDataBranchEndpointSchema(
 	for i := range tables.def.baseColToTarIdx {
 		tables.def.baseColToTarIdx[i] = -1
 	}
+	tables.def.baseColNames = make([]string, len(tables.def.colNames))
 	for _, tarCol := range tarDef.Cols {
 		if tarCol.Name == catalog.Row_ID {
 			continue
@@ -1124,11 +1144,13 @@ func reconcileDataBranchEndpointSchema(
 		if baseCol == nil {
 			continue
 		}
+		tarIdx := dataBranchColumnIndexByName(tables.def.colNames, tarCol.Name)
+		if tarIdx >= 0 {
+			tables.def.baseColNames[tarIdx] = baseCol.Name
+		}
 		for i, candidate := range baseDataCols {
 			if strings.EqualFold(candidate.Name, baseCol.Name) {
-				tables.def.baseColToTarIdx[i] = dataBranchColumnIndexByName(
-					tables.def.colNames, tarCol.Name,
-				)
+				tables.def.baseColToTarIdx[i] = tarIdx
 				break
 			}
 		}
