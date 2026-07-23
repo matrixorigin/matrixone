@@ -1066,10 +1066,23 @@ func forceAssignmentCastExpr(ctx context.Context, expr *Expr, targetType Type) (
 }
 
 func (builder *QueryBuilder) forceProjectedAssignmentCastExpr(expr, sourceExpr *Expr, targetType Type) (*Expr, error) {
-	if targetType.Id == int32(types.T_json) && builder.isProjectedEnumDisplayValueExpr(sourceExpr, nil) {
-		return quoteEnumDisplayValueAsJSON(builder.GetContext(), expr)
+	var err error
+	expr, err = builder.rewriteProjectedEnumDisplayValueToJSONCast(expr, sourceExpr, targetType)
+	if err != nil || expr.Typ.Id == int32(types.T_json) {
+		return expr, err
 	}
 	return forceAssignmentCastExpr(builder.GetContext(), expr, targetType)
+}
+
+func (builder *QueryBuilder) rewriteProjectedEnumDisplayValueToJSONCast(expr, sourceExpr *Expr, targetType Type) (*Expr, error) {
+	if builder == nil || expr == nil || sourceExpr == nil ||
+		targetType.Id != int32(types.T_json) || sourceExpr.Typ.Id == int32(types.T_enum) {
+		return expr, nil
+	}
+	if builder.isProjectedEnumDisplayValueExpr(sourceExpr, nil) {
+		return quoteEnumDisplayValueAsJSON(builder.GetContext(), expr)
+	}
+	return expr, nil
 }
 
 func (builder *QueryBuilder) isProjectedEnumDisplayValueExpr(expr *Expr, visited map[[2]int32]struct{}) bool {

@@ -252,6 +252,47 @@ order by id;
 select e_json from convert_json_enum
 minus all
 select e_json from convert_json_enum;
+
+-- Explicit casts retain projected ENUM display-value provenance.
+select json_type(convert(e, json)), json_unquote(convert(e, json))
+from (
+    select e_json as e from convert_json_enum where id = 1
+) src;
+select id, json_type(cast(e as json)), json_unquote(cast(e as json))
+from (
+    select 1 as id, e_json as e from convert_json_enum where id = 1
+    union
+    select 2 as id, e_json as e from convert_json_enum where id = 1
+) src
+order by id;
+-- A mixed set-operation result remains an ordinary JSON document source.
+select id, json_type(convert(e, json)), json_unquote(convert(e, json))
+from (
+    select 1 as id, e_json as e from convert_json_enum where id = 1
+    union all
+    select 2 as id, cast('{"b":2}' as varchar) as e
+) src
+order by id;
+
+-- UPDATE assignment uses the same projected ENUM provenance rule as INSERT.
+create table convert_json_enum_update(id int primary key, j json);
+insert into convert_json_enum_update values (1, null), (2, null), (3, null);
+update convert_json_enum_update dst
+join (
+    select id, e_json as e from convert_json_enum where id = 1
+) src on dst.id = src.id
+set dst.j = src.e;
+update convert_json_enum_update dst
+join (
+    select 2 as id, e_json as e from convert_json_enum where id = 1
+    union all
+    select 3 as id, cast('{"b":2}' as varchar) as e
+) src on dst.id = src.id
+set dst.j = src.e;
+select id, json_type(j), json_unquote(j)
+from convert_json_enum_update
+order by id;
+drop table convert_json_enum_update;
 drop table convert_json_enum_destination;
 drop table convert_json_enum;
 

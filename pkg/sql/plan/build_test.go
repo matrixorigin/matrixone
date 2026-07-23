@@ -482,6 +482,84 @@ func TestInsertSelectEnumToJSONQuotesDisplayValue(t *testing.T) {
 	}
 }
 
+func TestProjectedEnumToJSONExplicitCastQuotesDisplayValue(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	source := mock.ctxt.tables["nation"]
+	source.Cols[1].Typ = plan.Type{
+		Id:         int32(types.T_enum),
+		Enumvalues: `alpha,{"a":1}`,
+	}
+
+	for _, tc := range []struct {
+		sql       string
+		wantQuote bool
+	}{
+		{sql: "select convert(name, json) from (select n_name as name from nation) src", wantQuote: true},
+		{sql: "select cast(name as json) from (select n_name as name from nation union all select n_name from nation) src", wantQuote: true},
+		{sql: "select convert(name, json) from (select n_name as name from nation union select n_name from nation) src", wantQuote: true},
+		{sql: "select convert(name, json) from (select n_name as name from nation union all select n_comment from nation) src", wantQuote: false},
+	} {
+		logicPlan, err := runOneStmt(mock, t, tc.sql)
+		require.NoError(t, err, tc.sql)
+
+		foundJSONQuote := false
+		for _, node := range logicPlan.GetQuery().Nodes {
+			for _, expr := range node.ProjectList {
+				if exprContainsFuncName(expr, "json_quote") {
+					foundJSONQuote = true
+				}
+			}
+		}
+		require.Equal(t, tc.wantQuote, foundJSONQuote, "unexpected ENUM display quoting decision: %s", tc.sql)
+	}
+}
+
+func TestUpdateProjectedEnumToJSONQuotesDisplayValue(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	table := mock.ctxt.tables["nation"]
+	table.Cols[1].Typ = plan.Type{
+		Id:         int32(types.T_enum),
+		Enumvalues: `alpha,{"a":1}`,
+	}
+	for _, col := range table.Cols {
+		if col.Name == "n_comment" {
+			col.Typ = plan.Type{Id: int32(types.T_json)}
+			break
+		}
+	}
+
+	for _, tc := range []struct {
+		sql       string
+		wantQuote bool
+	}{
+		{
+			sql:       "update nation n join (select n_nationkey as id, n_name as value from nation) src on n.n_nationkey = src.id set n.n_comment = src.value",
+			wantQuote: true,
+		},
+		{
+			sql:       "update nation n join (select n_nationkey as id, n_name as value from nation union all select n_nationkey, n_name from nation) src on n.n_nationkey = src.id set n.n_comment = src.value",
+			wantQuote: true,
+		},
+		{
+			sql:       "update nation n join (select n_nationkey as id, n_name as value from nation union all select n_nationkey, cast('{\"a\":1}' as varchar) from nation) src on n.n_nationkey = src.id set n.n_comment = src.value",
+			wantQuote: false,
+		},
+	} {
+		logicPlan, err := runOneStmt(mock, t, tc.sql)
+		require.NoError(t, err, tc.sql)
+
+		foundJSONQuote := false
+		for _, node := range logicPlan.GetQuery().Nodes {
+			for _, expr := range node.ProjectList {
+				if exprContainsFuncName(expr, "json_quote") {
+					foundJSONQuote = true
+				}
+			}
+		}
+		require.Equal(t, tc.wantQuote, foundJSONQuote, "unexpected ENUM display quoting decision: %s", tc.sql)
+	}
+}
+
 func TestOnDuplicateUpdateVarcharFromTextUsesStrictAssignmentCast(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	addTextCastTableForTest(mock)

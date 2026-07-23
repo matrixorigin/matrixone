@@ -297,7 +297,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 						return 0, err
 					}
 				} else {
-					selectNode.ProjectList[colPos], err = forceAssignmentCastExpr(builder.GetContext(), updateExpr, col.Typ)
+					selectNode.ProjectList[colPos], err = builder.forceProjectedAssignmentCastExpr(updateExpr, updateExpr, col.Typ)
 					if err != nil {
 						return 0, err
 					}

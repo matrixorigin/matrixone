@@ -334,6 +334,54 @@ select e_json from convert_json_enum
 minus all
 select e_json from convert_json_enum;
 EXCEPT/MINUS ALL clause is not yet implemented
+select json_type(convert(e, json)), json_unquote(convert(e, json))
+from (
+select e_json as e from convert_json_enum where id = 1
+) src;
+➤ json_type(cast(e as json))[12,-1,0]  ¦  json_unquote(cast(e as json))[12,-1,0]  𝄀
+STRING  ¦  {"a":1}
+select id, json_type(cast(e as json)), json_unquote(cast(e as json))
+from (
+select 1 as id, e_json as e from convert_json_enum where id = 1
+union
+select 2 as id, e_json as e from convert_json_enum where id = 1
+) src
+order by id;
+➤ id[-5,64,0]  ¦  json_type(cast(e as json))[12,-1,0]  ¦  json_unquote(cast(e as json))[12,-1,0]  𝄀
+1  ¦  STRING  ¦  {"a":1}  𝄀
+2  ¦  STRING  ¦  {"a":1}
+select id, json_type(convert(e, json)), json_unquote(convert(e, json))
+from (
+select 1 as id, e_json as e from convert_json_enum where id = 1
+union all
+select 2 as id, cast('{"b":2}' as varchar) as e
+) src
+order by id;
+➤ id[-5,64,0]  ¦  json_type(cast(e as json))[12,-1,0]  ¦  json_unquote(cast(e as json))[12,-1,0]  𝄀
+1  ¦  OBJECT  ¦  {"a": 1}  𝄀
+2  ¦  OBJECT  ¦  {"b": 2}
+create table convert_json_enum_update(id int primary key, j json);
+insert into convert_json_enum_update values (1, null), (2, null), (3, null);
+update convert_json_enum_update dst
+join (
+select id, e_json as e from convert_json_enum where id = 1
+) src on dst.id = src.id
+set dst.j = src.e;
+update convert_json_enum_update dst
+join (
+select 2 as id, e_json as e from convert_json_enum where id = 1
+union all
+select 3 as id, cast('{"b":2}' as varchar) as e
+) src on dst.id = src.id
+set dst.j = src.e;
+select id, json_type(j), json_unquote(j)
+from convert_json_enum_update
+order by id;
+➤ id[4,32,0]  ¦  json_type(j)[12,-1,0]  ¦  json_unquote(j)[12,-1,0]  𝄀
+1  ¦  STRING  ¦  {"a":1}  𝄀
+2  ¦  OBJECT  ¦  {"a": 1}  𝄀
+3  ¦  OBJECT  ¦  {"b": 2}
+drop table convert_json_enum_update;
 drop table convert_json_enum_destination;
 drop table convert_json_enum;
 prepare convert_json_parameter from 'select json_type(convert(?, json)), convert(?, json)';

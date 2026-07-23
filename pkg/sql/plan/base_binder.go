@@ -155,6 +155,12 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		if err != nil {
 			return
 		}
+		if b.builder != nil {
+			expr, err = b.builder.rewriteProjectedEnumDisplayValueToJSONCast(expr, expr, typ)
+			if err != nil {
+				return
+			}
+		}
 		if useExplicitCastOverload(exprImpl.Type) {
 			expr, err = appendExplicitCastBeforeExpr(b.GetContext(), expr, typ)
 		} else {
