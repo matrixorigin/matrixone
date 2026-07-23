@@ -9759,6 +9759,21 @@ func TestMakeTimeExactStringSecondRounding(t *testing.T) {
 	require.Zero(t, second)
 	require.Zero(t, microsecond)
 
+	for _, test := range []struct {
+		name  string
+		value string
+	}{
+		{name: "wide leading zeroes", value: strings.Repeat("0", 4096) + "1"},
+		{name: "wide trailing fractional zeroes", value: "1." + strings.Repeat("0", 4097)},
+		{name: "wide fractional leading zeroes canceled by exponent", value: "0." + strings.Repeat("0", 4096) + "1e4097"},
+		{name: "wide integer trailing zeroes canceled by exponent", value: "1" + strings.Repeat("0", 4096) + "e-4096"},
+	} {
+		second, microsecond, null = makeTimeExactSecond(test.value)
+		require.False(t, null, test.name)
+		require.Equal(t, int64(1), second, test.name)
+		require.Zero(t, microsecond, test.name)
+	}
+
 	for _, value := range []string{"1e-4103", "1e-4104"} {
 		second, microsecond, null = makeTimeExactSecond(value)
 		require.False(t, null, value)

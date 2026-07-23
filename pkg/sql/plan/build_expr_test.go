@@ -447,6 +447,9 @@ func TestMakeTimeBinaryLiteralBindAndExecute(t *testing.T) {
 		{name: "safe exponent underflow", sql: "select cast(maketime(12, 34, '1e-5000') as varchar)", want: "12:34:00.000000"},
 		{name: "zero mantissa huge exponent", sql: "select cast(maketime(12, 34, '0e5000') as varchar)", want: "12:34:00.000000"},
 		{name: "wide zero mantissa", sql: "select cast(maketime(12, 34, '" + strings.Repeat("0", 4097) + "') as varchar)", want: "12:34:00.000000"},
+		{name: "wide leading zero second", sql: "select cast(maketime(12, 34, '" + strings.Repeat("0", 4096) + "1') as varchar)", want: "12:34:01.000000"},
+		{name: "wide trailing fractional zero second", sql: "select cast(maketime(12, 34, '1." + strings.Repeat("0", 4097) + "') as varchar)", want: "12:34:01.000000"},
+		{name: "wide zero padding canceled by exponent", sql: "select cast(maketime(12, 34, '0." + strings.Repeat("0", 4096) + "1e4097') as varchar)", want: "12:34:01.000000"},
 	}
 
 	for _, test := range tests {

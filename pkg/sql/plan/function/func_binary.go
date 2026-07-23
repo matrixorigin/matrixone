@@ -7451,34 +7451,56 @@ func makeTimeExactSecond(value string) (int64, uint32, bool) {
 	}
 
 	end := 0
+	negative := false
 	if value[end] == '+' || value[end] == '-' {
+		negative = value[end] == '-'
 		end++
 	}
-	digits := 0
-	nonzeroMantissa := false
+
+	totalDigits := 0
+	firstNonzeroDigit := -1
+	lastNonzeroDigit := -1
+	integerStart := end
 	for end < len(value) && value[end] >= '0' && value[end] <= '9' {
-		nonzeroMantissa = nonzeroMantissa || value[end] != '0'
+		if value[end] != '0' {
+			if firstNonzeroDigit == -1 {
+				firstNonzeroDigit = totalDigits
+			}
+			lastNonzeroDigit = totalDigits
+		}
 		end++
-		digits++
+		totalDigits++
 	}
+	integerEnd := end
+	fractionStart := end
+	fractionEnd := end
 	if end < len(value) && value[end] == '.' {
 		end++
+		fractionStart = end
 		for end < len(value) && value[end] >= '0' && value[end] <= '9' {
-			nonzeroMantissa = nonzeroMantissa || value[end] != '0'
+			if value[end] != '0' {
+				if firstNonzeroDigit == -1 {
+					firstNonzeroDigit = totalDigits
+				}
+				lastNonzeroDigit = totalDigits
+			}
 			end++
-			digits++
+			totalDigits++
 		}
+		fractionEnd = end
 	}
-	if digits == 0 {
+	if totalDigits == 0 {
 		return 0, 0, false
 	}
-	if !nonzeroMantissa {
+	if firstNonzeroDigit == -1 {
 		return 0, 0, false
 	}
-	if digits > maxExactSecondDigits {
+	significantDigits := lastNonzeroDigit - firstNonzeroDigit + 1
+	if significantDigits > maxExactSecondDigits {
 		return 0, 0, true
 	}
 
+	exponent := 0
 	if end < len(value) && (value[end] == 'e' || value[end] == 'E') {
 		exponentStart := end
 		end++
@@ -7489,25 +7511,65 @@ func makeTimeExactSecond(value string) (int64, uint32, bool) {
 		}
 		exponentDigits := end
 		exponentMagnitude := 0
+		exponentLimit := maxExactSecondExponent + totalDigits
+		exponentOverflow := false
 		for end < len(value) && value[end] >= '0' && value[end] <= '9' {
-			if exponentMagnitude <= maxExactSecondExponent {
-				exponentMagnitude = exponentMagnitude*10 + int(value[end]-'0')
+			digit := int(value[end] - '0')
+			if !exponentOverflow {
+				if exponentMagnitude > (exponentLimit-digit)/10 {
+					exponentOverflow = true
+				} else {
+					exponentMagnitude = exponentMagnitude*10 + digit
+				}
 			}
 			end++
 		}
 		if end == exponentDigits {
 			end = exponentStart
-		} else if negativeExponent && exponentMagnitude > maxExactSecondExponent {
-			return 0, 0, false
-		} else if exponentMagnitude > maxExactSecondExponent {
+		} else if exponentOverflow {
+			if negativeExponent {
+				return 0, 0, false
+			}
 			return 0, 0, true
+		} else if negativeExponent {
+			exponent = -exponentMagnitude
+		} else {
+			exponent = exponentMagnitude
 		}
 	}
-	if end > maxExactSecondDigits {
+
+	fractionDigits := fractionEnd - fractionStart
+	trailingZeroDigits := totalDigits - lastNonzeroDigit - 1
+	exponent += trailingZeroDigits - fractionDigits
+	if exponent < -maxExactSecondExponent {
+		return 0, 0, false
+	}
+	if exponent > maxExactSecondExponent {
 		return 0, 0, true
 	}
 
-	second, ok := new(big.Rat).SetString(value[:end])
+	var normalized strings.Builder
+	normalized.Grow(significantDigits + 16)
+	if negative {
+		normalized.WriteByte('-')
+	}
+	digitIndex := 0
+	appendSignificantDigits := func(part string) {
+		for i := range part {
+			if digitIndex >= firstNonzeroDigit && digitIndex <= lastNonzeroDigit {
+				normalized.WriteByte(part[i])
+			}
+			digitIndex++
+		}
+	}
+	appendSignificantDigits(value[integerStart:integerEnd])
+	appendSignificantDigits(value[fractionStart:fractionEnd])
+	if exponent != 0 {
+		normalized.WriteByte('e')
+		normalized.WriteString(strconv.Itoa(exponent))
+	}
+
+	second, ok := new(big.Rat).SetString(normalized.String())
 	if !ok || second.Sign() < 0 || second.Cmp(big.NewRat(60, 1)) >= 0 {
 		return 0, 0, true
 	}
