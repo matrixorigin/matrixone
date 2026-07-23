@@ -336,7 +336,7 @@ create table base_schema_mismatch(id int primary key, payload varchar(20));
 data branch create table branch_schema_mismatch from base_schema_mismatch;
 alter table branch_schema_mismatch modify payload varchar(80);
 insert into branch_schema_mismatch values (1, repeat(char(120), 40));
--- @regex("target table schema is not equivalent",true)
+-- @regex("column 'payload' has different type attributes",true)
 data branch diff branch_schema_mismatch against base_schema_mismatch
     output as diff_schema_mismatch;
 select count(*) as diff_schema_mismatch_tables

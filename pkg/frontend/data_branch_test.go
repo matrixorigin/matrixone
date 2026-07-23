@@ -1322,6 +1322,59 @@ func TestValidateDataBranchColumnLineage(t *testing.T) {
 			tarDefs, []bool{false, false}, baseDefs, []bool{false, false},
 		))
 	})
+
+	t.Run("rename without origin name preserves stable identity", func(t *testing.T) {
+		tarDefs := []*plan.TableDef{
+			tableDef(col("a", 1, 0), col("b", 2, 1)),
+			tableDef(col("a", 1, 0), col("bb", 2, 1)),
+		}
+		baseDefs := []*plan.TableDef{
+			tableDef(col("a", 1, 0), col("b", 2, 1)),
+			tableDef(col("a", 1, 0), col("b", 2, 1)),
+		}
+		require.NoError(t, validateDataBranchColumnLineage(
+			tarDefs, []bool{false, false}, baseDefs, []bool{false, false},
+		))
+	})
+
+	t.Run("replacement with colliding endpoint identity remains discontinuous", func(t *testing.T) {
+		tarDefs := []*plan.TableDef{
+			tableDef(col("a", 1, 0), col("b", 2, 1)),
+			tableDef(col("a", 10, 0)),
+			tableDef(col("a", 20, 0), col("c", 2, 1)),
+		}
+		baseDefs := []*plan.TableDef{
+			tableDef(col("a", 1, 0), col("b", 2, 1)),
+			tableDef(col("a", 1, 0), col("b", 2, 1)),
+		}
+		err := validateDataBranchColumnLineage(
+			tarDefs, []bool{false, true, true}, baseDefs, []bool{false, false},
+		)
+		require.ErrorContains(t, err, "column 'c' has different identity")
+	})
+}
+
+func TestCheckSchemaCompatibility_AllowsStableIdentityRename(t *testing.T) {
+	baseDef := &plan.TableDef{
+		Pkey: &plan.PrimaryKeyDef{Names: []string{"a"}, PkeyColName: "a"},
+		Cols: []*plan.ColDef{
+			{Name: "a", ColId: 1, Seqnum: 0, Primary: true, Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "b", ColId: 2, Seqnum: 1, Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+	}
+	targetDef := &plan.TableDef{
+		Pkey: &plan.PrimaryKeyDef{Names: []string{"a"}, PkeyColName: "a"},
+		Cols: []*plan.ColDef{
+			{Name: "a", ColId: 1, Seqnum: 0, Primary: true, Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "bb", ColId: 2, Seqnum: 1, Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+	}
+
+	common, visible, targetOnly, err := checkSchemaCompatibility(targetDef, baseDef)
+	require.NoError(t, err)
+	require.Equal(t, []int{0, 1}, common)
+	require.Equal(t, []int{0, 1}, visible)
+	require.Empty(t, targetOnly)
 }
 
 func TestCheckSchemaCompatibility_RejectsDifferentTypeAttributes(t *testing.T) {

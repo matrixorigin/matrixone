@@ -1057,7 +1057,7 @@ func getTableStuff(
 		}
 		for i, name := range baseDataNames {
 			baseCol := dataBranchColumnDefByName(baseTblDef, name)
-			tarCol := dataBranchColumnDefByLogicalName(tarTblDef, baseCol)
+			tarCol := dataBranchEndpointColumnDef(tarTblDef, baseCol)
 			if tarCol != nil {
 				tblStuff.def.baseColToTarIdx[i] = dataBranchColumnIndexByName(
 					tblStuff.def.colNames, tarCol.Name,
@@ -1255,7 +1255,7 @@ func checkSchemaCompatibility(tarDef, baseDef *plan.TableDef) (commonIdxes, comm
 		}
 
 		name := strings.ToLower(tarCol.Name)
-		baseCol := dataBranchColumnDefByLogicalName(baseDef, tarCol)
+		baseCol := dataBranchEndpointColumnDef(baseDef, tarCol)
 		if baseCol != nil {
 			if baseCol.Typ.Id == tarCol.Typ.Id {
 				if !dataBranchColumnTypeAttributesEqual(baseCol.Typ, tarCol.Typ) {
@@ -1775,8 +1775,12 @@ func dataBranchColumnReachesLCA(
 		previous := dataBranchColumnDefByName(pathDefs[i], current.Name)
 		if previous == nil && !lineageOnly[i+1] {
 			// An in-place rename on an ordinary clone edge keeps OriginName,
-			// which links the descendant name back to its ancestor name.
+			// or at least its stable physical identity, which links the
+			// descendant name back to its ancestor column.
 			previous = dataBranchColumnDefByLogicalName(pathDefs[i], current)
+			if previous == nil {
+				previous = dataBranchColumnDefByIdentity(pathDefs[i], current)
+			}
 		}
 		if previous == nil {
 			for j := i - 1; j >= 0; j-- {
@@ -1818,7 +1822,7 @@ func validateDataBranchColumnLineage(
 		if !isDataBranchUserVisibleColumn(tarCol) {
 			continue
 		}
-		baseCol := dataBranchColumnDefByLogicalName(baseEndpoint, tarCol)
+		baseCol := dataBranchEndpointColumnDef(baseEndpoint, tarCol)
 		if baseCol == nil || !isDataBranchUserVisibleColumn(baseCol) {
 			continue
 		}

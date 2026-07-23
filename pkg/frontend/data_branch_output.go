@@ -455,6 +455,9 @@ func dataBranchColumnDefByName(tableDef *plan2.TableDef, name string) *plan2.Col
 }
 
 func dataBranchColumnDefByIdentity(tableDef *plan2.TableDef, sourceColDef *plan2.ColDef) *plan2.ColDef {
+	if tableDef == nil || sourceColDef == nil || sourceColDef.ColId == 0 {
+		return nil
+	}
 	for _, colDef := range tableDef.Cols {
 		if colDef != nil &&
 			colDef.ColId == sourceColDef.ColId &&
@@ -484,6 +487,16 @@ func dataBranchColumnDefByLogicalName(tableDef *plan2.TableDef, sourceColDef *pl
 		}
 	}
 	return nil
+}
+
+func dataBranchEndpointColumnDef(tableDef *plan2.TableDef, sourceColDef *plan2.ColDef) *plan2.ColDef {
+	if colDef := dataBranchColumnDefByLogicalName(tableDef, sourceColDef); colDef != nil {
+		return colDef
+	}
+	// A rename on an ordinary clone keeps the physical identity even when the
+	// endpoint definition no longer carries OriginName. Later path validation
+	// still rejects DROP/ADD discontinuities before DIFF or MERGE reads data.
+	return dataBranchColumnDefByIdentity(tableDef, sourceColDef)
 }
 
 // dataBranchColumnsByIdentity maps each source column name to the column with

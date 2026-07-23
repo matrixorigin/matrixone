@@ -458,8 +458,8 @@ alter table branch_schema_mismatch modify payload varchar(80);
 insert into branch_schema_mismatch values (1, repeat(char(120), 40));
 data branch diff branch_schema_mismatch against base_schema_mismatch
 output as diff_schema_mismatch;
--- @regex("target table schema is not equivalent", true)
-internal error: the target table schema is not equivalent to the base table.
+-- @regex("column 'payload' has different type attributes", true)
+internal error: schema compatibility check: column 'payload' has different type attributes
 select count(*) as diff_schema_mismatch_tables
 from mo_catalog.mo_tables
 where reldatabase = 'test_diff_output_as' and relname = 'diff_schema_mismatch';
