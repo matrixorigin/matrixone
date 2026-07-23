@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"math"
+	"sync/atomic"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -41,6 +42,37 @@ import (
 type winTestCase struct {
 	arg  *Window
 	proc *process.Process
+}
+
+type cancelAfterDoneChecksContext struct {
+	context.Context
+	done      chan struct{}
+	remaining atomic.Int32
+}
+
+func newCancelAfterDoneChecksContext(parent context.Context, checks int32) *cancelAfterDoneChecksContext {
+	ctx := &cancelAfterDoneChecksContext{
+		Context: parent,
+		done:    make(chan struct{}),
+	}
+	ctx.remaining.Store(checks)
+	return ctx
+}
+
+func (c *cancelAfterDoneChecksContext) Done() <-chan struct{} {
+	if c.remaining.Add(-1) == 0 {
+		close(c.done)
+	}
+	return c.done
+}
+
+func (c *cancelAfterDoneChecksContext) Err() error {
+	select {
+	case <-c.done:
+		return context.Canceled
+	default:
+		return nil
+	}
 }
 
 func makeTestCases(t *testing.T) []winTestCase {
@@ -112,6 +144,46 @@ func TestWin(t *testing.T) {
 		tc.proc.Free()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
+}
+
+func TestWindowFrameEvaluationHonorsCancellation(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	const rows = cancellationCheckInterval * 2
+	values := make([]int32, rows)
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = testutil.MakeInt32Vector(values, nil, proc.Mp())
+	bat.SetRowCount(rows)
+
+	arg := &Window{
+		WinSpecList: []*plan.Expr{makeWindowSpec()},
+		Aggs:        []aggexec.AggFuncExecExpression{newAggExpr()},
+	}
+	require.NoError(t, arg.Prepare(proc))
+	arg.ctr.bat = bat
+	require.NoError(t, arg.ctr.evalAggVector(bat, proc))
+
+	arg.ctr.batAggs = make([]aggexec.AggFuncExec, 1)
+	var err error
+	arg.ctr.batAggs[0], err = aggexec.MakeAgg(
+		proc.Mp(),
+		arg.Aggs[0].GetAggID(),
+		arg.Aggs[0].IsDistinct(),
+		types.T_int32.ToType(),
+	)
+	require.NoError(t, err)
+	require.NoError(t, arg.ctr.batAggs[0].GroupGrow(bat.RowCount()))
+
+	// processFunc checks once at the outer row, then every 1024 frame rows.
+	// Cancel on the third check so the test proves an already-running frame is
+	// interrupted, rather than only proving that a pre-canceled call is rejected.
+	proc.Ctx = newCancelAfterDoneChecksContext(proc.Ctx, 3)
+
+	err = arg.ctr.processFunc(0, arg, proc, arg.OpAnalyzer)
+	require.ErrorIs(t, err, context.Canceled)
+
+	arg.Free(proc, true, err)
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
 func resetChildren(arg *Window, m *mpool.MPool) {
