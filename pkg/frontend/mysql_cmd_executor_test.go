@@ -5843,4 +5843,27 @@ func TestRecordSessionDDL(t *testing.T) {
 
 	recordSessionDDL(ses, &tree.AlterTable{}, nil)
 	require.Equal(t, uint64(1), ses.getDDLVersion())
+
+	recordSessionDDL(ses, &tree.CloneTable{}, nil)
+	require.Equal(t, uint64(2), ses.getDDLVersion())
+
+	recordSessionDDL(ses, &tree.CloneDatabase{}, nil)
+	require.Equal(t, uint64(3), ses.getDDLVersion())
+
+	recordSessionDDL(ses, &tree.DataBranchDiff{}, nil)
+	require.Equal(t, uint64(3), ses.getDDLVersion())
+}
+
+func TestPreparedCloneSource(t *testing.T) {
+	clone := &tree.CloneTable{}
+	clone.SrcTable.SchemaName = "sub"
+	clone.SrcTable.ObjectName = "src"
+
+	databaseName, tableName, ok := preparedCloneSource(clone)
+	require.True(t, ok)
+	require.Equal(t, "sub", databaseName)
+	require.Equal(t, "src", tableName)
+
+	_, _, ok = preparedCloneSource(&tree.Select{})
+	require.False(t, ok)
 }

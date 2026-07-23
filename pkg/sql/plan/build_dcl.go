@@ -238,7 +238,7 @@ func collectPrepareDdlSchemas(ctx CompilerContext, stmt tree.Statement, prepareP
 			}
 		}
 	case *tree.CloneTable:
-		if clone := preparePlan.GetDdl().GetCloneTable(); clone != nil && clone.GetScanSnapshot() == nil {
+		if clone := preparePlan.GetDdl().GetCloneTable(); clone != nil {
 			schemas = appendPrepareSchemas(schemas, prepareSchemaRef(clone.GetSrcObjDef(), clone.GetSrcTableDef()))
 		}
 	}

@@ -318,6 +318,11 @@ type PrepareStmt struct {
 	tempTableVersion uint64
 	// ddlVersion is the session DDL generation used to build the cached plan.
 	ddlVersion uint64
+	// cloneSource preserves the user-visible source name because clone planning
+	// rewrites the shared AST to the publisher's physical database and table.
+	cloneSourceDatabase string
+	cloneSourceTable    string
+	hasCloneSource      bool
 
 	// schedulingSQLMode freezes the lexical mode used when Sql was prepared.
 	// EXECUTE must not reinterpret optimizer comments after session sql_mode

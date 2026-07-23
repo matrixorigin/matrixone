@@ -315,6 +315,7 @@ func TestPreparedDDLNeedsCatalogRefresh(t *testing.T) {
 		{sql: "create database db", expected: false},
 		{sql: "create database sub from pub publication p", expected: true},
 		{sql: "drop database db", expected: true},
+		{sql: "create table dst clone src", expected: true},
 		{sql: "truncate table t", expected: false},
 	}
 	for _, testCase := range testCases {
@@ -338,9 +339,24 @@ func TestPrepareSchemaAccountID(t *testing.T) {
 
 func TestPreparedSchemaNeedsCatalogRefresh(t *testing.T) {
 	subscription := &plan.ObjectRef{SubscriptionName: "sub"}
-	require.False(t, preparedSchemaNeedsCatalogRefresh(subscription, &tree.Select{}))
-	require.True(t, preparedSchemaNeedsCatalogRefresh(subscription, &tree.AlterTable{}))
-	require.False(t, preparedSchemaNeedsCatalogRefresh(&plan.ObjectRef{}, &tree.AlterTable{}))
+	require.True(t, preparedSchemaNeedsCatalogRefresh(subscription))
+	require.False(t, preparedSchemaNeedsCatalogRefresh(&plan.ObjectRef{}))
+}
+
+func TestRestorePreparedCloneSource(t *testing.T) {
+	clone := &tree.CloneTable{}
+	clone.SrcTable.SchemaName = "publisher_db"
+	clone.SrcTable.ObjectName = "physical_table"
+	prepareStmt := &PrepareStmt{
+		PrepareStmt:         clone,
+		cloneSourceDatabase: "subscription_db",
+		cloneSourceTable:    "logical_table",
+		hasCloneSource:      true,
+	}
+
+	restorePreparedCloneSource(prepareStmt)
+	require.Equal(t, tree.Identifier("subscription_db"), clone.SrcTable.SchemaName)
+	require.Equal(t, tree.Identifier("logical_table"), clone.SrcTable.ObjectName)
 }
 
 func TestCurrentTxnSnapshotTS(t *testing.T) {
@@ -409,8 +425,8 @@ func TestInitExecuteStmtParamReusesCachedCompileWhenNoSchemaChange(t *testing.T)
 	require.NotNil(t, retStmt)
 }
 
-func BenchmarkInitExecuteStmtParamReusesSubscriptionSelect(b *testing.B) {
-	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnv(b, 101)
+func TestInitExecuteStmtParamRefreshesSubscriptionSelect(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnv(t, 101)
 	defer prepareStmt.Close()
 
 	prepareStmt.PreparePlan.GetDcl().GetPrepare().Schemas = []*plan.ObjectRef{{
@@ -421,16 +437,27 @@ func BenchmarkInitExecuteStmtParamReusesSubscriptionSelect(b *testing.B) {
 		cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
 	prepareStmt.compile = sentinel
 
+	retComp, _, _, _, err := initExecuteStmtParam(
+		execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.NotNil(t, retComp)
+	require.Empty(t, prepareStmt.PreparePlan.GetDcl().GetPrepare().GetSchemas())
+}
+
+func BenchmarkInitExecuteStmtParamRefreshesSubscriptionSelect(b *testing.B) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnv(b, 101)
+	defer prepareStmt.Close()
+
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
-		retComp, _, _, _, err := initExecuteStmtParam(
+		prepareStmt.PreparePlan.GetDcl().GetPrepare().Schemas = []*plan.ObjectRef{{
+			SubscriptionName: "sub",
+		}}
+		_, _, _, _, err := initExecuteStmtParam(
 			execCtx, ses, cw, nil, prepareStmt.Name)
 		if err != nil {
 			b.Fatal(err)
-		}
-		if retComp != sentinel {
-			b.Fatal("subscription SELECT compile was not reused")
 		}
 	}
 }

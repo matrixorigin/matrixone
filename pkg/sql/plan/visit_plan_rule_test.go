@@ -130,15 +130,24 @@ func TestCollectPrepareDdlSchemasUsesCloneSourceMetadata(t *testing.T) {
 	defer statements[0].Free()
 	clonePlan := &planpb.Plan{Plan: &planpb.Plan_Ddl{Ddl: &planpb.DataDefinition{
 		Definition: &planpb.DataDefinition_CloneTable{CloneTable: &planpb.CloneTable{
-			SrcObjDef:   &planpb.ObjectRef{SchemaName: "tpch", ObjName: "src"},
-			SrcTableDef: &planpb.TableDef{Name: "src", DbName: "tpch", DbId: 10, TblId: 20, Version: 30},
+			SrcObjDef: &planpb.ObjectRef{
+				SchemaName:       "tpch",
+				ObjName:          "src",
+				SubscriptionName: "sub",
+				PubInfo:          &planpb.PubInfo{TenantId: 12},
+			},
+			SrcTableDef:  &planpb.TableDef{Name: "src", DbName: "tpch", DbId: 10, TblId: 20, Version: 30},
+			ScanSnapshot: &planpb.Snapshot{},
 		}},
 	}}}
 
 	schemas, err := collectPrepareDdlSchemas(NewMockCompilerContext(false), statements[0], clonePlan)
 	require.NoError(t, err)
 	require.Equal(t, []*planpb.ObjectRef{
-		{Server: 30, Db: 10, Schema: 10, Obj: 20, SchemaName: "tpch", ObjName: "src"},
+		{
+			Server: 30, Db: 10, Schema: 10, Obj: 20, SchemaName: "tpch", ObjName: "src",
+			SubscriptionName: "sub", PubInfo: &planpb.PubInfo{TenantId: 12},
+		},
 		{SchemaName: "tpch"},
 	}, schemas)
 }

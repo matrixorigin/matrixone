@@ -587,7 +587,7 @@ func initExecuteStmtParam(execCtx *ExecCtx, ses *Session, cwft *TxnComputationWr
 		// authorization can change without changing the publisher table version.
 		// Until subscription metadata has a catalog version, conservatively
 		// rebuild plans that resolved through a subscription on every EXECUTE.
-		if preparedSchemaNeedsCatalogRefresh(obj, prepareStmt.PrepareStmt) {
+		if preparedSchemaNeedsCatalogRefresh(obj) {
 			change = true
 			break
 		}
@@ -626,6 +626,7 @@ func initExecuteStmtParam(execCtx *ExecCtx, ses *Session, cwft *TxnComputationWr
 			Name: tree.Identifier(prepareStmt.Name),
 			Stmt: prepareStmt.PrepareStmt,
 		}
+		restorePreparedCloneSource(prepareStmt)
 		compilerCtx := ses.GetTxnCompileCtx()
 		newPlan, err := func() (*plan.Plan, error) {
 			currentDatabase := compilerCtx.GetDatabase()
@@ -756,15 +757,27 @@ func currentTxnSnapshotTS(ses *Session) timestamp.Timestamp {
 	return txnOperator.SnapshotTS()
 }
 
-func preparedSchemaNeedsCatalogRefresh(obj *plan.ObjectRef, stmt tree.Statement) bool {
-	return IsDDL(stmt) && obj.GetSubscriptionName() != ""
+func preparedSchemaNeedsCatalogRefresh(obj *plan.ObjectRef) bool {
+	return obj.GetSubscriptionName() != ""
+}
+
+func restorePreparedCloneSource(prepareStmt *PrepareStmt) {
+	if prepareStmt == nil || !prepareStmt.hasCloneSource {
+		return
+	}
+	clone, ok := prepareStmt.PrepareStmt.(*tree.CloneTable)
+	if !ok {
+		return
+	}
+	clone.SrcTable.SchemaName = tree.Identifier(prepareStmt.cloneSourceDatabase)
+	clone.SrcTable.ObjectName = tree.Identifier(prepareStmt.cloneSourceTable)
 }
 
 func preparedDDLNeedsCatalogRefresh(stmt tree.Statement) bool {
 	switch ddl := stmt.(type) {
 	case *tree.CreateDatabase:
 		return ddl.SubscriptionOption != nil
-	case *tree.CreatePitr, *tree.DropDatabase:
+	case *tree.CreatePitr, *tree.DropDatabase, *tree.CloneTable:
 		return true
 	default:
 		return false

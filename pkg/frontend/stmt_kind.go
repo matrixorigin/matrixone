@@ -67,6 +67,26 @@ func IsDDL(stmt tree.Statement) bool {
 	return false
 }
 
+// changesSessionCatalog reports statements whose successful execution can
+// invalidate a prepared plan before their catalog changes reach CatalogCache.
+func changesSessionCatalog(stmt tree.Statement) bool {
+	if IsDDL(stmt) {
+		return true
+	}
+	switch stmt.(type) {
+	case *tree.CloneTable,
+		*tree.CloneDatabase,
+		*tree.DataBranchCreateTable,
+		*tree.DataBranchCreateDatabase,
+		*tree.DataBranchDeleteTable,
+		*tree.DataBranchDeleteDatabase,
+		*tree.DataBranchMerge,
+		*tree.DataBranchPick:
+		return true
+	}
+	return false
+}
+
 // IsDropStatement checks the statement is the drop statement.
 func IsDropStatement(stmt tree.Statement) bool {
 	switch stmt.(type) {

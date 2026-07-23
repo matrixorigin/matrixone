@@ -41,6 +41,21 @@ execute revoked_publication_stmt;
 show databases like 'prepared_revoked_sub';
 deallocate prepare revoked_publication_stmt;
 
+-- @session
+alter publication prepared_pub1 account prepared_subscriber;
+
+-- @session:id=1&user=prepared_subscriber:admin&password=111
+create database prepared_select_sub from sys publication prepared_pub1;
+prepare revoked_select_stmt from 'select * from prepared_select_sub.src';
+-- @session
+
+alter publication prepared_pub1 account prepared_other;
+
+-- @session:id=1&user=prepared_subscriber:admin&password=111
+execute revoked_select_stmt;
+deallocate prepare revoked_select_stmt;
+drop database prepared_select_sub;
+
 create database prepared_work;
 use prepared_work;
 -- @session

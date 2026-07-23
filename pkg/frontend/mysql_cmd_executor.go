@@ -1828,6 +1828,7 @@ func createPrepareStmt(
 		ses.GetTxnCompileCtx().SetExecCtx(execCtx)
 	}
 
+	cloneSourceDatabase, cloneSourceTable, hasCloneSource := preparedCloneSource(saveStmt)
 	preparePlan, err := buildPlanWithAuthorization(execCtx.reqCtx, ses, ses.GetTxnCompileCtx(), stmt)
 	if err != nil {
 		return nil, err
@@ -1868,6 +1869,9 @@ func createPrepareStmt(
 		defaultDatabase:     ses.GetTxnCompileCtx().GetDatabase(),
 		tempTableVersion:    ses.GetTempTableVersion(),
 		ddlVersion:          ses.getDDLVersion(),
+		cloneSourceDatabase: cloneSourceDatabase,
+		cloneSourceTable:    cloneSourceTable,
+		hasCloneSource:      hasCloneSource,
 		getFromSendLongData: make(map[int]struct{}),
 		schedulingSQLMode:   schedulingSQLMode,
 	}
@@ -1885,6 +1889,14 @@ func createPrepareStmt(
 	}
 	prepareStmt.Ts = prepareTs
 	return prepareStmt, nil
+}
+
+func preparedCloneSource(stmt tree.Statement) (databaseName, tableName string, ok bool) {
+	clone, ok := stmt.(*tree.CloneTable)
+	if !ok {
+		return "", "", false
+	}
+	return clone.SrcTable.SchemaName.String(), clone.SrcTable.ObjectName.String(), true
 }
 
 func doDeallocate(ses *Session, execCtx *ExecCtx, st *tree.Deallocate) error {
@@ -3851,7 +3863,7 @@ func executeStmtWithWorkspace(ses FeSession,
 }
 
 func recordSessionDDL(ses FeSession, stmt tree.Statement, err error) {
-	if err != nil || !IsDDL(stmt) {
+	if err != nil || !changesSessionCatalog(stmt) {
 		return
 	}
 	if session, ok := ses.(*Session); ok {

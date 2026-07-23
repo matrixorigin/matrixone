@@ -256,4 +256,17 @@ execute local_ddl_stmt;
 deallocate prepare local_ddl_stmt;
 rollback;
 
+create table clone_generation_src (id int);
+begin;
+prepare clone_generation_stmt from
+    'drop table if exists clone_generation_dst';
+create table clone_generation_dst clone clone_generation_src;
+execute clone_generation_stmt;
+deallocate prepare clone_generation_stmt;
+commit;
+select count(*)
+from information_schema.tables
+where table_schema = 'prepare_ddl_schema_change'
+  and table_name = 'clone_generation_dst';
+
 drop database prepare_ddl_schema_change;

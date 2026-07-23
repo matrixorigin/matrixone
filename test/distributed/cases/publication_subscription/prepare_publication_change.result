@@ -29,6 +29,14 @@ internal error: the account prepared_subscriber is not allowed to subscribe the 
 show databases like 'prepared_revoked_sub';
 ➤ Database[12,-1,0]
 deallocate prepare revoked_publication_stmt;
+alter publication prepared_pub1 account prepared_subscriber;
+create database prepared_select_sub from sys publication prepared_pub1;
+prepare revoked_select_stmt from 'select * from prepared_select_sub.src';
+alter publication prepared_pub1 account prepared_other;
+execute revoked_select_stmt;
+internal error: the account prepared_subscriber is not allowed to subscribe the publication prepared_pub1
+deallocate prepare revoked_select_stmt;
+drop database prepared_select_sub;
 create database prepared_work;
 use prepared_work;
 alter publication prepared_pub1 account prepared_subscriber;
