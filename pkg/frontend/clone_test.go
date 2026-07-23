@@ -23,6 +23,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 )
@@ -88,8 +89,19 @@ func TestTimestampDataBranchCloneWaitsForAlterPublication(t *testing.T) {
 		done <- withDataBranchCloneSourceLock(timestampSource, func() error {
 			close(entered)
 			catalogRow.RLock()
-			catalogRow.RUnlock()
-			return nil
+			defer catalogRow.RUnlock()
+			return validateTimestampDataBranchSourceAfterLock(
+				timestampSource,
+				func(at *plan.Snapshot) (uint64, error) {
+					if at != nil {
+						return 1, nil // timestamp selected the old generation
+					}
+					return 2, nil // ALTER published the new current generation
+				},
+				func() (*databranchutils.DataBranchDAG, error) {
+					return databranchutils.NewDAG(nil), nil
+				},
+			)
 		})
 	}()
 
@@ -107,10 +119,54 @@ func TestTimestampDataBranchCloneWaitsForAlterPublication(t *testing.T) {
 	catalogRow.Unlock()
 	select {
 	case err := <-done:
-		require.NoError(t, err)
+		require.ErrorContains(t, err, "timestamp source generation is not connected")
 	case <-time.After(time.Second):
 		t.Fatal("timestamp clone did not resume after ALTER released the lock")
 	}
+}
+
+func TestValidateTimestampDataBranchSourceIDs(t *testing.T) {
+	t.Run("same generation", func(t *testing.T) {
+		require.NoError(t, validateTimestampDataBranchSourceIDs(1, 1, nil))
+	})
+
+	t.Run("alter first without lineage is rejected", func(t *testing.T) {
+		dag := databranchutils.NewDAG(nil)
+		err := validateTimestampDataBranchSourceIDs(1, 2, dag)
+		require.ErrorContains(t, err, "timestamp source generation is not connected")
+	})
+
+	t.Run("preserved alter lineage is accepted", func(t *testing.T) {
+		dag := databranchutils.NewDAG([]databranchutils.DataBranchMetadata{
+			{TableID: 2, PTableID: 1, LineageOnly: true},
+		})
+		require.NoError(t, validateTimestampDataBranchSourceIDs(1, 2, dag))
+	})
+}
+
+func TestValidateTimestampDataBranchSourceAfterLock(t *testing.T) {
+	timestampSource := &plan.Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 42}}
+	var resolved []*plan.Snapshot
+	dagLoaded := false
+	err := validateTimestampDataBranchSourceAfterLock(
+		timestampSource,
+		func(at *plan.Snapshot) (uint64, error) {
+			resolved = append(resolved, at)
+			if at != nil {
+				return 1, nil
+			}
+			return 2, nil
+		},
+		func() (*databranchutils.DataBranchDAG, error) {
+			dagLoaded = true
+			return databranchutils.NewDAG([]databranchutils.DataBranchMetadata{
+				{TableID: 2, PTableID: 1, LineageOnly: true},
+			}), nil
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, []*plan.Snapshot{timestampSource, nil}, resolved)
+	require.True(t, dagLoaded)
 }
 
 func Test_prepareCloneViewSnapshot(t *testing.T) {

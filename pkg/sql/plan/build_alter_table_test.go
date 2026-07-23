@@ -53,6 +53,27 @@ func TestAlterTableAddColumns(t *testing.T) {
 	runTestShouldPass(mock, t, sqls, false, false)
 }
 
+func TestAlterTableCopyRecordsSameStatementColumnReplacement(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	logicPlan, err := buildSingleStmt(
+		mock, t, `ALTER TABLE t1 DROP COLUMN b, ADD COLUMN b INT;`,
+	)
+	assert.NoError(t, err)
+
+	alter := logicPlan.GetDdl().GetAlterTable()
+	droppedSeq := FindColumn(alter.TableDef.Cols, "b").Seqnum
+	if assert.Len(t, alter.Actions, 2) {
+		assert.Equal(t, droppedSeq, alter.Actions[0].GetDropColumn().GetSeq())
+		assert.Equal(t, "b", alter.Actions[1].GetAddColumn().GetName())
+	}
+
+	cloned := DeepCopyPlan(logicPlan).GetDdl().GetAlterTable()
+	if assert.Len(t, cloned.Actions, 2) {
+		assert.Equal(t, droppedSeq, cloned.Actions[0].GetDropColumn().GetSeq())
+		assert.Equal(t, "b", cloned.Actions[1].GetAddColumn().GetName())
+	}
+}
+
 func TestAlterTableRejectsNonGeometrySRIDAttribute(t *testing.T) {
 	mock := NewMockOptimizer(false)
 

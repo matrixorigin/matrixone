@@ -59,6 +59,41 @@ func TestShouldEnableAlterCopyPipelineFlush(t *testing.T) {
 	assert.True(t, shouldEnableAlterCopyPipelineFlush(&plan2.AlterCopyOpt{SkipPkDedup: true}))
 }
 
+func TestAlterCopySameStatementColumnReplacement(t *testing.T) {
+	tableDef := &plan2.TableDef{Cols: []*plan2.ColDef{
+		{Name: "a", Seqnum: 0},
+		{Name: "b", Seqnum: 1},
+	}}
+	replacement := &plan2.AlterTable{
+		TableDef: tableDef,
+		Actions: []*plan2.AlterTable_Action{
+			{Action: &plan2.AlterTable_Action_DropColumn{
+				DropColumn: &plan2.AlterDropColumn{Seq: 1},
+			}},
+			{Action: &plan2.AlterTable_Action_AddColumn{
+				AddColumn: &plan2.AlterAddColumn{Name: "B"},
+			}},
+		},
+	}
+	name, ok := alterCopySameStatementColumnReplacement(replacement)
+	require.True(t, ok)
+	require.Equal(t, "B", name)
+
+	nonReplacement := &plan2.AlterTable{
+		TableDef: tableDef,
+		Actions: []*plan2.AlterTable_Action{
+			{Action: &plan2.AlterTable_Action_DropColumn{
+				DropColumn: &plan2.AlterDropColumn{Seq: 1},
+			}},
+			{Action: &plan2.AlterTable_Action_AddColumn{
+				AddColumn: &plan2.AlterAddColumn{Name: "c"},
+			}},
+		},
+	}
+	_, ok = alterCopySameStatementColumnReplacement(nonReplacement)
+	require.False(t, ok)
+}
+
 func TestBuildAlterDataBranchLineageSQL(t *testing.T) {
 	metadataSQL, snapshotSQL := buildAlterDataBranchLineageSQL(
 		11, 22, 123456, 7,

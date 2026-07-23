@@ -171,8 +171,17 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 		case *tree.AlterOptionDrop:
 			switch option.Typ {
 			case tree.AlterTableDropColumn:
+				droppedCol := FindColumn(tableDef.Cols, string(option.Name))
+				droppedIdx := slices.Index(tableDef.Cols, droppedCol)
 				pkAffected, err = DropColumn(cctx, alterTablePlan, string(option.Name), alterTableCtx)
 				affectedCols = append(affectedCols, string(option.Name))
+				if err == nil && droppedCol != nil && droppedIdx >= 0 {
+					alterTablePlan.Actions = append(alterTablePlan.Actions, &plan.AlterTable_Action{
+						Action: &plan.AlterTable_Action_DropColumn{DropColumn: &plan.AlterDropColumn{
+							Idx: uint32(droppedIdx), Seq: droppedCol.Seqnum,
+						}},
+					})
+				}
 			case tree.AlterTableDropPrimaryKey:
 				err = DropPrimaryKey(cctx, alterTablePlan, alterTableCtx)
 				affectedAllIdxCols()
@@ -184,6 +193,13 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 		case *tree.AlterAddCol:
 			pkAffected, err = AddColumn(cctx, alterTablePlan, option, alterTableCtx)
 			affectedCols = append(affectedCols, option.Column.Name.ColName())
+			if err == nil {
+				alterTablePlan.Actions = append(alterTablePlan.Actions, &plan.AlterTable_Action{
+					Action: &plan.AlterTable_Action_AddColumn{AddColumn: &plan.AlterAddColumn{
+						Name: option.Column.Name.ColName(),
+					}},
+				})
+			}
 		case *tree.AlterTableModifyColumnClause:
 			pkAffected, err = ModifyColumn(cctx, alterTablePlan, option, alterTableCtx)
 			affectedCols = append(affectedCols, option.NewColumn.Name.ColName())

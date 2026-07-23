@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -85,6 +86,89 @@ func shouldLockDataBranchCloneSource(snapshot *plan.Snapshot) bool {
 	// clone runs. Timestamp hints carry only TS/Tenant, so they still need the
 	// live source-row lock to serialize metadata publication with COPY ALTER.
 	return snapshot == nil || snapshot.ExtraInfo == nil
+}
+
+func isTimestampDataBranchCloneSource(snapshot *plan.Snapshot) bool {
+	return snapshot != nil && snapshot.TS != nil && snapshot.ExtraInfo == nil
+}
+
+func validateTimestampDataBranchSourceIDs(
+	selectedTableID, currentTableID uint64,
+	dag *databranchutils.DataBranchDAG,
+) error {
+	if selectedTableID == currentTableID {
+		return nil
+	}
+	if dag != nil {
+		if _, _, _, ok := dag.FindLCA(selectedTableID, currentTableID); ok {
+			return nil
+		}
+	}
+	return moerr.NewInvalidInputNoCtx(
+		"data branch: timestamp source generation is not connected to the current table",
+	)
+}
+
+func validateTimestampDataBranchSourceAfterLock(
+	snapshot *plan.Snapshot,
+	resolveTableID func(*plan.Snapshot) (uint64, error),
+	loadDAG func() (*databranchutils.DataBranchDAG, error),
+) error {
+	if !isTimestampDataBranchCloneSource(snapshot) {
+		return nil
+	}
+	selectedTableID, err := resolveTableID(snapshot)
+	if err != nil {
+		return err
+	}
+	currentTableID, err := resolveTableID(nil)
+	if err != nil {
+		return err
+	}
+	if selectedTableID == currentTableID {
+		return nil
+	}
+	dag, err := loadDAG()
+	if err != nil {
+		return err
+	}
+	return validateTimestampDataBranchSourceIDs(selectedTableID, currentTableID, dag)
+}
+
+func revalidateTimestampDataBranchCloneSource(
+	ctx context.Context,
+	ses *Session,
+	bh BackgroundExec,
+	snapshot *plan.Snapshot,
+	fromAccountID uint32,
+	databaseName, tableName string,
+) error {
+	if !isTimestampDataBranchCloneSource(snapshot) {
+		return nil
+	}
+
+	sourceCtx := defines.AttachAccountId(ctx, fromAccountID)
+	tcc := ses.GetTxnCompileCtx()
+	originalCtx := tcc.GetContext()
+	tcc.SetContext(sourceCtx)
+	defer tcc.SetContext(originalCtx)
+
+	return validateTimestampDataBranchSourceAfterLock(
+		snapshot,
+		func(at *plan.Snapshot) (uint64, error) {
+			_, tableDef, err := tcc.Resolve(databaseName, tableName, at)
+			if err != nil {
+				return 0, err
+			}
+			if tableDef == nil {
+				return 0, moerr.NewNoSuchTable(sourceCtx, databaseName, tableName)
+			}
+			return tableDef.TblId, nil
+		},
+		func() (*databranchutils.DataBranchDAG, error) {
+			return constructBranchDAG(ctx, ses, bh)
+		},
+	)
 }
 
 func withDataBranchCloneSourceLock(
@@ -485,6 +569,26 @@ func handleCloneTable(
 		)
 	}); err != nil {
 		return
+	}
+	if isTimestampDataBranchCloneSource(snapshot) {
+		// The timestamp was resolved before waiting for the source-row lock.
+		// Advance the RC snapshot while the lock is held, then ensure an ALTER
+		// that won the lock either preserved a path to the selected generation
+		// or causes this branch creation to fail before publishing metadata.
+		if _, err = tryToIncreaseTxnPhysicalTS(reqCtx, ses.proc.GetTxnOperator()); err != nil {
+			return
+		}
+		if err = revalidateTimestampDataBranchCloneSource(
+			reqCtx,
+			ses,
+			bh,
+			snapshot,
+			fromAccountId,
+			stmt.SrcTable.SchemaName.String(),
+			stmt.SrcTable.ObjectName.String(),
+		); err != nil {
+			return
+		}
 	}
 
 	ctx = defines.AttachAccountId(reqCtx, toAccountId)

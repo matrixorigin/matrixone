@@ -648,6 +648,48 @@ func getAlterCopyPkPrecheck(qry *plan.AlterTable) (pkCols []string, checkNotNull
 	return pkCols, checkNotNull
 }
 
+func alterCopySameStatementColumnReplacement(qry *plan.AlterTable) (string, bool) {
+	if qry == nil || qry.TableDef == nil {
+		return "", false
+	}
+	dropped := make(map[string]struct{})
+	added := make(map[string]string)
+	for _, action := range qry.Actions {
+		if action == nil {
+			continue
+		}
+		switch act := action.Action.(type) {
+		case *plan.AlterTable_Action_DropColumn:
+			if act.DropColumn == nil {
+				continue
+			}
+			idx := int(act.DropColumn.Idx)
+			if idx >= 0 && idx < len(qry.TableDef.Cols) &&
+				qry.TableDef.Cols[idx].Seqnum == act.DropColumn.Seq {
+				dropped[strings.ToLower(qry.TableDef.Cols[idx].Name)] = struct{}{}
+				continue
+			}
+			for _, col := range qry.TableDef.Cols {
+				if col.Seqnum == act.DropColumn.Seq {
+					dropped[strings.ToLower(col.Name)] = struct{}{}
+					break
+				}
+			}
+		case *plan.AlterTable_Action_AddColumn:
+			if act.AddColumn == nil || act.AddColumn.Name == "" {
+				continue
+			}
+			added[strings.ToLower(act.AddColumn.Name)] = act.AddColumn.Name
+		}
+	}
+	for name, originalName := range added {
+		if _, ok := dropped[name]; ok {
+			return originalName, true
+		}
+	}
+	return "", false
+}
+
 func quoteAlterCopyIdentifier(name string) string {
 	return "`" + strings.ReplaceAll(name, "`", "``") + "`"
 }
@@ -912,6 +954,14 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 	lineagePlan, err = c.prepareAlterDataBranchLineage(oldId, dbName, tblName)
 	if err != nil {
 		return err
+	}
+	if lineagePlan.enabled {
+		if columnName, replaced := alterCopySameStatementColumnReplacement(qry); replaced {
+			return moerr.NewNotSupportedNoCtxf(
+				"ALTER on a data-branch lineage cannot drop and add column '%s' in the same statement",
+				columnName,
+			)
+		}
 	}
 	if lineagePlan.enabled {
 		if lineageSnapshotAdvanced {

@@ -743,6 +743,16 @@ func DeepCopyDataDefinition(old *plan.DataDefinition) *plan.DataDefinition {
 				AlterTable.Actions[i] = &plan.AlterTable_Action{
 					Action: AddFk,
 				}
+			case *plan.AlterTable_Action_AddColumn:
+				addColumn := *act.AddColumn
+				AlterTable.Actions[i] = &plan.AlterTable_Action{
+					Action: &plan.AlterTable_Action_AddColumn{AddColumn: &addColumn},
+				}
+			case *plan.AlterTable_Action_DropColumn:
+				dropColumn := *act.DropColumn
+				AlterTable.Actions[i] = &plan.AlterTable_Action{
+					Action: &plan.AlterTable_Action_DropColumn{DropColumn: &dropColumn},
+				}
 			}
 		}
 
