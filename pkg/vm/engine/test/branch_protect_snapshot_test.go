@@ -734,8 +734,15 @@ func TestBranchProtectSnapshot_AlterInheritsLiveBranchOwnership(t *testing.T) {
 	)
 	require.Empty(t, env.compactHistoricalLineage(t, nil))
 
-	// Once the replacement is dropped, ordinary reclaim removes the complete
-	// snapshot chain; retaining alter:table above must not introduce a leak.
+	// Once the replacement is dropped, ordinary branch reclaim leaves ALTER's
+	// identity snapshot for the historical-owner-aware compactor. The compactor
+	// then removes the complete snapshot and metadata chain.
 	env.markBranchDeleted(t, currentTID)
-	require.Empty(t, env.runReclaim(t, []uint64{currentTID}))
+	require.Equal(t,
+		[]string{databranchutils.BranchSnapshotName(currentTID)},
+		env.runReclaim(t, []uint64{currentTID}),
+	)
+	plan := env.compactHistoricalLineage(t, nil)
+	require.Equal(t, []uint64{currentTID}, plan.TableIDs)
+	require.Empty(t, env.querySnapshotsByPrefix(t, databranchutils.BranchSnapshotSnamePrefix))
 }

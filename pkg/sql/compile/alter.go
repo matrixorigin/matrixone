@@ -260,18 +260,20 @@ func (c *Compile) advanceAlterDataBranchLineageSnapshot() (int64, error) {
 	return updated - int64(time.Nanosecond), nil
 }
 
-func (c *Compile) loadAlterDataBranchDAG(forUpdate bool) (databranchutils.BranchReclaimDag, error) {
+type alterDataBranchQuery func(string) (executor.Result, error)
+
+func loadAlterDataBranchDAGWithQuery(
+	query alterDataBranchQuery,
+	forUpdate bool,
+) (databranchutils.BranchReclaimDag, error) {
 	suffix := ""
 	if forUpdate {
 		suffix = " for update"
 	}
-	res, err := c.runSqlWithResult(
-		fmt.Sprintf(
-			"select table_id, p_table_id, clone_ts, creator, level, table_deleted from %s.%s%s",
-			catalog.MO_CATALOG, catalog.MO_BRANCH_METADATA, suffix,
-		),
-		int32(catalog.System_Account),
-	)
+	res, err := query(fmt.Sprintf(
+		"select table_id, p_table_id, clone_ts, creator, level, table_deleted from %s.%s%s",
+		catalog.MO_CATALOG, catalog.MO_BRANCH_METADATA, suffix,
+	))
 	if err != nil {
 		return databranchutils.BranchReclaimDag{}, err
 	}
@@ -302,34 +304,16 @@ func (c *Compile) loadAlterDataBranchDAG(forUpdate bool) (databranchutils.Branch
 	return databranchutils.NewBranchReclaimDag(rows), nil
 }
 
-func alterDataBranchLineageEdgeSQL() string {
-	return fmt.Sprintf(
-		"select sname, ts, account_name, database_name, table_name, obj_id from %s.%s where kind = '%s'",
-		catalog.MO_CATALOG, catalog.MO_SNAPSHOTS, databranchutils.BranchSnapshotKind,
-	)
+func (c *Compile) loadAlterDataBranchDAG(forUpdate bool) (databranchutils.BranchReclaimDag, error) {
+	return loadAlterDataBranchDAGWithQuery(func(sql string) (executor.Result, error) {
+		return c.runSqlWithResult(sql, int32(catalog.System_Account))
+	}, forUpdate)
 }
 
-func alterDataBranchSnapshotSourceSQL() string {
-	return fmt.Sprintf(
-		"select ts, level, account_name, database_name, table_name, obj_id from %s.%s where kind = 'user'",
-		catalog.MO_CATALOG, catalog.MO_SNAPSHOTS,
-	)
-}
-
-func alterDataBranchPitrSourceSQL() string {
-	return fmt.Sprintf(
-		"select level, account_name, database_name, table_name, obj_id, pitr_length, pitr_unit from %s.%s where pitr_status = 1",
-		catalog.MO_CATALOG, catalog.MO_PITR,
-	)
-}
-
-func (c *Compile) loadAlterDataBranchLineageEdges() (
-	map[uint64]databranchutils.HistoricalLineageEdge,
-	error,
-) {
-	res, err := c.runSqlWithResult(
-		alterDataBranchLineageEdgeSQL(), int32(catalog.System_Account),
-	)
+func loadAlterDataBranchLineageEdgesWithQuery(
+	query alterDataBranchQuery,
+) (map[uint64]databranchutils.HistoricalLineageEdge, error) {
+	res, err := query(alterDataBranchLineageEdgeSQL())
 	if err != nil {
 		return nil, err
 	}
@@ -362,6 +346,36 @@ func (c *Compile) loadAlterDataBranchLineageEdges() (
 		return true
 	})
 	return edges, nil
+}
+
+func alterDataBranchLineageEdgeSQL() string {
+	return fmt.Sprintf(
+		"select sname, ts, account_name, database_name, table_name, obj_id from %s.%s where kind = '%s'",
+		catalog.MO_CATALOG, catalog.MO_SNAPSHOTS, databranchutils.BranchSnapshotKind,
+	)
+}
+
+func alterDataBranchSnapshotSourceSQL() string {
+	return fmt.Sprintf(
+		"select ts, level, account_name, database_name, table_name, obj_id from %s.%s where kind = 'user'",
+		catalog.MO_CATALOG, catalog.MO_SNAPSHOTS,
+	)
+}
+
+func alterDataBranchPitrSourceSQL() string {
+	return fmt.Sprintf(
+		"select level, account_name, database_name, table_name, obj_id, pitr_length, pitr_unit from %s.%s where pitr_status = 1",
+		catalog.MO_CATALOG, catalog.MO_PITR,
+	)
+}
+
+func (c *Compile) loadAlterDataBranchLineageEdges() (
+	map[uint64]databranchutils.HistoricalLineageEdge,
+	error,
+) {
+	return loadAlterDataBranchLineageEdgesWithQuery(func(sql string) (executor.Result, error) {
+		return c.runSqlWithResult(sql, int32(catalog.System_Account))
+	})
 }
 
 func appendAlterDataBranchHistoricalSources(
@@ -400,12 +414,11 @@ func appendAlterDataBranchHistoricalSources(
 	return loadErr
 }
 
-func (c *Compile) loadAlterDataBranchHistoricalSources(
+func loadAlterDataBranchHistoricalSourcesWithQuery(
+	query alterDataBranchQuery,
 	now time.Time,
 ) ([]databranchutils.HistoricalSource, error) {
-	res, err := c.runSqlWithResult(
-		alterDataBranchSnapshotSourceSQL(), int32(catalog.System_Account),
-	)
+	res, err := query(alterDataBranchSnapshotSourceSQL())
 	if err != nil {
 		return nil, err
 	}
@@ -423,9 +436,7 @@ func (c *Compile) loadAlterDataBranchHistoricalSources(
 		return nil, err
 	}
 
-	res, err = c.runSqlWithResult(
-		alterDataBranchPitrSourceSQL(), int32(catalog.System_Account),
-	)
+	res, err = query(alterDataBranchPitrSourceSQL())
 	if err != nil {
 		return nil, err
 	}
@@ -444,6 +455,17 @@ func (c *Compile) loadAlterDataBranchHistoricalSources(
 		return nil, err
 	}
 	return sources, nil
+}
+
+func (c *Compile) loadAlterDataBranchHistoricalSources(
+	now time.Time,
+) ([]databranchutils.HistoricalSource, error) {
+	return loadAlterDataBranchHistoricalSourcesWithQuery(
+		func(sql string) (executor.Result, error) {
+			return c.runSqlWithResult(sql, int32(catalog.System_Account))
+		},
+		now,
+	)
 }
 
 // compactExpiredAlterDataBranchLineage is ALTER's opportunistic expiry

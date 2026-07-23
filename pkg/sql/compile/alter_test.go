@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math"
 	"testing"
 	"time"
@@ -814,6 +815,89 @@ func TestCompactExpiredAlterDataBranchLineage(t *testing.T) {
 			require.Equal(t, want, spyExec.executedSQLs)
 		})
 	}
+}
+
+func TestCompactExpiredAlterDataBranchLineageWithExecutor(t *testing.T) {
+	now := time.Date(2026, time.July, 17, 12, 0, 0, 0, time.UTC)
+	cloneTS := now.Add(-48 * time.Hour).UnixNano()
+	ctrl := gomock.NewController(t)
+	c := newAlterCopyPrecheckCompile(t, ctrl, &alterCopyInsertSpyExecutor{})
+	mp := c.proc.Mp()
+
+	metadataSQL := fmt.Sprintf(
+		"select table_id, p_table_id, clone_ts, creator, level, table_deleted from %s.%s for update",
+		catalog.MO_CATALOG, catalog.MO_BRANCH_METADATA,
+	)
+	results := map[string]executor.Result{
+		metadataSQL: newAlterLineageMetadataResult(
+			t, mp, []uint64{2}, []uint64{1}, []int64{cloneTS},
+			[]uint64{uint64(catalog.System_Account)}, []string{databranchutils.AlterLineageLevel}, []bool{false},
+		),
+		alterDataBranchLineageEdgeSQL(): newAlterLineageEdgeResult(
+			t, mp, []string{databranchutils.BranchSnapshotName(2)}, []int64{cloneTS},
+			[]string{"tenant"}, []string{"db"}, []string{"tbl"}, []uint64{1},
+		),
+		alterDataBranchSnapshotSourceSQL(): newAlterLineageSnapshotSourceResult(t, mp, nil, nil, nil, nil, nil, nil),
+		alterDataBranchPitrSourceSQL(): newAlterLineagePitrSourceResult(
+			t, mp, []string{"table"}, []string{"tenant"}, []string{"db"}, []string{"tbl"},
+			[]uint64{1}, []int64{24}, []string{"h"},
+		),
+	}
+	var executed []string
+	sqlExecutor := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+		executed = append(executed, sql)
+		return results[sql], nil
+	})
+
+	require.NoError(t, compactExpiredAlterDataBranchLineageWithExecutor(context.Background(), sqlExecutor, now))
+	require.Equal(t, []string{
+		metadataSQL,
+		alterDataBranchLineageEdgeSQL(),
+		alterDataBranchSnapshotSourceSQL(),
+		alterDataBranchPitrSourceSQL(),
+		"delete from mo_catalog.mo_snapshots where kind = 'branch' and sname in ('__mo_branch_2')",
+		"delete from mo_catalog.mo_branch_metadata where table_id in (2) and (level = 'alter' or level like 'alter:%')",
+	}, executed)
+}
+
+func TestCompactExpiredAlterDataBranchLineageWithExecutorPropagatesDeleteError(t *testing.T) {
+	now := time.Date(2026, time.July, 17, 12, 0, 0, 0, time.UTC)
+	cloneTS := now.Add(-48 * time.Hour).UnixNano()
+	ctrl := gomock.NewController(t)
+	c := newAlterCopyPrecheckCompile(t, ctrl, &alterCopyInsertSpyExecutor{})
+	mp := c.proc.Mp()
+	metadataSQL := fmt.Sprintf(
+		"select table_id, p_table_id, clone_ts, creator, level, table_deleted from %s.%s for update",
+		catalog.MO_CATALOG, catalog.MO_BRANCH_METADATA,
+	)
+	results := map[string]executor.Result{
+		metadataSQL: newAlterLineageMetadataResult(
+			t, mp, []uint64{2}, []uint64{1}, []int64{cloneTS},
+			[]uint64{uint64(catalog.System_Account)}, []string{databranchutils.AlterLineageLevel}, []bool{false},
+		),
+		alterDataBranchLineageEdgeSQL(): newAlterLineageEdgeResult(
+			t, mp, []string{databranchutils.BranchSnapshotName(2)}, []int64{cloneTS},
+			[]string{"tenant"}, []string{"db"}, []string{"tbl"}, []uint64{1},
+		),
+		alterDataBranchSnapshotSourceSQL(): newAlterLineageSnapshotSourceResult(t, mp, nil, nil, nil, nil, nil, nil),
+		alterDataBranchPitrSourceSQL(): newAlterLineagePitrSourceResult(
+			t, mp, []string{"table"}, []string{"tenant"}, []string{"db"}, []string{"tbl"},
+			[]uint64{1}, []int64{24}, []string{"h"},
+		),
+	}
+	wantErr := errors.New("delete failed")
+	snapshotDeleteSQL := "delete from mo_catalog.mo_snapshots where kind = 'branch' and sname in ('__mo_branch_2')"
+	sqlExecutor := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+		if sql == snapshotDeleteSQL {
+			return executor.Result{}, wantErr
+		}
+		return results[sql], nil
+	})
+
+	require.ErrorIs(t,
+		compactExpiredAlterDataBranchLineageWithExecutor(context.Background(), sqlExecutor, now),
+		wantErr,
+	)
 }
 
 func newAlterLineageMetadataResult(

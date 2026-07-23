@@ -103,13 +103,8 @@ func lockDataBranchCloneSource(
 		return nil
 	}
 	txnOp := ses.proc.GetTxnOperator()
-	if !txnOp.Txn().IsPessimistic() {
-		// LockRows is intentionally a no-op for optimistic transactions.
-		// Keep DATA BRANCH available in that mode; ALTER records the lineage
-		// from its statement snapshot, and a missing edge caused by a true
-		// concurrent copy-and-swap is detected by the legacy-lineage guard
-		// before DIFF/MERGE can return an incorrect result.
-		return nil
+	if err := validateDataBranchCreateTxn(txnOp.Txn().IsPessimistic()); err != nil {
+		return err
 	}
 	sourceCtx := defines.AttachAccountId(ctx, fromAccountID)
 	eng := ses.proc.GetSessionInfo().StorageEngine

@@ -49,6 +49,13 @@ func TestDataBranchUserVisibleColumn(t *testing.T) {
 	require.False(t, isDataBranchUserVisibleColumn(&plan.ColDef{Name: catalog.Row_ID, Hidden: true}))
 }
 
+func TestValidateDataBranchCreateTxn(t *testing.T) {
+	require.NoError(t, validateDataBranchCreateTxn(true))
+	err := validateDataBranchCreateTxn(false)
+	require.ErrorContains(t, err,
+		"CREATE DATA BRANCH is not supported with optimistic transactions")
+}
+
 func TestBranchQuotaUsageSQLExcludesRootAlterLineage(t *testing.T) {
 	require.Equal(t,
 		"select count(*) from mo_catalog.mo_branch_metadata where creator = 7 and table_deleted = false and level != 'alter'",

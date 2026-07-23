@@ -331,6 +331,12 @@ func dataBranchCreateTable(
 	ses *Session,
 	stmt *tree.DataBranchCreateTable,
 ) (err error) {
+	if err = validateDataBranchCreateTxn(
+		ses.proc.GetTxnOperator().Txn().IsPessimistic(),
+	); err != nil {
+		return err
+	}
+
 	var (
 		bh        BackgroundExec
 		deferred  func(error) error
@@ -386,6 +392,12 @@ func dataBranchCreateDatabase(
 	ses *Session,
 	stmt *tree.DataBranchCreateDatabase,
 ) (stats statistic.StatsArray, err error) {
+	if err = validateDataBranchCreateTxn(
+		ses.proc.GetTxnOperator().Txn().IsPessimistic(),
+	); err != nil {
+		return stats, err
+	}
+
 	var (
 		bh        BackgroundExec
 		deferred  func(error) error
@@ -446,6 +458,15 @@ func dataBranchCreateDatabase(
 	}
 
 	return
+}
+
+func validateDataBranchCreateTxn(pessimistic bool) error {
+	if !pessimistic {
+		return moerr.NewNotSupportedNoCtx(
+			"CREATE DATA BRANCH is not supported with optimistic transactions",
+		)
+	}
+	return nil
 }
 
 func markBranchTablesDeleted(
