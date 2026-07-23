@@ -41,10 +41,12 @@ import (
 )
 
 type QCloudSDK struct {
-	name            string
-	client          *cos.Client
-	perfCounterSets []*perfcounter.CounterSet
-	listMaxKeys     int
+	name                 string
+	copySourceHost       string
+	client               *cos.Client
+	copyCredentialDomain objectStorageCopyCredentialDomain
+	perfCounterSets      []*perfcounter.CounterSet
+	listMaxKeys          int
 }
 
 func NewQCloudSDK(
@@ -129,10 +131,30 @@ func NewQCloudSDK(
 	}
 
 	return &QCloudSDK{
-		name:            args.Name,
-		client:          client,
+		name:           args.Name,
+		copySourceHost: baseURL.Host,
+		client:         client,
+		copyCredentialDomain: newObjectStorageCopyCredentialDomain(
+			keyID, keySecret, sessionToken,
+		),
 		perfCounterSets: perfCounterSets,
 	}, nil
+}
+
+var _ objectStorageCopier = new(QCloudSDK)
+
+func (a *QCloudSDK) CopyObject(
+	ctx context.Context,
+	src ObjectStorage,
+	srcKey string,
+	dstKey string,
+) (bool, error) {
+	s, ok := src.(*QCloudSDK)
+	if !ok || !a.copyCredentialDomain.matches(s.copyCredentialDomain) {
+		return false, nil
+	}
+	_, _, err := a.client.Object.Copy(ctx, dstKey, s.copySourceHost+"/"+srcKey, nil)
+	return true, err
 }
 
 var _ ObjectStorage = new(QCloudSDK)
@@ -702,7 +724,8 @@ func (a *QCloudSDK) statObject(ctx context.Context, key string) (http.Header, er
 	ctx, task := gotrace.NewTask(ctx, "QCloudSDK.statObject")
 	defer task.End()
 
-	return DoWithRetry(
+	return DoWithRetryContext(
+		ctx,
 		"s3 head object",
 		func() (http.Header, error) {
 			perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
