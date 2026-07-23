@@ -255,9 +255,6 @@ type LogicalIdKey struct{}
 // CarryOnCtxKeys defines keys needed to be serialized when pass context through net
 var CarryOnCtxKeys = []any{TenantIDKey{}, UserIDKey{}, RoleIDKey{}}
 
-// TemporaryTN use TemporaryTN to get temporary storage from Context
-type TemporaryTN struct{}
-
 type IsMoLogger struct{}
 
 type SourceScanResKey struct{}
@@ -288,6 +285,9 @@ type FulltextMembershipFilter struct{}
 // IvfReaderParam carries DistRange for ivf entries scan in internal SQL executor.
 // This key is set on context when invoking internal SQL from ivf_search.
 type IvfReaderParam struct{}
+
+// RemoteRunContext marks a pipeline executing through remote-run RPC.
+type RemoteRunContext struct{}
 
 // PkCheckByTN whether TN does primary key uniqueness check against transaction's workspace or not.
 type PkCheckByTN struct{}

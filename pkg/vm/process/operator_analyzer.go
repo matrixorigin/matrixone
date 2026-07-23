@@ -68,16 +68,36 @@ type Analyzer interface {
 }
 
 type ParquetProfileStats struct {
-	Files          int64
-	RowGroups      int64
-	RowsRead       int64
-	BytesRead      int64
-	PrefetchBytes  int64
-	OpenTime       int64
-	ReadPageTime   int64
-	MapTime        int64
-	RowModeTime    int64
-	PeakBatchBytes int64
+	Files                             int64
+	RowGroups                         int64
+	RowsRead                          int64
+	BytesRead                         int64
+	PrefetchBytes                     int64
+	ProjectedColumns                  int64
+	TotalColumns                      int64
+	SelectedFiles                     int64
+	SelectedFileBytes                 int64
+	IcebergMetadataBytes              int64
+	IcebergManifestListBytes          int64
+	IcebergManifestBytes              int64
+	IcebergManifestsSelected          int64
+	IcebergManifestsPruned            int64
+	IcebergDataFilesSelected          int64
+	IcebergDataFilesPruned            int64
+	IcebergDataFileBytesSelected      int64
+	IcebergDataFileBytesPruned        int64
+	IcebergPlanningCacheHits          int64
+	IcebergPlanningCacheMiss          int64
+	IcebergDeleteFilesRead            int64
+	IcebergDeleteRowsFiltered         int64
+	IcebergPositionDeleteRowsFiltered int64
+	IcebergEqualityDeleteRowsFiltered int64
+	IcebergDeleteApplyPeakMemoryBytes int64
+	OpenTime                          int64
+	ReadPageTime                      int64
+	MapTime                           int64
+	RowModeTime                       int64
+	PeakBatchBytes                    int64
 }
 
 func (stats ParquetProfileStats) Empty() bool {
@@ -90,6 +110,26 @@ func (stats *ParquetProfileStats) Add(delta ParquetProfileStats) {
 	stats.RowsRead += delta.RowsRead
 	stats.BytesRead += delta.BytesRead
 	stats.PrefetchBytes += delta.PrefetchBytes
+	stats.ProjectedColumns += delta.ProjectedColumns
+	stats.TotalColumns += delta.TotalColumns
+	stats.SelectedFiles += delta.SelectedFiles
+	stats.SelectedFileBytes += delta.SelectedFileBytes
+	stats.IcebergMetadataBytes += delta.IcebergMetadataBytes
+	stats.IcebergManifestListBytes += delta.IcebergManifestListBytes
+	stats.IcebergManifestBytes += delta.IcebergManifestBytes
+	stats.IcebergManifestsSelected += delta.IcebergManifestsSelected
+	stats.IcebergManifestsPruned += delta.IcebergManifestsPruned
+	stats.IcebergDataFilesSelected += delta.IcebergDataFilesSelected
+	stats.IcebergDataFilesPruned += delta.IcebergDataFilesPruned
+	stats.IcebergDataFileBytesSelected += delta.IcebergDataFileBytesSelected
+	stats.IcebergDataFileBytesPruned += delta.IcebergDataFileBytesPruned
+	stats.IcebergPlanningCacheHits += delta.IcebergPlanningCacheHits
+	stats.IcebergPlanningCacheMiss += delta.IcebergPlanningCacheMiss
+	stats.IcebergDeleteFilesRead += delta.IcebergDeleteFilesRead
+	stats.IcebergDeleteRowsFiltered += delta.IcebergDeleteRowsFiltered
+	stats.IcebergPositionDeleteRowsFiltered += delta.IcebergPositionDeleteRowsFiltered
+	stats.IcebergEqualityDeleteRowsFiltered += delta.IcebergEqualityDeleteRowsFiltered
+	stats.IcebergDeleteApplyPeakMemoryBytes = max(stats.IcebergDeleteApplyPeakMemoryBytes, delta.IcebergDeleteApplyPeakMemoryBytes)
 	stats.OpenTime += delta.OpenTime
 	stats.ReadPageTime += delta.ReadPageTime
 	stats.MapTime += delta.MapTime
@@ -373,6 +413,26 @@ func (opAlyzr *operatorAnalyzer) AddParquetProfile(stats ParquetProfileStats) {
 	opAlyzr.opStats.ParquetRowsRead += stats.RowsRead
 	opAlyzr.opStats.ParquetBytesRead += stats.BytesRead
 	opAlyzr.opStats.ParquetPrefetchBytes += stats.PrefetchBytes
+	opAlyzr.opStats.ParquetProjectedColumns += stats.ProjectedColumns
+	opAlyzr.opStats.ParquetTotalColumns += stats.TotalColumns
+	opAlyzr.opStats.ParquetSelectedFiles += stats.SelectedFiles
+	opAlyzr.opStats.ParquetSelectedFileBytes += stats.SelectedFileBytes
+	opAlyzr.opStats.IcebergMetadataBytes += stats.IcebergMetadataBytes
+	opAlyzr.opStats.IcebergManifestListBytes += stats.IcebergManifestListBytes
+	opAlyzr.opStats.IcebergManifestBytes += stats.IcebergManifestBytes
+	opAlyzr.opStats.IcebergManifestsSelected += stats.IcebergManifestsSelected
+	opAlyzr.opStats.IcebergManifestsPruned += stats.IcebergManifestsPruned
+	opAlyzr.opStats.IcebergDataFilesSelected += stats.IcebergDataFilesSelected
+	opAlyzr.opStats.IcebergDataFilesPruned += stats.IcebergDataFilesPruned
+	opAlyzr.opStats.IcebergDataFileBytesSelected += stats.IcebergDataFileBytesSelected
+	opAlyzr.opStats.IcebergDataFileBytesPruned += stats.IcebergDataFileBytesPruned
+	opAlyzr.opStats.IcebergPlanningCacheHits += stats.IcebergPlanningCacheHits
+	opAlyzr.opStats.IcebergPlanningCacheMiss += stats.IcebergPlanningCacheMiss
+	opAlyzr.opStats.IcebergDeleteFilesRead += stats.IcebergDeleteFilesRead
+	opAlyzr.opStats.IcebergDeleteRowsFiltered += stats.IcebergDeleteRowsFiltered
+	opAlyzr.opStats.IcebergPositionDeleteRowsFiltered += stats.IcebergPositionDeleteRowsFiltered
+	opAlyzr.opStats.IcebergEqualityDeleteRowsFiltered += stats.IcebergEqualityDeleteRowsFiltered
+	opAlyzr.opStats.IcebergDeleteApplyPeakMemoryBytes = max(opAlyzr.opStats.IcebergDeleteApplyPeakMemoryBytes, stats.IcebergDeleteApplyPeakMemoryBytes)
 	opAlyzr.opStats.ParquetOpenTime += stats.OpenTime
 	opAlyzr.opStats.ParquetReadPageTime += stats.ReadPageTime
 	opAlyzr.opStats.ParquetMapTime += stats.MapTime
@@ -426,16 +486,36 @@ type OperatorStats struct {
 	CacheRemoteRead int64 `json:"CacheRemoteRead,omitempty"`
 	CacheRemoteHit  int64 `json:"CacheRemoteHit,omitempty"`
 
-	ParquetFiles          int64 `json:"ParquetFiles,omitempty"`
-	ParquetRowGroups      int64 `json:"ParquetRowGroups,omitempty"`
-	ParquetRowsRead       int64 `json:"ParquetRowsRead,omitempty"`
-	ParquetBytesRead      int64 `json:"ParquetBytesRead,omitempty"`
-	ParquetPrefetchBytes  int64 `json:"ParquetPrefetchBytes,omitempty"`
-	ParquetOpenTime       int64 `json:"ParquetOpenTime,omitempty"`
-	ParquetReadPageTime   int64 `json:"ParquetReadPageTime,omitempty"`
-	ParquetMapTime        int64 `json:"ParquetMapTime,omitempty"`
-	ParquetRowModeTime    int64 `json:"ParquetRowModeTime,omitempty"`
-	ParquetPeakBatchBytes int64 `json:"ParquetPeakBatchBytes,omitempty"`
+	ParquetFiles                      int64 `json:"ParquetFiles,omitempty"`
+	ParquetRowGroups                  int64 `json:"ParquetRowGroups,omitempty"`
+	ParquetRowsRead                   int64 `json:"ParquetRowsRead,omitempty"`
+	ParquetBytesRead                  int64 `json:"ParquetBytesRead,omitempty"`
+	ParquetPrefetchBytes              int64 `json:"ParquetPrefetchBytes,omitempty"`
+	ParquetProjectedColumns           int64 `json:"ParquetProjectedColumns,omitempty"`
+	ParquetTotalColumns               int64 `json:"ParquetTotalColumns,omitempty"`
+	ParquetSelectedFiles              int64 `json:"ParquetSelectedFiles,omitempty"`
+	ParquetSelectedFileBytes          int64 `json:"ParquetSelectedFileBytes,omitempty"`
+	IcebergMetadataBytes              int64 `json:"IcebergMetadataBytes,omitempty"`
+	IcebergManifestListBytes          int64 `json:"IcebergManifestListBytes,omitempty"`
+	IcebergManifestBytes              int64 `json:"IcebergManifestBytes,omitempty"`
+	IcebergManifestsSelected          int64 `json:"IcebergManifestsSelected,omitempty"`
+	IcebergManifestsPruned            int64 `json:"IcebergManifestsPruned,omitempty"`
+	IcebergDataFilesSelected          int64 `json:"IcebergDataFilesSelected,omitempty"`
+	IcebergDataFilesPruned            int64 `json:"IcebergDataFilesPruned,omitempty"`
+	IcebergDataFileBytesSelected      int64 `json:"IcebergDataFileBytesSelected,omitempty"`
+	IcebergDataFileBytesPruned        int64 `json:"IcebergDataFileBytesPruned,omitempty"`
+	IcebergPlanningCacheHits          int64 `json:"IcebergPlanningCacheHits,omitempty"`
+	IcebergPlanningCacheMiss          int64 `json:"IcebergPlanningCacheMiss,omitempty"`
+	IcebergDeleteFilesRead            int64 `json:"IcebergDeleteFilesRead,omitempty"`
+	IcebergDeleteRowsFiltered         int64 `json:"IcebergDeleteRowsFiltered,omitempty"`
+	IcebergPositionDeleteRowsFiltered int64 `json:"IcebergPositionDeleteRowsFiltered,omitempty"`
+	IcebergEqualityDeleteRowsFiltered int64 `json:"IcebergEqualityDeleteRowsFiltered,omitempty"`
+	IcebergDeleteApplyPeakMemoryBytes int64 `json:"IcebergDeleteApplyPeakMemoryBytes,omitempty"`
+	ParquetOpenTime                   int64 `json:"ParquetOpenTime,omitempty"`
+	ParquetReadPageTime               int64 `json:"ParquetReadPageTime,omitempty"`
+	ParquetMapTime                    int64 `json:"ParquetMapTime,omitempty"`
+	ParquetRowModeTime                int64 `json:"ParquetRowModeTime,omitempty"`
+	ParquetPeakBatchBytes             int64 `json:"ParquetPeakBatchBytes,omitempty"`
 
 	OperatorMetrics map[MetricType]int64 `json:"OperatorMetrics,omitempty"`
 
@@ -572,6 +652,66 @@ func (ps *OperatorStats) String() string {
 	}
 	if ps.ParquetPrefetchBytes > 0 {
 		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("ParquetPrefetchBytes:%dbytes ", ps.ParquetPrefetchBytes))
+	}
+	if ps.ParquetProjectedColumns > 0 {
+		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("ParquetProjectedColumns:%d ", ps.ParquetProjectedColumns))
+	}
+	if ps.ParquetTotalColumns > 0 {
+		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("ParquetTotalColumns:%d ", ps.ParquetTotalColumns))
+	}
+	if ps.ParquetSelectedFiles > 0 {
+		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("ParquetSelectedFiles:%d ", ps.ParquetSelectedFiles))
+	}
+	if ps.ParquetSelectedFileBytes > 0 {
+		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("ParquetSelectedFileBytes:%dbytes ", ps.ParquetSelectedFileBytes))
+	}
+	if ps.IcebergMetadataBytes > 0 {
+		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("IcebergMetadataBytes:%dbytes ", ps.IcebergMetadataBytes))
+	}
+	if ps.IcebergManifestListBytes > 0 {
+		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("IcebergManifestListBytes:%dbytes ", ps.IcebergManifestListBytes))
+	}
+	if ps.IcebergManifestBytes > 0 {
+		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("IcebergManifestBytes:%dbytes ", ps.IcebergManifestBytes))
+	}
+	if ps.IcebergManifestsSelected > 0 {
+		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("IcebergManifestsSelected:%d ", ps.IcebergManifestsSelected))
+	}
+	if ps.IcebergManifestsPruned > 0 {
+		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("IcebergManifestsPruned:%d ", ps.IcebergManifestsPruned))
+	}
+	if ps.IcebergDataFilesSelected > 0 {
+		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("IcebergDataFilesSelected:%d ", ps.IcebergDataFilesSelected))
+	}
+	if ps.IcebergDataFilesPruned > 0 {
+		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("IcebergDataFilesPruned:%d ", ps.IcebergDataFilesPruned))
+	}
+	if ps.IcebergDataFileBytesSelected > 0 {
+		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("IcebergDataFileBytesSelected:%dbytes ", ps.IcebergDataFileBytesSelected))
+	}
+	if ps.IcebergDataFileBytesPruned > 0 {
+		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("IcebergDataFileBytesPruned:%dbytes ", ps.IcebergDataFileBytesPruned))
+	}
+	if ps.IcebergPlanningCacheHits > 0 {
+		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("IcebergPlanningCacheHits:%d ", ps.IcebergPlanningCacheHits))
+	}
+	if ps.IcebergPlanningCacheMiss > 0 {
+		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("IcebergPlanningCacheMiss:%d ", ps.IcebergPlanningCacheMiss))
+	}
+	if ps.IcebergDeleteFilesRead > 0 {
+		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("IcebergDeleteFilesRead:%d ", ps.IcebergDeleteFilesRead))
+	}
+	if ps.IcebergDeleteRowsFiltered > 0 {
+		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("IcebergDeleteRowsFiltered:%d ", ps.IcebergDeleteRowsFiltered))
+	}
+	if ps.IcebergPositionDeleteRowsFiltered > 0 {
+		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("IcebergPositionDeleteRowsFiltered:%d ", ps.IcebergPositionDeleteRowsFiltered))
+	}
+	if ps.IcebergEqualityDeleteRowsFiltered > 0 {
+		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("IcebergEqualityDeleteRowsFiltered:%d ", ps.IcebergEqualityDeleteRowsFiltered))
+	}
+	if ps.IcebergDeleteApplyPeakMemoryBytes > 0 {
+		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("IcebergDeleteApplyPeakMemoryBytes:%dbytes ", ps.IcebergDeleteApplyPeakMemoryBytes))
 	}
 	if ps.ParquetOpenTime > 0 {
 		dynamicAttrs = append(dynamicAttrs, fmt.Sprintf("ParquetOpenTime:%dns ", ps.ParquetOpenTime))

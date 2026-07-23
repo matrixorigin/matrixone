@@ -137,8 +137,12 @@ type Session struct {
 	tempTables map[string]string
 	// tempTablesRev records the reverse relationship.
 	// Key: realName, Value: dbName.alias
-	tempTablesRev   map[string]string
-	hasLockedTables atomic.Bool
+	tempTablesRev map[string]string
+	// tempTableVersion changes whenever the session's temporary-table name
+	// resolution changes. Prepared statements use it to invalidate plans that
+	// were built against an older temporary-table mapping.
+	tempTableVersion uint64
+	hasLockedTables  atomic.Bool
 
 	prepareStmts map[string]*PrepareStmt
 	lastStmtId   uint32
@@ -160,6 +164,11 @@ type Session struct {
 	mu sync.Mutex
 
 	lastInsertID uint64
+
+	// lastAffectedRows records the rows affected by the previous statement,
+	// consumed by the ROW_COUNT() builtin. MySQL semantics: -1 after a
+	// result-set statement (SELECT/SHOW...), 0 after DDL, affected rows after DML.
+	lastAffectedRows int64
 
 	// tStmt is used only to record the StatementInfo
 	// QueryResult please use feSessionImpl.stmtProfile instead.
@@ -329,9 +338,13 @@ func (ses *Session) getNextProcessId() string {
 
 // SetUserDefinedVar sets the user defined variable to the value in session
 func (ses *Session) SetUserDefinedVar(name string, value interface{}, sql string) error {
+	return ses.setUserDefinedVar(name, value, sql, false)
+}
+
+func (ses *Session) setUserDefinedVar(name string, value interface{}, sql string, isBin bool) error {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	ses.userDefinedVars[strings.ToLower(name)] = &UserDefinedVar{Value: value, Sql: sql}
+	ses.userDefinedVars[strings.ToLower(name)] = &UserDefinedVar{Value: value, Sql: sql, IsBin: isBin}
 	return nil
 }
 
@@ -351,8 +364,15 @@ func (ses *Session) AddTempTable(dbName, alias, realName string) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	key := dbName + "." + alias
+	if oldRealName, ok := ses.tempTables[key]; ok {
+		if oldRealName == realName {
+			return
+		}
+		delete(ses.tempTablesRev, oldRealName)
+	}
 	ses.tempTables[key] = realName
 	ses.tempTablesRev[realName] = key
+	ses.tempTableVersion++
 }
 
 // GetTempTable gets the real name of the temporary table
@@ -363,6 +383,14 @@ func (ses *Session) GetTempTable(dbName, alias string) (string, bool) {
 	return val, ok
 }
 
+// GetTempTableVersion returns the version of the session's temporary-table
+// name mapping.
+func (ses *Session) GetTempTableVersion() uint64 {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.tempTableVersion
+}
+
 // RemoveTempTable removes the temporary table alias
 func (ses *Session) RemoveTempTable(dbName, alias string) {
 	ses.mu.Lock()
@@ -371,6 +399,7 @@ func (ses *Session) RemoveTempTable(dbName, alias string) {
 	if realName, ok := ses.tempTables[key]; ok {
 		delete(ses.tempTables, key)
 		delete(ses.tempTablesRev, realName)
+		ses.tempTableVersion++
 	}
 }
 
@@ -381,6 +410,7 @@ func (ses *Session) RemoveTempTableByRealName(realName string) {
 	if alias, ok := ses.tempTablesRev[realName]; ok {
 		delete(ses.tempTables, alias)
 		delete(ses.tempTablesRev, realName)
+		ses.tempTableVersion++
 	}
 }
 
@@ -615,6 +645,29 @@ func (ses *Session) updateSqlModeNoAutoValueOnZero(val interface{}) {
 	}
 }
 
+func (ses *Session) sqlModeHasMatrixOneNative() bool {
+	if ses == nil {
+		return false
+	}
+	value, err := ses.GetSessionSysVar("sql_mode")
+	if err != nil {
+		return false
+	}
+	has, ok := sqlModeHasMatrixOneNativeValue(value)
+	return ok && has
+}
+
+func (ses *Session) updateSqlModeCaches(oldNative bool, val interface{}) {
+	ses.updateSqlModeNoAutoValueOnZero(val)
+	newNative, ok := sqlModeHasMatrixOneNativeValue(val)
+	if !ok {
+		return
+	}
+	if oldNative != newNative {
+		ses.cleanCache()
+	}
+}
+
 func parseNoAutoValueOnZero(val interface{}) (bool, bool) {
 	mode, ok := val.(string)
 	if !ok {
@@ -727,6 +780,7 @@ func NewSession(
 
 	ses.proc.SetStmtProfile(&ses.stmtProfile)
 	ses.proc.Session = ses
+	setRowCount(ses, ses.proc, -1)
 	// ses.proc.SetResolveVariableFunc(ses.txnCompileCtx.ResolveVariable)
 
 	runtime.SetFinalizer(ses, func(ss *Session) {
@@ -1133,6 +1187,18 @@ func (ses *Session) GetLastInsertID() uint64 {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	return ses.lastInsertID
+}
+
+func (ses *Session) SetLastAffectedRows(num int64) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ses.lastAffectedRows = num
+}
+
+func (ses *Session) GetLastAffectedRows() int64 {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.lastAffectedRows
 }
 
 func (ses *Session) SetCmd(cmd CommandType) {
@@ -2041,6 +2107,10 @@ type prepareStmtMigration struct {
 	commitFn   func(*Session, error) error
 }
 
+func quotePrepareStmtName(name string) string {
+	return "`" + strings.ReplaceAll(name, "`", "``") + "`"
+}
+
 func newPrepareStmtMigration(name string, sql string, paramTypes []byte) *prepareStmtMigration {
 	return &prepareStmtMigration{
 		name:       name,
@@ -2054,7 +2124,7 @@ func (p *prepareStmtMigration) Migrate(ctx context.Context, ses *Session) error 
 	ses.EnterFPrint(FPMigratePrepareStmt)
 	defer ses.ExitFPrint(FPMigratePrepareStmt)
 	if !strings.HasPrefix(strings.ToLower(p.sql), "prepare") {
-		p.sql = fmt.Sprintf("prepare %s from %s", p.name, p.sql)
+		p.sql = fmt.Sprintf("prepare %s from %s", quotePrepareStmtName(p.name), p.sql)
 	}
 
 	tempExecCtx := &ExecCtx{
@@ -2070,6 +2140,9 @@ func (p *prepareStmtMigration) Migrate(ctx context.Context, ses *Session) error 
 func Migrate(ses *Session, req *query.MigrateConnToRequest) error {
 	ses.EnterFPrint(FPMigrate)
 	defer ses.ExitFPrint(FPMigrate)
+	// USE and PREPARE are replayed as internal statements and update ROW_COUNT().
+	// Restore the source session value after all replay work has finished.
+	defer restoreRowCount(ses, ses.GetProc(), req.LastAffectedRows)
 	parameters := getPu(ses.GetService()).SV
 
 	//all offspring related to the request inherit the txnCtx

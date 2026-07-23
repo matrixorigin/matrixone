@@ -1,0 +1,74 @@
+set time_zone = '+00:00';
+select cast(cast('2024-01-02' as date) as signed) as date_signed;
+➤ date_signed[-5,64,0]  𝄀
+20240102
+select cast(cast('2024-01-02' as date) as decimal(20,0)) as date_decimal;
+➤ date_decimal[3,20,0]  𝄀
+20240102
+select cast(cast('2006-08-10' as date) as decimal(20,6)) as date_decimal_scale;
+➤ date_decimal_scale[3,20,6]  𝄀
+20060810.000000
+select cast('2024-01-02' as date) + 0 as date_plus_zero;
+➤ date_plus_zero[-5,64,0]  𝄀
+20240102
+select cast('2024-01-02' as date) = 20240102 as date_eq_compact_int;
+➤ date_eq_compact_int[-7,1,0]  𝄀
+1
+select cast(cast('2024-01-02 03:04:05.123456' as datetime(6)) as signed) as datetime_signed;
+➤ datetime_signed[-5,64,0]  𝄀
+20240102030405
+select cast(cast('2024-01-02 03:04:05.123456' as datetime(6)) as decimal(20,6)) as datetime_decimal;
+➤ datetime_decimal[3,20,6]  𝄀
+20240102030405.123456
+select cast(cast('2006-08-10 10:11:12.000014' as datetime(6)) as decimal(20,6)) as datetime_decimal_microsecond;
+➤ datetime_decimal_microsecond[3,20,6]  𝄀
+20060810101112.000014
+select cast('2024-01-02 03:04:05.123456' as datetime(6)) + 0 as datetime_plus_zero;
+➤ datetime_plus_zero[3,38,6]  𝄀
+20240102030405.123456
+select cast('2024-01-02 03:04:05.123456' as datetime(6)) = cast(20240102030405.123456 as decimal(20,6)) as datetime_eq_compact_decimal;
+➤ datetime_eq_compact_decimal[-7,1,0]  𝄀
+1
+select cast(cast('2024-01-02 03:04:05' as datetime) as int) as datetime_int32;
+Data truncation: data out of range: data type int32, value '20240102030405'
+select cast(cast('2024-01-02 03:04:05.123456' as timestamp(6)) as signed) as timestamp_signed;
+➤ timestamp_signed[-5,64,0]  𝄀
+20240102030405
+select cast(cast('2024-01-02 03:04:05.123456' as timestamp(6)) as decimal(20,6)) as timestamp_decimal;
+➤ timestamp_decimal[3,20,6]  𝄀
+20240102030405.123456
+select cast(cast(20240102030405 as decimal(14,0)) as timestamp) as timestamp_from_decimal64;
+➤ timestamp_from_decimal64[93,64,0]  𝄀
+2024-01-02 03:04:05
+select cast('2024-01-02 03:04:05.123456' as timestamp(6)) + 0 as timestamp_plus_zero;
+➤ timestamp_plus_zero[3,38,6]  𝄀
+20240102030405.123456
+select cast('2024-01-02 03:04:05.123456' as timestamp(6)) = cast(20240102030405.123456 as decimal(20,6)) as timestamp_eq_compact_decimal;
+➤ timestamp_eq_compact_decimal[-7,1,0]  𝄀
+1
+select cast(cast('2024-01-02 03:04:05' as timestamp) as int) as timestamp_int32;
+Data truncation: data out of range: data type int32, value '20240102030405'
+drop table if exists temporal_numeric_cast_timestamp_tz;
+create table temporal_numeric_cast_timestamp_tz(ts timestamp(6));
+insert into temporal_numeric_cast_timestamp_tz values ('2024-01-02 03:04:05.123456');
+set time_zone = '+08:00';
+select cast(ts as decimal(20,6)) as timestamp_decimal_session_tz from temporal_numeric_cast_timestamp_tz;
+➤ timestamp_decimal_session_tz[3,20,6]  𝄀
+20240102110405.123456
+drop table temporal_numeric_cast_timestamp_tz;
+set time_zone = '+00:00';
+select cast(cast('2024' as year) as signed) as year_signed;
+➤ year_signed[-5,64,0]  𝄀
+2024
+select cast(cast('2024' as year) as decimal(20,0)) as year_decimal;
+➤ year_decimal[3,20,0]  𝄀
+2024
+select cast('2024' as year) + 0 as year_plus_zero;
+➤ year_plus_zero[-5,64,0]  𝄀
+2024
+select cast('2024' as year) = cast(2024 as decimal(20,0)) as year_eq_decimal;
+➤ year_eq_decimal[-7,1,0]  𝄀
+1
+select cast(cast('03:04:05.123456' as time(6)) as decimal(20,6)) as time_decimal;
+➤ time_decimal[3,20,6]  𝄀
+30405.123456

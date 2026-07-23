@@ -161,6 +161,105 @@ func TestTimeWin(t *testing.T) {
 	}
 }
 
+// TestTimeWinSplitDistinctResultAndReplace verifies the complete non-final
+// flush transition: split physical results are materialized as one logical
+// batch, and the flushed DISTINCT executor is freed before its replacement is
+// installed.
+func TestTimeWinSplitDistinctResultAndReplace(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	rows := aggexec.AggBatchSize + 17
+	values := make([]int32, rows)
+	groups := make([]uint64, rows)
+	for i := range values {
+		values[i] = int32(i + 1)
+		groups[i] = uint64(i + 1)
+	}
+	input := testutil.MakeInt32Vector(values, nil, proc.Mp())
+
+	agg, err := aggexec.MakeAgg(proc.Mp(), function.AggSumOverloadID, true, types.T_int32.ToType())
+	require.NoError(t, err)
+	require.NoError(t, agg.GroupGrow(rows))
+	require.NoError(t, agg.BatchFill(0, groups, []*vector.Vector{input}))
+
+	arg := &TimeWin{
+		Types: []types.Type{types.T_int32.ToType()},
+		Aggs: []aggexec.AggFuncExecExpression{
+			aggexec.MakeAggFunctionExpression(
+				function.AggSumOverloadID, true, []*plan.Expr{newExpression(0)}, nil),
+		},
+	}
+	arg.ctr.status = flush
+	arg.ctr.colCnt = 1
+	arg.ctr.aggs = []aggexec.AggFuncExec{agg}
+	arg.ctr.wStart = make([]types.Datetime, rows)
+	arg.ctr.wEnd = make([]types.Datetime, rows)
+	result, err := arg.Call(proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	require.Empty(t, arg.ctr.wStart)
+	require.Empty(t, arg.ctr.wEnd)
+	resultValues := vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[0])
+	require.Len(t, resultValues, rows)
+	for _, idx := range []int{0, aggexec.AggBatchSize - 1, aggexec.AggBatchSize, rows - 1} {
+		require.Equal(t, int64(values[idx]), resultValues[idx], "row %d", idx)
+	}
+
+	require.Equal(t, int32(nextWindow), arg.ctr.status)
+	require.Len(t, arg.ctr.aggs, 1)
+	require.NotSame(t, agg, arg.ctr.aggs[0])
+
+	// A second intermediate flush verifies both generations: the first output
+	// batch is released on the next Call, and the first replacement executor is
+	// released when the second replacement is installed.
+	require.NoError(t, arg.ctr.aggs[0].Fill(0, 0, []*vector.Vector{input}))
+	arg.ctr.status = flush
+	arg.ctr.wStart = make([]types.Datetime, maxTimeWindowRows+1)
+	arg.ctr.wEnd = make([]types.Datetime, maxTimeWindowRows+1)
+	secondResult, err := arg.Call(proc)
+	require.NoError(t, err)
+	require.NotNil(t, secondResult.Batch)
+	require.Equal(t, []int64{1}, vector.MustFixedColWithTypeCheck[int64](secondResult.Batch.Vecs[0]))
+	require.Empty(t, arg.ctr.wStart)
+	require.Empty(t, arg.ctr.wEnd)
+
+	arg.Free(proc, false, nil)
+	input.Free(proc.Mp())
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestTimeWinReplacementFailurePreservesOwnership(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	input := testutil.MakeInt32Vector([]int32{1}, nil, proc.Mp())
+
+	agg, err := aggexec.MakeAgg(proc.Mp(), function.AggSumOverloadID, true, types.T_int32.ToType())
+	require.NoError(t, err)
+	require.NoError(t, agg.GroupGrow(1))
+	require.NoError(t, agg.Fill(0, 0, []*vector.Vector{input}))
+
+	arg := &TimeWin{
+		Types: []types.Type{types.T_int32.ToType(), types.T_int32.ToType()},
+		Aggs: []aggexec.AggFuncExecExpression{
+			aggexec.MakeAggFunctionExpression(
+				function.AggSumOverloadID, true, []*plan.Expr{newExpression(0)}, nil),
+			aggexec.MakeAggFunctionExpression(-9999, false, []*plan.Expr{newExpression(0)}, nil),
+		},
+	}
+	arg.ctr.status = flush
+	arg.ctr.colCnt = 1
+	arg.ctr.aggs = []aggexec.AggFuncExec{agg}
+
+	_, err = arg.Call(proc)
+	require.Error(t, err)
+	require.Len(t, arg.ctr.aggs, 1)
+	require.Same(t, agg, arg.ctr.aggs[0], "failed replacement must not overwrite the owned executor")
+
+	arg.Free(proc, true, err)
+	input.Free(proc.Mp())
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
 func resetChildren(arg *TimeWin, m *mpool.MPool) {
 	bat := colexec.MakeMockTimeWinBatchs(m)
 	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})

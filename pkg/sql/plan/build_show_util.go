@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
@@ -141,7 +142,7 @@ func ConstructCreateTableSQL(
 					buf.WriteString(" DEFAULT NULL")
 				}
 			} else if len(col.Default.OriginString) > 0 {
-				buf.WriteString(" DEFAULT " + formatStr(col.Default.OriginString))
+				buf.WriteString(" DEFAULT " + formatDefaultExpr(col.Default.OriginString))
 			}
 
 			if col.OnUpdate != nil && col.OnUpdate.Expr != nil {
@@ -318,8 +319,8 @@ func ConstructCreateTableSQL(
 				}
 			}
 			if indexdef.Comment != "" {
-				indexdef.Comment = strings.Replace(indexdef.Comment, "'", "\\'", -1)
-				indexStr += fmt.Sprintf(" COMMENT '%s'", formatStr(indexdef.Comment))
+				formattedComment := formatStr(indexdef.Comment)
+				indexStr += fmt.Sprintf(" COMMENT '%s'", formattedComment)
 				if len(rewritePairs) > 0 && rewritePairs[len(rewritePairs)-1].display != rewritePairs[len(rewritePairs)-1].rewrite &&
 					strings.HasPrefix(indexStr, rewritePairs[len(rewritePairs)-1].display) {
 					rewritePairs[len(rewritePairs)-1] = struct {
@@ -327,7 +328,7 @@ func ConstructCreateTableSQL(
 						rewrite string
 					}{
 						display: indexStr,
-						rewrite: rewritePairs[len(rewritePairs)-1].rewrite + fmt.Sprintf(" COMMENT '%s'", formatStr(indexdef.Comment)),
+						rewrite: rewritePairs[len(rewritePairs)-1].rewrite + fmt.Sprintf(" COMMENT '%s'", formattedComment),
 					}
 				}
 			}
@@ -577,6 +578,17 @@ func ConstructCreateTableSQL(
 	}
 
 	if tableDef.TableType == catalog.SystemExternalRel {
+		if env, found, parseErr := sqliceberg.ParseCreateSQLEnvelope(ctx.GetContext(), tableDef.Createsql); parseErr != nil {
+			return "", nil, parseErr
+		} else if found {
+			createStr += formatIcebergTableOptionsForShowCreate(env)
+			var stmt tree.Statement
+			if ctx != nil {
+				stmt, err = getRewriteSQLStmt(ctx, createStr)
+			}
+			return createStr, stmt, err
+		}
+
 		param := &tree.ExternParam{}
 		if err = json.Unmarshal([]byte(tableDef.Createsql), param); err != nil {
 			return "", nil, err
@@ -982,6 +994,34 @@ func formatExternalTableOptionsForShowCreate(param *tree.ExternParam) string {
 	return formatInfileExternalOptionsForShowCreate(param)
 }
 
+func formatIcebergTableOptionsForShowCreate(env sqliceberg.CreateSQLEnvelope) string {
+	options := []struct {
+		key   string
+		value string
+	}{
+		{key: "catalog", value: env.Catalog},
+		{key: "namespace", value: env.Namespace},
+		{key: "table", value: env.Table},
+		{key: "ref", value: env.DefaultRef},
+		{key: "read_mode", value: env.ReadMode},
+		{key: "write_mode", value: env.WriteMode},
+	}
+	var builder strings.Builder
+	builder.WriteString(" ENGINE = ICEBERG WITH (")
+	for i, option := range options {
+		if i > 0 {
+			builder.WriteString(", ")
+		}
+		builder.WriteString("\"")
+		builder.WriteString(option.key)
+		builder.WriteString("\" = '")
+		builder.WriteString(formatStrInSingleQuotes(option.value))
+		builder.WriteString("'")
+	}
+	builder.WriteString(")")
+	return builder.String()
+}
+
 func formatInfileExternalOptionsForShowCreate(param *tree.ExternParam) string {
 	if pattern, writable := GetWriteFilePattern(param); writable {
 		// Writable external tables must be recreatable from their own DDL:
@@ -1148,6 +1188,14 @@ func formatStr(str string) string {
 		return "'" + strings.Replace(tmp[1:strLen-1], "'", "''", -1) + "'"
 	}
 	return strings.Replace(tmp, "'", "''", -1)
+}
+
+func formatDefaultExpr(expr string) string {
+	trimmed := strings.TrimSpace(expr)
+	if strings.HasPrefix(trimmed, "(") && strings.HasSuffix(trimmed, ")") {
+		return trimmed
+	}
+	return formatStr(expr)
 }
 
 func getTimeStampByTsHint(ctx CompilerContext, AtTsExpr *tree.AtTimeStamp) (snapshot *plan.Snapshot, err error) {

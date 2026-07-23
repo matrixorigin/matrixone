@@ -17,7 +17,6 @@ package service
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -39,10 +38,11 @@ import (
 var _ TxnService = (*service)(nil)
 
 type service struct {
-	sid       string
-	logger    *log.MOLogger
-	shard     metadata.TNShard
-	storage   storage.TxnStorage
+	sid     string
+	logger  *log.MOLogger
+	shard   metadata.TNShard
+	storage storage.TxnStorage
+	// sender is owned by the TN store and shared by all replica services.
 	sender    rpc.TxnSender
 	stopper   *stopper.Stopper
 	allocator lockservice.LockTableAllocator
@@ -60,11 +60,14 @@ type service struct {
 	// due to the network, resulting in the transaction information being written back to the map.
 	// We use the zombieTimeout setting to solve this problem, so that when a transaction exceeds the zombieTimeout
 	// threshold in the map, it is cleaned up.
-	transactions  sync.Map // string(txn.id) -> txnContext
-	zombieTimeout time.Duration
-	pool          sync.Pool
-	recoveryC     chan struct{}
-	txnC          chan txn.TxnMeta
+	transactions   sync.Map // string(txn.id) -> txnContext
+	zombieTimeout  time.Duration
+	pool           sync.Pool
+	recoveryC      chan struct{}
+	recoveryOnce   sync.Once
+	recoveryCtx    context.Context
+	recoveryCancel context.CancelFunc
+	txnC           chan txn.TxnMeta
 }
 
 // NewTxnService create TxnService
@@ -77,6 +80,7 @@ func NewTxnService(
 	allocator lockservice.LockTableAllocator,
 ) TxnService {
 	logger := util.GetLogger(sid)
+	recoveryCtx, recoveryCancel := context.WithCancel(context.Background())
 	s := &service{
 		sid:     sid,
 		logger:  logger,
@@ -91,10 +95,12 @@ func NewTxnService(
 			shard.ShardID,
 			shard.ReplicaID),
 			stopper.WithLogger(logger.RawLogger())),
-		zombieTimeout: zombieTimeout,
-		recoveryC:     make(chan struct{}),
-		txnC:          make(chan txn.TxnMeta, 16),
-		allocator:     allocator,
+		zombieTimeout:  zombieTimeout,
+		recoveryC:      make(chan struct{}),
+		recoveryCtx:    recoveryCtx,
+		recoveryCancel: recoveryCancel,
+		txnC:           make(chan txn.TxnMeta, 16),
+		allocator:      allocator,
 	}
 	if err := s.stopper.RunTask(s.gcZombieTxn); err != nil {
 		s.logger.Fatal("start gc zombie txn failed",
@@ -109,6 +115,7 @@ func (s *service) Shard() metadata.TNShard {
 
 func (s *service) Start() error {
 	if err := s.storage.Start(); err != nil {
+		s.finishRecovery()
 		return err
 	}
 	s.logger.Info("txn.service.start.recovery")
@@ -117,7 +124,15 @@ func (s *service) Start() error {
 	return nil
 }
 
+// CancelRecovery interrupts recovery without closing storage. TN replica
+// shutdown uses this to unblock Start before running the normal Close path.
+func (s *service) CancelRecovery() {
+	s.recoveryCancel()
+}
+
 func (s *service) Close(destroy bool) error {
+	s.CancelRecovery()
+	s.finishRecovery()
 	s.waitRecoveryCompleted()
 	s.stopper.Stop()
 	closer := s.storage.Close
@@ -125,7 +140,7 @@ func (s *service) Close(destroy bool) error {
 		closer = s.storage.Destroy
 	}
 	// FIXME: all context.TODO() need to use tracing context
-	return errors.Join(closer(context.TODO()), s.sender.Close())
+	return closer(context.TODO())
 }
 
 func (s *service) gcZombieTxn(ctx context.Context) {
@@ -253,7 +268,7 @@ func (s *service) parallelSendWithRetry(
 			if err != nil {
 				err = moerr.AttachCause(ctx, err)
 				util.LogTxnSendRequestsFailed(s.logger, requests, err)
-				if !waitParallelSendRetryBackoff(ctx, backoff) {
+				if !waitRetryBackoff(ctx, backoff) {
 					return nil
 				}
 				backoff = nextParallelSendRetryBackoff(backoff, maxBackoff)
@@ -273,7 +288,7 @@ func (s *service) parallelSendWithRetry(
 				return result
 			}
 			result.Release()
-			if !waitParallelSendRetryBackoff(ctx, backoff) {
+			if !waitRetryBackoff(ctx, backoff) {
 				return nil
 			}
 			backoff = nextParallelSendRetryBackoff(backoff, maxBackoff)
@@ -281,7 +296,7 @@ func (s *service) parallelSendWithRetry(
 	}
 }
 
-func waitParallelSendRetryBackoff(ctx context.Context, backoff time.Duration) bool {
+func waitRetryBackoff(ctx context.Context, backoff time.Duration) bool {
 	if backoff <= 0 {
 		return ctx.Err() == nil
 	}

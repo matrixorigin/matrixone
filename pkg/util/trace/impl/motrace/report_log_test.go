@@ -16,6 +16,7 @@ package motrace
 
 import (
 	"context"
+	"errors"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -29,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/matrixorigin/matrixone/pkg/util/stack"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
@@ -129,6 +131,72 @@ func TestReportZap(t *testing.T) {
 	}
 }
 
+func TestGeneratedTraceContextSurvivesLogAndErrorExtraction(t *testing.T) {
+	exportMux.Lock()
+	defer exportMux.Unlock()
+
+	collector := newRecordingBatchProcessor()
+	provider := newMOTracerProvider(EnableTracer(true), WithBatchProcessor(collector))
+	stubs := gostub.Stub(&GetTracerProvider, func() *MOTracerProvider { return provider })
+	defer stubs.Reset()
+
+	ctx, span := provider.Tracer("test").Start(context.Background(), "root", trace.WithNewRoot(true))
+	spanContext := span.SpanContext()
+	require.False(t, spanContext.IsEmpty())
+	require.Equal(t, trace.SpanKindInternal, spanContext.Kind)
+
+	// LocalFS spans were mo_ctl opt-in and disabled by default. Retiring their
+	// recording/runtime control must preserve the parent correlation context,
+	// rather than introducing localFSOperation into system.rawlog.
+	ctx, retiredSpan := provider.Tracer("test").Start(ctx, "local-fs", trace.WithKind(trace.SpanKindLocalFSVis))
+	require.IsType(t, trace.NoopSpan{}, retiredSpan)
+	require.Equal(t, spanContext, trace.SpanFromContext(ctx).SpanContext())
+
+	encoder := zapcore.NewJSONEncoder(zapcore.EncoderConfig{SkipLineEnding: true})
+	_, err := ReportZap(encoder, zapcore.Entry{Level: zapcore.InfoLevel}, []zapcore.Field{trace.ContextField(ctx)})
+	require.NoError(t, err)
+	require.Len(t, collector.collected, 1)
+	logItem, ok := collector.collected[0].(*MOZapLog)
+	require.True(t, ok)
+	defer logItem.Free()
+	require.Equal(t, spanContext, *logItem.SpanContext)
+	logRow := logView.OriginTable.GetRow(ctx)
+	defer logRow.Free()
+	logItem.FillRow(ctx, logRow)
+	logValues := logRow.ToStrings()
+	foundSpanKind := false
+	for idx, column := range logRow.Table.Columns {
+		if column.Name == spanKindCol.Name {
+			foundSpanKind = true
+			require.Equal(t, trace.SpanKindInternal.String(), logValues[idx])
+		}
+	}
+	require.True(t, foundSpanKind)
+
+	previousReporter := errutil.GetReportErrorFunc()
+	errutil.SetErrorReporter(func(context.Context, error, int) {})
+	defer errutil.SetErrorReporter(previousReporter)
+	wrapped := errutil.WithContext(ctx, errors.New("generated trace context"))
+	errorItem := &MOErrorHolder{Error: wrapped}
+	row := errorView.OriginTable.GetRow(ctx)
+	defer row.Free()
+	errorItem.FillRow(ctx, row)
+	values := row.ToStrings()
+	var foundTraceID, foundSpanID bool
+	for idx, column := range row.Table.Columns {
+		switch column.Name {
+		case traceIDCol.Name:
+			foundTraceID = true
+			require.Equal(t, spanContext.TraceID.String(), values[idx])
+		case spanIDCol.Name:
+			foundSpanID = true
+			require.Equal(t, spanContext.SpanID.String(), values[idx])
+		}
+	}
+	require.True(t, foundTraceID)
+	require.True(t, foundSpanID)
+}
+
 var _ BatchProcessor = (*dummyCollectorCounter)(nil)
 var _ DiscardableCollector = (*dummyCollectorCounter)(nil)
 
@@ -164,7 +232,7 @@ func TestReportZap_Discardable(t *testing.T) {
 	runtime.SetupServiceBasedRuntime("", runtime.NewRuntime(metadata.ServiceType_CN, "test", logutil.GetGlobalLogger()))
 
 	collector := newDummyCollectorCounter()
-	p := newMOTracerProvider(WithFSWriterFactory(&dummyFileWriterFactory{}), EnableTracer(true), WithBatchProcessor(collector))
+	p := newMOTracerProvider(EnableTracer(true), WithBatchProcessor(collector))
 	stubs := gostub.Stub(&GetTracerProvider, func() *MOTracerProvider {
 		return p
 	})

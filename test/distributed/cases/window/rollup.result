@@ -1010,4 +1010,86 @@ group by region, product with rollup
 order by grouping(region) + product;
 SQL syntax error: for SELECT DISTINCT, ORDER BY expressions must appear in select list
 drop table grouping_order;
+create table rollup_window_sales(region varchar(20), product varchar(20), qty int);
+insert into rollup_window_sales values
+('east', 'apple', 10),
+('east', 'banana', 20),
+('west', 'apple', 30),
+('west', 'banana', 10);
+select
+region,
+product,
+sum(qty) as total_qty,
+row_number() over (order by sum(qty) desc, region, product) as row_num,
+rank() over (order by sum(qty) desc) as rank_num,
+dense_rank() over (order by sum(qty) desc) as dense_rank_num
+from
+rollup_window_sales
+group by
+region,
+product with rollup
+order by total_qty desc, region, product;
+region    product    total_qty    row_num    rank_num    dense_rank_num
+null    null    70    1    1    1
+west    null    40    2    2    2
+east    null    30    3    3    3
+west    apple    30    4    3    3
+east    banana    20    5    5    4
+east    apple    10    6    6    5
+west    banana    10    7    6    5
+select
+region,
+product,
+sum(qty),
+row_number() over (order by sum(qty) desc, region, product) as row_num,
+rank() over (order by sum(qty) desc) as rank_num,
+dense_rank() over (order by sum(qty) desc) as dense_rank_num
+from
+rollup_window_sales
+group by
+region,
+product with rollup
+order by sum(qty) desc, region, product;
+region    product    sum(qty)    row_num    rank_num    dense_rank_num
+null    null    70    1    1    1
+west    null    40    2    2    2
+east    null    30    3    3    3
+west    apple    30    4    3    3
+east    banana    20    5    5    4
+east    apple    10    6    6    5
+west    banana    10    7    6    5
+select
+region,
+product,
+row_number() over (order by sum(qty) desc, region, product) as row_num,
+rank() over (order by sum(qty) desc) as rank_num,
+dense_rank() over (order by sum(qty) desc) as dense_rank_num
+from
+rollup_window_sales
+group by
+region,
+product with rollup
+order by row_num;
+region    product    row_num    rank_num    dense_rank_num
+null    null    1    1    1
+west    null    2    2    2
+east    null    3    3    3
+west    apple    4    3    3
+east    banana    5    5    4
+east    apple    6    6    5
+west    banana    7    6    5
+select
+sum(r.qty) as qty,
+row_number() over (order by sum(r.qty), count(*)) as row_num
+from
+rollup_window_sales r
+group by
+r.qty with rollup
+having qty > 0
+order by row_num;
+qty    row_num
+20    1
+20    2
+30    3
+drop table rollup_window_sales;
 drop database rollup_test;

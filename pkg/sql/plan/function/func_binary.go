@@ -16,6 +16,7 @@ package function
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
@@ -27,6 +28,7 @@ import (
 	"math"
 	"math/big"
 	"math/bits"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -4599,6 +4601,9 @@ type number interface {
 func fieldCheck(overloads []overload, inputs []types.Type) checkResult {
 	tc := func(inputs []types.Type, t types.T) bool {
 		for _, input := range inputs {
+			if input.Oid == types.T_text && t == types.T_varchar {
+				continue
+			}
 			if (input.Oid == types.T_char && t == types.T_varchar) || (input.Oid == types.T_varchar && t == types.T_char) {
 				continue
 			}
@@ -10483,11 +10488,18 @@ func parameterIntervalsCoverSegment(intervals []geometryParamInterval) bool {
 		return false
 	}
 
-	sort.Slice(intervals, func(i, j int) bool {
-		if sameGeometryCoordinate(intervals[i].start, intervals[j].start) {
-			return intervals[i].end < intervals[j].end
+	// Sort by an exact total order on (start, end). Do NOT fold starts within an
+	// epsilon into an "equal" bucket here: an epsilon band is non-transitive
+	// (start A~B and B~C does not imply A~C), which violates slices.SortFunc's
+	// strict-weak-ordering contract and can leave a non-minimum-start interval at
+	// position 0 -- making the coverage check below wrongly bail on
+	// intervals[0].start > 1e-9. The epsilon tolerance stays in the gap/coverage
+	// loop, where it is applied pairwise and transitivity is not required.
+	slices.SortFunc(intervals, func(a, b geometryParamInterval) int {
+		if c := cmp.Compare(a.start, b.start); c != 0 {
+			return c
 		}
-		return intervals[i].start < intervals[j].start
+		return cmp.Compare(a.end, b.end)
 	})
 
 	coveredEnd := intervals[0].end

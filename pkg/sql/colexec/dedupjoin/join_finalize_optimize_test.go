@@ -266,6 +266,119 @@ func TestDedupJoinFinalize_UnionSelsByBatch_PartialMatch(t *testing.T) {
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
+func TestDedupJoinIgnoreSkipsUpdateTargetOldKey(t *testing.T) {
+	proc, ctrl := newCaptureTestProc(t)
+	defer ctrl.Finish()
+
+	int32Typ := types.T_int32.ToType()
+	tag++
+	curTag := tag
+
+	// The build row is the new row produced by UPDATE. Its old key is kept in
+	// column 1 so HashBuild can mark the matching build bucket deleted. The
+	// probe sees the same key, which is a self-match and must not make UPDATE
+	// IGNORE discard the row.
+	buildBat := makeInt32Batch(proc.Mp(), [][]int32{{1}, {1}, {1}}, nil)
+	probeBat := makeInt32Batch(proc.Mp(), [][]int32{{1}}, nil)
+	conditions := [][]*plan.Expr{
+		{newExpr(0, int32Typ)},
+		{newExpr(0, int32Typ)},
+	}
+
+	dedupArg := &DedupJoin{
+		LeftTypes:  []types.Type{int32Typ},
+		RightTypes: []types.Type{int32Typ, int32Typ, int32Typ},
+		Conditions: conditions,
+		Result: []colexec.ResultPos{
+			colexec.NewResultPos(1, 0),
+			colexec.NewResultPos(1, 2),
+		},
+		OnDuplicateAction: plan.Node_IGNORE,
+		JoinMapTag:        curTag,
+		OperatorBase:      vm.OperatorBase{OperatorInfo: vm.OperatorInfo{Idx: 0}},
+	}
+	buildArg := &hashbuild.HashBuild{
+		NeedHashMap:       true,
+		NeedBatches:       true,
+		Conditions:        conditions[1],
+		IsDedup:           true,
+		DelColIdx:         1,
+		JoinMapTag:        curTag,
+		JoinMapRefCnt:     1,
+		OnDuplicateAction: plan.Node_IGNORE,
+		OperatorBase:      vm.OperatorBase{OperatorInfo: vm.OperatorInfo{Idx: 0}},
+	}
+
+	out := runFinalizeFixture(t, dedupArg, buildArg, proc, buildBat, probeBat)
+	require.Len(t, out, 1)
+	require.Equal(t, 1, out[0].RowCount())
+	require.Equal(t, []int32{1}, vector.MustFixedColNoTypeCheck[int32](out[0].Vecs[0]))
+	require.Equal(t, []int32{1}, vector.MustFixedColNoTypeCheck[int32](out[0].Vecs[1]))
+
+	dedupArg.Reset(proc, false, nil)
+	buildArg.Reset(proc, false, nil)
+	dedupArg.Free(proc, false, nil)
+	buildArg.Free(proc, false, nil)
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestDedupJoinIgnoreMapsNullableKeyGroupToBuildRow(t *testing.T) {
+	proc, ctrl := newCaptureTestProc(t)
+	defer ctrl.Finish()
+
+	int32Typ := types.T_int32.ToType()
+	tag++
+	curTag := tag
+
+	// NULL does not create a hash group, so key 10 is group 1 but physical
+	// build row 1. GroupSels must make the probe filter row 1, not NULL row 0.
+	buildBat := makeInt32Batch(proc.Mp(), [][]int32{{0, 10}, {100, 200}}, [][]uint64{{0}, nil})
+	probeBat := makeInt32Batch(proc.Mp(), [][]int32{{10}}, nil)
+	conditions := [][]*plan.Expr{
+		{newExpr(0, int32Typ)},
+		{newExpr(0, int32Typ)},
+	}
+
+	dedupArg := &DedupJoin{
+		LeftTypes:  []types.Type{int32Typ},
+		RightTypes: []types.Type{int32Typ, int32Typ},
+		Conditions: conditions,
+		Result: []colexec.ResultPos{
+			colexec.NewResultPos(1, 0),
+			colexec.NewResultPos(1, 1),
+		},
+		OnDuplicateAction: plan.Node_IGNORE,
+		JoinMapTag:        curTag,
+		OperatorBase:      vm.OperatorBase{OperatorInfo: vm.OperatorInfo{Idx: 0}},
+	}
+	buildArg := &hashbuild.HashBuild{
+		NeedHashMap:       true,
+		NeedBatches:       true,
+		NeedAllocateSels:  true,
+		Conditions:        conditions[1],
+		IsDedup:           true,
+		DelColIdx:         -1,
+		JoinMapTag:        curTag,
+		JoinMapRefCnt:     1,
+		OnDuplicateAction: plan.Node_IGNORE,
+		OperatorBase:      vm.OperatorBase{OperatorInfo: vm.OperatorInfo{Idx: 0}},
+	}
+
+	out := runFinalizeFixture(t, dedupArg, buildArg, proc, buildBat, probeBat)
+	require.Len(t, out, 1)
+	require.Equal(t, 1, out[0].RowCount())
+	require.True(t, out[0].Vecs[0].IsNull(0))
+	require.Equal(t, []int32{100}, vector.MustFixedColNoTypeCheck[int32](out[0].Vecs[1]))
+
+	dedupArg.Reset(proc, false, nil)
+	buildArg.Reset(proc, false, nil)
+	dedupArg.Free(proc, false, nil)
+	buildArg.Free(proc, false, nil)
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
 // makeInt32Vec builds a single-vector helper for unionSelsByBatch tests.
 func makeInt32Vec(t *testing.T, proc *process.Process, vals []int32) *vector.Vector {
 	t.Helper()

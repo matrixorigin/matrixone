@@ -16,16 +16,290 @@ package shardservice
 
 import (
 	"context"
+	"fmt"
+	"os"
 	"sort"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/shard"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/version"
 	"github.com/stretchr/testify/require"
 )
+
+type countingMethodBasedClient struct {
+	morpc.MethodBasedClient[*shard.Request, *shard.Response]
+	asyncCalls atomic.Int32
+}
+
+func (c *countingMethodBasedClient) AsyncSend(
+	ctx context.Context,
+	req *shard.Request,
+) (*morpc.Future, error) {
+	c.asyncCalls.Add(1)
+	return c.MethodBasedClient.AsyncSend(ctx, req)
+}
+
+func TestValidateRemoteReadCompatibility(t *testing.T) {
+	cns, _ := initTestCluster("target")
+	cluster := clusterservice.GetMOCluster(sid)
+	s := &service{}
+	s.remote.cluster = cluster
+	target := shard.TableShard{Replicas: []shard.ShardReplica{{CN: "target"}}}
+	binaryParam := shard.ReadParam{Process: pipeline.ProcessInfo{
+		PrepareParams: pipeline.PrepareParamInfo{IsBin: []bool{false, true}},
+	}}
+
+	cns[0].CommitID = version.CommitID
+	cluster.UpdateCN(cns[0])
+	require.NoError(t, s.validateRemoteReadCompatibility(t.Context(), target, binaryParam))
+
+	cns[0].CommitID = "older-commit"
+	cluster.UpdateCN(cns[0])
+	require.Error(t, s.validateRemoteReadCompatibility(t.Context(), target, binaryParam))
+
+	textParam := binaryParam
+	textParam.Process.PrepareParams.IsBin = []bool{false, false}
+	require.NoError(t, s.validateRemoteReadCompatibility(t.Context(), target, textParam))
+
+	unknown := target
+	unknown.Replicas[0].CN = "unknown"
+	require.Error(t, s.validateRemoteReadCompatibility(t.Context(), unknown, binaryParam))
+}
+
+func TestNewReadRequestUsesVersionedMethodForBinaryParams(t *testing.T) {
+	s := &service{}
+	s.remote.pool = morpc.NewMessagePool(
+		func() *shard.Request { return &shard.Request{} },
+		func() *shard.Response { return &shard.Response{} },
+	)
+	target := shard.TableShard{Replicas: []shard.ShardReplica{{CN: "target"}}}
+
+	textReq := s.newReadRequest(target, ReadRows, shard.ReadParam{}, timestamp.Timestamp{})
+	require.Equal(t, shard.Method_ShardRead, textReq.RPCMethod)
+	s.remote.pool.ReleaseRequest(textReq)
+
+	binaryReq := s.newReadRequest(
+		target,
+		ReadRows,
+		shard.ReadParam{Process: pipeline.ProcessInfo{
+			PrepareParams: pipeline.PrepareParamInfo{IsBin: []bool{true}},
+		}},
+		timestamp.Timestamp{},
+	)
+	require.Equal(t, shard.Method_ShardReadV2, binaryReq.RPCMethod)
+	s.remote.pool.ReleaseRequest(binaryReq)
+}
+
+func TestOldReceiverRejectsVersionedShardReadBeforeHandler(t *testing.T) {
+	initTestCluster("cn1")
+	address := fmt.Sprintf("unix:///tmp/shard-read-v2-%d.sock", time.Now().UnixNano())
+	require.NoError(t, os.RemoveAll(address[7:]))
+
+	pool := morpc.NewMessagePool(
+		func() *shard.Request { return &shard.Request{} },
+		func() *shard.Response { return &shard.Response{} },
+	)
+	server, err := morpc.NewMessageHandler(
+		sid,
+		"old-shard-service",
+		address,
+		morpc.Config{},
+		pool,
+	)
+	require.NoError(t, err)
+	var handlerCalls atomic.Int32
+	server.RegisterMethod(
+		uint32(shard.Method_ShardRead),
+		func(context.Context, *shard.Request, *shard.Response, *morpc.Buffer) error {
+			handlerCalls.Add(1)
+			return nil
+		},
+		false,
+	)
+	require.NoError(t, server.Start())
+	t.Cleanup(func() { require.NoError(t, server.Close()) })
+
+	client, err := morpc.NewMethodBasedClient(
+		sid,
+		"new-shard-client",
+		morpc.Config{ClientOptions: []morpc.ClientOption{morpc.WithClientEnableAutoCreateBackend()}},
+		pool,
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, client.Close()) })
+	client.RegisterMethod(
+		uint32(shard.Method_ShardReadV2),
+		func(*shard.Request) (string, error) { return address, nil },
+	)
+
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	_, err = client.Send(ctx, &shard.Request{RPCMethod: shard.Method_ShardReadV2})
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
+	require.Zero(t, handlerCalls.Load())
+}
+
+func TestBinaryReadUsesVersionedRemoteHandler(t *testing.T) {
+	runServicesTest(
+		t,
+		"cn1,cn2",
+		func(ctx context.Context, _ *server, services []*service) {
+			s1 := services[0]
+			s2 := services[1]
+			table := uint64(1)
+			mustAddTestShards(t, ctx, s1, table, 2, 1, s2)
+			waitReplicaCount(table, s1, 1)
+			waitReplicaCount(table, s2, 1)
+
+			var cns []metadata.CNService
+			s1.remote.cluster.GetCNServiceWithoutWorkingState(
+				clusterservice.NewSelector(),
+				func(cn metadata.CNService) bool {
+					cns = append(cns, cn)
+					return true
+				},
+			)
+			for _, cn := range cns {
+				cn.CommitID = version.CommitID
+				s1.remote.cluster.UpdateCN(cn)
+			}
+
+			key := []byte("key")
+			value := []byte("value")
+			store := s2.storage.(*MemShardStorage)
+			store.set(key, value, newTestTimestamp(1))
+			store.waiter.NotifyLatestCommitTS(newTestTimestamp(2))
+			remoteShard := s2.getAllocatedShards()[0].ShardID
+			applied := false
+			err := s1.Read(
+				ctx,
+				ReadRequest{
+					TableID: table,
+					Param: shard.ReadParam{
+						KeyParam: shard.KeyParam{Key: key},
+						Process: pipeline.ProcessInfo{
+							PrepareParams: pipeline.PrepareParamInfo{IsBin: []bool{true}},
+						},
+					},
+					Apply: func(actual []byte) {
+						applied = true
+						require.Equal(t, value, actual)
+					},
+				},
+				DefaultOptions.ReadAt(newTestTimestamp(2)).Shard(remoteShard),
+			)
+			require.NoError(t, err)
+			require.True(t, applied)
+		},
+		nil,
+	)
+}
+
+func TestReadValidatesAllRemoteShardsBeforeSending(t *testing.T) {
+	runServicesTest(
+		t,
+		"cn1,cn2,cn3",
+		func(_ context.Context, _ *server, services []*service) {
+			s := services[0]
+			table := uint64(1)
+
+			cns := make(map[string]metadata.CNService)
+			s.remote.cluster.GetCNServiceWithoutWorkingState(
+				clusterservice.NewSelector(),
+				func(cn metadata.CNService) bool {
+					cns[cn.ServiceID] = cn
+					return true
+				},
+			)
+			remoteTargets := []string{services[1].cfg.ServiceID, services[2].cfg.ServiceID}
+			for _, target := range remoteTargets {
+				cn := cns[target]
+				cn.CommitID = version.CommitID
+				s.remote.cluster.UpdateCN(cn)
+			}
+			incompatible := cns[remoteTargets[1]]
+			incompatible.CommitID = "older-commit"
+			s.remote.cluster.UpdateCN(incompatible)
+
+			// Stop the heartbeat loop before replacing the client so the test does
+			// not race with background RPCs unrelated to the read under test.
+			s.stopper.Stop()
+			client := &countingMethodBasedClient{MethodBasedClient: s.remote.client}
+			s.remote.client = client
+			// This is a read-ordering contract test, not a scheduler test. Install
+			// the two remote shards directly so rebalance timing and cache refresh
+			// cannot change which target is checked first.
+			cache := newReadCache()
+			cache.addShards(
+				table,
+				shard.ShardsMetadata{
+					Policy:          shard.Policy_Hash,
+					ShardsCount:     2,
+					Version:         1,
+					MaxReplicaCount: 1,
+					ShardIDs:        []uint64{1, 2},
+				},
+				[]shard.TableShard{
+					{
+						TableID: table,
+						ShardID: 1,
+						Policy:  shard.Policy_Hash,
+						Version: 1,
+						Replicas: []shard.ShardReplica{{
+							ReplicaID: 1,
+							State:     shard.ReplicaState_Running,
+							CN:        remoteTargets[0],
+							Version:   1,
+						}},
+					},
+					{
+						TableID: table,
+						ShardID: 2,
+						Policy:  shard.Policy_Hash,
+						Version: 1,
+						Replicas: []shard.ShardReplica{{
+							ReplicaID: 2,
+							State:     shard.ReplicaState_Running,
+							CN:        remoteTargets[1],
+							Version:   1,
+						}},
+					},
+				},
+			)
+			s.cache.read.Store(cache)
+
+			adjustCalls := make(map[uint64]int)
+			readCtx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+			defer cancel()
+			err := s.Read(
+				readCtx,
+				ReadRequest{
+					TableID: table,
+					Param: shard.ReadParam{Process: pipeline.ProcessInfo{
+						PrepareParams: pipeline.PrepareParamInfo{IsBin: []bool{true}},
+					}},
+				},
+				DefaultOptions.Adjust(func(target *shard.TableShard) {
+					adjustCalls[target.ShardID]++
+				}),
+			)
+			require.Error(t, err)
+			require.ErrorContains(t, err, "incompatible or unknown commit")
+			require.Zero(t, client.asyncCalls.Load())
+			require.Equal(t, map[uint64]int{1: 1, 2: 1}, adjustCalls)
+		},
+		nil,
+	)
+}
 
 func TestRead(t *testing.T) {
 	runServicesTest(

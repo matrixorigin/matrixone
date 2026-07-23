@@ -17,6 +17,7 @@ package iscp
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"slices"
 
@@ -29,6 +30,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -37,6 +39,7 @@ import (
 	// "github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -392,7 +395,7 @@ func getTxn(
 	}
 	err = cnEngine.New(ctx, op)
 	if err != nil {
-		return nil, err
+		return nil, errors.Join(err, op.Rollback(ctx))
 	}
 	return op, nil
 }
@@ -440,14 +443,8 @@ func checkLease(
 	}
 	defer txn.Commit(ctxWithTimeout)
 
-	sql := `select task_runner from mo_task.sys_daemon_task where task_type = "ISCP" and task_runner is not null`
-	result, err := ExecWithResult(ctxWithTimeout, sql, cnUUID, txn)
-	if err != nil {
-		return
-	}
-	defer result.Close()
 	var runner string
-	runner, err = readSingleTaskRunner(result)
+	runner, err = GetTaskRunner(ctxWithTimeout, cnUUID, txn)
 	if err != nil {
 		return
 	}
@@ -464,6 +461,24 @@ func checkLease(
 		)
 	}
 	return
+}
+
+func GetTaskRunner(
+	ctx context.Context,
+	cnUUID string,
+	txn client.TxnOperator,
+) (string, error) {
+	ctxWithSysAccount := context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+	ctxWithTimeout, cancel := context.WithTimeoutCause(ctxWithSysAccount, time.Minute*5, moerr.NewInternalErrorNoCtx("iscp get task runner timeout"))
+	defer cancel()
+
+	sql := `select task_runner from mo_task.sys_daemon_task where task_type = "ISCP" and task_runner is not null`
+	result, err := ExecWithResult(ctxWithTimeout, sql, cnUUID, txn)
+	if err != nil {
+		return "", err
+	}
+	defer result.Close()
+	return readSingleTaskRunner(result)
 }
 
 func readSingleTaskRunner(result executor.Result) (string, error) {

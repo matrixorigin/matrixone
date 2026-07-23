@@ -91,9 +91,7 @@ type Service interface {
 type EngineType string
 
 const (
-	EngineDistributedTAE       EngineType = "distributed-tae"
-	EngineMemory               EngineType = "memory"
-	EngineNonDistributedMemory EngineType = "non-distributed-memory"
+	EngineDistributedTAE EngineType = "distributed-tae"
 	// ReservedTasks equals how many task must run background.
 	// 1 for metric StorageUsage
 	// 1 for trace ETLMerge
@@ -158,6 +156,9 @@ type Config struct {
 		BatchRows int64 `toml:"batch-rows"`
 		// BatchSize is the memory limit for one batch
 		BatchSize int64 `toml:"batch-size"`
+		// DisableStreamReuse is an emergency rollback gate for negotiated
+		// FIN/FIN_ACK pipeline teardown. It is enabled by default when false.
+		DisableStreamReuse bool `toml:"disable-stream-reuse"`
 	}
 
 	// Frontend parameters for the frontend
@@ -355,6 +356,9 @@ func (c *Config) Validate() error {
 	if c.Engine.Type == "" {
 		c.Engine.Type = EngineDistributedTAE
 	}
+	if c.Engine.Type != EngineDistributedTAE {
+		return moerr.NewBadConfigNoCtx("unsupported CN engine: " + string(c.Engine.Type))
+	}
 	if c.Cluster.RefreshInterval.Duration == 0 {
 		c.Cluster.RefreshInterval.Duration = time.Second * 10
 	}
@@ -453,6 +457,10 @@ func (c *Config) Validate() error {
 	moruntime.ServiceRuntime(c.UUID).SetGlobalVariables(
 		moruntime.EnableCheckInvalidRCErrors,
 		c.Txn.EnableCheckRCInvalidError,
+	)
+	moruntime.ServiceRuntime(c.UUID).SetGlobalVariables(
+		moruntime.EnablePipelineStreamReuse,
+		!c.Pipeline.DisableStreamReuse,
 	)
 	return nil
 }

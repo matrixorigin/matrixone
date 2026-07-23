@@ -298,7 +298,7 @@ drop table index03;
 -- varchar column add unique key
 drop table if exists t4;
 create table t4(col1 varchar(256) primary key, col2 int);
-insert into t4 select "matrixone " || "mo " || result, 1 from generate_series (1, 500000)g;
+insert into t4 select concat('matrixone ', 'mo ', result), 1 from generate_series (1, 500000)g;
 select count(*) from t4;
 alter table t4 add unique key `title01`(`col1`);
 show create table t4;
@@ -308,7 +308,7 @@ drop table t4;
 -- add unique key with parser 'using btree'
 drop table if exists t5;
 create table t5(col1 varchar(256) primary key, col2 int);
-insert into t5 select "matrixone " || "mo " || result, 1 from generate_series (1, 500000)g;
+insert into t5 select concat('matrixone ', 'mo ', result), 1 from generate_series (1, 500000)g;
 select count(*) from t5;
 alter table t5 add unique key `title01`(`col1`) using btree;
 show create table t5;

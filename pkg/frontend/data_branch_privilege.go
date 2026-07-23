@@ -17,7 +17,7 @@ package frontend
 import (
 	"context"
 	"fmt"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -219,6 +219,19 @@ func authenticateDataBranchDiff(
 	stats.Add(&delta)
 	if err != nil {
 		return stats, err
+	}
+	if stmt.OutputOpt != nil && stmt.OutputOpt.As.ObjectName != "" {
+		outputDBName, err := branchDatabaseName(ctx, ses, stmt.OutputOpt.As.SchemaName.String())
+		if err != nil {
+			return stats, err
+		}
+		delta, err = requireAllBranchPrivileges(ctx, ses, []branchPrivilegeRequirement{
+			branchCreateTableRequirement(outputDBName),
+		})
+		stats.Add(&delta)
+		if err != nil {
+			return stats, err
+		}
 	}
 	return stats, nil
 }
@@ -672,7 +685,7 @@ func validateDataBranchDeleteDatabaseTarget(
 	for id := range tableNames {
 		tableIDs = append(tableIDs, id)
 	}
-	sort.Slice(tableIDs, func(i, j int) bool { return tableIDs[i] < tableIDs[j] })
+	slices.Sort(tableIDs)
 	return tableIDs, nil
 }
 
@@ -731,7 +744,7 @@ func validateActiveBranchChildTableIDs(
 	for id := range tableNames {
 		idList = append(idList, id)
 	}
-	sort.Slice(idList, func(i, j int) bool { return idList[i] < idList[j] })
+	slices.Sort(idList)
 	sysCtx := defines.AttachAccountId(ctx, sysAccountID)
 
 	active := make(map[uint64]struct{}, len(tableNames))

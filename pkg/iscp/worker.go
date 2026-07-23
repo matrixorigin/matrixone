@@ -37,10 +37,14 @@ const (
 
 type Worker interface {
 	Submit(iteration *IterationContext) error
+	// Stop cancels running work and discards work that has not started. The
+	// executor repairs and reloads durable state before publishing a successor
+	// generation, so abandoned optimistic state cannot cross that boundary.
 	Stop()
 }
 
 type worker struct {
+	exec        *ISCPTaskExecutor
 	cnUUID      string
 	cnEngine    engine.Engine
 	cnTxnClient client.TxnClient
@@ -50,10 +54,44 @@ type worker struct {
 	cancel      context.CancelFunc
 	ctx         context.Context
 	closed      atomic.Bool
+	stopOnce    sync.Once
+	admissions  workerAdmissionGate
 }
 
-func NewWorker(cnUUID string, cnEngine engine.Engine, cnTxnClient client.TxnClient, mp *mpool.MPool) Worker {
+type workerAdmissionGate struct {
+	mu sync.RWMutex
+	wg sync.WaitGroup
+}
+
+// enter registers a sender before it can block. seal excludes new senders,
+// cancels blocked ones, and waits until no sender can arrive after draining.
+func (g *workerAdmissionGate) enter(closed *atomic.Bool) bool {
+	if closed.Load() {
+		return false
+	}
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	if closed.Load() {
+		return false
+	}
+	g.wg.Add(1)
+	return true
+}
+
+func (g *workerAdmissionGate) leave() {
+	g.wg.Done()
+}
+
+func (g *workerAdmissionGate) seal(cancel context.CancelFunc) {
+	g.mu.Lock()
+	cancel()
+	g.mu.Unlock()
+	g.wg.Wait()
+}
+
+func NewWorker(exec *ISCPTaskExecutor, cnUUID string, cnEngine engine.Engine, cnTxnClient client.TxnClient, mp *mpool.MPool) Worker {
 	worker := &worker{
+		exec:        exec,
 		cnUUID:      cnUUID,
 		cnEngine:    cnEngine,
 		cnTxnClient: cnTxnClient,
@@ -61,13 +99,15 @@ func NewWorker(cnUUID string, cnEngine engine.Engine, cnTxnClient client.TxnClie
 		mp:          mp,
 	}
 	worker.ctx, worker.cancel = context.WithCancel(context.Background())
-	go worker.Run()
+	worker.start()
 	return worker
 }
 
-func (w *worker) Run() {
+// start seals the worker generation before NewWorker publishes it. Stop must
+// never observe a zero WaitGroup while worker goroutines can still be created.
+func (w *worker) start() {
+	w.wg.Add(ISCPWorkerThread)
 	for i := 0; i < ISCPWorkerThread; i++ {
-		w.wg.Add(1)
 		go func() {
 			defer w.wg.Done()
 			for {
@@ -75,6 +115,13 @@ func (w *worker) Run() {
 				case <-w.ctx.Done():
 					return
 				case task := <-w.taskChan:
+					// Cancellation wins over queued work. This keeps Stop bounded
+					// and prevents a stopped generation from starting new tasks.
+					select {
+					case <-w.ctx.Done():
+						return
+					default:
+					}
 					w.onItem(task)
 				}
 			}
@@ -83,23 +130,32 @@ func (w *worker) Run() {
 }
 
 func (w *worker) Submit(iteration *IterationContext) error {
-	status := make([]*JobStatus, len(iteration.jobNames))
-	for i := range status {
-		status[i] = &JobStatus{}
+	if iteration == nil {
+		return moerr.NewInternalErrorNoCtx("cannot submit a nil ISCP iteration")
 	}
-	if w.closed.Load() {
-		return moerr.NewInternalError(context.Background(), "ISCP-Worker is closed")
+	if !w.admissions.enter(&w.closed) {
+		return moerr.NewInternalErrorNoCtx("ISCP-Worker is closed")
 	}
-	w.taskChan <- iteration
-	return nil
+	defer w.admissions.leave()
+	select {
+	case w.taskChan <- iteration:
+		return nil
+	case <-w.ctx.Done():
+		return moerr.NewInternalErrorNoCtx("ISCP-Worker is closed")
+	}
 }
 
 func (w *worker) onItem(iterCtx *IterationContext) {
+	iterCtx = w.exec.filterFencedIteration(iterCtx)
+	if iterCtx == nil {
+		return
+	}
 	err := retry(
 		w.ctx,
 		func() error {
-			err := ExecuteIteration(
+			err := ExecuteIterationWithRuntime(
 				w.ctx,
+				w.exec,
 				w.cnUUID,
 				w.cnEngine,
 				w.cnTxnClient,
@@ -164,8 +220,16 @@ func (w *worker) onItem(iterCtx *IterationContext) {
 }
 
 func (w *worker) Stop() {
-	w.closed.Store(true)
-	w.cancel()
-	w.wg.Wait()
-	close(w.taskChan)
+	w.stopOnce.Do(func() {
+		w.closed.Store(true)
+		w.admissions.seal(w.cancel)
+		w.wg.Wait()
+		for {
+			select {
+			case <-w.taskChan:
+			default:
+				return
+			}
+		}
+	})
 }
