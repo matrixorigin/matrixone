@@ -26,6 +26,50 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func BenchmarkInt64HashMapFindBatchLarge(b *testing.B) {
+	const (
+		numKeys   = 1 << 20
+		batchSize = 8192
+	)
+
+	mp := mpool.MustNewZero()
+	defer func() {
+		if mp.CurrNB() != 0 {
+			b.Fatalf("memory leak detected: %d bytes", mp.CurrNB())
+		}
+	}()
+
+	keys := make([]uint64, numKeys)
+	hashes := make([]uint64, numKeys)
+	values := make([]uint64, numKeys)
+	for i := range keys {
+		keys[i] = uint64(i + 1)
+	}
+	Int64BatchHash(toUnsafePointer(&keys[0]), &hashes[0], len(keys))
+
+	var ht Int64HashMap
+	if err := ht.Init(mp); err != nil {
+		b.Fatal(err)
+	}
+	defer ht.Free()
+	if err := ht.InsertBatch(len(keys), hashes, toUnsafePointer(&keys[0]), values); err != nil {
+		b.Fatal(err)
+	}
+
+	b.ReportAllocs()
+	b.SetBytes(batchSize * 8)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		offset := (i * batchSize) & (numKeys - 1)
+		ht.FindBatch(
+			batchSize,
+			hashes[offset:offset+batchSize],
+			toUnsafePointer(&keys[offset]),
+			values[offset:offset+batchSize],
+		)
+	}
+}
+
 var data = [][]byte{
 	[]byte(""),
 	[]byte("a"),

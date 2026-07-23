@@ -17,6 +17,7 @@ package hashtable
 import (
 	"bytes"
 	"io"
+	"math/bits"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -33,6 +34,8 @@ type Int64HashMap struct {
 	mp *mpool.MPool
 
 	blockCellCnt    uint64
+	blockCellShift  uint64 // always < 64; masking at use avoids a variable-shift range guard
+	blockCellMask   uint64
 	blockMaxElemCnt uint64
 	cellCntMask     uint64
 
@@ -80,6 +83,8 @@ func (ht *Int64HashMap) allocate(index int, ncells int) error {
 func (ht *Int64HashMap) Init(mp *mpool.MPool) (err error) {
 	ht.mp = mp
 	ht.blockCellCnt = kInitialCellCnt
+	ht.blockCellShift = uint64(bits.TrailingZeros64(ht.blockCellCnt))
+	ht.blockCellMask = ht.blockCellCnt - 1
 	ht.blockMaxElemCnt = maxElemCnt(kInitialCellCnt, intCellSize)
 	ht.cellCntMask = kInitialCellCnt - 1
 	ht.elemCnt = 0
@@ -159,8 +164,8 @@ func (ht *Int64HashMap) FindBatch(n int, hashes []uint64, keysPtr unsafe.Pointer
 
 func (ht *Int64HashMap) findCell(hash uint64) *Int64HashMapCell {
 	for idx := hash & ht.cellCntMask; true; idx = (idx + 1) & ht.cellCntMask {
-		blockId := idx / ht.blockCellCnt
-		cellId := idx % ht.blockCellCnt
+		blockId := idx >> (ht.blockCellShift & 63)
+		cellId := idx & ht.blockCellMask
 		cell := &ht.cells[blockId][cellId]
 		if cell.Key == hash || cell.Mapped == 0 {
 			return cell
@@ -171,8 +176,8 @@ func (ht *Int64HashMap) findCell(hash uint64) *Int64HashMapCell {
 
 func (ht *Int64HashMap) findEmptyCell(hash uint64) *Int64HashMapCell {
 	for idx := hash & ht.cellCntMask; true; idx = (idx + 1) & ht.cellCntMask {
-		blockId := idx / ht.blockCellCnt
-		cellId := idx % ht.blockCellCnt
+		blockId := idx >> (ht.blockCellShift & 63)
+		cellId := idx & ht.blockCellMask
 		cell := &ht.cells[blockId][cellId]
 		if cell.Mapped == 0 {
 			return cell
@@ -243,6 +248,8 @@ func (ht *Int64HashMap) ResizeWithPlan(plan ResizePlan) error {
 	}
 
 	newMask := plan.TargetCellCount - 1
+	newBlockMask := plan.TargetBlockCellCount - 1
+	newBlockShift := uint64(bits.TrailingZeros64(plan.TargetBlockCellCount))
 	for i := range ht.cells {
 		for j := range ht.cells[i] {
 			old := ht.cells[i][j]
@@ -250,7 +257,7 @@ func (ht *Int64HashMap) ResizeWithPlan(plan ResizePlan) error {
 				continue
 			}
 			for idx := old.Key & newMask; ; idx = (idx + 1) & newMask {
-				cell := &newCells[idx/plan.TargetBlockCellCount][idx%plan.TargetBlockCellCount]
+				cell := &newCells[idx>>newBlockShift][idx&newBlockMask]
 				if cell.Mapped == 0 {
 					*cell = old
 					break
@@ -264,6 +271,8 @@ func (ht *Int64HashMap) ResizeWithPlan(plan ResizePlan) error {
 	ht.cellCnt = plan.TargetCellCount
 	ht.cellCntMask = newMask
 	ht.blockCellCnt = plan.TargetBlockCellCount
+	ht.blockCellShift = newBlockShift
+	ht.blockCellMask = newBlockMask
 	ht.blockMaxElemCnt = plan.TargetMaxElemCount
 	ht.version++
 	for i := range oldCells {
@@ -302,8 +311,8 @@ func (it *Int64HashMapIterator) Init(ht *Int64HashMap) {
 
 func (it *Int64HashMapIterator) Next() (cell *Int64HashMapCell, err error) {
 	for it.pos < it.table.cellCnt {
-		blockId := it.pos / it.table.blockCellCnt
-		cellId := it.pos % it.table.blockCellCnt
+		blockId := it.pos >> (it.table.blockCellShift & 63)
+		cellId := it.pos & it.table.blockCellMask
 		cell = &it.table.cells[blockId][cellId]
 		if cell.Mapped != 0 {
 			break
