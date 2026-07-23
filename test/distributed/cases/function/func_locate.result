@@ -222,7 +222,7 @@ insert into locate01 values (null,null);
 insert into locate01 values ('ABCDF','GHIJKLMNabcdfeowejfwve');
 Data truncation: Can't cast 'GHIJKLMNabcdfeowejfwve' to VARCHAR type. Src length 22 is larger than Dest length 20
 insert into locate01 values ('圣诞节快乐','圣诞节快乐Merry Charismas!');
-Data truncation: Can't cast '圣诞节快乐Merry Charismas!' to VARCHAR type. Src length 31 is larger than Dest length 20
+Data truncation: Can't cast '圣诞节快乐Merry Charismas!' to VARCHAR type. Src length 21 is larger than Dest length 20
 insert into locate01 values ('@#$', '^&**(&^$@@#$');
 select * from locate01;
 col1    col2

@@ -693,10 +693,6 @@ func (e *errInfo) push(code uint16, msg string) {
 	e.msgs = append(e.msgs, msg)
 }
 
-func (e *errInfo) length() int {
-	return len(e.codes)
-}
-
 func NewSession(
 	connCtx context.Context,
 	service string,
