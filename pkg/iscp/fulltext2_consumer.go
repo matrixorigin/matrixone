@@ -53,14 +53,16 @@ func RunFulltext2(c *IndexConsumer, ctx context.Context, errch chan error, r Dat
 	if w.cfg.PositionFree {
 		bopts = append(bopts, fulltext2.WithPositionFree())
 	}
-	// The sync build spills its segments onto the LOCAL (SSD) fileservice's __fulltext2
-	// dir, but the ISCP consumer context has no LOCAL fileservice handle to do the same
-	// for the CDC tail: the engine exposes only SHARED, the persist-txn sqlproc carries
-	// no FileService, and the ctx has no ParameterUnit. So the tail spills to the OS temp
-	// dir (spillDir=""). NewTailBuilder already takes a spillDir; routing the tail to
-	// __fulltext2 is a follow-up that threads the container FileService through the ISCP
-	// framework (ISCPTaskExecutorFactory -> Worker -> IndexConsumer).
-	tb, err := fulltext2.NewTailBuilder(w.pkType, w.capacity, w.postingCap, "", tokenize, bopts...)
+	// Route the CDC tail's segment spills onto the LOCAL (SSD) fileservice's __fulltext2
+	// dir — the same fast mount the sync build uses — so tail mmap page faults come off
+	// the SSD, not /tmp. The CN root FileService is published on the ISCP executor by
+	// ISCPTaskExecutorFactory; resolve it by this CN's UUID. spillDir="" (no LOCAL
+	// attached / executor not found) falls back to the OS temp dir, unchanged behavior.
+	var spillDir string
+	if exec, ok := GetExecutorRuntime(c.cnUUID); ok {
+		spillDir = fulltext2.LocalSpillDir(ctx, exec.rootFS)
+	}
+	tb, err := fulltext2.NewTailBuilder(w.pkType, w.capacity, w.postingCap, spillDir, tokenize, bopts...)
 	if err != nil {
 		errch <- err
 		return
