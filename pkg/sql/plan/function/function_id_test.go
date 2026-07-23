@@ -602,11 +602,16 @@ var predefinedFunids = map[int]int{
 	INTERNAL_JSON_ORDERING_PARAM:  546,
 	JSON_MERGE_PATCH:              547,
 	JSON_MERGE_PRESERVE:           548,
-	ONNX_RUN:                      549,
+	JSON_OVERLAPS:                 549,
+	VECBF16_FROM_BASE64:           550,
+	VECF16_FROM_BASE64:            551,
+	VECINT8_FROM_BASE64:           552,
+	VECUINT8_FROM_BASE64:          553,
+	ONNX_RUN:                      554,
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER: 550,
+	FUNCTION_END_NUMBER: 555,
 }
 
 func Test_funids(t *testing.T) {

@@ -15,6 +15,12 @@ midnight
 SELECT HOUR(CAST('23:59:59' AS TIME)) AS end_of_day;
 end_of_day
 23
+SELECT HOUR(CAST('272:59:59' AS TIME)) AS extended_positive;
+extended_positive
+272
+SELECT HOUR(CAST('-272:59:59' AS TIME)) AS extended_negative;
+extended_negative
+272
 SELECT HOUR(CAST('2024-12-20 10:20:30' AS DATETIME)) AS datetime_hour;
 datetime_hour
 10

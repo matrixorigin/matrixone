@@ -768,11 +768,32 @@ const (
 	INTERNAL_JSON_ORDERING_PARAM = 546
 	JSON_MERGE_PATCH             = 547
 	JSON_MERGE_PRESERVE          = 548
-	ONNX_RUN                     = 549
+	JSON_OVERLAPS                = 549
+
+	// vec{bf16,f16,int8}_from_base64: decode a base64 payload of the narrow type's
+	// raw bytes into that narrow vector type — the narrow siblings of
+	// vecf32_from_base64 / vecf64_from_base64. Used by the ivfflat narrow re-rank,
+	// where the query must be a constant narrow vec literal matching the narrow
+	// entries (a cast of vecf32_from_base64 does not constant-fold, breaking the
+	// ORDER BY index pushdown).
+	// Renumbered after the main merge, which took 524-548 for the S2/H3/ST_POINT/
+	// CAST_STRICT/DATE_TRUNC/JSON_CONTAINS/JSON_REMOVE and the new JSON_CONTAINS_PATH/
+	// INTERNAL_JSON_ORDERING_PARAM/JSON_MERGE_PATCH/JSON_MERGE_PRESERVE functions (545-548).
+	// These IDs are referenced by name only (name map + list_builtIn registration), so
+	// renumbering is safe.
+	VECBF16_FROM_BASE64  = 550
+	VECF16_FROM_BASE64   = 551
+	VECINT8_FROM_BASE64  = 552
+	VECUINT8_FROM_BASE64 = 553
+
+	// onnx_run: evaluate an ONNX model. Renumbered from 549 after the main
+	// merge took 549-553 for JSON_OVERLAPS and the narrow-vector base64
+	// decoders; referenced by name only, so renumbering is safe.
+	ONNX_RUN = 554
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 550
+	FUNCTION_END_NUMBER = 555
 )
 
 // functionIdRegister is what function we have registered already.
@@ -1060,6 +1081,7 @@ var functionIdRegister = map[string]int32{
 	"json_contains_path":             JSON_CONTAINS_PATH,
 	"json_merge_patch":               JSON_MERGE_PATCH,
 	"json_merge_preserve":            JSON_MERGE_PRESERVE,
+	"json_overlaps":                  JSON_OVERLAPS,
 	"onnx_run":                       ONNX_RUN,
 	"json_keys":                      JSON_KEYS,
 	"json_pretty":                    JSON_PRETTY,
@@ -1090,6 +1112,10 @@ var functionIdRegister = map[string]int32{
 	"from_base64":                    FROM_BASE64,
 	"vecf32_from_base64":             VECF32_FROM_BASE64,
 	"vecf64_from_base64":             VECF64_FROM_BASE64,
+	"vecbf16_from_base64":            VECBF16_FROM_BASE64,
+	"vecf16_from_base64":             VECF16_FROM_BASE64,
+	"vecint8_from_base64":            VECINT8_FROM_BASE64,
+	"vecuint8_from_base64":           VECUINT8_FROM_BASE64,
 	"serial":                         SERIAL,
 	"serial_full":                    SERIAL_FULL,
 	"serial_extract":                 SERIAL_EXTRACT,

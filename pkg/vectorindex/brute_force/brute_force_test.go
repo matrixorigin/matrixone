@@ -383,7 +383,7 @@ func TestGoBruteForceLifecycle(t *testing.T) {
 	idx, err := NewGoBruteForceIndex[float32](dataset, 3, metric.Metric_L2sqDistance, 4)
 	require.NoError(t, err)
 
-	bf := idx.(*GoBruteForceIndex[float32])
+	bf := idx.(*GoBruteForceIndex[float32, float32])
 	require.NoError(t, bf.Load(nil))
 	require.NoError(t, bf.UpdateConfig(nil))
 	bf.Destroy()

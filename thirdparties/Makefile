@@ -15,14 +15,26 @@
 PWD=$(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
 UNAME_S=$(shell uname -s | tr A-Z a-z)
 UNAME_M=$(shell uname -m)
+# Extracted third-party sources live in _-prefixed directories: go/build skips
+# any directory whose name starts with _ or ., so `go list ./...` (and gopls,
+# and `go test ./...`) never walk into them.
+#
+# Without the prefix, StringZilla-4.2.1/scripts/ breaks the top-level `config`
+# target: it ships bench.go alongside bench_*.cpp, and a directory containing a
+# .go file IS a package, so `go list` rejects its C++ sources with
+#   C++ source files not allowed when not using cgo or SWIG: bench_container.cpp ...
+# (a directory of .cpp with no .go is simply skipped, which is why this only
+# bites on trees that carry Go bindings). The extracted tree exists only while
+# this Makefile runs, so under `make -j` it fails a clean build and vanishes
+# before anyone can look -- see the `config` target in ../Makefile.
 USEARCH_DIR=_usearch_build
 USEARCH_TAR=usearch-2.25.3.tar.gz
-STRINGZILLA_DIR=StringZilla-4.2.1
-STRINGZILLA_TAR=$(STRINGZILLA_DIR).tar.gz
-SIMSIMD_DIR=SimSIMD-6.5.3
-SIMSIMD_TAR=$(SIMSIMD_DIR).tar.gz
-FP16_DIR=fp16
-FP16_TAR=$(FP16_DIR).tar.gz
+STRINGZILLA_DIR=_stringzilla
+STRINGZILLA_TAR=StringZilla-4.2.1.tar.gz
+SIMSIMD_DIR=_simsimd
+SIMSIMD_TAR=SimSIMD-6.5.3.tar.gz
+FP16_DIR=_fp16
+FP16_TAR=fp16.tar.gz
 XXHASH_DIR=xxHash-0.8.3
 XXHASH_TAR=$(XXHASH_DIR).tar.gz
 XXHASH_TMP=_xxhash_build
@@ -73,15 +85,21 @@ install/include/xxhash.h:
 	rm -rf $(XXHASH_TMP)
 
 install/include/fp16.h:
-	tar zxvf $(FP16_TAR)
+	rm -rf $(FP16_DIR)
+	mkdir -p $(FP16_DIR)
+	tar zxvf $(FP16_TAR) -C $(FP16_DIR) --strip-components=1
 	cp -r $(FP16_DIR)/include/* install/include
 
 install/include/simsimd/simsimd.h:
-	tar zxvf $(SIMSIMD_TAR)
+	rm -rf $(SIMSIMD_DIR)
+	mkdir -p $(SIMSIMD_DIR)
+	tar zxvf $(SIMSIMD_TAR) -C $(SIMSIMD_DIR) --strip-components=1
 	cp -r $(SIMSIMD_DIR)/include/* install/include
 
 install/include/stringzilla/stringzilla.h:
-	tar zxvf $(STRINGZILLA_TAR)
+	rm -rf $(STRINGZILLA_DIR)
+	mkdir -p $(STRINGZILLA_DIR)
+	tar zxvf $(STRINGZILLA_TAR) -C $(STRINGZILLA_DIR) --strip-components=1
 	cp -r $(STRINGZILLA_DIR)/include/* install/include
 
 USEARCH_CMAKE_FLAG := -DUSEARCH_BUILD_BENCH_CPP=OFF -DUSEARCH_BUILD_TEST_C=OFF -DUSEARCH_BUILD_TEST_CPP=OFF -DUSEARCH_BUILD_LIB_C=ON -DCMAKE_CXX_FLAGS=-I$(PWD)/install/include -DCMAKE_POLICY_VERSION_MINIMUM=3.5
