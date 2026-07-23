@@ -18,18 +18,79 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+const moIndexesColumnList = "(id, table_id, database_id, name, type, algo, algo_table_type, algo_params, is_visible, hidden, comment, column_name, ordinal_position, options, index_table_name)"
+
+func moIndexesIncludedColumnsAvailable(proc *process.Process) (bool, error) {
+	if proc == nil || proc.GetSessionInfo().SqlHelper == nil {
+		return true, nil
+	}
+
+	rows, err := proc.GetSessionInfo().SqlHelper.ExecSql(fmt.Sprintf(
+		"select count(*) from %s.mo_columns where att_database = '%s' and att_relname = '%s' and attname = '%s'",
+		catalog.MO_CATALOG,
+		catalog.MO_CATALOG,
+		catalog.MO_INDEXES,
+		catalog.IndexIncludedColumns,
+	))
+	if err != nil {
+		return true, nil
+	}
+	if len(rows) == 0 || len(rows[0]) == 0 || rows[0][0] == nil {
+		return false, nil
+	}
+
+	switch val := rows[0][0].(type) {
+	case int:
+		return val > 0, nil
+	case int8:
+		return val > 0, nil
+	case int16:
+		return val > 0, nil
+	case int32:
+		return val > 0, nil
+	case int64:
+		return val > 0, nil
+	case uint:
+		return val > 0, nil
+	case uint8:
+		return val > 0, nil
+	case uint16:
+		return val > 0, nil
+	case uint32:
+		return val > 0, nil
+	case uint64:
+		return val > 0, nil
+	case string:
+		n, err := strconv.ParseInt(strings.TrimSpace(val), 10, 64)
+		if err != nil {
+			return false, err
+		}
+		return n > 0, nil
+	case []byte:
+		n, err := strconv.ParseInt(strings.TrimSpace(string(val)), 10, 64)
+		if err != nil {
+			return false, err
+		}
+		return n > 0, nil
+	default:
+		return true, nil
+	}
+}
 
 // resolveVariableOrDefault wraps proc.GetResolveVariableFunc() with a
 // nil-safe fallback to executor.DefaultResolveVariable (populated from
@@ -240,8 +301,19 @@ func genInsertIndexTableSqlForMasterIndex(originTableDef *plan.TableDef, indexDe
 
 // genInsertMOIndexesSql: Generate an insert statement for insert index metadata into `mo_catalog.mo_indexes`
 func genInsertMOIndexesSql(eg engine.Engine, proc *process.Process, databaseId string, tableId uint64, ct *engine.ConstraintDef, tableDef *plan.TableDef) (string, error) {
+	hasIncludedColumns, err := moIndexesIncludedColumnsAvailable(proc)
+	if err != nil {
+		return "", err
+	}
+
 	buffer := bytes.NewBuffer(make([]byte, 0, 1024))
-	buffer.WriteString("insert into mo_catalog.mo_indexes values")
+	buffer.WriteString("insert into mo_catalog.mo_indexes ")
+	if hasIncludedColumns {
+		fmt.Fprintf(buffer, "%s, %s) values", moIndexesColumnList[:len(moIndexesColumnList)-1], catalog.IndexIncludedColumns)
+	} else {
+		buffer.WriteString(moIndexesColumnList)
+		buffer.WriteString(" values")
+	}
 
 	getOriginName := func(name string) string {
 		if idx, ok := tableDef.Name2ColIndex[name]; ok {
@@ -327,9 +399,26 @@ func genInsertMOIndexesSql(eg engine.Engine, proc *process.Process, databaseId s
 
 					// 15. index vec_index_table
 					if indexDef.TableExist {
-						fmt.Fprintf(buffer, "'%s')", indexDef.IndexTableName)
+						fmt.Fprintf(buffer, "'%s'", indexDef.IndexTableName)
 					} else {
-						fmt.Fprintf(buffer, "%s)", NULL_VALUE)
+						fmt.Fprintf(buffer, "%s", NULL_VALUE)
+					}
+
+					if hasIncludedColumns {
+						// 16. index vec_included_columns
+						includedColumns, err := catalog.MarshalIncludeColumnsValue(indexDef.IncludedColumns)
+						if err != nil {
+							return "", err
+						}
+						if includedColumns != "" {
+							fmt.Fprintf(buffer, ", '%s')", sqlquote.EscapeString(includedColumns))
+						} else {
+							fmt.Fprintf(buffer, ", %s)", NULL_VALUE)
+						}
+					} else if len(indexDef.IncludedColumns) > 0 {
+						return "", moerr.NewInternalErrorNoCtx("cannot create index with INCLUDE before mo_catalog.mo_indexes.included_columns is upgraded")
+					} else {
+						buffer.WriteString(")")
 					}
 				}
 			}
@@ -390,7 +479,14 @@ func genInsertMOIndexesSql(eg engine.Engine, proc *process.Process, databaseId s
 					fmt.Fprintf(buffer, "%s, ", NULL_VALUE)
 
 					// 15. index vec_index_table
-					fmt.Fprintf(buffer, "%s)", NULL_VALUE)
+					fmt.Fprintf(buffer, "%s", NULL_VALUE)
+
+					if hasIncludedColumns {
+						// 16. index vec_included_columns
+						fmt.Fprintf(buffer, ", %s)", NULL_VALUE)
+					} else {
+						buffer.WriteString(")")
+					}
 				}
 			}
 		}

@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/stretchr/testify/require"
@@ -87,6 +88,32 @@ func TestIvfflatSupportedOpTypes(t *testing.T) {
 	require.NotEmpty(t, got)
 	for k := range metric.OpTypeToIvfMetric {
 		require.Contains(t, got, k)
+	}
+}
+
+func TestIvfflatIncludeTypesAreMaintainableByISCP(t *testing.T) {
+	supported := CatalogHooks{}.SupportedIncludeColumnTypes()
+	for _, oid := range []types.T{
+		types.T_int128,
+		types.T_uint128,
+		types.T_decimal256,
+		types.T_interval,
+		types.T_year,
+		types.T_geometry,
+		types.T_geometry32,
+	} {
+		require.NotContains(t, supported, oid)
+	}
+
+	for _, oid := range []types.T{
+		types.T_int64,
+		types.T_uint64,
+		types.T_decimal128,
+		types.T_timestamp,
+		types.T_varchar,
+		types.T_binary,
+	} {
+		require.Contains(t, supported, oid)
 	}
 }
 

@@ -80,6 +80,11 @@ type SqlProcess struct {
 	IvfMembershipFilter []byte
 	// Optional doc_id membership-filter bytes (tagged docfilter payload) for the fulltext index scan.
 	FulltextMembershipFilter []byte
+
+	// Optional raw runtime-filter payload from the build side for IVF probe path.
+	// This contains serialized unique join keys and must be converted by IVF code
+	// before it is exposed to entries table scans.
+	IvfRuntimeFilterData []byte
 	// Optional exact primary-key filter list (SQL literals, comma-separated).
 	// When set, ivf_search uses it to build "pk IN (...)" and skip centroid filtering.
 	ExactPkFilter string

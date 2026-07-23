@@ -69,15 +69,20 @@ const PKHostIdVirtualName = "__mo_pk_host_id"
 const pkHostIdSentinelCol = -1
 
 // parseIncludedColumnsFromParams reads the comma-joined "included_columns"
-// entry from an index's algo-params JSON. Returns nil when the key is absent
-// or empty (treated as "no INCLUDE columns declared").
+// entry from an index's algo-params JSON. It also accepts the historical
+// "include_columns" spelling so legacy serialized table definitions can still
+// feed the INCLUDE metadata consumers. Returns nil when no key is present or
+// the value is empty (treated as "no INCLUDE columns declared").
 func parseIncludedColumnsFromParams(indexAlgoParams string) ([]string, error) {
 	if indexAlgoParams == "" {
 		return nil, nil
 	}
 	val, err := sonic.Get([]byte(indexAlgoParams), catalog.IncludedColumns)
 	if err != nil {
-		return nil, nil
+		val, err = sonic.Get([]byte(indexAlgoParams), "include_columns")
+		if err != nil {
+			return nil, nil
+		}
 	}
 	joined, err := val.StrictString()
 	if err != nil || joined == "" {

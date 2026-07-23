@@ -54,6 +54,9 @@ func (Hooks) BuildSecondaryIndexDefs(
 	if !catalogplugin.SupportsPrimaryKeyType(hnswCatalogHooks, types.T(colMap[pkeyName].Typ.Id)) {
 		return nil, nil, moerr.NewInternalErrorNoCtx("type of primary key must be bigint")
 	}
+	if indexInfo.IndexOption != nil && len(indexInfo.IndexOption.IncludeColumns) > 0 {
+		return nil, nil, moerr.NewNotSupported(ctx.GetContext(), "HNSW index does not support INCLUDE columns")
+	}
 
 	indexParts := make([]string, 1)
 	{

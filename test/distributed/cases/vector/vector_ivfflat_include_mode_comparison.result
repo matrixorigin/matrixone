@@ -1,0 +1,112 @@
+drop database if exists vector_ivfflat_include_phase9;
+create database vector_ivfflat_include_phase9;
+use vector_ivfflat_include_phase9;
+drop table if exists phase9_main;
+create table phase9_main(
+id int primary key,
+embedding vecf32(3),
+title varchar(20),
+category int,
+note varchar(20)
+);
+insert into phase9_main values
+(1, "[1,2,3]", "alpha", 10, "n1"),
+(2, "[1,2,4]", "beta", 20, "n2"),
+(3, "[1,2,5]", "gamma", 30, "n3"),
+(4, "[2,2,2]", "delta", 40, "n4"),
+(5, "[9,9,9]", "epsilon", 50, "n5");
+create index idx_ivf_include_phase9 using ivfflat on phase9_main(embedding)
+lists=2 op_type "vector_l2_ops" include(title, category);
+explain select id, title, category
+from phase9_main
+where category >= 20
+order by l2_distance(embedding, "[1,2,3]")
+limit 3 by rank with option 'mode=include';
+-- @regex("Table Function on ivf_search", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: mo_ivf_alias_0.score INTERNAL  𝄀
+        Limit: 3  𝄀
+        ->  Table Function on ivf_search  𝄀
+              Index Reader Param:  Limit: 3  𝄀
+              Limit: 3  𝄀
+              Filter Cond: (`__mo_index_include_category` >= 20)
+explain select id, title, category
+from phase9_main
+where category >= 20
+order by l2_distance(embedding, "[1,2,3]")
+limit 3 by rank with option 'mode=post';
+-- @regex("Table Function on ivf_search", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: mo_ivf_alias_0.score INTERNAL  𝄀
+        Limit: 3  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (phase9_main.id = mo_ivf_alias_0.pkid)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on vector_ivfflat_include_phase9.phase9_main  𝄀
+                    Filter Cond: (phase9_main.category >= 20)  𝄀
+                    Runtime Filter Probe: phase9_main.id  𝄀
+              ->  Table Function on ivf_search  𝄀
+                    Index Reader Param:  Limit: 15  𝄀
+                    Limit: 15
+explain select id, title, category
+from phase9_main
+where category >= 20
+order by l2_distance(embedding, "[1,2,3]")
+limit 3 by rank with option 'mode=pre';
+-- @regex("Table Function on ivf_search", true)
+➤ TP QUERY PLAN[12,0,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: mo_ivf_alias_0.score INTERNAL  𝄀
+        Limit: 3  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (phase9_main.id = mo_ivf_alias_0.pkid)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on vector_ivfflat_include_phase9.phase9_main  𝄀
+                    Filter Cond: (phase9_main.category >= 20)  𝄀
+                    Runtime Filter Probe: phase9_main.id  𝄀
+              ->  Join  𝄀
+                    Join Type: INNER  𝄀
+                    Join Cond: (mo_ivf_alias_0.pkid = phase9_main.id)  𝄀
+                    Runtime Filter Build: #[10,0]  𝄀
+                    ->  Table Function on ivf_search  𝄀
+                          Index Reader Param:  Limit: 3  𝄀
+                          Runtime Filter Probe: #[8,0]  𝄀
+                          Limit: 3  𝄀
+                    ->  Table Scan on vector_ivfflat_include_phase9.phase9_main  𝄀
+                          Filter Cond: (phase9_main.category >= 20)
+select id, title, category
+from phase9_main
+where category >= 20
+order by l2_distance(embedding, "[1,2,3]")
+limit 3 by rank with option 'mode=include';
+➤ id[4,32,0]  ¦  title[12,-1,0]  ¦  category[4,32,0]  𝄀
+2  ¦  beta  ¦  20  𝄀
+4  ¦  delta  ¦  40  𝄀
+3  ¦  gamma  ¦  30
+select id, title, category
+from phase9_main
+where category >= 20
+order by l2_distance(embedding, "[1,2,3]")
+limit 3 by rank with option 'mode=post';
+➤ id[4,32,0]  ¦  title[12,-1,0]  ¦  category[4,32,0]  𝄀
+2  ¦  beta  ¦  20  𝄀
+4  ¦  delta  ¦  40  𝄀
+3  ¦  gamma  ¦  30
+select id, title, category
+from phase9_main
+where category >= 20
+order by l2_distance(embedding, "[1,2,3]")
+limit 3 by rank with option 'mode=pre';
+➤ id[4,32,0]  ¦  title[12,-1,0]  ¦  category[4,32,0]  𝄀
+2  ¦  beta  ¦  20  𝄀
+4  ¦  delta  ¦  40  𝄀
+3  ¦  gamma  ¦  30
+drop table phase9_main;
+drop database vector_ivfflat_include_phase9;

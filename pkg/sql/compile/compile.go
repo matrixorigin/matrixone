@@ -3096,7 +3096,11 @@ func shouldDispatchIvfSearchMultiCN(
 	cnList engine.Nodes,
 	workspace client.Workspace,
 ) bool {
+	// Runtime-filter messages are broadcast on the current CN's message board.
+	// Keep their consumer local; its entries reader can still fan out after the
+	// table function turns the message into a serializable membership payload.
 	return plan2.IsIvfSearchEntriesInternalScan(node) &&
+		len(node.GetRuntimeFilterProbeList()) == 0 &&
 		execType == plan2.ExecTypeAP_MULTICN &&
 		len(cnList) > 1 &&
 		(workspace == nil || workspace.Readonly()) &&
