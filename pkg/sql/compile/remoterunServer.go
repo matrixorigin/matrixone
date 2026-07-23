@@ -276,6 +276,7 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 
 		runCompile.scopes = []*Scope{s}
 		runCompile.InitPipelineContextToExecuteQuery()
+		normalizeRemoteDispatchReceiverAddresses(s, runCompile.addr)
 
 		registrations, err := registerRemoteDispatchReceivers(s)
 		if err != nil {
@@ -499,7 +500,7 @@ type processHelper struct {
 	sessionInfo process.SessionInfo
 	//analysisNodeList []int32
 	StmtId        uuid.UUID
-	prepareParams *vector.Vector
+	prepareParams pipeline.PrepareParamInfo
 	affectedRows  int64
 }
 
@@ -645,7 +646,26 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 	proc.Base.Lim = pHelper.lim
 	proc.Base.SessionInfo = pHelper.sessionInfo
 	proc.Base.SessionInfo.StorageEngine = cnInfo.storeEngine
-	proc.SetPrepareParams(pHelper.prepareParams)
+	if pHelper.prepareParams.Length > 0 {
+		prepareParams, err := vector.NewVecWithDataCopy(
+			types.T_text.ToType(),
+			int(pHelper.prepareParams.Length),
+			pHelper.prepareParams.Data,
+			pHelper.prepareParams.Area,
+			proc.Mp(),
+		)
+		if err != nil {
+			proc.Free()
+			mpool.DeleteMPool(mp)
+			return nil, err
+		}
+		for i := range pHelper.prepareParams.Nulls {
+			if pHelper.prepareParams.Nulls[i] {
+				prepareParams.GetNulls().Add(uint64(i))
+			}
+		}
+		proc.SetOwnedPrepareParamsWithIsBin(prepareParams, append([]bool(nil), pHelper.prepareParams.IsBin...))
+	}
 	// Carry ROW_COUNT() state so row_count() pushed down to this remote CN reads
 	// the previous statement's affected rows instead of the default 0.
 	proc.SetAffectedRows(pHelper.affectedRows)
@@ -768,19 +788,6 @@ func generateProcessHelper(ctx context.Context, data []byte, cli client.TxnClien
 		txnClient:    cli,
 		affectedRows: procInfo.AffectedRows,
 	}
-	if procInfo.PrepareParams.Length > 0 {
-		result.prepareParams = vector.NewVecWithData(
-			types.T_text.ToType(),
-			int(procInfo.PrepareParams.Length),
-			procInfo.PrepareParams.Data,
-			procInfo.PrepareParams.Area,
-		)
-		for i := range procInfo.PrepareParams.Nulls {
-			if procInfo.PrepareParams.Nulls[i] {
-				result.prepareParams.GetNulls().Add(uint64(i))
-			}
-		}
-	}
 	result.txnOperator, err = cli.NewWithSnapshot(ctx, procInfo.Snapshot)
 	if err != nil {
 		return processHelper{}, err
@@ -789,6 +796,7 @@ func generateProcessHelper(ctx context.Context, data []byte, cli client.TxnClien
 	if err != nil {
 		return processHelper{}, err
 	}
+	result.prepareParams = procInfo.PrepareParams
 	if sessLogger := procInfo.SessionLogger; len(sessLogger.SessId) > 0 {
 		copy(result.sessionInfo.SessionId[:], sessLogger.SessId)
 		copy(result.StmtId[:], sessLogger.StmtId)

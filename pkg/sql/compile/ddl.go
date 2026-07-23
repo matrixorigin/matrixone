@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"math"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -43,6 +44,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
+	"github.com/matrixorigin/matrixone/pkg/iceberg/model"
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	compileplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/compile"
@@ -54,6 +56,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/shardservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
+	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -728,6 +731,12 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 				hasUpdateConstraints = true
 				var notDroppedIndex []*plan.IndexDef
 				var newIndexes []uint64
+				if err = DropIndexCdcTask(c, oTableDef, dbName, tblName, constraintName); err != nil {
+					return err
+				}
+				if err = DrainIndexCdcTaskConsumer(c, oTableDef, dbName, tblName, constraintName); err != nil {
+					return err
+				}
 				for idx, indexdef := range oTableDef.Indexes {
 					if indexdef.IndexName == constraintName {
 						dropIndexMap[indexdef.IndexName] = true
@@ -1706,6 +1715,15 @@ func (s *Scope) CreateTable(c *Compile) error {
 		return err
 	}
 
+	if err := c.maybeInsertIcebergTableMapping(dbSource, main, qry); err != nil {
+		c.proc.Error(c.proc.Ctx, "createTable iceberg mapping",
+			zap.String("databaseName", dbName),
+			zap.String("tableName", qry.GetTableDef().GetName()),
+			zap.Error(err),
+		)
+		return err
+	}
+
 	var indexExtra *api.SchemaExtra
 	for i, def := range qry.IndexTables {
 		planCols = def.GetCols()
@@ -1938,6 +1956,18 @@ func (s *Scope) CreateTable(c *Compile) error {
 		// Mark current txn as DDL before compiling CTAS follow-up INSERT ... SELECT,
 		// so internal SQL stays on one CN and can see uncommitted table metadata.
 		c.setHaveDDL(true)
+		statementOption := executor.StatementOption{}.WithDisableLog()
+		if params := c.proc.GetPrepareParams(); c.pn.IsPrepare && params != nil && params.Length() > 0 {
+			values := make([]string, params.Length())
+			nulls := make([]bool, params.Length())
+			for i := range values {
+				nulls[i] = params.IsNull(uint64(i))
+				if !nulls[i] {
+					values[i] = string(params.GetRawBytesAt(i))
+				}
+			}
+			statementOption = statementOption.WithParamsAndNulls(values, nulls)
+		}
 		res, err := func() (executor.Result, error) {
 			oldCtx := c.proc.Ctx
 			// CTAS follow-up SQL needs frontend session for temp-table alias resolution.
@@ -1951,7 +1981,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 			return c.runSqlWithResultAndOptions(
 				createAsSelectSql,
 				NoAccountId,
-				executor.StatementOption{}.WithDisableLog(),
+				statementOption,
 			)
 		}()
 		if err != nil {
@@ -1962,6 +1992,115 @@ func (s *Scope) CreateTable(c *Compile) error {
 	}
 
 	return nil
+}
+
+func (c *Compile) maybeInsertIcebergTableMapping(dbSource engine.Database, rel engine.Relation, qry *plan.CreateTable) error {
+	createSQL := icebergCreateSQLFromPlanTableDef(qry.GetTableDef())
+	env, found, err := sqliceberg.ParseCreateSQLEnvelope(c.proc.Ctx, createSQL)
+	if err != nil || !found {
+		return err
+	}
+
+	accountID, err := defines.GetAccountId(c.proc.Ctx)
+	if err != nil {
+		return err
+	}
+	dbIDText := dbSource.GetDatabaseId(c.proc.Ctx)
+	dbID, err := strconv.ParseUint(dbIDText, 10, 64)
+	if err != nil || dbID == 0 {
+		return moerr.NewInternalErrorf(c.proc.Ctx, "invalid database id for iceberg mapping: %s", dbIDText)
+	}
+	catalogID, err := c.lookupIcebergCatalogID(accountID, env.Catalog)
+	if err != nil {
+		return err
+	}
+
+	mapping := model.TableMapping{
+		AccountID:            accountID,
+		DatabaseID:           dbID,
+		TableID:              rel.GetTableID(c.proc.Ctx),
+		CatalogID:            catalogID,
+		Namespace:            env.Namespace,
+		TableName:            env.Table,
+		DefaultRef:           env.DefaultRef,
+		ReadMode:             env.ReadMode,
+		WriteMode:            env.WriteMode,
+		WriterOwnerAccountID: accountID,
+	}
+	return c.runSqlWithOptions(
+		sqliceberg.InsertTableMappingSQL(mapping),
+		executor.StatementOption{}.WithDisableLog(),
+	)
+}
+
+func (c *Compile) lookupIcebergCatalogID(accountID uint32, catalogName string) (uint64, error) {
+	res, err := c.runSqlWithResultAndOptions(
+		sqliceberg.GetCatalogByNameSQL(accountID, catalogName),
+		NoAccountId,
+		executor.StatementOption{}.WithDisableLog(),
+	)
+	if err != nil {
+		return 0, err
+	}
+	defer res.Close()
+
+	var catalogID uint64
+	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		if rows == 0 {
+			return true
+		}
+		ids := executor.GetFixedRows[uint64](cols[1])
+		if len(ids) > 0 {
+			catalogID = ids[0]
+		}
+		return false
+	})
+	if catalogID == 0 {
+		return 0, moerr.NewInvalidInputf(c.proc.Ctx, "iceberg catalog %s does not exist", catalogName)
+	}
+	return catalogID, nil
+}
+
+func (c *Compile) maybeDeleteIcebergTableMapping(dbSource engine.Database, rel engine.Relation, tableDef *plan.TableDef) error {
+	createSQL := icebergCreateSQLFromPlanTableDef(tableDef)
+	_, found, err := sqliceberg.ParseCreateSQLEnvelope(c.proc.Ctx, createSQL)
+	if err != nil || !found {
+		return err
+	}
+	accountID, err := defines.GetAccountId(c.proc.Ctx)
+	if err != nil {
+		return err
+	}
+	dbIDText := dbSource.GetDatabaseId(c.proc.Ctx)
+	dbID, err := strconv.ParseUint(dbIDText, 10, 64)
+	if err != nil || dbID == 0 {
+		return moerr.NewInternalErrorf(c.proc.Ctx, "invalid database id for iceberg mapping delete: %s", dbIDText)
+	}
+	return c.runSqlWithOptions(
+		sqliceberg.DeleteTableMappingSQL(accountID, dbID, rel.GetTableID(c.proc.Ctx)),
+		executor.StatementOption{}.WithDisableLog(),
+	)
+}
+
+func icebergCreateSQLFromPlanTableDef(tableDef *plan.TableDef) string {
+	if tableDef == nil {
+		return ""
+	}
+	if tableDef.Createsql != "" {
+		return tableDef.Createsql
+	}
+	for _, def := range tableDef.Defs {
+		properties := def.GetProperties()
+		if properties == nil {
+			continue
+		}
+		for _, property := range properties.Properties {
+			if property.Key == catalog.SystemRelAttr_CreateSQL {
+				return property.Value
+			}
+		}
+	}
+	return ""
 }
 
 func (c *Compile) runSqlWithSystemTenant(sql string) error {
@@ -2503,6 +2642,14 @@ func (s *Scope) DropIndex(c *Compile) error {
 	if err != nil {
 		return err
 	}
+	err = DropIndexCdcTask(c, oldTableDef, qry.Database, qry.Table, qry.IndexName)
+	if err != nil {
+		return err
+	}
+	err = DrainIndexCdcTaskConsumer(c, oldTableDef, qry.Database, qry.Table, qry.IndexName)
+	if err != nil {
+		return err
+	}
 	err = r.UpdateConstraint(c.proc.Ctx, newCt)
 	if err != nil {
 		return err
@@ -2529,13 +2676,7 @@ func (s *Scope) DropIndex(c *Compile) error {
 		}
 	}
 
-	//3. delete iscp job for vector, fulltext index
-	err = DropIndexCdcTask(c, oldTableDef, qry.Database, qry.Table, qry.IndexName)
-	if err != nil {
-		return err
-	}
-
-	// 4. unregister index update
+	// 3. unregister index update
 	err = idxcron.UnregisterUpdate(c.proc.Ctx,
 		c.proc.GetService(),
 		c.proc.GetTxnOperator(),
@@ -2546,7 +2687,7 @@ func (s *Scope) DropIndex(c *Compile) error {
 		return err
 	}
 
-	//5. delete index object from mo_catalog.mo_indexes
+	// 4. delete index object from mo_catalog.mo_indexes
 	deleteSql := fmt.Sprintf(deleteMoIndexesWithTableIdAndIndexNameFormat, r.GetTableID(c.proc.Ctx), qry.IndexName)
 	err = c.runSqlWithOptions(
 		deleteSql, executor.StatementOption{}.WithDisableLog(),
@@ -2559,7 +2700,7 @@ func (s *Scope) DropIndex(c *Compile) error {
 }
 
 func makeNewDropConstraint(oldCt *engine.ConstraintDef, dropName string) (*engine.ConstraintDef, []string, error) {
-	dropIndexTableNames := []string{}
+	dropIndexTables := []hiddenIndexTableDrop{}
 	// must fount dropName because of being checked in plan
 	for i := 0; i < len(oldCt.Cts); i++ {
 		ct := oldCt.Cts[i]
@@ -2573,7 +2714,10 @@ func makeNewDropConstraint(oldCt *engine.ConstraintDef, dropName string) (*engin
 		case *engine.IndexDef:
 			pred := func(index *plan.IndexDef) bool {
 				if index.IndexName == dropName && len(index.IndexTableName) > 0 {
-					dropIndexTableNames = append(dropIndexTableNames, index.IndexTableName)
+					dropIndexTables = append(dropIndexTables, hiddenIndexTableDrop{
+						name:     index.IndexTableName,
+						priority: hiddenIndexTableDropPriority(index),
+					})
 				}
 				return index.IndexName == dropName
 			}
@@ -2581,7 +2725,30 @@ func makeNewDropConstraint(oldCt *engine.ConstraintDef, dropName string) (*engin
 			oldCt.Cts[i] = def
 		}
 	}
+	sort.SliceStable(dropIndexTables, func(i, j int) bool {
+		return dropIndexTables[i].priority > dropIndexTables[j].priority
+	})
+	dropIndexTableNames := make([]string, 0, len(dropIndexTables))
+	for _, table := range dropIndexTables {
+		dropIndexTableNames = append(dropIndexTableNames, table.name)
+	}
 	return oldCt, dropIndexTableNames, nil
+}
+
+type hiddenIndexTableDrop struct {
+	name     string
+	priority int
+}
+
+func hiddenIndexTableDropPriority(index *plan.IndexDef) int {
+	if index == nil {
+		return 0
+	}
+	p, ok := indexplugin.Get(index.IndexAlgo)
+	if !ok || p.Compile() == nil {
+		return 0
+	}
+	return p.Compile().HiddenTableDropPriority(catalog.ToLower(index.IndexAlgoTableType))
 }
 
 func MakeNewCreateConstraint(oldCt *engine.ConstraintDef, c engine.Constraint) (*engine.ConstraintDef, error) {
@@ -3180,6 +3347,10 @@ func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable) error {
 				return err
 			}
 		}
+	}
+
+	if err := c.maybeDeleteIcebergTableMapping(dbSource, rel, qry.GetTableDef()); err != nil {
+		return err
 	}
 
 	if err := dbSource.Delete(c.proc.Ctx, tblName); err != nil {

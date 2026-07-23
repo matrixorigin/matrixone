@@ -32,12 +32,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 )
 
-// actionIvfflatReindex mirrors idxcron.Action_Ivfflat_Reindex. Inlined
-// here so this package doesn't import pkg/vectorindex/idxcron — which
-// would create an import cycle in tests via testengine → pkg/sql/plan →
-// this plugin.
-//
-// Stays in lock-step with pkg/vectorindex/idxcron/executor.go:56.
+// Kept local so the plugin package stays independent of the cron executor,
+// whose tests import the IVF-FLAT idxcron hook directly.
 const actionIvfflatReindex = "ivfflat_reindex"
 
 // Compile-time interface check.

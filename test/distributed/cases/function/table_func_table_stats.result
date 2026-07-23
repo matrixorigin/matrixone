@@ -140,6 +140,27 @@ table_func_table_stats.t1  ¦  {
 select table_name, table_cnt >= 0 from table_stats('mo_catalog.mo_tables') g;
 ➤ table_name[12,-1,0]  ¦  table_cnt >= 0[-7,1,0]  𝄀
 mo_catalog.mo_tables  ¦  1
+drop account if exists table_stats_bvt_acc;
+create account table_stats_bvt_acc admin_name = 'table_stats_bvt_admin' identified by '111';
+set @table_stats_bvt_account_id = (select account_id from mo_catalog.mo_account where account_name = 'table_stats_bvt_acc');
+create database table_stats_bvt_db;
+use table_stats_bvt_db;
+create table table_stats_bvt_t1 (id int, value varchar(20));
+insert into table_stats_bvt_t1 values (1, 'tenant-row');
+select table_name from table_stats('table_stats_bvt_db.table_stats_bvt_t1') g;
+➤ table_name[12,-1,0]  𝄀
+table_stats_bvt_db.table_stats_bvt_t1
+select * from table_stats('table_stats_bvt_db.table_stats_bvt_t1.0') g;
+-- @regex("only sys account can query stats for other accounts", true)
+internal error: only sys account can query stats for other accounts
+set @table_stats_bvt_path = concat('table_stats_bvt_db.table_stats_bvt_t1.', @table_stats_bvt_account_id);
+set @table_stats_bvt_sql = concat('select table_name from table_stats(''', @table_stats_bvt_path, ''') g');
+prepare table_stats_bvt_stmt from @table_stats_bvt_sql;
+execute table_stats_bvt_stmt;
+➤ table_name[12,-1,0]  𝄀
+table_stats_bvt_db.table_stats_bvt_t1
+deallocate prepare table_stats_bvt_stmt;
+drop account if exists table_stats_bvt_acc;
 drop table if exists t1;
 drop table if exists t2;
 drop table if exists t3;

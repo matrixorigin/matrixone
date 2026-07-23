@@ -202,6 +202,9 @@ type TxnHandler struct {
 }
 
 func InitTxnHandler(service string, storage engine.Engine, connCtx context.Context, txnOp TxnOperator) *TxnHandler {
+	if connCtx == nil {
+		connCtx = context.Background()
+	}
 	ret := &TxnHandler{
 		service:      service,
 		storage:      &engine.EntireEngine{Engine: storage},
@@ -608,6 +611,23 @@ func (th *TxnHandler) commitUnsafe(execCtx *ExecCtx) error {
 // Rollback rolls back the txn
 // the option bits decide the actual behavior
 func (th *TxnHandler) Rollback(execCtx *ExecCtx) error {
+	return th.rollback(execCtx, nil)
+}
+
+// rollbackWithContext rolls back the txn using operationCtx as the parent of
+// the storage rollback context. Normal statement rollback intentionally uses
+// the transaction context so that request cancellation cannot skip cleanup.
+func (th *TxnHandler) rollbackWithContext(
+	operationCtx context.Context,
+	execCtx *ExecCtx,
+) error {
+	return th.rollback(execCtx, operationCtx)
+}
+
+func (th *TxnHandler) rollback(
+	execCtx *ExecCtx,
+	operationCtx context.Context,
+) error {
 	execCtx.ses.EnterFPrint(FPRollback)
 	defer execCtx.ses.ExitFPrint(FPRollback)
 	var err error
@@ -630,7 +650,7 @@ func (th *TxnHandler) Rollback(execCtx *ExecCtx) error {
 		//Case1.1: autocommit && not_begin
 		//Case1.2: (not_autocommit || begin) && activeTxn && needToBeCommitted
 		//Case1.3: the error that should rollback the whole txn
-		err = th.rollbackUnsafe(execCtx)
+		err = th.rollbackUnsafe(execCtx, operationCtx)
 	} else {
 		//Case2: not ( autocommit && !begin ) && not ( activeTxn && needToBeCommitted )
 		//<==>  ( not_autocommit || begin ) && not ( activeTxn && needToBeCommitted )
@@ -639,11 +659,15 @@ func (th *TxnHandler) Rollback(execCtx *ExecCtx) error {
 		defer execCtx.ses.ExitFPrint(FPRollbackUnsafe2)
 		//non derived statement
 		if th.txnOp != nil && !execCtx.ses.IsDerivedStmt() {
+			rollbackCtx := th.txnCtx
+			if operationCtx != nil {
+				rollbackCtx = operationCtx
+			}
 			err, hasRecovered = ExecuteFuncWithRecover(func() error {
-				return th.txnOp.GetWorkspace().RollbackLastStatement(th.txnCtx)
+				return th.txnOp.GetWorkspace().RollbackLastStatement(rollbackCtx)
 			})
 			if err != nil || hasRecovered {
-				err4 := th.rollbackUnsafe(execCtx)
+				err4 := th.rollbackUnsafe(execCtx, operationCtx)
 				return errors.Join(err, err4)
 			}
 		}
@@ -651,7 +675,10 @@ func (th *TxnHandler) Rollback(execCtx *ExecCtx) error {
 	return err
 }
 
-func (th *TxnHandler) rollbackUnsafe(execCtx *ExecCtx) error {
+func (th *TxnHandler) rollbackUnsafe(
+	execCtx *ExecCtx,
+	operationCtx context.Context,
+) error {
 	execCtx.ses.EnterFPrint(FPRollbackUnsafe)
 	defer execCtx.ses.ExitFPrint(FPRollbackUnsafe)
 	traceCtx := th.txnCtx
@@ -675,8 +702,12 @@ func (th *TxnHandler) rollbackUnsafe(execCtx *ExecCtx) error {
 		panic("context should not be nil")
 	}
 
+	rollbackCtx := th.txnCtx
+	if operationCtx != nil {
+		rollbackCtx = operationCtx
+	}
 	ctx2, cancel := context.WithTimeoutCause(
-		th.txnCtx,
+		rollbackCtx,
 		th.storage.Hints().CommitOrRollbackTimeout,
 		moerr.CauseRollbackUnsafe,
 	)

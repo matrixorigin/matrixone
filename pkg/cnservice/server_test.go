@@ -16,6 +16,7 @@ package cnservice
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -23,13 +24,19 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap"
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc/mock_morpc"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/frontend"
+	"github.com/matrixorigin/matrixone/pkg/frontend/test/mock_lock"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -40,6 +47,126 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/address"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
+
+type closeErrorMOServer struct {
+	err error
+}
+
+func (s closeErrorMOServer) GetRoutineManager() *frontend.RoutineManager {
+	return nil
+}
+
+func (s closeErrorMOServer) Start() error {
+	return nil
+}
+
+func (s closeErrorMOServer) Stop() error {
+	return s.err
+}
+
+type closeOnlyRPCServer struct {
+	closeErr error
+}
+
+func (s closeOnlyRPCServer) Start() error {
+	return nil
+}
+
+func (s closeOnlyRPCServer) Close() error {
+	return s.closeErr
+}
+
+func (s closeOnlyRPCServer) RegisterRequestHandler(
+	func(context.Context, morpc.RPCMessage, uint64, morpc.ClientSession) error,
+) {
+}
+
+func TestCloseCNServiceStepsAttemptsAllAndAggregatesErrors(t *testing.T) {
+	bootstrapErr := errors.New("bootstrap close failed")
+	gossipErr := errors.New("gossip leave failed")
+
+	var calls []string
+	steps := []struct {
+		name string
+		err  error
+	}{
+		{name: "bootstrap", err: bootstrapErr},
+		{name: "frontend"},
+		{name: "task"},
+		{name: "rpcs"},
+		{name: "io-pipeline"},
+		{name: "gossip", err: gossipErr},
+		{name: "pipeline-server"},
+		{name: "lock-service"},
+		{name: "shard-service"},
+		{name: "pipeline-client"},
+	}
+
+	closeSteps := make([]func() error, 0, len(steps))
+	for _, step := range steps {
+		closeSteps = append(closeSteps, func() error {
+			calls = append(calls, step.name)
+			return step.err
+		})
+	}
+
+	err := closeCNServiceSteps(closeSteps...)
+	require.ErrorIs(t, err, bootstrapErr)
+	require.ErrorIs(t, err, gossipErr)
+	require.Equal(t, []string{
+		"bootstrap",
+		"frontend",
+		"task",
+		"rpcs",
+		"io-pipeline",
+		"gossip",
+		"pipeline-server",
+		"lock-service",
+		"shard-service",
+		"pipeline-client",
+	}, calls)
+}
+
+func TestServiceCloseDoesNotHangOnNeverReadyClusterAfterEarlyError(t *testing.T) {
+	moruntime.RunTest(
+		t.Name(),
+		func(rt moruntime.Runtime) {
+			frontendErr := errors.New("frontend close failed")
+			refreshErr := errors.New("hakeeper refresh failed")
+			hc := &testHAKClient{clusterErr: refreshErr}
+			moCluster := clusterservice.NewMOCluster(t.Name(), hc, time.Hour)
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+			ls := mock_lock.NewMockLockService(ctrl)
+			ls.EXPECT().Close().Return(nil).Times(2)
+			sv := &service{
+				cfg:                &Config{UUID: t.Name()},
+				logger:             zap.NewNop(),
+				stopper:            stopper.NewStopper("test-cn-close"),
+				bootstrapService:   &testBootService{},
+				mo:                 closeErrorMOServer{err: frontendErr},
+				cancelMoServerFunc: func() {},
+				_hakeeperClient:    hc,
+				moCluster:          moCluster,
+				server:             closeOnlyRPCServer{},
+				lockService:        ls,
+			}
+
+			done := make(chan error, 1)
+			go func() {
+				done <- sv.Close()
+			}()
+
+			select {
+			case err := <-done:
+				require.ErrorIs(t, err, frontendErr)
+				require.Equal(t, 1, hc.closed)
+			case <-time.After(time.Second):
+				t.Fatal("service.Close blocked on never-ready cluster")
+			}
+		},
+	)
+}
 
 func TestMakeRSSCacheEvictorEvictsMemoryCacheOnly(t *testing.T) {
 	oldMemoryEvictor := evictMemoryCachesToCapacityPercent
@@ -265,8 +392,7 @@ func (boot *testBootService) GetFinalVersionOffset() int32 {
 }
 
 func (boot *testBootService) Close() error {
-	//TODO implement me
-	panic("implement me")
+	return nil
 }
 
 func Test_tenant(t *testing.T) {

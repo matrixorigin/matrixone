@@ -404,6 +404,148 @@ func TestExternalScanParquetRowGroupShardsRoundtrip(t *testing.T) {
 	require.Equal(t, shards, restoredExternal.Es.ParquetRowGroupShards)
 }
 
+func TestExternalScanIcebergRuntimeRoundtrip(t *testing.T) {
+	ctx := &scopeContext{
+		id:     1,
+		root:   &scopeContext{},
+		parent: &scopeContext{},
+	}
+	proc := &process.Process{}
+	proc.Base = &process.BaseProcess{}
+
+	dataTasks := []*pipeline.IcebergDataFileTask{{
+		FilePath:              "s3://warehouse/sales/orders/data-0001.parquet",
+		FileFormat:            "parquet",
+		FileSize:              2048,
+		RecordCount:           100,
+		PartitionSpecId:       7,
+		PartitionValues:       map[string]string{"created_day": "19815"},
+		SplitOffsets:          []int64{4, 1024},
+		RowGroupStart:         0,
+		RowGroupEnd:           2,
+		CredentialScope:       "scope-ref-1",
+		ContentSequenceNumber: 9,
+		FileSequenceNumber:    9,
+		HasResidualFilter:     true,
+		ResidualFilterHash:    "filter_digest:abcdef0123456789",
+	}}
+	deleteTasks := []*pipeline.IcebergDeleteFileTask{{
+		DeleteType:         "position",
+		DeleteFilePath:     "s3://warehouse/sales/orders/delete-0001.parquet",
+		ReferencedDataFile: "s3://warehouse/sales/orders/data-0001.parquet",
+		EqualityFieldIds:   []int32{1, 2},
+		DeleteSchemaId:     3,
+		PartitionSpecId:    7,
+		SequenceNumber:     10,
+		CredentialScope:    "scope-ref-1",
+	}}
+	columns := []*pipeline.IcebergColumnMapping{{
+		MoColIndex:        0,
+		IcebergFieldId:    1,
+		SnapshotFieldName: "order_id",
+		CurrentFieldName:  "id",
+		MoType:            &planpb.Type{Id: int32(types.T_int64)},
+		Required:          true,
+		ParquetPathHint:   "order_id",
+	}}
+	snapshot := &pipeline.IcebergSnapshotRuntime{
+		SnapshotId:           22,
+		SchemaId:             1,
+		PartitionSpecIds:     []int32{7},
+		MetadataLocationHash: "meta-hash",
+		ManifestListHash:     "manifest-list-hash",
+		RefName:              "main",
+		PlanningMode:         "client",
+	}
+	op := external.NewArgument().WithEs(
+		&external.ExternalParam{
+			ExParamConst: external.ExParamConst{
+				FileList:                    []string{"s3://warehouse/sales/orders/data-0001.parquet"},
+				FileSize:                    []int64{2048},
+				FileOffsetTotal:             []*pipeline.FileOffset{{Offset: []int64{0, -1}}},
+				IcebergDataTasks:            dataTasks,
+				IcebergDeleteTasks:          deleteTasks,
+				IcebergColumns:              columns,
+				IcebergSnapshot:             snapshot,
+				IcebergObjectIORef:          "object-scope-ref",
+				IcebergHiddenReadCols:       []int32{3, 4},
+				IcebergDeleteMaxMemoryBytes: 4096,
+				IcebergDeleteSpillEnabled:   true,
+				IcebergPlanningStats: process.ParquetProfileStats{
+					IcebergMetadataBytes:         10,
+					IcebergManifestListBytes:     20,
+					IcebergManifestBytes:         30,
+					IcebergManifestsSelected:     2,
+					IcebergManifestsPruned:       1,
+					IcebergDataFilesSelected:     2,
+					IcebergDataFilesPruned:       3,
+					IcebergDataFileBytesSelected: 2048,
+					IcebergDataFileBytesPruned:   4096,
+					IcebergPlanningCacheHits:     4,
+					IcebergPlanningCacheMiss:     5,
+				},
+				NeedRowOrdinal: true,
+			},
+			ExParam: external.ExParam{
+				Fileparam: &external.ExFileparam{},
+				Filter:    &external.FilterParam{},
+			},
+		},
+	)
+
+	_, pipeInstr, err := convertToPipelineInstruction(op, proc, ctx, 1)
+	require.NoError(t, err)
+	require.Equal(t, dataTasks, pipeInstr.ExternalScan.IcebergDataTasks)
+	require.Equal(t, deleteTasks, pipeInstr.ExternalScan.IcebergDeleteTasks)
+	require.Equal(t, columns, pipeInstr.ExternalScan.IcebergColumns)
+	require.Equal(t, snapshot, pipeInstr.ExternalScan.IcebergSnapshot)
+	require.Equal(t, "object-scope-ref", pipeInstr.ExternalScan.IcebergObjectIoRef)
+	require.Equal(t, []int32{3, 4}, pipeInstr.ExternalScan.IcebergHiddenReadColumns)
+	require.Equal(t, int64(4096), pipeInstr.ExternalScan.IcebergDeleteMaxMemoryBytes)
+	require.True(t, pipeInstr.ExternalScan.IcebergDeleteSpillEnabled)
+	require.NotNil(t, pipeInstr.ExternalScan.IcebergPlanningStats)
+	require.Equal(t, int64(10), pipeInstr.ExternalScan.IcebergPlanningStats.MetadataBytes)
+	require.Equal(t, int64(20), pipeInstr.ExternalScan.IcebergPlanningStats.ManifestListBytes)
+	require.Equal(t, int64(30), pipeInstr.ExternalScan.IcebergPlanningStats.ManifestBytes)
+	require.Equal(t, int64(2), pipeInstr.ExternalScan.IcebergPlanningStats.ManifestsSelected)
+	require.Equal(t, int64(1), pipeInstr.ExternalScan.IcebergPlanningStats.ManifestsPruned)
+	require.Equal(t, int64(2), pipeInstr.ExternalScan.IcebergPlanningStats.DataFilesSelected)
+	require.Equal(t, int64(3), pipeInstr.ExternalScan.IcebergPlanningStats.DataFilesPruned)
+	require.Equal(t, int64(2048), pipeInstr.ExternalScan.IcebergPlanningStats.DataFileBytesSelected)
+	require.Equal(t, int64(4096), pipeInstr.ExternalScan.IcebergPlanningStats.DataFileBytesPruned)
+	require.Equal(t, int64(4), pipeInstr.ExternalScan.IcebergPlanningStats.PlanningCacheHits)
+	require.Equal(t, int64(5), pipeInstr.ExternalScan.IcebergPlanningStats.PlanningCacheMiss)
+	require.True(t, pipeInstr.ExternalScan.NeedRowOrdinal)
+	require.True(t, pipeInstr.ExternalScan.IcebergDataTasks[0].HasResidualFilter)
+	require.Equal(t, "filter_digest:abcdef0123456789", pipeInstr.ExternalScan.IcebergDataTasks[0].ResidualFilterHash)
+
+	restored, err := convertToVmOperator(pipeInstr, ctx, nil)
+	require.NoError(t, err)
+	restoredExternal := restored.(*external.External)
+	require.Equal(t, dataTasks, restoredExternal.Es.IcebergDataTasks)
+	require.Equal(t, deleteTasks, restoredExternal.Es.IcebergDeleteTasks)
+	require.Equal(t, columns, restoredExternal.Es.IcebergColumns)
+	require.Equal(t, snapshot, restoredExternal.Es.IcebergSnapshot)
+	require.Equal(t, "object-scope-ref", restoredExternal.Es.IcebergObjectIORef)
+	require.Equal(t, []int32{3, 4}, restoredExternal.Es.IcebergHiddenReadCols)
+	require.Equal(t, int64(4096), restoredExternal.Es.IcebergDeleteMaxMemoryBytes)
+	require.True(t, restoredExternal.Es.IcebergDeleteSpillEnabled)
+	require.Equal(t, int64(10), restoredExternal.Es.IcebergPlanningStats.IcebergMetadataBytes)
+	require.Equal(t, int64(20), restoredExternal.Es.IcebergPlanningStats.IcebergManifestListBytes)
+	require.Equal(t, int64(30), restoredExternal.Es.IcebergPlanningStats.IcebergManifestBytes)
+	require.Equal(t, int64(2), restoredExternal.Es.IcebergPlanningStats.IcebergManifestsSelected)
+	require.Equal(t, int64(1), restoredExternal.Es.IcebergPlanningStats.IcebergManifestsPruned)
+	require.Equal(t, int64(2), restoredExternal.Es.IcebergPlanningStats.IcebergDataFilesSelected)
+	require.Equal(t, int64(3), restoredExternal.Es.IcebergPlanningStats.IcebergDataFilesPruned)
+	require.Equal(t, int64(2048), restoredExternal.Es.IcebergPlanningStats.IcebergDataFileBytesSelected)
+	require.Equal(t, int64(4096), restoredExternal.Es.IcebergPlanningStats.IcebergDataFileBytesPruned)
+	require.Equal(t, int64(4), restoredExternal.Es.IcebergPlanningStats.IcebergPlanningCacheHits)
+	require.Equal(t, int64(5), restoredExternal.Es.IcebergPlanningStats.IcebergPlanningCacheMiss)
+	require.True(t, restoredExternal.Es.NeedRowOrdinal)
+	require.True(t, restoredExternal.Es.IcebergDataTasks[0].HasResidualFilter)
+	require.Equal(t, "filter_digest:abcdef0123456789", restoredExternal.Es.IcebergDataTasks[0].ResidualFilterHash)
+}
+
 func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 	ctx := &scopeContext{
 		id:     1,
@@ -707,6 +849,40 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		restoredOp := restored.(*multi_update.MultiUpdate)
 		require.Equal(t, mockEng, restoredOp.Engine)
 	})
+}
+
+func TestShuffleSerializationRoundtrip(t *testing.T) {
+	ctx := &scopeContext{id: 1, root: &scopeContext{}, parent: &scopeContext{}}
+	proc := &process.Process{Base: &process.BaseProcess{}}
+	op := shuffle.NewArgument()
+	defer op.Release()
+	op.ShuffleColIdx = 2
+	op.ShuffleType = int32(planpb.ShuffleType_Range)
+	op.ShuffleColMin = -10
+	op.ShuffleColMax = 100
+	op.BucketNum = 8
+	op.ShuffleRangeInt64 = []int64{0, 10, 20}
+	op.RuntimeFilterSpec = &planpb.RuntimeFilterSpec{Tag: 42}
+	op.ShuffleExpr = plan.MakePlan2Int64ConstExprWithType(7)
+	op.DrainAllBuckets = true
+
+	_, instruction, err := convertToPipelineInstruction(op, proc, ctx, 1)
+	require.NoError(t, err)
+	require.True(t, instruction.Shuffle.DrainAllBuckets)
+
+	restored, err := convertToVmOperator(instruction, ctx, nil)
+	require.NoError(t, err)
+	restoredShuffle := restored.(*shuffle.Shuffle)
+	defer restoredShuffle.Release()
+	require.Equal(t, op.ShuffleColIdx, restoredShuffle.ShuffleColIdx)
+	require.Equal(t, op.ShuffleType, restoredShuffle.ShuffleType)
+	require.Equal(t, op.ShuffleColMin, restoredShuffle.ShuffleColMin)
+	require.Equal(t, op.ShuffleColMax, restoredShuffle.ShuffleColMax)
+	require.Equal(t, op.BucketNum, restoredShuffle.BucketNum)
+	require.Equal(t, op.ShuffleRangeInt64, restoredShuffle.ShuffleRangeInt64)
+	require.Equal(t, op.RuntimeFilterSpec, restoredShuffle.RuntimeFilterSpec)
+	require.Equal(t, op.ShuffleExpr, restoredShuffle.ShuffleExpr)
+	require.True(t, restoredShuffle.DrainAllBuckets)
 }
 func Test_convertToProcessLimitation(t *testing.T) {
 	lim := pipeline.ProcessLimitation{
@@ -3019,9 +3195,9 @@ func newDispatchSrcScopeForTest(proc *process.Process, addr string, localBuckets
 //
 //	before regrouping, the bucket that carries a cross-CN shuffle dispatch is wrongly
 //	judged non-standalone-executable (its dispatch LocalRegs point to a sibling bucket
-//	that lives in a separate send tree) -> RemoteRun converts it to local -> the dispatch
-//	lands on the coordinator, mispaired with the compile-time cross-CN receiver FromAddr
-//	-> hang.
+//	that lives in a separate send tree) -> the remote tree is not independently executable.
+//	Historically RemoteRun converted it to local, mispaired the dispatch with the compile-time
+//	cross-CN receiver FromAddr, and hung; now RemoteRun rejects that topology before start.
 //
 //	after regrouping, the dop same-CN buckets (and the nested dispatch) become one per-CN
 //	send unit, so checkPipelineStandaloneExecutableAtRemote returns true and the whole

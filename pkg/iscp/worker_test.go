@@ -28,14 +28,14 @@ func TestWorkerStopImmediatelyAfterConstruction(t *testing.T) {
 	defer runtime.GOMAXPROCS(previous)
 
 	for range 32 {
-		worker := NewWorker("", nil, nil, nil)
+		worker := NewWorker(nil, "", nil, nil, nil)
 		worker.Stop()
 		runtime.Gosched()
 	}
 }
 
 func TestWorkerStopIsIdempotent(t *testing.T) {
-	worker := NewWorker("", nil, nil, nil)
+	worker := NewWorker(nil, "", nil, nil, nil)
 
 	var stops sync.WaitGroup
 	for range 8 {
@@ -49,7 +49,7 @@ func TestWorkerStopIsIdempotent(t *testing.T) {
 }
 
 func TestWorkerRejectsInvalidOrClosedSubmissions(t *testing.T) {
-	worker := NewWorker("", nil, nil, nil)
+	worker := NewWorker(nil, "", nil, nil, nil)
 	require.Error(t, worker.Submit(nil))
 
 	worker.Stop()

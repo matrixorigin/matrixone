@@ -38,6 +38,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -121,17 +123,352 @@ func TestRoutineCleanupWithoutSession(t *testing.T) {
 	assert.Nil(t, rt.getProtocol())
 }
 
+func TestRoutineCleanupCancelsRequestBeforeWaitingForLifecycleOperation(t *testing.T) {
+	routine := NewRoutine(context.Background(), &testMysqlWriter{}, &config.FrontendParameters{})
+	requestCtx, cancelRequest := context.WithCancel(context.Background())
+	routine.setCancelRequestFunc(cancelRequest)
+	require.True(t, routine.mc.beginOperation())
+	released := false
+	defer func() {
+		if !released {
+			routine.mc.endOperation()
+		}
+	}()
+
+	cleaned := make(chan struct{})
+	go func() {
+		routine.cleanup()
+		close(cleaned)
+	}()
+
+	select {
+	case <-requestCtx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("connection cleanup waited for a lifecycle operation before canceling the query")
+	}
+
+	routine.mc.endOperation()
+	released = true
+	select {
+	case <-cleaned:
+	case <-time.After(time.Second):
+		t.Fatal("connection cleanup did not finish after the lifecycle operation ended")
+	}
+}
+
+func TestRoutineManagerClosedCancelsActiveLifecycleOperation(t *testing.T) {
+	routine := NewRoutine(context.Background(), &testMysqlWriter{}, &config.FrontendParameters{})
+	operationCtx, ok := routine.mc.beginOperationWithContext(context.Background())
+	require.True(t, ok)
+
+	operationDone := make(chan struct{})
+	go func() {
+		<-operationCtx.Done()
+		routine.mc.endOperation()
+		close(operationDone)
+	}()
+
+	conn := &Conn{}
+	rm := &RoutineManager{
+		ctx:              context.Background(),
+		clients:          map[*Conn]*Routine{conn: routine},
+		routinesByConnID: map[uint32]*Routine{0: routine},
+	}
+	closed := make(chan struct{})
+	go func() {
+		rm.Closed(conn)
+		close(closed)
+	}()
+
+	select {
+	case <-operationDone:
+	case <-time.After(time.Second):
+		t.Fatal("RoutineManager.Closed did not cancel the active lifecycle operation")
+	}
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("RoutineManager.Closed did not finish after lifecycle cancellation")
+	}
+}
+
+func TestCanceledMigrationAdmissionDoesNotConsumeMigrateOnce(t *testing.T) {
+	routine := NewRoutine(context.Background(), &testMysqlWriter{}, &config.FrontendParameters{})
+	t.Cleanup(routine.cancelRoutineFunc)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	require.ErrorIs(t, routine.migrateConnectionTo(ctx, &query.MigrateConnToRequest{}), context.Canceled)
+
+	ran := false
+	routine.mc.migrateOnce.Do(func() {
+		ran = true
+	})
+	require.True(t, ran, "caller cancellation before admission must allow a later migration retry")
+}
+
+func TestCanceledResetAdmissionDoesNotTouchSession(t *testing.T) {
+	routine := NewRoutine(context.Background(), &testMysqlWriter{}, &config.FrontendParameters{})
+	t.Cleanup(routine.cancelRoutineFunc)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	require.ErrorIs(
+		t,
+		routine.resetSessionWithContext(ctx, "", &query.ResetSessionResponse{}),
+		context.Canceled,
+	)
+	require.True(t, routine.mc.tryBeginOperation(), "canceled reset must not retain lifecycle admission")
+	routine.mc.endOperation()
+}
+
+func TestRoutineCloseCancelsResetRollback(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	oldSession := newTestSession(t, ctrl)
+	oldSession.GetTxnHandler().Close()
+
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().Hints().Return(engine.Hints{
+		CommitOrRollbackTimeout: 5 * time.Minute,
+	}).AnyTimes()
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
+	txnOp.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).AnyTimes()
+	rollbackStarted := make(chan struct{})
+	txnOp.EXPECT().Rollback(gomock.Any()).DoAndReturn(func(ctx context.Context) error {
+		close(rollbackStarted)
+		<-ctx.Done()
+		return context.Cause(ctx)
+	})
+	oldSession.txnHandler = InitTxnHandler("", eng, context.Background(), txnOp)
+	oldSession.txnHandler.shareTxn = false
+
+	routine := NewRoutine(
+		context.Background(),
+		oldSession.GetResponser().MysqlRrWr(),
+		&config.FrontendParameters{},
+	)
+	t.Cleanup(routine.cancelRoutineFunc)
+	routine.setSession(oldSession)
+
+	resetDone := make(chan error, 1)
+	go func() {
+		resetDone <- routine.resetSession("", &query.ResetSessionResponse{})
+	}()
+
+	select {
+	case <-rollbackStarted:
+	case <-time.After(time.Second):
+		t.Fatal("reset did not enter transaction rollback")
+	}
+
+	closeDone := make(chan struct{})
+	go func() {
+		routine.beginClose()
+		routine.mc.waitAndClose()
+		close(closeDone)
+	}()
+
+	select {
+	case err := <-resetDone:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("connection close did not cancel reset rollback")
+	}
+	select {
+	case <-closeDone:
+	case <-time.After(time.Second):
+		t.Fatal("connection close remained blocked after reset rollback cancellation")
+	}
+}
+
+func TestMigrateConnectionFromRejectsClosedRoutineBeforeReadingSession(t *testing.T) {
+	routine := NewRoutine(context.Background(), &testMysqlWriter{}, &config.FrontendParameters{})
+	t.Cleanup(routine.cancelRoutineFunc)
+	routine.mc.waitAndClose()
+
+	err := routine.migrateConnectionFromWithContext(context.Background(), &query.MigrateConnFromResponse{})
+	require.Error(t, err)
+}
+
+func TestRoutineCleanupCancelsRequestBeforeRollback(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	ses.GetTxnHandler().Close()
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().Hints().Return(engine.Hints{CommitOrRollbackTimeout: time.Second}).AnyTimes()
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
+	txnOp.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).AnyTimes()
+
+	routine := NewRoutine(context.Background(), ses.GetResponser().MysqlRrWr(), &config.FrontendParameters{})
+	routine.setSession(ses)
+	requestCtx, cancelRequest := context.WithCancel(context.Background())
+	routine.setCancelRequestFunc(cancelRequest)
+	canceledBeforeRollback := false
+	txnOp.EXPECT().Rollback(gomock.Any()).DoAndReturn(func(context.Context) error {
+		select {
+		case <-requestCtx.Done():
+			canceledBeforeRollback = true
+		default:
+		}
+		return nil
+	})
+	ses.txnHandler = InitTxnHandler("", eng, context.Background(), txnOp)
+	ses.txnHandler.shareTxn = false
+
+	routine.cleanup()
+
+	require.True(t, canceledBeforeRollback,
+		"rollback must not run ahead of cancellation of the active query")
+}
+
 func TestMigrateConnectionFromPreservesLastAffectedRows(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 	ses := newTestSession(t, ctrl)
 	ses.SetLastAffectedRows(7)
-	rt := &Routine{}
+	rt := &Routine{mc: newMigrateController()}
 	rt.setSession(ses)
 
 	resp := &query.MigrateConnFromResponse{}
 	require.NoError(t, rt.migrateConnectionFrom(resp))
 	require.Equal(t, int64(7), resp.LastAffectedRows)
+}
+
+func TestRoutineResetSessionKeepsReplacementRegistered(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	oldSession := newTestSession(t, ctrl)
+	rm, err := NewRoutineManager(context.Background(), "")
+	require.NoError(t, err)
+	rm.sessionManager = queryservice.NewSessionManager()
+
+	routine := NewRoutine(context.Background(), oldSession.GetResponser().MysqlRrWr(), &config.FrontendParameters{})
+	oldSession.setRoutineManager(rm)
+	oldSession.setRoutine(routine)
+	routine.setSession(oldSession)
+	rm.sessionManager.AddSession(oldSession)
+	require.Len(t, rm.sessionManager.GetAllSessions(), 1)
+
+	resp := &query.ResetSessionResponse{}
+	require.NoError(t, routine.resetSession("", resp))
+
+	newSession := routine.getSession()
+	t.Cleanup(func() {
+		rm.sessionManager.RemoveSession(newSession)
+		newSession.Close()
+		rm.cancelCtx()
+	})
+
+	require.NotSame(t, oldSession, newSession)
+	require.Equal(t, oldSession.GetUUIDString(), newSession.GetUUIDString())
+
+	registered := rm.sessionManager.GetAllSessions()
+	require.Len(t, registered, 1, "successful reset must keep the replacement session registered")
+	require.Same(t, newSession, registered[0])
+}
+
+func TestRoutineResetSessionFailureRestoresProtocolState(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	oldSession := newTestSession(t, ctrl)
+	rm, err := NewRoutineManager(context.Background(), "")
+	require.NoError(t, err)
+	rm.sessionManager = queryservice.NewSessionManager()
+	t.Cleanup(func() {
+		oldSession.Close()
+		rm.cancelCtx()
+	})
+
+	protocol := oldSession.GetResponser().MysqlRrWr()
+	protocol.SetStr(DBNAME, "db1")
+	routine := NewRoutine(context.Background(), protocol, &config.FrontendParameters{})
+	t.Cleanup(routine.cancelRoutineFunc)
+	oldSession.setRoutineManager(rm)
+	oldSession.setRoutine(routine)
+	routine.setSession(oldSession)
+	rm.sessionManager.AddSession(oldSession)
+
+	oldSession.GetTxnHandler().Close()
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().Hints().Return(engine.Hints{CommitOrRollbackTimeout: time.Second}).AnyTimes()
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
+	txnOp.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).AnyTimes()
+	txnOp.EXPECT().Rollback(gomock.Any()).Return(assert.AnError)
+	oldSession.txnHandler = InitTxnHandler("", eng, context.Background(), txnOp)
+	oldSession.txnHandler.shareTxn = false
+
+	err = routine.resetSession("", &query.ResetSessionResponse{})
+	require.ErrorIs(t, err, assert.AnError)
+	require.Same(t, oldSession, routine.getSession())
+	require.Equal(t, "db1", protocol.GetStr(DBNAME))
+	registered := rm.sessionManager.GetAllSessions()
+	require.Len(t, registered, 1)
+	require.Same(t, oldSession, registered[0])
+}
+
+func TestRoutineResetSessionRejectsLifecycleConflict(t *testing.T) {
+	routine := NewRoutine(context.Background(), &testMysqlWriter{}, &config.FrontendParameters{})
+	t.Cleanup(routine.cancelRoutineFunc)
+	resp := &query.ResetSessionResponse{}
+
+	require.True(t, routine.mc.beginOperation())
+	require.Error(t, routine.resetSession("", resp))
+	routine.mc.endOperation()
+
+	routine.mc.waitAndClose()
+	require.Error(t, routine.resetSession("", resp))
+}
+
+func TestRoutineManagerClosedRemovesResetReplacement(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	oldSession := newTestSession(t, ctrl)
+	rm, err := NewRoutineManager(context.Background(), "")
+	require.NoError(t, err)
+	rm.sessionManager = queryservice.NewSessionManager()
+	t.Cleanup(func() {
+		oldSession.Close()
+		rm.cancel()
+	})
+
+	routine := NewRoutine(context.Background(), oldSession.GetResponser().MysqlRrWr(), &config.FrontendParameters{})
+	oldSession.setRoutineManager(rm)
+	oldSession.setRoutine(routine)
+	routine.setSession(oldSession)
+	rm.sessionManager.AddSession(oldSession)
+	conn := &Conn{}
+	rm.setRoutine(conn, 0, routine)
+
+	// Model a reset that already owns lifecycle admission when the connection
+	// close starts. Closed must wait, then unregister the replacement session.
+	require.True(t, routine.mc.beginOperation())
+	closed := make(chan struct{})
+	go func() {
+		rm.Closed(conn)
+		close(closed)
+	}()
+	require.Eventually(t, func() bool {
+		routine.mc.Lock()
+		defer routine.mc.Unlock()
+		return routine.mc.closed
+	}, time.Second, time.Millisecond)
+
+	newSession := newTestSession(t, ctrl)
+	newSession.uuid = oldSession.uuid
+	newSession.setRoutineManager(rm)
+	newSession.setRoutine(routine)
+	routine.setSession(newSession)
+	rm.sessionManager.AddSession(newSession)
+	routine.mc.endOperation()
+
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("routine close did not finish after reset completed")
+	}
+
+	require.Empty(t, rm.sessionManager.GetAllSessions())
+	require.Empty(t, rm.sessionManager.GetSessionsByTenant(oldSession.GetTenantName()))
 }
 
 const (

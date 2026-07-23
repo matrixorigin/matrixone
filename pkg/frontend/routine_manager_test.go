@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"io"
 	"net"
 	"sync"
@@ -218,6 +219,140 @@ func TestRoutineManager_killClients(t *testing.T) {
 				sessionManager:   tt.fields.sessionManager,
 			}
 			rm.killNetConns()
+		})
+	}
+}
+
+func TestRoutineManagerCancelDisconnectedLongRunningRequests(t *testing.T) {
+	now := time.Now()
+	grace := 30 * time.Second
+	longServer, longClient := net.Pipe()
+	shortServer, shortClient := net.Pipe()
+	t.Cleanup(func() {
+		_ = longServer.Close()
+		_ = longClient.Close()
+		_ = shortServer.Close()
+		_ = shortClient.Close()
+	})
+
+	longRoutine := NewRoutine(context.Background(), &testMysqlWriter{}, &config.FrontendParameters{})
+	shortRoutine := NewRoutine(context.Background(), &testMysqlWriter{}, &config.FrontendParameters{})
+	t.Cleanup(longRoutine.cancelRoutineFunc)
+	t.Cleanup(shortRoutine.cancelRoutineFunc)
+	longRoutine.requestStartedAt.Store(clientRequestClockValue(now.Add(-grace - time.Second)))
+	shortRoutine.requestStartedAt.Store(clientRequestClockValue(now.Add(-grace + time.Second)))
+
+	longCtx, cancelLong := context.WithCancel(context.Background())
+	shortCtx, cancelShort := context.WithCancel(context.Background())
+	t.Cleanup(cancelLong)
+	t.Cleanup(cancelShort)
+	longRoutine.setCancelRequestFunc(cancelLong)
+	shortRoutine.setCancelRequestFunc(cancelShort)
+
+	longConn := &Conn{conn: longServer, remoteAddr: "long"}
+	shortConn := &Conn{conn: shortServer, remoteAddr: "short"}
+	rm := &RoutineManager{clients: map[*Conn]*Routine{
+		longConn:  longRoutine,
+		shortConn: shortRoutine,
+	}}
+
+	probes := 0
+	rm.cancelDisconnectedRequests(now, grace, func(conn net.Conn) (bool, error) {
+		probes++
+		return conn == longServer, nil
+	})
+
+	require.Equal(t, 1, probes, "only requests beyond the grace period should be probed")
+	select {
+	case <-longCtx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("disconnected long-running request was not canceled")
+	}
+	select {
+	case <-shortCtx.Done():
+		t.Fatal("short-running request was canceled")
+	default:
+	}
+
+	rm.cancelDisconnectedRequests(now, grace, func(net.Conn) (bool, error) {
+		probes++
+		return true, nil
+	})
+	require.Equal(t, 1, probes, "a routine already closing should not be probed again")
+}
+
+func TestRoutineManagerProbeErrorDoesNotCancelRequest(t *testing.T) {
+	now := time.Now()
+	serverConn, clientConn := net.Pipe()
+	t.Cleanup(func() {
+		_ = serverConn.Close()
+		_ = clientConn.Close()
+	})
+
+	routine := NewRoutine(context.Background(), &testMysqlWriter{}, &config.FrontendParameters{})
+	t.Cleanup(routine.cancelRoutineFunc)
+	routine.requestStartedAt.Store(clientRequestClockValue(now.Add(-time.Minute)))
+	requestCtx, cancelRequest := context.WithCancel(context.Background())
+	t.Cleanup(cancelRequest)
+	routine.setCancelRequestFunc(cancelRequest)
+
+	conn := &Conn{conn: serverConn}
+	rm := &RoutineManager{clients: map[*Conn]*Routine{conn: routine}}
+	rm.cancelDisconnectedRequests(now, 30*time.Second, func(net.Conn) (bool, error) {
+		return false, errors.New("probe failed")
+	})
+
+	select {
+	case <-requestCtx.Done():
+		t.Fatal("an inconclusive socket probe canceled the request")
+	default:
+	}
+}
+
+func TestConnectionLivenessMonitorStopsWithRoutineManager(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	server := &MOServer{rm: &RoutineManager{ctx: ctx}}
+	server.startConnectionLivenessMonitor()
+	cancel()
+
+	stopped := make(chan struct{})
+	go func() {
+		server.wg.Wait()
+		close(stopped)
+	}()
+	select {
+	case <-stopped:
+	case <-time.After(time.Second):
+		t.Fatal("connection liveness monitor leaked after routine manager cancellation")
+	}
+}
+
+func BenchmarkRoutineManagerLongRunningRequests(b *testing.B) {
+	const connections = 10_000
+	now := time.Now()
+
+	for _, benchmark := range []struct {
+		name       string
+		activeLong int
+	}{
+		{name: "idle", activeLong: 0},
+		{name: "one-percent-active", activeLong: connections / 100},
+	} {
+		b.Run(benchmark.name, func(b *testing.B) {
+			rm := &RoutineManager{clients: make(map[*Conn]*Routine, connections)}
+			for i := 0; i < connections; i++ {
+				routine := &Routine{}
+				if i < benchmark.activeLong {
+					routine.requestStartedAt.Store(clientRequestClockValue(now.Add(-time.Minute)))
+				}
+				rm.clients[&Conn{}] = routine
+			}
+
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				_ = rm.longRunningRequests(now, 30*time.Second)
+			}
 		})
 	}
 }
