@@ -88,6 +88,50 @@ func TestBuildPrepareStringUsesSessionSQLMode(t *testing.T) {
 	require.NotNil(t, p.GetDcl().GetPrepare().GetPlan())
 }
 
+func TestPreparedSetVariablesCollectParamsInAssignmentOrder(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	p, err := runOneStmt(mock, t,
+		"prepare stmt1 from 'set @first = ? + 1, @second = ?'")
+	require.NoError(t, err)
+	prepare := p.GetDcl().GetPrepare()
+	require.NotNil(t, prepare)
+	require.Len(t, prepare.ParamTypes, 2)
+
+	setVars := prepare.Plan.GetDcl().GetSetVariables()
+	require.NotNil(t, setVars)
+	require.Len(t, setVars.Items, 2)
+	require.Equal(t, int32(0), findFirstParamPos(setVars.Items[0].Value))
+	require.Equal(t, int32(1), findFirstParamPos(setVars.Items[1].Value))
+}
+
+func TestPreparedLiteralSetHasNoParams(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	p, err := runOneStmt(mock, t,
+		"prepare stmt1 from 'set @answer = 41 + 1'")
+	require.NoError(t, err)
+	require.Empty(t, p.GetDcl().GetPrepare().ParamTypes)
+}
+
+func findFirstParamPos(expr *plan.Expr) int32 {
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_P:
+		return exprImpl.P.Pos
+	case *plan.Expr_F:
+		for _, arg := range exprImpl.F.Args {
+			if pos := findFirstParamPos(arg); pos >= 0 {
+				return pos
+			}
+		}
+	case *plan.Expr_List:
+		for _, item := range exprImpl.List.List {
+			if pos := findFirstParamPos(item); pos >= 0 {
+				return pos
+			}
+		}
+	}
+	return -1
+}
+
 func TestBuildViewPersistsSessionSQLMode(t *testing.T) {
 	ctx := &sqlModeMockCompilerContext{
 		MockCompilerContext: NewMockCompilerContext(true),

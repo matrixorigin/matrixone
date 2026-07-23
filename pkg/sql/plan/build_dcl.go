@@ -174,11 +174,11 @@ func buildDeallocate(stmt *tree.Deallocate, _ CompilerContext) (*Plan, error) {
 	}, nil
 }
 
-func buildSetVariables(stmt *tree.SetVar, ctx CompilerContext) (*Plan, error) {
+func buildSetVariables(stmt *tree.SetVar, ctx CompilerContext, isPrepareStmt bool) (*Plan, error) {
 	var err error
 	items := make([]*plan.SetVariablesItem, len(stmt.Assignments))
 
-	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, false)
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt, false)
 	binder := NewWhereBinder(builder, &BindContext{})
 
 	for idx, assignment := range stmt.Assignments {

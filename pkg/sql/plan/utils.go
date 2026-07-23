@@ -2759,6 +2759,38 @@ func ResetPreparePlan(ctx CompilerContext, preparePlan *Plan) ([]*plan.ObjectRef
 		}
 		return querySchemas, getParamRule.paramTypes, nil
 	}
+	resetSetVariables := func(setVars *plan.SetVariables) ([]int32, error) {
+		getParamRule := NewGetParamRule()
+		for _, item := range setVars.Items {
+			var err error
+			item.Value, err = getParamRule.ApplyExpr(item.Value)
+			if err != nil {
+				return nil, err
+			}
+			if item.Reserved != nil {
+				item.Reserved, err = getParamRule.ApplyExpr(item.Reserved)
+				if err != nil {
+					return nil, err
+				}
+			}
+		}
+		getParamRule.SetParamOrder()
+		resetRule := NewResetParamOrderRule(getParamRule.params)
+		for _, item := range setVars.Items {
+			var err error
+			item.Value, err = resetRule.ApplyExpr(item.Value)
+			if err != nil {
+				return nil, err
+			}
+			if item.Reserved != nil {
+				item.Reserved, err = resetRule.ApplyExpr(item.Reserved)
+				if err != nil {
+					return nil, err
+				}
+			}
+		}
+		return getParamRule.paramTypes, nil
+	}
 
 	switch pp := preparePlan.Plan.(type) {
 	case *plan.Plan_Tcl:
@@ -2769,6 +2801,12 @@ func ResetPreparePlan(ctx CompilerContext, preparePlan *Plan) ([]*plan.ObjectRef
 			plan.DataControl_ALTER_ACCOUNT,
 			plan.DataControl_DROP_ACCOUNT:
 			return nil, pp.Dcl.GetOther().GetParamTypes(), nil
+		case plan.DataControl_SET_VARIABLES:
+			paramTypes, err := resetSetVariables(pp.Dcl.GetSetVariables())
+			if err != nil {
+				return nil, nil, err
+			}
+			return nil, paramTypes, nil
 		default:
 			return nil, nil, moerr.NewInvalidInput(ctx.GetContext(), "cannot prepare TCL and DCL statement")
 		}
