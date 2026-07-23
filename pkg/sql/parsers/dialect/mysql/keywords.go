@@ -316,6 +316,8 @@ func init() {
 		"load":                       LOAD,
 		"import":                     IMPORT,
 		"discard":                    DISCARD,
+		"dump":                       DUMP,
+		"metadata":                   METADATA,
 		"localtime":                  LOCALTIME,
 		"localtimestamp":             LOCALTIMESTAMP,
 		"lock":                       LOCK,

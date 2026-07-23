@@ -23,6 +23,7 @@ import (
 	"io"
 	"iter"
 	"math"
+	"net/url"
 	gotrace "runtime/trace"
 	"slices"
 	"strings"
@@ -50,12 +51,35 @@ import (
 )
 
 type AwsSDKv2 struct {
-	name               string
-	bucket             string
-	client             *s3.Client
-	perfCounterSets    []*perfcounter.CounterSet
-	listMaxKeys        int32
-	disableMultiDelete atomic.Bool
+	name                 string
+	endpoint             string
+	bucket               string
+	client               *s3.Client
+	copyCredentialDomain objectStorageCopyCredentialDomain
+	perfCounterSets      []*perfcounter.CounterSet
+	listMaxKeys          int32
+	disableMultiDelete   atomic.Bool
+}
+
+var _ objectStorageCopier = new(AwsSDKv2)
+
+func (a *AwsSDKv2) CopyObject(
+	ctx context.Context,
+	src ObjectStorage,
+	srcKey string,
+	dstKey string,
+) (bool, error) {
+	s, ok := src.(*AwsSDKv2)
+	if !ok || !strings.EqualFold(a.endpoint, s.endpoint) ||
+		!a.copyCredentialDomain.matches(s.copyCredentialDomain) {
+		return false, nil
+	}
+	_, err := a.client.CopyObject(ctx, &s3.CopyObjectInput{
+		Bucket:     aws.String(a.bucket),
+		CopySource: aws.String(url.PathEscape(s.bucket + "/" + srcKey)),
+		Key:        aws.String(dstKey),
+	})
+	return true, err
 }
 
 func NewAwsSDKv2(
@@ -99,11 +123,16 @@ func NewAwsSDKv2(
 	}
 
 	// validate
+	var copyCredentialDomain objectStorageCopyCredentialDomain
 	if credentialProvider != nil {
-		_, err := credentialProvider.Retrieve(ctx)
+		credential, retrieveErr := credentialProvider.Retrieve(ctx)
+		err = retrieveErr
 		if err != nil {
 			return nil, moerr.AttachCause(ctx, err)
 		}
+		copyCredentialDomain = newObjectStorageCopyCredentialDomain(
+			credential.AccessKeyID, credential.SecretAccessKey, credential.SessionToken,
+		)
 	}
 
 	// load configs
@@ -188,10 +217,12 @@ func NewAwsSDKv2(
 	}
 
 	return &AwsSDKv2{
-		name:            args.Name,
-		bucket:          args.Bucket,
-		client:          client,
-		perfCounterSets: perfCounterSets,
+		name:                 args.Name,
+		endpoint:             args.Endpoint,
+		bucket:               args.Bucket,
+		client:               client,
+		copyCredentialDomain: copyCredentialDomain,
+		perfCounterSets:      perfCounterSets,
 	}, nil
 
 }
@@ -904,7 +935,8 @@ func (a *AwsSDKv2) listObjects(ctx context.Context, params *s3.ListObjectsInput,
 func (a *AwsSDKv2) headObject(ctx context.Context, params *s3.HeadObjectInput, optFns ...func(*s3.Options)) (*s3.HeadObjectOutput, error) {
 	ctx, task := gotrace.NewTask(ctx, "AwsSDKv2.headObject")
 	defer task.End()
-	return DoWithRetry(
+	return DoWithRetryContext(
+		ctx,
 		"s3 head object",
 		func() (*s3.HeadObjectOutput, error) {
 			perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
