@@ -1661,15 +1661,18 @@ func TestGetObjectChunk(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "size exceeds maximum chunk size")
 
-	// Test case 2: Large file (> 100MB) - should have multiple chunks
-	// Create a file larger than 100MB (e.g., 150MB)
-	const chunkSize = 100 * 1024 * 1024       // 100MB
-	largeFileSize := int64(150 * 1024 * 1024) // 150MB
+	// Test case 2: the smallest file beyond the 100 MiB boundary must be read
+	// as one full chunk plus one partial chunk.
+	const chunkSize = 100 * 1024 * 1024
+	largeFileSize := int64(chunkSize + 1024)
 	testObjectName2 := "test_object_large"
 	largeContent := make([]byte, largeFileSize)
-	for i := range largeContent {
-		largeContent[i] = byte(i % 256)
-	}
+	// Distinct sentinels on both sides of the chunk boundary preserve exact
+	// content/offset validation without 100 MiB of race-instrumented byte writes.
+	largeContent[0] = 1
+	largeContent[chunkSize-1] = 2
+	largeContent[chunkSize] = 3
+	largeContent[len(largeContent)-1] = 4
 
 	// Write in chunks to avoid memory issues
 	const writeChunkSize = 10 * 1024 * 1024 // 10MB per write
@@ -1704,7 +1707,7 @@ func TestGetObjectChunk(t *testing.T) {
 	require.Equal(t, int64(chunkSize), int64(len(chunk0)))
 	require.Equal(t, largeContent[0:chunkSize], chunk0)
 
-	// Read second chunk (50MB)
+	// Read the partial second chunk.
 	remainingSize := largeFileSize - chunkSize
 	chunk1, err := frontend.ReadObjectFromEngine(ctxWithTimeout, de, testObjectName2, chunkSize, remainingSize)
 	require.NoError(t, err)

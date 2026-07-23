@@ -4136,6 +4136,44 @@ func TestAllocatorObserverCloseWaitersOnStaleLocalBind(t *testing.T) {
 	)
 }
 
+func requireServiceStatus(t *testing.T, service *service, status pb.Status) {
+	t.Helper()
+	require.Eventually(t,
+		func() bool { return service.isStatus(status) },
+		5*time.Second,
+		10*time.Millisecond,
+	)
+}
+
+func requireRollingRestartLockEventuallySucceeds(
+	t *testing.T,
+	fn func() error,
+	onBindChanged func(),
+) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		err := fn()
+		if err == nil {
+			return
+		}
+		if moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged) && onBindChanged != nil {
+			onBindChanged()
+		}
+		require.True(t,
+			moerr.IsMoErrCode(err, moerr.ErrRetryForCNRollingRestart) ||
+				moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged) ||
+				moerr.IsMoErrCode(err, moerr.ErrBackendClosed) ||
+				moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect),
+			"unexpected rolling-restart lock error: %v", err,
+		)
+		if time.Now().After(deadline) {
+			require.NoError(t, err, "lock did not recover after rolling restart")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func TestRetryLockSuccInRollingRestartCN(t *testing.T) {
 	runLockServiceTests(
 		t,
@@ -4175,17 +4213,7 @@ func TestRetryLockSuccInRollingRestartCN(t *testing.T) {
 			require.NoError(t, err)
 
 			alloc.setRestartService("s1")
-			for {
-				if l1.isStatus(pb.Status_ServiceLockWaiting) {
-					break
-				}
-				select {
-				case <-ctx.Done():
-					return
-				default:
-				}
-			}
-			require.Equal(t, true, l1.isStatus(pb.Status_ServiceLockWaiting))
+			requireServiceStatus(t, l1, pb.Status_ServiceLockWaiting)
 
 			// remote lock should be failed
 			t3, _ := l2.clock.Now()
@@ -4193,10 +4221,10 @@ func TestRetryLockSuccInRollingRestartCN(t *testing.T) {
 			_, err = l2.Lock(
 				ctx,
 				0,
-				[][]byte{{1}},
+				[][]byte{{3}},
 				[]byte("txn3"),
 				option)
-			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrRetryForCNRollingRestart), err)
 
 			err = l1.Unlock(
 				ctx,
@@ -4209,36 +4237,24 @@ func TestRetryLockSuccInRollingRestartCN(t *testing.T) {
 				[]byte("txn2"),
 				timestamp.Timestamp{})
 			require.NoError(t, err)
-			for {
-				if l1.isStatus(pb.Status_ServiceCanRestart) {
-					break
-				}
-				select {
-				case <-ctx.Done():
-					return
-				default:
-				}
-			}
-			require.Equal(t, true, l1.isStatus(pb.Status_ServiceCanRestart))
+			requireServiceStatus(t, l1, pb.Status_ServiceCanRestart)
 
 			// remote lock should be succ
 			option.SnapShotTs = t3
-			for {
-				if _, err = l2.Lock(
+			txnID := []byte("txn3")
+			requireRollingRestartLockEventuallySucceeds(t, func() error {
+				_, err = l2.Lock(
 					ctx,
 					0,
-					[][]byte{{1}},
-					[]byte("txn3"),
-					option); err == nil {
-					break
-				}
-				select {
-				case <-ctx.Done():
-					return
-				default:
-					require.Error(t, moerr.NewRetryForCNRollingRestart(), err)
-				}
-			}
+					[][]byte{{3}},
+					txnID,
+					option)
+				return err
+			}, func() {
+				require.NoError(t, l2.Unlock(ctx, txnID, timestamp.Timestamp{}))
+				txnID = []byte("txn4")
+				option.SnapShotTs, _ = l2.clock.Now()
+			})
 		},
 	)
 }
@@ -4426,17 +4442,7 @@ func TestMoveTableRetryLockSuccInRollingRestartCN(t *testing.T) {
 			require.NoError(t, err)
 
 			alloc.setRestartService("s1")
-			for {
-				if l1.isStatus(pb.Status_ServiceLockWaiting) {
-					break
-				}
-				select {
-				case <-ctx.Done():
-					return
-				default:
-				}
-			}
-			require.Equal(t, true, l1.isStatus(pb.Status_ServiceLockWaiting))
+			requireServiceStatus(t, l1, pb.Status_ServiceLockWaiting)
 
 			err = l1.Unlock(
 				ctx,
@@ -4444,22 +4450,20 @@ func TestMoveTableRetryLockSuccInRollingRestartCN(t *testing.T) {
 				timestamp.Timestamp{})
 			require.NoError(t, err)
 
-			for {
-				if _, err = l2.Lock(
+			txnID := []byte("txn2")
+			requireRollingRestartLockEventuallySucceeds(t, func() error {
+				_, err = l2.Lock(
 					ctx,
 					0,
 					[][]byte{{1}},
-					[]byte("txn2"),
-					option); err == nil {
-					break
-				}
-				select {
-				case <-ctx.Done():
-					return
-				default:
-					require.Error(t, moerr.NewRetryForCNRollingRestart(), err)
-				}
-			}
+					txnID,
+					option)
+				return err
+			}, func() {
+				require.NoError(t, l2.Unlock(ctx, txnID, timestamp.Timestamp{}))
+				txnID = []byte("txn4")
+				option.SnapShotTs, _ = l2.clock.Now()
+			})
 		},
 	)
 }
@@ -4503,17 +4507,7 @@ func TestPreTxnLockInRollingRestartCN(t *testing.T) {
 			require.NoError(t, err)
 
 			alloc.setRestartService("s2")
-			for {
-				if l1.isStatus(pb.Status_ServiceLockWaiting) {
-					break
-				}
-				select {
-				case <-ctx.Done():
-					return
-				default:
-				}
-			}
-			require.Equal(t, true, l1.isStatus(pb.Status_ServiceLockWaiting))
+			requireServiceStatus(t, l2, pb.Status_ServiceLockWaiting)
 
 			// remote lock should be succ, because txn3 start time earlier than restart time
 			option.SnapShotTs = t1

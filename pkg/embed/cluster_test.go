@@ -49,6 +49,9 @@ func TestBasicCluster(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.NoError(t, c.Start())
+	defer func() {
+		require.NoError(t, c.Close())
+	}()
 
 	validCNCanWork(t, c, 0)
 	validCNCanWork(t, c, 1)
@@ -59,14 +62,15 @@ func TestBasicCluster(t *testing.T) {
 	v, err := c.GetService(cn.ServiceID())
 	require.NoError(t, err)
 	require.Equal(t, cn, v)
-
-	require.NoError(t, c.Close())
 }
 
 func TestSingleCNCluster(t *testing.T) {
 	c, err := NewCluster()
 	require.NoError(t, err)
 	require.NoError(t, c.Start())
+	defer func() {
+		require.NoError(t, c.Close())
+	}()
 	require.Error(t, c.Start())
 
 	validCNCanWork(t, c, 0)
@@ -76,14 +80,15 @@ func TestSingleCNCluster(t *testing.T) {
 
 	_, err = c.GetCNService(1)
 	require.Error(t, err)
-
-	require.NoError(t, c.Close())
 }
 
 func TestClusterCanStartNewCNServices(t *testing.T) {
 	c, err := NewCluster(WithCNCount(3))
 	require.NoError(t, err)
 	require.NoError(t, c.Start())
+	defer func() {
+		require.NoError(t, c.Close())
+	}()
 
 	validCNCanWork(t, c, 0)
 	validCNCanWork(t, c, 1)
@@ -91,8 +96,6 @@ func TestClusterCanStartNewCNServices(t *testing.T) {
 
 	require.NoError(t, c.StartNewCNService(1))
 	validCNCanWork(t, c, 3)
-
-	require.NoError(t, c.Close())
 }
 
 func TestMultiClusterCanWork(t *testing.T) {
@@ -100,6 +103,9 @@ func TestMultiClusterCanWork(t *testing.T) {
 		c, err := NewCluster(WithCNCount(3))
 		require.NoError(t, err)
 		require.NoError(t, c.Start())
+		t.Cleanup(func() {
+			require.NoError(t, c.Close())
+		})
 
 		validCNCanWork(t, c, 0)
 		validCNCanWork(t, c, 1)
@@ -107,11 +113,8 @@ func TestMultiClusterCanWork(t *testing.T) {
 		return c
 	}
 
-	c1 := new()
-	c2 := new()
-
-	require.NoError(t, c1.Close())
-	require.NoError(t, c2.Close())
+	new()
+	new()
 }
 
 func TestBaseClusterCanWorkWithNewCluster(t *testing.T) {
