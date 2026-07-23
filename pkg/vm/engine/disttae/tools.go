@@ -173,14 +173,16 @@ func toPBEntry(e Entry) (*api.Entry, error) {
 		return nil, err
 	}
 	return &api.Entry{
-		Bat:          bat,
-		EntryType:    typ,
-		TableId:      e.tableId,
-		DatabaseId:   e.databaseId,
-		TableName:    e.tableName,
-		DatabaseName: e.databaseName,
-		FileName:     e.fileName,
-		PkCheckByTn:  int32(e.pkChkByTN),
+		Bat:                bat,
+		EntryType:          typ,
+		TableId:            e.tableId,
+		DatabaseId:         e.databaseId,
+		TableName:          e.tableName,
+		DatabaseName:       e.databaseName,
+		FileName:           e.fileName,
+		PkCheckByTn:        int32(e.pkChkByTN),
+		AutoIncrEpoch:      e.autoIncrEpoch,
+		AutoIncrEpochKnown: e.autoIncrEpochKnown,
 	}, nil
 }
 

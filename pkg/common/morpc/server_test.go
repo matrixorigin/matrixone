@@ -831,6 +831,59 @@ func TestCannotGetClosedBackend(t *testing.T) {
 	})
 }
 
+func TestCloseStreamWithCloseConnNotifiesReceiver(t *testing.T) {
+	testRPCServer(t, func(_ *server) {
+		c := newTestClient(t)
+		defer func() {
+			assert.NoError(t, c.Close())
+		}()
+
+		st, err := c.NewStream(context.Background(), testAddr, true)
+		require.NoError(t, err)
+		recv, err := st.Receive()
+		require.NoError(t, err)
+
+		// Do not start the receiver before Close. This deterministically covers
+		// the race where the backend's first nil notification is still buffered
+		// and stream.Close used to drain it without publishing another one.
+		require.NoError(t, st.Close(true))
+		select {
+		case message := <-recv:
+			require.Nil(t, message)
+		case <-time.After(time.Second):
+			t.Fatal("stream receiver was not notified after closing the connection")
+		}
+	})
+}
+
+func TestCloseStreamUnregistersWithoutStreamLock(t *testing.T) {
+	c := make(chan Message, 1)
+	s := newStream(
+		nil,
+		c,
+		func() *Future { return newFuture(nil) },
+		func(*Future) error { return nil },
+		func(st *stream) {
+			// Backend cancellation enters stream from rb.mu. Requiring the stream
+			// lock here proves Close does not keep the inverse s.mu -> rb.mu order
+			// across unregister.
+			st.mu.RLock()
+			st.mu.RUnlock()
+		},
+		func() {},
+	)
+	s.init(1, false)
+
+	done := make(chan error, 1)
+	go func() { done <- s.Close(false) }()
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("stream close held the stream lock while unregistering")
+	}
+}
+
 func TestPingError(t *testing.T) {
 	testRPCServer(t, func(rs *server) {
 		c := newTestClient(t, WithClientMaxBackendPerHost(2))
