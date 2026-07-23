@@ -26,29 +26,59 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var (
-	STATEMENT_ACCOUNT = "account"
-)
-
 //this file is duplicate with colexec/external/external.go , to avoid import cycle
 
-func filterFileList(ctx context.Context, node *plan.Node, proc *process.Process, fileList []string, fileSize []int64) ([]string, []int64, error) {
+func filterFileList(ctx context.Context, node *plan.Node, proc *process.Process, fileList []string, fileSize []int64) ([]string, []int64, []*plan.Expr, error) {
 	return filterByAccountAndFilename(ctx, node, proc, fileList, fileSize)
 }
 
-func isFileLevelColumnName(col string) bool {
-	if dot := strings.LastIndexByte(col, '.'); dot >= 0 {
-		col = col[dot+1:]
+func isFileLevelColumn(node *plan.Node, col *plan.ColRef) bool {
+	if node == nil || node.TableDef == nil || node.ExternScan == nil || col == nil {
+		return false
 	}
-	return col == STATEMENT_ACCOUNT || col == catalog.ExternalFilePath
+
+	colPos := int(col.ColPos)
+	if colPos < 0 || colPos >= len(node.TableDef.Cols) || colPos != len(node.TableDef.Cols)-1 {
+		return false
+	}
+	if node.TableDef.Cols[colPos].Name != catalog.ExternalFilePath {
+		return false
+	}
+
+	for _, physicalColPos := range node.ExternScan.TbColToDataCol {
+		if physicalColPos == col.ColPos {
+			return false
+		}
+	}
+	return true
 }
 
-func classifyFileLevelColumns(expr *plan.Expr) (hasFileLevelColumn, hasUnsupportedColumn bool) {
+func isSafeFileLevelFunction(ref *plan.ObjectRef) bool {
+	if ref == nil {
+		return false
+	}
+	overload, exists := function.GetFunctionByIdWithoutError(ref.Obj)
+	if !exists || overload.IsRealTimeRelated() {
+		return false
+	}
+	if !overload.CannotFold() {
+		return true
+	}
+
+	// mo_log_date is marked volatile to prevent ordinary constant folding, but
+	// it is a deterministic transform of __mo_filepath and is the established
+	// file-pruning primitive. Other volatile functions must stay at row level.
+	functionID, _ := function.DecodeOverloadID(ref.Obj)
+	return functionID == function.MO_LOG_DATE
+}
+
+func classifyFileLevelColumns(node *plan.Node, expr *plan.Expr) (hasFileLevelColumn, hasUnsupportedColumn bool) {
 	if expr == nil {
 		return false, false
 	}
@@ -58,16 +88,19 @@ func classifyFileLevelColumns(expr *plan.Expr) (hasFileLevelColumn, hasUnsupport
 		if typedExpr.Col == nil {
 			return false, true
 		}
-		if isFileLevelColumnName(typedExpr.Col.Name) {
+		if isFileLevelColumn(node, typedExpr.Col) {
 			return true, false
 		}
 		return false, true
 	case *plan.Expr_F:
-		if typedExpr.F == nil {
+		if typedExpr.F == nil || typedExpr.F.Func == nil {
+			return false, true
+		}
+		if !isSafeFileLevelFunction(typedExpr.F.Func) {
 			return false, true
 		}
 		for _, arg := range typedExpr.F.Args {
-			hasFileLevel, hasUnsupported := classifyFileLevelColumns(arg)
+			hasFileLevel, hasUnsupported := classifyFileLevelColumns(node, arg)
 			hasFileLevelColumn = hasFileLevelColumn || hasFileLevel
 			hasUnsupportedColumn = hasUnsupportedColumn || hasUnsupported
 		}
@@ -77,7 +110,7 @@ func classifyFileLevelColumns(expr *plan.Expr) (hasFileLevelColumn, hasUnsupport
 			return false, false
 		}
 		for _, item := range typedExpr.List.List {
-			hasFileLevel, hasUnsupported := classifyFileLevelColumns(item)
+			hasFileLevel, hasUnsupported := classifyFileLevelColumns(node, item)
 			hasFileLevelColumn = hasFileLevelColumn || hasFileLevel
 			hasUnsupportedColumn = hasUnsupportedColumn || hasUnsupported
 		}
@@ -90,7 +123,7 @@ func classifyFileLevelColumns(expr *plan.Expr) (hasFileLevelColumn, hasUnsupport
 	}
 }
 
-func isFileLevelFilter(expr *plan.Expr) bool {
+func isFileLevelFilter(node *plan.Node, expr *plan.Expr) bool {
 	if expr == nil {
 		return false
 	}
@@ -99,60 +132,66 @@ func isFileLevelFilter(expr *plan.Expr) bool {
 	if !ok || functionExpr.F == nil || functionExpr.F.Func == nil {
 		return false
 	}
+	if !isSafeFileLevelFunction(functionExpr.F.Func) {
+		return false
+	}
 	if functionExpr.F.Func.ObjName == "or" {
 		if len(functionExpr.F.Args) == 0 {
 			return false
 		}
 		for _, arg := range functionExpr.F.Args {
-			if !isFileLevelFilter(arg) {
+			if !isFileLevelFilter(node, arg) {
 				return false
 			}
 		}
 		return true
 	}
 
-	hasFileLevelColumn, hasUnsupportedColumn := classifyFileLevelColumns(expr)
+	hasFileLevelColumn, hasUnsupportedColumn := classifyFileLevelColumns(node, expr)
 	return hasFileLevelColumn && !hasUnsupportedColumn
 }
 
-func filterByAccountAndFilename(ctx context.Context, node *plan.Node, proc *process.Process, fileList []string, fileSize []int64) ([]string, []int64, error) {
+func filterByAccountAndFilename(ctx context.Context, node *plan.Node, proc *process.Process, fileList []string, fileSize []int64) ([]string, []int64, []*plan.Expr, error) {
 	_, span := trace.Start(ctx, "filterByAccountAndFilename")
 	defer span.End()
 	filterList := make([]*plan.Expr, 0)
 	filterList2 := make([]*plan.Expr, 0)
 	for i := 0; i < len(node.FilterList); i++ {
-		if isFileLevelFilter(node.FilterList[i]) {
+		if isFileLevelFilter(node, node.FilterList[i]) {
 			filterList = append(filterList, node.FilterList[i])
 		} else {
 			filterList2 = append(filterList2, node.FilterList[i])
 		}
 	}
 	if len(filterList) == 0 {
-		return fileList, fileSize, nil
+		return fileList, fileSize, filterList2, nil
 	}
-	bat := makeFilepathBatch(node, proc, filterList, fileList)
+	bat := makeFilepathBatch(node, proc, fileList)
+	defer bat.Clean(proc.Mp())
 	filter := colexec.RewriteFilterExprList(filterList)
 
 	vec, free, err := colexec.GetReadonlyResultFromExpression(proc, filter, []*batch.Batch{bat})
 	if err != nil {
-		return nil, fileSize, err
+		return nil, nil, nil, err
 	}
+	defer free()
 
 	fileListTmp := make([]string, 0)
 	fileSizeTmp := make([]int64, 0)
-	bs := vector.MustFixedColNoTypeCheck[bool](vec)
-	for i := 0; i < len(bs); i++ {
-		if bs[i] {
+	for i := 0; i < len(fileList); i++ {
+		valuePos := i
+		if vec.IsConst() {
+			valuePos = 0
+		}
+		if !vec.GetNulls().Contains(uint64(valuePos)) && vector.GetFixedAtNoTypeCheck[bool](vec, i) {
 			fileListTmp = append(fileListTmp, fileList[i])
 			fileSizeTmp = append(fileSizeTmp, fileSize[i])
 		}
 	}
-	free()
-	node.FilterList = filterList2
-	return fileListTmp, fileSizeTmp, nil
+	return fileListTmp, fileSizeTmp, filterList2, nil
 }
 
-func makeFilepathBatch(node *plan.Node, proc *process.Process, filterList []*plan.Expr, fileList []string) *batch.Batch {
+func makeFilepathBatch(node *plan.Node, proc *process.Process, fileList []string) *batch.Batch {
 	num := len(node.TableDef.Cols)
 	bat := &batch.Batch{
 		Attrs: make([]string, num),
@@ -160,15 +199,7 @@ func makeFilepathBatch(node *plan.Node, proc *process.Process, filterList []*pla
 	}
 	for i := 0; i < num; i++ {
 		bat.Attrs[i] = node.TableDef.Cols[i].Name
-		if bat.Attrs[i] == STATEMENT_ACCOUNT {
-			typ := types.New(types.T(node.TableDef.Cols[i].Typ.Id), node.TableDef.Cols[i].Typ.Width, node.TableDef.Cols[i].Typ.Scale)
-			vec, _ := proc.AllocVectorOfRows(typ, len(fileList), nil)
-			//vec.SetOriginal(false)
-			for j := 0; j < len(fileList); j++ {
-				vector.SetStringAt(vec, j, getAccountCol(fileList[j]), proc.Mp())
-			}
-			bat.Vecs[i] = vec
-		} else if bat.Attrs[i] == catalog.ExternalFilePath {
+		if i == num-1 && bat.Attrs[i] == catalog.ExternalFilePath {
 			typ := types.T_varchar.ToType()
 			vec, _ := proc.AllocVectorOfRows(typ, len(fileList), nil)
 			//vec.SetOriginal(false)
@@ -180,14 +211,6 @@ func makeFilepathBatch(node *plan.Node, proc *process.Process, filterList []*pla
 	}
 	bat.SetRowCount(len(fileList))
 	return bat
-}
-
-func getAccountCol(filepath string) string {
-	pathDir := strings.Split(filepath, "/")
-	if len(pathDir) < 2 {
-		return ""
-	}
-	return pathDir[1]
 }
 
 func getExternalStats(node *plan.Node, builder *QueryBuilder) *Stats {
@@ -244,7 +267,7 @@ func getExternalStats(node *plan.Node, builder *QueryBuilder) *Stats {
 	if err != nil {
 		return DefaultHugeStats()
 	}
-	fileList, fileSize, err = filterFileList(param.Ctx, node, builder.compCtx.GetProcess(), fileList, fileSize)
+	fileList, fileSize, _, err = filterFileList(param.Ctx, node, builder.compCtx.GetProcess(), fileList, fileSize)
 	if err != nil {
 		return DefaultHugeStats()
 	}
