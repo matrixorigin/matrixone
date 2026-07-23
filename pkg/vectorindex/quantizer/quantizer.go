@@ -151,11 +151,16 @@ func TrainInt8[T types.RealNumbers](data [][]T) (min, max float64) {
 //
 // The multiply-add is done in FLOAT32 with float32-narrowed params, rounding after
 // the multiply AND after the add — matching the entry SQL `cast(cast(base as vecf32)
-// * mul + add as vecint8)`, which evaluates in float32 (type_check.go: VECF32 <op>
-// Scalar => VECF32) and rounds twice. Doing it in float64 (one fused multiply-add)
-// buckets a boundary component to a different code than the build, so query and entry
-// MUST both use this f32 form. The intermediate is forced to a float32 variable so the
-// compiler cannot fuse the two operations back into a single rounding. qf32 is never
+// * mul + add as vecint8)`, which evaluates as two separate float32 operations
+// (type_check.go: VECF32 <op> Scalar => VECF32) and rounds twice. A single fused
+// multiply-add rounds only once and buckets a boundary component to a different code
+// than the build, so query and entry MUST both round the product.
+//
+// The product is wrapped in an EXPLICIT float32() conversion — the Go spec's only
+// guaranteed barrier against FMA fusion (a plain `m := x*fmul` temp does NOT prevent
+// it; the compiler may fuse `t=x*y; r=t+z` across statements). This matters on the
+// build defaults: GOAMD64=v3 (VFMADD231SS) and arm64 both have hardware FMA, so
+// without the conversion x*fmul+fadd fuses and diverges from the SQL. qf32 is never
 // mutated.
 func ApplyInt8(qf32 []float32, mul, add float64) []int8 {
 	if mul == 1.0 && add == 0.0 {
@@ -164,7 +169,7 @@ func ApplyInt8(qf32 []float32, mul, add float64) []int8 {
 	fmul, fadd := float32(mul), float32(add)
 	sq := make([]float32, len(qf32))
 	for i, x := range qf32 {
-		m := x * fmul
+		m := float32(x * fmul) // explicit conversion rounds the product; blocks FMA fusion
 		sq[i] = m + fadd
 	}
 	return types.Float32ToInt8Slice(sq)
@@ -188,10 +193,15 @@ func CastSQL(colExpr string, t types.T, dim int32) string {
 // the same f32 value, with the same two f32 roundings, as ApplyInt8 on the query
 // (which is always narrowed to f32). Without it a vecf64 base would compute q(x) in
 // f64 while the query encodes in f32, giving different codes at bucket boundaries.
-// %.9g is the exact float32 round-trip width, so float32(literal) == float32(mul).
+//
+// The params are formatted from the FLOAT32-NARROWED mul/add (float32(mul), not mul):
+// %.9g round-trips a float32 exactly, but formatting the float64 can emit a decimal
+// that parses to an ADJACENT float32 from float32(mul) — which ApplyInt8 and the CDC
+// SQL narrowing use — a one-bucket divergence at boundaries. Narrowing first makes the
+// literal round-trip to exactly the float32 all other paths use.
 func Int8EntrySQL(colExpr string, mul, add float64, dim int32) string {
 	f32col := CastSQL(colExpr, types.T_array_float32, dim)
-	return fmt.Sprintf("cast(%s * %.9g + (%.9g) as vecint8(%d))", f32col, mul, add, dim)
+	return fmt.Sprintf("cast(%s * %.9g + (%.9g) as vecint8(%d))", f32col, float32(mul), float32(add), dim)
 }
 
 // Int8EntrySQLFromBounds builds the int8 entry projection where the bounds are SQL
@@ -234,8 +244,10 @@ func Uint8Params(min, max float64) (mul, add float64) {
 
 // ApplyUint8 is the uint8 analog of ApplyInt8: applies q(x)=x*mul+add to a float32
 // query vector and narrows to uint8 (round+clamp to [0,255]). (mul,add)=(1,0) is
-// identity. The multiply-add is done in FLOAT32 with float32-narrowed params (see
-// ApplyInt8) so it is bit-identical to the entry SQL. qf32 is never mutated.
+// identity. The multiply-add is done in FLOAT32 with the product wrapped in an
+// explicit float32() conversion to block FMA fusion (see ApplyInt8) so it is
+// bit-identical to the entry SQL's two separate float32 operations. qf32 is never
+// mutated.
 func ApplyUint8(qf32 []float32, mul, add float64) []uint8 {
 	if mul == 1.0 && add == 0.0 {
 		return types.Float32ToUint8Slice(qf32)
@@ -243,7 +255,7 @@ func ApplyUint8(qf32 []float32, mul, add float64) []uint8 {
 	fmul, fadd := float32(mul), float32(add)
 	sq := make([]float32, len(qf32))
 	for i, x := range qf32 {
-		m := x * fmul
+		m := float32(x * fmul) // explicit conversion rounds the product; blocks FMA fusion
 		sq[i] = m + fadd
 	}
 	return types.Float32ToUint8Slice(sq)
@@ -251,11 +263,12 @@ func ApplyUint8(qf32 []float32, mul, add float64) []uint8 {
 
 // Uint8EntrySQL is the uint8 analog of Int8EntrySQL: the build-side entry
 // projection `cast(cast(<colExpr> as vecf32) * mul + add as vecuint8(dim))` from
-// literal bounds. The inner cast-to-vecf32 pins the affine map to f32 arithmetic for
-// both f32 and f64 bases, matching ApplyUint8 on the query (see Int8EntrySQL).
+// literal bounds. The inner cast-to-vecf32 pins the affine map to f32 arithmetic, and
+// the params are formatted from float32(mul)/float32(add) so the literal round-trips
+// to the exact float32 the query/CDC use (see Int8EntrySQL).
 func Uint8EntrySQL(colExpr string, mul, add float64, dim int32) string {
 	f32col := CastSQL(colExpr, types.T_array_float32, dim)
-	return fmt.Sprintf("cast(%s * %.9g + (%.9g) as vecuint8(%d))", f32col, mul, add, dim)
+	return fmt.Sprintf("cast(%s * %.9g + (%.9g) as vecuint8(%d))", f32col, float32(mul), float32(add), dim)
 }
 
 // Uint8EntrySQLFromBounds is the uint8 analog of Int8EntrySQLFromBounds (CDC delta

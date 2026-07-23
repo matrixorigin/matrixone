@@ -42,6 +42,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
@@ -66,6 +67,12 @@ func ensureExecutorContext(ctx context.Context) context.Context {
 		return context.Background()
 	}
 	return ctx
+}
+
+func newInternalStatementContext(parent context.Context) context.Context {
+	return statistic.ContextWithStatsInfo(
+		ensureExecutorContext(parent),
+		statistic.NewStatsInfo())
 }
 
 // NewSQLExecutor returns a internal used sql service. It can execute sql in current CN.
@@ -284,6 +291,14 @@ func (exec *txnExecutor) Exec(
 	sql string,
 	statementOption executor.StatementOption,
 ) (executor.Result, error) {
+	parentCtx := exec.ctx
+	exec.ctx = newInternalStatementContext(parentCtx)
+	defer func() {
+		// The fresh StatsInfo is statement-owned. Do not retain it in a
+		// long-lived transaction executor or build an unbounded context chain.
+		exec.ctx = parentCtx
+	}()
+
 	// NOTE: This code is to restore tenantID information in the Context when temporarily switching tenants
 	// so that it can be restored to its original state after completing the task.
 	var originCtx context.Context

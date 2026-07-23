@@ -19,13 +19,13 @@ import (
 	"runtime"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/util/gpumode"
+	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/brute_force"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
@@ -176,9 +176,9 @@ func getIndex[T types.RealNumbers](ap *Productl2, proc *process.Process, analyze
 
 func (productl2 *Productl2) build(proc *process.Process, analyzer process.Analyzer) error {
 	ctr := &productl2.ctr
-	start := time.Now()
-	defer analyzer.WaitStop(start)
-	mp, err := message.ReceiveJoinMap(productl2.JoinMapTag, false, 0, proc.GetMessageBoard(), proc.Ctx)
+	mp, err := process.MeasureWait(analyzer, resource.WaitOther, func() (*message.JoinMap, error) {
+		return message.ReceiveJoinMap(productl2.JoinMapTag, false, 0, proc.GetMessageBoard(), proc.Ctx)
+	})
 	if err != nil {
 		return err
 	}

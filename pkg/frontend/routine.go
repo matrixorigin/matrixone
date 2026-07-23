@@ -312,6 +312,21 @@ func (rt *Routine) handleRequest(req *Request) error {
 	})
 
 	execCtx.reqCtx = tenantCtx
+	ses.beginResponseAccounting()
+	responseAccountingOpen := true
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			if responseAccountingOpen {
+				accountingCtx := requestFinalizationContext(&execCtx, tenantCtx)
+				ses.finishResponseAccounting(
+					accountingCtx,
+					moerr.ConvertPanicError(accountingCtx, recovered),
+					true,
+				)
+			}
+			panic(recovered)
+		}
+	}()
 	if resp, err = ExecRequest(ses, &execCtx, req); err != nil {
 		err = moerr.AttachCause(tenantCtx, err)
 		if !skipClientQuit(err.Error()) {
@@ -341,6 +356,20 @@ func (rt *Routine) handleRequest(req *Request) error {
 			ses.Infof(tenantCtx, "load local '%s' exec failed. response error success", resp.loadLocalFile)
 		}
 	}
+	responseFailed := err != nil
+	responseErr := err
+	if resp != nil && resp.category == ErrorResponse {
+		responseFailed = true
+		if execErr, ok := resp.data.(error); ok && execErr != nil {
+			responseErr = execErr
+		}
+	}
+	ses.finishResponseAccounting(
+		requestFinalizationContext(&execCtx, tenantCtx),
+		responseErr,
+		responseFailed,
+	)
+	responseAccountingOpen = false
 
 	ses.Debugf(tenantCtx, "the time of handling the request %s", time.Since(reqBegin).String())
 
@@ -383,6 +412,13 @@ func (rt *Routine) handleRequest(req *Request) error {
 	}
 
 	return err
+}
+
+func requestFinalizationContext(execCtx *ExecCtx, fallback context.Context) context.Context {
+	if execCtx != nil && execCtx.reqCtx != nil {
+		return execCtx.reqCtx
+	}
+	return fallback
 }
 
 // killQuery if there is a running query, just cancel it.

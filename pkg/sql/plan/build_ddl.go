@@ -196,7 +196,8 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef, er
 	tableDef.Cols = cols
 
 	// Check alter and change the viewsql.
-	viewSql := ctx.GetRootSql()
+	rootSQL := ctx.GetRootSql()
+	viewSql := rootSQL
 	// remove sql hint
 	viewSql = cleanHint(viewSql)
 	if len(viewSql) != 0 {
@@ -227,7 +228,7 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef, er
 		},
 		{
 			Key:   catalog.SystemRelAttr_CreateSQL,
-			Value: ctx.GetRootSql(),
+			Value: rootSQL,
 		},
 	}
 	tableDef.Defs = append(tableDef.Defs, &plan.TableDef_DefType{
