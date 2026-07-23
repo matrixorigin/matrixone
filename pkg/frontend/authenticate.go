@@ -6579,6 +6579,24 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		if st.Table != nil {
 			dbName = string(st.Table.SchemaName)
 		}
+	case *tree.DumpTable:
+		objType = objectTypeNone
+		kind = privilegeKindSpecial
+		special = specialTagAdmin
+		writeDatabaseAndTableDirectly = true
+		appendWriteTableNameDatabaseName(st.Table)
+		if st.Table != nil {
+			dbName = string(st.Table.Schema())
+		}
+	case *tree.LoadTable:
+		objType = objectTypeNone
+		kind = privilegeKindSpecial
+		special = specialTagAdmin
+		writeDatabaseAndTableDirectly = true
+		appendWriteTableNameDatabaseName(st.Table)
+		if st.Table != nil {
+			dbName = string(st.Table.Schema())
+		}
 	case *tree.Update:
 		objType = objectTypeTable
 		typs = append(typs, PrivilegeTypeUpdate, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
@@ -9915,6 +9933,8 @@ func authenticateUserCanExecuteStatementWithObjectTypeNone(ctx context.Context, 
 		case *tree.BackupStart:
 			yes, err := checkBackUpStartPrivilege()
 			return yes, stats, err
+		case *tree.DumpTable, *tree.LoadTable:
+			return tenant.IsAdminRole(), stats, nil
 		case *tree.CreateCDC, *tree.ShowCDC, *tree.PauseCDC, *tree.DropCDC, *tree.ResumeCDC, *tree.RestartCDC:
 			yes, err := checkCdcTaskPrivilege()
 			return yes, stats, err
