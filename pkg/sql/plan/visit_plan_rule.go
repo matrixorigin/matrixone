@@ -44,6 +44,49 @@ type prepareIndexDependency struct {
 	tableName string
 }
 
+func applyRuleToWindowSpec(rule VisitPlanRule, window *plan.WindowSpec) error {
+	if window == nil {
+		return nil
+	}
+	apply := func(expr **plan.Expr) error {
+		if *expr == nil {
+			return nil
+		}
+		var err error
+		*expr, err = rule.ApplyExpr(*expr)
+		return err
+	}
+	var err error
+	if err = apply(&window.WindowFunc); err != nil {
+		return err
+	}
+	for i := range window.PartitionBy {
+		if err = apply(&window.PartitionBy[i]); err != nil {
+			return err
+		}
+	}
+	for i := range window.OrderBy {
+		if window.OrderBy[i] != nil {
+			if err = apply(&window.OrderBy[i].Expr); err != nil {
+				return err
+			}
+		}
+	}
+	if window.Frame != nil {
+		if window.Frame.Start != nil {
+			if err = apply(&window.Frame.Start.Val); err != nil {
+				return err
+			}
+		}
+		if window.Frame.End != nil {
+			if err = apply(&window.Frame.End.Val); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 func NewGetParamRule() *GetParamRule {
 	return &GetParamRule{
 		params:   make(map[int]int),
@@ -126,6 +169,8 @@ func (rule *GetParamRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			}
 		*/
 		return e, nil
+	case *plan.Expr_W:
+		return e, applyRuleToWindowSpec(rule, exprImpl.W)
 	case *plan.Expr_List:
 		for i := range exprImpl.List.List {
 			exprImpl.List.List[i], _ = rule.ApplyExpr(exprImpl.List.List[i])
@@ -205,6 +250,8 @@ func (rule *ResetParamOrderRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 	case *plan.Expr_P:
 		exprImpl.P.Pos = int32(rule.params[int(exprImpl.P.Pos)])
 		return e, nil
+	case *plan.Expr_W:
+		return e, applyRuleToWindowSpec(rule, exprImpl.W)
 	case *plan.Expr_List:
 		for i := range exprImpl.List.List {
 			exprImpl.List.List[i], _ = rule.ApplyExpr(exprImpl.List.List[i])
@@ -247,6 +294,10 @@ func (rule *subqueryRootRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
 		for i := range exprImpl.List.List {
 			exprImpl.List.List[i], _ = rule.ApplyExpr(exprImpl.List.List[i])
 		}
+	case *plan.Expr_W:
+		if err := applyRuleToWindowSpec(rule, exprImpl.W); err != nil {
+			return nil, err
+		}
 	case *plan.Expr_Sub:
 		rule.pending = append(rule.pending, exprImpl.Sub.NodeId)
 	}
@@ -288,6 +339,10 @@ func (rule *decrementParamOrdinalRule) ApplyExpr(e *plan.Expr) (*plan.Expr, erro
 			if err != nil {
 				return nil, err
 			}
+		}
+	case *plan.Expr_W:
+		if err := applyRuleToWindowSpec(rule, exprImpl.W); err != nil {
+			return nil, err
 		}
 	case *plan.Expr_P:
 		if _, ok := rule.seen[exprImpl.P]; ok {

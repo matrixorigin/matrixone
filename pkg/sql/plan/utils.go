@@ -2733,7 +2733,11 @@ func NormalizePrepareParamRefs(ctx context.Context, preparePlan *Plan) error {
 	}
 	rule := &decrementParamOrdinalRule{seen: make(map[*plan.ParamRef]struct{})}
 	visit := NewVisitPlan(preparePlan, []VisitPlanRule{rule})
-	return visit.Visit(ctx)
+	if err := visit.Visit(ctx); err != nil {
+		return err
+	}
+	return visitMissingNodeExprs(
+		preparePlan.GetQuery(), preparePlan.GetQuery().Steps, []VisitPlanRule{rule})
 }
 
 func resetPreparePlan(
@@ -2826,6 +2830,11 @@ func resetPreparePlan(
 			queryPlan := &Plan{Plan: &plan.Plan_Query{Query: &query}}
 			visitQuery := NewVisitPlan(queryPlan, []VisitPlanRule{getParamRule, subqueryRoots})
 			if err := visitQuery.Visit(ctx.GetContext()); err != nil {
+				return nil, nil, err
+			}
+			if err := visitMissingNodeExprs(
+				&query, query.Steps, []VisitPlanRule{getParamRule, subqueryRoots},
+			); err != nil {
 				return nil, nil, err
 			}
 		}
