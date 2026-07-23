@@ -104,6 +104,7 @@ const (
 	Mock
 	Apply
 	PostDml
+	IcebergWrite
 )
 
 var OperatorToStrMap map[OpType]string
@@ -167,6 +168,7 @@ func init() {
 		Mock:                    "Mock",
 		Apply:                   "Apply",
 		PostDml:                 "PostDml",
+		IcebergWrite:            "IcebergWrite",
 	}
 
 	// Initialize StrToOperatorMap
