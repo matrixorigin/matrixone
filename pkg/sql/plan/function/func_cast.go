@@ -584,7 +584,7 @@ func newCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 		err = blockidToOthers(proc.Ctx, s, *toType, result, length, selectList)
 	case types.T_json:
 		s := vector.GenerateFunctionStrParameter(from)
-		err = jsonToOthers(proc.Ctx, s, *toType, result, length, selectList, strictStringWidth)
+		err = jsonToOthers(proc.Ctx, s, *toType, result, length, selectList, strictStringWidth, allowTrailingSpaceTrim)
 	case types.T_enum:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Enum](from)
 		err = enumToOthers(proc.Ctx, s, *toType, result, length, selectList, strictStringWidth)
@@ -2094,7 +2094,7 @@ func blockidToOthers(ctx context.Context,
 
 func jsonToOthers(ctx context.Context,
 	source vector.FunctionParameterWrapper[types.Varlena],
-	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList, strictStringWidth ...bool) error {
+	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList, strictStringWidth bool, allowTrailingSpaceTrim bool) error {
 	switch toType.Oid {
 	case types.T_json:
 		rs := vector.MustFunctionResult[types.Varlena](result)
@@ -2107,7 +2107,7 @@ func jsonToOthers(ctx context.Context,
 		return nil
 	case types.T_char, types.T_varchar, types.T_text, types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
-		return jsonToStr(ctx, source, rs, length, selectList, strictStringWidth...)
+		return jsonToStr(ctx, source, rs, length, selectList, strictStringWidth, allowTrailingSpaceTrim)
 	case types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64, types.T_decimal64, types.T_decimal128:
@@ -6104,7 +6104,7 @@ func tsToInt64(
 func jsonToStr(
 	ctx context.Context,
 	from vector.FunctionParameterWrapper[types.Varlena],
-	to *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList, strictStringWidth ...bool) error {
+	to *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList, strictStringWidth bool, allowTrailingSpaceTrim bool) error {
 	var i uint64
 	toType := to.GetType()
 	for i = 0; i < uint64(length); i++ {
@@ -6132,18 +6132,26 @@ func jsonToStr(
 			val := []byte(str)
 			// CHAR/VARCHAR width enforcement: use rune count (not byte
 			// count) for multi-byte-safe truncation. JSON output may
-			// contain Unicode characters.
-			if (toType.Oid == types.T_char || toType.Oid == types.T_varchar) && utf8.RuneCountInString(str) > int(toType.Width) {
-				if len(strictStringWidth) > 0 && strictStringWidth[0] {
+			// contain Unicode characters. Mirror strToStr's semantics so the
+			// trailing-space exemption and sql_mode gating apply to JSON too.
+			destLen := int(toType.Width)
+			if (toType.Oid == types.T_char || toType.Oid == types.T_varchar) && utf8.RuneCountInString(str) > destLen {
+				if (allowTrailingSpaceTrim && overLenIsAllTrailingSpaces(str, destLen)) || !strictStringWidth {
+					val = []byte(truncateStringByRunes(str, destLen))
+				} else if allowTrailingSpaceTrim {
+					// DML assignment cast — reject with 1406 ER_DATA_TOO_LONG.
 					return formatDataTruncationError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
-						"%v is larger than Dest length %v", val, toType.Width))
+						"Src length %v is larger than Dest length %v", utf8.RuneCountInString(str), destLen))
+				} else {
+					// DDL (cast_strict) default/on-update value — reject with
+					// 1067 ER_INVALID_DEFAULT, matching MySQL semantics.
+					return moerr.NewErrInvalidDefault(ctx, str)
 				}
-				val = []byte(truncateStringByRunes(str, int(toType.Width)))
 			} else {
-				val = truncateCastBytesResult(val, toType, strictStringWidth...)
+				val = truncateCastBytesResult(val, toType, strictStringWidth)
 				if len(val) > int(toType.Width) && toType.Oid != types.T_text && toType.Oid != types.T_blob && toType.Oid != types.T_datalink {
 					return formatDataTruncationError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
-						"%v is larger than Dest length %v", val, toType.Width))
+						"Src length %v is larger than Dest length %v", len(val), toType.Width))
 				}
 			}
 			if err := to.AppendBytes(val, false); err != nil {

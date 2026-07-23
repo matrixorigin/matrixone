@@ -497,11 +497,18 @@ func buildGeneratedExpr(col *tree.ColumnTableDef, typ plan.Type, existingCols []
 		return nil, err
 	}
 
-	// A generated CHAR/VARCHAR column is materialized as a real column write, so
-	// use the strict assignment cast: an over-length value is rejected instead of
-	// being silently truncated, matching column DEFAULT / ON UPDATE and the DML
-	// assignment paths.
-	genExpr, err := makePlan2AssignmentCastExpr(proc.Ctx, planExpr, typ)
+	// A stored generated CHAR/VARCHAR value is a real column write that is
+	// evaluated at DML time, so it follows DML assignment semantics: use the
+	// sql_mode-gated cast_assign instead of cast_strict. Non-strict mode
+	// truncates, strict mode rejects with 1406, matching how ordinary columns
+	// are written (forceAssignmentCastExpr). INSERT IGNORE truncation is applied
+	// where the generated expression is reused (see bind_insert). Non-CHAR/VARCHAR
+	// targets keep the generic cast, unchanged.
+	funcName := "cast"
+	if typ.Id == int32(types.T_char) || typ.Id == int32(types.T_varchar) {
+		funcName = "cast_assign"
+	}
+	genExpr, err := makePlan2CastExprWithName(proc.Ctx, planExpr, typ, funcName)
 	if err != nil {
 		return nil, err
 	}
@@ -649,6 +656,28 @@ func inlineGeneratedColExpr(expr *plan.Expr, colIdxToProjPos map[int32]int32, pr
 			inlineGeneratedColExpr(item, colIdxToProjPos, projList1)
 		}
 	}
+}
+
+// applyGenColInsertIgnoreCast downgrades a generated CHAR/VARCHAR column's
+// cast_assign wrapper to a lenient truncating cast when the statement is
+// INSERT IGNORE, so an over-length stored generated value is truncated (with a
+// warning) instead of raising ER_DATA_TOO_LONG (1406) — matching how ordinary
+// columns behave under INSERT IGNORE (forceAssignmentCastExprWithIgnore). For
+// non-IGNORE inserts, or expressions not wrapped in cast_assign, the expression
+// is returned unchanged.
+func (builder *QueryBuilder) applyGenColInsertIgnoreCast(expr *plan.Expr) *plan.Expr {
+	if !builder.isInsertIgnore || expr == nil {
+		return expr
+	}
+	f := expr.GetF()
+	if f == nil || f.Func == nil || f.Func.ObjName != "cast_assign" || len(f.Args) == 0 {
+		return expr
+	}
+	lenient, err := forceCastExprWithName(builder.GetContext(), f.Args[0], expr.Typ, "cast")
+	if err != nil {
+		return expr
+	}
+	return lenient
 }
 
 // substituteColRefsInExpr replaces ColRef(0, colIdx) in a generated column expression

@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	rt "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -166,6 +167,40 @@ func TestProcessCodecHelpers(t *testing.T) {
 			return int64(0), nil
 		})
 		require.Equal(t, int64(7), resolveLockWaitTimeoutSeconds(proc))
+	})
+
+	t.Run("sql mode resolution", func(t *testing.T) {
+		require.Equal(t, "", resolveSqlMode(nil))
+
+		// Resolver present: its value wins.
+		proc := &Process{Base: &BaseProcess{SessionInfo: SessionInfo{SqlMode: "STRICT_ALL_TABLES"}}}
+		proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+			return "STRICT_TRANS_TABLES", nil
+		})
+		require.Equal(t, "STRICT_TRANS_TABLES", resolveSqlMode(proc))
+
+		// Resolver returns explicit empty string -> sentinel (explicitly non-strict).
+		proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+			return "", nil
+		})
+		require.Equal(t, EmptySqlModeSentinel, resolveSqlMode(proc))
+
+		// Resolver error / non-string -> fall back to captured SessionInfo.SqlMode.
+		proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+			return nil, moerr.NewInternalErrorNoCtx("boom")
+		})
+		require.Equal(t, "STRICT_ALL_TABLES", resolveSqlMode(proc))
+
+		// Resolver is nil (remote CN): fall back to SessionInfo.SqlMode so a second
+		// forward preserves the upstream mode instead of defaulting to strict.
+		strictProc := &Process{Base: &BaseProcess{SessionInfo: SessionInfo{SqlMode: "STRICT_TRANS_TABLES"}}}
+		require.Equal(t, "STRICT_TRANS_TABLES", resolveSqlMode(strictProc))
+
+		sentinelProc := &Process{Base: &BaseProcess{SessionInfo: SessionInfo{SqlMode: EmptySqlModeSentinel}}}
+		require.Equal(t, EmptySqlModeSentinel, resolveSqlMode(sentinelProc))
+
+		emptyProc := &Process{Base: &BaseProcess{SessionInfo: SessionInfo{}}}
+		require.Equal(t, "", resolveSqlMode(emptyProc))
 	})
 }
 

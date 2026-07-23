@@ -252,3 +252,21 @@ func Test_ForCoverage(t *testing.T) {
 	err = NewTxnStaleNoCtxf("test")
 	require.True(t, IsMoErrCode(err, ErrTxnStale))
 }
+
+// TestNewErrCastWidthExceeded verifies the cast width-violation error carries the
+// ErrCastWidthExceeded code and maps to MySQL ER_DATA_TOO_LONG (1406) — the
+// correct protocol code for an over-length write. The message template is bare
+// "%s" (no "internal error:" prefix); the JDBC driver then wraps it as
+// java.sql.DataTruncation, which the BVT result files reflect.
+func TestNewErrCastWidthExceeded(t *testing.T) {
+	ctx := context.Background()
+	err := NewErrCastWidthExceeded(ctx, "Can't cast 'abcd' to VARCHAR type. Src length 4 is larger than Dest length 3")
+
+	require.Equal(t, ErrCastWidthExceeded, err.ErrorCode())
+	require.Equal(t, uint16(ER_DATA_TOO_LONG), err.MySQLCode())
+	require.True(t, IsMoErrCode(err, ErrCastWidthExceeded))
+	// Bare "%s" template: the diagnostic message is carried verbatim.
+	require.Equal(t,
+		"Can't cast 'abcd' to VARCHAR type. Src length 4 is larger than Dest length 3",
+		err.Error())
+}

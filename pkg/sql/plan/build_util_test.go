@@ -539,10 +539,11 @@ func TestMakePlan2AssignmentCastExprUsesStrictForCharVarchar(t *testing.T) {
 	require.Equal(t, "cast", intExpr.GetF().GetFunc().GetObjName())
 }
 
-// A generated CHAR/VARCHAR column is materialized as a real column write, so
-// buildGeneratedExpr must wrap its expression with the strict assignment cast
-// (cast_strict): an over-length value is rejected, not silently truncated.
-func TestBuildGeneratedExprUsesStrictForCharVarchar(t *testing.T) {
+// A stored generated CHAR/VARCHAR value is a real column write evaluated at DML
+// time, so buildGeneratedExpr wraps it with the sql_mode-gated cast_assign
+// (non-strict truncates, strict rejects with 1406) — the same as ordinary
+// column writes, not the DDL-fixed cast_strict.
+func TestBuildGeneratedExprUsesAssignForCharVarchar(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	stmt, err := mysql.ParseOne(context.Background(),
 		"create table t (t text, g varchar(1) generated always as (coalesce(t, '')) stored)", 1)
@@ -562,5 +563,11 @@ func TestBuildGeneratedExprUsesStrictForCharVarchar(t *testing.T) {
 	gen, err := buildGeneratedExpr(genCol, plan.Type{Id: int32(types.T_varchar), Width: 1}, existingCols, proc)
 	require.NoError(t, err)
 	require.NotNil(t, gen)
-	require.Equal(t, "cast_strict", gen.Expr.GetF().GetFunc().GetObjName())
+	require.Equal(t, "cast_assign", gen.Expr.GetF().GetFunc().GetObjName())
+	require.Equal(t, int32(types.T_varchar), gen.Expr.Typ.Id) // type still resolves to the column type
+
+	// A non-CHAR/VARCHAR generated target keeps the generic cast.
+	genInt, err := buildGeneratedExpr(genCol, plan.Type{Id: int32(types.T_int64)}, existingCols, proc)
+	require.NoError(t, err)
+	require.Equal(t, "cast", genInt.Expr.GetF().GetFunc().GetObjName())
 }

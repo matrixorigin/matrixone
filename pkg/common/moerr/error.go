@@ -318,12 +318,12 @@ const (
 	ErrUnsupportedDataType uint16 = 20905
 	ErrTaskNotFound        uint16 = 20906
 
-	// ErrCastWidthExceeded is used by cast width-violation paths to return
-	// an error compatible with the JDBC driver used by mo-tester (the message
-	// format is "internal error: %s" so BVT result files don't need updating).
-	// We use ER_UNKNOWN_ERROR instead of ER_DATA_TOO_LONG because the latter
-	// triggers JDBC's java.sql.DataTruncation wrapper which prepends
-	// "Data truncation: " to the message, breaking BVT result matching.
+	// ErrCastWidthExceeded is returned by cast width-violation paths (DML
+	// assignment / generated columns) when strict sql_mode rejects an
+	// over-length CHAR/VARCHAR value. It maps to MySQL ER_DATA_TOO_LONG (1406),
+	// the correct protocol code for this condition; the JDBC driver used by
+	// mo-tester wraps it as java.sql.DataTruncation (prepending "Data
+	// truncation: " to the message), which the BVT result files reflect.
 	ErrCastWidthExceeded uint16 = 20907
 
 	// Group 10: skip list
@@ -384,7 +384,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrDivByZero:                   {ER_DIVISION_BY_ZERO, []string{MySQLDefaultSqlState}, "division by zero"},
 	ErrOutOfRange:                  {ER_DATA_OUT_OF_RANGE, []string{MySQLDefaultSqlState}, "data out of range: data type %s, %s"},
 	ErrDataTruncated:               {ER_DATA_TOO_LONG, []string{MySQLDefaultSqlState}, "data truncated: data type %s, %s"},
-	ErrCastWidthExceeded:           {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "internal error: %s"},
+	ErrCastWidthExceeded:           {ER_DATA_TOO_LONG, []string{MySQLDefaultSqlState}, "%s"},
 	ErrInvalidArg:                  {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid argument %s, bad value %s"},
 	ErrTruncatedWrongValueForField: {ER_TRUNCATED_WRONG_VALUE_FOR_FIELD, []string{MySQLDefaultSqlState}, "truncated type %s value %s for column %s, %d"},
 	ErrTooBigPrecision:             {ER_TOO_BIG_PRECISION, []string{"42000", "S1009"}, "Too-big precision %d specified for '%-.192s'. Maximum is %d."},

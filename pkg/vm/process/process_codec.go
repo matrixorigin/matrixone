@@ -318,18 +318,23 @@ func ConvertToProcessSessionInfo(
 }
 
 func resolveSqlMode(proc *Process) string {
-	if proc == nil || proc.GetResolveVariableFunc() == nil {
+	if proc == nil {
 		return ""
 	}
-	if v, err := proc.GetResolveVariableFunc()("sql_mode", true, false); err == nil {
-		if s, ok := v.(string); ok {
-			if s == "" {
-				return EmptySqlModeSentinel // explicitly non-strict
+	if f := proc.GetResolveVariableFunc(); f != nil {
+		if v, err := f("sql_mode", true, false); err == nil {
+			if s, ok := v.(string); ok {
+				if s == "" {
+					return EmptySqlModeSentinel // explicitly non-strict
+				}
+				return s
 			}
-			return s
 		}
 	}
-	return ""
+	// Resolver is nil on a remote CN (no session). Fall back to the sql_mode
+	// captured from the upstream CN so it survives a second forward
+	// (encode -> decode -> encode); otherwise the next hop defaults to strict.
+	return proc.Base.SessionInfo.SqlMode
 }
 
 func resolveLockWaitTimeoutSeconds(proc *Process) int64 {

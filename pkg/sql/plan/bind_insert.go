@@ -2898,6 +2898,7 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 	for _, i := range generatedColIdxs {
 		col := tableDef.Cols[i]
 		genExpr := DeepCopyExpr(col.GeneratedCol.Expr)
+		genExpr = builder.applyGenColInsertIgnoreCast(genExpr)
 		inlineGeneratedColExpr(genExpr, colIdxToProjPos, projList1)
 		proj1Pos := genColIdxToProj1Pos[i]
 		projList1[proj1Pos] = genExpr

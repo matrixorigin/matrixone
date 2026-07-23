@@ -177,3 +177,63 @@ func TestNewAssignCastHonorsSqlMode(t *testing.T) {
 	require.NoError(t, rs.PreExtendAndReset(1))
 	require.Error(t, NewStrictCast([]*vector.Vector{src, dst}, rs, proc, 1, nil))
 }
+
+func runJSONToStrWidth(t *testing.T, mp *mpool.MPool, jsonText string, toType types.Type, strict, allowTrim bool) (string, error) {
+	t.Helper()
+	encoded := makeJSONEncodedFromText(t, []string{jsonText}, nil)[0]
+	src := vector.NewVec(types.T_json.ToType())
+	require.NoError(t, vector.AppendBytes(src, []byte(encoded), false, mp))
+	defer src.Free(mp)
+
+	from := vector.GenerateFunctionStrParameter(src)
+	rsw := vector.NewFunctionResultWrapper(toType, mp)
+	to := rsw.(*vector.FunctionResult[types.Varlena])
+	defer to.Free()
+	require.NoError(t, to.PreExtendAndReset(1))
+
+	if err := jsonToStr(context.Background(), from, to, 1, nil, strict, allowTrim); err != nil {
+		return "", err
+	}
+	got, _ := vector.GenerateFunctionStrParameter(to.GetResultVector()).GetStrValue(0)
+	return string(got), nil
+}
+
+// TestJSONToStrWidthEnforcement mirrors TestStrToStrWidthEnforcement for the
+// JSON->CHAR/VARCHAR path: the trailing-space exemption, sql_mode gating, and
+// the DML(1406)/DDL(1067) split must apply to JSON sources too.
+func TestJSONToStrWidthEnforcement(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vc3 := types.New(types.T_varchar, 3, 0)
+
+	cases := []struct {
+		name      string
+		jsonText  string
+		strict    bool
+		allowTrim bool
+		want      string
+		wantErr   bool
+		errCode   uint16 // 0 = not asserted
+	}{
+		{"fits", `"abc"`, true, true, "abc", false, 0},
+		{"trailing_space_exempt_strict_dml", `"abc   "`, true, true, "abc", false, 0},
+		{"real_overlen_dml_reject", `"abcd"`, true, true, "", true, moerr.ErrCastWidthExceeded},
+		{"real_overlen_ddl_reject", `"abcd"`, true, false, "", true, moerr.ErrInvalidDefault},
+		{"nonstrict_truncate", `"abcd"`, false, true, "abc", false, 0},
+		{"trailing_space_not_exempt_ddl", `"abc   "`, true, false, "", true, moerr.ErrInvalidDefault},
+		{"multibyte_trailing_space_exempt", `"你好世   "`, true, true, "你好世", false, 0},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := runJSONToStrWidth(t, mp, c.jsonText, vc3, c.strict, c.allowTrim)
+			if c.wantErr {
+				require.Error(t, err)
+				if c.errCode != 0 {
+					require.Equal(t, c.errCode, err.(*moerr.Error).ErrorCode())
+				}
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, c.want, got)
+		})
+	}
+}
