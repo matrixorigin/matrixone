@@ -79,3 +79,25 @@
 - ROLLUP 与 CUBE 均覆盖派生排序表达式。
 - UUID、普通标量、NULL、GROUPING 输出的 typed NULL 规范化均可建计划。
 - 真实 BVT 验证可见去重、隐藏排序和最终输出列数。
+
+## PR #25335 第五轮 review 修复
+
+### 有效问题
+
+`remapGroupingSetDistinctOrderExpr` 未递归处理 `plan.Expr_List`，导致合法的
+`GROUPING(a) + (b IN (...))` 被 DISTINCT projection 规则错误拒绝。若仅复制整个列表，
+列表中的未选择列又可能绕过可见 projection 限制。
+
+### 修复方案
+
+1. 对 `Expr_List.List` 的每个元素递归调用同一重映射函数，保留完整的可见列约束；允许绑定阶段
+   将纯常量列表折叠成的 `Expr_Vec`。
+2. 对 nil list 保持保守拒绝，避免构造无效 plan。
+3. 增加 ROLLUP `IN`、ROLLUP `NOT IN`、CUBE 和显式 `GROUPING SETS` 的合法矩阵。
+4. 增加列表内引用未选择源列的拒绝用例，证明列表没有直接复制逃逸。
+
+### 验证
+
+- 运行新增定向 UT 和完整 `pkg/sql/plan` CGo 测试。
+- 运行 build、vet、覆盖率、静态检查和 `git diff --check`。
+- 完成全差异 self-review 后提交并正常推送，不 force push，不修改 GitHub thread。

@@ -4724,6 +4724,100 @@ func TestGroupingSetDistinctDerivedGroupingOrder(t *testing.T) {
 	require.Contains(t, err.Error(), "for SELECT DISTINCT, ORDER BY expressions must appear in select list")
 }
 
+func TestGroupingSetDistinctListGroupingOrder(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	for _, testCase := range []struct {
+		name    string
+		groupBy string
+		orderBy string
+	}{
+		{
+			name:    "rollup in",
+			groupBy: "a, b with rollup",
+			orderBy: "grouping(a) + (b in (1, 2))",
+		},
+		{
+			name:    "rollup not in",
+			groupBy: "a, b with rollup",
+			orderBy: "grouping(a) + (b not in (1, 2))",
+		},
+		{
+			name:    "cube",
+			groupBy: "cube(a, b)",
+			orderBy: "grouping(a) + (b in (1, 2))",
+		},
+		{
+			name:    "grouping sets",
+			groupBy: "grouping sets ((a, b), (a), ())",
+			orderBy: "grouping(a) + (b in (1, 2))",
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			p, err := runOneStmt(mock, t,
+				"select distinct grouping(a), b from select_test.bind_select "+
+					"group by "+testCase.groupBy+" order by "+testCase.orderBy)
+			require.NoError(t, err)
+			require.True(t, hasAggAboveUnionAll(p))
+		})
+	}
+
+	_, err := runOneStmt(mock, t,
+		"select distinct grouping(a), b from select_test.bind_select "+
+			"group by a, b with rollup order by grouping(a) + (b in (a, 2))")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "for SELECT DISTINCT, ORDER BY expressions must appear in select list")
+}
+
+func TestRemapGroupingSetDistinctOrderExprList(t *testing.T) {
+	builder, branchCtx := genBuilderAndCtx()
+	unionCtx := NewBindContext(builder, nil)
+	unionCtx.projectTag = builder.GenNewBindTag()
+
+	intType := plan.Type{Id: int32(types.T_int64)}
+	selected := GetColExpr(intType, 1, 1)
+	unionCtx.projects = []*plan.Expr{DeepCopyExpr(selected)}
+	selectedKey, err := projectExprKey(selected)
+	require.NoError(t, err)
+	branchCtx.projectByExpr[selectedKey] = 0
+
+	listExpr := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_tuple)},
+		Expr: &plan.Expr_List{List: &plan.ExprList{List: []*plan.Expr{
+			DeepCopyExpr(selected),
+			makePlan2Int64ConstExprWithType(2),
+		}}},
+	}
+	remapped, err := remapGroupingSetDistinctOrderExpr(
+		context.Background(), listExpr, branchCtx, unionCtx, 1)
+	require.NoError(t, err)
+	require.Equal(t, unionCtx.projectTag, remapped.GetList().List[0].GetCol().RelPos)
+	require.Equal(t, int32(0), remapped.GetList().List[0].GetCol().ColPos)
+	require.NotSame(t, listExpr, remapped)
+
+	vectorExpr := &plan.Expr{
+		Typ:  intType,
+		Expr: &plan.Expr_Vec{Vec: &plan.LiteralVec{Len: 2}},
+	}
+	remappedVector, err := remapGroupingSetDistinctOrderExpr(
+		context.Background(), vectorExpr, branchCtx, unionCtx, 1)
+	require.NoError(t, err)
+	require.NotSame(t, vectorExpr, remappedVector)
+
+	unselectedList := DeepCopyExpr(listExpr)
+	unselectedList.GetList().List[0] = GetColExpr(intType, 1, 0)
+	_, err = remapGroupingSetDistinctOrderExpr(
+		context.Background(), unselectedList, branchCtx, unionCtx, 1)
+	require.Error(t, err)
+
+	nilList := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_tuple)},
+		Expr: &plan.Expr_List{},
+	}
+	_, err = remapGroupingSetDistinctOrderExpr(
+		context.Background(), nilList, branchCtx, unionCtx, 1)
+	require.Error(t, err)
+}
+
 func TestNormalizeGroupingSetDistinctProjectsTypedNull(t *testing.T) {
 	builder, bindCtx := genBuilderAndCtx()
 	for _, typ := range []types.T{

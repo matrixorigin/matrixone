@@ -6182,7 +6182,27 @@ func remapGroupingSetDistinctOrderExpr(
 		}
 		return remapped, nil
 
-	case *plan.Expr_Lit, *plan.Expr_P, *plan.Expr_V, *plan.Expr_T:
+	case *plan.Expr_List:
+		if exprImpl.List == nil {
+			break
+		}
+		remapped := DeepCopyExpr(expr)
+		for i, item := range exprImpl.List.List {
+			remappedItem, remapErr := remapGroupingSetDistinctOrderExpr(
+				sysCtx,
+				item,
+				branchCtx,
+				unionCtx,
+				resultLen,
+			)
+			if remapErr != nil {
+				return nil, remapErr
+			}
+			remapped.GetList().List[i] = remappedItem
+		}
+		return remapped, nil
+
+	case *plan.Expr_Lit, *plan.Expr_P, *plan.Expr_V, *plan.Expr_T, *plan.Expr_Vec:
 		return DeepCopyExpr(expr), nil
 	}
 
