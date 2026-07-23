@@ -178,38 +178,6 @@ func (l Lock) release() {
 	holdersPool.Put(l.holders)
 }
 
-func (l Lock) closeWaiter(w *waiter, logger *log.MOLogger) bool {
-	canRemove := func() bool {
-		if l.holders.size() > 0 {
-			return false
-		}
-
-		if l.waiters.size() == 0 {
-			return true
-		}
-
-		if l.waiters.first() != w {
-			return false
-		}
-
-		if l.waiters.size() == 1 {
-			return true
-		}
-
-		l.waiters.notify(notifyValue{defChanged: l.isLockTableDefChanged()})
-		return l.isEmpty()
-	}()
-
-	if canRemove {
-		// close all ref in waiter waitTxns
-		l.waiters.iter(func(w *waiter) bool {
-			w.close("Lock closeWaiter", logger)
-			return true
-		})
-	}
-	return canRemove
-}
-
 func (l Lock) removeWaiter(w *waiter, logger *log.MOLogger) (bool, bool) {
 	removed, wasFirst := l.waiters.remove(w)
 	if !removed {
