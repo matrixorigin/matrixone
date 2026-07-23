@@ -531,9 +531,7 @@ drop table if exists replace_prepare_src;
 drop table if exists prepared_window_frame;
 create table prepared_window_frame(id int primary key, n int);
 insert into prepared_window_frame values (1,10),(2,20),(3,30);
-prepare prepared_rows_frame from
-  'select id, sum(n) over (order by id rows between ? preceding and ? following)
-   from prepared_window_frame order by id';
+prepare prepared_rows_frame from 'select id, sum(n) over (order by id rows between ? preceding and ? following) from prepared_window_frame order by id';
 set @before = 1, @after = 1;
 execute prepared_rows_frame using @before, @after;
 set @before = 0, @after = 0;
