@@ -16,7 +16,6 @@ package rpc
 
 import (
 	"context"
-	"fmt"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -27,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
-	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -142,17 +140,6 @@ func mock1PCTxn(db *db.DB) *txn.TxnMeta {
 	txnMeta.ID = db.TxnMgr.IdAlloc.Alloc()
 	txnMeta.SnapshotTS = db.TxnMgr.Now().ToTimestamp()
 	return txnMeta
-}
-
-func mockTNShard(id uint64) metadata.TNShard {
-	return metadata.TNShard{
-		TNShardRecord: metadata.TNShardRecord{
-			ShardID:    id,
-			LogShardID: id,
-		},
-		ReplicaID: id,
-		Address:   fmt.Sprintf("dn-%d", id),
-	}
 }
 
 const (

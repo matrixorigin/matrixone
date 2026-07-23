@@ -192,10 +192,6 @@ func (s *TestSender) AddTxnService(ts TxnService) {
 	s.router[s.getRouteKey(txn.TxnMethod_DEBUG, ts.Shard())] = ts.Debug
 }
 
-func (s *TestSender) setFilter(filter func(*txn.TxnRequest) bool) {
-	s.filter = filter
-}
-
 // Send TxnSender send
 func (s *TestSender) Send(ctx context.Context, requests []txn.TxnRequest) (*rpc.SendResult, error) {
 	if s.action == "return_err_and_reset" {

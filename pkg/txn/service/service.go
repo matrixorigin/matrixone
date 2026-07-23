@@ -261,13 +261,6 @@ func (c *txnContext) getTxn() txn.TxnMeta {
 	return c.getTxnLocked()
 }
 
-func (c *txnContext) updateTxn(txn txn.TxnMeta) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	c.updateTxnLocked(txn)
-}
-
 func (c *txnContext) getTxnLocked() txn.TxnMeta {
 	return c.mu.txn
 }
