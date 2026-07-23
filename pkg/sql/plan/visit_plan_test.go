@@ -76,3 +76,24 @@ func TestVisitPlanExploresAggregateAndGroupExpressions(t *testing.T) {
 	require.Equal(t, uint64(7), node.AggList[0].GetLit().GetU64Val())
 	require.Equal(t, uint64(7), node.GroupBy[0].GetLit().GetU64Val())
 }
+
+func TestVisitMissingNodeExprsVisitsAllSupplementalFieldsOnce(t *testing.T) {
+	param := func(pos int32) *planpb.Expr {
+		return &planpb.Expr{Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: pos}}}
+	}
+	groupBy := param(1)
+	agg := param(2)
+	window := param(3)
+	query := &planpb.Query{Nodes: []*planpb.Node{
+		{NodeId: 0, GroupBy: []*planpb.Expr{groupBy}},
+		{NodeId: 1, Children: []int32{0, 0}, AggList: []*planpb.Expr{agg}, WinSpecList: []*planpb.Expr{window}},
+	}}
+	rule := &decrementParamOrdinalRule{seen: make(map[*planpb.ParamRef]struct{})}
+
+	require.NoError(t, visitMissingNodeExprs(query, []int32{1}, []VisitPlanRule{rule}))
+	require.Equal(t, int32(0), groupBy.GetP().Pos)
+	require.Equal(t, int32(1), agg.GetP().Pos)
+	require.Equal(t, int32(2), window.GetP().Pos)
+
+	require.ErrorContains(t, visitMissingNodeExprs(query, []int32{-1}, []VisitPlanRule{rule}), "invalid query node id")
+}
