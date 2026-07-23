@@ -893,6 +893,7 @@ func (entry *TableEntry) AlterTable(ctx context.Context, txn txnif.TxnReader, re
 			Hints:             hints,
 			AutoIncrOffset:    newSchema.Extra.AutoIncrOffset,
 			AutoIncrEpoch:     newSchema.Extra.AutoIncrEpoch,
+			Checks:            newSchema.Extra.Checks,
 		}
 
 	}

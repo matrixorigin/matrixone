@@ -17,6 +17,7 @@ package engine
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/stretchr/testify/require"
 )
@@ -50,4 +51,30 @@ func TestPlanDefToCstrDefKeepsChecksOutOfLegacyConstraintStream(t *testing.T) {
 	})
 	require.Len(t, decoded.Cts, 1)
 	require.Equal(t, userProperty, decoded.Cts[0].(*StreamConfigsDef).Configs[0])
+}
+
+func TestPlanDefsToExeDefsPersistsChecksInSchemaExtra(t *testing.T) {
+	check := &plan.CheckDef{
+		Name:      "t_chk_1",
+		OriginSql: "`a` > 0",
+		Check: &plan.Expr{
+			Typ: plan.Type{Id: int32(10)},
+			Expr: &plan.Expr_Lit{
+				Lit: &plan.Literal{Value: &plan.Literal_Bval{Bval: true}},
+			},
+		},
+	}
+	tableDef := &plan.TableDef{Checks: []*plan.CheckDef{check}}
+
+	_, extra, err := PlanDefsToExeDefs(tableDef)
+	require.NoError(t, err)
+	require.Len(t, extra.Checks, 1)
+	require.Equal(t, check.Name, extra.Checks[0].Name)
+	require.Equal(t, check.OriginSql, extra.Checks[0].OriginSql)
+
+	data, err := extra.Marshal()
+	require.NoError(t, err)
+	roundTripped := &api.SchemaExtra{}
+	require.NoError(t, roundTripped.Unmarshal(data))
+	require.Equal(t, extra.Checks, roundTripped.Checks)
 }

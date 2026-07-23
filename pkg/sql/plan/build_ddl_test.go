@@ -886,9 +886,24 @@ func TestBuildCreateTableCheckConstraintNameDeduplication(t *testing.T) {
 		require.ErrorContains(t, err, "is too long")
 	})
 
+	t.Run("generated name is not silently truncated", func(t *testing.T) {
+		tableName := strings.Repeat("t", 60)
+		_, err := runOneStmt(mock, t,
+			"CREATE TABLE "+tableName+" (a INT CHECK (a > 0))")
+		require.ErrorContains(t, err, "is too long")
+	})
+
 	t.Run("name comparison is case sensitive and accent insensitive", func(t *testing.T) {
 		require.Equal(t, NormalizeCheckConstraintName("résumé"), NormalizeCheckConstraintName("resume"))
 		require.NotEqual(t, NormalizeCheckConstraintName("Check"), NormalizeCheckConstraintName("check"))
+
+		logicPlan, err := runOneStmt(mock, t,
+			"CREATE TABLE t_chk_case_sensitive ("+
+				"a INT, CONSTRAINT C CHECK (a > 0), CONSTRAINT c CHECK (a < 10))")
+		require.NoError(t, err)
+		checks := logicPlan.GetDdl().GetCreateTable().GetTableDef().GetChecks()
+		require.Equal(t, "C", checks[0].Name)
+		require.Equal(t, "c", checks[1].Name)
 	})
 
 	t.Run("explicit name is unique within schema", func(t *testing.T) {
@@ -923,9 +938,11 @@ func TestCreateTableLikeRegeneratesCheckConstraintNames(t *testing.T) {
 	require.Len(t, checks, 1)
 	require.Equal(t, "cloned_t_chk_1", checks[0].Name)
 	require.True(t, checks[0].IsGeneratedName)
+	require.Contains(t, p.GetDdl().GetCreateTable().GetTableDef().GetCreatesql(), "CHECK")
+	require.NotContains(t, p.GetDdl().GetCreateTable().GetTableDef().GetCreatesql(), " LIKE ")
 }
 
-func TestRenameTableRejectsRewrittenCheckConstraintNameCollision(t *testing.T) {
+func TestRenameTableDefersRewrittenCheckConstraintNameCollisionToExecution(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	mock.ctxt.tables["t1"].Checks = []*plan.CheckDef{{
 		Name:            "t1_chk_1",
@@ -933,8 +950,53 @@ func TestRenameTableRejectsRewrittenCheckConstraintNameCollision(t *testing.T) {
 	}}
 	mock.ctxt.tables["employees"].Checks = []*plan.CheckDef{{Name: "renamed_t_chk_1"}}
 
-	_, err := runOneStmt(mock, t, "RENAME TABLE t1 TO renamed_t")
-	require.ErrorContains(t, err, "duplicate check constraint name 'renamed_t_chk_1'")
+	p, err := runOneStmt(mock, t, "RENAME TABLE t1 TO renamed_t")
+	require.NoError(t, err)
+	renamePlans := p.GetDdl().GetRenameTable().GetAlterTables()
+	require.Len(t, renamePlans, 1)
+	require.Equal(t, "renamed_t_chk_1",
+		renamePlans[0].GetCopyTableDef().GetChecks()[0].GetName())
+}
+
+func TestRenameTableCheckNamesFollowLeftToRightTransitions(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	mock.ctxt.tables["a"] = &plan.TableDef{
+		Name: "a",
+		Checks: []*plan.CheckDef{{
+			Name:            "a_chk_1",
+			IsGeneratedName: true,
+		}},
+	}
+	mock.ctxt.tables["b"] = &plan.TableDef{
+		Name: "b",
+		Checks: []*plan.CheckDef{{
+			Name:            "b_chk_1",
+			IsGeneratedName: true,
+		}},
+	}
+	mock.ctxt.objects["a"] = &plan.ObjectRef{}
+	mock.ctxt.objects["b"] = &plan.ObjectRef{}
+
+	p, err := runOneStmt(mock, t, "RENAME TABLE a TO tmp, b TO a, tmp TO b")
+	require.NoError(t, err)
+	renamePlans := p.GetDdl().GetRenameTable().GetAlterTables()
+	require.Len(t, renamePlans, 3)
+	require.Equal(t, "tmp_chk_1", renamePlans[0].GetCopyTableDef().GetChecks()[0].Name)
+	require.Equal(t, "a_chk_1", renamePlans[1].GetCopyTableDef().GetChecks()[0].Name)
+	require.Equal(t, "b_chk_1", renamePlans[2].GetCopyTableDef().GetChecks()[0].Name)
+}
+
+func TestAlterTableRenameRewritesCheckNames(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	mock.ctxt.tables["t1"].Checks = []*plan.CheckDef{{
+		Name:            "t1_chk_1",
+		IsGeneratedName: true,
+	}}
+
+	p, err := runOneStmt(mock, t, "ALTER TABLE t1 RENAME renamed_t")
+	require.NoError(t, err)
+	require.Equal(t, "renamed_t_chk_1",
+		p.GetDdl().GetAlterTable().GetCopyTableDef().GetChecks()[0].Name)
 }
 
 func TestBuildCreateTableCheckConstraintOriginSql(t *testing.T) {
@@ -947,6 +1009,15 @@ func TestBuildCreateTableCheckConstraintOriginSql(t *testing.T) {
 		checks := logicPlan.GetDdl().GetCreateTable().GetTableDef().GetChecks()
 		require.Len(t, checks, 1)
 		require.Equal(t, "`a` > 0", checks[0].OriginSql)
+	})
+
+	t.Run("string literals remain replayable under ansi quotes", func(t *testing.T) {
+		logicPlan, err := runOneStmt(mock, t,
+			"CREATE TABLE t_chk_origin_string (s VARCHAR(10), CHECK (s = 'ok'));")
+		require.NoError(t, err)
+		checks := logicPlan.GetDdl().GetCreateTable().GetTableDef().GetChecks()
+		require.Len(t, checks, 1)
+		require.Equal(t, "`s` = 'ok'", checks[0].OriginSql)
 	})
 
 	t.Run("named check stores origin sql", func(t *testing.T) {
@@ -1107,6 +1178,14 @@ func TestRecoverCheckConstraintsFromCreateSql(t *testing.T) {
 		RecoverCheckConstraintsFromCreateSql(ctx, td)
 		require.Len(t, td.Checks, 1)
 		require.Equal(t, "`a` > 0", td.Checks[0].OriginSql)
+	})
+
+	t.Run("fails closed for mode-sensitive legacy sql without marker", func(t *testing.T) {
+		td := newTableDef(`CREATE TABLE t (a INT, CHECK ("a" > 0))`)
+		RecoverCheckConstraintsFromCreateSql(ctx, td)
+		require.Len(t, td.Checks, 1)
+		require.Equal(t, "__mo_check_recovery_failed", td.Checks[0].Name)
+		require.False(t, td.Checks[0].Check.GetLit().GetBval())
 	})
 
 	t.Run("uses persisted pipes as concat mode", func(t *testing.T) {
@@ -1766,15 +1845,15 @@ func TestPartitionCreateSQLIsModeIndependentForAddPartition(t *testing.T) {
 	require.Len(t, defs, 1)
 }
 
-func TestRewriteCheckConstraintTablePrefixHandlesTruncatedCopyName(t *testing.T) {
+func TestRewriteCheckConstraintTablePrefix(t *testing.T) {
 	const (
 		oldTable = "t_chk_addcol_notenforced_copy_019f8e0b-8a21-7df2-b0b9-86a743ae494c"
 		newTable = "t_chk_addcol_notenforced"
 	)
 	checks := []*plan.CheckDef{{
-		Name: "t_chk_addcol_notenforced_copy_019f8e0b-8a21-7df2-b0b9-86a7_chk_1",
+		Name: oldTable + "_chk_1",
 	}}
-	rewriteCheckConstraintTablePrefix(checks, oldTable, newTable)
+	RewriteCheckConstraintTablePrefix(checks, oldTable, newTable)
 	require.Equal(t, "t_chk_addcol_notenforced_chk_1", checks[0].Name)
 }
 

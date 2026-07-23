@@ -2274,6 +2274,9 @@ func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32, isRoot bo
 		return nil, moerr.NewNYIf(b.GetContext(), "function expr '%v'", astExpr)
 	}
 	funcName := funcRef.ColName()
+	if strings.EqualFold(funcName, "_check_constraint_assert") {
+		return nil, moerr.NewInvalidInput(b.GetContext(), "function '_check_constraint_assert' is reserved for internal use")
+	}
 	if strings.EqualFold(funcName, "mod") && b.numericParamType == nil {
 		return b.bindNumericExprWithDefaultContext(astExpr, depth, b.defaultNumericOuterType())
 	}

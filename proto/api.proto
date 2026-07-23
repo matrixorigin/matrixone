@@ -302,6 +302,7 @@ enum AlterKind {
     RenameColumn     = 8;
     ReplaceDef       = 9;
     UpdateAutoIncrement = 10;
+    UpdateChecks     = 11;
 }
 
 message AlterTablePolicy {
@@ -351,6 +352,10 @@ message AlterTableAutoIncrement {
     uint32 epoch = 2;
 }
 
+message AlterTableChecks {
+    repeated plan.CheckDef checks = 1;
+}
+
 message AlterTableReq {
     uint64 table_id = 1;
     uint64 db_id    = 2;
@@ -366,6 +371,7 @@ message AlterTableReq {
         AlterTableRenameCol rename_col       = 11;
         AlterTableReplaceDef replace_def     = 12;
         AlterTableAutoIncrement update_auto_increment = 13;
+        AlterTableChecks update_checks = 14;
     }
 }
 
@@ -400,6 +406,10 @@ message SchemaExtra {
     uint64 auto_incr_offset = 16;
     // Advances only when AUTO_INCREMENT allocation is reset.
     uint32 auto_incr_epoch = 17;
+    // CHECK metadata is stored in the length-delimited schema extra envelope
+    // so older CNs safely skip it instead of misreading the legacy unframed
+    // constraint stream.
+    repeated plan.CheckDef checks = 18;
 }
 
 // Int64Map mainly used in unit test

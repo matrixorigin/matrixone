@@ -158,16 +158,14 @@ func appendCheckConstraintPlanFromLastNodeWithMode(
 }
 
 func appendCheckConstraintPlanWithTableColProjections(builder *QueryBuilder, bindCtx *BindContext, tableDef *TableDef, lastNodeID int32, tableColProjList []*plan.Expr, ignoreMode bool) (int32, error) {
-	if ignoreMode {
-		proc := builder.compCtx.GetProcess()
-		if proc != nil {
-			version, ok := moruntime.ServiceRuntime(proc.GetService()).
-				GetGlobalVariables(moruntime.MOProtocolVersion)
-			if ok && version.(int64) < defines.MORPCVersion5 {
-				return 0, moerr.NewNotSupported(
-					builder.GetContext(),
-					"CHECK constraint warnings require all CNs to support protocol version 5")
-			}
+	proc := builder.compCtx.GetProcess()
+	if proc != nil {
+		version, ok := moruntime.ServiceRuntime(proc.GetService()).
+			GetGlobalVariables(moruntime.MOProtocolVersion)
+		if ok && version.(int64) < defines.MORPCVersion6 {
+			return 0, moerr.NewNotSupported(
+				builder.GetContext(),
+				"CHECK constraints require all CNs to support protocol version 6")
 		}
 	}
 	filterList := make([]*plan.Expr, 0, len(tableDef.Checks))
@@ -205,10 +203,8 @@ func appendCheckConstraintPlanWithTableColProjections(builder *QueryBuilder, bin
 			checkName = "CHECK"
 		}
 		errMsg := makePlan2StringConstExprWithType(fmt.Sprintf("Check constraint '%s' is violated", checkName))
-		// Use the long-standing assert function so plans remain executable on old
-		// CNs during rolling upgrades. CHECK-specific function IDs cannot be sent
-		// to an older executor safely.
-		assertExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "assert", []*plan.Expr{passExpr, errMsg})
+		assertExpr, err := BindFuncExprImplByPlanExpr(
+			builder.GetContext(), "_check_constraint_assert", []*plan.Expr{passExpr, errMsg})
 		if err != nil {
 			return 0, err
 		}

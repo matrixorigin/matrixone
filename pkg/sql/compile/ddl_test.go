@@ -78,6 +78,20 @@ func TestCheckConstraintCreateSQLSkipsNonSQLRelations(t *testing.T) {
 	require.Equal(t, "CREATE TABLE t(a INT CHECK(a > 0))", sql)
 }
 
+func TestCheckConstraintNamesPreferStructuredMetadata(t *testing.T) {
+	extra := &api.SchemaExtra{Checks: []*plan2.CheckDef{{Name: "t_chk_1"}}}
+	data, err := extra.Marshal()
+	require.NoError(t, err)
+
+	names, err := checkConstraintNames(context.Background(), []engine.Property{
+		{Key: catalog.PropSchemaExtra, Value: string(data)},
+		{Key: catalog.SystemRelAttr_Kind, Value: catalog.SystemOrdinaryRel},
+		{Key: catalog.SystemRelAttr_CreateSQL, Value: "not valid SQL"},
+	}, "t", 1)
+	require.NoError(t, err)
+	require.Equal(t, []string{"t_chk_1"}, names)
+}
+
 func TestOptimisticCheckConstraintSchemaTouchSQL(t *testing.T) {
 	sql := optimisticCheckConstraintSchemaTouchSQL("db'name")
 	require.Equal(t,

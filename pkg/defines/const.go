@@ -41,7 +41,8 @@ const (
 	MORPCVersion3      int64 = 3 // start from 1.3.0
 	MORPCVersion4      int64 = 4 // start from 2.0.1
 	MORPCVersion5      int64 = 5 // CHECK IGNORE warning metadata
-	MORPCLatestVersion       = MORPCVersion5
+	MORPCVersion6      int64 = 6 // persisted CHECK metadata and CHECK-specific assertion
+	MORPCLatestVersion       = MORPCVersion6
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

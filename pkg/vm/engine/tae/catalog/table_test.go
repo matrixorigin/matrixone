@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
@@ -79,6 +80,9 @@ func TestAutoIncrementEpochTransition(t *testing.T) {
 	require.Equal(t, uint32(1), schema.Extra.AutoIncrEpoch)
 	require.NoError(t, schema.ApplyAlterTable(apipb.NewUpdateConstraintReq(0, 1, "constraint")))
 	require.Equal(t, uint32(1), schema.Extra.AutoIncrEpoch)
+	checks := []*plan.CheckDef{{Name: "t_chk_1"}}
+	require.NoError(t, schema.ApplyAlterTable(apipb.NewUpdateChecksReq(0, 1, checks)))
+	require.Equal(t, checks, schema.Extra.Checks)
 
 	schema.Extra.AutoIncrEpoch = math.MaxUint32
 	require.Error(t, schema.ApplyAlterTable(apipb.NewUpdateAutoIncrementReq(0, 1, 20, 0)))

@@ -23,10 +23,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
-func TestAssertCheckConstraintFailureUsesMySQL3819(t *testing.T) {
+func TestPublicAssertCannotSpoofCheckConstraintFailure(t *testing.T) {
 	err := newAssertFailure(context.Background(), "Check constraint 't_chk_1' is violated")
-	require.True(t, moerr.IsMoErrCode(err, moerr.ErrConstraintViolation))
-	require.Equal(t, uint16(moerr.ER_CHECK_CONSTRAINT_VIOLATED), err.(*moerr.Error).MySQLCode())
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInternal))
 
 	err = newAssertFailure(context.Background(), "ordinary assert failure")
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInternal))

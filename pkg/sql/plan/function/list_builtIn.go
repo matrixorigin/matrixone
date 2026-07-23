@@ -17,7 +17,6 @@ package function
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -58,10 +57,6 @@ func uuidSwapFlagTypeSupported(typ types.Type) bool {
 }
 
 func newAssertFailure(ctx context.Context, errMsg string) error {
-	if strings.HasPrefix(errMsg, "Check constraint '") &&
-		strings.HasSuffix(errMsg, "' is violated") {
-		return moerr.NewConstraintViolation(ctx, errMsg)
-	}
 	return moerr.NewInternalError(ctx, errMsg)
 }
 
@@ -13917,6 +13912,41 @@ var supportedOthersBuiltIns = []FuncNew{
 				},
 			},
 		},
+	},
+
+	// function `_check_constraint_assert`
+	{
+		functionId: CHECK_CONSTRAINT_ASSERT,
+		class:      plan.Function_INTERNAL | plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{{
+			overloadId: 0,
+			args:       []types.T{types.T_bool, types.T_varchar},
+			retType: func(parameters []types.Type) types.Type {
+				return types.T_bool.ToType()
+			},
+			newOp: func() executeLogicOfOverload {
+				return func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, _ *FunctionSelectList) error {
+					checkFlags := vector.GenerateFunctionFixedTypeParameter[bool](parameters[0])
+					errMsgs := vector.GenerateFunctionStrParameter(parameters[1])
+					value, null := errMsgs.GetStrValue(0)
+					if null {
+						return moerr.NewInternalError(proc.Ctx, "the CHECK constraint error message should not be null")
+					}
+					errMsg := functionUtil.QuickBytesToStr(value)
+					res := vector.MustFunctionResult[bool](result)
+					for i := uint64(0); i < uint64(length); i++ {
+						flag, isNull := checkFlags.GetValue(i)
+						if isNull || !flag {
+							return moerr.NewConstraintViolation(proc.Ctx, errMsg)
+						}
+						res.AppendMustValue(true)
+					}
+					return nil
+				}
+			},
+		}},
 	},
 
 	// function `isempty`

@@ -708,6 +708,22 @@ func getTableDef(tblItem *TableItem, coldefs []engine.TableDef) (*plan.TableDef,
 	var checks []*plan.CheckDef
 	var partition *plan.Partition
 
+	if tblItem.ExtraInfo != nil {
+		checks = make([]*plan.CheckDef, len(tblItem.ExtraInfo.Checks))
+		for i, check := range tblItem.ExtraInfo.Checks {
+			if check == nil {
+				continue
+			}
+			checks[i] = &plan.CheckDef{
+				Name:            check.Name,
+				Check:           plan2.DeepCopyExpr(check.Check),
+				OriginSql:       check.OriginSql,
+				IsGeneratedName: check.IsGeneratedName,
+				NotEnforced:     check.NotEnforced,
+			}
+		}
+	}
+
 	tableDef := make([]engine.TableDef, 0)
 
 	i := int32(0)

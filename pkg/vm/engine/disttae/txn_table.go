@@ -1675,6 +1675,7 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 	oldConstraint := tbl.constraint
 	oldAutoIncrOffset := tbl.extraInfo.AutoIncrOffset
 	oldAutoIncrEpoch := tbl.extraInfo.AutoIncrEpoch
+	oldChecks := tbl.extraInfo.Checks
 	// The fact that the tableDef brought by alter requests can appended to the tail of original defs presupposes:
 	// 1. late arriving tableDef will overwrite the existing tableDef
 	// 2. any TableDef about columns, like AttritebuteDef, PrimaryKeyDef, or CluterbyDef do not change, ensuring genColumnsFromDefs works well
@@ -1700,6 +1701,8 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 			case api.AlterKind_UpdateAutoIncrement:
 				tbl.extraInfo.AutoIncrOffset = oldAutoIncrOffset
 				tbl.extraInfo.AutoIncrEpoch = oldAutoIncrEpoch
+			case api.AlterKind_UpdateChecks:
+				tbl.extraInfo.Checks = oldChecks
 			}
 		}
 		tbl.defs = olddefs
@@ -1728,6 +1731,8 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 				panic("mismatch cstr AlterTable")
 			}
 			appendDef = append(appendDef, c)
+		case api.AlterKind_UpdateChecks:
+			tbl.extraInfo.Checks = req.GetUpdateChecks().GetChecks()
 		case api.AlterKind_RenameTable:
 			tbl.tableName = req.GetRenameTable().NewName
 		case api.AlterKind_ReplaceDef:

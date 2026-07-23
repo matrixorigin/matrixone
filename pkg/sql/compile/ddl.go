@@ -582,11 +582,22 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 	}
 	//added fk in this alter table statement
 	newAddedFkNames := make(map[string]bool)
+	hasCheckRename := false
+	for _, action := range qry.Actions {
+		if action != nil && action.GetAlterName() != nil && len(qry.TableDef.Checks) > 0 {
+			hasCheckRename = true
+			break
+		}
+	}
 
 	if c.proc.GetTxnOperator().Txn().IsPessimistic() {
 		var retryErr error
 		// 0. lock origin database metadata in catalog
-		if err = lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
+		databaseLockMode := lock.LockMode_Shared
+		if hasCheckRename {
+			databaseLockMode = lock.LockMode_Exclusive
+		}
+		if err = lockMoDatabase(c, dbName, databaseLockMode); err != nil {
 			return err
 		}
 
@@ -1121,6 +1132,26 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 				act.AlterComment.NewComment,
 			))
 		case *plan.AlterTable_Action_AlterName:
+			renamedChecks := plan2.DeepCopyTableDef(qry.TableDef, true).Checks
+			if qry.CopyTableDef != nil {
+				renamedChecks = plan2.DeepCopyTableDef(qry.CopyTableDef, true).Checks
+			} else {
+				plan2.RewriteCheckConstraintTablePrefix(
+					renamedChecks, act.AlterName.OldName, act.AlterName.NewName)
+			}
+			if len(renamedChecks) > 0 {
+				if !c.proc.GetTxnOperator().Txn().IsPessimistic() {
+					if err = c.runSqlWithOptions(
+						optimisticCheckConstraintSchemaTouchSQL(dbName),
+						executor.StatementOption{}.WithDisableLog()); err != nil {
+						return err
+					}
+				}
+				if err = validateCheckConstraintNamesAfterSchemaLock(
+					c, dbSource, act.AlterName.OldName, renamedChecks); err != nil {
+					return err
+				}
+			}
 			reqs = append(reqs, api.NewRenameTableReq(
 				did, tid,
 				act.AlterName.OldName,
@@ -1212,6 +1243,11 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 		reqs = append([]*api.AlterTableReq{
 			api.NewReplaceDefReq(did, tid, qry.GetCopyTableDef()),
 		}, reqs...)
+		if len(qry.GetTableDef().GetChecks()) > 0 ||
+			len(qry.GetCopyTableDef().GetChecks()) > 0 {
+			reqs = append(reqs, api.NewUpdateChecksReq(
+				did, tid, qry.GetCopyTableDef().GetChecks()))
+		}
 	}
 
 	if hasUpdateConstraints {
@@ -1340,12 +1376,8 @@ func validateCheckConstraintNamesAfterSchemaLock(
 			if !ok {
 				continue
 			}
-			createSQL, ok := checkConstraintCreateSQL(properties.Properties)
-			if !ok {
-				continue
-			}
-			names, err := plan2.ExtractCheckConstraintNamesFromCreateSQL(
-				c.proc.Ctx, createSQL, tableName, c.getLower())
+			names, err := checkConstraintNames(
+				c.proc.Ctx, properties.Properties, tableName, c.getLower())
 			if err != nil {
 				return err
 			}
@@ -1358,6 +1390,39 @@ func validateCheckConstraintNamesAfterSchemaLock(
 		}
 	}
 	return nil
+}
+
+func checkConstraintNames(
+	ctx context.Context,
+	properties []engine.Property,
+	tableName string,
+	lower int64,
+) ([]string, error) {
+	for _, property := range properties {
+		if property.Key != catalog.PropSchemaExtra {
+			continue
+		}
+		extra := &api.SchemaExtra{}
+		if err := extra.Unmarshal([]byte(property.Value)); err != nil {
+			return nil, err
+		}
+		if len(extra.Checks) > 0 {
+			names := make([]string, 0, len(extra.Checks))
+			for _, check := range extra.Checks {
+				if check != nil {
+					names = append(names, check.Name)
+				}
+			}
+			return names, nil
+		}
+		break
+	}
+	createSQL, ok := checkConstraintCreateSQL(properties)
+	if !ok {
+		return nil, nil
+	}
+	return plan2.ExtractCheckConstraintNamesFromCreateSQL(
+		ctx, createSQL, tableName, lower)
 }
 
 func checkConstraintCreateSQL(properties []engine.Property) (string, bool) {
@@ -1392,6 +1457,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 	aliasName := qry.GetTableDef().GetName()
 	session := c.proc.GetSession()
 	isTemp := qry.GetTemporary()
+	skipCheckNamespace := isTemp || defines.IsInternalExecutor(c.proc.Ctx)
 	if isTemp {
 		if session == nil {
 			return moerr.NewInternalError(c.proc.Ctx, "session not found for temporary table")
@@ -1451,7 +1517,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 		// CHECK names are schema-scoped. Serialize CHECK-bearing CREATE TABLE
 		// statements so the lock-holder can refresh its snapshot and recheck
 		// the catalog immediately before creating the relation.
-		if len(qry.GetTableDef().GetChecks()) > 0 {
+		if !skipCheckNamespace && len(qry.GetTableDef().GetChecks()) > 0 {
 			lockMode = lock.LockMode_Exclusive
 		}
 		if err := lockMoDatabase(c, dbName, lockMode); err != nil {
@@ -1481,7 +1547,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 		}
 		return moerr.NewTableAlreadyExists(c.proc.Ctx, tblName)
 	}
-	if len(qry.GetTableDef().GetChecks()) > 0 {
+	if !skipCheckNamespace && len(qry.GetTableDef().GetChecks()) > 0 {
 		txnOp := c.proc.GetTxnOperator()
 		if !txnOp.Txn().IsPessimistic() {
 			// Row locks are intentionally disabled for optimistic transactions.

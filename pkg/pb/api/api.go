@@ -16,6 +16,8 @@ package api
 import (
 	"strings"
 
+	"github.com/gogo/protobuf/proto"
+
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
@@ -78,7 +80,21 @@ func CloneExtra(info *SchemaExtra) *SchemaExtra {
 		ParentTableID:     info.ParentTableID,
 		AutoIncrOffset:    info.AutoIncrOffset,
 		AutoIncrEpoch:     info.AutoIncrEpoch,
+		Checks:            cloneCheckDefs(info.Checks),
 	}
+}
+
+func cloneCheckDefs(checks []*plan.CheckDef) []*plan.CheckDef {
+	if len(checks) == 0 {
+		return nil
+	}
+	cloned := make([]*plan.CheckDef, len(checks))
+	for i, check := range checks {
+		if check != nil {
+			cloned[i] = proto.Clone(check).(*plan.CheckDef)
+		}
+	}
+	return cloned
 }
 
 func NewUpdateAutoIncrementReq(did, tid, offset uint64, epoch uint32) *AlterTableReq {
@@ -186,6 +202,17 @@ func NewReplaceDefReq(did, tid uint64, planDef *plan.TableDef) *AlterTableReq {
 			&AlterTableReplaceDef{
 				Def: planDef,
 			},
+		},
+	}
+}
+
+func NewUpdateChecksReq(did, tid uint64, checks []*plan.CheckDef) *AlterTableReq {
+	return &AlterTableReq{
+		DbId:    did,
+		TableId: tid,
+		Kind:    AlterKind_UpdateChecks,
+		Operation: &AlterTableReq_UpdateChecks{
+			UpdateChecks: &AlterTableChecks{Checks: checks},
 		},
 	}
 }

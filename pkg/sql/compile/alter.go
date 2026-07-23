@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	catalogplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/catalog"
@@ -300,7 +301,11 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 	if c.proc.GetTxnOperator().Txn().IsPessimistic() {
 		var retryErr error
 		// 0. lock origin database metadata in catalog
-		if err = lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
+		dbLockMode := lock.LockMode_Shared
+		if len(qry.GetCopyTableDef().GetChecks()) > 0 {
+			dbLockMode = lock.LockMode_Exclusive
+		}
+		if err = lockMoDatabase(c, dbName, dbLockMode); err != nil {
 			return err
 		}
 
@@ -359,6 +364,30 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 
 		if retryErr != nil {
 			return retryErr
+		}
+	}
+
+	if len(qry.GetCopyTableDef().GetChecks()) > 0 {
+		txnOp := c.proc.GetTxnOperator()
+		if !txnOp.Txn().IsPessimistic() {
+			if err = c.runSqlWithOptions(
+				optimisticCheckConstraintSchemaTouchSQL(dbName),
+				executor.StatementOption{}.WithDisableLog()); err != nil {
+				return err
+			}
+		}
+		if txnOp.Txn().IsPessimistic() && txnOp.Txn().IsRCIsolation() {
+			now, _ := moruntime.ServiceRuntime(c.proc.GetService()).Clock().Now()
+			if err = txnOp.GetWorkspace().AdvanceSnapshot(c.proc.Ctx, now); err != nil {
+				return err
+			}
+		}
+		// The internal copy table is outside the user-visible CHECK namespace.
+		// Validate the final names while excluding the source relation that the
+		// copy will atomically replace.
+		if err = validateCheckConstraintNamesAfterSchemaLock(
+			c, dbSource, tblName, qry.GetCopyTableDef().GetChecks()); err != nil {
+			return err
 		}
 	}
 

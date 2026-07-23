@@ -43,6 +43,32 @@ func TestAlterTable1(t *testing.T) {
 	outPutPlan(logicPlan, true, t)
 }
 
+func TestDropColumnCheckConstraintHandling(t *testing.T) {
+	colExpr := func(pos int32) *plan.Expr {
+		return &plan.Expr{Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: pos}}}
+	}
+	tableDef := &plan.TableDef{
+		Cols: []*plan.ColDef{{Name: "a"}, {Name: "b"}},
+		Checks: []*plan.CheckDef{
+			{Name: "a_only", Check: colExpr(0)},
+			{Name: "b_only", Check: colExpr(1)},
+		},
+	}
+	require.NoError(t, handleDropColumnCheckConstraints(context.Background(), tableDef, "a"))
+	require.Len(t, tableDef.Checks, 1)
+	require.Equal(t, "b_only", tableDef.Checks[0].Name)
+
+	tableDef.Checks = []*plan.CheckDef{{
+		Name: "a_and_b",
+		Check: &plan.Expr{Expr: &plan.Expr_List{List: &plan.ExprList{
+			List: []*plan.Expr{colExpr(0), colExpr(1)},
+		}}},
+	}}
+	require.ErrorContains(t,
+		handleDropColumnCheckConstraints(context.Background(), tableDef, "a"),
+		"depends on multiple columns")
+}
+
 func TestAlterTableAddColumns(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	// CREATE TABLE t1 (a INTEGER, b CHAR(10));

@@ -418,7 +418,7 @@ func DropColumn(
 		return column.Primary, err
 	}
 
-	if err := checkColumnWithCheckDependency(ctx.GetContext(), tableDef, colName); err != nil {
+	if err := handleDropColumnCheckConstraints(ctx.GetContext(), tableDef, colName); err != nil {
 		return column.Primary, err
 	}
 
@@ -679,15 +679,33 @@ func remapCheckExprsAfterDrop(tableDef *TableDef, dropPos int32) {
 	}
 }
 
-// checkColumnWithCheckDependency checks if the column is referenced
-// by any check constraint expression. If so, the operation is rejected.
+// handleDropColumnCheckConstraints removes CHECKs that reference only the
+// dropped column. Multi-column CHECKs still make the drop invalid.
+func handleDropColumnCheckConstraints(ctx context.Context, tableDef *TableDef, colName string) error {
+	remaining := make([]*plan.CheckDef, 0, len(tableDef.Checks))
+	for _, chk := range tableDef.Checks {
+		referenced := make(map[string]struct{})
+		collectCheckColumnNames(chk.Check, tableDef.Cols, referenced)
+		if _, depends := referenced[colName]; !depends {
+			remaining = append(remaining, chk)
+			continue
+		}
+		if len(referenced) > 1 {
+			return moerr.NewInvalidInputf(ctx,
+				"Cannot drop column '%s': check constraint '%s' depends on multiple columns",
+				colName, chk.Name)
+		}
+	}
+	tableDef.Checks = remaining
+	return nil
+}
+
 func checkColumnWithCheckDependency(ctx context.Context, tableDef *TableDef, colName string) error {
 	for _, chk := range tableDef.Checks {
-		if chk.Check != nil {
-			if exprReferencesColumn(chk.Check, colName, tableDef.Cols) {
-				return moerr.NewInvalidInputf(ctx,
-					"Cannot drop, modify, or rename column '%s': check constraint '%s' depends on it", colName, chk.Name)
-			}
+		if exprReferencesColumn(chk.Check, colName, tableDef.Cols) {
+			return moerr.NewInvalidInputf(ctx,
+				"Cannot drop, modify, or rename column '%s': check constraint '%s' depends on it",
+				colName, chk.Name)
 		}
 	}
 	return nil

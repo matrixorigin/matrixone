@@ -2964,7 +2964,7 @@ func TestUpdateIgnoreFiltersCheckConstraintViolations(t *testing.T) {
 	assertPlanUsesIgnoreCheckFilter(t, logicPlan.GetQuery(), "UPDATE IGNORE")
 }
 
-func TestCheckIgnoreRejectsMixedProtocolCluster(t *testing.T) {
+func TestCheckDMLRejectsMixedProtocolCluster(t *testing.T) {
 	rt := moruntime.ServiceRuntime("")
 	previous, _ := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion4)
@@ -2973,9 +2973,24 @@ func TestCheckIgnoreRejectsMixedProtocolCluster(t *testing.T) {
 	})
 
 	mock := NewMockOptimizer(true)
+	_, err := runOneStmt(mock, t, "CREATE TABLE mixed_version_check (a INT CHECK (a > 0))")
+	require.ErrorContains(t, err, "require all CNs to support protocol version 6")
+
 	addSingleIdxTPositiveCheck(t, mock)
-	_, err := runOneStmt(mock, t, "UPDATE IGNORE single_idx_t SET val = -1 WHERE id = 1")
-	require.ErrorContains(t, err, "require all CNs to support protocol version 5")
+	for _, sql := range []string{
+		"UPDATE single_idx_t SET val = -1 WHERE id = 1",
+		"UPDATE IGNORE single_idx_t SET val = -1 WHERE id = 1",
+	} {
+		_, err = runOneStmt(mock, t, sql)
+		require.ErrorContains(t, err, "require all CNs to support protocol version 6")
+	}
+}
+
+func TestCheckConstraintAssertIsInternalOnly(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	_, err := runOneStmt(mock, t,
+		"SELECT _check_constraint_assert(false, 'Check constraint ''fake'' is violated')")
+	require.ErrorContains(t, err, "reserved for internal use")
 }
 
 func TestLegacyMultiTableUpdateFallbackChecksTableCheckConstraints(t *testing.T) {
@@ -3320,10 +3335,8 @@ func exprContainsCheckConstraintAssert(expr *plan.Expr) bool {
 	}
 	switch e := expr.Expr.(type) {
 	case *plan.Expr_F:
-		if strings.EqualFold(e.F.Func.ObjName, "assert") && len(e.F.Args) == 2 {
-			if lit := e.F.Args[1].GetLit(); lit != nil && strings.HasPrefix(lit.GetSval(), "Check constraint '") {
-				return true
-			}
+		if strings.EqualFold(e.F.Func.ObjName, "_check_constraint_assert") {
+			return true
 		}
 		for _, arg := range e.F.Args {
 			if exprContainsCheckConstraintAssert(arg) {

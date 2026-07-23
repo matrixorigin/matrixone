@@ -33,6 +33,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -883,7 +884,7 @@ func buildCreateTable(
 			check.IsGeneratedName = true
 		}
 
-		_, newStmt, err := ConstructCreateTableSQL(ctx, tableDef, snapshot, true, cloneStmt)
+		newCreateSQL, newStmt, err := ConstructCreateTableSQL(ctx, tableDef, snapshot, true, cloneStmt)
 		if err != nil {
 			return nil, err
 		}
@@ -908,6 +909,10 @@ func buildCreateTable(
 			for _, check := range p.GetDdl().GetCreateTable().GetTableDef().GetChecks() {
 				check.IsGeneratedName = true
 			}
+			likeTableDef := p.GetDdl().GetCreateTable().GetTableDef()
+			newCreateSQL = addCheckSQLModeMarker(newCreateSQL, parserSQLModeFromContext(ctx))
+			likeTableDef.Createsql = newCreateSQL
+			setCreateSQLProperty(likeTableDef, newCreateSQL)
 			return p, nil
 		}
 
@@ -918,7 +923,8 @@ func buildCreateTable(
 		IfNotExists: stmt.IfNotExists,
 		Temporary:   stmt.Temporary,
 		TableDef: &TableDef{
-			Name: string(stmt.Table.ObjectName),
+			Name:        string(stmt.Table.ObjectName),
+			IsTemporary: stmt.Temporary,
 		},
 	}
 
@@ -1192,6 +1198,21 @@ func buildCreateTable(
 			},
 		},
 	}, nil
+}
+
+func setCreateSQLProperty(tableDef *TableDef, createSQL string) {
+	for _, def := range tableDef.Defs {
+		properties := def.GetProperties()
+		if properties == nil {
+			continue
+		}
+		for _, property := range properties.Properties {
+			if property.Key == catalog.SystemRelAttr_CreateSQL {
+				property.Value = createSQL
+				return
+			}
+		}
+	}
 }
 
 type checkForeignKeyAction struct {
@@ -1894,7 +1915,24 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 }
 
 func appendCheckDef(ctx CompilerContext, tableDef *TableDef, name string, astExpr tree.Expr) error {
+	if err := ensureCheckConstraintProtocol(ctx); err != nil {
+		return err
+	}
 	return appendCheckDefInternal(ctx, tableDef, name, astExpr, true)
+}
+
+func ensureCheckConstraintProtocol(ctx CompilerContext) error {
+	proc := ctx.GetProcess()
+	if proc == nil {
+		return nil
+	}
+	version, ok := moruntime.ServiceRuntime(proc.GetService()).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	if ok && version.(int64) < defines.MORPCVersion6 {
+		return moerr.NewNotSupported(
+			ctx.GetContext(), "CHECK constraints require all CNs to support protocol version 6")
+	}
+	return nil
 }
 
 func appendCheckDefInternal(
@@ -1904,6 +1942,9 @@ func appendCheckDefInternal(
 	astExpr tree.Expr,
 	validateSchemaName bool,
 ) error {
+	validateSchemaName = validateSchemaName &&
+		!tableDef.IsTemporary &&
+		!defines.IsInternalExecutor(ctx.GetContext())
 	// Scope validation for column-level CHECKs happens before this call. Bind
 	// against the complete column list here so persisted column positions match
 	// the table row layout; table-level CHECKs may reference any table column.
@@ -1927,7 +1968,7 @@ func appendCheckDefInternal(
 	}
 
 	// Format the original SQL expression text for SHOW CREATE TABLE output
-	fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true), tree.WithQuoteIdentifier())
+	fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithSingleQuoteString(), tree.WithQuoteIdentifier())
 	astExpr.Format(fmtCtx)
 	originSql := fmtCtx.String()
 
@@ -1946,9 +1987,10 @@ func appendCheckDefInternal(
 		for i := 1; ; i++ {
 			suffix := fmt.Sprintf("_chk_%d", i)
 			tableName := tableDef.Name
-			maxTableRunes := maxCheckConstraintNameRunes - utf8.RuneCountInString(suffix)
-			if utf8.RuneCountInString(tableName) > maxTableRunes {
-				tableName = string([]rune(tableName)[:maxTableRunes])
+			if utf8.RuneCountInString(tableName)+utf8.RuneCountInString(suffix) >
+				maxCheckConstraintNameRunes {
+				return moerr.NewInvalidInputf(
+					ctx.GetContext(), "identifier name '%s%s' is too long", tableName, suffix)
 			}
 			candidate := tableName + suffix
 			if checkNameSet[NormalizeCheckConstraintName(candidate)] {
@@ -2151,6 +2193,14 @@ func RecoverCheckConstraintsFromCreateSql(ctx CompilerContext, tableDef *TableDe
 		return
 	}
 
+	if !hasCheckSQLModeMarker(tableDef.Createsql) &&
+		legacyCheckSQLModeAmbiguous(tableDef.Createsql) {
+		logutil.Errorf(
+			"recover check constraints: table %s has mode-sensitive legacy SQL without an SQL-mode marker",
+			tableDef.Name)
+		setFailedCheckRecovery(tableDef)
+		return
+	}
 	createSQL, sqlMode := extractCheckSQLModeMarker(tableDef.Createsql)
 	stmt, err := parsers.ParseOneWithSQLMode(
 		ctx.GetContext(), dialect.MYSQL, createSQL, ctx.GetLowerCaseTableNames(), sqlMode)
@@ -2220,32 +2270,46 @@ func RecoverCheckConstraintsFromCreateSql(ctx CompilerContext, tableDef *TableDe
 		// it as schema metadata while preventing DML from asserting it.
 		scratch.Checks[len(scratch.Checks)-1].NotEnforced = c.enforcementSet && !c.enforced
 	}
+	if err := validateCheckConstraintNameLengths(ctx.GetContext(), scratch.Checks); err != nil {
+		logutil.Errorf(
+			"recover check constraints: invalid constraint name for table %s: %v",
+			tableDef.Name, err)
+		setFailedCheckRecovery(tableDef)
+		return
+	}
 	tableDef.Checks = scratch.Checks
 }
 
-func rewriteCheckConstraintTablePrefix(checks []*plan.CheckDef, oldTableName, newTableName string) {
+func RewriteCheckConstraintTablePrefix(checks []*plan.CheckDef, oldTableName, newTableName string) {
 	if oldTableName == "" || newTableName == "" || oldTableName == newTableName {
 		return
 	}
 	for _, check := range checks {
+		if check == nil {
+			continue
+		}
 		check.Name = rewriteCheckConstraintName(check.Name, oldTableName, newTableName, check.IsGeneratedName)
 	}
+}
+
+func validateCheckConstraintNameLengths(ctx context.Context, checks []*plan.CheckDef) error {
+	for _, check := range checks {
+		if check == nil {
+			continue
+		}
+		if utf8.RuneCountInString(check.Name) > maxCheckConstraintNameRunes {
+			return moerr.NewInvalidInputf(ctx, "identifier name '%s' is too long", check.Name)
+		}
+	}
+	return nil
 }
 
 func rewriteCheckConstraintName(name, oldTableName, newTableName string, generated bool) string {
 	if suffixAt := strings.LastIndex(name, "_chk_"); suffixAt >= 0 {
 		suffix := name[suffixAt:]
-		maxTableRunes := maxCheckConstraintNameRunes - utf8.RuneCountInString(suffix)
 		oldGeneratedPrefix := oldTableName
-		if utf8.RuneCountInString(oldGeneratedPrefix) > maxTableRunes {
-			oldGeneratedPrefix = string([]rune(oldGeneratedPrefix)[:maxTableRunes])
-		}
 		if generated || name == oldGeneratedPrefix+suffix {
-			newGeneratedPrefix := newTableName
-			if utf8.RuneCountInString(newGeneratedPrefix) > maxTableRunes {
-				newGeneratedPrefix = string([]rune(newGeneratedPrefix)[:maxTableRunes])
-			}
-			return newGeneratedPrefix + suffix
+			return newTableName + suffix
 		}
 	}
 	if generated {
@@ -2260,17 +2324,23 @@ func rewriteCheckConstraintName(name, oldTableName, newTableName string, generat
 
 func generatedCheckConstraintName(tableName string, ordinal int) string {
 	suffix := fmt.Sprintf("_chk_%d", ordinal)
-	maxTableRunes := maxCheckConstraintNameRunes - utf8.RuneCountInString(suffix)
-	if utf8.RuneCountInString(tableName) > maxTableRunes {
-		tableName = string([]rune(tableName)[:maxTableRunes])
-	}
 	return tableName + suffix
 }
 
 const checkSQLModeMarker = "/*__mo_check_sql_mode_hex="
 
+func hasCheckSQLModeMarker(createSQL string) bool {
+	return strings.HasPrefix(createSQL, checkSQLModeMarker)
+}
+
+func legacyCheckSQLModeAmbiguous(createSQL string) bool {
+	return strings.Contains(createSQL, `"`) ||
+		strings.Contains(createSQL, `||`) ||
+		strings.Contains(createSQL, `\`)
+}
+
 func addCheckSQLModeMarker(createSQL string, sqlMode *string) string {
-	if sqlMode == nil || *sqlMode == "" {
+	if sqlMode == nil {
 		return createSQL
 	}
 	return checkSQLModeMarker + hex.EncodeToString([]byte(*sqlMode)) + "*/ " + createSQL
@@ -4008,21 +4078,10 @@ func buildRenameTable(stmt *tree.RenameTable, ctx CompilerContext) (*Plan, error
 							return nil, moerr.NewTableAlreadyExists(ctx.GetContext(), newName)
 						}
 					}
-					if resolver, ok := ctx.(interface {
-						CheckConstraintNameExists(string, string, string) (bool, error)
-					}); ok {
-						for _, check := range tableDef.Checks {
-							renamed := rewriteCheckConstraintName(
-								check.Name, oldName, newName, check.IsGeneratedName)
-							exists, err := resolver.CheckConstraintNameExists(schemaName, oldName, renamed)
-							if err != nil {
-								return nil, err
-							}
-							if exists {
-								return nil, moerr.NewInvalidInputf(
-									ctx.GetContext(), "duplicate check constraint name '%s'", renamed)
-							}
-						}
+					renamedChecks := DeepCopyTableDef(tableDef, true).Checks
+					RewriteCheckConstraintTablePrefix(renamedChecks, oldName, newName)
+					if err := validateCheckConstraintNameLengths(ctx.GetContext(), renamedChecks); err != nil {
+						return nil, err
 					}
 				}
 				alterTablePlan.Actions[i] = &plan.AlterTable_Action{
@@ -4033,16 +4092,29 @@ func buildRenameTable(stmt *tree.RenameTable, ctx CompilerContext) (*Plan, error
 						},
 					},
 				}
+				alterTablePlan.CopyTableDef = DeepCopyTableDef(tableDef, true)
+				RewriteCheckConstraintTablePrefix(
+					alterTablePlan.CopyTableDef.Checks, oldName, newName)
 				updateSqls = append(updateSqls, getSqlForRenameTable(schemaName, oldName, newName)...)
 				delete(nameMapping, srcKey)
 				removed[srcKey] = true
-				nameMapping[dstKey] = &renamedInfo{objRef: objRef, tableDef: tableDef}
+				nameMapping[dstKey] = &renamedInfo{
+					objRef:   objRef,
+					tableDef: alterTablePlan.CopyTableDef,
+				}
 				delete(removed, dstKey)
 
 			default:
 				return nil, moerr.NewNotSupportedf(ctx.GetContext(), "statement: '%v'", tree.String(stmt, dialect.MYSQL))
 			}
 			alterTablePlan.UpdateFkSqls = updateSqls
+		}
+		if alterTablePlan.CopyTableDef != nil {
+			alterTablePlan.Actions = append(alterTablePlan.Actions, &plan.AlterTable_Action{
+				Action: &plan.AlterTable_Action_AlterReplaceDef{
+					AlterReplaceDef: &plan.AlterReplaceDef{},
+				},
+			})
 		}
 		renameTables = append(renameTables, alterTablePlan)
 	}
@@ -4585,11 +4657,11 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 			}
 
 			// TODO ONLY Check
-			_, tableDef, err := ctx.Resolve(databaseName, newName, nil)
+			_, existingDef, err := ctx.Resolve(databaseName, newName, nil)
 			if err != nil {
 				return nil, err
 			}
-			if tableDef != nil {
+			if existingDef != nil {
 				return nil, moerr.NewTableAlreadyExists(ctx.GetContext(), newName)
 			}
 
@@ -4601,6 +4673,9 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 					},
 				},
 			}
+			alterTable.CopyTableDef = DeepCopyTableDef(tableDef, true)
+			RewriteCheckConstraintTablePrefix(
+				alterTable.CopyTableDef.Checks, oldName, newName)
 
 			updateSqls = append(
 				updateSqls,
@@ -4714,11 +4789,15 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 	}
 
 	if alterTable.CopyTableDef != nil {
-		rewriteCheckConstraintTablePrefix(
+		RewriteCheckConstraintTablePrefix(
 			alterTable.CopyTableDef.Checks,
 			alterTable.CopyTableDef.Name,
 			alterTable.TableDef.Name,
 		)
+		if err := validateCheckConstraintNameLengths(
+			ctx.GetContext(), alterTable.CopyTableDef.Checks); err != nil {
+			return nil, err
+		}
 		alterTable.Actions = append(alterTable.Actions, &plan.AlterTable_Action{
 			Action: &plan.AlterTable_Action_AlterReplaceDef{
 				AlterReplaceDef: &plan.AlterReplaceDef{},

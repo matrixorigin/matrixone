@@ -11260,7 +11260,9 @@ constraint_keyword:
     }
 |   CONSTRAINT ident
     {
-        $$ = $2.Compare()
+        // CHECK constraint names are case-sensitive independently of
+        // lower_case_table_names, so preserve the token spelling.
+        $$ = $2.Origin()
     }
 
 references_def:
