@@ -578,16 +578,6 @@ func (mgr *TxnManager) onPrepare1PC(op *OpTxn, ts types.TS) {
 	mgr.onPrepare(op, ts)
 }
 
-func (mgr *TxnManager) onPrepare2PC(op *OpTxn, ts types.TS) {
-	// If Op is not OpPrepare, prepare rollback
-	if op.Op != OpPrepare {
-		mgr.onPreparRollback(op.Txn)
-		return
-	}
-
-	mgr.onPrepare(op, ts)
-}
-
 func (mgr *TxnManager) on1PCApply(op *OpTxn) {
 	var err error
 	var isAbort bool
@@ -620,26 +610,6 @@ func (mgr *TxnManager) OnCommitTxn(txn txnif.AsyncTxn) {
 		}
 	}
 }
-func (mgr *TxnManager) on2PCApply(op *OpTxn) {
-	var err error
-	var isAbort bool
-	switch op.Op {
-	// case OpPrepare:
-	// 	if err = op.Txn.ToPrepared(); err != nil {
-	// 		panic(err)
-	// 	}
-	case OpRollback:
-		isAbort = true
-		if err = op.Txn.ApplyRollback(); err != nil {
-			mgr.OnException(err)
-			logutil.Warn("[ApplyRollback]", TxnField(op.Txn), common.ErrorField(err))
-		}
-	}
-	// Here to change the txn state and
-	// broadcast the rollback event to all waiting threads
-	_ = op.Txn.DoneApply(err, isAbort)
-}
-
 func (mgr *TxnManager) preWal(op *OpTxn) bool {
 	// Idempotent check
 	if state := op.Txn.GetTxnState(false); state != txnif.TxnStateActive {
@@ -647,21 +617,17 @@ func (mgr *TxnManager) preWal(op *OpTxn) bool {
 		return false
 	}
 
-	// Mainly do : 1. conflict check for 1PC Commit or 2PC Prepare;
+	// Mainly do conflict checking before commit and push append nodes into
+	// their MVCC handles.
 	//   		   2. push the AppendNode into the MVCCHandle of block
 	mgr.onPrePrepare(op)
 
 	//Before this moment, all mvcc nodes of a txn has been pushed into the MVCCHandle.
 	//1. Allocate a timestamp , set it to txn's prepare timestamp and commit timestamp,
-	//   which would be changed in the future if txn is 2PC.
 	//2. Set transaction's state to Preparing or Rollbacking if op.Op is OpRollback.
 	ts := mgr.onBindPrepareTimeStamp(op)
 
-	if op.Txn.Is2PC() {
-		mgr.onPrepare2PC(op, ts)
-	} else {
-		mgr.onPrepare1PC(op, ts)
-	}
+	mgr.onPrepare1PC(op, ts)
 	if !op.Txn.IsReplay() {
 		if !mgr.prevPrepareTSInPreparing.IsEmpty() {
 			prepareTS := op.Txn.GetPrepareTS()
@@ -680,7 +646,7 @@ func (mgr *TxnManager) onWal(op *OpTxn) bool {
 		return false
 	}
 
-	if op.Op != OpCommit && op.Op != OpPrepare {
+	if op.Op != OpCommit {
 		return false
 	}
 
@@ -704,7 +670,6 @@ func (mgr *TxnManager) onWal(op *OpTxn) bool {
 	return true
 }
 
-// 1PC and 2PC
 func (mgr *TxnManager) onApply(items ...any) {
 	now := time.Now()
 	for _, item := range items {
@@ -723,11 +688,7 @@ func (mgr *TxnManager) onApply(items ...any) {
 				time.Sleep(duration)
 			}
 
-			if op.Is2PC() {
-				mgr.on2PCApply(op)
-			} else {
-				mgr.on1PCApply(op)
-			}
+			mgr.on1PCApply(op)
 		})
 	}
 	common.DoIfDebugEnabled(func() {

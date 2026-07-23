@@ -440,6 +440,58 @@ func TestTxnCmd_MarshalBinary_Basic(t *testing.T) {
 	assert.Equal(t, buf, buf2, "multiple calls should produce same result")
 }
 
+func TestTxnCmd_WALCompatibility(t *testing.T) {
+	newCmd := func(participants []uint64) *TxnCmd {
+		cmd := NewTxnCmd()
+		cmd.ID = "legacy-txn"
+		cmd.StartTS = types.BuildTS(10, 1)
+		cmd.PrepareTS = types.BuildTS(20, 2)
+		cmd.Participants = participants
+		return cmd
+	}
+
+	// A current single-TN record still uses the historical layout: in
+	// particular, PrepareTS and the zero-length Participants field remain.
+	nilParticipants, err := newCmd(nil).MarshalBinary()
+	require.NoError(t, err)
+	emptyParticipants, err := newCmd([]uint64{}).MarshalBinary()
+	require.NoError(t, err)
+	require.Equal(t, nilParticipants, emptyParticipants)
+	require.Equal(t, IOET_WALTxnEntry, types.DecodeUint16(nilParticipants[:2]))
+	require.Equal(t, IOET_WALTxnEntry_CurrVer, types.DecodeUint16(nilParticipants[2:4]))
+
+	for _, participants := range [][]uint64{nil, {11, 22, 33}} {
+		data, err := newCmd(participants).MarshalBinary()
+		require.NoError(t, err)
+		decoded, err := BuildCommandFrom(data)
+		require.NoError(t, err)
+		txnCmd := decoded.(*TxnCmd)
+		require.Equal(t, types.BuildTS(20, 2), txnCmd.PrepareTS)
+		require.Len(t, txnCmd.Participants, len(participants))
+		require.ElementsMatch(t, participants, txnCmd.Participants)
+	}
+}
+
+func TestTxnStateCmd_LegacyCodecRegistration(t *testing.T) {
+	require.Equal(t, txnif.TxnState(2), txnif.TxnStatePrepared)
+	require.Equal(t, txnif.TxnState(3), txnif.TxnStateCommittingFinished)
+	require.Equal(t, txnif.TxnState(5), txnif.TxnStateCommitted)
+	require.Equal(t, txnif.TxnState(6), txnif.TxnStateRollbacked)
+
+	cmd := NewTxnStateCmd("legacy-state", txnif.TxnStatePrepared, types.BuildTS(30, 3))
+	data, err := cmd.MarshalBinary()
+	require.NoError(t, err)
+	require.Equal(t, IOET_WALTxnCommand_TxnState, types.DecodeUint16(data[:2]))
+	require.Equal(t, IOET_WALTxnCommand_TxnState_CurrVer, types.DecodeUint16(data[2:4]))
+
+	decoded, err := BuildCommandFrom(data)
+	require.NoError(t, err)
+	stateCmd := decoded.(*TxnStateCmd)
+	require.Equal(t, cmd.ID, stateCmd.ID)
+	require.Equal(t, cmd.State, stateCmd.State)
+	require.Equal(t, cmd.CommitTs, stateCmd.CommitTs)
+}
+
 // TestTxnCmd_MarshalBinaryWithBuffer tests MarshalBinaryWithBuffer
 func TestTxnCmd_MarshalBinaryWithBuffer(t *testing.T) {
 	txnCmd := NewTxnCmd()
