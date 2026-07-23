@@ -23,6 +23,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -80,6 +81,104 @@ func TestDataBranchOutputMakeFileName(t *testing.T) {
 		tblStuff,
 	)
 	require.Regexp(t, regexp.MustCompile(`^diff_t2_sp2_t1_sp1_\d{8}_\d{6}$`), got)
+}
+
+func TestDataBranchOutputFileNameAndHintQuotePathSeparators(t *testing.T) {
+	ctx := context.Background()
+	ses := newValidateSession(t)
+
+	ctrl := gomock.NewController(t)
+	baseRel := mock_frontend.NewMockRelation(ctrl)
+	tarRel := mock_frontend.NewMockRelation(ctrl)
+	baseRel.EXPECT().GetTableName().Return("base/name`quoted").AnyTimes()
+	baseRel.EXPECT().GetTableDef(gomock.Any()).Return(&plan.TableDef{
+		DbName: "db/name`quoted",
+		Name:   "base/name`quoted",
+	}).AnyTimes()
+	tarRel.EXPECT().GetTableName().Return(`child\name:quoted`).AnyTimes()
+
+	outputDir := t.TempDir()
+	stmt := &tree.DataBranchDiff{
+		BaseTable: tree.TableName{
+			AtTsExpr: &tree.AtTimeStamp{SnapshotName: "base/snapshot 1"},
+		},
+		TargetTable: tree.TableName{
+			AtTsExpr: &tree.AtTimeStamp{SnapshotName: `target\snapshot%1`},
+		},
+		OutputOpt: &tree.DiffOutputOpt{DirPath: outputDir},
+	}
+	tblStuff := tableStuff{baseRel: baseRel, tarRel: tarRel}
+
+	filePath, hint, _, release, cleanup, err := prepareFSForDiffAsFile(ctx, ses, stmt, tblStuff)
+	require.NoError(t, err)
+	require.NotNil(t, release)
+	require.NotNil(t, cleanup)
+	t.Cleanup(release)
+	t.Cleanup(cleanup)
+
+	require.Equal(t, outputDir, filepath.Dir(filePath))
+	require.Regexp(t, regexp.MustCompile(
+		`^diff_child@5Cname@3Aquoted_target@5Csnapshot@251_base@2Fname@60quoted_base@2Fsnapshot@201_\d{8}_\d{6}\.sql$`,
+	), filepath.Base(filePath))
+	require.Equal(t,
+		"DELETE FROM `db/name``quoted`.`base/name``quoted`, INSERT INTO `db/name``quoted`.`base/name``quoted`",
+		hint,
+	)
+}
+
+func TestDataBranchOutputFileNameSurvivesCSVFormattingAndLengthLimit(t *testing.T) {
+	ctrl := gomock.NewController(t)
+
+	t.Run("valid and invalid UTF-8", func(t *testing.T) {
+		require.Equal(t, "a�b", encodeDiffFileNamePart("a�b"))
+		require.Equal(t, "a@FFb", encodeDiffFileNamePart(string([]byte{'a', 0xff, 'b'})))
+	})
+
+	t.Run("CSV format string", func(t *testing.T) {
+		for _, name := range []string{"Ād", "x%d", "x d", "x`d"} {
+			t.Run(name, func(t *testing.T) {
+				baseRel := mock_frontend.NewMockRelation(ctrl)
+				tarRel := mock_frontend.NewMockRelation(ctrl)
+				baseRel.EXPECT().GetTableName().Return("base").AnyTimes()
+				tarRel.EXPECT().GetTableName().Return(name).AnyTimes()
+
+				fileName := makeFileName(nil, nil, tableStuff{baseRel: baseRel, tarRel: tarRel}) + ".csv"
+				require.Equal(t, fileName, getExportFilePath(fileName, 0))
+			})
+		}
+	})
+
+	t.Run("long Unicode components", func(t *testing.T) {
+		ctx := context.Background()
+		ses := newValidateSession(t)
+		longName := strings.Repeat("中", 100)
+
+		baseRel := mock_frontend.NewMockRelation(ctrl)
+		tarRel := mock_frontend.NewMockRelation(ctrl)
+		baseRel.EXPECT().GetTableName().Return(longName).AnyTimes()
+		baseRel.EXPECT().GetTableDef(gomock.Any()).Return(&plan.TableDef{
+			DbName: "unicode_db",
+			Name:   longName,
+		}).AnyTimes()
+		tarRel.EXPECT().GetTableName().Return(longName).AnyTimes()
+
+		outputDir := t.TempDir()
+		stmt := &tree.DataBranchDiff{OutputOpt: &tree.DiffOutputOpt{DirPath: outputDir}}
+		filePath, _, _, release, cleanup, err := prepareFSForDiffAsFile(
+			ctx, ses, stmt, tableStuff{baseRel: baseRel, tarRel: tarRel},
+		)
+		require.NoError(t, err)
+		require.NotNil(t, release)
+		require.NotNil(t, cleanup)
+		t.Cleanup(release)
+		t.Cleanup(cleanup)
+
+		baseName := filepath.Base(filePath)
+		require.LessOrEqual(t, len(baseName), maxDiffFileNameStemBytes+len(".sql"))
+		require.True(t, utf8.ValidString(baseName))
+		require.Regexp(t, regexp.MustCompile(`_[0-9a-f]{32}_\d{8}_\d{6}\.sql$`), baseName)
+		require.Equal(t, outputDir, filepath.Dir(filePath))
+	})
 }
 
 func TestDataBranchOutputTableSpec(t *testing.T) {
