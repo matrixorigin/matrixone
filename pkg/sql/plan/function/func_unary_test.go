@@ -7219,6 +7219,10 @@ func resetDetachedUserLevelLockCleanupsForTest() {
 	detachedUserLevelLockCleanups.Lock()
 	defer detachedUserLevelLockCleanups.Unlock()
 	detachedUserLevelLockCleanups.entries = make(map[detachedUserLevelLockCleanupKey]*detachedUserLevelLockCleanupEntry)
+	detachedUserLevelLockCleanups.queue = make(chan detachedUserLevelLockCleanupKey, userLevelLockDetachedCleanupMaxEntries)
+	detachedUserLevelLockCleanups.backlog = make(chan detachedUserLevelLockCleanupRequest, userLevelLockDetachedCleanupBacklog)
+	detachedUserLevelLockCleanups.started = false
+	detachedUserLevelLockCleanups.backlogStarted = false
 	for {
 		select {
 		case <-detachedUserLevelLockCleanups.queue:
@@ -8842,6 +8846,41 @@ func TestDetachedUserLevelLockCleanupQueueIsBoundedAndDeduped(t *testing.T) {
 			v, err := getUserLevelLock("close_overload_a", 0, contender)
 			return err == nil && v == 1
 		}, 3*time.Second, 10*time.Millisecond)
+	})
+}
+
+func TestDetachedUserLevelLockCleanupFullBacklogHonorsContext(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		service := services[0].(*userLevelLockTestService)
+		key := detachedUserLevelLockCleanupKey{
+			serviceID: service.GetServiceID(),
+			owner:     "owner-full-backlog",
+			name:      "lock-full-backlog",
+			connID:    1001,
+			kind:      "lock",
+		}
+		txnIDs := make([][]byte, userLevelLockDetachedCleanupMaxTxnIDsPerEntry+1)
+		for i := range txnIDs {
+			txnIDs[i] = []byte(fmt.Sprintf("txn-full-backlog-%d", i))
+		}
+
+		detachedUserLevelLockCleanups.Lock()
+		detachedUserLevelLockCleanups.backlog = make(chan detachedUserLevelLockCleanupRequest, userLevelLockDetachedCleanupBacklog)
+		detachedUserLevelLockCleanups.backlogStarted = true
+		for i := 0; i < userLevelLockDetachedCleanupBacklog; i++ {
+			detachedUserLevelLockCleanups.backlog <- detachedUserLevelLockCleanupRequest{
+				ls:     service,
+				key:    key,
+				txnIDs: [][]byte{[]byte(fmt.Sprintf("queued-%d", i))},
+			}
+		}
+		detachedUserLevelLockCleanups.Unlock()
+
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+		defer cancel()
+		start := time.Now()
+		require.False(t, handoffDetachedUserLevelLockTxnCleanup(ctx, service, key, txnIDs))
+		require.Less(t, time.Since(start), 200*time.Millisecond)
 	})
 }
 

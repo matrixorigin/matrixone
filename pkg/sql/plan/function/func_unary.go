@@ -6986,6 +6986,7 @@ const userLevelLockDetachedCleanupOverflowShards = 16
 const userLevelLockDetachedCleanupMaxTxnIDsPerEntry = 2048
 const userLevelLockDetachedCleanupWorkers = 4
 const userLevelLockDetachedCleanupBacklog = 64
+const userLevelLockDetachedCleanupHandoffTimeout = 100 * time.Millisecond
 
 type userLevelLockKey struct {
 	owner string
@@ -7273,7 +7274,9 @@ func cleanupFailedUserLevelLockTxn(
 	if err := unlockUserLevelLockTxnID(attemptCtx, ls, txnID); err == nil {
 		return nil
 	}
-	if handoffDetachedUserLevelLockTxnCleanup(context.Background(), ls, key, [][]byte{txnID}) {
+	handoffCtx, handoffCancel := context.WithTimeout(context.Background(), userLevelLockDetachedCleanupHandoffTimeout)
+	defer handoffCancel()
+	if handoffDetachedUserLevelLockTxnCleanup(handoffCtx, ls, key, [][]byte{txnID}) {
 		return nil
 	}
 	return moerr.NewInternalErrorNoCtxf("user-level lock cleanup handoff failed for %s", key.name)
@@ -7815,8 +7818,10 @@ func unlockUserLevelLockProbe(ctx context.Context, ls lockservice.LockService, o
 	if err == nil {
 		return nil
 	}
+	handoffCtx, handoffCancel := context.WithTimeout(context.Background(), userLevelLockDetachedCleanupHandoffTimeout)
+	defer handoffCancel()
 	if !handoffDetachedUserLevelLockTxnCleanup(
-		context.Background(),
+		handoffCtx,
 		ls,
 		detachedUserLevelLockCleanupKey{
 			serviceID: ls.GetServiceID(),
@@ -8312,7 +8317,9 @@ func releaseUserLevelLocksOnSessionCloseWithTimeout(proc *process.Process, timeo
 		owner := userLevelLockOwner(proc)
 		connID := userLevelLockConnectionID(proc)
 		states := userLevelLocksForOwnerSession(owner, userLevelLockSessionID(proc))
-		if handoffDetachedUserLevelLockCleanups(context.Background(), proc.GetLockService(), userLevelLockOwnerCandidates(proc), connID, states) {
+		handoffCtx, handoffCancel := context.WithTimeout(context.Background(), min(timeout, userLevelLockDetachedCleanupHandoffTimeout))
+		defer handoffCancel()
+		if handoffDetachedUserLevelLockCleanups(handoffCtx, proc.GetLockService(), userLevelLockOwnerCandidates(proc), connID, states) {
 			detached := detachUserLevelLocksForOwner(owner, userLevelLockSessionID(proc))
 			logutil.Warn(fmt.Sprintf(
 				"ReleaseUserLevelLocksOnSessionClose transferred cleanup ownership after release failure: owner=%s locks=%d err=%v",
