@@ -16,6 +16,7 @@ package plan
 
 import (
 	"math"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -107,6 +108,11 @@ func buildPrepare(stmt tree.Prepare, ctx CompilerContext) (*Plan, error) {
 	if err != nil {
 		return nil, err
 	}
+	viewSchemas, err := collectPrepareViewSchemas(ctx)
+	if err != nil {
+		return nil, err
+	}
+	schemas = appendPrepareSchemas(schemas, viewSchemas...)
 	ddlSchemas, err := collectPrepareDdlSchemas(ctx, preparedStmt, preparePlan)
 	if err != nil {
 		return nil, err
@@ -325,6 +331,26 @@ func collectPrepareDdlSchemas(ctx CompilerContext, stmt tree.Statement, prepareP
 		}
 	}
 
+	return schemas, nil
+}
+
+func collectPrepareViewSchemas(ctx CompilerContext) ([]*plan.ObjectRef, error) {
+	var schemas []*plan.ObjectRef
+	for _, viewKey := range ctx.GetViews() {
+		viewKey, _, _ = strings.Cut(viewKey, ViewSnapshotKeySuffix)
+		databaseName, tableName, ok := strings.Cut(viewKey, "#")
+		if !ok || databaseName == "" || tableName == "" {
+			return nil, moerr.NewInternalErrorf(ctx.GetContext(), "invalid view dependency %q", viewKey)
+		}
+		objRef, tableDef, err := ctx.Resolve(databaseName, tableName, ctx.GetSnapshot())
+		if err != nil {
+			return nil, err
+		}
+		if objRef == nil || tableDef == nil {
+			return nil, moerr.NewNoSuchTable(ctx.GetContext(), databaseName, tableName)
+		}
+		schemas = appendPrepareSchemas(schemas, prepareSchemaRef(objRef, tableDef))
+	}
 	return schemas, nil
 }
 

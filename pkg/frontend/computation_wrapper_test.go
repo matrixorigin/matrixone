@@ -431,28 +431,6 @@ func TestPreparedSubscriptionSchemaChangedUsesLogicalName(t *testing.T) {
 	require.False(t, changed)
 }
 
-func TestRestorePreparedCloneNames(t *testing.T) {
-	clone := &tree.CloneTable{}
-	clone.SrcTable.SchemaName = "publisher_db"
-	clone.SrcTable.ObjectName = "physical_table"
-	clone.CreateTable.Table.SchemaName = "execute_db"
-	clone.CreateTable.Table.ObjectName = "mutated_target"
-	prepareStmt := &PrepareStmt{
-		PrepareStmt:         clone,
-		cloneSourceDatabase: "subscription_db",
-		cloneSourceTable:    "logical_table",
-		cloneTargetDatabase: "prepare_db",
-		cloneTargetTable:    "target",
-		hasCloneSource:      true,
-	}
-
-	restorePreparedCloneNames(prepareStmt)
-	require.Equal(t, tree.Identifier("subscription_db"), clone.SrcTable.SchemaName)
-	require.Equal(t, tree.Identifier("logical_table"), clone.SrcTable.ObjectName)
-	require.Equal(t, tree.Identifier("prepare_db"), clone.CreateTable.Table.SchemaName)
-	require.Equal(t, tree.Identifier("target"), clone.CreateTable.Table.ObjectName)
-}
-
 func TestCurrentTxnSnapshotTS(t *testing.T) {
 	ses, prepareStmt, _, _ := newPreparedExecuteEnv(t, 100)
 	defer prepareStmt.Close()
@@ -684,6 +662,42 @@ func TestRebuildPreparePlanUsesPreparedRootSQL(t *testing.T) {
 	requirePreparedViewRootSQL(t, prepareStmt, preparedSQL)
 	require.Equal(t, executeSQL, ses.GetSql())
 	require.Equal(t, executeSQL, ses.GetTxnCompileCtx().GetRootSql())
+}
+
+func TestRebuildPreparePlanUsesFreshCloneStatement(t *testing.T) {
+	ses, prepareStmt, _, execCtx := newPreparedExecuteEnv(t, 108)
+	defer prepareStmt.Close()
+	prepareStmt.PrepareStmt.Free()
+	clone := &tree.CloneTable{}
+	clone.SrcTable.ObjectName = "src"
+	clone.CreateTable.Table.ObjectName = "dst"
+	prepareStmt.PrepareStmt = clone
+	prepareStmt.cloneSQL = preparedCloneSQL(clone, "prepare_db")
+	prepareStmt.defaultDatabase = "prepare_db"
+
+	buildCount := 0
+	buildFn := func(
+		_ context.Context,
+		_ FeSession,
+		_ plan2.CompilerContext,
+		stmt tree.Statement,
+	) (*plan2.Plan, error) {
+		buildCount++
+		inner := stmt.(*tree.PrepareStmt).Stmt.(*tree.CloneTable)
+		require.Equal(t, tree.Identifier("prepare_db"), inner.SrcTable.SchemaName)
+		require.Equal(t, tree.Identifier("prepare_db"), inner.CreateTable.Table.SchemaName)
+		inner.SrcTable.SchemaName = "planner_mutation"
+		inner.CreateTable.Table.SchemaName = "planner_mutation"
+		return &plan2.Plan{}, nil
+	}
+
+	_, err := rebuildPreparePlan(execCtx, ses, prepareStmt, buildFn)
+	require.NoError(t, err)
+	_, err = rebuildPreparePlan(execCtx, ses, prepareStmt, buildFn)
+	require.NoError(t, err)
+	require.Equal(t, 2, buildCount)
+	require.Empty(t, clone.SrcTable.SchemaName)
+	require.Empty(t, clone.CreateTable.Table.SchemaName)
 }
 
 func TestModeMismatchRebuildsPreparedViewWithPreparedRootSQL(t *testing.T) {

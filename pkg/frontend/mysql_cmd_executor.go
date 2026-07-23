@@ -1874,8 +1874,7 @@ func createPrepareStmt(
 		ses.GetTxnCompileCtx().SetExecCtx(execCtx)
 	}
 
-	cloneSourceDatabase, cloneSourceTable, cloneTargetDatabase, cloneTargetTable, hasCloneSource :=
-		preparedCloneNames(saveStmt, ses.GetTxnCompileCtx().GetDatabase())
+	cloneSQL := preparedCloneSQL(saveStmt, ses.GetTxnCompileCtx().GetDatabase())
 	var preparePlan *plan.Plan
 	err := execCtx.withRootSQL(originSQL, func() (err error) {
 		preparePlan, err = buildPlanWithAuthorization(execCtx.reqCtx, ses, ses.GetTxnCompileCtx(), stmt)
@@ -1920,11 +1919,7 @@ func createPrepareStmt(
 		defaultDatabase:     ses.GetTxnCompileCtx().GetDatabase(),
 		tempTableVersion:    ses.GetTempTableVersion(),
 		ddlVersion:          ses.getDDLVersion(),
-		cloneSourceDatabase: cloneSourceDatabase,
-		cloneSourceTable:    cloneSourceTable,
-		cloneTargetDatabase: cloneTargetDatabase,
-		cloneTargetTable:    cloneTargetTable,
-		hasCloneSource:      hasCloneSource,
+		cloneSQL:            cloneSQL,
 		getFromSendLongData: make(map[int]struct{}),
 		schedulingSQLMode:   schedulingSQLMode,
 	}
@@ -1944,24 +1939,56 @@ func createPrepareStmt(
 	return prepareStmt, nil
 }
 
-func preparedCloneNames(
-	stmt tree.Statement,
-	defaultDatabase string,
-) (sourceDatabase, sourceTable, targetDatabase, targetTable string, ok bool) {
+func preparedCloneSQL(stmt tree.Statement, defaultDatabase string) string {
 	clone, ok := stmt.(*tree.CloneTable)
 	if !ok {
-		return "", "", "", "", false
+		return ""
 	}
-	sourceDatabase = clone.SrcTable.SchemaName.String()
-	if sourceDatabase == "" {
-		sourceDatabase = defaultDatabase
+	executionClone := *clone
+	executionClone.SrcTable = clone.SrcTable
+	executionClone.CreateTable = clone.CreateTable
+	if executionClone.SrcTable.SchemaName == "" {
+		executionClone.SrcTable.SchemaName = tree.Identifier(defaultDatabase)
 	}
-	targetDatabase = clone.CreateTable.Table.SchemaName.String()
-	if targetDatabase == "" {
-		targetDatabase = defaultDatabase
+	executionClone.SrcTable.ExplicitSchema = true
+	if executionClone.CreateTable.Table.SchemaName == "" && executionClone.ToAccountOpt == nil {
+		executionClone.CreateTable.Table.SchemaName = tree.Identifier(defaultDatabase)
 	}
-	return sourceDatabase, clone.SrcTable.ObjectName.String(),
-		targetDatabase, clone.CreateTable.Table.ObjectName.String(), true
+	executionClone.CreateTable.Table.ExplicitSchema =
+		executionClone.CreateTable.Table.SchemaName != ""
+	return tree.StringWithOpts(
+		&executionClone,
+		dialect.MYSQL,
+		tree.WithQuoteIdentifier(),
+		tree.WithSingleQuoteString(),
+	)
+}
+
+func freshPreparedCloneStatement(
+	ctx context.Context,
+	prepareStmt *PrepareStmt,
+) (tree.Statement, bool, error) {
+	if prepareStmt == nil {
+		return nil, false, moerr.NewInternalError(ctx, "prepared statement is nil")
+	}
+	if prepareStmt.cloneSQL == "" {
+		return prepareStmt.PrepareStmt, false, nil
+	}
+	stmts, err := mysql.ParseWithSQLMode(ctx, prepareStmt.cloneSQL, 0, prepareStmt.schedulingSQLMode)
+	if err != nil {
+		return nil, false, err
+	}
+	if len(stmts) != 1 {
+		for _, stmt := range stmts {
+			stmt.Free()
+		}
+		return nil, false, moerr.NewInternalError(ctx, "prepared clone SQL must contain exactly one statement")
+	}
+	if _, ok := stmts[0].(*tree.CloneTable); !ok {
+		stmts[0].Free()
+		return nil, false, moerr.NewInternalError(ctx, "prepared clone SQL did not parse as CLONE TABLE")
+	}
+	return stmts[0], true, nil
 }
 
 func doDeallocate(ses *Session, execCtx *ExecCtx, st *tree.Deallocate) error {

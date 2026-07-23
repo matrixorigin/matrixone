@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/stretchr/testify/require"
 )
@@ -32,6 +33,29 @@ type resolveErrorCompilerContext struct {
 
 func (c *resolveErrorCompilerContext) Resolve(string, string, *Snapshot) (*ObjectRef, *TableDef, error) {
 	return nil, nil, c.err
+}
+
+type viewDependencyCompilerContext struct {
+	*MockCompilerContext
+	views    []string
+	snapshot *Snapshot
+	resolve  func(string, string, *Snapshot) (*ObjectRef, *TableDef, error)
+}
+
+func (c *viewDependencyCompilerContext) GetViews() []string {
+	return c.views
+}
+
+func (c *viewDependencyCompilerContext) GetSnapshot() *Snapshot {
+	return c.snapshot
+}
+
+func (c *viewDependencyCompilerContext) Resolve(
+	databaseName string,
+	tableName string,
+	snapshot *Snapshot,
+) (*ObjectRef, *TableDef, error) {
+	return c.resolve(databaseName, tableName, snapshot)
 }
 
 func TestCollectPrepareDdlSchemas(t *testing.T) {
@@ -315,6 +339,63 @@ func TestResetPreparePlanCollectsDdlQuerySchemas(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, schemas, 1)
 	require.Equal(t, "src", schemas[0].ObjName)
+	require.Equal(t, int64(30), schemas[0].Server)
+}
+
+func TestResetPreparePlanCollectsExternalAndSourceScans(t *testing.T) {
+	for _, nodeType := range []planpb.Node_NodeType{
+		planpb.Node_EXTERNAL_SCAN,
+		planpb.Node_SOURCE_SCAN,
+	} {
+		t.Run(nodeType.String(), func(t *testing.T) {
+			queryPlan := &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{
+				Steps: []int32{0},
+				Nodes: []*planpb.Node{{
+					NodeType: nodeType,
+					ObjRef: &planpb.ObjectRef{
+						SchemaName: "db", ObjName: "src", Obj: 20,
+					},
+					TableDef: &planpb.TableDef{Name: "src", DbId: 10, TblId: 20, Version: 30},
+				}},
+			}}}
+
+			schemas, _, err := ResetPreparePlan(NewMockCompilerContext(false), queryPlan)
+			require.NoError(t, err)
+			require.Len(t, schemas, 1)
+			require.Equal(t, "src", schemas[0].ObjName)
+			require.Equal(t, int64(30), schemas[0].Server)
+		})
+	}
+}
+
+func TestCollectPrepareViewSchemasPreservesIdentity(t *testing.T) {
+	mock := NewMockCompilerContext(false)
+	snapshot := &Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 42}}
+	ctx := &viewDependencyCompilerContext{
+		MockCompilerContext: mock,
+		views: []string{
+			"sub#src_v",
+			FormatViewKeyWithSnapshot("sub#src_v", snapshot),
+		},
+		snapshot: snapshot,
+	}
+	ctx.resolve = func(databaseName, tableName string, gotSnapshot *Snapshot) (*ObjectRef, *TableDef, error) {
+		require.Equal(t, "sub", databaseName)
+		require.Equal(t, "src_v", tableName)
+		require.Same(t, snapshot, gotSnapshot)
+		return &ObjectRef{
+				SchemaName: "publisher_db", ObjName: tableName, Obj: 20,
+				SubscriptionName: databaseName, PubInfo: &planpb.PubInfo{TenantId: 11},
+			},
+			&TableDef{Name: tableName, DbId: 10, TblId: 20, Version: 30},
+			nil
+	}
+
+	schemas, err := collectPrepareViewSchemas(ctx)
+	require.NoError(t, err)
+	require.Len(t, schemas, 1)
+	require.Equal(t, "sub", schemas[0].SubscriptionName)
+	require.Equal(t, int32(11), schemas[0].GetPubInfo().GetTenantId())
 	require.Equal(t, int64(30), schemas[0].Server)
 }
 

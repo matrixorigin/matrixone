@@ -6186,18 +6186,38 @@ func TestPlanChangesCatalog(t *testing.T) {
 	require.False(t, planChangesCatalog(nil))
 }
 
-func TestPreparedCloneNames(t *testing.T) {
+func TestFreshPreparedCloneStatement(t *testing.T) {
 	clone := &tree.CloneTable{}
 	clone.SrcTable.ObjectName = "src"
 	clone.CreateTable.Table.ObjectName = "dst"
 
-	srcDB, srcTable, dstDB, dstTable, ok := preparedCloneNames(clone, "prepare_db")
-	require.True(t, ok)
-	require.Equal(t, "prepare_db", srcDB)
-	require.Equal(t, "src", srcTable)
-	require.Equal(t, "prepare_db", dstDB)
-	require.Equal(t, "dst", dstTable)
+	cloneSQL := preparedCloneSQL(clone, "prepare_db")
+	require.NotEmpty(t, cloneSQL)
+	prepareStmt := &PrepareStmt{
+		PrepareStmt: clone,
+		cloneSQL:    cloneSQL,
+	}
 
-	_, _, _, _, ok = preparedCloneNames(&tree.Select{}, "prepare_db")
-	require.False(t, ok)
+	first, owned, err := freshPreparedCloneStatement(context.Background(), prepareStmt)
+	require.NoError(t, err)
+	require.True(t, owned)
+	defer first.Free()
+	firstClone := first.(*tree.CloneTable)
+	require.Equal(t, tree.Identifier("prepare_db"), firstClone.SrcTable.SchemaName)
+	require.Equal(t, tree.Identifier("src"), firstClone.SrcTable.ObjectName)
+	require.Equal(t, tree.Identifier("prepare_db"), firstClone.CreateTable.Table.SchemaName)
+	require.Equal(t, tree.Identifier("dst"), firstClone.CreateTable.Table.ObjectName)
+
+	firstClone.SrcTable.SchemaName = "execute_db"
+	firstClone.CreateTable.Table.SchemaName = "execute_db"
+	second, owned, err := freshPreparedCloneStatement(context.Background(), prepareStmt)
+	require.NoError(t, err)
+	require.True(t, owned)
+	defer second.Free()
+	require.NotSame(t, first, second)
+	secondClone := second.(*tree.CloneTable)
+	require.Equal(t, tree.Identifier("prepare_db"), secondClone.SrcTable.SchemaName)
+	require.Equal(t, tree.Identifier("prepare_db"), secondClone.CreateTable.Table.SchemaName)
+
+	require.Empty(t, preparedCloneSQL(&tree.Select{}, "prepare_db"))
 }

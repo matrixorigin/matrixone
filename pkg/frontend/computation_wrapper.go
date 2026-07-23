@@ -571,13 +571,19 @@ func rebuildPreparePlan(
 	prepareStmt *PrepareStmt,
 	buildFn func(context.Context, FeSession, plan2.CompilerContext, tree.Statement) (*plan2.Plan, error),
 ) (*plan2.Plan, error) {
-	restorePreparedCloneNames(prepareStmt)
+	innerStmt, owned, err := freshPreparedCloneStatement(execCtx.reqCtx, prepareStmt)
+	if err != nil {
+		return nil, err
+	}
+	if owned {
+		defer innerStmt.Free()
+	}
 	originPrepareStmt := &tree.PrepareStmt{
 		Name: tree.Identifier(prepareStmt.Name),
-		Stmt: prepareStmt.PrepareStmt,
+		Stmt: innerStmt,
 	}
 	var newPlan *plan2.Plan
-	err := execCtx.withRootSQL(prepareStmt.Sql, func() (err error) {
+	err = execCtx.withRootSQL(prepareStmt.Sql, func() (err error) {
 		compilerCtx := ses.GetTxnCompileCtx()
 		currentDatabase := compilerCtx.GetDatabase()
 		compilerCtx.SetDatabase(prepareStmt.defaultDatabase)
@@ -778,8 +784,11 @@ func initExecuteStmtParamWithResolver(
 		ses, originSQL, prepareStmt.schedulingSQLMode).Explicit {
 		retComp = nil
 	}
-	restorePreparedCloneNames(prepareStmt)
-	return retComp, preparePlan.Plan, prepareStmt.PrepareStmt, originSQL, nil
+	executionStmt, _, err := freshPreparedCloneStatement(reqCtx, prepareStmt)
+	if err != nil {
+		return nil, nil, nil, "", err
+	}
+	return retComp, preparePlan.Plan, executionStmt, originSQL, nil
 }
 
 func prepareSchemaAccountID(currentAccountID uint32, obj *plan.ObjectRef) uint32 {
@@ -827,20 +836,6 @@ func preparedSubscriptionSchemaChanged(resolve preparedSchemaResolver, expected 
 		currentDef.GetDbId() != uint64(expected.GetDb()) ||
 		currentDef.GetTblId() != uint64(expected.GetObj()) ||
 		currentDef.GetVersion() != uint32(expected.GetServer()), nil
-}
-
-func restorePreparedCloneNames(prepareStmt *PrepareStmt) {
-	if prepareStmt == nil || !prepareStmt.hasCloneSource {
-		return
-	}
-	clone, ok := prepareStmt.PrepareStmt.(*tree.CloneTable)
-	if !ok {
-		return
-	}
-	clone.SrcTable.SchemaName = tree.Identifier(prepareStmt.cloneSourceDatabase)
-	clone.SrcTable.ObjectName = tree.Identifier(prepareStmt.cloneSourceTable)
-	clone.CreateTable.Table.SchemaName = tree.Identifier(prepareStmt.cloneTargetDatabase)
-	clone.CreateTable.Table.ObjectName = tree.Identifier(prepareStmt.cloneTargetTable)
 }
 
 func preparedDDLNeedsCatalogRefresh(stmt tree.Statement) bool {

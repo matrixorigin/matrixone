@@ -318,14 +318,9 @@ type PrepareStmt struct {
 	tempTableVersion uint64
 	// ddlVersion is the session DDL generation used to build the cached plan.
 	ddlVersion uint64
-	// The clone names preserve the source and target resolved at PREPARE time.
-	// CLONE execution mutates the shared AST while resolving subscriptions and
-	// filling unqualified database names, so every EXECUTE restores both sides.
-	cloneSourceDatabase string
-	cloneSourceTable    string
-	cloneTargetDatabase string
-	cloneTargetTable    string
-	hasCloneSource      bool
+	// cloneSQL is an immutable, fully qualified SQL representation captured
+	// before clone planning can mutate the parsed AST.
+	cloneSQL string
 
 	// schedulingSQLMode freezes the lexical mode used when Sql was prepared.
 	// EXECUTE must not reinterpret optimizer comments after session sql_mode

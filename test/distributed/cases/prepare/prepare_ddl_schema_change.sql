@@ -269,6 +269,42 @@ from information_schema.tables
 where table_schema = 'prepare_ddl_schema_change'
   and table_name = 'clone_generation_dst';
 
+create table prepared_view_t1 (a int);
+create table prepared_view_t2 (b bigint);
+create view prepared_source_view as select a from prepared_view_t1;
+prepare prepared_view_dependency_stmt from
+    'create view prepared_target_view as select * from prepared_source_view';
+-- @session:id=1
+use prepare_ddl_schema_change;
+alter view prepared_source_view as select b from prepared_view_t2;
+-- @session
+execute prepared_view_dependency_stmt;
+select column_name, data_type
+from information_schema.columns
+where table_schema = 'prepare_ddl_schema_change'
+  and table_name = 'prepared_target_view'
+order by ordinal_position;
+deallocate prepare prepared_view_dependency_stmt;
+
+create external table prepared_external_source (a int)
+infile{"filepath"='$resources/external_table_file/ex_table_number.csv'}
+fields terminated by ',' enclosed by '\"' lines terminated by '\n';
+prepare prepared_external_dependency_stmt from
+    'create view prepared_external_view as select * from prepared_external_source';
+-- @session:id=1
+drop table prepared_external_source;
+create external table prepared_external_source (b bigint)
+infile{"filepath"='$resources/external_table_file/ex_table_number.csv'}
+fields terminated by ',' enclosed by '\"' lines terminated by '\n';
+-- @session
+execute prepared_external_dependency_stmt;
+select column_name, data_type
+from information_schema.columns
+where table_schema = 'prepare_ddl_schema_change'
+  and table_name = 'prepared_external_view'
+order by ordinal_position;
+deallocate prepare prepared_external_dependency_stmt;
+
 create database clone_prepare_db1;
 create database clone_prepare_db2;
 create table clone_prepare_db1.src (a int);
