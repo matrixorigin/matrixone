@@ -493,6 +493,20 @@ func TestQueryAndStopBoundedWhenIOQueueFull(t *testing.T) {
 	releaseIO()
 }
 
+func TestClosedGenerationNeverEnqueuesIO(t *testing.T) {
+	sched := &MergeScheduler{
+		ioChan: make(chan *MMsg, 256),
+	}
+	stopCh := make(chan struct{})
+	close(stopCh)
+	msg := &MMsg{Kind: MMsgKindVacuumCheck}
+
+	for range cap(sched.ioChan) * 4 {
+		require.False(t, sched.sendIOForGeneration(&stopCh, msg))
+	}
+	require.Empty(t, sched.ioChan)
+}
+
 func TestLaunchPad(t *testing.T) {
 	pad := newLaunchPad(NewStdClock())
 	cata := catalog.MockCatalog(nil)

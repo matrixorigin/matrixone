@@ -514,6 +514,11 @@ func (a *MergeScheduler) sendIOForGeneration(
 		return false
 	}
 	select {
+	case <-*stopCh:
+		return false
+	default:
+	}
+	select {
 	case a.ioChan <- msg:
 		return true
 	case <-*stopCh:
