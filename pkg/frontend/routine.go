@@ -37,6 +37,13 @@ type holder[T any] struct {
 	value T
 }
 
+var clientRequestClockOrigin = time.Now()
+
+func clientRequestClockValue(now time.Time) int64 {
+	// Reserve zero as the inactive sentinel.
+	return now.Sub(clientRequestClockOrigin).Nanoseconds() + 1
+}
+
 // Routine handles requests.
 // Read requests from the IOSession layer,
 // use the executor to handle requests, and response them.
@@ -55,6 +62,8 @@ type Routine struct {
 	closeOnce sync.Once
 
 	inProcessRequest bool
+	requestStartedAt atomic.Int64
+	closing          atomic.Bool
 
 	cancelled atomic.Bool
 
@@ -126,6 +135,22 @@ func (rt *Routine) setInProcessRequest(b bool) {
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
 	rt.inProcessRequest = b
+	if b {
+		rt.requestStartedAt.Store(clientRequestClockValue(time.Now()))
+	} else {
+		rt.requestStartedAt.Store(0)
+	}
+}
+
+func (rt *Routine) requestRunningLongerThan(nowValue int64, minimum time.Duration) bool {
+	if rt.closing.Load() {
+		return false
+	}
+	startedAt := rt.requestStartedAt.Load()
+	if startedAt == 0 {
+		return false
+	}
+	return nowValue-startedAt >= minimum.Nanoseconds()
 }
 
 // execCallbackInProcessRequestOnly denotes if inProcessRequest is true,
@@ -193,16 +218,36 @@ func (rt *Routine) getSession() *Session {
 
 func (rt *Routine) setCancelRequestFunc(cf context.CancelFunc) {
 	rt.mu.Lock()
-	defer rt.mu.Unlock()
 	rt.cancelRequestFunc = cf
+	closing := rt.closing.Load()
+	rt.mu.Unlock()
+	if closing && cf != nil {
+		cf()
+	}
 }
 
 func (rt *Routine) cancelRequestCtx() {
 	rt.mu.Lock()
-	defer rt.mu.Unlock()
-	if rt.cancelRequestFunc != nil {
-		rt.cancelRequestFunc()
+	cancel := rt.cancelRequestFunc
+	rt.mu.Unlock()
+	if cancel != nil {
+		cancel()
 	}
+}
+
+// beginClose seals new lifecycle work and cancels current request/lifecycle
+// contexts without waiting for them. Resource cleanup remains owned by
+// cleanup's closeOnce path.
+func (rt *Routine) beginClose() {
+	rt.mu.Lock()
+	rt.closing.Store(true)
+	cancelRequest := rt.cancelRequestFunc
+	rt.mu.Unlock()
+
+	if cancelRequest != nil {
+		cancelRequest()
+	}
+	rt.mc.startClose()
 }
 
 func (rt *Routine) getCleanupContext() context.Context {
@@ -396,13 +441,11 @@ func (rt *Routine) cleanup() {
 	//step 1: cancel the query if there is a running query.
 	//step 2: close the connection.
 	rt.closeOnce.Do(func() {
-		// Cancellation is the control path for both the running pipeline and any
-		// lifecycle operation waiting on it. It must happen before waiting for
-		// migration/reset or acquiring the transaction handler during rollback.
-		rt.killQuery(false, "")
-
-		// we should wait for the migration and close the migration controller.
+		// Seal and cancel before waiting. beginClose itself never waits, so it is
+		// safe to call from the connection-liveness control path.
+		rt.beginClose()
 		rt.mc.waitAndClose()
+		rt.killQuery(false, "")
 
 		var txnMeta string
 		ses := rt.getSession()
@@ -450,22 +493,48 @@ func (rt *Routine) cleanup() {
 }
 
 func (rt *Routine) migrateConnectionTo(ctx context.Context, req *query.MigrateConnToRequest) error {
-	var err error
-	rt.mc.migrateOnce.Do(func() {
-		if !rt.mc.beginOperation() {
-			err = moerr.NewInternalErrorNoCtx("cannot start migrate as routine has been closed")
-			return
+	operationCtx, ok := rt.mc.beginOperationWithContext(ctx)
+	if !ok {
+		if ctx != nil {
+			if cause := context.Cause(ctx); cause != nil {
+				return cause
+			}
 		}
-		defer rt.mc.endOperation()
+		return moerr.NewInternalErrorNoCtx("cannot start migrate as routine has been closed")
+	}
+	defer rt.mc.endOperation()
+
+	rt.mc.migrateOnce.Do(func() {
 		ses := rt.getSession()
 		ses.UpdateDebugString()
-		err = Migrate(ses, req)
+		rt.mc.migrateErr = Migrate(operationCtx, ses, req)
 	})
-	return err
+	return rt.mc.migrateErr
 }
 
 func (rt *Routine) migrateConnectionFrom(resp *query.MigrateConnFromResponse) error {
+	return rt.migrateConnectionFromWithContext(rt.getCancelRoutineCtx(), resp)
+}
+
+func (rt *Routine) migrateConnectionFromWithContext(
+	ctx context.Context,
+	resp *query.MigrateConnFromResponse,
+) error {
+	operationCtx, ok := rt.mc.beginOperationWithContext(ctx)
+	if !ok {
+		if ctx != nil {
+			if cause := context.Cause(ctx); cause != nil {
+				return cause
+			}
+		}
+		return moerr.NewInternalErrorNoCtx("cannot migrate from a routine that has been closed")
+	}
+	defer rt.mc.endOperation()
+
 	ses := rt.getSession()
+	if cause := context.Cause(operationCtx); cause != nil {
+		return cause
+	}
 	resp.DB = ses.GetDatabaseName()
 	resp.LastAffectedRows = ses.GetLastAffectedRows()
 	for _, st := range ses.GetPrepareStmts() {
@@ -475,14 +544,34 @@ func (rt *Routine) migrateConnectionFrom(resp *query.MigrateConnFromResponse) er
 			ParamTypes: st.ParamTypes,
 		})
 	}
+	if cause := context.Cause(operationCtx); cause != nil {
+		return cause
+	}
 	return nil
 }
 
 func (rt *Routine) resetSession(baseServiceID string, resp *query.ResetSessionResponse) error {
-	if !rt.mc.tryBeginOperation() {
+	return rt.resetSessionWithContext(rt.getCancelRoutineCtx(), baseServiceID, resp)
+}
+
+func (rt *Routine) resetSessionWithContext(
+	ctx context.Context,
+	baseServiceID string,
+	resp *query.ResetSessionResponse,
+) error {
+	operationCtx, ok := rt.mc.tryBeginOperationWithContext(ctx)
+	if !ok {
+		if ctx != nil {
+			if cause := context.Cause(ctx); cause != nil {
+				return cause
+			}
+		}
 		return moerr.NewInternalErrorNoCtx("cannot reset session as routine is closed or busy")
 	}
 	defer rt.mc.endOperation()
+	if cause := context.Cause(operationCtx); cause != nil {
+		return cause
+	}
 
 	// retrieve the old session.
 	oldSession := rt.getSession()
@@ -492,12 +581,25 @@ func (rt *Routine) resetSession(baseServiceID string, resp *query.ResetSessionRe
 	cancelCtx = context.WithValue(cancelCtx, defines.NodeIDKey{}, baseServiceID)
 
 	// before create new session, we should reset the database on the protocol.
-	rt.getProtocol().SetStr(DBNAME, "")
+	protocol := rt.getProtocol()
+	previousDB := protocol.GetStr(DBNAME)
+	protocol.SetStr(DBNAME, "")
 
-	newSession := NewSession(cancelCtx, baseServiceID, rt.getProtocol(), nil)
+	newSession := NewSession(cancelCtx, baseServiceID, protocol, nil)
+	resetCommitted := false
+	defer func() {
+		if !resetCommitted {
+			protocol.SetStr(DBNAME, previousDB)
+			// The protocol still belongs to the old routine/session on this
+			// path. Release the speculative session without closing the
+			// connection.
+			newSession.ReserveConn()
+			newSession.Close()
+		}
+	}()
 
 	// reset the old and new session.
-	if err := newSession.reset(oldSession); err != nil {
+	if err := newSession.reset(operationCtx, oldSession); err != nil {
 		return err
 	}
 
@@ -505,12 +607,13 @@ func (rt *Routine) resetSession(baseServiceID string, resp *query.ResetSessionRe
 	rt.killQuery(false, "")
 
 	// reset the new session in other instances.
-	rt.getProtocol().Reset(newSession)
+	protocol.Reset(newSession)
 	rt.setSession(newSession)
 	newSession.getRoutineManager().sessionManager.AddSession(newSession)
+	resetCommitted = true
 
 	// update the password filed in response.
-	resp.AuthString = []byte(rt.getProtocol().GetStr(AuthString))
+	resp.AuthString = []byte(protocol.GetStr(AuthString))
 
 	return nil
 }

@@ -1974,7 +1974,7 @@ func (ses *Session) getCleanupContext() context.Context {
 
 // reset resets the ses instance and copy some fields of prev, then
 // close the prev.
-func (ses *Session) reset(prev *Session) error {
+func (ses *Session) reset(ctx context.Context, prev *Session) error {
 	if ses == nil || prev == nil {
 		return nil
 	}
@@ -2004,8 +2004,23 @@ func (ses *Session) reset(prev *Session) error {
 	ses.proxyAddr = prev.proxyAddr
 
 	// rollback the transactions in the old session.
+	rollbackCtx := prev.getCleanupContext()
+	if ctx != nil {
+		cancelCtx, cancel := context.WithCancelCause(rollbackCtx)
+		stopCancel := context.AfterFunc(ctx, func() {
+			cancel(context.Cause(ctx))
+		})
+		defer func() {
+			stopCancel()
+			cancel(nil)
+		}()
+		rollbackCtx = cancelCtx
+		if cause := context.Cause(ctx); cause != nil {
+			return cause
+		}
+	}
 	tempExecCtx := ExecCtx{
-		reqCtx: prev.getCleanupContext(),
+		reqCtx: rollbackCtx,
 		ses:    prev,
 		txnOpt: FeTxnOption{byRollback: true},
 	}
@@ -2014,6 +2029,11 @@ func (ses *Session) reset(prev *Session) error {
 		prev.Error(tempExecCtx.reqCtx, "failed to rollback txn",
 			zap.Error(err))
 		return err
+	}
+	if ctx != nil {
+		if cause := context.Cause(ctx); cause != nil {
+			return cause
+		}
 	}
 	// close the previous session.
 	prev.ReserveConnAndClose()
@@ -2116,16 +2136,23 @@ func (p *prepareStmtMigration) Migrate(ctx context.Context, ses *Session) error 
 	return doComQuery(ses, tempExecCtx, &UserInput{sql: p.sql})
 }
 
-func Migrate(ses *Session, req *query.MigrateConnToRequest) error {
+func Migrate(ctx context.Context, ses *Session, req *query.MigrateConnToRequest) error {
 	ses.EnterFPrint(FPMigrate)
 	defer ses.ExitFPrint(FPMigrate)
+	parameters := getPu(ses.GetService()).SV
+
+	if ctx == nil {
+		ctx = ses.GetTxnHandler().GetTxnCtx()
+	}
+	if err := context.Cause(ctx); err != nil {
+		return err
+	}
 	// USE and PREPARE are replayed as internal statements and update ROW_COUNT().
 	// Restore the source session value after all replay work has finished.
 	defer restoreRowCount(ses, ses.GetProc(), req.LastAffectedRows)
-	parameters := getPu(ses.GetService()).SV
-
-	//all offspring related to the request inherit the txnCtx
-	cancelRequestCtx, cancelRequestFunc := context.WithTimeoutCause(ses.GetTxnHandler().GetTxnCtx(), parameters.SessionTimeout.Duration, moerr.CauseMigrate)
+	// Migration work is bounded by both its caller/lifecycle context and the
+	// configured session timeout.
+	cancelRequestCtx, cancelRequestFunc := context.WithTimeoutCause(ctx, parameters.SessionTimeout.Duration, moerr.CauseMigrate)
 	defer cancelRequestFunc()
 	ses.UpdateDebugString()
 	tenant := ses.GetTenantInfo()
@@ -2134,21 +2161,24 @@ func Migrate(ses *Session, req *query.MigrateConnToRequest) error {
 	if rm != nil && rm.baseService != nil {
 		nodeCtx = context.WithValue(cancelRequestCtx, defines.NodeIDKey{}, rm.baseService.ID())
 	}
-	ctx := defines.AttachAccount(nodeCtx, tenant.GetTenantID(), tenant.GetUserID(), tenant.GetDefaultRoleID())
+	migrationCtx := defines.AttachAccount(nodeCtx, tenant.GetTenantID(), tenant.GetUserID(), tenant.GetDefaultRoleID())
 
-	accountID, err := defines.GetAccountId(ctx)
+	accountID, err := defines.GetAccountId(migrationCtx)
 
 	if err != nil {
-		ses.Errorf(ctx, "failed to get account ID: %v", err)
+		ses.Errorf(migrationCtx, "failed to get account ID: %v", err)
 		return err
 	}
-	userID := defines.GetUserId(ctx)
-	ses.Infof(ctx, "do migration on connection %d, db: %s, account id: %d, user id: %d",
+	userID := defines.GetUserId(migrationCtx)
+	ses.Infof(migrationCtx, "do migration on connection %d, db: %s, account id: %d, user id: %d",
 		req.ConnID, req.DB, accountID, userID)
 
 	dbm := newDBMigration(req.DB)
-	if err := dbm.Migrate(ctx, ses); err != nil {
-		ses.Warnf(ctx, "the database %s may have been deleted, "+
+	if err := dbm.Migrate(migrationCtx, ses); err != nil {
+		if cause := context.Cause(migrationCtx); cause != nil {
+			return cause
+		}
+		ses.Warnf(migrationCtx, "the database %s may have been deleted, "+
 			"so continue to mirgrate session, conn ID: %d, err: %v",
 			req.DB, req.ConnID, err)
 	}
@@ -2159,8 +2189,8 @@ func Migrate(ses *Session, req *query.MigrateConnToRequest) error {
 			continue
 		}
 		pm := newPrepareStmtMigration(p.Name, p.SQL, p.ParamTypes)
-		if err := pm.Migrate(ctx, ses); err != nil {
-			return moerr.AttachCause(ctx, err)
+		if err := pm.Migrate(migrationCtx, ses); err != nil {
+			return moerr.AttachCause(migrationCtx, err)
 		}
 		id := parsePrepareStmtID(p.Name)
 		if id > maxStmtID {
@@ -2169,6 +2199,9 @@ func Migrate(ses *Session, req *query.MigrateConnToRequest) error {
 	}
 	if maxStmtID > 0 {
 		ses.SetLastStmtID(maxStmtID)
+	}
+	if cause := context.Cause(migrationCtx); cause != nil {
+		return cause
 	}
 	return nil
 }

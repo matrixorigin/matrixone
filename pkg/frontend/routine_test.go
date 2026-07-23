@@ -156,6 +156,81 @@ func TestRoutineCleanupCancelsRequestBeforeWaitingForLifecycleOperation(t *testi
 	}
 }
 
+func TestRoutineManagerClosedCancelsActiveLifecycleOperation(t *testing.T) {
+	routine := NewRoutine(context.Background(), &testMysqlWriter{}, &config.FrontendParameters{})
+	operationCtx, ok := routine.mc.beginOperationWithContext(context.Background())
+	require.True(t, ok)
+
+	operationDone := make(chan struct{})
+	go func() {
+		<-operationCtx.Done()
+		routine.mc.endOperation()
+		close(operationDone)
+	}()
+
+	conn := &Conn{}
+	rm := &RoutineManager{
+		ctx:              context.Background(),
+		clients:          map[*Conn]*Routine{conn: routine},
+		routinesByConnID: map[uint32]*Routine{0: routine},
+	}
+	closed := make(chan struct{})
+	go func() {
+		rm.Closed(conn)
+		close(closed)
+	}()
+
+	select {
+	case <-operationDone:
+	case <-time.After(time.Second):
+		t.Fatal("RoutineManager.Closed did not cancel the active lifecycle operation")
+	}
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("RoutineManager.Closed did not finish after lifecycle cancellation")
+	}
+}
+
+func TestCanceledMigrationAdmissionDoesNotConsumeMigrateOnce(t *testing.T) {
+	routine := NewRoutine(context.Background(), &testMysqlWriter{}, &config.FrontendParameters{})
+	t.Cleanup(routine.cancelRoutineFunc)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	require.ErrorIs(t, routine.migrateConnectionTo(ctx, &query.MigrateConnToRequest{}), context.Canceled)
+
+	ran := false
+	routine.mc.migrateOnce.Do(func() {
+		ran = true
+	})
+	require.True(t, ran, "caller cancellation before admission must allow a later migration retry")
+}
+
+func TestCanceledResetAdmissionDoesNotTouchSession(t *testing.T) {
+	routine := NewRoutine(context.Background(), &testMysqlWriter{}, &config.FrontendParameters{})
+	t.Cleanup(routine.cancelRoutineFunc)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	require.ErrorIs(
+		t,
+		routine.resetSessionWithContext(ctx, "", &query.ResetSessionResponse{}),
+		context.Canceled,
+	)
+	require.True(t, routine.mc.tryBeginOperation(), "canceled reset must not retain lifecycle admission")
+	routine.mc.endOperation()
+}
+
+func TestMigrateConnectionFromRejectsClosedRoutineBeforeReadingSession(t *testing.T) {
+	routine := NewRoutine(context.Background(), &testMysqlWriter{}, &config.FrontendParameters{})
+	t.Cleanup(routine.cancelRoutineFunc)
+	routine.mc.waitAndClose()
+
+	err := routine.migrateConnectionFromWithContext(context.Background(), &query.MigrateConnFromResponse{})
+	require.Error(t, err)
+}
+
 func TestRoutineCleanupCancelsRequestBeforeRollback(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	ses := newTestSession(t, ctrl)
@@ -193,7 +268,7 @@ func TestMigrateConnectionFromPreservesLastAffectedRows(t *testing.T) {
 	defer ctrl.Finish()
 	ses := newTestSession(t, ctrl)
 	ses.SetLastAffectedRows(7)
-	rt := &Routine{}
+	rt := &Routine{mc: newMigrateController()}
 	rt.setSession(ses)
 
 	resp := &query.MigrateConnFromResponse{}
@@ -231,6 +306,45 @@ func TestRoutineResetSessionKeepsReplacementRegistered(t *testing.T) {
 	registered := rm.sessionManager.GetAllSessions()
 	require.Len(t, registered, 1, "successful reset must keep the replacement session registered")
 	require.Same(t, newSession, registered[0])
+}
+
+func TestRoutineResetSessionFailureRestoresProtocolState(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	oldSession := newTestSession(t, ctrl)
+	rm, err := NewRoutineManager(context.Background(), "")
+	require.NoError(t, err)
+	rm.sessionManager = queryservice.NewSessionManager()
+	t.Cleanup(func() {
+		oldSession.Close()
+		rm.cancelCtx()
+	})
+
+	protocol := oldSession.GetResponser().MysqlRrWr()
+	protocol.SetStr(DBNAME, "db1")
+	routine := NewRoutine(context.Background(), protocol, &config.FrontendParameters{})
+	t.Cleanup(routine.cancelRoutineFunc)
+	oldSession.setRoutineManager(rm)
+	oldSession.setRoutine(routine)
+	routine.setSession(oldSession)
+	rm.sessionManager.AddSession(oldSession)
+
+	oldSession.GetTxnHandler().Close()
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().Hints().Return(engine.Hints{CommitOrRollbackTimeout: time.Second}).AnyTimes()
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
+	txnOp.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).AnyTimes()
+	txnOp.EXPECT().Rollback(gomock.Any()).Return(assert.AnError)
+	oldSession.txnHandler = InitTxnHandler("", eng, context.Background(), txnOp)
+	oldSession.txnHandler.shareTxn = false
+
+	err = routine.resetSession("", &query.ResetSessionResponse{})
+	require.ErrorIs(t, err, assert.AnError)
+	require.Same(t, oldSession, routine.getSession())
+	require.Equal(t, "db1", protocol.GetStr(DBNAME))
+	registered := rm.sessionManager.GetAllSessions()
+	require.Len(t, registered, 1)
+	require.Same(t, oldSession, registered[0])
 }
 
 func TestRoutineResetSessionRejectsLifecycleConflict(t *testing.T) {
