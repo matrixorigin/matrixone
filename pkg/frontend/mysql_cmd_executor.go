@@ -1634,14 +1634,13 @@ func previewQuerySchedulingWithSQLMode(
 	if info := ses.GetTenantInfo(); info != nil {
 		tenant = info.GetTenant()
 	}
-	policySet := queryWorkloadPolicySnapshot(ses)
-	intent := querySchedulingIntentForStatementWithWorkloadPolicy(ses, rawSQL, policySet)
+	policySet := queryWorkloadPolicySnapshotAt(previewCtx, ses)
+	intent := querySchedulingIntentForStatement(ses, rawSQL)
 	if sqlMode != nil {
-		intent = querySchedulingIntentForStatementWithSQLModeAndWorkloadPolicy(
+		intent = querySchedulingIntentForStatementWithSQLMode(
 			ses,
 			rawSQL,
 			*sqlMode,
-			policySet,
 		)
 	}
 	return compile.PreviewQueryScheduling(compile.SchedulingPreviewRequest{
@@ -1932,7 +1931,7 @@ func createPrepareStmt(
 		(!prepareSchedulingIntent.Explicit ||
 			schedule.ValidateSchedulingIntent(prepareSchedulingIntent) != "") {
 		//only DQL & DML will pre compile
-		comp, err = createCompile(execCtx, ses, ses.proc, originSQL, originSQL, &schedulingSQLMode, saveStmt, preparePlan.GetDcl().GetPrepare().Plan, ses.GetOutputCallback(execCtx), true, nil)
+		comp, err = createCompile(execCtx, ses, ses.proc, originSQL, originSQL, &schedulingSQLMode, saveStmt, preparePlan.GetDcl().GetPrepare().Plan, ses.GetOutputCallback(execCtx), true, nil, nil)
 		if err != nil {
 			if !moerr.IsMoErrCode(err, moerr.ErrCantCompileForPrepare) {
 				return nil, err

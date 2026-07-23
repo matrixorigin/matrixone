@@ -575,6 +575,12 @@ func (th *TxnHandler) commitUnsafe(execCtx *ExecCtx) error {
 		err, hasRecovered = ExecuteFuncWithRecover(func() error {
 			return th.txnOp.Commit(ctx2)
 		})
+		if !hasRecovered {
+			// Commit publishes the final TN commit timestamp into the operator
+			// response state. Reading it before Commit yields the snapshot/empty
+			// timestamp and cannot order cross-CN cache invalidations.
+			commitTs = th.txnOp.Txn().CommitTS
+		}
 		if err != nil {
 			err = moerr.AttachCause(ctx2, err)
 			commitResultUnknown = isTxnCommitResultUnknown(err)

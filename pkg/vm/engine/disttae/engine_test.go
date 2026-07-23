@@ -347,6 +347,24 @@ func TestEngineQueryCandidateProvidersSeparateInventoryAndPool(t *testing.T) {
 		[]string{"app-working:6001", "app-draining:6001"},
 		nodeAddresses(pool.Nodes))
 	require.Equal(t, map[string]string{"account": "app"}, labels)
+
+	current, err := e.DiscoverCurrentQueryCandidate(
+		context.Background(),
+		"app-draining",
+	)
+	require.NoError(t, err)
+	require.Len(t, current, 1)
+	require.Equal(t, "app-draining", current[0].Service.ServiceID)
+
+	missing, err := e.DiscoverCurrentQueryCandidate(
+		context.Background(),
+		"missing",
+	)
+	require.NoError(t, err)
+	require.Empty(t, missing)
+
+	_, err = e.DiscoverCurrentQueryCandidate(context.Background(), "")
+	require.ErrorContains(t, err, "service ID is empty")
 }
 
 func TestEngineQueryPoolUsesTargetLabelsWithoutMutatingIngressLabels(t *testing.T) {

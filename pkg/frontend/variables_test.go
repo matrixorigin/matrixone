@@ -15,11 +15,16 @@
 package frontend
 
 import (
+	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	"github.com/smartystreets/goconvey/convey"
 )
 
@@ -56,6 +61,94 @@ func TestScope(t *testing.T) {
 
 		convey.So(wanted[ScopeBoth], convey.ShouldEqual, ScopeBoth.String())
 	})
+}
+
+func TestSystemVariablesWorkloadPolicySnapshotIsCachedAndImmutable(t *testing.T) {
+	raw := `{"version":1,"policies":{"ap":{"pool":"ap","labels":{"role":"ap"}}}}`
+	vars := &SystemVariables{mp: map[string]interface{}{queryWorkloadPolicy: raw}}
+
+	first := vars.WorkloadPolicySnapshot()
+	require.Empty(t, first.InvalidReason)
+	rule := first.Rules[schedule.WorkloadAP]
+	rule.Labels["role"] = "mutated"
+	first.Rules[schedule.WorkloadAP] = rule
+
+	second := vars.WorkloadPolicySnapshot()
+	require.Equal(t, "ap", second.Rules[schedule.WorkloadAP].Labels["role"])
+
+	vars.Set(queryWorkloadPolicy, `{"version":1`)
+	invalid := vars.WorkloadPolicySnapshot()
+	require.NotEmpty(t, invalid.InvalidReason)
+}
+
+func TestSystemVariablesSharedWorkloadPolicySnapshotDoesNotAllocate(t *testing.T) {
+	raw := `{"version":1,"policies":{"tp":{"pool":"tp","labels":{"role":"tp"},"current_cn":"required"}}}`
+	vars := &SystemVariables{mp: map[string]interface{}{queryWorkloadPolicy: raw}}
+	require.NotEmpty(t, vars.workloadPolicySnapshotShared().Generation)
+
+	allocs := testing.AllocsPerRun(1000, func() {
+		if vars.workloadPolicySnapshotShared().Generation == "" {
+			panic("cached workload policy generation disappeared")
+		}
+	})
+	require.Zero(t, allocs)
+}
+
+func TestGlobalSysVarsMgrWorkloadPolicyUpdateIsOrderedAndAccountScoped(t *testing.T) {
+	const accountID = uint32(42)
+	oldPolicy := `{"version":1,"policies":{"ap":{"pool":"old","labels":{"role":"ap"}}}}`
+	newPolicy := `{"version":1,"policies":{"ap":{"pool":"new","labels":{"role":"ap"}}}}`
+	vars := &SystemVariables{
+		mp: map[string]interface{}{queryWorkloadPolicy: oldPolicy},
+	}
+	mgr := &GlobalSysVarsMgr{
+		accountsGlobalSysVarsMap: map[uint32]*SystemVariables{
+			accountID: vars,
+		},
+	}
+	older := timestamp.Timestamp{PhysicalTime: 10}
+	newer := timestamp.Timestamp{PhysicalTime: 20}
+
+	require.True(t, mgr.ApplyWorkloadPolicyUpdate(accountID, newPolicy, newer))
+	require.False(t, mgr.ApplyWorkloadPolicyUpdate(accountID, oldPolicy, older))
+	require.False(t, mgr.ApplyWorkloadPolicyUpdate(accountID, oldPolicy, newer))
+	require.Equal(t, newPolicy, vars.Get(queryWorkloadPolicy))
+	require.False(t, mgr.ApplyWorkloadPolicyUpdate(accountID+1, oldPolicy, newer))
+}
+
+func TestSystemVariablesCatalogSnapshotPreservesConcurrentPolicyUpdate(t *testing.T) {
+	oldPolicy := `{"version":1,"policies":{"ap":{"pool":"old","labels":{"role":"ap"}}}}`
+	newPolicy := `{"version":1,"policies":{"ap":{"pool":"new","labels":{"role":"ap"}}}}`
+	oldCommit := timestamp.Timestamp{PhysicalTime: 10}
+	vars := &SystemVariables{
+		mp:                     map[string]interface{}{queryWorkloadPolicy: oldPolicy},
+		workloadPolicyCommitTS: oldCommit,
+	}
+
+	require.True(t, vars.applyWorkloadPolicyUpdate(
+		newPolicy,
+		timestamp.Timestamp{PhysicalTime: 20},
+	))
+	vars.applyCatalogSnapshot(map[string]interface{}{
+		queryWorkloadPolicy: oldPolicy,
+		"sql_mode":          "STRICT_TRANS_TABLES",
+	}, oldCommit)
+
+	require.Equal(t, newPolicy, vars.Get(queryWorkloadPolicy))
+	require.Equal(t, "STRICT_TRANS_TABLES", vars.Get("sql_mode"))
+}
+
+func TestWorkloadPolicyRefreshWaitIsCancellable(t *testing.T) {
+	vars := &SystemVariables{
+		mp: make(map[string]interface{}),
+		workloadPolicyRefresh: &workloadPolicyRefreshCall{
+			done: make(chan struct{}),
+		},
+	}
+	vars.workloadPolicyRefreshAfter.Store(time.Now().Add(-time.Second).UnixNano())
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	require.ErrorIs(t, vars.RefreshWorkloadPolicy(ctx, &Session{}), context.Canceled)
 }
 
 func TestSystemVariable(t *testing.T) {

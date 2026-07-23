@@ -19,14 +19,18 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"io"
 	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 const (
-	workloadPolicyVersion       = 1
-	maxWorkloadPolicyBytes      = 64 << 10
+	workloadPolicyVersion = 1
+	// mo_mysql_compatibility_mode.variable_value is varchar(5000). Reject a
+	// policy before persistence instead of accepting a value the catalog
+	// cannot store losslessly.
+	maxWorkloadPolicyBytes      = 5000
 	maxWorkloadPolicyLabels     = 16
 	maxWorkloadPolicyLabelPart  = 128
 	maxWorkloadPolicyPoolLength = 256
@@ -163,7 +167,7 @@ func ParseWorkloadPolicyConfig(raw string) (WorkloadPolicySet, error) {
 		return WorkloadPolicySet{}, nil
 	}
 	if len(raw) > maxWorkloadPolicyBytes {
-		return WorkloadPolicySet{}, fmt.Errorf(
+		return WorkloadPolicySet{}, moerr.NewInvalidInputNoCtxf(
 			"query workload policy exceeds %d bytes", maxWorkloadPolicyBytes)
 	}
 	if err := rejectDuplicateWorkloadPolicyKeys(raw); err != nil {
@@ -174,17 +178,19 @@ func ParseWorkloadPolicyConfig(raw string) (WorkloadPolicySet, error) {
 	decoder.DisallowUnknownFields()
 	var document workloadPolicyDocument
 	if err := decoder.Decode(&document); err != nil {
-		return WorkloadPolicySet{}, fmt.Errorf("invalid query workload policy: %w", err)
+		return WorkloadPolicySet{}, moerr.NewInvalidInputNoCtxf(
+			"invalid query workload policy: %v", err)
 	}
 	if err := requireWorkloadPolicyEOF(decoder); err != nil {
 		return WorkloadPolicySet{}, err
 	}
 	if document.Version != workloadPolicyVersion {
-		return WorkloadPolicySet{}, fmt.Errorf(
+		return WorkloadPolicySet{}, moerr.NewInvalidInputNoCtxf(
 			"unsupported query workload policy version %d", document.Version)
 	}
 	if len(document.Policies) == 0 {
-		return WorkloadPolicySet{}, fmt.Errorf("query workload policy has no policies")
+		return WorkloadPolicySet{}, moerr.NewInvalidInputNoCtx(
+			"query workload policy has no policies")
 	}
 
 	set := WorkloadPolicySet{
@@ -195,11 +201,15 @@ func ParseWorkloadPolicyConfig(raw string) (WorkloadPolicySet, error) {
 	for name, configured := range document.Policies {
 		class := WorkloadClass(strings.ToLower(strings.TrimSpace(name)))
 		if !class.Valid() {
-			return WorkloadPolicySet{}, fmt.Errorf(
+			return WorkloadPolicySet{}, moerr.NewInvalidInputNoCtxf(
 				"invalid query workload class %q", name)
 		}
+		if class == WorkloadMaintenance {
+			return WorkloadPolicySet{}, moerr.NewInvalidInputNoCtx(
+				"query workload class \"maintenance\" is not configurable in policy version 1")
+		}
 		if _, exists := set.Rules[class]; exists {
-			return WorkloadPolicySet{}, fmt.Errorf(
+			return WorkloadPolicySet{}, moerr.NewInvalidInputNoCtxf(
 				"duplicate query workload class %q", class)
 		}
 		rule, err := configured.toRule(class)
@@ -233,10 +243,10 @@ func rejectDuplicateWorkloadPolicyKeys(raw string) error {
 				}
 				key, ok := token.(string)
 				if !ok {
-					return fmt.Errorf("object key is not a string")
+					return moerr.NewInvalidInputNoCtx("object key is not a string")
 				}
 				if _, exists := keys[key]; exists {
-					return fmt.Errorf("duplicate JSON field %q", key)
+					return moerr.NewInvalidInputNoCtxf("duplicate JSON field %q", key)
 				}
 				keys[key] = struct{}{}
 				if err = consumeValue(); err != nil {
@@ -254,11 +264,11 @@ func rejectDuplicateWorkloadPolicyKeys(raw string) error {
 			_, err = decoder.Token()
 			return err
 		default:
-			return fmt.Errorf("unexpected JSON delimiter %q", delimiter)
+			return moerr.NewInvalidInputNoCtxf("unexpected JSON delimiter %q", delimiter)
 		}
 	}
 	if err := consumeValue(); err != nil {
-		return fmt.Errorf("invalid query workload policy: %w", err)
+		return moerr.NewInvalidInputNoCtxf("invalid query workload policy: %v", err)
 	}
 	return nil
 }
@@ -268,9 +278,9 @@ func requireWorkloadPolicyEOF(decoder *json.Decoder) error {
 	if err := decoder.Decode(&trailing); err == io.EOF {
 		return nil
 	} else if err != nil {
-		return fmt.Errorf("invalid query workload policy: %w", err)
+		return moerr.NewInvalidInputNoCtxf("invalid query workload policy: %v", err)
 	}
-	return fmt.Errorf("invalid query workload policy: multiple JSON values")
+	return moerr.NewInvalidInputNoCtx("invalid query workload policy: multiple JSON values")
 }
 
 func (configured workloadPolicyJSON) toRule(
@@ -278,12 +288,12 @@ func (configured workloadPolicyJSON) toRule(
 ) (WorkloadPolicyRule, error) {
 	pool := strings.TrimSpace(configured.Pool)
 	if pool == "" || len(pool) > maxWorkloadPolicyPoolLength {
-		return WorkloadPolicyRule{}, fmt.Errorf(
+		return WorkloadPolicyRule{}, moerr.NewInvalidInputNoCtxf(
 			"query workload policy %q has invalid pool identity", class)
 	}
 	if len(configured.Labels) == 0 ||
 		len(configured.Labels) > maxWorkloadPolicyLabels {
-		return WorkloadPolicyRule{}, fmt.Errorf(
+		return WorkloadPolicyRule{}, moerr.NewInvalidInputNoCtxf(
 			"query workload policy %q must have 1..%d labels",
 			class,
 			maxWorkloadPolicyLabels)
@@ -295,15 +305,15 @@ func (configured workloadPolicyJSON) toRule(
 		if key == "" || value == "" ||
 			len(key) > maxWorkloadPolicyLabelPart ||
 			len(value) > maxWorkloadPolicyLabelPart {
-			return WorkloadPolicyRule{}, fmt.Errorf(
+			return WorkloadPolicyRule{}, moerr.NewInvalidInputNoCtxf(
 				"query workload policy %q has invalid target label", class)
 		}
 		if strings.EqualFold(key, "account") {
-			return WorkloadPolicyRule{}, fmt.Errorf(
+			return WorkloadPolicyRule{}, moerr.NewInvalidInputNoCtxf(
 				"query workload policy %q cannot set protected account label", class)
 		}
 		if _, exists := labels[key]; exists {
-			return WorkloadPolicyRule{}, fmt.Errorf(
+			return WorkloadPolicyRule{}, moerr.NewInvalidInputNoCtxf(
 				"query workload policy %q has duplicate target label %q", class, key)
 		}
 		labels[key] = value
@@ -311,25 +321,25 @@ func (configured workloadPolicyJSON) toRule(
 
 	fallback, err := parseWorkloadPoolFallback(configured.Fallback)
 	if err != nil {
-		return WorkloadPolicyRule{}, fmt.Errorf(
-			"query workload policy %q: %w", class, err)
+		return WorkloadPolicyRule{}, moerr.NewInvalidInputNoCtxf(
+			"query workload policy %q: %v", class, err)
 	}
 	emptyWorker, err := parseWorkloadEmptyWorker(configured.EmptyWorker, fallback)
 	if err != nil {
-		return WorkloadPolicyRule{}, fmt.Errorf(
-			"query workload policy %q: %w", class, err)
+		return WorkloadPolicyRule{}, moerr.NewInvalidInputNoCtxf(
+			"query workload policy %q: %v", class, err)
 	}
 	currentCN, err := parseWorkloadCurrentCN(configured.CurrentCN)
 	if err != nil {
-		return WorkloadPolicyRule{}, fmt.Errorf(
-			"query workload policy %q: %w", class, err)
+		return WorkloadPolicyRule{}, moerr.NewInvalidInputNoCtxf(
+			"query workload policy %q: %v", class, err)
 	}
 	if class == WorkloadTP && currentCN != CurrentCNRequired {
-		return WorkloadPolicyRule{}, fmt.Errorf(
+		return WorkloadPolicyRule{}, moerr.NewInvalidInputNoCtxf(
 			"query workload policy %q must require the current CN", class)
 	}
 	if configured.MaxWorkers < 0 {
-		return WorkloadPolicyRule{}, fmt.Errorf(
+		return WorkloadPolicyRule{}, moerr.NewInvalidInputNoCtxf(
 			"query workload policy %q has negative max_workers", class)
 	}
 	workerSet := WorkerSetPolicy{Mode: WorkerSetAll}
@@ -354,7 +364,8 @@ func parseWorkloadPoolFallback(value string) (PoolFallbackPolicy, error) {
 	case "legacy-compatible":
 		return PoolFallbackLegacyCompatible, nil
 	default:
-		return PoolFallbackPolicy(255), fmt.Errorf("invalid fallback %q", value)
+		return PoolFallbackPolicy(255), moerr.NewInvalidInputNoCtxf(
+			"invalid fallback %q", value)
 	}
 }
 
@@ -372,12 +383,12 @@ func parseWorkloadEmptyWorker(
 		return EmptyWorkerFail, nil
 	case "local-fallback":
 		if fallback == PoolFallbackStrict {
-			return EmptyWorkerPolicy(255), fmt.Errorf(
+			return EmptyWorkerPolicy(255), moerr.NewInvalidInputNoCtx(
 				"strict fallback cannot use local-fallback for empty workers")
 		}
 		return EmptyWorkerLocalFallback, nil
 	default:
-		return EmptyWorkerPolicy(255), fmt.Errorf(
+		return EmptyWorkerPolicy(255), moerr.NewInvalidInputNoCtxf(
 			"invalid empty_worker %q", value)
 	}
 }
@@ -393,7 +404,8 @@ func parseWorkloadCurrentCN(value string) (CurrentCNPolicy, error) {
 	case "excluded":
 		return CurrentCNExcluded, nil
 	default:
-		return CurrentCNPolicy(255), fmt.Errorf("invalid current_cn %q", value)
+		return CurrentCNPolicy(255), moerr.NewInvalidInputNoCtxf(
+			"invalid current_cn %q", value)
 	}
 }
 
@@ -406,7 +418,10 @@ func ResolveWorkloadPolicy(
 	set WorkloadPolicySet,
 ) EffectiveWorkloadPolicy {
 	class := descriptor.Class
-	if descriptor.Internal {
+	// Maintenance owns special compile/runtime paths. Preserve that boundary
+	// even for derived internal SQL so an "internal" policy cannot route DDL
+	// indirectly around version 1's maintenance restriction.
+	if descriptor.Internal && class != WorkloadMaintenance {
 		class = WorkloadInternal
 	}
 	if !class.Valid() {

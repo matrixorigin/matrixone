@@ -232,6 +232,39 @@ func TestTxnHandler_CommitTxn(t *testing.T) {
 	})
 }
 
+func TestTxnHandlerCommitPublishesFinalCommitTimestamp(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+	ses := newSes(nil, ctrl)
+	finalTS := timestamp.Timestamp{PhysicalTime: 42}
+	committed := false
+
+	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOperator.EXPECT().Txn().DoAndReturn(func() txn.TxnMeta {
+		meta := txn.TxnMeta{}
+		if committed {
+			meta.CommitTS = finalTS
+		}
+		return meta
+	}).AnyTimes()
+	txnOperator.EXPECT().Commit(gomock.Any()).DoAndReturn(func(context.Context) error {
+		committed = true
+		return nil
+	})
+
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().Hints().Return(engine.Hints{
+		CommitOrRollbackTimeout: time.Second,
+	})
+	handler := InitTxnHandler("", eng, ctx, nil)
+	handler.txnOp = txnOperator
+
+	execCtx := newTestExecCtx(ctx, ctrl)
+	execCtx.ses = ses
+	require.NoError(t, handler.commitUnsafe(execCtx))
+	require.Equal(t, finalTS, ses.getLastCommitTS())
+}
+
 func TestTxnHandler_RollbackTxn(t *testing.T) {
 	convey.Convey("rollback txn", t, func() {
 		ctrl := gomock.NewController(t)

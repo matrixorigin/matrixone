@@ -17,6 +17,7 @@ package frontend
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1595,11 +1596,13 @@ const (
 
 	getSystemVariablesWithAccountFormat = `select variable_name, variable_value from mo_catalog.mo_mysql_compatibility_mode where account_id = %d and system_variables = true;`
 
-	getSystemVariableWithAccountFormat = `select variable_name from mo_catalog.mo_mysql_compatibility_mode where account_id = %d and system_variables = true and variable_name = '%s';`
+	getSystemVariableWithAccountFormat = `select variable_name from mo_catalog.mo_mysql_compatibility_mode where account_id = %d and system_variables = true and variable_name = %s;`
 
-	insertSystemVariableWithAccountFormat = `insert into mo_catalog.mo_mysql_compatibility_mode(account_id, account_name, variable_name, variable_value, system_variables) values (%d, "%s", "%s", "%s", %v);`
+	getSystemVariableValueWithAccountFormat = `select variable_value from mo_catalog.mo_mysql_compatibility_mode where account_id = %d and system_variables = true and variable_name = %s;`
 
-	updateSystemVariableValueFormat = `update mo_catalog.mo_mysql_compatibility_mode set variable_value = '%s' where account_id = %d and variable_name = '%s' and system_variables = true;`
+	insertSystemVariableWithAccountFormat = `insert into mo_catalog.mo_mysql_compatibility_mode(account_id, account_name, variable_name, variable_value, system_variables) values (%d, %s, %s, %s, %v);`
+
+	updateSystemVariableValueFormat = `update mo_catalog.mo_mysql_compatibility_mode set variable_value = %s where account_id = %d and variable_name = %s and system_variables = true;`
 
 	updateConfigurationByDbNameAndAccountNameFormat = `update mo_catalog.mo_mysql_compatibility_mode set variable_value = '%s' where account_name = '%s' and dat_name = '%s' and variable_name = '%s';`
 
@@ -2289,16 +2292,48 @@ func getSqlForGetSystemVariablesWithAccount(accountId uint64) string {
 }
 
 func getSqlForGetSysVarWithAccount(accountId uint64, varName string) string {
-	return fmt.Sprintf(getSystemVariableWithAccountFormat, accountId, varName)
+	return fmt.Sprintf(
+		getSystemVariableWithAccountFormat,
+		accountId,
+		sqlStringValueExpression(varName),
+	)
+}
+
+func getSqlForGetSysVarValueWithAccount(accountID uint64, varName string) string {
+	return fmt.Sprintf(
+		getSystemVariableValueWithAccountFormat,
+		accountID,
+		sqlStringValueExpression(varName),
+	)
 }
 
 func getSqlForInsertSysVarWithAccount(accountId uint64, accountName string, varName string, varValue string) string {
-	return fmt.Sprintf(insertSystemVariableWithAccountFormat, accountId, accountName, varName, varValue, true)
+	return fmt.Sprintf(
+		insertSystemVariableWithAccountFormat,
+		accountId,
+		sqlStringValueExpression(accountName),
+		sqlStringValueExpression(varName),
+		sqlStringValueExpression(varValue),
+		true,
+	)
 }
 
 // getSqlForUpdateSysVarValue returns a SQL query to update the value of a system variable for a given account.
 func getSqlForUpdateSysVarValue(varValue string, accountId uint64, varName string) string {
-	return fmt.Sprintf(updateSystemVariableValueFormat, varValue, accountId, varName)
+	return fmt.Sprintf(
+		updateSystemVariableValueFormat,
+		sqlStringValueExpression(varValue),
+		accountId,
+		sqlStringValueExpression(varName),
+	)
+}
+
+// sqlStringValueExpression is independent of the session's backslash escape
+// mode. System-variable values can contain arbitrary JSON escapes, so quoted
+// literals are not byte-stable under both default SQL mode and
+// NO_BACKSLASH_ESCAPES.
+func sqlStringValueExpression(value string) string {
+	return "unhex('" + hex.EncodeToString([]byte(value)) + "')"
 }
 
 func getSqlForupdateConfigurationByDbNameAndAccountName(ctx context.Context, varValue, accountName, dbName, varName string) (string, error) {
@@ -11937,6 +11972,90 @@ func postAlterSessionStatus(
 
 	err = queryservice.RequestMultipleCn(ctx, nodes, qc, genRequest, handleValidResponse, handleInvalidResponse)
 	return errors.Join(err, retErr)
+}
+
+// postWorkloadPolicyUpdate propagates an already-committed policy to the
+// account caches on other CNs. The catalog remains authoritative; a CN without
+// an active cache ignores the update and loads the complete row set when its
+// first session connects.
+func postWorkloadPolicyUpdate(
+	ctx context.Context,
+	ses *Session,
+	raw string,
+	commitTS timestamp.Timestamp,
+) error {
+	if commitTS.IsEmpty() {
+		// Lightweight test and embedded executors may not expose a transaction
+		// timestamp. They have no independently cached remote CN to update.
+		return nil
+	}
+	qc := getPu(ses.GetService()).QueryClient
+	if qc == nil {
+		return nil
+	}
+
+	seen := make(map[string]struct{})
+	var nodes []string
+	clusterservice.GetMOCluster(qc.ServiceID()).GetCNService(
+		clusterservice.NewSelectAll(),
+		func(service metadata.CNService) bool {
+			if service.QueryAddress == "" {
+				return true
+			}
+			if _, ok := seen[service.QueryAddress]; ok {
+				return true
+			}
+			seen[service.QueryAddress] = struct{}{}
+			nodes = append(nodes, service.QueryAddress)
+			return true
+		},
+	)
+	if len(nodes) == 0 {
+		return nil
+	}
+
+	accountID := ses.GetTenantInfo().TenantID
+	genRequest := func() *query.Request {
+		req := qc.NewRequest(query.CmdMethod_WorkloadPolicyUpdate)
+		req.WorkloadPolicyUpdateRequest = &query.WorkloadPolicyUpdateRequest{
+			AccountID: accountID,
+			Policy:    raw,
+			CommitTS:  commitTS,
+		}
+		return req
+	}
+
+	var responseMu sync.Mutex
+	var responseErr error
+	recordInvalidResponse := func(nodeAddr string) {
+		responseMu.Lock()
+		defer responseMu.Unlock()
+		responseErr = errors.Join(
+			responseErr,
+			moerr.NewInternalErrorf(
+				ctx,
+				"query workload policy update failed on CN %s",
+				nodeAddr,
+			),
+		)
+	}
+	handleValidResponse := func(nodeAddr string, rsp *query.Response) {
+		if rsp == nil || rsp.WorkloadPolicyUpdateResponse == nil {
+			recordInvalidResponse(nodeAddr)
+		}
+	}
+
+	err := queryservice.RequestMultipleCn(
+		ctx,
+		nodes,
+		qc,
+		genRequest,
+		handleValidResponse,
+		recordInvalidResponse,
+	)
+	responseMu.Lock()
+	defer responseMu.Unlock()
+	return errors.Join(err, responseErr)
 }
 
 func checkTimeStampValid(ctx context.Context, ses FeSession, snapshotTs int64) (bool, error) {

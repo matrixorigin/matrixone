@@ -980,7 +980,7 @@ func (c *Compile) compileSteps(qry *plan.Query, ss []*Scope, step int32) ([]*Sco
 		return ss, nil
 	default:
 		var rs *Scope
-		if c.IsSingleScope(ss) {
+		if c.IsSingleScope(ss) && !c.resultScopeRunsOffIngress(ss[0]) {
 			rs = ss[0]
 		} else {
 			ss = c.mergeShuffleScopesIfNeeded(ss, false)
@@ -999,6 +999,16 @@ func (c *Compile) compileSteps(qry *plan.Query, ss []*Scope, step int32) ([]*Sco
 		)
 		return []*Scope{rs}, nil
 	}
+}
+
+// resultScopeRunsOffIngress reports whether the client-facing Output operator
+// would otherwise be attached to a scope that must be encoded and executed by
+// another CN. Output owns a local callback and is not part of the remote
+// pipeline protocol, so even one remote producer needs a local merge root.
+func (c *Compile) resultScopeRunsOffIngress(scope *Scope) bool {
+	return scope != nil &&
+		scope.Magic == Remote &&
+		!sameExecutionNode(scope.NodeInfo, getIngressEngineNode(c))
 }
 
 func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, nodes []*plan.Node) ([]*Scope, error) {
