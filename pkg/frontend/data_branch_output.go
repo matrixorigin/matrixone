@@ -17,6 +17,7 @@ package frontend
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -29,6 +30,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -61,32 +64,62 @@ func makeFileName(
 		srcName = fmt.Sprintf("%s_%s", srcName, encodeDiffFileNamePart(tarAtTsExpr.SnapshotName))
 	}
 
-	return fmt.Sprintf(
-		"diff_%s_%s_%s",
-		srcName, baseName,
-		time.Now().UTC().Format("20060102_150405"),
-	)
+	namePrefix := fmt.Sprintf("diff_%s_%s", srcName, baseName)
+	timeSuffix := "_" + time.Now().UTC().Format("20060102_150405")
+	if len(namePrefix)+len(timeSuffix) <= maxDiffFileNameStemBytes {
+		return namePrefix + timeSuffix
+	}
+
+	digest := sha256.Sum256([]byte(namePrefix))
+	digestSuffix := fmt.Sprintf("_%x%s", digest[:16], timeSuffix)
+	return truncateDiffFileNamePrefix(namePrefix, maxDiffFileNameStemBytes-len(digestSuffix)) + digestSuffix
 }
+
+const maxDiffFileNameStemBytes = 240
 
 func encodeDiffFileNamePart(name string) string {
 	const hex = "0123456789ABCDEF"
 
 	var encoded strings.Builder
 	encoded.Grow(len(name))
-	for i := 0; i < len(name); i++ {
+	for i := 0; i < len(name); {
 		c := name[i]
 		if c >= 'a' && c <= 'z' ||
 			c >= 'A' && c <= 'Z' ||
 			c >= '0' && c <= '9' ||
 			c == '-' || c == '_' || c == '.' {
 			encoded.WriteByte(c)
+			i++
 			continue
 		}
-		encoded.WriteByte('%')
+		if c >= utf8.RuneSelf {
+			r, size := utf8.DecodeRuneInString(name[i:])
+			if r != utf8.RuneError && unicode.IsPrint(r) {
+				encoded.WriteString(name[i : i+size])
+				i += size
+				continue
+			}
+		}
+		encoded.WriteByte('@')
 		encoded.WriteByte(hex[c>>4])
 		encoded.WriteByte(hex[c&0x0f])
+		i++
 	}
 	return encoded.String()
+}
+
+func truncateDiffFileNamePrefix(name string, maxBytes int) string {
+	if len(name) <= maxBytes {
+		return name
+	}
+	end := maxBytes
+	for end > 0 && !utf8.ValidString(name[:end]) {
+		end--
+	}
+	if escapeStart := strings.LastIndexByte(name[:end], '@'); escapeStart >= 0 && end-escapeStart < 3 {
+		end = escapeStart
+	}
+	return name[:end]
 }
 
 type applyBatchInfo struct {
