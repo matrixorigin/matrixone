@@ -235,4 +235,25 @@ deallocate prepare late_reverse_fk_stmt;
 drop database late_reverse_db;
 set foreign_key_checks = 1;
 
+create table snapshot_baseline (id int);
+begin;
+prepare snapshot_baseline_stmt from
+    'alter table snapshot_baseline add column note int';
+-- @session:id=1
+use prepare_ddl_schema_change;
+alter table snapshot_baseline add column note int;
+-- @session
+execute snapshot_baseline_stmt;
+deallocate prepare snapshot_baseline_stmt;
+rollback;
+
+create table local_ddl_generation (id int);
+begin;
+prepare local_ddl_stmt from
+    'alter table local_ddl_generation add column note int';
+alter table local_ddl_generation add column note int;
+execute local_ddl_stmt;
+deallocate prepare local_ddl_stmt;
+rollback;
+
 drop database prepare_ddl_schema_change;

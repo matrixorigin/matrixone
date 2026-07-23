@@ -110,6 +110,7 @@ func TestTxnHandler_NewTxn(t *testing.T) {
 		ctx := defines.AttachAccountId(context.TODO(), sysAccountID)
 		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
 		txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
+		txnOperator.EXPECT().SnapshotTS().Return(timestamp.Timestamp{}).AnyTimes()
 		txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 		txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 		txnOperator.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).Return().AnyTimes()
@@ -628,6 +629,7 @@ func TestSession_Migrate(t *testing.T) {
 		txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(any, any, ...any) (TxnOperator, error) {
 			txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
 			txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
+			txnOperator.EXPECT().SnapshotTS().Return(timestamp.Timestamp{}).AnyTimes()
 			txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 			txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 			txnOperator.EXPECT().GetWorkspace().Return(newTestWorkspace()).AnyTimes()

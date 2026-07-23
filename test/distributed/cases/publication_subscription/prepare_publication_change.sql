@@ -54,7 +54,10 @@ prepare subscription_identity_stmt from
 drop database prepared_identity_sub;
 create database prepared_identity_sub from sys publication prepared_pub1;
 execute subscription_identity_stmt;
-show columns from prepared_like;
+select column_name, data_type
+from information_schema.columns
+where table_schema = database() and table_name = 'prepared_like'
+order by ordinal_position;
 deallocate prepare subscription_identity_stmt;
 drop database prepared_identity_sub;
 

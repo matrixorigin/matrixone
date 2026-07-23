@@ -5831,3 +5831,16 @@ func Test_parseStmtSendLongData(t *testing.T) {
 		})
 	})
 }
+
+func TestRecordSessionDDL(t *testing.T) {
+	ses := &Session{}
+
+	recordSessionDDL(ses, &tree.Select{}, nil)
+	require.Equal(t, uint64(0), ses.getDDLVersion())
+
+	recordSessionDDL(ses, &tree.AlterTable{}, assert.AnError)
+	require.Equal(t, uint64(0), ses.getDDLVersion())
+
+	recordSessionDDL(ses, &tree.AlterTable{}, nil)
+	require.Equal(t, uint64(1), ses.getDDLVersion())
+}

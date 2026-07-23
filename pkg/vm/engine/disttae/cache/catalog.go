@@ -55,7 +55,6 @@ func NewCatalog() *CatalogCache {
 			end   types.TS
 		}{start: types.MaxTs()},
 	}
-	cc.tableChange.byAccount = make(map[uint32]timestamp.Timestamp)
 	return cc
 }
 
@@ -410,28 +409,14 @@ func (cc *CatalogCache) HasNewerVersion(qry *TableChangeQuery) bool {
 	if qry.Name == "" {
 		if qry.DatabaseId == 0 {
 			cc.tableChange.RLock()
-			latest := cc.tableChange.byAccount[qry.AccountId]
+			latest := cc.tableChange.byAccount[tableChangeBucket(qry.AccountId)]
 			cc.tableChange.RUnlock()
 			return latest.Greater(qry.Ts)
 		}
-		key := &TableItem{
-			AccountId: qry.AccountId, DatabaseId: qry.DatabaseId,
-			Ts: types.MaxTs().ToTimestamp(),
-		}
-		cc.tables.data.Ascend(key, func(item *TableItem) bool {
-			if item.AccountId != qry.AccountId {
-				return false
-			}
-			if qry.DatabaseId != 0 && item.DatabaseId != qry.DatabaseId {
-				return false
-			}
-			if item.Ts.Greater(qry.Ts) {
-				find = true
-				return false
-			}
-			return true
-		})
-		return find
+		// A database-only marker protects the target database identity. The
+		// database lookup above already detected deletion/recreation, and table
+		// changes inside the same database are unrelated to that dependency.
+		return false
 	}
 
 	key := &TableItem{
@@ -588,9 +573,14 @@ func (cc *CatalogCache) setTableItemLocked(item *TableItem, updateCPKey bool) {
 	if updateCPKey {
 		cc.tables.cpkeyIndex.Set(item)
 	}
-	if latest := cc.tableChange.byAccount[item.AccountId]; item.Ts.Greater(latest) {
-		cc.tableChange.byAccount[item.AccountId] = item.Ts
+	bucket := tableChangeBucket(item.AccountId)
+	if latest := cc.tableChange.byAccount[bucket]; item.Ts.Greater(latest) {
+		cc.tableChange.byAccount[bucket] = item.Ts
 	}
+}
+
+func tableChangeBucket(accountID uint32) uint32 {
+	return accountID % tableChangeBucketCount
 }
 
 func ParseColumnsBatchAnd(bat *batch.Batch, f func(map[TableItemKey]Columns)) {

@@ -24,12 +24,12 @@ import (
 	"github.com/mohae/deepcopy"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/models"
@@ -553,6 +553,9 @@ func getStatementStartAt(ctx context.Context) time.Time {
 }
 
 func CheckTableDefChange(catalogCache *cache.CatalogCache, tblKey *cache.TableChangeQuery) bool {
+	if catalogCache == nil {
+		return false
+	}
 	return catalogCache.HasNewerVersion(tblKey)
 }
 
@@ -576,13 +579,15 @@ func initExecuteStmtParam(execCtx *ExecCtx, ses *Session, cwft *TxnComputationWr
 	catalogCache := eng.(*disttae.Engine).GetLatestCatalogCache()
 
 	currentTempTableVersion := ses.GetTempTableVersion()
-	change := prepareStmt.tempTableVersion != currentTempTableVersion
+	currentDDLVersion := ses.getDDLVersion()
+	change := prepareStmt.tempTableVersion != currentTempTableVersion ||
+		prepareStmt.ddlVersion != currentDDLVersion
 	for _, obj := range preparePlan.GetSchemas() {
 		// A subscription can be rebound to another publication, or its table
 		// authorization can change without changing the publisher table version.
 		// Until subscription metadata has a catalog version, conservatively
 		// rebuild plans that resolved through a subscription on every EXECUTE.
-		if preparedSchemaNeedsCatalogRefresh(obj) {
+		if preparedSchemaNeedsCatalogRefresh(obj, prepareStmt.PrepareStmt) {
 			change = true
 			break
 		}
@@ -617,7 +622,6 @@ func initExecuteStmtParam(execCtx *ExecCtx, ses *Session, cwft *TxnComputationWr
 	// Rebuild the plan when catalog schema, session temporary-table name
 	// resolution, or the session's compatibility mode changed.
 	if change || modeMismatch {
-		prepareTs, _ := runtime.ServiceRuntime(ses.GetService()).Clock().Now()
 		originPrepareStmt := &tree.PrepareStmt{
 			Name: tree.Identifier(prepareStmt.Name),
 			Stmt: prepareStmt.PrepareStmt,
@@ -632,6 +636,7 @@ func initExecuteStmtParam(execCtx *ExecCtx, ses *Session, cwft *TxnComputationWr
 		if err != nil {
 			return nil, nil, nil, "", err
 		}
+		prepareTs := currentTxnSnapshotTS(ses)
 		newPreparePlan := newPlan.GetDcl().GetPrepare()
 		columns := plan2.GetResultColumnsFromPlan(newPreparePlan.Plan)
 		newColDefData, err := execCtx.resper.MysqlRrWr().MakeColumnDefData(reqCtx, columns)
@@ -648,6 +653,7 @@ func initExecuteStmtParam(execCtx *ExecCtx, ses *Session, cwft *TxnComputationWr
 		prepareStmt.NativeMode = currentNativeMode
 		prepareStmt.Ts = prepareTs
 		prepareStmt.tempTableVersion = currentTempTableVersion
+		prepareStmt.ddlVersion = currentDDLVersion
 	}
 
 	// Recreate the cached compile only when a plan dependency changed.
@@ -739,8 +745,19 @@ func prepareSchemaAccountID(currentAccountID uint32, obj *plan.ObjectRef) uint32
 	return currentAccountID
 }
 
-func preparedSchemaNeedsCatalogRefresh(obj *plan.ObjectRef) bool {
-	return obj.GetSubscriptionName() != ""
+func currentTxnSnapshotTS(ses *Session) timestamp.Timestamp {
+	if ses == nil || ses.GetProc() == nil {
+		return timestamp.Timestamp{}
+	}
+	txnOperator := ses.GetProc().GetTxnOperator()
+	if txnOperator == nil {
+		return timestamp.Timestamp{}
+	}
+	return txnOperator.SnapshotTS()
+}
+
+func preparedSchemaNeedsCatalogRefresh(obj *plan.ObjectRef, stmt tree.Statement) bool {
+	return IsDDL(stmt) && obj.GetSubscriptionName() != ""
 }
 
 func preparedDDLNeedsCatalogRefresh(stmt tree.Statement) bool {

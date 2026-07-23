@@ -21,12 +21,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -108,11 +111,11 @@ func TestTxnComputationWrapper_Run_Error(t *testing.T) {
 // newPreparedExecuteEnv sets up a session holding a prepared "select 1" and a
 // computation wrapper that executes it through the binary protocol, so tests
 // can drive cw.Compile through initExecuteStmtParam.
-func newPreparedExecuteEnv(t *testing.T, stmtID uint32) (*Session, *PrepareStmt, *TxnComputationWrapper, *ExecCtx) {
+func newPreparedExecuteEnv(t testing.TB, stmtID uint32) (*Session, *PrepareStmt, *TxnComputationWrapper, *ExecCtx) {
 	return newPreparedExecuteEnvForSQL(t, stmtID, "select 1")
 }
 
-func newPreparedExecuteEnvForSQL(t *testing.T, stmtID uint32, sql string) (*Session, *PrepareStmt, *TxnComputationWrapper, *ExecCtx) {
+func newPreparedExecuteEnvForSQL(t testing.TB, stmtID uint32, sql string) (*Session, *PrepareStmt, *TxnComputationWrapper, *ExecCtx) {
 	ctx := statistic.ContextWithStatsInfo(context.Background(), statistic.NewStatsInfo())
 	ctx = defines.AttachAccount(ctx, sysAccountID, rootID, moAdminRoleID)
 	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
@@ -334,8 +337,41 @@ func TestPrepareSchemaAccountID(t *testing.T) {
 }
 
 func TestPreparedSchemaNeedsCatalogRefresh(t *testing.T) {
-	require.False(t, preparedSchemaNeedsCatalogRefresh(&plan.ObjectRef{}))
-	require.True(t, preparedSchemaNeedsCatalogRefresh(&plan.ObjectRef{SubscriptionName: "sub"}))
+	subscription := &plan.ObjectRef{SubscriptionName: "sub"}
+	require.False(t, preparedSchemaNeedsCatalogRefresh(subscription, &tree.Select{}))
+	require.True(t, preparedSchemaNeedsCatalogRefresh(subscription, &tree.AlterTable{}))
+	require.False(t, preparedSchemaNeedsCatalogRefresh(&plan.ObjectRef{}, &tree.AlterTable{}))
+}
+
+func TestCurrentTxnSnapshotTS(t *testing.T) {
+	ses, prepareStmt, _, _ := newPreparedExecuteEnv(t, 100)
+	defer prepareStmt.Close()
+
+	snapshot := timestamp.Timestamp{PhysicalTime: 100, LogicalTime: 7}
+	ctrl := gomock.NewController(t)
+	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOperator.EXPECT().SnapshotTS().Return(snapshot)
+	ses.proc.Base.TxnOperator = txnOperator
+
+	require.Equal(t, snapshot, currentTxnSnapshotTS(ses))
+}
+
+func TestInitExecuteStmtParamUsesTxnSnapshotAfterRebuild(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnv(t, 101)
+	defer prepareStmt.Close()
+
+	snapshot := timestamp.Timestamp{PhysicalTime: 100, LogicalTime: 7}
+	ctrl := gomock.NewController(t)
+	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOperator.EXPECT().SnapshotTS().Return(snapshot)
+	txnOperator.EXPECT().NextSequence().Return(uint64(1)).AnyTimes()
+	ses.proc.Base.TxnOperator = txnOperator
+	ses.advanceDDLVersion()
+
+	_, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.Equal(t, snapshot, prepareStmt.Ts)
+	require.Equal(t, ses.getDDLVersion(), prepareStmt.ddlVersion)
 }
 
 func TestInitExecuteStmtParamSkipsPrepareCompileWithoutCache(t *testing.T) {
@@ -371,6 +407,32 @@ func TestInitExecuteStmtParamReusesCachedCompileWhenNoSchemaChange(t *testing.T)
 	require.Same(t, sentinel, prepareStmt.compile)
 	require.NotNil(t, retPlan)
 	require.NotNil(t, retStmt)
+}
+
+func BenchmarkInitExecuteStmtParamReusesSubscriptionSelect(b *testing.B) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnv(b, 101)
+	defer prepareStmt.Close()
+
+	prepareStmt.PreparePlan.GetDcl().GetPrepare().Schemas = []*plan.ObjectRef{{
+		SubscriptionName: "sub",
+	}}
+	sentinel := compile.NewCompile(
+		"", "", prepareStmt.Sql, "", "", nil,
+		cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
+	prepareStmt.compile = sentinel
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		retComp, _, _, _, err := initExecuteStmtParam(
+			execCtx, ses, cw, nil, prepareStmt.Name)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if retComp != sentinel {
+			b.Fatal("subscription SELECT compile was not reused")
+		}
+	}
 }
 
 func TestInitExecuteStmtParamRebuildsWhenTempTableMappingChanges(t *testing.T) {

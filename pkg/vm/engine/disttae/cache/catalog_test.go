@@ -151,7 +151,7 @@ func TestHasNewerVersionDetectsAnyTableChange(t *testing.T) {
 		AccountId: 1, DatabaseId: 10, Name: "new_child", Id: 20,
 		Ts: timestamp.Timestamp{PhysicalTime: 200},
 	}, true)
-	require.True(t, cc.HasNewerVersion(&TableChangeQuery{
+	require.False(t, cc.HasNewerVersion(&TableChangeQuery{
 		AccountId: 1, DatabaseId: 10, Name: "", Ts: timestamp.Timestamp{PhysicalTime: 100},
 	}))
 	require.False(t, cc.HasNewerVersion(&TableChangeQuery{
@@ -205,6 +205,21 @@ func TestAccountTableChangeHighWatermarkConcurrent(t *testing.T) {
 	}))
 	require.False(t, cc.HasNewerVersion(&TableChangeQuery{
 		AccountId: 1, DatabaseId: 0, Name: "", Ts: timestamp.Timestamp{PhysicalTime: 64},
+	}))
+}
+
+func TestAccountTableChangeHighWatermarkCollisionIsConservative(t *testing.T) {
+	cc := NewCatalog()
+	cc.setTableItem(&TableItem{
+		AccountId: 1, DatabaseId: 10, Name: "t",
+		Ts: timestamp.Timestamp{PhysicalTime: 100},
+	}, true)
+
+	// A colliding account may rebuild conservatively, but it must never miss
+	// the bucket's latest table change.
+	require.True(t, cc.HasNewerVersion(&TableChangeQuery{
+		AccountId: 1 + tableChangeBucketCount, DatabaseId: 0,
+		Ts: timestamp.Timestamp{PhysicalTime: 1},
 	}))
 }
 

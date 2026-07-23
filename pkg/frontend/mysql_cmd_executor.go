@@ -1828,11 +1828,11 @@ func createPrepareStmt(
 		ses.GetTxnCompileCtx().SetExecCtx(execCtx)
 	}
 
-	prepareTs, _ := runtime.ServiceRuntime(ses.GetService()).Clock().Now()
 	preparePlan, err := buildPlanWithAuthorization(execCtx.reqCtx, ses, ses.GetTxnCompileCtx(), stmt)
 	if err != nil {
 		return nil, err
 	}
+	prepareTs := currentTxnSnapshotTS(ses)
 
 	schedulingSQLMode := sessionSQLModeForParser(ses)
 	prepareSchedulingIntent := querySchedulingIntentForStatementWithSQLMode(
@@ -1867,6 +1867,7 @@ func createPrepareStmt(
 		remapDb:             maps.Clone(execCtx.remapDb),
 		defaultDatabase:     ses.GetTxnCompileCtx().GetDatabase(),
 		tempTableVersion:    ses.GetTempTableVersion(),
+		ddlVersion:          ses.getDDLVersion(),
 		getFromSendLongData: make(map[int]struct{}),
 		schedulingSQLMode:   schedulingSQLMode,
 	}
@@ -3844,8 +3845,18 @@ func executeStmtWithWorkspace(ses FeSession,
 	}()
 
 	err = executeStmtWithIncrStmt(ses, statsArr, execCtx, txnOp)
+	recordSessionDDL(ses, execCtx.stmt, err)
 
 	return
+}
+
+func recordSessionDDL(ses FeSession, stmt tree.Statement, err error) {
+	if err != nil || !IsDDL(stmt) {
+		return
+	}
+	if session, ok := ses.(*Session); ok {
+		session.advanceDDLVersion()
+	}
 }
 
 func executeStmtWithIncrStmt(ses FeSession,
