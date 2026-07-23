@@ -825,11 +825,34 @@ func (e *Engine) Nodes(
 }
 
 var _ engine.QueryCandidateDiscoverer = (*Engine)(nil)
+var _ engine.CurrentQueryCandidateDiscoverer = (*Engine)(nil)
 var _ engine.QueryCandidatePoolResolver = (*Engine)(nil)
 
 // DiscoverQueryCandidates reads a version-compatible CN inventory without
 // applying tenant or label policy.
 func (e *Engine) DiscoverQueryCandidates(ctx context.Context) (engine.QueryCandidates, error) {
+	return e.discoverQueryCandidates(ctx, clusterservice.NewSelector())
+}
+
+// DiscoverCurrentQueryCandidate reads only the ingress CN metadata needed by
+// a local-routing workload policy.
+func (e *Engine) DiscoverCurrentQueryCandidate(
+	ctx context.Context,
+	serviceID string,
+) (engine.QueryCandidates, error) {
+	if serviceID == "" {
+		return nil, moerr.NewInvalidInput(ctx, "current CN service ID is empty")
+	}
+	return e.discoverQueryCandidates(
+		ctx,
+		clusterservice.NewServiceIDSelector(serviceID),
+	)
+}
+
+func (e *Engine) discoverQueryCandidates(
+	ctx context.Context,
+	selector clusterservice.Selector,
+) (engine.QueryCandidates, error) {
 	start := time.Now()
 	defer func() {
 		v2.TxnStatementNodesHistogram.Observe(time.Since(start).Seconds())
@@ -850,7 +873,7 @@ func (e *Engine) DiscoverQueryCandidates(ctx context.Context) (engine.QueryCandi
 	err = clusterservice.GetCNServiceWithoutWorkingStateWithContext(
 		ctx,
 		cluster,
-		clusterservice.NewSelector(),
+		selector,
 		func(c metadata.CNService) bool {
 			if ctx.Err() != nil {
 				return false

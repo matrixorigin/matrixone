@@ -110,6 +110,11 @@ func TestParseWorkloadPolicyConfigRejectsUnsafeOrInvalidPolicy(t *testing.T) {
 			reason: "strict fallback",
 		},
 		{
+			name:   "maintenance is not routed by v1",
+			policy: `{"version":1,"policies":{"maintenance":{"pool":"ddl","labels":{"role":"ddl"}}}}`,
+			reason: "not configurable",
+		},
+		{
 			name:   "trailing value",
 			policy: `{"version":1,"policies":{"ap":{"pool":"ap","labels":{"role":"ap"}}}} {}`,
 			reason: "multiple JSON values",
@@ -167,6 +172,30 @@ func TestResolveWorkloadPolicySeparatesIngressAndTargetPool(t *testing.T) {
 	require.Equal(t, CurrentCNExcluded, policy.Intent.CurrentCNPolicy)
 	require.Equal(t, 2, policy.Intent.WorkerSet.MaxWorkers)
 	require.Equal(t, "tp", ingress["role"])
+}
+
+func TestResolveWorkloadPolicyDoesNotRouteInternalMaintenance(t *testing.T) {
+	set, err := ParseWorkloadPolicyConfig(
+		`{"version":1,"policies":{"internal":{"pool":"system","labels":{"role":"internal"}}}}`,
+	)
+	require.NoError(t, err)
+
+	policy := ResolveWorkloadPolicy(WorkloadDescriptor{
+		Class:    WorkloadMaintenance,
+		ExecKind: QueryExecTP,
+		Internal: true,
+		Tenant:   "sys",
+		SchedulingIntent: SchedulingIntent{
+			PoolFallback:      PoolFallbackLegacyCompatible,
+			EmptyWorkerPolicy: EmptyWorkerLocalFallback,
+			CurrentCNPolicy:   CurrentCNAllowed,
+			WorkerSet:         WorkerSetPolicy{Mode: WorkerSetAll},
+		},
+	}, set)
+
+	require.Equal(t, WorkloadMaintenance, policy.WorkloadClass)
+	require.False(t, policy.Applied)
+	require.Equal(t, WorkloadPolicySourceLegacy, policy.Source)
 }
 
 func TestResolveWorkloadPolicyRoutingAndLegacyCompatibility(t *testing.T) {

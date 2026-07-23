@@ -119,6 +119,14 @@ type QueryCandidateDiscoverer interface {
 	DiscoverQueryCandidates(context.Context) (QueryCandidates, error)
 }
 
+// CurrentQueryCandidateDiscoverer is an optional fast path for policies whose
+// routing contract requires execution on the ingress CN. It avoids building a
+// full cluster inventory merely to verify that one CN still belongs to the
+// authorized pool.
+type CurrentQueryCandidateDiscoverer interface {
+	DiscoverCurrentQueryCandidate(context.Context, string) (QueryCandidates, error)
+}
+
 // QueryCandidatePoolResolver is the matching optional capability that applies
 // tenant and label policy to an already-discovered candidate snapshot.
 // Implementations must treat candidates, request.CNLabel, and

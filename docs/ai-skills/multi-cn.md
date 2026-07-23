@@ -68,14 +68,18 @@ select a remote CN or multiple CNs when their semantics allow it.
 
 This phase establishes a hard boundary between policy and execution:
 
-- A dynamic account-level policy maps workload classes such as `tp`, `ap`,
-  `load`, `maintenance`, and `internal` to labeled target pools.
+- A dynamic account-level policy maps executable query classes `tp`, `ap`,
+  `load`, non-DDL `internal`, and `unclassified` to labeled target pools.
+  Version 1 rejects `maintenance`; DDL remains maintenance even when derived
+  internally because its dedicated execution paths do not yet pass through
+  query worker placement.
 - The server injects the authenticated account label. User hints may only
   reduce the worker count or strengthen fallback behavior; they cannot widen
   the target set across tenants.
 - TP must remain on the current CN and verifies that it is a member of the
-  target pool. AP and LOAD may select one remote worker, while multi-CN AP may
-  select a deterministic worker subset.
+  target pool. This verification reads only the ingress CN metadata when the
+  engine supports targeted discovery. AP and LOAD may select one remote
+  worker, while multi-CN AP may select a deterministic worker subset.
 - Strict policies fail closed on invalid configuration, unresolved pools,
   unroutable workers, or empty pools. Historical behavior remains only when no
   policy is configured or a compatibility fallback is explicitly requested.
@@ -83,6 +87,10 @@ This phase establishes a hard boundary between policy and execution:
   immutable policy snapshot. Traces, logs, and metrics expose the workload
   class, policy generation, pool, routing mode, candidates, and selected
   workers.
+- A committed `SET GLOBAL` is propagated to active account caches on every CN
+  with its transaction commit timestamp. Delayed updates cannot overwrite a
+  newer cache. Periodic catalog revalidation bounds stale use if a CN misses
+  the RPC; failure to revalidate fails the statement closed.
 
 Phase 9 establishes workload isolation and the legal candidate set. It does not
 select by instantaneous load, and it does not by itself provide multi-CN TPCC
@@ -121,7 +129,8 @@ SET GLOBAL query_workload_policy = '{
 `fallback` defaults to `strict`. `legacy-compatible` is the only compatibility
 mode, and `empty_worker: local-fallback` is valid only with that mode.
 `max_workers` is an upper bound. TP policies must use
-`current_cn: required`.
+`current_cn: required`. The encoded JSON must not exceed 5,000 bytes, matching
+the catalog column that stores global system-variable values.
 
 ### Phase 10: Unified Resource and Capacity Model
 

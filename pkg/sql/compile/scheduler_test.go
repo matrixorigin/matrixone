@@ -67,6 +67,26 @@ type schedulerProviderTestEngine struct {
 	mutateLabels     bool
 }
 
+type schedulerCurrentProviderTestEngine struct {
+	*schedulerProviderTestEngine
+	currentCandidates engine.QueryCandidates
+	currentErr        error
+	currentCalls      int
+	currentServiceID  string
+}
+
+func (e *schedulerCurrentProviderTestEngine) DiscoverCurrentQueryCandidate(
+	ctx context.Context,
+	serviceID string,
+) (engine.QueryCandidates, error) {
+	e.currentCalls++
+	e.currentServiceID = serviceID
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return e.currentCandidates, e.currentErr
+}
+
 func (e *schedulerProviderTestEngine) DiscoverQueryCandidates(ctx context.Context) (engine.QueryCandidates, error) {
 	e.discoveryCalls++
 	if err := ctx.Err(); err != nil {
@@ -551,6 +571,107 @@ func TestScheduleQueryWorkersTPPolicyVerifiesCurrentPoolWithoutRelocation(t *tes
 	require.Equal(t, "tp-local:6001", nodes[0].Addr)
 	require.Equal(t, schedule.WorkloadRoutingLocal, c.queryPlacement.WorkloadPolicy.Routing)
 	require.Equal(t, schedule.ReasonRequiredCurrentCN, c.queryPlacement.Reason)
+}
+
+func TestScheduleQueryWorkersTPPolicyDiscoversOnlyCurrentCN(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	lockSvc := mock_lock.NewMockLockService(ctrl)
+	lockSvc.EXPECT().GetConfig().Return(lockservice.Config{ServiceID: "tp-local"}).AnyTimes()
+
+	policySet, err := schedule.ParseWorkloadPolicyConfig(`{
+		"version": 1,
+		"policies": {
+			"tp": {
+				"pool": "tenant-tp",
+				"labels": {"role": "tp"},
+				"current_cn": "required"
+			}
+		}
+	}`)
+	require.NoError(t, err)
+
+	base := &schedulerProviderTestEngine{
+		schedulerTestEngine: &schedulerTestEngine{},
+		resolvedNodes: engine.Nodes{{
+			Id: "tp-local", Addr: "tp-local:6001", Mcpu: 4,
+			WorkState: metadata.WorkState_Working,
+		}},
+	}
+	provider := &schedulerCurrentProviderTestEngine{
+		schedulerProviderTestEngine: base,
+		currentCandidates: engine.QueryCandidates{{
+			Service: metadata.CNService{
+				ServiceID: "tp-local", PipelineServiceAddress: "tp-local:6001",
+				WorkState: metadata.WorkState_Working,
+			},
+			Mcpu: 4,
+		}},
+	}
+	c := NewMockCompile(t)
+	c.proc.Base.LockService = lockSvc
+	c.addr = "tp-local:6001"
+	c.execType = plan2.ExecTypeTP
+	c.tenant = "tenant-a"
+	c.cnLabel = map[string]string{"account": "tenant-a", "role": "tp"}
+	c.e = provider
+	c.SetWorkloadPolicy(policySet, "")
+
+	nodes, err := c.scheduleQueryWorkers()
+	require.NoError(t, err)
+	require.Equal(t, "tp-local", provider.currentServiceID)
+	require.Equal(t, 1, provider.currentCalls)
+	require.Zero(t, provider.discoveryCalls)
+	require.Len(t, provider.resolvedSnapshot, 1)
+	require.Equal(t, "tp-local:6001", nodes[0].Addr)
+}
+
+func TestPreparedWorkloadPolicyRefreshIsClassScoped(t *testing.T) {
+	apOnly := schedule.WorkloadPolicySet{
+		Rules: map[schedule.WorkloadClass]schedule.WorkloadPolicyRule{
+			schedule.WorkloadAP: {PoolIdentity: "ap"},
+		},
+	}
+	tpOnly := schedule.WorkloadPolicySet{
+		Rules: map[schedule.WorkloadClass]schedule.WorkloadPolicyRule{
+			schedule.WorkloadTP: {
+				PoolIdentity: "tp",
+				Labels:       map[string]string{"role": "tp"},
+			},
+		},
+	}
+	c := &Compile{execType: plan2.ExecTypeTP}
+
+	require.False(t, c.NeedsPreparedWorkloadPolicyRefresh(apOnly))
+	require.True(t, c.NeedsPreparedWorkloadPolicyRefresh(tpOnly))
+
+	c.workloadPolicySet = tpOnly.Clone()
+	require.False(t, c.NeedsPreparedWorkloadPolicyRefresh(tpOnly.Clone()))
+	require.True(t, c.NeedsPreparedWorkloadPolicyRefresh(schedule.WorkloadPolicySet{
+		Rules: map[schedule.WorkloadClass]schedule.WorkloadPolicyRule{
+			schedule.WorkloadTP: {
+				PoolIdentity: "tp-new",
+				Labels:       map[string]string{"role": "tp"},
+			},
+		},
+	}))
+	require.True(t, c.NeedsPreparedWorkloadPolicyRefresh(schedule.WorkloadPolicySet{}))
+	c.workloadPolicySet = schedule.WorkloadPolicySet{}
+	require.True(t, c.NeedsPreparedWorkloadPolicyRefresh(
+		schedule.WorkloadPolicySet{InvalidReason: "corrupt catalog value"},
+	))
+}
+
+func TestInternalDDLRemainsMaintenanceWorkload(t *testing.T) {
+	c := &Compile{
+		isInternal: true,
+		execType:   plan2.ExecTypeTP,
+		stmt:       &tree.CreateTable{},
+	}
+	require.Equal(t, schedule.WorkloadMaintenance, c.queryWorkloadClass())
+
+	c.stmt = &tree.Select{}
+	require.Equal(t, schedule.WorkloadInternal, c.queryWorkloadClass())
 }
 
 func TestScheduleQueryWorkersTPPolicyRejectsRelocationOutsideTargetPool(t *testing.T) {

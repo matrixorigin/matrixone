@@ -174,11 +174,18 @@ type pendingLocalAttempt struct {
 type pendingLocalQuery struct {
 	execKind               QueryExecKind
 	workloadClass          WorkloadClass
+	workloadPolicySource   WorkloadPolicySource
+	workloadGeneration     string
+	workloadPolicyReason   string
+	workloadRouting        WorkloadRoutingMode
 	currentCNPolicy        CurrentCNPolicy
 	currentCN              pendingWorkerTrace
 	reason                 string
+	intent                 SchedulingIntent
+	resolvedPool           ResolvedPoolDecision
 	candidateResolution    CandidateResolution
 	resolvedCandidateCount int
+	eligibleCount          int
 	selectedCount          int
 }
 
@@ -233,9 +240,13 @@ func (r *TraceRecorder) RecordQuery(
 		}
 		if canDeferLocalQuery(decision) {
 			r.pendingLocal.query = pendingLocalQuery{
-				execKind:        decision.ExecKind,
-				workloadClass:   decision.WorkloadPolicy.WorkloadClass,
-				currentCNPolicy: decision.CurrentCNPolicy,
+				execKind:             decision.ExecKind,
+				workloadClass:        decision.WorkloadPolicy.WorkloadClass,
+				workloadPolicySource: decision.WorkloadPolicy.Source,
+				workloadGeneration:   decision.WorkloadPolicy.Generation,
+				workloadPolicyReason: decision.WorkloadPolicy.Reason,
+				workloadRouting:      decision.WorkloadPolicy.Routing,
+				currentCNPolicy:      decision.CurrentCNPolicy,
 				currentCN: pendingWorkerTrace{
 					id:       decision.CurrentCN.ID,
 					routable: hasWorkerRoute(decision.CurrentCN),
@@ -244,8 +255,11 @@ func (r *TraceRecorder) RecordQuery(
 					route:    decision.CurrentCN.Route,
 				},
 				reason:                 decision.Reason,
+				intent:                 decision.Intent,
+				resolvedPool:           decision.ResolvedPool,
 				candidateResolution:    decision.CandidateResolution,
 				resolvedCandidateCount: max(decision.ResolvedCandidateCount, 0),
+				eligibleCount:          max(decision.EligibleCount, 0),
 				selectedCount:          len(decision.Workers),
 			}
 			r.pendingLocal.hasQuery = true
@@ -576,9 +590,11 @@ func (t Trace) PersistStandalone() bool {
 		}
 		query := attempt.Query
 		if query.ExecKind == QueryExecAPMultiCN.String() ||
-			query.WorkloadPolicySource == string(WorkloadPolicySourceAccountGlobal) ||
+			(query.WorkloadPolicySource == string(WorkloadPolicySourceAccountGlobal) &&
+				query.WorkloadRouting != string(WorkloadRoutingLocal)) ||
 			!query.Satisfied ||
 			query.Fallback ||
+			query.PoolFallback ||
 			query.DroppedCount > 0 {
 			return true
 		}
@@ -613,10 +629,16 @@ func (r *TraceRecorder) attemptLocked(id TraceAttemptID) *AttemptTrace {
 }
 
 func canDeferLocalQuery(decision QueryDecision) bool {
+	legacyDefault := !decision.Intent.Explicit &&
+		decision.Intent.WorkerSet.Mode == WorkerSetAll
+	localAccountPolicy := decision.WorkloadPolicy.Applied &&
+		decision.WorkloadPolicy.Source == WorkloadPolicySourceAccountGlobal &&
+		decision.WorkloadPolicy.Routing == WorkloadRoutingLocal
 	return (decision.ExecKind == QueryExecTP || decision.ExecKind == QueryExecAPOneCN) &&
-		!decision.Intent.Explicit && decision.Intent.WorkerSet.Mode == WorkerSetAll &&
+		(legacyDefault || localAccountPolicy) &&
 		decision.Satisfied &&
 		decision.Reason != ReasonNoCandidateCN &&
+		!decision.ResolvedPool.Fallback &&
 		len(decision.Dropped) == 0
 }
 
@@ -639,13 +661,26 @@ func (r *TraceRecorder) materializePendingLocalLocked() {
 	}
 	if pending.hasQuery {
 		query := pending.query
+		var selected []WorkerTrace
+		if query.workloadPolicySource == WorkloadPolicySourceAccountGlobal &&
+			query.selectedCount > 0 {
+			selected = []WorkerTrace{{
+				ID:       boundedTraceWorkerValue(query.currentCN.id),
+				Routable: query.currentCN.routable,
+				Mcpu:     query.currentCN.mcpu,
+				State:    query.currentCN.state.String(),
+				Route:    query.currentCN.route.String(),
+			}}
+			r.workerRefCount++
+		}
 		attempt.Query = &QueryTrace{
-			ExecKind:             query.execKind.String(),
-			WorkloadClass:        string(query.workloadClass),
-			WorkloadPolicySource: string(WorkloadPolicySourceLegacy),
-			WorkloadPolicyReason: "workload-policy-not-configured",
-			WorkloadRouting:      string(legacyWorkloadRouting(query.execKind)),
-			CurrentCNPolicy:      query.currentCNPolicy.String(),
+			ExecKind:                 query.execKind.String(),
+			WorkloadClass:            string(query.workloadClass),
+			WorkloadPolicySource:     string(query.workloadPolicySource),
+			WorkloadPolicyGeneration: boundedTraceWorkerValue(query.workloadGeneration),
+			WorkloadPolicyReason:     boundedTraceWorkerValue(query.workloadPolicyReason),
+			WorkloadRouting:          string(query.workloadRouting),
+			CurrentCNPolicy:          query.currentCNPolicy.String(),
 			CurrentCN: WorkerTrace{
 				ID:       boundedTraceWorkerValue(query.currentCN.id),
 				Routable: query.currentCN.routable,
@@ -653,17 +688,28 @@ func (r *TraceRecorder) materializePendingLocalLocked() {
 				State:    query.currentCN.state.String(),
 				Route:    query.currentCN.route.String(),
 			},
-			Reason:             query.reason,
-			Satisfied:          true,
-			PoolFallbackPolicy: PoolFallbackLegacyCompatible.String(),
-			EmptyWorkerPolicy:  EmptyWorkerLocalFallback.String(),
-			WorkerSetMode:      WorkerSetAll.String(),
-			CandidateSource:    string(query.candidateResolution.DiscoverySource),
-			PoolResolution:     string(query.candidateResolution.PoolResolution),
-			DiscoveredCount:    max(query.candidateResolution.DiscoveredCount, 0),
-			ResolvedCount:      query.resolvedCandidateCount,
-			SelectedCount:      query.selectedCount,
-			SelectedOmitted:    query.selectedCount > 0,
+			Reason:                 query.reason,
+			Satisfied:              true,
+			IntentExplicit:         query.intent.Explicit,
+			RequestedPool:          boundedTraceWorkerValue(query.resolvedPool.RequestedIdentity),
+			ResolvedPool:           boundedTraceWorkerValue(query.resolvedPool.Identity),
+			ResolvedPoolResolution: boundedTraceWorkerValue(string(query.resolvedPool.Resolution)),
+			PoolFallbackPolicy:     query.intent.PoolFallback.String(),
+			PoolFallback:           query.resolvedPool.Fallback,
+			PoolFallbackReason:     boundedTraceWorkerValue(query.resolvedPool.FallbackReason),
+			EmptyWorkerPolicy:      query.intent.EmptyWorkerPolicy.String(),
+			WorkerSetMode:          query.intent.WorkerSet.Mode.String(),
+			MaxWorkers:             query.intent.WorkerSet.MaxWorkers,
+			SelectionAlgorithm:     query.intent.WorkerSet.AlgorithmVersion,
+			SelectionKeyHash:       selectionKeyTraceHash(query.intent.WorkerSet.SelectionKey),
+			CandidateSource:        string(query.candidateResolution.DiscoverySource),
+			PoolResolution:         string(query.candidateResolution.PoolResolution),
+			DiscoveredCount:        max(query.candidateResolution.DiscoveredCount, 0),
+			ResolvedCount:          query.resolvedCandidateCount,
+			EligibleCount:          query.eligibleCount,
+			Selected:               selected,
+			SelectedCount:          query.selectedCount,
+			SelectedOmitted:        len(selected) == 0 && query.selectedCount > 0,
 		}
 	}
 	r.trace.Attempts = append(r.trace.Attempts, attempt)

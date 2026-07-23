@@ -247,6 +247,45 @@ func (d engineQueryCandidateDiscoverer) discover(ctx context.Context) (discovere
 	}, nil
 }
 
+type engineCurrentQueryCandidateDiscoverer struct {
+	provider  engine.CurrentQueryCandidateDiscoverer
+	serviceID string
+}
+
+func (d engineCurrentQueryCandidateDiscoverer) discover(
+	ctx context.Context,
+) (discoveredQueryCandidates, error) {
+	candidates, err := d.provider.DiscoverCurrentQueryCandidate(ctx, d.serviceID)
+	if err != nil {
+		return discoveredQueryCandidates{}, err
+	}
+	return discoveredQueryCandidates{
+		candidates: candidates,
+		source:     schedule.CandidateSourceClusterInventory,
+	}, nil
+}
+
+func currentQueryCandidateDiscoverer(
+	e engine.Engine,
+	serviceID string,
+) (queryCandidateDiscoverer, bool) {
+	if serviceID == "" {
+		return nil, false
+	}
+	base, ok := unwrapSchedulingEngine(e)
+	if !ok {
+		return nil, false
+	}
+	provider, ok := base.(engine.CurrentQueryCandidateDiscoverer)
+	if !ok {
+		return nil, false
+	}
+	return engineCurrentQueryCandidateDiscoverer{
+		provider:  provider,
+		serviceID: serviceID,
+	}, true
+}
+
 func unwrapSchedulingEngine(e engine.Engine) (engine.Engine, bool) {
 	const maxEntireEngineDepth = 8
 	for depth := 0; depth < maxEntireEngineDepth; depth++ {
@@ -451,6 +490,15 @@ func (c *Compile) evaluateQueryPlacement(
 	if err != nil {
 		return schedule.QueryDecision{}, scheduleFailureCandidateProvider, err
 	}
+	if workloadPolicy.Applied &&
+		workloadPolicy.Routing == schedule.WorkloadRoutingLocal {
+		if currentDiscoverer, ok := currentQueryCandidateDiscoverer(
+			c.e,
+			currentCN.ID,
+		); ok {
+			discoverer = currentDiscoverer
+		}
+	}
 	discovered, err := discoverer.discover(ctx)
 	if err != nil {
 		return schedule.QueryDecision{}, scheduleFailureCandidateDiscovery, err
@@ -494,8 +542,52 @@ func (c *Compile) SetWorkloadPolicy(
 	set schedule.WorkloadPolicySet,
 	classHint schedule.WorkloadClass,
 ) {
+	if set.Generation != "" &&
+		set.Generation == c.workloadPolicySet.Generation &&
+		set.InvalidReason == c.workloadPolicySet.InvalidReason {
+		c.workloadClassHint = classHint
+		return
+	}
 	c.workloadPolicySet = set.Clone()
 	c.workloadClassHint = classHint
+}
+
+// NeedsPreparedWorkloadPolicyRefresh reports whether reusing this prepared
+// Compile could bypass policy evaluation for its workload class. Policies for
+// unrelated classes do not invalidate a cached TP topology.
+func (c *Compile) NeedsPreparedWorkloadPolicyRefresh(
+	current schedule.WorkloadPolicySet,
+) bool {
+	if c == nil {
+		return false
+	}
+	if c.workloadPolicySet.InvalidReason != "" || current.InvalidReason != "" {
+		return true
+	}
+	class := c.queryWorkloadClass()
+	previous, previouslyMatched := c.workloadPolicySet.Rules[class]
+	next, currentlyMatches := current.Rules[class]
+	if previouslyMatched != currentlyMatches {
+		return true
+	}
+	return previouslyMatched && !sameWorkloadPolicyRule(previous, next)
+}
+
+func sameWorkloadPolicyRule(left, right schedule.WorkloadPolicyRule) bool {
+	if left.PoolIdentity != right.PoolIdentity ||
+		left.PoolFallback != right.PoolFallback ||
+		left.EmptyWorkerPolicy != right.EmptyWorkerPolicy ||
+		left.CurrentCNPolicy != right.CurrentCNPolicy ||
+		left.WorkerSet != right.WorkerSet ||
+		len(left.Labels) != len(right.Labels) {
+		return false
+	}
+	for key, value := range left.Labels {
+		if right.Labels[key] != value {
+			return false
+		}
+	}
+	return true
 }
 
 func (c *Compile) effectiveQuerySchedulingIntent() schedule.SchedulingIntent {
@@ -532,9 +624,6 @@ func (c *Compile) effectiveWorkloadPolicy() schedule.EffectiveWorkloadPolicy {
 }
 
 func (c *Compile) queryWorkloadClass() schedule.WorkloadClass {
-	if c.isInternal {
-		return schedule.WorkloadInternal
-	}
 	if c.workloadClassHint.Valid() {
 		return c.workloadClassHint
 	}
@@ -543,6 +632,9 @@ func (c *Compile) queryWorkloadClass() schedule.WorkloadClass {
 	}
 	if c.stmt != nil && c.stmt.GetQueryType() == tree.QueryTypeDDL {
 		return schedule.WorkloadMaintenance
+	}
+	if c.isInternal {
+		return schedule.WorkloadInternal
 	}
 	switch c.execType {
 	case plan2.ExecTypeTP:
