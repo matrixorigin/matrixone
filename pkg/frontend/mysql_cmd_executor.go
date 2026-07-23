@@ -101,6 +101,20 @@ func unclassifiedStatementInUncommittedTxnErrorInfo() string {
 	return "unclassified statement appears in uncommitted transaction"
 }
 
+func dataBranchMergePickTxnErrorInfo() string {
+	return "DATA BRANCH MERGE/PICK is not supported in transactions"
+}
+
+func dataBranchMergeTxnNotAllowed(ses *Session) bool {
+	return ses.GetTxnHandler().OptionBitsIsSet(OPTION_NOT_AUTOCOMMIT) &&
+		!ses.proc.GetTxnOperator().TxnOptions().ByBegin
+}
+
+func dataBranchPickTxnNotAllowed(ses *Session) bool {
+	return ses.GetTxnHandler().InMultiStmtTransactionMode() ||
+		ses.proc.GetTxnOperator().TxnOptions().ByBegin
+}
+
 func writeWriteConflictsErrorInfo() string {
 	return "Write conflicts detected. Previous transaction need to be aborted."
 }
@@ -1851,6 +1865,8 @@ func createPrepareStmt(
 		PrepareStmt:         saveStmt,
 		NativeMode:          ses.sqlModeHasMatrixOneNative(),
 		remapDb:             maps.Clone(execCtx.remapDb),
+		defaultDatabase:     ses.GetTxnCompileCtx().GetDatabase(),
+		tempTableVersion:    ses.GetTempTableVersion(),
 		getFromSendLongData: make(map[int]struct{}),
 		schedulingSQLMode:   schedulingSQLMode,
 	}
@@ -3430,8 +3446,9 @@ func canExecuteStatementInUncommittedTransaction(
 		return err
 	}
 	if !can {
-		if _, ok := stmt.(*tree.DataBranchPick); ok {
-			return moerr.NewInternalError(reqCtx, "DATA BRANCH PICK is not supported in explicit transactions")
+		switch stmt.(type) {
+		case *tree.DataBranchMerge, *tree.DataBranchPick:
+			return moerr.NewInternalError(reqCtx, dataBranchMergePickTxnErrorInfo())
 		}
 		//is ddl statement
 		if IsCreateDropDatabase(stmt) {
