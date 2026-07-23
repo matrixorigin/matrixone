@@ -53,8 +53,6 @@ enum Status {
 }
 
 message Message {
-  // Pipeline payloads may contain credentials and Iceberg file locations.
-  // String is implemented in iceberg_redact.go instead of generated code.
   option (gogoproto.goproto_stringer) = false;
   Status sid = 1;
   Method cmd = 2;

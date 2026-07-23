@@ -23,10 +23,35 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/iceberg/api"
 )
 
-// String methods for Message, IcebergDataFileTask, IcebergDeleteFileTask,
-// ExternalScan, Instruction, and Pipeline live here because their proto
-// declarations disable generated stringers. This keeps credentials and Iceberg
-// paths redacted after protobuf regeneration.
+// pipeline.proto disables generated String methods for Message,
+// IcebergDataFileTask, IcebergDeleteFileTask, ExternalScan, Instruction, and
+// Pipeline so these redacting implementations survive protobuf regeneration.
+// GoString and JSON methods alone are insufficient because logging commonly
+// calls String.
+
+func (m *Message) String() string {
+	return messageString(m)
+}
+
+func (m *IcebergDataFileTask) String() string {
+	return icebergDataFileTaskString(m)
+}
+
+func (m *IcebergDeleteFileTask) String() string {
+	return icebergDeleteFileTaskString(m)
+}
+
+func (m *ExternalScan) String() string {
+	return externalScanString(m)
+}
+
+func (m *Instruction) String() string {
+	return instructionString(m)
+}
+
+func (m *Pipeline) String() string {
+	return pipelineString(m)
+}
 
 func messageString(m *Message) string {
 	if m == nil {
