@@ -286,10 +286,8 @@ func getExprValueWithPrepareMode(
 	var planExpr *plan.Expr
 	oid := resultVec.GetType().Oid
 	if oid == types.T_decimal64 || oid == types.T_decimal128 || oid == types.T_decimal256 {
-		builder := plan2.NewQueryBuilder(plan.Query_SELECT, ses.GetTxnCompileCtx(), false, false)
-		bindContext := plan2.NewBindContext(builder, nil)
-		binder := plan2.NewSetVarBinder(builder, bindContext)
-		planExpr, err = binder.BindExpr(e, 0, false)
+		planExpr, err = bindSetVariableResultExpr(
+			e, ses.GetTxnCompileCtx(), preparedExpression)
 		if err != nil {
 			return nil, err
 		}
@@ -299,6 +297,18 @@ func getExprValueWithPrepareMode(
 		*isBin[0] = resultVec.GetIsBin()
 	}
 	return getValueFromVector(execCtx.reqCtx, resultVec, ses, planExpr)
+}
+
+func bindSetVariableResultExpr(
+	e tree.Expr,
+	compilerContext plan2.CompilerContext,
+	preparedExpression bool,
+) (*plan.Expr, error) {
+	builder := plan2.NewQueryBuilder(
+		plan.Query_SELECT, compilerContext, preparedExpression, false)
+	bindContext := plan2.NewBindContext(builder, nil)
+	binder := plan2.NewSetVarBinder(builder, bindContext)
+	return binder.BindExpr(e, 0, false)
 }
 
 // only support single value and unary minus
@@ -1703,6 +1713,9 @@ type UserInput struct {
 	sqlSourceType             []string
 	isRestore                 bool
 	isBinaryProtExecute       bool
+	// isSetExpression marks an AST-only SELECT synthesized to evaluate a SET
+	// assignment. Such statements have no stable SQL cache key.
+	isSetExpression bool
 	// isPreparedExpression marks a nested SET-derived expression that is being
 	// evaluated as part of prepared-statement execution.
 	isPreparedExpression bool
@@ -1755,6 +1768,10 @@ func (ui *UserInput) isInternal() bool {
 
 func (ui *UserInput) isPreparedExpr() bool {
 	return ui != nil && ui.isPreparedExpression
+}
+
+func (ui *UserInput) canUsePlanCache() bool {
+	return ui != nil && !ui.isSetExpression
 }
 
 func (ui *UserInput) genSqlSourceType(ses FeSession) {

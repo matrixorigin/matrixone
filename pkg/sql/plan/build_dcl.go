@@ -23,14 +23,16 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func getPreparePlan(ctx CompilerContext, stmt tree.Statement) (*Plan, error) {
+func getPreparePlan(ctx CompilerContext, stmt tree.Statement) (*Plan, *Query, error) {
 	if s, ok := stmt.(*tree.Insert); ok {
 		if _, ok := s.Rows.Select.(*tree.ValuesClause); ok {
-			return BuildPlan(ctx, stmt, true)
+			p, err := BuildPlan(ctx, stmt, true)
+			return p, nil, err
 		}
 	} else if s, ok := stmt.(*tree.Replace); ok {
 		if _, ok := s.Rows.Select.(*tree.ValuesClause); ok {
-			return BuildPlan(ctx, stmt, true)
+			p, err := BuildPlan(ctx, stmt, true)
+			return p, nil, err
 		}
 	}
 
@@ -42,27 +44,31 @@ func getPreparePlan(ctx CompilerContext, stmt tree.Statement) (*Plan, error) {
 		opt := NewPrepareOptimizer(ctx)
 		optimized, err := opt.Optimize(stmt, true)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		return &Plan{
 			Plan: &Plan_Query{
 				Query: optimized,
 			},
-		}, nil
+		}, nil, nil
+	case *tree.SetVar:
+		return buildSetVariablesWithQuery(stmt, ctx, true)
 	default:
-		return BuildPlan(ctx, stmt, true)
+		p, err := BuildPlan(ctx, stmt, true)
+		return p, nil, err
 	}
 }
 
 func buildPrepare(stmt tree.Prepare, ctx CompilerContext) (*Plan, error) {
 	var preparePlan *Plan
+	var transientQuery *Query
 	var err error
 	var stmtName string
 
 	switch pstmt := stmt.(type) {
 	case *tree.PrepareStmt:
 		stmtName = string(pstmt.Name)
-		preparePlan, err = getPreparePlan(ctx, pstmt.Stmt)
+		preparePlan, transientQuery, err = getPreparePlan(ctx, pstmt.Stmt)
 		if err != nil {
 			return nil, err
 		}
@@ -93,14 +99,14 @@ func buildPrepare(stmt tree.Prepare, ctx CompilerContext) (*Plan, error) {
 			return nil, moerr.NewInvalidInput(ctx.GetContext(), "cannot prepare multi statements")
 		}
 		stmtName = string(pstmt.Name)
-		preparePlan, err = getPreparePlan(ctx, stmts[0])
+		preparePlan, transientQuery, err = getPreparePlan(ctx, stmts[0])
 		if err != nil {
 			return nil, err
 		}
 		preparePlan.IsPrepare = true
 	}
 
-	schemas, paramTypes, err := ResetPreparePlan(ctx, preparePlan)
+	schemas, paramTypes, err := resetPreparePlan(ctx, preparePlan, transientQuery)
 	if err != nil {
 		return nil, err
 	}
@@ -175,6 +181,15 @@ func buildDeallocate(stmt *tree.Deallocate, _ CompilerContext) (*Plan, error) {
 }
 
 func buildSetVariables(stmt *tree.SetVar, ctx CompilerContext, isPrepareStmt bool) (*Plan, error) {
+	p, _, err := buildSetVariablesWithQuery(stmt, ctx, isPrepareStmt)
+	return p, err
+}
+
+func buildSetVariablesWithQuery(
+	stmt *tree.SetVar,
+	ctx CompilerContext,
+	isPrepareStmt bool,
+) (*Plan, *Query, error) {
 	var err error
 	items := make([]*plan.SetVariablesItem, len(stmt.Assignments))
 
@@ -188,16 +203,16 @@ func buildSetVariables(stmt *tree.SetVar, ctx CompilerContext, isPrepareStmt boo
 			Name:   assignment.Name,
 		}
 		if assignment.Value == nil {
-			return nil, moerr.NewInvalidInput(ctx.GetContext(), "Set statement has no value")
+			return nil, nil, moerr.NewInvalidInput(ctx.GetContext(), "Set statement has no value")
 		}
 		item.Value, err = binder.baseBindExpr(assignment.Value, 0, true)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if assignment.Reserved != nil {
 			item.Reserved, err = binder.baseBindExpr(assignment.Reserved, 0, true)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 		}
 		items[idx] = item
@@ -216,7 +231,7 @@ func buildSetVariables(stmt *tree.SetVar, ctx CompilerContext, isPrepareStmt boo
 				},
 			},
 		},
-	}, nil
+	}, builder.qry, nil
 }
 
 func buildCreateAccount(stmt *tree.CreateAccount, ctx CompilerContext, isPrepareStmt bool) (*Plan, error) {

@@ -897,16 +897,10 @@ func createCompile(
 		retCompile.SetResourceAttemptOwnerEligible()
 	}
 	retCompile.SetSchedulingTraceRecorder(schedulingTrace)
+	forcePrepare := execCtx.input.isPreparedExpr()
 	retCompile.SetBuildPlanFunc(func(ctx context.Context) (*plan2.Plan, error) {
-		// No permission verification is required when retry execute buildPlan
-		plan, err := buildPlan(ctx, ses, ses.GetTxnCompileCtx(), stmt)
-		if err != nil {
-			return nil, err
-		}
-		if plan.IsPrepare {
-			_, _, err = plan2.ResetPreparePlan(ses.GetTxnCompileCtx(), plan)
-		}
-		return plan, err
+		return buildPlanForCompileRetry(
+			ctx, ses, ses.GetTxnCompileCtx(), stmt, forcePrepare)
 	})
 
 	if _, ok := stmt.(*tree.ExplainAnalyze); ok {
@@ -923,6 +917,28 @@ func createCompile(
 	}
 	retCompile.SetOriginSQL(originSQL)
 	return
+}
+
+func buildPlanForCompileRetry(
+	ctx context.Context,
+	ses FeSession,
+	compilerContext plan2.CompilerContext,
+	stmt tree.Statement,
+	forcePrepare bool,
+) (*plan2.Plan, error) {
+	// No permission verification is required when retry execute buildPlan.
+	retryPlan, err := buildPlanWithPrepareMode(
+		ctx, ses, compilerContext, stmt, forcePrepare)
+	if err != nil {
+		return nil, err
+	}
+	// Forced SET-expression plans were already normalized from the parser's
+	// global one-based ordinals. Generic prepared plans retain the existing
+	// compacting normalization path.
+	if retryPlan.IsPrepare && !forcePrepare {
+		_, _, err = plan2.ResetPreparePlan(compilerContext, retryPlan)
+	}
+	return retryPlan, err
 }
 
 func querySchedulingIntent(ses FeSession) schedule.SchedulingIntent {

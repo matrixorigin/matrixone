@@ -104,6 +104,47 @@ func TestPreparedSetVariablesCollectParamsInAssignmentOrder(t *testing.T) {
 	require.Equal(t, int32(1), findFirstParamPos(setVars.Items[1].Value))
 }
 
+func TestPreparedSetVariablesCollectScalarSubqueryParams(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	p, err := runOneStmt(mock, t,
+		"prepare stmt1 from 'set @answer = (select ?)'")
+	require.NoError(t, err)
+
+	prepare := p.GetDcl().GetPrepare()
+	require.NotNil(t, prepare)
+	require.Len(t, prepare.ParamTypes, 1)
+}
+
+func TestPreparedSetVariablesKeepGlobalParamOrderAcrossSubqueries(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	p, err := runOneStmt(mock, t,
+		"prepare stmt1 from 'set @first = ?, @nested = (select (select ?)), @third = ?'")
+	require.NoError(t, err)
+
+	prepare := p.GetDcl().GetPrepare()
+	require.NotNil(t, prepare)
+	require.Len(t, prepare.ParamTypes, 3)
+
+	setVars := prepare.Plan.GetDcl().GetSetVariables()
+	require.NotNil(t, setVars)
+	require.Len(t, setVars.Items, 3)
+	require.Equal(t, int32(0), findFirstParamPos(setVars.Items[0].Value))
+	require.Equal(t, int32(2), findFirstParamPos(setVars.Items[2].Value))
+}
+
+func TestPreparedSetVariablesCollectScalarSubquerySchemas(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	p, err := runOneStmt(mock, t,
+		"prepare stmt1 from 'set @answer = (select n_nationkey from nation where n_nationkey = ?)'")
+	require.NoError(t, err)
+
+	prepare := p.GetDcl().GetPrepare()
+	require.NotNil(t, prepare)
+	require.Len(t, prepare.ParamTypes, 1)
+	require.Len(t, prepare.Schemas, 1)
+	require.Equal(t, "nation", prepare.Schemas[0].ObjName)
+}
+
 func TestPreparedLiteralSetHasNoParams(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	p, err := runOneStmt(mock, t,

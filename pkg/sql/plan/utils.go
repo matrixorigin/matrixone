@@ -2722,9 +2722,47 @@ func detectedExprWhetherTimeRelated(expr *plan.Expr) bool {
 }
 
 func ResetPreparePlan(ctx CompilerContext, preparePlan *Plan) ([]*plan.ObjectRef, []int32, error) {
+	return resetPreparePlan(ctx, preparePlan, nil)
+}
+
+// NormalizePrepareParamRefs converts the parser's one-based parameter ordinals
+// to execution-time zero-based positions without compacting gaps.
+func NormalizePrepareParamRefs(ctx context.Context, preparePlan *Plan) error {
+	if preparePlan == nil || preparePlan.GetQuery() == nil {
+		return nil
+	}
+	rule := &decrementParamOrdinalRule{seen: make(map[*plan.ParamRef]struct{})}
+	visit := NewVisitPlan(preparePlan, []VisitPlanRule{rule})
+	return visit.Visit(ctx)
+}
+
+func resetPreparePlan(
+	ctx CompilerContext,
+	preparePlan *Plan,
+	transientQuery *Query,
+) ([]*plan.ObjectRef, []int32, error) {
 	// dcl tcl is not support
 	var schemas []*plan.ObjectRef
 	var paramTypes []int32
+	resolveIndexDependencies := func(getParamRule *GetParamRule) ([]*plan.ObjectRef, error) {
+		querySchemas := getParamRule.schemas
+		for _, dependency := range getParamRule.indexDependencies {
+			objRef, tableDef, err := ctx.ResolveIndexTableByRef(dependency.baseRef, dependency.tableName, dependency.snapshot)
+			if err != nil {
+				return nil, err
+			}
+			if objRef == nil || tableDef == nil {
+				return nil, moerr.NewInternalErrorf(ctx.GetContext(), "resolved index table %q without catalog metadata", dependency.tableName)
+			}
+			ref := DeepCopyObjectRef(objRef)
+			ref.Server = int64(tableDef.Version)
+			ref.Db = int64(tableDef.DbId)
+			ref.Schema = int64(tableDef.DbId)
+			ref.Obj = int64(tableDef.TblId)
+			querySchemas = append(querySchemas, ref)
+		}
+		return querySchemas, nil
+	}
 	resetQuery := func(query *Query) ([]*plan.ObjectRef, []int32, error) {
 		queryPlan := &Plan{Plan: &plan.Plan_Query{Query: query}}
 		getParamRule := NewGetParamRule()
@@ -2735,21 +2773,9 @@ func ResetPreparePlan(ctx CompilerContext, preparePlan *Plan) ([]*plan.ObjectRef
 
 		getParamRule.SetParamOrder()
 		args := getParamRule.params
-		querySchemas := getParamRule.schemas
-		for _, dependency := range getParamRule.indexDependencies {
-			objRef, tableDef, err := ctx.ResolveIndexTableByRef(dependency.baseRef, dependency.tableName, dependency.snapshot)
-			if err != nil {
-				return nil, nil, err
-			}
-			if objRef == nil || tableDef == nil {
-				return nil, nil, moerr.NewInternalErrorf(ctx.GetContext(), "resolved index table %q without catalog metadata", dependency.tableName)
-			}
-			ref := DeepCopyObjectRef(objRef)
-			ref.Server = int64(tableDef.Version)
-			ref.Db = int64(tableDef.DbId)
-			ref.Schema = int64(tableDef.DbId)
-			ref.Obj = int64(tableDef.TblId)
-			querySchemas = append(querySchemas, ref)
+		querySchemas, err := resolveIndexDependencies(getParamRule)
+		if err != nil {
+			return nil, nil, err
 		}
 
 		resetParamRule := NewResetParamOrderRule(args)
@@ -2759,19 +2785,48 @@ func ResetPreparePlan(ctx CompilerContext, preparePlan *Plan) ([]*plan.ObjectRef
 		}
 		return querySchemas, getParamRule.paramTypes, nil
 	}
-	resetSetVariables := func(setVars *plan.SetVariables) ([]int32, error) {
+	resetSetVariables := func(setVars *plan.SetVariables) ([]*plan.ObjectRef, []int32, error) {
 		getParamRule := NewGetParamRule()
+		subqueryRoots := newSubqueryRootRule()
 		for _, item := range setVars.Items {
 			var err error
+			item.Value, err = subqueryRoots.ApplyExpr(item.Value)
+			if err != nil {
+				return nil, nil, err
+			}
 			item.Value, err = getParamRule.ApplyExpr(item.Value)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			if item.Reserved != nil {
+				item.Reserved, err = subqueryRoots.ApplyExpr(item.Reserved)
+				if err != nil {
+					return nil, nil, err
+				}
 				item.Reserved, err = getParamRule.ApplyExpr(item.Reserved)
 				if err != nil {
-					return nil, err
+					return nil, nil, err
 				}
+			}
+		}
+		visitedRoots := make(map[int32]struct{})
+		for len(subqueryRoots.pending) > 0 {
+			root := subqueryRoots.pending[0]
+			subqueryRoots.pending = subqueryRoots.pending[1:]
+			if _, ok := visitedRoots[root]; ok {
+				continue
+			}
+			if transientQuery == nil || root < 0 || int(root) >= len(transientQuery.Nodes) {
+				return nil, nil, moerr.NewInternalErrorf(
+					ctx.GetContext(), "missing transient query root %d for prepared SET", root)
+			}
+			visitedRoots[root] = struct{}{}
+			query := *transientQuery
+			query.Steps = []int32{root}
+			queryPlan := &Plan{Plan: &plan.Plan_Query{Query: &query}}
+			visitQuery := NewVisitPlan(queryPlan, []VisitPlanRule{getParamRule, subqueryRoots})
+			if err := visitQuery.Visit(ctx.GetContext()); err != nil {
+				return nil, nil, err
 			}
 		}
 		getParamRule.SetParamOrder()
@@ -2780,16 +2835,20 @@ func ResetPreparePlan(ctx CompilerContext, preparePlan *Plan) ([]*plan.ObjectRef
 			var err error
 			item.Value, err = resetRule.ApplyExpr(item.Value)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			if item.Reserved != nil {
 				item.Reserved, err = resetRule.ApplyExpr(item.Reserved)
 				if err != nil {
-					return nil, err
+					return nil, nil, err
 				}
 			}
 		}
-		return getParamRule.paramTypes, nil
+		querySchemas, err := resolveIndexDependencies(getParamRule)
+		if err != nil {
+			return nil, nil, err
+		}
+		return querySchemas, getParamRule.paramTypes, nil
 	}
 
 	switch pp := preparePlan.Plan.(type) {
@@ -2802,11 +2861,11 @@ func ResetPreparePlan(ctx CompilerContext, preparePlan *Plan) ([]*plan.ObjectRef
 			plan.DataControl_DROP_ACCOUNT:
 			return nil, pp.Dcl.GetOther().GetParamTypes(), nil
 		case plan.DataControl_SET_VARIABLES:
-			paramTypes, err := resetSetVariables(pp.Dcl.GetSetVariables())
+			schemas, paramTypes, err := resetSetVariables(pp.Dcl.GetSetVariables())
 			if err != nil {
 				return nil, nil, err
 			}
-			return nil, paramTypes, nil
+			return schemas, paramTypes, nil
 		default:
 			return nil, nil, moerr.NewInvalidInput(ctx.GetContext(), "cannot prepare TCL and DCL statement")
 		}

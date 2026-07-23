@@ -924,6 +924,7 @@ func executeStmtInSameSession(
 	return doComQuery(ses, execCtx, &UserInput{
 		stmt:                 stmt,
 		isInternalInput:      true,
+		isSetExpression:      true,
 		isPreparedExpression: preparedExpression,
 	})
 }

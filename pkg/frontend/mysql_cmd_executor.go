@@ -2890,6 +2890,9 @@ func buildPlanWithPrepareMode(
 
 	if ret != nil {
 		ret.IsPrepare = isPrepareStmt
+		if forcePrepare {
+			err = plan2.NormalizePrepareParamRefs(reqCtx, ret)
+		}
 		return ret, err
 	}
 
@@ -2917,6 +2920,9 @@ func buildPlanWithPrepareMode(
 
 	if ret != nil {
 		ret.IsPrepare = isPrepareStmt
+		if forcePrepare && err == nil {
+			err = plan2.NormalizePrepareParamRefs(reqCtx, ret)
+		}
 	}
 	return ret, err
 }
@@ -2999,6 +3005,13 @@ func checkModify(plan0 *plan.Plan, resolveFn func(string, string, *plan2.Snapsho
 	return false, nil
 }
 
+func cachedPlanForInput(ses *Session, input *UserInput) *cachedPlan {
+	if !input.canUsePlanCache() {
+		return nil
+	}
+	return ses.getCachedPlan(input.getHash())
+}
+
 var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng engine.Engine, proc *process.Process, ses *Session) ([]ComputationWrapper, error) {
 	// COM_QUERY carries the switch captured before its first statement. Other
 	// protocols retain their existing session-level behavior.
@@ -3021,7 +3034,7 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 		tcw.SetRemapDb(execCtx.input.remapDb)
 		cws = append(cws, tcw)
 		return cws, nil
-	} else if cached := ses.getCachedPlan(execCtx.input.getHash()); cached != nil {
+	} else if cached := cachedPlanForInput(ses, execCtx.input); cached != nil {
 		var remapErr error
 		statementSchedulingSQL, schedulingErr := schedulingSQLByStatementWithSQLMode(
 			execCtx.reqCtx, execCtx.input.getSql(), parserSQLMode)
@@ -4386,7 +4399,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		ses.p = nil
 	}()
 
-	canCache := !stagedSQLMode
+	canCache := !stagedSQLMode && input.canUsePlanCache()
 	Cached := false
 	defer func() {
 		execCtx.stmt = nil

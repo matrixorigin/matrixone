@@ -187,6 +187,93 @@ func (rule *ResetParamOrderRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
 
 // ---------------------------
 
+type subqueryRootRule struct {
+	pending []int32
+}
+
+func newSubqueryRootRule() *subqueryRootRule {
+	return &subqueryRootRule{}
+}
+
+func (rule *subqueryRootRule) MatchNode(_ *Node) bool {
+	return false
+}
+
+func (rule *subqueryRootRule) IsApplyExpr() bool {
+	return true
+}
+
+func (rule *subqueryRootRule) ApplyNode(_ *Node) error {
+	return nil
+}
+
+func (rule *subqueryRootRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
+	switch exprImpl := e.Expr.(type) {
+	case *plan.Expr_F:
+		for i := range exprImpl.F.Args {
+			exprImpl.F.Args[i], _ = rule.ApplyExpr(exprImpl.F.Args[i])
+		}
+	case *plan.Expr_List:
+		for i := range exprImpl.List.List {
+			exprImpl.List.List[i], _ = rule.ApplyExpr(exprImpl.List.List[i])
+		}
+	case *plan.Expr_Sub:
+		rule.pending = append(rule.pending, exprImpl.Sub.NodeId)
+	}
+	return e, nil
+}
+
+// ---------------------------
+
+type decrementParamOrdinalRule struct {
+	seen map[*plan.ParamRef]struct{}
+}
+
+func (rule *decrementParamOrdinalRule) MatchNode(_ *Node) bool {
+	return false
+}
+
+func (rule *decrementParamOrdinalRule) IsApplyExpr() bool {
+	return true
+}
+
+func (rule *decrementParamOrdinalRule) ApplyNode(_ *Node) error {
+	return nil
+}
+
+func (rule *decrementParamOrdinalRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
+	switch exprImpl := e.Expr.(type) {
+	case *plan.Expr_F:
+		for i := range exprImpl.F.Args {
+			var err error
+			exprImpl.F.Args[i], err = rule.ApplyExpr(exprImpl.F.Args[i])
+			if err != nil {
+				return nil, err
+			}
+		}
+	case *plan.Expr_List:
+		for i := range exprImpl.List.List {
+			var err error
+			exprImpl.List.List[i], err = rule.ApplyExpr(exprImpl.List.List[i])
+			if err != nil {
+				return nil, err
+			}
+		}
+	case *plan.Expr_P:
+		if _, ok := rule.seen[exprImpl.P]; ok {
+			return e, nil
+		}
+		rule.seen[exprImpl.P] = struct{}{}
+		if exprImpl.P.Pos <= 0 {
+			return nil, moerr.NewInternalErrorNoCtx("prepared parameter ordinal is not one-based")
+		}
+		exprImpl.P.Pos--
+	}
+	return e, nil
+}
+
+// ---------------------------
+
 type ResetParamRefRule struct {
 	ctx    context.Context
 	params []*Expr
