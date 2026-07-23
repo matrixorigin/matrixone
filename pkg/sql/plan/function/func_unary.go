@@ -233,7 +233,7 @@ var (
 	}
 )
 
-func NormalizeL2Array[T types.RealNumbers](parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func NormalizeL2Array[T types.ArrayElement](parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	source := vector.GenerateFunctionStrParameter(parameters[0])
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
@@ -290,11 +290,47 @@ func NormalizeL2Array[T types.RealNumbers](parameters []*vector.Vector, result v
 
 			*outArrayF64Ptr = outArrayF64
 			arrayF64Pool.Put(outArrayF64Ptr)
+		case types.T_array_bf16:
+			_ = appendNormalizedNarrowArray[types.BF16](rs, data)
+		case types.T_array_float16:
+			_ = appendNormalizedNarrowArray[types.Float16](rs, data)
+		case types.T_array_int8:
+			// A normalized vector is a unit vector, which cannot be represented in
+			// an integer element type (components round to 0/±1 and the norm is no
+			// longer 1), so int8/uint8 normalize_l2 widens the result to vecf32.
+			// The overload's retType is T_array_float32 to match (see list_builtIn).
+			_ = appendNormalizedIntArrayAsFloat32[int8](rs, data)
+		case types.T_array_uint8:
+			_ = appendNormalizedIntArrayAsFloat32[uint8](rs, data)
 		}
 
 	}
 
 	return nil
+}
+
+// appendNormalizedNarrowArray normalizes a bf16/f16 vector by upcasting to
+// float32, normalizing in float32, then narrowing back to T. bf16/f16 are
+// floating-point so they can hold a (near-)unit vector; int8/uint8 cannot and
+// use appendNormalizedIntArrayAsFloat32 instead.
+func appendNormalizedNarrowArray[T types.ArrayElement](rs *vector.FunctionResult[types.Varlena], data []byte) error {
+	in := types.ToFloat32Array[T](types.BytesToArray[T](data))
+	out := make([]float32, len(in))
+	_ = moarray.NormalizeL2(in, out)
+	return rs.AppendBytes(types.ArrayToBytes[T](types.FromFloat32Array[T](out)), false)
+}
+
+// appendNormalizedIntArrayAsFloat32 normalizes an integer-typed (int8/uint8)
+// vector and writes the result as float32. A unit vector cannot be represented
+// in an integer element type — narrowing back would round components to 0/±1 so
+// the norm is no longer 1 (e.g. normalize_l2([0,1,2,3]::vecuint8) would become
+// [0,0,1,1], whose norm is √2). Widening the result to vecf32 keeps the unit-norm
+// contract; the int8/uint8 overloads declare retType T_array_float32 to match.
+func appendNormalizedIntArrayAsFloat32[T types.ArrayElement](rs *vector.FunctionResult[types.Varlena], data []byte) error {
+	in := types.ToFloat32Array[T](types.BytesToArray[T](data))
+	out := make([]float32, len(in))
+	_ = moarray.NormalizeL2(in, out)
+	return rs.AppendBytes(types.ArrayToBytes[float32](out), false)
 }
 
 func L1NormArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -311,7 +347,7 @@ func L2NormArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.Func
 	}, selectList)
 }
 
-func VectorDimsArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func VectorDimsArray[T types.ArrayElement](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opUnaryBytesToFixed[int64](ivecs, result, proc, length, func(in []byte) (out int64) {
 		_in := types.BytesToArray[T](in)
 		return int64(len(_in))
@@ -633,6 +669,12 @@ func bitCountFromFloat[T constraints.Float](v T, proc *process.Process) (uint64,
 	}
 	if rounded >= ULLONG_MAX_DOUBLE {
 		return bitCountFromUint64(uint64(math.MaxUint64)), nil
+	}
+	// Converting a negative float directly to uint64 is undefined in Go (the
+	// result is implementation-specific: two's-complement on amd64, 0 on arm64),
+	// so route negatives through int64 first and reinterpret the bit pattern.
+	if rounded < 0 {
+		return bitCountFromSignedInt64Pattern(int64(rounded)), nil
 	}
 	return bitCountFromUint64(uint64(rounded)), nil
 }
@@ -5687,7 +5729,7 @@ func FromBase64(parameters []*vector.Vector, result vector.FunctionResultWrapper
 // VecFromBase64 decodes a base64-encoded string into a vector (vecf32 or vecf64).
 // The base64 payload must be the raw little-endian bytes of the vector elements,
 // as produced by to_base64(vecf32_col) or to_base64(vecf64_col).
-func VecFromBase64[T types.RealNumbers](parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func VecFromBase64[T types.ArrayElement](parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	source := vector.GenerateFunctionStrParameter(parameters[0])
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
@@ -5697,6 +5739,14 @@ func VecFromBase64[T types.RealNumbers](parameters []*vector.Vector, result vect
 		elemSize = 4
 	case float64:
 		elemSize = 8
+	case types.BF16, types.Float16:
+		elemSize = 2
+	case int8, uint8:
+		elemSize = 1
+	default:
+		// Guard: an unhandled element type would leave elemSize==0 and panic at
+		// the `n % elemSize` check below. Fail explicitly instead.
+		return moerr.NewInternalErrorNoCtx("vec_from_base64: unsupported vector element type")
 	}
 
 	// Pre-extend area: peek at the first non-null input to estimate per-row decoded size.
@@ -5730,11 +5780,11 @@ func VecFromBase64[T types.RealNumbers](parameters []*vector.Vector, result vect
 		}
 		n, err := base64.StdEncoding.Decode(buf, data)
 		if err != nil {
-			return moerr.NewInternalErrorNoCtxf("vecf%d_from_base64: invalid base64 input", elemSize*8)
+			return moerr.NewInternalErrorNoCtx("vec_from_base64: invalid base64 input")
 		}
 
 		if n%elemSize != 0 {
-			return moerr.NewInternalErrorNoCtxf("vecf%d_from_base64: decoded length %d is not a multiple of %d bytes", elemSize*8, n, elemSize)
+			return moerr.NewInternalErrorNoCtxf("vec_from_base64: decoded length %d is not a multiple of %d bytes", n, elemSize)
 		}
 
 		if err = rs.AppendBytes(buf[:n], false); err != nil {
