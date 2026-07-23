@@ -15,6 +15,7 @@
 package lockservice
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -34,6 +35,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap/zapcore"
@@ -1682,6 +1685,14 @@ func TestIssue3654(t *testing.T) {
 			l1 := s[0]
 			l2 := s[1]
 
+			// Establish the first lock with a live setup context. Lock-table
+			// binding now observes caller cancellation, so using the intentionally
+			// expired context below for setup would test the old cancellation bug
+			// rather than the remote retry behavior covered by issue 3654.
+			setupCtx, setupCancel := context.WithTimeout(
+				context.Background(),
+				time.Second*10)
+			defer setupCancel()
 			ctx, cancel := context.WithTimeout(
 				context.Background(),
 				time.Nanosecond)
@@ -1694,7 +1705,7 @@ func TestIssue3654(t *testing.T) {
 			}
 
 			_, err := l1.Lock(
-				ctx,
+				setupCtx,
 				0,
 				[][]byte{{1}},
 				[]byte("txn1"),
@@ -4741,8 +4752,37 @@ func TestRowLockWithConflictAndUnlock(t *testing.T) {
 			require.NoError(t, s.Unlock(ctx, txn2, timestamp.Timestamp{}))
 
 			<-c
-			checkLock(t, lt, rows[0], [][]byte{txn1}, [][]byte{txn2}, []int32{1})
+			checkLock(t, lt, rows[0], [][]byte{txn1}, nil, nil)
 			require.NoError(t, s.Unlock(ctx, txn1, timestamp.Timestamp{}))
+		})
+}
+
+func TestRangeLockWaitTimeoutRemovesWaiterImmediately(t *testing.T) {
+	table := uint64(0)
+	getRunner(false)(
+		t,
+		table,
+		func(
+			ctx context.Context,
+			s *service,
+			lt *localLockTable) {
+			holderRows := newTestRows(1, 10)
+			waiterRows := newTestRows(2, 3)
+			holderTxn := newTestTxnID(1)
+			waiterTxn := newTestTxnID(2)
+
+			_, err := s.Lock(ctx, table, holderRows, holderTxn, newTestRangeExclusiveOptions())
+			require.NoError(t, err)
+
+			options := newTestRangeExclusiveOptions()
+			options.LockWaitTimeout = 60
+			options.LockWaitDeadline = time.Now().Add(100 * time.Millisecond).UnixNano()
+			_, err = s.Lock(ctx, table, waiterRows, waiterTxn, options)
+			require.ErrorIs(t, err, ErrLockTimeout)
+
+			checkLock(t, lt, holderRows[0], [][]byte{holderTxn}, nil, nil)
+			require.NoError(t, s.Unlock(ctx, waiterTxn, timestamp.Timestamp{}))
+			require.NoError(t, s.Unlock(ctx, holderTxn, timestamp.Timestamp{}))
 		})
 }
 
@@ -5395,7 +5435,448 @@ func TestLockWaitTimeout(t *testing.T) {
 	)
 }
 
-func TestLockWaitTimeoutDefaultNoTimeout(t *testing.T) {
+func TestLockWaitTimeoutCeilingBoundsMissingCallerTimeout(t *testing.T) {
+	runLockServiceTestsWithAdjustConfig(
+		t,
+		[]string{"s1"},
+		time.Second*10,
+		func(alloc *lockTableAllocator, s []*service) {
+			l := s[0]
+			option := pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+
+			_, err := l.Lock(ctx, 0, [][]byte{{1}}, []byte("txn1"), option)
+			require.NoError(t, err)
+
+			start := time.Now()
+			_, err = l.Lock(ctx, 0, [][]byte{{1}}, []byte("txn2"), option)
+			elapsed := time.Since(start)
+
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockWaitTimeout),
+				"expected safety-ceiling lock-wait-timeout error, got %v", err)
+			require.GreaterOrEqual(t, elapsed, time.Second)
+			require.Less(t, elapsed, 3*time.Second)
+		},
+		func(c *Config) {
+			c.MaxLockWaitDuration.Duration = time.Second
+		})
+}
+
+func TestApplyLockWaitTimeoutCeiling(t *testing.T) {
+	s := &service{}
+	s.cfg.MaxLockWaitDuration.Duration = 1500 * time.Millisecond
+
+	metricBefore := testutil.ToFloat64(v2.TxnLockWaitTimeoutCeilingClampedCounter)
+	start := time.Now()
+	injected := s.applyLockWaitTimeoutCeiling(pb.LockOptions{})
+	require.Equal(t, int64(2), injected.LockWaitTimeout)
+	require.WithinDuration(t, start.Add(1500*time.Millisecond), time.Unix(0, injected.LockWaitDeadline), 100*time.Millisecond)
+	require.Equal(t, metricBefore, testutil.ToFloat64(v2.TxnLockWaitTimeoutCeilingClampedCounter),
+		"injecting a missing timeout is the normal safety-net path")
+	reapplied := s.applyLockWaitTimeoutCeiling(injected)
+	require.Equal(t, injected.LockWaitDeadline, reapplied.LockWaitDeadline,
+		"remote/forward owner must keep the deadline injected at the first service entry")
+	require.LessOrEqual(t, reapplied.LockWaitTimeout, injected.LockWaitTimeout)
+
+	start = time.Now()
+	shorter := s.applyLockWaitTimeoutCeiling(pb.LockOptions{LockWaitTimeout: 1})
+	require.Equal(t, int64(1), shorter.LockWaitTimeout)
+	require.WithinDuration(t, start.Add(time.Second), time.Unix(0, shorter.LockWaitDeadline), 100*time.Millisecond)
+
+	callerDeadline := time.Now().Add(500 * time.Millisecond).UnixNano()
+	withEarlierDeadline := s.applyLockWaitTimeoutCeiling(pb.LockOptions{
+		LockWaitTimeout:  1,
+		LockWaitDeadline: callerDeadline,
+	})
+	require.Equal(t, int64(1), withEarlierDeadline.LockWaitTimeout)
+	require.Equal(t, callerDeadline, withEarlierDeadline.LockWaitDeadline)
+
+	start = time.Now()
+	clamped := s.applyLockWaitTimeoutCeiling(pb.LockOptions{LockWaitTimeout: 30})
+	require.Equal(t, int64(2), clamped.LockWaitTimeout)
+	require.WithinDuration(t, start.Add(1500*time.Millisecond), time.Unix(0, clamped.LockWaitDeadline), 100*time.Millisecond)
+	require.True(t, s.lockWaitCeilingWarned.Load())
+	require.Equal(t, metricBefore+1, testutil.ToFloat64(v2.TxnLockWaitTimeoutCeilingClampedCounter))
+
+	subsecond := &service{}
+	subsecond.cfg.MaxLockWaitDuration.Duration = 500 * time.Millisecond
+	start = time.Now()
+	subsecondClamped := subsecond.applyLockWaitTimeoutCeiling(pb.LockOptions{LockWaitTimeout: 1})
+	require.Equal(t, int64(1), subsecondClamped.LockWaitTimeout,
+		"the wire-compatible relative timeout must remain a positive whole second")
+	require.WithinDuration(t, start.Add(500*time.Millisecond),
+		time.Unix(0, subsecondClamped.LockWaitDeadline), 100*time.Millisecond,
+		"the authoritative deadline must honor the exact sub-second ceiling")
+	require.True(t, subsecond.lockWaitCeilingWarned.Load())
+	require.Equal(t, metricBefore+2, testutil.ToFloat64(v2.TxnLockWaitTimeoutCeilingClampedCounter))
+
+	expiredDeadline := time.Now().Add(-time.Second).UnixNano()
+	expired := s.applyLockWaitTimeoutCeiling(pb.LockOptions{
+		LockWaitTimeout:  1,
+		LockWaitDeadline: expiredDeadline,
+	})
+	require.Zero(t, expired.LockWaitTimeout,
+		"an expired absolute budget must not be restarted as a one-second relative timeout")
+	require.Equal(t, expiredDeadline, expired.LockWaitDeadline)
+}
+
+func TestLockWaitTimeoutExpiredDeadlineFailsBeforeQueueAdmission(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(_ *lockTableAllocator, services []*service) {
+			s := services[0]
+			options := newTestRowExclusiveOptions()
+			_, err := s.Lock(context.Background(), 0, [][]byte{{1}}, []byte("holder"), options)
+			require.NoError(t, err)
+
+			options.LockWaitTimeout = 60
+			options.LockWaitDeadline = time.Now().Add(-time.Second).UnixNano()
+			start := time.Now()
+			_, err = s.Lock(context.Background(), 0, [][]byte{{1}}, []byte("waiter"), options)
+			require.ErrorIs(t, err, ErrLockTimeout)
+			require.Less(t, time.Since(start), 250*time.Millisecond)
+		},
+	)
+}
+
+func TestLockWaitTimeoutExpiresDuringServiceAdmission(t *testing.T) {
+	ready := make(chan struct{})
+	defer close(ready)
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(_ *lockTableAllocator, services []*service) {
+			options := newTestRowExclusiveOptions()
+			options.LockWaitTimeout = 60
+			options.LockWaitDeadline = time.Now().Add(100 * time.Millisecond).UnixNano()
+			start := time.Now()
+			_, err := services[0].Lock(
+				context.Background(),
+				0,
+				[][]byte{{1}},
+				[]byte("waiter"),
+				options)
+			require.ErrorIs(t, err, ErrLockTimeout)
+			require.Less(t, time.Since(start), time.Second,
+				"readiness must not have to open before the lock budget can expire")
+		},
+		WithWaitAndReady(
+			func(ctx context.Context) error {
+				select {
+				case <-ready:
+					return nil
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+			},
+			func() bool {
+				select {
+				case <-ready:
+					return true
+				default:
+					return false
+				}
+			}),
+	)
+}
+
+func TestLockWaitTimeoutExpiresWhileWaitingForLocalTableMutex(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(_ *lockTableAllocator, services []*service) {
+			s := services[0]
+			const tableID = uint64(24918)
+			l, err := s.getLockTableWithCreate(0, tableID, nil, pb.Sharding_None)
+			require.NoError(t, err)
+			local := l.(*localLockTable)
+
+			entered := make(chan struct{})
+			var enteredOnce sync.Once
+			local.options.beforeAcquire = func(*lockContext) {
+				enteredOnce.Do(func() { close(entered) })
+			}
+			defer func() { local.options.beforeAcquire = nil }()
+
+			local.mu.Lock()
+			mutexReleased := false
+			defer func() {
+				if !mutexReleased {
+					local.mu.Unlock()
+				}
+			}()
+
+			deadline := time.Now().Add(100 * time.Millisecond)
+			options := newTestRowExclusiveOptions()
+			options.LockWaitTimeout = 60
+			options.LockWaitDeadline = deadline.UnixNano()
+			resultC := make(chan error, 1)
+			go func() {
+				_, err := s.Lock(
+					context.Background(),
+					tableID,
+					[][]byte{{1}},
+					[]byte("local-mutex-waiter"),
+					options)
+				resultC <- err
+			}()
+
+			select {
+			case <-entered:
+			case <-time.After(time.Second):
+				require.FailNow(t, "lock request did not reach local-table admission")
+			}
+			if wait := time.Until(deadline.Add(20 * time.Millisecond)); wait > 0 {
+				timer := time.NewTimer(wait)
+				<-timer.C
+			}
+			local.mu.Unlock()
+			mutexReleased = true
+
+			select {
+			case err := <-resultC:
+				require.ErrorIs(t, err, ErrLockTimeout)
+			case <-time.After(time.Second):
+				require.FailNow(t, "expired request did not leave local-table admission")
+			}
+
+			local.mu.RLock()
+			_, acquired := local.mu.store.Get([]byte{1})
+			local.mu.RUnlock()
+			require.False(t, acquired, "an expired uncontended request must not acquire the row")
+			require.NoError(t, s.Unlock(
+				context.Background(),
+				[]byte("local-mutex-waiter"),
+				timestamp.Timestamp{}))
+		},
+	)
+}
+
+func TestNotifiedWaiterDeadlineDetachesSync(t *testing.T) {
+	testCases := []struct {
+		name        string
+		rows        [][]byte
+		granularity pb.Granularity
+	}{
+		{name: "row", rows: [][]byte{{1}}, granularity: pb.Granularity_Row},
+		{name: "range", rows: [][]byte{{1}, {10}}, granularity: pb.Granularity_Range},
+	}
+
+	for idx, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			runLockServiceTests(
+				t,
+				[]string{"s1"},
+				func(_ *lockTableAllocator, services []*service) {
+					s := services[0]
+					tableID := uint64(24920 + idx)
+					holderTxn := []byte("post-notify-sync-holder")
+					waiterTxn := []byte("post-notify-sync-waiter")
+					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+					defer cancel()
+
+					options := newTestRowExclusiveOptions()
+					if testCase.granularity == pb.Granularity_Range {
+						options = newTestRangeExclusiveOptions()
+					}
+					_, err := s.Lock(ctx, tableID, testCase.rows, holderTxn, options)
+					require.NoError(t, err)
+					local := s.tableGroups.get(0, tableID).(*localLockTable)
+
+					var attempts atomic.Int32
+					reacquireEntered := make(chan struct{})
+					resumeReacquire := make(chan struct{})
+					var resumeOnce sync.Once
+					defer resumeOnce.Do(func() { close(resumeReacquire) })
+					local.options.beforeAcquire = func(c *lockContext) {
+						if !bytes.Equal(c.txn.txnID, waiterTxn) || attempts.Add(1) != 2 {
+							return
+						}
+						close(reacquireEntered)
+						<-resumeReacquire
+					}
+					defer func() { local.options.beforeAcquire = nil }()
+
+					deadline := time.Now().Add(500 * time.Millisecond)
+					waitOptions := options
+					waitOptions.LockWaitTimeout = 60
+					waitOptions.LockWaitDeadline = deadline.UnixNano()
+					resultC := make(chan error, 1)
+					go func() {
+						_, err := s.Lock(ctx, tableID, testCase.rows, waiterTxn, waitOptions)
+						resultC <- err
+					}()
+
+					require.Eventually(t, func() bool {
+						txn := s.activeTxnHolder.getActiveTxn(waiterTxn, false, "")
+						if txn == nil {
+							return false
+						}
+						txn.Lock()
+						defer txn.Unlock()
+						return len(txn.blockedWaiters) == 1
+					}, time.Second, time.Millisecond)
+					require.NoError(t, s.Unlock(ctx, holderTxn, timestamp.Timestamp{}))
+
+					select {
+					case <-reacquireEntered:
+					case <-ctx.Done():
+						require.NoError(t, ctx.Err())
+					}
+					if wait := time.Until(deadline.Add(20 * time.Millisecond)); wait > 0 {
+						timer := time.NewTimer(wait)
+						<-timer.C
+					}
+					resumeOnce.Do(func() { close(resumeReacquire) })
+
+					select {
+					case err := <-resultC:
+						require.ErrorIs(t, err, ErrLockTimeout)
+					case <-ctx.Done():
+						require.NoError(t, ctx.Err())
+					}
+
+					waiter := s.activeTxnHolder.getActiveTxn(waiterTxn, false, "")
+					require.NotNil(t, waiter)
+					waiter.Lock()
+					require.Empty(t, waiter.blockedWaiters)
+					waiter.Unlock()
+					local.mu.RLock()
+					require.Zero(t, local.mu.store.Len())
+					require.Empty(t, local.mu.ownerLocalWaits)
+					local.mu.RUnlock()
+					nextTxn := []byte("post-notify-sync-next")
+					_, err = s.Lock(ctx, tableID, testCase.rows, nextTxn, options)
+					require.NoError(t, err)
+					require.NoError(t, s.Unlock(ctx, nextTxn, timestamp.Timestamp{}))
+					require.NoError(t, s.Unlock(ctx, waiterTxn, timestamp.Timestamp{}))
+				},
+			)
+		})
+	}
+}
+
+func TestLockWaitTimeoutExpiresWhileWaitingForLockTableAllocation(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(_ *lockTableAllocator, services []*service) {
+			s := services[0]
+			const (
+				group   = uint32(0)
+				tableID = uint64(24915)
+			)
+			waitC := make(chan struct{})
+			s.mu.Lock()
+			if s.mu.allocating[group] == nil {
+				s.mu.allocating[group] = make(map[uint64]chan struct{})
+			}
+			s.mu.allocating[group][tableID] = waitC
+			s.mu.Unlock()
+			defer func() {
+				s.mu.Lock()
+				delete(s.mu.allocating[group], tableID)
+				s.mu.Unlock()
+				close(waitC)
+			}()
+
+			options := newTestRowExclusiveOptions()
+			options.LockWaitTimeout = 60
+			options.LockWaitDeadline = time.Now().Add(100 * time.Millisecond).UnixNano()
+			txnID := []byte("bind-waiter")
+			resultC := make(chan error, 1)
+			start := time.Now()
+			go func() {
+				_, err := s.Lock(
+					context.Background(),
+					tableID,
+					[][]byte{{1}},
+					txnID,
+					options)
+				resultC <- err
+			}()
+
+			select {
+			case err := <-resultC:
+				require.ErrorIs(t, err, ErrLockTimeout)
+				require.Less(t, time.Since(start), time.Second)
+			case <-time.After(2 * time.Second):
+				require.Fail(t, "lock budget did not cancel the in-flight allocation wait")
+			}
+			require.NoError(t, s.Unlock(context.Background(), txnID, timestamp.Timestamp{}))
+		},
+	)
+}
+
+func TestLockWaitTimeoutExpiresDuringLockTableBindRPC(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(alloc *lockTableAllocator, services []*service) {
+			s := services[0]
+			entered := make(chan struct{})
+			release := make(chan struct{})
+			var releaseOnce sync.Once
+			releaseHandler := func() {
+				releaseOnce.Do(func() { close(release) })
+			}
+			defer releaseHandler()
+			alloc.server.RegisterMethodHandler(
+				pb.Method_GetBind,
+				func(
+					context.Context,
+					context.CancelFunc,
+					*pb.Request,
+					*pb.Response,
+					morpc.ClientSession,
+				) {
+					close(entered)
+					<-release
+				})
+
+			options := newTestRowExclusiveOptions()
+			options.LockWaitTimeout = 60
+			options.LockWaitDeadline = time.Now().Add(100 * time.Millisecond).UnixNano()
+			txnID := []byte("bind-rpc-waiter")
+			resultC := make(chan error, 1)
+			start := time.Now()
+			go func() {
+				_, err := s.Lock(
+					context.Background(),
+					24916,
+					[][]byte{{1}},
+					txnID,
+					options)
+				resultC <- err
+			}()
+
+			select {
+			case <-entered:
+			case <-time.After(time.Second):
+				require.Fail(t, "lock request did not reach the allocator")
+			}
+			select {
+			case err := <-resultC:
+				require.ErrorIs(t, err, ErrLockTimeout)
+				require.Less(t, time.Since(start), time.Second)
+			case <-time.After(2 * time.Second):
+				releaseHandler()
+				require.Fail(t, "lock budget did not cancel the allocator RPC")
+			}
+			releaseHandler()
+			require.NoError(t, s.Unlock(context.Background(), txnID, timestamp.Timestamp{}))
+		},
+	)
+}
+
+func TestLockWaitTimeoutCallerContextBeforeCeiling(t *testing.T) {
 	runLockServiceTests(
 		t,
 		[]string{"s1"},
@@ -5417,7 +5898,7 @@ func TestLockWaitTimeoutDefaultNoTimeout(t *testing.T) {
 			require.NoError(t, err)
 
 			// txn2 tries to lock the same row WITHOUT LockWaitTimeout.
-			// Should be blocked until ctx expires (no internal/default timeout interception).
+			// The caller context is earlier than the one-hour safety ceiling.
 			option2 := option
 			option2.LockWaitTimeout = 0 // no session/internal timeout; rely on caller context deadline
 			start := time.Now()
@@ -5509,7 +5990,7 @@ func TestLockWaitTimeoutSucceedsWhenHolderReleases(t *testing.T) {
 	)
 }
 
-func TestLockWaitTimeoutZeroMeansFallbackToContext(t *testing.T) {
+func TestLockWaitTimeoutZeroUsesEarlierCallerContext(t *testing.T) {
 	runLockServiceTests(
 		t,
 		[]string{"s1"},
@@ -5530,8 +6011,8 @@ func TestLockWaitTimeoutZeroMeansFallbackToContext(t *testing.T) {
 			_, err := l.Lock(ctx, 0, [][]byte{{1}}, []byte("txn1"), option)
 			require.NoError(t, err)
 
-			// txn2 with LockWaitTimeout=0 should wait for context expiry (500ms),
-			// NOT the default 5-minute configLockWaitTimeout.
+			// txn2 with LockWaitTimeout=0 should use the earlier context expiry
+			// instead of waiting for the one-hour safety ceiling.
 			option2 := option
 			option2.LockWaitTimeout = 0
 			start := time.Now()
@@ -5547,6 +6028,9 @@ func TestLockWaitTimeoutZeroMeansFallbackToContext(t *testing.T) {
 }
 
 func BenchmarkWithoutConflict(b *testing.B) {
+	// The 1-table case retains a cached local bind after its first iteration.
+	// Keep allocation reporting enabled in runBenchmark: this guards the core
+	// no-wait path against eager lock-deadline context allocation.
 	runBenchmark(b, "1-table", 1)
 	runBenchmark(b, "unlimited-table", 32)
 }
@@ -5676,6 +6160,7 @@ func maybeAddTestLockWithDeadlockWithWaitRetry(
 
 	if moerr.IsMoErrCode(err, moerr.ErrDeadLockDetected) ||
 		moerr.IsMoErrCode(err, moerr.ErrTxnNotFound) ||
+		moerr.IsMoErrCode(err, moerr.ErrLockWaitTimeout) ||
 		moerr.IsMoErrCode(err, moerr.ErrInvalidState) {
 		return res
 	}

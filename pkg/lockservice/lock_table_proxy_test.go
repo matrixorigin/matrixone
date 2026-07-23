@@ -17,6 +17,7 @@ package lockservice
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -43,6 +44,27 @@ type recordingUnlockTable struct {
 	lockTable
 	mutations []pb.ExtraMutation
 }
+
+type blockingProxyLockTable struct {
+	lockTable
+	bind    pb.LockTable
+	started chan struct{}
+	release chan struct{}
+}
+
+func (t *blockingProxyLockTable) lock(
+	_ context.Context,
+	_ *activeTxn,
+	_ [][]byte,
+	_ LockOptions,
+	cb func(pb.Result, error),
+) {
+	t.started <- struct{}{}
+	<-t.release
+	cb(pb.Result{LockedOn: t.bind}, nil)
+}
+
+func (t *blockingProxyLockTable) getBind() pb.LockTable { return t.bind }
 
 func (t *recordingUnlockTable) unlockWithContext(
 	ctx context.Context,
@@ -161,6 +183,105 @@ func TestProxySharedLock(t *testing.T) {
 			// require.NoError(t, s1.Unlock(ctx, txn5, timestamp.Timestamp{}))
 		},
 	)
+}
+
+func TestProxyCoalescedTimeoutIsRemovedAndCallbackRunsOnce(t *testing.T) {
+	testCases := []struct {
+		name       string
+		lockBudget bool
+	}{
+		{name: "caller-deadline"},
+		{name: "lock-budget", lockBudget: true},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			bind := pb.LockTable{Group: 0, Table: 1, OriginTable: 1, ServiceID: "s2", Valid: true}
+			remote := &blockingProxyLockTable{
+				bind:    bind,
+				started: make(chan struct{}, 1),
+				release: make(chan struct{}),
+			}
+			proxy := newLockTableProxy("s1", remote, getLogger("")).(*localLockTableProxy)
+			row := []byte("row")
+			firstTxnID := []byte("proxy-first")
+			waiterTxnID := []byte("proxy-waiter")
+			firstTxn := newUnpooledActiveTxnForTest(firstTxnID)
+			waiterTxn := newUnpooledActiveTxnForTest(waiterTxnID)
+			defer firstTxn.reset()
+			defer waiterTxn.reset()
+
+			firstDone := make(chan struct{})
+			go func() {
+				firstTxn.Lock()
+				proxy.lock(
+					context.Background(),
+					firstTxn,
+					[][]byte{row},
+					LockOptions{LockOptions: newTestRowSharedOptions()},
+					func(pb.Result, error) {})
+				firstTxn.Unlock()
+				close(firstDone)
+			}()
+			select {
+			case <-remote.started:
+			case <-time.After(time.Second):
+				require.FailNow(t, "first proxy owner RPC did not start")
+			}
+
+			waitCtx := context.Background()
+			cancel := func() {}
+			options := newTestRowSharedOptions()
+			if testCase.lockBudget {
+				options.LockWaitTimeout = 60
+				options.LockWaitDeadline = time.Now().Add(100 * time.Millisecond).UnixNano()
+			} else {
+				waitCtx, cancel = context.WithTimeout(context.Background(), 100*time.Millisecond)
+			}
+			defer cancel()
+
+			var callbackCount atomic.Int32
+			var callbackErr error
+			waiterTxn.Lock()
+			proxy.lock(
+				waitCtx,
+				waiterTxn,
+				[][]byte{row},
+				LockOptions{LockOptions: options},
+				func(_ pb.Result, err error) {
+					callbackCount.Add(1)
+					callbackErr = err
+				})
+			waiterTxn.Unlock()
+			if testCase.lockBudget {
+				require.ErrorIs(t, callbackErr, ErrLockTimeout)
+			} else {
+				require.ErrorIs(t, callbackErr, context.DeadlineExceeded)
+			}
+			require.Equal(t, int32(1), callbackCount.Load())
+
+			close(remote.release)
+			select {
+			case <-firstDone:
+			case <-time.After(time.Second):
+				require.FailNow(t, "first proxy owner RPC did not finish")
+			}
+			require.Equal(t, int32(1), callbackCount.Load(),
+				"owner completion must not invoke the timed-out callback again")
+
+			proxy.mu.Lock()
+			shared := proxy.mu.holders[string(row)]
+			require.NotNil(t, shared)
+			require.Len(t, shared.txns, 1)
+			require.Same(t, firstTxn, shared.txns[0])
+			require.Len(t, shared.waiters, 1)
+			require.Nil(t, shared.waiters[0])
+			shared.remove(firstTxn)
+			delete(proxy.mu.holders, string(row))
+			delete(proxy.mu.currentHolder, string(row))
+			proxy.mu.Unlock()
+		})
+	}
 }
 
 func TestProxySharedUnlock(t *testing.T) {
