@@ -60,8 +60,10 @@ func sharedLibName() string {
 
 // resolveLibPath finds the onnxruntime shared library. Search order:
 //  1. $MO_ONNXRUNTIME_LIB (explicit path);
-//  2. next to the mo-service binary (production layout);
-//  3. thirdparties/install/lib/<name> discovered by walking up from the
+//  2. next to the mo-service binary, or its lib/ subdir (production layout);
+//  3. system library dirs (/usr/local/lib, /usr/lib) — the docker image
+//     installs thirdparties/install/lib/*.so into /usr/local/lib;
+//  4. thirdparties/install/lib/<name> discovered by walking up from the
 //     working directory (dev / test layout).
 func resolveLibPath() (string, error) {
 	if p := os.Getenv(EnvLibPath); p != "" {
@@ -92,7 +94,15 @@ func resolveLibPath() (string, error) {
 		}
 	}
 
-	// (3) thirdparties/install/lib walking up from cwd.
+	// (3) System library dirs: the release docker image copies
+	// thirdparties/install/lib/*.so into /usr/local/lib.
+	for _, dir := range []string{"/usr/local/lib", "/usr/lib"} {
+		if cand := filepath.Join(dir, name); fileExists(cand) {
+			return cand, nil
+		}
+	}
+
+	// (4) thirdparties/install/lib walking up from cwd.
 	if wd, err := os.Getwd(); err == nil {
 		dir := wd
 		for {
