@@ -610,6 +610,54 @@ func TestWindowOrderResultAcrossChunks(t *testing.T) {
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
+func TestWindowOrdersPartitionedInput(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	bat := batch.NewWithSize(2)
+	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{2, 1, 2, 1}, nil, proc.Mp())
+	bat.Vecs[1] = testutil.MakeInt32Vector([]int32{20, 10, 10, 20}, nil, proc.Mp())
+	bat.SetRowCount(4)
+
+	partitionExpr := newColExpr(0)
+	orderExpr := newColExpr(1)
+	arg := &Window{
+		WinSpecList: []*plan.Expr{{
+			Expr: &plan.Expr_W{W: &plan.WindowSpec{
+				Name:        "row_number",
+				WindowFunc:  newFunExpr("row_number"),
+				PartitionBy: []*plan.Expr{partitionExpr},
+				// The planner presents partition expressions before the explicit
+				// ORDER BY expressions to the physical window operator.
+				OrderBy: []*plan.OrderBySpec{
+					{Expr: partitionExpr, Flag: plan.OrderBySpec_NULLS_FIRST},
+					{Expr: orderExpr, Flag: plan.OrderBySpec_DESC | plan.OrderBySpec_NULLS_LAST},
+				},
+			}},
+		}},
+		Aggs: []aggexec.AggFuncExecExpression{newRowNumberAggExpr(t)},
+		OperatorBase: vm.OperatorBase{
+			OperatorInfo: vm.OperatorInfo{Idx: 0},
+		},
+	}
+	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
+	arg.AppendChild(op)
+
+	require.Equal(t, vm.Window, arg.OpType())
+	require.NoError(t, arg.Prepare(proc))
+	result, err := vm.Exec(arg, proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	require.Equal(t, []int32{1, 1, 2, 2},
+		vector.MustFixedColWithTypeCheck[int32](result.Batch.Vecs[0]))
+	require.Equal(t, []int32{20, 10, 20, 10},
+		vector.MustFixedColWithTypeCheck[int32](result.Batch.Vecs[1]))
+	require.Len(t, vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[2]), 4)
+
+	arg.Free(proc, false, nil)
+	op.Free(proc, false, nil)
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
 func newFunExpr(name string) *plan.Expr {
 	return &plan.Expr{
 		Expr: &plan.Expr_F{
@@ -1272,5 +1320,72 @@ func TestSearchLeftRightDateTimeTypes(t *testing.T) {
 		r, err = searchRight(0, 4, 0, vec2, nil, false, true)
 		require.NoError(t, err)
 		require.Equal(t, 1, r)
+	})
+}
+
+func intervalExpr(diff int64, unit types.IntervalType) *plan.Expr {
+	return &plan.Expr{
+		Expr: &plan.Expr_List{List: &plan.ExprList{List: []*plan.Expr{
+			{Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+				Value: &plan.Literal_I64Val{I64Val: diff},
+			}}},
+			{Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+				Value: &plan.Literal_I64Val{I64Val: int64(unit)},
+			}}},
+		}}},
+	}
+}
+
+func assertIntervalSearches(t *testing.T, vec *vector.Vector, expr *plan.Expr, wantLeftSub, wantLeftAdd, wantRightSub, wantRightAdd int) {
+	t.Helper()
+	left, err := searchLeft(0, vec.Length(), 1, vec, expr, false, false)
+	require.NoError(t, err)
+	require.Equal(t, wantLeftSub, left)
+	left, err = searchLeft(0, vec.Length(), 1, vec, expr, true, false)
+	require.NoError(t, err)
+	require.Equal(t, wantLeftAdd, left)
+
+	right, err := searchRight(0, vec.Length(), 1, vec, expr, true, false)
+	require.NoError(t, err)
+	require.Equal(t, wantRightSub, right)
+	right, err = searchRight(0, vec.Length(), 1, vec, expr, false, false)
+	require.NoError(t, err)
+	require.Equal(t, wantRightAdd, right)
+}
+
+func TestSearchLeftRightDateTimeIntervals(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
+
+	t.Run("date", func(t *testing.T) {
+		vec := testutil.NewDateVector(0, types.T_date.ToType(), mp, false, nil,
+			[]string{"2024-01-01", "2024-01-02", "2024-01-02", "2024-01-04"})
+		require.NotNil(t, vec)
+		defer vec.Free(mp)
+		assertIntervalSearches(t, vec, intervalExpr(1, types.Day), 0, 3, 1, 3)
+	})
+
+	t.Run("datetime", func(t *testing.T) {
+		vec := testutil.NewDatetimeVector(0, types.T_datetime.ToType(), mp, false, nil,
+			[]string{"2024-01-01 10:00:00", "2024-01-02 10:00:00", "2024-01-02 10:00:00", "2024-01-04 10:00:00"})
+		require.NotNil(t, vec)
+		defer vec.Free(mp)
+		assertIntervalSearches(t, vec, intervalExpr(1, types.Day), 0, 3, 1, 3)
+	})
+
+	t.Run("time", func(t *testing.T) {
+		vec := testutil.NewTimeVector(0, types.T_time.ToType(), mp, false, nil,
+			[]string{"10:00:00", "12:00:00", "12:00:00", "14:00:00"})
+		require.NotNil(t, vec)
+		defer vec.Free(mp)
+		assertIntervalSearches(t, vec, intervalExpr(2, types.Hour), 0, 3, 1, 4)
+	})
+
+	t.Run("timestamp", func(t *testing.T) {
+		vec := testutil.NewTimestampVector(0, types.T_timestamp.ToType(), mp, false, nil,
+			[]string{"2024-01-01 10:00:00", "2024-01-02 10:00:00", "2024-01-02 10:00:00", "2024-01-04 10:00:00"})
+		require.NotNil(t, vec)
+		defer vec.Free(mp)
+		assertIntervalSearches(t, vec, intervalExpr(1, types.Day), 0, 3, 1, 3)
 	})
 }
