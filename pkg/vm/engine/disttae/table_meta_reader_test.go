@@ -111,13 +111,13 @@ func TestNewImmutableTableMetaReader(t *testing.T) {
 		Name2ColIndex: map[string]int32{"a": 0},
 	}
 	mp := mpool.MustNewZero()
-	dataBat := colexec.AllocCNS3ResultBat(false, false)
+	dataBat := colexec.AllocCNS3ResultBat(false)
 	defer dataBat.Clean(mp)
 	end, err := reader.Read(context.Background(), nil, nil, mp, dataBat)
 	require.NoError(t, err)
 	require.False(t, end)
 	require.Equal(t, 1, dataBat.RowCount())
-	tombstoneBat := colexec.AllocCNS3ResultBat(true, false)
+	tombstoneBat := colexec.AllocCNS3ResultBat(true)
 	defer tombstoneBat.Clean(mp)
 	end, err = reader.Read(context.Background(), nil, nil, mp, tombstoneBat)
 	require.NoError(t, err)
@@ -131,7 +131,7 @@ func TestNewImmutableTableMetaReader(t *testing.T) {
 	limited, err := NewImmutableTableMetaReader(context.Background(), tbl, 1)
 	require.NoError(t, err)
 	limited.(*TableMetaReader).objectCount = 1
-	limitedBat := colexec.AllocCNS3ResultBat(false, false)
+	limitedBat := colexec.AllocCNS3ResultBat(false)
 	defer limitedBat.Clean(mp)
 	_, err = limited.Read(context.Background(), nil, nil, mp, limitedBat)
 	require.Error(t, err)
@@ -147,11 +147,56 @@ func TestNewImmutableTableMetaReader(t *testing.T) {
 	})
 	appendableReader, err := NewImmutableTableMetaReader(context.Background(), tbl, 7)
 	require.NoError(t, err)
-	appendableOut := colexec.AllocCNS3ResultBat(false, false)
+	appendableOut := colexec.AllocCNS3ResultBat(false)
 	defer appendableOut.Clean(mp)
 	_, err = appendableReader.Read(context.Background(), nil, nil, mp, appendableOut)
 	require.Error(t, err)
 	require.NoError(t, appendableReader.Close())
+}
+
+func TestImmutableTableMetaReaderDoesNotRetainCloneFilesAcrossStatements(t *testing.T) {
+	tbl := newTxnTableForTest()
+	txn := tbl.getTxn()
+	txn.proc = testutil.NewProcess(t)
+	txn.BindTxnOp(tbl.db.op)
+	txn.tableOps = newTableOps()
+	txn.tableOps.addCreatedInTxn(tbl.tableId, 0)
+	txn.engine.partitions = make(map[[2]uint64]*logtailreplay.Partition)
+	txn.engine.cloneTxnCache = newCloneTxnCache()
+	txn.SetCloneTxn(1)
+	tbl.tableDef = &plan.TableDef{
+		Pkey:          &plan.PrimaryKeyDef{Names: []string{"a"}, PkeyColName: "a"},
+		Cols:          []*plan.ColDef{{Name: "a", Typ: plan.Type{Id: int32(types.T_int64)}, Seqnum: 0}},
+		Name2ColIndex: map[string]int32{"a": 0},
+	}
+
+	stats := mockStatsList(t, 2)
+	mp := mpool.MustNewZero()
+	for statement := range stats {
+		statsBat := cloneObjectStatsBatchForTest(t, txn.proc.Mp(), stats[statement])
+		defer statsBat.Clean(txn.proc.Mp())
+		txn.writes = append(txn.writes, Entry{
+			typ: INSERT, databaseId: tbl.db.databaseId, tableId: tbl.tableId,
+			fileName: stats[statement].ObjectName().String(), bat: statsBat,
+		})
+
+		txn.StartStatement()
+		reader, err := NewImmutableTableMetaReader(context.Background(), tbl, 7)
+		require.NoError(t, err)
+		dataBat := colexec.AllocCNS3ResultBat(false)
+		_, err = reader.Read(context.Background(), nil, nil, mp, dataBat)
+		require.NoError(t, err)
+		dataBat.Clean(mp)
+		require.NoError(t, reader.Close())
+		txn.EndStatement()
+
+		for i := 0; i <= statement; i++ {
+			name := stats[i].ObjectName().String()
+			txnID := txn.op.Txn().ID
+			require.False(t, txn.engine.cloneTxnCache.IsSharedFile(txnID, name))
+			require.False(t, txn.engine.cloneTxnCache.IsTxnLocalSharedFile(txnID, name))
+		}
+	}
 }
 
 func TestProtectCloneFilesDistinguishesExistingOwnership(t *testing.T) {

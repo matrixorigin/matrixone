@@ -318,12 +318,14 @@ func (r *TableMetaReader) collect(
 				}
 			}
 
-			// Committed pState objects are owned outside this transaction and
-			// must survive any clone rollback. Txn-local objects can be shared
-			// by later ALTER/clone writes in this transaction, so intermediate
-			// workspace GC must keep them, but full transaction rollback must
-			// still delete them.
-			r.addCloneSharedFile(stats, source)
+			if !r.immutableOnly {
+				// Committed pState objects are owned outside this transaction and
+				// must survive any clone rollback. Txn-local objects can be shared
+				// by later ALTER/clone writes in this transaction, so intermediate
+				// workspace GC must keep them, but full transaction rollback must
+				// still delete them.
+				r.addCloneSharedFile(stats, source)
+			}
 
 		} else {
 			// we can see an appendable object, if the snapshot falls into [createTS, deleteTS).

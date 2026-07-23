@@ -492,47 +492,24 @@ func TestLoadPhysicalTableDumpStatsRejectsManifestForgery(t *testing.T) {
 	fs, err := fileservice.NewLocalETLFS("objects", t.TempDir())
 	require.NoError(t, err)
 	item := writePhysicalTableDumpTestObject(t, fs)
-	targetDef := &plan.TableDef{
-		Name:          "target",
-		Pkey:          &plan.PrimaryKeyDef{PkeyColName: "a"},
-		Name2ColIndex: map[string]int32{"a": 0},
-		Cols: []*plan.ColDef{{
-			Name: "a", Seqnum: 0, Typ: plan.Type{Id: int32(types.T_int64)},
-		}},
-	}
-	schema, err := buildTableDumpPhysicalSchema(targetDef)
-	require.NoError(t, err)
 
-	stats, blocks, err := loadPhysicalTableDumpStats(ctx, fs, item, mpool.MustNewZero(), schema)
+	stats, blocks, err := loadPhysicalTableDumpStats(ctx, fs, item, mpool.MustNewZero())
 	require.NoError(t, err)
 	require.Equal(t, uint32(1), blocks)
 	require.Equal(t, objectio.ObjectStats(item.Stats), stats)
-	tombstoneItem := item
-	tombstoneItem.Tombstone = true
-	_, _, err = loadPhysicalTableDumpStats(ctx, fs, tombstoneItem, mpool.MustNewZero(), schema)
-	require.ErrorContains(t, err, "tombstone object")
-
-	incompatibleDef := *targetDef
-	incompatibleDef.Cols = []*plan.ColDef{{
-		Name: "a", Seqnum: 0, Typ: plan.Type{Id: int32(types.T_varchar)},
-	}}
-	incompatibleSchema, err := buildTableDumpPhysicalSchema(&incompatibleDef)
-	require.NoError(t, err)
-	_, _, err = loadPhysicalTableDumpStats(ctx, fs, item, mpool.MustNewZero(), incompatibleSchema)
-	require.ErrorContains(t, err, "target expects")
 
 	forged := item
 	forged.Stats = append([]byte(nil), item.Stats...)
 	forgedStats := objectio.ObjectStats(forged.Stats)
 	require.NoError(t, objectio.SetObjectStatsBlkCnt(&forgedStats, math.MaxUint16))
 	forged.Stats = append(forged.Stats[:0], forgedStats.Marshal()...)
-	_, _, err = loadPhysicalTableDumpStats(ctx, fs, forged, mpool.MustNewZero(), schema)
+	_, _, err = loadPhysicalTableDumpStats(ctx, fs, forged, mpool.MustNewZero())
 	require.ErrorContains(t, err, "do not match physical metadata")
 
 	objects := []tableDumpObject{item}
 	var total atomic.Uint64
 	total.Store(tableDumpMaxBlocks)
-	err = validatePhysicalTableDumpObjectsImpl(ctx, fs, objects, mpool.MustNewZero(), &total, targetDef)
+	err = validatePhysicalTableDumpObjectsImpl(ctx, fs, objects, mpool.MustNewZero(), &total)
 	require.ErrorContains(t, err, "more than 1000000 blocks")
 
 	header := objectio.BuildHeader()
@@ -542,7 +519,7 @@ func TestLoadPhysicalTableDumpStatsRejectsManifestForgery(t *testing.T) {
 		FilePath: badItem.Name,
 		Entries:  []fileservice.IOEntry{{Offset: 0, Size: int64(len(header)), Data: header}},
 	}))
-	_, _, err = loadPhysicalTableDumpStats(ctx, fs, badItem, mpool.MustNewZero(), schema)
+	_, _, err = loadPhysicalTableDumpStats(ctx, fs, badItem, mpool.MustNewZero())
 	require.ErrorContains(t, err, "invalid metadata extent")
 }
 
@@ -660,7 +637,7 @@ func TestHandleLoadTable(t *testing.T) {
 	})
 	defer lockStub.Reset()
 	physicalStub := gostub.Stub(&validatePhysicalTableDumpObjects, func(
-		context.Context, fileservice.FileService, []tableDumpObject, *mpool.MPool, *atomic.Uint64, *plan.TableDef,
+		context.Context, fileservice.FileService, []tableDumpObject, *mpool.MPool, *atomic.Uint64,
 	) error {
 		return nil
 	})

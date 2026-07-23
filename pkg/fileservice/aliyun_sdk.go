@@ -52,7 +52,7 @@ type AliyunSDK struct {
 var _ objectStorageCopier = new(AliyunSDK)
 
 func (a *AliyunSDK) CopyObject(
-	_ context.Context,
+	ctx context.Context,
 	src ObjectStorage,
 	srcKey string,
 	dstKey string,
@@ -62,7 +62,12 @@ func (a *AliyunSDK) CopyObject(
 		!a.copyCredentialDomain.matches(s.copyCredentialDomain) {
 		return false, nil
 	}
-	_, err := a.bucket.CopyObjectFrom(s.bucket.BucketName, srcKey, dstKey)
+	_, err := a.bucket.CopyObjectFrom(
+		s.bucket.BucketName,
+		srcKey,
+		dstKey,
+		oss.WithContext(ctx),
+	)
 	return true, err
 }
 
