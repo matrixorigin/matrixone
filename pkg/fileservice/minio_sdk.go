@@ -552,14 +552,12 @@ func (a *MinioSDK) putObject(
 	defer task.End()
 	// not retryable because Reader may be half consumed
 	//TODO set expire
-	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
-		counter.FileService.S3.Put.Add(1)
-	}, a.perfCounterSets...)
+	recordS3PutRequest(ctx, a.perfCounterSets...)
 	size := int64(-1)
 	if sizeHint != nil {
 		size = *sizeHint
 	}
-	return a.client.PutObject(
+	info, err := a.client.PutObject(
 		ctx,
 		a.bucket,
 		key,
@@ -567,6 +565,10 @@ func (a *MinioSDK) putObject(
 		size,
 		minio.PutObjectOptions{},
 	)
+	if err == nil {
+		recordS3AcceptedBytes(ctx, info.Size, a.perfCounterSets...)
+	}
+	return info, err
 }
 
 func (a *MinioSDK) getObject(ctx context.Context, key string, min *int64, max *int64) (io.ReadCloser, error) {

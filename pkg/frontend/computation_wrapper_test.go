@@ -46,6 +46,14 @@ type mockCompile struct {
 	releaseFunc func()
 }
 
+func TestResourceAttemptOwnerEligible(t *testing.T) {
+	require.True(t, resourceAttemptOwnerEligible(&Session{}))
+	require.False(t, resourceAttemptOwnerEligible(&backSession{}))
+	derived := &Session{}
+	derived.ReplaceDerivedStmt(true)
+	require.False(t, resourceAttemptOwnerEligible(derived))
+}
+
 func (m *mockCompile) Run(ts uint64) (*util2.RunResult, error) { return m.runFunc(ts) }
 func (m *mockCompile) GetPlan() *plan.Plan                     { return m.getPlanFunc() }
 func (m *mockCompile) Release()                                { m.releaseFunc() }
@@ -424,6 +432,56 @@ func TestInitExecuteStmtParamBypassesButRetainsCachedTopologyForExplicitScheduli
 	require.Same(t, sentinel, prepareStmt.compile)
 	require.NotNil(t, retPlan)
 	require.NotNil(t, retStmt)
+}
+
+func TestRebuildPreparePlanUsesPreparedRootSQL(t *testing.T) {
+	const preparedSQL = "create view v as select 1"
+	const executeSQL = "execute prepared_view"
+	ses, prepareStmt, _, execCtx := newPreparedExecuteEnvForSQL(t, 106, preparedSQL)
+	defer prepareStmt.Close()
+	prepareStmt.Name = "prepared_view"
+	ses.SetSql(executeSQL)
+
+	rebuilt, err := rebuildPreparePlan(
+		execCtx,
+		ses,
+		prepareStmt,
+		func(_ context.Context, _ FeSession, compilerCtx plan2.CompilerContext, stmt tree.Statement) (*plan2.Plan, error) {
+			return plan2.BuildPlan(&preparedViewCompilerContext{CompilerContext: compilerCtx}, stmt, false)
+		},
+	)
+	require.NoError(t, err)
+	prepareStmt.PreparePlan = rebuilt
+	requirePreparedViewRootSQL(t, prepareStmt, preparedSQL)
+	require.Equal(t, executeSQL, ses.GetSql())
+	require.Equal(t, executeSQL, ses.GetTxnCompileCtx().GetRootSql())
+}
+
+func TestModeMismatchRebuildsPreparedViewWithPreparedRootSQL(t *testing.T) {
+	const preparedSQL = "create view v as select 1"
+	const executeSQL = "execute prepared_view"
+	ses, prepareStmt, _, execCtx := newPreparedExecuteEnvForSQL(t, 107, preparedSQL)
+	defer prepareStmt.Close()
+	ses.SetSql(executeSQL)
+	execCtx.reqCtx = defines.AttachAccountId(execCtx.reqCtx, catalog.System_Account)
+	require.NoError(t, ses.SetSessionSysVar(execCtx.reqCtx, "sql_mode", "MATRIXONE_NATIVE"))
+	modeMismatch := prepareStmt.NativeMode != ses.sqlModeHasMatrixOneNative()
+	require.True(t, modeMismatch)
+	require.True(t, preparePlanNeedsRebuild(false, modeMismatch))
+
+	rebuilt, err := rebuildPreparePlan(
+		execCtx,
+		ses,
+		prepareStmt,
+		func(_ context.Context, _ FeSession, compilerCtx plan2.CompilerContext, stmt tree.Statement) (*plan2.Plan, error) {
+			return plan2.BuildPlan(&preparedViewCompilerContext{CompilerContext: compilerCtx}, stmt, false)
+		},
+	)
+	require.NoError(t, err)
+	prepareStmt.PreparePlan = rebuilt
+	requirePreparedViewRootSQL(t, prepareStmt, preparedSQL)
+	require.Equal(t, executeSQL, ses.GetSql())
+	require.Equal(t, executeSQL, ses.GetTxnCompileCtx().GetRootSql())
 }
 
 func TestTxnComputationWrapperRunPanicStillReleases(t *testing.T) {

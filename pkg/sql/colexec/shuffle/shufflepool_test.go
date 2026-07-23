@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -455,7 +456,7 @@ func TestShufflePoolEndWakesEveryAllBucketDrainer(t *testing.T) {
 	}
 }
 
-func TestShufflePrepareRejectsAbortedSharedPool(t *testing.T) {
+func TestVMPrepareRejectsAbortedSharedPool(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
 	sp := NewShufflePool(1, 1, false)
@@ -465,8 +466,14 @@ func TestShufflePrepareRejectsAbortedSharedPool(t *testing.T) {
 	arg.BucketNum = 1
 	arg.SetShufflePool(sp)
 
-	err := arg.Prepare(proc)
+	err := vm.Prepare(arg, proc)
 	require.Error(t, err)
+	producerCtx := arg.ctr.producerProc.Ctx
 	arg.Reset(proc, true, err)
+	select {
+	case <-producerCtx.Done():
+	default:
+		t.Fatal("failed VM preparation leaked the producer context")
+	}
 	arg.Free(proc, true, err)
 }

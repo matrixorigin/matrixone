@@ -467,13 +467,10 @@ func (a *AliyunSDK) putObject(
 		opts = append(opts, oss.Expires(*expire))
 	}
 
+	var n atomic.Int64
+	r = &countingReader{R: r, C: &n}
 	if sizeHint != nil {
 		opts = append(opts, oss.ContentLength(*sizeHint))
-		var n atomic.Int64
-		r = &countingReader{
-			R: r,
-			C: &n,
-		}
 		defer func() {
 			if err == nil && n.Load() != *sizeHint {
 				err = moerr.NewSizeNotMatchNoCtx(key)
@@ -481,15 +478,17 @@ func (a *AliyunSDK) putObject(
 		}()
 	}
 
-	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
-		counter.FileService.S3.Put.Add(1)
-	}, a.perfCounterSets...)
+	recordS3PutRequest(ctx, a.perfCounterSets...)
 
-	return a.bucket.PutObject(
+	err = a.bucket.PutObject(
 		key,
 		r,
 		opts...,
 	)
+	if err == nil {
+		recordS3AcceptedBytes(ctx, n.Load(), a.perfCounterSets...)
+	}
+	return err
 }
 
 func (a *AliyunSDK) getObject(ctx context.Context, key string, min *int64, max *int64) (io.ReadCloser, error) {

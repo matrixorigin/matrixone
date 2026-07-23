@@ -15,6 +15,7 @@
 package shuffle
 
 import (
+	"context"
 	"sync"
 	"sync/atomic"
 
@@ -33,12 +34,16 @@ type ShufflePool struct {
 	holders    int32
 	finished   int32
 	stoppers   int32
+	consumers  int32
 	holderLock sync.Mutex
 	aborted    bool
+	abortErr   error
 	cleaned    bool
+	producers  map[int32]context.CancelCauseFunc
 
 	batchSets  []*batch.BatchSet
 	batchLocks []sync.Mutex
+	closed     []bool
 	batchPool  []*batch.Batch
 	batchLock  sync.Mutex
 
@@ -72,6 +77,7 @@ func NewShufflePool(bucketNum int32, maxHolders int32, drainAll bool) *ShufflePo
 		drainAll:           allBuckets,
 		batchSets:          make([]*batch.BatchSet, bucketNum),
 		batchLocks:         make([]sync.Mutex, bucketNum),
+		closed:             make([]bool, bucketNum),
 		batchWaiters:       make([]chan bool, bucketNum),
 		endingWaiters:      make([]chan bool, bucketNum),
 		batchPool:          make([]*batch.Batch, 0, readyLimit),
@@ -82,6 +88,7 @@ func NewShufflePool(bucketNum int32, maxHolders int32, drainAll bool) *ShufflePo
 		bucketReadyCounts:  make([]int, bucketNum),
 		bucketSpaceWaiters: make([]chan struct{}, bucketNum),
 		tracked:            make(map[*batch.Batch]int64),
+		producers:          make(map[int32]context.CancelCauseFunc),
 	}
 	if allBuckets {
 		sp.readyBuckets = make(chan int32, readyLimit)
@@ -126,6 +133,22 @@ func (sp *ShufflePool) stopWriting() {
 	}
 }
 
+func (sp *ShufflePool) terminalError() error {
+	sp.holderLock.Lock()
+	defer sp.holderLock.Unlock()
+	return sp.abortErr
+}
+
+func (sp *ShufflePool) registerProducer(bucket int32, cancel context.CancelCauseFunc) {
+	sp.holderLock.Lock()
+	sp.producers[bucket] = cancel
+	allConsumersClosed := sp.consumers == sp.maxHolders
+	sp.holderLock.Unlock()
+	if allConsumersClosed {
+		cancel(nil)
+	}
+}
+
 func (sp *ShufflePool) allStop() bool {
 	sp.holderLock.Lock()
 	defer sp.holderLock.Unlock()
@@ -137,7 +160,7 @@ func (sp *ShufflePool) release(m *mpool.MPool, failed bool) (int64, bool) {
 	sp.holderLock.Lock()
 	defer sp.holderLock.Unlock()
 	if failed {
-		sp.abortLocked()
+		sp.abortLocked(nil)
 	}
 	sp.finished++
 	if sp.finished > sp.holders {
@@ -152,15 +175,22 @@ func (sp *ShufflePool) release(m *mpool.MPool, failed bool) (int64, bool) {
 }
 
 func (sp *ShufflePool) abort(m *mpool.MPool) {
+	sp.abortWithError(m, nil)
+}
+
+func (sp *ShufflePool) abortWithError(m *mpool.MPool, err error) {
 	sp.holderLock.Lock()
 	defer sp.holderLock.Unlock()
-	sp.abortLocked()
+	sp.abortLocked(err)
 	if sp.finished == sp.holders {
 		sp.cleanupLocked(m)
 	}
 }
 
-func (sp *ShufflePool) abortLocked() {
+func (sp *ShufflePool) abortLocked(err error) {
+	if sp.abortErr == nil && err != nil {
+		sp.abortErr = err
+	}
 	if sp.aborted {
 		return
 	}
@@ -193,6 +223,59 @@ func (sp *ShufflePool) cleanupLocked(m *mpool.MPool) {
 		sp.batchSets[i].Clean(m)
 	}
 	sp.cleanBatchPool(m)
+}
+
+// closeConsumer permanently closes one fixed-bucket destination for this
+// generation. Producers skip subsequent rows for the bucket because its
+// downstream pipeline has declared that it needs no more input.
+func (sp *ShufflePool) closeConsumer(bucket int32, m *mpool.MPool) {
+	if sp.drainAll || bucket < 0 || bucket >= sp.bucketNum {
+		return
+	}
+
+	sp.batchLocks[bucket].Lock()
+	if sp.closed[bucket] {
+		sp.batchLocks[bucket].Unlock()
+		return
+	}
+	sp.closed[bucket] = true
+	ready := sp.batchSets[bucket].ReadyCount()
+	for i := 0; i < sp.batchSets[bucket].Length(); i++ {
+		sp.forgetBatch(sp.batchSets[bucket].Get(i))
+	}
+	sp.batchSets[bucket].Clean(m)
+	sp.batchSets[bucket] = batch.NewBatchSet(objectio.BlockMaxRows)
+	sp.batchLocks[bucket].Unlock()
+
+	if ready > 0 {
+		sp.releaseReady(bucket, ready)
+	}
+	select {
+	case sp.batchWaiters[bucket] <- true:
+	default:
+	}
+	select {
+	case sp.endingWaiters[bucket] <- true:
+	default:
+	}
+
+	sp.holderLock.Lock()
+	sp.consumers++
+	if sp.consumers > sp.maxHolders {
+		sp.holderLock.Unlock()
+		panic("shuffle pool too many closed consumers!")
+	}
+	var cancels []context.CancelCauseFunc
+	if sp.consumers == sp.maxHolders {
+		cancels = make([]context.CancelCauseFunc, 0, len(sp.producers))
+		for _, cancel := range sp.producers {
+			cancels = append(cancels, cancel)
+		}
+	}
+	sp.holderLock.Unlock()
+	for _, cancel := range cancels {
+		cancel(nil)
+	}
 }
 
 func (sp *ShufflePool) cleanBatchPool(m *mpool.MPool) {
@@ -338,7 +421,7 @@ func (sp *ShufflePool) publishReady(bucket int32, count int) {
 func (sp *ShufflePool) getFullBatch(shuffleIDX int32) *batch.Batch {
 	sp.batchLocks[shuffleIDX].Lock()
 	var bat *batch.Batch
-	if sp.batchSets[shuffleIDX].ReadyCount() > 0 {
+	if !sp.closed[shuffleIDX] && sp.batchSets[shuffleIDX].ReadyCount() > 0 {
 		bat = sp.batchSets[shuffleIDX].PopFront()
 		bat.ShuffleIDX = shuffleIDX
 	}
@@ -386,6 +469,9 @@ func (sp *ShufflePool) popReadyBatch(bucket int32) *batch.Batch {
 func (sp *ShufflePool) getLastBatch(shuffleIDX int32) *batch.Batch {
 	sp.batchLocks[shuffleIDX].Lock()
 	defer sp.batchLocks[shuffleIDX].Unlock()
+	if sp.closed[shuffleIDX] {
+		return nil
+	}
 	bat := sp.batchSets[shuffleIDX].Pop()
 	if bat != nil {
 		bat.ShuffleIDX = shuffleIDX
@@ -416,14 +502,6 @@ func (sp *ShufflePool) getAnyLastBatch() *batch.Batch {
 		if bat := sp.getLastPartialBatch(int32(idx)); bat != nil {
 			return bat
 		}
-	}
-}
-
-func (sp *ShufflePool) waitBatchOrEnd(shuffleIDX int32, proc *process.Process) {
-	select {
-	case <-sp.batchWaiters[shuffleIDX]:
-	case <-sp.endingWaiters[shuffleIDX]:
-	case <-proc.Ctx.Done():
 	}
 }
 
@@ -461,6 +539,10 @@ func (sp *ShufflePool) tryWrite(
 			end := min(offset+objectio.BlockMaxRows, len(current))
 			chunk := current[offset:end]
 			sp.batchLocks[bucket].Lock()
+			if sp.closed[bucket] {
+				sp.batchLocks[bucket].Unlock()
+				break
+			}
 			readyDelta := sp.batchSets[bucket].ReadyDelta(len(chunk))
 			wait, ok := sp.reserveReady(int32(bucket), readyDelta)
 			if !ok {
