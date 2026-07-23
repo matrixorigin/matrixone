@@ -205,8 +205,8 @@ func TestApplyInt8(t *testing.T) {
 	q := ApplyInt8([]float32{0.10, 0.99, 0.50}, mul, add)
 	require.Equal(t, int8(-128), q[0]) // min -> -128
 	require.Equal(t, int8(127), q[1])  // max -> +127
-	// 0.50 matches the float64 multiply-add, rounded.
-	want := int8(math.Round(0.50*mul + add))
+	// 0.50 matches the float32 multiply-add (the canonical entry-SQL arithmetic), rounded.
+	want := int8(math.Round(float64(float32(0.50)*float32(mul) + float32(add))))
 	require.Equal(t, want, q[2])
 
 	// empty input -> empty output, no panic.
@@ -216,7 +216,7 @@ func TestApplyInt8(t *testing.T) {
 func TestEntrySQLBuilders(t *testing.T) {
 	// literal-bounds (build) projection.
 	require.Equal(t,
-		"cast(`v` * 286.516854 + (-156.651685) as vecint8(4))",
+		"cast(cast(`v` as vecf32(4)) * 286.516854 + (-156.651685) as vecint8(4))",
 		Int8EntrySQL("`v`", 286.516854, -156.651685, 4))
 
 	// metadata-subquery (CDC) projection with COALESCE identity fallback.
@@ -224,8 +224,8 @@ func TestEntrySQLBuilders(t *testing.T) {
 	max := "(SELECT m FROM meta WHERE k='quantize_max')"
 	got := Int8EntrySQLFromBounds("src1", min, max, 4)
 	require.Equal(t,
-		"cast(src1 * COALESCE(255.0 / ("+max+" - "+min+"), 1.0) + "+
-			"COALESCE(0.0 - "+min+" * 255.0 / ("+max+" - "+min+") - 128.0, 0.0) as vecint8(4))",
+		"cast(cast(src1 as vecf32(4)) * COALESCE(255.0 / ("+max+" - "+min+"), 1.0) + "+
+			"COALESCE(0.0 - "+min+" * (255.0 / ("+max+" - "+min+")) - 128.0, 0.0) as vecint8(4))",
 		got)
 
 	// plain narrowing cast (float formats / untrained int8).
@@ -274,14 +274,81 @@ func TestApplyUint8(t *testing.T) {
 func TestUint8EntrySQLBuilders(t *testing.T) {
 	// literal-bounds (build) projection -> vecuint8.
 	require.Equal(t,
-		"cast(`v` * 286.516854 + (28.6516854) as vecuint8(4))",
+		"cast(cast(`v` as vecf32(4)) * 286.516854 + (28.6516854) as vecuint8(4))",
 		Uint8EntrySQL("`v`", 286.516854, 28.6516854, 4))
 
 	// metadata-subquery (CDC) projection: no -128 offset, identity COALESCE fallback.
 	min := "(SELECT m FROM meta WHERE k='quantize_min')"
 	max := "(SELECT m FROM meta WHERE k='quantize_max')"
 	require.Equal(t,
-		"cast(src1 * COALESCE(255.0 / ("+max+" - "+min+"), 1.0) + "+
-			"COALESCE(0.0 - "+min+" * 255.0 / ("+max+" - "+min+"), 0.0) as vecuint8(4))",
+		"cast(cast(src1 as vecf32(4)) * COALESCE(255.0 / ("+max+" - "+min+"), 1.0) + "+
+			"COALESCE(0.0 - "+min+" * (255.0 / ("+max+" - "+min+")), 0.0) as vecuint8(4))",
 		Uint8EntrySQLFromBounds("src1", min, max, 4))
+}
+
+// entryInt8/entryUint8 replicate the entry SQL arithmetic `cast(cast(v as vecf32) *
+// mul + add as vec{int8,uint8})`: FLOAT32, rounding after the multiply AND after the
+// add (the intermediate is forced to a float32 var so it is never fused into one
+// rounding). This is the canonical build/CDC encoding the query encoder must match.
+func entryInt8(x float32, mul, add float64) int8 {
+	m := x * float32(mul)
+	return types.Float32ToInt8Slice([]float32{m + float32(add)})[0]
+}
+func entryUint8(x float32, mul, add float64) uint8 {
+	m := x * float32(mul)
+	return types.Float32ToUint8Slice([]float32{m + float32(add)})[0]
+}
+
+// oldF64Int8/oldF64Uint8 are the PRE-FIX query encoding (a single float64
+// multiply-add then narrow) — kept only to prove the paths genuinely diverge, so a
+// revert to float64 is caught.
+func oldF64Int8(x float32, mul, add float64) int8 {
+	return types.Float32ToInt8Slice([]float32{float32(float64(x)*mul + add)})[0]
+}
+func oldF64Uint8(x float32, mul, add float64) uint8 {
+	return types.Float32ToUint8Slice([]float32{float32(float64(x)*mul + add)})[0]
+}
+
+// TestQueryEntryEncodingContract is the cross-path boundary regression: the query
+// encoder (ApplyInt8/ApplyUint8) must be bit-identical to the entry-SQL arithmetic
+// for every component, and must diverge from the old float64 encoding at boundaries
+// (otherwise an exact query can bucket to a different code than its own stored row).
+// The query is always a float32 vector, and a vecf64 base is narrowed to float32 in
+// the entry SQL (cast ... as vecf32), so this f32 contract covers both f32 and f64
+// bases; int8 and uint8 are both checked.
+func TestQueryEntryEncodingContract(t *testing.T) {
+	imul, iadd := Int8Params(0.10, 0.99)
+	umul, uadd := Uint8Params(0.10, 0.99)
+
+	var intDiverged, uintDiverged bool
+	// sweep the trained value range at f32 granularity around a known boundary.
+	for i := 0; i <= 200000; i++ {
+		x := float32(0.10 + 0.89*float64(i)/200000.0)
+
+		gotI := ApplyInt8([]float32{x}, imul, iadd)[0]
+		require.Equal(t, entryInt8(x, imul, iadd), gotI,
+			"int8: ApplyInt8 must equal the float32 entry arithmetic at x=%v", x)
+		if entryInt8(x, imul, iadd) != oldF64Int8(x, imul, iadd) {
+			intDiverged = true
+		}
+
+		gotU := ApplyUint8([]float32{x}, umul, uadd)[0]
+		require.Equal(t, entryUint8(x, umul, uadd), gotU,
+			"uint8: ApplyUint8 must equal the float32 entry arithmetic at x=%v", x)
+		if entryUint8(x, umul, uadd) != oldF64Uint8(x, umul, uadd) {
+			uintDiverged = true
+		}
+	}
+	// The whole point of the fix: f32 and f64 encodings differ somewhere in-range, so
+	// query and entry MUST use the same one. If this ever stops holding the sweep
+	// isn't exercising a boundary and the regression is toothless.
+	require.True(t, intDiverged, "int8: expected a boundary where f32 and f64 encodings differ")
+	require.True(t, uintDiverged, "uint8: expected a boundary where f32 and f64 encodings differ")
+
+	// The reviewer's concrete boundary (bounds [0.1,0.99], component 0.367): entry
+	// (float32) and query (ApplyInt8) agree, and the old float64 path differs.
+	x := float32(0.367)
+	require.Equal(t, entryInt8(x, imul, iadd), ApplyInt8([]float32{x}, imul, iadd)[0])
+	require.NotEqual(t, oldF64Int8(x, imul, iadd), ApplyInt8([]float32{x}, imul, iadd)[0],
+		"0.367 is the documented boundary; the fix must change its code vs the old f64 path")
 }

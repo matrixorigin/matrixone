@@ -146,19 +146,26 @@ func TrainInt8[T types.RealNumbers](data [][]T) (min, max float64) {
 }
 
 // ApplyInt8 applies q(x)=x*mul+add to a float32 query vector and narrows to int8
-// (round+clamp), matching the entry build. (mul,add)=(1,0) is identity (no
-// quantizer trained), so the raw narrowing cast is used. The multiply-add is done
-// in float64 (then narrowed) to match the build side, whose entry SQL
-// `cast(base*mul+add as vecint8)` evaluates the f64 literals in the base column's
-// arithmetic — doing it in float32 here could bucket a boundary component
-// differently. qf32 is never mutated.
+// (round+clamp), bit-identically to the entry build. (mul,add)=(1,0) is identity (no
+// quantizer trained), so the raw narrowing cast is used.
+//
+// The multiply-add is done in FLOAT32 with float32-narrowed params, rounding after
+// the multiply AND after the add — matching the entry SQL `cast(cast(base as vecf32)
+// * mul + add as vecint8)`, which evaluates in float32 (type_check.go: VECF32 <op>
+// Scalar => VECF32) and rounds twice. Doing it in float64 (one fused multiply-add)
+// buckets a boundary component to a different code than the build, so query and entry
+// MUST both use this f32 form. The intermediate is forced to a float32 variable so the
+// compiler cannot fuse the two operations back into a single rounding. qf32 is never
+// mutated.
 func ApplyInt8(qf32 []float32, mul, add float64) []int8 {
 	if mul == 1.0 && add == 0.0 {
 		return types.Float32ToInt8Slice(qf32)
 	}
+	fmul, fadd := float32(mul), float32(add)
 	sq := make([]float32, len(qf32))
 	for i, x := range qf32 {
-		sq[i] = float32(float64(x)*mul + add)
+		m := x * fmul
+		sq[i] = m + fadd
 	}
 	return types.Float32ToInt8Slice(sq)
 }
@@ -171,12 +178,20 @@ func CastSQL(colExpr string, t types.T, dim int32) string {
 	return fmt.Sprintf("cast(%s as %s(%d))", colExpr, SQLTypeName(t), dim)
 }
 
-// Int8EntrySQL builds the int8 entry projection `cast(<colExpr> * mul + add as
-// vecint8(dim))` from precomputed literal bounds (the synchronous build path,
-// where compile has already read the trained [min,max] from metadata). colExpr is
-// the already-quoted column reference.
+// Int8EntrySQL builds the int8 entry projection `cast(cast(<colExpr> as vecf32) *
+// mul + add as vecint8(dim))` from precomputed literal bounds (the synchronous build
+// path, where compile has already read the trained [min,max] from metadata). colExpr
+// is the already-quoted column reference.
+//
+// The inner `cast(... as vecf32)` pins the affine map to FLOAT32 arithmetic for BOTH
+// a vecf32 base (identity cast) and a vecf64 base (narrow first) — so it evaluates on
+// the same f32 value, with the same two f32 roundings, as ApplyInt8 on the query
+// (which is always narrowed to f32). Without it a vecf64 base would compute q(x) in
+// f64 while the query encodes in f32, giving different codes at bucket boundaries.
+// %.9g is the exact float32 round-trip width, so float32(literal) == float32(mul).
 func Int8EntrySQL(colExpr string, mul, add float64, dim int32) string {
-	return fmt.Sprintf("cast(%s * %.9g + (%.9g) as vecint8(%d))", colExpr, mul, add, dim)
+	f32col := CastSQL(colExpr, types.T_array_float32, dim)
+	return fmt.Sprintf("cast(%s * %.9g + (%.9g) as vecint8(%d))", f32col, mul, add, dim)
 }
 
 // Int8EntrySQLFromBounds builds the int8 entry projection where the bounds are SQL
@@ -188,11 +203,15 @@ func Int8EntrySQL(colExpr string, mul, add float64, dim int32) string {
 // does when the bounds are missing. colExpr/minExpr/maxExpr are SQL sub-expressions.
 func Int8EntrySQLFromBounds(colExpr, minExpr, maxExpr string, dim int32) string {
 	// 255.0 == int8Span, 128.0 == -Int8Lo, kept as literals so the division/offset
-	// evaluate in DOUBLE in SQL (and the generated text is stable).
+	// evaluate in DOUBLE in SQL (and the generated text is stable). add is grouped as
+	// min * (255.0/rng) so the f64 divide-then-multiply order matches the build side's
+	// add = -min*mul (mul = 255/rng) before the f32 coercion. The inner cast-to-vecf32
+	// pins the arithmetic to f32 (see Int8EntrySQL), matching ApplyInt8 on the query.
 	rng := fmt.Sprintf("(%s - %s)", maxExpr, minExpr)
 	mul := fmt.Sprintf("COALESCE(255.0 / %s, 1.0)", rng)
-	add := fmt.Sprintf("COALESCE(0.0 - %s * 255.0 / %s - 128.0, 0.0)", minExpr, rng)
-	return fmt.Sprintf("cast(%s * %s + %s as vecint8(%d))", colExpr, mul, add, dim)
+	add := fmt.Sprintf("COALESCE(0.0 - %s * (255.0 / %s) - 128.0, 0.0)", minExpr, rng)
+	f32col := CastSQL(colExpr, types.T_array_float32, dim)
+	return fmt.Sprintf("cast(%s * %s + %s as vecint8(%d))", f32col, mul, add, dim)
 }
 
 // Uint8Params returns (mul, add) for the cuVS-style asymmetric uint8 scalar
@@ -215,32 +234,40 @@ func Uint8Params(min, max float64) (mul, add float64) {
 
 // ApplyUint8 is the uint8 analog of ApplyInt8: applies q(x)=x*mul+add to a float32
 // query vector and narrows to uint8 (round+clamp to [0,255]). (mul,add)=(1,0) is
-// identity. The multiply-add is done in float64 to match the build side. qf32 is
-// never mutated.
+// identity. The multiply-add is done in FLOAT32 with float32-narrowed params (see
+// ApplyInt8) so it is bit-identical to the entry SQL. qf32 is never mutated.
 func ApplyUint8(qf32 []float32, mul, add float64) []uint8 {
 	if mul == 1.0 && add == 0.0 {
 		return types.Float32ToUint8Slice(qf32)
 	}
+	fmul, fadd := float32(mul), float32(add)
 	sq := make([]float32, len(qf32))
 	for i, x := range qf32 {
-		sq[i] = float32(float64(x)*mul + add)
+		m := x * fmul
+		sq[i] = m + fadd
 	}
 	return types.Float32ToUint8Slice(sq)
 }
 
 // Uint8EntrySQL is the uint8 analog of Int8EntrySQL: the build-side entry
-// projection `cast(<colExpr> * mul + add as vecuint8(dim))` from literal bounds.
+// projection `cast(cast(<colExpr> as vecf32) * mul + add as vecuint8(dim))` from
+// literal bounds. The inner cast-to-vecf32 pins the affine map to f32 arithmetic for
+// both f32 and f64 bases, matching ApplyUint8 on the query (see Int8EntrySQL).
 func Uint8EntrySQL(colExpr string, mul, add float64, dim int32) string {
-	return fmt.Sprintf("cast(%s * %.9g + (%.9g) as vecuint8(%d))", colExpr, mul, add, dim)
+	f32col := CastSQL(colExpr, types.T_array_float32, dim)
+	return fmt.Sprintf("cast(%s * %.9g + (%.9g) as vecuint8(%d))", f32col, mul, add, dim)
 }
 
 // Uint8EntrySQLFromBounds is the uint8 analog of Int8EntrySQLFromBounds (CDC delta
 // path). q(x)=x*mul+add with mul=255/(max-min) and add=-min*255/(max-min) — no -128
 // shift — wrapped in COALESCE for identity fallback when a bound is absent.
 func Uint8EntrySQLFromBounds(colExpr, minExpr, maxExpr string, dim int32) string {
-	// 255.0 == uint8Span; no offset term since Uint8Lo == 0.
+	// 255.0 == uint8Span; no offset term since Uint8Lo == 0. add grouped as
+	// min * (255.0/rng) to match the build's divide-then-multiply order (see
+	// Int8EntrySQLFromBounds); inner cast-to-vecf32 pins the arithmetic to f32.
 	rng := fmt.Sprintf("(%s - %s)", maxExpr, minExpr)
 	mul := fmt.Sprintf("COALESCE(255.0 / %s, 1.0)", rng)
-	add := fmt.Sprintf("COALESCE(0.0 - %s * 255.0 / %s, 0.0)", minExpr, rng)
-	return fmt.Sprintf("cast(%s * %s + %s as vecuint8(%d))", colExpr, mul, add, dim)
+	add := fmt.Sprintf("COALESCE(0.0 - %s * (255.0 / %s), 0.0)", minExpr, rng)
+	f32col := CastSQL(colExpr, types.T_array_float32, dim)
+	return fmt.Sprintf("cast(%s * %s + %s as vecuint8(%d))", f32col, mul, add, dim)
 }
