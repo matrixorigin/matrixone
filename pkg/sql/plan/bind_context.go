@@ -26,12 +26,13 @@ import (
 
 func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {
 	bc := &BindContext{
-		groupByAst:     make(map[string]int32),
-		aggregateByAst: make(map[string]int32),
-		sampleByAst:    make(map[string]int32),
-		projectByExpr:  make(map[string]int32),
-		windowByAst:    make(map[string]int32),
-		timeByAst:      make(map[string]int32),
+		groupByAst:      make(map[string]int32),
+		groupByParamAst: make(map[string]int32),
+		aggregateByAst:  make(map[string]int32),
+		sampleByAst:     make(map[string]int32),
+		projectByExpr:   make(map[string]int32),
+		windowByAst:     make(map[string]int32),
+		timeByAst:       make(map[string]int32),
 
 		projectColByAst: make(map[string]int32),
 
@@ -59,6 +60,7 @@ func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {
 		}
 		bc.snapshot = parent.snapshot
 		bc.remapOption = parent.remapOption
+		bc.numericCteByName = parent.numericCteByName
 		if len(parent.viewChain) > 0 {
 			bc.viewChain = append([]string{}, parent.viewChain...)
 		}
@@ -66,6 +68,22 @@ func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {
 	}
 
 	return bc
+}
+
+// newCTEDeclarationContext records the name-resolution scope at a WITH
+// declaration without retaining bindings that the declaring query block adds
+// later while binding its FROM clause. The normal child-context constructor
+// carries default-database, snapshot, CTE-state, rewrite, and view metadata;
+// detaching the new context from ctx then leaves only the already-existing
+// outer query blocks available for correlation.
+func newCTEDeclarationContext(builder *QueryBuilder, ctx *BindContext) *BindContext {
+	declarationCtx := NewBindContext(builder, ctx)
+	declarationCtx.parent = ctx.parent
+	declarationCtx.cteByName = ctx.cteByName
+	for name, cteRef := range ctx.boundCtes {
+		declarationCtx.boundCtes[name] = cteRef
+	}
+	return declarationCtx
 }
 
 func (bc *BindContext) rootTag() int32 {

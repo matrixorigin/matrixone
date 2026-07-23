@@ -626,18 +626,13 @@ SELECT * FROM sales_rollup
 ORDER BY region, product;
 ➤ region[12,-1,0]  ¦  product[12,-1,0]  ¦  total_amount[3,38,2]  𝄀
 null  ¦  null  ¦  1750.00  𝄀
-null  ¦  null  ¦  1750.00  𝄀
-East  ¦  null  ¦  650.00  𝄀
 East  ¦  null  ¦  650.00  𝄀
 East  ¦  Product C  ¦  650.00  𝄀
-North  ¦  null  ¦  470.00  𝄀
 North  ¦  null  ¦  470.00  𝄀
 North  ¦  Product A  ¦  250.00  𝄀
 North  ¦  Product B  ¦  220.00  𝄀
 South  ¦  null  ¦  450.00  𝄀
-South  ¦  null  ¦  450.00  𝄀
 South  ¦  Product B  ¦  450.00  𝄀
-West  ¦  null  ¦  180.00  𝄀
 West  ¦  null  ¦  180.00  𝄀
 West  ¦  Product A  ¦  180.00
 /*+ {
