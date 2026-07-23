@@ -285,9 +285,7 @@ func (insert *Insert) insert_external(proc *process.Process, analyzer process.An
 		return input, err
 	}
 	ctx := insert.externalWriterContext(proc.Ctx)
-	if err = process.MeasureFilesystemWaitErr(analyzer, func() error {
-		return insert.ctr.extWriter.WriteBatch(ctx, input.Batch)
-	}); err != nil {
+	if err = insert.ctr.extWriter.WriteBatch(ctx, input.Batch, analyzer); err != nil {
 		return input, err
 	}
 

@@ -244,6 +244,12 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 		// ignore internal EMPTY query.
 		return ctx, nil
 	}
+	// A same-session derived statement is implementation work of the visible
+	// client statement. Keep its independent StatsInfo, but share the existing
+	// resource root and StatementInfo lifecycle instead of replacing either.
+	if ses.IsDerivedStmt() && resource.RootFromContext(ctx) != nil {
+		return ctx, nil
+	}
 
 	// Only a StatementInfo owns and closes the statement memory epoch. Create
 	// the root and epoch after every path that deliberately skips recording.

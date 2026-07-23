@@ -945,7 +945,7 @@ func querySchedulingIntent(ses FeSession) schedule.SchedulingIntent {
 // but it must not claim the root's single attempt owner.
 func resourceAttemptOwnerEligible(ses FeSession) bool {
 	_, isBackExec := ses.(*backSession)
-	return !isBackExec
+	return !isBackExec && !ses.IsDerivedStmt()
 }
 
 func currentCNPipelineAddress(ses FeSession) string {

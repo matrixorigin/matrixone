@@ -42,16 +42,19 @@ type mockExtWriter struct {
 	closeBytes int64
 }
 
-func (m *mockExtWriter) WriteBatch(ctx context.Context, bat *batch.Batch) error {
+func (m *mockExtWriter) WriteBatch(ctx context.Context, bat *batch.Batch, analyzer process.Analyzer) error {
 	m.writes++
-	if m.writeBytes > 0 {
-		perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
-			counter.FileService.S3.Put.Add(1)
-			counter.FileService.S3WriteSize.Add(m.writeBytes)
-		})
-	}
-	if m.failure != nil {
+	err := process.MeasureFilesystemWaitErr(analyzer, func() error {
+		if m.writeBytes > 0 {
+			perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
+				counter.FileService.S3.Put.Add(1)
+				counter.FileService.S3WriteSize.Add(m.writeBytes)
+			})
+		}
 		return m.failure
+	})
+	if err != nil {
+		return err
 	}
 	m.rows += uint64(bat.RowCount())
 	return nil

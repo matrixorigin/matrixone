@@ -160,6 +160,19 @@ func TestStatementlessRequestConsumesResponseCounters(t *testing.T) {
 	require.Zero(t, writer.packets)
 }
 
+func TestDerivedStatementLeavesParentResponseAccountingOpen(t *testing.T) {
+	writer := &accountingMysqlWriter{bytes: 23, packets: 2}
+	ses := &Session{feSessionImpl: feSessionImpl{respr: NewMysqlResp(writer)}}
+	ses.ReplaceDerivedStmt(true)
+
+	ctx := resource.ContextWithRoot(context.Background(), resource.NewRoot(resource.ConnExternal))
+	finishStatementAccounting(ctx, ses, nil)
+
+	require.Zero(t, writer.calls)
+	require.Equal(t, int64(23), writer.bytes)
+	require.Equal(t, int64(2), writer.packets)
+}
+
 type testColumnWithoutDecimalScale struct {
 	ColumnImpl
 	signed bool

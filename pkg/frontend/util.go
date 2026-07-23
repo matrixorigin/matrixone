@@ -53,6 +53,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/debug/goroutine"
+	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
@@ -474,6 +475,12 @@ func logStatementStringStatus(
 }
 
 func finishStatementAccounting(ctx context.Context, ses FeSession, err error) {
+	// A same-session derived statement without its own StatementInfo belongs to
+	// the enclosing client statement. The outer request owns both its terminal
+	// accounting and protocol counters.
+	if ses.IsDerivedStmt() && ses.GetStmtInfo() == nil && resource.RootFromContext(ctx) != nil {
+		return
+	}
 	var outBytes, outPacket int64
 	switch resper := ses.GetResponser().(type) {
 	case *MysqlResp:

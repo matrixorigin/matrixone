@@ -130,6 +130,42 @@ func TestRecordStatementSkippedInternalEmptyDoesNotOpenMemoryEpoch(t *testing.T)
 	require.True(t, ended)
 }
 
+func TestRecordDerivedStatementSharesParentResourceLifecycle(t *testing.T) {
+	ctx := context.Background()
+	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
+	provider := motrace.GetTracerProvider()
+	wasEnabled := provider.IsEnable()
+	provider.SetEnable(true)
+	defer provider.SetEnable(wasEnabled)
+
+	ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
+	proc := ses.GetProc()
+	root := resource.NewRoot(resource.ConnExternal)
+	parentCtx := resource.ContextWithRoot(ctx, root)
+	derivedStats := statistic.NewStatsInfo()
+	parentCtx = statistic.ContextWithStatsInfo(parentCtx, derivedStats)
+	outer := motrace.NewStatementInfo()
+	outer.SetResourceRoot(root)
+	ses.SetTStmt(outer)
+	savedOuter := ses.GetStmtInfo()
+	ses.SetTStmt(nil) // doComQuery saves the outer StatementInfo while nested.
+	ses.ReplaceDerivedStmt(true)
+	cw := InitTxnComputationWrapper(ses, &tree.Select{}, proc)
+
+	derivedCtx, err := RecordStatement(
+		parentCtx, ses, proc, cw, time.Now(), "select 1", constant.ExternSql, true,
+	)
+	require.NoError(t, err)
+	require.Same(t, root, resource.RootFromContext(derivedCtx))
+	require.Same(t, derivedStats, statistic.StatsInfoFromContext(derivedCtx))
+	require.Nil(t, ses.GetStmtInfo())
+	ses.SetTStmt(savedOuter)
+	require.Same(t, outer, ses.GetStmtInfo())
+	require.True(t, root.MergeExecution(resource.ExecutionSummary{
+		Usage: resource.Usage{ExclusiveActiveNS: 1},
+	}))
+}
+
 func TestRecordStatementSetsIgnoreForInsertIgnore(t *testing.T) {
 	ctx := context.Background()
 	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
