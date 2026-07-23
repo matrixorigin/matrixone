@@ -117,6 +117,14 @@ func appendQueryExplain(b *schedulingExplainBuilder, query *QueryTrace) {
 		query.Fallback,
 	))
 	b.add(fmt.Sprintf(
+		"    Workload: class=%s policy-source=%s generation=%s routing=%s policy-reason=%s",
+		explainValue(query.WorkloadClass),
+		explainValue(query.WorkloadPolicySource),
+		explainValue(query.WorkloadPolicyGeneration),
+		explainValue(query.WorkloadRouting),
+		explainValue(query.WorkloadPolicyReason),
+	))
+	b.add(fmt.Sprintf(
 		"    Candidates: source=%s pool-resolution=%s discovered=%d resolved=%d selected=%d dropped=%d",
 		explainValue(query.CandidateSource),
 		explainValue(query.PoolResolution),

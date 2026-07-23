@@ -43,6 +43,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -1365,7 +1366,10 @@ func (ses *feSessionImpl) GetGlobalSysVar(name string) (interface{}, error) {
 	if ses.gSysVars == nil {
 		return gSysVarsDefs[name].Default, nil
 	}
-	return ses.gSysVars.Get(name), nil
+	if value := ses.gSysVars.Get(name); value != nil {
+		return value, nil
+	}
+	return gSysVarsDefs[name].Default, nil
 }
 
 func (ses *Session) SetGlobalSysVar(ctx context.Context, name string, val interface{}) (err error) {
@@ -1405,6 +1409,19 @@ func (ses *Session) SetGlobalSysVar(ctx context.Context, name string, val interf
 
 	if val, err = def.GetType().Convert(val); err != nil {
 		return err
+	}
+	if name == queryWorkloadPolicy {
+		raw, ok := val.(string)
+		if !ok {
+			return moerr.NewInvalidInputf(
+				ctx,
+				"%s must be a string",
+				queryWorkloadPolicy,
+			)
+		}
+		if _, parseErr := schedule.ParseWorkloadPolicyConfig(raw); parseErr != nil {
+			return moerr.NewInvalidInputf(ctx, "%v", parseErr)
+		}
 	}
 
 	if name == "wait_timeout" || name == "interactive_timeout" {

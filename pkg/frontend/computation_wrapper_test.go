@@ -434,6 +434,37 @@ func TestInitExecuteStmtParamBypassesButRetainsCachedTopologyForExplicitScheduli
 	require.NotNil(t, retStmt)
 }
 
+func TestInitExecuteStmtParamBypassesCachedTopologyAfterPolicyGenerationAppears(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnv(t, 107)
+	defer prepareStmt.Close()
+
+	sentinel := compile.NewCompile(
+		"", "", prepareStmt.Sql, "", "", nil,
+		cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
+	prepareStmt.compile = sentinel
+	if ses.gSysVars == nil {
+		ses.gSysVars = &SystemVariables{mp: make(map[string]interface{})}
+	}
+	ses.gSysVars.Set(queryWorkloadPolicy, `{
+		"version": 1,
+		"policies": {
+			"tp": {
+				"pool": "tenant-tp",
+				"labels": {"role": "tp"},
+				"current_cn": "required"
+			}
+		}
+	}`)
+
+	retComp, retPlan, retStmt, _, err := initExecuteStmtParam(
+		execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.Nil(t, retComp)
+	require.Same(t, sentinel, prepareStmt.compile)
+	require.NotNil(t, retPlan)
+	require.NotNil(t, retStmt)
+}
+
 func TestRebuildPreparePlanUsesPreparedRootSQL(t *testing.T) {
 	const preparedSQL = "create view v as select 1"
 	const executeSQL = "execute prepared_view"

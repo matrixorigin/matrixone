@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -94,6 +95,11 @@ func (c *Compile) querySchedulePlacementFields(placement schedule.QueryDecision)
 		zap.String("reason", placement.Reason),
 		zap.String("current-cn-policy", placement.CurrentCNPolicy.String()),
 		zap.String("exec-type", queryExecTypeString(c.execType)),
+		zap.String("workload-class", string(placement.WorkloadPolicy.WorkloadClass)),
+		zap.String("workload-policy-source", string(placement.WorkloadPolicy.Source)),
+		zap.String("workload-policy-generation", placement.WorkloadPolicy.Generation),
+		zap.String("workload-policy-reason", placement.WorkloadPolicy.Reason),
+		zap.String("workload-routing", string(placement.WorkloadPolicy.Routing)),
 		zap.String("current-cn-id", currentCN.ID),
 		zap.String("current-cn-address", currentCN.Addr),
 		zap.Int("worker-count", len(placement.Workers)),
@@ -109,7 +115,11 @@ func (c *Compile) querySchedulePlacementFields(placement schedule.QueryDecision)
 }
 
 func (c *Compile) validateScheduledQueryRoutes(nodes engine.Nodes, placement schedule.QueryDecision) error {
-	if c.execType != plan2.ExecTypeAP_MULTICN {
+	singleWorkloadTarget := placement.WorkloadPolicy.Applied &&
+		placement.WorkloadPolicy.Routing == schedule.WorkloadRoutingSingle
+	requiresRoutableWorker := c.execType == plan2.ExecTypeAP_MULTICN ||
+		singleWorkloadTarget
+	if !requiresRoutableWorker {
 		return nil
 	}
 	for _, node := range nodes {
@@ -134,8 +144,14 @@ func (c *Compile) validateScheduledQueryRoutes(nodes engine.Nodes, placement sch
 				node.WorkState.String())
 		}
 	}
-	if len(nodes) <= 1 {
+	if len(nodes) <= 1 && !singleWorkloadTarget {
 		return nil
+	}
+	logMessage := "query schedule selected a worker without route for multi-CN execution"
+	errorMessage := "query schedule selected worker %s without address for multi-CN execution"
+	if singleWorkloadTarget {
+		logMessage = "query schedule selected a worker without route for routed workload execution"
+		errorMessage = "query schedule selected worker %s without address for routed workload execution"
 	}
 	for _, node := range nodes {
 		if node.Addr != "" {
@@ -148,14 +164,12 @@ func (c *Compile) validateScheduledQueryRoutes(nodes engine.Nodes, placement sch
 		recordSelectedWorkerFailureMetric(scheduleFailureUnroutableSelectedWorker)
 		getQueryScheduleLogger().WarnWithConfig(
 			"query-schedule-unroutable-selected-worker",
-			"query schedule selected a worker without route for multi-CN execution",
+			logMessage,
 			queryScheduleLogRateLimit,
 			append(c.querySchedulePlacementFields(placement),
 				zap.String("worker-id", node.Id),
 				zap.Int("worker-mcpu", node.Mcpu))...)
-		return moerr.NewInternalErrorNoCtxf(
-			"query schedule selected worker %s without address for multi-CN execution",
-			node.Id)
+		return moerr.NewInternalErrorNoCtxf(errorMessage, node.Id)
 	}
 	return nil
 }
@@ -207,7 +221,7 @@ func (d legacyEngineNodesCandidateDiscoverer) discover(ctx context.Context) (dis
 		d.poolRequest.IsInternal,
 		d.poolRequest.Tenant,
 		d.poolRequest.Username,
-		cloneCNLabels(d.poolRequest.CNLabel),
+		queryPoolSelectorLabels(d.poolRequest),
 	)
 	if err != nil {
 		return discoveredQueryCandidates{}, err
@@ -312,6 +326,7 @@ func (r engineQueryCandidatePoolResolver) resolve(
 	request queryCandidatePoolRequest,
 ) (resolvedQueryCandidates, error) {
 	request.CNLabel = cloneCNLabels(request.CNLabel)
+	request.TargetLabels = cloneCNLabels(request.TargetLabels)
 	pool, err := r.provider.ResolveQueryCandidatePool(
 		ctx,
 		discovered.candidates,
@@ -381,6 +396,13 @@ func cloneCNLabels(labels map[string]string) map[string]string {
 	return cloned
 }
 
+func queryPoolSelectorLabels(request queryCandidatePoolRequest) map[string]string {
+	if request.TargetLabels != nil {
+		return cloneCNLabels(request.TargetLabels)
+	}
+	return cloneCNLabels(request.CNLabel)
+}
+
 func (c *Compile) evaluateQueryPlacement(
 	ctx context.Context,
 	mode queryCandidateMode,
@@ -389,17 +411,20 @@ func (c *Compile) evaluateQueryPlacement(
 		ctx = context.Background()
 	}
 	currentCN := c.currentCNWorker()
-	intent := c.effectiveQuerySchedulingIntent()
+	workloadPolicy := c.effectiveWorkloadPolicy()
+	intent := workloadPolicy.Intent
 	req := schedule.QueryRequest{
 		ExecKind:        toScheduleExecKind(c.execType),
 		CurrentCN:       currentCN,
 		CurrentCNPolicy: intent.CurrentCNPolicy,
 		Intent:          intent,
+		WorkloadPolicy:  workloadPolicy,
 	}
 	if schedule.ValidateSchedulingIntent(intent) != "" {
 		return schedule.DecideQueryPlacement(req), "", nil
 	}
-	if c.execType != plan2.ExecTypeAP_MULTICN {
+	if c.execType != plan2.ExecTypeAP_MULTICN &&
+		!workloadPolicy.RequiresPoolResolution() {
 		req.CandidateResolution = schedule.CandidateResolution{
 			DiscoverySource: schedule.CandidateSourceNotRequired,
 			PoolResolution:  schedule.PoolResolutionNotRequired,
@@ -415,8 +440,12 @@ func (c *Compile) evaluateQueryPlacement(
 		Tenant:         c.tenant,
 		Username:       c.uid,
 		CNLabel:        c.cnLabel,
+		TargetLabels:   nil,
 		RequestedPool:  intent.RequestedPool,
 		FallbackPolicy: toEnginePoolFallbackPolicy(intent.PoolFallback),
+	}
+	if workloadPolicy.Applied {
+		poolRequest.TargetLabels = workloadPolicy.Pool.Labels
 	}
 	discoverer, poolResolver, err := queryCandidatePipeline(c.e, poolRequest, mode)
 	if err != nil {
@@ -461,10 +490,36 @@ func (c *Compile) SetQuerySchedulingIntent(intent schedule.SchedulingIntent) {
 	c.querySchedulingIntent = intent
 }
 
+func (c *Compile) SetWorkloadPolicy(
+	set schedule.WorkloadPolicySet,
+	classHint schedule.WorkloadClass,
+) {
+	c.workloadPolicySet = set.Clone()
+	c.workloadClassHint = classHint
+}
+
 func (c *Compile) effectiveQuerySchedulingIntent() schedule.SchedulingIntent {
+	return c.effectiveWorkloadPolicy().Intent
+}
+
+func (c *Compile) effectiveWorkloadPolicy() schedule.EffectiveWorkloadPolicy {
 	intent := c.querySchedulingIntent
+	legacyPool := intent.RequestedPool
+	if legacyPool == "" {
+		legacyPool = canonicalQueryPoolIdentity(c.tenant, c.cnLabel)
+	}
+	policy := schedule.ResolveWorkloadPolicy(schedule.WorkloadDescriptor{
+		Class:            c.queryWorkloadClass(),
+		ExecKind:         toScheduleExecKind(c.execType),
+		Internal:         c.isInternal,
+		Tenant:           c.tenant,
+		IngressLabels:    c.cnLabel,
+		LegacyPool:       legacyPool,
+		SchedulingIntent: intent,
+	}, c.workloadPolicySet)
+	intent = policy.Intent
 	if intent.RequestedPool == "" {
-		intent.RequestedPool = canonicalQueryPoolIdentity(c.tenant, c.cnLabel)
+		intent.RequestedPool = legacyPool
 	}
 	if intent.WorkerSet.Mode == schedule.WorkerSetMax && intent.WorkerSet.SelectionKey == "" {
 		intent.WorkerSet.SelectionKey = c.querySchedulingSelectionKey()
@@ -472,7 +527,31 @@ func (c *Compile) effectiveQuerySchedulingIntent() schedule.SchedulingIntent {
 	if intent.WorkerSet.Mode == schedule.WorkerSetMax && intent.WorkerSet.AlgorithmVersion == "" {
 		intent.WorkerSet.AlgorithmVersion = schedule.WorkerSelectionAlgorithmV1
 	}
-	return intent
+	policy.Intent = intent
+	return policy
+}
+
+func (c *Compile) queryWorkloadClass() schedule.WorkloadClass {
+	if c.isInternal {
+		return schedule.WorkloadInternal
+	}
+	if c.workloadClassHint.Valid() {
+		return c.workloadClassHint
+	}
+	if _, ok := c.stmt.(*tree.Load); ok {
+		return schedule.WorkloadLoad
+	}
+	if c.stmt != nil && c.stmt.GetQueryType() == tree.QueryTypeDDL {
+		return schedule.WorkloadMaintenance
+	}
+	switch c.execType {
+	case plan2.ExecTypeTP:
+		return schedule.WorkloadTP
+	case plan2.ExecTypeAP_ONECN, plan2.ExecTypeAP_MULTICN:
+		return schedule.WorkloadAP
+	default:
+		return schedule.WorkloadUnclassified
+	}
 }
 
 func (c *Compile) querySchedulingSelectionKey() string {
@@ -658,7 +737,7 @@ func queryHasIvfSearchEntriesInternalScan(qry *plan.Query) bool {
 }
 
 func (c *Compile) currentCNWorker() schedule.Worker {
-	currentCN := getEngineNode(c)
+	currentCN := getIngressEngineNode(c)
 	if c.proc != nil {
 		currentCN.Id = c.proc.GetService()
 	}
@@ -828,6 +907,15 @@ func normalizeMcpu(mcpu int) int {
 		return 1
 	}
 	return mcpu
+}
+
+func normalizeMcpuForPlan(mcpu int) int32 {
+	const maxInt32Value = int64(1<<31 - 1)
+	normalized := normalizeMcpu(mcpu)
+	if int64(normalized) > maxInt32Value {
+		return int32(maxInt32Value)
+	}
+	return int32(normalized)
 }
 
 func toScheduleWorkerState(state metadata.WorkState) schedule.WorkerState {

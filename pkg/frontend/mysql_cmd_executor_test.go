@@ -3591,6 +3591,83 @@ func TestQuerySchedulingIntentUsesSessionAndSetVarCapableVariables(t *testing.T)
 	require.Equal(t, int64(2147483647), maxWorkersType.maximum)
 }
 
+func TestQueryWorkloadPolicyUsesAccountGlobalAdministratorPolicy(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	policyJSON := `{
+		"version": 1,
+		"policies": {
+			"ap": {
+				"pool": "tenant-ap",
+				"labels": {"role": "ap"},
+				"current_cn": "excluded"
+			}
+		}
+	}`
+	ses.gSysVars.Set(queryWorkloadPolicy, policyJSON)
+
+	set := queryWorkloadPolicySnapshot(ses)
+	require.True(t, set.Configured())
+	require.Empty(t, set.InvalidReason)
+	require.Contains(t, set.Rules, schedule.WorkloadAP)
+	require.True(t, querySchedulingIntent(ses).Explicit)
+	require.False(t, querySchedulingIntentWithWorkloadPolicy(
+		ses,
+		schedule.WorkloadPolicySet{},
+	).Explicit)
+	require.True(t, querySchedulingIntentWithWorkloadPolicy(ses, set).Explicit)
+	require.Equal(t, ScopeGlobal, gSysVarsDefs[queryWorkloadPolicy].Scope)
+	require.True(t, gSysVarsDefs[queryWorkloadPolicy].Dynamic)
+	require.False(t, gSysVarsDefs[queryWorkloadPolicy].SetVarHintApplies)
+	require.ErrorContains(
+		t,
+		ses.SetSessionSysVar(context.Background(), queryWorkloadPolicy, policyJSON),
+		errorSystemVariableIsGlobal(),
+	)
+
+	// The global setter rejects malformed or unsafe policy before it reaches
+	// catalog persistence.
+	err := ses.SetGlobalSysVar(
+		context.Background(),
+		queryWorkloadPolicy,
+		`{"version":1,"policies":{"ap":{"pool":"ap","labels":{"account":"other"}}}}`,
+	)
+	require.ErrorContains(t, err, "protected account")
+}
+
+func TestQueryWorkloadPolicyCorruptCatalogValueFailsClosed(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	ses.gSysVars.Set(queryWorkloadPolicy, `{"version":1`)
+
+	set := queryWorkloadPolicySnapshot(ses)
+	require.NotEmpty(t, set.InvalidReason)
+	intent := querySchedulingIntent(ses)
+	require.True(t, intent.Explicit)
+
+	policy := schedule.ResolveWorkloadPolicy(schedule.WorkloadDescriptor{
+		Class:    schedule.WorkloadAP,
+		ExecKind: schedule.QueryExecAPMultiCN,
+		SchedulingIntent: schedule.SchedulingIntent{
+			PoolFallback:      schedule.PoolFallbackLegacyCompatible,
+			EmptyWorkerPolicy: schedule.EmptyWorkerLocalFallback,
+			CurrentCNPolicy:   schedule.CurrentCNAllowed,
+			WorkerSet:         schedule.WorkerSetPolicy{Mode: schedule.WorkerSetAll},
+		},
+	}, set)
+	require.False(t, policy.Intent.PoolFallback.Valid())
+	require.Equal(t, "invalid-workload-policy", policy.Reason)
+}
+
+func TestQueryWorkloadClassHintUsesParsedStatement(t *testing.T) {
+	require.Equal(t, schedule.WorkloadLoad, queryWorkloadClassHint(&tree.Load{}))
+	require.Equal(t, schedule.WorkloadMaintenance, queryWorkloadClassHint(&tree.CreateTable{}))
+	require.Empty(t, queryWorkloadClassHint(&tree.Select{}))
+	require.Empty(t, queryWorkloadClassHint(nil))
+}
+
 func TestQuerySchedulingIntentAppliesStatementSetVarOverrides(t *testing.T) {
 	intent := querySchedulingIntentForStatement(nil,
 		"select /*+ SET_VAR(query_max_workers=2) SET_VAR(query_pool_strict='ON') */ 1")
