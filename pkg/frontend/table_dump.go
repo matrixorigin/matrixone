@@ -21,8 +21,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"io"
+	"math"
 	"path"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync/atomic"
 
@@ -37,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -53,6 +56,13 @@ const (
 	tableDumpMaxManifest   = 64 << 20
 	tableDumpMaxRelations  = 4_096
 	tableDumpMaxObjects    = 250_000
+	tableDumpMaxBlocks     = 1_000_000
+	tableDumpMaxObjectMeta = 64 << 20
+
+	// Keep LOAD object installation separate from real catalog table locks.
+	// The high synthetic table ID follows the existing user-level-lock
+	// namespace and serializes installs until the owning transaction ends.
+	tableDumpObjectInstallLockTableID uint64 = (1 << 62) + 1
 )
 
 type tableDumpManifest struct {
@@ -293,6 +303,34 @@ func validateTableDumpSchema(def *plan.TableDef) error {
 	return nil
 }
 
+func validateTableDumpRelations(ctx context.Context, refs []tableDumpRelationRef) error {
+	for _, ref := range refs {
+		if err := validateTableDumpSchema(ref.relation.GetTableDef(ctx)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func hashTableDumpFile(ctx context.Context, fs fileservice.FileService, name string) (int64, string, error) {
+	var reader io.ReadCloser
+	if err := fs.Read(ctx, &fileservice.IOVector{
+		FilePath: name,
+		Entries:  []fileservice.IOEntry{{Offset: 0, Size: -1, ReadCloserForRead: &reader}},
+		Policy:   fileservice.SkipAllCache,
+	}); err != nil {
+		return 0, "", err
+	}
+	defer reader.Close()
+
+	hasher := sha256.New()
+	n, err := io.Copy(hasher, reader)
+	if err != nil {
+		return 0, "", err
+	}
+	return n, hex.EncodeToString(hasher.Sum(nil)), nil
+}
+
 func copyTableDumpFile(ctx context.Context, srcFS, dstFS fileservice.FileService, src, dst string) (int64, string, error) {
 	srcEntry, err := srcFS.StatFile(ctx, src)
 	if err != nil {
@@ -304,17 +342,17 @@ func copyTableDumpFile(ctx context.Context, srcFS, dstFS fileservice.FileService
 			return 0, "", err
 		}
 		if copied {
-			dstEntry, err := dstFS.StatFile(ctx, dst)
+			dstSize, hash, err := hashTableDumpFile(ctx, dstFS, dst)
 			if err != nil {
 				return 0, "", err
 			}
-			if dstEntry.Size != srcEntry.Size {
+			if dstSize != srcEntry.Size {
 				return 0, "", moerr.NewInternalErrorNoCtxf(
 					"server-side object copy size mismatch: source %d, destination %d",
-					srcEntry.Size, dstEntry.Size,
+					srcEntry.Size, dstSize,
 				)
 			}
-			return srcEntry.Size, "", nil
+			return srcEntry.Size, hash, nil
 		}
 	}
 	return streamTableDumpFile(ctx, srcFS, dstFS, src, dst)
@@ -395,17 +433,18 @@ func copyTableDumpObjects(
 				if err != nil {
 					return err
 				}
-				dstEntry, err := dumpFS.StatFile(statCtx, objects[i].FixturePath)
+				dstSize, hash, err := hashTableDumpFile(statCtx, dumpFS, objects[i].FixturePath)
 				if err != nil {
 					return err
 				}
-				if dstEntry.Size != srcEntry.Size {
+				if dstSize != srcEntry.Size {
 					return moerr.NewInternalErrorNoCtxf(
 						"server-side object copy size mismatch: source %d, destination %d",
-						srcEntry.Size, dstEntry.Size,
+						srcEntry.Size, dstSize,
 					)
 				}
 				objects[i].Size = srcEntry.Size
+				objects[i].SHA256 = hash
 			}
 		})
 	}
@@ -769,6 +808,9 @@ func handleDumpTable(ctx context.Context, ses *Session, stmt *tree.DumpTable) er
 	if err != nil {
 		return err
 	}
+	if err = validateTableDumpRelations(ctx, refs); err != nil {
+		return err
+	}
 
 	manifest := &tableDumpManifest{
 		Version: tableDumpFormatVersion, SourceDatabase: dbName, SourceTable: tableName,
@@ -848,32 +890,33 @@ func verifyTableDumpObject(ctx context.Context, fs fileservice.FileService, name
 	return nil
 }
 
-func installTableDumpObject(ctx context.Context, dumpFS, targetFS fileservice.FileService, item tableDumpObject) error {
+func installTableDumpObject(ctx context.Context, dumpFS, targetFS fileservice.FileService, item tableDumpObject) (bool, error) {
 	if _, err := targetFS.StatFile(ctx, item.Name); err == nil {
-		return verifyTableDumpObject(ctx, targetFS, item.Name, item.Size, item.SHA256)
+		return false, verifyTableDumpObject(ctx, targetFS, item.Name, item.Size, item.SHA256)
 	} else if !moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
-		return err
+		return false, err
 	}
 	size, hash, err := copyTableDumpFile(ctx, dumpFS, targetFS, item.FixturePath, item.Name)
 	if err != nil {
-		return err
+		return true, err
 	}
 	checksumMismatch := item.SHA256 != "" && hash != "" && !strings.EqualFold(hash, item.SHA256)
 	if size != item.Size || checksumMismatch {
-		return moerr.NewInvalidInputNoCtxf("object %s does not match manifest checksum", item.Name)
+		return true, moerr.NewInvalidInputNoCtxf("object %s does not match manifest checksum", item.Name)
 	}
 	if item.SHA256 != "" && hash == "" {
 		if err = verifyTableDumpObject(ctx, targetFS, item.Name, item.Size, item.SHA256); err != nil {
-			return err
+			return true, err
 		}
 	}
-	return nil
+	return true, nil
 }
 
 func installTableDumpObjects(
 	ctx context.Context,
 	dumpFS, targetFS fileservice.FileService,
 	items []tableDumpObject,
+	onCreated func(string),
 ) error {
 	if len(items) == 0 {
 		return nil
@@ -891,7 +934,11 @@ func installTableDumpObjects(
 				if i >= len(items) {
 					return nil
 				}
-				if err := installTableDumpObject(copyCtx, dumpFS, targetFS, items[i]); err != nil {
+				created, err := installTableDumpObject(copyCtx, dumpFS, targetFS, items[i])
+				if created && onCreated != nil {
+					onCreated(items[i].Name)
+				}
+				if err != nil {
 					return err
 				}
 			}
@@ -911,6 +958,142 @@ func setTableDumpObjectFlags(stats *objectio.ObjectStats, tombstone, hasFakePK b
 	stats.UnMarshal(flags)
 	stats.SetLevel(level)
 }
+
+func loadPhysicalTableDumpStats(
+	ctx context.Context,
+	fs fileservice.FileService,
+	item tableDumpObject,
+	mp *mpool.MPool,
+) (stats objectio.ObjectStats, blocks uint32, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = moerr.NewInvalidInputNoCtxf("invalid physical object metadata for %s: %v", item.Name, recovered)
+		}
+	}()
+	if len(item.Stats) != objectio.ObjectStatsLen {
+		return stats, 0, moerr.NewInvalidInputNoCtxf("invalid object stats for %s", item.Name)
+	}
+	manifestStats := objectio.ObjectStats(item.Stats)
+	if manifestStats.GetAppendable() || manifestStats.ObjectName().String() != item.Name {
+		return stats, 0, moerr.NewInvalidInputNoCtxf("invalid immutable object metadata for %s", item.Name)
+	}
+
+	entry, err := fs.StatFile(ctx, item.Name)
+	if err != nil {
+		return stats, 0, err
+	}
+	if entry.Size < 0 || entry.Size > math.MaxUint32 {
+		return stats, 0, moerr.NewInvalidInputNoCtxf("object %s has unsupported size %d", item.Name, entry.Size)
+	}
+	reader, err := objectio.NewObjectReaderWithStr(item.Name, fs)
+	if err != nil {
+		return stats, 0, err
+	}
+	header, err := reader.ReadHeader(ctx, mp)
+	if err != nil {
+		return stats, 0, err
+	}
+	headerExtent := header.Extent()
+	if headerExtent.Length() > tableDumpMaxObjectMeta ||
+		headerExtent.OriginSize() > tableDumpMaxObjectMeta ||
+		uint64(headerExtent.Offset())+uint64(headerExtent.Length()) > uint64(entry.Size) {
+		return stats, 0, moerr.NewInvalidInputNoCtxf("object %s has invalid metadata extent", item.Name)
+	}
+	reader.CacheMetaExtent(&headerExtent)
+	meta, err := reader.ReadAllMeta(ctx, mp)
+	if err != nil {
+		return stats, 0, err
+	}
+	extent := reader.GetMetaExtent()
+	if extent == nil {
+		return stats, 0, moerr.NewInvalidInputNoCtxf("object %s has no metadata extent", item.Name)
+	}
+	// Object writers persist both data and tombstone objects in SchemaData;
+	// Tombstone controls how the stats are submitted to the relation, not the
+	// physical metadata slot.
+	dataMeta := meta.MustGetMeta(objectio.SchemaData)
+	blocks = dataMeta.BlockCount()
+	if blocks > tableDumpMaxBlocks {
+		return stats, 0, moerr.NewInvalidInputNoCtxf("object %s contains too many blocks", item.Name)
+	}
+	var rows uint64
+	for i := uint32(0); i < blocks; i++ {
+		rows += uint64(dataMeta.GetBlockMeta(i).GetRows())
+	}
+	if rows > math.MaxUint32 {
+		return stats, 0, moerr.NewInvalidInputNoCtxf("object %s has too many rows", item.Name)
+	}
+
+	originSize := uint64(objectio.HeaderSize + objectio.FooterSize + 24)
+	addOriginSize := func(size uint32) error {
+		if originSize > math.MaxUint32-uint64(size) {
+			return moerr.NewInvalidInputNoCtxf("object %s has unsupported origin size", item.Name)
+		}
+		originSize += uint64(size)
+		return nil
+	}
+	if err := addOriginSize(extent.OriginSize()); err != nil {
+		return stats, 0, err
+	}
+	for i := uint32(0); i < dataMeta.BlockCount(); i++ {
+		blockMeta := dataMeta.GetBlockMeta(i)
+		for col := uint16(0); col < blockMeta.GetColumnCount(); col++ {
+			if err := addOriginSize(blockMeta.MustGetColumn(col).Location().OriginSize()); err != nil {
+				return stats, 0, err
+			}
+		}
+	}
+	if err := addOriginSize(dataMeta.BlockHeader().BFExtent().OriginSize()); err != nil {
+		return stats, 0, err
+	}
+	if err := addOriginSize(dataMeta.BlockHeader().ZoneMapArea().OriginSize()); err != nil {
+		return stats, 0, err
+	}
+
+	if !bytes.Equal(manifestStats.Extent(), *extent) ||
+		manifestStats.BlkCnt() != blocks ||
+		manifestStats.Rows() != uint32(rows) ||
+		manifestStats.Size() != uint32(entry.Size) ||
+		manifestStats.OriginSize() != uint32(originSize) {
+		return stats, 0, moerr.NewInvalidInputNoCtxf(
+			"object %s stats do not match physical metadata: extent %s/%s, blocks %d/%d, rows %d/%d, size %d/%d, origin size %d/%d",
+			item.Name, manifestStats.Extent().String(), extent.String(),
+			manifestStats.BlkCnt(), blocks, manifestStats.Rows(), rows,
+			manifestStats.Size(), entry.Size, manifestStats.OriginSize(), originSize,
+		)
+	}
+	sortKey := dataMeta.BlockHeader().SortKey()
+	physicalZoneMap := objectio.EmptyZm[:]
+	if sortKey != math.MaxUint16 {
+		physicalZoneMap = dataMeta.MustGetColumn(sortKey).ZoneMap()
+	}
+	if !bytes.Equal(manifestStats.SortKeyZoneMap(), physicalZoneMap) {
+		return stats, 0, moerr.NewInvalidInputNoCtxf("object %s zone map does not match physical metadata", item.Name)
+	}
+	return manifestStats, blocks, nil
+}
+
+func validatePhysicalTableDumpObjectsImpl(
+	ctx context.Context,
+	fs fileservice.FileService,
+	objects []tableDumpObject,
+	mp *mpool.MPool,
+	totalBlocks *atomic.Uint64,
+) error {
+	for i := range objects {
+		stats, blocks, err := loadPhysicalTableDumpStats(ctx, fs, objects[i], mp)
+		if err != nil {
+			return err
+		}
+		if totalBlocks.Add(uint64(blocks)) > tableDumpMaxBlocks {
+			return moerr.NewInvalidInputNoCtxf("table dump contains more than %d blocks", tableDumpMaxBlocks)
+		}
+		objects[i].Stats = append(objects[i].Stats[:0], stats.Marshal()...)
+	}
+	return nil
+}
+
+var validatePhysicalTableDumpObjects = validatePhysicalTableDumpObjectsImpl
 
 func submitTableDumpObjects(
 	ctx context.Context,
@@ -983,6 +1166,54 @@ type cloneFileProtector interface {
 	ProtectCloneFiles(names ...string)
 }
 
+type loadFileTracker interface {
+	TrackLoadFiles(names ...string)
+}
+
+var lockTableDumpLoadTargets = func(
+	ctx context.Context,
+	ses *Session,
+	refs []tableDumpRelationRef,
+	lockObjectInstall bool,
+) error {
+	proc := ses.GetProc()
+	if proc == nil || proc.GetTxnOperator() == nil {
+		return moerr.NewInternalErrorNoCtx("LOAD TABLE requires an active transaction process")
+	}
+	if !proc.GetTxnOperator().Txn().IsPessimistic() {
+		return moerr.NewNotSupportedNoCtx("LOAD TABLE in optimistic transactions")
+	}
+	ordered := append([]tableDumpRelationRef(nil), refs...)
+	sort.Slice(ordered, func(i, j int) bool {
+		return ordered[i].relation.GetTableID(ctx) < ordered[j].relation.GetTableID(ctx)
+	})
+	eng := ses.GetTxnHandler().GetStorage()
+	var previous uint64
+	for i, ref := range ordered {
+		tableID := ref.relation.GetTableID(ctx)
+		if i != 0 && tableID == previous {
+			continue
+		}
+		previous = tableID
+		primaryKeys, err := ref.relation.GetPrimaryKeys(ctx)
+		if err != nil {
+			return err
+		}
+		if len(primaryKeys) != 1 {
+			return moerr.NewInternalErrorNoCtxf("target relation %s has invalid primary key metadata", ref.relation.GetTableName())
+		}
+		if err = lockop.LockTable(eng, proc, tableID, primaryKeys[0].Type, false); err != nil {
+			return err
+		}
+	}
+	if lockObjectInstall {
+		return lockop.LockTable(
+			eng, proc, tableDumpObjectInstallLockTableID, types.T_varchar.ToType(), false,
+		)
+	}
+	return nil
+}
+
 func handleLoadTable(ctx context.Context, ses *Session, stmt *tree.LoadTable) (err error) {
 	dbName, _, rel, err := getTableForDump(ctx, ses, stmt.Table)
 	if err != nil {
@@ -1017,6 +1248,9 @@ func handleLoadTable(ctx context.Context, ses *Session, stmt *tree.LoadTable) (e
 	if err != nil {
 		return err
 	}
+	if err = validateTableDumpRelations(ctx, targetRefs); err != nil {
+		return err
+	}
 	if len(targetRefs) != len(manifest.Relations) {
 		return moerr.NewInvalidInputNoCtx("target table index topology does not match table dump")
 	}
@@ -1033,9 +1267,24 @@ func handleLoadTable(ctx context.Context, ses *Session, stmt *tree.LoadTable) (e
 	txn := ses.GetTxnHandler().GetTxn()
 	workspace := txn.GetWorkspace()
 	workspace.SetCloneTxn(txn.Txn().SnapshotTS.PhysicalTime)
+	if err = lockTableDumpLoadTargets(ctx, ses, targetRefs, !manifest.MetadataOnly); err != nil {
+		return err
+	}
+	protector, ok := workspace.(cloneFileProtector)
+	if !ok {
+		return moerr.NewNotSupportedNoCtx("LOAD TABLE reusing existing objects with this transaction workspace")
+	}
+	var tracker loadFileTracker
+	if !manifest.MetadataOnly {
+		tracker, ok = workspace.(loadFileTracker)
+		if !ok {
+			return moerr.NewNotSupportedNoCtx("LOAD TABLE installing objects with this transaction workspace")
+		}
+	}
 	sharedObjects := make([]string, 0)
 	seenRelations := make(map[string]struct{}, len(manifest.Relations))
 	seenObjects := make(map[string]struct{})
+	var totalBlocks atomic.Uint64
 	for _, relationDump := range manifest.Relations {
 		key := tableDumpRelationKey(relationDump.Role, relationDump.IndexName, relationDump.IndexAlgoTableType)
 		if _, ok := seenRelations[key]; ok {
@@ -1065,7 +1314,7 @@ func handleLoadTable(ctx context.Context, ses *Session, stmt *tree.LoadTable) (e
 				if item.FixturePath != "" {
 					return moerr.NewInvalidInputNoCtxf("metadata-only object %s contains a fixture path", item.Name)
 				}
-			} else if item.FixturePath != path.Join("objects", item.Name) || item.Size < 0 {
+			} else if item.FixturePath != path.Join("objects", item.Name) || item.Size < 0 || item.SHA256 == "" {
 				return moerr.NewInvalidInputNoCtxf("object %s is missing file metadata", item.Name)
 			}
 			if _, ok := seenObjects[item.Name]; ok {
@@ -1082,18 +1331,22 @@ func handleLoadTable(ctx context.Context, ses *Session, stmt *tree.LoadTable) (e
 			// reference-aware object GC reclaim files left by a failed LOAD.
 			sharedObjects = append(sharedObjects, item.Name)
 		}
+		if len(sharedObjects) != 0 {
+			protector.ProtectCloneFiles(sharedObjects...)
+			sharedObjects = sharedObjects[:0]
+		}
 		if !manifest.MetadataOnly {
-			if err = installTableDumpObjects(ctx, dumpFS, targetFS, relationDump.Objects); err != nil {
+			if err = installTableDumpObjects(ctx, dumpFS, targetFS, relationDump.Objects, func(name string) {
+				tracker.TrackLoadFiles(name)
+			}); err != nil {
 				return err
 			}
 		}
-	}
-	if len(sharedObjects) != 0 {
-		protector, ok := workspace.(cloneFileProtector)
-		if !ok {
-			return moerr.NewNotSupportedNoCtx("LOAD TABLE reusing existing objects with this transaction workspace")
+		if err = validatePhysicalTableDumpObjects(
+			ctx, targetFS, relationDump.Objects, ses.GetMemPool(), &totalBlocks,
+		); err != nil {
+			return err
 		}
-		protector.ProtectCloneFiles(sharedObjects...)
 	}
 	for _, relationDump := range manifest.Relations {
 		key := tableDumpRelationKey(relationDump.Role, relationDump.IndexName, relationDump.IndexAlgoTableType)

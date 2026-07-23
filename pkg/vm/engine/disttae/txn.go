@@ -2605,6 +2605,12 @@ func (txn *Transaction) Rollback(ctx context.Context) error {
 			zap.String("txn", hex.EncodeToString(txn.op.Txn().ID)),
 		)
 	}
+	txn.Lock()
+	if err := txn.deleteLoadFilesLocked(ctx, nil); err != nil {
+		txn.Unlock()
+		return err
+	}
+	txn.Unlock()
 
 	// For CCPR transactions, call OnTxnRollback to clean up the cache and GC objects
 	// Skip normal GCObjsByIdxRange for CCPR transactions because:
@@ -2648,6 +2654,7 @@ func (txn *Transaction) delTransaction() {
 	txn.haveDDL.Store(false)
 	colexec.MustGetServer(txn.engine.service).DeleteTxnSegmentIds(txn.op.Txn().ID)
 	txn.cnObjsSummary = nil
+	txn.loadFiles = nil
 	txn.hasS3Op.Store(false)
 	txn.removed = true
 

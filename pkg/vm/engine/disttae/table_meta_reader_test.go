@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -139,6 +140,50 @@ func TestProtectCloneFilesDistinguishesExistingOwnership(t *testing.T) {
 	txnID := txn.op.Txn().ID
 	require.True(t, txn.engine.cloneTxnCache.IsSharedFile(txnID, stats[0].ObjectName().String()))
 	require.True(t, txn.engine.cloneTxnCache.IsTxnLocalSharedFile(txnID, stats[1].ObjectName().String()))
+}
+
+func TestTrackLoadFilesDeletesOnlyRolledBackGeneration(t *testing.T) {
+	ctx := context.Background()
+	fs := newCleanFS(t)
+	txnOp, closeFn := client.NewTestTxnOperator(ctx)
+	defer closeFn()
+	txn := &Transaction{
+		engine: &Engine{cloneTxnCache: newCloneTxnCache(), fs: fs},
+		op:     txnOp,
+	}
+	txnOp.AddWorkspace(txn)
+	txn.SetCloneTxn(1)
+
+	first := mockStatsList(t, 1)[0].ObjectName().String()
+	second := mockStatsList(t, 1)[0].ObjectName().String()
+	require.NoError(t, writeObjectToFS(ctx, fs, first))
+	require.NoError(t, writeObjectToFS(ctx, fs, second))
+	txn.statementID = 1
+	txn.TrackLoadFiles(first)
+	txn.statementID = 2
+	txn.TrackLoadFiles(second)
+	require.True(t, txn.engine.cloneTxnCache.IsSharedFile(txnOp.Txn().ID, first))
+	require.True(t, txn.engine.cloneTxnCache.IsSharedFile(txnOp.Txn().ID, second))
+
+	txn.Lock()
+	statementID := 2
+	err := txn.deleteLoadFilesLocked(ctx, &statementID)
+	txn.Unlock()
+	require.NoError(t, err)
+	_, err = fs.StatFile(ctx, first)
+	require.NoError(t, err)
+	_, err = fs.StatFile(ctx, second)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound))
+	require.False(t, txn.engine.cloneTxnCache.IsSharedFile(txnOp.Txn().ID, second))
+	require.True(t, txn.engine.cloneTxnCache.IsSharedFile(txnOp.Txn().ID, first))
+
+	txn.Lock()
+	err = txn.deleteLoadFilesLocked(ctx, nil)
+	txn.Unlock()
+	require.NoError(t, err)
+	_, err = fs.StatFile(ctx, first)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound))
+	require.False(t, txn.engine.cloneTxnCache.IsSharedFile(txnOp.Txn().ID, first))
 }
 
 func TestCloneTxnIntermediateGCKeepsTxnLocalSharedObjects(t *testing.T) {

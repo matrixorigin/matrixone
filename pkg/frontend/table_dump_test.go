@@ -16,8 +16,10 @@ package frontend
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
+	"math"
 	"net/url"
 	"path"
 	"strings"
@@ -122,6 +124,26 @@ func (c *testConcurrentTableDumpObjectCopier) StatFile(
 	return c.FileService.StatFile(ctx, filePath)
 }
 
+func (c *testConcurrentTableDumpObjectCopier) Read(ctx context.Context, vector *fileservice.IOVector) error {
+	if c.statRelease == nil {
+		return c.FileService.Read(ctx, vector)
+	}
+	active := c.statActive.Add(1)
+	defer c.statActive.Add(-1)
+	for {
+		maximum := c.statMaximum.Load()
+		if active <= maximum || c.statMaximum.CompareAndSwap(maximum, active) {
+			break
+		}
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-c.statRelease:
+	}
+	return c.FileService.Read(ctx, vector)
+}
+
 func (c *testTableDumpObjectCopier) CopyObject(
 	ctx context.Context,
 	_ fileservice.FileService,
@@ -223,12 +245,20 @@ func TestTableDumpPrivileges(t *testing.T) {
 	require.True(t, allowed)
 
 	loadPriv := determinePrivilegeSetOfStatement(&tree.LoadTable{Table: table})
-	require.Equal(t, objectTypeTable, loadPriv.objType)
+	require.Equal(t, objectTypeNone, loadPriv.objType)
+	require.Equal(t, privilegeKindSpecial, loadPriv.kind)
+	require.Equal(t, specialTagAdmin, loadPriv.special)
 	require.True(t, loadPriv.writeDatabaseAndTableDirectly)
 	require.Equal(t, []string{"tpch"}, loadPriv.writeDatabaseTargets)
-	require.Len(t, loadPriv.entries, 3)
-	require.Equal(t, PrivilegeTypeInsert, loadPriv.entries[0].privilegeId)
-	require.Equal(t, "tpch", loadPriv.entries[0].databaseName)
+	require.Empty(t, loadPriv.entries)
+	load := &tree.LoadTable{Table: table}
+	allowed, _, err = authenticateUserCanExecuteStatementWithObjectTypeNone(context.Background(), ses, load)
+	require.NoError(t, err)
+	require.True(t, allowed)
+	ses.GetTenantInfo().SetDefaultRole("readonly")
+	allowed, _, err = authenticateUserCanExecuteStatementWithObjectTypeNone(context.Background(), ses, load)
+	require.NoError(t, err)
+	require.False(t, allowed)
 }
 
 func TestExecInFrontendRoutesTableDumpAndLoad(t *testing.T) {
@@ -279,6 +309,19 @@ func TestGetTableDumpRelations(t *testing.T) {
 	require.NotEmpty(t, refs[0].SchemaHash)
 	require.NotEmpty(t, refs[1].SchemaHash)
 	require.Equal(t, tableDumpRelationKey("index", "idx", "regular"), "index\x00idx\x00regular")
+}
+
+func TestValidateTableDumpRelationsRejectsHiddenAutoIncrement(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	rel := mock_frontend.NewMockRelation(ctrl)
+	rel.EXPECT().GetTableDef(gomock.Any()).Return(&plan.TableDef{
+		Name: "__fulltext", Cols: []*plan.ColDef{{
+			Name: catalog.FakePrimaryKeyColName,
+			Typ:  plan.Type{Id: int32(types.T_uint64), AutoIncr: true},
+		}},
+	})
+	err := validateTableDumpRelations(context.Background(), []tableDumpRelationRef{{relation: rel}})
+	require.ErrorContains(t, err, "auto-increment")
 }
 
 func TestGetTableForDumpErrors(t *testing.T) {
@@ -365,6 +408,78 @@ func newTableDumpTestObject(t *testing.T, tombstone bool) tableDumpObject {
 	}
 }
 
+func writePhysicalTableDumpTestObject(
+	t *testing.T,
+	fs fileservice.FileService,
+) tableDumpObject {
+	t.Helper()
+	ctx := context.Background()
+	id := objectio.NewObjectid()
+	objectName := objectio.BuildObjectNameWithObjectID(&id)
+	name := objectName.String()
+	mp := mpool.MustNewZero()
+	bat := batch.NewWithSize(1)
+	bat.SetAttributes([]string{"a"})
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(42), false, mp))
+	bat.SetRowCount(1)
+	defer bat.Clean(mp)
+
+	writer, err := objectio.NewObjectWriter(objectName, fs, 0, nil, nil)
+	require.NoError(t, err)
+	_, err = writer.Write(bat)
+	require.NoError(t, err)
+	writer.WriteObjectMeta(ctx, 1, nil)
+	_, err = writer.WriteEnd(ctx)
+	require.NoError(t, err)
+	stats := writer.GetObjectStats()
+	size, hash, err := hashTableDumpFile(ctx, fs, name)
+	require.NoError(t, err)
+	return tableDumpObject{
+		Name: name, Stats: append([]byte(nil), stats.Marshal()...), Size: size, SHA256: hash,
+	}
+}
+
+func TestLoadPhysicalTableDumpStatsRejectsManifestForgery(t *testing.T) {
+	ctx := context.Background()
+	fs, err := fileservice.NewLocalETLFS("objects", t.TempDir())
+	require.NoError(t, err)
+	item := writePhysicalTableDumpTestObject(t, fs)
+
+	stats, blocks, err := loadPhysicalTableDumpStats(ctx, fs, item, mpool.MustNewZero())
+	require.NoError(t, err)
+	require.Equal(t, uint32(1), blocks)
+	require.Equal(t, objectio.ObjectStats(item.Stats), stats)
+	tombstoneItem := item
+	tombstoneItem.Tombstone = true
+	_, _, err = loadPhysicalTableDumpStats(ctx, fs, tombstoneItem, mpool.MustNewZero())
+	require.NoError(t, err)
+
+	forged := item
+	forged.Stats = append([]byte(nil), item.Stats...)
+	forgedStats := objectio.ObjectStats(forged.Stats)
+	require.NoError(t, objectio.SetObjectStatsBlkCnt(&forgedStats, math.MaxUint16))
+	forged.Stats = append(forged.Stats[:0], forgedStats.Marshal()...)
+	_, _, err = loadPhysicalTableDumpStats(ctx, fs, forged, mpool.MustNewZero())
+	require.ErrorContains(t, err, "do not match physical metadata")
+
+	objects := []tableDumpObject{item}
+	var total atomic.Uint64
+	total.Store(tableDumpMaxBlocks)
+	err = validatePhysicalTableDumpObjectsImpl(ctx, fs, objects, mpool.MustNewZero(), &total)
+	require.ErrorContains(t, err, "more than 1000000 blocks")
+
+	header := objectio.BuildHeader()
+	header.SetExtent(objectio.NewExtent(0, objectio.HeaderSize, tableDumpMaxObjectMeta+1, tableDumpMaxObjectMeta+1))
+	badItem := newTableDumpTestObject(t, false)
+	require.NoError(t, fs.Write(ctx, fileservice.IOVector{
+		FilePath: badItem.Name,
+		Entries:  []fileservice.IOEntry{{Offset: 0, Size: int64(len(header)), Data: header}},
+	}))
+	_, _, err = loadPhysicalTableDumpStats(ctx, fs, badItem, mpool.MustNewZero())
+	require.ErrorContains(t, err, "invalid metadata extent")
+}
+
 func TestSubmitTableDumpObjects(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	rel := mock_frontend.NewMockRelation(ctrl)
@@ -418,6 +533,7 @@ func TestHandleLoadTable(t *testing.T) {
 	rel := mock_frontend.NewMockRelation(ctrl)
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
 	workspace := newTestWorkspace()
+	var targetsLocked atomic.Bool
 	ses.txnHandler.storage = eng
 	ses.txnHandler.txnOp = txnOp
 	eng.EXPECT().Database(gomock.Any(), "tpch", txnOp).Return(db, nil).Times(2)
@@ -432,7 +548,10 @@ func TestHandleLoadTable(t *testing.T) {
 	}
 	rel.EXPECT().GetTableDef(gomock.Any()).Return(def).AnyTimes()
 	rel.EXPECT().GetTableName().Return("orders")
-	rel.EXPECT().Rows(gomock.Any()).Return(uint64(0), nil)
+	rel.EXPECT().Rows(gomock.Any()).DoAndReturn(func(context.Context) (uint64, error) {
+		require.True(t, targetsLocked.Load())
+		return 0, nil
+	})
 	rel.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil)
 	txnOp.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
 	txnOp.EXPECT().GetWorkspace().Return(workspace).AnyTimes()
@@ -440,6 +559,7 @@ func TestHandleLoadTable(t *testing.T) {
 	object := newTableDumpTestObject(t, false)
 	content := []byte("immutable object fixture")
 	object.Size = int64(len(content))
+	object.SHA256 = fmt.Sprintf("%x", sha256.Sum256(content))
 	object.FixturePath = path.Join("objects", object.Name)
 	dumpRoot := t.TempDir()
 	dumpFS, err := fileservice.NewLocalETLFS("dump", dumpRoot)
@@ -466,11 +586,25 @@ func TestHandleLoadTable(t *testing.T) {
 		return targetFS, nil
 	})
 	defer stub.Reset()
+	lockStub := gostub.Stub(&lockTableDumpLoadTargets, func(_ context.Context, _ *Session, refs []tableDumpRelationRef, install bool) error {
+		require.Len(t, refs, 1)
+		require.True(t, install)
+		targetsLocked.Store(true)
+		return nil
+	})
+	defer lockStub.Reset()
+	physicalStub := gostub.Stub(&validatePhysicalTableDumpObjects, func(
+		context.Context, fileservice.FileService, []tableDumpObject, *mpool.MPool, *atomic.Uint64,
+	) error {
+		return nil
+	})
+	defer physicalStub.Reset()
 
 	stmt := &tree.LoadTable{Table: tree.NewTableName("orders", tree.ObjectNamePrefix{}, nil), Path: dumpRoot}
 	require.NoError(t, handleLoadTable(context.Background(), ses, stmt))
 	require.Equal(t, []string{object.Name}, workspace.protectedCloneFiles)
-	require.NoError(t, verifyTableDumpObject(context.Background(), targetFS, object.Name, object.Size, ""))
+	require.Equal(t, []string{object.Name}, workspace.trackedLoadFiles)
+	require.NoError(t, verifyTableDumpObject(context.Background(), targetFS, object.Name, object.Size, object.SHA256))
 }
 
 func TestHandleDumpTable(t *testing.T) {
@@ -649,22 +783,28 @@ func TestTableDumpManifestAndCopy(t *testing.T) {
 	read, err := readTableDumpManifest(ctx, fixture)
 	require.NoError(t, err)
 	require.Equal(t, manifest.Relations, read.Relations)
-	err = installTableDumpObject(ctx, fixture, dst, read.Relations[0].Objects[0])
+	created, err := installTableDumpObject(ctx, fixture, dst, read.Relations[0].Objects[0])
 	require.NoError(t, err)
+	require.True(t, created)
 	require.NoError(t, verifyTableDumpObject(ctx, dst, "obj", size, hash))
+	created, err = installTableDumpObject(ctx, fixture, dst, read.Relations[0].Objects[0])
+	require.NoError(t, err)
+	require.False(t, created)
 
 	serverSideDst, err := fileservice.NewLocalETLFS("server-side-dst", t.TempDir())
 	require.NoError(t, err)
 	serverSideCopier := &testTableDumpObjectCopier{FileService: serverSideDst, data: content}
-	err = installTableDumpObject(ctx, fixture, serverSideCopier, read.Relations[0].Objects[0])
+	created, err = installTableDumpObject(ctx, fixture, serverSideCopier, read.Relations[0].Objects[0])
 	require.NoError(t, err)
+	require.True(t, created)
 	require.NoError(t, verifyTableDumpObject(ctx, serverSideCopier, "obj", size, hash))
 
 	badDst, err := fileservice.NewLocalETLFS("bad-dst", t.TempDir())
 	require.NoError(t, err)
 	badCopier := &testTableDumpObjectCopier{FileService: badDst, data: []byte("corrupt object byte")}
-	err = installTableDumpObject(ctx, fixture, badCopier, read.Relations[0].Objects[0])
+	created, err = installTableDumpObject(ctx, fixture, badCopier, read.Relations[0].Objects[0])
 	require.Error(t, err)
+	require.True(t, created)
 	_, err = badDst.StatFile(ctx, "obj")
 	require.NoError(t, err)
 }
@@ -736,7 +876,7 @@ func TestCopyTableDumpFilePrefersObjectCopier(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, copier.copied)
 	require.Equal(t, int64(len(content)), size)
-	require.Empty(t, hash)
+	require.Equal(t, fmt.Sprintf("%x", sha256.Sum256(content)), hash)
 	require.NoError(t, verifyTableDumpObject(ctx, copier, "objects/obj", size, hash))
 }
 
@@ -813,7 +953,7 @@ func TestCopyTableDumpObjectsUsesBoundedConcurrency(t *testing.T) {
 	require.Equal(t, int32(fileservice.DefaultObjectCopyConcurrency), copier.maximum.Load())
 	for i := range objects {
 		require.Equal(t, int64(len(content)), objects[i].Size)
-		require.Empty(t, objects[i].SHA256)
+		require.Equal(t, fmt.Sprintf("%x", sha256.Sum256(content)), objects[i].SHA256)
 	}
 }
 
@@ -867,6 +1007,7 @@ func TestCopyTableDumpObjectsValidatesWithBoundedConcurrency(t *testing.T) {
 	require.Equal(t, int32(fileservice.DefaultObjectCopyConcurrency), copier.statMaximum.Load())
 	for i := range objects {
 		require.Equal(t, int64(len(content)), objects[i].Size)
+		require.Equal(t, fmt.Sprintf("%x", sha256.Sum256(content)), objects[i].SHA256)
 	}
 }
 
@@ -899,8 +1040,11 @@ func TestInstallTableDumpObjectsUsesBoundedConcurrency(t *testing.T) {
 		}
 	}()
 	resultCh := make(chan error, 1)
+	var tracked atomic.Int32
 	go func() {
-		resultCh <- installTableDumpObjects(ctx, fixture, copier, objects)
+		resultCh <- installTableDumpObjects(ctx, fixture, copier, objects, func(string) {
+			tracked.Add(1)
+		})
 	}()
 	require.Eventually(t, func() bool {
 		return copier.maximum.Load() == fileservice.DefaultObjectCopyConcurrency
@@ -909,6 +1053,7 @@ func TestInstallTableDumpObjectsUsesBoundedConcurrency(t *testing.T) {
 	released = true
 	require.NoError(t, <-resultCh)
 	require.Equal(t, int32(fileservice.DefaultObjectCopyConcurrency), copier.maximum.Load())
+	require.Equal(t, int32(len(objects)), tracked.Load())
 	for i := range objects {
 		require.NoError(t, verifyTableDumpObject(ctx, copier, objects[i].Name, objects[i].Size, ""))
 	}
@@ -938,14 +1083,18 @@ func TestInstallTableDumpObjectsCancelsWorkers(t *testing.T) {
 		release:     make(chan struct{}),
 	}
 	resultCh := make(chan error, 1)
+	var tracked atomic.Int32
 	go func() {
-		resultCh <- installTableDumpObjects(ctx, fixture, copier, objects)
+		resultCh <- installTableDumpObjects(ctx, fixture, copier, objects, func(string) {
+			tracked.Add(1)
+		})
 	}()
 	require.Eventually(t, func() bool {
 		return copier.maximum.Load() == fileservice.DefaultObjectCopyConcurrency
 	}, 5*time.Second, 10*time.Millisecond)
 	cancel()
 	require.ErrorIs(t, <-resultCh, context.Canceled)
+	require.Positive(t, tracked.Load(), "ambiguous partial copies must be tracked for rollback")
 }
 
 func TestTableSchemaHashIgnoresIdentity(t *testing.T) {

@@ -447,6 +447,7 @@ type Transaction struct {
 
 	haveDDL             atomic.Bool
 	isCloneTxn          bool
+	loadFiles           map[int]map[string]struct{}
 	isCCPRTxn           bool
 	ccprTaskID          string
 	syncProtectionJobID string
@@ -483,6 +484,65 @@ func (txn *Transaction) ProtectCloneFiles(names ...string) {
 			txn.engine.cloneTxnCache.AddSharedFile(txnID, name)
 		}
 	}
+}
+
+// TrackLoadFiles records object files physically created by LOAD TABLE. They
+// are protected from the generic clone GC and synchronously removed by the
+// statement/transaction rollback path while LOAD's global install lock is
+// still held. This avoids both orphaning partial installs and deleting an
+// object that a concurrent LOAD has begun to reuse.
+func (txn *Transaction) TrackLoadFiles(names ...string) {
+	txn.Lock()
+	defer txn.Unlock()
+	if txn.loadFiles == nil {
+		txn.loadFiles = make(map[int]map[string]struct{})
+	}
+	files := txn.loadFiles[txn.statementID]
+	if files == nil {
+		files = make(map[string]struct{})
+		txn.loadFiles[txn.statementID] = files
+	}
+	txnID := txn.op.Txn().ID
+	for _, name := range names {
+		files[name] = struct{}{}
+		txn.engine.cloneTxnCache.AddSharedFile(txnID, name)
+	}
+}
+
+func (txn *Transaction) deleteLoadFilesLocked(ctx context.Context, statementID *int) error {
+	if len(txn.loadFiles) == 0 {
+		return nil
+	}
+	names := make([]string, 0)
+	for id, files := range txn.loadFiles {
+		if statementID != nil && id != *statementID {
+			continue
+		}
+		for name := range files {
+			names = append(names, name)
+		}
+	}
+	slices.Sort(names)
+	// Rollback commonly runs after its request context has been canceled. Keep
+	// cleanup independent from that cancellation, but bounded so a failed file
+	// service cannot hold transaction locks forever.
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
+	defer cancel()
+	for start := 0; start < len(names); start += GCBatchOfFileCount {
+		end := min(start+GCBatchOfFileCount, len(names))
+		if err := txn.engine.fs.Delete(cleanupCtx, names[start:end]...); err != nil {
+			return err
+		}
+		for _, name := range names[start:end] {
+			txn.engine.cloneTxnCache.RemoveSharedFile(txn.op.Txn().ID, name)
+		}
+	}
+	if statementID == nil {
+		clear(txn.loadFiles)
+	} else {
+		delete(txn.loadFiles, *statementID)
+	}
+	return nil
 }
 
 // SetCCPRTxn marks this transaction as a CCPR transaction.
@@ -1050,6 +1110,9 @@ func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
 	defer txn.Unlock()
 
 	beforeEntries = len(txn.writes)
+	if err := txn.deleteLoadFilesLocked(ctx, &txn.statementID); err != nil {
+		return err
+	}
 
 	txn.rollbackCount++
 	if txn.statementID > 0 {
@@ -1356,6 +1419,16 @@ func (ctc CloneTxnCache) AddSharedFile(txnId []byte, name string) {
 	}
 
 	item.sharedFiles.Set(name)
+	ctc.items.Set(item)
+}
+
+func (ctc CloneTxnCache) RemoveSharedFile(txnId []byte, name string) {
+	item, exist := ctc.items.Get(cloneTxnItem{txnID: txnId})
+	if !exist {
+		return
+	}
+
+	item.sharedFiles.Delete(name)
 	ctc.items.Set(item)
 }
 
