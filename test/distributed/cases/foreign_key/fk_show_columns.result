@@ -170,6 +170,7 @@ dat_name  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 variable_name  ¦  VARCHAR(300)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 variable_value  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 system_variables  ¦  BOOL(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
+query_workload_policy_account_id  ¦  INT(32)  ¦  YES  ¦  UNI  ¦  null  ¦  STORED GENERATED  ¦
 desc	mo_catalog.mo_increment_columns       ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 table_id  ¦  BIGINT UNSIGNED(64)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
@@ -491,6 +492,7 @@ dat_name  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 variable_name  ¦  VARCHAR(300)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 variable_value  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 system_variables  ¦  BOOL(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
+query_workload_policy_account_id  ¦  INT(32)  ¦  YES  ¦  UNI  ¦  null  ¦  STORED GENERATED  ¦
 show columns from	mo_catalog.mo_increment_columns       ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 table_id  ¦  BIGINT UNSIGNED(64)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
@@ -803,6 +805,7 @@ dat_name  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 variable_name  ¦  VARCHAR(300)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 variable_value  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 system_variables  ¦  BOOL(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
+query_workload_policy_account_id  ¦  INT(32)  ¦  YES  ¦  UNI  ¦  null  ¦  STORED GENERATED  ¦
 desc	mo_catalog.mo_increment_columns       ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 table_id  ¦  BIGINT UNSIGNED(64)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
@@ -1102,6 +1105,7 @@ dat_name  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 variable_name  ¦  VARCHAR(300)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 variable_value  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 system_variables  ¦  BOOL(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
+query_workload_policy_account_id  ¦  INT(32)  ¦  YES  ¦  UNI  ¦  null  ¦  STORED GENERATED  ¦
 show columns from	mo_catalog.mo_increment_columns       ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 table_id  ¦  BIGINT UNSIGNED(64)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀

@@ -1806,6 +1806,7 @@ func (ses *Session) getGlobalSysVars(ctx context.Context, bh BackgroundExec) (gS
 		gSysVars[name] = sysVar.Default
 	}
 
+	workloadPolicySeen := false
 	for _, execResult := range execResults {
 		for i := uint64(0); i < execResult.GetRowCount(); i++ {
 			var varName, varValue string
@@ -1814,6 +1815,16 @@ func (ses *Session) getGlobalSysVars(ctx context.Context, bh BackgroundExec) (gS
 			}
 			if varValue, err = execResult.GetString(tenantCtx, i, 1); err != nil {
 				return
+			}
+
+			if strings.EqualFold(varName, queryWorkloadPolicy) {
+				if workloadPolicySeen {
+					return nil, moerr.NewInternalError(
+						ctx,
+						"query workload policy catalog contains duplicate account rows",
+					)
+				}
+				workloadPolicySeen = true
 			}
 
 			// overwrite with the values from table `mo_mysql_compatibility`

@@ -21,6 +21,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/merge"
 )
 
+const (
+	MoMysqlCompatWorkloadPolicyAccountColumn = "query_workload_policy_account_id"
+	MoMysqlCompatWorkloadPolicyUniqueIndex   = "uk_query_workload_policy_account"
+	MoMysqlCompatWorkloadPolicyExpression    = "case when system_variables = true and variable_name = 'query_workload_policy' then account_id else null end"
+)
+
 var (
 	// the sqls creating many tables for the tenant.
 	// Wrap them in a transaction
@@ -125,7 +131,9 @@ var (
 				variable_name  varchar(300),
 				variable_value varchar(5000),
 				system_variables bool,
-				primary key(configuration_id)
+				` + MoMysqlCompatWorkloadPolicyAccountColumn + ` int generated always as (` + MoMysqlCompatWorkloadPolicyExpression + `) stored,
+				primary key(configuration_id),
+				unique key ` + MoMysqlCompatWorkloadPolicyUniqueIndex + ` (` + MoMysqlCompatWorkloadPolicyAccountColumn + `)
 			)`
 
 	MoCatalogMoSnapshotsDDL = fmt.Sprintf(`CREATE TABLE %s.%s (

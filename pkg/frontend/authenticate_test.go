@@ -9792,7 +9792,7 @@ func TestSetGlobalQueryWorkloadPolicyPersistsQuotedJSON(t *testing.T) {
 
 	raw := `{"version":1,"policies":{"ap":{"pool":"O'Reilly\\pool","labels":{"role":"ap"},"current_cn":"excluded"}}}`
 	lookup := getSqlForGetSysVarWithAccount(sysAccountID, queryWorkloadPolicy)
-	insert := getSqlForInsertSysVarWithAccount(
+	upsert := getSqlForUpsertSysVarWithAccount(
 		sysAccountID,
 		sysAccountName,
 		queryWorkloadPolicy,
@@ -9801,35 +9801,22 @@ func TestSetGlobalQueryWorkloadPolicyPersistsQuotedJSON(t *testing.T) {
 	bh.sql2result["begin;"] = nil
 	bh.sql2result["commit;"] = nil
 	bh.sql2result["rollback;"] = nil
-	bh.sql2result[lookup] = newMrsForSystemVariableNameOfAccount(nil)
-	bh.sql2result[insert] = nil
+	bh.sql2result[upsert] = nil
 
 	// The generated SQL must remain one parseable statement even when the JSON
 	// contains both double quotes, an apostrophe, and a backslash.
-	parsed, err := mysqlparser.Parse(context.Background(), insert, 1)
+	parsed, err := mysqlparser.Parse(context.Background(), upsert, 1)
 	require.NoError(t, err)
 	require.Len(t, parsed, 1)
 	parsed, err = mysqlparser.ParseWithSQLMode(
 		context.Background(),
-		insert,
+		upsert,
 		1,
 		"NO_BACKSLASH_ESCAPES",
 	)
 	require.NoError(t, err)
 	require.Len(t, parsed, 1)
-	require.NotContains(t, insert, raw)
-	update := getSqlForUpdateSysVarValue(raw, sysAccountID, queryWorkloadPolicy)
-	parsed, err = mysqlparser.Parse(context.Background(), update, 1)
-	require.NoError(t, err)
-	require.Len(t, parsed, 1)
-	parsed, err = mysqlparser.ParseWithSQLMode(
-		context.Background(),
-		update,
-		1,
-		"NO_BACKSLASH_ESCAPES",
-	)
-	require.NoError(t, err)
-	require.Len(t, parsed, 1)
+	require.NotContains(t, upsert, raw)
 
 	ses := newSes(nil, ctrl)
 	ses.gSysVars.Set(queryWorkloadPolicy, "")
@@ -9839,6 +9826,110 @@ func TestSetGlobalQueryWorkloadPolicyPersistsQuotedJSON(t *testing.T) {
 		raw,
 	))
 	require.Equal(t, raw, ses.gSysVars.Get(queryWorkloadPolicy))
+	require.Contains(t, bh.executedSQLs, upsert)
+	require.NotContains(t, bh.executedSQLs, lookup)
+	require.NotContains(
+		t,
+		bh.executedSQLs,
+		getSqlForUpdateSysVarValue(raw, sysAccountID, queryWorkloadPolicy),
+	)
+}
+
+func TestSetGlobalQueryWorkloadPolicyFailureRollsBackWithoutUpdatingCache(t *testing.T) {
+	oldRaw := `{"version":1,"policies":{"ap":{"pool":"old","labels":{"role":"ap"}}}}`
+	newRaw := `{"version":1,"policies":{"ap":{"pool":"new","labels":{"role":"ap"}}}}`
+	upsert := getSqlForUpsertSysVarWithAccount(
+		sysAccountID,
+		sysAccountName,
+		queryWorkloadPolicy,
+		newRaw,
+	)
+
+	for _, tc := range []struct {
+		name    string
+		failSQL string
+	}{
+		{name: "upsert", failSQL: upsert},
+		{name: "commit", failSQL: "commit;"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			bh := &backgroundExecTest{}
+			bh.init()
+			bh.sql2err[tc.failSQL] = moerr.NewInternalErrorNoCtx("injected failure")
+			stub := gostub.StubFunc(&NewBackgroundExec, bh)
+			defer stub.Reset()
+
+			ses := newSes(nil, ctrl)
+			ses.gSysVars.Set(queryWorkloadPolicy, oldRaw)
+			err := ses.SetGlobalSysVar(
+				context.Background(),
+				queryWorkloadPolicy,
+				newRaw,
+			)
+			require.ErrorContains(t, err, "injected failure")
+			require.Equal(t, oldRaw, ses.gSysVars.Get(queryWorkloadPolicy))
+			require.Contains(t, bh.executedSQLs, "rollback;")
+		})
+	}
+}
+
+func TestWorkloadPolicyCatalogDDLHasAccountScopedUniqueKey(t *testing.T) {
+	parsed, err := mysqlparser.Parse(
+		context.Background(),
+		MoCatalogMoMysqlCompatibilityModeDDL,
+		1,
+	)
+	require.NoError(t, err)
+	require.Len(t, parsed, 1)
+	require.Contains(
+		t,
+		MoCatalogMoMysqlCompatibilityModeDDL,
+		MoMysqlCompatWorkloadPolicyExpression,
+	)
+	require.Contains(
+		t,
+		MoCatalogMoMysqlCompatibilityModeDDL,
+		"unique key "+MoMysqlCompatWorkloadPolicyUniqueIndex+
+			" ("+MoMysqlCompatWorkloadPolicyAccountColumn+")",
+	)
+}
+
+func TestInitialGlobalSysVarLoadRejectsDuplicateWorkloadPolicies(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	bh := &backgroundExecTest{}
+	bh.init()
+	sql := getSqlForGetSystemVariablesWithAccount(sysAccountID)
+	mrs := &MysqlResultSet{}
+	nameColumn := &MysqlColumn{}
+	nameColumn.SetName("variable_name")
+	nameColumn.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	mrs.AddColumn(nameColumn)
+	valueColumn := &MysqlColumn{}
+	valueColumn.SetName("variable_value")
+	valueColumn.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	mrs.AddColumn(valueColumn)
+	mrs.AddRow([]interface{}{
+		queryWorkloadPolicy,
+		`{"version":1,"policies":{"ap":{"pool":"first"}}}`,
+	})
+	mrs.AddRow([]interface{}{
+		strings.ToUpper(queryWorkloadPolicy),
+		`{"version":1,"policies":{"ap":{"pool":"second"}}}`,
+	})
+	bh.sql2result[sql] = mrs
+
+	ses := newSes(nil, ctrl)
+	_, err := ses.getGlobalSysVars(context.Background(), bh)
+	require.ErrorContains(
+		t,
+		err,
+		"query workload policy catalog contains duplicate account rows",
+	)
 }
 
 func TestQueryWorkloadPolicyCatalogRevalidationFailsClosedAndRecovers(t *testing.T) {

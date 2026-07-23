@@ -1602,6 +1602,8 @@ const (
 
 	insertSystemVariableWithAccountFormat = `insert into mo_catalog.mo_mysql_compatibility_mode(account_id, account_name, variable_name, variable_value, system_variables) values (%d, %s, %s, %s, %v);`
 
+	upsertSystemVariableWithAccountFormat = `insert into mo_catalog.mo_mysql_compatibility_mode(account_id, account_name, variable_name, variable_value, system_variables) values (%d, %s, %s, %s, %v) on duplicate key update account_name = values(account_name), variable_value = values(variable_value), system_variables = values(system_variables);`
+
 	updateSystemVariableValueFormat = `update mo_catalog.mo_mysql_compatibility_mode set variable_value = %s where account_id = %d and variable_name = %s and system_variables = true;`
 
 	updateConfigurationByDbNameAndAccountNameFormat = `update mo_catalog.mo_mysql_compatibility_mode set variable_value = '%s' where account_name = '%s' and dat_name = '%s' and variable_name = '%s';`
@@ -2310,6 +2312,17 @@ func getSqlForGetSysVarValueWithAccount(accountID uint64, varName string) string
 func getSqlForInsertSysVarWithAccount(accountId uint64, accountName string, varName string, varValue string) string {
 	return fmt.Sprintf(
 		insertSystemVariableWithAccountFormat,
+		accountId,
+		sqlStringValueExpression(accountName),
+		sqlStringValueExpression(varName),
+		sqlStringValueExpression(varValue),
+		true,
+	)
+}
+
+func getSqlForUpsertSysVarWithAccount(accountId uint64, accountName string, varName string, varValue string) string {
+	return fmt.Sprintf(
+		upsertSystemVariableWithAccountFormat,
 		accountId,
 		sqlStringValueExpression(accountName),
 		sqlStringValueExpression(varName),
@@ -11868,6 +11881,19 @@ func doSetGlobalSystemVariable(ctx context.Context, ses *Session, varName string
 	defer func() {
 		err = finishTxn(ctx, bh, err)
 	}()
+
+	// The policy row has an account-scoped unique generated key in
+	// mo_mysql_compatibility_mode. A single upsert is the cross-CN
+	// linearization point: concurrent first SETs cannot both create rows.
+	if varName == queryWorkloadPolicy {
+		err = bh.Exec(ctx, getSqlForUpsertSysVarWithAccount(
+			accountId,
+			accountName,
+			varName,
+			getVariableValue(varValue),
+		))
+		return
+	}
 
 	// check if var exists
 	sql := getSqlForGetSysVarWithAccount(accountId, varName)
