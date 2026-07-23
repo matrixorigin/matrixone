@@ -1828,6 +1828,8 @@ func createPrepareStmt(
 		PrepareStmt:         saveStmt,
 		NativeMode:          ses.sqlModeHasMatrixOneNative(),
 		remapDb:             maps.Clone(execCtx.remapDb),
+		defaultDatabase:     ses.GetTxnCompileCtx().GetDatabase(),
+		tempTableVersion:    ses.GetTempTableVersion(),
 		getFromSendLongData: make(map[int]struct{}),
 		schedulingSQLMode:   schedulingSQLMode,
 	}

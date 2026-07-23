@@ -573,7 +573,8 @@ func initExecuteStmtParam(execCtx *ExecCtx, ses *Session, cwft *TxnComputationWr
 	eng := ses.proc.Base.SessionInfo.StorageEngine
 	catalogCache := eng.(*disttae.Engine).GetLatestCatalogCache()
 
-	var change bool
+	currentTempTableVersion := ses.GetTempTableVersion()
+	change := prepareStmt.tempTableVersion != currentTempTableVersion
 	for _, obj := range preparePlan.GetSchemas() {
 		accountId := ses.GetAccountId()
 		if ShouldSwitchToSysAccount(obj.SchemaName, obj.ObjName) {
@@ -588,31 +589,50 @@ func initExecuteStmtParam(execCtx *ExecCtx, ses *Session, cwft *TxnComputationWr
 			Ts:         prepareStmt.Ts,
 		}
 
-		change = CheckTableDefChange(catalogCache, tblKey)
-		if change {
+		if CheckTableDefChange(catalogCache, tblKey) {
+			change = true
 			break
 		}
 	}
 
 	modeMismatch := prepareStmt.NativeMode != currentNativeMode
 
-	// rebuild plan when schema changed or the session's compatibility mode changed
+	// Rebuild the plan when catalog schema, session temporary-table name
+	// resolution, or the session's compatibility mode changed.
 	if change || modeMismatch {
 		originPrepareStmt := &tree.PrepareStmt{
 			Name: tree.Identifier(prepareStmt.Name),
 			Stmt: prepareStmt.PrepareStmt,
 		}
-		newPlan, err := buildPlan(reqCtx, ses, ses.GetTxnCompileCtx(), originPrepareStmt)
+		compilerCtx := ses.GetTxnCompileCtx()
+		newPlan, err := func() (*plan.Plan, error) {
+			currentDatabase := compilerCtx.GetDatabase()
+			compilerCtx.SetDatabase(prepareStmt.defaultDatabase)
+			defer compilerCtx.SetDatabase(currentDatabase)
+			return buildPlan(reqCtx, ses, compilerCtx, originPrepareStmt)
+		}()
 		if err != nil {
 			return nil, nil, nil, "", err
 		}
-		preparePlan = newPlan.GetDcl().GetPrepare()
+		newPreparePlan := newPlan.GetDcl().GetPrepare()
+		columns := plan2.GetResultColumnsFromPlan(newPreparePlan.Plan)
+		newColDefData, err := execCtx.resper.MysqlRrWr().MakeColumnDefData(reqCtx, columns)
+		if err != nil {
+			return nil, nil, nil, "", err
+		}
+
+		preparePlan = newPreparePlan
 		prepareStmt.PreparePlan = newPlan
+		prepareStmt.ColDefData = newColDefData
+		if execCtx.input != nil && execCtx.input.isBinaryProtExecute {
+			execCtx.prepareColDef = newColDefData
+		}
 		prepareStmt.NativeMode = currentNativeMode
 		prepareStmt.Ts = timestamp.Timestamp{PhysicalTime: time.Now().Unix()}
+		prepareStmt.tempTableVersion = currentTempTableVersion
 	}
 
-	// Recreate the cached compile when schema or compatibility-mode changes.
+	// Recreate the cached compile only when a plan dependency changed.
 	// Otherwise the cached compile is reused as-is: Compile.Reset clears
 	// the per-execution state, including the pipeline edges' terminal state
 	// (see Scope.resetForReuse), so reuse is safe and avoids the
