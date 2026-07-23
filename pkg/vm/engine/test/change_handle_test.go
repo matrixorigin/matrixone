@@ -2459,30 +2459,26 @@ func TestISCPExecutor4(t *testing.T) {
 		assert.NoError(t, txn.Commit(ctxWithTimeout))
 	}
 
-	appendFn := func(idx int) {
+	appendFn := func(idx int) types.TS {
 		_, rel, txn, err := disttaeEngine.GetTable(ctxWithTimeout, "srcdb", "src_table")
-		require.Nil(t, err)
+		require.NoError(t, err)
 
 		err = rel.Write(ctxWithTimeout, containers.ToCNBatch(bats[idx]))
-		require.Nil(t, err)
+		require.NoError(t, err)
 
-		txn.Commit(ctxWithTimeout)
+		require.NoError(t, txn.Commit(ctxWithTimeout))
+		return types.TimestampToTS(txn.Txn().CommitTS)
 	}
 
-	checkWaterMarkFn := func(indexName string, waitTime int, expectResult bool) {
-		now := taeHandler.GetDB().TxnMgr.Now()
-		testutils.WaitExpect(
-			waitTime,
-			func() bool {
-				ts, _ := cdcExecutor.GetWatermark(accountId, tableID, indexName)
-				return ts.GE(&now)
-			},
-		)
-		ts, _ := cdcExecutor.GetWatermark(accountId, tableID, indexName)
+	checkWaterMarkFn := func(indexName string, target types.TS, expectResult bool) {
+		reached := func() bool {
+			ts, ok := cdcExecutor.GetWatermark(accountId, tableID, indexName)
+			return ok && ts.GE(&target)
+		}
 		if expectResult {
-			assert.True(t, ts.GE(&now), indexName)
+			require.Eventually(t, reached, 10*time.Second, 10*time.Millisecond, indexName)
 		} else {
-			assert.False(t, ts.GE(&now), indexName)
+			require.Never(t, reached, 100*time.Millisecond, 10*time.Millisecond, indexName)
 		}
 	}
 
@@ -2495,51 +2491,51 @@ func TestISCPExecutor4(t *testing.T) {
 	appendFn(1)
 
 	// insertAsyncIndexIterations failed
-	appendFn(2)
+	target := appendFn(2)
 	for i := 0; i < indexCount; i++ {
-		checkWaterMarkFn(fmt.Sprintf("hnsw_idx_%d", i), 4000, true)
+		checkWaterMarkFn(fmt.Sprintf("hnsw_idx_%d", i), target, true)
 	}
 
 	// collectChanges failed
 	rmFn, err := objectio.InjectCDCExecutor("collectChanges")
 	assert.NoError(t, err)
-	appendFn(3)
-	checkWaterMarkFn("hnsw_idx_0", 100, false)
+	target = appendFn(3)
+	checkWaterMarkFn("hnsw_idx_0", target, false)
 	rmFn()
 	for i := 0; i < indexCount; i++ {
-		checkWaterMarkFn(fmt.Sprintf("hnsw_idx_%d", i), 4000, true)
+		checkWaterMarkFn(fmt.Sprintf("hnsw_idx_%d", i), target, true)
 	}
 
 	// changesNext failed
 	rmFn, err = objectio.InjectCDCExecutor("changesNext")
 	assert.NoError(t, err)
-	appendFn(6)
-	checkWaterMarkFn("hnsw_idx_0", 100, false)
+	target = appendFn(6)
+	checkWaterMarkFn("hnsw_idx_0", target, false)
 	rmFn()
 	for i := 0; i < indexCount; i++ {
-		checkWaterMarkFn(fmt.Sprintf("hnsw_idx_%d", i), 1000, true)
+		checkWaterMarkFn(fmt.Sprintf("hnsw_idx_%d", i), target, true)
 	}
 
 	// consume failed
 	rmFn, err = objectio.InjectCDCExecutor("consume")
 	assert.NoError(t, err)
-	appendFn(7)
-	checkWaterMarkFn("hnsw_idx_0", 100, false)
+	target = appendFn(7)
+	checkWaterMarkFn("hnsw_idx_0", target, false)
 	rmFn()
 	for i := 0; i < indexCount; i++ {
-		checkWaterMarkFn(fmt.Sprintf("hnsw_idx_%d", i), 1000, true)
+		checkWaterMarkFn(fmt.Sprintf("hnsw_idx_%d", i), target, true)
 	}
 	// consume, firstTxn failed
 	rmFn, err = objectio.InjectCDCExecutor("consumeWithJobName:hnsw_idx_0")
 	assert.NoError(t, err)
-	appendFn(8)
-	checkWaterMarkFn("hnsw_idx_0", 100, false)
+	target = appendFn(8)
+	checkWaterMarkFn("hnsw_idx_0", target, false)
 	// for i := 1; i < indexCount; i++ {
 	// 	CheckTableData(t, disttaeEngine, ctxWithTimeout, "srcdb", "src_table", tableID, fmt.Sprintf("hnsw_idx_%d", i))
 	// }
 	rmFn()
-	for i := 1; i < indexCount; i++ {
-		checkWaterMarkFn(fmt.Sprintf("hnsw_idx_%d", i), 1000, true)
+	for i := 0; i < indexCount; i++ {
+		checkWaterMarkFn(fmt.Sprintf("hnsw_idx_%d", i), target, true)
 	}
 
 	for i := 0; i < indexCount; i++ {
