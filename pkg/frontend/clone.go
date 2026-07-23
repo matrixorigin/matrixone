@@ -87,6 +87,16 @@ func shouldLockDataBranchCloneSource(snapshot *plan.Snapshot) bool {
 	return snapshot == nil || snapshot.ExtraInfo == nil
 }
 
+func withDataBranchCloneSourceLock(
+	snapshot *plan.Snapshot,
+	lockSource func() error,
+) error {
+	if !shouldLockDataBranchCloneSource(snapshot) {
+		return nil
+	}
+	return lockSource()
+}
+
 func withDataBranchCloneLockContext(
 	proc *process.Process,
 	ctx context.Context,
@@ -465,16 +475,16 @@ func handleCloneTable(
 		err = moerr.NewInternalErrorNoCtxf("only sys can clone table to another account")
 		return
 	}
-	if shouldLockDataBranchCloneSource(snapshot) {
-		if err = lockDataBranchCloneSource(
+	if err = withDataBranchCloneSourceLock(snapshot, func() error {
+		return lockDataBranchCloneSource(
 			reqCtx,
 			ses,
 			fromAccountId,
 			stmt.SrcTable.SchemaName.String(),
 			stmt.SrcTable.ObjectName.String(),
-		); err != nil {
-			return
-		}
+		)
+	}); err != nil {
+		return
 	}
 
 	ctx = defines.AttachAccountId(reqCtx, toAccountId)
@@ -650,7 +660,9 @@ func handleCloneDatabaseWithSource(
 		var (
 			receipt     cloneReceipt
 			tempExecCtx = &ExecCtx{
-				reqCtx: reqCtx,
+				// Database clone already holds every source-row lock in sorted
+				// order, so nested table clones must not acquire them again.
+				reqCtx: context.WithValue(reqCtx, dataBranchCloneLockCtxKey{}, false),
 			}
 		)
 

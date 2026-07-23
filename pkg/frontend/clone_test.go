@@ -17,7 +17,9 @@ package frontend
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -71,6 +73,44 @@ func TestShouldLockDataBranchCloneSource(t *testing.T) {
 	require.True(t, shouldLockDataBranchCloneSource(nil))
 	require.True(t, shouldLockDataBranchCloneSource(timestampSource))
 	require.False(t, shouldLockDataBranchCloneSource(namedSnapshotSource))
+}
+
+func TestTimestampDataBranchCloneWaitsForAlterPublication(t *testing.T) {
+	timestampSource := &plan.Snapshot{
+		TS: &timestamp.Timestamp{PhysicalTime: 42},
+	}
+	var catalogRow sync.RWMutex
+	catalogRow.Lock() // COPY ALTER holds the exclusive publication lock.
+
+	entered := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- withDataBranchCloneSourceLock(timestampSource, func() error {
+			close(entered)
+			catalogRow.RLock()
+			catalogRow.RUnlock()
+			return nil
+		})
+	}()
+
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("timestamp clone did not enter the shared source-lock path")
+	}
+	select {
+	case err := <-done:
+		t.Fatalf("timestamp clone bypassed the ALTER publication lock: %v", err)
+	default:
+	}
+
+	catalogRow.Unlock()
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("timestamp clone did not resume after ALTER released the lock")
+	}
 }
 
 func Test_prepareCloneViewSnapshot(t *testing.T) {
