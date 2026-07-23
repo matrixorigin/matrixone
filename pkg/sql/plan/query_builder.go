@@ -3179,7 +3179,6 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 					ctx,
 					resultLen,
 					true,
-					newGroupingSetDistinctOrderAliasRemap(order.Expr, branchCtx),
 				)
 				if bindErr != nil {
 					return 0, bindErr
@@ -6154,18 +6153,21 @@ func remapGroupingSetDistinctOrderExpr(
 	unionCtx *BindContext,
 	resultLen int,
 	allowWholeProjection bool,
-	aliasRemap *groupingSetDistinctOrderAliasRemap,
 ) (*plan.Expr, error) {
+	if col := expr.GetCol(); col != nil && col.RelPos == branchCtx.projectTag &&
+		col.ColPos >= 0 && int(col.ColPos) < resultLen {
+		return GetColExpr(unionCtx.projects[col.ColPos].Typ, unionCtx.projectTag, col.ColPos), nil
+	}
+
 	exprKey, err := projectExprKey(expr)
 	if err != nil {
 		return nil, err
 	}
 	if colPos, ok := branchCtx.projectByExpr[exprKey]; ok && colPos >= 0 && int(colPos) < resultLen {
-		selectedAlias := aliasRemap.allow(colPos)
 		directColumn := expr.GetCol() != nil
 		groupingOutput := expr.GetF() != nil && expr.GetF().Func != nil &&
 			strings.EqualFold(expr.GetF().Func.ObjName, "grouping")
-		if allowWholeProjection || selectedAlias || directColumn || groupingOutput {
+		if allowWholeProjection || directColumn || groupingOutput {
 			return GetColExpr(unionCtx.projects[colPos].Typ, unionCtx.projectTag, colPos), nil
 		}
 	}
@@ -6185,7 +6187,6 @@ func remapGroupingSetDistinctOrderExpr(
 				unionCtx,
 				resultLen,
 				false,
-				aliasRemap,
 			)
 			if remapErr != nil {
 				return nil, remapErr
@@ -6207,7 +6208,6 @@ func remapGroupingSetDistinctOrderExpr(
 				unionCtx,
 				resultLen,
 				false,
-				aliasRemap,
 			)
 			if remapErr != nil {
 				return nil, remapErr
@@ -6224,53 +6224,6 @@ func remapGroupingSetDistinctOrderExpr(
 		sysCtx,
 		"for SELECT DISTINCT, ORDER BY expressions must appear in select list",
 	)
-}
-
-type groupingSetDistinctOrderAliasRemap struct {
-	occurrences map[int32][]bool
-	seen        map[int32]int
-}
-
-func (r *groupingSetDistinctOrderAliasRemap) allow(colPos int32) bool {
-	if r == nil {
-		return false
-	}
-	seen := r.seen[colPos]
-	r.seen[colPos] = seen + 1
-	return seen < len(r.occurrences[colPos]) && r.occurrences[colPos][seen]
-}
-
-func newGroupingSetDistinctOrderAliasRemap(
-	astExpr tree.Expr,
-	ctx *BindContext,
-) *groupingSetDistinctOrderAliasRemap {
-	remap := &groupingSetDistinctOrderAliasRemap{
-		occurrences: make(map[int32][]bool),
-		seen:        make(map[int32]int),
-	}
-	walkGroupingSetOrderByExpr(astExpr, func(expr tree.Expr) bool {
-		if name, ok := expr.(*tree.UnresolvedName); ok && !name.Star && name.NumParts == 1 {
-			alias := name.ColName()
-			if _, sourceColumn := ctx.bindingByCol[alias]; !sourceColumn && ctx.aliasFrequency[alias] == 1 {
-				if item, ok := ctx.aliasMap[alias]; ok {
-					remap.occurrences[item.idx] = append(remap.occurrences[item.idx], true)
-					return true
-				}
-			}
-		}
-
-		exprText := tree.String(unwrapParenExpr(expr), dialect.MYSQL)
-		for _, item := range ctx.aliasMap {
-			if item.astExpr == nil {
-				continue
-			}
-			if exprText == tree.String(unwrapParenExpr(item.astExpr), dialect.MYSQL) {
-				remap.occurrences[item.idx] = append(remap.occurrences[item.idx], false)
-			}
-		}
-		return true
-	})
-	return remap
 }
 
 func prepareGroupingSetOrderByProjects(
@@ -6390,6 +6343,49 @@ func qualifyBoundGroupingOrderExpr(ctx *BindContext, astExpr tree.Expr) (tree.Ex
 	if bindErr != nil {
 		return nil, bindErr
 	}
+
+	// The NUL-prefixed name cannot collide with a user-written table alias.
+	const projectionTable = "\x00grouping_distinct_output"
+	binding, ok := ctx.bindingByTable[projectionTable]
+	if !ok {
+		binding = &Binding{
+			tag:            ctx.projectTag,
+			table:          projectionTable,
+			cols:           make([]string, len(ctx.projects)),
+			types:          make([]*plan.Type, len(ctx.projects)),
+			colIdByName:    make(map[string]int32, len(ctx.projects)),
+			colIsHidden:    make([]bool, len(ctx.projects)),
+			refCnts:        make([]uint, len(ctx.projects)),
+			defaults:       make([]string, len(ctx.projects)),
+			originCols:     make([]string, len(ctx.projects)),
+			isClusterTable: false,
+		}
+		for i := range ctx.projects {
+			colName := fmt.Sprintf("__col_%d", i)
+			binding.cols[i] = colName
+			binding.originCols[i] = colName
+			binding.types[i] = DeepCopyType(&ctx.projects[i].Typ)
+			binding.colIdByName[colName] = int32(i)
+		}
+		ctx.bindingByTable[projectionTable] = binding
+	}
+
+	originalAliasExprs := make(map[*aliasItem]tree.Expr, len(ctx.aliasMap))
+	for _, item := range ctx.aliasMap {
+		if item == nil || item.idx < 0 || int(item.idx) >= len(binding.cols) {
+			continue
+		}
+		originalAliasExprs[item] = item.astExpr
+		item.astExpr = tree.NewUnresolvedName(
+			tree.NewCStr(projectionTable, ctx.lower),
+			tree.NewCStr(binding.cols[item.idx], 1),
+		)
+	}
+	defer func() {
+		for item, original := range originalAliasExprs {
+			item.astExpr = original
+		}
+	}()
 	return ctx.qualifyColumnNames(qualified, AliasBeforeColumn)
 }
 

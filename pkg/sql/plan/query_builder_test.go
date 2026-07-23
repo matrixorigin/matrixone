@@ -4788,7 +4788,7 @@ func TestRemapGroupingSetDistinctOrderExprList(t *testing.T) {
 		}}},
 	}
 	remapped, err := remapGroupingSetDistinctOrderExpr(
-		context.Background(), listExpr, branchCtx, unionCtx, 1, true, nil)
+		context.Background(), listExpr, branchCtx, unionCtx, 1, true)
 	require.NoError(t, err)
 	require.Equal(t, unionCtx.projectTag, remapped.GetList().List[0].GetCol().RelPos)
 	require.Equal(t, int32(0), remapped.GetList().List[0].GetCol().ColPos)
@@ -4799,14 +4799,14 @@ func TestRemapGroupingSetDistinctOrderExprList(t *testing.T) {
 		Expr: &plan.Expr_Vec{Vec: &plan.LiteralVec{Len: 2}},
 	}
 	remappedVector, err := remapGroupingSetDistinctOrderExpr(
-		context.Background(), vectorExpr, branchCtx, unionCtx, 1, false, nil)
+		context.Background(), vectorExpr, branchCtx, unionCtx, 1, false)
 	require.NoError(t, err)
 	require.NotSame(t, vectorExpr, remappedVector)
 
 	unselectedList := DeepCopyExpr(listExpr)
 	unselectedList.GetList().List[0] = GetColExpr(intType, 1, 0)
 	_, err = remapGroupingSetDistinctOrderExpr(
-		context.Background(), unselectedList, branchCtx, unionCtx, 1, false, nil)
+		context.Background(), unselectedList, branchCtx, unionCtx, 1, false)
 	require.Error(t, err)
 
 	nilList := &plan.Expr{
@@ -4814,7 +4814,7 @@ func TestRemapGroupingSetDistinctOrderExprList(t *testing.T) {
 		Expr: &plan.Expr_List{},
 	}
 	_, err = remapGroupingSetDistinctOrderExpr(
-		context.Background(), nilList, branchCtx, unionCtx, 1, false, nil)
+		context.Background(), nilList, branchCtx, unionCtx, 1, false)
 	require.Error(t, err)
 }
 
@@ -4844,6 +4844,24 @@ func TestGroupingSetDistinctOrderProjectionBoundaries(t *testing.T) {
 			"group by a, b with rollup order by grouping(a) + abs(b) + x")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "for SELECT DISTINCT, ORDER BY expressions must appear in select list")
+}
+
+func TestGroupingSetDistinctOrderAliasIdentity(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	queries := []string{
+		"select distinct grouping(a), abs(b) as x, abs(b) as y " +
+			"from select_test.bind_select group by a, b with rollup order by grouping(a) + y",
+		"select distinct grouping(a), abs(b) as x " +
+			"from select_test.bind_select group by a, b with rollup order by grouping(a) + nullif(x, 0)",
+		"select distinct grouping(a), abs(b) as x " +
+			"from select_test.bind_select group by a, b with rollup " +
+			"order by grouping(a) + ((x, x + 1) in ((1, 2), (2, 3)))",
+	}
+	for _, query := range queries {
+		p, err := runOneStmt(mock, t, query)
+		require.NoError(t, err, query)
+		require.True(t, hasAggAboveUnionAll(p), query)
+	}
 }
 
 func TestGroupingSetDistinctOrderKeepsNestedVolatileCall(t *testing.T) {
@@ -4904,6 +4922,25 @@ func TestGroupingSetDistinctVectorProjects(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestIffVectorCommonType(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	for _, query := range []string{
+		"select if(false, cast('[0,0]' as vecf32(2)), cast('[1.0000000001,2]' as vecf64(2)))",
+		"select if(false, cast('[1.0000000001,2]' as vecf64(2)), cast('[0,0]' as vecf32(2)))",
+	} {
+		p, err := runOneStmt(mock, t, query)
+		require.NoError(t, err)
+		root := p.GetQuery().Nodes[p.GetQuery().Steps[0]]
+		require.Equal(t, int32(types.T_array_float64), root.ProjectList[0].Typ.Id)
+		require.Equal(t, int32(2), root.ProjectList[0].Typ.Width)
+	}
+
+	_, err := runOneStmt(mock, t,
+		"select if(false, cast('[1,2]' as vecf32(2)), cast('[3,4,5]' as vecf32(3)))")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "invalid argument function if")
 }
 
 func TestNormalizeGroupingSetDistinctProjectsTypedNull(t *testing.T) {

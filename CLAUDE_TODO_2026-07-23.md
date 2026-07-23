@@ -129,3 +129,25 @@
 - `GROUPING(a) + RAND()` 保留新的 volatile 调用，不引用 RAND SELECT 输出列。
 - 复杂 SELECT alias 的派生排序仍通过；直接写同一复杂子表达式则按普通 DISTINCT 规则拒绝。
 - 运行完整 planner/function UT、build、vet、覆盖率、静态检查和 rollup BVT。
+
+## PR #25335 第七轮 review 修复
+
+### 有效问题
+
+1. grouping-set DISTINCT 通过未绑定 AST 文本和出现次数猜测 alias ordinal；重复投影、NULLIF
+   参数复制和 tuple-IN 重写会使 AST 与 plan 树失配，合法 alias 派生排序被拒绝。
+2. IFF 复用通用隐式转换成本选择向量结果，混合 VECF32/VECF64 会降级到 VECF32；同类型
+   不同维度也未拒绝，导致声明类型与运行值维度不一致。
+
+### 修复方案
+
+1. 移除 alias 文本/次数配对。绑定 ORDER BY 时把 alias 引用直接编码为对应可见输出 ordinal，
+   再绑定其余表达式；重复表达式不再经过 `projectByExpr` 的首个 ordinal 猜测。
+2. 为 IFF 增加向量专用 common type：混合精度提升为 VECF64；相同及混合类型都要求维度一致，
+   不一致时绑定失败；结果保留统一维度。
+3. 增加重复 alias、NULLIF、tuple-IN、双向混合精度、超 float32 精度值及维度不一致回归。
+
+### 验证
+
+- 运行 planner/function 定向与全量 CGo UT，真实 mo-service BVT，build、覆盖率、静态检查。
+- 完成全差异 self-review 后提交并正常推送，不 force push，不修改 GitHub thread。

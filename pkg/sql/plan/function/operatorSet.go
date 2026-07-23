@@ -453,6 +453,30 @@ func iffCheck(_ []overload, inputs []types.Type) checkResult {
 		}
 
 		source := []types.Type{inputs[1], inputs[2]}
+		if source[0].Oid.IsArrayRelate() || source[1].Oid.IsArrayRelate() {
+			vectorIdx := 0
+			if !source[0].Oid.IsArrayRelate() {
+				vectorIdx = 1
+			}
+			otherIdx := 1 - vectorIdx
+			if !source[otherIdx].Oid.IsArrayRelate() &&
+				source[otherIdx].Oid != types.T_any &&
+				!source[otherIdx].Oid.IsMySQLString() {
+				return newCheckResultWithFailure(failedFunctionParametersWrong)
+			}
+			if source[otherIdx].Oid.IsArrayRelate() && source[0].Width != source[1].Width {
+				return newCheckResultWithFailure(failedFunctionParametersWrong)
+			}
+			retType := source[vectorIdx]
+			if source[otherIdx].Oid == types.T_array_float64 {
+				retType.Oid = types.T_array_float64
+			}
+			finalTypes := []types.Type{conditionType, retType, retType}
+			if needCast || source[0] != retType || source[1] != retType {
+				return newCheckResultWithCast(0, finalTypes)
+			}
+			return newCheckResultWithSuccess(0)
+		}
 		if retType, ok := mixedStringNumericToVarchar(source); ok {
 			return newCheckResultWithCast(0, []types.Type{conditionType, retType, retType})
 		}

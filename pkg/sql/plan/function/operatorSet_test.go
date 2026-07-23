@@ -483,6 +483,30 @@ func TestIffCheck_PreservesVectorResultTypes(t *testing.T) {
 	}
 }
 
+func TestIffCheck_VectorCommonType(t *testing.T) {
+	vecf32 := types.New(types.T_array_float32, 2, 0)
+	vecf64 := types.New(types.T_array_float64, 2, 0)
+	for _, branches := range [][]types.Type{{vecf32, vecf64}, {vecf64, vecf32}} {
+		result := iffCheck(nil, []types.Type{types.T_bool.ToType(), branches[0], branches[1]})
+		require.Equal(t, succeedWithCast, result.status)
+		require.Equal(t, types.T_array_float64, result.finalType[1].Oid)
+		require.Equal(t, int32(2), result.finalType[1].Width)
+		require.Equal(t, result.finalType[1], result.finalType[2])
+	}
+
+	result := iffCheck(nil, []types.Type{
+		types.T_bool.ToType(),
+		types.New(types.T_array_float32, 2, 0),
+		types.New(types.T_array_float32, 3, 0),
+	})
+	require.Equal(t, failedFunctionParametersWrong, result.status)
+
+	result = iffCheck(nil, []types.Type{types.T_bool.ToType(), vecf64, types.T_any.ToType()})
+	require.Equal(t, succeedWithCast, result.status)
+	require.Equal(t, vecf64, result.finalType[1])
+	require.Equal(t, vecf64, result.finalType[2])
+}
+
 func TestIffConditionTruthyAt(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
