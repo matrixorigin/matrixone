@@ -349,6 +349,55 @@ func TestEngineQueryCandidateProvidersSeparateInventoryAndPool(t *testing.T) {
 	require.Equal(t, map[string]string{"account": "app"}, labels)
 }
 
+func TestEngineQueryPoolUsesTargetLabelsWithoutMutatingIngressLabels(t *testing.T) {
+	candidates := engine.QueryCandidates{
+		{Service: metadata.CNService{
+			ServiceID: "tp", PipelineServiceAddress: "tp:6001",
+			Labels: map[string]metadata.LabelList{
+				"account": {Labels: []string{"tenant-a"}},
+				"role":    {Labels: []string{"tp"}},
+			},
+			WorkState: metadata.WorkState_Working,
+		}, Mcpu: 4},
+		{Service: metadata.CNService{
+			ServiceID: "ap", PipelineServiceAddress: "ap:6001",
+			Labels: map[string]metadata.LabelList{
+				"account": {Labels: []string{"tenant-a"}},
+				"role":    {Labels: []string{"ap"}},
+			},
+			WorkState: metadata.WorkState_Working,
+		}, Mcpu: 8},
+		{Service: metadata.CNService{
+			ServiceID: "other-ap", PipelineServiceAddress: "other-ap:6001",
+			Labels: map[string]metadata.LabelList{
+				"account": {Labels: []string{"tenant-b"}},
+				"role":    {Labels: []string{"ap"}},
+			},
+			WorkState: metadata.WorkState_Working,
+		}, Mcpu: 16},
+	}
+	ingress := map[string]string{"account": "tenant-a", "role": "tp"}
+	target := map[string]string{"account": "tenant-a", "role": "ap"}
+
+	pool, err := new(Engine).ResolveQueryCandidatePool(
+		context.Background(),
+		candidates,
+		engine.QueryCandidatePoolRequest{
+			Tenant:         "tenant-a",
+			CNLabel:        ingress,
+			TargetLabels:   target,
+			RequestedPool:  "tenant-ap",
+			FallbackPolicy: engine.QueryPoolFallbackStrict,
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, []string{"ap:6001"}, nodeAddresses(pool.Nodes))
+	require.Equal(t, engine.QueryPoolResolutionExactLabels, pool.Resolution)
+	require.Equal(t, "tenant-ap", pool.Identity)
+	require.Equal(t, map[string]string{"account": "tenant-a", "role": "tp"}, ingress)
+	require.Equal(t, map[string]string{"account": "tenant-a", "role": "ap"}, target)
+}
+
 func TestEngineCandidateDiscoveryExcludesIncompatibleCNBeforePoolFallback(t *testing.T) {
 	appLabel := map[string]metadata.LabelList{
 		"account": {Labels: []string{"app"}},

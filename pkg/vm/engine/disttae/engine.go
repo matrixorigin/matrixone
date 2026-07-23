@@ -900,7 +900,11 @@ func (e *Engine) ResolveQueryCandidatePool(
 	if !request.FallbackPolicy.Valid() {
 		return engine.ResolvedQueryPool{}, moerr.NewInvalidInput(ctx, "invalid query pool fallback policy")
 	}
-	if len(request.CNLabel) == 0 {
+	selectorLabels := request.TargetLabels
+	if selectorLabels == nil {
+		selectorLabels = request.CNLabel
+	}
+	if len(selectorLabels) == 0 {
 		if request.FallbackPolicy == engine.QueryPoolFallbackStrict {
 			identity := request.RequestedPool
 			if identity == "" {
@@ -922,7 +926,7 @@ func (e *Engine) ResolveQueryCandidatePool(
 		}, err
 	}
 
-	labels, err := cloneStringMap(ctx, request.CNLabel)
+	labels, err := cloneStringMap(ctx, selectorLabels)
 	if err != nil {
 		return engine.ResolvedQueryPool{}, err
 	}
