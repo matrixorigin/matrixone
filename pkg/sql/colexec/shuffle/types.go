@@ -15,6 +15,9 @@
 package shuffle
 
 import (
+	"context"
+	"sync"
+
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -45,6 +48,13 @@ func (shuffle *Shuffle) GetOperatorBase() *vm.OperatorBase {
 	return &shuffle.OperatorBase
 }
 
+// ResetBeforeChildren reports that a local Shuffle owns an asynchronous task
+// which may still be executing its child. Pipeline cleanup must join that task
+// before resetting descendants.
+func (shuffle *Shuffle) ResetBeforeChildren() bool {
+	return !shuffle.DrainAllBuckets
+}
+
 func init() {
 	reuse.CreatePool[Shuffle](
 		func() *Shuffle {
@@ -58,7 +68,7 @@ func init() {
 	)
 }
 
-func (shuffle Shuffle) TypeName() string {
+func (shuffle *Shuffle) TypeName() string {
 	return opName
 }
 
@@ -83,6 +93,26 @@ type container struct {
 	runtimeFilterHandled bool
 	exprExec             colexec.ExpressionExecutor
 	held                 bool
+	writingStopped       bool
+
+	producerOnce    sync.Once
+	producerStarted bool
+	producerProc    *process.Process
+	producerCancel  context.CancelCauseFunc
+	producerDone    chan struct{}
+	producerRows    int64
+	producerSize    int64
+
+	directBatches chan directHandoff
+	directAck     chan struct{}
+	consumerDone  chan struct{}
+	consumerOnce  sync.Once
+	bufFromPool   bool
+}
+
+type directHandoff struct {
+	bat *batch.Batch
+	ack chan struct{}
 }
 
 func (shuffle *Shuffle) SetShufflePool(sp *ShufflePool) {
@@ -94,8 +124,38 @@ func (shuffle *Shuffle) GetShufflePool() *ShufflePool {
 }
 
 func (shuffle *Shuffle) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	if !shuffle.DrainAllBuckets {
+		if (pipelineFailed || err != nil) && shuffle.ctr.shufflePool != nil {
+			abortErr := err
+			if abortErr == nil {
+				abortErr = context.Canceled
+			}
+			shuffle.ctr.shufflePool.abortWithError(proc.Mp(), abortErr)
+		}
+		if shuffle.ctr.held {
+			shuffle.ackDirectBatch()
+			if shuffle.ctr.buf != nil && shuffle.ctr.bufFromPool && shuffle.ctr.shufflePool != nil {
+				shuffle.ctr.shufflePool.discardBatch(shuffle.ctr.buf, proc.Mp())
+			}
+			shuffle.ctr.buf = nil
+			shuffle.ctr.bufFromPool = false
+			shuffle.closeLocalConsumer(proc)
+		}
+		shuffle.stopLocalProducer(pipelineFailed || err != nil, err)
+		if shuffle.ctr.held && shuffle.OpAnalyzer != nil {
+			stats := shuffle.OpAnalyzer.GetOpStats()
+			stats.InputRows += shuffle.ctr.producerRows
+			stats.InputSize += shuffle.ctr.producerSize
+		}
+	} else if !pipelineFailed && err == nil {
+		shuffle.stopWritingOnce()
+	}
+
+	shuffle.ackDirectBatch()
 	if shuffle.ctr.buf != nil {
-		shuffle.ctr.shufflePool.discardBatch(shuffle.ctr.buf, proc.Mp())
+		if shuffle.DrainAllBuckets || shuffle.ctr.bufFromPool {
+			shuffle.ctr.shufflePool.discardBatch(shuffle.ctr.buf, proc.Mp())
+		}
 		shuffle.ctr.buf = nil
 	}
 	if shuffle.ctr.shufflePool != nil {
@@ -122,6 +182,50 @@ func (shuffle *Shuffle) Reset(proc *process.Process, pipelineFailed bool, err er
 	shuffle.ctr.pendingOffset = 0
 	shuffle.ctr.runtimeFilterHandled = false
 	shuffle.ctr.held = false
+	shuffle.ctr.writingStopped = false
+	shuffle.ctr.producerOnce = sync.Once{}
+	shuffle.ctr.producerStarted = false
+	shuffle.ctr.producerProc = nil
+	shuffle.ctr.producerCancel = nil
+	shuffle.ctr.producerDone = nil
+	shuffle.ctr.producerRows = 0
+	shuffle.ctr.producerSize = 0
+	shuffle.ctr.directBatches = nil
+	shuffle.ctr.directAck = nil
+	shuffle.ctr.consumerDone = nil
+	shuffle.ctr.consumerOnce = sync.Once{}
+	shuffle.ctr.bufFromPool = false
+}
+
+func (shuffle *Shuffle) closeLocalConsumer(proc *process.Process) {
+	shuffle.ctr.consumerOnce.Do(func() {
+		if shuffle.ctr.consumerDone != nil {
+			close(shuffle.ctr.consumerDone)
+		}
+		if shuffle.ctr.shufflePool != nil {
+			shuffle.ctr.shufflePool.closeConsumer(shuffle.CurrentShuffleIdx, proc.Mp())
+		}
+	})
+}
+
+func (shuffle *Shuffle) stopLocalProducer(failed bool, err error) {
+	if shuffle.ctr.producerProc == nil {
+		return
+	}
+	if failed && shuffle.ctr.producerCancel != nil {
+		if err == nil {
+			err = context.Canceled
+		}
+		shuffle.ctr.producerCancel(err)
+	}
+	if shuffle.ctr.producerStarted && shuffle.ctr.producerDone != nil {
+		<-shuffle.ctr.producerDone
+	} else if shuffle.ctr.held {
+		shuffle.stopWritingOnce()
+	}
+	if shuffle.ctr.producerCancel != nil {
+		shuffle.ctr.producerCancel(nil)
+	}
 }
 
 func (shuffle *Shuffle) Free(proc *process.Process, pipelineFailed bool, err error) {

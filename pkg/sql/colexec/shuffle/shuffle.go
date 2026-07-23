@@ -16,6 +16,7 @@ package shuffle
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 
 	moerr "github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -38,6 +39,28 @@ func (shuffle *Shuffle) String(buf *bytes.Buffer) {
 
 func (shuffle *Shuffle) OpType() vm.OpType {
 	return vm.Shuffle
+}
+
+// PrepareChildrenProcess creates the process that will execute the local
+// Shuffle's child tree. It must exist before vm.Prepare descends into that
+// tree, because children may retain the process context in Prepare.
+func (shuffle *Shuffle) PrepareChildrenProcess(proc *process.Process) *process.Process {
+	if shuffle.DrainAllBuckets || shuffle.GetShufflePool() == nil {
+		return proc
+	}
+	if shuffle.ctr.producerProc == nil {
+		parent, _ := process.GetQueryCtxFromProc(proc)
+		if parent == nil {
+			parent = proc.Ctx
+		}
+		producerProc := proc.NewNoContextChildProc(0)
+		producerProc.Reg = proc.Reg
+		producerProc.Session = proc.Session
+		producerProc.BuildPipelineContext(parent)
+		shuffle.ctr.producerProc = producerProc
+		shuffle.ctr.producerCancel = producerProc.Cancel
+	}
+	return shuffle.ctr.producerProc
 }
 
 func (shuffle *Shuffle) Prepare(proc *process.Process) error {
@@ -68,10 +91,23 @@ func (shuffle *Shuffle) Prepare(proc *process.Process) error {
 	shuffle.ctr.held = true
 	shuffle.ctr.ending = false
 	shuffle.ctr.runtimeFilterHandled = false
+	if !shuffle.DrainAllBuckets {
+		shuffle.PrepareChildrenProcess(proc)
+		shuffle.ctr.producerDone = make(chan struct{})
+		shuffle.ctr.directBatches = make(chan directHandoff)
+		shuffle.ctr.consumerDone = make(chan struct{})
+	}
 	return nil
 }
 
 func (shuffle *Shuffle) Call(proc *process.Process) (vm.CallResult, error) {
+	if !shuffle.DrainAllBuckets {
+		return shuffle.callLocal(proc)
+	}
+	return shuffle.callSynchronous(proc)
+}
+
+func (shuffle *Shuffle) callSynchronous(proc *process.Process) (vm.CallResult, error) {
 	analyzer := shuffle.OpAnalyzer
 
 	// Put old buf back to pool after cleaning data
@@ -81,25 +117,9 @@ func (shuffle *Shuffle) Call(proc *process.Process) (vm.CallResult, error) {
 		shuffle.ctr.buf = nil
 	}
 
-	getFull := func() *batch.Batch {
-		if shuffle.DrainAllBuckets {
-			return shuffle.ctr.shufflePool.getAnyFullBatch()
-		}
-		return shuffle.ctr.shufflePool.getFullBatch(shuffle.CurrentShuffleIdx)
-	}
-	getLast := func() *batch.Batch {
-		if shuffle.DrainAllBuckets {
-			return shuffle.ctr.shufflePool.getAnyLastBatch()
-		}
-		return shuffle.ctr.shufflePool.getLastBatch(shuffle.CurrentShuffleIdx)
-	}
-	wait := func() {
-		if shuffle.DrainAllBuckets {
-			shuffle.ctr.shufflePool.waitAnyBatchOrEnd(proc)
-		} else {
-			shuffle.ctr.shufflePool.waitBatchOrEnd(shuffle.CurrentShuffleIdx, proc)
-		}
-	}
+	getFull := shuffle.ctr.shufflePool.getAnyFullBatch
+	getLast := shuffle.ctr.shufflePool.getAnyLastBatch
+	wait := func() { shuffle.ctr.shufflePool.waitAnyBatchOrEnd(proc) }
 
 	for {
 		result := vm.NewCallResult()
@@ -122,9 +142,6 @@ func (shuffle *Shuffle) Call(proc *process.Process) (vm.CallResult, error) {
 				continue
 			}
 
-			// Every fixed-bucket holder is both a producer and a consumer.
-			// Drain its own bucket before waiting for global capacity so a
-			// cross-write cycle cannot deadlock.
 			if tmpBat = getFull(); tmpBat != nil {
 				shuffle.ctr.buf = tmpBat
 				if err = shuffle.handleRuntimeFilter(proc); err != nil {
@@ -172,7 +189,7 @@ func (shuffle *Shuffle) Call(proc *process.Process) (vm.CallResult, error) {
 		bat := result.Batch
 		if bat == nil {
 			shuffle.ctr.ending = true
-			shuffle.ctr.shufflePool.stopWriting()
+			shuffle.stopWritingOnce()
 			result.Status = vm.ExecNext
 			result.Batch = batch.EmptyBatch
 			return result, nil
@@ -198,6 +215,193 @@ func (shuffle *Shuffle) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 		}
 	}
+}
+
+// callLocal is the consumer half of the fixed-bucket local exchange. Its
+// producer runs independently, so bounded pool writes cannot prevent this
+// goroutine from draining its bucket, including when local shuffles nest.
+func (shuffle *Shuffle) callLocal(proc *process.Process) (vm.CallResult, error) {
+	shuffle.releasePreviousLocalBatch(proc)
+	shuffle.startLocalProducer(proc)
+
+	for {
+		if bat := shuffle.ctr.shufflePool.getFullBatch(shuffle.CurrentShuffleIdx); bat != nil {
+			return shuffle.returnLocalBatch(proc, bat, true)
+		}
+
+		if shuffle.ctr.shufflePool.allStop() {
+			if err := shuffle.ctr.shufflePool.terminalError(); err != nil {
+				return vm.CancelResult, err
+			}
+			if bat := shuffle.ctr.shufflePool.getLastBatch(shuffle.CurrentShuffleIdx); bat != nil {
+				return shuffle.returnLocalBatch(proc, bat, true)
+			}
+			return vm.CancelResult, nil
+		}
+
+		select {
+		case handoff := <-shuffle.ctr.directBatches:
+			shuffle.ctr.directAck = handoff.ack
+			return shuffle.returnLocalBatch(proc, handoff.bat, false)
+		case <-shuffle.ctr.shufflePool.batchWaiters[shuffle.CurrentShuffleIdx]:
+		case <-shuffle.ctr.shufflePool.endingWaiters[shuffle.CurrentShuffleIdx]:
+		case <-shuffle.ctr.producerDone:
+		case <-shuffle.ctr.consumerDone:
+			return vm.CancelResult, nil
+		case <-proc.Ctx.Done():
+			return vm.CancelResult, context.Cause(proc.Ctx)
+		}
+	}
+}
+
+func (shuffle *Shuffle) returnLocalBatch(proc *process.Process, bat *batch.Batch, fromPool bool) (vm.CallResult, error) {
+	shuffle.ctr.buf = bat
+	shuffle.ctr.bufFromPool = fromPool
+	if err := shuffle.handleRuntimeFilter(proc); err != nil {
+		if !fromPool {
+			shuffle.ackDirectBatch()
+			shuffle.ctr.buf = nil
+		}
+		return vm.CancelResult, err
+	}
+	result := vm.NewCallResult()
+	result.Batch = bat
+	return result, nil
+}
+
+func (shuffle *Shuffle) releasePreviousLocalBatch(proc *process.Process) {
+	shuffle.ackDirectBatch()
+	if shuffle.ctr.buf == nil {
+		return
+	}
+	if shuffle.ctr.bufFromPool {
+		shuffle.ctr.buf.CleanOnlyData()
+		shuffle.ctr.shufflePool.putBatchToPool(shuffle.ctr.buf, proc.Mp())
+	}
+	shuffle.ctr.buf = nil
+	shuffle.ctr.bufFromPool = false
+}
+
+func (shuffle *Shuffle) ackDirectBatch() {
+	if shuffle.ctr.directAck != nil {
+		close(shuffle.ctr.directAck)
+		shuffle.ctr.directAck = nil
+	}
+}
+
+func (shuffle *Shuffle) startLocalProducer(proc *process.Process) {
+	shuffle.ctr.producerOnce.Do(func() {
+		producerProc := shuffle.PrepareChildrenProcess(proc)
+		shuffle.ctr.producerStarted = true
+		shuffle.ctr.shufflePool.registerProducer(shuffle.CurrentShuffleIdx, producerProc.Cancel)
+		go shuffle.runLocalProducer(producerProc)
+	})
+}
+
+func (shuffle *Shuffle) runLocalProducer(proc *process.Process) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err := moerr.ConvertPanicError(proc.Ctx, recovered)
+			shuffle.ctr.shufflePool.abortWithError(proc.Mp(), err)
+		}
+		shuffle.stopWritingOnce()
+		close(shuffle.ctr.producerDone)
+	}()
+
+	for {
+		if shuffle.ctr.pendingBat != nil {
+			done, waiter, err := shuffle.flushPending(proc)
+			if err != nil {
+				shuffle.failLocalProducer(proc, err)
+				return
+			}
+			if !done {
+				select {
+				case <-waiter:
+				case <-shuffle.ctr.shufflePool.endingWaiter:
+					return
+				case <-proc.Ctx.Done():
+					return
+				}
+				continue
+			}
+		}
+
+		result, err := vm.Exec(shuffle.GetChildren(0), proc)
+		if err != nil {
+			if proc.Ctx.Err() == nil {
+				shuffle.failLocalProducer(proc, err)
+			}
+			return
+		}
+		bat := result.Batch
+		if bat == nil {
+			return
+		}
+		shuffle.ctr.producerRows += int64(bat.RowCount())
+		shuffle.ctr.producerSize += int64(bat.Size())
+		if bat.Last() {
+			if !shuffle.sendDirectBatch(proc, bat) {
+				return
+			}
+			continue
+		}
+		if bat.IsEmpty() {
+			continue
+		}
+
+		if shuffle.ctr.exprExec != nil {
+			bat, err = shuffle.evalAndShuffle(bat, proc)
+		} else if shuffle.ShuffleType == int32(plan.ShuffleType_Hash) {
+			bat, err = hashShuffle(shuffle, bat, proc)
+		} else if shuffle.ShuffleType == int32(plan.ShuffleType_Range) {
+			bat, err = rangeShuffle(shuffle, bat, proc)
+		}
+		if err != nil {
+			shuffle.failLocalProducer(proc, err)
+			return
+		}
+		if bat != nil && !shuffle.sendDirectBatch(proc, bat) {
+			return
+		}
+	}
+}
+
+func (shuffle *Shuffle) sendDirectBatch(proc *process.Process, bat *batch.Batch) bool {
+	ack := make(chan struct{})
+	handoff := directHandoff{bat: bat, ack: ack}
+	select {
+	case shuffle.ctr.directBatches <- handoff:
+	case <-shuffle.ctr.consumerDone:
+		return true
+	case <-shuffle.ctr.shufflePool.endingWaiter:
+		return false
+	case <-proc.Ctx.Done():
+		return false
+	}
+
+	select {
+	case <-ack:
+		return true
+	case <-shuffle.ctr.consumerDone:
+		return true
+	case <-shuffle.ctr.shufflePool.endingWaiter:
+		return false
+	case <-proc.Ctx.Done():
+		return false
+	}
+}
+
+func (shuffle *Shuffle) failLocalProducer(proc *process.Process, err error) {
+	shuffle.ctr.shufflePool.abortWithError(proc.Mp(), err)
+}
+
+func (shuffle *Shuffle) stopWritingOnce() {
+	if shuffle.ctr.writingStopped || shuffle.ctr.shufflePool == nil {
+		return
+	}
+	shuffle.ctr.writingStopped = true
+	shuffle.ctr.shufflePool.stopWriting()
 }
 
 func (shuffle *Shuffle) flushPending(proc *process.Process) (bool, <-chan struct{}, error) {
