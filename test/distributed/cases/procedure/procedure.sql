@@ -111,6 +111,37 @@ select @id;
 drop procedure test_inout_param;
 
 -- @case
+-- @desc:temporary table lifecycle inside a stored procedure
+-- @label:bvt
+drop procedure if exists test_temp_table_lifecycle;
+create procedure test_temp_table_lifecycle() 'begin create temporary table tmp_proc_lifecycle (id int primary key, v int); insert into tmp_proc_lifecycle select id, val from tbh1 where id <= 2; select sum(v) as tmp_sum from tmp_proc_lifecycle; drop table tmp_proc_lifecycle; end';
+call test_temp_table_lifecycle();
+drop procedure test_temp_table_lifecycle;
+
+-- @case
+-- @desc:temporary table created in a stored procedure remains bound to the caller session
+-- @label:bvt
+drop procedure if exists test_temp_table_session_binding;
+create procedure test_temp_table_session_binding() 'begin create temporary table tmp_proc_session (id int primary key, v int); insert into tmp_proc_session select id, val from tbh1 where id <= 2; end';
+call test_temp_table_session_binding();
+select sum(v) as tmp_sum from tmp_proc_session;
+drop table tmp_proc_session;
+drop procedure test_temp_table_session_binding;
+
+-- @case
+-- @desc:temporary table created in a nested stored procedure remains bound to the caller session
+-- @label:bvt
+drop procedure if exists test_nested_temp_table_outer;
+drop procedure if exists test_nested_temp_table_inner;
+create procedure test_nested_temp_table_inner() 'begin create temporary table tmp_nested_proc_session (id int primary key, v int); insert into tmp_nested_proc_session select id, val from tbh1 where id <= 2; end';
+create procedure test_nested_temp_table_outer() 'begin call test_nested_temp_table_inner(); end';
+call test_nested_temp_table_outer();
+select sum(v) as tmp_sum from tmp_nested_proc_session;
+drop table tmp_nested_proc_session;
+drop procedure test_nested_temp_table_outer;
+drop procedure test_nested_temp_table_inner;
+
+-- @case
 -- @desc:procedure parser SQL mode is retained after caller mode changes
 -- @label:bvt
 set sql_mode = 'PIPES_AS_CONCAT';
