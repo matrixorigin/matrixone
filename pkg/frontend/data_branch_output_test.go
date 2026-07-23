@@ -177,6 +177,36 @@ func TestDataBranchOutputTableSpec(t *testing.T) {
 		require.Equal(t, []string{"__mo_diff_source", "__mo_diff_flag", "name", "id"}, output.columnNames)
 	})
 
+	t.Run("target-only column uses target type and remains nullable", func(t *testing.T) {
+		targetDef := tarRel.GetTableDef(ctx)
+		targetDef.Cols = append(targetDef.Cols, &plan.ColDef{
+			Name: "extra", ColId: 5, Seqnum: 4,
+			Typ: plan.Type{Id: int32(types.T_int32), NotNullable: true},
+		})
+		defer func() { targetDef.Cols = targetDef.Cols[:len(targetDef.Cols)-1] }()
+
+		targetOnlyTblStuff := tblStuff
+		targetOnlyTblStuff.def.colNames = append(
+			append([]string(nil), tblStuff.def.colNames...), "extra",
+		)
+		targetOnlyTblStuff.def.colTypes = append(
+			append([]types.Type(nil), tblStuff.def.colTypes...), types.T_int32.ToType(),
+		)
+		targetOnlyTblStuff.def.visibleIdxes = append(
+			append([]int(nil), tblStuff.def.visibleIdxes...), 4,
+		)
+		targetOnlyTblStuff.def.tarOnlyIdxes = []int{4}
+
+		output, err := newDiffOutputTable(ctx, ses, &tree.DataBranchDiff{
+			OutputOpt: &tree.DiffOutputOpt{As: *outName},
+		}, targetOnlyTblStuff)
+		require.NoError(t, err)
+		sql, err := output.createSQL(ctx, targetOnlyTblStuff)
+		require.NoError(t, err)
+		require.Contains(t, sql, "`extra` INT default null")
+		require.NotContains(t, sql, "`extra` INT not null")
+	})
+
 	t.Run("renamed target column retains target name and base type", func(t *testing.T) {
 		renamedTargetDef := tblStuff.tarRel.GetTableDef(ctx)
 		renamedTargetDef.Cols[1].Name = "display_name"

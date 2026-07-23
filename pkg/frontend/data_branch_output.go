@@ -414,10 +414,18 @@ func (output *diffOutputTable) createSQL(ctx context.Context, tblStuff tableStuf
 	}
 
 	projectedNames := make([]string, len(output.projectedIdxes))
+	projectedTargetOnly := make([]bool, len(output.projectedIdxes))
+	targetOnlyIdxes := make(map[int]struct{}, len(tblStuff.def.tarOnlyIdxes))
+	for _, idx := range tblStuff.def.tarOnlyIdxes {
+		targetOnlyIdxes[idx] = struct{}{}
+	}
 	for i, idx := range output.projectedIdxes {
 		projectedNames[i] = tblStuff.def.colNames[idx]
+		_, projectedTargetOnly[i] = targetOnlyIdxes[idx]
 	}
-	baseColDefs, err := dataBranchColumnsByIdentity(targetTableDef, baseTableDef, projectedNames)
+	outputColDefs, targetOnly, err := dataBranchOutputColumnDefs(
+		targetTableDef, baseTableDef, projectedNames, projectedTargetOnly,
+	)
 	if err != nil {
 		return "", err
 	}
@@ -427,10 +435,10 @@ func (output *diffOutputTable) createSQL(ctx context.Context, tblStuff tableStuf
 		fmt.Sprintf("%s varchar(16) default null", quoteIdentifierForSQL(output.columnNames[1])),
 	}
 	for i, name := range projectedNames {
-		colDef := baseColDefs[i]
+		colDef := outputColDefs[i]
 
 		columnDef := fmt.Sprintf("%s %s", quoteIdentifierForSQL(name), plan2.FormatColType(colDef.Typ))
-		if colDef.Typ.NotNullable {
+		if colDef.Typ.NotNullable && !targetOnly[i] {
 			columnDef += " not null"
 		} else {
 			columnDef += " default null"
@@ -511,31 +519,43 @@ func dataBranchEndpointColumnDef(tableDef *plan2.TableDef, sourceColDef *plan2.C
 // intentionally not part of schema equivalence: a branch may rename a column
 // without changing its identity, so physical reads from another branch or an
 // ancestor must resolve that branch's local name through ColId and Seqnum.
-func dataBranchColumnsByIdentity(
+func dataBranchOutputColumnDefs(
 	sourceTableDef *plan2.TableDef,
 	destinationTableDef *plan2.TableDef,
 	sourceColumnNames []string,
-) ([]*plan2.ColDef, error) {
+	sourceTargetOnly []bool,
+) ([]*plan2.ColDef, []bool, error) {
 	if sourceTableDef == nil || destinationTableDef == nil {
-		return nil, moerr.NewInternalErrorNoCtx("DATA BRANCH table definition is unavailable")
+		return nil, nil, moerr.NewInternalErrorNoCtx("DATA BRANCH table definition is unavailable")
+	}
+	if len(sourceColumnNames) != len(sourceTargetOnly) {
+		return nil, nil, moerr.NewInternalErrorNoCtx("DATA BRANCH output column classification is unavailable")
 	}
 
-	destinationColDefs := make([]*plan2.ColDef, len(sourceColumnNames))
+	outputColDefs := make([]*plan2.ColDef, len(sourceColumnNames))
+	targetOnly := make([]bool, len(sourceColumnNames))
 	for i, sourceColumnName := range sourceColumnNames {
 		sourceColDef := dataBranchColumnDefByName(sourceTableDef, sourceColumnName)
 		if sourceColDef == nil {
-			return nil, moerr.NewInternalErrorNoCtxf(
+			return nil, nil, moerr.NewInternalErrorNoCtxf(
 				"DATA BRANCH source column %q is unavailable", sourceColumnName,
 			)
 		}
-		destinationColDefs[i] = dataBranchColumnDefByIdentity(destinationTableDef, sourceColDef)
-		if destinationColDefs[i] == nil {
-			return nil, moerr.NewInternalErrorNoCtxf(
-				"DATA BRANCH destination column for source column %q is unavailable", sourceColumnName,
-			)
+		outputColDefs[i] = dataBranchColumnDefByIdentity(destinationTableDef, sourceColDef)
+		if outputColDefs[i] == nil {
+			if !sourceTargetOnly[i] {
+				return nil, nil, moerr.NewInternalErrorNoCtxf(
+					"DATA BRANCH destination column for source column %q is unavailable", sourceColumnName,
+				)
+			}
+			// A target-only column has no base identity. Keep its target type in
+			// the materialized schema, but make the output column nullable because
+			// base-side DIFF rows project target-only values as NULL.
+			outputColDefs[i] = sourceColDef
+			targetOnly[i] = true
 		}
 	}
-	return destinationColDefs, nil
+	return outputColDefs, targetOnly, nil
 }
 
 func (output *diffOutputTable) insertSQL(values *bytes.Buffer) string {
