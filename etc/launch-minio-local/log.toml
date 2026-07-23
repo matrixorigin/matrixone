@@ -1,3 +1,4 @@
+# service node type, [DN|CN|LOG]
 service-type = "LOG"
 data-dir = "./etc/launch-minio-local/mo-data"
 
