@@ -15,8 +15,12 @@
 package frontend
 
 import (
+	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/stretchr/testify/require"
@@ -240,4 +244,32 @@ func Test_SessionAccessorsWithNilPlanCache(t *testing.T) {
 	require.False(t, ses.isCached("x"))
 	require.NotPanics(t, func() { ses.cleanCache() })
 	require.NotPanics(t, func() { ses.releasePlanCache() })
+}
+
+func TestSessionSQLModePresenceChangeClearsPlanCache(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
+
+	ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
+	stmt := &trackedStatement{}
+	ses.cachePlan("cached-sql", []tree.Statement{stmt}, []*plan.Plan{{}})
+	require.True(t, ses.isCached("cached-sql"))
+
+	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "STRICT_TRANS_TABLES"))
+	require.True(t, ses.isCached("cached-sql"))
+	require.Zero(t, stmt.freed)
+
+	require.NoError(t, ses.SetSessionSysVar(ctx, "SQL_MODE", "STRICT_TRANS_TABLES,MATRIXONE_NATIVE"))
+	require.False(t, ses.isCached("cached-sql"))
+	require.Equal(t, 1, stmt.freed)
+}
+
+func TestSessionSQLModePresenceMatcherUsesExactToken(t *testing.T) {
+	has, ok := sqlModeHasMatrixOneNativeValue("STRICT_TRANS_TABLES, MATRIXONE_NATIVE")
+	require.True(t, ok)
+	require.True(t, has)
+
+	has, ok = sqlModeHasMatrixOneNativeValue("STRICT_TRANS_TABLES, MATRIXONE_NATIVE_EXTRA")
+	require.True(t, ok)
+	require.False(t, has)
 }

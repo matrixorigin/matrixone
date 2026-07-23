@@ -79,6 +79,16 @@ type TxnComputationWrapper struct {
 	// can contain statements with different inline overrides, so this metadata
 	// must travel with the wrapper rather than live at request scope.
 	remapDb map[string]string
+
+	// schedulingSQL preserves the raw per-statement fragment, including
+	// optimizer comments. sqlOfStmt is intentionally sanitized for logging and
+	// therefore cannot carry statement-scoped scheduling intent.
+	schedulingSQL string
+
+	// Prepared SQL keeps the lexical mode from PREPARE time. An empty value is
+	// a valid mode, so prepared execution tracks its presence separately.
+	preparedSchedulingSQLMode    string
+	hasPreparedSchedulingSQLMode bool
 }
 
 func InitTxnComputationWrapper(
@@ -106,6 +116,31 @@ func (cwft *TxnComputationWrapper) SetRemapDb(remapDb map[string]string) {
 
 func (cwft *TxnComputationWrapper) GetRemapDb() map[string]string {
 	return cwft.remapDb
+}
+
+func (cwft *TxnComputationWrapper) SetSchedulingSQL(sql string) {
+	cwft.schedulingSQL = sql
+}
+
+func (cwft *TxnComputationWrapper) SchedulingSQL() string {
+	return cwft.schedulingSQL
+}
+
+func (cwft *TxnComputationWrapper) schedulingSQLOr(fallback string) string {
+	if cwft.schedulingSQL != "" {
+		return cwft.schedulingSQL
+	}
+	return fallback
+}
+
+func (cwft *TxnComputationWrapper) querySchedulingIntentForPreparedStatement(
+	sql string,
+) schedule.SchedulingIntent {
+	if cwft.hasPreparedSchedulingSQLMode {
+		return querySchedulingIntentForStatementWithSQLMode(
+			cwft.ses, sql, cwft.preparedSchedulingSQLMode)
+	}
+	return querySchedulingIntentForStatement(cwft.ses, sql)
 }
 
 func (cwft *TxnComputationWrapper) Plan() *plan.Plan {
@@ -146,6 +181,9 @@ func (cwft *TxnComputationWrapper) Clear() {
 	cwft.prepareName = ""
 	cwft.binaryPrepare = false
 	cwft.remapDb = nil
+	cwft.schedulingSQL = ""
+	cwft.preparedSchedulingSQLMode = ""
+	cwft.hasPreparedSchedulingSQLMode = false
 	cwft.schedulingTrace.Reset()
 }
 
@@ -335,11 +373,17 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 		}
 
 		if retComp == nil {
+			var schedulingSQLMode *string
+			if cwft.hasPreparedSchedulingSQLMode {
+				schedulingSQLMode = &cwft.preparedSchedulingSQLMode
+			}
 			cwft.compile, err = createCompile(
 				execCtx,
 				cwft.ses,
 				cwft.proc,
 				cwft.ses.GetSql(),
+				originSQL,
+				schedulingSQLMode,
 				cwft.stmt,
 				cwft.plan,
 				fill,
@@ -353,6 +397,9 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 		} else {
 			// retComp
 			cwft.proc.ReplaceTopCtx(execCtx.reqCtx)
+			// originSQL is the prepared statement text here; the wrapper carries
+			// the outer EXECUTE fragment, which cannot contain the inner hint.
+			retComp.SetQuerySchedulingIntent(cwft.querySchedulingIntentForPreparedStatement(originSQL))
 			retComp.SetSchedulingTraceRecorder(&cwft.schedulingTrace)
 			retComp.Reset(cwft.proc, getStatementStartAt(execCtx.reqCtx), fill, cwft.ses.GetSql())
 			cwft.compile = retComp
@@ -371,6 +418,8 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 			cwft.ses,
 			cwft.proc,
 			execCtx.sqlOfStmt,
+			cwft.schedulingSQLOr(execCtx.sqlOfStmt),
+			nil,
 			cwft.stmt,
 			cwft.plan,
 			fill,
@@ -518,6 +567,7 @@ func initExecuteStmtParam(execCtx *ExecCtx, ses *Session, cwft *TxnComputationWr
 	}
 	originSQL := prepareStmt.Sql
 	preparePlan := prepareStmt.PreparePlan.GetDcl().GetPrepare()
+	currentNativeMode := ses.sqlModeHasMatrixOneNative()
 
 	// TODO check if schema change, obj.Obj is zero all the time in 0.6
 	eng := ses.proc.Base.SessionInfo.StorageEngine
@@ -544,8 +594,10 @@ func initExecuteStmtParam(execCtx *ExecCtx, ses *Session, cwft *TxnComputationWr
 		}
 	}
 
-	// rebuild plan when schema changed
-	if change {
+	modeMismatch := prepareStmt.NativeMode != currentNativeMode
+
+	// rebuild plan when schema changed or the session's compatibility mode changed
+	if change || modeMismatch {
 		originPrepareStmt := &tree.PrepareStmt{
 			Name: tree.Identifier(prepareStmt.Name),
 			Stmt: prepareStmt.PrepareStmt,
@@ -556,11 +608,12 @@ func initExecuteStmtParam(execCtx *ExecCtx, ses *Session, cwft *TxnComputationWr
 		}
 		preparePlan = newPlan.GetDcl().GetPrepare()
 		prepareStmt.PreparePlan = newPlan
+		prepareStmt.NativeMode = currentNativeMode
 		prepareStmt.Ts = timestamp.Timestamp{PhysicalTime: time.Now().Unix()}
 	}
 
-	// Recreate the cached compile only when the schema changed. Without a
-	// schema change the cached compile is reused as-is: Compile.Reset clears
+	// Recreate the cached compile when schema or compatibility-mode changes.
+	// Otherwise the cached compile is reused as-is: Compile.Reset clears
 	// the per-execution state, including the pipeline edges' terminal state
 	// (see Scope.resetForReuse), so reuse is safe and avoids the
 	// per-execution recompilation overhead that regressed TPCC. A nil cache
@@ -568,16 +621,19 @@ func initExecuteStmtParam(execCtx *ExecCtx, ses *Session, cwft *TxnComputationWr
 	// query); recompiling would fail with ErrCantCompileForPrepare on every
 	// execution, so leave it to the regular compile path (isPrepare=false).
 	// See: https://github.com/matrixorigin/matrixone/issues/25614
-	if change && prepareStmt.compile != nil {
+	if (change || modeMismatch) && prepareStmt.compile != nil {
 		prepareStmt.compile.FreeOperator()
 		prepareStmt.compile.SetIsPrepare(false)
 		prepareStmt.compile.Release()
 		prepareStmt.compile = nil
 
-		if _, ok := preparePlan.Plan.Plan.(*plan.Plan_Query); ok && shouldCachePrepareCompile(preparePlan.Plan) {
+		executionIntent := querySchedulingIntentForStatementWithSQLMode(
+			ses, originSQL, prepareStmt.schedulingSQLMode)
+		if _, ok := preparePlan.Plan.Plan.(*plan.Plan_Query); ok &&
+			shouldCachePrepareCompile(preparePlan.Plan) && !executionIntent.Explicit {
 			// Prepare-time compiles are cached and must not retain a statement-owned trace.
 			// The execution path attaches the current wrapper trace after cache retrieval.
-			comp, err := createCompile(execCtx, ses, ses.proc, originSQL, prepareStmt.PrepareStmt, preparePlan.Plan, ses.GetOutputCallback(execCtx), true, nil)
+			comp, err := createCompile(execCtx, ses, ses.proc, originSQL, originSQL, &prepareStmt.schedulingSQLMode, prepareStmt.PrepareStmt, preparePlan.Plan, ses.GetOutputCallback(execCtx), true, nil)
 			if err != nil {
 				if !moerr.IsMoErrCode(err, moerr.ErrCantCompileForPrepare) {
 					return nil, nil, nil, "", err
@@ -602,28 +658,66 @@ func initExecuteStmtParam(execCtx *ExecCtx, ses *Session, cwft *TxnComputationWr
 		if len(execPlan.Args) != numParams {
 			return nil, nil, nil, originSQL, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
 		}
-		params := vector.NewVec(types.T_text.ToType())
-		paramVals := make([]any, numParams)
-		for i, arg := range execPlan.Args {
-			exprImpl := arg.Expr.(*plan.Expr_V)
-			param, err := cwft.proc.GetResolveVariableFunc()(exprImpl.V.Name, exprImpl.V.System, exprImpl.V.Global)
-			if err != nil {
-				return nil, nil, nil, originSQL, err
-			}
-			err = util.AppendAnyToStringVector(cwft.proc, param, params)
-			if err != nil {
-				return nil, nil, nil, originSQL, err
-			}
-			paramVals[i] = param
+		params, paramVals, paramIsBin, err := buildExecuteUserParams(cwft.proc, execPlan.Args)
+		if err != nil {
+			return nil, nil, nil, originSQL, err
 		}
-		cwft.proc.SetPrepareParams(params)
+		cwft.proc.SetOwnedPrepareParamsWithIsBin(params, paramIsBin)
 		cwft.paramVals = paramVals
 	} else {
 		if numParams > 0 {
 			return nil, nil, nil, originSQL, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
 		}
 	}
-	return prepareStmt.compile, preparePlan.Plan, prepareStmt.PrepareStmt, originSQL, nil
+	// A cached prepared Compile already owns a materialized worker topology.
+	// Explicit scheduling intent must be evaluated for this execution, so it
+	// cannot reuse a topology compiled under the prepare-time defaults. Keep a
+	// default cached topology dormant, though: prepared compiles already coexist
+	// with other statement compiles on the session process, and it may become
+	// reusable if a session-level scheduling override is later cleared.
+	cwft.preparedSchedulingSQLMode = prepareStmt.schedulingSQLMode
+	cwft.hasPreparedSchedulingSQLMode = true
+	retComp := prepareStmt.compile
+	if retComp != nil && querySchedulingIntentForStatementWithSQLMode(
+		ses, originSQL, prepareStmt.schedulingSQLMode).Explicit {
+		retComp = nil
+	}
+	return retComp, preparePlan.Plan, prepareStmt.PrepareStmt, originSQL, nil
+}
+
+func buildExecuteUserParams(
+	proc *process.Process,
+	args []*plan.Expr,
+) (params *vector.Vector, paramVals []any, paramIsBin []bool, err error) {
+	params = vector.NewVec(types.T_text.ToType())
+	defer func() {
+		if err != nil {
+			params.Free(proc.Mp())
+		}
+	}()
+	paramVals = make([]any, len(args))
+	paramIsBin = make([]bool, len(args))
+	for i, arg := range args {
+		exprImpl := arg.Expr.(*plan.Expr_V)
+		var param any
+		param, err = proc.GetResolveVariableFunc()(exprImpl.V.Name, exprImpl.V.System, exprImpl.V.Global)
+		if err != nil {
+			return
+		}
+		err = util.AppendAnyToStringVector(proc, param, params)
+		if err != nil {
+			return
+		}
+		resolveIsBin := proc.GetResolveVariableIsBinFunc()
+		if resolveIsBin != nil {
+			paramIsBin[i], err = resolveIsBin(exprImpl.V.Name, exprImpl.V.System, exprImpl.V.Global)
+			if err != nil {
+				return
+			}
+		}
+		paramVals[i] = plan2.ParamValue{Value: param, IsBin: paramIsBin[i]}
+	}
+	return
 }
 
 func shouldCachePrepareCompile(p *plan.Plan) bool {
@@ -653,6 +747,8 @@ func createCompile(
 	ses FeSession,
 	proc *process.Process,
 	originSQL string,
+	schedulingSQL string,
+	schedulingSQLMode *string,
 	stmt tree.Statement,
 	plan *plan2.Plan,
 	fill func(*batch.Batch, *perfcounter.CounterSet) error,
@@ -708,6 +804,15 @@ func createCompile(
 		getStatementStartAt(execCtx.reqCtx),
 	)
 	retCompile.SetIsPrepare(isPrepare)
+	if schedulingSQL == "" {
+		schedulingSQL = originSQL
+	}
+	if schedulingSQLMode != nil {
+		retCompile.SetQuerySchedulingIntent(querySchedulingIntentForStatementWithSQLMode(
+			ses, schedulingSQL, *schedulingSQLMode))
+	} else {
+		retCompile.SetQuerySchedulingIntent(querySchedulingIntentForStatement(ses, schedulingSQL))
+	}
 	retCompile.SetSchedulingTraceRecorder(schedulingTrace)
 	retCompile.SetBuildPlanFunc(func(ctx context.Context) (*plan2.Plan, error) {
 		// No permission verification is required when retry execute buildPlan
@@ -735,6 +840,44 @@ func createCompile(
 	}
 	retCompile.SetOriginSQL(originSQL)
 	return
+}
+
+func querySchedulingIntent(ses FeSession) schedule.SchedulingIntent {
+	intent := schedule.SchedulingIntent{
+		PoolFallback:      schedule.PoolFallbackLegacyCompatible,
+		EmptyWorkerPolicy: schedule.EmptyWorkerLocalFallback,
+		CurrentCNPolicy:   schedule.CurrentCNAllowed,
+		WorkerSet: schedule.WorkerSetPolicy{
+			Mode: schedule.WorkerSetAll,
+		},
+	}
+	if ses == nil {
+		return intent
+	}
+	if value, err := ses.GetSessionSysVar(queryMaxWorkers); err == nil {
+		var maxWorkers int
+		switch value := value.(type) {
+		case int64:
+			maxWorkers = int(value)
+		case uint64:
+			maxWorkers = int(value)
+		case int:
+			maxWorkers = value
+		}
+		if maxWorkers > 0 {
+			intent.Explicit = true
+			intent.WorkerSet.Mode = schedule.WorkerSetMax
+			intent.WorkerSet.MaxWorkers = maxWorkers
+		}
+	}
+	if value, err := ses.GetSessionSysVar(queryPoolStrict); err == nil {
+		if boolType, ok := gSysVarsDefs[queryPoolStrict].Type.(SystemVariableBoolType); ok && boolType.IsTrue(value) {
+			intent.Explicit = true
+			intent.PoolFallback = schedule.PoolFallbackStrict
+			intent.EmptyWorkerPolicy = schedule.EmptyWorkerFail
+		}
+	}
+	return intent
 }
 
 func currentCNPipelineAddress(ses FeSession) string {

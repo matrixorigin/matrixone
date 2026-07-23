@@ -1,4 +1,4 @@
-// Copyright 2021 - 2022 Matrix Origin
+// Copyright 2021 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,12 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package service
+package frontend
 
-import (
-	"testing"
-)
+import "github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 
-func TestFileServices(t *testing.T) {
-
+func sqlModeHasMatrixOneNativeValue(value interface{}) (bool, bool) {
+	mode, ok := value.(string)
+	if !ok {
+		return false, false
+	}
+	return mysql.HasMatrixOneNativeSQLMode(mode), true
 }

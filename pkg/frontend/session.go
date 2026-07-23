@@ -334,9 +334,13 @@ func (ses *Session) getNextProcessId() string {
 
 // SetUserDefinedVar sets the user defined variable to the value in session
 func (ses *Session) SetUserDefinedVar(name string, value interface{}, sql string) error {
+	return ses.setUserDefinedVar(name, value, sql, false)
+}
+
+func (ses *Session) setUserDefinedVar(name string, value interface{}, sql string, isBin bool) error {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	ses.userDefinedVars[strings.ToLower(name)] = &UserDefinedVar{Value: value, Sql: sql}
+	ses.userDefinedVars[strings.ToLower(name)] = &UserDefinedVar{Value: value, Sql: sql, IsBin: isBin}
 	return nil
 }
 
@@ -617,6 +621,29 @@ func (ses *Session) updateSqlModeNoAutoValueOnZero(val interface{}) {
 		atomic.StoreInt32(&ses.sqlModeNoAutoValueOnZero, 1)
 	} else {
 		atomic.StoreInt32(&ses.sqlModeNoAutoValueOnZero, 0)
+	}
+}
+
+func (ses *Session) sqlModeHasMatrixOneNative() bool {
+	if ses == nil {
+		return false
+	}
+	value, err := ses.GetSessionSysVar("sql_mode")
+	if err != nil {
+		return false
+	}
+	has, ok := sqlModeHasMatrixOneNativeValue(value)
+	return ok && has
+}
+
+func (ses *Session) updateSqlModeCaches(oldNative bool, val interface{}) {
+	ses.updateSqlModeNoAutoValueOnZero(val)
+	newNative, ok := sqlModeHasMatrixOneNativeValue(val)
+	if !ok {
+		return
+	}
+	if oldNative != newNative {
+		ses.cleanCache()
 	}
 }
 
