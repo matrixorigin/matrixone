@@ -300,6 +300,7 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 
 		runCompile.scopes = []*Scope{s}
 		runCompile.InitPipelineContextToExecuteQuery()
+		normalizeRemoteDispatchReceiverAddresses(s, runCompile.addr)
 
 		registrations, runErr := registerRemoteDispatchReceivers(s)
 		if runErr != nil {
