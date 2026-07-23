@@ -497,10 +497,12 @@ func (txn *Transaction) GetSyncProtectionJobID() string {
 }
 
 type Summary struct {
-	objBat    *batch.Batch
-	accountId uint32
-	tbName    string
-	dbName    string
+	objBat             *batch.Batch
+	accountId          uint32
+	tbName             string
+	dbName             string
+	autoIncrEpoch      uint32
+	autoIncrEpochKnown bool
 }
 
 // FIXME: The map inside this one will be accessed concurrently, using
@@ -697,6 +699,29 @@ func (txn *Transaction) IncrStatementID(ctx context.Context, commit bool) error 
 	}
 
 	return nil
+}
+
+func (txn *Transaction) AdvanceSnapshot(ctx context.Context, ts timestamp.Timestamp) error {
+	txn.op.EnterIncrStmt()
+	defer txn.op.ExitIncrStmt()
+
+	txn.Lock()
+	defer txn.Unlock()
+
+	if !txn.op.Txn().IsRCIsolation() {
+		return txn.advanceSnapshot(ctx, ts)
+	}
+
+	if txn.transfer.lastTransferred.IsEmpty() {
+		txn.start = time.Now()
+		txn.transfer.lastTransferred = types.TimestampToTS(txn.op.SnapshotTS())
+	}
+
+	if err := txn.advanceSnapshot(ctx, ts); err != nil {
+		return err
+	}
+
+	return txn.transferTombstones(ctx)
 }
 
 // writeOffset returns the offset of the first write in the workspace
@@ -1112,6 +1137,11 @@ type Entry struct {
 	bat       *batch.Batch
 	tnStore   DNStore
 	pkChkByTN int8
+	// autoIncrEpoch is the allocator epoch used to plan this user-table write.
+	// autoIncrEpochKnown distinguishes a valid initial zero epoch from an
+	// old CN that did not send the dependency.
+	autoIncrEpoch      uint32
+	autoIncrEpochKnown bool
 
 	// skipTransfer indicates this entry should skip transfer processing
 	// Used by CCPR to avoid transfer errors for cross-cluster tombstones
@@ -1168,6 +1198,14 @@ type tableKey struct {
 	databaseId uint64
 	dbName     string
 	name       string
+}
+
+// workspaceTableKey keeps batches planned against different table definitions
+// from being coalesced when the CN workspace is flushed to S3.
+type workspaceTableKey struct {
+	tableKey
+	autoIncrEpoch      uint32
+	autoIncrEpochKnown bool
 }
 
 func (k tableKey) String() string {

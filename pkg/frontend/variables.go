@@ -33,6 +33,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/gpumode"
 )
 
+// defaultLockWaitTimeoutSeconds is the transitional frontend fallback. Long
+// internal jobs should supply a task-owned deadline instead of relying on it.
+const defaultLockWaitTimeoutSeconds int64 = defines.DefaultLockWaitTimeoutSeconds
+
 var (
 	errorConvertToBoolFailed                   = moerr.NewInternalError(context.Background(), "convert to the system variable bool type failed")
 	errorConvertToIntFailed                    = moerr.NewInternalError(context.Background(), "convert to the system variable int type failed")
@@ -1050,7 +1054,11 @@ func (sv *SystemVariables) Set(name string, value interface{}) {
 }
 
 // definitions of system variables
-const enableExplainScheduling = "enable_explain_scheduling"
+const (
+	enableExplainScheduling = "enable_explain_scheduling"
+	queryMaxWorkers         = "query_max_workers"
+	queryPoolStrict         = "query_pool_strict"
+)
 
 var gSysVarsDefs = map[string]SystemVariable{
 	"port": {
@@ -1252,7 +1260,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Scope:             ScopeBoth,
 		Dynamic:           true,
 		SetVarHintApplies: true,
-		Type:              InitSystemVariableSetType("sql_mode", "ANSI", "TRADITIONAL", "ALLOW_INVALID_DATES", "ANSI_QUOTES", "ERROR_FOR_DIVISION_BY_ZERO", "HIGH_NOT_PRECEDENCE", "IGNORE_SPACE", "NO_AUTO_VALUE_ON_ZERO", "NO_BACKSLASH_ESCAPES", "NO_DIR_IN_CREATE", "NO_ENGINE_SUBSTITUTION", "NO_UNSIGNED_SUBTRACTION", "NO_ZERO_DATE", "NO_ZERO_IN_DATE", "ONLY_FULL_GROUP_BY", "PAD_CHAR_TO_FULL_LENGTH", "PIPES_AS_CONCAT", "REAL_AS_FLOAT", "STRICT_ALL_TABLES", "STRICT_TRANS_TABLES", "TIME_TRUNCATE_FRACTIONAL"),
+		Type:              InitSystemVariableSetType("sql_mode", "ANSI", "TRADITIONAL", "ALLOW_INVALID_DATES", "ANSI_QUOTES", "ERROR_FOR_DIVISION_BY_ZERO", "HIGH_NOT_PRECEDENCE", "IGNORE_SPACE", "MATRIXONE_NATIVE", "NO_AUTO_VALUE_ON_ZERO", "NO_BACKSLASH_ESCAPES", "NO_DIR_IN_CREATE", "NO_ENGINE_SUBSTITUTION", "NO_UNSIGNED_SUBTRACTION", "NO_ZERO_DATE", "NO_ZERO_IN_DATE", "ONLY_FULL_GROUP_BY", "PAD_CHAR_TO_FULL_LENGTH", "PIPES_AS_CONCAT", "REAL_AS_FLOAT", "STRICT_ALL_TABLES", "STRICT_TRANS_TABLES", "TIME_TRUNCATE_FRACTIONAL"),
 		Default:           "ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES",
 	},
 	"completion_type": {
@@ -2168,7 +2176,9 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: true,
 		Type:              InitSystemVariableIntType("lock_wait_timeout", 1, 31536000, false),
-		Default:           int64(31536000),
+		// Keep the default bounded so a single abandoned or slow transaction
+		// cannot stall every waiter behind the same row lock for hours.
+		Default: defaultLockWaitTimeoutSeconds,
 	},
 	"locked_in_memory": {
 		Name:              "locked_in_memory",
@@ -3594,6 +3604,25 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableBoolType(enableExplainScheduling),
 		Default:           int64(0),
 	},
+	queryMaxWorkers: {
+		Name:              queryMaxWorkers,
+		Scope:             ScopeSession,
+		Dynamic:           true,
+		SetVarHintApplies: true,
+		// CNCNT/CNIDX are int32 at the execution boundary. Do not impose a
+		// smaller arbitrary cluster-size ceiling here; a value above the resolved
+		// candidate count naturally selects the whole eligible pool.
+		Type:    InitSystemVariableIntType(queryMaxWorkers, 0, 2147483647, false),
+		Default: int64(0),
+	},
+	queryPoolStrict: {
+		Name:              queryPoolStrict,
+		Scope:             ScopeSession,
+		Dynamic:           true,
+		SetVarHintApplies: true,
+		Type:              InitSystemVariableBoolType(queryPoolStrict),
+		Default:           int64(0),
+	},
 	// remap_rewrites holds a JSON object of table-rewrite rules that apply to
 	// every query in the session (gated by enable_remap_hint). The value is the
 	// same payload as the /*+ {"rewrites": {...}} */ hint, e.g.
@@ -4191,6 +4220,7 @@ func valueIsBoolTrue(value interface{}) (bool, error) {
 type UserDefinedVar struct {
 	Value interface{}
 	Sql   string
+	IsBin bool
 }
 
 func autocommitValue(ses FeSession) (bool, error) {

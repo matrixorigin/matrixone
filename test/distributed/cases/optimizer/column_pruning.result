@@ -54,9 +54,198 @@ create table empty_t(v int);
 select 1 from (select sum(v) as discarded from empty_t) s;
 1
 1
+create table carrier_l(payload varchar(1000), id tinyint);
+create table carrier_r(payload varchar(2000), id tinyint);
+insert into carrier_l values ('wide-a', 1), ('wide-b', 2);
+insert into carrier_r values ('wide-c', 3);
+select 1 from carrier_l order by id;
+1
+1
+1
+select 1 from (
+select payload, id from carrier_l
+union all
+select payload, id from carrier_r
+) u;
+1
+1
+1
+1
+select 1 from (select group_concat(payload), count(*) from carrier_l) s;
+1
+1
+select 1 from (select group_concat(payload), count(*) from carrier_l where id < 0) s;
+1
+1
+select 1 from (select count(interval 1 day), count(*) from mo_catalog.mo_database) s;
+1
+1
+create table sample_nn(a int not null, b int not null, payload varchar(100) not null);
+insert into sample_nn select * from l;
+select b from (select sample(payload, b, 4 rows) from sample_nn) s order by b;
+b
+10
+10
+20
+30
+select count(*) from (select 1 from (select sample(payload, b, 4 rows) from sample_nn) s) q;
+count(*)
+4
+select count(*) from (select 1 from (select sample(payload, b, 4 rows) from sample_nn where a < 0) s) q;
+count(*)
+0
+select count(*) from (select 1 from (select sample(payload, b, 4 rows) from sample_nn where a = 2) s) q;
+count(*)
+1
+select count(*) from (select 1 from (select sample(payload, b, 100 percent) from sample_nn) s) q;
+count(*)
+4
+select a from (
+select a, sample(payload, b, 4 rows) from sample_nn group by a
+) s where b > 15 order by a, b;
+a
+1
+2
+create table sample_runtime_null(j json not null, id int not null);
+insert into sample_runtime_null values
+('{}', 1),
+('{}', 2),
+('{"x":3}', 3),
+('{"x":4}', 4);
+select id from (
+select sample(json_extract(j, '$.x'), id, 2 rows)
+from sample_runtime_null
+) s order by id;
+id
+1
+2
+3
+4
 create table tw(ts timestamp, v int);
 insert into tw values ('2024-01-01 00:00:00', 1), ('2024-01-01 12:00:00', 2);
 select _wend, max(v) from tw interval(ts, 1, day);
 _wend    max(v)
 2024-01-02 00:00:00    2
+create table tws(ts timestamp(3) primary key, v int);
+insert into tws values
+('2023-08-01 00:00:00', 10), ('2023-08-01 00:00:01', 20),
+('2023-08-01 00:00:06', 30), ('2023-08-01 00:00:07', 40);
+select _wstart, _wend, max(v), min(v) from tws interval(ts, 5, second);
+➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  max(v)[4,32,0]  ¦  min(v)[4,32,0]  𝄀
+2023-08-01 00:00:00  ¦  2023-08-01 00:00:05  ¦  20  ¦  10  𝄀
+2023-08-01 00:00:05  ¦  2023-08-01 00:00:10  ¦  40  ¦  30
+select c from (select _wstart as a, max(v) as b, min(v) as c from tws interval(ts, 5, second)) x;
+➤ c[4,32,0]  𝄀
+10  𝄀
+30
+select a from (select _wstart as a, max(v) as b, min(v) as c from tws interval(ts, 5, second)) x;
+➤ a[93,64,0]  𝄀
+2023-08-01 00:00:00  𝄀
+2023-08-01 00:00:05
+select d from (select _wstart as a, _wend as d, max(v) as b from tws interval(ts, 5, second)) x;
+➤ d[93,64,0]  𝄀
+2023-08-01 00:00:05  𝄀
+2023-08-01 00:00:10
+select c from (select _wstart as a, max(v) as b, min(v) as c from tws interval(ts, 10, second) sliding(5, second)) x;
+➤ c[4,32,0]  𝄀
+10  𝄀
+30
+select a from (select _wstart as a, max(v) as b, min(v) as c from tws interval(ts, 10, second) sliding(5, second)) x;
+➤ a[93,64,0]  𝄀
+2023-08-01 00:00:00  𝄀
+2023-08-01 00:00:05
+select c from (select _wstart as a, _wend as d, max(v) as b, min(v) as c from tws interval(ts, 5, second) fill(prev)) x;
+➤ c[4,32,0]  𝄀
+10  𝄀
+30
+select c from (select _wstart as a, max(v) as b, min(v) as c from tws interval(ts, 5, second) fill(linear)) x;
+➤ c[4,32,0]  𝄀
+10  𝄀
+30
+select c from (select _wstart as a, max(v) as b, min(v) as c from tws interval(ts, 5, second) fill(value, 99)) x;
+➤ c[4,32,0]  𝄀
+10  𝄀
+30
+select 1 from (select _wstart as a, max(v) as b from tws interval(ts, 5, second)) x;
+➤ 1[-5,64,0]  𝄀
+1  𝄀
+1
+select count(*) from (select _wstart as a, max(v) as b from tws interval(ts, 5, second)) x;
+➤ count(*)[-5,64,0]  𝄀
+2
+select 1 from (select max(v) as b from tws interval(ts, 5, second)) x;
+➤ 1[-5,64,0]  𝄀
+1  𝄀
+1
+create table tw_empty(ts timestamp(3) primary key, v int);
+select _wstart, max(v) from tw_empty interval(ts, 5, second);
+➤ _wstart[93,64,0]  ¦  max(v)[4,32,0]
+select 1 from (select _wstart as a, max(v) as b from tw_empty interval(ts, 5, second)) x;
+➤ 1[-5,64,0]
+create table twp(ts timestamp(3), p int, v int);
+insert into twp values
+('2023-08-01 00:00:00', 1, 10), ('2023-08-01 00:00:01', 1, 20),
+('2023-08-01 00:00:06', 1, 30), ('2023-08-01 00:00:00', 2, 100),
+('2023-08-01 00:00:07', 2, 400);
+select _wstart, p, max(v) from twp group by p interval(ts, 5, second) order by p, _wstart;
+➤ _wstart[93,64,0]  ¦  p[4,32,0]  ¦  max(v)[4,32,0]  𝄀
+2023-08-01 00:00:00  ¦  1  ¦  20  𝄀
+2023-08-01 00:00:05  ¦  1  ¦  30  𝄀
+2023-08-01 00:00:00  ¦  2  ¦  100  𝄀
+2023-08-01 00:00:05  ¦  2  ¦  400
+select _wstart, _wend, p, max(v), min(v) from twp group by p interval(ts, 5, second) order by p, _wstart;
+➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  p[4,32,0]  ¦  max(v)[4,32,0]  ¦  min(v)[4,32,0]  𝄀
+2023-08-01 00:00:00  ¦  2023-08-01 00:00:05  ¦  1  ¦  20  ¦  10  𝄀
+2023-08-01 00:00:05  ¦  2023-08-01 00:00:10  ¦  1  ¦  30  ¦  30  𝄀
+2023-08-01 00:00:00  ¦  2023-08-01 00:00:05  ¦  2  ¦  100  ¦  100  𝄀
+2023-08-01 00:00:05  ¦  2023-08-01 00:00:10  ¦  2  ¦  400  ¦  400
+select p, _wstart, max(v), min(v) from twp group by p interval(ts, 10, second) sliding(5, second) order by p, _wstart;
+➤ p[4,32,0]  ¦  _wstart[93,64,0]  ¦  max(v)[4,32,0]  ¦  min(v)[4,32,0]  𝄀
+1  ¦  2023-08-01 00:00:00  ¦  30  ¦  10  𝄀
+1  ¦  2023-08-01 00:00:05  ¦  30  ¦  30  𝄀
+2  ¦  2023-08-01 00:00:00  ¦  400  ¦  100  𝄀
+2  ¦  2023-08-01 00:00:05  ¦  400  ¦  400
+select b from (select _wstart as a, p, max(v) as b from twp group by p interval(ts, 5, second)) x order by b;
+➤ b[4,32,0]  𝄀
+20  𝄀
+30  𝄀
+100  𝄀
+400
+select count(*) from (select _wstart as a, p, max(v) as b from twp group by p interval(ts, 5, second)) x;
+➤ count(*)[-5,64,0]  𝄀
+4
+create table twf(ts datetime, p int, v int);
+insert into twf values
+('2026-01-01 00:00:00', 1, 10), ('2026-01-01 00:00:07', 1, null),
+('2026-01-01 00:00:00', 2, null), ('2026-01-01 00:00:07', 2, 40);
+select p, _wstart, max(v) from twf group by p interval(ts, 5, second) order by p, _wstart;
+➤ p[4,32,0]  ¦  _wstart[93,64,0]  ¦  max(v)[4,32,0]  𝄀
+1  ¦  2026-01-01 00:00:00  ¦  10  𝄀
+1  ¦  2026-01-01 00:00:05  ¦  null  𝄀
+2  ¦  2026-01-01 00:00:00  ¦  null  𝄀
+2  ¦  2026-01-01 00:00:05  ¦  40
+select p, _wstart, max(v) from twf group by p interval(ts, 5, second) fill(prev) order by p, _wstart;
+➤ p[4,32,0]  ¦  _wstart[93,64,0]  ¦  max(v)[4,32,0]  𝄀
+1  ¦  2026-01-01 00:00:00  ¦  10  𝄀
+1  ¦  2026-01-01 00:00:05  ¦  10  𝄀
+2  ¦  2026-01-01 00:00:00  ¦  null  𝄀
+2  ¦  2026-01-01 00:00:05  ¦  40
+select p, _wstart, max(v) from twf group by p interval(ts, 5, second) fill(next) order by p, _wstart;
+➤ p[4,32,0]  ¦  _wstart[93,64,0]  ¦  max(v)[4,32,0]  𝄀
+1  ¦  2026-01-01 00:00:00  ¦  10  𝄀
+1  ¦  2026-01-01 00:00:05  ¦  null  𝄀
+2  ¦  2026-01-01 00:00:00  ¦  40  𝄀
+2  ¦  2026-01-01 00:00:05  ¦  40
+select p, _wstart, max(v) from twf group by p interval(ts, 5, second) fill(value, 99) order by p, _wstart;
+➤ p[4,32,0]  ¦  _wstart[93,64,0]  ¦  max(v)[4,32,0]  𝄀
+1  ¦  2026-01-01 00:00:00  ¦  10  𝄀
+1  ¦  2026-01-01 00:00:05  ¦  99  𝄀
+2  ¦  2026-01-01 00:00:00  ¦  99  𝄀
+2  ¦  2026-01-01 00:00:05  ¦  40
+select p, _wstart, max(v) from twf group by p interval(ts, 10, second) sliding(5, second) fill(prev) order by p, _wstart;
+➤ p[4,32,0]  ¦  _wstart[93,64,0]  ¦  max(v)[4,32,0]  𝄀
+1  ¦  2026-01-01 00:00:00  ¦  10  𝄀
+1  ¦  2026-01-01 00:00:05  ¦  10  𝄀
+2  ¦  2026-01-01 00:00:00  ¦  40  𝄀
+2  ¦  2026-01-01 00:00:05  ¦  40
 drop database column_pruning;

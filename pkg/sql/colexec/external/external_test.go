@@ -53,6 +53,12 @@ const (
 	Rows = 10 // default rows
 )
 
+func TestCsvReaderRejectsZeroVectorBatch(t *testing.T) {
+	proc := testutil.NewProc(t)
+	_, err := (&CsvReader{}).makeBatchRows(proc, batch.NewWithSize(0))
+	require.ErrorContains(t, err, "external CSV reader requires at least one materialized column")
+}
+
 // add unit tests for cases
 type externalTestCase struct {
 	arg      *External
@@ -937,6 +943,63 @@ func Test_Prepare(t *testing.T) {
 	})
 }
 
+func TestIcebergParquetProfileStats(t *testing.T) {
+	stats := icebergParquetProfileStats(&ExternalParam{
+		ExParamConst: ExParamConst{
+			Attrs: []plan.ExternAttr{
+				{ColName: "id", ColIndex: 0},
+				{ColName: "name", ColIndex: 1},
+			},
+			Cols: []*plan.ColDef{
+				{Name: "id"},
+				{Name: "name"},
+				{Name: "hidden", Hidden: true},
+			},
+			IcebergColumns: []*pipeline.IcebergColumnMapping{
+				{MoColIndex: 0, IcebergFieldId: 1, CurrentFieldName: "id"},
+				{MoColIndex: 1, IcebergFieldId: 2, CurrentFieldName: "name", DefaultNullFill: true},
+				{MoColIndex: 2, IcebergFieldId: 3, CurrentFieldName: "hidden", IsHidden: true},
+			},
+			IcebergDataTasks: []*pipeline.IcebergDataFileTask{
+				{FilePath: "warehouse/orders/part-0.parquet", FileSize: 100},
+				{FilePath: "warehouse/orders/part-1.parquet", FileSize: 200},
+			},
+			IcebergPlanningStats: process.ParquetProfileStats{
+				IcebergMetadataBytes:         10,
+				IcebergManifestListBytes:     20,
+				IcebergManifestBytes:         30,
+				IcebergManifestsSelected:     2,
+				IcebergManifestsPruned:       1,
+				IcebergDataFilesSelected:     2,
+				IcebergDataFilesPruned:       3,
+				IcebergDataFileBytesSelected: 300,
+				IcebergDataFileBytesPruned:   400,
+				IcebergPlanningCacheHits:     4,
+				IcebergPlanningCacheMiss:     5,
+			},
+			Extern: &tree.ExternParam{
+				ExParamConst: tree.ExParamConst{Format: tree.PARQUET},
+				ExParam:      tree.ExParam{ExternType: int32(plan.ExternType_ICEBERG_TB)},
+			},
+		},
+	})
+	require.Equal(t, int64(2), stats.TotalColumns)
+	require.Equal(t, int64(1), stats.ProjectedColumns)
+	require.Equal(t, int64(2), stats.SelectedFiles)
+	require.Equal(t, int64(300), stats.SelectedFileBytes)
+	require.Equal(t, int64(10), stats.IcebergMetadataBytes)
+	require.Equal(t, int64(20), stats.IcebergManifestListBytes)
+	require.Equal(t, int64(30), stats.IcebergManifestBytes)
+	require.Equal(t, int64(2), stats.IcebergManifestsSelected)
+	require.Equal(t, int64(1), stats.IcebergManifestsPruned)
+	require.Equal(t, int64(2), stats.IcebergDataFilesSelected)
+	require.Equal(t, int64(3), stats.IcebergDataFilesPruned)
+	require.Equal(t, int64(300), stats.IcebergDataFileBytesSelected)
+	require.Equal(t, int64(400), stats.IcebergDataFileBytesPruned)
+	require.Equal(t, int64(4), stats.IcebergPlanningCacheHits)
+	require.Equal(t, int64(5), stats.IcebergPlanningCacheMiss)
+}
+
 func TestReadFileOffsetCompressedUnsafe(t *testing.T) {
 	fs := testutil.NewFS(t)
 	content := []byte("0,0,1,2,0,0,3,4,0,0,abc,2024-01-01,2024-01-01 00:00:01,2024-01-01 00:00:01,1,1.23,txt,aaa,bbb,ccc\n")
@@ -1603,6 +1666,71 @@ func Test_getMOCSVReader(t *testing.T) {
 	require.NoError(t, err)
 	_, err = r.Open(param, case1.proc)
 	require.Equal(t, nil, err)
+}
+
+func TestGetColDataYear(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vector.NewVec(types.T_year.ToType())
+	defer bat.Clean(proc.Mp())
+
+	param := &ExternalParam{
+		ExParamConst: ExParamConst{
+			Cols: []*plan.ColDef{{
+				Name: "c_year",
+				Typ:  plan.Type{Id: int32(types.T_year)},
+			}},
+			Ctx:    context.Background(),
+			Extern: &tree.ExternParam{},
+		},
+	}
+
+	err := getColData(
+		bat,
+		[]csvparser.Field{{Val: "2024"}},
+		0,
+		param,
+		proc.Mp(),
+		plan.ExternAttr{ColName: "c_year", ColIndex: 0, ColFieldIndex: 0},
+		proc,
+	)
+	require.NoError(t, err)
+	require.Equal(t, []types.MoYear{2024}, vector.MustFixedColWithTypeCheck[types.MoYear](bat.Vecs[0]))
+}
+
+func TestGetColDataUnsupportedTypeReportsColumnIndex(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	bat := batch.NewWithSize(2)
+	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_TS.ToType())
+	defer bat.Clean(proc.Mp())
+
+	param := &ExternalParam{
+		ExParamConst: ExParamConst{
+			Cols: []*plan.ColDef{
+				{Name: "id", Typ: plan.Type{Id: int32(types.T_int32)}},
+				{Name: "unsupported", Typ: plan.Type{Id: int32(types.T_TS)}},
+			},
+			Ctx:    context.Background(),
+			Extern: &tree.ExternParam{},
+		},
+	}
+
+	err := getColData(
+		bat,
+		[]csvparser.Field{{Val: "1"}},
+		0,
+		param,
+		proc.Mp(),
+		plan.ExternAttr{ColName: "unsupported", ColIndex: 1, ColFieldIndex: 0},
+		proc,
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "the value type TRANSACTION TIMESTAMP is not support now")
 }
 
 // Test_getColData_VecDimensionCheck tests that getColData correctly validates

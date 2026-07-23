@@ -15,8 +15,9 @@
 package clusterservice
 
 import (
+	"cmp"
 	"context"
-	"sort"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -120,6 +121,33 @@ func GetCNServiceWithoutWorkingStateWithContext(
 	return ctx.Err()
 }
 
+// GetAllTNServicesWithContext returns a TN service snapshot without waiting
+// past ctx for the built-in cluster's initial HAKeeper refresh.
+func GetAllTNServicesWithContext(
+	ctx context.Context,
+	service MOCluster,
+) ([]metadata.TNService, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if service == nil {
+		return nil, moerr.NewInternalErrorNoCtx("mocluster service is not initialized")
+	}
+	if builtIn, ok := service.(*cluster); ok {
+		if err := builtIn.waitReadyWithContext(ctx); err != nil {
+			return nil, err
+		}
+		services := builtIn.services.Load()
+		return append([]metadata.TNService(nil), services.tn...), ctx.Err()
+	}
+
+	services := service.GetAllTNServices()
+	return services, ctx.Err()
+}
+
 func lookupMOCluster(service string) (MOCluster, bool, error) {
 	rt := runtime.ServiceRuntime(service)
 	if rt == nil {
@@ -173,6 +201,8 @@ type cluster struct {
 	// Reading from a closed channel still requires runtime mutex acquisition,
 	// which causes significant contention under high concurrency (observed 241s/5.79%
 	// mutex contention in production). Using atomic.Bool eliminates this overhead.
+	// Close also sets ready to release callers that are waiting for the first
+	// refresh while the cluster is shutting down.
 	//
 	// Correctness: readyOnce.Do guarantees that ready.Store(true) happens before
 	// close(readyC), so if readyC is closed (i.e., <-readyC returns), ready is
@@ -338,9 +368,14 @@ func (c *cluster) Refresh(ctx context.Context) error {
 }
 
 func (c *cluster) Close() {
-	c.waitReady()
 	c.stopper.Stop()
-	close(c.forceRefreshC)
+	// A failed initial refresh leaves readiness waiters blocked. Once the
+	// refresh task has stopped, release them so shutdown does not depend on
+	// HAKeeper becoming available.
+	c.readyOnce.Do(func() {
+		c.ready.Store(true)
+		close(c.readyC)
+	})
 }
 
 // DebugUpdateCNLabel implements the MOCluster interface.
@@ -405,8 +440,10 @@ func (c *cluster) UpdateCN(s metadata.CNService) {
 	c.services.Store(new)
 }
 
-// waitReady blocks until the cluster has completed its first refresh from HAKeeper.
-// This ensures that service discovery calls don't return empty results during startup.
+// waitReady blocks until the cluster has completed its first refresh from HAKeeper
+// or is closing. This ensures that service discovery calls don't return empty
+// results during startup, while allowing shutdown to finish if HAKeeper never
+// supplied an initial snapshot.
 //
 // Performance optimization: We use atomic.Bool as a fast-path to avoid the overhead
 // of channel receive operations. Even reading from a closed channel requires acquiring
@@ -422,7 +459,8 @@ func (c *cluster) waitReady() {
 	if c.ready.Load() {
 		return
 	}
-	// Slow path: block until first refresh completes. Only happens during startup.
+	// Slow path: block until first refresh completes or shutdown releases waiters.
+	// Only happens during startup.
 	<-c.readyC
 }
 
@@ -495,8 +533,8 @@ func (c *cluster) refreshWithContext(ctx context.Context) error {
 		}
 	}
 	// sort as the tick, with the bigger one at the front.
-	sort.Slice(details.TNStores, func(i, j int) bool {
-		return details.TNStores[i].Tick > details.TNStores[j].Tick
+	slices.SortFunc(details.TNStores, func(a, b logpb.TNStore) int {
+		return cmp.Compare(b.Tick, a.Tick)
 	})
 	for _, tn := range details.TNStores {
 		v := newTNService(tn)

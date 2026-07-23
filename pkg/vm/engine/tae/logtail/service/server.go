@@ -190,6 +190,9 @@ func NewLogtailServer(
 	for _, opt := range opts {
 		opt(s)
 	}
+	if err := ValidateRPCMaxMessageSize(s.cfg.RpcMaxMessageSize); err != nil {
+		return nil, err
+	}
 
 	uid, _ := uuid.NewV7()
 	s.logger = s.logger.Named(LogtailServiceRPCName).
@@ -200,7 +203,8 @@ func NewLogtailServer(
 	s.pool.segments = NewLogtailServerSegmentPool(int(s.cfg.RpcMaxMessageSize))
 	s.maxChunkSize = s.pool.segments.LeastEffectiveCapacity()
 	if s.maxChunkSize <= 0 {
-		panic("rpc max message size isn't enough")
+		return nil, moerr.NewBadConfigNoCtxf(
+			"logtail rpc max message size %d is too small", s.cfg.RpcMaxMessageSize)
 	}
 
 	s.logger.Debug("max data chunk size for segment", zap.Int("value", s.maxChunkSize))

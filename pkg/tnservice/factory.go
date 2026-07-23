@@ -18,7 +18,6 @@ import (
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
@@ -26,18 +25,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/mem"
-	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
 	taestorage "github.com/matrixorigin/matrixone/pkg/txn/storage/tae"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/logservicedriver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
-	"go.uber.org/zap"
 )
 
 var (
 	supportTxnStorageBackends = map[StorageType]struct{}{
 		StorageMEMKV: {},
-		StorageMEM:   {},
 		StorageTAE:   {},
 	}
 )
@@ -47,29 +42,9 @@ func (s *store) createTxnStorage(
 	shard metadata.TNShard,
 	txnServer rpc.TxnServer,
 ) (storage.TxnStorage, error) {
-
-	factory := s.createLogServiceClientFactroy(shard)
-	closeLogClientFn := func(logClient logservice.Client) {
-		if err := logClient.Close(); err != nil {
-			s.rt.Logger().Error("close log client failed",
-				zap.Error(err))
-		}
-	}
-
 	switch s.cfg.Txn.Storage.Backend {
-	case StorageMEM:
-		logClient, err := factory()
-		if err != nil {
-			return nil, err
-		}
-		ts, err := s.newMemTxnStorage(shard, logClient, s.hakeeperClient)
-		if err != nil {
-			closeLogClientFn(logClient)
-			return nil, err
-		}
-		return ts, nil
-
 	case StorageMEMKV:
+		factory := s.createLogServiceClientFactroy(shard)
 		logClient, err := factory()
 		if err != nil {
 			return nil, err
@@ -77,6 +52,7 @@ func (s *store) createTxnStorage(
 		return s.newMemKVStorage(shard, logClient)
 
 	case StorageTAE:
+		factory := s.createLogServiceClientFactroy(shard)
 		ts, err := s.newTAEStorage(ctx, shard, factory, txnServer)
 		if err != nil {
 			return nil, err
@@ -115,24 +91,6 @@ func (s *store) newLogServiceClient(shard metadata.TNShard) (logservice.Client, 
 		return nil, moerr.AttachCause(ctx, err)
 	}
 	return client, nil
-}
-
-func (s *store) newMemTxnStorage(
-	shard metadata.TNShard,
-	logClient logservice.Client,
-	hakeeper logservice.TNHAKeeperClient,
-) (storage.TxnStorage, error) {
-	// should it be no fixed or a certain size?
-	mp, err := mpool.NewMPool("mem_txn_storge", 0, mpool.NoFixed)
-	if err != nil {
-		return nil, err
-	}
-	return memorystorage.NewMemoryStorage(
-		s.cfg.UUID,
-		mp,
-		s.rt.Clock(),
-		memoryengine.NewHakeeperIDGenerator(hakeeper),
-	)
 }
 
 func (s *store) newMemKVStorage(shard metadata.TNShard, logClient logservice.Client) (storage.TxnStorage, error) {

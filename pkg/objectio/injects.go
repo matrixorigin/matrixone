@@ -57,6 +57,29 @@ const (
 	FJ_CDCExecutor  = "fj/cdc/executor"
 	FJ_CDCScanTable = "fj/cdc/scantable"
 
+	FJ_ISCPIndexSendError     = "fj/iscp/index/send/error"
+	FJ_ISCPIndexSendBlock     = "fj/iscp/index/send/block"
+	FJ_ISCPIndexExecError     = "fj/iscp/index/exec/error"
+	FJ_ISCPIndexWatermarkErr  = "fj/iscp/index/watermark/error"
+	FJ_ISCPIndexCloseBlock    = "fj/iscp/index/close/block"
+	FJ_ISCPIndexHnswUpdateErr = "fj/iscp/index/hnsw/update/error"
+	FJ_ISCPIndexHnswSaveErr   = "fj/iscp/index/hnsw/save/error"
+	FJ_ISCPIndexCuvsAppendErr = "fj/iscp/index/cuvs/append/error"
+	FJ_ISCPIndexCuvsSaveErr   = "fj/iscp/index/cuvs/save/error"
+
+	FJ_ISCPCancelAfterSubmit           = "fj/iscp/cancel/after-submit"
+	FJ_ISCPCancelAfterRegisterConsumer = "fj/iscp/cancel/after-register-consumer"
+	FJ_ISCPCancelFanoutBeforeSend      = "fj/iscp/cancel/fanout-before-send"
+	FJ_ISCPCancelHnswBeforeSave        = "fj/iscp/cancel/hnsw-before-save"
+	FJ_ISCPCancelBeforeUpdateWatermark = "fj/iscp/cancel/before-update-watermark"
+	FJ_ISCPCancelLongBeforeSend        = "fj/iscp/cancel/long/before-send"
+	FJ_ISCPCancelLongBeforeExec        = "fj/iscp/cancel/long/before-exec"
+	FJ_ISCPCancelLongHnswBeforeUpdate  = "fj/iscp/cancel/long/hnsw-before-update"
+	FJ_ISCPCancelLongHnswBeforeSave    = "fj/iscp/cancel/long/hnsw-before-save"
+	FJ_ISCPCancelLongBeforeWatermark   = "fj/iscp/cancel/long/before-watermark"
+	FJ_ISCPCancelRemoveFenceError      = "fj/iscp/cancel/remove-fence-error"
+	FJ_ISCPCancelRollbackFenceTTL      = "fj/iscp/cancel/rollback-fence-ttl"
+
 	FJ_PublicationSnapshotFinished = "fj/publication/snapshot/finished"
 
 	FJ_UpstreamSQLHelper = "fj/publication/upstream/sqlhelper"
@@ -426,8 +449,14 @@ func GCDumpTableInjected() (string, bool) {
 	return sarg, injected
 }
 
-func WaitInjected(key string) {
-	fault.TriggerFault(key)
+func WaitInjected(key string) bool {
+	_, _, injected := fault.TriggerFault(key)
+	return injected
+}
+
+func WaitInjectedCtx(ctx context.Context, key string) bool {
+	_, _, injected := fault.TriggerFaultWithContext(ctx, key)
+	return injected
 }
 
 func NotifyInjected(key string) {
@@ -442,6 +471,51 @@ func ISCPExecutorInjected() (string, bool) {
 func CDCScanTableInjected() (string, bool) {
 	_, sarg, injected := fault.TriggerFault(FJ_CDCScanTable)
 	return sarg, injected
+}
+
+func ISCPIndexSendErrorInjected() bool {
+	_, _, injected := fault.TriggerFault(FJ_ISCPIndexSendError)
+	return injected
+}
+
+func ISCPIndexSendBlockInjected() bool {
+	_, _, injected := fault.TriggerFault(FJ_ISCPIndexSendBlock)
+	return injected
+}
+
+func ISCPIndexExecErrorInjected() bool {
+	_, _, injected := fault.TriggerFault(FJ_ISCPIndexExecError)
+	return injected
+}
+
+func ISCPIndexWatermarkErrInjected() bool {
+	_, _, injected := fault.TriggerFault(FJ_ISCPIndexWatermarkErr)
+	return injected
+}
+
+func ISCPIndexCloseBlockInjected() bool {
+	_, _, injected := fault.TriggerFault(FJ_ISCPIndexCloseBlock)
+	return injected
+}
+
+func ISCPIndexHnswUpdateErrInjected() bool {
+	_, _, injected := fault.TriggerFault(FJ_ISCPIndexHnswUpdateErr)
+	return injected
+}
+
+func ISCPIndexHnswSaveErrInjected() bool {
+	_, _, injected := fault.TriggerFault(FJ_ISCPIndexHnswSaveErr)
+	return injected
+}
+
+func ISCPIndexCuvsAppendErrInjected() bool {
+	_, _, injected := fault.TriggerFault(FJ_ISCPIndexCuvsAppendErr)
+	return injected
+}
+
+func ISCPIndexCuvsSaveErrInjected() bool {
+	_, _, injected := fault.TriggerFault(FJ_ISCPIndexCuvsSaveErr)
+	return injected
 }
 
 func InjectWait(key string) (rmFault func(), err error) {

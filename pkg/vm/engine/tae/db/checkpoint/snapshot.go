@@ -16,7 +16,7 @@ package checkpoint
 
 import (
 	"context"
-	"sort"
+	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
@@ -83,12 +83,12 @@ func getSnapshotMetaFiles(
 	metaFiles, compactedFiles []ioutil.TSRangeFile,
 	snapshot *types.TS,
 ) []ioutil.TSRangeFile {
-	sort.Slice(compactedFiles, func(i, j int) bool {
-		return compactedFiles[i].GetEnd().LT(compactedFiles[j].GetEnd())
+	slices.SortFunc(compactedFiles, func(a, b ioutil.TSRangeFile) int {
+		return a.GetEnd().Compare(b.GetEnd())
 	})
 
-	sort.Slice(metaFiles, func(i, j int) bool {
-		return metaFiles[i].GetEnd().LT(metaFiles[j].GetEnd())
+	slices.SortFunc(metaFiles, func(a, b ioutil.TSRangeFile) int {
+		return a.GetEnd().Compare(b.GetEnd())
 	})
 
 	retFiles := make([]ioutil.TSRangeFile, 0)
@@ -222,18 +222,29 @@ func filterSnapshotEntries(entries []*CheckpointEntry, snapshot *types.TS) []*Ch
 		}
 	}
 
-	// Sort by end timestamp
-	sort.Slice(entries, func(i, j int) bool {
-		if entries[i] == nil || entries[j] == nil {
-			return false
+	// Sort by end timestamp. nil entries are given a deterministic position
+	// (sorted first) so the comparator is a valid strict weak ordering; treating
+	// nil as equal to every entry would make incomparability non-transitive.
+	slices.SortFunc(entries, func(a, b *CheckpointEntry) int {
+		if a == nil || b == nil {
+			if a == b {
+				return 0
+			}
+			if a == nil {
+				return -1
+			}
+			return 1
 		}
-		return entries[i].end.LT(&entries[j].end)
+		return a.end.Compare(&b.end)
 	})
 
 	if snapshot != nil && snapshot.Equal(&maxGlobalEnd) {
 		// Find the global checkpoint with end == maxGlobalEnd
 		for i := range entries {
-			if entries[i].end.Equal(&maxGlobalEnd) &&
+			// nil entries sort first (see the comparator above), so guard the
+			// dereference here rather than assume a non-nil invariant.
+			if entries[i] != nil &&
+				entries[i].end.Equal(&maxGlobalEnd) &&
 				entries[i].entryType == ET_Global {
 				// Return only the global checkpoint, since snapshot ts == gckp.end
 				return []*CheckpointEntry{entries[i]}

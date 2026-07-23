@@ -15,7 +15,10 @@
 package readutil
 
 import (
+	"fmt"
 	"math"
+	"strconv"
+	"sync"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -289,6 +292,190 @@ func TestMemPKFilter_FilterVector(t *testing.T) {
 	}
 }
 
+func TestMemPKFilterPrefixInScales(t *testing.T) {
+	mp := mpool.MustNew(t.Name())
+	defer func() { require.Zero(t, mp.CurrNB()) }()
+
+	tableDef := &plan.TableDef{
+		Name: "test",
+		Pkey: &plan.PrimaryKeyDef{
+			Names:       []string{"pk"},
+			PkeyColName: "pk",
+		},
+		Cols: []*plan.ColDef{{
+			Name: "pk",
+			Typ:  plan.Type{Id: int32(types.T_varchar)},
+		}},
+	}
+	packerPool := fileservice.NewPool(
+		8,
+		func() *types.Packer { return types.NewPacker() },
+		func(packer *types.Packer) { packer.Reset() },
+		func(packer *types.Packer) { packer.Close() },
+	)
+
+	for _, count := range []int{0, 1, 4, 5, 64, 1024} {
+		t.Run(strconv.Itoa(count), func(t *testing.T) {
+			prefixes := vector.NewVec(types.T_varchar.ToType())
+			defer prefixes.Free(mp)
+			for idx := 0; idx < count; idx++ {
+				require.NoError(t, vector.AppendBytes(prefixes, []byte(fmt.Sprintf("p%04d", idx)), false, mp))
+			}
+
+			filter, err := NewMemPKFilter(
+				tableDef,
+				types.MaxTs().ToTimestamp(),
+				packerPool,
+				BasePKFilter{Valid: true, Op: function.PREFIX_IN, Oid: types.T_varchar, Vec: prefixes},
+				engine.FilterHint{},
+			)
+			require.NoError(t, err)
+			require.True(t, filter.Valid())
+
+			input := vector.NewVec(types.T_varchar.ToType())
+			defer input.Free(mp)
+			require.NoError(t, vector.AppendBytes(input, []byte("p0000-tail"), false, mp))
+			last := max(count-1, 0)
+			require.NoError(t, vector.AppendBytes(input, []byte(fmt.Sprintf("p%04d-tail", last)), false, mp))
+			require.NoError(t, vector.AppendBytes(input, []byte("miss"), false, mp))
+
+			packer := types.NewPacker()
+			defer packer.Close()
+			skipMask := objectio.GetReusableBitmap()
+			defer skipMask.Release()
+			filter.FilterVector(input, packer, &skipMask)
+
+			wantSkipped := 1
+			if count == 0 {
+				wantSkipped = 3
+			}
+			require.Equal(t, wantSkipped, skipMask.Count())
+		})
+	}
+
+	t.Run("overlap duplicate and empty", func(t *testing.T) {
+		for _, test := range []struct {
+			name        string
+			prefixes    []string
+			wantSkipped int
+		}{
+			{name: "overlap", prefixes: []string{"ab", "a", "b", "a"}, wantSkipped: 1},
+			{name: "empty prefix", prefixes: []string{"z", ""}, wantSkipped: 0},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				prefixes := vector.NewVec(types.T_varchar.ToType())
+				defer prefixes.Free(mp)
+				for _, prefix := range test.prefixes {
+					require.NoError(t, vector.AppendBytes(prefixes, []byte(prefix), false, mp))
+				}
+				filter, err := NewMemPKFilter(
+					tableDef,
+					types.MaxTs().ToTimestamp(),
+					packerPool,
+					BasePKFilter{Valid: true, Op: function.PREFIX_IN, Oid: types.T_varchar, Vec: prefixes},
+					engine.FilterHint{},
+				)
+				require.NoError(t, err)
+
+				input := vector.NewVec(types.T_varchar.ToType())
+				defer input.Free(mp)
+				for _, value := range []string{"ax", "abx", "bx", "cx"} {
+					require.NoError(t, vector.AppendBytes(input, []byte(value), false, mp))
+				}
+				packer := types.NewPacker()
+				defer packer.Close()
+				skipMask := objectio.GetReusableBitmap()
+				defer skipMask.Release()
+				filter.FilterVector(input, packer, &skipMask)
+				require.Equal(t, test.wantSkipped, skipMask.Count())
+			})
+		}
+	})
+}
+
+func TestMemPKFilterDisjunctsAndConcurrentRead(t *testing.T) {
+	mp := mpool.MustNew(t.Name())
+	defer func() { require.Zero(t, mp.CurrNB()) }()
+	tableDef := &plan.TableDef{
+		Name: "test",
+		Pkey: &plan.PrimaryKeyDef{
+			Names:       []string{"pk"},
+			PkeyColName: "pk",
+		},
+		Cols: []*plan.ColDef{{Name: "pk", Typ: plan.Type{Id: int32(types.T_int64)}}},
+	}
+	packerPool := fileservice.NewPool(
+		8,
+		func() *types.Packer { return types.NewPacker() },
+		func(packer *types.Packer) { packer.Reset() },
+		func(packer *types.Packer) { packer.Close() },
+	)
+	filter, err := NewMemPKFilter(
+		tableDef,
+		types.MaxTs().ToTimestamp(),
+		packerPool,
+		BasePKFilter{
+			Valid: true,
+			Disjuncts: []BasePKFilter{
+				{Valid: true, Op: function.EQUAL, Oid: types.T_int64, LB: types.EncodeFixed(int64(1))},
+				{Valid: true, Op: function.BETWEEN, Oid: types.T_int64, LB: types.EncodeFixed(int64(4)), UB: types.EncodeFixed(int64(6))},
+			},
+		},
+		engine.FilterHint{},
+	)
+	require.NoError(t, err)
+	require.True(t, filter.Valid())
+	require.Len(t, filter.Specs(), 2)
+
+	input := vector.NewVec(types.T_int64.ToType())
+	defer input.Free(mp)
+	for value := int64(0); value < 10; value++ {
+		require.NoError(t, vector.AppendFixed(input, value, false, mp))
+	}
+
+	const readers = 16
+	errs := make(chan int, readers)
+	var wg sync.WaitGroup
+	for range readers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			packer := types.NewPacker()
+			defer packer.Close()
+			skipMask := objectio.GetReusableBitmap()
+			defer skipMask.Release()
+			filter.FilterVector(input, packer, &skipMask)
+			if skipMask.Count() != 6 {
+				errs <- skipMask.Count()
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for count := range errs {
+		require.Equal(t, 6, count)
+	}
+
+	t.Run("invalid branch fails open", func(t *testing.T) {
+		invalid, err := NewMemPKFilter(
+			tableDef,
+			types.MaxTs().ToTimestamp(),
+			packerPool,
+			BasePKFilter{
+				Valid: true,
+				Disjuncts: []BasePKFilter{
+					{Valid: true, Op: function.EQUAL, Oid: types.T_int64, LB: types.EncodeFixed(int64(1))},
+					{Valid: true, Op: function.EQUAL, Oid: types.T_int64, LB: []byte{1}},
+				},
+			},
+			engine.FilterHint{},
+		)
+		require.NoError(t, err)
+		require.False(t, invalid.Valid())
+		require.Empty(t, invalid.Specs())
+	})
+}
+
 func TestPKFiltersUseSameFailOpenValidation(t *testing.T) {
 	mp := mpool.MustNew(t.Name())
 	packerPool := fileservice.NewPool(
@@ -337,6 +524,18 @@ func TestPKFiltersUseSameFailOpenValidation(t *testing.T) {
 	t.Run("PREFIX_IN type mismatch", func(t *testing.T) {
 		values := vector.NewVec(types.T_varbinary.ToType())
 		require.NoError(t, vector.AppendBytes(values, []byte("prefix"), false, mp))
+		defer values.Free(mp)
+		assertFailOpen(t, types.T_varchar, BasePKFilter{
+			Valid: true,
+			Op:    function.PREFIX_IN,
+			Oid:   types.T_varchar,
+			Vec:   values,
+		})
+	})
+
+	t.Run("PREFIX_IN null fails open", func(t *testing.T) {
+		values := vector.NewVec(types.T_varchar.ToType())
+		require.NoError(t, vector.AppendBytes(values, nil, true, mp))
 		defer values.Free(mp)
 		assertFailOpen(t, types.T_varchar, BasePKFilter{
 			Valid: true,
@@ -407,4 +606,39 @@ func TestPKFiltersUseSameFailOpenValidation(t *testing.T) {
 	}
 
 	require.Zero(t, mp.CurrNB())
+}
+
+var benchmarkMemPKFilterMatches int
+
+func BenchmarkMemPKFilterPrefixIn(b *testing.B) {
+	packer := types.NewPacker()
+	defer packer.Close()
+
+	for _, prefixCount := range []int{4, 64, 1024} {
+		b.Run(strconv.Itoa(prefixCount), func(b *testing.B) {
+			prefixes := make([][]byte, 0, prefixCount)
+			for idx := 0; idx < prefixCount; idx++ {
+				encoded := EncodePrimaryKey(fmt.Sprintf("p%04d", idx), packer)
+				prefixes = append(prefixes, encoded[:len(encoded)-1])
+			}
+			var filter MemPKFilter
+			filter.SetFullData(function.PREFIX_IN, true, prefixes...)
+
+			keys := make([][]byte, 8192)
+			for idx := range keys {
+				keys[idx] = EncodePrimaryKey(fmt.Sprintf("p%04d-tail", idx%(prefixCount*2)), packer)
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			matched := 0
+			for range b.N {
+				for idx := range keys {
+					if filter.matches(keys[idx]) {
+						matched++
+					}
+				}
+			}
+			benchmarkMemPKFilterMatches = matched
+		})
+	}
 }

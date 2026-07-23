@@ -24,6 +24,53 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestJsonOrderingOperatorsUseExactComparison(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	encode := func(t *testing.T, value string) string {
+		t.Helper()
+		encoded, err := encodeJsonOrderingParam([]byte(value))
+		require.NoError(t, err)
+		return string(encoded)
+	}
+
+	tests := []struct {
+		name  string
+		fn    fEvalFn
+		left  string
+		right string
+	}{
+		{name: "less adjacent integers", fn: lessThanFn, left: "9007199254740992", right: "9007199254740993"},
+		{name: "greater adjacent integers", fn: greatThanFn, left: "9007199254740993", right: "9007199254740992"},
+		{name: "less equal precise decimals", fn: lessEqualFn, left: "0.123456789123456788", right: "0.123456789123456789"},
+		{name: "greater equal precise decimals", fn: greatEqualFn, left: "0.123456789123456789", right: "0.123456789123456788"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			inputs := []FunctionTestInput{
+				NewFunctionTestInput(types.T_json.ToType(), []string{encode(t, test.left)}, []bool{false}),
+				NewFunctionTestInput(types.T_json.ToType(), []string{encode(t, test.right)}, []bool{false}),
+			}
+			expect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true}, []bool{false})
+			testCase := NewFunctionTestCase(proc, inputs, expect, test.fn)
+			ok, info := testCase.Run()
+			require.True(t, ok, info)
+		})
+	}
+
+	t.Run("null propagates", func(t *testing.T) {
+		inputs := []FunctionTestInput{
+			NewFunctionTestInput(types.T_json.ToType(), []string{encode(t, "0")}, []bool{true}),
+			NewFunctionTestInput(types.T_json.ToType(), []string{encode(t, "1")}, []bool{false}),
+		}
+		expect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false}, []bool{true})
+		testCase := NewFunctionTestCase(proc, inputs, expect, lessThanFn)
+		ok, info := testCase.Run()
+		require.True(t, ok, info)
+	})
+}
+
 func TestOperatorOpBitAndUint64Fn(t *testing.T) {
 	// 1 & 2 = 0
 	// max uint64 & 2 = 2

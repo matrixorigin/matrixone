@@ -183,6 +183,106 @@ func TestRunSQLWithFrontend(t *testing.T) {
 	)
 }
 
+func TestRowCountOverMySQLProtocol(t *testing.T) {
+	require.NoError(t, RunBaseClusterTests(
+		func(c Cluster) {
+			cn0, err := c.GetCNService(0)
+			require.NoError(t, err)
+
+			dsn := fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/",
+				cn0.GetServiceConfig().CN.Frontend.Port,
+			)
+			db, err := sql.Open("mysql", dsn)
+			require.NoError(t, err)
+			defer db.Close()
+
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			defer cancel()
+			conn, err := db.Conn(ctx)
+			require.NoError(t, err)
+			defer conn.Close()
+
+			_, err = conn.ExecContext(ctx, "drop database if exists row_count_protocol_test")
+			require.NoError(t, err)
+			_, err = conn.ExecContext(ctx, "create database row_count_protocol_test")
+			require.NoError(t, err)
+			defer conn.ExecContext(ctx, "drop database if exists row_count_protocol_test")
+			_, err = conn.ExecContext(ctx, "use row_count_protocol_test")
+			require.NoError(t, err)
+			_, err = conn.ExecContext(ctx, "create table t (id int primary key)")
+			require.NoError(t, err)
+
+			_, err = conn.ExecContext(ctx, "insert into t values (1), (2)")
+			require.NoError(t, err)
+			stmt, err := conn.PrepareContext(ctx, "select row_count()")
+			require.NoError(t, err)
+			defer stmt.Close()
+
+			var rowCount int64
+			require.NoError(t, stmt.QueryRowContext(ctx).Scan(&rowCount))
+			require.Equal(t, int64(2), rowCount)
+
+			result, err := conn.ExecContext(ctx, "insert into t values (3)")
+			require.NoError(t, err)
+			affectedRows, err := result.RowsAffected()
+			require.NoError(t, err)
+			require.Equal(t, int64(1), affectedRows)
+
+			_, err = conn.ExecContext(ctx, "create procedure insert_rows() 'begin insert into t values (4), (5); end'")
+			require.NoError(t, err)
+			result, err = conn.ExecContext(ctx, "call insert_rows()")
+			require.NoError(t, err)
+			affectedRows, err = result.RowsAffected()
+			require.NoError(t, err)
+			require.Equal(t, int64(2), affectedRows)
+			require.NoError(t, stmt.QueryRowContext(ctx).Scan(&rowCount))
+			require.Equal(t, int64(2), rowCount)
+
+			_, err = conn.ExecContext(ctx, "create procedure caller_count() 'begin select row_count(); end'")
+			require.NoError(t, err)
+			_, err = conn.ExecContext(ctx, "insert into t values (6), (7), (8), (9), (10), (11)")
+			require.NoError(t, err)
+			func() {
+				rows, err := conn.QueryContext(ctx, "call caller_count()")
+				require.NoError(t, err)
+				defer rows.Close()
+				require.True(t, rows.Next())
+				require.NoError(t, rows.Scan(&rowCount))
+				require.NoError(t, rows.Err())
+				require.Equal(t, int64(6), rowCount)
+			}()
+
+			_, err = conn.ExecContext(ctx, "create procedure inner_results() 'begin select 20; select 21; end'")
+			require.NoError(t, err)
+			_, err = conn.ExecContext(ctx, "create procedure outer_results() 'begin select 10; call inner_results(); select 30; end'")
+			require.NoError(t, err)
+			func() {
+				rows, err := conn.QueryContext(ctx, "call outer_results()")
+				require.NoError(t, err)
+				defer rows.Close()
+				var got []int64
+				for {
+					for rows.Next() {
+						var value int64
+						require.NoError(t, rows.Scan(&value))
+						got = append(got, value)
+					}
+					require.NoError(t, rows.Err())
+					if !rows.NextResultSet() {
+						break
+					}
+				}
+				require.Equal(t, []int64{10, 20, 21, 30}, got)
+			}()
+
+			_, err = conn.ExecContext(ctx, "insert into t values (1)")
+			require.Error(t, err)
+			require.NoError(t, stmt.QueryRowContext(ctx).Scan(&rowCount))
+			require.Equal(t, int64(-1), rowCount)
+		},
+	))
+}
+
 func TestGetInitValue(t *testing.T) {
 	var wg sync.WaitGroup
 	var ports []uint64

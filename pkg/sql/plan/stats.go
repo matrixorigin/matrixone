@@ -16,10 +16,11 @@ package plan
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"fmt"
 	"math"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -28,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -37,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	ivfflatplan "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -1069,10 +1072,18 @@ func sortFilterListByStats(ctx context.Context, nodeID int32, builder *QueryBuil
 	switch node.NodeType {
 	case plan.Node_TABLE_SCAN:
 		if node.ObjRef != nil && len(node.FilterList) >= 1 {
-			sort.Slice(node.FilterList, func(i, j int) bool {
-				cost1 := estimateFilterWeight(node.FilterList[i], 0) * node.FilterList[i].Selectivity
-				cost2 := estimateFilterWeight(node.FilterList[j], 0) * node.FilterList[j].Selectivity
-				return cost1 <= cost2
+			// Use a STABLE sort with a strict comparator, deliberately not a plain
+			// (unstable) sort. Filter evaluation order is semantically significant
+			// here: it decides which predicate a vector/IVF index probes with (see
+			// #25639) and which value a runtime bool error reports. A stable sort
+			// keeps equal-cost filters in their original, as-written relative order,
+			// which is a deterministic and well-defined tie order; an unstable sort
+			// would reorder equal-cost filters arbitrarily and make those results
+			// depend on the sort implementation's internals.
+			slices.SortStableFunc(node.FilterList, func(a, b *plan.Expr) int {
+				cost1 := estimateFilterWeight(a, 0) * a.Selectivity
+				cost2 := estimateFilterWeight(b, 0) * b.Selectivity
+				return cmp.Compare(cost1, cost2)
 			})
 		}
 	}
@@ -1400,6 +1411,32 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 		if node.IndexReaderParam.Limit != nil {
 			applyLimitToStats(node.Stats, node.IndexReaderParam.Limit, builder)
 		}
+	}
+}
+
+// reCalcNodeStatsAfterSwap mirrors ReCalcNodeStats recursion after
+// swapJoinChildren has changed the physical child order. IsRightJoin is set
+// before that swap, so putting this rule in the general stats pass would select
+// the wrong preserved side during earlier optimizer phases.
+func reCalcNodeStatsAfterSwap(nodeID int32, builder *QueryBuilder, recursive bool, leafNode bool, needResetHashMapStats bool) {
+	node := builder.qry.Nodes[nodeID]
+	if recursive {
+		for _, childID := range node.Children {
+			reCalcNodeStatsAfterSwap(childID, builder, true, leafNode, needResetHashMapStats)
+		}
+	}
+
+	ReCalcNodeStats(nodeID, builder, false, leafNode, needResetHashMapStats)
+	if node.NodeType != plan.Node_JOIN || node.JoinType != plan.Node_SINGLE || !node.IsRightJoin {
+		return
+	}
+
+	preservedStats := builder.qry.Nodes[node.Children[1]].Stats
+	node.Stats.Outcnt = preservedStats.Outcnt
+	node.Stats.BlockNum = preservedStats.BlockNum
+	node.Stats.Selectivity = preservedStats.Selectivity
+	if node.Limit != nil {
+		applyLimitToStats(node.Stats, node.Limit, builder)
 	}
 }
 
@@ -1893,6 +1930,158 @@ func (builder *QueryBuilder) determineBuildAndProbeSide(nodeID int32, recursive 
 	}
 }
 
+// disableMemoryUnsafeRightDedup keeps RIGHT DEDUP as the small-input fast path.
+// Unlike normal DEDUP, RIGHT DEDUP inserts every incoming key into its resident
+// hashmap and cannot start spilling when that probe-side map grows.  Multiple
+// DEDUP operators used for a primary key and unique indexes are chained in one
+// pipeline, so their maps coexist and must be budgeted together.
+//
+// This pass runs immediately before swapJoinChildren.  At this point a DEDUP's
+// logical left child is the existing target and its logical right child is the
+// incoming row stream.  If the combined estimate is unsafe, reverting all
+// candidates lets normal DEDUP shuffle when supported and spill that stream.
+func (builder *QueryBuilder) disableMemoryUnsafeRightDedup(rootID int32) {
+	const maxUint64 = ^uint64(0)
+
+	var candidates []*plan.Node
+	visited := make(map[int32]struct{})
+	var collect func(int32)
+	collect = func(nodeID int32) {
+		if _, ok := visited[nodeID]; ok {
+			return
+		}
+		visited[nodeID] = struct{}{}
+
+		node := builder.qry.Nodes[nodeID]
+		for _, childID := range node.Children {
+			collect(childID)
+		}
+		if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_DEDUP && node.IsRightJoin {
+			candidates = append(candidates, node)
+		}
+	}
+	collect(rootID)
+	if len(candidates) == 0 {
+		return
+	}
+
+	var totalBytes, totalRows uint64
+	memoryUnsafe := false
+	for _, node := range candidates {
+		targetRows, targetRowsKnown := builder.estimatedNodeRows(node.Children[0])
+		sourceRows, sourceRowsKnown := builder.estimatedLogicalDedupOutputRows(node.Children[1])
+		if !targetRowsKnown || !sourceRowsKnown || targetRows > maxUint64-sourceRows {
+			memoryUnsafe = true
+			break
+		}
+		keyCount := targetRows + sourceRows
+
+		var mapBytes uint64
+		if rightDedupUsesIntHashMap(node) {
+			mapBytes = hashtable.EstimateInt64HashMapSize(keyCount)
+		} else {
+			mapBytes = hashtable.EstimateStringHashMapSize(keyCount)
+		}
+		if mapBytes == maxUint64 || totalBytes > maxUint64-mapBytes || totalRows > maxUint64-keyCount {
+			memoryUnsafe = true
+			break
+		}
+		totalBytes += mapBytes
+		totalRows += keyCount
+	}
+
+	if !memoryUnsafe && builder.joinSpillMem != 0 {
+		const maxInt64 = uint64(^uint64(0) >> 1)
+		memoryUnsafe = colexec.ShouldSpill(
+			int64(min(totalBytes, maxInt64)),
+			int64(min(totalRows, maxInt64)),
+			builder.joinSpillMem,
+		)
+	} else if !memoryUnsafe {
+		// ResolveSpillThreshold is per worker.  RIGHT DEDUP is forced onto one
+		// CN with DOP 1, but this guard budgets the complete chained stage.  The
+		// aggregate default therefore restores the GOMAXPROCS factor, yielding
+		// roughly one eighth of CN memory after the file-cache reservation.
+		perWorkerBudget := uint64(colexec.ResolveSpillThreshold(0))
+		workers := uint64(system.GoMaxProcs())
+		if workers == 0 {
+			memoryUnsafe = true
+		} else {
+			budget := maxUint64
+			if perWorkerBudget <= maxUint64/workers {
+				budget = perWorkerBudget * workers
+			}
+			memoryUnsafe = totalBytes > budget
+		}
+	}
+	if !memoryUnsafe {
+		return
+	}
+
+	for _, node := range candidates {
+		node.IsRightJoin = false
+	}
+}
+
+// estimatedLogicalDedupOutputRows returns the incoming-side cardinality for a
+// logical DEDUP chain.  Before children are swapped, every DEDUP preserves its
+// right child's rows regardless of which physical implementation is selected.
+// Looking through the chain avoids stale right-join output stats making later
+// unique-index maps appear artificially small.
+func (builder *QueryBuilder) estimatedLogicalDedupOutputRows(nodeID int32) (uint64, bool) {
+	node := builder.qry.Nodes[nodeID]
+	if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_DEDUP && len(node.Children) == 2 {
+		return builder.estimatedLogicalDedupOutputRows(node.Children[1])
+	}
+	return builder.estimatedNodeRows(nodeID)
+}
+
+func (builder *QueryBuilder) estimatedNodeRows(nodeID int32) (uint64, bool) {
+	stats := builder.qry.Nodes[nodeID].Stats
+	if stats == nil || IsDefaultStats(stats) || math.IsNaN(stats.Outcnt) || math.IsInf(stats.Outcnt, 0) || stats.Outcnt < 0 || stats.Outcnt >= float64(^uint64(0)) {
+		return 0, false
+	}
+	return uint64(math.Ceil(stats.Outcnt)), true
+}
+
+func rightDedupUsesIntHashMap(node *plan.Node) bool {
+	keyWidth := 0
+	conditions := colexec.SplitAndExprs(node.OnList)
+	if len(conditions) == 0 {
+		return false
+	}
+	for _, condition := range conditions {
+		fn := condition.GetF()
+		if fn == nil || len(fn.Args) != 2 {
+			return false
+		}
+
+		// Equality operands normally have the same type after binding.  Taking
+		// the wider side keeps the estimate conservative if coercion differs.
+		width := max(rightDedupKeyWidth(fn.Args[0]), rightDedupKeyWidth(fn.Args[1]))
+		if width > 8 || keyWidth > 8-width {
+			return false
+		}
+		keyWidth += width
+	}
+	return keyWidth <= 8
+}
+
+func rightDedupKeyWidth(expr *plan.Expr) int {
+	if expr == nil {
+		return 128
+	}
+	typ := types.T(expr.Typ.Id)
+	if typ.FixedLength() < 0 {
+		return 128
+	}
+	width := typ.TypeLen()
+	if width <= 0 {
+		return 128
+	}
+	return width
+}
+
 func (builder *QueryBuilder) hasRecursiveScan(node *plan.Node) bool {
 	if node.NodeType == plan.Node_RECURSIVE_SCAN {
 		return true
@@ -1905,15 +2094,23 @@ func (builder *QueryBuilder) hasRecursiveScan(node *plan.Node) bool {
 	return false
 }
 
-func compareStats(stats1, stats2 *Stats) bool {
-	// selectivity is first considered to reduce data
-	// when selectivity very close, we first join smaller table
-	if math.Abs(stats1.Selectivity-stats2.Selectivity) > 0.01 {
-		return stats1.Selectivity < stats2.Selectivity
-	} else {
-		// todo we need to calculate ndv of outcnt here
-		return stats1.Outcnt < stats2.Outcnt
+// compareStats orders join candidates: smaller selectivity first (to reduce
+// data), and when the selectivity is very close, smaller outcnt first (join the
+// smaller table first). It returns a three-way result (negative when stats1
+// sorts before stats2).
+//
+// "Very close" is defined by bucketing selectivity onto a fixed 0.01 grid rather
+// than a sliding |s1-s2| < 0.01 window. The window version is NOT transitive
+// (a~b and b~c does not imply a~c), which makes it an invalid comparator for
+// slices.SortFunc; the grid is a genuine strict weak ordering. See issue #25702.
+func compareStats(stats1, stats2 *Stats) int {
+	b1 := int64(math.Floor(stats1.Selectivity / 0.01))
+	b2 := int64(math.Floor(stats2.Selectivity / 0.01))
+	if b1 != b2 {
+		return cmp.Compare(b1, b2)
 	}
+	// todo we need to calculate ndv of outcnt here
+	return cmp.Compare(stats1.Outcnt, stats2.Outcnt)
 }
 
 func andSelectivity(s1, s2 float64) float64 {
@@ -2084,9 +2281,13 @@ func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool) ExecType {
 	// We detect this by inspecting the actual join condition expression: if either side of
 	// the equi-join condition is a function expression (not a plain column ref), it's expr-based.
 	hasExprBasedShuffle := false
+	hasForceOneCN := false
 	for _, node := range qry.GetNodes() {
 		if node == nil {
 			continue
+		}
+		if node.GetStats().GetForceOneCN() {
+			hasForceOneCN = true
 		}
 		if node.Stats == nil || node.Stats.HashmapStats == nil {
 			continue
@@ -2113,7 +2314,7 @@ func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool) ExecType {
 			break
 		}
 	}
-	canUseMultiCN := !txnHaveDDL && !hasExprBasedShuffle
+	canUseMultiCN := !txnHaveDDL && !hasExprBasedShuffle && !hasForceOneCN
 	ret := ExecTypeTP
 	for _, node := range qry.GetNodes() {
 		if node == nil {
@@ -2125,33 +2326,31 @@ func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool) ExecType {
 		}
 		stats := node.Stats
 		if stats == nil || stats.BlockNum > int32(BlockThresholdForOneCN) && stats.Cost > float64(costThresholdForOneCN) {
-			if txnHaveDDL {
-				return ExecTypeAP_ONECN
-			} else if stats != nil && hasExprBasedShuffle {
+			if !canUseMultiCN {
 				return ExecTypeAP_ONECN
 			} else {
 				return ExecTypeAP_MULTICN
 			}
 		}
 		if isPrepare {
-			if stats.BlockNum > blockThresholdForTpQuery*4 || stats.Cost > costThresholdForTpQuery*4 {
+			if ret != ExecTypeAP_MULTICN && (stats.BlockNum > blockThresholdForTpQuery*4 || stats.Cost > costThresholdForTpQuery*4) {
 				ret = ExecTypeAP_ONECN
 			}
 		} else {
-			if stats.BlockNum > blockThresholdForTpQuery || stats.Cost > costThresholdForTpQuery {
+			if ret != ExecTypeAP_MULTICN && (stats.BlockNum > blockThresholdForTpQuery || stats.Cost > costThresholdForTpQuery) {
 				ret = ExecTypeAP_ONECN
 			}
 		}
-		if node.NodeType == plan.Node_TABLE_SCAN && node.TableDef != nil {
-			if IsIvfSearchEntriesInternalScan(node) {
-				execType := ExecTypeAP_MULTICN
-				if !canUseMultiCN {
-					execType = ExecTypeAP_ONECN
-				}
-				if execType > ret {
-					ret = execType
-				}
+		if IsIvfSearchEntriesInternalScan(node) {
+			execType := ExecTypeAP_MULTICN
+			if stats.GetForceOneCN() || !canUseMultiCN {
+				execType = ExecTypeAP_ONECN
 			}
+			if execType > ret {
+				ret = execType
+			}
+		}
+		if node.NodeType == plan.Node_TABLE_SCAN && node.TableDef != nil {
 			// due to the inaccuracy of stats.Rowsize, currently only vector index tables are supported
 			if (node.TableDef.TableType == catalog.SystemSI_IVFFLAT_TblType_Entries || node.TableDef.TableType == catalog.Hnsw_TblType_Storage) &&
 				stats.Rowsize > RowSizeThreshold &&
@@ -2165,7 +2364,7 @@ func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool) ExecType {
 				}
 			}
 		}
-		if node.NodeType != plan.Node_TABLE_SCAN && stats.HashmapStats != nil && stats.HashmapStats.Shuffle {
+		if node.NodeType != plan.Node_TABLE_SCAN && stats.HashmapStats != nil && stats.HashmapStats.Shuffle && ret != ExecTypeAP_MULTICN {
 			ret = ExecTypeAP_ONECN
 		}
 	}
@@ -2178,17 +2377,30 @@ func isIvfSearchEntriesTableScan(node *plan.Node) bool {
 		node.GetTableDef().GetTableType() == catalog.SystemSI_IVFFLAT_TblType_Entries
 }
 
+func isIvfSearchFunctionScan(node *plan.Node) bool {
+	if node == nil || node.NodeType != plan.Node_FUNCTION_SCAN {
+		return false
+	}
+	tblDef := node.GetTableDef()
+	if tblDef == nil || tblDef.GetTblFunc() == nil {
+		return false
+	}
+	return tblDef.GetTblFunc().GetName() == ivfflatplan.IVFFLATSearchFuncName
+}
+
 // IsIvfSearchEntriesInternalScan reports the internal entries table scan issued by ivf_search.
+// It recognizes both the FUNCTION_SCAN form produced by the production ivf_search planner
+// path and the legacy TABLE_SCAN form used by unit tests.
 func IsIvfSearchEntriesInternalScan(node *plan.Node) bool {
+	if isIvfSearchFunctionScan(node) {
+		return isIvfEntriesIndexReaderScan(node)
+	}
 	return isIvfSearchEntriesTableScan(node) && isIvfEntriesIndexReaderScan(node)
 }
 
 func isIvfEntriesIndexReaderScan(node *plan.Node) bool {
 	param := node.GetIndexReaderParam()
-	if param.GetLimit() == nil {
-		return false
-	}
-	return param.GetOrigFuncName() != "" || len(param.GetOrderBy()) > 0
+	return param.GetOrigFuncName() != ""
 }
 
 func GetPlanTitle(qry *plan.Query, txnHaveDDL bool) string {

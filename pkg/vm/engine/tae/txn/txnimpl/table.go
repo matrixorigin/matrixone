@@ -19,7 +19,7 @@ import (
 	"context"
 	"fmt"
 	"runtime/trace"
-	"sort"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -118,6 +118,85 @@ type txnTable struct {
 	dedupTS types.TS
 
 	idx int
+
+	// expectedAutoIncrEpochs are the known CN allocator epochs this
+	// transaction's user-table writes were planned against. A transaction can
+	// legitimately use both the committed version and the version created by
+	// its own ALTER TABLE.
+	expectedAutoIncrEpochs map[uint32]struct{}
+	autoIncrementAlter     bool
+}
+
+func (tbl *txnTable) validateAutoIncrementDMLOrder() error {
+	if tbl.autoIncrementAlter {
+		if tbl.entry.ShouldRetryAutoIncrementAlter(tbl.store.txn.GetStartTS()) {
+			return moerr.NewTxnNeedRetryWithDefChangedNoCtx()
+		}
+		return nil
+	}
+	if len(tbl.expectedAutoIncrEpochs) > 0 {
+		tbl.entry.RecordKnownDMLPrepare(tbl.store.txn.GetPrepareTS())
+	}
+	return nil
+}
+
+func (tbl *txnTable) setExpectedAutoIncrEpoch(epoch uint32) error {
+	if tbl.expectedAutoIncrEpochs == nil {
+		tbl.expectedAutoIncrEpochs = make(map[uint32]struct{}, 2)
+	}
+	tbl.expectedAutoIncrEpochs[epoch] = struct{}{}
+	return nil
+}
+
+func (tbl *txnTable) validateAutoIncrEpoch() error {
+	if len(tbl.expectedAutoIncrEpochs) == 0 {
+		return nil
+	}
+
+	prepareTS := tbl.store.txn.GetPrepareTS()
+	for {
+		tbl.entry.RLock()
+		latest := tbl.entry.GetLatestNodeLocked()
+		if latest != nil && !latest.IsSameTxn(tbl.store.txn) {
+			if needWait, txnToWait := latest.NeedWaitCommitting(prepareTS); needWait {
+				tbl.entry.RUnlock()
+				txnToWait.GetTxnState(true)
+				continue
+			}
+		}
+
+		baseEpoch := uint32(0)
+		localEpoch := uint32(0)
+		hasLocalEpoch := false
+		tbl.entry.LoopChainLocked(func(node *catalog.MVCCNode[*catalog.TableMVCCNode]) bool {
+			// A same-transaction ALTER is unordered with the transaction's DML.
+			// Keep scanning for the committed base version as both are valid.
+			if node.IsSameTxn(tbl.store.txn) {
+				localEpoch = node.BaseNode.Schema.Extra.AutoIncrEpoch
+				hasLocalEpoch = true
+				return true
+			}
+			if node.IsActive() || node.IsCommitting() || node.IsAborted() {
+				return true
+			}
+			// A schema committed with a later prepare timestamp is ordered after
+			// this DML and must not invalidate it.
+			nodePrepareTS := node.GetPrepare()
+			if nodePrepareTS.GT(&prepareTS) {
+				return true
+			}
+			baseEpoch = node.BaseNode.Schema.Extra.AutoIncrEpoch
+			return false
+		})
+		tbl.entry.RUnlock()
+
+		for expected := range tbl.expectedAutoIncrEpochs {
+			if expected != baseEpoch && (!hasLocalEpoch || expected != localEpoch) {
+				return moerr.NewTxnNeedRetryWithDefChangedNoCtx()
+			}
+		}
+		return nil
+	}
 }
 
 func newTxnTable(store *txnStore, entry *catalog.TableEntry) (*txnTable, error) {
@@ -269,8 +348,11 @@ func (tbl *txnTable) TransferDeletes(
 			}
 		}
 		softDeleteObjects = tbl.entry.GetSoftdeleteObjects(startTS, ts)
-		sort.Slice(softDeleteObjects, func(i, j int) bool {
-			return softDeleteObjects[i].CreatedAt.LE(&softDeleteObjects[j].CreatedAt)
+		// Stable sort with a strict comparator: objects created at the same
+		// timestamp keep their original relative order (the tie-breaker), instead
+		// of sort.Slice's unspecified tie ordering.
+		slices.SortStableFunc(softDeleteObjects, func(a, b *catalog.ObjectEntry) int {
+			return a.CreatedAt.Compare(&b.CreatedAt)
 		})
 		v2.TxnS3TombstoneTransferGetSoftdeleteObjectsHistogram.Observe(time.Since(tGetSoftdeleteObjects).Seconds())
 		v2.TxnS3TombstoneSoftdeleteObjectCounter.Add(float64(len(softDeleteObjects)))
@@ -1006,7 +1088,8 @@ func (tbl *txnTable) AlterTable(ctx context.Context, req *apipb.AlterTableReq) e
 		apipb.AlterKind_RenameTable,
 		apipb.AlterKind_UpdatePolicy,
 		apipb.AlterKind_AddPartition,
-		apipb.AlterKind_RenameColumn:
+		apipb.AlterKind_RenameColumn,
+		apipb.AlterKind_UpdateAutoIncrement:
 	case apipb.AlterKind_ReplaceDef:
 		return nil
 	default:
@@ -1031,6 +1114,9 @@ func (tbl *txnTable) AlterTable(ctx context.Context, req *apipb.AlterTableReq) e
 		if err != nil {
 			return err
 		}
+	}
+	if req.Kind == apipb.AlterKind_UpdateAutoIncrement {
+		tbl.autoIncrementAlter = true
 	}
 
 	tbl.dataTable.schema = newSchema // update new schema to txn local schema
@@ -1443,6 +1529,12 @@ func (tbl *txnTable) dumpCore(errMsg string) {
 }
 
 func (tbl *txnTable) PrepareCommit() (err error) {
+	if err = tbl.validateAutoIncrEpoch(); err != nil {
+		return err
+	}
+	if err = tbl.validateAutoIncrementDMLOrder(); err != nil {
+		return err
+	}
 	nodeCount := len(tbl.txnEntries.entries)
 	for idx, node := range tbl.txnEntries.entries {
 		if tbl.txnEntries.IsDeleted(idx) {

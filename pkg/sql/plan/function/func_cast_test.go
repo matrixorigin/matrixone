@@ -22,80 +22,151 @@ import (
 	"testing"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
-func Test_StringToFloatInvalidConversion(t *testing.T) {
-	// Test invalid string to float conversion (should return 0, not error)
-	// This matches MySQL behavior where invalid strings convert to 0
+func TestStringToFloatDefaultCompatibilityUsesNumericPrefix(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
-	testCases := []tcTemp{
-		{
-			info: "cast invalid string 'a' to float64 should return 0",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"a"}, []bool{false}),
-				NewFunctionTestInput(types.T_float64.ToType(), []float64{}, []bool{}),
-			},
-			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
-				[]float64{0}, []bool{false}),
+	for _, tt := range []struct {
+		input string
+		want  float64
+	}{
+		{input: "1abc", want: 1},
+		{input: "a", want: 0},
+		{input: "", want: 0},
+		{input: "   ", want: 0},
+		{input: "  -2.5foo", want: -2.5},
+		{input: ".5xyz", want: 0.5},
+		{input: "1e2foo", want: 100},
+		{input: "1eabc", want: 1},
+		{input: "-0suffix", want: math.Copysign(0, -1)},
+		{input: "2020-01-01", want: 2020},
+	} {
+		t.Run(tt.input, func(t *testing.T) {
+			tc := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{tt.input}, nil),
+					NewFunctionTestInput(types.T_float64.ToType(), []float64{}, nil),
+				},
+				NewFunctionTestResult(types.T_float64.ToType(), false, []float64{tt.want}, nil), NewCast)
+			succeed, info := tc.Run()
+			require.True(t, succeed, info)
+		})
+	}
+}
+
+func TestStringToFloatMatrixOneNativeRejectsIncompleteTokens(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.GetSessionInfo().MatrixOneNativeMode = true
+
+	for _, input := range []string{
+		"1abc", "abc", "", "   ", "  -2.5foo", ".5xyz", "1e2foo", "1eabc", "-0suffix", "1e10000",
+	} {
+		t.Run(input, func(t *testing.T) {
+			tc := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{input}, nil),
+					NewFunctionTestInput(types.T_float64.ToType(), []float64{}, nil),
+				},
+				NewFunctionTestResult(types.T_float64.ToType(), true, nil, nil), NewCast)
+			succeed, info := tc.Run()
+			require.True(t, succeed, info)
+		})
+	}
+}
+
+func TestStringToFloat32DefaultCompatibilityRange(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	tc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"1e100", "-1e100", "1e-100", "-1e-100"}, nil),
+			NewFunctionTestInput(types.T_float32.ToType(), []float32{}, nil),
 		},
-		{
-			info: "cast invalid string 'abc123' to float64 should return 0",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"abc123"}, []bool{false}),
-				NewFunctionTestInput(types.T_float64.ToType(), []float64{}, []bool{}),
-			},
-			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
-				[]float64{0}, []bool{false}),
-		},
-		{
-			info: "cast empty string to float64 should return 0",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{""}, []bool{false}),
-				NewFunctionTestInput(types.T_float64.ToType(), []float64{}, []bool{}),
-			},
-			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
-				[]float64{0}, []bool{false}),
-		},
-		{
-			info: "cast date string '2020-01-01' to float64 should return 0",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"2020-01-01"}, []bool{false}),
-				NewFunctionTestInput(types.T_float64.ToType(), []float64{}, []bool{}),
-			},
-			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
-				[]float64{0}, []bool{false}),
-		},
-		{
-			info: "cast datetime string '2020-01-01 12:34:56' to float64 should return 0",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"2020-01-01 12:34:56"}, []bool{false}),
-				NewFunctionTestInput(types.T_float64.ToType(), []float64{}, []bool{}),
-			},
-			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
-				[]float64{0}, []bool{false}),
-		},
+		NewFunctionTestResult(types.T_float32.ToType(), false,
+			[]float32{math.MaxFloat32, -math.MaxFloat32, 0, float32(math.Copysign(0, -1))}, nil), NewCast)
+	succeed, info := tc.Run()
+	require.True(t, succeed, info)
+}
+
+func TestStringToFixedFloat32PreservesSourcePrecision(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	targetType := types.New(types.T_float32, 5, 2)
+
+	for _, mode := range []SQLCompatibilityMode{SQLCompatibilityMySQL, SQLCompatibilityMatrixOne} {
+		for _, input := range []string{"999.995", "-999.995"} {
+			t.Run(fmt.Sprintf("mode_%d_%s", mode, input), func(t *testing.T) {
+				inputVec := newVectorByType(proc.Mp(), types.T_varchar.ToType(), []string{input}, nil)
+				defer inputVec.Free(proc.Mp())
+
+				result := vector.NewFunctionResultWrapper(targetType, proc.Mp()).(*vector.FunctionResult[float32])
+				defer result.Free()
+				require.NoError(t, result.PreExtendAndReset(1))
+
+				err := strToFloat(context.Background(), mode, vector.GenerateFunctionStrParameter(inputVec), result, 32, 1, nil)
+				require.Error(t, err)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), err)
+			})
+		}
 	}
 
-	for _, tc := range testCases {
-		t.Run(tc.info, func(t *testing.T) {
-			tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, NewCast)
-			succeed, info := tcc.Run()
-			require.True(t, succeed, tc.info, info)
+	for _, tc := range []struct {
+		name  string
+		mode  SQLCompatibilityMode
+		input string
+		want  float32
+	}{
+		{name: "mysql_positive_boundary", mode: SQLCompatibilityMySQL, input: "999.994suffix", want: 999.99},
+		{name: "mysql_negative_boundary", mode: SQLCompatibilityMySQL, input: "-999.994suffix", want: -999.99},
+		{name: "native_positive_boundary", mode: SQLCompatibilityMatrixOne, input: "999.994", want: 999.99},
+		{name: "native_negative_boundary", mode: SQLCompatibilityMatrixOne, input: "-999.994", want: -999.99},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			inputVec := newVectorByType(proc.Mp(), types.T_varchar.ToType(), []string{tc.input}, nil)
+			defer inputVec.Free(proc.Mp())
+
+			result := vector.NewFunctionResultWrapper(targetType, proc.Mp()).(*vector.FunctionResult[float32])
+			defer result.Free()
+			require.NoError(t, result.PreExtendAndReset(1))
+
+			err := strToFloat(context.Background(), tc.mode, vector.GenerateFunctionStrParameter(inputVec), result, 32, 1, nil)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, vector.GetFixedAtNoTypeCheck[float32](result.GetResultVector(), 0))
 		})
+	}
+}
+
+func TestStringToFloatSkipsInactiveInvalidRows(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	input := newVectorByType(proc.Mp(), types.T_varchar.ToType(), []string{"1.5", "invalid"}, nil)
+	defer input.Free(proc.Mp())
+
+	result := vector.NewFunctionResultWrapper(types.T_float64.ToType(), proc.Mp()).(*vector.FunctionResult[float64])
+	defer result.Free()
+	require.NoError(t, result.PreExtendAndReset(2))
+
+	err := strToFloat(context.Background(), SQLCompatibilityMySQL, vector.GenerateFunctionStrParameter(input), result, 64, 2,
+		&FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}})
+	require.NoError(t, err)
+	resultVec := result.GetResultVector()
+	require.Equal(t, 2, resultVec.Length())
+	require.Equal(t, 1.5, vector.GetFixedAtNoTypeCheck[float64](resultVec, 0))
+	require.True(t, resultVec.GetNulls().Contains(1))
+
+	require.NoError(t, result.PreExtendAndReset(2))
+	err = strToFloat(context.Background(), SQLCompatibilityMySQL, vector.GenerateFunctionStrParameter(input), result, 64, 2,
+		&FunctionSelectList{AllNull: true})
+	require.NoError(t, err)
+	resultVec = result.GetResultVector()
+	require.Equal(t, 2, resultVec.Length())
+	for i := uint64(0); i < 2; i++ {
+		require.True(t, resultVec.GetNulls().Contains(i))
 	}
 }
 
@@ -245,9 +316,7 @@ func TestCastStringNumericSignRejectsInvalidBodies(t *testing.T) {
 	}
 }
 
-func Test_BinaryToFloatInvalidConversion(t *testing.T) {
-	// Test binary to float conversion with invalid hex values
-	// Should return 0, not error (MySQL non-strict mode behavior)
+func TestBinaryToFloatConversion(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
 	ctx := context.Background()
@@ -260,13 +329,6 @@ func Test_BinaryToFloatInvalidConversion(t *testing.T) {
 		wantNulls []uint64
 	}{
 		{
-			name:      "overflow binary (>8 bytes) should return 0",
-			inputs:    []string{"this-is-a-very-long-string"}, // > 8 bytes, will overflow uint64
-			nulls:     []uint64{},
-			want:      []float64{0},
-			wantNulls: []uint64{}, // Not null, just 0
-		},
-		{
 			name:      "date string as binary should work",
 			inputs:    []string{"2020-01"}, // 7 bytes, fits in uint64
 			nulls:     []uint64{},
@@ -278,13 +340,6 @@ func Test_BinaryToFloatInvalidConversion(t *testing.T) {
 			inputs:    []string{"A"}, // 'A' = 0x41
 			nulls:     []uint64{},
 			want:      []float64{65}, // 0x41 = 65
-			wantNulls: []uint64{},
-		},
-		{
-			name:      "empty binary should return 0",
-			inputs:    []string{""},
-			nulls:     []uint64{},
-			want:      []float64{0},
 			wantNulls: []uint64{},
 		},
 	}
@@ -309,7 +364,7 @@ func Test_BinaryToFloatInvalidConversion(t *testing.T) {
 			err := to.PreExtendAndReset(len(tt.inputs))
 			require.NoError(t, err)
 
-			err = strToFloat(ctx, from, to, 64, len(tt.inputs), nil)
+			err = strToFloat(ctx, SQLCompatibilityMySQL, from, to, 64, len(tt.inputs), nil)
 			require.NoError(t, err, "should not return error for invalid binary")
 
 			resultVec := to.GetResultVector()
@@ -318,6 +373,22 @@ func Test_BinaryToFloatInvalidConversion(t *testing.T) {
 
 			nulls := resultVec.GetNulls()
 			require.Equal(t, tt.wantNulls, nulls.ToArray())
+		})
+	}
+
+	for _, input := range []string{"", "this-is-a-very-long-string"} {
+		t.Run("invalid_"+input, func(t *testing.T) {
+			inputVec := testutil.MakeVarlenaVector([][]byte{[]byte(input)}, nil, types.T_blob.ToType(), mp)
+			defer inputVec.Free(mp)
+			inputVec.SetIsBin(true)
+
+			to := vector.NewFunctionResultWrapper(types.T_float64.ToType(), mp).(*vector.FunctionResult[float64])
+			defer to.Free()
+			require.NoError(t, to.PreExtendAndReset(1))
+
+			err := strToFloat(ctx, SQLCompatibilityMySQL, vector.GenerateFunctionStrParameter(inputVec), to, 64, 1, nil)
+			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
 		})
 	}
 }
@@ -3868,4 +3939,206 @@ func TestIsStrictSqlModeSessionInfoFallback(t *testing.T) {
 	procSentinel := testutil.NewProcess(t)
 	procSentinel.Base.SessionInfo.SqlMode = process.EmptySqlModeSentinel
 	require.False(t, isStrictSqlMode(procSentinel))
+}
+
+func TestParseFloatCastString(t *testing.T) {
+	valid := []struct {
+		input string
+		want  float64
+	}{
+		{"  -2.5 ", -2.5},
+		{"+0x10", 16},
+		{"-0x10", -16},
+		{"0b1010", 10},
+		{"0o17", 15},
+		{"NaN", math.NaN()},
+		{"Inf", math.Inf(1)},
+	}
+	for _, tt := range valid {
+		t.Run(tt.input, func(t *testing.T) {
+			got, err := parseFloatCastString(tt.input)
+			require.NoError(t, err)
+			if math.IsNaN(tt.want) {
+				require.True(t, math.IsNaN(got))
+				return
+			}
+			require.Equal(t, tt.want, got)
+		})
+	}
+
+	for _, input := range []string{"1abc", "", "0x", "0xg", "1e10000"} {
+		t.Run("invalid_"+input, func(t *testing.T) {
+			_, err := parseFloatCastString(input)
+			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+		})
+	}
+}
+
+func TestParseStringToFloat(t *testing.T) {
+	t.Run("mysql_default_prefix_behavior", func(t *testing.T) {
+		testCases := []struct {
+			name  string
+			input string
+			want  float64
+		}{
+			{name: "suffix accepted", input: "1abc", want: 1},
+			{name: "no prefix returns zero", input: "abc", want: 0},
+			{name: "empty returns zero", input: "", want: 0},
+			{name: "ascii whitespace skipped", input: "\t\n\v\f\r -2.5foo", want: -2.5},
+			{name: "fraction without integer", input: ".5xyz", want: 0.5},
+			{name: "exponent suffix accepted", input: "1e2foo", want: 100},
+			{name: "malformed exponent rolls back", input: "1eabc", want: 1},
+			{name: "malformed exponent without suffix rolls back", input: "1e", want: 1},
+			{name: "malformed signed exponent rolls back", input: "1e+", want: 1},
+			{name: "malformed negative exponent rolls back", input: "1e-foo", want: 1},
+			{name: "sign without mantissa returns zero", input: "+", want: 0},
+			{name: "spaces only return zero", input: "   ", want: 0},
+			{name: "unicode whitespace is not mysql numeric whitespace", input: "\u00a01", want: 0},
+		}
+
+		for _, tt := range testCases {
+			t.Run(tt.name, func(t *testing.T) {
+				got, err := parseStringToFloat(tt.input, SQLCompatibilityMySQL)
+				require.NoError(t, err)
+				require.Equal(t, tt.want, got)
+			})
+		}
+	})
+
+	t.Run("extension_tokens_preserved_in_both_modes", func(t *testing.T) {
+		testCases := []struct {
+			name  string
+			input string
+			want  float64
+		}{
+			{name: "hex", input: "0x10", want: 16},
+			{name: "binary", input: "0b1010", want: 10},
+			{name: "octal", input: "0o17", want: 15},
+			{name: "nan", input: "NaN", want: math.NaN()},
+			{name: "inf", input: "Inf", want: math.Inf(1)},
+			{name: "signed hex with unicode whitespace", input: "\u00a0-0x10\u00a0", want: -16},
+			{name: "signed nan with unicode whitespace", input: "\u00a0+NaN\u00a0", want: math.NaN()},
+		}
+
+		for _, tt := range testCases {
+			for _, mode := range []SQLCompatibilityMode{SQLCompatibilityMySQL, SQLCompatibilityMatrixOne} {
+				t.Run(tt.name+"_"+fmt.Sprint(mode), func(t *testing.T) {
+					got, err := parseStringToFloat(tt.input, mode)
+					require.NoError(t, err)
+					if math.IsNaN(tt.want) {
+						require.True(t, math.IsNaN(got))
+						return
+					}
+					require.Equal(t, tt.want, got)
+				})
+			}
+		}
+	})
+
+	t.Run("malformed_extensions_error_in_both_modes", func(t *testing.T) {
+		for _, input := range []string{"0x", "0x10foo", "NaNfoo"} {
+			for _, mode := range []SQLCompatibilityMode{SQLCompatibilityMySQL, SQLCompatibilityMatrixOne} {
+				t.Run(input+"_"+fmt.Sprint(mode), func(t *testing.T) {
+					_, err := parseStringToFloat(input, mode)
+					require.Error(t, err)
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+				})
+			}
+		}
+	})
+
+	t.Run("native_mode_remains_strict", func(t *testing.T) {
+		for _, input := range []string{"1abc", "abc", "", "   ", "\t\n\v\f\r", "  -2.5foo", ".5xyz", "1eabc"} {
+			t.Run(input, func(t *testing.T) {
+				_, err := parseStringToFloat(input, SQLCompatibilityMatrixOne)
+				require.Error(t, err)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+			})
+		}
+	})
+
+	t.Run("native_mode_preserves_unicode_trim_space", func(t *testing.T) {
+		got, err := parseStringToFloat("\u00a01\u00a0", SQLCompatibilityMatrixOne)
+		require.NoError(t, err)
+		require.Equal(t, float64(1), got)
+	})
+}
+
+// These cases mirror MySQL's unittest/gunit/strtod-t.cc Balloc, ManyZeros,
+// and ZerosAndOnes coverage at a size suitable for the function package UT.
+func TestParseStringToFloatMySQLStrtodRegressionCases(t *testing.T) {
+	const maxDecimalExponent = 308 // DBL_MAX_10_EXP used by MySQL strtod-t.cc.
+
+	t.Run("long_mantissa_stops_at_first_non_numeric_suffix", func(t *testing.T) {
+		input := "-75.5189175" + strings.Repeat("0", 4096) + "767521D9"
+		got, err := parseStringToFloat(input, SQLCompatibilityMySQL)
+		require.NoError(t, err)
+		require.Equal(t, -75.5189175, got)
+	})
+
+	t.Run("subnormal_decimal", func(t *testing.T) {
+		input := "0." + strings.Repeat("0", maxDecimalExponent) + "12345"
+		got, err := parseStringToFloat(input, SQLCompatibilityMySQL)
+		require.NoError(t, err)
+		require.Equal(t, 1.2345e-309, got)
+	})
+
+	t.Run("decimal_underflow", func(t *testing.T) {
+		input := "0." + strings.Repeat("0", maxDecimalExponent*2) + "12345"
+		got, err := parseStringToFloat(input, SQLCompatibilityMySQL)
+		require.NoError(t, err)
+		require.Zero(t, got)
+	})
+
+	t.Run("many_zero_blocks_keep_first_representable_digit", func(t *testing.T) {
+		var input strings.Builder
+		input.WriteString("0.")
+		for range 20 {
+			input.WriteString(strings.Repeat("0", maxDecimalExponent))
+			input.WriteByte('1')
+		}
+		got, err := parseStringToFloat(input.String(), SQLCompatibilityMySQL)
+		require.NoError(t, err)
+		require.Equal(t, 1.0e-309, got)
+	})
+}
+
+func TestCompatibilityModeFromProcess(t *testing.T) {
+	require.Equal(t, SQLCompatibilityMySQL, CompatibilityModeFromProcess(nil))
+
+	proc := testutil.NewProcess(t)
+	require.Equal(t, SQLCompatibilityMySQL, CompatibilityModeFromProcess(proc))
+	proc.GetSessionInfo().MatrixOneNativeMode = true
+	require.Equal(t, SQLCompatibilityMatrixOne, CompatibilityModeFromProcess(proc))
+}
+
+func TestParseStringToFloatWithBitSize(t *testing.T) {
+	t.Run("mysql_default_range_handling", func(t *testing.T) {
+		got32, err := parseStringToFloatWithBitSize("1e100", 32, SQLCompatibilityMySQL)
+		require.NoError(t, err)
+		require.Equal(t, math.MaxFloat32, got32)
+
+		got64, err := parseStringToFloatWithBitSize("-1e10000", 64, SQLCompatibilityMySQL)
+		require.NoError(t, err)
+		require.Equal(t, -math.MaxFloat64, got64)
+
+		underflow, err := parseStringToFloatWithBitSize("-1e-10000", 64, SQLCompatibilityMySQL)
+		require.NoError(t, err)
+		require.Equal(t, math.Copysign(0, -1), underflow)
+		require.True(t, math.Signbit(underflow))
+
+		underflow32, err := parseStringToFloatWithBitSize("1e-10000", 32, SQLCompatibilityMySQL)
+		require.NoError(t, err)
+		require.Equal(t, float64(0), underflow32)
+		require.False(t, math.Signbit(underflow32))
+	})
+
+	t.Run("native_range_error_remains_invalid_input", func(t *testing.T) {
+		for _, bitSize := range []int{32, 64} {
+			_, err := parseStringToFloatWithBitSize("1e10000", bitSize, SQLCompatibilityMatrixOne)
+			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+		}
+	})
 }

@@ -70,7 +70,7 @@ Main workflow:
 import (
 	"context"
 	"fmt"
-	"sort"
+	"slices"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -350,7 +350,7 @@ func (b *TableLogtailRespBuilder) BuildResp() (api.SyncLogTailResp, error) {
 	for k := range b.dataInsBatches {
 		keys = append(keys, k)
 	}
-	sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
+	slices.Sort(keys)
 	for _, k := range keys {
 		if err := tryAppendEntry(api.Entry_Insert, TableRespKind_Data, DataChangeToLogtailBatch(b.dataInsBatches[k]), k); err != nil {
 			return empty, err

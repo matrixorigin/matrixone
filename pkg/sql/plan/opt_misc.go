@@ -136,7 +136,8 @@ func (builder *QueryBuilder) removeSimpleProjections(nodeID int32, parentType pl
 		allColRef := true
 		tag := node.BindingTags[0]
 		for i, proj := range node.ProjectList {
-			if flag || colRefCnt[[2]int32{tag, int32(i)}] > 1 {
+			refCnt := colRefCnt[[2]int32{tag, int32(i)}]
+			if flag || refCnt > 1 {
 				if proj.GetCol() == nil && (proj.GetLit() == nil || flag) {
 					allColRef = false
 					break
@@ -199,9 +200,8 @@ func (builder *QueryBuilder) canRemoveProject(parentType plan.Node_NodeType, nod
 	if parentType == plan.Node_INSERT || parentType == plan.Node_PRE_INSERT || parentType == plan.Node_PRE_INSERT_UK || parentType == plan.Node_PRE_INSERT_SK {
 		return false
 	}
-
-	for _, e := range node.ProjectList {
-		if !exprCanRemoveProject(e) {
+	for _, expr := range node.ProjectList {
+		if !exprCanRemoveProject(expr) {
 			return false
 		}
 	}
@@ -231,7 +231,8 @@ func (builder *QueryBuilder) canRemoveProject(parentType plan.Node_NodeType, nod
 func exprCanRemoveProject(expr *Expr) bool {
 	switch ne := expr.Expr.(type) {
 	case *plan.Expr_F:
-		if ne.F.Func.ObjName == "sleep" {
+		overload, exists := function.GetFunctionByIdWithoutError(ne.F.Func.Obj)
+		if !exists || overload.CannotFold() || overload.IsRealTimeRelated() {
 			return false
 		}
 		for _, arg := range ne.F.GetArgs() {
@@ -271,6 +272,7 @@ func replaceColumnsForNode(node *plan.Node, projMap map[[2]int32]*plan.Expr) {
 	replaceColumnsForExprList(node.GroupBy, projMap)
 	replaceColumnsForExprList(node.AggList, projMap)
 	replaceColumnsForExprList(node.WinSpecList, projMap)
+	replaceColumnsForExprList(node.TimeWindowPartitionBy, projMap)
 
 	for i := range node.OrderBy {
 		node.OrderBy[i].Expr = replaceColumnsForExpr(node.OrderBy[i].Expr, projMap)
@@ -1117,16 +1119,9 @@ func (builder *QueryBuilder) forceJoinOnOneCN(nodeID int32, force bool) {
 		}
 
 		if len(node.RuntimeFilterBuildList) > 0 {
-			switch node.JoinType {
-			case plan.Node_RIGHT:
-				if !node.Stats.HashmapStats.Shuffle {
-					force = true
-				}
-			case plan.Node_SEMI, plan.Node_ANTI:
-				if node.IsRightJoin && !node.Stats.HashmapStats.Shuffle {
-					force = true
-				}
-			case plan.Node_INDEX:
+			policy := analyzeRuntimeFilterJoinPolicy(node)
+			if policy.requiresLocalDelivery &&
+				(node.JoinType == plan.Node_INDEX || !node.Stats.HashmapStats.Shuffle) {
 				force = true
 			}
 		}
@@ -1188,6 +1183,8 @@ func handleOptimizerHints(str string, builder *QueryBuilder) {
 		builder.optimizerHints.execType = value
 	case "disableRightJoin":
 		builder.optimizerHints.disableRightJoin = value
+	case "disableRightSingleRF":
+		builder.optimizerHints.disableRightSingleRF = value
 	case "printShuffle":
 		builder.optimizerHints.printShuffle = value
 	case "skipDedup":

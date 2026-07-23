@@ -47,7 +47,7 @@ func (child *emptyDispatchChild) Call(*process.Process) (vm.CallResult, error) {
 }
 
 func TestPrepareRemote(t *testing.T) {
-	_ = colexec.NewServer(nil)
+	_ = colexec.NewServer("")
 
 	proc := testutil.NewProcess(t)
 
@@ -65,14 +65,14 @@ func TestPrepareRemote(t *testing.T) {
 	// uuid map should have this pipeline information after prepare remote.
 	require.NoError(t, d.prepareRemote(proc))
 
-	p, c, b := colexec.Get().GetProcByUuid(uid, false)
+	p, c, b := colexec.GetServer("").GetProcByUuid(uid, false)
 	require.True(t, b)
 	require.Equal(t, proc, p)
 	require.Equal(t, d.ctr.remoteInfo, c)
 }
 
 func TestRegisterRemoteReceiversBeforePrepare(t *testing.T) {
-	_ = colexec.NewServer(nil)
+	_ = colexec.NewServer("")
 
 	proc := testutil.NewProcess(t)
 
@@ -97,16 +97,16 @@ func TestRegisterRemoteReceiversBeforePrepare(t *testing.T) {
 	require.NoError(t, d.Prepare(proc))
 	require.Equal(t, earlyNotifyCh, d.ctr.remoteInfo)
 
-	p, notifyCh, ok := colexec.Get().GetProcByUuid(uid, false)
+	p, notifyCh, ok := colexec.GetServer("").GetProcByUuid(uid, false)
 	require.True(t, ok)
 	require.Same(t, proc, p)
 	require.Equal(t, earlyNotifyCh, notifyCh)
 
-	colexec.Get().DeleteUuids([]uuid.UUID{uid})
+	colexec.GetServer("").DeleteUuids([]uuid.UUID{uid})
 }
 
 func TestRegisterRemoteReceiversRollbackOnPartialFailure(t *testing.T) {
-	_ = colexec.NewServer(nil)
+	_ = colexec.NewServer("")
 
 	proc := testutil.NewProcess(t)
 
@@ -115,7 +115,7 @@ func TestRegisterRemoteReceiversRollbackOnPartialFailure(t *testing.T) {
 	uid2, err := uuid.NewV7()
 	require.NoError(t, err)
 
-	colexec.Get().GetProcByUuid(uid2, true)
+	colexec.GetServer("").GetProcByUuid(uid2, true)
 	d := Dispatch{
 		FuncId: SendToAllFunc,
 		RemoteRegs: []colexec.ReceiveInfo{
@@ -127,14 +127,14 @@ func TestRegisterRemoteReceiversRollbackOnPartialFailure(t *testing.T) {
 	require.Error(t, d.RegisterRemoteReceivers(proc))
 	require.Nil(t, d.ctr.remoteInfo)
 
-	p, notifyCh, ok := colexec.Get().GetProcByUuid(uid1, false)
+	p, notifyCh, ok := colexec.GetServer("").GetProcByUuid(uid1, false)
 	require.False(t, ok)
 	require.Nil(t, p)
 	require.Nil(t, notifyCh)
 }
 
 func TestRegisterRemoteReceiversRollbackPreservesConflictingLiveOwner(t *testing.T) {
-	server := colexec.NewServer(nil)
+	server := colexec.NewServer("")
 	proc := testutil.NewProcess(t)
 	ownerProc := &process.Process{}
 	ownerCh := make(process.RemotePipelineInformationChannel)
@@ -168,7 +168,7 @@ func TestRegisterRemoteReceiversRollbackPreservesConflictingLiveOwner(t *testing
 }
 
 func TestRegisterRemoteReceiversRollbackPreservesConflictingAttachedOwner(t *testing.T) {
-	server := colexec.NewServer(nil)
+	server := colexec.NewServer("")
 	proc := testutil.NewProcess(t)
 	ownerProc := &process.Process{}
 	ownerCh := make(process.RemotePipelineInformationChannel)
@@ -210,7 +210,7 @@ func TestRegisterRemoteReceiversRollbackPreservesConflictingAttachedOwner(t *tes
 }
 
 func TestRemoteReceiverRegistrationCleanupChecksOwner(t *testing.T) {
-	_ = colexec.NewServer(nil)
+	_ = colexec.NewServer("")
 
 	proc := testutil.NewProcess(t)
 	uid, err := uuid.NewV7()
@@ -234,7 +234,7 @@ func TestRemoteReceiverRegistrationCleanupChecksOwner(t *testing.T) {
 	// A delayed cleanup from the previous registration must not remove or
 	// clear the current owner, even though the UUID and process are reused.
 	first.Cleanup()
-	registeredProc, notifyCh, ok := colexec.Get().GetProcByUuid(uid, false)
+	registeredProc, notifyCh, ok := colexec.GetServer("").GetProcByUuid(uid, false)
 	require.True(t, ok)
 	require.Same(t, proc, registeredProc)
 	require.Equal(t, secondCh, notifyCh)
@@ -278,8 +278,113 @@ func TestWaitRemoteRegsReadyPropagatesCancelCause(t *testing.T) {
 	}
 }
 
+func TestWaitRemoteRegsReadyFailsWhenRegistrationChannelCloses(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.BuildPipelineContext(context.Background())
+
+	uid, err := uuid.NewV7()
+	require.NoError(t, err)
+	remoteInfo := make(process.RemotePipelineInformationChannel)
+	close(remoteInfo)
+	d := &Dispatch{
+		RemoteRegs: []colexec.ReceiveInfo{{Uuid: uid}},
+		ctr: &container{
+			remoteInfo: remoteInfo,
+		},
+	}
+
+	end, err := d.waitRemoteRegsReady(proc)
+	require.False(t, end)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "registration channel closed")
+	require.False(t, d.ctr.prepared)
+	require.Empty(t, d.ctr.remoteReceivers)
+}
+
+func TestWaitRemoteRegsReadyWaitsPastFormerAdmissionLimit(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.BuildPipelineContext(context.Background())
+	uid := uuid.Must(uuid.NewV7())
+	remoteInfo := make(process.RemotePipelineInformationChannel)
+	d := &Dispatch{
+		RemoteRegs: []colexec.ReceiveInfo{{Uuid: uid}},
+		ctr: &container{
+			remoteInfo: remoteInfo,
+		},
+	}
+
+	type result struct {
+		end bool
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		end, err := d.waitRemoteRegsReady(proc)
+		done <- result{end: end, err: err}
+	}()
+
+	formerLimit := time.NewTimer(20 * time.Millisecond)
+	defer formerLimit.Stop()
+	select {
+	case got := <-done:
+		t.Fatalf("receiver wait returned without lifecycle evidence: %v", got.err)
+	case <-formerLimit.C:
+	}
+
+	attached := &process.WrapCs{Uid: uid}
+	remoteInfo <- attached
+	select {
+	case got := <-done:
+		require.False(t, got.end)
+		require.NoError(t, got.err)
+		require.True(t, d.ctr.prepared)
+		require.Equal(t, []*process.WrapCs{attached}, d.ctr.remoteReceivers)
+	case <-time.After(time.Second):
+		t.Fatal("waitRemoteRegsReady did not return after receiver attachment")
+	}
+}
+
+func TestWaitRemoteRegsReadyCancellationAfterPartialRegistration(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	ctx, cancel := context.WithCancelCause(context.Background())
+	proc.Ctx = ctx
+	proc.Cancel = cancel
+	remoteInfo := make(process.RemotePipelineInformationChannel)
+	attached := &process.WrapCs{Uid: uuid.Must(uuid.NewV7())}
+	d := &Dispatch{
+		RemoteRegs: []colexec.ReceiveInfo{
+			{Uuid: attached.Uid},
+			{Uuid: uuid.Must(uuid.NewV7())},
+		},
+		ctr: &container{remoteInfo: remoteInfo},
+	}
+
+	type result struct {
+		end bool
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		end, err := d.waitRemoteRegsReady(proc)
+		done <- result{end: end, err: err}
+	}()
+	remoteInfo <- attached
+	cause := moerr.NewInternalErrorNoCtx("query canceled after partial receiver attachment")
+	cancel(cause)
+
+	select {
+	case got := <-done:
+		require.False(t, got.end)
+		require.ErrorIs(t, got.err, cause)
+		require.True(t, d.ctr.prepared)
+		require.Equal(t, []*process.WrapCs{attached}, d.ctr.remoteReceivers)
+	case <-time.After(time.Second):
+		t.Fatal("partial receiver wait did not return after query cancellation")
+	}
+}
+
 func TestDispatchEmptyInputWaitsForRemoteReceiver(t *testing.T) {
-	_ = colexec.NewServer(nil)
+	_ = colexec.NewServer("")
 
 	proc := testutil.NewProcess(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -307,20 +412,18 @@ func TestDispatchEmptyInputWaitsForRemoteReceiver(t *testing.T) {
 	defer registration.Cleanup()
 	require.NoError(t, d.Prepare(proc))
 
-	attached := make(chan struct{})
 	go func() {
 		select {
 		case <-child.called:
 		case <-ctx.Done():
 			return
 		}
-		registeredProc, notifyCh, ok := colexec.Get().GetProcByUuid(uid, false)
+		registeredProc, notifyCh, ok := colexec.GetServer("").GetProcByUuid(uid, false)
 		if !ok || registeredProc != proc {
 			return
 		}
 		select {
 		case notifyCh <- &process.WrapCs{Uid: uid, Err: make(chan error, 1)}:
-			close(attached)
 		case <-ctx.Done():
 		}
 	}()
@@ -330,15 +433,10 @@ func TestDispatchEmptyInputWaitsForRemoteReceiver(t *testing.T) {
 	require.Equal(t, vm.ExecStop, result.Status)
 	require.True(t, d.ctr.prepared)
 	require.Len(t, d.ctr.remoteReceivers, 1)
-	select {
-	case <-attached:
-	default:
-		t.Fatal("empty dispatch returned before its remote receiver attached")
-	}
 }
 
 func TestDispatchEmptyInputRemoteWaitPropagatesCancellation(t *testing.T) {
-	_ = colexec.NewServer(nil)
+	_ = colexec.NewServer("")
 
 	proc := testutil.NewProcess(t)
 	ctx, cancel := context.WithCancelCause(context.Background())
@@ -406,7 +504,7 @@ func TestDispatchAdoptCleanupState_NilSafe(t *testing.T) {
 }
 
 func TestDispatchResetDoesNotBlockWhenRemoteErrChannelIsFull(t *testing.T) {
-	_ = colexec.NewServer(nil)
+	_ = colexec.NewServer("")
 
 	proc := testutil.NewProcess(t)
 	uid, err := uuid.NewV7()
@@ -437,7 +535,7 @@ func TestDispatchResetDoesNotBlockWhenRemoteErrChannelIsFull(t *testing.T) {
 }
 
 func TestDispatchResetFailedNilErrorNotifiesRemoteWithCause(t *testing.T) {
-	_ = colexec.NewServer(nil)
+	_ = colexec.NewServer("")
 
 	uid, err := uuid.NewV7()
 	require.NoError(t, err)

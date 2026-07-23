@@ -22,6 +22,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
@@ -179,6 +180,9 @@ var (
 
 	// defaultLongSpanTime default: 10 s
 	defaultLongSpanTime = 10 * time.Second
+	// defaultDisableSpan keeps the legacy effective configuration aligned with
+	// the permanently retired Span runtime.
+	defaultDisableSpan = true
 
 	defaultAggregationWindow = 5 * time.Second
 
@@ -204,6 +208,132 @@ var (
 
 	defaultConnectTimeout = time.Minute
 )
+
+const (
+	IcebergConfigKeyManifestCacheBytes      = "iceberg.scan.manifest_cache_bytes"
+	IcebergConfigKeyManifestCacheTTL        = "iceberg.scan.manifest_cache_ttl"
+	IcebergConfigKeyManifestReadParallelism = "iceberg.scan.manifest_read_parallelism"
+	IcebergConfigKeyMaxManifestFiles        = "iceberg.scan.max_manifest_files"
+	IcebergConfigKeyMaxDataFiles            = "iceberg.scan.max_data_files"
+	IcebergConfigKeyPlanningMaxMemory       = "iceberg.scan.planning_max_memory"
+	IcebergConfigKeyServerPlanningMode      = "iceberg.scan.server_planning"
+	IcebergConfigKeyPlanningTimeout         = "iceberg.planning.timeout"
+	IcebergConfigKeyDeleteMaxMemory         = "iceberg.delete.max_memory"
+	IcebergConfigKeyDMLMaxMemory            = "iceberg.write.dml_max_memory"
+	IcebergConfigKeyEnableDeleteSpill       = "iceberg.delete.enable_spill"
+	IcebergConfigKeyWriteOrphanTTL          = "iceberg.write.orphan_ttl"
+	IcebergConfigKeyEnableOrphanGC          = "iceberg.write.enable_orphan_gc"
+	IcebergConfigKeyProtectedCNToCN         = "iceberg.security.protected_cn_to_cn"
+
+	IcebergServerPlanningOff      = "off"
+	IcebergServerPlanningAuto     = "auto"
+	IcebergServerPlanningRequired = "required"
+)
+
+type IcebergParameters struct {
+	Enable                  bool          `toml:"enable" user_setting:"advanced"`
+	EnablePerAccount        bool          `toml:"enable-per-account" user_setting:"advanced"`
+	ManifestCacheBytes      int64         `toml:"manifest-cache-bytes" user_setting:"advanced"`
+	ManifestCacheTTL        toml.Duration `toml:"manifest-cache-ttl" user_setting:"advanced"`
+	ManifestReadParallelism int           `toml:"manifest-read-parallelism" user_setting:"advanced"`
+	MaxManifestFiles        int           `toml:"max-manifest-files" user_setting:"advanced"`
+	MaxDataFiles            int           `toml:"max-data-files" user_setting:"advanced"`
+	PlanningMaxMemory       int64         `toml:"planning-max-memory" user_setting:"advanced"`
+	ServerPlanningMode      string        `toml:"server-planning-mode" user_setting:"advanced"`
+	PlanningTimeout         toml.Duration `toml:"planning-timeout" user_setting:"advanced"`
+	EnableWrite             bool          `toml:"enable-write" user_setting:"advanced"`
+	EnableDelete            bool          `toml:"enable-delete" user_setting:"advanced"`
+	DeleteMaxMemory         int64         `toml:"delete-max-memory" user_setting:"advanced"`
+	DMLMaxMemory            int64         `toml:"dml-max-memory" user_setting:"advanced"`
+	EnableDeleteSpill       bool          `toml:"enable-delete-spill" user_setting:"advanced"`
+	EnableDML               bool          `toml:"enable-dml" user_setting:"advanced"`
+	EnableMaintenance       bool          `toml:"enable-maintenance" user_setting:"advanced"`
+	EnableRemoteSigning     bool          `toml:"enable-remote-signing" user_setting:"advanced"`
+	ProtectedCNToCN         bool          `toml:"protected-cn-to-cn" user_setting:"advanced"`
+	OrphanTTL               toml.Duration `toml:"orphan-ttl" user_setting:"advanced"`
+	EnableOrphanGC          bool          `toml:"enable-orphan-gc" user_setting:"advanced"`
+}
+
+func (ip *IcebergParameters) SetDefaultValues() {
+	if ip.ManifestCacheBytes == 0 {
+		ip.ManifestCacheBytes = 256 << 20
+	}
+	if ip.ManifestCacheTTL.Duration == 0 {
+		ip.ManifestCacheTTL.Duration = 5 * time.Minute
+	}
+	if ip.ManifestReadParallelism == 0 {
+		ip.ManifestReadParallelism = 8
+	}
+	if ip.MaxManifestFiles == 0 {
+		ip.MaxManifestFiles = 100000
+	}
+	if ip.MaxDataFiles == 0 {
+		ip.MaxDataFiles = 1000000
+	}
+	if ip.PlanningMaxMemory == 0 {
+		ip.PlanningMaxMemory = 256 << 20
+	}
+	if ip.ServerPlanningMode == "" {
+		ip.ServerPlanningMode = IcebergServerPlanningAuto
+	}
+	if ip.PlanningTimeout.Duration == 0 {
+		ip.PlanningTimeout.Duration = 30 * time.Second
+	}
+	if ip.DeleteMaxMemory == 0 {
+		ip.DeleteMaxMemory = 256 << 20
+	}
+	if ip.DMLMaxMemory == 0 {
+		ip.DMLMaxMemory = 256 << 20
+	}
+	if ip.OrphanTTL.Duration == 0 {
+		ip.OrphanTTL.Duration = 24 * time.Hour
+	}
+}
+
+func (ip IcebergParameters) Validate(ctx context.Context) error {
+	if ip.ManifestCacheBytes < 0 {
+		return moerr.NewBadConfig(ctx, IcebergConfigKeyManifestCacheBytes+" must be greater than or equal to zero")
+	}
+	if ip.ManifestCacheTTL.Duration < 0 {
+		return moerr.NewBadConfig(ctx, IcebergConfigKeyManifestCacheTTL+" must be greater than or equal to zero")
+	}
+	if ip.ManifestReadParallelism <= 0 {
+		return moerr.NewBadConfig(ctx, IcebergConfigKeyManifestReadParallelism+" must be greater than zero")
+	}
+	if ip.MaxManifestFiles <= 0 {
+		return moerr.NewBadConfig(ctx, IcebergConfigKeyMaxManifestFiles+" must be greater than zero")
+	}
+	if ip.MaxDataFiles <= 0 {
+		return moerr.NewBadConfig(ctx, IcebergConfigKeyMaxDataFiles+" must be greater than zero")
+	}
+	if ip.PlanningMaxMemory <= 0 {
+		return moerr.NewBadConfig(ctx, IcebergConfigKeyPlanningMaxMemory+" must be greater than zero")
+	}
+	switch ip.ServerPlanningMode {
+	case IcebergServerPlanningOff, IcebergServerPlanningAuto, IcebergServerPlanningRequired:
+	default:
+		return moerr.NewBadConfig(ctx, IcebergConfigKeyServerPlanningMode+" must be off, auto, or required")
+	}
+	if ip.PlanningTimeout.Duration < 0 {
+		return moerr.NewBadConfig(ctx, IcebergConfigKeyPlanningTimeout+" must be greater than or equal to zero")
+	}
+	if ip.DeleteMaxMemory < 0 {
+		return moerr.NewBadConfig(ctx, IcebergConfigKeyDeleteMaxMemory+" must be greater than or equal to zero")
+	}
+	if ip.DMLMaxMemory <= 0 {
+		return moerr.NewBadConfig(ctx, IcebergConfigKeyDMLMaxMemory+" must be greater than zero")
+	}
+	if ip.EnableDeleteSpill {
+		return moerr.NewBadConfig(ctx, IcebergConfigKeyEnableDeleteSpill+" is not supported; keep enable-delete-spill disabled")
+	}
+	if ip.OrphanTTL.Duration < 0 {
+		return moerr.NewBadConfig(ctx, IcebergConfigKeyWriteOrphanTTL+" must be greater than or equal to zero")
+	}
+	if ip.EnableOrphanGC {
+		return moerr.NewBadConfig(ctx, IcebergConfigKeyEnableOrphanGC+" is not supported; orphan files are recorded for audited cleanup")
+	}
+	return nil
+}
 
 // FrontendParameters of the frontend
 type FrontendParameters struct {
@@ -373,6 +503,8 @@ type FrontendParameters struct {
 	// Can be overridden per-session with SET sidecar_url = '...' or
 	// globally for new sessions with SET GLOBAL sidecar_url = '...'.
 	SidecarURL string `toml:"sidecarUrl" user_setting:"advanced"`
+
+	Iceberg IcebergParameters `toml:"iceberg" user_setting:"advanced"`
 }
 
 func (fp *FrontendParameters) SetDefaultValues() {
@@ -529,6 +661,8 @@ func (fp *FrontendParameters) SetDefaultValues() {
 	if fp.ConnectTimeout.Duration == 0 {
 		fp.ConnectTimeout.Duration = defaultConnectTimeout
 	}
+
+	fp.Iceberg.SetDefaultValues()
 }
 
 func (fp *FrontendParameters) SetMaxMessageSize(size uint64) {
@@ -612,7 +746,7 @@ type ObservabilityParameters struct {
 	// DisableTrace default is false. if false, enable trace at booting
 	DisableTrace bool `toml:"disable-trace" user_setting:"advanced"`
 
-	// EnableTraceDebug default is false. With true, system will check all the children span is ended, which belong to the closing span.
+	// EnableTraceDebug is retained for configuration compatibility after Span recording was retired.
 	EnableTraceDebug bool `toml:"enable-trace-debug"`
 
 	// TraceExportInterval default is 15s.
@@ -642,16 +776,17 @@ type ObservabilityParameters struct {
 	// PS: only used while MO init.
 	MergeCycle toml.Duration `toml:"merge-cycle"`
 
-	// DisableSpan default: false. Disable span collection
+	// DisableSpan defaults to true and is retained for configuration compatibility.
+	// Span recording cannot be enabled; statement, log, and error collection is independent.
 	DisableSpan bool `toml:"disable-span"`
 
-	// EnableSpanProfile default: false. Do NO profile by default.
+	// EnableSpanProfile is retained for configuration compatibility and has no effect.
 	EnableSpanProfile bool `toml:"enable-span-profile"`
 
 	// DisableError default: false. Disable error collection
 	DisableError bool `toml:"disable-error"`
 
-	// LongSpanTime default: 500 ms. Only record span, which duration >= LongSpanTime
+	// LongSpanTime is retained for configuration compatibility and has no effect.
 	LongSpanTime toml.Duration `toml:"long-span-time"`
 
 	// SkipRunningStmt default: false. Skip status:Running entry while collect statement_info
@@ -739,7 +874,7 @@ func NewObservabilityParameters() *ObservabilityParameters {
 		MetricStorageUsageUpdateInterval:   toml.Duration{},
 		MetricStorageUsageCheckNewInterval: toml.Duration{},
 		MergeCycle:                         toml.Duration{},
-		DisableSpan:                        false,
+		DisableSpan:                        defaultDisableSpan,
 		EnableSpanProfile:                  false,
 		DisableError:                       false,
 		LongSpanTime:                       toml.Duration{},
@@ -894,7 +1029,7 @@ func (op *ObservabilityParameters) resetConfigByOld() {
 	resetBoolConfig(&op.DisableMetric, false, op.DisableMetricV12)
 	resetBoolConfig(&op.DisableTrace, false, op.DisableTraceV12)
 	resetBoolConfig(&op.DisableError, false, op.DisableErrorV12)
-	resetBoolConfig(&op.DisableSpan, false, op.DisableSpanV12)
+	resetBoolConfig(&op.DisableSpan, defaultDisableSpan, op.DisableSpanV12)
 	// part metric
 	resetDurationConfig(&op.MetricStorageUsageUpdateInterval.Duration,
 		defaultMetricUpdateStorageUsageInterval,

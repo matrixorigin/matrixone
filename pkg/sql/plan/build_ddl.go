@@ -39,7 +39,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/externalwrite"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
+	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	mokafka "github.com/matrixorigin/matrixone/pkg/stream/adapter/kafka"
@@ -83,6 +85,7 @@ func genDynamicTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef,
 	viewData, err := json.Marshal(ViewData{
 		Stmt:            ctx.GetRootSql(),
 		DefaultDatabase: ctx.DefaultDatabase(),
+		SQLMode:         parserSQLModeFromContext(ctx),
 		SecurityType:    getViewSecurityTypeFromContext(ctx),
 	})
 	if err != nil {
@@ -122,6 +125,39 @@ func getViewSecurityTypeFromContext(ctx CompilerContext) string {
 	}
 	// Default to DEFINER to match SQL SECURITY behavior.
 	return "DEFINER"
+}
+
+func parserSQLModeFromContext(ctx CompilerContext) *string {
+	sqlMode := ""
+	val, err := ctx.ResolveVariable("sql_mode", true, false)
+	if err == nil {
+		if s, ok := val.(string); ok {
+			sqlMode = mysql.SessionSQLModeForParser(s)
+		}
+	}
+	return &sqlMode
+}
+
+func canonicalPartitionedCreateTableSQL(stmt *tree.CreateTable) string {
+	fmtCtx := tree.NewFmtCtx(
+		dialect.MYSQL,
+		tree.WithQuoteIdentifier(),
+		tree.WithSingleQuoteString(),
+	)
+	stmt.Format(fmtCtx)
+	// CreateTable.Format does not include ClusterByOption, but rel_createsql is
+	// also consumed when a table is recreated on another node.
+	if stmt.ClusterByOption != nil {
+		fmtCtx.WriteString(" cluster by (")
+		for i, col := range stmt.ClusterByOption.ColumnList {
+			if i > 0 {
+				fmtCtx.WriteString(", ")
+			}
+			col.Format(fmtCtx)
+		}
+		fmtCtx.WriteByte(')')
+	}
+	return fmtCtx.String()
 }
 
 func genViewTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef, error) {
@@ -175,6 +211,7 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef, er
 	viewData, err := json.Marshal(ViewData{
 		Stmt:            viewSql,
 		DefaultDatabase: ctx.DefaultDatabase(),
+		SQLMode:         parserSQLModeFromContext(ctx),
 		SecurityType:    getViewSecurityTypeFromContext(ctx),
 	})
 	if err != nil {
@@ -204,10 +241,10 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef, er
 	return &tableDef, nil
 }
 
-func genAsSelectCols(ctx CompilerContext, stmt *tree.Select) ([]*ColDef, error) {
+func genAsSelectCols(ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool) ([]*ColDef, *Query, error) {
 	var err error
 	var rootId int32
-	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, false)
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt, false)
 	bindCtx := NewBindContext(builder, nil)
 
 	getTblAndColName := func(relPos, colPos int32) (string, string) {
@@ -224,8 +261,9 @@ func genAsSelectCols(ctx CompilerContext, stmt *tree.Select) ([]*ColDef, error) 
 		stmt = s.Select
 	}
 	if rootId, err = builder.bindSelect(stmt, bindCtx, true); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
+	builder.qry.Steps = append(builder.qry.Steps, rootId)
 	rootNode := builder.qry.Nodes[rootId]
 
 	cols := make([]*plan.ColDef, len(rootNode.ProjectList))
@@ -261,7 +299,7 @@ func genAsSelectCols(ctx CompilerContext, stmt *tree.Select) ([]*ColDef, error) 
 			},
 		}
 	}
-	return cols, nil
+	return cols, builder.qry, nil
 }
 
 func buildCreateSource(stmt *tree.CreateSource, ctx CompilerContext) (*Plan, error) {
@@ -776,6 +814,7 @@ func buildCreateTable(
 	ctx CompilerContext,
 	stmt *tree.CreateTable,
 	cloneStmt *tree.CloneTable,
+	isPrepareStmt bool,
 ) (*Plan, error) {
 
 	if stmt.IsAsLike {
@@ -812,6 +851,13 @@ func buildCreateTable(
 		}
 		// TODO WHY?
 		if tableDef.TableType == catalog.SystemViewRel || tableDef.TableType == catalog.SystemExternalRel {
+			isIceberg, err := IsIcebergTableDef(ctx.GetContext(), tableDef)
+			if err != nil {
+				return nil, err
+			}
+			if isIceberg {
+				return nil, moerr.NewInvalidInputf(ctx.GetContext(), "cannot create table like Iceberg table mapping %s.%s", dbName, tblName)
+			}
 			return nil, moerr.NewInternalErrorf(ctx.GetContext(), "%s.%s is not BASE TABLE", dbName, tblName)
 		}
 
@@ -832,7 +878,7 @@ func buildCreateTable(
 			// `CREATE TABLE IF NOT EXISTS T LIKE S` errors with "table already
 			// exists" when T exists instead of being a no-op (issue #25119).
 			stmtLike.IfNotExists = stmt.IfNotExists
-			p, err := buildCreateTable(ctx, stmtLike, nil)
+			p, err := buildCreateTable(ctx, stmtLike, nil, isPrepareStmt)
 			if err != nil {
 				return nil, err
 			}
@@ -859,12 +905,7 @@ func buildCreateTable(
 	}
 
 	if stmt.PartitionOption != nil {
-		createTable.RawSQL = tree.StringWithOpts(
-			stmt,
-			dialect.MYSQL,
-			tree.WithQuoteIdentifier(),
-			tree.WithSingleQuoteString(),
-		)
+		createTable.RawSQL = canonicalPartitionedCreateTableSQL(stmt)
 		createTable.TableDef.FeatureFlag |= features.Partitioned
 	}
 
@@ -899,8 +940,9 @@ func buildCreateTable(
 	}
 
 	var asSelectCols []*ColDef
+	var asSelectQuery *Query
 	if stmt.IsAsSelect {
-		if asSelectCols, err = genAsSelectCols(ctx, stmt.AsSource); err != nil {
+		if asSelectCols, asSelectQuery, err = genAsSelectCols(ctx, stmt.AsSource, isPrepareStmt); err != nil {
 			return nil, err
 		}
 	}
@@ -982,7 +1024,32 @@ func buildCreateTable(
 	}
 
 	// After handleTableOptions, so begin the partitions processing depend on TableDef
-	if stmt.Param != nil {
+	if stmt.IcebergParam != nil {
+		if err := ensureIcebergTableSurfaceEnabled(ctx.GetContext(), "CREATE EXTERNAL TABLE ENGINE=ICEBERG"); err != nil {
+			return nil, err
+		}
+		spec, err := sqliceberg.ParseTableMappingSpec(ctx.GetContext(), stmt.IcebergParam)
+		if err != nil {
+			return nil, err
+		}
+		properties := []*plan.Property{
+			{
+				Key:   catalog.SystemRelAttr_Kind,
+				Value: catalog.SystemExternalRel,
+			},
+			{
+				Key:   catalog.SystemRelAttr_CreateSQL,
+				Value: sqliceberg.BuildCreateSQLEnvelope(spec.Mapping, spec.CatalogName),
+			},
+		}
+		createTable.TableDef.TableType = catalog.SystemExternalRel
+		createTable.TableDef.Defs = append(createTable.TableDef.Defs, &plan.TableDef_DefType{
+			Def: &plan.TableDef_DefType_Properties{
+				Properties: &plan.PropertiesDef{
+					Properties: properties,
+				},
+			}})
+	} else if stmt.Param != nil {
 		for i := 0; i < len(stmt.Param.Option); i += 2 {
 			switch strings.ToLower(stmt.Param.Option[i]) {
 			case "endpoint", "region", "access_key_id", "secret_access_key", "bucket", "filepath", "compression", "format", "jsondata", "provider", "role_arn", "external_id", "hive_partitioning", "hive_partition_columns", ExternalWriteFilePatternKey, CSVCommentKey:
@@ -1032,8 +1099,10 @@ func buildCreateTable(
 		if catalog.IsHiddenTable(createTable.TableDef.Name) {
 			kind = ""
 		}
-		fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
-		stmt.Format(fmtCtx)
+		createSQL := ctx.GetRootSql()
+		if stmt.PartitionOption != nil {
+			createSQL = canonicalPartitionedCreateTableSQL(stmt)
+		}
 		properties := []*plan.Property{
 			{
 				Key:   catalog.SystemRelAttr_Kind,
@@ -1041,7 +1110,7 @@ func buildCreateTable(
 			},
 			{
 				Key:   catalog.SystemRelAttr_CreateSQL,
-				Value: ctx.GetRootSql(),
+				Value: createSQL,
 			},
 		}
 		createTable.TableDef.Defs = append(createTable.TableDef.Defs, &plan.TableDef_DefType{
@@ -1086,11 +1155,15 @@ func buildCreateTable(
 	if stmt.Temporary {
 		createTable.TableDef.TableType = catalog.SystemTemporaryTable
 	}
+	if !isPrepareStmt {
+		asSelectQuery = nil
+	}
 
 	return &Plan{
 		Plan: &plan.Plan_Ddl{
 			Ddl: &plan.DataDefinition{
 				DdlType: plan.DataDefinition_CREATE_TABLE,
+				Query:   asSelectQuery,
 				Definition: &plan.DataDefinition_CreateTable{
 					CreateTable: createTable,
 				},
@@ -1110,7 +1183,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 	fkDatasOfFKSelfRefer := make([]*FkData, 0)
 	dedupFkName := make(UnorderedSet[string])
 
-	if stmt.Param != nil {
+	if stmt.Param != nil || stmt.IcebergParam != nil {
 		if err := rejectExternalTableInlineIndexes(ctx.GetContext(), stmt); err != nil {
 			return err
 		}
@@ -1447,7 +1520,13 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 
 		// insert into new_table select default_val1, default_val2, ..., * from (select clause);
 		var insertSqlBuilder strings.Builder
-		insertSqlBuilder.WriteString(fmt.Sprintf("insert into `%s`.`%s` select ", createTable.Database, createTable.TableDef.Name))
+		insertSqlBuilder.WriteString("insert into ")
+		targetFmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteIdentifier())
+		targetFmtCtx.WriteIdentifier(tree.Identifier(createTable.Database))
+		targetFmtCtx.WriteByte('.')
+		targetFmtCtx.WriteIdentifier(tree.Identifier(createTable.TableDef.Name))
+		insertSqlBuilder.WriteString(targetFmtCtx.String())
+		insertSqlBuilder.WriteString(" select ")
 
 		cols := createTable.TableDef.Cols
 		firstCol := true
@@ -1468,7 +1547,11 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		insertSqlBuilder.WriteString("*")
 
 		// from
-		fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
+		fmtCtx := tree.NewFmtCtx(
+			dialect.MYSQL,
+			tree.WithQuoteString(true),
+			tree.WithQuoteIdentifier(),
+		)
 		stmt.AsSource.Format(fmtCtx)
 		insertSqlBuilder.WriteString(fmt.Sprintf(" from (%s)", restoreIntervalSyntaxForCTAS(fmtCtx.String())))
 
@@ -1724,7 +1807,19 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 func restoreIntervalSyntaxForCTAS(sql string) string {
 	var out strings.Builder
 	for i := 0; i < len(sql); {
-		if !strings.HasPrefix(strings.ToLower(sql[i:]), "interval(") {
+		if sql[i] == '\'' || sql[i] == '"' {
+			next := skipQuotedStringForCTAS(sql, i, sql[i])
+			out.WriteString(sql[i:next])
+			i = next
+			continue
+		}
+		if sql[i] == '`' {
+			next := skipBacktickIdentifierForCTAS(sql, i)
+			out.WriteString(sql[i:next])
+			i = next
+			continue
+		}
+		if !hasIntervalKeywordAt(sql, i) {
 			out.WriteByte(sql[i])
 			i++
 			continue
@@ -1751,42 +1846,84 @@ func parseIntervalCall(sql string, start int) (expr string, unit string, next in
 	pos := start + len(prefix)
 	depth := 1
 	comma := -1
-	inSingleQuote := false
-	inDoubleQuote := false
 
 	for pos < len(sql) {
 		ch := sql[pos]
+		if ch == '\'' || ch == '"' {
+			pos = skipQuotedStringForCTAS(sql, pos, ch)
+			continue
+		}
+		if ch == '`' {
+			pos = skipBacktickIdentifierForCTAS(sql, pos)
+			continue
+		}
 		switch ch {
-		case '\'':
-			if !inDoubleQuote {
-				inSingleQuote = !inSingleQuote
-			}
-		case '"':
-			if !inSingleQuote {
-				inDoubleQuote = !inDoubleQuote
-			}
 		case '(':
-			if !inSingleQuote && !inDoubleQuote {
-				depth++
-			}
+			depth++
 		case ')':
-			if !inSingleQuote && !inDoubleQuote {
-				depth--
-				if depth == 0 {
-					if comma == -1 {
-						return "", "", 0, false
-					}
-					return sql[start+len(prefix) : comma], sql[comma+1 : pos], pos + 1, true
+			depth--
+			if depth == 0 {
+				if comma == -1 {
+					return "", "", 0, false
 				}
+				return sql[start+len(prefix) : comma], sql[comma+1 : pos], pos + 1, true
 			}
 		case ',':
-			if !inSingleQuote && !inDoubleQuote && depth == 1 && comma == -1 {
+			if depth == 1 && comma == -1 {
 				comma = pos
 			}
 		}
 		pos++
 	}
 	return "", "", 0, false
+}
+
+func hasIntervalKeywordAt(sql string, start int) bool {
+	const keyword = "interval"
+	end := start + len(keyword)
+	if end >= len(sql) || sql[end] != '(' || !strings.EqualFold(sql[start:end], keyword) {
+		return false
+	}
+	return start == 0 || !isSQLIdentifierByte(sql[start-1])
+}
+
+func isSQLIdentifierByte(ch byte) bool {
+	return ch >= 0x80 || ch >= 'a' && ch <= 'z' || ch >= 'A' && ch <= 'Z' ||
+		ch >= '0' && ch <= '9' || ch == '_' || ch == '$'
+}
+
+func skipQuotedStringForCTAS(sql string, start int, quote byte) int {
+	for pos := start + 1; pos < len(sql); pos++ {
+		if sql[pos] == '\\' {
+			if pos+1 < len(sql) {
+				pos++
+			}
+			continue
+		}
+		if sql[pos] != quote {
+			continue
+		}
+		if pos+1 < len(sql) && sql[pos+1] == quote {
+			pos++
+			continue
+		}
+		return pos + 1
+	}
+	return len(sql)
+}
+
+func skipBacktickIdentifierForCTAS(sql string, start int) int {
+	for pos := start + 1; pos < len(sql); pos++ {
+		if sql[pos] != '`' {
+			continue
+		}
+		if pos+1 < len(sql) && sql[pos+1] == '`' {
+			pos++
+			continue
+		}
+		return pos + 1
+	}
+	return len(sql)
 }
 
 func isIntervalUnitToken(unit string) bool {
@@ -2576,6 +2713,13 @@ func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, e
 		// the user would expect TRUNCATE to remove — reject rather than report
 		// success while the stage files survive.
 		if tableDef.TableType == catalog.SystemExternalRel {
+			isIceberg, err := IsIcebergTableDef(ctx.GetContext(), tableDef)
+			if err != nil {
+				return nil, err
+			}
+			if isIceberg {
+				return nil, moerr.NewNotSupportedf(ctx.GetContext(), "truncate Iceberg table mapping '%v'", truncateTable.Table)
+			}
 			if _, ok := GetWriteFilePattern(getExternParamFromTableDef(tableDef)); ok {
 				return nil, moerr.NewNotSupportedf(ctx.GetContext(),
 					"truncate writable external table '%v'; its files in the stage are not managed by the table", truncateTable.Table)
@@ -3064,6 +3208,13 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 
 func checkCreateIndexTableType(ctx context.Context, tableDef *TableDef) error {
 	if tableDef.TableType == catalog.SystemExternalRel {
+		isIceberg, err := IsIcebergTableDef(ctx, tableDef)
+		if err != nil {
+			return err
+		}
+		if isIceberg {
+			return moerr.NewInvalidInput(ctx, "cannot create index on Iceberg table mapping")
+		}
 		return moerr.NewInvalidInput(ctx, "cannot create index on external table")
 	}
 	return nil
@@ -4630,15 +4781,17 @@ func constructAddedPartitionDefs(
 	tableDef *plan.TableDef,
 	clause *tree.AlterPartitionAddPartitionClause,
 ) ([]*plan.PartitionDef, error) {
-	originTableStmt, err := parsers.ParseOne(
+	originTableStmt, err := parsers.ParseOneWithSQLMode(
 		ctx.GetContext(),
 		dialect.MYSQL,
 		tableDef.Createsql,
 		ctx.GetLowerCaseTableNames(),
+		"PIPES_AS_CONCAT",
 	)
 	if err != nil {
 		return nil, err
 	}
+	defer originTableStmt.Free()
 
 	ct, ok := originTableStmt.(*tree.CreateTable)
 	if !ok {
