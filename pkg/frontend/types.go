@@ -1443,8 +1443,32 @@ func (ses *Session) SetGlobalSysVar(ctx context.Context, name string, val interf
 	if err = doSetGlobalSystemVariable(ctx, ses, name, val); err != nil {
 		return
 	}
-	ses.gSysVars.Set(name, val)
-	return
+	if name != queryWorkloadPolicy {
+		ses.gSysVars.Set(name, val)
+		return nil
+	}
+
+	raw := val.(string)
+	commitTS := ses.getLastCommitTS()
+	if !ses.gSysVars.applyWorkloadPolicyUpdate(raw, commitTS) {
+		return moerr.NewInternalError(
+			ctx,
+			"query workload policy was committed but is older than the local cache revision",
+		)
+	}
+	GSysVarsMgr.ApplyWorkloadPolicyUpdate(
+		ses.GetTenantInfo().TenantID,
+		raw,
+		commitTS,
+	)
+	if err = postWorkloadPolicyUpdate(ctx, ses, raw, commitTS); err != nil {
+		return moerr.NewInternalErrorf(
+			ctx,
+			"query workload policy was committed but CN propagation failed; retry SET GLOBAL: %v",
+			err,
+		)
+	}
+	return nil
 }
 
 func (ses *feSessionImpl) GetSessionSysVars() *SystemVariables {

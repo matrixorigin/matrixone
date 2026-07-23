@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/iceberg/api"
 	"github.com/matrixorigin/matrixone/pkg/iscp"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
@@ -41,6 +42,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/ctl"
+	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
@@ -107,6 +109,7 @@ func (s *service) initQueryCommandHandler() {
 	s.queryService.AddHandleFunc(query.CmdMethod_CtlPrefetchOnSubscribed, s.handleCtlPrefetchOnSubscribed, false)
 	s.queryService.AddHandleFunc(query.CmdMethod_ISCPDrainConsumer, s.handleISCPDrainConsumer, false)
 	s.queryService.AddHandleFunc(query.CmdMethod_IcebergCacheInvalidate, s.handleIcebergCacheInvalidate, false)
+	s.queryService.AddHandleFunc(query.CmdMethod_WorkloadPolicyUpdate, s.handleWorkloadPolicyUpdate, false)
 }
 
 func (s *service) handleKillConn(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
@@ -146,6 +149,32 @@ func (s *service) handleAlterAccount(ctx context.Context, req *query.Request, re
 	accountMgr.AlterRoutineStatue(req.AlterAccountRequest.TenantId, req.AlterAccountRequest.Status)
 	resp.AlterAccountResponse = &query.AlterAccountResponse{
 		AlterSuccess: true,
+	}
+	return nil
+}
+
+func (s *service) handleWorkloadPolicyUpdate(
+	ctx context.Context,
+	req *query.Request,
+	resp *query.Response,
+	_ *morpc.Buffer,
+) error {
+	if req == nil || req.WorkloadPolicyUpdateRequest == nil {
+		return moerr.NewInvalidInput(ctx, "bad workload policy update request")
+	}
+	update := req.WorkloadPolicyUpdateRequest
+	if update.CommitTS.IsEmpty() {
+		return moerr.NewInvalidInput(ctx, "workload policy update commit timestamp is empty")
+	}
+	if _, err := schedule.ParseWorkloadPolicyConfig(update.Policy); err != nil {
+		return moerr.NewInvalidInputf(ctx, "invalid workload policy update: %v", err)
+	}
+	resp.WorkloadPolicyUpdateResponse = &query.WorkloadPolicyUpdateResponse{
+		Applied: frontend.GSysVarsMgr.ApplyWorkloadPolicyUpdate(
+			update.AccountID,
+			update.Policy,
+			update.CommitTS,
+		),
 	}
 	return nil
 }

@@ -49,6 +49,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/shardservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/ctl"
@@ -61,6 +62,60 @@ import (
 
 var dummyBadRequestErr = moerr.NewInternalError(context.TODO(), "bad request")
 var dummyErr = moerr.NewInternalError(context.TODO(), "dummy error")
+
+func TestServiceHandleWorkloadPolicyUpdateRejectsDelayedValue(t *testing.T) {
+	const accountID = uint32(math.MaxUint32 - 1)
+	vars := &frontend.SystemVariables{}
+	frontend.GSysVarsMgr.Put(accountID, vars)
+	s := &service{}
+
+	newPolicy := `{"version":1,"policies":{"ap":{"pool":"new","labels":{"role":"ap"}}}}`
+	resp := &query.Response{}
+	err := s.handleWorkloadPolicyUpdate(
+		context.Background(),
+		&query.Request{WorkloadPolicyUpdateRequest: &query.WorkloadPolicyUpdateRequest{
+			AccountID: accountID,
+			Policy:    newPolicy,
+			CommitTS:  timestamp.Timestamp{PhysicalTime: 20},
+		}},
+		resp,
+		nil,
+	)
+	require.NoError(t, err)
+	require.True(t, resp.WorkloadPolicyUpdateResponse.Applied)
+	require.Equal(t, "new", vars.WorkloadPolicySnapshot().Rules["ap"].PoolIdentity)
+
+	resp = &query.Response{}
+	err = s.handleWorkloadPolicyUpdate(
+		context.Background(),
+		&query.Request{WorkloadPolicyUpdateRequest: &query.WorkloadPolicyUpdateRequest{
+			AccountID: accountID,
+			Policy:    `{"version":1,"policies":{"ap":{"pool":"old","labels":{"role":"ap"}}}}`,
+			CommitTS:  timestamp.Timestamp{PhysicalTime: 10},
+		}},
+		resp,
+		nil,
+	)
+	require.NoError(t, err)
+	require.False(t, resp.WorkloadPolicyUpdateResponse.Applied)
+	require.Equal(t, "new", vars.WorkloadPolicySnapshot().Rules["ap"].PoolIdentity)
+
+	require.Error(t, s.handleWorkloadPolicyUpdate(
+		context.Background(),
+		&query.Request{},
+		&query.Response{},
+		nil,
+	))
+	require.Error(t, s.handleWorkloadPolicyUpdate(
+		context.Background(),
+		&query.Request{WorkloadPolicyUpdateRequest: &query.WorkloadPolicyUpdateRequest{
+			AccountID: accountID,
+			Policy:    newPolicy,
+		}},
+		&query.Response{},
+		nil,
+	))
+}
 
 func Test_service_handleISCPDrainConsumerRenewFenceOnly(t *testing.T) {
 	require.True(t, fault.Enable())

@@ -54,6 +54,7 @@ import (
 	mysqlparser "github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	"github.com/matrixorigin/matrixone/pkg/stage"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
@@ -9780,6 +9781,166 @@ func TestSetGlobalSysVar(t *testing.T) {
 	})
 }
 
+func TestSetGlobalQueryWorkloadPolicyPersistsQuotedJSON(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	bh := &backgroundExecTest{}
+	bh.init()
+	stub := gostub.StubFunc(&NewBackgroundExec, bh)
+	defer stub.Reset()
+
+	raw := `{"version":1,"policies":{"ap":{"pool":"O'Reilly\\pool","labels":{"role":"ap"},"current_cn":"excluded"}}}`
+	lookup := getSqlForGetSysVarWithAccount(sysAccountID, queryWorkloadPolicy)
+	insert := getSqlForInsertSysVarWithAccount(
+		sysAccountID,
+		sysAccountName,
+		queryWorkloadPolicy,
+		raw,
+	)
+	bh.sql2result["begin;"] = nil
+	bh.sql2result["commit;"] = nil
+	bh.sql2result["rollback;"] = nil
+	bh.sql2result[lookup] = newMrsForSystemVariableNameOfAccount(nil)
+	bh.sql2result[insert] = nil
+
+	// The generated SQL must remain one parseable statement even when the JSON
+	// contains both double quotes, an apostrophe, and a backslash.
+	parsed, err := mysqlparser.Parse(context.Background(), insert, 1)
+	require.NoError(t, err)
+	require.Len(t, parsed, 1)
+	parsed, err = mysqlparser.ParseWithSQLMode(
+		context.Background(),
+		insert,
+		1,
+		"NO_BACKSLASH_ESCAPES",
+	)
+	require.NoError(t, err)
+	require.Len(t, parsed, 1)
+	require.NotContains(t, insert, raw)
+	update := getSqlForUpdateSysVarValue(raw, sysAccountID, queryWorkloadPolicy)
+	parsed, err = mysqlparser.Parse(context.Background(), update, 1)
+	require.NoError(t, err)
+	require.Len(t, parsed, 1)
+	parsed, err = mysqlparser.ParseWithSQLMode(
+		context.Background(),
+		update,
+		1,
+		"NO_BACKSLASH_ESCAPES",
+	)
+	require.NoError(t, err)
+	require.Len(t, parsed, 1)
+
+	ses := newSes(nil, ctrl)
+	ses.gSysVars.Set(queryWorkloadPolicy, "")
+	require.NoError(t, ses.SetGlobalSysVar(
+		context.Background(),
+		queryWorkloadPolicy,
+		raw,
+	))
+	require.Equal(t, raw, ses.gSysVars.Get(queryWorkloadPolicy))
+}
+
+func TestQueryWorkloadPolicyCatalogRevalidationFailsClosedAndRecovers(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	bh := &backgroundExecTest{}
+	bh.init()
+	stub := gostub.StubFunc(&NewBackgroundExec, bh)
+	defer stub.Reset()
+
+	raw := `{"version":1,"policies":{"ap":{"pool":"fresh-ap","labels":{"role":"ap"}}}}`
+	sql := getSqlForGetSysVarValueWithAccount(sysAccountID, queryWorkloadPolicy)
+	mrs := &MysqlResultSet{}
+	column := &MysqlColumn{}
+	column.SetName("variable_value")
+	column.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	mrs.AddColumn(column)
+	mrs.AddRow([]interface{}{raw})
+	bh.sql2result[sql] = mrs
+
+	ses := newSes(nil, ctrl)
+	ses.gSysVars.Set(queryWorkloadPolicy, "")
+	ses.gSysVars.workloadPolicyRefreshAfter.Store(time.Now().Add(-time.Second).UnixNano())
+
+	bh.sql2err[sql] = moerr.NewInternalErrorNoCtx("catalog unavailable")
+	failed := queryWorkloadPolicySnapshotAt(context.Background(), ses)
+	require.Contains(t, failed.InvalidReason, "refresh failed")
+
+	delete(bh.sql2err, sql)
+	recovered := queryWorkloadPolicySnapshotAt(context.Background(), ses)
+	require.Empty(t, recovered.InvalidReason)
+	require.Equal(t, "fresh-ap", recovered.Rules[schedule.WorkloadAP].PoolIdentity)
+}
+
+func TestQueryWorkloadPolicyCatalogRevalidationDoesNotOverwriteNewerRPC(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	sql := getSqlForGetSysVarValueWithAccount(sysAccountID, queryWorkloadPolicy)
+	catalogRaw := `{"version":1,"policies":{"ap":{"pool":"catalog-ap","labels":{"role":"ap"}}}}`
+	rpcRaw := `{"version":1,"policies":{"ap":{"pool":"rpc-ap","labels":{"role":"ap"}}}}`
+	base := &backgroundExecTest{}
+	base.init()
+	mrs := &MysqlResultSet{}
+	column := &MysqlColumn{}
+	column.SetName("variable_value")
+	column.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	mrs.AddColumn(column)
+	mrs.AddRow([]interface{}{catalogRaw})
+	base.sql2result[sql] = mrs
+	base.sql2err[sql] = moerr.NewInternalErrorNoCtx("obsolete catalog read failed")
+
+	bh := &blockingBackgroundExecTest{
+		backgroundExecTest: base,
+		blockSQL:           sql,
+		started:            make(chan struct{}),
+		release:            make(chan struct{}),
+	}
+	defer func() {
+		select {
+		case <-bh.release:
+		default:
+			close(bh.release)
+		}
+	}()
+	stub := gostub.StubFunc(&NewBackgroundExec, bh)
+	defer stub.Reset()
+
+	ses := newSes(nil, ctrl)
+	ses.gSysVars.Set(queryWorkloadPolicy, "")
+	ses.gSysVars.mu.Lock()
+	ses.gSysVars.workloadPolicyCommitTS = timestamp.Timestamp{PhysicalTime: 10}
+	ses.gSysVars.mu.Unlock()
+	ses.gSysVars.workloadPolicyRefreshAfter.Store(time.Now().Add(-time.Second).UnixNano())
+
+	snapshotC := make(chan schedule.WorkloadPolicySet, 1)
+	go func() {
+		snapshotC <- queryWorkloadPolicySnapshotAt(context.Background(), ses)
+	}()
+	select {
+	case <-bh.started:
+	case <-time.After(5 * time.Second):
+		require.FailNow(t, "catalog revalidation did not start")
+	}
+
+	require.True(t, ses.gSysVars.applyWorkloadPolicyUpdate(
+		rpcRaw,
+		timestamp.Timestamp{PhysicalTime: 20},
+	))
+	close(bh.release)
+
+	select {
+	case snapshot := <-snapshotC:
+		require.Empty(t, snapshot.InvalidReason)
+		require.Equal(t, "rpc-ap", snapshot.Rules[schedule.WorkloadAP].PoolIdentity)
+	case <-time.After(5 * time.Second):
+		require.FailNow(t, "catalog revalidation did not finish")
+	}
+	require.Equal(t, rpcRaw, ses.gSysVars.Get(queryWorkloadPolicy))
+}
+
 func boxExprStr(s string) tree.Expr {
 	return tree.NewNumVal(s, s, false, tree.P_char)
 }
@@ -11258,6 +11419,25 @@ type backgroundExecTest struct {
 	sql2err                        map[string]error
 	executedSQLs                   []string
 	dropDatabaseIgnoresForeignKeys bool
+}
+
+type blockingBackgroundExecTest struct {
+	*backgroundExecTest
+	blockSQL string
+	started  chan struct{}
+	release  chan struct{}
+}
+
+func (bt *blockingBackgroundExecTest) Exec(ctx context.Context, sql string) error {
+	if sql == bt.blockSQL {
+		close(bt.started)
+		select {
+		case <-bt.release:
+		case <-ctx.Done():
+			return context.Cause(ctx)
+		}
+	}
+	return bt.backgroundExecTest.Exec(ctx, sql)
 }
 
 func (bt *backgroundExecTest) ExecStmt(ctx context.Context, statement tree.Statement) error {

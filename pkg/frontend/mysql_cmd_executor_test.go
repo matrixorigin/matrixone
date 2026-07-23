@@ -3611,12 +3611,7 @@ func TestQueryWorkloadPolicyUsesAccountGlobalAdministratorPolicy(t *testing.T) {
 	require.True(t, set.Configured())
 	require.Empty(t, set.InvalidReason)
 	require.Contains(t, set.Rules, schedule.WorkloadAP)
-	require.True(t, querySchedulingIntent(ses).Explicit)
-	require.False(t, querySchedulingIntentWithWorkloadPolicy(
-		ses,
-		schedule.WorkloadPolicySet{},
-	).Explicit)
-	require.True(t, querySchedulingIntentWithWorkloadPolicy(ses, set).Explicit)
+	require.False(t, querySchedulingIntent(ses).Explicit)
 	require.Equal(t, ScopeGlobal, gSysVarsDefs[queryWorkloadPolicy].Scope)
 	require.True(t, gSysVarsDefs[queryWorkloadPolicy].Dynamic)
 	require.False(t, gSysVarsDefs[queryWorkloadPolicy].SetVarHintApplies)
@@ -3645,7 +3640,7 @@ func TestQueryWorkloadPolicyCorruptCatalogValueFailsClosed(t *testing.T) {
 	set := queryWorkloadPolicySnapshot(ses)
 	require.NotEmpty(t, set.InvalidReason)
 	intent := querySchedulingIntent(ses)
-	require.True(t, intent.Explicit)
+	require.False(t, intent.Explicit)
 
 	policy := schedule.ResolveWorkloadPolicy(schedule.WorkloadDescriptor{
 		Class:    schedule.WorkloadAP,

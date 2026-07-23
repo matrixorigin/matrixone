@@ -138,21 +138,15 @@ func (cwft *TxnComputationWrapper) schedulingSQLOr(fallback string) string {
 
 func (cwft *TxnComputationWrapper) querySchedulingIntentForPreparedStatement(
 	sql string,
-	policySet schedule.WorkloadPolicySet,
 ) schedule.SchedulingIntent {
 	if cwft.hasPreparedSchedulingSQLMode {
-		return querySchedulingIntentForStatementWithSQLModeAndWorkloadPolicy(
+		return querySchedulingIntentForStatementWithSQLMode(
 			cwft.ses,
 			sql,
 			cwft.preparedSchedulingSQLMode,
-			policySet,
 		)
 	}
-	return querySchedulingIntentForStatementWithWorkloadPolicy(
-		cwft.ses,
-		sql,
-		policySet,
-	)
+	return querySchedulingIntentForStatement(cwft.ses, sql)
 }
 
 func (cwft *TxnComputationWrapper) Plan() *plan.Plan {
@@ -401,6 +395,7 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 				cwft.plan,
 				fill,
 				false,
+				&cwft.preparedWorkloadPolicy,
 				&cwft.schedulingTrace,
 			)
 			if err != nil {
@@ -414,7 +409,6 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 			// the outer EXECUTE fragment, which cannot contain the inner hint.
 			retComp.SetQuerySchedulingIntent(cwft.querySchedulingIntentForPreparedStatement(
 				originSQL,
-				cwft.preparedWorkloadPolicy,
 			))
 			retComp.SetWorkloadPolicy(cwft.preparedWorkloadPolicy, "")
 			retComp.SetSchedulingTraceRecorder(&cwft.schedulingTrace)
@@ -441,6 +435,7 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 			cwft.plan,
 			fill,
 			false,
+			nil,
 			&cwft.schedulingTrace,
 		)
 		if err != nil {
@@ -688,7 +683,7 @@ func initExecuteStmtParam(execCtx *ExecCtx, ses *Session, cwft *TxnComputationWr
 			shouldCachePrepareCompile(preparePlan.Plan) && !executionIntent.Explicit {
 			// Prepare-time compiles are cached and must not retain a statement-owned trace.
 			// The execution path attaches the current wrapper trace after cache retrieval.
-			comp, err := createCompile(execCtx, ses, ses.proc, originSQL, originSQL, &prepareStmt.schedulingSQLMode, prepareStmt.PrepareStmt, preparePlan.Plan, ses.GetOutputCallback(execCtx), true, nil)
+			comp, err := createCompile(execCtx, ses, ses.proc, originSQL, originSQL, &prepareStmt.schedulingSQLMode, prepareStmt.PrepareStmt, preparePlan.Plan, ses.GetOutputCallback(execCtx), true, nil, nil)
 			if err != nil {
 				if !moerr.IsMoErrCode(err, moerr.ErrCantCompileForPrepare) {
 					return nil, nil, nil, "", err
@@ -738,15 +733,18 @@ func initExecuteStmtParam(execCtx *ExecCtx, ses *Session, cwft *TxnComputationWr
 	cwft.preparedSchedulingSQLMode = prepareStmt.schedulingSQLMode
 	cwft.hasPreparedSchedulingSQLMode = true
 	cwft.preparedSchedulingSQL = originSQL
-	cwft.preparedWorkloadPolicy = queryWorkloadPolicySnapshot(ses)
+	cwft.preparedWorkloadPolicy = queryWorkloadPolicySnapshotAt(reqCtx, ses)
 	retComp := prepareStmt.compile
-	if retComp != nil && querySchedulingIntentForStatementWithSQLModeAndWorkloadPolicy(
-		ses,
-		originSQL,
-		prepareStmt.schedulingSQLMode,
-		cwft.preparedWorkloadPolicy,
-	).Explicit {
-		retComp = nil
+	if retComp != nil {
+		intent := querySchedulingIntentForStatementWithSQLMode(
+			ses,
+			originSQL,
+			prepareStmt.schedulingSQLMode,
+		)
+		if intent.Explicit ||
+			retComp.NeedsPreparedWorkloadPolicyRefresh(cwft.preparedWorkloadPolicy) {
+			retComp = nil
+		}
 	}
 	return retComp, preparePlan.Plan, prepareStmt.PrepareStmt, originSQL, nil
 }
@@ -838,6 +836,7 @@ func createCompile(
 	plan *plan2.Plan,
 	fill func(*batch.Batch, *perfcounter.CounterSet) error,
 	isPrepare bool,
+	policySnapshot *schedule.WorkloadPolicySet,
 	schedulingTrace *schedule.TraceRecorder,
 ) (retCompile *compile.Compile, err error) {
 
@@ -900,22 +899,24 @@ func createCompile(
 	if schedulingSQL == "" {
 		schedulingSQL = originSQL
 	}
-	policySet := queryWorkloadPolicySnapshot(ses)
+	policySet := schedule.WorkloadPolicySet{}
+	if policySnapshot != nil {
+		policySet = *policySnapshot
+	} else {
+		policySet = queryWorkloadPolicySnapshotAt(execCtx.reqCtx, ses)
+	}
 	if schedulingSQLMode != nil {
 		retCompile.SetQuerySchedulingIntent(
-			querySchedulingIntentForStatementWithSQLModeAndWorkloadPolicy(
+			querySchedulingIntentForStatementWithSQLMode(
 				ses,
 				schedulingSQL,
 				*schedulingSQLMode,
-				policySet,
 			),
 		)
 	} else {
-		retCompile.SetQuerySchedulingIntent(querySchedulingIntentForStatementWithWorkloadPolicy(
-			ses,
-			schedulingSQL,
-			policySet,
-		))
+		retCompile.SetQuerySchedulingIntent(
+			querySchedulingIntentForStatement(ses, schedulingSQL),
+		)
 	}
 	retCompile.SetWorkloadPolicy(policySet, "")
 	if resourceAttemptOwnerEligible(ses) {
@@ -951,16 +952,6 @@ func createCompile(
 }
 
 func querySchedulingIntent(ses FeSession) schedule.SchedulingIntent {
-	return querySchedulingIntentWithWorkloadPolicy(
-		ses,
-		queryWorkloadPolicySnapshot(ses),
-	)
-}
-
-func querySchedulingIntentWithWorkloadPolicy(
-	ses FeSession,
-	policySet schedule.WorkloadPolicySet,
-) schedule.SchedulingIntent {
 	intent := schedule.SchedulingIntent{
 		PoolFallback:      schedule.PoolFallbackLegacyCompatible,
 		EmptyWorkerPolicy: schedule.EmptyWorkerLocalFallback,
@@ -971,12 +962,6 @@ func querySchedulingIntentWithWorkloadPolicy(
 	}
 	if ses == nil {
 		return intent
-	}
-	if policySet.Configured() || policySet.InvalidReason != "" {
-		// Configured policies are resolved only after the plan execution kind is
-		// known. Marking the raw intent explicit prevents prepared topology from
-		// bypassing a newer account policy generation.
-		intent.Explicit = true
 	}
 	if value, err := ses.GetSessionSysVar(queryMaxWorkers); err == nil {
 		var maxWorkers int
@@ -1008,6 +993,9 @@ func queryWorkloadPolicySnapshot(ses FeSession) schedule.WorkloadPolicySet {
 	if ses == nil {
 		return schedule.WorkloadPolicySet{}
 	}
+	if vars := ses.GetGlobalSysVars(); vars != nil {
+		return vars.workloadPolicySnapshotShared()
+	}
 	value, err := ses.GetGlobalSysVar(queryWorkloadPolicy)
 	if err != nil || value == nil {
 		return schedule.WorkloadPolicySet{}
@@ -1023,6 +1011,29 @@ func queryWorkloadPolicySnapshot(ses FeSession) schedule.WorkloadPolicySet {
 		return schedule.WorkloadPolicySet{InvalidReason: err.Error()}
 	}
 	return set
+}
+
+func queryWorkloadPolicySnapshotAt(
+	ctx context.Context,
+	ses FeSession,
+) schedule.WorkloadPolicySet {
+	if ses == nil {
+		return schedule.WorkloadPolicySet{}
+	}
+	vars := ses.GetGlobalSysVars()
+	if vars == nil {
+		return queryWorkloadPolicySnapshot(ses)
+	}
+	// Background and mock sessions share their upstream/account snapshot but
+	// must not recursively issue a policy refresh while compiling that refresh.
+	if _, ok := ses.(*Session); ok {
+		if err := vars.RefreshWorkloadPolicy(ctx, ses); err != nil {
+			return schedule.WorkloadPolicySet{
+				InvalidReason: "query workload policy refresh failed: " + err.Error(),
+			}
+		}
+	}
+	return vars.workloadPolicySnapshotShared()
 }
 
 // Only the client statement owns retry-attempt cardinality. Back-exec SQL is

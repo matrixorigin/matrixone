@@ -397,6 +397,81 @@ func TestTraceRecorderExportMatchesStandalonePersistencePolicy(t *testing.T) {
 	}
 }
 
+func TestTracePersistenceDoesNotAmplifySuccessfulLocalTPPolicy(t *testing.T) {
+	decision := normalLocalTraceDecision()
+	decision.Intent.Explicit = true
+	decision.WorkloadPolicy = EffectiveWorkloadPolicy{
+		WorkloadClass: WorkloadTP,
+		Source:        WorkloadPolicySourceAccountGlobal,
+		Applied:       true,
+		Routing:       WorkloadRoutingLocal,
+	}
+	recorder := new(TraceRecorder)
+	attempt := recorder.StartAttempt()
+	recorder.RecordQuery(attempt, decision)
+	require.False(t, recorder.Snapshot().PersistStandalone())
+
+	decision.WorkloadPolicy.Routing = WorkloadRoutingSingle
+	recorder.Reset()
+	attempt = recorder.StartAttempt()
+	recorder.RecordQuery(attempt, decision)
+	require.True(t, recorder.Snapshot().PersistStandalone())
+}
+
+func TestTracePersistenceRetainsLocalTPPolicyPoolFallback(t *testing.T) {
+	decision := normalLocalTraceDecision()
+	decision.WorkloadPolicy = EffectiveWorkloadPolicy{
+		WorkloadClass: WorkloadTP,
+		Source:        WorkloadPolicySourceAccountGlobal,
+		Applied:       true,
+		Routing:       WorkloadRoutingLocal,
+	}
+	decision.ResolvedPool = ResolvedPoolDecision{
+		RequestedIdentity: "tp",
+		Identity:          "shared-unlabeled",
+		Fallback:          true,
+		FallbackReason:    "shared-unlabeled",
+	}
+
+	recorder := new(TraceRecorder)
+	attempt := recorder.StartAttempt()
+	recorder.RecordQuery(attempt, decision)
+	trace := recorder.SnapshotForExport(false)
+	require.False(t, trace.Empty())
+	require.True(t, trace.Attempts[0].Query.PoolFallback)
+	require.True(t, trace.PersistStandalone())
+}
+
+func TestTraceRecorderLocalTPPolicyExportAllocations(t *testing.T) {
+	decision := normalLocalTraceDecision()
+	decision.Intent = SchedulingIntent{
+		Explicit:          true,
+		PoolFallback:      PoolFallbackStrict,
+		EmptyWorkerPolicy: EmptyWorkerFail,
+		CurrentCNPolicy:   CurrentCNRequired,
+		WorkerSet: WorkerSetPolicy{
+			Mode:       WorkerSetMax,
+			MaxWorkers: 1,
+		},
+	}
+	decision.WorkloadPolicy = EffectiveWorkloadPolicy{
+		WorkloadClass: WorkloadTP,
+		Source:        WorkloadPolicySourceAccountGlobal,
+		Applied:       true,
+		Routing:       WorkloadRoutingLocal,
+	}
+	recorder := new(TraceRecorder)
+	allocs := testing.AllocsPerRun(1000, func() {
+		recorder.Reset()
+		attempt := recorder.StartAttempt()
+		recorder.RecordQuery(attempt, decision)
+		if !recorder.SnapshotForExport(false).Empty() {
+			panic("local TP policy trace unexpectedly exported")
+		}
+	})
+	require.Zero(t, allocs)
+}
+
 func TestTraceRecorderNormalLocalExportAllocations(t *testing.T) {
 	recorder := new(TraceRecorder)
 	decision := normalLocalTraceDecision()

@@ -105,6 +105,8 @@ enum CmdMethod {
   ISCPDrainConsumer = 37;
   // IcebergCacheInvalidate invalidates Iceberg metadata/manifest cache after commit.
   IcebergCacheInvalidate = 38;
+  // WorkloadPolicyUpdate propagates a committed account policy to active CN caches.
+  WorkloadPolicyUpdate = 39;
 }
 
 // QueryRequest is the common query request. It contains the query
@@ -247,6 +249,7 @@ message Request {
   CtlPrefetchOnSubscribedRequest CtlPrefetchOnSubscribedRequest = 38;
   ISCPDrainConsumerRequest ISCPDrainConsumerRequest = 39;
   IcebergCacheInvalidateRequest IcebergCacheInvalidateRequest = 40 [ (gogoproto.nullable) = false ];
+  WorkloadPolicyUpdateRequest WorkloadPolicyUpdateRequest = 41;
 }
 
 // ShowProcessListResponse is the response of command ShowProcessList.
@@ -314,6 +317,7 @@ message Response {
   CtlPrefetchOnSubscribedResponse CtlPrefetchOnSubscribedResponse = 39;
   ISCPDrainConsumerResponse ISCPDrainConsumerResponse = 40;
   IcebergCacheInvalidateResponse IcebergCacheInvalidateResponse = 41 [ (gogoproto.nullable) = false ];
+  WorkloadPolicyUpdateResponse WorkloadPolicyUpdateResponse = 42;
 }
 
 // AlterAccountRequest is the "alter account restricted" query request.
@@ -327,6 +331,16 @@ message AlterAccountRequest {
 // AlterAccountResponse is the response of command AlterAccount.
 message AlterAccountResponse {
   bool alterSuccess = 1;
+}
+
+message WorkloadPolicyUpdateRequest {
+  uint32 AccountID = 1;
+  string Policy = 2;
+  timestamp.Timestamp CommitTS = 3 [ (gogoproto.nullable) = false ];
+}
+
+message WorkloadPolicyUpdateResponse {
+  bool Applied = 1;
 }
 
 // KillConnRequest is the request that kill the connections belongs

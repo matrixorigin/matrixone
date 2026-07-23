@@ -25,26 +25,13 @@ import (
 // SET_VAR overrides without mutating session state. The first override for a
 // variable wins, matching optimizer-hint duplicate semantics.
 func querySchedulingIntentForStatement(ses FeSession, sql string) schedule.SchedulingIntent {
-	return querySchedulingIntentForStatementWithWorkloadPolicy(
-		ses,
-		sql,
-		queryWorkloadPolicySnapshot(ses),
-	)
-}
-
-func querySchedulingIntentForStatementWithWorkloadPolicy(
-	ses FeSession,
-	sql string,
-	policySet schedule.WorkloadPolicySet,
-) schedule.SchedulingIntent {
 	if !hasSchedulingOptimizerHint(sql) {
-		return querySchedulingIntentWithWorkloadPolicy(ses, policySet)
+		return querySchedulingIntent(ses)
 	}
-	return querySchedulingIntentForStatementWithSQLModeAndWorkloadPolicy(
+	return querySchedulingIntentForStatementWithSQLMode(
 		ses,
 		sql,
 		sessionSQLModeForScheduling(ses),
-		policySet,
 	)
 }
 
@@ -53,21 +40,7 @@ func querySchedulingIntentForStatementWithSQLMode(
 	sql string,
 	sqlMode string,
 ) schedule.SchedulingIntent {
-	return querySchedulingIntentForStatementWithSQLModeAndWorkloadPolicy(
-		ses,
-		sql,
-		sqlMode,
-		queryWorkloadPolicySnapshot(ses),
-	)
-}
-
-func querySchedulingIntentForStatementWithSQLModeAndWorkloadPolicy(
-	ses FeSession,
-	sql string,
-	sqlMode string,
-	policySet schedule.WorkloadPolicySet,
-) schedule.SchedulingIntent {
-	intent := querySchedulingIntentWithWorkloadPolicy(ses, policySet)
+	intent := querySchedulingIntent(ses)
 	if !hasSchedulingOptimizerHint(sql) {
 		return intent
 	}
