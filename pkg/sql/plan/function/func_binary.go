@@ -7502,7 +7502,6 @@ func makeTimeExactSecond(value string) (int64, uint32, bool) {
 
 	exponent := 0
 	if end < len(value) && (value[end] == 'e' || value[end] == 'E') {
-		exponentStart := end
 		end++
 		negativeExponent := false
 		if end < len(value) && (value[end] == '+' || value[end] == '-') {
@@ -7524,17 +7523,17 @@ func makeTimeExactSecond(value string) (int64, uint32, bool) {
 			}
 			end++
 		}
-		if end == exponentDigits {
-			end = exponentStart
-		} else if exponentOverflow {
-			if negativeExponent {
-				return 0, 0, false
+		if end != exponentDigits {
+			if exponentOverflow {
+				if negativeExponent {
+					return 0, 0, false
+				}
+				return 0, 0, true
+			} else if negativeExponent {
+				exponent = -exponentMagnitude
+			} else {
+				exponent = exponentMagnitude
 			}
-			return 0, 0, true
-		} else if negativeExponent {
-			exponent = -exponentMagnitude
-		} else {
-			exponent = exponentMagnitude
 		}
 	}
 
