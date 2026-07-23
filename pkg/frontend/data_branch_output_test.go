@@ -129,6 +129,11 @@ func TestDataBranchOutputFileNameAndHintQuotePathSeparators(t *testing.T) {
 func TestDataBranchOutputFileNameSurvivesCSVFormattingAndLengthLimit(t *testing.T) {
 	ctrl := gomock.NewController(t)
 
+	t.Run("valid and invalid UTF-8", func(t *testing.T) {
+		require.Equal(t, "a�b", encodeDiffFileNamePart("a�b"))
+		require.Equal(t, "a@FFb", encodeDiffFileNamePart(string([]byte{'a', 0xff, 'b'})))
+	})
+
 	t.Run("CSV format string", func(t *testing.T) {
 		for _, name := range []string{"Ād", "x%d", "x d", "x`d"} {
 			t.Run(name, func(t *testing.T) {

@@ -94,7 +94,7 @@ func encodeDiffFileNamePart(name string) string {
 		}
 		if c >= utf8.RuneSelf {
 			r, size := utf8.DecodeRuneInString(name[i:])
-			if r != utf8.RuneError && unicode.IsPrint(r) {
+			if !(r == utf8.RuneError && size == 1) && unicode.IsPrint(r) {
 				encoded.WriteString(name[i : i+size])
 				i += size
 				continue
