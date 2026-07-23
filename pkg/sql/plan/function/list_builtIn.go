@@ -15,7 +15,9 @@
 package function
 
 import (
+	"context"
 	"fmt"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -53,6 +55,14 @@ func uuidSwapFlagTypeSupported(typ types.Type) bool {
 		typ.IsFloat() ||
 		typ.IsDecimal() ||
 		typ.Oid.IsMySQLString()
+}
+
+func newAssertFailure(ctx context.Context, errMsg string) error {
+	if strings.HasPrefix(errMsg, "Check constraint '") &&
+		strings.HasSuffix(errMsg, "' is violated") {
+		return moerr.NewConstraintViolation(ctx, errMsg)
+	}
+	return moerr.NewInternalError(ctx, errMsg)
 }
 
 // wkbConstructor builds a typed WKB geometry constructor function definition
@@ -13541,7 +13551,7 @@ var supportedOthersBuiltIns = []FuncNew{
 						for i := uint64(0); i < uint64(length); i++ {
 							flag, isNull := checkFlags.GetValue(i)
 							if isNull || !flag {
-								return moerr.NewInternalError(proc.Ctx, errMsg)
+								return newAssertFailure(proc.Ctx, errMsg)
 							}
 							res.AppendMustValue(true)
 						}

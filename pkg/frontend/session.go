@@ -678,16 +678,19 @@ func parseNoAutoValueOnZero(val interface{}) (bool, bool) {
 }
 
 type errInfo struct {
+	levels []string
 	codes  []uint16
 	msgs   []string
 	maxCnt int
 }
 
-func (e *errInfo) push(code uint16, msg string) {
-	if e.maxCnt > 0 && len(e.codes) > e.maxCnt {
+func (e *errInfo) push(level string, code uint16, msg string) {
+	if e.maxCnt > 0 && len(e.codes) >= e.maxCnt {
+		e.levels = e.levels[1:]
 		e.codes = e.codes[1:]
 		e.msgs = e.msgs[1:]
 	}
+	e.levels = append(e.levels, level)
 	e.codes = append(e.codes, code)
 	e.msgs = append(e.msgs, msg)
 }
@@ -720,11 +723,13 @@ func NewSession(
 			service:        service,
 		},
 		errInfo: &errInfo{
+			levels: make([]string, 0, MoDefaultErrorCount),
 			codes:  make([]uint16, 0, MoDefaultErrorCount),
 			msgs:   make([]string, 0, MoDefaultErrorCount),
 			maxCnt: MoDefaultErrorCount,
 		},
 		warnInfo: &errInfo{
+			levels: make([]string, 0, MoDefaultErrorCount),
 			codes:  make([]uint16, 0, MoDefaultErrorCount),
 			msgs:   make([]string, 0, MoDefaultErrorCount),
 			maxCnt: MoDefaultErrorCount,
@@ -1170,12 +1175,13 @@ func (ses *Session) setCheckConstraintWarnings(count uint64, checkWarnings []uti
 	defer ses.mu.Unlock()
 	ses.warnInfo.codes = ses.warnInfo.codes[:0]
 	ses.warnInfo.msgs = ses.warnInfo.msgs[:0]
+	ses.warnInfo.levels = ses.warnInfo.levels[:0]
 	if len(checkWarnings) > 0 {
 		remaining := uint64(ses.warnInfo.maxCnt)
 		for _, warning := range checkWarnings {
 			storedCount := min(warning.Count, remaining)
 			for i := uint64(0); i < storedCount; i++ {
-				ses.warnInfo.push(moerr.ER_CHECK_CONSTRAINT_VIOLATED, warning.Message)
+				ses.warnInfo.push("Warning", moerr.ER_CHECK_CONSTRAINT_VIOLATED, warning.Message)
 			}
 			remaining -= storedCount
 			if remaining == 0 {
@@ -1186,8 +1192,18 @@ func (ses *Session) setCheckConstraintWarnings(count uint64, checkWarnings []uti
 	}
 	storedCount := min(count, uint64(ses.warnInfo.maxCnt))
 	for i := uint64(0); i < storedCount; i++ {
-		ses.warnInfo.push(moerr.ER_CHECK_CONSTRAINT_VIOLATED, "Check constraint is violated")
+		ses.warnInfo.push("Warning", moerr.ER_CHECK_CONSTRAINT_VIOLATED, "Check constraint is violated")
 	}
+}
+
+func (ses *Session) setStatementError(code uint16, msg string) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ses.errInfo.push("Error", code, msg)
+	ses.warnInfo.levels = ses.warnInfo.levels[:0]
+	ses.warnInfo.codes = ses.warnInfo.codes[:0]
+	ses.warnInfo.msgs = ses.warnInfo.msgs[:0]
+	ses.warnInfo.push("Error", code, msg)
 }
 
 func (ses *Session) getWarnInfo() *errInfo {

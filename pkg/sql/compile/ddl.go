@@ -1340,25 +1340,41 @@ func validateCheckConstraintNamesAfterSchemaLock(
 			if !ok {
 				continue
 			}
-			for _, property := range properties.Properties {
-				if property.Key != catalog.SystemRelAttr_CreateSQL {
-					continue
-				}
-				names, err := plan2.ExtractCheckConstraintNamesFromCreateSQL(
-					c.proc.Ctx, property.Value, tableName, c.getLower())
-				if err != nil {
-					return err
-				}
-				for _, name := range names {
-					if original, exists := wanted[plan2.NormalizeCheckConstraintName(name)]; exists {
-						return moerr.NewInvalidInputf(
-							c.proc.Ctx, "duplicate check constraint name '%s'", original)
-					}
+			createSQL, ok := checkConstraintCreateSQL(properties.Properties)
+			if !ok {
+				continue
+			}
+			names, err := plan2.ExtractCheckConstraintNamesFromCreateSQL(
+				c.proc.Ctx, createSQL, tableName, c.getLower())
+			if err != nil {
+				return err
+			}
+			for _, name := range names {
+				if original, exists := wanted[plan2.NormalizeCheckConstraintName(name)]; exists {
+					return moerr.NewInvalidInputf(
+						c.proc.Ctx, "duplicate check constraint name '%s'", original)
 				}
 			}
 		}
 	}
 	return nil
+}
+
+func checkConstraintCreateSQL(properties []engine.Property) (string, bool) {
+	kind := ""
+	createSQL := ""
+	for _, property := range properties {
+		switch property.Key {
+		case catalog.SystemRelAttr_Kind:
+			kind = property.Value
+		case catalog.SystemRelAttr_CreateSQL:
+			createSQL = property.Value
+		}
+	}
+	if kind == catalog.SystemExternalRel || kind == catalog.SystemViewRel || createSQL == "" {
+		return "", false
+	}
+	return createSQL, true
 }
 
 func (s *Scope) CreateTable(c *Compile) error {
@@ -1450,20 +1466,6 @@ func (s *Scope) CreateTable(c *Compile) error {
 		}
 		return convertDBEOB(c.proc.Ctx, err, dbName)
 	}
-	if len(qry.GetTableDef().GetChecks()) > 0 {
-		txnOp := c.proc.GetTxnOperator()
-		if txnOp.Txn().IsPessimistic() && txnOp.Txn().IsRCIsolation() {
-			now, _ := moruntime.ServiceRuntime(c.proc.GetService()).Clock().Now()
-			if err = txnOp.GetWorkspace().AdvanceSnapshot(c.proc.Ctx, now); err != nil {
-				return err
-			}
-		}
-		if err = validateCheckConstraintNamesAfterSchemaLock(
-			c, dbSource, tblName, qry.GetTableDef().GetChecks()); err != nil {
-			return err
-		}
-	}
-
 	exists, err := dbSource.RelationExists(c.proc.Ctx, tblName, nil)
 	if err != nil {
 		c.proc.Error(c.proc.Ctx, "check table relation exists failed",
@@ -1478,6 +1480,30 @@ func (s *Scope) CreateTable(c *Compile) error {
 			return nil
 		}
 		return moerr.NewTableAlreadyExists(c.proc.Ctx, tblName)
+	}
+	if len(qry.GetTableDef().GetChecks()) > 0 {
+		txnOp := c.proc.GetTxnOperator()
+		if !txnOp.Txn().IsPessimistic() {
+			// Row locks are intentionally disabled for optimistic transactions.
+			// Touch the database catalog row in the same transaction instead, so
+			// concurrent CHECK-bearing CREATEs in one schema conflict and retry
+			// against a fresh snapshot before the name scan below.
+			if err = c.runSqlWithOptions(
+				optimisticCheckConstraintSchemaTouchSQL(dbName),
+				executor.StatementOption{}.WithDisableLog()); err != nil {
+				return err
+			}
+		}
+		if txnOp.Txn().IsPessimistic() && txnOp.Txn().IsRCIsolation() {
+			now, _ := moruntime.ServiceRuntime(c.proc.GetService()).Clock().Now()
+			if err = txnOp.GetWorkspace().AdvanceSnapshot(c.proc.Ctx, now); err != nil {
+				return err
+			}
+		}
+		if err = validateCheckConstraintNamesAfterSchemaLock(
+			c, dbSource, tblName, qry.GetTableDef().GetChecks()); err != nil {
+			return err
+		}
 	}
 
 	if !c.disableLock {
@@ -2074,6 +2100,14 @@ func (s *Scope) CreateTable(c *Compile) error {
 	}
 
 	return nil
+}
+
+func optimisticCheckConstraintSchemaTouchSQL(dbName string) string {
+	return fmt.Sprintf(
+		"UPDATE `%s`.`%s` SET `%s` = `%s` WHERE `account_id` = current_account_id() AND `datname` = '%s'",
+		catalog.MO_CATALOG, catalog.MO_DATABASE,
+		catalog.SystemDBAttr_CreateSQL, catalog.SystemDBAttr_CreateSQL,
+		sqlquote.EscapeString(dbName))
 }
 
 func (c *Compile) maybeInsertIcebergTableMapping(dbSource engine.Database, rel engine.Relation, qry *plan.CreateTable) error {

@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -866,6 +867,34 @@ func TestBuildCreateTableCheckConstraintNameDeduplication(t *testing.T) {
 	})
 }
 
+func TestCreateTableLikeRegeneratesCheckConstraintNames(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	mock.ctxt.tables["t1"].Checks = []*plan.CheckDef{{
+		Name:            "t1_chk_1",
+		OriginSql:       "`a` > 0",
+		IsGeneratedName: true,
+	}}
+
+	p, err := runOneStmt(mock, t, "CREATE TABLE cloned_t LIKE t1")
+	require.NoError(t, err)
+	checks := p.GetDdl().GetCreateTable().GetTableDef().GetChecks()
+	require.Len(t, checks, 1)
+	require.Equal(t, "cloned_t_chk_1", checks[0].Name)
+	require.True(t, checks[0].IsGeneratedName)
+}
+
+func TestRenameTableRejectsRewrittenCheckConstraintNameCollision(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	mock.ctxt.tables["t1"].Checks = []*plan.CheckDef{{
+		Name:            "t1_chk_1",
+		IsGeneratedName: true,
+	}}
+	mock.ctxt.tables["employees"].Checks = []*plan.CheckDef{{Name: "renamed_t_chk_1"}}
+
+	_, err := runOneStmt(mock, t, "RENAME TABLE t1 TO renamed_t")
+	require.ErrorContains(t, err, "duplicate check constraint name 'renamed_t_chk_1'")
+}
+
 func TestBuildCreateTableCheckConstraintOriginSql(t *testing.T) {
 	mock := NewMockOptimizer(false)
 
@@ -887,6 +916,21 @@ func TestBuildCreateTableCheckConstraintOriginSql(t *testing.T) {
 		require.Equal(t, "chk_ab", checks[0].GetName())
 		require.Equal(t, "`a` < `b`", checks[0].OriginSql)
 	})
+}
+
+func TestCanonicalPartitionedCreateTableQuotesCheckConstraintName(t *testing.T) {
+	stmt, err := parsers.ParseOne(
+		context.Background(), dialect.MYSQL,
+		"CREATE TABLE t(a INT, CONSTRAINT `my check` CHECK(a > 0)) PARTITION BY HASH(a) PARTITIONS 2", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	createTable := stmt.(*tree.CreateTable)
+	canonical := canonicalPartitionedCreateTableSQL(createTable)
+	require.Contains(t, canonical, "constraint `my check` check")
+	parsed, err := parsers.ParseOne(context.Background(), dialect.MYSQL, canonical, 1)
+	require.NoError(t, err, canonical)
+	parsed.Free()
 }
 
 func TestRecoverCheckConstraintsFromCreateSql(t *testing.T) {
@@ -1039,6 +1083,27 @@ func TestRecoverCheckConstraintsFromCreateSql(t *testing.T) {
 		RecoverCheckConstraintsFromCreateSql(ctx, td)
 		require.Len(t, td.Checks, 1)
 		require.Equal(t, "new_t_chk_custom", td.Checks[0].Name)
+	})
+
+	t.Run("renames truncated generated check after copy table swap", func(t *testing.T) {
+		oldName := strings.Repeat("x", 80)
+		td := newTableDef(fmt.Sprintf(
+			"CREATE TABLE `%s` (a INT, b INT, CONSTRAINT `%s` CHECK (a > 0))",
+			oldName, generatedCheckConstraintName(oldName, 1)))
+		td.Name = "t"
+		RecoverCheckConstraintsFromCreateSql(ctx, td)
+		require.Len(t, td.Checks, 1)
+		require.Equal(t, "t_chk_1", td.Checks[0].Name)
+	})
+
+	t.Run("temporary table keeps logical check name", func(t *testing.T) {
+		td := newTableDef(
+			"CREATE TEMPORARY TABLE t (a INT, b INT, CONSTRAINT t_chk_1 CHECK (a > 0))")
+		td.Name = "__mo_temp_physical_t"
+		td.IsTemporary = true
+		RecoverCheckConstraintsFromCreateSql(ctx, td)
+		require.Len(t, td.Checks, 1)
+		require.Equal(t, "t_chk_1", td.Checks[0].Name)
 	})
 }
 

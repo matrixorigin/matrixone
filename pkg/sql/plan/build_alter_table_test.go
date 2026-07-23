@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -95,8 +96,10 @@ func TestAlterTableAddColumnPreservesNotEnforcedCheck(t *testing.T) {
 	alter := logicPlan.GetDdl().GetAlterTable()
 	require.Len(t, alter.CopyTableDef.Checks, 1)
 	require.True(t, alter.CopyTableDef.Checks[0].NotEnforced)
-	require.Equal(t, "t1_chk_1", alter.CopyTableDef.Checks[0].Name)
-	require.Contains(t, alter.CreateTmpTableSql, "CONSTRAINT `t1_chk_1` CHECK (`d` > 0) NOT ENFORCED")
+	require.Contains(t, alter.CopyTableDef.Checks[0].Name, "t1_copy_")
+	require.True(t, strings.HasSuffix(alter.CopyTableDef.Checks[0].Name, "_chk_1"))
+	require.Contains(t, alter.CreateTmpTableSql,
+		fmt.Sprintf("CONSTRAINT `%s` CHECK (`d` > 0) NOT ENFORCED", alter.CopyTableDef.Checks[0].Name))
 }
 
 func TestAlterTableAlterCheckEnforcementIsExplicitlyUnsupported(t *testing.T) {

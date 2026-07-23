@@ -698,7 +698,8 @@ func extractTopLevelCheckDefs(tableDef *plan.TableDef) []string {
 	if tableDef == nil || tableDef.Createsql == "" || tableDef.TableType == catalog.SystemExternalRel {
 		return nil
 	}
-	if !containsKeywordOutsideQuotes(tableDef.Createsql, "CHECK") {
+	createSQL, _ := extractCheckSQLModeMarker(tableDef.Createsql)
+	if !containsKeywordOutsideQuotes(createSQL, "CHECK") {
 		return nil
 	}
 
@@ -706,7 +707,7 @@ func extractTopLevelCheckDefs(tableDef *plan.TableDef) []string {
 		return checks
 	}
 
-	defsSection, ok := extractCreateTableDefsSection(tableDef.Createsql)
+	defsSection, ok := extractCreateTableDefsSection(createSQL)
 	if !ok {
 		return nil
 	}
@@ -723,7 +724,8 @@ func extractTopLevelCheckDefs(tableDef *plan.TableDef) []string {
 }
 
 func extractCheckDefsInCreateOrder(createSQL string) ([]string, bool) {
-	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, createSQL, 1)
+	createSQL, sqlMode := extractCheckSQLModeMarker(createSQL)
+	stmt, err := parsers.ParseOneWithSQLMode(context.Background(), dialect.MYSQL, createSQL, 1, sqlMode)
 	if err != nil {
 		return nil, false
 	}

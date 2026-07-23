@@ -409,7 +409,7 @@ drop table if exists t_replace_check;
 create table t_replace_check(id int primary key, v int check (v > 0));
 insert into t_replace_check values (1, 10);
 replace into t_replace_check values (1, -1);
-internal error: Check constraint 't_replace_check_chk_1' is violated
+constraint violation: Check constraint 't_replace_check_chk_1' is violated
 select * from t_replace_check order by id;
 ➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
 1  ¦  10
@@ -419,25 +419,25 @@ select * from t_replace_check order by id;
 1  ¦  10  𝄀
 2  ¦  null
 insert into t_replace_check values (3, -3);
-internal error: Check constraint 't_replace_check_chk_1' is violated
+constraint violation: Check constraint 't_replace_check_chk_1' is violated
 select * from t_replace_check order by id;
 ➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
 1  ¦  10  𝄀
 2  ¦  null
 insert into t_replace_check values (3, 30), (4, -4);
-internal error: Check constraint 't_replace_check_chk_1' is violated
+constraint violation: Check constraint 't_replace_check_chk_1' is violated
 select * from t_replace_check order by id;
 ➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
 1  ¦  10  𝄀
 2  ¦  null
 insert into t_replace_check values (1, -5) on duplicate key update v = values(v);
-internal error: Check constraint 't_replace_check_chk_1' is violated
+constraint violation: Check constraint 't_replace_check_chk_1' is violated
 select * from t_replace_check order by id;
 ➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
 1  ¦  10  𝄀
 2  ¦  null
 update t_replace_check set v = -3 where id = 1;
-internal error: Check constraint 't_replace_check_chk_1' is violated
+constraint violation: Check constraint 't_replace_check_chk_1' is violated
 select * from t_replace_check order by id;
 ➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
 1  ¦  10  𝄀
@@ -447,7 +447,7 @@ drop table if exists t_replace_table_check;
 create table t_replace_table_check(id int primary key, a int, b int, check (a < b));
 insert into t_replace_table_check values (1, 1, 2);
 insert into t_replace_table_check values (2, 3, 2);
-internal error: Check constraint 't_replace_table_check_chk_1' is violated
+constraint violation: Check constraint 't_replace_table_check_chk_1' is violated
 select * from t_replace_table_check order by id;
 ➤ id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
 1  ¦  1  ¦  2
@@ -455,7 +455,7 @@ drop table t_replace_table_check;
 drop table if exists t_insert_check_no_key;
 create table t_insert_check_no_key(a int check (a > 0), b int);
 insert into t_insert_check_no_key values (-1, 2) on duplicate key update b = values(b);
-internal error: Check constraint 't_insert_check_no_key_chk_1' is violated
+constraint violation: Check constraint 't_insert_check_no_key_chk_1' is violated
 select * from t_insert_check_no_key order by a;
 ➤ a[4,32,0]  ¦  b[4,32,0]
 insert into t_insert_check_no_key values (1, 2) on duplicate key update b = values(b);
@@ -484,7 +484,7 @@ drop table t_chk_truth;
 drop table if exists t_chk_fail;
 create table t_chk_fail(a int, check (a));
 insert into t_chk_fail values (0);
-internal error: Check constraint 't_chk_fail_chk_1' is violated
+constraint violation: Check constraint 't_chk_fail_chk_1' is violated
 select * from t_chk_fail;
 ➤ a[4,32,0]
 drop table t_chk_fail;
@@ -500,7 +500,7 @@ drop table if exists t_chk_update_fail;
 create table t_chk_update_fail(a int, check (a > 0));
 insert into t_chk_update_fail values (1);
 update t_chk_update_fail set a = -1;
-internal error: Check constraint 't_chk_update_fail_chk_1' is violated
+constraint violation: Check constraint 't_chk_update_fail_chk_1' is violated
 select * from t_chk_update_fail;
 ➤ a[4,32,0]  𝄀
 1
@@ -524,7 +524,7 @@ insert into t_chk_update_multi_src values (1);
 update t_chk_update_multi, t_chk_update_multi_src
 set t_chk_update_multi.a = -1
 where t_chk_update_multi.id = t_chk_update_multi_src.id;
-internal error: Check constraint 't_chk_update_multi_chk_1' is violated
+constraint violation: Check constraint 't_chk_update_multi_chk_1' is violated
 select * from t_chk_update_multi;
 ➤ id[4,32,0]  ¦  a[4,32,0]  𝄀
 1  ¦  1
@@ -555,7 +555,7 @@ drop table t_chk_replace;
 drop table if exists t_chk_replace_fail;
 create table t_chk_replace_fail(id int primary key, a int, check (a > 0));
 replace into t_chk_replace_fail values (1, -1);
-internal error: Check constraint 't_chk_replace_fail_chk_1' is violated
+constraint violation: Check constraint 't_chk_replace_fail_chk_1' is violated
 select * from t_chk_replace_fail;
 ➤ id[4,32,0]  ¦  a[4,32,0]
 drop table t_chk_replace_fail;
@@ -608,11 +608,11 @@ t_chk_showcreate  ¦  CREATE TABLE `t_chk_showcreate` (
 drop table t_chk_showcreate;
 drop table if exists t_ctas_chk;
 create table t_ctas_chk(a int check (a > 0)) as select -1 as a;
-internal error: Check constraint 't_ctas_chk_chk_1' is violated
+constraint violation: Check constraint 't_ctas_chk_chk_1' is violated
 drop table if exists t_ctas_chk;
 create table t_ctas_chk(a int check (a > 0)) as select 1 as a;
 insert into t_ctas_chk values (-5);
-internal error: Check constraint 't_ctas_chk_chk_1' is violated
+constraint violation: Check constraint 't_ctas_chk_chk_1' is violated
 select * from t_ctas_chk order by a;
 ➤ a[4,32,0]  𝄀
 1
@@ -663,7 +663,7 @@ create table t_chk_addcol(id int primary key);
 alter table t_chk_addcol add column b int check (b > 0);
 insert into t_chk_addcol values (1, 5);
 insert into t_chk_addcol values (2, -5);
-internal error: Check constraint 't_chk_addcol_chk_1' is violated
+constraint violation: Check constraint 't_chk_addcol_chk_1' is violated
 select * from t_chk_addcol order by id;
 ➤ id[4,32,0]  ¦  b[4,32,0]  𝄀
 1  ¦  5
@@ -704,7 +704,7 @@ set sql_mode = 'ANSI_QUOTES';
 create table t_chk_sql_mode(a int, check ("a" > 0));
 set sql_mode = '';
 insert into t_chk_sql_mode values (-1);
-internal error: Check constraint 't_chk_sql_mode_chk_1' is violated
+constraint violation: Check constraint 't_chk_sql_mode_chk_1' is violated
 insert into t_chk_sql_mode values (1);
 select * from t_chk_sql_mode;
 ➤ a[4,32,0]  𝄀

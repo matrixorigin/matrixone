@@ -1713,7 +1713,7 @@ func (node *AttributeCheckConstraint) Format(ctx *FmtCtx) {
 	ctx.WriteString("constraint")
 	if node.Name != "" {
 		ctx.WriteByte(' ')
-		ctx.WriteString(node.Name)
+		ctx.WriteIdentifier(Identifier(node.Name))
 	}
 	ctx.WriteString(" check")
 	ctx.WriteString(" (")
@@ -2637,7 +2637,7 @@ type CheckIndex struct {
 func (node *CheckIndex) Format(ctx *FmtCtx) {
 	if node.ConstraintSymbol != "" {
 		ctx.WriteString("constraint ")
-		ctx.WriteString(node.ConstraintSymbol)
+		ctx.WriteIdentifier(Identifier(node.ConstraintSymbol))
 		ctx.WriteByte(' ')
 	}
 	ctx.WriteString("check (")

@@ -876,6 +876,11 @@ func buildCreateTable(
 			tableDef.DbName = ctx.DefaultDatabase()
 		}
 		tableDef.IsTemporary = stmt.Temporary
+		tableDef.Checks = DeepCopyTableDef(tableDef, true).Checks
+		for i, check := range tableDef.Checks {
+			check.Name = generatedCheckConstraintName(tableDef.Name, i+1)
+			check.IsGeneratedName = true
+		}
 
 		_, newStmt, err := ConstructCreateTableSQL(ctx, tableDef, snapshot, true, cloneStmt)
 		if err != nil {
@@ -898,6 +903,9 @@ func buildCreateTable(
 			// kmeans_train_percent) and falls back to defaults.
 			if err := preserveIndexSessionVars(p, tableDef); err != nil {
 				return nil, err
+			}
+			for _, check := range p.GetDdl().GetCreateTable().GetTableDef().GetChecks() {
+				check.IsGeneratedName = true
 			}
 			return p, nil
 		}
@@ -2189,13 +2197,10 @@ func RecoverCheckConstraintsFromCreateSql(ctx CompilerContext, tableDef *TableDe
 		return
 	}
 	createTableName := string(ct.Table.ObjectName)
-	if createTableName != "" && createTableName != tableDef.Name {
-		oldPrefix := createTableName + "_chk_"
-		newPrefix := tableDef.Name + "_chk_"
+	if !tableDef.IsTemporary && createTableName != "" && createTableName != tableDef.Name {
 		for i := range checks {
-			if strings.HasPrefix(checks[i].name, oldPrefix) {
-				checks[i].name = newPrefix + strings.TrimPrefix(checks[i].name, oldPrefix)
-			}
+			checks[i].name = rewriteCheckConstraintName(
+				checks[i].name, createTableName, tableDef.Name, false)
 		}
 	}
 
@@ -2221,32 +2226,44 @@ func rewriteCheckConstraintTablePrefix(checks []*plan.CheckDef, oldTableName, ne
 	if oldTableName == "" || newTableName == "" || oldTableName == newTableName {
 		return
 	}
-	oldPrefix := oldTableName + "_chk_"
-	newPrefix := newTableName + "_chk_"
 	for _, check := range checks {
-		if suffixAt := strings.LastIndex(check.Name, "_chk_"); suffixAt >= 0 {
-			suffix := check.Name[suffixAt:]
-			maxTableRunes := maxCheckConstraintNameRunes - utf8.RuneCountInString(suffix)
-			oldGeneratedPrefix := oldTableName
-			if utf8.RuneCountInString(oldGeneratedPrefix) > maxTableRunes {
-				oldGeneratedPrefix = string([]rune(oldGeneratedPrefix)[:maxTableRunes])
-			}
-			if check.IsGeneratedName || check.Name == oldGeneratedPrefix+suffix {
-				newGeneratedPrefix := newTableName
-				if utf8.RuneCountInString(newGeneratedPrefix) > maxTableRunes {
-					newGeneratedPrefix = string([]rune(newGeneratedPrefix)[:maxTableRunes])
-				}
-				check.Name = newGeneratedPrefix + suffix
-				continue
-			}
+		check.Name = rewriteCheckConstraintName(check.Name, oldTableName, newTableName, check.IsGeneratedName)
+	}
+}
+
+func rewriteCheckConstraintName(name, oldTableName, newTableName string, generated bool) string {
+	if suffixAt := strings.LastIndex(name, "_chk_"); suffixAt >= 0 {
+		suffix := name[suffixAt:]
+		maxTableRunes := maxCheckConstraintNameRunes - utf8.RuneCountInString(suffix)
+		oldGeneratedPrefix := oldTableName
+		if utf8.RuneCountInString(oldGeneratedPrefix) > maxTableRunes {
+			oldGeneratedPrefix = string([]rune(oldGeneratedPrefix)[:maxTableRunes])
 		}
-		if check.IsGeneratedName {
-			continue
-		}
-		if strings.HasPrefix(check.Name, oldPrefix) {
-			check.Name = newPrefix + strings.TrimPrefix(check.Name, oldPrefix)
+		if generated || name == oldGeneratedPrefix+suffix {
+			newGeneratedPrefix := newTableName
+			if utf8.RuneCountInString(newGeneratedPrefix) > maxTableRunes {
+				newGeneratedPrefix = string([]rune(newGeneratedPrefix)[:maxTableRunes])
+			}
+			return newGeneratedPrefix + suffix
 		}
 	}
+	if generated {
+		return name
+	}
+	oldPrefix := oldTableName + "_chk_"
+	if strings.HasPrefix(name, oldPrefix) {
+		return newTableName + "_chk_" + strings.TrimPrefix(name, oldPrefix)
+	}
+	return name
+}
+
+func generatedCheckConstraintName(tableName string, ordinal int) string {
+	suffix := fmt.Sprintf("_chk_%d", ordinal)
+	maxTableRunes := maxCheckConstraintNameRunes - utf8.RuneCountInString(suffix)
+	if utf8.RuneCountInString(tableName) > maxTableRunes {
+		tableName = string([]rune(tableName)[:maxTableRunes])
+	}
+	return tableName + suffix
 }
 
 const checkSQLModeMarker = "/*__mo_check_sql_mode_hex="
@@ -3988,6 +4005,22 @@ func buildRenameTable(stmt *tree.RenameTable, ctx CompilerContext) (*Plan, error
 						}
 						if existDef != nil {
 							return nil, moerr.NewTableAlreadyExists(ctx.GetContext(), newName)
+						}
+					}
+					if resolver, ok := ctx.(interface {
+						CheckConstraintNameExists(string, string, string) (bool, error)
+					}); ok {
+						for _, check := range tableDef.Checks {
+							renamed := rewriteCheckConstraintName(
+								check.Name, oldName, newName, check.IsGeneratedName)
+							exists, err := resolver.CheckConstraintNameExists(schemaName, oldName, renamed)
+							if err != nil {
+								return nil, err
+							}
+							if exists {
+								return nil, moerr.NewInvalidInputf(
+									ctx.GetContext(), "duplicate check constraint name '%s'", renamed)
+							}
 						}
 					}
 				}

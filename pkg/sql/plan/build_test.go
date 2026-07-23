@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -2961,6 +2962,20 @@ func TestUpdateIgnoreFiltersCheckConstraintViolations(t *testing.T) {
 	logicPlan, err := runOneStmt(mock, t, "UPDATE IGNORE single_idx_t SET val = -1 WHERE id = 1")
 	require.NoError(t, err)
 	assertPlanUsesIgnoreCheckFilter(t, logicPlan.GetQuery(), "UPDATE IGNORE")
+}
+
+func TestCheckIgnoreRejectsMixedProtocolCluster(t *testing.T) {
+	rt := moruntime.ServiceRuntime("")
+	previous, _ := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion4)
+	t.Cleanup(func() {
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, previous)
+	})
+
+	mock := NewMockOptimizer(true)
+	addSingleIdxTPositiveCheck(t, mock)
+	_, err := runOneStmt(mock, t, "UPDATE IGNORE single_idx_t SET val = -1 WHERE id = 1")
+	require.ErrorContains(t, err, "require all CNs to support protocol version 5")
 }
 
 func TestLegacyMultiTableUpdateFallbackChecksTableCheckConstraints(t *testing.T) {

@@ -436,6 +436,28 @@ func TestConstructCreateTableSQLPreservesLegacyChecksWithoutCompilerContext(t *t
 	require.Contains(t, createSQL, "CHECK (`a` < 10) NOT ENFORCED")
 }
 
+func TestConstructCreateTableSQLUsesPersistedSQLModeWithoutCompilerContext(t *testing.T) {
+	mode := "ANSI_QUOTES"
+	tableDef := &plan.TableDef{
+		Name:      "legacy_ansi_check",
+		DbName:    "test",
+		TableType: catalog.SystemOrdinaryRel,
+		Createsql: addCheckSQLModeMarker(
+			`CREATE TABLE legacy_ansi_check (a INT, CHECK ("a" > 0))`, &mode),
+		Cols: []*plan.ColDef{{
+			Name:       "a",
+			Typ:        plan.Type{Id: int32(types.T_int32)},
+			Default:    &plan.Default{NullAbility: true},
+			OriginName: "a",
+		}},
+	}
+
+	createSQL, _, err := ConstructCreateTableSQL(nil, tableDef, nil, true, nil)
+	require.NoError(t, err)
+	require.Contains(t, createSQL, "CHECK (`a` > 0)")
+	require.NotContains(t, createSQL, `CHECK ('a' > 0)`)
+}
+
 func TestConstructCreateTableSQLPreservesLegacyColumnChecksWithoutCompilerContext(t *testing.T) {
 	tableDef := &plan.TableDef{
 		Name:      "legacy_column_checks",
