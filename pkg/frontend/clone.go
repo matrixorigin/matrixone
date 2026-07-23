@@ -80,6 +80,13 @@ type cloneReceipt struct {
 
 type dataBranchCloneLockCtxKey struct{}
 
+func shouldLockDataBranchCloneSource(snapshot *plan.Snapshot) bool {
+	// A named snapshot already publishes a durable historical owner before the
+	// clone runs. Timestamp hints carry only TS/Tenant, so they still need the
+	// live source-row lock to serialize metadata publication with COPY ALTER.
+	return snapshot == nil || snapshot.ExtraInfo == nil
+}
+
 func withDataBranchCloneLockContext(
 	proc *process.Process,
 	ctx context.Context,
@@ -184,7 +191,7 @@ func lockDataBranchCloneDatabaseSources(
 	if locked, _ := ctx.Value(dataBranchCloneLockCtxKey{}).(bool); !locked {
 		return nil
 	}
-	if source.snapshot != nil && source.snapshot.TS != nil {
+	if !shouldLockDataBranchCloneSource(source.snapshot) {
 		return nil
 	}
 	fromAccountID := source.opAccountId
@@ -458,7 +465,7 @@ func handleCloneTable(
 		err = moerr.NewInternalErrorNoCtxf("only sys can clone table to another account")
 		return
 	}
-	if snapshot == nil || snapshot.TS == nil {
+	if shouldLockDataBranchCloneSource(snapshot) {
 		if err = lockDataBranchCloneSource(
 			reqCtx,
 			ses,

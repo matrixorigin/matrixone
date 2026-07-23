@@ -57,6 +57,22 @@ func TestDataBranchCloneCatalogLockBatch(t *testing.T) {
 	require.Equal(t, baseline, mp.CurrNB())
 }
 
+func TestShouldLockDataBranchCloneSource(t *testing.T) {
+	timestampSource := &plan.Snapshot{
+		TS: &timestamp.Timestamp{PhysicalTime: 42},
+	}
+	namedSnapshotSource := &plan.Snapshot{
+		TS: &timestamp.Timestamp{PhysicalTime: 42},
+		ExtraInfo: &plan.SnapshotExtraInfo{
+			Name: "snap",
+		},
+	}
+
+	require.True(t, shouldLockDataBranchCloneSource(nil))
+	require.True(t, shouldLockDataBranchCloneSource(timestampSource))
+	require.False(t, shouldLockDataBranchCloneSource(namedSnapshotSource))
+}
+
 func Test_prepareCloneViewSnapshot(t *testing.T) {
 	original := &plan.Snapshot{
 		Tenant: &plan.SnapshotTenant{TenantID: 1001},
