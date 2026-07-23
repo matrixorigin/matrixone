@@ -659,11 +659,36 @@ func TestUserInputPreparedExpressionIsExplicit(t *testing.T) {
 	prepared := &UserInput{
 		stmt:                 &tree.Select{},
 		isInternalInput:      true,
+		isSetExpression:      true,
 		isPreparedExpression: true,
+	}
+	direct := &UserInput{
+		stmt:            &tree.Select{},
+		isInternalInput: true,
+		isSetExpression: true,
 	}
 
 	require.False(t, ordinary.isPreparedExpr())
 	require.True(t, prepared.isPreparedExpr())
+	require.True(t, ordinary.canUsePlanCache())
+	require.False(t, direct.canUsePlanCache())
+	require.False(t, prepared.canUsePlanCache())
+}
+
+func TestBindSetVariableResultExprUsesPreparedModeForDecimalParam(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	stmt, err := parsers.ParseOne(
+		ctx, dialect.MYSQL, "select cast(? as decimal(10, 2)) from dual", 1)
+	require.NoError(t, err)
+	selectStmt := stmt.(*tree.Select)
+	expr := selectStmt.Select.(*tree.SelectClause).Exprs[0].Expr
+
+	_, err = bindSetVariableResultExpr(expr, plan.NewEmptyCompilerContext(), false)
+	require.ErrorContains(t, err, "only prepare statement can use ? expr")
+
+	bound, err := bindSetVariableResultExpr(expr, plan.NewEmptyCompilerContext(), true)
+	require.NoError(t, err)
+	require.NotNil(t, bound)
 }
 
 func TestGetExprValue(t *testing.T) {
