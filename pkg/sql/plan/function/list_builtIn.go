@@ -1417,6 +1417,26 @@ var supportedStringBuiltIns = []FuncNew{
 			},
 		},
 	},
+	// function `json_overlaps`
+	{
+		functionId: JSON_OVERLAPS,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    jsonOverlapsCheckFn,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return jsonOverlaps
+				},
+			},
+		},
+	},
 	// function `json_contains_path`
 	{
 		functionId: JSON_CONTAINS_PATH,
