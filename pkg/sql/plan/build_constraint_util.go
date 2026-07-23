@@ -1095,7 +1095,8 @@ func (builder *QueryBuilder) isProjectedEnumDisplayValueExpr(expr *Expr, visited
 		return false
 	}
 	node := builder.qry.Nodes[nodeID]
-	if isSetOperationNode(node.NodeType) {
+	switch node.NodeType {
+	case plan.Node_UNION, plan.Node_UNION_ALL:
 		if len(node.Children) == 0 {
 			return false
 		}
@@ -1112,6 +1113,16 @@ func (builder *QueryBuilder) isProjectedEnumDisplayValueExpr(expr *Expr, visited
 			}
 		}
 		return true
+	case plan.Node_MINUS, plan.Node_MINUS_ALL,
+		plan.Node_INTERSECT, plan.Node_INTERSECT_ALL:
+		if len(node.Children) == 0 || node.Children[0] < 0 || int(node.Children[0]) >= len(builder.qry.Nodes) {
+			return false
+		}
+		leftProjectList := builder.qry.Nodes[node.Children[0]].ProjectList
+		if col.ColPos < 0 || int(col.ColPos) >= len(leftProjectList) {
+			return false
+		}
+		return builder.isProjectedEnumDisplayValueExpr(leftProjectList[col.ColPos], visited)
 	}
 
 	projectList := node.ProjectList
@@ -1119,17 +1130,6 @@ func (builder *QueryBuilder) isProjectedEnumDisplayValueExpr(expr *Expr, visited
 		return false
 	}
 	return builder.isProjectedEnumDisplayValueExpr(projectList[col.ColPos], visited)
-}
-
-func isSetOperationNode(nodeType plan.Node_NodeType) bool {
-	switch nodeType {
-	case plan.Node_UNION, plan.Node_UNION_ALL,
-		plan.Node_MINUS, plan.Node_MINUS_ALL,
-		plan.Node_INTERSECT, plan.Node_INTERSECT_ALL:
-		return true
-	default:
-		return false
-	}
 }
 
 func forceCastExprWithName(ctx context.Context, expr *Expr, targetType Type, funcName string) (*Expr, error) {

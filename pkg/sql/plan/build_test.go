@@ -455,6 +455,9 @@ func TestInsertSelectEnumToJSONQuotesDisplayValue(t *testing.T) {
 		{sql: "insert into enum_json_destination(id, j) select n_nationkey, n_name from nation", wantQuote: true},
 		{sql: "insert into enum_json_destination(id, j) select id, name from (select n_nationkey as id, n_name as name from nation) src", wantQuote: true},
 		{sql: "insert into enum_json_destination(id, j) select id, name from (select n_nationkey as id, n_name as name from nation union all select n_nationkey, n_name from nation) src", wantQuote: true},
+		{sql: "insert into enum_json_destination(id, j) select id, name from (select n_nationkey as id, n_name as name from nation intersect select n_nationkey, cast('{\"a\":1}' as varchar) from nation) src", wantQuote: true},
+		{sql: "insert into enum_json_destination(id, j) select id, name from (select n_nationkey as id, n_name as name from nation intersect all select n_nationkey, cast('{\"a\":1}' as varchar) from nation) src", wantQuote: true},
+		{sql: "insert into enum_json_destination(id, j) select id, name from (select n_nationkey as id, n_name as name from nation minus select n_nationkey, cast('{\"a\":1}' as varchar) from nation) src", wantQuote: true},
 		{sql: "insert into enum_json_destination(id, j) select id, name from (select n_nationkey as id, n_name as name from nation union all select n_nationkey, n_comment from nation) src", wantQuote: false},
 	} {
 		logicPlan, err := runOneStmt(mock, t, tc.sql)

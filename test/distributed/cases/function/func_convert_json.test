@@ -167,6 +167,21 @@ from (
 ) src;
 insert into convert_json_enum_destination
 select 12, concat(e_json, '') from convert_json_enum where id = 1;
+-- INTERSECT and MINUS return rows from the left ENUM display-value projection.
+insert into convert_json_enum_destination
+select id, e
+from (
+    select 13 as id, e_json as e from convert_json_enum where id = 1
+    intersect
+    select 13 as id, cast('{"a":1}' as varchar) as e
+) src;
+insert into convert_json_enum_destination
+select id, e
+from (
+    select 14 as id, e_json as e from convert_json_enum where id = 1
+    minus
+    select 14 as id, cast('{"b":2}' as varchar) as e
+) src;
 select id, json_type(j), json_unquote(j)
 from convert_json_enum_destination
 order by id;

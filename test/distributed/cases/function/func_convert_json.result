@@ -227,6 +227,20 @@ select 11 as id, cast('{"b":2}' as varchar) as e
 ) src;
 insert into convert_json_enum_destination
 select 12, concat(e_json, '') from convert_json_enum where id = 1;
+insert into convert_json_enum_destination
+select id, e
+from (
+select 13 as id, e_json as e from convert_json_enum where id = 1
+intersect
+select 13 as id, cast('{"a":1}' as varchar) as e
+) src;
+insert into convert_json_enum_destination
+select id, e
+from (
+select 14 as id, e_json as e from convert_json_enum where id = 1
+minus
+select 14 as id, cast('{"b":2}' as varchar) as e
+) src;
 select id, json_type(j), json_unquote(j)
 from convert_json_enum_destination
 order by id;
@@ -242,7 +256,9 @@ order by id;
 9  ¦  STRING  ¦  {"a":1}  𝄀
 10  ¦  OBJECT  ¦  {"a": 1}  𝄀
 11  ¦  OBJECT  ¦  {"b": 2}  𝄀
-12  ¦  OBJECT  ¦  {"a": 1}
+12  ¦  OBJECT  ¦  {"a": 1}  𝄀
+13  ¦  STRING  ¦  {"a":1}  𝄀
+14  ¦  STRING  ¦  {"a":1}
 drop table convert_json_enum_destination;
 drop table convert_json_enum;
 prepare convert_json_parameter from 'select json_type(convert(?, json)), convert(?, json)';
