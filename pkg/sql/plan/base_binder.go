@@ -54,7 +54,7 @@ var kAlwaysFalseExpr = &plan.Expr{
 }
 
 func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (expr *Expr, err error) {
-	if b.numericParamType != nil && !isNumericContextNode(astExpr) {
+	if b.numericParamType != nil && !b.isNumericContextNode(astExpr, depth) {
 		paramType := b.numericParamType
 		b.numericParamType = nil
 		defer func() { b.numericParamType = paramType }()
@@ -147,7 +147,8 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		}
 		parentParamType := b.numericParamType
 		b.numericParamType = nil
-		if isNumericArithmeticRoot(exprImpl.Expr) {
+		if isNumericArithmeticRoot(exprImpl.Expr) ||
+			b.isGenericNumericFunctionRoot(exprImpl.Expr, depth, &typ) {
 			expr, err = b.bindNumericExprWithContext(exprImpl.Expr, depth, &typ)
 		} else {
 			expr, err = b.impl.BindExpr(exprImpl.Expr, depth, false)
@@ -598,6 +599,9 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Exp
 		return nil, moerr.NewInvalidInput(b.GetContext(), "field reference doesn't support SUBQUERY")
 	}
 	subCtx := NewBindContext(b.builder, b.ctx)
+	if b.numericSubqueryTarget != nil && !astExpr.Exists {
+		subCtx.numericProjectionTypes = []Type{*b.numericSubqueryTarget}
+	}
 
 	// A subquery is a nested SELECT and must not inherit the outer FOR UPDATE
 	// state. MySQL only locks rows in the outer query; rows reached through
@@ -696,7 +700,7 @@ func (b *baseBinder) bindRangeCond(astExpr *tree.RangeCond, depth int32, isRoot 
 
 func (b *baseBinder) bindUnaryExpr(astExpr *tree.UnaryExpr, depth int32, isRoot bool) (*Expr, error) {
 	if (astExpr.Op == tree.UNARY_MINUS || astExpr.Op == tree.UNARY_PLUS) && b.numericParamType == nil {
-		return b.bindNumericExprWithContext(astExpr, depth, b.defaultNumericOuterType())
+		return b.bindNumericExprWithDefaultContext(astExpr, depth, b.defaultNumericOuterType())
 	}
 	return b.bindUnaryExprWithCurrentContext(astExpr, depth)
 }
@@ -717,7 +721,7 @@ func (b *baseBinder) bindUnaryExprWithCurrentContext(astExpr *tree.UnaryExpr, de
 
 func (b *baseBinder) bindBinaryExpr(astExpr *tree.BinaryExpr, depth int32, isRoot bool) (*Expr, error) {
 	if isNumericBinaryOp(astExpr.Op) && b.numericParamType == nil {
-		return b.bindNumericExprWithContext(astExpr, depth, b.defaultNumericOuterType())
+		return b.bindNumericExprWithDefaultContext(astExpr, depth, b.defaultNumericOuterType())
 	}
 	return b.bindBinaryExprWithCurrentContext(astExpr, depth)
 }
@@ -768,10 +772,41 @@ func isNumericContextNode(astExpr tree.Expr) bool {
 	case *tree.UnaryExpr:
 		return expr.Op == tree.UNARY_PLUS || expr.Op == tree.UNARY_MINUS
 	case *tree.FuncExpr:
-		return numericAstFunctionName(expr) == "mod"
+		return isNumericContextFunction(numericAstFunctionName(expr))
+	case *tree.CaseExpr:
+		return true
 	default:
 		return false
 	}
+}
+
+func (b *baseBinder) isNumericContextNode(astExpr tree.Expr, depth int32) bool {
+	if isNumericContextNode(astExpr) {
+		return true
+	}
+	if paren, ok := astExpr.(*tree.ParenExpr); ok {
+		return b.isNumericContextNode(paren.Expr, depth)
+	}
+	functionExpr, ok := astExpr.(*tree.FuncExpr)
+	if !ok || b.numericParamType == nil || !b.numericFunctionTarget {
+		return false
+	}
+	_, ok = b.resolveNumericFunctionContext(
+		functionExpr, depth, b.numericAstColumnResolver(), b.numericParamType,
+	)
+	return ok
+}
+
+func (b *baseBinder) isGenericNumericFunctionRoot(astExpr tree.Expr, depth int32, target *Type) bool {
+	if paren, ok := astExpr.(*tree.ParenExpr); ok {
+		return b.isGenericNumericFunctionRoot(paren.Expr, depth, target)
+	}
+	functionExpr, ok := astExpr.(*tree.FuncExpr)
+	if !ok {
+		return false
+	}
+	_, ok = b.resolveNumericFunctionContext(functionExpr, depth, b.numericAstColumnResolver(), target)
+	return ok
 }
 
 func isNumericArithmeticRoot(astExpr tree.Expr) bool {
@@ -790,6 +825,23 @@ func isNumericArithmeticRoot(astExpr tree.Expr) bool {
 }
 
 func (b *baseBinder) bindNumericExprWithContext(astExpr tree.Expr, depth int32, outer *Type) (*Expr, error) {
+	return b.bindNumericExprWithContextMode(astExpr, depth, outer, true)
+}
+
+func (b *baseBinder) bindNumericExprWithDefaultContext(
+	astExpr tree.Expr,
+	depth int32,
+	outer *Type,
+) (*Expr, error) {
+	return b.bindNumericExprWithContextMode(astExpr, depth, outer, false)
+}
+
+func (b *baseBinder) bindNumericExprWithContextMode(
+	astExpr tree.Expr,
+	depth int32,
+	outer *Type,
+	functionTarget bool,
+) (*Expr, error) {
 	if b.numericParamType != nil {
 		return b.impl.BindExpr(astExpr, depth, false)
 	}
@@ -797,7 +849,7 @@ func (b *baseBinder) bindNumericExprWithContext(astExpr tree.Expr, depth int32, 
 		return b.bindNumericExprWithoutNewContext(astExpr, depth)
 	}
 
-	scan, err := b.numericAstTypes(astExpr, depth)
+	scan, err := b.numericAstTypesWithHint(astExpr, depth, outer)
 	if err != nil || !scan.hasParam || scan.incompatible {
 		if err != nil {
 			return nil, err
@@ -805,27 +857,18 @@ func (b *baseBinder) bindNumericExprWithContext(astExpr tree.Expr, depth int32, 
 		return b.bindNumericExprWithoutNewContext(astExpr, depth)
 	}
 
-	typesKnown := make([]types.Type, 0, len(scan.strong)+len(scan.weakDecimals))
-	for i := range scan.strong {
-		typesKnown = append(typesKnown, makeTypeByPlan2Type(scan.strong[i]))
-	}
-	var outerType *types.Type
-	if outer != nil {
-		typ := makeTypeByPlan2Type(*outer)
-		outerType = &typ
-	}
-	if len(scan.weakDecimals) > 0 && shouldActivateWeakDecimal(typesKnown, outerType) {
-		for i := range scan.weakDecimals {
-			typesKnown = append(typesKnown, makeTypeByPlan2Type(scan.weakDecimals[i]))
-		}
-	}
-	paramType, ok := function.InferNumericParameterType(typesKnown, outerType)
+	planType, ok := numericTypeFromAstScan(scan, outer)
 	if !ok {
 		return b.bindNumericExprWithoutNewContext(astExpr, depth)
 	}
-	planType := makePlan2Type(&paramType)
 	b.numericParamType = &planType
 	defer func() { b.numericParamType = nil }()
+	previousFunctionTarget := b.numericFunctionTarget
+	b.numericFunctionTarget = functionTarget
+	defer func() { b.numericFunctionTarget = previousFunctionTarget }()
+	previousSubqueryTarget := b.numericSubqueryTarget
+	b.numericSubqueryTarget = &planType
+	defer func() { b.numericSubqueryTarget = previousSubqueryTarget }()
 
 	return b.bindNumericExprWithCurrentContext(astExpr, depth)
 }
@@ -851,6 +894,7 @@ type numericAstTypeScan struct {
 	strong       []Type
 	weakDecimals []Type
 	hasParam     bool
+	hasUnknown   bool
 	incompatible bool
 }
 
@@ -858,6 +902,7 @@ func (s numericAstTypeScan) merge(other numericAstTypeScan) numericAstTypeScan {
 	s.strong = append(s.strong, other.strong...)
 	s.weakDecimals = append(s.weakDecimals, other.weakDecimals...)
 	s.hasParam = s.hasParam || other.hasParam
+	s.hasUnknown = s.hasUnknown || other.hasUnknown
 	s.incompatible = s.incompatible || other.incompatible
 	return s
 }
@@ -882,28 +927,69 @@ func shouldActivateWeakDecimal(strong []types.Type, outer *types.Type) bool {
 	return outer != nil && (outer.Oid.IsInteger() || outer.Oid.IsDecimal() || outer.Oid == types.T_bit)
 }
 
-func (b *baseBinder) numericAstTypes(astExpr tree.Expr, depth int32) (numericAstTypeScan, error) {
+func (b *baseBinder) numericAstTypesWithHint(
+	astExpr tree.Expr,
+	depth int32,
+	hint *Type,
+) (numericAstTypeScan, error) {
+	return b.numericAstTypesInternalWithHint(astExpr, depth, b.numericAstColumnResolver(), hint)
+}
+
+func (b *baseBinder) numericAstColumnResolver() numericAstColumnResolver {
+	return func(name *tree.UnresolvedName) (numericAstTypeScan, bool) {
+		typ, ok := b.numericColumnType(name)
+		return numericAstTypedOperand(typ), ok
+	}
+}
+
+type numericAstColumnResolver func(*tree.UnresolvedName) (numericAstTypeScan, bool)
+
+func (b *baseBinder) numericAstTypesInternal(
+	astExpr tree.Expr,
+	depth int32,
+	resolveColumn numericAstColumnResolver,
+) (numericAstTypeScan, error) {
+	return b.numericAstTypesInternalWithHint(astExpr, depth, resolveColumn, nil)
+}
+
+func (b *baseBinder) numericAstTypesInternalWithHint(
+	astExpr tree.Expr,
+	depth int32,
+	resolveColumn numericAstColumnResolver,
+	hint *Type,
+) (numericAstTypeScan, error) {
 	switch expr := astExpr.(type) {
 	case *tree.ParamExpr:
 		return numericAstTypeScan{hasParam: true}, nil
+	case *tree.Subquery:
+		if expr.Exists {
+			return numericAstTypeScan{}, nil
+		}
+		scan, err := b.numericScalarSubqueryAstTypes(expr, depth)
+		// Keep scalar subqueries as deferred parameter-bearing operands even
+		// when their projection type cannot be determined statically. This
+		// preserves assignment-target propagation for expressions whose
+		// parameters are hidden behind unsupported projection shapes.
+		scan.hasParam = true
+		return scan, err
 	case *tree.ParenExpr:
-		return b.numericAstTypes(expr.Expr, depth)
+		return b.numericAstTypesInternalWithHint(expr.Expr, depth, resolveColumn, hint)
 	case *tree.BinaryExpr:
 		if !isNumericBinaryOp(expr.Op) {
 			return numericAstTypeScan{}, nil
 		}
-		left, err := b.numericAstTypes(expr.Left, depth)
+		left, err := b.numericAstTypesInternalWithHint(expr.Left, depth, resolveColumn, hint)
 		if err != nil {
 			return numericAstTypeScan{}, err
 		}
-		right, err := b.numericAstTypes(expr.Right, depth)
+		right, err := b.numericAstTypesInternalWithHint(expr.Right, depth, resolveColumn, hint)
 		if err != nil {
 			return numericAstTypeScan{}, err
 		}
 		return left.merge(right), nil
 	case *tree.UnaryExpr:
 		if expr.Op == tree.UNARY_PLUS || expr.Op == tree.UNARY_MINUS {
-			return b.numericAstTypes(expr.Expr, depth)
+			return b.numericAstTypesInternalWithHint(expr.Expr, depth, resolveColumn, hint)
 		}
 		return numericAstTypeScan{}, nil
 	case *tree.CastExpr:
@@ -922,26 +1008,545 @@ func (b *baseBinder) numericAstTypes(astExpr tree.Expr, depth int32) (numericAst
 		}
 		return numericAstTypedOperand(bound.Typ), nil
 	case *tree.FuncExpr:
-		if numericAstFunctionName(expr) != "mod" || len(expr.Exprs) != 2 {
+		name := numericAstFunctionName(expr)
+		indexes, ok := numericFunctionResultArgs(name, len(expr.Exprs))
+		if ok {
+			var scan numericAstTypeScan
+			for _, idx := range indexes {
+				value, err := b.numericAstTypesInternalWithHint(expr.Exprs[idx], depth, resolveColumn, hint)
+				if err != nil {
+					return numericAstTypeScan{}, err
+				}
+				scan = scan.merge(value)
+			}
+			return scan, nil
+		}
+		typ, known, err := b.numericAstStaticType(expr, depth, resolveColumn)
+		if err != nil || !known {
+			if err != nil {
+				return numericAstTypeScan{}, err
+			}
+			resolved, ok := b.resolveNumericFunctionContext(expr, depth, resolveColumn, hint)
+			if ok {
+				var scan numericAstTypeScan
+				if numericFunctionReturnIsStrong(resolved, hint) {
+					scan = numericAstTypedOperand(resolved.returnType)
+				}
+				for _, arg := range expr.Exprs {
+					argScan, scanErr := b.numericAstTypesInternalWithHint(arg, depth, resolveColumn, hint)
+					if scanErr != nil {
+						return numericAstTypeScan{}, scanErr
+					}
+					scan.hasParam = scan.hasParam || argScan.hasParam
+				}
+				return scan, nil
+			}
+			var scan numericAstTypeScan
+			for _, arg := range expr.Exprs {
+				argScan, scanErr := b.numericAstTypesInternalWithHint(arg, depth, resolveColumn, hint)
+				if scanErr != nil {
+					return numericAstTypeScan{}, scanErr
+				}
+				scan.hasParam = scan.hasParam || argScan.hasParam
+			}
+			return scan, nil
+		}
+		if !makeTypeByPlan2Type(typ).IsNumeric() {
 			return numericAstTypeScan{}, nil
 		}
-		left, err := b.numericAstTypes(expr.Exprs[0], depth)
-		if err != nil {
-			return numericAstTypeScan{}, err
+		return numericAstTypedOperand(typ), nil
+	case *tree.CaseExpr:
+		var scan numericAstTypeScan
+		for _, when := range expr.Whens {
+			if when == nil || when.Val == nil {
+				continue
+			}
+			value, err := b.numericAstTypesInternalWithHint(when.Val, depth, resolveColumn, hint)
+			if err != nil {
+				return numericAstTypeScan{}, err
+			}
+			scan = scan.merge(value)
 		}
-		right, err := b.numericAstTypes(expr.Exprs[1], depth)
-		if err != nil {
-			return numericAstTypeScan{}, err
+		if expr.Else != nil {
+			value, err := b.numericAstTypesInternalWithHint(expr.Else, depth, resolveColumn, hint)
+			if err != nil {
+				return numericAstTypeScan{}, err
+			}
+			scan = scan.merge(value)
 		}
-		return left.merge(right), nil
+		return scan, nil
 	case *tree.UnresolvedName:
-		if typ, ok := b.numericColumnType(expr); ok {
-			return numericAstTypedOperand(typ), nil
+		if resolveColumn != nil {
+			if scan, ok := resolveColumn(expr); ok {
+				return scan, nil
+			}
 		}
-		return numericAstTypeScan{}, nil
+		return numericAstTypeScan{hasUnknown: true}, nil
 	default:
 		return numericAstTypeScan{}, nil
 	}
+}
+
+func numericFunctionReturnIsStrong(resolved numericFunctionContext, hint *Type) bool {
+	for _, dynamic := range resolved.dynamic {
+		if !dynamic {
+			return true
+		}
+	}
+	if hint == nil {
+		return false
+	}
+	returnOid := types.T(resolved.returnType.Id)
+	hintOid := types.T(hint.Id)
+	return (returnOid == types.T_float32 || returnOid == types.T_float64) &&
+		hintOid != types.T_float32 && hintOid != types.T_float64
+}
+
+func (b *baseBinder) numericAstStaticType(
+	astExpr tree.Expr,
+	depth int32,
+	resolveColumn numericAstColumnResolver,
+) (Type, bool, error) {
+	switch expr := astExpr.(type) {
+	case *tree.ParenExpr:
+		return b.numericAstStaticType(expr.Expr, depth, resolveColumn)
+	case *tree.CastExpr:
+		typ, err := getTypeFromAst(b.GetContext(), expr.Type)
+		return typ, err == nil, err
+	case *tree.NumVal:
+		bound, err := b.bindNumVal(expr, Type{})
+		if err != nil {
+			return Type{}, false, err
+		}
+		return bound.Typ, true, nil
+	case *tree.BinaryExpr:
+		if !isNumericBinaryOp(expr.Op) {
+			return Type{}, false, nil
+		}
+		scan, err := b.numericAstTypesInternal(expr, depth, resolveColumn)
+		if err != nil || scan.incompatible || scan.hasUnknown ||
+			(scan.hasParam && len(scan.strong) == 0) {
+			return Type{}, false, err
+		}
+		typ, ok := numericTypeFromAstScan(scan, nil)
+		return typ, ok, nil
+	case *tree.UnaryExpr:
+		if expr.Op != tree.UNARY_PLUS && expr.Op != tree.UNARY_MINUS {
+			return Type{}, false, nil
+		}
+		scan, err := b.numericAstTypesInternal(expr, depth, resolveColumn)
+		if err != nil || scan.incompatible || scan.hasUnknown ||
+			(scan.hasParam && len(scan.strong) == 0) {
+			return Type{}, false, err
+		}
+		typ, ok := numericTypeFromAstScan(scan, nil)
+		return typ, ok, nil
+	case *tree.UnresolvedName:
+		if resolveColumn == nil {
+			return Type{}, false, nil
+		}
+		scan, ok := resolveColumn(expr)
+		if !ok || scan.incompatible || scan.hasParam || len(scan.strong) != 1 || len(scan.weakDecimals) != 0 {
+			return Type{}, false, nil
+		}
+		return scan.strong[0], true, nil
+	case *tree.Subquery:
+		if expr.Exists {
+			return Type{}, false, nil
+		}
+		scan, err := b.numericScalarSubqueryAstTypes(expr, depth)
+		if err != nil || scan.incompatible || scan.hasParam || len(scan.strong) != 1 || len(scan.weakDecimals) != 0 {
+			return Type{}, false, err
+		}
+		return scan.strong[0], true, nil
+	case *tree.FuncExpr:
+		name := numericAstFunctionName(expr)
+		if name == "" {
+			return Type{}, false, nil
+		}
+		argTypes := make([]types.Type, len(expr.Exprs))
+		for i, arg := range expr.Exprs {
+			typ, known, err := b.numericAstStaticType(arg, depth, resolveColumn)
+			if err != nil || !known {
+				return Type{}, false, err
+			}
+			argTypes[i] = makeTypeByPlan2Type(typ)
+		}
+		resolved, err := function.GetFunctionByName(b.GetContext(), name, argTypes)
+		if err != nil {
+			return Type{}, false, nil
+		}
+		ret := resolved.GetReturnType()
+		return makePlan2Type(&ret), true, nil
+	default:
+		return Type{}, false, nil
+	}
+}
+
+func numericTypeFromAstScan(scan numericAstTypeScan, outer *Type) (Type, bool) {
+	typesKnown := make([]types.Type, 0, len(scan.strong)+len(scan.weakDecimals))
+	for i := range scan.strong {
+		typesKnown = append(typesKnown, makeTypeByPlan2Type(scan.strong[i]))
+	}
+	var outerType *types.Type
+	if outer != nil {
+		typ := makeTypeByPlan2Type(*outer)
+		outerType = &typ
+	}
+	if len(scan.weakDecimals) > 0 && shouldActivateWeakDecimal(typesKnown, outerType) {
+		for i := range scan.weakDecimals {
+			typesKnown = append(typesKnown, makeTypeByPlan2Type(scan.weakDecimals[i]))
+		}
+	}
+	resolved, ok := function.InferNumericParameterType(typesKnown, outerType)
+	if !ok {
+		return Type{}, false
+	}
+	return makePlan2Type(&resolved), true
+}
+
+func (b *baseBinder) numericScalarSubqueryAstTypes(
+	subquery *tree.Subquery,
+	depth int32,
+) (numericAstTypeScan, error) {
+	var owner *tree.Select
+	switch selectStmt := subquery.Select.(type) {
+	case *tree.Select:
+		owner = selectStmt
+	case *tree.ParenSelect:
+		owner = selectStmt.Select
+	default:
+		return numericAstTypeScan{}, nil
+	}
+	return b.numericScalarSelectAstTypes(owner, owner.Select, depth, make(map[*tree.Select]bool), nil)
+}
+
+func (b *baseBinder) numericScalarSelectAstTypes(
+	owner *tree.Select,
+	stmt tree.SelectStatement,
+	depth int32,
+	visiting map[*tree.Select]bool,
+	ctes map[string]*tree.CTE,
+) (numericAstTypeScan, error) {
+	_, scans, ok, err := b.numericScalarStatementOutputs(owner, stmt, depth, visiting, ctes)
+	if err != nil {
+		return numericAstTypeScan{}, err
+	}
+	if !ok || len(scans) != 1 {
+		return numericAstTypeScan{}, nil
+	}
+	return scans[0], nil
+}
+
+type numericScalarSource struct {
+	alias string
+	name  string
+	cols  []string
+	types []numericAstTypeScan
+	known bool
+}
+
+func numericScalarVisibleCtes(owner *tree.Select, inherited map[string]*tree.CTE) map[string]*tree.CTE {
+	if owner == nil || owner.With == nil || len(owner.With.CTEs) == 0 {
+		return inherited
+	}
+	visible := make(map[string]*tree.CTE, len(inherited)+len(owner.With.CTEs))
+	for name, cte := range inherited {
+		visible[name] = cte
+	}
+	for _, cte := range owner.With.CTEs {
+		visible[strings.ToLower(string(cte.Name.Alias))] = cte
+	}
+	return visible
+}
+
+func numericScalarCteSource(cte *tree.CTE, existingCols tree.IdentifierList) (*tree.Select, tree.IdentifierList) {
+	if len(existingCols) == 0 {
+		existingCols = cte.Name.Cols
+	}
+	switch source := cte.Stmt.(type) {
+	case *tree.Select:
+		return source, existingCols
+	case *tree.ParenSelect:
+		return source.Select, existingCols
+	default:
+		return nil, existingCols
+	}
+}
+
+func (b *baseBinder) numericScalarSources(
+	owner *tree.Select,
+	clause *tree.SelectClause,
+	depth int32,
+	visiting map[*tree.Select]bool,
+	ctes map[string]*tree.CTE,
+) ([]numericScalarSource, bool) {
+	if clause.From == nil {
+		return nil, true
+	}
+	if len(clause.From.Tables) != 1 {
+		return nil, false
+	}
+	infos := collectNumericProjectionSources(clause.From.Tables[0], "", nil)
+	sources := make([]numericScalarSource, len(infos))
+	ctes = numericScalarVisibleCtes(owner, ctes)
+	for i := range infos {
+		sources[i].alias = strings.ToLower(infos[i].alias)
+		sources[i].name = strings.ToLower(infos[i].sourceName)
+		if infos[i].source == nil && infos[i].sourceSchema == "" {
+			if cte := ctes[strings.ToLower(infos[i].sourceName)]; cte != nil {
+				infos[i].source, infos[i].aliasCols = numericScalarCteSource(cte, infos[i].aliasCols)
+			} else {
+				infos[i].source, infos[i].aliasCols = numericProjectionCteSource(
+					owner, b.ctx, infos[i].sourceName, infos[i].aliasCols,
+				)
+			}
+		}
+		if infos[i].source != nil {
+			cols, scans, ok, err := b.numericScalarSelectOutputs(infos[i].source, depth, visiting, ctes)
+			if err != nil {
+				return nil, false
+			}
+			if !ok {
+				continue
+			}
+			sources[i].cols = cols
+			sources[i].types = scans
+			sources[i].known = true
+		} else if infos[i].sourceName != "" && b.builder != nil {
+			cols := numericPhysicalTableVisibleCols(b.builder, infos[i])
+			if cols == nil {
+				continue
+			}
+			for _, col := range cols {
+				sources[i].cols = append(sources[i].cols, strings.ToLower(col.Name))
+				sources[i].types = append(sources[i].types, numericAstTypedOperand(col.Typ))
+			}
+			sources[i].known = true
+		}
+		if !sources[i].known || len(infos[i].aliasCols) == 0 {
+			continue
+		}
+		if len(infos[i].aliasCols) != len(sources[i].cols) {
+			sources[i].known = false
+			continue
+		}
+		for pos := range infos[i].aliasCols {
+			sources[i].cols[pos] = strings.ToLower(string(infos[i].aliasCols[pos]))
+		}
+	}
+	return sources, true
+}
+
+func (b *baseBinder) numericScalarSelectOutputs(
+	owner *tree.Select,
+	depth int32,
+	visiting map[*tree.Select]bool,
+	ctes map[string]*tree.CTE,
+) ([]string, []numericAstTypeScan, bool, error) {
+	if visiting[owner] {
+		return nil, nil, false, nil
+	}
+	visiting[owner] = true
+	defer delete(visiting, owner)
+	return b.numericScalarStatementOutputs(owner, owner.Select, depth, visiting, ctes)
+}
+
+func (b *baseBinder) numericScalarStatementOutputs(
+	owner *tree.Select,
+	stmt tree.SelectStatement,
+	depth int32,
+	visiting map[*tree.Select]bool,
+	ctes map[string]*tree.CTE,
+) ([]string, []numericAstTypeScan, bool, error) {
+	switch selectStmt := stmt.(type) {
+	case *tree.SelectClause:
+		sources, sourcesKnown := b.numericScalarSources(owner, selectStmt, depth, visiting, ctes)
+		if !sourcesKnown {
+			sources = nil
+		}
+		cols := make([]string, 0, len(selectStmt.Exprs))
+		scans := make([]numericAstTypeScan, 0, len(selectStmt.Exprs))
+		for _, selectExpr := range selectStmt.Exprs {
+			switch expr := selectExpr.Expr.(type) {
+			case tree.UnqualifiedStar:
+				if !sourcesKnown {
+					return nil, nil, false, nil
+				}
+				starCols, starScans, ok := numericScalarUnqualifiedStarOutputs(selectStmt, sources)
+				if !ok {
+					return nil, nil, false, nil
+				}
+				cols = append(cols, starCols...)
+				scans = append(scans, starScans...)
+				continue
+			case *tree.UnresolvedName:
+				if expr.Star {
+					if !sourcesKnown {
+						return nil, nil, false, nil
+					}
+					starCols, starScans, ok := numericScalarQualifiedStarOutputs(sources, expr.ColName())
+					if !ok {
+						return nil, nil, false, nil
+					}
+					cols = append(cols, starCols...)
+					scans = append(scans, starScans...)
+					continue
+				}
+			}
+			col := ""
+			if selectExpr.As != nil && !selectExpr.As.Empty() {
+				col = strings.ToLower(selectExpr.As.Origin())
+			} else if name, ok := selectExpr.Expr.(*tree.UnresolvedName); ok {
+				col = strings.ToLower(name.ColName())
+			}
+			scan, err := b.numericAstTypesInternal(
+				selectExpr.Expr,
+				depth,
+				func(name *tree.UnresolvedName) (numericAstTypeScan, bool) {
+					return resolveNumericScalarColumn(sources, name)
+				},
+			)
+			if err != nil {
+				return nil, nil, false, err
+			}
+			cols = append(cols, col)
+			scans = append(scans, scan)
+		}
+		return cols, scans, true, nil
+	case *tree.ValuesClause:
+		if len(selectStmt.Rows) == 0 {
+			return nil, nil, false, nil
+		}
+		width := len(selectStmt.Rows[0])
+		cols := make([]string, width)
+		scans := make([]numericAstTypeScan, width)
+		for i := range cols {
+			cols[i] = fmt.Sprintf("column_%d", i)
+		}
+		for _, row := range selectStmt.Rows {
+			if len(row) != width {
+				return nil, nil, false, nil
+			}
+			for i, cell := range row {
+				scan, err := b.numericAstTypesInternal(cell, depth, nil)
+				if err != nil {
+					return nil, nil, false, err
+				}
+				scans[i] = scans[i].merge(scan)
+			}
+		}
+		return cols, scans, true, nil
+	case *tree.UnionClause:
+		leftCols, left, leftOK, err := b.numericScalarStatementOutputs(owner, selectStmt.Left, depth, visiting, ctes)
+		if err != nil || !leftOK {
+			return nil, nil, false, err
+		}
+		_, right, rightOK, err := b.numericScalarStatementOutputs(owner, selectStmt.Right, depth, visiting, ctes)
+		if err != nil || !rightOK || len(left) != len(right) {
+			return nil, nil, false, err
+		}
+		for i := range left {
+			left[i] = left[i].merge(right[i])
+		}
+		return leftCols, left, true, nil
+	case *tree.ParenSelect:
+		return b.numericScalarStatementOutputs(selectStmt.Select, selectStmt.Select.Select, depth, visiting, ctes)
+	default:
+		return nil, nil, false, nil
+	}
+}
+
+func numericScalarProjectionSources(sources []numericScalarSource) []numericProjectionSourceInfo {
+	projectionSources := make([]numericProjectionSourceInfo, len(sources))
+	for i := range sources {
+		projectionSources[i] = numericProjectionSourceInfo{
+			sourceName:  sources[i].name,
+			alias:       sources[i].alias,
+			outputNames: sources[i].cols,
+			outputKnown: sources[i].known,
+		}
+	}
+	return projectionSources
+}
+
+func numericScalarUnqualifiedStarOutputs(
+	clause *tree.SelectClause,
+	sources []numericScalarSource,
+) ([]string, []numericAstTypeScan, bool) {
+	if clause.From == nil || len(clause.From.Tables) != 1 {
+		return nil, nil, false
+	}
+	projectionSources := numericScalarProjectionSources(sources)
+	cursor := 0
+	outputs, ok := numericProjectionStarOutputs(clause.From.Tables[0], projectionSources, &cursor)
+	if !ok || cursor != len(sources) {
+		return nil, nil, false
+	}
+	return numericScalarScansFromStarOutputs(outputs, sources)
+}
+
+func numericScalarQualifiedStarOutputs(
+	sources []numericScalarSource,
+	qualifier string,
+) ([]string, []numericAstTypeScan, bool) {
+	source := uniqueNumericStarSource(numericScalarProjectionSources(sources), qualifier)
+	if source < 0 || source >= len(sources) || len(sources[source].cols) != len(sources[source].types) {
+		return nil, nil, false
+	}
+	return append([]string(nil), sources[source].cols...),
+		append([]numericAstTypeScan(nil), sources[source].types...), true
+}
+
+func numericScalarScansFromStarOutputs(
+	outputs []numericProjectionStarOutput,
+	sources []numericScalarSource,
+) ([]string, []numericAstTypeScan, bool) {
+	cols := make([]string, len(outputs))
+	scans := make([]numericAstTypeScan, len(outputs))
+	for i, output := range outputs {
+		if len(output.refs) == 0 {
+			return nil, nil, false
+		}
+		cols[i] = output.name
+		for _, ref := range output.refs {
+			if ref.source < 0 || ref.source >= len(sources) ||
+				ref.pos < 0 || ref.pos >= len(sources[ref.source].types) {
+				return nil, nil, false
+			}
+			scans[i] = scans[i].merge(sources[ref.source].types[ref.pos])
+		}
+	}
+	return cols, scans, true
+}
+
+func resolveNumericScalarColumn(
+	sources []numericScalarSource,
+	name *tree.UnresolvedName,
+) (numericAstTypeScan, bool) {
+	column := strings.ToLower(name.ColName())
+	table := strings.ToLower(name.TblName())
+	found := false
+	var result numericAstTypeScan
+	for _, source := range sources {
+		if table != "" && table != source.alias && table != source.name {
+			continue
+		}
+		if !source.known {
+			return numericAstTypeScan{}, false
+		}
+		for pos, candidate := range source.cols {
+			if candidate != column {
+				continue
+			}
+			if found || pos >= len(source.types) {
+				return numericAstTypeScan{}, false
+			}
+			result = source.types[pos]
+			found = true
+		}
+	}
+	return result, found
 }
 
 func numericAstFunctionName(astExpr *tree.FuncExpr) string {
@@ -950,6 +1555,154 @@ func numericAstFunctionName(astExpr *tree.FuncExpr) string {
 		return ""
 	}
 	return strings.ToLower(funcRef.ColName())
+}
+
+type numericFunctionContext struct {
+	returnType Type
+	argTypes   []Type
+	dynamic    []bool
+}
+
+func (b *baseBinder) resolveNumericFunctionContext(
+	expr *tree.FuncExpr,
+	depth int32,
+	resolveColumn numericAstColumnResolver,
+	hint *Type,
+) (numericFunctionContext, bool) {
+	return b.resolveNumericFunctionArgs(
+		numericAstFunctionName(expr), expr.Exprs, depth, resolveColumn, hint,
+	)
+}
+
+func (b *baseBinder) resolveNumericFunctionArgs(
+	name string,
+	args []tree.Expr,
+	depth int32,
+	resolveColumn numericAstColumnResolver,
+	hint *Type,
+) (numericFunctionContext, bool) {
+	name = strings.ToLower(name)
+	if !supportsGenericNumericFunctionContext(name) || hint == nil || function.GetFunctionIsAggregateByName(name) ||
+		function.GetFunctionIsWinFunByName(name) {
+		return numericFunctionContext{}, false
+	}
+
+	argTypes := make([]types.Type, len(args))
+	dynamic := make([]bool, len(args))
+	for i, arg := range args {
+		typ, known, err := b.numericAstStaticType(arg, depth, resolveColumn)
+		if err != nil {
+			return numericFunctionContext{}, false
+		}
+		if known {
+			argTypes[i] = makeTypeByPlan2Type(typ)
+			continue
+		}
+		argTypes[i] = makeTypeByPlan2Type(*hint)
+		dynamic[i] = true
+	}
+
+	resolved, err := function.GetFunctionByName(b.GetContext(), name, argTypes)
+	if err != nil || !resolved.GetReturnType().IsNumeric() {
+		return numericFunctionContext{}, false
+	}
+	if targets, shouldCast := resolved.ShouldDoImplicitTypeCast(); shouldCast {
+		if len(targets) != len(argTypes) {
+			return numericFunctionContext{}, false
+		}
+		argTypes = targets
+	}
+
+	returnType := resolved.GetReturnType()
+	context := numericFunctionContext{
+		returnType: makePlan2Type(&returnType),
+		argTypes:   make([]Type, len(argTypes)),
+		dynamic:    dynamic,
+	}
+	for i := range argTypes {
+		context.argTypes[i] = makePlan2Type(&argTypes[i])
+	}
+	return context, true
+}
+
+func supportsGenericNumericFunctionContext(name string) bool {
+	switch name {
+	// These functions' value arguments are in the same numeric domain as their
+	// result. A numeric return type alone is insufficient: FIELD, LENGTH and
+	// similar functions return numbers while their arguments belong to another
+	// domain.
+	case "abs", "ceil", "ceiling", "floor", "round", "truncate",
+		"sqrt", "power", "pow", "exp", "ln", "log", "log2", "log10":
+		return true
+	default:
+		return false
+	}
+}
+
+func isNumericContextFunction(name string) bool {
+	switch name {
+	case "+", "-", "*", "/", "%", "div", "^", "unary_plus", "unary_minus",
+		"mod", "if", "coalesce", "ifnull", "nullif":
+		return true
+	default:
+		return false
+	}
+}
+
+func numericFunctionResultArgs(name string, argCount int) ([]int, bool) {
+	switch name {
+	case "mod":
+		if argCount != 2 {
+			return nil, false
+		}
+		return []int{0, 1}, true
+	case "if":
+		if argCount != 3 {
+			return nil, false
+		}
+		return []int{1, 2}, true
+	case "coalesce", "ifnull":
+		if argCount == 0 {
+			return nil, false
+		}
+		indexes := make([]int, argCount)
+		for i := range indexes {
+			indexes[i] = i
+		}
+		return indexes, true
+	case "nullif":
+		if argCount != 2 {
+			return nil, false
+		}
+		return []int{0}, true
+	default:
+		return nil, false
+	}
+}
+
+func numericFunctionArgKeepsContext(name string, idx, argCount int) bool {
+	if name == "case" {
+		return idx%2 == 1 || idx == argCount-1
+	}
+	indexes, ok := numericFunctionResultArgs(name, argCount)
+	if !ok {
+		return false
+	}
+	for _, resultIdx := range indexes {
+		if idx == resultIdx {
+			return true
+		}
+	}
+	return false
+}
+
+func numericFunctionHasSelectiveContext(name string) bool {
+	switch name {
+	case "case", "if", "ifnull", "nullif":
+		return true
+	default:
+		return false
+	}
 }
 
 func (b *baseBinder) numericColumnType(astExpr *tree.UnresolvedName) (Type, bool) {
@@ -1518,7 +2271,7 @@ func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32, isRoot bo
 	}
 	funcName := funcRef.ColName()
 	if strings.EqualFold(funcName, "mod") && b.numericParamType == nil {
-		return b.bindNumericExprWithContext(astExpr, depth, b.defaultNumericOuterType())
+		return b.bindNumericExprWithDefaultContext(astExpr, depth, b.defaultNumericOuterType())
 	}
 
 	if function.GetFunctionIsAggregateByName(funcName) && astExpr.WindowSpec == nil {
@@ -1682,8 +2435,40 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		args = []*Expr{serialExpr, idxExpr, typeExpr}
 	} else {
 		args = make([]*Expr, len(astArgs))
+		var functionContext numericFunctionContext
+		hasFunctionContext := false
+		if b.numericFunctionTarget {
+			functionContext, hasFunctionContext = b.resolveNumericFunctionArgs(
+				name, astArgs, depth, b.numericAstColumnResolver(), b.numericParamType,
+			)
+		}
 		for idx, arg := range astArgs {
+			paramType := b.numericParamType
+			subqueryTarget := b.numericSubqueryTarget
+			if paramType != nil && numericFunctionHasSelectiveContext(name) &&
+				!numericFunctionArgKeepsContext(name, idx, len(astArgs)) {
+				b.numericParamType = nil
+				b.numericSubqueryTarget = nil
+			} else if paramType != nil && hasFunctionContext {
+				if functionContext.dynamic[idx] &&
+					makeTypeByPlan2Type(functionContext.argTypes[idx]).IsNumeric() {
+					argTarget := functionContext.argTypes[idx]
+					b.numericParamType = &argTarget
+					b.numericSubqueryTarget = &argTarget
+				} else {
+					b.numericParamType = nil
+					b.numericSubqueryTarget = nil
+				}
+			} else if paramType != nil && !isNumericContextFunction(name) &&
+				!numericFunctionHasSelectiveContext(name) {
+				// A function outside the explicit domain-preserving metadata must
+				// resolve its arguments independently of the assignment target.
+				b.numericParamType = nil
+				b.numericSubqueryTarget = nil
+			}
 			expr, err := b.impl.BindExpr(arg, depth, false)
+			b.numericParamType = paramType
+			b.numericSubqueryTarget = subqueryTarget
 			if err != nil {
 				return nil, err
 			}
@@ -2742,6 +3527,16 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 			}
 		}
 
+	case "maketime":
+		// Hex and bit literals are represented as VARCHAR literals carrying
+		// IsBin. They are integral seconds, so they retain TIME(0) metadata even
+		// though the VARCHAR seconds overload normally advertises TIME(6).
+		if len(args) == 3 {
+			if literal := args[2].GetLit(); literal != nil && literal.IsBin {
+				returnType.Scale = 0
+			}
+		}
+
 	case "timestampadd":
 		// For TIMESTAMPADD with DATE input, check if unit is constant and adjust return type
 		// MySQL behavior: DATE input + date unit → DATE output, DATE input + time unit → DATETIME output
@@ -2792,6 +3587,15 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		}
 		for idx, castType := range argsCastType {
 			if !argsType[idx].Eq(castType) && castType.Oid != types.T_any {
+				// MAKETIME uses the scale on its VARCHAR seconds target only to
+				// derive the TIME return scale. Recasting an already-VARCHAR
+				// argument solely for that metadata clears Literal.IsBin, changing
+				// X'..'/B'..' from a binary number into ordinary text.
+				if name == "maketime" && idx == 2 &&
+					argsType[idx].Oid == types.T_varchar && castType.Oid == types.T_varchar &&
+					argsType[idx].Width == castType.Width {
+					continue
+				}
 				if argsType[idx].Oid == castType.Oid && castType.Oid.IsDecimal() && argsType[idx].Scale == castType.Scale {
 					continue
 				}

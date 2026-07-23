@@ -101,10 +101,13 @@ func TestHandleServerWriteWithClosedSession(t *testing.T) {
 		defer cancel()
 
 		c := newTestClient(t)
+		handlerDone := make(chan error, 1)
 		rs.RegisterRequestHandler(func(_ context.Context, request RPCMessage, _ uint64, cs ClientSession) error {
 			assert.NoError(t, c.Close())
+			// The peer may still accept a write briefly after the client closes;
+			// transport buffering does not guarantee an immediate write error.
 			err := cs.Write(ctx, request.Message)
-			assert.Error(t, err)
+			handlerDone <- err
 			return err
 		})
 
@@ -114,8 +117,13 @@ func TestHandleServerWriteWithClosedSession(t *testing.T) {
 
 		defer f.Close()
 		resp, err := f.Get()
-		assert.Error(t, ctx.Err(), err)
+		assert.ErrorIs(t, err, backendClosed)
 		assert.Nil(t, resp)
+		select {
+		case <-handlerDone:
+		case <-ctx.Done():
+			t.Fatal("server handler did not finish after client close")
+		}
 	})
 }
 
@@ -821,6 +829,59 @@ func TestCannotGetClosedBackend(t *testing.T) {
 
 		require.NoError(t, c.Ping(ctx, testAddr))
 	})
+}
+
+func TestCloseStreamWithCloseConnNotifiesReceiver(t *testing.T) {
+	testRPCServer(t, func(_ *server) {
+		c := newTestClient(t)
+		defer func() {
+			assert.NoError(t, c.Close())
+		}()
+
+		st, err := c.NewStream(context.Background(), testAddr, true)
+		require.NoError(t, err)
+		recv, err := st.Receive()
+		require.NoError(t, err)
+
+		// Do not start the receiver before Close. This deterministically covers
+		// the race where the backend's first nil notification is still buffered
+		// and stream.Close used to drain it without publishing another one.
+		require.NoError(t, st.Close(true))
+		select {
+		case message := <-recv:
+			require.Nil(t, message)
+		case <-time.After(time.Second):
+			t.Fatal("stream receiver was not notified after closing the connection")
+		}
+	})
+}
+
+func TestCloseStreamUnregistersWithoutStreamLock(t *testing.T) {
+	c := make(chan Message, 1)
+	s := newStream(
+		nil,
+		c,
+		func() *Future { return newFuture(nil) },
+		func(*Future) error { return nil },
+		func(st *stream) {
+			// Backend cancellation enters stream from rb.mu. Requiring the stream
+			// lock here proves Close does not keep the inverse s.mu -> rb.mu order
+			// across unregister.
+			st.mu.RLock()
+			st.mu.RUnlock()
+		},
+		func() {},
+	)
+	s.init(1, false)
+
+	done := make(chan error, 1)
+	go func() { done <- s.Close(false) }()
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("stream close held the stream lock while unregistering")
+	}
 }
 
 func TestPingError(t *testing.T) {

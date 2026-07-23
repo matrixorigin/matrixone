@@ -107,6 +107,8 @@ func (s *Scope) Reset(c *Compile) error {
 }
 
 func (s *Scope) resetForReuse(c *Compile) (err error) {
+	s.resourceExecutedLocally = false
+
 	if err = vm.HandleAllOp(s.RootOp, func(parentOp vm.Operator, op vm.Operator) error {
 		if op.OpType() == vm.Output {
 			op.(*output.Output).Func = c.fill
@@ -419,6 +421,8 @@ func cleanPipelineWitchStartFail(sp *Scope, fail error, isPrepare bool) {
 
 // RemoteRun send the scope to a remote node for execution.
 func (s *Scope) RemoteRun(c *Compile) error {
+	s.resourceExecutedLocally = false
+
 	if s.ScopeAnalyzer == nil {
 		s.ScopeAnalyzer = NewScopeAnalyzer()
 	}
@@ -435,18 +439,9 @@ func (s *Scope) RemoteRun(c *Compile) error {
 		return s.failRemoteRunBeforeStart(c, err)
 	}
 
-	// In fact, it's not a safe way to convert this pipeline to run at local.
-	//
-	// Just image this case,
-	// pipelineA holds an operator `dispatch d1`, d1 want to send data to pipelineB at node1.
-	// for this operator `d1`, it takes a remote-receiver (the pipelineB), and it will call a rpc for sending.
-	// but now, the pipelineB is not a remote-receiver but in local, the rpc will fail and the B cannot receive anything.
-	// This will cause a hung.
-	//
-	// we should avoid to generate this format pipeline, or do a suitable conversion for the dispatch operator,
-	// or refactor the dispatch operator for no need to know a receiver is local or remote.
 	if !checkPipelineStandaloneExecutableAtRemote(s) {
-		return s.MergeRun(c)
+		return s.failRemoteRunBeforeStart(c, moerr.NewInternalErrorNoCtxf(
+			"remote pipeline for CN %q is not standalone executable", s.NodeInfo.Addr))
 	}
 	runtime.ServiceRuntime(s.Proc.GetService()).Logger().
 		Debug("remote run pipeline",
@@ -480,6 +475,9 @@ func (s *Scope) RemoteRun(c *Compile) error {
 }
 
 func (s *Scope) failRemoteRunBeforeStart(c *Compile, err error) error {
+	if c != nil && c.proc != nil && c.proc.Cancel != nil {
+		c.proc.Cancel(err)
+	}
 	cleanPipelineWitchStartFail(s, err, c.isPrepare)
 	return err
 }

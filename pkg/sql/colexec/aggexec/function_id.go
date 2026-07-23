@@ -55,5 +55,5 @@ const (
 	AggIdOfJsonObjectAgg       int64 = 401 << 32
 	AggIdOfHllAdd              int64 = 453 << 32
 	AggIdOfHllMerge            int64 = 454 << 32
-	AggIdOfApproxPercentile    int64 = 549 << 32
+	AggIdOfApproxPercentile    int64 = 550 << 32
 )

@@ -107,12 +107,11 @@ func (tc *TableClone) Reset(proc *process.Process, pipelineFailed bool, err erro
 }
 
 func (tc *TableClone) String(buf *bytes.Buffer) {
-	//TODO implement me
-	panic("implement me")
+	buf.WriteString("TableClone")
 }
 
 func (tc *TableClone) OpType() vm.OpType {
-	return 0
+	return vm.TableClone
 }
 
 func initRelAndReader(
@@ -230,8 +229,8 @@ func (tc *TableClone) Prepare(proc *process.Process) error {
 	txnMeta := proc.GetTxnOperator().Txn()
 	proc.GetTxnOperator().GetWorkspace().SetCloneTxn(txnMeta.SnapshotTS.PhysicalTime)
 
-	tc.dataObjBat = colexec.AllocCNS3ResultBat(false, false)
-	tc.tombstoneObjBat = colexec.AllocCNS3ResultBat(true, false)
+	tc.dataObjBat = colexec.AllocCNS3ResultBat(false)
+	tc.tombstoneObjBat = colexec.AllocCNS3ResultBat(true)
 
 	tc.srcRel = make(map[string]engine.Relation)
 	tc.srcReader = make(map[string]engine.Reader)

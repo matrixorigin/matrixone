@@ -113,6 +113,16 @@ func (bj *ByteJson) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+func (bj *ByteJson) unmarshalJSONWithDepthLimit(data []byte, maxDepth int) error {
+	bs, err := parseJsonByte(data, maxDepth)
+	if err != nil {
+		return err
+	}
+	bj.Data = bs[1:]
+	bj.Type = TpCode(bs[0])
+	return nil
+}
+
 func (bj ByteJson) IsNull() bool {
 	return bj.Type == TpCodeLiteral && bj.Data[0] == LiteralNull
 }
@@ -371,13 +381,14 @@ func (bj ByteJson) query(cur []ByteJson, path *Path) []ByteJson {
 				cur = bj.query(cur, &nPath)
 			}
 		case subPathRange:
-			se := sub.iRange.genRange(bj.GetElemCnt())
-			if se[0] == 0 {
+			if sub.iRange.matchesIndex(0, 1) {
 				cur = bj.query(cur, &nPath)
 			}
 		case subPathKey:
-			tmp := bj.queryValByKey(util.UnsafeStringToBytes(sub.key))
-			cur = tmp.query(cur, &nPath)
+			tmp, exists := bj.queryValByKeyExists(util.UnsafeStringToBytes(sub.key))
+			if exists {
+				cur = tmp.query(cur, &nPath)
+			}
 		case subPathKeyWildcard:
 			cnt := bj.GetElemCnt()
 			for i := 0; i < cnt; i++ {
@@ -393,8 +404,6 @@ func (bj ByteJson) query(cur []ByteJson, path *Path) []ByteJson {
 		case subPathIdx:
 			idx, _, last := sub.idx.genIndex(cnt)
 			if last && idx < 0 || cnt <= idx {
-				tmp := ByteJson{Type: TpCodeLiteral, Data: []byte{LiteralNull}}
-				cur = append(cur, tmp)
 				return cur
 			}
 			if idx == subPathIdxALL {
@@ -405,42 +414,53 @@ func (bj ByteJson) query(cur []ByteJson, path *Path) []ByteJson {
 				cur = bj.getArrayElem(idx).query(cur, &nPath)
 			}
 		case subPathRange:
+			if cnt == 0 {
+				return cur
+			}
 			se := sub.iRange.genRange(cnt)
-			if se[0] == subPathIdxErr {
-				tmp := ByteJson{Type: TpCodeLiteral, Data: []byte{LiteralNull}}
-				cur = append(cur, tmp)
+			if se[0] < 0 || se[1] < 0 {
 				return cur
 			}
 			for i := se[0]; i <= se[1]; i++ {
 				cur = bj.getArrayElem(i).query(cur, &nPath)
 			}
 		}
+		return cur
+	}
+	if sub.tp == subPathIdx {
+		idx, _, _ := sub.idx.genIndex(1)
+		if idx == 0 {
+			return bj.query(cur, &nPath)
+		}
+	}
+	if sub.tp == subPathRange && sub.iRange.matchesIndex(0, 1) {
+		return bj.query(cur, &nPath)
 	}
 	return cur
 }
 
 func (bj ByteJson) Query(paths []*Path) ByteJson {
+	result, _ := bj.QueryWithExists(paths)
+	return result
+}
+
+// QueryWithExists returns the selected JSON value and whether any path matched.
+// A matched JSON literal null is a value and therefore returns exists=true.
+func (bj ByteJson) QueryWithExists(paths []*Path) (ByteJson, bool) {
 	out := make([]ByteJson, 0, len(paths))
 	for _, path := range paths {
 		tmp := bj.query(nil, path)
 		if len(tmp) > 0 {
-			allNull := checkAllNull(tmp)
-			if !allNull {
-				out = append(out, tmp...)
-			}
+			out = append(out, tmp...)
 		}
 	}
 	if len(out) == 0 {
-		return ByteJson{Type: TpCodeLiteral, Data: []byte{LiteralNull}}
+		return Null, false
 	}
-	if len(out) == 1 && len(paths) == 1 {
-		return out[0]
+	if len(out) == 1 && len(paths) == 1 && !paths[0].mayReturnMultiple() {
+		return out[0], true
 	}
-	allNull := checkAllNull(out)
-	if allNull {
-		return ByteJson{Type: TpCodeLiteral, Data: []byte{LiteralNull}}
-	}
-	return mergeToArray(out)
+	return mergeToArray(out), true
 }
 
 // PathExists reports whether path selects at least one JSON value. A selected
@@ -602,27 +622,31 @@ func (bj ByteJson) querySimpleExist(path *Path, autowrapScalarIndex bool) (ByteJ
 }
 
 func (bj ByteJson) QuerySimple(paths []*Path) ByteJson {
+	result, _ := bj.QuerySimpleWithExists(paths)
+	return result
+}
+
+// QuerySimpleWithExists is the simple-path variant of QueryWithExists.
+func (bj ByteJson) QuerySimpleWithExists(paths []*Path) (ByteJson, bool) {
 	if len(paths) == 0 {
 		// not retrieve anything
-		return Null
+		return Null, false
 	} else if len(paths) == 1 {
 		// only retrieve one path
-		return bj.querySimple(paths[0])
+		return bj.querySimpleExist(paths[0], true)
 	} else {
 		// retrieve multiple paths, merge them into an array
 		out := make([]ByteJson, 0, len(paths))
 		for _, path := range paths {
-			tmp := bj.querySimple(path)
-			// strange behavior, skipping Null value.
-			if !tmp.IsNull() {
+			tmp, exists := bj.querySimpleExist(path, true)
+			if exists {
 				out = append(out, tmp)
 			}
 		}
-		// strange behavior, we actually return Null instead of an array of nulls.
-		if checkAllNull(out) {
-			return Null
+		if len(out) == 0 {
+			return Null, false
 		}
-		return mergeToArray(out)
+		return mergeToArray(out), true
 	}
 }
 
@@ -900,7 +924,11 @@ func ParseJsonByteFromString(s string) ([]byte, error) {
 }
 
 func ParseJsonByte(data []byte) ([]byte, error) {
-	n, err := ParseNode(data)
+	return parseJsonByte(data, 0)
+}
+
+func parseJsonByte(data []byte, maxDepth int) ([]byte, error) {
+	n, err := parseNode(data, maxDepth)
 	if err != nil {
 		return nil, err
 	}
@@ -920,16 +948,22 @@ func ParseNodeString(s string) (Node, error) {
 }
 
 func ParseNode(data []byte) (Node, error) {
-	p := parser{src: data}
+	return parseNode(data, 0)
+}
+
+func parseNode(data []byte, maxDepth int) (Node, error) {
+	p := parser{src: data, maxDepth: maxDepth}
 	return p.do()
 }
 
 type parser struct {
-	src   []byte
-	stack []*Group
-	tz    *json2.Tokenizer
-	state func(*parser) int
-	top   Node
+	src      []byte
+	stack    []*Group
+	tz       *json2.Tokenizer
+	state    func(*parser) int
+	top      Node
+	maxDepth int
+	depthErr error
 }
 
 func (p *parser) do() (Node, error) {
@@ -949,6 +983,9 @@ func (p *parser) do() (Node, error) {
 			for _, g := range p.stack {
 				g.free()
 			}
+			if p.depthErr != nil {
+				return z, p.depthErr
+			}
 			if errors.Is(p.tz.Err, io.EOF) {
 				return z, io.ErrUnexpectedEOF
 			}
@@ -960,9 +997,12 @@ func (p *parser) do() (Node, error) {
 		case scanEnd:
 			if p.tz.Next() {
 				p.top.Free()
+				p.top = Node{}
 				return z, moerr.NewInvalidInputNoCtxf("invalid json: %s", p.src)
 			}
 			if p.tz.Err != nil {
+				p.top.Free()
+				p.top = Node{}
 				return z, moerr.NewInternalErrorNoCtxf("parse json: %v", p.tz.Err)
 			}
 			return p.top, nil
@@ -981,11 +1021,15 @@ func (p *parser) stateBeginValue() int {
 
 	switch k.Class() {
 	case json2.Array:
-		p.openGroup(k)
+		if !p.openGroup(k) {
+			return scanError
+		}
 		p.state = (*parser).stateBeginValueOrEmpty
 		return scanContinue
 	case json2.Object:
-		p.openGroup(k)
+		if !p.openGroup(k) {
+			return scanError
+		}
 		p.state = (*parser).stateObjectKeyOrEmpty
 		return scanContinue
 	}
@@ -1077,10 +1121,16 @@ func (p *parser) stateEndValue() int {
 	return scanError
 }
 
-func (p *parser) openGroup(k json2.Kind) {
+func (p *parser) openGroup(k json2.Kind) bool {
+	if p.maxDepth > 0 && len(p.stack) >= p.maxDepth {
+		p.depthErr = newJSONDocumentDepthError(p.maxDepth)
+		p.tz.Err = p.depthErr
+		return false
+	}
 	g := reuse.Alloc[Group](nil)
 	g.Obj = k == json2.Object
 	p.stack = append(p.stack, g)
+	return true
 }
 
 func (p *parser) closeGroup() {

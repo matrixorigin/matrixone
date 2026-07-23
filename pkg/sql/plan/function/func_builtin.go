@@ -17,7 +17,6 @@ package function
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"math"
 	"math/rand"
@@ -2987,6 +2986,9 @@ func builtInSerialExtract(parameters []*vector.Vector, result vector.FunctionRes
 	case types.T_timestamp:
 		rs := vector.MustFunctionResult[types.Timestamp](result)
 		return serialExtractExceptStrings(p1, p2, rs, proc, length, selectList)
+	case types.T_uuid:
+		rs := vector.MustFunctionResult[types.Uuid](result)
+		return serialExtractExceptStrings(p1, p2, rs, proc, length, selectList)
 
 	case types.T_json, types.T_char, types.T_varchar, types.T_text,
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_geometry, types.T_array_float32, types.T_array_float64, types.T_datalink:
@@ -3007,7 +3009,7 @@ func getConstInt64(p vector.FunctionParameterWrapper[int64]) (int64, bool) {
 	return 0, false
 }
 
-func serialExtractExceptStrings[T types.Number | bool | types.Date | types.Datetime | types.Time | types.Timestamp](
+func serialExtractExceptStrings[T types.Number | bool | types.Date | types.Datetime | types.Time | types.Timestamp | types.Uuid](
 	p1 vector.FunctionParameterWrapper[types.Varlena],
 	p2 vector.FunctionParameterWrapper[int64],
 	result *vector.FunctionResult[T], proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -3768,13 +3770,13 @@ func builtInToLower(parameters []*vector.Vector, result vector.FunctionResultWra
 
 // buildInMOCU extract cu or calculate cu from parameters
 // example:
-// - select mo_cu('[1,2,3,4,5,6,7,8]', 134123)
-// - select mo_cu('[1,2,3,4,5,6,7,8]', 134123, 'total')
-// - select mo_cu('[1,2,3,4,5,6,7,8]', 134123, 'cpu')
-// - select mo_cu('[1,2,3,4,5,6,7,8]', 134123, 'mem')
-// - select mo_cu('[1,2,3,4,5,6,7,8]', 134123, 'ioin')
-// - select mo_cu('[1,2,3,4,5,6,7,8]', 134123, 'ioout')
-// - select mo_cu('[1,2,3,4,5,6,7,8]', 134123, 'network')
+// - select mo_cu('[6,2,3,4,5,6,2,7,8,9,10,0,11,12,13,14,1]', 134123)
+// - select mo_cu('[6,2,3,4,5,6,2,7,8,9,10,0,11,12,13,14,1]', 134123, 'total')
+// - select mo_cu('[6,2,3,4,5,6,2,7,8,9,10,0,11,12,13,14,1]', 134123, 'cpu')
+// - select mo_cu('[6,2,3,4,5,6,2,7,8,9,10,0,11,12,13,14,1]', 134123, 'mem')
+// - select mo_cu('[6,2,3,4,5,6,2,7,8,9,10,0,11,12,13,14,1]', 134123, 'ioin')
+// - select mo_cu('[6,2,3,4,5,6,2,7,8,9,10,0,11,12,13,14,1]', 134123, 'ioout')
+// - select mo_cu('[6,2,3,4,5,6,2,7,8,9,10,0,11,12,13,14,1]', 134123, 'network')
 func buildInMOCU(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return buildInMOCUWithCfg(parameters, result, proc, length, nil)
 }
@@ -3820,12 +3822,26 @@ func buildInMOCUWithCfg(parameters []*vector.Vector, result vector.FunctionResul
 			continue
 		}
 
-		if err := json.Unmarshal(statsJsonArrayStr, &stats); err != nil {
+		decoded, err := statistic.DecodeStatsArray(statsJsonArrayStr)
+		if err != nil {
 			rs.Append(float64(0), true)
-			//return moerr.NewInternalError(proc.Ctx, "failed to parse json arr: %v", err)
+			continue
+		}
+		stats = decoded
+
+		targetName := util.UnsafeBytesToString(target)
+		if stats.GetVersion() >= statistic.StatsArrayVersion6 {
+			if stats.IsAggregated() && (targetName != "total" || cfg != nil) {
+				rs.Append(float64(0), true)
+				continue
+			}
+			if targetName == "total" && cfg == nil {
+				rs.Append(stats.GetCU(), false)
+				continue
+			}
 		}
 
-		switch util.UnsafeBytesToString(target) {
+		switch targetName {
 		case "cpu":
 			cu = motrace.CalculateCUCpu(int64(stats.GetTimeConsumed()), cfg)
 		case "mem":

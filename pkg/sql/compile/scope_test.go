@@ -58,13 +58,17 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/testutil/testengine"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
+
+func GetFilePath() string {
+	dir, _ := os.Getwd()
+	return dir
+}
 
 func checkSrcOpsWithDst(srcRoot vm.Operator, dstRoot vm.Operator) bool {
 	if srcRoot == nil && dstRoot == nil {
@@ -93,10 +97,9 @@ func checkSrcOpsWithDst(srcRoot vm.Operator, dstRoot vm.Operator) bool {
 func TestScopeSerialization(t *testing.T) {
 	testCases := []string{
 		"select 1",
-		"select * from R",
-		//	"select count(*) from R",  todo, because MemRelationData.MarshalBinary() is not support now
-		"select * from R limit 2, 1",
-		"select * from R left join S on R.uid = S.uid",
+		"select * from nation",
+		"select * from nation limit 2, 1",
+		"select * from nation left join region on nation.n_regionkey = region.r_regionkey",
 	}
 
 	var sourceScopes = generateScopeCases(t, testCases)
@@ -127,7 +130,7 @@ func TestScopeSerialization(t *testing.T) {
 func TestCompileOrderByLimitOffsetUsesTopCandidateBudget(t *testing.T) {
 	catalog.SetupDefines("")
 	scope := generateScopeCases(t, []string{
-		"select uid from R order by uid limit 2 + 3 offset 0 + 2",
+		"select n_regionkey from nation order by n_regionkey limit 2 + 3 offset 0 + 2",
 	})[0]
 
 	var topLimits []uint64
@@ -260,7 +263,13 @@ func generateScopeCases(t *testing.T, testCases []string) []*Scope {
 		txnCli, txnOp := newTestTxnClientAndOp(ctrl)
 		proc.Base.TxnClient = txnCli
 		proc.Base.TxnOperator = txnOp
-		e, _, compilerCtx := testengine.New(defines.AttachAccountId(context.Background(), catalog.System_Account))
+		e := newStubEngine()
+		db := newStubDatabase("tpch")
+		db.rels["nation"] = newStubRelation("nation")
+		db.rels["region"] = newStubRelation("region")
+		e.dbs["tpch"] = db
+		compilerCtx := plan2.NewMockCompilerContext(true)
+		compilerCtx.SetContext(defines.AttachAccountId(context.Background(), catalog.System_Account))
 		opt := plan2.NewBaseOptimizer(compilerCtx)
 		ctx := compilerCtx.GetContext()
 		stmts, err := mysql.Parse(ctx, sql, 1)
@@ -269,7 +278,7 @@ func generateScopeCases(t *testing.T, testCases []string) []*Scope {
 		require.NoError(t1, err)
 		proc.Ctx = ctx
 		proc.ReplaceTopCtx(ctx)
-		c := NewCompile("test", "test", sql, "", "", e, proc, nil, false, nil, time.Now())
+		c := NewCompile("test", "tpch", sql, "", "", e, proc, nil, false, nil, time.Now())
 		qry.Nodes[0].Stats.Cost = 10000000 // to hint this is ap query for unit test
 		err = c.Compile(ctx, &plan.Plan{Plan: &plan.Plan_Query{Query: qry}}, func(batch *batch.Batch, crs *perfcounter.CounterSet) error {
 			return nil
@@ -1868,13 +1877,17 @@ func TestCleanPipelineWitchStartFail(t *testing.T) {
 
 func TestRemoteRunMalformedAddressTerminatesReceiver(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	proc.BuildPipelineContext(context.Background())
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	proc.Ctx = ctx
+	proc.BuildPipelineContext(ctx)
 	reg := process.NewPipelineEdge(1, 0)
+	dispatchOp := dispatch.NewArgument()
+	dispatchOp.LocalRegs = []*process.WaitRegister{reg}
 	s := &Scope{
 		Magic:    Remote,
 		NodeInfo: engine.Node{Addr: "malformed-remote-address"},
 		Proc:     proc,
-		RootOp:   connector.NewArgument().WithReg(reg),
+		RootOp:   dispatchOp,
 	}
 	c := &Compile{proc: proc, addr: "local:6001"}
 
@@ -1887,6 +1900,37 @@ func TestRemoteRunMalformedAddressTerminatesReceiver(t *testing.T) {
 		require.ErrorIs(t, signalErr, err)
 	case <-time.After(time.Second):
 		t.Fatal("malformed remote start failure did not terminate its receiver")
+	}
+}
+
+func TestRemoteRunNonStandalonePipelineFailsInsteadOfExecutingOnWrongCN(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	proc.Ctx = ctx
+	proc.BuildPipelineContext(ctx)
+	proc.Base.TxnOperator = fakeTxnOperator{}
+	reg := process.NewPipelineEdge(1, 0)
+	rootProc := proc.NewContextChildProc(1)
+	preProc := proc.NewContextChildProc(0)
+	preDispatch := dispatch.NewArgument()
+	preDispatch.LocalRegs = []*process.WaitRegister{reg}
+	pre := &Scope{Magic: Remote, NodeInfo: engine.Node{Addr: "remote:6001"}, Proc: preProc, RootOp: preDispatch}
+	s := &Scope{
+		Magic:     Remote,
+		NodeInfo:  engine.Node{Addr: "remote:6001"},
+		Proc:      rootProc,
+		RootOp:    dispatch.NewArgument(),
+		PreScopes: []*Scope{pre},
+	}
+	c := &Compile{proc: proc, addr: "local:6001"}
+
+	err := s.RemoteRun(c)
+	require.ErrorContains(t, err, "not standalone executable")
+	select {
+	case <-proc.Ctx.Done():
+		require.ErrorIs(t, context.Cause(proc.Ctx), err)
+	case <-time.After(time.Second):
+		t.Fatal("non-standalone remote start failure did not cancel sibling pipelines")
 	}
 }
 
@@ -1944,10 +1988,9 @@ func TestScopeGetRelDataError(t *testing.T) {
 
 	// Create a mock compile with engine
 	catalog.SetupDefines("")
-	e, _, _ := testengine.New(defines.AttachAccountId(context.Background(), catalog.System_Account))
 	c := NewMockCompile(t)
 	c.proc = s.Proc
-	c.e = e
+	c.e = newStubEngine()
 
 	// Test case: error when expanding ranges
 	err := s.getRelData(c, nil)

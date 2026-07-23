@@ -487,6 +487,16 @@ func TestDataBranchDiffColumns(t *testing.T) {
 	require.NotNil(t, diffStmt.OutputOpt.Limit)
 	require.Equal(t, int64(10), *diffStmt.OutputOpt.Limit)
 
+	// COLUMNS with OUTPUT AS preserves both the projection and qualified result table.
+	stmt, err = ParseOne(context.TODO(), "data branch diff t1 against t2 columns (name, id) output as out_db.diff_out", 1)
+	require.NoError(t, err)
+	diffStmt, ok = stmt.(*tree.DataBranchDiff)
+	require.True(t, ok)
+	require.Equal(t, tree.IdentifierList{tree.Identifier("name"), tree.Identifier("id")}, diffStmt.Columns)
+	require.NotNil(t, diffStmt.OutputOpt)
+	require.Equal(t, tree.Identifier("out_db"), diffStmt.OutputOpt.As.SchemaName)
+	require.Equal(t, tree.Identifier("diff_out"), diffStmt.OutputOpt.As.ObjectName)
+
 	// COLUMNS with snapshot and output file
 	stmt, err = ParseOne(context.TODO(), `data branch diff t1{snapshot="sp1"} against t2{snapshot="sp2"} columns (x) output file '/tmp/'`, 1)
 	require.NoError(t, err)
@@ -4137,6 +4147,21 @@ func TestValid(t *testing.T) {
 			t.Errorf("Parsing failed. \nExpected/Got:\n%s\n%s", tcase.output, out)
 		}
 		ast.StmtKind()
+	}
+}
+
+func TestQuotedUnicodeIdentifierAliases(t *testing.T) {
+	for _, sql := range []string{
+		"SELECT 1 AS `الكمية`",
+		"SELECT 1 AS `数量`",
+		"SELECT 1 AS `\xe9`",
+		"SELECT 1 AS `\xe9``name`",
+		"SELECT 1 AS `\xf0\x9f\x98\x80`",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			_, err := ParseOne(context.Background(), sql, 1)
+			require.NoError(t, err)
+		})
 	}
 }
 

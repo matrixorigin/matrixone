@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -177,6 +178,59 @@ func TestShufflePoolBoundsReadyBatchesAndResumes(t *testing.T) {
 	peak, ownsStats := sp.release(proc.Mp(), false)
 	require.True(t, ownsStats)
 	require.Positive(t, peak)
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestShufflePoolFixedBucketsHaveIndependentBackpressure(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	sp := NewShufflePool(2, 2, false)
+
+	input := testutil.NewBatch(
+		[]types.Type{types.T_int64.ToType()}, false, objectio.BlockMaxRows, proc.Mp())
+	defer input.Clean(proc.Mp())
+
+	// Fill bucket 0 until its writer is backpressured. With the old global
+	// credit pool, this also exhausted the credits needed by every other bucket.
+	var bucket0Waiter <-chan struct{}
+	for attempts := 0; attempts <= sp.readyLimit; attempts++ {
+		sels := make([][]int32, sp.bucketNum)
+		sels[0] = make([]int32, input.RowCount())
+		for i := range sels[0] {
+			sels[0][i] = int32(i)
+		}
+		_, _, waiter, done, err := sp.tryWrite(input, sels, 0, 0, proc)
+		require.NoError(t, err)
+		if !done {
+			bucket0Waiter = waiter
+			break
+		}
+	}
+	require.NotNil(t, bucket0Waiter)
+
+	// Bucket 1 has its own consumer and capacity. A hot bucket must not prevent
+	// publishing a batch that can wake this independent consumer.
+	done, err := writeBatchToBucketForTest(sp, input, proc, 1)
+	require.NoError(t, err)
+	require.True(t, done)
+	require.Equal(t, 3, sp.readyCount)
+
+	bat := sp.getFullBatch(0)
+	require.NotNil(t, bat)
+	sp.discardBatch(bat, proc.Mp())
+	select {
+	case <-bucket0Waiter:
+	default:
+		t.Fatal("draining a fixed bucket did not wake that bucket's writer")
+	}
+
+	for bucket := int32(0); bucket < sp.bucketNum; bucket++ {
+		for bat = sp.getFullBatch(bucket); bat != nil; bat = sp.getFullBatch(bucket) {
+			sp.discardBatch(bat, proc.Mp())
+		}
+	}
+	require.Zero(t, sp.readyCount)
+	sp.abort(proc.Mp())
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
@@ -402,7 +456,7 @@ func TestShufflePoolEndWakesEveryAllBucketDrainer(t *testing.T) {
 	}
 }
 
-func TestShufflePrepareRejectsAbortedSharedPool(t *testing.T) {
+func TestVMPrepareRejectsAbortedSharedPool(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
 	sp := NewShufflePool(1, 1, false)
@@ -412,8 +466,14 @@ func TestShufflePrepareRejectsAbortedSharedPool(t *testing.T) {
 	arg.BucketNum = 1
 	arg.SetShufflePool(sp)
 
-	err := arg.Prepare(proc)
+	err := vm.Prepare(arg, proc)
 	require.Error(t, err)
+	producerCtx := arg.ctr.producerProc.Ctx
 	arg.Reset(proc, true, err)
+	select {
+	case <-producerCtx.Done():
+	default:
+		t.Fatal("failed VM preparation leaked the producer context")
+	}
 	arg.Free(proc, true, err)
 }

@@ -315,7 +315,9 @@ func (update *MultiUpdate) updateFlushS3Info(proc *process.Process, analyzer pro
 
 			crs := analyzer.GetOpCounterSet()
 			newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
-			err = source.Delete(newCtx, batBufs[actionDelete], name)
+			err = process.MeasureFilesystemWaitErr(analyzer, func() error {
+				return source.Delete(newCtx, batBufs[actionDelete], name)
+			})
 			if err != nil {
 				return input, err
 			}
@@ -323,9 +325,6 @@ func (update *MultiUpdate) updateFlushS3Info(proc *process.Process, analyzer pro
 				update.addDeleteAffectRows(tableType, rowCounts[i])
 			}
 			analyzer.AddDeletedRows(int64(batBufs[actionDelete].RowCount()))
-			analyzer.AddS3RequestCount(crs)
-			analyzer.AddFileServiceCacheInfo(crs)
-			analyzer.AddDiskIO(crs)
 
 		case actionInsert:
 			if batBufs[actionInsert] == nil {
@@ -345,14 +344,13 @@ func (update *MultiUpdate) updateFlushS3Info(proc *process.Process, analyzer pro
 
 			crs := analyzer.GetOpCounterSet()
 			newCtx := perfcounter.AttachS3RequestKey(ctx, crs)
-			err = source.Write(newCtx, batBufs[actionInsert])
+			err = process.MeasureFilesystemWaitErr(analyzer, func() error {
+				return source.Write(newCtx, batBufs[actionInsert])
+			})
 			if err != nil {
 				return input, err
 			}
 			analyzer.AddWrittenRows(int64(batBufs[actionInsert].RowCount()))
-			analyzer.AddS3RequestCount(crs)
-			analyzer.AddFileServiceCacheInfo(crs)
-			analyzer.AddDiskIO(crs)
 
 		case actionUpdate:
 			if batBufs[actionUpdate] == nil {

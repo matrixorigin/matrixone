@@ -36,6 +36,48 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
+type rootSQLCompilerContext struct {
+	*MockCompilerContext
+	rootSQL string
+	calls   int
+}
+
+func (c *rootSQLCompilerContext) GetRootSql() string {
+	c.calls++
+	return c.rootSQL
+}
+
+func TestGenViewTableDefCapturesRootSQLOnce(t *testing.T) {
+	const rootSQL = "create view v as select 1"
+	ctx := &rootSQLCompilerContext{
+		MockCompilerContext: NewMockCompilerContext(false),
+		rootSQL:             rootSQL,
+	}
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, rootSQL, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	p, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+	require.Equal(t, 1, ctx.calls)
+	tableDef := p.GetDdl().GetCreateView().GetTableDef()
+	require.NotNil(t, tableDef)
+
+	var viewData ViewData
+	require.NoError(t, json.Unmarshal([]byte(tableDef.GetViewSql().GetView()), &viewData))
+	require.Equal(t, rootSQL, viewData.Stmt)
+
+	var createSQL string
+	for _, def := range tableDef.GetDefs() {
+		for _, property := range def.GetProperties().GetProperties() {
+			if property.GetKey() == catalog.SystemRelAttr_CreateSQL {
+				createSQL = property.GetValue()
+			}
+		}
+	}
+	require.Equal(t, rootSQL, createSQL)
+}
+
 func TestBuildAlterView(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -628,6 +670,26 @@ func TestCreateTableAsSelect(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	sqls := []string{"CREATE TABLE t1 (a int, b char(5)); CREATE TABLE t2 (c float) as select b, a from t1"}
 	runTestShouldPass(mock, t, sqls, false, false)
+}
+
+func TestPrepareCreateTableAsSelectWithParams(t *testing.T) {
+	mock := NewMockOptimizer(false)
+
+	prepared, err := runOneStmt(mock, t, "prepare stmt_ctas from 'create table ctas_p as select ? as a, ? as b'")
+	require.NoError(t, err)
+	prepare := prepared.GetDcl().GetPrepare()
+	require.Len(t, prepare.GetParamTypes(), 2)
+	require.NotNil(t, prepare.GetPlan().GetDdl().GetQuery())
+	require.Empty(t, GetResultColumnsFromPlan(prepare.GetPlan()))
+
+	prepared, err = runOneStmt(mock, t, "prepare stmt_ctas_where from 'create table ctas_where as select N_NAME from NATION where N_REGIONKEY = ?'")
+	require.NoError(t, err)
+	prepare = prepared.GetDcl().GetPrepare()
+	require.Len(t, prepare.GetParamTypes(), 1)
+	require.NotEmpty(t, prepare.GetSchemas())
+
+	_, err = runOneStmt(mock, t, "create table ctas_unprepared as select ? as a")
+	require.ErrorContains(t, err, "only prepare statement can use ? expr")
 }
 
 func TestCreateTableAsSelectQuotesIdentifiers(t *testing.T) {

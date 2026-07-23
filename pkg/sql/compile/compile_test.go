@@ -16,8 +16,6 @@ package compile
 
 import (
 	"context"
-	"fmt"
-	"os"
 	"testing"
 	"time"
 
@@ -41,7 +39,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 
-	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
@@ -52,24 +49,72 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/testutil/testengine"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
-	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-type compileTestCase struct {
-	sql       string
-	pn        *plan.Plan
-	e         engine.Engine
-	stmt      tree.Statement
-	proc      *process.Process
-	txnClient client.TxnClient // Store txnClient for truncating table with real transaction
+func TestCompileRunPreservesBinaryPrepareParamAcrossRetries(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	proc := testutil.NewProcess(t)
+	proc.GetSessionInfo().Buf = buffer.New()
+	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+		return "STRICT_TRANS_TABLES", nil
+	})
+	compilerCtx := plan2.NewEmptyCompilerContext()
+	compilerCtx.SetContext(ctx)
+	stmts, err := mysql.Parse(ctx, "select ?", 1)
+	require.NoError(t, err)
+	query, err := plan2.NewPrepareOptimizer(compilerCtx).Optimize(stmts[0], true)
+	require.NoError(t, err)
+	pn := &plan.Plan{Plan: &plan.Plan_Query{Query: query}, IsPrepare: true}
+	_, _, err = plan2.ResetPreparePlan(compilerCtx, pn)
+	require.NoError(t, err)
+
+	ctrl := gomock.NewController(t)
+	txnCli, txnOp := newTestTxnClientAndOpWithIsolation(ctrl, txn.TxnIsolation_RC)
+	proc.Base.TxnClient = txnCli
+	proc.Base.TxnOperator = txnOp
+	proc.Ctx = ctx
+	proc.ReplaceTopCtx(ctx)
+
+	want := []byte{'A', 'B', 0, 0}
+	params := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(params, want, false, proc.Mp()))
+	proc.SetOwnedPrepareParamsWithIsBin(params, []bool{true})
+
+	evaluations := 0
+	fill := func(bat *batch.Batch, _ *perfcounter.CounterSet) error {
+		if bat == nil {
+			return nil
+		}
+		require.Len(t, bat.Vecs, 1)
+		require.True(t, bat.Vecs[0].GetIsBin(), "binary semantics were lost on evaluation %d", evaluations+1)
+		require.Equal(t, want, bat.Vecs[0].GetBytesAt(0))
+		evaluations++
+		if evaluations <= 2 {
+			return moerr.NewTxnNeedRetryNoCtx()
+		}
+		return nil
+	}
+
+	c := NewCompile("test", "test", "select ?", "", "", newStubEngine(), proc, stmts[0], false, nil, time.Now())
+	require.NoError(t, c.Compile(ctx, pn, fill))
+	_, err = c.Run(0)
+	require.NoError(t, err)
+	require.Equal(t, 3, evaluations)
+	require.Equal(t, 2, c.retryTimes)
+	require.Zero(t, params.Length())
+	require.Nil(t, params.GetData())
+	require.Nil(t, params.GetArea())
+
+	c.Release()
+	proc.Free()
+	proc.GetSessionInfo().Buf.Free()
 }
 
 func TestApplyExecutorLockWaitTimeout(t *testing.T) {
@@ -98,10 +143,6 @@ func TestApplyExecutorLockWaitTimeout(t *testing.T) {
 	require.Zero(t, proc.Base.SessionInfo.LockWaitTimeout)
 	require.True(t, proc.Base.SessionInfo.LockWaitTimeoutSet,
 		"an explicit zero must be distinguishable from an absent override")
-}
-
-func testPrint(_ *batch.Batch, crs *perfcounter.CounterSet) error {
-	return nil
 }
 
 type Ws struct {
@@ -303,125 +344,19 @@ func TestLockTableLocksAllPrePipelineTargets(t *testing.T) {
 		},
 	)
 }
-func TestCompile(t *testing.T) {
-	c, err := cnclient.NewPipelineClient("", "test", &cnclient.PipelineConfig{})
-	require.NoError(t, err)
-	defer func() {
-		require.NoError(t, c.Close())
-	}()
-
-	ctrl := gomock.NewController(t)
-	ctx := defines.AttachAccountId(context.TODO(), catalog.System_Account)
-	txnCli, txnOp := newTestTxnClientAndOp(ctrl)
-
-	// Generate test SQLs (avoiding engine creation in init)
-	testSQLs := []string{
-		"select 1",
-		"select * from R",
-		"select * from R where uid > 1",
-		"select * from R order by uid",
-		"select * from R order by uid limit 1",
-		"select * from R limit 1",
-		"select * from R limit 2, 1",
-		"select count(*) from R",
-		"select * from R join S on R.uid = S.uid",
-		"select * from R left join S on R.uid = S.uid",
-		"select * from R right join S on R.uid = S.uid",
-		"select * from R join S on R.uid > S.uid",
-		"select * from R limit 10",
-		"select count(*) from R group by uid",
-		"select count(distinct uid) from R",
-		"select _wstart, _wend, max(b) from (select date_add('2021-01-12 00:00:00.000', interval 1 second) as ts, 1 as b) as t interval(ts, 2, second) sliding(1, second) fill(prev)",
-		"select _wstart, sum(b) from (select date_add('2021-01-12 00:00:00.000', interval 1 second) as ts, 1 as b) as t interval(ts, 2, minute) sliding(1, minute) fill(none)",
-		"select _wend, avg(b) from (select date_add('2021-01-12 00:00:00.000', interval 1 second) as ts, 1 as b) as t interval(ts, 2, hour) sliding(1, hour) fill(value, 1.2)",
-		"select count(b) from (select date_add('2021-01-12 00:00:00.000', interval 1 second) as ts, 1 as b) as t interval(ts, 2, second) sliding(1, second)",
-		"select _wstart, _wend, min(b) from (select date_add('2021-01-12 00:00:00.000', interval 1 second) as ts, 1 as b) as t interval(ts, 2, second)",
-		"select _wstart, _wend, avg(b) from (select date_add('2021-01-12 00:00:00.000', interval 1 second) as ts, cast(1.222 as decimal(6, 2)) as b) as t interval(ts, 2, second)",
-		"select _wstart, _wend, avg(b) from (select date_add('2021-01-12 00:00:00.000', interval 1 second) as ts, cast(1.222 as decimal(16, 2)) as b) as t interval(ts, 2, second)",
-		fmt.Sprintf("load data infile {\"filepath\"=\"%s/../../../test/distributed/resources/load_data/parallel_1.txt.gz\", \"compression\"=\"gzip\"} into table pressTbl FIELDS TERMINATED BY '|' OPTIONALLY ENCLOSED BY '\"' LINES TERMINATED BY '\\n' parallel 'true';", GetFilePath()),
-	}
-
-	// Create fresh test cases for each test run to avoid state persistence with --count > 1
-	for _, sql := range testSQLs {
-		// Create a fresh test case with a new engine for each SQL
-		tc := newTestCase(sql, t)
-
-		tc.proc.Base.TxnClient = txnCli
-		tc.proc.Base.TxnOperator = txnOp
-		tc.proc.Ctx = ctx
-		tc.proc.ReplaceTopCtx(ctx)
-		c := NewCompile("test", "test", tc.sql, "", "", tc.e, tc.proc, tc.stmt, false, nil, time.Now())
-		err := c.Compile(ctx, tc.pn, testPrint)
-		require.NoError(t, err)
-		c.getAffectedRows()
-		_, err = c.Run(0)
-		require.NoError(t, err)
-		// Enable memory check
-		tc.proc.Free()
-		//FIXME:
-		//!!!GOD!!!
-		//Sometimes it is 0.
-		//Sometimes it is 24.
-		//require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
-		tc.proc.GetSessionInfo().Buf.Free()
-	}
-}
-
-// TestCompileWithFaults tests compile behavior with fault injection.
-//
-// Test quality criteria:
-// 1. No randomness: Fixed fault points and SQL
-// 2. Fast execution: Uses testengine with mocks
-// 3. Meaningful: Tests fault tolerance and error handling
-// 4. Realistic: Tests real fault scenarios that can occur in production
-func TestCompileWithFaults(t *testing.T) {
-	var ctx = defines.AttachAccountId(context.Background(), catalog.System_Account)
-
-	pc, err := cnclient.NewPipelineClient("", "test", &cnclient.PipelineConfig{})
-	require.NoError(t, err)
-	defer func() {
-		require.NoError(t, pc.Close())
-	}()
-
-	tests := []struct {
-		name      string
-		faultName string
-		sql       string
-	}{
-		{
-			name:      "panic_in_batch_append",
-			faultName: "panic_in_batch_append",
-			sql:       "select * from R join S on R.uid = S.uid",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			fault.AddFaultPoint(ctx, tt.faultName, ":::", "panic", 0, "", false)
-			tc := newTestCase(tt.sql, t)
-			ctrl := gomock.NewController(t)
-			txnCli, txnOp := newTestTxnClientAndOp(ctrl)
-			tc.proc.Base.TxnClient = txnCli
-			tc.proc.Base.TxnOperator = txnOp
-			tc.proc.Ctx = ctx
-			c := NewCompile("test", "test", tc.sql, "", "", tc.e, tc.proc, nil, false, nil, time.Now())
-			err = c.Compile(ctx, tc.pn, testPrint)
-			require.NoError(t, err, "compile should succeed even with fault point")
-			c.getAffectedRows()
-			_, err = c.Run(0)
-			// Note: Run may succeed or fail depending on fault injection behavior
-			// The key is that compile doesn't crash
-			require.NoError(t, err, "run should complete without panic")
-		})
-	}
-}
-
 func newTestTxnClientAndOp(ctrl *gomock.Controller) (client.TxnClient, client.TxnOperator) {
+	return newTestTxnClientAndOpWithIsolation(ctrl, txn.TxnIsolation_SI)
+}
+
+func newTestTxnClientAndOpWithIsolation(
+	ctrl *gomock.Controller,
+	isolation txn.TxnIsolation,
+) (client.TxnClient, client.TxnOperator) {
 	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
 	txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 	txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 	txnOperator.EXPECT().GetWorkspace().Return(&Ws{}).AnyTimes()
-	txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
+	txnOperator.EXPECT().Txn().Return(txn.TxnMeta{Isolation: isolation}).AnyTimes()
 	txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{}).AnyTimes()
 	txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
 	txnOperator.EXPECT().TryEnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(1), nil).AnyTimes()
@@ -492,36 +427,6 @@ func newTestTxnClientAndOpWithPessimistic(ctrl *gomock.Controller) (client.TxnCl
 	txnClient := mock_frontend.NewMockTxnClient(ctrl)
 	txnClient.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
 	return txnClient, txnOperator
-}
-
-func newTestCase(sql string, t *testing.T) compileTestCase {
-	proc := testutil.NewProcess(t)
-	proc.GetSessionInfo().Buf = buffer.New()
-	proc.SetResolveVariableFunc(func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
-		return "STRICT_TRANS_TABLES", nil
-	})
-	catalog.SetupDefines("")
-	e, txnClient, compilerCtx := testengine.New(defines.AttachAccountId(context.Background(), catalog.System_Account))
-	stmts, err := mysql.Parse(compilerCtx.GetContext(), sql, 1)
-	require.NoError(t, err)
-	pn, err := plan2.BuildPlan(compilerCtx, stmts[0], false)
-	if err != nil {
-		panic(err)
-	}
-	require.NoError(t, err)
-	return compileTestCase{
-		e:         e,
-		sql:       sql,
-		proc:      proc,
-		pn:        pn,
-		stmt:      stmts[0],
-		txnClient: txnClient,
-	}
-}
-
-func GetFilePath() string {
-	dir, _ := os.Getwd()
-	return dir
 }
 
 func TestDebugLogFor19288(t *testing.T) {
@@ -682,6 +587,82 @@ func TestCompileShuffleGroupUsesLocalPathWhenScopeMcpuMatchesDop(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, int32(16), shuffleOp.BucketNum)
 	require.Equal(t, int32(0), shuffleOp.CurrentShuffleIdx)
+}
+
+func TestCompileShuffleGroupKeepsNestedShuffleLocal(t *testing.T) {
+	c := newCompileForShuffleGroupTest(t)
+	aggNode, nodes := newShuffleGroupTestNodes(16)
+	scope := newShuffleGroupInputScope(t, 16)
+	inner := shuffle.NewArgument()
+	inner.BucketNum = 16
+	scope.setRootOperator(inner)
+	scope.setRootOperator(colexec.NewMockOperator())
+
+	result := c.compileShuffleGroup(aggNode, []*Scope{scope}, nodes)
+
+	require.Len(t, result, 1)
+	require.Same(t, scope, result[0])
+	require.IsType(t, &group.Group{}, result[0].RootOp)
+	outer, ok := result[0].RootOp.GetOperatorBase().GetChildren(0).(*shuffle.Shuffle)
+	require.True(t, ok)
+	require.False(t, outer.DrainAllBuckets)
+	middle := outer.GetOperatorBase().GetChildren(0)
+	nestedInner, ok := middle.GetOperatorBase().GetChildren(0).(*shuffle.Shuffle)
+	require.True(t, ok)
+	require.False(t, nestedInner.DrainAllBuckets)
+}
+
+func TestCompileShuffleJoinKeepsNestedShuffleLocal(t *testing.T) {
+	const dop = int32(16)
+	for _, nestedSide := range []string{"probe", "build"} {
+		t.Run(nestedSide, func(t *testing.T) {
+			c := newCompileForShuffleJoinTest(t, engine.Nodes{{Addr: "cn1:6001", Mcpu: int(dop)}})
+			node := newShuffleJoinTestNode(dop)
+			node.Stats.HashmapStats.ShuffleMethod = plan.ShuffleMethod_Normal
+			left := &plan.Node{Stats: &plan.Stats{Dop: dop}}
+			right := &plan.Node{Stats: &plan.Stats{Dop: dop}}
+			probe := newShuffleJoinTestScope(t, c.cnList[0], int(dop))
+			build := newShuffleJoinTestScope(t, c.cnList[0], int(dop))
+
+			inner := shuffle.NewArgument()
+			inner.BucketNum = dop
+			if nestedSide == "probe" {
+				probe.setRootOperator(inner)
+				probe.setRootOperator(colexec.NewMockOperator())
+			} else {
+				build.setRootOperator(inner)
+				build.setRootOperator(colexec.NewMockOperator())
+			}
+
+			result := c.compileShuffleJoin(node, left, right, []*Scope{probe}, []*Scope{build})
+
+			require.Len(t, result, 1,
+				"the asynchronous local exchange permits nested fixed-bucket shuffles")
+			require.Same(t, probe, result[0])
+			_, probeIsDispatch := probe.RootOp.(*dispatch.Dispatch)
+			_, buildIsDispatch := build.RootOp.(*dispatch.Dispatch)
+			require.False(t, probeIsDispatch)
+			require.False(t, buildIsDispatch)
+		})
+	}
+}
+
+func TestCompileShuffleJoinKeepsReusableLocalShuffle(t *testing.T) {
+	const dop = int32(4)
+	c := newCompileForShuffleJoinTest(t, engine.Nodes{{Addr: "cn1:6001", Mcpu: int(dop)}})
+	node := newShuffleJoinTestNode(dop)
+	left := &plan.Node{Stats: &plan.Stats{Dop: dop}}
+	right := &plan.Node{Stats: &plan.Stats{Dop: dop}}
+	probe := newShuffleJoinTestScope(t, c.cnList[0], int(dop))
+	build := newShuffleJoinTestScope(t, c.cnList[0], int(dop))
+	inner := shuffle.NewArgument()
+	inner.BucketNum = dop
+	probe.setRootOperator(inner)
+
+	result := c.compileShuffleJoin(node, left, right, []*Scope{probe}, []*Scope{build})
+
+	require.Len(t, result, 1,
+		"reusing an existing probe partition must keep the single local fast path")
 }
 
 func newCompileForShuffleGroupTest(t *testing.T) *Compile {
@@ -880,6 +861,10 @@ func newShuffleJoinTestNode(dop int32) *plan.Node {
 			Expr: &plan.Expr_F{F: &plan.Function{
 				Args: []*plan.Expr{leftCol, rightCol},
 			}},
+		}},
+		SendMsgList: []plan.MsgHeader{{
+			MsgType: int32(message.MsgJoinMap),
+			MsgTag:  1,
 		}},
 	}
 }

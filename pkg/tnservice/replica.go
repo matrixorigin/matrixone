@@ -35,6 +35,7 @@ type replica struct {
 	logger       *log.MOLogger
 	shard        metadata.TNShard
 	service      service.TxnService
+	serviceC     chan struct{}
 	startedC     chan struct{}
 	createCtx    context.Context
 	cancelCreate context.CancelFunc
@@ -81,6 +82,7 @@ func newReplica(shard metadata.TNShard, rt runtime.Runtime) *replica {
 		rt:           rt,
 		shard:        shard,
 		logger:       rt.Logger().With(util.TxnTNShardField(shard)),
+		serviceC:     make(chan struct{}),
 		startedC:     make(chan struct{}),
 		createCtx:    ctx,
 		cancelCreate: cancel,
@@ -114,6 +116,7 @@ func (r *replica) startReserved(txnService service.TxnService) error {
 	}
 	r.service = txnService
 	r.mu.Unlock()
+	close(r.serviceC)
 
 	err := txnService.Start()
 	r.finishStart(err)
@@ -159,6 +162,30 @@ func (r *replica) close(destroy bool) error {
 	return r.closeErr
 }
 
+func (r *replica) cancelRecovery() {
+	r.mu.RLock()
+	starting := r.mu.starting
+	txnService := r.service
+	r.mu.RUnlock()
+	if !starting {
+		return
+	}
+	if txnService == nil {
+		// Once start is reserved, startReserved either publishes the service or
+		// finishStart reports that startup ended without one.
+		select {
+		case <-r.serviceC:
+		case <-r.startedC:
+		}
+		r.mu.RLock()
+		txnService = r.service
+		r.mu.RUnlock()
+	}
+	if txnService != nil {
+		txnService.CancelRecovery()
+	}
+}
+
 func (r *replica) closeOnceFn() error {
 	r.mu.RLock()
 	starting := r.mu.starting
@@ -166,6 +193,8 @@ func (r *replica) closeOnceFn() error {
 	if !starting {
 		return nil
 	}
+	// Recovery may block Start indefinitely while waiting for a participant.
+	r.cancelRecovery()
 
 	r.waitStartCompleted()
 	r.mu.Lock()
