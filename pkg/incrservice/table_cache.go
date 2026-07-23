@@ -115,7 +115,7 @@ func (c *tableCache) getLastAllocateTS(_ context.Context, colName string) (times
 		panic("column cache should not be nil, " + colName)
 	}
 	cc.RLock()
-	ts := cc.ranges.oldestAllocateAt()
+	ts := cc.oldestAllocateAtLocked()
 	cc.RUnlock()
 	// Log a warning if the allocation timestamp is empty, which may cause PrimaryKeysMayBeUpserted
 	// to scan a very large time range and impact performance.

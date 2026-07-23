@@ -403,6 +403,35 @@ func TestSetOffset(t *testing.T) {
 		})
 }
 
+func TestSetOffsetPreservesMaxUint64TerminalValue(t *testing.T) {
+	runServiceTests(
+		t,
+		1,
+		func(
+			ctx context.Context,
+			ss []*service,
+			ops []client.TxnOperator,
+		) {
+			s := ss[0]
+			def := newTestTableDef(1)
+			require.NoError(t, s.Create(ctx, 0, def, ops[0]))
+			require.NoError(t, ops[0].Commit(ctx))
+
+			require.NoError(t, s.SetOffset(ctx, 0, def[0].ColName, math.MaxUint64-1, nil))
+
+			input := newTestVector[uint64](1, types.New(types.T_uint64, 0, 0), nil, nil)
+			last, err := s.InsertValues(ctx, 0, 0, nil, []*vector.Vector{input}, 1, 0)
+			require.NoError(t, err)
+			require.Equal(t, uint64(math.MaxUint64), last)
+			require.Equal(t, uint64(math.MaxUint64), vector.MustFixedColWithTypeCheck[uint64](input)[0])
+
+			input = newTestVector[uint64](1, types.New(types.T_uint64, 0, 0), nil, nil)
+			_, err = s.InsertValues(ctx, 0, 0, nil, []*vector.Vector{input}, 1, 0)
+			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange))
+		})
+}
+
 func TestSetOffsetDoesNotReadCommittedColumns(t *testing.T) {
 	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 	store := &setOffsetStore{t: t}

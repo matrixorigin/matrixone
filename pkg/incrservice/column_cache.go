@@ -39,14 +39,17 @@ var (
 
 type columnCache struct {
 	sync.RWMutex
-	logger      *log.MOLogger
-	col         AutoColumn
-	cfg         Config
-	ranges      *ranges
-	allocator   valueAllocator
-	allocating  bool
-	allocatingC chan error
-	overflow    bool
+	logger        *log.MOLogger
+	col           AutoColumn
+	cfg           Config
+	ranges        *ranges
+	allocator     valueAllocator
+	allocating    bool
+	allocatingC   chan error
+	overflow      bool
+	terminal      bool
+	terminalValue uint64
+	terminalTS    timestamp.Timestamp
 	// For the load scenario, if the machine is good enough, there will be very many goroutines to
 	// concurrently fetch the value of the self-increasing column, which will immediately trigger
 	// the cache of the self-increasing column to be insufficient and thus go to the store to allocate
@@ -94,7 +97,13 @@ func (col *columnCache) current(ctx context.Context) (uint64, error) {
 	if err := col.waitPrevAllocatingLocked(ctx); err != nil {
 		return 0, err
 	}
-	return col.ranges.current(), nil
+	if v := col.ranges.current(); v != 0 {
+		return v, nil
+	}
+	if col.terminal {
+		return col.terminalValue, nil
+	}
+	return 0, nil
 }
 
 func (col *columnCache) insertAutoValues(
@@ -271,8 +280,18 @@ func (col *columnCache) updateTo(
 	col.Lock()
 
 	contains := col.ranges.updateTo(manualValue)
+	if col.terminal && manualValue >= col.terminalValue {
+		col.terminal = false
+		col.terminalValue = 0
+		col.terminalTS = timestamp.Timestamp{}
+		col.overflow = true
+		contains = true
+	}
 	// mark col next() is overflow
 	if manualValue == math.MaxUint64 {
+		col.terminal = false
+		col.terminalValue = 0
+		col.terminalTS = timestamp.Timestamp{}
 		col.overflow = true
 	}
 	col.Unlock()
@@ -311,7 +330,7 @@ func (col *columnCache) applyAutoValues(
 			return true, nil
 		}
 
-		if col.ranges.empty() {
+		if col.ranges.empty() && !col.terminal {
 			if err := col.allocateLocked(ctx, tableID, rows, cul, txnOp); err != nil {
 				return false, err
 			}
@@ -336,7 +355,15 @@ func (col *columnCache) applyAutoValues(
 		if overflow {
 			return apply(i, 0)
 		}
-		if err := apply(i, col.ranges.next()); err != nil {
+		value := col.ranges.next()
+		if value == 0 && col.terminal {
+			value = col.terminalValue
+			col.terminal = false
+			col.terminalValue = 0
+			col.terminalTS = timestamp.Timestamp{}
+			col.overflow = true
+		}
+		if err := apply(i, value); err != nil {
 			return err
 		}
 	}
@@ -354,7 +381,7 @@ func (col *columnCache) preAllocate(
 		return
 	}
 
-	if col.ranges.left() >= count {
+	if col.ranges.left() >= count || col.terminal {
 		return
 	}
 
@@ -435,7 +462,7 @@ func (col *columnCache) allocateLocked(
 func (col *columnCache) maybeAllocate(ctx context.Context, tableID uint64, txnOp client.TxnOperator) error {
 	col.Lock()
 	committed := col.committed
-	low := col.ranges.left() <= col.cfg.LowCapacity
+	low := col.ranges.left() <= col.cfg.LowCapacity && !col.terminal
 	retired := col.retired
 	col.Unlock()
 	if low && committed && !retired {
@@ -480,11 +507,28 @@ func (col *columnCache) applyAllocateLocked(
 		}
 	}
 
-	if to > from {
+	// A wrapped exclusive upper bound means the allocation reached the end of
+	// uint64. Keep its final value separately because max+step is not representable.
+	if to < from {
+		terminalValue := to - col.col.Step
+		if from < terminalValue {
+			col.ranges.addWithTimestamp(from, terminalValue, allocateAt)
+		}
+		col.terminal = true
+		col.terminalValue = terminalValue
+		col.terminalTS = allocateAt
+	} else if to > from {
 		col.ranges.addWithTimestamp(from, to, allocateAt)
 	}
 	close(col.allocatingC)
 	col.allocating = false
+}
+
+func (col *columnCache) oldestAllocateAtLocked() timestamp.Timestamp {
+	if !col.ranges.empty() {
+		return col.ranges.oldestAllocateAt()
+	}
+	return col.terminalTS
 }
 
 func (col *columnCache) waitPrevAllocatingLocked(ctx context.Context) error {
