@@ -620,11 +620,37 @@ drop table t_ctas_chk;
 drop table if exists t_chk_ignore;
 create table t_chk_ignore(a int check (a > 0));
 insert ignore into t_chk_ignore values (-1), (1), (-2), (2);
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  3819  ¦  Check constraint 't_chk_ignore_chk_1' is violated  𝄀
+Warning  ¦  3819  ¦  Check constraint 't_chk_ignore_chk_1' is violated
 select * from t_chk_ignore order by a;
 ➤ a[4,32,0]  𝄀
 1  𝄀
 2
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]
 drop table t_chk_ignore;
+drop table if exists t_chk_load_child;
+drop table if exists t_chk_load_parent;
+create table t_chk_load_parent(id int primary key);
+create table t_chk_load_child(
+id int primary key,
+parent_id int,
+check (id > 0),
+foreign key (parent_id) references t_chk_load_parent(id)
+);
+insert into t_chk_load_parent values (1);
+load data inline format='csv', data='-1,1\n1,1\n' ignore
+into table t_chk_load_child fields terminated by ',';
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  3819  ¦  Check constraint 't_chk_load_child_chk_1' is violated
+select * from t_chk_load_child order by id;
+➤ id[4,32,0]  ¦  parent_id[4,32,0]  𝄀
+1  ¦  1
+drop table t_chk_load_child;
+drop table t_chk_load_parent;
 drop table if exists t_chk_ignore_dedup;
 create table t_chk_ignore_dedup(id int primary key, v int check (v > 0));
 insert ignore into t_chk_ignore_dedup values (1, -1), (1, 1);
@@ -661,7 +687,7 @@ t_chk_addcol_notenforced  ¦  CREATE TABLE `t_chk_addcol_notenforced` (
   `id` int NOT NULL,
   `b` int DEFAULT NULL,
   PRIMARY KEY (`id`),
-  CHECK (`b` > 0) NOT ENFORCED
+  CONSTRAINT `t_chk_addcol_notenforced_chk_1` CHECK (`b` > 0) NOT ENFORCED
 )
 select * from t_chk_addcol_notenforced order by id;
 ➤ id[4,32,0]  ¦  b[4,32,0]  𝄀
@@ -673,3 +699,30 @@ alter table t_chk_rename rename column a to a2;
 invalid input: Cannot drop, modify, or rename column 'a': check constraint 't_chk_rename_chk_1' depends on it
 alter table t_chk_rename rename column b to b2;
 drop table t_chk_rename;
+drop table if exists t_chk_sql_mode;
+set sql_mode = 'ANSI_QUOTES';
+create table t_chk_sql_mode(a int, check ("a" > 0));
+set sql_mode = '';
+insert into t_chk_sql_mode values (-1);
+internal error: Check constraint 't_chk_sql_mode_chk_1' is violated
+insert into t_chk_sql_mode values (1);
+select * from t_chk_sql_mode;
+➤ a[4,32,0]  𝄀
+1
+drop table t_chk_sql_mode;
+drop table if exists t_chk_rename_name_new;
+drop table if exists t_chk_rename_name;
+create table t_chk_rename_name(
+a int,
+constraint t_chk_rename_name_chk_custom check (a > 0),
+check (a < 10)
+);
+rename table t_chk_rename_name to t_chk_rename_name_new;
+show create table t_chk_rename_name_new;
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+t_chk_rename_name_new  ¦  CREATE TABLE `t_chk_rename_name_new` (
+  `a` int DEFAULT NULL,
+  CONSTRAINT `t_chk_rename_name_new_chk_custom` CHECK (`a` > 0),
+  CONSTRAINT `t_chk_rename_name_new_chk_1` CHECK (`a` < 10)
+)
+drop table t_chk_rename_name_new;

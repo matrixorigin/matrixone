@@ -88,6 +88,15 @@ func (tcc *TxnCompilerContext) GetLowerCaseTableNames() int64 {
 	return val.(int64)
 }
 
+// GetParserSQLMode returns the exact session SQL mode used to parse the
+// statement. Planner metadata that must later reparse SQL should prefer this
+// over resolving sql_mode again through the generic variable interface.
+func (tcc *TxnCompilerContext) GetParserSQLMode() string {
+	tcc.mu.Lock()
+	defer tcc.mu.Unlock()
+	return sessionSQLModeForParser(tcc.execCtx.ses)
+}
+
 func (tcc *TxnCompilerContext) SetExecCtx(execCtx *ExecCtx) {
 	tcc.mu.Lock()
 	defer tcc.mu.Unlock()
@@ -288,7 +297,8 @@ func (tcc *TxnCompilerContext) CheckConstraintNameExists(dbName, excludedTable, 
 		for _, check := range tableDef.Checks {
 			// MySQL CHECK constraint names are case-sensitive regardless of
 			// lower_case_table_names.
-			if check.Name == name {
+			if plan2.NormalizeCheckConstraintName(check.Name) ==
+				plan2.NormalizeCheckConstraintName(name) {
 				return true, nil
 			}
 		}

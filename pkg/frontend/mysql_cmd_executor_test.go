@@ -3027,6 +3027,34 @@ func TestSituationResponsePropagatesAndReplacesCheckWarnings(t *testing.T) {
 	require.Zero(t, ses.getWarnInfo().length())
 }
 
+func TestStatusResponsePropagatesNamedCheckWarnings(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	writer := &countingMysqlWriter{testMysqlWriter: &testMysqlWriter{}}
+	resper := NewMysqlResp(writer)
+	execCtx := &ExecCtx{
+		reqCtx:     context.Background(),
+		ses:        ses,
+		proc:       ses.proc,
+		stmt:       &tree.CreateTable{},
+		isLastStmt: true,
+		runResult: &util.RunResult{
+			WarningCount: 2,
+			CheckWarnings: []util.CheckWarning{{
+				Message: "Check constraint 't_chk_1' is violated",
+				Count:   2,
+			}},
+		},
+	}
+
+	require.NoError(t, resper.respStatus(ses, execCtx))
+	require.Len(t, writer.responses, 1)
+	require.Equal(t, uint16(2), writer.responses[0].warnings)
+	require.Equal(t, 2, ses.getWarnInfo().length())
+	require.Equal(t, "Check constraint 't_chk_1' is violated", ses.getWarnInfo().msgs[0])
+}
+
 func TestNormalizeProcedureAffectedRows(t *testing.T) {
 	require.Equal(t, uint64(0), normalizeProcedureAffectedRows(-1))
 	require.Equal(t, uint64(7), normalizeProcedureAffectedRows(7))

@@ -121,7 +121,9 @@ func (filter *Filter) Call(proc *process.Process) (vm.CallResult, error) {
 			v, null := bs.GetValue(0)
 			if null || !v {
 				if warningFilter {
-					proc.AddWarningCount(int64(filterBat.RowCount()))
+					proc.AddCheckWarning(
+						filter.FilterExprs[i-len(filter.ctr.runtimeExecutors)].WarningMessage,
+						int64(filterBat.RowCount()))
 				}
 				filterBat, err = filter.ctr.shrinkWithSels(proc, filterBat, nil)
 				if err != nil {
@@ -152,7 +154,9 @@ func (filter *Filter) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 			if len(sels) != filterBat.RowCount() {
 				if warningFilter {
-					proc.AddWarningCount(int64(filterBat.RowCount() - len(sels)))
+					proc.AddCheckWarning(
+						filter.FilterExprs[i-len(filter.ctr.runtimeExecutors)].WarningMessage,
+						int64(filterBat.RowCount()-len(sels)))
 				}
 				filterBat, err = filter.ctr.shrinkWithSels(proc, filterBat, sels)
 				if err != nil {

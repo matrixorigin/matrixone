@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"iter"
@@ -24,9 +25,11 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"golang.org/x/text/unicode/norm"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -130,6 +133,10 @@ func getViewSecurityTypeFromContext(ctx CompilerContext) string {
 }
 
 func parserSQLModeFromContext(ctx CompilerContext) *string {
+	if provider, ok := ctx.(interface{ GetParserSQLMode() string }); ok {
+		sqlMode := provider.GetParserSQLMode()
+		return &sqlMode
+	}
 	sqlMode := ""
 	val, err := ctx.ResolveVariable("sql_mode", true, false)
 	if err == nil {
@@ -917,6 +924,7 @@ func buildCreateTable(
 	} else {
 		createTable.Database = string(stmt.Table.SchemaName)
 	}
+	createTable.TableDef.DbName = createTable.Database
 
 	if stmt.Temporary && stmt.PartitionOption != nil {
 		return nil, moerr.NewPartitionNoTemporary(ctx.GetContext())
@@ -1104,6 +1112,9 @@ func buildCreateTable(
 		createSQL := ctx.GetRootSql()
 		if stmt.PartitionOption != nil {
 			createSQL = canonicalPartitionedCreateTableSQL(stmt)
+		}
+		if len(createTable.TableDef.Checks) > 0 {
+			createSQL = addCheckSQLModeMarker(createSQL, parserSQLModeFromContext(ctx))
 		}
 		properties := []*plan.Property{
 			{
@@ -1914,7 +1925,7 @@ func appendCheckDefInternal(
 	// Build a set of existing check constraint names for deduplication
 	checkNameSet := make(map[string]bool, len(tableDef.Checks))
 	for _, chk := range tableDef.Checks {
-		checkNameSet[chk.Name] = true
+		checkNameSet[NormalizeCheckConstraintName(chk.Name)] = true
 	}
 
 	// Assign or validate the constraint name
@@ -1923,7 +1934,7 @@ func appendCheckDefInternal(
 		// Anonymous CHECK names follow MySQL's table_name_chk_N convention.
 		// CREATE TABLE ... LIKE omits generated names while formatting, so the
 		// destination table gets a fresh name based on its own table name.
-		for i := len(tableDef.Checks) + 1; ; i++ {
+		for i := 1; ; i++ {
 			suffix := fmt.Sprintf("_chk_%d", i)
 			tableName := tableDef.Name
 			maxTableRunes := maxCheckConstraintNameRunes - utf8.RuneCountInString(suffix)
@@ -1931,7 +1942,7 @@ func appendCheckDefInternal(
 				tableName = string([]rune(tableName)[:maxTableRunes])
 			}
 			candidate := tableName + suffix
-			if checkNameSet[candidate] {
+			if checkNameSet[NormalizeCheckConstraintName(candidate)] {
 				continue
 			}
 			if resolver, ok := ctx.(interface {
@@ -1952,7 +1963,7 @@ func appendCheckDefInternal(
 		if utf8.RuneCountInString(name) > maxCheckConstraintNameRunes {
 			return moerr.NewInvalidInputf(ctx.GetContext(), "identifier name '%s' is too long", name)
 		}
-		if checkNameSet[name] {
+		if checkNameSet[NormalizeCheckConstraintName(name)] {
 			return moerr.NewInvalidInputf(ctx.GetContext(), "duplicate check constraint name '%s'", name)
 		}
 		if resolver, ok := ctx.(interface {
@@ -1978,6 +1989,18 @@ func appendCheckDefInternal(
 }
 
 const maxCheckConstraintNameRunes = 64
+
+// NormalizeCheckConstraintName implements the CHECK-name comparison key used by
+// MySQL: case-sensitive but accent-insensitive.
+func NormalizeCheckConstraintName(name string) string {
+	decomposed := norm.NFD.String(name)
+	return strings.Map(func(r rune) rune {
+		if unicode.Is(unicode.Mn, r) {
+			return -1
+		}
+		return r
+	}, decomposed)
+}
 
 func checkCheckExprReferences(ctx context.Context, expr *plan.Expr, cols []*ColDef) error {
 	if expr == nil {
@@ -2046,14 +2069,19 @@ func validateCheckForeignKeyActions(
 			if _, checked := checkedCols[colName]; !checked {
 				continue
 			}
-			if fk.onUpdate == tree.REFERENCE_OPTION_CASCADE || fk.onUpdate == tree.REFERENCE_OPTION_SET_NULL ||
-				fk.onDelete == tree.REFERENCE_OPTION_SET_NULL {
+			if isMutatingReferenceOption(fk.onUpdate) || isMutatingReferenceOption(fk.onDelete) {
 				return moerr.NewInvalidInputf(ctx,
 					"check constraint cannot be defined on column used by foreign key '%s' with cascading SET NULL/CASCADE action", fk.name)
 			}
 		}
 	}
 	return nil
+}
+
+func isMutatingReferenceOption(option tree.ReferenceOptionType) bool {
+	return option == tree.REFERENCE_OPTION_CASCADE ||
+		option == tree.REFERENCE_OPTION_SET_NULL ||
+		option == tree.REFERENCE_OPTION_SET_DEFAULT
 }
 
 func collectCheckColumnNames(expr *plan.Expr, cols []*ColDef, out map[string]struct{}) {
@@ -2114,9 +2142,12 @@ func RecoverCheckConstraintsFromCreateSql(ctx CompilerContext, tableDef *TableDe
 		return
 	}
 
-	stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL, tableDef.Createsql, ctx.GetLowerCaseTableNames())
+	createSQL, sqlMode := extractCheckSQLModeMarker(tableDef.Createsql)
+	stmt, err := parsers.ParseOneWithSQLMode(
+		ctx.GetContext(), dialect.MYSQL, createSQL, ctx.GetLowerCaseTableNames(), sqlMode)
 	if err != nil {
 		logutil.Errorf("recover check constraints: parse createsql for table %s failed: %v", tableDef.Name, err)
+		setFailedCheckRecovery(tableDef)
 		return
 	}
 	defer stmt.Free()
@@ -2157,6 +2188,16 @@ func RecoverCheckConstraintsFromCreateSql(ctx CompilerContext, tableDef *TableDe
 	if len(checks) == 0 {
 		return
 	}
+	createTableName := string(ct.Table.ObjectName)
+	if createTableName != "" && createTableName != tableDef.Name {
+		oldPrefix := createTableName + "_chk_"
+		newPrefix := tableDef.Name + "_chk_"
+		for i := range checks {
+			if strings.HasPrefix(checks[i].name, oldPrefix) {
+				checks[i].name = newPrefix + strings.TrimPrefix(checks[i].name, oldPrefix)
+			}
+		}
+	}
 
 	// Bind into a scratch TableDef so a mid-way failure leaves the original
 	// untouched (all-or-nothing recovery). appendCheckDef reuses the exact
@@ -2165,6 +2206,7 @@ func RecoverCheckConstraintsFromCreateSql(ctx CompilerContext, tableDef *TableDe
 	for _, c := range checks {
 		if err := appendCheckDefInternal(ctx, scratch, c.name, c.expr, false); err != nil {
 			logutil.Errorf("recover check constraints: bind check for table %s failed: %v", tableDef.Name, err)
+			setFailedCheckRecovery(tableDef)
 			return
 		}
 		// Ordinary tables persist the original CREATE statement, so an explicit
@@ -2173,6 +2215,137 @@ func RecoverCheckConstraintsFromCreateSql(ctx CompilerContext, tableDef *TableDe
 		scratch.Checks[len(scratch.Checks)-1].NotEnforced = c.enforcementSet && !c.enforced
 	}
 	tableDef.Checks = scratch.Checks
+}
+
+func rewriteCheckConstraintTablePrefix(checks []*plan.CheckDef, oldTableName, newTableName string) {
+	if oldTableName == "" || newTableName == "" || oldTableName == newTableName {
+		return
+	}
+	oldPrefix := oldTableName + "_chk_"
+	newPrefix := newTableName + "_chk_"
+	for _, check := range checks {
+		if suffixAt := strings.LastIndex(check.Name, "_chk_"); suffixAt >= 0 {
+			suffix := check.Name[suffixAt:]
+			maxTableRunes := maxCheckConstraintNameRunes - utf8.RuneCountInString(suffix)
+			oldGeneratedPrefix := oldTableName
+			if utf8.RuneCountInString(oldGeneratedPrefix) > maxTableRunes {
+				oldGeneratedPrefix = string([]rune(oldGeneratedPrefix)[:maxTableRunes])
+			}
+			if check.IsGeneratedName || check.Name == oldGeneratedPrefix+suffix {
+				newGeneratedPrefix := newTableName
+				if utf8.RuneCountInString(newGeneratedPrefix) > maxTableRunes {
+					newGeneratedPrefix = string([]rune(newGeneratedPrefix)[:maxTableRunes])
+				}
+				check.Name = newGeneratedPrefix + suffix
+				continue
+			}
+		}
+		if check.IsGeneratedName {
+			continue
+		}
+		if strings.HasPrefix(check.Name, oldPrefix) {
+			check.Name = newPrefix + strings.TrimPrefix(check.Name, oldPrefix)
+		}
+	}
+}
+
+const checkSQLModeMarker = "/*__mo_check_sql_mode_hex="
+
+func addCheckSQLModeMarker(createSQL string, sqlMode *string) string {
+	if sqlMode == nil || *sqlMode == "" {
+		return createSQL
+	}
+	return checkSQLModeMarker + hex.EncodeToString([]byte(*sqlMode)) + "*/ " + createSQL
+}
+
+func extractCheckSQLModeMarker(createSQL string) (string, string) {
+	if !strings.HasPrefix(createSQL, checkSQLModeMarker) {
+		return createSQL, ""
+	}
+	end := strings.Index(createSQL[len(checkSQLModeMarker):], "*/")
+	if end < 0 {
+		return createSQL, ""
+	}
+	end += len(checkSQLModeMarker)
+	decoded, err := hex.DecodeString(createSQL[len(checkSQLModeMarker):end])
+	if err != nil {
+		return createSQL, ""
+	}
+	return strings.TrimSpace(createSQL[end+2:]), string(decoded)
+}
+
+// ExtractCheckConstraintNamesFromCreateSQL returns CHECK names in definition
+// order without binding their expressions. It is used by CREATE TABLE
+// execution after taking the schema lock, where a fresh catalog snapshot is
+// required to close the planner-to-executor TOCTOU window.
+func ExtractCheckConstraintNamesFromCreateSQL(
+	ctx context.Context,
+	createSQL string,
+	tableName string,
+	lowerCaseTableNames int64,
+) ([]string, error) {
+	createSQL, sqlMode := extractCheckSQLModeMarker(createSQL)
+	stmt, err := parsers.ParseOneWithSQLMode(
+		ctx, dialect.MYSQL, createSQL, lowerCaseTableNames, sqlMode)
+	if err != nil {
+		return nil, err
+	}
+	defer stmt.Free()
+	ct, ok := stmt.(*tree.CreateTable)
+	if !ok {
+		return nil, nil
+	}
+
+	rawNames := make([]string, 0)
+	for _, def := range ct.Defs {
+		switch d := def.(type) {
+		case *tree.CheckIndex:
+			rawNames = append(rawNames, d.ConstraintSymbol)
+		case *tree.ColumnTableDef:
+			for _, attr := range d.Attributes {
+				if check, ok := attr.(*tree.AttributeCheckConstraint); ok {
+					rawNames = append(rawNames, check.Name)
+				}
+			}
+		}
+	}
+
+	names := make([]string, 0, len(rawNames))
+	used := make(map[string]struct{}, len(rawNames))
+	parsedTableName := string(ct.Table.ObjectName)
+	for _, rawName := range rawNames {
+		name := rawName
+		if name == "" {
+			for ordinal := 1; ; ordinal++ {
+				suffix := fmt.Sprintf("_chk_%d", ordinal)
+				prefix := tableName
+				maxPrefixRunes := maxCheckConstraintNameRunes - utf8.RuneCountInString(suffix)
+				if utf8.RuneCountInString(prefix) > maxPrefixRunes {
+					prefix = string([]rune(prefix)[:maxPrefixRunes])
+				}
+				name = prefix + suffix
+				if _, exists := used[NormalizeCheckConstraintName(name)]; !exists {
+					break
+				}
+			}
+		} else if parsedTableName != "" && parsedTableName != tableName {
+			oldPrefix := parsedTableName + "_chk_"
+			if strings.HasPrefix(name, oldPrefix) {
+				name = tableName + "_chk_" + strings.TrimPrefix(name, oldPrefix)
+			}
+		}
+		used[NormalizeCheckConstraintName(name)] = struct{}{}
+		names = append(names, name)
+	}
+	return names, nil
+}
+
+func setFailedCheckRecovery(tableDef *TableDef) {
+	tableDef.Checks = []*plan.CheckDef{{
+		Name:      "__mo_check_recovery_failed",
+		Check:     makePlan2BoolConstExprWithType(false),
+		OriginSql: "false",
+	}}
 }
 
 func restoreIntervalSyntaxForCTAS(sql string) string {
@@ -3987,6 +4160,22 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				if err != nil {
 					return nil, err
 				}
+				fkCols := make(map[string]struct{}, len(def.KeyParts))
+				for _, keyPart := range def.KeyParts {
+					fkCols[keyPart.ColName.ColName()] = struct{}{}
+				}
+				if err := validateCheckForeignKeyActions(
+					ctx.GetContext(),
+					tableDef,
+					[]checkForeignKeyAction{{
+						name:     fkData.Def.Name,
+						cols:     fkCols,
+						onDelete: def.Refer.OnDelete,
+						onUpdate: def.Refer.OnUpdate,
+					}},
+				); err != nil {
+					return nil, err
+				}
 				alterTable.Actions[i] = &plan.AlterTable_Action{
 					Action: &plan.AlterTable_Action_AddFk{
 						AddFk: &plan.AlterTableAddFk{
@@ -4491,6 +4680,11 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 	}
 
 	if alterTable.CopyTableDef != nil {
+		rewriteCheckConstraintTablePrefix(
+			alterTable.CopyTableDef.Checks,
+			alterTable.CopyTableDef.Name,
+			alterTable.TableDef.Name,
+		)
 		alterTable.Actions = append(alterTable.Actions, &plan.AlterTable_Action{
 			Action: &plan.AlterTable_Action_AlterReplaceDef{
 				AlterReplaceDef: &plan.AlterReplaceDef{},

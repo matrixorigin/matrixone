@@ -120,6 +120,14 @@ func (resper *MysqlResp) respClient(ses *Session,
 	if execCtx.inMigration {
 		return nil
 	}
+	// Every non-diagnostic statement replaces the diagnostics area. SHOW
+	// WARNINGS itself has already materialized the previous diagnostics and must
+	// leave them available for a subsequent SHOW WARNINGS.
+	_, showWarnings := execCtx.stmt.(*tree.ShowWarnings)
+	_, showErrors := execCtx.stmt.(*tree.ShowErrors)
+	if !showWarnings && !showErrors {
+		ses.setCheckConstraintWarnings(0, nil)
+	}
 	switch execCtx.stmt.StmtKind().RespType() {
 	case tree.RESP_STREAM_RESULT_ROW:
 		err = resper.respStreamResultRow(ses, execCtx)

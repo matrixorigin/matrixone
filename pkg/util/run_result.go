@@ -15,6 +15,12 @@
 package util
 
 type RunResult struct {
-	AffectRows   uint64
-	WarningCount uint64
+	AffectRows    uint64
+	WarningCount  uint64
+	CheckWarnings []CheckWarning
+}
+
+type CheckWarning struct {
+	Message string
+	Count   uint64
 }

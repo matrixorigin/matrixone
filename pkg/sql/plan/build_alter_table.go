@@ -215,6 +215,7 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 		}
 	}
 
+	rewriteCheckConstraintTablePrefix(copyTableDef.Checks, copyTableDef.Name, tableDef.Name)
 	createTmpDdl, _, err := ConstructCreateTableSQL(cctx, copyTableDef, snapshot, true, nil)
 	if err != nil {
 		return nil, err

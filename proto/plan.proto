@@ -230,6 +230,7 @@ message Expr {
   int32 aux_id = 16;
   double ndv = 17;
   double selectivity = 18;
+  string warning_message = 19;
 }
 
 message FoldVal {

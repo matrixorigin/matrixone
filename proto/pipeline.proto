@@ -66,6 +66,12 @@ message Message {
   StreamTeardownMode requested_teardown_mode = 11;
   StreamTeardownMode accepted_teardown_mode = 12;
   uint64 warning_count = 13;
+  repeated CheckWarning check_warnings = 14;
+}
+
+message CheckWarning {
+  string message = 1;
+  uint64 count = 2;
 }
 
 message Connector {

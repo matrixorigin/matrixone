@@ -96,6 +96,7 @@ func (s *Scope) remoteRun(c *Compile) (sender *messageSenderOnClient, err error)
 		return nil, err
 	}
 	sender.warningCount = s.Proc.Base.WarningCount
+	sender.warningProcess = s.Proc
 
 	debugMsg := ""
 	_, sub_sql, exist := fault.TriggerFault("inject_send_pipeline")
@@ -361,7 +362,8 @@ type messageSenderOnClient struct {
 	// anal was used to merge remote-run's cost analysis information.
 	anal *AnalyzeModule
 	// warningCount is shared by all scopes in the statement process.
-	warningCount *int64
+	warningCount   *int64
+	warningProcess *process.Process
 
 	// message sender and its data receiver.
 	streamSender morpc.Stream
@@ -549,8 +551,14 @@ func (sender *messageSenderOnClient) markReceiveClosed() {
 }
 
 func (sender *messageSenderOnClient) markTerminal(message *pipeline.Message, successful bool) {
-	if successful && message.GetWarningCount() > 0 && sender.warningCount != nil {
-		atomic.AddInt64(sender.warningCount, int64(message.GetWarningCount()))
+	if successful {
+		if len(message.GetCheckWarnings()) > 0 && sender.warningProcess != nil {
+			for _, warning := range message.GetCheckWarnings() {
+				sender.warningProcess.AddCheckWarning(warning.GetMessage(), int64(warning.GetCount()))
+			}
+		} else if message.GetWarningCount() > 0 && sender.warningCount != nil {
+			atomic.AddInt64(sender.warningCount, int64(message.GetWarningCount()))
+		}
 	}
 	sender.stateMu.Lock()
 	defer sender.stateMu.Unlock()

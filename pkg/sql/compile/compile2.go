@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/hex"
 	gotrace "runtime/trace"
+	"sort"
 	"strings"
 	"time"
 
@@ -244,11 +245,13 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	var retryTimes = 0
 	queryResult = &util2.RunResult{}
 	c.proc.SetWarningCount(0)
+	c.proc.ClearCheckWarnings()
 	v2.TxnStatementTotalCounter.Inc()
 	for {
 		// A retry is a replacement execution attempt. Warnings produced by the
 		// discarded attempt must not leak into the final statement result.
 		runC.proc.SetWarningCount(0)
+		runC.proc.ClearCheckWarnings()
 		// Record the time from the beginning of Run to just before runOnce().
 		preRunOnceStart := time.Now()
 		// Before compile.runOnce, Reset the 'StatsInfo' execution related resources in context
@@ -335,6 +338,15 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	}
 	queryResult.AffectRows = runC.getAffectedRows()
 	queryResult.WarningCount = uint64(runC.proc.GetWarningCount())
+	for message, count := range runC.proc.GetCheckWarnings() {
+		queryResult.CheckWarnings = append(queryResult.CheckWarnings, util2.CheckWarning{
+			Message: message,
+			Count:   count,
+		})
+	}
+	sort.Slice(queryResult.CheckWarnings, func(i, j int) bool {
+		return queryResult.CheckWarnings[i].Message < queryResult.CheckWarnings[j].Message
+	})
 	if c.uid != "mo_logger" &&
 		strings.Contains(strings.ToLower(c.sql), "insert") &&
 		(strings.Contains(c.sql, "{MO_TS =") ||

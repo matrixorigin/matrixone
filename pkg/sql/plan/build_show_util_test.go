@@ -268,9 +268,7 @@ func Test_ShowCreateTableRendersStructuredChecks(t *testing.T) {
 }
 
 func Test_ShowCreateTableRendersAnonymousCheck(t *testing.T) {
-	// An anonymous CHECK is stored under a MO-generated __mo_chk_N name, which
-	// must be omitted from SHOW CREATE so the output round-trips as an anonymous
-	// constraint rather than leaking the internal name.
+	// MySQL exposes the generated table_name_chk_N constraint name in SHOW CREATE.
 	const sql = `CREATE TABLE t_anon_chk (
 		id INT NOT NULL,
 		v INT NULL,
@@ -290,12 +288,7 @@ func Test_ShowCreateTableRendersAnonymousCheck(t *testing.T) {
 	if err != nil {
 		t.Fatalf("construct show create failed: %+v", err)
 	}
-	if !strings.Contains(showSQL, "CHECK (`v` > 0)") {
-		t.Fatalf("expected anonymous check clause in show create output: %s", showSQL)
-	}
-	if strings.Contains(showSQL, "__mo_chk_") {
-		t.Fatalf("anonymous check must not leak its internal __mo_chk_ name: %s", showSQL)
-	}
+	require.Contains(t, showSQL, "CONSTRAINT `t_anon_chk_chk_1` CHECK (`v` > 0)")
 }
 
 func TestShowCreateTablePreservesExplicitInternalPrefixCheckName(t *testing.T) {

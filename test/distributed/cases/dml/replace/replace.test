@@ -492,8 +492,28 @@ drop table t_ctas_chk;
 drop table if exists t_chk_ignore;
 create table t_chk_ignore(a int check (a > 0));
 insert ignore into t_chk_ignore values (-1), (1), (-2), (2);
+show warnings;
 select * from t_chk_ignore order by a;
+show warnings;
 drop table t_chk_ignore;
+
+-- legacy LOAD DATA fallback on an FK table keeps IGNORE CHECK semantics.
+drop table if exists t_chk_load_child;
+drop table if exists t_chk_load_parent;
+create table t_chk_load_parent(id int primary key);
+create table t_chk_load_child(
+    id int primary key,
+    parent_id int,
+    check (id > 0),
+    foreign key (parent_id) references t_chk_load_parent(id)
+);
+insert into t_chk_load_parent values (1);
+load data inline format='csv', data='-1,1\n1,1\n' ignore
+into table t_chk_load_child fields terminated by ',';
+show warnings;
+select * from t_chk_load_child order by id;
+drop table t_chk_load_child;
+drop table t_chk_load_parent;
 
 -- INSERT IGNORE evaluates CHECK per row before the unique-key dedup: an invalid
 -- row sharing a primary key with a later valid row must not mask it. Expect (1,1).
@@ -537,3 +557,25 @@ create table t_chk_rename(a int, b int, check (a > 0));
 alter table t_chk_rename rename column a to a2;
 alter table t_chk_rename rename column b to b2;
 drop table t_chk_rename;
+
+-- CHECK recovery uses the creation SQL mode after the session mode changes.
+drop table if exists t_chk_sql_mode;
+set sql_mode = 'ANSI_QUOTES';
+create table t_chk_sql_mode(a int, check ("a" > 0));
+set sql_mode = '';
+insert into t_chk_sql_mode values (-1);
+insert into t_chk_sql_mode values (1);
+select * from t_chk_sql_mode;
+drop table t_chk_sql_mode;
+
+-- RENAME TABLE rewrites generated-prefix and matching explicit CHECK names.
+drop table if exists t_chk_rename_name_new;
+drop table if exists t_chk_rename_name;
+create table t_chk_rename_name(
+    a int,
+    constraint t_chk_rename_name_chk_custom check (a > 0),
+    check (a < 10)
+);
+rename table t_chk_rename_name to t_chk_rename_name_new;
+show create table t_chk_rename_name_new;
+drop table t_chk_rename_name_new;

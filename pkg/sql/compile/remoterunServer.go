@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -294,6 +295,7 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 
 		err = s.MergeRun(runCompile)
 		receiver.warningCount = uint64(runCompile.proc.GetWarningCount())
+		receiver.checkWarnings = runCompile.proc.GetCheckWarnings()
 		if err == nil {
 			runCompile.GenPhyPlan(runCompile)
 			receiver.phyPlan = runCompile.anal.GetPhyPlan()
@@ -530,8 +532,9 @@ type messageReceiverOnServer struct {
 	colexecServer *colexec.Server
 
 	// result.
-	phyPlan      *models.PhyPlan
-	warningCount uint64
+	phyPlan       *models.PhyPlan
+	warningCount  uint64
+	checkWarnings map[string]uint64
 }
 
 func newMessageReceiverOnServer(
@@ -704,6 +707,7 @@ func (receiver *messageReceiverOnServer) sendError(
 	message.SetMessageType(receiver.messageTyp)
 	message.AcceptedTeardownMode = receiver.acceptedTeardownMode
 	message.WarningCount = receiver.warningCount
+	message.CheckWarnings = makePipelineCheckWarnings(receiver.checkWarnings)
 	if errInfo != nil {
 		message.SetMoError(receiver.messageCtx, errInfo)
 	}
@@ -766,6 +770,7 @@ func (receiver *messageReceiverOnServer) sendEndMessage() error {
 	message.SetMessageType(receiver.messageTyp)
 	message.AcceptedTeardownMode = receiver.acceptedTeardownMode
 	message.WarningCount = receiver.warningCount
+	message.CheckWarnings = makePipelineCheckWarnings(receiver.checkWarnings)
 
 	jsonData, err := json.MarshalIndent(receiver.phyPlan, "", "  ")
 	if err != nil {
@@ -774,6 +779,17 @@ func (receiver *messageReceiverOnServer) sendEndMessage() error {
 	message.SetAnalysis(jsonData)
 
 	return receiver.clientSession.Write(receiver.messageCtx, message)
+}
+
+func makePipelineCheckWarnings(warnings map[string]uint64) []*pipeline.CheckWarning {
+	result := make([]*pipeline.CheckWarning, 0, len(warnings))
+	for message, count := range warnings {
+		result = append(result, &pipeline.CheckWarning{Message: message, Count: count})
+	}
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].Message < result[j].Message
+	})
+	return result
 }
 
 func generateProcessHelper(ctx context.Context, data []byte, cli client.TxnClient) (processHelper, error) {

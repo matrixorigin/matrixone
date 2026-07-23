@@ -123,6 +123,16 @@ func appendCheckConstraintPlan(builder *QueryBuilder, bindCtx *BindContext, tabl
 }
 
 func appendCheckConstraintPlanFromLastNode(builder *QueryBuilder, bindCtx *BindContext, tableDef *TableDef, lastNodeID int32) (int32, error) {
+	return appendCheckConstraintPlanFromLastNodeWithMode(builder, bindCtx, tableDef, lastNodeID, false)
+}
+
+func appendCheckConstraintPlanFromLastNodeWithMode(
+	builder *QueryBuilder,
+	bindCtx *BindContext,
+	tableDef *TableDef,
+	lastNodeID int32,
+	ignoreMode bool,
+) (int32, error) {
 	if !hasEnforcedCheckConstraint(tableDef) {
 		return lastNodeID, nil
 	}
@@ -142,7 +152,8 @@ func appendCheckConstraintPlanFromLastNode(builder *QueryBuilder, bindCtx *BindC
 		tableColProjList[i] = projection[i]
 	}
 
-	return appendCheckConstraintPlanWithTableColProjections(builder, bindCtx, tableDef, lastNodeID, tableColProjList, false)
+	return appendCheckConstraintPlanWithTableColProjections(
+		builder, bindCtx, tableDef, lastNodeID, tableColProjList, ignoreMode)
 }
 
 func appendCheckConstraintPlanWithTableColProjections(builder *QueryBuilder, bindCtx *BindContext, tableDef *TableDef, lastNodeID int32, tableColProjList []*plan.Expr, ignoreMode bool) (int32, error) {
@@ -171,6 +182,7 @@ func appendCheckConstraintPlanWithTableColProjections(builder *QueryBuilder, bin
 			// going) rather than aborting. A plain FILTER on passExpr keeps only
 			// the rows that satisfy the check.
 			passExpr.AuxId = plan.CheckConstraintWarningFilterAuxID
+			passExpr.WarningMessage = fmt.Sprintf("Check constraint '%s' is violated", check.Name)
 			filterList = append(filterList, passExpr)
 			continue
 		}

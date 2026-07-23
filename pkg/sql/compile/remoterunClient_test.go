@@ -207,6 +207,26 @@ func TestMessageSenderOnClientNegotiatedStreamTeardown(t *testing.T) {
 		require.Equal(t, int64(3), warningCount)
 	})
 
+	t.Run("terminal message preserves remote check warning names", func(t *testing.T) {
+		proc := testutil.NewProc(t)
+		sender := &messageSenderOnClient{
+			expectedEnd:    pipeline.Method_PipelineMessage,
+			warningCount:   proc.Base.WarningCount,
+			warningProcess: proc,
+		}
+		sender.markTerminal(&pipeline.Message{
+			Cmd:          pipeline.Method_PipelineMessage,
+			Sid:          pipeline.Status_MessageEnd,
+			WarningCount: 2,
+			CheckWarnings: []*pipeline.CheckWarning{{
+				Message: "Check constraint 't_chk_1' is violated",
+				Count:   2,
+			}},
+		}, true)
+		require.Equal(t, int64(2), proc.GetWarningCount())
+		require.Equal(t, uint64(2), proc.GetCheckWarnings()["Check constraint 't_chk_1' is violated"])
+	})
+
 	t.Run("negotiated retry terminal needs explicit cleanup authorization", func(t *testing.T) {
 		sender := &messageSenderOnClient{expectedEnd: pipeline.Method_PrepareDoneNotifyMessage}
 		message := &pipeline.Message{

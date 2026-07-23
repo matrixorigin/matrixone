@@ -126,6 +126,7 @@ func buildInsertPlans(
 	objRef *ObjectRef, tableDef *TableDef, lastNodeId int32, ifExistAutoPkCol bool,
 	insertWithoutUniqueKeyMap map[string]bool,
 	ifInsertFromUniqueColMap map[string]bool,
+	ignoreMode bool,
 ) error {
 
 	var err error
@@ -152,7 +153,8 @@ func buildInsertPlans(
 	// add plan: -> preinsert -> sink
 	lastNodeId = appendPreInsertNode(builder, bindCtx, objRef, tableDef, lastNodeId, false)
 
-	lastNodeId, err = appendCheckConstraintPlanFromLastNode(builder, bindCtx, tableDef, lastNodeId)
+	lastNodeId, err = appendCheckConstraintPlanFromLastNodeWithMode(
+		builder, bindCtx, tableDef, lastNodeId, ignoreMode)
 	if err != nil {
 		return err
 	}

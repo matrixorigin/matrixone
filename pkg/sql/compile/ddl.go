@@ -1302,6 +1302,65 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 	return nil
 }
 
+func validateCheckConstraintNamesAfterSchemaLock(
+	c *Compile,
+	db engine.Database,
+	excludedTable string,
+	newChecks []*plan.CheckDef,
+) error {
+	wanted := make(map[string]string, len(newChecks))
+	for _, check := range newChecks {
+		wanted[plan2.NormalizeCheckConstraintName(check.Name)] = check.Name
+	}
+	tableNames, err := db.Relations(c.proc.Ctx)
+	if err != nil {
+		if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+			return nil
+		}
+		return err
+	}
+	for _, tableName := range tableNames {
+		if tableName == excludedTable {
+			continue
+		}
+		rel, err := db.Relation(c.proc.Ctx, tableName, nil)
+		if err != nil {
+			if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) ||
+				moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
+				continue
+			}
+			return err
+		}
+		defs, err := rel.TableDefs(c.proc.Ctx)
+		if err != nil {
+			return err
+		}
+		for _, def := range defs {
+			properties, ok := def.(*engine.PropertiesDef)
+			if !ok {
+				continue
+			}
+			for _, property := range properties.Properties {
+				if property.Key != catalog.SystemRelAttr_CreateSQL {
+					continue
+				}
+				names, err := plan2.ExtractCheckConstraintNamesFromCreateSQL(
+					c.proc.Ctx, property.Value, tableName, c.getLower())
+				if err != nil {
+					return err
+				}
+				for _, name := range names {
+					if original, exists := wanted[plan2.NormalizeCheckConstraintName(name)]; exists {
+						return moerr.NewInvalidInputf(
+							c.proc.Ctx, "duplicate check constraint name '%s'", original)
+					}
+				}
+			}
+		}
+	}
+	return nil
+}
+
 func (s *Scope) CreateTable(c *Compile) error {
 	if s.ScopeAnalyzer == nil {
 		s.ScopeAnalyzer = NewScopeAnalyzer()
@@ -1372,7 +1431,14 @@ func (s *Scope) CreateTable(c *Compile) error {
 	tblName := qry.GetTableDef().GetName()
 
 	if !c.disableLock {
-		if err := lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
+		lockMode := lock.LockMode_Shared
+		// CHECK names are schema-scoped. Serialize CHECK-bearing CREATE TABLE
+		// statements so the lock-holder can refresh its snapshot and recheck
+		// the catalog immediately before creating the relation.
+		if len(qry.GetTableDef().GetChecks()) > 0 {
+			lockMode = lock.LockMode_Exclusive
+		}
+		if err := lockMoDatabase(c, dbName, lockMode); err != nil {
 			return err
 		}
 	}
@@ -1383,6 +1449,19 @@ func (s *Scope) CreateTable(c *Compile) error {
 			return moerr.NewNoDB(c.proc.Ctx)
 		}
 		return convertDBEOB(c.proc.Ctx, err, dbName)
+	}
+	if len(qry.GetTableDef().GetChecks()) > 0 {
+		txnOp := c.proc.GetTxnOperator()
+		if txnOp.Txn().IsPessimistic() && txnOp.Txn().IsRCIsolation() {
+			now, _ := moruntime.ServiceRuntime(c.proc.GetService()).Clock().Now()
+			if err = txnOp.GetWorkspace().AdvanceSnapshot(c.proc.Ctx, now); err != nil {
+				return err
+			}
+		}
+		if err = validateCheckConstraintNamesAfterSchemaLock(
+			c, dbSource, tblName, qry.GetTableDef().GetChecks()); err != nil {
+			return err
+		}
 	}
 
 	exists, err := dbSource.RelationExists(c.proc.Ctx, tblName, nil)

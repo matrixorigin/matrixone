@@ -1165,11 +1165,25 @@ func (ses *Session) GetErrInfo() *errInfo {
 	return ses.errInfo
 }
 
-func (ses *Session) setCheckConstraintWarnings(count uint64) {
+func (ses *Session) setCheckConstraintWarnings(count uint64, checkWarnings []util.CheckWarning) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	ses.warnInfo.codes = ses.warnInfo.codes[:0]
 	ses.warnInfo.msgs = ses.warnInfo.msgs[:0]
+	if len(checkWarnings) > 0 {
+		remaining := uint64(ses.warnInfo.maxCnt)
+		for _, warning := range checkWarnings {
+			storedCount := min(warning.Count, remaining)
+			for i := uint64(0); i < storedCount; i++ {
+				ses.warnInfo.push(moerr.ER_CHECK_CONSTRAINT_VIOLATED, warning.Message)
+			}
+			remaining -= storedCount
+			if remaining == 0 {
+				break
+			}
+		}
+		return
+	}
 	storedCount := min(count, uint64(ses.warnInfo.maxCnt))
 	for i := uint64(0); i < storedCount; i++ {
 		ses.warnInfo.push(moerr.ER_CHECK_CONSTRAINT_VIOLATED, "Check constraint is violated")

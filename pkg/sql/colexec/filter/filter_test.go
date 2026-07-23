@@ -213,6 +213,7 @@ func TestFilter(t *testing.T) {
 func TestCheckConstraintIgnoreFilterCountsWarnings(t *testing.T) {
 	tc := makeTestCases(t)[0]
 	tc.arg.FilterExprs[0].AuxId = plan.CheckConstraintWarningFilterAuxID
+	tc.arg.FilterExprs[0].WarningMessage = "Check constraint 't_chk_1' is violated"
 	resetChildren(tc.arg, tc.proc)
 	require.NoError(t, tc.arg.Prepare(tc.proc))
 
@@ -220,6 +221,7 @@ func TestCheckConstraintIgnoreFilterCountsWarnings(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 20, res.Batch.RowCount())
 	require.Equal(t, int64(10), tc.proc.GetWarningCount())
+	require.Equal(t, uint64(10), tc.proc.GetCheckWarnings()["Check constraint 't_chk_1' is violated"])
 
 	for _, child := range tc.arg.Children {
 		child.Free(tc.proc, false, nil)

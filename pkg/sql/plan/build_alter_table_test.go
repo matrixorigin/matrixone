@@ -95,7 +95,8 @@ func TestAlterTableAddColumnPreservesNotEnforcedCheck(t *testing.T) {
 	alter := logicPlan.GetDdl().GetAlterTable()
 	require.Len(t, alter.CopyTableDef.Checks, 1)
 	require.True(t, alter.CopyTableDef.Checks[0].NotEnforced)
-	require.Contains(t, alter.CreateTmpTableSql, "CHECK (`d` > 0) NOT ENFORCED")
+	require.Equal(t, "t1_chk_1", alter.CopyTableDef.Checks[0].Name)
+	require.Contains(t, alter.CreateTmpTableSql, "CONSTRAINT `t1_chk_1` CHECK (`d` > 0) NOT ENFORCED")
 }
 
 func TestAlterTableAlterCheckEnforcementIsExplicitlyUnsupported(t *testing.T) {

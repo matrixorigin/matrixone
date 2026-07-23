@@ -758,6 +758,9 @@ func TestBuildCreateTableRejectsCheckWithIncompatibleForeignKeyAction(t *testing
 		"CREATE TABLE t_check_fk_delete_set_null (" +
 			"deptno INT UNSIGNED, CHECK (deptno > 0), " +
 			"CONSTRAINT fk_dept FOREIGN KEY (deptno) REFERENCES dept(deptno) ON DELETE SET NULL)",
+		"CREATE TABLE t_check_fk_delete_cascade (" +
+			"deptno INT UNSIGNED, CHECK (deptno > 0), " +
+			"CONSTRAINT fk_dept FOREIGN KEY (deptno) REFERENCES dept(deptno) ON DELETE CASCADE)",
 	} {
 		t.Run(sql, func(t *testing.T) {
 			_, err := runOneStmt(mock, t, sql)
@@ -796,6 +799,13 @@ func TestBuildCreateTableCheckConstraintVolatileFuncRejection(t *testing.T) {
 func TestBuildCreateTableCheckConstraintNameDeduplication(t *testing.T) {
 	mock := NewMockOptimizer(false)
 
+	t.Run("database name is carried into table definition", func(t *testing.T) {
+		logicPlan, err := runOneStmt(mock, t,
+			"CREATE TABLE tpch.t_chk_db_name (a INT, CHECK (a > 0))")
+		require.NoError(t, err)
+		require.Equal(t, "tpch", logicPlan.GetDdl().GetCreateTable().GetTableDef().DbName)
+	})
+
 	t.Run("duplicate user names reject", func(t *testing.T) {
 		_, err := runOneStmt(mock, t,
 			"CREATE TABLE t_chk_dup_name (a INT, CONSTRAINT chk_pos CHECK (a > 0), CONSTRAINT chk_pos CHECK (a < 10));")
@@ -816,11 +826,26 @@ func TestBuildCreateTableCheckConstraintNameDeduplication(t *testing.T) {
 		require.Equal(t, "t_chk_anon_name_chk_2", checks[1].GetName())
 	})
 
+	t.Run("explicit names do not consume anonymous ordinals", func(t *testing.T) {
+		logicPlan, err := runOneStmt(mock, t,
+			"CREATE TABLE t_chk_ordinals ("+
+				"a INT, CONSTRAINT explicitly_named CHECK (a > 0), b INT CHECK (b > 0));")
+		require.NoError(t, err)
+		checks := logicPlan.GetDdl().GetCreateTable().GetTableDef().GetChecks()
+		require.Len(t, checks, 2)
+		require.Equal(t, "t_chk_ordinals_chk_1", checks[1].GetName())
+	})
+
 	t.Run("explicit name is limited to 64 characters", func(t *testing.T) {
 		name := strings.Repeat("x", 65)
 		_, err := runOneStmt(mock, t,
 			"CREATE TABLE t_chk_long_name (a INT, CONSTRAINT "+name+" CHECK (a > 0))")
 		require.ErrorContains(t, err, "is too long")
+	})
+
+	t.Run("name comparison is case sensitive and accent insensitive", func(t *testing.T) {
+		require.Equal(t, NormalizeCheckConstraintName("résumé"), NormalizeCheckConstraintName("resume"))
+		require.NotEqual(t, NormalizeCheckConstraintName("Check"), NormalizeCheckConstraintName("check"))
 	})
 
 	t.Run("explicit name is unique within schema", func(t *testing.T) {
@@ -981,10 +1006,39 @@ func TestRecoverCheckConstraintsFromCreateSql(t *testing.T) {
 		require.Empty(t, td.Checks)
 	})
 
-	t.Run("no-op on unparseable createsql", func(t *testing.T) {
+	t.Run("fails closed on unparseable createsql", func(t *testing.T) {
 		td := newTableDef("this is not valid sql with CHECK keyword")
 		RecoverCheckConstraintsFromCreateSql(ctx, td)
-		require.Empty(t, td.Checks)
+		require.Len(t, td.Checks, 1)
+		require.Equal(t, "__mo_check_recovery_failed", td.Checks[0].Name)
+		require.False(t, td.Checks[0].Check.GetLit().GetBval())
+	})
+
+	t.Run("uses persisted ansi quotes mode", func(t *testing.T) {
+		mode := "ANSI_QUOTES"
+		td := newTableDef(addCheckSQLModeMarker(
+			`CREATE TABLE t (a INT, b INT, CHECK ("a" > 0))`, &mode))
+		RecoverCheckConstraintsFromCreateSql(ctx, td)
+		require.Len(t, td.Checks, 1)
+		require.Equal(t, "`a` > 0", td.Checks[0].OriginSql)
+	})
+
+	t.Run("uses persisted pipes as concat mode", func(t *testing.T) {
+		mode := "PIPES_AS_CONCAT"
+		td := newTableDef(addCheckSQLModeMarker(
+			`CREATE TABLE t (a INT, b INT, CHECK ('1' || a))`, &mode))
+		RecoverCheckConstraintsFromCreateSql(ctx, td)
+		require.Len(t, td.Checks, 1)
+		require.NotEqual(t, "__mo_check_recovery_failed", td.Checks[0].Name)
+	})
+
+	t.Run("renames generated-prefix checks after table rename", func(t *testing.T) {
+		td := newTableDef(
+			"CREATE TABLE old_t (a INT, b INT, CONSTRAINT old_t_chk_custom CHECK (a > 0))")
+		td.Name = "new_t"
+		RecoverCheckConstraintsFromCreateSql(ctx, td)
+		require.Len(t, td.Checks, 1)
+		require.Equal(t, "new_t_chk_custom", td.Checks[0].Name)
 	})
 }
 
@@ -1603,4 +1657,31 @@ func TestPartitionCreateSQLIsModeIndependentForAddPartition(t *testing.T) {
 	defs, err := constructAddedPartitionDefs(ctx, tableDef, clause)
 	require.NoError(t, err)
 	require.Len(t, defs, 1)
+}
+
+func TestRewriteCheckConstraintTablePrefixHandlesTruncatedCopyName(t *testing.T) {
+	const (
+		oldTable = "t_chk_addcol_notenforced_copy_019f8e0b-8a21-7df2-b0b9-86a743ae494c"
+		newTable = "t_chk_addcol_notenforced"
+	)
+	checks := []*plan.CheckDef{{
+		Name: "t_chk_addcol_notenforced_copy_019f8e0b-8a21-7df2-b0b9-86a7_chk_1",
+	}}
+	rewriteCheckConstraintTablePrefix(checks, oldTable, newTable)
+	require.Equal(t, "t_chk_addcol_notenforced_chk_1", checks[0].Name)
+}
+
+func TestExtractCheckConstraintNamesFromCreateSQL(t *testing.T) {
+	sqlMode := "ANSI_QUOTES"
+	names, err := ExtractCheckConstraintNamesFromCreateSQL(
+		context.Background(),
+		addCheckSQLModeMarker(
+			`CREATE TABLE old_name(a INT CHECK (a > 0), CONSTRAINT old_name_chk_custom CHECK (a < 10))`,
+			&sqlMode,
+		),
+		"new_name",
+		1,
+	)
+	require.NoError(t, err)
+	require.Equal(t, []string{"new_name_chk_1", "new_name_chk_custom"}, names)
 }

@@ -30,6 +30,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/explain"
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
+	"github.com/matrixorigin/matrixone/pkg/util"
 )
 
 func GetExplainColumn(ctx context.Context, explainColName string) ([]*plan2.ColDef, []interface{}, error) {
@@ -454,7 +455,11 @@ func (resper *MysqlResp) respBySituation(ses *Session,
 	}
 	// Replace, rather than append to, the previous statement's warning list.
 	// SHOW WARNINGS has already materialized its result rows before this point.
-	ses.setCheckConstraintWarnings(warningCount)
+	var checkWarnings []util.CheckWarning
+	if execCtx.runResult != nil {
+		checkWarnings = execCtx.runResult.CheckWarnings
+	}
+	ses.setCheckConstraintWarnings(warningCount, checkWarnings)
 	if len(execCtx.results) == 0 {
 		var affectedRows uint64
 		if execCtx.runResult != nil {
