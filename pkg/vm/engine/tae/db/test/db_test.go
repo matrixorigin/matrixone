@@ -12131,13 +12131,14 @@ func TestTxnModeSwitchWaitCancelRollsBack(t *testing.T) {
 	_, err := rel.CreateNonAppendableObject(false, nil)
 	require.NoError(t, err)
 	require.NoError(t, txn.Commit(context.Background()))
-	queryDone := make(chan struct{})
+	queryDone := make(chan error, 1)
 	go func() {
-		tae.MergeScheduler.Query(nil)
-		close(queryDone)
+		_, err := tae.MergeScheduler.Query(context.Background(), nil)
+		queryDone <- err
 	}()
 	select {
-	case <-queryDone:
+	case err := <-queryDone:
+		require.NoError(t, err)
 	case <-time.After(10 * time.Second):
 		t.Fatal("merge scheduler was not restarted after mode switch rollback")
 	}

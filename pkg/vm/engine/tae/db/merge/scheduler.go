@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"container/heap"
 	"context"
+	"errors"
 	"fmt"
 	"math/rand"
 	"slices"
@@ -39,6 +40,8 @@ const (
 	bigDataTaskCntThreshold   = 4
 	objectOpsTriggerThreshold = 5
 )
+
+var ErrMergeSchedulerStopped = errors.New("merge scheduler stopped")
 
 type mergeTask struct {
 	objs        []*objectio.ObjectStats
@@ -469,13 +472,53 @@ type todoItem struct {
 	table   catalog.MergeTable
 }
 
-func (a *MergeScheduler) Query(table catalog.MergeTable) *QueryAnswer {
-	answer := make(chan *QueryAnswer)
-	a.msgChan <- &MMsg{
+func (a *MergeScheduler) Query(
+	ctx context.Context,
+	table catalog.MergeTable,
+) (*QueryAnswer, error) {
+	stopCh := a.stopCh.Load()
+	if a.stopped.Load() || stopCh == nil {
+		return nil, ErrMergeSchedulerStopped
+	}
+	answer := make(chan *QueryAnswer, 1)
+	msg := &MMsg{
 		Kind:  MMsgKindQuery,
 		Value: MMsgQuery{Table: table, Answer: answer},
 	}
-	return <-answer
+	select {
+	case a.msgChan <- msg:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-*stopCh:
+		return nil, ErrMergeSchedulerStopped
+	}
+	select {
+	case answer := <-answer:
+		return answer, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-*stopCh:
+		return nil, ErrMergeSchedulerStopped
+	}
+}
+
+func (a *MergeScheduler) sendIO(msg *MMsg) bool {
+	return a.sendIOForGeneration(a.stopCh.Load(), msg)
+}
+
+func (a *MergeScheduler) sendIOForGeneration(
+	stopCh *chan struct{},
+	msg *MMsg,
+) bool {
+	if stopCh == nil {
+		return false
+	}
+	select {
+	case a.ioChan <- msg:
+		return true
+	case <-*stopCh:
+		return false
+	}
 }
 
 func (a *MergeScheduler) PauseAll() {
@@ -692,6 +735,11 @@ func (a *MergeScheduler) handleIOLoop() {
 		select {
 		case <-stopCh:
 			return
+		default:
+		}
+		select {
+		case <-stopCh:
+			return
 		case msg := <-a.ioChan:
 			switch msg.Kind {
 			case MMsgKindVacuumCheck:
@@ -704,6 +752,7 @@ func (a *MergeScheduler) handleIOLoop() {
 }
 
 func (a *MergeScheduler) fallbackSchedVacuumCheck() {
+	stopCh := a.stopCh.Load()
 	for _, supp := range a.supps {
 		size := 0
 		for stat := range supp.todo.table.IterTombstoneItem() {
@@ -711,13 +760,13 @@ func (a *MergeScheduler) fallbackSchedVacuumCheck() {
 		}
 		if size > 2*common.DefaultMaxOsizeObjBytes {
 			a.clock.AfterFunc(time.Duration(rand.Intn(10))*time.Minute, func() {
-				a.ioChan <- &MMsg{
+				a.sendIOForGeneration(stopCh, &MMsg{
 					Kind: MMsgKindVacuumCheck,
 					Value: MMsgVacuumCheck{
 						Table: supp.todo.table,
 						opts:  DefaultVacuumOpts,
 					},
-				}
+				})
 			})
 		}
 	}
@@ -845,12 +894,14 @@ func (a *MergeScheduler) handleTaskTrigger(msg *MMsgTaskTrigger) {
 	}
 
 	if msg.vacuum != nil {
-		a.ioChan <- &MMsg{
+		if !a.sendIO(&MMsg{
 			Kind: MMsgKindVacuumCheck,
 			Value: MMsgVacuumCheck{
 				Table: msg.table,
 				opts:  msg.vacuum,
 			},
+		}) {
+			return
 		}
 		supp.lastVacuumCheckTime = a.clock.Now()
 	}
@@ -1107,12 +1158,14 @@ func (a *MergeScheduler) doSched(todo *todoItem) {
 			if trigger.vacuum != nil {
 				vacuumOpts = trigger.vacuum
 			}
-			a.ioChan <- &MMsg{
+			if !a.sendIO(&MMsg{
 				Kind: MMsgKindVacuumCheck,
 				Value: MMsgVacuumCheck{
 					Table: todo.table,
 					opts:  vacuumOpts,
 				},
+			}) {
+				return
 			}
 			supp.lastVacuumCheckTime = afterGather
 			supp.totalVacuumCheckCnt++

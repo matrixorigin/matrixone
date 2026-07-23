@@ -361,10 +361,15 @@ func (c *Controller) handleToReplayCmd(cmd *controlCmd) {
 	// Detach the producer, process every event already queued, and only then stop
 	// the consumer.
 	c.db.Catalog.SetMergeNotifier(nil)
-	c.db.MergeScheduler.Query(nil)
+	rollbackSteps.Add("restore merge scheduler notifier", func() error {
+		c.db.Catalog.SetMergeNotifier(c.db.MergeScheduler)
+		return nil
+	})
+	if _, err = c.db.MergeScheduler.Query(ctx, nil); err != nil {
+		return
+	}
 	c.db.MergeScheduler.Stop()
 	rollbackSteps.Add("start merge scheduler", func() error {
-		c.db.Catalog.SetMergeNotifier(c.db.MergeScheduler)
 		c.db.MergeScheduler.Start()
 		return nil
 	})

@@ -18,6 +18,7 @@ import (
 	"container/heap"
 	"context"
 	"iter"
+	"sync"
 	"testing"
 	"time"
 
@@ -86,6 +87,17 @@ var oneGoodOneBad = func() (*batch.Batch, func()) {
 
 func (c *dummyCatalogSource) GetMergeSettingsBatchFn() func() (*batch.Batch, func()) {
 	return c.settingsFn
+}
+
+func requireQuery(
+	t *testing.T,
+	sched *MergeScheduler,
+	table catalog.MergeTable,
+) *QueryAnswer {
+	t.Helper()
+	answer, err := sched.Query(context.Background(), table)
+	require.NoError(t, err)
+	return answer
 }
 
 type droppedMergeTable struct {
@@ -180,19 +192,19 @@ func TestScheduler(t *testing.T) {
 	{
 		// switch on/off
 		sched.PauseTable(tables[0])
-		answer := sched.Query(tables[0])
+		answer := requireQuery(t, sched, tables[0])
 		require.Equal(t, answer.AutoMergeOn, false)
 		sched.ResumeTable(tables[0])
-		answer = sched.Query(tables[0])
+		answer = requireQuery(t, sched, tables[0])
 		require.Equal(t, answer.AutoMergeOn, true)
 		// next check due will be 1s later because of the resume
 		require.Greater(t, answer.NextCheckDue, 900*time.Millisecond)
 
 		sched.PauseAll()
-		answer = sched.Query(nil)
+		answer = requireQuery(t, sched, nil)
 		require.Equal(t, answer.GlobalAutoMergeOn, false)
 		sched.ResumeAll()
-		answer = sched.Query(nil)
+		answer = requireQuery(t, sched, nil)
 		require.Equal(t, answer.GlobalAutoMergeOn, true)
 	}
 
@@ -201,7 +213,7 @@ func TestScheduler(t *testing.T) {
 		for i := 0; i < 6; i++ {
 			sched.OnCreateNonAppendObject(tables[0])
 		}
-		answer := sched.Query(tables[0])
+		answer := requireQuery(t, sched, tables[0])
 		require.Less(t, answer.NextCheckDue, 500*time.Millisecond)
 	}
 
@@ -209,7 +221,7 @@ func TestScheduler(t *testing.T) {
 	{
 		// create new table
 		sched.OnCreateTableCommit(t1004)
-		answer := sched.Query(t1004)
+		answer := requireQuery(t, sched, t1004)
 		require.Equal(t, answer.AutoMergeOn, true)
 
 		sched.PauseTable(t1004)
@@ -293,7 +305,7 @@ func TestScheduler(t *testing.T) {
 		trigger.WithExpire(time.Now().Add(50 * time.Millisecond))
 		sched.SendTrigger(trigger)
 
-		answer := sched.Query(tables[0])
+		answer := requireQuery(t, sched, tables[0])
 		require.Contains(t, answer.Triggers, "L2C: 10")
 
 		// merge existing patch
@@ -303,7 +315,7 @@ func TestScheduler(t *testing.T) {
 				WithTombstone(DefaultTombstoneOpts.Clone().WithL2Count(100)),
 		)
 
-		answer = sched.Query(tables[0])
+		answer = requireQuery(t, sched, tables[0])
 		require.Contains(t, answer.Triggers, "L2C: 100")
 	}
 
@@ -312,7 +324,7 @@ func TestScheduler(t *testing.T) {
 		var answer *QueryAnswer
 
 		for i := 0; i < 100; i++ {
-			answer = sched.Query(t1004)
+			answer = requireQuery(t, sched, t1004)
 			if answer.DataMergeCnt == 1 {
 				break
 			}
@@ -321,7 +333,7 @@ func TestScheduler(t *testing.T) {
 		require.Equal(t, answer.DataMergeCnt, 1)
 
 		for i := 0; i < 100; i++ {
-			answer = sched.Query(tables[1])
+			answer = requireQuery(t, sched, tables[1])
 			if answer.DataMergeCnt == t1002TaskCnt {
 				break
 			}
@@ -331,7 +343,7 @@ func TestScheduler(t *testing.T) {
 		require.Equal(t, answer.VaccumTrigCount, 1)
 
 		for i := 0; i < 100; i++ {
-			answer = sched.Query(tables[0])
+			answer = requireQuery(t, sched, tables[0])
 			if answer.DataMergeCnt == 1 {
 				break
 			}
@@ -342,10 +354,143 @@ func TestScheduler(t *testing.T) {
 
 	{
 		// dropped table will be removed from scheduler
-		answer := sched.Query(tables[2])
+		answer := requireQuery(t, sched, tables[2])
 		require.Equal(t, answer.NotExists, true)
 	}
 
+}
+
+type blockingMergeTable struct {
+	catalog.MergeTable
+	item catalog.MergeTombstoneItem
+}
+
+func (t *blockingMergeTable) IterTombstoneItem() iter.Seq[catalog.MergeTombstoneItem] {
+	return func(yield func(catalog.MergeTombstoneItem) bool) {
+		yield(t.item)
+	}
+}
+
+type blockingMergeTombstoneItem struct {
+	stats       *objectio.ObjectStats
+	createdAt   types.TS
+	enteredOnce sync.Once
+	entered     chan struct{}
+	release     chan struct{}
+}
+
+func (i *blockingMergeTombstoneItem) GetCreatedAt() types.TS {
+	return i.createdAt
+}
+
+func (i *blockingMergeTombstoneItem) GetObjectStats() *objectio.ObjectStats {
+	return i.stats
+}
+
+func (i *blockingMergeTombstoneItem) ForeachRowid(
+	context.Context,
+	any,
+	func(types.Rowid, bool, int) error,
+) error {
+	i.enteredOnce.Do(func() {
+		close(i.entered)
+	})
+	<-i.release
+	return nil
+}
+
+func (i *blockingMergeTombstoneItem) MakeBufferBatch() (any, func()) {
+	return struct{}{}, func() {}
+}
+
+func TestQueryAndStopBoundedWhenIOQueueFull(t *testing.T) {
+	db := catalog.MockDBEntryWithAccInfo(1, 1001)
+	baseTable := catalog.ToMergeTable(catalog.MockTableEntryWithDB(db, 1001))
+	item := &blockingMergeTombstoneItem{
+		stats: newTestObjectStats(
+			t,
+			1,
+			2,
+			2*common.DefaultMaxOsizeObjBytes,
+			1,
+			0,
+			nil,
+			0,
+		),
+		createdAt: types.BuildTS(time.Now().Add(-time.Hour).UnixNano(), 0),
+		entered:   make(chan struct{}),
+		release:   make(chan struct{}),
+	}
+	table := &blockingMergeTable{
+		MergeTable: baseTable,
+		item:       item,
+	}
+	source := &dummyCatalogSource{initTables: []catalog.MergeTable{table}}
+	sched := NewMergeScheduler(
+		time.Hour,
+		source,
+		&dummyExecutor{},
+		NewStdClock(),
+	)
+	sched.Start()
+
+	var releaseOnce sync.Once
+	releaseIO := func() {
+		releaseOnce.Do(func() {
+			close(item.release)
+		})
+	}
+	t.Cleanup(func() {
+		releaseIO()
+		sched.Stop()
+	})
+
+	require.NoError(t, sched.SendTrigger(
+		NewMMsgTaskTrigger(table).WithVacuumCheck(DefaultVacuumOpts),
+	))
+	select {
+	case <-item.entered:
+	case <-time.After(time.Second):
+		t.Fatal("vacuum I/O did not start")
+	}
+
+	for i := 0; i <= cap(sched.ioChan); i++ {
+		require.NoError(t, sched.SendTrigger(
+			NewMMsgTaskTrigger(table).WithVacuumCheck(DefaultVacuumOpts),
+		))
+	}
+	require.Eventually(t, func() bool {
+		return len(sched.ioChan) == cap(sched.ioChan)
+	}, time.Second, time.Millisecond)
+
+	queryCtx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	_, err := sched.Query(queryCtx, nil)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+
+	for len(sched.msgChan) < cap(sched.msgChan) {
+		sched.msgChan <- &MMsg{
+			Kind: MMsgKindTrigger,
+			Value: NewMMsgTaskTrigger(table).
+				WithVacuumCheck(DefaultVacuumOpts),
+		}
+	}
+	sendCtx, cancelSend := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancelSend()
+	_, err = sched.Query(sendCtx, nil)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+
+	stopDone := make(chan struct{})
+	go func() {
+		sched.Stop()
+		close(stopDone)
+	}()
+	select {
+	case <-stopDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("scheduler stop blocked behind the full I/O queue")
+	}
+	releaseIO()
 }
 
 func TestLaunchPad(t *testing.T) {

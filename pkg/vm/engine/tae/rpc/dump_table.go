@@ -282,11 +282,19 @@ func (c *DumpTableArg) Run() (err error) {
 		return err
 	}
 
-	p := &catalog.LoopProcessor{}
-	p.ObjectFn = c.onObject
-	p.TombstoneFn = c.onObject
-	if err = c.table.RecurLoop(p); err != nil {
-		return err
+	dataIt := c.table.MakeDataVisibleObjectIt(c.txn)
+	defer dataIt.Release()
+	for dataIt.Next() {
+		if err = c.onObject(dataIt.Item()); err != nil {
+			return err
+		}
+	}
+	tombstoneIt := c.table.MakeTombstoneVisibleObjectIt(c.txn)
+	defer tombstoneIt.Release()
+	for tombstoneIt.Next() {
+		if err = c.onObject(tombstoneIt.Item()); err != nil {
+			return err
+		}
 	}
 	if err := c.flush(DumpTableObjectList, c.objectListBatch); err != nil {
 		return err
