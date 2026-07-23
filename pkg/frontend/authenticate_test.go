@@ -5049,10 +5049,6 @@ func Test_determineUseDatabase(t *testing.T) {
 	})
 }
 
-func Test_determineUseRole(t *testing.T) {
-	//TODO:add ut
-}
-
 func Test_determineCreateTable(t *testing.T) {
 	convey.Convey("create table succ", t, func() {
 		ctrl := gomock.NewController(t)
