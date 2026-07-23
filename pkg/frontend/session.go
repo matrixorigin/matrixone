@@ -624,6 +624,29 @@ func (ses *Session) updateSqlModeNoAutoValueOnZero(val interface{}) {
 	}
 }
 
+func (ses *Session) sqlModeHasMatrixOneNative() bool {
+	if ses == nil {
+		return false
+	}
+	value, err := ses.GetSessionSysVar("sql_mode")
+	if err != nil {
+		return false
+	}
+	has, ok := sqlModeHasMatrixOneNativeValue(value)
+	return ok && has
+}
+
+func (ses *Session) updateSqlModeCaches(oldNative bool, val interface{}) {
+	ses.updateSqlModeNoAutoValueOnZero(val)
+	newNative, ok := sqlModeHasMatrixOneNativeValue(val)
+	if !ok {
+		return
+	}
+	if oldNative != newNative {
+		ses.cleanCache()
+	}
+}
+
 func parseNoAutoValueOnZero(val interface{}) (bool, bool) {
 	mode, ok := val.(string)
 	if !ok {

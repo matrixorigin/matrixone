@@ -1812,6 +1812,7 @@ func createPrepareStmt(
 		compile:             comp,
 		PreparePlan:         preparePlan,
 		PrepareStmt:         saveStmt,
+		NativeMode:          ses.sqlModeHasMatrixOneNative(),
 		remapDb:             maps.Clone(execCtx.remapDb),
 		getFromSendLongData: make(map[int]struct{}),
 		schedulingSQLMode:   schedulingSQLMode,
@@ -3053,7 +3054,7 @@ func parseSql(execCtx *ExecCtx, p *mysql.MySQLParser) (stmts []tree.Statement, e
 	)
 }
 
-func sessionSQLModeForParser(ses FeSession) string {
+func sessionSQLMode(ses FeSession) string {
 	v, err := ses.GetSessionSysVar("sql_mode")
 	if err != nil {
 		return ""
@@ -3062,7 +3063,27 @@ func sessionSQLModeForParser(ses FeSession) string {
 	if !ok {
 		return ""
 	}
+	return mode
+}
+
+func sessionSQLModeForParser(ses FeSession) string {
+	mode := sessionSQLMode(ses)
 	return mysql.SessionSQLModeForParser(mode)
+}
+
+func refreshStatementScopedSessionInfo(ses FeSession, proc *process.Process) {
+	refreshStatementScopedSessionInfoWithSQLMode(sessionSQLMode(ses), proc)
+}
+
+func refreshStatementScopedSessionInfoWithSQLMode(sqlMode string, proc *process.Process) {
+	refreshStatementScopedSessionInfoWithNativeMode(mysql.HasMatrixOneNativeSQLMode(sqlMode), proc)
+}
+
+func refreshStatementScopedSessionInfoWithNativeMode(nativeMode bool, proc *process.Process) {
+	if proc == nil || proc.Base == nil {
+		return
+	}
+	proc.Base.SessionInfo.MatrixOneNativeMode = nativeMode
 }
 
 func parserLowerCaseTableNames(ses FeSession) int64 {
@@ -4102,6 +4123,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	proc.SetAffectedRows(ses.GetLastAffectedRows())
 	proc.SetResolveVariableFunc(ses.txnCompileCtx.ResolveVariable)
 	proc.SetResolveVariableIsBinFunc(ses.txnCompileCtx.ResolveVariableIsBin)
+	refreshStatementScopedSessionInfo(ses, proc)
 	// Frontend client SQL — session-bound resolver. Procs constructed
 	// via pkg/sql/compile/sql_executor.go's NewTopProcess inherit
 	// IsFrontend from opts.IsFrontend() (default false → background);
@@ -4376,6 +4398,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 				return recordParseError(nextInput, nextErr)
 			}
 			execCtx.input = nextInput
+			refreshStatementScopedSessionInfo(ses, proc)
 			nextCWs, nextErr := GetComputationWrapper(execCtx, ses.GetDatabaseName(),
 				ses.GetUserName(),
 				pu.StorageEngine,
