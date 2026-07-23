@@ -480,7 +480,15 @@ func CosineSimilarityF32(a, b []float32) (float32, error) {
 	if den == 0 {
 		return 0, moerr.NewInternalErrorNoCtx("cosine similarity zero denominator")
 	}
-	return float32(float64(dot) / den), nil
+	// Clamp to [-1,1]: float32 accumulation can push the quotient a hair
+	// outside (e.g. 1.000000119) and mirror the scalar CosineSimilarity.
+	sim := float64(dot) / den
+	if sim > 1 {
+		sim = 1
+	} else if sim < -1 {
+		sim = -1
+	}
+	return float32(sim), nil
 }
 
 func CosineSimilarityF64(a, b []float64) (float64, error) {
@@ -522,7 +530,15 @@ func CosineSimilarityF64(a, b []float64) (float64, error) {
 	if den == 0 {
 		return 0, moerr.NewInternalErrorNoCtx("cosine similarity zero denominator")
 	}
-	return dot / den, nil
+	// Clamp to [-1,1]: float accumulation can push the quotient a hair
+	// outside and mirror the scalar CosineSimilarity.
+	sim := dot / den
+	if sim > 1 {
+		sim = 1
+	} else if sim < -1 {
+		sim = -1
+	}
+	return sim, nil
 }
 
 func CosineSimilarity[T types.RealNumbers](p, q []T) (T, error) {

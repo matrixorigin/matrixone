@@ -182,6 +182,35 @@ func TestAMD64ClampAndZeroEdges(t *testing.T) {
 	require.Equal(t, 0.0, e64)
 }
 
+// TestAMD64CosineSimilarityUpperClamp pins the [-1,1] clamp on the SIMD cosine
+// similarity kernels. float32 accumulation can push the raw quotient a hair above
+// 1.0; without the clamp CosineSimilarityF32 returned 0x3f800001 (1.000000119) for
+// these operands. The result must never exceed 1.0 (nor drop below -1.0).
+func TestAMD64CosineSimilarityUpperClamp(t *testing.T) {
+	bits32 := func(bs ...uint32) []float32 {
+		out := make([]float32, len(bs))
+		for i, b := range bs {
+			out[i] = math.Float32frombits(b)
+		}
+		return out
+	}
+	a := bits32(0xbb667df6, 0x3ea790ea, 0xc31cb60c, 0x3d8855cd)
+	b := bits32(0xbe9dc4d1, 0x41e564b9, 0xc6568888, 0x40baa3a1)
+
+	cs32, err := CosineSimilarityF32(a, b)
+	require.NoError(t, err)
+	require.LessOrEqual(t, float64(cs32), 1.0, "F32 cosine similarity must be clamped to <= 1.0")
+	require.GreaterOrEqual(t, float64(cs32), -1.0, "F32 cosine similarity must be clamped to >= -1.0")
+
+	// Same guard for the F64 kernel: a near-parallel pair must not exceed 1.0.
+	p64 := []float64{1, 1, 1, 1, 1, 1, 1, 1}
+	q64 := []float64{1, 1, 1, 1, 1, 1, 1, 1}
+	cs64, err := CosineSimilarityF64(p64, q64)
+	require.NoError(t, err)
+	require.LessOrEqual(t, cs64, 1.0, "F64 cosine similarity must be clamped to <= 1.0")
+	require.GreaterOrEqual(t, cs64, -1.0, "F64 cosine similarity must be clamped to >= -1.0")
+}
+
 // TestAMD64GenericDispatchers covers the generic RealNumbers wrappers (both the
 // float32 and float64 type arms) and L2Distance's error-propagation branches.
 // The trailing "type not supported" returns are unreachable: RealNumbers is
