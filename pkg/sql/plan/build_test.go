@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -2677,6 +2678,88 @@ func TestReplacePKTable(t *testing.T) {
 		"REPLACE INTO dept (deptno, badcol) VALUES (1, 2)", // column not exist
 	}
 	runTestShouldError(mock, t, sqls)
+}
+
+func TestReplaceRewritesLegacyGeneratedColumnCast(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	tableDef := mock.ctxt.tables["dept"]
+	require.NotNil(t, tableDef)
+
+	var source, generated *plan.ColDef
+	var sourcePos int32
+	for i, col := range tableDef.Cols {
+		switch strings.ToLower(col.Name) {
+		case "deptno":
+			source = col
+			sourcePos = int32(i)
+		case "dname":
+			generated = col
+		}
+	}
+	require.NotNil(t, source)
+	require.NotNil(t, generated)
+	sourceExpr := &plan.Expr{
+		Typ: source.Typ,
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				RelPos: 0,
+				ColPos: sourcePos,
+				Name:   source.Name,
+			},
+		},
+	}
+	legacyExpr, err := forceCastExprWithName(t.Context(), sourceExpr, generated.Typ, "cast_strict")
+	require.NoError(t, err)
+	generated.GeneratedCol = &plan.GeneratedCol{Expr: legacyExpr, IsStored: true}
+
+	stmt, err := mysql.ParseOne(t.Context(), "REPLACE INTO dept (deptno, loc) VALUES (1, 'NY')", 1)
+	require.NoError(t, err)
+	built, err := mock.Optimize(stmt)
+	require.NoError(t, err)
+	foundGeneratedAssignment := false
+	for _, node := range built.Nodes {
+		for _, expr := range node.ProjectList {
+			f := expr.GetF()
+			if f != nil &&
+				f.GetFunc().GetObjName() == "cast_assign" &&
+				expr.Typ.Width == generated.Typ.Width &&
+				len(f.Args) > 0 &&
+				f.Args[0].Typ.Id == source.Typ.Id {
+				foundGeneratedAssignment = true
+			}
+		}
+	}
+	require.True(t, foundGeneratedAssignment)
+}
+
+func TestAssignmentCastRollingUpgradePlanGate(t *testing.T) {
+	proc := testutil.NewProc(nil)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+
+	build := func(version int64) string {
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
+		mock := NewMockOptimizer(true)
+		stmt, err := mysql.ParseOne(
+			t.Context(),
+			"INSERT INTO dept (deptno, dname, loc) SELECT 1, 'Sales', 'NY'",
+			1,
+		)
+		require.NoError(t, err)
+		built, err := mock.Optimize(stmt)
+		require.NoError(t, err)
+		data, err := json.Marshal(built)
+		require.NoError(t, err)
+		return string(data)
+	}
+
+	mixedVersionPlan := build(defines.MORPCVersion4)
+	require.Contains(t, mixedVersionPlan, `"obj_name":"cast_strict"`)
+	require.NotContains(t, mixedVersionPlan, `"obj_name":"cast_assign"`)
+	require.NotContains(t, mixedVersionPlan, `"obj_name":"cast_ignore"`)
+
+	upgradedPlan := build(defines.MORPCVersion5)
+	require.Contains(t, upgradedPlan, `"obj_name":"cast_assign"`)
 }
 
 func TestReplaceSetColRefAsDefault(t *testing.T) {

@@ -224,8 +224,8 @@ func rewriteUpdateQueryLastNode(builder *QueryBuilder, planCtxs []*dmlPlanCtx, l
 						return err
 					}
 				} else {
-					lastNode.ProjectList[pos], err = forceAssignmentCastExprWithIgnore(
-						builder.GetContext(), posExpr, col.Typ, isIgnore)
+					lastNode.ProjectList[pos], err = builder.forceAssignmentCastExpr(
+						posExpr, col.Typ, isIgnore)
 					if err != nil {
 						return err
 					}
@@ -258,8 +258,8 @@ func rewriteUpdateQueryLastNode(builder *QueryBuilder, planCtxs []*dmlPlanCtx, l
 						return err
 					}
 				} else {
-					lastNode.ProjectList[pos], err = forceAssignmentCastExprWithIgnore(
-						builder.GetContext(), lastNode.ProjectList[pos], col.Typ, isIgnore)
+					lastNode.ProjectList[pos], err = builder.forceAssignmentCastExpr(
+						lastNode.ProjectList[pos], col.Typ, isIgnore)
 					if err != nil {
 						return err
 					}

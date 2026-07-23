@@ -21,6 +21,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -622,7 +623,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 				return false, nil, nil, err
 			}
 		} else {
-			projExpr, err = forceAssignmentCastExprWithIgnore(builder.GetContext(), projExpr, tableDef.Cols[colIdx].Typ, builder.isInsertIgnore)
+			projExpr, err = builder.forceAssignmentCastExpr(projExpr, tableDef.Cols[colIdx].Typ, builder.isInsertIgnore)
 			if err != nil {
 				return false, nil, nil, err
 			}
@@ -804,7 +805,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 							return false, nil, nil, err
 						}
 					}
-					defExpr, err = forceAssignmentCastExprWithIgnore(builder.GetContext(), defExpr, col.Typ, builder.isInsertIgnore)
+					defExpr, err = builder.forceAssignmentCastExpr(defExpr, col.Typ, builder.isInsertIgnore)
 					if err != nil {
 						return false, nil, nil, err
 					}
@@ -1020,6 +1021,17 @@ func forceCastExpr2(ctx context.Context, expr *Expr, t2 types.Type, targetType *
 // cast_assign, which honors sql_mode at runtime (strict rejects over-length,
 // non-strict truncates). INSERT IGNORE and generic casts stay lenient.
 func forceCastExpr2WithIgnore(ctx context.Context, expr *Expr, t2 types.Type, targetType *plan.Expr, isIgnore bool) (*Expr, error) {
+	return forceCastExpr2WithProcess(ctx, expr, t2, targetType, isIgnore, nil)
+}
+
+func forceCastExpr2WithProcess(
+	ctx context.Context,
+	expr *Expr,
+	t2 types.Type,
+	targetType *plan.Expr,
+	isIgnore bool,
+	proc *process.Process,
+) (*Expr, error) {
 	if targetType.Typ.Id == 0 {
 		return expr, nil
 	}
@@ -1037,8 +1049,8 @@ func forceCastExpr2WithIgnore(ctx context.Context, expr *Expr, t2 types.Type, ta
 	// non-strict truncates). INSERT IGNORE and generic casts stay lenient
 	// (MySQL-compatible truncation).
 	funcName := "cast"
-	if !isIgnore && (t2.Oid == types.T_char || t2.Oid == types.T_varchar) {
-		funcName = "cast_assign"
+	if proc != nil || !isIgnore {
+		funcName = assignmentCastFunctionName(targetType.Typ, isIgnore, proc)
 	}
 	fGet, err := function.GetFunctionByName(ctx, funcName, []types.Type{t1, t2})
 	if err != nil {
@@ -1055,6 +1067,22 @@ func forceCastExpr2WithIgnore(ctx context.Context, expr *Expr, t2 types.Type, ta
 	}, nil
 }
 
+func (builder *QueryBuilder) forceCastExpr2(
+	expr *Expr,
+	t2 types.Type,
+	targetType *plan.Expr,
+	isIgnore bool,
+) (*Expr, error) {
+	return forceCastExpr2WithProcess(
+		builder.GetContext(),
+		expr,
+		t2,
+		targetType,
+		isIgnore,
+		builder.compCtx.GetProcess(),
+	)
+}
+
 func forceCastExpr(ctx context.Context, expr *Expr, targetType Type) (*Expr, error) {
 	return forceCastExprWithName(ctx, expr, targetType, "cast")
 }
@@ -1063,21 +1091,53 @@ func forceAssignmentCastExpr(ctx context.Context, expr *Expr, targetType Type) (
 	return forceAssignmentCastExprWithIgnore(ctx, expr, targetType, false)
 }
 
+func assignmentCastFunctionName(targetType Type, isIgnore bool, proc *process.Process) string {
+	if targetType.Id != int32(types.T_char) && targetType.Id != int32(types.T_varchar) {
+		return "cast"
+	}
+	if proc != nil {
+		version, ok := moruntime.ServiceRuntime(proc.GetService()).GetGlobalVariables(moruntime.MOProtocolVersion)
+		protocolVersion, valid := version.(int64)
+		if !ok || !valid || protocolVersion < defines.MORPCVersion5 {
+			if isIgnore {
+				return "cast"
+			}
+			return "cast_strict"
+		}
+	}
+	if isIgnore {
+		return "cast_ignore"
+	}
+	return "cast_assign"
+}
+
 // forceAssignmentCastExprWithIgnore builds the assignment cast for a DML write.
 // For CHAR/VARCHAR targets it normally uses cast_assign (sql_mode-gated width
 // check). When isIgnore is true (INSERT IGNORE or UPDATE IGNORE), over-length
 // writes are downgraded to truncation regardless of sql_mode and warning 1265
 // is recorded.
 func forceAssignmentCastExprWithIgnore(ctx context.Context, expr *Expr, targetType Type, isIgnore bool) (*Expr, error) {
-	funcName := "cast"
-	if targetType.Id == int32(types.T_char) || targetType.Id == int32(types.T_varchar) {
-		if isIgnore {
-			funcName = "cast_ignore"
-		} else {
-			funcName = "cast_assign"
-		}
-	}
-	return forceCastExprWithName(ctx, expr, targetType, funcName)
+	return forceAssignmentCastExprWithProcess(ctx, expr, targetType, isIgnore, nil)
+}
+
+func forceAssignmentCastExprWithProcess(
+	ctx context.Context,
+	expr *Expr,
+	targetType Type,
+	isIgnore bool,
+	proc *process.Process,
+) (*Expr, error) {
+	return forceCastExprWithName(ctx, expr, targetType, assignmentCastFunctionName(targetType, isIgnore, proc))
+}
+
+func (builder *QueryBuilder) forceAssignmentCastExpr(expr *Expr, targetType Type, isIgnore bool) (*Expr, error) {
+	return forceAssignmentCastExprWithProcess(
+		builder.GetContext(),
+		expr,
+		targetType,
+		isIgnore,
+		builder.compCtx.GetProcess(),
+	)
 }
 
 func forceCastExprWithName(ctx context.Context, expr *Expr, targetType Type, funcName string) (*Expr, error) {
@@ -1215,7 +1275,7 @@ func MakeInsertValueConstExpr(proc *process.Process, numVal *tree.NumVal, colTyp
 		// The plan-time width check in SetInsertValueString no longer rejects
 		// over-length CHAR/VARCHAR (relaxed to defer to sql_mode). Enforce width
 		// at runtime via the assignment cast (cast_assign / lenient for IGNORE).
-		return forceAssignmentCastExprWithIgnore(proc.Ctx, expr, makePlan2Type(colType), isIgnore)
+		return forceAssignmentCastExprWithProcess(proc.Ctx, expr, makePlan2Type(colType), isIgnore, proc)
 	case types.T_blob, types.T_binary, types.T_varbinary, types.T_text, types.T_datalink, types.T_geometry,
 		types.T_array_float32, types.T_array_float64:
 		canInsert, num, err := util.SetInsertValueString(proc, numVal, colType)
@@ -1324,7 +1384,7 @@ func buildValueScan(
 			if err != nil {
 				return err
 			}
-			defExpr, err = forceCastExpr2WithIgnore(builder.GetContext(), defExpr, colTyp, targetTyp, builder.isInsertIgnore)
+			defExpr, err = builder.forceCastExpr2(defExpr, colTyp, targetTyp, builder.isInsertIgnore)
 			if err != nil {
 				return err
 			}
@@ -1378,7 +1438,7 @@ func buildValueScan(
 						}
 					}
 				}
-				defExpr, err = forceCastExpr2WithIgnore(builder.GetContext(), defExpr, colTyp, targetTyp, builder.isInsertIgnore)
+				defExpr, err = builder.forceCastExpr2(defExpr, colTyp, targetTyp, builder.isInsertIgnore)
 				if err != nil {
 					return err
 				}

@@ -504,10 +504,7 @@ func buildGeneratedExpr(col *tree.ColumnTableDef, typ plan.Type, existingCols []
 	// are written (forceAssignmentCastExpr). INSERT IGNORE truncation is applied
 	// where the generated expression is reused (see bind_insert). Non-CHAR/VARCHAR
 	// targets keep the generic cast, unchanged.
-	funcName := "cast"
-	if typ.Id == int32(types.T_char) || typ.Id == int32(types.T_varchar) {
-		funcName = "cast_assign"
-	}
+	funcName := assignmentCastFunctionName(typ, false, proc)
 	genExpr, err := makePlan2CastExprWithName(proc.Ctx, planExpr, typ, funcName)
 	if err != nil {
 		return nil, err
@@ -672,10 +669,7 @@ func (builder *QueryBuilder) applyGeneratedColumnAssignmentCast(expr *plan.Expr,
 		len(f.Args) == 0 {
 		return expr
 	}
-	funcName := "cast_assign"
-	if isIgnore {
-		funcName = "cast_ignore"
-	}
+	funcName := assignmentCastFunctionName(expr.Typ, isIgnore, builder.compCtx.GetProcess())
 	assignmentCast, err := forceCastExprWithName(builder.GetContext(), f.Args[0], expr.Typ, funcName)
 	if err != nil {
 		return expr

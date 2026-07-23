@@ -1331,7 +1331,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 				}
 			}
 
-			updateExpr, err = forceAssignmentCastExpr(builder.GetContext(), updateExpr, colDef.Typ)
+			updateExpr, err = builder.forceAssignmentCastExpr(updateExpr, colDef.Typ, false)
 			if err != nil {
 				return 0, err
 			}
@@ -2771,7 +2771,7 @@ func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows
 				return 0, nil, nil, err
 			}
 		} else {
-			projExpr, err = forceAssignmentCastExprWithIgnore(builder.GetContext(), projExpr, tableDef.Cols[colIdx].Typ, builder.isInsertIgnore)
+			projExpr, err = builder.forceAssignmentCastExpr(projExpr, tableDef.Cols[colIdx].Typ, builder.isInsertIgnore)
 			if err != nil {
 				return 0, nil, nil, err
 			}
@@ -3073,7 +3073,7 @@ func (builder *QueryBuilder) buildValueScan(
 			if err != nil {
 				return 0, err
 			}
-			defExpr, err = forceCastExpr2WithIgnore(builder.GetContext(), defExpr, colTyp, targetTyp, builder.isInsertIgnore)
+			defExpr, err = builder.forceCastExpr2(defExpr, colTyp, targetTyp, builder.isInsertIgnore)
 			if err != nil {
 				return 0, err
 			}
@@ -3190,7 +3190,7 @@ func (builder *QueryBuilder) buildValueScan(
 						}
 					}
 				}
-				defExpr, err = forceCastExpr2WithIgnore(builder.GetContext(), defExpr, colTyp, targetTyp, builder.isInsertIgnore)
+				defExpr, err = builder.forceCastExpr2(defExpr, colTyp, targetTyp, builder.isInsertIgnore)
 				if err != nil {
 					return 0, err
 				}
