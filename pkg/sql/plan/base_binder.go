@@ -3529,6 +3529,16 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 			}
 		}
 
+	case "maketime":
+		// Hex and bit literals are represented as VARCHAR literals carrying
+		// IsBin. They are integral seconds, so they retain TIME(0) metadata even
+		// though the VARCHAR seconds overload normally advertises TIME(6).
+		if len(args) == 3 {
+			if literal := args[2].GetLit(); literal != nil && literal.IsBin {
+				returnType.Scale = 0
+			}
+		}
+
 	case "timestampadd":
 		// For TIMESTAMPADD with DATE input, check if unit is constant and adjust return type
 		// MySQL behavior: DATE input + date unit → DATE output, DATE input + time unit → DATETIME output
@@ -3579,6 +3589,15 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		}
 		for idx, castType := range argsCastType {
 			if !argsType[idx].Eq(castType) && castType.Oid != types.T_any {
+				// MAKETIME uses the scale on its VARCHAR seconds target only to
+				// derive the TIME return scale. Recasting an already-VARCHAR
+				// argument solely for that metadata clears Literal.IsBin, changing
+				// X'..'/B'..' from a binary number into ordinary text.
+				if name == "maketime" && idx == 2 &&
+					argsType[idx].Oid == types.T_varchar && castType.Oid == types.T_varchar &&
+					argsType[idx].Width == castType.Width {
+					continue
+				}
 				if argsType[idx].Oid == castType.Oid && castType.Oid.IsDecimal() && argsType[idx].Scale == castType.Scale {
 					continue
 				}
