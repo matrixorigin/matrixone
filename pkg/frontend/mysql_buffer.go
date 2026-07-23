@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"io"
 	"net"
 	"strings"
 	"sync"
@@ -29,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 )
 
 const (
@@ -228,6 +230,9 @@ type Conn struct {
 	timeout           time.Duration
 	readTimeout       time.Duration
 	writeTimeout      time.Duration
+	outputHeader      [HeaderLengthOfTheProtocol]byte
+	outputHeaderBytes int
+	outputPayloadLeft int
 	// loadLocalReadTimeout is the timeout for reading data from client during LOAD DATA LOCAL operations
 	loadLocalReadTimeout time.Duration
 	// loadLocalWriteTimeout is the timeout for writing data to client during LOAD DATA LOCAL operations
@@ -236,6 +241,28 @@ type Conn struct {
 	ses                   atomic.Pointer[holder[*Session]]
 	closeFunc             sync.Once
 	service               string
+	outputCounter         atomic.Pointer[perfcounter.CounterSet]
+	responseOutputWait    atomic.Pointer[responseOutputWaitTracker]
+}
+
+type responseOutputWaitTracker struct {
+	// totalNS covers every physical write in the statement response. operatorNS
+	// is the subset already published by an operator analyzer, so finalization
+	// can add only the delayed flush/terminal-response remainder.
+	totalNS    atomic.Int64
+	operatorNS atomic.Int64
+}
+
+func (c *Conn) withOutputCounter(counter *perfcounter.CounterSet, fn func() error) error {
+	// MysqlProtocolImpl serializes these scopes with its protocol mutex. The
+	// request tracker remains installed independently across buffered flushes.
+	previous := c.outputCounter.Swap(counter)
+	defer c.outputCounter.Store(previous)
+	return fn()
+}
+
+func (c *Conn) setResponseOutputWaitTracker(tracker *responseOutputWaitTracker) {
+	c.responseOutputWait.Store(tracker)
 }
 
 // SetTimeout updates the read timeout used by ReadFromConn.
@@ -866,7 +893,6 @@ func (c *Conn) Flush() error {
 	}
 	var err error
 	defer c.Reset()
-	c.CountFlushPackage(1)
 	err = c.WriteToConn(c.fixBuf.AvailableData())
 	if err != nil {
 		return err
@@ -905,6 +931,7 @@ func (c *Conn) Write(payload []byte) error {
 	if err != nil {
 		return err
 	}
+	c.packetInBuf++
 	err = c.Flush()
 	if err != nil {
 		return err
@@ -916,14 +943,60 @@ func (c *Conn) Write(payload []byte) error {
 func (c *Conn) WriteToConn(buf []byte) error {
 	sendLength := 0
 	for sendLength < len(buf) {
+		tracker := c.responseOutputWait.Load()
+		operatorCounter := c.outputCounter.Load()
+		start := time.Now()
 		n, err := c.conn.Write(buf[sendLength:])
+		elapsedNS := time.Since(start).Nanoseconds()
+		if tracker != nil {
+			tracker.totalNS.Add(elapsedNS)
+		}
+		if operatorCounter != nil {
+			operatorCounter.ProtocolOutputWaitNS.Add(elapsedNS)
+			if tracker != nil {
+				tracker.operatorNS.Add(elapsedNS)
+			}
+		}
+		if n > 0 {
+			sendLength += n
+			c.CountOutputBytes(n)
+			c.countCompletedOutputPackets(buf[sendLength-n : sendLength])
+		}
 		if err != nil {
 			return err
 		}
-		sendLength += n
-		c.CountOutputBytes(n)
+		if n == 0 {
+			return io.ErrNoProgress
+		}
 	}
 	return nil
+}
+
+func (c *Conn) countCompletedOutputPackets(written []byte) {
+	for len(written) > 0 {
+		if c.outputPayloadLeft > 0 {
+			n := min(c.outputPayloadLeft, len(written))
+			c.outputPayloadLeft -= n
+			written = written[n:]
+			if c.outputPayloadLeft == 0 {
+				c.CountFlushPackage(1)
+			}
+			continue
+		}
+		n := min(HeaderLengthOfTheProtocol-c.outputHeaderBytes, len(written))
+		copy(c.outputHeader[c.outputHeaderBytes:], written[:n])
+		c.outputHeaderBytes += n
+		written = written[n:]
+		if c.outputHeaderBytes == HeaderLengthOfTheProtocol {
+			c.outputPayloadLeft = int(c.outputHeader[0]) |
+				int(c.outputHeader[1])<<8 |
+				int(c.outputHeader[2])<<16
+			c.outputHeaderBytes = 0
+			if c.outputPayloadLeft == 0 {
+				c.CountFlushPackage(1)
+			}
+		}
+	}
 }
 
 func (c *Conn) RemoteAddress() string {

@@ -526,39 +526,45 @@ func (x Decimal128) ScaleTruncate(n int32) (Decimal128, error) {
 }
 
 func (x Decimal256) Scale(n int32) (Decimal256, error) {
+	if n == 0 || (x.B0_63 == 0 && x.B64_127 == 0 && x.B128_191 == 0 && x.B192_255 == 0) {
+		return x, nil
+	}
+	if n < -77 {
+		return Decimal256{}, nil
+	}
 	signx := x.Sign()
 	x1 := x
 	if signx {
 		x1 = x1.Minus()
 	}
 	err := error(nil)
-	m := int32(0)
-	for n-m > 19 || n-m < -19 {
-		if n > 0 {
-			m += 19
+	remaining := int64(n)
+	for remaining > 19 || remaining < -19 {
+		if remaining > 0 {
+			remaining -= 19
 			x1, err = x1.Mul256(Decimal256{Pow10[19], 0, 0, 0})
 		} else {
-			m -= 19
+			remaining += 19
 			x1, err = x1.Div256(Decimal256{Pow10[19], 0, 0, 0})
 		}
 		if err != nil {
-			err = moerr.NewInvalidInputNoCtxf("Decimal256 scale overflow: %s", x.Format(n))
+			err = moerr.NewInvalidInputNoCtxf("Decimal256 scale overflow: target scale=%d", n)
 			return x, err
 		}
 	}
-	if n == m {
+	if remaining == 0 {
 		if signx {
 			x1 = x1.Minus()
 		}
 		return x1, nil
 	}
-	if n-m > 0 {
-		x1, err = x1.Mul256(Decimal256{Pow10[n-m], 0, 0, 0})
+	if remaining > 0 {
+		x1, err = x1.Mul256(Decimal256{Pow10[remaining], 0, 0, 0})
 	} else {
-		x1, err = x1.Div256(Decimal256{Pow10[m-n], 0, 0, 0})
+		x1, err = x1.Div256(Decimal256{Pow10[-remaining], 0, 0, 0})
 	}
 	if err != nil {
-		err = moerr.NewInvalidInputNoCtxf("Decimal256 scale overflow: %s", x.Format(n))
+		err = moerr.NewInvalidInputNoCtxf("Decimal256 scale overflow: target scale=%d", n)
 		return x, err
 	}
 	if signx {
@@ -2191,7 +2197,12 @@ func Parse256(x string) (y Decimal256, scale int32, err error) {
 				scale++
 			}
 		} else {
-			scalecount = scalecount*10 + int32(x[i]-'0')
+			digit := int32(x[i] - '0')
+			if scalecount > (math.MaxInt32-digit)/10 {
+				err = moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal256.", x)
+				return
+			}
+			scalecount = scalecount*10 + digit
 		}
 		i++
 	}
@@ -2206,9 +2217,14 @@ func Parse256(x string) (y Decimal256, scale int32, err error) {
 		if scalesign {
 			scalecount = -scalecount
 		}
-		scale -= scalecount
+		nextScale := int64(scale) - int64(scalecount)
+		if nextScale < math.MinInt32 || nextScale > math.MaxInt32 {
+			err = moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal256.", x)
+			return
+		}
+		scale = int32(nextScale)
 		if scale < 0 {
-			y, err = y.Scale(-scale)
+			y, err = y.Scale(int32(-int64(scale)))
 			scale = 0
 			if err != nil {
 				err = moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal256.", x)

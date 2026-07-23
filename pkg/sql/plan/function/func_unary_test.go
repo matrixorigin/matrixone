@@ -3859,6 +3859,9 @@ func initHourTestCase() []tcTemp {
 	t1, _ := types.ParseTime("15:30:45", 6)
 	t2, _ := types.ParseTime("00:00:00", 6)
 	t3, _ := types.ParseTime("23:59:59", 6)
+	t4, _ := types.ParseTime("272:59:59", 6)
+	t5, _ := types.ParseTime("-272:59:59", 6)
+	t6 := types.TimeFromClock(false, types.MaxHourInTime, 59, 59, 0)
 
 	return []tcTemp{
 		{
@@ -3890,12 +3893,12 @@ func initHourTestCase() []tcTemp {
 			typ:  types.T_time,
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_time.ToType(),
-					[]types.Time{t1, t2, t3},
-					[]bool{false, false, false}),
+					[]types.Time{t1, t2, t3, t4, t5, t6},
+					[]bool{false, false, false, false, false, false}),
 			},
-			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
-				[]uint8{15, 0, 23},
-				[]bool{false, false, false}),
+			expect: NewFunctionTestResult(types.T_uint32.ToType(), false,
+				[]uint32{15, 0, 23, 272, 272, uint32(types.MaxHourInTime)},
+				[]bool{false, false, false, false, false, false}),
 		},
 	}
 }

@@ -1638,7 +1638,11 @@ func TestLockTableIfLockCountIsZeroWithLockRows(t *testing.T) {
 		require.NoError(t, arg.Prepare(proc))
 		arg.ctr.hasNewVersionInRange = testFunc
 
+		arg.OpAnalyzer.Start()
 		require.NoError(t, lockTalbeIfLockCountIsZero(proc, arg))
+		arg.OpAnalyzer.Stop()
+		require.Equal(t, 1, arg.OpAnalyzer.GetOpStats().CallNum)
+		require.Zero(t, arg.OpAnalyzer.GetOpStats().ResourceDelta().Quality)
 
 		arg.Free(proc, false, nil)
 	})

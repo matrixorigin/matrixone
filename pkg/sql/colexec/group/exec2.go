@@ -199,9 +199,6 @@ func (group *Group) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	group.OpAnalyzer.Start()
-	defer group.OpAnalyzer.Stop()
-
 	switch group.ctr.state {
 	case vm.Build, vm.EvalReset:
 		if group.ctr.state == vm.EvalReset {
