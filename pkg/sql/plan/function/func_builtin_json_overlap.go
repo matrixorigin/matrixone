@@ -85,15 +85,16 @@ func jsonOverlapsCheckFn(_ []overload, inputs []types.Type) checkResult {
 	finalTypes := make([]types.Type, 2)
 	needsCast := false
 	for i, input := range inputs {
-		switch {
-		case input.Oid == types.T_json || input.Oid.IsMySQLString():
+		if input.Oid == types.T_json || input.Oid.IsMySQLString() {
 			finalTypes[i] = input
-		case input.Oid == types.T_any:
+			continue
+		}
+		if canCast, _ := fixedImplicitTypeCast(input, types.T_varchar); canCast {
 			finalTypes[i] = types.T_varchar.ToType()
 			needsCast = true
-		default:
-			return newCheckResultWithFailure(failedFunctionParametersWrong)
+			continue
 		}
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
 	}
 	if needsCast {
 		return newCheckResultWithCast(0, finalTypes)
