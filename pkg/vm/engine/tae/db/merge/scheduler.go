@@ -18,13 +18,13 @@ import (
 	"bytes"
 	"container/heap"
 	"context"
-	"errors"
 	"fmt"
 	"math/rand"
 	"slices"
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -41,7 +41,7 @@ const (
 	objectOpsTriggerThreshold = 5
 )
 
-var ErrMergeSchedulerStopped = errors.New("merge scheduler stopped")
+var ErrMergeSchedulerStopped = moerr.NewInternalErrorNoCtx("merge scheduler stopped")
 
 type mergeTask struct {
 	objs        []*objectio.ObjectStats
