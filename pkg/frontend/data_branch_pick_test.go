@@ -102,6 +102,29 @@ func TestSegmentBuilder_LargeGap_SplitsSegment(t *testing.T) {
 	require.Equal(t, int64(1000004), types.DecodeInt64(zm1.GetMaxBuf()))
 }
 
+func TestSegmentBuilder_LargeGapResetsGapStatistics(t *testing.T) {
+	pkType := types.T_int64.ToType()
+	sb := newSegmentBuilder(pkType)
+
+	for _, value := range []int64{
+		1, 2, 3, 4, 5,
+		1000000, 1000100, 1000200, 1000300, 1000400,
+	} {
+		sb.observe(types.EncodeInt64(&value))
+	}
+
+	segments := sb.finalize()
+	require.Len(t, segments, 2)
+
+	first := index.ZM(segments[0])
+	require.Equal(t, int64(1), types.DecodeInt64(first.GetMinBuf()))
+	require.Equal(t, int64(5), types.DecodeInt64(first.GetMaxBuf()))
+
+	second := index.ZM(segments[1])
+	require.Equal(t, int64(1000000), types.DecodeInt64(second.GetMinBuf()))
+	require.Equal(t, int64(1000400), types.DecodeInt64(second.GetMaxBuf()))
+}
+
 func TestSegmentBuilder_StringType_CountBased(t *testing.T) {
 	// String types use count-based splitting (maxSegmentSize cap).
 	// With only a few values, should be one segment.
