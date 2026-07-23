@@ -306,6 +306,8 @@ type Session struct {
 	// admission barrier. It is not held while writing to the transport or
 	// joining the sender.
 	enqueueMu sync.RWMutex
+	// enqueueClosed is protected by enqueueMu and becomes true exactly once.
+	enqueueClosed bool
 
 	logger      *log.MOLogger
 	sendTimeout time.Duration
@@ -542,15 +544,16 @@ func (ss *Session) PostClean() {
 		}
 
 		ss.progressTimer.Stop()
-		// Cross the response-admission barrier after cancellation. Every hand-off
-		// that passed its context check before cancellation either completes its
-		// enqueue or withdraws before this writer acquires the lock. Hand-offs
-		// admitted afterwards observe sessionCtx cancellation and cannot enqueue.
+		// Cross and seal the response-admission barrier after cancellation. Every
+		// hand-off that passed its context check before cancellation either
+		// completes its enqueue or withdraws before this writer acquires the lock.
+		// Hand-offs admitted afterwards observe enqueueClosed and cannot enqueue.
 		//
 		// Do not hold enqueueMu while joining the sender: the sender can still
 		// need Session.mu for progress or diagnostics, while subscription
 		// completion takes Session.mu before entering the admission barrier.
 		ss.enqueueMu.Lock()
+		ss.enqueueClosed = true
 		ss.enqueueMu.Unlock()
 		ss.wg.Wait()
 
@@ -847,6 +850,18 @@ func (ss *Session) sendResponse(
 ) error {
 	ss.enqueueMu.RLock()
 	defer ss.enqueueMu.RUnlock()
+	if ss.enqueueClosed {
+		err := ss.sessionCtx.Err()
+		if err == nil {
+			// PostClean cancels the session before sealing admission. Keep this
+			// fallback so a future caller cannot turn a closed admission gate
+			// into a successful hand-off by violating that ordering.
+			err = context.Canceled
+		}
+		ss.logger.Error("session response admission closed", zap.Error(err))
+		ss.responses.Release(response)
+		return err
+	}
 	select {
 	case <-ss.sessionCtx.Done():
 		ss.logger.Error("session context done", zap.Error(ss.sessionCtx.Err()))

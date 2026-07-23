@@ -110,8 +110,9 @@ func TestSessionStopsWhenTransportDisconnects(t *testing.T) {
 
 func TestPostCleanCancelsBeforeClosingTransport(t *testing.T) {
 	transport := &cancelOrderSession{captureSession: newCaptureSession()}
+	responses := NewLogtailResponsePool()
 	session := NewSession(
-		context.Background(), mockMOLogger(), NewLogtailResponsePool(),
+		context.Background(), mockMOLogger(), responses,
 		&recordingSessionNotifier{notified: make(chan error, 1)},
 		mockMorpcStream(transport, 1, 1024),
 		time.Second, time.Second, time.Hour, time.Hour,
@@ -124,6 +125,20 @@ func TestPostCleanCancelsBeforeClosingTransport(t *testing.T) {
 		"cleanup must cancel response admission before entering transport Close")
 	require.ErrorIs(t, session.sessionCtx.Err(), context.Canceled)
 	require.ErrorIs(t, transport.ctx.Err(), context.Canceled)
+	session.enqueueMu.RLock()
+	admissionClosed := session.enqueueClosed
+	session.enqueueMu.RUnlock()
+	require.True(t, admissionClosed)
+
+	var released atomic.Int32
+	response := responses.Acquire()
+	response.closeCB = func() { released.Add(1) }
+	require.ErrorIs(t,
+		session.SendResponse(context.Background(), response),
+		context.Canceled,
+	)
+	require.Equal(t, int32(1), released.Load())
+	require.Empty(t, session.sendChan)
 }
 
 func TestPostCleanDoesNotHoldAdmissionBarrierWhileJoiningSender(t *testing.T) {
