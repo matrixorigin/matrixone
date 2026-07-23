@@ -541,6 +541,13 @@ func (bh *branchHashmap) PopByVectorsStream(keyVecs []*vector.Vector, removeAll 
 		}
 		shard.lock()
 		var removedTotal int64
+		finishShard := func() {
+			if removedTotal > 0 {
+				atomic.AddInt64(&shard.items, -removedTotal)
+				totalRemoved += removedTotal
+			}
+			shard.unlock()
+		}
 		for _, probe := range probes {
 			rows, removedBytes, removedCount := shard.mem.collect(probe.hash, probe.key, probe.plan, true, collectValues)
 			if removedBytes > 0 {
@@ -552,7 +559,7 @@ func (bh *branchHashmap) PopByVectorsStream(keyVecs []*vector.Vector, removeAll 
 			if collectValues {
 				for _, row := range rows {
 					if err := fn(probe.idx, probe.key, row); err != nil {
-						shard.unlock()
+						finishShard()
 						return int(totalRemoved), err
 					}
 				}
@@ -560,15 +567,11 @@ func (bh *branchHashmap) PopByVectorsStream(keyVecs []*vector.Vector, removeAll 
 		}
 		if shard.spill != nil {
 			if err := collectSpillPopStream(shard, probes, removeAll, fn, &removedTotal, collectValues); err != nil {
-				shard.unlock()
+				finishShard()
 				return int(totalRemoved), err
 			}
 		}
-		if removedTotal > 0 {
-			atomic.AddInt64(&shard.items, -removedTotal)
-			totalRemoved += removedTotal
-		}
-		shard.unlock()
+		finishShard()
 	}
 
 	return int(totalRemoved), nil
