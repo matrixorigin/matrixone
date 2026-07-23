@@ -4662,3 +4662,100 @@ func TestGroupingSetDistinctGlobalDedup(t *testing.T) {
 	require.False(t, hasAggAboveUnionAll(allPlan),
 		"non-distinct grouping-set has no whole-result de-dup above the union")
 }
+
+func TestGroupingSetDistinctOrderByHiddenKeyAfterDedup(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	p, err := runOneStmt(mock, t,
+		"select distinct a from select_test.bind_select group by a, b with rollup order by rand()")
+	require.NoError(t, err)
+
+	nodes := p.GetQuery().Nodes
+	lastUnion := -1
+	for i, node := range nodes {
+		if node.NodeType == plan.Node_UNION_ALL {
+			lastUnion = i
+		}
+	}
+	require.NotEqual(t, -1, lastUnion)
+
+	distinctGroup := -1
+	for i := lastUnion + 1; i < len(nodes); i++ {
+		if nodes[i].NodeType == plan.Node_AGG {
+			distinctGroup = i
+			break
+		}
+	}
+	require.NotEqual(t, -1, distinctGroup)
+	require.Len(t, nodes[distinctGroup].GroupBy, 1,
+		"the hidden random order key must not enter the visible DISTINCT tuple")
+
+	hasOrderProject := false
+	for i := distinctGroup + 1; i < len(nodes); i++ {
+		if nodes[i].NodeType == plan.Node_PROJECT && len(nodes[i].ProjectList) == 2 {
+			hasOrderProject = true
+			break
+		}
+	}
+	require.True(t, hasOrderProject, "the hidden random key must be projected after DISTINCT")
+}
+
+func TestGroupingSetDistinctDerivedGroupingOrder(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	for _, testCase := range []struct {
+		name    string
+		groupBy string
+	}{
+		{name: "rollup", groupBy: "a, b with rollup"},
+		{name: "cube", groupBy: "cube(a, b)"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			p, err := runOneStmt(mock, t,
+				"select distinct grouping(a) as ga, b from select_test.bind_select "+
+					"group by "+testCase.groupBy+" order by grouping(a) + cast(b as int)")
+			require.NoError(t, err)
+			require.True(t, hasAggAboveUnionAll(p))
+		})
+	}
+
+	_, err := runOneStmt(mock, t,
+		"select distinct b from select_test.bind_select group by a, b with rollup order by grouping(a) + b")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "for SELECT DISTINCT, ORDER BY expressions must appear in select list")
+}
+
+func TestNormalizeGroupingSetDistinctProjectsTypedNull(t *testing.T) {
+	builder, bindCtx := genBuilderAndCtx()
+	for _, typ := range []types.T{
+		types.T_int64,
+		types.T_varchar,
+		types.T_decimal128,
+		types.T_date,
+		types.T_uuid,
+	} {
+		t.Run(typ.String(), func(t *testing.T) {
+			project := GetColExpr(
+				plan.Type{Id: int32(typ), NotNullable: false},
+				bindCtx.projectTag,
+				0,
+			)
+			normalized, err := normalizeGroupingSetDistinctProjects(builder.GetContext(), []*plan.Expr{project})
+			require.NoError(t, err)
+			require.Len(t, normalized, 1)
+
+			ifExpr := normalized[0].GetF()
+			require.NotNil(t, ifExpr)
+			require.Equal(t, "if", ifExpr.Func.ObjName)
+			require.Len(t, ifExpr.Args, 3)
+			nullLiteral := ifExpr.Args[1].GetLit()
+			require.NotNil(t, nullLiteral)
+			require.True(t, nullLiteral.Isnull)
+			require.Equal(t, int32(typ), ifExpr.Args[1].Typ.Id)
+		})
+	}
+
+	mock := NewMockOptimizer(true)
+	_, err := runOneStmt(mock, t,
+		"select distinct snapshot_id from mo_catalog.mo_snapshots group by snapshot_id with rollup")
+	require.NoError(t, err, "UUID grouping-set DISTINCT must build without an ANY-to-UUID cast")
+}

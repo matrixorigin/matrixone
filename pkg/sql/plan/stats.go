@@ -616,6 +616,9 @@ func getExprNdv(expr *plan.Expr, builder *QueryBuilder) float64 {
 			// Invalid modValue (zero, negative, or overflow), fallback to column NDV
 			return getExprNdv(exprImpl.F.Args[0], builder)
 		default:
+			if len(exprImpl.F.Args) == 0 {
+				return -1
+			}
 			return getExprNdv(exprImpl.F.Args[0], builder)
 		}
 	case *plan.Expr_Col:

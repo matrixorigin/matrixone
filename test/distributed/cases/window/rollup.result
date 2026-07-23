@@ -999,7 +999,28 @@ null	0
 east	0
 west	0
 null	1
-select distinct region as product, grouping(region) as gr
+select count(*) as visible_regions
+from (
+select distinct region
+from grouping_order
+group by region, product with rollup
+order by rand()
+) as ordered_distinct;
+visible_regions
+3
+select distinct grouping(region) as gr, amount
+from grouping_order
+group by region, amount with rollup
+order by grouping(region) + amount;
+gr	amount
+1	null
+0	null
+0	3
+0	5
+0	7
+0	10
+0	20
+select distinct region as product, grouping(region) + product as sort_key
 from grouping_order
 group by region, product with rollup
 order by grouping(region) + product;
@@ -1059,6 +1080,21 @@ west	tea	3	0	y	null
 west	tea	3	0	y	2
 null	null	null	1	null	null
 drop table grouping_order2;
+drop table if exists grouping_uuid;
+create table grouping_uuid (snapshot_id uuid);
+insert into grouping_uuid values
+('00000000-0000-0000-0000-000000000001'),
+('00000000-0000-0000-0000-000000000002'),
+(null);
+select distinct snapshot_id
+from grouping_uuid
+group by snapshot_id with rollup
+order by snapshot_id;
+snapshot_id
+null
+00000000-0000-0000-0000-000000000001
+00000000-0000-0000-0000-000000000002
+drop table grouping_uuid;
 drop table grouping_order;
 create table rollup_window_sales(region varchar(20), product varchar(20), qty int);
 insert into rollup_window_sales values

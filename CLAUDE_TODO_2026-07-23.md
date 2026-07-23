@@ -46,3 +46,36 @@
 - 不 force push。
 - 不擅自回复或 resolve GitHub review thread。
 - 验证与 self-review 通过后提交并正常推送现有 Draft PR。
+
+## PR #25335 第四轮 review 修复
+
+### 有效问题
+
+1. grouping-set DISTINCT 当前对整个 `ctx.projects` 去重，普通 `ORDER BY` 追加的隐藏键会污染
+   DISTINCT tuple；`ORDER BY rand()` 还会因隐藏列越界触发优化器 panic。
+2. grouping NULL 规范化通过 `CAST(ANY NULL AS target)` 构造空值，UUID 等不支持该 cast 的类型
+   无法建计划。
+3. grouping-related DISTINCT `ORDER BY` 只接受完整表达式命中，未支持由多个可见输出派生的表达式。
+
+### 修复方案
+
+1. grouping-set DISTINCT 与普通 DISTINCT 保持相同节点顺序：
+   - 最终分支 PROJECT 只包含 `resultLen` 个可见列；
+   - 先对可见列执行全局 DISTINCT；
+   - DISTINCT 之后用 `appendDistinctOrderProjectionNode` 计算派生或隐藏排序键；
+   - SORT 后再投影回可见列。
+2. 直接构造 `Typ` 为目标类型且 `Isnull=true` 的 literal，不经过 ANY 到目标类型的 CAST。
+3. grouping-related 排序表达式先在首个真实分支中绑定，再递归映射到 DISTINCT 可见输出：
+   - 完整可见子表达式直接替换为 UNION 输出列；
+   - 普通函数允许由已选择子表达式继续派生；
+   - 未被选择的 `GROUPING()` 子表达式不可从已清除 provenance 的普通列重算，必须拒绝。
+4. 非 grouping 排序表达式复用现有 `distinctOrderBinder`，保持 `RAND()` 和由可见列派生表达式的
+   既有行为。
+
+### 新增测试矩阵
+
+- `ORDER BY rand()` 不 panic，且随机隐藏键不进入 DISTINCT tuple。
+- `GROUPING(a) + b` 在 `GROUPING(a)` 与 `b` 都可见时通过；缺少任一依赖时拒绝。
+- ROLLUP 与 CUBE 均覆盖派生排序表达式。
+- UUID、普通标量、NULL、GROUPING 输出的 typed NULL 规范化均可建计划。
+- 真实 BVT 验证可见去重、隐藏排序和最终输出列数。

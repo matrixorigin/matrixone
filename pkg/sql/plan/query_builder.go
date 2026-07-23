@@ -3123,6 +3123,11 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 	// added to ctx.projects by ORDER BY are included in the PROJECT node
 	var orderBys []*plan.OrderBySpec
 	if astOrderBy != nil {
+		// The grouping-set rewrite builds a UNION context whose DISTINCT flag is
+		// otherwise lost with the generated branches. Restore it while binding
+		// ORDER BY so ordinary expressions use the same projected-column-only
+		// rules as a non-rewritten SELECT DISTINCT.
+		ctx.isDistinct = distinct
 		orderBinder := NewOrderBinder(projectionBinder, nil)
 		orderBys = make([]*plan.OrderBySpec, 0, len(astOrderBy))
 
@@ -3152,9 +3157,11 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 				}
 			case groupingOrderResolve != nil && oi < len(groupingOrderResolve.bindDistinct) && groupingOrderResolve.bindDistinct[oi]:
 				// Bind against the first generated grouping-set branch, where
-				// table bindings, grouping-column identities, expanded stars, and
-				// select aliases are all available. The regular DISTINCT binder
-				// rejects expressions not represented by the visible projection.
+				// table bindings and grouping-column identities are available,
+				// then remap every selected subexpression to the visible UNION
+				// projection. This accepts derived expressions such as
+				// GROUPING(a)+b without allowing an unselected GROUPING(a) to be
+				// recomputed after its grouping provenance has been materialized.
 				branchCtx := subCtxList[0]
 				qualifiedOrderExpr, qualifyErr := qualifyBoundGroupingOrderExpr(branchCtx, order.Expr)
 				if qualifyErr != nil {
@@ -3165,23 +3172,15 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 				if bindErr != nil {
 					return 0, bindErr
 				}
-				exprKey, keyErr := projectExprKey(branchExpr)
-				if keyErr != nil {
-					return 0, keyErr
-				}
-				branchColPos, ok := branchCtx.projectByExpr[exprKey]
-				if !ok || branchColPos < 0 || int(branchColPos) >= resultLen {
-					return 0, moerr.NewSyntaxError(builder.GetContext(), "for SELECT DISTINCT, ORDER BY expressions must appear in select list")
-				}
-				colPos := int(branchColPos)
-				expr = &plan.Expr{
-					Typ: ctx.projects[colPos].Typ,
-					Expr: &plan.Expr_Col{
-						Col: &plan.ColRef{
-							RelPos: ctx.projectTag,
-							ColPos: int32(colPos),
-						},
-					},
+				expr, bindErr = remapGroupingSetDistinctOrderExpr(
+					builder.GetContext(),
+					branchExpr,
+					branchCtx,
+					ctx,
+					resultLen,
+				)
+				if bindErr != nil {
+					return 0, bindErr
 				}
 			default:
 				// On the grouping-set path a positional ORDER BY may only address
@@ -3228,7 +3227,12 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 		}
 	}
 
-	// append a project node (after ORDER BY binding to include any new expressions)
+	// The DISTINCT tuple contains visible columns only. Derived ORDER BY keys are
+	// materialized after duplicate elimination below. Non-DISTINCT queries keep
+	// their hidden grouping sort keys in this initial PROJECT.
+	if distinct {
+		ctx.projects = ctx.projects[:resultLen]
+	}
 	projectList := ctx.projects
 	if distinct {
 		projectList, err = normalizeGroupingSetDistinctProjects(builder.GetContext(), projectList)
@@ -3252,6 +3256,14 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 	// duplicates from different grouping-set branches do not collapse.
 	if distinct {
 		lastNodeID = builder.appendDistinctNode(ctx, lastNodeID)
+	}
+
+	resultSourceTag := ctx.projectTag
+	if distinct && len(orderBys) > 0 {
+		lastNodeID, resultSourceTag, err = builder.appendDistinctOrderProjectionNode(ctx, lastNodeID, orderBys)
+		if err != nil {
+			return 0, err
+		}
 	}
 
 	// append orderBy (SORT node)
@@ -3286,7 +3298,7 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 				Typ: ctx.projects[i].Typ,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
-						RelPos: ctx.projectTag,
+						RelPos: resultSourceTag,
 						ColPos: int32(i),
 					},
 				},
@@ -3826,7 +3838,11 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 							selectClause.Having.RollupHaving = true
 						}
 						selectStmts[i] = &tree.SelectClause{
-							Distinct: selectClause.Distinct,
+							// Duplicate elimination belongs above the complete
+							// UNION ALL. Branch-local DISTINCT is redundant and
+							// can force invalid type harmonization for a rolled-up
+							// UUID column whose empty grouping set starts as ANY.
+							Distinct: false,
 							Exprs:    branchExprs,
 							From:     selectClause.From,
 							Where:    selectClause.Where,
@@ -6111,10 +6127,11 @@ func normalizeGroupingSetDistinctProjects(
 		if err != nil {
 			return nil, err
 		}
-		nullExpr := makePlan2NullConstExprWithType()
-		nullExpr, err = appendCastBeforeExpr(ctx, nullExpr, project.Typ)
-		if err != nil {
-			return nil, err
+		nullExpr := &plan.Expr{
+			Typ: project.Typ,
+			Expr: &plan.Expr_Lit{
+				Lit: &plan.Literal{Isnull: true},
+			},
 		}
 		normalized[i], err = BindFuncExprImplByPlanExpr(
 			ctx,
@@ -6126,6 +6143,53 @@ func normalizeGroupingSetDistinctProjects(
 		}
 	}
 	return normalized, nil
+}
+
+func remapGroupingSetDistinctOrderExpr(
+	sysCtx context.Context,
+	expr *plan.Expr,
+	branchCtx *BindContext,
+	unionCtx *BindContext,
+	resultLen int,
+) (*plan.Expr, error) {
+	exprKey, err := projectExprKey(expr)
+	if err != nil {
+		return nil, err
+	}
+	if colPos, ok := branchCtx.projectByExpr[exprKey]; ok && colPos >= 0 && int(colPos) < resultLen {
+		return GetColExpr(unionCtx.projects[colPos].Typ, unionCtx.projectTag, colPos), nil
+	}
+
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		if exprImpl.F == nil || exprImpl.F.Func == nil ||
+			strings.EqualFold(exprImpl.F.Func.ObjName, "grouping") {
+			break
+		}
+		remapped := DeepCopyExpr(expr)
+		for i, arg := range exprImpl.F.Args {
+			remappedArg, remapErr := remapGroupingSetDistinctOrderExpr(
+				sysCtx,
+				arg,
+				branchCtx,
+				unionCtx,
+				resultLen,
+			)
+			if remapErr != nil {
+				return nil, remapErr
+			}
+			remapped.GetF().Args[i] = remappedArg
+		}
+		return remapped, nil
+
+	case *plan.Expr_Lit, *plan.Expr_P, *plan.Expr_V, *plan.Expr_T:
+		return DeepCopyExpr(expr), nil
+	}
+
+	return nil, moerr.NewSyntaxError(
+		sysCtx,
+		"for SELECT DISTINCT, ORDER BY expressions must appear in select list",
+	)
 }
 
 func prepareGroupingSetOrderByProjects(
@@ -6285,8 +6349,12 @@ func cloneTreeValue(value reflect.Value, visited map[treeClonePointer]reflect.Va
 		}
 		result := reflect.New(value.Type().Elem())
 		visited[key] = result
-		result.Elem().Set(value.Elem())
-		cloneTreeStructFields(result.Elem(), value.Elem(), visited)
+		if value.Elem().Kind() == reflect.Struct {
+			result.Elem().Set(value.Elem())
+			cloneTreeStructFields(result.Elem(), value.Elem(), visited)
+		} else {
+			result.Elem().Set(cloneTreeValue(value.Elem(), visited))
+		}
 		return result
 	case reflect.Struct:
 		result := reflect.New(value.Type()).Elem()

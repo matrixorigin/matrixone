@@ -651,9 +651,23 @@ from grouping_order
 group by region, product with rollup
 order by grouping(region), region;
 
+-- Hidden and derived ORDER BY keys must be computed after visible DISTINCT.
+select count(*) as visible_regions
+from (
+    select distinct region
+    from grouping_order
+    group by region, product with rollup
+    order by rand()
+) as ordered_distinct;
+
+select distinct grouping(region) as gr, amount
+from grouping_order
+group by region, amount with rollup
+order by grouping(region) + amount;
+
 -- alias shadowing: the ORDER BY `product` is the alias for `region`, so the
 -- expression differs from the select-list one (source column) and is rejected.
-select distinct region as product, grouping(region) as gr
+select distinct region as product, grouping(region) + product as sort_key
 from grouping_order
 group by region, product with rollup
 order by grouping(region) + product;
@@ -675,6 +689,19 @@ from grouping_order t1, grouping_order2 t2
 group by region, product, amount, city, qty with rollup
 order by grouping(region), region, product, amount, city, qty;
 drop table grouping_order2;
+
+-- Typed grouping NULL materialization must support types that reject ANY casts.
+drop table if exists grouping_uuid;
+create table grouping_uuid (snapshot_id uuid);
+insert into grouping_uuid values
+    ('00000000-0000-0000-0000-000000000001'),
+    ('00000000-0000-0000-0000-000000000002'),
+    (null);
+select distinct snapshot_id
+from grouping_uuid
+group by snapshot_id with rollup
+order by snapshot_id;
+drop table grouping_uuid;
 
 drop table grouping_order;
 -- rollup with window functions should rank over the full rollup result
