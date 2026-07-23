@@ -100,6 +100,65 @@ func shouldRevalidateTimestampDataBranchCloneSource(
 	return dataBranchClone && isTimestampDataBranchCloneSource(snapshot)
 }
 
+func shouldLockNamedDataBranchCloneSnapshot(
+	ctx context.Context,
+	snapshot *plan.Snapshot,
+) bool {
+	dataBranchClone, _ := ctx.Value(dataBranchCloneLockCtxKey{}).(bool)
+	return dataBranchClone && snapshot != nil && snapshot.TS != nil &&
+		snapshot.ExtraInfo != nil && snapshot.ExtraInfo.Name != ""
+}
+
+func namedDataBranchCloneSnapshotLockSQL(
+	ctx context.Context,
+	snapshotName string,
+) (string, error) {
+	if err := inputNameIsInvalid(ctx, snapshotName); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(
+		"%s where sname = '%s' for update",
+		getSnapshotFormat, snapshotName,
+	), nil
+}
+
+func validateNamedDataBranchCloneSnapshotRecord(
+	snapshot *plan.Snapshot,
+	record *snapshotRecord,
+) error {
+	if record == nil || snapshot == nil || snapshot.TS == nil || snapshot.ExtraInfo == nil ||
+		record.snapshotName != snapshot.ExtraInfo.Name ||
+		record.ts != snapshot.TS.PhysicalTime ||
+		record.level != snapshot.ExtraInfo.Level ||
+		record.objId != snapshot.ExtraInfo.ObjId ||
+		record.kind == branchSnapshotKind {
+		return moerr.NewTxnNeedRetryWithDefChangedNoCtx()
+	}
+	return nil
+}
+
+func lockNamedDataBranchCloneSnapshot(
+	ctx context.Context,
+	bh BackgroundExec,
+	snapshot *plan.Snapshot,
+) error {
+	if !shouldLockNamedDataBranchCloneSnapshot(ctx, snapshot) {
+		return nil
+	}
+	sql, err := namedDataBranchCloneSnapshotLockSQL(ctx, snapshot.ExtraInfo.Name)
+	if err != nil {
+		return err
+	}
+	records, err := getSnapshotRecords(ctx, bh, sql)
+	if err != nil {
+		return err
+	}
+	if len(records) != 1 {
+		return moerr.NewTxnNeedRetryWithDefChangedNoCtx()
+	}
+	return validateNamedDataBranchCloneSnapshotRecord(snapshot, records[0])
+}
+
 func validateTimestampDataBranchSourceIDs(
 	selectedTableID, currentTableID uint64,
 	dag *databranchutils.DataBranchDAG,
@@ -606,6 +665,11 @@ func handleCloneTable(
 		err = moerr.NewInternalErrorNoCtxf("only sys can clone table to another account")
 		return
 	}
+	if err = lockNamedDataBranchCloneSnapshot(
+		defines.AttachAccountId(reqCtx, fromAccountId), bh, snapshot,
+	); err != nil {
+		return
+	}
 	if err = withDataBranchCloneSourceLock(snapshot, func() error {
 		return lockDataBranchCloneSource(
 			reqCtx,
@@ -760,6 +824,15 @@ func handleCloneDatabaseWithSource(
 		if source, err = collectCloneDatabaseSource(reqCtx, ses, bh, stmt); err != nil {
 			return
 		}
+	}
+	fromAccountID := source.opAccountId
+	if source.snapshot != nil && source.snapshot.Tenant != nil {
+		fromAccountID = source.snapshot.Tenant.TenantID
+	}
+	if err = lockNamedDataBranchCloneSnapshot(
+		defines.AttachAccountId(reqCtx, fromAccountID), bh, source.snapshot,
+	); err != nil {
+		return
 	}
 	if err = lockDataBranchCloneDatabaseSources(reqCtx, ses, source); err != nil {
 		return

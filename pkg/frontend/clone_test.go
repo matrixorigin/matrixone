@@ -23,6 +23,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -95,6 +96,66 @@ func TestShouldRevalidateTimestampDataBranchCloneSource(t *testing.T) {
 	require.False(t, shouldRevalidateTimestampDataBranchCloneSource(
 		dataBranchCtx, namedSnapshotSource,
 	))
+}
+
+func TestShouldLockNamedDataBranchCloneSnapshot(t *testing.T) {
+	ctx := context.WithValue(context.Background(), dataBranchCloneLockCtxKey{}, true)
+	named := &plan.Snapshot{
+		TS:        &timestamp.Timestamp{PhysicalTime: 42},
+		ExtraInfo: &plan.SnapshotExtraInfo{Name: "snap"},
+	}
+	require.True(t, shouldLockNamedDataBranchCloneSnapshot(ctx, named))
+	require.False(t, shouldLockNamedDataBranchCloneSnapshot(context.Background(), named))
+	require.False(t, shouldLockNamedDataBranchCloneSnapshot(ctx,
+		&plan.Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 42}},
+	))
+}
+
+func TestLockNamedDataBranchCloneSnapshot(t *testing.T) {
+	ctx := context.WithValue(context.Background(), dataBranchCloneLockCtxKey{}, true)
+	snapshot := &plan.Snapshot{
+		TS: &timestamp.Timestamp{PhysicalTime: 42},
+		ExtraInfo: &plan.SnapshotExtraInfo{
+			Name:  "snap",
+			Level: "table",
+			ObjId: 7,
+		},
+	}
+	lockSQL, err := namedDataBranchCloneSnapshotLockSQL(ctx, "snap")
+	require.NoError(t, err)
+	require.Equal(t,
+		"select * from mo_catalog.mo_snapshots where sname = 'snap' for update",
+		lockSQL,
+	)
+
+	t.Run("matching snapshot is locked", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		bh.sql2result[lockSQL] = newMrsForSnapshotRecord(
+			"id", "snap", 42, "table", "acc", "db", "tbl", 7,
+		)
+		require.NoError(t, lockNamedDataBranchCloneSnapshot(ctx, bh, snapshot))
+		require.Equal(t, []string{lockSQL}, bh.executedSQLs)
+	})
+
+	for _, tc := range []struct {
+		name   string
+		record *MysqlResultSet
+	}{
+		{name: "drop won the row lock", record: newMrsEmpty()},
+		{name: "same name was recreated", record: newMrsForSnapshotRecord(
+			"new-id", "snap", 43, "table", "acc", "db", "tbl", 7,
+		)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bh := &backgroundExecTest{}
+			bh.init()
+			bh.sql2result[lockSQL] = tc.record
+			err := lockNamedDataBranchCloneSnapshot(ctx, bh, snapshot)
+			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged))
+		})
+	}
 }
 
 func TestBranchDAGSelectSQLLocksTimestampValidation(t *testing.T) {
