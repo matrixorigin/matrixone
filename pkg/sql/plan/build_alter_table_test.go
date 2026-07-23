@@ -81,7 +81,7 @@ func TestAlterTableCopyPreservesExistingColumnIdentity(t *testing.T) {
 		sql       string
 		finalName string
 	}{
-		{`ALTER TABLE t1 MODIFY COLUMN b BIGINT;`, "b"},
+		{`ALTER TABLE t1 ALGORITHM=COPY, MODIFY COLUMN b VARCHAR(20);`, "b"},
 		{`ALTER TABLE t1 RENAME COLUMN b TO bb;`, "bb"},
 	} {
 		t.Run(tc.sql, func(t *testing.T) {
