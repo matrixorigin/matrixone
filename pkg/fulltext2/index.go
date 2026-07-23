@@ -184,6 +184,14 @@ func (idx *Index) SearchPhrase(slots []phraseSlot, algo ScoreAlgo, k int, filter
 // evicted in O(log k) when a better candidate arrives. It replaces "materialize every
 // match, then top-k", which was O(matches). Ties at the k-th place are unspecified (as
 // before — no arbitrary pk tie-break; see topKResults).
+//
+// It is deliberately keyed by the resolved `pk any` (NOT the segment `ord`), unlike the
+// ord-keyed FastMaxHeap in wand.go: SearchPhrase accumulates across ALL segments into
+// ONE heap, and each segment has its own ord space (ord 5 in seg0 != ord 5 in seg1), so
+// only the globally-unique pk is a safe key here. It also defers the single idf² scale to
+// resultsDescScaled. Those two properties are why it is not the FastMaxHeap used by the
+// per-segment WAND paths — do not "unify" them; keying this by ord reintroduces cross-
+// segment ord collisions.
 type topKItem struct {
 	pk    any
 	score float32

@@ -577,6 +577,7 @@ func streamChunkRowsToFile(sqlproc *sqlexec.SqlProcess, sql string, baseChunk, b
 
 	var loopErr error
 	closed := false
+	seen := make(map[int64]struct{}) // chunk_ids already written, to catch duplicates
 	for !closed {
 		select {
 		case res, ok := <-streamCh:
@@ -597,6 +598,16 @@ func streamChunkRowsToFile(sqlproc *sqlexec.SqlProcess, sql string, baseChunk, b
 							fmt.Sprintf("fulltext2 chunk_id %d out of range [base %d, bound %d]", cid, baseChunk, bound))
 						break
 					}
+					// A duplicate (index_id, chunk_id) row would write its region twice and
+					// inflate `written`, letting the caller's written==filesize check pass while
+					// a DIFFERENT chunk's region is never filled (a hole the CRC only catches
+					// after a full stream+mmap). Reject the duplicate here, fail-fast.
+					if _, dup := seen[cid]; dup {
+						loopErr = moerr.NewInternalError(sqlproc.GetContext(),
+							fmt.Sprintf("fulltext2 duplicate chunk_id %d", cid))
+						break
+					}
+					seen[cid] = struct{}{}
 					if _, e := fp.WriteAt(data, off); e != nil {
 						loopErr = e
 						break

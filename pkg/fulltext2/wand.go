@@ -132,11 +132,21 @@ func (it *wandIter) skipTo(d int64) {
 // last posting. Uses only the resident blockLastDoc (no block decode).
 func (it *wandIter) blockIndexAt(d int64) int {
 	bl := it.tp.blockLastDoc
-	b := it.idx / BlockSize
-	for b < len(bl) && bl[b] < d {
-		b++
+	// blockLastDoc is ascending, so the first block with bl[b] >= d is a lower-bound
+	// binary search from the cursor's current block. The block-skip branch calls this
+	// per iters[0..pivot] per pivot step over a long posting list, where the old linear
+	// scan was O(nblk); binary search makes it O(log nblk) on the hot WAND loop.
+	lo := it.idx / BlockSize
+	hi := len(bl)
+	for lo < hi {
+		mid := int(uint(lo+hi) >> 1)
+		if bl[mid] < d {
+			lo = mid + 1
+		} else {
+			hi = mid
+		}
 	}
-	return b
+	return lo
 }
 
 // blockMax is the weighted Block-Max score upper bound for the block containing

@@ -228,12 +228,20 @@ func (s *Segment) decodeDocmap(data []byte) error {
 		}
 		offs[i] = int32(pos)
 		l := int(binary.LittleEndian.Uint32(data[pos:]))
+		// For a fixed-width pk type the stored length MUST equal the type width; a
+		// corrupt smaller length would pass the pos bound below but then make pk(ord)
+		// read past its slice (LittleEndian.Uint64 on <8 bytes panics). Validate here at
+		// load so corruption fails cleanly instead of crashing a query goroutine.
+		if w, fixed := fixedPkByteWidth(s.PkType); fixed && l != w {
+			return moerr.NewInternalErrorNoCtxf("fulltext2: docmap pk %d width %d != expected %d", i, l, w)
+		}
 		pos += 4 + l
 		if pos < 0 || pos > len(data) {
 			return moerr.NewInternalErrorNoCtx("fulltext2: docmap truncated pk data")
 		}
 	}
-	// Validate pkType ONCE (decodePk rejects unsupported types) so pk(ord) can trust it.
+	// Validate pkType ONCE (decodePk rejects unsupported types) so pk(ord) can trust it;
+	// per-pk width was already checked in the loop above for fixed-width types.
 	if n > 0 {
 		off := int(offs[0])
 		l := int(binary.LittleEndian.Uint32(data[off:]))
@@ -590,6 +598,11 @@ func encodePk(pkType int32, v any) ([]byte, error) {
 		return packUint64(uint64(v.(int64))), nil
 	case types.T_uint64:
 		return packUint64(v.(uint64)), nil
+	case types.T_bit:
+		// BIT is backed by uint64 (types.MustFixedColWithTypeCheck[uint64]); encode
+		// like T_uint64. build_ddl accepts a BIT primary key, so the codec must too —
+		// otherwise the first CDC flush errors and stalls index maintenance.
+		return packUint64(v.(uint64)), nil
 	case types.T_int32:
 		return packUint32(uint32(v.(int32))), nil
 	case types.T_uint32:
@@ -637,11 +650,41 @@ func encodePk(pkType int32, v any) ([]byte, error) {
 	}
 }
 
+// fixedPkByteWidth returns the exact stored byte width of a fixed-width pk type, and
+// false for variable-width types (varchar/blob/uuid/json…). Used to validate a docmap's
+// per-pk length prefix at load and to guard decodePk's fixed-width reads.
+func fixedPkByteWidth(pkType int32) (int, bool) {
+	switch types.T(pkType) {
+	case types.T_int8, types.T_uint8:
+		return 1, true
+	case types.T_int16, types.T_uint16:
+		return 2, true
+	case types.T_int32, types.T_uint32, types.T_date:
+		return 4, true
+	case types.T_int64, types.T_uint64, types.T_bit,
+		types.T_datetime, types.T_time, types.T_timestamp, types.T_decimal64:
+		return 8, true
+	case types.T_decimal128:
+		return 16, true
+	default:
+		return 0, false
+	}
+}
+
 func decodePk(pkType int32, b []byte) (any, error) {
+	// Fixed-width types index into b with LittleEndian.Uint{16,32,64}, which panic on
+	// a short slice. A corrupt docmap can store a wrong length prefix, so verify the
+	// slice is wide enough and return a clean error instead of crashing the query
+	// goroutine. (decodeDocmap also width-validates at load; this is belt-and-suspenders.)
+	if w, fixed := fixedPkByteWidth(pkType); fixed && len(b) < w {
+		return nil, moerr.NewInternalErrorNoCtxf("fulltext2: corrupt pk: type %d needs %d bytes, got %d", pkType, w, len(b))
+	}
 	switch types.T(pkType) {
 	case types.T_int64:
 		return int64(binary.LittleEndian.Uint64(b)), nil
 	case types.T_uint64:
+		return binary.LittleEndian.Uint64(b), nil
+	case types.T_bit:
 		return binary.LittleEndian.Uint64(b), nil
 	case types.T_int32:
 		return int32(binary.LittleEndian.Uint32(b)), nil

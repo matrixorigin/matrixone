@@ -130,10 +130,25 @@ func (p *termPostings) fillBlock(b int, outDocs []int64, outTfs []uint8) int {
 	}
 	off := 0
 	for i := 0; i < blen; i++ {
+		// Guard corrupt/torn block bytes that survive the CRC: a malformed docID varint
+		// (n<=0) or one that over-consumes would otherwise make the tf copy below slice
+		// out of range and panic the query goroutine. Return the docs decoded so far —
+		// the sibling fillBlockPositions degrades the same way rather than crashing.
+		if off >= len(data) {
+			return i
+		}
 		g, n := binary.Uvarint(data[off:])
+		if n <= 0 {
+			return i
+		}
 		off += n
 		prev += int64(g)
 		outDocs[i] = prev
+	}
+	// tfs are blen raw bytes after the docID gaps; on corruption they may not all be
+	// present. Copy only what the block actually holds (never past len(data)).
+	if off+blen > len(data) {
+		blen = len(data) - off
 	}
 	copy(outTfs[:blen], data[off:off+blen])
 	return blen

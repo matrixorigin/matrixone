@@ -2168,6 +2168,7 @@ func (node *IndexOption) Format(ctx *FmtCtx) {
 		node.KmeansTrainPercent != 0 || node.KmeansMaxIteration != 0 ||
 		node.MaxIndexCapacity != 0 || node.MaxPostingsCapacity != 0 ||
 		node.QuantizerTrainLimit != 0 || node.PositionFree ||
+		node.Merge || node.ForceSync ||
 		len(node.IncludeColumns) != 0 {
 		ctx.WriteByte(' ')
 	}
