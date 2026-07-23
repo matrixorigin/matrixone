@@ -1667,8 +1667,18 @@ func TestGetObjectChunk(t *testing.T) {
 	largeFileSize := int64(chunkSize + 1024)
 	testObjectName2 := "test_object_large"
 	largeContent := make([]byte, largeFileSize)
+	// Seed the object with non-zero data, then expand it with bulk copies. This
+	// preserves full content/offset validation without 100 MiB of
+	// race-instrumented scalar writes.
+	const payloadPatternSize = 251
+	for i := range payloadPatternSize {
+		largeContent[i] = byte(i + 1)
+	}
+	for initialized := payloadPatternSize; initialized < len(largeContent); {
+		initialized += copy(largeContent[initialized:], largeContent[:initialized])
+	}
 	// Distinct sentinels on both sides of the chunk boundary preserve exact
-	// content/offset validation without 100 MiB of race-instrumented byte writes.
+	// boundary validation.
 	largeContent[0] = 1
 	largeContent[chunkSize-1] = 2
 	largeContent[chunkSize] = 3
