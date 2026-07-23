@@ -35,6 +35,7 @@ type GetParamRule struct {
 	paramTypes        []int32
 	schemas           []*plan.ObjectRef
 	indexDependencies []prepareIndexDependency
+	exprMemo          map[*plan.Expr]*plan.Expr
 }
 
 type prepareIndexDependency struct {
@@ -99,6 +100,24 @@ func (rule *GetParamRule) ApplyNode(node *Node) error {
 }
 
 func (rule *GetParamRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
+	if e == nil {
+		return nil, nil
+	}
+	if rewritten, ok := rule.exprMemo[e]; ok {
+		return rewritten, nil
+	}
+	rewritten, err := rule.applyExpr(e)
+	if err != nil {
+		return nil, err
+	}
+	if rule.exprMemo == nil {
+		rule.exprMemo = make(map[*plan.Expr]*plan.Expr)
+	}
+	rule.exprMemo[e] = rewritten
+	return rewritten, nil
+}
+
+func (rule *GetParamRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 	switch exprImpl := e.Expr.(type) {
 	case *plan.Expr_F:
 		for i := range exprImpl.F.Args {
@@ -146,7 +165,8 @@ func (rule *GetParamRule) SetParamOrder() {
 // ---------------------------
 
 type ResetParamOrderRule struct {
-	params map[int]int
+	params   map[int]int
+	exprMemo map[*plan.Expr]*plan.Expr
 }
 
 func NewResetParamOrderRule(params map[int]int) *ResetParamOrderRule {
@@ -168,6 +188,24 @@ func (rule *ResetParamOrderRule) ApplyNode(node *Node) error {
 }
 
 func (rule *ResetParamOrderRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
+	if e == nil {
+		return nil, nil
+	}
+	if rewritten, ok := rule.exprMemo[e]; ok {
+		return rewritten, nil
+	}
+	rewritten, err := rule.applyExpr(e)
+	if err != nil {
+		return nil, err
+	}
+	if rule.exprMemo == nil {
+		rule.exprMemo = make(map[*plan.Expr]*plan.Expr)
+	}
+	rule.exprMemo[e] = rewritten
+	return rewritten, nil
+}
+
+func (rule *ResetParamOrderRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 	switch exprImpl := e.Expr.(type) {
 	case *plan.Expr_F:
 		for i := range exprImpl.F.Args {
@@ -192,8 +230,9 @@ func (rule *ResetParamOrderRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
 // ---------------------------
 
 type ResetParamRefRule struct {
-	ctx    context.Context
-	params []*Expr
+	ctx      context.Context
+	params   []*Expr
+	exprMemo map[*plan.Expr]*plan.Expr
 }
 
 func NewResetParamRefRule(ctx context.Context, params []*Expr) *ResetParamRefRule {
@@ -216,6 +255,24 @@ func (rule *ResetParamRefRule) ApplyNode(node *Node) error {
 }
 
 func (rule *ResetParamRefRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
+	if e == nil {
+		return nil, nil
+	}
+	if rewritten, ok := rule.exprMemo[e]; ok {
+		return rewritten, nil
+	}
+	rewritten, err := rule.applyExpr(e)
+	if err != nil {
+		return nil, err
+	}
+	if rule.exprMemo == nil {
+		rule.exprMemo = make(map[*plan.Expr]*plan.Expr)
+	}
+	rule.exprMemo[e] = rewritten
+	return rewritten, nil
+}
+
+func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 	var err error
 	switch exprImpl := e.Expr.(type) {
 	case *plan.Expr_F:

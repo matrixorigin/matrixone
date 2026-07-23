@@ -148,3 +148,62 @@ func TestResetParamRefRuleReplacesWindowParameters(t *testing.T) {
 	require.Equal(t, int64(13), window.Frame.Start.Val.GetLit().GetI64Val())
 	require.Equal(t, int64(14), window.Frame.End.Val.GetLit().GetI64Val())
 }
+
+func TestVisitPlanDeduplicatesAliasedWindowPartitionExpr(t *testing.T) {
+	newPlan := func(t *testing.T) (*planpb.Plan, *planpb.WindowSpec, *planpb.Node) {
+		t.Helper()
+		paramExpr := func(pos int32) *planpb.Expr {
+			return &planpb.Expr{Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: pos}}}
+		}
+		builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(false), false, true)
+		bindCtx := NewBindContext(builder, nil)
+		bindCtx.windowTag = builder.GenNewBindTag()
+		inputID := builder.appendNode(&planpb.Node{NodeType: planpb.Node_VALUE_SCAN}, bindCtx)
+		window := &planpb.WindowSpec{
+			WindowFunc:  paramExpr(1),
+			PartitionBy: []*planpb.Expr{paramExpr(3)},
+		}
+		bindCtx.windows = []*planpb.Expr{{Expr: &planpb.Expr_W{W: window}}}
+		windowID, err := builder.appendWindowNode(bindCtx, inputID, nil)
+		require.NoError(t, err)
+		windowNode := builder.qry.Nodes[windowID]
+		partitionNode := builder.qry.Nodes[windowNode.Children[0]]
+		require.Equal(t, planpb.Node_PARTITION, partitionNode.NodeType)
+		require.Same(t, window.PartitionBy[0], partitionNode.OrderBy[0].Expr)
+		return &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{
+			Steps: []int32{windowID},
+			Nodes: builder.qry.Nodes,
+		}}}, window, partitionNode
+	}
+
+	t.Run("collects once", func(t *testing.T) {
+		queryPlan, _, _ := newPlan(t)
+		rule := NewGetParamRule()
+		require.NoError(t, NewVisitPlan(queryPlan, []VisitPlanRule{rule}).Visit(context.Background()))
+		rule.SetParamOrder()
+		require.Equal(t, map[int]int{1: 0, 3: 1}, rule.params)
+	})
+
+	t.Run("resets the shared partition expression once", func(t *testing.T) {
+		queryPlan, window, partitionNode := newPlan(t)
+		rule := NewResetParamOrderRule(map[int]int{1: 0, 3: 1})
+		require.NoError(t, NewVisitPlan(queryPlan, []VisitPlanRule{rule}).Visit(context.Background()))
+		require.Equal(t, int32(0), window.WindowFunc.GetP().Pos)
+		require.Equal(t, int32(1), window.PartitionBy[0].GetP().Pos)
+		require.Equal(t, int32(1), partitionNode.OrderBy[0].Expr.GetP().Pos)
+	})
+
+	t.Run("replaces the shared partition expression once", func(t *testing.T) {
+		queryPlan, window, partitionNode := newPlan(t)
+		rule := NewResetParamRefRule(context.Background(), []*planpb.Expr{
+			makePlan2Int64ConstExprWithType(7),
+			makePlan2Int64ConstExprWithType(11),
+			nil,
+			makePlan2Int64ConstExprWithType(13),
+		})
+		require.NoError(t, NewVisitPlan(queryPlan, []VisitPlanRule{rule}).Visit(context.Background()))
+		require.Equal(t, int64(11), window.WindowFunc.GetLit().GetI64Val())
+		require.Equal(t, int64(13), window.PartitionBy[0].GetLit().GetI64Val())
+		require.Same(t, partitionNode.OrderBy[0].Expr, window.PartitionBy[0])
+	})
+}
