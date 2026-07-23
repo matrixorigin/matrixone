@@ -5567,14 +5567,23 @@ func TestLockWaitTimeoutExpiresDuringServiceAdmission(t *testing.T) {
 			require.Less(t, time.Since(start), time.Second,
 				"readiness must not have to open before the lock budget can expire")
 		},
-		WithWait(func(ctx context.Context) error {
-			select {
-			case <-ready:
-				return nil
-			case <-ctx.Done():
-				return ctx.Err()
-			}
-		}),
+		WithWaitAndReady(
+			func(ctx context.Context) error {
+				select {
+				case <-ready:
+					return nil
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+			},
+			func() bool {
+				select {
+				case <-ready:
+					return true
+				default:
+					return false
+				}
+			}),
 	)
 }
 
@@ -6019,6 +6028,9 @@ func TestLockWaitTimeoutZeroUsesEarlierCallerContext(t *testing.T) {
 }
 
 func BenchmarkWithoutConflict(b *testing.B) {
+	// The 1-table case retains a cached local bind after its first iteration.
+	// Keep allocation reporting enabled in runBenchmark: this guards the core
+	// no-wait path against eager lock-deadline context allocation.
 	runBenchmark(b, "1-table", 1)
 	runBenchmark(b, "unlimited-table", 32)
 }

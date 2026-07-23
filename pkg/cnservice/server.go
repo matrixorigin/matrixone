@@ -908,14 +908,23 @@ func (s *service) initLockService() {
 	cfg := s.getLockServiceConfig()
 	s.lockService = lockservice.NewLockService(
 		cfg,
-		lockservice.WithWait(func(ctx context.Context) error {
-			select {
-			case <-s.hakeeperConnected:
-				return nil
-			case <-ctx.Done():
-				return ctx.Err()
-			}
-		}))
+		lockservice.WithWaitAndReady(
+			func(ctx context.Context) error {
+				select {
+				case <-s.hakeeperConnected:
+					return nil
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+			},
+			func() bool {
+				select {
+				case <-s.hakeeperConnected:
+					return true
+				default:
+					return false
+				}
+			}))
 	runtime.ServiceRuntime(s.cfg.UUID).SetGlobalVariables(runtime.LockService, s.lockService)
 	lockservice.SetLockServiceByServiceID(s.cfg.UUID, s.lockService)
 
