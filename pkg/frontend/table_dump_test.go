@@ -45,6 +45,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/stage"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type testTableDumpObjectCopier struct {
@@ -68,11 +69,57 @@ type testAmbiguousWriteFileService struct {
 	fileservice.FileService
 }
 
+type tableDumpRequestContextKey struct{}
+
 func (f *testAmbiguousWriteFileService) Write(ctx context.Context, vector fileservice.IOVector) error {
 	if err := f.FileService.Write(ctx, vector); err != nil {
 		return err
 	}
 	return errors.New("write response lost after destination was created")
+}
+
+func TestLockTableDumpLoadTargetsUsesRequestContext(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().Txn().Return(txn.TxnMeta{Mode: txn.TxnMode_Pessimistic}).AnyTimes()
+	ses.proc.Base.TxnOperator = txnOp
+	eng := mock_frontend.NewMockEngine(ctrl)
+	ses.txnHandler.storage = eng
+
+	rel := mock_frontend.NewMockRelation(ctrl)
+	rel.EXPECT().GetTableID(gomock.Any()).Return(uint64(42)).AnyTimes()
+	rel.EXPECT().GetPrimaryKeys(gomock.Any()).Return([]*engine.Attribute{{
+		Name: "id",
+		Type: types.T_int64.ToType(),
+	}}, nil)
+
+	staleCtx, cancelStale := context.WithCancel(context.Background())
+	cancelStale()
+	ses.proc.Ctx = staleCtx
+	requestCtx := context.WithValue(context.Background(), tableDumpRequestContextKey{}, "request")
+
+	var locked []uint64
+	stub := gostub.Stub(&lockTableForTableDump, func(
+		ctx context.Context,
+		_ engine.Engine,
+		_ *process.Process,
+		tableID uint64,
+		_ types.Type,
+		_ bool,
+	) error {
+		require.NoError(t, ctx.Err())
+		require.Equal(t, "request", ctx.Value(tableDumpRequestContextKey{}))
+		locked = append(locked, tableID)
+		return nil
+	})
+	defer stub.Reset()
+
+	err := lockTableDumpLoadTargets(requestCtx, ses, []tableDumpRelationRef{{relation: rel}}, true)
+	require.NoError(t, err)
+	require.Equal(t, []uint64{42, tableDumpObjectInstallLockTableID}, locked)
 }
 
 func (c *testConcurrentTableDumpObjectCopier) CopyObject(
@@ -445,28 +492,47 @@ func TestLoadPhysicalTableDumpStatsRejectsManifestForgery(t *testing.T) {
 	fs, err := fileservice.NewLocalETLFS("objects", t.TempDir())
 	require.NoError(t, err)
 	item := writePhysicalTableDumpTestObject(t, fs)
+	targetDef := &plan.TableDef{
+		Name:          "target",
+		Pkey:          &plan.PrimaryKeyDef{PkeyColName: "a"},
+		Name2ColIndex: map[string]int32{"a": 0},
+		Cols: []*plan.ColDef{{
+			Name: "a", Seqnum: 0, Typ: plan.Type{Id: int32(types.T_int64)},
+		}},
+	}
+	schema, err := buildTableDumpPhysicalSchema(targetDef)
+	require.NoError(t, err)
 
-	stats, blocks, err := loadPhysicalTableDumpStats(ctx, fs, item, mpool.MustNewZero())
+	stats, blocks, err := loadPhysicalTableDumpStats(ctx, fs, item, mpool.MustNewZero(), schema)
 	require.NoError(t, err)
 	require.Equal(t, uint32(1), blocks)
 	require.Equal(t, objectio.ObjectStats(item.Stats), stats)
 	tombstoneItem := item
 	tombstoneItem.Tombstone = true
-	_, _, err = loadPhysicalTableDumpStats(ctx, fs, tombstoneItem, mpool.MustNewZero())
+	_, _, err = loadPhysicalTableDumpStats(ctx, fs, tombstoneItem, mpool.MustNewZero(), schema)
+	require.ErrorContains(t, err, "tombstone object")
+
+	incompatibleDef := *targetDef
+	incompatibleDef.Cols = []*plan.ColDef{{
+		Name: "a", Seqnum: 0, Typ: plan.Type{Id: int32(types.T_varchar)},
+	}}
+	incompatibleSchema, err := buildTableDumpPhysicalSchema(&incompatibleDef)
 	require.NoError(t, err)
+	_, _, err = loadPhysicalTableDumpStats(ctx, fs, item, mpool.MustNewZero(), incompatibleSchema)
+	require.ErrorContains(t, err, "target expects")
 
 	forged := item
 	forged.Stats = append([]byte(nil), item.Stats...)
 	forgedStats := objectio.ObjectStats(forged.Stats)
 	require.NoError(t, objectio.SetObjectStatsBlkCnt(&forgedStats, math.MaxUint16))
 	forged.Stats = append(forged.Stats[:0], forgedStats.Marshal()...)
-	_, _, err = loadPhysicalTableDumpStats(ctx, fs, forged, mpool.MustNewZero())
+	_, _, err = loadPhysicalTableDumpStats(ctx, fs, forged, mpool.MustNewZero(), schema)
 	require.ErrorContains(t, err, "do not match physical metadata")
 
 	objects := []tableDumpObject{item}
 	var total atomic.Uint64
 	total.Store(tableDumpMaxBlocks)
-	err = validatePhysicalTableDumpObjectsImpl(ctx, fs, objects, mpool.MustNewZero(), &total)
+	err = validatePhysicalTableDumpObjectsImpl(ctx, fs, objects, mpool.MustNewZero(), &total, targetDef)
 	require.ErrorContains(t, err, "more than 1000000 blocks")
 
 	header := objectio.BuildHeader()
@@ -476,7 +542,7 @@ func TestLoadPhysicalTableDumpStatsRejectsManifestForgery(t *testing.T) {
 		FilePath: badItem.Name,
 		Entries:  []fileservice.IOEntry{{Offset: 0, Size: int64(len(header)), Data: header}},
 	}))
-	_, _, err = loadPhysicalTableDumpStats(ctx, fs, badItem, mpool.MustNewZero())
+	_, _, err = loadPhysicalTableDumpStats(ctx, fs, badItem, mpool.MustNewZero(), schema)
 	require.ErrorContains(t, err, "invalid metadata extent")
 }
 
@@ -594,7 +660,7 @@ func TestHandleLoadTable(t *testing.T) {
 	})
 	defer lockStub.Reset()
 	physicalStub := gostub.Stub(&validatePhysicalTableDumpObjects, func(
-		context.Context, fileservice.FileService, []tableDumpObject, *mpool.MPool, *atomic.Uint64,
+		context.Context, fileservice.FileService, []tableDumpObject, *mpool.MPool, *atomic.Uint64, *plan.TableDef,
 	) error {
 		return nil
 	})
@@ -678,13 +744,24 @@ func TestHandleDumpTable(t *testing.T) {
 }
 
 func TestHandleDumpTableRejectsUnsupportedSchemas(t *testing.T) {
-	for _, def := range []*plan.TableDef{
-		{Name: "orders", Partition: &plan.Partition{}},
-		{Name: "orders", Cols: []*plan.ColDef{{Typ: plan.Type{AutoIncr: true}}}},
-		{Name: "orders", Fkeys: []*plan.ForeignKeyDef{{Name: "fk_parent"}}},
-		{Name: "orders", RefChildTbls: []uint64{42}},
+	for _, tc := range []struct {
+		name string
+		def  *plan.TableDef
+	}{
+		{name: "partition", def: &plan.TableDef{Name: "orders", Partition: &plan.Partition{}}},
+		{name: "auto-increment", def: &plan.TableDef{Name: "orders", Cols: []*plan.ColDef{{Typ: plan.Type{AutoIncr: true}}}}},
+		{name: "foreign-key", def: &plan.TableDef{Name: "orders", Fkeys: []*plan.ForeignKeyDef{{Name: "fk_parent"}}}},
+		{name: "referenced", def: &plan.TableDef{Name: "orders", RefChildTbls: []uint64{42}}},
+		{name: "temporary", def: &plan.TableDef{Name: "orders", IsTemporary: true}},
+		{name: "external", def: &plan.TableDef{Name: "orders", TableType: catalog.SystemExternalRel}},
+		{name: "source", def: &plan.TableDef{Name: "orders", TableType: catalog.SystemSourceRel}},
+		{name: "view", def: &plan.TableDef{Name: "orders", TableType: catalog.SystemViewRel}},
+		{name: "sequence", def: &plan.TableDef{Name: "orders", TableType: catalog.SystemSequenceRel}},
+		{name: "transient", def: &plan.TableDef{Name: "orders", TableType: catalog.SystemTransientRel}},
+		{name: "view-sql", def: &plan.TableDef{Name: "orders", ViewSql: &plan.ViewDef{}}},
+		{name: "table-function", def: &plan.TableDef{Name: "orders", TblFunc: &plan.TableFunction{}}},
 	} {
-		t.Run(fmt.Sprintf("%p", def), func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			ctrl := gomock.NewController(t)
 			ses := newTestSession(t, ctrl)
 			defer ses.Close()
@@ -695,9 +772,45 @@ func TestHandleDumpTableRejectsUnsupportedSchemas(t *testing.T) {
 			ses.txnHandler.storage = eng
 			eng.EXPECT().Database(gomock.Any(), "tpch", gomock.Any()).Return(db, nil)
 			db.EXPECT().Relation(gomock.Any(), "orders", nil).Return(rel, nil)
-			rel.EXPECT().GetTableDef(gomock.Any()).Return(def)
+			rel.EXPECT().GetTableDef(gomock.Any()).Return(tc.def)
 			err := handleDumpTable(context.Background(), ses, &tree.DumpTable{
 				Table: tree.NewTableName("orders", tree.ObjectNamePrefix{}, nil), Path: t.TempDir(),
+			})
+			require.Error(t, err)
+		})
+	}
+}
+
+func TestHandleLoadTableRejectsNonObjectBackedRelations(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		def  *plan.TableDef
+	}{
+		{name: "temporary", def: &plan.TableDef{Name: "orders", IsTemporary: true}},
+		{name: "external", def: &plan.TableDef{Name: "orders", TableType: catalog.SystemExternalRel}},
+		{name: "source", def: &plan.TableDef{Name: "orders", TableType: catalog.SystemSourceRel}},
+		{name: "view", def: &plan.TableDef{Name: "orders", TableType: catalog.SystemViewRel}},
+		{name: "sequence", def: &plan.TableDef{Name: "orders", TableType: catalog.SystemSequenceRel}},
+		{name: "transient", def: &plan.TableDef{Name: "orders", TableType: catalog.SystemTransientRel}},
+		{name: "view-sql", def: &plan.TableDef{Name: "orders", ViewSql: &plan.ViewDef{}}},
+		{name: "table-function", def: &plan.TableDef{Name: "orders", TblFunc: &plan.TableFunction{}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			ses := newTestSession(t, ctrl)
+			defer ses.Close()
+			ses.SetDatabaseName("tpch")
+			eng := mock_frontend.NewMockEngine(ctrl)
+			db := mock_frontend.NewMockDatabase(ctrl)
+			rel := mock_frontend.NewMockRelation(ctrl)
+			ses.txnHandler.storage = eng
+			eng.EXPECT().Database(gomock.Any(), "tpch", gomock.Any()).Return(db, nil)
+			db.EXPECT().Relation(gomock.Any(), "orders", nil).Return(rel, nil)
+			rel.EXPECT().GetTableDef(gomock.Any()).Return(tc.def)
+
+			err := handleLoadTable(context.Background(), ses, &tree.LoadTable{
+				Table: tree.NewTableName("orders", tree.ObjectNamePrefix{}, nil),
+				Path:  t.TempDir(),
 			})
 			require.Error(t, err)
 		})

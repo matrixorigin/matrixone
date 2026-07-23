@@ -11,6 +11,9 @@ create table src (id int primary key, value varchar(32));
 insert into src values (1, 'one'), (2, 'two'), (3, 'three');
 -- @separator:table
 select mo_ctl('dn', 'flush', 'table_dump_load_bvt.src');
+delete from src where id = 2;
+-- @separator:table
+select mo_ctl('dn', 'flush', 'table_dump_load_bvt.src');
 
 dump table src to 'stage://table_dump_load_stage/full';
 create table dst like src;

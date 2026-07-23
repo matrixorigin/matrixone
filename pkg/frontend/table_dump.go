@@ -24,6 +24,7 @@ import (
 	"math"
 	"path"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync/atomic"
@@ -288,6 +289,22 @@ func tableSchemaHash(def *plan.TableDef) (string, error) {
 func validateTableDumpSchema(def *plan.TableDef) error {
 	if def == nil {
 		return moerr.NewInternalErrorNoCtx("table definition is unavailable")
+	}
+	if def.IsTemporary {
+		return moerr.NewNotSupportedNoCtx("DUMP TABLE and LOAD TABLE with temporary tables")
+	}
+	switch def.TableType {
+	case catalog.SystemExternalRel, catalog.SystemSourceRel:
+		return moerr.NewNotSupportedNoCtx("DUMP TABLE and LOAD TABLE with external or source tables")
+	case catalog.SystemViewRel:
+		return moerr.NewNotSupportedNoCtx("DUMP TABLE and LOAD TABLE with views")
+	case catalog.SystemSequenceRel:
+		return moerr.NewNotSupportedNoCtx("DUMP TABLE and LOAD TABLE with sequences")
+	case catalog.SystemTransientRel:
+		return moerr.NewNotSupportedNoCtx("DUMP TABLE and LOAD TABLE with transient relations")
+	}
+	if def.ViewSql != nil || def.TblFunc != nil {
+		return moerr.NewNotSupportedNoCtx("DUMP TABLE and LOAD TABLE with non-object-backed relations")
 	}
 	if def.Partition != nil {
 		return moerr.NewNotSupportedNoCtx("DUMP TABLE and LOAD TABLE with partitions")
@@ -959,11 +976,152 @@ func setTableDumpObjectFlags(stats *objectio.ObjectStats, tombstone, hasFakePK b
 	stats.SetLevel(level)
 }
 
+type tableDumpPhysicalSchema struct {
+	dataTypes     map[uint16]uint8
+	dataMaxSeqnum uint16
+	primaryType   uint8
+}
+
+func buildTableDumpPhysicalSchema(def *plan.TableDef) (*tableDumpPhysicalSchema, error) {
+	if def == nil {
+		return nil, moerr.NewInternalErrorNoCtx("table definition is unavailable")
+	}
+	schema := &tableDumpPhysicalSchema{
+		dataTypes: make(map[uint16]uint8, len(def.Cols)),
+	}
+	var primaryName string
+	if def.Pkey != nil {
+		primaryName = def.Pkey.PkeyColName
+	}
+	for _, col := range def.Cols {
+		if col == nil || objectio.IsPhysicalAddr(col.Name) {
+			continue
+		}
+		if col.Typ.Id <= int32(types.T_any) || col.Typ.Id > math.MaxUint8 {
+			return nil, moerr.NewInternalErrorNoCtxf(
+				"table %s has invalid physical type for column %s", def.Name, col.Name,
+			)
+		}
+		if col.Seqnum >= objectio.SEQNUM_UPPER {
+			return nil, moerr.NewInternalErrorNoCtxf(
+				"table %s has invalid physical seqnum %d for column %s",
+				def.Name, col.Seqnum, col.Name,
+			)
+		}
+		seqnum := uint16(col.Seqnum)
+		if _, ok := schema.dataTypes[seqnum]; ok {
+			return nil, moerr.NewInternalErrorNoCtxf(
+				"table %s has duplicate physical seqnum %d", def.Name, seqnum,
+			)
+		}
+		oid := uint8(types.T(col.Typ.Id))
+		schema.dataTypes[seqnum] = oid
+		schema.dataMaxSeqnum = max(schema.dataMaxSeqnum, seqnum)
+		if col.Name == primaryName {
+			schema.primaryType = oid
+		}
+	}
+	if len(schema.dataTypes) == 0 {
+		return nil, moerr.NewInternalErrorNoCtxf("table %s has no stored columns", def.Name)
+	}
+	return schema, nil
+}
+
+func validateTableDumpDataBlock(
+	name string,
+	blockIndex uint32,
+	block objectio.BlockObject,
+	schema *tableDumpPhysicalSchema,
+) error {
+	if block.GetMaxSeqnum() != schema.dataMaxSeqnum {
+		return moerr.NewInvalidInputNoCtxf(
+			"object %s block %d physical max seqnum %d does not match target %d",
+			name, blockIndex, block.GetMaxSeqnum(), schema.dataMaxSeqnum,
+		)
+	}
+	for seq := 0; seq <= int(schema.dataMaxSeqnum); seq++ {
+		seqnum := uint16(seq)
+		actual := block.MustGetColumn(seqnum).DataType()
+		expected, stored := schema.dataTypes[seqnum]
+		if stored && actual != expected {
+			return moerr.NewInvalidInputNoCtxf(
+				"object %s block %d column seqnum %d has physical type %d, target expects %d",
+				name, blockIndex, seqnum, actual, expected,
+			)
+		}
+		if !stored && actual != uint8(types.T_any) {
+			return moerr.NewInvalidInputNoCtxf(
+				"object %s block %d contains unexpected physical column seqnum %d",
+				name, blockIndex, seqnum,
+			)
+		}
+	}
+	extraColumns := int(block.GetColumnCount()) - len(schema.dataTypes)
+	if extraColumns < 0 || extraColumns > 1 {
+		return moerr.NewInvalidInputNoCtxf(
+			"object %s block %d has incompatible physical column count %d",
+			name, blockIndex, block.GetColumnCount(),
+		)
+	}
+	expectedMetaColumns := int(schema.dataMaxSeqnum) + 1 + extraColumns
+	if int(block.GetMetaColumnCount()) != expectedMetaColumns {
+		return moerr.NewInvalidInputNoCtxf(
+			"object %s block %d has incompatible physical metadata column count %d",
+			name, blockIndex, block.GetMetaColumnCount(),
+		)
+	}
+	// TN-created immutable data objects retain a commit timestamp column after
+	// the normal table columns. CN-created objects have no such stored suffix.
+	if extraColumns == 1 &&
+		block.MustGetColumn(schema.dataMaxSeqnum+1).DataType() != uint8(types.T_TS) {
+		return moerr.NewInvalidInputNoCtxf(
+			"object %s block %d has an invalid hidden physical column", name, blockIndex,
+		)
+	}
+	return nil
+}
+
+func validateTableDumpTombstoneBlock(
+	name string,
+	blockIndex uint32,
+	block objectio.BlockObject,
+	schema *tableDumpPhysicalSchema,
+) error {
+	if schema.primaryType == uint8(types.T_any) {
+		return moerr.NewInternalErrorNoCtx("target table primary key metadata is unavailable")
+	}
+	if block.GetMaxSeqnum() != objectio.TombstoneAttr_PK_SeqNum {
+		return moerr.NewInvalidInputNoCtxf(
+			"tombstone object %s block %d has incompatible max seqnum %d",
+			name, blockIndex, block.GetMaxSeqnum(),
+		)
+	}
+	actual := make([]uint8, block.GetMetaColumnCount())
+	for i := range actual {
+		actual[i] = block.MustGetColumn(uint16(i)).DataType()
+	}
+	valid := [][]uint8{
+		{uint8(types.T_Rowid), schema.primaryType},
+		{uint8(types.T_Rowid), schema.primaryType, uint8(types.T_TS)},
+		{uint8(types.T_Rowid), schema.primaryType, uint8(types.T_Rowid)},
+		{uint8(types.T_Rowid), schema.primaryType, uint8(types.T_TS), uint8(types.T_Rowid)},
+	}
+	for _, expected := range valid {
+		if int(block.GetColumnCount()) == len(expected) && slices.Equal(actual, expected) {
+			return nil
+		}
+	}
+	return moerr.NewInvalidInputNoCtxf(
+		"tombstone object %s block %d has an incompatible physical schema", name, blockIndex,
+	)
+}
+
 func loadPhysicalTableDumpStats(
 	ctx context.Context,
 	fs fileservice.FileService,
 	item tableDumpObject,
 	mp *mpool.MPool,
+	schema *tableDumpPhysicalSchema,
 ) (stats objectio.ObjectStats, blocks uint32, err error) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
@@ -1018,7 +1176,16 @@ func loadPhysicalTableDumpStats(
 	}
 	var rows uint64
 	for i := uint32(0); i < blocks; i++ {
-		rows += uint64(dataMeta.GetBlockMeta(i).GetRows())
+		block := dataMeta.GetBlockMeta(i)
+		if item.Tombstone {
+			err = validateTableDumpTombstoneBlock(item.Name, i, block, schema)
+		} else {
+			err = validateTableDumpDataBlock(item.Name, i, block, schema)
+		}
+		if err != nil {
+			return stats, 0, err
+		}
+		rows += uint64(block.GetRows())
 	}
 	if rows > math.MaxUint32 {
 		return stats, 0, moerr.NewInvalidInputNoCtxf("object %s has too many rows", item.Name)
@@ -1037,8 +1204,12 @@ func loadPhysicalTableDumpStats(
 	}
 	for i := uint32(0); i < dataMeta.BlockCount(); i++ {
 		blockMeta := dataMeta.GetBlockMeta(i)
-		for col := uint16(0); col < blockMeta.GetColumnCount(); col++ {
-			if err := addOriginSize(blockMeta.MustGetColumn(col).Location().OriginSize()); err != nil {
+		for col := uint16(0); col < blockMeta.GetMetaColumnCount(); col++ {
+			columnMeta := blockMeta.MustGetColumn(col)
+			if columnMeta.DataType() == uint8(types.T_any) {
+				continue
+			}
+			if err := addOriginSize(columnMeta.Location().OriginSize()); err != nil {
 				return stats, 0, err
 			}
 		}
@@ -1079,9 +1250,14 @@ func validatePhysicalTableDumpObjectsImpl(
 	objects []tableDumpObject,
 	mp *mpool.MPool,
 	totalBlocks *atomic.Uint64,
+	def *plan.TableDef,
 ) error {
+	schema, err := buildTableDumpPhysicalSchema(def)
+	if err != nil {
+		return err
+	}
 	for i := range objects {
-		stats, blocks, err := loadPhysicalTableDumpStats(ctx, fs, objects[i], mp)
+		stats, blocks, err := loadPhysicalTableDumpStats(ctx, fs, objects[i], mp, schema)
 		if err != nil {
 			return err
 		}
@@ -1170,6 +1346,8 @@ type loadFileTracker interface {
 	TrackLoadFiles(names ...string)
 }
 
+var lockTableForTableDump = lockop.LockTableWithContext
+
 var lockTableDumpLoadTargets = func(
 	ctx context.Context,
 	ses *Session,
@@ -1202,13 +1380,13 @@ var lockTableDumpLoadTargets = func(
 		if len(primaryKeys) != 1 {
 			return moerr.NewInternalErrorNoCtxf("target relation %s has invalid primary key metadata", ref.relation.GetTableName())
 		}
-		if err = lockop.LockTable(eng, proc, tableID, primaryKeys[0].Type, false); err != nil {
+		if err = lockTableForTableDump(ctx, eng, proc, tableID, primaryKeys[0].Type, false); err != nil {
 			return err
 		}
 	}
 	if lockObjectInstall {
-		return lockop.LockTable(
-			eng, proc, tableDumpObjectInstallLockTableID, types.T_varchar.ToType(), false,
+		return lockTableForTableDump(
+			ctx, eng, proc, tableDumpObjectInstallLockTableID, types.T_varchar.ToType(), false,
 		)
 	}
 	return nil
@@ -1344,6 +1522,7 @@ func handleLoadTable(ctx context.Context, ses *Session, stmt *tree.LoadTable) (e
 		}
 		if err = validatePhysicalTableDumpObjects(
 			ctx, targetFS, relationDump.Objects, ses.GetMemPool(), &totalBlocks,
+			targetRef.relation.GetTableDef(ctx),
 		); err != nil {
 			return err
 		}
