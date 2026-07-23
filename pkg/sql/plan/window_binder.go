@@ -369,6 +369,9 @@ func bindWindowFuncExpr(b windowFuncExprBinder, ctx *BindContext, funcName strin
 	case tree.Groups:
 		return nil, moerr.NewNYI(b.GetContext(), "GROUPS in WINDOW FUNCTION condition")
 	}
+	if isPreparedWindowIntervalBound(ws.Frame.Start.Expr) || isPreparedWindowIntervalBound(ws.Frame.End.Expr) {
+		return nil, moerr.NewNotSupported(b.GetContext(), "prepared parameter markers in interval window frames")
+	}
 	if ws.Frame.Type == tree.Range &&
 		(isWindowFrameParam(ws.Frame.Start.Expr) || isWindowFrameParam(ws.Frame.End.Expr)) {
 		return nil, moerr.NewNotSupported(b.GetContext(), "prepared parameter markers in RANGE window frames")
@@ -417,6 +420,34 @@ func bindWindowFuncExpr(b windowFuncExprBinder, ctx *BindContext, funcName strin
 func isWindowFrameParam(expr tree.Expr) bool {
 	_, ok := expr.(*tree.ParamExpr)
 	return ok
+}
+
+func isPreparedWindowIntervalBound(expr tree.Expr) bool {
+	interval, ok := expr.(*tree.FuncExpr)
+	if !ok {
+		return false
+	}
+	return hasWindowFrameParam(interval)
+}
+
+func hasWindowFrameParam(expr tree.Expr) bool {
+	switch expr := expr.(type) {
+	case *tree.ParamExpr:
+		return true
+	case *tree.FuncExpr:
+		for _, arg := range expr.Exprs {
+			if hasWindowFrameParam(arg) {
+				return true
+			}
+		}
+	case *tree.ParenExpr:
+		return hasWindowFrameParam(expr.Expr)
+	case *tree.UnaryExpr:
+		return hasWindowFrameParam(expr.Expr)
+	case *tree.CastExpr:
+		return hasWindowFrameParam(expr.Expr)
+	}
+	return false
 }
 
 func (b *baseBinder) bindPreparedRowsFrameBound(expr tree.Expr) (*plan.Expr, error) {

@@ -186,6 +186,24 @@ func TestPreparedWindowRangeFrameMarkersAreUnsupported(t *testing.T) {
 	require.ErrorContains(t, err, "prepared parameter markers in RANGE window frames")
 }
 
+func TestPreparedWindowIntervalFrameMarkersAreUnsupported(t *testing.T) {
+	for _, frameType := range []string{"rows", "range"} {
+		t.Run(frameType, func(t *testing.T) {
+			optimizer := NewMockOptimizer(false)
+			stmts, err := parsers.Parse(
+				optimizer.CurrentContext().GetContext(),
+				dialect.MYSQL,
+				"select sum(n_nationkey) over (order by n_nationkey "+frameType+" between interval ? day preceding and current row) from nation",
+				1,
+			)
+			require.NoError(t, err)
+
+			_, err = BuildPlan(optimizer.CurrentContext(), stmts[0], true)
+			require.ErrorContains(t, err, "prepared parameter markers in interval window frames")
+		})
+	}
+}
+
 func firstWindowSpec(t *testing.T, queryPlan *planpb.Plan) *planpb.WindowSpec {
 	t.Helper()
 	for _, node := range queryPlan.GetQuery().Nodes {
