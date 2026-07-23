@@ -254,8 +254,15 @@ func statementCanBeExecutedInUncommittedTransaction(
 		*tree.DataBranchDeleteDatabase,
 		*tree.DataBranchDiff:
 		return true, nil
+	case *tree.DataBranchMerge:
+		// MERGE reuses an explicit BEGIN transaction, but cannot run inside an
+		// implicit autocommit=0 transaction because that path would manage and
+		// commit a separate background transaction.
+		return ses.IsBackgroundSession() || ses.GetTxnHandler().OptionBitsIsSet(OPTION_BEGIN), nil
 	case *tree.DataBranchPick:
-		return false, nil
+		// PICK manages its own transaction and cannot follow an outer user
+		// transaction. Background sessions reuse the caller's shared transaction.
+		return ses.IsBackgroundSession(), nil
 	case *tree.CallStmt:
 		// Call procedure can be executed in an uncommitted transaction, usually used in
 		// nested procedure call.

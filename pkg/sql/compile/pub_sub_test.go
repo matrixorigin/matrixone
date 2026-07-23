@@ -16,7 +16,9 @@ package compile
 
 import (
 	"context"
+	"errors"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -48,6 +50,7 @@ func (e *createSubscriptionExecutor) Exec(
 		return e.selectResult, nil
 	}
 	require.Contains(e.t, sql, "status = 0")
+	require.Contains(e.t, sql, "sub_name IS NULL")
 	return executor.Result{AffectedRows: e.updateAffected}, nil
 }
 
@@ -97,6 +100,73 @@ func TestCreateSubscriptionValidatesCurrentAuthorization(t *testing.T) {
 			require.Equal(t, 2, spy.calls)
 		})
 	}
+}
+
+type subscriptionRaceExecutor struct {
+	selectCount atomic.Int32
+	occupied    atomic.Bool
+	bothRead    chan struct{}
+}
+
+func (e *subscriptionRaceExecutor) Exec(
+	_ context.Context,
+	sql string,
+	_ executor.Options,
+) (executor.Result, error) {
+	lowerSQL := strings.ToLower(sql)
+	if strings.Contains(lowerSQL, "select count(1)") {
+		if e.selectCount.Add(1) == 2 {
+			close(e.bothRead)
+		}
+		<-e.bothRead
+		return executor.Result{}, nil
+	}
+	if !strings.Contains(lowerSQL, "status = 0") || !strings.Contains(lowerSQL, "sub_name is null") {
+		return executor.Result{}, errors.New("subscription update is not an atomic claim")
+	}
+	if e.occupied.CompareAndSwap(false, true) {
+		return executor.Result{AffectedRows: 1}, nil
+	}
+	return executor.Result{}, nil
+}
+
+func (e *subscriptionRaceExecutor) ExecTxn(
+	context.Context,
+	func(executor.TxnExecutor) error,
+	executor.Options,
+) error {
+	return nil
+}
+
+func TestCreateSubscriptionConcurrentClaim(t *testing.T) {
+	spy := &subscriptionRaceExecutor{bothRead: make(chan struct{})}
+	results := make(chan error, 2)
+
+	for _, name := range []string{"sub_a", "sub_b"} {
+		proc := testutil.NewProcess(t)
+		ctx := defines.AttachAccountId(context.Background(), catalog.System_Account+1)
+		proc.Ctx = ctx
+		proc.ReplaceTopCtx(ctx)
+		moruntime.ServiceRuntime(proc.GetService()).SetGlobalVariables(moruntime.InternalSQLExecutor, spy)
+		c := &Compile{proc: proc, pn: &plan.Plan{}}
+
+		go func() {
+			results <- createSubscription(ctx, c, name, &plan.SubscriptionOption{
+				From: "publisher", Publication: "publication",
+			})
+		}()
+	}
+
+	var success, rejected int
+	for range 2 {
+		if err := <-results; err == nil {
+			success++
+		} else {
+			rejected++
+		}
+	}
+	require.Equal(t, 1, success)
+	require.Equal(t, 1, rejected)
 }
 
 func Test_updatePubTableList(t *testing.T) {

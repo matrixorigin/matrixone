@@ -72,7 +72,8 @@ func createSubscription(ctx context.Context, c *Compile, dbName string, subOptio
 	sql = fmt.Sprintf(`
 		UPDATE mo_catalog.mo_subs
 		SET sub_name='%s', sub_time=now()
-		WHERE pub_account_name = '%s' AND pub_name = '%s' AND sub_account_id = %d AND status = %d
+		WHERE pub_account_name = '%s' AND pub_name = '%s' AND sub_account_id = %d
+			AND status = %d AND sub_name IS NULL
 	`, dbName, subOption.From, subOption.Publication, accountId, pubsub.SubStatusNormal)
 	updateResult, err := c.runSqlWithResultAndOptions(
 		sql,

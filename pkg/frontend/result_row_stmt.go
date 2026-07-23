@@ -51,6 +51,33 @@ func GetExplainColumn(ctx context.Context, explainColName string) ([]*plan2.ColD
 	return cols, columns, err
 }
 
+func getPreparedResultColumns(stmt *PrepareStmt, txnHaveDDL bool) []*plan2.ColDef {
+	dcPrepare := stmt.PreparePlan.GetDcl().GetPrepare()
+	if _, ok := stmt.PrepareStmt.(*tree.ExplainStmt); ok {
+		if query := dcPrepare.GetPlan().GetQuery(); query != nil {
+			title := plan2.GetPlanTitle(query, txnHaveDDL)
+			return []*plan2.ColDef{{
+				Typ:        plan2.Type{Id: int32(types.T_varchar)},
+				Name:       title,
+				OriginName: title,
+			}}
+		}
+	}
+	return plan2.GetResultColumnsFromPlan(dcPrepare.GetPlan())
+}
+
+func sessionTxnHaveDDL(ses FeSession) bool {
+	if ses == nil || ses.GetProc() == nil {
+		return false
+	}
+	txnOperator := ses.GetProc().GetTxnOperator()
+	if txnOperator == nil {
+		return false
+	}
+	workspace := txnOperator.GetWorkspace()
+	return workspace != nil && workspace.GetHaveDDL()
+}
+
 func getSelectColumnsAndResultColumns(ctx context.Context, cw ComputationWrapper) ([]interface{}, []*plan2.ColDef, error) {
 	if txnCW, ok := cw.(*TxnComputationWrapper); ok {
 		if _, ok = txnCW.GetAst().(*tree.Select); ok {

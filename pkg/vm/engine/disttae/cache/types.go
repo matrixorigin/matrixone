@@ -59,7 +59,11 @@ type CatalogCache struct {
 		start types.TS
 		end   types.TS
 	}
-	gcMu sync.Mutex
+	gcMu        sync.Mutex
+	tableChange struct {
+		sync.RWMutex
+		byAccount map[uint32]timestamp.Timestamp
+	}
 	//tables and database is safe to be read concurrently.
 	tables    *tableCache
 	databases *databaseCache

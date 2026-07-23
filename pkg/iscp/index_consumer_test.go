@@ -32,7 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/testutil/testengine"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
@@ -44,6 +43,27 @@ import (
 )
 
 const testDeadlockAlgo = "test-deadlock-algo"
+
+func stubIndexConsumerTxnRunner() *gostub.Stubs {
+	return gostub.Stub(&runTxnWithSqlContext, func(
+		ctx context.Context,
+		_ engine.Engine,
+		_ client.TxnClient,
+		cnUUID string,
+		accountID uint32,
+		duration time.Duration,
+		resolveVariableFunc func(string, bool, bool) (interface{}, error),
+		data any,
+		fn func(*sqlexec.SqlProcess, any) error,
+	) error {
+		txnCtx := context.WithValue(ctx, defines.TenantIDKey{}, accountID)
+		txnCtx, cancel := context.WithTimeout(txnCtx, duration)
+		defer cancel()
+		return fn(sqlexec.NewSqlProcessWithContext(sqlexec.NewSqlContext(
+			txnCtx, cnUUID, nil, accountID, resolveVariableFunc,
+		)), data)
+	})
+}
 
 type flushEveryRowHooks struct{}
 
@@ -320,10 +340,10 @@ func TestConsumer(t *testing.T) {
 	info := newTestIvfConsumerInfo()
 	job := newTestJobID()
 
-	catalog.SetupDefines("")
-	cnEngine, cnClient, _ := testengine.New(ctx)
+	txnStub := stubIndexConsumerTxnRunner()
+	defer txnStub.Reset()
 
-	consumer, err := NewConsumer(cnUUID, cnEngine, cnClient, tblDef, job, info)
+	consumer, err := NewConsumer(cnUUID, nil, nil, tblDef, job, info)
 	require.NoError(t, err)
 	err = consumer.Consume(ctx, r)
 	require.NoError(t, err)
@@ -342,19 +362,17 @@ func TestIndexConsumerConsumeReturnsExecErrorAfterRunnerExit(t *testing.T) {
 
 	tblDef := newTestIvfTableDef("pk", types.T_int64, "vec", types.T_array_float32, 2)
 	cnUUID := "a-b-c-d"
-	catalog.SetupDefines("")
-	cnEngine, cnClient, _ := testengine.New(ctx)
+	txnStub := stubIndexConsumerTxnRunner()
+	defer txnStub.Reset()
 
 	consumer := &IndexConsumer{
-		cnUUID:      cnUUID,
-		cnEngine:    cnEngine,
-		cnTxnClient: cnClient,
-		info:        newTestIvfConsumerInfo(),
-		tableDef:    tblDef,
-		sqlWriter:   &flushEveryRowWriter{},
-		rowdata:     make([]any, len(tblDef.Cols)),
-		rowdelete:   make([]any, 1),
-		algo:        testDeadlockAlgo,
+		cnUUID:    cnUUID,
+		info:      newTestIvfConsumerInfo(),
+		tableDef:  tblDef,
+		sqlWriter: &flushEveryRowWriter{},
+		rowdata:   make([]any, len(tblDef.Cols)),
+		rowdelete: make([]any, 1),
+		algo:      testDeadlockAlgo,
 	}
 
 	bat := testutil.NewBatchWithVectors(
@@ -678,17 +696,15 @@ func TestIndexConsumerInFlightSnapshotExecUsesParentContext(t *testing.T) {
 	defer stubExec.Reset()
 
 	tblDef := newTestIvfTableDef("pk", types.T_int64, "vec", types.T_array_float32, 2)
-	catalog.SetupDefines("")
-	cnEngine, cnClient, _ := testengine.New(context.Background())
+	txnStub := stubIndexConsumerTxnRunner()
+	defer txnStub.Reset()
 	consumer := &IndexConsumer{
-		cnUUID:      "a-b-c-d",
-		cnEngine:    cnEngine,
-		cnTxnClient: cnClient,
-		info:        newTestIvfConsumerInfo(),
-		tableDef:    tblDef,
-		sqlWriter:   &flushEveryRowWriter{},
-		rowdata:     make([]any, len(tblDef.Cols)),
-		algo:        testDeadlockAlgo,
+		cnUUID:    "a-b-c-d",
+		info:      newTestIvfConsumerInfo(),
+		tableDef:  tblDef,
+		sqlWriter: &flushEveryRowWriter{},
+		rowdata:   make([]any, len(tblDef.Cols)),
+		algo:      testDeadlockAlgo,
 	}
 
 	bat := testutil.NewBatchWithVectors(
@@ -717,18 +733,16 @@ func TestIndexConsumerTailFinalizationUsesParentContext(t *testing.T) {
 	defer cancel()
 
 	tblDef := newTestIvfTableDef("pk", types.T_int64, "vec", types.T_array_float32, 2)
-	catalog.SetupDefines("")
-	cnEngine, cnClient, _ := testengine.New(context.Background())
+	txnStub := stubIndexConsumerTxnRunner()
+	defer txnStub.Reset()
 	consumer := &IndexConsumer{
-		cnUUID:      "a-b-c-d",
-		cnEngine:    cnEngine,
-		cnTxnClient: cnClient,
-		info:        newTestIvfConsumerInfo(),
-		tableDef:    tblDef,
-		sqlWriter:   &flushEveryRowWriter{},
-		rowdata:     make([]any, len(tblDef.Cols)),
-		rowdelete:   make([]any, 1),
-		algo:        testDeadlockAlgo,
+		cnUUID:    "a-b-c-d",
+		info:      newTestIvfConsumerInfo(),
+		tableDef:  tblDef,
+		sqlWriter: &flushEveryRowWriter{},
+		rowdata:   make([]any, len(tblDef.Cols)),
+		rowdelete: make([]any, 1),
+		algo:      testDeadlockAlgo,
 	}
 
 	insertAtomicBat := &AtomicBatch{
@@ -1049,11 +1063,11 @@ func TestIvfSnapshot(t *testing.T) {
 	cnUUID := "a-b-c-d"
 	info := newTestIvfConsumerInfo()
 	job := newTestJobID()
-	catalog.SetupDefines("")
-	cnEngine, cnClient, _ := testengine.New(ctx)
+	txnStub := stubIndexConsumerTxnRunner()
+	defer txnStub.Reset()
 
 	t.Run("snapshot", func(t *testing.T) {
-		consumer, err := NewConsumer(cnUUID, cnEngine, cnClient, tblDef, job, info)
+		consumer, err := NewConsumer(cnUUID, nil, nil, tblDef, job, info)
 		require.NoError(t, err)
 
 		mp := mpool.MustNewZeroNoFixed()
@@ -1094,7 +1108,7 @@ func TestIvfSnapshot(t *testing.T) {
 
 	t.Run("noMoreData", func(t *testing.T) {
 		sqls = sqls[:0]
-		consumer, err := NewConsumer(cnUUID, cnEngine, cnClient, tblDef, job, info)
+		consumer, err := NewConsumer(cnUUID, nil, nil, tblDef, job, info)
 		require.NoError(t, err)
 
 		output := &MockRetriever{
@@ -1127,10 +1141,10 @@ func TestIvfTail(t *testing.T) {
 	cnUUID := "a-b-c-d"
 	info := newTestIvfConsumerInfo()
 	job := newTestJobID()
-	catalog.SetupDefines("")
-	cnEngine, cnClient, _ := testengine.New(ctx)
+	txnStub := stubIndexConsumerTxnRunner()
+	defer txnStub.Reset()
 
-	consumer, err := NewConsumer(cnUUID, cnEngine, cnClient, tblDef, job, info)
+	consumer, err := NewConsumer(cnUUID, nil, nil, tblDef, job, info)
 	require.NoError(t, err)
 
 	bat := testutil.NewBatchWithVectors(
@@ -1215,12 +1229,6 @@ func TestHnswConsumer(t *testing.T) {
 	tblDef := newTestTableDef("pk", types.T_int64, "vec", types.T_array_float32, 2)
 	info := newTestConsumerInfo()
 	job := newTestJobID()
-	/*
-		cnUUID := "a-b-c-d"
-		catalog.SetupDefines("")
-		cnEngine, cnClient, _ := testengine.New(ctx)
-	*/
-
 	t.Run("HnswSqlWriter", func(t *testing.T) {
 
 		row1 := []any{int64(1), []float32{0.1, 0.2}}

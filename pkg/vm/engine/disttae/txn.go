@@ -2172,7 +2172,7 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 
 			if objBlkDeletion[*stats.ObjectName().ObjectId()] == nil {
 				// clean object, no deletion on it
-				bat := colexec.AllocCNS3ResultBat(false, false)
+				bat := colexec.AllocCNS3ResultBat(false)
 				if err := bat.Vecs[0].UnionBatch(entry.bat.Vecs[0],
 					int64(offset), int(stats.BlkCnt()), nil, txn.proc.Mp()); err != nil {
 					return err
