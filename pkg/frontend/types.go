@@ -296,22 +296,26 @@ func (ec *engineColumnInfo) GetType() types.T {
 }
 
 type PrepareStmt struct {
-	Name           string
-	Sql            string
-	PreparePlan    *plan.Plan
-	PrepareStmt    tree.Statement
-	NativeMode     bool
-	ParamTypes     []byte
-	ColDefData     [][]byte
-	IsCloudNonuser bool
-	proc           *process.Process
-	remapDb        map[string]string
+	Name            string
+	Sql             string
+	PreparePlan     *plan.Plan
+	PrepareStmt     tree.Statement
+	NativeMode      bool
+	ParamTypes      []byte
+	ColDefData      [][]byte
+	IsCloudNonuser  bool
+	proc            *process.Process
+	remapDb         map[string]string
+	defaultDatabase string
 
 	params              *vector.Vector
 	getFromSendLongData map[int]struct{}
 
 	compile *compile.Compile
 	Ts      timestamp.Timestamp
+	// tempTableVersion is the session temporary-table mapping version used to
+	// build PreparePlan and compile.
+	tempTableVersion uint64
 
 	// schedulingSQLMode freezes the lexical mode used when Sql was prepared.
 	// EXECUTE must not reinterpret optimizer comments after session sql_mode

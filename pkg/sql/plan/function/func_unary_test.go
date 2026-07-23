@@ -8884,6 +8884,44 @@ func TestDetachedUserLevelLockCleanupFullBacklogHonorsContext(t *testing.T) {
 	})
 }
 
+func TestDetachedUserLevelLockCleanupBacklogBatchAdmissionIsAtomic(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		service := services[0].(*userLevelLockTestService)
+		key := detachedUserLevelLockCleanupKey{
+			serviceID: service.GetServiceID(),
+			owner:     "owner-batch-backlog",
+			name:      "lock-batch-backlog",
+			connID:    1001,
+			kind:      "session_close",
+		}
+
+		detachedUserLevelLockCleanups.Lock()
+		detachedUserLevelLockCleanups.backlog = make(chan detachedUserLevelLockCleanupRequest, userLevelLockDetachedCleanupBacklog)
+		detachedUserLevelLockCleanups.backlogStarted = true
+		for i := 0; i < userLevelLockDetachedCleanupBacklog-1; i++ {
+			detachedUserLevelLockCleanups.backlog <- detachedUserLevelLockCleanupRequest{
+				ls:     service,
+				key:    key,
+				txnIDs: [][]byte{[]byte(fmt.Sprintf("queued-%d", i))},
+			}
+		}
+		before := len(detachedUserLevelLockCleanups.backlog)
+		detachedUserLevelLockCleanups.Unlock()
+
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+		defer cancel()
+		requests := []detachedUserLevelLockCleanupRequest{
+			{ls: service, key: key, txnIDs: [][]byte{[]byte("txn-batch-0")}},
+			{ls: service, key: key, txnIDs: [][]byte{[]byte("txn-batch-1")}},
+		}
+		require.False(t, handoffDetachedUserLevelLockBacklogCleanups(ctx, requests))
+
+		detachedUserLevelLockCleanups.Lock()
+		require.Equal(t, before, len(detachedUserLevelLockCleanups.backlog))
+		detachedUserLevelLockCleanups.Unlock()
+	})
+}
+
 func TestDetachedUserLevelLockCleanupEntryPayloadIsBounded(t *testing.T) {
 	entry := &detachedUserLevelLockCleanupEntry{}
 	for i := 0; i < userLevelLockDetachedCleanupMaxTxnIDsPerEntry; i++ {
@@ -8974,7 +9012,7 @@ func TestReleaseLockPreGenerationLegacyTxnIDCompatible(t *testing.T) {
 		proc1 := newUserLevelLockTestProcess(t, services[0], "acc")
 		proc1.GetSessionInfo().ConnectionID = 1001
 		proc2 := newUserLevelLockTestProcess(t, services[1], "acc")
-		legacyOwner := fmt.Sprintf("%s:%s", proc1.GetSessionInfo().Account, proc1.GetSessionInfo().SessionId.String())
+		legacyOwner := proc1.GetSessionInfo().SessionId.String()
 		owner, _ := ensureUserLevelLockIdentity(proc1)
 		state := services[0].(*userLevelLockTestService).state
 		name := "legacy_uuid_release"

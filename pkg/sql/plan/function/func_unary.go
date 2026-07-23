@@ -7116,6 +7116,7 @@ func userLevelLockOwnerCandidates(proc *process.Process) []string {
 	if proc != nil && proc.GetSessionInfo() != nil {
 		si := proc.GetSessionInfo()
 		if sessionID := si.SessionId.String(); sessionID != "" && sessionID != "00000000-0000-0000-0000-000000000000" {
+			add(sessionID)
 			add(fmt.Sprintf("%s:%s", si.Account, sessionID))
 		}
 		connID := si.GetConnectionID()
@@ -7274,9 +7275,7 @@ func cleanupFailedUserLevelLockTxn(
 	if err := unlockUserLevelLockTxnID(attemptCtx, ls, txnID); err == nil {
 		return nil
 	}
-	handoffCtx, handoffCancel := context.WithTimeout(context.Background(), userLevelLockDetachedCleanupHandoffTimeout)
-	defer handoffCancel()
-	if handoffDetachedUserLevelLockTxnCleanup(handoffCtx, ls, key, [][]byte{txnID}) {
+	if handoffDetachedUserLevelLockTxnCleanup(ctx, ls, key, [][]byte{txnID}) {
 		return nil
 	}
 	return moerr.NewInternalErrorNoCtxf("user-level lock cleanup handoff failed for %s", key.name)
@@ -7561,12 +7560,7 @@ func handoffDetachedUserLevelLockTxnCleanup(ctx context.Context, ls lockservice.
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	select {
-	case detachedUserLevelLockCleanups.backlog <- req:
-		return true
-	case <-ctx.Done():
-		return false
-	}
+	return handoffDetachedUserLevelLockBacklogCleanups(ctx, []detachedUserLevelLockCleanupRequest{req})
 }
 
 func enqueueDetachedUserLevelLockCleanupLocked(entry *detachedUserLevelLockCleanupEntry) bool {
@@ -7655,23 +7649,58 @@ func handoffDetachedUserLevelLockCleanups(ctx context.Context, ls lockservice.Lo
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	requests := make([]detachedUserLevelLockCleanupRequest, 0, len(chunks))
 	for i, chunk := range chunks {
-		if !handoffDetachedUserLevelLockTxnCleanup(
-			ctx,
-			ls,
-			detachedUserLevelLockCleanupKey{
+		requests = append(requests, detachedUserLevelLockCleanupRequest{
+			ls: ls,
+			key: detachedUserLevelLockCleanupKey{
 				serviceID: ls.GetServiceID(),
 				owner:     owner,
 				name:      fmt.Sprintf("%s:%d", owner, i),
 				connID:    connID,
 				kind:      "session_close",
 			},
-			chunk,
-		) {
+			txnIDs: cloneUserLevelLockTxnIDs(chunk),
+		})
+	}
+	startDetachedUserLevelLockCleanupBacklogWorker()
+	return handoffDetachedUserLevelLockBacklogCleanups(ctx, requests)
+}
+
+func handoffDetachedUserLevelLockBacklogCleanups(ctx context.Context, requests []detachedUserLevelLockCleanupRequest) bool {
+	if len(requests) == 0 {
+		return true
+	}
+	if len(requests) > userLevelLockDetachedCleanupBacklog {
+		return false
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	for {
+		detachedUserLevelLockCleanups.Lock()
+		if cap(detachedUserLevelLockCleanups.backlog)-len(detachedUserLevelLockCleanups.backlog) >= len(requests) {
+			for _, req := range requests {
+				detachedUserLevelLockCleanups.backlog <- req
+			}
+			detachedUserLevelLockCleanups.Unlock()
+			return true
+		}
+		detachedUserLevelLockCleanups.Unlock()
+
+		timer := time.NewTimer(userLevelLockDetachedCleanupInitialBackoff)
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
 			return false
 		}
 	}
-	return true
 }
 
 func startDetachedUserLevelLockCleanupWorkers() {
@@ -7818,10 +7847,8 @@ func unlockUserLevelLockProbe(ctx context.Context, ls lockservice.LockService, o
 	if err == nil {
 		return nil
 	}
-	handoffCtx, handoffCancel := context.WithTimeout(context.Background(), userLevelLockDetachedCleanupHandoffTimeout)
-	defer handoffCancel()
 	if !handoffDetachedUserLevelLockTxnCleanup(
-		handoffCtx,
+		ctx,
 		ls,
 		detachedUserLevelLockCleanupKey{
 			serviceID: ls.GetServiceID(),

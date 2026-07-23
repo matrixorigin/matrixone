@@ -20,6 +20,7 @@ import (
 	"crypto/x509"
 	"fmt"
 	"math"
+	"net"
 	"os"
 	"sync"
 	"time"
@@ -63,6 +64,11 @@ type AccountRoutineManager struct {
 type KillRecord struct {
 	killTime time.Time
 	version  uint64
+}
+
+type activeClientRequest struct {
+	conn    *Conn
+	routine *Routine
 }
 
 func NewKillRecord(killtime time.Time, version uint64) KillRecord {
@@ -187,6 +193,41 @@ func (rm *RoutineManager) getRoutineByConnID(id uint32) *Routine {
 	return nil
 }
 
+func (rm *RoutineManager) longRunningRequests(now time.Time, minimum time.Duration) []activeClientRequest {
+	rm.mu.RLock()
+	defer rm.mu.RUnlock()
+	nowValue := clientRequestClockValue(now)
+	var requests []activeClientRequest
+	for conn, routine := range rm.clients {
+		if conn != nil && routine != nil && routine.requestRunningLongerThan(nowValue, minimum) {
+			requests = append(requests, activeClientRequest{conn: conn, routine: routine})
+		}
+	}
+	return requests
+}
+
+func (rm *RoutineManager) cancelDisconnectedRequests(
+	now time.Time,
+	minimum time.Duration,
+	probe func(net.Conn) (bool, error),
+) {
+	if probe == nil {
+		return
+	}
+	for _, request := range rm.longRunningRequests(now, minimum) {
+		closed, err := probe(request.conn.RawConn())
+		if err != nil {
+			logutil.Debugf("failed to probe active client connection %s: %v", request.conn.RemoteAddress(), err)
+			continue
+		}
+		if !closed {
+			continue
+		}
+		logutil.Infof("cancel active query after client disconnect: connection=%s", request.conn.RemoteAddress())
+		request.routine.beginClose()
+	}
+}
+
 func (rm *RoutineManager) deleteRoutine(rs *Conn) *Routine {
 	var rt *Routine
 	var ok bool
@@ -297,8 +338,9 @@ func (rm *RoutineManager) Closed(rs *Conn) {
 	if rt == nil {
 		return
 	}
-	// Prevent reset or migration from publishing a replacement session after we
-	// select the session that this close operation must unregister.
+	// Seal admission and cancel request/lifecycle work before waiting. This
+	// keeps connection close independent of the work it is stopping.
+	rt.beginClose()
 	rt.mc.waitAndClose()
 
 	defer func() {
@@ -453,6 +495,14 @@ func (rm *RoutineManager) MigrateConnectionTo(ctx context.Context, req *query.Mi
 }
 
 func (rm *RoutineManager) MigrateConnectionFrom(req *query.MigrateConnFromRequest, resp *query.MigrateConnFromResponse) error {
+	return rm.MigrateConnectionFromWithContext(rm.ctx, req, resp)
+}
+
+func (rm *RoutineManager) MigrateConnectionFromWithContext(
+	ctx context.Context,
+	req *query.MigrateConnFromRequest,
+	resp *query.MigrateConnFromResponse,
+) error {
 	routine := rm.getRoutineByConnID(req.ConnID)
 	if routine == nil {
 		return moerr.NewInternalErrorf(rm.ctx, "cannot get routine to migrate connection %d", req.ConnID)
@@ -462,21 +512,29 @@ func (rm *RoutineManager) MigrateConnectionFrom(req *query.MigrateConnFromReques
 		if states := function.UserLevelLocksForMigration(routine.getSession().proc); len(states) > 0 {
 			return moerr.NewInternalErrorNoCtx("cannot migrate connection while user-level locks are held")
 		}
-		return routine.migrateConnectionFrom(nil)
+		return routine.migrateConnectionFromWithContext(ctx, nil)
 	case query.MigrateConnFromAction_MigrateConnFromEnableUserLevelLockRelease:
 		routine.getSession().userLevelLocksMigrated = false
 		return nil
 	default:
-		return routine.migrateConnectionFrom(resp)
+		return routine.migrateConnectionFromWithContext(ctx, resp)
 	}
 }
 
 func (rm *RoutineManager) ResetSession(req *query.ResetSessionRequest, resp *query.ResetSessionResponse) error {
+	return rm.ResetSessionWithContext(rm.ctx, req, resp)
+}
+
+func (rm *RoutineManager) ResetSessionWithContext(
+	ctx context.Context,
+	req *query.ResetSessionRequest,
+	resp *query.ResetSessionResponse,
+) error {
 	routine := rm.getRoutineByConnID(req.ConnID)
 	if routine == nil {
 		return moerr.NewInternalErrorf(rm.ctx, "cannot get routine to clear session %d", req.ConnID)
 	}
-	return routine.resetSession(rm.baseService.ID(), resp)
+	return routine.resetSessionWithContext(ctx, rm.baseService.ID(), resp)
 }
 
 func (rm *RoutineManager) cancelCtx() {

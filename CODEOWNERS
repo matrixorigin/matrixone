@@ -194,7 +194,6 @@
 
 # pkg/txn
 /pkg/txn @iamlinjunhong @XuPeng-SH
-/pkg/txn/storage/memorystorage @XuPeng-SH
 
 # pkg/util
 /pkg/util @XuPeng-SH
@@ -218,7 +217,6 @@
 /pkg/vm/engine/disttae @XuPeng-SH @gouhongshen
 /pkg/vm/engine/disttae/logtailreplay @XuPeng-SH @gouhongshen
 /pkg/vm/engine/tae @XuPeng-SH
-/pkg/vm/engine/memoryengine @XuPeng-SH
 /pkg/vm/engine/tae/logtail/service @XuPeng-SH @aptend
 /pkg/vm/engine/tae/logstore @XuPeng-SH @jiangxinmeng1
 /pkg/vm/engine/tae/wal @XuPeng-SH @jiangxinmeng1
