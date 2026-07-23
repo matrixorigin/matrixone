@@ -8884,6 +8884,99 @@ func TestDetachedUserLevelLockCleanupFullBacklogHonorsContext(t *testing.T) {
 	})
 }
 
+func fillDetachedUserLevelLockCleanupAdmissionForTest(
+	service *userLevelLockTestService,
+	key detachedUserLevelLockCleanupKey,
+	txnIDs [][]byte,
+) {
+	shard := detachedUserLevelLockOverflowShard(key, txnIDs)
+	detachedUserLevelLockCleanups.Lock()
+	defer detachedUserLevelLockCleanups.Unlock()
+	for i := uint64(0); i < userLevelLockDetachedCleanupOverflowShards; i++ {
+		overflowKey := detachedUserLevelLockOverflowCleanupKey(key, (shard+i)%userLevelLockDetachedCleanupOverflowShards)
+		entry := &detachedUserLevelLockCleanupEntry{
+			key:     overflowKey,
+			ls:      service,
+			backoff: userLevelLockDetachedCleanupInitialBackoff,
+		}
+		for j := 0; j < userLevelLockDetachedCleanupMaxTxnIDsPerEntry; j++ {
+			entry.txnIDs = append(entry.txnIDs, []byte(fmt.Sprintf("overflow-full-%d-%d", i, j)))
+		}
+		detachedUserLevelLockCleanups.entries[overflowKey] = entry
+	}
+	for i := 0; len(detachedUserLevelLockCleanups.entries) < userLevelLockDetachedCleanupMaxEntries; i++ {
+		fillerKey := detachedUserLevelLockCleanupKey{
+			serviceID: service.GetServiceID(),
+			owner:     fmt.Sprintf("filler-owner-%d", i),
+			name:      fmt.Sprintf("filler-lock-%d", i),
+			connID:    uint64(i),
+			kind:      "filler",
+		}
+		detachedUserLevelLockCleanups.entries[fillerKey] = &detachedUserLevelLockCleanupEntry{
+			key:     fillerKey,
+			ls:      service,
+			txnIDs:  [][]byte{[]byte(fmt.Sprintf("filler-txn-%d", i))},
+			backoff: userLevelLockDetachedCleanupInitialBackoff,
+		}
+	}
+}
+
+func TestFailedAttemptCleanupWaitsForBacklogAdmissionAndTransfersOwnership(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		service := services[0].(*userLevelLockTestService)
+		service.unlockErr = moerr.NewInternalErrorNoCtx("forced cleanup unlock failure")
+		key := detachedUserLevelLockCleanupKey{
+			serviceID: service.GetServiceID(),
+			owner:     "owner-failed-attempt-backlog",
+			name:      "lock-failed-attempt-backlog",
+			connID:    1001,
+			kind:      "get_lock_failed",
+		}
+		txnID := []byte("txn-failed-attempt-backlog")
+		fillDetachedUserLevelLockCleanupAdmissionForTest(service, key, [][]byte{txnID})
+
+		detachedUserLevelLockCleanups.Lock()
+		detachedUserLevelLockCleanups.backlog = make(chan detachedUserLevelLockCleanupRequest, userLevelLockDetachedCleanupBacklog)
+		detachedUserLevelLockCleanups.backlogStarted = true
+		for i := 0; i < userLevelLockDetachedCleanupBacklog; i++ {
+			detachedUserLevelLockCleanups.backlog <- detachedUserLevelLockCleanupRequest{
+				ls:     service,
+				key:    key,
+				txnIDs: [][]byte{[]byte(fmt.Sprintf("queued-%d", i))},
+			}
+		}
+		detachedUserLevelLockCleanups.Unlock()
+
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		done := make(chan error, 1)
+		go func() {
+			done <- cleanupFailedUserLevelLockTxn(ctx, service, key, txnID)
+		}()
+
+		select {
+		case err := <-done:
+			require.Failf(t, "cleanup returned before backlog admission", "err=%v", err)
+		case <-time.After(50 * time.Millisecond):
+		}
+
+		detachedUserLevelLockCleanups.Lock()
+		<-detachedUserLevelLockCleanups.backlog
+		detachedUserLevelLockCleanups.Unlock()
+
+		require.NoError(t, <-done)
+		detachedUserLevelLockCleanups.Lock()
+		require.Len(t, detachedUserLevelLockCleanups.backlog, userLevelLockDetachedCleanupBacklog)
+		req := <-detachedUserLevelLockCleanups.backlog
+		for len(detachedUserLevelLockCleanups.backlog) > 0 {
+			req = <-detachedUserLevelLockCleanups.backlog
+		}
+		detachedUserLevelLockCleanups.Unlock()
+		require.Equal(t, key, req.key)
+		require.Equal(t, [][]byte{txnID}, req.txnIDs)
+	})
+}
+
 func TestDetachedUserLevelLockCleanupBacklogBatchAdmissionIsAtomic(t *testing.T) {
 	runUserLevelLockTest(t, func(services []lockservice.LockService) {
 		service := services[0].(*userLevelLockTestService)

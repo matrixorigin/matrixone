@@ -6986,7 +6986,6 @@ const userLevelLockDetachedCleanupOverflowShards = 16
 const userLevelLockDetachedCleanupMaxTxnIDsPerEntry = 2048
 const userLevelLockDetachedCleanupWorkers = 4
 const userLevelLockDetachedCleanupBacklog = 64
-const userLevelLockDetachedCleanupHandoffTimeout = 100 * time.Millisecond
 
 type userLevelLockKey struct {
 	owner string
@@ -8344,7 +8343,7 @@ func releaseUserLevelLocksOnSessionCloseWithTimeout(proc *process.Process, timeo
 		owner := userLevelLockOwner(proc)
 		connID := userLevelLockConnectionID(proc)
 		states := userLevelLocksForOwnerSession(owner, userLevelLockSessionID(proc))
-		handoffCtx, handoffCancel := context.WithTimeout(context.Background(), min(timeout, userLevelLockDetachedCleanupHandoffTimeout))
+		handoffCtx, handoffCancel := context.WithTimeout(context.Background(), timeout)
 		defer handoffCancel()
 		if handoffDetachedUserLevelLockCleanups(handoffCtx, proc.GetLockService(), userLevelLockOwnerCandidates(proc), connID, states) {
 			detached := detachUserLevelLocksForOwner(owner, userLevelLockSessionID(proc))
