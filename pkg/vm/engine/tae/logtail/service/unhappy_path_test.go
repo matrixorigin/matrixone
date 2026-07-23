@@ -16,6 +16,7 @@ package service
 
 import (
 	"context"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -42,6 +43,51 @@ func (n *recordingSessionNotifier) NotifySessionError(_ *Session, err error) {
 	}
 }
 
+type cancelOrderSession struct {
+	*captureSession
+	sessionCanceled   <-chan struct{}
+	closeBeforeCancel atomic.Bool
+}
+
+func (s *cancelOrderSession) Close() error {
+	select {
+	case <-s.sessionCanceled:
+	default:
+		s.closeBeforeCancel.Store(true)
+	}
+	return s.captureSession.Close()
+}
+
+type controlledWriteSession struct {
+	*captureSession
+	writeOnce        sync.Once
+	closeOnce        sync.Once
+	writeEntered     chan struct{}
+	closed           chan struct{}
+	allowWriteReturn chan struct{}
+}
+
+func newControlledWriteSession() *controlledWriteSession {
+	return &controlledWriteSession{
+		captureSession:   newCaptureSession(),
+		writeEntered:     make(chan struct{}),
+		closed:           make(chan struct{}),
+		allowWriteReturn: make(chan struct{}),
+	}
+}
+
+func (s *controlledWriteSession) Close() error {
+	err := s.captureSession.Close()
+	s.closeOnce.Do(func() { close(s.closed) })
+	return err
+}
+
+func (s *controlledWriteSession) Write(context.Context, morpc.Message) error {
+	s.writeOnce.Do(func() { close(s.writeEntered) })
+	<-s.allowWriteReturn
+	return context.Canceled
+}
+
 func TestSessionStopsWhenTransportDisconnects(t *testing.T) {
 	transport := newCaptureSession()
 	notifier := &recordingSessionNotifier{notified: make(chan error, 1)}
@@ -60,6 +106,152 @@ func TestSessionStopsWhenTransportDisconnects(t *testing.T) {
 		t.Fatal("session sender did not observe transport cancellation")
 	}
 	require.ErrorIs(t, session.sessionCtx.Err(), context.Canceled)
+}
+
+func TestPostCleanCancelsBeforeClosingTransport(t *testing.T) {
+	transport := &cancelOrderSession{captureSession: newCaptureSession()}
+	session := NewSession(
+		context.Background(), mockMOLogger(), NewLogtailResponsePool(),
+		&recordingSessionNotifier{notified: make(chan error, 1)},
+		mockMorpcStream(transport, 1, 1024),
+		time.Second, time.Second, time.Hour, time.Hour,
+	)
+	transport.sessionCanceled = session.sessionCtx.Done()
+
+	session.PostClean()
+
+	require.False(t, transport.closeBeforeCancel.Load(),
+		"cleanup must cancel response admission before entering transport Close")
+	require.ErrorIs(t, session.sessionCtx.Err(), context.Canceled)
+	require.ErrorIs(t, transport.ctx.Err(), context.Canceled)
+}
+
+func TestPostCleanDoesNotHoldAdmissionBarrierWhileJoiningSender(t *testing.T) {
+	transport := newControlledWriteSession()
+	notifier := &recordingSessionNotifier{notified: make(chan error, 1)}
+	responses := NewLogtailResponsePool()
+	session := NewSession(
+		context.Background(), mockMOLogger(), responses, notifier,
+		mockMorpcStream(transport, 1, 1024),
+		time.Second, time.Second, time.Hour, time.Hour,
+	)
+
+	table := mockTable(1, 1, 1)
+	id := MarshalTableID(&table)
+	_, generation := session.RegisterWithGeneration(id, table)
+	require.NoError(t, session.SendUpdateResponse(
+		context.Background(),
+		mockTimestamp(1, 0),
+		mockTimestamp(2, 0),
+		nil,
+	))
+	select {
+	case <-transport.writeEntered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("session sender did not enter the controlled transport write")
+	}
+
+	var allowWriteReturnOnce sync.Once
+	allowWriteReturn := func() {
+		allowWriteReturnOnce.Do(func() { close(transport.allowWriteReturn) })
+	}
+	t.Cleanup(allowWriteReturn)
+
+	// Hold a reader so PostClean can be observed queued as the admission-barrier
+	// writer before subscription completion tries to enter as a later reader.
+	session.enqueueMu.RLock()
+	admissionReadLocked := true
+	defer func() {
+		if admissionReadLocked {
+			session.enqueueMu.RUnlock()
+		}
+	}()
+
+	postCleanDone := make(chan struct{})
+	go func() {
+		session.PostClean()
+		close(postCleanDone)
+	}()
+	select {
+	case <-transport.closed:
+	case <-time.After(10 * time.Second):
+		t.Fatal("PostClean did not close the transport")
+	}
+
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if !session.enqueueMu.TryRLock() {
+			break
+		}
+		session.enqueueMu.RUnlock()
+		if time.Now().After(deadline) {
+			t.Fatal("PostClean did not reach the response-admission barrier")
+		}
+		runtime.Gosched()
+	}
+
+	type completionResult struct {
+		completed bool
+		err       error
+	}
+	var released atomic.Int32
+	completionDone := make(chan completionResult, 1)
+	go func() {
+		completed, err := session.CompleteSubscription(
+			context.Background(),
+			id,
+			generation,
+			mockLogtail(table, mockTimestamp(3, 0)),
+			func() { released.Add(1) },
+		)
+		completionDone <- completionResult{completed: completed, err: err}
+	}()
+
+	deadline = time.Now().Add(10 * time.Second)
+	for {
+		if !session.mu.TryLock() {
+			break
+		}
+		session.mu.Unlock()
+		if time.Now().After(deadline) {
+			t.Fatal("subscription completion did not acquire Session.mu")
+		}
+		runtime.Gosched()
+	}
+
+	// Model a sender-side state read that must finish before wg can reach zero.
+	// If PostClean keeps enqueueMu held while joining, this worker and
+	// CompleteSubscription recreate the production lock cycle.
+	session.wg.Add(1)
+	stateReadStarted := make(chan struct{})
+	go func() {
+		close(stateReadStarted)
+		session.mu.Lock()
+		session.mu.Unlock()
+		session.wg.Done()
+	}()
+	<-stateReadStarted
+
+	allowWriteReturn()
+	session.enqueueMu.RUnlock()
+	admissionReadLocked = false
+
+	select {
+	case result := <-completionDone:
+		require.True(t, result.completed)
+		require.ErrorIs(t, result.err, context.Canceled)
+	case <-time.After(10 * time.Second):
+		t.Fatal("subscription completion deadlocked with cleanup")
+	}
+	select {
+	case <-postCleanDone:
+	case <-time.After(10 * time.Second):
+		t.Fatal("PostClean deadlocked while joining the sender")
+	}
+
+	require.Equal(t, int32(1), released.Load())
+	require.Zero(t, session.Active())
+	require.Equal(t, TableNotFound, session.Unregister(id))
 }
 
 func TestSessionSeparatesProgressAndTransportIntervals(t *testing.T) {

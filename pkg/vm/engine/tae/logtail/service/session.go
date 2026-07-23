@@ -302,8 +302,9 @@ type Session struct {
 	cancelFunc  context.CancelFunc
 	wg          sync.WaitGroup
 	cleanupOnce sync.Once
-	// enqueueMu serializes the final response hand-off with PostClean. It is
-	// not held while writing to the transport.
+	// enqueueMu serializes the final response hand-off with PostClean's
+	// admission barrier. It is not held while writing to the transport or
+	// joining the sender.
 	enqueueMu sync.RWMutex
 
 	logger      *log.MOLogger
@@ -530,19 +531,27 @@ func (ss *Session) PostClean() {
 	ss.cleanupOnce.Do(func() {
 		ss.logger.Info("clean session for morpc stream")
 
+		// Seal response admission before closing the transport. In particular,
+		// an in-flight ClientSession.Write observes this cancellation and can
+		// release transport-internal read locks needed by Close.
+		ss.cancelFunc()
+
 		// close morpc stream, maybe verbose
 		if err := ss.stream.Close(); err != nil {
 			ss.logger.Error("fail to close morpc client session", zap.Error(err))
 		}
 
-		ss.cancelFunc()
 		ss.progressTimer.Stop()
-		// Wait for any in-flight response hand-off that began before cancel,
-		// then keep new hand-offs excluded until the sender and queue are fully
-		// drained. Subsequent senders observe sessionCtx cancellation after this
-		// critical section and release their response without enqueueing it.
+		// Cross the response-admission barrier after cancellation. Every hand-off
+		// that passed its context check before cancellation either completes its
+		// enqueue or withdraws before this writer acquires the lock. Hand-offs
+		// admitted afterwards observe sessionCtx cancellation and cannot enqueue.
+		//
+		// Do not hold enqueueMu while joining the sender: the sender can still
+		// need Session.mu for progress or diagnostics, while subscription
+		// completion takes Session.mu before entering the admission barrier.
 		ss.enqueueMu.Lock()
-		defer ss.enqueueMu.Unlock()
+		ss.enqueueMu.Unlock()
 		ss.wg.Wait()
 
 		left := len(ss.sendChan)
@@ -943,8 +952,9 @@ func (ss *Session) LastAfterSend() time.Time {
 }
 
 func (ss *Session) RemoteAddress() string {
-	ss.mu.Lock()
-	defer ss.mu.Unlock()
+	// stream is sealed during construction and never changes afterwards.
+	// Diagnostics must not depend on the subscription-state lock: the sender
+	// can need the address while a state transition is waiting for cleanup.
 	return ss.stream.remote
 }
 
