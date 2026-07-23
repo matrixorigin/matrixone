@@ -370,6 +370,7 @@ func (a *AwsSDKv2) Write(
 				break
 			}
 			uploadOutput, err := DoWithRetry("upload part", func() (*s3.UploadPartOutput, error) {
+				recordS3PutRequest(ctx, a.perfCounterSets...)
 				return a.client.UploadPart(ctx, &s3.UploadPartInput{
 					Bucket:     ptrTo(a.bucket),
 					Key:        ptrTo(key),
@@ -381,6 +382,7 @@ func (a *AwsSDKv2) Write(
 			if err != nil {
 				return err
 			}
+			recordS3AcceptedBytes(ctx, int64(len(content)), a.perfCounterSets...)
 			completed.Parts = append(completed.Parts, types.CompletedPart{
 				ETag:       uploadOutput.ETag,
 				PartNumber: ptrTo(num),
@@ -621,6 +623,7 @@ func (a *AwsSDKv2) WriteMultipartParallel(
 				return
 			}
 			uploadOutput, uploadErr := DoWithRetry("upload part", func() (*s3.UploadPartOutput, error) {
+				recordS3PutRequest(ctx, a.perfCounterSets...)
 				return a.client.UploadPart(ctx, &s3.UploadPartInput{
 					Bucket:     ptrTo(a.bucket),
 					Key:        ptrTo(key),
@@ -634,6 +637,7 @@ func (a *AwsSDKv2) WriteMultipartParallel(
 				releasePartBuffer(job.part)
 				return
 			}
+			recordS3AcceptedBytes(ctx, int64(job.part.n), a.perfCounterSets...)
 			releasePartBuffer(job.part)
 			partsLock.Lock()
 			parts = append(parts, types.CompletedPart{
@@ -916,11 +920,13 @@ func (a *AwsSDKv2) headObject(ctx context.Context, params *s3.HeadObjectInput, o
 func (a *AwsSDKv2) putObject(ctx context.Context, params *s3.PutObjectInput, optFns ...func(*s3.Options)) (*s3.PutObjectOutput, error) {
 	ctx, task := gotrace.NewTask(ctx, "AwsSDKv2.putObject")
 	defer task.End()
-	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
-		counter.FileService.S3.Put.Add(1)
-	}, a.perfCounterSets...)
+	recordS3PutRequest(ctx, a.perfCounterSets...)
 	// not retryable because Reader may be half consumed
-	return a.client.PutObject(ctx, params, optFns...)
+	output, err := a.client.PutObject(ctx, params, optFns...)
+	if err == nil && params.ContentLength != nil {
+		recordS3AcceptedBytes(ctx, *params.ContentLength, a.perfCounterSets...)
+	}
+	return output, err
 }
 
 func (a *AwsSDKv2) getObject(ctx context.Context, min *int64, max *int64, params *s3.GetObjectInput, optFns ...func(*s3.Options)) (io.ReadCloser, error) {
