@@ -370,7 +370,12 @@ func jsonOverlapPreparedCandidate(
 		return jsonOverlapPreparedArrayCandidate{}, false
 	}
 	count := constant.document.GetElemCnt()
-	cost := jsonOverlapPreparedArrayBatchCost(count, probe.document.GetElemCnt(), evaluableRows)
+	cost := jsonOverlapPreparedArrayBatchCost(
+		count,
+		probe.document.GetElemCnt(),
+		evaluableRows,
+		!constant.prepared.ready,
+	)
 	if jsonOverlapSaturatingAdd(cost, jsonOverlapLinearCompareBudget) >= genericCost {
 		return jsonOverlapPreparedArrayCandidate{}, false
 	}
@@ -399,13 +404,19 @@ func jsonOverlapGenericArrayBatchCost(leftCount, rightCount, evaluableRows int) 
 	return jsonOverlapSaturatingMul(int64(evaluableRows), rowCost)
 }
 
-func jsonOverlapPreparedArrayBatchCost(count, probeCount, evaluableRows int) int64 {
+func jsonOverlapPreparedArrayBatchCost(
+	count, probeCount, evaluableRows int,
+	includePreparationCost bool,
+) int64 {
 	logCount := int64(bits.Len(uint(count)))
-	prepareCost := jsonOverlapSaturatingMul(int64(count), logCount)
 	probeCost := jsonOverlapSaturatingMul(
 		jsonOverlapSaturatingMul(int64(evaluableRows), int64(probeCount)),
 		logCount,
 	)
+	if !includePreparationCost {
+		return probeCost
+	}
+	prepareCost := jsonOverlapSaturatingMul(int64(count), logCount)
 	return jsonOverlapSaturatingAdd(prepareCost, probeCost)
 }
 

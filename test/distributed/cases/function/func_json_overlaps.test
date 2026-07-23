@@ -45,6 +45,8 @@ select json_overlaps(1, '1');
 select json_overlaps('1', 1);
 select json_overlaps(1, '[0,1,2]');
 select json_overlaps(true, '1');
+-- BOOL is TINYINT(1) in MySQL, not a JSON boolean scalar.
+select json_overlaps(true, 'true');
 select json_overlaps(false, '0');
 select json_overlaps(cast(1.25 as decimal(10,2)), '1.25');
 select json_overlaps('1.25', cast(1.25 as decimal(10,2)));
@@ -72,6 +74,18 @@ select id,
 from t_json_overlaps_native_scalar
 order by id;
 drop table t_json_overlaps_native_scalar;
+
+-- Exercise a constant array with wide and single-element misses in one batch.
+-- The unit test covers the corresponding prepared-index cost selection.
+drop table if exists t_json_overlaps_prepared_probe;
+create table t_json_overlaps_prepared_probe (id int, probe varchar(4096));
+insert into t_json_overlaps_prepared_probe values
+    (1, concat('[', repeat('1000,', 256), '1000]')),
+    (2, '[9999]');
+select count(*)
+from t_json_overlaps_prepared_probe
+where json_overlaps(concat('[', repeat('0,', 256), '0]'), probe) = 1;
+drop table t_json_overlaps_prepared_probe;
 
 -- MySQL binary string families containing valid JSON text are accepted.
 drop table if exists t_json_overlaps_binary;

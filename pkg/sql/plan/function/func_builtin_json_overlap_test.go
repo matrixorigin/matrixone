@@ -297,6 +297,21 @@ func TestJSONOverlapPreparedConstArrayIndexIsBuiltOnce(t *testing.T) {
 	require.Same(t, firstIndexAddress, &prepared.indexes[0])
 }
 
+func TestJSONOverlapPreparedCandidateOmitsSetupCostAfterPreparation(t *testing.T) {
+	array := mustParseJSONOverlap(t, jsonOverlapIntegerArray(0, 8192))
+	probe := mustParseJSONOverlap(t, `[9000]`)
+	prepared := jsonOverlapPreparedArray{}
+	prepared.ensure(array)
+
+	constView := jsonOverlapValueView{document: array, prepared: &prepared}
+	probeView := jsonOverlapValueView{document: probe}
+	genericCost := jsonOverlapGenericArrayBatchCost(array.GetElemCnt(), probe.GetElemCnt(), 2)
+	candidate, found := jsonOverlapPreparedCandidate(constView, probeView, 2, genericCost)
+
+	require.True(t, found)
+	require.Same(t, &prepared, candidate.prepared)
+}
+
 func TestJSONOverlapPreparedConstArrayStaysLinearForOneEffectiveScalarRow(t *testing.T) {
 	array := mustParseJSONOverlap(t, jsonOverlapIntegerArray(0, 512))
 	probe := mustParseJSONOverlap(t, `1000`)
@@ -391,15 +406,16 @@ func TestJSONOverlapPreparedConstArrayCostTieUsesSmallerConst(t *testing.T) {
 
 func TestJSONOverlapArrayBatchCostsSaturate(t *testing.T) {
 	require.Equal(t, int64(936), jsonOverlapGenericArrayBatchCost(3, 78, 4))
-	require.Equal(t, int64(630), jsonOverlapPreparedArrayBatchCost(3, 78, 4))
-	require.Equal(t, int64(630), jsonOverlapPreparedArrayBatchCost(78, 3, 4))
+	require.Equal(t, int64(630), jsonOverlapPreparedArrayBatchCost(3, 78, 4, true))
+	require.Equal(t, int64(630), jsonOverlapPreparedArrayBatchCost(78, 3, 4, true))
+	require.Equal(t, int64(624), jsonOverlapPreparedArrayBatchCost(3, 78, 4, false))
 
 	require.Equal(t, int64(math.MaxInt64), jsonOverlapSaturatingMul(math.MaxInt64, 2))
 	require.Equal(t, int64(math.MaxInt64), jsonOverlapSaturatingAdd(math.MaxInt64-1, 2))
 	require.Equal(t, int64(math.MaxInt64),
 		jsonOverlapGenericArrayBatchCost(math.MaxInt, math.MaxInt, math.MaxInt))
 	require.Equal(t, int64(math.MaxInt64),
-		jsonOverlapPreparedArrayBatchCost(math.MaxInt, math.MaxInt, math.MaxInt))
+		jsonOverlapPreparedArrayBatchCost(math.MaxInt, math.MaxInt, math.MaxInt, true))
 }
 
 func TestJSONOverlapPreparedConstArrayHandlesMultiElementProbe(t *testing.T) {
