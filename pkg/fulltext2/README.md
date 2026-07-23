@@ -258,6 +258,31 @@ loop:
   5. else:                              skipTo(pivotDoc) — align a lagging cursor
 ```
 
+**Multi-term query: how the cursors combine.** One `wandIter` per SHOULD term
+(`buildWandIters`); a document's score is the **sum of the contributions of whichever query
+terms it contains** — disjunctive, so a doc need not hold every term. Only cursors *sitting on
+the same doc* contribute to that doc's score (step 4 sums `it.tf()`-based contributions for
+every `it` at `pivotDoc`). The pivot is what makes it fast: because cursors are sorted by
+current doc and `maxImpact` is accumulated in that order, any doc below `pivotDoc` could only
+contain the terms of cursors `0..pivot-1`, whose max-impacts sum to `< θ` — so it provably
+can't make the top-k and is skipped without ever being read.
+
+Worked example — query `A B C`, want top-1, θ currently 3.0, per-term
+`maxImpact{A:4, B:1, C:5}`, cursors at `A@5, B@2, C@8`:
+
+```
+1. sort by doc         → [B@2, A@5, C@8]
+2. pivot scan          → acc=B(1)=1 < 3 ; +A(4)=5 ≥ 3  ⇒ pivot=A, pivotDoc=5
+                         ⇒ doc 2 is skipped: B alone (max 1) can never beat θ=3
+3. blockSum{B,A}@5 = 4.2 > 3          ⇒ don't block-skip
+4. iters[0].doc()==5 ?  lead is B@2 ≠ 5 ⇒ NOT aligned ⇒ skipTo(5) on B, re-loop
+   (once cursors align on a doc, it is scored = Σ contributions of the terms it has;
+    that raises θ, which prunes even more of the next iteration)
+```
+
+The heavier a term (larger `maxImpact`), the earlier the pivot lands on it and the more docs
+below it are pruned; a rare, high-idf term therefore does most of the skipping.
+
 Design notes worth knowing:
 
 - **Insertion sort, not `sort.Slice`** (step 1): the cursor array is nearly sorted between
@@ -287,25 +312,83 @@ does the ranking.
 
 ## 6. Algorithm: phrase & boolean evaluation
 
-### Exact phrase (NL mode) — `SearchPhrase` (`index.go`, `search.go`)
+WAND (§5) is **only** the pure-OR path. `SearchBoolean` dispatches on query shape:
 
-Two-phase positional match. Candidate docs come from the *rarest* term's posting list (fewest
-docs); each candidate is verified by decoding positions and checking that the query's terms occur
-at the exact relative byte offsets (`phraseSlot.off`). Only verified docs are scored. This is the
-positional analogue that makes `AGAINST('brown fox')` match "brown fox" but not "fox … brown".
-`boundedTopK` keeps the top-k without materializing all matches.
+```
+pure OR of single-term SHOULDs      → searchWAND        (§5: θ/pivot/block-skip)
+any MUST / MUST-NOT / phrase clause  → searchBooleanFull (dense accumulator, NO skip)
+NL / "…" phrase                      → SearchPhrase      (conjunctive block-cursor)
+```
 
-### Boolean — `SearchBoolean` (`index.go`, `boolean.go`)
+The three engines treat their per-term cursors in fundamentally different ways — desynchronized
+(OR), no cursors at all (boolean), or forced-to-converge (phrase). One worked example each below;
+all share a corpus where the postings are:
 
-The operator tree is evaluated per segment:
+```
+term "quick" → docs {2, 5, 8, 40}          term "brown" → docs {5, 8, 9}
+term "fox"   → docs {8, 60}                 (doc 8 = "quick brown fox", doc 5 = "quick brown …")
+```
 
-- **SHOULD** (bare/OR terms) → `searchWAND` (disjunctive top-k), or `searchBooleanFull` when the
-  tree also has MUST/MUST-NOT/phrase clauses that need a materialized candidate set.
-- **MUST / MUST-NOT** intersect / subtract candidate sets.
-- **phrase** clauses verify positionally (as NL).
-- **prefix** (`word*`) enumerates matching terms from the FST and unions their posting lists.
-- Boolean scoring is `O(N ≤ capacity)` per segment (a dense score array), deliberately bounded by
-  the segment size.
+### Exact phrase (NL mode) — `SearchPhrase` → `matchPhraseCursor` (`search.go`)
+
+Conjunctive, anchored on the **rarest** slot, then a byte-offset positional verify. Cursors are
+forced to *converge* on the anchor's current doc — the opposite of WAND.
+
+`AGAINST('brown fox')` → slots `[{brown, off=0}, {fox, off=6}]`:
+
+```
+1. rarest slot = "fox" (df 2)  ⇒ drive its docs {8, 60}
+2. doc 8:  skipTo(8) the "brown" cursor → present. Positional check:
+             fox @ pos p ⇒ phrase-start = p-6 ; is "brown" @ start+0 ?  yes ⇒ MATCH
+   doc 60: skipTo(60) the "brown" cursor → absent ⇒ drop, no position decode
+3. score only doc 8 (the one verified doc)
+```
+
+So `AGAINST('brown fox')` matches doc 8 ("brown fox") but **not** a doc containing "fox … brown"
+out of order — the offset check (`phraseSlot.off`) is what makes it a phrase, not a bag. Positions
+are decoded **only** for docs that survive the doc-level intersection; `boundedTopK` keeps the
+top-k without materializing all matches. (This is also the only mode that reads positions.)
+
+### Boolean AND / MUST / MUST-NOT — `searchBooleanFull` (`boolean.go`)
+
+No impact cursors, no skipping: every clause's **whole** posting list is materialized into a dense
+`O(N)` per-doc `score[]` array; AND is an intersection by **hit-count**, MUST-NOT an exclusion
+bitset.
+
+`AGAINST('+quick +brown -fox' IN BOOLEAN MODE)` → must `{quick, brown}`, mustNot `{fox}`:
+
+```
+1. mustNot "fox" → set bits {8, 60} in the exclusion bitset
+2. MUST pass, count hits per doc (need == 2):
+     quick {2,5,8,40}: mustHit[2,5,8,40]=1 ; score[..]+=
+     brown {5,8,9}    : mustHit[5]=2, mustHit[8]=2, mustHit[9]=1 ; score[..]+=
+3. admit docs with mustHit == 2  → {5, 8}
+     doc 8 excluded by mustNot("fox") ⇒ dropped
+   ⇒ candidate = {5}, pushed to the top-k heap by its summed score
+```
+
+Every MUST/SHOULD/MUST-NOT term is read in full (`materializeDocIDs` decodes all its blocks) —
+cost `O(Σ df)` to decode + `O(N)` dense memory, no block-skip. WAND's impact bound is useless here
+because MUST/MUST-NOT need *membership* of every doc, which an impact upper bound cannot tell you.
+`~term` (ADJUST) adds a (typically negative) contribution but does **not** exclude — a doc matching
+only a `~`-term still ranks, just low (MySQL parity).
+
+### Boolean OR — routes to WAND
+
+`AGAINST('quick brown fox' IN BOOLEAN MODE)` with no `+`/`-`/`"…"` is a pure disjunction, so
+`disjunctiveTerms` returns true and it runs the §5 WAND engine — identical to the OR example there.
+
+`word*` prefix clauses enumerate matching terms from the FST and union their posting lists; a group
+`(…)` recurses. Both fall back to the dense `searchBooleanFull` path (they need a per-doc MAX over
+their expansion).
+
+### Mode comparison
+
+| Mode | SQL | Engine | Cursor behavior | Skips docs? | Reads positions? |
+|---|---|---|---|---|---|
+| **OR** | `AGAINST('a b' IN BM25 MODE)` / pure-OR `IN BOOLEAN MODE` | `searchWAND` | desynchronized, impact-driven `skipTo` | **yes** (θ + block-max) | no |
+| **AND / NOT** | `+a +b -c IN BOOLEAN MODE` | `searchBooleanFull` | none — full `materializeDocIDs` + dense arrays | no (full read) | no |
+| **phrase** | `AGAINST('a b')` (default NL) / `"a b"` | `matchPhraseCursor` | conjunctive, converge on rarest-slot doc | yes (skip to anchor) | **yes** (offset check) |
 
 All three top-k paths use `vectorindex.FastMaxHeap` (SoA, keyed by ord, distance = −score) — zero
 per-candidate allocation, ties unspecified (bm25 parity).
