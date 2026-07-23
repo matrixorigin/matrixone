@@ -7077,13 +7077,13 @@ func TestAppendAndGC2(t *testing.T) {
 	schema2.Extra.ObjectMaxBlocks = 2
 	{
 		txn, _ := db.StartTxn(nil)
-		database, err := txn.CreateDatabase("db", "", "")
-		assert.Nil(t, err)
-		_, err = database.CreateRelation(schema1)
-		assert.Nil(t, err)
-		_, err = database.CreateRelation(schema2)
-		assert.Nil(t, err)
-		assert.Nil(t, txn.Commit(context.Background()))
+		database, err := testutil.CreateDatabase2(ctx, txn, "db")
+		require.NoError(t, err)
+		_, err = testutil.CreateRelation2(ctx, txn, database, schema1)
+		require.NoError(t, err)
+		_, err = testutil.CreateRelation2(ctx, txn, database, schema2)
+		require.NoError(t, err)
+		require.NoError(t, txn.Commit(ctx))
 	}
 	bat := catalog.MockBatch(schema1, int(schema1.Extra.BlockMaxRows*10-1))
 	defer bat.Close()
@@ -7110,6 +7110,21 @@ func TestAppendAndGC2(t *testing.T) {
 	metaFile := db.BGCheckpointRunner.GetCheckpointMetaFiles()
 	tae.Restart(ctx)
 	db = tae.DB
+	func() {
+		replayTxn, err := db.StartTxn(nil)
+		require.NoError(t, err)
+		defer func() {
+			require.NoError(t, replayTxn.Rollback(ctx))
+		}()
+		replayDB, err := replayTxn.GetDatabase("db")
+		require.NoError(t, err)
+		replayRel1, err := replayDB.GetRelationByName(schema1.Name)
+		require.NoError(t, err)
+		replayRel2, err := replayDB.GetRelationByName(schema2.Name)
+		require.NoError(t, err)
+		testutil.CheckAllColRowsByScan(t, replayRel1, bat.Length(), false)
+		testutil.CheckAllColRowsByScan(t, replayRel2, bat.Length(), false)
+	}()
 	files := make(map[string]struct{}, 0)
 	loadFiles := func(group uint32, lsn uint64, payload []byte, typ uint16, info any) driver.ReplayEntryState {
 		if group != wal.GroupFiles {
