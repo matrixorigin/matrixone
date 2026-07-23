@@ -41,32 +41,78 @@ func filterFileList(ctx context.Context, node *plan.Node, proc *process.Process,
 	return filterByAccountAndFilename(ctx, node, proc, fileList, fileSize)
 }
 
-func containColname(col string) bool {
-	return strings.Contains(col, STATEMENT_ACCOUNT) || strings.Contains(col, catalog.ExternalFilePath)
+func isFileLevelColumnName(col string) bool {
+	if dot := strings.LastIndexByte(col, '.'); dot >= 0 {
+		col = col[dot+1:]
+	}
+	return col == STATEMENT_ACCOUNT || col == catalog.ExternalFilePath
 }
 
-func judgeContainColname(expr *plan.Expr) bool {
-	expr_F, ok := expr.Expr.(*plan.Expr_F)
-	if !ok {
+func classifyFileLevelColumns(expr *plan.Expr) (hasFileLevelColumn, hasUnsupportedColumn bool) {
+	if expr == nil {
+		return false, false
+	}
+
+	switch typedExpr := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		if typedExpr.Col == nil {
+			return false, true
+		}
+		if isFileLevelColumnName(typedExpr.Col.Name) {
+			return true, false
+		}
+		return false, true
+	case *plan.Expr_F:
+		if typedExpr.F == nil {
+			return false, true
+		}
+		for _, arg := range typedExpr.F.Args {
+			hasFileLevel, hasUnsupported := classifyFileLevelColumns(arg)
+			hasFileLevelColumn = hasFileLevelColumn || hasFileLevel
+			hasUnsupportedColumn = hasUnsupportedColumn || hasUnsupported
+		}
+		return hasFileLevelColumn, hasUnsupportedColumn
+	case *plan.Expr_List:
+		if typedExpr.List == nil {
+			return false, false
+		}
+		for _, item := range typedExpr.List.List {
+			hasFileLevel, hasUnsupported := classifyFileLevelColumns(item)
+			hasFileLevelColumn = hasFileLevelColumn || hasFileLevel
+			hasUnsupportedColumn = hasUnsupportedColumn || hasUnsupported
+		}
+		return hasFileLevelColumn, hasUnsupportedColumn
+	case *plan.Expr_Lit, *plan.Expr_P, *plan.Expr_V, *plan.Expr_T,
+		*plan.Expr_Max, *plan.Expr_Vec, *plan.Expr_Fold:
+		return false, false
+	default:
+		return false, true
+	}
+}
+
+func isFileLevelFilter(expr *plan.Expr) bool {
+	if expr == nil {
 		return false
 	}
-	if expr_F.F.Func.ObjName == "or" {
-		flag := true
-		for i := 0; i < len(expr_F.F.Args); i++ {
-			flag = flag && judgeContainColname(expr_F.F.Args[i])
-		}
-		return flag
+
+	functionExpr, ok := expr.Expr.(*plan.Expr_F)
+	if !ok || functionExpr.F == nil || functionExpr.F.Func == nil {
+		return false
 	}
-	expr_Col, ok := expr_F.F.Args[0].Expr.(*plan.Expr_Col)
-	if ok && containColname(expr_Col.Col.Name) {
+	if functionExpr.F.Func.ObjName == "or" {
+		if len(functionExpr.F.Args) == 0 {
+			return false
+		}
+		for _, arg := range functionExpr.F.Args {
+			if !isFileLevelFilter(arg) {
+				return false
+			}
+		}
 		return true
 	}
-	for _, arg := range expr_F.F.Args {
-		if judgeContainColname(arg) {
-			return true
-		}
-	}
-	return false
+
+	hasFileLevelColumn, hasUnsupportedColumn := classifyFileLevelColumns(expr)
+	return hasFileLevelColumn && !hasUnsupportedColumn
 }
 
 func filterByAccountAndFilename(ctx context.Context, node *plan.Node, proc *process.Process, fileList []string, fileSize []int64) ([]string, []int64, error) {
@@ -75,7 +121,7 @@ func filterByAccountAndFilename(ctx context.Context, node *plan.Node, proc *proc
 	filterList := make([]*plan.Expr, 0)
 	filterList2 := make([]*plan.Expr, 0)
 	for i := 0; i < len(node.FilterList); i++ {
-		if judgeContainColname(node.FilterList[i]) {
+		if isFileLevelFilter(node.FilterList[i]) {
 			filterList = append(filterList, node.FilterList[i])
 		} else {
 			filterList2 = append(filterList2, node.FilterList[i])

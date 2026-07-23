@@ -1635,6 +1635,144 @@ func Test_fliterByAccountAndFilename(t *testing.T) {
 	}
 }
 
+func TestFileLevelColumnNameMatchesOnlyVirtualColumns(t *testing.T) {
+	tests := []struct {
+		name string
+		col  string
+		want bool
+	}{
+		{name: "account", col: STATEMENT_ACCOUNT, want: true},
+		{name: "qualified account", col: "ext." + STATEMENT_ACCOUNT, want: true},
+		{name: "filepath", col: catalog.ExternalFilePath, want: true},
+		{name: "qualified filepath", col: "ext." + catalog.ExternalFilePath, want: true},
+		{name: "account id", col: "account_id", want: false},
+		{name: "qualified account id", col: "ext.account_id", want: false},
+		{name: "accounting", col: "accounting", want: false},
+		{name: "customer account", col: "customer_account", want: false},
+		{name: "account in qualifier", col: "account_source.payload", want: false},
+		{name: "filepath suffix", col: catalog.ExternalFilePath + "_suffix", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, isFileLevelColumnName(tt.col))
+		})
+	}
+}
+
+func TestFilterByAccountAndFilenameKeepsPhysicalAccountColumns(t *testing.T) {
+	tests := []struct {
+		name         string
+		relationName string
+		columnName   string
+	}{
+		{name: "account id", relationName: "ext", columnName: "account_id"},
+		{name: "accounting", relationName: "ext", columnName: "accounting"},
+		{name: "customer account", relationName: "ext", columnName: "customer_account"},
+		{name: "account in qualifier", relationName: "account_source", columnName: "payload"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			varcharType := plan.Type{
+				Id: int32(types.T_varchar), Width: types.MaxVarcharLen, Table: tt.relationName,
+			}
+			filter := &plan.Expr{
+				Typ: plan.Type{Id: int32(types.T_bool)},
+				Expr: &plan.Expr_F{F: &plan.Function{
+					Func: &plan.ObjectRef{Obj: function.EqualFunctionEncodedID, ObjName: "="},
+					Args: []*plan.Expr{
+						{
+							Typ: varcharType,
+							Expr: &plan.Expr_Col{Col: &plan.ColRef{
+								RelPos: 0,
+								ColPos: 0,
+								Name:   tt.relationName + "." + tt.columnName,
+							}},
+						},
+						{
+							Typ: varcharType,
+							Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+								Value: &plan.Literal_Sval{Sval: "normal"},
+							}},
+						},
+					},
+				}},
+			}
+			node := &plan.Node{
+				NodeType: plan.Node_EXTERNAL_SCAN,
+				TableDef: &plan.TableDef{Cols: []*plan.ColDef{
+					{Name: tt.columnName, Typ: varcharType},
+					{Name: catalog.ExternalFilePath, Typ: varcharType},
+				}},
+				FilterList: []*plan.Expr{filter},
+			}
+
+			fileList := []string{"etl:/tenant/file.csv"}
+			fileSize := []int64{1}
+			gotFiles, gotSizes, err := filterByAccountAndFilename(
+				context.Background(), node, testutil.NewProc(t), fileList, fileSize,
+			)
+
+			require.NoError(t, err)
+			require.Equal(t, fileList, gotFiles)
+			require.Equal(t, fileSize, gotSizes)
+			require.Equal(t, []*plan.Expr{filter}, node.FilterList,
+				"physical-column filter must remain a row-level filter")
+		})
+	}
+}
+
+func TestFilterByAccountAndFilenameKeepsMixedColumnFilterAtRowLevel(t *testing.T) {
+	const tableName = "ext"
+	varcharType := plan.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen, Table: tableName}
+	filter := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_bool)},
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{Obj: function.EqualFunctionEncodedID, ObjName: "="},
+			Args: []*plan.Expr{
+				{
+					Typ: varcharType,
+					Expr: &plan.Expr_Col{Col: &plan.ColRef{
+						RelPos: 0,
+						ColPos: 0,
+						Name:   tableName + "." + STATEMENT_ACCOUNT,
+					}},
+				},
+				{
+					Typ: varcharType,
+					Expr: &plan.Expr_Col{Col: &plan.ColRef{
+						RelPos: 0,
+						ColPos: 1,
+						Name:   tableName + ".account_id",
+					}},
+				},
+			},
+		}},
+	}
+	node := &plan.Node{
+		NodeType: plan.Node_EXTERNAL_SCAN,
+		TableDef: &plan.TableDef{Cols: []*plan.ColDef{
+			{Name: STATEMENT_ACCOUNT, Typ: varcharType},
+			{Name: "account_id", Typ: varcharType},
+			{Name: catalog.ExternalFilePath, Typ: varcharType},
+		}},
+		FilterList: []*plan.Expr{filter},
+	}
+
+	fileList := []string{"etl:/tenant/file.csv"}
+	fileSize := []int64{1}
+	gotFiles, gotSizes, err := filterByAccountAndFilename(
+		context.Background(), node, testutil.NewProc(t), fileList, fileSize,
+	)
+
+	require.NoError(t, err)
+	require.Equal(t, fileList, gotFiles)
+	require.Equal(t, fileSize, gotSizes)
+	require.Equal(t, []*plan.Expr{filter}, node.FilterList,
+		"a filter that also references a physical column must remain at row level")
+}
+
 // test load data local infile with a compress file which not exists
 // getUnCompressReader will return EOF err in that case, and getMOCSVReader should handle EOF, and return nil err
 func Test_getMOCSVReader(t *testing.T) {
