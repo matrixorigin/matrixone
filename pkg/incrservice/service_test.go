@@ -16,12 +16,20 @@ package incrservice
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"math"
+	"runtime"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -29,6 +37,224 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type setOffsetStore struct {
+	IncrValueStore
+
+	t           *testing.T
+	forceCalled bool
+	tableID     uint64
+	colName     string
+	offset      uint64
+}
+
+type failingGetColumnsStore struct {
+	IncrValueStore
+
+	mu  sync.Mutex
+	err error
+}
+
+type blockingGetColumnsStore struct {
+	IncrValueStore
+
+	mu      sync.Mutex
+	block   bool
+	started chan struct{}
+	release chan struct{}
+}
+
+type blockingAllocateStore struct {
+	IncrValueStore
+
+	mu      sync.Mutex
+	block   bool
+	started chan struct{}
+	release chan struct{}
+}
+
+func (s *blockingAllocateStore) blockNext() (<-chan struct{}, func()) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.block = true
+	s.started = make(chan struct{})
+	s.release = make(chan struct{})
+	var once sync.Once
+	return s.started, func() { once.Do(func() { close(s.release) }) }
+}
+
+func (s *blockingAllocateStore) Allocate(
+	ctx context.Context,
+	tableID uint64,
+	col string,
+	count int,
+	txnOp client.TxnOperator,
+) (uint64, uint64, timestamp.Timestamp, error) {
+	s.mu.Lock()
+	block := s.block
+	started := s.started
+	release := s.release
+	if block {
+		s.block = false
+	}
+	s.mu.Unlock()
+	if block {
+		close(started)
+		select {
+		case <-release:
+		case <-ctx.Done():
+			return 0, 0, timestamp.Timestamp{}, context.Cause(ctx)
+		}
+	}
+	return s.IncrValueStore.Allocate(ctx, tableID, col, count, txnOp)
+}
+
+type countingAllocator struct {
+	asyncCalls atomic.Int64
+	asyncErr   error
+}
+
+type observedDoneContext struct {
+	context.Context
+	observed chan struct{}
+	once     sync.Once
+}
+
+func (c *observedDoneContext) Done() <-chan struct{} {
+	c.once.Do(func() { close(c.observed) })
+	return c.Context.Done()
+}
+
+type countingIncrTableCache struct {
+	tableID  uint64
+	acquires atomic.Int64
+	releases atomic.Int64
+	retires  atomic.Int64
+	closes   atomic.Int64
+	retired  atomic.Bool
+}
+
+func (c *countingIncrTableCache) table() uint64 { return c.tableID }
+func (c *countingIncrTableCache) epoch() uint32 { return 0 }
+func (c *countingIncrTableCache) acquire()      { c.acquires.Add(1) }
+func (c *countingIncrTableCache) release()      { c.releases.Add(1) }
+func (c *countingIncrTableCache) retire() {
+	if c.retired.CompareAndSwap(false, true) {
+		c.retires.Add(1)
+		_ = c.close()
+	}
+}
+func (c *countingIncrTableCache) commit()               {}
+func (c *countingIncrTableCache) columns() []AutoColumn { return nil }
+func (c *countingIncrTableCache) insertAutoValues(context.Context, uint64, []*vector.Vector, int, int64) (uint64, error) {
+	return 0, nil
+}
+func (c *countingIncrTableCache) currentValue(context.Context, uint64, string) (uint64, error) {
+	return 0, nil
+}
+func (c *countingIncrTableCache) getLastAllocateTS(context.Context, string) (timestamp.Timestamp, error) {
+	return timestamp.Timestamp{}, nil
+}
+func (c *countingIncrTableCache) adjust(context.Context, []AutoColumn) error { return nil }
+func (c *countingIncrTableCache) close() error {
+	c.closes.Add(1)
+	return nil
+}
+
+func (a *countingAllocator) allocate(context.Context, uint64, string, int, client.TxnOperator) (uint64, uint64, timestamp.Timestamp, error) {
+	return 0, 0, timestamp.Timestamp{}, nil
+}
+
+func (a *countingAllocator) asyncAllocate(context.Context, uint64, string, int, client.TxnOperator, func(uint64, uint64, timestamp.Timestamp, error)) error {
+	a.asyncCalls.Add(1)
+	return a.asyncErr
+}
+
+func (a *countingAllocator) updateMinValue(context.Context, uint64, string, uint64, client.TxnOperator) error {
+	return nil
+}
+
+func (a *countingAllocator) forceSetOffset(context.Context, uint64, string, uint64, client.TxnOperator) error {
+	return nil
+}
+
+func (a *countingAllocator) close() {}
+
+func (s *blockingGetColumnsStore) blockNext() (<-chan struct{}, chan<- struct{}) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.block = true
+	s.started = make(chan struct{})
+	s.release = make(chan struct{})
+	return s.started, s.release
+}
+
+func (s *blockingGetColumnsStore) GetColumns(
+	ctx context.Context,
+	tableID uint64,
+	txnOp client.TxnOperator,
+) ([]AutoColumn, error) {
+	s.mu.Lock()
+	block := s.block
+	started := s.started
+	release := s.release
+	if block {
+		s.block = false
+	}
+	s.mu.Unlock()
+	if block {
+		close(started)
+		select {
+		case <-release:
+		case <-ctx.Done():
+			return nil, context.Cause(ctx)
+		}
+	}
+	return s.IncrValueStore.GetColumns(ctx, tableID, txnOp)
+}
+
+func (s *failingGetColumnsStore) GetColumns(
+	ctx context.Context,
+	tableID uint64,
+	txnOp client.TxnOperator,
+) ([]AutoColumn, error) {
+	s.mu.Lock()
+	err := s.err
+	s.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	return s.IncrValueStore.GetColumns(ctx, tableID, txnOp)
+}
+
+func (s *failingGetColumnsStore) failWith(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.err = err
+}
+
+func (s *setOffsetStore) GetColumns(
+	ctx context.Context,
+	tableID uint64,
+	txnOp client.TxnOperator,
+) ([]AutoColumn, error) {
+	s.t.Fatalf("SetOffset should not read committed columns")
+	return nil, nil
+}
+
+func (s *setOffsetStore) ForceSetOffset(
+	ctx context.Context,
+	tableID uint64,
+	colName string,
+	offset uint64,
+	txnOp client.TxnOperator,
+) error {
+	s.forceCalled = true
+	s.tableID = tableID
+	s.colName = colName
+	s.offset = offset
+	return nil
+}
 
 func TestCreate(t *testing.T) {
 	runServiceTests(
@@ -139,6 +365,145 @@ func TestReloadIncrCache(t *testing.T) {
 		})
 }
 
+func TestReloadDoesNotRetainGenerationWithoutActiveBuilder(t *testing.T) {
+	s := NewIncrService("", NewMemStore(), Config{}).(*service)
+	defer s.Close()
+	for tableID := uint64(1); tableID <= 1000; tableID++ {
+		require.NoError(t, s.Reload(context.Background(), tableID))
+	}
+	s.mu.Lock()
+	generations := len(s.mu.generation)
+	builds := len(s.mu.generationBuilds)
+	s.mu.Unlock()
+	require.Zero(t, generations)
+	require.Zero(t, builds)
+}
+
+func TestSetOffset(t *testing.T) {
+	runServiceTests(
+		t,
+		1,
+		func(
+			ctx context.Context,
+			ss []*service,
+			ops []client.TxnOperator,
+		) {
+			s := ss[0]
+			op := ops[0]
+			def := newTestTableDef(1)
+			require.NoError(t, s.Create(ctx, 0, def, op))
+			require.NoError(t, op.Commit(ctx))
+
+			require.NoError(t, s.SetOffset(ctx, 0, def[0].ColName, 42, nil))
+
+			store := s.store.(*memStore)
+			store.Lock()
+			require.Equal(t, uint64(42), store.caches[0][0].Offset)
+			store.Unlock()
+		})
+}
+
+func TestSetOffsetDoesNotReadCommittedColumns(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	store := &setOffsetStore{t: t}
+	allocator := newValueAllocator("", store)
+	defer allocator.close()
+	s := &service{store: store, allocator: allocator}
+
+	require.NoError(t, s.SetOffset(ctx, 10, "auto_col", 99, nil))
+	require.True(t, store.forceCalled)
+	require.Equal(t, uint64(10), store.tableID)
+	require.Equal(t, "auto_col", store.colName)
+	require.Equal(t, uint64(99), store.offset)
+}
+
+func TestSetOffsetReturnsStoreError(t *testing.T) {
+	runServiceTests(
+		t,
+		1,
+		func(
+			ctx context.Context,
+			ss []*service,
+			ops []client.TxnOperator,
+		) {
+			s := ss[0]
+			err := s.SetOffset(ctx, 42, "auto_0", 42, ops[0])
+			require.Error(t, err)
+		})
+}
+
+func TestMemStoreSetOffset(t *testing.T) {
+	runServiceTests(
+		t,
+		1,
+		func(
+			ctx context.Context,
+			ss []*service,
+			ops []client.TxnOperator,
+		) {
+			store := ss[0].store.(*memStore)
+			op := ops[0]
+			def := newTestTableDef(1)
+			require.NoError(t, store.Create(ctx, 0, def, op))
+
+			require.NoError(t, store.SetOffset(ctx, 0, def[0].ColName, 77, op))
+			require.NoError(t, store.SetOffset(ctx, 0, def[0].ColName, math.MaxUint64, op))
+
+			store.Lock()
+			require.Equal(t, uint64(math.MaxUint64), store.uncommitted[string(op.Txn().ID)][0][0].Offset)
+			store.Unlock()
+		})
+}
+
+func TestMemStoreSetOffsetReturnsError(t *testing.T) {
+	runServiceTests(
+		t,
+		1,
+		func(
+			ctx context.Context,
+			ss []*service,
+			ops []client.TxnOperator,
+		) {
+			store := ss[0].store.(*memStore)
+			def := newTestTableDef(1)
+			require.NoError(t, store.Create(ctx, 0, def, nil))
+
+			require.Error(t, store.SetOffset(ctx, 1, def[0].ColName, 77, nil))
+			require.Error(t, store.SetOffset(ctx, 0, "missing_col", 77, nil))
+
+			op := ops[0]
+			require.NoError(t, store.SetOffset(ctx, 0, def[0].ColName, 88, op))
+			store.Lock()
+			require.Equal(t, uint64(88), store.caches[0][0].Offset)
+			store.Unlock()
+		})
+}
+
+func TestMemStoreSetOffsetLowerThanPreAllocated(t *testing.T) {
+	runServiceTests(
+		t,
+		1,
+		func(
+			ctx context.Context,
+			ss []*service,
+			ops []client.TxnOperator,
+		) {
+			store := ss[0].store.(*memStore)
+			def := newTestTableDef(1)
+			// Simulate pre-allocation by advancing the offset to a high value
+			def[0].Offset = 10000
+			require.NoError(t, store.Create(ctx, 0, def, nil))
+
+			// ForceSetOffset to a value LOWER than the current offset bypasses
+			// the monotonic guard. Regular SetOffset would reject the decrease.
+			require.NoError(t, store.ForceSetOffset(ctx, 0, def[0].ColName, 99, nil))
+
+			store.Lock()
+			require.Equal(t, uint64(99), store.caches[0][0].Offset)
+			store.Unlock()
+		})
+}
+
 func TestCreateWithTxnAborted(t *testing.T) {
 	runServiceTests(
 		t,
@@ -241,6 +606,1220 @@ func TestDeleteOnOtherService(t *testing.T) {
 			op2 := ops[1]
 			require.NoError(t, s2.Delete(ctx, 0, op2))
 			require.NoError(t, op2.Commit(ctx))
+		})
+}
+
+func TestForceSetOffset(t *testing.T) {
+	runServiceTests(
+		t,
+		1,
+		func(
+			ctx context.Context,
+			ss []*service,
+			ops []client.TxnOperator,
+		) {
+			s := ss[0]
+			op := ops[0]
+			def := newTestTableDef(1)
+			require.NoError(t, s.Create(ctx, 0, def, op))
+			require.NoError(t, op.Commit(ctx))
+
+			// Simulate pre-allocation by advancing the store offset past the
+			// desired value. CountPerAllocate defaults to 10000.
+			store := s.store.(*memStore)
+			store.Lock()
+			store.caches[0][0].Offset = 10000
+			store.Unlock()
+
+			// SetOffset should detect the pre-allocation gap and use
+			// ForceSetOffset to bypass the store-level monotonic guard.
+			require.NoError(t, s.SetOffset(ctx, 0, def[0].ColName, 100, nil))
+
+			store.Lock()
+			require.Equal(t, uint64(100), store.caches[0][0].Offset)
+			store.Unlock()
+		})
+}
+
+func TestReloadAfterSetOffsetDropsStalePreAllocatedRange(t *testing.T) {
+	client.RunTxnTests(func(tc client.TxnClient, _ rpc.TxnSender) {
+		defer leaktest.AfterTest(t)()
+		ctx, cancel := context.WithTimeout(defines.AttachAccountId(context.Background(), catalog.System_Account), 10*time.Second)
+		defer cancel()
+
+		store := NewMemStore()
+		cn1 := NewIncrService("", store, Config{CountPerAllocate: 100}).(*service)
+		cn2 := NewIncrService("", store, Config{CountPerAllocate: 100}).(*service)
+		defer cn1.Close()
+		defer cn2.Close()
+
+		op, err := tc.New(ctx, timestamp.Timestamp{})
+		require.NoError(t, err)
+		def := newTestTableDef(1)
+		require.NoError(t, cn1.Create(ctx, 0, def, op))
+		require.NoError(t, op.Commit(ctx))
+
+		vecType := types.New(types.T_uint64, 0, 0)
+		input := newTestVector[uint64](1, vecType, nil, nil)
+		last, err := cn1.InsertValues(ctx, 0, 0, nil, []*vector.Vector{input}, 1, 0)
+		require.NoError(t, err)
+		require.Equal(t, uint64(1), last)
+
+		require.NoError(t, cn2.SetOffset(ctx, 0, def[0].ColName, 100, nil))
+		require.NoError(t, cn1.Reload(ctx, 0))
+
+		input = newTestVector[uint64](1, vecType, nil, nil)
+		last, err = cn1.InsertValues(ctx, 0, 0, nil, []*vector.Vector{input}, 1, 0)
+		require.NoError(t, err)
+		require.Equal(t, uint64(101), last)
+	})
+}
+
+func TestSetOffsetRollbackKeepsCommittedOffsetAndSafelyRebuildsCache(t *testing.T) {
+	client.RunTxnTests(func(tc client.TxnClient, _ rpc.TxnSender) {
+		defer leaktest.AfterTest(t)()
+		ctx, cancel := context.WithTimeout(defines.AttachAccountId(context.Background(), catalog.System_Account), 10*time.Second)
+		defer cancel()
+
+		store := NewMemStore().(*memStore)
+		s := NewIncrService("", store, Config{CountPerAllocate: 100}).(*service)
+		defer s.Close()
+
+		createTxn, err := tc.New(ctx, timestamp.Timestamp{})
+		require.NoError(t, err)
+		def := newTestTableDef(1)
+		require.NoError(t, s.Create(ctx, 0, def, createTxn))
+		require.NoError(t, createTxn.Commit(ctx))
+
+		const autoIncrEpoch = 7
+		input := newTestVector[uint64](1, types.New(types.T_uint64, 0, 0), nil, nil)
+		lastBeforeAlter, err := s.InsertValues(ctx, 0, autoIncrEpoch, nil, []*vector.Vector{input}, 1, 0)
+		require.NoError(t, err)
+
+		// Drain any background pre-allocation before recording the durable
+		// high-water mark that rollback must preserve.
+		require.NoError(t, s.allocator.updateMinValue(ctx, 0, def[0].ColName, 0, nil))
+		store.Lock()
+		committedCols := append([]AutoColumn(nil), store.caches[0]...)
+		store.Unlock()
+		committedOffset := committedCols[0].Offset
+		require.Greater(t, committedOffset, lastBeforeAlter)
+
+		alterTxn, err := tc.New(ctx, timestamp.Timestamp{})
+		require.NoError(t, err)
+		// The mem store models the SQL transaction's private view by copying the
+		// committed auto-increment row into this transaction.
+		require.NoError(t, store.Create(ctx, 0, committedCols, alterTxn))
+		require.NoError(t, s.SetOffset(ctx, 0, def[0].ColName, 50, alterTxn))
+
+		store.Lock()
+		uncommittedCols := append([]AutoColumn(nil), store.uncommitted[string(alterTxn.Txn().ID)][0]...)
+		store.Unlock()
+		// The private cache is lazy, so ALTER without subsequent DML leaves the
+		// staged offset exactly at the requested reset value.
+		require.Equal(t, uint64(50), uncommittedCols[0].Offset)
+		require.NoError(t, alterTxn.Rollback(ctx))
+
+		store.Lock()
+		committedCols = append([]AutoColumn(nil), store.caches[0]...)
+		store.Unlock()
+		require.Equal(t, committedOffset, committedCols[0].Offset)
+
+		input = newTestVector[uint64](1, types.New(types.T_uint64, 0, 0), nil, nil)
+		lastAfterRollback, err := s.InsertValues(ctx, 0, autoIncrEpoch, nil, []*vector.Vector{input}, 1, 0)
+		require.NoError(t, err)
+		require.Greater(t, lastAfterRollback, committedOffset)
+		require.Greater(t, lastAfterRollback, lastBeforeAlter)
+	})
+}
+
+func TestSetOffsetTransactionUsesPendingOffsetForInsert(t *testing.T) {
+	client.RunTxnTests(func(tc client.TxnClient, _ rpc.TxnSender) {
+		defer leaktest.AfterTest(t)()
+		ctx, cancel := context.WithTimeout(defines.AttachAccountId(context.Background(), catalog.System_Account), 10*time.Second)
+		defer cancel()
+
+		store := NewMemStore().(*memStore)
+		s := NewIncrService("", store, Config{CountPerAllocate: 100}).(*service)
+		defer s.Close()
+
+		createTxn, err := tc.New(ctx, timestamp.Timestamp{})
+		require.NoError(t, err)
+		def := newTestTableDef(1)
+		require.NoError(t, s.Create(ctx, 0, def, createTxn))
+		require.NoError(t, createTxn.Commit(ctx))
+
+		alterTxn, err := tc.New(ctx, timestamp.Timestamp{})
+		require.NoError(t, err)
+		require.NoError(t, store.Create(ctx, 0, def, alterTxn))
+		require.NoError(t, s.SetOffset(ctx, 0, def[0].ColName, 999, alterTxn))
+
+		input := newTestVector[uint64](1, types.New(types.T_uint64, 0, 0), nil, nil)
+		last, err := s.InsertValues(ctx, 0, 1, alterTxn, []*vector.Vector{input}, 1, 0)
+		require.NoError(t, err)
+		require.Equal(t, uint64(1000), last)
+	})
+}
+
+func TestSetOffsetOnNewTablePublishesFreshCacheAfterCommit(t *testing.T) {
+	client.RunTxnTests(func(tc client.TxnClient, _ rpc.TxnSender) {
+		ctx, cancel := context.WithTimeout(
+			defines.AttachAccountId(context.Background(), catalog.System_Account),
+			10*time.Second,
+		)
+		defer cancel()
+
+		s := NewIncrService("", NewMemStore(), Config{CountPerAllocate: 100}).(*service)
+		defer s.Close()
+		createTxn, err := tc.New(ctx, timestamp.Timestamp{})
+		require.NoError(t, err)
+		def := newTestTableDef(1)
+		require.NoError(t, s.Create(ctx, 0, def, createTxn))
+		require.NoError(t, s.SetOffset(ctx, 0, def[0].ColName, 999, createTxn))
+		key := privateResetKey{txnID: string(createTxn.Txn().ID), tableID: 0}
+		require.NoError(t, createTxn.Commit(ctx))
+		s.mu.Lock()
+		_, resetExists := s.mu.createdResets[key]
+		s.mu.Unlock()
+		require.False(t, resetExists)
+
+		input := newTestVector[uint64](1, types.New(types.T_uint64, 0, 0), nil, nil)
+		last, err := s.InsertValues(ctx, 0, 0, nil, []*vector.Vector{input}, 1, 0)
+		require.NoError(t, err)
+		require.Equal(t, uint64(1000), last)
+	})
+}
+
+func TestDiscardOffsetResetRestoresCreatedTableCache(t *testing.T) {
+	client.RunTxnTests(func(tc client.TxnClient, _ rpc.TxnSender) {
+		ctx, cancel := context.WithTimeout(
+			defines.AttachAccountId(context.Background(), catalog.System_Account),
+			10*time.Second,
+		)
+		defer cancel()
+
+		s := NewIncrService("", NewMemStore(), Config{CountPerAllocate: 100}).(*service)
+		defer s.Close()
+		createTxn, err := tc.New(ctx, timestamp.Timestamp{})
+		require.NoError(t, err)
+		def := newTestTableDef(1)
+		require.NoError(t, s.Create(ctx, 0, def, createTxn))
+		original := s.getTableCache(0)
+
+		require.NoError(t, s.SetOffset(ctx, 0, def[0].ColName, 999, createTxn))
+		replacement := s.getTableCache(0)
+		require.NotSame(t, original, replacement)
+		input := newTestVector[uint64](1, types.New(types.T_uint64, 0, 0), nil, nil)
+		last, err := s.InsertValues(ctx, 0, 0, createTxn, []*vector.Vector{input}, 1, 0)
+		require.NoError(t, err)
+		require.Equal(t, uint64(1000), last)
+		key := privateResetKey{txnID: string(createTxn.Txn().ID), tableID: 0}
+		s.mu.Lock()
+		previous := s.mu.createdResets[key]
+		s.mu.Unlock()
+		require.Same(t, original, previous)
+
+		require.NoError(t, s.DiscardOffsetReset(ctx, 0, createTxn))
+		require.NoError(t, s.DiscardOffsetReset(ctx, 0, createTxn))
+		require.Same(t, original, s.getTableCache(0))
+		s.mu.Lock()
+		_, exists := s.mu.createdResets[key]
+		s.mu.Unlock()
+		require.False(t, exists)
+		cache := replacement.(*tableCache)
+		cache.lifecycle.Lock()
+		require.True(t, cache.lifecycle.retired)
+		require.True(t, cache.lifecycle.closed)
+		cache.lifecycle.Unlock()
+
+		require.NoError(t, createTxn.Rollback(ctx))
+		originalCache := original.(*tableCache)
+		originalCache.lifecycle.Lock()
+		require.True(t, originalCache.lifecycle.retired)
+		require.True(t, originalCache.lifecycle.closed)
+		originalCache.lifecycle.Unlock()
+	})
+}
+
+func TestSetOffsetWithoutInsertDoesNotReservePrivateRange(t *testing.T) {
+	client.RunTxnTests(func(tc client.TxnClient, _ rpc.TxnSender) {
+		ctx, cancel := context.WithTimeout(defines.AttachAccountId(context.Background(), catalog.System_Account), 10*time.Second)
+		defer cancel()
+
+		store := NewMemStore().(*memStore)
+		s := NewIncrService("", store, Config{CountPerAllocate: 100}).(*service)
+		defer s.Close()
+		def := newTestTableDef(1)
+		require.NoError(t, store.Create(ctx, 0, def, nil))
+
+		alterTxn, err := tc.New(ctx, timestamp.Timestamp{})
+		require.NoError(t, err)
+		require.NoError(t, store.Create(ctx, 0, def, alterTxn))
+		require.NoError(t, s.SetOffset(ctx, 0, def[0].ColName, 999, alterTxn))
+
+		store.Lock()
+		staged := append([]AutoColumn(nil), store.uncommitted[string(alterTxn.Txn().ID)][0]...)
+		store.Unlock()
+		require.Equal(t, uint64(999), staged[0].Offset,
+			"ALTER without DML must not reserve a range in its private transaction")
+		require.NoError(t, alterTxn.Commit(ctx))
+
+		input := newTestVector[uint64](1, types.New(types.T_uint64, 0, 0), nil, nil)
+		last, err := s.InsertValues(ctx, 0, 1, nil, []*vector.Vector{input}, 1, 0)
+		require.NoError(t, err)
+		require.Equal(t, uint64(1000), last)
+	})
+}
+
+type lazyLoadResult struct {
+	cache incrTableCache
+	err   error
+}
+
+func TestLazyPrivateTableCacheCanceledWaiterDoesNotStealBuild(t *testing.T) {
+	buildStarted := make(chan struct{})
+	releaseBuild := make(chan struct{})
+	var buildCalls atomic.Int64
+	candidate := &countingIncrTableCache{tableID: 1}
+	lazy := newLazyPrivateTableCache(1, nil, func(context.Context) (incrTableCache, error) {
+		buildCalls.Add(1)
+		close(buildStarted)
+		<-releaseBuild
+		return candidate, nil
+	}).(*lazyPrivateTableCache)
+
+	builderResult := make(chan lazyLoadResult, 1)
+	go func() {
+		cache, err := lazy.load(context.Background())
+		builderResult <- lazyLoadResult{cache: cache, err: err}
+	}()
+	<-buildStarted
+
+	waiterBase, cancelWaiter := context.WithCancel(context.Background())
+	waiterCtx := &observedDoneContext{Context: waiterBase, observed: make(chan struct{})}
+	waiterResult := make(chan lazyLoadResult, 1)
+	go func() {
+		cache, err := lazy.load(waiterCtx)
+		waiterResult <- lazyLoadResult{cache: cache, err: err}
+	}()
+	<-waiterCtx.observed
+	cancelWaiter()
+
+	waiter := <-waiterResult
+	require.Nil(t, waiter.cache)
+	require.ErrorIs(t, waiter.err, context.Canceled)
+	require.Equal(t, int64(1), buildCalls.Load())
+	select {
+	case result := <-builderResult:
+		require.Failf(t, "builder returned before release", "result: %+v", result)
+	default:
+	}
+
+	close(releaseBuild)
+	builder := <-builderResult
+	require.NoError(t, builder.err)
+	require.Same(t, candidate, builder.cache)
+	builder.cache.release()
+	lazy.retire()
+	require.Equal(t, int64(1), candidate.acquires.Load())
+	require.Equal(t, int64(1), candidate.releases.Load())
+	require.Equal(t, int64(1), candidate.retires.Load())
+	require.Equal(t, int64(1), candidate.closes.Load())
+}
+
+func TestLazyPrivateTableCacheBuildErrorWakesGenerationAndLaterRetries(t *testing.T) {
+	firstBuildStarted := make(chan struct{})
+	releaseFirstBuild := make(chan struct{})
+	buildErr := errors.New("first build failed")
+	var buildCalls atomic.Int64
+	candidate := &countingIncrTableCache{tableID: 1}
+	lazy := newLazyPrivateTableCache(1, nil, func(context.Context) (incrTableCache, error) {
+		if buildCalls.Add(1) == 1 {
+			close(firstBuildStarted)
+			<-releaseFirstBuild
+			return nil, buildErr
+		}
+		return candidate, nil
+	}).(*lazyPrivateTableCache)
+
+	firstResult := make(chan lazyLoadResult, 1)
+	go func() {
+		cache, err := lazy.load(context.Background())
+		firstResult <- lazyLoadResult{cache: cache, err: err}
+	}()
+	<-firstBuildStarted
+
+	waiterCtx := &observedDoneContext{Context: context.Background(), observed: make(chan struct{})}
+	waiterResult := make(chan lazyLoadResult, 1)
+	go func() {
+		cache, err := lazy.load(waiterCtx)
+		waiterResult <- lazyLoadResult{cache: cache, err: err}
+	}()
+	<-waiterCtx.observed
+	close(releaseFirstBuild)
+
+	for _, result := range []lazyLoadResult{<-firstResult, <-waiterResult} {
+		require.Nil(t, result.cache)
+		require.ErrorIs(t, result.err, buildErr)
+	}
+	require.Equal(t, int64(1), buildCalls.Load(), "same-generation waiter must not retry")
+
+	cache, err := lazy.load(context.Background())
+	require.NoError(t, err)
+	require.Same(t, candidate, cache)
+	cache.release()
+	require.Equal(t, int64(2), buildCalls.Load())
+	lazy.retire()
+	require.Equal(t, int64(1), candidate.acquires.Load())
+	require.Equal(t, int64(1), candidate.releases.Load())
+	require.Equal(t, int64(1), candidate.retires.Load())
+	require.Equal(t, int64(1), candidate.closes.Load())
+}
+
+func TestLazyPrivateTableCacheRetireRejectsBlockedCandidate(t *testing.T) {
+	buildStarted := make(chan struct{})
+	releaseBuild := make(chan struct{})
+	candidate := &countingIncrTableCache{tableID: 1}
+	lazy := newLazyPrivateTableCache(1, nil, func(context.Context) (incrTableCache, error) {
+		close(buildStarted)
+		<-releaseBuild
+		return candidate, nil
+	}).(*lazyPrivateTableCache)
+
+	resultC := make(chan lazyLoadResult, 1)
+	go func() {
+		cache, err := lazy.load(context.Background())
+		resultC <- lazyLoadResult{cache: cache, err: err}
+	}()
+	<-buildStarted
+	lazy.retire()
+	close(releaseBuild)
+
+	result := <-resultC
+	require.Nil(t, result.cache)
+	require.True(t, moerr.IsMoErrCode(result.err, moerr.ErrTxnNeedRetryWithDefChanged))
+	require.Nil(t, lazy.mu.cache)
+	lazy.retire()
+	require.Zero(t, candidate.acquires.Load())
+	require.Equal(t, int64(1), candidate.retires.Load())
+	require.Equal(t, int64(1), candidate.closes.Load())
+}
+
+func TestServiceCloseWaitsForAdmittedLazyBuilder(t *testing.T) {
+	s := NewIncrService("", NewMemStore(), Config{CountPerAllocate: 100}).(*service)
+	buildAdmitted := make(chan struct{})
+	releaseBuild := make(chan struct{})
+	candidate := &countingIncrTableCache{tableID: 1}
+	lazy := newLazyPrivateTableCache(1, nil, func(ctx context.Context) (incrTableCache, error) {
+		return s.buildPrivateTableCache(ctx, func() (incrTableCache, error) {
+			close(buildAdmitted)
+			<-releaseBuild
+			return candidate, nil
+		})
+	}).(*lazyPrivateTableCache)
+	key := privateResetKey{txnID: "close-gate", tableID: 1}
+	s.mu.Lock()
+	s.mu.private[key] = lazy
+	s.mu.Unlock()
+
+	loadResult := make(chan lazyLoadResult, 1)
+	go func() {
+		cache, err := lazy.load(context.Background())
+		loadResult <- lazyLoadResult{cache: cache, err: err}
+	}()
+	<-buildAdmitted
+
+	closeResult := make(chan struct{})
+	go func() {
+		s.Close()
+		close(closeResult)
+	}()
+	closedObserved := make(chan struct{})
+	go func() {
+		for {
+			s.mu.Lock()
+			closed := s.mu.closed
+			s.mu.Unlock()
+			if closed {
+				close(closedObserved)
+				return
+			}
+			runtime.Gosched()
+		}
+	}()
+	<-closedObserved
+	select {
+	case <-closeResult:
+		require.Fail(t, "Close returned while an admitted builder was blocked")
+	default:
+	}
+
+	close(releaseBuild)
+	result := <-loadResult
+	require.Nil(t, result.cache)
+	require.True(t, moerr.IsMoErrCode(result.err, moerr.ErrTxnNeedRetryWithDefChanged))
+	<-closeResult
+	require.Nil(t, lazy.mu.cache)
+	require.Zero(t, candidate.acquires.Load())
+	require.Equal(t, int64(1), candidate.retires.Load())
+	require.Equal(t, int64(1), candidate.closes.Load())
+	s.mu.Lock()
+	_, exists := s.mu.private[key]
+	s.mu.Unlock()
+	require.False(t, exists)
+}
+
+func TestPrivateOffsetResetBuildsOneCacheForConcurrentUsers(t *testing.T) {
+	client.RunTxnTests(func(tc client.TxnClient, _ rpc.TxnSender) {
+		ctx, cancel := context.WithTimeout(defines.AttachAccountId(context.Background(), catalog.System_Account), 10*time.Second)
+		defer cancel()
+
+		store := NewMemStore().(*memStore)
+		s := NewIncrService("", store, Config{CountPerAllocate: 100}).(*service)
+		defer s.Close()
+		def := newTestTableDef(1)
+		require.NoError(t, store.Create(ctx, 0, def, nil))
+		txnOp, err := tc.New(ctx, timestamp.Timestamp{})
+		require.NoError(t, err)
+		require.NoError(t, store.Create(ctx, 0, def, txnOp))
+		require.NoError(t, s.SetOffset(ctx, 0, def[0].ColName, 999, txnOp))
+
+		key := privateResetKey{txnID: string(txnOp.Txn().ID), tableID: 0}
+		s.mu.Lock()
+		lazy := s.mu.private[key].(*lazyPrivateTableCache)
+		s.mu.Unlock()
+
+		const users = 8
+		caches := make(chan incrTableCache, users)
+		errs := make(chan error, users)
+		var wg sync.WaitGroup
+		for range users {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				cache, err := lazy.load(ctx)
+				if err == nil {
+					cache.release()
+				}
+				caches <- cache
+				errs <- err
+			}()
+		}
+		wg.Wait()
+		close(caches)
+		close(errs)
+		for err := range errs {
+			require.NoError(t, err)
+		}
+		var first incrTableCache
+		for cache := range caches {
+			if first == nil {
+				first = cache
+			} else {
+				require.Same(t, first, cache)
+			}
+		}
+
+		store.Lock()
+		staged := append([]AutoColumn(nil), store.uncommitted[string(txnOp.Txn().ID)][0]...)
+		store.Unlock()
+		require.Equal(t, uint64(1099), staged[0].Offset,
+			"concurrent users must reserve exactly one 100-value range")
+	})
+}
+
+func TestOffsetResetCacheRetiredOnTransactionClose(t *testing.T) {
+	for _, commit := range []bool{false, true} {
+		name := "rollback"
+		if commit {
+			name = "commit"
+		}
+		t.Run(name, func(t *testing.T) {
+			client.RunTxnTests(func(tc client.TxnClient, _ rpc.TxnSender) {
+				ctx, cancel := context.WithTimeout(defines.AttachAccountId(context.Background(), catalog.System_Account), 10*time.Second)
+				defer cancel()
+
+				store := NewMemStore().(*memStore)
+				s := NewIncrService("", store, Config{CountPerAllocate: 100}).(*service)
+				defer s.Close()
+				def := newTestTableDef(1)
+				require.NoError(t, store.Create(ctx, 0, def, nil))
+
+				txnOp, err := tc.New(ctx, timestamp.Timestamp{})
+				require.NoError(t, err)
+				require.NoError(t, store.Create(ctx, 0, def, txnOp))
+				require.NoError(t, s.SetOffset(ctx, 0, def[0].ColName, 999, txnOp))
+
+				key := privateResetKey{txnID: string(txnOp.Txn().ID), tableID: 0}
+				s.mu.Lock()
+				private := s.mu.private[key]
+				s.mu.Unlock()
+				require.NotNil(t, private)
+
+				if commit {
+					require.NoError(t, txnOp.Commit(ctx))
+				} else {
+					require.NoError(t, txnOp.Rollback(ctx))
+				}
+
+				s.mu.Lock()
+				_, exists := s.mu.private[key]
+				s.mu.Unlock()
+				require.False(t, exists)
+				cache := private.(*lazyPrivateTableCache)
+				cache.lifecycle.Lock()
+				require.True(t, cache.lifecycle.retired)
+				require.True(t, cache.lifecycle.closed)
+				cache.lifecycle.Unlock()
+			})
+		})
+	}
+}
+
+func TestDiscardOffsetResetRetiresPrivateCache(t *testing.T) {
+	client.RunTxnTests(func(tc client.TxnClient, _ rpc.TxnSender) {
+		ctx, cancel := context.WithTimeout(defines.AttachAccountId(context.Background(), catalog.System_Account), 10*time.Second)
+		defer cancel()
+
+		store := NewMemStore().(*memStore)
+		s := NewIncrService("", store, Config{CountPerAllocate: 100}).(*service)
+		defer s.Close()
+		def := newTestTableDef(1)
+		require.NoError(t, store.Create(ctx, 0, def, nil))
+
+		txnOp, err := tc.New(ctx, timestamp.Timestamp{})
+		require.NoError(t, err)
+		require.NoError(t, store.Create(ctx, 0, def, txnOp))
+		require.NoError(t, s.SetOffset(ctx, 0, def[0].ColName, 999, txnOp))
+
+		key := privateResetKey{txnID: string(txnOp.Txn().ID), tableID: 0}
+		s.mu.Lock()
+		private := s.mu.private[key]
+		s.mu.Unlock()
+		require.NotNil(t, private)
+
+		require.NoError(t, s.DiscardOffsetReset(ctx, 0, txnOp))
+		require.NoError(t, s.DiscardOffsetReset(ctx, 0, txnOp))
+
+		s.mu.Lock()
+		_, exists := s.mu.private[key]
+		s.mu.Unlock()
+		require.False(t, exists)
+		cache := private.(*lazyPrivateTableCache)
+		cache.lifecycle.Lock()
+		require.True(t, cache.lifecycle.retired)
+		require.True(t, cache.lifecycle.closed)
+		cache.lifecycle.Unlock()
+	})
+}
+
+func TestServiceCloseRetiresPrivateOffsetResetCache(t *testing.T) {
+	client.RunTxnTests(func(tc client.TxnClient, _ rpc.TxnSender) {
+		ctx, cancel := context.WithTimeout(defines.AttachAccountId(context.Background(), catalog.System_Account), 10*time.Second)
+		defer cancel()
+
+		store := NewMemStore().(*memStore)
+		s := NewIncrService("", store, Config{CountPerAllocate: 100}).(*service)
+		def := newTestTableDef(1)
+		require.NoError(t, store.Create(ctx, 0, def, nil))
+
+		txnOp, err := tc.New(ctx, timestamp.Timestamp{})
+		require.NoError(t, err)
+		require.NoError(t, store.Create(ctx, 0, def, txnOp))
+		require.NoError(t, s.SetOffset(ctx, 0, def[0].ColName, 999, txnOp))
+
+		key := privateResetKey{txnID: string(txnOp.Txn().ID), tableID: 0}
+		s.mu.Lock()
+		private := s.mu.private[key]
+		s.mu.Unlock()
+		require.NotNil(t, private)
+
+		s.Close()
+		cache := private.(*lazyPrivateTableCache)
+		cache.lifecycle.Lock()
+		require.True(t, cache.lifecycle.retired)
+		require.True(t, cache.lifecycle.closed)
+		cache.lifecycle.Unlock()
+	})
+}
+
+func TestPrivateOffsetResetIsVisibleOnlyToOwningTransaction(t *testing.T) {
+	client.RunTxnTests(func(tc client.TxnClient, _ rpc.TxnSender) {
+		ctx, cancel := context.WithTimeout(defines.AttachAccountId(context.Background(), catalog.System_Account), 10*time.Second)
+		defer cancel()
+
+		store := NewMemStore().(*memStore)
+		s := NewIncrService("", store, Config{CountPerAllocate: 100}).(*service)
+		defer s.Close()
+		def := newTestTableDef(1)
+		require.NoError(t, store.Create(ctx, 0, def, nil))
+
+		owner, err := tc.New(ctx, timestamp.Timestamp{})
+		require.NoError(t, err)
+		require.NoError(t, store.Create(ctx, 0, def, owner))
+		require.NoError(t, s.SetOffset(ctx, 0, def[0].ColName, 999, owner))
+		other, err := tc.New(ctx, timestamp.Timestamp{})
+		require.NoError(t, err)
+
+		otherInput := newTestVector[uint64](1, types.New(types.T_uint64, 0, 0), nil, nil)
+		otherLast, err := s.InsertValues(ctx, 0, 1, other, []*vector.Vector{otherInput}, 1, 0)
+		require.NoError(t, err)
+		require.Less(t, otherLast, uint64(1000))
+
+		key := privateResetKey{txnID: string(owner.Txn().ID), tableID: 0}
+		s.mu.Lock()
+		lazy := s.mu.private[key].(*lazyPrivateTableCache)
+		s.mu.Unlock()
+		loaded, err := lazy.load(ctx)
+		require.NoError(t, err)
+		private := loaded.(*tableCache)
+		loaded.release()
+		privateTS := timestamp.Timestamp{PhysicalTime: 42, LogicalTime: 7}
+		private.mu.Lock()
+		privateCol := private.mu.cols[def[0].ColName]
+		private.mu.Unlock()
+		privateCol.Lock()
+		privateCol.ranges.allocatedAt[0] = privateTS
+		privateCol.Unlock()
+		gotTS, err := s.GetLastAllocateTS(ctx, 0, 1, owner, def[0].ColName)
+		require.NoError(t, err)
+		require.Equal(t, privateTS, gotTS)
+
+		ownerInput := newTestVector[uint64](1, types.New(types.T_uint64, 0, 0), nil, nil)
+		ownerLast, err := s.InsertValues(ctx, 0, 1, owner, []*vector.Vector{ownerInput}, 1, 0)
+		require.NoError(t, err)
+		require.Equal(t, uint64(1000), ownerLast)
+
+		privateCol.Lock()
+		privateCol.ranges.values = nil
+		privateCol.ranges.allocatedAt = nil
+		privateCol.overflow = true
+		privateCol.Unlock()
+		ownerInput = newTestVector[uint64](1, types.New(types.T_uint64, 0, 0), nil, nil)
+		_, err = s.InsertValues(ctx, 0, 1, owner, []*vector.Vector{ownerInput}, 1, 0)
+		require.Error(t, err, "a present private cache must never fall back to the committed cache")
+	})
+}
+
+func TestFailedPrivateOffsetResetInstallRetiresCache(t *testing.T) {
+	client.RunTxnTests(func(tc client.TxnClient, _ rpc.TxnSender) {
+		ctx, cancel := context.WithTimeout(defines.AttachAccountId(context.Background(), catalog.System_Account), 10*time.Second)
+		defer cancel()
+
+		store := NewMemStore().(*memStore)
+		s := NewIncrService("", store, Config{CountPerAllocate: 100}).(*service)
+		def := newTestTableDef(1)
+		require.NoError(t, store.Create(ctx, 0, def, nil))
+		txnOp, err := tc.New(ctx, timestamp.Timestamp{})
+		require.NoError(t, err)
+		require.NoError(t, store.Create(ctx, 0, def, txnOp))
+
+		private, err := newTableCache(ctx, s.sid, 0, 0, def, s.cfg, s.allocator, txnOp, false)
+		require.NoError(t, err)
+		s.Close()
+		require.Error(t, s.installPrivateReset(ctx, 0, txnOp, private))
+
+		cache := private.(*tableCache)
+		cache.lifecycle.Lock()
+		require.True(t, cache.lifecycle.retired)
+		require.True(t, cache.lifecycle.closed)
+		cache.lifecycle.Unlock()
+	})
+}
+
+func TestInsertValuesReplacesCacheOnAutoIncrementEpochChange(t *testing.T) {
+	client.RunTxnTests(func(tc client.TxnClient, _ rpc.TxnSender) {
+		defer leaktest.AfterTest(t)()
+		ctx, cancel := context.WithTimeout(defines.AttachAccountId(context.Background(), catalog.System_Account), 10*time.Second)
+		defer cancel()
+
+		store := NewMemStore()
+		s := NewIncrService("", store, Config{CountPerAllocate: 100}).(*service)
+		defer s.Close()
+
+		op, err := tc.New(ctx, timestamp.Timestamp{})
+		require.NoError(t, err)
+		def := newTestTableDef(1)
+		require.NoError(t, s.Create(ctx, 0, def, op))
+		require.NoError(t, op.Commit(ctx))
+
+		vecType := types.New(types.T_uint64, 0, 0)
+		input := newTestVector[uint64](1, vecType, nil, nil)
+		last, err := s.InsertValues(ctx, 0, 7, nil, []*vector.Vector{input}, 1, 0)
+		require.NoError(t, err)
+		require.Equal(t, uint64(101), last)
+
+		require.NoError(t, store.ForceSetOffset(ctx, 0, def[0].ColName, 1000, nil))
+		input = newTestVector[uint64](1, vecType, nil, nil)
+		last, err = s.InsertValues(ctx, 0, 8, nil, []*vector.Vector{input}, 1, 0)
+		require.NoError(t, err)
+		require.Equal(t, uint64(1001), last)
+
+		s.mu.Lock()
+		cached := s.mu.tables[0]
+		s.mu.Unlock()
+		require.Equal(t, uint32(8), cached.epoch())
+	})
+}
+
+func TestTwoServicesKeepStaleRangesAcrossTransactionalReset(t *testing.T) {
+	client.RunTxnTests(func(tc client.TxnClient, _ rpc.TxnSender) {
+		defer leaktest.AfterTest(t)()
+		ctx, cancel := context.WithTimeout(defines.AttachAccountId(context.Background(), catalog.System_Account), 10*time.Second)
+		defer cancel()
+
+		store := NewMemStore().(*memStore)
+		cn1 := NewIncrService("", store, Config{CountPerAllocate: 100}).(*service)
+		cn2 := NewIncrService("", store, Config{CountPerAllocate: 100}).(*service)
+		defer cn1.Close()
+		defer cn2.Close()
+
+		createTxn, err := tc.New(ctx, timestamp.Timestamp{})
+		require.NoError(t, err)
+		def := newTestTableDef(1)
+		require.NoError(t, cn1.Create(ctx, 0, def, createTxn))
+		require.NoError(t, createTxn.Commit(ctx))
+
+		const (
+			oldEpoch        = uint32(7)
+			newEpoch        = uint32(8)
+			effectiveOffset = uint64(999)
+		)
+
+		vecType := types.New(types.T_uint64, 0, 0)
+		input1 := newTestVector[uint64](1, vecType, nil, nil)
+		last1, err := cn1.InsertValues(ctx, 0, oldEpoch, nil, []*vector.Vector{input1}, 1, 0)
+		require.NoError(t, err)
+		input2 := newTestVector[uint64](1, vecType, nil, nil)
+		last2, err := cn2.InsertValues(ctx, 0, oldEpoch, nil, []*vector.Vector{input2}, 1, 0)
+		require.NoError(t, err)
+		// Create reserves the first range in its transaction; the first epoch-7
+		// committed caches therefore start at 101 and 201 respectively.
+		require.Equal(t, uint64(101), last1)
+		require.Equal(t, uint64(201), last2)
+		require.LessOrEqual(t, last1, effectiveOffset)
+		require.LessOrEqual(t, last2, effectiveOffset)
+
+		alterTxn, err := tc.New(ctx, timestamp.Timestamp{})
+		require.NoError(t, err)
+		// The memory store models the ALTER transaction's private metadata row.
+		require.NoError(t, store.Create(ctx, 0, def, alterTxn))
+		require.NoError(t, cn1.SetOffset(ctx, 0, def[0].ColName, effectiveOffset, alterTxn))
+		require.NoError(t, alterTxn.Commit(ctx))
+
+		// CN2 is deliberately not reloaded. Its known epoch-7 cache can still generate
+		// a value below the effective offset; the TN fence test consumes this same
+		// stale-value/epoch shape and proves that it cannot commit after ALTER.
+		input2 = newTestVector[uint64](1, vecType, nil, nil)
+		staleGenerated, err := cn2.InsertValues(ctx, 0, oldEpoch, nil, []*vector.Vector{input2}, 1, 0)
+		require.NoError(t, err)
+		require.Equal(t, uint64(202), staleGenerated)
+		require.LessOrEqual(t, staleGenerated, effectiveOffset)
+
+		// A retry planned at epoch 8 replaces CN2's stale cache from durable metadata.
+		input2 = newTestVector[uint64](1, vecType, nil, nil)
+		retryGenerated, err := cn2.InsertValues(ctx, 0, newEpoch, nil, []*vector.Vector{input2}, 1, 0)
+		require.NoError(t, err)
+		require.Equal(t, uint64(1000), retryGenerated)
+		require.Greater(t, retryGenerated, effectiveOffset)
+	})
+}
+
+func TestInsertValuesFailedEpochReplacementPreservesOldCache(t *testing.T) {
+	client.RunTxnTests(func(tc client.TxnClient, _ rpc.TxnSender) {
+		defer leaktest.AfterTest(t)()
+		ctx, cancel := context.WithTimeout(defines.AttachAccountId(context.Background(), catalog.System_Account), 10*time.Second)
+		defer cancel()
+
+		store := &failingGetColumnsStore{IncrValueStore: NewMemStore()}
+		s := NewIncrService("", store, Config{CountPerAllocate: 100}).(*service)
+		defer s.Close()
+
+		op, err := tc.New(ctx, timestamp.Timestamp{})
+		require.NoError(t, err)
+		def := newTestTableDef(1)
+		require.NoError(t, s.Create(ctx, 0, def, op))
+		require.NoError(t, op.Commit(ctx))
+
+		vecType := types.New(types.T_uint64, 0, 0)
+		input := newTestVector[uint64](1, vecType, nil, nil)
+		last, err := s.InsertValues(ctx, 0, 7, nil, []*vector.Vector{input}, 1, 0)
+		require.NoError(t, err)
+
+		loadErr := errors.New("load version 8")
+		store.failWith(loadErr)
+		input = newTestVector[uint64](1, vecType, nil, nil)
+		_, err = s.InsertValues(ctx, 0, 8, nil, []*vector.Vector{input}, 1, 0)
+		require.ErrorIs(t, err, loadErr)
+
+		store.failWith(nil)
+		input = newTestVector[uint64](1, vecType, nil, nil)
+		next, err := s.InsertValues(ctx, 0, 7, nil, []*vector.Vector{input}, 1, 0)
+		require.NoError(t, err)
+		require.Equal(t, last+1, next)
+	})
+}
+
+func TestTableCacheRetireWaitsForActiveUsers(t *testing.T) {
+	c := &tableCache{}
+	c.acquire()
+	c.retire()
+
+	c.lifecycle.Lock()
+	require.False(t, c.lifecycle.closed)
+	c.lifecycle.Unlock()
+
+	c.release()
+	c.lifecycle.Lock()
+	require.True(t, c.lifecycle.closed)
+	c.lifecycle.Unlock()
+}
+
+func TestInsertValuesRejectsOlderEpoch(t *testing.T) {
+	runServiceTests(t, 1, func(ctx context.Context, ss []*service, ops []client.TxnOperator) {
+		s := ss[0]
+		def := newTestTableDef(1)
+		require.NoError(t, s.Create(ctx, 0, def, ops[0]))
+		require.NoError(t, ops[0].Commit(ctx))
+		vecType := types.New(types.T_uint64, 0, 0)
+		input := newTestVector[uint64](1, vecType, nil, nil)
+		_, err := s.InsertValues(ctx, 0, 8, nil, []*vector.Vector{input}, 1, 0)
+		require.NoError(t, err)
+
+		input = newTestVector[uint64](1, vecType, nil, nil)
+		_, err = s.InsertValues(ctx, 0, 7, nil, []*vector.Vector{input}, 1, 0)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged))
+		require.Equal(t, uint32(8), s.getTableCache(0).epoch())
+	})
+}
+
+func TestInsertValuesRollbackDiscardsTxnInstalledNewerEpoch(t *testing.T) {
+	client.RunTxnTests(func(tc client.TxnClient, _ rpc.TxnSender) {
+		ctx, cancel := context.WithTimeout(defines.AttachAccountId(context.Background(), catalog.System_Account), 10*time.Second)
+		defer cancel()
+		s := NewIncrService("", NewMemStore(), Config{CountPerAllocate: 10}).(*service)
+		defer s.Close()
+
+		createTxn, err := tc.New(ctx, timestamp.Timestamp{})
+		require.NoError(t, err)
+		require.NoError(t, s.Create(ctx, 0, newTestTableDef(1), createTxn))
+		require.NoError(t, createTxn.Commit(ctx))
+
+		vecType := types.New(types.T_uint64, 0, 0)
+		input := newTestVector[uint64](1, vecType, nil, nil)
+		_, err = s.InsertValues(ctx, 0, 7, nil, []*vector.Vector{input}, 1, 0)
+		require.NoError(t, err)
+
+		alterTxn, err := tc.New(ctx, timestamp.Timestamp{})
+		require.NoError(t, err)
+		input = newTestVector[uint64](1, vecType, nil, nil)
+		_, err = s.InsertValues(ctx, 0, 8, alterTxn, []*vector.Vector{input}, 1, 0)
+		require.NoError(t, err)
+		require.Equal(t, uint32(8), s.getTableCache(0).epoch())
+		require.NoError(t, alterTxn.Rollback(ctx))
+
+		input = newTestVector[uint64](1, vecType, nil, nil)
+		_, err = s.InsertValues(ctx, 0, 7, nil, []*vector.Vector{input}, 1, 0)
+		require.NoError(t, err)
+		require.Equal(t, uint32(7), s.getTableCache(0).epoch())
+	})
+}
+
+func TestInsertValuesCommitKeepsTxnInstalledNewerEpoch(t *testing.T) {
+	client.RunTxnTests(func(tc client.TxnClient, _ rpc.TxnSender) {
+		ctx, cancel := context.WithTimeout(defines.AttachAccountId(context.Background(), catalog.System_Account), 10*time.Second)
+		defer cancel()
+		s := NewIncrService("", NewMemStore(), Config{CountPerAllocate: 10}).(*service)
+		defer s.Close()
+
+		createTxn, err := tc.New(ctx, timestamp.Timestamp{})
+		require.NoError(t, err)
+		require.NoError(t, s.Create(ctx, 0, newTestTableDef(1), createTxn))
+		require.NoError(t, createTxn.Commit(ctx))
+
+		alterTxn, err := tc.New(ctx, timestamp.Timestamp{})
+		require.NoError(t, err)
+		input := newTestVector[uint64](1, types.New(types.T_uint64, 0, 0), nil, nil)
+		_, err = s.InsertValues(ctx, 0, 8, alterTxn, []*vector.Vector{input}, 1, 0)
+		require.NoError(t, err)
+		require.NoError(t, alterTxn.Commit(ctx))
+
+		input = newTestVector[uint64](1, types.New(types.T_uint64, 0, 0), nil, nil)
+		_, err = s.InsertValues(ctx, 0, 8, nil, []*vector.Vector{input}, 1, 0)
+		require.NoError(t, err)
+		require.Equal(t, uint32(8), s.getTableCache(0).epoch())
+	})
+}
+
+func TestInsertValuesRejectsOlderBuilderFinishingAfterNewerEpoch(t *testing.T) {
+	client.RunTxnTests(func(tc client.TxnClient, _ rpc.TxnSender) {
+		ctx, cancel := context.WithTimeout(defines.AttachAccountId(context.Background(), catalog.System_Account), 10*time.Second)
+		defer cancel()
+		store := &blockingGetColumnsStore{IncrValueStore: NewMemStore()}
+		s := NewIncrService("", store, Config{CountPerAllocate: 10}).(*service)
+		defer s.Close()
+		op, err := tc.New(ctx, timestamp.Timestamp{})
+		require.NoError(t, err)
+		require.NoError(t, s.Create(ctx, 0, newTestTableDef(1), op))
+		require.NoError(t, op.Commit(ctx))
+
+		started, release := store.blockNext()
+		oldErr := make(chan error, 1)
+		go func() {
+			input := newTestVector[uint64](1, types.New(types.T_uint64, 0, 0), nil, nil)
+			_, err := s.InsertValues(ctx, 0, 7, nil, []*vector.Vector{input}, 1, 0)
+			oldErr <- err
+		}()
+		<-started
+		input := newTestVector[uint64](1, types.New(types.T_uint64, 0, 0), nil, nil)
+		_, err = s.InsertValues(ctx, 0, 8, nil, []*vector.Vector{input}, 1, 0)
+		require.NoError(t, err)
+		close(release)
+		require.True(t, moerr.IsMoErrCode(<-oldErr, moerr.ErrTxnNeedRetryWithDefChanged))
+		require.Equal(t, uint32(8), s.getTableCache(0).epoch())
+	})
+}
+
+func TestInsertValuesBuilderCannotReviveCacheAfterReload(t *testing.T) {
+	testBlockedBuilderInvalidation(t, false)
+}
+
+func TestInsertValuesBuilderCannotReviveCacheAfterClose(t *testing.T) {
+	testBlockedBuilderInvalidation(t, true)
+}
+
+func TestSetOffsetWaitsForQueuedOldAllocation(t *testing.T) {
+	client.RunTxnTests(func(tc client.TxnClient, _ rpc.TxnSender) {
+		ctx, cancel := context.WithTimeout(defines.AttachAccountId(context.Background(), catalog.System_Account), 10*time.Second)
+		defer cancel()
+		store := &blockingAllocateStore{IncrValueStore: NewMemStore()}
+		s := NewIncrService("", store, Config{CountPerAllocate: 2, LowCapacity: 1}).(*service)
+		defer s.Close()
+		op, err := tc.New(ctx, timestamp.Timestamp{})
+		require.NoError(t, err)
+		def := newTestTableDef(1)
+		require.NoError(t, s.Create(ctx, 0, def, op))
+		require.NoError(t, op.Commit(ctx))
+
+		started, release := store.blockNext()
+		defer release()
+		input := newTestVector[uint64](1, types.New(types.T_uint64, 0, 0), nil, nil)
+		last, err := s.InsertValues(ctx, 0, 0, nil, []*vector.Vector{input}, 1, 0)
+		require.NoError(t, err)
+		require.Equal(t, uint64(1), last)
+		<-started
+
+		setResult := make(chan error, 1)
+		go func() { setResult <- s.SetOffset(ctx, 0, def[0].ColName, 99, nil) }()
+		require.Eventually(t, func() bool {
+			return len(s.allocator.(*allocator).c) == 1
+		}, time.Second, time.Millisecond)
+		release()
+		require.NoError(t, <-setResult)
+
+		input = newTestVector[uint64](1, types.New(types.T_uint64, 0, 0), nil, nil)
+		last, err = s.InsertValues(ctx, 0, 1, nil, []*vector.Vector{input}, 1, 0)
+		require.NoError(t, err)
+		require.Equal(t, uint64(100), last)
+	})
+}
+
+func TestGetLastAllocateTSUsesRequestedEpochCache(t *testing.T) {
+	client.RunTxnTests(func(tc client.TxnClient, _ rpc.TxnSender) {
+		ctx, cancel := context.WithTimeout(defines.AttachAccountId(context.Background(), catalog.System_Account), 10*time.Second)
+		defer cancel()
+		store := NewMemStore()
+		s := NewIncrService("", store, Config{CountPerAllocate: 2, LowCapacity: 1}).(*service)
+		defer s.Close()
+		op, err := tc.New(ctx, timestamp.Timestamp{})
+		require.NoError(t, err)
+		def := newTestTableDef(1)
+		require.NoError(t, s.Create(ctx, 0, def, op))
+		require.NoError(t, op.Commit(ctx))
+		require.NoError(t, s.SetOffset(ctx, 0, def[0].ColName, 99, nil))
+
+		_, err = s.GetLastAllocateTS(ctx, 0, 1, nil, def[0].ColName)
+		require.NoError(t, err)
+		input := newTestVector[uint64](1, types.New(types.T_uint64, 0, 0), nil, nil)
+		last, err := s.InsertValues(ctx, 0, 1, nil, []*vector.Vector{input}, 1, 0)
+		require.NoError(t, err)
+		require.Equal(t, uint64(100), last)
+	})
+}
+
+func TestCanceledSetOffsetDoesNotRunQueuedForceUpdate(t *testing.T) {
+	client.RunTxnTests(func(tc client.TxnClient, _ rpc.TxnSender) {
+		ctx, cancel := context.WithTimeout(defines.AttachAccountId(context.Background(), catalog.System_Account), 10*time.Second)
+		defer cancel()
+		mem := NewMemStore().(*memStore)
+		store := &blockingAllocateStore{IncrValueStore: mem}
+		s := NewIncrService("", store, Config{CountPerAllocate: 2, LowCapacity: 1}).(*service)
+		defer s.Close()
+		op, err := tc.New(ctx, timestamp.Timestamp{})
+		require.NoError(t, err)
+		def := newTestTableDef(1)
+		require.NoError(t, s.Create(ctx, 0, def, op))
+		require.NoError(t, op.Commit(ctx))
+
+		started, release := store.blockNext()
+		defer release()
+		input := newTestVector[uint64](1, types.New(types.T_uint64, 0, 0), nil, nil)
+		_, err = s.InsertValues(ctx, 0, 0, nil, []*vector.Vector{input}, 1, 0)
+		require.NoError(t, err)
+		<-started
+
+		setCtx, cancelSet := context.WithCancel(ctx)
+		setResult := make(chan error, 1)
+		go func() { setResult <- s.SetOffset(setCtx, 0, def[0].ColName, 99, nil) }()
+		require.Eventually(t, func() bool {
+			return len(s.allocator.(*allocator).c) == 1
+		}, time.Second, time.Millisecond)
+		cancelSet()
+		require.ErrorIs(t, <-setResult, context.Canceled)
+		release()
+
+		require.NoError(t, s.allocator.updateMinValue(ctx, 0, def[0].ColName, 0, nil))
+		mem.Lock()
+		offset := mem.caches[0][0].Offset
+		mem.Unlock()
+		require.Equal(t, uint64(4), offset)
+	})
+}
+
+func TestRetiredTableCacheCannotQueueAllocation(t *testing.T) {
+	allocator := &countingAllocator{}
+	col := &columnCache{
+		col:       AutoColumn{TableID: 1, ColName: "auto", Step: 1},
+		cfg:       Config{CountPerAllocate: 2, LowCapacity: 1},
+		ranges:    &ranges{step: 1},
+		allocator: allocator,
+		committed: true,
+	}
+	c := &tableCache{}
+	c.mu.cols = map[string]*columnCache{"auto": col}
+	c.retire()
+	col.preAllocate(context.Background(), 1, 2, nil)
+	require.Zero(t, allocator.asyncCalls.Load())
+}
+
+func TestPreAllocateClearsStateWhenEnqueueFails(t *testing.T) {
+	allocator := &countingAllocator{asyncErr: context.Canceled}
+	col := &columnCache{
+		col:       AutoColumn{TableID: 1, ColName: "auto", Step: 1},
+		cfg:       Config{CountPerAllocate: 2, LowCapacity: 1},
+		ranges:    &ranges{step: 1},
+		allocator: allocator,
+		committed: true,
+	}
+	col.preAllocate(context.Background(), 1, 2, nil)
+	col.Lock()
+	allocating := col.allocating
+	col.Unlock()
+	require.False(t, allocating)
+}
+
+func testBlockedBuilderInvalidation(t *testing.T, closeService bool) {
+	client.RunTxnTests(func(tc client.TxnClient, _ rpc.TxnSender) {
+		ctx, cancel := context.WithTimeout(defines.AttachAccountId(context.Background(), catalog.System_Account), 10*time.Second)
+		defer cancel()
+		store := &blockingGetColumnsStore{IncrValueStore: NewMemStore()}
+		s := NewIncrService("", store, Config{CountPerAllocate: 10}).(*service)
+		if !closeService {
+			defer s.Close()
+		}
+		op, err := tc.New(ctx, timestamp.Timestamp{})
+		require.NoError(t, err)
+		require.NoError(t, s.Create(ctx, 0, newTestTableDef(1), op))
+		require.NoError(t, op.Commit(ctx))
+
+		started, release := store.blockNext()
+		result := make(chan error, 1)
+		go func() {
+			input := newTestVector[uint64](1, types.New(types.T_uint64, 0, 0), nil, nil)
+			_, err := s.InsertValues(ctx, 0, 8, nil, []*vector.Vector{input}, 1, 0)
+			result <- err
+		}()
+		<-started
+		if closeService {
+			closed := make(chan struct{})
+			go func() {
+				s.Close()
+				close(closed)
+			}()
+			require.Eventually(t, func() bool {
+				s.mu.Lock()
+				defer s.mu.Unlock()
+				return s.mu.closed
+			}, time.Second, time.Millisecond)
+			close(release)
+			<-closed
+		} else {
+			require.NoError(t, s.Reload(ctx, 0))
+			close(release)
+		}
+		require.True(t, moerr.IsMoErrCode(<-result, moerr.ErrTxnNeedRetryWithDefChanged))
+		s.mu.Lock()
+		cache, installed := s.mu.tables[0]
+		_, generationExists := s.mu.generation[0]
+		_, generationBuildExists := s.mu.generationBuilds[0]
+		s.mu.Unlock()
+		require.False(t, generationExists)
+		require.False(t, generationBuildExists)
+		if closeService {
+			require.True(t, installed)
+			require.Equal(t, uint32(0), cache.epoch())
+		} else {
+			require.False(t, installed)
+		}
+	})
+}
+
+func TestMemStoreForceSetOffset(t *testing.T) {
+	runServiceTests(
+		t,
+		1,
+		func(
+			ctx context.Context,
+			ss []*service,
+			ops []client.TxnOperator,
+		) {
+			store := ss[0].store.(*memStore)
+			op := ops[0]
+			def := newTestTableDef(1)
+			require.NoError(t, store.Create(ctx, 0, def, op))
+
+			// ForceSetOffset bypasses the monotonic guard, allowing any value.
+			require.NoError(t, store.ForceSetOffset(ctx, 0, def[0].ColName, 50, op))
+
+			store.Lock()
+			require.Equal(t, uint64(50), store.uncommitted[string(op.Txn().ID)][0][0].Offset)
+			store.Unlock()
+		})
+}
+
+func TestMemStoreForceSetOffsetLowerThanCurrent(t *testing.T) {
+	runServiceTests(
+		t,
+		1,
+		func(
+			ctx context.Context,
+			ss []*service,
+			ops []client.TxnOperator,
+		) {
+			store := ss[0].store.(*memStore)
+			op := ops[0]
+			def := newTestTableDef(1)
+			require.NoError(t, store.Create(ctx, 0, def, op))
+
+			// Raise offset first with monotonic SetOffset.
+			require.NoError(t, store.SetOffset(ctx, 0, def[0].ColName, 1000, op))
+
+			// ForceSetOffset can lower it below the current value.
+			require.NoError(t, store.ForceSetOffset(ctx, 0, def[0].ColName, 100, op))
+
+			store.Lock()
+			require.Equal(t, uint64(100), store.uncommitted[string(op.Txn().ID)][0][0].Offset)
+			store.Unlock()
 		})
 }
 

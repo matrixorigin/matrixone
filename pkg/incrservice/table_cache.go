@@ -28,7 +28,15 @@ import (
 type tableCache struct {
 	logger  *log.MOLogger
 	tableID uint64
+	epochID uint32
 	cols    []AutoColumn
+
+	lifecycle struct {
+		sync.Mutex
+		users   int
+		retired bool
+		closed  bool
+	}
 
 	mu struct {
 		sync.RWMutex
@@ -42,6 +50,7 @@ func newTableCache(
 	ctx context.Context,
 	sid string,
 	tableID uint64,
+	epoch uint32,
 	cols []AutoColumn,
 	cfg Config,
 	allocator valueAllocator,
@@ -50,6 +59,7 @@ func newTableCache(
 	c := &tableCache{
 		logger:  getLogger(sid).Named("incrservice"),
 		tableID: tableID,
+		epochID: epoch,
 		cols:    cols,
 	}
 	c.mu.cols = make(map[string]*columnCache, 1)
@@ -67,6 +77,10 @@ func newTableCache(
 			txnOp,
 		)
 		if err != nil {
+			for _, created := range c.mu.cols {
+				created.retire()
+				_ = created.close()
+			}
 			return nil, err
 		}
 		c.mu.cols[col.ColName] = cc
@@ -95,7 +109,7 @@ func (c *tableCache) getTxn() client.TxnOperator {
 	return c.mu.txnOp
 }
 
-func (c *tableCache) getLastAllocateTS(colName string) (timestamp.Timestamp, error) {
+func (c *tableCache) getLastAllocateTS(_ context.Context, colName string) (timestamp.Timestamp, error) {
 	cc := c.getColumnCache(colName)
 	if cc == nil {
 		panic("column cache should not be nil, " + colName)
@@ -160,6 +174,48 @@ func (c *tableCache) currentValue(
 
 func (c *tableCache) table() uint64 {
 	return c.tableID
+}
+
+func (c *tableCache) epoch() uint32 {
+	return c.epochID
+}
+
+func (c *tableCache) acquire() {
+	c.lifecycle.Lock()
+	defer c.lifecycle.Unlock()
+	c.lifecycle.users++
+}
+
+func (c *tableCache) release() {
+	c.lifecycle.Lock()
+	c.lifecycle.users--
+	closeNow := c.lifecycle.retired && c.lifecycle.users == 0 && !c.lifecycle.closed
+	if closeNow {
+		c.lifecycle.closed = true
+	}
+	c.lifecycle.Unlock()
+	if closeNow {
+		_ = c.close()
+	}
+}
+
+func (c *tableCache) retire() {
+	c.mu.RLock()
+	for _, col := range c.mu.cols {
+		col.retire()
+	}
+	c.mu.RUnlock()
+
+	c.lifecycle.Lock()
+	c.lifecycle.retired = true
+	closeNow := c.lifecycle.users == 0 && !c.lifecycle.closed
+	if closeNow {
+		c.lifecycle.closed = true
+	}
+	c.lifecycle.Unlock()
+	if closeNow {
+		_ = c.close()
+	}
 }
 
 func (c *tableCache) columns() []AutoColumn {
