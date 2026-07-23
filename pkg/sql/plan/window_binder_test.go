@@ -254,6 +254,37 @@ func TestHasWindowFrameParamTraversesExpressionForms(t *testing.T) {
 	}
 }
 
+func TestHasWindowFrameParamRejectsExpressionFormsWithoutParameters(t *testing.T) {
+	literal := func() tree.Expr { return testNumVal(1) }
+	tests := []struct {
+		name string
+		expr tree.Expr
+	}{
+		{name: "literal", expr: literal()},
+		{name: "binary", expr: tree.NewBinaryExpr(tree.PLUS, literal(), literal())},
+		{name: "unary", expr: &tree.UnaryExpr{Expr: literal()}},
+		{name: "comparison", expr: tree.NewComparisonExpr(tree.EQUAL, literal(), literal())},
+		{name: "boolean", expr: tree.NewAndExpr(literal(), tree.NewNotExpr(literal()))},
+		{name: "xor", expr: &tree.XorExpr{Left: literal(), Right: literal()}},
+		{name: "or", expr: &tree.OrExpr{Left: literal(), Right: literal()}},
+		{name: "is-null", expr: &tree.IsNullExpr{Expr: literal()}},
+		{name: "paren", expr: &tree.ParenExpr{Expr: literal()}},
+		{name: "tuple", expr: &tree.Tuple{Exprs: tree.Exprs{literal(), literal()}}},
+		{name: "interval", expr: &tree.IntervalExpr{Expr: literal()}},
+		{name: "default", expr: &tree.DefaultVal{Expr: literal()}},
+		{name: "variable", expr: &tree.VarExpr{Expr: literal()}},
+		{name: "case", expr: tree.NewCaseExpr(nil, []*tree.When{tree.NewWhen(literal(), literal())}, literal())},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			require.False(t, hasWindowFrameParam(tc.expr))
+		})
+	}
+
+	require.False(t, isPreparedWindowIntervalBound(testScalarFuncExpr("interval", literal())))
+}
+
 func firstWindowSpec(t *testing.T, queryPlan *planpb.Plan) *planpb.WindowSpec {
 	t.Helper()
 	for _, node := range queryPlan.GetQuery().Nodes {
