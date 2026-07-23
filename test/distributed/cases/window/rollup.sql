@@ -703,6 +703,23 @@ group by snapshot_id with rollup
 order by snapshot_id;
 drop table grouping_uuid;
 
+-- Grouping NULL normalization must preserve vector projection types.
+drop table if exists grouping_vector;
+create table grouping_vector (v32 vecf32(3), v64 vecf64(3));
+insert into grouping_vector values
+    ('[1, 2, 3]', '[1, 2, 3]'),
+    ('[4, 5, 6]', '[4, 5, 6]'),
+    (null, null);
+select distinct v32
+from grouping_vector
+group by v32 with rollup
+order by v32;
+select distinct v64
+from grouping_vector
+group by cube(v64)
+order by v64;
+drop table grouping_vector;
+
 drop table grouping_order;
 -- rollup with window functions should rank over the full rollup result
 create table rollup_window_sales(region varchar(20), product varchar(20), qty int);

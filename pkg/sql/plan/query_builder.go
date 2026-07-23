@@ -3178,6 +3178,8 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 					branchCtx,
 					ctx,
 					resultLen,
+					true,
+					newGroupingSetDistinctOrderAliasRemap(order.Expr, branchCtx),
 				)
 				if bindErr != nil {
 					return 0, bindErr
@@ -6151,13 +6153,21 @@ func remapGroupingSetDistinctOrderExpr(
 	branchCtx *BindContext,
 	unionCtx *BindContext,
 	resultLen int,
+	allowWholeProjection bool,
+	aliasRemap *groupingSetDistinctOrderAliasRemap,
 ) (*plan.Expr, error) {
 	exprKey, err := projectExprKey(expr)
 	if err != nil {
 		return nil, err
 	}
 	if colPos, ok := branchCtx.projectByExpr[exprKey]; ok && colPos >= 0 && int(colPos) < resultLen {
-		return GetColExpr(unionCtx.projects[colPos].Typ, unionCtx.projectTag, colPos), nil
+		selectedAlias := aliasRemap.allow(colPos)
+		directColumn := expr.GetCol() != nil
+		groupingOutput := expr.GetF() != nil && expr.GetF().Func != nil &&
+			strings.EqualFold(expr.GetF().Func.ObjName, "grouping")
+		if allowWholeProjection || selectedAlias || directColumn || groupingOutput {
+			return GetColExpr(unionCtx.projects[colPos].Typ, unionCtx.projectTag, colPos), nil
+		}
 	}
 
 	switch exprImpl := expr.Expr.(type) {
@@ -6174,6 +6184,8 @@ func remapGroupingSetDistinctOrderExpr(
 				branchCtx,
 				unionCtx,
 				resultLen,
+				false,
+				aliasRemap,
 			)
 			if remapErr != nil {
 				return nil, remapErr
@@ -6194,6 +6206,8 @@ func remapGroupingSetDistinctOrderExpr(
 				branchCtx,
 				unionCtx,
 				resultLen,
+				false,
+				aliasRemap,
 			)
 			if remapErr != nil {
 				return nil, remapErr
@@ -6210,6 +6224,53 @@ func remapGroupingSetDistinctOrderExpr(
 		sysCtx,
 		"for SELECT DISTINCT, ORDER BY expressions must appear in select list",
 	)
+}
+
+type groupingSetDistinctOrderAliasRemap struct {
+	occurrences map[int32][]bool
+	seen        map[int32]int
+}
+
+func (r *groupingSetDistinctOrderAliasRemap) allow(colPos int32) bool {
+	if r == nil {
+		return false
+	}
+	seen := r.seen[colPos]
+	r.seen[colPos] = seen + 1
+	return seen < len(r.occurrences[colPos]) && r.occurrences[colPos][seen]
+}
+
+func newGroupingSetDistinctOrderAliasRemap(
+	astExpr tree.Expr,
+	ctx *BindContext,
+) *groupingSetDistinctOrderAliasRemap {
+	remap := &groupingSetDistinctOrderAliasRemap{
+		occurrences: make(map[int32][]bool),
+		seen:        make(map[int32]int),
+	}
+	walkGroupingSetOrderByExpr(astExpr, func(expr tree.Expr) bool {
+		if name, ok := expr.(*tree.UnresolvedName); ok && !name.Star && name.NumParts == 1 {
+			alias := name.ColName()
+			if _, sourceColumn := ctx.bindingByCol[alias]; !sourceColumn && ctx.aliasFrequency[alias] == 1 {
+				if item, ok := ctx.aliasMap[alias]; ok {
+					remap.occurrences[item.idx] = append(remap.occurrences[item.idx], true)
+					return true
+				}
+			}
+		}
+
+		exprText := tree.String(unwrapParenExpr(expr), dialect.MYSQL)
+		for _, item := range ctx.aliasMap {
+			if item.astExpr == nil {
+				continue
+			}
+			if exprText == tree.String(unwrapParenExpr(item.astExpr), dialect.MYSQL) {
+				remap.occurrences[item.idx] = append(remap.occurrences[item.idx], false)
+			}
+		}
+		return true
+	})
+	return remap
 }
 
 func prepareGroupingSetOrderByProjects(

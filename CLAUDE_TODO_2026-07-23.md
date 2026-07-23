@@ -101,3 +101,31 @@
 - 运行新增定向 UT 和完整 `pkg/sql/plan` CGo 测试。
 - 运行 build、vet、覆盖率、静态检查和 `git diff --check`。
 - 完成全差异 self-review 后提交并正常推送，不 force push，不修改 GitHub thread。
+
+## PR #25335 第六轮 review 修复
+
+### 有效问题
+
+1. grouping-set DISTINCT 使用 `IF(GROUPING(project), NULL, project)` 清除 grouping provenance，
+   但 IF 缺少 VECF32/VECF64 结果类型，导致合法的向量 GROUP BY 在 ROLLUP/CUBE 下无法建计划。
+2. grouping-set DISTINCT 的 ORDER BY 重映射在每层递归入口复用任意完整 SELECT 子表达式，
+   比普通 `distinctOrderBinder` 更宽松，并会把嵌套的 volatile `RAND()` 错误替换为 SELECT 输出。
+
+### 修复方案
+
+1. 为 IF 的结果类型检查和执行路径补齐 VECF32/VECF64；继续使用 grouping-aware IF 将 rollup
+   marker 转成普通 SQL NULL，避免同类型 CAST 把 grouping-only NULL 错当成向量零值。
+2. 重映射只在顶层允许完整 SELECT 表达式命中；递归层仅允许：
+   - 已选择的直接列；
+   - 已选择的 `GROUPING()` 输出；
+   - ORDER BY 明确引用的 SELECT alias。
+3. 未通过以上规则的函数继续递归绑定，因此嵌套 `RAND()` 保持为新的调用；未选择输入和任意
+   SELECT 子表达式不再绕过普通 DISTINCT 规则。
+
+### 测试矩阵
+
+- VECF32/VECF64 的 ROLLUP 与 CUBE planner 用例及真实 BVT。
+- 完整 ORDER BY 精确命中仍通过，嵌套已选择复合子表达式加常量被拒绝。
+- `GROUPING(a) + RAND()` 保留新的 volatile 调用，不引用 RAND SELECT 输出列。
+- 复杂 SELECT alias 的派生排序仍通过；直接写同一复杂子表达式则按普通 DISTINCT 规则拒绝。
+- 运行完整 planner/function UT、build、vet、覆盖率、静态检查和 rollup BVT。

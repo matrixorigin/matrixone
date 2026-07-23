@@ -1095,6 +1095,29 @@ null
 00000000-0000-0000-0000-000000000001
 00000000-0000-0000-0000-000000000002
 drop table grouping_uuid;
+drop table if exists grouping_vector;
+create table grouping_vector (v32 vecf32(3), v64 vecf64(3));
+insert into grouping_vector values
+('[1, 2, 3]', '[1, 2, 3]'),
+('[4, 5, 6]', '[4, 5, 6]'),
+(null, null);
+select distinct v32
+from grouping_vector
+group by v32 with rollup
+order by v32;
+v32
+null
+[1, 2, 3]
+[4, 5, 6]
+select distinct v64
+from grouping_vector
+group by cube(v64)
+order by v64;
+v64
+null
+[1, 2, 3]
+[4, 5, 6]
+drop table grouping_vector;
 drop table grouping_order;
 create table rollup_window_sales(region varchar(20), product varchar(20), qty int);
 insert into rollup_window_sales values

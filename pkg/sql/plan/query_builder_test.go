@@ -4788,7 +4788,7 @@ func TestRemapGroupingSetDistinctOrderExprList(t *testing.T) {
 		}}},
 	}
 	remapped, err := remapGroupingSetDistinctOrderExpr(
-		context.Background(), listExpr, branchCtx, unionCtx, 1)
+		context.Background(), listExpr, branchCtx, unionCtx, 1, true, nil)
 	require.NoError(t, err)
 	require.Equal(t, unionCtx.projectTag, remapped.GetList().List[0].GetCol().RelPos)
 	require.Equal(t, int32(0), remapped.GetList().List[0].GetCol().ColPos)
@@ -4799,14 +4799,14 @@ func TestRemapGroupingSetDistinctOrderExprList(t *testing.T) {
 		Expr: &plan.Expr_Vec{Vec: &plan.LiteralVec{Len: 2}},
 	}
 	remappedVector, err := remapGroupingSetDistinctOrderExpr(
-		context.Background(), vectorExpr, branchCtx, unionCtx, 1)
+		context.Background(), vectorExpr, branchCtx, unionCtx, 1, false, nil)
 	require.NoError(t, err)
 	require.NotSame(t, vectorExpr, remappedVector)
 
 	unselectedList := DeepCopyExpr(listExpr)
 	unselectedList.GetList().List[0] = GetColExpr(intType, 1, 0)
 	_, err = remapGroupingSetDistinctOrderExpr(
-		context.Background(), unselectedList, branchCtx, unionCtx, 1)
+		context.Background(), unselectedList, branchCtx, unionCtx, 1, false, nil)
 	require.Error(t, err)
 
 	nilList := &plan.Expr{
@@ -4814,8 +4814,96 @@ func TestRemapGroupingSetDistinctOrderExprList(t *testing.T) {
 		Expr: &plan.Expr_List{},
 	}
 	_, err = remapGroupingSetDistinctOrderExpr(
-		context.Background(), nilList, branchCtx, unionCtx, 1)
+		context.Background(), nilList, branchCtx, unionCtx, 1, false, nil)
 	require.Error(t, err)
+}
+
+func TestGroupingSetDistinctOrderProjectionBoundaries(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	_, err := runOneStmt(mock, t,
+		"select distinct grouping(a) + b from select_test.bind_select "+
+			"group by a, b with rollup order by (grouping(a) + b) + 1")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "for SELECT DISTINCT, ORDER BY expressions must appear in select list")
+
+	p, err := runOneStmt(mock, t,
+		"select distinct grouping(a), abs(b) as x from select_test.bind_select "+
+			"group by a, b with rollup order by grouping(a) + x")
+	require.NoError(t, err)
+	require.True(t, hasAggAboveUnionAll(p))
+
+	_, err = runOneStmt(mock, t,
+		"select distinct grouping(a), abs(b) from select_test.bind_select "+
+			"group by a, b with rollup order by grouping(a) + abs(b)")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "for SELECT DISTINCT, ORDER BY expressions must appear in select list")
+
+	_, err = runOneStmt(mock, t,
+		"select distinct grouping(a), abs(b) as x from select_test.bind_select "+
+			"group by a, b with rollup order by grouping(a) + abs(b) + x")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "for SELECT DISTINCT, ORDER BY expressions must appear in select list")
+}
+
+func TestGroupingSetDistinctOrderKeepsNestedVolatileCall(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	p, err := runOneStmt(mock, t,
+		"select distinct grouping(a), rand() as r from select_test.bind_select "+
+			"group by a, b with rollup order by grouping(a) + rand()")
+	require.NoError(t, err)
+
+	containsRand := func(expr *plan.Expr) bool {
+		var visit func(*plan.Expr) bool
+		visit = func(current *plan.Expr) bool {
+			if current == nil {
+				return false
+			}
+			if fn := current.GetF(); fn != nil {
+				if fn.Func != nil && strings.EqualFold(fn.Func.ObjName, "rand") {
+					return true
+				}
+				for _, arg := range fn.Args {
+					if visit(arg) {
+						return true
+					}
+				}
+			}
+			return false
+		}
+		return visit(expr)
+	}
+
+	foundOrderProjection := false
+	for _, node := range p.GetQuery().Nodes {
+		if node.NodeType != plan.Node_PROJECT || len(node.ProjectList) != 3 {
+			continue
+		}
+		if containsRand(node.ProjectList[2]) {
+			foundOrderProjection = true
+			require.Nil(t, node.ProjectList[2].GetCol(),
+				"the nested volatile call must not reuse the RAND select output")
+			break
+		}
+	}
+	require.True(t, foundOrderProjection)
+}
+
+func TestGroupingSetDistinctVectorProjects(t *testing.T) {
+	for _, typ := range []types.T{types.T_array_float32, types.T_array_float64} {
+		t.Run(typ.String(), func(t *testing.T) {
+			mock := NewMockOptimizer(true)
+			vectorCol := mock.ctxt.tables["bind_select"].Cols[0]
+			vectorCol.Name = "v"
+			vectorCol.OriginName = "v"
+			vectorCol.Typ = plan.Type{Id: int32(typ), Width: 3}
+			for _, groupBy := range []string{"v with rollup", "cube(v)"} {
+				_, err := runOneStmt(mock, t,
+					"select distinct v from select_test.bind_select group by "+groupBy)
+				require.NoError(t, err)
+			}
+		})
+	}
 }
 
 func TestNormalizeGroupingSetDistinctProjectsTypedNull(t *testing.T) {
@@ -4826,6 +4914,8 @@ func TestNormalizeGroupingSetDistinctProjectsTypedNull(t *testing.T) {
 		types.T_decimal128,
 		types.T_date,
 		types.T_uuid,
+		types.T_array_float32,
+		types.T_array_float64,
 	} {
 		t.Run(typ.String(), func(t *testing.T) {
 			project := GetColExpr(

@@ -467,6 +467,22 @@ func TestIffCheck_PreservesSupportedConditionTypes(t *testing.T) {
 	}
 }
 
+func TestIffCheck_PreservesVectorResultTypes(t *testing.T) {
+	for _, typ := range []types.Type{
+		types.New(types.T_array_float32, 3, 0),
+		types.New(types.T_array_float64, 3, 0),
+	} {
+		t.Run(typ.Oid.String(), func(t *testing.T) {
+			result := iffCheck(nil, []types.Type{
+				types.T_bool.ToType(),
+				typ,
+				typ,
+			})
+			require.Equal(t, succeedMatched, result.status)
+		})
+	}
+}
+
 func TestIffConditionTruthyAt(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
@@ -541,6 +557,49 @@ func TestIffFn_StringCondition(t *testing.T) {
 		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{20, 11, 12}, nil), iffFn)
 	succeed, info := tc.Run()
 	require.True(t, succeed, info)
+}
+
+func TestIffFn_VectorResults(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	tests := []struct {
+		name   string
+		typ    types.Type
+		values any
+		want   any
+	}{
+		{
+			name:   "vecf32",
+			typ:    types.T_array_float32.ToType(),
+			values: [][]float32{{1, 2, 3}, {4, 5, 6}},
+			want:   [][]float32{{1, 2, 3}, {8, 9, 10}},
+		},
+		{
+			name:   "vecf64",
+			typ:    types.T_array_float64.ToType(),
+			values: [][]float64{{1, 2, 3}, {4, 5, 6}},
+			want:   [][]float64{{1, 2, 3}, {8, 9, 10}},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			falseValues := any(nil)
+			switch tt.typ.Oid {
+			case types.T_array_float32:
+				falseValues = [][]float32{{7, 8, 9}, {8, 9, 10}}
+			case types.T_array_float64:
+				falseValues = [][]float64{{7, 8, 9}, {8, 9, 10}}
+			}
+			tc := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(types.T_bool.ToType(), []bool{true, false}, nil),
+					NewFunctionTestInput(tt.typ, tt.values, nil),
+					NewFunctionTestInput(tt.typ, falseValues, nil),
+				},
+				NewFunctionTestResult(tt.typ, false, tt.want, nil), iffFn)
+			succeed, info := tc.Run()
+			require.True(t, succeed, info)
+		})
+	}
 }
 
 func TestIffFn_DecimalConditionBatch(t *testing.T) {
