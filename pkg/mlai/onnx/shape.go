@@ -43,14 +43,32 @@ const (
 // valid reports whether d is a dtype supported by this package. String tensors
 // are intentionally unsupported in v1.
 func (d DType) valid() bool {
+	return d.width() != 0
+}
+
+// width returns the element width in bytes, or 0 for an unsupported dtype.
+func (d DType) width() int64 {
 	switch d {
-	case DTInt8, DTUint8, DTInt16, DTUint16, DTInt32, DTUint32,
-		DTInt64, DTUint64, DTFloat16, DTFloat32, DTFloat64, DTBool:
-		return true
+	case DTInt8, DTUint8, DTBool:
+		return 1
+	case DTInt16, DTUint16, DTFloat16:
+		return 2
+	case DTInt32, DTUint32, DTFloat32:
+		return 4
+	case DTInt64, DTUint64, DTFloat64:
+		return 8
 	default:
-		return false
+		return 0
 	}
 }
+
+// MaxTensorBytes caps the in-memory size of a single declared tensor
+// (element count x element width). Tensors are allocated from the
+// user-supplied shape BEFORE onnxruntime validates it against the model, so
+// an unchecked shape would let plain SQL input OOM the CN. 64 MB mirrors
+// types.MaxBlobLen: a result tensor larger than that could not be returned
+// as a json value anyway.
+const MaxTensorBytes = 64 << 20
 
 // Shape describes a tensor: its dimensions and element dtype.
 //
@@ -73,8 +91,16 @@ func ParseShape(js []byte) (*Shape, error) {
 		return nil, moerr.NewInvalidInputNoCtxf(
 			"onnx: unsupported dtype %q", string(s.Dtype))
 	}
-	if _, err := s.NumElements(); err != nil {
+	n, err := s.NumElements()
+	if err != nil {
 		return nil, err
+	}
+	// Bound the declared tensor size; the division form avoids any overflow
+	// in n*width.
+	if w := s.Dtype.width(); n > MaxTensorBytes/w {
+		return nil, moerr.NewInvalidInputNoCtxf(
+			"onnx: declared tensor size %d elements x %d bytes exceeds the %d MB limit",
+			n, w, MaxTensorBytes>>20)
 	}
 	return &s, nil
 }

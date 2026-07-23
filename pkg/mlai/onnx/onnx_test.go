@@ -57,6 +57,18 @@ func TestParseShape(t *testing.T) {
 	require.Error(t, err)
 	_, err = ParseShape([]byte(`{"dim":[],"dtype":"int8"}`))
 	require.Error(t, err)
+
+	// The declared tensor byte size is bounded: shapes are allocated before
+	// onnxruntime validates them against the model, so an oversized shape must
+	// be rejected up front rather than OOM the process.
+	_, err = ParseShape([]byte(`{"dim":[100000000,100],"dtype":"float64"}`))
+	require.ErrorContains(t, err, "exceeds")
+	_, err = ParseShape([]byte(`{"dim":[4611686018427387904],"dtype":"int8"}`))
+	require.ErrorContains(t, err, "exceeds")
+	// At the limit is still accepted (64 MB of int8).
+	s, err = ParseShape([]byte(`{"dim":[67108864],"dtype":"int8"}`))
+	require.NoError(t, err)
+	require.NotNil(t, s)
 }
 
 func TestSumAndDifference(t *testing.T) {

@@ -17,13 +17,20 @@ package function
 import (
 	"bytes"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/datalink"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/mlai/onnx"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+// maxOnnxModelBytes bounds a datalink-loaded model file (read fully into
+// memory to build the session). 1 GiB is generous for real ONNX models while
+// still refusing sizes that would destabilize the CN.
+const maxOnnxModelBytes = int64(1) << 30
 
 // onnx_run(model, input, input_shape, output_shape) evaluates an ONNX model.
 //
@@ -106,6 +113,29 @@ func (op *opOnnxRun) ensureSession(proc *process.Process, rawArg []byte, isDatal
 		dl, err := datalink.NewDatalink(string(rawArg), proc)
 		if err != nil {
 			return err
+		}
+		// Bound the model size BEFORE reading: GetBytes loads the whole file
+		// into memory, so stat first (same pattern as load_file) and refuse
+		// absurd sizes instead of letting a huge stage file OOM the CN.
+		size := dl.Size
+		if size < 0 {
+			etlFS, readPath, err := fileservice.GetForETL(proc.Ctx, proc.GetFileService(), dl.MoPath)
+			if err != nil {
+				return err
+			}
+			entry, err := etlFS.StatFile(proc.Ctx, readPath)
+			if err != nil {
+				return err
+			}
+			if dl.Offset > entry.Size {
+				return moerr.NewInternalError(proc.Ctx, "offset exceeds file size")
+			}
+			size = entry.Size - dl.Offset
+		}
+		if size > maxOnnxModelBytes {
+			return moerr.NewInvalidInputNoCtxf(
+				"onnx: model file is %d bytes, exceeds the %d MB limit",
+				size, maxOnnxModelBytes>>20)
 		}
 		if model, err = dl.GetBytes(proc); err != nil {
 			return err

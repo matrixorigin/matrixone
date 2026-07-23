@@ -1947,8 +1947,12 @@ var supportedStringBuiltIns = []FuncNew{
 		checkFn:    fixedTypeMatch,
 		Overloads: []overload{
 			{
-				// model as raw varbinary bytes
+				// model as raw varbinary bytes. volatile like load_file: the
+				// model argument may be a datalink URL (see the scheme
+				// coercion note in func_builtin_onnx.go) whose target file can
+				// change, so calls must not be constant-folded at plan time.
 				overloadId: 0,
+				volatile:   true,
 				args:       []types.T{types.T_varbinary, types.T_varchar, types.T_varchar, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_json.ToType()
@@ -1961,6 +1965,7 @@ var supportedStringBuiltIns = []FuncNew{
 			{
 				// model as a datalink to a file in a stage
 				overloadId: 1,
+				volatile:   true,
 				args:       []types.T{types.T_datalink, types.T_varchar, types.T_varchar, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_json.ToType()
