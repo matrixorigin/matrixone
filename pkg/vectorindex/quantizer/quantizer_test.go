@@ -15,7 +15,10 @@
 package quantizer
 
 import (
+	"fmt"
 	"math"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -215,8 +218,10 @@ func TestApplyInt8(t *testing.T) {
 
 func TestEntrySQLBuilders(t *testing.T) {
 	// literal-bounds (build) projection.
+	// params are formatted from float32(mul)/float32(add): 286.516854 -> 286.516846,
+	// -156.651685 -> -156.651688, so the literal round-trips to the float32 the query uses.
 	require.Equal(t,
-		"cast(cast(`v` as vecf32(4)) * 286.516854 + (-156.651685) as vecint8(4))",
+		"cast(cast(`v` as vecf32(4)) * 286.516846 + (-156.651688) as vecint8(4))",
 		Int8EntrySQL("`v`", 286.516854, -156.651685, 4))
 
 	// metadata-subquery (CDC) projection with COALESCE identity fallback.
@@ -273,8 +278,9 @@ func TestApplyUint8(t *testing.T) {
 
 func TestUint8EntrySQLBuilders(t *testing.T) {
 	// literal-bounds (build) projection -> vecuint8.
+	// params formatted from float32(mul)/float32(add) (see TestEntrySQLBuilders).
 	require.Equal(t,
-		"cast(cast(`v` as vecf32(4)) * 286.516854 + (28.6516854) as vecuint8(4))",
+		"cast(cast(`v` as vecf32(4)) * 286.516846 + (28.6516857) as vecuint8(4))",
 		Uint8EntrySQL("`v`", 286.516854, 28.6516854, 4))
 
 	// metadata-subquery (CDC) projection: no -128 offset, identity COALESCE fallback.
@@ -379,4 +385,63 @@ func TestApplyFMABoundaryMatchesSQL(t *testing.T) {
 	xu := math.Float32frombits(0x3dd05fbc) // 0.1017451
 	require.Equal(t, uint8(1), ApplyUint8([]float32{xu}, umul, uadd)[0],
 		"uint8 FMA boundary: ApplyUint8 must match the SQL two-rounding result (1), not the fused 0")
+}
+
+// TestEntrySQLParamNarrowedToFloat32 is the regression for formatting the entry-SQL
+// quantizer params from the FLOAT32-narrowed mul/add rather than the raw float64.
+// %.9g round-trips a float32 exactly, but %.9g of the float64 can emit a decimal that
+// narrows to an ADJACENT float32 from float32(mul) — which ApplyInt8 (search) and the
+// CDC SQL narrowing use — so build could store a boundary component one bucket off.
+//
+// Bounds [0, 7.75195541] give mul=32.89492605582467: float32(mul)=0x42039467, but
+// %.9g(float64)="32.8949261" parses to 0x42039468. At component bits 0x3ea36df5,
+// search encodes -118 while the raw-float64 build encoded -117.
+func TestEntrySQLParamNarrowedToFloat32(t *testing.T) {
+	mul, add := Int8Params(0.0, 7.75195541)
+	parseF32 := func(s string) float32 {
+		f, err := strconv.ParseFloat(strings.TrimSpace(s), 64)
+		require.NoError(t, err)
+		return float32(f)
+	}
+
+	// Precondition: for this mul, formatting the raw float64 really does narrow to a
+	// DIFFERENT float32 than float32(mul) — otherwise the regression has no teeth.
+	require.NotEqual(t,
+		math.Float32bits(float32(mul)),
+		math.Float32bits(parseF32(fmt.Sprintf("%.9g", mul))),
+		"precondition: %%.9g(float64 mul) must narrow to a different float32 than float32(mul)")
+
+	// The fix: the emitted entry-SQL literals round-trip to exactly float32(mul)/float32(add).
+	sql := Int8EntrySQL("v", mul, add, 8) // cast(cast(v as vecf32(8)) * MUL + (ADD) as vecint8(8))
+	mulLit := strings.SplitN(strings.SplitN(sql, " * ", 2)[1], " + ", 2)[0]
+	addLit := strings.SplitN(strings.SplitN(sql, " + (", 2)[1], ") as ", 2)[0]
+	require.Equal(t, math.Float32bits(float32(mul)), math.Float32bits(parseF32(mulLit)),
+		"entry SQL mul literal must round-trip to float32(mul)")
+	require.Equal(t, math.Float32bits(float32(add)), math.Float32bits(parseF32(addLit)),
+		"entry SQL add literal must round-trip to float32(add)")
+
+	// End-to-end at the reported int8 boundary component: build (using the emitted,
+	// narrowed param) and search (ApplyInt8) encode it to the same bucket. With the
+	// raw-float64 param the two differed by one (search -118, build -117).
+	xi := math.Float32frombits(0x3ea36df5) // 0.31919828
+	require.Equal(t,
+		ApplyInt8([]float32{xi}, mul, add)[0],
+		entryInt8(xi, float64(parseF32(mulLit)), float64(parseF32(addLit))),
+		"int8: build and search must encode the boundary component to the same bucket")
+
+	// uint8 has the same mul (so the same float32-format boundary); component
+	// 0x3c79090d encoded search 0 vs raw-float64 build 1.
+	umul, uadd := Uint8Params(0.0, 7.75195541)
+	usql := Uint8EntrySQL("v", umul, uadd, 8)
+	umulLit := strings.SplitN(strings.SplitN(usql, " * ", 2)[1], " + ", 2)[0]
+	uaddLit := strings.SplitN(strings.SplitN(usql, " + (", 2)[1], ") as ", 2)[0]
+	require.Equal(t, math.Float32bits(float32(umul)), math.Float32bits(parseF32(umulLit)),
+		"uint8 entry SQL mul literal must round-trip to float32(mul)")
+	require.Equal(t, math.Float32bits(float32(uadd)), math.Float32bits(parseF32(uaddLit)),
+		"uint8 entry SQL add literal must round-trip to float32(add)")
+	xu := math.Float32frombits(0x3c79090d) // 0.015199912
+	require.Equal(t,
+		ApplyUint8([]float32{xu}, umul, uadd)[0],
+		entryUint8(xu, float64(parseF32(umulLit)), float64(parseF32(uaddLit))),
+		"uint8: build and search must encode the boundary component to the same bucket")
 }

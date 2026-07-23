@@ -193,10 +193,15 @@ func CastSQL(colExpr string, t types.T, dim int32) string {
 // the same f32 value, with the same two f32 roundings, as ApplyInt8 on the query
 // (which is always narrowed to f32). Without it a vecf64 base would compute q(x) in
 // f64 while the query encodes in f32, giving different codes at bucket boundaries.
-// %.9g is the exact float32 round-trip width, so float32(literal) == float32(mul).
+//
+// The params are formatted from the FLOAT32-NARROWED mul/add (float32(mul), not mul):
+// %.9g round-trips a float32 exactly, but formatting the float64 can emit a decimal
+// that parses to an ADJACENT float32 from float32(mul) — which ApplyInt8 and the CDC
+// SQL narrowing use — a one-bucket divergence at boundaries. Narrowing first makes the
+// literal round-trip to exactly the float32 all other paths use.
 func Int8EntrySQL(colExpr string, mul, add float64, dim int32) string {
 	f32col := CastSQL(colExpr, types.T_array_float32, dim)
-	return fmt.Sprintf("cast(%s * %.9g + (%.9g) as vecint8(%d))", f32col, mul, add, dim)
+	return fmt.Sprintf("cast(%s * %.9g + (%.9g) as vecint8(%d))", f32col, float32(mul), float32(add), dim)
 }
 
 // Int8EntrySQLFromBounds builds the int8 entry projection where the bounds are SQL
@@ -258,11 +263,12 @@ func ApplyUint8(qf32 []float32, mul, add float64) []uint8 {
 
 // Uint8EntrySQL is the uint8 analog of Int8EntrySQL: the build-side entry
 // projection `cast(cast(<colExpr> as vecf32) * mul + add as vecuint8(dim))` from
-// literal bounds. The inner cast-to-vecf32 pins the affine map to f32 arithmetic for
-// both f32 and f64 bases, matching ApplyUint8 on the query (see Int8EntrySQL).
+// literal bounds. The inner cast-to-vecf32 pins the affine map to f32 arithmetic, and
+// the params are formatted from float32(mul)/float32(add) so the literal round-trips
+// to the exact float32 the query/CDC use (see Int8EntrySQL).
 func Uint8EntrySQL(colExpr string, mul, add float64, dim int32) string {
 	f32col := CastSQL(colExpr, types.T_array_float32, dim)
-	return fmt.Sprintf("cast(%s * %.9g + (%.9g) as vecuint8(%d))", f32col, mul, add, dim)
+	return fmt.Sprintf("cast(%s * %.9g + (%.9g) as vecuint8(%d))", f32col, float32(mul), float32(add), dim)
 }
 
 // Uint8EntrySQLFromBounds is the uint8 analog of Int8EntrySQLFromBounds (CDC delta
