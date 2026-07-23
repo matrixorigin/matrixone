@@ -16,6 +16,7 @@ package function
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -28,6 +29,21 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
+
+type castWarningTestSession struct {
+	codes []uint16
+	msgs  []string
+}
+
+func (s *castWarningTestSession) GetTempTable(string, string) (string, bool) { return "", false }
+func (s *castWarningTestSession) AddTempTable(string, string, string)        {}
+func (s *castWarningTestSession) RemoveTempTable(string, string)             {}
+func (s *castWarningTestSession) RemoveTempTableByRealName(string)           {}
+func (s *castWarningTestSession) GetSqlModeNoAutoValueOnZero() (bool, bool)  { return false, false }
+func (s *castWarningTestSession) AddWarning(code uint16, msg string) {
+	s.codes = append(s.codes, code)
+	s.msgs = append(s.msgs, msg)
+}
 
 func runStrToStrWidth(t *testing.T, mp *mpool.MPool, proc *process.Process, input string, toType types.Type, strict, allowTrim bool) (string, bool, error) {
 	t.Helper()
@@ -192,6 +208,85 @@ func TestNewAssignCastHonorsSqlMode(t *testing.T) {
 	defer rs.Free()
 	require.NoError(t, rs.PreExtendAndReset(1))
 	require.Error(t, NewStrictCast([]*vector.Vector{src, dst}, rs, proc, 1, nil))
+}
+
+func TestAssignmentCastTypedSourceAndWarnings(t *testing.T) {
+	ignoreFunction, err := GetFunctionByName(
+		context.Background(),
+		"cast_ignore",
+		[]types.Type{types.T_int64.ToType(), types.New(types.T_varchar, 3, 0)},
+	)
+	require.NoError(t, err)
+	functionID, _ := DecodeOverloadID(ignoreFunction.GetEncodedOverloadID())
+	require.Equal(t, int32(CAST_IGNORE), functionID)
+
+	newProc := func(sqlMode string) (*process.Process, *castWarningTestSession) {
+		proc := testutil.NewProcess(t)
+		session := &castWarningTestSession{}
+		proc.Session = session
+		proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+			require.Equal(t, "sql_mode", name)
+			return sqlMode, nil
+		})
+		return proc, session
+	}
+	run := func(
+		proc *process.Process,
+		cast func([]*vector.Vector, vector.FunctionResultWrapper, *process.Process, int, *FunctionSelectList) error,
+	) (string, error) {
+		src := vector.NewVec(types.T_int64.ToType())
+		require.NoError(t, vector.AppendFixed(src, int64(12345), false, proc.Mp()))
+		defer src.Free(proc.Mp())
+		target := types.New(types.T_varchar, 3, 0)
+		dst := vector.NewVec(target)
+		defer dst.Free(proc.Mp())
+		result := vector.NewFunctionResultWrapper(target, proc.Mp())
+		defer result.Free()
+		require.NoError(t, result.PreExtendAndReset(1))
+		if err := cast([]*vector.Vector{src, dst}, result, proc, 1, nil); err != nil {
+			return "", err
+		}
+		got, _ := vector.GenerateFunctionStrParameter(result.GetResultVector()).GetStrValue(0)
+		return string(got), nil
+	}
+
+	strictProc, strictWarnings := newProc("STRICT_TRANS_TABLES")
+	_, err = run(strictProc, NewAssignCast)
+	require.Error(t, err)
+	moErr := err.(*moerr.Error)
+	require.Equal(t, moerr.ErrCastWidthExceeded, moErr.ErrorCode())
+	require.Equal(t, uint16(moerr.ER_DATA_TOO_LONG), moErr.MySQLCode())
+	require.Equal(t, "22001", moErr.SqlState())
+	require.Empty(t, strictWarnings.codes)
+
+	nonStrictProc, nonStrictWarnings := newProc("")
+	got, err := run(nonStrictProc, NewAssignCast)
+	require.NoError(t, err)
+	require.Equal(t, "123", got)
+	require.Equal(t, []uint16{moerr.WARN_DATA_TRUNCATED}, nonStrictWarnings.codes)
+
+	ignoreProc, ignoreWarnings := newProc("STRICT_TRANS_TABLES")
+	got, err = run(ignoreProc, NewAssignIgnoreCast)
+	require.NoError(t, err)
+	require.Equal(t, "123", got)
+	require.Equal(t, []uint16{moerr.WARN_DATA_TRUNCATED}, ignoreWarnings.codes)
+
+	explicitProc, explicitWarnings := newProc("STRICT_TRANS_TABLES")
+	got, err = run(explicitProc, NewExplicitCast)
+	require.NoError(t, err)
+	require.Equal(t, "123", got)
+	require.Equal(t, []uint16{moerr.ER_TRUNCATED_WRONG_VALUE}, explicitWarnings.codes)
+}
+
+func TestMultibyteAssignmentErrorUsesCharacterLength(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+		return "STRICT_TRANS_TABLES", nil
+	})
+	_, err := castTextToVarchar3(t, proc, "你好世界")
+	require.Error(t, err)
+	require.True(t, strings.Contains(err.Error(), "Src length 4"))
+	require.False(t, strings.Contains(err.Error(), "Src length 12"))
 }
 
 func castGeometryToVarchar(

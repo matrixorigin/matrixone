@@ -658,26 +658,29 @@ func inlineGeneratedColExpr(expr *plan.Expr, colIdxToProjPos map[int32]int32, pr
 	}
 }
 
-// applyGenColInsertIgnoreCast downgrades a generated CHAR/VARCHAR column's
-// cast_assign wrapper to a lenient truncating cast when the statement is
-// INSERT IGNORE, so an over-length stored generated value is truncated (with a
-// warning) instead of raising ER_DATA_TOO_LONG (1406) — matching how ordinary
-// columns behave under INSERT IGNORE (forceAssignmentCastExprWithIgnore). For
-// non-IGNORE inserts, or expressions not wrapped in cast_assign, the expression
-// is returned unchanged.
-func (builder *QueryBuilder) applyGenColInsertIgnoreCast(expr *plan.Expr) *plan.Expr {
-	if !builder.isInsertIgnore || expr == nil {
+// applyGeneratedColumnAssignmentCast upgrades persisted legacy cast_strict
+// wrappers to cast_assign and uses cast_ignore for INSERT/UPDATE IGNORE. This
+// keeps generated-column assignment semantics compatible across catalog
+// versions without rewriting catalog rows.
+func (builder *QueryBuilder) applyGeneratedColumnAssignmentCast(expr *plan.Expr, isIgnore bool) *plan.Expr {
+	if expr == nil {
 		return expr
 	}
 	f := expr.GetF()
-	if f == nil || f.Func == nil || f.Func.ObjName != "cast_assign" || len(f.Args) == 0 {
+	if f == nil || f.Func == nil ||
+		(f.Func.ObjName != "cast_assign" && f.Func.ObjName != "cast_strict") ||
+		len(f.Args) == 0 {
 		return expr
 	}
-	lenient, err := forceCastExprWithName(builder.GetContext(), f.Args[0], expr.Typ, "cast")
+	funcName := "cast_assign"
+	if isIgnore {
+		funcName = "cast_ignore"
+	}
+	assignmentCast, err := forceCastExprWithName(builder.GetContext(), f.Args[0], expr.Typ, funcName)
 	if err != nil {
 		return expr
 	}
-	return lenient
+	return assignmentCast
 }
 
 // substituteColRefsInExpr replaces ColRef(0, colIdx) in a generated column expression

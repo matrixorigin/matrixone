@@ -291,6 +291,7 @@ func TestNewErrCastWidthExceeded(t *testing.T) {
 
 	require.Equal(t, ErrCastWidthExceeded, err.ErrorCode())
 	require.Equal(t, uint16(ER_DATA_TOO_LONG), err.MySQLCode())
+	require.Equal(t, "22001", err.SqlState())
 	require.True(t, IsMoErrCode(err, ErrCastWidthExceeded))
 	// Bare "%s" template: the diagnostic message is carried verbatim.
 	require.Equal(t,

@@ -2774,6 +2774,36 @@ var supportedOperators = []FuncNew{
 		},
 	},
 
+	// operator `cast_ignore`
+	// Used by INSERT IGNORE and UPDATE IGNORE assignment paths. It always
+	// truncates over-width CHAR/VARCHAR values and records warning 1265.
+	{
+		functionId: CAST_IGNORE,
+		class:      plan.Function_STRICT,
+		layout:     CAST_EXPRESSION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			if len(inputs) == 2 {
+				if IfTypeCastSupported(inputs[0].Oid, inputs[1].Oid) {
+					return newCheckResultWithSuccess(0)
+				}
+			}
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		},
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				volatile:   true,
+				retType: func(parameters []types.Type) types.Type {
+					return parameters[1]
+				},
+				newOp: func() executeLogicOfOverload {
+					return NewAssignIgnoreCast
+				},
+			},
+		},
+	},
+
 	// operator `bit_cast`
 	{
 		functionId: BIT_CAST,

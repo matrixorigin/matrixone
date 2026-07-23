@@ -344,7 +344,10 @@ func (resper *MysqlResp) respStreamResultRow(ses *Session,
 			return
 		}
 
-		err = resper.mysqlRrWr.WriteEOFOrOK(0, checkMoreResultSet(ses.getStatusAfterTxnIsEnded(), execCtx.isLastStmt))
+		err = resper.mysqlRrWr.WriteEOFOrOK(
+			ses.WarningCount(),
+			checkMoreResultSet(ses.getStatusAfterTxnIsEnded(), execCtx.isLastStmt),
+		)
 		if err != nil {
 			return
 		}
@@ -372,14 +375,20 @@ func (resper *MysqlResp) respStreamResultRow(ses *Session,
 			return
 		}
 
-		err = resper.mysqlRrWr.WriteEOFOrOK(0, checkMoreResultSet(ses.getStatusAfterTxnIsEnded(), execCtx.isLastStmt))
+		err = resper.mysqlRrWr.WriteEOFOrOK(
+			ses.WarningCount(),
+			checkMoreResultSet(ses.getStatusAfterTxnIsEnded(), execCtx.isLastStmt),
+		)
 		if err != nil {
 			return
 		}
 
 		//--------------------------------------------------------------------------------------------------------------
 	default:
-		err = resper.mysqlRrWr.WriteEOFOrOK(0, checkMoreResultSet(ses.getStatusAfterTxnIsEnded(), execCtx.isLastStmt))
+		err = resper.mysqlRrWr.WriteEOFOrOK(
+			ses.WarningCount(),
+			checkMoreResultSet(ses.getStatusAfterTxnIsEnded(), execCtx.isLastStmt),
+		)
 		if err != nil {
 			return
 		}

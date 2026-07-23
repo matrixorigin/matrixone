@@ -1065,13 +1065,17 @@ func forceAssignmentCastExpr(ctx context.Context, expr *Expr, targetType Type) (
 
 // forceAssignmentCastExprWithIgnore builds the assignment cast for a DML write.
 // For CHAR/VARCHAR targets it normally uses cast_assign (sql_mode-gated width
-// check). When isIgnore is true (INSERT IGNORE), over-length writes are
-// downgraded to truncation regardless of sql_mode, so the generic lenient cast
-// is used instead, matching MySQL's INSERT IGNORE behavior.
+// check). When isIgnore is true (INSERT IGNORE or UPDATE IGNORE), over-length
+// writes are downgraded to truncation regardless of sql_mode and warning 1265
+// is recorded.
 func forceAssignmentCastExprWithIgnore(ctx context.Context, expr *Expr, targetType Type, isIgnore bool) (*Expr, error) {
 	funcName := "cast"
-	if !isIgnore && (targetType.Id == int32(types.T_char) || targetType.Id == int32(types.T_varchar)) {
-		funcName = "cast_assign"
+	if targetType.Id == int32(types.T_char) || targetType.Id == int32(types.T_varchar) {
+		if isIgnore {
+			funcName = "cast_ignore"
+		} else {
+			funcName = "cast_assign"
+		}
 	}
 	return forceCastExprWithName(ctx, expr, targetType, funcName)
 }

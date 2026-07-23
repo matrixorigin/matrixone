@@ -1032,13 +1032,13 @@ func doShowErrors(ses *Session, execCtx *ExecCtx) error {
 	mrs.AddColumn(CodeCol)
 	mrs.AddColumn(MsgCol)
 
-	info := ses.GetErrInfo()
+	level, codes, msgs := ses.showConditionSnapshot(execCtx.stmt)
 
-	for i := info.length() - 1; i >= 0; i-- {
+	for i := len(codes) - 1; i >= 0; i-- {
 		row := make([]interface{}, 3)
-		row[0] = "Error"
-		row[1] = int16(info.codes[i])
-		row[2] = info.msgs[i]
+		row[0] = level
+		row[1] = int16(codes[i])
+		row[2] = msgs[i]
 		mrs.AddRow(row)
 	}
 	return trySaveQueryResult(execCtx.reqCtx, ses, mrs)
@@ -3692,6 +3692,8 @@ func executeStmtWithResponse(ses *Session,
 	ses.SetQueryInExecute(true)
 	defer ses.SetQueryEnd(time.Now())
 	defer ses.SetQueryInProgress(false)
+
+	ses.prepareWarningsForStatement(execCtx.stmt)
 
 	err = executeStmtWithTxn(ses, nil, execCtx)
 	if err != nil {

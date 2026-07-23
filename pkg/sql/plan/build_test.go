@@ -1525,6 +1525,55 @@ func TestUpdateIgnoreUsesIgnoreDedupAction(t *testing.T) {
 	require.True(t, found, "UPDATE IGNORE of a primary key should include a DEDUP join")
 }
 
+func TestUpdateIgnoreUsesAssignmentIgnoreCast(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	logicPlan, err := runOneStmt(mock, t,
+		"UPDATE IGNORE NATION SET N_NAME = CAST('abcdefghijklmnopqrstuvwxyz' AS TEXT)")
+	require.NoError(t, err)
+	require.True(t,
+		planHasTextToVarcharCastWithNameAndWidth(logicPlan, "cast_ignore", 25),
+		"UPDATE IGNORE assignment should use cast_ignore",
+	)
+
+	logicPlan, err = runOneStmt(mock, t,
+		"UPDATE NATION SET N_NAME = CAST('abcdefghijklmnopqrstuvwxyz' AS TEXT)")
+	require.NoError(t, err)
+	require.True(t,
+		planHasTextToVarcharCastWithNameAndWidth(logicPlan, "cast_assign", 25),
+		"ordinary UPDATE assignment should use cast_assign",
+	)
+}
+
+func TestLegacyUpdateIgnoreUsesAssignmentIgnoreCast(t *testing.T) {
+	newBuilder := func() (*QueryBuilder, []*dmlPlanCtx) {
+		builder := NewQueryBuilder(plan.Query_UPDATE, NewMockCompilerContext(true), false, true)
+		builder.qry.Nodes = append(builder.qry.Nodes, &plan.Node{
+			ProjectList: []*plan.Expr{{
+				Typ:  plan.Type{Id: int32(types.T_text)},
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{}},
+			}},
+		})
+		return builder, []*dmlPlanCtx{{
+			tableDef: &plan.TableDef{Cols: []*plan.ColDef{{
+				Name: "c",
+				Typ:  plan.Type{Id: int32(types.T_varchar), Width: 3},
+			}}},
+			updateColLength: 1,
+			updateColPosMap: map[string]int{
+				"c": 0,
+			},
+		}}
+	}
+
+	builder, planContexts := newBuilder()
+	require.NoError(t, rewriteUpdateQueryLastNode(builder, planContexts, 0, true))
+	require.Equal(t, "cast_ignore", builder.qry.Nodes[0].ProjectList[0].GetF().GetFunc().GetObjName())
+
+	builder, planContexts = newBuilder()
+	require.NoError(t, rewriteUpdateQueryLastNode(builder, planContexts, 0, false))
+	require.Equal(t, "cast_assign", builder.qry.Nodes[0].ProjectList[0].GetF().GetFunc().GetObjName())
+}
+
 func TestUpdateRecomputesCompositeClusterByKey(t *testing.T) {
 	testCases := []struct {
 		name             string

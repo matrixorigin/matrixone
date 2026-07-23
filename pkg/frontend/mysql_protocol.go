@@ -3811,7 +3811,7 @@ func (mp *MysqlProtocolImpl) sendResultSet(ctx context.Context, set ResultSet, c
 
 	//If the CLIENT_DEPRECATE_EOF client capabilities flag is set, OK_Packet; else EOF_Packet.
 	if mp.capability&CLIENT_DEPRECATE_EOF != 0 {
-		err := mp.sendOKPacketWithEof(0, 0, extendStatus(status), 0, "")
+		err := mp.sendOKPacketWithEof(0, 0, extendStatus(status), warnings, "")
 		if err != nil {
 			return err
 		}

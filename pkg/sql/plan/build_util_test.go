@@ -571,3 +571,23 @@ func TestBuildGeneratedExprUsesAssignForCharVarchar(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "cast", genInt.Expr.GetF().GetFunc().GetObjName())
 }
+
+func TestApplyGeneratedColumnAssignmentCastCompatibility(t *testing.T) {
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	source := &Expr{Typ: plan.Type{Id: int32(types.T_text)}}
+	target := plan.Type{Id: int32(types.T_varchar), Width: 3}
+
+	for _, storedName := range []string{"cast_strict", "cast_assign"} {
+		stored, err := forceCastExprWithName(context.Background(), DeepCopyExpr(source), target, storedName)
+		require.NoError(t, err)
+
+		normal := builder.applyGeneratedColumnAssignmentCast(DeepCopyExpr(stored), false)
+		require.Equal(t, "cast_assign", normal.GetF().GetFunc().GetObjName())
+
+		ignore := builder.applyGeneratedColumnAssignmentCast(DeepCopyExpr(stored), true)
+		require.Equal(t, "cast_ignore", ignore.GetF().GetFunc().GetObjName())
+	}
+
+	require.Nil(t, builder.applyGeneratedColumnAssignmentCast(nil, false))
+	require.Same(t, source, builder.applyGeneratedColumnAssignmentCast(source, false))
+}
