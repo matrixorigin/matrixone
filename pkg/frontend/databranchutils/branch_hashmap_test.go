@@ -17,6 +17,7 @@ package databranchutils
 import (
 	"fmt"
 	"math/rand"
+	"os"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -714,6 +715,52 @@ func TestBranchHashmapPutRejectsAllocationCompletedAfterClose(t *testing.T) {
 	}
 
 	require.NoError(t, bh.Close())
+	require.Zero(t, allocator.retainedBytes())
+}
+
+func TestBranchHashmapPutDoesNotSpillAfterClose(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	allocator := newBlockingNilFirstAllocator()
+	spillRoot := t.TempDir()
+	bh, err := NewBranchHashmap(
+		WithBranchHashmapAllocator(allocator),
+		WithBranchHashmapSpillRoot(spillRoot),
+	)
+	require.NoError(t, err)
+
+	key := buildInt64Vector(t, mp, []int64{1})
+	defer key.Free(mp)
+
+	putDone := make(chan error, 1)
+	go func() {
+		putDone <- bh.PutByVectors([]*vector.Vector{key}, []int{0})
+	}()
+
+	select {
+	case <-allocator.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("PutByVectors did not reach allocator")
+	}
+
+	require.NoError(t, bh.Close())
+	close(allocator.release)
+
+	select {
+	case err := <-putDone:
+		require.ErrorContains(t, err, "branchHashmap is closed")
+	case <-time.After(5 * time.Second):
+		t.Fatal("PutByVectors did not return after allocator was released")
+	}
+
+	entries, err := os.ReadDir(spillRoot)
+	require.NoError(t, err)
+	require.Empty(t, entries)
+	for _, shard := range bh.(*branchHashmap).shards {
+		require.Nil(t, shard.spill)
+		require.Empty(t, shard.spillDir)
+	}
 	require.Zero(t, allocator.retainedBytes())
 }
 
@@ -1815,11 +1862,13 @@ type limitedAllocator struct {
 }
 
 type blockingAllocator struct {
-	entered chan struct{}
-	release chan struct{}
-	once    sync.Once
-	mu      sync.Mutex
-	used    uint64
+	entered  chan struct{}
+	release  chan struct{}
+	once     sync.Once
+	mu       sync.Mutex
+	used     uint64
+	allocs   int
+	nilFirst bool
 }
 
 func newBlockingAllocator() *blockingAllocator {
@@ -1829,10 +1878,21 @@ func newBlockingAllocator() *blockingAllocator {
 	}
 }
 
+func newBlockingNilFirstAllocator() *blockingAllocator {
+	allocator := newBlockingAllocator()
+	allocator.nilFirst = true
+	return allocator
+}
+
 func (a *blockingAllocator) Allocate(size uint64, _ malloc.Hints) ([]byte, malloc.Deallocator, error) {
 	a.once.Do(func() { close(a.entered) })
 	<-a.release
 	a.mu.Lock()
+	a.allocs++
+	if a.nilFirst && a.allocs == 1 {
+		a.mu.Unlock()
+		return nil, nil, nil
+	}
 	a.used += size
 	a.mu.Unlock()
 	return make([]byte, int(size)), &blockingDeallocator{allocator: a, size: size}, nil
