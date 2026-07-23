@@ -15,6 +15,7 @@
 package aggexec
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 
@@ -338,7 +339,7 @@ func BenchmarkAggExecPaths(b *testing.B) {
 	})
 }
 
-func BenchmarkSumDecimal64FastHighCardinality(b *testing.B) {
+func BenchmarkSumDecimal64FastCardinality(b *testing.B) {
 	mp := mpool.MustNewZero()
 	defer func() {
 		if mp.CurrNB() != 0 {
@@ -346,31 +347,107 @@ func BenchmarkSumDecimal64FastHighCardinality(b *testing.B) {
 		}
 	}()
 
-	const rows = 4096
-	groups := make([]uint64, rows)
+	const rows = AggBatchSize
 	values := make([]types.Decimal64, rows)
-	for i := range groups {
-		groups[i] = uint64(i + 1)
+	for i := range values {
 		values[i] = types.Decimal64(i + 1)
 	}
 	vec := testutil.NewDecimal64Vector(
 		rows, types.New(types.T_decimal64, 15, 2), mp, false, nil, values)
 	defer vec.Free(mp)
-
-	exec := newSumDecimal64FastExec(
-		mp, true, AggIdOfSum, false, types.New(types.T_decimal64, 15, 2))
-	if err := exec.GroupGrow(rows); err != nil {
-		b.Fatal(err)
-	}
-	defer exec.Free()
 	vectors := []*vector.Vector{vec}
 
-	b.ReportAllocs()
-	b.ResetTimer()
-	for range b.N {
-		if err := exec.BatchFill(0, groups, vectors); err != nil {
-			b.Fatal(err)
+	cases := []struct {
+		name       string
+		groupCount int
+		groupAt    func(int) uint64
+	}{
+		{"Compact64", 64, func(i int) uint64 { return uint64(i%64 + 1) }},
+		{"Scattered64", 1 << 20, func(i int) uint64 {
+			return uint64((i%64)*(1<<14) + 1)
+		}},
+		{"Compact256", 256, func(i int) uint64 { return uint64(i%256 + 1) }},
+		{"Scattered256", 1 << 20, func(i int) uint64 {
+			return uint64((i%256)*(1<<12) + 1)
+		}},
+		{"Compact1024", 1024, func(i int) uint64 { return uint64(i%1024 + 1) }},
+		{"Compact" + strconv.Itoa(rows), rows, func(i int) uint64 { return uint64(i + 1) }},
+		{"Scattered" + strconv.Itoa(rows), 1 << 20, func(i int) uint64 {
+			return uint64((i*65537)&((1<<20)-1) + 1)
+		}},
+	}
+	for _, tc := range cases {
+		b.Run(tc.name, func(b *testing.B) {
+			groups := make([]uint64, rows)
+			for i := range groups {
+				groups[i] = tc.groupAt(i)
+			}
+			exec := newSumDecimal64FastExec(
+				mp, true, AggIdOfSum, false, types.New(types.T_decimal64, 15, 2))
+			if err := exec.GroupGrow(tc.groupCount); err != nil {
+				b.Fatal(err)
+			}
+			defer exec.Free()
+
+			b.ReportAllocs()
+			b.SetBytes(rows * 8)
+			b.ResetTimer()
+			for range b.N {
+				if err := exec.BatchFill(0, groups, vectors); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+func BenchmarkSumDecimal64FastBatchMerge(b *testing.B) {
+	mp := mpool.MustNewZero()
+	defer func() {
+		if mp.CurrNB() != 0 {
+			b.Fatalf("memory leak detected: %d bytes", mp.CurrNB())
 		}
+	}()
+
+	const rows = AggBatchSize
+	cases := []struct {
+		name       string
+		groupCount int
+		groupAt    func(int) uint64
+	}{
+		{"Compact", rows, func(i int) uint64 { return uint64(i + 1) }},
+		{"Scattered", 1 << 20, func(i int) uint64 {
+			return uint64((i*65537)&((1<<20)-1) + 1)
+		}},
+	}
+	for _, tc := range cases {
+		b.Run(tc.name, func(b *testing.B) {
+			groups := make([]uint64, rows)
+			for i := range groups {
+				groups[i] = tc.groupAt(i)
+			}
+			dst := newSumDecimal64FastExec(
+				mp, true, AggIdOfSum, false, types.New(types.T_decimal64, 15, 2))
+			src := newSumDecimal64FastExec(
+				mp, true, AggIdOfSum, false, types.New(types.T_decimal64, 15, 2))
+			if err := dst.GroupGrow(tc.groupCount); err != nil {
+				b.Fatal(err)
+			}
+			if err := src.GroupGrow(rows); err != nil {
+				b.Fatal(err)
+			}
+			defer dst.Free()
+			defer src.Free()
+
+			b.ReportAllocs()
+			b.SetBytes(rows * 8)
+			b.ResetTimer()
+			for range b.N {
+				if err := dst.BatchMerge(src, 0, groups); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
 	}
 }
 

@@ -224,17 +224,30 @@ func (exec *sumDecimal64FastExec) BatchMerge(next AggFuncExec, offset int, group
 		return exec.batchMergeArgs(&other.aggExec, offset, groups, true)
 	}
 
+	lastX1, lastX2 := -1, -1
+	var sums1, sums2 *[AggBatchSize]types.Decimal128
+	var cnts1, cnts2 []int64
 	for i, grp := range groups {
 		if grp == GroupNotMatched {
 			continue
 		}
 
-		x1, y1 := exec.getXY(grp - 1)
-		x2, y2 := other.getXY(uint64(offset + i))
-		sums1 := vector.MustFixedColNoTypeCheck[types.Decimal128](exec.state[x1].vecs[0])
-		sums2 := vector.MustFixedColNoTypeCheck[types.Decimal128](other.state[x2].vecs[0])
-		cnts1 := vector.MustFixedColNoTypeCheck[int64](exec.state[x1].vecs[1])
-		cnts2 := vector.MustFixedColNoTypeCheck[int64](other.state[x2].vecs[1])
+		g1 := grp - 1
+		g2 := uint64(offset + i)
+		x1 := int(g1 >> aggBatchSizeShift)
+		x2 := int(g2 >> aggBatchSizeShift)
+		if x1 != lastX1 {
+			lastX1 = x1
+			sums1 = chunkArr[types.Decimal128](exec.state[x1].vecs[0])
+			cnts1 = vector.MustFixedColNoTypeCheck[int64](exec.state[x1].vecs[1])
+		}
+		if x2 != lastX2 {
+			lastX2 = x2
+			sums2 = chunkArr[types.Decimal128](other.state[x2].vecs[0])
+			cnts2 = vector.MustFixedColNoTypeCheck[int64](other.state[x2].vecs[1])
+		}
+		y1 := g1 & aggBatchSizeMask
+		y2 := g2 & aggBatchSizeMask
 
 		sums1[y1] = sums1[y1].Add128Unchecked(sums2[y2])
 		cnts1[y1] += cnts2[y2]
