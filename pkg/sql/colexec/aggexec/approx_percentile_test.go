@@ -1174,3 +1174,23 @@ func TestQuantileSketchMPoolLifecycle(t *testing.T) {
 	require.Error(t, restored.UnmarshalBinary(encoded[:len(encoded)-1]))
 	require.Equal(t, beforeInvalid, mp.CurrNB(), "truncated unmarshal must release partially decoded levels")
 }
+
+func TestQuantileSketchMergeEmptyParityLevelIntoEmptyDestination(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
+
+	dst := newQuantileSketch[int64](mp, orderedCompare[int64])
+	src := newQuantileSketch[int64](mp, orderedCompare[int64])
+	defer dst.Free()
+	defer src.Free()
+
+	for value := range int64(2 * approxPercentileSketchCapacity) {
+		require.NoError(t, src.Add(value))
+	}
+	require.Empty(t, src.levels[0])
+	require.True(t, src.parity[0])
+
+	require.NoError(t, dst.Merge(src))
+	require.Equal(t, src.count, dst.count)
+	require.True(t, dst.hasValue)
+}

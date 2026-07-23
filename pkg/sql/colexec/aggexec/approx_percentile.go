@@ -109,6 +109,7 @@ func (s *quantileSketch[T]) Merge(other *quantileSketch[T]) error {
 		}
 	}
 	for level, values := range other.levels {
+		s.ensureLevel(level)
 		if err := s.appendValues(level, values); err != nil {
 			return err
 		}
