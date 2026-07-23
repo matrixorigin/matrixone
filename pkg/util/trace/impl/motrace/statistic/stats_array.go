@@ -15,10 +15,16 @@
 package statistic
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"math"
 	"strconv"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/util/resource"
 )
 
 type StatsArray [StatsArrayLength]float64
@@ -40,6 +46,7 @@ const (
 	StatsArrayVersion3 = 3 // ... + 1 elem: ConnType
 	StatsArrayVersion4 = 4 // ... + 2 elem: OutPacketCount, CU
 	StatsArrayVersion5 = 5 // ... + 1 elem: S3IOListCount, S3IODeleteCount
+	StatsArrayVersion6 = 6 // ... + 6 resource quality/byte/wait/retry fields
 
 	StatsArrayVersionLatest // same value as last variable StatsArrayVersion#
 )
@@ -56,6 +63,12 @@ const (
 	StatsArrayIndexCU              // index: 8, version: 4
 	StatsArrayIndexS3IOListCount   // index: 9, version: 5
 	StatsArrayIndexS3IODeleteCount // index: 10, version: 5
+	StatsArrayIndexQualityFlags    // index: 11, version: 6
+	StatsArrayIndexS3ReadBytes     // index: 12, version: 6
+	StatsArrayIndexS3WriteBytes    // index: 13, version: 6
+	StatsArrayIndexSpillBytes      // index: 14, version: 6
+	StatsArrayIndexTotalWaitNS     // index: 15, version: 6
+	StatsArrayIndexAttemptCount    // index: 16, version: 6
 
 	StatsArrayLength
 )
@@ -66,6 +79,7 @@ const (
 	StatsArrayLengthV3 = 7
 	StatsArrayLengthV4 = 9
 	StatsArrayLengthV5 = 11
+	StatsArrayLengthV6 = 17
 )
 
 type ConnType float64
@@ -95,6 +109,10 @@ func NewStatsArrayV3() *StatsArray {
 
 func NewStatsArrayV4() *StatsArray {
 	return NewStatsArray().WithVersion(StatsArrayVersion4)
+}
+
+func NewStatsArrayV6() *StatsArray {
+	return NewStatsArray().WithVersion(StatsArrayVersion6)
 }
 
 func (s *StatsArray) Init() *StatsArray {
@@ -157,6 +175,52 @@ func (s *StatsArray) GetS3IODeleteCount() float64 {
 	return s[StatsArrayIndexS3IODeleteCount]
 }
 
+func (s *StatsArray) GetQualityFlags() resource.QualityFlags {
+	if s.GetVersion() < StatsArrayVersion6 {
+		return 0
+	}
+	return resource.QualityFlags((*s)[StatsArrayIndexQualityFlags])
+}
+
+func (s *StatsArray) GetS3ReadBytes() float64 {
+	if s.GetVersion() < StatsArrayVersion6 {
+		return 0
+	}
+	return (*s)[StatsArrayIndexS3ReadBytes]
+}
+
+func (s *StatsArray) GetS3WriteBytes() float64 {
+	if s.GetVersion() < StatsArrayVersion6 {
+		return 0
+	}
+	return (*s)[StatsArrayIndexS3WriteBytes]
+}
+
+func (s *StatsArray) GetSpillBytes() float64 {
+	if s.GetVersion() < StatsArrayVersion6 {
+		return 0
+	}
+	return (*s)[StatsArrayIndexSpillBytes]
+}
+
+func (s *StatsArray) GetTotalWaitNS() float64 {
+	if s.GetVersion() < StatsArrayVersion6 {
+		return 0
+	}
+	return (*s)[StatsArrayIndexTotalWaitNS]
+}
+
+func (s *StatsArray) GetAttemptCount() float64 {
+	if s.GetVersion() < StatsArrayVersion6 {
+		return 0
+	}
+	return (*s)[StatsArrayIndexAttemptCount]
+}
+
+func (s *StatsArray) IsAggregated() bool {
+	return s.GetQualityFlags()&resource.QualityAggregated != 0
+}
+
 // WithVersion set the version array in StatsArray, please carefully to use.
 func (s *StatsArray) WithVersion(v float64) *StatsArray { (*s)[StatsArrayIndexVersion] = v; return s }
 func (s *StatsArray) WithTimeConsumed(v float64) *StatsArray {
@@ -181,6 +245,48 @@ func (s *StatsArray) WithS3IOListCount(v float64) *StatsArray {
 }
 func (s *StatsArray) WithS3IODeleteCount(v float64) *StatsArray {
 	(*s)[StatsArrayIndexS3IODeleteCount] = v
+	return s
+}
+
+func (s *StatsArray) WithQualityFlags(v resource.QualityFlags) *StatsArray {
+	if s.GetVersion() >= StatsArrayVersion6 {
+		(*s)[StatsArrayIndexQualityFlags] = float64(v)
+	}
+	return s
+}
+
+func (s *StatsArray) WithS3ReadBytes(v float64) *StatsArray {
+	if s.GetVersion() >= StatsArrayVersion6 {
+		(*s)[StatsArrayIndexS3ReadBytes] = v
+	}
+	return s
+}
+
+func (s *StatsArray) WithS3WriteBytes(v float64) *StatsArray {
+	if s.GetVersion() >= StatsArrayVersion6 {
+		(*s)[StatsArrayIndexS3WriteBytes] = v
+	}
+	return s
+}
+
+func (s *StatsArray) WithSpillBytes(v float64) *StatsArray {
+	if s.GetVersion() >= StatsArrayVersion6 {
+		(*s)[StatsArrayIndexSpillBytes] = v
+	}
+	return s
+}
+
+func (s *StatsArray) WithTotalWaitNS(v float64) *StatsArray {
+	if s.GetVersion() >= StatsArrayVersion6 {
+		(*s)[StatsArrayIndexTotalWaitNS] = v
+	}
+	return s
+}
+
+func (s *StatsArray) WithAttemptCount(v float64) *StatsArray {
+	if s.GetVersion() >= StatsArrayVersion6 {
+		(*s)[StatsArrayIndexAttemptCount] = v
+	}
 	return s
 }
 
@@ -210,6 +316,8 @@ func (s *StatsArray) WithCU(v float64) *StatsArray {
 
 func (s *StatsArray) ToJsonString() []byte {
 	switch s.GetVersion() {
+	case StatsArrayVersion0:
+		return StatsArrayToJsonString((*s)[:StatsArrayLengthV5])
 	case StatsArrayVersion1:
 		return StatsArrayToJsonString((*s)[:StatsArrayLengthV1])
 	case StatsArrayVersion2:
@@ -220,6 +328,8 @@ func (s *StatsArray) ToJsonString() []byte {
 		return StatsArrayToJsonString((*s)[:StatsArrayLengthV4])
 	case StatsArrayVersion5:
 		return StatsArrayToJsonString((*s)[:StatsArrayLengthV5])
+	case StatsArrayVersion6:
+		return StatsArrayToJsonString((*s)[:StatsArrayLengthV6])
 	default:
 		return StatsArrayToJsonString((*s)[:])
 	}
@@ -228,6 +338,23 @@ func (s *StatsArray) ToJsonString() []byte {
 // Add do add two stats array together
 // except for Element ConnType, which idx = StatsArrayIndexConnType, just keep s[StatsArrayIndexConnType] value.
 func (s *StatsArray) Add(delta *StatsArray) *StatsArray {
+	if s.GetVersion() >= StatsArrayVersion6 && delta.GetVersion() >= StatsArrayVersion6 {
+		return s.addV6(delta)
+	}
+	if s.GetVersion() < StatsArrayVersion6 && delta.GetVersion() >= StatsArrayVersion6 {
+		// A legacy memory value is a statement-level sum, not a physical
+		// memory-domain peak.  Promote it with that value deliberately omitted,
+		// then merge the genuine v6 operand.
+		legacy := *s
+		s.promoteLegacy(legacy)
+		return s.addV6(delta)
+	}
+	if s.GetVersion() >= StatsArrayVersion6 && delta.GetVersion() < StatsArrayVersion6 {
+		// The legacy operand contributes all compatible counters, but its legacy
+		// memory value must never become a v6 peak.
+		s.WithQualityFlags(s.GetQualityFlags() | resource.QualityPartial | resource.QualityMissingMemoryDomain | resource.QualityAggregated)
+		return s.addV6WithoutMemory(delta)
+	}
 	dstLen := len(*delta)
 	if len(*s) < len(*delta) {
 		dstLen = len(*s)
@@ -239,6 +366,200 @@ func (s *StatsArray) Add(delta *StatsArray) *StatsArray {
 		(*s)[idx] += (*delta)[idx]
 	}
 	return s
+}
+
+// promoteLegacy changes a v0-v5 receiver to v6 while retaining only fields whose
+// meaning is unchanged between the schemas.  The caller supplies a copy so
+// that promotion is safe even when the source aliases the receiver.
+func (s *StatsArray) promoteLegacy(legacy StatsArray) {
+	*s = StatsArray{}
+	(*s)[StatsArrayIndexVersion] = StatsArrayVersion6
+	for idx := StatsArrayIndexTimeConsumed; idx < StatsArrayLengthV5; idx++ {
+		if idx != StatsArrayIndexMemorySize {
+			(*s)[idx] = legacy[idx]
+		}
+	}
+	s.WithQualityFlags(resource.QualityPartial | resource.QualityMissingMemoryDomain | resource.QualityAggregated)
+}
+
+func (s *StatsArray) addV6(delta *StatsArray) *StatsArray {
+	return s.addV6Memory(delta, true)
+}
+
+func (s *StatsArray) addV6WithoutMemory(delta *StatsArray) *StatsArray {
+	return s.addV6Memory(delta, false)
+}
+
+func (s *StatsArray) addV6Memory(delta *StatsArray, deltaHasMemory bool) *StatsArray {
+	flags := s.GetQualityFlags() | delta.GetQualityFlags()
+	for _, idx := range [...]int{
+		StatsArrayIndexTimeConsumed,
+		StatsArrayIndexS3IOInputCount,
+		StatsArrayIndexS3IOOutputCount,
+		StatsArrayIndexOutTrafficBytes,
+		StatsArrayIndexOutPacketCnt,
+		StatsArrayIndexCU,
+		StatsArrayIndexS3IOListCount,
+		StatsArrayIndexS3IODeleteCount,
+		StatsArrayIndexS3ReadBytes,
+		StatsArrayIndexS3WriteBytes,
+		StatsArrayIndexSpillBytes,
+		StatsArrayIndexTotalWaitNS,
+		StatsArrayIndexAttemptCount,
+	} {
+		(*s)[idx] += (*delta)[idx]
+		if idx != StatsArrayIndexCU && (*s)[idx] > float64(maxExactFloatInteger) {
+			flags |= resource.QualityProjectionOverflow
+		}
+	}
+	if deltaHasMemory && (*delta)[StatsArrayIndexMemorySize] > (*s)[StatsArrayIndexMemorySize] {
+		(*s)[StatsArrayIndexMemorySize] = (*delta)[StatsArrayIndexMemorySize]
+	}
+	if s.GetConnType() == float64(ConnTypeUnknown) {
+		(*s)[StatsArrayIndexConnType] = (*delta)[StatsArrayIndexConnType]
+	} else if delta.GetConnType() != float64(ConnTypeUnknown) && s.GetConnType() != delta.GetConnType() {
+		flags |= resource.QualityInvariantFailure
+	}
+	s.WithQualityFlags(flags)
+	return s
+}
+
+// DecodeStatsArray validates and decodes every statement-stat schema emitted
+// by MatrixOne. In particular, it rejects malformed JSON, non-arrays,
+// non-finite numbers, unsupported versions, and version/length mismatches
+// before exposing a StatsArray to aggregation.
+func DecodeStatsArray(data []byte) (StatsArray, error) {
+	var rawValues []json.RawMessage
+	if err := json.Unmarshal(data, &rawValues); err != nil {
+		return StatsArray{}, moerr.NewInvalidInputNoCtxf("decode stats array: %v", err)
+	}
+	if rawValues == nil {
+		return StatsArray{}, moerr.NewInvalidInputNoCtx("decode stats array: expected JSON array")
+	}
+	if len(rawValues) == 0 {
+		return StatsArray{}, moerr.NewInvalidInputNoCtx("decode stats array: empty array")
+	}
+	values := make([]float64, len(rawValues))
+	for idx, raw := range rawValues {
+		if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+			return StatsArray{}, moerr.NewInvalidInputNoCtxf("decode stats array: null value at index %d", idx)
+		}
+		if err := json.Unmarshal(raw, &values[idx]); err != nil {
+			return StatsArray{}, moerr.NewInvalidInputNoCtxf("decode stats array: value at index %d: %v", idx, err)
+		}
+		value := values[idx]
+		if math.IsNaN(value) || math.IsInf(value, 0) {
+			return StatsArray{}, moerr.NewInvalidInputNoCtxf("decode stats array: non-finite value at index %d", idx)
+		}
+	}
+	version := values[StatsArrayIndexVersion]
+	if version != math.Trunc(version) {
+		return StatsArray{}, moerr.NewInvalidInputNoCtxf("decode stats array: version %v is not integral", version)
+	}
+	var wantLen int
+	switch int(version) {
+	case StatsArrayVersion0:
+		wantLen = StatsArrayLengthV5
+	case StatsArrayVersion1:
+		wantLen = StatsArrayLengthV1
+	case StatsArrayVersion2:
+		wantLen = StatsArrayLengthV2
+	case StatsArrayVersion3:
+		wantLen = StatsArrayLengthV3
+	case StatsArrayVersion4:
+		wantLen = StatsArrayLengthV4
+	case StatsArrayVersion5:
+		wantLen = StatsArrayLengthV5
+	case StatsArrayVersion6:
+		wantLen = StatsArrayLengthV6
+	default:
+		return StatsArray{}, moerr.NewInvalidInputNoCtxf("decode stats array: unsupported version %v", version)
+	}
+	if len(values) != wantLen {
+		return StatsArray{}, moerr.NewInvalidInputNoCtxf("decode stats array: version %d requires %d values, got %d", int(version), wantLen, len(values))
+	}
+	var result StatsArray
+	copy(result[:], values)
+	return result, nil
+}
+
+const maxExactFloatInteger = uint64(1 << 53)
+
+// FromResourceSummary is the single StatsArray v6 projection. CU is supplied
+// by the caller because pricing remains downstream of resource accounting.
+func FromResourceSummary(summary resource.StatementResourceSummary, cu float64) StatsArray {
+	flags := summary.Quality
+	totalWait, waitFlags := summary.Usage.TotalWaitNS()
+	flags |= waitFlags
+	getAndHead := projectionAdd(
+		summary.Usage.S3Requests[resource.S3Head],
+		summary.Usage.S3Requests[resource.S3Get],
+		&flags,
+	)
+	deleteAll := projectionAdd(
+		summary.Usage.S3Requests[resource.S3Delete],
+		summary.Usage.S3Requests[resource.S3DeleteMulti],
+		&flags,
+	)
+	values := [...]uint64{
+		summary.Usage.ExclusiveActiveNS,
+		summary.Memory.MaxDomainPeakLiveBytes,
+		summary.Usage.S3Requests[resource.S3Put],
+		getAndHead,
+		summary.Usage.ClientEgressBytes,
+		summary.OutputPacketCount,
+		summary.Usage.S3Requests[resource.S3List],
+		deleteAll,
+		summary.Usage.S3ReadBytes,
+		summary.Usage.S3WriteBytes,
+		summary.Usage.SpillBytes,
+		totalWait,
+		summary.AttemptCount,
+	}
+	for _, value := range values {
+		if value > maxExactFloatInteger {
+			flags |= resource.QualityProjectionOverflow
+			break
+		}
+	}
+
+	stats := NewStatsArrayV6()
+	stats.WithTimeConsumed(float64(summary.Usage.ExclusiveActiveNS)).
+		WithMemorySize(float64(summary.Memory.MaxDomainPeakLiveBytes)).
+		WithS3IOInputCount(float64(summary.Usage.S3Requests[resource.S3Put])).
+		WithS3IOOutputCount(float64(getAndHead)).
+		WithOutTrafficBytes(float64(summary.Usage.ClientEgressBytes)).
+		WithConnType(resourceConnType(summary.ConnType)).
+		WithOutPacketCount(float64(summary.OutputPacketCount)).
+		WithCU(cu).
+		WithS3IOListCount(float64(summary.Usage.S3Requests[resource.S3List])).
+		WithS3IODeleteCount(float64(deleteAll)).
+		WithQualityFlags(flags).
+		WithS3ReadBytes(float64(summary.Usage.S3ReadBytes)).
+		WithS3WriteBytes(float64(summary.Usage.S3WriteBytes)).
+		WithSpillBytes(float64(summary.Usage.SpillBytes)).
+		WithTotalWaitNS(float64(totalWait)).
+		WithAttemptCount(float64(summary.AttemptCount))
+	return *stats
+}
+
+func projectionAdd(a, b uint64, flags *resource.QualityFlags) uint64 {
+	if math.MaxUint64-a < b {
+		*flags |= resource.QualityInvariantFailure | resource.QualityProjectionOverflow
+		return math.MaxUint64
+	}
+	return a + b
+}
+
+func resourceConnType(conn resource.ConnType) ConnType {
+	switch conn {
+	case resource.ConnInternal:
+		return ConnTypeInternal
+	case resource.ConnExternal:
+		return ConnTypeExternal
+	default:
+		return ConnTypeUnknown
+	}
 }
 
 // StatsArrayToJsonString return json arr format
@@ -283,6 +604,8 @@ var DefaultStatsArrayJsonString = initStatsArray.ToJsonString()
 type statsInfoKey struct{}
 
 type StatsInfo struct {
+	resourceClaimed uint32
+
 	ParseStage struct {
 		ParseDuration  time.Duration `json:"ParseDuration"`
 		ParseStartTime time.Time     `json:"ParseStartTime"`
@@ -307,6 +630,7 @@ type StatsInfo struct {
 		CompileStartTime      time.Time     `json:"CompileStartTime"`
 		CompileS3Request      S3Request     `json:"CompileS3Request"`
 		CompileExpandRangesS3 S3Request     `json:"CompileExpandRangesS3"`
+		CompileIOConsumption  int64         `json:"CompileIOConsumption"`
 		// It belongs to independent statistics, which occurs during the `CompileQuery` stage, only for analysis reference.
 		CompileTableScanDuration int64 `json:"CompileTableScanDuration"` // unit: ns
 	}
@@ -587,6 +911,13 @@ func (stats *StatsInfo) AddCompileS3Request(sreq S3Request) {
 	atomic.AddInt64(&stats.CompileStage.CompileS3Request.Get, sreq.Get)
 	atomic.AddInt64(&stats.CompileStage.CompileS3Request.Delete, sreq.Delete)
 	atomic.AddInt64(&stats.CompileStage.CompileS3Request.DeleteMul, sreq.DeleteMul)
+}
+
+func (stats *StatsInfo) AddCompileIOConsumption(d time.Duration) {
+	if stats == nil {
+		return
+	}
+	atomic.AddInt64(&stats.CompileStage.CompileIOConsumption, int64(d))
 }
 
 // CompileExpandRangesS3Request
