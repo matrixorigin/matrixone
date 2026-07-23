@@ -36,6 +36,48 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
+type rootSQLCompilerContext struct {
+	*MockCompilerContext
+	rootSQL string
+	calls   int
+}
+
+func (c *rootSQLCompilerContext) GetRootSql() string {
+	c.calls++
+	return c.rootSQL
+}
+
+func TestGenViewTableDefCapturesRootSQLOnce(t *testing.T) {
+	const rootSQL = "create view v as select 1"
+	ctx := &rootSQLCompilerContext{
+		MockCompilerContext: NewMockCompilerContext(false),
+		rootSQL:             rootSQL,
+	}
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, rootSQL, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	p, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+	require.Equal(t, 1, ctx.calls)
+	tableDef := p.GetDdl().GetCreateView().GetTableDef()
+	require.NotNil(t, tableDef)
+
+	var viewData ViewData
+	require.NoError(t, json.Unmarshal([]byte(tableDef.GetViewSql().GetView()), &viewData))
+	require.Equal(t, rootSQL, viewData.Stmt)
+
+	var createSQL string
+	for _, def := range tableDef.GetDefs() {
+		for _, property := range def.GetProperties().GetProperties() {
+			if property.GetKey() == catalog.SystemRelAttr_CreateSQL {
+				createSQL = property.GetValue()
+			}
+		}
+	}
+	require.Equal(t, rootSQL, createSQL)
+}
+
 func TestBuildAlterView(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()

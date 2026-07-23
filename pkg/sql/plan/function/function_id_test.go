@@ -602,11 +602,12 @@ var predefinedFunids = map[int]int{
 	INTERNAL_JSON_ORDERING_PARAM:  546,
 	JSON_MERGE_PATCH:              547,
 	JSON_MERGE_PRESERVE:           548,
-	CAST_ASSIGN:                   549,
-	CAST_IGNORE:                   550,
+	JSON_OVERLAPS:                 549,
+	CAST_ASSIGN:                   550,
+	CAST_IGNORE:                   551,
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER: 551,
+	FUNCTION_END_NUMBER: 552,
 }
 
 func Test_funids(t *testing.T) {
