@@ -481,6 +481,9 @@ func finishStatementAccounting(ctx context.Context, ses FeSession, err error) {
 	if ses.IsDerivedStmt() && ses.GetStmtInfo() == nil && resource.RootFromContext(ctx) != nil {
 		return
 	}
+	if concrete, ok := ses.(*Session); ok {
+		concrete.rotateResponseOutputWait(ctx)
+	}
 	var outBytes, outPacket int64
 	switch resper := ses.GetResponser().(type) {
 	case *MysqlResp:
@@ -506,6 +509,50 @@ func (ses *Session) beginResponseAccounting() {
 	ses.responseAccounting = true
 	ses.pendingStatementFailed = false
 	ses.pendingStatementError = nil
+	ses.installResponseOutputWaitTracker(new(responseOutputWaitTracker))
+}
+
+type responseOutputWaitTrackerInstaller interface {
+	setResponseOutputWaitTracker(*responseOutputWaitTracker)
+}
+
+func (ses *Session) installResponseOutputWaitTracker(tracker *responseOutputWaitTracker) {
+	ses.responseOutputWait = tracker
+	if resper, ok := ses.GetResponser().(*MysqlResp); ok {
+		if installer, ok := resper.mysqlRrWr.(responseOutputWaitTrackerInstaller); ok {
+			installer.setResponseOutputWaitTracker(tracker)
+		}
+	}
+}
+
+func (ses *Session) rotateResponseOutputWait(ctx context.Context) {
+	tracker := ses.responseOutputWait
+	var next *responseOutputWaitTracker
+	if ses.responseAccounting {
+		next = new(responseOutputWaitTracker)
+	}
+	ses.installResponseOutputWaitTracker(next)
+	if tracker == nil {
+		return
+	}
+	totalNS := tracker.totalNS.Load()
+	operatorNS := tracker.operatorNS.Load()
+	root := resource.RootFromContext(ctx)
+	if totalNS < 0 || operatorNS < 0 || operatorNS > totalNS {
+		if root != nil {
+			root.AddLocal(resource.Delta{Quality: resource.QualityInvariantFailure})
+		}
+		return
+	}
+	// Immediate writes inside Output.Call are already classified by its
+	// analyzer and subtracted from active time. Add only writes that happened
+	// later (buffer flush, EOF/OK, or an error response) at the statement root.
+	unclassifiedNS := totalNS - operatorNS
+	if unclassifiedNS > 0 && root != nil {
+		var usage resource.Usage
+		usage.WaitNS[resource.WaitOutput] = uint64(unclassifiedNS)
+		root.MergeExecution(resource.ExecutionSummary{Usage: usage})
+	}
 }
 
 func (ses *Session) deferStatementCompletion(err error) bool {

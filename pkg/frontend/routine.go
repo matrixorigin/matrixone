@@ -317,9 +317,10 @@ func (rt *Routine) handleRequest(req *Request) error {
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			if responseAccountingOpen {
+				accountingCtx := requestFinalizationContext(&execCtx, tenantCtx)
 				ses.finishResponseAccounting(
-					tenantCtx,
-					moerr.ConvertPanicError(tenantCtx, recovered),
+					accountingCtx,
+					moerr.ConvertPanicError(accountingCtx, recovered),
 					true,
 				)
 			}
@@ -363,7 +364,11 @@ func (rt *Routine) handleRequest(req *Request) error {
 			responseErr = execErr
 		}
 	}
-	ses.finishResponseAccounting(tenantCtx, responseErr, responseFailed)
+	ses.finishResponseAccounting(
+		requestFinalizationContext(&execCtx, tenantCtx),
+		responseErr,
+		responseFailed,
+	)
 	responseAccountingOpen = false
 
 	ses.Debugf(tenantCtx, "the time of handling the request %s", time.Since(reqBegin).String())
@@ -407,6 +412,13 @@ func (rt *Routine) handleRequest(req *Request) error {
 	}
 
 	return err
+}
+
+func requestFinalizationContext(execCtx *ExecCtx, fallback context.Context) context.Context {
+	if execCtx != nil && execCtx.reqCtx != nil {
+		return execCtx.reqCtx
+	}
+	return fallback
 }
 
 // killQuery if there is a running query, just cancel it.

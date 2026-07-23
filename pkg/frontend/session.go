@@ -179,6 +179,7 @@ type Session struct {
 	responseAccounting     bool
 	pendingStatementFailed bool
 	pendingStatementError  error
+	responseOutputWait     *responseOutputWaitTracker
 
 	ast tree.Statement
 

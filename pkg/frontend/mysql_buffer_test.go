@@ -209,20 +209,37 @@ func TestConnMeasuresOnlyPhysicalOutputWrite(t *testing.T) {
 	assert.NoError(t, err)
 	defer conn.Close()
 
+	tracker := new(responseOutputWaitTracker)
+	conn.setResponseOutputWaitTracker(tracker)
 	counter := new(perfcounter.CounterSet)
 	err = conn.withOutputCounter(counter, func() error {
 		return conn.WriteToConn([]byte("physical-write"))
 	})
 	assert.ErrorIs(t, err, io.ErrUnexpectedEOF)
 	assert.Positive(t, counter.ProtocolOutputWaitNS.Load())
+	assert.Equal(t, counter.ProtocolOutputWaitNS.Load(), tracker.totalNS.Load())
+	assert.Equal(t, tracker.totalNS.Load(), tracker.operatorNS.Load())
 	assert.Nil(t, conn.outputCounter.Load())
+	assert.Same(t, tracker, conn.responseOutputWait.Load())
+	conn.setResponseOutputWaitTracker(nil)
+}
 
-	outer := new(perfcounter.CounterSet)
-	conn.outputCounter.Store(outer)
-	err = conn.withOutputCounter(counter, func() error { return assert.AnError })
-	assert.ErrorIs(t, err, assert.AnError)
-	assert.Same(t, outer, conn.outputCounter.Load())
-	conn.outputCounter.Store(nil)
+func TestConnMeasuresDelayedBufferedFlush(t *testing.T) {
+	underlying, conn := newTestConn(t, NewLeakCheckAllocator())
+	defer conn.Close()
+
+	tracker := new(responseOutputWaitTracker)
+	conn.setResponseOutputWaitTracker(tracker)
+	assert.NoError(t, conn.BeginPacket())
+	assert.NoError(t, conn.Append([]byte("buffered")...))
+	assert.NoError(t, conn.FinishedPacket())
+	assert.Empty(t, underlying.data)
+	assert.Zero(t, tracker.totalNS.Load())
+
+	assert.NoError(t, conn.Flush())
+	assert.NotEmpty(t, underlying.data)
+	assert.Positive(t, tracker.totalNS.Load())
+	assert.Zero(t, tracker.operatorNS.Load())
 }
 
 func TestMySQLProtocolRead(t *testing.T) {

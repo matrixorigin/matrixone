@@ -242,14 +242,27 @@ type Conn struct {
 	closeFunc             sync.Once
 	service               string
 	outputCounter         atomic.Pointer[perfcounter.CounterSet]
+	responseOutputWait    atomic.Pointer[responseOutputWaitTracker]
+}
+
+type responseOutputWaitTracker struct {
+	// totalNS covers every physical write in the statement response. operatorNS
+	// is the subset already published by an operator analyzer, so finalization
+	// can add only the delayed flush/terminal-response remainder.
+	totalNS    atomic.Int64
+	operatorNS atomic.Int64
 }
 
 func (c *Conn) withOutputCounter(counter *perfcounter.CounterSet, fn func() error) error {
 	// MysqlProtocolImpl serializes these scopes with its protocol mutex. The
-	// atomic pointer lets the lower socket-write boundary observe the owner.
+	// request tracker remains installed independently across buffered flushes.
 	previous := c.outputCounter.Swap(counter)
 	defer c.outputCounter.Store(previous)
 	return fn()
+}
+
+func (c *Conn) setResponseOutputWaitTracker(tracker *responseOutputWaitTracker) {
+	c.responseOutputWait.Store(tracker)
 }
 
 // SetTimeout updates the read timeout used by ReadFromConn.
@@ -930,10 +943,19 @@ func (c *Conn) Write(payload []byte) error {
 func (c *Conn) WriteToConn(buf []byte) error {
 	sendLength := 0
 	for sendLength < len(buf) {
+		tracker := c.responseOutputWait.Load()
+		operatorCounter := c.outputCounter.Load()
 		start := time.Now()
 		n, err := c.conn.Write(buf[sendLength:])
-		if counter := c.outputCounter.Load(); counter != nil {
-			counter.ProtocolOutputWaitNS.Add(time.Since(start).Nanoseconds())
+		elapsedNS := time.Since(start).Nanoseconds()
+		if tracker != nil {
+			tracker.totalNS.Add(elapsedNS)
+		}
+		if operatorCounter != nil {
+			operatorCounter.ProtocolOutputWaitNS.Add(elapsedNS)
+			if tracker != nil {
+				tracker.operatorNS.Add(elapsedNS)
+			}
 		}
 		if n > 0 {
 			sendLength += n

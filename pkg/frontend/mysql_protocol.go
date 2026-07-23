@@ -3568,6 +3568,10 @@ func (mp *MysqlProtocolImpl) UseConn(conn net.Conn) {
 	mp.tcpConn.UseConn(conn)
 }
 
+func (mp *MysqlProtocolImpl) setResponseOutputWaitTracker(tracker *responseOutputWaitTracker) {
+	mp.tcpConn.setResponseOutputWaitTracker(tracker)
+}
+
 func (mp *MysqlProtocolImpl) beginPacket() error {
 	err := mp.tcpConn.BeginPacket()
 	return err

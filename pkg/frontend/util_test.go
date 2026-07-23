@@ -65,9 +65,10 @@ func init() {
 
 type accountingMysqlWriter struct {
 	testMysqlWriter
-	bytes   int64
-	packets int64
-	calls   int
+	bytes         int64
+	packets       int64
+	calls         int
+	outputTracker *responseOutputWaitTracker
 }
 
 func (w *accountingMysqlWriter) CalculateOutTrafficBytes(reset bool) (int64, int64) {
@@ -80,6 +81,10 @@ func (w *accountingMysqlWriter) CalculateOutTrafficBytes(reset bool) (int64, int
 	return bytes, packets
 }
 
+func (w *accountingMysqlWriter) setResponseOutputWaitTracker(tracker *responseOutputWaitTracker) {
+	w.outputTracker = tracker
+}
+
 func TestFailedStatementSealsAfterTerminalResponse(t *testing.T) {
 	provider := motrace.GetTracerProvider()
 	wasEnabled := provider.IsEnable()
@@ -90,6 +95,10 @@ func TestFailedStatementSealsAfterTerminalResponse(t *testing.T) {
 	writer := &accountingMysqlWriter{}
 	ses := &Session{feSessionImpl: feSessionImpl{respr: NewMysqlResp(writer)}}
 	root := resource.NewRoot(resource.ConnExternal)
+	ctx = resource.ContextWithRoot(ctx, root)
+	statsInfo := statistic.NewStatsInfo()
+	statsInfo.ParseStage.ParseDuration = 7 * time.Nanosecond
+	ctx = statistic.ContextWithStatsInfo(ctx, statsInfo)
 	require.True(t, root.MergeExecution(resource.ExecutionSummary{
 		Usage:        resource.Usage{ExclusiveActiveNS: 10},
 		AttemptCount: 1,
@@ -112,6 +121,8 @@ func TestFailedStatementSealsAfterTerminalResponse(t *testing.T) {
 	writer.packets = 9
 	ses.beginResponseAccounting()
 	require.Equal(t, 1, writer.calls)
+	require.NotNil(t, writer.outputTracker)
+	writer.outputTracker.totalNS.Add(13)
 	execErr := moerr.NewInternalErrorNoCtx("failed")
 	require.True(t, ses.deferStatementCompletion(execErr))
 	require.Same(t, stmt, ses.GetStmtInfo())
@@ -121,9 +132,12 @@ func TestFailedStatementSealsAfterTerminalResponse(t *testing.T) {
 	ses.finishResponseAccounting(ctx, execErr, true)
 	require.Nil(t, ses.GetStmtInfo())
 	require.Equal(t, 2, writer.calls)
+	require.Nil(t, writer.outputTracker)
 	summary := root.PreResponseSummary()
+	require.Equal(t, uint64(17), summary.Usage.ExclusiveActiveNS)
 	require.Equal(t, uint64(17), summary.Usage.ClientEgressBytes)
 	require.Equal(t, uint64(1), summary.OutputPacketCount)
+	require.Equal(t, uint64(13), summary.Usage.WaitNS[resource.WaitOutput])
 	require.Equal(t, uint64(96), summary.Memory.MaxDomainPeakLiveBytes)
 	require.Zero(t, summary.MissingMemoryDomainCount)
 	withoutCU := statistic.FromResourceSummary(summary, 0)
@@ -136,7 +150,7 @@ func TestFailedStatementSealsAfterTerminalResponse(t *testing.T) {
 	var persisted statistic.StatsArray
 	require.NoError(t, json.Unmarshal(projected.ToJsonString(), &persisted))
 	require.Equal(t, float64(statistic.StatsArrayVersion6), persisted.GetVersion())
-	require.Equal(t, float64(10), persisted.GetTimeConsumed())
+	require.Equal(t, float64(17), persisted.GetTimeConsumed())
 	require.Equal(t, float64(96), persisted.GetMemorySize())
 	require.Equal(t, float64(17), persisted.GetOutTrafficBytes())
 	require.Equal(t, float64(1), persisted.GetOutPacketCount())
@@ -156,8 +170,37 @@ func TestStatementlessRequestConsumesResponseCounters(t *testing.T) {
 	ses.finishResponseAccounting(context.Background(), nil, false)
 
 	require.Equal(t, 2, writer.calls)
+	require.Nil(t, writer.outputTracker)
 	require.Zero(t, writer.bytes)
 	require.Zero(t, writer.packets)
+}
+
+func TestResponseOutputCounterRotatesAcrossStatements(t *testing.T) {
+	writer := &accountingMysqlWriter{}
+	ses := &Session{feSessionImpl: feSessionImpl{respr: NewMysqlResp(writer)}}
+	ses.beginResponseAccounting()
+
+	first := writer.outputTracker
+	require.NotNil(t, first)
+	first.totalNS.Add(11)
+	first.operatorNS.Add(3)
+	firstRoot := resource.NewRoot(resource.ConnExternal)
+	var operatorUsage resource.Usage
+	operatorUsage.WaitNS[resource.WaitOutput] = 3
+	require.True(t, firstRoot.MergeExecution(resource.ExecutionSummary{Usage: operatorUsage}))
+	firstCtx := resource.ContextWithRoot(context.Background(), firstRoot)
+	finishStatementAccounting(firstCtx, ses, nil)
+	require.Equal(t, uint64(11), firstRoot.PreResponseSummary().Usage.WaitNS[resource.WaitOutput])
+
+	second := writer.outputTracker
+	require.NotNil(t, second)
+	require.NotSame(t, first, second)
+	second.totalNS.Add(17)
+	secondRoot := resource.NewRoot(resource.ConnExternal)
+	secondCtx := resource.ContextWithRoot(context.Background(), secondRoot)
+	ses.finishResponseAccounting(secondCtx, nil, false)
+	require.Equal(t, uint64(17), secondRoot.PreResponseSummary().Usage.WaitNS[resource.WaitOutput])
+	require.Nil(t, writer.outputTracker)
 }
 
 func TestDerivedStatementLeavesParentResponseAccountingOpen(t *testing.T) {
