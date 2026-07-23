@@ -46,6 +46,20 @@ import (
 func WithWait(wait func(context.Context) error) Option {
 	return func(s *service) {
 		s.option.wait = wait
+		s.option.waitReady = nil
+	}
+}
+
+// WithWaitAndReady sets the readiness gate and a non-blocking readiness probe.
+// When ready returns true, wait must also be able to return nil immediately.
+// The probe keeps deadline-context allocation off an already-ready Lock path.
+func WithWaitAndReady(
+	wait func(context.Context) error,
+	ready func() bool,
+) Option {
+	return func(s *service) {
+		s.option.wait = wait
+		s.option.waitReady = ready
 	}
 }
 
@@ -92,6 +106,7 @@ type service struct {
 
 	option struct {
 		wait                      func(context.Context) error
+		waitReady                 func() bool
 		beforeRemoteLockBindCheck func()
 		serverOpts                []ServerOption
 	}
@@ -167,10 +182,6 @@ func (s *service) Lock(
 	if lockWaitDeadlineExpired(options, time.Now()) {
 		return pb.Result{}, ErrLockTimeout
 	}
-	lockCtx, cancelLockCtx := newLockWaitContext(ctx, options)
-	if cancelLockCtx != nil {
-		defer cancelLockCtx()
-	}
 
 	if !s.canLockOnServiceStatus(txnID, options, tableID, rows) {
 		return pb.Result{}, moerr.NewNewTxnInCNRollingRestart()
@@ -184,8 +195,8 @@ func (s *service) Lock(
 		v2.TxnAcquireLockDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
 
-	if err := s.wait(lockCtx); err != nil {
-		return pb.Result{}, lockWaitContextError(lockCtx, err)
+	if err := s.waitForLock(ctx, options); err != nil {
+		return pb.Result{}, err
 	}
 	// Service admission/bind work may consume the remaining budget after the
 	// entry check. Recheck before dispatch so a delayed hop cannot restart or
@@ -203,17 +214,16 @@ func (s *service) Lock(
 	}
 
 	txn := s.activeTxnHolder.getActiveTxn(txnID, true, "")
-	l, err := s.getLockTableWithCreateContext(
-		lockCtx,
-		options.Group,
+	l, err := s.getLockTableWithCreateForLock(
+		ctx,
 		tableID,
 		rows,
-		options.Sharding)
+		options)
 	if err != nil {
 		return pb.Result{}, err
 	}
-	if err := lockCtx.Err(); err != nil {
-		return pb.Result{}, lockWaitContextError(lockCtx, err)
+	if err := ctx.Err(); err != nil {
+		return pb.Result{}, err
 	}
 	// Binding can finish concurrently with the deadline. Recheck after it
 	// returns so an uncontended local table cannot admit an expired request.
@@ -841,6 +851,36 @@ func (s *service) getLockTableWithCreate(
 		sharding)
 }
 
+// getLockTableWithCreateForLock keeps context/timer allocation off the common
+// path where the lock-table bind is already cached. A cache miss may wait for
+// another allocation or the allocator RPC, so only that slow path derives a
+// context from the absolute lock-wait deadline.
+func (s *service) getLockTableWithCreateForLock(
+	ctx context.Context,
+	tableID uint64,
+	rows [][]byte,
+	options pb.LockOptions,
+) (lockTable, error) {
+	lookupTableID := tableID
+	if options.Sharding == pb.Sharding_ByRow {
+		lookupTableID = ShardingByRow(rows[0])
+	}
+	if v := s.tableGroups.get(options.Group, lookupTableID); v != nil {
+		return v, nil
+	}
+
+	lockCtx, cancel := newLockWaitContext(ctx, options)
+	if cancel != nil {
+		defer cancel()
+	}
+	return s.getLockTableWithCreateContext(
+		lockCtx,
+		options.Group,
+		tableID,
+		rows,
+		options.Sharding)
+}
+
 func (s *service) getLockTableWithCreateContext(
 	ctx context.Context,
 	group uint32,
@@ -1310,6 +1350,29 @@ func (s *service) wait(ctx context.Context) error {
 		return nil
 	}
 	return s.option.wait(ctx)
+}
+
+// waitForLock derives a deadline context only when the readiness gate may
+// block. Other lock operations keep their historical wait behavior.
+func (s *service) waitForLock(
+	ctx context.Context,
+	options pb.LockOptions,
+) error {
+	if s.option.wait == nil {
+		return nil
+	}
+	if s.option.waitReady != nil && s.option.waitReady() {
+		return nil
+	}
+
+	lockCtx, cancel := newLockWaitContext(ctx, options)
+	if cancel != nil {
+		defer cancel()
+	}
+	if err := s.option.wait(lockCtx); err != nil {
+		return lockWaitContextError(lockCtx, err)
+	}
+	return nil
 }
 
 type activeTxnHolder interface {
