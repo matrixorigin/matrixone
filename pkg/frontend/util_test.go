@@ -17,7 +17,6 @@ package frontend
 import (
 	"container/list"
 	"context"
-	"encoding/binary"
 	"fmt"
 	"math"
 	"sort"
@@ -52,7 +51,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -600,15 +599,7 @@ func TestGetExprValue(t *testing.T) {
 		table.EXPECT().TableDefs(gomock.Any()).Return(defs, nil).AnyTimes()
 		table.EXPECT().GetEngineType().Return(engine.Disttae).AnyTimes()
 
-		var ranges memoryengine.ShardIdSlice
-		id := make([]byte, 8)
-		binary.LittleEndian.PutUint64(id, 1)
-		ranges.Append(id)
-
-		relData := &memoryengine.MemRelationData{
-			Shards: ranges,
-		}
-		table.EXPECT().Ranges(gomock.Any(), gomock.Any()).Return(relData, nil).AnyTimes()
+		table.EXPECT().Ranges(gomock.Any(), gomock.Any()).Return(readutil.BuildEmptyRelData(), nil).AnyTimes()
 		//table.EXPECT().NewReader(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, moerr.NewInvalidInputNoCtx("new reader failed")).AnyTimes()
 
 		eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).Return(db, nil).AnyTimes()

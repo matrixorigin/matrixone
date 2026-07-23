@@ -173,7 +173,7 @@ func (insert *Insert) Prepare(proc *process.Process) error {
 			sinkerOpts = append(sinkerOpts, ioutil.WithPipelineFlush())
 		}
 		s3Writer := colexec.NewCNS3DataWriter(
-			proc.Mp(), fs, insert.InsertCtx.TableDef, -1, insert.isMemoryTable(),
+			proc.Mp(), fs, insert.InsertCtx.TableDef, -1, false,
 			sinkerOpts...)
 
 		insert.ctr.s3Writer = s3Writer
@@ -342,9 +342,7 @@ func (insert *Insert) insert_s3(proc *process.Process, analyzer process.Analyzer
 		writer := insert.ctr.s3Writer
 		// handle the last Batch that batchSize less than DefaultBlockMaxRows
 		// for more info, refer to the comments about reSizeBatch.
-		//
-		// data returned to the result would be raw data if it is a memory table.
-		err := flushTailBatch(proc, writer, &result, analyzer, insert.isMemoryTable())
+		err := flushTailBatch(proc, writer, &result, analyzer)
 		if err != nil {
 			insert.ctr.state = vm.End
 			return result, err
@@ -366,7 +364,7 @@ type forceRefreshThrottler interface {
 }
 
 func (insert *Insert) acquireS3WriteMemory(proc *process.Process, analyzer process.Analyzer, size int) error {
-	if insert.isMemoryTable() || insert.ctr.s3MemThrottler == nil || size <= 0 {
+	if insert.ctr.s3MemThrottler == nil || size <= 0 {
 		return nil
 	}
 
@@ -434,7 +432,7 @@ func forcedRefresh(throttler interface{ Refresh() }) {
 }
 
 func (insert *Insert) flushS3WriterOnMemoryPressure(proc *process.Process, analyzer process.Analyzer) (err error) {
-	if insert.isMemoryTable() || insert.ctr.s3Writer == nil {
+	if insert.ctr.s3Writer == nil {
 		insert.releaseS3MemGrant()
 		return nil
 	}
@@ -561,7 +559,6 @@ func flushTailBatch(
 	writer *colexec.CNS3Writer,
 	result *vm.CallResult,
 	analyzer process.Analyzer,
-	isMemoryTable bool,
 ) error {
 
 	var (
@@ -569,32 +566,28 @@ func flushTailBatch(
 		bat *batch.Batch
 	)
 
-	if !isMemoryTable {
-		crs := analyzer.GetOpCounterSet()
+	crs := analyzer.GetOpCounterSet()
 
-		newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
+	newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
 
-		if _, err = writer.Sync(newCtx); err != nil {
-			return err
-		}
-
-		analyzer.AddS3RequestCount(crs)
-		analyzer.AddFileServiceCacheInfo(crs)
-		analyzer.AddDiskIO(crs)
-
-		if bat, err = writer.FillBlockInfoBat(); err != nil {
-			return err
-		}
-
-		result.Batch, err = result.Batch.Append(proc.Ctx, proc.GetMPool(), bat)
-		if err != nil {
-			return err
-		}
-
-		writer.ResetBlockInfoBat()
-
-		return nil
+	if _, err = writer.Sync(newCtx); err != nil {
+		return err
 	}
 
-	return writer.OutputInMemoryData(result.Batch)
+	analyzer.AddS3RequestCount(crs)
+	analyzer.AddFileServiceCacheInfo(crs)
+	analyzer.AddDiskIO(crs)
+
+	if bat, err = writer.FillBlockInfoBat(); err != nil {
+		return err
+	}
+
+	result.Batch, err = result.Batch.Append(proc.Ctx, proc.GetMPool(), bat)
+	if err != nil {
+		return err
+	}
+
+	writer.ResetBlockInfoBat()
+
+	return nil
 }
