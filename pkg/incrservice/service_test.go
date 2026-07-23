@@ -73,6 +73,26 @@ type blockingAllocateStore struct {
 	release chan struct{}
 }
 
+type deadlineCheckingForceSetOffsetStore struct {
+	IncrValueStore
+	deadline chan time.Time
+}
+
+func (s *deadlineCheckingForceSetOffsetStore) ForceSetOffset(
+	ctx context.Context,
+	tableID uint64,
+	colName string,
+	offset uint64,
+	txnOp client.TxnOperator,
+) error {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return errors.New("ForceSetOffset context has no deadline")
+	}
+	s.deadline <- deadline
+	return s.IncrValueStore.ForceSetOffset(ctx, tableID, colName, offset, txnOp)
+}
+
 func (s *blockingAllocateStore) blockNext() (<-chan struct{}, func()) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -501,9 +521,16 @@ func TestMemStoreSetOffsetReturnsError(t *testing.T) {
 			require.Error(t, store.SetOffset(ctx, 0, "missing_col", 77, nil))
 
 			op := ops[0]
+			require.Error(t, store.SetOffset(ctx, 1, def[0].ColName, 77, op))
+			store.Lock()
+			_, exists := store.uncommitted[string(op.Txn().ID)]
+			store.Unlock()
+			require.False(t, exists)
+
 			require.NoError(t, store.SetOffset(ctx, 0, def[0].ColName, 88, op))
 			store.Lock()
-			require.Equal(t, uint64(88), store.caches[0][0].Offset)
+			require.Equal(t, uint64(0), store.caches[0][0].Offset)
+			require.Equal(t, uint64(88), store.uncommitted[string(op.Txn().ID)][0][0].Offset)
 			store.Unlock()
 		})
 }
@@ -736,9 +763,6 @@ func TestSetOffsetRollbackKeepsCommittedOffsetAndSafelyRebuildsCache(t *testing.
 
 		alterTxn, err := tc.New(ctx, timestamp.Timestamp{})
 		require.NoError(t, err)
-		// The mem store models the SQL transaction's private view by copying the
-		// committed auto-increment row into this transaction.
-		require.NoError(t, store.Create(ctx, 0, committedCols, alterTxn))
 		require.NoError(t, s.SetOffset(ctx, 0, def[0].ColName, 50, alterTxn))
 
 		store.Lock()
@@ -780,7 +804,6 @@ func TestSetOffsetTransactionUsesPendingOffsetForInsert(t *testing.T) {
 
 		alterTxn, err := tc.New(ctx, timestamp.Timestamp{})
 		require.NoError(t, err)
-		require.NoError(t, store.Create(ctx, 0, def, alterTxn))
 		require.NoError(t, s.SetOffset(ctx, 0, def[0].ColName, 999, alterTxn))
 
 		input := newTestVector[uint64](1, types.New(types.T_uint64, 0, 0), nil, nil)
@@ -883,7 +906,6 @@ func TestSetOffsetWithoutInsertDoesNotReservePrivateRange(t *testing.T) {
 
 		alterTxn, err := tc.New(ctx, timestamp.Timestamp{})
 		require.NoError(t, err)
-		require.NoError(t, store.Create(ctx, 0, def, alterTxn))
 		require.NoError(t, s.SetOffset(ctx, 0, def[0].ColName, 999, alterTxn))
 
 		store.Lock()
@@ -1431,8 +1453,6 @@ func TestTwoServicesKeepStaleRangesAcrossTransactionalReset(t *testing.T) {
 
 		alterTxn, err := tc.New(ctx, timestamp.Timestamp{})
 		require.NoError(t, err)
-		// The memory store models the ALTER transaction's private metadata row.
-		require.NoError(t, store.Create(ctx, 0, def, alterTxn))
 		require.NoError(t, cn1.SetOffset(ctx, 0, def[0].ColName, effectiveOffset, alterTxn))
 		require.NoError(t, alterTxn.Commit(ctx))
 
@@ -1715,6 +1735,23 @@ func TestCanceledSetOffsetDoesNotRunQueuedForceUpdate(t *testing.T) {
 	})
 }
 
+func TestForceSetOffsetUsesBoundedContext(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	store := &deadlineCheckingForceSetOffsetStore{
+		IncrValueStore: NewMemStore(),
+		deadline:       make(chan time.Time, 1),
+	}
+	require.NoError(t, store.Create(ctx, 0, newTestTableDef(1), nil))
+	allocator := newValueAllocator("", store).(*allocator)
+	defer allocator.close()
+
+	require.NoError(t, allocator.forceSetOffset(ctx, 0, "auto_0", 99, nil))
+	deadline := <-store.deadline
+	remaining := time.Until(deadline)
+	require.Positive(t, remaining)
+	require.LessOrEqual(t, remaining, defaultForceSetOffsetTimeout)
+}
+
 func TestRetiredTableCacheCannotQueueAllocation(t *testing.T) {
 	allocator := &countingAllocator{}
 	col := &columnCache{
@@ -1850,6 +1887,42 @@ func TestMemStoreForceSetOffsetLowerThanCurrent(t *testing.T) {
 			require.Equal(t, uint64(100), store.uncommitted[string(op.Txn().ID)][0][0].Offset)
 			store.Unlock()
 		})
+}
+
+func TestMemStoreForceSetOffsetCreatesTransactionPrivateState(t *testing.T) {
+	client.RunTxnTests(func(tc client.TxnClient, _ rpc.TxnSender) {
+		ctx, cancel := context.WithTimeout(defines.AttachAccountId(context.Background(), catalog.System_Account), 10*time.Second)
+		defer cancel()
+		store := NewMemStore().(*memStore)
+		def := newTestTableDef(1)
+		createTxn, err := tc.New(ctx, timestamp.Timestamp{})
+		require.NoError(t, err)
+		require.NoError(t, store.Create(ctx, 0, def, createTxn))
+		require.NoError(t, createTxn.Commit(ctx))
+		require.NoError(t, store.ForceSetOffset(ctx, 0, def[0].ColName, 10, nil))
+
+		rollbackTxn, err := tc.New(ctx, timestamp.Timestamp{})
+		require.NoError(t, err)
+		require.NoError(t, store.ForceSetOffset(ctx, 0, def[0].ColName, 99, rollbackTxn))
+		store.Lock()
+		require.Equal(t, uint64(10), store.caches[0][0].Offset)
+		require.Equal(t, uint64(99), store.uncommitted[string(rollbackTxn.Txn().ID)][0][0].Offset)
+		store.Unlock()
+		require.NoError(t, rollbackTxn.Rollback(ctx))
+		store.Lock()
+		require.Equal(t, uint64(10), store.caches[0][0].Offset)
+		_, exists := store.uncommitted[string(rollbackTxn.Txn().ID)]
+		store.Unlock()
+		require.False(t, exists)
+
+		commitTxn, err := tc.New(ctx, timestamp.Timestamp{})
+		require.NoError(t, err)
+		require.NoError(t, store.ForceSetOffset(ctx, 0, def[0].ColName, 77, commitTxn))
+		require.NoError(t, commitTxn.Commit(ctx))
+		store.Lock()
+		require.Equal(t, uint64(77), store.caches[0][0].Offset)
+		store.Unlock()
+	})
 }
 
 func runServiceTests(

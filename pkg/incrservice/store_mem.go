@@ -57,23 +57,7 @@ func (s *memStore) Create(
 	defer s.Unlock()
 	m := s.caches
 	if txnOp != nil {
-		m = make(map[uint64][]AutoColumn)
-		s.uncommitted[string(txnOp.Txn().ID)] = m
-		txnOp.AppendEventCallback(
-			client.ClosedEvent,
-			client.NewTxnEventCallback(
-				func(ctx context.Context, txnOp client.TxnOperator, event client.TxnEvent, v any) error {
-					txnMeta := event.Txn
-					s.Lock()
-					defer s.Unlock()
-					delete(s.uncommitted, string(txnMeta.ID))
-					if txnMeta.Status == txn.TxnStatus_Committed {
-						for k, v := range m {
-							s.caches[k] = v
-						}
-					}
-					return nil
-				}))
+		m = s.getOrCreateTxnMapLocked(txnOp)
 	}
 
 	caches := m[tableID]
@@ -91,6 +75,50 @@ func (s *memStore) Create(
 	}
 	m[tableID] = caches
 	return nil
+}
+
+func (s *memStore) getOrCreateTxnMapLocked(txnOp client.TxnOperator) map[uint64][]AutoColumn {
+	txnKey := string(txnOp.Txn().ID)
+	if m, ok := s.uncommitted[txnKey]; ok {
+		return m
+	}
+	m := make(map[uint64][]AutoColumn)
+	s.uncommitted[txnKey] = m
+	txnOp.AppendEventCallback(
+		client.ClosedEvent,
+		client.NewTxnEventCallback(
+			func(ctx context.Context, txnOp client.TxnOperator, event client.TxnEvent, v any) error {
+				txnMeta := event.Txn
+				s.Lock()
+				defer s.Unlock()
+				delete(s.uncommitted, string(txnMeta.ID))
+				if txnMeta.Status == txn.TxnStatus_Committed {
+					for k, v := range m {
+						s.caches[k] = v
+					}
+				}
+				return nil
+			}))
+	return m
+}
+
+func (s *memStore) getOrCloneTxnTableLocked(
+	ctx context.Context,
+	tableID uint64,
+	txnOp client.TxnOperator,
+) (map[uint64][]AutoColumn, error) {
+	if m, ok := s.uncommitted[string(txnOp.Txn().ID)]; ok {
+		if _, exists := m[tableID]; exists {
+			return m, nil
+		}
+	}
+	cols, ok := s.caches[tableID]
+	if !ok {
+		return nil, moerr.NewInternalErrorf(ctx, "incrservice: table %d not found in memStore", tableID)
+	}
+	m := s.getOrCreateTxnMapLocked(txnOp)
+	m[tableID] = append([]AutoColumn(nil), cols...)
+	return m, nil
 }
 
 func (s *memStore) GetColumns(
@@ -187,10 +215,10 @@ func (s *memStore) SetOffset(
 	defer s.Unlock()
 	m := s.caches
 	if txnOp != nil {
-		if um, ok := s.uncommitted[string(txnOp.Txn().ID)]; ok {
-			if _, exists := um[tableID]; exists {
-				m = um
-			}
+		var err error
+		m, err = s.getOrCloneTxnTableLocked(ctx, tableID, txnOp)
+		if err != nil {
+			return err
 		}
 	}
 	cols, ok := m[tableID]
@@ -222,10 +250,10 @@ func (s *memStore) ForceSetOffset(
 	defer s.Unlock()
 	m := s.caches
 	if txnOp != nil {
-		if um, ok := s.uncommitted[string(txnOp.Txn().ID)]; ok {
-			if _, exists := um[tableID]; exists {
-				m = um
-			}
+		var err error
+		m, err = s.getOrCloneTxnTableLocked(ctx, tableID, txnOp)
+		if err != nil {
+			return err
 		}
 	}
 	cols, ok := m[tableID]

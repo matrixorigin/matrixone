@@ -31,7 +31,8 @@ import (
 )
 
 const (
-	defaultAllocateTimeout = time.Minute * 3
+	defaultAllocateTimeout       = time.Minute * 3
+	defaultForceSetOffsetTimeout = time.Second * 10
 )
 
 type allocator struct {
@@ -248,12 +249,19 @@ func (a *allocator) run(ctx context.Context) {
 }
 
 func (a *allocator) doForceSetOffset(act action) {
-	ctx := defines.AttachAccountId(act.ctx, act.accountID)
+	baseCtx := act.ctx
+	if baseCtx == nil {
+		baseCtx = context.Background()
+	}
+	ctx := defines.AttachAccountId(baseCtx, act.accountID)
+	ctx, cancel := context.WithTimeoutCause(ctx, defaultForceSetOffsetTimeout, moerr.CauseDoForceSetOffset)
+	defer cancel()
 	if err := context.Cause(ctx); err != nil {
 		act.applyUpdate(err)
 		return
 	}
 	err := a.store.ForceSetOffset(ctx, act.tableID, act.col, act.minValue, act.txnOp)
+	err = moerr.AttachCause(ctx, err)
 	act.applyUpdate(err)
 }
 
