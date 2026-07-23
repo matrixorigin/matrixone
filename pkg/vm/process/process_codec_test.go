@@ -271,6 +271,34 @@ func TestCodecServiceEncodeDecodeAndLookup(t *testing.T) {
 	require.Same(t, svc, GetCodecService(rtSvc))
 }
 
+func TestCodecServiceRoundTripsPreparedRowsFrameParams(t *testing.T) {
+	proc, _ := newCodecTestProcess(t)
+	frameParams := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(frameParams, []byte("1"), false, proc.Mp()))
+	require.NoError(t, vector.AppendBytes(frameParams, []byte("0"), false, proc.Mp()))
+	proc.SetPrepareParamsWithIsBin(frameParams, []bool{true, false})
+
+	svc := NewCodecService(fakeCodecTxnClient{op: fakeCodecTxnOperator{}}, nil, nil, nil, nil, nil, nil, nil)
+	payload, err := svc.Encode(proc, "select sum(n) over (order by id rows between ? preceding and ? following)")
+	require.NoError(t, err)
+
+	info := pipeline.ProcessInfo{}
+	require.NoError(t, info.Unmarshal(payload))
+	decodedProc, err := svc.Decode(context.Background(), info)
+	require.NoError(t, err)
+	defer decodedProc.Free()
+
+	decodedParams := decodedProc.GetPrepareParams()
+	require.NotNil(t, decodedParams)
+	require.Equal(t, 2, decodedParams.Length())
+	require.False(t, decodedParams.GetNulls().Contains(0))
+	require.False(t, decodedParams.GetNulls().Contains(1))
+	require.True(t, decodedProc.GetPrepareParamIsBin(0))
+	require.False(t, decodedProc.GetPrepareParamIsBin(1))
+	require.Equal(t, "1", decodedParams.GetStringAt(0))
+	require.Equal(t, "0", decodedParams.GetStringAt(1))
+}
+
 func TestCodecServiceDecodesLegacyPrepareParamsWithoutBinaryFlags(t *testing.T) {
 	proc, _ := newCodecTestProcess(t)
 	info, err := proc.BuildProcessInfo("select ?")
