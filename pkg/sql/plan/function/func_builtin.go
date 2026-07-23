@@ -17,7 +17,6 @@ package function
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"math"
 	"math/rand"
@@ -3771,13 +3770,13 @@ func builtInToLower(parameters []*vector.Vector, result vector.FunctionResultWra
 
 // buildInMOCU extract cu or calculate cu from parameters
 // example:
-// - select mo_cu('[1,2,3,4,5,6,7,8]', 134123)
-// - select mo_cu('[1,2,3,4,5,6,7,8]', 134123, 'total')
-// - select mo_cu('[1,2,3,4,5,6,7,8]', 134123, 'cpu')
-// - select mo_cu('[1,2,3,4,5,6,7,8]', 134123, 'mem')
-// - select mo_cu('[1,2,3,4,5,6,7,8]', 134123, 'ioin')
-// - select mo_cu('[1,2,3,4,5,6,7,8]', 134123, 'ioout')
-// - select mo_cu('[1,2,3,4,5,6,7,8]', 134123, 'network')
+// - select mo_cu('[6,2,3,4,5,6,2,7,8,9,10,0,11,12,13,14,1]', 134123)
+// - select mo_cu('[6,2,3,4,5,6,2,7,8,9,10,0,11,12,13,14,1]', 134123, 'total')
+// - select mo_cu('[6,2,3,4,5,6,2,7,8,9,10,0,11,12,13,14,1]', 134123, 'cpu')
+// - select mo_cu('[6,2,3,4,5,6,2,7,8,9,10,0,11,12,13,14,1]', 134123, 'mem')
+// - select mo_cu('[6,2,3,4,5,6,2,7,8,9,10,0,11,12,13,14,1]', 134123, 'ioin')
+// - select mo_cu('[6,2,3,4,5,6,2,7,8,9,10,0,11,12,13,14,1]', 134123, 'ioout')
+// - select mo_cu('[6,2,3,4,5,6,2,7,8,9,10,0,11,12,13,14,1]', 134123, 'network')
 func buildInMOCU(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return buildInMOCUWithCfg(parameters, result, proc, length, nil)
 }
@@ -3823,12 +3822,26 @@ func buildInMOCUWithCfg(parameters []*vector.Vector, result vector.FunctionResul
 			continue
 		}
 
-		if err := json.Unmarshal(statsJsonArrayStr, &stats); err != nil {
+		decoded, err := statistic.DecodeStatsArray(statsJsonArrayStr)
+		if err != nil {
 			rs.Append(float64(0), true)
-			//return moerr.NewInternalError(proc.Ctx, "failed to parse json arr: %v", err)
+			continue
+		}
+		stats = decoded
+
+		targetName := util.UnsafeBytesToString(target)
+		if stats.GetVersion() >= statistic.StatsArrayVersion6 {
+			if stats.IsAggregated() && (targetName != "total" || cfg != nil) {
+				rs.Append(float64(0), true)
+				continue
+			}
+			if targetName == "total" && cfg == nil {
+				rs.Append(stats.GetCU(), false)
+				continue
+			}
 		}
 
-		switch util.UnsafeBytesToString(target) {
+		switch targetName {
 		case "cpu":
 			cu = motrace.CalculateCUCpu(int64(stats.GetTimeConsumed()), cfg)
 		case "mem":

@@ -15,14 +15,67 @@
 package pipeline
 
 import (
+	"bytes"
+	"compress/gzip"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
 	"testing"
 
+	"github.com/gogo/protobuf/gogoproto"
 	"github.com/gogo/protobuf/proto"
+	"github.com/gogo/protobuf/protoc-gen-gogo/descriptor"
 	"github.com/matrixorigin/matrixone/pkg/iceberg/testutil"
 )
+
+func TestIcebergRedactionDisablesGeneratedStringers(t *testing.T) {
+	file := decodePipelineFileDescriptor(t)
+	for _, name := range []string{
+		"Message",
+		"IcebergDataFileTask",
+		"IcebergDeleteFileTask",
+		"ExternalScan",
+		"Instruction",
+		"Pipeline",
+	} {
+		var found *descriptor.DescriptorProto
+		for _, message := range file.GetMessageType() {
+			if message.GetName() == name {
+				found = message
+				break
+			}
+		}
+		if found == nil {
+			t.Fatalf("pipeline descriptor missing protected message %s", name)
+		}
+		if gogoproto.EnabledGoStringer(file, found) {
+			t.Fatalf("generated String method must stay disabled for %s", name)
+		}
+	}
+}
+
+func decodePipelineFileDescriptor(t *testing.T) *descriptor.FileDescriptorProto {
+	t.Helper()
+	compressed := proto.FileDescriptor("pipeline.proto")
+	if len(compressed) == 0 {
+		t.Fatal("pipeline protobuf descriptor is not registered")
+	}
+	reader, err := gzip.NewReader(bytes.NewReader(compressed))
+	if err != nil {
+		t.Fatalf("open pipeline protobuf descriptor: %v", err)
+	}
+	defer reader.Close()
+	raw, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatalf("read pipeline protobuf descriptor: %v", err)
+	}
+	var file descriptor.FileDescriptorProto
+	if err := proto.Unmarshal(raw, &file); err != nil {
+		t.Fatalf("decode pipeline protobuf descriptor: %v", err)
+	}
+	return &file
+}
 
 func TestIcebergRuntimeStringRedactsSensitiveFields(t *testing.T) {
 	rawCredential := "scope://catalog/secret-token"
