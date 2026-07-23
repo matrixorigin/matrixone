@@ -65,6 +65,7 @@ message Message {
   string debugMsg = 10;
   StreamTeardownMode requested_teardown_mode = 11;
   StreamTeardownMode accepted_teardown_mode = 12;
+  uint64 warning_count = 13;
 }
 
 message Connector {

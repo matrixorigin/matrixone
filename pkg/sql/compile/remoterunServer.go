@@ -293,6 +293,7 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 		}()
 
 		err = s.MergeRun(runCompile)
+		receiver.warningCount = uint64(runCompile.proc.GetWarningCount())
 		if err == nil {
 			runCompile.GenPhyPlan(runCompile)
 			receiver.phyPlan = runCompile.anal.GetPhyPlan()
@@ -529,7 +530,8 @@ type messageReceiverOnServer struct {
 	colexecServer *colexec.Server
 
 	// result.
-	phyPlan *models.PhyPlan
+	phyPlan      *models.PhyPlan
+	warningCount uint64
 }
 
 func newMessageReceiverOnServer(
@@ -701,6 +703,7 @@ func (receiver *messageReceiverOnServer) sendError(
 	message.SetSid(pipeline.Status_MessageEnd)
 	message.SetMessageType(receiver.messageTyp)
 	message.AcceptedTeardownMode = receiver.acceptedTeardownMode
+	message.WarningCount = receiver.warningCount
 	if errInfo != nil {
 		message.SetMoError(receiver.messageCtx, errInfo)
 	}
@@ -762,6 +765,7 @@ func (receiver *messageReceiverOnServer) sendEndMessage() error {
 	message.SetID(receiver.messageId)
 	message.SetMessageType(receiver.messageTyp)
 	message.AcceptedTeardownMode = receiver.acceptedTeardownMode
+	message.WarningCount = receiver.warningCount
 
 	jsonData, err := json.MarshalIndent(receiver.phyPlan, "", "  ")
 	if err != nil {

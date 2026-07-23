@@ -194,6 +194,20 @@ func TestNewMessageSenderOnClientReturnsErrorOnNilStream(t *testing.T) {
 }
 
 func TestMessageSenderOnClientNegotiatedStreamTeardown(t *testing.T) {
+	t.Run("terminal message accumulates remote check warnings", func(t *testing.T) {
+		var warningCount int64
+		sender := &messageSenderOnClient{
+			expectedEnd:  pipeline.Method_PipelineMessage,
+			warningCount: &warningCount,
+		}
+		sender.markTerminal(&pipeline.Message{
+			Cmd:          pipeline.Method_PipelineMessage,
+			Sid:          pipeline.Status_MessageEnd,
+			WarningCount: 3,
+		}, true)
+		require.Equal(t, int64(3), warningCount)
+	})
+
 	t.Run("negotiated retry terminal needs explicit cleanup authorization", func(t *testing.T) {
 		sender := &messageSenderOnClient{expectedEnd: pipeline.Method_PrepareDoneNotifyMessage}
 		message := &pipeline.Message{

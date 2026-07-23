@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -697,12 +698,78 @@ func TestBuildCreateTableCheckConstraintRejectsUnstableReferences(t *testing.T) 
 			sql:     "CREATE TABLE t_check_auto_incr (id INT AUTO_INCREMENT PRIMARY KEY, CHECK (id > 0))",
 			errText: "cannot refer to auto-increment column 'id'",
 		},
+		{
+			name:    "current user id",
+			sql:     "CREATE TABLE t_check_current_user_id (a INT, CHECK (current_user_id() = 1 OR a > 0))",
+			errText: "connection-dependent function 'current_user_id'",
+		},
+		{
+			name:    "current user name",
+			sql:     "CREATE TABLE t_check_current_user_name (a INT, CHECK (current_user_name() = 'root' OR a > 0))",
+			errText: "connection-dependent function 'current_user_name'",
+		},
+		{
+			name:    "current role",
+			sql:     "CREATE TABLE t_check_current_role (a INT, CHECK (current_role() = 'admin' OR a > 0))",
+			errText: "connection-dependent function 'current_role'",
+		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			_, err := runOneStmt(mock, t, tt.sql)
 			require.ErrorContains(t, err, tt.errText)
 		})
 	}
+}
+
+func TestBuildCreateTableCheckConstraintInvalidInputDoesNotPanic(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	for _, sql := range []string{
+		"CREATE TABLE t_check_unknown_func (a INT, CHECK (no_such_func(a) > 0))",
+		"CREATE TABLE t_check_param (a INT, CHECK (? > 0))",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			require.NotPanics(t, func() {
+				_, err := runOneStmt(mock, t, sql)
+				require.Error(t, err)
+			})
+		})
+	}
+}
+
+func TestBuildCreateTableCheckConstraintConvertsRootToBoolean(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	logicPlan, err := runOneStmt(mock, t, "CREATE TABLE t_check_bool_context (s VARCHAR(10), CHECK (s))")
+	require.NoError(t, err)
+
+	checks := logicPlan.GetDdl().GetCreateTable().GetTableDef().GetChecks()
+	require.Len(t, checks, 1)
+	require.Equal(t, int32(types.T_bool), checks[0].GetCheck().GetTyp().Id)
+}
+
+func TestBuildCreateTableRejectsCheckWithIncompatibleForeignKeyAction(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	for _, sql := range []string{
+		"CREATE TABLE t_check_fk_update_cascade (" +
+			"deptno INT UNSIGNED, CHECK (deptno > 0), " +
+			"CONSTRAINT fk_dept FOREIGN KEY (deptno) REFERENCES dept(deptno) ON UPDATE CASCADE)",
+		"CREATE TABLE t_check_fk_update_set_null (" +
+			"deptno INT UNSIGNED, CHECK (deptno > 0), " +
+			"CONSTRAINT fk_dept FOREIGN KEY (deptno) REFERENCES dept(deptno) ON UPDATE SET NULL)",
+		"CREATE TABLE t_check_fk_delete_set_null (" +
+			"deptno INT UNSIGNED, CHECK (deptno > 0), " +
+			"CONSTRAINT fk_dept FOREIGN KEY (deptno) REFERENCES dept(deptno) ON DELETE SET NULL)",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			_, err := runOneStmt(mock, t, sql)
+			require.ErrorContains(t, err, "check constraint cannot be defined on column used by foreign key")
+		})
+	}
+
+	_, err := runOneStmt(mock, t,
+		"CREATE TABLE t_check_fk_restrict ("+
+			"deptno INT UNSIGNED, CHECK (deptno > 0), "+
+			"CONSTRAINT fk_dept FOREIGN KEY (deptno) REFERENCES dept(deptno) ON UPDATE RESTRICT)")
+	require.NoError(t, err)
 }
 
 func TestBuildCreateTableKeepsNamedTableCheckConstraint(t *testing.T) {
@@ -740,12 +807,37 @@ func TestBuildCreateTableCheckConstraintNameDeduplication(t *testing.T) {
 		// Create a table with a user-named constraint that uses an anonymous-like name.
 		// The anonymous generator must skip it.
 		logicPlan, err := runOneStmt(mock, t,
-			"CREATE TABLE t_chk_anon_name (a INT, CONSTRAINT __mo_chk_1 CHECK (a > 0), b INT CHECK (b > 0));")
+			"CREATE TABLE t_chk_anon_name ("+
+				"a INT, CONSTRAINT t_chk_anon_name_chk_1 CHECK (a > 0), b INT CHECK (b > 0));")
 		require.NoError(t, err)
 		checks := logicPlan.GetDdl().GetCreateTable().GetTableDef().GetChecks()
 		require.Len(t, checks, 2)
-		require.Equal(t, "__mo_chk_1", checks[0].GetName())
-		require.Equal(t, "__mo_chk_2", checks[1].GetName())
+		require.Equal(t, "t_chk_anon_name_chk_1", checks[0].GetName())
+		require.Equal(t, "t_chk_anon_name_chk_2", checks[1].GetName())
+	})
+
+	t.Run("explicit name is limited to 64 characters", func(t *testing.T) {
+		name := strings.Repeat("x", 65)
+		_, err := runOneStmt(mock, t,
+			"CREATE TABLE t_chk_long_name (a INT, CONSTRAINT "+name+" CHECK (a > 0))")
+		require.ErrorContains(t, err, "is too long")
+	})
+
+	t.Run("explicit name is unique within schema", func(t *testing.T) {
+		mockWithExisting := NewMockOptimizer(false)
+		mockWithExisting.ctxt.tables["t1"].Checks = []*plan.CheckDef{{Name: "schema_check_name"}}
+		_, err := runOneStmt(mockWithExisting, t,
+			"CREATE TABLE t_chk_schema_dup (a INT, CONSTRAINT schema_check_name CHECK (a > 0))")
+		require.ErrorContains(t, err, "duplicate check constraint name 'schema_check_name'")
+	})
+
+	t.Run("anonymous name uses destination table", func(t *testing.T) {
+		logicPlan, err := runOneStmt(mock, t, "CREATE TABLE destination_name (a INT CHECK (a > 0))")
+		require.NoError(t, err)
+		checks := logicPlan.GetDdl().GetCreateTable().GetTableDef().GetChecks()
+		require.Len(t, checks, 1)
+		require.Equal(t, "destination_name_chk_1", checks[0].Name)
+		require.True(t, checks[0].IsGeneratedName)
 	})
 }
 

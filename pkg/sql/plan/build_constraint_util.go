@@ -170,6 +170,7 @@ func appendCheckConstraintPlanWithTableColProjections(builder *QueryBuilder, bin
 			// INSERT IGNORE: violating rows are dropped (and the statement keeps
 			// going) rather than aborting. A plain FILTER on passExpr keeps only
 			// the rows that satisfy the check.
+			passExpr.AuxId = plan.CheckConstraintWarningFilterAuxID
 			filterList = append(filterList, passExpr)
 			continue
 		}
@@ -179,7 +180,10 @@ func appendCheckConstraintPlanWithTableColProjections(builder *QueryBuilder, bin
 			checkName = "CHECK"
 		}
 		errMsg := makePlan2StringConstExprWithType(fmt.Sprintf("Check constraint '%s' is violated", checkName))
-		assertExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "check_constraint_assert", []*plan.Expr{passExpr, errMsg})
+		// Use the long-standing assert function so plans remain executable on old
+		// CNs during rolling upgrades. CHECK-specific function IDs cannot be sent
+		// to an older executor safely.
+		assertExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "assert", []*plan.Expr{passExpr, errMsg})
 		if err != nil {
 			return 0, err
 		}

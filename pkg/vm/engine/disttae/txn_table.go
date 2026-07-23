@@ -1535,8 +1535,6 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 					primarykey = k.Pkey
 				case *engine.StreamConfigsDef:
 					properties = append(properties, k.Configs...)
-				case *engine.CheckConstraintsDef:
-					checks = append(checks, k.Checks...)
 				}
 			}
 		}

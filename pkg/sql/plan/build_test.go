@@ -2846,7 +2846,7 @@ func TestLoadDataIgnoreFiltersCheckViolationsPerRow(t *testing.T) {
 	foundCheckFilter := false
 	for _, node := range p.GetQuery().GetNodes() {
 		for _, expr := range node.FilterList {
-			require.False(t, exprContainsFuncName(expr, "check_constraint_assert"),
+			require.False(t, exprContainsFuncName(expr, "assert"),
 				"LOAD DATA IGNORE must not abort on a CHECK violation")
 			if exprContainsFuncName(expr, "coalesce") {
 				foundCheckFilter = true
@@ -3185,10 +3185,10 @@ func TestInsertIgnoreFiltersCheckViolatingRows(t *testing.T) {
 	query := logicPlan.GetQuery()
 
 	// INSERT IGNORE must skip check-violating rows, not abort the statement, so
-	// the plan must not contain a check_constraint_assert.
+	// the plan must not contain a CHECK assert.
 	for _, node := range query.Nodes {
 		for _, expr := range node.FilterList {
-			if exprContainsFuncName(expr, "check_constraint_assert") {
+			if exprContainsFuncName(expr, "assert") {
 				t.Fatalf("INSERT IGNORE must not assert table CHECK constraints")
 			}
 		}
@@ -3604,7 +3604,7 @@ func assertPlanHasCheckConstraintAssert(t *testing.T, query *Query, stmt string)
 			continue
 		}
 		for _, expr := range node.FilterList {
-			if exprContainsFuncName(expr, "check_constraint_assert") {
+			if exprContainsCheckConstraintAssert(expr) {
 				hasCheckAssert = true
 				break
 			}
@@ -3621,7 +3621,7 @@ func assertPlanUsesIgnoreCheckFilter(t *testing.T, query *Query, stmt string) {
 			continue
 		}
 		for _, expr := range node.FilterList {
-			require.False(t, exprContainsFuncName(expr, "check_constraint_assert"),
+			require.False(t, exprContainsCheckConstraintAssert(expr),
 				"%s must not abort on a CHECK violation", stmt)
 			if exprContainsFuncName(expr, "coalesce") {
 				hasIgnoreFilter = true
@@ -3629,6 +3629,32 @@ func assertPlanUsesIgnoreCheckFilter(t *testing.T, query *Query, stmt string) {
 		}
 	}
 	require.True(t, hasIgnoreFilter, "%s should filter rows that violate CHECK constraints", stmt)
+}
+
+func exprContainsCheckConstraintAssert(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_F:
+		if strings.EqualFold(e.F.Func.ObjName, "assert") && len(e.F.Args) == 2 {
+			if lit := e.F.Args[1].GetLit(); lit != nil && strings.HasPrefix(lit.GetSval(), "Check constraint '") {
+				return true
+			}
+		}
+		for _, arg := range e.F.Args {
+			if exprContainsCheckConstraintAssert(arg) {
+				return true
+			}
+		}
+	case *plan.Expr_List:
+		for _, item := range e.List.List {
+			if exprContainsCheckConstraintAssert(item) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func TestInsertOnDupFakePKUsesModernPath(t *testing.T) {

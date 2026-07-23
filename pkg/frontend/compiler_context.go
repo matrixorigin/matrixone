@@ -243,6 +243,39 @@ func (tcc *TxnCompilerContext) DatabaseExists(name string, snapshot *plan2.Snaps
 	return true
 }
 
+func (tcc *TxnCompilerContext) CheckConstraintNameExists(dbName, excludedTable, name string) (bool, error) {
+	ctx := tcc.execCtx.reqCtx
+	txn := tcc.GetTxnHandler().GetTxn()
+	db, err := tcc.GetTxnHandler().GetStorage().Database(ctx, dbName, txn)
+	if err != nil {
+		return false, err
+	}
+	tableNames, err := db.Relations(ctx)
+	if err != nil {
+		return false, err
+	}
+	for _, tableName := range tableNames {
+		if tableName == excludedTable {
+			continue
+		}
+		_, tableDef, err := tcc.Resolve(dbName, tableName, nil)
+		if err != nil {
+			return false, err
+		}
+		if tableDef == nil {
+			continue
+		}
+		for _, check := range tableDef.Checks {
+			// MySQL CHECK constraint names are case-sensitive regardless of
+			// lower_case_table_names.
+			if check.Name == name {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
 func (tcc *TxnCompilerContext) GetDatabaseId(dbName string, snapshot *plan2.Snapshot) (uint64, error) {
 	dbName, _, err := tcc.ensureDatabaseIsNotEmpty(dbName, false, snapshot)
 	if err != nil {

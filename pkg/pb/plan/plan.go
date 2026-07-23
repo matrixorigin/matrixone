@@ -16,6 +16,11 @@ package plan
 
 const (
 	SystemExternalRel = "e"
+
+	// CheckConstraintWarningFilterAuxID marks a FILTER predicate that implements
+	// CHECK enforcement for an IGNORE statement. Older CNs safely ignore AuxId;
+	// newer CNs use it only to count rows dropped as warnings.
+	CheckConstraintWarningFilterAuxID int32 = -24950
 )
 
 // when autocommit is set to false, and no active txn is started

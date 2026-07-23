@@ -15,5 +15,6 @@
 package util
 
 type RunResult struct {
-	AffectRows uint64
+	AffectRows   uint64
+	WarningCount uint64
 }

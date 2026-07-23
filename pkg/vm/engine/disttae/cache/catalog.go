@@ -786,8 +786,6 @@ func getTableDef(tblItem *TableItem, coldefs []engine.TableDef) (*plan.TableDef,
 				primarykey = k.Pkey
 			case *engine.StreamConfigsDef:
 				properties = append(properties, k.Configs...)
-			case *engine.CheckConstraintsDef:
-				checks = append(checks, k.Checks...)
 			}
 		}
 	}

@@ -332,8 +332,6 @@ func (t *Table) GetTableDef(ctx context.Context) *plan.TableDef {
 					primarykey = k.Pkey
 				case *engine.StreamConfigsDef:
 					properties = append(properties, k.Configs...)
-				case *engine.CheckConstraintsDef:
-					checks = append(checks, k.Checks...)
 				}
 			}
 		} else if commnetDef, ok := def.(*engine.CommentDef); ok {

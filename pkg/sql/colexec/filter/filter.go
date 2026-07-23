@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -113,9 +114,15 @@ func (filter *Filter) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 		}
 		bs := filter.ctr.bs
+		warningFilter := i >= len(filter.ctr.runtimeExecutors) &&
+			i-len(filter.ctr.runtimeExecutors) < len(filter.FilterExprs) &&
+			filter.FilterExprs[i-len(filter.ctr.runtimeExecutors)].AuxId == plan.CheckConstraintWarningFilterAuxID
 		if vec.IsConst() {
 			v, null := bs.GetValue(0)
 			if null || !v {
+				if warningFilter {
+					proc.AddWarningCount(int64(filterBat.RowCount()))
+				}
 				filterBat, err = filter.ctr.shrinkWithSels(proc, filterBat, nil)
 				if err != nil {
 					return vm.CancelResult, err
@@ -144,6 +151,9 @@ func (filter *Filter) Call(proc *process.Process) (vm.CallResult, error) {
 				}
 			}
 			if len(sels) != filterBat.RowCount() {
+				if warningFilter {
+					proc.AddWarningCount(int64(filterBat.RowCount() - len(sels)))
+				}
 				filterBat, err = filter.ctr.shrinkWithSels(proc, filterBat, sels)
 				if err != nil {
 					return vm.CancelResult, err

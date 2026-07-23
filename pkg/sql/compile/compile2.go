@@ -243,8 +243,12 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	// running and retry.
 	var retryTimes = 0
 	queryResult = &util2.RunResult{}
+	c.proc.SetWarningCount(0)
 	v2.TxnStatementTotalCounter.Inc()
 	for {
+		// A retry is a replacement execution attempt. Warnings produced by the
+		// discarded attempt must not leak into the final statement result.
+		runC.proc.SetWarningCount(0)
 		// Record the time from the beginning of Run to just before runOnce().
 		preRunOnceStart := time.Now()
 		// Before compile.runOnce, Reset the 'StatsInfo' execution related resources in context
@@ -330,6 +334,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		return nil, err
 	}
 	queryResult.AffectRows = runC.getAffectedRows()
+	queryResult.WarningCount = uint64(runC.proc.GetWarningCount())
 	if c.uid != "mo_logger" &&
 		strings.Contains(strings.ToLower(c.sql), "insert") &&
 		(strings.Contains(c.sql, "{MO_TS =") ||

@@ -147,7 +147,8 @@ type Session struct {
 
 	ddlOwnerRoleID uint32
 
-	errInfo *errInfo
+	errInfo  *errInfo
+	warnInfo *errInfo
 
 	cache       *privilegeCache
 	ruleCache   map[string]string // rewrite rule cache, nil means not loaded
@@ -679,6 +680,11 @@ func NewSession(
 			msgs:   make([]string, 0, MoDefaultErrorCount),
 			maxCnt: MoDefaultErrorCount,
 		},
+		warnInfo: &errInfo{
+			codes:  make([]uint16, 0, MoDefaultErrorCount),
+			msgs:   make([]string, 0, MoDefaultErrorCount),
+			maxCnt: MoDefaultErrorCount,
+		},
 		cache:     &privilegeCache{},
 		blockIdx:  0,
 		planCache: newPlanCache(100),
@@ -832,6 +838,7 @@ func (ses *Session) Close() {
 	ses.tenant = nil
 	ses.priv = nil
 	ses.errInfo = nil
+	ses.warnInfo = nil
 	ses.cache = nil
 	ses.debugStr = ""
 	ses.tStmt = nil
@@ -1112,6 +1119,23 @@ func (ses *Session) GetErrInfo() *errInfo {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	return ses.errInfo
+}
+
+func (ses *Session) setCheckConstraintWarnings(count uint64) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ses.warnInfo.codes = ses.warnInfo.codes[:0]
+	ses.warnInfo.msgs = ses.warnInfo.msgs[:0]
+	storedCount := min(count, uint64(ses.warnInfo.maxCnt))
+	for i := uint64(0); i < storedCount; i++ {
+		ses.warnInfo.push(moerr.ER_CHECK_CONSTRAINT_VIOLATED, "Check constraint is violated")
+	}
+}
+
+func (ses *Session) getWarnInfo() *errInfo {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.warnInfo
 }
 
 func (ses *Session) GenNewStmtId() uint32 {

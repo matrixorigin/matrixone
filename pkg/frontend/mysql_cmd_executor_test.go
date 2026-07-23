@@ -2803,6 +2803,32 @@ func TestSituationResponsePropagatesAffectedRows(t *testing.T) {
 	require.Equal(t, uint64(7), writer.responses[0].affectedRows)
 }
 
+func TestSituationResponsePropagatesAndReplacesCheckWarnings(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	writer := &countingMysqlWriter{testMysqlWriter: &testMysqlWriter{}}
+	resper := NewMysqlResp(writer)
+
+	execCtx := &ExecCtx{
+		reqCtx:     context.Background(),
+		ses:        ses,
+		isLastStmt: true,
+		runResult:  &util.RunResult{WarningCount: 2},
+	}
+	require.NoError(t, resper.respBySituation(ses, execCtx))
+	require.Len(t, writer.responses, 1)
+	require.Equal(t, uint16(2), writer.responses[0].warnings)
+	require.Equal(t, 2, ses.getWarnInfo().length())
+
+	writer.responses = nil
+	execCtx.runResult = &util.RunResult{}
+	require.NoError(t, resper.respBySituation(ses, execCtx))
+	require.Len(t, writer.responses, 1)
+	require.Zero(t, writer.responses[0].warnings)
+	require.Zero(t, ses.getWarnInfo().length())
+}
+
 func TestNormalizeProcedureAffectedRows(t *testing.T) {
 	require.Equal(t, uint64(0), normalizeProcedureAffectedRows(-1))
 	require.Equal(t, uint64(7), normalizeProcedureAffectedRows(7))

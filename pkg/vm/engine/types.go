@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
-	"io"
 	"regexp"
 	"strconv"
 	"sync"
@@ -155,12 +154,6 @@ func PlanDefToCstrDef(tableDef *plan.TableDef) (*ConstraintDef, error) {
 	if len(tableDef.RefChildTbls) > 0 {
 		c.Cts = append(c.Cts, &RefChildTableDef{
 			Tables: tableDef.RefChildTbls,
-		})
-	}
-
-	if len(tableDef.Checks) > 0 {
-		c.Cts = append(c.Cts, &CheckConstraintsDef{
-			Checks: tableDef.Checks,
 		})
 	}
 
@@ -394,10 +387,6 @@ type StreamConfigsDef struct {
 	Configs []*plan.Property
 }
 
-type CheckConstraintsDef struct {
-	Checks []*plan.CheckDef
-}
-
 type TableDef interface {
 	tableDef()
 
@@ -534,7 +523,6 @@ const (
 	ForeignKey
 	PrimaryKey
 	StreamConfig
-	CheckConstraint
 )
 
 type EngineType int8
@@ -627,23 +615,6 @@ func (def *ConstraintDef) MarshalBinary() (data []byte, err error) {
 				}
 				buf.Write(bytes)
 			}
-		case *CheckConstraintsDef:
-			if err := binary.Write(buf, binary.BigEndian, CheckConstraint); err != nil {
-				return nil, err
-			}
-			if err := binary.Write(buf, binary.BigEndian, uint64(len(def.Checks))); err != nil {
-				return nil, err
-			}
-			for _, check := range def.Checks {
-				data, err := check.Marshal()
-				if err != nil {
-					return nil, err
-				}
-				if err := binary.Write(buf, binary.BigEndian, uint64(len(data))); err != nil {
-					return nil, err
-				}
-				buf.Write(data)
-			}
 		}
 	}
 	return buf.Bytes(), nil
@@ -729,33 +700,6 @@ func (def *ConstraintDef) UnmarshalBinary(data []byte) error {
 				configs[i] = config
 			}
 			def.Cts = append(def.Cts, &StreamConfigsDef{configs})
-		case CheckConstraint:
-			if len(data)-l < 8 {
-				return io.ErrUnexpectedEOF
-			}
-			length = binary.BigEndian.Uint64(data[l : l+8])
-			l += 8
-			if length > uint64((len(data)-l)/8) {
-				return io.ErrUnexpectedEOF
-			}
-			checks := make([]*plan.CheckDef, length)
-			for i := 0; i < int(length); i++ {
-				if len(data)-l < 8 {
-					return io.ErrUnexpectedEOF
-				}
-				dataLength := binary.BigEndian.Uint64(data[l : l+8])
-				l += 8
-				if dataLength > uint64(len(data)-l) {
-					return io.ErrUnexpectedEOF
-				}
-				check := &plan.CheckDef{}
-				if err := check.Unmarshal(data[l : l+int(dataLength)]); err != nil {
-					return err
-				}
-				l += int(dataLength)
-				checks[i] = check
-			}
-			def.Cts = append(def.Cts, &CheckConstraintsDef{Checks: checks})
 		}
 	}
 	return nil
@@ -787,9 +731,6 @@ func (def *ConstraintPB) FromPBVersion() Constraint {
 	if r := def.GetStreamConfigsDef(); r != nil {
 		return r
 	}
-	if r := def.GetCheckConstraintsDef(); r != nil {
-		return r
-	}
 	panic("no corresponding type")
 }
 
@@ -811,12 +752,11 @@ type Constraint interface {
 }
 
 // TODO: UniqueIndexDef, SecondaryIndexDef will not be tabledef and need to be moved in Constraint to be able modified
-func (*ForeignKeyDef) constraint()       {}
-func (*PrimaryKeyDef) constraint()       {}
-func (*RefChildTableDef) constraint()    {}
-func (*IndexDef) constraint()            {}
-func (*StreamConfigsDef) constraint()    {}
-func (*CheckConstraintsDef) constraint() {}
+func (*ForeignKeyDef) constraint()    {}
+func (*PrimaryKeyDef) constraint()    {}
+func (*RefChildTableDef) constraint() {}
+func (*IndexDef) constraint()         {}
+func (*StreamConfigsDef) constraint() {}
 
 func (def *ForeignKeyDef) ToPBVersion() ConstraintPB {
 	return ConstraintPB{
@@ -851,14 +791,6 @@ func (def *StreamConfigsDef) ToPBVersion() ConstraintPB {
 	return ConstraintPB{
 		Ct: &ConstraintPB_StreamConfigsDef{
 			StreamConfigsDef: def,
-		},
-	}
-}
-
-func (def *CheckConstraintsDef) ToPBVersion() ConstraintPB {
-	return ConstraintPB{
-		Ct: &ConstraintPB_CheckConstraintsDef{
-			CheckConstraintsDef: def,
 		},
 	}
 }

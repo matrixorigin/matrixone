@@ -24,6 +24,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 
@@ -1173,6 +1174,13 @@ func buildCreateTable(
 	}, nil
 }
 
+type checkForeignKeyAction struct {
+	name     string
+	cols     map[string]struct{}
+	onDelete tree.ReferenceOptionType
+	onUpdate tree.ReferenceOptionType
+}
+
 func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *plan.CreateTable, asSelectCols []*ColDef) error {
 	// all below fields' key is lower case
 	var primaryKeys []string
@@ -1182,6 +1190,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 	fullTextIndexInfos := make([]*tree.FullTextIndex, 0)
 	secondaryIndexInfos := make([]*tree.Index, 0)
 	fkDatasOfFKSelfRefer := make([]*FkData, 0)
+	fkActionsForCheckValidation := make([]checkForeignKeyAction, 0)
 	dedupFkName := make(UnorderedSet[string])
 	type pendingCheckDef struct {
 		name           string
@@ -1505,6 +1514,16 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			if err != nil {
 				return err
 			}
+			fkCols := make(map[string]struct{}, len(def.KeyParts))
+			for _, keyPart := range def.KeyParts {
+				fkCols[keyPart.ColName.ColName()] = struct{}{}
+			}
+			fkActionsForCheckValidation = append(fkActionsForCheckValidation, checkForeignKeyAction{
+				name:     fkData.Def.Name,
+				cols:     fkCols,
+				onDelete: def.Refer.OnDelete,
+				onUpdate: def.Refer.OnUpdate,
+			})
 
 			if def.ConstraintSymbol != fkData.Def.Name {
 				return moerr.NewInternalErrorf(ctx.GetContext(), "different fk name %s %s", def.ConstraintSymbol, fkData.Def.Name)
@@ -1603,6 +1622,9 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		}
 		createTable.TableDef.Checks[len(createTable.TableDef.Checks)-1].NotEnforced =
 			check.enforcementSet && !check.enforced
+	}
+	if err := validateCheckForeignKeyActions(ctx.GetContext(), createTable.TableDef, fkActionsForCheckValidation); err != nil {
+		return err
 	}
 
 	// table must have one visible column
@@ -1852,12 +1874,28 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 }
 
 func appendCheckDef(ctx CompilerContext, tableDef *TableDef, name string, astExpr tree.Expr) error {
+	return appendCheckDefInternal(ctx, tableDef, name, astExpr, true)
+}
+
+func appendCheckDefInternal(
+	ctx CompilerContext,
+	tableDef *TableDef,
+	name string,
+	astExpr tree.Expr,
+	validateSchemaName bool,
+) error {
 	// Scope validation for column-level CHECKs happens before this call. Bind
 	// against the complete column list here so persisted column positions match
 	// the table row layout; table-level CHECKs may reference any table column.
 	checkExpr, err := bindCheckExpr(ctx, astExpr, tableDef.Cols)
 	if err != nil {
 		return err
+	}
+	if checkExpr.Typ.Id != int32(types.T_bool) {
+		checkExpr, err = appendCastBeforeExpr(ctx.GetContext(), checkExpr, plan.Type{Id: int32(types.T_bool)})
+		if err != nil {
+			return moerr.NewInvalidInputf(ctx.GetContext(), "check constraint expression cannot be converted to boolean: %v", err)
+		}
 	}
 
 	// Reject non-deterministic (volatile) functions in CHECK expressions
@@ -1882,16 +1920,52 @@ func appendCheckDef(ctx CompilerContext, tableDef *TableDef, name string, astExp
 	// Assign or validate the constraint name
 	isGeneratedName := name == ""
 	if name == "" {
-		// Anonymous constraint: generate __mo_chk_N, skipping already-occupied names
+		// Anonymous CHECK names follow MySQL's table_name_chk_N convention.
+		// CREATE TABLE ... LIKE omits generated names while formatting, so the
+		// destination table gets a fresh name based on its own table name.
 		for i := len(tableDef.Checks) + 1; ; i++ {
-			candidate := fmt.Sprintf("__mo_chk_%d", i)
-			if !checkNameSet[candidate] {
-				name = candidate
-				break
+			suffix := fmt.Sprintf("_chk_%d", i)
+			tableName := tableDef.Name
+			maxTableRunes := maxCheckConstraintNameRunes - utf8.RuneCountInString(suffix)
+			if utf8.RuneCountInString(tableName) > maxTableRunes {
+				tableName = string([]rune(tableName)[:maxTableRunes])
+			}
+			candidate := tableName + suffix
+			if checkNameSet[candidate] {
+				continue
+			}
+			if resolver, ok := ctx.(interface {
+				CheckConstraintNameExists(string, string, string) (bool, error)
+			}); validateSchemaName && ok {
+				exists, err := resolver.CheckConstraintNameExists(tableDef.DbName, tableDef.Name, candidate)
+				if err != nil {
+					return err
+				}
+				if exists {
+					continue
+				}
+			}
+			name = candidate
+			break
+		}
+	} else {
+		if utf8.RuneCountInString(name) > maxCheckConstraintNameRunes {
+			return moerr.NewInvalidInputf(ctx.GetContext(), "identifier name '%s' is too long", name)
+		}
+		if checkNameSet[name] {
+			return moerr.NewInvalidInputf(ctx.GetContext(), "duplicate check constraint name '%s'", name)
+		}
+		if resolver, ok := ctx.(interface {
+			CheckConstraintNameExists(string, string, string) (bool, error)
+		}); validateSchemaName && ok {
+			exists, err := resolver.CheckConstraintNameExists(tableDef.DbName, tableDef.Name, name)
+			if err != nil {
+				return err
+			}
+			if exists {
+				return moerr.NewInvalidInputf(ctx.GetContext(), "duplicate check constraint name '%s'", name)
 			}
 		}
-	} else if checkNameSet[name] {
-		return moerr.NewInvalidInputf(ctx.GetContext(), "duplicate check constraint name '%s'", name)
 	}
 
 	tableDef.Checks = append(tableDef.Checks, &plan.CheckDef{
@@ -1902,6 +1976,8 @@ func appendCheckDef(ctx CompilerContext, tableDef *TableDef, name string, astExp
 	})
 	return nil
 }
+
+const maxCheckConstraintNameRunes = 64
 
 func checkCheckExprReferences(ctx context.Context, expr *plan.Expr, cols []*ColDef) error {
 	if expr == nil {
@@ -1917,6 +1993,10 @@ func checkCheckExprReferences(ctx context.Context, expr *plan.Expr, cols []*ColD
 	case *plan.Expr_P:
 		return moerr.NewInvalidInputf(ctx, "check constraint cannot contain parameter marker")
 	case *plan.Expr_F:
+		if _, denied := checkConstraintConnectionFunctions[strings.ToLower(e.F.Func.ObjName)]; denied {
+			return moerr.NewInvalidInputf(ctx,
+				"check constraint cannot refer to connection-dependent function '%s'", e.F.Func.ObjName)
+		}
 		for _, arg := range e.F.Args {
 			if err := checkCheckExprReferences(ctx, arg, cols); err != nil {
 				return err
@@ -1930,6 +2010,70 @@ func checkCheckExprReferences(ctx context.Context, expr *plan.Expr, cols []*ColD
 		}
 	}
 	return nil
+}
+
+var checkConstraintConnectionFunctions = map[string]struct{}{
+	"connection_id":        {},
+	"current_account_id":   {},
+	"current_account_name": {},
+	"current_role":         {},
+	"current_role_id":      {},
+	"current_user":         {},
+	"current_user_id":      {},
+	"current_user_name":    {},
+	"database":             {},
+	"found_rows":           {},
+	"last_insert_id":       {},
+	"last_query_id":        {},
+	"role":                 {},
+	"row_count":            {},
+	"session_user":         {},
+	"system_user":          {},
+	"user":                 {},
+}
+
+func validateCheckForeignKeyActions(
+	ctx context.Context,
+	tableDef *TableDef,
+	fkeys []checkForeignKeyAction,
+) error {
+	checkedCols := make(map[string]struct{})
+	for _, check := range tableDef.Checks {
+		collectCheckColumnNames(check.Check, tableDef.Cols, checkedCols)
+	}
+	for _, fk := range fkeys {
+		for colName := range fk.cols {
+			if _, checked := checkedCols[colName]; !checked {
+				continue
+			}
+			if fk.onUpdate == tree.REFERENCE_OPTION_CASCADE || fk.onUpdate == tree.REFERENCE_OPTION_SET_NULL ||
+				fk.onDelete == tree.REFERENCE_OPTION_SET_NULL {
+				return moerr.NewInvalidInputf(ctx,
+					"check constraint cannot be defined on column used by foreign key '%s' with cascading SET NULL/CASCADE action", fk.name)
+			}
+		}
+	}
+	return nil
+}
+
+func collectCheckColumnNames(expr *plan.Expr, cols []*ColDef, out map[string]struct{}) {
+	if expr == nil {
+		return
+	}
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		if e.Col.ColPos >= 0 && int(e.Col.ColPos) < len(cols) {
+			out[cols[e.Col.ColPos].Name] = struct{}{}
+		}
+	case *plan.Expr_F:
+		for _, arg := range e.F.Args {
+			collectCheckColumnNames(arg, cols, out)
+		}
+	case *plan.Expr_List:
+		for _, item := range e.List.List {
+			collectCheckColumnNames(item, cols, out)
+		}
+	}
 }
 
 func bindCheckExpr(ctx CompilerContext, astExpr tree.Expr, cols []*ColDef) (*plan.Expr, error) {
@@ -1947,12 +2091,11 @@ func bindCheckExpr(ctx CompilerContext, astExpr tree.Expr, cols []*ColDef) (*pla
 	return binder.BindExpr(astExpr, 0, true)
 }
 
-// RecoverCheckConstraintsFromCreateSql is an upgrade-compatibility fallback for
-// tables created before CHECK constraints were persisted structurally under the
-// hidden __mo_check_constraints config key. Such tables come back from the
-// engine with an empty TableDef.Checks even though their CHECK clauses are still
-// recorded verbatim in Createsql. Without this recovery, INSERT/REPLACE/UPDATE
-// on those tables would silently bypass CHECK enforcement after a restart.
+// RecoverCheckConstraintsFromCreateSql rebuilds CHECK metadata from Createsql.
+// CHECKs intentionally stay out of the legacy engine constraint binary stream
+// because adding a new unframed tag would crash old CNs during rolling upgrade.
+// Without this recovery, INSERT/REPLACE/UPDATE after Resolve would silently
+// bypass CHECK enforcement.
 //
 // When TableDef.Checks is already populated (tables created on the new version)
 // this is a no-op. On any parse/bind failure it logs and leaves Checks empty so
@@ -2020,7 +2163,7 @@ func RecoverCheckConstraintsFromCreateSql(ctx CompilerContext, tableDef *TableDe
 	// binding, naming and OriginSql formatting used by CREATE TABLE.
 	scratch := &TableDef{Name: tableDef.Name, Cols: tableDef.Cols}
 	for _, c := range checks {
-		if err := appendCheckDef(ctx, scratch, c.name, c.expr); err != nil {
+		if err := appendCheckDefInternal(ctx, scratch, c.name, c.expr, false); err != nil {
 			logutil.Errorf("recover check constraints: bind check for table %s failed: %v", tableDef.Name, err)
 			return
 		}

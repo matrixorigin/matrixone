@@ -1019,10 +1019,15 @@ func doShowErrors(ses *Session, execCtx *ExecCtx) error {
 	mrs.AddColumn(MsgCol)
 
 	info := ses.GetErrInfo()
+	level := "Error"
+	if _, ok := execCtx.stmt.(*tree.ShowWarnings); ok {
+		info = ses.getWarnInfo()
+		level = "Warning"
+	}
 
 	for i := info.length() - 1; i >= 0; i-- {
 		row := make([]interface{}, 3)
-		row[0] = "Error"
+		row[0] = level
 		row[1] = int16(info.codes[i])
 		row[2] = info.msgs[i]
 		mrs.AddRow(row)
