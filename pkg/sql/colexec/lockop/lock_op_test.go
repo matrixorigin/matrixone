@@ -161,6 +161,42 @@ func TestLockOpHelpers(t *testing.T) {
 	require.True(t, opts.changeDef)
 }
 
+func TestHasMismatchedLockTargetType(t *testing.T) {
+	mp := mpool.MustNew("test")
+	intVec, err := vector.NewConstFixed(types.T_int32.ToType(), int32(1), 1, mp)
+	require.NoError(t, err)
+	defer intVec.Free(mp)
+
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = intVec
+	bat.SetRowCount(1)
+	targets := []lockTarget{{
+		primaryColumnIndexInBatch: 0,
+		primaryColumnType:         types.T_varchar.ToType(),
+	}}
+	require.True(t, hasMismatchedLockTargetType(bat, targets))
+
+	otherVec := vector.NewVec(types.T_int32.ToType())
+	require.NoError(t, vector.AppendFixed(otherVec, int32(2), false, mp))
+	defer otherVec.Free(mp)
+	bat.Vecs = append(bat.Vecs, otherVec)
+	require.True(t, hasMismatchedLockTargetType(bat, targets))
+
+	targets[0].primaryColumnType = types.T_int32.ToType()
+	require.False(t, hasMismatchedLockTargetType(bat, targets))
+
+	normalVec := vector.NewVec(types.T_int32.ToType())
+	require.NoError(t, vector.AppendFixed(normalVec, int32(1), false, mp))
+	defer normalVec.Free(mp)
+	bat.Vecs[0] = normalVec
+	targets[0].primaryColumnType = types.T_varchar.ToType()
+	require.False(t, hasMismatchedLockTargetType(bat, targets))
+
+	bat.SetRowCount(2)
+	bat.Vecs[0] = intVec
+	require.False(t, hasMismatchedLockTargetType(bat, targets))
+}
+
 func TestRefreshLockWaitOptionsUsesRemainingDeadline(t *testing.T) {
 	options := lock.LockOptions{
 		LockWaitDeadline: time.Now().Add(1500 * time.Millisecond).UnixNano(),

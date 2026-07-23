@@ -435,11 +435,21 @@ id    d1    d2
 6    323.0    3.782732943432E7
 8    7382.0    3923404.2132421
 SELECT * from format_02 WHERE format(d2, 2) >= 0;
-invalid argument cast to int, bad value 47,832.43
+id    d1    d2
+1    1.2    47832.434
+2    -3283.33    73.32
+3    null    32789.33
+5    323232.0    0.0
+6    323.0    3.782732943432E7
+8    7382.0    3923404.2132421
 SELECT * FROM format_02 WHERE format(d2, 0) NOT BETWEEN 0 AND 100;
-invalid argument cast to int, bad value 47,832
+id    d1    d2
+4    0.0    -3.89020934324E7
 SELECT * FROM format_02 WHERE format(d2, 2) MOD 2 = 0;
-invalid argument cast to int, bad value 47,832.43
+id    d1    d2
+3    null    32789.33
+4    0.0    -3.89020934324E7
+5    323232.0    0.0
 SELECT concat_ws(format(d2,3),'abc') from format_02;
 concat_ws(format(d2, 3), abc)
 abc
