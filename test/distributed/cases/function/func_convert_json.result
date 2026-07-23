@@ -279,6 +279,27 @@ from convert_json_enum where id = 1
 minus
 select 20 as id, e_json as e from convert_json_enum where id = 2
 ) src;
+insert into convert_json_enum_destination
+select id, e
+from (
+select 21 as id, cast('{"a":1}' as varchar) as e
+union all
+select 22 as id, e_json as e from convert_json_enum where id = 1
+) src;
+insert into convert_json_enum_destination
+select id, e
+from (
+select 23 as id, e_json as e from convert_json_enum where id = 1
+union
+select 24 as id, cast('{"b":2}' as varchar) as e
+) src;
+insert into convert_json_enum_destination
+select id, e
+from (
+select 25 as id, cast('{"a":1}' as varchar) as e
+union
+select 26 as id, e_json as e from convert_json_enum where id = 1
+) src;
 select id, json_type(j), json_unquote(j)
 from convert_json_enum_destination
 order by id;
@@ -302,7 +323,17 @@ order by id;
 17  ¦  STRING  ¦  {"a":1}  𝄀
 18  ¦  OBJECT  ¦  {"a": 1}  𝄀
 19  ¦  OBJECT  ¦  {"a": 1}  𝄀
-20  ¦  OBJECT  ¦  {"a": 1}
+20  ¦  OBJECT  ¦  {"a": 1}  𝄀
+21  ¦  OBJECT  ¦  {"a": 1}  𝄀
+22  ¦  OBJECT  ¦  {"a": 1}  𝄀
+23  ¦  OBJECT  ¦  {"a": 1}  𝄀
+24  ¦  OBJECT  ¦  {"b": 2}  𝄀
+25  ¦  OBJECT  ¦  {"a": 1}  𝄀
+26  ¦  OBJECT  ¦  {"a": 1}
+select e_json from convert_json_enum
+minus all
+select e_json from convert_json_enum;
+EXCEPT/MINUS ALL clause is not yet implemented
 drop table convert_json_enum_destination;
 drop table convert_json_enum;
 prepare convert_json_parameter from 'select json_type(convert(?, json)), convert(?, json)';
