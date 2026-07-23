@@ -12004,19 +12004,26 @@ func TestRW2(t *testing.T) {
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnRWConflict))
 }
 
+func newTestTxnServer(t *testing.T) rpc.TxnServer {
+	t.Helper()
+	server, err := rpc.NewTxnServer("127.0.0.1:0", runtime.ServiceRuntime(""))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, server.Close())
+	})
+	return server
+}
+
 func Test_BasicTxnModeSwitch(t *testing.T) {
 	ctx := context.Background()
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
-
-	var err error
-	tae.TxnServer, err = rpc.NewTxnServer("localhost:12345", runtime.ServiceRuntime(""))
-	require.NoError(t, err)
+	tae.TxnServer = newTestTxnServer(t)
 
 	defer tae.Close()
 
 	assert.True(t, tae.IsWriteMode())
-	err = tae.SwitchTxnMode(ctx, 1, "todo")
+	err := tae.SwitchTxnMode(ctx, 1, "todo")
 	assert.NoError(t, err)
 	assert.True(t, tae.IsReplayMode())
 	assert.True(t, tae.TxnMgr.IsReplayMode())
@@ -12035,9 +12042,7 @@ func prepareTxnModeSwitchWithInflightTxn(
 	ctx := context.Background()
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
-	var err error
-	tae.TxnServer, err = rpc.NewTxnServer("localhost:12345", runtime.ServiceRuntime(""))
-	require.NoError(t, err)
+	tae.TxnServer = newTestTxnServer(t)
 
 	schema := catalog.MockSchema(1, -1)
 	txn, err := tae.StartTxn(nil)
