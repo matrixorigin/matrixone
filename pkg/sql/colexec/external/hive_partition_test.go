@@ -960,7 +960,7 @@ func TestClassifyFilters_AccountAsPhysicalCol(t *testing.T) {
 // motivated the compile-side fpFilters → rowFilters propagation fix:
 // ClassifyFilters routes OR(__mo_filepath LIKE ..., const) to fpFilters
 // because both operands' col refs are a subset of filePathColSet (the
-// literal contributes no refs). But FilterFileList's judgeContainColname is
+// literal contributes no refs). But FilterFileList's isFileLevelFilter is
 // stricter — it rejects OR branches that don't reference a filepath column
 // — so the filter comes back unconsumed and must be appended to rowFilters
 // by the caller. This test pins the classification half of the contract so
@@ -987,7 +987,7 @@ func TestClassifyFilters_OrFilepathAndLiteral(t *testing.T) {
 
 // TestFilterFileList_LeavesUnconsumedOrFilterInNode locks the exact side-effect
 // contract that compile.getHivePartitionFileList depends on: when FilterFileList
-// is handed an OR(filepath, literal) filter, its judgeContainColname check
+// is handed an OR(filepath, literal) filter, its isFileLevelFilter check
 // rejects it (OR branches must each reference a filepath col), and the rejected
 // filter is written back via node.FilterList. compile.go appends tmpNode.FilterList
 // onto rowFilters so the runtime still evaluates the predicate; without that
@@ -1017,9 +1017,9 @@ func TestFilterFileList_LeavesUnconsumedOrFilterInNode(t *testing.T) {
 	outFileList, outFileSize, err := FilterFileList(proc.Ctx, tmpNode, proc, fileList, fileSize)
 	require.NoError(t, err)
 
-	// judgeContainColname rejected the OR, so filterList in filterByAccountAndFilename
-	// was empty and the function short-circuited at line 368-370 — fileList / fileSize
-	// come back unchanged.
+	// isFileLevelFilter rejected the OR, so filterList in filterByAccountAndFilename
+	// was empty and the function short-circuited — fileList / fileSize come back
+	// unchanged.
 	assert.Equal(t, fileList, outFileList)
 	assert.Equal(t, fileSize, outFileSize)
 
