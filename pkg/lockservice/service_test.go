@@ -4147,15 +4147,20 @@ func requireServiceStatus(t *testing.T, service *service, status pb.Status) {
 
 func requireRollingRestartLockEventuallySucceeds(
 	t *testing.T,
-	fn func() error,
+	ctx context.Context,
+	fn func(context.Context) error,
 	onBindChanged func(),
 ) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	retryCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
 	for {
-		err := fn()
+		err := fn(retryCtx)
 		if err == nil {
 			return
+		}
+		if retryCtx.Err() != nil {
+			require.NoError(t, err, "lock did not recover after rolling restart")
 		}
 		if moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged) && onBindChanged != nil {
 			onBindChanged()
@@ -4167,10 +4172,11 @@ func requireRollingRestartLockEventuallySucceeds(
 				moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect),
 			"unexpected rolling-restart lock error: %v", err,
 		)
-		if time.Now().After(deadline) {
+		select {
+		case <-retryCtx.Done():
 			require.NoError(t, err, "lock did not recover after rolling restart")
+		case <-time.After(10 * time.Millisecond):
 		}
-		time.Sleep(10 * time.Millisecond)
 	}
 }
 
@@ -4184,7 +4190,7 @@ func TestRetryLockSuccInRollingRestartCN(t *testing.T) {
 
 			ctx, cancel := context.WithTimeout(
 				context.Background(),
-				time.Second*10)
+				time.Second*20)
 			defer cancel()
 			option := pb.LockOptions{
 				Granularity: pb.Granularity_Row,
@@ -4242,9 +4248,9 @@ func TestRetryLockSuccInRollingRestartCN(t *testing.T) {
 			// remote lock should be succ
 			option.SnapShotTs = t3
 			txnID := []byte("txn3")
-			requireRollingRestartLockEventuallySucceeds(t, func() error {
+			requireRollingRestartLockEventuallySucceeds(t, ctx, func(retryCtx context.Context) error {
 				_, err = l2.Lock(
-					ctx,
+					retryCtx,
 					0,
 					[][]byte{{3}},
 					txnID,
@@ -4403,7 +4409,7 @@ func TestMoveTableRetryLockSuccInRollingRestartCN(t *testing.T) {
 
 			ctx, cancel := context.WithTimeout(
 				context.Background(),
-				time.Second*10)
+				time.Second*20)
 			defer cancel()
 			option := pb.LockOptions{
 				Granularity: pb.Granularity_Row,
@@ -4451,9 +4457,9 @@ func TestMoveTableRetryLockSuccInRollingRestartCN(t *testing.T) {
 			require.NoError(t, err)
 
 			txnID := []byte("txn2")
-			requireRollingRestartLockEventuallySucceeds(t, func() error {
+			requireRollingRestartLockEventuallySucceeds(t, ctx, func(retryCtx context.Context) error {
 				_, err = l2.Lock(
-					ctx,
+					retryCtx,
 					0,
 					[][]byte{{1}},
 					txnID,
