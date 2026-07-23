@@ -356,16 +356,22 @@ type BindContext struct {
 	windows    []*plan.Expr
 	times      []*plan.Expr
 
-	groupByAst     map[string]int32
-	aggregateByAst map[string]int32
-	sampleByAst    map[string]int32
-	windowByAst    map[string]int32
-	projectByExpr  map[string]int32
-	timeByAst      map[string]int32
+	groupByAst      map[string]int32
+	groupByParamAst map[string]int32
+	aggregateByAst  map[string]int32
+	sampleByAst     map[string]int32
+	windowByAst     map[string]int32
+	projectByExpr   map[string]int32
+	timeByAst       map[string]int32
 
 	projectColByAst map[string]int32
 
 	projectByAst []SelectField
+
+	numericProjectionTypes          []Type
+	numericTableProjectionTypes     map[string][]Type
+	numericTableProjectionAmbiguous map[string][]bool
+	numericCteByName                map[string]*tree.CTE
 
 	timeAsts []tree.Expr
 
@@ -453,12 +459,14 @@ type Binder interface {
 }
 
 type baseBinder struct {
-	sysCtx           context.Context
-	builder          *QueryBuilder
-	ctx              *BindContext
-	impl             Binder
-	boundCols        []string
-	numericParamType *Type
+	sysCtx                context.Context
+	builder               *QueryBuilder
+	ctx                   *BindContext
+	impl                  Binder
+	boundCols             []string
+	numericParamType      *Type
+	numericSubqueryTarget *Type
+	numericFunctionTarget bool
 }
 
 type DefaultBinder struct {
@@ -505,7 +513,8 @@ type WhereBinder struct {
 
 type GroupBinder struct {
 	baseBinder
-	selectList tree.SelectExprs
+	selectList        tree.SelectExprs
+	projectionExprPos int32
 }
 
 type HavingBinder struct {
@@ -516,7 +525,8 @@ type HavingBinder struct {
 
 type ProjectionBinder struct {
 	baseBinder
-	havingBinder *HavingBinder
+	havingBinder      *HavingBinder
+	numericTargetType *Type
 }
 
 type OrderBinder struct {

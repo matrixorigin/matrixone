@@ -89,6 +89,7 @@ type TxnComputationWrapper struct {
 	// a valid mode, so prepared execution tracks its presence separately.
 	preparedSchedulingSQLMode    string
 	hasPreparedSchedulingSQLMode bool
+	preparedSchedulingSQL        string
 }
 
 func InitTxnComputationWrapper(
@@ -184,6 +185,7 @@ func (cwft *TxnComputationWrapper) Clear() {
 	cwft.schedulingSQL = ""
 	cwft.preparedSchedulingSQLMode = ""
 	cwft.hasPreparedSchedulingSQLMode = false
+	cwft.preparedSchedulingSQL = ""
 	cwft.schedulingTrace.Reset()
 }
 
@@ -573,7 +575,8 @@ func initExecuteStmtParam(execCtx *ExecCtx, ses *Session, cwft *TxnComputationWr
 	eng := ses.proc.Base.SessionInfo.StorageEngine
 	catalogCache := eng.(*disttae.Engine).GetLatestCatalogCache()
 
-	var change bool
+	currentTempTableVersion := ses.GetTempTableVersion()
+	change := prepareStmt.tempTableVersion != currentTempTableVersion
 	for _, obj := range preparePlan.GetSchemas() {
 		accountId := ses.GetAccountId()
 		if ShouldSwitchToSysAccount(obj.SchemaName, obj.ObjName) {
@@ -588,8 +591,8 @@ func initExecuteStmtParam(execCtx *ExecCtx, ses *Session, cwft *TxnComputationWr
 			Ts:         prepareStmt.Ts,
 		}
 
-		change = CheckTableDefChange(catalogCache, tblKey)
-		if change {
+		if CheckTableDefChange(catalogCache, tblKey) {
+			change = true
 			break
 		}
 	}
@@ -601,23 +604,42 @@ func initExecuteStmtParam(execCtx *ExecCtx, ses *Session, cwft *TxnComputationWr
 	fkSensitive := shouldRebuildPreparePlan(false, preparePlan.Plan)
 	modeMismatch := prepareStmt.NativeMode != currentNativeMode
 
-	// Rebuild when schema, FK-check state, or compatibility mode requires it.
+	// Rebuild the plan when catalog schema, session temporary-table name
+	// resolution, FK-check state, or compatibility mode changed.
 	if change || fkSensitive || modeMismatch {
 		originPrepareStmt := &tree.PrepareStmt{
 			Name: tree.Identifier(prepareStmt.Name),
 			Stmt: prepareStmt.PrepareStmt,
 		}
-		newPlan, err := buildPlan(reqCtx, ses, ses.GetTxnCompileCtx(), originPrepareStmt)
+		compilerCtx := ses.GetTxnCompileCtx()
+		newPlan, err := func() (*plan.Plan, error) {
+			currentDatabase := compilerCtx.GetDatabase()
+			compilerCtx.SetDatabase(prepareStmt.defaultDatabase)
+			defer compilerCtx.SetDatabase(currentDatabase)
+			return buildPlan(reqCtx, ses, compilerCtx, originPrepareStmt)
+		}()
 		if err != nil {
 			return nil, nil, nil, "", err
 		}
-		preparePlan = newPlan.GetDcl().GetPrepare()
+		newPreparePlan := newPlan.GetDcl().GetPrepare()
+		columns := plan2.GetResultColumnsFromPlan(newPreparePlan.Plan)
+		newColDefData, err := execCtx.resper.MysqlRrWr().MakeColumnDefData(reqCtx, columns)
+		if err != nil {
+			return nil, nil, nil, "", err
+		}
+
+		preparePlan = newPreparePlan
 		prepareStmt.PreparePlan = newPlan
+		prepareStmt.ColDefData = newColDefData
+		if execCtx.input != nil && execCtx.input.isBinaryProtExecute {
+			execCtx.prepareColDef = newColDefData
+		}
 		prepareStmt.NativeMode = currentNativeMode
 		prepareStmt.Ts = timestamp.Timestamp{PhysicalTime: time.Now().Unix()}
+		prepareStmt.tempTableVersion = currentTempTableVersion
 	}
 
-	// Recreate the cached compile when schema, FK-check state, or compatibility mode changes.
+	// Recreate the cached compile only when a plan dependency changed.
 	// Otherwise the cached compile is reused as-is: Compile.Reset clears
 	// the per-execution state, including the pipeline edges' terminal state
 	// (see Scope.resetForReuse), so reuse is safe and avoids the
@@ -654,11 +676,16 @@ func initExecuteStmtParam(execCtx *ExecCtx, ses *Session, cwft *TxnComputationWr
 		}
 	}
 	numParams := len(preparePlan.ParamTypes)
+	cwft.paramVals = nil
 	if prepareStmt.params != nil && prepareStmt.params.Length() > 0 { // use binary protocol
 		if prepareStmt.params.Length() != numParams {
 			return nil, nil, nil, originSQL, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
 		}
 		cwft.proc.SetPrepareParams(prepareStmt.params)
+		cwft.paramVals, err = preparedParamValues(cwft.proc)
+		if err != nil {
+			return nil, nil, nil, originSQL, err
+		}
 	} else if execPlan != nil && len(execPlan.Args) > 0 {
 		if len(execPlan.Args) != numParams {
 			return nil, nil, nil, originSQL, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
@@ -682,12 +709,32 @@ func initExecuteStmtParam(execCtx *ExecCtx, ses *Session, cwft *TxnComputationWr
 	// reusable if a session-level scheduling override is later cleared.
 	cwft.preparedSchedulingSQLMode = prepareStmt.schedulingSQLMode
 	cwft.hasPreparedSchedulingSQLMode = true
+	cwft.preparedSchedulingSQL = originSQL
 	retComp := prepareStmt.compile
 	if retComp != nil && querySchedulingIntentForStatementWithSQLMode(
 		ses, originSQL, prepareStmt.schedulingSQLMode).Explicit {
 		retComp = nil
 	}
 	return retComp, preparePlan.Plan, prepareStmt.PrepareStmt, originSQL, nil
+}
+
+func preparedParamValues(proc *process.Process) ([]any, error) {
+	params := proc.GetPrepareParams()
+	if params == nil || params.Length() == 0 {
+		return nil, nil
+	}
+	values := make([]any, params.Length())
+	for i := range values {
+		if params.IsNull(uint64(i)) {
+			continue
+		}
+		raw, err := proc.GetPrepareParamsAt(i)
+		if err != nil {
+			return nil, err
+		}
+		values[i] = plan2.ParamValue{Value: string(raw), IsBin: proc.GetPrepareParamIsBin(i)}
+	}
+	return values, nil
 }
 
 func buildExecuteUserParams(
