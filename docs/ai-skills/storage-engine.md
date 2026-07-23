@@ -42,7 +42,7 @@ TN 侧: TAE (本地存储引擎)
 
 - **路径：** `pkg/vm/engine/types.go`
 - **抽象：** Engine → Database → Relation(Table) → Reader
-- **可插拔：** 支持 DisttaE、MemoryEngine (测试用) 等实现
+- **实现：** CN 使用 DistTAE 访问分布式 TAE 存储
 
 ## 与测试的关联
 
