@@ -973,6 +973,63 @@ func TestDecodeTableDumpManifestBoundsCollectionsBeforeMaterializing(t *testing.
 	require.ErrorContains(t, err, "more than 250000 objects")
 }
 
+func TestDecodeTableDumpManifestUnknownAndMalformedFields(t *testing.T) {
+	manifest, err := decodeTableDumpManifest([]byte(`{
+		"version": 1,
+		"source_database": "db",
+		"source_table": "src",
+		"create_sql": "create table src (a int)",
+		"schema_hash": "main",
+		"metadata_only": true,
+		"unknown_scalar": 42,
+		"unknown_nested": {"array": [1, {"deeper": [true, null]}]},
+		"relations": [{
+			"role": "main",
+			"index_name": "",
+			"index_algo_table_type": "",
+			"source_table": "src",
+			"schema_hash": "relation",
+			"unknown_relation_field": [{"ignored": true}],
+			"objects": [{"name": "object"}]
+		}]
+	}`))
+	require.NoError(t, err)
+	require.Equal(t, "db", manifest.SourceDatabase)
+	require.Equal(t, "src", manifest.SourceTable)
+	require.True(t, manifest.MetadataOnly)
+	require.Len(t, manifest.Relations, 1)
+	require.Len(t, manifest.Relations[0].Objects, 1)
+
+	for _, tc := range []struct {
+		name string
+		data string
+	}{
+		{name: "not-object", data: `[]`},
+		{name: "invalid-field-type", data: `{"version":"one"}`},
+		{name: "relations-not-array", data: `{"relations":{}}`},
+		{name: "relation-not-object", data: `{"relations":[[]]}`},
+		{name: "objects-not-array", data: `{"relations":[{"objects":{}}]}`},
+		{name: "invalid-object", data: `{"relations":[{"objects":[1]}]}`},
+		{name: "trailing-data", data: `{} {}`},
+		{name: "truncated-unknown-value", data: `{"unknown":[1,`},
+		{name: "truncated-relations", data: `{"relations":[`},
+		{name: "truncated-relation", data: `{"relations":[{"role":"main"`},
+		{name: "truncated-objects", data: `{"relations":[{"objects":[`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := decodeTableDumpManifest([]byte(tc.data))
+			require.Error(t, err)
+		})
+	}
+
+	manifest, err = decodeTableDumpManifest([]byte(`{"relations":null}`))
+	require.NoError(t, err)
+	require.Nil(t, manifest.Relations)
+	manifest, err = decodeTableDumpManifest([]byte(`{"relations":[{"objects":null}]}`))
+	require.NoError(t, err)
+	require.Nil(t, manifest.Relations[0].Objects)
+}
+
 func TestCopyTableDumpFilePrefersObjectCopier(t *testing.T) {
 	ctx := context.Background()
 	src, err := fileservice.NewLocalETLFS("src", t.TempDir())
@@ -991,6 +1048,30 @@ func TestCopyTableDumpFilePrefersObjectCopier(t *testing.T) {
 	require.Equal(t, int64(len(content)), size)
 	require.Equal(t, fmt.Sprintf("%x", sha256.Sum256(content)), hash)
 	require.NoError(t, verifyTableDumpObject(ctx, copier, "objects/obj", size, hash))
+}
+
+func TestVerifyTableDumpObjectRejectsMissingAndMismatchedData(t *testing.T) {
+	ctx := context.Background()
+	fs, err := fileservice.NewLocalETLFS("objects", t.TempDir())
+	require.NoError(t, err)
+	content := []byte("object bytes")
+	require.NoError(t, fs.Write(ctx, fileservice.IOVector{
+		FilePath: "object",
+		Entries:  []fileservice.IOEntry{{Offset: 0, Size: int64(len(content)), Data: content}},
+	}))
+
+	require.NoError(t, verifyTableDumpObject(ctx, fs, "object", int64(len(content)), ""))
+	require.Error(t, verifyTableDumpObject(ctx, fs, "object", int64(len(content)+1), ""))
+	require.Error(t, verifyTableDumpObject(ctx, fs, "object", int64(len(content)), strings.Repeat("0", sha256.Size*2)))
+	require.Error(t, verifyTableDumpObject(ctx, fs, "missing", 0, ""))
+	require.Error(t, verifyTableDumpObject(ctx, fs, "missing", 0, strings.Repeat("0", sha256.Size*2)))
+
+	_, _, err = hashTableDumpFile(ctx, fs, "missing")
+	require.Error(t, err)
+	_, _, err = copyTableDumpFile(ctx, fs, fs, "missing", "destination")
+	require.Error(t, err)
+	_, _, err = streamTableDumpFile(ctx, fs, fs, "missing", "destination")
+	require.Error(t, err)
 }
 
 func TestCopyTableDumpFileRejectsServerSideSizeMismatch(t *testing.T) {

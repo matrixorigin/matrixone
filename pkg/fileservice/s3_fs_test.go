@@ -46,9 +46,16 @@ type objectStorageReadRange struct {
 
 type testObjectCopyStorage struct {
 	dummyObjectStorage
-	src    ObjectStorage
-	srcKey string
-	dstKey string
+	src     ObjectStorage
+	srcKey  string
+	dstKey  string
+	exists  bool
+	err     error
+	copyErr error
+}
+
+func (s *testObjectCopyStorage) Exists(context.Context, string) (bool, error) {
+	return s.exists, s.err
 }
 
 func (s *testObjectCopyStorage) CopyObject(
@@ -60,7 +67,7 @@ func (s *testObjectCopyStorage) CopyObject(
 	s.src = src
 	s.srcKey = srcKey
 	s.dstKey = dstKey
-	return true, nil
+	return true, s.copyErr
 }
 
 func TestS3FSCopyObject(t *testing.T) {
@@ -92,6 +99,28 @@ func TestS3FSCopyObject(t *testing.T) {
 	require.True(t, copied)
 	require.Equal(t, "cluster/objects/a", dstStorage.srcKey)
 	require.Equal(t, "fixture/objects/b", dstStorage.dstKey)
+
+	noCopier := &S3FS{name: "dst", storage: dummyObjectStorage{}}
+	copied, err = noCopier.CopyObject(ctx, src, "objects/a", "objects/b")
+	require.NoError(t, err)
+	require.False(t, copied)
+
+	dstStorage.exists = true
+	_, err = dst.CopyObject(ctx, src, "objects/a", "objects/b")
+	require.Error(t, err)
+	dstStorage.exists = false
+	dstStorage.err = errors.New("exists failed")
+	_, err = dst.CopyObject(ctx, src, "objects/a", "objects/b")
+	require.ErrorContains(t, err, "exists failed")
+	dstStorage.err = nil
+	dstStorage.copyErr = errors.New("copy failed")
+	_, err = dst.CopyObject(ctx, src, "objects/a", "objects/b")
+	require.ErrorContains(t, err, "copy failed")
+
+	_, err = dst.CopyObject(ctx, src, "~~", "objects/b")
+	require.Error(t, err)
+	_, err = dst.CopyObject(ctx, src, "objects/a", "~~")
+	require.Error(t, err)
 }
 
 func TestObjectCopyCapabilityFallbacks(t *testing.T) {
