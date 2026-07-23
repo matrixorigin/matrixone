@@ -19,12 +19,11 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
-	"github.com/matrixorigin/matrixone/pkg/frontend"
 )
 
 func TestIcebergOrphanCleanupTenantUpgradeEntries(t *testing.T) {
-	if len(tenantUpgEntries) != 6 {
-		t.Fatalf("expected 4 Iceberg and 2 workload policy tenant upgrades, got %d", len(tenantUpgEntries))
+	if len(tenantUpgEntries) != 4 {
+		t.Fatalf("expected 4 Iceberg tenant upgrades, got %d", len(tenantUpgEntries))
 	}
 	allocator := tenantUpgEntries[0]
 	if allocator.UpgType != versions.MODIFY_COLUMN || allocator.TableName != "mo_iceberg_catalogs" {
@@ -39,7 +38,7 @@ func TestIcebergOrphanCleanupTenantUpgradeEntries(t *testing.T) {
 	if strings.Contains(allocatorSQL, "drop primary key") {
 		t.Fatalf("catalog allocator upgrade should preserve the account-scoped primary key: %s", allocator.UpgSql)
 	}
-	for _, entry := range tenantUpgEntries[1:4] {
+	for _, entry := range tenantUpgEntries[1:] {
 		if entry.UpgType != versions.ADD_COLUMN {
 			t.Fatalf("%s should be ADD_COLUMN", entry.TableName)
 		}
@@ -51,41 +50,6 @@ func TestIcebergOrphanCleanupTenantUpgradeEntries(t *testing.T) {
 		}
 		if strings.Contains(lower, "drop ") {
 			t.Fatalf("orphan cleanup upgrade SQL must not drop objects: %s", entry.UpgSql)
-		}
-	}
-
-	column := tenantUpgEntries[4]
-	if column.UpgType != versions.ADD_COLUMN ||
-		column.TableName != "mo_mysql_compatibility_mode" {
-		t.Fatalf("unexpected workload policy generated-column upgrade: %+v", column)
-	}
-	columnSQL := strings.ToLower(column.UpgSql)
-	for _, want := range []string{
-		"alter table",
-		frontend.MoMysqlCompatWorkloadPolicyAccountColumn,
-		"generated always as",
-		frontend.MoMysqlCompatWorkloadPolicyExpression,
-		"stored",
-	} {
-		if !strings.Contains(columnSQL, strings.ToLower(want)) {
-			t.Fatalf("workload policy column upgrade SQL missing %q: %s", want, column.UpgSql)
-		}
-	}
-
-	index := tenantUpgEntries[5]
-	if index.UpgType != versions.ADD_CONSTRAINT_UNIQUE_INDEX ||
-		index.TableName != "mo_mysql_compatibility_mode" {
-		t.Fatalf("unexpected workload policy unique-index upgrade: %+v", index)
-	}
-	indexSQL := strings.ToLower(index.UpgSql)
-	for _, want := range []string{
-		"alter table",
-		"add unique key",
-		frontend.MoMysqlCompatWorkloadPolicyUniqueIndex,
-		frontend.MoMysqlCompatWorkloadPolicyAccountColumn,
-	} {
-		if !strings.Contains(indexSQL, strings.ToLower(want)) {
-			t.Fatalf("workload policy index upgrade SQL missing %q: %s", want, index.UpgSql)
 		}
 	}
 }
