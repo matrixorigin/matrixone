@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -30,8 +31,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
+	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 
@@ -42,7 +46,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
@@ -284,6 +287,40 @@ func TestShouldPrePipelineLockTable(t *testing.T) {
 	require.False(t, target.LockTableAtTheEnd)
 }
 
+func TestConstructLockOpPreservesSharedTableMode(t *testing.T) {
+	for _, lockTable := range []bool{false, true} {
+		t.Run(fmt.Sprintf("table=%t", lockTable), func(t *testing.T) {
+			node := &plan.Node{LockTargets: []*plan.LockTarget{{
+				TableId: 42, PrimaryColTyp: plan.Type{Id: int32(types.T_int64)},
+				Mode: lockpb.LockMode_Shared, LockTable: lockTable,
+			}}}
+
+			op, err := constructLockOp(node, nil)
+			require.NoError(t, err)
+			targets := op.CopyToPipelineTarget()
+			require.Len(t, targets, 1)
+			assert.Equal(t, lockTable, targets[0].LockTable)
+			assert.Equal(t, lockpb.LockMode_Shared, targets[0].Mode)
+		})
+	}
+}
+
+func TestValidateReplaceParentTxnMode(t *testing.T) {
+	ctx := context.Background()
+	query := &plan.Query{DetectSqls: []string{"REPLACE_PARENT_LOCK:select 1 for update"}}
+
+	require.NoError(t, validateReplaceParentTxnMode(ctx, query, true))
+	require.ErrorContains(t, validateReplaceParentTxnMode(ctx, query, false),
+		"optimistic transaction mode")
+	query.DetectSqls = []string{"REPLACE_PARENT_PLAN:"}
+	require.NoError(t, validateReplaceParentTxnMode(ctx, query, true))
+	require.ErrorContains(t, validateReplaceParentTxnMode(ctx, query, false),
+		"optimistic transaction mode")
+	require.NoError(t, validateReplaceParentTxnMode(ctx,
+		&plan.Query{DetectSqls: []string{"select true"}}, false))
+	require.NoError(t, validateReplaceParentTxnMode(ctx, nil, false))
+}
+
 func TestLockTableLocksAllPrePipelineTargets(t *testing.T) {
 	runtime.RunTest(
 		"",
@@ -329,7 +366,8 @@ func TestLockTableLocksAllPrePipelineTargets(t *testing.T) {
 					c := &Compile{
 						proc: proc,
 						lockTables: map[uint64]*plan.LockTarget{
-							10: {TableId: 10, PrimaryColTyp: plan.Type{Id: int32(types.T_int32)}},
+							10: {TableId: 10, PrimaryColTyp: plan.Type{Id: int32(types.T_int32)},
+								Mode: lockpb.LockMode_Shared},
 							11: {TableId: 11, PrimaryColTyp: plan.Type{Id: int32(types.T_int32)}},
 						},
 					}
@@ -337,6 +375,14 @@ func TestLockTableLocksAllPrePipelineTargets(t *testing.T) {
 					require.NoError(t, c.lockTable())
 					require.True(t, txnOp.HasLockTable(10))
 					require.True(t, txnOp.HasLockTable(11))
+
+					sharedTxn, err := txnClient.New(ctx, timestamp.Timestamp{})
+					require.NoError(t, err)
+					defer func() { require.NoError(t, sharedTxn.Rollback(ctx)) }()
+					sharedProc := process.NewTopProcess(ctx, mpool.MustNewZero(), txnClient, sharedTxn,
+						nil, services[0], nil, nil, nil, nil, nil)
+					require.NoError(t, lockop.LockTableWithMode(nil, sharedProc, 10,
+						types.T_int32.ToType(), lockpb.LockMode_Shared, false))
 				},
 				nil,
 			)

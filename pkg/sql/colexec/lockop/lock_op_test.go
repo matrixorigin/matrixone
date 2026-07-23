@@ -1109,8 +1109,9 @@ func TestCallLockOpLocksTableAtEOFWhenNoRowsProduced(t *testing.T) {
 				IsFirst: false,
 				IsLast:  false,
 			}
-			arg.AddLockTarget(tableID, nil, 0, pkType, -1, -1, nil, true)
-			arg.LockTable(tableID, false)
+			arg.AddLockTargetWithMode(
+				tableID, nil, lock.LockMode_Shared, 0, pkType, -1, -1, nil, true)
+			arg.LockTableWithMode(tableID, lock.LockMode_Shared, false)
 			resetChildren(arg, nil)
 			defer arg.Free(proc, false, nil)
 
@@ -1118,6 +1119,16 @@ func TestCallLockOpLocksTableAtEOFWhenNoRowsProduced(t *testing.T) {
 			_, err := vm.Exec(arg, proc)
 			require.NoError(t, err)
 			require.True(t, proc.GetTxnOperator().HasLockTable(tableID))
+
+			sharedTxn, err := proc.Base.TxnClient.New(proc.Ctx, timestamp.Timestamp{})
+			require.NoError(t, err)
+			defer func() { require.NoError(t, sharedTxn.Rollback(proc.Ctx)) }()
+			sharedProc := process.NewTopProcess(proc.Ctx, mpool.MustNewZero(), proc.Base.TxnClient,
+				sharedTxn, nil, proc.GetLockService(), nil, nil, nil, nil, nil)
+			require.NoError(t, LockTableWithMode(
+				nil, sharedProc, tableID, pkType, lock.LockMode_Shared, false))
+			require.NoError(t, LockTable(nil, proc, tableID+1, pkType, false))
+			require.True(t, proc.GetTxnOperator().HasLockTable(tableID+1))
 		},
 	)
 }
@@ -1712,4 +1723,116 @@ func TestDedupLockRows_Idempotent(t *testing.T) {
 	once := dedupLockRows(in)
 	twice := dedupLockRows(append([][]byte(nil), once...))
 	require.Equal(t, once, twice)
+}
+
+func TestLockOpMergeableTargetsRemainStreaming(t *testing.T) {
+	runLockOpTest(t, func(proc *process.Process) {
+		pkType := types.T_int32.ToType()
+		makeBatch := func(left, right int32) *batch.Batch {
+			bat := batch.NewWithSize(2)
+			bat.Vecs[0] = testutil.MakeInt32Vector([]int32{left}, nil, proc.Mp())
+			bat.Vecs[1] = testutil.MakeInt32Vector([]int32{right}, nil, proc.Mp())
+			bat.SetRowCount(1)
+			return bat
+		}
+		first := makeBatch(2, 1)
+		second := makeBatch(1, 2)
+		defer first.Clean(proc.Mp())
+		defer second.Clean(proc.Mp())
+
+		arg := NewArgumentByEngine(nil)
+		arg.AddLockTargetWithMode(1, nil, lock.LockMode_Shared, 0, pkType, -1, -1, nil, false)
+		arg.AddLockTargetWithMode(1, nil, lock.LockMode_Shared, 1, pkType, -1, -1, nil, false)
+		arg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{first, second}))
+		require.NoError(t, arg.Prepare(proc))
+		arg.ctr.hasNewVersionInRange = testFunc
+
+		result, err := vm.Exec(arg, proc)
+		require.NoError(t, err)
+		require.Same(t, first, result.Batch)
+		require.True(t, proc.GetTxnOperator().HasLockTable(uint64(1)))
+		result, err = vm.Exec(arg, proc)
+		require.NoError(t, err)
+		require.Same(t, second, result.Batch)
+		result, err = vm.Exec(arg, proc)
+		require.NoError(t, err)
+		require.Nil(t, result.Batch)
+		arg.Free(proc, false, nil)
+	})
+}
+
+func TestLockOpMergeableTargetsSkipLeadingAllNull(t *testing.T) {
+	runLockOpTest(t, func(proc *process.Process) {
+		pkType := types.T_int32.ToType()
+		bat := batch.NewWithSize(2)
+		bat.Vecs[0] = testutil.MakeInt32Vector([]int32{0}, []uint64{0}, proc.Mp())
+		bat.Vecs[1] = testutil.MakeInt32Vector([]int32{42}, nil, proc.Mp())
+		bat.SetRowCount(1)
+		defer bat.Clean(proc.Mp())
+
+		arg := NewArgumentByEngine(nil)
+		arg.AddLockTargetWithMode(1, nil, lock.LockMode_Shared, 0, pkType, -1, -1, nil, false)
+		arg.AddLockTargetWithMode(1, nil, lock.LockMode_Shared, 1, pkType, -1, -1, nil, false)
+		arg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat}))
+		require.NoError(t, arg.Prepare(proc))
+		arg.ctr.hasNewVersionInRange = testFunc
+
+		result, err := vm.Exec(arg, proc)
+		require.NoError(t, err)
+		require.Same(t, bat, result.Batch)
+		require.True(t, proc.GetTxnOperator().HasLockTable(uint64(1)))
+		arg.Free(proc, false, nil)
+	})
+}
+
+func TestLockOpMergedTargetChecksEveryVersionRange(t *testing.T) {
+	arg := NewArgumentByEngine(nil)
+	pkType := types.T_int32.ToType()
+	arg.AddLockTargetWithMode(1, nil, lock.LockMode_Shared, 3, pkType, -1, -1, nil, false)
+	arg.AddLockTargetWithMode(1, nil, lock.LockMode_Shared, 7, pkType, -1, -1, nil, false)
+	arg.ctr.relations = make([]engine.Relation, len(arg.targets))
+	var checked []int32
+	arg.ctr.hasNewVersionInRange = func(
+		_ *process.Process,
+		_ engine.Relation,
+		_ process.Analyzer,
+		_ uint64,
+		_ engine.Engine,
+		_ *batch.Batch,
+		idx int32,
+		_ int32,
+		_, _ timestamp.Timestamp,
+	) (bool, error) {
+		checked = append(checked, idx)
+		return idx == 7, nil
+	}
+
+	changed, err := arg.hasNewVersionInRangeForTargets([]int{0, 1})(
+		nil, nil, nil, 1, nil, nil, -1, -1, timestamp.Timestamp{}, timestamp.Timestamp{})
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.Equal(t, []int32{3, 7}, checked)
+}
+
+func TestLockOpExclusiveTargetsStayRowLocked(t *testing.T) {
+	runLockOpTest(t, func(proc *process.Process) {
+		pkType := types.T_int32.ToType()
+		bat := batch.NewWithSize(2)
+		bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1}, nil, proc.Mp())
+		bat.Vecs[1] = testutil.MakeInt32Vector([]int32{1}, nil, proc.Mp())
+		bat.SetRowCount(1)
+		defer bat.Clean(proc.Mp())
+
+		arg := NewArgumentByEngine(nil)
+		arg.AddLockTargetWithMode(1, nil, lock.LockMode_Exclusive, 0, pkType, -1, -1, nil, false)
+		arg.AddLockTargetWithMode(1, nil, lock.LockMode_Exclusive, 1, pkType, -1, -1, nil, false)
+		require.False(t, mergeableLockTargets(arg.targets[0], arg.targets[1]))
+		arg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat}))
+		require.NoError(t, arg.Prepare(proc))
+		arg.ctr.hasNewVersionInRange = testFunc
+
+		_, err := vm.Exec(arg, proc)
+		require.NoError(t, err)
+		arg.Free(proc, false, nil)
+	})
 }

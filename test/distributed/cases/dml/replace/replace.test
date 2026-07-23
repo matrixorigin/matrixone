@@ -237,6 +237,249 @@ insert into t_replace_multi_uk_batch (name, email, value) values ('a', 'x@a.com'
 replace into t_replace_multi_uk_batch (name, email, value) values ('a', 'y@a.com', 111), ('b', 'z@a.com', 222);
 select name, email, value from t_replace_multi_uk_batch order by name;
 drop table t_replace_multi_uk_batch;
+-- parent-side foreign key actions during REPLACE (delete-then-insert semantics)
+-- ON DELETE RESTRICT: replacing a referenced parent row must fail and leave it unchanged
+drop table if exists fk_c;
+drop table if exists fk_p;
+create table fk_p(id int primary key, v varchar(20));
+create table fk_c(id int primary key, pid int, foreign key(pid) references fk_p(id) on delete restrict);
+insert into fk_p values (1,'p1');
+insert into fk_c values (10,1);
+replace into fk_p values (1,'p1_new');
+select * from fk_p order by id;
+select * from fk_c order by id;
+-- replacing an unreferenced parent row is allowed
+replace into fk_p values (2,'p2_new');
+select * from fk_p order by id;
+drop table fk_c;
+drop table fk_p;
+
+-- ON DELETE CASCADE: replacing a referenced parent row cascades the delete to children
+drop table if exists fk_cc;
+drop table if exists fk_cp;
+create table fk_cp(id int primary key, v varchar(20));
+create table fk_cc(id int primary key, pid int, foreign key(pid) references fk_cp(id) on delete cascade);
+insert into fk_cp values (1,'p1');
+insert into fk_cc values (10,1);
+replace into fk_cp values (1,'p1_new');
+select * from fk_cp order by id;
+select * from fk_cc order by id;
+drop table fk_cc;
+drop table fk_cp;
+
+-- ON DELETE SET NULL: replacing a referenced parent row nulls the child fk columns
+drop table if exists fk_sc;
+drop table if exists fk_sp;
+create table fk_sp(id int primary key, v varchar(20));
+create table fk_sc(id int primary key, pid int, foreign key(pid) references fk_sp(id) on delete set null);
+insert into fk_sp values (1,'p1');
+insert into fk_sc values (10,1);
+replace into fk_sp values (1,'p1_new');
+select * from fk_sp order by id;
+select * from fk_sc order by id;
+drop table fk_sc;
+drop table fk_sp;
+
+-- combined SET NULL keeps physically distinct rows with identical business columns
+drop table if exists fk_dup_sc;
+drop table if exists fk_dup_sp;
+create table fk_dup_sp(id int primary key);
+create table fk_dup_sc(pid1 int, pid2 int, note int,
+  foreign key(pid1) references fk_dup_sp(id) on delete set null,
+  foreign key(pid2) references fk_dup_sp(id) on delete set null);
+insert into fk_dup_sp values (1);
+insert into fk_dup_sc values (1,1,7),(1,1,7);
+replace into fk_dup_sp values (1);
+select count(*) from fk_dup_sc where pid1 is null and pid2 is null and note = 7;
+select count(*) from fk_dup_sc where pid1 = 1 or pid2 = 1;
+drop table fk_dup_sc;
+drop table fk_dup_sp;
+
+-- ON DELETE SET DEFAULT follows DELETE semantics and restricts referenced parents
+drop table if exists fk_dc;
+drop table if exists fk_dp;
+create table fk_dp(id int primary key, v varchar(20));
+create table fk_dc(id int primary key, pid int default 2,
+  foreign key(pid) references fk_dp(id) on delete set default);
+insert into fk_dp values (1,'p1'),(2,'p2');
+insert into fk_dc values (10,1);
+replace into fk_dp values (1,'p1_new');
+select * from fk_dp order by id;
+select * from fk_dc order by id;
+drop table fk_dc;
+drop table fk_dp;
+
+-- multi-row REPLACE: every conflicting parent row applies its child action (CASCADE)
+drop table if exists fk_mc;
+drop table if exists fk_mp;
+create table fk_mp(id int primary key, v varchar(20));
+create table fk_mc(id int primary key, pid int, foreign key(pid) references fk_mp(id) on delete cascade);
+insert into fk_mp values (1,'p1'),(2,'p2'),(3,'p3');
+insert into fk_mc values (10,1),(20,2),(30,3);
+replace into fk_mp values (1,'p1_new'),(2,'p2_new');
+select * from fk_mp order by id;
+select * from fk_mc order by id;
+drop table fk_mc;
+drop table fk_mp;
+
+-- Unsupported parent-side FK shapes must fail instead of silently skipping actions.
+drop table if exists fk_review_c;
+drop table if exists fk_review_p;
+create table fk_review_p(id int primary key, u int unique, v int);
+create table fk_review_c(id int primary key, pid int,
+  foreign key(pid) references fk_review_p(id) on delete cascade);
+insert into fk_review_p values (1, 10, 100);
+insert into fk_review_c values (1, 1);
+replace into fk_review_p values (2, 10, 200);
+select * from fk_review_p order by id;
+select * from fk_review_c order by id;
+create table fk_review_src(id int, u int, v int);
+insert into fk_review_src values (1, 10, 400);
+replace into fk_review_p select * from fk_review_src;
+select * from fk_review_p order by id;
+select * from fk_review_c order by id;
+drop table fk_review_src;
+drop table fk_review_c;
+drop table fk_review_p;
+
+create table fk_auto_p(id int auto_increment primary key, u int unique, v int);
+create table fk_auto_c(id int primary key, pid int,
+  foreign key(pid) references fk_auto_p(id) on delete cascade);
+insert into fk_auto_p(u, v) values (10, 100);
+insert into fk_auto_c values (1, 1);
+replace into fk_auto_p(u, v) values (10, 200);
+select u, v from fk_auto_p;
+select * from fk_auto_c;
+drop table fk_auto_c;
+drop table fk_auto_p;
+
+create table fk_nonpk_p(id int primary key, u int unique);
+create table fk_nonpk_c(id int primary key, parent_u int,
+  foreign key(parent_u) references fk_nonpk_p(u) on delete cascade);
+insert into fk_nonpk_p values (1, 10);
+insert into fk_nonpk_c values (1, 10);
+replace into fk_nonpk_p values (2, 10);
+select * from fk_nonpk_p;
+select * from fk_nonpk_c;
+drop table fk_nonpk_c;
+drop table fk_nonpk_p;
+
+create table fk_fanout_p(id int primary key, u int unique, v int unique);
+create table fk_fanout_c(id int primary key, pid int,
+  foreign key(pid) references fk_fanout_p(id) on delete cascade);
+insert into fk_fanout_p values (1, 10, 100), (2, 20, 200);
+insert into fk_fanout_c values (1, 1), (2, 2);
+replace into fk_fanout_p values (3, 10, 200);
+select * from fk_fanout_p;
+select * from fk_fanout_c;
+drop table fk_fanout_c;
+drop table fk_fanout_p;
+
+create table fk_prefix_p(id int primary key, body varchar(64), unique key u(body(4)));
+create table fk_prefix_c(id int primary key, pid int,
+  foreign key(pid) references fk_prefix_p(id) on delete cascade);
+insert into fk_prefix_p values (1, 'abcdxxxx');
+insert into fk_prefix_c values (1, 1);
+replace into fk_prefix_p values (2, 'abcdyyyy');
+select * from fk_prefix_p;
+select * from fk_prefix_c;
+drop table fk_prefix_c;
+drop table fk_prefix_p;
+
+create table fk_omitted_uk_p(
+  id int primary key,
+  u varchar(20) unique,
+  v int
+);
+create table fk_omitted_uk_c(
+  id int primary key,
+  pid int,
+  foreign key(pid) references fk_omitted_uk_p(id) on delete cascade
+);
+insert into fk_omitted_uk_p values (1, 'x', 100);
+insert into fk_omitted_uk_c values (1, 1);
+replace into fk_omitted_uk_p(id) values (1);
+select * from fk_omitted_uk_p;
+select * from fk_omitted_uk_c;
+insert into fk_omitted_uk_p values (2, 'x', 200);
+select * from fk_omitted_uk_p order by id;
+drop table fk_omitted_uk_c;
+drop table fk_omitted_uk_p;
+
+create table fk_temporal_default_p(
+  id int primary key,
+  d date unique default '2026-07-15',
+  t time unique default '12:34:56',
+  dt datetime unique default '2026-07-15 12:34:56',
+  ts timestamp unique default '2026-07-15 12:34:56'
+);
+create table fk_temporal_default_c(
+  id int primary key,
+  pid int,
+  foreign key(pid) references fk_temporal_default_p(id) on delete cascade
+);
+insert into fk_temporal_default_p(id) values (1);
+insert into fk_temporal_default_c values (1, 1);
+replace into fk_temporal_default_p(id) values (2);
+select * from fk_temporal_default_p;
+select * from fk_temporal_default_c;
+drop table fk_temporal_default_c;
+drop table fk_temporal_default_p;
+
+create table fk_decimal_cast_p(id int primary key, u decimal(5,2) unique);
+create table fk_decimal_cast_c(id int primary key, pid int,
+  foreign key(pid) references fk_decimal_cast_p(id) on delete cascade);
+insert into fk_decimal_cast_p values (1, 1.23);
+insert into fk_decimal_cast_c values (1, 1);
+replace into fk_decimal_cast_p values (2, 1.234);
+select * from fk_decimal_cast_p;
+select * from fk_decimal_cast_c;
+drop table fk_decimal_cast_c;
+drop table fk_decimal_cast_p;
+
+create table fk_param_p(id int primary key, v int);
+create table fk_param_c(id int primary key, pid int,
+  foreign key(pid) references fk_param_p(id) on delete restrict);
+prepare fk_param_key_stmt from 'replace into fk_param_p values (?, ?)';
+set @fk_id = 1, @fk_v = 300;
+execute fk_param_key_stmt using @fk_id, @fk_v;
+deallocate prepare fk_param_key_stmt;
+insert into fk_param_p values (1, 100);
+insert into fk_param_c values (1, 1);
+prepare fk_review_stmt from 'replace into fk_param_p values (1, ?)';
+set @fk_v = 300;
+execute fk_review_stmt using @fk_v;
+select * from fk_param_p;
+select * from fk_param_c;
+deallocate prepare fk_review_stmt;
+drop table fk_param_c;
+drop table fk_param_p;
+
+drop table if exists fk_comp_c;
+drop table if exists fk_comp_p;
+create table fk_comp_p(a int, b int, primary key(a, b));
+create table fk_comp_c(id int primary key, a int, b int,
+  foreign key(a, b) references fk_comp_p(a, b) on delete cascade);
+insert into fk_comp_p values (1, 1);
+insert into fk_comp_c values (1, 1, 1);
+replace into fk_comp_p values (1, 1);
+select * from fk_comp_p;
+select * from fk_comp_c;
+drop table fk_comp_c;
+drop table fk_comp_p;
+
+drop table if exists `fk``tick_c`;
+drop table if exists `fk``tick_p`;
+create table `fk``tick_p`(`id``x` int primary key);
+create table `fk``tick_c`(id int primary key, `pid``x` int,
+  foreign key(`pid``x`) references `fk``tick_p`(`id``x`) on delete cascade);
+insert into `fk``tick_p` values (1);
+insert into `fk``tick_c` values (1, 1);
+replace into `fk``tick_p` values (1);
+select * from `fk``tick_c`;
+drop table `fk``tick_c`;
+drop table `fk``tick_p`;
+
 -- child-side foreign key check during REPLACE: an inserted/replaced child row
 -- must reference an existing parent row, otherwise REPLACE fails and the
 -- previous conflicting row stays intact
@@ -333,3 +576,34 @@ select a, b, c from t_replace_fakepk_comp_null order by a, b, c;
 replace into t_replace_fakepk_comp_null (a, b, c) values (1, 1, 'one-replaced');
 select a, b, c from t_replace_fakepk_comp_null order by a, b, c;
 drop table t_replace_fakepk_comp_null;
+
+-- Self-referencing CASCADE uses the conflicting old row as the recursive root.
+drop table if exists t_replace_self_cascade;
+create table t_replace_self_cascade (
+  id int primary key,
+  parent_id int,
+  foreign key (parent_id) references t_replace_self_cascade(id) on delete cascade
+);
+insert into t_replace_self_cascade values (1, null), (2, 1), (3, 2), (4, 1);
+replace into t_replace_self_cascade values (1, null);
+select * from t_replace_self_cascade order by id;
+insert into t_replace_self_cascade values (2, 1), (3, 2);
+replace into t_replace_self_cascade values (10, null);
+select * from t_replace_self_cascade order by id;
+delete from t_replace_self_cascade;
+insert into t_replace_self_cascade values (1, null);
+update t_replace_self_cascade set parent_id = 1 where id = 1;
+replace into t_replace_self_cascade values (1, 1);
+select row_count();
+select * from t_replace_self_cascade order by id;
+delete from t_replace_self_cascade;
+insert into t_replace_self_cascade values (1, null), (2, 1);
+replace into t_replace_self_cascade values (1, null), (2, 1);
+select row_count();
+select * from t_replace_self_cascade order by id;
+delete from t_replace_self_cascade;
+insert into t_replace_self_cascade values (1, null), (2, 1);
+update t_replace_self_cascade set parent_id = 2 where id = 1;
+replace into t_replace_self_cascade values (1, null);
+select * from t_replace_self_cascade order by id;
+drop table t_replace_self_cascade;

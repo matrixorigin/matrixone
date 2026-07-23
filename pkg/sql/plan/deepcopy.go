@@ -157,16 +157,21 @@ func DeepCopyLockTarget(target *plan.LockTarget) *plan.LockTarget {
 		return nil
 	}
 	return &plan.LockTarget{
-		TableId:            target.TableId,
-		ObjRef:             DeepCopyObjectRef(target.ObjRef),
-		PrimaryColIdxInBat: target.PrimaryColIdxInBat,
-		PrimaryColTyp:      target.PrimaryColTyp,
-		RefreshTsIdxInBat:  target.RefreshTsIdxInBat,
-		FilterColIdxInBat:  target.FilterColIdxInBat,
-		LockTable:          target.LockTable,
-		Block:              target.Block,
-		LockRows:           DeepCopyExpr(target.LockRows),
-		LockTableAtTheEnd:  target.LockTableAtTheEnd,
+		TableId:              target.TableId,
+		ObjRef:               DeepCopyObjectRef(target.ObjRef),
+		PrimaryColIdxInBat:   target.PrimaryColIdxInBat,
+		PrimaryColTyp:        target.PrimaryColTyp,
+		RefreshTsIdxInBat:    target.RefreshTsIdxInBat,
+		FilterColIdxInBat:    target.FilterColIdxInBat,
+		LockTable:            target.LockTable,
+		Block:                target.Block,
+		Mode:                 target.Mode,
+		PrimaryColRelPos:     target.PrimaryColRelPos,
+		FilterColRelPos:      target.FilterColRelPos,
+		LockRows:             DeepCopyExpr(target.LockRows),
+		LockTableAtTheEnd:    target.LockTableAtTheEnd,
+		PartitionColIdxInBat: target.PartitionColIdxInBat,
+		HasPartitionCol:      target.HasPartitionCol,
 	}
 }
 
@@ -620,6 +625,7 @@ func DeepCopyQuery(qry *plan.Query) *plan.Query {
 		Params:              DeepCopyExprList(qry.Params),
 		Headings:            qry.Headings,
 		HasForeignKeyAction: qry.HasForeignKeyAction,
+		DetectSqls:          slices.Clone(qry.DetectSqls),
 	}
 	for idx, node := range qry.Nodes {
 		newQry.Nodes[idx] = DeepCopyNode(node)

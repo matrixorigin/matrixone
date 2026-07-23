@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -121,6 +122,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 			break
 		}
 	}
+	needsOldIndexMaintenance := !isFakePK || hasUniqueIdx
 
 	// get old columns from existing main table
 	//
@@ -186,7 +188,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 
 		var err error
 		for i, idxDef := range tableDef.Indexes {
-			if skipUniqueIdx[i] {
+			if skipUniqueIdx[i] && !needsOldIndexMaintenance {
 				continue
 			}
 			idxObjRefs[i], idxTableDefs[i], err = builder.compCtx.ResolveIndexTableByRef(objRef, idxDef.IndexTableName, bindCtx.snapshot)
@@ -242,10 +244,13 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 			})
 		}
 
-		var err error
 		for i, idxDef := range tableDef.Indexes {
-			if skipUniqueIdx[i] {
+			if skipUniqueIdx[i] && !needsOldIndexMaintenance {
 				continue
+			}
+			prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
+			if err != nil {
+				return 0, err
 			}
 			idxObjRefs[i], idxTableDefs[i], err = builder.compCtx.ResolveIndexTableByRef(objRef, idxDef.IndexTableName, bindCtx.snapshot)
 			if err != nil {
@@ -255,11 +260,31 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 			oldColName2Idx[idxDef.IndexTableName+"."+catalog.IndexTablePrimaryColName] = oldColName2Idx[tableDef.Name+"."+tableDef.Pkey.PkeyColName]
 
 			if !indexTableStoresSerializedKey(idxDef) {
-				oldColName2Idx[idxDef.IndexTableName+"."+catalog.IndexTableIndexColName] = oldColName2Idx[tableDef.Name+"."+indexPrimaryPartName(idxDef)]
+				partName := indexPrimaryPartName(idxDef)
+				if prefixLengths[partName] > 0 {
+					colIdx := tableDef.Name2ColIndex[partName]
+					partExpr := &plan.Expr{
+						Typ: tableDef.Cols[colIdx].Typ,
+						Expr: &plan.Expr_Col{
+							Col: &plan.ColRef{RelPos: oldScanTag, ColPos: colIdx},
+						},
+					}
+					idxExpr, err := builder.makeIndexPartExprFromInputExpr(partExpr, partName, prefixLengths)
+					if err != nil {
+						return 0, err
+					}
+					oldColName2Idx[idxDef.IndexTableName+"."+catalog.IndexTableIndexColName] = [2]int32{
+						fullProjTag, int32(len(fullProjList)),
+					}
+					fullProjList = append(fullProjList, idxExpr)
+				} else {
+					oldColName2Idx[idxDef.IndexTableName+"."+catalog.IndexTableIndexColName] = oldColName2Idx[tableDef.Name+"."+partName]
+				}
 			} else {
 				args := make([]*plan.Expr, len(idxDef.Parts))
 				for j, part := range idxDef.Parts {
-					colIdx := tableDef.Name2ColIndex[catalog.ResolveAlias(part)]
+					partName := catalog.ResolveAlias(part)
+					colIdx := tableDef.Name2ColIndex[partName]
 					args[j] = &plan.Expr{
 						Typ: tableDef.Cols[colIdx].Typ,
 						Expr: &plan.Expr_Col{
@@ -268,6 +293,12 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 								ColPos: colIdx,
 							},
 						},
+					}
+					if prefixLengths[partName] > 0 {
+						args[j], err = builder.makeIndexPartExprFromInputExpr(args[j], partName, prefixLengths)
+						if err != nil {
+							return 0, err
+						}
 					}
 				}
 
@@ -300,6 +331,10 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 				if !idxDef.Unique || skipUniqueIdx[i] {
 					continue
 				}
+				prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
+				if err != nil {
+					return 0, err
+				}
 				var ukPartConds []*plan.Expr
 				for _, part := range idxDef.Parts {
 					colName := catalog.ResolveAlias(part)
@@ -322,6 +357,16 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 								ColPos: colIdx,
 							},
 						},
+					}
+					if prefixLengths[colName] > 0 {
+						lExpr, err = builder.makeIndexPartExprFromInputExpr(lExpr, colName, prefixLengths)
+						if err != nil {
+							return 0, err
+						}
+						rExpr, err = builder.makeIndexPartExprFromInputExpr(rExpr, colName, prefixLengths)
+						if err != nil {
+							return 0, err
+						}
 					}
 					partCond, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{lExpr, rExpr})
 					ukPartConds = append(ukPartConds, partCond)
@@ -363,6 +408,10 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 				if !idxDef.Unique || skipUniqueIdx[i] {
 					continue
 				}
+				prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
+				if err != nil {
+					return 0, err
+				}
 				var ukPartConds []*plan.Expr
 				for _, part := range idxDef.Parts {
 					colName := catalog.ResolveAlias(part)
@@ -385,6 +434,16 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 								ColPos: colIdx,
 							},
 						},
+					}
+					if prefixLengths[colName] > 0 {
+						lExpr, err = builder.makeIndexPartExprFromInputExpr(lExpr, colName, prefixLengths)
+						if err != nil {
+							return 0, err
+						}
+						rExpr, err = builder.makeIndexPartExprFromInputExpr(rExpr, colName, prefixLengths)
+						if err != nil {
+							return 0, err
+						}
 					}
 					partCond, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{lExpr, rExpr})
 					ukPartConds = append(ukPartConds, partCond)
@@ -430,6 +489,14 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 
 	oldMainRowIDPos := oldColName2Idx[tableDef.Name+"."+catalog.Row_ID]
 	oldMainPKPos := oldColName2Idx[tableDef.Name+"."+tableDef.Pkey.PkeyColName]
+	buildParentFKActions := len(tableDef.RefChildTbls) > 0
+	if buildParentFKActions {
+		enabled, err := IsForeignKeyChecksEnabled(builder.compCtx)
+		if err != nil {
+			return 0, err
+		}
+		buildParentFKActions = enabled
+	}
 	replaceDedupOldColList := func(first [2]int32) []plan.ColRef {
 		oldCols := make([]plan.ColRef, 0, 3+len(tableDef.Indexes))
 		seen := make(map[[2]int32]struct{}, 3+len(tableDef.Indexes))
@@ -446,6 +513,16 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 		appendOldCol(first)
 		appendOldCol(oldMainRowIDPos)
 		appendOldCol(oldMainPKPos)
+		if buildParentFKActions {
+			// Parent-side FK actions consume the actual old row selected by the
+			// REPLACE conflict joins. Preserve every base column so FKs that
+			// reference any UNIQUE key can reuse the delete action planner.
+			for _, col := range tableDef.Cols {
+				if pos, ok := oldColName2Idx[tableDef.Name+"."+col.Name]; ok {
+					appendOldCol(pos)
+				}
+			}
+		}
 		for i, idxDef := range tableDef.Indexes {
 			if idxTableDefs[i] == nil {
 				continue
@@ -466,12 +543,11 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 
 		scanNodeID := builder.appendNode(&plan.Node{
 			NodeType:     plan.Node_TABLE_SCAN,
-			TableDef:     tableDef,
+			TableDef:     CloneTableDefForPlan(tableDef, true),
 			ObjRef:       objRef,
 			BindingTags:  []int32{scanTag},
 			ScanSnapshot: bindCtx.snapshot,
 		}, bindCtx)
-
 		pkPos := tableDef.Name2ColIndex[pkName]
 		pkTyp := tableDef.Cols[pkPos].Typ
 		leftExpr := &plan.Expr{
@@ -526,7 +602,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 			requiredOldCols[catalog.Row_ID] = struct{}{}
 			requiredOldCols[tableDef.Pkey.PkeyColName] = struct{}{}
 			for i, idxDef := range tableDef.Indexes {
-				if skipUniqueIdx[i] {
+				if skipUniqueIdx[i] && !needsOldIndexMaintenance {
 					continue
 				}
 				if !indexTableStoresSerializedKey(idxDef) {
@@ -535,6 +611,9 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 			}
 			captureList := make([]plan.OldColCapture, 0, len(requiredOldCols))
 			for i, col := range tableDef.Cols {
+				if buildParentFKActions {
+					requiredOldCols[col.Name] = struct{}{}
+				}
 				if _, needed := requiredOldCols[col.Name]; !needed {
 					continue
 				}
@@ -659,8 +738,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 
 	// get old RowID for index tables
 	for i, idxDef := range tableDef.Indexes {
-		// Skipped unique index (statically-NULL key): not stored, so no old row to fetch.
-		if skipUniqueIdx[i] {
+		if skipUniqueIdx[i] && !needsOldIndexMaintenance {
 			continue
 		}
 		idxTag := builder.genNewBindTag()
@@ -729,6 +807,8 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 	// unique key, so the deleted row's PK can differ from the inserted row's PK.
 	var replaceOldPkPos int32
 	var replaceOldPkTyp plan.Type
+	var replaceOldParentPos []int32
+	oldParentColFinalPos := make(map[string]int32)
 
 	{
 		insertCols := make([]plan.ColRef, len(tableDef.Cols)-1)
@@ -788,6 +868,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 				},
 			},
 		})
+		oldParentColFinalPos[catalog.Row_ID] = deleteCols[0].ColPos
 
 		oldPkPos := oldColName2Idx[tableDef.Name+"."+tableDef.Pkey.PkeyColName]
 		deleteCols[1].RelPos = finalProjTag
@@ -821,6 +902,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 				},
 			},
 		})
+		oldParentColFinalPos[tableDef.Pkey.PkeyColName] = replaceOldPkPos
 		updateCtxList = append(updateCtxList, &plan.UpdateCtx{
 			ObjRef:                objRef,
 			TableDef:              tableDef,
@@ -832,18 +914,31 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 		})
 	}
 
-	for i, idxDef := range tableDef.Indexes {
-		// A unique index whose key is statically NULL for this statement is not stored
-		// (serial(...) is NULL), matching the INSERT path which skips index maintenance
-		// for a NULL key. Nothing to insert into or delete from its index table.
-		if skipUniqueIdx[i] {
+	orderedIndexPos := make([]int, len(tableDef.Indexes))
+	for i := range orderedIndexPos {
+		orderedIndexPos[i] = i
+	}
+	slices.SortStableFunc(orderedIndexPos, func(left, right int) int {
+		return strings.Compare(
+			tableDef.Indexes[left].IndexTableName,
+			tableDef.Indexes[right].IndexTableName,
+		)
+	})
+	for _, i := range orderedIndexPos {
+		idxDef := tableDef.Indexes[i]
+		if skipUniqueIdx[i] && !needsOldIndexMaintenance {
 			continue
 		}
 		insertCols := make([]plan.ColRef, 2)
 		deleteCols := make([]plan.ColRef, 2)
 
 		newIdxPos := colName2Idx[idxDef.IndexTableName+"."+catalog.IndexTableIndexColName]
-		if indexTableStoresSerializedKey(idxDef) {
+		prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
+		if err != nil {
+			return 0, err
+		}
+		partName := indexPrimaryPartName(idxDef)
+		if indexTableStoresSerializedKey(idxDef) || prefixLengths[partName] > 0 {
 			idxExpr := &plan.Expr{
 				Typ: fullProjList[newIdxPos].Typ,
 				Expr: &plan.Expr_Col{
@@ -894,6 +989,9 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 			},
 		}
 		finalProjList = append(finalProjList, idxExpr)
+		if len(idxDef.Parts) == 1 && !indexTableStoresSerializedKey(idxDef) && prefixLengths[partName] == 0 {
+			oldParentColFinalPos[catalog.ResolveAlias(idxDef.Parts[0])] = oldIdxPos
+		}
 
 		insertCols[0].RelPos = finalProjTag
 		insertCols[0].ColPos = int32(newIdxPos)
@@ -913,18 +1011,46 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 		})
 
 		if idxDef.Unique {
+			if !skipUniqueIdx[i] {
+				lockTargets = append(lockTargets, &plan.LockTarget{
+					TableId:            idxTableDefs[i].TblId,
+					ObjRef:             idxObjRefs[i],
+					PrimaryColIdxInBat: int32(newIdxPos),
+					PrimaryColRelPos:   finalProjTag,
+					PrimaryColTyp:      finalProjList[newIdxPos].Typ,
+				})
+			}
 			lockTargets = append(lockTargets, &plan.LockTarget{
-				TableId:            idxTableDefs[i].TblId,
-				ObjRef:             idxObjRefs[i],
-				PrimaryColIdxInBat: int32(newIdxPos),
-				PrimaryColRelPos:   finalProjTag,
-				PrimaryColTyp:      finalProjList[newIdxPos].Typ,
-			}, &plan.LockTarget{
 				TableId:            idxTableDefs[i].TblId,
 				ObjRef:             idxObjRefs[i],
 				PrimaryColIdxInBat: int32(oldIdxPos),
 				PrimaryColRelPos:   finalProjTag,
 				PrimaryColTyp:      finalProjList[oldIdxPos].Typ,
+			})
+		}
+	}
+
+	if buildParentFKActions {
+		// Append the auxiliary old-parent image after every existing DML/index
+		// column. Native index keys rely on the legacy prefix positions above.
+		replaceOldParentPos = make([]int32, len(tableDef.Cols))
+		for i, col := range tableDef.Cols {
+			if finalPos, ok := oldParentColFinalPos[col.Name]; ok {
+				replaceOldParentPos[i] = finalPos
+				continue
+			}
+			oldPos, ok := oldColName2Idx[tableDef.Name+"."+col.Name]
+			if !ok {
+				return 0, moerr.NewInternalErrorf(builder.GetContext(),
+					"bind replace err, can not find old parent column %s", col.Name)
+			}
+			replaceOldParentPos[i] = int32(len(finalProjList))
+			finalProjList = append(finalProjList, &plan.Expr{
+				Typ: fullProjList[oldPos[1]].Typ,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: fullProjTag,
+					ColPos: oldPos[1],
+				}},
 			})
 		}
 	}
@@ -946,15 +1072,88 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 			irregularIndexes, tableDef, objRef)
 	}
 
-	if len(lockTargets) > 0 {
+	if len(lockTargets) > 0 && !buildParentFKActions {
 		lastNodeID = builder.appendNode(&plan.Node{
-			NodeType:    plan.Node_LOCK_OP,
-			Children:    []int32{lastNodeID},
-			TableDef:    tableDef,
-			BindingTags: []int32{builder.genNewBindTag()},
+			NodeType: plan.Node_LOCK_OP,
+			Children: []int32{lastNodeID},
+			TableDef: tableDef,
+			// LOCK_OP is a pass-through node. Keep the projection tag so a
+			// following shared SINK can remap every requested column correctly.
+			BindingTags: []int32{finalProjTag},
 			LockTargets: lockTargets,
 		}, bindCtx)
 		reCheckifNeedLockWholeTable(builder)
+	}
+
+	if len(replaceOldParentPos) > 0 {
+		// Execute parent-side FK actions from the same evaluated and locked old-row
+		// set consumed by MULTI_UPDATE. This supports VALUES parameters/functions
+		// and REPLACE SELECT/TABLE without serializing their AST into background SQL.
+		evaluatedSinkID := appendSinkNode(builder, bindCtx, lastNodeID)
+		if builder.preserveSinkProjection == nil {
+			builder.preserveSinkProjection = make(map[int32]struct{})
+		}
+		builder.preserveSinkProjection[evaluatedSinkID] = struct{}{}
+		evaluatedStep := builder.appendStep(evaluatedSinkID)
+
+		lockedSourceID := appendSinkScanNode(builder, bindCtx, evaluatedStep)
+		builder.qry.Nodes[lockedSourceID].BindingTags = []int32{finalProjTag}
+		lockedSourceID = builder.appendNode(&plan.Node{
+			NodeType:    plan.Node_LOCK_OP,
+			Children:    []int32{lockedSourceID},
+			TableDef:    tableDef,
+			BindingTags: []int32{finalProjTag},
+			LockTargets: lockTargets,
+		}, bindCtx)
+		if builder.preserveLockProjection == nil {
+			builder.preserveLockProjection = make(map[int32]struct{})
+		}
+		builder.preserveLockProjection[lockedSourceID] = struct{}{}
+		reCheckifNeedLockWholeTable(builder)
+
+		sharedSinkID := appendSinkNode(builder, bindCtx, lockedSourceID)
+		builder.preserveSinkProjection[sharedSinkID] = struct{}{}
+		sharedStep := builder.appendStep(sharedSinkID)
+
+		actionSourceID := appendSinkScanNode(builder, bindCtx, sharedStep)
+		actionInputTag := builder.genNewBindTag()
+		builder.qry.Nodes[actionSourceID].BindingTags = []int32{actionInputTag}
+		actionTag := builder.genNewBindTag()
+		actionProjection := make([]*plan.Expr, len(tableDef.Cols))
+		for i, col := range tableDef.Cols {
+			actionProjection[i] = &plan.Expr{
+				Typ: col.Typ,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: actionInputTag,
+					ColPos: replaceOldParentPos[i],
+				}},
+			}
+		}
+		actionSourceID = builder.appendNode(&plan.Node{
+			NodeType:    plan.Node_PROJECT,
+			Children:    []int32{actionSourceID},
+			ProjectList: actionProjection,
+			BindingTags: []int32{actionTag},
+		}, bindCtx)
+		actionSinkID := appendSinkNode(builder, bindCtx, actionSourceID)
+		builder.preserveSinkProjection[actionSinkID] = struct{}{}
+		actionStep := builder.appendStep(actionSinkID)
+
+		delCtx := getDmlPlanCtx()
+		delCtx.objRef = objRef
+		delCtx.tableDef = tableDef
+		delCtx.sourceStep = actionStep
+		delCtx.rowIdPos = int(tableDef.Name2ColIndex[catalog.Row_ID])
+		delCtx.allDelTableIDs = map[uint64]struct{}{tableDef.TblId: {}}
+		delCtx.skipTargetDelete = true
+		err := buildDeletePlans(builder.compCtx, builder, bindCtx, delCtx)
+		putDmlPlanCtx(delCtx)
+		if err != nil {
+			return 0, err
+		}
+
+		lastNodeID = appendSinkScanNode(builder, bindCtx, sharedStep)
+		builder.qry.Nodes[lastNodeID].BindingTags = []int32{finalProjTag}
 	}
 
 	// Self-referencing FK constraint checks are handled by DetectSqls (generated in
@@ -1136,8 +1335,23 @@ func (builder *QueryBuilder) appendNodesForReplaceStmt(
 
 		idxTableName := idxDef.IndexTableName
 		colName2Idx[idxTableName+"."+catalog.IndexTablePrimaryColName] = pkPos
+		prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
+		if err != nil {
+			return 0, nil, nil, err
+		}
 		if !indexTableStoresSerializedKey(idxDef) {
-			colName2Idx[idxTableName+"."+catalog.IndexTableIndexColName] = colName2Idx[tableDef.Name+"."+indexPrimaryPartName(idxDef)]
+			partName := indexPrimaryPartName(idxDef)
+			partPos := colName2Idx[tableDef.Name+"."+partName]
+			if prefixLengths[partName] > 0 {
+				idxExpr, err := builder.makeIndexPartExprFromInputExpr(projList2[partPos], partName, prefixLengths)
+				if err != nil {
+					return 0, nil, nil, err
+				}
+				colName2Idx[idxTableName+"."+catalog.IndexTableIndexColName] = int32(len(projList2))
+				projList2 = append(projList2, idxExpr)
+			} else {
+				colName2Idx[idxTableName+"."+catalog.IndexTableIndexColName] = partPos
+			}
 		} else {
 			argsLen := len(idxDef.Parts)
 			args := make([]*plan.Expr, argsLen)
@@ -1149,7 +1363,15 @@ func (builder *QueryBuilder) appendNodesForReplaceStmt(
 					errMsg := fmt.Sprintf("bind insert err, can not find colName = %s", idxDef.Parts[k])
 					return 0, nil, nil, moerr.NewInternalError(builder.GetContext(), errMsg)
 				}
-				args[k] = DeepCopyExpr(projList2[colPos])
+				partName := catalog.ResolveAlias(idxDef.Parts[k])
+				if prefixLengths[partName] > 0 {
+					args[k], err = builder.makeIndexPartExprFromInputExpr(projList2[colPos], partName, prefixLengths)
+					if err != nil {
+						return 0, nil, nil, err
+					}
+				} else {
+					args[k] = DeepCopyExpr(projList2[colPos])
+				}
 			}
 
 			funcName := "serial"

@@ -528,12 +528,21 @@ func (c *Compile) runOnce() (err error) {
 		c.proc.Base.StageCache.Clear()
 	}()
 
-	// Pre-check: REPLACE parent→child FK RESTRICT constraints must be
-	// verified before the REPLACE execution modifies any rows.
+	// REPLACE parent checks and actions run before the main pipeline.
 	query := c.pn.GetQuery()
 	if query != nil && query.StmtType == plan.Query_INSERT && len(query.GetDetectSqls()) != 0 {
+		if err = validateReplaceParentTxnMode(
+			c.proc.Ctx, query, c.proc.GetTxnOperator().Txn().IsPessimistic()); err != nil {
+			return err
+		}
 		for _, sql := range query.DetectSqls {
-			if strings.HasPrefix(sql, "REPLACE_PARENT_CHK:") {
+			if strings.HasPrefix(sql, "REPLACE_PARENT_PLAN:") {
+				continue
+			} else if strings.HasPrefix(sql, "REPLACE_PARENT_LOCK:") {
+				if err = c.runSql(strings.TrimPrefix(sql, "REPLACE_PARENT_LOCK:")); err != nil {
+					return err
+				}
+			} else if strings.HasPrefix(sql, "REPLACE_PARENT_CHK:") {
 				if err = runDetectSql(c, strings.TrimPrefix(sql, "REPLACE_PARENT_CHK:")); err != nil {
 					// Only translate the "check returned false" signal into the
 					// parent-row-referenced error; pass through real execution
@@ -542,6 +551,10 @@ func (c *Compile) runOnce() (err error) {
 					if moerr.IsMoErrCode(err, moerr.ErrFKNoReferencedRow2) {
 						return moerr.NewErrFKRowIsReferenced(c.proc.Ctx)
 					}
+					return err
+				}
+			} else if strings.HasPrefix(sql, "REPLACE_PARENT_ACTION:") {
+				if err = c.runSql(strings.TrimPrefix(sql, "REPLACE_PARENT_ACTION:")); err != nil {
 					return err
 				}
 			}
@@ -637,12 +650,14 @@ func (c *Compile) runOnce() (err error) {
 	query = c.pn.GetQuery()
 	if query != nil && (query.StmtType == plan.Query_INSERT ||
 		query.StmtType == plan.Query_UPDATE) && len(query.GetDetectSqls()) != 0 {
-		// Filter out pre-check SQLs (already executed before the main operation).
-		// The modern INSERT path enforces child→parent existence in-plan now, so the
-		// remaining DetectSqls are self-referencing FK checks (plain 1452 message).
+		// Filter out REPLACE parent-side checks and actions already executed before
+		// the main operation.
 		var postCheckSqls []string
 		for _, sql := range query.DetectSqls {
-			if strings.HasPrefix(sql, "REPLACE_PARENT_CHK:") {
+			if strings.HasPrefix(sql, "REPLACE_PARENT_LOCK:") ||
+				strings.HasPrefix(sql, "REPLACE_PARENT_PLAN:") ||
+				strings.HasPrefix(sql, "REPLACE_PARENT_CHK:") ||
+				strings.HasPrefix(sql, "REPLACE_PARENT_ACTION:") {
 				continue
 			}
 			postCheckSqls = append(postCheckSqls, sql)
@@ -657,6 +672,20 @@ func (c *Compile) runOnce() (err error) {
 		}
 	}
 	return err
+}
+
+func validateReplaceParentTxnMode(ctx context.Context, query *plan.Query, pessimistic bool) error {
+	if pessimistic || query == nil {
+		return nil
+	}
+	for _, sql := range query.DetectSqls {
+		if strings.HasPrefix(sql, "REPLACE_PARENT_LOCK:") ||
+			strings.HasPrefix(sql, "REPLACE_PARENT_PLAN:") {
+			return moerr.NewNotSupported(ctx,
+				"REPLACE on a referenced parent table in optimistic transaction mode")
+		}
+	}
+	return nil
 }
 
 // add log to check if background sql return NeedRetry error when origin sql execute successfully
@@ -810,11 +839,12 @@ func (c *Compile) lockTable() error {
 	for _, tableID := range tableIDs {
 		tbl := c.lockTables[tableID]
 		typ := plan2.MakeTypeByPlan2Type(tbl.PrimaryColTyp)
-		if err := lockop.LockTable(
+		if err := lockop.LockTableWithMode(
 			c.e,
 			c.proc,
 			tbl.TableId,
 			typ,
+			tbl.Mode,
 			false); err != nil {
 			return err
 		}

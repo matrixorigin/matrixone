@@ -40,6 +40,15 @@ func TestShouldCachePrepareCompileForeignKeyActions(t *testing.T) {
 
 	require.False(t, shouldCachePrepareCompile(makePlan(plan.Query_UPDATE, true)))
 	require.False(t, shouldCachePrepareCompile(makePlan(plan.Query_DELETE, true)))
+	require.False(t, shouldCachePrepareCompile(makePlan(plan.Query_INSERT, true)))
+
+	require.True(t, checkNodeCanCache(makePlan(plan.Query_INSERT, false)))
+	require.False(t, checkNodeCanCache(makePlan(plan.Query_INSERT, true)))
+
+	require.False(t, shouldRebuildPreparePlan(false, nil))
+	require.False(t, shouldRebuildPreparePlan(false, makePlan(plan.Query_INSERT, false)))
+	require.True(t, shouldRebuildPreparePlan(false, makePlan(plan.Query_INSERT, true)))
+	require.True(t, shouldRebuildPreparePlan(true, makePlan(plan.Query_INSERT, false)))
 }
 
 func TestShouldCachePrepareCompileRejectsIcebergScan(t *testing.T) {

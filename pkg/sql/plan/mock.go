@@ -53,6 +53,8 @@ type MockCompilerContext struct {
 	GetDatabaseIdFunc     func(string, *Snapshot) (uint64, error)
 	ResolveAccountIdsFunc func([]string) ([]uint32, error)
 	ResolveFunc           func(string, string, *Snapshot) (*ObjectRef, *TableDef)
+	ResolveVariableFunc   func(string, bool, bool) (interface{}, error)
+	GetProcessFunc        func() *process.Process
 }
 
 func (m *MockCompilerContext) GetLowerCaseTableNames() int64 {
@@ -102,6 +104,9 @@ func (m *MockCompilerContext) ResolveAccountIds(accountNames []string) ([]uint32
 }
 
 func (m *MockCompilerContext) ResolveVariable(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+	if m.ResolveVariableFunc != nil {
+		return m.ResolveVariableFunc(varName, isSystemVar, isGlobalVar)
+	}
 	vars := make(map[string]interface{})
 	vars["str_var"] = "str"
 	vars["int_var"] = 20
@@ -155,15 +160,16 @@ func NewEmptyCompilerContext() *MockCompilerContext {
 }
 
 type Schema struct {
-	cols      []col
-	pks       []int
-	idxs      []index
-	fks       []*ForeignKeyDef
-	clusterby *ClusterByDef
-	outcnt    float64
-	tblId     int64
-	isView    bool
-	viewCfg   ViewCfg
+	cols         []col
+	pks          []int
+	idxs         []index
+	fks          []*ForeignKeyDef
+	refChildTbls []uint64
+	clusterby    *ClusterByDef
+	outcnt       float64
+	tblId        int64
+	isView       bool
+	viewCfg      ViewCfg
 	// tableType overrides TableType when non-empty; used to mock index tables
 	// carrying an algo-specific type (e.g. ivfflat "metadata").
 	tableType string
@@ -1037,7 +1043,175 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 				OnUpdate:    plan.ForeignKeyDef_CASCADE,
 			},
 		},
-		outcnt: 10,
+		refChildTbls: []uint64{0},
+		outcnt:       10,
+	}
+
+	/*
+		Parent-side FK action fixtures for REPLACE (issue #24951).
+
+		create table replace_fk_p(id int primary key, v varchar(20));
+		create table replace_fk_c(id int primary key, pid int,
+			foreign key(pid) references replace_fk_p(id) on delete restrict);
+
+		create table replace_fk_cp(id int primary key, v varchar(20));
+		create table replace_fk_cc(id int primary key, pid int,
+			foreign key(pid) references replace_fk_cp(id) on delete cascade);
+	*/
+	constraintTestSchema["replace_fk_p"] = &Schema{
+		tblId: 77001,
+		cols: []col{
+			{"id", types.T_int32, true, 32, 0},
+			{"v", types.T_varchar, true, 20, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+		pks:          []int{0},
+		refChildTbls: []uint64{77002},
+		outcnt:       4,
+	}
+	constraintTestSchema["replace_fk_c"] = &Schema{
+		tblId: 77002,
+		cols: []col{
+			{"id", types.T_int32, true, 32, 0},
+			{"pid", types.T_int32, true, 32, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+		pks: []int{0},
+		fks: []*plan.ForeignKeyDef{
+			{
+				Name:        "fk_replace_c",
+				Cols:        []uint64{1}, // pid
+				ForeignTbl:  77001,
+				ForeignCols: []uint64{0}, // replace_fk_p.id
+				OnDelete:    plan.ForeignKeyDef_RESTRICT,
+				OnUpdate:    plan.ForeignKeyDef_RESTRICT,
+			},
+		},
+		outcnt: 4,
+	}
+	constraintTestSchema["replace_fk_cp"] = &Schema{
+		tblId: 77003,
+		cols: []col{
+			{"id", types.T_int32, true, 32, 0},
+			{"v", types.T_varchar, true, 20, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+		pks:          []int{0},
+		refChildTbls: []uint64{77004},
+		outcnt:       4,
+	}
+	constraintTestSchema["replace_fk_cc"] = &Schema{
+		tblId: 77004,
+		cols: []col{
+			{"id", types.T_int32, true, 32, 0},
+			{"pid", types.T_int32, true, 32, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+		pks: []int{0},
+		fks: []*plan.ForeignKeyDef{
+			{
+				Name:        "fk_replace_cc",
+				Cols:        []uint64{1}, // pid
+				ForeignTbl:  77003,
+				ForeignCols: []uint64{0}, // replace_fk_cp.id
+				OnDelete:    plan.ForeignKeyDef_CASCADE,
+				OnUpdate:    plan.ForeignKeyDef_CASCADE,
+			},
+		},
+		outcnt: 4,
+	}
+	constraintTestSchema["replace_fk_sp"] = &Schema{
+		tblId: 77005,
+		cols: []col{
+			{"id", types.T_int32, true, 32, 0},
+			{"v", types.T_varchar, true, 20, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+		pks:          []int{0},
+		refChildTbls: []uint64{77006},
+		outcnt:       4,
+	}
+	constraintTestSchema["replace_fk_sc"] = &Schema{
+		tblId: 77006,
+		cols: []col{
+			{"id", types.T_int32, true, 32, 0},
+			{"pid", types.T_int32, true, 32, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+		pks: []int{0},
+		fks: []*plan.ForeignKeyDef{
+			{
+				Name:        "fk_replace_sc",
+				Cols:        []uint64{1}, // pid
+				ForeignTbl:  77005,
+				ForeignCols: []uint64{0}, // replace_fk_sp.id
+				OnDelete:    plan.ForeignKeyDef_SET_NULL,
+				OnUpdate:    plan.ForeignKeyDef_SET_NULL,
+			},
+		},
+		outcnt: 4,
+	}
+	constraintTestSchema["replace_fk_np"] = &Schema{
+		tblId: 77007,
+		cols: []col{
+			{"id", types.T_int32, true, 32, 0},
+			{"v", types.T_varchar, true, 20, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+		pks:          []int{0},
+		refChildTbls: []uint64{77008},
+		outcnt:       4,
+	}
+	constraintTestSchema["replace_fk_nc"] = &Schema{
+		tblId: 77008,
+		cols: []col{
+			{"id", types.T_int32, true, 32, 0},
+			{"pid", types.T_int32, true, 32, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+		pks: []int{0},
+		fks: []*plan.ForeignKeyDef{
+			{
+				Name:        "fk_replace_nc",
+				Cols:        []uint64{1}, // pid
+				ForeignTbl:  77007,
+				ForeignCols: []uint64{0}, // replace_fk_np.id
+				OnDelete:    plan.ForeignKeyDef_NO_ACTION,
+				OnUpdate:    plan.ForeignKeyDef_NO_ACTION,
+			},
+		},
+		outcnt: 4,
+	}
+	constraintTestSchema["replace_fk_dp"] = &Schema{
+		tblId: 77009,
+		cols: []col{
+			{"id", types.T_int32, true, 32, 0},
+			{"v", types.T_varchar, true, 20, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+		pks:          []int{0},
+		refChildTbls: []uint64{77010},
+		outcnt:       4,
+	}
+	constraintTestSchema["replace_fk_dc"] = &Schema{
+		tblId: 77010,
+		cols: []col{
+			{"id", types.T_int32, true, 32, 0},
+			{"pid", types.T_int32, true, 32, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+		pks: []int{0},
+		fks: []*plan.ForeignKeyDef{
+			{
+				Name:        "fk_replace_dc",
+				Cols:        []uint64{1}, // pid
+				ForeignTbl:  77009,
+				ForeignCols: []uint64{0}, // replace_fk_dp.id
+				OnDelete:    plan.ForeignKeyDef_SET_DEFAULT,
+				OnUpdate:    plan.ForeignKeyDef_SET_DEFAULT,
+			},
+		},
+		outcnt: 4,
 	}
 
 	/*
@@ -1513,6 +1687,10 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 				tableDef.Fkeys = table.fks
 			}
 
+			if table.refChildTbls != nil {
+				tableDef.RefChildTbls = table.refChildTbls
+			}
+
 			if table.clusterby != nil {
 				tableDef.ClusterBy = &plan.ClusterByDef{
 					Name: "__mo_cbkey_003pid005pname",
@@ -1702,6 +1880,9 @@ func (m *MockCompilerContext) SetContext(ctx context.Context) {
 }
 
 func (m *MockCompilerContext) GetProcess() *process.Process {
+	if m.GetProcessFunc != nil {
+		return m.GetProcessFunc()
+	}
 	proc := testutil.NewProc(nil)
 	moruntime.ServiceRuntime(proc.GetService()).SetGlobalVariables(
 		moruntime.InternalSQLExecutor,

@@ -120,6 +120,15 @@ func (builder *QueryBuilder) removeSimpleProjections(nodeID int32, parentType pl
 			}
 		}
 
+	case plan.Node_LOCK_OP:
+		for i, childID := range node.Children {
+			newChildID, childProjMap := builder.removeSimpleProjections(childID, node.NodeType, true, colRefCnt)
+			node.Children[i] = newChildID
+			for ref, expr := range childProjMap {
+				projMap[ref] = expr
+			}
+		}
+
 	default:
 		for i, childID := range node.Children {
 			newChildID, childProjMap := builder.removeSimpleProjections(childID, node.NodeType, flag, colRefCnt)

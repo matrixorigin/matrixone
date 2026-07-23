@@ -183,7 +183,28 @@ func bindAndOptimizeReplaceQuery(ctx CompilerContext, stmt *tree.Replace, isPrep
 	if err != nil {
 		return nil, err
 	}
-	if len(tblInfo.tableDefs) == 1 {
+	// FK checks/actions are all disabled when foreign_key_checks is off, the
+	// same way MySQL skips foreign-key enforcement. Gate every FK SQL below
+	// (self-referencing checks, the RESTRICT pre-check, and the non-self
+	// parent-side actions) under one guard so the behavior is consistent.
+	fkChecksEnabled, err := IsForeignKeyChecksEnabled(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if len(tblInfo.tableDefs) == 1 &&
+		(len(tblInfo.tableDefs[0].Fkeys) > 0 || len(tblInfo.tableDefs[0].RefChildTbls) > 0) {
+		// The presence or absence of DetectSqls depends on the session's
+		// foreign_key_checks value. Keep the plan FK-sensitive even when the
+		// variable is currently off, otherwise a cached plan built without the
+		// checks could survive after they are enabled.
+		query.HasForeignKeyAction = true
+	}
+	if fkChecksEnabled && len(tblInfo.tableDefs) == 1 {
+		if len(tblInfo.tableDefs[0].RefChildTbls) > 0 {
+			// Parent-side actions are part of the modern REPLACE plan. Keep a
+			// marker solely for the optimistic-transaction fail-closed guard.
+			query.DetectSqls = append(query.DetectSqls, "REPLACE_PARENT_PLAN:")
+		}
 		sqls, err := genSqlsForCheckFKSelfRefer(
 			ctx.GetContext(),
 			tblInfo.objRef[0].SchemaName,
@@ -194,7 +215,7 @@ func bindAndOptimizeReplaceQuery(ctx CompilerContext, stmt *tree.Replace, isPrep
 		if err != nil {
 			return nil, err
 		}
-		query.DetectSqls = sqls
+		query.DetectSqls = append(query.DetectSqls, sqls...)
 
 		// Generate pre-check SQLs for parent→child safety (RESTRICT).
 		preCheckSqls, err := genPreCheckSqlsForReplaceFKSelfRefer(
