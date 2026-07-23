@@ -1660,6 +1660,93 @@ func TestFileLevelColumnNameMatchesOnlyVirtualColumns(t *testing.T) {
 	}
 }
 
+func TestFileLevelFilterClassifiesBoundaryExpressions(t *testing.T) {
+	column := func(name string) *plan.Expr {
+		return &plan.Expr{Expr: &plan.Expr_Col{Col: &plan.ColRef{Name: name}}}
+	}
+	literal := func() *plan.Expr {
+		return &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{}}}
+	}
+	function := func(name string, args ...*plan.Expr) *plan.Expr {
+		return &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{ObjName: name},
+			Args: args,
+		}}}
+	}
+	list := func(items ...*plan.Expr) *plan.Expr {
+		return &plan.Expr{Expr: &plan.Expr_List{List: &plan.ExprList{List: items}}}
+	}
+
+	virtualColumn := column("ext." + STATEMENT_ACCOUNT)
+	physicalColumn := column("ext.account_id")
+	virtualFilter := function("=", virtualColumn, literal())
+	physicalFilter := function("=", physicalColumn, literal())
+
+	classificationTests := []struct {
+		name           string
+		expr           *plan.Expr
+		hasFileLevel   bool
+		hasUnsupported bool
+	}{
+		{name: "nil expression", expr: nil},
+		{name: "empty expression", expr: &plan.Expr{}, hasUnsupported: true},
+		{name: "nil column", expr: &plan.Expr{Expr: &plan.Expr_Col{}}, hasUnsupported: true},
+		{name: "nil function", expr: &plan.Expr{Expr: &plan.Expr_F{}}, hasUnsupported: true},
+		{name: "nil list", expr: &plan.Expr{Expr: &plan.Expr_List{}}},
+		{name: "literal", expr: literal()},
+		{
+			name:         "virtual list",
+			expr:         list(virtualColumn, literal()),
+			hasFileLevel: true,
+		},
+		{
+			name:           "mixed function",
+			expr:           function("=", virtualColumn, physicalColumn),
+			hasFileLevel:   true,
+			hasUnsupported: true,
+		},
+		{
+			name:           "mixed list",
+			expr:           list(virtualColumn, physicalColumn),
+			hasFileLevel:   true,
+			hasUnsupported: true,
+		},
+		{
+			name:           "unsupported expression",
+			expr:           &plan.Expr{Expr: &plan.Expr_Raw{Raw: &plan.RawColRef{}}},
+			hasUnsupported: true,
+		},
+	}
+
+	for _, tt := range classificationTests {
+		t.Run("columns/"+tt.name, func(t *testing.T) {
+			hasFileLevel, hasUnsupported := classifyFileLevelColumns(tt.expr)
+			require.Equal(t, tt.hasFileLevel, hasFileLevel)
+			require.Equal(t, tt.hasUnsupported, hasUnsupported)
+		})
+	}
+
+	filterTests := []struct {
+		name string
+		expr *plan.Expr
+		want bool
+	}{
+		{name: "nil expression", expr: nil},
+		{name: "non function", expr: literal()},
+		{name: "nil function", expr: &plan.Expr{Expr: &plan.Expr_F{}}},
+		{name: "missing function metadata", expr: &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{}}}},
+		{name: "empty or", expr: function("or")},
+		{name: "or with virtual branches", expr: function("or", virtualFilter, virtualFilter), want: true},
+		{name: "or with physical branch", expr: function("or", virtualFilter, physicalFilter)},
+	}
+
+	for _, tt := range filterTests {
+		t.Run("filter/"+tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, isFileLevelFilter(tt.expr))
+		})
+	}
+}
+
 func TestFilterByAccountAndFilenameKeepsPhysicalAccountColumns(t *testing.T) {
 	tests := []struct {
 		name         string
