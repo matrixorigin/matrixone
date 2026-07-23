@@ -241,10 +241,10 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef, er
 	return &tableDef, nil
 }
 
-func genAsSelectCols(ctx CompilerContext, stmt *tree.Select) ([]*ColDef, error) {
+func genAsSelectCols(ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool) ([]*ColDef, *Query, error) {
 	var err error
 	var rootId int32
-	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, false)
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt, false)
 	bindCtx := NewBindContext(builder, nil)
 
 	getTblAndColName := func(relPos, colPos int32) (string, string) {
@@ -261,8 +261,9 @@ func genAsSelectCols(ctx CompilerContext, stmt *tree.Select) ([]*ColDef, error) 
 		stmt = s.Select
 	}
 	if rootId, err = builder.bindSelect(stmt, bindCtx, true); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
+	builder.qry.Steps = append(builder.qry.Steps, rootId)
 	rootNode := builder.qry.Nodes[rootId]
 
 	cols := make([]*plan.ColDef, len(rootNode.ProjectList))
@@ -298,7 +299,7 @@ func genAsSelectCols(ctx CompilerContext, stmt *tree.Select) ([]*ColDef, error) 
 			},
 		}
 	}
-	return cols, nil
+	return cols, builder.qry, nil
 }
 
 func buildCreateSource(stmt *tree.CreateSource, ctx CompilerContext) (*Plan, error) {
@@ -813,6 +814,7 @@ func buildCreateTable(
 	ctx CompilerContext,
 	stmt *tree.CreateTable,
 	cloneStmt *tree.CloneTable,
+	isPrepareStmt bool,
 ) (*Plan, error) {
 
 	if stmt.IsAsLike {
@@ -876,7 +878,7 @@ func buildCreateTable(
 			// `CREATE TABLE IF NOT EXISTS T LIKE S` errors with "table already
 			// exists" when T exists instead of being a no-op (issue #25119).
 			stmtLike.IfNotExists = stmt.IfNotExists
-			p, err := buildCreateTable(ctx, stmtLike, nil)
+			p, err := buildCreateTable(ctx, stmtLike, nil, isPrepareStmt)
 			if err != nil {
 				return nil, err
 			}
@@ -938,8 +940,9 @@ func buildCreateTable(
 	}
 
 	var asSelectCols []*ColDef
+	var asSelectQuery *Query
 	if stmt.IsAsSelect {
-		if asSelectCols, err = genAsSelectCols(ctx, stmt.AsSource); err != nil {
+		if asSelectCols, asSelectQuery, err = genAsSelectCols(ctx, stmt.AsSource, isPrepareStmt); err != nil {
 			return nil, err
 		}
 	}
@@ -1152,11 +1155,15 @@ func buildCreateTable(
 	if stmt.Temporary {
 		createTable.TableDef.TableType = catalog.SystemTemporaryTable
 	}
+	if !isPrepareStmt {
+		asSelectQuery = nil
+	}
 
 	return &Plan{
 		Plan: &plan.Plan_Ddl{
 			Ddl: &plan.DataDefinition{
 				DdlType: plan.DataDefinition_CREATE_TABLE,
+				Query:   asSelectQuery,
 				Definition: &plan.DataDefinition_CreateTable{
 					CreateTable: createTable,
 				},
@@ -1513,7 +1520,13 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 
 		// insert into new_table select default_val1, default_val2, ..., * from (select clause);
 		var insertSqlBuilder strings.Builder
-		insertSqlBuilder.WriteString(fmt.Sprintf("insert into `%s`.`%s` select ", createTable.Database, createTable.TableDef.Name))
+		insertSqlBuilder.WriteString("insert into ")
+		targetFmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteIdentifier())
+		targetFmtCtx.WriteIdentifier(tree.Identifier(createTable.Database))
+		targetFmtCtx.WriteByte('.')
+		targetFmtCtx.WriteIdentifier(tree.Identifier(createTable.TableDef.Name))
+		insertSqlBuilder.WriteString(targetFmtCtx.String())
+		insertSqlBuilder.WriteString(" select ")
 
 		cols := createTable.TableDef.Cols
 		firstCol := true
@@ -1534,7 +1547,11 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		insertSqlBuilder.WriteString("*")
 
 		// from
-		fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
+		fmtCtx := tree.NewFmtCtx(
+			dialect.MYSQL,
+			tree.WithQuoteString(true),
+			tree.WithQuoteIdentifier(),
+		)
 		stmt.AsSource.Format(fmtCtx)
 		insertSqlBuilder.WriteString(fmt.Sprintf(" from (%s)", restoreIntervalSyntaxForCTAS(fmtCtx.String())))
 
@@ -1790,7 +1807,19 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 func restoreIntervalSyntaxForCTAS(sql string) string {
 	var out strings.Builder
 	for i := 0; i < len(sql); {
-		if !strings.HasPrefix(strings.ToLower(sql[i:]), "interval(") {
+		if sql[i] == '\'' || sql[i] == '"' {
+			next := skipQuotedStringForCTAS(sql, i, sql[i])
+			out.WriteString(sql[i:next])
+			i = next
+			continue
+		}
+		if sql[i] == '`' {
+			next := skipBacktickIdentifierForCTAS(sql, i)
+			out.WriteString(sql[i:next])
+			i = next
+			continue
+		}
+		if !hasIntervalKeywordAt(sql, i) {
 			out.WriteByte(sql[i])
 			i++
 			continue
@@ -1817,42 +1846,84 @@ func parseIntervalCall(sql string, start int) (expr string, unit string, next in
 	pos := start + len(prefix)
 	depth := 1
 	comma := -1
-	inSingleQuote := false
-	inDoubleQuote := false
 
 	for pos < len(sql) {
 		ch := sql[pos]
+		if ch == '\'' || ch == '"' {
+			pos = skipQuotedStringForCTAS(sql, pos, ch)
+			continue
+		}
+		if ch == '`' {
+			pos = skipBacktickIdentifierForCTAS(sql, pos)
+			continue
+		}
 		switch ch {
-		case '\'':
-			if !inDoubleQuote {
-				inSingleQuote = !inSingleQuote
-			}
-		case '"':
-			if !inSingleQuote {
-				inDoubleQuote = !inDoubleQuote
-			}
 		case '(':
-			if !inSingleQuote && !inDoubleQuote {
-				depth++
-			}
+			depth++
 		case ')':
-			if !inSingleQuote && !inDoubleQuote {
-				depth--
-				if depth == 0 {
-					if comma == -1 {
-						return "", "", 0, false
-					}
-					return sql[start+len(prefix) : comma], sql[comma+1 : pos], pos + 1, true
+			depth--
+			if depth == 0 {
+				if comma == -1 {
+					return "", "", 0, false
 				}
+				return sql[start+len(prefix) : comma], sql[comma+1 : pos], pos + 1, true
 			}
 		case ',':
-			if !inSingleQuote && !inDoubleQuote && depth == 1 && comma == -1 {
+			if depth == 1 && comma == -1 {
 				comma = pos
 			}
 		}
 		pos++
 	}
 	return "", "", 0, false
+}
+
+func hasIntervalKeywordAt(sql string, start int) bool {
+	const keyword = "interval"
+	end := start + len(keyword)
+	if end >= len(sql) || sql[end] != '(' || !strings.EqualFold(sql[start:end], keyword) {
+		return false
+	}
+	return start == 0 || !isSQLIdentifierByte(sql[start-1])
+}
+
+func isSQLIdentifierByte(ch byte) bool {
+	return ch >= 0x80 || ch >= 'a' && ch <= 'z' || ch >= 'A' && ch <= 'Z' ||
+		ch >= '0' && ch <= '9' || ch == '_' || ch == '$'
+}
+
+func skipQuotedStringForCTAS(sql string, start int, quote byte) int {
+	for pos := start + 1; pos < len(sql); pos++ {
+		if sql[pos] == '\\' {
+			if pos+1 < len(sql) {
+				pos++
+			}
+			continue
+		}
+		if sql[pos] != quote {
+			continue
+		}
+		if pos+1 < len(sql) && sql[pos+1] == quote {
+			pos++
+			continue
+		}
+		return pos + 1
+	}
+	return len(sql)
+}
+
+func skipBacktickIdentifierForCTAS(sql string, start int) int {
+	for pos := start + 1; pos < len(sql); pos++ {
+		if sql[pos] != '`' {
+			continue
+		}
+		if pos+1 < len(sql) && sql[pos+1] == '`' {
+			pos++
+			continue
+		}
+		return pos + 1
+	}
+	return len(sql)
 }
 
 func isIntervalUnitToken(unit string) bool {

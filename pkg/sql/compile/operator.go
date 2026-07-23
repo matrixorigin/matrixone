@@ -1473,48 +1473,36 @@ func constructUnionAll(_ *plan.Node) *unionall.UnionAll {
 }
 
 func constructFill(node *plan.Node) *fill.Fill {
-	aggIdx := make([]int32, len(node.AggList))
-	for i, expr := range node.AggList {
-		f := expr.Expr.(*plan.Expr_F)
-		obj := int64(uint64(f.F.Func.Obj) & function.DistinctMask)
-		aggIdx[i], _ = function.DecodeOverloadID(obj)
-	}
 	arg := fill.NewArgument()
+	// AggList is pruned in lockstep with the child TIME_WINDOW's aggregates,
+	// so this stays aligned with the prefix that child projects.
 	arg.ColLen = len(node.AggList)
 	arg.FillType = node.FillType
 	arg.FillVal = node.FillVal
-	arg.AggIds = aggIdx
+	arg.PartitionColIdx = node.TimeWindowPartitionColPos
 	return arg
 }
 
 func constructTimeWindow(_ context.Context, node *plan.Node, proc *process.Process) *timewin.TimeWin {
-	var aggregationExpressions []aggexec.AggFuncExecExpression = nil
-	var typs []types.Type
-	var wStart, wEnd bool
-	i := 0
-	for _, expr := range node.AggList {
-		if e, ok := expr.Expr.(*plan.Expr_Col); ok {
-			if e.Col.Name == plan2.TimeWindowStart {
-				wStart = true
-			}
-			if e.Col.Name == plan2.TimeWindowEnd {
-				wEnd = true
-			}
-			continue
-		}
-		f := expr.Expr.(*plan.Expr_F)
+	// The planner addresses this operator's output through the same layout,
+	// so derive both from BuildTimeWindowLayout rather than re-deriving here.
+	layout := plan2.BuildTimeWindowLayout(node)
+	aggregationExpressions := make([]aggexec.AggFuncExecExpression, 0, len(layout.AggIdx))
+	typs := make([]types.Type, 0, len(layout.AggIdx))
+	for _, aggIdx := range layout.AggIdx {
+		f := node.AggList[aggIdx].Expr.(*plan.Expr_F)
 		isDistinct := (uint64(f.F.Func.Obj) & function.Distinct) != 0
 		functionID := int64(uint64(f.F.Func.Obj) & function.DistinctMask)
+		// Every slot the layout hands out must get an aggregate, or the
+		// operator's columns stop matching the positions the planner projects.
 		e := f.F.Args[0]
-		if e != nil {
-			aggregationExpressions = append(
-				aggregationExpressions,
-				aggexec.MakeAggFunctionExpression(functionID, isDistinct, f.F.Args, nil))
-
-			typs = append(typs, types.New(types.T(e.Typ.Id), e.Typ.Width, e.Typ.Scale))
-		}
-		i++
+		aggregationExpressions = append(
+			aggregationExpressions,
+			aggexec.MakeAggFunctionExpression(functionID, isDistinct, f.F.Args, nil))
+		typs = append(typs, types.New(types.T(e.Typ.Id), e.Typ.Width, e.Typ.Scale))
 	}
+	wStart := layout.WStartSlot != plan2.TimeWindowSlotNone
+	wEnd := layout.WEndSlot != plan2.TimeWindowSlotNone
 
 	arg := timewin.NewArgument()
 	err := arg.MakeIntervalAndSliding(node.Interval, node.Sliding)
@@ -1524,11 +1512,41 @@ func constructTimeWindow(_ context.Context, node *plan.Node, proc *process.Proce
 	arg.Types = typs
 	arg.Aggs = aggregationExpressions
 	arg.Ts = node.GroupBy[0]
+	arg.PartitionBy = node.TimeWindowPartitionBy
 	arg.WStart = wStart
 	arg.WEnd = wEnd
-	arg.EndExpr = node.WEnd
+	// The operator evaluates the window-end expression against a batch holding
+	// only the timestamp, so its column reference has to name slot 0. The
+	// planner leaves it pointing at the timestamp's GROUP BY position, which is
+	// 0 only while the window key is the sole grouping key. Copy before
+	// rewriting: the plan may be reused.
+	if node.WEnd != nil {
+		endExpr := plan2.DeepCopyExpr(node.WEnd)
+		resetTimeWindowTsColRef(endExpr)
+		arg.EndExpr = endExpr
+	}
 	arg.TsType = node.Timestamp.Typ
 	return arg
+}
+
+// resetTimeWindowTsColRef points every column reference in a time-window
+// helper expression at slot 0, the single timestamp column the operator feeds
+// it. The expression is derived from the window's timestamp, so it can hold no
+// other column.
+func resetTimeWindowTsColRef(expr *plan.Expr) {
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		e.Col.RelPos = 0
+		e.Col.ColPos = 0
+	case *plan.Expr_F:
+		for _, arg := range e.F.Args {
+			resetTimeWindowTsColRef(arg)
+		}
+	case *plan.Expr_List:
+		for _, item := range e.List.List {
+			resetTimeWindowTsColRef(item)
+		}
+	}
 }
 
 func constructWindow(_ context.Context, node *plan.Node, proc *process.Process) *window.Window {

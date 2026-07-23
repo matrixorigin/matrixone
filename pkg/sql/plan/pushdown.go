@@ -52,7 +52,8 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		aggregateTag := node.BindingTags[1]
 
 		for _, filter := range filters {
-			if !containsTag(filter, aggregateTag) && !containGrouping(filter) {
+			if !containsTag(filter, aggregateTag) && !containGrouping(filter) &&
+				!referencesSyntheticGroupKey(filter, groupTag, len(node.GroupBy), node.GroupingFlag) {
 				canPushdown = append(canPushdown, replaceColRefs(filter, groupTag, node.GroupBy))
 			} else {
 				node.FilterList = append(node.FilterList, filter)
@@ -607,6 +608,61 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 			fmt.Sprintf("pushdownFilters:after (nodeID: %d, no change, cantPushdown: %d)", nodeID, len(cantPushdown)))
 	}
 	return nodeID, cantPushdown
+}
+
+// referencesSyntheticGroupKey reports whether expr cannot be rewritten below
+// an aggregate because it refers to a group-key position synthesized by that
+// aggregate branch. Invalid positions and expression variants that
+// replaceColRefs cannot safely rewrite are kept above the aggregate as well.
+func referencesSyntheticGroupKey(expr *plan.Expr, groupTag int32, groupCount int, groupingFlag []bool) bool {
+	if expr == nil {
+		return true
+	}
+
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		if exprImpl.F == nil {
+			return true
+		}
+		for _, arg := range exprImpl.F.Args {
+			if referencesSyntheticGroupKey(arg, groupTag, groupCount, groupingFlag) {
+				return true
+			}
+		}
+		return false
+
+	case *plan.Expr_W:
+		// replaceColRefs does not assign its rewritten WindowSpec children back.
+		// Keep windows with group output references above the aggregate.
+		return exprImpl.W == nil || containsTag(expr, groupTag)
+
+	case *plan.Expr_List:
+		// replaceColRefs does not recurse into Expr_List. Keep a list that
+		// contains any group output reference above the aggregate, including
+		// active keys, rather than pushing an expression with stale tags.
+		return exprImpl.List == nil || containsTag(expr, groupTag)
+
+	case *plan.Expr_Col:
+		if exprImpl.Col == nil || exprImpl.Col.RelPos != groupTag {
+			return exprImpl.Col == nil
+		}
+		colPos := exprImpl.Col.ColPos
+		if colPos < 0 || int(colPos) >= groupCount {
+			return true
+		}
+		return len(groupingFlag) > 0 &&
+			(int(colPos) >= len(groupingFlag) || !groupingFlag[colPos])
+
+	case *plan.Expr_Sub, *plan.Expr_Corr:
+		return true
+
+	case *plan.Expr_Lit, *plan.Expr_P, *plan.Expr_V, *plan.Expr_Raw,
+		*plan.Expr_T, *plan.Expr_Max, *plan.Expr_Vec, *plan.Expr_Fold:
+		return false
+
+	default:
+		return true
+	}
 }
 
 // order by limit can be pushed down to left child of left join

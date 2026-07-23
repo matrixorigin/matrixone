@@ -112,6 +112,8 @@ type SessionInfo struct {
 	Version              string
 	TimeZone             *time.Location
 	LockWaitTimeout      int64
+	LockWaitTimeoutSet   bool // distinguishes an explicit zero from an unset value
+	MatrixOneNativeMode  bool
 	StorageEngine        engine.Engine
 	QueryId              []string
 	ResultColTypes       []types.Type
@@ -328,19 +330,22 @@ type BaseProcess struct {
 	// statement in the same session, used by the ROW_COUNT() builtin.
 	// It follows MySQL semantics: -1 after a result-set statement (e.g. SELECT),
 	// 0 after DDL, and the affected row count after DML.
-	AffectedRows        *int64
-	LoadLocalReader     *io.PipeReader
-	Aicm                *defines.AutoIncrCacheManager
-	resolveVariableFunc func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)
-	prepareParams       *vector.Vector
-	QueryClient         qclient.QueryClient
-	Hakeeper            logservice.CNHAKeeperClient
-	UdfService          udf.Service
-	WaitPolicy          lock.WaitPolicy
-	messageBoard        *message.MessageBoard
-	logger              *log.MOLogger
-	TxnOperator         client.TxnOperator
-	CloneTxnOperator    client.TxnOperator
+	AffectedRows             *int64
+	LoadLocalReader          *io.PipeReader
+	Aicm                     *defines.AutoIncrCacheManager
+	resolveVariableFunc      func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)
+	resolveVariableIsBinFunc func(varName string, isSystemVar, isGlobalVar bool) (bool, error)
+	prepareParams            *vector.Vector
+	prepareParamsIsBin       []bool
+	prepareParamsOwned       bool
+	QueryClient              qclient.QueryClient
+	Hakeeper                 logservice.CNHAKeeperClient
+	UdfService               udf.Service
+	WaitPolicy               lock.WaitPolicy
+	messageBoard             *message.MessageBoard
+	logger                   *log.MOLogger
+	TxnOperator              client.TxnOperator
+	CloneTxnOperator         client.TxnOperator
 	// incrStatementDisabled marks a process that executes internal SQL on a
 	// caller-owned transaction without opening a statement of its own
 	// (executor.Options.WithDisableIncrStatement). Compiles on such a process
@@ -467,6 +472,10 @@ func (proc *Process) GetPrepareParamsAt(i int) ([]byte, error) {
 	}
 }
 
+func (proc *Process) GetPrepareParamIsBin(i int) bool {
+	return i >= 0 && i < len(proc.Base.prepareParamsIsBin) && proc.Base.prepareParamsIsBin[i]
+}
+
 // SetIncrStatementDisabled marks this process (and every child process
 // sharing its BaseProcess) as running internal SQL that must not advance the
 // workspace snapshot write offset. See BaseProcess.incrStatementDisabled.
@@ -486,6 +495,14 @@ func (proc *Process) SetResolveVariableFunc(f func(varName string, isSystemVar, 
 
 func (proc *Process) GetResolveVariableFunc() func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
 	return proc.Base.resolveVariableFunc
+}
+
+func (proc *Process) SetResolveVariableIsBinFunc(f func(varName string, isSystemVar, isGlobalVar bool) (bool, error)) {
+	proc.Base.resolveVariableIsBinFunc = f
+}
+
+func (proc *Process) GetResolveVariableIsBinFunc() func(varName string, isSystemVar, isGlobalVar bool) (bool, error) {
+	return proc.Base.resolveVariableIsBinFunc
 }
 
 func (proc *Process) SetLastInsertID(num uint64) {

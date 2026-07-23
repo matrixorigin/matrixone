@@ -282,10 +282,11 @@ type OptimizerHints struct {
 }
 
 type CTERef struct {
-	isRecursive bool
-	ast         *tree.CTE
-	maskedCTEs  map[string]bool
-	snapshot    *Snapshot
+	isRecursive    bool
+	ast            *tree.CTE
+	maskedCTEs     map[string]bool
+	snapshot       *Snapshot
+	declarationCtx *BindContext
 }
 
 type CteBindState struct {
