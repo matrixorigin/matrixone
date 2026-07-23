@@ -396,6 +396,11 @@ func (rt *Routine) cleanup() {
 	//step 1: cancel the query if there is a running query.
 	//step 2: close the connection.
 	rt.closeOnce.Do(func() {
+		// Cancellation is the control path for both the running pipeline and any
+		// lifecycle operation waiting on it. It must happen before waiting for
+		// migration/reset or acquiring the transaction handler during rollback.
+		rt.killQuery(false, "")
+
 		// we should wait for the migration and close the migration controller.
 		rt.mc.waitAndClose()
 
@@ -427,19 +432,16 @@ func (rt *Routine) cleanup() {
 			logutil.Info("routine cleanup without session", zap.Uint64("routine go id", rt.goroutineID))
 		}
 
-		//step B: cancel the query
-		rt.killQuery(false, "")
-
-		//step C: cancel the root context of the connection.
+		//step B: cancel the root context of the connection.
 		//At the same time, it cancels all the contexts
 		//(includes the request context) derived from the root context.
 		rt.releaseRoutineCtx()
 
-		//step D: clean protocol
+		//step C: clean protocol
 		rt.getProtocol().Close()
 		rt.protocol.Store(&holder[MysqlRrWr]{})
 
-		//step E: release the resources related to the session
+		//step D: release the resources related to the session
 		if ses != nil {
 			ses.Close()
 			rt.ses = nil

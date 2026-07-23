@@ -38,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -120,6 +121,71 @@ func TestRoutineCleanupWithoutSession(t *testing.T) {
 		t.Fatal("cleanup did not cancel routine context")
 	}
 	assert.Nil(t, rt.getProtocol())
+}
+
+func TestRoutineCleanupCancelsRequestBeforeWaitingForLifecycleOperation(t *testing.T) {
+	routine := NewRoutine(context.Background(), &testMysqlWriter{}, &config.FrontendParameters{})
+	requestCtx, cancelRequest := context.WithCancel(context.Background())
+	routine.setCancelRequestFunc(cancelRequest)
+	require.True(t, routine.mc.beginOperation())
+	released := false
+	defer func() {
+		if !released {
+			routine.mc.endOperation()
+		}
+	}()
+
+	cleaned := make(chan struct{})
+	go func() {
+		routine.cleanup()
+		close(cleaned)
+	}()
+
+	select {
+	case <-requestCtx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("connection cleanup waited for a lifecycle operation before canceling the query")
+	}
+
+	routine.mc.endOperation()
+	released = true
+	select {
+	case <-cleaned:
+	case <-time.After(time.Second):
+		t.Fatal("connection cleanup did not finish after the lifecycle operation ended")
+	}
+}
+
+func TestRoutineCleanupCancelsRequestBeforeRollback(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	ses.GetTxnHandler().Close()
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().Hints().Return(engine.Hints{CommitOrRollbackTimeout: time.Second}).AnyTimes()
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
+	txnOp.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).AnyTimes()
+
+	routine := NewRoutine(context.Background(), ses.GetResponser().MysqlRrWr(), &config.FrontendParameters{})
+	routine.setSession(ses)
+	requestCtx, cancelRequest := context.WithCancel(context.Background())
+	routine.setCancelRequestFunc(cancelRequest)
+	canceledBeforeRollback := false
+	txnOp.EXPECT().Rollback(gomock.Any()).DoAndReturn(func(context.Context) error {
+		select {
+		case <-requestCtx.Done():
+			canceledBeforeRollback = true
+		default:
+		}
+		return nil
+	})
+	ses.txnHandler = InitTxnHandler("", eng, context.Background(), txnOp)
+	ses.txnHandler.shareTxn = false
+
+	routine.cleanup()
+
+	require.True(t, canceledBeforeRollback,
+		"rollback must not run ahead of cancellation of the active query")
 }
 
 func TestMigrateConnectionFromPreservesLastAffectedRows(t *testing.T) {
