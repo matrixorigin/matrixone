@@ -98,7 +98,6 @@ type container struct {
 	producerOnce    sync.Once
 	producerStarted bool
 	producerProc    *process.Process
-	producerCancel  context.CancelCauseFunc
 	producerDone    chan struct{}
 	producerRows    int64
 	producerSize    int64
@@ -186,7 +185,6 @@ func (shuffle *Shuffle) Reset(proc *process.Process, pipelineFailed bool, err er
 	shuffle.ctr.producerOnce = sync.Once{}
 	shuffle.ctr.producerStarted = false
 	shuffle.ctr.producerProc = nil
-	shuffle.ctr.producerCancel = nil
 	shuffle.ctr.producerDone = nil
 	shuffle.ctr.producerRows = 0
 	shuffle.ctr.producerSize = 0
@@ -212,20 +210,18 @@ func (shuffle *Shuffle) stopLocalProducer(failed bool, err error) {
 	if shuffle.ctr.producerProc == nil {
 		return
 	}
-	if failed && shuffle.ctr.producerCancel != nil {
+	if failed {
 		if err == nil {
 			err = context.Canceled
 		}
-		shuffle.ctr.producerCancel(err)
+		shuffle.ctr.producerProc.Cancel(err)
 	}
 	if shuffle.ctr.producerStarted && shuffle.ctr.producerDone != nil {
 		<-shuffle.ctr.producerDone
 	} else if shuffle.ctr.held {
 		shuffle.stopWritingOnce()
 	}
-	if shuffle.ctr.producerCancel != nil {
-		shuffle.ctr.producerCancel(nil)
-	}
+	shuffle.ctr.producerProc.Cancel(nil)
 }
 
 func (shuffle *Shuffle) Free(proc *process.Process, pipelineFailed bool, err error) {

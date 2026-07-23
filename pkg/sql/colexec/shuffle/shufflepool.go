@@ -505,14 +505,6 @@ func (sp *ShufflePool) getAnyLastBatch() *batch.Batch {
 	}
 }
 
-func (sp *ShufflePool) waitBatchOrEnd(shuffleIDX int32, proc *process.Process) {
-	select {
-	case <-sp.batchWaiters[shuffleIDX]:
-	case <-sp.endingWaiters[shuffleIDX]:
-	case <-proc.Ctx.Done():
-	}
-}
-
 func (sp *ShufflePool) waitAnyBatchOrEnd(proc *process.Process) {
 	select {
 	case <-sp.endingWaiter:

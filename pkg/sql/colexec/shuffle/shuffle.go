@@ -58,7 +58,6 @@ func (shuffle *Shuffle) PrepareChildrenProcess(proc *process.Process) *process.P
 		producerProc.Session = proc.Session
 		producerProc.BuildPipelineContext(parent)
 		shuffle.ctr.producerProc = producerProc
-		shuffle.ctr.producerCancel = producerProc.Cancel
 	}
 	return shuffle.ctr.producerProc
 }
@@ -92,7 +91,6 @@ func (shuffle *Shuffle) Prepare(proc *process.Process) error {
 	shuffle.ctr.ending = false
 	shuffle.ctr.runtimeFilterHandled = false
 	if !shuffle.DrainAllBuckets {
-		shuffle.PrepareChildrenProcess(proc)
 		shuffle.ctr.producerDone = make(chan struct{})
 		shuffle.ctr.directBatches = make(chan directHandoff)
 		shuffle.ctr.consumerDone = make(chan struct{})
@@ -245,7 +243,6 @@ func (shuffle *Shuffle) callLocal(proc *process.Process) (vm.CallResult, error) 
 			return shuffle.returnLocalBatch(proc, handoff.bat, false)
 		case <-shuffle.ctr.shufflePool.batchWaiters[shuffle.CurrentShuffleIdx]:
 		case <-shuffle.ctr.shufflePool.endingWaiters[shuffle.CurrentShuffleIdx]:
-		case <-shuffle.ctr.producerDone:
 		case <-shuffle.ctr.consumerDone:
 			return vm.CancelResult, nil
 		case <-proc.Ctx.Done():
