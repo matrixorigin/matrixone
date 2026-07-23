@@ -2846,7 +2846,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 }
 
 func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.OrderBy, astLimit *tree.Limit, astRankOption *tree.RankOption, ctx *BindContext, isRoot bool) (int32, error) {
-	return builder.buildUnionWithResultLen(stmt, astOrderBy, astLimit, astRankOption, ctx, isRoot, 0, nil)
+	return builder.buildUnionWithResultLen(stmt, astOrderBy, astLimit, astRankOption, ctx, isRoot, 0, nil, false)
 }
 
 func (builder *QueryBuilder) buildUnionWithResultLen(
@@ -2864,6 +2864,10 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 	// resolve past the star expansion, and positional references are validated
 	// against resultLen so hidden keys are not addressable by ordinal.
 	groupingOrderResolve *groupingSetOrderResolution,
+	// distinct requests whole-result de-duplication above the (UNION ALL) branch
+	// chain, applied by a DISTINCT node after PROJECT and before SORT. Used by the
+	// grouping-set SELECT DISTINCT path; ordinary UNION passes false.
+	distinct bool,
 ) (int32, error) {
 	if builder.isForUpdate {
 		return 0, moerr.NewInternalError(builder.GetContext(), "not support select union for update")
@@ -3146,14 +3150,30 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 						},
 					},
 				}
-			case groupingOrderResolve != nil && oi < len(groupingOrderResolve.visibleIdx) && groupingOrderResolve.visibleIdx[oi] >= 0:
-				// Deferred DISTINCT match: the matched visible select item sits
-				// after every star, so its expanded position is its non-star
-				// offset plus the total star expansion width.
-				colPos := groupingOrderResolve.visibleIdx[oi] + (resultLen - groupingOrderResolve.nonStarLen)
-				if colPos < 0 || colPos >= resultLen {
-					return 0, moerr.NewInternalError(builder.GetContext(), "grouping order column out of range")
+			case groupingOrderResolve != nil && oi < len(groupingOrderResolve.bindDistinct) && groupingOrderResolve.bindDistinct[oi]:
+				// Bind against the first generated grouping-set branch, where
+				// table bindings, grouping-column identities, expanded stars, and
+				// select aliases are all available. The regular DISTINCT binder
+				// rejects expressions not represented by the visible projection.
+				branchCtx := subCtxList[0]
+				qualifiedOrderExpr, qualifyErr := qualifyBoundGroupingOrderExpr(branchCtx, order.Expr)
+				if qualifyErr != nil {
+					return 0, qualifyErr
 				}
+				branchProjectionBinder := NewProjectionBinder(builder, branchCtx, NewHavingBinder(builder, branchCtx))
+				branchExpr, bindErr := branchProjectionBinder.BindExpr(qualifiedOrderExpr, 0, true)
+				if bindErr != nil {
+					return 0, bindErr
+				}
+				exprKey, keyErr := projectExprKey(branchExpr)
+				if keyErr != nil {
+					return 0, keyErr
+				}
+				branchColPos, ok := branchCtx.projectByExpr[exprKey]
+				if !ok || branchColPos < 0 || int(branchColPos) >= resultLen {
+					return 0, moerr.NewSyntaxError(builder.GetContext(), "for SELECT DISTINCT, ORDER BY expressions must appear in select list")
+				}
+				colPos := int(branchColPos)
 				expr = &plan.Expr{
 					Typ: ctx.projects[colPos].Typ,
 					Expr: &plan.Expr_Col{
@@ -3209,12 +3229,30 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 	}
 
 	// append a project node (after ORDER BY binding to include any new expressions)
+	projectList := ctx.projects
+	if distinct {
+		projectList, err = normalizeGroupingSetDistinctProjects(builder.GetContext(), projectList)
+		if err != nil {
+			return 0, err
+		}
+	}
 	lastNodeID = builder.appendNode(&plan.Node{
 		NodeType:    plan.Node_PROJECT,
-		ProjectList: ctx.projects,
+		ProjectList: projectList,
 		Children:    []int32{lastNodeID},
 		BindingTags: []int32{ctx.projectTag},
 	}, ctx)
+
+	// append DISTINCT node (whole-result de-duplication for SELECT DISTINCT over a
+	// grouping-set UNION ALL). Placed after PROJECT and before SORT, mirroring the
+	// ordinary select path; the grouping-set DISTINCT path adds no hidden order
+	// key, so PROJECT emits exactly the resultLen visible columns being de-duped.
+	// The project also materializes grouping NULLs as ordinary SQL NULLs; without
+	// that boundary, the hash key retains grouping provenance and visible
+	// duplicates from different grouping-set branches do not collapse.
+	if distinct {
+		lastNodeID = builder.appendDistinctNode(ctx, lastNodeID)
+	}
 
 	// append orderBy (SORT node)
 	if len(orderBys) > 0 {
@@ -3804,6 +3842,12 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 						}
 					}
 				}
+				// Branches are stitched with UNION ALL so every grouping-set row is
+				// preserved (a de-duplicating UNION here makes the optimizer fold the
+				// same-source branches into one scan, dropping ROLLUP super-aggregate
+				// and grand-total rows). For SELECT DISTINCT, whole-result
+				// de-duplication is instead applied by a single DISTINCT node above
+				// the union inside buildUnionWithResultLen.
 				leftClause := &tree.UnionClause{Type: tree.UNION, Left: selectStmts[0], Right: selectStmts[1], All: true}
 				for i, stmt := range selectStmts {
 					if i == 0 || i == 1 {
@@ -3820,6 +3864,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 					false,
 					hiddenResultLen,
 					groupingOrderResolve,
+					selectClause.Distinct,
 				); err != nil {
 					return
 				}
@@ -6048,25 +6093,39 @@ type groupingSetOrderResolution struct {
 	// hiddenIdx[i] >= 0: ORDER BY entry i references the k-th appended hidden
 	// grouping sort key, resolved to ColPos = resultLen + k. -1 otherwise.
 	hiddenIdx []int
-	// visibleIdx[i] >= 0: entry i matched a visible DISTINCT select item whose
-	// star-expanded position is visibleIdx[i] (the number of non-star items
-	// before it) plus the total star expansion width, i.e.
-	// ColPos = visibleIdx[i] + (resultLen - nonStarLen). -1 otherwise.
-	visibleIdx []int
-	// nonStarLen is the number of non-star items in the raw AST select list.
-	nonStarLen int
+	// bindDistinct[i] is true when a DISTINCT grouping-related ORDER BY entry
+	// must be resolved after the first generated grouping-set branch is fully
+	// bound. Binding there preserves source relation identity and normal
+	// AliasBeforeColumn semantics; textual pre-binding comparison cannot safely
+	// distinguish same-named columns from different self-join inputs.
+	bindDistinct []bool
 }
 
-// isStarSelectExpr reports whether a select-list item expands to multiple
-// columns ('*' or 't.*').
-func isStarSelectExpr(expr tree.Expr) bool {
-	switch e := expr.(type) {
-	case tree.UnqualifiedStar:
-		return true
-	case *tree.UnresolvedName:
-		return e.Star
+func normalizeGroupingSetDistinctProjects(
+	ctx context.Context,
+	projects []*plan.Expr,
+) ([]*plan.Expr, error) {
+	normalized := make([]*plan.Expr, len(projects))
+	for i, project := range projects {
+		groupingExpr, err := BindFuncExprImplByPlanExpr(ctx, "grouping", []*plan.Expr{DeepCopyExpr(project)})
+		if err != nil {
+			return nil, err
+		}
+		nullExpr := makePlan2NullConstExprWithType()
+		nullExpr, err = appendCastBeforeExpr(ctx, nullExpr, project.Typ)
+		if err != nil {
+			return nil, err
+		}
+		normalized[i], err = BindFuncExprImplByPlanExpr(
+			ctx,
+			"if",
+			[]*plan.Expr{groupingExpr, nullExpr, DeepCopyExpr(project)},
+		)
+		if err != nil {
+			return nil, err
+		}
 	}
-	return false
+	return normalized, nil
 }
 
 func prepareGroupingSetOrderByProjects(
@@ -6082,46 +6141,19 @@ func prepareGroupingSetOrderByProjects(
 	// selectList is the pre-star-expansion AST list, so len(selectList) is not
 	// the visible column count; that check lives in buildUnionWithResultLen.
 	resolve := &groupingSetOrderResolution{
-		hiddenIdx:  make([]int, len(astOrderBy)),
-		visibleIdx: make([]int, len(astOrderBy)),
+		hiddenIdx:    make([]int, len(astOrderBy)),
+		bindDistinct: make([]bool, len(astOrderBy)),
 	}
-	starsBefore := make([]int, len(selectList))
-	stars := 0
-	for selectIdx := range selectList {
-		starsBefore[selectIdx] = stars
-		if isStarSelectExpr(selectList[selectIdx].Expr) {
-			stars++
-		}
-	}
-	resolve.nonStarLen = len(selectList) - stars
 	for i := range resolve.hiddenIdx {
 		resolve.hiddenIdx[i] = -1
-		resolve.visibleIdx[i] = -1
 	}
 
 	// For SELECT DISTINCT we must not inject hidden order keys: they would
 	// participate in the branch-level DISTINCT and then be trimmed from the
-	// output, changing the visible result. Instead, an ORDER BY expression is
-	// only allowed when it already matches a visible select-list expression,
-	// in which case it is resolved to that visible column. The two sides are
-	// keyed under their own binding semantics: select-list expressions bind
-	// with NoAlias (a name is always the source column) while ORDER BY binds
-	// aliases first, so e.g. `a AS b` makes a bare `b` mean different things.
-	visibleOrdinals := make(map[string]int)
-	if distinct {
-		for selectIdx := range selectList {
-			if isStarSelectExpr(selectList[selectIdx].Expr) {
-				continue
-			}
-			key, err := groupingOrderExprKey(builder, selectList, selectList[selectIdx].Expr, false)
-			if err != nil {
-				return nil, nil, nil, err
-			}
-			if _, exists := visibleOrdinals[key]; !exists {
-				visibleOrdinals[key] = selectIdx
-			}
-		}
-	}
+	// output, changing the visible result. Resolve these expressions only after
+	// the first generated branch has been fully bound, using its regular
+	// DISTINCT OrderBinder. That binder compares bound expressions and therefore
+	// preserves both source relation identity and normal alias precedence.
 
 	for i, order := range astOrderBy {
 		orderCopy := *order
@@ -6133,29 +6165,7 @@ func prepareGroupingSetOrderByProjects(
 		}
 
 		if distinct {
-			key, err := groupingOrderExprKey(builder, selectList, order.Expr, true)
-			if err != nil {
-				return nil, nil, nil, err
-			}
-			selectIdx, ok := visibleOrdinals[key]
-			if !ok {
-				return nil, nil, nil, moerr.NewSyntaxError(builder.GetContext(), "for SELECT DISTINCT, ORDER BY expressions must appear in select list")
-			}
-			switch {
-			case starsBefore[selectIdx] == 0:
-				// No star ahead of the matched item: its AST position equals its
-				// star-expanded position, so rewrite to the ordinal right away.
-				orderCopy.Expr = tree.NewNumVal(int64(selectIdx+1), strconv.FormatInt(int64(selectIdx+1), 10), false, tree.P_int64)
-			case starsBefore[selectIdx] == stars:
-				// All stars precede the matched item: its expanded position is its
-				// non-star offset plus the total star width, which is only known
-				// after expansion — defer to buildUnionWithResultLen.
-				resolve.visibleIdx[i] = selectIdx - starsBefore[selectIdx]
-			default:
-				// The matched item sits between stars: the expansion width of the
-				// stars ahead of it cannot be derived from the total width alone.
-				return nil, nil, nil, moerr.NewNYI(builder.GetContext(), "ORDER BY GROUPING expression matching a select item between multiple '*' expressions")
-			}
+			resolve.bindDistinct[i] = true
 			continue
 		}
 
@@ -6211,143 +6221,31 @@ func qualifyGroupingOrderExpr(
 	return qualified, nil
 }
 
-// groupingOrderExprKey returns a canonical string key for astExpr so that an
-// ORDER BY expression can be matched against a visible select-list expression
-// regardless of alias-vs-column spelling, table qualifiers, function-name case,
-// or redundant parentheses. useAlias selects the clause semantics (see
-// qualifyGroupingOrderExpr); keys from the two sides only match when the
-// expressions agree under their respective binding rules.
-func groupingOrderExprKey(
-	builder *QueryBuilder,
-	selectList tree.SelectExprs,
-	astExpr tree.Expr,
-	useAlias bool,
-) (string, error) {
-	// Unwrap parentheses wrapping the whole expression, e.g. (GROUPING(a)),
-	// before qualification so both ORDER BY and select-list spellings agree.
-	qualified, err := qualifyGroupingOrderExpr(builder, selectList, unwrapParenExpr(astExpr), useAlias)
-	if err != nil {
-		return "", err
+// qualifyBoundGroupingOrderExpr applies the real branch binding semantics used
+// by grouping-set ORDER BY expressions. GROUPING() arguments are source
+// expressions, so they bind with NoAlias and retain concrete relation identity;
+// the surrounding ORDER BY expression then binds with AliasBeforeColumn.
+func qualifyBoundGroupingOrderExpr(ctx *BindContext, astExpr tree.Expr) (tree.Expr, error) {
+	qualified := cloneTreeExpr(astExpr)
+	var bindErr error
+	walkGroupingSetOrderByExpr(qualified, func(expr tree.Expr) bool {
+		funcExpr, ok := expr.(*tree.FuncExpr)
+		if !ok || funcExpr.FuncName == nil || !strings.EqualFold(funcExpr.FuncName.Origin(), "grouping") {
+			return true
+		}
+		for i := range funcExpr.Exprs {
+			funcExpr.Exprs[i], bindErr = ctx.qualifyColumnNames(funcExpr.Exprs[i], NoAlias)
+			if bindErr != nil {
+				return false
+			}
+		}
+		// The complete GROUPING argument subtree is already source-qualified.
+		return false
+	})
+	if bindErr != nil {
+		return nil, bindErr
 	}
-	normalizeExprForComparison(qualified)
-	return tree.String(qualified, dialect.MYSQL), nil
-}
-
-// normalizeExprForComparison rewrites a cloned expression into a canonical form
-// for textual comparison: every function name is folded to lower case, and
-// GROUPING() arguments have their table qualifiers stripped and redundant
-// parentheses unwrapped. So, for example, GROUPING(A), grouping(a),
-// GROUPING(t.a) and GROUPING((a)) all canonicalize to the same key, while
-// case-sensitive string literals are left untouched.
-func normalizeExprForComparison(astExpr tree.Expr) {
-	visited := make(map[uintptr]struct{})
-	var walk func(reflect.Value)
-	walk = func(value reflect.Value) {
-		if !value.IsValid() {
-			return
-		}
-		if value.Kind() == reflect.Interface {
-			if value.IsNil() {
-				return
-			}
-			walk(value.Elem())
-			return
-		}
-		if value.Kind() == reflect.Pointer {
-			if value.IsNil() {
-				return
-			}
-			pointer := value.Pointer()
-			if _, ok := visited[pointer]; ok {
-				return
-			}
-			visited[pointer] = struct{}{}
-
-			if funcExpr, ok := value.Interface().(*tree.FuncExpr); ok {
-				isGrouping := false
-				if funcExpr.FuncName != nil {
-					// Fold the function-name case, e.g. GROUPING -> grouping.
-					isGrouping = strings.EqualFold(funcExpr.FuncName.Origin(), "grouping")
-					funcExpr.FuncName = tree.NewCStr(strings.ToLower(funcExpr.FuncName.Origin()), 0)
-				}
-				if isGrouping {
-					for i := range funcExpr.Exprs {
-						funcExpr.Exprs[i] = unwrapParenExpr(funcExpr.Exprs[i])
-						stripGroupingArgQualifiers(funcExpr.Exprs[i])
-					}
-				}
-			}
-			walk(value.Elem())
-			return
-		}
-		switch value.Kind() {
-		case reflect.Struct:
-			valueType := value.Type()
-			for i := 0; i < value.NumField(); i++ {
-				if valueType.Field(i).PkgPath == "" {
-					walk(value.Field(i))
-				}
-			}
-		case reflect.Slice, reflect.Array:
-			for i := 0; i < value.Len(); i++ {
-				walk(value.Index(i))
-			}
-		}
-	}
-	walk(reflect.ValueOf(astExpr))
-}
-
-// stripGroupingArgQualifiers deeply walks an expression inside a GROUPING()
-// argument and strips table qualifiers from every UnresolvedName. This is
-// scoped to the GROUPING argument subtree only so that names outside
-// GROUPING() (e.g. t1.b vs t2.b in grouping(a) + t1.b vs grouping(a) + t2.b)
-// retain their qualifiers for correct DISTINCT expression matching.
-func stripGroupingArgQualifiers(astExpr tree.Expr) {
-	visited := make(map[uintptr]struct{})
-	var walk func(reflect.Value)
-	walk = func(value reflect.Value) {
-		if !value.IsValid() {
-			return
-		}
-		if value.Kind() == reflect.Interface {
-			if value.IsNil() {
-				return
-			}
-			walk(value.Elem())
-			return
-		}
-		if value.Kind() == reflect.Pointer {
-			if value.IsNil() {
-				return
-			}
-			pointer := value.Pointer()
-			if _, ok := visited[pointer]; ok {
-				return
-			}
-			visited[pointer] = struct{}{}
-
-			if name, ok := value.Interface().(*tree.UnresolvedName); ok &&
-				name.NumParts > 1 && !name.Star {
-				name.NumParts = 1
-			}
-			walk(value.Elem())
-			return
-		}
-		switch value.Kind() {
-		case reflect.Struct:
-			valueType := value.Type()
-			for i := 0; i < value.NumField(); i++ {
-				if valueType.Field(i).PkgPath == "" {
-					walk(value.Field(i))
-				}
-			}
-		case reflect.Slice, reflect.Array:
-			for i := 0; i < value.Len(); i++ {
-				walk(value.Index(i))
-			}
-		}
-	}
-	walk(reflect.ValueOf(astExpr))
+	return ctx.qualifyColumnNames(qualified, AliasBeforeColumn)
 }
 
 func cloneTreeExpr(astExpr tree.Expr) tree.Expr {

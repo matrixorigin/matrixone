@@ -638,8 +638,9 @@ group by region, product, amount with rollup
 order by 6;
 
 -- DISTINCT grouping-set path: a grouping() ORDER BY key matching a visible
--- select item must resolve to that item's star-expanded position, and the
--- row set must reflect branch-level DISTINCT.
+-- select item must resolve to that item's star-expanded position, and the row
+-- set must be de-duplicated globally across all grouping-set branches, not only
+-- within each branch.
 select distinct *, grouping(region) as gr
 from grouping_order
 group by region, product, amount with rollup
@@ -656,6 +657,24 @@ select distinct region as product, grouping(region) as gr
 from grouping_order
 group by region, product with rollup
 order by grouping(region) + product;
+
+-- DISTINCT over GROUPING SETS must de-duplicate globally across every generated
+-- grouping-set branch, the same as ROLLUP.
+select distinct region, grouping(region) as gr
+from grouping_order
+group by grouping sets((region, product), (region), ())
+order by grouping(region), region;
+
+-- a grouping() ORDER BY key matching a select item that sits between two star
+-- expansions (t1.*, grouping(...), t2.*) must be located precisely, not rejected.
+drop table if exists grouping_order2;
+create table grouping_order2 (city varchar(8), qty int);
+insert into grouping_order2 values ('x', 1), ('y', 2);
+select distinct t1.*, grouping(region) as gr, t2.*
+from grouping_order t1, grouping_order2 t2
+group by region, product, amount, city, qty with rollup
+order by grouping(region), region, product, amount, city, qty;
+drop table grouping_order2;
 
 drop table grouping_order;
 -- rollup with window functions should rank over the full rollup result

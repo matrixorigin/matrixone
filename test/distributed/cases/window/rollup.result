@@ -982,11 +982,9 @@ null	tea	null	0
 null	tea	10	0
 null	tea	20	0
 east	null	null	0
-east	null	null	0
 east	null	5	0
 east	coffee	null	0
 east	coffee	7	0
-east	tea	null	0
 east	tea	null	0
 west	null	null	0
 west	tea	null	0
@@ -998,10 +996,7 @@ group by region, product with rollup
 order by grouping(region), region;
 region	gr
 null	0
-null	0
 east	0
-east	0
-west	0
 west	0
 null	1
 select distinct region as product, grouping(region) as gr
@@ -1009,6 +1004,61 @@ from grouping_order
 group by region, product with rollup
 order by grouping(region) + product;
 SQL syntax error: for SELECT DISTINCT, ORDER BY expressions must appear in select list
+select distinct region, grouping(region) as gr
+from grouping_order
+group by grouping sets((region, product), (region), ())
+order by grouping(region), region;
+region	gr
+null	0
+east	0
+west	0
+null	1
+drop table if exists grouping_order2;
+create table grouping_order2 (city varchar(8), qty int);
+insert into grouping_order2 values ('x', 1), ('y', 2);
+select distinct t1.*, grouping(region) as gr, t2.*
+from grouping_order t1, grouping_order2 t2
+group by region, product, amount, city, qty with rollup
+order by grouping(region), region, product, amount, city, qty;
+region	product	amount	gr	city	qty
+null	null	null	0	null	null
+null	tea	null	0	null	null
+null	tea	10	0	null	null
+null	tea	10	0	x	null
+null	tea	10	0	x	1
+null	tea	10	0	y	null
+null	tea	10	0	y	2
+null	tea	20	0	null	null
+null	tea	20	0	x	null
+null	tea	20	0	x	1
+null	tea	20	0	y	null
+null	tea	20	0	y	2
+east	null	null	0	null	null
+east	null	5	0	null	null
+east	null	5	0	x	null
+east	null	5	0	x	1
+east	null	5	0	y	null
+east	null	5	0	y	2
+east	coffee	null	0	null	null
+east	coffee	7	0	null	null
+east	coffee	7	0	x	null
+east	coffee	7	0	x	1
+east	coffee	7	0	y	null
+east	coffee	7	0	y	2
+east	tea	null	0	null	null
+east	tea	null	0	x	null
+east	tea	null	0	x	1
+east	tea	null	0	y	null
+east	tea	null	0	y	2
+west	null	null	0	null	null
+west	tea	null	0	null	null
+west	tea	3	0	null	null
+west	tea	3	0	x	null
+west	tea	3	0	x	1
+west	tea	3	0	y	null
+west	tea	3	0	y	2
+null	null	null	1	null	null
+drop table grouping_order2;
 drop table grouping_order;
 create table rollup_window_sales(region varchar(20), product varchar(20), qty int);
 insert into rollup_window_sales values

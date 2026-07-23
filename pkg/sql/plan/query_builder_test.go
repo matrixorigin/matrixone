@@ -1152,9 +1152,9 @@ func TestAppendGroupingSetOrderByProjectsSupportsGroupAlias(t *testing.T) {
 	require.Equal(t, []int{0}, orderResolve.hiddenIdx)
 }
 
-// For SELECT DISTINCT, an ORDER BY expression that is already a visible
-// select-list expression must be rewritten to that visible ordinal instead of
-// being injected as a hidden order key, so DISTINCT semantics are preserved.
+// For SELECT DISTINCT, a grouping-related ORDER BY expression is deferred until
+// the generated branch has real table bindings and a star-expanded projection.
+// No hidden key is injected, so DISTINCT semantics are preserved.
 func TestAppendGroupingSetOrderByProjectsDistinctReusesVisibleProjection(t *testing.T) {
 	stmts, err := parsers.Parse(
 		context.TODO(),
@@ -1173,19 +1173,16 @@ func TestAppendGroupingSetOrderByProjectsDistinctReusesVisibleProjection(t *test
 	require.NoError(t, err)
 	// No hidden order key appended: the branch list stays equal to the select list.
 	require.Len(t, branchExprs, len(selectClause.Exprs))
-	// DISTINCT rewrites to an existing visible ordinal, so nothing is hidden.
 	require.Equal(t, []int{-1}, orderResolve.hiddenIdx)
-
-	rewrittenPos, ok := rewrittenOrderBy[0].Expr.(*tree.NumVal)
-	require.True(t, ok)
-	pos, ok := rewrittenPos.Int64()
-	require.True(t, ok)
-	require.Equal(t, int64(1), pos)
+	require.Equal(t, []bool{true}, orderResolve.bindDistinct)
+	require.Equal(t,
+		tree.String(selectStmt.OrderBy[0].Expr, dialect.MYSQL),
+		tree.String(rewrittenOrderBy[0].Expr, dialect.MYSQL))
 }
 
 // For SELECT DISTINCT, an ORDER BY expression that is not a visible select-list
-// expression must be rejected with the same error as the ordinary ORDER BY path
-// rather than silently injecting a hidden order key.
+// expression is also deferred; the bound DISTINCT path below rejects it with
+// the same error as ordinary ORDER BY instead of injecting a hidden key.
 func TestAppendGroupingSetOrderByProjectsDistinctRejectsHiddenKey(t *testing.T) {
 	stmts, err := parsers.Parse(
 		context.TODO(),
@@ -1200,9 +1197,11 @@ func TestAppendGroupingSetOrderByProjectsDistinctRejectsHiddenKey(t *testing.T) 
 
 	selectStmt := stmts[0].(*tree.Select)
 	selectClause := selectStmt.Select.(*tree.SelectClause)
-	_, _, _, err = prepareGroupingSetOrderByProjects(nil, selectStmt.OrderBy, selectClause.Exprs, true)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "for SELECT DISTINCT, ORDER BY expressions must appear in select list")
+	branchExprs, _, orderResolve, err := prepareGroupingSetOrderByProjects(nil, selectStmt.OrderBy, selectClause.Exprs, true)
+	require.NoError(t, err)
+	require.Len(t, branchExprs, len(selectClause.Exprs))
+	require.Equal(t, []int{-1}, orderResolve.hiddenIdx)
+	require.Equal(t, []bool{true}, orderResolve.bindDistinct)
 }
 
 // End-to-end guard: the DISTINCT rejection must also fire through the full plan
@@ -1274,192 +1273,6 @@ func TestQueryBuilderBuildRollupOrderByGroupingExpressionDistinctPreservesOuterQ
 	_, err = BuildPlan(NewMockCompilerContext(true), stmts[0], false)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "for SELECT DISTINCT, ORDER BY expressions must appear in select list")
-}
-
-// normalizeExprForComparison strips table qualifiers from GROUPING()
-// arguments so that GROUPING(t.a) normalizes to GROUPING(a) for comparison.
-func TestNormalizeExprForComparisonStripsTableQualifier(t *testing.T) {
-	groupingExpr := &tree.FuncExpr{
-		FuncName: tree.NewCStr("grouping", 0),
-		Exprs: tree.Exprs{
-			&tree.UnresolvedName{
-				NumParts: 2,
-				CStrParts: [4]*tree.CStr{
-					tree.NewCStr("a", 0),
-					tree.NewCStr("t", 0),
-				},
-			},
-		},
-	}
-	normalizeExprForComparison(groupingExpr)
-	arg, ok := groupingExpr.Exprs[0].(*tree.UnresolvedName)
-	require.True(t, ok)
-	require.Equal(t, 1, arg.NumParts)
-	require.Equal(t, "a", arg.CStrParts[0].Compare())
-}
-
-// normalizeExprForComparison unwraps redundant parentheses from
-// GROUPING() arguments so that GROUPING((a)) normalizes to GROUPING(a).
-func TestNormalizeExprForComparisonUnwrapsParenExpr(t *testing.T) {
-	groupingExpr := &tree.FuncExpr{
-		FuncName: tree.NewCStr("grouping", 0),
-		Exprs: tree.Exprs{
-			&tree.ParenExpr{
-				Expr: &tree.UnresolvedName{
-					NumParts: 1,
-					CStrParts: [4]*tree.CStr{
-						tree.NewCStr("a", 0),
-					},
-				},
-			},
-		},
-	}
-	normalizeExprForComparison(groupingExpr)
-	arg, ok := groupingExpr.Exprs[0].(*tree.UnresolvedName)
-	require.True(t, ok)
-	require.Equal(t, 1, arg.NumParts)
-	require.Equal(t, "a", arg.CStrParts[0].Compare())
-}
-
-// normalizeExprForComparison folds function-name case so that GROUPING(a) and
-// grouping(a) canonicalize to the same comparison key.
-func TestNormalizeExprForComparisonFoldsFunctionNameCase(t *testing.T) {
-	groupingExpr := &tree.FuncExpr{
-		FuncName: tree.NewCStr("GROUPING", 0),
-		Exprs: tree.Exprs{
-			&tree.UnresolvedName{
-				NumParts:  1,
-				CStrParts: [4]*tree.CStr{tree.NewCStr("a", 0)},
-			},
-		},
-	}
-	normalizeExprForComparison(groupingExpr)
-	require.Equal(t, "grouping", groupingExpr.FuncName.Origin())
-}
-
-// normalizeExprForComparison must recurse into the expression subtrees of
-// GROUPING() arguments so that qualifiers on nested expression arguments are
-// also stripped. E.g. GROUPING(abs(t.col)) should canonicalize its inner t.col
-// to col so the key matches GROUPING(abs(col)).
-func TestNormalizeExprForComparisonStripsQualifierInsideGroupingArgExpr(t *testing.T) {
-	expr := &tree.FuncExpr{
-		FuncName: tree.NewCStr("GROUPING", 0),
-		Exprs: tree.Exprs{
-			&tree.FuncExpr{
-				FuncName: tree.NewCStr("ABS", 0),
-				Exprs: tree.Exprs{
-					&tree.UnresolvedName{
-						NumParts: 2,
-						CStrParts: [4]*tree.CStr{
-							tree.NewCStr("col", 0),
-							tree.NewCStr("t", 0),
-						},
-					},
-				},
-			},
-		},
-	}
-	normalizeExprForComparison(expr)
-	require.Equal(t, "grouping", expr.FuncName.Origin())
-	nestedFunc := expr.Exprs[0].(*tree.FuncExpr)
-	require.Equal(t, "abs", nestedFunc.FuncName.Origin())
-	innerName := nestedFunc.Exprs[0].(*tree.UnresolvedName)
-	require.Equal(t, 1, innerName.NumParts)
-	require.Equal(t, "col", innerName.CStrParts[0].Compare())
-}
-
-// groupingOrderExprKey must return the same key for GROUPING(a) and
-// GROUPING(t.a) so that the DISTINCT guard matches them as the same expression.
-func TestGroupingOrderExprKeyNormalizesQualifiedColumn(t *testing.T) {
-	// Parse a query to obtain a well-formed GROUPING(a) FuncExpr.
-	stmts, err := parsers.Parse(
-		context.TODO(),
-		dialect.MYSQL,
-		`select grouping(a) from select_test.bind_select group by a with rollup`,
-		1,
-	)
-	require.NoError(t, err)
-	selectList := stmts[0].(*tree.Select).Select.(*tree.SelectClause).Exprs
-	unqualifiedGrouping := selectList[0].Expr
-
-	// Clone it and replace the argument with a qualified t.a reference.
-	qualifiedGrouping := cloneTreeExpr(unqualifiedGrouping)
-	qualifiedGrouping.(*tree.FuncExpr).Exprs[0] = &tree.UnresolvedName{
-		NumParts:  2,
-		CStrParts: [4]*tree.CStr{tree.NewCStr("a", 0), tree.NewCStr("t", 0)},
-	}
-
-	key1, err := groupingOrderExprKey(nil, nil, unqualifiedGrouping, false)
-	require.NoError(t, err)
-	key2, err := groupingOrderExprKey(nil, nil, qualifiedGrouping, true)
-	require.NoError(t, err)
-	require.Equal(t, key1, key2)
-}
-
-// groupingOrderExprKey must return the same key for GROUPING((a)) and
-// GROUPING(a) so that the DISTINCT guard matches them as the same expression.
-func TestGroupingOrderExprKeyNormalizesParenExpr(t *testing.T) {
-	// Parse a query to obtain a well-formed GROUPING(a) FuncExpr.
-	stmts, err := parsers.Parse(
-		context.TODO(),
-		dialect.MYSQL,
-		`select grouping(a) from select_test.bind_select group by a with rollup`,
-		1,
-	)
-	require.NoError(t, err)
-	selectList := stmts[0].(*tree.Select).Select.(*tree.SelectClause).Exprs
-	unwrappedGrouping := selectList[0].Expr
-
-	// Clone it and wrap the argument in a redundant ParenExpr.
-	wrappedGrouping := cloneTreeExpr(unwrappedGrouping)
-	wrappedGrouping.(*tree.FuncExpr).Exprs[0] = &tree.ParenExpr{
-		Expr: wrappedGrouping.(*tree.FuncExpr).Exprs[0],
-	}
-
-	key1, err := groupingOrderExprKey(nil, nil, unwrappedGrouping, false)
-	require.NoError(t, err)
-	key2, err := groupingOrderExprKey(nil, nil, wrappedGrouping, true)
-	require.NoError(t, err)
-	require.Equal(t, key1, key2)
-}
-
-// groupingOrderExprKey must return the same key for GROUPING(A) and grouping(a)
-// so the DISTINCT guard treats function-name case as insignificant.
-func TestGroupingOrderExprKeyFoldsFunctionNameCase(t *testing.T) {
-	upper := parseSingleSelectExpr(t, `select GROUPING(A) from select_test.bind_select group by a with rollup`)
-	lower := parseSingleSelectExpr(t, `select grouping(a) from select_test.bind_select group by a with rollup`)
-
-	key1, err := groupingOrderExprKey(nil, nil, upper, false)
-	require.NoError(t, err)
-	key2, err := groupingOrderExprKey(nil, nil, lower, true)
-	require.NoError(t, err)
-	require.Equal(t, key1, key2)
-}
-
-// groupingOrderExprKey must return the same key for (GROUPING(a)) and
-// GROUPING(a) so the DISTINCT guard ignores parentheses wrapping the whole
-// ORDER BY expression.
-func TestGroupingOrderExprKeyUnwrapsOuterParens(t *testing.T) {
-	wrapped := parseSingleOrderByExpr(t, `select grouping(a) from select_test.bind_select group by a with rollup order by (grouping(a))`)
-	bare := parseSingleSelectExpr(t, `select grouping(a) from select_test.bind_select group by a with rollup`)
-
-	key1, err := groupingOrderExprKey(nil, nil, wrapped, true)
-	require.NoError(t, err)
-	key2, err := groupingOrderExprKey(nil, nil, bare, false)
-	require.NoError(t, err)
-	require.Equal(t, key1, key2)
-}
-
-func parseSingleSelectExpr(t *testing.T, sql string) tree.Expr {
-	stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, sql, 1)
-	require.NoError(t, err)
-	return stmts[0].(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr
-}
-
-func parseSingleOrderByExpr(t *testing.T, sql string) tree.Expr {
-	stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, sql, 1)
-	require.NoError(t, err)
-	return stmts[0].(*tree.Select).OrderBy[0].Expr
 }
 
 func TestAppendGroupingSetOrderByNestedProjects(t *testing.T) {
@@ -4730,16 +4543,122 @@ func TestGroupingSetDistinctOrderByAliasShadowing(t *testing.T) {
 	require.Equal(t, int32(1), firstSortColPos(t, p))
 }
 
-// TestGroupingSetDistinctOrderByBetweenStarsNotSupported pins the explicit
-// rejection of the undecidable layout: when the matched visible item sits
-// between '*' expansions, the widths of the stars ahead of it cannot be derived
-// from the total visible width, so the query must fail loudly rather than sort
-// by a wrong column.
-func TestGroupingSetDistinctOrderByBetweenStarsNotSupported(t *testing.T) {
+// TestGroupingSetDistinctOrderByBetweenStars verifies that a DISTINCT ORDER BY
+// grouping() key matching a visible item that sits BETWEEN two star expansions
+// (t1.*, grouping(a), t2.*) resolves through the bound visible projection.
+// t1 (bind_select) expands to 3 columns (a, b, c), so grouping(a) as ga lands
+// at 0-based ColPos 3.
+func TestGroupingSetDistinctOrderByBetweenStars(t *testing.T) {
 	mock := NewMockOptimizer(false)
 
-	_, err := runOneStmt(mock, t,
+	p, err := runOneStmt(mock, t,
 		"select distinct t1.*, grouping(a) as ga, t2.* from select_test.bind_select as t1, nation as t2 group by a, b, c, n_nationkey, n_name, n_regionkey, n_comment with rollup order by grouping(a)")
+	require.NoError(t, err)
+	require.Equal(t, int32(3), firstSortColPos(t, p))
+}
+
+func TestGroupingSetDistinctOrderByBoundIdentity(t *testing.T) {
+	mock := NewMockOptimizer(false)
+
+	// The unqualified b in ORDER BY resolves unambiguously to t1.b and therefore
+	// matches the selected bound expression grouping(a) + t1.b.
+	p, err := runOneStmt(mock, t,
+		"select distinct grouping(a) + t1.b from select_test.bind_select as t1 group by t1.a, t1.b with rollup order by grouping(a) + b")
+	require.NoError(t, err)
+	require.Equal(t, int32(0), firstSortColPos(t, p))
+
+	// An unqualified GROUPING argument is ambiguous across self-join inputs and
+	// must fail instead of being text-matched to either visible grouping bit.
+	_, err = runOneStmt(mock, t,
+		"select distinct grouping(a) from select_test.bind_select as t1, select_test.bind_select as t2 group by t1.a, t2.a with rollup order by grouping(a)")
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "not yet implemented")
+	require.Contains(t, err.Error(), "ambiguous")
+}
+
+func TestQualifyBoundGroupingOrderExprPreservesRelationIdentity(t *testing.T) {
+	_, bindCtx := genBuilderAndCtx()
+	t1 := bindCtx.bindings[0]
+	t1.table = "t1"
+	t1.tag = 1
+	t2 := *t1
+	t2.table = "t2"
+	t2.tag = 2
+	bindCtx.bindings = []*Binding{t1, &t2}
+	bindCtx.bindingByTable = map[string]*Binding{"t1": t1, "t2": &t2}
+	bindCtx.bindingByTag = map[int32]*Binding{1: t1, 2: &t2}
+	bindCtx.bindingByCol = map[string]*Binding{}
+
+	makeGrouping := func(table string) tree.Expr {
+		stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, "select grouping(a)", 1)
+		require.NoError(t, err)
+		expr := stmts[0].(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr
+		funcExpr := expr.(*tree.FuncExpr)
+		funcExpr.Exprs[0] = tree.NewUnresolvedName(tree.NewCStr(table, 0), tree.NewCStr("a", 0))
+		return funcExpr
+	}
+
+	t1Expr, err := qualifyBoundGroupingOrderExpr(bindCtx, makeGrouping("t1"))
+	require.NoError(t, err)
+	t2Expr, err := qualifyBoundGroupingOrderExpr(bindCtx, makeGrouping("t2"))
+	require.NoError(t, err)
+	require.NotEqual(t, tree.String(t1Expr, dialect.MYSQL), tree.String(t2Expr, dialect.MYSQL))
+	require.Equal(t, "grouping(t1.a)", tree.String(t1Expr, dialect.MYSQL))
+	require.Equal(t, "grouping(t2.a)", tree.String(t2Expr, dialect.MYSQL))
+}
+
+func hasNodeType(p *Plan, nt plan.Node_NodeType) bool {
+	for _, n := range p.GetQuery().Nodes {
+		if n.NodeType == nt {
+			return true
+		}
+	}
+	return false
+}
+
+// hasAggAboveUnionAll reports whether an AGG node was appended after the last
+// UNION ALL, i.e. a whole-result de-duplication step sits above the grouping-set
+// union chain (the DISTINCT node is rewritten to AGG). Nodes are in append order,
+// with the union built before any top-level DISTINCT.
+func hasAggAboveUnionAll(p *Plan) bool {
+	nodes := p.GetQuery().Nodes
+	lastUnion := -1
+	for i, n := range nodes {
+		if n.NodeType == plan.Node_UNION_ALL {
+			lastUnion = i
+		}
+	}
+	if lastUnion < 0 {
+		return false
+	}
+	for _, n := range nodes[lastUnion+1:] {
+		if n.NodeType == plan.Node_AGG {
+			return true
+		}
+	}
+	return false
+}
+
+// TestGroupingSetDistinctGlobalDedup verifies that SELECT DISTINCT over a
+// grouping-set (ROLLUP) expansion de-duplicates the whole result: the branches
+// are stitched with UNION ALL (so every ROLLUP super-aggregate / grand-total row
+// survives) and a single DISTINCT step (rewritten to AGG) sits above the union.
+// The non-distinct form has no such de-dup step.
+func TestGroupingSetDistinctGlobalDedup(t *testing.T) {
+	mock := NewMockOptimizer(false)
+
+	distinctPlan, err := runOneStmt(mock, t,
+		"select distinct a, grouping(a) as ga from select_test.bind_select group by a, b with rollup")
+	require.NoError(t, err)
+	require.True(t, hasNodeType(distinctPlan, plan.Node_UNION_ALL),
+		"DISTINCT grouping-set must keep UNION ALL so ROLLUP rows survive")
+	require.True(t, hasAggAboveUnionAll(distinctPlan),
+		"DISTINCT grouping-set must de-duplicate the whole result above the union")
+
+	allPlan, err := runOneStmt(mock, t,
+		"select a, grouping(a) as ga from select_test.bind_select group by a, b with rollup")
+	require.NoError(t, err)
+	require.True(t, hasNodeType(allPlan, plan.Node_UNION_ALL),
+		"non-distinct grouping-set keeps UNION ALL")
+	require.False(t, hasAggAboveUnionAll(allPlan),
+		"non-distinct grouping-set has no whole-result de-dup above the union")
 }
