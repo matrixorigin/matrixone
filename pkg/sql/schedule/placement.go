@@ -96,6 +96,7 @@ type QueryRequest struct {
 	CandidateResolution  CandidateResolution
 	Intent               SchedulingIntent
 	ResolvedPool         ResolvedPool
+	WorkloadPolicy       EffectiveWorkloadPolicy
 	CurrentCNPolicy      CurrentCNPolicy
 	CurrentCNOrdinalZero bool
 }
@@ -108,6 +109,7 @@ type QueryDecision struct {
 	Reason                 string
 	CandidateResolution    CandidateResolution
 	Intent                 SchedulingIntent
+	WorkloadPolicy         EffectiveWorkloadPolicy
 	ResolvedPool           ResolvedPoolDecision
 	EligibleCount          int
 	ResolvedCandidateCount int
@@ -252,7 +254,12 @@ func DecideQueryPlacement(req QueryRequest) QueryDecision {
 	if req.Intent.PoolFallback == PoolFallbackStrict && req.ResolvedPool.Fallback {
 		return queryDecision(req, nil, nil, ReasonStrictPoolFallback, false)
 	}
-	if req.ExecKind == QueryExecTP || req.ExecKind == QueryExecAPOneCN {
+	if req.WorkloadPolicy.Applied &&
+		req.WorkloadPolicy.Routing == WorkloadRoutingLocal {
+		return decidePolicyLocalPlacement(req)
+	}
+	if !req.WorkloadPolicy.Applied &&
+		(req.ExecKind == QueryExecTP || req.ExecKind == QueryExecAPOneCN) {
 		// A max-worker policy is an upper bound, so a local query using one
 		// worker satisfies every positive cap. Strict pool intent has already
 		// rejected a compatibility fallback above. Treating either policy as
@@ -499,6 +506,68 @@ func decideLocalQueryPlacement(req QueryRequest) QueryDecision {
 	return queryDecision(req, workers, nil, ReasonLocalExecType, true)
 }
 
+func decidePolicyLocalPlacement(req QueryRequest) QueryDecision {
+	resolved := resolvedWorkers(req)
+	workers, dropped := selectEligibleCandidateWorkers(resolved)
+	currentRejectReason, currentRejected := rejectedCurrentWorkerReason(req.CurrentCN)
+	if !hasWorkerIdentity(req.CurrentCN) {
+		decision := queryDecision(
+			req,
+			workers,
+			dropped,
+			ReasonCurrentCNMissingIdentity,
+			false,
+		)
+		decision.EligibleCount = len(workers)
+		return decision
+	}
+	if currentRejected {
+		decision := queryDecision(
+			req,
+			workers,
+			dropped,
+			currentRejectReason,
+			false,
+		)
+		decision.EligibleCount = len(workers)
+		return decision
+	}
+	if len(workers) == 0 &&
+		req.Intent.EmptyWorkerPolicy == EmptyWorkerLocalFallback {
+		decision := queryDecision(
+			req,
+			Workers{req.CurrentCN},
+			dropped,
+			ReasonNoCandidateCN,
+			true,
+		)
+		decision.EligibleCount = 0
+		return decision
+	}
+	for _, worker := range workers {
+		if sameWorker(worker, req.CurrentCN) {
+			decision := queryDecision(
+				req,
+				Workers{worker},
+				dropped,
+				ReasonRequiredCurrentCN,
+				true,
+			)
+			decision.EligibleCount = len(workers)
+			return decision
+		}
+	}
+	decision := queryDecision(
+		req,
+		nil,
+		dropped,
+		ReasonRequiredCurrentOutsidePool,
+		false,
+	)
+	decision.EligibleCount = len(workers)
+	return decision
+}
+
 func (p CurrentCNPolicy) Valid() bool {
 	switch p {
 	case CurrentCNAllowed, CurrentCNRequired, CurrentCNPreferred, CurrentCNExcluded:
@@ -526,6 +595,7 @@ func queryDecision(req QueryRequest, workers Workers, dropped DroppedWorkers, re
 		Reason:                 reason,
 		CandidateResolution:    resolution,
 		Intent:                 req.Intent,
+		WorkloadPolicy:         req.WorkloadPolicy,
 		ResolvedPool:           resolvedPoolDecision(req),
 		ResolvedCandidateCount: len(resolvedWorkers(req)),
 		CurrentCNPolicy:        req.CurrentCNPolicy,

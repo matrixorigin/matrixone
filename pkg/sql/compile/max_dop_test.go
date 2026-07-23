@@ -232,7 +232,23 @@ func TestConstructScopeForExternalNodeKeepsWorkerIdentity(t *testing.T) {
 
 	require.Equal(t, "remote", scope.NodeInfo.Id)
 	require.Equal(t, "remote:6001", scope.NodeInfo.Addr)
-	require.Equal(t, 1, scope.NodeInfo.Mcpu)
+	require.Equal(t, 8, scope.NodeInfo.Mcpu)
+	require.Equal(t, Remote, scope.Magic)
+
+	serialScope := c.constructScopeForExternalNode(engine.Node{
+		Id:   "remote",
+		Addr: "remote:6001",
+		Mcpu: 8,
+	}, false)
+	require.Equal(t, 1, serialScope.NodeInfo.Mcpu)
+	require.Equal(t, Remote, serialScope.Magic)
+
+	localScope := c.constructScopeForExternalNode(engine.Node{
+		Id:   "local",
+		Addr: "local:6001",
+		Mcpu: 8,
+	}, false)
+	require.Equal(t, Merge, localScope.Magic)
 }
 
 func TestSameExecutionNodeUsesIdentityAndDoesNotMatchEmptyAddressToRemote(t *testing.T) {

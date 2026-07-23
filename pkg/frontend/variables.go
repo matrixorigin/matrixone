@@ -1094,6 +1094,7 @@ const (
 	maxPreparedStmtCount    = "max_prepared_stmt_count"
 	queryMaxWorkers         = "query_max_workers"
 	queryPoolStrict         = "query_pool_strict"
+	queryWorkloadPolicy     = "query_workload_policy"
 )
 
 var gSysVarsDefs = map[string]SystemVariable{
@@ -3658,6 +3659,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 		SetVarHintApplies: true,
 		Type:              InitSystemVariableBoolType(queryPoolStrict),
 		Default:           int64(0),
+	},
+	queryWorkloadPolicy: {
+		Name:              queryWorkloadPolicy,
+		Scope:             ScopeGlobal,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableStringType(queryWorkloadPolicy),
+		Default:           "",
 	},
 	// remap_rewrites holds a JSON object of table-rewrite rules that apply to
 	// every query in the session (gated by enable_remap_hint). The value is the

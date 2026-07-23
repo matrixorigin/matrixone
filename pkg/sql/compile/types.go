@@ -296,6 +296,8 @@ type Compile struct {
 	cnList                engine.Nodes
 	queryPlacement        schedule.QueryDecision
 	querySchedulingIntent schedule.SchedulingIntent
+	workloadPolicySet     schedule.WorkloadPolicySet
+	workloadClassHint     schedule.WorkloadClass
 	schedulingTrace       *schedule.TraceRecorder
 	schedulingAttempt     schedule.TraceAttemptID
 	// ast

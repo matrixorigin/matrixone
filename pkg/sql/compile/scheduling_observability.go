@@ -43,6 +43,12 @@ func (c *Compile) recordQuerySchedulingMetrics(
 		placement.Reason,
 		result,
 	).Inc()
+	metricv2.QueryWorkloadPolicyDecisionCounter.WithLabelValues(
+		string(placement.WorkloadPolicy.WorkloadClass),
+		string(placement.WorkloadPolicy.Source),
+		string(placement.WorkloadPolicy.Routing),
+		result,
+	).Inc()
 
 	metricv2.QueryScheduleWorkerHistogram.WithLabelValues("discovered").Observe(float64(placement.CandidateResolution.DiscoveredCount))
 	metricv2.QueryScheduleWorkerHistogram.WithLabelValues("candidate").Observe(float64(placement.ResolvedCandidateCount))

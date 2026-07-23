@@ -733,6 +733,7 @@ func (c *Compile) buildRetryCompile(defChanged bool) (*Compile, error) {
 	var e error
 	runC := NewCompile(c.addr, c.db, c.sql, c.tenant, c.uid, c.e, c.proc, c.stmt, c.isInternal, c.cnLabel, c.startAt)
 	runC.SetQuerySchedulingIntent(c.querySchedulingIntent)
+	runC.SetWorkloadPolicy(c.workloadPolicySet, c.workloadClassHint)
 	runC.SetSchedulingTraceRecorder(c.schedulingTrace)
 	runC.SetOriginSQL(c.originSQL)
 	defer func() {
