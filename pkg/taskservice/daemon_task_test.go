@@ -94,12 +94,14 @@ func (r *mockErrActiveRoutine) Restart() error { return r.restartErr }
 
 type serviceWithDaemonHook struct {
 	TaskService
-	mu        sync.RWMutex
-	queryErr  error
-	updateErr error
+	mu         sync.RWMutex
+	queryErr   error
+	updateErr  error
+	queryCalls atomic.Int64
 }
 
 func (s *serviceWithDaemonHook) QueryDaemonTask(ctx context.Context, conds ...Condition) ([]task.DaemonTask, error) {
+	s.queryCalls.Add(1)
 	s.mu.RLock()
 	queryErr := s.queryErr
 	s.mu.RUnlock()
@@ -129,6 +131,54 @@ func (s *serviceWithDaemonHook) setUpdateErr(err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.updateErr = err
+}
+
+func TestDaemonTaskPollResumesAfterTaskFrameworkReenabled(t *testing.T) {
+	wasDisabled := taskFrameworkDisabled()
+	DebugCtlTaskFramework(true)
+	t.Cleanup(func() {
+		DebugCtlTaskFramework(wasDisabled)
+	})
+
+	r, _ := newDaemonHandleTestRunner(t)
+	hook := &serviceWithDaemonHook{TaskService: r.service}
+	r.service = hook
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	timerC := make(chan time.Time)
+	resetC := make(chan struct{}, 2)
+	go func() {
+		defer close(done)
+		r.pollWithTimer(ctx, timerC, func() {
+			resetC <- struct{}{}
+		})
+	}()
+	defer func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Error("daemon poll did not stop after cancellation")
+		}
+	}()
+
+	timerC <- time.Now()
+	select {
+	case <-resetC:
+	case <-time.After(time.Second):
+		t.Fatal("disabled daemon poll did not reset its timer")
+	}
+	require.Zero(t, hook.queryCalls.Load())
+
+	DebugCtlTaskFramework(false)
+	timerC <- time.Now()
+	select {
+	case <-resetC:
+	case <-time.After(time.Second):
+		t.Fatal("enabled daemon poll did not reset its timer")
+	}
+	require.Positive(t, hook.queryCalls.Load())
 }
 
 func daemonTaskMetadata() task.TaskMetadata {
