@@ -15,7 +15,6 @@
 package tree
 
 import (
-	"fmt"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -51,34 +50,29 @@ func Test_Function(t *testing.T) {
 
 	ctx.Reset()
 	arg1.Format(ctx)
-	fmt.Println(ctx.String())
-	require.Equal(t, ctx.String(), "a int")
+	require.Equal(t, "a int", ctx.String())
 
 	ctx.Reset()
 	arg1.GetName(ctx)
-	fmt.Println(ctx.String())
-	require.Equal(t, ctx.String(), "a")
+	require.Equal(t, "a", ctx.String())
 
 	ctx.Reset()
 	arg1.GetType(ctx)
-	fmt.Println(ctx.String())
-	require.Equal(t, ctx.String(), "int")
+	require.Equal(t, "int", ctx.String())
 
 	// ReturnType
 	ret := NewReturnType(intType)
 
 	ctx.Reset()
 	ret.Format(ctx)
-	fmt.Println(ctx.String())
-	require.Equal(t, ctx.String(), "int")
+	require.Equal(t, "int", ctx.String())
 
 	// FunctionName
 	name := NewFuncName("sql_sum", ObjectNamePrefix{})
 
 	ctx.Reset()
 	name.Format(ctx)
-	fmt.Println(ctx.String())
-	require.Equal(t, ctx.String(), "sql_sum")
+	require.Equal(t, "sql_sum", ctx.String())
 
 	// CreateFunction
 	create := &CreateFunction{
@@ -91,8 +85,7 @@ func Test_Function(t *testing.T) {
 
 	ctx.Reset()
 	create.Format(ctx)
-	fmt.Println(ctx.String())
-	require.Equal(t, ctx.String(), "create function sql_sum (a int, b int) returns int language sql as '$1 + $2'")
+	require.Equal(t, "create function sql_sum (a int, b int) returns int language sql as '$1 + $2'", ctx.String())
 
 	// DropFunction
 	drop := &DropFunction{
@@ -102,6 +95,5 @@ func Test_Function(t *testing.T) {
 
 	ctx.Reset()
 	drop.Format(ctx)
-	fmt.Println(ctx.String())
-	require.Equal(t, ctx.String(), "drop function sql_sum (a int, b int)")
+	require.Equal(t, "drop function sql_sum (a int, b int)", ctx.String())
 }

@@ -453,6 +453,8 @@ message TableDef {
   uint64 FeatureFlag = 35;
   uint64 logical_id = 36;
   string original_name = 37;
+  // Persistent cache epoch for AUTO_INCREMENT allocation.
+  uint32 auto_incr_epoch = 38;
 }
 
 message TableFunction {

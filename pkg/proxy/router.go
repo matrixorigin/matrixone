@@ -134,7 +134,7 @@ type transferRouter interface {
 // backend connection is still eligible for a fresh client login. Cached reuse
 // must honor the same CN health policy as a new session route.
 type cacheReuseChecker interface {
-	CanReuseCachedCN(cn *CNServer) bool
+	CanReuseCachedCN(cn *CNServer, client clientInfo) bool
 }
 
 // RefreshableRouter is a router that can be refreshed to get latest route strategy
@@ -403,14 +403,51 @@ func (r *router) RouteForTransfer(
 	return s, nil
 }
 
-// CanReuseCachedCN implements cacheReuseChecker. Cached connections must only
-// be reused when the breaker is closed/absent; otherwise they would bypass the
-// new-session health gate.
-func (r *router) CanReuseCachedCN(cn *CNServer) bool {
+// CanReuseCachedCN implements cacheReuseChecker. Cached connections must pass
+// the same cluster-eligibility and health gates as a newly routed session.
+func (r *router) CanReuseCachedCN(cn *CNServer, client clientInfo) bool {
 	if cn == nil {
 		return true
 	}
-	return r.health.canReuseCachedCN(cn.uuid)
+	if !r.health.canReuseCachedCN(cn.uuid) || r.moCluster == nil {
+		return false
+	}
+
+	candidates := make([]metadata.CNService, 0)
+	r.moCluster.GetCNService(
+		clusterservice.NewSelector(),
+		func(service metadata.CNService) bool {
+			candidates = append(candidates, service)
+			return true
+		},
+	)
+	if len(candidates) == 0 {
+		return false
+	}
+
+	// Apply the exact fresh-session routing policy to the current metadata for
+	// all working CNs. The full snapshot is required because labeled and empty
+	// CNs form priority tiers: whether a cached fallback remains eligible can
+	// change when another CN is added or removed.
+	eligible := false
+	selector := client.labelInfo.genSelector(clusterservice.EQ_Globbing)
+	appendFn := func(service *metadata.CNService) {
+		if service.ServiceID == cn.uuid {
+			eligible = true
+		}
+	}
+	if client.isSuperTenant() {
+		if err := route.RouteForSuperTenantCandidates(
+			context.Background(), candidates, selector, client.username, nil, appendFn,
+		); err != nil {
+			return false
+		}
+	} else if err := route.RouteForCommonTenantCandidates(
+		context.Background(), candidates, selector, nil, appendFn,
+	); err != nil {
+		return false
+	}
+	return eligible
 }
 
 func (r *router) connect(

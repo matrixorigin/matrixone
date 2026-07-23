@@ -295,6 +295,7 @@ func (c *Compile) clear() {
 
 	c.cnList = c.cnList[:0]
 	c.queryPlacement = schedule.QueryDecision{}
+	c.querySchedulingIntent = schedule.SchedulingIntent{}
 	c.schedulingTrace = nil
 	c.schedulingAttempt = 0
 	c.stmt = nil
@@ -4877,8 +4878,9 @@ func (c *Compile) compileInsert(nodes []*plan.Node, node *plan.Node, ss []*Scope
 		// can produce few output rows (non-S3) yet still shuffle across CNs. So group the same-CN
 		// shuffle buckets (with their nested cross-CN dispatch) into one per-CN send unit *before*
 		// attaching Insert. This (a) keeps the dispatch in the same tree as all its local buckets
-		// so it is sent to its own CN instead of being converted to local on the coordinator and
-		// hanging (issue #24919), and (b) puts Insert on the per-CN container's RootOp chain
+		// so it remains standalone-executable on its own CN instead of failing before remote start
+		// (historically this was silently converted to local and hung; issue #24919), and (b) puts
+		// Insert on the per-CN container's RootOp chain
 		// (Insert -> Merge), so affectedRows() -- which walks the RootOp chain -- still counts it.
 		// Noop when ss carries no cross-CN shuffle dispatch.
 		ss = c.groupShuffleBucketsByCNIfNeeded(ss)
@@ -4904,7 +4906,8 @@ func (c *Compile) compileInsert(nodes []*plan.Node, node *plan.Node, ss []*Scope
 		c.anal.isFirst = false
 		// dataScope merges the buckets, but dataScope.MergeRun still sends each bucket as an
 		// individual RemoteRun unit, so a cross-CN shuffle dispatch here would hit the same
-		// convert-to-local hang. Group same-CN buckets into one per-CN send unit first (issue #24919).
+		// non-standalone remote-start failure. Group same-CN buckets into one per-CN send unit first
+		// (historically this was a convert-to-local hang; issue #24919).
 		ss = c.groupShuffleBucketsByCNIfNeeded(ss)
 		dataScope := c.newMergeScope(ss)
 		if c.anal.qry.LoadTag {
@@ -4983,8 +4986,8 @@ func (c *Compile) compileInsert(nodes []*plan.Node, node *plan.Node, ss []*Scope
 	currentFirstFlag = false
 	// Group a CN's dop shuffle buckets (and the shuffle dispatch nested under them) into one
 	// per-CN send unit before the coordinator merge, so the cross-CN shuffle dispatch is sent
-	// to and executed at its own CN instead of being converted to local on the coordinator
-	// (which mispairs the cross-CN receiver handshake and hangs -- issue #24919).
+	// to and executed at its own CN. Without grouping the tree is rejected before remote start;
+	// historically it was moved to the coordinator, mispaired the receiver, and hung (#24919).
 	ss = c.groupShuffleBucketsByCNIfNeeded(ss)
 	rs := c.newMergeScope(ss)
 	rs.Magic = MergeInsert
@@ -5050,8 +5053,8 @@ func (c *Compile) compileMultiUpdate(node *plan.Node, ss []*Scope) ([]*Scope, er
 
 		// Group a CN's dop shuffle buckets (and the shuffle dispatch nested under them) into one
 		// per-CN send unit before the coordinator merge, so the cross-CN shuffle dispatch is sent
-		// to and executed at its own CN instead of being converted to local on the coordinator
-		// (which mispairs the cross-CN receiver handshake and hangs -- issue #24919).
+		// to and executed at its own CN. Without grouping the tree is rejected before remote start;
+		// historically it was moved to the coordinator, mispaired the receiver, and hung (#24919).
 		ss = c.groupShuffleBucketsByCNIfNeeded(ss)
 		rs := ss[0]
 		if len(ss) > 1 || ss[0].NodeInfo.Mcpu > 1 {
@@ -5552,11 +5555,11 @@ func scopeTreeHasCrossCNDispatch(s *Scope) bool {
 // separate RemoteRun trees while the shuffle dispatch only attaches to the first bucket.
 // When the consumer (here compileInsert) sends each bucket individually, RemoteRun ->
 // checkPipelineStandaloneExecutableAtRemote sees the dispatch.LocalRegs pointing to the
-// sibling out-of-tree buckets, converts the pipeline to local on the coordinator, and the
-// dispatch then runs on the coordinator instead of its compile-time CN -- mispaired with
-// the cross-CN receiver's FromAddr -> the remote receiver's GetProcByUuid spins / merge
-// WaitingEnd waits forever -> hang. Regrouping by CN keeps all of a CN's buckets in one
-// tree, so the whole group is really executed at the remote CN and the pairing is correct.
+// sibling out-of-tree buckets, so the tree is not independently executable and must fail
+// before remote start. Historically RemoteRun silently moved that tree to the coordinator;
+// the dispatch then ran on the wrong CN, was mispaired with the cross-CN receiver's FromAddr,
+// and the remote receiver/merge could wait forever. Regrouping by CN keeps all of a CN's
+// buckets in one tree, so the whole group executes at the intended remote CN.
 //
 // It is a no-op unless we are multi-CN and ss actually carries a cross-CN shuffle dispatch,
 // so single-CN and non-shuffle inserts are completely unaffected.

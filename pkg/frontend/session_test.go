@@ -699,11 +699,18 @@ func TestSession_Migrate(t *testing.T) {
 			PrepareStmts: []*query.PrepareStmt{
 				{Name: "p1", SQL: `select ?`},
 				{Name: "p2", SQL: `select ?`},
+				{Name: "a-b", SQL: `select ?`},
+				{Name: "select", SQL: `select ?`},
+				{Name: "a`b", SQL: `select ?`},
+				{Name: "from", SQL: `select ?`},
 			},
 		})
 		assert.NoError(t, err)
 		assert.Equal(t, "d1", s.GetDatabaseName())
-		assert.Equal(t, 2, len(s.prepareStmts))
+		assert.Len(t, s.prepareStmts, 6)
+		for _, name := range []string{"a-b", "select", "a`b", "from"} {
+			assert.Contains(t, s.prepareStmts, name)
+		}
 		assert.Equal(t, int64(7), s.GetLastAffectedRows())
 		assert.Equal(t, int64(7), s.GetProc().GetAffectedRows())
 

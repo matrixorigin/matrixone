@@ -300,6 +300,7 @@ type PrepareStmt struct {
 	Sql            string
 	PreparePlan    *plan.Plan
 	PrepareStmt    tree.Statement
+	NativeMode     bool
 	ParamTypes     []byte
 	ColDefData     [][]byte
 	IsCloudNonuser bool
@@ -311,6 +312,11 @@ type PrepareStmt struct {
 
 	compile *compile.Compile
 	Ts      timestamp.Timestamp
+
+	// schedulingSQLMode freezes the lexical mode used when Sql was prepared.
+	// EXECUTE must not reinterpret optimizer comments after session sql_mode
+	// changes.
+	schedulingSQLMode string
 }
 
 /*
@@ -1444,6 +1450,10 @@ func (ses *Session) GetSessionSysVar(name string) (interface{}, error) {
 
 func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val interface{}) (err error) {
 	name = strings.ToLower(name)
+	oldMatrixOneNative := false
+	if name == "sql_mode" {
+		oldMatrixOneNative = ses.sqlModeHasMatrixOneNative()
+	}
 
 	def, ok := gSysVarsDefs[name]
 	if !ok {
@@ -1493,7 +1503,7 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 		ses.sesSysVars.Set(name, val)
 	}
 	if err == nil && name == "sql_mode" {
-		ses.updateSqlModeNoAutoValueOnZero(val)
+		ses.updateSqlModeCaches(oldMatrixOneNative, val)
 	}
 
 	// Update rewriteEnabled cache when enable_remap_hint is changed

@@ -297,6 +297,9 @@ func (rm *RoutineManager) Closed(rs *Conn) {
 	if rt == nil {
 		return
 	}
+	// Prevent reset or migration from publishing a replacement session after we
+	// select the session that this close operation must unregister.
+	rt.mc.waitAndClose()
 
 	defer func() {
 		v2.CloseRoutineCounter.Inc()

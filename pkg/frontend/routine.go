@@ -451,11 +451,11 @@ func (rt *Routine) cleanup() {
 func (rt *Routine) migrateConnectionTo(ctx context.Context, req *query.MigrateConnToRequest) error {
 	var err error
 	rt.mc.migrateOnce.Do(func() {
-		if !rt.mc.beginMigrate() {
+		if !rt.mc.beginOperation() {
 			err = moerr.NewInternalErrorNoCtx("cannot start migrate as routine has been closed")
 			return
 		}
-		defer rt.mc.endMigrate()
+		defer rt.mc.endOperation()
 		ses := rt.getSession()
 		ses.UpdateDebugString()
 		err = Migrate(ses, req)
@@ -486,6 +486,11 @@ func (rt *Routine) migrateConnectionFrom(resp *query.MigrateConnFromResponse) er
 }
 
 func (rt *Routine) resetSession(baseServiceID string, resp *query.ResetSessionResponse) error {
+	if !rt.mc.tryBeginOperation() {
+		return moerr.NewInternalErrorNoCtx("cannot reset session as routine is closed or busy")
+	}
+	defer rt.mc.endOperation()
+
 	// retrieve the old session.
 	oldSession := rt.getSession()
 
@@ -509,6 +514,7 @@ func (rt *Routine) resetSession(baseServiceID string, resp *query.ResetSessionRe
 	// reset the new session in other instances.
 	rt.getProtocol().Reset(newSession)
 	rt.setSession(newSession)
+	newSession.getRoutineManager().sessionManager.AddSession(newSession)
 
 	// update the password filed in response.
 	resp.AuthString = []byte(rt.getProtocol().GetStr(AuthString))
