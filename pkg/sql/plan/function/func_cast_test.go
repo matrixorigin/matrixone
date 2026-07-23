@@ -2841,7 +2841,7 @@ func Test_strToStr_TextToCharVarchar(t *testing.T) {
 			err := to.PreExtendAndReset(len(tt.inputs))
 			require.NoError(t, err)
 
-			err = strToStr(ctx, nil, from, to, len(tt.inputs), tt.toType, false, false)
+			err = strToStr(ctx, nil, from, to, len(tt.inputs), tt.toType, false, false, false)
 
 			if tt.wantErr {
 				require.Error(t, err)
@@ -2922,7 +2922,7 @@ func Test_strToStr_StrictStringWidth(t *testing.T) {
 			defer to.Free()
 			require.NoError(t, to.PreExtendAndReset(1))
 
-			err := strToStr(ctx, nil, from, to, 1, tt.toType, tt.strict, false)
+			err := strToStr(ctx, nil, from, to, 1, tt.toType, tt.strict, false, false)
 			if tt.wantErr {
 				require.Error(t, err)
 				// DDL (cast_strict, allowTrailingSpaceTrim=false) returns
@@ -3023,7 +3023,7 @@ func Test_CastVarcharToGeometryRejectTooManyPoints(t *testing.T) {
 	err := to.PreExtendAndReset(1)
 	require.NoError(t, err)
 
-	err = strToStr(context.Background(), proc, from, to, 1, types.T_geometry.ToType(), false, false)
+	err = strToStr(context.Background(), proc, from, to, 1, types.T_geometry.ToType(), false, false, false)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "max_points_in_geometry=3")
 }
@@ -3865,7 +3865,7 @@ func TestFormatCastError(t *testing.T) {
 	require.NoError(t, err)
 	defer constVec.Free(mp)
 	err1 := formatCastError(ctx, constVec, toType, "Src length 4 is larger than Dest length 3")
-	require.Contains(t, err1.Error(), "Can't cast 'abcd' to VARCHAR type.")
+	require.Contains(t, err1.Error(), "Can't cast 'abcd' from VARCHAR type to VARCHAR type.")
 	require.Contains(t, err1.Error(), "Src length 4 is larger than Dest length 3")
 	require.Equal(t, uint16(moerr.ER_UNKNOWN_ERROR), err1.(*moerr.Error).MySQLCode())
 
@@ -3900,7 +3900,13 @@ func TestFormatDataTruncationError(t *testing.T) {
 	constVec, err := vector.NewConstBytes(types.New(types.T_varchar, 4, 0), []byte("abcd"), 1, mp)
 	require.NoError(t, err)
 	defer constVec.Free(mp)
-	err1 := formatDataTruncationError(ctx, constVec, toType, "Src length 4 is larger than Dest length 3")
+	err1 := formatDataTruncationError(
+		ctx,
+		constVec,
+		toType,
+		"Src length 4 is larger than Dest length 3",
+		true,
+	)
 	require.Contains(t, err1.Error(), "Can't cast 'abcd' to VARCHAR type.")
 	require.NotContains(t, err1.Error(), "Data truncation:")
 	moErr1 := err1.(*moerr.Error)
@@ -3910,14 +3916,34 @@ func TestFormatDataTruncationError(t *testing.T) {
 	// const NULL
 	nullVec := vector.NewConstNull(types.New(types.T_varchar, 4, 0), 1, mp)
 	defer nullVec.Free(mp)
-	err2 := formatDataTruncationError(ctx, nullVec, toType, "")
+	err2 := formatDataTruncationError(ctx, nullVec, toType, "", true)
 	require.Contains(t, err2.Error(), "Can't cast 'NULL' as VARCHAR type.")
 
 	// non-const column
 	colVec := testutil.MakeVarcharVector([]string{"abcd", "efgh"}, nil, mp)
 	defer colVec.Free(mp)
-	err3 := formatDataTruncationError(ctx, colVec, toType, "Src length 4 is larger than Dest length 3")
+	err3 := formatDataTruncationError(
+		ctx,
+		colVec,
+		toType,
+		"Src length 4 is larger than Dest length 3",
+		true,
+	)
 	require.Contains(t, err3.Error(), "Can't cast column from VARCHAR type to VARCHAR type because of one or more values in that column.")
+
+	// Generic casts and non-CHAR/VARCHAR targets preserve the legacy internal
+	// error contract even if the caller accidentally marks the operation as an
+	// assignment.
+	genericErr := formatDataTruncationError(ctx, constVec, toType, "")
+	require.Equal(t, moerr.ErrInternal, genericErr.(*moerr.Error).ErrorCode())
+	binaryErr := formatDataTruncationError(
+		ctx,
+		constVec,
+		types.New(types.T_varbinary, 3, 0),
+		"",
+		true,
+	)
+	require.Equal(t, moerr.ErrInternal, binaryErr.(*moerr.Error).ErrorCode())
 }
 
 // TestIsStrictSqlModeSessionInfoFallback covers the branches TestIsStrictSqlMode

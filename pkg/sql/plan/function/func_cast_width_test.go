@@ -22,6 +22,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -39,7 +41,7 @@ func runStrToStrWidth(t *testing.T, mp *mpool.MPool, proc *process.Process, inpu
 	defer to.Free()
 	require.NoError(t, to.PreExtendAndReset(1))
 
-	if err := strToStr(context.Background(), proc, from, to, 1, toType, strict, allowTrim); err != nil {
+	if err := strToStr(context.Background(), proc, from, to, 1, toType, strict, allowTrim, allowTrim); err != nil {
 		return "", false, err
 	}
 	got, null := vector.GenerateFunctionStrParameter(to.GetResultVector()).GetStrValue(0)
@@ -107,10 +109,16 @@ func TestIsStrictSqlMode(t *testing.T) {
 	require.True(t, isStrictSqlMode(proc))
 	set("ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES", nil)
 	require.True(t, isStrictSqlMode(proc))
+	set("TRADITIONAL", nil)
+	require.True(t, isStrictSqlMode(proc))
+	set("ansi, traditional ", nil)
+	require.True(t, isStrictSqlMode(proc))
 
 	set("", nil)
 	require.False(t, isStrictSqlMode(proc))
 	set("NO_ENGINE_SUBSTITUTION", nil)
+	require.False(t, isStrictSqlMode(proc))
+	set("NOT_STRICT_TRANS_TABLES", nil)
 	require.False(t, isStrictSqlMode(proc))
 
 	// error / nil / non-string default to strict (safe fallback)
@@ -167,6 +175,14 @@ func TestNewAssignCastHonorsSqlMode(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "abc", got)
 
+	// ALTER COPY executes an internal INSERT, but keeps its legacy internal
+	// error contract instead of exposing the DML-only 1406 mapping.
+	alterProc := newProc("STRICT_TRANS_TABLES")
+	alterProc.Ctx = context.WithValue(alterProc.Ctx, defines.AlterCopyOpt{}, &plan.AlterCopyOpt{})
+	_, err = castTextToVarchar3(t, alterProc, "abcd")
+	require.Error(t, err)
+	require.Equal(t, moerr.ErrInternal, err.(*moerr.Error).ErrorCode())
+
 	// DDL cast (NewStrictCast) never applies the trailing-space exemption.
 	proc := testutil.NewProcess(t)
 	src := vector.NewVec(types.T_text.ToType())
@@ -176,6 +192,71 @@ func TestNewAssignCastHonorsSqlMode(t *testing.T) {
 	defer rs.Free()
 	require.NoError(t, rs.PreExtendAndReset(1))
 	require.Error(t, NewStrictCast([]*vector.Vector{src, dst}, rs, proc, 1, nil))
+}
+
+func castGeometryToVarchar(
+	t *testing.T,
+	proc *process.Process,
+	input string,
+	width int32,
+	cast func(
+		[]*vector.Vector,
+		vector.FunctionResultWrapper,
+		*process.Process,
+		int,
+		*FunctionSelectList,
+	) error,
+) (string, error) {
+	t.Helper()
+	toType := types.New(types.T_varchar, width, 0)
+	src := vector.NewVec(types.T_geometry.ToType())
+	require.NoError(t, vector.AppendBytes(src, encodeGeometryPayload(input, 0, false), false, proc.Mp()))
+	defer src.Free(proc.Mp())
+	dst := vector.NewVec(toType)
+	defer dst.Free(proc.Mp())
+	rs := vector.NewFunctionResultWrapper(toType, proc.Mp())
+	defer rs.Free()
+	require.NoError(t, rs.PreExtendAndReset(1))
+	if err := cast([]*vector.Vector{src, dst}, rs, proc, 1, nil); err != nil {
+		return "", err
+	}
+	got, _ := vector.GenerateFunctionStrParameter(rs.GetResultVector()).GetStrValue(0)
+	return string(got), nil
+}
+
+func TestGeometryToVarcharWidthEnforcement(t *testing.T) {
+	newProc := func(sqlMode string) *process.Process {
+		proc := testutil.NewProcess(t)
+		proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+			require.Equal(t, "sql_mode", name)
+			return sqlMode, nil
+		})
+		return proc
+	}
+
+	_, err := castGeometryToVarchar(
+		t,
+		newProc("STRICT_TRANS_TABLES"),
+		"POINT(1 2)",
+		3,
+		NewAssignCast,
+	)
+	require.Error(t, err)
+	require.Equal(t, moerr.ErrCastWidthExceeded, err.(*moerr.Error).ErrorCode())
+
+	got, err := castGeometryToVarchar(t, newProc(""), "POINT(1 2)", 3, NewAssignCast)
+	require.NoError(t, err)
+	require.Equal(t, "POI", got)
+
+	got, err = castGeometryToVarchar(
+		t,
+		testutil.NewProcess(t),
+		"POINT(1 2)",
+		3,
+		NewExplicitCast,
+	)
+	require.NoError(t, err)
+	require.Equal(t, "POI", got)
 }
 
 func runJSONToStrWidth(t *testing.T, mp *mpool.MPool, jsonText string, toType types.Type, strict, allowTrim bool) (string, error) {
@@ -191,7 +272,7 @@ func runJSONToStrWidth(t *testing.T, mp *mpool.MPool, jsonText string, toType ty
 	defer to.Free()
 	require.NoError(t, to.PreExtendAndReset(1))
 
-	if err := jsonToStr(context.Background(), from, to, 1, nil, strict, allowTrim); err != nil {
+	if err := jsonToStr(context.Background(), from, to, 1, nil, strict, allowTrim, allowTrim); err != nil {
 		return "", err
 	}
 	got, _ := vector.GenerateFunctionStrParameter(to.GetResultVector()).GetStrValue(0)

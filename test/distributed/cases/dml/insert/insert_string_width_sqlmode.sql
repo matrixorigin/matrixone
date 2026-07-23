@@ -154,6 +154,36 @@ select count(*) from vdst;
 drop table jsrc;
 drop table vdst;
 
+-- ============================================================
+-- (10) TRADITIONAL is a strict combination mode
+-- ============================================================
+create table traditional_dst (c varchar(3));
+set session sql_mode = 'TRADITIONAL';
+insert into traditional_dst values ('abcd');
+select count(*) from traditional_dst;
+drop table traditional_dst;
+
+-- ============================================================
+-- (11) GEOMETRY-to-VARCHAR honors assignment width semantics
+-- ============================================================
+create table geometry_src (g geometry);
+create table geometry_dst (c varchar(3));
+insert into geometry_src values (st_geomfromtext('POINT(1 2)'));
+
+set session sql_mode = 'STRICT_TRANS_TABLES';
+insert into geometry_dst select g from geometry_src;
+insert into geometry_dst values (st_geomfromtext('POINT(1 2)'));
+select count(*) from geometry_dst;
+
+set session sql_mode = '';
+insert into geometry_dst select g from geometry_src;
+insert into geometry_dst values (st_geomfromtext('POINT(1 2)'));
+select c, char_length(c) from geometry_dst order by c;
+
+select cast(st_geomfromtext('POINT(1 2)') as char(3));
+drop table geometry_src;
+drop table geometry_dst;
+
 drop database insert_str_width;
 set session sql_mode = @old_sql_mode;
 select @@sql_mode = @old_sql_mode;

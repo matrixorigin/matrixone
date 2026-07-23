@@ -129,6 +129,37 @@ select count(*) from vdst;
 1
 drop table jsrc;
 drop table vdst;
+create table traditional_dst (c varchar(3));
+set session sql_mode = 'TRADITIONAL';
+insert into traditional_dst values ('abcd');
+Data truncation: Can't cast 'abcd' to VARCHAR type. Src length 4 is larger than Dest length 3
+select count(*) from traditional_dst;
+➤ count(*)[-5,64,0]  𝄀
+0
+drop table traditional_dst;
+create table geometry_src (g geometry);
+create table geometry_dst (c varchar(3));
+insert into geometry_src values (st_geomfromtext('POINT(1 2)'));
+set session sql_mode = 'STRICT_TRANS_TABLES';
+insert into geometry_dst select g from geometry_src;
+Data truncation: Can't cast column from GEOMETRY type to VARCHAR type because of one or more values in that column. Src length 10 is larger than Dest length 3
+insert into geometry_dst values (st_geomfromtext('POINT(1 2)'));
+Data truncation: Can't cast 'POINT(1 2)' to VARCHAR type. Src length 10 is larger than Dest length 3
+select count(*) from geometry_dst;
+➤ count(*)[-5,64,0]  𝄀
+0
+set session sql_mode = '';
+insert into geometry_dst select g from geometry_src;
+insert into geometry_dst values (st_geomfromtext('POINT(1 2)'));
+select c, char_length(c) from geometry_dst order by c;
+➤ c[12,-1,0]  ¦  char_length(c)[-5,64,0]  𝄀
+POI  ¦  3  𝄀
+POI  ¦  3
+select cast(st_geomfromtext('POINT(1 2)') as char(3));
+➤ cast(st_geomfromtext(POINT(1 2)) as char(3))[1,3,0]  𝄀
+POI
+drop table geometry_src;
+drop table geometry_dst;
 drop database insert_str_width;
 set session sql_mode = @old_sql_mode;
 select @@sql_mode = @old_sql_mode;
