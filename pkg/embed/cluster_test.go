@@ -126,6 +126,9 @@ func TestBaseClusterCanWorkWithNewCluster(t *testing.T) {
 	c, err := NewCluster(WithCNCount(3))
 	require.NoError(t, err)
 	require.NoError(t, c.Start())
+	defer func() {
+		require.NoError(t, c.Close())
+	}()
 
 	validCNCanWork(t, c, 0)
 	validCNCanWork(t, c, 1)
