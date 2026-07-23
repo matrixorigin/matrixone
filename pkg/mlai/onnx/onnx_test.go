@@ -1,0 +1,181 @@
+// Copyright 2021 - 2025 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package onnx
+
+import (
+	"encoding/json"
+	"os"
+	"testing"
+
+	"github.com/stretchr/testify/require"
+)
+
+func mustModel(t *testing.T, name string) []byte {
+	t.Helper()
+	b, err := os.ReadFile("testdata/" + name)
+	require.NoError(t, err)
+	return b
+}
+
+// skipIfNoRuntime skips a test when the onnxruntime shared library cannot be
+// loaded (e.g. CI without the downloaded lib), so the suite stays green there.
+func skipIfNoRuntime(t *testing.T) {
+	if err := Available(); err != nil {
+		t.Skipf("onnxruntime not available: %v", err)
+	}
+}
+
+func TestHalfRoundTrip(t *testing.T) {
+	// Half conversion must be exact for representable values.
+	for _, f := range []float32{0, 1, -1, 0.5, 2, 3, 6, 9, 65504, -65504} {
+		h := float32ToFloat16(f)
+		got := float16ToFloat32(h)
+		require.InDeltaf(t, f, got, 1e-3, "half round-trip for %v", f)
+	}
+}
+
+func TestParseShape(t *testing.T) {
+	s, err := ParseShape([]byte(`{"dim":[1,1,4],"dtype":"float32"}`))
+	require.NoError(t, err)
+	require.Equal(t, []int64{1, 1, 4}, s.Dim)
+	n, _ := s.NumElements()
+	require.Equal(t, int64(4), n)
+
+	_, err = ParseShape([]byte(`{"dim":[1],"dtype":"blob"}`))
+	require.Error(t, err)
+	_, err = ParseShape([]byte(`{"dim":[],"dtype":"int8"}`))
+	require.Error(t, err)
+
+	// The declared tensor byte size is bounded: shapes are allocated before
+	// onnxruntime validates them against the model, so an oversized shape must
+	// be rejected up front rather than OOM the process.
+	_, err = ParseShape([]byte(`{"dim":[100000000,100],"dtype":"float64"}`))
+	require.ErrorContains(t, err, "exceeds")
+	_, err = ParseShape([]byte(`{"dim":[4611686018427387904],"dtype":"int8"}`))
+	require.ErrorContains(t, err, "exceeds")
+	// At the limit is still accepted (64 MB of int8).
+	s, err = ParseShape([]byte(`{"dim":[67108864],"dtype":"int8"}`))
+	require.NoError(t, err)
+	require.NotNil(t, s)
+}
+
+func TestSumAndDifference(t *testing.T) {
+	skipIfNoRuntime(t)
+	sess, err := NewSession(mustModel(t, "sum_and_difference.onnx"))
+	require.NoError(t, err)
+	defer sess.Close()
+
+	in := ParseShapeMust(t, `{"dim":[1,1,4],"dtype":"float32"}`)
+	out := ParseShapeMust(t, `{"dim":[1,1,2],"dtype":"float32"}`)
+	got, err := sess.Run([]byte(`[0.2,0.3,0.6,0.9]`), in, out)
+	require.NoError(t, err)
+	js := mustJSON(t, got)
+	t.Logf("sum_and_difference output: %s", js)
+	require.Contains(t, js, "[[[")
+	// The normalized float64 must render as the shortest float32 repr.
+	require.Contains(t, js, "1.9999883")
+	require.NotContains(t, js, "1.99998830") // no widened-float64 noise
+}
+
+func TestNonTensorOutputs(t *testing.T) {
+	skipIfNoRuntime(t)
+	sess, err := NewSession(mustModel(t, "sklearn_randomforest.onnx"))
+	require.NoError(t, err)
+	defer sess.Close()
+
+	in := ParseShapeMust(t, `{"dim":[6,4],"dtype":"float32"}`)
+	input := `[5.9,3.0,5.1,1.8, 6.8,2.8,4.8,1.4, 6.3,2.3,4.4,1.3, 6.5,3.0,5.5,1.8, 7.7,2.8,6.7,2.0, 5.5,2.5,4.0,1.3]`
+	got, err := sess.Run([]byte(input), in, nil) // NULL output_shape
+	require.NoError(t, err)
+	js := mustJSON(t, got)
+	t.Logf("non_tensor_outputs: %s", js)
+	require.Contains(t, js, `"output_label":[2,1,1,2,2,1]`)
+}
+
+func TestMnistFloat16(t *testing.T) {
+	skipIfNoRuntime(t)
+	sess, err := NewSession(mustModel(t, "mnist_float16.onnx"))
+	require.NoError(t, err)
+	defer sess.Close()
+
+	// 1x1x28x28 float16 input of zeros exercises the float16 in+out path.
+	buf := make([]byte, 0, 784*2)
+	buf = append(buf, '[')
+	for i := range 784 {
+		if i > 0 {
+			buf = append(buf, ',')
+		}
+		buf = append(buf, '0')
+	}
+	buf = append(buf, ']')
+
+	in := ParseShapeMust(t, `{"dim":[1,1,28,28],"dtype":"float16"}`)
+	out := ParseShapeMust(t, `{"dim":[1,10],"dtype":"float16"}`)
+	got, err := sess.Run(buf, in, out)
+	require.NoError(t, err)
+	js := mustJSON(t, got)
+	t.Logf("mnist_float16 logits: %s", js)
+	require.Contains(t, js, "[[")
+}
+
+// TestIntegerInputValidation covers the integer dtype conversion paths:
+// valid values build a tensor; non-integer and out-of-range values must error,
+// never silently become 0 or wrap.
+func TestIntegerInputValidation(t *testing.T) {
+	skipIfNoRuntime(t) // NewTensor allocates through the runtime
+	shape := &Shape{Dim: []int64{4}, Dtype: DTInt32}
+
+	v, err := buildInputTensor([]byte(`[1, -2, 3, 2147483647]`), shape)
+	require.NoError(t, err)
+	require.NoError(t, v.Destroy())
+
+	// Non-integer input for an int dtype: error, not 0.
+	_, err = buildInputTensor([]byte(`[1.5, 2, 3, 4]`), shape)
+	require.ErrorContains(t, err, "invalid integer input")
+
+	// Out of range for the declared width: error, not a wrap.
+	_, err = buildInputTensor([]byte(`[300]`), &Shape{Dim: []int64{1}, Dtype: DTInt8})
+	require.ErrorContains(t, err, "out of range")
+
+	// Negative value for an unsigned dtype: error.
+	_, err = buildInputTensor([]byte(`[-1]`), &Shape{Dim: []int64{1}, Dtype: DTUint16})
+	require.ErrorContains(t, err, "invalid integer input")
+}
+
+func TestTrailingGarbageRejected(t *testing.T) {
+	_, err := buildInputTensor([]byte(`[1,2,3,4]junk`),
+		&Shape{Dim: []int64{4}, Dtype: DTFloat32})
+	require.ErrorContains(t, err, "trailing data")
+}
+
+func TestCorruptModel(t *testing.T) {
+	skipIfNoRuntime(t)
+	_, err := NewSession([]byte("this is not an onnx protobuf"))
+	require.ErrorContains(t, err, "cannot read model")
+}
+
+func mustJSON(t *testing.T, v any) string {
+	t.Helper()
+	b, err := json.Marshal(v)
+	require.NoError(t, err)
+	return string(b)
+}
+
+func ParseShapeMust(t *testing.T, s string) *Shape {
+	t.Helper()
+	sh, err := ParseShape([]byte(s))
+	require.NoError(t, err)
+	return sh
+}
