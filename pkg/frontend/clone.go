@@ -92,6 +92,14 @@ func isTimestampDataBranchCloneSource(snapshot *plan.Snapshot) bool {
 	return snapshot != nil && snapshot.TS != nil && snapshot.ExtraInfo == nil
 }
 
+func shouldRevalidateTimestampDataBranchCloneSource(
+	ctx context.Context,
+	snapshot *plan.Snapshot,
+) bool {
+	dataBranchClone, _ := ctx.Value(dataBranchCloneLockCtxKey{}).(bool)
+	return dataBranchClone && isTimestampDataBranchCloneSource(snapshot)
+}
+
 func validateTimestampDataBranchSourceIDs(
 	selectedTableID, currentTableID uint64,
 	dag *databranchutils.DataBranchDAG,
@@ -166,7 +174,7 @@ func revalidateTimestampDataBranchCloneSource(
 			return tableDef.TblId, nil
 		},
 		func() (*databranchutils.DataBranchDAG, error) {
-			return constructBranchDAG(ctx, ses, bh)
+			return constructBranchDAGForUpdate(ctx, ses, bh)
 		},
 	)
 }
@@ -570,7 +578,7 @@ func handleCloneTable(
 	}); err != nil {
 		return
 	}
-	if isTimestampDataBranchCloneSource(snapshot) {
+	if shouldRevalidateTimestampDataBranchCloneSource(reqCtx, snapshot) {
 		// The timestamp was resolved before waiting for the source-row lock.
 		// Advance the RC snapshot while the lock is held, then ensure an ALTER
 		// that won the lock either preserved a path to the selected generation

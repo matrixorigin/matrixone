@@ -76,6 +76,36 @@ func TestShouldLockDataBranchCloneSource(t *testing.T) {
 	require.False(t, shouldLockDataBranchCloneSource(namedSnapshotSource))
 }
 
+func TestShouldRevalidateTimestampDataBranchCloneSource(t *testing.T) {
+	timestampSource := &plan.Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 42}}
+	namedSnapshotSource := &plan.Snapshot{
+		TS:        &timestamp.Timestamp{PhysicalTime: 42},
+		ExtraInfo: &plan.SnapshotExtraInfo{Name: "snap"},
+	}
+
+	require.False(t, shouldRevalidateTimestampDataBranchCloneSource(
+		context.Background(), timestampSource,
+	))
+	dataBranchCtx := context.WithValue(
+		context.Background(), dataBranchCloneLockCtxKey{}, true,
+	)
+	require.True(t, shouldRevalidateTimestampDataBranchCloneSource(
+		dataBranchCtx, timestampSource,
+	))
+	require.False(t, shouldRevalidateTimestampDataBranchCloneSource(
+		dataBranchCtx, namedSnapshotSource,
+	))
+}
+
+func TestBranchDAGSelectSQLLocksTimestampValidation(t *testing.T) {
+	require.NotContains(t, branchDAGSelectSQL(false), "for update")
+	require.Equal(t,
+		"select table_id, clone_ts, p_table_id, level, table_deleted from "+
+			"mo_catalog.mo_branch_metadata for update",
+		branchDAGSelectSQL(true),
+	)
+}
+
 func TestTimestampDataBranchCloneWaitsForAlterPublication(t *testing.T) {
 	timestampSource := &plan.Snapshot{
 		TS: &timestamp.Timestamp{PhysicalTime: 42},
@@ -167,6 +197,55 @@ func TestValidateTimestampDataBranchSourceAfterLock(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []*plan.Snapshot{timestampSource, nil}, resolved)
 	require.True(t, dagLoaded)
+}
+
+func TestTimestampDataBranchValidationLockCoversPublication(t *testing.T) {
+	timestampSource := &plan.Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 42}}
+	var lineageRows sync.Mutex
+	validated := make(chan struct{})
+	gcStarted := make(chan struct{})
+	gcDone := make(chan struct{})
+
+	lineageRows.Lock() // SELECT ... FOR UPDATE, held until clone transaction commit.
+	err := validateTimestampDataBranchSourceAfterLock(
+		timestampSource,
+		func(at *plan.Snapshot) (uint64, error) {
+			if at != nil {
+				return 1, nil
+			}
+			return 2, nil
+		},
+		func() (*databranchutils.DataBranchDAG, error) {
+			return databranchutils.NewDAG([]databranchutils.DataBranchMetadata{
+				{TableID: 2, PTableID: 1, LineageOnly: true},
+			}), nil
+		},
+	)
+	require.NoError(t, err)
+	close(validated)
+
+	go func() {
+		close(gcStarted)
+		lineageRows.Lock() // Compaction uses the same FOR UPDATE lock.
+		lineageRows.Unlock()
+		close(gcDone)
+	}()
+
+	<-gcStarted
+	select {
+	case <-gcDone:
+		t.Fatal("lineage compaction passed validation before branch publication")
+	default:
+	}
+	<-validated
+	// updateBranchMetaTable and createBranchProtectSnapshot run before this
+	// transaction commits and releases the lineage-row lock.
+	lineageRows.Unlock()
+	select {
+	case <-gcDone:
+	case <-time.After(time.Second):
+		t.Fatal("lineage compaction did not resume after branch publication")
+	}
 }
 
 func Test_prepareCloneViewSnapshot(t *testing.T) {

@@ -649,42 +649,17 @@ func getAlterCopyPkPrecheck(qry *plan.AlterTable) (pkCols []string, checkNotNull
 }
 
 func alterCopySameStatementColumnReplacement(qry *plan.AlterTable) (string, bool) {
-	if qry == nil || qry.TableDef == nil {
+	if qry == nil || qry.TableDef == nil || qry.CopyTableDef == nil {
 		return "", false
 	}
-	dropped := make(map[string]struct{})
-	added := make(map[string]string)
-	for _, action := range qry.Actions {
-		if action == nil {
+	for _, oldCol := range qry.TableDef.Cols {
+		if oldCol == nil || oldCol.Hidden {
 			continue
 		}
-		switch act := action.Action.(type) {
-		case *plan.AlterTable_Action_DropColumn:
-			if act.DropColumn == nil {
-				continue
-			}
-			idx := int(act.DropColumn.Idx)
-			if idx >= 0 && idx < len(qry.TableDef.Cols) &&
-				qry.TableDef.Cols[idx].Seqnum == act.DropColumn.Seq {
-				dropped[strings.ToLower(qry.TableDef.Cols[idx].Name)] = struct{}{}
-				continue
-			}
-			for _, col := range qry.TableDef.Cols {
-				if col.Seqnum == act.DropColumn.Seq {
-					dropped[strings.ToLower(col.Name)] = struct{}{}
-					break
-				}
-			}
-		case *plan.AlterTable_Action_AddColumn:
-			if act.AddColumn == nil || act.AddColumn.Name == "" {
-				continue
-			}
-			added[strings.ToLower(act.AddColumn.Name)] = act.AddColumn.Name
-		}
-	}
-	for name, originalName := range added {
-		if _, ok := dropped[name]; ok {
-			return originalName, true
+		newCol := plan2.FindColumn(qry.CopyTableDef.Cols, oldCol.Name)
+		if newCol != nil &&
+			(oldCol.ColId != newCol.ColId || oldCol.Seqnum != newCol.Seqnum) {
+			return newCol.Name, true
 		}
 	}
 	return "", false

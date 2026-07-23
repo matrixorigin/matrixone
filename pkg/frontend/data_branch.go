@@ -3078,6 +3078,34 @@ func constructBranchDAG(
 	ses *Session,
 	bh BackgroundExec,
 ) (dag *databranchutils.DataBranchDAG, err error) {
+	return constructBranchDAGWithLock(ctx, ses, bh, false)
+}
+
+func constructBranchDAGForUpdate(
+	ctx context.Context,
+	ses *Session,
+	bh BackgroundExec,
+) (dag *databranchutils.DataBranchDAG, err error) {
+	return constructBranchDAGWithLock(ctx, ses, bh, true)
+}
+
+func branchDAGSelectSQL(forUpdate bool) string {
+	lockClause := ""
+	if forUpdate {
+		lockClause = " for update"
+	}
+	return fmt.Sprintf(
+		"select table_id, clone_ts, p_table_id, level, table_deleted from %s.%s%s",
+		catalog.MO_CATALOG, catalog.MO_BRANCH_METADATA, lockClause,
+	)
+}
+
+func constructBranchDAGWithLock(
+	ctx context.Context,
+	ses *Session,
+	bh BackgroundExec,
+	forUpdate bool,
+) (dag *databranchutils.DataBranchDAG, err error) {
 
 	var (
 		rowData []databranchutils.DataBranchMetadata
@@ -3095,12 +3123,12 @@ func constructBranchDAG(
 		sqlRet.Close()
 	}()
 
+	// The FOR UPDATE variant keeps the lineage rows used for validation locked
+	// through branch metadata and protect-snapshot publication in this
+	// transaction, serializing timestamp branch creation with compaction.
 	if sqlRet, err = runSql(
 		sysCtx, ses, bh,
-		fmt.Sprintf(
-			"select table_id, clone_ts, p_table_id, level, table_deleted from %s.%s",
-			catalog.MO_CATALOG, catalog.MO_BRANCH_METADATA,
-		),
+		branchDAGSelectSQL(forUpdate),
 		nil, nil,
 	); err != nil {
 		return

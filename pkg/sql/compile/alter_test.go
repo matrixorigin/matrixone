@@ -61,37 +61,43 @@ func TestShouldEnableAlterCopyPipelineFlush(t *testing.T) {
 
 func TestAlterCopySameStatementColumnReplacement(t *testing.T) {
 	tableDef := &plan2.TableDef{Cols: []*plan2.ColDef{
-		{Name: "a", Seqnum: 0},
-		{Name: "b", Seqnum: 1},
+		{Name: "a", ColId: 1, Seqnum: 0},
+		{Name: "b", ColId: 2, Seqnum: 1},
 	}}
 	replacement := &plan2.AlterTable{
 		TableDef: tableDef,
-		Actions: []*plan2.AlterTable_Action{
-			{Action: &plan2.AlterTable_Action_DropColumn{
-				DropColumn: &plan2.AlterDropColumn{Seq: 1},
-			}},
-			{Action: &plan2.AlterTable_Action_AddColumn{
-				AddColumn: &plan2.AlterAddColumn{Name: "B"},
-			}},
-		},
+		CopyTableDef: &plan2.TableDef{Cols: []*plan2.ColDef{
+			{Name: "a", ColId: 1, Seqnum: 0},
+			{Name: "B", ColId: ^uint64(0), Seqnum: 0},
+		}},
 	}
 	name, ok := alterCopySameStatementColumnReplacement(replacement)
 	require.True(t, ok)
 	require.Equal(t, "B", name)
 
-	nonReplacement := &plan2.AlterTable{
-		TableDef: tableDef,
-		Actions: []*plan2.AlterTable_Action{
-			{Action: &plan2.AlterTable_Action_DropColumn{
-				DropColumn: &plan2.AlterDropColumn{Seq: 1},
+	t.Run("same identity survives rename and reorder", func(t *testing.T) {
+		unchanged := &plan2.AlterTable{
+			TableDef: tableDef,
+			CopyTableDef: &plan2.TableDef{Cols: []*plan2.ColDef{
+				{Name: "B", ColId: 2, Seqnum: 1},
+				{Name: "a", ColId: 1, Seqnum: 0},
 			}},
-			{Action: &plan2.AlterTable_Action_AddColumn{
-				AddColumn: &plan2.AlterAddColumn{Name: "c"},
+		}
+		_, replaced := alterCopySameStatementColumnReplacement(unchanged)
+		require.False(t, replaced)
+	})
+
+	t.Run("drop without same-name replacement", func(t *testing.T) {
+		dropped := &plan2.AlterTable{
+			TableDef: tableDef,
+			CopyTableDef: &plan2.TableDef{Cols: []*plan2.ColDef{
+				{Name: "a", ColId: 1, Seqnum: 0},
+				{Name: "c", ColId: ^uint64(0), Seqnum: 0},
 			}},
-		},
-	}
-	_, ok = alterCopySameStatementColumnReplacement(nonReplacement)
-	require.False(t, ok)
+		}
+		_, replaced := alterCopySameStatementColumnReplacement(dropped)
+		require.False(t, replaced)
+	})
 }
 
 func TestBuildAlterDataBranchLineageSQL(t *testing.T) {
