@@ -126,7 +126,17 @@ func tensorData[T ort.TensorData](v ort.Value, dt DType) ([]T, error) {
 // []any of normalized json scalars, inferring the element type from the
 // concrete Go type. Used on the NULL-output_shape path where the caller did not
 // declare a dtype.
+//
+// Model-produced (auto-allocated) outputs never pass through ParseShape, so
+// the raw-byte cap is applied here as well. The element count is checked
+// against MaxTensorBytes/8 — conservative for narrow element types, exact for
+// the widest — which keeps the guard to a single check for all branches.
 func anyTensorFlat(v ort.Value) ([]any, error) {
+	if n := v.GetShape().FlattenedSize(); n < 0 || n > MaxTensorBytes/8 {
+		return nil, moerr.NewInvalidInputNoCtxf(
+			"onnx: model output tensor of %d elements exceeds the %d MB limit",
+			n, MaxTensorBytes>>20)
+	}
 	switch t := v.(type) {
 	case *ort.Tensor[float32]:
 		return f32sToAny(t.GetData())

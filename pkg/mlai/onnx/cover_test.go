@@ -166,6 +166,14 @@ func TestOutputConversions(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []any{int64(9)}, j)
 	require.NoError(t, v3.Destroy())
+
+	// Model-produced outputs on the NULL-output_shape path are byte-capped
+	// too: they never pass through ParseShape, so an oversized model output
+	// must be rejected before conversion.
+	big := mkTensor(t, make([]int8, MaxTensorBytes/8+1))
+	_, err = anyTensorFlat(big)
+	require.ErrorContains(t, err, "exceeds")
+	require.NoError(t, big.Destroy())
 }
 
 // TestScalarNormalization covers the float normalization edge cases.
