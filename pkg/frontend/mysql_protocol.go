@@ -45,7 +45,6 @@ import (
 	planPb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/proxy"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -694,7 +693,7 @@ func (mp *MysqlProtocolImpl) SendPrepareResponse(ctx context.Context, stmt *Prep
 	}
 	paramTypes := dcPrepare.Prepare.ParamTypes
 	numParams := len(paramTypes)
-	columns := plan2.GetResultColumnsFromPlan(dcPrepare.Prepare.Plan)
+	columns := getPreparedResultColumns(stmt, sessionTxnHaveDDL(mp.GetSession()))
 	numColumns := len(columns)
 
 	var data []byte
