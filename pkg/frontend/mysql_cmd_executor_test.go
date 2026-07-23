@@ -2659,6 +2659,141 @@ func TestCreatePrepareStmtRestoresCurrentExecCtx(t *testing.T) {
 	require.True(t, checked)
 }
 
+type preparedViewCompilerContext struct {
+	plan.CompilerContext
+}
+
+func (c *preparedViewCompilerContext) GetSubscriptionMeta(string, *plan.Snapshot) (*plan0.SubscriptionMeta, error) {
+	return nil, nil
+}
+
+func requirePreparedViewRootSQL(t *testing.T, prepared *PrepareStmt, wantRootSQL string) {
+	t.Helper()
+	preparePlan := prepared.PreparePlan.GetDcl().GetPrepare().GetPlan()
+	require.NotNil(t, preparePlan)
+	tableDef := preparePlan.GetDdl().GetCreateView().GetTableDef()
+	require.NotNil(t, tableDef)
+
+	var viewData plan.ViewData
+	require.NoError(t, json.Unmarshal([]byte(tableDef.GetViewSql().GetView()), &viewData))
+	wantViewSQL := strings.TrimSpace(wantRootSQL)
+	if hintEnd := strings.Index(wantViewSQL, "*/"); strings.HasPrefix(wantViewSQL, "/*+") && hintEnd >= 0 {
+		wantViewSQL = strings.TrimSpace(wantViewSQL[hintEnd+2:])
+	}
+	require.Equal(t, wantViewSQL, strings.TrimSpace(viewData.Stmt))
+
+	var createSQL string
+	for _, def := range tableDef.GetDefs() {
+		for _, property := range def.GetProperties().GetProperties() {
+			if property.GetKey() == catalog.SystemRelAttr_CreateSQL {
+				createSQL = property.GetValue()
+			}
+		}
+	}
+	require.Equal(t, wantRootSQL, createSQL)
+}
+
+func TestPreparedCreateViewUsesInnerRootSQL(t *testing.T) {
+	setSessionAlloc("", NewLeakCheckAllocator())
+	oldBuildPlanWithAuthorization := buildPlanWithAuthorization
+	defer func() {
+		buildPlanWithAuthorization = oldBuildPlanWithAuthorization
+	}()
+	buildPlanWithAuthorization = func(
+		_ context.Context,
+		_ FeSession,
+		compilerCtx plan.CompilerContext,
+		stmt tree.Statement,
+	) (*plan.Plan, error) {
+		return plan.BuildPlan(&preparedViewCompilerContext{CompilerContext: compilerCtx}, stmt, false)
+	}
+
+	for _, tt := range []struct {
+		name     string
+		outerSQL string
+		innerSQL string
+	}{
+		{
+			name:     "create view",
+			outerSQL: "prepare create_view_stmt from create view v as select 1",
+			innerSQL: "create view v as select 1",
+		},
+		{
+			name:     "create or replace view",
+			outerSQL: "prepare replace_view_stmt from create or replace view v as select 2",
+			innerSQL: "create or replace view v as select 2",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, tt.outerSQL, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			runTestHandle("prepared "+tt.name+" root SQL", t, func(ses *Session) error {
+				execCtx := newTestExecCtx(ctx, gomock.NewController(t))
+				execCtx.ses = ses
+				execCtx.proc = ses.proc
+				execCtx.resper = ses.respr
+				ses.SetSql(tt.outerSQL)
+
+				prepared, err := handlePrepareStmt(ses, execCtx, stmt.(*tree.PrepareStmt), tt.outerSQL)
+				if err != nil {
+					return err
+				}
+				defer prepared.Close()
+				requirePreparedViewRootSQL(t, prepared, tt.innerSQL)
+				require.Equal(t, tt.outerSQL, ses.GetSql())
+				return nil
+			})
+		})
+	}
+}
+
+func TestPrepareStringCreateViewUsesRewrittenInnerRootSQL(t *testing.T) {
+	setSessionAlloc("", NewLeakCheckAllocator())
+	oldBuildPlanWithAuthorization := buildPlanWithAuthorization
+	defer func() {
+		buildPlanWithAuthorization = oldBuildPlanWithAuthorization
+	}()
+	buildPlanWithAuthorization = func(
+		_ context.Context,
+		_ FeSession,
+		compilerCtx plan.CompilerContext,
+		stmt tree.Statement,
+	) (*plan.Plan, error) {
+		return plan.BuildPlan(&preparedViewCompilerContext{CompilerContext: compilerCtx}, stmt, false)
+	}
+
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	const outerSQL = `/*+ {"remapdb":{"src":"dst"}} */ prepare inline_view from 'create view v as select 1'`
+	const innerSQL = "create view v as select 1"
+	want, err := rewriteSQLFromMaterializedPolicy(ctx, outerSQL, innerSQL)
+	require.NoError(t, err)
+
+	runTestHandle("prepare string create view root SQL", t, func(ses *Session) error {
+		execCtx := newTestExecCtx(ctx, gomock.NewController(t))
+		execCtx.ses = ses
+		execCtx.proc = ses.proc
+		execCtx.resper = ses.respr
+		execCtx.rewriteEnabled = true
+		execCtx.sqlOfStmt = outerSQL
+		ses.SetSql(outerSQL)
+		stmt := tree.NewPrepareString("inline_view", innerSQL)
+		defer stmt.Free()
+
+		prepared, err := handlePrepareString(ses, execCtx, stmt)
+		if err != nil {
+			return err
+		}
+		defer prepared.Close()
+		require.Equal(t, want, prepared.Sql)
+		requirePreparedViewRootSQL(t, prepared, want)
+		require.Equal(t, outerSQL, ses.GetSql())
+		return nil
+	})
+}
+
 func TestBuildAnalyzeDerivedSQLQuotesIdentifiers(t *testing.T) {
 	entry := &tree.AnalyzeTableEntry{
 		Table: tree.NewTableName(
