@@ -429,7 +429,8 @@ func (a *AliyunSDK) listObjects(ctx context.Context, prefix string, cont string)
 func (a *AliyunSDK) statObject(ctx context.Context, key string) (http.Header, error) {
 	ctx, task := gotrace.NewTask(ctx, "AliyunSDK.statObject")
 	defer task.End()
-	return DoWithRetry(
+	return DoWithRetryContext(
+		ctx,
 		"s3 head object",
 		func() (http.Header, error) {
 			perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {

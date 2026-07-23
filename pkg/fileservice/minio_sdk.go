@@ -522,7 +522,8 @@ func (a *MinioSDK) listObjects(ctx context.Context, prefix string, marker string
 func (a *MinioSDK) statObject(ctx context.Context, key string) (minio.ObjectInfo, error) {
 	ctx, task := gotrace.NewTask(ctx, "MinioSDK.statObject")
 	defer task.End()
-	return DoWithRetry(
+	return DoWithRetryContext(
+		ctx,
 		"s3 head object",
 		func() (minio.ObjectInfo, error) {
 			perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {

@@ -721,7 +721,8 @@ func (a *QCloudSDK) statObject(ctx context.Context, key string) (http.Header, er
 	ctx, task := gotrace.NewTask(ctx, "QCloudSDK.statObject")
 	defer task.End()
 
-	return DoWithRetry(
+	return DoWithRetryContext(
+		ctx,
 		"s3 head object",
 		func() (http.Header, error) {
 			perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {

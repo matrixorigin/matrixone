@@ -52,6 +52,7 @@ type testObjectCopyStorage struct {
 	exists  bool
 	err     error
 	copyErr error
+	copies  int
 }
 
 func (s *testObjectCopyStorage) Exists(context.Context, string) (bool, error) {
@@ -64,6 +65,7 @@ func (s *testObjectCopyStorage) CopyObject(
 	srcKey string,
 	dstKey string,
 ) (bool, error) {
+	s.copies++
 	s.src = src
 	s.srcKey = srcKey
 	s.dstKey = dstKey
@@ -116,6 +118,13 @@ func TestS3FSCopyObject(t *testing.T) {
 	dstStorage.copyErr = errors.New("copy failed")
 	_, err = dst.CopyObject(ctx, src, "objects/a", "objects/b")
 	require.ErrorContains(t, err, "copy failed")
+	dstStorage.copyErr = context.DeadlineExceeded
+	canceledCtx, cancel := context.WithCancel(ctx)
+	cancel()
+	copies := dstStorage.copies
+	_, err = dst.CopyObject(canceledCtx, src, "objects/a", "objects/b")
+	require.ErrorIs(t, err, context.Canceled)
+	require.Equal(t, copies, dstStorage.copies)
 
 	_, err = dst.CopyObject(ctx, src, "~~", "objects/b")
 	require.Error(t, err)

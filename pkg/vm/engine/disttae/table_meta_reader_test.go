@@ -271,7 +271,7 @@ func TestLoadFileCleanupFailureDoesNotAbortTransactionTeardown(t *testing.T) {
 		waitForContext bool
 		timeout        time.Duration
 	}{
-		{name: "delete error", deleteErr: errors.New("delete failed")},
+		{name: "delete error", deleteErr: errors.New("delete failed"), timeout: 20 * time.Millisecond},
 		{name: "blocked delete", waitForContext: true, timeout: 20 * time.Millisecond},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -309,6 +309,54 @@ func TestLoadFileCleanupFailureDoesNotAbortTransactionTeardown(t *testing.T) {
 			}
 		})
 	}
+}
+
+type retryLoadCleanupFileService struct {
+	fileservice.FileService
+	failures int32
+	calls    int32
+}
+
+func (f *retryLoadCleanupFileService) Delete(ctx context.Context, names ...string) error {
+	f.calls++
+	if f.calls <= f.failures {
+		return context.DeadlineExceeded
+	}
+	if err := f.FileService.Delete(ctx, names...); err != nil {
+		return err
+	}
+	return nil
+}
+
+func TestLoadFileCleanupRetriesBeforeTransactionTeardown(t *testing.T) {
+	ctx := context.Background()
+	baseFS := newCleanFS(t)
+	fs := &retryLoadCleanupFileService{
+		FileService: baseFS,
+		failures:    2,
+	}
+	txnOp, closeFn := client.NewTestTxnOperator(ctx)
+	defer closeFn()
+	colexec.NewServer("")
+	txn := &Transaction{
+		engine:             &Engine{cloneTxnCache: newCloneTxnCache(), fs: fs},
+		op:                 txnOp,
+		loadCleanupTimeout: time.Second,
+	}
+	txnOp.AddWorkspace(txn)
+	txn.SetCloneTxn(1)
+	name := mockStatsList(t, 1)[0].ObjectName().String()
+	require.NoError(t, baseFS.Write(ctx, fileservice.IOVector{
+		FilePath: name,
+		Entries:  []fileservice.IOEntry{{Offset: 0, Size: 1, Data: []byte("x")}},
+	}))
+	txn.TrackLoadFiles(name)
+
+	require.NoError(t, txn.Rollback(ctx))
+	require.True(t, txn.removed)
+	_, err := baseFS.StatFile(ctx, name)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound))
+	require.Equal(t, int32(3), fs.calls)
 }
 
 func TestLoadFileCleanupDoesNotHoldTransactionMutex(t *testing.T) {

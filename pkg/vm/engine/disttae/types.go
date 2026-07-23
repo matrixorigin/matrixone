@@ -510,10 +510,15 @@ func (txn *Transaction) TrackLoadFiles(names ...string) {
 	}
 }
 
-const defaultLoadFileCleanupTimeout = 2 * time.Minute
+const (
+	defaultLoadFileCleanupTimeout = 2 * time.Minute
+	loadFileCleanupRetryAttempts  = 128
+)
 
 // deleteLoadFiles attempts physical cleanup after statement execution has
 // stopped. It never holds the transaction mutex across file-service I/O.
+// Retryable failures are retried within one bounded cleanup deadline while
+// LOAD's install lock still prevents another transaction from reusing a name.
 // Successfully deleted names are returned with their clone-GC protection still
 // installed; the caller removes that protection only after ordinary workspace
 // GC has inspected the same generation.
@@ -555,7 +560,16 @@ func (txn *Transaction) deleteLoadFiles(
 	defer cancel()
 	for start := 0; start < len(names); start += GCBatchOfFileCount {
 		end := min(start+GCBatchOfFileCount, len(names))
-		if err := txn.engine.fs.Delete(cleanupCtx, names[start:end]...); err != nil {
+		_, err := fileservice.DoWithRetryContext(
+			cleanupCtx,
+			"delete LOAD TABLE objects",
+			func() (struct{}, error) {
+				return struct{}{}, txn.engine.fs.Delete(cleanupCtx, names[start:end]...)
+			},
+			loadFileCleanupRetryAttempts,
+			fileservice.IsRetryableError,
+		)
+		if err != nil {
 			return deleted, err
 		}
 		deleted = append(deleted, names[start:end]...)

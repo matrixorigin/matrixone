@@ -199,7 +199,8 @@ func (s *S3FS) CopyObject(
 	if exists {
 		return false, moerr.NewFileAlreadyExistsNoCtx(dstPath)
 	}
-	return DoWithRetry(
+	return DoWithRetryContext(
+		ctx,
 		"CopyObject",
 		func() (bool, error) {
 			return copier.CopyObject(ctx, src.rawStorage, srcKey, dstKey)
