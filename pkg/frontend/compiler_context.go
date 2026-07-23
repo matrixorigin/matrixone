@@ -248,10 +248,22 @@ func (tcc *TxnCompilerContext) CheckConstraintNameExists(dbName, excludedTable, 
 	txn := tcc.GetTxnHandler().GetTxn()
 	db, err := tcc.GetTxnHandler().GetStorage().Database(ctx, dbName, txn)
 	if err != nil {
+		// During CREATE TABLE planning the catalog snapshot may report an
+		// otherwise valid, newly created database as ExpectedEOB. The actual
+		// CREATE still validates database existence during execution; for name
+		// lookup this state means there is no visible conflicting CHECK.
+		if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+			return false, nil
+		}
 		return false, err
 	}
 	tableNames, err := db.Relations(ctx)
 	if err != nil {
+		// The engine uses ExpectedEOB to represent an empty relation list.
+		// An empty schema has no CHECK names to conflict with the new table.
+		if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+			return false, nil
+		}
 		return false, err
 	}
 	for _, tableName := range tableNames {
@@ -260,6 +272,14 @@ func (tcc *TxnCompilerContext) CheckConstraintNameExists(dbName, excludedTable, 
 		}
 		_, tableDef, err := tcc.Resolve(dbName, tableName, nil)
 		if err != nil {
+			// Relations can still contain a table that became invisible in the
+			// current snapshot (for example, after DROP TABLE in the same BVT
+			// database). Such a table cannot own a conflicting visible CHECK
+			// name, so ignore the catalog end-of-batch/no-such-table race.
+			if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) ||
+				moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
+				continue
+			}
 			return false, err
 		}
 		if tableDef == nil {

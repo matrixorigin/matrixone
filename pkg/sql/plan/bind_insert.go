@@ -873,6 +873,7 @@ func (builder *QueryBuilder) buildOnDupTargetPkResolution(
 	selectTag int32,
 	colName2Idx map[string]int32,
 	skipUniqueIdx []bool,
+	incomingProjectList []*plan.Expr,
 ) (int32, int32, int32, error) {
 	objRef := dmlCtx.objRefs[0]
 	pkName := tableDef.Pkey.PkeyColName
@@ -880,7 +881,6 @@ func (builder *QueryBuilder) buildOnDupTargetPkResolution(
 	pkTyp := tableDef.Cols[pkColIdx].Typ
 	incomingPkPos := colName2Idx[tableDef.Name+"."+pkName]
 
-	selectNode := builder.qry.Nodes[lastNodeID]
 	candExprs := make([]*plan.Expr, 0, len(tableDef.Indexes)+1)
 
 	// cand0: primary-key existence probe. A lightweight LEFT JOIN against the main
@@ -954,14 +954,14 @@ func (builder *QueryBuilder) buildOnDupTargetPkResolution(
 			partName := catalog.ResolveAlias(idxDef.Parts[0])
 			incomingValPos := colName2Idx[tableDef.Name+"."+partName]
 			incomingValExpr, err = builder.makeIndexPartExpr(selectTag, incomingValPos, partName,
-				selectNode.ProjectList[incomingValPos].Typ, prefixLengths)
+				incomingProjectList[incomingValPos].Typ, prefixLengths)
 			if err != nil {
 				return 0, 0, 0, err
 			}
 		} else {
 			incomingValPos := colName2Idx[idxDef.IndexTableName+"."+catalog.IndexTableIndexColName]
 			incomingValExpr = &plan.Expr{
-				Typ:  selectNode.ProjectList[incomingValPos].Typ,
+				Typ:  incomingProjectList[incomingValPos].Typ,
 				Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: selectTag, ColPos: incomingValPos}},
 			}
 		}
@@ -986,8 +986,8 @@ func (builder *QueryBuilder) buildOnDupTargetPkResolution(
 	// append target_pk = coalesce(cand0, cand1, ...). Positions [0, len) are
 	// preserved so colName2Idx stays valid; target_pk lands at len.
 	newTag := builder.genNewBindTag()
-	newProjList := make([]*plan.Expr, 0, len(selectNode.ProjectList)+1)
-	for i, expr := range selectNode.ProjectList {
+	newProjList := make([]*plan.Expr, 0, len(incomingProjectList)+1)
+	for i, expr := range incomingProjectList {
 		newProjList = append(newProjList, &plan.Expr{
 			Typ:  expr.Typ,
 			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: selectTag, ColPos: int32(i)}},
@@ -1322,7 +1322,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 					return 0, err
 				}
 			} else {
-				updateExpr, err = binder.BindExpr(astExpr, 0, true)
+				updateExpr, err = binder.BindAssignmentExpr(astExpr, colDef.Typ)
 				if err != nil {
 					return 0, err
 				}
@@ -1346,6 +1346,14 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 				updateExprs[col.Name] = newDefExpr
 				autoUpdateCols[col.Name] = true
 			}
+		}
+
+		for colName, updateExpr := range updateExprs {
+			lastNodeID, updateExpr, err = builder.flattenSubqueries(lastNodeID, updateExpr, bindCtx)
+			if err != nil {
+				return 0, err
+			}
+			updateExprs[colName] = updateExpr
 		}
 
 		// Recompute generated columns from the final updated row image, so
@@ -1521,7 +1529,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	if useTargetPk {
 		oldSelectTag := selectTag
 		lastNodeID, selectTag, targetPkPos, err = builder.buildOnDupTargetPkResolution(
-			bindCtx, dmlCtx, tableDef, lastNodeID, selectTag, colName2Idx, skipUniqueIdx)
+			bindCtx, dmlCtx, tableDef, lastNodeID, selectTag, colName2Idx, skipUniqueIdx, selectNode.ProjectList)
 		if err != nil {
 			return 0, err
 		}
@@ -2715,6 +2723,7 @@ func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows
 		astSelect = astRows
 
 		subCtx := NewBindContext(builder, bindCtx)
+		subCtx.numericProjectionTypes = insertProjectionTypes(insertColumns, tableDef)
 		lastNodeID, err = builder.bindSelect(astSelect, subCtx, false)
 		if err != nil {
 			return 0, nil, nil, err
@@ -2725,6 +2734,7 @@ func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows
 		astSelect = selectImpl.Select
 
 		subCtx := NewBindContext(builder, bindCtx)
+		subCtx.numericProjectionTypes = insertProjectionTypes(insertColumns, tableDef)
 		lastNodeID, err = builder.bindSelect(astSelect, subCtx, false)
 		if err != nil {
 			return 0, nil, nil, err
@@ -2787,6 +2797,27 @@ func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows
 	} else {
 		return builder.appendNodesForInsertStmt(bindCtx, lastNodeID, tableDef, objRef, insertColToExpr)
 	}
+}
+
+// isNumericAssignmentTarget reports whether a DML target column type may seed the
+// numeric assignment context. A non-numeric target keeps the default binding path,
+// because InferNumericParameterType falls back to float64 for a non-numeric outer
+// type and would otherwise mistype a bare prepared parameter.
+func isNumericAssignmentTarget(typ Type) bool {
+	return makeTypeByPlan2Type(typ).IsNumeric()
+}
+
+func insertProjectionTypes(insertColumns []string, tableDef *plan.TableDef) []Type {
+	// only numeric targets may seed the numeric assignment context; a zero
+	// Type keeps the projection binder on the default binding path
+	targets := make([]Type, len(insertColumns))
+	for i, column := range insertColumns {
+		typ := tableDef.Cols[tableDef.Name2ColIndex[column]].Typ
+		if isNumericAssignmentTarget(typ) {
+			targets[i] = typ
+		}
+	}
+	return targets
 }
 
 func (builder *QueryBuilder) appendNodesForInsertStmt(
@@ -2993,12 +3024,12 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 }
 
 // valuesExprIsFuncCall reports whether a VALUES item is, or transparently wraps
-// (through parentheses or a cast), a function call. Such expressions must be
-// bound without the destination column type so the function's literal arguments
-// bind by their own types — e.g. st_point(116.3975, 39.9087),
-// (st_point(116.3975, 39.9087)) or cast(st_point(...) as point) into a geometry
-// column. A bare literal (or a literal wrapped in a unary minus / cast) is not a
-// function call and still binds against the column type.
+// (through parentheses or a cast), a function call. For non-numeric destinations
+// such expressions bind without the destination type so arguments keep their
+// own domains — e.g. st_point(116.3975, 39.9087), (st_point(...)) or a cast of
+// st_point into a geometry column. Numeric destinations instead use assignment-
+// aware overload resolution. A bare literal (or a literal wrapped in a unary
+// minus / cast) is not a function call.
 func valuesExprIsFuncCall(e tree.Expr) bool {
 	for {
 		switch v := e.(type) {
@@ -3007,7 +3038,10 @@ func valuesExprIsFuncCall(e tree.Expr) bool {
 		case *tree.CastExpr:
 			e = v.Expr
 		case *tree.FuncExpr:
-			return true
+			// mod() is arithmetic and shares the numeric-context binder with the
+			// binary operators (see numericAstFunctionName); every other function
+			// binds its arguments by their own types.
+			return numericAstFunctionName(v) != "mod"
 		default:
 			return false
 		}
@@ -3080,15 +3114,11 @@ func (builder *QueryBuilder) buildValueScan(
 				defaultBinder.builder = builder
 				binder = defaultBinder
 
-				// A function-call value expression must be bound without the
-				// destination column type. The DefaultBinder pushes its type down to
-				// nested literals, so binding st_point(116.3975, 39.9087) against a
-				// GEOMETRY column would type the float arguments as GEOMETRY and break
-				// the function's overload resolution. A function's arguments bind by
-				// their own types, and the result is cast to the column type below
-				// (funcCastFor*Type / forceCastExpr2). Other value expressions (a
-				// negative literal like -1.5, a cast, etc.) still bind against the
-				// column type, which a literal value legitimately adopts.
+				// Non-numeric destinations need a target-free function binder. The
+				// DefaultBinder would otherwise push GEOMETRY into st_point's float
+				// arguments and break overload resolution. Numeric destinations use
+				// the target-aware binder below, which resolves each function argument
+				// from overload metadata before the final assignment cast.
 				defaultFuncBinder := NewDefaultBinder(builder.GetContext(), nil, nil, plan.Type{}, nil)
 				defaultFuncBinder.builder = builder
 				funcBinder = defaultFuncBinder
@@ -3114,15 +3144,50 @@ func (builder *QueryBuilder) buildValueScan(
 					}
 				} else {
 					valueBinder := binder
-					if valuesExprIsFuncCall(r[i]) {
-						// function call (possibly wrapped in parens / a cast):
-						// bind its arguments by their own types, not the
-						// destination column type
+					boundWithNumericContext := false
+					if isNumericAssignmentTarget(col.Typ) {
+						if builder.isPrepareStatement {
+							// Analyze prepared functions with the target-free binder. The
+							// explicit numeric context below supplies the assignment domain only
+							// to compatible numeric arguments.
+							var scan numericAstTypeScan
+							switch numericBinder := funcBinder.(type) {
+							case *DefaultBinder:
+								scan, err = numericBinder.numericAstTypesInternal(r[i], 0, numericBinder.numericAstColumnResolver())
+							case *ReplaceValueBinder:
+								scan, err = numericBinder.numericAstTypesInternal(r[i], 0, numericBinder.numericAstColumnResolver())
+							}
+							if err != nil {
+								return 0, err
+							}
+							if scan.hasParam {
+								switch numericBinder := funcBinder.(type) {
+								case *DefaultBinder:
+									defExpr, err = numericBinder.bindNumericExprWithContext(r[i], 0, &col.Typ)
+								case *ReplaceValueBinder:
+									defExpr, err = numericBinder.bindNumericExprWithContext(r[i], 0, &col.Typ)
+								}
+								if err != nil {
+									return 0, err
+								}
+								boundWithNumericContext = defExpr != nil
+							}
+						}
+						// A function without dynamic parameters must retain its normal
+						// argument domain (for example LENGTH(100000.5)).
+						if !boundWithNumericContext && valuesExprIsFuncCall(r[i]) {
+							valueBinder = funcBinder
+						}
+					} else if valuesExprIsFuncCall(r[i]) {
+						// Geometry and other non-numeric functions need their
+						// arguments to bind independently of the destination type.
 						valueBinder = funcBinder
 					}
-					defExpr, err = valueBinder.BindExpr(r[i], 0, true)
-					if err != nil {
-						return 0, err
+					if !boundWithNumericContext {
+						defExpr, err = valueBinder.BindExpr(r[i], 0, true)
+						if err != nil {
+							return 0, err
+						}
 					}
 					if isEnumPlanType(&col.Typ) {
 						defExpr, err = funcCastForEnumType(builder.GetContext(), defExpr, col.Typ)

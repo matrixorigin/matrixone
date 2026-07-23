@@ -101,6 +101,20 @@ func unclassifiedStatementInUncommittedTxnErrorInfo() string {
 	return "unclassified statement appears in uncommitted transaction"
 }
 
+func dataBranchMergePickTxnErrorInfo() string {
+	return "DATA BRANCH MERGE/PICK is not supported in transactions"
+}
+
+func dataBranchMergeTxnNotAllowed(ses *Session) bool {
+	return ses.GetTxnHandler().OptionBitsIsSet(OPTION_NOT_AUTOCOMMIT) &&
+		!ses.proc.GetTxnOperator().TxnOptions().ByBegin
+}
+
+func dataBranchPickTxnNotAllowed(ses *Session) bool {
+	return ses.GetTxnHandler().InMultiStmtTransactionMode() ||
+		ses.proc.GetTxnOperator().TxnOptions().ByBegin
+}
+
 func writeWriteConflictsErrorInfo() string {
 	return "Write conflicts detected. Previous transaction need to be aborted."
 }
@@ -1429,7 +1443,6 @@ func doExplainStmt(reqCtx context.Context, ses *Session, stmt *tree.ExplainStmt,
 	if err != nil {
 		return err
 	}
-
 	//get query optimizer and execute Optimize
 	exPlan, err := buildPlanWithAuthorization(reqCtx, ses, ses.GetTxnCompileCtx(), stmt.Statement)
 	if err != nil {
@@ -1456,29 +1469,38 @@ func doExplainStmt(reqCtx context.Context, ses *Session, stmt *tree.ExplainStmt,
 			}
 		}
 	}
+	rawSQL := ""
+	if len(statementSQL) > 0 {
+		rawSQL = statementSQL[0]
+	}
+	return writeExplainResult(reqCtx, ses, stmt, exPlan, es, rawSQL, nil)
+}
+
+func writeExplainResult(
+	reqCtx context.Context,
+	ses *Session,
+	stmt *tree.ExplainStmt,
+	exPlan *plan.Plan,
+	es *explain.ExplainOptions,
+	rawSQL string,
+	sqlMode *string,
+) error {
 	if exPlan.GetQuery() == nil {
 		return moerr.NewNotSupported(reqCtx, "the sql query plan does not support explain.")
 	}
-	txnHaveDDL := false
-	if txnOperator := ses.proc.GetTxnOperator(); txnOperator != nil {
-		if ws := txnOperator.GetWorkspace(); ws != nil {
-			txnHaveDDL = ws.GetHaveDDL()
-		}
-	}
+	txnHaveDDL := sessionTxnHaveDDL(ses)
 	// generator query explain
 	explainQuery := explain.NewExplainQueryImpl(exPlan.GetQuery())
 
 	// build explain data buffer
 	buffer := explain.NewExplainDataBuffer()
-	err = explainQuery.ExplainPlan(reqCtx, buffer, es)
+	err := explainQuery.ExplainPlan(reqCtx, buffer, es)
 	if err != nil {
 		return err
 	}
 	if explainSchedulingEnabled(ses) {
-		rawSQL := ses.GetSql()
-		var schedulingSQLMode *string
-		if len(statementSQL) > 0 {
-			rawSQL = statementSQL[0]
+		if rawSQL == "" {
+			rawSQL = ses.GetSql()
 		}
 		// EXPLAIN EXECUTE replaces the outer EXECUTE plan with the prepared
 		// query above. Its scheduling intent belongs to that same inner SQL,
@@ -1486,11 +1508,11 @@ func doExplainStmt(reqCtx context.Context, ses *Session, stmt *tree.ExplainStmt,
 		if execute, ok := stmt.Statement.(*tree.Execute); ok {
 			if prepared, getErr := ses.GetPrepareStmt(reqCtx, string(execute.Name)); getErr == nil {
 				rawSQL = prepared.Sql
-				schedulingSQLMode = &prepared.schedulingSQLMode
+				sqlMode = &prepared.schedulingSQLMode
 			}
 		}
 		schedulingPreview := previewQuerySchedulingWithSQLMode(
-			reqCtx, ses, exPlan.GetQuery(), txnHaveDDL, rawSQL, schedulingSQLMode)
+			reqCtx, ses, exPlan.GetQuery(), txnHaveDDL, rawSQL, sqlMode)
 		appendSchedulingExplain(buffer, schedulingPreview)
 	}
 	if err = reqCtx.Err(); err != nil {
@@ -1599,7 +1621,36 @@ func handleExplainStmt(ses FeSession, execCtx *ExecCtx, stmt *tree.ExplainStmt) 
 	if carrier, ok := execCtx.cw.(interface{ SchedulingSQL() string }); ok && carrier.SchedulingSQL() != "" {
 		rawSQL = carrier.SchedulingSQL()
 	}
+	if txnCW, ok := execCtx.cw.(*TxnComputationWrapper); ok && txnCW.ifIsExeccute {
+		es, err := getExplainOption(execCtx.reqCtx, stmt.Options)
+		if err != nil {
+			return err
+		}
+		exPlan, err := preparedExplainPlan(execCtx.reqCtx, txnCW)
+		if err != nil {
+			return err
+		}
+		if preparedSQL := txnCW.preparedSchedulingSQL; preparedSQL != "" {
+			rawSQL = preparedSQL
+		}
+		var sqlMode *string
+		if txnCW.hasPreparedSchedulingSQLMode {
+			sqlMode = &txnCW.preparedSchedulingSQLMode
+		}
+		return writeExplainResult(execCtx.reqCtx, ses.(*Session), stmt, exPlan, es, rawSQL, sqlMode)
+	}
 	return doExplainStmt(execCtx.reqCtx, ses.(*Session), stmt, rawSQL)
+}
+
+func preparedExplainPlan(ctx context.Context, txnCW *TxnComputationWrapper) (*plan.Plan, error) {
+	exPlan := txnCW.Plan()
+	if exPlan == nil {
+		return nil, moerr.NewInternalError(ctx, "prepared EXPLAIN has no plan")
+	}
+	if paramVals := txnCW.ParamVals(); len(paramVals) > 0 {
+		return plan2.FillValuesOfParamsInPlan(ctx, exPlan, paramVals)
+	}
+	return exPlan, nil
 }
 
 func extractPrepareStmtSQL(ctx context.Context, sql, sqlMode string) (string, error) {
@@ -1817,14 +1868,17 @@ func createPrepareStmt(
 		compile:             comp,
 		PreparePlan:         preparePlan,
 		PrepareStmt:         saveStmt,
+		NativeMode:          ses.sqlModeHasMatrixOneNative(),
 		remapDb:             maps.Clone(execCtx.remapDb),
+		defaultDatabase:     ses.GetTxnCompileCtx().GetDatabase(),
+		tempTableVersion:    ses.GetTempTableVersion(),
 		getFromSendLongData: make(map[int]struct{}),
 		schedulingSQLMode:   schedulingSQLMode,
 	}
 
-	dcPrepare, ok := preparePlan.GetDcl().Control.(*plan.DataControl_Prepare)
+	_, ok := preparePlan.GetDcl().Control.(*plan.DataControl_Prepare)
 	if ok {
-		columns := plan2.GetResultColumnsFromPlan(dcPrepare.Prepare.Plan)
+		columns := getPreparedResultColumns(prepareStmt, sessionTxnHaveDDL(ses))
 		if prepareStmt.ColDefData, err = execCtx.resper.MysqlRrWr().MakeColumnDefData(execCtx.reqCtx, columns); err != nil {
 			logutil.Errorf("Error make column def data for prepare statement: %v", err)
 		}
@@ -3058,7 +3112,7 @@ func parseSql(execCtx *ExecCtx, p *mysql.MySQLParser) (stmts []tree.Statement, e
 	)
 }
 
-func sessionSQLModeForParser(ses FeSession) string {
+func sessionSQLMode(ses FeSession) string {
 	v, err := ses.GetSessionSysVar("sql_mode")
 	if err != nil {
 		return ""
@@ -3067,7 +3121,27 @@ func sessionSQLModeForParser(ses FeSession) string {
 	if !ok {
 		return ""
 	}
+	return mode
+}
+
+func sessionSQLModeForParser(ses FeSession) string {
+	mode := sessionSQLMode(ses)
 	return mysql.SessionSQLModeForParser(mode)
+}
+
+func refreshStatementScopedSessionInfo(ses FeSession, proc *process.Process) {
+	refreshStatementScopedSessionInfoWithSQLMode(sessionSQLMode(ses), proc)
+}
+
+func refreshStatementScopedSessionInfoWithSQLMode(sqlMode string, proc *process.Process) {
+	refreshStatementScopedSessionInfoWithNativeMode(mysql.HasMatrixOneNativeSQLMode(sqlMode), proc)
+}
+
+func refreshStatementScopedSessionInfoWithNativeMode(nativeMode bool, proc *process.Process) {
+	if proc == nil || proc.Base == nil {
+		return
+	}
+	proc.Base.SessionInfo.MatrixOneNativeMode = nativeMode
 }
 
 func parserLowerCaseTableNames(ses FeSession) int64 {
@@ -3344,6 +3418,13 @@ func authenticateUserCanExecutePrepareOrExecute(reqCtx context.Context, ses *Ses
 	if getPu(ses.GetService()).SV.SkipCheckPrivilege {
 		return stats, nil
 	}
+	for {
+		explainStmt, ok := stmt.(*tree.ExplainStmt)
+		if !ok {
+			break
+		}
+		stmt = explainStmt.Statement
+	}
 	delta, err := authenticateUserCanExecuteStatement(reqCtx, ses, stmt)
 	if err != nil {
 		return stats, err
@@ -3370,8 +3451,9 @@ func canExecuteStatementInUncommittedTransaction(
 		return err
 	}
 	if !can {
-		if _, ok := stmt.(*tree.DataBranchPick); ok {
-			return moerr.NewInternalError(reqCtx, "DATA BRANCH PICK is not supported in explicit transactions")
+		switch stmt.(type) {
+		case *tree.DataBranchMerge, *tree.DataBranchPick:
+			return moerr.NewInternalError(reqCtx, dataBranchMergePickTxnErrorInfo())
 		}
 		//is ddl statement
 		if IsCreateDropDatabase(stmt) {
@@ -4107,6 +4189,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	proc.SetAffectedRows(ses.GetLastAffectedRows())
 	proc.SetResolveVariableFunc(ses.txnCompileCtx.ResolveVariable)
 	proc.SetResolveVariableIsBinFunc(ses.txnCompileCtx.ResolveVariableIsBin)
+	refreshStatementScopedSessionInfo(ses, proc)
 	// Frontend client SQL — session-bound resolver. Procs constructed
 	// via pkg/sql/compile/sql_executor.go's NewTopProcess inherit
 	// IsFrontend from opts.IsFrontend() (default false → background);
@@ -4381,6 +4464,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 				return recordParseError(nextInput, nextErr)
 			}
 			execCtx.input = nextInput
+			refreshStatementScopedSessionInfo(ses, proc)
 			nextCWs, nextErr := GetComputationWrapper(execCtx, ses.GetDatabaseName(),
 				ses.GetUserName(),
 				pu.StorageEngine,
