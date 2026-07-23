@@ -712,4 +712,22 @@ SELECT * FROM replace_prepare ORDER BY a;
 DEALLOCATE PREPARE rp2;
 drop table if exists replace_prepare;
 drop table if exists replace_prepare_src;
+set @input = 41;
+prepare prepared_set_literal from 'set @prepared_literal = 41 + 1';
+execute prepared_set_literal;
+select @prepared_literal;
+➤ @prepared_literal[12,0,0]  𝄀
+42
+prepare prepared_set_param from 'set @prepared_param = ? + 1';
+execute prepared_set_param using @input;
+select @prepared_param;
+➤ @prepared_param[12,0,0]  𝄀
+42
+set @input = 9;
+execute prepared_set_param using @input;
+select @prepared_param;
+➤ @prepared_param[12,0,0]  𝄀
+10
+deallocate prepare prepared_set_literal;
+deallocate prepare prepared_set_param;
 SET TIME_ZONE = "SYSTEM";
