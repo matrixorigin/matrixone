@@ -24,6 +24,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -3646,6 +3647,200 @@ func TestCastJsonToJsonOverloadResolution(t *testing.T) {
 
 	_, err := GetFunctionByName(context.Background(), "cast", []types.Type{types.T_json.ToType(), types.T_json.ToType()})
 	require.NoError(t, err)
+}
+
+func TestCastToJSONSupportedTypes(t *testing.T) {
+	for _, source := range []types.T{
+		types.T_any,
+		types.T_json,
+		types.T_char, types.T_varchar, types.T_text,
+		types.T_binary, types.T_varbinary, types.T_blob,
+		types.T_bool, types.T_bit,
+		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_year,
+		types.T_float32, types.T_float64,
+		types.T_decimal64, types.T_decimal128, types.T_decimal256,
+		types.T_date, types.T_time, types.T_datetime, types.T_timestamp,
+		types.T_geometry, types.T_geometry32,
+	} {
+		require.Truef(t, IfTypeCastSupported(source, types.T_json), "%s -> JSON", source)
+	}
+
+	for _, source := range []types.T{
+		types.T_uuid, types.T_enum, types.T_Rowid, types.T_Blockid,
+		types.T_array_float32, types.T_array_float64, types.T_datalink, types.T_TS,
+	} {
+		require.Falsef(t, IfTypeCastSupported(source, types.T_json), "%s -> JSON", source)
+	}
+}
+
+func encodeJSONCastValue(t *testing.T, value bytejson.ByteJson) string {
+	t.Helper()
+	encoded, err := types.EncodeJson(value)
+	require.NoError(t, err)
+	return string(encoded)
+}
+
+func TestCastToJSONPreservesSourceCategories(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	jsonType := types.T_json.ToType()
+
+	run := func(t *testing.T, sourceType types.Type, values any, nulls []bool, expected []string) {
+		t.Helper()
+		tc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(sourceType, values, nulls),
+				NewFunctionTestInput(jsonType, []string{}, nil),
+			},
+			NewFunctionTestResult(jsonType, false, expected, nulls), NewCast)
+		ok, info := tc.Run()
+		require.True(t, ok, info)
+	}
+
+	t.Run("text parses a JSON document", func(t *testing.T) {
+		run(t, types.T_varchar.ToType(), []string{`1`, `"1"`, `{"a":1}`, ""}, []bool{false, false, false, true},
+			makeJSONEncodedFromText(t, []string{`1`, `"1"`, `{"a":1}`, ""}, []bool{false, false, false, true}))
+	})
+	t.Run("binary remains opaque including its payload", func(t *testing.T) {
+		run(t, types.T_blob.ToType(), []string{`{"a":1}`}, nil,
+			[]string{encodeJSONCastValue(t, newTypedByteJson(bytejson.TpCodeBlob, "eyJhIjoxfQ=="))})
+	})
+	t.Run("signed and unsigned keep their numeric representation", func(t *testing.T) {
+		run(t, types.T_int64.ToType(), []int64{-1}, nil,
+			[]string{encodeJSONCastValue(t, mustCreateJSON(t, int64(-1)))})
+		run(t, types.T_uint64.ToType(), []uint64{math.MaxUint64}, nil,
+			[]string{encodeJSONCastValue(t, mustCreateJSON(t, uint64(math.MaxUint64)))})
+	})
+	t.Run("decimal and temporal use typed JSON values", func(t *testing.T) {
+		decimalType := types.New(types.T_decimal128, 20, 2)
+		decimal, err := types.ParseDecimal128("1.20", 20, 2)
+		require.NoError(t, err)
+		run(t, decimalType, []types.Decimal128{decimal}, nil,
+			[]string{encodeJSONCastValue(t, newTypedByteJson(bytejson.TpCodeDecimal, "1.20"))})
+
+		date, err := types.ParseDateCast("2020-01-02")
+		require.NoError(t, err)
+		run(t, types.T_date.ToType(), []types.Date{date}, nil,
+			[]string{encodeJSONCastValue(t, newTypedByteJson(bytejson.TpCodeDate, "2020-01-02"))})
+
+		timeValue, err := types.ParseTime("10:00:00.1", 1)
+		require.NoError(t, err)
+		timeType := types.New(types.T_time, 0, 1)
+		run(t, timeType, []types.Time{timeValue}, nil,
+			[]string{encodeJSONCastValue(t, newTypedByteJson(bytejson.TpCodeTime, "10:00:00.100000"))})
+	})
+	t.Run("geometry becomes a JSON object", func(t *testing.T) {
+		run(t, types.T_geometry.ToType(), []string{"POINT(1 1)"}, nil,
+			makeJSONEncodedFromText(t, []string{`{"type":"Point","coordinates":[1,1]}`}, nil))
+	})
+	t.Run("invalid geometry returns its decode error", func(t *testing.T) {
+		tc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(), []string{"not geometry"}, nil),
+				NewFunctionTestInput(jsonType, []string{}, nil),
+			},
+			NewFunctionTestResult(jsonType, true, nil, nil), NewCast)
+		ok, info := tc.Run()
+		require.True(t, ok, info)
+	})
+}
+
+func TestExplicitCastToJSONUsesSameDispatcher(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	input := `{"long":"abcdefghijklmnopqrstuvwxyz0123456789"}`
+	expected := makeJSONEncodedFromText(t, []string{input}, nil)
+	tc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{input}, nil),
+			NewFunctionTestInput(types.T_json.ToType(), []string{}, nil),
+		},
+		NewFunctionTestResult(types.T_json.ToType(), false, expected, nil), NewExplicitCast)
+	ok, info := tc.Run()
+	require.True(t, ok, info)
+}
+
+func mustCreateJSON(t *testing.T, value any) bytejson.ByteJson {
+	t.Helper()
+	bj, err := bytejson.CreateByteJSON(value)
+	require.NoError(t, err)
+	return bj
+}
+
+func TestCastToJSONRejectsNonFiniteFloatAndSkipsInactiveRows(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	jsonType := types.T_json.ToType()
+
+	t.Run("non-finite float fails", func(t *testing.T) {
+		tc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_float64.ToType(), []float64{math.Inf(1)}, nil),
+				NewFunctionTestInput(jsonType, []string{}, nil),
+			},
+			NewFunctionTestResult(jsonType, true, nil, nil), NewCast)
+		ok, info := tc.Run()
+		require.True(t, ok, info)
+	})
+
+	t.Run("inactive invalid JSON is not evaluated", func(t *testing.T) {
+		tc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`1`, `not json`}, nil),
+				NewFunctionTestInput(jsonType, []string{}, nil),
+			},
+			NewFunctionTestResult(jsonType, false, nil, nil), NewCast)
+		require.NoError(t, tc.result.PreExtendAndReset(tc.fnLength))
+		err := tc.fn(tc.parameters, tc.result, proc, tc.fnLength, &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}})
+		require.NoError(t, err)
+		out := tc.GetResultVectorDirectly()
+		require.Equal(t, 2, out.Length())
+		require.Equal(t, "1", types.DecodeJson(out.GetBytesAt(0)).String())
+		require.True(t, out.IsNull(1))
+	})
+}
+
+func TestCastToJSONAllNullPathsMaterializeVarlenaLength(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	jsonTarget := vector.NewConstNull(types.T_json.ToType(), 1, proc.Mp())
+	defer jsonTarget.Free(proc.Mp())
+
+	t.Run("const null", func(t *testing.T) {
+		source := vector.NewConstNull(types.T_any.ToType(), 3, proc.Mp())
+		defer source.Free(proc.Mp())
+		result := vector.NewFunctionResultWrapper(types.T_json.ToType(), proc.Mp())
+		defer result.Free()
+		require.NoError(t, result.PreExtendAndReset(3))
+		require.NoError(t, NewCast([]*vector.Vector{source, jsonTarget}, result, proc, 3, nil))
+		out := result.GetResultVector()
+		require.Equal(t, 3, out.Length())
+		for row := uint64(0); row < 3; row++ {
+			require.True(t, out.IsNull(row))
+		}
+	})
+
+	t.Run("ignore all rows", func(t *testing.T) {
+		source := testutil.MakeVarcharVector([]string{`not json`, `also not json`}, nil, proc.Mp())
+		defer source.Free(proc.Mp())
+		result := vector.NewFunctionResultWrapper(types.T_json.ToType(), proc.Mp())
+		defer result.Free()
+		require.NoError(t, result.PreExtendAndReset(2))
+		require.NoError(t, NewCast([]*vector.Vector{source, jsonTarget}, result, proc, 2, &FunctionSelectList{AllNull: true}))
+		out := result.GetResultVector()
+		require.Equal(t, 2, out.Length())
+		for row := uint64(0); row < 2; row++ {
+			require.True(t, out.IsNull(row))
+		}
+	})
+}
+
+func TestBitToJSONRestoresDeclaredWidth(t *testing.T) {
+	value, err := bitToJSON(0x10a, 9, context.Background())
+	require.NoError(t, err)
+	require.Equal(t, bytejson.TpCodeBlob, value.Type)
+	require.Equal(t, `"AQo="`, value.String())
+
+	_, err = bitToJSON(1, 65, context.Background())
+	require.Error(t, err)
 }
 
 // TestCastJsonToVarchar verifies that casting a JSON value to VARCHAR uses JSON_UNQUOTE semantics,

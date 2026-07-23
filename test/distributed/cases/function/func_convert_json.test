@@ -1,0 +1,101 @@
+-- CONVERT(expr, JSON) shares CAST(expr AS JSON)'s target type and executor.
+select convert('{"a":1}', json) = cast('{"a":1}' as json) as convert_equals_cast;
+select json_type(convert('1', json)), json_type(convert('"1"', json));
+select convert(null, json) is null as sql_null_is_null;
+select convert('null', json) is null as json_null_is_sql_null,
+       json_type(convert('null', json)) as json_null_type;
+select json_type(convert(true, json)), convert(true, json);
+select json_type(convert(cast('{"long":"abcdefghijklmnopqrstuvwxyz0123456789"}' as json), json)),
+       convert(cast('{"long":"abcdefghijklmnopqrstuvwxyz0123456789"}' as json), json);
+
+-- String family is parsed as JSON document text; binary family is opaque BLOB.
+create table convert_json_source(
+    id int,
+    b binary(16),
+    vb varbinary(64),
+    bl blob,
+    tx text,
+    bits bit(4),
+    y year
+);
+insert into convert_json_source values
+    (1, '{"a":1}', '{"a":1}', '{"a":1}', '{"a":1}', b'1010', 2020);
+
+select json_type(convert(b, json)), json_unquote(convert(b, json)) from convert_json_source;
+select json_type(convert(vb, json)), json_unquote(convert(vb, json)) from convert_json_source;
+select json_type(convert(bl, json)), json_unquote(convert(bl, json)) from convert_json_source;
+select json_type(convert(tx, json)), json_unquote(convert(tx, json)) from convert_json_source;
+select json_type(convert(bits, json)), json_unquote(convert(bits, json)) from convert_json_source;
+select json_type(convert(y, json)), convert(y, json) from convert_json_source;
+select json_type(convert(cast(x'ff' as blob), json)),
+       json_unquote(convert(cast(x'ff' as blob), json));
+
+create table convert_json_bit_width(bits bit(9));
+insert into convert_json_bit_width values (b'100001010');
+select json_type(convert(bits, json)), json_unquote(convert(bits, json)) from convert_json_bit_width;
+drop table convert_json_bit_width;
+
+select json_type(convert(cast(-9223372036854775808 as signed), json));
+select json_type(convert(cast(18446744073709551615 as unsigned), json)),
+       convert(cast(18446744073709551615 as unsigned), json);
+select json_type(convert(cast(1.20 as decimal(10,2)), json)),
+       convert(cast(1.20 as decimal(10,2)), json);
+select json_type(convert(cast(1.5 as double), json)),
+       convert(cast(1.5 as double), json);
+select json_type(convert(cast(12345678901234567890.123456789012345678 as decimal(38,18)), json)),
+       convert(cast(12345678901234567890.123456789012345678 as decimal(38,18)), json);
+select json_type(convert(cast('2020-01-02' as date), json)),
+       convert(cast('2020-01-02' as date), json);
+select json_type(convert(cast('10:00:00.1' as time(1)), json)),
+       convert(cast('10:00:00.1' as time(1)), json);
+select json_type(convert(cast('2020-01-02 03:04:05.120000' as datetime(6)), json)),
+       json_unquote(convert(cast('2020-01-02 03:04:05.120000' as datetime(6)), json));
+set time_zone = '+00:00';
+select json_type(convert(cast('2020-01-02 03:04:05.120000' as timestamp(6)), json)),
+       json_unquote(convert(cast('2020-01-02 03:04:05.120000' as timestamp(6)), json));
+set time_zone = '+08:00';
+select json_type(convert(cast('2020-01-02 03:04:05.120000' as timestamp(6)), json)),
+       json_unquote(convert(cast('2020-01-02 03:04:05.120000' as timestamp(6)), json));
+set time_zone = '+00:00';
+select json_type(convert(st_geomfromtext('POINT(1 1)'), json)),
+       convert(st_geomfromtext('POINT(1 1)'), json);
+select json_type(convert(st_geomfromtext('LINESTRING(0 0,1 1)'), json)),
+       convert(st_geomfromtext('LINESTRING(0 0,1 1)'), json);
+
+-- MatrixOne currently compares TpCodeBlob payloads after base64 encoding and
+-- does not preserve MySQL's opaque subtype metadata.
+select convert(cast(x'00' as blob), json) <
+       convert(cast(x'd0' as blob), json) as mo_base64_order;
+select convert(cast(b'1' as bit(1)), json) =
+       convert(cast(x'01' as blob), json) as mo_subtype_collapsed;
+
+create table convert_json_destination(id int, j json);
+insert into convert_json_destination select 1, bl from convert_json_source;
+insert into convert_json_destination select 2, tx from convert_json_source;
+select id, json_type(j), json_unquote(j) from convert_json_destination order by id;
+drop table convert_json_destination;
+drop table convert_json_source;
+
+-- Error statements are intentionally isolated so one error cannot hide later cases.
+select convert('', json);
+select convert('NULL', json);
+select convert('not json', json);
+select convert(cast('00000000-0000-0000-0000-000000000001' as uuid), json);
+
+create table convert_json_unsupported_enum(v enum('alpha', 'beta'));
+insert into convert_json_unsupported_enum values ('alpha');
+select convert(v, json) from convert_json_unsupported_enum;
+drop table convert_json_unsupported_enum;
+
+-- MySQL's json_prep_stmts.test covers CAST(? AS JSON); retain the same
+-- runtime-type boundary for CONVERT(? , JSON).
+prepare convert_json_parameter from 'select json_type(convert(?, json)), convert(?, json)';
+set @convert_json_param = 123;
+execute convert_json_parameter using @convert_json_param, @convert_json_param;
+set @convert_json_param = '{"prepared":true}';
+execute convert_json_parameter using @convert_json_param, @convert_json_param;
+set @convert_json_param = 'null';
+execute convert_json_parameter using @convert_json_param, @convert_json_param;
+set @convert_json_param = null;
+execute convert_json_parameter using @convert_json_param, @convert_json_param;
+deallocate prepare convert_json_parameter;
