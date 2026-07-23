@@ -21,6 +21,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -39,17 +40,20 @@ import (
 var (
 	newCheckpointOfflineFS = objectio.NewOfflineFS
 	loadCheckpointEntries  = (*CheckpointReader).loadEntries
+	newCheckpointMPool     = mpool.MustNewZero
 )
 
 // CheckpointReader reads checkpoint data from a directory
 type CheckpointReader struct {
-	ctx     context.Context
-	fs      fileservice.FileService
-	dir     string
-	kind    string
-	entries []*checkpoint.CheckpointEntry
-	mp      *mpool.MPool
-	closeFS bool
+	ctx       context.Context
+	fs        fileservice.FileService
+	dir       string
+	kind      string
+	entries   []*checkpoint.CheckpointEntry
+	mp        *mpool.MPool
+	closeFS   bool
+	ownMP     bool
+	closeOnce sync.Once
 
 	getTableRangesForTest   func(*CheckpointReader, *checkpoint.CheckpointEntry) ([]ckputil.TableRange, error)
 	getTablesForTest        func(*CheckpointReader, *checkpoint.CheckpointEntry) ([]*TableInfo, error)
@@ -87,6 +91,7 @@ type Option func(*CheckpointReader)
 func WithMPool(mp *mpool.MPool) Option {
 	return func(r *CheckpointReader) {
 		r.mp = mp
+		r.ownMP = false
 	}
 }
 
@@ -125,19 +130,15 @@ func Open(ctx context.Context, dir string, opts ...Option) (*CheckpointReader, e
 	if err != nil {
 		return nil, moerr.NewInternalErrorf(ctx, "create file service: %v", err)
 	}
+	r.fs = fs
+	r.closeFS = true
+	r.ensureMPool()
 	initialized := false
 	defer func() {
 		if !initialized {
-			fs.Close(ctx)
+			_ = r.Close()
 		}
 	}()
-
-	r.fs = fs
-	r.closeFS = true
-
-	if r.mp == nil {
-		r.mp = mpool.MustNewZero()
-	}
 
 	if err := loadCheckpointEntries(r); err != nil {
 		return nil, err
@@ -158,22 +159,26 @@ func OpenWithFS(ctx context.Context, fs fileservice.FileService, dir string, opt
 	}
 
 	r.fs = fs
+	r.ensureMPool()
 	initialized := false
 	defer func() {
-		if !initialized && r.closeFS && fs != nil {
-			fs.Close(ctx)
+		if !initialized {
+			_ = r.Close()
 		}
 	}()
-
-	if r.mp == nil {
-		r.mp = mpool.MustNewZero()
-	}
 
 	if err := loadCheckpointEntries(r); err != nil {
 		return nil, err
 	}
 	initialized = true
 	return r, nil
+}
+
+func (r *CheckpointReader) ensureMPool() {
+	if r.mp == nil {
+		r.mp = newCheckpointMPool()
+		r.ownMP = true
+	}
 }
 
 // FS returns the file service used by this reader.
@@ -194,7 +199,8 @@ func (r *CheckpointReader) Fork(ctx context.Context) *CheckpointReader {
 		dir:                     r.dir,
 		kind:                    r.kind,
 		entries:                 r.entries,
-		mp:                      mpool.MustNewZero(),
+		mp:                      newCheckpointMPool(),
+		ownMP:                   true,
 		getTableRangesForTest:   r.getTableRangesForTest,
 		getTablesForTest:        r.getTablesForTest,
 		getObjectEntriesForTest: r.getObjectEntriesForTest,
@@ -671,13 +677,23 @@ func isDataFileNotFound(err error) bool {
 
 // Close releases resources
 func (r *CheckpointReader) Close() error {
-	r.entries = nil
-	if r.closeFS && r.fs != nil {
-		fs := r.fs
-		r.fs = nil
-		r.closeFS = false
-		fs.Close(r.ctx)
-	}
+	r.closeOnce.Do(func() {
+		r.entries = nil
+
+		mp := r.mp
+		r.mp = nil
+		if r.ownMP {
+			r.ownMP = false
+			mpool.DeleteMPool(mp)
+		}
+
+		if r.closeFS && r.fs != nil {
+			fs := r.fs
+			r.fs = nil
+			r.closeFS = false
+			fs.Close(r.ctx)
+		}
+	})
 	return nil
 }
 

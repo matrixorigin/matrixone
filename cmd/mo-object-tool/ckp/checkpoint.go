@@ -2243,6 +2243,7 @@ func dumpTablesConcurrently(
 	worker := func() {
 		defer wg.Done()
 		workerReader := reader.Fork(ctx)
+		defer workerReader.Close()
 		for plan := range tableCh {
 			if err := dumpOneTable(ctx, workerReader, dumpOut, plan, snapshotTS, outputDir, rowOrder, metaComments, header, out, &outMu); err != nil {
 				recordErr(err)

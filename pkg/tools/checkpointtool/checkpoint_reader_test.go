@@ -48,10 +48,14 @@ func (f *closeCountingCheckpointFS) Close(ctx context.Context) {
 func TestOpenOwnsFileServiceTransactionally(t *testing.T) {
 	oldNewFS := newCheckpointOfflineFS
 	oldLoadEntries := loadCheckpointEntries
+	oldNewMPool := newCheckpointMPool
 	t.Cleanup(func() {
 		newCheckpointOfflineFS = oldNewFS
 		loadCheckpointEntries = oldLoadEntries
+		newCheckpointMPool = oldNewMPool
 	})
+	const poolTag = "checkpoint-reader-open-owned"
+	newCheckpointMPool = func() *mpool.MPool { return mpool.MustNewNoLock(poolTag) }
 
 	ctx := context.Background()
 	newCounter := func() *closeCountingCheckpointFS {
@@ -69,19 +73,28 @@ func TestOpenOwnsFileServiceTransactionally(t *testing.T) {
 	_, err := Open(ctx, "/display")
 	require.ErrorIs(t, err, assert.AnError)
 	require.Equal(t, 1, counter.closes)
+	require.Equal(t, "[]", mpool.ReportMemUsage(poolTag))
 
 	loadCheckpointEntries = func(*CheckpointReader) error { return nil }
 	reader, err := Open(ctx, "/display")
 	require.NoError(t, err)
 	require.Zero(t, counter.closes)
+	require.NotEqual(t, "[]", mpool.ReportMemUsage(poolTag))
 	require.NoError(t, reader.Close())
 	require.NoError(t, reader.Close())
 	require.Equal(t, 1, counter.closes)
+	require.Equal(t, "[]", mpool.ReportMemUsage(poolTag))
 }
 
 func TestOpenWithFSCloseOwnershipRollsBackOnlyWhenTransferred(t *testing.T) {
 	oldLoadEntries := loadCheckpointEntries
-	t.Cleanup(func() { loadCheckpointEntries = oldLoadEntries })
+	oldNewMPool := newCheckpointMPool
+	t.Cleanup(func() {
+		loadCheckpointEntries = oldLoadEntries
+		newCheckpointMPool = oldNewMPool
+	})
+	const poolTag = "checkpoint-reader-open-with-fs-failure"
+	newCheckpointMPool = func() *mpool.MPool { return mpool.MustNewNoLock(poolTag) }
 	loadCheckpointEntries = func(*CheckpointReader) error { return assert.AnError }
 	ctx := context.Background()
 
@@ -91,6 +104,7 @@ func TestOpenWithFSCloseOwnershipRollsBackOnlyWhenTransferred(t *testing.T) {
 	_, err = OpenWithFS(ctx, owned, "/display", WithCloseFS())
 	require.ErrorIs(t, err, assert.AnError)
 	require.Equal(t, 1, owned.closes)
+	require.Equal(t, "[]", mpool.ReportMemUsage(poolTag))
 
 	borrowedMemory, err := fileservice.NewMemoryFS("BORROWED", fileservice.DisabledCacheConfig, nil)
 	require.NoError(t, err)
@@ -98,11 +112,13 @@ func TestOpenWithFSCloseOwnershipRollsBackOnlyWhenTransferred(t *testing.T) {
 	_, err = OpenWithFS(ctx, borrowed, "/display")
 	require.ErrorIs(t, err, assert.AnError)
 	require.Zero(t, borrowed.closes)
+	require.Equal(t, "[]", mpool.ReportMemUsage(poolTag))
 	borrowed.Close(ctx)
 }
 
 func TestVecValueToString_SQLLikeFormatting(t *testing.T) {
 	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
 	defer func() {
 		require.Equal(t, int64(0), mp.CurrNB())
 	}()
@@ -192,7 +208,9 @@ func TestOpenWithFSOptions(t *testing.T) {
 	ctx := context.Background()
 	fs, err := fileservice.NewLocalFS(ctx, "local", t.TempDir(), fileservice.DisabledCacheConfig, nil)
 	require.NoError(t, err)
-	mp := mpool.MustNewZero()
+	const poolTag = "checkpoint-reader-caller-owned"
+	mp := mpool.MustNewNoLock(poolTag)
+	defer mpool.DeleteMPool(mp)
 
 	r, err := OpenWithFS(ctx, fs, "/display",
 		WithKind(objectio.OfflineKindLocal2),
@@ -205,9 +223,15 @@ func TestOpenWithFSOptions(t *testing.T) {
 	require.Equal(t, fs, r.FS())
 	require.Same(t, mp, r.mp)
 	require.NoError(t, r.Close())
+	require.NotEqual(t, "[]", mpool.ReportMemUsage(poolTag))
 }
 
 func TestOpenErrorAndOpenWithFSDefaultMPool(t *testing.T) {
+	oldNewMPool := newCheckpointMPool
+	t.Cleanup(func() { newCheckpointMPool = oldNewMPool })
+	const poolTag = "checkpoint-reader-open-with-fs-default"
+	newCheckpointMPool = func() *mpool.MPool { return mpool.MustNewNoLock(poolTag) }
+
 	ctx := context.Background()
 	_, err := Open(ctx, t.TempDir(), WithKind("bad-kind"))
 	require.Error(t, err)
@@ -220,7 +244,10 @@ func TestOpenErrorAndOpenWithFSDefaultMPool(t *testing.T) {
 	r, err := OpenWithFS(ctx, fs, "/display")
 	require.NoError(t, err)
 	require.NotNil(t, r.mp)
+	require.NotEqual(t, "[]", mpool.ReportMemUsage(poolTag))
 	require.NoError(t, r.Close())
+	require.NoError(t, r.Close())
+	require.Equal(t, "[]", mpool.ReportMemUsage(poolTag))
 }
 
 func TestOpenListsRawCheckpointDirectoryFiles(t *testing.T) {
@@ -240,6 +267,11 @@ func TestOpenListsRawCheckpointDirectoryFiles(t *testing.T) {
 }
 
 func TestCheckpointReaderBasicAccessorsAndFork(t *testing.T) {
+	oldNewMPool := newCheckpointMPool
+	t.Cleanup(func() { newCheckpointMPool = oldNewMPool })
+	const forkPoolTag = "checkpoint-reader-fork-owned"
+	newCheckpointMPool = func() *mpool.MPool { return mpool.MustNewNoLock(forkPoolTag) }
+
 	ctx := context.Background()
 	fs, err := fileservice.NewLocalFS(ctx, "local", t.TempDir(), fileservice.DisabledCacheConfig, nil)
 	require.NoError(t, err)
@@ -254,6 +286,7 @@ func TestCheckpointReaderBasicAccessorsAndFork(t *testing.T) {
 		entries: []*checkpoint.CheckpointEntry{entry},
 		mp:      mpool.MustNewZero(),
 	}
+	defer mpool.DeleteMPool(reader.mp)
 
 	require.Equal(t, fs, reader.FS())
 	require.Equal(t, "/tmp/ckp", reader.Dir())
@@ -286,10 +319,16 @@ func TestCheckpointReaderBasicAccessorsAndFork(t *testing.T) {
 	require.Equal(t, reader.kind, fork.kind)
 	require.Equal(t, reader.entries, fork.entries)
 	require.NotNil(t, fork.mp)
+	require.NotEqual(t, "[]", mpool.ReportMemUsage(forkPoolTag))
+	require.NoError(t, fork.Close())
+	require.NoError(t, fork.Close())
+	require.Equal(t, "[]", mpool.ReportMemUsage(forkPoolTag))
 
 	customCtx := context.WithValue(ctx, struct{}{}, "x")
 	fork = reader.Fork(customCtx)
 	require.Equal(t, customCtx, fork.ctx)
+	require.NoError(t, fork.Close())
+	require.Equal(t, "[]", mpool.ReportMemUsage(forkPoolTag))
 }
 
 func TestCheckpointReaderCloseWithOwnedFileService(t *testing.T) {
@@ -630,6 +669,7 @@ func TestCheckpointReaderTestHookSetters(t *testing.T) {
 	require.Equal(t, []string{"id"}, view.Headers)
 
 	fork := reader.Fork(context.Background())
+	defer fork.Close()
 	gotRanges, err = fork.GetTableRanges(entry)
 	require.NoError(t, err)
 	require.Equal(t, ranges, gotRanges)

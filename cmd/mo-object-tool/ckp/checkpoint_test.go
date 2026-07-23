@@ -28,6 +28,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
@@ -46,6 +47,30 @@ func TestPreferRealErrorKeepsNonCanceledRootCause(t *testing.T) {
 	assert.ErrorIs(t, preferRealError(root, context.Canceled), root)
 	assert.ErrorIs(t, preferRealError(context.Canceled, context.Canceled), context.Canceled)
 	assert.NoError(t, preferRealError(nil, nil))
+}
+
+func TestDumpTablesConcurrentlyClosesWorkerForks(t *testing.T) {
+	const workers = 4
+	poolCount := func() int {
+		return strings.Count(mpool.ReportMemUsage("must_new_zero"), `{"must_new_zero":`)
+	}
+	before := poolCount()
+
+	err := dumpTablesConcurrently(
+		context.Background(),
+		&checkpointtool.CheckpointReader{},
+		nil,
+		nil,
+		types.TS{},
+		"",
+		workers,
+		checkpointtool.CSVRowOrderStorage,
+		false,
+		false,
+		io.Discard,
+	)
+	require.NoError(t, err)
+	require.Equal(t, before, poolCount())
 }
 
 func TestDumpTableErrorDedupesPipeWriteAndCloseError(t *testing.T) {
