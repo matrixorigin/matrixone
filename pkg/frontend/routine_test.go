@@ -222,6 +222,66 @@ func TestCanceledResetAdmissionDoesNotTouchSession(t *testing.T) {
 	routine.mc.endOperation()
 }
 
+func TestRoutineCloseCancelsResetRollback(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	oldSession := newTestSession(t, ctrl)
+	oldSession.GetTxnHandler().Close()
+
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().Hints().Return(engine.Hints{
+		CommitOrRollbackTimeout: 5 * time.Minute,
+	}).AnyTimes()
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
+	txnOp.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).AnyTimes()
+	rollbackStarted := make(chan struct{})
+	txnOp.EXPECT().Rollback(gomock.Any()).DoAndReturn(func(ctx context.Context) error {
+		close(rollbackStarted)
+		<-ctx.Done()
+		return context.Cause(ctx)
+	})
+	oldSession.txnHandler = InitTxnHandler("", eng, context.Background(), txnOp)
+	oldSession.txnHandler.shareTxn = false
+
+	routine := NewRoutine(
+		context.Background(),
+		oldSession.GetResponser().MysqlRrWr(),
+		&config.FrontendParameters{},
+	)
+	t.Cleanup(routine.cancelRoutineFunc)
+	routine.setSession(oldSession)
+
+	resetDone := make(chan error, 1)
+	go func() {
+		resetDone <- routine.resetSession("", &query.ResetSessionResponse{})
+	}()
+
+	select {
+	case <-rollbackStarted:
+	case <-time.After(time.Second):
+		t.Fatal("reset did not enter transaction rollback")
+	}
+
+	closeDone := make(chan struct{})
+	go func() {
+		routine.beginClose()
+		routine.mc.waitAndClose()
+		close(closeDone)
+	}()
+
+	select {
+	case err := <-resetDone:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("connection close did not cancel reset rollback")
+	}
+	select {
+	case <-closeDone:
+	case <-time.After(time.Second):
+		t.Fatal("connection close remained blocked after reset rollback cancellation")
+	}
+}
+
 func TestMigrateConnectionFromRejectsClosedRoutineBeforeReadingSession(t *testing.T) {
 	routine := NewRoutine(context.Background(), &testMysqlWriter{}, &config.FrontendParameters{})
 	t.Cleanup(routine.cancelRoutineFunc)

@@ -2024,7 +2024,7 @@ func (ses *Session) reset(ctx context.Context, prev *Session) error {
 		ses:    prev,
 		txnOpt: FeTxnOption{byRollback: true},
 	}
-	err := prev.GetTxnHandler().Rollback(&tempExecCtx)
+	err := prev.GetTxnHandler().rollbackWithContext(rollbackCtx, &tempExecCtx)
 	if err != nil {
 		prev.Error(tempExecCtx.reqCtx, "failed to rollback txn",
 			zap.Error(err))
