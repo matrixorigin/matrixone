@@ -137,8 +137,12 @@ type Session struct {
 	tempTables map[string]string
 	// tempTablesRev records the reverse relationship.
 	// Key: realName, Value: dbName.alias
-	tempTablesRev   map[string]string
-	hasLockedTables atomic.Bool
+	tempTablesRev map[string]string
+	// tempTableVersion changes whenever the session's temporary-table name
+	// resolution changes. Prepared statements use it to invalidate plans that
+	// were built against an older temporary-table mapping.
+	tempTableVersion uint64
+	hasLockedTables  atomic.Bool
 
 	prepareStmts map[string]*PrepareStmt
 	lastStmtId   uint32
@@ -360,8 +364,15 @@ func (ses *Session) AddTempTable(dbName, alias, realName string) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	key := dbName + "." + alias
+	if oldRealName, ok := ses.tempTables[key]; ok {
+		if oldRealName == realName {
+			return
+		}
+		delete(ses.tempTablesRev, oldRealName)
+	}
 	ses.tempTables[key] = realName
 	ses.tempTablesRev[realName] = key
+	ses.tempTableVersion++
 }
 
 // GetTempTable gets the real name of the temporary table
@@ -372,6 +383,14 @@ func (ses *Session) GetTempTable(dbName, alias string) (string, bool) {
 	return val, ok
 }
 
+// GetTempTableVersion returns the version of the session's temporary-table
+// name mapping.
+func (ses *Session) GetTempTableVersion() uint64 {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.tempTableVersion
+}
+
 // RemoveTempTable removes the temporary table alias
 func (ses *Session) RemoveTempTable(dbName, alias string) {
 	ses.mu.Lock()
@@ -380,6 +399,7 @@ func (ses *Session) RemoveTempTable(dbName, alias string) {
 	if realName, ok := ses.tempTables[key]; ok {
 		delete(ses.tempTables, key)
 		delete(ses.tempTablesRev, realName)
+		ses.tempTableVersion++
 	}
 }
 
@@ -390,6 +410,7 @@ func (ses *Session) RemoveTempTableByRealName(realName string) {
 	if alias, ok := ses.tempTablesRev[realName]; ok {
 		delete(ses.tempTables, alias)
 		delete(ses.tempTablesRev, realName)
+		ses.tempTableVersion++
 	}
 }
 
