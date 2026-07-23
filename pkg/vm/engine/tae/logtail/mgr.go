@@ -77,10 +77,11 @@ func (cb *callback) call(from, to timestamp.Timestamp, closeCB func(), tails ...
 // - Truncate unneceessary txn handles according to GC timestamp
 type Manager struct {
 	txnbase.NoopCommitListener
-	table     *TxnTable
-	rt        *dbutils.Runtime
-	truncated types.TS
-	nowClock  func() types.TS // nowClock is from TxnManager
+	table      *TxnTable
+	rt         *dbutils.Runtime
+	truncateMu sync.RWMutex
+	truncated  types.TS
+	nowClock   func() types.TS // nowClock is from TxnManager
 
 	maxCommittedLSN atomic.Uint64
 
@@ -349,15 +350,21 @@ func (mgr *Manager) GetReader(from, to types.TS) *Reader {
 }
 
 func (mgr *Manager) GetTruncateTS() types.TS {
+	mgr.truncateMu.RLock()
+	defer mgr.truncateMu.RUnlock()
 	return mgr.truncated
 }
 
 func (mgr *Manager) GCByTS(ctx context.Context, ts types.TS) (updated bool) {
+	mgr.truncateMu.Lock()
 	if ts.LE(&mgr.truncated) {
+		mgr.truncateMu.Unlock()
 		return
 	}
-	updated = true
 	mgr.truncated = ts
+	mgr.truncateMu.Unlock()
+
+	updated = true
 	cnt := mgr.table.TruncateByTimeStamp(ts)
 	logutil.Info(
 		"GC-Logtail-Table",

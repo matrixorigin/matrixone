@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"math"
 	"slices"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -54,11 +55,68 @@ type TableEntry struct {
 	tableData data.Table
 	rows      atomic.Uint64
 
+	// latestKnownDMLPrepare is the greatest visibility timestamp of accepted
+	// epoch-aware DML. An AUTO_INCREMENT reset uses it to reject a snapshot
+	// that did not observe a later durable write.
+	latestKnownDMLPrepare atomic.Pointer[types.TS]
+	replayedPreparedDML   struct {
+		sync.Mutex
+		txns map[string]struct{}
+	}
+
 	// fullname is format as 'tenantID-tableName', the tenantID prefix is only used 'mo_catalog' database
 	fullName string
 
 	dataObjects      *ObjectList
 	tombstoneObjects *ObjectList
+}
+
+func (entry *TableEntry) RecordKnownDMLPrepare(ts types.TS) {
+	for old := entry.latestKnownDMLPrepare.Load(); old == nil || ts.GT(old); old = entry.latestKnownDMLPrepare.Load() {
+		candidate := ts
+		if entry.latestKnownDMLPrepare.CompareAndSwap(old, &candidate) {
+			return
+		}
+	}
+}
+
+func (entry *TableEntry) GetLatestKnownDMLPrepare() types.TS {
+	if ts := entry.latestKnownDMLPrepare.Load(); ts != nil {
+		return *ts
+	}
+	return types.TS{}
+}
+
+func (entry *TableEntry) RegisterReplayedPreparedDML(txnID string) {
+	entry.replayedPreparedDML.Lock()
+	defer entry.replayedPreparedDML.Unlock()
+	if entry.replayedPreparedDML.txns == nil {
+		entry.replayedPreparedDML.txns = make(map[string]struct{})
+	}
+	entry.replayedPreparedDML.txns[txnID] = struct{}{}
+}
+
+func (entry *TableEntry) ResolveReplayedPreparedDML(txnID string, visibilityTS *types.TS) {
+	entry.replayedPreparedDML.Lock()
+	defer entry.replayedPreparedDML.Unlock()
+	if _, ok := entry.replayedPreparedDML.txns[txnID]; !ok {
+		return
+	}
+	if visibilityTS != nil {
+		entry.RecordKnownDMLPrepare(*visibilityTS)
+	}
+	delete(entry.replayedPreparedDML.txns, txnID)
+}
+
+func (entry *TableEntry) ShouldRetryAutoIncrementAlter(startTS types.TS) bool {
+	entry.replayedPreparedDML.Lock()
+	unresolved := len(entry.replayedPreparedDML.txns) > 0
+	entry.replayedPreparedDML.Unlock()
+	if unresolved {
+		return true
+	}
+	latestDML := entry.GetLatestKnownDMLPrepare()
+	return latestDML.GT(&startTS)
 }
 
 func genTblFullName(tenantID uint32, name string) string {
@@ -865,6 +923,8 @@ func (entry *TableEntry) AlterTable(ctx context.Context, txn txnif.TxnReader, re
 			BlockMaxRows:      newSchema.Extra.BlockMaxRows,
 			ObjectMaxBlocks:   newSchema.Extra.ObjectMaxBlocks,
 			Hints:             hints,
+			AutoIncrOffset:    newSchema.Extra.AutoIncrOffset,
+			AutoIncrEpoch:     newSchema.Extra.AutoIncrEpoch,
 		}
 
 	}
