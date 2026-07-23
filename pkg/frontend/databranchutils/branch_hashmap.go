@@ -1525,7 +1525,14 @@ func (bh *branchHashmap) allocateBuffer(size uint64) ([]byte, malloc.Deallocator
 		return nil, nil, err
 	}
 	if buf == nil {
-		if err := bh.spill(size); err != nil {
+		bh.metaMu.RLock()
+		if bh.closed {
+			bh.metaMu.RUnlock()
+			return nil, nil, moerr.NewInternalErrorNoCtx("branchHashmap is closed")
+		}
+		err = bh.spill(size)
+		bh.metaMu.RUnlock()
+		if err != nil {
 			return nil, nil, err
 		}
 		buf, deallocator, err = bh.allocator.Allocate(size, malloc.NoClear)
