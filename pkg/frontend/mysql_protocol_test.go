@@ -3372,10 +3372,11 @@ var _ MysqlRrWr = &testMysqlWriter{}
 
 // testMysqlWriter works for the background transaction that does not use the network protocol.
 type testMysqlWriter struct {
-	username string
-	database string
-	ioses    *Conn
-	mod      int
+	username              string
+	database              string
+	ioses                 *Conn
+	mod                   int
+	makeColumnDefDataFunc func(context.Context, []*planPb.ColDef) ([][]byte, error)
 }
 
 func (fp *testMysqlWriter) WriteResultSetRow2(mrs *MysqlResultSet, colSlices *ColumnSlices, count uint64) error {
@@ -3600,6 +3601,9 @@ func (fp *testMysqlWriter) Flush() error {
 }
 
 func (fp *testMysqlWriter) MakeColumnDefData(ctx context.Context, columns []*planPb.ColDef) ([][]byte, error) {
+	if fp.makeColumnDefDataFunc != nil {
+		return fp.makeColumnDefDataFunc(ctx, columns)
+	}
 	return nil, nil
 }
 

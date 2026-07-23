@@ -367,6 +367,7 @@ func selectUpdateTables(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.
 	}
 	var err error
 	var selectList []tree.SelectExpr
+	legacyNumericTargets := make(map[int]Type)
 
 	var aliasList = make([]string, len(tableInfo.alias))
 	for alias, i := range tableInfo.alias {
@@ -418,10 +419,15 @@ func selectUpdateTables(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.
 		for _, colName := range updateColNames {
 			updateKey := updateKeys[colName]
 			for _, coldef := range tableDef.Cols {
-				if coldef.Name == colName && isEnumOrSetPlanType(&coldef.Typ) {
-					updateKey, err = wrapAstExprForMySQLSpecialType(builder.GetContext(), coldef.Typ, updateKey)
-					if err != nil {
-						return 0, nil, err
+				if coldef.Name == colName {
+					if isNumericAssignmentTarget(coldef.Typ) {
+						legacyNumericTargets[len(selectList)] = coldef.Typ
+					}
+					if isEnumOrSetPlanType(&coldef.Typ) {
+						updateKey, err = wrapAstExprForMySQLSpecialType(builder.GetContext(), coldef.Typ, updateKey)
+						if err != nil {
+							return 0, nil, err
+						}
 					}
 				}
 			}
@@ -465,6 +471,10 @@ func selectUpdateTables(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.
 		OrderBy: stmt.OrderBy,
 		Limit:   stmt.Limit,
 		With:    stmt.With,
+	}
+	bindCtx.numericProjectionTypes = make([]Type, len(selectList))
+	for pos, typ := range legacyNumericTargets {
+		bindCtx.numericProjectionTypes[pos] = typ
 	}
 
 	lastNodeId, err := builder.bindSelect(selectAst, bindCtx, false)
