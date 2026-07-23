@@ -342,14 +342,10 @@ func (ctr *container) processFunc(idx int, ap *Window, proc *process.Process, an
 	if err != nil {
 		return err
 	}
-	if len(vecs) > 1 {
-		for _, vec := range vecs {
-			vec.Free(proc.Mp())
-		}
-		return moerr.NewInternalErrorNoCtx("the Window operator currently does not support sending split result of window function.")
+	ctr.vec, err = aggexec.MergeSplitResult(vecs, proc.Mp())
+	if err != nil {
+		return err
 	}
-
-	ctr.vec = vecs[0]
 	if isWinOrder {
 		ctr.vec.SetNulls(nil)
 	}
@@ -408,12 +404,12 @@ func (ctr *container) processValueFunc(idx int, ap *Window, proc *process.Proces
 			if ctr.ps != nil {
 				start, _ = buildPartitionInterval(ctr.ps, j, n)
 			}
-			srcRow := j - int(offset)
-			if srcRow < start {
+			if offset > int64(j-start) {
 				if err := appendDefaultOrNull(localResult, defaultVec, j, proc.Mp()); err != nil {
 					return nil, err
 				}
 			} else {
+				srcRow := j - int(offset)
 				if err := localResult.UnionOne(srcVec, int64(srcRow), proc.Mp()); err != nil {
 					return nil, err
 				}
@@ -448,12 +444,12 @@ func (ctr *container) processValueFunc(idx int, ap *Window, proc *process.Proces
 			if ctr.ps != nil {
 				_, end = buildPartitionInterval(ctr.ps, j, n)
 			}
-			srcRow := j + int(offset)
-			if srcRow >= end {
+			if offset >= int64(end-j) {
 				if err := appendDefaultOrNull(localResult, defaultVec, j, proc.Mp()); err != nil {
 					return nil, err
 				}
 			} else {
+				srcRow := j + int(offset)
 				if err := localResult.UnionOne(srcVec, int64(srcRow), proc.Mp()); err != nil {
 					return nil, err
 				}
@@ -549,12 +545,12 @@ func (ctr *container) processValueFunc(idx int, ap *Window, proc *process.Proces
 			if right > end {
 				right = end
 			}
-			targetRow := left + int(nthVal) - 1
-			if left >= right || targetRow >= right {
+			if left >= right || nthVal > int64(right-left) {
 				if err := vector.AppendAny(localResult, nil, true, proc.Mp()); err != nil {
 					return nil, err
 				}
 			} else {
+				targetRow := left + int(nthVal) - 1
 				if err := localResult.UnionOne(srcVec, int64(targetRow), proc.Mp()); err != nil {
 					return nil, err
 				}
@@ -633,17 +629,26 @@ func (ctr *container) buildInterval(rowIdx, start, end int, frame *plan.FrameCla
 }
 
 func (ctr *container) buildRowsInterval(rowIdx int, start, end int, frame *plan.FrameClause) (int, int) {
+	partitionStart, partitionEnd := start, end
 	switch frame.Start.Type {
 	case plan.FrameBound_CURRENT_ROW:
 		start = rowIdx
 	case plan.FrameBound_PRECEDING:
 		if !frame.Start.UnBounded {
 			pre := frame.Start.Val.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_U64Val).U64Val
-			start = rowIdx - int(pre)
+			if pre >= uint64(rowIdx-partitionStart) {
+				start = partitionStart
+			} else {
+				start = rowIdx - int(pre)
+			}
 		}
 	case plan.FrameBound_FOLLOWING:
 		fol := frame.Start.Val.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_U64Val).U64Val
-		start = rowIdx + int(fol)
+		if fol >= uint64(partitionEnd-rowIdx) {
+			start = partitionEnd
+		} else {
+			start = rowIdx + int(fol)
+		}
 	}
 
 	switch frame.End.Type {
@@ -651,11 +656,19 @@ func (ctr *container) buildRowsInterval(rowIdx int, start, end int, frame *plan.
 		end = rowIdx + 1
 	case plan.FrameBound_PRECEDING:
 		pre := frame.End.Val.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_U64Val).U64Val
-		end = rowIdx - int(pre) + 1
+		if pre >= uint64(rowIdx-partitionStart+1) {
+			end = partitionStart
+		} else {
+			end = rowIdx - int(pre) + 1
+		}
 	case plan.FrameBound_FOLLOWING:
 		if !frame.End.UnBounded {
 			fol := frame.End.Val.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_U64Val).U64Val
-			end = rowIdx + int(fol) + 1
+			if fol >= uint64(partitionEnd-rowIdx) {
+				end = partitionEnd
+			} else {
+				end = rowIdx + int(fol) + 1
+			}
 		}
 	}
 	return start, end

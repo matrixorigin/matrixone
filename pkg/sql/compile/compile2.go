@@ -158,7 +158,9 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	c.InitPipelineContextToExecuteQuery()
 
 	// record this query to compile service.
-	MarkQueryRunning(c, txnOperator)
+	if err = TryMarkQueryRunning(c, txnOperator); err != nil {
+		return nil, err
+	}
 	defer func() {
 		MarkQueryDone(c, txnOperator)
 	}()
@@ -290,7 +292,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 
 		retryTimes++
 		if runC != c {
-			runC.Release()
+			releaseRetryCompile(runC)
 		}
 		c.retryTimes = retryTimes
 		defChanged := moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged)
@@ -347,6 +349,13 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	//}
 
 	return queryResult, err
+}
+
+func releaseRetryCompile(c *Compile) {
+	proc := c.proc
+	prepareParams := proc.DetachPrepareParams()
+	defer proc.RestorePrepareParams(prepareParams)
+	c.Release()
 }
 
 // rewriteAutoModeToPre recursively traverses the AST and rewrites 'mode=auto' to 'mode=pre'
@@ -575,6 +584,7 @@ func (c *Compile) prepareRetry(defChanged bool) (*Compile, error) {
 
 	var e error
 	runC := NewCompile(c.addr, c.db, c.sql, c.tenant, c.uid, c.e, c.proc, c.stmt, c.isInternal, c.cnLabel, c.startAt)
+	runC.SetQuerySchedulingIntent(c.querySchedulingIntent)
 	runC.SetSchedulingTraceRecorder(c.schedulingTrace)
 	runC.SetOriginSQL(c.originSQL)
 	defer func() {

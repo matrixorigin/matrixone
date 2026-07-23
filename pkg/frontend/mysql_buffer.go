@@ -56,6 +56,43 @@ type BufferAllocator struct {
 	allocator Allocator
 }
 
+// IOSessionOption customizes the memory retained by an IOSession. Options are
+// intentionally applied only by NewIOSessionWithOptions so existing frontend
+// callers keep the historical defaults.
+type IOSessionOption func(*ioSessionOptions)
+
+type ioSessionOptions struct {
+	bufferSize        int
+	allowedPacketSize int
+	allocator         Allocator
+}
+
+// WithIOSessionBufferSize sets the size of the buffer retained for the whole
+// session lifetime. Packets larger than this buffer continue to use the
+// existing dynamic read/write paths.
+func WithIOSessionBufferSize(size int) IOSessionOption {
+	return func(opts *ioSessionOptions) {
+		opts.bufferSize = size
+	}
+}
+
+// WithIOSessionAllowedPacketSize bounds a single logical MySQL packet. This is
+// useful for protocol endpoints, such as a Proxy login path, that never need
+// the frontend server's general-purpose packet maximum.
+func WithIOSessionAllowedPacketSize(size int) IOSessionOption {
+	return func(opts *ioSessionOptions) {
+		opts.allowedPacketSize = size
+	}
+}
+
+// WithIOSessionAllocator uses allocator for all buffers owned by the session.
+// The allocator must be safe for concurrent use when shared by sessions.
+func WithIOSessionAllocator(allocator Allocator) IOSessionOption {
+	return func(opts *ioSessionOptions) {
+		opts.allocator = allocator
+	}
+}
+
 func (ba *BufferAllocator) Alloc(size int) ([]byte, error) {
 	if size == 0 {
 		return nil, nil
@@ -102,7 +139,7 @@ func (block *MemBlock) ResetIndices() {
 
 // IsFull check read buf full or not
 func (block *MemBlock) IsFull() bool {
-	return block.writeIndex == fixBufferSize
+	return block.writeIndex >= len(block.data)
 }
 
 func (block *MemBlock) BufferLen() int {
@@ -168,6 +205,10 @@ type Conn struct {
 	header                [4]byte
 	// static buffer block for read & write in general cases
 	fixBuf MemBlock
+	// bufferSize is the allocation unit for the fixed and dynamic write
+	// buffers. It is configurable for lightweight protocol users such as the
+	// Proxy, while regular frontend sessions keep fixBufferSize.
+	bufferSize int
 	// dynamic write buffer block is organized by a list
 	dynamicWrBuf *list.List
 	// just for load local read
@@ -204,20 +245,58 @@ func (c *Conn) SetTimeout(d time.Duration) {
 
 // NewIOSession create a new io session
 func NewIOSession(conn net.Conn, pu *config.ParameterUnit, service string) (_ *Conn, err error) {
+	return NewIOSessionWithOptions(conn, pu, service)
+}
+
+// NewIOSessionWithOptions creates an IO session with optional buffer and
+// allocator overrides. The default behavior is identical to NewIOSession.
+func NewIOSessionWithOptions(
+	conn net.Conn,
+	pu *config.ParameterUnit,
+	service string,
+	options ...IOSessionOption,
+) (_ *Conn, err error) {
+	opts := ioSessionOptions{
+		bufferSize:        fixBufferSize,
+		allowedPacketSize: int(MaxPayloadSize),
+	}
+	for _, option := range options {
+		if option != nil {
+			option(&opts)
+		}
+	}
+	if opts.bufferSize < HeaderLengthOfTheProtocol {
+		return nil, moerr.NewInternalErrorNoCtxf(
+			"invalid IO session buffer size %d, must be at least %d",
+			opts.bufferSize,
+			HeaderLengthOfTheProtocol,
+		)
+	}
+	if opts.allowedPacketSize < 1 {
+		return nil, moerr.NewInternalErrorNoCtxf(
+			"invalid IO session allowed packet size %d, must be positive",
+			opts.allowedPacketSize,
+		)
+	}
+	if opts.allocator == nil {
+		opts.allocator = getSessionAlloc(service)
+	}
+
 	c := &Conn{
 		conn:                  conn,
 		localAddr:             conn.LocalAddr().String(),
 		remoteAddr:            conn.RemoteAddr().String(),
 		fixBuf:                MemBlock{},
+		bufferSize:            opts.bufferSize,
 		dynamicWrBuf:          list.New(),
-		allocator:             &BufferAllocator{allocator: getSessionAlloc(service)},
+		allocator:             &BufferAllocator{allocator: opts.allocator},
 		timeout:               pu.SV.SessionTimeout.Duration,
 		readTimeout:           pu.SV.NetReadTimeout.Duration,
 		writeTimeout:          pu.SV.NetWriteTimeout.Duration,
 		loadLocalReadTimeout:  pu.SV.LoadLocalReadTimeout.Duration,
 		loadLocalWriteTimeout: pu.SV.LoadLocalWriteTimeout.Duration,
 		maxBytesToFlush:       int(pu.SV.MaxBytesInOutbufToFlush * 1024),
-		allowedPacketSize:     int(MaxPayloadSize),
+		allowedPacketSize:     opts.allowedPacketSize,
 		service:               service,
 	}
 
@@ -227,7 +306,7 @@ func NewIOSession(conn net.Conn, pu *config.ParameterUnit, service string) (_ *C
 		}
 	}()
 
-	c.fixBuf.data, err = c.allocator.Alloc(fixBufferSize)
+	c.fixBuf.data, err = c.allocator.Alloc(c.bufferSize)
 	if err != nil {
 		return nil, err
 	}
@@ -243,6 +322,11 @@ func (c *Conn) ID() uint64 {
 
 func (c *Conn) RawConn() net.Conn {
 	return c.conn
+}
+
+// GetSequenceID returns the sequence expected for the next MySQL packet.
+func (c *Conn) GetSequenceID() uint8 {
+	return c.sequenceId
 }
 
 func (c *Conn) UseConn(conn net.Conn) {
@@ -334,6 +418,9 @@ func (c *Conn) ReadLoadLocalPacket() (_ []byte, err error) {
 	packetLength = int(uint32(c.header[0]) | uint32(c.header[1])<<8 | uint32(c.header[2])<<16)
 	sequenceId := c.header[3]
 	c.sequenceId = sequenceId + 1
+	if err = c.CheckAllowedPacketSize(packetLength); err != nil {
+		return
+	}
 
 	if c.loadLocalBuf.data == nil {
 		c.loadLocalBuf.data, err = c.allocator.Alloc(packetLength)
@@ -667,9 +754,9 @@ func (c *Conn) AppendPart(elems []byte) error {
 		}
 		curElemsRemainSpace := len(elems) - curBufRemainSpace
 
-		allocLength := Max(fixBufferSize, curElemsRemainSpace)
-		if allocLength%fixBufferSize != 0 {
-			allocLength += fixBufferSize - allocLength%fixBufferSize
+		allocLength := Max(c.bufferSize, curElemsRemainSpace)
+		if allocLength%c.bufferSize != 0 {
+			allocLength += c.bufferSize - allocLength%c.bufferSize
 		}
 
 		err = AllocNewBlock(c, allocLength)
@@ -728,7 +815,7 @@ var BeginPacket = func(c *Conn) error {
 // BeginPacket Reserve Header in the buffer
 func (c *Conn) BeginPacket() error {
 	if c.curBuf.AvailableSpaceLen() < HeaderLengthOfTheProtocol {
-		err := AllocNewBlock(c, fixBufferSize)
+		err := AllocNewBlock(c, c.bufferSize)
 		if err != nil {
 			return err
 		}

@@ -17,6 +17,7 @@ package dedupjoin
 import (
 	"bytes"
 	"context"
+	"os"
 	"testing"
 
 	"github.com/golang/mock/gomock"
@@ -30,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/spillutil"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
@@ -50,6 +52,217 @@ type joinTestCase struct {
 	proc   *process.Process
 	cancel context.CancelFunc
 	barg   *hashbuild.HashBuild
+}
+
+func TestDedupFinalizeCleansConsumedBuffer(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	baseline := proc.Mp().CurrNB()
+
+	bat := batch.NewOffHeapWithSize(1)
+	bat.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int32.ToType())
+	require.NoError(t, vector.AppendFixed(bat.Vecs[0], int32(1), false, proc.Mp()))
+	bat.SetRowCount(1)
+
+	arg := &DedupJoin{}
+	arg.ctr.state = Finalize
+	arg.ctr.buf = []*batch.Batch{bat}
+	arg.ctr.lastPos = 1
+	arg.ctr.spillEngine = spillutil.NewSpillEngine(spillutil.SpillEngineConfig{})
+
+	res, err := arg.Call(proc)
+	require.NoError(t, err)
+	require.Equal(t, vm.ExecStop, res.Status)
+	require.Nil(t, arg.ctr.buf)
+	require.Equal(t, baseline, proc.Mp().CurrNB())
+	arg.Free(proc, false, nil)
+	require.Equal(t, baseline, proc.Mp().CurrNB())
+	proc.Free()
+}
+
+func writeDedupSpillBatch(t *testing.T, proc *process.Process, name string, value int32) *os.File {
+	spillfs, err := proc.GetSpillFileService()
+	require.NoError(t, err)
+	fd, err := spillfs.CreateAndRemoveFile(proc.Ctx, name)
+	require.NoError(t, err)
+	w := spillutil.BucketWriter{Name: name, Fd: fd}
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{value}, nil, proc.Mp())
+	bat.SetRowCount(1)
+	var buf bytes.Buffer
+	require.NoError(t, spillutil.FlushBucketBatch(proc, bat, &w, &buf, nil))
+	bat.Clean(proc.Mp())
+	return w.HandOffFd()
+}
+
+func TestDedupSpillAdvancesAfterOutput(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	baseline := proc.Mp().CurrNB()
+	typ := types.T_int32.ToType()
+	conditions := [][]*plan.Expr{{newExpr(0, typ)}, {newExpr(0, typ)}}
+	engine := spillutil.NewSpillEngine(spillutil.SpillEngineConfig{
+		BuildKeyExprs:           conditions[1],
+		NeedBatches:             true,
+		NeedsBuildForEmptyProbe: true,
+		IsDedup:                 true,
+	})
+	engine.InitFromSpilledMap([]*os.File{
+		writeDedupSpillBatch(t, proc, "dedup_bucket_1", 1),
+		writeDedupSpillBatch(t, proc, "dedup_bucket_2", 2),
+	})
+
+	arg := &DedupJoin{
+		RightTypes:        []types.Type{typ},
+		Conditions:        conditions,
+		Result:            []colexec.ResultPos{{Rel: 1, Pos: 0}},
+		OnDuplicateAction: plan.Node_FAIL,
+	}
+	require.NoError(t, arg.Prepare(proc))
+	arg.ctr.state = Finalize
+	arg.ctr.spillEngine = engine
+
+	for _, want := range []int32{1, 2} {
+		res, err := arg.Call(proc)
+		require.NoError(t, err)
+		require.Equal(t, vm.ExecHasMore, res.Status)
+		require.Equal(t, []int32{want}, vector.MustFixedColNoTypeCheck[int32](res.Batch.Vecs[0]))
+	}
+	res, err := arg.Call(proc)
+	require.NoError(t, err)
+	require.Equal(t, vm.ExecStop, res.Status)
+	require.Nil(t, arg.ctr.buf)
+
+	arg.Free(proc, false, nil)
+	require.Equal(t, baseline, proc.Mp().CurrNB())
+	proc.Free()
+}
+
+func TestDedupResetClearsBucketState(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	arg := &DedupJoin{}
+	arg.ctr.batches = []*batch.Batch{batch.EmptyBatch}
+	arg.ctr.batchRowCount = 1
+	arg.ctr.matched = &bitmap.Bitmap{}
+	arg.ctr.matched.InitWithSize(1)
+
+	arg.Reset(proc, false, nil)
+	require.Nil(t, arg.ctr.batches)
+	require.Zero(t, arg.ctr.batchRowCount)
+	require.Nil(t, arg.ctr.matched)
+	proc.Free()
+}
+
+func TestDedupShuffleWorkersFinalizeTheirOwnPartitions(t *testing.T) {
+	tests := []struct {
+		name        string
+		isShuffle   bool
+		wantOutput  bool
+		wantMessage bool
+	}{
+		{
+			name:        "broadcast worker defers to merger",
+			wantMessage: true,
+		},
+		{
+			name:       "shuffle worker emits local partition",
+			isShuffle:  true,
+			wantOutput: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			baseline := proc.Mp().CurrNB()
+			typ := types.T_int32.ToType()
+			bat := batch.NewOffHeapWithSize(1)
+			bat.Vecs[0] = vector.NewOffHeapVecWithType(typ)
+			require.NoError(t, vector.AppendFixed(bat.Vecs[0], int32(42), false, proc.Mp()))
+			bat.SetRowCount(1)
+
+			jm := message.NewJoinMap(message.GroupSels{}, nil, nil, nil, []*batch.Batch{bat}, proc.Mp())
+			jm.SetRowCount(1)
+			jm.IncRef(1)
+			matched := &bitmap.Bitmap{}
+			matched.InitWithSize(1)
+			ch := make(chan *WorkerJoinMsg, 1)
+			arg := &DedupJoin{
+				RightTypes:        []types.Type{typ},
+				Result:            []colexec.ResultPos{{Rel: 1, Pos: 0}},
+				OnDuplicateAction: plan.Node_FAIL,
+				NumCPU:            2,
+				IsMerger:          false,
+				IsShuffle:         test.isShuffle,
+				Channel:           ch,
+			}
+			arg.ctr.mp = jm
+			arg.ctr.batches = jm.GetBatches()
+			arg.ctr.batchRowCount = jm.GetRowCount()
+			arg.ctr.matched = matched
+
+			require.NoError(t, arg.ctr.finalize(arg, proc))
+			if test.wantOutput {
+				require.Len(t, arg.ctr.buf, 1)
+				require.Equal(t, []int32{42}, vector.MustFixedColNoTypeCheck[int32](arg.ctr.buf[0].Vecs[0]))
+			} else {
+				require.Nil(t, arg.ctr.buf)
+			}
+			require.Equal(t, test.wantMessage, len(ch) == 1)
+
+			arg.Free(proc, false, nil)
+			require.Equal(t, baseline, proc.Mp().CurrNB())
+			proc.Free()
+		})
+	}
+}
+
+func TestDedupResetNotifiesOnlySharedBuildMerger(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		isShuffle   bool
+		wantMessage bool
+	}{
+		{name: "broadcast worker notifies merger", wantMessage: true},
+		{name: "shuffle worker owns its partition", isShuffle: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			ch := make(chan *WorkerJoinMsg, 1)
+			arg := &DedupJoin{
+				NumCPU:    2,
+				IsMerger:  false,
+				IsShuffle: test.isShuffle,
+				Channel:   ch,
+			}
+
+			arg.Reset(proc, false, nil)
+
+			require.Equal(t, test.wantMessage, len(ch) == 1)
+			proc.Free()
+		})
+	}
+}
+
+func TestDedupPrepareFailureCanRetry(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	typ := types.T_int32.ToType()
+	valid := newExpr(0, typ)
+	invalid := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int32)}}
+	arg := &DedupJoin{
+		Conditions:        [][]*plan.Expr{{valid}, {valid}},
+		UpdateColExprList: []*plan.Expr{valid, invalid},
+	}
+
+	require.Error(t, arg.Prepare(proc))
+	require.Nil(t, arg.ctr.vecs)
+	require.Nil(t, arg.ctr.evecs)
+	require.Nil(t, arg.ctr.exprExecs)
+
+	arg.UpdateColExprList[1] = valid
+	require.NoError(t, arg.Prepare(proc))
+	require.Len(t, arg.ctr.evecs, 1)
+	require.Len(t, arg.ctr.exprExecs, 2)
+	arg.Free(proc, false, nil)
+	proc.Free()
 }
 
 var (

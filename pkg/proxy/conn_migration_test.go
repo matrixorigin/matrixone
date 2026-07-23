@@ -73,13 +73,18 @@ func runTestWithQueryService(t *testing.T, cn metadata.CNService, fn func(cc *cl
 					return moerr.NewInternalError(ctx, "bad request")
 				}
 				resp.MigrateConnFromResponse = &pb.MigrateConnFromResponse{
-					DB: "d1",
+					DB:               "d1",
+					LastAffectedRows: 7,
 				}
 				return nil
 			}, false)
 			qs.AddHandleFunc(pb.CmdMethod_MigrateConnTo, func(ctx context.Context, req *pb.Request, resp *pb.Response, _ *morpc.Buffer) error {
 				if req.MigrateConnToRequest == nil {
 					return moerr.NewInternalError(ctx, "bad request")
+				}
+				if req.MigrateConnToRequest.LastAffectedRows != 7 {
+					return moerr.NewInternalErrorf(ctx, "unexpected last affected rows: %d",
+						req.MigrateConnToRequest.LastAffectedRows)
 				}
 				resp.MigrateConnToResponse = &pb.MigrateConnToResponse{
 					Success: true,
@@ -122,6 +127,7 @@ func TestQueryServiceMigrateFrom(t *testing.T) {
 		assert.NoError(t, err)
 		assert.NotNil(t, resp)
 		assert.Equal(t, "d1", resp.DB)
+		assert.Equal(t, int64(7), resp.LastAffectedRows)
 	})
 }
 
@@ -139,4 +145,30 @@ func TestQueryServiceMigrateTo(t *testing.T) {
 		err = cc.migrateConnTo(sc, resp)
 		assert.NoError(t, err)
 	})
+}
+
+func TestMigrateConnToContextCancelsReplay(t *testing.T) {
+	local, remote := net.Pipe()
+	defer remote.Close()
+	blocked := newBlockingContextServerConn(local)
+	defer blocked.Close()
+	cc := &clientConn{}
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		result <- cc.migrateConnToContext(ctx, blocked, &pb.MigrateConnFromResponse{})
+	}()
+
+	select {
+	case <-blocked.entered:
+	case <-time.After(time.Second):
+		t.Fatal("migration replay did not enter backend ExecStmt")
+	}
+	cancel()
+	select {
+	case err := <-result:
+		assert.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("migration replay ignored transfer cancellation")
+	}
 }

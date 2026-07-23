@@ -46,6 +46,58 @@ const (
 	ModuleName = "Backup"
 )
 
+func TestExecBackupRejectsIncompleteCheckpointResponse(t *testing.T) {
+	testCases := []struct {
+		name      string
+		locations []string
+		want      string
+	}{
+		{
+			name: "empty response",
+			want: "expected backup time and checkpoint location, got 0 field(s)",
+		},
+		{
+			name:      "checkpoint timeout response",
+			locations: []string{"2026-06-27 06:01:22"},
+			want:      "expected backup time and checkpoint location, got 1 field(s)",
+		},
+		{
+			name:      "empty backup time",
+			locations: []string{"", "checkpoint"},
+			want:      "backup time is empty",
+		},
+		{
+			name:      "empty checkpoint location",
+			locations: []string{"2026-06-27 06:01:22", ""},
+			want:      "checkpoint location is empty",
+		},
+		{
+			name:      "malformed checkpoint location",
+			locations: []string{"2026-06-27 06:01:22", "Failed"},
+			want:      "invalid checkpoint string",
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			err := execBackup(
+				context.Background(),
+				"",
+				nil,
+				nil,
+				testCase.locations,
+				1,
+				types.TS{},
+				"full",
+				nil,
+				nil,
+				nil,
+			)
+			require.ErrorContains(t, err, testCase.want)
+		})
+	}
+}
+
 func TestBackupData(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)

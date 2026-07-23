@@ -16,7 +16,7 @@ package plan
 
 import (
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -250,7 +250,9 @@ func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 		}
 	}
 
-	sort.Slice(subTrees, func(i, j int) bool { return compareStats(subTrees[i].Stats, subTrees[j].Stats) })
+	slices.SortFunc(subTrees, func(a, b *plan.Node) int {
+		return compareStats(a.Stats, b.Stats)
+	})
 
 	leafByTag := make(map[int32]int32)
 
@@ -563,7 +565,7 @@ func shouldChangeParent(self, currentParent, nextParent int32, vertices []*joinV
 		}
 	}
 	// self is the biggest node
-	return compareStats(nextParentStats, currentParentStats)
+	return compareStats(nextParentStats, currentParentStats) < 0
 }
 
 // buildSubJoinTree build sub- join tree for a fact table and all its dimension tables
@@ -583,7 +585,9 @@ func (builder *QueryBuilder) buildSubJoinTree(vertices []*joinVertex, vid int32)
 		builder.buildSubJoinTree(vertices, child)
 		dimensions = append(dimensions, vertices[child])
 	}
-	sort.Slice(dimensions, func(i, j int) bool { return compareStats(dimensions[i].node.Stats, dimensions[j].node.Stats) })
+	slices.SortFunc(dimensions, func(a, b *joinVertex) int {
+		return compareStats(a.node.Stats, b.node.Stats)
+	})
 
 	for _, child := range dimensions {
 

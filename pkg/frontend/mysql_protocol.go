@@ -45,7 +45,6 @@ import (
 	planPb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/proxy"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -694,7 +693,7 @@ func (mp *MysqlProtocolImpl) SendPrepareResponse(ctx context.Context, stmt *Prep
 	}
 	paramTypes := dcPrepare.Prepare.ParamTypes
 	numParams := len(paramTypes)
-	columns := plan2.GetResultColumnsFromPlan(dcPrepare.Prepare.Plan)
+	columns := getPreparedResultColumns(stmt, sessionTxnHaveDDL(mp.GetSession()))
 	numColumns := len(columns)
 
 	var data []byte
@@ -723,6 +722,7 @@ func (mp *MysqlProtocolImpl) SendPrepareResponse(ctx context.Context, stmt *Prep
 		if err != nil {
 			return err
 		}
+		setCharacter(column)
 
 		_, err = mp.SendColumnDefinitionPacket(ctx, column, cmd)
 		if err != nil {
@@ -1004,6 +1004,12 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(ctx context.Context, proc *process
 					return moerr.NewInvalidInput(ctx, "mysql protocol error, malformed packet")
 				}
 				pos = newPos
+				// The readers below index `data` at fixed offsets; make sure the
+				// declared payload is actually present so a truncated packet returns
+				// an error instead of panicking on an out-of-range slice.
+				if pos+int(length) > len(data) {
+					return moerr.NewInvalidInput(ctx, "mysql protocol error, malformed packet")
+				}
 				var val string
 				switch length {
 				case 0:
@@ -1027,6 +1033,12 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(ctx context.Context, proc *process
 
 				}
 				pos = newPos
+				// The readers below index `data` at fixed offsets; make sure the
+				// declared payload is actually present so a truncated packet returns
+				// an error instead of panicking on an out-of-range slice.
+				if pos+int(length) > len(data) {
+					return moerr.NewInvalidInput(ctx, "mysql protocol error, malformed packet")
+				}
 				var val string
 				switch length {
 				case 0:

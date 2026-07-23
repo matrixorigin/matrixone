@@ -148,7 +148,7 @@ func buildCloneTable(
 		return nil, err
 	}
 
-	if createTablePlan, err = buildCreateTable(ctx, &stmt.CreateTable, stmt); err != nil {
+	if createTablePlan, err = buildCreateTable(ctx, &stmt.CreateTable, stmt, false); err != nil {
 		return nil, err
 	}
 

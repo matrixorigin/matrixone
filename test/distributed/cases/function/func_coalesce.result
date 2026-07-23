@@ -28,13 +28,17 @@ drop table t2;
 CREATE TABLE t0(c0 BIGINT UNSIGNED);
 INSERT INTO t0(c0) VALUES(NULL);
 SELECT * FROM t0 WHERE CAST(COALESCE(t0.c0, -1) AS UNSIGNED);
-Data truncation: data out of range: data type uint64, value '-1'
+c0
+NULL
 SELECT * FROM t0 WHERE CAST(IFNULL(t0.c0, -1) AS UNSIGNED);
-Data truncation: data out of range: data type uint64, value '-1'
+c0
+NULL
 SELECT CAST(COALESCE(t0.c0, -1) AS UNSIGNED) IS TRUE FROM t0;
-Data truncation: data out of range: data type uint64, value '-1'
+cast(COALESCE(t0.c0, -1) as unsigned) is true
+1
 SELECT CAST(COALESCE(t0.c0, -1) AS UNSIGNED) FROM t0;
-Data truncation: data out of range: data type uint64, value '-1'
+cast(COALESCE(t0.c0, -1) as unsigned)
+18446744073709551615
 DROP TABLE t0;
 CREATE TABLE t1 (a char(10), b INT);
 INSERT INTO t1 VALUES ('', 0);
@@ -188,12 +192,13 @@ CREATE TABLE t1 (a DATE);
 INSERT INTO t1 VALUES ('2000-01-01');
 SELECT CAST(COALESCE(a,a) AS SIGNED) FROM t1;
 ➤ cast(COALESCE(a, a) as signed)[-5,64,0]  𝄀
-10957
+20000101
 SELECT CAST(COALESCE(a,a) AS CHAR) FROM t1;
 ➤ cast(COALESCE(a, a) as varchar)[12,-1,0]  𝄀
 2000-01-01
 SELECT CAST(COALESCE(a,a) AS DECIMAL(25,3)) FROM t1;
-invalid argument operator cast, bad value [DATE DECIMAL128]
+➤ cast(COALESCE(a, a) as decimal(25, 3))[3,25,3]  𝄀
+20000101.000
 SELECT CAST(COALESCE(a,a) AS DATETIME(6)) FROM t1;
 ➤ cast(COALESCE(a, a) as datetime(6, 6))[93,64,0]  𝄀
 2000-01-01 00:00:00
@@ -207,13 +212,13 @@ CREATE TABLE t1 (a DATETIME);
 INSERT INTO t1 VALUES ('2000-01-01 00:00:00');
 SELECT CAST(COALESCE(a,a) AS SIGNED) FROM t1;
 ➤ cast(COALESCE(a, a) as signed)[-5,64,0]  𝄀
-946684800
+20000101000000
 SELECT CAST(COALESCE(a,a) AS CHAR) FROM t1;
 ➤ cast(COALESCE(a, a) as varchar)[12,-1,0]  𝄀
 2000-01-01 00:00:00
 SELECT CAST(COALESCE(a,a) AS DECIMAL(25,3)) FROM t1;
 ➤ cast(COALESCE(a, a) as decimal(25, 3))[3,25,3]  𝄀
-946684800.000
+20000101000000.000
 SELECT CAST(COALESCE(a,a) AS DATETIME(6)) FROM t1;
 ➤ cast(COALESCE(a, a) as datetime(6, 6))[93,64,0]  𝄀
 2000-01-01 00:00:00
@@ -280,8 +285,8 @@ CREATE TABLE t2 (b INT, s BLOB);
 INSERT INTO t2 VALUES (2, '1234589002');
 select * from t1 union all select * from t2;
 ➤ a[4,32,0]  ¦  s[12,0,0]  𝄀
-1  ¦  test  𝄀
-2  ¦  1234589002
+2  ¦  1234589002  𝄀
+1  ¦  test
 drop table t1;
 drop table t2;
 SELECT COALESCE(NULL, NULL, NULL, CAST('abcdef' AS text), NULL, CAST('1234589002' AS text));

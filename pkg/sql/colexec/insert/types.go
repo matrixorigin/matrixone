@@ -23,7 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/externalwrite"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -200,10 +199,5 @@ func (insert *Insert) GetAffectedRows() uint64 {
 }
 
 func (insert *Insert) initBufForS3() {
-	insert.ctr.buf = colexec.AllocCNS3ResultBat(false, insert.isMemoryTable())
-}
-
-func (insert *Insert) isMemoryTable() bool {
-	_, ok := insert.InsertCtx.Engine.(*memoryengine.BindedEngine)
-	return ok
+	insert.ctr.buf = colexec.AllocCNS3ResultBat(false)
 }

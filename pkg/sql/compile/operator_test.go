@@ -20,15 +20,18 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dedupjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeorder"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightdedupjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffleV2"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/stretchr/testify/require"
@@ -52,6 +55,16 @@ func TestDupOperator(t *testing.T) {
 		0,
 		0,
 	)
+}
+
+func TestDupHashBuildPreservesNullTracking(t *testing.T) {
+	source := hashbuild.NewArgument()
+	defer source.Release()
+	source.TrackNullKeys = true
+
+	duplicated := dupOperator(source, 0, 1).(*hashbuild.HashBuild)
+	defer duplicated.Release()
+	require.True(t, duplicated.TrackNullKeys)
 }
 
 func TestDupOperatorMergeTop(t *testing.T) {
@@ -225,25 +238,73 @@ func TestDupOperatorLoopJoinMarkPos(t *testing.T) {
 func TestDupOperatorShuffleSharesPoolAcrossWorkers(t *testing.T) {
 	op := shuffle.NewArgument()
 	op.BucketNum = 4
+	op.DrainAllBuckets = true
 
-	dup1 := dupOperator(op, 0, 2).(*shuffle.Shuffle)
-	dup2 := dupOperator(op, 1, 2).(*shuffle.Shuffle)
+	dupCtx := newOperatorDupContext()
+	dup1 := dupOperatorWithContext(op, 0, 2, dupCtx).(*shuffle.Shuffle)
+	dup2 := dupOperatorWithContext(op, 1, 2, dupCtx).(*shuffle.Shuffle)
 
-	require.NotNil(t, op.GetShufflePool())
-	require.Same(t, op.GetShufflePool(), dup1.GetShufflePool())
-	require.Same(t, op.GetShufflePool(), dup2.GetShufflePool())
+	require.Nil(t, op.GetShufflePool(), "duplicating must not mutate the reusable template")
+	require.Same(t, dup1.GetShufflePool(), dup2.GetShufflePool())
+	nextGeneration := dupOperatorWithContext(op, 0, 2, newOperatorDupContext()).(*shuffle.Shuffle)
+	require.NotSame(t, dup1.GetShufflePool(), nextGeneration.GetShufflePool())
+	require.Equal(t, int32(0), dup1.CurrentShuffleIdx)
+	require.Equal(t, int32(1), dup2.CurrentShuffleIdx)
+	require.True(t, dup1.DrainAllBuckets)
+	require.True(t, dup2.DrainAllBuckets)
 }
 
-func TestDupOperatorShuffleV2SharesPoolAcrossWorkers(t *testing.T) {
-	op := shuffleV2.NewArgument()
-	op.BucketNum = 4
+func TestDupOperatorAssignsSharedShuffleConsumerIndex(t *testing.T) {
+	hashBuild := hashbuild.NewArgument()
+	hashBuild.IsShuffle = true
+	hashBuild.ShuffleIdx = -1
+	require.Equal(t, int32(2), dupOperator(hashBuild, 2, 4).(*hashbuild.HashBuild).ShuffleIdx)
 
-	dup1 := dupOperator(op, 0, 2).(*shuffleV2.ShuffleV2)
-	dup2 := dupOperator(op, 1, 2).(*shuffleV2.ShuffleV2)
+	hashJoin := hashjoin.NewArgument()
+	hashJoin.IsShuffle = true
+	hashJoin.ShuffleIdx = -1
+	require.Equal(t, int32(2), dupOperator(hashJoin, 2, 4).(*hashjoin.HashJoin).ShuffleIdx)
 
-	require.NotNil(t, op.GetShufflePool())
-	require.Same(t, op.GetShufflePool(), dup1.GetShufflePool())
-	require.Same(t, op.GetShufflePool(), dup2.GetShufflePool())
+	dedupJoin := dedupjoin.NewArgument()
+	dedupJoin.IsShuffle = true
+	dedupJoin.ShuffleIdx = -1
+	require.Equal(t, int32(2), dupOperator(dedupJoin, 2, 4).(*dedupjoin.DedupJoin).ShuffleIdx)
+
+	rightDedupJoin := rightdedupjoin.NewArgument()
+	rightDedupJoin.IsShuffle = true
+	rightDedupJoin.ShuffleIdx = -1
+	require.Equal(t, int32(2), dupOperator(rightDedupJoin, 2, 4).(*rightdedupjoin.RightDedupJoin).ShuffleIdx)
+}
+
+func TestConstructShuffleOperatorForJoinSupportsColumnsAndExpressions(t *testing.T) {
+	left := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_int64)},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 3}},
+	}
+	right := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_varchar)},
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{ObjName: "serial_full"},
+		}},
+	}
+	node := &plan.Node{
+		OnList: []*plan.Expr{{Expr: &plan.Expr_F{F: &plan.Function{Args: []*plan.Expr{left, right}}}}},
+		Stats: &plan.Stats{HashmapStats: &plan.HashMapStats{
+			ShuffleColIdx: 0,
+			ShuffleType:   plan.ShuffleType_Range,
+		}},
+		RuntimeFilterProbeList: []*plan.RuntimeFilterSpec{{Tag: 42}},
+	}
+
+	leftShuffle := constructShuffleOperatorForJoin(4, node, true)
+	require.Equal(t, int32(3), leftShuffle.ShuffleColIdx)
+	require.Nil(t, leftShuffle.ShuffleExpr)
+	require.Equal(t, int32(42), leftShuffle.RuntimeFilterSpec.Tag)
+
+	rightShuffle := constructShuffleOperatorForJoin(4, node, false)
+	require.Equal(t, right.Typ.Id, rightShuffle.ShuffleExpr.Typ.Id)
+	require.Equal(t, "serial_full", rightShuffle.ShuffleExpr.GetF().Func.ObjName)
+	require.Nil(t, rightShuffle.RuntimeFilterSpec)
 }
 
 func makeTimeWindowIntervalExpr(value int64, unit string) *plan.Expr {

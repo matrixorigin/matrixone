@@ -167,14 +167,10 @@ func GetFunctionByName(ctx context.Context, name string, args []types.Type) (r F
 		r.cannotRunInParallel = f.Overloads[r.overloadId].cannotParallel
 
 	case failedFunctionParametersWrong:
-		displayName := name
-		if name == "cast_strict" || name == "cast_explicit" {
-			displayName = "cast"
-		}
 		if f.isFunction() {
-			err = moerr.NewInvalidArg(ctx, fmt.Sprintf("function %s", displayName), args)
+			err = moerr.NewInvalidArg(ctx, fmt.Sprintf("function %s", name), args)
 		} else {
-			err = moerr.NewInvalidArg(ctx, fmt.Sprintf("operator %s", displayName), args)
+			err = moerr.NewInvalidArg(ctx, fmt.Sprintf("operator %s", name), args)
 		}
 
 	case failedAggParametersWrong:
@@ -185,6 +181,26 @@ func GetFunctionByName(ctx context.Context, name string, args []types.Type) (r F
 	}
 
 	return r, err
+}
+
+// GetFunctionByNameWithOverload validates the arguments using the function's
+// normal type checker, then selects a specific overload. It is intended for
+// planner-only variants that must keep the same SQL function name and layout.
+func GetFunctionByNameWithOverload(
+	ctx context.Context, name string, args []types.Type, overloadID int32,
+) (r FuncGetResult, err error) {
+	r, err = GetFunctionByName(ctx, name, args)
+	if err != nil {
+		return r, err
+	}
+	f := allSupportedFunctions[r.fid]
+	if overloadID < 0 || int(overloadID) >= len(f.Overloads) {
+		return FuncGetResult{}, moerr.NewInvalidInputf(ctx, "function overload %s.%d not found", name, overloadID)
+	}
+	r.overloadId = overloadID
+	r.retType = f.Overloads[overloadID].retType(args)
+	r.cannotRunInParallel = f.Overloads[overloadID].cannotParallel
+	return r, nil
 }
 
 // RunFunctionDirectly runs a function directly without any protections.

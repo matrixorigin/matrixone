@@ -15,7 +15,6 @@
 package stage
 
 import (
-	"fmt"
 	"net/url"
 	"testing"
 
@@ -95,9 +94,8 @@ func TestToPathMinio(t *testing.T) {
 	mopath, query, err := s.ToPath()
 	require.Nil(t, err)
 
-	require.Equal(t, mopath, "s3-opts,endpoint=endpoint,region=region,bucket=bucket,key=key,secret=secret,is-minio=true\n:/path/a.csv")
-	fmt.Printf("mo=%s, query = %s", mopath, query)
-
+	require.Equal(t, "s3-opts,endpoint=endpoint,region=region,bucket=bucket,key=key,secret=secret,is-minio=true\n:/path/a.csv", mopath)
+	require.Empty(t, query)
 }
 
 func TestToPath(t *testing.T) {
@@ -120,8 +118,8 @@ func TestToPath(t *testing.T) {
 	mopath, query, err := s.ToPath()
 	require.Nil(t, err)
 
-	require.Equal(t, mopath, "s3-opts,endpoint=endpoint,region=region,bucket=bucket,key=key,secret=secret\n:/path/a.csv")
-	fmt.Printf("mo=%s, query = %s", mopath, query)
+	require.Equal(t, "s3-opts,endpoint=endpoint,region=region,bucket=bucket,key=key,secret=secret\n:/path/a.csv", mopath)
+	require.Empty(t, query)
 
 	// file path
 	u, err = url.Parse("file:///tmp/dir/subdir/file.pdf")
@@ -133,9 +131,8 @@ func TestToPath(t *testing.T) {
 
 	mopath, query, err = s.ToPath()
 	require.Nil(t, err)
-	require.Equal(t, query, "")
-
-	require.Equal(t, mopath, "/tmp/dir/subdir/file.pdf")
+	require.Empty(t, query)
+	require.Equal(t, "/tmp/dir/subdir/file.pdf", mopath)
 
 	// hdfs path
 	u, err = url.Parse("hdfs://localhost:8080/dir/path.txt")
@@ -146,7 +143,7 @@ func TestToPath(t *testing.T) {
 		Status: ""}
 	mopath, _, err = s.ToPath()
 	require.Nil(t, err)
-	require.Equal(t, mopath, "hdfs,endpoint=localhost:8080\n:/dir/path.txt")
+	require.Equal(t, "hdfs,endpoint=localhost:8080\n:/dir/path.txt", mopath)
 
 	// invalid schema
 	u, err = url.Parse("https://localhost/path/file.pdf")

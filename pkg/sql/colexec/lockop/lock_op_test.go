@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	mock_lock "github.com/matrixorigin/matrixone/pkg/frontend/test/mock_lock"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
@@ -99,6 +100,7 @@ func TestLockWaitTimeoutUsesCurrentSessionValue(t *testing.T) {
 		nil,
 		nil,
 		nil)
+	proc.Base.IsFrontend = true
 	proc.SetResolveVariableFunc(func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
 		require.Equal(t, "lock_wait_timeout", varName)
 		require.True(t, isSystemVar)
@@ -113,6 +115,26 @@ func TestLockWaitTimeoutUsesCurrentSessionValue(t *testing.T) {
 
 	proc.GetSessionInfo().LockWaitTimeout = 0
 	require.Equal(t, 60*time.Second, lockWaitTimeout(proc, txnOp))
+
+	proc.Base.IsFrontend = false
+	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+		return int64(2), nil
+	})
+	require.Equal(t, 60*time.Second, lockWaitTimeout(proc, txnOp),
+		"background per-execution txn option must override the default resolver")
+	proc.GetSessionInfo().LockWaitTimeout = 4
+	require.Equal(t, 4*time.Second, lockWaitTimeout(proc, txnOp),
+		"background process-level per-execution option must have highest priority")
+
+	proc.GetSessionInfo().LockWaitTimeout = 0
+	proc.GetSessionInfo().LockWaitTimeoutSet = true
+	require.Equal(t, 2*time.Second, lockWaitTimeout(proc, txnOp),
+		"clearing an existing transaction override must fall back to the resolver")
+	proc.SetResolveVariableFunc(nil)
+	require.Equal(t,
+		time.Duration(defines.DefaultLockWaitTimeoutSeconds)*time.Second,
+		lockWaitTimeout(proc, txnOp),
+		"clearing without a resolver must use the rolling-upgrade-safe fallback, not the existing transaction timeout")
 }
 
 func TestLockOpHelpers(t *testing.T) {
@@ -157,6 +179,10 @@ func TestRefreshLockWaitOptionsReturnsTimeoutAfterDeadline(t *testing.T) {
 
 	_, err := refreshLockWaitOptions(options)
 	require.ErrorIs(t, err, lockservice.ErrLockTimeout)
+}
+
+func TestLockWaitTimeoutIsNotRetryable(t *testing.T) {
+	require.False(t, isRetryLockError(lockservice.ErrLockTimeout))
 }
 
 func TestLockOpTargetHelpers(t *testing.T) {

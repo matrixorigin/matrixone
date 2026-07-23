@@ -15,8 +15,6 @@
 package plan
 
 import (
-	"context"
-	"math"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -27,67 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/stretchr/testify/require"
 )
-
-func TestFloatDomainKeyNormalizesSignedZero(t *testing.T) {
-	operand := &domainFilterOperand{
-		hasCast: true,
-		castTyp: planpb.Type{Id: int32(types.T_float64)},
-	}
-	positiveKey, ok := constLiteralKeyForOperand(MakePlan2Float64ConstExprWithType(0), operand)
-	require.True(t, ok)
-	negativeKey, ok := constLiteralKeyForOperand(
-		MakePlan2Float64ConstExprWithType(math.Copysign(0, -1)), operand)
-	require.True(t, ok)
-	require.Equal(t, positiveKey, negativeKey)
-}
-
-func TestDomainLiteralRejectsUnevaluatedExplicitCast(t *testing.T) {
-	expr, err := appendCastBeforeExprWithName(
-		context.Background(),
-		MakePlan2Int64ConstExprWithType(42),
-		planpb.Type{Id: int32(types.T_decimal128), Width: 20, Scale: 0},
-		"cast_explicit",
-	)
-	require.NoError(t, err)
-
-	lit, typ, ok := unwrapConstLiteral(expr)
-	require.False(t, ok)
-	require.Nil(t, lit)
-	require.Equal(t, planpb.Type{}, typ)
-	require.Same(t, expr, stripConstLiteralCasts(expr))
-}
-
-func TestCompositeKeyMergeKeepsMixedNumericStringOr(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
-	builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, false)
-	tag := builder.genNewBindTag()
-	col := &planpb.Expr{
-		Typ:  planpb.Type{Id: int32(types.T_varchar)},
-		Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: tag, ColPos: 0, Name: "a"}},
-	}
-	left, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "=", []*planpb.Expr{
-		DeepCopyExpr(col), MakePlan2Int64ConstExprWithType(9007199254740992),
-	})
-	require.NoError(t, err)
-	_, _, ok := extractEqualConstForDomain(left)
-	require.False(t, ok)
-	_, kind, values := classifyDomainConjunct(left)
-	require.Equal(t, domainOther, kind)
-	require.Nil(t, values)
-	right, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "=", []*planpb.Expr{
-		DeepCopyExpr(col), MakePlan2Int64ConstExprWithType(9007199254740993),
-	})
-	require.NoError(t, err)
-	orExpr, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "or", []*planpb.Expr{left, right})
-	require.NoError(t, err)
-	merged, changed := builder.mergeEqualsInOr(DeepCopyExpr(orExpr))
-	require.False(t, changed)
-	require.Equal(t, "or", merged.GetF().GetFunc().GetObjName())
-
-	ret := builder.doMergeFiltersOnCompositeKey(makeExprOptCompositeSortKeyTableDef(), tag, orExpr)
-	require.Len(t, ret, 1)
-	require.Equal(t, "or", ret[0].GetF().GetFunc().GetObjName())
-}
 
 func TestDoMergeFiltersOnCompositeKeyKeepsNonSortKeyRanges(t *testing.T) {
 	ctx := NewMockCompilerContext(true)
@@ -119,95 +56,6 @@ func TestDoMergeFiltersOnCompositeKeyMergesSortKeyRanges(t *testing.T) {
 	ret := builder.doMergeFiltersOnCompositeKey(tableDef, tag, aEq, bGt, bLt)
 
 	requireFuncNames(t, ret, "in_range")
-}
-
-func TestCompositeKeyRewriteRejectsMixedNumericStringPredicates(t *testing.T) {
-	for _, tc := range []struct {
-		name     string
-		tableDef *planpb.TableDef
-	}{
-		{name: "primary key", tableDef: makeExprOptCompositeSortKeyTableDef()},
-		{name: "cluster by", tableDef: makeExprOptCompositeClusterKeyTableDef()},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			ctx := NewMockCompilerContext(true)
-			builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, false)
-			tag := builder.genNewBindTag()
-			tableDef := tc.tableDef
-			tableDef.Cols[1].Typ = planpb.Type{Id: int32(types.T_varchar)}
-			aEq := makeExprOptBinaryInt64Expr(t, ctx, "=", makeExprOptInt64Col(tag, 0, "a"), 1)
-			bCol := &planpb.Expr{
-				Typ: tableDef.Cols[1].Typ,
-				Expr: &planpb.Expr_Col{Col: &planpb.ColRef{
-					RelPos: tag, ColPos: 1, Name: "b",
-				}},
-			}
-			intConst := func(v int64) *planpb.Expr { return MakePlan2Int64ConstExprWithType(v) }
-			predicate := func(name string, args ...*planpb.Expr) *planpb.Expr {
-				return &planpb.Expr{Expr: &planpb.Expr_F{F: &planpb.Function{
-					Func: &planpb.ObjectRef{ObjName: name}, Args: args,
-				}}}
-			}
-			intList := &planpb.Expr{
-				Typ:  planpb.Type{Id: int32(types.T_int64)},
-				Expr: &planpb.Expr_List{List: &planpb.ExprList{List: []*planpb.Expr{intConst(2), intConst(10)}}},
-			}
-			param := &planpb.Expr{
-				Typ:  planpb.Type{Id: int32(types.T_any)},
-				Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}},
-			}
-			runtimeConst := &planpb.Expr{
-				Typ: planpb.Type{Id: int32(types.T_int64)},
-				Expr: &planpb.Expr_F{F: &planpb.Function{
-					Func: &planpb.ObjectRef{ObjName: "abs"}, Args: []*planpb.Expr{intConst(-2)},
-				}},
-			}
-
-			for _, pred := range []struct {
-				name    string
-				filters []*planpb.Expr
-			}{
-				{name: "paired range", filters: []*planpb.Expr{
-					predicate(">", DeepCopyExpr(bCol), intConst(2)),
-					predicate("<", DeepCopyExpr(bCol), intConst(10)),
-				}},
-				{name: "between", filters: []*planpb.Expr{
-					predicate("between", DeepCopyExpr(bCol), intConst(2), intConst(10)),
-				}},
-				{name: "in", filters: []*planpb.Expr{
-					predicate("in", DeepCopyExpr(bCol), intList),
-				}},
-				{name: "in range", filters: []*planpb.Expr{
-					predicate("in_range", DeepCopyExpr(bCol), intConst(2), intConst(10), makePlan2BoolConstExprWithType(true)),
-				}},
-				{name: "prepared parameter", filters: []*planpb.Expr{
-					predicate(">", DeepCopyExpr(bCol), param),
-				}},
-				{name: "runtime constant", filters: []*planpb.Expr{
-					predicate(">", DeepCopyExpr(bCol), runtimeConst),
-				}},
-			} {
-				t.Run(pred.name, func(t *testing.T) {
-					for _, filter := range pred.filters {
-						require.True(t, isUnsafeStringKeyPredicate(filter.GetF()))
-					}
-					filters := append([]*planpb.Expr{DeepCopyExpr(aEq)}, pred.filters...)
-					ret := builder.doMergeFiltersOnCompositeKey(tableDef, tag, filters...)
-					require.Len(t, ret, len(filters))
-					for _, filter := range pred.filters {
-						preserved := false
-						for _, candidate := range ret {
-							if candidate == filter {
-								preserved = true
-								break
-							}
-						}
-						require.True(t, preserved, "mixed predicate %s must remain unchanged", filter.GetF().Func.ObjName)
-					}
-				})
-			}
-		})
-	}
 }
 
 func TestDoMergeFiltersOnCompositeKeySupportsFoldedInVector(t *testing.T) {

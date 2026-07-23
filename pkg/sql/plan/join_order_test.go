@@ -17,33 +17,10 @@ package plan
 import (
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
-
-func TestIsEquiCondRejectsMixedExactNumericString(t *testing.T) {
-	ctx := NewMockCompilerContext(true)
-	const leftTag, rightTag int32 = 1, 2
-	leftTags := map[int32]bool{leftTag: true}
-	rightTags := map[int32]bool{rightTag: true}
-	makeCond := func(leftType, rightType types.T) *plan.Expr {
-		expr, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "=", []*plan.Expr{
-			GetColExpr(plan.Type{Id: int32(leftType)}, leftTag, 0),
-			GetColExpr(plan.Type{Id: int32(rightType)}, rightTag, 0),
-		})
-		require.NoError(t, err)
-		return expr
-	}
-
-	mixed := makeCond(types.T_varchar, types.T_int64)
-	compatible := makeCond(types.T_int64, types.T_int64)
-	require.False(t, isEquiCond(mixed, leftTags, rightTags))
-	require.False(t, IsEquiJoin2([]*plan.Expr{mixed}))
-	require.True(t, isEquiCond(compatible, leftTags, rightTags))
-	require.True(t, IsEquiJoin2([]*plan.Expr{compatible}))
-}
 
 func TestSetParentRejectsJoinGraphCycle(t *testing.T) {
 	vertices := makeJoinVertices(3)

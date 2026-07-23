@@ -15,7 +15,8 @@
 package cache
 
 import (
-	"sort"
+	"cmp"
+	"slices"
 	"strings"
 	"sync"
 
@@ -582,7 +583,7 @@ func ParseColumnsBatchAnd(bat *batch.Batch, f func(map[TableItemKey]Columns)) {
 }
 
 func InitTableItemWithColumns(item *TableItem, cols Columns) {
-	sort.Sort(cols)
+	slices.SortFunc(cols, func(a, b catalog.Column) int { return cmp.Compare(a.Num, b.Num) })
 	coldefs := make([]engine.TableDef, 0, len(cols))
 	for i, col := range cols {
 		if col.ConstraintType == catalog.SystemColPKConstraint {
@@ -852,24 +853,26 @@ func getTableDef(tblItem *TableItem, coldefs []engine.TableDef) (*plan.TableDef,
 	}
 
 	return &plan.TableDef{
-		TblId:         tblItem.Id,
-		Name:          tblItem.Name,
-		DbName:        tblItem.DatabaseName,
-		Cols:          cols,
-		Name2ColIndex: name2index,
-		Defs:          defs,
-		TableType:     TableType,
-		Createsql:     Createsql,
-		Pkey:          primarykey,
-		ViewSql:       viewSql,
-		Fkeys:         foreignKeys,
-		RefChildTbls:  refChildTbls,
-		ClusterBy:     clusterByDef,
-		Indexes:       indexes,
-		Version:       tblItem.Version,
-		DbId:          tblItem.DatabaseId,
-		Partition:     partition,
-		FeatureFlag:   tblItem.ExtraInfo.GetFeatureFlag(),
-		LogicalId:     tblItem.LogicalId,
+		TblId:          tblItem.Id,
+		Name:           tblItem.Name,
+		DbName:         tblItem.DatabaseName,
+		Cols:           cols,
+		Name2ColIndex:  name2index,
+		Defs:           defs,
+		TableType:      TableType,
+		Createsql:      Createsql,
+		Pkey:           primarykey,
+		ViewSql:        viewSql,
+		Fkeys:          foreignKeys,
+		RefChildTbls:   refChildTbls,
+		ClusterBy:      clusterByDef,
+		Indexes:        indexes,
+		Version:        tblItem.Version,
+		DbId:           tblItem.DatabaseId,
+		Partition:      partition,
+		FeatureFlag:    tblItem.ExtraInfo.GetFeatureFlag(),
+		AutoIncrOffset: tblItem.ExtraInfo.GetAutoIncrOffset(),
+		AutoIncrEpoch:  tblItem.ExtraInfo.GetAutoIncrEpoch(),
+		LogicalId:      tblItem.LogicalId,
 	}, tableDef
 }

@@ -351,8 +351,8 @@ func checkIfNeedReGenAutoIncrCol(bat *batch.Batch, preInsert *PreInsert) map[str
 
 	var pkSet map[string]bool
 	if preInsert.TableDef.IsTemporary || preInsert.TableDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
-		// 1. currently temporary table is supported by memory engine, this distinction should be removed after refactoring
-		// 2. for __mo_fake_pk_col, user can not specify the value for this column, so no need to check
+		// Temporary tables and internal fake primary keys skip the persistent duplicate probe.
+		// Users cannot provide values for __mo_fake_pk_col.
 	} else {
 		pkSet = make(map[string]bool)
 		for _, n := range preInsert.TableDef.Pkey.Names {

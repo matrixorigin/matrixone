@@ -244,15 +244,20 @@ select cast(col9 as double) from t8;
 1.2345678904345465  𝄀
 111.22233334444556
 delete from t8 where col9 is not NULL;
-insert into  t8(col9) values ('1000000000000000000000000000000000000000');
-insert into  t8(col9) values (1000000000000000000000000000000000000000);
+insert into t8(col9) values ('1000000000000000000000000000000000000000');
 select cast(col9 as float) from t8;
 ➤ cast(col9 as float)[7,24,0]  𝄀
-3.4028235E38  𝄀
 3.4028235E38
 select cast(col9 as double) from t8;
 ➤ cast(col9 as double)[8,54,0]  𝄀
-1.0E39  𝄀
+1.0E39
+delete from t8 where col9 is not NULL;
+insert into t8(col9) values (1000000000000000000000000000000000000000);
+select cast(col9 as float) from t8;
+➤ cast(col9 as float)[7,24,0]  𝄀
+3.4028235E38
+select cast(col9 as double) from t8;
+➤ cast(col9 as double)[8,54,0]  𝄀
 1.0E39
 delete from t8 where col9 is not NULL;
 insert into t8(col10) values ('this is a char type');
@@ -328,11 +333,17 @@ delete from t8 where col12 is not NULL;
 insert into t8(col13) values ('12345.123456789');
 insert into t8(col13) values (12345.123456789);
 select cast(col13 as decimal(5,3)) from t8;
-invalid input: 12345.123456789 beyond the range, can't be converted to Decimal64(5,3).
+➤ cast(col13 as decimal(5, 3))[3,5,3]  𝄀
+99.999  𝄀
+99.999
 insert into t8(col13) values ('1.234567');
 insert into t8(col13) values (1.234567);
 select cast(col13 as decimal(5,3)) from t8;
-invalid input: 12345.123456789 beyond the range, can't be converted to Decimal64(5,3).
+➤ cast(col13 as decimal(5, 3))[3,5,3]  𝄀
+99.999  𝄀
+99.999  𝄀
+1.235  𝄀
+1.235
 select cast(col13 as decimal(20,15)) from t8;
 ➤ cast(col13 as decimal(20, 15))[3,20,15]  𝄀
 12345.123456789000000  𝄀
