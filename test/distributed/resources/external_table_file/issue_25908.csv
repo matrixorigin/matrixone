@@ -1,2 +1,2 @@
-normal,ledger,customer-a,first
-other,cash,customer-b,second
+normal,ledger,customer-a,first,row-account,dotted-account,dotted-filepath
+other,cash,customer-b,second,other-account,other-dotted-account,other-dotted-filepath

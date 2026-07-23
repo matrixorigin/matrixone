@@ -985,16 +985,10 @@ func TestClassifyFilters_OrFilepathAndLiteral(t *testing.T) {
 			"re-appending it to rowFilters if FilterFileList refuses to consume it")
 }
 
-// TestFilterFileList_LeavesUnconsumedOrFilterInNode locks the exact side-effect
-// contract that compile.getHivePartitionFileList depends on: when FilterFileList
-// is handed an OR(filepath, literal) filter, its isFileLevelFilter check
-// rejects it (OR branches must each reference a filepath col), and the rejected
-// filter is written back via node.FilterList. compile.go appends tmpNode.FilterList
-// onto rowFilters so the runtime still evaluates the predicate; without that
-// append, the filter is silently dropped. If a future change has FilterFileList
-// consume such filters, or uses a different side-effect pattern (e.g. returning
-// leftover filters), this test goes red and the compile side must be audited.
-func TestFilterFileList_LeavesUnconsumedOrFilterInNode(t *testing.T) {
+// TestFilterFileList_ReturnsUnconsumedOrFilter locks the non-mutating contract:
+// rejected filepath predicates are returned explicitly so the compile layer can
+// retain them as row filters without consuming the reusable plan.
+func TestFilterFileList_ReturnsUnconsumedOrFilter(t *testing.T) {
 	proc := testutil.NewProc(t)
 
 	td := makeTableDef("year", catalog.ExternalFilePath)
@@ -1010,11 +1004,12 @@ func TestFilterFileList_LeavesUnconsumedOrFilterInNode(t *testing.T) {
 	tmpNode := &plan.Node{
 		TableDef:   td,
 		FilterList: []*plan.Expr{orExpr},
+		ExternScan: &plan.ExternScan{Type: int32(plan.ExternType_EXTERNAL_TB)},
 	}
 	fileList := []string{"/warehouse/data/year=2024/f.parquet"}
 	fileSize := []int64{123}
 
-	outFileList, outFileSize, err := FilterFileList(proc.Ctx, tmpNode, proc, fileList, fileSize)
+	outFileList, outFileSize, leftover, err := FilterFileList(proc.Ctx, tmpNode, proc, fileList, fileSize)
 	require.NoError(t, err)
 
 	// isFileLevelFilter rejected the OR, so filterList in filterByAccountAndFilename
@@ -1023,12 +1018,11 @@ func TestFilterFileList_LeavesUnconsumedOrFilterInNode(t *testing.T) {
 	assert.Equal(t, fileList, outFileList)
 	assert.Equal(t, fileSize, outFileSize)
 
-	// And tmpNode.FilterList must still hold the unconsumed predicate. This is
-	// what compile.getHivePartitionFileList `append`s back onto rowFilters.
-	require.Equal(t, 1, len(tmpNode.FilterList),
-		"unconsumed OR(filepath, literal) filter must remain in tmpNode.FilterList")
-	assert.Same(t, orExpr, tmpNode.FilterList[0],
-		"tmpNode.FilterList must hold the exact expression for compile.go to re-append")
+	require.Equal(t, 1, len(leftover),
+		"unconsumed OR(filepath, literal) filter must be returned to the caller")
+	assert.Same(t, orExpr, leftover[0])
+	require.Equal(t, []*plan.Expr{orExpr}, tmpNode.FilterList,
+		"FilterFileList must not mutate the reusable node")
 }
 
 // ---------------------------------------------------------------------------
