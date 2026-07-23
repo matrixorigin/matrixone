@@ -16,11 +16,12 @@ package fileservice
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"io"
 	"iter"
 	"sync"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 type objectStorageSemaphore struct {
@@ -42,6 +43,15 @@ func (o *objectStorageSemaphore) acquire() {
 	o.semaphore <- struct{}{}
 }
 
+func (o *objectStorageSemaphore) acquireContext(ctx context.Context) error {
+	select {
+	case o.semaphore <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 func (o *objectStorageSemaphore) release() {
 	<-o.semaphore
 }
@@ -60,17 +70,17 @@ func (o *objectStorageSemaphore) CopyObject(
 	if !ok {
 		return false, nil
 	}
-	select {
-	case o.semaphore <- struct{}{}:
-	case <-ctx.Done():
-		return false, ctx.Err()
+	if err := o.acquireContext(ctx); err != nil {
+		return false, err
 	}
 	defer o.release()
 	return copier.CopyObject(ctx, src, srcKey, dstKey)
 }
 
 func (o *objectStorageSemaphore) Delete(ctx context.Context, keys ...string) (err error) {
-	o.acquire()
+	if err := o.acquireContext(ctx); err != nil {
+		return err
+	}
 	defer o.release()
 	return o.upstream.Delete(ctx, keys...)
 }

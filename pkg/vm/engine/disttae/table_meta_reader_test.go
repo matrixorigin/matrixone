@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -25,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -34,6 +36,35 @@ import (
 	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/require"
 )
+
+type loadCleanupFileService struct {
+	fileservice.FileService
+	err            error
+	waitForContext bool
+	deleteCalled   bool
+	entered        chan struct{}
+	release        chan struct{}
+}
+
+func (f *loadCleanupFileService) Delete(ctx context.Context, _ ...string) error {
+	f.deleteCalled = true
+	if f.entered != nil {
+		close(f.entered)
+	}
+	if f.release != nil {
+		select {
+		case <-f.release:
+			return f.err
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	if f.waitForContext {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	return f.err
+}
 
 func TestTableMetaReaderRecordsCloneObjectOwnership(t *testing.T) {
 	tbl := newTxnTableForTest()
@@ -165,9 +196,10 @@ func TestTrackLoadFilesDeletesOnlyRolledBackGeneration(t *testing.T) {
 	require.True(t, txn.engine.cloneTxnCache.IsSharedFile(txnOp.Txn().ID, first))
 	require.True(t, txn.engine.cloneTxnCache.IsSharedFile(txnOp.Txn().ID, second))
 
-	txn.Lock()
 	statementID := 2
-	err := txn.deleteLoadFilesLocked(ctx, &statementID)
+	deleted, err := txn.deleteLoadFiles(ctx, &statementID)
+	txn.Lock()
+	txn.removeLoadFileProtectionsLocked(deleted)
 	txn.Unlock()
 	require.NoError(t, err)
 	_, err = fs.StatFile(ctx, first)
@@ -177,13 +209,98 @@ func TestTrackLoadFilesDeletesOnlyRolledBackGeneration(t *testing.T) {
 	require.False(t, txn.engine.cloneTxnCache.IsSharedFile(txnOp.Txn().ID, second))
 	require.True(t, txn.engine.cloneTxnCache.IsSharedFile(txnOp.Txn().ID, first))
 
+	deleted, err = txn.deleteLoadFiles(ctx, nil)
 	txn.Lock()
-	err = txn.deleteLoadFilesLocked(ctx, nil)
+	txn.removeLoadFileProtectionsLocked(deleted)
 	txn.Unlock()
 	require.NoError(t, err)
 	_, err = fs.StatFile(ctx, first)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound))
 	require.False(t, txn.engine.cloneTxnCache.IsSharedFile(txnOp.Txn().ID, first))
+}
+
+func TestLoadFileCleanupFailureDoesNotAbortTransactionTeardown(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		deleteErr      error
+		waitForContext bool
+		timeout        time.Duration
+	}{
+		{name: "delete error", deleteErr: errors.New("delete failed")},
+		{name: "blocked delete", waitForContext: true, timeout: 20 * time.Millisecond},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			baseFS := newCleanFS(t)
+			fs := &loadCleanupFileService{
+				FileService:    baseFS,
+				err:            tc.deleteErr,
+				waitForContext: tc.waitForContext,
+			}
+			txnOp, closeFn := client.NewTestTxnOperator(ctx)
+			defer closeFn()
+			colexec.NewServer("")
+			txn := &Transaction{
+				engine:             &Engine{cloneTxnCache: newCloneTxnCache(), fs: fs},
+				op:                 txnOp,
+				loadCleanupTimeout: tc.timeout,
+			}
+			txnOp.AddWorkspace(txn)
+			txn.SetCloneTxn(1)
+			name := mockStatsList(t, 1)[0].ObjectName().String()
+			txn.TrackLoadFiles(name)
+
+			start := time.Now()
+			err := txn.Rollback(ctx)
+			require.Error(t, err)
+			require.True(t, fs.deleteCalled)
+			require.True(t, txn.removed)
+			require.False(t, txn.engine.cloneTxnCache.IsSharedFile(txnOp.Txn().ID, name))
+			if tc.waitForContext {
+				require.ErrorIs(t, err, context.DeadlineExceeded)
+				require.Less(t, time.Since(start), time.Second)
+			} else {
+				require.ErrorIs(t, err, tc.deleteErr)
+			}
+		})
+	}
+}
+
+func TestLoadFileCleanupDoesNotHoldTransactionMutex(t *testing.T) {
+	ctx := context.Background()
+	baseFS := newCleanFS(t)
+	fs := &loadCleanupFileService{
+		FileService: baseFS,
+		entered:     make(chan struct{}),
+		release:     make(chan struct{}),
+	}
+	txnOp, closeFn := client.NewTestTxnOperator(ctx)
+	defer closeFn()
+	txn := &Transaction{
+		engine: &Engine{cloneTxnCache: newCloneTxnCache(), fs: fs},
+		op:     txnOp,
+	}
+	txnOp.AddWorkspace(txn)
+	txn.SetCloneTxn(1)
+	txn.TrackLoadFiles(mockStatsList(t, 1)[0].ObjectName().String())
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := txn.deleteLoadFiles(ctx, nil)
+		done <- err
+	}()
+	<-fs.entered
+	released := false
+	defer func() {
+		if !released {
+			close(fs.release)
+		}
+	}()
+	require.True(t, txn.TryLock(), "file deletion must not hold the transaction mutex")
+	txn.Unlock()
+	close(fs.release)
+	released = true
+	require.NoError(t, <-done)
 }
 
 func TestCloneTxnIntermediateGCKeepsTxnLocalSharedObjects(t *testing.T) {

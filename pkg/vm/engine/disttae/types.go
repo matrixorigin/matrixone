@@ -448,6 +448,7 @@ type Transaction struct {
 	haveDDL             atomic.Bool
 	isCloneTxn          bool
 	loadFiles           map[int]map[string]struct{}
+	loadCleanupTimeout  time.Duration
 	isCCPRTxn           bool
 	ccprTaskID          string
 	syncProtectionJobID string
@@ -509,40 +510,84 @@ func (txn *Transaction) TrackLoadFiles(names ...string) {
 	}
 }
 
-func (txn *Transaction) deleteLoadFilesLocked(ctx context.Context, statementID *int) error {
+const defaultLoadFileCleanupTimeout = 2 * time.Minute
+
+// deleteLoadFiles attempts physical cleanup after statement execution has
+// stopped. It never holds the transaction mutex across file-service I/O.
+// Successfully deleted names are returned with their clone-GC protection still
+// installed; the caller removes that protection only after ordinary workspace
+// GC has inspected the same generation.
+func (txn *Transaction) deleteLoadFiles(
+	ctx context.Context,
+	statementID *int,
+) (deleted []string, err error) {
+	txn.Lock()
 	if len(txn.loadFiles) == 0 {
-		return nil
+		txn.Unlock()
+		return nil, nil
 	}
-	names := make([]string, 0)
+	selectedIDs := make([]int, 0, len(txn.loadFiles))
+	nameSet := make(map[string]struct{})
 	for id, files := range txn.loadFiles {
 		if statementID != nil && id != *statementID {
 			continue
 		}
+		selectedIDs = append(selectedIDs, id)
 		for name := range files {
-			names = append(names, name)
+			nameSet[name] = struct{}{}
 		}
+	}
+	txn.Unlock()
+
+	names := make([]string, 0, len(nameSet))
+	for name := range nameSet {
+		names = append(names, name)
 	}
 	slices.Sort(names)
 	// Rollback commonly runs after its request context has been canceled. Keep
 	// cleanup independent from that cancellation, but bounded so a failed file
 	// service cannot hold transaction locks forever.
-	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
+	timeout := txn.loadCleanupTimeout
+	if timeout <= 0 {
+		timeout = defaultLoadFileCleanupTimeout
+	}
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
 	defer cancel()
 	for start := 0; start < len(names); start += GCBatchOfFileCount {
 		end := min(start+GCBatchOfFileCount, len(names))
 		if err := txn.engine.fs.Delete(cleanupCtx, names[start:end]...); err != nil {
-			return err
+			return deleted, err
 		}
-		for _, name := range names[start:end] {
-			txn.engine.cloneTxnCache.RemoveSharedFile(txn.op.Txn().ID, name)
+		deleted = append(deleted, names[start:end]...)
+		txn.Lock()
+		for _, id := range selectedIDs {
+			files := txn.loadFiles[id]
+			for _, name := range names[start:end] {
+				delete(files, name)
+			}
+			if len(files) == 0 {
+				delete(txn.loadFiles, id)
+			}
+		}
+		txn.Unlock()
+	}
+	return deleted, nil
+}
+
+func (txn *Transaction) removeLoadFileProtectionsLocked(names []string) {
+	txnID := txn.op.Txn().ID
+	for _, name := range names {
+		stillTracked := false
+		for _, files := range txn.loadFiles {
+			if _, ok := files[name]; ok {
+				stillTracked = true
+				break
+			}
+		}
+		if !stillTracked {
+			txn.engine.cloneTxnCache.RemoveSharedFile(txnID, name)
 		}
 	}
-	if statementID == nil {
-		clear(txn.loadFiles)
-	} else {
-		delete(txn.loadFiles, *statementID)
-	}
-	return nil
 }
 
 // SetCCPRTxn marks this transaction as a CCPR transaction.
@@ -1106,13 +1151,12 @@ func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
 			)
 		})
 	}()
+	deletedLoadFiles, loadCleanupErr := txn.deleteLoadFiles(ctx, &txn.statementID)
+
 	txn.Lock()
 	defer txn.Unlock()
 
 	beforeEntries = len(txn.writes)
-	if err := txn.deleteLoadFilesLocked(ctx, &txn.statementID); err != nil {
-		return err
-	}
 
 	txn.rollbackCount++
 	if txn.statementID > 0 {
@@ -1165,7 +1209,8 @@ func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
 
 	// current statement has been rolled back, make can call IncrStatementID again.
 	txn.incrStatementCalled = false
-	return nil
+	txn.removeLoadFileProtectionsLocked(deletedLoadFiles)
+	return loadCleanupErr
 }
 
 func (txn *Transaction) IncrSQLCount() {

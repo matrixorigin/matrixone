@@ -50,6 +50,17 @@ func TestObjectStorageSemaphoreCopyObject(t *testing.T) {
 	<-blocked.semaphore
 }
 
+func TestObjectStorageSemaphoreDeleteObservesContextWhileWaiting(t *testing.T) {
+	wrapped := newObjectStorageSemaphore(dummyObjectStorage{}, 1)
+	wrapped.semaphore <- struct{}{}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := wrapped.Delete(ctx, "object")
+	require.ErrorIs(t, err, context.Canceled)
+	<-wrapped.semaphore
+}
+
 func TestObjectStorageSemaphoreSerializes(t *testing.T) {
 	start := make(chan struct{}, 2)
 	wait := make(chan struct{})
