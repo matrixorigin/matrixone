@@ -106,6 +106,21 @@ func planListContainsParamPos(exprs []*planpb.Expr, pos int32) bool {
 	return false
 }
 
+func preparedPlanReusesGroupedColumn(prepare *planpb.Prepare) bool {
+	for _, node := range prepare.GetPlan().GetQuery().Nodes {
+		if node.NodeType != planpb.Node_AGG || len(node.GroupBy) == 0 || len(node.ProjectList) == 0 {
+			continue
+		}
+		// GroupBinder marks SELECT expressions reused by GROUP BY with the
+		// aggregate's synthetic relation (-1), rather than rebinding the scan
+		// expression (or wrapping it in any_value).
+		if col := node.ProjectList[0].GetCol(); col != nil && col.RelPos == -1 {
+			return true
+		}
+	}
+	return false
+}
+
 func TestPreparedAggregateParametersAreDiscoveredAndExecutable(t *testing.T) {
 	for _, function := range []string{"min", "max", "count", "group_concat"} {
 		t.Run(function, func(t *testing.T) {
@@ -139,6 +154,18 @@ func TestPreparedNestedGroupMarkerStaysIndependent(t *testing.T) {
 	prepare := buildPreparedAggregatePlan(t, "select (? + 0) as k, sum(n_nationkey) from nation group by (? + 0)")
 	require.Len(t, prepare.ParamTypes, 2)
 	require.Equal(t, []int32{0, 1}, preparedParamPositions(prepare))
+}
+
+func TestPreparedParameterizedGroupAliasAndOrdinalReuseGroupedColumn(t *testing.T) {
+	for _, groupBy := range []string{"x", "1"} {
+		t.Run(groupBy, func(t *testing.T) {
+			prepare := buildPreparedAggregatePlan(t,
+				fmt.Sprintf("select n_nationkey + ? as x, count(*) from nation group by %s", groupBy))
+			require.Len(t, prepare.ParamTypes, 1)
+			require.Equal(t, []int32{0}, preparedParamPositions(prepare))
+			require.True(t, preparedPlanReusesGroupedColumn(prepare))
+		})
+	}
 }
 
 func TestPreparedEqualLookingAggregatesStayIndependent(t *testing.T) {
