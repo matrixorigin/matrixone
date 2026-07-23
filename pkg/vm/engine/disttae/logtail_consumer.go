@@ -1920,6 +1920,17 @@ func (s *logTailSubscriber) ready() bool {
 func (s *logTailSubscriber) waitReady(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// If ctx is already cancelled, return immediately. We check this before
+	// registering AfterFunc to avoid unnecessary callback registration.
+	// Note: context.AfterFunc always runs its callback in a separate goroutine,
+	// never synchronously in the caller's goroutine.
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	// sync.Cond cannot observe context cancellation itself. Register the
+	// wakeup while holding the same mutex as Wait: if cancellation races the
+	// ctx.Err check above, the callback waits for Wait to atomically release
+	// the lock and then broadcasts, so no wakeup can be lost.
 	stop := context.AfterFunc(ctx, func() {
 		s.mu.Lock()
 		s.mu.cond.Broadcast()

@@ -265,6 +265,46 @@ func Test_exportDataToCSVFile(t *testing.T) {
 		convey.So(exportDataFromResultSetToCSVFile(ep), convey.ShouldBeNil)
 	})
 
+	// Guards the narrow-vector export path: bf16/f16/int8 are emitted as their
+	// distinct slice types and vecuint8 as its display string (see
+	// extractRowFromVector). Before the fix the VARCHAR branch only special-cased
+	// []float32/[]float64 and then did value.([]byte) — a panic for []types.BF16 /
+	// []types.Float16 / []int8 and raw-byte corruption for []uint8.
+	convey.Convey("exportDataFromResultSetToCSVFile narrow vectors", t, func() {
+		ep := &ExportConfig{
+			userConfig: &tree.ExportParam{
+				Lines:    &tree.Lines{TerminatedBy: &tree.Terminated{}},
+				Fields:   &tree.Fields{Terminated: &tree.Terminated{}, EnclosedBy: &tree.EnclosedBy{}, EscapedBy: &tree.EscapedBy{}},
+				Header:   true,
+				FilePath: "test/export_narrow.csv",
+			},
+			mrs: &MysqlResultSet{},
+		}
+		col := make([]MysqlColumn, 4)
+		for i := range col {
+			col[i].SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+			ep.mrs.AddColumn(&col[i])
+		}
+		f32 := []float32{1, 2, 3}
+		data := make([]interface{}, len(col))
+		data[0] = types.Float32ToBF16Slice(f32)                // bf16 slice
+		data[1] = types.Float32ToFloat16Slice(f32)             // f16 slice
+		data[2] = []int8{1, 2, 3}                              // int8 slice
+		data[3] = types.ArrayToString[uint8]([]uint8{1, 2, 3}) // uint8 display string
+		ep.mrs.AddRow(data)
+		ep.Symbol = make([][]byte, len(col))
+		ep.ColumnFlag = make([]bool, len(col))
+
+		stubs := gostub.StubFunc(&Close, nil)
+		defer stubs.Reset()
+		stubs = gostub.StubFunc(&openNewFile, nil)
+		defer stubs.Reset()
+		stubs = gostub.StubFunc(&writeDataToCSVFile, nil)
+		defer stubs.Reset()
+
+		convey.So(exportDataFromResultSetToCSVFile(ep), convey.ShouldBeNil)
+	})
+
 	convey.Convey("exportDataToCSVFile fail", t, func() {
 		ep := &ExportConfig{
 			userConfig: &tree.ExportParam{

@@ -54,6 +54,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -588,6 +589,82 @@ func TestCompileShuffleGroupUsesLocalPathWhenScopeMcpuMatchesDop(t *testing.T) {
 	require.Equal(t, int32(0), shuffleOp.CurrentShuffleIdx)
 }
 
+func TestCompileShuffleGroupKeepsNestedShuffleLocal(t *testing.T) {
+	c := newCompileForShuffleGroupTest(t)
+	aggNode, nodes := newShuffleGroupTestNodes(16)
+	scope := newShuffleGroupInputScope(t, 16)
+	inner := shuffle.NewArgument()
+	inner.BucketNum = 16
+	scope.setRootOperator(inner)
+	scope.setRootOperator(colexec.NewMockOperator())
+
+	result := c.compileShuffleGroup(aggNode, []*Scope{scope}, nodes)
+
+	require.Len(t, result, 1)
+	require.Same(t, scope, result[0])
+	require.IsType(t, &group.Group{}, result[0].RootOp)
+	outer, ok := result[0].RootOp.GetOperatorBase().GetChildren(0).(*shuffle.Shuffle)
+	require.True(t, ok)
+	require.False(t, outer.DrainAllBuckets)
+	middle := outer.GetOperatorBase().GetChildren(0)
+	nestedInner, ok := middle.GetOperatorBase().GetChildren(0).(*shuffle.Shuffle)
+	require.True(t, ok)
+	require.False(t, nestedInner.DrainAllBuckets)
+}
+
+func TestCompileShuffleJoinKeepsNestedShuffleLocal(t *testing.T) {
+	const dop = int32(16)
+	for _, nestedSide := range []string{"probe", "build"} {
+		t.Run(nestedSide, func(t *testing.T) {
+			c := newCompileForShuffleJoinTest(t, engine.Nodes{{Addr: "cn1:6001", Mcpu: int(dop)}})
+			node := newShuffleJoinTestNode(dop)
+			node.Stats.HashmapStats.ShuffleMethod = plan.ShuffleMethod_Normal
+			left := &plan.Node{Stats: &plan.Stats{Dop: dop}}
+			right := &plan.Node{Stats: &plan.Stats{Dop: dop}}
+			probe := newShuffleJoinTestScope(t, c.cnList[0], int(dop))
+			build := newShuffleJoinTestScope(t, c.cnList[0], int(dop))
+
+			inner := shuffle.NewArgument()
+			inner.BucketNum = dop
+			if nestedSide == "probe" {
+				probe.setRootOperator(inner)
+				probe.setRootOperator(colexec.NewMockOperator())
+			} else {
+				build.setRootOperator(inner)
+				build.setRootOperator(colexec.NewMockOperator())
+			}
+
+			result := c.compileShuffleJoin(node, left, right, []*Scope{probe}, []*Scope{build})
+
+			require.Len(t, result, 1,
+				"the asynchronous local exchange permits nested fixed-bucket shuffles")
+			require.Same(t, probe, result[0])
+			_, probeIsDispatch := probe.RootOp.(*dispatch.Dispatch)
+			_, buildIsDispatch := build.RootOp.(*dispatch.Dispatch)
+			require.False(t, probeIsDispatch)
+			require.False(t, buildIsDispatch)
+		})
+	}
+}
+
+func TestCompileShuffleJoinKeepsReusableLocalShuffle(t *testing.T) {
+	const dop = int32(4)
+	c := newCompileForShuffleJoinTest(t, engine.Nodes{{Addr: "cn1:6001", Mcpu: int(dop)}})
+	node := newShuffleJoinTestNode(dop)
+	left := &plan.Node{Stats: &plan.Stats{Dop: dop}}
+	right := &plan.Node{Stats: &plan.Stats{Dop: dop}}
+	probe := newShuffleJoinTestScope(t, c.cnList[0], int(dop))
+	build := newShuffleJoinTestScope(t, c.cnList[0], int(dop))
+	inner := shuffle.NewArgument()
+	inner.BucketNum = dop
+	probe.setRootOperator(inner)
+
+	result := c.compileShuffleJoin(node, left, right, []*Scope{probe}, []*Scope{build})
+
+	require.Len(t, result, 1,
+		"reusing an existing probe partition must keep the single local fast path")
+}
+
 func newCompileForShuffleGroupTest(t *testing.T) *Compile {
 	c := NewMockCompile(t)
 	c.execType = plan2.ExecTypeAP_ONECN
@@ -784,6 +861,10 @@ func newShuffleJoinTestNode(dop int32) *plan.Node {
 			Expr: &plan.Expr_F{F: &plan.Function{
 				Args: []*plan.Expr{leftCol, rightCol},
 			}},
+		}},
+		SendMsgList: []plan.MsgHeader{{
+			MsgType: int32(message.MsgJoinMap),
+			MsgTag:  1,
 		}},
 	}
 }

@@ -20,6 +20,7 @@ import (
 	"testing"
 	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/stretchr/testify/require"
 )
 
@@ -121,6 +122,146 @@ func TestMP(t *testing.T) {
 
 }
 
+func TestMPoolFailedAllocationDoesNotAdvanceResourcePeak(t *testing.T) {
+	mp, err := NewMPool("failed-allocation-peak", 1<<20, NoFixed)
+	require.NoError(t, err)
+	defer DeleteMPool(mp)
+
+	_, err = mp.Alloc(2<<20, true)
+	require.Error(t, err)
+	summary, flags := mp.ResourceSnapshot()
+	require.Zero(t, flags)
+	require.Zero(t, summary.AllocatedBytes)
+	require.Zero(t, summary.FreedBytes)
+	require.Zero(t, summary.PeakLiveBytes)
+	require.Zero(t, summary.LiveBytesAtSeal)
+}
+
+func TestMPoolResourcePeakEpochKeepsRetainedBaseline(t *testing.T) {
+	mp := MustNew("resource-epoch")
+	defer DeleteMPool(mp)
+
+	first, err := mp.Alloc(100, true)
+	require.NoError(t, err)
+	second, err := mp.Alloc(200, true)
+	require.NoError(t, err)
+	require.Equal(t, int64(300), mp.Stats().HighWaterMark.Load())
+
+	summary, flags := mp.ResourceSnapshot()
+	require.Equal(t, resource.QualityNonZeroLiveAtSeal, flags)
+	require.Equal(t, uint64(300), summary.AllocatedBytes)
+	require.Equal(t, uint64(300), summary.PeakLiveBytes)
+	require.Equal(t, uint64(300), summary.LiveBytesAtSeal)
+	epoch := mp.StartResourcePeakEpoch()
+	require.NotNil(t, epoch)
+	peak, exact := mp.ResourcePeakLiveBytes(epoch)
+	require.True(t, exact)
+	require.Equal(t, uint64(300), peak)
+	third, err := mp.Alloc(50, true)
+	require.NoError(t, err)
+	peak, exact = mp.ResourcePeakLiveBytes(epoch)
+	require.True(t, exact)
+	require.Equal(t, uint64(350), peak)
+	mp.Free(third)
+
+	mp.Free(first)
+	mp.Free(second)
+	summary, flags = mp.ResourceSnapshot()
+	require.Zero(t, flags)
+	require.Equal(t, uint64(350), summary.AllocatedBytes)
+	require.Equal(t, uint64(350), summary.FreedBytes)
+	require.Equal(t, uint64(350), summary.PeakLiveBytes)
+	require.Zero(t, summary.LiveBytesAtSeal)
+	endedPeak, ended := mp.EndResourcePeakEpoch(epoch)
+	require.True(t, ended)
+	require.Equal(t, uint64(350), endedPeak)
+	peak, exact = mp.ResourcePeakLiveBytes(epoch)
+	require.True(t, exact)
+	require.Equal(t, endedPeak, peak)
+	epoch = mp.StartResourcePeakEpoch()
+	require.NotNil(t, epoch)
+	peak, exact = mp.ResourcePeakLiveBytes(epoch)
+	require.True(t, exact)
+	require.Zero(t, peak)
+	_, ended = mp.EndResourcePeakEpoch(epoch)
+	require.True(t, ended)
+}
+
+func TestMPoolResourcePeakEpochRejectsOverlapAndStaleEnd(t *testing.T) {
+	mp := MustNew("resource-epoch-overlap")
+	defer DeleteMPool(mp)
+	other := MustNew("resource-epoch-other")
+	defer DeleteMPool(other)
+
+	first := mp.StartResourcePeakEpoch()
+	require.NotNil(t, first)
+	require.Nil(t, mp.StartResourcePeakEpoch())
+	wrong := &ResourcePeakEpoch{}
+	_, ok := mp.EndResourcePeakEpoch(wrong)
+	require.False(t, ok)
+	otherEpoch := other.StartResourcePeakEpoch()
+	require.NotNil(t, otherEpoch)
+	_, ok = mp.EndResourcePeakEpoch(otherEpoch)
+	require.False(t, ok)
+	_, ok = other.EndResourcePeakEpoch(otherEpoch)
+	require.True(t, ok)
+	peak, ok := mp.EndResourcePeakEpoch(first)
+	require.True(t, ok)
+	require.Zero(t, peak)
+	_, ok = mp.EndResourcePeakEpoch(first)
+	require.False(t, ok)
+
+	second := mp.StartResourcePeakEpoch()
+	require.NotNil(t, second)
+	_, ok = mp.EndResourcePeakEpoch(first)
+	require.False(t, ok)
+	_, ok = mp.EndResourcePeakEpoch(second)
+	require.True(t, ok)
+}
+
+func TestMPoolResourcePeakEpochLifetimeHighWaterNeverDecreases(t *testing.T) {
+	mp := MustNew("resource-epoch-lifetime")
+	defer DeleteMPool(mp)
+
+	buf, err := mp.Alloc(128, true)
+	require.NoError(t, err)
+	initial := mp.Stats().HighWaterMark.Load()
+	require.Equal(t, int64(128), initial)
+	epoch := mp.StartResourcePeakEpoch()
+	require.NotNil(t, epoch)
+	mp.Free(buf)
+	peak, ok := mp.EndResourcePeakEpoch(epoch)
+	require.True(t, ok)
+	require.Equal(t, uint64(128), peak)
+	require.Equal(t, initial, mp.Stats().HighWaterMark.Load())
+}
+
+func TestMPoolResourcePeakEpochConcurrentAllocations(t *testing.T) {
+	mp := MustNew("resource-epoch-concurrent")
+	defer DeleteMPool(mp)
+	epoch := mp.StartResourcePeakEpoch()
+	require.NotNil(t, epoch)
+
+	const workers = 16
+	var wg sync.WaitGroup
+	wg.Add(workers)
+	for i := 0; i < workers; i++ {
+		go func() {
+			defer wg.Done()
+			buf, err := mp.Alloc(1024, true)
+			if err != nil {
+				return
+			}
+			mp.Free(buf)
+		}()
+	}
+	wg.Wait()
+	peak, ok := mp.EndResourcePeakEpoch(epoch)
+	require.True(t, ok)
+	require.GreaterOrEqual(t, peak, uint64(1024))
+	require.GreaterOrEqual(t, uint64(mp.Stats().HighWaterMark.Load()), peak)
+}
+
 func TestMpoolReAllocate(t *testing.T) {
 	m := MustNewZero()
 	d1, err := m.Alloc(1023, true)
@@ -218,6 +359,10 @@ func TestCrossPoolFreeOffHeap(t *testing.T) {
 
 	// Verify cross-pool free count was recorded (NumCrossPoolFree counts occurrences, not bytes)
 	require.Equal(t, int64(1), mp2.Stats().NumCrossPoolFree.Load())
+	summary, flags := mp1.ResourceSnapshot()
+	require.Equal(t, uint64(1), summary.CrossPoolFreeCount)
+	require.NotZero(t, flags&resource.QualityCrossPoolFree)
+	require.NotZero(t, flags&resource.QualityInvariantFailure)
 
 	// Verify global stats decreased (memory was actually freed)
 	globalAfter := GlobalStats().NumCurrBytes.Load()
@@ -530,5 +675,20 @@ func TestMPoolReallocZeroUsesRecordedSourceProvenance(t *testing.T) {
 			mp.Free(resized)
 			require.Zero(t, mp.CurrNB())
 		})
+	}
+}
+
+func BenchmarkMPoolAtomicMax(b *testing.B) {
+	mp, err := NewMPool("benchmark-resource-peak", 0, NoFixed)
+	require.NoError(b, err)
+	defer DeleteMPool(mp)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		buf, allocErr := mp.Alloc(64, true)
+		if allocErr != nil {
+			b.Fatal(allocErr)
+		}
+		mp.Free(buf)
 	}
 }

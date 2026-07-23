@@ -37,17 +37,6 @@
 
 namespace matrixone {
 
-void save_host_matrix(const std::string& filename, raft::host_matrix_view<const float, int64_t, raft::row_major> view) {
-    std::ofstream out(filename, std::ios::binary);
-    if (!out) throw std::runtime_error("Failed to open file for writing: " + filename);
-    
-    int64_t rows = view.extent(0);
-    int64_t cols = view.extent(1);
-    out.write(reinterpret_cast<const char*>(&rows), sizeof(rows));
-    out.write(reinterpret_cast<const char*>(&cols), sizeof(cols));
-    out.write(reinterpret_cast<const char*>(view.data_handle()), rows * cols * sizeof(float));
-}
-
 void set_errmsg(void* errmsg, const char* context, const char* message) noexcept {
     if (!errmsg) return;
     char** err_ptr_ptr = static_cast<char**>(errmsg);

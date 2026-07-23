@@ -449,6 +449,17 @@ func (zm ZM) getValue(buf []byte) any {
 		return types.BytesToArray[float32](buf)
 	case types.T_array_float64:
 		return types.BytesToArray[float64](buf)
+	// Narrow vector element types. Omitting them made MO_TABLE_COL_MAX panic on
+	// a table that merely CONTAINS a bf16/f16/int8/uint8 vector column, without
+	// the query touching it.
+	case types.T_array_bf16:
+		return types.BytesToArray[types.BF16](buf)
+	case types.T_array_float16:
+		return types.BytesToArray[types.Float16](buf)
+	case types.T_array_int8:
+		return types.BytesToArray[int8](buf)
+	case types.T_array_uint8:
+		return types.BytesToArray[uint8](buf)
 	}
 	panic(fmt.Sprintf("unsupported type: %v", zm.GetType()))
 }

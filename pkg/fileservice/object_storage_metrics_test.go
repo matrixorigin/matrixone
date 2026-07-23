@@ -91,3 +91,26 @@ func TestObjectStorageMetricsReadCloseDecrementsActive(t *testing.T) {
 	require.NoError(t, r.Close())
 	require.Equal(t, before, testutil.ToFloat64(active))
 }
+
+func TestObjectStorageMetricsCopyObject(t *testing.T) {
+	name := t.Name()
+	src := &testObjectCopyStorage{}
+	upstream := &testObjectCopyStorage{}
+	wrapped := newObjectStorageMetrics(upstream, name)
+	writeGauge := metric.FSObjectStorageOperations.WithLabelValues(name, "write")
+	before := testutil.ToFloat64(writeGauge)
+
+	copied, err := wrapped.CopyObject(context.Background(), src, "source", "destination")
+	require.NoError(t, err)
+	require.True(t, copied)
+	require.Equal(t, before+1, testutil.ToFloat64(writeGauge))
+	require.Same(t, src, upstream.src)
+	require.Equal(t, "source", upstream.srcKey)
+	require.Equal(t, "destination", upstream.dstKey)
+
+	copied, err = newObjectStorageMetrics(dummyObjectStorage{}, t.Name()+"-unsupported").CopyObject(
+		context.Background(), src, "source", "destination",
+	)
+	require.NoError(t, err)
+	require.False(t, copied)
+}
