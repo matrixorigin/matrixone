@@ -287,15 +287,17 @@ func TestUint8EntrySQLBuilders(t *testing.T) {
 }
 
 // entryInt8/entryUint8 replicate the entry SQL arithmetic `cast(cast(v as vecf32) *
-// mul + add as vec{int8,uint8})`: FLOAT32, rounding after the multiply AND after the
-// add (the intermediate is forced to a float32 var so it is never fused into one
-// rounding). This is the canonical build/CDC encoding the query encoder must match.
+// mul + add as vec{int8,uint8})`: FLOAT32, with the product wrapped in an explicit
+// float32() conversion so it is ROUNDED before the add (two roundings), exactly like
+// SQL's two separate float32 operations. The explicit conversion — NOT a temp var —
+// is the Go spec's barrier against FMA fusion; without it this helper would fuse the
+// same way production did and mask a fused query encoder.
 func entryInt8(x float32, mul, add float64) int8 {
-	m := x * float32(mul)
+	m := float32(x * float32(mul))
 	return types.Float32ToInt8Slice([]float32{m + float32(add)})[0]
 }
 func entryUint8(x float32, mul, add float64) uint8 {
-	m := x * float32(mul)
+	m := float32(x * float32(mul))
 	return types.Float32ToUint8Slice([]float32{m + float32(add)})[0]
 }
 
@@ -351,4 +353,30 @@ func TestQueryEntryEncodingContract(t *testing.T) {
 	require.Equal(t, entryInt8(x, imul, iadd), ApplyInt8([]float32{x}, imul, iadd)[0])
 	require.NotEqual(t, oldF64Int8(x, imul, iadd), ApplyInt8([]float32{x}, imul, iadd)[0],
 		"0.367 is the documented boundary; the fix must change its code vs the old f64 path")
+}
+
+// TestApplyFMABoundaryMatchesSQL is the independent-oracle regression for the FMA
+// fusion boundary. The expected codes are the ACTUAL entry-SQL output (verified via
+// `select cast(cast(v as vecf32) * mul + add as vec{int8,uint8})` on the live engine)
+// for trained bounds [0.1,0.99] — SQL evaluates the multiply and add as two separate
+// float32 operations (two roundings). ApplyInt8/ApplyUint8 must reproduce those codes.
+//
+// The inputs are exact float32 bit patterns where a fused multiply-add (GOAMD64=v3
+// VFMADD231SS / arm64 hardware FMA) rounds only once and lands in the ADJACENT bucket:
+// int8 0.11221571 is 0.5-on-a-half (SQL -124.5 -> -125; fused -124.49999 -> -124),
+// uint8 0.1017451 is 0.5 (SQL 0.5 -> 1; fused 0.49999908 -> 0). This oracle is
+// independent of the Go-side entry replication, so it catches a fused query encoder
+// even if the replication were to fuse the same way. Runs under the repo-default
+// GOAMD64=v3; a plain `m := x*fmul` temp (not an explicit conversion) fails here.
+func TestApplyFMABoundaryMatchesSQL(t *testing.T) {
+	imul, iadd := Int8Params(0.10, 0.99)
+	umul, uadd := Uint8Params(0.10, 0.99)
+
+	xi := math.Float32frombits(0x3de5d15a) // 0.11221571
+	require.Equal(t, int8(-125), ApplyInt8([]float32{xi}, imul, iadd)[0],
+		"int8 FMA boundary: ApplyInt8 must match the SQL two-rounding result (-125), not the fused -124")
+
+	xu := math.Float32frombits(0x3dd05fbc) // 0.1017451
+	require.Equal(t, uint8(1), ApplyUint8([]float32{xu}, umul, uadd)[0],
+		"uint8 FMA boundary: ApplyUint8 must match the SQL two-rounding result (1), not the fused 0")
 }
