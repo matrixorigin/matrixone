@@ -40,7 +40,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/testutil/testengine"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -476,8 +475,7 @@ func TestRemoteRun(t *testing.T) {
 	proc.Base.TxnOperator = txnOp
 
 	sql := "insert into test_tbl values (1,1)"
-	e, _, _ := testengine.New(defines.AttachAccountId(context.Background(), catalog.System_Account))
-	c := NewCompile("test", "test", sql, "", "", e, proc, nil, false, nil, time.Now())
+	c := NewCompile("test", "test", sql, "", "", newStubEngine(), proc, nil, false, nil, time.Now())
 	c.anal = &AnalyzeModule{qry: &plan.Query{}}
 
 	// if the root operator is connector.
@@ -526,8 +524,7 @@ func TestRemoteRunFailureReleasesPendingRetainedDispatchAttach(t *testing.T) {
 	proc.Base.TxnClient = txnCli
 	proc.Base.TxnOperator = txnOp
 
-	e, _, _ := testengine.New(defines.AttachAccountId(context.Background(), catalog.System_Account))
-	c := NewCompile("local-cn:6002", "test", "select 1", "", "", e, proc, nil, false, nil, time.Now())
+	c := NewCompile("local-cn:6002", "test", "select 1", "", "", newStubEngine(), proc, nil, false, nil, time.Now())
 	c.anal = &AnalyzeModule{qry: &plan.Query{}}
 
 	uid := uuid.Must(uuid.NewV7())

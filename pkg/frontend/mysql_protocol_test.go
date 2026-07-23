@@ -2323,9 +2323,93 @@ func Test_beginPacket(t *testing.T) {
 
 }
 
+type prepareColumnDefinition struct {
+	name     string
+	charset  uint16
+	length   uint32
+	typ      defines.MysqlType
+	flags    uint16
+	decimals uint8
+}
+
+type prepareResponseCaptureConn struct {
+	testConn
+	writes []byte
+}
+
+func (c *prepareResponseCaptureConn) Write(data []byte) (int, error) {
+	c.writes = append(c.writes, data...)
+	return len(data), nil
+}
+
+func splitProtocolPackets(t *testing.T, data []byte) [][]byte {
+	t.Helper()
+	const mysqlPacketHeaderSize = 4
+	var packets [][]byte
+	for pos := 0; pos < len(data); {
+		if len(data)-pos < mysqlPacketHeaderSize {
+			t.Fatalf("truncated packet header at %d: %x", pos, data)
+		}
+		payloadLen := int(data[pos]) | int(data[pos+1])<<8 | int(data[pos+2])<<16
+		end := pos + mysqlPacketHeaderSize + payloadLen
+		if end > len(data) {
+			t.Fatalf("truncated packet payload at %d: length=%d data=%x", pos, payloadLen, data)
+		}
+		packets = append(packets, data[pos+mysqlPacketHeaderSize:end])
+		pos = end
+	}
+	return packets
+}
+
+func readPrepareLenEncString(t *testing.T, data []byte, pos *int) string {
+	t.Helper()
+	if *pos >= len(data) {
+		t.Fatalf("missing length-encoded string at %d: %x", *pos, data)
+	}
+	length := int(data[*pos])
+	*pos++
+	if *pos+length > len(data) {
+		t.Fatalf("truncated length-encoded string at %d: length=%d data=%x", *pos, length, data)
+	}
+	value := string(data[*pos : *pos+length])
+	*pos += length
+	return value
+}
+
+func parsePrepareColumnDefinition(t *testing.T, payload []byte) prepareColumnDefinition {
+	t.Helper()
+	pos := 0
+	require.Equal(t, "def", readPrepareLenEncString(t, payload, &pos))
+	for range 3 {
+		_ = readPrepareLenEncString(t, payload, &pos)
+	}
+	name := readPrepareLenEncString(t, payload, &pos)
+	_ = readPrepareLenEncString(t, payload, &pos)
+	if pos >= len(payload) {
+		t.Fatalf("missing fixed column definition fields at %d: %x", pos, payload)
+	}
+	require.Equal(t, byte(0x0c), payload[pos])
+	pos++
+	if pos+12 > len(payload) {
+		t.Fatalf("truncated fixed column definition fields at %d: %x", pos, payload)
+	}
+	definition := prepareColumnDefinition{
+		name:     name,
+		charset:  binary.LittleEndian.Uint16(payload[pos:]),
+		length:   binary.LittleEndian.Uint32(payload[pos+2:]),
+		typ:      defines.MysqlType(payload[pos+6]),
+		flags:    binary.LittleEndian.Uint16(payload[pos+7:]),
+		decimals: payload[pos+9],
+	}
+	require.Equal(t, []byte{0, 0}, payload[pos+10:pos+12])
+	require.Equal(t, pos+12, len(payload))
+	return definition
+}
+
 func TestSendPrepareResponse(t *testing.T) {
 	ctx := context.TODO()
-	convey.Convey("send Prepare response succ", t, func() {
+	setSessionAlloc("", NewLeakCheckAllocator())
+	t.Run("send Prepare response succ", func(t *testing.T) {
 		sv, err := getSystemVariables("test/system_vars_config.toml")
 		if err != nil {
 			t.Error(err)
@@ -2334,16 +2418,21 @@ func TestSendPrepareResponse(t *testing.T) {
 		pu.SV.SkipCheckUser = true
 		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
-		ioses, err := NewIOSession(&testConn{}, pu, "")
-		convey.ShouldBeNil(err)
+		conn := &prepareResponseCaptureConn{}
+		ioses, err := NewIOSession(conn, pu, "")
+		require.NoError(t, err)
 		proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
+		proto.capability &^= CLIENT_DEPRECATE_EOF
 		proto.SetSession(&Session{
 			feSessionImpl: feSessionImpl{
 				txnHandler: &TxnHandler{},
 			},
 		})
 
-		st := tree.NewPrepareString(tree.Identifier(getPrepareStmtName(1)), "select ?, 1")
+		st := tree.NewPrepareString(
+			tree.Identifier(getPrepareStmtName(1)),
+			"select cast((? + ?) + 1 as decimal(30, 0)) as result",
+		)
 		stmts, err := mysql.Parse(ctx, st.Sql, 1)
 		if err != nil {
 			t.Error(err)
@@ -2360,10 +2449,39 @@ func TestSendPrepareResponse(t *testing.T) {
 		}
 		err = proto.SendPrepareResponse(ctx, prepareStmt)
 
-		convey.So(err, convey.ShouldBeNil)
+		require.NoError(t, err)
+		packets := splitProtocolPackets(t, conn.writes)
+		require.Len(t, packets, 6)
+		require.Len(t, packets[0], 12)
+		require.Equal(t, byte(0), packets[0][0])
+		require.Equal(t, uint32(1), binary.LittleEndian.Uint32(packets[0][1:]))
+		require.Equal(t, uint16(1), binary.LittleEndian.Uint16(packets[0][5:]))
+		require.Equal(t, uint16(2), binary.LittleEndian.Uint16(packets[0][7:]))
+		require.Equal(t, byte(0), packets[0][9])
+		require.Equal(t, uint16(0), binary.LittleEndian.Uint16(packets[0][10:]))
+
+		for _, payload := range packets[1:3] {
+			column := parsePrepareColumnDefinition(t, payload)
+			require.Equal(t, "?", column.name)
+			require.Equal(t, uint16(charsetBinary), column.charset)
+			require.Equal(t, uint32(0), column.length)
+			require.Equal(t, defines.MYSQL_TYPE_NULL, column.typ)
+			require.Equal(t, uint16(0), column.flags)
+			require.Equal(t, uint8(0), column.decimals)
+		}
+		require.Equal(t, byte(defines.EOFHeader), packets[3][0])
+
+		resultColumn := parsePrepareColumnDefinition(t, packets[4])
+		require.Equal(t, "result", resultColumn.name)
+		require.Equal(t, uint16(charsetBinary), resultColumn.charset)
+		require.Equal(t, uint32(31), resultColumn.length)
+		require.Equal(t, defines.MYSQL_TYPE_DECIMAL, resultColumn.typ)
+		require.Equal(t, uint16(0), resultColumn.flags)
+		require.Equal(t, uint8(0), resultColumn.decimals)
+		require.Equal(t, byte(defines.EOFHeader), packets[5][0])
 	})
 
-	convey.Convey("send Prepare response error", t, func() {
+	t.Run("send Prepare response error", func(t *testing.T) {
 		sv, err := getSystemVariables("test/system_vars_config.toml")
 		if err != nil {
 			t.Error(err)
@@ -2373,7 +2491,7 @@ func TestSendPrepareResponse(t *testing.T) {
 		pu.SV.KillRountinesInterval = 0
 		setPu("", pu)
 		ioses, err := NewIOSession(&testConn{}, pu, "")
-		convey.ShouldBeNil(err)
+		require.NoError(t, err)
 		proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
 
 		st := tree.NewPrepareString("stmt1", "select ?, 1")
@@ -2393,7 +2511,7 @@ func TestSendPrepareResponse(t *testing.T) {
 		}
 		err = proto.SendPrepareResponse(ctx, prepareStmt)
 
-		convey.So(err, convey.ShouldBeError)
+		require.Error(t, err)
 	})
 }
 
@@ -3254,10 +3372,11 @@ var _ MysqlRrWr = &testMysqlWriter{}
 
 // testMysqlWriter works for the background transaction that does not use the network protocol.
 type testMysqlWriter struct {
-	username string
-	database string
-	ioses    *Conn
-	mod      int
+	username              string
+	database              string
+	ioses                 *Conn
+	mod                   int
+	makeColumnDefDataFunc func(context.Context, []*planPb.ColDef) ([][]byte, error)
 }
 
 func (fp *testMysqlWriter) WriteResultSetRow2(mrs *MysqlResultSet, colSlices *ColumnSlices, count uint64) error {
@@ -3482,6 +3601,9 @@ func (fp *testMysqlWriter) Flush() error {
 }
 
 func (fp *testMysqlWriter) MakeColumnDefData(ctx context.Context, columns []*planPb.ColDef) ([][]byte, error) {
+	if fp.makeColumnDefDataFunc != nil {
+		return fp.makeColumnDefDataFunc(ctx, columns)
+	}
 	return nil, nil
 }
 

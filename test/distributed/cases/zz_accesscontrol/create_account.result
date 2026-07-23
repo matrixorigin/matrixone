@@ -164,31 +164,39 @@ mysql
 use mo_catalog;
 show tables;
 Tables_in_mo_catalog
+mo_cache
+mo_columns
+mo_configurations
+mo_database
+mo_foreign_keys
+mo_iceberg_catalogs
+mo_iceberg_maintenance_jobs
+mo_iceberg_orphan_files
+mo_iceberg_principal_map
+mo_iceberg_publish_jobs
+mo_iceberg_refs
+mo_iceberg_residency_policy
+mo_iceberg_tables
 mo_indexes
-mo_table_partitions
-mo_tables
-mo_user
-mo_role
-mo_user_grant
-mo_role_grant
-mo_role_privs
-mo_role_rule
-mo_user_defined_function
+mo_locks
 mo_mysql_compatibility_mode
 mo_partition_metadata
 mo_partition_tables
-mo_stored_procedure
-mo_stages
-mo_snapshots
-mo_database
-mo_columns
+mo_role
+mo_role_grant
+mo_role_privs
+mo_role_rule
 mo_sessions
-mo_configurations
-mo_locks
-mo_variables
+mo_snapshots
+mo_stages
+mo_stored_procedure
+mo_table_partitions
+mo_tables
 mo_transactions
-mo_cache
-mo_foreign_keys
+mo_user
+mo_user_defined_function
+mo_user_grant
+mo_variables
 select user_name,authentication_string,owner from mo_user;
 user_name    authentication_string    owner
 admin    *6BB4837EB74329105EE4568DDA7DC67ED2CA2AD9    2

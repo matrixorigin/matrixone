@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	icebergapi "github.com/matrixorigin/matrixone/pkg/iceberg/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -287,10 +288,11 @@ type Compile struct {
 
 	MessageBoard *message.MessageBoard
 
-	cnList            engine.Nodes
-	queryPlacement    schedule.QueryDecision
-	schedulingTrace   *schedule.TraceRecorder
-	schedulingAttempt schedule.TraceAttemptID
+	cnList                engine.Nodes
+	queryPlacement        schedule.QueryDecision
+	querySchedulingIntent schedule.SchedulingIntent
+	schedulingTrace       *schedule.TraceRecorder
+	schedulingAttempt     schedule.TraceAttemptID
 	// ast
 	stmt tree.Statement
 
@@ -333,6 +335,9 @@ type Compile struct {
 	ignorePublish            bool
 	ignoreCheckExperimental  bool
 	disableLock              bool
+
+	icebergScanPlanner icebergapi.ScanPlanner
+	icebergScanPlans   map[int32]*icebergapi.IcebergScanPlan
 }
 
 type RemoteReceivRegInfo struct {

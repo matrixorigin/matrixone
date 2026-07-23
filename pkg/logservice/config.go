@@ -212,12 +212,23 @@ type Config struct {
 		InitHAKeeperMembers []string `toml:"init-hakeeper-members" user_setting:"advanced"`
 		// Restore structure is used when the cluster needs to restore data.
 		Restore struct {
+			// Enabled puts every initial LogService member into recovery mode.
+			// It must be set consistently on all initial HAKeeper members. Only
+			// the member with WALDataPath needs access to the recovery artifacts.
+			// TN services must remain stopped until WAL recovery completes.
+			Enabled bool `toml:"enabled"`
 			// FilePath is the path of the file, which contains the backup data.
 			// If is not set, nothing will be done for restore.
 			FilePath string `toml:"file-path"`
-			// Force means that we force to do restore even if RESTORED tag file
-			// already exists.
+			// Force is retained for restore configuration compatibility. HAKeeper
+			// ID watermarks are restored idempotently, and a completed WAL is never
+			// replayed into a non-empty Log shard even when Force is true.
 			Force bool `toml:"force"`
+			// WALDataPath is the path to the WAL data file extracted from damaged LogService.
+			// When set, LogService will replay WAL entries from this file during bootstrap.
+			// This is used for disaster recovery when the original LogService cluster is
+			// completely damaged but Raft logs can still be read offline.
+			WALDataPath string `toml:"wal-data-path"`
 		} `toml:"restore"`
 		// NonVotingLocality is the locality for non-voting replicas.
 		NonVotingLocality string `toml:"non-voting-locality" user_setting:"advanced"`
@@ -394,6 +405,19 @@ func (c *Config) Validate() error {
 			return moerr.NewBadConfigNoCtx("InitHAKeeperMembers does not match NumOfLogShardReplicas")
 		}
 	}
+	if c.BootstrapConfig.Restore.Enabled {
+		if _, ok := c.Bootstrapping(); !ok {
+			return moerr.NewBadConfigNoCtx("LogService recovery must run on an initial HAKeeper member")
+		}
+	}
+	if c.BootstrapConfig.Restore.WALDataPath != "" {
+		if !c.BootstrapConfig.Restore.Enabled {
+			return moerr.NewBadConfigNoCtx("WAL recovery requires restore.enabled on every initial HAKeeper member")
+		}
+		if c.BootstrapConfig.Restore.FilePath == "" {
+			return moerr.NewBadConfigNoCtx("HAKeeper restore file path is required for WAL recovery")
+		}
+	}
 
 	return nil
 }
@@ -455,8 +479,10 @@ func DefaultConfig() Config {
 			NumOfLogShardReplicas uint64   `toml:"num-of-log-shard-replicas"`
 			InitHAKeeperMembers   []string `toml:"init-hakeeper-members" user_setting:"advanced"`
 			Restore               struct {
-				FilePath string `toml:"file-path"`
-				Force    bool   `toml:"force"`
+				Enabled     bool   `toml:"enabled"`
+				FilePath    string `toml:"file-path"`
+				Force       bool   `toml:"force"`
+				WALDataPath string `toml:"wal-data-path"`
 			} `toml:"restore"`
 			NonVotingLocality string `toml:"non-voting-locality" user_setting:"advanced"`
 			StandbyEnabled    bool   `toml:"standby-enabled" user_setting:"advanced"`
@@ -467,8 +493,10 @@ func DefaultConfig() Config {
 			NumOfLogShardReplicas uint64
 			InitHAKeeperMembers   []string
 			Restore               struct {
-				FilePath string
-				Force    bool
+				Enabled     bool
+				FilePath    string
+				Force       bool
+				WALDataPath string
 			}
 			NonVotingLocality string
 			StandbyEnabled    bool
@@ -479,11 +507,15 @@ func DefaultConfig() Config {
 			NumOfLogShardReplicas: 1,
 			InitHAKeeperMembers:   []string{"131072:" + uid},
 			Restore: struct {
-				FilePath string
-				Force    bool
+				Enabled     bool
+				FilePath    string
+				Force       bool
+				WALDataPath string
 			}{
-				FilePath: defaultRestoreFilePath,
-				Force:    false,
+				Enabled:     false,
+				FilePath:    defaultRestoreFilePath,
+				Force:       false,
+				WALDataPath: "",
 			},
 			NonVotingLocality: "",
 			StandbyEnabled:    false,

@@ -39,10 +39,26 @@ import (
 const StreamReaderLease = time.Minute * 2
 
 type shardingRemoteReader struct {
-	streamID types.Uuid
-	rd       engine.Reader
-	colTypes []types.Type
-	deadline time.Time
+	streamID  types.Uuid
+	rd        engine.Reader
+	colTypes  []types.Type
+	deadline  time.Time
+	release   func()
+	mu        sync.Mutex
+	closed    bool
+	closeOnce sync.Once
+}
+
+func (sr *shardingRemoteReader) close() {
+	sr.closeOnce.Do(func() {
+		sr.mu.Lock()
+		defer sr.mu.Unlock()
+		sr.closed = true
+		sr.rd.Close()
+		if sr.release != nil {
+			sr.release()
+		}
+	})
 }
 
 func (sr *shardingRemoteReader) updateCols(cols []string, tblDef *plan.TableDef) {
@@ -67,25 +83,34 @@ func (sr *shardingRemoteReader) updateCols(cols []string, tblDef *plan.TableDef)
 
 type streamHandle struct {
 	sync.Mutex
-	streamReaders map[types.Uuid]shardingRemoteReader
+	streamReaders map[types.Uuid]*shardingRemoteReader
 	gcJob         *tasks.CancelableJob
 }
 
 var streamHandler streamHandle
 
+func closeExpiredStreamReaders(now time.Time) {
+	streamHandler.Lock()
+	var expired []*shardingRemoteReader
+	for id, sr := range streamHandler.streamReaders {
+		if now.After(sr.deadline) {
+			delete(streamHandler.streamReaders, id)
+			expired = append(expired, sr)
+		}
+	}
+	streamHandler.Unlock()
+	for _, sr := range expired {
+		sr.close()
+	}
+}
+
 func init() {
-	streamHandler.streamReaders = make(map[types.Uuid]shardingRemoteReader)
+	streamHandler.streamReaders = make(map[types.Uuid]*shardingRemoteReader)
 	streamHandler.gcJob = tasks.NewCancelableCronJob(
 		"streamReaderGC",
 		StreamReaderLease,
 		func(ctx context.Context) {
-			streamHandler.Lock()
-			defer streamHandler.Unlock()
-			for id, sr := range streamHandler.streamReaders {
-				if time.Now().After(sr.deadline) {
-					delete(streamHandler.streamReaders, id)
-				}
-			}
+			closeExpiredStreamReaders(time.Now())
 		},
 		true,
 		1,
@@ -102,7 +127,7 @@ func HandleShardingReadRows(
 	ts timestamp.Timestamp,
 	buffer *morpc.Buffer,
 ) ([]byte, error) {
-	tbl, err := getTxnTable(
+	tbl, release, err := getTxnTable(
 		ctx,
 		param,
 		engine,
@@ -110,6 +135,7 @@ func HandleShardingReadRows(
 	if err != nil {
 		return nil, err
 	}
+	defer release()
 
 	rows, err := tbl.Rows(ctx)
 	if err != nil {
@@ -127,7 +153,7 @@ func HandleShardingReadSize(
 	ts timestamp.Timestamp,
 	buffer *morpc.Buffer,
 ) ([]byte, error) {
-	tbl, err := getTxnTable(
+	tbl, release, err := getTxnTable(
 		ctx,
 		param,
 		engine,
@@ -135,6 +161,7 @@ func HandleShardingReadSize(
 	if err != nil {
 		return nil, err
 	}
+	defer release()
 
 	rows, err := tbl.Size(
 		ctx,
@@ -155,7 +182,7 @@ func HandleShardingReadStatus(
 	ts timestamp.Timestamp,
 	buffer *morpc.Buffer,
 ) ([]byte, error) {
-	tbl, err := getTxnTable(
+	tbl, release, err := getTxnTable(
 		ctx,
 		param,
 		engine,
@@ -163,6 +190,7 @@ func HandleShardingReadStatus(
 	if err != nil {
 		return nil, err
 	}
+	defer release()
 
 	info, err := tbl.Stats(
 		ctx,
@@ -191,7 +219,7 @@ func HandleShardingReadApproxObjectsNum(
 	ts timestamp.Timestamp,
 	buffer *morpc.Buffer,
 ) ([]byte, error) {
-	tbl, err := getTxnTable(
+	tbl, release, err := getTxnTable(
 		ctx,
 		param,
 		engine,
@@ -199,6 +227,7 @@ func HandleShardingReadApproxObjectsNum(
 	if err != nil {
 		return nil, err
 	}
+	defer release()
 
 	num := tbl.ApproxObjectsNum(
 		ctx,
@@ -215,7 +244,7 @@ func HandleShardingReadRanges(
 	ts timestamp.Timestamp,
 	buffer *morpc.Buffer,
 ) ([]byte, error) {
-	tbl, err := getTxnTable(
+	tbl, release, err := getTxnTable(
 		ctx,
 		param,
 		eng,
@@ -223,6 +252,7 @@ func HandleShardingReadRanges(
 	if err != nil {
 		return nil, err
 	}
+	defer release()
 	rangesParam := engine.RangesParam{
 		BlockFilters:   param.RangesParam.Exprs,
 		PreAllocBlocks: int(param.RangesParam.PreAllocSize),
@@ -251,7 +281,7 @@ func HandleShardingReadBuildReader(
 	ts timestamp.Timestamp,
 	buffer *morpc.Buffer,
 ) ([]byte, error) {
-	tbl, err := getTxnTable(
+	tbl, release, err := getTxnTable(
 		ctx,
 		param,
 		e,
@@ -259,6 +289,16 @@ func HandleShardingReadBuildReader(
 	if err != nil {
 		return nil, err
 	}
+	transferred := false
+	var rd engine.Reader
+	defer func() {
+		if !transferred {
+			if rd != nil {
+				rd.Close()
+			}
+			release()
+		}
+	}()
 
 	relData, err := readutil.UnmarshalRelationData(param.ReaderBuildParam.RelData)
 	if err != nil {
@@ -276,7 +316,7 @@ func HandleShardingReadBuildReader(
 		return nil, err
 	}
 
-	rd, err := readutil.NewReader(
+	rd, err = readutil.NewReader(
 		ctx,
 		tbl.proc.Load().Mp(),
 		e.(*Engine).packerPool,
@@ -298,11 +338,13 @@ func HandleShardingReadBuildReader(
 	}
 	streamHandler.Lock()
 	defer streamHandler.Unlock()
-	streamHandler.streamReaders[uuid] = shardingRemoteReader{
+	streamHandler.streamReaders[uuid] = &shardingRemoteReader{
 		streamID: uuid,
 		rd:       rd,
 		deadline: time.Now().Add(StreamReaderLease),
+		release:  release,
 	}
+	transferred = true
 
 	return buffer.EncodeBytes(types.EncodeUuid(&uuid)), nil
 }
@@ -316,7 +358,7 @@ func HandleShardingReadNext(
 	buffer *morpc.Buffer,
 ) ([]byte, error) {
 
-	tbl, err := getTxnTable(
+	tbl, release, err := getTxnTable(
 		ctx,
 		param,
 		engine,
@@ -324,6 +366,7 @@ func HandleShardingReadNext(
 	if err != nil {
 		return nil, err
 	}
+	defer release()
 	mp := tbl.proc.Load().Mp()
 
 	streamID := types.DecodeUuid(param.ReadNextParam.Uuid)
@@ -335,8 +378,14 @@ func HandleShardingReadNext(
 		streamHandler.Unlock()
 		return nil, moerr.NewInternalErrorNoCtx("stream reader not found, may be expired")
 	}
-	streamHandler.Unlock()
 	sr.deadline = time.Now().Add(StreamReaderLease)
+	streamHandler.Unlock()
+
+	sr.mu.Lock()
+	defer sr.mu.Unlock()
+	if sr.closed {
+		return nil, moerr.NewInternalErrorNoCtx("stream reader is closed")
+	}
 
 	sr.updateCols(cols, tbl.tableDef)
 
@@ -398,13 +447,14 @@ func HandleShardingReadClose(
 	streamID := types.DecodeUuid(param.ReadCloseParam.Uuid)
 	//find reader by streamID
 	streamHandler.Lock()
-	defer streamHandler.Unlock()
 	sr, ok := streamHandler.streamReaders[streamID]
 	if !ok {
+		streamHandler.Unlock()
 		return nil, moerr.NewInternalErrorNoCtx("stream reader not found, may be expired")
 	}
-	sr.rd.Close()
 	delete(streamHandler.streamReaders, sr.streamID)
+	streamHandler.Unlock()
+	sr.close()
 	return nil, nil
 }
 
@@ -416,7 +466,7 @@ func HandleShardingReadCollectTombstones(
 	ts timestamp.Timestamp,
 	buffer *morpc.Buffer,
 ) ([]byte, error) {
-	tbl, err := getTxnTable(
+	tbl, release, err := getTxnTable(
 		ctx,
 		param,
 		eng,
@@ -424,6 +474,7 @@ func HandleShardingReadCollectTombstones(
 	if err != nil {
 		return nil, err
 	}
+	defer release()
 
 	tombstones, err := tbl.CollectTombstones(
 		ctx,
@@ -451,7 +502,7 @@ func HandleShardingReadGetColumMetadataScanInfo(
 	ts timestamp.Timestamp,
 	buffer *morpc.Buffer,
 ) ([]byte, error) {
-	tbl, err := getTxnTable(
+	tbl, release, err := getTxnTable(
 		ctx,
 		param,
 		engine,
@@ -459,6 +510,7 @@ func HandleShardingReadGetColumMetadataScanInfo(
 	if err != nil {
 		return nil, err
 	}
+	defer release()
 
 	infos, err := tbl.GetColumMetadataScanInfo(
 		ctx,
@@ -488,7 +540,7 @@ func HandleShardingReadPrimaryKeysMayBeModified(
 	ts timestamp.Timestamp,
 	buffer *morpc.Buffer,
 ) ([]byte, error) {
-	tbl, err := getTxnTable(
+	tbl, release, err := getTxnTable(
 		ctx,
 		param,
 		engine,
@@ -496,6 +548,7 @@ func HandleShardingReadPrimaryKeysMayBeModified(
 	if err != nil {
 		return nil, err
 	}
+	defer release()
 
 	var from, to types.TS
 	err = from.Unmarshal(param.PrimaryKeysMayBeModifiedParam.From)
@@ -542,7 +595,7 @@ func HandleShardingReadPrimaryKeysMayBeUpserted(
 	ts timestamp.Timestamp,
 	buffer *morpc.Buffer,
 ) ([]byte, error) {
-	tbl, err := getTxnTable(
+	tbl, release, err := getTxnTable(
 		ctx,
 		param,
 		engine,
@@ -550,6 +603,7 @@ func HandleShardingReadPrimaryKeysMayBeUpserted(
 	if err != nil {
 		return nil, err
 	}
+	defer release()
 
 	var from, to types.TS
 	err = from.Unmarshal(param.PrimaryKeysMayBeModifiedParam.From)
@@ -596,7 +650,7 @@ func HandleShardingReadMergeObjects(
 	ts timestamp.Timestamp,
 	buffer *morpc.Buffer,
 ) ([]byte, error) {
-	tbl, err := getTxnTable(
+	tbl, release, err := getTxnTable(
 		ctx,
 		param,
 		engine,
@@ -604,6 +658,7 @@ func HandleShardingReadMergeObjects(
 	if err != nil {
 		return nil, err
 	}
+	defer release()
 
 	objstats := make([]objectio.ObjectStats, len(param.MergeObjectsParam.Objstats))
 	for i, o := range param.MergeObjectsParam.Objstats {
@@ -634,7 +689,7 @@ func HandleShardingReadVisibleObjectStats(
 	ts timestamp.Timestamp,
 	buffer *morpc.Buffer,
 ) ([]byte, error) {
-	tbl, err := getTxnTable(
+	tbl, release, err := getTxnTable(
 		ctx,
 		param,
 		engine,
@@ -642,6 +697,7 @@ func HandleShardingReadVisibleObjectStats(
 	if err != nil {
 		return nil, err
 	}
+	defer release()
 
 	stats, err := tbl.GetNonAppendableObjectStats(ctx)
 	if err != nil {
@@ -662,14 +718,18 @@ func getTxnTable(
 	ctx context.Context,
 	param shard.ReadParam,
 	engine engine.Engine,
-) (*txnTable, error) {
+) (*txnTable, func(), error) {
 	// TODO: reduce mem allocate
 	proc, err := process.GetCodecService(engine.GetService()).Decode(
 		ctx,
 		param.Process,
 	)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
+	}
+	var releaseOnce sync.Once
+	release := func() {
+		releaseOnce.Do(proc.Free)
 	}
 	ws := NewTxnWorkSpace(engine.(*Engine), proc)
 	proc.GetTxnOperator().AddWorkspace(ws)
@@ -688,10 +748,12 @@ func getTxnTable(
 		engine.(*Engine),
 	)
 	if err != nil {
-		return nil, err
+		release()
+		return nil, nil, err
 	}
 	if item == nil {
-		return nil, moerr.NewParseErrorf(ctx, "table %q does not exist", param.TxnTable.TableName)
+		release()
+		return nil, nil, moerr.NewParseErrorf(ctx, "table %q does not exist", param.TxnTable.TableName)
 	}
 
 	tbl := newTxnTableWithItem(
@@ -702,5 +764,5 @@ func getTxnTable(
 	)
 	tbl.remoteWorkspace = true
 	tbl.createdInTxn = param.TxnTable.CreatedInTxn
-	return tbl, nil
+	return tbl, release, nil
 }

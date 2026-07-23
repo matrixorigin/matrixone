@@ -48,10 +48,37 @@ var (
 	defaultAuthTimeout = time.Second * 10
 	// The default value of TSL connect timeout.
 	defaultTLSConnectTimeout = time.Second * 10
+	// The default deadline for receiving a client login packet. It applies only
+	// before authentication; established tunnel traffic has no such deadline.
+	defaultClientHandshakeTimeout = time.Second * 10
 	// The default base cooldown of the CN health circuit breaker.
 	defaultCNHealthCheckBaseCooldown = time.Second * 5
 	// The default max cooldown of the CN health circuit breaker.
 	defaultCNHealthCheckMaxCooldown = time.Second * 30
+	// Default connection budgets bound Proxy memory independently of client
+	// cleanup behavior. Per-tenant headroom prevents one tenant from consuming
+	// all capacity while still allowing large connection pools.
+	defaultMaxConnections          = 10000
+	defaultMaxConnectionsPerTenant = 8000
+	// Protocol memory covers both the shared allocator used by client/backend
+	// protocol sessions and the Go-heap buffers retained by established tunnels.
+	// The default preserves the 10K connection budget after accounting for both.
+	defaultProtocolMemoryLimit        = toml.ByteSize(2 << 30)
+	defaultClientHandshakePacketLimit = toml.ByteSize(64 << 10)
+	// Proxy only consumes the address block; leave bounded room for common TLVs
+	// without coupling this unauthenticated framing limit to the MySQL login.
+	defaultProxyProtocolBodyLimit = toml.ByteSize(4 << 10)
+	// A protocol 4.1 SSLRequest contains only the 32-byte fixed response
+	// prefix. A usable final login must additionally carry at least a one-byte
+	// username, its NUL terminator, and one auth length/terminator byte. Keep the
+	// configured minimum tied to a complete login rather than the shorter
+	// intermediate TLS request.
+	protocol41SSLRequestPayloadSize   = toml.ByteSize(32)
+	minimumClientHandshakePacketLimit = protocol41SSLRequestPayloadSize + 3
+	// The packet header itself can encode at most (1<<24)-1 payload bytes.
+	maximumClientHandshakePacketLimit = toml.ByteSize((1 << 24) - 1)
+	minimumProxyProtocolBodyLimit     = toml.ByteSize(2*ipv6AddrLength + 4)
+	maximumProxyProtocolBodyLimit     = toml.ByteSize((1 << 16) - 1)
 )
 
 type RebalancePolicy int
@@ -92,6 +119,9 @@ type Config struct {
 	AuthTimeout toml.Duration `toml:"auth-timeout" user_setting:"advanced"`
 	// TLSConnectTimeout is the timeout duration when TLS connect to server.
 	TLSConnectTimeout toml.Duration `toml:"tls-connect-timeout" user_setting:"advanced"`
+	// ClientHandshakeTimeout bounds how long an unauthenticated client may hold
+	// a Proxy connection slot while sending its login packet.
+	ClientHandshakeTimeout toml.Duration `toml:"client-handshake-timeout" user_setting:"advanced"`
 
 	// Default is false. With true. Server will support tls.
 	// This value should be ths same with all CN servers, and the name
@@ -112,6 +142,21 @@ type Config struct {
 	InternalCIDRs []string `toml:"internal-cidrs"`
 	// ConnCacheEnabled indicates if the connection cache feature is enabled.
 	ConnCacheEnabled bool `toml:"conn-cache-enabled"`
+	// MaxConnections bounds live client connections owned by one Proxy.
+	MaxConnections int `toml:"max-connections" user_setting:"advanced"`
+	// MaxConnectionsPerTenant bounds one tenant's live client connections.
+	// It must not exceed MaxConnections.
+	MaxConnectionsPerTenant int `toml:"max-connections-per-tenant" user_setting:"advanced"`
+	// ProtocolMemoryLimit bounds retained and phase-overlap MySQL protocol
+	// memory, including shared session buffers, tunnel message/write buffers,
+	// pre-auth framing and login packets retained for connection migration.
+	ProtocolMemoryLimit toml.ByteSize `toml:"protocol-memory-limit" user_setting:"advanced"`
+	// ClientHandshakePacketLimit bounds the login packet retained for routing
+	// and migration for the lifetime of a client connection.
+	ClientHandshakePacketLimit toml.ByteSize `toml:"client-handshake-packet-limit" user_setting:"advanced"`
+	// ProxyProtocolBodyLimit bounds the unauthenticated PROXY v2 address and
+	// TLV body independently of the MySQL login packet.
+	ProxyProtocolBodyLimit toml.ByteSize `toml:"proxy-protocol-body-limit" user_setting:"advanced"`
 
 	// CNHealthCheckDisabled disables the CN health circuit breaker. By default
 	// the breaker is enabled: it temporarily skips CN servers that fail to
@@ -228,6 +273,9 @@ func (c *Config) FillDefault() {
 	if c.TLSConnectTimeout.Duration == 0 {
 		c.TLSConnectTimeout.Duration = defaultTLSConnectTimeout
 	}
+	if c.ClientHandshakeTimeout.Duration == 0 {
+		c.ClientHandshakeTimeout.Duration = defaultClientHandshakeTimeout
+	}
 	if c.RebalanceInterval.Duration == 0 {
 		c.RebalanceInterval.Duration = defaultRebalanceInterval
 	}
@@ -260,11 +308,62 @@ func (c *Config) FillDefault() {
 	if c.CNHealthCheckFailThreshold < 1 {
 		c.CNHealthCheckFailThreshold = defaultCNHealthFailThreshold
 	}
+	if c.MaxConnections == 0 {
+		c.MaxConnections = defaultMaxConnections
+	}
+	if c.MaxConnectionsPerTenant == 0 {
+		c.MaxConnectionsPerTenant = min(defaultMaxConnectionsPerTenant, c.MaxConnections)
+	}
+	if c.ProtocolMemoryLimit == 0 {
+		c.ProtocolMemoryLimit = defaultProtocolMemoryLimit
+	}
+	if c.ClientHandshakePacketLimit == 0 {
+		c.ClientHandshakePacketLimit = defaultClientHandshakePacketLimit
+	}
+	if c.ProxyProtocolBodyLimit == 0 {
+		c.ProxyProtocolBodyLimit = defaultProxyProtocolBodyLimit
+	}
 }
 
 // Validate validates the configuration of proxy server.
 func (c *Config) Validate() error {
 	noReport := errutil.ContextWithNoReport(context.Background(), true)
+	if c.MaxConnections < 0 {
+		return moerr.NewInternalError(noReport, "proxy max-connections must be positive")
+	}
+	if c.ClientHandshakeTimeout.Duration < 0 {
+		return moerr.NewInternalError(noReport, "proxy client-handshake-timeout must be positive")
+	}
+	if c.MaxConnectionsPerTenant < 0 {
+		return moerr.NewInternalError(noReport, "proxy max-connections-per-tenant must be positive")
+	}
+	if c.MaxConnections > 0 && c.MaxConnectionsPerTenant > c.MaxConnections {
+		return moerr.NewInternalError(noReport,
+			"proxy max-connections-per-tenant must not exceed max-connections")
+	}
+	if c.ProtocolMemoryLimit > toml.ByteSize(^uint64(0)>>1) {
+		return moerr.NewInternalError(noReport, "proxy protocol-memory-limit is too large")
+	}
+	if c.ClientHandshakePacketLimit > 0 &&
+		c.ClientHandshakePacketLimit < minimumClientHandshakePacketLimit {
+		return moerr.NewInternalError(noReport,
+			"proxy client-handshake-packet-limit is smaller than a complete protocol 4.1 login")
+	}
+	if c.ClientHandshakePacketLimit > maximumClientHandshakePacketLimit {
+		return moerr.NewInternalError(noReport,
+			"proxy client-handshake-packet-limit exceeds the MySQL packet payload limit")
+	}
+	if c.ProxyProtocolBodyLimit > 0 && c.ProxyProtocolBodyLimit < minimumProxyProtocolBodyLimit {
+		return moerr.NewInternalError(noReport,
+			"proxy proxy-protocol-body-limit is smaller than a TCP/IPv6 address block")
+	}
+	if c.ProxyProtocolBodyLimit > maximumProxyProtocolBodyLimit {
+		return moerr.NewInternalError(noReport,
+			"proxy proxy-protocol-body-limit exceeds the PROXY v2 body length")
+	}
+	if _, err := calculateProtocolMemoryBudget(c); err != nil {
+		return err
+	}
 	if c.Plugin != nil {
 		if c.Plugin.Backend == "" {
 			return moerr.NewInternalError(noReport, "proxy plugin backend must be set")

@@ -13,6 +13,12 @@ select id, year_col, revenue, LEAD(revenue) over (order by year_col) as next_rev
 2  ¦  2021  ¦  1500.00  ¦  1800.00  𝄀
 3  ¦  2022  ¦  1800.00  ¦  2000.00  𝄀
 4  ¦  2023  ¦  2000.00  ¦  null
+select id, LEAD(id, 9223372036854775807) over (order by id) as next_id from test_value_window where category = 'A';
+➤ id[4,32,0]  ¦  next_id[4,32,0]  𝄀
+1  ¦  null  𝄀
+2  ¦  null  𝄀
+3  ¦  null  𝄀
+4  ¦  null
 select id, year_col, revenue, FIRST_VALUE(revenue) over (order by year_col) as first_revenue from test_value_window where category = 'A';
 ➤ id[4,32,0]  ¦  year_col[4,32,0]  ¦  revenue[3,10,2]  ¦  first_revenue[3,10,2]  𝄀
 1  ¦  2020  ¦  1000.00  ¦  1000.00  𝄀

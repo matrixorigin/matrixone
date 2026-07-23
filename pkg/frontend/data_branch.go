@@ -17,6 +17,7 @@ package frontend
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"runtime"
 	"strconv"
@@ -714,15 +715,16 @@ func diffMergeAgency(
 		return
 	}
 	var (
-		done      bool
-		wg        = new(sync.WaitGroup)
-		outputErr atomic.Value
-		retBatCh  = make(chan batchWithKind, 10)
-		stopCh    = make(chan struct{})
-		stopOnce  sync.Once
-		emit      emitFunc
-		stop      func()
-		waited    bool
+		done        bool
+		wg          = new(sync.WaitGroup)
+		outputErr   atomic.Value
+		retBatCh    = make(chan batchWithKind, 10)
+		stopCh      = make(chan struct{})
+		stopOnce    sync.Once
+		emit        emitFunc
+		stop        func()
+		waited      bool
+		outputPhase *dataBranchOutputAsTablePhase
 	)
 
 	defer func() {
@@ -755,6 +757,17 @@ func diffMergeAgency(
 
 		if done {
 			return
+		}
+
+		if diffStmt.OutputOpt != nil && diffStmt.OutputOpt.As.ObjectName != "" {
+			if outputPhase, err = newDataBranchOutputAsTablePhase(ctx, ses.proc); err != nil {
+				return
+			}
+			defer func() {
+				if closeErr := outputPhase.close(); closeErr != nil {
+					err = errors.Join(err, closeErr)
+				}
+			}()
 		}
 	}
 
@@ -803,9 +816,15 @@ func diffMergeAgency(
 			// 4. as table
 			// 5. as file
 
-			if err2 := satisfyDiffOutputOpt(
-				ctx, cancel, stop, ses, bh, diffStmt, dagInfo, tblStuff, outputCh,
-			); err2 != nil {
+			var err2 error
+			if outputPhase != nil {
+				err2 = outputPhase.drain(ctx, cancel, tblStuff.retPool, outputCh)
+			} else {
+				err2 = satisfyDiffOutputOpt(
+					ctx, cancel, stop, ses, bh, diffStmt, dagInfo, tblStuff, outputCh,
+				)
+			}
+			if err2 != nil {
 				outputErr.Store(err2)
 			}
 		} else if pickStmt != nil {
@@ -848,7 +867,12 @@ func diffMergeAgency(
 	wg.Wait()
 
 	if outputErr.Load() != nil {
-		err = outputErr.Load().(error)
+		return outputErr.Load().(error)
+	}
+
+	if outputPhase != nil {
+		outputPhase.markProducerDone()
+		return outputPhase.materialize(ctx, cancel, ses, bh, diffStmt, tblStuff)
 	}
 
 	return err
@@ -867,6 +891,9 @@ func handleBranchMerge(
 	ses *Session,
 	stmt *tree.DataBranchMerge,
 ) (err error) {
+	if dataBranchMergeTxnNotAllowed(ses) {
+		return moerr.NewInternalError(execCtx.reqCtx, dataBranchMergePickTxnErrorInfo())
+	}
 
 	if stmt.ConflictOpt == nil {
 		stmt.ConflictOpt = &tree.ConflictOpt{
@@ -895,8 +922,11 @@ func validate(
 		return nil
 	}
 
-	if diffStmt.OutputOpt != nil && diffStmt.OutputOpt.As.ObjectName != "" {
-		return moerr.NewNotSupportedNoCtx("DATA BRANCH DIFF OUTPUT AS")
+	if diffStmt.OutputOpt != nil && diffStmt.OutputOpt.As.ObjectName != "" &&
+		diffStmt.OutputOpt.As.AtTsExpr != nil {
+		return moerr.NewInvalidInputNoCtx(
+			"destination snapshot option is not supported for DATA BRANCH DIFF OUTPUT AS",
+		)
 	}
 
 	if diffStmt.OutputOpt != nil && len(diffStmt.OutputOpt.DirPath) > 0 {
@@ -1082,7 +1112,7 @@ func isSchemaEquivalent(leftDef, rightDef *plan.TableDef) bool {
 			return false
 		}
 
-		if leftDef.Cols[i].Typ.Id != rightDef.Cols[i].Typ.Id {
+		if !isDataBranchLogicalTypeEquivalent(leftDef.Cols[i].Typ, rightDef.Cols[i].Typ) {
 			return false
 		}
 
@@ -1104,6 +1134,19 @@ func isSchemaEquivalent(leftDef, rightDef *plan.TableDef) bool {
 	}
 
 	return true
+}
+
+// isDataBranchLogicalTypeEquivalent compares the type metadata that controls
+// both DIFF value interpretation and OUTPUT AS table DDL. A relation ID can be
+// preserved by an inplace ALTER, so matching column IDs and OIDs alone do not
+// guarantee that values valid on one side can be materialized into the other.
+func isDataBranchLogicalTypeEquivalent(left, right plan.Type) bool {
+	return left.Id == right.Id &&
+		left.Width == right.Width &&
+		left.Scale == right.Scale &&
+		left.Enumvalues == right.Enumvalues &&
+		left.NotNullable == right.NotNullable &&
+		left.AutoIncr == right.AutoIncr
 }
 
 func getRelationById(
@@ -1711,6 +1754,14 @@ func buildSideCollectRange(
 			windowEnd  types.TS
 			nodeCTS    types.TS
 		)
+		// An ancestor must be resolved at the child clone timestamp, not at
+		// the endpoint snapshot. The ancestor may have been altered, dropped,
+		// or recreated after the child was forked.
+		nodeSnapshot := endpointSP
+		if i < len(selfPath)-1 {
+			nodeSnapshot = selfPathTS[i+1]
+		}
+		nodeSnapshotPB := nodeSnapshot.ToTimestamp()
 
 		// Resolve the relation handle for this node.
 		switch {
@@ -1724,7 +1775,7 @@ func buildSideCollectRange(
 			if rel, err = getRelationById(
 				ctx, ses, bh, nodeID, &plan2.Snapshot{
 					Tenant: &plan.SnapshotTenant{TenantID: ses.GetAccountId()},
-					TS:     &timestamp.Timestamp{PhysicalTime: endpointSP.Physical()},
+					TS:     &nodeSnapshotPB,
 				},
 			); err != nil {
 				return
@@ -1739,7 +1790,7 @@ func buildSideCollectRange(
 		} else {
 			ctsList, err2 := getTablesCreationCommitTS(
 				ctx, ses, rel, rel,
-				[]types.TS{endpointSP, endpointSP},
+				[]types.TS{nodeSnapshot, nodeSnapshot},
 			)
 			if err2 != nil {
 				err = err2

@@ -125,6 +125,20 @@ func appendQueryExplain(b *schedulingExplainBuilder, query *QueryTrace) {
 		query.SelectedCount,
 		query.DroppedCount,
 	))
+	b.add(fmt.Sprintf(
+		"    Intent: explicit=%t requested-pool=%s resolved-pool=%s resolved-pool-resolution=%s pool-fallback-policy=%s pool-fallback=%t empty-worker=%s worker-set=%s max-workers=%d algorithm=%s eligible=%d",
+		query.IntentExplicit,
+		explainValue(query.RequestedPool),
+		explainValue(query.ResolvedPool),
+		explainValue(query.ResolvedPoolResolution),
+		explainValue(query.PoolFallbackPolicy),
+		query.PoolFallback,
+		explainValue(query.EmptyWorkerPolicy),
+		explainValue(query.WorkerSetMode),
+		query.MaxWorkers,
+		explainValue(query.SelectionAlgorithm),
+		query.EligibleCount,
+	))
 	b.add("    Current CN: " + explainWorker(query.CurrentCN))
 	if query.SelectedOmitted {
 		b.add("    Selected workers: local details omitted")
@@ -203,6 +217,9 @@ func explainWorker(worker WorkerTrace) string {
 	}
 	if worker.Routable {
 		parts = append(parts, "route=available")
+	}
+	if worker.Route != "" && worker.Route != WorkerRouteUnknown.String() {
+		parts = append(parts, "locality="+explainValue(worker.Route))
 	}
 	if worker.Mcpu != 0 {
 		parts = append(parts, fmt.Sprintf("mcpu=%d", worker.Mcpu))

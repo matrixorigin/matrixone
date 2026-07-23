@@ -35,6 +35,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/google/uuid"
@@ -100,6 +101,20 @@ func unclassifiedStatementInUncommittedTxnErrorInfo() string {
 	return "unclassified statement appears in uncommitted transaction"
 }
 
+func dataBranchMergePickTxnErrorInfo() string {
+	return "DATA BRANCH MERGE/PICK is not supported in transactions"
+}
+
+func dataBranchMergeTxnNotAllowed(ses *Session) bool {
+	return ses.GetTxnHandler().OptionBitsIsSet(OPTION_NOT_AUTOCOMMIT) &&
+		!ses.proc.GetTxnOperator().TxnOptions().ByBegin
+}
+
+func dataBranchPickTxnNotAllowed(ses *Session) bool {
+	return ses.GetTxnHandler().InMultiStmtTransactionMode() ||
+		ses.proc.GetTxnOperator().TxnOptions().ByBegin
+}
+
 func writeWriteConflictsErrorInfo() string {
 	return "Write conflicts detected. Previous transaction need to be aborted."
 }
@@ -158,6 +173,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	if cw != nil {
 		copy(stmID[:], cw.GetUUID())
 		statement = cw.GetAst()
+		envStmt = redactStatementTextForLogging(statement, envStmt)
 
 		ses.ast = statement
 		binExec, prepareName := cw.BinaryExecute()
@@ -268,6 +284,15 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	ses.SetTStmt(stm)
 
 	return ctx, nil
+}
+
+func redactStatementTextForLogging(statement tree.Statement, text string) string {
+	switch statement.(type) {
+	case *tree.CreateIcebergCatalog, *tree.AlterIcebergCatalog:
+		return tree.String(statement, dialect.MYSQL)
+	default:
+		return text
+	}
 }
 
 func isIgnoreStatement(statement tree.Statement) bool {
@@ -829,6 +854,7 @@ func handleCmdFieldList(ses FeSession, execCtx *ExecCtx, icfl *InternalCmdFieldL
 func doSetVar(ses *Session, execCtx *ExecCtx, sv *tree.SetVar, sql string) error {
 	var err error = nil
 	var ok bool
+	var userVarIsBin bool
 	setVarFunc := func(system, global bool, name string, value interface{}, sql string) error {
 		var oldValueRaw interface{}
 		if system {
@@ -865,7 +891,7 @@ func doSetVar(ses *Session, execCtx *ExecCtx, sv *tree.SetVar, sql string) error
 				}
 			}
 		} else {
-			err = ses.SetUserDefinedVar(name, value, sql)
+			err = ses.setUserDefinedVar(name, value, sql, userVarIsBin)
 			if err != nil {
 				return err
 			}
@@ -876,8 +902,9 @@ func doSetVar(ses *Session, execCtx *ExecCtx, sv *tree.SetVar, sql string) error
 	for _, assign := range sv.Assignments {
 		name := assign.Name
 		var value interface{}
+		userVarIsBin = false
 
-		value, err = getExprValue(assign.Value, ses, execCtx)
+		value, err = getExprValue(assign.Value, ses, execCtx, &userVarIsBin)
 		if err != nil {
 			return err
 		}
@@ -1404,14 +1431,13 @@ func handleShowProfileStmt(ses FeSession, execCtx *ExecCtx, stmt *tree.ShowProfi
 	return moerr.NewNotSupported(execCtx.reqCtx, msg)
 }
 
-func doExplainStmt(reqCtx context.Context, ses *Session, stmt *tree.ExplainStmt) error {
+func doExplainStmt(reqCtx context.Context, ses *Session, stmt *tree.ExplainStmt, statementSQL ...string) error {
 
 	//1. generate the plan
 	es, err := getExplainOption(reqCtx, stmt.Options)
 	if err != nil {
 		return err
 	}
-
 	//get query optimizer and execute Optimize
 	exPlan, err := buildPlanWithAuthorization(reqCtx, ses, ses.GetTxnCompileCtx(), stmt.Statement)
 	if err != nil {
@@ -1438,26 +1464,50 @@ func doExplainStmt(reqCtx context.Context, ses *Session, stmt *tree.ExplainStmt)
 			}
 		}
 	}
+	rawSQL := ""
+	if len(statementSQL) > 0 {
+		rawSQL = statementSQL[0]
+	}
+	return writeExplainResult(reqCtx, ses, stmt, exPlan, es, rawSQL, nil)
+}
+
+func writeExplainResult(
+	reqCtx context.Context,
+	ses *Session,
+	stmt *tree.ExplainStmt,
+	exPlan *plan.Plan,
+	es *explain.ExplainOptions,
+	rawSQL string,
+	sqlMode *string,
+) error {
 	if exPlan.GetQuery() == nil {
 		return moerr.NewNotSupported(reqCtx, "the sql query plan does not support explain.")
 	}
-	txnHaveDDL := false
-	if txnOperator := ses.proc.GetTxnOperator(); txnOperator != nil {
-		if ws := txnOperator.GetWorkspace(); ws != nil {
-			txnHaveDDL = ws.GetHaveDDL()
-		}
-	}
+	txnHaveDDL := sessionTxnHaveDDL(ses)
 	// generator query explain
 	explainQuery := explain.NewExplainQueryImpl(exPlan.GetQuery())
 
 	// build explain data buffer
 	buffer := explain.NewExplainDataBuffer()
-	err = explainQuery.ExplainPlan(reqCtx, buffer, es)
+	err := explainQuery.ExplainPlan(reqCtx, buffer, es)
 	if err != nil {
 		return err
 	}
 	if explainSchedulingEnabled(ses) {
-		schedulingPreview := previewQueryScheduling(reqCtx, ses, exPlan.GetQuery(), txnHaveDDL)
+		if rawSQL == "" {
+			rawSQL = ses.GetSql()
+		}
+		// EXPLAIN EXECUTE replaces the outer EXECUTE plan with the prepared
+		// query above. Its scheduling intent belongs to that same inner SQL,
+		// not to the outer EXPLAIN fragment.
+		if execute, ok := stmt.Statement.(*tree.Execute); ok {
+			if prepared, getErr := ses.GetPrepareStmt(reqCtx, string(execute.Name)); getErr == nil {
+				rawSQL = prepared.Sql
+				sqlMode = &prepared.schedulingSQLMode
+			}
+		}
+		schedulingPreview := previewQuerySchedulingWithSQLMode(
+			reqCtx, ses, exPlan.GetQuery(), txnHaveDDL, rawSQL, sqlMode)
 		appendSchedulingExplain(buffer, schedulingPreview)
 	}
 	if err = reqCtx.Err(); err != nil {
@@ -1485,6 +1535,25 @@ func previewQueryScheduling(
 	ses *Session,
 	query *plan.Query,
 	txnHaveDDL bool,
+	statementSQL ...string,
+) schedule.Trace {
+	rawSQL := ""
+	if ses != nil {
+		rawSQL = ses.GetSql()
+	}
+	if len(statementSQL) > 0 {
+		rawSQL = statementSQL[0]
+	}
+	return previewQuerySchedulingWithSQLMode(ctx, ses, query, txnHaveDDL, rawSQL, nil)
+}
+
+func previewQuerySchedulingWithSQLMode(
+	ctx context.Context,
+	ses *Session,
+	query *plan.Query,
+	txnHaveDDL bool,
+	rawSQL string,
+	sqlMode *string,
 ) schedule.Trace {
 	if ctx == nil {
 		ctx = context.Background()
@@ -1501,6 +1570,10 @@ func previewQueryScheduling(
 	if info := ses.GetTenantInfo(); info != nil {
 		tenant = info.GetTenant()
 	}
+	intent := querySchedulingIntentForStatement(ses, rawSQL)
+	if sqlMode != nil {
+		intent = querySchedulingIntentForStatementWithSQLMode(ses, rawSQL, *sqlMode)
+	}
 	return compile.PreviewQueryScheduling(compile.SchedulingPreviewRequest{
 		Context:    previewCtx,
 		Query:      query,
@@ -1511,6 +1584,7 @@ func previewQueryScheduling(
 		Tenant:     tenant,
 		Username:   ses.GetUserName(),
 		CNLabel:    ses.getCNLabels(),
+		Intent:     intent,
 		TxnHasDDL:  txnHaveDDL,
 	})
 }
@@ -1538,13 +1612,90 @@ func explainSchedulingEnabled(ses *Session) bool {
 
 // Note: for pass the compile quickly. We will remove the comments in the future.
 func handleExplainStmt(ses FeSession, execCtx *ExecCtx, stmt *tree.ExplainStmt) error {
-	return doExplainStmt(execCtx.reqCtx, ses.(*Session), stmt)
+	rawSQL := execCtx.sqlOfStmt
+	if carrier, ok := execCtx.cw.(interface{ SchedulingSQL() string }); ok && carrier.SchedulingSQL() != "" {
+		rawSQL = carrier.SchedulingSQL()
+	}
+	if txnCW, ok := execCtx.cw.(*TxnComputationWrapper); ok && txnCW.ifIsExeccute {
+		es, err := getExplainOption(execCtx.reqCtx, stmt.Options)
+		if err != nil {
+			return err
+		}
+		exPlan, err := preparedExplainPlan(execCtx.reqCtx, txnCW)
+		if err != nil {
+			return err
+		}
+		if preparedSQL := txnCW.preparedSchedulingSQL; preparedSQL != "" {
+			rawSQL = preparedSQL
+		}
+		var sqlMode *string
+		if txnCW.hasPreparedSchedulingSQLMode {
+			sqlMode = &txnCW.preparedSchedulingSQLMode
+		}
+		return writeExplainResult(execCtx.reqCtx, ses.(*Session), stmt, exPlan, es, rawSQL, sqlMode)
+	}
+	return doExplainStmt(execCtx.reqCtx, ses.(*Session), stmt, rawSQL)
+}
+
+func preparedExplainPlan(ctx context.Context, txnCW *TxnComputationWrapper) (*plan.Plan, error) {
+	exPlan := txnCW.Plan()
+	if exPlan == nil {
+		return nil, moerr.NewInternalError(ctx, "prepared EXPLAIN has no plan")
+	}
+	if paramVals := txnCW.ParamVals(); len(paramVals) > 0 {
+		return plan2.FillValuesOfParamsInPlan(ctx, exPlan, paramVals)
+	}
+	return exPlan, nil
+}
+
+func extractPrepareStmtSQL(ctx context.Context, sql, sqlMode string) (string, error) {
+	scanner := mysql.NewScannerWithSQLMode(dialect.MYSQL, sql, mysql.ParseSQLModeFlags(sqlMode))
+	defer mysql.PutScanner(scanner)
+
+	if token, _ := scanner.Scan(); token != mysql.PREPARE {
+		return "", moerr.NewInvalidInput(ctx, "invalid PREPARE statement")
+	}
+	if token, _ := scanner.Scan(); token == mysql.EofChar() || token == mysql.LEX_ERROR {
+		return "", moerr.NewInvalidInput(ctx, "invalid PREPARE statement name")
+	}
+	if token, _ := scanner.Scan(); token != mysql.FROM {
+		return "", moerr.NewInvalidInput(ctx, "invalid PREPARE statement delimiter")
+	}
+
+	preparedStart := scanner.Pos
+	preparedSQL := sql[preparedStart:]
+	if scanner.CommentFlag {
+		scanner.TakeExecutableCommentEnd()
+		var commentEnd int
+		for commentEnd == 0 {
+			previousPos := scanner.Pos
+			token, _ := scanner.Scan()
+			commentEnd = scanner.TakeExecutableCommentEnd()
+			if commentEnd == 0 &&
+				(token == mysql.EofChar() || token == mysql.LEX_ERROR || scanner.Pos == previousPos) {
+				return "", moerr.NewInvalidInput(ctx, "invalid PREPARE executable comment")
+			}
+		}
+		insideComment := strings.TrimSpace(sql[preparedStart : commentEnd-2])
+		afterComment := strings.TrimLeftFunc(sql[commentEnd:], unicode.IsSpace)
+		switch {
+		case insideComment == "":
+			preparedSQL = afterComment
+		case afterComment == "":
+			preparedSQL = insideComment
+		default:
+			preparedSQL = insideComment + " " + afterComment
+		}
+	}
+
+	return strings.TrimLeftFunc(preparedSQL, unicode.IsSpace), nil
 }
 
 func doPrepareStmt(execCtx *ExecCtx, ses *Session, st *tree.PrepareStmt, sql string, paramTypes []byte) (*PrepareStmt, error) {
-	idx := strings.Index(strings.ToLower(sql[:(len(st.Name)+20)]), "from") + 5
-	originSql := strings.TrimLeft(sql[idx:], " ")
-	// fmt.Print(originSql)
+	originSql, err := extractPrepareStmtSQL(execCtx.reqCtx, sql, sessionSQLModeForParser(ses))
+	if err != nil {
+		return nil, err
+	}
 	prepareStmt, err := createPrepareStmt(execCtx, ses, originSql, st, st.Stmt)
 	if err != nil {
 		return nil, err
@@ -1571,7 +1722,13 @@ func handlePrepareVar(ses *Session, execCtx *ExecCtx, st *tree.PrepareVar) (*Pre
 	if err != nil {
 		return nil, err
 	}
-	wrapper.Sql = p.Value.(string)
+	// MySQL converts numeric and NULL user variables to statement text so that
+	// the SQL parser reports the invalid statement consistently.
+	if p.Value == nil {
+		wrapper.Sql = "NULL"
+	} else {
+		wrapper.Sql = fmt.Sprint(p.Value)
+	}
 
 	return doPrepareString(ses, execCtx, wrapper)
 }
@@ -1677,11 +1834,16 @@ func createPrepareStmt(
 		return nil, err
 	}
 
+	schedulingSQLMode := sessionSQLModeForParser(ses)
+	prepareSchedulingIntent := querySchedulingIntentForStatementWithSQLMode(
+		ses, originSQL, schedulingSQLMode)
 	var comp *compile.Compile
 	if _, ok := preparePlan.GetDcl().GetPrepare().Plan.Plan.(*plan.Plan_Query); ok &&
-		shouldCachePrepareCompile(preparePlan.GetDcl().GetPrepare().Plan) {
+		shouldCachePrepareCompile(preparePlan.GetDcl().GetPrepare().Plan) &&
+		(!prepareSchedulingIntent.Explicit ||
+			schedule.ValidateSchedulingIntent(prepareSchedulingIntent) != "") {
 		//only DQL & DML will pre compile
-		comp, err = createCompile(execCtx, ses, ses.proc, originSQL, saveStmt, preparePlan.GetDcl().GetPrepare().Plan, ses.GetOutputCallback(execCtx), true, nil)
+		comp, err = createCompile(execCtx, ses, ses.proc, originSQL, originSQL, &schedulingSQLMode, saveStmt, preparePlan.GetDcl().GetPrepare().Plan, ses.GetOutputCallback(execCtx), true, nil)
 		if err != nil {
 			if !moerr.IsMoErrCode(err, moerr.ErrCantCompileForPrepare) {
 				return nil, err
@@ -1701,13 +1863,17 @@ func createPrepareStmt(
 		compile:             comp,
 		PreparePlan:         preparePlan,
 		PrepareStmt:         saveStmt,
+		NativeMode:          ses.sqlModeHasMatrixOneNative(),
 		remapDb:             maps.Clone(execCtx.remapDb),
+		defaultDatabase:     ses.GetTxnCompileCtx().GetDatabase(),
+		tempTableVersion:    ses.GetTempTableVersion(),
 		getFromSendLongData: make(map[int]struct{}),
+		schedulingSQLMode:   schedulingSQLMode,
 	}
 
-	dcPrepare, ok := preparePlan.GetDcl().Control.(*plan.DataControl_Prepare)
+	_, ok := preparePlan.GetDcl().Control.(*plan.DataControl_Prepare)
 	if ok {
-		columns := plan2.GetResultColumnsFromPlan(dcPrepare.Prepare.Plan)
+		columns := getPreparedResultColumns(prepareStmt, sessionTxnHaveDDL(ses))
 		if prepareStmt.ColDefData, err = execCtx.resper.MysqlRrWr().MakeColumnDefData(execCtx.reqCtx, columns); err != nil {
 			logutil.Errorf("Error make column def data for prepare statement: %v", err)
 		}
@@ -2037,14 +2203,37 @@ func handleDropProcedure(ses FeSession, execCtx *ExecCtx, dp *tree.DropProcedure
 }
 
 func handleCallProcedure(ses FeSession, execCtx *ExecCtx, call *tree.CallStmt, bg bool) error {
-	results, err := doInterpretCall(execCtx.reqCtx, ses, call, bg)
+	var affectedRows int64
+	results, err := doInterpretCall(
+		execCtx.reqCtx,
+		ses,
+		call,
+		bg,
+		procedureCallerAffectedRows(execCtx),
+		&affectedRows,
+	)
 	if err != nil {
 		return err
 	}
+	execCtx.runResult = &util.RunResult{AffectRows: normalizeProcedureAffectedRows(affectedRows)}
 
 	ses.SetMysqlResultSet(nil)
 	execCtx.results = results
 	return nil
+}
+
+func procedureCallerAffectedRows(execCtx *ExecCtx) int64 {
+	if execCtx.proc == nil {
+		return 0
+	}
+	return execCtx.proc.GetAffectedRows()
+}
+
+func normalizeProcedureAffectedRows(affectedRows int64) uint64 {
+	if affectedRows < 0 {
+		return 0
+	}
+	return uint64(affectedRows)
 }
 
 // handleGrantRole grants the role
@@ -2753,6 +2942,14 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 		return cws, nil
 	} else if cached := ses.getCachedPlan(execCtx.input.getHash()); cached != nil {
 		var remapErr error
+		statementSchedulingSQL, schedulingErr := schedulingSQLByStatementWithSQLMode(
+			execCtx.reqCtx, execCtx.input.getSql(), parserSQLMode)
+		if schedulingErr != nil {
+			return nil, schedulingErr
+		}
+		if len(statementSchedulingSQL) != len(cached.stmts) {
+			return nil, moerr.NewInternalError(execCtx.reqCtx, "the count of scheduling policies is not equal to cached statements")
+		}
 		statementRemaps, remapErr = extractRemapDbByStatementWithSQLMode(execCtx.reqCtx, execCtx.input.getSql(), parserSQLMode)
 		if remapErr != nil {
 			return nil, remapErr
@@ -2764,6 +2961,7 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 			tcw := InitTxnComputationWrapper(ses, stmt, proc)
 			tcw.plan = cached.plans[i]
 			tcw.SetRemapDb(statementRemaps[i])
+			tcw.SetSchedulingSQL(statementSchedulingSQL[i])
 			cws = append(cws, tcw)
 		}
 
@@ -2876,8 +3074,22 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 		}
 	}
 
+	var statementSchedulingSQL []string
+	if execCtx.input.getStmt() != nil {
+		statementSchedulingSQL = []string{execCtx.input.getSql()}
+	} else {
+		statementSchedulingSQL, err = schedulingSQLByStatementWithSQLMode(
+			execCtx.reqCtx, execCtx.input.getSql(), parserSQLMode)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if len(statementSchedulingSQL) != len(stmts) {
+		return nil, moerr.NewInternalError(execCtx.reqCtx, "the count of scheduling policies is not equal to statements")
+	}
 	for i, stmt := range stmts {
 		tcw := InitTxnComputationWrapper(ses, stmt, proc)
+		tcw.SetSchedulingSQL(statementSchedulingSQL[i])
 		if len(statementRemaps) == len(stmts) {
 			tcw.SetRemapDb(statementRemaps[i])
 		}
@@ -2895,7 +3107,7 @@ func parseSql(execCtx *ExecCtx, p *mysql.MySQLParser) (stmts []tree.Statement, e
 	)
 }
 
-func sessionSQLModeForParser(ses FeSession) string {
+func sessionSQLMode(ses FeSession) string {
 	v, err := ses.GetSessionSysVar("sql_mode")
 	if err != nil {
 		return ""
@@ -2904,7 +3116,27 @@ func sessionSQLModeForParser(ses FeSession) string {
 	if !ok {
 		return ""
 	}
+	return mode
+}
+
+func sessionSQLModeForParser(ses FeSession) string {
+	mode := sessionSQLMode(ses)
 	return mysql.SessionSQLModeForParser(mode)
+}
+
+func refreshStatementScopedSessionInfo(ses FeSession, proc *process.Process) {
+	refreshStatementScopedSessionInfoWithSQLMode(sessionSQLMode(ses), proc)
+}
+
+func refreshStatementScopedSessionInfoWithSQLMode(sqlMode string, proc *process.Process) {
+	refreshStatementScopedSessionInfoWithNativeMode(mysql.HasMatrixOneNativeSQLMode(sqlMode), proc)
+}
+
+func refreshStatementScopedSessionInfoWithNativeMode(nativeMode bool, proc *process.Process) {
+	if proc == nil || proc.Base == nil {
+		return
+	}
+	proc.Base.SessionInfo.MatrixOneNativeMode = nativeMode
 }
 
 func parserLowerCaseTableNames(ses FeSession) int64 {
@@ -3181,6 +3413,13 @@ func authenticateUserCanExecutePrepareOrExecute(reqCtx context.Context, ses *Ses
 	if getPu(ses.GetService()).SV.SkipCheckPrivilege {
 		return stats, nil
 	}
+	for {
+		explainStmt, ok := stmt.(*tree.ExplainStmt)
+		if !ok {
+			break
+		}
+		stmt = explainStmt.Statement
+	}
 	delta, err := authenticateUserCanExecuteStatement(reqCtx, ses, stmt)
 	if err != nil {
 		return stats, err
@@ -3207,8 +3446,9 @@ func canExecuteStatementInUncommittedTransaction(
 		return err
 	}
 	if !can {
-		if _, ok := stmt.(*tree.DataBranchPick); ok {
-			return moerr.NewInternalError(reqCtx, "DATA BRANCH PICK is not supported in explicit transactions")
+		switch stmt.(type) {
+		case *tree.DataBranchMerge, *tree.DataBranchPick:
+			return moerr.NewInternalError(reqCtx, dataBranchMergePickTxnErrorInfo())
 		}
 		//is ddl statement
 		if IsCreateDropDatabase(stmt) {
@@ -3943,6 +4183,8 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	// ROW_COUNT() builtin can read it.
 	proc.SetAffectedRows(ses.GetLastAffectedRows())
 	proc.SetResolveVariableFunc(ses.txnCompileCtx.ResolveVariable)
+	proc.SetResolveVariableIsBinFunc(ses.txnCompileCtx.ResolveVariableIsBin)
+	refreshStatementScopedSessionInfo(ses, proc)
 	// Frontend client SQL — session-bound resolver. Procs constructed
 	// via pkg/sql/compile/sql_executor.go's NewTopProcess inherit
 	// IsFrontend from opts.IsFrontend() (default false → background);
@@ -4217,6 +4459,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 				return recordParseError(nextInput, nextErr)
 			}
 			execCtx.input = nextInput
+			refreshStatementScopedSessionInfo(ses, proc)
 			nextCWs, nextErr := GetComputationWrapper(execCtx, ses.GetDatabaseName(),
 				ses.GetUserName(),
 				pu.StorageEngine,
@@ -4291,6 +4534,32 @@ func sqlForRecordByStatementWithSQLMode(ctx context.Context, sql string, sqlMode
 	}
 	if len(byStatement) == 0 {
 		return []string{""}, nil
+	}
+	return byStatement, nil
+}
+
+// schedulingSQLByStatementWithSQLMode keeps raw statement text (including
+// optimizer comments) aligned with the parser's AST list. Unlike sqlForRecord,
+// this text is control-plane input and must never be sanitized first.
+func schedulingSQLByStatementWithSQLMode(ctx context.Context, sql string, sqlMode string) ([]string, error) {
+	if isCmdFieldListSql(sql) || isCmdGetSnapshotTsSql(sql) ||
+		isCmdGetDatabasesSql(sql) || isCmdGetMoIndexesSql(sql) ||
+		isCmdGetDdlSql(sql) || isCmdGetObjectSql(sql) ||
+		isCmdObjectListSql(sql) || isCmdCheckSnapshotFlushedSql(sql) {
+		return []string{sql}, nil
+	}
+	fragments, err := parsers.SplitSqlByStatementWithSQLMode(ctx, sql, sqlMode)
+	if err != nil {
+		return nil, err
+	}
+	byStatement := make([]string, 0, len(fragments))
+	for _, fragment := range fragments {
+		if parsers.FragmentHasStatement(fragment) {
+			byStatement = append(byStatement, fragment)
+		}
+	}
+	if len(byStatement) == 0 {
+		return []string{sql}, nil
 	}
 	return byStatement, nil
 }

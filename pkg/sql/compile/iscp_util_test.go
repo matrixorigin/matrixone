@@ -16,7 +16,6 @@ package compile
 
 import (
 	"context"
-	"fmt"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -27,16 +26,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-/*
-func mockIscpRegisterJobSuccess(ctx context.Context, cnUUID string, txn client.TxnOperator, spec *iscp.JobSpec, job *iscp.JobID, startFromNow bool) (bool, error) {
-	return true, nil
-}
-
-func mockIscpUnregisterJobSuccess(ctx context.Context, cnUUID string, txn client.TxnOperator, job *iscp.JobID) (bool, error) {
-	return true, nil
-}
-*/
 
 func mockIscpRegisterJobError(ctx context.Context, cnUUID string, txn client.TxnOperator, spec *iscp.JobSpec, job *iscp.JobID, startFromNow bool) (bool, error) {
 	return false, moerr.NewInternalErrorNoCtx("mock register job error")
@@ -154,7 +143,6 @@ func TestISCPCreateAllIndexCdcTasks(t *testing.T) {
 
 		err := CreateAllIndexCdcTasks(c, tbldef.Indexes, "dbname", "tname", 0, false, tbldef)
 		require.NotNil(t, err)
-		fmt.Println(err)
 
 	}
 
@@ -172,7 +160,6 @@ func TestISCPCreateAllIndexCdcTasks(t *testing.T) {
 
 		err := CreateAllIndexCdcTasks(c, tbldef.Indexes, "dbname", "tname", 0, false, tbldef)
 		require.NotNil(t, err)
-		fmt.Println(err)
 
 	}
 
@@ -205,7 +192,6 @@ func TestISCPDropAllIndexCdcTasks(t *testing.T) {
 
 		err := DropAllIndexCdcTasks(c, tbldef, "dbname", "tname")
 		require.NotNil(t, err)
-		fmt.Println(err)
 
 	}
 
@@ -223,7 +209,6 @@ func TestISCPDropAllIndexCdcTasks(t *testing.T) {
 
 		err := DropAllIndexCdcTasks(c, tbldef, "dbname", "tname")
 		require.NotNil(t, err)
-		fmt.Println(err)
 
 	}
 
@@ -256,7 +241,6 @@ func TestISCPDropIndexCdcTask(t *testing.T) {
 
 		err := DropIndexCdcTask(c, tbldef, "dbname", "tname", "a")
 		require.NotNil(t, err)
-		fmt.Println(err)
 
 	}
 
@@ -274,7 +258,6 @@ func TestISCPDropIndexCdcTask(t *testing.T) {
 
 		err := DropIndexCdcTask(c, tbldef, "dbname", "tname", "a")
 		require.NotNil(t, err)
-		fmt.Println(err)
 
 	}
 
@@ -298,7 +281,6 @@ func TestISCPCreateIndexCdcTask(t *testing.T) {
 	{
 		err := CreateIndexCdcTask(c, "dbname", "tname", 0, "a", 0, true, "", nil)
 		require.NotNil(t, err)
-		fmt.Println(err)
 
 	}
 

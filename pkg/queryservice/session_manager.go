@@ -56,12 +56,17 @@ func (sm *SessionManager) AddSession(s Session) {
 	}
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
-	sm.mu.sessionsByID[s.GetUUIDString()] = s
-	_, ok := sm.mu.sessionsByTenant[s.GetTenantName()]
-	if !ok {
-		sm.mu.sessionsByTenant[s.GetTenantName()] = make(map[Session]struct{})
+	id := s.GetUUIDString()
+	tenant := s.GetTenantName()
+	if old, ok := sm.mu.sessionsByID[id]; ok && old != s {
+		delete(sm.mu.sessionsByTenant[old.GetTenantName()], old)
 	}
-	sm.mu.sessionsByTenant[s.GetTenantName()][s] = struct{}{}
+	sm.mu.sessionsByID[id] = s
+	_, ok := sm.mu.sessionsByTenant[tenant]
+	if !ok {
+		sm.mu.sessionsByTenant[tenant] = make(map[Session]struct{})
+	}
+	sm.mu.sessionsByTenant[tenant][s] = struct{}{}
 }
 
 // RemoveSession removes a session from manager.
@@ -71,7 +76,10 @@ func (sm *SessionManager) RemoveSession(s Session) {
 	}
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
-	delete(sm.mu.sessionsByID, s.GetUUIDString())
+	id := s.GetUUIDString()
+	if current, ok := sm.mu.sessionsByID[id]; ok && current == s {
+		delete(sm.mu.sessionsByID, id)
+	}
 	delete(sm.mu.sessionsByTenant[s.GetTenantName()], s)
 }
 

@@ -1,0 +1,1104 @@
+// Copyright 2026 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package iceberg
+
+import (
+	"context"
+	"errors"
+	"net/http"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/iceberg/api"
+	icebergcatalog "github.com/matrixorigin/matrixone/pkg/iceberg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/iceberg/dml"
+	icebergio "github.com/matrixorigin/matrixone/pkg/iceberg/io"
+	"github.com/matrixorigin/matrixone/pkg/iceberg/metadata"
+	"github.com/matrixorigin/matrixone/pkg/iceberg/model"
+	icebergwritecore "github.com/matrixorigin/matrixone/pkg/iceberg/write"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/icebergwrite"
+	internalexecutor "github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
+)
+
+type TableMappingGetter interface {
+	GetTableMapping(ctx context.Context, accountID uint32, databaseID uint64, tableID uint64) (model.TableMapping, error)
+}
+
+type ResidencyPolicyLister interface {
+	ListResidencyPolicies(ctx context.Context, accountID uint32, catalogID uint64) ([]model.ResidencyPolicy, error)
+}
+
+type AppendRuntimeCoordinatorStore interface {
+	CatalogByNameGetter
+	TableMappingGetter
+	DMLCommitWorkflowStore
+}
+
+type AppendRuntimeSnapshotIDFunc func(time.Time, *api.TableMetadata) int64
+
+type AppendRuntimeCoordinatorFactoryOptions struct {
+	Store                  AppendRuntimeCoordinatorStore
+	CatalogFactory         icebergcatalog.ClientFactory
+	Config                 api.Config
+	Account                api.AccountConfig
+	Now                    func() time.Time
+	SnapshotID             AppendRuntimeSnapshotIDFunc
+	CommitVerifier         icebergwritecore.CommitVerifier
+	MetricsReporter        api.MetricsReporter
+	CacheInvalidator       icebergwritecore.CacheInvalidator
+	AllowTagMove           bool
+	TargetFileSizeBytes    int64
+	BuildFileService       icebergio.ScopedFileServiceBuilder
+	ObjectIOProvider       icebergio.ObjectIOProvider
+	ScopeForLocation       icebergio.ObjectScopeForLocation
+	ResidencyPolicies      []model.ResidencyPolicy
+	RequireResidencyPolicy bool
+}
+
+type AppendRuntimeCoordinatorFactory struct {
+	opts   AppendRuntimeCoordinatorFactoryOptions
+	shared *appendRuntimeCoordinatorCache
+}
+
+type appendObjectIOContext struct {
+	WriterProvider   icebergio.ObjectIOProvider
+	ReaderProvider   icebergio.ObjectIOProvider
+	ScopeForLocation icebergio.ObjectScopeForLocation
+}
+
+func NewAppendRuntimeCoordinatorFactory(opts AppendRuntimeCoordinatorFactoryOptions) AppendRuntimeCoordinatorFactory {
+	return AppendRuntimeCoordinatorFactory{
+		opts: opts,
+		shared: &appendRuntimeCoordinatorCache{
+			entries: make(map[string]*appendRuntimeCoordinatorCacheEntry),
+		},
+	}
+}
+
+func NewAppendRuntimeCoordinatorFactoryFromInternalSQLExecutor(
+	exec internalexecutor.SQLExecutor,
+	opts AppendRuntimeCoordinatorFactoryOptions,
+) AppendRuntimeCoordinatorFactory {
+	if opts.Store == nil {
+		opts.Store = NewDAO(InternalSQLExecutorAdapter{Executor: exec})
+	}
+	return NewAppendRuntimeCoordinatorFactory(opts)
+}
+
+func (f AppendRuntimeCoordinatorFactory) NewCoordinator(ctx context.Context, req icebergwrite.AppendRequest) (icebergwrite.Coordinator, error) {
+	if req.Operation != "" && req.Operation != icebergwrite.OperationAppend {
+		return nil, nil
+	}
+	if f.shared != nil {
+		if key := appendRuntimeCoordinatorCacheKey(req); key != "" {
+			return f.shared.getOrCreate(ctx, key, req, func() (icebergwrite.Coordinator, error) {
+				return f.newCoordinator(ctx, req)
+			})
+		}
+	}
+	return f.newCoordinator(ctx, req)
+}
+
+func (f AppendRuntimeCoordinatorFactory) newCoordinator(ctx context.Context, req icebergwrite.AppendRequest) (icebergwrite.Coordinator, error) {
+	if err := f.validateRuntimeRequest(ctx, req); err != nil {
+		return nil, err
+	}
+	catalogModel, err := f.opts.Store.GetCatalogByName(ctx, req.AccountID, req.CatalogName)
+	if err != nil {
+		return nil, err
+	}
+	access, err := checkRuntimeCatalogAccess(ctx, f.opts.Store, req.AccountID, catalogModel, req.RoleID, req.UserID)
+	if err != nil {
+		return nil, err
+	}
+	req.ExternalPrincipal = access.Decision.ExternalPrincipal
+	mapping, err := f.tableMapping(ctx, req, catalogModel)
+	if err != nil {
+		return nil, err
+	}
+	catalogCaps, err := icebergcatalog.ParseCapabilitiesJSON(catalogModel.CapabilitiesJSON)
+	if err != nil {
+		return nil, api.ToMOErr(ctx, err)
+	}
+	client, err := f.opts.CatalogFactory.NewClient(ctx, catalogModel)
+	if err != nil {
+		return nil, api.ToMOErr(ctx, err)
+	}
+	namespace := dottedNamespace(firstNonEmpty(mapping.Namespace, req.Namespace))
+	rawTargetRef := firstNonEmpty(req.DefaultRef, mapping.DefaultRef, model.DefaultRefMain)
+	catalogReq, targetRef, targetRefType, err := resolveRuntimeCatalogRequestPrefixForWriteRef(ctx, client, api.CatalogRequest{
+		Catalog:           catalogModel,
+		ExternalPrincipal: req.ExternalPrincipal,
+	}, rawTargetRef, catalogCaps, f.opts.AllowTagMove)
+	if err != nil {
+		return nil, api.ToMOErr(ctx, err)
+	}
+	loadResp, err := client.LoadTable(ctx, api.LoadTableRequest{
+		CatalogRequest: catalogReq,
+		Namespace:      namespace,
+		Table:          firstNonEmpty(mapping.TableName, req.Table),
+		Snapshots:      "all",
+	})
+	if err != nil {
+		return nil, api.ToMOErr(ctx, err)
+	}
+	catalogReq.TableToken = loadResp.TableToken
+	tableMeta, err := metadata.ParseTableMetadata(loadResp.MetadataJSON, strings.TrimSpace(loadResp.MetadataLocation))
+	if err != nil {
+		return nil, api.ToMOErr(ctx, err)
+	}
+	if err := validateRuntimeWriteFormatVersion(ctx, req.Table, tableMeta.FormatVersion); err != nil {
+		return nil, err
+	}
+	schema, err := appendCurrentSchema(ctx, tableMeta, req.Table)
+	if err != nil {
+		return nil, err
+	}
+	spec, err := appendDefaultSpec(ctx, tableMeta, req.Table)
+	if err != nil {
+		return nil, err
+	}
+	caps := mergeCatalogCapabilities(catalogCaps, loadResp.Capabilities)
+	if targetRef == "" {
+		targetRef, targetRefType, err = resolveDMLTargetRef(ctx, tableMeta, rawTargetRef, caps, f.opts.AllowTagMove)
+		if err != nil {
+			return nil, err
+		}
+	}
+	baseSnapshot, baseSnapshotID, err := appendBaseSnapshot(ctx, tableMeta, targetRef)
+	if err != nil {
+		return nil, err
+	}
+	objectIO, err := f.objectIOContext(ctx, client, catalogReq, loadResp, namespace, firstNonEmpty(mapping.TableName, req.Table), catalogModel)
+	if err != nil {
+		return nil, err
+	}
+	objectWriter := icebergio.ProviderObjectWriter{Provider: objectIO.WriterProvider, ScopeForLocation: objectIO.ScopeForLocation}
+	objectReader := icebergio.ProviderObjectReader{Provider: objectIO.ReaderProvider, ScopeForLocation: objectIO.ScopeForLocation}
+	effectiveCfg := f.effectiveConfig(req.AccountID)
+	scanConfig := effectiveCfg.Scan
+	preserved, err := readAppendBaseManifestList(ctx, objectReader, baseSnapshot, scanConfig.PlanningMaxMemory, scanConfig.MaxManifestFiles)
+	if err != nil {
+		return nil, err
+	}
+	now := f.now()
+	snapshotID := f.nextSnapshotID(now, tableMeta)
+	sequenceNumber := nextDMLSequenceNumber(tableMeta)
+	writerID := "append-" + api.PathHash(firstNonEmpty(req.StatementID, req.IdempotencyKey))
+	manifestPaths, err := buildAppendManifestPaths(ctx, tableMeta.Location, firstNonEmpty(req.StatementID, req.IdempotencyKey), snapshotID)
+	if err != nil {
+		return nil, err
+	}
+	appendWriteBudget := newDMLMemoryBudget(
+		effectiveCfg.Write.DMLMaxMemory,
+		metadata.ManifestListMemoryWeight(0, preserved),
+	)
+	writer, err := icebergwritecore.NewFanoutParquetDataWriter(ctx, icebergwritecore.FanoutWriterConfig{
+		Schema:              schema,
+		PartitionSpec:       spec,
+		TableLocation:       strings.TrimRight(strings.TrimSpace(tableMeta.Location), "/"),
+		DataDir:             appendDataDir(firstNonEmpty(req.StatementID, req.IdempotencyKey), snapshotID),
+		WriterID:            writerID,
+		TargetFileSizeBytes: f.opts.TargetFileSizeBytes,
+		TimeZone:            req.TimeZone,
+	}, bufferedDataFileOutputFactory{
+		Writer:                objectWriter,
+		MemoryBudget:          appendWriteBudget,
+		RetainedMetadataBytes: retainedDMLDataFileMetadataBytesForSchema(schema, spec),
+	})
+	if err != nil {
+		return nil, api.ToMOErr(ctx, err)
+	}
+	builder := &appendManifestWritingBuilder{
+		ManifestAttemptBuilder: icebergwritecore.ManifestAttemptBuilder{
+			SnapshotID:         snapshotID,
+			SequenceNumber:     sequenceNumber,
+			TimestampMS:        now.UnixMilli(),
+			ManifestPath:       manifestPaths.ManifestPath,
+			ManifestListPath:   manifestPaths.ManifestListPath,
+			PreservedManifests: preserved,
+			MaxMemoryBytes:     effectiveCfg.Write.DMLMaxMemory,
+			InitialMemoryBytes: metadata.ManifestListMemoryWeight(0, preserved),
+		},
+		Writer: objectWriter,
+	}
+	commitVerifier := f.opts.CommitVerifier
+	if commitVerifier == nil {
+		commitVerifier = icebergwritecore.CatalogCommitVerifier{Client: client}
+	}
+	workflow := icebergwritecore.AppendWorkflow{
+		Builder:          builder,
+		Committer:        client,
+		Verifier:         commitVerifier,
+		OrphanRecorder:   OrphanFileRecorder{DAO: f.opts.Store},
+		AuditRecorder:    PublishAuditRecorder{DAO: f.opts.Store},
+		CacheInvalidator: f.opts.CacheInvalidator,
+		MetricsReporter:  appendMetricsReporter(f.opts.MetricsReporter, client),
+		Now:              f.opts.Now,
+		OrphanTTL:        effectiveCfg.Write.OrphanTTL,
+	}
+	appendReq, err := icebergwritecore.BuildAppendRequest(ctx, icebergwritecore.AppendRequestSpec{
+		CatalogRequest:       catalogReq,
+		Namespace:            namespace,
+		Table:                firstNonEmpty(mapping.TableName, req.Table),
+		TableLocation:        tableMeta.Location,
+		TargetRef:            targetRef,
+		TargetRefType:        targetRefType,
+		TargetRefRetention:   tableMeta.Refs[targetRef],
+		AllowTagMove:         f.opts.AllowTagMove,
+		CatalogCapabilities:  caps,
+		TableUUID:            tableMeta.TableUUID,
+		FormatVersion:        tableMeta.FormatVersion,
+		BaseSnapshotID:       baseSnapshotID,
+		BaseSchemaID:         schema.SchemaID,
+		BaseSpecID:           spec.SpecID,
+		BaseSchema:           schema,
+		BaseSpec:             spec,
+		KnownPartitionSpecs:  append([]api.PartitionSpec(nil), tableMeta.PartitionSpecs...),
+		WriterOwnerAccountID: mapping.WriterOwnerAccountID,
+		IdempotencyKey:       firstNonEmpty(req.IdempotencyKey, req.StatementID),
+		SourceKind:           icebergwritecore.AppendSourceSQLInsert,
+		SourceQueryID:        req.StatementID,
+		WriterID:             writerID,
+		StatementID:          req.StatementID,
+		Summary: map[string]string{
+			"mo-operation": string(icebergwrite.OperationAppend),
+		},
+		PublishAuditHint: api.PublishAuditHint{
+			JobID:       firstNonEmpty(req.StatementID, req.IdempotencyKey),
+			SourceBatch: firstNonEmpty(req.StatementID, req.IdempotencyKey),
+		},
+	})
+	if err != nil {
+		return nil, api.ToMOErr(ctx, errors.Join(err, writer.Abort(ctx)))
+	}
+	return &AppendRuntimeCoordinator{
+		req:          req,
+		appendReq:    appendReq,
+		writer:       writer,
+		workflow:     workflow,
+		closed:       false,
+		committed:    false,
+		dataFiles:    nil,
+		objectRef:    "",
+		releaseRef:   nil,
+		memoryBudget: appendWriteBudget,
+	}, nil
+}
+
+type appendRuntimeCoordinatorCache struct {
+	mu      sync.Mutex
+	entries map[string]*appendRuntimeCoordinatorCacheEntry
+}
+
+type appendRuntimeCoordinatorCacheEntry struct {
+	ready  chan struct{}
+	shared *appendRuntimeSharedCoordinator
+	err    error
+}
+
+func (c *appendRuntimeCoordinatorCache) getOrCreate(ctx context.Context, key string, req icebergwrite.AppendRequest, build func() (icebergwrite.Coordinator, error)) (icebergwrite.Coordinator, error) {
+	c.mu.Lock()
+	if entry := c.entries[key]; entry != nil {
+		c.mu.Unlock()
+		select {
+		case <-entry.ready:
+			if entry.err != nil {
+				return nil, entry.err
+			}
+			return &appendRuntimeSharedCoordinatorScope{shared: entry.shared, scopeID: appendRuntimeParallelScopeID(req)}, nil
+		case <-ctx.Done():
+			return nil, context.Cause(ctx)
+		}
+	}
+	entry := &appendRuntimeCoordinatorCacheEntry{ready: make(chan struct{})}
+	c.entries[key] = entry
+	c.mu.Unlock()
+
+	coord, err := build()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err != nil {
+		entry.err = err
+		if c.entries[key] == entry {
+			delete(c.entries, key)
+		}
+		close(entry.ready)
+		return nil, err
+	}
+	shared := newAppendRuntimeSharedCoordinator(coord, req)
+	shared.release = func() {
+		c.release(key, shared)
+	}
+	entry.shared = shared
+	close(entry.ready)
+	return &appendRuntimeSharedCoordinatorScope{shared: shared, scopeID: appendRuntimeParallelScopeID(req)}, nil
+}
+
+func (c *appendRuntimeCoordinatorCache) release(key string, coord *appendRuntimeSharedCoordinator) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if entry := c.entries[key]; entry != nil && entry.shared == coord {
+		delete(c.entries, key)
+	}
+}
+
+type appendRuntimeSharedCoordinatorScope struct {
+	shared  *appendRuntimeSharedCoordinator
+	scopeID int32
+}
+
+func (s *appendRuntimeSharedCoordinatorScope) Begin(ctx context.Context, req icebergwrite.AppendRequest) error {
+	if s == nil || s.shared == nil {
+		return api.ToMOErr(ctx, api.NewError(api.ErrConfigInvalid, "Iceberg append shared coordinator scope is not initialized", nil))
+	}
+	return s.shared.Begin(ctx, req)
+}
+
+func (s *appendRuntimeSharedCoordinatorScope) Append(ctx context.Context, bat *batch.Batch) error {
+	if s == nil || s.shared == nil {
+		return api.ToMOErr(ctx, api.NewError(api.ErrConfigInvalid, "Iceberg append shared coordinator scope is not initialized", nil))
+	}
+	return s.shared.Append(ctx, bat)
+}
+
+func (s *appendRuntimeSharedCoordinatorScope) AppendWithProcess(proc *process.Process, bat *batch.Batch) error {
+	ctx := context.Background()
+	if proc != nil {
+		ctx = proc.Ctx
+	}
+	if s == nil || s.shared == nil {
+		return api.ToMOErr(ctx, api.NewError(api.ErrConfigInvalid, "Iceberg append shared coordinator scope is not initialized", nil))
+	}
+	return s.shared.AppendWithProcess(proc, bat)
+}
+
+func (s *appendRuntimeSharedCoordinatorScope) Commit(ctx context.Context) error {
+	if s == nil || s.shared == nil {
+		return api.ToMOErr(ctx, api.NewError(api.ErrConfigInvalid, "Iceberg append shared coordinator scope is not initialized", nil))
+	}
+	return s.shared.CommitScope(ctx, s.scopeID)
+}
+
+func (s *appendRuntimeSharedCoordinatorScope) Abort(ctx context.Context, cause error) error {
+	if s == nil || s.shared == nil {
+		return nil
+	}
+	return s.shared.Abort(ctx, cause)
+}
+
+type appendRuntimeSharedCoordinator struct {
+	mu              sync.Mutex
+	inner           icebergwrite.Coordinator
+	release         func()
+	done            sync.Once
+	opened          bool
+	expectedScopes  int
+	begunScopes     map[int32]struct{}
+	finishedScopes  map[int32]struct{}
+	commitAttempted bool
+	commitErr       error
+	aborted         bool
+	abortErr        error
+}
+
+func newAppendRuntimeSharedCoordinator(inner icebergwrite.Coordinator, req icebergwrite.AppendRequest) *appendRuntimeSharedCoordinator {
+	expected := int(req.MaxParallel)
+	if expected <= 0 {
+		expected = 1
+	}
+	return &appendRuntimeSharedCoordinator{
+		inner:          inner,
+		expectedScopes: expected,
+		begunScopes:    make(map[int32]struct{}, expected),
+		finishedScopes: make(map[int32]struct{}, expected),
+	}
+}
+
+func (c *appendRuntimeSharedCoordinator) Begin(ctx context.Context, req icebergwrite.AppendRequest) error {
+	if c == nil || c.inner == nil {
+		return api.ToMOErr(ctx, api.NewError(api.ErrConfigInvalid, "Iceberg append shared coordinator is not initialized", nil))
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.aborted {
+		return c.abortErr
+	}
+	if c.commitAttempted {
+		if c.commitErr != nil {
+			return c.commitErr
+		}
+		return api.ToMOErr(ctx, api.NewError(api.ErrCommitUnknown, "Iceberg append coordinator already committed before this parallel scope started", nil))
+	}
+	if !c.opened {
+		if err := c.inner.Begin(ctx, req); err != nil {
+			return err
+		}
+		c.opened = true
+	}
+	c.begunScopes[appendRuntimeParallelScopeID(req)] = struct{}{}
+	return nil
+}
+
+func (c *appendRuntimeSharedCoordinator) Append(ctx context.Context, bat *batch.Batch) error {
+	if c == nil || c.inner == nil {
+		return api.ToMOErr(ctx, api.NewError(api.ErrConfigInvalid, "Iceberg append shared coordinator is not initialized", nil))
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err := c.appendStateErrorLocked(ctx); err != nil {
+		return err
+	}
+	return c.inner.Append(ctx, bat)
+}
+
+func (c *appendRuntimeSharedCoordinator) AppendWithProcess(proc *process.Process, bat *batch.Batch) error {
+	ctx := context.Background()
+	if proc != nil {
+		ctx = proc.Ctx
+	}
+	if c == nil || c.inner == nil {
+		return api.ToMOErr(ctx, api.NewError(api.ErrConfigInvalid, "Iceberg append shared coordinator is not initialized", nil))
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err := c.appendStateErrorLocked(ctx); err != nil {
+		return err
+	}
+	if processAware, ok := c.inner.(icebergwrite.ProcessAwareCoordinator); ok {
+		return processAware.AppendWithProcess(proc, bat)
+	}
+	return c.inner.Append(ctx, bat)
+}
+
+func (c *appendRuntimeSharedCoordinator) Commit(ctx context.Context) error {
+	return c.CommitScope(ctx, 0)
+}
+
+func (c *appendRuntimeSharedCoordinator) CommitScope(ctx context.Context, scopeID int32) error {
+	if c == nil || c.inner == nil {
+		return api.ToMOErr(ctx, api.NewError(api.ErrConfigInvalid, "Iceberg append shared coordinator is not initialized", nil))
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.opened {
+		return api.ToMOErr(ctx, api.NewError(api.ErrConfigInvalid, "Iceberg append shared coordinator was not opened", nil))
+	}
+	if c.aborted {
+		return c.abortErr
+	}
+	if c.commitAttempted {
+		return c.commitErr
+	}
+	c.finishedScopes[scopeID] = struct{}{}
+	if len(c.finishedScopes) < c.expectedScopes {
+		return nil
+	}
+	err := c.inner.Commit(ctx)
+	c.commitAttempted = true
+	c.commitErr = err
+	c.releaseOnce()
+	return err
+}
+
+func appendRuntimeParallelScopeID(req icebergwrite.AppendRequest) int32 {
+	if req.MaxParallel <= 1 {
+		return 0
+	}
+	if req.ParallelID < 0 || req.ParallelID >= req.MaxParallel {
+		return 0
+	}
+	return req.ParallelID
+}
+
+func (c *appendRuntimeSharedCoordinator) Abort(ctx context.Context, cause error) error {
+	if c == nil || c.inner == nil {
+		return nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.commitAttempted || c.aborted {
+		return nil
+	}
+	err := c.inner.Abort(ctx, cause)
+	c.aborted = true
+	c.abortErr = err
+	c.releaseOnce()
+	return err
+}
+
+func (c *appendRuntimeSharedCoordinator) appendStateErrorLocked(ctx context.Context) error {
+	if !c.opened {
+		return api.ToMOErr(ctx, api.NewError(api.ErrConfigInvalid, "Iceberg append shared coordinator was not opened", nil))
+	}
+	if c.aborted {
+		return c.abortErr
+	}
+	if c.commitAttempted {
+		return api.ToMOErr(ctx, api.NewError(api.ErrCommitUnknown, "Iceberg append coordinator already committed before all rows were appended", nil))
+	}
+	return nil
+}
+
+func (c *appendRuntimeSharedCoordinator) releaseOnce() {
+	c.done.Do(func() {
+		if c.release != nil {
+			c.release()
+		}
+	})
+}
+
+func appendRuntimeCoordinatorCacheKey(req icebergwrite.AppendRequest) string {
+	statementKey := strings.TrimSpace(firstNonEmpty(req.IdempotencyKey, req.StatementID))
+	if statementKey == "" {
+		return ""
+	}
+	ref := strings.TrimSpace(firstNonEmpty(req.DefaultRef, model.DefaultRefMain))
+	return lengthPrefixedKey(
+		strconv.FormatUint(uint64(req.AccountID), 10),
+		strconv.FormatUint(req.RoleID, 10),
+		strconv.FormatUint(req.UserID, 10),
+		strings.TrimSpace(req.ExternalPrincipal),
+		icebergwrite.OperationAppend,
+		strings.TrimSpace(req.CatalogName),
+		strings.TrimSpace(req.Namespace),
+		strings.TrimSpace(req.Table),
+		ref,
+		statementKey,
+	)
+}
+
+func (f AppendRuntimeCoordinatorFactory) validateRuntimeRequest(ctx context.Context, req icebergwrite.AppendRequest) error {
+	if f.opts.Store == nil {
+		return api.ToMOErr(ctx, api.NewError(api.ErrConfigInvalid, "Iceberg append runtime coordinator requires a store", nil))
+	}
+	if f.opts.CatalogFactory == nil {
+		return api.ToMOErr(ctx, api.NewError(api.ErrConfigInvalid, "Iceberg append runtime coordinator requires a catalog factory", nil))
+	}
+	cfg := f.effectiveConfig(req.AccountID)
+	if !cfg.Enable || !cfg.Write.EnableWrite {
+		return api.ToMOErr(ctx, api.NewError(api.ErrUnsupportedFeature, "Iceberg append write is disabled by configuration", nil))
+	}
+	if strings.TrimSpace(req.CatalogName) == "" || strings.TrimSpace(req.Namespace) == "" || strings.TrimSpace(req.Table) == "" {
+		return api.ToMOErr(ctx, api.NewError(api.ErrConfigInvalid, "Iceberg append write requires catalog, namespace, and table", nil))
+	}
+	if strings.TrimSpace(firstNonEmpty(req.IdempotencyKey, req.StatementID)) == "" {
+		return api.ToMOErr(ctx, api.NewError(api.ErrConfigInvalid, "Iceberg append write requires a statement idempotency key", map[string]string{
+			"table": req.Table,
+		}))
+	}
+	if req.TableDef == nil || req.TableDef.GetDbId() == 0 || req.TableDef.GetTblId() == 0 {
+		return api.ToMOErr(ctx, api.NewError(api.ErrConfigInvalid, "Iceberg append write requires table mapping object ids", map[string]string{
+			"table": req.Table,
+		}))
+	}
+	return nil
+}
+
+func (f AppendRuntimeCoordinatorFactory) tableMapping(ctx context.Context, req icebergwrite.AppendRequest, catalog model.Catalog) (model.TableMapping, error) {
+	mapping, err := f.opts.Store.GetTableMapping(ctx, req.AccountID, req.TableDef.GetDbId(), req.TableDef.GetTblId())
+	if err != nil {
+		return model.TableMapping{}, err
+	}
+	if mapping.CatalogID != catalog.CatalogID {
+		return model.TableMapping{}, api.ToMOErr(ctx, api.NewError(api.ErrMetadataInvalid, "Iceberg append table mapping catalog does not match catalog name", map[string]string{
+			"table": req.Table,
+		}))
+	}
+	if mapping.WriteMode != model.WriteModeAppendOnly && mapping.WriteMode != model.WriteModeMergeOnRead {
+		return model.TableMapping{}, api.ToMOErr(ctx, api.NewError(api.ErrUnsupportedFeature, "Iceberg append target is not writable", map[string]string{
+			"table":      req.Table,
+			"write_mode": mapping.WriteMode,
+		}))
+	}
+	return mapping, nil
+}
+
+func (f AppendRuntimeCoordinatorFactory) objectIOContext(
+	ctx context.Context,
+	client api.CatalogClient,
+	catalogReq api.CatalogRequest,
+	loadResp *api.LoadTableResponse,
+	namespace api.Namespace,
+	table string,
+	catalog model.Catalog,
+) (appendObjectIOContext, error) {
+	if f.opts.ObjectIOProvider != nil {
+		return appendObjectIOContext{
+			WriterProvider:   f.opts.ObjectIOProvider,
+			ReaderProvider:   f.opts.ObjectIOProvider,
+			ScopeForLocation: f.opts.ScopeForLocation,
+		}, nil
+	}
+	credentials := append([]api.StorageCredential(nil), loadResp.StorageCredentials...)
+	if len(credentials) == 0 {
+		creds, err := client.LoadCredentials(ctx, api.LoadCredentialsRequest{
+			CatalogRequest: catalogReq,
+			Namespace:      namespace,
+			Table:          table,
+		})
+		if err != nil {
+			return appendObjectIOContext{}, api.ToMOErr(ctx, err)
+		}
+		if creds != nil {
+			credentials = append(credentials, creds.StorageCredentials...)
+		}
+	}
+	buildFileService := f.opts.BuildFileService
+	if buildFileService == nil {
+		buildFileService = icebergio.NewS3VendedFileServiceBuilder().Build
+	}
+	baseScope := icebergio.ObjectScope{
+		AccountID: catalog.AccountID,
+		CatalogID: catalog.CatalogID,
+		Principal: firstNonEmpty(catalogReq.ExternalPrincipal, "matrixone-append"),
+	}
+	scopeForLocation := f.opts.ScopeForLocation
+	if scopeForLocation == nil {
+		scopeForLocation = icebergio.S3ObjectScopeForLocation(baseScope, credentials)
+	}
+	policies := append([]model.ResidencyPolicy(nil), f.opts.ResidencyPolicies...)
+	if len(policies) == 0 {
+		if lister, ok := f.opts.Store.(ResidencyPolicyLister); ok {
+			loaded, err := lister.ListResidencyPolicies(ctx, catalog.AccountID, catalog.CatalogID)
+			if err != nil {
+				return appendObjectIOContext{}, err
+			}
+			policies = append(policies, loaded...)
+		}
+	}
+	residencyValidator := ObjectScopeResidencyValidator(policies, catalog.URI)
+	vendedCredentials := filterS3AccessCredentials(credentials)
+	if len(vendedCredentials) > 0 {
+		provider := icebergio.VendedCredentialProvider{
+			Credentials:            vendedCredentials,
+			BuildFileService:       buildFileService,
+			Now:                    f.opts.Now,
+			ResidencyValidator:     residencyValidator,
+			RequireResidencyPolicy: f.requireResidencyPolicy(),
+		}
+		return appendObjectIOContext{
+			WriterProvider:   provider,
+			ReaderProvider:   provider,
+			ScopeForLocation: scopeForLocation,
+		}, nil
+	}
+	if loadResp != nil && loadResp.Capabilities.RemoteSigning {
+		signerFactory, ok := client.(interface {
+			NewRemoteSigner(api.CatalogRequest, map[string]string) icebergio.RemoteSigner
+		})
+		if !ok {
+			return appendObjectIOContext{}, api.ToMOErr(ctx, api.NewError(api.ErrRemoteSigningDenied, "Iceberg append catalog client cannot create remote signer", map[string]string{
+				"catalog": catalog.Name,
+				"table":   table,
+			}))
+		}
+		signer := signerFactory.NewRemoteSigner(catalogReq, loadResp.Config)
+		if signer == nil {
+			return appendObjectIOContext{}, api.ToMOErr(ctx, api.NewError(api.ErrRemoteSigningDenied, "Iceberg append catalog client returned empty remote signer", map[string]string{
+				"catalog": catalog.Name,
+				"table":   table,
+			}))
+		}
+		scopeForLocation = f.opts.ScopeForLocation
+		if scopeForLocation == nil {
+			scopeForLocation = icebergio.S3ObjectScopeForConfig(baseScope, loadResp.Config)
+		}
+		buildSignedFileService := icebergio.SignedHTTPFileServiceBuilder{}.Build
+		return appendObjectIOContext{
+			WriterProvider: icebergio.RemoteSigningProvider{
+				Signer:                 signer,
+				BuildFileService:       buildSignedFileService,
+				Method:                 http.MethodPut,
+				Now:                    f.opts.Now,
+				ResidencyValidator:     residencyValidator,
+				RequireResidencyPolicy: f.requireResidencyPolicy(),
+			},
+			ReaderProvider: icebergio.RemoteSigningProvider{
+				Signer:                 signer,
+				BuildFileService:       buildSignedFileService,
+				Method:                 http.MethodGet,
+				Now:                    f.opts.Now,
+				ResidencyValidator:     residencyValidator,
+				RequireResidencyPolicy: f.requireResidencyPolicy(),
+			},
+			ScopeForLocation: scopeForLocation,
+		}, nil
+	}
+	return appendObjectIOContext{}, api.ToMOErr(ctx, api.NewError(api.ErrCredentialExpired, "Iceberg append catalog did not return usable storage credentials", map[string]string{
+		"catalog": catalog.Name,
+		"table":   table,
+	}))
+}
+
+func (f AppendRuntimeCoordinatorFactory) requireResidencyPolicy() bool {
+	return f.opts.ObjectIOProvider == nil
+}
+
+func filterS3AccessCredentials(credentials []api.StorageCredential) []api.StorageCredential {
+	if len(credentials) == 0 {
+		return nil
+	}
+	out := make([]api.StorageCredential, 0, len(credentials))
+	for _, credential := range credentials {
+		cfg := make(map[string]string, len(credential.Config))
+		for key, value := range credential.Config {
+			cfg[strings.ToLower(strings.TrimSpace(key))] = strings.TrimSpace(value)
+		}
+		if firstNonEmpty(cfg["s3.access-key-id"], cfg["s3.access_key_id"], cfg["aws.access-key-id"]) == "" {
+			continue
+		}
+		if firstNonEmpty(cfg["s3.secret-access-key"], cfg["s3.secret_access_key"], cfg["aws.secret-access-key"]) == "" {
+			continue
+		}
+		out = append(out, credential)
+	}
+	return out
+}
+
+func (f AppendRuntimeCoordinatorFactory) effectiveConfig(accountID uint32) api.Config {
+	account := f.opts.Account
+	if account.AccountID == 0 {
+		account.AccountID = accountID
+	}
+	return f.opts.Config.EffectiveForAccount(account)
+}
+
+func (f AppendRuntimeCoordinatorFactory) now() time.Time {
+	if f.opts.Now != nil {
+		return f.opts.Now()
+	}
+	return time.Now()
+}
+
+func (f AppendRuntimeCoordinatorFactory) nextSnapshotID(now time.Time, meta *api.TableMetadata) int64 {
+	if f.opts.SnapshotID != nil {
+		return f.opts.SnapshotID(now, meta)
+	}
+	return nextDMLSnapshotID(now, meta)
+}
+
+type AppendRuntimeCoordinator struct {
+	req          icebergwrite.AppendRequest
+	appendReq    api.AppendRequest
+	writer       *icebergwritecore.FanoutParquetDataWriter
+	workflow     icebergwritecore.AppendWorkflow
+	closed       bool
+	committed    bool
+	dataFiles    []api.DataFile
+	objectRef    string
+	releaseRef   func()
+	memoryBudget *dmlMemoryBudget
+}
+
+func (c *AppendRuntimeCoordinator) Begin(ctx context.Context, req icebergwrite.AppendRequest) error {
+	return nil
+}
+
+func (c *AppendRuntimeCoordinator) Append(ctx context.Context, bat *batch.Batch) error {
+	if c == nil || c.writer == nil {
+		return api.ToMOErr(ctx, api.NewError(api.ErrConfigInvalid, "Iceberg append coordinator is not initialized", nil))
+	}
+	if c.closed {
+		return api.ToMOErr(ctx, api.NewError(api.ErrConfigInvalid, "Iceberg append coordinator is already closed", map[string]string{
+			"table": c.req.Table,
+		}))
+	}
+	visible, err := appendRuntimeVisibleBatch(c.req.Attrs, bat)
+	if err != nil {
+		return api.ToMOErr(ctx, err)
+	}
+	return api.ToMOErr(ctx, c.writer.WriteBatch(ctx, c.req.Attrs, visible))
+}
+
+func appendRuntimeVisibleBatch(attrs []string, bat *batch.Batch) (*batch.Batch, error) {
+	if bat == nil || len(attrs) == 0 {
+		return bat, nil
+	}
+	if len(bat.Vecs) < len(attrs) {
+		return nil, api.NewError(api.ErrMetadataInvalid, "Iceberg append batch has fewer vectors than visible columns", nil)
+	}
+	// The insert/pre-insert contract keeps target columns at the front and
+	// appends generated or hidden vectors after them. Some pipeline batches do
+	// not carry attributes; in that case the plan-defined prefix is the only
+	// available mapping.
+	if len(bat.Attrs) == 0 {
+		if len(bat.Vecs) == len(attrs) {
+			return bat, nil
+		}
+		visible := batch.NewWithSize(len(attrs))
+		visible.Attrs = append([]string(nil), attrs...)
+		copy(visible.Vecs, bat.Vecs[:len(attrs)])
+		visible.SetRowCount(bat.RowCount())
+		return visible, nil
+	}
+	namedVecs := bat.Vecs
+	if len(bat.Attrs) != len(bat.Vecs) {
+		// A batch may name only its target-column prefix while carrying unnamed
+		// generated vectors at the end. Bind those names to that prefix, but keep
+		// using the strict name mapping below so mismatches cannot become silent
+		// positional writes.
+		if len(bat.Attrs) != len(attrs) {
+			return nil, api.NewError(api.ErrMetadataInvalid, "Iceberg append batch has incomplete column names", nil)
+		}
+		namedVecs = bat.Vecs[:len(bat.Attrs)]
+	}
+	visible := batch.NewWithSize(len(attrs))
+	visible.Attrs = append([]string(nil), attrs...)
+	exactPositions := make(map[string]int, len(bat.Attrs))
+	foldedPositions := make(map[string]int, len(bat.Attrs))
+	ambiguousFolded := make(map[string]struct{})
+	for idx, attr := range bat.Attrs {
+		name := strings.TrimSpace(attr)
+		if name == "" {
+			continue
+		}
+		if _, ok := exactPositions[name]; ok {
+			return nil, api.NewError(api.ErrMetadataInvalid, "Iceberg append batch contains duplicate column names", map[string]string{"column": attr})
+		}
+		exactPositions[name] = idx
+		folded := strings.ToLower(name)
+		if _, exists := foldedPositions[folded]; exists {
+			delete(foldedPositions, folded)
+			ambiguousFolded[folded] = struct{}{}
+			continue
+		}
+		if _, ambiguous := ambiguousFolded[folded]; !ambiguous {
+			foldedPositions[folded] = idx
+		}
+	}
+	for idx, attr := range attrs {
+		name := strings.TrimSpace(attr)
+		pos, ok := exactPositions[name]
+		if !ok {
+			folded := strings.ToLower(name)
+			if _, ambiguous := ambiguousFolded[folded]; ambiguous {
+				return nil, api.NewError(api.ErrMetadataInvalid, "Iceberg append batch column name is ambiguous", map[string]string{"column": attr})
+			}
+			pos, ok = foldedPositions[folded]
+		}
+		if !ok || pos < 0 || pos >= len(namedVecs) {
+			return nil, api.NewError(api.ErrMetadataInvalid, "Iceberg append batch is missing a visible column", map[string]string{"column": attr})
+		}
+		visible.Vecs[idx] = namedVecs[pos]
+	}
+	if len(bat.Vecs) == len(attrs) {
+		positional := true
+		for idx := range visible.Vecs {
+			if visible.Vecs[idx] != bat.Vecs[idx] {
+				positional = false
+				break
+			}
+		}
+		if positional {
+			return bat, nil
+		}
+	}
+	visible.SetRowCount(bat.RowCount())
+	return visible, nil
+}
+
+func (c *AppendRuntimeCoordinator) Commit(ctx context.Context) error {
+	if c == nil || c.writer == nil {
+		return api.ToMOErr(ctx, api.NewError(api.ErrConfigInvalid, "Iceberg append coordinator is not initialized", nil))
+	}
+	if c.committed {
+		return nil
+	}
+	files, err := c.writer.Close(ctx)
+	if err != nil {
+		abortErr := c.writer.Abort(ctx)
+		recordErr := c.workflow.RecordOrphanPaths(ctx, c.appendReq, c.writer.OrphanPaths(), true)
+		c.closed = true
+		return api.ToMOErr(ctx, errors.Join(err, abortErr, recordErr))
+	}
+	c.closed = true
+	c.dataFiles = append([]api.DataFile(nil), files...)
+	if len(files) == 0 {
+		c.committed = true
+		return nil
+	}
+	req := c.appendReq
+	req.DataFiles = append([]api.DataFile(nil), files...)
+	if builder, ok := c.workflow.Builder.(*appendManifestWritingBuilder); ok && c.memoryBudget != nil {
+		// Data-file buffers are released after upload, but their DataFile metadata
+		// remains live through manifest encoding. Handoff the same budget's
+		// retained usage so the write peak is bounded end to end.
+		builder.InitialMemoryBytes = c.memoryBudget.usedBytes()
+	}
+	if _, err := c.workflow.CommitAppend(ctx, req); err != nil {
+		return api.ToMOErr(ctx, err)
+	}
+	c.committed = true
+	return nil
+}
+
+func (c *AppendRuntimeCoordinator) Abort(ctx context.Context, cause error) error {
+	if c == nil || c.writer == nil || c.closed || c.committed {
+		return nil
+	}
+	abortErr := c.writer.Abort(ctx)
+	recordErr := c.workflow.RecordOrphanPaths(ctx, c.appendReq, c.writer.OrphanPaths(), true)
+	c.closed = true
+	return api.ToMOErr(ctx, errors.Join(abortErr, recordErr))
+}
+
+type appendManifestWritingBuilder struct {
+	icebergwritecore.ManifestAttemptBuilder
+	Writer dml.ManifestObjectWriter
+}
+
+func (b *appendManifestWritingBuilder) BuildAppend(ctx context.Context, req api.AppendRequest) (*api.CommitAttempt, error) {
+	attempt, err := b.ManifestAttemptBuilder.BuildAppend(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	if b.Writer == nil {
+		return nil, api.NewError(api.ErrConfigInvalid, "Iceberg append manifest writer is not configured", nil)
+	}
+	result := b.ManifestAttemptBuilder.LastResult
+	if result == nil {
+		return nil, api.NewError(api.ErrConfigInvalid, "Iceberg append manifest builder did not return artifacts", nil)
+	}
+	if err := b.Writer.WriteManifestObject(ctx, result.ManifestFile.Path, result.ManifestBytes); err != nil {
+		return attempt, err
+	}
+	if err := b.Writer.WriteManifestObject(ctx, b.ManifestListPath, result.ManifestListBytes); err != nil {
+		return attempt, err
+	}
+	return attempt, nil
+}
+
+type appendManifestPaths struct {
+	ManifestPath     string
+	ManifestListPath string
+}
+
+func buildAppendManifestPaths(ctx context.Context, tableLocation, statementKey string, snapshotID int64) (appendManifestPaths, error) {
+	tableLocation = strings.TrimRight(strings.TrimSpace(tableLocation), "/")
+	if tableLocation == "" {
+		return appendManifestPaths{}, api.ToMOErr(ctx, api.NewError(api.ErrConfigInvalid, "Iceberg append manifest paths require table location", nil))
+	}
+	if strings.TrimSpace(statementKey) == "" || snapshotID <= 0 {
+		return appendManifestPaths{}, api.ToMOErr(ctx, api.NewError(api.ErrConfigInvalid, "Iceberg append manifest paths require statement key and snapshot id", nil))
+	}
+	base := joinDMLObjectPath(tableLocation, "metadata", "mo-append", "stmt-"+api.PathHash(statementKey))
+	return appendManifestPaths{
+		ManifestPath:     joinDMLObjectPath(base, "data-manifest-snap-"+strconv.FormatInt(snapshotID, 10)+".avro"),
+		ManifestListPath: joinDMLObjectPath(base, "manifest-list-snap-"+strconv.FormatInt(snapshotID, 10)+".avro"),
+	}, nil
+}
+
+func appendDataDir(statementKey string, snapshotID int64) string {
+	return joinDMLObjectPath("data", "mo-append", "stmt-"+api.PathHash(statementKey), "snap-"+strconv.FormatInt(snapshotID, 10))
+}
+
+func appendCurrentSchema(ctx context.Context, meta *api.TableMetadata, table string) (api.Schema, error) {
+	if meta == nil {
+		return api.Schema{}, api.ToMOErr(ctx, api.NewError(api.ErrMetadataInvalid, "Iceberg append table metadata is empty", map[string]string{"table": table}))
+	}
+	schema, ok := meta.CurrentSchema()
+	if !ok {
+		return api.Schema{}, api.ToMOErr(ctx, api.NewError(api.ErrMetadataInvalid, "Iceberg append table metadata has no current schema", map[string]string{"table": table}))
+	}
+	return schema, nil
+}
+
+func appendDefaultSpec(ctx context.Context, meta *api.TableMetadata, table string) (api.PartitionSpec, error) {
+	if meta == nil {
+		return api.PartitionSpec{}, api.ToMOErr(ctx, api.NewError(api.ErrMetadataInvalid, "Iceberg append table metadata is empty", map[string]string{"table": table}))
+	}
+	spec, ok := meta.DefaultSpec()
+	if !ok {
+		return api.PartitionSpec{}, api.ToMOErr(ctx, api.NewError(api.ErrMetadataInvalid, "Iceberg append table metadata has no default partition spec", map[string]string{"table": table}))
+	}
+	return spec, nil
+}
+
+func appendBaseSnapshot(ctx context.Context, meta *api.TableMetadata, ref string) (api.Snapshot, int64, error) {
+	if !metadata.HasCurrentSnapshot(meta) {
+		return api.Snapshot{}, 0, nil
+	}
+	snapshot, err := metadata.ResolveSnapshot(meta, metadata.SnapshotSelector{
+		RefName:           firstNonEmpty(ref, model.DefaultRefMain),
+		AllowMainFallback: true,
+	})
+	if err != nil {
+		return api.Snapshot{}, 0, api.ToMOErr(ctx, err)
+	}
+	return snapshot, snapshot.SnapshotID, nil
+}
+
+func readAppendBaseManifestList(
+	ctx context.Context,
+	reader icebergio.ProviderObjectReader,
+	snapshot api.Snapshot,
+	planningMaxMemory int64,
+	maxManifestFiles int,
+) ([]api.ManifestFile, error) {
+	if strings.TrimSpace(snapshot.ManifestList) == "" {
+		return nil, nil
+	}
+	defaults := api.DefaultConfig().Scan
+	if planningMaxMemory <= 0 {
+		planningMaxMemory = defaults.PlanningMaxMemory
+	}
+	if maxManifestFiles <= 0 {
+		maxManifestFiles = defaults.MaxManifestFiles
+	}
+	// The append path must preserve the prior manifest list, but it must not
+	// silently bypass the same planning limits used by scans. A future streaming
+	// commit builder could remove this materialization altogether.
+	data, err := reader.ReadBounded(ctx, snapshot.ManifestList, planningMaxMemory)
+	if err != nil {
+		return nil, err
+	}
+	budgetRecordLimit := planningMaxMemory / 256
+	if budgetRecordLimit < 1 {
+		budgetRecordLimit = 1
+	}
+	if budgetRecordLimit < int64(maxManifestFiles) {
+		maxManifestFiles = int(budgetRecordLimit)
+	}
+	manifests, err := (metadata.NativeFacade{}).ReadManifestListWithLimits(ctx, data, maxManifestFiles, planningMaxMemory)
+	if err != nil {
+		return nil, api.ToMOErr(ctx, err)
+	}
+	weight := metadata.ManifestListMemoryWeight(cap(data), manifests)
+	if weight > planningMaxMemory {
+		return nil, api.ToMOErr(ctx, api.NewError(api.ErrPlanningLimitExceeded, "Iceberg append base manifest list exceeded the planning memory limit", map[string]string{
+			"actual_bytes": strconv.FormatInt(weight, 10),
+			"limit_bytes":  strconv.FormatInt(planningMaxMemory, 10),
+		}))
+	}
+	return append([]api.ManifestFile(nil), manifests...), nil
+}
+
+func appendMetricsReporter(configured api.MetricsReporter, client api.CatalogClient) api.MetricsReporter {
+	if configured != nil {
+		return configured
+	}
+	if reporter, ok := client.(api.MetricsReporter); ok {
+		return reporter
+	}
+	return nil
+}
+
+var _ icebergwrite.CoordinatorFactory = AppendRuntimeCoordinatorFactory{}
+var _ icebergwrite.Coordinator = (*AppendRuntimeCoordinator)(nil)

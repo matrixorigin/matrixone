@@ -17,6 +17,7 @@ package interactive
 import (
 	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 )
 
@@ -29,4 +30,9 @@ func Run(path string) error {
 // offline fs kind ("local", "local2" or "s3").
 func RunWithKind(path string, kind string) error {
 	return RunUnified(context.Background(), path, &ViewOptions{Kind: kind})
+}
+
+// RunWithFS runs the interactive interface using an existing file service.
+func RunWithFS(ctx context.Context, fs fileservice.FileService, path string) error {
+	return RunUnifiedWithFS(ctx, fs, path, nil)
 }

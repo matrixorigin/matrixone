@@ -51,6 +51,33 @@ func GetExplainColumn(ctx context.Context, explainColName string) ([]*plan2.ColD
 	return cols, columns, err
 }
 
+func getPreparedResultColumns(stmt *PrepareStmt, txnHaveDDL bool) []*plan2.ColDef {
+	dcPrepare := stmt.PreparePlan.GetDcl().GetPrepare()
+	if _, ok := stmt.PrepareStmt.(*tree.ExplainStmt); ok {
+		if query := dcPrepare.GetPlan().GetQuery(); query != nil {
+			title := plan2.GetPlanTitle(query, txnHaveDDL)
+			return []*plan2.ColDef{{
+				Typ:        plan2.Type{Id: int32(types.T_varchar)},
+				Name:       title,
+				OriginName: title,
+			}}
+		}
+	}
+	return plan2.GetResultColumnsFromPlan(dcPrepare.GetPlan())
+}
+
+func sessionTxnHaveDDL(ses FeSession) bool {
+	if ses == nil || ses.GetProc() == nil {
+		return false
+	}
+	txnOperator := ses.GetProc().GetTxnOperator()
+	if txnOperator == nil {
+		return false
+	}
+	workspace := txnOperator.GetWorkspace()
+	return workspace != nil && workspace.GetHaveDDL()
+}
+
 func getSelectColumnsAndResultColumns(ctx context.Context, cw ComputationWrapper) ([]interface{}, []*plan2.ColDef, error) {
 	if txnCW, ok := cw.(*TxnComputationWrapper); ok {
 		if _, ok = txnCW.GetAst().(*tree.Select); ok {
@@ -420,16 +447,31 @@ func (resper *MysqlResp) respBySituation(ses *Session,
 	defer func() {
 		execCtx.results = nil
 	}()
-	resp := NewGeneralOkResponse(COM_QUERY, ses.GetTxnHandler().GetServerStatus())
 	if len(execCtx.results) == 0 {
+		var affectedRows uint64
+		if execCtx.runResult != nil {
+			affectedRows = execCtx.runResult.AffectRows
+		}
+		resp := setResponse(ses, execCtx.isLastStmt, affectedRows)
 		if err = resper.mysqlRrWr.WriteResponse(execCtx.reqCtx, resp); err != nil {
 			return moerr.NewInternalErrorf(execCtx.reqCtx, "routine send response failed. error:%v ", err)
 		}
 	} else {
+		_, isCall := execCtx.stmt.(*tree.CallStmt)
 		for i, result := range execCtx.results {
 			mer := NewMysqlExecutionResult(0, 0, 0, 0, result.(*MysqlResultSet))
-			isLastResult := i == len(execCtx.results)-1 && execCtx.isLastStmt
-			resp = ses.SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, isLastResult)
+			isLastResult := i == len(execCtx.results)-1 && execCtx.isLastStmt && !isCall
+			resp := ses.SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, isLastResult)
+			if err = resper.mysqlRrWr.WriteResponse(execCtx.reqCtx, resp); err != nil {
+				return moerr.NewInternalErrorf(execCtx.reqCtx, "routine send response failed. error:%v ", err)
+			}
+		}
+		if isCall {
+			var affectedRows uint64
+			if execCtx.runResult != nil {
+				affectedRows = execCtx.runResult.AffectRows
+			}
+			resp := setResponse(ses, execCtx.isLastStmt, affectedRows)
 			if err = resper.mysqlRrWr.WriteResponse(execCtx.reqCtx, resp); err != nil {
 				return moerr.NewInternalErrorf(execCtx.reqCtx, "routine send response failed. error:%v ", err)
 			}

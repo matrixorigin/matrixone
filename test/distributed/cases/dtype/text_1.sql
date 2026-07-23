@@ -226,8 +226,12 @@ select cast(col9 as float) from t8;
 select cast(col9 as double) from t8;
 delete from t8 where col9 is not NULL;
 
-insert into  t8(col9) values ('1000000000000000000000000000000000000000');
-insert into  t8(col9) values (1000000000000000000000000000000000000000);
+insert into t8(col9) values ('1000000000000000000000000000000000000000');
+select cast(col9 as float) from t8;
+select cast(col9 as double) from t8;
+delete from t8 where col9 is not NULL;
+
+insert into t8(col9) values (1000000000000000000000000000000000000000);
 select cast(col9 as float) from t8;
 select cast(col9 as double) from t8;
 delete from t8 where col9 is not NULL;

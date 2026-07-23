@@ -262,6 +262,16 @@ func checkTableType(ctx context.Context, tableDef *TableDef, op string) error {
 	if tableDef.TableType == catalog.SystemSourceRel {
 		return moerr.NewInvalidInput(ctx, "cannot insert/update/delete from source")
 	} else if tableDef.TableType == catalog.SystemExternalRel {
+		isIceberg, err := IsIcebergTableDef(ctx, tableDef)
+		if err != nil {
+			return err
+		}
+		if isIceberg {
+			if op == "insert" {
+				return nil
+			}
+			return moerr.NewInvalidInput(ctx, "cannot update/delete from Iceberg table mapping in P1 append phase")
+		}
 		// A writable external table (created with WRITE_FILE_PATTERN) accepts
 		// INSERT/LOAD; everything else on an external table is rejected.
 		if op == "insert" {
@@ -508,6 +518,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 		astSlt = stmt.Rows
 
 		subCtx := NewBindContext(builder, bindCtx)
+		subCtx.numericProjectionTypes = insertProjectionTypes(insertColumns, tableDef)
 		info.rootId, err = builder.bindSelect(astSlt, subCtx, false)
 		if err != nil {
 			return false, nil, nil, err
@@ -518,6 +529,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 		astSlt = slt.Select
 
 		subCtx := NewBindContext(builder, bindCtx)
+		subCtx.numericProjectionTypes = insertProjectionTypes(insertColumns, tableDef)
 		info.rootId, err = builder.bindSelect(astSlt, subCtx, false)
 		if err != nil {
 			return false, nil, nil, err
