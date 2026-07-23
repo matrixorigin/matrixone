@@ -434,18 +434,94 @@ func hasWindowFrameParam(expr tree.Expr) bool {
 	switch expr := expr.(type) {
 	case *tree.ParamExpr:
 		return true
-	case *tree.FuncExpr:
-		for _, arg := range expr.Exprs {
-			if hasWindowFrameParam(arg) {
-				return true
-			}
-		}
-	case *tree.ParenExpr:
-		return hasWindowFrameParam(expr.Expr)
+	case *tree.BinaryExpr:
+		return hasWindowFrameParam(expr.Left) || hasWindowFrameParam(expr.Right)
 	case *tree.UnaryExpr:
+		return hasWindowFrameParam(expr.Expr)
+	case *tree.ComparisonExpr:
+		return hasWindowFrameParam(expr.Left) ||
+			hasWindowFrameParam(expr.Right) ||
+			hasWindowFrameParam(expr.Escape)
+	case *tree.AndExpr:
+		return hasWindowFrameParam(expr.Left) || hasWindowFrameParam(expr.Right)
+	case *tree.XorExpr:
+		return hasWindowFrameParam(expr.Left) || hasWindowFrameParam(expr.Right)
+	case *tree.OrExpr:
+		return hasWindowFrameParam(expr.Left) || hasWindowFrameParam(expr.Right)
+	case *tree.NotExpr:
+		return hasWindowFrameParam(expr.Expr)
+	case *tree.IsNullExpr:
+		return hasWindowFrameParam(expr.Expr)
+	case *tree.IsNotNullExpr:
+		return hasWindowFrameParam(expr.Expr)
+	case *tree.IsUnknownExpr:
+		return hasWindowFrameParam(expr.Expr)
+	case *tree.IsNotUnknownExpr:
+		return hasWindowFrameParam(expr.Expr)
+	case *tree.IsTrueExpr:
+		return hasWindowFrameParam(expr.Expr)
+	case *tree.IsNotTrueExpr:
+		return hasWindowFrameParam(expr.Expr)
+	case *tree.IsFalseExpr:
+		return hasWindowFrameParam(expr.Expr)
+	case *tree.IsNotFalseExpr:
+		return hasWindowFrameParam(expr.Expr)
+	case *tree.Subquery:
+		// A frame bound cannot be folded through a subquery safely.
+		return true
+	case *tree.FuncExpr:
+		return hasWindowFrameParamInExprs(expr.Exprs) || hasWindowFrameParamInOrderBy(expr.OrderBy)
+	case *tree.ExprList:
+		return hasWindowFrameParamInExprs(expr.Exprs)
+	case *tree.ParenExpr:
 		return hasWindowFrameParam(expr.Expr)
 	case *tree.CastExpr:
 		return hasWindowFrameParam(expr.Expr)
+	case *tree.BitCastExpr:
+		return hasWindowFrameParam(expr.Expr)
+	case *tree.Tuple:
+		return hasWindowFrameParamInExprs(expr.Exprs)
+	case *tree.RangeCond:
+		return hasWindowFrameParam(expr.Left) ||
+			hasWindowFrameParam(expr.From) ||
+			hasWindowFrameParam(expr.To)
+	case *tree.CaseExpr:
+		if hasWindowFrameParam(expr.Expr) || hasWindowFrameParam(expr.Else) {
+			return true
+		}
+		for _, when := range expr.Whens {
+			if when != nil && (hasWindowFrameParam(when.Cond) || hasWindowFrameParam(when.Val)) {
+				return true
+			}
+		}
+	case *tree.IntervalExpr:
+		return hasWindowFrameParam(expr.Expr)
+	case *tree.DefaultVal:
+		return hasWindowFrameParam(expr.Expr)
+	case *tree.VarExpr:
+		return hasWindowFrameParam(expr.Expr)
+	case *tree.SerialExtractExpr:
+		return hasWindowFrameParam(expr.SerialExpr) || hasWindowFrameParam(expr.IndexExpr)
+	case *tree.FullTextMatchExpr:
+		return hasWindowFrameParam(expr.Pattern)
+	}
+	return false
+}
+
+func hasWindowFrameParamInExprs(exprs tree.Exprs) bool {
+	for _, expr := range exprs {
+		if hasWindowFrameParam(expr) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasWindowFrameParamInOrderBy(orderBy tree.OrderBy) bool {
+	for _, order := range orderBy {
+		if order != nil && hasWindowFrameParam(order.Expr) {
+			return true
+		}
 	}
 	return false
 }

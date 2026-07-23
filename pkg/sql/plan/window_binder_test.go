@@ -204,6 +204,56 @@ func TestPreparedWindowIntervalFrameMarkersAreUnsupported(t *testing.T) {
 	}
 }
 
+func TestPreparedWindowNestedIntervalFrameMarkersAreUnsupported(t *testing.T) {
+	for _, frameType := range []string{"rows", "range"} {
+		t.Run(frameType, func(t *testing.T) {
+			optimizer := NewMockOptimizer(false)
+			stmts, err := parsers.Parse(
+				optimizer.CurrentContext().GetContext(),
+				dialect.MYSQL,
+				"select sum(n_nationkey) over (order by n_nationkey "+frameType+" between interval (? + 1) day preceding and current row) from nation",
+				1,
+			)
+			require.NoError(t, err)
+
+			_, err = BuildPlan(optimizer.CurrentContext(), stmts[0], true)
+			require.ErrorContains(t, err, "prepared parameter markers in interval window frames")
+		})
+	}
+}
+
+func TestHasWindowFrameParamTraversesExpressionForms(t *testing.T) {
+	param := func() tree.Expr { return tree.NewParamExpr(1) }
+	literal := func() tree.Expr { return testNumVal(1) }
+	tests := []struct {
+		name string
+		expr tree.Expr
+	}{
+		{
+			name: "binary",
+			expr: tree.NewBinaryExpr(tree.PLUS, param(), literal()),
+		},
+		{
+			name: "comparison",
+			expr: tree.NewComparisonExpr(tree.EQUAL, literal(), param()),
+		},
+		{
+			name: "boolean",
+			expr: tree.NewAndExpr(literal(), tree.NewNotExpr(param())),
+		},
+		{
+			name: "case",
+			expr: tree.NewCaseExpr(nil, []*tree.When{tree.NewWhen(literal(), param())}, literal()),
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			require.True(t, hasWindowFrameParam(tc.expr))
+		})
+	}
+}
+
 func firstWindowSpec(t *testing.T, queryPlan *planpb.Plan) *planpb.WindowSpec {
 	t.Helper()
 	for _, node := range queryPlan.GetQuery().Nodes {
