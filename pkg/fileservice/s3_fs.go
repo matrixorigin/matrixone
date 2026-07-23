@@ -502,6 +502,7 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (bytesWritten int, er
 		}
 		metric.FSWriteDurationStorage.Observe(time.Since(storageStart).Seconds())
 	}
+	bytesWritten = int(n.Load())
 
 	// write to disk cache
 	if writeDiskCache {
@@ -515,7 +516,7 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (bytesWritten int, er
 		metric.FSWriteDurationDiskCacheSet.Observe(time.Since(diskCacheStart).Seconds())
 	}
 
-	return int(n.Load()), nil
+	return bytesWritten, nil
 }
 
 func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
