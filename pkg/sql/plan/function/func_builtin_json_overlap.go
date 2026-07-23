@@ -89,12 +89,12 @@ func jsonOverlapsCheckFn(_ []overload, inputs []types.Type) checkResult {
 			finalTypes[i] = input
 			continue
 		}
-		if canCast, _ := fixedImplicitTypeCast(input, types.T_varchar); canCast {
+		if input.Oid == types.T_any {
 			finalTypes[i] = types.T_varchar.ToType()
 			needsCast = true
 			continue
 		}
-		return newCheckResultWithFailure(failedFunctionParametersWrong)
+		return newCheckResultWithInvalidJSONArgument(i + 1)
 	}
 	if needsCast {
 		return newCheckResultWithCast(0, finalTypes)

@@ -696,48 +696,6 @@ func TestJSONOverlapsEvaluationOrder(t *testing.T) {
 	}
 }
 
-func TestJSONOverlapsImplicitFloatCastRejectsNonFinite(t *testing.T) {
-	proc := testutil.NewProcess(t)
-
-	for _, tt := range []struct {
-		name  string
-		value float64
-	}{
-		{name: "nan", value: math.NaN()},
-		{name: "positive infinity", value: math.Inf(1)},
-		{name: "negative infinity", value: math.Inf(-1)},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			inputVec := vector.NewVec(types.T_float64.ToType())
-			defer inputVec.Free(proc.Mp())
-			require.NoError(t, vector.AppendFixedList(inputVec, []float64{tt.value}, nil, proc.Mp()))
-
-			targetType := vector.NewConstNull(types.T_varchar.ToType(), 1, proc.Mp())
-			defer targetType.Free(proc.Mp())
-
-			castResult := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
-			defer castResult.Free()
-			require.NoError(t, castResult.PreExtendAndReset(1))
-			require.NoError(t, NewCast([]*vector.Vector{inputVec, targetType}, castResult, proc, 1, nil))
-
-			castParam := vector.GenerateFunctionStrParameter(castResult.GetResultVector())
-			casted, isNull := castParam.GetStrValue(0)
-			require.False(t, isNull)
-			require.Equal(t, string(floatToBytes(tt.value, 64)), string(casted))
-
-			rightVec := testutil.MakeVarcharVector([]string{`0`}, nil, proc.Mp())
-			defer rightVec.Free(proc.Mp())
-
-			overlapResult := vector.NewFunctionResultWrapper(types.T_int64.ToType(), proc.Mp())
-			defer overlapResult.Free()
-			require.NoError(t, overlapResult.PreExtendAndReset(1))
-
-			err := jsonOverlaps([]*vector.Vector{castResult.GetResultVector(), rightVec}, overlapResult, proc, 1, nil)
-			require.ErrorContains(t, err, "invalid JSON document")
-		})
-	}
-}
-
 func TestJSONOverlapsCheckFn(t *testing.T) {
 	for _, tt := range []struct {
 		name        string
@@ -764,94 +722,24 @@ func TestJSONOverlapsCheckFn(t *testing.T) {
 			wantTargets: nil,
 		},
 		{
-			name:       "int64 casts on left",
+			name:       "int64 is rejected",
 			inputs:     []types.Type{types.T_int64.ToType(), types.T_varchar.ToType()},
-			wantStatus: succeedWithCast,
-			wantTargets: []types.Type{
-				types.T_varchar.ToType(),
-				types.T_varchar.ToType(),
-			},
+			wantStatus: failedFunctionParametersWrong,
 		},
 		{
-			name:       "int64 casts on right",
-			inputs:     []types.Type{types.T_varchar.ToType(), types.T_int64.ToType()},
-			wantStatus: succeedWithCast,
-			wantTargets: []types.Type{
-				types.T_varchar.ToType(),
-				types.T_varchar.ToType(),
-			},
-		},
-		{
-			name:       "bool casts on left",
-			inputs:     []types.Type{types.T_bool.ToType(), types.T_varchar.ToType()},
-			wantStatus: succeedWithCast,
-			wantTargets: []types.Type{
-				types.T_varchar.ToType(),
-				types.T_varchar.ToType(),
-			},
-		},
-		{
-			name:       "bool casts on right",
+			name:       "bool is rejected",
 			inputs:     []types.Type{types.T_varchar.ToType(), types.T_bool.ToType()},
-			wantStatus: succeedWithCast,
-			wantTargets: []types.Type{
-				types.T_varchar.ToType(),
-				types.T_varchar.ToType(),
-			},
+			wantStatus: failedFunctionParametersWrong,
 		},
 		{
-			name:       "decimal64 casts on left",
-			inputs:     []types.Type{types.T_decimal64.ToType(), types.T_varchar.ToType()},
-			wantStatus: succeedWithCast,
-			wantTargets: []types.Type{
-				types.T_varchar.ToType(),
-				types.T_varchar.ToType(),
-			},
-		},
-		{
-			name:       "decimal128 casts on left",
+			name:       "decimal is rejected",
 			inputs:     []types.Type{types.T_decimal128.ToType(), types.T_varchar.ToType()},
-			wantStatus: succeedWithCast,
-			wantTargets: []types.Type{
-				types.T_varchar.ToType(),
-				types.T_varchar.ToType(),
-			},
+			wantStatus: failedFunctionParametersWrong,
 		},
 		{
-			name:       "decimal256 casts on left",
-			inputs:     []types.Type{types.T_decimal256.ToType(), types.T_varchar.ToType()},
-			wantStatus: succeedWithCast,
-			wantTargets: []types.Type{
-				types.T_varchar.ToType(),
-				types.T_varchar.ToType(),
-			},
-		},
-		{
-			name:       "float32 casts on left",
-			inputs:     []types.Type{types.T_float32.ToType(), types.T_varchar.ToType()},
-			wantStatus: succeedWithCast,
-			wantTargets: []types.Type{
-				types.T_varchar.ToType(),
-				types.T_varchar.ToType(),
-			},
-		},
-		{
-			name:       "float64 casts on left",
-			inputs:     []types.Type{types.T_float64.ToType(), types.T_varchar.ToType()},
-			wantStatus: succeedWithCast,
-			wantTargets: []types.Type{
-				types.T_varchar.ToType(),
-				types.T_varchar.ToType(),
-			},
-		},
-		{
-			name:       "both native sides cast",
-			inputs:     []types.Type{types.T_int64.ToType(), types.T_decimal128.ToType()},
-			wantStatus: succeedWithCast,
-			wantTargets: []types.Type{
-				types.T_varchar.ToType(),
-				types.T_varchar.ToType(),
-			},
+			name:       "float is rejected",
+			inputs:     []types.Type{types.T_varchar.ToType(), types.T_float64.ToType()},
+			wantStatus: failedFunctionParametersWrong,
 		},
 		{
 			name:       "any uses varchar fallback",
@@ -882,7 +770,9 @@ func TestJSONOverlapsCheckFn(t *testing.T) {
 
 	ctx := context.Background()
 	_, err := GetFunctionByName(ctx, "json_overlaps", []types.Type{types.T_int64.ToType(), types.T_varchar.ToType()})
-	require.NoError(t, err)
+	require.EqualError(t, err, "Invalid data type for JSON data in argument 1 to function json_overlaps; a JSON string or JSON type is required.")
+	_, err = GetFunctionByName(ctx, "json_overlaps", []types.Type{types.T_varchar.ToType(), types.T_bool.ToType()})
+	require.EqualError(t, err, "Invalid data type for JSON data in argument 2 to function json_overlaps; a JSON string or JSON type is required.")
 }
 
 func TestJSONOverlapsMySQLBinaryStringTypes(t *testing.T) {
