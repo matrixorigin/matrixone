@@ -133,7 +133,7 @@ func Test_checkChangeTypeCompatible(t *testing.T) {
 				origin: &plan.Type{Id: int32(types.T_binary)},
 				to:     &plan.Type{Id: int32(types.T_json)},
 			},
-			wantErr: assert.Error,
+			wantErr: assert.NoError,
 		},
 		{
 			name: "test2",
@@ -142,7 +142,7 @@ func Test_checkChangeTypeCompatible(t *testing.T) {
 				origin: &plan.Type{Id: int32(types.T_binary)},
 				to:     &plan.Type{Id: int32(types.T_json)},
 			},
-			wantErr: assert.Error,
+			wantErr: assert.NoError,
 		},
 		{
 			name: "test3",

@@ -1013,6 +1013,14 @@ func forceCastExpr2(ctx context.Context, expr *Expr, t2 types.Type, targetType *
 	if targetType.Typ.Id == 0 {
 		return expr, nil
 	}
+	var err error
+	expr, err = rewriteEnumDisplayValueToJSONCast(ctx, expr, targetType.Typ)
+	if err != nil {
+		return nil, err
+	}
+	if expr.Typ.Id == int32(types.T_json) {
+		return expr, nil
+	}
 	if isTypedArrayPlanType(&targetType.Typ) {
 		return funcCastForTypedArrayType(ctx, expr, targetType.Typ)
 	}
@@ -1058,6 +1066,14 @@ func forceAssignmentCastExpr(ctx context.Context, expr *Expr, targetType Type) (
 
 func forceCastExprWithName(ctx context.Context, expr *Expr, targetType Type, funcName string) (*Expr, error) {
 	if targetType.Id == 0 {
+		return expr, nil
+	}
+	var err error
+	expr, err = rewriteEnumDisplayValueToJSONCast(ctx, expr, targetType)
+	if err != nil {
+		return nil, err
+	}
+	if expr.Typ.Id == int32(types.T_json) {
 		return expr, nil
 	}
 	if isTypedArrayPlanType(&targetType) {

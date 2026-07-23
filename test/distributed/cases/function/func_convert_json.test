@@ -51,11 +51,19 @@ select json_type(convert(cast('10:00:00.1' as time(1)), json)),
 select json_type(convert(cast('2020-01-02 03:04:05.120000' as datetime(6)), json)),
        json_unquote(convert(cast('2020-01-02 03:04:05.120000' as datetime(6)), json));
 set time_zone = '+00:00';
-select json_type(convert(cast('2020-01-02 03:04:05.120000' as timestamp(6)), json)),
-       json_unquote(convert(cast('2020-01-02 03:04:05.120000' as timestamp(6)), json));
+create table convert_json_timestamp(id int, ts timestamp(6));
+insert into convert_json_timestamp values
+    (1, '2020-01-02 03:04:05.120000'),
+    (2, '2020-01-01 23:30:00.000000');
+select id, ts, json_type(convert(ts, json)), json_unquote(convert(ts, json))
+from convert_json_timestamp order by id;
 set time_zone = '+08:00';
-select json_type(convert(cast('2020-01-02 03:04:05.120000' as timestamp(6)), json)),
-       json_unquote(convert(cast('2020-01-02 03:04:05.120000' as timestamp(6)), json));
+select id, ts, json_type(convert(ts, json)), json_unquote(convert(ts, json))
+from convert_json_timestamp order by id;
+set time_zone = '-05:00';
+select id, ts, json_type(convert(ts, json)), json_unquote(convert(ts, json))
+from convert_json_timestamp order by id;
+drop table convert_json_timestamp;
 set time_zone = '+00:00';
 select json_type(convert(st_geomfromtext('POINT(1 1)'), json)),
        convert(st_geomfromtext('POINT(1 1)'), json);
@@ -66,8 +74,30 @@ select json_type(convert(st_geomfromtext('LINESTRING(0 0,1 1)'), json)),
 -- does not preserve MySQL's opaque subtype metadata.
 select convert(cast(x'00' as blob), json) <
        convert(cast(x'd0' as blob), json) as mo_base64_order;
-select convert(cast(b'1' as bit(1)), json) =
-       convert(cast(x'01' as blob), json) as mo_subtype_collapsed;
+
+-- Constant folding must retain BIT width so this follows the BIT -> JSON BLOB path.
+select json_type(convert(cast(b'1' as bit(1)), json)),
+       json_unquote(convert(cast(b'1' as bit(1)), json));
+
+create table convert_json_bit_blob(
+    b1 bit(1), b8 bit(8), b9 bit(9),
+    bl1 blob, bl8 blob, bl9 blob
+);
+insert into convert_json_bit_blob values
+    (b'1', b'11111111', b'100001010', x'01', x'ff', x'010a');
+select json_type(convert(b1, json)), json_unquote(convert(b1, json)),
+       json_type(convert(bl1, json)), json_unquote(convert(bl1, json)),
+       convert(b1, json) = convert(bl1, json)
+from convert_json_bit_blob;
+select json_type(convert(b8, json)), json_unquote(convert(b8, json)),
+       json_type(convert(bl8, json)), json_unquote(convert(bl8, json)),
+       convert(b8, json) = convert(bl8, json)
+from convert_json_bit_blob;
+select json_type(convert(b9, json)), json_unquote(convert(b9, json)),
+       json_type(convert(bl9, json)), json_unquote(convert(bl9, json)),
+       convert(b9, json) = convert(bl9, json)
+from convert_json_bit_blob;
+drop table convert_json_bit_blob;
 
 create table convert_json_destination(id int, j json);
 insert into convert_json_destination select 1, bl from convert_json_source;
@@ -82,10 +112,35 @@ select convert('NULL', json);
 select convert('not json', json);
 select convert(cast('00000000-0000-0000-0000-000000000001' as uuid), json);
 
-create table convert_json_unsupported_enum(v enum('alpha', 'beta'));
-insert into convert_json_unsupported_enum values ('alpha');
-select convert(v, json) from convert_json_unsupported_enum;
-drop table convert_json_unsupported_enum;
+-- ENUM labels become JSON strings. They are not parsed as JSON documents.
+create table convert_json_enum(
+    id int,
+    e_text enum('alpha', 'beta'),
+    e_number enum('1', '2'),
+    e_json enum('{"a":1}', '{"b":2}'),
+    e_quoted enum('a"b', 'c')
+);
+insert into convert_json_enum values
+    (1, 'alpha', '1', '{"a":1}', 'a"b'),
+    (2, null, null, null, null);
+select id,
+       json_type(convert(e_text, json)), convert(e_text, json),
+       json_type(convert(e_number, json)), convert(e_number, json),
+       json_type(convert(e_json, json)), convert(e_json, json),
+       json_type(convert(e_quoted, json)), convert(e_quoted, json)
+from convert_json_enum
+order by id;
+select convert(e_text, json) = cast(e_text as json) as explicit_cast_matches,
+       json_unquote(cast(e_quoted as json)) as quoted_label
+from convert_json_enum
+where id = 1;
+create table convert_json_enum_destination(id int, j json);
+insert into convert_json_enum_destination select id, e_json from convert_json_enum;
+select id, json_type(j), json_unquote(j)
+from convert_json_enum_destination
+order by id;
+drop table convert_json_enum_destination;
+drop table convert_json_enum;
 
 -- MySQL's json_prep_stmts.test covers CAST(? AS JSON); retain the same
 -- runtime-type boundary for CONVERT(? , JSON).

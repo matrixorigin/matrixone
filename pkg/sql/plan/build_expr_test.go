@@ -15,10 +15,12 @@
 package plan
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
@@ -27,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/smartystreets/goconvey/convey"
 )
 
@@ -383,6 +386,152 @@ func TestExpr_B(t *testing.T) {
 			}
 		}
 	})
+}
+
+func TestConvertBitConstantToJSONPreservesBitType(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	pl, err := runOneExprStmt(mock, t, "select convert(cast(b'1' as bit(1)), json)")
+	require.NoError(t, err)
+
+	query := pl.GetQuery()
+	require.NotNil(t, query)
+	require.Len(t, query.Nodes, 2)
+	require.Len(t, query.Nodes[1].ProjectList, 1)
+
+	cast := query.Nodes[1].ProjectList[0].GetF()
+	require.NotNil(t, cast)
+	require.Equal(t, "cast", cast.Func.ObjName)
+	require.Len(t, cast.Args, 2)
+	require.Equal(t, int32(types.T_bit), cast.Args[0].Typ.Id)
+	require.Equal(t, int32(1), cast.Args[0].Typ.Width)
+}
+
+func TestConstantFoldBitCastPreservesBitType(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		literal string
+		width   int32
+	}{
+		{name: "bit1", literal: "b'1'", width: 1},
+		{name: "bit8", literal: "b'11111111'", width: 8},
+		{name: "bit9", literal: "b'100001010'", width: 9},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			pl, err := runOneExprStmt(mock, t, fmt.Sprintf("select convert(cast(%s as bit(%d)), json)", tc.literal, tc.width))
+			require.NoError(t, err)
+
+			cast := pl.GetQuery().Nodes[1].ProjectList[0].GetF()
+			require.NotNil(t, cast)
+			require.Len(t, cast.Args, 2)
+
+			node := &plan.Node{ProjectList: []*plan.Expr{DeepCopyExpr(cast.Args[0])}}
+			rule.NewConstantFold(false).Apply(node, nil, mock.CurrentContext().GetProcess())
+
+			folded := node.ProjectList[0]
+			require.Equal(t, int32(types.T_bit), folded.Typ.Id)
+			require.Equal(t, tc.width, folded.Typ.Width)
+			require.NotNil(t, folded.GetLit())
+		})
+	}
+}
+
+func TestConvertBitConstantToJSONAfterConstantFold(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		literal string
+		width   int32
+		payload string
+	}{
+		{name: "bit1", literal: "b'1'", width: 1, payload: `"AQ=="`},
+		{name: "bit8", literal: "b'11111111'", width: 8, payload: `"/w=="`},
+		{name: "bit9", literal: "b'100001010'", width: 9, payload: `"AQo="`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			pl, err := runOneExprStmt(mock, t, fmt.Sprintf("select convert(cast(%s as bit(%d)), json)", tc.literal, tc.width))
+			require.NoError(t, err)
+
+			expr := DeepCopyExpr(pl.GetQuery().Nodes[1].ProjectList[0])
+			folded, err := ConstantFold(batch.EmptyForConstFoldBatch, expr, mock.CurrentContext().GetProcess(), false, true)
+			require.NoError(t, err)
+
+			vec, free, err := colexec.GetReadonlyResultFromExpression(
+				mock.CurrentContext().GetProcess(), folded, []*batch.Batch{batch.EmptyForConstFoldBatch})
+			require.NoError(t, err)
+			defer free()
+			require.Equal(t, types.T_json, vec.GetType().Oid)
+			value := types.DecodeJson(vec.GetBytesAt(0))
+			require.Equal(t, bytejson.TpCodeBlob, value.Type)
+			require.Equal(t, tc.payload, value.String())
+		})
+	}
+}
+
+func TestEnumToJSONQuotesDisplayValueDuringBinding(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		enumValues string
+		nullable   bool
+	}{
+		{name: "text label", enumValues: "alpha,beta"},
+		{name: "json-looking label", enumValues: `{"a":1},1`},
+		{name: "nullable column", enumValues: "alpha,beta", nullable: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			column := mock.ctxt.tables["nation"].Cols[1]
+			column.Typ = plan.Type{
+				Id:          int32(types.T_enum),
+				Enumvalues:  tc.enumValues,
+				NotNullable: !tc.nullable,
+			}
+
+			for _, sql := range []string{
+				"select convert(n_name, json) from nation",
+				"select cast(n_name as json) from nation",
+			} {
+				pl, err := runOneExprStmt(mock, t, sql)
+				require.NoError(t, err, sql)
+
+				expr := pl.GetQuery().Nodes[1].ProjectList[0]
+				require.Equal(t, int32(types.T_json), expr.Typ.Id, sql)
+				quoted := expr.GetF()
+				require.NotNil(t, quoted, sql)
+				require.Equal(t, "json_quote", quoted.Func.ObjName, sql)
+				require.Len(t, quoted.Args, 1, sql)
+				displayValue := quoted.Args[0].GetF()
+				require.NotNil(t, displayValue, sql)
+				require.Equal(t, moEnumCastIndexToValueFun, displayValue.Func.ObjName, sql)
+			}
+		})
+	}
+}
+
+func TestEnumDisplayValueToJSONUsesJSONQuoteInPlannerCasts(t *testing.T) {
+	ctx := NewMockCompilerContext(true).GetContext()
+	displayExpr := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_varchar)},
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{ObjName: moEnumCastIndexToValueFun},
+		}},
+	}
+	jsonType := plan.Type{Id: int32(types.T_json)}
+
+	expr, err := makePlan2CastExpr(ctx, DeepCopyExpr(displayExpr), jsonType)
+	require.NoError(t, err)
+	require.Equal(t, int32(types.T_json), expr.Typ.Id)
+	require.Equal(t, "json_quote", expr.GetF().Func.ObjName)
+
+	expr, err = forceAssignmentCastExpr(ctx, DeepCopyExpr(displayExpr), jsonType)
+	require.NoError(t, err)
+	require.Equal(t, int32(types.T_json), expr.Typ.Id)
+	require.Equal(t, "json_quote", expr.GetF().Func.ObjName)
+
+	expr, err = forceCastExpr2(ctx, DeepCopyExpr(displayExpr), types.T_json.ToType(), &plan.Expr{Typ: jsonType})
+	require.NoError(t, err)
+	require.Equal(t, int32(types.T_json), expr.Typ.Id)
+	require.Equal(t, "json_quote", expr.GetF().Func.ObjName)
 }
 
 func runOneExprStmt(opt Optimizer, t *testing.T, sql string) (*plan.Plan, error) {
