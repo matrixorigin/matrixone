@@ -79,6 +79,54 @@ func TestLoadOrStoreTxnBalancesWaiterOnHit(t *testing.T) {
 	require.NoError(t, mgr.WaitEmpty(context.Background()))
 }
 
+func TestLoadOrStoreTxnRejectsNewTxnInReadonlyMode(t *testing.T) {
+	newManager := func() *TxnManager {
+		mgr := &TxnManager{}
+		mgr.txns.store = new(sync.Map)
+		return mgr
+	}
+	newTxn := func(mgr *TxnManager, id []byte) *Txn {
+		return NewTxn(mgr, new(NoopTxnStore), id, types.BuildTS(1, 0), types.TS{})
+	}
+
+	t.Run("new ID is not managed", func(t *testing.T) {
+		mgr := newManager()
+		WithTxnSkipFlag(TxnFlag_Normal)(mgr)
+		id := []byte("readonly-new-txn")
+
+		txn, loaded, offline := mgr.loadOrStoreTxn(newTxn(mgr, id), TxnFlag_Normal)
+		require.False(t, loaded)
+		require.True(t, offline)
+		require.Equal(t, id, []byte(txn.GetID()))
+		_, ok := mgr.loadTxn(txn.GetID())
+		require.False(t, ok)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		defer cancel()
+		require.NoError(t, mgr.WaitEmpty(ctx))
+	})
+
+	t.Run("managed ID is reused", func(t *testing.T) {
+		mgr := newManager()
+		id := []byte("readonly-managed-txn")
+		managed := newTxn(mgr, id)
+		stored, loaded, offline := mgr.loadOrStoreTxn(managed, TxnFlag_Normal)
+		require.False(t, loaded)
+		require.False(t, offline)
+		require.Same(t, managed, stored)
+
+		WithTxnSkipFlag(TxnFlag_Normal)(mgr)
+		stored, loaded, offline = mgr.loadOrStoreTxn(newTxn(mgr, id), TxnFlag_Normal)
+		require.True(t, loaded)
+		require.False(t, offline)
+		require.Same(t, managed, stored)
+
+		_, ok := mgr.loadAndDeleteTxn(managed.GetID())
+		require.True(t, ok)
+		require.NoError(t, mgr.WaitEmpty(context.Background()))
+	})
+}
+
 func TestTryUpdateMaxCommittedTSNeverMovesBackward(t *testing.T) {
 	mgr := &TxnManager{}
 	mgr.initMaxCommittedTS()
