@@ -9785,14 +9785,19 @@ func TestSetGlobalQueryWorkloadPolicyPersistsQuotedJSON(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	bh := &backgroundExecTest{}
+	bh := &accountRecordingBackgroundExecTest{
+		backgroundExecTest: &backgroundExecTest{},
+		accountIDs:         make(map[string]uint32),
+	}
 	bh.init()
 	stub := gostub.StubFunc(&NewBackgroundExec, bh)
 	defer stub.Reset()
 
 	raw := `{"version":1,"policies":{"ap":{"pool":"O'Reilly\\pool","labels":{"role":"ap"},"current_cn":"excluded"}}}`
+	lockSQL, err := getSqlForLockMoAccountNameFormat(context.Background(), sysAccountName)
+	require.NoError(t, err)
 	lookup := getSqlForGetSysVarWithAccount(sysAccountID, queryWorkloadPolicy)
-	upsert := getSqlForUpsertSysVarWithAccount(
+	insert := getSqlForInsertSysVarWithAccount(
 		sysAccountID,
 		sysAccountName,
 		queryWorkloadPolicy,
@@ -9801,22 +9806,36 @@ func TestSetGlobalQueryWorkloadPolicyPersistsQuotedJSON(t *testing.T) {
 	bh.sql2result["begin;"] = nil
 	bh.sql2result["commit;"] = nil
 	bh.sql2result["rollback;"] = nil
-	bh.sql2result[upsert] = nil
+	bh.sql2result[lockSQL] = nil
+	bh.sql2result[lookup] = newMrsForSystemVariableNameOfAccount(nil)
+	bh.sql2result[insert] = nil
 
 	// The generated SQL must remain one parseable statement even when the JSON
 	// contains both double quotes, an apostrophe, and a backslash.
-	parsed, err := mysqlparser.Parse(context.Background(), upsert, 1)
+	parsed, err := mysqlparser.Parse(context.Background(), insert, 1)
 	require.NoError(t, err)
 	require.Len(t, parsed, 1)
 	parsed, err = mysqlparser.ParseWithSQLMode(
 		context.Background(),
-		upsert,
+		insert,
 		1,
 		"NO_BACKSLASH_ESCAPES",
 	)
 	require.NoError(t, err)
 	require.Len(t, parsed, 1)
-	require.NotContains(t, upsert, raw)
+	require.NotContains(t, insert, raw)
+	update := getSqlForUpdateSysVarValue(raw, sysAccountID, queryWorkloadPolicy)
+	parsed, err = mysqlparser.Parse(context.Background(), update, 1)
+	require.NoError(t, err)
+	require.Len(t, parsed, 1)
+	parsed, err = mysqlparser.ParseWithSQLMode(
+		context.Background(),
+		update,
+		1,
+		"NO_BACKSLASH_ESCAPES",
+	)
+	require.NoError(t, err)
+	require.Len(t, parsed, 1)
 
 	ses := newSes(nil, ctrl)
 	ses.gSysVars.Set(queryWorkloadPolicy, "")
@@ -9826,19 +9845,54 @@ func TestSetGlobalQueryWorkloadPolicyPersistsQuotedJSON(t *testing.T) {
 		raw,
 	))
 	require.Equal(t, raw, ses.gSysVars.Get(queryWorkloadPolicy))
-	require.Contains(t, bh.executedSQLs, upsert)
-	require.NotContains(t, bh.executedSQLs, lookup)
-	require.NotContains(
+	require.Equal(
 		t,
+		[]string{"begin;", lockSQL, lookup, insert, "commit;"},
 		bh.executedSQLs,
-		getSqlForUpdateSysVarValue(raw, sysAccountID, queryWorkloadPolicy),
 	)
+	require.Equal(t, uint32(catalog.System_Account), bh.accountIDs[lockSQL])
+}
+
+func TestSetGlobalQueryWorkloadPolicyLocksExistingRowUpdate(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	bh := &backgroundExecTest{}
+	bh.init()
+	stub := gostub.StubFunc(&NewBackgroundExec, bh)
+	defer stub.Reset()
+
+	raw := `{"version":1,"policies":{"ap":{"pool":"updated","labels":{"role":"ap"}}}}`
+	lockSQL, err := getSqlForLockMoAccountNameFormat(context.Background(), sysAccountName)
+	require.NoError(t, err)
+	lookup := getSqlForGetSysVarWithAccount(sysAccountID, queryWorkloadPolicy)
+	update := getSqlForUpdateSysVarValue(raw, sysAccountID, queryWorkloadPolicy)
+	bh.sql2result[lookup] = newMrsForSystemVariableNameOfAccount(
+		[][]interface{}{{queryWorkloadPolicy}},
+	)
+
+	ses := newSes(nil, ctrl)
+	ses.gSysVars.Set(queryWorkloadPolicy, "")
+	require.NoError(t, ses.SetGlobalSysVar(
+		context.Background(),
+		queryWorkloadPolicy,
+		raw,
+	))
+	require.Equal(
+		t,
+		[]string{"begin;", lockSQL, lookup, update, "commit;"},
+		bh.executedSQLs,
+	)
+	require.Equal(t, raw, ses.gSysVars.Get(queryWorkloadPolicy))
 }
 
 func TestSetGlobalQueryWorkloadPolicyFailureRollsBackWithoutUpdatingCache(t *testing.T) {
 	oldRaw := `{"version":1,"policies":{"ap":{"pool":"old","labels":{"role":"ap"}}}}`
 	newRaw := `{"version":1,"policies":{"ap":{"pool":"new","labels":{"role":"ap"}}}}`
-	upsert := getSqlForUpsertSysVarWithAccount(
+	lockSQL, err := getSqlForLockMoAccountNameFormat(context.Background(), sysAccountName)
+	require.NoError(t, err)
+	lookup := getSqlForGetSysVarWithAccount(sysAccountID, queryWorkloadPolicy)
+	insert := getSqlForInsertSysVarWithAccount(
 		sysAccountID,
 		sysAccountName,
 		queryWorkloadPolicy,
@@ -9849,7 +9903,9 @@ func TestSetGlobalQueryWorkloadPolicyFailureRollsBackWithoutUpdatingCache(t *tes
 		name    string
 		failSQL string
 	}{
-		{name: "upsert", failSQL: upsert},
+		{name: "lock", failSQL: lockSQL},
+		{name: "lookup", failSQL: lookup},
+		{name: "insert", failSQL: insert},
 		{name: "commit", failSQL: "commit;"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -9858,6 +9914,7 @@ func TestSetGlobalQueryWorkloadPolicyFailureRollsBackWithoutUpdatingCache(t *tes
 
 			bh := &backgroundExecTest{}
 			bh.init()
+			bh.sql2result[lookup] = newMrsForSystemVariableNameOfAccount(nil)
 			bh.sql2err[tc.failSQL] = moerr.NewInternalErrorNoCtx("injected failure")
 			stub := gostub.StubFunc(&NewBackgroundExec, bh)
 			defer stub.Reset()
@@ -9874,27 +9931,6 @@ func TestSetGlobalQueryWorkloadPolicyFailureRollsBackWithoutUpdatingCache(t *tes
 			require.Contains(t, bh.executedSQLs, "rollback;")
 		})
 	}
-}
-
-func TestWorkloadPolicyCatalogDDLHasAccountScopedUniqueKey(t *testing.T) {
-	parsed, err := mysqlparser.Parse(
-		context.Background(),
-		MoCatalogMoMysqlCompatibilityModeDDL,
-		1,
-	)
-	require.NoError(t, err)
-	require.Len(t, parsed, 1)
-	require.Contains(
-		t,
-		MoCatalogMoMysqlCompatibilityModeDDL,
-		MoMysqlCompatWorkloadPolicyExpression,
-	)
-	require.Contains(
-		t,
-		MoCatalogMoMysqlCompatibilityModeDDL,
-		"unique key "+MoMysqlCompatWorkloadPolicyUniqueIndex+
-			" ("+MoMysqlCompatWorkloadPolicyAccountColumn+")",
-	)
 }
 
 func TestInitialGlobalSysVarLoadRejectsDuplicateWorkloadPolicies(t *testing.T) {
@@ -11596,6 +11632,18 @@ type blockingBackgroundExecTest struct {
 	blockSQL string
 	started  chan struct{}
 	release  chan struct{}
+}
+
+type accountRecordingBackgroundExecTest struct {
+	*backgroundExecTest
+	accountIDs map[string]uint32
+}
+
+func (bt *accountRecordingBackgroundExecTest) Exec(ctx context.Context, sql string) error {
+	if accountID, err := defines.GetAccountId(ctx); err == nil {
+		bt.accountIDs[sql] = accountID
+	}
+	return bt.backgroundExecTest.Exec(ctx, sql)
 }
 
 func (bt *blockingBackgroundExecTest) Exec(ctx context.Context, sql string) error {

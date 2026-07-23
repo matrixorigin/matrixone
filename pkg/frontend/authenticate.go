@@ -1602,8 +1602,6 @@ const (
 
 	insertSystemVariableWithAccountFormat = `insert into mo_catalog.mo_mysql_compatibility_mode(account_id, account_name, variable_name, variable_value, system_variables) values (%d, %s, %s, %s, %v);`
 
-	upsertSystemVariableWithAccountFormat = `insert into mo_catalog.mo_mysql_compatibility_mode(account_id, account_name, variable_name, variable_value, system_variables) values (%d, %s, %s, %s, %v) on duplicate key update account_name = values(account_name), variable_value = values(variable_value), system_variables = values(system_variables);`
-
 	updateSystemVariableValueFormat = `update mo_catalog.mo_mysql_compatibility_mode set variable_value = %s where account_id = %d and variable_name = %s and system_variables = true;`
 
 	updateConfigurationByDbNameAndAccountNameFormat = `update mo_catalog.mo_mysql_compatibility_mode set variable_value = '%s' where account_name = '%s' and dat_name = '%s' and variable_name = '%s';`
@@ -2312,17 +2310,6 @@ func getSqlForGetSysVarValueWithAccount(accountID uint64, varName string) string
 func getSqlForInsertSysVarWithAccount(accountId uint64, accountName string, varName string, varValue string) string {
 	return fmt.Sprintf(
 		insertSystemVariableWithAccountFormat,
-		accountId,
-		sqlStringValueExpression(accountName),
-		sqlStringValueExpression(varName),
-		sqlStringValueExpression(varValue),
-		true,
-	)
-}
-
-func getSqlForUpsertSysVarWithAccount(accountId uint64, accountName string, varName string, varValue string) string {
-	return fmt.Sprintf(
-		upsertSystemVariableWithAccountFormat,
 		accountId,
 		sqlStringValueExpression(accountName),
 		sqlStringValueExpression(varName),
@@ -11882,17 +11869,23 @@ func doSetGlobalSystemVariable(ctx context.Context, ses *Session, varName string
 		err = finishTxn(ctx, bh, err)
 	}()
 
-	// The policy row has an account-scoped unique generated key in
-	// mo_mysql_compatibility_mode. A single upsert is the cross-CN
-	// linearization point: concurrent first SETs cannot both create rows.
+	// query_workload_policy is not pre-seeded for an account, so its first SET
+	// must serialize the following existence check and insert across CNs. The
+	// system account lock table is an existing logical-key lock namespace: a
+	// primary-key point lookup locks even an absent account-name row, and the
+	// enclosing transaction releases the lock on commit or rollback.
 	if varName == queryWorkloadPolicy {
-		err = bh.Exec(ctx, getSqlForUpsertSysVarWithAccount(
-			accountId,
-			accountName,
-			varName,
-			getVariableValue(varValue),
-		))
-		return
+		var sql string
+		if sql, err = getSqlForLockMoAccountNameFormat(ctx, accountName); err != nil {
+			return
+		}
+		bh.ClearExecResultSet()
+		if err = bh.Exec(
+			defines.AttachAccountId(ctx, catalog.System_Account),
+			sql,
+		); err != nil {
+			return
+		}
 	}
 
 	// check if var exists
