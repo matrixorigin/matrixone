@@ -208,27 +208,9 @@ func TestReadValidatesAllRemoteShardsBeforeSending(t *testing.T) {
 	runServicesTest(
 		t,
 		"cn1,cn2,cn3",
-		func(ctx context.Context, _ *server, services []*service) {
+		func(_ context.Context, _ *server, services []*service) {
 			s := services[0]
 			table := uint64(1)
-			mustAddTestShards(t, ctx, s, table, 3, 1, services[1:]...)
-			for _, service := range services {
-				waitReplicaCount(table, service, 1)
-			}
-
-			cache, err := s.getShards(table)
-			require.NoError(t, err)
-			var remoteTargets []string
-			cache.selectReplicas(
-				table,
-				func(_ shard.ShardsMetadata, _ shard.TableShard, replica shard.ShardReplica) bool {
-					if !s.isLocalReplica(replica) {
-						remoteTargets = append(remoteTargets, replica.CN)
-					}
-					return true
-				},
-			)
-			require.GreaterOrEqual(t, len(remoteTargets), 2)
 
 			cns := make(map[string]metadata.CNService)
 			s.remote.cluster.GetCNServiceWithoutWorkingState(
@@ -238,12 +220,13 @@ func TestReadValidatesAllRemoteShardsBeforeSending(t *testing.T) {
 					return true
 				},
 			)
+			remoteTargets := []string{services[1].cfg.ServiceID, services[2].cfg.ServiceID}
 			for _, target := range remoteTargets {
 				cn := cns[target]
 				cn.CommitID = version.CommitID
 				s.remote.cluster.UpdateCN(cn)
 			}
-			incompatible := cns[remoteTargets[len(remoteTargets)-1]]
+			incompatible := cns[remoteTargets[1]]
 			incompatible.CommitID = "older-commit"
 			s.remote.cluster.UpdateCN(incompatible)
 
@@ -252,9 +235,53 @@ func TestReadValidatesAllRemoteShardsBeforeSending(t *testing.T) {
 			s.stopper.Stop()
 			client := &countingMethodBasedClient{MethodBasedClient: s.remote.client}
 			s.remote.client = client
+			// This is a read-ordering contract test, not a scheduler test. Install
+			// the two remote shards directly so rebalance timing and cache refresh
+			// cannot change which target is checked first.
+			cache := newReadCache()
+			cache.addShards(
+				table,
+				shard.ShardsMetadata{
+					Policy:          shard.Policy_Hash,
+					ShardsCount:     2,
+					Version:         1,
+					MaxReplicaCount: 1,
+					ShardIDs:        []uint64{1, 2},
+				},
+				[]shard.TableShard{
+					{
+						TableID: table,
+						ShardID: 1,
+						Policy:  shard.Policy_Hash,
+						Version: 1,
+						Replicas: []shard.ShardReplica{{
+							ReplicaID: 1,
+							State:     shard.ReplicaState_Running,
+							CN:        remoteTargets[0],
+							Version:   1,
+						}},
+					},
+					{
+						TableID: table,
+						ShardID: 2,
+						Policy:  shard.Policy_Hash,
+						Version: 1,
+						Replicas: []shard.ShardReplica{{
+							ReplicaID: 2,
+							State:     shard.ReplicaState_Running,
+							CN:        remoteTargets[1],
+							Version:   1,
+						}},
+					},
+				},
+			)
+			s.cache.read.Store(cache)
+
 			adjustCalls := make(map[uint64]int)
-			err = s.Read(
-				ctx,
+			readCtx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+			defer cancel()
+			err := s.Read(
+				readCtx,
 				ReadRequest{
 					TableID: table,
 					Param: shard.ReadParam{Process: pipeline.ProcessInfo{
@@ -266,11 +293,9 @@ func TestReadValidatesAllRemoteShardsBeforeSending(t *testing.T) {
 				}),
 			)
 			require.Error(t, err)
+			require.ErrorContains(t, err, "incompatible or unknown commit")
 			require.Zero(t, client.asyncCalls.Load())
-			require.Len(t, adjustCalls, len(remoteTargets))
-			for _, calls := range adjustCalls {
-				require.Equal(t, 1, calls)
-			}
+			require.Equal(t, map[uint64]int{1: 1, 2: 1}, adjustCalls)
 		},
 		nil,
 	)

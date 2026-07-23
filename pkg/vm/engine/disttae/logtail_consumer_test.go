@@ -698,10 +698,6 @@ func TestPushClient_DoGCPartitionState(t *testing.T) {
 	assert.Equal(t, 3, state.ApproxInMemRows())
 }
 
-func TestLogTailConnect(t *testing.T) {
-	// this case is tested by TestSpeedupAbortAllTxn
-}
-
 func TestPushClient_LoadAndConsumeLatestCkp(t *testing.T) {
 	ctx, cancel := context.WithTimeoutCause(
 		context.Background(),

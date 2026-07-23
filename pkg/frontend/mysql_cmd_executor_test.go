@@ -1991,6 +1991,121 @@ func TestNextSQLModeStatementUsesCurrentSessionMode(t *testing.T) {
 	require.Equal(t, "c", name.ColName())
 }
 
+func TestRefreshStatementScopedSessionInfo(t *testing.T) {
+	ctx := defines.AttachAccountId(context.TODO(), catalog.System_Account)
+	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
+	ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
+	proc := &process.Process{Base: &process.BaseProcess{}}
+
+	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "ANSI_QUOTES"))
+	refreshStatementScopedSessionInfo(ses, proc)
+	require.False(t, proc.Base.SessionInfo.MatrixOneNativeMode)
+
+	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "ANSI_QUOTES,MATRIXONE_NATIVE"))
+	refreshStatementScopedSessionInfo(ses, proc)
+	require.True(t, proc.Base.SessionInfo.MatrixOneNativeMode)
+}
+
+func TestBackgroundSessionInheritsUpstreamSQLMode(t *testing.T) {
+	ctx := defines.AttachAccountId(context.TODO(), catalog.System_Account)
+	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
+	ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
+	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "PIPES_AS_CONCAT,MATRIXONE_NATIVE"))
+
+	backSes := &backSession{}
+	backSes.upstream = ses
+	proc := &process.Process{Base: &process.BaseProcess{}}
+
+	mode, err := backSes.GetSessionSysVar("sql_mode")
+	require.NoError(t, err)
+	require.Equal(t, "", mode)
+
+	refreshBackgroundStatementScopedSessionInfo(backSes, &UserInput{}, proc)
+	require.True(t, proc.Base.SessionInfo.MatrixOneNativeMode)
+}
+
+func TestBackgroundExplicitSQLModeOverridesUpstream(t *testing.T) {
+	ctx := defines.AttachAccountId(context.TODO(), catalog.System_Account)
+	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
+	ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
+	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "MATRIXONE_NATIVE"))
+
+	backSes := &backSession{}
+	backSes.upstream = ses
+	proc := &process.Process{Base: &process.BaseProcess{}}
+
+	refreshBackgroundStatementScopedSessionInfo(backSes, &UserInput{
+		useParserSQLMode: true,
+		parserSQLMode:    "ANSI_QUOTES",
+	}, proc)
+	require.False(t, proc.Base.SessionInfo.MatrixOneNativeMode)
+
+	refreshBackgroundStatementScopedSessionInfo(backSes, &UserInput{
+		useParserSQLMode: true,
+		parserSQLMode:    "ANSI_QUOTES,MATRIXONE_NATIVE",
+	}, proc)
+	require.True(t, proc.Base.SessionInfo.MatrixOneNativeMode)
+
+	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", ""))
+	refreshBackgroundStatementScopedSessionInfo(backSes, &UserInput{}, proc)
+	require.False(t, proc.Base.SessionInfo.MatrixOneNativeMode)
+}
+
+func TestNestedBackgroundSessionInheritsEffectiveSQLMode(t *testing.T) {
+	ctx := defines.AttachAccountId(context.TODO(), catalog.System_Account)
+	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
+	ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
+
+	tests := []struct {
+		name         string
+		sessionMode  string
+		explicitMode *string
+		wantNative   bool
+	}{
+		{name: "upstream_native", sessionMode: "MATRIXONE_NATIVE", wantNative: true},
+		{name: "explicit_native", sessionMode: "", explicitMode: ptrTo("MATRIXONE_NATIVE"), wantNative: true},
+		{name: "explicit_default", sessionMode: "MATRIXONE_NATIVE", explicitMode: ptrTo(""), wantNative: false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", tc.sessionMode))
+
+			parent := (&backSession{}).initFeSes(ses, nil, "", nil)
+			parent.upstream = ses
+			defer parent.Close()
+
+			input := &UserInput{}
+			if tc.explicitMode != nil {
+				input.useParserSQLMode = true
+				input.parserSQLMode = *tc.explicitMode
+			}
+			parentProc := &process.Process{Base: &process.BaseProcess{}}
+			refreshBackgroundStatementScopedSessionInfo(parent, input, parentProc)
+			require.Equal(t, tc.wantNative, parentProc.Base.SessionInfo.MatrixOneNativeMode)
+
+			child := (&backSession{}).initFeSes(parent, nil, "", nil)
+			defer child.Close()
+			childProc := &process.Process{Base: &process.BaseProcess{}}
+			refreshBackgroundStatementScopedSessionInfo(child, &UserInput{}, childProc)
+			require.Equal(t, tc.wantNative, childProc.Base.SessionInfo.MatrixOneNativeMode)
+
+			nextMode := "MATRIXONE_NATIVE"
+			nextNative := true
+			if tc.wantNative {
+				nextMode = ""
+				nextNative = false
+			}
+			refreshBackgroundStatementScopedSessionInfo(parent, &UserInput{
+				useParserSQLMode: true,
+				parserSQLMode:    nextMode,
+			}, parentProc)
+			refreshBackgroundStatementScopedSessionInfo(child, &UserInput{}, childProc)
+			require.Equal(t, nextNative, childProc.Base.SessionInfo.MatrixOneNativeMode)
+		})
+	}
+}
+
 func TestSQLModeStagingDefersRewriteWithRequestSnapshot(t *testing.T) {
 	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
@@ -2319,6 +2434,89 @@ func TestLockTablesSessionState(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, unlockAgainCtx.txnOpt.byCommit)
 	require.False(t, ses.hasLockedTables.Load())
+}
+
+func TestCanExecuteDataBranchMergePickInUncommittedTransaction(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	for _, txnCase := range []struct {
+		name       string
+		optionBits uint32
+	}{
+		{name: "explicit begin", optionBits: OPTION_BEGIN},
+		{name: "autocommit off", optionBits: OPTION_NOT_AUTOCOMMIT},
+	} {
+		for _, stmtCase := range []struct {
+			name    string
+			stmt    tree.Statement
+			allowed bool
+		}{
+			{name: "merge", stmt: &tree.DataBranchMerge{}, allowed: txnCase.optionBits == OPTION_BEGIN},
+			{name: "pick", stmt: &tree.DataBranchPick{}, allowed: false},
+		} {
+			t.Run(txnCase.name+"/"+stmtCase.name, func(t *testing.T) {
+				ses := newTestSession(t, ctrl)
+				ses.GetTxnHandler().SetOptionBits(txnCase.optionBits)
+				can, err := statementCanBeExecutedInUncommittedTransaction(context.TODO(), ses, stmtCase.stmt)
+				require.NoError(t, err)
+				require.Equal(t, stmtCase.allowed, can)
+				if stmtCase.allowed {
+					require.NoError(t, canExecuteStatementInUncommittedTransaction(context.TODO(), ses, stmtCase.stmt))
+					return
+				}
+				err = canExecuteStatementInUncommittedTransaction(context.TODO(), ses, stmtCase.stmt)
+				require.Error(t, err)
+				require.Contains(t, err.Error(), dataBranchMergePickTxnErrorInfo())
+			})
+		}
+	}
+}
+
+func TestDataBranchMergePickTransactionFallback(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	for _, txnCase := range []struct {
+		name            string
+		optionBits      uint32
+		byBegin         bool
+		mergeNotAllowed bool
+		pickNotAllowed  bool
+	}{
+		{
+			name:           "ordinary autocommit",
+			pickNotAllowed: false,
+		},
+		{
+			name:           "explicit begin",
+			optionBits:     OPTION_BEGIN,
+			byBegin:        true,
+			pickNotAllowed: true,
+		},
+		{
+			name:            "autocommit off before active txn",
+			optionBits:      OPTION_NOT_AUTOCOMMIT,
+			mergeNotAllowed: true,
+			pickNotAllowed:  true,
+		},
+		{
+			name:           "explicit begin with autocommit off",
+			optionBits:     OPTION_BEGIN | OPTION_NOT_AUTOCOMMIT,
+			byBegin:        true,
+			pickNotAllowed: true,
+		},
+	} {
+		t.Run(txnCase.name, func(t *testing.T) {
+			ses := newTestSession(t, ctrl)
+			ses.GetTxnHandler().SetOptionBits(txnCase.optionBits)
+			txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+			txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{ByBegin: txnCase.byBegin}).AnyTimes()
+			ses.proc.Base.TxnOperator = txnOperator
+			require.Equal(t, txnCase.mergeNotAllowed, dataBranchMergeTxnNotAllowed(ses))
+			require.Equal(t, txnCase.pickNotAllowed, dataBranchPickTxnNotAllowed(ses))
+		})
+	}
 }
 
 func TestUnsupportedFrontendParserStatements(t *testing.T) {

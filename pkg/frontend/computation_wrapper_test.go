@@ -17,9 +17,11 @@ package frontend
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -112,6 +114,7 @@ func newPreparedExecuteEnv(t *testing.T, stmtID uint32) (*Session, *PrepareStmt,
 
 func newPreparedExecuteEnvForSQL(t *testing.T, stmtID uint32, sql string) (*Session, *PrepareStmt, *TxnComputationWrapper, *ExecCtx) {
 	ctx := statistic.ContextWithStatsInfo(context.Background(), statistic.NewStatsInfo())
+	ctx = defines.AttachAccount(ctx, sysAccountID, rootID, moAdminRoleID)
 	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
 
 	ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
@@ -141,12 +144,13 @@ func newPreparedExecuteEnvForSQL(t *testing.T, stmtID uint32, sql string) (*Sess
 		reqCtx: ctx,
 		ses:    ses,
 		proc:   proc,
+		resper: ses.GetResponser(),
 		input: &UserInput{
 			stmtName:            stmtName,
 			isBinaryProtExecute: true,
 		},
 	}
-	ses.txnCompileCtx.execCtx = execCtx
+	ses.GetTxnCompileCtx().SetExecCtx(execCtx)
 	proc.SetResolveVariableFunc(ses.txnCompileCtx.ResolveVariable)
 	proc.SetResolveVariableIsBinFunc(ses.txnCompileCtx.ResolveVariableIsBin)
 	return ses, prepareStmt, cw, execCtx
@@ -332,6 +336,75 @@ func TestInitExecuteStmtParamReusesCachedCompileWhenNoSchemaChange(t *testing.T)
 	require.Same(t, sentinel, prepareStmt.compile)
 	require.NotNil(t, retPlan)
 	require.NotNil(t, retStmt)
+}
+
+func TestInitExecuteStmtParamRebuildsWhenTempTableMappingChanges(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnv(t, 102)
+	defer prepareStmt.Close()
+
+	oldColDefData := [][]byte{[]byte("old-int-column")}
+	newColDefData := [][]byte{[]byte("new-varchar-column")}
+	prepareStmt.ColDefData = oldColDefData
+	execCtx.prepareColDef = oldColDefData
+	w := execCtx.resper.MysqlRrWr().(*testMysqlWriter)
+	w.makeColumnDefDataFunc = func(context.Context, []*plan.ColDef) ([][]byte, error) {
+		return newColDefData, nil
+	}
+
+	oldPlan := prepareStmt.PreparePlan
+	ses.AddTempTable("db1", "unrelated", "temp-unrelated")
+
+	retComp, retPlan, retStmt, _, err := initExecuteStmtParam(
+		execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.Nil(t, retComp)
+	require.NotSame(t, oldPlan, prepareStmt.PreparePlan)
+	require.Same(t, prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan, retPlan)
+	require.NotNil(t, retStmt)
+	require.Equal(t, ses.GetTempTableVersion(), prepareStmt.tempTableVersion)
+	require.Equal(t, newColDefData, prepareStmt.ColDefData)
+	require.Equal(t, newColDefData, execCtx.prepareColDef)
+}
+
+func TestInitExecuteStmtParamKeepsOldStateWhenColumnMetadataRefreshFails(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnv(t, 103)
+	defer prepareStmt.Close()
+
+	oldPlan := prepareStmt.PreparePlan
+	oldColDefData := [][]byte{[]byte("old-int-column")}
+	prepareStmt.ColDefData = oldColDefData
+	execCtx.prepareColDef = oldColDefData
+	w := execCtx.resper.MysqlRrWr().(*testMysqlWriter)
+	w.makeColumnDefDataFunc = func(context.Context, []*plan.ColDef) ([][]byte, error) {
+		return nil, errors.New("column metadata refresh failed")
+	}
+
+	ses.AddTempTable("db1", "unrelated", "temp-unrelated")
+	_, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	require.EqualError(t, err, "column metadata refresh failed")
+	require.Same(t, oldPlan, prepareStmt.PreparePlan)
+	require.Equal(t, oldColDefData, prepareStmt.ColDefData)
+	require.Equal(t, oldColDefData, execCtx.prepareColDef)
+	require.NotEqual(t, ses.GetTempTableVersion(), prepareStmt.tempTableVersion)
+}
+
+func TestInitExecuteStmtParamRebuildsPreparedPlanWhenSQLModePresenceChanges(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnv(t, 106)
+	defer prepareStmt.Close()
+
+	originalPlan := prepareStmt.PreparePlan
+	require.False(t, prepareStmt.NativeMode)
+
+	execCtx.reqCtx = defines.AttachAccountId(execCtx.reqCtx, catalog.System_Account)
+	require.NoError(t, ses.SetSessionSysVar(execCtx.reqCtx, "sql_mode", "MATRIXONE_NATIVE"))
+
+	retComp, retPlan, retStmt, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.Nil(t, retComp)
+	require.NotNil(t, retPlan)
+	require.NotNil(t, retStmt)
+	require.True(t, prepareStmt.NativeMode)
+	require.NotSame(t, originalPlan, prepareStmt.PreparePlan)
 }
 
 func TestInitExecuteStmtParamBypassesButRetainsCachedTopologyForExplicitSchedulingIntent(t *testing.T) {
