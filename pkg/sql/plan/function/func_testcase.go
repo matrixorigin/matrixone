@@ -15,6 +15,7 @@
 package function
 
 import (
+	"bytes"
 	"fmt"
 	"strings"
 
@@ -715,6 +716,27 @@ func (fc *FunctionTestCase) Run() (succeed bool, errInfo string) {
 					i+1, types.BytesToArray[float64](want), types.BytesToArray[float64](get))
 			}
 		}
+	case types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8:
+		// Narrow vector types compare byte-exact (their stored representation is
+		// the comparison ground truth; ArrayCompare only covers float32/float64).
+		r := vector.GenerateFunctionStrParameter(v)
+		s := vector.GenerateFunctionStrParameter(vExpected)
+		for i = 0; i < uint64(fc.fnLength); i++ {
+			want, null1 := s.GetStrValue(i)
+			get, null2 := r.GetStrValue(i)
+			if null1 {
+				if null2 {
+					continue
+				}
+				return false, fmt.Sprintf("the %dth row expected NULL, but get not null", i+1)
+			}
+			if null2 {
+				return false, fmt.Sprintf("the %dth row expected %v, but get NULL", i+1, want)
+			}
+			if !bytes.Equal(want, get) {
+				return false, fmt.Sprintf("the %dth row expected %v, but get %v", i+1, want, get)
+			}
+		}
 	case types.T_uuid:
 		r := vector.GenerateFunctionFixedTypeParameter[types.Uuid](v)
 		s := vector.GenerateFunctionFixedTypeParameter[types.Uuid](vExpected)
@@ -917,6 +939,18 @@ func newVectorByType(mp *mpool.MPool, typ types.Type, val any, nsp *nulls.Nulls)
 	case types.T_array_float64:
 		values := val.([][]float64)
 		vector.AppendArrayList[float64](vec, values, nil, mp)
+	case types.T_array_bf16:
+		values := val.([][]types.BF16)
+		vector.AppendArrayList[types.BF16](vec, values, nil, mp)
+	case types.T_array_float16:
+		values := val.([][]types.Float16)
+		vector.AppendArrayList[types.Float16](vec, values, nil, mp)
+	case types.T_array_int8:
+		values := val.([][]int8)
+		vector.AppendArrayList[int8](vec, values, nil, mp)
+	case types.T_array_uint8:
+		values := val.([][]uint8)
+		vector.AppendArrayList[uint8](vec, values, nil, mp)
 	case types.T_uuid:
 		values := val.([]types.Uuid)
 		vector.AppendFixedList(vec, values, nil, mp)

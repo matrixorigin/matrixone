@@ -15,6 +15,7 @@
 package compile
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	compileplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/compile"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -84,6 +85,27 @@ func (p *pluginCompileCtx) IndexInfo() *plan.CreateTable     { return p.indexInf
 func (p *pluginCompileCtx) MainTableID() uint64              { return p.mainTableID }
 func (p *pluginCompileCtx) MainExtra() *api.SchemaExtra      { return p.mainExtra }
 func (p *pluginCompileCtx) RunSql(sql string) error          { return p.c.runSql(sql) }
+
+// RunWithSourceReadCacheSkip runs fn with SkipMemoryCacheWrites attached to the
+// compile context, so block reads performed inside fn — notably an index build's
+// source-table scans (kmeans sample + entry assignment) — do NOT populate the
+// fileservice memory cache. The build reads the source once; queries never re-read
+// it (re-rank fetches only a handful of rows), so caching it would just evict the
+// index-entry blocks the queries actually hit. Mirrors the SkipAllCache policy
+// compaction (mergeobjects) and LOAD DATA (external) already use for one-shot bulk
+// reads. runSqlWithResultAndOptions reads c.proc.Ctx for the sub-execution, so
+// attaching the policy here propagates to every read in the build; it is restored
+// afterward. The build runs synchronously within this compile, so the temporary
+// swap is single-threaded.
+func (p *pluginCompileCtx) RunWithSourceReadCacheSkip(fn func() error) error {
+	if p.c == nil || p.c.proc == nil {
+		return fn()
+	}
+	prev := p.c.proc.Ctx
+	p.c.proc.Ctx = fileservice.WithFileServicePolicy(prev, fileservice.SkipMemoryCacheWrites)
+	defer func() { p.c.proc.Ctx = prev }()
+	return fn()
+}
 
 func (p *pluginCompileCtx) BuildIndexTable(def *plan.TableDef) error {
 	return indexTableBuild(p.c, p.mainTableID, p.mainExtra, def, p.dbSource)
