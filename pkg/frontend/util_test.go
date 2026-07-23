@@ -654,6 +654,18 @@ func TestGetSimpleExprValue(t *testing.T) {
 	})
 }
 
+func TestUserInputPreparedExpressionIsExplicit(t *testing.T) {
+	ordinary := &UserInput{stmt: &tree.Select{}}
+	prepared := &UserInput{
+		stmt:                 &tree.Select{},
+		isInternalInput:      true,
+		isPreparedExpression: true,
+	}
+
+	require.False(t, ordinary.isPreparedExpr())
+	require.True(t, prepared.isPreparedExpr())
+}
+
 func TestGetExprValue(t *testing.T) {
 	ctx := defines.AttachAccountId(context.TODO(), sysAccountID)
 	catalog.SetupDefines("")

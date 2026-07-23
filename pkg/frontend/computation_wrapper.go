@@ -292,7 +292,13 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 	cacheHit := cwft.plan != nil
 	if !cacheHit {
 		cwft.protocolVersion = currentProtocolVersion(cwft.proc)
-		cwft.plan, err = buildPlan(execCtx.reqCtx, cwft.ses, cwft.ses.GetTxnCompileCtx(), cwft.stmt)
+		cwft.plan, err = buildPlanWithPrepareMode(
+			execCtx.reqCtx,
+			cwft.ses,
+			cwft.ses.GetTxnCompileCtx(),
+			cwft.stmt,
+			execCtx.input.isPreparedExpr(),
+		)
 		if err != nil {
 			return nil, err
 		}
