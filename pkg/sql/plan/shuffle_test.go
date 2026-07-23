@@ -475,11 +475,9 @@ func TestDetermineShuffleForDedupJoin(t *testing.T) {
 
 func TestGetRangeShuffleIndexForZM(t *testing.T) {
 	zm := index2.NewZM(types.T_datetime, 0)
-	defer func() {
-		r := recover()
-		fmt.Println("panic recover", r)
-	}()
-	GetRangeShuffleIndexForZM(0, 1000, zm, 4)
+	require.PanicsWithValue(t, "unsupported shuffle type!", func() {
+		GetRangeShuffleIndexForZM(0, 1000, zm, 4)
+	})
 }
 
 func TestShuffleByZonemap(t *testing.T) {

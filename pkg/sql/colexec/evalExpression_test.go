@@ -1785,10 +1785,6 @@ func TestJsonOrderingWithTextPrepareParamExact(t *testing.T) {
 	}
 }
 
-func TestFunctionFold(t *testing.T) {
-	t.Skip("todo: implement this test")
-}
-
 func TestModifyResultOwnerToOuter(t *testing.T) {
 	// we cannot modify the column expression's memory owner.
 	// because its owner is never own to executor.
