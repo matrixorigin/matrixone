@@ -450,6 +450,7 @@ func TestMakeTimeBinaryLiteralBindAndExecute(t *testing.T) {
 		{name: "wide leading zero second", sql: "select cast(maketime(12, 34, '" + strings.Repeat("0", 4096) + "1') as varchar)", want: "12:34:01.000000"},
 		{name: "wide trailing fractional zero second", sql: "select cast(maketime(12, 34, '1." + strings.Repeat("0", 4097) + "') as varchar)", want: "12:34:01.000000"},
 		{name: "wide zero padding canceled by exponent", sql: "select cast(maketime(12, 34, '0." + strings.Repeat("0", 4096) + "1e4097') as varchar)", want: "12:34:01.000000"},
+		{name: "wide significant fractional second", sql: "select cast(maketime(12, 34, '1." + strings.Repeat("1", 4096) + "') as varchar)", want: "12:34:01.111111"},
 	}
 
 	for _, test := range tests {

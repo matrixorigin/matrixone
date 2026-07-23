@@ -7496,7 +7496,7 @@ func makeTimeExactSecond(value string) (int64, uint32, bool) {
 		return 0, 0, false
 	}
 	significantDigits := lastNonzeroDigit - firstNonzeroDigit + 1
-	if significantDigits > maxExactSecondDigits {
+	if negative {
 		return 0, 0, true
 	}
 
@@ -7540,52 +7540,48 @@ func makeTimeExactSecond(value string) (int64, uint32, bool) {
 	fractionDigits := fractionEnd - fractionStart
 	trailingZeroDigits := totalDigits - lastNonzeroDigit - 1
 	exponent += trailingZeroDigits - fractionDigits
-	if exponent < -maxExactSecondExponent {
+	integerDigits := integerEnd - integerStart
+	significantDigitAt := func(index int) byte {
+		index += firstNonzeroDigit
+		if index < integerDigits {
+			return value[integerStart+index]
+		}
+		return value[fractionStart+index-integerDigits]
+	}
+
+	// Reject the exact value before rounding. The significant mantissa has no
+	// leading zero, so its decimal width is enough to classify it against 60
+	// without constructing a big.Int proportional to the input length.
+	integerValueDigits := significantDigits + exponent
+	if integerValueDigits > 2 ||
+		(integerValueDigits == 2 && significantDigitAt(0) >= '6') {
+		return 0, 0, true
+	}
+
+	// Round second*1e6 half away from zero. At most eight integer digits can
+	// survive the range check above; the next significant digit alone decides
+	// the rounding direction, so arbitrarily long VARCHAR/TEXT input stays
+	// bounded in memory.
+	scaledDigits := integerValueDigits + 6
+	if scaledDigits <= 0 {
+		if scaledDigits == 0 && significantDigitAt(0) >= '5' {
+			return 0, 1, false
+		}
 		return 0, 0, false
 	}
-	if exponent > maxExactSecondExponent {
-		return 0, 0, true
+	var totalMicroseconds int64
+	keptDigits := min(significantDigits, scaledDigits)
+	for i := 0; i < keptDigits; i++ {
+		totalMicroseconds = totalMicroseconds*10 + int64(significantDigitAt(i)-'0')
 	}
-
-	var normalized strings.Builder
-	normalized.Grow(significantDigits + 16)
-	if negative {
-		normalized.WriteByte('-')
+	for i := significantDigits; i < scaledDigits; i++ {
+		totalMicroseconds *= 10
 	}
-	digitIndex := 0
-	appendSignificantDigits := func(part string) {
-		for i := range part {
-			if digitIndex >= firstNonzeroDigit && digitIndex <= lastNonzeroDigit {
-				normalized.WriteByte(part[i])
-			}
-			digitIndex++
-		}
+	if scaledDigits < significantDigits && significantDigitAt(scaledDigits) >= '5' {
+		totalMicroseconds++
 	}
-	appendSignificantDigits(value[integerStart:integerEnd])
-	appendSignificantDigits(value[fractionStart:fractionEnd])
-	if exponent != 0 {
-		normalized.WriteByte('e')
-		normalized.WriteString(strconv.Itoa(exponent))
-	}
-
-	second, ok := new(big.Rat).SetString(normalized.String())
-	if !ok || second.Sign() < 0 || second.Cmp(big.NewRat(60, 1)) >= 0 {
-		return 0, 0, true
-	}
-
-	scaledNumerator := new(big.Int).Mul(second.Num(), big.NewInt(types.MicroSecsPerSec))
-	totalMicroseconds, remainder := new(big.Int), new(big.Int)
-	totalMicroseconds.QuoRem(scaledNumerator, second.Denom(), remainder)
-	twiceRemainder := new(big.Int).Lsh(remainder, 1)
-	if twiceRemainder.Cmp(second.Denom()) >= 0 {
-		totalMicroseconds.Add(totalMicroseconds, big.NewInt(1))
-	}
-	if !totalMicroseconds.IsInt64() {
-		return 0, 0, true
-	}
-
-	total := totalMicroseconds.Int64()
-	return total / types.MicroSecsPerSec, uint32(total % types.MicroSecsPerSec), false
+	return totalMicroseconds / types.MicroSecsPerSec,
+		uint32(totalMicroseconds % types.MicroSecsPerSec), false
 }
 
 func makeTimeStringSecondGetter(vec *vector.Vector) func(uint64) (int64, uint32, bool) {

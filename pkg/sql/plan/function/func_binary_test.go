@@ -9759,6 +9759,14 @@ func TestMakeTimeExactStringSecondRounding(t *testing.T) {
 	require.Zero(t, second)
 	require.Zero(t, microsecond)
 
+	second, microsecond, null = makeTimeExactSecond("1." + strings.Repeat("1", 4096))
+	require.False(t, null)
+	require.Equal(t, int64(1), second)
+	require.Equal(t, uint32(111111), microsecond)
+
+	_, _, null = makeTimeExactSecond("-1e-" + strings.Repeat("9", 8192))
+	require.True(t, null)
+
 	for _, test := range []struct {
 		name  string
 		value string
