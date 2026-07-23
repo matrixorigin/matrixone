@@ -151,8 +151,12 @@ func numericTensor(shape ort.Shape, dt DType, nums []json.Number) (ort.Value, er
 	}
 }
 
-type signed interface{ ~int8 | ~int16 | ~int32 | ~int64 }
-type unsigned interface{ ~uint8 | ~uint16 | ~uint32 | ~uint64 }
+type signed interface {
+	~int8 | ~int16 | ~int32 | ~int64
+}
+type unsigned interface {
+	~uint8 | ~uint16 | ~uint32 | ~uint64
+}
 
 // intTensor / uintTensor parse json numbers as integers of the declared width.
 // Parse and range errors are reported, never silently truncated: "1.5" as an
