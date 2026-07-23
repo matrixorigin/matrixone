@@ -199,6 +199,63 @@ func TestValidateTimestampDataBranchSourceAfterLock(t *testing.T) {
 	require.True(t, dagLoaded)
 }
 
+func TestTimestampDataBranchDatabaseRevalidatesEveryTableAfterAllLocks(t *testing.T) {
+	timestampSource := &plan.Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 42}}
+	var catalogRows sync.RWMutex
+	catalogRows.Lock() // COPY ALTER holds one source row exclusively.
+
+	enteredLockPath := make(chan struct{})
+	allLocksHeld := make(chan struct{})
+	validated := make(chan string, 2)
+	done := make(chan error, 1)
+	go func() {
+		// Database clone acquires all source locks before revalidating any table.
+		close(enteredLockPath)
+		catalogRows.RLock()
+		close(allLocksHeld)
+		defer catalogRows.RUnlock()
+		source := cloneDatabaseSource{srcTblInfos: []*tableInfo{
+			{dbName: "db", tblName: "t1"},
+			{dbName: "db", tblName: "v", typ: view},
+			{dbName: "db", tblName: "t2"},
+		}}
+		done <- forEachCloneDatabaseSourceTable(source, func(table *tableInfo) error {
+			err := validateTimestampDataBranchSourceAfterLock(
+				timestampSource,
+				func(at *plan.Snapshot) (uint64, error) {
+					if at != nil {
+						return 1, nil
+					}
+					return 1, nil
+				},
+				func() (*databranchutils.DataBranchDAG, error) {
+					return databranchutils.NewDAG(nil), nil
+				},
+			)
+			if err != nil {
+				return err
+			}
+			validated <- table.tblName
+			return nil
+		})
+	}()
+
+	<-enteredLockPath
+	select {
+	case <-allLocksHeld:
+		t.Fatal("database clone acquired all locks before ALTER released its row")
+	default:
+	}
+	catalogRows.Unlock()
+	select {
+	case <-allLocksHeld:
+	case <-time.After(time.Second):
+		t.Fatal("database clone did not acquire all source locks")
+	}
+	require.NoError(t, <-done)
+	require.ElementsMatch(t, []string{"t1", "t2"}, []string{<-validated, <-validated})
+}
+
 func TestTimestampDataBranchValidationLockCoversPublication(t *testing.T) {
 	timestampSource := &plan.Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 42}}
 	var lineageRows sync.Mutex

@@ -2550,6 +2550,13 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal_To_new_Using_cluster(t *testi
 	})
 }
 
+func TestDataBranchLineagePitrPublicationLockSQL(t *testing.T) {
+	require.Equal(t,
+		"select table_id from mo_catalog.mo_branch_metadata for update",
+		dataBranchLineagePitrPublicationLockSQL(),
+	)
+}
+
 func Test_doCreatePitr(t *testing.T) {
 	convey.Convey("doRestorePitr fail", t, func() {
 		ctrl := gomock.NewController(t)

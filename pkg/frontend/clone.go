@@ -320,6 +320,45 @@ func lockDataBranchCloneDatabaseSources(
 	return nil
 }
 
+func revalidateTimestampDataBranchCloneDatabaseSource(
+	ctx context.Context,
+	ses *Session,
+	bh BackgroundExec,
+	source cloneDatabaseSource,
+) error {
+	if !shouldRevalidateTimestampDataBranchCloneSource(ctx, source.snapshot) {
+		return nil
+	}
+	if _, err := tryToIncreaseTxnPhysicalTS(ctx, ses.proc.GetTxnOperator()); err != nil {
+		return err
+	}
+	fromAccountID := source.opAccountId
+	if source.snapshot.Tenant != nil {
+		fromAccountID = source.snapshot.Tenant.TenantID
+	}
+	return forEachCloneDatabaseSourceTable(source, func(table *tableInfo) error {
+		return revalidateTimestampDataBranchCloneSource(
+			ctx, ses, bh, source.snapshot, fromAccountID,
+			table.dbName, table.tblName,
+		)
+	})
+}
+
+func forEachCloneDatabaseSourceTable(
+	source cloneDatabaseSource,
+	fn func(*tableInfo) error,
+) error {
+	for _, table := range source.srcTblInfos {
+		if table.typ == view {
+			continue
+		}
+		if err := fn(table); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func getBackExecutor(
 	ctx context.Context,
 	ses *Session,
@@ -723,6 +762,9 @@ func handleCloneDatabaseWithSource(
 		}
 	}
 	if err = lockDataBranchCloneDatabaseSources(reqCtx, ses, source); err != nil {
+		return
+	}
+	if err = revalidateTimestampDataBranchCloneDatabaseSource(reqCtx, ses, bh, source); err != nil {
 		return
 	}
 
