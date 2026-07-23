@@ -341,6 +341,99 @@ func TestShufflePoolPeakIsReportedByExactlyOneHolder(t *testing.T) {
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
+func TestShuffleSuccessfulResetCompletesWriter(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	sp := NewShufflePool(2, 2, false)
+	args := []*Shuffle{NewArgument(), NewArgument()}
+	defer func() {
+		for _, arg := range args {
+			if arg.GetShufflePool() != nil {
+				arg.Reset(proc, true, nil)
+			}
+			arg.Free(proc, false, nil)
+			arg.Release()
+		}
+	}()
+	for i, arg := range args {
+		arg.BucketNum = 2
+		arg.CurrentShuffleIdx = int32(i)
+		arg.SetShufflePool(sp)
+		require.NoError(t, arg.Prepare(proc))
+	}
+
+	args[0].stopWritingOnce()
+	require.False(t, sp.allStop())
+	woke := make(chan struct{})
+	waiting := make(chan struct{})
+	go func() {
+		close(waiting)
+		sp.waitBatchOrEnd(0, proc)
+		close(woke)
+	}()
+	<-waiting
+
+	args[1].Reset(proc, false, nil)
+	select {
+	case <-woke:
+	case <-time.After(time.Second):
+		t.Fatal("successful reset did not complete the writer")
+	}
+	args[0].Reset(proc, false, nil)
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestShuffleWriterStopsOnceAcrossEOFAndReset(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	sp := NewShufflePool(1, 1, false)
+	arg := NewArgument()
+	defer func() {
+		arg.Free(proc, false, nil)
+		arg.Release()
+	}()
+	arg.BucketNum = 1
+	arg.SetShufflePool(sp)
+	require.NoError(t, arg.Prepare(proc))
+
+	arg.stopWritingOnce()
+	arg.stopWritingOnce()
+	require.Equal(t, int32(1), sp.stoppers)
+	arg.Reset(proc, false, nil)
+	require.Equal(t, int32(1), sp.stoppers)
+}
+
+func TestShuffleFailedResetAbortsWithoutStoppingWriter(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	sp := NewShufflePool(1, 1, false)
+	arg := NewArgument()
+	defer func() {
+		arg.Free(proc, true, nil)
+		arg.Release()
+	}()
+	arg.BucketNum = 1
+	arg.SetShufflePool(sp)
+	require.NoError(t, arg.Prepare(proc))
+
+	woke := make(chan struct{})
+	waiting := make(chan struct{})
+	go func() {
+		close(waiting)
+		sp.waitBatchOrEnd(0, proc)
+		close(woke)
+	}()
+	<-waiting
+	arg.Reset(proc, true, nil)
+	select {
+	case <-woke:
+	case <-time.After(time.Second):
+		t.Fatal("failed reset did not abort the shuffle pool")
+	}
+	require.True(t, sp.aborted)
+	require.Zero(t, sp.stoppers)
+}
+
 func TestShufflePoolRetainsOwnershipWhenBatchSetWriteFails(t *testing.T) {
 	for _, tc := range []struct {
 		name  string

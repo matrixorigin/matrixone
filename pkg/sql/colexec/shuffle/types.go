@@ -83,6 +83,14 @@ type container struct {
 	runtimeFilterHandled bool
 	exprExec             colexec.ExpressionExecutor
 	held                 bool
+	writingStopped       bool
+}
+
+func (shuffle *Shuffle) stopWritingOnce() {
+	if shuffle.ctr.held && !shuffle.ctr.writingStopped && shuffle.ctr.shufflePool != nil {
+		shuffle.ctr.shufflePool.stopWriting()
+		shuffle.ctr.writingStopped = true
+	}
 }
 
 func (shuffle *Shuffle) SetShufflePool(sp *ShufflePool) {
@@ -108,6 +116,7 @@ func (shuffle *Shuffle) Reset(proc *process.Process, pipelineFailed bool, err er
 				shuffle.ctr.shufflePool.abort(proc.Mp())
 			}
 		} else if shuffle.ctr.held {
+			shuffle.stopWritingOnce()
 			peak, ownsStats = shuffle.ctr.shufflePool.release(proc.Mp(), false)
 		}
 		if ownsStats && shuffle.OpAnalyzer != nil {
@@ -122,6 +131,7 @@ func (shuffle *Shuffle) Reset(proc *process.Process, pipelineFailed bool, err er
 	shuffle.ctr.pendingOffset = 0
 	shuffle.ctr.runtimeFilterHandled = false
 	shuffle.ctr.held = false
+	shuffle.ctr.writingStopped = false
 }
 
 func (shuffle *Shuffle) Free(proc *process.Process, pipelineFailed bool, err error) {

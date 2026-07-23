@@ -66,6 +66,7 @@ func (shuffle *Shuffle) Prepare(proc *process.Process) error {
 		return moerr.NewInternalError(proc.Ctx, "shuffle pool was aborted before prepare completed")
 	}
 	shuffle.ctr.held = true
+	shuffle.ctr.writingStopped = false
 	shuffle.ctr.ending = false
 	shuffle.ctr.runtimeFilterHandled = false
 	return nil
@@ -172,7 +173,7 @@ func (shuffle *Shuffle) Call(proc *process.Process) (vm.CallResult, error) {
 		bat := result.Batch
 		if bat == nil {
 			shuffle.ctr.ending = true
-			shuffle.ctr.shufflePool.stopWriting()
+			shuffle.stopWritingOnce()
 			result.Status = vm.ExecNext
 			result.Batch = batch.EmptyBatch
 			return result, nil
