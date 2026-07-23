@@ -69,6 +69,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/source"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
@@ -3590,10 +3591,48 @@ func (c *Compile) compileShuffleJoin(node, left, right *plan.Node, leftscopes, r
 	if len(stageNodes) == 1 && len(leftscopes) == 1 && len(rightscopes) == 1 &&
 		sameExecutionNode(leftscopes[0].NodeInfo, rightscopes[0].NodeInfo) &&
 		leftscopes[0].NodeInfo.Mcpu == int(left.Stats.Dop) &&
-		rightscopes[0].NodeInfo.Mcpu == int(right.Stats.Dop) {
+		rightscopes[0].NodeInfo.Mcpu == int(right.Stats.Dop) &&
+		!localShuffleJoinWouldNest(node, leftscopes[0], rightscopes[0]) {
 		return c.compileLocalShuffleJoin(node, left, right, leftscopes, rightscopes)
 	}
 	return c.compileDistributedShuffleJoin(node, left, right, leftscopes, rightscopes)
+}
+
+// A fixed-bucket local shuffle is implemented by duplicating one pull-based
+// operator tree into DOP workers that share a bounded pool. Stacking another
+// fixed-bucket shuffle in the same tree can form a wait cycle across pools:
+// an outer writer waits for a worker that is waiting for every inner writer,
+// including the outer writer's child. Materializing the second shuffle into
+// producer and consumer scopes keeps the bounded edges in an acyclic graph.
+func localShuffleJoinWouldNest(node *plan.Node, probe, build *Scope) bool {
+	if scopeHasFixedBucketShuffle(build) {
+		return true
+	}
+	return node.Stats.HashmapStats.ShuffleMethod != plan.ShuffleMethod_Reuse &&
+		scopeHasFixedBucketShuffle(probe)
+}
+
+func scopeHasFixedBucketShuffle(scope *Scope) bool {
+	if scope == nil {
+		return false
+	}
+	return operatorTreeHasFixedBucketShuffle(scope.RootOp)
+}
+
+func operatorTreeHasFixedBucketShuffle(op vm.Operator) bool {
+	if op == nil {
+		return false
+	}
+	if shuffleOp, ok := op.(*shuffle.Shuffle); ok && !shuffleOp.DrainAllBuckets {
+		return true
+	}
+	base := op.GetOperatorBase()
+	for i := 0; i < base.NumChildren(); i++ {
+		if operatorTreeHasFixedBucketShuffle(base.GetChildren(i)) {
+			return true
+		}
+	}
+	return false
 }
 
 // canReuseDistributedShuffleJoin reports whether probeScopes already use the
@@ -4533,7 +4572,8 @@ func (c *Compile) compileShuffleGroup(node *plan.Node, inputSS []*Scope, nodes [
 		c.anal.isFirst = false
 		return inputSS
 	}
-	if len(stageNodes) == 1 && len(inputSS) == 1 && inputSS[0].NodeInfo.Mcpu > 1 && inputSS[0].NodeInfo.Mcpu == int(node.Stats.Dop) {
+	if len(stageNodes) == 1 && len(inputSS) == 1 && inputSS[0].NodeInfo.Mcpu > 1 &&
+		inputSS[0].NodeInfo.Mcpu == int(node.Stats.Dop) && !scopeHasFixedBucketShuffle(inputSS[0]) {
 		return c.compileLocalShuffleGroup(node, inputSS, nodes)
 	}
 
