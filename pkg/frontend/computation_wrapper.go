@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"maps"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -500,15 +501,16 @@ func (cwft *TxnComputationWrapper) RecordCompoundStmt(ctx context.Context, stats
 	return nil
 }
 
+// StatsCompositeSubStmtResource returns the legacy plan-statistics projection
+// for a composite child statement. The caller owns the returned value; it is
+// deliberately not merged into the authoritative resource root.
 func (cwft *TxnComputationWrapper) StatsCompositeSubStmtResource(ctx context.Context) (statsByte statistic.StatsArray) {
 	waitActiveCost := time.Duration(0)
 	if handler := cwft.ses.GetTxnHandler(); handler.InActiveTxn() {
-		txn := handler.GetTxn()
-		if txn != nil {
+		if txn := handler.GetTxn(); txn != nil {
 			waitActiveCost = txn.GetWaitActiveCost()
 		}
 	}
-
 	h := NewMarshalPlanHandlerCompositeSubStmt(ctx, cwft.plan, WithWaitActiveCost(waitActiveCost))
 	statsByte, _ = h.Stats(ctx, cwft.ses)
 	return statsByte
@@ -833,9 +835,17 @@ func createCompile(
 
 	stats := statistic.StatsInfoFromContext(execCtx.reqCtx)
 	stats.CompileStart()
+	var compileIOStart int64
+	if stats != nil {
+		compileIOStart = atomic.LoadInt64(&stats.IOAccessTimeConsumption)
+	}
 	crs := new(perfcounter.CounterSet)
 	execCtx.reqCtx = perfcounter.AttachCompilePlanMarkKey(execCtx.reqCtx, crs)
 	defer func() {
+		if stats != nil {
+			compileIO := atomic.LoadInt64(&stats.IOAccessTimeConsumption) - compileIOStart
+			stats.AddCompileIOConsumption(time.Duration(compileIO))
+		}
 		stats.AddCompileS3Request(statistic.S3Request{
 			List:      crs.FileService.S3.List.Load(),
 			Head:      crs.FileService.S3.Head.Load(),
@@ -876,6 +886,9 @@ func createCompile(
 			ses, schedulingSQL, *schedulingSQLMode))
 	} else {
 		retCompile.SetQuerySchedulingIntent(querySchedulingIntentForStatement(ses, schedulingSQL))
+	}
+	if resourceAttemptOwnerEligible(ses) {
+		retCompile.SetResourceAttemptOwnerEligible()
 	}
 	retCompile.SetSchedulingTraceRecorder(schedulingTrace)
 	retCompile.SetBuildPlanFunc(func(ctx context.Context) (*plan2.Plan, error) {
@@ -942,6 +955,14 @@ func querySchedulingIntent(ses FeSession) schedule.SchedulingIntent {
 		}
 	}
 	return intent
+}
+
+// Only the client statement owns retry-attempt cardinality. Back-exec SQL is
+// derived work under that statement's resource root and contributes resources,
+// but it must not claim the root's single attempt owner.
+func resourceAttemptOwnerEligible(ses FeSession) bool {
+	_, isBackExec := ses.(*backSession)
+	return !isBackExec && !ses.IsDerivedStmt()
 }
 
 func currentCNPipelineAddress(ses FeSession) string {
