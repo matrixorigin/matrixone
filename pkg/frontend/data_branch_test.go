@@ -21,6 +21,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -1347,10 +1348,45 @@ func TestValidateDataBranchColumnLineage(t *testing.T) {
 			tableDef(col("a", 1, 0), col("b", 2, 1)),
 			tableDef(col("a", 1, 0), col("b", 2, 1)),
 		}
-		err := validateDataBranchColumnLineage(
+		endpointColumns, err := dataBranchLineageEndpointColumns(
 			tarDefs, []bool{false, true, true}, baseDefs, []bool{false, false},
 		)
-		require.ErrorContains(t, err, "column 'c' has different identity")
+		require.NoError(t, err)
+		require.NotContains(t, endpointColumns, "c")
+	})
+
+	t.Run("independent different-name additions do not pair on colliding identity", func(t *testing.T) {
+		tarDefs := []*plan.TableDef{
+			tableDef(col("a", 1, 0)),
+			tableDef(col("a", 10, 0), col("c", 2, 1)),
+		}
+		baseDefs := []*plan.TableDef{
+			tableDef(col("a", 1, 0)),
+			tableDef(col("a", 20, 0), col("d", 2, 1)),
+		}
+		endpointColumns, err := dataBranchLineageEndpointColumns(
+			tarDefs, []bool{false, true}, baseDefs, []bool{false, true},
+		)
+		require.NoError(t, err)
+		require.NotContains(t, endpointColumns, "c")
+	})
+
+	t.Run("column dropped by sibling remains target only after type change", func(t *testing.T) {
+		varcharCol := col("c", 12, 1)
+		varcharCol.Typ.Id = int32(types.T_varchar)
+		tarDefs := []*plan.TableDef{
+			tableDef(col("a", 1, 0), col("c", 2, 1)),
+			tableDef(col("a", 10, 0), varcharCol),
+		}
+		baseDefs := []*plan.TableDef{
+			tableDef(col("a", 1, 0), col("c", 2, 1)),
+			tableDef(col("a", 20, 0)),
+		}
+		endpointColumns, err := dataBranchLineageEndpointColumns(
+			tarDefs, []bool{false, true}, baseDefs, []bool{false, true},
+		)
+		require.NoError(t, err)
+		require.NotContains(t, endpointColumns, "c")
 	})
 }
 
@@ -1370,7 +1406,20 @@ func TestCheckSchemaCompatibility_AllowsStableIdentityRename(t *testing.T) {
 		},
 	}
 
-	common, visible, targetOnly, err := checkSchemaCompatibility(targetDef, baseDef)
+	endpointColumns, err := dataBranchLineageEndpointColumns(
+		[]*plan.TableDef{baseDef, targetDef}, []bool{false, false},
+		[]*plan.TableDef{baseDef, baseDef}, []bool{false, false},
+	)
+	require.NoError(t, err)
+	common, visible, targetOnly, err := checkSchemaCompatibilityWithResolver(
+		targetDef, baseDef,
+		func(targetCol *plan.ColDef) *plan.ColDef {
+			if baseCol := endpointColumns[strings.ToLower(targetCol.Name)]; baseCol != nil {
+				return baseCol
+			}
+			return dataBranchColumnDefByLogicalName(baseDef, targetCol)
+		},
+	)
 	require.NoError(t, err)
 	require.Equal(t, []int{0, 1}, common)
 	require.Equal(t, []int{0, 1}, visible)

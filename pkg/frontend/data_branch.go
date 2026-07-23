@@ -727,6 +727,9 @@ func diffMergeAgency(
 	); err != nil {
 		return
 	}
+	if err = reconcileDataBranchEndpointSchema(ctx, ses, bh, &tblStuff, &dagInfo); err != nil {
+		return
+	}
 	var (
 		done        bool
 		wg          = new(sync.WaitGroup)
@@ -994,14 +997,6 @@ func getTableStuff(
 		}
 	}
 
-	var commonIdxes, commonVisibleIdxes, tarOnlyIdxes []int
-	if commonIdxes, commonVisibleIdxes, tarOnlyIdxes, err = checkSchemaCompatibility(tarTblDef, baseTblDef); err != nil {
-		return
-	}
-	tblStuff.def.commonIdxes = commonIdxes
-	tblStuff.def.commonVisibleIdxes = commonVisibleIdxes
-	tblStuff.def.tarOnlyIdxes = tarOnlyIdxes
-
 	if baseTblDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
 		tblStuff.def.pkKind = fakeKind
 	} else if baseTblDef.Pkey.CompPkeyCol != nil {
@@ -1038,34 +1033,6 @@ func getTableStuff(
 		tblStuff.def.pkColIdxes = dataBranchFakePKColIdxes(baseTblDef)
 	}
 
-	// Build baseColToTarIdx: map each base data column (in batch column order,
-	// excluding Row_ID) to its position in target colNames.
-	// colNames is already populated above from tarTblDef.Cols (excluding Row_ID,
-	// including FakePK/CPK). Hidden key columns must stay in the mapping because
-	// BranchHashmap keys may be built from FakePK/CPK vectors.
-	{
-		baseDataNames := make([]string, 0, len(baseTblDef.Cols))
-		for _, col := range baseTblDef.Cols {
-			if col.Name == catalog.Row_ID {
-				continue
-			}
-			baseDataNames = append(baseDataNames, col.Name)
-		}
-		tblStuff.def.baseColToTarIdx = make([]int, len(baseDataNames))
-		for i := range tblStuff.def.baseColToTarIdx {
-			tblStuff.def.baseColToTarIdx[i] = -1
-		}
-		for i, name := range baseDataNames {
-			baseCol := dataBranchColumnDefByName(baseTblDef, name)
-			tarCol := dataBranchEndpointColumnDef(tarTblDef, baseCol)
-			if tarCol != nil {
-				tblStuff.def.baseColToTarIdx[i] = dataBranchColumnIndexByName(
-					tblStuff.def.colNames, tarCol.Name,
-				)
-			}
-		}
-	}
-
 	tblStuff.retPool = &retBatchList{}
 	tblStuff.bufPool = &sync.Pool{
 		New: func() any {
@@ -1077,6 +1044,96 @@ func getTableStuff(
 
 	return
 
+}
+
+func reconcileDataBranchEndpointSchema(
+	ctx context.Context,
+	ses *Session,
+	bh BackgroundExec,
+	tables *tableStuff,
+	dagInfo *branchMetaInfo,
+) error {
+	tarDef := tables.tarRel.GetTableDef(ctx)
+	baseDef := tables.baseRel.GetTableDef(ctx)
+	resolveBaseColumn := dataBranchEndpointColumnResolver(func(tarCol *plan.ColDef) *plan.ColDef {
+		return dataBranchColumnDefByLogicalName(baseDef, tarCol)
+	})
+
+	if tables.tarRel.GetTableID(ctx) == tables.baseRel.GetTableID(ctx) {
+		resolveBaseColumn = func(tarCol *plan.ColDef) *plan.ColDef {
+			return dataBranchEndpointColumnDef(baseDef, tarCol)
+		}
+	} else if dagInfo.hasLCA() {
+		tarSP, baseSP := tables.resolvedSnapshots(ses)
+		tarDefs, err := dataBranchPathTableDefs(
+			ctx, ses, bh, tables.tarRel, tarSP,
+			dagInfo.pathFromLCAToTar, dagInfo.pathFromLCAToTarTS,
+		)
+		if err != nil {
+			return err
+		}
+		baseDefs, err := dataBranchPathTableDefs(
+			ctx, ses, bh, tables.baseRel, baseSP,
+			dagInfo.pathFromLCAToBase, dagInfo.pathFromLCAToBaseTS,
+		)
+		if err != nil {
+			return err
+		}
+		endpointColumns, err := dataBranchLineageEndpointColumns(
+			tarDefs, dagInfo.pathFromLCAToTarLineageOnly,
+			baseDefs, dagInfo.pathFromLCAToBaseLineageOnly,
+		)
+		if err != nil {
+			return err
+		}
+		resolveBaseColumn = func(tarCol *plan.ColDef) *plan.ColDef {
+			if baseCol := endpointColumns[strings.ToLower(tarCol.Name)]; baseCol != nil {
+				return baseCol
+			}
+			if !isDataBranchUserVisibleColumn(tarCol) {
+				return dataBranchColumnDefByLogicalName(baseDef, tarCol)
+			}
+			return nil
+		}
+	}
+
+	commonIdxes, commonVisibleIdxes, tarOnlyIdxes, err :=
+		checkSchemaCompatibilityWithResolver(tarDef, baseDef, resolveBaseColumn)
+	if err != nil {
+		return err
+	}
+	tables.def.commonIdxes = commonIdxes
+	tables.def.commonVisibleIdxes = commonVisibleIdxes
+	tables.def.tarOnlyIdxes = tarOnlyIdxes
+
+	baseDataCols := make([]*plan.ColDef, 0, len(baseDef.Cols))
+	for _, baseCol := range baseDef.Cols {
+		if baseCol.Name != catalog.Row_ID {
+			baseDataCols = append(baseDataCols, baseCol)
+		}
+	}
+	tables.def.baseColToTarIdx = make([]int, len(baseDataCols))
+	for i := range tables.def.baseColToTarIdx {
+		tables.def.baseColToTarIdx[i] = -1
+	}
+	for _, tarCol := range tarDef.Cols {
+		if tarCol.Name == catalog.Row_ID {
+			continue
+		}
+		baseCol := resolveBaseColumn(tarCol)
+		if baseCol == nil {
+			continue
+		}
+		for i, candidate := range baseDataCols {
+			if strings.EqualFold(candidate.Name, baseCol.Name) {
+				tables.def.baseColToTarIdx[i] = dataBranchColumnIndexByName(
+					tables.def.colNames, tarCol.Name,
+				)
+				break
+			}
+		}
+	}
+	return nil
 }
 
 func dataBranchColumnIndexByName(colNames []string, name string) int {
@@ -1226,7 +1283,21 @@ func dataBranchColumnTypeAttributesEqual(left, right plan.Type) bool {
 		left.NotNullable == right.NotNullable
 }
 
+type dataBranchEndpointColumnResolver func(*plan.ColDef) *plan.ColDef
+
 func checkSchemaCompatibility(tarDef, baseDef *plan.TableDef) (commonIdxes, commonVisibleIdxes, tarOnlyIdxes []int, err error) {
+	return checkSchemaCompatibilityWithResolver(
+		tarDef, baseDef,
+		func(tarCol *plan.ColDef) *plan.ColDef {
+			return dataBranchColumnDefByLogicalName(baseDef, tarCol)
+		},
+	)
+}
+
+func checkSchemaCompatibilityWithResolver(
+	tarDef, baseDef *plan.TableDef,
+	resolveBaseColumn dataBranchEndpointColumnResolver,
+) (commonIdxes, commonVisibleIdxes, tarOnlyIdxes []int, err error) {
 	if err = checkDataBranchPrimaryKeyCompatibility(tarDef, baseDef); err != nil {
 		return
 	}
@@ -1255,7 +1326,7 @@ func checkSchemaCompatibility(tarDef, baseDef *plan.TableDef) (commonIdxes, comm
 		}
 
 		name := strings.ToLower(tarCol.Name)
-		baseCol := dataBranchEndpointColumnDef(baseDef, tarCol)
+		baseCol := resolveBaseColumn(tarCol)
 		if baseCol != nil {
 			if baseCol.Typ.Id == tarCol.Typ.Id {
 				if !dataBranchColumnTypeAttributesEqual(baseCol.Typ, tarCol.Typ) {
@@ -1813,22 +1884,59 @@ func validateDataBranchColumnLineage(
 	baseDefs []*plan.TableDef,
 	baseLineageOnly []bool,
 ) error {
+	_, err := dataBranchLineageEndpointColumns(
+		tarDefs, tarLineageOnly, baseDefs, baseLineageOnly,
+	)
+	return err
+}
+
+func dataBranchLineageEndpointColumns(
+	tarDefs []*plan.TableDef,
+	tarLineageOnly []bool,
+	baseDefs []*plan.TableDef,
+	baseLineageOnly []bool,
+) (map[string]*plan.ColDef, error) {
 	if len(tarDefs) == 0 || len(baseDefs) == 0 {
-		return moerr.NewInternalErrorNoCtx("data branch: missing schema lineage")
+		return nil, moerr.NewInternalErrorNoCtx("data branch: missing schema lineage")
 	}
 	tarEndpoint := tarDefs[len(tarDefs)-1]
 	baseEndpoint := baseDefs[len(baseDefs)-1]
+	endpointColumns := make(map[string]*plan.ColDef, len(tarEndpoint.Cols))
 	for _, tarCol := range tarEndpoint.Cols {
 		if !isDataBranchUserVisibleColumn(tarCol) {
-			continue
-		}
-		baseCol := dataBranchEndpointColumnDef(baseEndpoint, tarCol)
-		if baseCol == nil || !isDataBranchUserVisibleColumn(baseCol) {
 			continue
 		}
 		tarReachesLCA, tarLCACol, tarRedefined := dataBranchColumnReachesLCA(
 			tarDefs, tarLineageOnly, tarCol,
 		)
+		baseCol := dataBranchColumnDefByLogicalName(baseEndpoint, tarCol)
+		if baseCol == nil && tarReachesLCA && !tarRedefined {
+			// A rename without OriginName can only be proved by both endpoint
+			// columns reaching the same logical LCA column. Endpoint-local
+			// ColId/Seqnum values alone are insufficient because sibling ALTERs
+			// and hidden columns can independently reuse them.
+			for _, candidate := range baseEndpoint.Cols {
+				if !isDataBranchUserVisibleColumn(candidate) {
+					continue
+				}
+				candidateReachesLCA, candidateLCACol, candidateRedefined :=
+					dataBranchColumnReachesLCA(baseDefs, baseLineageOnly, candidate)
+				if candidateRedefined || !candidateReachesLCA ||
+					dataBranchColumnDefByLogicalName(baseDefs[0], tarLCACol) != candidateLCACol {
+					continue
+				}
+				if baseCol != nil {
+					return nil, moerr.NewInternalErrorNoCtxf(
+						"schema compatibility check: column '%s' has ambiguous lineage",
+						tarCol.Name,
+					)
+				}
+				baseCol = candidate
+			}
+		}
+		if baseCol == nil || !isDataBranchUserVisibleColumn(baseCol) {
+			continue
+		}
 		baseReachesLCA, baseLCACol, baseRedefined := dataBranchColumnReachesLCA(
 			baseDefs, baseLineageOnly, baseCol,
 		)
@@ -1846,13 +1954,14 @@ func validateDataBranchColumnLineage(
 				dataBranchLCASchemaContainsColumn(baseDefs[0], baseCol)
 		}
 		if identityMismatch {
-			return moerr.NewInternalErrorNoCtxf(
+			return nil, moerr.NewInternalErrorNoCtxf(
 				"schema compatibility check: column '%s' has different identity",
 				tarCol.Name,
 			)
 		}
+		endpointColumns[strings.ToLower(tarCol.Name)] = baseCol
 	}
-	return nil
+	return endpointColumns, nil
 }
 
 func decideCollectRange(

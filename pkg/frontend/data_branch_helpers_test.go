@@ -314,6 +314,7 @@ func TestScanSnapshotRelationByID_EarlyAndErrorPaths(t *testing.T) {
 
 		txnOp := mock_frontend.NewMockTxnOperator(ctrl)
 		txnOp.EXPECT().SnapshotTS().Return(types.BuildTS(10, 0).ToTimestamp()).AnyTimes()
+		txnOp.EXPECT().CloneSnapshotOp(gomock.Any()).Return(txnOp).Times(1)
 
 		currentLookupErr := moerr.NewInternalErrorNoCtx("can not find table by id 7")
 		eng := mock_frontend.NewMockEngine(ctrl)

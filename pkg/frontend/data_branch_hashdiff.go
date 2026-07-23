@@ -48,6 +48,7 @@ type lcaProbeLayout struct {
 	attrs       []string
 	types       []types.Type
 	targetIdxes []int
+	enumValues  []string
 }
 
 func lcaProbeResultTargetIndexes(

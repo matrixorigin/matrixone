@@ -496,7 +496,14 @@ func dataBranchEndpointColumnDef(tableDef *plan2.TableDef, sourceColDef *plan2.C
 	// A rename on an ordinary clone keeps the physical identity even when the
 	// endpoint definition no longer carries OriginName. Later path validation
 	// still rejects DROP/ADD discontinuities before DIFF or MERGE reads data.
-	return dataBranchColumnDefByIdentity(tableDef, sourceColDef)
+	colDef := dataBranchColumnDefByIdentity(tableDef, sourceColDef)
+	if colDef == nil ||
+		isDataBranchUserVisibleColumn(colDef) != isDataBranchUserVisibleColumn(sourceColDef) ||
+		!isDataBranchLogicalTypeEquivalent(colDef.Typ, sourceColDef.Typ) ||
+		colDef.NotNull != sourceColDef.NotNull {
+		return nil
+	}
+	return colDef
 }
 
 // dataBranchColumnsByIdentity maps each source column name to the column with

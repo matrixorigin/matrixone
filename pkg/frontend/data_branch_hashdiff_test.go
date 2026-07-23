@@ -1345,6 +1345,12 @@ func TestHandleDelsOnLCA_SQLPaths(t *testing.T) {
 		tblStuff.def.pkColIdx = 1
 		tblStuff.def.pkColIdxes = []int{1}
 		tblStuff.retPool = &retBatchList{}
+		targetDef := tblStuff.tarRel.GetTableDef(context.Background())
+		targetDef.Cols = []*plan.ColDef{
+			{Name: "added", ColId: 4, Seqnum: 3, Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "id", ColId: 1, Seqnum: 0, Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "name", ColId: 2, Seqnum: 1, Typ: plan.Type{Id: int32(types.T_varchar)}},
+		}
 		lcaDef := &plan.TableDef{
 			DbName: "db1",
 			Name:   "lca_tbl",
