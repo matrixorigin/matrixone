@@ -33,6 +33,16 @@ enum Method {
   BatchMessage = 2;
   PrepareDoneNotifyMessage = 3; // for dispatch
   StopSending = 4;
+  PipelineStreamFinish = 5;
+  PipelineStreamFinishAck = 6;
+}
+
+// StreamTeardownMode negotiates whether a completed logical pipeline stream can
+// be retired without closing its exclusive TCP backend. Zero intentionally
+// preserves the legacy close-the-backend behavior for rolling upgrades.
+enum StreamTeardownMode {
+  LegacyClose = 0;
+  FinishAck = 1;
 }
 
 enum Status {
@@ -53,6 +63,8 @@ message Message {
   bytes uuid = 8;
   bool needNotReply = 9;
   string debugMsg = 10;
+  StreamTeardownMode requested_teardown_mode = 11;
+  StreamTeardownMode accepted_teardown_mode = 12;
 }
 
 message Connector {
@@ -70,6 +82,7 @@ message Shuffle {
   repeated int64 shuffle_ranges_int64 = 7;
   plan.RuntimeFilterSpec runtimeFilterSpec = 8;
   plan.Expr ShuffleExpr = 9;
+  bool drain_all_buckets = 10;
 }
 
 message Dispatch {
@@ -364,6 +377,70 @@ message parquet_row_group_shard {
   int64 bytes = 5;
 }
 
+message IcebergDataFileTask {
+  string file_path = 1;
+  string file_format = 2;
+  int64 file_size = 3;
+  int64 record_count = 4;
+  int32 partition_spec_id = 5;
+  map<string, string> partition_values = 6;
+  repeated int64 split_offsets = 7;
+  int32 row_group_start = 8;
+  int32 row_group_end = 9;
+  string credential_scope = 10;
+  int64 content_sequence_number = 11;
+  int64 file_sequence_number = 12;
+  bool has_residual_filter = 13;
+  string residual_filter_hash = 14;
+}
+
+message IcebergDeleteFileTask {
+  string delete_type = 1;
+  string delete_file_path = 2;
+  string referenced_data_file = 3;
+  repeated int32 equality_field_ids = 4;
+  int32 delete_schema_id = 5;
+  int32 partition_spec_id = 6;
+  int64 sequence_number = 7;
+  string credential_scope = 8;
+}
+
+message IcebergColumnMapping {
+  int32 mo_col_index = 1;
+  int32 iceberg_field_id = 2;
+  string snapshot_field_name = 3;
+  string current_field_name = 4;
+  plan.Type mo_type = 5;
+  bool required = 6;
+  bool is_hidden = 7;
+  bool default_null_fill = 8;
+  string parquet_path_hint = 9;
+}
+
+message IcebergSnapshotRuntime {
+  int64 snapshot_id = 1;
+  int32 schema_id = 2;
+  repeated int32 partition_spec_ids = 3;
+  string metadata_location_hash = 4;
+  string manifest_list_hash = 5;
+  string ref_name = 6;
+  string planning_mode = 7;
+}
+
+message IcebergPlanningStats {
+  int64 metadata_bytes = 1;
+  int64 manifest_list_bytes = 2;
+  int64 manifest_bytes = 3;
+  int64 manifests_selected = 4;
+  int64 manifests_pruned = 5;
+  int64 data_files_selected = 6;
+  int64 data_files_pruned = 7;
+  int64 data_file_bytes_selected = 8;
+  int64 data_file_bytes_pruned = 9;
+  int64 planning_cache_hits = 10;
+  int64 planning_cache_miss = 11;
+}
+
 message ExternalScan {
   repeated plan.ExternAttr attrs = 1 [(gogoproto.nullable) = false];
   repeated int64 file_size = 2;
@@ -378,6 +455,16 @@ message ExternalScan {
   bool parallel_load = 11;
   bool load_empty_numeric_as_zero = 12;
   repeated parquet_row_group_shard parquet_row_group_shards = 13;
+  repeated IcebergDataFileTask iceberg_data_tasks = 14;
+  repeated IcebergDeleteFileTask iceberg_delete_tasks = 15;
+  repeated IcebergColumnMapping iceberg_columns = 16;
+  IcebergSnapshotRuntime iceberg_snapshot = 17;
+  string iceberg_object_io_ref = 18;
+  repeated int32 iceberg_hidden_read_columns = 19;
+  bool need_row_ordinal = 20;
+  IcebergPlanningStats iceberg_planning_stats = 21;
+  int64 iceberg_delete_max_memory_bytes = 22;
+  bool iceberg_delete_spill_enabled = 23;
 }
 
 message StreamScan {
@@ -416,6 +503,7 @@ message HashBuild {
   bool dedup_build_keep_last = 16;
   int32 dedup_delete_marker_col_idx = 17;
   repeated int32 dedup_delete_keep_col_idx_list = 18;
+  bool track_null_keys = 19;
 }
 
 message Indexbuild {
@@ -537,6 +625,7 @@ message PrepareParamInfo {
   bytes data = 2;
   bytes area = 3;
   repeated bool nulls = 4;
+  repeated bool is_bin = 5;
 }
 
 message ProcessInfo {
@@ -549,6 +638,7 @@ message ProcessInfo {
   SessionInfo session_info = 7 [(gogoproto.nullable) = false];
   SessionLoggerInfo session_logger = 8 [(gogoproto.nullable) = false];
   PrepareParamInfo prepare_params = 9 [(gogoproto.nullable) = false];
+  int64 affected_rows = 10;
 }
 
 message SessionInfo {
@@ -562,6 +652,8 @@ message SessionInfo {
   string account = 8;
   repeated string query_id = 9;
   int64 lock_wait_timeout = 10;
+  bool lock_wait_timeout_set = 11;
+  bool matrixone_native_mode = 12;
 }
 
 message SessionLoggerInfo {

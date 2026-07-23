@@ -238,27 +238,40 @@ func (s *store) Start() error {
 }
 
 func (s *store) Close() error {
+	// Reject new replica calls and cancel active call contexts before waiting
+	// for store tasks. A published service may be blocked in recovery, so its
+	// cancellation must be delivered before joining the store stopper. Storage
+	// remains open until the RPC server drains below.
+	s.replicas.Range(func(_, value any) bool {
+		r := value.(*replica)
+		r.cancelStart(false)
+		r.cancelRecovery()
+		return true
+	})
 	s.stopper.Stop()
 	s.moCluster.Close()
 
 	var err error
-	if s.cfg.ShardService.Enable {
-		err = s.shardServer.Close()
+	if s.queryService != nil {
+		err = errors.Join(err, s.queryService.Close())
 	}
-	err = errors.Join(
-		s.hakeeperClient.Close(),
-		s.sender.Close(),
-		s.server.Close(),
-		s.lockTableAllocator.Close(),
-	)
+	if s.cfg.ShardService.Enable {
+		err = errors.Join(err, s.shardServer.Close())
+	}
+	err = errors.Join(err, s.server.Close())
 	s.replicas.Range(func(_, value any) bool {
 		r := value.(*replica)
-		r.cancelStart(false)
 		if e := r.close(false); e != nil {
-			err = errors.Join(e, err)
+			err = errors.Join(err, e)
 		}
 		return true
 	})
+	err = errors.Join(
+		err,
+		s.hakeeperClient.Close(),
+		s.sender.Close(),
+		s.lockTableAllocator.Close(),
+	)
 	if s.queryClient != nil {
 		err = errors.Join(err, s.queryClient.Close())
 	}
@@ -301,6 +314,9 @@ func (s *store) getTNShardInfo() []logservicepb.TNShardInfo {
 	var shards []logservicepb.TNShardInfo
 	s.replicas.Range(func(_, value any) bool {
 		r := value.(*replica)
+		if !r.started() {
+			return true
+		}
 		shards = append(shards, logservicepb.TNShardInfo{
 			ShardID:   r.shard.ShardID,
 			ReplicaID: r.shard.ReplicaID,
@@ -321,9 +337,7 @@ func (s *store) createReplicaLocked(shard metadata.TNShard) error {
 	}
 
 	err := s.stopper.RunTask(func(stopperCtx context.Context) {
-		stopCancelPropagation := context.AfterFunc(stopperCtx, func() {
-			r.cancelStart(false)
-		})
+		stopCancelPropagation := propagateReplicaStopperCancellation(stopperCtx, r)
 		defer stopCancelPropagation()
 
 		for {
@@ -391,6 +405,16 @@ func (s *store) createReplicaLocked(shard metadata.TNShard) error {
 	return nil
 }
 
+func propagateReplicaStopperCancellation(
+	stopperCtx context.Context,
+	r *replica,
+) func() bool {
+	return context.AfterFunc(stopperCtx, func() {
+		r.cancelStart(false)
+		r.cancelRecovery()
+	})
+}
+
 func waitCreateRetry(stopperCtx, createCtx context.Context) error {
 	timer := time.NewTimer(retryCreateStorageInterval)
 	defer timer.Stop()
@@ -406,8 +430,6 @@ func waitCreateRetry(stopperCtx, createCtx context.Context) error {
 
 func (s *store) removeReplicaLocked(tnShardID uint64) error {
 	if r := s.getReplica(tnShardID); r != nil {
-		r.cancelStart(true)
-		r.waitStartCompleted()
 		err := r.close(true)
 		s.replicas.CompareAndDelete(tnShardID, r)
 		s.removeTNShardLocked(tnShardID)

@@ -15,6 +15,7 @@
 package proxy
 
 import (
+	"encoding/binary"
 	"testing"
 
 	"github.com/fagongzi/goetty/v2/buf"
@@ -28,7 +29,154 @@ func TestProxyProtocolOptions(t *testing.T) {
 	require.NotNil(t, ret)
 }
 
+func TestProxyServerCodecAcceptsIPv6AtIndependentMinimum(t *testing.T) {
+	data := buf.NewByteBuf(ProxyHeaderLength + int(minimumProxyProtocolBodyLimit))
+	header := make([]byte, ProxyHeaderLength)
+	copy(header, ProxyProtocolV2Signature)
+	header[12] = 0x21
+	header[13] = tcpOverIPv6
+	binary.BigEndian.PutUint16(header[14:], uint16(minimumProxyProtocolBodyLimit))
+	_, err := data.Write(header)
+	require.NoError(t, err)
+	_, err = data.Write(make([]byte, minimumProxyProtocolBodyLimit))
+	require.NoError(t, err)
+
+	configured := Config{
+		ClientHandshakePacketLimit: minimumClientHandshakePacketLimit,
+		ProxyProtocolBodyLimit:     minimumProxyProtocolBodyLimit,
+	}
+	res, ok, err := newProxySessionCodec(configured).Decode(data)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.IsType(t, &ProxyAddr{}, res)
+}
+
 func TestProxyProtocolCodec_Decode(t *testing.T) {
+	t.Run("oversized body rejected from fixed header", func(t *testing.T) {
+		data := buf.NewByteBuf(ProxyHeaderLength)
+		header := make([]byte, ProxyHeaderLength)
+		copy(header, ProxyProtocolV2Signature)
+		header[12] = 0x21
+		header[13] = unspec
+		binary.BigEndian.PutUint16(header[14:], 65)
+		_, err := data.Write(header)
+		require.NoError(t, err)
+
+		pp := WithProxyProtocolCodec(
+			frontend.NewSqlCodec(),
+			WithProxyProtocolMaxBodySize(64),
+		)
+		res, ok, err := pp.Decode(data)
+		require.ErrorIs(t, err, frontend.ErrPacketTooLarge)
+		require.False(t, ok)
+		require.Nil(t, res)
+		require.Equal(t, ProxyHeaderLength, data.Readable())
+	})
+
+	t.Run("body at configured limit is accepted", func(t *testing.T) {
+		data := buf.NewByteBuf(ProxyHeaderLength + 64)
+		header := make([]byte, ProxyHeaderLength)
+		copy(header, ProxyProtocolV2Signature)
+		header[12] = 0x21
+		header[13] = unspec
+		binary.BigEndian.PutUint16(header[14:], 64)
+		_, err := data.Write(header)
+		require.NoError(t, err)
+		_, err = data.Write(make([]byte, 64))
+		require.NoError(t, err)
+
+		pp := WithProxyProtocolCodec(
+			frontend.NewSqlCodec(),
+			WithProxyProtocolMaxBodySize(64),
+		)
+		res, ok, err := pp.Decode(data)
+		require.NoError(t, err)
+		require.True(t, ok)
+		require.IsType(t, &ProxyAddr{}, res)
+		require.Zero(t, data.Readable())
+	})
+
+	t.Run("fragmented header and body", func(t *testing.T) {
+		data := buf.NewByteBuf(100)
+		pp := WithProxyProtocolCodec(frontend.NewSqlCodec(
+			frontend.WithSQLCodecMaxPayloadSize(64 << 10)))
+
+		header := make([]byte, ProxyHeaderLength)
+		copy(header, ProxyProtocolV2Signature)
+		header[12] = 0x21
+		header[13] = tcpOverIPv4
+		binary.BigEndian.PutUint16(header[14:], 12)
+		body := []byte{
+			10, 11, 12, 13,
+			20, 21, 22, 23,
+			0x1f, 0x40,
+			0x23, 0x28,
+		}
+
+		fragments := [][]byte{
+			header[:4],
+			header[4:12],
+			header[12:15],
+			header[15:],
+			body[:5],
+			body[5:],
+		}
+		buffered := 0
+		for i, fragment := range fragments {
+			n, err := data.Write(fragment)
+			require.NoError(t, err)
+			require.Equal(t, len(fragment), n)
+			buffered += n
+
+			res, ok, err := pp.Decode(data)
+			require.NoError(t, err)
+			if i < len(fragments)-1 {
+				require.False(t, ok)
+				require.Nil(t, res)
+				require.Equal(t, buffered, data.Readable(), "incomplete input must not be consumed")
+				continue
+			}
+
+			require.True(t, ok)
+			addr, ok := res.(*ProxyAddr)
+			require.True(t, ok)
+			require.Equal(t, "10.11.12.13", addr.SourceAddress.String())
+			require.Equal(t, uint16(8000), addr.SourcePort)
+			require.Equal(t, "20.21.22.23", addr.TargetAddress.String())
+			require.Equal(t, uint16(9000), addr.TargetPort)
+			require.Zero(t, data.Readable())
+		}
+	})
+
+	t.Run("all incomplete signature prefixes wait", func(t *testing.T) {
+		pp := WithProxyProtocolCodec(frontend.NewSqlCodec(
+			frontend.WithSQLCodecMaxPayloadSize(64 << 10)))
+		for length := 1; length < len(ProxyProtocolV2Signature); length++ {
+			data := buf.NewByteBuf(100)
+			_, err := data.Write([]byte(ProxyProtocolV2Signature[:length]))
+			require.NoError(t, err)
+
+			res, ok, err := pp.Decode(data)
+			require.NoError(t, err, "prefix length %d", length)
+			require.False(t, ok, "prefix length %d", length)
+			require.Nil(t, res, "prefix length %d", length)
+			require.Equal(t, length, data.Readable(), "prefix length %d", length)
+		}
+	})
+
+	t.Run("mismatched signature delegates to mysql codec", func(t *testing.T) {
+		data := buf.NewByteBuf(100)
+		_, err := data.Write([]byte{0x0d, 0x0a, 0x0d, 0x00})
+		require.NoError(t, err)
+
+		pp := WithProxyProtocolCodec(frontend.NewSqlCodec(
+			frontend.WithSQLCodecMaxPayloadSize(64 << 10)))
+		res, ok, err := pp.Decode(data)
+		require.ErrorIs(t, err, frontend.ErrPacketTooLarge)
+		require.False(t, ok)
+		require.Nil(t, res)
+	})
+
 	t.Run("short header", func(t *testing.T) {
 		data := buf.NewByteBuf(100)
 		n, err := data.Write([]byte("12345"))
@@ -70,8 +218,11 @@ func TestProxyProtocolCodec_Decode(t *testing.T) {
 		pp := WithProxyProtocolCodec(frontend.NewSqlCodec())
 		res, ok, err := pp.Decode(data)
 		require.NoError(t, err)
-		require.False(t, ok)
-		require.Nil(t, res)
+		require.True(t, ok)
+		addr, ok := res.(*ProxyAddr)
+		require.True(t, ok)
+		require.Nil(t, addr.SourceAddress)
+		require.Zero(t, data.Readable())
 	})
 
 	t.Run("ipv4 address", func(t *testing.T) {
@@ -170,11 +321,13 @@ func TestProxyProtocolCodec_Decode(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, len(ProxyProtocolV2Signature), n)
 
-		// skip 2 bytes
-		n, err = data.Write([]byte{0, 0})
+		// ipv4 with a complete declared body that is too short for its address.
+		n, err = data.Write([]byte{0, tcpOverIPv4})
 		require.NoError(t, err)
 		require.Equal(t, 2, n)
-		data.WriteUint16(33)
+		data.WriteUint16(4)
+		_, err = data.Write(make([]byte, 4))
+		require.NoError(t, err)
 
 		pp := &proxyProtocolCodec{}
 		res, ok, err := pp.Decode(data)

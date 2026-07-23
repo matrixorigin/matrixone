@@ -723,6 +723,7 @@ func (mp *MysqlProtocolImpl) SendPrepareResponse(ctx context.Context, stmt *Prep
 		if err != nil {
 			return err
 		}
+		setCharacter(column)
 
 		_, err = mp.SendColumnDefinitionPacket(ctx, column, cmd)
 		if err != nil {
@@ -1004,6 +1005,12 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(ctx context.Context, proc *process
 					return moerr.NewInvalidInput(ctx, "mysql protocol error, malformed packet")
 				}
 				pos = newPos
+				// The readers below index `data` at fixed offsets; make sure the
+				// declared payload is actually present so a truncated packet returns
+				// an error instead of panicking on an out-of-range slice.
+				if pos+int(length) > len(data) {
+					return moerr.NewInvalidInput(ctx, "mysql protocol error, malformed packet")
+				}
 				var val string
 				switch length {
 				case 0:
@@ -1027,6 +1034,12 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(ctx context.Context, proc *process
 
 				}
 				pos = newPos
+				// The readers below index `data` at fixed offsets; make sure the
+				// declared payload is actually present so a truncated packet returns
+				// an error instead of panicking on an out-of-range slice.
+				if pos+int(length) > len(data) {
+					return moerr.NewInvalidInput(ctx, "mysql protocol error, malformed packet")
+				}
 				var val string
 				switch length {
 				case 0:

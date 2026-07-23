@@ -226,6 +226,7 @@ func initRPCMetrics() {
 	registry.MustRegister(rpcSendingQueueSizeGauge)
 	registry.MustRegister(rpcSendingBatchSizeGauge)
 	registry.MustRegister(rpcServerSessionSizeGauge)
+	registry.MustRegister(rpcServerStreamStateGauge)
 	registry.MustRegister(rpcGCRegisteredClientsGauge)
 	registry.MustRegister(rpcGCChannelQueueLengthGauge)
 	registry.MustRegister(rpcBackendActiveRequestsGauge)
@@ -275,6 +276,11 @@ func initPipelineMetrics() {
 	registry.MustRegister(PipelineServerDurationHistogram)
 	registry.MustRegister(pipelineStreamGauge)
 	registry.MustRegister(PipelineCleanupEventCounter)
+	registry.MustRegister(PipelineStreamTeardownCounter)
+	registry.MustRegister(PipelineStreamLifecycleGauge)
+	registry.MustRegister(PipelineStreamFinishDurationHistogram)
+	registry.MustRegister(PipelineRemoteReceiverWaitDurationHistogram)
+	registry.MustRegister(PipelineRemoteNotifyRetryCounter)
 }
 
 func initLogServiceMetrics() {

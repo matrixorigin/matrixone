@@ -420,15 +420,31 @@ func (resper *MysqlResp) respBySituation(ses *Session,
 	defer func() {
 		execCtx.results = nil
 	}()
-	resp := NewGeneralOkResponse(COM_QUERY, ses.GetTxnHandler().GetServerStatus())
 	if len(execCtx.results) == 0 {
+		var affectedRows uint64
+		if execCtx.runResult != nil {
+			affectedRows = execCtx.runResult.AffectRows
+		}
+		resp := setResponse(ses, execCtx.isLastStmt, affectedRows)
 		if err = resper.mysqlRrWr.WriteResponse(execCtx.reqCtx, resp); err != nil {
 			return moerr.NewInternalErrorf(execCtx.reqCtx, "routine send response failed. error:%v ", err)
 		}
 	} else {
+		_, isCall := execCtx.stmt.(*tree.CallStmt)
 		for i, result := range execCtx.results {
 			mer := NewMysqlExecutionResult(0, 0, 0, 0, result.(*MysqlResultSet))
-			resp = ses.SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, i == len(execCtx.results)-1)
+			isLastResult := i == len(execCtx.results)-1 && execCtx.isLastStmt && !isCall
+			resp := ses.SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, isLastResult)
+			if err = resper.mysqlRrWr.WriteResponse(execCtx.reqCtx, resp); err != nil {
+				return moerr.NewInternalErrorf(execCtx.reqCtx, "routine send response failed. error:%v ", err)
+			}
+		}
+		if isCall {
+			var affectedRows uint64
+			if execCtx.runResult != nil {
+				affectedRows = execCtx.runResult.AffectRows
+			}
+			resp := setResponse(ses, execCtx.isLastStmt, affectedRows)
 			if err = resper.mysqlRrWr.WriteResponse(execCtx.reqCtx, resp); err != nil {
 				return moerr.NewInternalErrorf(execCtx.reqCtx, "routine send response failed. error:%v ", err)
 			}

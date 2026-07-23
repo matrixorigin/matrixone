@@ -54,6 +54,11 @@ func (s *service) initRemote() {
 		s.handleRemoteRead,
 		true,
 	)
+	s.remote.server.RegisterMethod(
+		uint32(pb.Method_ShardReadV2),
+		s.handleRemoteRead,
+		true,
+	)
 
 	if err := s.remote.server.Start(); err != nil {
 		panic(err)
@@ -100,6 +105,12 @@ func (s *service) initRemoteClient() {
 
 	s.remote.client.RegisterMethod(
 		uint32(pb.Method_ShardRead),
+		func(r *pb.Request) (string, error) {
+			return getCNAddress(r.ShardRead.CN, s.remote.cluster), nil
+		},
+	)
+	s.remote.client.RegisterMethod(
+		uint32(pb.Method_ShardReadV2),
 		func(r *pb.Request) (string, error) {
 			return getCNAddress(r.ShardRead.CN, s.remote.cluster), nil
 		},
@@ -191,6 +202,9 @@ func (s *service) newReadRequest(
 ) *pb.Request {
 	req := s.remote.pool.AcquireRequest()
 	req.RPCMethod = pb.Method_ShardRead
+	if hasBinaryPrepareParam(param) {
+		req.RPCMethod = pb.Method_ShardReadV2
+	}
 	req.ShardRead.Shard = shard
 	req.ShardRead.Method = uint32(method)
 	req.ShardRead.Param = param

@@ -172,7 +172,8 @@ type BaseOptimizer struct {
 type ViewData struct {
 	Stmt            string
 	DefaultDatabase string
-	SecurityType    string `json:"security_type,omitempty"`
+	SQLMode         *string `json:"sql_mode,omitempty"`
+	SecurityType    string  `json:"security_type,omitempty"`
 }
 
 type QueryBuilder struct {
@@ -269,15 +270,17 @@ type OptimizerHints struct {
 	forceOneCN                 int
 	execType                   int
 	disableRightJoin           int
+	disableRightSingleRF       int
 	printShuffle               int
 	skipDedup                  int
 }
 
 type CTERef struct {
-	isRecursive bool
-	ast         *tree.CTE
-	maskedCTEs  map[string]bool
-	snapshot    *Snapshot
+	isRecursive    bool
+	ast            *tree.CTE
+	maskedCTEs     map[string]bool
+	snapshot       *Snapshot
+	declarationCtx *BindContext
 }
 
 type CteBindState struct {
@@ -353,6 +356,8 @@ type BindContext struct {
 	windowByAst    map[string]int32
 	projectByExpr  map[string]int32
 	timeByAst      map[string]int32
+
+	projectColByAst map[string]int32
 
 	projectByAst []SelectField
 
@@ -442,11 +447,12 @@ type Binder interface {
 }
 
 type baseBinder struct {
-	sysCtx    context.Context
-	builder   *QueryBuilder
-	ctx       *BindContext
-	impl      Binder
-	boundCols []string
+	sysCtx           context.Context
+	builder          *QueryBuilder
+	ctx              *BindContext
+	impl             Binder
+	boundCols        []string
+	numericParamType *Type
 }
 
 type DefaultBinder struct {
@@ -498,7 +504,8 @@ type GroupBinder struct {
 
 type HavingBinder struct {
 	baseBinder
-	insideAgg bool
+	insideAgg    bool
+	rollupHaving bool
 }
 
 type ProjectionBinder struct {
@@ -508,7 +515,8 @@ type ProjectionBinder struct {
 
 type OrderBinder struct {
 	*ProjectionBinder
-	selectList tree.SelectExprs
+	selectList     tree.SelectExprs
+	distinctBinder *distinctOrderBinder
 }
 
 type LimitBinder struct {

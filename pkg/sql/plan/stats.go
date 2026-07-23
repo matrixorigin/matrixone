@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -1413,6 +1414,32 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 	}
 }
 
+// reCalcNodeStatsAfterSwap mirrors ReCalcNodeStats recursion after
+// swapJoinChildren has changed the physical child order. IsRightJoin is set
+// before that swap, so putting this rule in the general stats pass would select
+// the wrong preserved side during earlier optimizer phases.
+func reCalcNodeStatsAfterSwap(nodeID int32, builder *QueryBuilder, recursive bool, leafNode bool, needResetHashMapStats bool) {
+	node := builder.qry.Nodes[nodeID]
+	if recursive {
+		for _, childID := range node.Children {
+			reCalcNodeStatsAfterSwap(childID, builder, true, leafNode, needResetHashMapStats)
+		}
+	}
+
+	ReCalcNodeStats(nodeID, builder, false, leafNode, needResetHashMapStats)
+	if node.NodeType != plan.Node_JOIN || node.JoinType != plan.Node_SINGLE || !node.IsRightJoin {
+		return
+	}
+
+	preservedStats := builder.qry.Nodes[node.Children[1]].Stats
+	node.Stats.Outcnt = preservedStats.Outcnt
+	node.Stats.BlockNum = preservedStats.BlockNum
+	node.Stats.Selectivity = preservedStats.Selectivity
+	if node.Limit != nil {
+		applyLimitToStats(node.Stats, node.Limit, builder)
+	}
+}
+
 func applyLimitToStats(stats *Stats, limit *plan.Expr, builder *QueryBuilder) {
 	if stats == nil {
 		return
@@ -1901,6 +1928,158 @@ func (builder *QueryBuilder) determineBuildAndProbeSide(nodeID int32, recursive 
 	if builder.hasRecursiveScan(builder.qry.Nodes[node.Children[1]]) {
 		node.Children[0], node.Children[1] = node.Children[1], node.Children[0]
 	}
+}
+
+// disableMemoryUnsafeRightDedup keeps RIGHT DEDUP as the small-input fast path.
+// Unlike normal DEDUP, RIGHT DEDUP inserts every incoming key into its resident
+// hashmap and cannot start spilling when that probe-side map grows.  Multiple
+// DEDUP operators used for a primary key and unique indexes are chained in one
+// pipeline, so their maps coexist and must be budgeted together.
+//
+// This pass runs immediately before swapJoinChildren.  At this point a DEDUP's
+// logical left child is the existing target and its logical right child is the
+// incoming row stream.  If the combined estimate is unsafe, reverting all
+// candidates lets normal DEDUP shuffle when supported and spill that stream.
+func (builder *QueryBuilder) disableMemoryUnsafeRightDedup(rootID int32) {
+	const maxUint64 = ^uint64(0)
+
+	var candidates []*plan.Node
+	visited := make(map[int32]struct{})
+	var collect func(int32)
+	collect = func(nodeID int32) {
+		if _, ok := visited[nodeID]; ok {
+			return
+		}
+		visited[nodeID] = struct{}{}
+
+		node := builder.qry.Nodes[nodeID]
+		for _, childID := range node.Children {
+			collect(childID)
+		}
+		if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_DEDUP && node.IsRightJoin {
+			candidates = append(candidates, node)
+		}
+	}
+	collect(rootID)
+	if len(candidates) == 0 {
+		return
+	}
+
+	var totalBytes, totalRows uint64
+	memoryUnsafe := false
+	for _, node := range candidates {
+		targetRows, targetRowsKnown := builder.estimatedNodeRows(node.Children[0])
+		sourceRows, sourceRowsKnown := builder.estimatedLogicalDedupOutputRows(node.Children[1])
+		if !targetRowsKnown || !sourceRowsKnown || targetRows > maxUint64-sourceRows {
+			memoryUnsafe = true
+			break
+		}
+		keyCount := targetRows + sourceRows
+
+		var mapBytes uint64
+		if rightDedupUsesIntHashMap(node) {
+			mapBytes = hashtable.EstimateInt64HashMapSize(keyCount)
+		} else {
+			mapBytes = hashtable.EstimateStringHashMapSize(keyCount)
+		}
+		if mapBytes == maxUint64 || totalBytes > maxUint64-mapBytes || totalRows > maxUint64-keyCount {
+			memoryUnsafe = true
+			break
+		}
+		totalBytes += mapBytes
+		totalRows += keyCount
+	}
+
+	if !memoryUnsafe && builder.joinSpillMem != 0 {
+		const maxInt64 = uint64(^uint64(0) >> 1)
+		memoryUnsafe = colexec.ShouldSpill(
+			int64(min(totalBytes, maxInt64)),
+			int64(min(totalRows, maxInt64)),
+			builder.joinSpillMem,
+		)
+	} else if !memoryUnsafe {
+		// ResolveSpillThreshold is per worker.  RIGHT DEDUP is forced onto one
+		// CN with DOP 1, but this guard budgets the complete chained stage.  The
+		// aggregate default therefore restores the GOMAXPROCS factor, yielding
+		// roughly one eighth of CN memory after the file-cache reservation.
+		perWorkerBudget := uint64(colexec.ResolveSpillThreshold(0))
+		workers := uint64(system.GoMaxProcs())
+		if workers == 0 {
+			memoryUnsafe = true
+		} else {
+			budget := maxUint64
+			if perWorkerBudget <= maxUint64/workers {
+				budget = perWorkerBudget * workers
+			}
+			memoryUnsafe = totalBytes > budget
+		}
+	}
+	if !memoryUnsafe {
+		return
+	}
+
+	for _, node := range candidates {
+		node.IsRightJoin = false
+	}
+}
+
+// estimatedLogicalDedupOutputRows returns the incoming-side cardinality for a
+// logical DEDUP chain.  Before children are swapped, every DEDUP preserves its
+// right child's rows regardless of which physical implementation is selected.
+// Looking through the chain avoids stale right-join output stats making later
+// unique-index maps appear artificially small.
+func (builder *QueryBuilder) estimatedLogicalDedupOutputRows(nodeID int32) (uint64, bool) {
+	node := builder.qry.Nodes[nodeID]
+	if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_DEDUP && len(node.Children) == 2 {
+		return builder.estimatedLogicalDedupOutputRows(node.Children[1])
+	}
+	return builder.estimatedNodeRows(nodeID)
+}
+
+func (builder *QueryBuilder) estimatedNodeRows(nodeID int32) (uint64, bool) {
+	stats := builder.qry.Nodes[nodeID].Stats
+	if stats == nil || IsDefaultStats(stats) || math.IsNaN(stats.Outcnt) || math.IsInf(stats.Outcnt, 0) || stats.Outcnt < 0 || stats.Outcnt >= float64(^uint64(0)) {
+		return 0, false
+	}
+	return uint64(math.Ceil(stats.Outcnt)), true
+}
+
+func rightDedupUsesIntHashMap(node *plan.Node) bool {
+	keyWidth := 0
+	conditions := colexec.SplitAndExprs(node.OnList)
+	if len(conditions) == 0 {
+		return false
+	}
+	for _, condition := range conditions {
+		fn := condition.GetF()
+		if fn == nil || len(fn.Args) != 2 {
+			return false
+		}
+
+		// Equality operands normally have the same type after binding.  Taking
+		// the wider side keeps the estimate conservative if coercion differs.
+		width := max(rightDedupKeyWidth(fn.Args[0]), rightDedupKeyWidth(fn.Args[1]))
+		if width > 8 || keyWidth > 8-width {
+			return false
+		}
+		keyWidth += width
+	}
+	return keyWidth <= 8
+}
+
+func rightDedupKeyWidth(expr *plan.Expr) int {
+	if expr == nil {
+		return 128
+	}
+	typ := types.T(expr.Typ.Id)
+	if typ.FixedLength() < 0 {
+		return 128
+	}
+	width := typ.TypeLen()
+	if width <= 0 {
+		return 128
+	}
+	return width
 }
 
 func (builder *QueryBuilder) hasRecursiveScan(node *plan.Node) bool {

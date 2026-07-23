@@ -106,6 +106,8 @@ const (
 	FPShowVariables
 	FPShowErrors
 	FPAnalyzeStmt
+	FPCheckTableStmt
+	FPShowProfileStmt
 	FPExplainStmt
 	FPInternalCmdFieldList
 	FPInternalCmdGetSnapshotTs
@@ -200,6 +202,8 @@ const (
 	FPInternalExecutorExec
 	FPInternalExecutorQuery
 	FPHandleAnalyzeStmt
+	FPHandleCheckTableStmt
+	FPHandleShowProfileStmt
 	FPShowPublications
 	FPCreateCDC
 	FPPauseCDC
@@ -296,16 +300,23 @@ type PrepareStmt struct {
 	Sql            string
 	PreparePlan    *plan.Plan
 	PrepareStmt    tree.Statement
+	NativeMode     bool
 	ParamTypes     []byte
 	ColDefData     [][]byte
 	IsCloudNonuser bool
 	proc           *process.Process
+	remapDb        map[string]string
 
 	params              *vector.Vector
 	getFromSendLongData map[int]struct{}
 
 	compile *compile.Compile
 	Ts      timestamp.Timestamp
+
+	// schedulingSQLMode freezes the lexical mode used when Sql was prepared.
+	// EXECUTE must not reinterpret optimizer comments after session sql_mode
+	// changes.
+	schedulingSQLMode string
 }
 
 /*
@@ -607,6 +618,7 @@ type BackgroundExecOption struct {
 type BackgroundExec interface {
 	Close()
 	Exec(context.Context, string) error
+	ExecWithSQLMode(context.Context, string, string) error
 	ExecRestore(context.Context, string, uint32, uint32) error
 	ExecStmt(context.Context, tree.Statement) error
 	GetExecResultSet() []interface{}
@@ -664,6 +676,7 @@ func (prepareStmt *PrepareStmt) Close() {
 	if prepareStmt.ColDefData != nil {
 		prepareStmt.ColDefData = nil
 	}
+	prepareStmt.remapDb = nil
 }
 
 func (prepareStmt *PrepareStmt) resetBinaryParamState() {
@@ -900,6 +913,11 @@ type ExecCtx struct {
 	// TxnCompilerContext.DefaultDatabase. nil when the rewrite feature is off or
 	// no remapdb is configured.
 	remapDb map[string]string
+	// rewriteEnabled is captured once when the request is parsed. It keeps
+	// nested SQL (notably PREPARE ... FROM 'sql'/@var) on the same policy
+	// snapshot even if an earlier statement in the request changes the session
+	// switch before the nested SQL is planned.
+	rewriteEnabled bool
 }
 
 func (execCtx *ExecCtx) Close() {
@@ -921,6 +939,7 @@ func (execCtx *ExecCtx) Close() {
 	execCtx.resper = nil
 	execCtx.results = nil
 	execCtx.prepareColDef = nil
+	execCtx.rewriteEnabled = false
 }
 
 // outputCallBackFunc is the callback function to send the result to the client.
@@ -1428,6 +1447,10 @@ func (ses *Session) GetSessionSysVar(name string) (interface{}, error) {
 
 func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val interface{}) (err error) {
 	name = strings.ToLower(name)
+	oldMatrixOneNative := false
+	if name == "sql_mode" {
+		oldMatrixOneNative = ses.sqlModeHasMatrixOneNative()
+	}
 
 	def, ok := gSysVarsDefs[name]
 	if !ok {
@@ -1477,7 +1500,7 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 		ses.sesSysVars.Set(name, val)
 	}
 	if err == nil && name == "sql_mode" {
-		ses.updateSqlModeNoAutoValueOnZero(val)
+		ses.updateSqlModeCaches(oldMatrixOneNative, val)
 	}
 
 	// Update rewriteEnabled cache when enable_remap_hint is changed

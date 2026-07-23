@@ -71,6 +71,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsertunique"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/product"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/productl2"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightdedupjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
@@ -310,6 +311,56 @@ func Test_convertToVmInstruction(t *testing.T) {
 	}
 }
 
+func TestRemoteRunOperatorCodecRoundTrip(t *testing.T) {
+	ctx := &scopeContext{
+		id:     1,
+		root:   &scopeContext{},
+		parent: &scopeContext{},
+	}
+	proc := &process.Process{Base: &process.BaseProcess{}}
+
+	roundTrip := func(t *testing.T, original vm.Operator) vm.Operator {
+		t.Helper()
+
+		_, instruction, err := convertToPipelineInstruction(original, proc, ctx, 1)
+		require.NoError(t, err)
+
+		data, err := instruction.Marshal()
+		require.NoError(t, err)
+		wireInstruction := new(pipeline.Instruction)
+		require.NoError(t, wireInstruction.Unmarshal(data))
+
+		restored, err := convertToVmOperator(wireInstruction, ctx, nil)
+		require.NoError(t, err)
+		return restored
+	}
+
+	t.Run("ProductL2", func(t *testing.T) {
+		original := &productl2.Productl2{
+			Result:       []colexec.ResultPos{{Rel: 1, Pos: 2}},
+			OnExpr:       plan.MakePlan2Int64ConstExprWithType(7),
+			JoinMapTag:   9,
+			VectorOpType: "l2_distance",
+		}
+
+		restored := roundTrip(t, original)
+		defer restored.Release()
+		restoredProductL2, ok := restored.(*productl2.Productl2)
+		require.True(t, ok)
+		require.Equal(t, original.Result, restoredProductL2.Result)
+		require.Equal(t, original.OnExpr, restoredProductL2.OnExpr)
+		require.Equal(t, original.JoinMapTag, restoredProductL2.JoinMapTag)
+		require.Equal(t, original.VectorOpType, restoredProductL2.VectorOpType)
+	})
+
+	t.Run("IntersectAll", func(t *testing.T) {
+		restored := roundTrip(t, &intersectall.IntersectAll{})
+		defer restored.Release()
+		require.IsType(t, &intersectall.IntersectAll{}, restored)
+		require.Equal(t, vm.IntersectAll, restored.OpType())
+	})
+}
+
 func TestExternalScanParquetRowGroupShardsRoundtrip(t *testing.T) {
 	ctx := &scopeContext{
 		id:     1,
@@ -351,6 +402,148 @@ func TestExternalScanParquetRowGroupShardsRoundtrip(t *testing.T) {
 	require.NoError(t, err)
 	restoredExternal := restored.(*external.External)
 	require.Equal(t, shards, restoredExternal.Es.ParquetRowGroupShards)
+}
+
+func TestExternalScanIcebergRuntimeRoundtrip(t *testing.T) {
+	ctx := &scopeContext{
+		id:     1,
+		root:   &scopeContext{},
+		parent: &scopeContext{},
+	}
+	proc := &process.Process{}
+	proc.Base = &process.BaseProcess{}
+
+	dataTasks := []*pipeline.IcebergDataFileTask{{
+		FilePath:              "s3://warehouse/sales/orders/data-0001.parquet",
+		FileFormat:            "parquet",
+		FileSize:              2048,
+		RecordCount:           100,
+		PartitionSpecId:       7,
+		PartitionValues:       map[string]string{"created_day": "19815"},
+		SplitOffsets:          []int64{4, 1024},
+		RowGroupStart:         0,
+		RowGroupEnd:           2,
+		CredentialScope:       "scope-ref-1",
+		ContentSequenceNumber: 9,
+		FileSequenceNumber:    9,
+		HasResidualFilter:     true,
+		ResidualFilterHash:    "filter_digest:abcdef0123456789",
+	}}
+	deleteTasks := []*pipeline.IcebergDeleteFileTask{{
+		DeleteType:         "position",
+		DeleteFilePath:     "s3://warehouse/sales/orders/delete-0001.parquet",
+		ReferencedDataFile: "s3://warehouse/sales/orders/data-0001.parquet",
+		EqualityFieldIds:   []int32{1, 2},
+		DeleteSchemaId:     3,
+		PartitionSpecId:    7,
+		SequenceNumber:     10,
+		CredentialScope:    "scope-ref-1",
+	}}
+	columns := []*pipeline.IcebergColumnMapping{{
+		MoColIndex:        0,
+		IcebergFieldId:    1,
+		SnapshotFieldName: "order_id",
+		CurrentFieldName:  "id",
+		MoType:            &planpb.Type{Id: int32(types.T_int64)},
+		Required:          true,
+		ParquetPathHint:   "order_id",
+	}}
+	snapshot := &pipeline.IcebergSnapshotRuntime{
+		SnapshotId:           22,
+		SchemaId:             1,
+		PartitionSpecIds:     []int32{7},
+		MetadataLocationHash: "meta-hash",
+		ManifestListHash:     "manifest-list-hash",
+		RefName:              "main",
+		PlanningMode:         "client",
+	}
+	op := external.NewArgument().WithEs(
+		&external.ExternalParam{
+			ExParamConst: external.ExParamConst{
+				FileList:                    []string{"s3://warehouse/sales/orders/data-0001.parquet"},
+				FileSize:                    []int64{2048},
+				FileOffsetTotal:             []*pipeline.FileOffset{{Offset: []int64{0, -1}}},
+				IcebergDataTasks:            dataTasks,
+				IcebergDeleteTasks:          deleteTasks,
+				IcebergColumns:              columns,
+				IcebergSnapshot:             snapshot,
+				IcebergObjectIORef:          "object-scope-ref",
+				IcebergHiddenReadCols:       []int32{3, 4},
+				IcebergDeleteMaxMemoryBytes: 4096,
+				IcebergDeleteSpillEnabled:   true,
+				IcebergPlanningStats: process.ParquetProfileStats{
+					IcebergMetadataBytes:         10,
+					IcebergManifestListBytes:     20,
+					IcebergManifestBytes:         30,
+					IcebergManifestsSelected:     2,
+					IcebergManifestsPruned:       1,
+					IcebergDataFilesSelected:     2,
+					IcebergDataFilesPruned:       3,
+					IcebergDataFileBytesSelected: 2048,
+					IcebergDataFileBytesPruned:   4096,
+					IcebergPlanningCacheHits:     4,
+					IcebergPlanningCacheMiss:     5,
+				},
+				NeedRowOrdinal: true,
+			},
+			ExParam: external.ExParam{
+				Fileparam: &external.ExFileparam{},
+				Filter:    &external.FilterParam{},
+			},
+		},
+	)
+
+	_, pipeInstr, err := convertToPipelineInstruction(op, proc, ctx, 1)
+	require.NoError(t, err)
+	require.Equal(t, dataTasks, pipeInstr.ExternalScan.IcebergDataTasks)
+	require.Equal(t, deleteTasks, pipeInstr.ExternalScan.IcebergDeleteTasks)
+	require.Equal(t, columns, pipeInstr.ExternalScan.IcebergColumns)
+	require.Equal(t, snapshot, pipeInstr.ExternalScan.IcebergSnapshot)
+	require.Equal(t, "object-scope-ref", pipeInstr.ExternalScan.IcebergObjectIoRef)
+	require.Equal(t, []int32{3, 4}, pipeInstr.ExternalScan.IcebergHiddenReadColumns)
+	require.Equal(t, int64(4096), pipeInstr.ExternalScan.IcebergDeleteMaxMemoryBytes)
+	require.True(t, pipeInstr.ExternalScan.IcebergDeleteSpillEnabled)
+	require.NotNil(t, pipeInstr.ExternalScan.IcebergPlanningStats)
+	require.Equal(t, int64(10), pipeInstr.ExternalScan.IcebergPlanningStats.MetadataBytes)
+	require.Equal(t, int64(20), pipeInstr.ExternalScan.IcebergPlanningStats.ManifestListBytes)
+	require.Equal(t, int64(30), pipeInstr.ExternalScan.IcebergPlanningStats.ManifestBytes)
+	require.Equal(t, int64(2), pipeInstr.ExternalScan.IcebergPlanningStats.ManifestsSelected)
+	require.Equal(t, int64(1), pipeInstr.ExternalScan.IcebergPlanningStats.ManifestsPruned)
+	require.Equal(t, int64(2), pipeInstr.ExternalScan.IcebergPlanningStats.DataFilesSelected)
+	require.Equal(t, int64(3), pipeInstr.ExternalScan.IcebergPlanningStats.DataFilesPruned)
+	require.Equal(t, int64(2048), pipeInstr.ExternalScan.IcebergPlanningStats.DataFileBytesSelected)
+	require.Equal(t, int64(4096), pipeInstr.ExternalScan.IcebergPlanningStats.DataFileBytesPruned)
+	require.Equal(t, int64(4), pipeInstr.ExternalScan.IcebergPlanningStats.PlanningCacheHits)
+	require.Equal(t, int64(5), pipeInstr.ExternalScan.IcebergPlanningStats.PlanningCacheMiss)
+	require.True(t, pipeInstr.ExternalScan.NeedRowOrdinal)
+	require.True(t, pipeInstr.ExternalScan.IcebergDataTasks[0].HasResidualFilter)
+	require.Equal(t, "filter_digest:abcdef0123456789", pipeInstr.ExternalScan.IcebergDataTasks[0].ResidualFilterHash)
+
+	restored, err := convertToVmOperator(pipeInstr, ctx, nil)
+	require.NoError(t, err)
+	restoredExternal := restored.(*external.External)
+	require.Equal(t, dataTasks, restoredExternal.Es.IcebergDataTasks)
+	require.Equal(t, deleteTasks, restoredExternal.Es.IcebergDeleteTasks)
+	require.Equal(t, columns, restoredExternal.Es.IcebergColumns)
+	require.Equal(t, snapshot, restoredExternal.Es.IcebergSnapshot)
+	require.Equal(t, "object-scope-ref", restoredExternal.Es.IcebergObjectIORef)
+	require.Equal(t, []int32{3, 4}, restoredExternal.Es.IcebergHiddenReadCols)
+	require.Equal(t, int64(4096), restoredExternal.Es.IcebergDeleteMaxMemoryBytes)
+	require.True(t, restoredExternal.Es.IcebergDeleteSpillEnabled)
+	require.Equal(t, int64(10), restoredExternal.Es.IcebergPlanningStats.IcebergMetadataBytes)
+	require.Equal(t, int64(20), restoredExternal.Es.IcebergPlanningStats.IcebergManifestListBytes)
+	require.Equal(t, int64(30), restoredExternal.Es.IcebergPlanningStats.IcebergManifestBytes)
+	require.Equal(t, int64(2), restoredExternal.Es.IcebergPlanningStats.IcebergManifestsSelected)
+	require.Equal(t, int64(1), restoredExternal.Es.IcebergPlanningStats.IcebergManifestsPruned)
+	require.Equal(t, int64(2), restoredExternal.Es.IcebergPlanningStats.IcebergDataFilesSelected)
+	require.Equal(t, int64(3), restoredExternal.Es.IcebergPlanningStats.IcebergDataFilesPruned)
+	require.Equal(t, int64(2048), restoredExternal.Es.IcebergPlanningStats.IcebergDataFileBytesSelected)
+	require.Equal(t, int64(4096), restoredExternal.Es.IcebergPlanningStats.IcebergDataFileBytesPruned)
+	require.Equal(t, int64(4), restoredExternal.Es.IcebergPlanningStats.IcebergPlanningCacheHits)
+	require.Equal(t, int64(5), restoredExternal.Es.IcebergPlanningStats.IcebergPlanningCacheMiss)
+	require.True(t, restoredExternal.Es.NeedRowOrdinal)
+	require.True(t, restoredExternal.Es.IcebergDataTasks[0].HasResidualFilter)
+	require.Equal(t, "filter_digest:abcdef0123456789", restoredExternal.Es.IcebergDataTasks[0].ResidualFilterHash)
 }
 
 func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
@@ -521,6 +714,17 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		}
 	})
 
+	t.Run("HashBuild_TrackNullKeys", func(t *testing.T) {
+		op := &hashbuild.HashBuild{TrackNullKeys: true}
+		_, pipeInstr, err := convertToPipelineInstruction(op, proc, ctx, 1)
+		require.NoError(t, err)
+		require.True(t, pipeInstr.HashBuild.TrackNullKeys)
+
+		restored, err := convertToVmOperator(pipeInstr, ctx, nil)
+		require.NoError(t, err)
+		require.True(t, restored.(*hashbuild.HashBuild).TrackNullKeys)
+	})
+
 	t.Run("JoinSpillThreshold_ReceiverResolvesLocally", func(t *testing.T) {
 		for name, op := range map[string]vm.Operator{
 			"hashjoin": &hashjoin.HashJoin{
@@ -646,6 +850,40 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		require.Equal(t, mockEng, restoredOp.Engine)
 	})
 }
+
+func TestShuffleSerializationRoundtrip(t *testing.T) {
+	ctx := &scopeContext{id: 1, root: &scopeContext{}, parent: &scopeContext{}}
+	proc := &process.Process{Base: &process.BaseProcess{}}
+	op := shuffle.NewArgument()
+	defer op.Release()
+	op.ShuffleColIdx = 2
+	op.ShuffleType = int32(planpb.ShuffleType_Range)
+	op.ShuffleColMin = -10
+	op.ShuffleColMax = 100
+	op.BucketNum = 8
+	op.ShuffleRangeInt64 = []int64{0, 10, 20}
+	op.RuntimeFilterSpec = &planpb.RuntimeFilterSpec{Tag: 42}
+	op.ShuffleExpr = plan.MakePlan2Int64ConstExprWithType(7)
+	op.DrainAllBuckets = true
+
+	_, instruction, err := convertToPipelineInstruction(op, proc, ctx, 1)
+	require.NoError(t, err)
+	require.True(t, instruction.Shuffle.DrainAllBuckets)
+
+	restored, err := convertToVmOperator(instruction, ctx, nil)
+	require.NoError(t, err)
+	restoredShuffle := restored.(*shuffle.Shuffle)
+	defer restoredShuffle.Release()
+	require.Equal(t, op.ShuffleColIdx, restoredShuffle.ShuffleColIdx)
+	require.Equal(t, op.ShuffleType, restoredShuffle.ShuffleType)
+	require.Equal(t, op.ShuffleColMin, restoredShuffle.ShuffleColMin)
+	require.Equal(t, op.ShuffleColMax, restoredShuffle.ShuffleColMax)
+	require.Equal(t, op.BucketNum, restoredShuffle.BucketNum)
+	require.Equal(t, op.ShuffleRangeInt64, restoredShuffle.ShuffleRangeInt64)
+	require.Equal(t, op.RuntimeFilterSpec, restoredShuffle.RuntimeFilterSpec)
+	require.Equal(t, op.ShuffleExpr, restoredShuffle.ShuffleExpr)
+	require.True(t, restoredShuffle.DrainAllBuckets)
+}
 func Test_convertToProcessLimitation(t *testing.T) {
 	lim := pipeline.ProcessLimitation{
 		Size: 100,
@@ -700,9 +938,11 @@ func Test_GetProcByUuid(t *testing.T) {
 		// this action will convert it to be ready-to-remove status.
 		colexec.GetServer("").DeleteUuids([]uuid.UUID{uid})
 
-		// get a nil p and c.
+		// A receiver closed before attachment is a terminal protocol state, not
+		// a successful nil attachment.
 		p, c, err := receiver.GetProcByUuid(uid)
-		require.Nil(t, err)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "already closed")
 		require.Nil(t, p)
 		require.Nil(t, c)
 
@@ -710,22 +950,24 @@ func Test_GetProcByUuid(t *testing.T) {
 	}
 
 	{
-		// if receiver done, get method should exit.
-		// 1. return nil.
-		// 2. no need to return error.
+		// A disconnected notify attempt must exit without poisoning a receiver
+		// UUID that a later attempt can still register.
+		uid, err := uuid.NewV7()
+		require.NoError(t, err)
 		cctx, ccancel := context.WithCancel(context.Background())
 		receiver := &messageReceiverOnServer{
 			colexecServer: colexec.GetServer(""),
 			connectionCtx: cctx,
+			messageCtx:    context.Background(),
 		}
 		ccancel()
-		p, _, err := receiver.GetProcByUuid(uuid.UUID{})
-		require.Nil(t, err)
+		p, _, err := receiver.GetProcByUuid(uid)
+		require.Error(t, err)
 		require.Nil(t, p)
 
-		// two action to delete the uuid can make sure the producer and consumer flag uuid done.
-		colexec.GetServer("").DeleteUuids([]uuid.UUID{{}})
-		colexec.GetServer("").DeleteUuids([]uuid.UUID{{}})
+		ownerCh := make(process.RemotePipelineInformationChannel)
+		require.NoError(t, colexec.GetServer("").PutProcIntoUuidMap(uid, &process.Process{}, ownerCh))
+		colexec.GetServer("").RemoveUuidsOwned([]uuid.UUID{uid}, ownerCh)
 	}
 
 	{
@@ -788,9 +1030,6 @@ func Test_GetProcByUuid_ConcurrentWake(t *testing.T) {
 		done <- result{p, c, e}
 	}()
 
-	// Give the goroutine time to enter the wait.
-	time.Sleep(10 * time.Millisecond)
-
 	p0 := &process.Process{}
 	c0 := process.RemotePipelineInformationChannel(make(chan *process.WrapCs))
 	require.NoError(t, colexec.GetServer("").PutProcIntoUuidMap(uid, p0, c0))
@@ -808,23 +1047,36 @@ func Test_GetProcByUuid_ConcurrentWake(t *testing.T) {
 	colexec.GetServer("").DeleteUuids([]uuid.UUID{uid})
 }
 
-func Test_GetProcByUuid_TimeoutDoesNotPoisonLaterRegistration(t *testing.T) {
+func Test_GetProcByUuid_CancellationDoesNotPoisonLaterRegistration(t *testing.T) {
 	_ = colexec.NewServer("")
 
 	uid, err := uuid.NewV7()
 	require.NoError(t, err)
 
+	messageCtx, cancelMessage := context.WithCancelCause(context.Background())
+	cancelCause := moerr.NewInternalErrorNoCtx("query canceled before receiver registration")
 	receiver := &messageReceiverOnServer{
-		colexecServer:           colexec.GetServer(""),
-		connectionCtx:           context.TODO(),
-		messageCtx:              context.TODO(),
-		waitRegistrationTimeout: 10 * time.Millisecond,
+		colexecServer: colexec.GetServer(""),
+		connectionCtx: context.Background(),
+		messageCtx:    messageCtx,
 	}
 
-	p, ch, err := receiver.GetProcByUuid(uid)
-	require.Error(t, err)
-	require.Nil(t, p)
-	require.Nil(t, ch)
+	type result struct {
+		proc *process.Process
+		ch   process.RemotePipelineInformationChannel
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() {
+		p, ch, lookupErr := receiver.GetProcByUuid(uid)
+		done <- result{proc: p, ch: ch, err: lookupErr}
+	}()
+	cancelMessage(cancelCause)
+
+	got := <-done
+	require.ErrorIs(t, got.err, cancelCause)
+	require.Nil(t, got.proc)
+	require.Nil(t, got.ch)
 
 	p0 := &process.Process{}
 	c0 := process.RemotePipelineInformationChannel(make(chan *process.WrapCs))
@@ -832,6 +1084,104 @@ func Test_GetProcByUuid_TimeoutDoesNotPoisonLaterRegistration(t *testing.T) {
 
 	colexec.GetServer("").DeleteUuids([]uuid.UUID{uid})
 	colexec.GetServer("").DeleteUuids([]uuid.UUID{uid})
+}
+
+func Test_GetProcByUuid_WaitsPastFormerAdmissionLimitForRegistration(t *testing.T) {
+	server := colexec.NewServer("")
+	uid := uuid.Must(uuid.NewV7())
+	messageCtx, cancelMessage := context.WithCancelCause(context.Background())
+	defer cancelMessage(context.Canceled)
+	receiver := &messageReceiverOnServer{
+		colexecServer: server,
+		connectionCtx: context.Background(),
+		messageCtx:    messageCtx,
+	}
+
+	type result struct {
+		proc *process.Process
+		ch   process.RemotePipelineInformationChannel
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() {
+		proc, ch, err := receiver.GetProcByUuid(uid)
+		done <- result{proc: proc, ch: ch, err: err}
+	}()
+
+	formerLimit := time.NewTimer(20 * time.Millisecond)
+	defer formerLimit.Stop()
+	select {
+	case got := <-done:
+		t.Fatalf("receiver lookup returned without lifecycle evidence: %v", got.err)
+	case <-formerLimit.C:
+	}
+
+	ownerProc := &process.Process{}
+	ownerCh := make(process.RemotePipelineInformationChannel)
+	require.NoError(t, server.PutProcIntoUuidMap(uid, ownerProc, ownerCh))
+	select {
+	case got := <-done:
+		require.NoError(t, got.err)
+		require.Same(t, ownerProc, got.proc)
+		require.Equal(t, ownerCh, got.ch)
+	case <-time.After(time.Second):
+		t.Fatal("GetProcByUuid did not attach after delayed registration")
+	}
+	server.RemoveUuidsOwned([]uuid.UUID{uid}, ownerCh)
+}
+
+func TestHandlePrepareDoneNotifyObservesMessageCancellationAfterAttach(t *testing.T) {
+	server := colexec.NewServer("")
+	uid := uuid.Must(uuid.NewV7())
+	messageCtx, cancelMessage := context.WithCancelCause(context.Background())
+	dispatchCtx, cancelDispatch := context.WithCancelCause(context.Background())
+	dispatchProc := &process.Process{
+		Ctx:    dispatchCtx,
+		Cancel: cancelDispatch,
+	}
+	notifyCh := make(process.RemotePipelineInformationChannel, 1)
+	require.NoError(t, server.PutProcIntoUuidMap(uid, dispatchProc, notifyCh))
+	t.Cleanup(func() {
+		server.RemoveUuidsOwned([]uuid.UUID{uid}, notifyCh)
+	})
+
+	ctrl := gomock.NewController(t)
+	session := mock_morpc.NewMockClientSession(ctrl)
+	session.EXPECT().SessionCtx().Return(context.Background()).AnyTimes()
+	receiver := &messageReceiverOnServer{
+		messageCtx:    messageCtx,
+		connectionCtx: context.Background(),
+		messageId:     7,
+		messageTyp:    pipeline.Method_PrepareDoneNotifyMessage,
+		messageUuid:   uid,
+		clientSession: session,
+		colexecServer: server,
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- handlePipelineMessage(receiver)
+	}()
+
+	var attached *process.WrapCs
+	select {
+	case attached = <-notifyCh:
+		require.NotNil(t, attached)
+		require.Equal(t, uid, attached.Uid)
+	case <-time.After(time.Second):
+		t.Fatal("prepare-done notify did not attach to the published receiver")
+	}
+
+	cancelCause := moerr.NewInternalErrorNoCtx("notify message canceled after attach")
+	cancelMessage(cancelCause)
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, cancelCause)
+	case <-time.After(time.Second):
+		t.Fatal("prepare-done notify did not stop after message cancellation")
+	}
+	require.ErrorIs(t, context.Cause(dispatchCtx), cancelCause)
+	server.RemoveRelatedPipeline(session, receiver.messageId)
 }
 
 func Test_TryGetProcByUuid_NotRegisteredYetDoesNotPoisonLaterRegistration(t *testing.T) {
@@ -1391,7 +1741,12 @@ func TestSendNotifyMessageRetriesUntilRemoteDispatchRegistered(t *testing.T) {
 
 	var wg sync.WaitGroup
 	resultCh := make(chan notifyMessageResult, 1)
-	s.sendNotifyMessageWithFactory(&wg, resultCh, factory)
+	s.sendNotifyMessageWithFactoryAndWait(
+		&wg,
+		resultCh,
+		factory,
+		func(context.Context, int, uuid.UUID) error { return nil },
+	)
 
 	select {
 	case signal := <-scopeProc.Reg.MergeReceivers[0].Ch2:
@@ -1413,6 +1768,30 @@ func TestSendNotifyMessageRetriesUntilRemoteDispatchRegistered(t *testing.T) {
 
 	wg.Wait()
 	require.Equal(t, 2, attempts)
+}
+
+func TestNotifyMessageRetryDelayIsBoundedAndDeterministic(t *testing.T) {
+	uid := uuid.UUID{
+		0x01, 0x02, 0x03, 0x04,
+		0x05, 0x06, 0x07, 0x08,
+		0x09, 0x0a, 0x0b, 0x0c,
+		0x0d, 0x0e, 0x0f, 0x10,
+	}
+	for _, tc := range []struct {
+		attempt int
+		base    time.Duration
+	}{
+		{attempt: -1, base: notifyMessageRetryInitialInterval},
+		{attempt: 0, base: notifyMessageRetryInitialInterval},
+		{attempt: 1, base: 2 * notifyMessageRetryInitialInterval},
+		{attempt: 2, base: 4 * notifyMessageRetryInitialInterval},
+		{attempt: 20, base: notifyMessageRetryMaxInterval},
+	} {
+		got := notifyMessageRetryDelay(tc.attempt, uid)
+		require.Equal(t, got, notifyMessageRetryDelay(tc.attempt, uid))
+		require.GreaterOrEqual(t, got, tc.base*80/100)
+		require.LessOrEqual(t, got, tc.base*120/100)
+	}
 }
 
 func TestRemoteNotifyRetryAttachesToEmptyDispatchBeforeCompletion(t *testing.T) {
@@ -1505,7 +1884,12 @@ func TestRemoteNotifyRetryAttachesToEmptyDispatchBeforeCompletion(t *testing.T) 
 
 	var wg sync.WaitGroup
 	resultCh := make(chan notifyMessageResult, 1)
-	s.sendNotifyMessageWithFactory(&wg, resultCh, factory)
+	s.sendNotifyMessageWithFactoryAndWait(
+		&wg,
+		resultCh,
+		factory,
+		func(context.Context, int, uuid.UUID) error { return nil },
+	)
 	select {
 	case <-firstLookupDone:
 	case <-time.After(5 * time.Second):
@@ -1601,6 +1985,7 @@ func TestSendNotifyMessageReportsSenderFactoryError(t *testing.T) {
 	select {
 	case result := <-resultCh:
 		require.ErrorIs(t, result.err, testErr)
+		require.ErrorIs(t, context.Cause(scopeProc.Ctx), testErr)
 	case <-time.After(time.Second):
 		t.Fatal("notify sender factory error did not finish")
 	}
@@ -1666,15 +2051,10 @@ func TestSendNotifyMessageReportsStreamSendError(t *testing.T) {
 	wg.Wait()
 }
 
-func TestSendNotifyMessageTimesOutWaitingForRemoteDispatchRegistration(t *testing.T) {
-	originTimeout := notifyMessageWaitRegistrationTimeout
-	notifyMessageWaitRegistrationTimeout = 10 * time.Millisecond
-	defer func() {
-		notifyMessageWaitRegistrationTimeout = originTimeout
-	}()
-
+func TestSendNotifyMessageLegacyRetryStopsAtQueryCancellation(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	proc.BuildPipelineContext(context.Background())
+	queryCtx, cancelQuery := context.WithCancelCause(context.Background())
+	proc.BuildPipelineContext(queryCtx)
 	scopeProc := proc.NewContextChildProc(1)
 
 	uid, err := uuid.NewV7()
@@ -1706,27 +2086,190 @@ func TestSendNotifyMessageTimesOutWaitingForRemoteDispatchRegistration(t *testin
 		}, nil
 	}
 
+	retryEntered := make(chan struct{})
+	waitRetry := func(ctx context.Context, _ int, _ uuid.UUID) error {
+		close(retryEntered)
+		<-ctx.Done()
+		return remoteRegistrationContextError(ctx)
+	}
+
 	var wg sync.WaitGroup
 	resultCh := make(chan notifyMessageResult, 1)
-	s.sendNotifyMessageWithFactory(&wg, resultCh, factory)
+	s.sendNotifyMessageWithFactoryAndWait(&wg, resultCh, factory, waitRetry)
+	<-retryEntered
+	cancelCause := moerr.NewInternalErrorNoCtx("query canceled while waiting for legacy receiver registration")
+	cancelQuery(cancelCause)
 
 	select {
 	case result := <-resultCh:
 		result.clean(scopeProc)
-		require.Error(t, result.err)
-		require.Contains(t, result.err.Error(), "dispatch process not registered within")
+		require.ErrorIs(t, result.err, cancelCause)
 	case <-time.After(time.Second):
-		t.Fatal("notify retry did not time out")
+		t.Fatal("notify retry did not stop after query cancellation")
 	}
 	select {
 	case signal := <-scopeProc.Reg.MergeReceivers[0].Ch2:
 		_, err := signal.Action()
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "dispatch process not registered within")
+		require.ErrorIs(t, err, cancelCause)
 	case <-time.After(time.Second):
-		t.Fatal("notify retry timeout did not send cleanup signal")
+		t.Fatal("notify retry cancellation did not send cleanup signal")
 	}
 	wg.Wait()
+}
+
+func TestSendNotifyMessageLegacyRetryWaitsPastFormerAdmissionLimit(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.BuildPipelineContext(context.Background())
+	scopeProc := proc.NewContextChildProc(1)
+	uid := uuid.Must(uuid.NewV7())
+	s := &Scope{
+		Proc: scopeProc,
+		RemoteReceivRegInfos: []RemoteReceivRegInfo{
+			{Idx: 0, Uuid: uid, FromAddr: "remote-cn"},
+		},
+	}
+
+	var attempts atomic.Int32
+	factory := func(
+		ctx context.Context,
+		sid string,
+		toAddr string,
+		mp *mpool.MPool,
+		analyzeModule *AnalyzeModule,
+	) (*messageSenderOnClient, error) {
+		receiveCh := make(chan morpc.Message, 1)
+		msg := &pipeline.Message{Sid: pipeline.Status_MessageEnd}
+		if attempts.Add(1) == 1 {
+			msg.SetMoError(ctx, moerr.NewRemoteDispatchNotRegistered(ctx, uid.String()))
+		}
+		receiveCh <- msg
+		return &messageSenderOnClient{
+			ctx:          ctx,
+			mp:           mp,
+			streamSender: &fakeStreamSender{},
+			receiveCh:    receiveCh,
+			safeToClose:  true,
+		}, nil
+	}
+
+	type retryContextObservation struct {
+		sameQueryContext bool
+		hasDeadline      bool
+	}
+	retryEntered := make(chan retryContextObservation, 1)
+	allowRetry := make(chan struct{})
+	waitRetry := func(ctx context.Context, _ int, _ uuid.UUID) error {
+		_, hasDeadline := ctx.Deadline()
+		retryEntered <- retryContextObservation{
+			sameQueryContext: ctx == scopeProc.Ctx,
+			hasDeadline:      hasDeadline,
+		}
+		select {
+		case <-allowRetry:
+			return nil
+		case <-ctx.Done():
+			return remoteRegistrationContextError(ctx)
+		}
+	}
+
+	var wg sync.WaitGroup
+	resultCh := make(chan notifyMessageResult, 1)
+	s.sendNotifyMessageWithFactoryAndWait(&wg, resultCh, factory, waitRetry)
+	observation := <-retryEntered
+	require.True(t, observation.sameQueryContext)
+	require.False(t, observation.hasDeadline, "legacy retry must use the query lifecycle context directly")
+
+	formerLimit := time.NewTimer(20 * time.Millisecond)
+	defer formerLimit.Stop()
+	select {
+	case result := <-resultCh:
+		result.clean(scopeProc)
+		t.Fatalf("legacy retry returned without lifecycle evidence: %v", result.err)
+	case <-formerLimit.C:
+	}
+	close(allowRetry)
+
+	select {
+	case result := <-resultCh:
+		result.clean(scopeProc)
+		require.NoError(t, result.err)
+	case <-time.After(time.Second):
+		t.Fatal("legacy notify retry did not succeed after delayed registration")
+	}
+	select {
+	case signal := <-scopeProc.Reg.MergeReceivers[0].Ch2:
+		_, err := signal.Action()
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("successful legacy retry did not send cleanup signal")
+	}
+	wg.Wait()
+	require.Equal(t, int32(2), attempts.Load())
+}
+
+func TestSendNotifyMessageSuccessfulAttachUsesQueryContext(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.BuildPipelineContext(context.Background())
+	scopeProc := proc.NewContextChildProc(1)
+	uid := uuid.Must(uuid.NewV7())
+	s := &Scope{
+		Proc: scopeProc,
+		RemoteReceivRegInfos: []RemoteReceivRegInfo{
+			{Idx: 0, Uuid: uid, FromAddr: "remote-cn"},
+		},
+	}
+
+	factory := func(
+		ctx context.Context,
+		sid string,
+		toAddr string,
+		mp *mpool.MPool,
+		analyzeModule *AnalyzeModule,
+	) (*messageSenderOnClient, error) {
+		_, hasDeadline := ctx.Deadline()
+		if hasDeadline {
+			return nil, errors.New("successful stream did not inherit the query context directly")
+		}
+		receiveCh := make(chan morpc.Message, 1)
+		receiveCh <- &pipeline.Message{Sid: pipeline.Status_MessageEnd}
+		return &messageSenderOnClient{
+			ctx:          ctx,
+			mp:           mp,
+			streamSender: &fakeStreamSender{},
+			receiveCh:    receiveCh,
+			safeToClose:  true,
+		}, nil
+	}
+
+	var waitCalls atomic.Int32
+	var wg sync.WaitGroup
+	resultCh := make(chan notifyMessageResult, 1)
+	s.sendNotifyMessageWithFactoryAndWait(
+		&wg,
+		resultCh,
+		factory,
+		func(context.Context, int, uuid.UUID) error {
+			waitCalls.Add(1)
+			return errors.New("retry wait must not run after successful attach")
+		},
+	)
+
+	select {
+	case result := <-resultCh:
+		result.clean(scopeProc)
+		require.NoError(t, result.err)
+	case <-time.After(time.Second):
+		t.Fatal("successful notify stream did not finish")
+	}
+	select {
+	case signal := <-scopeProc.Reg.MergeReceivers[0].Ch2:
+		_, err := signal.Action()
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("successful notify stream did not send its terminal signal")
+	}
+	wg.Wait()
+	require.Zero(t, waitCalls.Load())
 }
 
 func TestSendNotifyMessageStopsRetryWhenQueryContextCanceled(t *testing.T) {
@@ -1749,7 +2292,6 @@ func TestSendNotifyMessageStopsRetryWhenQueryContextCanceled(t *testing.T) {
 	}
 
 	var attempts atomic.Int32
-	notRegisteredSent := make(chan struct{})
 	factory := func(
 		ctx context.Context,
 		sid string,
@@ -1762,7 +2304,6 @@ func TestSendNotifyMessageStopsRetryWhenQueryContextCanceled(t *testing.T) {
 		msg := &pipeline.Message{Sid: pipeline.Status_MessageEnd}
 		msg.SetMoError(ctx, moerr.NewRemoteDispatchNotRegistered(ctx, uid.String()))
 		receiveCh <- msg
-		close(notRegisteredSent)
 		return &messageSenderOnClient{
 			ctx:          ctx,
 			mp:           mp,
@@ -1772,14 +2313,18 @@ func TestSendNotifyMessageStopsRetryWhenQueryContextCanceled(t *testing.T) {
 		}, nil
 	}
 
+	retryEntered := make(chan struct{})
+	waitRetry := func(ctx context.Context, _ int, _ uuid.UUID) error {
+		close(retryEntered)
+		<-ctx.Done()
+		return remoteRegistrationContextError(ctx)
+	}
+
 	var wg sync.WaitGroup
 	resultCh := make(chan notifyMessageResult, 1)
-	s.sendNotifyMessageWithFactory(&wg, resultCh, factory)
-	go func() {
-		<-notRegisteredSent
-		time.Sleep(10 * time.Millisecond)
-		scopeProc.Cancel(nil)
-	}()
+	s.sendNotifyMessageWithFactoryAndWait(&wg, resultCh, factory, waitRetry)
+	<-retryEntered
+	scopeProc.Cancel(nil)
 
 	select {
 	case result := <-resultCh:
@@ -1801,7 +2346,7 @@ func TestSendNotifyMessageStopsRetryWhenQueryContextCanceled(t *testing.T) {
 	require.Equal(t, int32(1), attempts.Load())
 }
 
-func TestGetProcByUuidCancelPendingRegistrationCancelsConsumedDispatchProc(t *testing.T) {
+func TestCancelConsumedDispatchRegistrationCancelsOwnerProcess(t *testing.T) {
 	_ = colexec.NewServer("")
 
 	uid, err := uuid.NewV7()
@@ -1820,14 +2365,14 @@ func TestGetProcByUuidCancelPendingRegistrationCancelsConsumedDispatchProc(t *te
 		colexecServer: colexec.GetServer(""),
 	}
 	cancelCause := moerr.NewInternalErrorNoCtx("registration abandoned")
-	receiver.cancelPendingDispatchRegistration(uid, cancelCause)
+	registeredProc, notifyChannel, state, _ := colexec.GetServer("").AttachProcByUuidOrWait(uid)
+	require.Equal(t, colexec.RemoteReceiverAttachedNow, state)
+	require.Same(t, dispatchProc, registeredProc)
+	require.Equal(t, notifyCh, notifyChannel)
+	receiver.cancelConsumedDispatchRegistration(registeredProc, cancelCause)
 
 	require.ErrorIs(t, context.Cause(procCtx), cancelCause)
-	colexec.GetServer("").DeleteUuids([]uuid.UUID{uid})
-	registeredProc, notifyChannel, ok := colexec.GetServer("").GetProcByUuid(uid, false)
-	require.False(t, ok)
-	require.Nil(t, registeredProc)
-	require.Nil(t, notifyChannel)
+	colexec.GetServer("").RemoveUuidsOwned([]uuid.UUID{uid}, notifyCh)
 }
 
 func TestGetProcByUuidReturnsWhenMessageContextCanceledBeforeRegistration(t *testing.T) {
@@ -1854,20 +2399,21 @@ func TestGetProcByUuidReturnsWhenMessageContextCanceledBeforeRegistration(t *tes
 		done <- result{proc: p, ch: c, err: e}
 	}()
 
-	time.Sleep(10 * time.Millisecond)
 	cancelMessage()
 
 	select {
 	case r := <-done:
-		require.NoError(t, r.err)
+		require.ErrorIs(t, r.err, context.Canceled)
 		require.Nil(t, r.proc)
 		require.Nil(t, r.ch)
 	case <-time.After(time.Second):
 		t.Fatal("GetProcByUuid did not return after message context cancellation")
 	}
 
-	err = colexec.GetServer("").PutProcIntoUuidMap(uid, &process.Process{}, make(chan *process.WrapCs))
-	require.Error(t, err)
+	ownerCh := make(process.RemotePipelineInformationChannel)
+	err = colexec.GetServer("").PutProcIntoUuidMap(uid, &process.Process{}, ownerCh)
+	require.NoError(t, err)
+	colexec.GetServer("").RemoveUuidsOwned([]uuid.UUID{uid}, ownerCh)
 }
 
 var _ morpc.Stream = &fakeStreamSender{}
@@ -1876,6 +2422,7 @@ var _ morpc.Stream = &fakeStreamSender{}
 type fakeStreamSender struct {
 	// how many packages were sent.
 	sentCnt int
+	sent    []morpc.Message
 
 	// return it during next send.
 	nextSendError error
@@ -1885,6 +2432,7 @@ func (s *fakeStreamSender) ID() uint64 { return 0 }
 func (s *fakeStreamSender) Send(ctx context.Context, request morpc.Message) error {
 	if s.nextSendError == nil {
 		s.sentCnt++
+		s.sent = append(s.sent, request)
 	}
 	return s.nextSendError
 }
@@ -2074,30 +2622,39 @@ func TestBuildRemoteDispatchReceiverRootReusesEarlyRegistration(t *testing.T) {
 
 func Test_MessageSenderSendPipeline(t *testing.T) {
 	sender := messageSenderOnClient{
-		ctx:          context.Background(),
-		streamSender: &fakeStreamSender{},
+		ctx:              context.Background(),
+		streamSender:     &fakeStreamSender{},
+		requestFinishAck: true,
 	}
 
 	{
 		// there should only send one time if this is just a small data.
 		sender.streamSender.(*fakeStreamSender).sentCnt = 0
+		sender.streamSender.(*fakeStreamSender).sent = nil
 		sender.streamSender.(*fakeStreamSender).nextSendError = nil
 
 		err := sender.sendPipeline(make([]byte, 10), make([]byte, 10), true, 100, "")
 		require.Nil(t, err)
 
 		require.Equal(t, 1, sender.streamSender.(*fakeStreamSender).sentCnt)
+		require.Equal(t, pipeline.StreamTeardownMode_FinishAck,
+			sender.streamSender.(*fakeStreamSender).sent[0].(*pipeline.Message).GetRequestedTeardownMode())
 	}
 
 	{
 		// there should be cut as multiple message to send for a big data.
 		sender.streamSender.(*fakeStreamSender).sentCnt = 0
+		sender.streamSender.(*fakeStreamSender).sent = nil
 		sender.streamSender.(*fakeStreamSender).nextSendError = nil
 
 		err := sender.sendPipeline(make([]byte, 10), make([]byte, 10), true, 5, "")
 		require.Nil(t, err)
 
 		require.True(t, sender.streamSender.(*fakeStreamSender).sentCnt > 1)
+		for _, sent := range sender.streamSender.(*fakeStreamSender).sent {
+			require.Equal(t, pipeline.StreamTeardownMode_FinishAck,
+				sent.(*pipeline.Message).GetRequestedTeardownMode())
+		}
 	}
 
 	{
@@ -2638,9 +3195,9 @@ func newDispatchSrcScopeForTest(proc *process.Process, addr string, localBuckets
 //
 //	before regrouping, the bucket that carries a cross-CN shuffle dispatch is wrongly
 //	judged non-standalone-executable (its dispatch LocalRegs point to a sibling bucket
-//	that lives in a separate send tree) -> RemoteRun converts it to local -> the dispatch
-//	lands on the coordinator, mispaired with the compile-time cross-CN receiver FromAddr
-//	-> hang.
+//	that lives in a separate send tree) -> the remote tree is not independently executable.
+//	Historically RemoteRun converted it to local, mispaired the dispatch with the compile-time
+//	cross-CN receiver FromAddr, and hung; now RemoteRun rejects that topology before start.
 //
 //	after regrouping, the dop same-CN buckets (and the nested dispatch) become one per-CN
 //	send unit, so checkPipelineStandaloneExecutableAtRemote returns true and the whole

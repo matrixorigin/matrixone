@@ -173,6 +173,30 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 		if err = handleShowConnectors(execCtx.reqCtx, ses); err != nil {
 			return
 		}
+	case *tree.CreateIcebergCatalog:
+		if err = handleCreateIcebergCatalog(execCtx.reqCtx, ses, st); err != nil {
+			return
+		}
+	case *tree.AlterIcebergCatalog:
+		if err = handleAlterIcebergCatalog(execCtx.reqCtx, ses, st); err != nil {
+			return
+		}
+	case *tree.DropIcebergCatalog:
+		if err = handleDropIcebergCatalog(execCtx.reqCtx, ses, st); err != nil {
+			return
+		}
+	case *tree.ShowIcebergCatalogs:
+		if err = handleShowIcebergCatalogs(execCtx.reqCtx, ses, st); err != nil {
+			return
+		}
+	case *tree.ShowIcebergNamespaces:
+		if err = handleShowIcebergNamespaces(execCtx.reqCtx, ses, st); err != nil {
+			return
+		}
+	case *tree.ShowIcebergTables:
+		if err = handleShowIcebergTables(execCtx.reqCtx, ses, st); err != nil {
+			return
+		}
 	case *tree.Deallocate:
 		ses.EnterFPrint(FPDeallocate)
 		defer ses.ExitFPrint(FPDeallocate)
@@ -212,6 +236,18 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 		ses.EnterFPrint(FPAnalyzeStmt)
 		defer ses.ExitFPrint(FPAnalyzeStmt)
 		if err = handleAnalyzeStmt(ses, execCtx, st); err != nil {
+			return
+		}
+	case *tree.CheckTableStmt:
+		ses.EnterFPrint(FPCheckTableStmt)
+		defer ses.ExitFPrint(FPCheckTableStmt)
+		if err = handleCheckTableStmt(ses, execCtx, st); err != nil {
+			return
+		}
+	case *tree.ShowProfileStmt:
+		ses.EnterFPrint(FPShowProfileStmt)
+		defer ses.ExitFPrint(FPShowProfileStmt)
+		if err = handleShowProfileStmt(ses, execCtx, st); err != nil {
 			return
 		}
 	case *tree.ExplainStmt:

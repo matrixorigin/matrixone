@@ -72,6 +72,11 @@ func (lp *localLockTableProxy) lock(
 	}
 
 	lp.mu.Lock()
+	if err := ctx.Err(); err != nil {
+		lp.mu.Unlock()
+		cb(pb.Result{}, err)
+		return
+	}
 	key := util.UnsafeBytesToString(rows[0])
 	if _, ok := lp.mu.pendingLastHolderUnlocks[key]; ok {
 		// The owner may already have applied the last-holder Unlock even
@@ -93,7 +98,6 @@ func (lp *localLockTableProxy) lock(
 	}
 
 	first := v.isEmpty()
-	r := v.result
 	w := v.add(
 		lp.serviceID,
 		txn,
@@ -122,18 +126,29 @@ func (lp *localLockTableProxy) lock(
 		return
 	}
 
-	defer func() {
-		bind := lp.getBind()
-		err := txn.lockAdded(bind.Group, bind, rows, lp.logger)
-		cb(r, err)
-	}()
-
 	// wait first done
 	if w != nil {
-		w.wait(ctx, lp.logger)
-		return
+		value := w.wait(ctx, lp.logger)
+		if value.err != nil {
+			lp.mu.Lock()
+			v.remove(txn)
+			lp.mu.Unlock()
+			cb(pb.Result{}, value.err)
+			return
+		}
 	}
 
+	lp.mu.Lock()
+	r := v.result
+	lp.mu.Unlock()
+	bind := lp.getBind()
+	err := txn.lockAdded(bind.Group, bind, rows, lp.logger)
+	if err != nil {
+		lp.mu.Lock()
+		v.remove(txn)
+		lp.mu.Unlock()
+	}
+	cb(r, err)
 }
 
 func (lp *localLockTableProxy) unlock(
@@ -314,10 +329,11 @@ func (lp *localLockTableProxy) isPendingRemoteHolderLocked(
 }
 
 func (lp *localLockTableProxy) getLock(
+	ctx context.Context,
 	key []byte,
 	txn pb.WaitTxn,
-	fn func(Lock)) {
-	lp.remote.getLock(key, txn, fn)
+	fn func(Lock)) error {
+	return lp.remote.getLock(ctx, key, txn, fn)
 }
 
 func (lp *localLockTableProxy) getLockHolder(ctx context.Context, key []byte) (pb.WaitTxn, bool, error) {
@@ -347,9 +363,10 @@ func (s *sharedOps) done(
 	logger *log.MOLogger,
 ) {
 	for idx, cb := range s.cbs {
-		cb(r, err)
-		if idx > 0 {
-			s.waiters[idx].notify(notifyValue{}, logger)
+		if idx == 0 && cb != nil {
+			cb(r, err)
+		} else if s.waiters[idx] != nil {
+			s.waiters[idx].notify(notifyValue{err: err}, logger)
 		}
 		s.cbs[idx] = nil
 		s.waiters[idx] = nil
@@ -394,6 +411,10 @@ func (s *sharedOps) add(
 		v := txn.toWaitTxn(serviceID, true)
 		w = acquireWaiter(v, "share ops add", logger)
 		w.setStatus(blocking)
+		// The waiting goroutine owns its callback. sharedOps.done only publishes
+		// the first remote result through the waiter, so completion and caller
+		// cancellation have one waiter-status linearization point.
+		cb = nil
 	}
 	if hasHolder {
 		cb = nil

@@ -60,7 +60,8 @@ func IsDDL(stmt tree.Statement) bool {
 	case *tree.CreateTable, *tree.DropTable,
 		*tree.CreateView, *tree.DropView, *tree.AlterView, *tree.AlterTable, *tree.RenameTable,
 		*tree.CreateDatabase, *tree.DropDatabase, *tree.CreateSequence, *tree.DropSequence,
-		*tree.CreateIndex, *tree.DropIndex, *tree.TruncateTable:
+		*tree.CreateIndex, *tree.DropIndex, *tree.TruncateTable,
+		*tree.CreateIcebergCatalog, *tree.AlterIcebergCatalog, *tree.DropIcebergCatalog:
 		return true
 	}
 	return false
@@ -69,7 +70,7 @@ func IsDDL(stmt tree.Statement) bool {
 // IsDropStatement checks the statement is the drop statement.
 func IsDropStatement(stmt tree.Statement) bool {
 	switch stmt.(type) {
-	case *tree.DropDatabase, *tree.DropTable, *tree.DropView, *tree.DropIndex, *tree.DropSequence:
+	case *tree.DropDatabase, *tree.DropTable, *tree.DropView, *tree.DropIndex, *tree.DropSequence, *tree.DropIcebergCatalog:
 		return true
 	}
 	return false
@@ -145,7 +146,8 @@ func statementCanBeExecutedInUncommittedTransaction(
 
 	switch st := stmt.(type) {
 	//ddl statement
-	case *tree.CreateTable, *tree.CreateIndex, *tree.CreateView, *tree.AlterView, *tree.AlterTable:
+	case *tree.CreateTable, *tree.CreateIndex, *tree.CreateView, *tree.AlterView, *tree.AlterTable,
+		*tree.CreateIcebergCatalog, *tree.AlterIcebergCatalog, *tree.DropIcebergCatalog:
 		// CTAS is allowed in explicit transactions now because its internal
 		// INSERT ... SELECT is executed in the same txn as CREATE TABLE.
 		//if createTblStmt, ok := stmt.(*tree.CreateTable); ok && createTblStmt.IsAsSelect {
@@ -195,6 +197,9 @@ func statementCanBeExecutedInUncommittedTransaction(
 		*tree.ShowBackendServers,
 		*tree.ShowAccountUpgrade,
 		*tree.ShowConnectors,
+		*tree.ShowIcebergCatalogs,
+		*tree.ShowIcebergNamespaces,
+		*tree.ShowIcebergTables,
 		*tree.ShowLogserviceReplicas,
 		*tree.ShowLogserviceStores,
 		*tree.ShowLogserviceSettings,
@@ -210,13 +215,11 @@ func statementCanBeExecutedInUncommittedTransaction(
 		if err != nil {
 			v = int64(1)
 		}
-		preStmt, err := mysql.ParseOne(ctx, st.Sql, v.(int64))
-		defer func() {
-			preStmt.Free()
-		}()
+		preStmt, err := mysql.ParseOneWithSQLMode(ctx, st.Sql, v.(int64), sessionSQLModeForParser(ses))
 		if err != nil {
 			return false, err
 		}
+		defer preStmt.Free()
 		return statementCanBeExecutedInUncommittedTransaction(ctx, ses, preStmt)
 	case *tree.Execute:
 		preName := string(st.Name)
@@ -248,13 +251,22 @@ func statementCanBeExecutedInUncommittedTransaction(
 		*tree.DataBranchCreateTable,
 		*tree.DataBranchCreateDatabase,
 		*tree.DataBranchDeleteTable,
-		*tree.DataBranchDeleteDatabase:
+		*tree.DataBranchDeleteDatabase,
+		*tree.DataBranchDiff:
 		return true, nil
 	case *tree.DataBranchPick:
 		return false, nil
 	case *tree.CallStmt:
 		// Call procedure can be executed in an uncommitted transaction, usually used in
 		// nested procedure call.
+		return true, nil
+	case *tree.AnalyzeStmt:
+		// ANALYZE TABLE rewrites to a derived SELECT, so it follows the same
+		// transaction policy as SELECT.
+		return true, nil
+	case *tree.CheckTableStmt, *tree.ShowProfileStmt:
+		// These are not supported, but we let them reach the NotSupported handler
+		// instead of the generic unclassified-transaction error.
 		return true, nil
 	}
 

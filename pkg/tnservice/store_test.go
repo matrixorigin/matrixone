@@ -24,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -31,8 +32,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
+	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/service"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/mem"
 	"github.com/stretchr/testify/assert"
@@ -44,9 +48,31 @@ var (
 	testTNLogtailAddress = "127.0.0.1:22001"
 )
 
+const storeTestTimeout = 30 * time.Second
+
 type storeQueryClient struct {
 	client.QueryClient
 	closeCalls int
+}
+
+type storeQueryService struct {
+	queryservice.QueryService
+	closeCalls int
+}
+
+type storeTxnServer struct {
+	rpc.TxnServer
+	beforeClose func()
+}
+
+func (s *storeTxnServer) Close() error {
+	s.beforeClose()
+	return s.TxnServer.Close()
+}
+
+func (s *storeQueryService) Close() error {
+	s.closeCalls++
+	return s.QueryService.Close()
 }
 
 func (c *storeQueryClient) Close() error {
@@ -255,14 +281,292 @@ func TestStoreCloseClosesSharedQueryClient(t *testing.T) {
 	})
 }
 
-func TestReplicaCreateRetryStopsPromptly(t *testing.T) {
+func TestStoreCloseClosesQueryService(t *testing.T) {
+	var tracked *storeQueryService
+	runTNStoreTest(t, func(s *store) {
+		tracked = &storeQueryService{QueryService: s.queryService}
+		s.queryService = tracked
+		t.Cleanup(func() {
+			require.Equal(t, 1, tracked.closeCalls)
+		})
+	})
+}
+
+func TestStoreCloseCancelsReplicasBeforeDrainingRPCServer(t *testing.T) {
+	var canceledBeforeServerClose atomic.Bool
+	runTNStoreTest(t, func(s *store) {
+		r := newReplica(newTestTNShard(1, 2, 3), s.rt)
+		s.replicas.Store(r.shard.ShardID, r)
+		s.server = &storeTxnServer{
+			TxnServer: s.server,
+			beforeClose: func() {
+				r.mu.RLock()
+				defer r.mu.RUnlock()
+				canceledBeforeServerClose.Store(r.mu.cancelled)
+			},
+		}
+	})
+	require.True(t, canceledBeforeServerClose.Load())
+}
+
+func TestStoreCloseCancelsRecoveryBeforeStoppingReplicaTask(t *testing.T) {
+	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
+	runtime.SetupServiceBasedRuntime("u1", runtime.ServiceRuntime(""))
+	fsFactory := func(name string) (*fileservice.FileServices, error) {
+		fs, err := fileservice.NewMemoryFS(name, fileservice.DisabledCacheConfig, nil)
+		if err != nil {
+			return nil, err
+		}
+		return fileservice.NewFileServices(name, fs)
+	}
+	s := newTestStore(
+		t,
+		"u1",
+		fsFactory,
+		WithHAKeeperClientFactory(func() (logservice.TNHAKeeperClient, error) {
+			return newTestHAKeeperClient(), nil
+		}),
+		WithLogServiceClientFactory(func(metadata.TNShard) (logservice.Client, error) {
+			return mem.NewMemLog(), nil
+		}),
+		WithConfigAdjust(func(c *Config) {
+			c.HAKeeper.HeatbeatInterval.Duration = 10 * time.Millisecond
+			c.Txn.Storage.Backend = StorageMEMKV
+		}),
+	)
+	require.NoError(t, s.Start())
+
+	meta := service.NewTestTxn(1, 1, 1)
+	meta.Status = txn.TxnStatus_Prepared
+	meta.PreparedTS = service.NewTestTimestamp(2)
+	meta.TNShards = append(meta.TNShards, metadata.TNShard{
+		TNShardRecord: metadata.TNShardRecord{ShardID: 99},
+	})
+	mlog := mem.NewMemLog()
+	data := (&mem.KVLog{Txn: meta}).MustMarshal()
+	record := mlog.GetLogRecord(len(data))
+	record.Type = logservicepb.UserRecord
+	record.Data = data
+	_, err := mlog.Append(context.Background(), record)
+	require.NoError(t, err)
+
+	sender := service.NewTestSender()
+	t.Cleanup(func() { require.NoError(t, sender.Close()) })
+	txnService := service.NewTestTxnServiceWithLog(
+		t, 1, sender, service.NewTestClock(0), mlog)
+	baseCluster := clusterservice.NewMOCluster(
+		"dn-uuid", nil, time.Hour,
+		clusterservice.WithDisableRefresh(),
+		clusterservice.WithServices(nil, nil),
+	)
+	t.Cleanup(baseCluster.Close)
+	cluster := &signalingRecoveryCluster{
+		MOCluster: baseCluster,
+		entered:   make(chan struct{}),
+	}
+	runtime.ServiceRuntime("dn-uuid").SetGlobalVariables(runtime.ClusterService, cluster)
+
+	r := newReplica(newTestTNShard(1, 2, 3), s.rt)
+	s.replicas.Store(r.shard.ShardID, r)
+	require.NoError(t, s.stopper.RunTask(func(context.Context) {
+		_ = r.start(txnService)
+	}))
+	select {
+	case <-cluster.entered:
+	case <-time.After(time.Second):
+		t.Fatal("recovery did not reach the missing participant route wait")
+	}
+
+	closed := make(chan error, 1)
+	go func() { closed <- s.Close() }()
+	select {
+	case err := <-closed:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		require.NoError(t, r.close(false))
+		require.NoError(t, <-closed)
+		t.Fatal("store Close waited for the stopper before canceling recovery")
+	}
+}
+
+type neverReadyHAKeeperClient struct {
+	*testHAKeeperClient
+	called chan struct{}
+	once   sync.Once
+}
+
+func (c *neverReadyHAKeeperClient) GetClusterDetails(
+	context.Context,
+) (logservicepb.ClusterDetails, error) {
+	c.once.Do(func() { close(c.called) })
+	return logservicepb.ClusterDetails{}, errors.New("injected hakeeper failure")
+}
+
+func TestStoreCloseWhenClusterNeverBecomesReady(t *testing.T) {
+	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
+	runtime.SetupServiceBasedRuntime("u1", runtime.ServiceRuntime(""))
+	fsFactory := func(name string) (*fileservice.FileServices, error) {
+		fs, err := fileservice.NewMemoryFS(name, fileservice.DisabledCacheConfig, nil)
+		if err != nil {
+			return nil, err
+		}
+		return fileservice.NewFileServices(name, fs)
+	}
+	hakeeper := &neverReadyHAKeeperClient{
+		testHAKeeperClient: newTestHAKeeperClient(),
+		called:             make(chan struct{}),
+	}
+	s := newTestStore(
+		t,
+		"u1",
+		fsFactory,
+		WithHAKeeperClientFactory(func() (logservice.TNHAKeeperClient, error) {
+			return hakeeper, nil
+		}),
+		WithLogServiceClientFactory(func(metadata.TNShard) (logservice.Client, error) {
+			return mem.NewMemLog(), nil
+		}),
+		WithConfigAdjust(func(c *Config) {
+			c.Cluster.RefreshInterval.Duration = 10 * time.Millisecond
+			c.HAKeeper.HeatbeatInterval.Duration = 10 * time.Millisecond
+			c.Txn.Storage.Backend = StorageMEMKV
+		}),
+	)
+	require.NoError(t, s.Start())
+	select {
+	case <-hakeeper.called:
+	case <-time.After(time.Second):
+		t.Fatal("cluster refresh did not start")
+	}
+
+	closed := make(chan error, 1)
+	go func() { closed <- s.Close() }()
+	select {
+	case err := <-closed:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("store Close waited forever for cluster readiness")
+	}
+}
+
+type blockingCancelRecoveryTxnService struct {
+	service.TxnService
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (s *blockingCancelRecoveryTxnService) Start() error {
+	return nil
+}
+
+func (s *blockingCancelRecoveryTxnService) CancelRecovery() {
+	s.once.Do(func() { close(s.entered) })
+	<-s.release
+}
+
+func (s *blockingCancelRecoveryTxnService) Close(bool) error {
+	return nil
+}
+
+func TestStoreCloseCancelsLateReplicaRecoveryFromStopper(t *testing.T) {
+	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
+	runtime.SetupServiceBasedRuntime("u1", runtime.ServiceRuntime(""))
+	fsFactory := func(name string) (*fileservice.FileServices, error) {
+		fs, err := fileservice.NewMemoryFS(name, fileservice.DisabledCacheConfig, nil)
+		if err != nil {
+			return nil, err
+		}
+		return fileservice.NewFileServices(name, fs)
+	}
+	s := newTestStore(
+		t,
+		"u1",
+		fsFactory,
+		WithHAKeeperClientFactory(func() (logservice.TNHAKeeperClient, error) {
+			return newTestHAKeeperClient(), nil
+		}),
+		WithLogServiceClientFactory(func(metadata.TNShard) (logservice.Client, error) {
+			return mem.NewMemLog(), nil
+		}),
+		WithConfigAdjust(func(c *Config) {
+			c.HAKeeper.HeatbeatInterval.Duration = 10 * time.Millisecond
+			c.Txn.Storage.Backend = StorageMEMKV
+		}),
+	)
+	require.NoError(t, s.Start())
+
+	shard := newTestTNShard(1, 2, 3)
+	barrierService := &blockingCancelRecoveryTxnService{
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	initial := newReplica(shard, s.rt)
+	require.NoError(t, initial.start(barrierService))
+	s.replicas.Store(shard.ShardID, initial)
+
+	closed := make(chan error, 1)
+	go func() { closed <- s.Close() }()
+	select {
+	case <-barrierService.entered:
+	case <-time.After(time.Second):
+		t.Fatal("store Close did not enter the initial replica cancellation")
+	}
+
+	lateService := &closeUnblocksStartTxnService{
+		started: make(chan struct{}),
+		closed:  make(chan struct{}),
+	}
+	late := newReplica(shard, s.rt)
+	require.True(t, s.replicas.CompareAndSwap(shard.ShardID, initial, late))
+	require.NoError(t, s.stopper.RunTask(func(stopperCtx context.Context) {
+		stopCancelPropagation := propagateReplicaStopperCancellation(stopperCtx, late)
+		defer stopCancelPropagation()
+		_ = late.start(lateService)
+	}))
+	select {
+	case <-lateService.started:
+	case <-time.After(time.Second):
+		t.Fatal("late replica did not block in Start")
+	}
+
+	close(barrierService.release)
+	select {
+	case err := <-closed:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		late.cancelRecovery()
+		require.ErrorIs(t, <-closed, context.Canceled)
+		t.Fatal("store Close did not cancel recovery for a replica registered after its initial Range")
+	}
+}
+
+func TestHeartbeatOnlyReportsStartedReplicas(t *testing.T) {
+	runTNStoreTest(t, func(s *store) {
+		r := newReplica(newTestTNShard(1, 2, 3), s.rt)
+		s.replicas.Store(r.shard.ShardID, r)
+		require.Empty(t, s.getTNShardInfo())
+
+		sender := service.NewTestSender()
+		t.Cleanup(func() { require.NoError(t, sender.Close()) })
+		txnService := service.NewTestTxnService(t, 1, sender, service.NewTestClock(1))
+		require.NoError(t, r.start(txnService))
+		require.Equal(t, []logservicepb.TNShardInfo{{
+			ShardID: 1, ReplicaID: 2,
+		}}, s.getTNShardInfo())
+	})
+}
+
+func TestReplicaCreateRetryStopsOnStoreStop(t *testing.T) {
 	oldInterval := retryCreateStorageInterval
-	retryCreateStorageInterval = time.Second
+	retryCreateStorageInterval = time.Hour
 	t.Cleanup(func() { retryCreateStorageInterval = oldInterval })
 
 	createAttempted := make(chan struct{}, 1)
+	var createAttempts atomic.Int32
 	runTNStoreTest(t, func(s *store) {
 		s.options.logServiceClientFactory = func(metadata.TNShard) (logservice.Client, error) {
+			createAttempts.Add(1)
 			select {
 			case createAttempted <- struct{}{}:
 			default:
@@ -273,13 +577,21 @@ func TestReplicaCreateRetryStopsPromptly(t *testing.T) {
 		require.NoError(t, s.StartTNReplica(newTestTNShard(102, 202, 302)))
 		select {
 		case <-createAttempted:
-		case <-time.After(time.Second):
+		case <-time.After(storeTestTimeout):
 			t.Fatal("storage creation was not attempted")
 		}
 
-		start := time.Now()
-		s.stopper.Stop()
-		require.Less(t, time.Since(start), 500*time.Millisecond)
+		stopped := make(chan struct{})
+		go func() {
+			s.stopper.Stop()
+			close(stopped)
+		}()
+		select {
+		case <-stopped:
+		case <-time.After(storeTestTimeout):
+			t.Fatal("store stop did not cancel replica creation retry")
+		}
+		require.Equal(t, int32(1), createAttempts.Load())
 	})
 }
 
@@ -427,7 +739,7 @@ func newTestStore(
 
 	rt := runtime.NewRuntime(
 		metadata.ServiceType_TN,
-		"",
+		uuid,
 		logutil.Adjust(nil),
 		runtime.WithClock(
 			clock.NewHLCClock(
