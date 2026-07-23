@@ -665,12 +665,12 @@ from grouping_order
 group by region, amount with rollup
 order by grouping(region) + amount;
 
--- alias shadowing: the ORDER BY `product` is the alias for `region`, so the
--- expression differs from the select-list one (source column) and is rejected.
-select distinct region as product, grouping(region) + product as sort_key
+-- nested ORDER BY names prefer source columns; the source amount is not a
+-- visible DISTINCT output and must not resolve through the same-named alias.
+select distinct grouping(region), abs(amount) as amount
 from grouping_order
-group by region, product with rollup
-order by grouping(region) + product;
+group by region, product, amount with rollup
+order by grouping(region) + amount;
 
 -- DISTINCT over GROUPING SETS must de-duplicate globally across every generated
 -- grouping-set branch, the same as ROLLUP.
@@ -719,6 +719,24 @@ from grouping_vector
 group by cube(v64)
 order by v64;
 drop table grouping_vector;
+
+-- DISTINCT must preserve subtotal and grand-total rows for NOT NULL inputs.
+drop table if exists grouping_not_null;
+create table grouping_not_null (a int not null, b int not null);
+insert into grouping_not_null values (1, 10), (2, 20);
+select distinct a, grouping(a) as ga
+from grouping_not_null
+group by a with rollup
+order by ga, a;
+select distinct a, b, grouping(a) as ga, grouping(b) as gb
+from grouping_not_null
+group by cube(a, b)
+order by ga, gb, a, b;
+select distinct a, b, grouping(a) as ga, grouping(b) as gb
+from grouping_not_null
+group by grouping sets ((a, b), (a), ())
+order by ga, gb, a, b;
+drop table grouping_not_null;
 
 drop table grouping_order;
 -- rollup with window functions should rank over the full rollup result

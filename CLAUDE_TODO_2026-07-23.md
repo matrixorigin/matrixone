@@ -102,6 +102,29 @@
 - 运行 build、vet、覆盖率、静态检查和 `git diff --check`。
 - 完成全差异 self-review 后提交并正常推送，不 force push，不修改 GitHub thread。
 
+## PR #25335 第八轮 review 修复
+
+### 有效问题
+
+1. grouping-set 分支经 UNION ALL 后才用 `IF(GROUPING(project), NULL, project)` 物化 NULL，
+   grouping provenance 已越过分支边界，NOT NULL 输入的小计和总计行会被丢弃。
+2. alias identity 占位绑定无条件采用 AliasBeforeColumn，绕过普通 DISTINCT 在嵌套表达式中的
+   源列优先规则，并未拒绝重复 alias。
+
+### 修复方案
+
+1. 在每个 ROLLUP/CUBE/GROUPING SETS 分支仍持有 grouping 标记时标准化可见 projection，
+   然后 UNION ALL，最后仅执行一次全局 DISTINCT。
+2. alias 占位只应用于唯一且不存在同名源列的 alias；重复 alias 返回与普通 DISTINCT 相同的
+   歧义错误，源列遮蔽继续绑定源列并接受普通 projection 范围校验。
+3. 增加 NOT NULL 输入的 ROLLUP/CUBE/GROUPING SETS 执行回归，以及源列遮蔽和重复 alias
+   的普通 DISTINCT/grouping-set parity planner 回归。
+
+### 验证
+
+- 运行 planner 定向及全量 CGo UT，真实 rollup BVT，build、覆盖率、静态检查和 self-review。
+- 提交并正常推送，不 force push，不修改 GitHub thread。
+
 ## PR #25335 第六轮 review 修复
 
 ### 有效问题

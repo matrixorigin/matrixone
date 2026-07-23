@@ -1020,10 +1020,10 @@ gr	amount
 0	7
 0	10
 0	20
-select distinct region as product, grouping(region) + product as sort_key
+select distinct grouping(region), abs(amount) as amount
 from grouping_order
-group by region, product with rollup
-order by grouping(region) + product;
+group by region, product, amount with rollup
+order by grouping(region) + amount;
 SQL syntax error: for SELECT DISTINCT, ORDER BY expressions must appear in select list
 select distinct region, grouping(region) as gr
 from grouping_order
@@ -1118,6 +1118,40 @@ null
 [1, 2, 3]
 [4, 5, 6]
 drop table grouping_vector;
+drop table if exists grouping_not_null;
+create table grouping_not_null (a int not null, b int not null);
+insert into grouping_not_null values (1, 10), (2, 20);
+select distinct a, grouping(a) as ga
+from grouping_not_null
+group by a with rollup
+order by ga, a;
+a	ga
+1	0
+2	0
+null	1
+select distinct a, b, grouping(a) as ga, grouping(b) as gb
+from grouping_not_null
+group by cube(a, b)
+order by ga, gb, a, b;
+a	b	ga	gb
+1	10	0	0
+2	20	0	0
+1	null	0	1
+2	null	0	1
+null	10	1	0
+null	20	1	0
+null	null	1	1
+select distinct a, b, grouping(a) as ga, grouping(b) as gb
+from grouping_not_null
+group by grouping sets ((a, b), (a), ())
+order by ga, gb, a, b;
+a	b	ga	gb
+1	10	0	0
+2	20	0	0
+1	null	0	1
+2	null	0	1
+null	null	1	1
+drop table grouping_not_null;
 drop table grouping_order;
 create table rollup_window_sales(region varchar(20), product varchar(20), qty int);
 insert into rollup_window_sales values

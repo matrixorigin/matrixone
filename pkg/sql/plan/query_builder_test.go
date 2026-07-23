@@ -4523,24 +4523,38 @@ func TestGroupingSetDistinctOrderByStarExpansion(t *testing.T) {
 
 // TestGroupingSetDistinctOrderByAliasShadowing verifies clause-correct alias
 // semantics when matching a DISTINCT ORDER BY expression against the visible
-// select list. In `select distinct a as b, grouping(a) + b ... order by
-// grouping(a) + b`, the select-list `b` is the source column (NoAlias binding)
-// while the ORDER BY `b` is the alias for `a`, so the two expressions differ
-// and the ORDER BY must be rejected instead of silently matching.
+// select list. Nested names prefer source columns over aliases, matching the
+// ordinary distinctOrderBinder.
 func TestGroupingSetDistinctOrderByAliasShadowing(t *testing.T) {
 	mock := NewMockOptimizer(false)
 
-	_, err := runOneStmt(mock, t,
+	p, err := runOneStmt(mock, t,
 		"select distinct a as b, grouping(a) + b from select_test.bind_select group by a, b with rollup order by grouping(a) + b")
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "for SELECT DISTINCT, ORDER BY expressions must appear in select list")
+	require.NoError(t, err)
+	require.Equal(t, int32(1), firstSortColPos(t, p))
 
 	// Sanity: without shadowing the same shape must still be accepted, sorting
 	// by the matched visible column (0-based ColPos 1).
-	p, err := runOneStmt(mock, t,
+	p, err = runOneStmt(mock, t,
 		"select distinct a, grouping(a) + b from select_test.bind_select group by a, b with rollup order by grouping(a) + b")
 	require.NoError(t, err)
 	require.Equal(t, int32(1), firstSortColPos(t, p))
+}
+
+func TestGroupingSetDistinctOrderAliasResolutionParity(t *testing.T) {
+	mock := NewMockOptimizer(true)
+
+	_, err := runOneStmt(mock, t,
+		"select distinct grouping(a), abs(b) as b from select_test.bind_select "+
+			"group by a, b with rollup order by grouping(a) + b")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "for SELECT DISTINCT, ORDER BY expressions must appear in select list")
+
+	_, err = runOneStmt(mock, t,
+		"select distinct grouping(a), abs(b) as x, -abs(b) as x from select_test.bind_select "+
+			"group by a, b with rollup order by grouping(a) + x")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "Column 'x' in order clause is ambiguous")
 }
 
 // TestGroupingSetDistinctOrderByBetweenStars verifies that a DISTINCT ORDER BY

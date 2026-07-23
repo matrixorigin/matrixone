@@ -2935,6 +2935,7 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 	for idx, sltStmt := range selectStmts {
 		subCtx := NewBindContext(builder, ctx)
 		subCtx.numericProjectionTypes = setProjectionTypes
+		subCtx.normalizeGroupingSetDistinct = distinct && groupingOrderResolve != nil
 		savedIsForUpdate := builder.isForUpdate
 		if slt, ok := sltStmt.(*tree.Select); ok {
 			nodeID, err = builder.bindSelect(slt, subCtx, isRoot)
@@ -3235,12 +3236,6 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 		ctx.projects = ctx.projects[:resultLen]
 	}
 	projectList := ctx.projects
-	if distinct {
-		projectList, err = normalizeGroupingSetDistinctProjects(builder.GetContext(), projectList)
-		if err != nil {
-			return 0, err
-		}
-	}
 	lastNodeID = builder.appendNode(&plan.Node{
 		NodeType:    plan.Node_PROJECT,
 		ProjectList: projectList,
@@ -3252,9 +3247,9 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 	// grouping-set UNION ALL). Placed after PROJECT and before SORT, mirroring the
 	// ordinary select path; the grouping-set DISTINCT path adds no hidden order
 	// key, so PROJECT emits exactly the resultLen visible columns being de-duped.
-	// The project also materializes grouping NULLs as ordinary SQL NULLs; without
-	// that boundary, the hash key retains grouping provenance and visible
-	// duplicates from different grouping-set branches do not collapse.
+	// Each grouping-set branch materializes grouping NULLs before UNION ALL while
+	// its grouping provenance is still available. This final aggregate therefore
+	// sees ordinary values and performs one global visible-tuple de-duplication.
 	if distinct {
 		lastNodeID = builder.appendDistinctNode(ctx, lastNodeID)
 	}
@@ -4059,6 +4054,17 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 	}
 
 	// append PROJECT node
+	if ctx.normalizeGroupingSetDistinct {
+		normalized, normalizeErr := normalizeGroupingSetDistinctProjects(
+			builder.GetContext(),
+			ctx.projects[:resultLen],
+		)
+		if normalizeErr != nil {
+			err = normalizeErr
+			return
+		}
+		ctx.projects = append(normalized, ctx.projects[resultLen:]...)
+	}
 	if nodeID, err = builder.appendProjectionNode(ctx, nodeID, notCacheable); err != nil {
 		return
 	}
@@ -6124,12 +6130,19 @@ func normalizeGroupingSetDistinctProjects(
 ) ([]*plan.Expr, error) {
 	normalized := make([]*plan.Expr, len(projects))
 	for i, project := range projects {
+		if fn := project.GetF(); fn != nil && fn.Func != nil &&
+			strings.EqualFold(fn.Func.ObjName, "grouping") {
+			normalized[i] = DeepCopyExpr(project)
+			continue
+		}
 		groupingExpr, err := BindFuncExprImplByPlanExpr(ctx, "grouping", []*plan.Expr{DeepCopyExpr(project)})
 		if err != nil {
 			return nil, err
 		}
+		nullType := project.Typ
+		nullType.NotNullable = false
 		nullExpr := &plan.Expr{
-			Typ: project.Typ,
+			Typ: nullType,
 			Expr: &plan.Expr_Lit{
 				Lit: &plan.Literal{Isnull: true},
 			},
@@ -6142,6 +6155,7 @@ func normalizeGroupingSetDistinctProjects(
 		if err != nil {
 			return nil, err
 		}
+		normalized[i].Typ.NotNullable = false
 	}
 	return normalized, nil
 }
@@ -6344,49 +6358,26 @@ func qualifyBoundGroupingOrderExpr(ctx *BindContext, astExpr tree.Expr) (tree.Ex
 		return nil, bindErr
 	}
 
-	// The NUL-prefixed name cannot collide with a user-written table alias.
-	const projectionTable = "\x00grouping_distinct_output"
-	binding, ok := ctx.bindingByTable[projectionTable]
-	if !ok {
-		binding = &Binding{
-			tag:            ctx.projectTag,
-			table:          projectionTable,
-			cols:           make([]string, len(ctx.projects)),
-			types:          make([]*plan.Type, len(ctx.projects)),
-			colIdByName:    make(map[string]int32, len(ctx.projects)),
-			colIsHidden:    make([]bool, len(ctx.projects)),
-			refCnts:        make([]uint, len(ctx.projects)),
-			defaults:       make([]string, len(ctx.projects)),
-			originCols:     make([]string, len(ctx.projects)),
-			isClusterTable: false,
+	walkGroupingSetOrderByExpr(qualified, func(expr tree.Expr) bool {
+		if fn, ok := expr.(*tree.FuncExpr); ok && fn.FuncName != nil &&
+			strings.EqualFold(fn.FuncName.Origin(), "grouping") {
+			return false
 		}
-		for i := range ctx.projects {
-			colName := fmt.Sprintf("__col_%d", i)
-			binding.cols[i] = colName
-			binding.originCols[i] = colName
-			binding.types[i] = DeepCopyType(&ctx.projects[i].Typ)
-			binding.colIdByName[colName] = int32(i)
+		name, ok := expr.(*tree.UnresolvedName)
+		if !ok || name.Star || name.NumParts != 1 {
+			return true
 		}
-		ctx.bindingByTable[projectionTable] = binding
+		col := name.ColName()
+		if _, sourceColumn := ctx.bindingByCol[col]; !sourceColumn && ctx.aliasFrequency[col] > 1 {
+			bindErr = moerr.NewInvalidInputf(ctx.binder.GetContext(), "Column '%s' in order clause is ambiguous", col)
+			return false
+		}
+		return true
+	})
+	if bindErr != nil {
+		return nil, bindErr
 	}
-
-	originalAliasExprs := make(map[*aliasItem]tree.Expr, len(ctx.aliasMap))
-	for _, item := range ctx.aliasMap {
-		if item == nil || item.idx < 0 || int(item.idx) >= len(binding.cols) {
-			continue
-		}
-		originalAliasExprs[item] = item.astExpr
-		item.astExpr = tree.NewUnresolvedName(
-			tree.NewCStr(projectionTable, ctx.lower),
-			tree.NewCStr(binding.cols[item.idx], 1),
-		)
-	}
-	defer func() {
-		for item, original := range originalAliasExprs {
-			item.astExpr = original
-		}
-	}()
-	return ctx.qualifyColumnNames(qualified, AliasBeforeColumn)
+	return ctx.qualifyColumnNames(qualified, NoAlias)
 }
 
 func cloneTreeExpr(astExpr tree.Expr) tree.Expr {
