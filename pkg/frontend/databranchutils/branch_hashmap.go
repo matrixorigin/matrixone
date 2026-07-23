@@ -420,6 +420,17 @@ func (bh *branchHashmap) flushPreparedEntries(shardEntries [][]int, chunk []prep
 		shardIdx := int(hash % uint64(bh.shardCount))
 		shardEntries[shardIdx] = append(shardEntries[shardIdx], i)
 	}
+
+	bh.metaMu.RLock()
+	if bh.closed {
+		bh.metaMu.RUnlock()
+		for range entries {
+			block.release()
+		}
+		return moerr.NewInternalErrorNoCtx("branchHashmap is closed")
+	}
+	defer bh.metaMu.RUnlock()
+
 	for idx, entryIdxs := range shardEntries {
 		if len(entryIdxs) == 0 {
 			continue
