@@ -244,6 +244,10 @@ GOEXPERIMENT_OPT ?=
 ifeq ("$(UNAME_M)", "x86_64")
   ARCHSIMD ?= 1
   ifeq ($(ARCHSIMD),1)
+	# DECISION (owner: cpegeric): raising the default x86 baseline to v3 (Haswell:
+	# AVX2/FMA/BMI) is intentional. The narrow-vector (bf16/f16/int8/uint8) SIMD
+	# kernels in pkg/vectorindex/metric require it, and the Go simd experiment
+	# mandates a v3 baseline. Pre-Haswell CPUs must build with `make ARCHSIMD=0`.
 	GOAMD64 ?= v3
 	GOEXPERIMENT_SIMD ?= simd
   endif
