@@ -52,6 +52,23 @@ func TestCheckGeometryKeyPartTypes(t *testing.T) {
 	require.Contains(t, err.Error(), "GEOMETRY column 'g' cannot be in unique index")
 }
 
+// TestCheckVectorPrimaryKeyPartTypes verifies ALTER ... ADD PRIMARY KEY rejects
+// every vector element type — including the narrow types (bf16/f16/int8/uint8),
+// which previously slipped through admission and hit the txn duplicate checker's
+// default panic on insert.
+func TestCheckVectorPrimaryKeyPartTypes(t *testing.T) {
+	for _, id := range []types.T{
+		types.T_array_float32, types.T_array_float64,
+		types.T_array_bf16, types.T_array_float16,
+		types.T_array_int8, types.T_array_uint8,
+	} {
+		require.True(t, id.IsArrayRelate(), "%s should be array-related", id)
+		err := checkPrimaryKeyPartType(context.Background(), plan.Type{Id: int32(id)}, "v")
+		require.Error(t, err, "type %s must be rejected in primary key", id)
+		require.Contains(t, err.Error(), "VECTOR column 'v' cannot be in primary key")
+	}
+}
+
 func TestCheckIndexedColumnTypeChangeGeometry(t *testing.T) {
 	tableDef := &TableDef{
 		Pkey: &plan.PrimaryKeyDef{Names: []string{"id"}, PkeyColName: "id"},

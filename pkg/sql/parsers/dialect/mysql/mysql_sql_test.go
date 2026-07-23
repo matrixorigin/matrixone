@@ -2287,6 +2287,9 @@ var (
 			input:  "create index idx using ivfflat on A (a) LISTS 10 op_type 'vector_l2_ops' kmeans_train_percent 5 kmeans_max_iteration 30",
 			output: "create index idx using ivfflat on a (a) LISTS 10 OP_TYPE vector_l2_ops KMEANS_TRAIN_PERCENT 5 KMEANS_MAX_ITERATION 30 ",
 		}, {
+			input:  "create index idx using ivfpq on A (a) LISTS 10 op_type 'vector_l2_ops' quantization 'int8' quantizer_train_limit 5000",
+			output: "create index idx using ivfpq on a (a) LISTS 10 OP_TYPE vector_l2_ops QUANTIZATION int8 QUANTIZER_TRAIN_LIMIT 5000 ",
+		}, {
 			input:  "create index idx using hnsw on A (a) M 16 max_index_capacity = 500000",
 			output: "create index idx using hnsw on a (a) M 16 MAX_INDEX_CAPACITY 500000 ",
 		}, {
@@ -3817,6 +3820,50 @@ var (
 		{
 			input:  "create table t1 (id bigint primary key, embedding vecf32(3), payload json, tags array(varchar(20)))",
 			output: "create table t1 (id bigint primary key, embedding vecf32(3), payload json, tags array(varchar(20)))",
+		},
+		{
+			input:  "create table t1(a vecbf16(3), b vecf16(3), c vecint8(3))",
+			output: "create table t1 (a vecbf16(3), b vecf16(3), c vecint8(3))",
+		},
+		{
+			input:  "create table t1(a vecbf16(128), b vecf16(65535), c vecint8(1))",
+			output: "create table t1 (a vecbf16(128), b vecf16(65535), c vecint8(1))",
+		},
+		{
+			input:  "create table t1(a vecuint8(3))",
+			output: "create table t1 (a vecuint8(3))",
+		},
+		{
+			input:  "create table t1(a vecuint8(128), b vecuint8(65535), c vecuint8(1))",
+			output: "create table t1 (a vecuint8(128), b vecuint8(65535), c vecuint8(1))",
+		},
+		{
+			input:  "select cast('[1,2,3]' as vecbf16(3))",
+			output: "select cast([1,2,3] as vecbf16(3))",
+		},
+		{
+			input:  "select cast('[1,2,3]' as vecf16(3))",
+			output: "select cast([1,2,3] as vecf16(3))",
+		},
+		{
+			input:  "select cast('[1,2,3]' as vecint8(3))",
+			output: "select cast([1,2,3] as vecint8(3))",
+		},
+		{
+			input:  "select cast(b as vecint8(3)) from t1",
+			output: "select cast(b as vecint8(3)) from t1",
+		},
+		{
+			input:  "select cast('[1,2,3]' as vecuint8(3))",
+			output: "select cast([1,2,3] as vecuint8(3))",
+		},
+		{
+			input:  "select cast(b as vecuint8(3)) from t1",
+			output: "select cast(b as vecuint8(3)) from t1",
+		},
+		{
+			input:  "select l2_distance(a, b) from t1",
+			output: "select l2_distance(a, b) from t1",
 		},
 		{
 			input:  "alter table tbl1 drop constraint fk_name",
