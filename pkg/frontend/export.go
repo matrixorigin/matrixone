@@ -496,6 +496,24 @@ func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index i
 				arrStr := types.BytesToArrayToString[float64](vec.GetBytesAt(i))
 				value := addEscapeToString(util2.UnsafeStringToBytes(arrStr), closeby)
 				formatOutputString(ep, value, symbol[j], closeby, true, buffer)
+			case types.T_array_bf16:
+				arrStr := types.BytesToArrayToString[types.BF16](vec.GetBytesAt(i))
+				value := addEscapeToString(util2.UnsafeStringToBytes(arrStr), closeby)
+				formatOutputString(ep, value, symbol[j], closeby, true, buffer)
+			case types.T_array_float16:
+				arrStr := types.BytesToArrayToString[types.Float16](vec.GetBytesAt(i))
+				value := addEscapeToString(util2.UnsafeStringToBytes(arrStr), closeby)
+				formatOutputString(ep, value, symbol[j], closeby, true, buffer)
+			case types.T_array_int8:
+				arrStr := types.BytesToArrayToString[int8](vec.GetBytesAt(i))
+				value := addEscapeToString(util2.UnsafeStringToBytes(arrStr), closeby)
+				formatOutputString(ep, value, symbol[j], closeby, true, buffer)
+			case types.T_array_uint8:
+				// []uint8 aliases []byte; BytesToArrayToString[uint8] renders the values
+				// as an array string ("[1, 2, 3]"), not the raw bytes as a string.
+				arrStr := types.BytesToArrayToString[uint8](vec.GetBytesAt(i))
+				value := addEscapeToString(util2.UnsafeStringToBytes(arrStr), closeby)
+				formatOutputString(ep, value, symbol[j], closeby, true, buffer)
 			case types.T_date:
 				val := vector.GetFixedAtNoTypeCheck[types.Date](vec, i)
 				formatOutputString(ep, []byte(val.String()), symbol[j], closeby, flag[j], buffer)
@@ -1225,6 +1243,23 @@ func vectorValueToJSON(vec *vector.Vector, i int, ss *Session, backSes *backSess
 		return types.BytesToArray[float32](vec.GetBytesAt(i)), nil
 	case types.T_array_float64:
 		return types.BytesToArray[float64](vec.GetBytesAt(i)), nil
+	case types.T_array_bf16:
+		// bf16/f16 are uint16-backed; widen to float32 so JSON emits their float values
+		// (a raw []BF16 would marshal the uint16 bit patterns).
+		return types.BF16ToFloat32Slice(types.BytesToArray[types.BF16](vec.GetBytesAt(i))), nil
+	case types.T_array_float16:
+		return types.Float16ToFloat32Slice(types.BytesToArray[types.Float16](vec.GetBytesAt(i))), nil
+	case types.T_array_int8:
+		return types.BytesToArray[int8](vec.GetBytesAt(i)), nil
+	case types.T_array_uint8:
+		// []uint8 aliases []byte and json.Marshal would base64-encode it; widen to
+		// []uint16 so it serializes as a JSON number array like the other vectors.
+		src := types.BytesToArray[uint8](vec.GetBytesAt(i))
+		out := make([]uint16, len(src))
+		for k, v := range src {
+			out[k] = uint16(v)
+		}
+		return out, nil
 	case types.T_date:
 		val := vector.GetFixedAtNoTypeCheck[types.Date](vec, i)
 		return val.String(), nil
