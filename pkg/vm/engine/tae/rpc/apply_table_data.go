@@ -211,21 +211,17 @@ func (a *ApplyTableDataArg) Run() (err error) {
 			panic(fmt.Sprintf("invalid object type: %d", objTypes[i]))
 		}
 		stats := objectio.ObjectStats(idVec.GetBytesAt(i))
+		var createLiveAppendable bool
+		if stats, createLiveAppendable, err = prepareObjectStatsForApply(stats, isPersisted[i]); err != nil {
+			return
+		}
 		opt := &objectio.CreateObjOpt{
 			Stats:       &stats,
 			IsTombstone: isTombstone,
 		}
 		tableEntry := a.rel.GetMeta().(*catalog.TableEntry)
 		var obj handle.Object
-		if stats.GetAppendable() {
-			if stats.Rows() > 0 {
-				err = moerr.NewInternalErrorNoCtxf(
-					"appendable object %s has non-empty row count %d",
-					stats.ObjectName().String(),
-					stats.Rows(),
-				)
-				return
-			}
+		if createLiveAppendable {
 			if obj, err = a.rel.CreateObjectWithOpt(isTombstone, opt); err != nil {
 				return
 			}
@@ -281,6 +277,32 @@ func (a *ApplyTableDataArg) Run() (err error) {
 	}
 	return
 
+}
+
+func prepareObjectStatsForApply(
+	stats objectio.ObjectStats,
+	isPersisted bool,
+) (prepared objectio.ObjectStats, createLiveAppendable bool, err error) {
+	prepared = stats
+	if !stats.GetAppendable() {
+		return
+	}
+	if isPersisted {
+		// A flushed appendable object is immutable file-backed history. Restore
+		// it as a non-appendable catalog object so it uses a persisted node and
+		// remains transactional for rollback and WAL replay.
+		objectio.SetObjectStatsAppendable(&prepared, false)
+		return prepared, false, nil
+	}
+	if stats.Rows() > 0 {
+		err = moerr.NewInternalErrorNoCtxf(
+			"live appendable object %s has non-empty row count %d",
+			stats.ObjectName().String(),
+			stats.Rows(),
+		)
+		return
+	}
+	return prepared, true, nil
 }
 
 func (a *ApplyTableDataArg) createDatabase() (err error) {

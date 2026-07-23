@@ -16,6 +16,7 @@ package db
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -273,45 +274,53 @@ func (c *Controller) handleToReplayCmd(cmd *controlCmd) {
 	)
 
 	defer func() {
-		err2 := err
-		if err2 != nil {
-			err = rollbackSteps.Apply("DB-SwitchToReplay-Rollback", true, 1)
-		}
-		if err2 != nil {
+		switchErr := err
+		var rollbackErr error
+		if switchErr != nil {
+			rollbackErr = rollbackSteps.Apply("DB-SwitchToReplay-Rollback", true, 1)
+			err = switchErr
 			logger = logutil.Error
 		}
-		if err != nil {
+		if rollbackErr != nil {
+			err = errors.Join(switchErr, rollbackErr)
 			logger = logutil.Fatal
 		}
 		logger(
 			"DB-SwitchToReplay-Done",
 			zap.String("cmd", cmd.String()),
 			zap.Duration("duration", time.Since(start)),
-			zap.Any("rollback-error", err2),
+			zap.Error(rollbackErr),
 			zap.Error(err),
 		)
 		cmd.setError(err)
 	}()
 
-	// 1. stop the merge scheduler
-	c.db.MergeScheduler.Stop()
-	rollbackSteps.Add("stop merge scheduler", func() error {
-		c.db.Catalog.SetMergeNotifier(c.db.MergeScheduler)
-		c.db.MergeScheduler.Start()
-		return nil
-	})
-	// TODO
+	// 1. switch the checkpoint|diskcleaner to replay mode
 
-	// 2. switch the checkpoint|diskcleaner to replay mode
-
-	// 2.1 remove GC disk cron job. no new GC job will be issued from now on
+	// 1.1 remove GC disk cron job. no new GC job will be issued from now on
+	gcDiskRunning := c.db.CronJobs.GetJob(CronJobs_Name_GCDisk) != nil
+	gcCheckpointRunning := c.db.CronJobs.GetJob(CronJobs_Name_GCCheckpoint) != nil
 	RemoveCronJob(c.db, CronJobs_Name_GCDisk)
 	RemoveCronJob(c.db, CronJobs_Name_GCCheckpoint)
+	rollbackSteps.Add("restore write cron jobs", func() error {
+		if gcDiskRunning {
+			if err := AddCronJob(c.db, CronJobs_Name_GCDisk, true); err != nil {
+				return err
+			}
+		}
+		if gcCheckpointRunning {
+			return AddCronJob(c.db, CronJobs_Name_GCCheckpoint, true)
+		}
+		return nil
+	})
 	// RemoveCronJob(c.db, CronJobs_Name_Scanner)
 	if err = c.db.DiskCleaner.SwitchToReplayMode(ctx); err != nil {
 		// Rollback
 		return
 	}
+	rollbackSteps.Add("switch disk cleaner to write mode", func() error {
+		return c.db.DiskCleaner.SwitchToWriteMode(context.Background())
+	})
 	// 2.x TODO: checkpoint runner
 	flushCfg := c.db.BGFlusher.GetCfg()
 	c.db.BGFlusher.Stop()
@@ -337,13 +346,28 @@ func (c *Controller) handleToReplayCmd(cmd *controlCmd) {
 	// 5. freeze the write requests consumer
 	// TODO
 
-	// 6. switch the txn mode to readonly mode
-	if err = c.db.TxnMgr.SwitchToReadonly(cmd.ctx); err != nil {
+	// 6. Prevent new transactions while the merge scheduler is still draining
+	// catalog notifications from transactions that were already in flight.
+	if err = c.db.TxnMgr.SwitchToReadonly(ctx); err != nil {
 		c.db.TxnMgr.ToWriteMode()
-		// TODO: recover the previous state
 		return
 	}
+	rollbackSteps.Add("switch txn manager to write mode", func() error {
+		c.db.TxnMgr.ToWriteMode()
+		return nil
+	})
+
+	// No transaction can publish another catalog notification after WaitEmpty.
+	// Detach the producer, process every event already queued, and only then stop
+	// the consumer.
 	c.db.Catalog.SetMergeNotifier(nil)
+	c.db.MergeScheduler.Query(nil)
+	c.db.MergeScheduler.Stop()
+	rollbackSteps.Add("start merge scheduler", func() error {
+		c.db.Catalog.SetMergeNotifier(c.db.MergeScheduler)
+		c.db.MergeScheduler.Start()
+		return nil
+	})
 
 	// 7. wait the logtail push queue to be flushed
 	// TODO

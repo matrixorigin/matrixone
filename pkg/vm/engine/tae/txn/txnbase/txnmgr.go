@@ -123,6 +123,51 @@ func (bl *batchTxnCommitListener) OnEndPrepareWAL(txn txnif.AsyncTxn) {
 type TxnStoreFactory = func() txnif.TxnStore
 type TxnFactory = func(*TxnManager, txnif.TxnStore, []byte, types.TS, types.TS) txnif.AsyncTxn
 
+type txnWaiter struct {
+	mu      sync.Mutex
+	count   int
+	emptyCh chan struct{}
+}
+
+func (w *txnWaiter) Add() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.count == 0 {
+		w.emptyCh = make(chan struct{})
+	}
+	w.count++
+}
+
+func (w *txnWaiter) Done() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.count <= 0 {
+		panic("txn waiter: negative transaction count")
+	}
+	w.count--
+	if w.count == 0 {
+		close(w.emptyCh)
+		w.emptyCh = nil
+	}
+}
+
+func (w *txnWaiter) Wait(ctx context.Context) error {
+	w.mu.Lock()
+	if w.count == 0 {
+		w.mu.Unlock()
+		return nil
+	}
+	emptyCh := w.emptyCh
+	w.mu.Unlock()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-emptyCh:
+		return nil
+	}
+}
+
 type TxnManager struct {
 	sm.ClosedState
 	preWalQueue     sm.Queue
@@ -142,8 +187,10 @@ type TxnManager struct {
 		// store all txns
 		store *sync.Map
 
-		// wg is used to wait all txns to be done
-		wg sync.WaitGroup
+		// waiter is used to wait all txns to be done. Unlike sync.WaitGroup,
+		// it supports cancelling a wait and starting a later transaction
+		// generation without leaving a blocked waiter behind.
+		waiter txnWaiter
 
 		// TxnSkipFlag to skip some txn type
 		// 0: skip nothing
@@ -182,7 +229,6 @@ func NewTxnManager(
 		CommitListener:  newBatchCommitListener(),
 	}
 	mgr.txns.store = new(sync.Map)
-	mgr.txns.wg = sync.WaitGroup{}
 	for _, opt := range opts {
 		opt(mgr)
 	}
@@ -344,17 +390,7 @@ func (mgr *TxnManager) StartTxnWithStartTSAndSnapshotTS(
 }
 
 func (mgr *TxnManager) WaitEmpty(ctx context.Context) (err error) {
-	c := make(chan struct{})
-	go func() {
-		mgr.txns.wg.Wait()
-		close(c)
-	}()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-c:
-		return
-	}
+	return mgr.txns.waiter.Wait(ctx)
 }
 
 func (mgr *TxnManager) loadTxn(
@@ -370,7 +406,7 @@ func (mgr *TxnManager) loadAndDeleteTxn(
 	id string,
 ) (txnif.AsyncTxn, bool) {
 	if res, ok := mgr.txns.store.LoadAndDelete(id); ok {
-		mgr.txns.wg.Done()
+		mgr.txns.waiter.Done()
 		return res.(txnif.AsyncTxn), true
 	}
 	return nil, false
@@ -383,11 +419,11 @@ func (mgr *TxnManager) loadAndDeleteTxn(
 func (mgr *TxnManager) storeTxn(
 	newTxn txnif.AsyncTxn, flag TxnFlag,
 ) (offline bool) {
-	mgr.txns.wg.Add(1)
+	mgr.txns.waiter.Add()
 
 	skipFlags := TxnSkipFlag(mgr.txns.skipFlags.Load())
 	if skipFlags.Skip(flag) {
-		mgr.txns.wg.Done()
+		mgr.txns.waiter.Done()
 		offline = true
 		return
 	}
@@ -401,7 +437,7 @@ func (mgr *TxnManager) storeTxn(
 func (mgr *TxnManager) loadOrStoreTxn(
 	newTxn txnif.AsyncTxn, flag TxnFlag,
 ) (retTxn txnif.AsyncTxn, loaded bool, offline bool) {
-	mgr.txns.wg.Add(1)
+	mgr.txns.waiter.Add()
 
 	skipFlags := TxnSkipFlag(mgr.txns.skipFlags.Load())
 	if skipFlags.Skip(flag) {
@@ -412,6 +448,7 @@ func (mgr *TxnManager) loadOrStoreTxn(
 		newTxn.GetID(), newTxn,
 	)
 	if loaded {
+		mgr.txns.waiter.Done()
 		retTxn = actual.(txnif.AsyncTxn)
 		offline = retTxn.GetStore().IsOffline()
 	} else {

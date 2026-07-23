@@ -15,6 +15,7 @@
 package txnbase
 
 import (
+	"context"
 	"errors"
 	"sync"
 	"testing"
@@ -23,6 +24,60 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/require"
 )
+
+func TestTxnWaiterCancelAndReuse(t *testing.T) {
+	var waiter txnWaiter
+	waiter.Add()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	require.ErrorIs(t, waiter.Wait(ctx), context.Canceled)
+
+	firstWait := make(chan error, 1)
+	go func() {
+		firstWait <- waiter.Wait(context.Background())
+	}()
+	waiter.Done()
+	require.NoError(t, <-firstWait)
+
+	// A canceled wait must not leave a sync.WaitGroup-style waiter that makes
+	// the next transaction generation unsafe to start.
+	waiter.Add()
+	secondWait := make(chan error, 1)
+	go func() {
+		secondWait <- waiter.Wait(context.Background())
+	}()
+	select {
+	case <-secondWait:
+		t.Fatal("new transaction generation reported empty before completion")
+	case <-time.After(20 * time.Millisecond):
+	}
+	waiter.Done()
+	require.NoError(t, <-secondWait)
+}
+
+func TestLoadOrStoreTxnBalancesWaiterOnHit(t *testing.T) {
+	mgr := &TxnManager{}
+	mgr.txns.store = new(sync.Map)
+	startTS := types.BuildTS(1, 0)
+	id := []byte("same-txn")
+
+	first := NewTxn(mgr, new(NoopTxnStore), id, startTS, types.TS{})
+	stored, loaded, offline := mgr.loadOrStoreTxn(first, TxnFlag_Normal)
+	require.False(t, loaded)
+	require.False(t, offline)
+	require.Same(t, first, stored)
+
+	duplicate := NewTxn(mgr, new(NoopTxnStore), id, startTS, types.TS{})
+	stored, loaded, offline = mgr.loadOrStoreTxn(duplicate, TxnFlag_Normal)
+	require.True(t, loaded)
+	require.False(t, offline)
+	require.Same(t, first, stored)
+
+	_, ok := mgr.loadAndDeleteTxn(first.GetID())
+	require.True(t, ok)
+	require.NoError(t, mgr.WaitEmpty(context.Background()))
+}
 
 func TestTryUpdateMaxCommittedTSNeverMovesBackward(t *testing.T) {
 	mgr := &TxnManager{}

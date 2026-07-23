@@ -512,11 +512,11 @@ func (c *DumpTableArg) collectObjectList(e *catalog.ObjectEntry) (isPersisted bo
 	} else {
 		deleteTS = e.DeletedAt
 	}
-	if e.GetAppendable() && deleteTS.IsEmpty() {
-		isPersisted = false
-	} else {
-		isPersisted = true
-	}
+	// Appendable describes the object's original layout, not whether its data
+	// is still backed by a live memory node. A checkpoint-replayed appendable
+	// object can be forced persisted without a delete entry. An active drop is
+	// not sufficient here because its file-backed state is not committed yet.
+	isPersisted = !e.GetAppendable() || e.IsForcePNode() || e.HasDropCommitted()
 	if err := vector.AppendFixed(
 		c.objectListBatch.Vecs[ObjectListAttr_DeleteTS_Idx], deleteTS, false, c.mp,
 	); err != nil {

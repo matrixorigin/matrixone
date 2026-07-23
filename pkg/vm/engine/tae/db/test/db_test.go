@@ -11760,6 +11760,116 @@ func Test_BasicTxnModeSwitch(t *testing.T) {
 	assert.Error(t, db.CheckCronJobs(tae.DB, db.DBTxnMode_Replay))
 }
 
+func prepareTxnModeSwitchWithInflightTxn(
+	t *testing.T,
+) (*testutil.TestEngine, txnif.AsyncTxn, handle.Relation, string) {
+	t.Helper()
+	ctx := context.Background()
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	var err error
+	tae.TxnServer, err = rpc.NewTxnServer("localhost:12345", runtime.ServiceRuntime(""))
+	require.NoError(t, err)
+
+	schema := catalog.MockSchema(1, -1)
+	txn, err := tae.StartTxn(nil)
+	require.NoError(t, err)
+	database, err := txn.CreateDatabase("mode-switch", "", "")
+	require.NoError(t, err)
+	_, err = database.CreateRelation(schema)
+	require.NoError(t, err)
+	require.NoError(t, txn.Commit(ctx))
+
+	txn, rel := testutil.GetRelation(t, 0, tae.DB, "mode-switch", schema.Name)
+	return tae, txn, rel, schema.Name
+}
+
+func TestTxnModeSwitchDrainsInflightCatalogEvents(t *testing.T) {
+	ctx := context.Background()
+	tae, txn, rel, _ := prepareTxnModeSwitchWithInflightTxn(t)
+	defer tae.Close()
+
+	switchCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	switchErr := make(chan error, 1)
+	go func() {
+		switchErr <- tae.SwitchTxnMode(switchCtx, 1, "todo")
+	}()
+
+	require.Eventually(t, func() bool {
+		return !tae.TxnMgr.IsWriteMode()
+	}, 10*time.Second, time.Millisecond)
+
+	commitErr := make(chan error, 1)
+	go func() {
+		for i := 0; i < 4097; i++ {
+			if _, err := rel.CreateNonAppendableObject(false, nil); err != nil {
+				commitErr <- err
+				return
+			}
+		}
+		commitErr <- txn.Commit(ctx)
+	}()
+
+	select {
+	case err := <-commitErr:
+		require.NoError(t, err)
+	case <-switchCtx.Done():
+		t.Fatal("in-flight transaction blocked while publishing catalog events")
+	}
+	select {
+	case err := <-switchErr:
+		require.NoError(t, err)
+	case <-switchCtx.Done():
+		t.Fatal("write to replay mode switch did not finish")
+	}
+	require.True(t, tae.IsReplayMode())
+	require.True(t, tae.TxnMgr.IsReplayMode())
+}
+
+func TestTxnModeSwitchWaitCancelRollsBack(t *testing.T) {
+	tae, txn, _, tableName := prepareTxnModeSwitchWithInflightTxn(t)
+	defer tae.Close()
+
+	switchCtx, cancel := context.WithCancel(context.Background())
+	switchErr := make(chan error, 1)
+	go func() {
+		switchErr <- tae.SwitchTxnMode(switchCtx, 1, "todo")
+	}()
+
+	require.Eventually(t, func() bool {
+		return !tae.TxnMgr.IsWriteMode()
+	}, 10*time.Second, time.Millisecond)
+	cancel()
+
+	select {
+	case err := <-switchErr:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(10 * time.Second):
+		t.Fatal("canceled mode switch did not roll back")
+	}
+	require.True(t, tae.IsWriteMode())
+	require.True(t, tae.TxnMgr.IsWriteMode())
+	require.NoError(t, db.CheckCronJobs(tae.DB, db.DBTxnMode_Write))
+	require.NoError(t, txn.Rollback(context.Background()))
+
+	// The notifier and scheduler must remain usable after rollback.
+	txn, rel := testutil.GetRelation(t, 0, tae.DB, "mode-switch", tableName)
+	_, err := rel.CreateNonAppendableObject(false, nil)
+	require.NoError(t, err)
+	require.NoError(t, txn.Commit(context.Background()))
+	queryDone := make(chan struct{})
+	go func() {
+		tae.MergeScheduler.Query(nil)
+		close(queryDone)
+	}()
+	select {
+	case <-queryDone:
+	case <-time.After(10 * time.Second):
+		t.Fatal("merge scheduler was not restarted after mode switch rollback")
+	}
+}
+
 func Test_OpenReplayDB1(t *testing.T) {
 	ctx := context.Background()
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -12710,12 +12820,30 @@ func Test_ApplyTableData(t *testing.T) {
 	err = applyArg.Run()
 	assert.NoError(t, err)
 
-	txn, rel := testutil.GetRelation(t, 0, tae.DB, "db2", "table2")
-	assert.NoError(t, txn.Commit(ctx))
-	for i := 0; i < colCount; i++ {
-		rows := testutil.GetColumnRowsByScan(t, rel, i, true)
-		assert.Equal(t, 2, rows)
+	checkAppliedTable := func() {
+		t.Helper()
+		txn, rel := testutil.GetRelation(t, 0, tae.DB, "db2", "table2")
+		it := rel.MakeObjectIt(false)
+		objectCount := 0
+		for it.Next() {
+			objectCount++
+			meta := it.GetObject().GetMeta().(*catalog.ObjectEntry)
+			require.False(t, meta.IsAppendable())
+			require.True(t, meta.ObjectPersisted())
+			require.False(t, meta.GetObjectData().IsAppendable())
+		}
+		require.NoError(t, it.Close())
+		require.Equal(t, 1, objectCount)
+		for i := 0; i < colCount; i++ {
+			rows := testutil.GetColumnRowsByScan(t, rel, i, true)
+			require.Equal(t, 2, rows)
+		}
+		require.NoError(t, txn.Commit(ctx))
 	}
+
+	checkAppliedTable()
+	tae.Restart(ctx)
+	checkAppliedTable()
 
 	t.Log(tae.Catalog.SimplePPString(3))
 }
