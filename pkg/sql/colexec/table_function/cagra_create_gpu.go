@@ -228,8 +228,9 @@ func (u *cagraCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 			u.idxcfg.CuvsCagra.GraphDegree = val
 		}
 
-		// quantizer training-sample buffer limit (rows) for int8/uint8 storage.
-		// Flat algo_params key set in CREATE INDEX; 0 => C++ default (1000).
+		// quantizer training-sample limit (rows) for int8/uint8 storage: the prefix of
+		// the arrival stream staged to derive the scale+offset. Flat algo_params key set
+		// in CREATE INDEX; 0 => C++ default (kDefaultQuantizerTrainLimit = 100000).
 		if qLimit, err := indexplugin.AlgoParamInt(u.param.QuantizerTrainLimit,
 			proc.GetResolveVariableFunc(), "quantizer_train_limit", 0); err != nil {
 			return err
