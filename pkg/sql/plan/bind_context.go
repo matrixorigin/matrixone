@@ -26,12 +26,13 @@ import (
 
 func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {
 	bc := &BindContext{
-		groupByAst:     make(map[string]int32),
-		aggregateByAst: make(map[string]int32),
-		sampleByAst:    make(map[string]int32),
-		projectByExpr:  make(map[string]int32),
-		windowByAst:    make(map[string]int32),
-		timeByAst:      make(map[string]int32),
+		groupByAst:      make(map[string]int32),
+		groupByParamAst: make(map[string]int32),
+		aggregateByAst:  make(map[string]int32),
+		sampleByAst:     make(map[string]int32),
+		projectByExpr:   make(map[string]int32),
+		windowByAst:     make(map[string]int32),
+		timeByAst:       make(map[string]int32),
 
 		projectColByAst: make(map[string]int32),
 
@@ -59,6 +60,7 @@ func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {
 		}
 		bc.snapshot = parent.snapshot
 		bc.remapOption = parent.remapOption
+		bc.numericCteByName = parent.numericCteByName
 		if len(parent.viewChain) > 0 {
 			bc.viewChain = append([]string{}, parent.viewChain...)
 		}
