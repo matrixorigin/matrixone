@@ -19,6 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/stretchr/testify/assert"
 )
@@ -27,6 +28,14 @@ func testCreateQueryClient(t *testing.T) QueryClient {
 	ct, err := NewQueryClient("", morpc.Config{})
 	assert.NoError(t, err)
 	return ct
+}
+
+func TestWorkloadPolicyUpdateRequiresMORPCVersion5(t *testing.T) {
+	assert.Equal(
+		t,
+		defines.MORPCVersion5,
+		methodVersions[query.CmdMethod_WorkloadPolicyUpdate],
+	)
 }
 
 func TestNewCacheClient(t *testing.T) {

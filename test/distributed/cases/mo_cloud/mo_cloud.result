@@ -835,6 +835,7 @@ mo_catalog  ¦  mo_locks  ¦  v  ¦  accountadmin  𝄀
 mo_catalog  ¦  mo_mysql_compatibility_mode  ¦  r  ¦  accountadmin  𝄀
 mo_catalog  ¦  mo_partition_metadata  ¦  r  ¦  accountadmin  𝄀
 mo_catalog  ¦  mo_partition_tables  ¦  r  ¦  accountadmin  𝄀
+mo_catalog  ¦  mo_query_workload_policy  ¦  r  ¦  accountadmin  𝄀
 mo_catalog  ¦  mo_role  ¦  r  ¦  accountadmin  𝄀
 mo_catalog  ¦  mo_role_grant  ¦  r  ¦  accountadmin  𝄀
 mo_catalog  ¦  mo_role_privs  ¦  r  ¦  accountadmin  𝄀

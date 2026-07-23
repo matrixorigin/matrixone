@@ -336,11 +336,12 @@ message AlterAccountResponse {
 message WorkloadPolicyUpdateRequest {
   uint32 AccountID = 1;
   string Policy = 2;
-  timestamp.Timestamp CommitTS = 3 [ (gogoproto.nullable) = false ];
+  uint64 Revision = 3;
 }
 
 message WorkloadPolicyUpdateResponse {
   bool Applied = 1;
+  uint64 Revision = 2;
 }
 
 // KillConnRequest is the request that kill the connections belongs

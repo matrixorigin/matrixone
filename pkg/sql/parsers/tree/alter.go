@@ -63,6 +63,12 @@ func init() {
 		reuse.DefaultOptions[AlterDataBaseConfig](), //.
 	) // WithEnableChecker()
 
+	reuse.CreatePool[AlterAccountConfig](
+		func() *AlterAccountConfig { return &AlterAccountConfig{} },
+		func(a *AlterAccountConfig) { a.reset() },
+		reuse.DefaultOptions[AlterAccountConfig](), //.
+	) // WithEnableChecker()
+
 	reuse.CreatePool[AlterTable](
 		func() *AlterTable { return &AlterTable{} },
 		func(a *AlterTable) { a.reset() },
@@ -628,6 +634,69 @@ func (node AlterDataBaseConfig) TypeName() string { return "tree.AlterDataBaseCo
 
 func (node *AlterDataBaseConfig) reset() {
 	*node = AlterDataBaseConfig{}
+}
+
+// AlterAccountConfig updates a durable account control-plane configuration.
+// An empty AccountName targets the authenticated account. Reset writes the
+// configuration's explicit disabled state instead of deleting its revision.
+type AlterAccountConfig struct {
+	statementImpl
+	AccountName string
+	ConfigName  string
+	Value       string
+	Reset       bool
+}
+
+func NewAlterAccountConfig(
+	accountName string,
+	configName string,
+	value string,
+	reset bool,
+) *AlterAccountConfig {
+	a := reuse.Alloc[AlterAccountConfig](nil)
+	a.AccountName = accountName
+	a.ConfigName = configName
+	a.Value = value
+	a.Reset = reset
+	return a
+}
+
+func (node *AlterAccountConfig) Free() {
+	reuse.Free[AlterAccountConfig](node, nil)
+}
+
+func (node *AlterAccountConfig) Format(ctx *FmtCtx) {
+	ctx.WriteString("alter account config")
+	if node.AccountName != "" {
+		ctx.WriteString(" for ")
+		ctx.WriteString(node.AccountName)
+	}
+	if node.Reset {
+		ctx.WriteString(" reset ")
+		ctx.WriteString(node.ConfigName)
+		return
+	}
+	ctx.WriteString(" set ")
+	ctx.WriteString(node.ConfigName)
+	ctx.WriteString(" = ")
+	value := NewNumVal(node.Value, node.Value, false, P_char)
+	quoteCtx := *ctx
+	quoteCtx.singleQuoteString = true
+	value.Format(&quoteCtx)
+}
+
+func (node *AlterAccountConfig) GetStatementType() string {
+	return "Alter Account Config"
+}
+
+func (node *AlterAccountConfig) GetQueryType() string { return QueryTypeDCL }
+
+func (node AlterAccountConfig) TypeName() string {
+	return "tree.AlterAccountConfig"
+}
+
+func (node *AlterAccountConfig) reset() {
+	*node = AlterAccountConfig{}
 }
 
 // AlterTable

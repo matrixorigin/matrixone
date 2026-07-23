@@ -2272,6 +2272,14 @@ func handleAlterAccountConfig(ses FeSession, execCtx *ExecCtx, st *tree.AlterDat
 	return doAlterAccountConfig(execCtx.reqCtx, ses.(*Session), st)
 }
 
+func handleAlterQueryWorkloadPolicy(
+	ses FeSession,
+	execCtx *ExecCtx,
+	st *tree.AlterAccountConfig,
+) error {
+	return doAlterQueryWorkloadPolicy(execCtx.reqCtx, ses.(*Session), st)
+}
+
 // handleCreateUser creates the user for the tenant
 func handleCreateUser(ses FeSession, execCtx *ExecCtx, st *tree.CreateUser) error {
 	tenant := ses.GetTenantInfo()

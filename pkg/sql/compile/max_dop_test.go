@@ -219,6 +219,31 @@ func TestScopeNodeWithMcpuKeepsWorkerIdentity(t *testing.T) {
 	require.Equal(t, 1, node.Mcpu)
 }
 
+func TestExecutionNodeCPUUsesActualWorkerCapacity(t *testing.T) {
+	c := NewMockCompile(t)
+	c.addr = "ingress:6001"
+	c.ncpu = 64
+	c.cnList = engine.Nodes{{
+		Id:   "target",
+		Addr: "target:6001",
+		Mcpu: 8,
+	}}
+
+	require.Equal(t, 8, c.executionNodeCPU(engine.Node{
+		Id:   "target",
+		Addr: "target:6001",
+		Mcpu: 64,
+	}))
+	require.Equal(t, 64, c.executionNodeCPU(engine.Node{
+		Addr: "ingress:6001",
+		Mcpu: 1,
+	}))
+	require.Equal(t, 4, c.executionNodeCPU(engine.Node{
+		Addr: "other:6001",
+		Mcpu: 4,
+	}))
+}
+
 func TestConstructScopeForExternalNodeKeepsWorkerIdentity(t *testing.T) {
 	c := NewMockCompile(t)
 	c.addr = "local:6001"

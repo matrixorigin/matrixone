@@ -473,6 +473,7 @@ mo_partition_metadata
 mo_partition_tables
 mo_pitr
 mo_pubs
+mo_query_workload_policy
 mo_role
 mo_role_grant
 mo_role_privs
@@ -605,6 +606,7 @@ mo_partition_metadata
 mo_partition_tables
 mo_pitr
 mo_pubs
+mo_query_workload_policy
 mo_role
 mo_role_grant
 mo_role_privs

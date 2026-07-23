@@ -40,10 +40,6 @@ var (
 	dumpUUID = uuid.UUID{}
 )
 
-type txnSnapshotRecorder interface {
-	recordTxnSnapshotTS(timestamp.Timestamp)
-}
-
 // get errors during the transaction. rollback the transaction
 func rollbackTxnFunc(ses FeSession, execErr error, execCtx *ExecCtx) error {
 	execCtx.ses.EnterFPrint(FPRollbackTxn)
@@ -478,9 +474,6 @@ func (th *TxnHandler) createTxnOpUnsafe(execCtx *ExecCtx) error {
 	if th.txnOp == nil {
 		return moerr.NewInternalError(execCtx.reqCtx, "NewTxnOperator: txnClient new a null txn")
 	}
-	if recorder, ok := execCtx.ses.(txnSnapshotRecorder); ok {
-		recorder.recordTxnSnapshotTS(th.txnOp.Txn().SnapshotTS)
-	}
 	return err
 }
 
@@ -595,12 +588,6 @@ func (th *TxnHandler) commitUnsafe(execCtx *ExecCtx) error {
 		err, hasRecovered = ExecuteFuncWithRecover(func() error {
 			return th.txnOp.Commit(ctx2)
 		})
-		if !hasRecovered {
-			// Commit publishes the final TN commit timestamp into the operator
-			// response state. Reading it before Commit yields the snapshot/empty
-			// timestamp and cannot order cross-CN cache invalidations.
-			commitTs = th.txnOp.Txn().CommitTS
-		}
 		if err != nil {
 			err = moerr.AttachCause(ctx2, err)
 			commitResultUnknown = isTxnCommitResultUnknown(err)

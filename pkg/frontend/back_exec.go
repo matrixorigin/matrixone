@@ -20,7 +20,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -34,7 +33,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
@@ -80,17 +78,6 @@ func (back *backExec) GetLastAffectedRows() int64 {
 
 func (back *backExec) SetLastAffectedRows(rows int64) {
 	back.backSes.lastAffectedRows = rows
-}
-
-// LastStatementSnapshotTS returns the transaction snapshot selected for the
-// most recent statement. It is intentionally outside BackgroundExec's public
-// contract: callers that need catalog ordering discover this capability
-// without forcing lightweight executors and mocks to emulate transactions.
-func (back *backExec) LastStatementSnapshotTS() timestamp.Timestamp {
-	if back == nil || back.backSes == nil {
-		return timestamp.Timestamp{}
-	}
-	return back.backSes.txnSnapshotTS()
 }
 
 func (back *backExec) Close() {
@@ -145,9 +132,6 @@ func (back *backExec) ExecWithSQLMode(ctx context.Context, sql string, sqlMode s
 func (back *backExec) exec(ctx context.Context, sql string, sqlMode string, useSQLMode bool) (retErr error) {
 	back.backSes.EnterFPrint(FPBackExecExec)
 	defer back.backSes.ExitFPrint(FPBackExecExec)
-	// Do not let an early parse/context failure expose the previous statement's
-	// transaction snapshot as the revision of this statement.
-	back.backSes.resetTxnSnapshotTS()
 	defer func() {
 		if retErr != nil {
 			back.SetLastAffectedRows(-1)
@@ -1037,22 +1021,6 @@ type backSession struct {
 	lastAffectedRows int64
 }
 
-func (backSes *backSession) recordTxnSnapshotTS(snapshotTS timestamp.Timestamp) {
-	backSes.txnSnapshotMu.Lock()
-	backSes.lastTxnSnapshotTS = snapshotTS
-	backSes.txnSnapshotMu.Unlock()
-}
-
-func (backSes *backSession) resetTxnSnapshotTS() {
-	backSes.recordTxnSnapshotTS(timestamp.Timestamp{})
-}
-
-func (backSes *backSession) txnSnapshotTS() timestamp.Timestamp {
-	backSes.txnSnapshotMu.Lock()
-	defer backSes.txnSnapshotMu.Unlock()
-	return backSes.lastTxnSnapshotTS
-}
-
 func newBackSession(ses FeSession, txnOp TxnOperator, db string, callBack outputCallBackFunc) *backSession {
 	service := ses.GetService()
 	var connCtx context.Context
@@ -1087,6 +1055,7 @@ func (backSes *backSession) initFeSes(
 	backSes.timeZone = ses.GetTimeZone()
 	backSes.respr = defResper
 	backSes.service = ses.GetService()
+	backSes.workloadPolicy.Store(workloadPolicyState(ses))
 	if parent, ok := ses.(*backSession); ok {
 		backSes.parentBackSession = parent
 	}

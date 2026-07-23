@@ -87,10 +87,36 @@ This phase establishes a hard boundary between policy and execution:
   immutable policy snapshot. Traces, logs, and metrics expose the workload
   class, policy generation, pool, routing mode, candidates, and selected
   workers.
-- A committed `SET GLOBAL` is propagated to active account caches on every CN
-  with its transaction commit timestamp. Delayed updates cannot overwrite a
-  newer cache. Periodic catalog revalidation bounds stale use if a CN misses
-  the RPC; failure to revalidate fails the statement closed.
+- The authoritative policy is one versioned row per account in
+  `mo_catalog.mo_query_workload_policy`. A policy update and its monotonically
+  increasing revision commit in one transaction. The revisioned update is then
+  published to active CN caches; delayed updates cannot overwrite newer state.
+- A foreground session references an account-level immutable snapshot. Login
+  performs the initial catalog read. The normal statement fast path is an
+  atomic deadline/snapshot read: it does not query a table, parse JSON, send
+  RPC, allocate, or take a cache lock.
+- After an established snapshot reaches its deadline, the first statement
+  starts one account-level singleflight reconciliation and immediately uses
+  the pinned stale snapshot. Reconciliation runs with a bounded, independent
+  internal SQL executor; it never borrows the foreground session across
+  goroutines, and concurrent statements do not queue behind it.
+- Catalog reconciliation is the durable repair path for missed notifications.
+  A transient read failure preserves the last valid snapshot and retries with
+  exponential backoff capped at 30 seconds. A malformed authoritative row is
+  cached as invalid and fails scheduling closed. Policy-control SQL bypasses
+  workload routing so a broken `internal` pool cannot block reconciliation,
+  policy repair, or `RESET`.
+
+The consistency contract is monotonic convergence, not a distributed
+stop-the-world cutover. A successful DDL means the authoritative transaction
+committed and the local active cache applied that revision. The frontend waits
+up to three seconds for live-CN notification acknowledgements, but a missed
+notification cannot roll back the committed row. On a healthy catalog, an
+active missed CN starts repair on the first statement after its account cache
+deadline (at most 30 seconds after the previous apply/reconcile); later
+statements observe the revision after that bounded asynchronous read
+completes. Every CN rejects lower revisions, and each statement pins one
+immutable snapshot for its entire compile/execution lifetime.
 
 Phase 9 establishes workload isolation and the legal candidate set. It does not
 select by instantaneous load, and it does not by itself provide multi-CN TPCC
@@ -99,12 +125,12 @@ Version 1 deliberately keeps target pools account-isolated; a shared AP pool
 across accounts requires explicit shared-pool authorization and per-account
 admission budgets in a later phase.
 
-The policy is configured by an account administrator through
-`query_workload_policy`. An empty value preserves historical scheduling. The
-versioned JSON form is:
+The policy is configured through dedicated account-control DDL. It is not a
+MySQL compatibility variable and cannot be changed with `SET GLOBAL`. An
+account administrator changes the current account:
 
 ```sql
-SET GLOBAL query_workload_policy = '{
+ALTER ACCOUNT CONFIG SET query_workload_policy = '{
   "version": 1,
   "policies": {
     "tp": {
@@ -125,20 +151,42 @@ SET GLOBAL query_workload_policy = '{
 }';
 ```
 
-For a rolling upgrade, keep `query_workload_policy` empty until every CN that
-can serve the account runs a Phase 9-capable binary. The propagation RPC uses
-the current MORPC protocol family, whose negotiated version does not advertise
-handler-level workload-policy capability; protocol compatibility alone
-therefore cannot prove that an older CN will enforce the policy. The empty
-default is mixed-version safe. Activating a non-empty policy is a cluster-wide
-feature cutover and must happen only after the CN upgrade is complete.
+The system administrator can target another account explicitly:
+
+```sql
+ALTER ACCOUNT CONFIG FOR tenant_a
+  SET query_workload_policy = '{"version":1,"policies":{"tp":{"pool":"tp","labels":{"role":"tp"},"current_cn":"required"}}}';
+```
+
+Resetting writes a versioned disabled state rather than deleting history:
+
+```sql
+ALTER ACCOUNT CONFIG RESET query_workload_policy;
+ALTER ACCOUNT CONFIG FOR tenant_a RESET query_workload_policy;
+```
+
+The catalog row contains `account_id`, `policy`, `revision`, `updated_at`, and
+the updating account/user IDs. The primary key makes concurrent updates
+serialize at the authoritative row. Administrators can inspect the active
+state and revision directly:
+
+```sql
+SELECT policy, revision, updated_at
+FROM mo_catalog.mo_query_workload_policy;
+```
+
+The table is installed by the append-only 4.0.5 tenant upgrade at
+`version_offset = 5`, and the publication RPC requires MORPC v5.
+Configuration DDL rejects activation until both the active protocol is at
+least v5 and the latest ready cluster version is at least 4.0.5 offset 5.
+Reads on an older or partially upgraded deployment treat a missing table as
+disabled.
 
 `labels` must not contain `account`; the server adds the authenticated account.
 `fallback` defaults to `strict`. `legacy-compatible` is the only compatibility
 mode, and `empty_worker: local-fallback` is valid only with that mode.
 `max_workers` is an upper bound. TP policies must use
-`current_cn: required`. The encoded JSON must not exceed 5,000 bytes, matching
-the catalog column that stores global system-variable values.
+`current_cn: required`. The encoded JSON must not exceed 5,000 bytes.
 
 ### Phase 10: Unified Resource and Capacity Model
 
