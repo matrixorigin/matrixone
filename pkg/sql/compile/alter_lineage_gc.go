@@ -19,19 +19,27 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
+const dataBranchLineageGCTimeout = 4 * time.Minute
+
 func DataBranchLineageGCExecutor(
 	sqlExecutor executor.SQLExecutor,
 ) taskservice.TaskExecutor {
 	return func(ctx context.Context, _ task.Task) error {
-		return compactExpiredAlterDataBranchLineageWithExecutor(
+		ctx, cancel := context.WithTimeoutCause(
+			ctx, dataBranchLineageGCTimeout, context.DeadlineExceeded,
+		)
+		defer cancel()
+		err := compactExpiredAlterDataBranchLineageWithExecutor(
 			ctx, sqlExecutor, time.Now().UTC(),
 		)
+		return moerr.AttachCause(ctx, err)
 	}
 }
 

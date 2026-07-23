@@ -860,6 +860,39 @@ func TestCompactExpiredAlterDataBranchLineageWithExecutor(t *testing.T) {
 	}, executed)
 }
 
+type lineageGCDeadlineExecutor struct {
+	deadline time.Time
+}
+
+func (e *lineageGCDeadlineExecutor) Exec(
+	context.Context, string, executor.Options,
+) (executor.Result, error) {
+	return executor.Result{}, nil
+}
+
+func (e *lineageGCDeadlineExecutor) ExecTxn(
+	ctx context.Context,
+	_ func(executor.TxnExecutor) error,
+	_ executor.Options,
+) error {
+	e.deadline, _ = ctx.Deadline()
+	return nil
+}
+
+func TestDataBranchLineageGCExecutorSetsDeadline(t *testing.T) {
+	spyExec := &lineageGCDeadlineExecutor{}
+	started := time.Now()
+	require.NoError(t, DataBranchLineageGCExecutor(spyExec)(context.Background(), nil))
+	require.False(t, spyExec.deadline.IsZero())
+	require.WithinDuration(t, started.Add(dataBranchLineageGCTimeout), spyExec.deadline, time.Second)
+
+	parentDeadline := time.Now().Add(time.Minute)
+	ctx, cancel := context.WithDeadline(context.Background(), parentDeadline)
+	defer cancel()
+	require.NoError(t, DataBranchLineageGCExecutor(spyExec)(ctx, nil))
+	require.WithinDuration(t, parentDeadline, spyExec.deadline, time.Second)
+}
+
 func TestCompactExpiredAlterDataBranchLineageWithExecutorPropagatesDeleteError(t *testing.T) {
 	now := time.Date(2026, time.July, 17, 12, 0, 0, 0, time.UTC)
 	cloneTS := now.Add(-48 * time.Hour).UnixNano()
