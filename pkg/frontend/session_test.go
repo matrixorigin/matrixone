@@ -162,6 +162,37 @@ func TestTxnHandler_NewTxn(t *testing.T) {
 	})
 }
 
+func TestTxnHandlerRecordsBackgroundStatementSnapshot(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+	snapshotTS := timestamp.Timestamp{PhysicalTime: 50, LogicalTime: 7}
+
+	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOperator.EXPECT().Txn().Return(txn.TxnMeta{SnapshotTS: snapshotTS})
+	txnClient := mock_frontend.NewMockTxnClient(ctrl)
+	txnClient.EXPECT().
+		New(gomock.Any(), gomock.Any(), gomock.Any()).
+		Return(txnOperator, nil)
+
+	sv := &config.FrontendParameters{}
+	sv.SetDefaultValues()
+	setPu("", config.NewParameterUnit(sv, nil, txnClient, nil))
+
+	previousRuntime := runtime.ServiceRuntime("")
+	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
+	t.Cleanup(func() {
+		runtime.SetupServiceBasedRuntime("", previousRuntime)
+	})
+
+	backSes := &backSession{}
+	handler := InitTxnHandler("", nil, ctx, nil)
+	backSes.txnHandler = handler
+	execCtx := &ExecCtx{reqCtx: ctx, ses: backSes}
+
+	require.NoError(t, handler.createTxnOpUnsafe(execCtx))
+	require.Equal(t, snapshotTS, backSes.txnSnapshotTS())
+}
+
 func TestTxnHandler_CommitTxn(t *testing.T) {
 	convey.Convey("commit txn", t, func() {
 		ctrl := gomock.NewController(t)

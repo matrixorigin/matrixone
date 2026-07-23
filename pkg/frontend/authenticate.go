@@ -11976,8 +11976,8 @@ func postAlterSessionStatus(
 
 // postWorkloadPolicyUpdate propagates an already-committed policy to the
 // account caches on other CNs. The catalog remains authoritative; a CN without
-// an active cache ignores the update and loads the complete row set when its
-// first session connects.
+// an active or currently-loading cache ignores the update and loads the
+// complete row set when its first session connects.
 func postWorkloadPolicyUpdate(
 	ctx context.Context,
 	ses *Session,

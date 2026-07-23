@@ -9911,7 +9911,7 @@ func TestQueryWorkloadPolicyCatalogRevalidationDoesNotOverwriteNewerRPC(t *testi
 	ses := newSes(nil, ctrl)
 	ses.gSysVars.Set(queryWorkloadPolicy, "")
 	ses.gSysVars.mu.Lock()
-	ses.gSysVars.workloadPolicyCommitTS = timestamp.Timestamp{PhysicalTime: 10}
+	ses.gSysVars.workloadPolicyRevisionTS = timestamp.Timestamp{PhysicalTime: 10}
 	ses.gSysVars.mu.Unlock()
 	ses.gSysVars.workloadPolicyRefreshAfter.Store(time.Now().Add(-time.Second).UnixNano())
 
@@ -9939,6 +9939,84 @@ func TestQueryWorkloadPolicyCatalogRevalidationDoesNotOverwriteNewerRPC(t *testi
 		require.FailNow(t, "catalog revalidation did not finish")
 	}
 	require.Equal(t, rpcRaw, ses.gSysVars.Get(queryWorkloadPolicy))
+}
+
+func TestGlobalSysVarsMgrInitialLoadDoesNotLoseConcurrentPolicyRPC(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	const accountID = sysAccountID
+	sql := getSqlForGetSystemVariablesWithAccount(accountID)
+	catalogRaw := `{"version":1,"policies":{"ap":{"pool":"catalog-ap","labels":{"role":"ap"}}}}`
+	rpcRaw := `{"version":1,"policies":{"ap":{"pool":"rpc-ap","labels":{"role":"ap"}}}}`
+
+	base := &backgroundExecTest{
+		lastStatementSnapshotTS: timestamp.Timestamp{
+			PhysicalTime: 30,
+			LogicalTime:  1,
+		},
+	}
+	base.init()
+	mrs := &MysqlResultSet{}
+	nameColumn := &MysqlColumn{}
+	nameColumn.SetName("variable_name")
+	nameColumn.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	mrs.AddColumn(nameColumn)
+	valueColumn := &MysqlColumn{}
+	valueColumn.SetName("variable_value")
+	valueColumn.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	mrs.AddColumn(valueColumn)
+	mrs.AddRow([]interface{}{queryWorkloadPolicy, catalogRaw})
+	base.sql2result[sql] = mrs
+
+	bh := &blockingBackgroundExecTest{
+		backgroundExecTest: base,
+		blockSQL:           sql,
+		started:            make(chan struct{}),
+		release:            make(chan struct{}),
+	}
+	defer func() {
+		select {
+		case <-bh.release:
+		default:
+			close(bh.release)
+		}
+	}()
+
+	ses := newSes(nil, ctrl)
+	mgr := &GlobalSysVarsMgr{
+		accountsGlobalSysVarsMap: make(map[uint32]*SystemVariables),
+	}
+
+	type getResult struct {
+		vars *SystemVariables
+		err  error
+	}
+	resultC := make(chan getResult, 1)
+	go func() {
+		vars, err := mgr.Get(accountID, ses, context.Background(), bh)
+		resultC <- getResult{vars: vars, err: err}
+	}()
+
+	select {
+	case <-bh.started:
+	case <-time.After(5 * time.Second):
+		require.FailNow(t, "initial catalog load did not start")
+	}
+
+	rpcRevision := timestamp.Timestamp{PhysicalTime: 40}
+	require.True(t, mgr.ApplyWorkloadPolicyUpdate(accountID, rpcRaw, rpcRevision))
+	close(bh.release)
+
+	select {
+	case result := <-resultC:
+		require.NoError(t, result.err)
+		require.NotNil(t, result.vars)
+		require.Equal(t, rpcRaw, result.vars.Get(queryWorkloadPolicy))
+		require.Equal(t, rpcRevision, result.vars.workloadPolicyRevision())
+	case <-time.After(5 * time.Second):
+		require.FailNow(t, "initial catalog load did not finish")
+	}
 }
 
 func boxExprStr(s string) tree.Expr {
@@ -11419,6 +11497,7 @@ type backgroundExecTest struct {
 	sql2err                        map[string]error
 	executedSQLs                   []string
 	dropDatabaseIgnoresForeignKeys bool
+	lastStatementSnapshotTS        timestamp.Timestamp
 }
 
 type blockingBackgroundExecTest struct {
@@ -11505,6 +11584,10 @@ func (bt *backgroundExecTest) ClearExecResultSet() {
 
 func (bt *backgroundExecTest) Service() string {
 	return ""
+}
+
+func (bt *backgroundExecTest) LastStatementSnapshotTS() timestamp.Timestamp {
+	return bt.lastStatementSnapshotTS
 }
 
 func (bt *backgroundExecTest) SetRestore(b bool) {

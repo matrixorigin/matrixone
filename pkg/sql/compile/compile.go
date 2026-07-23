@@ -3136,6 +3136,7 @@ func (c *Compile) compileGenerateSeriesParallel(node *plan.Node, ss []*Scope, pa
 		op.CanOpt = canOpt
 		op.GenerateSeriesCtrNumState(offset[0][0], offset[len(offset)-1][1], step, offset[0][0])
 		op.OffsetTotal = append(op.OffsetTotal, offset[startOffset:startOffset+currMcpu]...)
+		startOffset += currMcpu
 
 		ds.NodeInfo = getEngineNode(c)
 		ds.DataSource = &Source{isConst: true, node: node}

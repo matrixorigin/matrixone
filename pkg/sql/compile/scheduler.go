@@ -590,10 +590,6 @@ func sameWorkloadPolicyRule(left, right schedule.WorkloadPolicyRule) bool {
 	return true
 }
 
-func (c *Compile) effectiveQuerySchedulingIntent() schedule.SchedulingIntent {
-	return c.effectiveWorkloadPolicy().Intent
-}
-
 func (c *Compile) effectiveWorkloadPolicy() schedule.EffectiveWorkloadPolicy {
 	intent := c.querySchedulingIntent
 	legacyPool := intent.RequestedPool

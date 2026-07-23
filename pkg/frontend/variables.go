@@ -999,16 +999,24 @@ func resolveServerID(ses *Session) string {
 func (m *GlobalSysVarsMgr) Get(accountId uint32, ses *Session, ctx context.Context, bh BackgroundExec) (*SystemVariables, error) {
 	m.Lock()
 	startedVars := m.accountsGlobalSysVarsMap[accountId]
-	m.Unlock()
-	var startCommitTS pbtimestamp.Timestamp
-	if startedVars != nil {
-		startCommitTS = startedVars.workloadPolicyRevision()
+	if startedVars == nil {
+		// Publish the object identity before the catalog read. It is not
+		// returned to a session until the full snapshot is installed, but it
+		// lets a concurrent committed RPC land instead of being dropped.
+		startedVars = &SystemVariables{mp: make(map[string]interface{})}
+		if m.accountsGlobalSysVarsMap == nil {
+			m.accountsGlobalSysVarsMap = make(map[uint32]*SystemVariables)
+		}
+		m.accountsGlobalSysVarsMap[accountId] = startedVars
 	}
+	m.Unlock()
+	startRevision := startedVars.workloadPolicyRevision()
 
 	sysVarsMp, err := ses.getGlobalSysVars(ctx, bh)
 	if err != nil {
 		return nil, err
 	}
+	catalogRevision := workloadPolicyCatalogRevision(bh)
 
 	CNServiceConfig := getPu(ses.service).SV
 	useTomlConfigOverOtherConfigs(CNServiceConfig, sysVarsMp)
@@ -1019,17 +1027,19 @@ func (m *GlobalSysVarsMgr) Get(accountId uint32, ses *Session, ctx context.Conte
 
 	currentVars := m.accountsGlobalSysVarsMap[accountId]
 	if currentVars == nil {
-		currentVars = &SystemVariables{mp: sysVarsMp}
-		currentVars.markWorkloadPolicyRefreshed(time.Now())
-		m.accountsGlobalSysVarsMap[accountId] = currentVars
-		return currentVars, nil
+		// Put is allowed to remove an entry while a load is in flight. Do not
+		// resurrect an object generation that is no longer manager-owned.
+		return nil, moerr.NewInternalError(
+			ctx,
+			"global system variable cache changed during catalog load",
+		)
 	}
 	// Another concurrent initial load already installed a complete account
 	// cache. Do not replace that independently owned generation.
 	if currentVars != startedVars {
 		return currentVars, nil
 	}
-	currentVars.applyCatalogSnapshot(sysVarsMp, startCommitTS)
+	currentVars.applyCatalogSnapshot(sysVarsMp, startRevision, catalogRevision)
 	return currentVars, nil
 }
 
@@ -1040,10 +1050,9 @@ func (m *GlobalSysVarsMgr) Put(accountId uint32, vars *SystemVariables) {
 }
 
 // ApplyWorkloadPolicyUpdate updates an account cache only when that account is
-// already active on this CN. A missing cache is intentionally left missing so
-// the first session still loads the complete catalog snapshot. CommitTS makes
-// delivery idempotent and prevents a delayed cross-CN request from rolling a
-// cache back to an older committed policy.
+// active or being loaded on this CN. CommitTS makes delivery idempotent and
+// prevents a delayed cross-CN request from rolling a cache back to an older
+// committed policy.
 func (m *GlobalSysVarsMgr) ApplyWorkloadPolicyUpdate(
 	accountID uint32,
 	raw string,
@@ -1068,8 +1077,11 @@ type SystemVariables struct {
 	// name -> value/default
 	mp map[string]interface{}
 
-	workloadPolicyCache        atomic.Pointer[workloadPolicyCache]
-	workloadPolicyCommitTS     pbtimestamp.Timestamp
+	workloadPolicyCache atomic.Pointer[workloadPolicyCache]
+	// workloadPolicyRevisionTS is a visible-through high-water mark. An RPC
+	// contributes its commit timestamp; a catalog read contributes the
+	// transaction's exclusive SnapshotTS.Prev().
+	workloadPolicyRevisionTS   pbtimestamp.Timestamp
 	workloadPolicyRefreshAfter atomic.Int64
 	workloadPolicyRefresh      *workloadPolicyRefreshCall
 }
@@ -1104,24 +1116,46 @@ func (sv *SystemVariables) Get(name string) interface{} {
 func (sv *SystemVariables) workloadPolicyRevision() pbtimestamp.Timestamp {
 	sv.mu.Lock()
 	defer sv.mu.Unlock()
-	return sv.workloadPolicyCommitTS
+	return sv.workloadPolicyRevisionTS
+}
+
+func catalogWorkloadPolicyIsAuthoritative(
+	currentRevision pbtimestamp.Timestamp,
+	startRevision pbtimestamp.Timestamp,
+	catalogRevision pbtimestamp.Timestamp,
+) bool {
+	if catalogRevision.IsEmpty() {
+		// Transaction-less embedded executors and tests cannot prove snapshot
+		// ordering, so only install when no ordered update raced with the read.
+		return currentRevision.Equal(startRevision)
+	}
+	return !currentRevision.Greater(catalogRevision)
 }
 
 func (sv *SystemVariables) applyCatalogSnapshot(
 	values map[string]interface{},
-	startCommitTS pbtimestamp.Timestamp,
+	startRevision pbtimestamp.Timestamp,
+	catalogRevision pbtimestamp.Timestamp,
 ) {
 	sv.mu.Lock()
 	defer sv.mu.Unlock()
 
-	// Preserve a policy RPC that arrived while the caller read the catalog.
-	// The rest of the system-variable snapshot can still advance normally.
-	if !sv.workloadPolicyCommitTS.Equal(startCommitTS) {
+	// A catalog snapshot is authoritative through SnapshotTS.Prev(). Preserve
+	// only an RPC that is strictly newer than that boundary. Transaction-less
+	// test/embedded executors have no revision, so retain the conservative
+	// start-revision race check for them.
+	if !catalogWorkloadPolicyIsAuthoritative(
+		sv.workloadPolicyRevisionTS,
+		startRevision,
+		catalogRevision,
+	) {
 		if raw, ok := sv.mp[queryWorkloadPolicy]; ok {
 			values[queryWorkloadPolicy] = raw
 		} else {
 			delete(values, queryWorkloadPolicy)
 		}
+	} else if !catalogRevision.IsEmpty() {
+		sv.workloadPolicyRevisionTS = catalogRevision
 	}
 	sv.mp = values
 	sv.workloadPolicyCache.Store(nil)
@@ -1135,7 +1169,7 @@ func (sv *SystemVariables) Set(name string, value interface{}) {
 	sv.mp[name] = value
 	if name == queryWorkloadPolicy {
 		sv.workloadPolicyCache.Store(nil)
-		sv.workloadPolicyCommitTS = pbtimestamp.Timestamp{}
+		sv.workloadPolicyRevisionTS = pbtimestamp.Timestamp{}
 		sv.markWorkloadPolicyRefreshed(time.Now())
 	}
 }
@@ -1147,7 +1181,7 @@ func (sv *SystemVariables) applyWorkloadPolicyUpdate(
 	sv.mu.Lock()
 	defer sv.mu.Unlock()
 
-	currentTS := sv.workloadPolicyCommitTS
+	currentTS := sv.workloadPolicyRevisionTS
 	switch {
 	case commitTS.IsEmpty() && !currentTS.IsEmpty():
 		return false
@@ -1162,7 +1196,7 @@ func (sv *SystemVariables) applyWorkloadPolicyUpdate(
 	}
 	sv.mp[queryWorkloadPolicy] = raw
 	sv.workloadPolicyCache.Store(nil)
-	sv.workloadPolicyCommitTS = commitTS
+	sv.workloadPolicyRevisionTS = commitTS
 	sv.markWorkloadPolicyRefreshed(time.Now())
 	return true
 }
@@ -1222,24 +1256,33 @@ func (sv *SystemVariables) RefreshWorkloadPolicy(
 	}
 	call := &workloadPolicyRefreshCall{done: make(chan struct{})}
 	sv.workloadPolicyRefresh = call
-	startCommitTS := sv.workloadPolicyCommitTS
+	startRevision := sv.workloadPolicyRevisionTS
 	sv.mu.Unlock()
 
-	raw, err := loadWorkloadPolicyFromCatalog(ctx, ses)
+	raw, catalogRevision, err := loadWorkloadPolicyFromCatalog(ctx, ses)
 
 	sv.mu.Lock()
-	// A committed RPC update that won the race with this catalog read is at
-	// least as new as the read snapshot, so never overwrite it or surface an
-	// obsolete read error to statements that now own the newer policy.
-	if !sv.workloadPolicyCommitTS.Equal(startCommitTS) {
+	// A committed RPC update that won the race with a failed catalog read makes
+	// that read obsolete. On success, compare the RPC commit directly with the
+	// catalog's visible-through boundary instead of relying on arrival order.
+	if err != nil && !sv.workloadPolicyRevisionTS.Equal(startRevision) {
 		err = nil
 	} else if err == nil {
-		if sv.mp == nil {
-			sv.mp = make(map[string]interface{})
+		if catalogWorkloadPolicyIsAuthoritative(
+			sv.workloadPolicyRevisionTS,
+			startRevision,
+			catalogRevision,
+		) {
+			if sv.mp == nil {
+				sv.mp = make(map[string]interface{})
+			}
+			sv.mp[queryWorkloadPolicy] = raw
+			sv.workloadPolicyCache.Store(nil)
+			if !catalogRevision.IsEmpty() {
+				sv.workloadPolicyRevisionTS = catalogRevision
+			}
+			sv.markWorkloadPolicyRefreshed(time.Now())
 		}
-		sv.mp[queryWorkloadPolicy] = raw
-		sv.workloadPolicyCache.Store(nil)
-		sv.markWorkloadPolicyRefreshed(time.Now())
 	}
 	sv.workloadPolicyRefresh = nil
 	call.err = err
@@ -1251,10 +1294,10 @@ func (sv *SystemVariables) RefreshWorkloadPolicy(
 func loadWorkloadPolicyFromCatalog(
 	ctx context.Context,
 	ses FeSession,
-) (string, error) {
+) (string, pbtimestamp.Timestamp, error) {
 	tenant := ses.GetTenantInfo()
 	if tenant == nil {
-		return "", moerr.NewInternalError(ctx, "cannot refresh query workload policy without tenant")
+		return "", pbtimestamp.Timestamp{}, moerr.NewInternalError(ctx, "cannot refresh query workload policy without tenant")
 	}
 	tenantCtx := defines.AttachAccount(
 		ctx,
@@ -1264,7 +1307,7 @@ func loadWorkloadPolicyFromCatalog(
 	)
 	bh := ses.GetBackgroundExec(tenantCtx)
 	if bh == nil {
-		return "", moerr.NewInternalError(
+		return "", pbtimestamp.Timestamp{}, moerr.NewInternalError(
 			ctx,
 			"query workload policy background executor is not initialized",
 		)
@@ -1279,12 +1322,13 @@ func loadWorkloadPolicyFromCatalog(
 			queryWorkloadPolicy,
 		),
 	)
+	catalogRevision := workloadPolicyCatalogRevision(bh)
 	if err != nil {
-		return "", err
+		return "", catalogRevision, err
 	}
 	raw := ""
 	if len(results) > 1 || (len(results) == 1 && results[0].GetRowCount() > 1) {
-		return "", moerr.NewInternalError(
+		return "", catalogRevision, moerr.NewInternalError(
 			ctx,
 			"query workload policy catalog contains duplicate account rows",
 		)
@@ -1292,10 +1336,28 @@ func loadWorkloadPolicyFromCatalog(
 	if len(results) == 1 && results[0].GetRowCount() == 1 {
 		raw, err = results[0].GetString(tenantCtx, 0, 0)
 		if err != nil {
-			return "", err
+			return "", catalogRevision, err
 		}
 	}
-	return raw, nil
+	return raw, catalogRevision, nil
+}
+
+type backgroundExecSnapshotSource interface {
+	LastStatementSnapshotTS() pbtimestamp.Timestamp
+}
+
+func workloadPolicyCatalogRevision(bh BackgroundExec) pbtimestamp.Timestamp {
+	source, ok := bh.(backgroundExecSnapshotSource)
+	if !ok {
+		return pbtimestamp.Timestamp{}
+	}
+	snapshotTS := source.LastStatementSnapshotTS()
+	if snapshotTS.IsEmpty() {
+		return pbtimestamp.Timestamp{}
+	}
+	// Transaction snapshots are exclusive: every commit through Prev() is
+	// visible to the SELECT, while SnapshotTS itself is not.
+	return snapshotTS.Prev()
 }
 
 // WorkloadPolicySnapshot parses at most once per distinct account-global

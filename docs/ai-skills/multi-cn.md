@@ -125,6 +125,14 @@ SET GLOBAL query_workload_policy = '{
 }';
 ```
 
+For a rolling upgrade, keep `query_workload_policy` empty until every CN that
+can serve the account runs a Phase 9-capable binary. The propagation RPC uses
+the current MORPC protocol family, whose negotiated version does not advertise
+handler-level workload-policy capability; protocol compatibility alone
+therefore cannot prove that an older CN will enforce the policy. The empty
+default is mixed-version safe. Activating a non-empty policy is a cluster-wide
+feature cutover and must happen only after the CN upgrade is complete.
+
 `labels` must not contain `account`; the server adds the authenticated account.
 `fallback` defaults to `strict`. `legacy-compatible` is the only compatibility
 mode, and `empty_worker: local-fallback` is valid only with that mode.

@@ -52,6 +52,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -651,6 +652,12 @@ func TestWorkloadPolicyKeepsGenerateSeriesAndInfileFanoutInsideTargetPool(t *tes
 	})
 	require.Equal(t, Remote, scopes[0].Magic)
 	require.Equal(t, Remote, scopes[1].Magic)
+	firstSeries, ok := scopes[0].RootOp.(*table_function.TableFunction)
+	require.True(t, ok)
+	require.Equal(t, [][2]int64{{0, 0}}, firstSeries.OffsetTotal)
+	secondSeries, ok := scopes[1].RootOp.(*table_function.TableFunction)
+	require.True(t, ok)
+	require.Equal(t, [][2]int64{{1, 1}}, secondSeries.OffsetTotal)
 
 	fanout := testCompile.getHiveFileFanoutNodes(
 		&tree.ExternParam{ExParamConst: tree.ExParamConst{ScanType: tree.INFILE}},
