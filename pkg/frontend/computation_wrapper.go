@@ -567,6 +567,7 @@ func initExecuteStmtParam(execCtx *ExecCtx, ses *Session, cwft *TxnComputationWr
 	}
 	originSQL := prepareStmt.Sql
 	preparePlan := prepareStmt.PreparePlan.GetDcl().GetPrepare()
+	currentNativeMode := ses.sqlModeHasMatrixOneNative()
 
 	// TODO check if schema change, obj.Obj is zero all the time in 0.6
 	eng := ses.proc.Base.SessionInfo.StorageEngine
@@ -594,9 +595,11 @@ func initExecuteStmtParam(execCtx *ExecCtx, ses *Session, cwft *TxnComputationWr
 		}
 	}
 
-	// Rebuild the plan when catalog schema or session temporary-table name
-	// resolution changed.
-	if change {
+	modeMismatch := prepareStmt.NativeMode != currentNativeMode
+
+	// Rebuild the plan when catalog schema, session temporary-table name
+	// resolution, or the session's compatibility mode changed.
+	if change || modeMismatch {
 		originPrepareStmt := &tree.PrepareStmt{
 			Name: tree.Identifier(prepareStmt.Name),
 			Stmt: prepareStmt.PrepareStmt,
@@ -624,12 +627,13 @@ func initExecuteStmtParam(execCtx *ExecCtx, ses *Session, cwft *TxnComputationWr
 		if execCtx.input != nil && execCtx.input.isBinaryProtExecute {
 			execCtx.prepareColDef = newColDefData
 		}
+		prepareStmt.NativeMode = currentNativeMode
 		prepareStmt.Ts = timestamp.Timestamp{PhysicalTime: time.Now().Unix()}
 		prepareStmt.tempTableVersion = currentTempTableVersion
 	}
 
-	// Recreate the cached compile only when a plan dependency changed. Without
-	// such a change the cached compile is reused as-is: Compile.Reset clears
+	// Recreate the cached compile only when a plan dependency changed.
+	// Otherwise the cached compile is reused as-is: Compile.Reset clears
 	// the per-execution state, including the pipeline edges' terminal state
 	// (see Scope.resetForReuse), so reuse is safe and avoids the
 	// per-execution recompilation overhead that regressed TPCC. A nil cache
@@ -637,7 +641,7 @@ func initExecuteStmtParam(execCtx *ExecCtx, ses *Session, cwft *TxnComputationWr
 	// query); recompiling would fail with ErrCantCompileForPrepare on every
 	// execution, so leave it to the regular compile path (isPrepare=false).
 	// See: https://github.com/matrixorigin/matrixone/issues/25614
-	if change && prepareStmt.compile != nil {
+	if (change || modeMismatch) && prepareStmt.compile != nil {
 		prepareStmt.compile.FreeOperator()
 		prepareStmt.compile.SetIsPrepare(false)
 		prepareStmt.compile.Release()
