@@ -907,45 +907,6 @@ func makeIndexHintJoinBuilder(t *testing.T) (*QueryBuilder, int32, int32, *planp
 	return builder, joinID, leftScanID, leftDef
 }
 
-func TestJoinIndexRejectsMixedExactNumericStringKey(t *testing.T) {
-	builder, joinID, leftScanID, leftDef := makeIndexHintJoinBuilder(t)
-	joinNode := builder.qry.Nodes[joinID]
-	rightDef := builder.qry.Nodes[joinNode.Children[1]].TableDef
-
-	leftDef.Cols[1].Typ = planpb.Type{Id: int32(types.T_varchar)}
-	rightDef.Cols[1].Typ = planpb.Type{Id: int32(types.T_int64)}
-	joinNode.OnList[0].GetF().Args[0].Typ = leftDef.Cols[1].Typ
-	joinNode.OnList[0].GetF().Args[1].Typ = rightDef.Cols[1].Typ
-
-	newID, err := builder.applyIndicesForJoins(
-		joinID, joinNode, map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
-	require.NoError(t, err)
-	require.Equal(t, joinID, newID)
-	require.Equal(t, leftScanID, joinNode.Children[0])
-}
-
-func TestCompositeJoinIndexRejectsMixedPart(t *testing.T) {
-	builder, joinID, leftScanID, leftDef := makeIndexHintJoinBuilder(t)
-	joinNode := builder.qry.Nodes[joinID]
-	rightScan := builder.qry.Nodes[joinNode.Children[1]]
-	rightDef := rightScan.TableDef
-
-	leftDef.Indexes[0].Parts = []string{"a", "b", "id"}
-	leftDef.Cols[2].Typ = planpb.Type{Id: int32(types.T_varchar)}
-	rightDef.Cols[1].Typ = planpb.Type{Id: int32(types.T_int64)}
-	joinNode.OnList = append(joinNode.OnList, ftjMakeEqExpr(
-		t,
-		ftjColExpr(leftDef, builder.qry.Nodes[leftScanID].BindingTags[0], 2),
-		ftjColExpr(rightDef, rightScan.BindingTags[0], 1),
-	))
-
-	newID, err := builder.applyIndicesForJoins(
-		joinID, joinNode, map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
-	require.NoError(t, err)
-	require.Equal(t, joinID, newID)
-	require.Equal(t, leftScanID, joinNode.Children[0])
-}
-
 func TestIndexHintOrderScopeControlsTopSortRewrite(t *testing.T) {
 	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
 	tag := builder.genNewBindTag()
@@ -1092,6 +1053,59 @@ func addIndexHintIndexTableForTest(mock *MockOptimizer, name string, tableID uin
 	mock.ctxt.tables[name] = tableDef
 	mock.ctxt.id2name[tableID] = name
 	mock.ctxt.pks[name] = []int{0}
+}
+
+func addMixedStringNumericIndexTablesForTest(mock *MockOptimizer) {
+	addIndexHintChoiceTableForTest(mock)
+
+	addTable := func(name string, tableID uint64, valueType planpb.Type, withIndex bool) {
+		tableDef := DeepCopyTableDef(mock.ctxt.tables["index_hint_t"], true)
+		tableDef.Name = name
+		tableDef.TblId = tableID
+		tableDef.Cols[1].Typ = valueType
+		if withIndex {
+			tableDef.Indexes = []*planpb.IndexDef{{
+				IndexName:      "idx_a",
+				Parts:          []string{"a", catalog.CreateAlias("id")},
+				IndexTableName: "idx_hint_a",
+				TableExist:     true,
+			}}
+		} else {
+			tableDef.Indexes = nil
+		}
+		mock.ctxt.objects[name] = &ObjectRef{SchemaName: "tpch", ObjName: name, Obj: int64(tableID)}
+		mock.ctxt.tables[name] = tableDef
+		mock.ctxt.id2name[tableID] = name
+		mock.ctxt.pks[name] = []int{0}
+	}
+
+	addTable("string_index_t", 25361, planpb.Type{Id: int32(types.T_varchar)}, true)
+	addTable("numeric_join_t", 25362, planpb.Type{Id: int32(types.T_int64)}, false)
+}
+
+func TestMixedStringNumericComparisonSkipsForcedIndexEndToEnd(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	addMixedStringNumericIndexTablesForTest(mock)
+
+	queryPlan, err := runOneStmt(mock, t, `
+		select id
+		from string_index_t force index(idx_a)
+		where a = 9007199254740993`)
+	require.NoError(t, err)
+	require.Empty(t, findIndexScanNameForTable(queryPlan.GetQuery(), "string_index_t"))
+}
+
+func TestMixedStringNumericJoinSkipsForcedIndexEndToEnd(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	addMixedStringNumericIndexTablesForTest(mock)
+
+	queryPlan, err := runOneStmt(mock, t, `
+		select l.id
+		from string_index_t l force index for join(idx_a)
+		join numeric_join_t r on l.a = r.a`)
+	require.NoError(t, err)
+	require.False(t, planHasIndexJoin(queryPlan))
+	require.Empty(t, findIndexScanNameForTable(queryPlan.GetQuery(), "string_index_t"))
 }
 
 func findFirstIndexScanName(p *Plan) string {
@@ -4144,98 +4158,6 @@ func TestCheckIndexFilter_RangeOps(t *testing.T) {
 			assert.Equal(t, tt.wantColPos, gotCol.ColPos)
 		})
 	}
-}
-
-func TestCheckIndexFilterRejectsMixedExactNumericString(t *testing.T) {
-	stringCol := makeSpatialColExpr(5)
-	stringCol.Typ = planpb.Type{Id: int32(types.T_varchar)}
-	stringConst := makePlan2StringConstExprWithType("1", false)
-	numericConst := makePlan2Int64ConstExprWithType(1)
-	floatConst := makePlan2Float64ConstExprWithType(1)
-	dynamicParam := &planpb.Expr{
-		Typ:  planpb.Type{Id: int32(types.T_any)},
-		Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}},
-	}
-
-	tests := []struct {
-		name string
-		fn   *planpb.Function
-		want int
-	}{
-		{
-			name: "equal",
-			fn:   makeComparisonExpr("=", stringCol, numericConst).GetF(),
-			want: UnsupportedIndexCondition,
-		},
-		{
-			name: "reverse range",
-			fn:   makeComparisonExpr("<", numericConst, stringCol).GetF(),
-			want: UnsupportedIndexCondition,
-		},
-		{
-			name: "between",
-			fn: &planpb.Function{
-				Func: &planpb.ObjectRef{ObjName: "between"},
-				Args: []*planpb.Expr{stringCol, numericConst, makePlan2Int64ConstExprWithType(2)},
-			},
-			want: UnsupportedIndexCondition,
-		},
-		{
-			name: "in",
-			fn: &planpb.Function{
-				Func: &planpb.ObjectRef{ObjName: "in"},
-				Args: []*planpb.Expr{stringCol, numericConst},
-			},
-			want: UnsupportedIndexCondition,
-		},
-		{
-			name: "prepared parameter",
-			fn:   makeComparisonExpr("=", stringCol, dynamicParam).GetF(),
-			want: UnsupportedIndexCondition,
-		},
-		{
-			name: "string equality remains supported",
-			fn:   makeComparisonExpr("=", stringCol, stringConst).GetF(),
-			want: EqualIndexCondition,
-		},
-		{
-			name: "float string equality keeps existing path",
-			fn:   makeComparisonExpr("=", stringCol, floatConst).GetF(),
-			want: EqualIndexCondition,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, _ := checkIndexFilter(tt.fn)
-			require.Equal(t, tt.want, got)
-		})
-	}
-}
-
-func TestCompositeIndexLeadingFiltersStopBeforeMixedExactNumericString(t *testing.T) {
-	stringCol := func(pos int32) *planpb.Expr {
-		expr := makeSpatialColExpr(pos)
-		expr.Typ = planpb.Type{Id: int32(types.T_varchar)}
-		return expr
-	}
-	node := &planpb.Node{
-		TableDef: &planpb.TableDef{
-			Cols: []*planpb.ColDef{
-				{Name: "a", Typ: planpb.Type{Id: int32(types.T_varchar)}},
-				{Name: "b", Typ: planpb.Type{Id: int32(types.T_varchar)}},
-			},
-			Name2ColIndex: map[string]int32{"a": 0, "b": 1},
-		},
-		FilterList: []*planpb.Expr{
-			makeComparisonExpr("=", stringCol(0), makePlan2StringConstExprWithType("same", false)),
-			makeComparisonExpr("=", stringCol(1), makePlan2Int64ConstExprWithType(1)),
-		},
-	}
-	idxDef := &planpb.IndexDef{Parts: []string{"a", "b"}}
-
-	leading := tryMatchMoreLeadingFilters(idxDef, node, 0)
-	require.Equal(t, []int32{0}, leading)
 }
 
 func TestCanonicalRangeOp(t *testing.T) {

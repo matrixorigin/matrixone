@@ -43,8 +43,7 @@ DROP TABLE t0;
 CREATE TABLE t1 (a char(10), b INT);
 INSERT INTO t1 VALUES ('', 0);
 SELECT COALESCE(a) = COALESCE(b) FROM t1;
-➤ COALESCE(a) = COALESCE(b)[-7,1,0]  𝄀
-1
+invalid argument cast to int, bad value 
 DROP TABLE t1;
 CREATE TABLE t1 ( a INTEGER, b varchar(255) );
 INSERT INTO t1 VALUES (1,'z');

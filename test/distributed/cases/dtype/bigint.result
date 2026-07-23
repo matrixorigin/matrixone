@@ -180,43 +180,46 @@ id
 SELECT * from t_bigint WHERE id = 1.1e0;
 id
 SELECT * from t_bigint WHERE id = '1.1';
-id
+invalid argument cast to int, bad value 1.1
 SELECT * from t_bigint WHERE id = '1.1e0';
-id
+invalid argument cast to int, bad value 1.1e0
 SELECT * from t_bigint WHERE id IN (1.1, 2.2);
 id
 SELECT * from t_bigint WHERE id IN (1.1e0, 2.2e0);
 id
 SELECT * from t_bigint WHERE id IN ('1.1', '2.2');
-id
+invalid argument cast to int, bad value 1.1
 SELECT * from t_bigint WHERE id IN ('1.1e0', '2.2e0');
-id
+invalid argument cast to int, bad value 1.1e0
 SELECT * from t_bigint WHERE id BETWEEN 1.1 AND 1.9;
 id
 SELECT * from t_bigint WHERE id BETWEEN 1.1e0 AND 1.9e0;
 id
 SELECT * from t_bigint WHERE id BETWEEN '1.1' AND '1.9';
-id
+invalid argument cast to int, bad value 1.1
 SELECT * from t_bigint WHERE id BETWEEN '1.1e0' AND '1.9e0';
-id
+invalid argument cast to int, bad value 1.1e0
 INSERT INTO t_bigint VALUES (9007199254740992), (9007199254740993), (-9007199254740993);
 SELECT * from t_bigint WHERE id = '9007199254740993';
 id
+9007199254740992
 9007199254740993
 SELECT * from t_bigint WHERE id = '9007199254740992';
 id
 9007199254740992
+9007199254740993
 SELECT * from t_bigint WHERE id = '-9007199254740993';
 id
 -9007199254740993
 SELECT * from t_bigint WHERE id > '9007199254740992.5';
 id
-9007199254740993
 SELECT * from t_bigint WHERE id IN ('9007199254740993', '1.5');
 id
+9007199254740992
 9007199254740993
 SELECT * from t_bigint WHERE id BETWEEN '9007199254740992.5' AND '9007199254740993.5';
 id
+9007199254740992
 9007199254740993
 DELETE FROM t_bigint WHERE id > 2 or id < 0;
 drop table t1;
@@ -548,21 +551,25 @@ s
 1.7
 select s from t_numeric_string_reverse force index(idx_numeric_string_s) where s = 0 order by s;
 s
-0x10
 select s from t_numeric_string_reverse force index(idx_numeric_string_s) where s = 9007199254740993 order by s;
 s
+9007199254740992
 9007199254740993
 select s from t_numeric_string_reverse force index(idx_numeric_string_s) where s <=> 9007199254740993 order by s;
 s
+9007199254740992
 9007199254740993
 select s from t_numeric_string_reverse force index(idx_numeric_string_s) where s in (9007199254740993) order by s;
 s
+9007199254740992
 9007199254740993
 select s from t_numeric_string_reverse force index(idx_numeric_string_s) where s between 9007199254740993 and 9007199254740993 order by s;
 s
+9007199254740992
 9007199254740993
 select i from t_numeric_string_reverse where i <=> '9007199254740993' order by i;
 i
+9007199254740992
 9007199254740993
 prepare numeric_string_stmt from 'select s from t_numeric_string_reverse force index(idx_numeric_string_s) where s = ? order by s';
 set @numeric_string_param = 9007199254740993;
@@ -581,16 +588,19 @@ select l.s from t_numeric_string_join_left l
 join t_numeric_string_join_right r on l.s = r.i order by l.s;
 s
 1abc
+9007199254740992
 9007199254740993
 select l.s from t_numeric_string_join_left l force index for join(idx_numeric_string_join_s)
 join t_numeric_string_join_right r on l.s = r.i order by l.s;
 s
 1abc
+9007199254740992
 9007199254740993
 select l.s from t_numeric_string_join_left l force index for join(idx_numeric_string_join_as)
 join t_numeric_string_join_right r on l.a = r.a and l.s = r.i order by l.s;
 s
 1abc
+9007199254740992
 9007199254740993
 drop table t_numeric_string_join_left;
 drop table t_numeric_string_join_right;

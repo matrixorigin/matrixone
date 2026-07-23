@@ -2385,28 +2385,28 @@ func strTypeToOthers(proc *process.Process,
 		return strToBit(ctx, source, rs, int(toType.Width), length, selectList)
 	case types.T_int8:
 		rs := vector.MustFunctionResult[int8](result)
-		return strToSigned(ctx, source, rs, 8, length, selectList, explicit)
+		return strToSigned(ctx, source, rs, 8, length, selectList, mode)
 	case types.T_int16:
 		rs := vector.MustFunctionResult[int16](result)
-		return strToSigned(ctx, source, rs, 16, length, selectList, explicit)
+		return strToSigned(ctx, source, rs, 16, length, selectList, mode)
 	case types.T_int32:
 		rs := vector.MustFunctionResult[int32](result)
-		return strToSigned(ctx, source, rs, 32, length, selectList, explicit)
+		return strToSigned(ctx, source, rs, 32, length, selectList, mode)
 	case types.T_int64:
 		rs := vector.MustFunctionResult[int64](result)
-		return strToSigned(ctx, source, rs, 64, length, selectList, explicit)
+		return strToSigned(ctx, source, rs, 64, length, selectList, mode)
 	case types.T_uint8:
 		rs := vector.MustFunctionResult[uint8](result)
-		return strToUnsigned(ctx, source, rs, 8, length, selectList, explicit)
+		return strToUnsigned(ctx, source, rs, 8, length, selectList, mode)
 	case types.T_uint16:
 		rs := vector.MustFunctionResult[uint16](result)
-		return strToUnsigned(ctx, source, rs, 16, length, selectList, explicit)
+		return strToUnsigned(ctx, source, rs, 16, length, selectList, mode)
 	case types.T_uint32:
 		rs := vector.MustFunctionResult[uint32](result)
-		return strToUnsigned(ctx, source, rs, 32, length, selectList, explicit)
+		return strToUnsigned(ctx, source, rs, 32, length, selectList, mode)
 	case types.T_uint64:
 		rs := vector.MustFunctionResult[uint64](result)
-		return strToUnsigned(ctx, source, rs, 64, length, selectList, explicit)
+		return strToUnsigned(ctx, source, rs, 64, length, selectList, mode)
 	case types.T_float32:
 		rs := vector.MustFunctionResult[float32](result)
 		return strToFloat(ctx, CompatibilityModeFromProcess(proc), source, rs, 32, length, selectList)
@@ -5641,7 +5641,7 @@ func strToSigned[T constraints.Signed](
 	ctx context.Context,
 	from vector.FunctionParameterWrapper[types.Varlena],
 	to *vector.FunctionResult[T], bitSize int,
-	length int, selectList *FunctionSelectList, explicit ...bool) error {
+	length int, selectList *FunctionSelectList, modes ...castMode) error {
 	var i uint64
 	var l = uint64(length)
 	isBinary := from.GetSourceVector().GetIsBin()
@@ -5677,10 +5677,17 @@ func strToSigned[T constraints.Signed](
 				s := strings.TrimSpace(convertByteSliceToString(v))
 				var r int64
 				var err error
-				if len(explicit) > 0 && explicit[0] {
+				mode := castModeNormal
+				if len(modes) > 0 {
+					mode = modes[0]
+				}
+				switch mode {
+				case castModeExplicit:
 					r, err = parseSignedExplicitCastString(s, bitSize)
-				} else {
-					r, err = parseSignedCastString(s, bitSize)
+				case castModeStrictStringWidth:
+					r, err = parseSignedAssignmentCastString(s, bitSize)
+				default:
+					r, err = parseSignedImplicitCastString(s, bitSize)
 				}
 				if err != nil {
 					// XXX I'm not sure if we should return the int8 / int16 / int64 info. or
@@ -5983,12 +5990,174 @@ func parseUnsignedCastString(s string, bitSize int) (uint64, error) {
 	return val, nil
 }
 
+func decimalIntegerPrefix(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return "0"
+	}
+	i := 0
+	if s[i] == '+' || s[i] == '-' {
+		i++
+	}
+	digitsStart := i
+	for i < len(s) && s[i] >= '0' && s[i] <= '9' {
+		i++
+	}
+	if i == digitsStart {
+		return "0"
+	}
+	return s[:i]
+}
+
+func numericIntegerString(s string, round bool) (string, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return "", strconv.ErrSyntax
+	}
+	i := 0
+	negative := false
+	if s[i] == '+' || s[i] == '-' {
+		negative = s[i] == '-'
+		i++
+		if i == len(s) {
+			return "", strconv.ErrSyntax
+		}
+	}
+
+	var digits strings.Builder
+	integerDigits := 0
+	for i < len(s) && s[i] >= '0' && s[i] <= '9' {
+		digits.WriteByte(s[i])
+		integerDigits++
+		i++
+	}
+	fractionDigits := 0
+	if i < len(s) && s[i] == '.' {
+		i++
+		for i < len(s) && s[i] >= '0' && s[i] <= '9' {
+			digits.WriteByte(s[i])
+			fractionDigits++
+			i++
+		}
+	}
+	if integerDigits == 0 && fractionDigits == 0 {
+		return "", strconv.ErrSyntax
+	}
+
+	exponent := int64(0)
+	if i < len(s) && (s[i] == 'e' || s[i] == 'E') {
+		i++
+		exponentStart := i
+		if i < len(s) && (s[i] == '+' || s[i] == '-') {
+			i++
+		}
+		digitStart := i
+		for i < len(s) && s[i] >= '0' && s[i] <= '9' {
+			i++
+		}
+		if i == digitStart {
+			return "", strconv.ErrSyntax
+		}
+		parsed, err := strconv.ParseInt(s[exponentStart:i], 10, 32)
+		if err != nil {
+			if strings.HasPrefix(s[exponentStart:i], "-") {
+				return "0", nil
+			}
+			return "", strconv.ErrRange
+		}
+		exponent = parsed
+	}
+	if i != len(s) {
+		return "", strconv.ErrSyntax
+	}
+
+	allDigits := strings.TrimLeft(digits.String(), "0")
+	if allDigits == "" {
+		return "0", nil
+	}
+	scale := int64(fractionDigits) - exponent
+	if scale <= 0 {
+		zeroCount := -scale
+		if int64(len(allDigits))+zeroCount > 20 {
+			return "", strconv.ErrRange
+		}
+		allDigits += strings.Repeat("0", int(zeroCount))
+	} else {
+		split := int64(len(allDigits)) - scale
+		var integerPart string
+		var firstDiscarded byte
+		if split > 0 {
+			integerPart = allDigits[:split]
+			firstDiscarded = allDigits[split]
+		} else {
+			integerPart = "0"
+			if split == 0 {
+				firstDiscarded = allDigits[0]
+			} else {
+				firstDiscarded = '0'
+			}
+		}
+		if round && firstDiscarded >= '5' {
+			var magnitude big.Int
+			if _, ok := magnitude.SetString(integerPart, 10); !ok {
+				return "", strconv.ErrSyntax
+			}
+			magnitude.Add(&magnitude, big.NewInt(1))
+			integerPart = magnitude.String()
+		}
+		allDigits = integerPart
+	}
+	if negative && allDigits != "0" {
+		allDigits = "-" + allDigits
+	}
+	return allDigits, nil
+}
+
+func parseSignedAssignmentCastString(s string, bitSize int) (int64, error) {
+	integer, err := numericIntegerString(s, true)
+	if err != nil {
+		return 0, err
+	}
+	return strconv.ParseInt(integer, 10, bitSize)
+}
+
+func parseUnsignedAssignmentCastString(s string, bitSize int) (uint64, error) {
+	integer, err := numericIntegerString(s, true)
+	if err != nil {
+		return 0, err
+	}
+	return strconv.ParseUint(strings.TrimPrefix(integer, "+"), 10, bitSize)
+}
+
+func parseSignedImplicitCastString(s string, bitSize int) (int64, error) {
+	if token, err := parseCastNumericToken(s); err == nil && token.base != 10 {
+		return parseSignedCastString(s, bitSize)
+	}
+	integer, err := numericIntegerString(s, false)
+	if err != nil {
+		return 0, err
+	}
+	return strconv.ParseInt(integer, 10, bitSize)
+}
+
+func parseUnsignedImplicitCastString(s string, bitSize int) (uint64, error) {
+	if token, err := parseCastNumericToken(s); err == nil && token.base != 10 {
+		return parseUnsignedCastString(s, bitSize)
+	}
+	integer, err := numericIntegerString(s, false)
+	if err != nil {
+		return 0, err
+	}
+	return strconv.ParseUint(strings.TrimPrefix(integer, "+"), 10, bitSize)
+}
+
 func parseSignedExplicitCastString(s string, bitSize int) (int64, error) {
-	value, err := parseSignedCastString(s, bitSize)
+	prefix := decimalIntegerPrefix(s)
+	value, err := parseSignedCastString(prefix, bitSize)
 	if err == nil || !errors.Is(err, strconv.ErrRange) {
 		return value, err
 	}
-	token, tokenErr := parseCastNumericToken(s)
+	token, tokenErr := parseCastNumericToken(prefix)
 	if tokenErr != nil {
 		return 0, tokenErr
 	}
@@ -6018,11 +6187,12 @@ func parseSignedExplicitCastString(s string, bitSize int) (int64, error) {
 }
 
 func parseUnsignedExplicitCastString(s string, bitSize int) (uint64, error) {
-	value, err := parseUnsignedCastString(s, bitSize)
+	prefix := decimalIntegerPrefix(s)
+	value, err := parseUnsignedCastString(prefix, bitSize)
 	if err == nil {
 		return value, nil
 	}
-	token, tokenErr := parseCastNumericToken(s)
+	token, tokenErr := parseCastNumericToken(prefix)
 	if tokenErr != nil {
 		return 0, tokenErr
 	}
@@ -6046,7 +6216,7 @@ func strToUnsigned[T constraints.Unsigned](
 	ctx context.Context,
 	from vector.FunctionParameterWrapper[types.Varlena],
 	to *vector.FunctionResult[T], bitSize int,
-	length int, selectList *FunctionSelectList, explicit ...bool) error {
+	length int, selectList *FunctionSelectList, modes ...castMode) error {
 	var i uint64
 	var l = uint64(length)
 	isBinary := from.GetSourceVector().GetIsBin()
@@ -6068,10 +6238,17 @@ func strToUnsigned[T constraints.Unsigned](
 			} else {
 				s := strings.TrimSpace(convertByteSliceToString(v))
 				res = &s
-				if len(explicit) > 0 && explicit[0] {
+				mode := castModeNormal
+				if len(modes) > 0 {
+					mode = modes[0]
+				}
+				switch mode {
+				case castModeExplicit:
 					val, tErr = parseUnsignedExplicitCastString(s, bitSize)
-				} else {
-					val, tErr = parseUnsignedCastString(s, bitSize)
+				case castModeStrictStringWidth:
+					val, tErr = parseUnsignedAssignmentCastString(s, bitSize)
+				default:
+					val, tErr = parseUnsignedImplicitCastString(s, bitSize)
 				}
 			}
 			if tErr != nil {

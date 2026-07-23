@@ -608,10 +608,12 @@ func TestOrdinaryCastOverflowRemainsStrict(t *testing.T) {
 	_, err = parseDecimal64CastString("9999999.99", 6, 2)
 	require.Error(t, err)
 
-	_, err = parseSignedExplicitCastString("not-a-number", 64)
-	require.Error(t, err)
-	_, err = parseUnsignedExplicitCastString("not-a-number", 64)
-	require.Error(t, err)
+	signed, err := parseSignedExplicitCastString("not-a-number", 64)
+	require.NoError(t, err)
+	require.Zero(t, signed)
+	unsigned, err := parseUnsignedExplicitCastString("not-a-number", 64)
+	require.NoError(t, err)
+	require.Zero(t, unsigned)
 	_, err = clampDecimal64CastString("not-a-number", 6, 2)
 	require.Error(t, err)
 }
@@ -639,6 +641,72 @@ func TestMatrixOneExtendedIntegerTargetsRemainStrict(t *testing.T) {
 			testCase := NewFunctionTestCase(proc, inputs, expect, NewCast)
 			succeed, info := testCase.Run()
 			require.True(t, succeed, info)
+		})
+	}
+}
+
+func TestExplicitStringIntegerPrefixMatchesMySQL(t *testing.T) {
+	for _, test := range []struct {
+		input string
+		want  int64
+	}{
+		{input: "7e0", want: 7},
+		{input: "7e+2", want: 7},
+		{input: "1.5e0", want: 1},
+		{input: "-1.5", want: -1},
+		{input: "  +42suffix", want: 42},
+		{input: ".5", want: 0},
+		{input: "0x10", want: 0},
+	} {
+		t.Run(test.input, func(t *testing.T) {
+			got, err := parseSignedExplicitCastString(test.input, 64)
+			require.NoError(t, err)
+			require.Equal(t, test.want, got)
+		})
+	}
+
+	got, err := parseUnsignedExplicitCastString("7e2", 64)
+	require.NoError(t, err)
+	require.Equal(t, uint64(7), got)
+}
+
+func TestAssignmentStringIntegerRoundingMatchesMySQL(t *testing.T) {
+	for _, test := range []struct {
+		input string
+		want  int64
+	}{
+		{input: "1.5", want: 2},
+		{input: "-1.5", want: -2},
+		{input: "2.5", want: 3},
+		{input: "7e2", want: 700},
+		{input: "7E2", want: 700},
+		{input: ".5", want: 1},
+		{input: "-.5", want: -1},
+		{input: "9.007199254740993e15", want: 9007199254740993},
+	} {
+		t.Run(test.input, func(t *testing.T) {
+			got, err := parseSignedAssignmentCastString(test.input, 64)
+			require.NoError(t, err)
+			require.Equal(t, test.want, got)
+		})
+	}
+}
+
+func TestImplicitStringIntegerConversionMatchesMySQL(t *testing.T) {
+	for _, test := range []struct {
+		input string
+		want  int64
+	}{
+		{input: "1.5", want: 1},
+		{input: "-1.5", want: -1},
+		{input: "7e2", want: 700},
+		{input: "7E+2", want: 700},
+		{input: "1.5e1", want: 15},
+	} {
+		t.Run(test.input, func(t *testing.T) {
+			got, err := parseSignedImplicitCastString(test.input, 64)
+			require.NoError(t, err)
+			require.Equal(t, test.want, got)
 		})
 	}
 }

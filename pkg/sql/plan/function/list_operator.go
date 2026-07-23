@@ -2713,15 +2713,11 @@ var supportedOperators = []FuncNew{
 		class:      plan.Function_STRICT,
 		layout:     CAST_EXPRESSION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			// cast_strict is an internal operator used only for assignment to a
-			// real CHAR/VARCHAR column, where an over-width value must be
-			// rejected instead of truncated. Restrict the target type to
-			// CHAR/VARCHAR so it can't be misused as a generic strict cast.
-			if len(inputs) == 2 &&
-				(inputs[1].Oid == types.T_char || inputs[1].Oid == types.T_varchar) {
-				if IfTypeCastSupported(inputs[0].Oid, inputs[1].Oid) {
-					return newCheckResultWithSuccess(0)
-				}
+			// cast_strict is the internal assignment cast. It keeps strict
+			// CHAR/VARCHAR width checks and uses assignment-specific numeric
+			// conversion rules for real table columns.
+			if len(inputs) == 2 && IfTypeCastSupported(inputs[0].Oid, inputs[1].Oid) {
+				return newCheckResultWithSuccess(0)
 			}
 			return newCheckResultWithFailure(failedFunctionParametersWrong)
 		},

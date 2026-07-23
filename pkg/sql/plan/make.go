@@ -592,13 +592,13 @@ func makePlan2CastExpr(ctx context.Context, expr *Expr, targetType Type) (*Expr,
 }
 
 // makePlan2AssignmentCastExpr builds a cast used when validating/storing a value
-// against a real column type (e.g. column DEFAULT / ON UPDATE). For CHAR/VARCHAR
-// targets it uses the strict cast so an over-length value is rejected instead of
-// being silently truncated, mirroring forceAssignmentCastExpr. Explicit SQL CAST
-// keeps the lenient generic cast (MySQL-compatible truncation).
+// against a real column type (e.g. column DEFAULT / ON UPDATE). Assignment casts
+// preserve column-specific conversion rules, including CHAR/VARCHAR width checks
+// and numeric string parsing. Explicit SQL CAST uses its own conversion mode.
 func makePlan2AssignmentCastExpr(ctx context.Context, expr *Expr, targetType Type) (*Expr, error) {
 	funcName := "cast"
-	if targetType.Id == int32(types.T_char) || targetType.Id == int32(types.T_varchar) {
+	if targetType.Id == int32(types.T_char) || targetType.Id == int32(types.T_varchar) ||
+		isNumericAssignmentTarget(targetType) {
 		funcName = "cast_strict"
 	}
 	return makePlan2CastExprWithName(ctx, expr, targetType, funcName)

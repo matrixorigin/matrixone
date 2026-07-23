@@ -174,7 +174,7 @@ drop table if exists issue_25216_assignment;
 create table issue_25216_assignment (id int);
 insert into issue_25216_assignment values ('7e2'), ('1.5');
 select * from issue_25216_assignment order by id;
-update issue_25216_assignment set id = '2.5' where id = 1;
+update issue_25216_assignment set id = '2.5' where id = 2;
 select * from issue_25216_assignment order by id;
 insert into issue_25216_assignment values ('1a');
 insert into issue_25216_assignment values ('1 2');

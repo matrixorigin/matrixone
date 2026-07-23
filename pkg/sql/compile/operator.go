@@ -2237,8 +2237,13 @@ func extraJoinConditions(exprs []*plan.Expr) (*plan.Expr, []*plan.Expr) {
 	eqConds := make([]*plan.Expr, 0, len(exprs))
 	notEqConds := make([]*plan.Expr, 0, len(exprs))
 	for i, expr := range exprs {
-		if _, ok := expr.Expr.(*plan.Expr_F); ok {
-			if !plan2.IsEquiJoinKeyExpr(expr) {
+		if e, ok := expr.Expr.(*plan.Expr_F); ok {
+			if !plan2.IsEqualFunc(e.F.Func.GetObj()) {
+				notEqConds = append(notEqConds, exprs[i])
+				continue
+			}
+			lpos, rpos := plan2.HasColExpr(e.F.Args[0], -1), plan2.HasColExpr(e.F.Args[1], -1)
+			if lpos == -1 || rpos == -1 || (lpos == rpos) {
 				notEqConds = append(notEqConds, exprs[i])
 				continue
 			}

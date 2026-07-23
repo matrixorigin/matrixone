@@ -3191,7 +3191,9 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 					orExprList = append(orExprList, rightVal)
 					continue
 				}
-				if checkNoNeedCast(makeTypeByPlan2Expr(rightVal), typLeft, rightVal) || partitionIn {
+				rightType := makeTypeByPlan2Expr(rightVal)
+				if (!shouldUseApproximateStringNumericComparison(args[0], rightVal) &&
+					checkNoNeedCast(rightType, typLeft, rightVal)) || partitionIn {
 					inExpr, err := appendCastBeforeExpr(ctx, rightVal, args[0].Typ)
 					if err != nil {
 						return nil, err
@@ -3299,10 +3301,21 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 
 		return nil, err
 	}
+	var forcedCastTypes []types.Type
+	if castTypes, ok := approximateStringNumericCastTypes(name, args, argsType); ok {
+		fGet, err = function.GetFunctionByName(ctx, name, castTypes)
+		if err != nil {
+			return nil, err
+		}
+		forcedCastTypes = castTypes
+	}
 
 	funcID = fGet.GetEncodedOverloadID()
 	returnType = fGet.GetReturnType()
 	argsCastType, _ = fGet.ShouldDoImplicitTypeCast()
+	if len(forcedCastTypes) > 0 {
+		argsCastType = forcedCastTypes
+	}
 
 	// Optimization: avoid casting columns in comparisons to preserve index usage
 	switch name {
@@ -3439,6 +3452,9 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 	// old rule: cast(int32Col as int64) >10 ,   new rule: int32Col > (cast 10 as int32)
 	switch name {
 	case "=", "<", "<=", ">", ">=", "<>":
+		if len(forcedCastTypes) > 0 {
+			break
+		}
 		// if constant's type higher than column's type
 		// and constant's value in range of column's type, then no cast was needed
 		switch args[0].Expr.(type) {
@@ -3481,7 +3497,9 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		}
 
 	case "between":
-		if checkNoNeedCast(argsType[1], argsType[0], args[1]) && checkNoNeedCast(argsType[2], argsType[0], args[2]) {
+		if len(forcedCastTypes) == 0 &&
+			checkNoNeedCast(argsType[1], argsType[0], args[1]) &&
+			checkNoNeedCast(argsType[2], argsType[0], args[2]) {
 			argsCastType = []types.Type{argsType[0], argsType[0], argsType[0]}
 			fGet, err = function.GetFunctionByName(ctx, name, argsCastType)
 			if err != nil {
@@ -3491,7 +3509,9 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		}
 
 	case "in_range":
-		if checkNoNeedCast(argsType[1], argsType[0], args[1]) && checkNoNeedCast(argsType[2], argsType[0], args[2]) {
+		if len(forcedCastTypes) == 0 &&
+			checkNoNeedCast(argsType[1], argsType[0], args[1]) &&
+			checkNoNeedCast(argsType[2], argsType[0], args[2]) {
 			argsCastType = []types.Type{argsType[0], argsType[0], argsType[0], argsType[3]}
 			fGet, err = function.GetFunctionByName(ctx, name, argsCastType)
 			if err != nil {
@@ -3583,6 +3603,68 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		},
 		Typ: Typ,
 	}, nil
+}
+
+func approximateStringNumericCastTypes(
+	name string,
+	args []*Expr,
+	argsType []types.Type,
+) ([]types.Type, bool) {
+	var valueArgs int
+	numericOperator := false
+	switch name {
+	case "=", "<=>", "<", "<=", ">", ">=", "<>":
+		valueArgs = 2
+	case "between":
+		valueArgs = 3
+	case "in_range":
+		valueArgs = 3
+	case "+", "-", "*", "/", "%", "div", "mod":
+		valueArgs = 2
+		numericOperator = true
+	default:
+		return nil, false
+	}
+	if len(args) < valueArgs || len(argsType) < valueArgs {
+		return nil, false
+	}
+
+	hasString, hasNumeric := false, false
+	for i := 0; i < valueArgs; i++ {
+		if containsDynamicParam(args[i]) || isEnumDisplayValueExpr(args[i]) {
+			return nil, false
+		}
+		oid := types.T(args[i].Typ.Id)
+		switch {
+		case oid.IsMySQLString() && oid != types.T_enum && !isEnumPlanType(&args[i].Typ):
+			hasString = true
+		case argsType[i].IsNumeric() && argsType[i].Oid != types.T_decimal256:
+			hasNumeric = true
+		default:
+			return nil, false
+		}
+	}
+	if !hasString || (!numericOperator && !hasNumeric) {
+		return nil, false
+	}
+
+	castTypes := append([]types.Type(nil), argsType...)
+	for i := 0; i < valueArgs; i++ {
+		castTypes[i] = types.T_float64.ToType()
+	}
+	return castTypes, true
+}
+
+func isEnumDisplayValueExpr(expr *Expr) bool {
+	fn := expr.GetF()
+	return fn != nil && fn.Func != nil && fn.Func.ObjName == moEnumCastIndexToValueFun
+}
+
+func shouldUseApproximateStringNumericComparison(left, right *Expr) bool {
+	_, ok := approximateStringNumericCastTypes(
+		"=", []*Expr{left, right}, []types.Type{makeTypeByPlan2Expr(left), makeTypeByPlan2Expr(right)},
+	)
+	return ok
 }
 
 func adjustJsonOrderingDynamicParamType(ctx context.Context, name string, args []*Expr) error {

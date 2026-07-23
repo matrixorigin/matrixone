@@ -1975,6 +1975,29 @@ func isMixedExactNumericStringExprs(left, right *plan.Expr) bool {
 	return stringAndExact(leftType, rightType) || stringAndExact(rightType, leftType)
 }
 
+func implicitNumericCastFromString(expr *plan.Expr) (*plan.Expr, bool) {
+	if expr == nil || !isNumericTypeID(types.T(expr.Typ.Id)) {
+		return nil, false
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || fn.Func.ObjName != "cast" || len(fn.Args) != 2 {
+		return nil, false
+	}
+	_, overloadID := function.DecodeOverloadID(fn.Func.Obj)
+	if overloadID != 0 {
+		return nil, false
+	}
+	source := fn.Args[0]
+	if source == nil || !types.T(source.Typ.Id).IsMySQLString() {
+		return nil, false
+	}
+	return source, true
+}
+
+func isNumericTypeID(typ types.T) bool {
+	return typ.IsInteger() || typ.IsFloat() || typ.IsDecimal() || typ == types.T_bit
+}
+
 func isUnsafeStringKeyComparison(left, right *plan.Expr) bool {
 	if isMixedExactNumericStringExprs(left, right) {
 		return true
@@ -1983,6 +2006,12 @@ func isUnsafeStringKeyComparison(left, right *plan.Expr) bool {
 		return false
 	}
 	leftType, rightType := types.T(left.Typ.Id), types.T(right.Typ.Id)
+	if _, ok := implicitNumericCastFromString(left); ok && isNumericTypeID(rightType) {
+		return true
+	}
+	if _, ok := implicitNumericCastFromString(right); ok && isNumericTypeID(leftType) {
+		return true
+	}
 	return leftType.IsMySQLString() && rightType == types.T_any && containsDynamicParam(right) ||
 		rightType.IsMySQLString() && leftType == types.T_any && containsDynamicParam(left)
 }

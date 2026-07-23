@@ -106,7 +106,7 @@ SELECT * from t_bigint WHERE id BETWEEN 1.1 AND 1.9;
 SELECT * from t_bigint WHERE id BETWEEN 1.1e0 AND 1.9e0;
 SELECT * from t_bigint WHERE id BETWEEN '1.1' AND '1.9';
 SELECT * from t_bigint WHERE id BETWEEN '1.1e0' AND '1.9e0';
-#String constants compare by exact numeric value, not through float64
+# VARCHAR-vs-number comparisons follow MySQL approximate-number semantics
 INSERT INTO t_bigint VALUES (9007199254740992), (9007199254740993), (-9007199254740993);
 SELECT * from t_bigint WHERE id = '9007199254740993';
 SELECT * from t_bigint WHERE id = '9007199254740992';
