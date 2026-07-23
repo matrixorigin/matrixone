@@ -5,7 +5,7 @@ set @old_sql_mode = @@sql_mode;
 create table t (c varchar(3));
 set session sql_mode = 'STRICT_TRANS_TABLES';
 insert into t values ('abcd');
-internal error: Can't cast 'abcd' to VARCHAR type. Src length 4 is larger than Dest length 3
+Data truncation: Can't cast 'abcd' to VARCHAR type. Src length 4 is larger than Dest length 3
 insert into t values ('abc   ');
 select c, char_length(c) from t;
 ➤ c[12,-1,0]  ¦  char_length(c)[-5,64,0]  𝄀
@@ -41,7 +41,7 @@ set session sql_mode = '';
 prepare stmt_width_strict from 'insert into t values (''fail'')';
 set session sql_mode = 'STRICT_TRANS_TABLES';
 execute stmt_width_strict;
-internal error: Can't cast 'fail' to VARCHAR type. Src length 4 is larger than Dest length 3
+Data truncation: Can't cast 'fail' to VARCHAR type. Src length 4 is larger than Dest length 3
 select count(*) from t;
 ➤ count(*)[-5,64,0]  𝄀
 0
@@ -51,7 +51,7 @@ insert into src values ('1234567');
 truncate table t;
 set session sql_mode = 'STRICT_TRANS_TABLES';
 insert into t select c from src;
-internal error: Can't cast column from VARCHAR type to VARCHAR type because of one or more values in that column. Src length 7 is larger than Dest length 3
+Data truncation: Can't cast column from VARCHAR type to VARCHAR type because of one or more values in that column. Src length 7 is larger than Dest length 3
 set session sql_mode = '';
 insert into t select c from src;
 select c, char_length(c) from t;
@@ -62,7 +62,7 @@ set session sql_mode = '';
 insert into t values ('ab');
 set session sql_mode = 'STRICT_TRANS_TABLES';
 update t set c = 'abcd';
-internal error: Can't cast 'abcd' to VARCHAR type. Src length 4 is larger than Dest length 3
+Data truncation: Can't cast 'abcd' to VARCHAR type. Src length 4 is larger than Dest length 3
 set session sql_mode = '';
 update t set c = 'abcd';
 select c, char_length(c) from t;
@@ -72,7 +72,7 @@ create table p (id int primary key, c varchar(3));
 insert into p values (1, 'ab');
 set session sql_mode = 'STRICT_TRANS_TABLES';
 insert into p values (1, 'xx') on duplicate key update c = 'abcd';
-internal error: Can't cast 'abcd' to VARCHAR type. Src length 4 is larger than Dest length 3
+Data truncation: Can't cast 'abcd' to VARCHAR type. Src length 4 is larger than Dest length 3
 set session sql_mode = '';
 insert into p values (1, 'xx') on duplicate key update c = 'abcd';
 select id, c, char_length(c) from p;
@@ -92,6 +92,43 @@ Invalid default value for 'abcd'
 set session sql_mode = 'STRICT_TRANS_TABLES';
 create table d (c varchar(3) default 'abcd');
 Invalid default value for 'abcd'
+create table g (id int primary key, t text, v varchar(1) generated always as (coalesce(t, '')) stored);
+set session sql_mode = '';
+insert into g values (1, 'ab');
+select id, v, char_length(v) from g;
+➤ id[4,32,0]  ¦  v[12,-1,0]  ¦  char_length(v)[-5,64,0]  𝄀
+1  ¦  a  ¦  1
+set session sql_mode = 'STRICT_TRANS_TABLES';
+insert into g values (2, 'cd');
+Data truncation: Can't cast column from TEXT type to VARCHAR type because of one or more values in that column. Src length 2 is larger than Dest length 1
+insert ignore into g values (2, 'cd');
+select id, v, char_length(v) from g order by id;
+➤ id[4,32,0]  ¦  v[12,-1,0]  ¦  char_length(v)[-5,64,0]  𝄀
+1  ¦  a  ¦  1  𝄀
+2  ¦  c  ¦  1
+set session sql_mode = '';
+update g set t = 'xy' where id = 1;
+select id, v, char_length(v) from g where id = 1;
+➤ id[4,32,0]  ¦  v[12,-1,0]  ¦  char_length(v)[-5,64,0]  𝄀
+1  ¦  x  ¦  1
+drop table g;
+create table jsrc (jc json);
+create table vdst (vc varchar(3));
+insert into jsrc values ('"abc   "');
+set session sql_mode = 'STRICT_TRANS_TABLES';
+insert into vdst select jc from jsrc;
+select vc, char_length(vc) from vdst;
+➤ vc[12,-1,0]  ¦  char_length(vc)[-5,64,0]  𝄀
+abc  ¦  3
+truncate table jsrc;
+insert into jsrc values ('"abcd"');
+insert into vdst select jc from jsrc;
+Data truncation: Can't cast column from JSON type to VARCHAR type because of one or more values in that column. Src length 4 is larger than Dest length 3
+select count(*) from vdst;
+➤ count(*)[-5,64,0]  𝄀
+1
+drop table jsrc;
+drop table vdst;
 drop database insert_str_width;
 set session sql_mode = @old_sql_mode;
 select @@sql_mode = @old_sql_mode;
