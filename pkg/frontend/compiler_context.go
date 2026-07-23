@@ -205,7 +205,16 @@ func (tcc *TxnCompilerContext) DefaultDatabase() string {
 }
 
 func (tcc *TxnCompilerContext) GetRootSql() string {
-	return tcc.GetSession().GetSql()
+	tcc.mu.Lock()
+	execCtx := tcc.execCtx
+	if execCtx != nil && execCtx.rootSQLOverride != nil {
+		rootSQL := *execCtx.rootSQLOverride
+		tcc.mu.Unlock()
+		return rootSQL
+	}
+	ses := execCtx.ses
+	tcc.mu.Unlock()
+	return ses.GetSql()
 }
 
 func (tcc *TxnCompilerContext) GetAccountId() (uint32, error) {

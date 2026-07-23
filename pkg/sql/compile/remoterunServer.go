@@ -46,6 +46,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/matrixorigin/matrixone/pkg/util/debug/goroutine"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
@@ -249,15 +250,38 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 		if errBuildCompile != nil {
 			return errBuildCompile
 		}
+		var runErr error
 		defer func() {
+			// Capture operator and descendant facts before cleanup. The MPool
+			// snapshot intentionally follows Compile.clear so temporary execution
+			// allocations are released before LiveBytesAtSeal is measured. The
+			// descendant snapshot is already reduced under AnalyzeModule's mutex;
+			// sender quiescence remains the lifecycle contract for this boundary.
+			localDelta := collectScopeResourceDelta(runCompile.scopes, receiver.cnInformation.cnAddr)
+			descendant := runCompile.anal.remoteResourceSummary()
+			expectedDirect := countExpectedRemoteScopes(runCompile.scopes, receiver.cnInformation.cnAddr)
+			memoryPool := runCompile.proc.Mp()
 			runCompile.clear()
+			localMemory, localMemoryQuality := memoryPool.ResourceSnapshot()
+			aggregate := composeRemoteResourceAggregate(
+				localDelta,
+				localMemory,
+				localMemoryQuality,
+				descendant,
+				expectedDirect,
+			)
+			receiver.resourceDelta = aggregate.Delta
+			receiver.resourceMemory = aggregate.Memory
+			receiver.resourceMissingFragments = aggregate.MissingFragmentCount
+			receiver.resourceMissingMemoryDomains = aggregate.MissingMemoryDomainCount
+
 			runCompile.Release()
 		}()
 
 		// decode and running the pipeline.
-		s, err := decodeScope(receiver.scopeData, runCompile.proc, true, runCompile.e)
-		if err != nil {
-			return err
+		s, runErr := decodeScope(receiver.scopeData, runCompile.proc, true, runCompile.e)
+		if runErr != nil {
+			return runErr
 		}
 		if !receiver.needNotReply {
 			s = appendWriteBackOperator(runCompile, s)
@@ -279,29 +303,29 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 		runCompile.InitPipelineContextToExecuteQuery()
 		normalizeRemoteDispatchReceiverAddresses(s, runCompile.addr)
 
-		registrations, err := registerRemoteDispatchReceivers(s)
-		if err != nil {
-			return err
+		registrations, runErr := registerRemoteDispatchReceivers(s)
+		if runErr != nil {
+			return runErr
 		}
 		defer registrations.cleanup()
 		receiver.colexecServer.RecordBuiltPipeline(receiver.clientSession, receiver.messageId, runCompile.proc)
 
 		// running pipeline.
-		if err = TryMarkQueryRunning(runCompile, runCompile.proc.GetTxnOperator()); err != nil {
-			return err
+		if runErr = TryMarkQueryRunning(runCompile, runCompile.proc.GetTxnOperator()); runErr != nil {
+			return runErr
 		}
 		defer func() {
 			MarkQueryDone(runCompile, runCompile.proc.GetTxnOperator())
 		}()
 
-		err = s.MergeRun(runCompile)
+		runErr = s.MergeRun(runCompile)
 		receiver.warningCount = uint64(runCompile.proc.GetWarningCount())
 		receiver.checkWarnings = runCompile.proc.GetCheckWarnings()
-		if err == nil {
+		if runErr == nil {
 			runCompile.GenPhyPlan(runCompile)
 			receiver.phyPlan = runCompile.anal.GetPhyPlan()
 		}
-		return err
+		return runErr
 
 	case pipeline.Method_StopSending:
 		receiver.colexecServer.CancelPipelineSending(receiver.clientSession, receiver.messageId)
@@ -533,9 +557,13 @@ type messageReceiverOnServer struct {
 	colexecServer *colexec.Server
 
 	// result.
-	phyPlan       *models.PhyPlan
-	warningCount  uint64
-	checkWarnings map[string]uint64
+	phyPlan                      *models.PhyPlan
+	warningCount                 uint64
+	checkWarnings                map[string]uint64
+	resourceDelta                resource.Delta
+	resourceMemory               resource.MemoryTotals
+	resourceMissingFragments     uint64
+	resourceMissingMemoryDomains uint64
 }
 
 func newMessageReceiverOnServer(
@@ -712,6 +740,9 @@ func (receiver *messageReceiverOnServer) sendError(
 	if errInfo != nil {
 		message.SetMoError(receiver.messageCtx, errInfo)
 	}
+	if err = receiver.setTerminalAnalysis(message); err != nil {
+		return err
+	}
 	return receiver.clientSession.Write(receiver.messageCtx, message)
 }
 
@@ -773,13 +804,30 @@ func (receiver *messageReceiverOnServer) sendEndMessage() error {
 	message.WarningCount = receiver.warningCount
 	message.CheckWarnings = makePipelineCheckWarnings(receiver.checkWarnings)
 
-	jsonData, err := json.MarshalIndent(receiver.phyPlan, "", "  ")
+	if err = receiver.setTerminalAnalysis(message); err != nil {
+		return err
+	}
+
+	return receiver.clientSession.Write(receiver.messageCtx, message)
+}
+
+func (receiver *messageReceiverOnServer) setTerminalAnalysis(message *pipeline.Message) error {
+	envelope := remoteTerminalEnvelope{
+		TerminalResourceVersion:  remoteTerminalResourceVersion,
+		Delta:                    receiver.resourceDelta,
+		Memory:                   receiver.resourceMemory,
+		MissingFragmentCount:     receiver.resourceMissingFragments,
+		MissingMemoryDomainCount: receiver.resourceMissingMemoryDomains,
+	}
+	if receiver.phyPlan != nil {
+		envelope.PhyPlan = *receiver.phyPlan
+	}
+	data, err := json.Marshal(envelope)
 	if err != nil {
 		return err
 	}
-	message.SetAnalysis(jsonData)
-
-	return receiver.clientSession.Write(receiver.messageCtx, message)
+	message.SetAnalysis(data)
+	return nil
 }
 
 func makePipelineCheckWarnings(warnings map[string]uint64) []*pipeline.CheckWarning {

@@ -560,6 +560,7 @@ drop table t_chk_rename;
 
 -- CHECK recovery uses the creation SQL mode after the session mode changes.
 drop table if exists t_chk_sql_mode;
+set @old_sql_mode = @@sql_mode;
 set sql_mode = 'ANSI_QUOTES';
 create table t_chk_sql_mode(a int, check ("a" > 0));
 set sql_mode = '';
@@ -567,6 +568,7 @@ insert into t_chk_sql_mode values (-1);
 insert into t_chk_sql_mode values (1);
 select * from t_chk_sql_mode;
 drop table t_chk_sql_mode;
+set sql_mode = @old_sql_mode;
 
 -- RENAME TABLE rewrites generated-prefix and matching explicit CHECK names.
 drop table if exists t_chk_rename_name_new;

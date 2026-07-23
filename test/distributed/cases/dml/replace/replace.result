@@ -700,6 +700,7 @@ invalid input: Cannot drop, modify, or rename column 'a': check constraint 't_ch
 alter table t_chk_rename rename column b to b2;
 drop table t_chk_rename;
 drop table if exists t_chk_sql_mode;
+set @old_sql_mode = @@sql_mode;
 set sql_mode = 'ANSI_QUOTES';
 create table t_chk_sql_mode(a int, check ("a" > 0));
 set sql_mode = '';
@@ -710,6 +711,7 @@ select * from t_chk_sql_mode;
 ➤ a[4,32,0]  𝄀
 1
 drop table t_chk_sql_mode;
+set sql_mode = @old_sql_mode;
 drop table if exists t_chk_rename_name_new;
 drop table if exists t_chk_rename_name;
 create table t_chk_rename_name(
