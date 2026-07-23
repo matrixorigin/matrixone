@@ -49,6 +49,14 @@ type mockCompile struct {
 	releaseFunc func()
 }
 
+func TestResourceAttemptOwnerEligible(t *testing.T) {
+	require.True(t, resourceAttemptOwnerEligible(&Session{}))
+	require.False(t, resourceAttemptOwnerEligible(&backSession{}))
+	derived := &Session{}
+	derived.ReplaceDerivedStmt(true)
+	require.False(t, resourceAttemptOwnerEligible(derived))
+}
+
 func (m *mockCompile) Run(ts uint64) (*util2.RunResult, error) { return m.runFunc(ts) }
 func (m *mockCompile) GetPlan() *plan.Plan                     { return m.getPlanFunc() }
 func (m *mockCompile) Release()                                { m.releaseFunc() }
@@ -337,26 +345,112 @@ func TestPrepareSchemaAccountID(t *testing.T) {
 	}))
 }
 
-func TestPreparedSchemaNeedsCatalogRefresh(t *testing.T) {
-	subscription := &plan.ObjectRef{SubscriptionName: "sub"}
-	require.True(t, preparedSchemaNeedsCatalogRefresh(subscription))
-	require.False(t, preparedSchemaNeedsCatalogRefresh(&plan.ObjectRef{}))
+func TestPreparedSubscriptionSchemaChanged(t *testing.T) {
+	expected := &plan.ObjectRef{
+		Server: 4, Db: 2, Obj: 3, SchemaName: "publisher_db", ObjName: "src",
+		SubscriptionName: "sub", PubInfo: &plan.PubInfo{TenantId: 11},
+	}
+	resolve := func(
+		ref *plan.ObjectRef,
+		def *plan.TableDef,
+		err error,
+	) preparedSchemaResolver {
+		return func(databaseName, tableName string, _ *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
+			require.Equal(t, "sub", databaseName)
+			require.Equal(t, "src", tableName)
+			return ref, def, err
+		}
+	}
+	stableRef := &plan.ObjectRef{
+		Obj: 3, SchemaName: "publisher_db", ObjName: "src",
+		SubscriptionName: "sub", PubInfo: &plan.PubInfo{TenantId: 11},
+	}
+	stableDef := &plan.TableDef{DbId: 2, TblId: 3, Version: 4}
+	stableResolver := resolve(stableRef, stableDef, nil)
+
+	changed, err := preparedSubscriptionSchemaChanged(stableResolver, expected)
+	require.NoError(t, err)
+	require.False(t, changed)
+
+	changed, err = preparedSubscriptionSchemaChanged(stableResolver, &plan.ObjectRef{
+		SubscriptionName: "sub",
+		ObjName:          "src",
+	})
+	require.NoError(t, err)
+	require.True(t, changed)
+
+	changed, err = preparedSubscriptionSchemaChanged(resolve(nil, nil, nil), expected)
+	require.NoError(t, err)
+	require.True(t, changed)
+
+	changed, err = preparedSubscriptionSchemaChanged(resolve(
+		&plan.ObjectRef{
+			Obj: 3, SchemaName: "publisher_db", ObjName: "src",
+			SubscriptionName: "sub", PubInfo: &plan.PubInfo{TenantId: 12},
+		},
+		stableDef,
+		nil,
+	), expected)
+	require.NoError(t, err)
+	require.True(t, changed)
+
+	changed, err = preparedSubscriptionSchemaChanged(resolve(
+		stableRef,
+		&plan.TableDef{DbId: 2, TblId: 3, Version: 5},
+		nil,
+	), expected)
+	require.NoError(t, err)
+	require.True(t, changed)
+
+	changed, err = preparedSubscriptionSchemaChanged(resolve(
+		nil,
+		nil,
+		assert.AnError,
+	), expected)
+	require.ErrorIs(t, err, assert.AnError)
+	require.False(t, changed)
 }
 
-func TestRestorePreparedCloneSource(t *testing.T) {
+func TestPreparedSubscriptionSchemaChangedUsesLogicalName(t *testing.T) {
+	expected := &plan.ObjectRef{
+		Server: 4, Db: 2, Obj: 3, SchemaName: "publisher_db", ObjName: "src",
+		SubscriptionName: "sub", PubInfo: &plan.PubInfo{TenantId: 11},
+	}
+	changed, err := preparedSubscriptionSchemaChanged(func(
+		databaseName, tableName string, _ *plan.Snapshot,
+	) (*plan.ObjectRef, *plan.TableDef, error) {
+		require.Equal(t, "sub", databaseName)
+		require.Equal(t, "src", tableName)
+		return &plan.ObjectRef{
+				Obj: 3, SchemaName: "publisher_db", ObjName: "src",
+				SubscriptionName: "sub", PubInfo: &plan.PubInfo{TenantId: 11},
+			},
+			&plan.TableDef{DbId: 2, TblId: 3, Version: 4}, nil
+	}, expected)
+	require.NoError(t, err)
+	require.False(t, changed)
+}
+
+func TestRestorePreparedCloneNames(t *testing.T) {
 	clone := &tree.CloneTable{}
 	clone.SrcTable.SchemaName = "publisher_db"
 	clone.SrcTable.ObjectName = "physical_table"
+	clone.CreateTable.Table.SchemaName = "execute_db"
+	clone.CreateTable.Table.ObjectName = "mutated_target"
 	prepareStmt := &PrepareStmt{
 		PrepareStmt:         clone,
 		cloneSourceDatabase: "subscription_db",
 		cloneSourceTable:    "logical_table",
+		cloneTargetDatabase: "prepare_db",
+		cloneTargetTable:    "target",
 		hasCloneSource:      true,
 	}
 
-	restorePreparedCloneSource(prepareStmt)
+	restorePreparedCloneNames(prepareStmt)
 	require.Equal(t, tree.Identifier("subscription_db"), clone.SrcTable.SchemaName)
 	require.Equal(t, tree.Identifier("logical_table"), clone.SrcTable.ObjectName)
+	require.Equal(t, tree.Identifier("prepare_db"), clone.CreateTable.Table.SchemaName)
+	require.Equal(t, tree.Identifier("target"), clone.CreateTable.Table.ObjectName)
 }
 
 func TestCurrentTxnSnapshotTS(t *testing.T) {
@@ -425,37 +519,56 @@ func TestInitExecuteStmtParamReusesCachedCompileWhenNoSchemaChange(t *testing.T)
 	require.NotNil(t, retStmt)
 }
 
-func TestInitExecuteStmtParamRefreshesSubscriptionSelect(t *testing.T) {
+func TestInitExecuteStmtParamReusesStableSubscriptionSelect(t *testing.T) {
 	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnv(t, 101)
 	defer prepareStmt.Close()
 
-	prepareStmt.PreparePlan.GetDcl().GetPrepare().Schemas = []*plan.ObjectRef{{
-		SubscriptionName: "sub",
-	}}
+	expected := &plan.ObjectRef{
+		Server: 4, Db: 2, Obj: 3, SchemaName: "publisher_db", ObjName: "src",
+		SubscriptionName: "sub", PubInfo: &plan.PubInfo{TenantId: 11},
+	}
+	prepareStmt.PreparePlan.GetDcl().GetPrepare().Schemas = []*plan.ObjectRef{expected}
 	sentinel := compile.NewCompile(
 		"", "", prepareStmt.Sql, "", "", nil,
 		cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
 	prepareStmt.compile = sentinel
 
-	retComp, _, _, _, err := initExecuteStmtParam(
-		execCtx, ses, cw, nil, prepareStmt.Name)
+	retComp, _, _, _, err := initExecuteStmtParamWithResolver(
+		execCtx, ses, cw, nil, prepareStmt.Name,
+		func(string, string, *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
+			return &plan.ObjectRef{
+					Obj: 3, SchemaName: "publisher_db", ObjName: "src",
+					SubscriptionName: "sub", PubInfo: &plan.PubInfo{TenantId: 11},
+				},
+				&plan.TableDef{DbId: 2, TblId: 3, Version: 4}, nil
+		},
+	)
 	require.NoError(t, err)
-	require.NotNil(t, retComp)
-	require.Empty(t, prepareStmt.PreparePlan.GetDcl().GetPrepare().GetSchemas())
+	require.Same(t, sentinel, retComp)
+	require.Same(t, sentinel, prepareStmt.compile)
 }
 
-func BenchmarkInitExecuteStmtParamRefreshesSubscriptionSelect(b *testing.B) {
+func BenchmarkInitExecuteStmtParamReusesStableSubscriptionSelect(b *testing.B) {
 	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnv(b, 101)
 	defer prepareStmt.Close()
 
+	expected := &plan.ObjectRef{
+		Server: 4, Db: 2, Obj: 3, SchemaName: "publisher_db", ObjName: "src",
+		SubscriptionName: "sub", PubInfo: &plan.PubInfo{TenantId: 11},
+	}
+	prepareStmt.PreparePlan.GetDcl().GetPrepare().Schemas = []*plan.ObjectRef{expected}
+	resolve := func(string, string, *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
+		return &plan.ObjectRef{
+				Obj: 3, SchemaName: "publisher_db", ObjName: "src",
+				SubscriptionName: "sub", PubInfo: &plan.PubInfo{TenantId: 11},
+			},
+			&plan.TableDef{DbId: 2, TblId: 3, Version: 4}, nil
+	}
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
-		prepareStmt.PreparePlan.GetDcl().GetPrepare().Schemas = []*plan.ObjectRef{{
-			SubscriptionName: "sub",
-		}}
-		_, _, _, _, err := initExecuteStmtParam(
-			execCtx, ses, cw, nil, prepareStmt.Name)
+		_, _, _, _, err := initExecuteStmtParamWithResolver(
+			execCtx, ses, cw, nil, prepareStmt.Name, resolve)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -548,6 +661,56 @@ func TestInitExecuteStmtParamBypassesButRetainsCachedTopologyForExplicitScheduli
 	require.Same(t, sentinel, prepareStmt.compile)
 	require.NotNil(t, retPlan)
 	require.NotNil(t, retStmt)
+}
+
+func TestRebuildPreparePlanUsesPreparedRootSQL(t *testing.T) {
+	const preparedSQL = "create view v as select 1"
+	const executeSQL = "execute prepared_view"
+	ses, prepareStmt, _, execCtx := newPreparedExecuteEnvForSQL(t, 106, preparedSQL)
+	defer prepareStmt.Close()
+	prepareStmt.Name = "prepared_view"
+	ses.SetSql(executeSQL)
+
+	rebuilt, err := rebuildPreparePlan(
+		execCtx,
+		ses,
+		prepareStmt,
+		func(_ context.Context, _ FeSession, compilerCtx plan2.CompilerContext, stmt tree.Statement) (*plan2.Plan, error) {
+			return plan2.BuildPlan(&preparedViewCompilerContext{CompilerContext: compilerCtx}, stmt, false)
+		},
+	)
+	require.NoError(t, err)
+	prepareStmt.PreparePlan = rebuilt
+	requirePreparedViewRootSQL(t, prepareStmt, preparedSQL)
+	require.Equal(t, executeSQL, ses.GetSql())
+	require.Equal(t, executeSQL, ses.GetTxnCompileCtx().GetRootSql())
+}
+
+func TestModeMismatchRebuildsPreparedViewWithPreparedRootSQL(t *testing.T) {
+	const preparedSQL = "create view v as select 1"
+	const executeSQL = "execute prepared_view"
+	ses, prepareStmt, _, execCtx := newPreparedExecuteEnvForSQL(t, 107, preparedSQL)
+	defer prepareStmt.Close()
+	ses.SetSql(executeSQL)
+	execCtx.reqCtx = defines.AttachAccountId(execCtx.reqCtx, catalog.System_Account)
+	require.NoError(t, ses.SetSessionSysVar(execCtx.reqCtx, "sql_mode", "MATRIXONE_NATIVE"))
+	modeMismatch := prepareStmt.NativeMode != ses.sqlModeHasMatrixOneNative()
+	require.True(t, modeMismatch)
+	require.True(t, preparePlanNeedsRebuild(false, modeMismatch))
+
+	rebuilt, err := rebuildPreparePlan(
+		execCtx,
+		ses,
+		prepareStmt,
+		func(_ context.Context, _ FeSession, compilerCtx plan2.CompilerContext, stmt tree.Statement) (*plan2.Plan, error) {
+			return plan2.BuildPlan(&preparedViewCompilerContext{CompilerContext: compilerCtx}, stmt, false)
+		},
+	)
+	require.NoError(t, err)
+	prepareStmt.PreparePlan = rebuilt
+	requirePreparedViewRootSQL(t, prepareStmt, preparedSQL)
+	require.Equal(t, executeSQL, ses.GetSql())
+	require.Equal(t, executeSQL, ses.GetTxnCompileCtx().GetRootSql())
 }
 
 func TestTxnComputationWrapperRunPanicStillReleases(t *testing.T) {

@@ -269,4 +269,33 @@ from information_schema.tables
 where table_schema = 'prepare_ddl_schema_change'
   and table_name = 'clone_generation_dst';
 
+create database clone_prepare_db1;
+create database clone_prepare_db2;
+create table clone_prepare_db1.src (a int);
+create table clone_prepare_db2.src (b bigint);
+use clone_prepare_db1;
+prepare clone_default_db_stmt from 'create table dst clone src';
+use clone_prepare_db2;
+execute clone_default_db_stmt;
+select column_name
+from information_schema.columns
+where table_schema = 'clone_prepare_db1' and table_name = 'dst'
+order by ordinal_position;
+select count(*)
+from information_schema.tables
+where table_schema = 'clone_prepare_db2' and table_name = 'dst';
+drop table clone_prepare_db1.dst;
+use prepare_ddl_schema_change;
+execute clone_default_db_stmt;
+select column_name
+from information_schema.columns
+where table_schema = 'clone_prepare_db1' and table_name = 'dst'
+order by ordinal_position;
+select count(*)
+from information_schema.tables
+where table_schema = 'prepare_ddl_schema_change' and table_name = 'dst';
+deallocate prepare clone_default_db_stmt;
+drop database clone_prepare_db1;
+drop database clone_prepare_db2;
+
 drop database prepare_ddl_schema_change;

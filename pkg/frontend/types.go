@@ -318,10 +318,13 @@ type PrepareStmt struct {
 	tempTableVersion uint64
 	// ddlVersion is the session DDL generation used to build the cached plan.
 	ddlVersion uint64
-	// cloneSource preserves the user-visible source name because clone planning
-	// rewrites the shared AST to the publisher's physical database and table.
+	// The clone names preserve the source and target resolved at PREPARE time.
+	// CLONE execution mutates the shared AST while resolving subscriptions and
+	// filling unqualified database names, so every EXECUTE restores both sides.
 	cloneSourceDatabase string
 	cloneSourceTable    string
+	cloneTargetDatabase string
+	cloneTargetTable    string
 	hasCloneSource      bool
 
 	// schedulingSQLMode freezes the lexical mode used when Sql was prepared.
@@ -893,6 +896,10 @@ type ExecCtx struct {
 	reqCtx      context.Context
 	prepareStmt *PrepareStmt
 	runResult   *util.RunResult
+	// rootSQLOverride is the authoritative SQL for a statement planned
+	// recursively inside this request, such as the statement owned by PREPARE.
+	// A nil value falls back to the session SQL.
+	rootSQLOverride *string
 	//stmt will be replaced by the Execute
 	stmt tree.Statement
 	//isLastStmt : true denotes the last statement in the query
@@ -931,10 +938,20 @@ type ExecCtx struct {
 	rewriteEnabled bool
 }
 
+func (execCtx *ExecCtx) withRootSQL(rootSQL string, fn func() error) error {
+	previous := execCtx.rootSQLOverride
+	execCtx.rootSQLOverride = &rootSQL
+	defer func() {
+		execCtx.rootSQLOverride = previous
+	}()
+	return fn()
+}
+
 func (execCtx *ExecCtx) Close() {
 	execCtx.reqCtx = nil
 	execCtx.prepareStmt = nil
 	execCtx.runResult = nil
+	execCtx.rootSQLOverride = nil
 	execCtx.stmt = nil
 	execCtx.tenant = ""
 	execCtx.userName = ""

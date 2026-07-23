@@ -694,7 +694,7 @@ func TestSession_Migrate(t *testing.T) {
 		InitServerLevelVars(sid)
 		SetSessionAlloc(sid, NewSessionAllocator(&config.ParameterUnit{SV: sv}))
 		s := genSession(ctrl, "d1", nil)
-		err := Migrate(s, &query.MigrateConnToRequest{
+		err := Migrate(context.Background(), s, &query.MigrateConnToRequest{
 			DB:               "d1",
 			LastAffectedRows: 7,
 			PrepareStmts: []*query.PrepareStmt{
@@ -747,9 +747,26 @@ func TestSession_Migrate(t *testing.T) {
 		InitServerLevelVars(sid)
 		SetSessionAlloc(sid, NewSessionAllocator(&config.ParameterUnit{SV: sv}))
 		s := genSession(ctrl, "d2", context.Canceled)
-		err := Migrate(s, &query.MigrateConnToRequest{DB: "d2"})
+		err := Migrate(context.Background(), s, &query.MigrateConnToRequest{DB: "d2"})
 		assert.Equal(t, "", s.GetDatabaseName())
 		assert.NoError(t, err)
+	})
+
+	t.Run("caller canceled", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		runtime.SetupServiceBasedRuntime(sid, runtime.DefaultRuntime())
+		InitServerLevelVars(sid)
+		SetSessionAlloc(sid, NewSessionAllocator(&config.ParameterUnit{SV: sv}))
+		s := genSession(ctrl, "d3", nil)
+		s.SetLastAffectedRows(9)
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		err := Migrate(ctx, s, &query.MigrateConnToRequest{DB: "d3", LastAffectedRows: 3})
+		assert.ErrorIs(t, err, context.Canceled)
+		assert.Equal(t, int64(9), s.GetLastAffectedRows())
 	})
 }
 

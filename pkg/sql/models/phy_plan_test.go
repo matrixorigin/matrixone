@@ -16,6 +16,7 @@ package models
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -220,6 +221,9 @@ func TestPhyPlanJSON(t *testing.T) {
 	if err != nil {
 		fmt.Printf("Error serializing to JSON: %s", err)
 		return
+	}
+	if !strings.Contains(jsonStr, `"MemorySize"`) {
+		t.Fatalf("physical plan JSON lost operator memory diagnostic: %s", jsonStr)
 	}
 	fmt.Printf("JSON: %s\n", jsonStr)
 

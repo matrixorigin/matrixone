@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
@@ -69,13 +70,15 @@ func IsDDL(stmt tree.Statement) bool {
 
 // changesSessionCatalog reports statements whose successful execution can
 // invalidate a prepared plan before their catalog changes reach CatalogCache.
-func changesSessionCatalog(stmt tree.Statement) bool {
-	if IsDDL(stmt) {
+func changesSessionCatalog(stmt tree.Statement, queryPlan *plan.Plan) bool {
+	if planChangesCatalog(queryPlan) {
 		return true
 	}
 	switch stmt.(type) {
 	case *tree.CloneTable,
 		*tree.CloneDatabase,
+		*tree.RestoreSnapShot,
+		*tree.RestorePitr,
 		*tree.DataBranchCreateTable,
 		*tree.DataBranchCreateDatabase,
 		*tree.DataBranchDeleteTable,
@@ -85,6 +88,37 @@ func changesSessionCatalog(stmt tree.Statement) bool {
 		return true
 	}
 	return false
+}
+
+func planChangesCatalog(queryPlan *plan.Plan) bool {
+	ddl := queryPlan.GetDdl()
+	if ddl == nil {
+		return false
+	}
+	switch ddl.GetDdlType() {
+	case plan.DataDefinition_SHOW_CREATEDATABASE,
+		plan.DataDefinition_SHOW_CREATETABLE,
+		plan.DataDefinition_SHOW_DATABASES,
+		plan.DataDefinition_SHOW_TABLES,
+		plan.DataDefinition_SHOW_COLUMNS,
+		plan.DataDefinition_SHOW_INDEX,
+		plan.DataDefinition_SHOW_VARIABLES,
+		plan.DataDefinition_SHOW_WARNINGS,
+		plan.DataDefinition_SHOW_ERRORS,
+		plan.DataDefinition_SHOW_STATUS,
+		plan.DataDefinition_SHOW_PROCESSLIST,
+		plan.DataDefinition_SHOW_TABLE_STATUS,
+		plan.DataDefinition_SHOW_TARGET,
+		plan.DataDefinition_SHOW_COLLATION,
+		plan.DataDefinition_LOCK_TABLES,
+		plan.DataDefinition_UNLOCK_TABLES,
+		plan.DataDefinition_SHOW_SEQUENCES,
+		plan.DataDefinition_SHOW_CONNECTORS,
+		plan.DataDefinition_SHOW_UPGRADE:
+		return false
+	default:
+		return true
+	}
 }
 
 // IsDropStatement checks the statement is the drop statement.

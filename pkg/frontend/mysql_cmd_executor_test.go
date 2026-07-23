@@ -64,6 +64,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
+	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -93,12 +94,76 @@ func TestRecordStatementResetsDivByZeroErrorMode(t *testing.T) {
 
 	atomic.StoreInt32(&proc.Base.DivByZeroErrorMode, 0)
 	cw := InitTxnComputationWrapper(ses, &tree.Insert{}, proc)
-	_, err := RecordStatement(ctx, ses, proc, cw, time.Now(), "insert into t values (1, 10 / 0)", constant.ExternSql, true)
+	statementCtx, err := RecordStatement(ctx, ses, proc, cw, time.Now(), "insert into t values (1, 10 / 0)", constant.ExternSql, true)
 	require.NoError(t, err)
+	require.Nil(t, resource.RootFromContext(statementCtx))
+	// A statement skipped because tracing is disabled must not leave an epoch
+	// active in the session MPool.
+	epoch := proc.Mp().StartResourcePeakEpoch()
+	require.NotNil(t, epoch)
+	_, ended := proc.Mp().EndResourcePeakEpoch(epoch)
+	require.True(t, ended)
 
 	require.Equal(t, int32(-1), atomic.LoadInt32(&proc.Base.DivByZeroErrorMode))
 	require.Equal(t, "Insert", ses.GetStmtType())
 	require.Equal(t, tree.QueryTypeDML, ses.GetQueryType())
+}
+
+func TestRecordStatementSkippedInternalEmptyDoesNotOpenMemoryEpoch(t *testing.T) {
+	ctx := context.Background()
+	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
+	provider := motrace.GetTracerProvider()
+	wasEnabled := provider.IsEnable()
+	provider.SetEnable(true)
+	defer provider.SetEnable(wasEnabled)
+
+	ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
+	proc := ses.GetProc()
+	statementCtx, err := RecordStatement(
+		ctx, ses, proc, nil, time.Now(), "", constant.InternalSql, true,
+	)
+	require.NoError(t, err)
+	require.Nil(t, resource.RootFromContext(statementCtx))
+	epoch := proc.Mp().StartResourcePeakEpoch()
+	require.NotNil(t, epoch)
+	_, ended := proc.Mp().EndResourcePeakEpoch(epoch)
+	require.True(t, ended)
+}
+
+func TestRecordDerivedStatementSharesParentResourceLifecycle(t *testing.T) {
+	ctx := context.Background()
+	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
+	provider := motrace.GetTracerProvider()
+	wasEnabled := provider.IsEnable()
+	provider.SetEnable(true)
+	defer provider.SetEnable(wasEnabled)
+
+	ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
+	proc := ses.GetProc()
+	root := resource.NewRoot(resource.ConnExternal)
+	parentCtx := resource.ContextWithRoot(ctx, root)
+	derivedStats := statistic.NewStatsInfo()
+	parentCtx = statistic.ContextWithStatsInfo(parentCtx, derivedStats)
+	outer := motrace.NewStatementInfo()
+	outer.SetResourceRoot(root)
+	ses.SetTStmt(outer)
+	savedOuter := ses.GetStmtInfo()
+	ses.SetTStmt(nil) // doComQuery saves the outer StatementInfo while nested.
+	ses.ReplaceDerivedStmt(true)
+	cw := InitTxnComputationWrapper(ses, &tree.Select{}, proc)
+
+	derivedCtx, err := RecordStatement(
+		parentCtx, ses, proc, cw, time.Now(), "select 1", constant.ExternSql, true,
+	)
+	require.NoError(t, err)
+	require.Same(t, root, resource.RootFromContext(derivedCtx))
+	require.Same(t, derivedStats, statistic.StatsInfoFromContext(derivedCtx))
+	require.Nil(t, ses.GetStmtInfo())
+	ses.SetTStmt(savedOuter)
+	require.Same(t, outer, ses.GetStmtInfo())
+	require.True(t, root.MergeExecution(resource.ExecutionSummary{
+		Usage: resource.Usage{ExclusiveActiveNS: 1},
+	}))
 }
 
 func TestRecordStatementSetsIgnoreForInsertIgnore(t *testing.T) {
@@ -2594,6 +2659,145 @@ func TestCreatePrepareStmtRestoresCurrentExecCtx(t *testing.T) {
 	require.True(t, checked)
 }
 
+type preparedViewCompilerContext struct {
+	plan.CompilerContext
+}
+
+func (c *preparedViewCompilerContext) GetSubscriptionMeta(string, *plan.Snapshot) (*plan0.SubscriptionMeta, error) {
+	return nil, nil
+}
+
+func (c *preparedViewCompilerContext) DatabaseExists(string, *plan.Snapshot) bool {
+	return false
+}
+
+func requirePreparedViewRootSQL(t *testing.T, prepared *PrepareStmt, wantRootSQL string) {
+	t.Helper()
+	preparePlan := prepared.PreparePlan.GetDcl().GetPrepare().GetPlan()
+	require.NotNil(t, preparePlan)
+	tableDef := preparePlan.GetDdl().GetCreateView().GetTableDef()
+	require.NotNil(t, tableDef)
+
+	var viewData plan.ViewData
+	require.NoError(t, json.Unmarshal([]byte(tableDef.GetViewSql().GetView()), &viewData))
+	wantViewSQL := strings.TrimSpace(wantRootSQL)
+	if hintEnd := strings.Index(wantViewSQL, "*/"); strings.HasPrefix(wantViewSQL, "/*+") && hintEnd >= 0 {
+		wantViewSQL = strings.TrimSpace(wantViewSQL[hintEnd+2:])
+	}
+	require.Equal(t, wantViewSQL, strings.TrimSpace(viewData.Stmt))
+
+	var createSQL string
+	for _, def := range tableDef.GetDefs() {
+		for _, property := range def.GetProperties().GetProperties() {
+			if property.GetKey() == catalog.SystemRelAttr_CreateSQL {
+				createSQL = property.GetValue()
+			}
+		}
+	}
+	require.Equal(t, wantRootSQL, createSQL)
+}
+
+func TestPreparedCreateViewUsesInnerRootSQL(t *testing.T) {
+	setSessionAlloc("", NewLeakCheckAllocator())
+	oldBuildPlanWithAuthorization := buildPlanWithAuthorization
+	defer func() {
+		buildPlanWithAuthorization = oldBuildPlanWithAuthorization
+	}()
+	buildPlanWithAuthorization = func(
+		_ context.Context,
+		_ FeSession,
+		compilerCtx plan.CompilerContext,
+		stmt tree.Statement,
+	) (*plan.Plan, error) {
+		return plan.BuildPlan(&preparedViewCompilerContext{CompilerContext: compilerCtx}, stmt, false)
+	}
+
+	for _, tt := range []struct {
+		name     string
+		outerSQL string
+		innerSQL string
+	}{
+		{
+			name:     "create view",
+			outerSQL: "prepare create_view_stmt from create view v as select 1",
+			innerSQL: "create view v as select 1",
+		},
+		{
+			name:     "create or replace view",
+			outerSQL: "prepare replace_view_stmt from create or replace view v as select 2",
+			innerSQL: "create or replace view v as select 2",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, tt.outerSQL, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			runTestHandle("prepared "+tt.name+" root SQL", t, func(ses *Session) error {
+				execCtx := newTestExecCtx(ctx, gomock.NewController(t))
+				execCtx.ses = ses
+				execCtx.proc = ses.proc
+				execCtx.resper = ses.respr
+				ses.SetSql(tt.outerSQL)
+
+				prepared, err := handlePrepareStmt(ses, execCtx, stmt.(*tree.PrepareStmt), tt.outerSQL)
+				if err != nil {
+					return err
+				}
+				defer prepared.Close()
+				requirePreparedViewRootSQL(t, prepared, tt.innerSQL)
+				require.Equal(t, tt.outerSQL, ses.GetSql())
+				return nil
+			})
+		})
+	}
+}
+
+func TestPrepareStringCreateViewUsesRewrittenInnerRootSQL(t *testing.T) {
+	setSessionAlloc("", NewLeakCheckAllocator())
+	oldBuildPlanWithAuthorization := buildPlanWithAuthorization
+	defer func() {
+		buildPlanWithAuthorization = oldBuildPlanWithAuthorization
+	}()
+	buildPlanWithAuthorization = func(
+		_ context.Context,
+		_ FeSession,
+		compilerCtx plan.CompilerContext,
+		stmt tree.Statement,
+	) (*plan.Plan, error) {
+		return plan.BuildPlan(&preparedViewCompilerContext{CompilerContext: compilerCtx}, stmt, false)
+	}
+
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	const outerSQL = `/*+ {"remapdb":{"src":"dst"}} */ prepare inline_view from 'create view v as select 1'`
+	const innerSQL = "create view v as select 1"
+	want, err := rewriteSQLFromMaterializedPolicy(ctx, outerSQL, innerSQL)
+	require.NoError(t, err)
+
+	runTestHandle("prepare string create view root SQL", t, func(ses *Session) error {
+		execCtx := newTestExecCtx(ctx, gomock.NewController(t))
+		execCtx.ses = ses
+		execCtx.proc = ses.proc
+		execCtx.resper = ses.respr
+		execCtx.rewriteEnabled = true
+		execCtx.sqlOfStmt = outerSQL
+		ses.SetSql(outerSQL)
+		stmt := tree.NewPrepareString("inline_view", innerSQL)
+		defer stmt.Free()
+
+		prepared, err := handlePrepareString(ses, execCtx, stmt)
+		if err != nil {
+			return err
+		}
+		defer prepared.Close()
+		require.Equal(t, want, prepared.Sql)
+		requirePreparedViewRootSQL(t, prepared, want)
+		require.Equal(t, outerSQL, ses.GetSql())
+		return nil
+	})
+}
+
 func TestBuildAnalyzeDerivedSQLQuotesIdentifiers(t *testing.T) {
 	entry := &tree.AnalyzeTableEntry{
 		Table: tree.NewTableName(
@@ -3173,7 +3377,7 @@ func TestMarshalPlanHandlerSanitizesNonFinitePlanStats(t *testing.T) {
 	stmt := &motrace.StatementInfo{
 		StatementID: uid,
 		Statement:   []byte("select 1"),
-		RequestAt:   time.Now().Add(-2 * time.Second),
+		RequestAt:   time.Now().Add(-motrace.GetLongQueryTime() - time.Second),
 	}
 	logicPlan := &plan0.Plan{
 		Plan: &plan0.Plan_Query{
@@ -3196,6 +3400,98 @@ func TestMarshalPlanHandlerSanitizesNonFinitePlanStats(t *testing.T) {
 	jsonBytes := h.Marshal(context.Background())
 
 	require.NotContains(t, string(jsonBytes), "serialize plan to json error")
+}
+
+func TestJsonPlanHandlerRefreshesTerminalResourceSummary(t *testing.T) {
+	uid, err := uuid.NewV7()
+	require.NoError(t, err)
+	stmt := &motrace.StatementInfo{
+		StatementID: uid,
+		Statement:   []byte("select 1"),
+		RequestAt:   time.Now().Add(-motrace.GetLongQueryTime() - time.Second),
+	}
+	logicPlan := &plan0.Plan{Plan: &plan0.Plan_Query{Query: &plan0.Query{
+		Nodes: []*plan0.Node{{NodeId: 0, NodeType: plan0.Node_VALUE_SCAN}},
+		Steps: []int32{0},
+	}}}
+	h := NewJsonPlanHandler(context.Background(), stmt, nil, logicPlan, nil)
+	defer h.Free()
+	require.Nil(t, h.jsonBytes)
+	require.Nil(t, h.buffer)
+	summary := resource.StatementResourceSummary{
+		StatementWallNS: 99,
+		AttemptCount:    2,
+		Usage: resource.Usage{
+			ExclusiveActiveNS: 42,
+			ClientEgressBytes: 17,
+		},
+	}
+	h.SetResourceSummary(summary)
+	require.Nil(t, h.jsonBytes)
+	require.Nil(t, h.buffer)
+	var payload struct {
+		PhyPlan struct {
+			Resource *resource.StatementResourceSummary `json:"resource"`
+		}
+	}
+	first := h.Marshal(context.Background())
+	firstBuffer := h.buffer
+	require.NotNil(t, firstBuffer)
+	require.NoError(t, json.Unmarshal(first, &payload))
+	require.Equal(t, &summary, payload.PhyPlan.Resource)
+	second := h.Marshal(context.Background())
+	require.Equal(t, first, second)
+	require.Same(t, firstBuffer, h.buffer)
+	require.Nil(t, h.marshalHandler.stmt)
+	require.Nil(t, h.marshalHandler.query)
+
+	unmarshaled := NewJsonPlanHandler(context.Background(), stmt, nil, logicPlan, nil)
+	require.Nil(t, unmarshaled.jsonBytes)
+	require.Nil(t, unmarshaled.buffer)
+	unmarshaled.Free()
+	require.Nil(t, unmarshaled.buffer)
+	require.Nil(t, unmarshaled.marshalHandler)
+}
+
+func TestSchedulingTracePlanHandlerMarshalsLazilyOnce(t *testing.T) {
+	recorder := new(schedule.TraceRecorder)
+	attempt := recorder.StartAttempt()
+	recorder.RecordFailure(attempt, "candidate-discovery", schedule.Worker{})
+	h := newSchedulingTracePlanHandler(context.Background(), recorder.Snapshot())
+	defer h.Free()
+	require.Nil(t, h.jsonBytes)
+	require.Nil(t, h.buffer)
+
+	first := h.Marshal(context.Background())
+	firstBuffer := h.buffer
+	require.NotEmpty(t, first)
+	require.NotNil(t, firstBuffer)
+	require.Equal(t, first, h.Marshal(context.Background()))
+	require.Same(t, firstBuffer, h.buffer)
+}
+
+func TestJsonPlanHandlerKeepsStaticPlanPlaceholders(t *testing.T) {
+	uid, err := uuid.NewV7()
+	require.NoError(t, err)
+	stmt := &motrace.StatementInfo{
+		StatementID: uid,
+		Statement:   []byte("select 1"),
+		RequestAt:   time.Now(),
+	}
+	shortPlan := &plan0.Plan{Plan: &plan0.Plan_Query{Query: &plan0.Query{
+		Nodes: []*plan0.Node{{NodeId: 0, NodeType: plan0.Node_VALUE_SCAN}},
+		Steps: []int32{0},
+	}}}
+	shortHandler := NewJsonPlanHandler(
+		context.Background(), stmt, nil, shortPlan, nil, WithWaitActiveCost(time.Hour))
+	defer shortHandler.Free()
+	require.Equal(t, sqlQueryIgnoreExecPlan, shortHandler.Marshal(context.Background()))
+	require.Nil(t, shortHandler.buffer)
+
+	noPlanHandler := NewJsonPlanHandler(context.Background(), stmt, nil, nil, nil)
+	defer noPlanHandler.Free()
+	require.Equal(t, sqlQueryNoRecordExecPlan, noPlanHandler.Marshal(context.Background()))
+	require.Nil(t, noPlanHandler.buffer)
 }
 
 func TestMarshalPlanHandlerPersistsDistributedSchedulingTraceWithoutFullPlan(t *testing.T) {
@@ -4486,6 +4782,14 @@ func Test_RecordParseErrorStatement(t *testing.T) {
 
 	_, err = RecordParseErrorStatement(context.TODO(), ses, proc, time.Now(), []string{"abc", "def"}, []string{constant.ExternSql, constant.ExternSql}, moerr.NewInternalErrorNoCtx("test"))
 	assert.Nil(t, err)
+	assert.Nil(t, ses.GetStmtInfo())
+
+	ses.beginResponseAccounting()
+	_, err = RecordParseErrorStatement(context.TODO(), ses, proc, time.Now(), []string{"abc"}, []string{constant.ExternSql}, moerr.NewInternalErrorNoCtx("test"))
+	assert.Nil(t, err)
+	assert.NotNil(t, ses.GetStmtInfo())
+	ses.finishResponseAccounting(context.TODO(), moerr.NewInternalErrorNoCtx("test"), true)
+	assert.Nil(t, ses.GetStmtInfo())
 
 }
 
@@ -5834,36 +6138,66 @@ func Test_parseStmtSendLongData(t *testing.T) {
 
 func TestRecordSessionDDL(t *testing.T) {
 	ses := &Session{}
+	record := func(stmt tree.Statement, queryPlan *plan0.Plan, err error) {
+		recordSessionDDL(ses, &ExecCtx{
+			stmt: stmt,
+			cw:   &TxnComputationWrapper{plan: queryPlan},
+		}, err)
+	}
 
-	recordSessionDDL(ses, &tree.Select{}, nil)
+	record(&tree.Select{}, nil, nil)
 	require.Equal(t, uint64(0), ses.getDDLVersion())
 
-	recordSessionDDL(ses, &tree.AlterTable{}, assert.AnError)
+	record(&tree.AlterTable{}, &plan0.Plan{
+		Plan: &plan0.Plan_Ddl{Ddl: &plan0.DataDefinition{DdlType: plan0.DataDefinition_ALTER_TABLE}},
+	}, assert.AnError)
 	require.Equal(t, uint64(0), ses.getDDLVersion())
 
-	recordSessionDDL(ses, &tree.AlterTable{}, nil)
+	record(&tree.CreateSource{}, &plan0.Plan{
+		Plan: &plan0.Plan_Ddl{Ddl: &plan0.DataDefinition{DdlType: plan0.DataDefinition_CREATE_TABLE}},
+	}, nil)
 	require.Equal(t, uint64(1), ses.getDDLVersion())
 
-	recordSessionDDL(ses, &tree.CloneTable{}, nil)
+	record(&tree.AlterSequence{}, &plan0.Plan{
+		Plan: &plan0.Plan_Ddl{Ddl: &plan0.DataDefinition{DdlType: plan0.DataDefinition_ALTER_SEQUENCE}},
+	}, nil)
 	require.Equal(t, uint64(2), ses.getDDLVersion())
 
-	recordSessionDDL(ses, &tree.CloneDatabase{}, nil)
+	record(&tree.RestoreSnapShot{}, nil, nil)
 	require.Equal(t, uint64(3), ses.getDDLVersion())
 
-	recordSessionDDL(ses, &tree.DataBranchDiff{}, nil)
-	require.Equal(t, uint64(3), ses.getDDLVersion())
+	record(&tree.RestorePitr{}, nil, nil)
+	require.Equal(t, uint64(4), ses.getDDLVersion())
+
+	record(&tree.CloneTable{}, nil, nil)
+	require.Equal(t, uint64(5), ses.getDDLVersion())
+
+	record(&tree.DataBranchDiff{}, nil, nil)
+	require.Equal(t, uint64(5), ses.getDDLVersion())
 }
 
-func TestPreparedCloneSource(t *testing.T) {
+func TestPlanChangesCatalog(t *testing.T) {
+	require.True(t, planChangesCatalog(&plan0.Plan{
+		Plan: &plan0.Plan_Ddl{Ddl: &plan0.DataDefinition{DdlType: plan0.DataDefinition_CREATE_TABLE}},
+	}))
+	require.False(t, planChangesCatalog(&plan0.Plan{
+		Plan: &plan0.Plan_Ddl{Ddl: &plan0.DataDefinition{DdlType: plan0.DataDefinition_SHOW_TABLES}},
+	}))
+	require.False(t, planChangesCatalog(nil))
+}
+
+func TestPreparedCloneNames(t *testing.T) {
 	clone := &tree.CloneTable{}
-	clone.SrcTable.SchemaName = "sub"
 	clone.SrcTable.ObjectName = "src"
+	clone.CreateTable.Table.ObjectName = "dst"
 
-	databaseName, tableName, ok := preparedCloneSource(clone)
+	srcDB, srcTable, dstDB, dstTable, ok := preparedCloneNames(clone, "prepare_db")
 	require.True(t, ok)
-	require.Equal(t, "sub", databaseName)
-	require.Equal(t, "src", tableName)
+	require.Equal(t, "prepare_db", srcDB)
+	require.Equal(t, "src", srcTable)
+	require.Equal(t, "prepare_db", dstDB)
+	require.Equal(t, "dst", dstTable)
 
-	_, _, ok = preparedCloneSource(&tree.Select{})
+	_, _, _, _, ok = preparedCloneNames(&tree.Select{}, "prepare_db")
 	require.False(t, ok)
 }
