@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
