@@ -502,10 +502,11 @@ func TestInitExecuteStmtParamRebuildsCachedTopologyAfterPolicyGenerationAppears(
 		"", "", prepareStmt.Sql, "", "", nil,
 		cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
 	prepareStmt.compile = sentinel
-	if ses.gSysVars == nil {
-		ses.gSysVars = &SystemVariables{mp: make(map[string]interface{})}
-	}
-	ses.gSysVars.Set(queryWorkloadPolicy, `{
+	ses.workloadPolicy.Store(GWorkloadPolicyManager.acquire(42))
+	t.Cleanup(func() {
+		GWorkloadPolicyManager.Remove(42)
+	})
+	applied, _, err := GWorkloadPolicyManager.Apply(42, `{
 		"version": 1,
 		"policies": {
 			"tp": {
@@ -514,7 +515,9 @@ func TestInitExecuteStmtParamRebuildsCachedTopologyAfterPolicyGenerationAppears(
 				"current_cn": "required"
 			}
 		}
-	}`)
+	}`, 1)
+	require.NoError(t, err)
+	require.True(t, applied)
 
 	retComp, retPlan, retStmt, _, err := initExecuteStmtParam(
 		execCtx, ses, cw, nil, prepareStmt.Name)

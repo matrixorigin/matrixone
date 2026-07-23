@@ -62,10 +62,7 @@ var methodVersions = map[pb.CmdMethod]int64{
 	pb.CmdMethod_CtlPrefetchOnSubscribed:  defines.MORPCVersion4,
 	pb.CmdMethod_ISCPDrainConsumer:        defines.MORPCVersion4,
 	pb.CmdMethod_IcebergCacheInvalidate:   defines.MORPCVersion4,
-	// MORPC v4 does not advertise handler-level feature capabilities. Keep
-	// query_workload_policy empty during rolling upgrades and activate it only
-	// after every serving CN contains this handler.
-	pb.CmdMethod_WorkloadPolicyUpdate: defines.MORPCVersion4,
+	pb.CmdMethod_WorkloadPolicyUpdate:     defines.MORPCVersion5,
 }
 
 type queryClient struct {

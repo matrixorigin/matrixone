@@ -37,6 +37,7 @@ mo_partition_metadata    r
 mo_partition_tables    r
 mo_pitr    r
 mo_pubs    r
+mo_query_workload_policy    r
 mo_role    r
 mo_role_grant    r
 mo_role_privs    r

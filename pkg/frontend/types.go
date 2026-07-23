@@ -43,7 +43,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -1000,6 +999,9 @@ type feSessionImpl struct {
 
 	// gSysVars is a pointer to account's sys vars (saved in GSysVarsMgr)
 	gSysVars *SystemVariables
+	// workloadPolicy is the account-level, immutable policy cache referenced by
+	// this session. It is separate from MySQL-compatible system variables.
+	workloadPolicy atomic.Pointer[accountWorkloadPolicy]
 	// sesSysVars is session level sys vars; init as a copy of account's sys vars
 	sesSysVars *SystemVariables
 
@@ -1122,6 +1124,7 @@ func (ses *feSessionImpl) Reset() {
 	ses.sql = ""
 	ses.runSQLTokens = nil
 	ses.gSysVars = nil
+	ses.workloadPolicy.Store(nil)
 	ses.sesSysVars = nil
 	ses.allResultSet = nil
 	ses.tenant = nil
@@ -1366,10 +1369,7 @@ func (ses *feSessionImpl) GetGlobalSysVar(name string) (interface{}, error) {
 	if ses.gSysVars == nil {
 		return gSysVarsDefs[name].Default, nil
 	}
-	if value := ses.gSysVars.Get(name); value != nil {
-		return value, nil
-	}
-	return gSysVarsDefs[name].Default, nil
+	return ses.gSysVars.Get(name), nil
 }
 
 func (ses *Session) SetGlobalSysVar(ctx context.Context, name string, val interface{}) (err error) {
@@ -1410,19 +1410,6 @@ func (ses *Session) SetGlobalSysVar(ctx context.Context, name string, val interf
 	if val, err = def.GetType().Convert(val); err != nil {
 		return err
 	}
-	if name == queryWorkloadPolicy {
-		raw, ok := val.(string)
-		if !ok {
-			return moerr.NewInvalidInputf(
-				ctx,
-				"%s must be a string",
-				queryWorkloadPolicy,
-			)
-		}
-		if _, parseErr := schedule.ParseWorkloadPolicyConfig(raw); parseErr != nil {
-			return moerr.NewInvalidInputf(ctx, "%v", parseErr)
-		}
-	}
 
 	if name == "wait_timeout" || name == "interactive_timeout" {
 		if err = validateTimeoutLimits(ctx, ses, name, val); err != nil {
@@ -1443,32 +1430,8 @@ func (ses *Session) SetGlobalSysVar(ctx context.Context, name string, val interf
 	if err = doSetGlobalSystemVariable(ctx, ses, name, val); err != nil {
 		return
 	}
-	if name != queryWorkloadPolicy {
-		ses.gSysVars.Set(name, val)
-		return nil
-	}
-
-	raw := val.(string)
-	commitTS := ses.getLastCommitTS()
-	if !ses.gSysVars.applyWorkloadPolicyUpdate(raw, commitTS) {
-		return moerr.NewInternalError(
-			ctx,
-			"query workload policy was committed but is older than the local cache revision",
-		)
-	}
-	GSysVarsMgr.ApplyWorkloadPolicyUpdate(
-		ses.GetTenantInfo().TenantID,
-		raw,
-		commitTS,
-	)
-	if err = postWorkloadPolicyUpdate(ctx, ses, raw, commitTS); err != nil {
-		return moerr.NewInternalErrorf(
-			ctx,
-			"query workload policy was committed but CN propagation failed; retry SET GLOBAL: %v",
-			err,
-		)
-	}
-	return nil
+	ses.gSysVars.Set(name, val)
+	return
 }
 
 func (ses *feSessionImpl) GetSessionSysVars() *SystemVariables {
@@ -1621,6 +1584,10 @@ func (ses *feSessionImpl) GetSql() string {
 
 func (ses *feSessionImpl) GetAccountId() uint32 {
 	return ses.accountId
+}
+
+func (ses *feSessionImpl) getWorkloadPolicyState() *accountWorkloadPolicy {
+	return ses.workloadPolicy.Load()
 }
 
 func (ses *feSessionImpl) SetAccountId(u uint32) {

@@ -290,11 +290,13 @@ func (ses *Session) GetMySQLParser() *mysql.MySQLParser {
 
 func (ses *Session) InitSystemVariables(ctx context.Context, bh BackgroundExec) (err error) {
 	var sv *SystemVariables
-	if sv, err = GSysVarsMgr.Get(ses.GetTenantInfo().TenantID, ses, ctx, bh); err != nil {
+	tenantID := ses.GetTenantInfo().GetTenantID()
+	if sv, err = GSysVarsMgr.Get(tenantID, ses, ctx, bh); err != nil {
 		return
 	}
+	state := GWorkloadPolicyManager.acquire(tenantID)
 	ses.mu.Lock()
-	defer ses.mu.Unlock()
+	oldState := ses.workloadPolicy.Swap(state)
 	ses.gSysVars = sv
 	ses.sesSysVars = ses.gSysVars.Clone()
 	atomic.StoreInt32(&ses.sqlModeNoAutoValueOnZero, -1)
@@ -303,6 +305,29 @@ func (ses *Session) InitSystemVariables(ctx context.Context, bh BackgroundExec) 
 	if v := ses.sesSysVars.Get("enable_remap_hint"); v != nil {
 		if on, convErr := valueIsBoolTrue(v); convErr == nil {
 			ses.rewriteEnabled.Store(on)
+		}
+	}
+	ses.mu.Unlock()
+	GWorkloadPolicyManager.release(oldState)
+	if bh != nil {
+		tenantCtx := defines.AttachAccountId(ctx, tenantID)
+		if refreshErr := GWorkloadPolicyManager.refreshWith(
+			tenantCtx,
+			tenantID,
+			state,
+			func() (string, uint64, error) {
+				return loadWorkloadPolicyFromCatalogWithExec(
+					tenantCtx,
+					bh,
+					tenantID,
+				)
+			},
+		); refreshErr != nil {
+			ses.Warn(
+				ctx,
+				"failed to initialize query workload policy cache",
+				zap.Error(refreshErr),
+			)
 		}
 	}
 	return
@@ -859,7 +884,11 @@ func (ses *Session) Close() {
 	}
 
 	ses.mu.Lock()
-	defer ses.mu.Unlock()
+	workloadPolicy := ses.workloadPolicy.Swap(nil)
+	defer func() {
+		ses.mu.Unlock()
+		GWorkloadPolicyManager.release(workloadPolicy)
+	}()
 	ses.feSessionImpl.Close()
 	ses.feSessionImpl.Clear()
 	ses.respr = nil
@@ -1806,7 +1835,6 @@ func (ses *Session) getGlobalSysVars(ctx context.Context, bh BackgroundExec) (gS
 		gSysVars[name] = sysVar.Default
 	}
 
-	workloadPolicySeen := false
 	for _, execResult := range execResults {
 		for i := uint64(0); i < execResult.GetRowCount(); i++ {
 			var varName, varValue string
@@ -1815,16 +1843,6 @@ func (ses *Session) getGlobalSysVars(ctx context.Context, bh BackgroundExec) (gS
 			}
 			if varValue, err = execResult.GetString(tenantCtx, i, 1); err != nil {
 				return
-			}
-
-			if strings.EqualFold(varName, queryWorkloadPolicy) {
-				if workloadPolicySeen {
-					return nil, moerr.NewInternalError(
-						ctx,
-						"query workload policy catalog contains duplicate account rows",
-					)
-				}
-				workloadPolicySeen = true
 			}
 
 			// overwrite with the values from table `mo_mysql_compatibility`

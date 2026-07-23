@@ -28,11 +28,7 @@ func querySchedulingIntentForStatement(ses FeSession, sql string) schedule.Sched
 	if !hasSchedulingOptimizerHint(sql) {
 		return querySchedulingIntent(ses)
 	}
-	return querySchedulingIntentForStatementWithSQLMode(
-		ses,
-		sql,
-		sessionSQLModeForScheduling(ses),
-	)
+	return querySchedulingIntentForStatementWithSQLMode(ses, sql, sessionSQLModeForScheduling(ses))
 }
 
 func querySchedulingIntentForStatementWithSQLMode(

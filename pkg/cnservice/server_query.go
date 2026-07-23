@@ -42,7 +42,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/ctl"
-	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
@@ -126,6 +125,12 @@ func (s *service) handleKillConn(ctx context.Context, req *query.Request, resp *
 	}
 	logutil.Infof("[handle kill request] handle kill conn, add account id %d, version %d to kill queue", req.KillConnRequest.AccountID, req.KillConnRequest.Version)
 	accountMgr.EnKillQueue(req.KillConnRequest.AccountID, req.KillConnRequest.Version)
+	if req.KillConnRequest.AccountID >= 0 &&
+		req.KillConnRequest.AccountID <= int64(^uint32(0)) {
+		frontend.GWorkloadPolicyManager.Remove(
+			uint32(req.KillConnRequest.AccountID),
+		)
+	}
 
 	resp.KillConnResponse = &query.KillConnResponse{
 		Success: true,
@@ -163,18 +168,20 @@ func (s *service) handleWorkloadPolicyUpdate(
 		return moerr.NewInvalidInput(ctx, "bad workload policy update request")
 	}
 	update := req.WorkloadPolicyUpdateRequest
-	if update.CommitTS.IsEmpty() {
-		return moerr.NewInvalidInput(ctx, "workload policy update commit timestamp is empty")
+	if update.Revision == 0 {
+		return moerr.NewInvalidInput(ctx, "workload policy update revision is zero")
 	}
-	if _, err := schedule.ParseWorkloadPolicyConfig(update.Policy); err != nil {
+	applied, revision, err := frontend.GWorkloadPolicyManager.Apply(
+		update.AccountID,
+		update.Policy,
+		update.Revision,
+	)
+	if err != nil {
 		return moerr.NewInvalidInputf(ctx, "invalid workload policy update: %v", err)
 	}
 	resp.WorkloadPolicyUpdateResponse = &query.WorkloadPolicyUpdateResponse{
-		Applied: frontend.GSysVarsMgr.ApplyWorkloadPolicyUpdate(
-			update.AccountID,
-			update.Policy,
-			update.CommitTS,
-		),
+		Applied:  applied,
+		Revision: revision,
 	}
 	return nil
 }

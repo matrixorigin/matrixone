@@ -178,6 +178,10 @@ const (
 
 	MO_MERGE_SETTINGS = "mo_merge_settings"
 
+	MO_QUERY_WORKLOAD_POLICY                    = "mo_query_workload_policy"
+	MO_QUERY_WORKLOAD_POLICY_MIN_VERSION        = "4.0.5"
+	MO_QUERY_WORKLOAD_POLICY_MIN_VERSION_OFFSET = uint32(5)
+
 	MO_ISCP_LOG         = "mo_iscp_log"
 	MO_STORED_PROCEDURE = "mo_stored_procedure"
 

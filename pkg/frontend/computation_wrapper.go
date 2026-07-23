@@ -191,6 +191,7 @@ func (cwft *TxnComputationWrapper) Clear() {
 	cwft.preparedSchedulingSQLMode = ""
 	cwft.hasPreparedSchedulingSQLMode = false
 	cwft.preparedSchedulingSQL = ""
+	cwft.preparedWorkloadPolicy = schedule.WorkloadPolicySet{}
 	cwft.schedulingTrace.Reset()
 }
 
@@ -1060,50 +1061,50 @@ func querySchedulingIntent(ses FeSession) schedule.SchedulingIntent {
 }
 
 func queryWorkloadPolicySnapshot(ses FeSession) schedule.WorkloadPolicySet {
-	if ses == nil {
-		return schedule.WorkloadPolicySet{}
-	}
-	if vars := ses.GetGlobalSysVars(); vars != nil {
-		return vars.workloadPolicySnapshotShared()
-	}
-	value, err := ses.GetGlobalSysVar(queryWorkloadPolicy)
-	if err != nil || value == nil {
-		return schedule.WorkloadPolicySet{}
-	}
-	raw, ok := value.(string)
-	if !ok {
-		return schedule.WorkloadPolicySet{
-			InvalidReason: "query_workload_policy is not a string",
-		}
-	}
-	set, err := schedule.ParseWorkloadPolicyConfig(raw)
-	if err != nil {
-		return schedule.WorkloadPolicySet{InvalidReason: err.Error()}
-	}
-	return set
+	return GWorkloadPolicyManager.cached(workloadPolicyState(ses))
 }
 
 func queryWorkloadPolicySnapshotAt(
 	ctx context.Context,
 	ses FeSession,
 ) schedule.WorkloadPolicySet {
-	if ses == nil {
+	if workloadPolicyBypassed(ctx) {
 		return schedule.WorkloadPolicySet{}
 	}
-	vars := ses.GetGlobalSysVars()
-	if vars == nil {
-		return queryWorkloadPolicySnapshot(ses)
+	if ses == nil {
+		return schedule.WorkloadPolicySet{}
 	}
 	// Background and mock sessions share their upstream/account snapshot but
 	// must not recursively issue a policy refresh while compiling that refresh.
 	if _, ok := ses.(*Session); ok {
-		if err := vars.RefreshWorkloadPolicy(ctx, ses); err != nil {
+		state := workloadPolicyState(ses)
+		if state == nil {
+			// Foreground policy ownership is established by
+			// InitSystemVariables. A session that has not completed that
+			// initialization (for example an internal/direct session) must not
+			// lazily create account state or recursively execute catalog SQL
+			// from the compile path.
+			return schedule.WorkloadPolicySet{}
+		}
+		if state.snapshot.Load() == nil {
+			// InitSystemVariables may intentionally run without a background
+			// executor for direct/internal sessions. Only an initialization
+			// attempt with catalog access establishes the first snapshot;
+			// compile must not become an implicit control-plane loader.
+			return schedule.WorkloadPolicySet{}
+		}
+		if err := GWorkloadPolicyManager.RefreshAsync(
+			ctx,
+			ses.GetService(),
+			state.accountID,
+			state,
+		); err != nil {
 			return schedule.WorkloadPolicySet{
 				InvalidReason: "query workload policy refresh failed: " + err.Error(),
 			}
 		}
 	}
-	return vars.workloadPolicySnapshotShared()
+	return queryWorkloadPolicySnapshot(ses)
 }
 
 // Only the client statement owns retry-attempt cardinality. Back-exec SQL is

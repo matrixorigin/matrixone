@@ -944,7 +944,11 @@ func (c *Compile) compileSinkScan(qry *plan.Query, nodeId int32) error {
 		for _, s := range n.SourceStep {
 			var edge *process.PipelineEdge
 			if c.anal.qry.LoadTag {
-				edge = process.NewPipelineEdge(int(c.ncpu), 0)
+				edgeCPU := c.ncpu
+				if c.queryPlacement.WorkloadPolicy.Applied {
+					edgeCPU = c.executionNodeCPU(getEngineNode(c))
+				}
+				edge = process.NewPipelineEdge(edgeCPU, 0)
 			} else {
 				edge = process.NewPipelineEdge(1, 0)
 			}
@@ -1526,14 +1530,23 @@ func (c *Compile) compileSourceScan(node *plan.Node) ([]*Scope, error) {
 	if err != nil {
 		return nil, err
 	}
-	ps := calculatePartitions(0, end, int64(c.ncpu))
+	sourceNode := getEngineNode(c)
+	parallelism := c.ncpu
+	if c.queryPlacement.WorkloadPolicy.Applied {
+		parallelism = c.executionNodeCPU(sourceNode)
+	}
+	ps := calculatePartitions(0, end, int64(parallelism))
 
 	ss := make([]*Scope, len(ps))
 
 	currentFirstFlag := c.anal.isFirst
 	for i := range ss {
 		ss[i] = newScope(Merge)
-		ss[i].NodeInfo = getEngineNode(c)
+		ss[i].NodeInfo = sourceNode
+		if c.queryPlacement.WorkloadPolicy.Applied {
+			// Each partition is already represented by its own scope.
+			ss[i].NodeInfo.Mcpu = 1
+		}
 		c.markScopeRemoteWhenNeeded(ss[i])
 		ss[i].Proc = c.proc.NewNoContextChildProc(0)
 		arg := constructStream(node, ps[i])
@@ -3943,6 +3956,7 @@ func (c *Compile) compileProbeSideForBroadcastJoin(node, left, right *plan.Node,
 		rs = c.newProbeScopeListForBroadcastJoin(probeScopes, false)
 		currentFirstFlag := c.anal.isFirst
 		for i := range rs {
+			executionCPU := c.executionNodeCPU(rs[i].NodeInfo)
 			op := constructProductL2(node, c.proc)
 			op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 			rs[i].setRootOperator(op)
@@ -3950,8 +3964,8 @@ func (c *Compile) compileProbeSideForBroadcastJoin(node, left, right *plan.Node,
 				//product_l2 join is very time_consuming, increase the parallelism
 				rs[i].NodeInfo.Mcpu *= 8
 			}
-			if rs[i].NodeInfo.Mcpu > c.ncpu {
-				rs[i].NodeInfo.Mcpu = c.ncpu
+			if rs[i].NodeInfo.Mcpu > executionCPU {
+				rs[i].NodeInfo.Mcpu = executionCPU
 			}
 		}
 		c.anal.isFirst = false
@@ -4921,7 +4935,10 @@ func (c *Compile) compileMultiUpdate(node *plan.Node, ss []*Scope) ([]*Scope, er
 	currentFirstFlag := c.anal.isFirst
 	if toWriteS3 {
 		if len(ss) == 1 && ss[0].NodeInfo.Mcpu == 1 {
-			mcpu := c.getParallelSizeForExternalScan(node, c.ncpu)
+			mcpu := c.getParallelSizeForExternalScan(
+				node,
+				c.executionNodeCPU(ss[0].NodeInfo),
+			)
 			if mcpu > 1 {
 				oldScope := ss[0]
 
@@ -6487,6 +6504,21 @@ func getIngressEngineNode(c *Compile) engine.Node {
 		return engine.Node{Addr: c.addr, Mcpu: 1}
 	}
 	return engine.Node{Addr: c.addr, Mcpu: c.ncpu}
+}
+
+// executionNodeCPU returns the capacity advertised for the node that will
+// actually run a scope. It prevents a high-capacity ingress CN from inflating
+// parallelism on a smaller workload-policy target.
+func (c *Compile) executionNodeCPU(node engine.Node) int {
+	for _, worker := range c.cnList {
+		if sameExecutionNode(worker, node) {
+			return normalizeMcpu(worker.Mcpu)
+		}
+	}
+	if sameExecutionNode(node, getIngressEngineNode(c)) {
+		return normalizeMcpu(c.ncpu)
+	}
+	return normalizeMcpu(node.Mcpu)
 }
 
 func (c *Compile) setHaveDDL(haveDDL bool) {

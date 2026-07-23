@@ -54,6 +54,7 @@ def    mo_catalog    mo_partition_metadata    BASE TABLE    Tae
 def    mo_catalog    mo_partition_tables    BASE TABLE    Tae
 def    mo_catalog    mo_pitr    BASE TABLE    Tae
 def    mo_catalog    mo_pubs    BASE TABLE    Tae
+def    mo_catalog    mo_query_workload_policy    BASE TABLE    Tae
 def    mo_catalog    mo_role    BASE TABLE    Tae
 def    mo_catalog    mo_role_grant    BASE TABLE    Tae
 def    mo_catalog    mo_role_privs    BASE TABLE    Tae

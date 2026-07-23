@@ -415,3 +415,11 @@ func TestWorkloadPolicyTraceAndExplainAreSelfDescribing(t *testing.T) {
 	require.Contains(t, explain, "policy-source=account-global")
 	require.Contains(t, explain, "generation=0123456789abcdef")
 }
+
+func TestEffectiveWorkloadPolicyRequiresPoolResolutionOnlyWhenApplied(t *testing.T) {
+	require.False(t, (EffectiveWorkloadPolicy{}).RequiresPoolResolution())
+	require.True(t, (EffectiveWorkloadPolicy{
+		Applied: true,
+		Routing: WorkloadRoutingLocal,
+	}).RequiresPoolResolution())
+}

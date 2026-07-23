@@ -27,9 +27,9 @@ import (
 
 const (
 	workloadPolicyVersion = 1
-	// mo_mysql_compatibility_mode.variable_value is varchar(5000). Reject a
-	// policy before persistence instead of accepting a value the catalog
-	// cannot store losslessly.
+	// Bound control-plane storage, RPC payloads, parsing cost, and per-account
+	// cache size. A version-1 policy has a fixed set of workload classes, so a
+	// larger document is configuration abuse rather than legitimate scale.
 	maxWorkloadPolicyBytes      = 5000
 	maxWorkloadPolicyLabels     = 16
 	maxWorkloadPolicyLabelPart  = 128

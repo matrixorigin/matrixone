@@ -4423,6 +4423,42 @@ alter_database_config_stmt:
         }
         $$ = &tree.SetVar{Assignments: assignments}
     }
+|   ALTER ACCOUNT CONFIG SET ident equal_or_assignment STRING
+    {
+        $$ = tree.NewAlterAccountConfig(
+            "",
+            $5.Compare(),
+            $7,
+            false,
+        )
+    }
+|   ALTER ACCOUNT CONFIG FOR account_name SET ident equal_or_assignment STRING
+    {
+        $$ = tree.NewAlterAccountConfig(
+            $5,
+            $7.Compare(),
+            $9,
+            false,
+        )
+    }
+|   ALTER ACCOUNT CONFIG RESET ident
+    {
+        $$ = tree.NewAlterAccountConfig(
+            "",
+            $5.Compare(),
+            "",
+            true,
+        )
+    }
+|   ALTER ACCOUNT CONFIG FOR account_name RESET ident
+    {
+        $$ = tree.NewAlterAccountConfig(
+            $5,
+            $7.Compare(),
+            "",
+            true,
+        )
+    }
 
 alter_account_auth_option:
 {

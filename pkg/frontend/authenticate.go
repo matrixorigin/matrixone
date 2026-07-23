@@ -17,7 +17,6 @@ package frontend
 import (
 	"bytes"
 	"context"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -923,33 +922,34 @@ var (
 		"mo_task":            0,
 	}
 	sysWantedTables = map[string]int8{
-		"mo_user":                     0,
-		"mo_account":                  0,
-		"mo_role":                     0,
-		"mo_user_grant":               0,
-		"mo_role_grant":               0,
-		"mo_role_privs":               0,
-		"mo_user_defined_function":    0,
-		"mo_stored_procedure":         0,
-		"mo_mysql_compatibility_mode": 0,
-		"mo_stages":                   0,
-		catalog.MOAutoIncrTable:       0,
-		"mo_sessions":                 0,
-		"mo_configurations":           0,
-		"mo_locks":                    0,
-		"mo_variables":                0,
-		"mo_transactions":             0,
-		"mo_cache":                    0,
-		"mo_snapshots":                0,
-		"mo_cdc_task":                 0,
-		"mo_cdc_watermark":            0,
-		catalog.MO_TABLE_STATS:        0,
-		catalog.MO_MERGE_SETTINGS:     0,
-		catalog.MO_ISCP_LOG:           0,
-		catalog.MO_INDEX_UPDATE:       0,
-		catalog.MO_BRANCH_METADATA:    0,
-		catalog.MO_FEATURE_LIMIT:      0,
-		catalog.MO_FEATURE_REGISTRY:   0,
+		"mo_user":                        0,
+		"mo_account":                     0,
+		"mo_role":                        0,
+		"mo_user_grant":                  0,
+		"mo_role_grant":                  0,
+		"mo_role_privs":                  0,
+		"mo_user_defined_function":       0,
+		"mo_stored_procedure":            0,
+		"mo_mysql_compatibility_mode":    0,
+		catalog.MO_QUERY_WORKLOAD_POLICY: 0,
+		"mo_stages":                      0,
+		catalog.MOAutoIncrTable:          0,
+		"mo_sessions":                    0,
+		"mo_configurations":              0,
+		"mo_locks":                       0,
+		"mo_variables":                   0,
+		"mo_transactions":                0,
+		"mo_cache":                       0,
+		"mo_snapshots":                   0,
+		"mo_cdc_task":                    0,
+		"mo_cdc_watermark":               0,
+		catalog.MO_TABLE_STATS:           0,
+		catalog.MO_MERGE_SETTINGS:        0,
+		catalog.MO_ISCP_LOG:              0,
+		catalog.MO_INDEX_UPDATE:          0,
+		catalog.MO_BRANCH_METADATA:       0,
+		catalog.MO_FEATURE_LIMIT:         0,
+		catalog.MO_FEATURE_REGISTRY:      0,
 	}
 	sysAccountTables = map[string]struct{}{
 		catalog.MOVersionTable:       {},
@@ -961,53 +961,54 @@ var (
 	}
 	// predefined tables of the database mo_catalog in every account
 	predefinedTables = map[string]int8{
-		"mo_database":                   0,
-		"mo_tables":                     0,
-		"mo_columns":                    0,
-		"mo_account":                    0,
-		"mo_user":                       0,
-		"mo_role":                       0,
-		"mo_user_grant":                 0,
-		"mo_role_grant":                 0,
-		"mo_role_privs":                 0,
-		"mo_user_defined_function":      0,
-		"mo_stored_procedure":           0,
-		"mo_mysql_compatibility_mode":   0,
-		catalog.MOAutoIncrTable:         0,
-		"mo_indexes":                    0,
-		"mo_table_partitions":           0,
-		"mo_pubs":                       0,
-		"mo_stages":                     0,
-		"mo_sessions":                   0,
-		"mo_configurations":             0,
-		"mo_locks":                      0,
-		"mo_variables":                  0,
-		"mo_transactions":               0,
-		"mo_cache":                      0,
-		"mo_foreign_keys":               0,
-		"mo_snapshots":                  0,
-		"mo_subs":                       0,
-		"mo_shards":                     0,
-		"mo_shards_metadata":            0,
-		"mo_cdc_task":                   0,
-		"mo_cdc_watermark":              0,
-		catalog.MO_TABLE_STATS:          0,
-		catalog.MO_ACCOUNT_LOCK:         0,
-		catalog.MO_MERGE_SETTINGS:       0,
-		catalog.MO_ISCP_LOG:             0,
-		catalog.MO_INDEX_UPDATE:         0,
-		catalog.MO_BRANCH_METADATA:      0,
-		catalog.MO_FEATURE_LIMIT:        0,
-		catalog.MO_FEATURE_REGISTRY:     0,
-		catalog.MO_ROLE_RULE:            0,
-		icebergsql.TableCatalogs:        0,
-		icebergsql.TablePrincipalMap:    0,
-		icebergsql.TableResidencyPolicy: 0,
-		icebergsql.TableTables:          0,
-		icebergsql.TableRefs:            0,
-		icebergsql.TablePublishJobs:     0,
-		icebergsql.TableOrphanFiles:     0,
-		icebergsql.TableMaintenanceJobs: 0,
+		"mo_database":                    0,
+		"mo_tables":                      0,
+		"mo_columns":                     0,
+		"mo_account":                     0,
+		"mo_user":                        0,
+		"mo_role":                        0,
+		"mo_user_grant":                  0,
+		"mo_role_grant":                  0,
+		"mo_role_privs":                  0,
+		"mo_user_defined_function":       0,
+		"mo_stored_procedure":            0,
+		"mo_mysql_compatibility_mode":    0,
+		catalog.MO_QUERY_WORKLOAD_POLICY: 0,
+		catalog.MOAutoIncrTable:          0,
+		"mo_indexes":                     0,
+		"mo_table_partitions":            0,
+		"mo_pubs":                        0,
+		"mo_stages":                      0,
+		"mo_sessions":                    0,
+		"mo_configurations":              0,
+		"mo_locks":                       0,
+		"mo_variables":                   0,
+		"mo_transactions":                0,
+		"mo_cache":                       0,
+		"mo_foreign_keys":                0,
+		"mo_snapshots":                   0,
+		"mo_subs":                        0,
+		"mo_shards":                      0,
+		"mo_shards_metadata":             0,
+		"mo_cdc_task":                    0,
+		"mo_cdc_watermark":               0,
+		catalog.MO_TABLE_STATS:           0,
+		catalog.MO_ACCOUNT_LOCK:          0,
+		catalog.MO_MERGE_SETTINGS:        0,
+		catalog.MO_ISCP_LOG:              0,
+		catalog.MO_INDEX_UPDATE:          0,
+		catalog.MO_BRANCH_METADATA:       0,
+		catalog.MO_FEATURE_LIMIT:         0,
+		catalog.MO_FEATURE_REGISTRY:      0,
+		catalog.MO_ROLE_RULE:             0,
+		icebergsql.TableCatalogs:         0,
+		icebergsql.TablePrincipalMap:     0,
+		icebergsql.TableResidencyPolicy:  0,
+		icebergsql.TableTables:           0,
+		icebergsql.TableRefs:             0,
+		icebergsql.TablePublishJobs:      0,
+		icebergsql.TableOrphanFiles:      0,
+		icebergsql.TableMaintenanceJobs:  0,
 	}
 	createDbInformationSchemaSql = "create database information_schema;"
 	createAutoTableSql           = MoCatalogMoAutoIncrTableDDL
@@ -1030,6 +1031,7 @@ var (
 		MoCatalogMoRolePrivsDDL,
 		MoCatalogMoUserDefinedFunctionDDL,
 		MoCatalogMoMysqlCompatibilityModeDDL,
+		MoCatalogMoQueryWorkloadPolicyDDL,
 		MoCatalogMoSnapshotsDDL,
 		MoCatalogMoPubsDDL,
 		MoCatalogMoSubsDDL,
@@ -1077,6 +1079,7 @@ var (
 		`drop table if exists mo_catalog.mo_role_privs;`,
 		`drop table if exists mo_catalog.mo_user_defined_function;`,
 		`drop table if exists mo_catalog.mo_stored_procedure;`,
+		fmt.Sprintf(`drop table if exists mo_catalog.%s;`, catalog.MO_QUERY_WORKLOAD_POLICY),
 		`drop table if exists mo_catalog.mo_stages;`,
 		`drop view if exists mo_catalog.mo_sessions;`,
 		`drop view if exists mo_catalog.mo_configurations;`,
@@ -1596,13 +1599,11 @@ const (
 
 	getSystemVariablesWithAccountFormat = `select variable_name, variable_value from mo_catalog.mo_mysql_compatibility_mode where account_id = %d and system_variables = true;`
 
-	getSystemVariableWithAccountFormat = `select variable_name from mo_catalog.mo_mysql_compatibility_mode where account_id = %d and system_variables = true and variable_name = %s;`
+	getSystemVariableWithAccountFormat = `select variable_name from mo_catalog.mo_mysql_compatibility_mode where account_id = %d and system_variables = true and variable_name = '%s';`
 
-	getSystemVariableValueWithAccountFormat = `select variable_value from mo_catalog.mo_mysql_compatibility_mode where account_id = %d and system_variables = true and variable_name = %s;`
+	insertSystemVariableWithAccountFormat = `insert into mo_catalog.mo_mysql_compatibility_mode(account_id, account_name, variable_name, variable_value, system_variables) values (%d, "%s", "%s", "%s", %v);`
 
-	insertSystemVariableWithAccountFormat = `insert into mo_catalog.mo_mysql_compatibility_mode(account_id, account_name, variable_name, variable_value, system_variables) values (%d, %s, %s, %s, %v);`
-
-	updateSystemVariableValueFormat = `update mo_catalog.mo_mysql_compatibility_mode set variable_value = %s where account_id = %d and variable_name = %s and system_variables = true;`
+	updateSystemVariableValueFormat = `update mo_catalog.mo_mysql_compatibility_mode set variable_value = '%s' where account_id = %d and variable_name = '%s' and system_variables = true;`
 
 	updateConfigurationByDbNameAndAccountNameFormat = `update mo_catalog.mo_mysql_compatibility_mode set variable_value = '%s' where account_name = '%s' and dat_name = '%s' and variable_name = '%s';`
 
@@ -2292,48 +2293,16 @@ func getSqlForGetSystemVariablesWithAccount(accountId uint64) string {
 }
 
 func getSqlForGetSysVarWithAccount(accountId uint64, varName string) string {
-	return fmt.Sprintf(
-		getSystemVariableWithAccountFormat,
-		accountId,
-		sqlStringValueExpression(varName),
-	)
-}
-
-func getSqlForGetSysVarValueWithAccount(accountID uint64, varName string) string {
-	return fmt.Sprintf(
-		getSystemVariableValueWithAccountFormat,
-		accountID,
-		sqlStringValueExpression(varName),
-	)
+	return fmt.Sprintf(getSystemVariableWithAccountFormat, accountId, varName)
 }
 
 func getSqlForInsertSysVarWithAccount(accountId uint64, accountName string, varName string, varValue string) string {
-	return fmt.Sprintf(
-		insertSystemVariableWithAccountFormat,
-		accountId,
-		sqlStringValueExpression(accountName),
-		sqlStringValueExpression(varName),
-		sqlStringValueExpression(varValue),
-		true,
-	)
+	return fmt.Sprintf(insertSystemVariableWithAccountFormat, accountId, accountName, varName, varValue, true)
 }
 
 // getSqlForUpdateSysVarValue returns a SQL query to update the value of a system variable for a given account.
 func getSqlForUpdateSysVarValue(varValue string, accountId uint64, varName string) string {
-	return fmt.Sprintf(
-		updateSystemVariableValueFormat,
-		sqlStringValueExpression(varValue),
-		accountId,
-		sqlStringValueExpression(varName),
-	)
-}
-
-// sqlStringValueExpression is independent of the session's backslash escape
-// mode. System-variable values can contain arbitrary JSON escapes, so quoted
-// literals are not byte-stable under both default SQL mode and
-// NO_BACKSLASH_ESCAPES.
-func sqlStringValueExpression(value string) string {
-	return "unhex('" + hex.EncodeToString([]byte(value)) + "')"
+	return fmt.Sprintf(updateSystemVariableValueFormat, varValue, accountId, varName)
 }
 
 func getSqlForupdateConfigurationByDbNameAndAccountName(ctx context.Context, varValue, accountName, dbName, varName string) (string, error) {
@@ -3581,6 +3550,9 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *alterAccount) (err er
 	if accountExist {
 		if aa.StatusOption.Exist && aa.StatusOption.Option == tree.AccountStatusSuspend {
 			ses.getRoutineManager().accountRoutine.EnKillQueue(int64(targetAccountId), version)
+			if targetAccountId <= uint64(^uint32(0)) {
+				GWorkloadPolicyManager.Remove(uint32(targetAccountId))
+			}
 			logutil.Infof("[set suspend] set account id %d, version %d suspend", targetAccountId, version)
 			if err := postDropSuspendAccount(ctx, ses, aa.Name, int64(targetAccountId), version); err != nil {
 				ses.Errorf(ctx, "post alter account suspend error: %s", err.Error())
@@ -4468,6 +4440,9 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 	}
 	// if drop the account, add the account to kill queue
 	ses.getRoutineManager().accountRoutine.EnKillQueue(accountId, version)
+	if accountId > 0 && accountId <= int64(^uint32(0)) {
+		GWorkloadPolicyManager.Remove(uint32(accountId))
+	}
 
 	if err := postDropSuspendAccount(ctx, ses, da.Name, accountId, version); err != nil {
 		ses.Errorf(ctx, "post drop account error: %s", err.Error())
@@ -6499,6 +6474,9 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		if !st.IsAccountLevel {
 			writeDatabaseTargets = append(writeDatabaseTargets, st.DbName)
 		}
+	case *tree.AlterAccountConfig:
+		objType = objectTypeNone
+		kind = privilegeKindNone
 	case *tree.CreateFunction:
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeCreateView, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
@@ -11869,25 +11847,6 @@ func doSetGlobalSystemVariable(ctx context.Context, ses *Session, varName string
 		err = finishTxn(ctx, bh, err)
 	}()
 
-	// query_workload_policy is not pre-seeded for an account, so its first SET
-	// must serialize the following existence check and insert across CNs. The
-	// system account lock table is an existing logical-key lock namespace: a
-	// primary-key point lookup locks even an absent account-name row, and the
-	// enclosing transaction releases the lock on commit or rollback.
-	if varName == queryWorkloadPolicy {
-		var sql string
-		if sql, err = getSqlForLockMoAccountNameFormat(ctx, accountName); err != nil {
-			return
-		}
-		bh.ClearExecResultSet()
-		if err = bh.Exec(
-			defines.AttachAccountId(ctx, catalog.System_Account),
-			sql,
-		); err != nil {
-			return
-		}
-	}
-
 	// check if var exists
 	sql := getSqlForGetSysVarWithAccount(accountId, varName)
 	bh.ClearExecResultSet()
@@ -11991,90 +11950,6 @@ func postAlterSessionStatus(
 
 	err = queryservice.RequestMultipleCn(ctx, nodes, qc, genRequest, handleValidResponse, handleInvalidResponse)
 	return errors.Join(err, retErr)
-}
-
-// postWorkloadPolicyUpdate propagates an already-committed policy to the
-// account caches on other CNs. The catalog remains authoritative; a CN without
-// an active or currently-loading cache ignores the update and loads the
-// complete row set when its first session connects.
-func postWorkloadPolicyUpdate(
-	ctx context.Context,
-	ses *Session,
-	raw string,
-	commitTS timestamp.Timestamp,
-) error {
-	if commitTS.IsEmpty() {
-		// Lightweight test and embedded executors may not expose a transaction
-		// timestamp. They have no independently cached remote CN to update.
-		return nil
-	}
-	qc := getPu(ses.GetService()).QueryClient
-	if qc == nil {
-		return nil
-	}
-
-	seen := make(map[string]struct{})
-	var nodes []string
-	clusterservice.GetMOCluster(qc.ServiceID()).GetCNService(
-		clusterservice.NewSelectAll(),
-		func(service metadata.CNService) bool {
-			if service.QueryAddress == "" {
-				return true
-			}
-			if _, ok := seen[service.QueryAddress]; ok {
-				return true
-			}
-			seen[service.QueryAddress] = struct{}{}
-			nodes = append(nodes, service.QueryAddress)
-			return true
-		},
-	)
-	if len(nodes) == 0 {
-		return nil
-	}
-
-	accountID := ses.GetTenantInfo().TenantID
-	genRequest := func() *query.Request {
-		req := qc.NewRequest(query.CmdMethod_WorkloadPolicyUpdate)
-		req.WorkloadPolicyUpdateRequest = &query.WorkloadPolicyUpdateRequest{
-			AccountID: accountID,
-			Policy:    raw,
-			CommitTS:  commitTS,
-		}
-		return req
-	}
-
-	var responseMu sync.Mutex
-	var responseErr error
-	recordInvalidResponse := func(nodeAddr string) {
-		responseMu.Lock()
-		defer responseMu.Unlock()
-		responseErr = errors.Join(
-			responseErr,
-			moerr.NewInternalErrorf(
-				ctx,
-				"query workload policy update failed on CN %s",
-				nodeAddr,
-			),
-		)
-	}
-	handleValidResponse := func(nodeAddr string, rsp *query.Response) {
-		if rsp == nil || rsp.WorkloadPolicyUpdateResponse == nil {
-			recordInvalidResponse(nodeAddr)
-		}
-	}
-
-	err := queryservice.RequestMultipleCn(
-		ctx,
-		nodes,
-		qc,
-		genRequest,
-		handleValidResponse,
-		recordInvalidResponse,
-	)
-	responseMu.Lock()
-	defer responseMu.Unlock()
-	return errors.Join(err, responseErr)
 }
 
 func checkTimeStampValid(ctx context.Context, ses FeSession, snapshotTs int64) (bool, error) {

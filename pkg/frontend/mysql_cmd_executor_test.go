@@ -3595,6 +3595,11 @@ func TestQueryWorkloadPolicyUsesAccountGlobalAdministratorPolicy(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 	ses := newTestSession(t, ctrl)
+	accountID := ses.GetAccountId()
+	ses.workloadPolicy.Store(GWorkloadPolicyManager.acquire(accountID))
+	t.Cleanup(func() {
+		GWorkloadPolicyManager.Remove(accountID)
+	})
 	policyJSON := `{
 		"version": 1,
 		"policies": {
@@ -3605,37 +3610,37 @@ func TestQueryWorkloadPolicyUsesAccountGlobalAdministratorPolicy(t *testing.T) {
 			}
 		}
 	}`
-	ses.gSysVars.Set(queryWorkloadPolicy, policyJSON)
+	applied, revision, err := GWorkloadPolicyManager.Apply(
+		accountID,
+		policyJSON,
+		1,
+	)
+	require.NoError(t, err)
+	require.True(t, applied)
+	require.Equal(t, uint64(1), revision)
 
 	set := queryWorkloadPolicySnapshot(ses)
 	require.True(t, set.Configured())
 	require.Empty(t, set.InvalidReason)
 	require.Contains(t, set.Rules, schedule.WorkloadAP)
 	require.False(t, querySchedulingIntent(ses).Explicit)
-	require.Equal(t, ScopeGlobal, gSysVarsDefs[queryWorkloadPolicy].Scope)
-	require.True(t, gSysVarsDefs[queryWorkloadPolicy].Dynamic)
-	require.False(t, gSysVarsDefs[queryWorkloadPolicy].SetVarHintApplies)
-	require.ErrorContains(
-		t,
-		ses.SetSessionSysVar(context.Background(), queryWorkloadPolicy, policyJSON),
-		errorSystemVariableIsGlobal(),
-	)
-
-	// The global setter rejects malformed or unsafe policy before it reaches
-	// catalog persistence.
-	err := ses.SetGlobalSysVar(
-		context.Background(),
-		queryWorkloadPolicy,
-		`{"version":1,"policies":{"ap":{"pool":"ap","labels":{"account":"other"}}}}`,
-	)
-	require.ErrorContains(t, err, "protected account")
+	_, exists := gSysVarsDefs[queryWorkloadPolicy]
+	require.False(t, exists)
 }
 
 func TestQueryWorkloadPolicyCorruptCatalogValueFailsClosed(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 	ses := newTestSession(t, ctrl)
-	ses.gSysVars.Set(queryWorkloadPolicy, `{"version":1`)
+	state := &accountWorkloadPolicy{}
+	ses.workloadPolicy.Store(state)
+	state.snapshot.Store(&workloadPolicySnapshot{
+		raw:      `{"version":1`,
+		revision: 1,
+		set: schedule.WorkloadPolicySet{
+			InvalidReason: "invalid workload policy catalog row",
+		},
+	})
 
 	set := queryWorkloadPolicySnapshot(ses)
 	require.NotEmpty(t, set.InvalidReason)
