@@ -150,6 +150,14 @@ from (
     union all
     select 8 as id, e_json as e from convert_json_enum where id = 2
 ) src;
+-- UNION DISTINCT preserves ENUM display-value semantics when every branch is ENUM.
+insert into convert_json_enum_destination
+select id, e
+from (
+    select 15 as id, e_json as e from convert_json_enum where id = 1
+    union
+    select 16 as id, e_json as e from convert_json_enum where id = 2
+) src;
 -- Pure projection chains retain ENUM display-value semantics.
 insert into convert_json_enum_destination
 select 9, e
@@ -178,9 +186,42 @@ from (
 insert into convert_json_enum_destination
 select id, e
 from (
+    select 17 as id, e_json as e from convert_json_enum where id = 1
+    intersect all
+    select 17 as id, cast('{"a":1}' as varchar) as e
+) src;
+insert into convert_json_enum_destination
+select id, e
+from (
     select 14 as id, e_json as e from convert_json_enum where id = 1
     minus
     select 14 as id, cast('{"b":2}' as varchar) as e
+) src;
+-- Set-operation output provenance follows the left branch. A left VARCHAR
+-- JSON document must not be reclassified as an ENUM display value.
+insert into convert_json_enum_destination
+select id, e
+from (
+    select 18 as id, cast('{"a":1}' as varchar) as e
+    from convert_json_enum where id = 1
+    intersect
+    select 18 as id, e_json as e from convert_json_enum where id = 1
+) src;
+insert into convert_json_enum_destination
+select id, e
+from (
+    select 19 as id, cast('{"a":1}' as varchar) as e
+    from convert_json_enum where id = 1
+    intersect all
+    select 19 as id, e_json as e from convert_json_enum where id = 1
+) src;
+insert into convert_json_enum_destination
+select id, e
+from (
+    select 20 as id, cast('{"a":1}' as varchar) as e
+    from convert_json_enum where id = 1
+    minus
+    select 20 as id, e_json as e from convert_json_enum where id = 2
 ) src;
 select id, json_type(j), json_unquote(j)
 from convert_json_enum_destination
