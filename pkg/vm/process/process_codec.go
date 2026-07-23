@@ -80,6 +80,7 @@ func (proc *Process) BuildProcessInfo(
 			for i := range procInfo.PrepareParams.Nulls {
 				procInfo.PrepareParams.Nulls[i] = vec.GetNulls().Contains(uint64(i))
 			}
+			procInfo.PrepareParams.IsBin = append(procInfo.PrepareParams.IsBin, proc.Base.prepareParamsIsBin...)
 		}
 	}
 	{ // session info
@@ -93,15 +94,17 @@ func (proc *Process) BuildProcessInfo(
 		}
 
 		procInfo.SessionInfo = pipeline.SessionInfo{
-			User:            proc.Base.SessionInfo.GetUser(),
-			Host:            proc.Base.SessionInfo.GetHost(),
-			Role:            proc.Base.SessionInfo.GetRole(),
-			ConnectionId:    proc.Base.SessionInfo.GetConnectionID(),
-			Database:        proc.Base.SessionInfo.GetDatabase(),
-			Version:         proc.Base.SessionInfo.GetVersion(),
-			TimeZone:        timeBytes,
-			QueryId:         proc.Base.SessionInfo.QueryId,
-			LockWaitTimeout: resolveLockWaitTimeoutSeconds(proc),
+			User:                proc.Base.SessionInfo.GetUser(),
+			Host:                proc.Base.SessionInfo.GetHost(),
+			Role:                proc.Base.SessionInfo.GetRole(),
+			ConnectionId:        proc.Base.SessionInfo.GetConnectionID(),
+			Database:            proc.Base.SessionInfo.GetDatabase(),
+			Version:             proc.Base.SessionInfo.GetVersion(),
+			TimeZone:            timeBytes,
+			QueryId:             proc.Base.SessionInfo.QueryId,
+			LockWaitTimeout:     resolveLockWaitTimeoutSeconds(proc),
+			LockWaitTimeoutSet:  proc.Base.SessionInfo.LockWaitTimeoutSet,
+			MatrixoneNativeMode: proc.Base.SessionInfo.MatrixOneNativeMode,
 		}
 	}
 	{ // log info
@@ -223,17 +226,23 @@ func (c *codecService) Decode(
 	proc.Base.SessionInfo.StorageEngine = c.engine
 	proc.SetAffectedRows(value.AffectedRows)
 	if value.PrepareParams.Length > 0 {
-		proc.Base.prepareParams = vector.NewVecWithData(
+		prepareParams, err := vector.NewVecWithDataCopy(
 			types.T_text.ToType(),
 			int(value.PrepareParams.Length),
 			value.PrepareParams.Data,
 			value.PrepareParams.Area,
+			proc.Mp(),
 		)
+		if err != nil {
+			proc.Free()
+			return nil, err
+		}
 		for i := range value.PrepareParams.Nulls {
 			if value.PrepareParams.Nulls[i] {
-				proc.Base.prepareParams.GetNulls().Add(uint64(i))
+				prepareParams.GetNulls().Add(uint64(i))
 			}
 		}
+		proc.SetOwnedPrepareParamsWithIsBin(prepareParams, append([]bool(nil), value.PrepareParams.IsBin...))
 	}
 	return proc, nil
 }
@@ -300,15 +309,17 @@ func ConvertToProcessSessionInfo(
 	sei pipeline.SessionInfo,
 ) (SessionInfo, error) {
 	sessionInfo := SessionInfo{
-		User:            sei.User,
-		Host:            sei.Host,
-		Role:            sei.Role,
-		ConnectionID:    sei.ConnectionId,
-		Database:        sei.Database,
-		Version:         sei.Version,
-		Account:         sei.Account,
-		QueryId:         sei.QueryId,
-		LockWaitTimeout: sei.LockWaitTimeout,
+		User:                sei.User,
+		Host:                sei.Host,
+		Role:                sei.Role,
+		ConnectionID:        sei.ConnectionId,
+		Database:            sei.Database,
+		Version:             sei.Version,
+		Account:             sei.Account,
+		QueryId:             sei.QueryId,
+		LockWaitTimeout:     sei.LockWaitTimeout,
+		LockWaitTimeoutSet:  sei.LockWaitTimeoutSet,
+		MatrixOneNativeMode: sei.MatrixoneNativeMode,
 	}
 	t := time.Time{}
 	err := t.UnmarshalBinary(sei.TimeZone)
@@ -320,7 +331,23 @@ func ConvertToProcessSessionInfo(
 }
 
 func resolveLockWaitTimeoutSeconds(proc *Process) int64 {
+	// A positive per-execution timeout must survive remote pipeline encoding
+	// without being replaced by the background resolver's compiled default.
+	// For an explicit zero, continue to the resolver so clearing an old txn
+	// override falls back to the normal default when one is available.
+	if proc != nil && proc.GetSessionInfo() != nil &&
+		proc.GetSessionInfo().LockWaitTimeoutSet &&
+		proc.GetSessionInfo().LockWaitTimeout > 0 {
+		return proc.GetSessionInfo().LockWaitTimeout
+	}
 	if proc == nil || proc.GetResolveVariableFunc() == nil {
+		if proc != nil && proc.GetSessionInfo() != nil &&
+			proc.GetSessionInfo().LockWaitTimeoutSet {
+			// Older pipeline peers ignore LockWaitTimeoutSet. Encode an explicit
+			// clear as the shared positive fallback in the legacy timeout field,
+			// so they cannot resurrect a stale timeout from the reused txn.
+			return defines.DefaultLockWaitTimeoutSeconds
+		}
 		return procSessionLockWaitTimeout(proc)
 	}
 	if v, err := proc.GetResolveVariableFunc()("lock_wait_timeout", true, false); err == nil {

@@ -226,6 +226,23 @@ func (l *Lexer) Lex(lval *yySymType) int {
 	lval.pos = l.scanner.Pos
 	l.scanner.LastToken = str
 
+	if typ == FOR {
+		snapshot := *l.scanner
+		nextTyp, nextStr := l.scanner.Scan()
+		if nextTyp == ICEBERG {
+			afterIceberg := *l.scanner
+			afterTyp, _ := l.scanner.Scan()
+			if afterTyp == SNAPSHOT || afterTyp == TIMESTAMP || afterTyp == REF {
+				l.lastToken = FOR_ICEBERG
+				lval.str = str + " " + nextStr
+				l.scanner.LastToken = lval.str
+				*l.scanner = afterIceberg
+				return FOR_ICEBERG
+			}
+		}
+		*l.scanner = snapshot
+	}
+
 	switch typ {
 	case INTEGRAL:
 		return l.toInt(lval, str)
@@ -300,11 +317,27 @@ func SplitSqlByStatementWithSQLMode(ctx context.Context, sql string, lower int64
 		}
 	}()
 
+	// A MySQL executable comment is SQL lexical space, so a statement-ending
+	// semicolon can occur before the raw /*! ... */ wrapper closes. The parser
+	// records that semicolon's byte offset, but slicing there would turn one
+	// statement into two invalid raw fragments ("/*! ..." and "*/"). Extend
+	// only a comment's final semicolon through its terminator. Earlier
+	// semicolons, if any, remain genuine statement boundaries.
+	var executableCommentEnds map[int]int
+	if lexer.scanner.executableCommentEnd != 0 {
+		executableCommentEnds = executableCommentEndsByFinalSemicolon(sql, sqlMode)
+	}
 	fragments := make([]string, 0, len(lexer.topLevelSemicolonEnds)+1)
 	start := 0
 	for _, end := range lexer.topLevelSemicolonEnds {
-		fragments = append(fragments, strings.TrimSpace(sql[start:end-1]))
-		start = end
+		fragmentEnd := end - 1
+		nextStart := end
+		if commentEnd, ok := executableCommentEnds[end]; ok {
+			fragmentEnd = commentEnd
+			nextStart = commentEnd
+		}
+		fragments = append(fragments, strings.TrimSpace(sql[start:fragmentEnd]))
+		start = nextStart
 	}
 	tail := strings.TrimSpace(sql[start:])
 	if len(lexer.topLevelSemicolonEnds) == 0 || tail != "" {
@@ -314,6 +347,38 @@ func SplitSqlByStatementWithSQLMode(ctx context.Context, sql string, lower int64
 		return []string{""}, nil
 	}
 	return fragments, nil
+}
+
+// executableCommentEndsByFinalSemicolon maps the final semicolon inside each
+// executable comment to the byte offset immediately after its closing */. The
+// scanner supplies both SQL-mode-aware tokenization and a terminator offset
+// that is not confused by comment-looking text inside quoted values.
+func executableCommentEndsByFinalSemicolon(sql string, sqlMode string) map[int]int {
+	scanner := NewScannerWithSQLMode(dialect.MYSQL, sql, ParseSQLModeFlags(sqlMode))
+	defer PutScanner(scanner)
+
+	var ends map[int]int
+	finalSemicolonEnd := 0
+	for {
+		typ, _ := scanner.Scan()
+		if commentEnd := scanner.TakeExecutableCommentEnd(); commentEnd != 0 {
+			if finalSemicolonEnd != 0 && commentEnd >= 2 && finalSemicolonEnd <= commentEnd-2 &&
+				strings.TrimSpace(sql[finalSemicolonEnd:commentEnd-2]) == "" {
+				if ends == nil {
+					ends = make(map[int]int)
+				}
+				ends[finalSemicolonEnd] = commentEnd
+			}
+			finalSemicolonEnd = 0
+		}
+		if typ == ';' && scanner.CommentFlag {
+			finalSemicolonEnd = scanner.Pos
+		}
+		if typ == 0 || typ == EofChar() || typ == LEX_ERROR {
+			break
+		}
+	}
+	return ends
 }
 
 func (l *Lexer) toInt(lval *yySymType, str string) int {

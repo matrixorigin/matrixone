@@ -62,6 +62,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/explain"
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
@@ -1074,6 +1075,55 @@ func Test_GetComputationWrapper(t *testing.T) {
 	})
 }
 
+func TestGetComputationWrapperKeepsSchedulingSQLPerStatement(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	execCtx := newTestExecCtx(ctx, ctrl)
+	execCtx.ses = ses
+	execCtx.input = &UserInput{sql: "select /*+ SET_VAR(query_max_workers=1) */ 1;; " +
+		"select /*+ SET_VAR(query_pool_strict=on) */ 2"}
+
+	cws, err := GetComputationWrapper(execCtx, "", "root", nil, proc, ses)
+	require.NoError(t, err)
+	require.Len(t, cws, 2)
+	defer func() {
+		for _, cw := range cws {
+			cw.Free()
+		}
+	}()
+
+	first := cws[0].(interface{ SchedulingSQL() string }).SchedulingSQL()
+	second := cws[1].(interface{ SchedulingSQL() string }).SchedulingSQL()
+	require.Contains(t, first, "query_max_workers=1")
+	require.NotContains(t, first, "query_pool_strict")
+	require.Contains(t, second, "query_pool_strict=on")
+	require.NotContains(t, second, "query_max_workers")
+}
+
+func TestGetComputationWrapperKeepsExecutableCommentStatementWhole(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	execCtx := newTestExecCtx(ctx, ctrl)
+	execCtx.ses = ses
+	const sql = "/*!40101 use mysql_ddl_test_db_3; */"
+	execCtx.input = &UserInput{sql: sql}
+
+	cws, err := GetComputationWrapper(execCtx, "", "root", nil, proc, ses)
+	require.NoError(t, err)
+	require.Len(t, cws, 1)
+	defer cws[0].Free()
+
+	require.Equal(t, sql, cws[0].(interface{ SchedulingSQL() string }).SchedulingSQL())
+	records, err := sqlForRecordByStatement(ctx, sql)
+	require.NoError(t, err)
+	require.Len(t, records, 1)
+	require.Contains(t, records[0], "use mysql_ddl_test_db_3")
+}
+
 func TestGetComputationWrapperKeepsRemapPerStatement(t *testing.T) {
 	ctx := context.Background()
 	ctrl := gomock.NewController(t)
@@ -1568,6 +1618,150 @@ func Test_HandlePrepareStmt(t *testing.T) {
 	})
 }
 
+func TestHandlePrepareStmtNameContainingFrom(t *testing.T) {
+	setSessionAlloc("", NewLeakCheckAllocator())
+	ctx := defines.AttachAccountId(context.TODO(), catalog.System_Account)
+	const sql = "prepare fromx from select 1"
+	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, sql, 1)
+	require.NoError(t, err)
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	execCtx := newTestExecCtx(ctx, ctrl)
+
+	runTestHandle("handlePrepareStmt name containing from", t, func(ses *Session) error {
+		execCtx.resper = ses.respr
+		prepared, err := handlePrepareStmt(ses, execCtx, stmt.(*tree.PrepareStmt), sql)
+		if err != nil {
+			return err
+		}
+		require.Equal(t, "select 1", prepared.Sql)
+		return nil
+	})
+}
+
+func TestHandlePrepareStmtExecutableCommentDelimiter(t *testing.T) {
+	setSessionAlloc("", NewLeakCheckAllocator())
+	ctx := defines.AttachAccountId(context.TODO(), catalog.System_Account)
+	const sql = "prepare fromx /*! from */ select 1"
+	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, sql, 1)
+	require.NoError(t, err)
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	execCtx := newTestExecCtx(ctx, ctrl)
+
+	runTestHandle("handlePrepareStmt executable comment delimiter", t, func(ses *Session) error {
+		execCtx.resper = ses.respr
+		prepared, err := handlePrepareStmt(ses, execCtx, stmt.(*tree.PrepareStmt), sql)
+		if err != nil {
+			return err
+		}
+		require.Equal(t, "select 1", prepared.Sql)
+		return nil
+	})
+}
+
+func TestHandlePrepareStmtQuotedCommentTerminator(t *testing.T) {
+	setSessionAlloc("", NewLeakCheckAllocator())
+	ctx := defines.AttachAccountId(context.TODO(), catalog.System_Account)
+	const sql = "prepare fromx /*! from select 'x*/y' */"
+	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, sql, 1)
+	require.NoError(t, err)
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	execCtx := newTestExecCtx(ctx, ctrl)
+
+	runTestHandle("handlePrepareStmt quoted comment terminator", t, func(ses *Session) error {
+		execCtx.resper = ses.respr
+		prepared, err := handlePrepareStmt(ses, execCtx, stmt.(*tree.PrepareStmt), sql)
+		if err != nil {
+			return err
+		}
+		require.Equal(t, "select 'x*/y'", prepared.Sql)
+		return nil
+	})
+}
+
+func TestExtractPrepareStmtSQL(t *testing.T) {
+	testCases := []struct {
+		name    string
+		sql     string
+		sqlMode string
+		want    string
+	}{
+		{
+			name: "name contains delimiter text",
+			sql:  "prepare fromx from select 1",
+			want: "select 1",
+		},
+		{
+			name: "quoted delimiter name",
+			sql:  "prepare `from` from\n\tselect 2",
+			want: "select 2",
+		},
+		{
+			name:    "ansi quoted delimiter name",
+			sql:     `prepare "from" from select 3`,
+			sqlMode: "ANSI_QUOTES",
+			want:    "select 3",
+		},
+		{
+			name: "preserve inner comment",
+			sql:  "prepare from_name /* before delimiter */ from /* inner */ select 4",
+			want: "/* inner */ select 4",
+		},
+		{
+			name: "leading comment",
+			sql:  "/* rewrite hint */ prepare fromx from select 5",
+			want: "select 5",
+		},
+		{
+			name: "executable comment delimiter",
+			sql:  "prepare fromx /*! from */ select 1",
+			want: "select 1",
+		},
+		{
+			name: "statement inside executable comment",
+			sql:  "prepare fromx /*! from select 2 */",
+			want: "select 2",
+		},
+		{
+			name: "quoted comment terminator",
+			sql:  "prepare fromx /*! from select 'x*/y' */",
+			want: "select 'x*/y'",
+		},
+		{
+			name: "preserve comment after executable delimiter",
+			sql:  "prepare fromx /*! from */ /* inner */ select 3",
+			want: "/* inner */ select 3",
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			got, err := extractPrepareStmtSQL(context.Background(), testCase.sql, testCase.sqlMode)
+			require.NoError(t, err)
+			require.Equal(t, testCase.want, got)
+		})
+	}
+}
+
+func TestExtractPrepareStmtSQLRejectsInvalidInput(t *testing.T) {
+	for _, sql := range []string{
+		"select 1",
+		"prepare",
+		"prepare stmt select 1",
+		"prepare stmt /*! from select 1",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			_, err := extractPrepareStmtSQL(context.Background(), sql, "")
+			require.Error(t, err)
+		})
+	}
+}
+
 func TestHandlePrepareStmtStoresRemapPolicy(t *testing.T) {
 	setSessionAlloc("", NewLeakCheckAllocator())
 	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
@@ -1625,6 +1819,63 @@ func Test_HandlePrepareVarUsesSessionSQLMode(t *testing.T) {
 		}
 		defer preStmt.Close()
 		requirePreparedSelectConcat(t, preStmt)
+		return nil
+	})
+}
+
+func TestHandlePrepareVarWithNonStringValue(t *testing.T) {
+	ctx := defines.AttachAccountId(context.TODO(), catalog.System_Account)
+	setSessionAlloc("", NewLeakCheckAllocator())
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ec := newTestExecCtx(ctx, ctrl)
+
+	runTestHandle("handlePrepareVarWithNonStringValue", t, func(ses *Session) error {
+		ec.resper = ses.respr
+		for _, testCase := range []struct {
+			name  string
+			value any
+		}{
+			{name: "integer_zero", value: int64(0)},
+			{name: "integer_one", value: int64(1)},
+			{name: "integer_min", value: int64(math.MinInt64)},
+			{name: "integer_max", value: int64(math.MaxInt64)},
+			{name: "unsigned_integer_max", value: uint64(math.MaxUint64)},
+			{name: "float", value: float64(1.5)},
+			{name: "boolean", value: true},
+			{name: "array", value: []float32{1}},
+			{name: "null", value: nil},
+		} {
+			t.Run(testCase.name, func(t *testing.T) {
+				var prepared *PrepareStmt
+				var err error
+				stmt := tree.NewPrepareVar(
+					tree.Identifier("stmt_"+testCase.name),
+					tree.NewVarExpr(testCase.name, false, false, nil),
+				)
+				defer stmt.Free()
+				require.NoError(t, ses.SetUserDefinedVar(testCase.name, testCase.value, ""))
+				require.NotPanics(t, func() {
+					prepared, err = handlePrepareVar(ses, ec, stmt)
+				})
+				require.Nil(t, prepared)
+				require.Error(t, err)
+				require.Contains(t, err.Error(), "syntax error")
+				require.NotContains(t, err.Error(), "panic")
+				_, err = ses.GetPrepareStmt(ctx, "stmt_"+testCase.name)
+				require.Error(t, err)
+			})
+		}
+
+		require.NoError(t, ses.SetUserDefinedVar("valid_after_error", "select 1", ""))
+		stmt := tree.NewPrepareVar(
+			"stmt_valid_after_error",
+			tree.NewVarExpr("valid_after_error", false, false, nil),
+		)
+		defer stmt.Free()
+		prepared, err := handlePrepareVar(ses, ec, stmt)
+		require.NoError(t, err)
+		defer prepared.Close()
 		return nil
 	})
 }
@@ -1738,6 +1989,121 @@ func TestNextSQLModeStatementUsesCurrentSessionMode(t *testing.T) {
 	name, ok := selectClause.Exprs[0].Expr.(*tree.UnresolvedName)
 	require.True(t, ok)
 	require.Equal(t, "c", name.ColName())
+}
+
+func TestRefreshStatementScopedSessionInfo(t *testing.T) {
+	ctx := defines.AttachAccountId(context.TODO(), catalog.System_Account)
+	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
+	ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
+	proc := &process.Process{Base: &process.BaseProcess{}}
+
+	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "ANSI_QUOTES"))
+	refreshStatementScopedSessionInfo(ses, proc)
+	require.False(t, proc.Base.SessionInfo.MatrixOneNativeMode)
+
+	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "ANSI_QUOTES,MATRIXONE_NATIVE"))
+	refreshStatementScopedSessionInfo(ses, proc)
+	require.True(t, proc.Base.SessionInfo.MatrixOneNativeMode)
+}
+
+func TestBackgroundSessionInheritsUpstreamSQLMode(t *testing.T) {
+	ctx := defines.AttachAccountId(context.TODO(), catalog.System_Account)
+	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
+	ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
+	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "PIPES_AS_CONCAT,MATRIXONE_NATIVE"))
+
+	backSes := &backSession{}
+	backSes.upstream = ses
+	proc := &process.Process{Base: &process.BaseProcess{}}
+
+	mode, err := backSes.GetSessionSysVar("sql_mode")
+	require.NoError(t, err)
+	require.Equal(t, "", mode)
+
+	refreshBackgroundStatementScopedSessionInfo(backSes, &UserInput{}, proc)
+	require.True(t, proc.Base.SessionInfo.MatrixOneNativeMode)
+}
+
+func TestBackgroundExplicitSQLModeOverridesUpstream(t *testing.T) {
+	ctx := defines.AttachAccountId(context.TODO(), catalog.System_Account)
+	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
+	ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
+	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "MATRIXONE_NATIVE"))
+
+	backSes := &backSession{}
+	backSes.upstream = ses
+	proc := &process.Process{Base: &process.BaseProcess{}}
+
+	refreshBackgroundStatementScopedSessionInfo(backSes, &UserInput{
+		useParserSQLMode: true,
+		parserSQLMode:    "ANSI_QUOTES",
+	}, proc)
+	require.False(t, proc.Base.SessionInfo.MatrixOneNativeMode)
+
+	refreshBackgroundStatementScopedSessionInfo(backSes, &UserInput{
+		useParserSQLMode: true,
+		parserSQLMode:    "ANSI_QUOTES,MATRIXONE_NATIVE",
+	}, proc)
+	require.True(t, proc.Base.SessionInfo.MatrixOneNativeMode)
+
+	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", ""))
+	refreshBackgroundStatementScopedSessionInfo(backSes, &UserInput{}, proc)
+	require.False(t, proc.Base.SessionInfo.MatrixOneNativeMode)
+}
+
+func TestNestedBackgroundSessionInheritsEffectiveSQLMode(t *testing.T) {
+	ctx := defines.AttachAccountId(context.TODO(), catalog.System_Account)
+	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
+	ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
+
+	tests := []struct {
+		name         string
+		sessionMode  string
+		explicitMode *string
+		wantNative   bool
+	}{
+		{name: "upstream_native", sessionMode: "MATRIXONE_NATIVE", wantNative: true},
+		{name: "explicit_native", sessionMode: "", explicitMode: ptrTo("MATRIXONE_NATIVE"), wantNative: true},
+		{name: "explicit_default", sessionMode: "MATRIXONE_NATIVE", explicitMode: ptrTo(""), wantNative: false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", tc.sessionMode))
+
+			parent := (&backSession{}).initFeSes(ses, nil, "", nil)
+			parent.upstream = ses
+			defer parent.Close()
+
+			input := &UserInput{}
+			if tc.explicitMode != nil {
+				input.useParserSQLMode = true
+				input.parserSQLMode = *tc.explicitMode
+			}
+			parentProc := &process.Process{Base: &process.BaseProcess{}}
+			refreshBackgroundStatementScopedSessionInfo(parent, input, parentProc)
+			require.Equal(t, tc.wantNative, parentProc.Base.SessionInfo.MatrixOneNativeMode)
+
+			child := (&backSession{}).initFeSes(parent, nil, "", nil)
+			defer child.Close()
+			childProc := &process.Process{Base: &process.BaseProcess{}}
+			refreshBackgroundStatementScopedSessionInfo(child, &UserInput{}, childProc)
+			require.Equal(t, tc.wantNative, childProc.Base.SessionInfo.MatrixOneNativeMode)
+
+			nextMode := "MATRIXONE_NATIVE"
+			nextNative := true
+			if tc.wantNative {
+				nextMode = ""
+				nextNative = false
+			}
+			refreshBackgroundStatementScopedSessionInfo(parent, &UserInput{
+				useParserSQLMode: true,
+				parserSQLMode:    nextMode,
+			}, parentProc)
+			refreshBackgroundStatementScopedSessionInfo(child, &UserInput{}, childProc)
+			require.Equal(t, nextNative, childProc.Base.SessionInfo.MatrixOneNativeMode)
+		})
+	}
 }
 
 func TestSQLModeStagingDefersRewriteWithRequestSnapshot(t *testing.T) {
@@ -2468,6 +2834,50 @@ func TestAnalyzeSituationResponseSendsAllResults(t *testing.T) {
 	require.Nil(t, execCtx.results)
 }
 
+func TestCallSituationResponseSendsFinalAffectedRows(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		isLastStmt       bool
+		wantFinalMoreBit bool
+	}{
+		{name: "last statement", isLastStmt: true},
+		{name: "followed by another statement", wantFinalMoreBit: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+			ses := newTestSession(t, ctrl)
+			writer := &countingMysqlWriter{testMysqlWriter: &testMysqlWriter{}}
+			resper := NewMysqlResp(writer)
+			execCtx := &ExecCtx{
+				reqCtx:     context.Background(),
+				ses:        ses,
+				stmt:       &tree.CallStmt{},
+				isLastStmt: tc.isLastStmt,
+				results: []ExecResult{
+					makeAnalyzeCountResult("first", 1),
+					makeAnalyzeCountResult("second", 2),
+				},
+				runResult: &util.RunResult{AffectRows: 7},
+			}
+
+			require.NoError(t, resper.respBySituation(ses, execCtx))
+			require.Len(t, writer.responses, 3)
+			require.Equal(t, ResultResponse, writer.responses[0].category)
+			require.Equal(t, ResultResponse, writer.responses[1].category)
+			require.NotZero(t, writer.responses[0].GetStatus()&SERVER_MORE_RESULTS_EXISTS)
+			require.NotZero(t, writer.responses[1].GetStatus()&SERVER_MORE_RESULTS_EXISTS)
+			require.Equal(t, OkResponse, writer.responses[2].category)
+			require.Equal(t, uint64(7), writer.responses[2].affectedRows)
+			if tc.wantFinalMoreBit {
+				require.NotZero(t, writer.responses[2].GetStatus()&SERVER_MORE_RESULTS_EXISTS)
+			} else {
+				require.Zero(t, writer.responses[2].GetStatus()&SERVER_MORE_RESULTS_EXISTS)
+			}
+		})
+	}
+}
+
 func TestAnalyzeSituationResponsePreservesOuterMoreResults(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -2488,6 +2898,36 @@ func TestAnalyzeSituationResponsePreservesOuterMoreResults(t *testing.T) {
 	require.Len(t, writer.responses, 2)
 	require.NotZero(t, writer.responses[0].GetStatus()&SERVER_MORE_RESULTS_EXISTS)
 	require.NotZero(t, writer.responses[1].GetStatus()&SERVER_MORE_RESULTS_EXISTS)
+}
+
+func TestSituationResponsePropagatesAffectedRows(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	writer := &countingMysqlWriter{testMysqlWriter: &testMysqlWriter{}}
+	resper := NewMysqlResp(writer)
+	execCtx := &ExecCtx{
+		reqCtx:     context.Background(),
+		ses:        ses,
+		isLastStmt: true,
+		runResult:  &util.RunResult{AffectRows: 7},
+	}
+
+	require.NoError(t, resper.respBySituation(ses, execCtx))
+	require.Len(t, writer.responses, 1)
+	require.Equal(t, uint64(7), writer.responses[0].affectedRows)
+}
+
+func TestNormalizeProcedureAffectedRows(t *testing.T) {
+	require.Equal(t, uint64(0), normalizeProcedureAffectedRows(-1))
+	require.Equal(t, uint64(7), normalizeProcedureAffectedRows(7))
+}
+
+func TestProcedureCallerAffectedRows(t *testing.T) {
+	require.Equal(t, int64(0), procedureCallerAffectedRows(&ExecCtx{}))
+	proc := &process.Process{Base: &process.BaseProcess{AffectedRows: new(int64)}}
+	proc.SetAffectedRows(7)
+	require.Equal(t, int64(7), procedureCallerAffectedRows(&ExecCtx{proc: proc}))
 }
 
 func TestHandleAnalyzeStmtCollectsDerivedResultsInEntryOrder(t *testing.T) {
@@ -2750,6 +3190,87 @@ func TestExplainSchedulingEnabledUsesSessionOptIn(t *testing.T) {
 	require.False(t, explainSchedulingEnabled(ses))
 }
 
+func TestQuerySchedulingIntentUsesSessionAndSetVarCapableVariables(t *testing.T) {
+	require.Equal(t, schedule.SchedulingIntent{
+		PoolFallback:      schedule.PoolFallbackLegacyCompatible,
+		EmptyWorkerPolicy: schedule.EmptyWorkerLocalFallback,
+		CurrentCNPolicy:   schedule.CurrentCNAllowed,
+		WorkerSet:         schedule.WorkerSetPolicy{Mode: schedule.WorkerSetAll},
+	}, querySchedulingIntent(nil))
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	require.NoError(t, ses.SetSessionSysVar(context.Background(), queryMaxWorkers, int64(3)))
+	require.NoError(t, ses.SetSessionSysVar(context.Background(), queryPoolStrict, int64(1)))
+
+	intent := querySchedulingIntent(ses)
+	require.True(t, intent.Explicit)
+	require.Equal(t, schedule.PoolFallbackStrict, intent.PoolFallback)
+	require.Equal(t, schedule.EmptyWorkerFail, intent.EmptyWorkerPolicy)
+	require.Equal(t, schedule.WorkerSetMax, intent.WorkerSet.Mode)
+	require.Equal(t, 3, intent.WorkerSet.MaxWorkers)
+	require.True(t, gSysVarsDefs[queryMaxWorkers].SetVarHintApplies)
+	require.True(t, gSysVarsDefs[queryPoolStrict].SetVarHintApplies)
+	maxWorkersType := gSysVarsDefs[queryMaxWorkers].Type.(SystemVariableIntType)
+	require.Equal(t, int64(2147483647), maxWorkersType.maximum)
+}
+
+func TestQuerySchedulingIntentAppliesStatementSetVarOverrides(t *testing.T) {
+	intent := querySchedulingIntentForStatement(nil,
+		"select /*+ SET_VAR(query_max_workers=2) SET_VAR(query_pool_strict='ON') */ 1")
+	require.True(t, intent.Explicit)
+	require.Equal(t, schedule.WorkerSetMax, intent.WorkerSet.Mode)
+	require.Equal(t, 2, intent.WorkerSet.MaxWorkers)
+	require.Equal(t, schedule.PoolFallbackStrict, intent.PoolFallback)
+	require.Equal(t, schedule.EmptyWorkerFail, intent.EmptyWorkerPolicy)
+
+	// Optimizer hints use first-wins semantics for duplicate variables.
+	intent = querySchedulingIntentForStatement(nil,
+		"select /*+ SET_VAR(query_max_workers=1) SET_VAR(query_max_workers=2) */ 1")
+	require.Equal(t, 1, intent.WorkerSet.MaxWorkers)
+
+	// Hint-looking text outside optimizer-hint comments must not affect intent.
+	intent = querySchedulingIntentForStatement(nil,
+		"select '/*+ SET_VAR(query_max_workers=3) */' /* SET_VAR(query_pool_strict=on) */")
+	require.False(t, intent.Explicit)
+	require.Equal(t, schedule.WorkerSetAll, intent.WorkerSet.Mode)
+
+	// SET_VAR-looking text nested in another hint or its quoted arguments is
+	// not a top-level optimizer hint and must not become scheduling policy.
+	intent = querySchedulingIntentForStatement(nil,
+		"select /*+ QB_NAME('SET_VAR(query_max_workers=3)') OTHER(SET_VAR(query_pool_strict=on)) */ 1")
+	require.False(t, intent.Explicit)
+	require.Equal(t, schedule.WorkerSetAll, intent.WorkerSet.Mode)
+}
+
+func TestQuerySchedulingIntentScannerRespectsNoBackslashEscapes(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	require.NoError(t, ses.SetSessionSysVar(context.Background(), "sql_mode", "NO_BACKSLASH_ESCAPES"))
+
+	// With NO_BACKSLASH_ESCAPES, the quote after the backslash closes the
+	// string, so the following optimizer comment is in SQL lexical space.
+	intent := querySchedulingIntentForStatement(ses,
+		`select 'value\' /*+ SET_VAR(query_max_workers=3) */`)
+	require.True(t, intent.Explicit)
+	require.Equal(t, schedule.WorkerSetMax, intent.WorkerSet.Mode)
+	require.Equal(t, 3, intent.WorkerSet.MaxWorkers)
+}
+
+func TestQuerySchedulingIntentRejectsInvalidStatementSetVar(t *testing.T) {
+	for _, sql := range []string{
+		"select /*+ SET_VAR(query_max_workers=-1) */ 1",
+		"select /*+ SET_VAR(query_max_workers=2147483648) */ 1",
+		"select /*+ SET_VAR(query_pool_strict=maybe) */ 1",
+		"select /*+ SET_VAR(query_max_workers) */ 1",
+	} {
+		intent := querySchedulingIntentForStatement(nil, sql)
+		require.True(t, intent.Explicit, sql)
+		require.False(t, intent.PoolFallback.Valid(), sql)
+	}
+}
+
 func TestWithSchedulingTraceTakesIndependentOwnership(t *testing.T) {
 	recorder := new(schedule.TraceRecorder)
 	attempt := recorder.StartAttempt()
@@ -2764,10 +3285,97 @@ func TestWithSchedulingTraceTakesIndependentOwnership(t *testing.T) {
 	require.Equal(t, "candidate-discovery", config.schedulingTrace.Attempts[0].Failures[0].Category)
 }
 
+type successfulSchedulingPreviewEngine struct {
+	engine.Engine
+}
+
+func (*successfulSchedulingPreviewEngine) DiscoverQueryCandidates(context.Context) (engine.QueryCandidates, error) {
+	return engine.QueryCandidates{{
+		Service: metadata.CNService{
+			ServiceID:              "preview-cn",
+			PipelineServiceAddress: "preview-cn:6001",
+		},
+		Mcpu: 1,
+	}}, nil
+}
+
+func (*successfulSchedulingPreviewEngine) ResolveQueryCandidatePool(
+	_ context.Context,
+	_ engine.QueryCandidates,
+	_ engine.QueryCandidatePoolRequest,
+) (engine.ResolvedQueryPool, error) {
+	return engine.ResolvedQueryPool{
+		Nodes:             engine.Nodes{{Id: "preview-cn", Addr: "preview-cn:6001", Mcpu: 1}},
+		RequestedIdentity: "preview",
+		Identity:          "preview",
+		Resolution:        engine.QueryPoolResolutionAllCompatible,
+	}, nil
+}
+
+type strictNoSelectorSchedulingPreviewEngine struct {
+	*disttae.Engine
+	candidates engine.QueryCandidates
+}
+
+func (e *strictNoSelectorSchedulingPreviewEngine) DiscoverQueryCandidates(
+	ctx context.Context,
+) (engine.QueryCandidates, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return e.candidates, nil
+}
+
+func TestDirectSessionStrictPoolWithoutLabelSelectorFailsClosed(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	ses.SetTenantInfo(&TenantInfo{Tenant: "tenant-a", User: "user-a"})
+	ses.txnHandler.storage = &strictNoSelectorSchedulingPreviewEngine{
+		Engine: new(disttae.Engine),
+		candidates: engine.QueryCandidates{
+			{Service: metadata.CNService{
+				ServiceID: "tenant-a", PipelineServiceAddress: "tenant-a:6001",
+				Labels: map[string]metadata.LabelList{
+					"account": {Labels: []string{"tenant-a"}},
+				},
+				WorkState: metadata.WorkState_Working,
+			}, Mcpu: 4},
+			{Service: metadata.CNService{
+				ServiceID: "tenant-b", PipelineServiceAddress: "tenant-b:6001",
+				Labels: map[string]metadata.LabelList{
+					"account": {Labels: []string{"tenant-b"}},
+				},
+				WorkState: metadata.WorkState_Working,
+			}, Mcpu: 4},
+		},
+	}
+	require.Empty(t, ses.getCNLabels())
+	require.NoError(t, ses.SetSessionSysVar(context.Background(), queryPoolStrict, int64(1)))
+
+	trace := previewQueryScheduling(
+		context.Background(),
+		ses,
+		&plan0.Query{Nodes: []*plan0.Node{{NodeType: plan0.Node_TABLE_SCAN}}},
+		false,
+	)
+
+	require.Len(t, trace.Attempts, 1)
+	require.NotNil(t, trace.Attempts[0].Query)
+	require.Equal(t, schedule.ReasonNoCandidateCN, trace.Attempts[0].Query.Reason)
+	require.False(t, trace.Attempts[0].Query.Satisfied)
+	require.Equal(t, "strict", trace.Attempts[0].Query.PoolFallbackPolicy)
+	require.Equal(t, string(engine.QueryPoolResolutionNoMatch), trace.Attempts[0].Query.ResolvedPoolResolution)
+	require.Equal(t, "strict-missing-label-selector", trace.Attempts[0].Query.PoolFallbackReason)
+	require.Equal(t, 2, trace.Attempts[0].Query.DiscoveredCount)
+	require.Zero(t, trace.Attempts[0].Query.ResolvedCount)
+}
+
 func TestDoExplainStmtIncludesSchedulingPreviewWithoutFailingDiscovery(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 	ses := newTestSession(t, ctrl)
+	ses.txnHandler.storage = &successfulSchedulingPreviewEngine{}
 	oldBuildPlanWithAuthorization := buildPlanWithAuthorization
 	defer func() {
 		buildPlanWithAuthorization = oldBuildPlanWithAuthorization
@@ -2794,6 +3402,7 @@ func TestDoExplainStmtIncludesSchedulingPreviewWithoutFailingDiscovery(t *testin
 		context.Background(),
 		ses,
 		stmt,
+		"explain select /*+ SET_VAR(query_max_workers=1) */ 1",
 	)
 	require.NoError(t, err)
 
@@ -2806,7 +3415,59 @@ func TestDoExplainStmtIncludesSchedulingPreviewWithoutFailingDiscovery(t *testin
 		output.WriteByte('\n')
 	}
 	require.Contains(t, output.String(), "Scheduling (preview):")
-	require.Contains(t, output.String(), "Failure: category=candidate-provider")
+	require.Contains(t, output.String(), "Intent: explicit=true")
+	require.Contains(t, output.String(), "worker-set=max-workers max-workers=1")
+}
+
+func TestDoExplainExecuteUsesPreparedSchedulingSQL(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	ses.txnHandler.storage = &successfulSchedulingPreviewEngine{}
+	oldBuildPlanWithAuthorization := buildPlanWithAuthorization
+	defer func() {
+		buildPlanWithAuthorization = oldBuildPlanWithAuthorization
+	}()
+	buildPlanWithAuthorization = func(
+		context.Context,
+		FeSession,
+		plan.CompilerContext,
+		tree.Statement,
+	) (*plan.Plan, error) {
+		return &plan.Plan{
+			Plan: &plan0.Plan_Query{
+				Query: &plan0.Query{
+					Nodes: []*plan0.Node{{NodeId: 0, NodeType: plan0.Node_VALUE_SCAN}},
+					Steps: []int32{0},
+				},
+			},
+		}, nil
+	}
+
+	ctx := context.Background()
+	require.NoError(t, ses.SetSessionSysVar(ctx, enableExplainScheduling, int64(1)))
+	require.NoError(t, ses.SetPrepareStmt(ctx, "sched", &PrepareStmt{
+		Name:              "sched",
+		Sql:               `select 'value\' /*+ SET_VAR(query_max_workers=2) */`,
+		schedulingSQLMode: "NO_BACKSLASH_ESCAPES",
+	}))
+	err := doExplainStmt(
+		ctx,
+		ses,
+		tree.NewExplainStmt(tree.NewExecute(tree.Identifier("sched")), "text"),
+		"explain /*+ SET_VAR(query_max_workers=1) */ execute sched",
+	)
+	require.NoError(t, err)
+
+	var output strings.Builder
+	for i := uint64(0); i < ses.GetMysqlResultSet().GetRowCount(); i++ {
+		row, rowErr := ses.GetMysqlResultSet().GetRow(ctx, i)
+		require.NoError(t, rowErr)
+		output.WriteString(row[0].(string))
+		output.WriteByte('\n')
+	}
+	require.Contains(t, output.String(), "worker-set=max-workers max-workers=2")
+	require.NotContains(t, output.String(), "worker-set=max-workers max-workers=1")
 }
 
 func TestDoExplainStmtKeepsSchedulingPreviewOptIn(t *testing.T) {
@@ -2896,8 +3557,8 @@ func (*blockingSchedulingPreviewEngine) ResolveQueryCandidatePool(
 	context.Context,
 	engine.QueryCandidates,
 	engine.QueryCandidatePoolRequest,
-) (engine.Nodes, error) {
-	return nil, moerr.NewInternalErrorNoCtx("pool resolution should not run")
+) (engine.ResolvedQueryPool, error) {
+	return engine.ResolvedQueryPool{}, moerr.NewInternalErrorNoCtx("pool resolution should not run")
 }
 
 func TestSchedulingPreviewHasIndependentTimeout(t *testing.T) {
@@ -2933,9 +3594,9 @@ func (*blockingPoolResolutionPreviewEngine) ResolveQueryCandidatePool(
 	ctx context.Context,
 	_ engine.QueryCandidates,
 	_ engine.QueryCandidatePoolRequest,
-) (engine.Nodes, error) {
+) (engine.ResolvedQueryPool, error) {
 	<-ctx.Done()
-	return nil, ctx.Err()
+	return engine.ResolvedQueryPool{}, ctx.Err()
 }
 
 func TestSchedulingPreviewTimeoutBoundsPoolResolution(t *testing.T) {

@@ -196,23 +196,33 @@ func DeepCopyRankOption(opt *plan.RankOption) *plan.RankOption {
 
 func DeepCopyNode(node *plan.Node) *plan.Node {
 	newNode := &Node{
-		NodeType:         node.NodeType,
-		NodeId:           node.NodeId,
-		ExtraOptions:     node.ExtraOptions,
-		Children:         slices.Clone(node.Children),
-		JoinType:         node.JoinType,
-		IsRightJoin:      node.IsRightJoin,
-		BindingTags:      slices.Clone(node.BindingTags),
-		Limit:            DeepCopyExpr(node.Limit),
-		Offset:           DeepCopyExpr(node.Offset),
-		ProjectList:      DeepCopyExprList(node.ProjectList),
-		OnList:           DeepCopyExprList(node.OnList),
-		FilterList:       DeepCopyExprList(node.FilterList),
-		BlockFilterList:  DeepCopyExprList(node.BlockFilterList),
-		GroupBy:          DeepCopyExprList(node.GroupBy),
-		GroupingFlag:     slices.Clone(node.GroupingFlag),
-		AggList:          DeepCopyExprList(node.AggList),
-		OrderBy:          DeepCopyOrderBySpecList(node.OrderBy),
+		NodeType:        node.NodeType,
+		NodeId:          node.NodeId,
+		ExtraOptions:    node.ExtraOptions,
+		Children:        slices.Clone(node.Children),
+		JoinType:        node.JoinType,
+		IsRightJoin:     node.IsRightJoin,
+		BindingTags:     slices.Clone(node.BindingTags),
+		Limit:           DeepCopyExpr(node.Limit),
+		Offset:          DeepCopyExpr(node.Offset),
+		ProjectList:     DeepCopyExprList(node.ProjectList),
+		OnList:          DeepCopyExprList(node.OnList),
+		FilterList:      DeepCopyExprList(node.FilterList),
+		BlockFilterList: DeepCopyExprList(node.BlockFilterList),
+		GroupBy:         DeepCopyExprList(node.GroupBy),
+		GroupingFlag:    slices.Clone(node.GroupingFlag),
+		AggList:         DeepCopyExprList(node.AggList),
+		OrderBy:         DeepCopyOrderBySpecList(node.OrderBy),
+		Interval:        DeepCopyExpr(node.Interval),
+		Sliding:         DeepCopyExpr(node.Sliding),
+		Timestamp:       DeepCopyExpr(node.Timestamp),
+		WEnd:            DeepCopyExpr(node.WEnd),
+		FillType:        node.FillType,
+		FillVal:         DeepCopyExprList(node.FillVal),
+
+		TimeWindowPartitionBy:     DeepCopyExprList(node.TimeWindowPartitionBy),
+		TimeWindowPartitionColPos: slices.Clone(node.TimeWindowPartitionColPos),
+
 		DeleteCtx:        DeepCopyDeleteCtx(node.DeleteCtx),
 		TblFuncExprList:  DeepCopyExprList(node.TblFuncExprList),
 		ClusterTable:     DeepCopyClusterTable(node.GetClusterTable()),
@@ -497,6 +507,7 @@ func DeepCopyTableDef(table *plan.TableDef, withCols bool) *plan.TableDef {
 		TableLockType:  table.TableLockType,
 		IsTemporary:    table.IsTemporary,
 		AutoIncrOffset: table.AutoIncrOffset,
+		AutoIncrEpoch:  table.AutoIncrEpoch,
 		DbName:         table.DbName,
 		DbId:           table.DbId,
 		FeatureFlag:    table.FeatureFlag,
@@ -865,7 +876,8 @@ func DeepCopyExpr(expr *Expr) *Expr {
 	case *plan.Expr_Lit:
 		pc := &plan.Literal{
 			Isnull: item.Lit.GetIsnull(),
-			Src:    item.Lit.Src,
+			IsBin:  item.Lit.GetIsBin(),
+			Src:    DeepCopyExpr(item.Lit.Src),
 		}
 
 		switch c := item.Lit.Value.(type) {

@@ -107,12 +107,11 @@ func (tc *TableClone) Reset(proc *process.Process, pipelineFailed bool, err erro
 }
 
 func (tc *TableClone) String(buf *bytes.Buffer) {
-	//TODO implement me
-	panic("implement me")
+	buf.WriteString("TableClone")
 }
 
 func (tc *TableClone) OpType() vm.OpType {
-	return 0
+	return vm.TableClone
 }
 
 func initRelAndReader(
@@ -291,8 +290,7 @@ func (tc *TableClone) Prepare(proc *process.Process) error {
 	)
 
 	partitioned =
-		pSrv != nil &&
-			pSrv.Enabled() &&
+		pSrv.Enabled() &&
 			features.IsPartitioned(tc.Ctx.SrcTblDef.FeatureFlag)
 
 	// src tables

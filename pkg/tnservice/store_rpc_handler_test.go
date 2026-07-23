@@ -47,6 +47,8 @@ func (s *leaseCancelReadTxnService) Start() error {
 	return nil
 }
 
+func (s *leaseCancelReadTxnService) CancelRecovery() {}
+
 func (s *leaseCancelReadTxnService) Close(bool) error {
 	return nil
 }
