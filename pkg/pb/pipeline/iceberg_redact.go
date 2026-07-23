@@ -73,10 +73,6 @@ func messageString(m *Message) string {
 	return proto.CompactTextString(m)
 }
 
-func (m *Message) String() string {
-	return messageString(m)
-}
-
 func (m *Message) GoString() string {
 	return messageString(m)
 }
@@ -122,10 +118,6 @@ func icebergDataFileTaskString(m *IcebergDataFileTask) string {
 	return proto.CompactTextString(&cp)
 }
 
-func (m *IcebergDataFileTask) String() string {
-	return icebergDataFileTaskString(m)
-}
-
 func (m *IcebergDataFileTask) GoString() string {
 	return icebergDataFileTaskString(m)
 }
@@ -152,10 +144,6 @@ func icebergDeleteFileTaskString(m *IcebergDeleteFileTask) string {
 	return proto.CompactTextString(&cp)
 }
 
-func (m *IcebergDeleteFileTask) String() string {
-	return icebergDeleteFileTaskString(m)
-}
-
 func (m *IcebergDeleteFileTask) GoString() string {
 	return icebergDeleteFileTaskString(m)
 }
@@ -177,10 +165,6 @@ func externalScanString(m *ExternalScan) string {
 		return "<nil>"
 	}
 	return proto.CompactTextString(redactedExternalScanCopy(m))
-}
-
-func (m *ExternalScan) String() string {
-	return externalScanString(m)
 }
 
 func (m *ExternalScan) GoString() string {
@@ -205,10 +189,6 @@ func instructionString(m *Instruction) string {
 		cp.ExternalScan = redactedExternalScanCopy(m.ExternalScan)
 	}
 	return proto.CompactTextString(&cp)
-}
-
-func (m *Instruction) String() string {
-	return instructionString(m)
 }
 
 func (m *Instruction) GoString() string {
@@ -242,10 +222,6 @@ func pipelineString(m *Pipeline) string {
 		}
 	}
 	return proto.CompactTextString(&cp)
-}
-
-func (m *Pipeline) String() string {
-	return pipelineString(m)
 }
 
 func (m *Pipeline) GoString() string {
