@@ -747,6 +747,60 @@ func TestIvfSearchStartKeepsLegacyRuntimePathWithoutIncludeArgs(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestIvfSearchIncludeLimitZeroSkipsAllSearchWork(t *testing.T) {
+	oldNewIvfAlgo := newIvfAlgo
+	oldGetVersion := getVersion
+	defer func() {
+		newIvfAlgo = oldNewIvfAlgo
+		getVersion = oldGetVersion
+	}()
+
+	var algoCalls, versionCalls int
+	newIvfAlgo = func(idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig) (cache.VectorIndexSearchIf, error) {
+		algoCalls++
+		return &MockIvfSearch[float32]{}, nil
+	}
+	getVersion = func(sqlproc *sqlexec.SqlProcess, tblcfg vectorindex.IndexTableConfig) (int64, error) {
+		versionCalls++
+		return 0, nil
+	}
+
+	param := "{\"op_type\": \"vector_l2_ops\", \"lists\": \"100\"}"
+	includeAttr := catalog.SystemSI_IVFFLAT_IncludeColPrefix + "rank"
+	ut := newIvfSearchTestCase(t, mpool.MustNewZero(), []string{"pkid", "score", includeAttr}, param)
+	ut.arg.Rets = []*plan.ColDef{
+		{Name: "pkid", Typ: plan.Type{Id: int32(types.T_int64)}},
+		{Name: "score", Typ: plan.Type{Id: int32(types.T_float64)}},
+		{Name: includeAttr, Typ: plan.Type{Id: int32(types.T_int32)}},
+	}
+	ut.arg.Args = append(
+		makeConstInputExprsIvfSearch(),
+		plan2.MakePlan2StringConstExprWithType(""),
+		plan2.MakePlan2Uint64ConstExprWithType(1),
+		plan2.MakePlan2Uint64ConstExprWithType(1),
+	)
+	ut.arg.Limit = plan2.MakePlan2Uint64ConstExprWithType(0)
+
+	require.NoError(t, ut.arg.Prepare(ut.proc))
+	inbat := makeBatchIvfSearch(ut.proc)
+	for i := range ut.arg.ctr.executorsForArgs {
+		var err error
+		ut.arg.ctr.argVecs[i], err = ut.arg.ctr.executorsForArgs[i].Eval(ut.proc, []*batch.Batch{inbat}, nil)
+		require.NoError(t, err)
+	}
+
+	require.NoError(t, ut.arg.ctr.state.start(ut.arg, ut.proc, 0, nil))
+	result, err := ut.arg.ctr.state.call(ut.arg, ut.proc)
+	require.NoError(t, err)
+	require.Equal(t, vm.ExecStop, result.Status)
+	require.Zero(t, algoCalls)
+	require.Zero(t, versionCalls)
+	state := ut.arg.ctr.state.(*ivfSearchState)
+	require.True(t, state.emptyResult)
+	require.Zero(t, state.emittedCandidates)
+	require.Nil(t, state.cursor)
+}
+
 func TestIvfSearchStartResetsRoundStatePerNthRow(t *testing.T) {
 	oldNewIvfAlgo := newIvfAlgo
 	oldGetVersion := getVersion

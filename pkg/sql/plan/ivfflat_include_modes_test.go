@@ -16,6 +16,7 @@ package plan
 
 import (
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -616,7 +617,7 @@ func TestSerializeFiltersToSQL_DoesNotPushMixedOR(t *testing.T) {
 		},
 	}
 
-	sql, pushdown, remaining, err := serializeFiltersToSQL([]*plan.Expr{orExpr}, scanNode, []string{"title", "category"}, 1)
+	sql, pushdown, remaining, err := serializeFiltersToSQL([]*plan.Expr{orExpr}, scanNode, []string{"title", "category"}, 1, time.UTC)
 	require.NoError(t, err)
 	assert.Empty(t, sql)
 	assert.Empty(t, pushdown)
@@ -703,6 +704,7 @@ func TestSerializeFiltersToSQL_FormatsFunctionsCastAndArithmetic(t *testing.T) {
 		scanNode,
 		[]string{"title", "category"},
 		1,
+		time.UTC,
 	)
 	require.NoError(t, err)
 	require.Len(t, pushdown, 3)
@@ -737,7 +739,7 @@ func TestIvfLiteralToAST_QuotesStringSafely(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			ast, err := ivfLiteralToAST(tc.lit, plan.Type{Id: int32(types.T_varchar)})
+			ast, err := ivfLiteralToAST(tc.lit, plan.Type{Id: int32(types.T_varchar)}, time.UTC)
 			require.NoError(t, err)
 			sql := tree.StringWithOpts(ast, dialect.MYSQL, tree.WithQuoteString(true))
 			require.Equal(t, tc.want, sql)

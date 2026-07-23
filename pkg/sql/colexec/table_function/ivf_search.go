@@ -46,6 +46,7 @@ type ivfSearchState struct {
 	idxcfg         vectorindex.IndexConfig
 	offset         int
 	limit          uint64
+	emptyResult    bool
 	keys           []any
 	distances      []float64
 	includeColumns []string
@@ -264,6 +265,7 @@ func ivfSearchPrepare(proc *process.Process, arg *TableFunction) (tvfState, erro
 		}
 		st.limit = max(st.limit, tableFuncLimit)
 	}
+	st.emptyResult = (indexReaderLimit != nil || arg.Limit != nil) && st.limit == 0
 
 	arg.ctr.executorsForArgs, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, arg.Args)
 	arg.ctr.argVecs = make([]*vector.Vector, len(arg.Args))
@@ -280,6 +282,24 @@ func ivfSearchPrepare(proc *process.Process, arg *TableFunction) (tvfState, erro
 // start calling tvf on nthRow and put the result in u.batch.  Note that current tokenize impl will
 // always return one batch per nthRow.
 func (u *ivfSearchState) start(tf *TableFunction, proc *process.Process, nthRow int, analyzer process.Analyzer) (err error) {
+	if u.emptyResult {
+		if u.batch == nil {
+			u.batch = tf.createResultBatch()
+		} else {
+			u.batch.CleanOnlyData()
+		}
+		u.offset = 0
+		u.keys = nil
+		u.distances = nil
+		u.includeData = nil
+		u.includeNulls = nil
+		u.cursor = nil
+		u.multiRoundEnabled = false
+		u.emittedCandidates = 0
+		u.nthRow = nthRow
+		u.inited = true
+		return nil
+	}
 
 	if !u.inited {
 		if runtimeFilterData, err := waitRuntimeFilterDataForTableFunction(tf, proc); err != nil {

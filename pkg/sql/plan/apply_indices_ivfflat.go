@@ -346,7 +346,7 @@ func canDoIndexOnlyScan(requiredCols map[string]struct{}, tableDef *plan.TableDe
 	return true
 }
 
-func serializeFiltersToSQL(filters []*plan.Expr, scanNode *plan.Node, includeColumns []string, partPos int32) (string, []*plan.Expr, []*plan.Expr, error) {
+func serializeFiltersToSQL(filters []*plan.Expr, scanNode *plan.Node, includeColumns []string, partPos int32, timeZone *time.Location) (string, []*plan.Expr, []*plan.Expr, error) {
 	if scanNode == nil || scanNode.TableDef == nil || len(scanNode.BindingTags) == 0 {
 		return "", nil, filters, nil
 	}
@@ -357,7 +357,7 @@ func serializeFiltersToSQL(filters []*plan.Expr, scanNode *plan.Node, includeCol
 	pushdownFilters := make([]*plan.Expr, 0, len(filters))
 	remainingFilters := make([]*plan.Expr, 0, len(filters))
 	for _, expr := range filters {
-		astExpr, ok, err := serializeFilterExprToAST(expr, scanNode, scanTag, partPos, covered)
+		astExpr, ok, err := serializeFilterExprToAST(expr, scanNode, scanTag, partPos, covered, timeZone)
 		if err != nil {
 			return "", nil, nil, err
 		}
@@ -373,7 +373,7 @@ func serializeFiltersToSQL(filters []*plan.Expr, scanNode *plan.Node, includeCol
 	return strings.Join(sqlParts, " AND "), pushdownFilters, remainingFilters, nil
 }
 
-func serializeFilterExprToAST(expr *plan.Expr, scanNode *plan.Node, scanTag, partPos int32, covered map[string]struct{}) (tree.Expr, bool, error) {
+func serializeFilterExprToAST(expr *plan.Expr, scanNode *plan.Node, scanTag, partPos int32, covered map[string]struct{}, timeZone *time.Location) (tree.Expr, bool, error) {
 	if !vectorIndexExprRefsOnlyCoveredColumns(expr, scanTag, partPos, scanNode.TableDef, covered) {
 		return nil, false, nil
 	}
@@ -386,13 +386,13 @@ func serializeFilterExprToAST(expr *plan.Expr, scanNode *plan.Node, scanTag, par
 		}
 		return colExpr, true, nil
 	case *plan.Expr_Lit:
-		litExpr, err := ivfLiteralToAST(impl.Lit, expr.Typ)
+		litExpr, err := ivfLiteralToAST(impl.Lit, expr.Typ, timeZone)
 		if err != nil {
 			return nil, false, err
 		}
 		return litExpr, true, nil
 	case *plan.Expr_List:
-		items, ok, err := serializeFilterExprListToAST(impl.List.List, scanNode, scanTag, partPos, covered)
+		items, ok, err := serializeFilterExprListToAST(impl.List.List, scanNode, scanTag, partPos, covered, timeZone)
 		if err != nil {
 			return nil, false, err
 		}
@@ -401,16 +401,16 @@ func serializeFilterExprToAST(expr *plan.Expr, scanNode *plan.Node, scanTag, par
 		}
 		return tree.NewTuple(items), true, nil
 	case *plan.Expr_F:
-		return serializeFilterFuncToAST(expr, impl.F, scanNode, scanTag, partPos, covered)
+		return serializeFilterFuncToAST(expr, impl.F, scanNode, scanTag, partPos, covered, timeZone)
 	default:
 		return nil, false, nil
 	}
 }
 
-func serializeFilterExprListToAST(exprs []*plan.Expr, scanNode *plan.Node, scanTag, partPos int32, covered map[string]struct{}) (tree.Exprs, bool, error) {
+func serializeFilterExprListToAST(exprs []*plan.Expr, scanNode *plan.Node, scanTag, partPos int32, covered map[string]struct{}, timeZone *time.Location) (tree.Exprs, bool, error) {
 	items := make(tree.Exprs, 0, len(exprs))
 	for _, expr := range exprs {
-		item, ok, err := serializeFilterExprToAST(expr, scanNode, scanTag, partPos, covered)
+		item, ok, err := serializeFilterExprToAST(expr, scanNode, scanTag, partPos, covered, timeZone)
 		if err != nil {
 			return nil, false, err
 		}
@@ -422,7 +422,7 @@ func serializeFilterExprListToAST(exprs []*plan.Expr, scanNode *plan.Node, scanT
 	return items, true, nil
 }
 
-func serializeFilterFuncToAST(parentExpr *plan.Expr, fn *plan.Function, scanNode *plan.Node, scanTag, partPos int32, covered map[string]struct{}) (tree.Expr, bool, error) {
+func serializeFilterFuncToAST(parentExpr *plan.Expr, fn *plan.Function, scanNode *plan.Node, scanTag, partPos int32, covered map[string]struct{}, timeZone *time.Location) (tree.Expr, bool, error) {
 	if fn == nil || fn.Func == nil || fn.Func.ObjName == "" {
 		return nil, false, nil
 	}
@@ -435,11 +435,11 @@ func serializeFilterFuncToAST(parentExpr *plan.Expr, fn *plan.Function, scanNode
 		if len(args) != 2 {
 			return nil, false, nil
 		}
-		left, ok, err := serializeFilterExprToAST(args[0], scanNode, scanTag, partPos, covered)
+		left, ok, err := serializeFilterExprToAST(args[0], scanNode, scanTag, partPos, covered, timeZone)
 		if err != nil || !ok {
 			return nil, ok, err
 		}
-		right, ok, err := serializeFilterExprToAST(args[1], scanNode, scanTag, partPos, covered)
+		right, ok, err := serializeFilterExprToAST(args[1], scanNode, scanTag, partPos, covered, timeZone)
 		if err != nil || !ok {
 			return nil, ok, err
 		}
@@ -455,7 +455,7 @@ func serializeFilterFuncToAST(parentExpr *plan.Expr, fn *plan.Function, scanNode
 		if len(args) != 1 {
 			return nil, false, nil
 		}
-		subExpr, ok, err := serializeFilterExprToAST(args[0], scanNode, scanTag, partPos, covered)
+		subExpr, ok, err := serializeFilterExprToAST(args[0], scanNode, scanTag, partPos, covered, timeZone)
 		if err != nil || !ok {
 			return nil, ok, err
 		}
@@ -464,11 +464,11 @@ func serializeFilterFuncToAST(parentExpr *plan.Expr, fn *plan.Function, scanNode
 		if len(args) != 2 {
 			return nil, false, nil
 		}
-		left, ok, err := serializeFilterExprToAST(args[0], scanNode, scanTag, partPos, covered)
+		left, ok, err := serializeFilterExprToAST(args[0], scanNode, scanTag, partPos, covered, timeZone)
 		if err != nil || !ok {
 			return nil, ok, err
 		}
-		right, ok, err := serializeFilterExprToAST(args[1], scanNode, scanTag, partPos, covered)
+		right, ok, err := serializeFilterExprToAST(args[1], scanNode, scanTag, partPos, covered, timeZone)
 		if err != nil || !ok {
 			return nil, ok, err
 		}
@@ -481,15 +481,15 @@ func serializeFilterFuncToAST(parentExpr *plan.Expr, fn *plan.Function, scanNode
 		if len(args) != 3 {
 			return nil, false, nil
 		}
-		target, ok, err := serializeFilterExprToAST(args[0], scanNode, scanTag, partPos, covered)
+		target, ok, err := serializeFilterExprToAST(args[0], scanNode, scanTag, partPos, covered, timeZone)
 		if err != nil || !ok {
 			return nil, ok, err
 		}
-		fromExpr, ok, err := serializeFilterExprToAST(args[1], scanNode, scanTag, partPos, covered)
+		fromExpr, ok, err := serializeFilterExprToAST(args[1], scanNode, scanTag, partPos, covered, timeZone)
 		if err != nil || !ok {
 			return nil, ok, err
 		}
-		toExpr, ok, err := serializeFilterExprToAST(args[2], scanNode, scanTag, partPos, covered)
+		toExpr, ok, err := serializeFilterExprToAST(args[2], scanNode, scanTag, partPos, covered, timeZone)
 		if err != nil || !ok {
 			return nil, ok, err
 		}
@@ -498,11 +498,11 @@ func serializeFilterFuncToAST(parentExpr *plan.Expr, fn *plan.Function, scanNode
 		if len(args) < 2 {
 			return nil, false, nil
 		}
-		target, ok, err := serializeFilterExprToAST(args[0], scanNode, scanTag, partPos, covered)
+		target, ok, err := serializeFilterExprToAST(args[0], scanNode, scanTag, partPos, covered, timeZone)
 		if err != nil || !ok {
 			return nil, ok, err
 		}
-		listExpr, ok, err := serializeInListToAST(args[1:], scanNode, scanTag, partPos, covered)
+		listExpr, ok, err := serializeInListToAST(args[1:], scanNode, scanTag, partPos, covered, timeZone)
 		if err != nil || !ok {
 			return nil, ok, err
 		}
@@ -512,46 +512,46 @@ func serializeFilterFuncToAST(parentExpr *plan.Expr, fn *plan.Function, scanNode
 		}
 		return tree.NewComparisonExpr(op, target, listExpr), true, nil
 	case "isnull", "is_null":
-		return serializeFilterIsExprToAST(args, scanNode, scanTag, partPos, covered, func(expr tree.Expr) tree.Expr {
+		return serializeFilterIsExprToAST(args, scanNode, scanTag, partPos, covered, timeZone, func(expr tree.Expr) tree.Expr {
 			return tree.NewIsNullExpr(expr)
 		})
 	case "isnotnull", "is_not_null":
-		return serializeFilterIsExprToAST(args, scanNode, scanTag, partPos, covered, func(expr tree.Expr) tree.Expr {
+		return serializeFilterIsExprToAST(args, scanNode, scanTag, partPos, covered, timeZone, func(expr tree.Expr) tree.Expr {
 			return tree.NewIsNotNullExpr(expr)
 		})
 	case "isunknown", "is_unknown":
-		return serializeFilterIsExprToAST(args, scanNode, scanTag, partPos, covered, func(expr tree.Expr) tree.Expr {
+		return serializeFilterIsExprToAST(args, scanNode, scanTag, partPos, covered, timeZone, func(expr tree.Expr) tree.Expr {
 			return tree.NewIsUnknownExpr(expr)
 		})
 	case "isnotunknown", "is_not_unknown":
-		return serializeFilterIsExprToAST(args, scanNode, scanTag, partPos, covered, func(expr tree.Expr) tree.Expr {
+		return serializeFilterIsExprToAST(args, scanNode, scanTag, partPos, covered, timeZone, func(expr tree.Expr) tree.Expr {
 			return tree.NewIsNotUnknownExpr(expr)
 		})
 	case "istrue", "is_true":
-		return serializeFilterIsExprToAST(args, scanNode, scanTag, partPos, covered, func(expr tree.Expr) tree.Expr {
+		return serializeFilterIsExprToAST(args, scanNode, scanTag, partPos, covered, timeZone, func(expr tree.Expr) tree.Expr {
 			return tree.NewIsTrueExpr(expr)
 		})
 	case "isnottrue", "is_not_true":
-		return serializeFilterIsExprToAST(args, scanNode, scanTag, partPos, covered, func(expr tree.Expr) tree.Expr {
+		return serializeFilterIsExprToAST(args, scanNode, scanTag, partPos, covered, timeZone, func(expr tree.Expr) tree.Expr {
 			return tree.NewIsNotTrueExpr(expr)
 		})
 	case "isfalse", "is_false":
-		return serializeFilterIsExprToAST(args, scanNode, scanTag, partPos, covered, func(expr tree.Expr) tree.Expr {
+		return serializeFilterIsExprToAST(args, scanNode, scanTag, partPos, covered, timeZone, func(expr tree.Expr) tree.Expr {
 			return tree.NewIsFalseExpr(expr)
 		})
 	case "isnotfalse", "is_not_false":
-		return serializeFilterIsExprToAST(args, scanNode, scanTag, partPos, covered, func(expr tree.Expr) tree.Expr {
+		return serializeFilterIsExprToAST(args, scanNode, scanTag, partPos, covered, timeZone, func(expr tree.Expr) tree.Expr {
 			return tree.NewIsNotFalseExpr(expr)
 		})
 	case "+", "-", "*", "/", "div", "%", "&", "|", "^", "<<", ">>":
 		if len(args) != 2 {
 			return nil, false, nil
 		}
-		left, ok, err := serializeFilterExprToAST(args[0], scanNode, scanTag, partPos, covered)
+		left, ok, err := serializeFilterExprToAST(args[0], scanNode, scanTag, partPos, covered, timeZone)
 		if err != nil || !ok {
 			return nil, ok, err
 		}
-		right, ok, err := serializeFilterExprToAST(args[1], scanNode, scanTag, partPos, covered)
+		right, ok, err := serializeFilterExprToAST(args[1], scanNode, scanTag, partPos, covered, timeZone)
 		if err != nil || !ok {
 			return nil, ok, err
 		}
@@ -564,7 +564,7 @@ func serializeFilterFuncToAST(parentExpr *plan.Expr, fn *plan.Function, scanNode
 		if len(args) != 1 {
 			return nil, false, nil
 		}
-		child, ok, err := serializeFilterExprToAST(args[0], scanNode, scanTag, partPos, covered)
+		child, ok, err := serializeFilterExprToAST(args[0], scanNode, scanTag, partPos, covered, timeZone)
 		if err != nil || !ok {
 			return nil, ok, err
 		}
@@ -577,7 +577,7 @@ func serializeFilterFuncToAST(parentExpr *plan.Expr, fn *plan.Function, scanNode
 		if len(args) < 1 {
 			return nil, false, nil
 		}
-		child, ok, err := serializeFilterExprToAST(args[0], scanNode, scanTag, partPos, covered)
+		child, ok, err := serializeFilterExprToAST(args[0], scanNode, scanTag, partPos, covered, timeZone)
 		if err != nil || !ok {
 			return nil, ok, err
 		}
@@ -591,12 +591,12 @@ func serializeFilterFuncToAST(parentExpr *plan.Expr, fn *plan.Function, scanNode
 		}
 		return tree.NewCastExpr(child, treeType), true, nil
 	case "case":
-		return serializeFilterCaseExprToAST(args, scanNode, scanTag, partPos, covered)
+		return serializeFilterCaseExprToAST(args, scanNode, scanTag, partPos, covered, timeZone)
 	default:
 		if !ivfCanFormatAsFunctionName(fn.Func.ObjName) {
 			return nil, false, nil
 		}
-		astArgs, ok, err := serializeFilterExprListToAST(args, scanNode, scanTag, partPos, covered)
+		astArgs, ok, err := serializeFilterExprListToAST(args, scanNode, scanTag, partPos, covered, timeZone)
 		if err != nil || !ok {
 			return nil, ok, err
 		}
@@ -608,20 +608,20 @@ func serializeFilterFuncToAST(parentExpr *plan.Expr, fn *plan.Function, scanNode
 	}
 }
 
-func serializeFilterIsExprToAST(args []*plan.Expr, scanNode *plan.Node, scanTag, partPos int32, covered map[string]struct{}, build func(tree.Expr) tree.Expr) (tree.Expr, bool, error) {
+func serializeFilterIsExprToAST(args []*plan.Expr, scanNode *plan.Node, scanTag, partPos int32, covered map[string]struct{}, timeZone *time.Location, build func(tree.Expr) tree.Expr) (tree.Expr, bool, error) {
 	if len(args) != 1 {
 		return nil, false, nil
 	}
-	target, ok, err := serializeFilterExprToAST(args[0], scanNode, scanTag, partPos, covered)
+	target, ok, err := serializeFilterExprToAST(args[0], scanNode, scanTag, partPos, covered, timeZone)
 	if err != nil || !ok {
 		return nil, ok, err
 	}
 	return build(target), true, nil
 }
 
-func serializeInListToAST(args []*plan.Expr, scanNode *plan.Node, scanTag, partPos int32, covered map[string]struct{}) (tree.Expr, bool, error) {
+func serializeInListToAST(args []*plan.Expr, scanNode *plan.Node, scanTag, partPos int32, covered map[string]struct{}, timeZone *time.Location) (tree.Expr, bool, error) {
 	if len(args) == 1 {
-		listExpr, ok, err := serializeFilterExprToAST(args[0], scanNode, scanTag, partPos, covered)
+		listExpr, ok, err := serializeFilterExprToAST(args[0], scanNode, scanTag, partPos, covered, timeZone)
 		if err != nil || !ok {
 			return nil, ok, err
 		}
@@ -631,32 +631,32 @@ func serializeInListToAST(args []*plan.Expr, scanNode *plan.Node, scanTag, partP
 		return listExpr, true, nil
 	}
 
-	items, ok, err := serializeFilterExprListToAST(args, scanNode, scanTag, partPos, covered)
+	items, ok, err := serializeFilterExprListToAST(args, scanNode, scanTag, partPos, covered, timeZone)
 	if err != nil || !ok {
 		return nil, ok, err
 	}
 	return tree.NewTuple(items), true, nil
 }
 
-func serializeFilterCaseExprToAST(args []*plan.Expr, scanNode *plan.Node, scanTag, partPos int32, covered map[string]struct{}) (tree.Expr, bool, error) {
+func serializeFilterCaseExprToAST(args []*plan.Expr, scanNode *plan.Node, scanTag, partPos int32, covered map[string]struct{}, timeZone *time.Location) (tree.Expr, bool, error) {
 	if len(args) == 0 || len(args)%2 == 0 {
 		return nil, false, nil
 	}
 
 	whens := make([]*tree.When, 0, len(args)/2)
 	for i := 0; i < len(args)-1; i += 2 {
-		cond, ok, err := serializeFilterExprToAST(args[i], scanNode, scanTag, partPos, covered)
+		cond, ok, err := serializeFilterExprToAST(args[i], scanNode, scanTag, partPos, covered, timeZone)
 		if err != nil || !ok {
 			return nil, ok, err
 		}
-		val, ok, err := serializeFilterExprToAST(args[i+1], scanNode, scanTag, partPos, covered)
+		val, ok, err := serializeFilterExprToAST(args[i+1], scanNode, scanTag, partPos, covered, timeZone)
 		if err != nil || !ok {
 			return nil, ok, err
 		}
 		whens = append(whens, tree.NewWhen(cond, val))
 	}
 
-	elseExpr, ok, err := serializeFilterExprToAST(args[len(args)-1], scanNode, scanTag, partPos, covered)
+	elseExpr, ok, err := serializeFilterExprToAST(args[len(args)-1], scanNode, scanTag, partPos, covered, timeZone)
 	if err != nil || !ok {
 		return nil, ok, err
 	}
@@ -781,9 +781,12 @@ func ivfQuotedIdentifierOrigin(name string) string {
 	return sqlquote.Ident(name)
 }
 
-func ivfLiteralToAST(lit *plan.Literal, typ plan.Type) (tree.Expr, error) {
+func ivfLiteralToAST(lit *plan.Literal, typ plan.Type, timeZone *time.Location) (tree.Expr, error) {
 	if lit == nil || lit.Isnull {
 		return tree.NewNumVal("", "", false, tree.P_null), nil
+	}
+	if timeZone == nil {
+		timeZone = time.UTC
 	}
 
 	switch v := lit.Value.(type) {
@@ -828,7 +831,7 @@ func ivfLiteralToAST(lit *plan.Literal, typ plan.Type) (tree.Expr, error) {
 		str := types.Datetime(v.Datetimeval).String2(typ.Scale)
 		return tree.NewNumVal(str, str, false, tree.P_char), nil
 	case *plan.Literal_Timestampval:
-		str := types.Timestamp(v.Timestampval).String2(time.UTC, typ.Scale)
+		str := types.Timestamp(v.Timestampval).String2(timeZone, typ.Scale)
 		return tree.NewNumVal(str, str, false, tree.P_char), nil
 	case *plan.Literal_Decimal64Val:
 		str := types.Decimal64(v.Decimal64Val.A).Format(typ.Scale)
@@ -1292,7 +1295,11 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 	requiredCols := collectRequiredColumns(projNode, childNode, scanNode, orderExpr, ivfCtx.partPos)
 	projectedCols := collectProjectedColumns(projNode, childNode, scanNode, ivfCtx.partPos)
 	coveragePushdown, _ := splitFiltersByVectorIndexCoverage(newFilterList, scanNode, includeAwareColumns, ivfCtx.partPos)
-	pushdownFilterSQL, serializedPushdownFilters, _, err := serializeFiltersToSQL(coveragePushdown, scanNode, includeAwareColumns, ivfCtx.partPos)
+	timeZone := time.UTC
+	if proc := builder.compCtx.GetProcess(); proc != nil && proc.GetSessionInfo() != nil && proc.GetSessionInfo().TimeZone != nil {
+		timeZone = proc.GetSessionInfo().TimeZone
+	}
+	pushdownFilterSQL, serializedPushdownFilters, _, err := serializeFiltersToSQL(coveragePushdown, scanNode, includeAwareColumns, ivfCtx.partPos, timeZone)
 	if err != nil {
 		return nodeID, err
 	}

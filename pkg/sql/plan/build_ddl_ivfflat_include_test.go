@@ -224,3 +224,34 @@ func TestBuildIvfFlatSecondaryIndexDef_RejectsInvalidIncludeColumns(t *testing.T
 		})
 	}
 }
+
+func TestBuildIvfFlatSecondaryIndexDef_RejectsIncludeTypesUnsupportedByISCP(t *testing.T) {
+	for _, oid := range []types.T{
+		types.T_int128,
+		types.T_uint128,
+		types.T_decimal256,
+		types.T_interval,
+		types.T_year,
+		types.T_geometry,
+		types.T_geometry32,
+	} {
+		t.Run(oid.String(), func(t *testing.T) {
+			ctx := NewMockOptimizer(false).CurrentContext()
+			colMap := map[string]*ColDef{
+				"id":        makeTestColDef("id", types.T_int64),
+				"embedding": makeTestColDef("embedding", types.T_array_float32),
+				"payload":   makeTestColDef("payload", oid),
+			}
+
+			_, _, err := ivfflatplan.Hooks{}.BuildSecondaryIndexDefs(
+				ctx,
+				makeIvfIndexWithInclude("embedding", "payload"),
+				colMap,
+				nil,
+				"id",
+			)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "unsupported type")
+		})
+	}
+}

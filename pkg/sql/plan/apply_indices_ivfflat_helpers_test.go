@@ -255,6 +255,7 @@ func TestIvfIncludeHelperFilterCoverageAndSerialization(t *testing.T) {
 		scanNode,
 		[]string{"title", "category"},
 		1,
+		time.UTC,
 	)
 	require.NoError(t, err)
 	require.Len(t, serializedPushdown, 7)
@@ -402,7 +403,7 @@ func TestIvfSerializeFilterAdditionalBranches(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			ast, ok, err := serializeFilterExprToAST(tc.expr, scanNode, scanTag, 1, covered)
+			ast, ok, err := serializeFilterExprToAST(tc.expr, scanNode, scanTag, 1, covered, time.UTC)
 			require.NoError(t, err)
 			require.True(t, ok)
 			sql := tree.StringWithOpts(ast, dialect.MYSQL, tree.WithQuoteString(true))
@@ -412,13 +413,13 @@ func TestIvfSerializeFilterAdditionalBranches(t *testing.T) {
 
 	ast, ok, err := serializeFilterExprToAST(
 		makeIvfHelperFnExpr("bad-name", Type{Id: int32(types.T_varchar)}, makeIvfHelperColExpr(scanTag, 2, scanNode.TableDef)),
-		scanNode, scanTag, 1, covered,
+		scanNode, scanTag, 1, covered, time.UTC,
 	)
 	require.NoError(t, err)
 	assert.False(t, ok)
 	assert.Nil(t, ast)
 
-	caseAst, ok, err := serializeFilterCaseExprToAST([]*Expr{categoryEq, makePlan2StringConstExprWithType("beta")}, scanNode, scanTag, 1, covered)
+	caseAst, ok, err := serializeFilterCaseExprToAST([]*Expr{categoryEq, makePlan2StringConstExprWithType("beta")}, scanNode, scanTag, 1, covered, time.UTC)
 	require.NoError(t, err)
 	assert.False(t, ok)
 	assert.Nil(t, caseAst)
@@ -433,17 +434,17 @@ func TestIvfSerializeFilterInvalidShapes(t *testing.T) {
 		"category": {},
 	}
 
-	ast, ok, err := serializeFilterExprToAST(&Expr{}, scanNode, scanTag, 1, covered)
+	ast, ok, err := serializeFilterExprToAST(&Expr{}, scanNode, scanTag, 1, covered, time.UTC)
 	require.NoError(t, err)
 	assert.False(t, ok)
 	assert.Nil(t, ast)
 
-	ast, ok, err = serializeFilterExprToAST(makeIvfHelperColExpr(scanTag, 2, scanNode.TableDef), scanNode, scanTag, 1, covered)
+	ast, ok, err = serializeFilterExprToAST(makeIvfHelperColExpr(scanTag, 2, scanNode.TableDef), scanNode, scanTag, 1, covered, time.UTC)
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Contains(t, tree.StringWithOpts(ast, dialect.MYSQL, tree.WithQuoteString(true)), catalog.SystemSI_IVFFLAT_IncludeColPrefix+"title")
 
-	ast, ok, err = serializeFilterExprToAST(makePlan2StringConstExprWithType("beta"), scanNode, scanTag, 1, covered)
+	ast, ok, err = serializeFilterExprToAST(makePlan2StringConstExprWithType("beta"), scanNode, scanTag, 1, covered, time.UTC)
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Contains(t, tree.StringWithOpts(ast, dialect.MYSQL, tree.WithQuoteString(true)), "beta")
@@ -454,13 +455,13 @@ func TestIvfSerializeFilterInvalidShapes(t *testing.T) {
 				List: &planpb.ExprList{List: []*Expr{MakePlan2Int32ConstExprWithType(1), MakePlan2Int32ConstExprWithType(2)}},
 			},
 		},
-		scanNode, scanTag, 1, covered,
+		scanNode, scanTag, 1, covered, time.UTC,
 	)
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Contains(t, tree.StringWithOpts(ast, dialect.MYSQL, tree.WithQuoteString(true)), "(1, 2)")
 
-	ast, ok, err = serializeFilterFuncToAST(nil, nil, scanNode, scanTag, 1, covered)
+	ast, ok, err = serializeFilterFuncToAST(nil, nil, scanNode, scanTag, 1, covered, time.UTC)
 	require.NoError(t, err)
 	assert.False(t, ok)
 	assert.Nil(t, ast)
@@ -468,20 +469,20 @@ func TestIvfSerializeFilterInvalidShapes(t *testing.T) {
 	ast, ok, err = serializeFilterFuncToAST(
 		nil,
 		&planpb.Function{Func: &ObjectRef{ObjName: "and"}, Args: []*Expr{makeIvfHelperColExpr(scanTag, 3, scanNode.TableDef)}},
-		scanNode, scanTag, 1, covered,
+		scanNode, scanTag, 1, covered, time.UTC,
 	)
 	require.NoError(t, err)
 	assert.False(t, ok)
 	assert.Nil(t, ast)
 
-	ast, ok, err = serializeFilterIsExprToAST(nil, scanNode, scanTag, 1, covered, func(expr tree.Expr) tree.Expr {
+	ast, ok, err = serializeFilterIsExprToAST(nil, scanNode, scanTag, 1, covered, time.UTC, func(expr tree.Expr) tree.Expr {
 		return tree.NewIsNullExpr(expr)
 	})
 	require.NoError(t, err)
 	assert.False(t, ok)
 	assert.Nil(t, ast)
 
-	ast, ok, err = serializeInListToAST([]*Expr{MakePlan2Int32ConstExprWithType(1)}, scanNode, scanTag, 1, covered)
+	ast, ok, err = serializeInListToAST([]*Expr{MakePlan2Int32ConstExprWithType(1)}, scanNode, scanTag, 1, covered, time.UTC)
 	require.NoError(t, err)
 	assert.False(t, ok)
 	assert.Nil(t, ast)
@@ -501,7 +502,7 @@ func TestIvfSerializeFilterInvalidShapes(t *testing.T) {
 
 	for _, tc := range invalidFns {
 		t.Run(tc.name, func(t *testing.T) {
-			ast, ok, err := serializeFilterFuncToAST(&Expr{Typ: Type{Id: int32(types.T_int64)}}, tc.fn, scanNode, scanTag, 1, covered)
+			ast, ok, err := serializeFilterFuncToAST(&Expr{Typ: Type{Id: int32(types.T_int64)}}, tc.fn, scanNode, scanTag, 1, covered, time.UTC)
 			require.NoError(t, err)
 			assert.False(t, ok)
 			assert.Nil(t, ast)
@@ -661,7 +662,7 @@ func TestIvfLiteralAndPlanTypeConversionHelpers(t *testing.T) {
 
 	for _, tc := range literalCases {
 		t.Run("literal_"+tc.name, func(t *testing.T) {
-			ast, err := ivfLiteralToAST(tc.lit, tc.typ)
+			ast, err := ivfLiteralToAST(tc.lit, tc.typ, time.UTC)
 			require.NoError(t, err)
 			sql := tree.StringWithOpts(ast, dialect.MYSQL, tree.WithQuoteString(true))
 			assert.Contains(t, sql, tc.contains)
@@ -730,6 +731,48 @@ func TestIvfLiteralAndPlanTypeConversionHelpers(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestIvfTimestampFilterSerializationUsesSessionTimeZone(t *testing.T) {
+	_, _, scanNode, _, _ := newIvfIncludeModeTestBuilder(t)
+	scanTag := scanNode.BindingTags[0]
+	timeZone := time.FixedZone("+08:00", 8*60*60)
+	timestampType := Type{Id: int32(types.T_timestamp), Scale: 6}
+	timestamp, err := types.ParseTimestamp(timeZone, "2026-01-01 12:00:00.123456", timestampType.Scale)
+	require.NoError(t, err)
+
+	colPos := int32(len(scanNode.TableDef.Cols))
+	scanNode.TableDef.Cols = append(scanNode.TableDef.Cols, &ColDef{Name: "created_at", Typ: timestampType})
+	scanNode.TableDef.Name2ColIndex["created_at"] = colPos
+	literal := &Expr{
+		Typ: timestampType,
+		Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{
+			Value: &planpb.Literal_Timestampval{Timestampval: int64(timestamp)},
+		}},
+	}
+	filter := makeIvfHelperFnExpr(
+		"=",
+		Type{Id: int32(types.T_bool)},
+		makeIvfHelperColExpr(scanTag, colPos, scanNode.TableDef),
+		literal,
+	)
+
+	sql, pushdown, remaining, err := serializeFiltersToSQL(
+		[]*Expr{filter}, scanNode, []string{"created_at"}, 1, timeZone,
+	)
+	require.NoError(t, err)
+	require.Len(t, pushdown, 1)
+	require.Empty(t, remaining)
+	require.Contains(t, sql, "2026-01-01 12:00:00.123456")
+	require.NotContains(t, sql, "2026-01-01 04:00:00.123456")
+
+	literalAST, err := ivfLiteralToAST(literal.GetLit(), timestampType, timeZone)
+	require.NoError(t, err)
+	serializedLiteral, ok := literalAST.(*tree.NumVal)
+	require.True(t, ok)
+	roundTrip, err := types.ParseTimestamp(timeZone, serializedLiteral.String(), timestampType.Scale)
+	require.NoError(t, err)
+	require.Equal(t, timestamp, roundTrip)
+}
+
 func TestIvfIncludeCastSerializationAcceptedTypes(t *testing.T) {
 	_, _, scanNode, _, _ := newIvfIncludeModeTestBuilder(t)
 	scanTag := scanNode.BindingTags[0]
@@ -748,7 +791,7 @@ func TestIvfIncludeCastSerializationAcceptedTypes(t *testing.T) {
 				&Expr{Typ: targetType, Expr: &planpb.Expr_T{T: &planpb.TargetType{}}},
 			)
 
-			ast, ok, err := serializeFilterExprToAST(castExpr, scanNode, scanTag, 1, covered)
+			ast, ok, err := serializeFilterExprToAST(castExpr, scanNode, scanTag, 1, covered, time.UTC)
 			require.NoError(t, err)
 			if _, conversionErr := ivfPlanTypeToTreeType(targetType); conversionErr != nil {
 				assert.False(t, ok)
@@ -776,7 +819,7 @@ func TestIvfIncludeDecimal256CastSerialization(t *testing.T) {
 	)
 	filterExpr := makeIvfHelperFnExpr("is_not_null", Type{Id: int32(types.T_bool)}, castExpr)
 
-	sql, pushdown, remaining, err := serializeFiltersToSQL([]*Expr{filterExpr}, scanNode, []string{"amount"}, 1)
+	sql, pushdown, remaining, err := serializeFiltersToSQL([]*Expr{filterExpr}, scanNode, []string{"amount"}, 1, time.UTC)
 	require.NoError(t, err)
 	require.Len(t, pushdown, 1)
 	assert.Empty(t, remaining)
@@ -791,7 +834,7 @@ func TestIvfIncludeDecimal256CastSerialization(t *testing.T) {
 		&Expr{Typ: unsupportedType, Expr: &planpb.Expr_T{T: &planpb.TargetType{}}},
 	)
 	unsupportedFilter := makeIvfHelperFnExpr("is_not_null", Type{Id: int32(types.T_bool)}, unsupportedCast)
-	sql, pushdown, remaining, err = serializeFiltersToSQL([]*Expr{unsupportedFilter}, scanNode, []string{"amount"}, 1)
+	sql, pushdown, remaining, err = serializeFiltersToSQL([]*Expr{unsupportedFilter}, scanNode, []string{"amount"}, 1, time.UTC)
 	require.NoError(t, err)
 	assert.Empty(t, sql)
 	assert.Empty(t, pushdown)
