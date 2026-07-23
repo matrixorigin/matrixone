@@ -598,10 +598,6 @@ func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index i
 		return
 	}
 
-	if ss != nil {
-		ss.writeCsvBytes.Add(int64(reslen)) // statistic out traffic, CASE 2: select into
-	}
-
 	bat.Clean(mp)
 
 }
@@ -1189,10 +1185,6 @@ func constructJSONLine(ctx context.Context, obj FeSession, bat *batch.Batch, ind
 		index:     index,
 		writeByte: result,
 		err:       nil,
-	}
-
-	if ss != nil {
-		ss.writeCsvBytes.Add(int64(reslen))
 	}
 
 	bat.Clean(mp)

@@ -589,7 +589,7 @@ func TestCompileShuffleGroupUsesLocalPathWhenScopeMcpuMatchesDop(t *testing.T) {
 	require.Equal(t, int32(0), shuffleOp.CurrentShuffleIdx)
 }
 
-func TestCompileShuffleGroupMaterializesNestedLocalShuffle(t *testing.T) {
+func TestCompileShuffleGroupKeepsNestedShuffleLocal(t *testing.T) {
 	c := newCompileForShuffleGroupTest(t)
 	aggNode, nodes := newShuffleGroupTestNodes(16)
 	scope := newShuffleGroupInputScope(t, 16)
@@ -600,14 +600,19 @@ func TestCompileShuffleGroupMaterializesNestedLocalShuffle(t *testing.T) {
 
 	result := c.compileShuffleGroup(aggNode, []*Scope{scope}, nodes)
 
-	require.Len(t, result, 16)
-	dispatchOp, ok := scope.RootOp.(*dispatch.Dispatch)
+	require.Len(t, result, 1)
+	require.Same(t, scope, result[0])
+	require.IsType(t, &group.Group{}, result[0].RootOp)
+	outer, ok := result[0].RootOp.GetOperatorBase().GetChildren(0).(*shuffle.Shuffle)
 	require.True(t, ok)
-	require.Len(t, dispatchOp.LocalRegs, 16)
-	require.True(t, dispatchOp.GetOperatorBase().GetChildren(0).(*shuffle.Shuffle).DrainAllBuckets)
+	require.False(t, outer.DrainAllBuckets)
+	middle := outer.GetOperatorBase().GetChildren(0)
+	nestedInner, ok := middle.GetOperatorBase().GetChildren(0).(*shuffle.Shuffle)
+	require.True(t, ok)
+	require.False(t, nestedInner.DrainAllBuckets)
 }
 
-func TestCompileShuffleJoinMaterializesNestedLocalShuffle(t *testing.T) {
+func TestCompileShuffleJoinKeepsNestedShuffleLocal(t *testing.T) {
 	const dop = int32(16)
 	for _, nestedSide := range []string{"probe", "build"} {
 		t.Run(nestedSide, func(t *testing.T) {
@@ -619,9 +624,6 @@ func TestCompileShuffleJoinMaterializesNestedLocalShuffle(t *testing.T) {
 			probe := newShuffleJoinTestScope(t, c.cnList[0], int(dop))
 			build := newShuffleJoinTestScope(t, c.cnList[0], int(dop))
 
-			// The first local shuffle is duplicated into fixed-bucket workers when
-			// the packed scope runs. Adding another local shuffle above it would
-			// couple the two pools in the same pull-based worker graph.
 			inner := shuffle.NewArgument()
 			inner.BucketNum = dop
 			if nestedSide == "probe" {
@@ -634,12 +636,13 @@ func TestCompileShuffleJoinMaterializesNestedLocalShuffle(t *testing.T) {
 
 			result := c.compileShuffleJoin(node, left, right, []*Scope{probe}, []*Scope{build})
 
-			require.Len(t, result, int(dop),
-				"a nested fixed-bucket shuffle must be materialized into independent scopes")
-			probeDispatch, ok := probe.RootOp.(*dispatch.Dispatch)
-			require.True(t, ok)
-			require.Len(t, probeDispatch.LocalRegs, int(dop))
-			require.True(t, probeDispatch.GetOperatorBase().GetChildren(0).(*shuffle.Shuffle).DrainAllBuckets)
+			require.Len(t, result, 1,
+				"the asynchronous local exchange permits nested fixed-bucket shuffles")
+			require.Same(t, probe, result[0])
+			_, probeIsDispatch := probe.RootOp.(*dispatch.Dispatch)
+			_, buildIsDispatch := build.RootOp.(*dispatch.Dispatch)
+			require.False(t, probeIsDispatch)
+			require.False(t, buildIsDispatch)
 		})
 	}
 }
