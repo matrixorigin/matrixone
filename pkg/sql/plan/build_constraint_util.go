@@ -620,7 +620,8 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 				return false, nil, nil, err
 			}
 		} else {
-			projExpr, err = forceAssignmentCastExpr(builder.GetContext(), projExpr, tableDef.Cols[colIdx].Typ)
+			projExpr, err = builder.forceProjectedAssignmentCastExpr(
+				projExpr, oldProject[i], tableDef.Cols[colIdx].Typ)
 			if err != nil {
 				return false, nil, nil, err
 			}
@@ -1062,6 +1063,73 @@ func forceAssignmentCastExpr(ctx context.Context, expr *Expr, targetType Type) (
 		funcName = "cast_strict"
 	}
 	return forceCastExprWithName(ctx, expr, targetType, funcName)
+}
+
+func (builder *QueryBuilder) forceProjectedAssignmentCastExpr(expr, sourceExpr *Expr, targetType Type) (*Expr, error) {
+	if targetType.Id == int32(types.T_json) && builder.isProjectedEnumDisplayValueExpr(sourceExpr, nil) {
+		return quoteEnumDisplayValueAsJSON(builder.GetContext(), expr)
+	}
+	return forceAssignmentCastExpr(builder.GetContext(), expr, targetType)
+}
+
+func (builder *QueryBuilder) isProjectedEnumDisplayValueExpr(expr *Expr, visited map[[2]int32]struct{}) bool {
+	if isEnumDisplayValueExpr(expr) {
+		return true
+	}
+	col := expr.GetCol()
+	if col == nil {
+		return false
+	}
+	key := [2]int32{col.RelPos, col.ColPos}
+	if visited == nil {
+		visited = make(map[[2]int32]struct{})
+	}
+	if _, ok := visited[key]; ok {
+		return false
+	}
+	visited[key] = struct{}{}
+	defer delete(visited, key)
+
+	nodeID, ok := builder.tag2NodeID[col.RelPos]
+	if !ok || nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) {
+		return false
+	}
+	node := builder.qry.Nodes[nodeID]
+	if isSetOperationNode(node.NodeType) {
+		if len(node.Children) == 0 {
+			return false
+		}
+		for _, childID := range node.Children {
+			if childID < 0 || int(childID) >= len(builder.qry.Nodes) {
+				return false
+			}
+			childProjectList := builder.qry.Nodes[childID].ProjectList
+			if col.ColPos < 0 || int(col.ColPos) >= len(childProjectList) {
+				return false
+			}
+			if !builder.isProjectedEnumDisplayValueExpr(childProjectList[col.ColPos], visited) {
+				return false
+			}
+		}
+		return true
+	}
+
+	projectList := node.ProjectList
+	if col.ColPos < 0 || int(col.ColPos) >= len(projectList) {
+		return false
+	}
+	return builder.isProjectedEnumDisplayValueExpr(projectList[col.ColPos], visited)
+}
+
+func isSetOperationNode(nodeType plan.Node_NodeType) bool {
+	switch nodeType {
+	case plan.Node_UNION, plan.Node_UNION_ALL,
+		plan.Node_MINUS, plan.Node_MINUS_ALL,
+		plan.Node_INTERSECT, plan.Node_INTERSECT_ALL:
+		return true
+	default:
+		return false
+	}
 }
 
 func forceCastExprWithName(ctx context.Context, expr *Expr, targetType Type, funcName string) (*Expr, error) {

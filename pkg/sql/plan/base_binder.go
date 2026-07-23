@@ -3079,16 +3079,27 @@ func rewriteEnumDisplayValueToJSONCast(ctx context.Context, expr *Expr, toType T
 	if expr.Typ.Id == int32(types.T_enum) {
 		return nil, moerr.NewInvalidArg(ctx, "operator cast", "[ENUM JSON]")
 	}
-	fn := expr.GetF()
-	if fn != nil && fn.Func != nil && fn.Func.ObjName == moEnumCastIndexToValueFun {
-		quoted, err := BindFuncExprImplByPlanExpr(ctx, "json_quote", []*Expr{expr})
-		if err != nil {
-			return nil, err
-		}
-		quoted.Typ.NotNullable = expr.Typ.NotNullable
-		return quoted, nil
+	if isEnumDisplayValueExpr(expr) {
+		return quoteEnumDisplayValueAsJSON(ctx, expr)
 	}
 	return expr, nil
+}
+
+func isEnumDisplayValueExpr(expr *Expr) bool {
+	if expr == nil {
+		return false
+	}
+	fn := expr.GetF()
+	return fn != nil && fn.Func != nil && fn.Func.ObjName == moEnumCastIndexToValueFun
+}
+
+func quoteEnumDisplayValueAsJSON(ctx context.Context, expr *Expr) (*Expr, error) {
+	quoted, err := BindFuncExprImplByPlanExpr(ctx, "json_quote", []*Expr{expr})
+	if err != nil {
+		return nil, err
+	}
+	quoted.Typ.NotNullable = expr.Typ.NotNullable
+	return quoted, nil
 }
 
 func resetDateFunctionArgs(ctx context.Context, dateExpr *Expr, intervalExpr *Expr) ([]*Expr, error) {
