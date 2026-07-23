@@ -21,6 +21,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -91,6 +92,219 @@ func getAliasToName(ctx CompilerContext, expr tree.TableExpr, alias string, alia
 		getAliasToName(ctx, t.Left, alias, aliasMap)
 		getAliasToName(ctx, t.Right, alias, aliasMap)
 	}
+}
+
+func appendCheckConstraintPlan(builder *QueryBuilder, bindCtx *BindContext, tableDef *TableDef, lastNodeID int32, inputTag int32, colName2Idx map[string]int32, ignoreMode bool) (int32, error) {
+	if !hasEnforcedCheckConstraint(tableDef) {
+		return lastNodeID, nil
+	}
+
+	tableColProjList := make([]*plan.Expr, len(tableDef.Cols))
+	for i, col := range tableDef.Cols {
+		if col.Name == catalog.Row_ID {
+			continue
+		}
+		colPos, ok := colName2Idx[tableDef.Name+"."+col.Name]
+		if !ok {
+			return 0, moerr.NewInternalErrorf(builder.GetContext(), "cannot find column %s.%s for check constraint", tableDef.Name, col.Name)
+		}
+		tableColProjList[i] = &plan.Expr{
+			Typ: col.Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: inputTag,
+					ColPos: colPos,
+					Name:   col.Name,
+				},
+			},
+		}
+	}
+
+	return appendCheckConstraintPlanWithTableColProjections(builder, bindCtx, tableDef, lastNodeID, tableColProjList, ignoreMode)
+}
+
+func appendCheckConstraintPlanFromLastNode(builder *QueryBuilder, bindCtx *BindContext, tableDef *TableDef, lastNodeID int32) (int32, error) {
+	return appendCheckConstraintPlanFromLastNodeWithMode(builder, bindCtx, tableDef, lastNodeID, false)
+}
+
+func appendCheckConstraintPlanFromLastNodeWithMode(
+	builder *QueryBuilder,
+	bindCtx *BindContext,
+	tableDef *TableDef,
+	lastNodeID int32,
+	ignoreMode bool,
+) (int32, error) {
+	if !hasEnforcedCheckConstraint(tableDef) {
+		return lastNodeID, nil
+	}
+
+	projection := getProjectionByLastNode(builder, lastNodeID)
+	tableColProjList := make([]*plan.Expr, len(tableDef.Cols))
+	for i, col := range tableDef.Cols {
+		if col.Name == catalog.Row_ID {
+			continue
+		}
+		if i >= len(projection) {
+			if col.Hidden {
+				continue
+			}
+			return 0, moerr.NewInternalErrorf(builder.GetContext(), "cannot find column %s.%s for check constraint", tableDef.Name, col.Name)
+		}
+		tableColProjList[i] = projection[i]
+	}
+
+	return appendCheckConstraintPlanWithTableColProjections(
+		builder, bindCtx, tableDef, lastNodeID, tableColProjList, ignoreMode)
+}
+
+func appendCheckConstraintPlanWithTableColProjections(builder *QueryBuilder, bindCtx *BindContext, tableDef *TableDef, lastNodeID int32, tableColProjList []*plan.Expr, ignoreMode bool) (int32, error) {
+	if ignoreMode {
+		proc := builder.compCtx.GetProcess()
+		if proc != nil {
+			version, ok := moruntime.ServiceRuntime(proc.GetService()).
+				GetGlobalVariables(moruntime.MOProtocolVersion)
+			if ok && version.(int64) < defines.MORPCVersion5 {
+				return 0, moerr.NewNotSupported(
+					builder.GetContext(),
+					"CHECK constraint warnings require all CNs to support protocol version 5")
+			}
+		}
+	}
+	filterList := make([]*plan.Expr, 0, len(tableDef.Checks))
+	for _, check := range tableDef.Checks {
+		if check.NotEnforced {
+			continue
+		}
+		if colName, ok := checkConstraintReferencesSyntheticCol(check.Check, tableDef); ok {
+			return 0, moerr.NewInternalErrorf(builder.GetContext(),
+				"check constraint %q references synthetic column %s", check.Name, colName)
+		}
+		checkExpr := substituteColRefsInExpr(check.Check, tableColProjList, 0)
+		// A CHECK passes when the predicate is TRUE or NULL (MySQL semantics).
+		// coalesce(checkExpr, true) expresses this while evaluating the check
+		// expression exactly once, avoiding the double evaluation that an
+		// explicit `checkExpr OR checkExpr IS NULL` would incur.
+		passExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "coalesce",
+			[]*plan.Expr{checkExpr, makePlan2BoolConstExprWithType(true)})
+		if err != nil {
+			return 0, err
+		}
+
+		if ignoreMode {
+			// INSERT IGNORE: violating rows are dropped (and the statement keeps
+			// going) rather than aborting. A plain FILTER on passExpr keeps only
+			// the rows that satisfy the check.
+			passExpr.AuxId = plan.CheckConstraintWarningFilterAuxID
+			passExpr.WarningMessage = fmt.Sprintf("Check constraint '%s' is violated", check.Name)
+			filterList = append(filterList, passExpr)
+			continue
+		}
+
+		checkName := check.Name
+		if checkName == "" {
+			checkName = "CHECK"
+		}
+		errMsg := makePlan2StringConstExprWithType(fmt.Sprintf("Check constraint '%s' is violated", checkName))
+		// Use the long-standing assert function so plans remain executable on old
+		// CNs during rolling upgrades. CHECK-specific function IDs cannot be sent
+		// to an older executor safely.
+		assertExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "assert", []*plan.Expr{passExpr, errMsg})
+		if err != nil {
+			return 0, err
+		}
+		filterList = append(filterList, assertExpr)
+	}
+
+	return builder.appendNode(&plan.Node{
+		NodeType:    plan.Node_FILTER,
+		Children:    []int32{lastNodeID},
+		FilterList:  filterList,
+		ProjectList: getProjectionByLastNodeIfAvailable(builder, lastNodeID),
+	}, bindCtx), nil
+}
+
+func hasEnforcedCheckConstraint(tableDef *TableDef) bool {
+	for _, check := range tableDef.Checks {
+		if !check.NotEnforced {
+			return true
+		}
+	}
+	return false
+}
+
+func checkConstraintReferencesSyntheticCol(expr *plan.Expr, tableDef *TableDef) (string, bool) {
+	if expr == nil {
+		return "", false
+	}
+
+	syntheticCols := make(map[int32]string, 2)
+	addSyntheticCol := func(name string) {
+		if name == "" {
+			return
+		}
+		if colPos, ok := tableDef.Name2ColIndex[name]; ok {
+			syntheticCols[colPos] = name
+		}
+	}
+	addSyntheticCol(catalog.CPrimaryKeyColName)
+	if tableDef.ClusterBy != nil && util.JudgeIsCompositeClusterByColumn(tableDef.ClusterBy.Name) {
+		addSyntheticCol(tableDef.ClusterBy.Name)
+	}
+
+	var walk func(*plan.Expr) (string, bool)
+	walk = func(expr *plan.Expr) (string, bool) {
+		if expr == nil {
+			return "", false
+		}
+		switch e := expr.Expr.(type) {
+		case *plan.Expr_Col:
+			if e.Col.RelPos == 0 {
+				if colName, ok := syntheticCols[e.Col.ColPos]; ok {
+					return colName, true
+				}
+			}
+		case *plan.Expr_F:
+			for _, arg := range e.F.Args {
+				if colName, ok := walk(arg); ok {
+					return colName, true
+				}
+			}
+		case *plan.Expr_List:
+			for _, item := range e.List.List {
+				if colName, ok := walk(item); ok {
+					return colName, true
+				}
+			}
+		case *plan.Expr_Sub:
+			if e.Sub != nil {
+				if colName, ok := walk(e.Sub.Child); ok {
+					return colName, true
+				}
+			}
+		}
+		return "", false
+	}
+	return walk(expr)
+}
+
+func getProjectionByLastNodeIfAvailable(builder *QueryBuilder, lastNodeID int32) []*Expr {
+	return getProjectionByLastNodeIfAvailableWithVisited(builder, lastNodeID, make(map[int32]struct{}))
+}
+
+func getProjectionByLastNodeIfAvailableWithVisited(builder *QueryBuilder, lastNodeID int32, visited map[int32]struct{}) []*Expr {
+	if _, ok := visited[lastNodeID]; ok {
+		return nil
+	}
+	visited[lastNodeID] = struct{}{}
+
+	lastNode := builder.qry.Nodes[lastNodeID]
+	if len(lastNode.ProjectList) > 0 {
+		return getProjectionByLastNode(builder, lastNodeID)
+	}
+	if len(lastNode.Children) == 0 {
+		return nil
+	}
+	return getProjectionByLastNodeIfAvailableWithVisited(builder, lastNode.Children[0], visited)
 }
 
 func getUpdateTableInfo(ctx CompilerContext, stmt *tree.Update) (*dmlTableInfo, error) {

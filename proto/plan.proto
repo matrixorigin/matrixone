@@ -230,6 +230,7 @@ message Expr {
   int32 aux_id = 16;
   double ndv = 17;
   double selectivity = 18;
+  string warning_message = 19;
 }
 
 message FoldVal {
@@ -370,8 +371,13 @@ message ForeignKeyDef {
 
 message CheckDef {
   string name = 1;
-  // Name for anonymous constraints, __mo_chk_[INDEX_ID]
   Expr check = 2;
+  // Original SQL expression text, used for SHOW CREATE TABLE output
+  string origin_sql = 3;
+  // True when name was generated internally for an anonymous constraint.
+  bool is_generated_name = 4;
+  // True when the constraint is retained as schema metadata but is not enforced.
+  bool not_enforced = 5;
 }
 
 message Partition {

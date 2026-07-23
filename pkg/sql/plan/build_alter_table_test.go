@@ -17,10 +17,13 @@ package plan
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -51,6 +54,106 @@ func TestAlterTableAddColumns(t *testing.T) {
 		//`ALTER TABLE t2 ADD c INT PRIMARY KEY PRIMARY KEY PRIMARY KEY;`,
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
+}
+
+func TestAlterTableAddColumnWithColumnCheck(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	// A column-level CHECK on a freshly added column must bind against the new
+	// column itself, which is only present in TableDef.Cols after positioning.
+	// Before the fix the check was bound before the column was inserted and
+	// failed with "column d not found".
+	logicPlan, err := buildSingleStmt(mock, t, "ALTER TABLE t1 ADD COLUMN d INT CHECK (d > 0);")
+	require.NoError(t, err)
+	tableDef := logicPlan.GetDdl().GetAlterTable().GetCopyTableDef()
+	checks := tableDef.GetChecks()
+	require.Len(t, checks, 1)
+	checkArgs := checks[0].GetCheck().GetF().GetArgs()
+	require.NotEmpty(t, checkArgs)
+	newColPos := int32(-1)
+	var bindColPos int32
+	for _, col := range tableDef.GetCols() {
+		if col.GetName() == catalog.Row_ID {
+			continue
+		}
+		if col.GetName() == "d" {
+			newColPos = bindColPos
+			break
+		}
+		bindColPos++
+	}
+	require.NotEqual(t, int32(-1), newColPos)
+	require.Equal(t, newColPos, checkArgs[0].GetCol().GetColPos())
+
+	_, err = buildSingleStmt(mock, t, "ALTER TABLE t1 ADD COLUMN e INT CHECK (a > e);")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "column 'a'")
+}
+
+func TestAlterTableAddColumnPreservesNotEnforcedCheck(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	logicPlan, err := buildSingleStmt(mock, t, "ALTER TABLE t1 ADD COLUMN d INT CHECK (d > 0) NOT ENFORCED;")
+	require.NoError(t, err)
+	alter := logicPlan.GetDdl().GetAlterTable()
+	require.Len(t, alter.CopyTableDef.Checks, 1)
+	require.True(t, alter.CopyTableDef.Checks[0].NotEnforced)
+	require.Contains(t, alter.CopyTableDef.Checks[0].Name, "t1_copy_")
+	require.True(t, strings.HasSuffix(alter.CopyTableDef.Checks[0].Name, "_chk_1"))
+	require.Contains(t, alter.CreateTmpTableSql,
+		fmt.Sprintf("CONSTRAINT `%s` CHECK (`d` > 0) NOT ENFORCED", alter.CopyTableDef.Checks[0].Name))
+}
+
+func TestAlterTableAlterCheckEnforcementIsExplicitlyUnsupported(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	for _, sql := range []string{
+		"ALTER TABLE t1 ALTER CHECK chk_a ENFORCED",
+		"ALTER TABLE t1 ALTER CHECK chk_a NOT ENFORCED",
+	} {
+		_, err := buildSingleStmt(mock, t, sql)
+		require.ErrorContains(t, err, "ALTER TABLE ALTER CHECK enforcement is not supported")
+	}
+}
+
+func TestAlterTableRenameRejectsCheckDependentColumn(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	// Give single_idx_t a CHECK (val > 0) whose column ref points at val by
+	// position. Renaming val would leave the check's OriginSql pointing at a
+	// column that no longer exists, so the COPY rebuild would fail; reject the
+	// rename up front instead.
+	tableDef := mock.ctxt.tables["single_idx_t"]
+	valPos := int32(-1)
+	for i, c := range tableDef.Cols {
+		if c.Name == "val" {
+			valPos = int32(i)
+		}
+	}
+	if valPos < 0 {
+		t.Fatalf("single_idx_t must have a val column")
+	}
+	checkExpr, err := BindFuncExprImplByPlanExpr(context.TODO(), ">", []*plan.Expr{
+		{
+			Typ:  tableDef.Cols[valPos].Typ,
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{Name: "val", ColPos: valPos}},
+		},
+		MakePlan2Int32ConstExprWithType(0),
+	})
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+	tableDef.Checks = []*plan.CheckDef{{Name: "chk_val_positive", Check: checkExpr}}
+
+	_, err = buildSingleStmt(mock, t, "ALTER TABLE single_idx_t CHANGE COLUMN val val2 INT;")
+	assert.ErrorContains(t, err, "check constraint")
+
+	_, err = buildSingleStmt(mock, t, "ALTER TABLE single_idx_t CHANGE COLUMN val val BIGINT;")
+	assert.ErrorContains(t, err, "check constraint")
+
+	_, err = buildSingleStmt(mock, t, "ALTER TABLE single_idx_t RENAME COLUMN val TO val2;")
+	assert.ErrorContains(t, err, "check constraint")
+
+	// Renaming an unrelated column must still be allowed.
+	if _, err := buildSingleStmt(mock, t, "ALTER TABLE single_idx_t RENAME COLUMN id TO id2;"); err != nil {
+		t.Fatalf("renaming a column no check depends on should be allowed: %+v", err)
+	}
 }
 
 func TestAlterTableRejectsNonGeometrySRIDAttribute(t *testing.T) {

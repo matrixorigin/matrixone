@@ -1428,6 +1428,16 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			selectNode = builder.qry.Nodes[lastNodeID]
 		}
 	} else if onDupAction == plan.Node_IGNORE {
+		// INSERT IGNORE: drop CHECK-violating rows here, before the unique-key
+		// dedup, so that a later valid row sharing a key with a dropped invalid
+		// row still survives. MySQL evaluates CHECK per row before conflict
+		// handling; asserting after dedup would let the surviving (invalid) first
+		// row mask a valid later duplicate and end up inserting nothing.
+		if lastNodeID, err = appendCheckConstraintPlan(builder, bindCtx, tableDef, lastNodeID, selectTag, colName2Idx, true); err != nil {
+			return 0, err
+		}
+		selectNode = builder.qry.Nodes[lastNodeID]
+
 		fkEnabled, err := builder.modernInsertFkCheckEnabled(tableDef)
 		if err != nil {
 			return 0, err
@@ -2522,6 +2532,16 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		dmlNode.UpdateCtxList = append(dmlNode.UpdateCtxList, updateCtx)
 	}
 
+	// CHECK enforcement. INSERT IGNORE is handled earlier (before the unique-key
+	// dedup) so that a later valid row sharing a key with a dropped invalid row
+	// still survives; here we only assert-and-fail for the non-IGNORE modes.
+	if onDupAction != plan.Node_IGNORE {
+		lastNodeID, err = appendCheckConstraintPlan(builder, bindCtx, tableDef, lastNodeID, selectTag, colName2Idx, false)
+		if err != nil {
+			return 0, err
+		}
+	}
+
 	dmlNode.Children = append(dmlNode.Children, lastNodeID)
 	lastNodeID = builder.appendNode(dmlNode, bindCtx)
 
@@ -2833,6 +2853,9 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 	genColIdxToProj2Pos := make(map[int]int)
 	generatedColIdxs := make([]int, 0)
 
+	// colName2Idx values written in this loop are final select/projection
+	// positions. CHECK filters and DML update contexts consume those positions,
+	// not table definition ordinals.
 	for i, col := range tableDef.Cols {
 		if oldExpr, exists := insertColToExpr[col.Name]; exists {
 			colIdxToProjPos[int32(i)] = int32(len(projList1))
@@ -2846,6 +2869,7 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 				},
 			})
 			projList1 = append(projList1, oldExpr)
+			colName2Idx[tableDef.Name+"."+col.Name] = int32(len(projList2) - 1)
 		} else if col.Name == catalog.Row_ID {
 			continue
 		} else if col.Name == catalog.CPrimaryKeyColName {
@@ -2866,6 +2890,7 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 					},
 				},
 			})
+			colName2Idx[tableDef.Name+"."+col.Name] = int32(len(projList2) - 1)
 		} else if hasCompClusterBy && col.Name == tableDef.ClusterBy.Name {
 			//names := util.SplitCompositeClusterByColumnName(tableDef.ClusterBy.Name)
 			//args := make([]*plan.Expr, len(names))
@@ -2885,6 +2910,7 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 					},
 				},
 			})
+			colName2Idx[tableDef.Name+"."+col.Name] = int32(len(projList2) - 1)
 		} else if col.GeneratedCol != nil {
 			// MatrixOne currently materializes both STORED and VIRTUAL generated columns on write.
 			// Defer them until base/default columns are in projList1 so forward references resolve.
@@ -2893,6 +2919,7 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 			generatedColIdxs = append(generatedColIdxs, i)
 			projList1 = append(projList1, nil)
 			projList2 = append(projList2, nil)
+			colName2Idx[tableDef.Name+"."+col.Name] = int32(len(projList2) - 1)
 		} else {
 			defExpr, err := getDefaultExpr(builder.GetContext(), col)
 			if err != nil {
@@ -2918,9 +2945,8 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 				},
 			})
 			projList1 = append(projList1, defExpr)
+			colName2Idx[tableDef.Name+"."+col.Name] = int32(len(projList2) - 1)
 		}
-
-		colName2Idx[tableDef.Name+"."+col.Name] = int32(i)
 	}
 
 	for _, i := range generatedColIdxs {

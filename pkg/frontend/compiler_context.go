@@ -88,6 +88,15 @@ func (tcc *TxnCompilerContext) GetLowerCaseTableNames() int64 {
 	return val.(int64)
 }
 
+// GetParserSQLMode returns the exact session SQL mode used to parse the
+// statement. Planner metadata that must later reparse SQL should prefer this
+// over resolving sql_mode again through the generic variable interface.
+func (tcc *TxnCompilerContext) GetParserSQLMode() string {
+	tcc.mu.Lock()
+	defer tcc.mu.Unlock()
+	return sessionSQLModeForParser(tcc.execCtx.ses)
+}
+
 func (tcc *TxnCompilerContext) SetExecCtx(execCtx *ExecCtx) {
 	tcc.mu.Lock()
 	defer tcc.mu.Unlock()
@@ -250,6 +259,60 @@ func (tcc *TxnCompilerContext) DatabaseExists(name string, snapshot *plan2.Snaps
 	}
 
 	return true
+}
+
+func (tcc *TxnCompilerContext) CheckConstraintNameExists(dbName, excludedTable, name string) (bool, error) {
+	ctx := tcc.execCtx.reqCtx
+	txn := tcc.GetTxnHandler().GetTxn()
+	db, err := tcc.GetTxnHandler().GetStorage().Database(ctx, dbName, txn)
+	if err != nil {
+		// During CREATE TABLE planning the catalog snapshot may report an
+		// otherwise valid, newly created database as ExpectedEOB. The actual
+		// CREATE still validates database existence during execution; for name
+		// lookup this state means there is no visible conflicting CHECK.
+		if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+			return false, nil
+		}
+		return false, err
+	}
+	tableNames, err := db.Relations(ctx)
+	if err != nil {
+		// The engine uses ExpectedEOB to represent an empty relation list.
+		// An empty schema has no CHECK names to conflict with the new table.
+		if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+			return false, nil
+		}
+		return false, err
+	}
+	for _, tableName := range tableNames {
+		if tableName == excludedTable {
+			continue
+		}
+		_, tableDef, err := tcc.Resolve(dbName, tableName, nil)
+		if err != nil {
+			// Relations can still contain a table that became invisible in the
+			// current snapshot (for example, after DROP TABLE in the same BVT
+			// database). Such a table cannot own a conflicting visible CHECK
+			// name, so ignore the catalog end-of-batch/no-such-table race.
+			if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) ||
+				moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
+				continue
+			}
+			return false, err
+		}
+		if tableDef == nil {
+			continue
+		}
+		for _, check := range tableDef.Checks {
+			// MySQL CHECK constraint names are case-sensitive regardless of
+			// lower_case_table_names.
+			if plan2.NormalizeCheckConstraintName(check.Name) ==
+				plan2.NormalizeCheckConstraintName(name) {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
 }
 
 func (tcc *TxnCompilerContext) GetDatabaseId(dbName string, snapshot *plan2.Snapshot) (uint64, error) {
@@ -453,6 +516,7 @@ func (tcc *TxnCompilerContext) ResolveById(tableId uint64, snapshot *plan2.Snaps
 		Obj:        returnTableID,
 	}
 	tableDef := plan2.CloneTableDefForPlan(table.GetTableDef(tempCtx), true)
+	plan2.RecoverCheckConstraintsFromCreateSql(tcc, tableDef)
 	return obj, tableDef, nil
 }
 
@@ -478,6 +542,7 @@ func (tcc *TxnCompilerContext) ResolveSubscriptionTableById(tableId uint64, subM
 		Obj:        returnTableID,
 	}
 	tableDef := plan2.CloneTableDefForPlan(table.GetTableDef(pubContext), true)
+	plan2.RecoverCheckConstraintsFromCreateSql(tcc, tableDef)
 	return obj, tableDef, nil
 }
 
@@ -525,6 +590,11 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string, snapshot
 	}
 	tableDef := plan2.CloneTableDefForPlan(table.GetTableDef(ctx), true)
 	tableDef.IsTemporary = isTmpTable
+
+	// Upgrade compatibility: tables created before CHECK constraints were
+	// persisted structurally carry them only in Createsql. Recover them so
+	// DML enforcement and SHOW CREATE keep working after a restart.
+	plan2.RecoverCheckConstraintsFromCreateSql(tcc, tableDef)
 
 	// convert
 	var subscriptionName string

@@ -4,7 +4,7 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//      http://www.apache.org/licenses/LICENSE-2.0
+//     http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -18,8 +18,9 @@ import (
 	"fmt"
 	"testing"
 
-	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/stretchr/testify/require"
+
+	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
 func TestCloneTableDefForPlan(t *testing.T) {
@@ -55,6 +56,19 @@ func TestCloneTableDefForPlan(t *testing.T) {
 	require.Nil(t, withoutCols.Cols)
 	require.Same(t, index, withoutCols.Indexes[0])
 	require.Same(t, pkey, withoutCols.Pkey)
+}
+
+func TestDeepCopyExprPreservesAuxID(t *testing.T) {
+	expr := &planpb.Expr{
+		AuxId:          planpb.CheckConstraintWarningFilterAuxID,
+		WarningMessage: "Check constraint 't_chk_1' is violated",
+	}
+
+	copied := DeepCopyExpr(expr)
+
+	require.NotSame(t, expr, copied)
+	require.Equal(t, planpb.CheckConstraintWarningFilterAuxID, copied.AuxId)
+	require.Equal(t, expr.WarningMessage, copied.WarningMessage)
 }
 
 var clonedTableDef *planpb.TableDef

@@ -2087,7 +2087,7 @@ Error information includes several elements: an error code, SQLSTATE value, and 
 */
 func (mp *MysqlProtocolImpl) sendErrPacket(errorCode uint16, sqlState, errorMessage string) error {
 	if mp.ses != nil {
-		mp.ses.GetErrInfo().push(errorCode, errorMessage)
+		mp.ses.setStatementError(errorCode, errorMessage)
 	}
 	errPkt := mp.makeErrPayload(errorCode, sqlState, errorMessage)
 	return mp.writePackets(errPkt)

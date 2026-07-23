@@ -936,6 +936,12 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 		BindingTags: []int32{finalProjTag},
 	}, bindCtx)
 
+	var err error
+	lastNodeID, err = appendCheckConstraintPlan(builder, bindCtx, tableDef, lastNodeID, finalProjTag, colName2Idx, false)
+	if err != nil {
+		return 0, err
+	}
+
 	// REPLACE into an irregular-index table: the finalProj image carries both the
 	// new row (base columns) and the matched old row's PK, so materialize it once
 	// and let the main plan, the insert maintenance (new entries) and the delete
@@ -1015,6 +1021,9 @@ func (builder *QueryBuilder) appendNodesForReplaceStmt(
 	genColIdxToProj2Pos := make(map[int]int, colCount)
 	generatedColIdxs := make([]int, 0)
 
+	// colName2Idx values written in this loop are final select/projection
+	// positions. CHECK filters and DML update contexts consume those positions,
+	// not table definition ordinals.
 	for i, col := range tableDef.Cols {
 		if oldExpr, exists := insertColToExpr[col.Name]; exists {
 			if !col.Typ.AutoIncr && replaceExprAlwaysStaticNull(oldExpr, builder.qry, 0) {
@@ -1031,6 +1040,7 @@ func (builder *QueryBuilder) appendNodesForReplaceStmt(
 				},
 			})
 			projList1 = append(projList1, oldExpr)
+			colName2Idx[tableDef.Name+"."+col.Name] = int32(len(projList2) - 1)
 		} else if col.Name == catalog.Row_ID {
 			continue
 		} else if col.Name == catalog.CPrimaryKeyColName {
@@ -1044,6 +1054,7 @@ func (builder *QueryBuilder) appendNodesForReplaceStmt(
 					},
 				},
 			})
+			colName2Idx[tableDef.Name+"."+col.Name] = int32(len(projList2) - 1)
 		} else if hasCompClusterBy && col.Name == tableDef.ClusterBy.Name {
 			clusterByExpr = makeClusterByExpr(tableDef, tableDef.Name2ColIndex)
 			projList2 = append(projList2, &plan.Expr{
@@ -1055,6 +1066,7 @@ func (builder *QueryBuilder) appendNodesForReplaceStmt(
 					},
 				},
 			})
+			colName2Idx[tableDef.Name+"."+col.Name] = int32(len(projList2) - 1)
 		} else if col.GeneratedCol != nil {
 			// MatrixOne currently materializes both STORED and VIRTUAL generated columns on write.
 			// Defer them until base/default columns are in projList1 so forward references resolve.
@@ -1063,6 +1075,7 @@ func (builder *QueryBuilder) appendNodesForReplaceStmt(
 			generatedColIdxs = append(generatedColIdxs, i)
 			projList1 = append(projList1, nil)
 			projList2 = append(projList2, nil)
+			colName2Idx[tableDef.Name+"."+col.Name] = int32(len(projList2) - 1)
 		} else {
 			defExpr, err := getDefaultExpr(builder.GetContext(), col)
 			if err != nil {
@@ -1088,9 +1101,8 @@ func (builder *QueryBuilder) appendNodesForReplaceStmt(
 				},
 			})
 			projList1 = append(projList1, defExpr)
+			colName2Idx[tableDef.Name+"."+col.Name] = int32(len(projList2) - 1)
 		}
-
-		colName2Idx[tableDef.Name+"."+col.Name] = int32(i)
 	}
 
 	for _, i := range generatedColIdxs {

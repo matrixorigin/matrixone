@@ -47,7 +47,15 @@ func (builder *QueryBuilder) bindLoad(stmt *tree.Load, bindCtx *BindContext) (in
 	// LOAD never carries ON DUPLICATE KEY UPDATE, so the irregular-index
 	// maintenance source is the pre-dedup new-row image set up inside
 	// appendDedupAndMultiUpdateNodesForBindInsert (insert-only, no old-row delete).
-	return builder.appendDedupAndMultiUpdateNodesForBindInsert(bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil, irregularIndexes)
+	var duplicateHandling []*tree.UpdateExpr
+	if _, ok := stmt.DuplicateHandling.(*tree.DuplicateKeyIgnore); ok {
+		// Use the INSERT IGNORE sentinel so CHECK/FK violations are filtered per
+		// row before dedup and duplicate keys are ignored instead of aborting LOAD.
+		duplicateHandling = []*tree.UpdateExpr{nil}
+	}
+	return builder.appendDedupAndMultiUpdateNodesForBindInsert(
+		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, duplicateHandling, irregularIndexes,
+	)
 }
 
 func (builder *QueryBuilder) bindExternalScan(

@@ -646,7 +646,9 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 			return nil, err
 		}
 	} else {
-		err = buildInsertPlans(ctx, builder, bindCtx, nil, objRef, newTableDef, lastNodeId, ifExistAutoPkCol, nil, nil)
+		_, ignoreMode := stmt.DuplicateHandling.(*tree.DuplicateKeyIgnore)
+		err = buildInsertPlans(ctx, builder, bindCtx, nil, objRef, newTableDef, lastNodeId,
+			ifExistAutoPkCol, nil, nil, ignoreMode)
 		if err != nil {
 			return nil, err
 		}

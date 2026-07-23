@@ -126,6 +126,7 @@ func buildInsertPlans(
 	objRef *ObjectRef, tableDef *TableDef, lastNodeId int32, ifExistAutoPkCol bool,
 	insertWithoutUniqueKeyMap map[string]bool,
 	ifInsertFromUniqueColMap map[string]bool,
+	ignoreMode bool,
 ) error {
 
 	var err error
@@ -151,6 +152,12 @@ func buildInsertPlans(
 
 	// add plan: -> preinsert -> sink
 	lastNodeId = appendPreInsertNode(builder, bindCtx, objRef, tableDef, lastNodeId, false)
+
+	lastNodeId, err = appendCheckConstraintPlanFromLastNodeWithMode(
+		builder, bindCtx, tableDef, lastNodeId, ignoreMode)
+	if err != nil {
+		return err
+	}
 
 	lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
 	sourceStep := builder.appendStep(lastNodeId)
@@ -195,10 +202,22 @@ func buildInsertPlans(
 }
 
 // buildUpdatePlans  build update plan.
-func buildUpdatePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, updatePlanCtx *dmlPlanCtx, addAffectedRows bool) error {
+func buildUpdatePlans(
+	ctx CompilerContext,
+	builder *QueryBuilder,
+	bindCtx *BindContext,
+	updatePlanCtx *dmlPlanCtx,
+	addAffectedRows bool,
+	ignoreMode bool,
+) error {
 	var err error
 	// sink_scan -> project -> [agg] -> [filter] -> sink
 	lastNodeId := appendSinkScanNode(builder, bindCtx, updatePlanCtx.sourceStep)
+	lastNodeId, err = appendLegacyUpdateCheckConstraintPlan(
+		builder, bindCtx, updatePlanCtx, lastNodeId, ignoreMode)
+	if err != nil {
+		return err
+	}
 	lastNodeId, err = makePreUpdateDeletePlan(ctx, builder, bindCtx, updatePlanCtx, lastNodeId)
 	if err != nil {
 		return err
@@ -277,6 +296,44 @@ func buildUpdatePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 		updatePlanCtx.updateColLength, sourceStep, addAffectedRows, updatePlanCtx.isFkRecursionCall, updatePlanCtx.updatePkCol,
 		updatePlanCtx.pkFilterExprs, partitionExpr, ifExistAutoPkCol, ifNeedCheckPkDup, indexSourceColTypes, fuzzymessage, nil, nil,
 		updatePlanCtx.updateColPosMap, nil)
+}
+
+func appendLegacyUpdateCheckConstraintPlan(
+	builder *QueryBuilder,
+	bindCtx *BindContext,
+	updatePlanCtx *dmlPlanCtx,
+	lastNodeID int32,
+	ignoreMode bool,
+) (int32, error) {
+	if !hasEnforcedCheckConstraint(updatePlanCtx.tableDef) {
+		return lastNodeID, nil
+	}
+
+	projection := getProjectionByLastNode(builder, lastNodeID)
+	tableColProjList := make([]*plan.Expr, len(updatePlanCtx.tableDef.Cols))
+	insertColIdx := 0
+	for tableColIdx, col := range updatePlanCtx.tableDef.Cols {
+		if col.Hidden && col.Name != catalog.FakePrimaryKeyColName {
+			continue
+		}
+		if insertColIdx >= len(updatePlanCtx.insertColPos) {
+			return 0, moerr.NewInternalErrorf(builder.GetContext(),
+				"cannot find updated column %s.%s for check constraint", updatePlanCtx.tableDef.Name, col.Name)
+		}
+		sourceColIdx := updatePlanCtx.insertColPos[insertColIdx]
+		insertColIdx++
+		if sourceColIdx < 0 || sourceColIdx >= len(projection) {
+			return 0, moerr.NewInternalErrorf(builder.GetContext(),
+				"cannot find updated column %s.%s for check constraint", updatePlanCtx.tableDef.Name, col.Name)
+		}
+		tableColProjList[tableColIdx] = projection[sourceColIdx]
+	}
+
+	// Keep the source projection intact: both the delete and insert branches
+	// consume it. Filtering here guarantees UPDATE IGNORE rejects a row before
+	// the legacy delete+insert implementation can remove its old image.
+	return appendCheckConstraintPlanWithTableColProjections(
+		builder, bindCtx, updatePlanCtx.tableDef, lastNodeID, tableColProjList, ignoreMode)
 }
 
 func getStepByNodeId(builder *QueryBuilder, nodeId int32) int {
@@ -738,7 +795,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 						upPlanCtx.isFkRecursionCall = true
 						upPlanCtx.updatePkCol = updatePk
 
-						err = buildUpdatePlans(ctx, builder, bindCtx, upPlanCtx, false)
+						err = buildUpdatePlans(ctx, builder, bindCtx, upPlanCtx, false, false)
 						putDmlPlanCtx(upPlanCtx)
 						if err != nil {
 							return err
@@ -784,7 +841,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 								upPlanCtx.isFkRecursionCall = true
 								upPlanCtx.updatePkCol = updatePk
 
-								err = buildUpdatePlans(ctx, builder, bindCtx, upPlanCtx, false)
+								err = buildUpdatePlans(ctx, builder, bindCtx, upPlanCtx, false, false)
 								putDmlPlanCtx(upPlanCtx)
 								if err != nil {
 									return err

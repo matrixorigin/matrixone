@@ -331,6 +331,8 @@ type BaseProcess struct {
 	// It follows MySQL semantics: -1 after a result-set statement (e.g. SELECT),
 	// 0 after DDL, and the affected row count after DML.
 	AffectedRows             *int64
+	WarningCount             *int64
+	CheckWarnings            *sync.Map
 	LoadLocalReader          *io.PipeReader
 	Aicm                     *defines.AutoIncrCacheManager
 	resolveVariableFunc      func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)
@@ -532,6 +534,56 @@ func (proc *Process) SetAffectedRows(num int64) {
 func (proc *Process) GetAffectedRows() int64 {
 	if proc.Base.AffectedRows != nil {
 		return atomic.LoadInt64(proc.Base.AffectedRows)
+	}
+	return 0
+}
+
+func (proc *Process) AddWarningCount(num int64) {
+	if proc.Base.WarningCount != nil {
+		atomic.AddInt64(proc.Base.WarningCount, num)
+	}
+}
+
+func (proc *Process) AddCheckWarning(message string, num int64) {
+	proc.AddWarningCount(num)
+	if proc.Base.CheckWarnings == nil || message == "" || num <= 0 {
+		return
+	}
+	value, _ := proc.Base.CheckWarnings.LoadOrStore(message, new(atomic.Int64))
+	value.(*atomic.Int64).Add(num)
+}
+
+func (proc *Process) ClearCheckWarnings() {
+	if proc.Base.CheckWarnings == nil {
+		return
+	}
+	proc.Base.CheckWarnings.Range(func(key, _ any) bool {
+		proc.Base.CheckWarnings.Delete(key)
+		return true
+	})
+}
+
+func (proc *Process) GetCheckWarnings() map[string]uint64 {
+	result := make(map[string]uint64)
+	if proc.Base.CheckWarnings == nil {
+		return result
+	}
+	proc.Base.CheckWarnings.Range(func(key, value any) bool {
+		result[key.(string)] = uint64(value.(*atomic.Int64).Load())
+		return true
+	})
+	return result
+}
+
+func (proc *Process) SetWarningCount(num int64) {
+	if proc.Base.WarningCount != nil {
+		atomic.StoreInt64(proc.Base.WarningCount, num)
+	}
+}
+
+func (proc *Process) GetWarningCount() int64 {
+	if proc.Base.WarningCount != nil {
+		return atomic.LoadInt64(proc.Base.WarningCount)
 	}
 	return 0
 }

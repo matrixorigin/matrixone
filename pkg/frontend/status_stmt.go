@@ -15,10 +15,12 @@
 package frontend
 
 import (
+	"math"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/util"
 
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
@@ -190,8 +192,20 @@ func (resper *MysqlResp) respStatus(ses *Session,
 		return nil
 	}
 	var rspLen uint64
+	var warningCount uint64
 	if execCtx.runResult != nil {
 		rspLen = execCtx.runResult.AffectRows
+		warningCount = execCtx.runResult.WarningCount
+	}
+	var checkWarnings []util.CheckWarning
+	if execCtx.runResult != nil {
+		checkWarnings = execCtx.runResult.CheckWarnings
+	}
+	ses.setCheckConstraintWarnings(warningCount, checkWarnings)
+	newResponse := func() *Response {
+		res := setResponse(ses, execCtx.isLastStmt, rspLen)
+		res.warnings = uint16(min(warningCount, uint64(math.MaxUint16)))
+		return res
 	}
 
 	switch execCtx.stmt.(type) {
@@ -202,7 +216,7 @@ func (resper *MysqlResp) respStatus(ses *Session,
 		}
 		ses.SetSeqLastValue(execCtx.proc)
 
-		res := setResponse(ses, execCtx.isLastStmt, rspLen)
+		res := newResponse()
 		if err2 := resper.mysqlRrWr.WriteResponse(execCtx.reqCtx, res); err2 != nil {
 			err = moerr.NewInternalErrorf(execCtx.reqCtx, "routine send response failed. error:%v ", err2)
 			logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, err)
@@ -216,7 +230,7 @@ func (resper *MysqlResp) respStatus(ses *Session,
 				return err
 			}
 		} else {
-			res := setResponse(ses, execCtx.isLastStmt, rspLen)
+			res := newResponse()
 			if err2 := resper.mysqlRrWr.WriteResponse(execCtx.reqCtx, res); err2 != nil {
 				err = moerr.NewInternalErrorf(execCtx.reqCtx, "routine send response failed. error:%v ", err2)
 				logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, err)
@@ -227,7 +241,7 @@ func (resper *MysqlResp) respStatus(ses *Session,
 	case *tree.Deallocate:
 		//we will not send response in COM_STMT_CLOSE command
 		if ses.GetCmd() != COM_STMT_CLOSE {
-			res := setResponse(ses, execCtx.isLastStmt, rspLen)
+			res := newResponse()
 			if err2 := resper.mysqlRrWr.WriteResponse(execCtx.reqCtx, res); err2 != nil {
 				err = moerr.NewInternalErrorf(execCtx.reqCtx, "routine send response failed. error:%v ", err2)
 				logStatementStatus(execCtx.reqCtx, ses, execCtx.stmt, fail, err)
@@ -235,7 +249,7 @@ func (resper *MysqlResp) respStatus(ses *Session,
 			}
 		}
 	case *tree.CreateTable:
-		res := setResponse(ses, execCtx.isLastStmt, rspLen)
+		res := newResponse()
 		if len(execCtx.proc.GetSessionInfo().SeqDeleteKeys) != 0 {
 			ses.DeleteSeqValues(execCtx.proc)
 		}
@@ -251,7 +265,7 @@ func (resper *MysqlResp) respStatus(ses *Session,
 			return err
 		}
 	default:
-		res := setResponse(ses, execCtx.isLastStmt, rspLen)
+		res := newResponse()
 
 		if len(execCtx.proc.GetSessionInfo().SeqDeleteKeys) != 0 {
 			ses.DeleteSeqValues(execCtx.proc)

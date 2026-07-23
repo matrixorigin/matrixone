@@ -61,6 +61,31 @@ func TestConvertDBEOBToNoSuchTablePassThrough(t *testing.T) {
 	require.Same(t, want, got)
 }
 
+func TestCheckConstraintCreateSQLSkipsNonSQLRelations(t *testing.T) {
+	for _, kind := range []string{catalog.SystemExternalRel, catalog.SystemViewRel} {
+		_, ok := checkConstraintCreateSQL([]engine.Property{
+			{Key: catalog.SystemRelAttr_Kind, Value: kind},
+			{Key: catalog.SystemRelAttr_CreateSQL, Value: `{"filepath":"s3://bucket/file"}`},
+		})
+		require.False(t, ok)
+	}
+
+	sql, ok := checkConstraintCreateSQL([]engine.Property{
+		{Key: catalog.SystemRelAttr_Kind, Value: catalog.SystemOrdinaryRel},
+		{Key: catalog.SystemRelAttr_CreateSQL, Value: "CREATE TABLE t(a INT CHECK(a > 0))"},
+	})
+	require.True(t, ok)
+	require.Equal(t, "CREATE TABLE t(a INT CHECK(a > 0))", sql)
+}
+
+func TestOptimisticCheckConstraintSchemaTouchSQL(t *testing.T) {
+	sql := optimisticCheckConstraintSchemaTouchSQL("db'name")
+	require.Equal(t,
+		"UPDATE `mo_catalog`.`mo_database` SET `dat_createsql` = `dat_createsql` "+
+			"WHERE `account_id` = current_account_id() AND `datname` = 'db''name'",
+		sql)
+}
+
 func TestTableScopedDDLDatabaseEOBMapsToNoSuchTable(t *testing.T) {
 	newCompileWithStubEngine := func(t *testing.T, eng *stubEngine, sql string) *Compile {
 		t.Helper()

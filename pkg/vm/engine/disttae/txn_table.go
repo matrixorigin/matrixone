@@ -1450,6 +1450,7 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 		var primarykey *plan.PrimaryKeyDef
 		var indexes []*plan.IndexDef
 		var refChildTbls []uint64
+		var checks []*plan.CheckDef
 		var hasRowId bool
 		var partition *plan.Partition
 
@@ -1589,6 +1590,7 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 			RefChildTbls:  refChildTbls,
 			ClusterBy:     clusterByDef,
 			Indexes:       indexes,
+			Checks:        checks,
 			Version:       tbl.version,
 			DbId:          tbl.GetDBID(ctx),
 			Partition:     partition,

@@ -59,6 +59,20 @@ func (m *MockCompilerContext) GetLowerCaseTableNames() int64 {
 	return 1
 }
 
+func (m *MockCompilerContext) CheckConstraintNameExists(_ string, excludedTable, name string) (bool, error) {
+	for tableName, tableDef := range m.tables {
+		if tableName == excludedTable {
+			continue
+		}
+		for _, check := range tableDef.Checks {
+			if check.Name == name {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
 func (m *MockCompilerContext) GetViews() []string {
 	return nil
 }

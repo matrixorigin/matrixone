@@ -705,6 +705,7 @@ func getTableDef(tblItem *TableItem, coldefs []engine.TableDef) (*plan.TableDef,
 	var primarykey *plan.PrimaryKeyDef
 	var indexes []*plan.IndexDef
 	var refChildTbls []uint64
+	var checks []*plan.CheckDef
 	var partition *plan.Partition
 
 	tableDef := make([]engine.TableDef, 0)
@@ -867,6 +868,7 @@ func getTableDef(tblItem *TableItem, coldefs []engine.TableDef) (*plan.TableDef,
 		RefChildTbls:   refChildTbls,
 		ClusterBy:      clusterByDef,
 		Indexes:        indexes,
+		Checks:         checks,
 		Version:        tblItem.Version,
 		DbId:           tblItem.DatabaseId,
 		Partition:      partition,

@@ -60,6 +60,58 @@ func TestDebug(t *testing.T) {
 	}
 }
 
+func TestCheckConstraintEnforcementFormat(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		sql        string
+		want       string
+		notContain string
+	}{
+		{
+			name:       "table default",
+			sql:        "create table t (a int, check (a > 0))",
+			want:       "check (a > 0)",
+			notContain: "enforced",
+		},
+		{
+			name: "table explicit enforced",
+			sql:  "create table t (a int, check (a > 0) enforced)",
+			want: "check (a > 0) enforced",
+		},
+		{
+			name: "table explicit not enforced",
+			sql:  "create table t (a int, check (a > 0) not enforced)",
+			want: "check (a > 0) not enforced",
+		},
+		{
+			name:       "column default",
+			sql:        "create table t (a int check (a > 0))",
+			want:       "check (a > 0)",
+			notContain: "enforced",
+		},
+		{
+			name: "column explicit enforced",
+			sql:  "create table t (a int check (a > 0) enforced)",
+			want: "check (a > 0) enforced",
+		},
+		{
+			name: "column explicit not enforced",
+			sql:  "create table t (a int check (a > 0) not enforced)",
+			want: "check (a > 0) not enforced",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ast, err := ParseOne(context.TODO(), tc.sql, 1)
+			require.NoError(t, err)
+			got := tree.String(ast, dialect.MYSQL)
+			require.Contains(t, got, tc.want)
+			if tc.notContain != "" {
+				require.NotContains(t, got, tc.notContain)
+			}
+		})
+	}
+}
+
 func TestSQLModeParserModes(t *testing.T) {
 	t.Run("ansi quotes changes double quoted token from string to identifier", func(t *testing.T) {
 		stmt, err := ParseOneWithSQLMode(context.Background(), `select "abc"`, 1, "")

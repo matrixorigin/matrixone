@@ -41,9 +41,27 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
+
+func TestStatementErrorReplacesCheckWarnings(t *testing.T) {
+	ses := &Session{
+		errInfo:  &errInfo{maxCnt: 64},
+		warnInfo: &errInfo{maxCnt: 64},
+	}
+	ses.setCheckConstraintWarnings(0, []util.CheckWarning{{
+		Count:   1,
+		Message: "Check constraint 't_chk_1' is violated",
+	}})
+	ses.setStatementError(moerr.ER_PARSE_ERROR, "syntax error")
+
+	require.Equal(t, []string{"Error"}, ses.warnInfo.levels)
+	require.Equal(t, []uint16{moerr.ER_PARSE_ERROR}, ses.warnInfo.codes)
+	require.Equal(t, []string{"syntax error"}, ses.warnInfo.msgs)
+	require.Equal(t, []string{"Error"}, ses.errInfo.levels)
+}
 
 type legacyZeroRunSQLTxnOperator struct {
 	client.TxnOperator

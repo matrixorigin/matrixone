@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -229,7 +230,12 @@ func TestConstructCreateTableSQLDoesNotMutateIndexComments(t *testing.T) {
 	require.Contains(t, first, `COMMENT 'O''Reilly'`)
 }
 
-func Test_ShowCreateTableUsesStoredDDLForChecks(t *testing.T) {
+func Test_ShowCreateTableRendersStructuredChecks(t *testing.T) {
+	// SHOW CREATE renders CHECK constraints from the structured TableDef.Checks
+	// (each check's formatted OriginSql), not from the raw Createsql text. This
+	// keeps the output correct after ALTER ADD/DROP CHECK, which updates Checks
+	// but leaves Createsql untouched. The tradeoff is that the predicate is
+	// re-rendered in the binder's normalized form (lowercase keywords).
 	const sql = `CREATE TABLE t_numeric_types (
 		id BIGINT NOT NULL AUTO_INCREMENT,
 		c_age INT NULL,
@@ -250,15 +256,146 @@ func Test_ShowCreateTableUsesStoredDDLForChecks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("construct show create failed: %+v", err)
 	}
-	if !strings.Contains(showSQL, "CONSTRAINT chk_age CHECK (c_age IS NULL OR (c_age >= 0 AND c_age <= 200))") {
+	if !strings.Contains(showSQL, "CONSTRAINT `chk_age` CHECK (`c_age` is null or (`c_age` >= 0 and `c_age` <= 200))") {
 		t.Fatalf("expected chk_age check constraint in show create output: %s", showSQL)
 	}
-	if !strings.Contains(showSQL, "CONSTRAINT chk_score CHECK (c_score IS NULL OR (c_score >= 0 AND c_score <= 100))") {
+	if !strings.Contains(showSQL, "CONSTRAINT `chk_score` CHECK (`c_score` is null or (`c_score` >= 0 and `c_score` <= 100))") {
 		t.Fatalf("expected chk_score check constraint in show create output: %s", showSQL)
 	}
 	if !strings.Contains(showSQL, "PRIMARY KEY (`id`)") {
 		t.Fatalf("expected canonical primary key output to be preserved: %s", showSQL)
 	}
+}
+
+func Test_ShowCreateTableRendersAnonymousCheck(t *testing.T) {
+	// MySQL exposes the generated table_name_chk_N constraint name in SHOW CREATE.
+	const sql = `CREATE TABLE t_anon_chk (
+		id INT NOT NULL,
+		v INT NULL,
+		PRIMARY KEY (id),
+		CHECK (v > 0)
+	) ENGINE=InnoDB`
+
+	mock := NewMockOptimizer(false)
+	tableDef, err := buildTestCreateTableStmt(mock, sql)
+	if err != nil {
+		t.Fatalf("build create table failed: %+v", err)
+	}
+	require.Len(t, tableDef.Checks, 1)
+	require.True(t, tableDef.Checks[0].IsGeneratedName)
+
+	showSQL, _, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, nil, false, nil)
+	if err != nil {
+		t.Fatalf("construct show create failed: %+v", err)
+	}
+	require.Contains(t, showSQL, "CONSTRAINT `t_anon_chk_chk_1` CHECK (`v` > 0)")
+}
+
+func TestShowCreateTablePreservesExplicitInternalPrefixCheckName(t *testing.T) {
+	const sql = `CREATE TABLE t_named_chk (
+		a INT,
+		CONSTRAINT __mo_chk_1 CHECK (a > 0)
+	)`
+
+	mock := NewMockOptimizer(false)
+	tableDef, err := buildTestCreateTableStmt(mock, sql)
+	require.NoError(t, err)
+	require.Len(t, tableDef.Checks, 1)
+	require.False(t, tableDef.Checks[0].IsGeneratedName)
+
+	showSQL, _, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, nil, false, nil)
+	require.NoError(t, err)
+	require.Contains(t, showSQL, "CONSTRAINT `__mo_chk_1` CHECK (`a` > 0)")
+	stmt, err := mysql.ParseOne(context.Background(), showSQL, 1)
+	require.NoError(t, err, "SHOW CREATE output must preserve the explicit name: %s", showSQL)
+	stmt.Free()
+}
+
+// Test_ShowCreateTableChecksSurviveDeepCopy guards the regression where
+// DeepCopyTableDef dropped CheckDef.OriginSql. The production Resolve path runs
+// every table through CopyTableDef -> DeepCopyTableDef, so a lost OriginSql
+// makes SHOW CREATE (which renders CHECK from OriginSql) silently omit every
+// constraint on ordinary tables. The other SHOW CREATE tests build the TableDef
+// directly and never exercise the deep copy, so this one does.
+func Test_ShowCreateTableChecksSurviveDeepCopy(t *testing.T) {
+	const sql = `CREATE TABLE t_deepcopy_chk (
+		id INT NOT NULL,
+		v INT NULL,
+		PRIMARY KEY (id),
+		CONSTRAINT chk_v CHECK (v > 0)
+	) ENGINE=InnoDB`
+
+	mock := NewMockOptimizer(false)
+	tableDef, err := buildTestCreateTableStmt(mock, sql)
+	if err != nil {
+		t.Fatalf("build create table failed: %+v", err)
+	}
+	if len(tableDef.Checks) == 0 || tableDef.Checks[0].OriginSql == "" {
+		t.Fatalf("precondition: built TableDef must carry a check with OriginSql: %#v", tableDef.Checks)
+	}
+
+	copied := DeepCopyTableDef(tableDef, true)
+	if len(copied.Checks) == 0 || copied.Checks[0].OriginSql == "" {
+		t.Fatalf("DeepCopyTableDef must preserve CheckDef.OriginSql, got: %#v", copied.Checks)
+	}
+
+	showSQL, _, err := ConstructCreateTableSQL(&mock.ctxt, copied, nil, false, nil)
+	if err != nil {
+		t.Fatalf("construct show create failed: %+v", err)
+	}
+	if !strings.Contains(showSQL, "CONSTRAINT `chk_v` CHECK (`v` > 0)") {
+		t.Fatalf("check constraint must survive deep copy into show create output: %s", showSQL)
+	}
+}
+
+func TestDeepCopyTableDefPreservesGeneratedCheckNameMarker(t *testing.T) {
+	tableDef := &plan.TableDef{
+		Checks: []*plan.CheckDef{{
+			Name:            "__mo_chk_1",
+			OriginSql:       "`a` > 0",
+			IsGeneratedName: true,
+			NotEnforced:     true,
+		}},
+	}
+
+	copied := DeepCopyTableDef(tableDef, false)
+	require.Len(t, copied.Checks, 1)
+	require.True(t, copied.Checks[0].IsGeneratedName)
+	require.True(t, copied.Checks[0].NotEnforced)
+}
+
+func TestShowCreateTablePreservesRecoveredNotEnforcedCheck(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	tableDef := mock.ctxt.tables["t1"]
+	tableDef.Checks = nil
+	tableDef.Createsql = "CREATE TABLE t1 (a INT, b INT, CHECK (a > 0) NOT ENFORCED)"
+	RecoverCheckConstraintsFromCreateSql(&mock.ctxt, tableDef)
+	require.Len(t, tableDef.Checks, 1)
+	require.True(t, tableDef.Checks[0].NotEnforced)
+
+	showSQL, _, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, nil, false, nil)
+	require.NoError(t, err)
+	require.Contains(t, showSQL, "CHECK (`a` > 0) NOT ENFORCED")
+}
+
+func TestShowCreateTableQuotesCheckIdentifiersForRoundTrip(t *testing.T) {
+	const sql = "CREATE TABLE t_quoted_checks (" +
+		"`select` INT, `has space` INT, `tick``name` INT, " +
+		"CHECK (`select` > 0), CHECK (`has space` > 0), CHECK (`tick``name` > 0))"
+
+	mock := NewMockOptimizer(false)
+	tableDef, err := buildTestCreateTableStmt(mock, sql)
+	require.NoError(t, err)
+	require.Len(t, tableDef.Checks, 3)
+	require.Equal(t, "`select` > 0", tableDef.Checks[0].OriginSql)
+	require.Equal(t, "`has space` > 0", tableDef.Checks[1].OriginSql)
+	require.Equal(t, "`tick``name` > 0", tableDef.Checks[2].OriginSql)
+
+	showSQL, _, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, nil, false, nil)
+	require.NoError(t, err)
+	stmt, err := mysql.ParseOne(context.Background(), showSQL, 1)
+	require.NoError(t, err, "SHOW CREATE output must be executable: %s", showSQL)
+	stmt.Free()
 }
 
 func Test_extractTopLevelCheckDefs(t *testing.T) {
@@ -271,12 +408,114 @@ func Test_extractTopLevelCheckDefs(t *testing.T) {
 	if len(checks) != 2 {
 		t.Fatalf("expected 2 top-level check defs, got %d: %#v", len(checks), checks)
 	}
-	if checks[0] != "CONSTRAINT chk_id CHECK(id > 0)" {
+	if checks[0] != "CONSTRAINT `chk_id` CHECK (`id` > 0)" {
 		t.Fatalf("unexpected first check def: %s", checks[0])
 	}
-	if checks[1] != "CHECK(score>0)" {
+	if checks[1] != "CHECK (`score` > 0)" {
 		t.Fatalf("unexpected second check def: %s", checks[1])
 	}
+}
+
+func TestConstructCreateTableSQLPreservesLegacyChecksWithoutCompilerContext(t *testing.T) {
+	tableDef := &plan.TableDef{
+		Name:      "legacy_checks",
+		DbName:    "test",
+		TableType: catalog.SystemOrdinaryRel,
+		Createsql: "CREATE TABLE legacy_checks (a INT, CONSTRAINT chk_a CHECK (a > 0), CHECK (a < 10) NOT ENFORCED)",
+		Cols: []*plan.ColDef{{
+			Name:       "a",
+			Typ:        plan.Type{Id: int32(types.T_int32)},
+			Default:    &plan.Default{NullAbility: true},
+			OriginName: "a",
+		}},
+	}
+
+	createSQL, _, err := ConstructCreateTableSQL(nil, tableDef, nil, true, nil)
+	require.NoError(t, err)
+	require.Contains(t, createSQL, "CONSTRAINT `chk_a` CHECK (`a` > 0)")
+	require.Contains(t, createSQL, "CHECK (`a` < 10) NOT ENFORCED")
+}
+
+func TestConstructCreateTableSQLUsesPersistedSQLModeWithoutCompilerContext(t *testing.T) {
+	mode := "ANSI_QUOTES"
+	tableDef := &plan.TableDef{
+		Name:      "legacy_ansi_check",
+		DbName:    "test",
+		TableType: catalog.SystemOrdinaryRel,
+		Createsql: addCheckSQLModeMarker(
+			`CREATE TABLE legacy_ansi_check (a INT, CHECK ("a" > 0))`, &mode),
+		Cols: []*plan.ColDef{{
+			Name:       "a",
+			Typ:        plan.Type{Id: int32(types.T_int32)},
+			Default:    &plan.Default{NullAbility: true},
+			OriginName: "a",
+		}},
+	}
+
+	createSQL, _, err := ConstructCreateTableSQL(nil, tableDef, nil, true, nil)
+	require.NoError(t, err)
+	require.Contains(t, createSQL, "CHECK (`a` > 0)")
+	require.NotContains(t, createSQL, `CHECK ('a' > 0)`)
+}
+
+func TestConstructCreateTableSQLPreservesLegacyColumnChecksWithoutCompilerContext(t *testing.T) {
+	tableDef := &plan.TableDef{
+		Name:      "legacy_column_checks",
+		DbName:    "test",
+		TableType: catalog.SystemOrdinaryRel,
+		Createsql: "CREATE TABLE legacy_column_checks (a INT CHECK (a > 0), b INT CONSTRAINT chk_b CHECK (b < 10) NOT ENFORCED)",
+		Cols: []*plan.ColDef{
+			{
+				Name:       "a",
+				Typ:        plan.Type{Id: int32(types.T_int32)},
+				Default:    &plan.Default{NullAbility: true},
+				OriginName: "a",
+			},
+			{
+				Name:       "b",
+				Typ:        plan.Type{Id: int32(types.T_int32)},
+				Default:    &plan.Default{NullAbility: true},
+				OriginName: "b",
+			},
+		},
+	}
+
+	createSQL, _, err := ConstructCreateTableSQL(nil, tableDef, nil, true, nil)
+	require.NoError(t, err)
+	require.Contains(t, createSQL, "CHECK (`a` > 0)")
+	require.Contains(t, createSQL, "CONSTRAINT `chk_b` CHECK (`b` < 10) NOT ENFORCED")
+
+	stmt, err := mysql.ParseOne(context.Background(), createSQL, 1)
+	require.NoError(t, err, "generated legacy CREATE TABLE must be executable: %s", createSQL)
+	stmt.Free()
+}
+
+func TestConstructCreateTableSQLPreservesLegacyCheckDefinitionOrder(t *testing.T) {
+	tableDef := &plan.TableDef{
+		Name:      "legacy_check_order",
+		DbName:    "tpch",
+		TableType: catalog.SystemOrdinaryRel,
+		Createsql: "CREATE TABLE legacy_check_order (a INT CONSTRAINT __mo_chk_1 CHECK (a > 0), b INT, CHECK (b > 0))",
+		Cols: []*plan.ColDef{
+			{Name: "a", Typ: plan.Type{Id: int32(types.T_int32)}, Default: &plan.Default{NullAbility: true}, OriginName: "a"},
+			{Name: "b", Typ: plan.Type{Id: int32(types.T_int32)}, Default: &plan.Default{NullAbility: true}, OriginName: "b"},
+		},
+	}
+
+	createSQL, _, err := ConstructCreateTableSQL(nil, tableDef, nil, true, nil)
+	require.NoError(t, err)
+	namedPos := strings.Index(createSQL, "CONSTRAINT `__mo_chk_1` CHECK (`a` > 0)")
+	anonymousPos := strings.Index(createSQL, "CHECK (`b` > 0)")
+	require.NotEqual(t, -1, namedPos)
+	require.NotEqual(t, -1, anonymousPos)
+	require.Less(t, namedPos, anonymousPos)
+
+	stmt, err := mysql.ParseOne(context.Background(), createSQL, 1)
+	require.NoError(t, err, "generated legacy CREATE TABLE must preserve replayable constraint order: %s", createSQL)
+	stmt.Free()
+
+	_, err = runOneStmt(NewMockOptimizer(false), t, createSQL)
+	require.NoError(t, err, "replaying legacy CREATE TABLE must not create duplicate generated CHECK names: %s", createSQL)
 }
 
 func Test_SingleShowCreateTable(t *testing.T) {

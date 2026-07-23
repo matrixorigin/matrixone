@@ -91,6 +91,13 @@ func updateRenameColumnInTableDef(
 		return nil, err
 	}
 
+	// A CHECK constraint's OriginSql still references the old column name, so the
+	// COPY-algorithm rebuild would regenerate a CREATE TABLE that no longer parses.
+	// Reject the rename rather than silently corrupt the constraint.
+	if err := checkColumnWithCheckDependency(ctx.GetContext(), tableDef, oldColName); err != nil {
+		return nil, err
+	}
+
 	// Check if the new column name is valid and conflicts with internal hidden columns
 	if err := checkColumnNameValid(ctx.GetContext(), newColName); err != nil {
 		return nil, err

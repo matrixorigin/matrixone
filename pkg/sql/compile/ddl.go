@@ -553,7 +553,10 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 	}
 
 	if qry.GetCopyTableDef() != nil {
-		oldCt = engine.PlanDefToCstrDef(qry.GetCopyTableDef())
+		oldCt, err = engine.PlanDefToCstrDef(qry.GetCopyTableDef())
+		if err != nil {
+			return err
+		}
 	} else {
 		oldCt, err = GetConstraintDef(c.proc.Ctx, rel)
 		if err != nil {
@@ -1299,6 +1302,81 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 	return nil
 }
 
+func validateCheckConstraintNamesAfterSchemaLock(
+	c *Compile,
+	db engine.Database,
+	excludedTable string,
+	newChecks []*plan.CheckDef,
+) error {
+	wanted := make(map[string]string, len(newChecks))
+	for _, check := range newChecks {
+		wanted[plan2.NormalizeCheckConstraintName(check.Name)] = check.Name
+	}
+	tableNames, err := db.Relations(c.proc.Ctx)
+	if err != nil {
+		if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+			return nil
+		}
+		return err
+	}
+	for _, tableName := range tableNames {
+		if tableName == excludedTable {
+			continue
+		}
+		rel, err := db.Relation(c.proc.Ctx, tableName, nil)
+		if err != nil {
+			if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) ||
+				moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
+				continue
+			}
+			return err
+		}
+		defs, err := rel.TableDefs(c.proc.Ctx)
+		if err != nil {
+			return err
+		}
+		for _, def := range defs {
+			properties, ok := def.(*engine.PropertiesDef)
+			if !ok {
+				continue
+			}
+			createSQL, ok := checkConstraintCreateSQL(properties.Properties)
+			if !ok {
+				continue
+			}
+			names, err := plan2.ExtractCheckConstraintNamesFromCreateSQL(
+				c.proc.Ctx, createSQL, tableName, c.getLower())
+			if err != nil {
+				return err
+			}
+			for _, name := range names {
+				if original, exists := wanted[plan2.NormalizeCheckConstraintName(name)]; exists {
+					return moerr.NewInvalidInputf(
+						c.proc.Ctx, "duplicate check constraint name '%s'", original)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func checkConstraintCreateSQL(properties []engine.Property) (string, bool) {
+	kind := ""
+	createSQL := ""
+	for _, property := range properties {
+		switch property.Key {
+		case catalog.SystemRelAttr_Kind:
+			kind = property.Value
+		case catalog.SystemRelAttr_CreateSQL:
+			createSQL = property.Value
+		}
+	}
+	if kind == catalog.SystemExternalRel || kind == catalog.SystemViewRel || createSQL == "" {
+		return "", false
+	}
+	return createSQL, true
+}
+
 func (s *Scope) CreateTable(c *Compile) error {
 	if s.ScopeAnalyzer == nil {
 		s.ScopeAnalyzer = NewScopeAnalyzer()
@@ -1369,7 +1447,14 @@ func (s *Scope) CreateTable(c *Compile) error {
 	tblName := qry.GetTableDef().GetName()
 
 	if !c.disableLock {
-		if err := lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
+		lockMode := lock.LockMode_Shared
+		// CHECK names are schema-scoped. Serialize CHECK-bearing CREATE TABLE
+		// statements so the lock-holder can refresh its snapshot and recheck
+		// the catalog immediately before creating the relation.
+		if len(qry.GetTableDef().GetChecks()) > 0 {
+			lockMode = lock.LockMode_Exclusive
+		}
+		if err := lockMoDatabase(c, dbName, lockMode); err != nil {
 			return err
 		}
 	}
@@ -1381,7 +1466,6 @@ func (s *Scope) CreateTable(c *Compile) error {
 		}
 		return convertDBEOB(c.proc.Ctx, err, dbName)
 	}
-
 	exists, err := dbSource.RelationExists(c.proc.Ctx, tblName, nil)
 	if err != nil {
 		c.proc.Error(c.proc.Ctx, "check table relation exists failed",
@@ -1396,6 +1480,30 @@ func (s *Scope) CreateTable(c *Compile) error {
 			return nil
 		}
 		return moerr.NewTableAlreadyExists(c.proc.Ctx, tblName)
+	}
+	if len(qry.GetTableDef().GetChecks()) > 0 {
+		txnOp := c.proc.GetTxnOperator()
+		if !txnOp.Txn().IsPessimistic() {
+			// Row locks are intentionally disabled for optimistic transactions.
+			// Touch the database catalog row in the same transaction instead, so
+			// concurrent CHECK-bearing CREATEs in one schema conflict and retry
+			// against a fresh snapshot before the name scan below.
+			if err = c.runSqlWithOptions(
+				optimisticCheckConstraintSchemaTouchSQL(dbName),
+				executor.StatementOption{}.WithDisableLog()); err != nil {
+				return err
+			}
+		}
+		if txnOp.Txn().IsPessimistic() && txnOp.Txn().IsRCIsolation() {
+			now, _ := moruntime.ServiceRuntime(c.proc.GetService()).Clock().Now()
+			if err = txnOp.GetWorkspace().AdvanceSnapshot(c.proc.Ctx, now); err != nil {
+				return err
+			}
+		}
+		if err = validateCheckConstraintNamesAfterSchemaLock(
+			c, dbSource, tblName, qry.GetTableDef().GetChecks()); err != nil {
+			return err
+		}
 	}
 
 	if !c.disableLock {
@@ -1992,6 +2100,14 @@ func (s *Scope) CreateTable(c *Compile) error {
 	}
 
 	return nil
+}
+
+func optimisticCheckConstraintSchemaTouchSQL(dbName string) string {
+	return fmt.Sprintf(
+		"UPDATE `%s`.`%s` SET `%s` = `%s` WHERE `account_id` = current_account_id() AND `datname` = '%s'",
+		catalog.MO_CATALOG, catalog.MO_DATABASE,
+		catalog.SystemDBAttr_CreateSQL, catalog.SystemDBAttr_CreateSQL,
+		sqlquote.EscapeString(dbName))
 }
 
 func (c *Compile) maybeInsertIcebergTableMapping(dbSource engine.Database, rel engine.Relation, qry *plan.CreateTable) error {

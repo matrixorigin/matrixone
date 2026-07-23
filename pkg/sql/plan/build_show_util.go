@@ -16,6 +16,7 @@ package plan
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -28,6 +29,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
@@ -47,7 +50,6 @@ func ConstructCreateTableSQL(
 		display string
 		rewrite string
 	}, 0)
-	checkDefs := extractTopLevelCheckDefs(tableDef)
 
 	tblName := tableDef.Name
 	schemaName := tableDef.DbName
@@ -464,8 +466,27 @@ func ConstructCreateTableSQL(
 			formatStr(fk.Name), strings.Join(colOriginNames, "`,`"), fkRefDbTblName, strings.Join(fkColOriginNames, "`,`"), strings.ReplaceAll(fk.OnDelete.String(), "_", " "), strings.ReplaceAll(fk.OnUpdate.String(), "_", " "))
 	}
 
-	for _, checkDef := range checkDefs {
-		createStr += ",\n  " + checkDef
+	// Legacy tables created before CHECK metadata was persisted can reach this
+	// function through nil-context callers (CDC, publication, and get_ddl), where
+	// planner recovery is unavailable. Preserve the old top-level CHECK clauses
+	// from Createsql only when no structured CHECK metadata exists.
+	if len(tableDef.Checks) == 0 {
+		for _, checkDef := range extractTopLevelCheckDefs(tableDef) {
+			createStr += ",\n  " + checkDef
+		}
+	}
+
+	// Render CHECK constraints from the structured table definition so that the
+	// output stays correct after ALTER ADD/DROP CHECK (which updates Checks but
+	// not Createsql). OriginSql holds the formatted predicate text.
+	for _, chk := range tableDef.Checks {
+		if chk.OriginSql == "" {
+			continue
+		}
+		createStr += ",\n  CONSTRAINT `" + formatStr(chk.Name) + "` CHECK (" + chk.OriginSql + ")"
+		if chk.NotEnforced {
+			createStr += " NOT ENFORCED"
+		}
 	}
 
 	if rowCount != 0 {
@@ -677,11 +698,16 @@ func extractTopLevelCheckDefs(tableDef *plan.TableDef) []string {
 	if tableDef == nil || tableDef.Createsql == "" || tableDef.TableType == catalog.SystemExternalRel {
 		return nil
 	}
-	if !containsKeywordOutsideQuotes(tableDef.Createsql, "CHECK") {
+	createSQL, _ := extractCheckSQLModeMarker(tableDef.Createsql)
+	if !containsKeywordOutsideQuotes(createSQL, "CHECK") {
 		return nil
 	}
 
-	defsSection, ok := extractCreateTableDefsSection(tableDef.Createsql)
+	if checks, ok := extractCheckDefsInCreateOrder(tableDef.Createsql); ok {
+		return checks
+	}
+
+	defsSection, ok := extractCreateTableDefsSection(createSQL)
 	if !ok {
 		return nil
 	}
@@ -695,6 +721,63 @@ func extractTopLevelCheckDefs(tableDef *plan.TableDef) []string {
 		}
 	}
 	return checks
+}
+
+func extractCheckDefsInCreateOrder(createSQL string) ([]string, bool) {
+	createSQL, sqlMode := extractCheckSQLModeMarker(createSQL)
+	stmt, err := parsers.ParseOneWithSQLMode(context.Background(), dialect.MYSQL, createSQL, 1, sqlMode)
+	if err != nil {
+		return nil, false
+	}
+	defer stmt.Free()
+
+	createTable, ok := stmt.(*tree.CreateTable)
+	if !ok {
+		return nil, false
+	}
+
+	checks := make([]string, 0)
+	for _, def := range createTable.Defs {
+		switch typedDef := def.(type) {
+		case *tree.ColumnTableDef:
+			for _, attr := range typedDef.Attributes {
+				check, ok := attr.(*tree.AttributeCheckConstraint)
+				if !ok {
+					continue
+				}
+				checks = append(checks, formatLegacyCheckDef(
+					check.Name, check.Expr, check.Enforced, check.EnforcementSet,
+				))
+			}
+		case *tree.CheckIndex:
+			checks = append(checks, formatLegacyCheckDef(
+				typedDef.ConstraintSymbol, typedDef.Expr, typedDef.Enforced, typedDef.EnforcementSet,
+			))
+		}
+	}
+	return checks, true
+}
+
+func formatLegacyCheckDef(name string, expr tree.Expr, enforced bool, enforcementSet bool) string {
+	var builder strings.Builder
+	if name != "" {
+		builder.WriteString("CONSTRAINT `")
+		builder.WriteString(formatStr(name))
+		builder.WriteString("` ")
+	}
+	builder.WriteString("CHECK (")
+	fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true), tree.WithQuoteIdentifier())
+	expr.Format(fmtCtx)
+	builder.WriteString(fmtCtx.String())
+	builder.WriteByte(')')
+	if enforcementSet {
+		if enforced {
+			builder.WriteString(" ENFORCED")
+		} else {
+			builder.WriteString(" NOT ENFORCED")
+		}
+	}
+	return builder.String()
 }
 
 func extractCreateTableDefsSection(createSQL string) (string, bool) {

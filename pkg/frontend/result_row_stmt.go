@@ -17,6 +17,7 @@ package frontend
 import (
 	"bufio"
 	"context"
+	"math"
 	"strings"
 	"time"
 
@@ -29,6 +30,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/explain"
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
+	"github.com/matrixorigin/matrixone/pkg/util"
 )
 
 func GetExplainColumn(ctx context.Context, explainColName string) ([]*plan2.ColDef, []interface{}, error) {
@@ -447,12 +449,24 @@ func (resper *MysqlResp) respBySituation(ses *Session,
 	defer func() {
 		execCtx.results = nil
 	}()
+	var warningCount uint64
+	if execCtx.runResult != nil {
+		warningCount = execCtx.runResult.WarningCount
+	}
+	// Replace, rather than append to, the previous statement's warning list.
+	// SHOW WARNINGS has already materialized its result rows before this point.
+	var checkWarnings []util.CheckWarning
+	if execCtx.runResult != nil {
+		checkWarnings = execCtx.runResult.CheckWarnings
+	}
+	ses.setCheckConstraintWarnings(warningCount, checkWarnings)
 	if len(execCtx.results) == 0 {
 		var affectedRows uint64
 		if execCtx.runResult != nil {
 			affectedRows = execCtx.runResult.AffectRows
 		}
 		resp := setResponse(ses, execCtx.isLastStmt, affectedRows)
+		resp.warnings = uint16(min(warningCount, uint64(math.MaxUint16)))
 		if err = resper.mysqlRrWr.WriteResponse(execCtx.reqCtx, resp); err != nil {
 			return moerr.NewInternalErrorf(execCtx.reqCtx, "routine send response failed. error:%v ", err)
 		}

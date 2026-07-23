@@ -319,6 +319,143 @@ replace delayed into t_replace_prio values (1, 30);
 select * from t_replace_prio order by id;
 drop table t_replace_prio;
 
+-- test REPLACE validates CHECK constraints before deleting the old row
+drop table if exists t_replace_check;
+create table t_replace_check(id int primary key, v int check (v > 0));
+insert into t_replace_check values (1, 10);
+replace into t_replace_check values (1, -1);
+select * from t_replace_check order by id;
+replace into t_replace_check values (2, null);
+select * from t_replace_check order by id;
+insert into t_replace_check values (3, -3);
+select * from t_replace_check order by id;
+insert into t_replace_check values (3, 30), (4, -4);
+select * from t_replace_check order by id;
+insert into t_replace_check values (1, -5) on duplicate key update v = values(v);
+select * from t_replace_check order by id;
+update t_replace_check set v = -3 where id = 1;
+select * from t_replace_check order by id;
+drop table t_replace_check;
+
+drop table if exists t_replace_table_check;
+create table t_replace_table_check(id int primary key, a int, b int, check (a < b));
+insert into t_replace_table_check values (1, 1, 2);
+insert into t_replace_table_check values (2, 3, 2);
+select * from t_replace_table_check order by id;
+drop table t_replace_table_check;
+
+drop table if exists t_insert_check_no_key;
+create table t_insert_check_no_key(a int check (a > 0), b int);
+insert into t_insert_check_no_key values (-1, 2) on duplicate key update b = values(b);
+select * from t_insert_check_no_key order by a;
+insert into t_insert_check_no_key values (1, 2) on duplicate key update b = values(b);
+select * from t_insert_check_no_key order by a;
+drop table t_insert_check_no_key;
+
+-- a column-level CHECK may reference only the column where it is defined
+drop table if exists t_column_check_cross;
+create table t_column_check_cross(id int primary key, a int, b int check (a < b));
+create table t_column_check_cross(id int primary key, a int, b int);
+insert into t_column_check_cross values (1, -1, 0);
+select * from t_column_check_cross;
+drop table t_column_check_cross;
+
+-- truthiness: numeric CHECK (a) — 1 passes, 0 fails, null passes
+drop table if exists t_chk_truth;
+create table t_chk_truth(a int, check (a));
+insert into t_chk_truth values (1);
+insert into t_chk_truth values (null);
+select * from t_chk_truth order by a;
+drop table t_chk_truth;
+
+-- truthiness: zero should fail
+drop table if exists t_chk_fail;
+create table t_chk_fail(a int, check (a));
+insert into t_chk_fail values (0);
+select * from t_chk_fail;
+drop table t_chk_fail;
+
+-- UPDATE must enforce CHECK
+drop table if exists t_chk_update;
+create table t_chk_update(a int, check (a > 0));
+insert into t_chk_update values (1);
+update t_chk_update set a = a + 1;
+select * from t_chk_update;
+drop table t_chk_update;
+
+-- UPDATE violates CHECK
+drop table if exists t_chk_update_fail;
+create table t_chk_update_fail(a int, check (a > 0));
+insert into t_chk_update_fail values (1);
+update t_chk_update_fail set a = -1;
+select * from t_chk_update_fail;
+drop table t_chk_update_fail;
+
+-- UPDATE IGNORE skips CHECK violations while applying valid row updates
+drop table if exists t_chk_update_ignore;
+create table t_chk_update_ignore(id int primary key, a int, check (a > 0));
+insert into t_chk_update_ignore values (1, 1), (2, 2);
+update ignore t_chk_update_ignore
+set a = case when id = 1 then -1 else 3 end;
+select * from t_chk_update_ignore order by id;
+drop table t_chk_update_ignore;
+
+-- legacy multi-table UPDATE fallback must enforce CHECK on the final row image
+drop table if exists t_chk_update_multi;
+drop table if exists t_chk_update_multi_src;
+create table t_chk_update_multi(id int primary key, a int, check (a > 0));
+create table t_chk_update_multi_src(id int primary key);
+insert into t_chk_update_multi values (1, 1);
+insert into t_chk_update_multi_src values (1);
+update t_chk_update_multi, t_chk_update_multi_src
+set t_chk_update_multi.a = -1
+where t_chk_update_multi.id = t_chk_update_multi_src.id;
+select * from t_chk_update_multi;
+drop table t_chk_update_multi;
+drop table t_chk_update_multi_src;
+
+-- legacy multi-table UPDATE IGNORE also skips only CHECK-violating rows
+drop table if exists t_chk_update_multi_ignore;
+drop table if exists t_chk_update_multi_ignore_src;
+create table t_chk_update_multi_ignore(id int primary key, a int, check (a > 0));
+create table t_chk_update_multi_ignore_src(id int primary key);
+insert into t_chk_update_multi_ignore values (1, 1), (2, 2);
+insert into t_chk_update_multi_ignore_src values (1), (2);
+update ignore t_chk_update_multi_ignore, t_chk_update_multi_ignore_src
+set t_chk_update_multi_ignore.a = case when t_chk_update_multi_ignore.id = 1 then -1 else 3 end
+where t_chk_update_multi_ignore.id = t_chk_update_multi_ignore_src.id;
+select * from t_chk_update_multi_ignore order by id;
+drop table t_chk_update_multi_ignore;
+drop table t_chk_update_multi_ignore_src;
+
+-- REPLACE must enforce CHECK
+drop table if exists t_chk_replace;
+create table t_chk_replace(id int primary key, a int, check (a > 0));
+replace into t_chk_replace values (1, 1);
+select * from t_chk_replace;
+drop table t_chk_replace;
+
+-- REPLACE violates CHECK
+drop table if exists t_chk_replace_fail;
+create table t_chk_replace_fail(id int primary key, a int, check (a > 0));
+replace into t_chk_replace_fail values (1, -1);
+select * from t_chk_replace_fail;
+drop table t_chk_replace_fail;
+
+-- duplicate check constraint name should fail at DDL
+drop table if exists t_chk_dup_name;
+create table t_chk_dup_name(
+    a int,
+    constraint chk_pos check (a > 0),
+    constraint chk_pos check (a < 10)
+);
+drop table if exists t_chk_dup_name;
+
+-- non-deterministic function should be rejected in CHECK
+drop table if exists t_chk_volatile;
+create table t_chk_volatile(a int, check (rand() > 0));
+drop table if exists t_chk_volatile;
+
 -- fake-PK table with a composite nullable unique key: a REPLACE whose composite
 -- unique-key part is statically NULL (column a omitted -> NULL) serializes to a NULL
 -- key, can never conflict, and behaves like a plain INSERT (no existing row deleted;
@@ -333,3 +470,114 @@ select a, b, c from t_replace_fakepk_comp_null order by a, b, c;
 replace into t_replace_fakepk_comp_null (a, b, c) values (1, 1, 'one-replaced');
 select a, b, c from t_replace_fakepk_comp_null order by a, b, c;
 drop table t_replace_fakepk_comp_null;
+
+-- SHOW CREATE TABLE must still render CHECK after the table round-trips through
+-- the engine (the deep copy of TableDef must preserve each check's OriginSql).
+drop table if exists t_chk_showcreate;
+create table t_chk_showcreate(id int primary key, v int, constraint chk_v check (v > 0));
+show create table t_chk_showcreate;
+drop table t_chk_showcreate;
+
+-- CREATE TABLE ... AS SELECT: an explicit column that shares its name with a
+-- SELECT output column must still carry its column-level CHECK.
+drop table if exists t_ctas_chk;
+create table t_ctas_chk(a int check (a > 0)) as select -1 as a;
+drop table if exists t_ctas_chk;
+create table t_ctas_chk(a int check (a > 0)) as select 1 as a;
+insert into t_ctas_chk values (-5);
+select * from t_ctas_chk order by a;
+drop table t_ctas_chk;
+
+-- INSERT IGNORE must skip check-violating rows and insert the rest, not abort.
+drop table if exists t_chk_ignore;
+create table t_chk_ignore(a int check (a > 0));
+insert ignore into t_chk_ignore values (-1), (1), (-2), (2);
+show warnings;
+select * from t_chk_ignore order by a;
+show warnings;
+drop table t_chk_ignore;
+
+-- legacy LOAD DATA fallback on an FK table keeps IGNORE CHECK semantics.
+drop table if exists t_chk_load_child;
+drop table if exists t_chk_load_parent;
+create table t_chk_load_parent(id int primary key);
+create table t_chk_load_child(
+    id int primary key,
+    parent_id int,
+    check (id > 0),
+    foreign key (parent_id) references t_chk_load_parent(id)
+);
+insert into t_chk_load_parent values (1);
+load data inline format='csv', data='-1,1\n1,1\n' ignore
+into table t_chk_load_child fields terminated by ',';
+show warnings;
+select * from t_chk_load_child order by id;
+drop table t_chk_load_child;
+drop table t_chk_load_parent;
+
+-- INSERT IGNORE evaluates CHECK per row before the unique-key dedup: an invalid
+-- row sharing a primary key with a later valid row must not mask it. Expect (1,1).
+drop table if exists t_chk_ignore_dedup;
+create table t_chk_ignore_dedup(id int primary key, v int check (v > 0));
+insert ignore into t_chk_ignore_dedup values (1, -1), (1, 1);
+select * from t_chk_ignore_dedup order by id;
+drop table t_chk_ignore_dedup;
+
+-- ALTER TABLE ADD COLUMN with a column-level CHECK that references the new column.
+drop table if exists t_chk_addcol;
+create table t_chk_addcol(id int primary key);
+alter table t_chk_addcol add column b int check (b > 0);
+insert into t_chk_addcol values (1, 5);
+insert into t_chk_addcol values (2, -5);
+select * from t_chk_addcol order by id;
+drop table t_chk_addcol;
+
+-- ALTER column-level CHECK may reference only the newly added column.
+drop table if exists t_chk_addcol_cross;
+create table t_chk_addcol_cross(id int primary key, a int);
+alter table t_chk_addcol_cross add column b int check (a < b);
+insert into t_chk_addcol_cross values (1, -1);
+select * from t_chk_addcol_cross;
+drop table t_chk_addcol_cross;
+
+-- ALTER ADD COLUMN with NOT ENFORCED must retain the constraint as schema
+-- metadata without rejecting rows that violate it.
+drop table if exists t_chk_addcol_notenforced;
+create table t_chk_addcol_notenforced(id int primary key);
+alter table t_chk_addcol_notenforced add column b int check (b > 0) not enforced;
+insert into t_chk_addcol_notenforced values (1, -5);
+show create table t_chk_addcol_notenforced;
+select * from t_chk_addcol_notenforced order by id;
+drop table t_chk_addcol_notenforced;
+
+-- Renaming a column that a CHECK depends on must be rejected; renaming an
+-- unrelated column is still allowed.
+drop table if exists t_chk_rename;
+create table t_chk_rename(a int, b int, check (a > 0));
+alter table t_chk_rename rename column a to a2;
+alter table t_chk_rename rename column b to b2;
+drop table t_chk_rename;
+
+-- CHECK recovery uses the creation SQL mode after the session mode changes.
+drop table if exists t_chk_sql_mode;
+set @old_sql_mode = @@sql_mode;
+set sql_mode = 'ANSI_QUOTES';
+create table t_chk_sql_mode(a int, check ("a" > 0));
+set sql_mode = '';
+insert into t_chk_sql_mode values (-1);
+insert into t_chk_sql_mode values (1);
+select * from t_chk_sql_mode;
+drop table t_chk_sql_mode;
+set sql_mode = @old_sql_mode;
+
+-- RENAME TABLE rewrites generated-prefix and matching explicit CHECK names.
+drop table if exists t_chk_rename_name_new;
+drop table if exists t_chk_rename_name;
+create table t_chk_rename_name(
+    a int,
+    constraint t_chk_rename_name_chk_custom check (a > 0),
+    check (a < 10)
+);
+rename table t_chk_rename_name to t_chk_rename_name_new;
+show create table t_chk_rename_name_new;
+drop table t_chk_rename_name_new;

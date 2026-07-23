@@ -1,4 +1,4 @@
-// Copyright 2023 Matrix Origin
+// Copyright 2026 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,15 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package util
+package tree
 
-type RunResult struct {
-	AffectRows    uint64
-	WarningCount  uint64
-	CheckWarnings []CheckWarning
-}
+import (
+	"testing"
 
-type CheckWarning struct {
-	Message string
-	Count   uint64
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/stretchr/testify/require"
+)
+
+func TestUnresolvedNameFormatEscapesQuotedIdentifiers(t *testing.T) {
+	name := NewUnresolvedName(NewCStr("db`name", 1), NewCStr("column`name", 1))
+	require.Equal(t, "`db``name`.`column``name`",
+		StringWithOpts(name, dialect.MYSQL, WithQuoteIdentifier()))
 }

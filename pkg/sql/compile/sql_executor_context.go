@@ -350,6 +350,10 @@ func (c *compilerContext) Resolve(dbName string, tableName string, snapshot *pla
 		tableDef.IsTemporary = true
 		tableDef.Name = tableName
 	}
+	// Upgrade compatibility: tables created before CHECK constraints were
+	// persisted structurally carry them only in Createsql. Recover them so
+	// DML enforcement and SHOW CREATE keep working after a restart.
+	plan.RecoverCheckConstraintsFromCreateSql(c, tableDef)
 	tableID := int64(table.GetTableID(ctx))
 	obj := &plan.ObjectRef{
 		SchemaName: dbName,

@@ -68,6 +68,22 @@ func AddColumn(
 		return false, err
 	}
 
+	// Bind column-level CHECK constraints now that the new column is present in
+	// tableDef.Cols. Validate each CHECK against only its defining column, then
+	// bind it against the full table so the persisted ColPos matches the final
+	// row layout.
+	for _, attr := range specNewColumn.Attributes {
+		if ca, ok := attr.(*tree.AttributeCheckConstraint); ok {
+			if _, err = bindCheckExpr(ctx, ca.Expr, []*ColDef{newCol}); err != nil {
+				return false, err
+			}
+			if err = appendCheckDef(ctx, tableDef, ca.Name, ca.Expr); err != nil {
+				return false, err
+			}
+			tableDef.Checks[len(tableDef.Checks)-1].NotEnforced = ca.EnforcementSet && !ca.Enforced
+		}
+	}
+
 	if !newCol.Default.NullAbility && len(newCol.Default.OriginString) == 0 {
 		alterCtx.alterColMap[newCol.Name] = selectExpr{
 			sexprType: exprConstValue,
@@ -88,6 +104,7 @@ func handleAddColumnPosition(ctx context.Context, tableDef *TableDef, newCol *Co
 		tableDef.Cols = append(tableDef.Cols[:targetPos], append([]*ColDef{newCol}, tableDef.Cols[targetPos:]...)...)
 		// Remap ColPos in all generated column expressions after the insertion
 		remapGeneratedColExprsAfterInsert(tableDef, int32(targetPos))
+		remapCheckExprsAfterInsert(tableDef, int32(targetPos))
 	} else {
 		tableDef.Cols = append(tableDef.Cols, newCol)
 	}
@@ -191,6 +208,11 @@ func buildAddColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTable
 				return nil, err
 			}
 			newCol.GeneratedCol = generatedCol
+		case *tree.AttributeCheckConstraint:
+			// Column-level CHECK is bound later in AddColumn, after the new
+			// column has been inserted into TableDef.Cols, so the predicate may
+			// reference the new column itself (e.g. ADD COLUMN b INT CHECK (b > 0)).
+
 			//default:
 			//	return nil, moerr.NewNotSupported(ctx.GetContext(), "unsupport column definition %v", attribute)
 		}
@@ -396,6 +418,10 @@ func DropColumn(
 		return column.Primary, err
 	}
 
+	if err := checkColumnWithCheckDependency(ctx.GetContext(), tableDef, colName); err != nil {
+		return column.Primary, err
+	}
+
 	if err := handleDropColumnPosition(ctx.GetContext(), tableDef, column); err != nil {
 		return column.Primary, err
 	}
@@ -555,6 +581,7 @@ func handleDropColumnPosition(ctx context.Context, tableDef *TableDef, col *ColD
 	})
 	if dropPos >= 0 {
 		remapGeneratedColExprsAfterDrop(tableDef, dropPos)
+		remapCheckExprsAfterDrop(tableDef, dropPos)
 	}
 	return nil
 }
@@ -630,6 +657,40 @@ func remapGeneratedColExprsAfterDrop(tableDef *TableDef, dropPos int32) {
 			shiftColPosInExpr(col.GeneratedCol.Expr, dropPos+1, -1)
 		}
 	}
+}
+
+// remapCheckExprsAfterInsert adjusts all check constraint expressions
+// after a new column is inserted at insertPos. ColPos >= insertPos shift up by 1.
+func remapCheckExprsAfterInsert(tableDef *TableDef, insertPos int32) {
+	for _, chk := range tableDef.Checks {
+		if chk.Check != nil {
+			shiftColPosInExpr(chk.Check, insertPos, 1)
+		}
+	}
+}
+
+// remapCheckExprsAfterDrop adjusts all check constraint expressions
+// after a column is removed from dropPos. ColPos > dropPos shift down by 1.
+func remapCheckExprsAfterDrop(tableDef *TableDef, dropPos int32) {
+	for _, chk := range tableDef.Checks {
+		if chk.Check != nil {
+			shiftColPosInExpr(chk.Check, dropPos+1, -1)
+		}
+	}
+}
+
+// checkColumnWithCheckDependency checks if the column is referenced
+// by any check constraint expression. If so, the operation is rejected.
+func checkColumnWithCheckDependency(ctx context.Context, tableDef *TableDef, colName string) error {
+	for _, chk := range tableDef.Checks {
+		if chk.Check != nil {
+			if exprReferencesColumn(chk.Check, colName, tableDef.Cols) {
+				return moerr.NewInvalidInputf(ctx,
+					"Cannot drop, modify, or rename column '%s': check constraint '%s' depends on it", colName, chk.Name)
+			}
+		}
+	}
+	return nil
 }
 
 // checkColumnWithGeneratedDependency checks if the column is referenced

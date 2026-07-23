@@ -121,7 +121,7 @@ type QueryCandidatePoolResolver interface {
 	ResolveQueryCandidatePool(context.Context, QueryCandidates, QueryCandidatePoolRequest) (ResolvedQueryPool, error)
 }
 
-func PlanDefToCstrDef(tableDef *plan.TableDef) *ConstraintDef {
+func PlanDefToCstrDef(tableDef *plan.TableDef) (*ConstraintDef, error) {
 	planDefs := tableDef.GetDefs()
 	c := new(ConstraintDef)
 	for _, def := range planDefs {
@@ -157,7 +157,7 @@ func PlanDefToCstrDef(tableDef *plan.TableDef) *ConstraintDef {
 		})
 	}
 
-	return c
+	return c, nil
 }
 
 var PlanDefsToExeDefs = func(tableDef *plan.TableDef) ([]TableDef, *api.SchemaExtra, error) {
@@ -215,7 +215,10 @@ var PlanDefsToExeDefs = func(tableDef *plan.TableDef) ([]TableDef, *api.SchemaEx
 		})
 	}
 
-	c := PlanDefToCstrDef(tableDef)
+	c, err := PlanDefToCstrDef(tableDef)
+	if err != nil {
+		return nil, nil, err
+	}
 	if len(c.Cts) > 0 {
 		exeDefs = append(exeDefs, c)
 	}

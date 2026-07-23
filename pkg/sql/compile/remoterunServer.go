@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -318,6 +319,8 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 		}()
 
 		runErr = s.MergeRun(runCompile)
+		receiver.warningCount = uint64(runCompile.proc.GetWarningCount())
+		receiver.checkWarnings = runCompile.proc.GetCheckWarnings()
 		if runErr == nil {
 			runCompile.GenPhyPlan(runCompile)
 			receiver.phyPlan = runCompile.anal.GetPhyPlan()
@@ -555,6 +558,8 @@ type messageReceiverOnServer struct {
 
 	// result.
 	phyPlan                      *models.PhyPlan
+	warningCount                 uint64
+	checkWarnings                map[string]uint64
 	resourceDelta                resource.Delta
 	resourceMemory               resource.MemoryTotals
 	resourceMissingFragments     uint64
@@ -730,6 +735,8 @@ func (receiver *messageReceiverOnServer) sendError(
 	message.SetSid(pipeline.Status_MessageEnd)
 	message.SetMessageType(receiver.messageTyp)
 	message.AcceptedTeardownMode = receiver.acceptedTeardownMode
+	message.WarningCount = receiver.warningCount
+	message.CheckWarnings = makePipelineCheckWarnings(receiver.checkWarnings)
 	if errInfo != nil {
 		message.SetMoError(receiver.messageCtx, errInfo)
 	}
@@ -794,6 +801,8 @@ func (receiver *messageReceiverOnServer) sendEndMessage() error {
 	message.SetID(receiver.messageId)
 	message.SetMessageType(receiver.messageTyp)
 	message.AcceptedTeardownMode = receiver.acceptedTeardownMode
+	message.WarningCount = receiver.warningCount
+	message.CheckWarnings = makePipelineCheckWarnings(receiver.checkWarnings)
 
 	if err = receiver.setTerminalAnalysis(message); err != nil {
 		return err
@@ -819,6 +828,17 @@ func (receiver *messageReceiverOnServer) setTerminalAnalysis(message *pipeline.M
 	}
 	message.SetAnalysis(data)
 	return nil
+}
+
+func makePipelineCheckWarnings(warnings map[string]uint64) []*pipeline.CheckWarning {
+	result := make([]*pipeline.CheckWarning, 0, len(warnings))
+	for message, count := range warnings {
+		result = append(result, &pipeline.CheckWarning{Message: message, Count: count})
+	}
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].Message < result[j].Message
+	})
+	return result
 }
 
 func generateProcessHelper(ctx context.Context, data []byte, cli client.TxnClient) (processHelper, error) {

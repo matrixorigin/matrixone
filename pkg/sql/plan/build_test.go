@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -2493,6 +2494,37 @@ func exprContainsFuncName(expr *plan.Expr, name string) bool {
 	return false
 }
 
+func TestLoadDataIgnoreFiltersCheckViolationsPerRow(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	tableDef := mock.ctxt.tables["nation"]
+	require.NotNil(t, tableDef)
+	checkExpr, err := BindFuncExprImplByPlanExpr(context.Background(), ">", []*plan.Expr{
+		{
+			Typ:  tableDef.Cols[0].Typ,
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{Name: tableDef.Cols[0].Name, ColPos: 0}},
+		},
+		MakePlan2Int32ConstExprWithType(0),
+	})
+	require.NoError(t, err)
+	tableDef.Checks = []*plan.CheckDef{{Name: "chk_nation_key", Check: checkExpr}}
+
+	p, err := runOneStmt(mock, t,
+		"LOAD DATA INLINE FORMAT='csv', DATA='-1,x,1,y\\n1,x,1,y\\n' IGNORE INTO TABLE tpch.nation FIELDS TERMINATED BY ','")
+	require.NoError(t, err)
+
+	foundCheckFilter := false
+	for _, node := range p.GetQuery().GetNodes() {
+		for _, expr := range node.FilterList {
+			require.False(t, exprContainsFuncName(expr, "assert"),
+				"LOAD DATA IGNORE must not abort on a CHECK violation")
+			if exprContainsFuncName(expr, "coalesce") {
+				foundCheckFilter = true
+			}
+		}
+	}
+	require.True(t, foundCheckFilter, "LOAD DATA IGNORE must filter CHECK-violating rows")
+}
+
 func exprContainsStringLiteral(expr *plan.Expr, value string) bool {
 	switch e := expr.Expr.(type) {
 	case *plan.Expr_Lit:
@@ -2785,6 +2817,527 @@ func TestReplacePlanStructure(t *testing.T) {
 	}
 	assert.True(t, hasMultiUpdate, "REPLACE plan should contain MULTI_UPDATE node")
 	assert.True(t, hasDedupJoin, "REPLACE plan should contain DEDUP JOIN node")
+}
+
+func TestReplacePlanChecksTableCheckConstraints(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	addSingleIdxTPositiveCheck(t, mock)
+
+	logicPlan, err := runOneStmt(mock, t, "REPLACE INTO single_idx_t VALUES (1, -1)")
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+
+	assertPlanHasCheckConstraintAssert(t, logicPlan.GetQuery(), "REPLACE")
+}
+
+func TestInsertPlanChecksTableCheckConstraints(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	addSingleIdxTPositiveCheck(t, mock)
+
+	logicPlan, err := runOneStmt(mock, t, "INSERT INTO single_idx_t VALUES (1, -1)")
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+
+	assertPlanHasCheckConstraintAssert(t, logicPlan.GetQuery(), "INSERT")
+}
+
+func TestInsertIgnoreFiltersCheckViolatingRows(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	addSingleIdxTPositiveCheck(t, mock)
+
+	logicPlan, err := runOneStmt(mock, t, "INSERT IGNORE INTO single_idx_t VALUES (1, -1)")
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+	query := logicPlan.GetQuery()
+
+	// INSERT IGNORE must skip check-violating rows, not abort the statement, so
+	// the plan must not contain a CHECK assert.
+	for _, node := range query.Nodes {
+		for _, expr := range node.FilterList {
+			if exprContainsFuncName(expr, "assert") {
+				t.Fatalf("INSERT IGNORE must not assert table CHECK constraints")
+			}
+		}
+	}
+
+	// The check is instead enforced as a plain FILTER on coalesce(check, true),
+	// which drops the violating rows.
+	hasCheckFilter := false
+	for _, node := range query.Nodes {
+		if node.NodeType != plan.Node_FILTER {
+			continue
+		}
+		for _, expr := range node.FilterList {
+			if exprContainsFuncName(expr, "coalesce") {
+				hasCheckFilter = true
+			}
+		}
+	}
+	assert.True(t, hasCheckFilter, "INSERT IGNORE should filter check-violating rows out")
+}
+
+func TestInsertIgnoreFiltersChecksBeforeDedup(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	addSingleIdxTPositiveCheck(t, mock)
+
+	// Two rows share PK id=1: (1,-1) violates the check, (1,1) is valid. The
+	// CHECK filter must run BEFORE the unique-key dedup, otherwise dedup keeps
+	// the invalid (1,-1), discards the valid (1,1) as a duplicate, and the check
+	// filter then drops (1,-1) too — inserting nothing instead of (1,1).
+	logicPlan, err := runOneStmt(mock, t, "INSERT IGNORE INTO single_idx_t VALUES (1, -1), (1, 1)")
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+	query := logicPlan.GetQuery()
+
+	// Node ids do not reflect execution order, so walk the plan tree: the CHECK
+	// filter must sit in the subtree feeding the DEDUP join (i.e. run before it).
+	dedupID := int32(-1)
+	for i, node := range query.Nodes {
+		if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_DEDUP {
+			dedupID = int32(i)
+		}
+	}
+	require.NotEqual(t, int32(-1), dedupID, "INSERT IGNORE with duplicate keys should build a DEDUP join")
+	require.True(t, subtreeHasCoalesceCheckFilter(query, dedupID, map[int32]bool{}),
+		"CHECK filter must run before (feed into) the unique-key dedup for INSERT IGNORE")
+}
+
+// subtreeHasCoalesceCheckFilter reports whether the subtree rooted at nodeID
+// (following Children) contains a FILTER whose predicate calls coalesce, i.e. an
+// INSERT IGNORE check filter.
+func subtreeHasCoalesceCheckFilter(query *Query, nodeID int32, seen map[int32]bool) bool {
+	if nodeID < 0 || int(nodeID) >= len(query.Nodes) || seen[nodeID] {
+		return false
+	}
+	seen[nodeID] = true
+	node := query.Nodes[nodeID]
+	if node.NodeType == plan.Node_FILTER {
+		for _, e := range node.FilterList {
+			if exprContainsFuncName(e, "coalesce") {
+				return true
+			}
+		}
+	}
+	for _, c := range node.Children {
+		if subtreeHasCoalesceCheckFilter(query, c, seen) {
+			return true
+		}
+	}
+	return false
+}
+
+func TestLegacyInsertFallbackChecksTableCheckConstraints(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	addFakePkTPositiveCheckWithoutUniqueKey(t, mock)
+
+	logicPlan, err := runOneStmt(mock, t,
+		"INSERT INTO fake_pk_t VALUES (-1, 'bad') ON DUPLICATE KEY UPDATE b = VALUES(b)")
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+
+	assertPlanHasCheckConstraintAssert(t, logicPlan.GetQuery(), "legacy INSERT fallback")
+}
+
+func TestUpdatePlanChecksTableCheckConstraints(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	addSingleIdxTPositiveCheck(t, mock)
+
+	logicPlan, err := runOneStmt(mock, t, "UPDATE single_idx_t SET val = -1 WHERE id = 1")
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+
+	assertPlanHasCheckConstraintAssert(t, logicPlan.GetQuery(), "UPDATE")
+}
+
+func TestUpdateIgnoreFiltersCheckConstraintViolations(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	addSingleIdxTPositiveCheck(t, mock)
+
+	logicPlan, err := runOneStmt(mock, t, "UPDATE IGNORE single_idx_t SET val = -1 WHERE id = 1")
+	require.NoError(t, err)
+	assertPlanUsesIgnoreCheckFilter(t, logicPlan.GetQuery(), "UPDATE IGNORE")
+}
+
+func TestCheckIgnoreRejectsMixedProtocolCluster(t *testing.T) {
+	rt := moruntime.ServiceRuntime("")
+	previous, _ := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion4)
+	t.Cleanup(func() {
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, previous)
+	})
+
+	mock := NewMockOptimizer(true)
+	addSingleIdxTPositiveCheck(t, mock)
+	_, err := runOneStmt(mock, t, "UPDATE IGNORE single_idx_t SET val = -1 WHERE id = 1")
+	require.ErrorContains(t, err, "require all CNs to support protocol version 5")
+}
+
+func TestLegacyMultiTableUpdateFallbackChecksTableCheckConstraints(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	addPositiveCheck(t, mock.ctxt.tables["dept"], "deptno")
+
+	logicPlan, err := runOneStmt(mock, t,
+		"UPDATE emp, dept SET dept.deptno = -1 WHERE emp.deptno = dept.deptno")
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+
+	assertPlanHasCheckConstraintAssert(t, logicPlan.GetQuery(), "legacy multi-table UPDATE fallback")
+}
+
+func TestLegacyMultiTableUpdateIgnoreFiltersCheckConstraintViolations(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	addPositiveCheck(t, mock.ctxt.tables["dept"], "deptno")
+
+	logicPlan, err := runOneStmt(mock, t,
+		"UPDATE IGNORE emp, dept SET dept.deptno = -1 WHERE emp.deptno = dept.deptno")
+	require.NoError(t, err)
+	assertPlanUsesIgnoreCheckFilter(t, logicPlan.GetQuery(), "legacy multi-table UPDATE IGNORE fallback")
+}
+
+func TestAppendCheckConstraintPlanFromLastNodeSkipsTablesWithoutChecks(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	builder := NewQueryBuilder(plan.Query_INSERT, mock.CurrentContext(), false, true)
+	bindCtx := NewBindContext(builder, nil)
+	nodeID := builder.appendNode(&plan.Node{
+		NodeType: plan.Node_PROJECT,
+		ProjectList: []*plan.Expr{
+			MakePlan2Int32ConstExprWithType(1),
+		},
+	}, bindCtx)
+
+	got, err := appendCheckConstraintPlanFromLastNode(builder, bindCtx, mock.ctxt.tables["single_idx_t"], nodeID)
+	require.NoError(t, err)
+	require.Equal(t, nodeID, got)
+}
+
+func TestAppendCheckConstraintPlanFromLastNodeErrorsOnMissingVisibleProjection(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	builder := NewQueryBuilder(plan.Query_INSERT, mock.CurrentContext(), false, true)
+	bindCtx := NewBindContext(builder, nil)
+	nodeID := builder.appendNode(&plan.Node{
+		NodeType: plan.Node_PROJECT,
+		ProjectList: []*plan.Expr{
+			MakePlan2Int32ConstExprWithType(1),
+		},
+	}, bindCtx)
+
+	tableDef := &plan.TableDef{
+		Name: "missing_projection_t",
+		Cols: []*plan.ColDef{
+			{Name: "a", Typ: plan.Type{Id: int32(types.T_int32)}},
+			{Name: "b", Typ: plan.Type{Id: int32(types.T_int32)}},
+		},
+		Name2ColIndex: map[string]int32{
+			"a": 0,
+			"b": 1,
+		},
+		Checks: []*plan.CheckDef{
+			{Name: "chk_a", Check: MakePlan2BoolConstExprWithType(true)},
+		},
+	}
+
+	_, err := appendCheckConstraintPlanFromLastNode(builder, bindCtx, tableDef, nodeID)
+	require.ErrorContains(t, err, "cannot find column missing_projection_t.b for check constraint")
+}
+
+func TestAppendCheckConstraintPlanSkipsNotEnforcedChecks(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	builder := NewQueryBuilder(plan.Query_INSERT, mock.CurrentContext(), false, true)
+	bindCtx := NewBindContext(builder, nil)
+	nodeID := builder.appendNode(&plan.Node{NodeType: plan.Node_PROJECT}, bindCtx)
+	tableDef := &plan.TableDef{
+		Checks: []*plan.CheckDef{{
+			Name:        "legacy_not_enforced",
+			Check:       MakePlan2BoolConstExprWithType(false),
+			NotEnforced: true,
+		}},
+	}
+
+	got, err := appendCheckConstraintPlanFromLastNode(builder, bindCtx, tableDef, nodeID)
+	require.NoError(t, err)
+	require.Equal(t, nodeID, got)
+}
+
+func TestAppendCheckConstraintPlanKeepsEnforcedChecksInMixedSet(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	builder := NewQueryBuilder(plan.Query_INSERT, mock.CurrentContext(), false, true)
+	bindCtx := NewBindContext(builder, nil)
+	nodeID := builder.appendNode(&plan.Node{
+		NodeType:    plan.Node_PROJECT,
+		ProjectList: []*plan.Expr{MakePlan2Int32ConstExprWithType(1)},
+	}, bindCtx)
+	tableDef := &plan.TableDef{
+		Name: "mixed_checks",
+		Cols: []*plan.ColDef{{Name: "a", Typ: plan.Type{Id: int32(types.T_int32)}}},
+		Checks: []*plan.CheckDef{
+			{Name: "not_enforced", Check: MakePlan2BoolConstExprWithType(false), NotEnforced: true},
+			{Name: "enforced", Check: MakePlan2BoolConstExprWithType(true)},
+		},
+	}
+
+	got, err := appendCheckConstraintPlanFromLastNode(builder, bindCtx, tableDef, nodeID)
+	require.NoError(t, err)
+	require.NotEqual(t, nodeID, got)
+	require.Len(t, builder.qry.Nodes[got].FilterList, 1)
+}
+
+func TestSubstituteColRefsInExprSkipsNilProjection(t *testing.T) {
+	expr := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_Rowid)},
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				RelPos: 0,
+				ColPos: 1,
+				Name:   catalog.Row_ID,
+			},
+		},
+	}
+
+	got := substituteColRefsInExpr(expr, []*plan.Expr{MakePlan2Int32ConstExprWithType(1), nil}, 0)
+	assert.Same(t, expr, got)
+}
+
+func TestGetProjectionByLastNodeIfAvailableFollowsPrimaryChild(t *testing.T) {
+	builder := &QueryBuilder{
+		qry: &plan.Query{
+			Nodes: []*plan.Node{
+				{
+					NodeType: plan.Node_JOIN,
+					Children: []int32{1, 2},
+				},
+				{
+					NodeType: plan.Node_TABLE_SCAN,
+				},
+				{
+					NodeType: plan.Node_PROJECT,
+					ProjectList: []*plan.Expr{
+						MakePlan2Int32ConstExprWithType(1),
+					},
+				},
+			},
+		},
+	}
+
+	require.Nil(t, getProjectionByLastNodeIfAvailable(builder, 0))
+}
+
+func TestCheckConstraintRejectsSyntheticColumns(t *testing.T) {
+	tableDef := &TableDef{
+		Cols: []*plan.ColDef{
+			{Name: "a"},
+			{Name: "b"},
+			{Name: catalog.CPrimaryKeyColName},
+			{Name: "__mo_cbkey_001a001b"},
+		},
+		Name2ColIndex: map[string]int32{
+			"a":                        0,
+			"b":                        1,
+			catalog.CPrimaryKeyColName: 2,
+			"__mo_cbkey_001a001b":      3,
+		},
+		ClusterBy: &plan.ClusterByDef{Name: "__mo_cbkey_001a001b"},
+	}
+
+	for _, tc := range []struct {
+		name   string
+		colPos int32
+		want   string
+	}{
+		{name: "composite primary key", colPos: 2, want: catalog.CPrimaryKeyColName},
+		{name: "composite cluster by", colPos: 3, want: "__mo_cbkey_001a001b"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			expr := &plan.Expr{
+				Typ: plan.Type{Id: int32(types.T_varchar)},
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: 0,
+						ColPos: tc.colPos,
+					},
+				},
+			}
+			got, ok := checkConstraintReferencesSyntheticCol(expr, tableDef)
+			require.True(t, ok)
+			require.Equal(t, tc.want, got)
+		})
+	}
+
+	syntheticColExpr := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_varchar)},
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				RelPos: 0,
+				ColPos: 2,
+			},
+		},
+	}
+	litExpr := MakePlan2Int32ConstExprWithType(1)
+	for _, tc := range []struct {
+		name string
+		expr *plan.Expr
+	}{
+		{
+			name: "under function args",
+			expr: &plan.Expr{
+				Typ: plan.Type{Id: int32(types.T_bool)},
+				Expr: &plan.Expr_F{
+					F: &plan.Function{Args: []*plan.Expr{litExpr, syntheticColExpr}},
+				},
+			},
+		},
+		{
+			name: "under expression list",
+			expr: &plan.Expr{
+				Typ: plan.Type{Id: int32(types.T_tuple)},
+				Expr: &plan.Expr_List{
+					List: &plan.ExprList{List: []*plan.Expr{litExpr, syntheticColExpr}},
+				},
+			},
+		},
+		{
+			name: "under subquery child",
+			expr: &plan.Expr{
+				Typ: plan.Type{Id: int32(types.T_bool)},
+				Expr: &plan.Expr_Sub{
+					Sub: &plan.SubqueryRef{Child: syntheticColExpr},
+				},
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := checkConstraintReferencesSyntheticCol(tc.expr, tableDef)
+			require.True(t, ok)
+			require.Equal(t, catalog.CPrimaryKeyColName, got)
+		})
+	}
+}
+
+func addSingleIdxTPositiveCheck(t *testing.T, mock *MockOptimizer) {
+	t.Helper()
+	tableDef := mock.ctxt.tables["single_idx_t"]
+	addPositiveCheck(t, tableDef, "val")
+}
+
+func addPositiveCheck(t *testing.T, tableDef *plan.TableDef, colName string) {
+	t.Helper()
+	colPos := tableDef.Name2ColIndex[colName]
+	checkExpr, err := BindFuncExprImplByPlanExpr(context.TODO(), ">", []*plan.Expr{
+		{
+			Typ: tableDef.Cols[colPos].Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					Name:   colName,
+					ColPos: colPos,
+				},
+			},
+		},
+		MakePlan2Int32ConstExprWithType(0),
+	})
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+	tableDef.Checks = []*plan.CheckDef{
+		{
+			Name:  "chk_" + colName + "_positive",
+			Check: checkExpr,
+		},
+	}
+}
+
+func addFakePkTPositiveCheckWithoutUniqueKey(t *testing.T, mock *MockOptimizer) {
+	t.Helper()
+	tableDef := mock.ctxt.tables["fake_pk_t"]
+	tableDef.Indexes = nil
+	aCol := tableDef.Name2ColIndex["a"]
+	checkExpr, err := BindFuncExprImplByPlanExpr(context.TODO(), ">", []*plan.Expr{
+		{
+			Typ: tableDef.Cols[aCol].Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					Name:   "a",
+					ColPos: aCol,
+				},
+			},
+		},
+		MakePlan2Int32ConstExprWithType(0),
+	})
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+	tableDef.Checks = []*plan.CheckDef{
+		{
+			Name:  "chk_a_positive",
+			Check: checkExpr,
+		},
+	}
+}
+
+func assertPlanHasCheckConstraintAssert(t *testing.T, query *Query, stmt string) {
+	t.Helper()
+	hasCheckAssert := false
+	for _, node := range query.Nodes {
+		if node.NodeType != plan.Node_FILTER {
+			continue
+		}
+		for _, expr := range node.FilterList {
+			if exprContainsCheckConstraintAssert(expr) {
+				hasCheckAssert = true
+				break
+			}
+		}
+	}
+	assert.True(t, hasCheckAssert, "%s plan should assert table CHECK constraints before writing", stmt)
+}
+
+func assertPlanUsesIgnoreCheckFilter(t *testing.T, query *Query, stmt string) {
+	t.Helper()
+	hasIgnoreFilter := false
+	for _, node := range query.Nodes {
+		if node.NodeType != plan.Node_FILTER {
+			continue
+		}
+		for _, expr := range node.FilterList {
+			require.False(t, exprContainsCheckConstraintAssert(expr),
+				"%s must not abort on a CHECK violation", stmt)
+			if exprContainsFuncName(expr, "coalesce") {
+				hasIgnoreFilter = true
+			}
+		}
+	}
+	require.True(t, hasIgnoreFilter, "%s should filter rows that violate CHECK constraints", stmt)
+}
+
+func exprContainsCheckConstraintAssert(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_F:
+		if strings.EqualFold(e.F.Func.ObjName, "assert") && len(e.F.Args) == 2 {
+			if lit := e.F.Args[1].GetLit(); lit != nil && strings.HasPrefix(lit.GetSval(), "Check constraint '") {
+				return true
+			}
+		}
+		for _, arg := range e.F.Args {
+			if exprContainsCheckConstraintAssert(arg) {
+				return true
+			}
+		}
+	case *plan.Expr_List:
+		for _, item := range e.List.List {
+			if exprContainsCheckConstraintAssert(item) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func TestInsertOnDupFakePKUsesModernPath(t *testing.T) {
