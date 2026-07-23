@@ -49,16 +49,16 @@ func makeFileName(
 	tblStuff tableStuff,
 ) string {
 	var (
-		srcName  = tblStuff.tarRel.GetTableName()
-		baseName = tblStuff.baseRel.GetTableName()
+		srcName  = encodeDiffFileNamePart(tblStuff.tarRel.GetTableName())
+		baseName = encodeDiffFileNamePart(tblStuff.baseRel.GetTableName())
 	)
 
 	if baseAtTsExpr != nil {
-		baseName = fmt.Sprintf("%s_%s", baseName, baseAtTsExpr.SnapshotName)
+		baseName = fmt.Sprintf("%s_%s", baseName, encodeDiffFileNamePart(baseAtTsExpr.SnapshotName))
 	}
 
 	if tarAtTsExpr != nil {
-		srcName = fmt.Sprintf("%s_%s", srcName, tarAtTsExpr.SnapshotName)
+		srcName = fmt.Sprintf("%s_%s", srcName, encodeDiffFileNamePart(tarAtTsExpr.SnapshotName))
 	}
 
 	return fmt.Sprintf(
@@ -66,6 +66,27 @@ func makeFileName(
 		srcName, baseName,
 		time.Now().UTC().Format("20060102_150405"),
 	)
+}
+
+func encodeDiffFileNamePart(name string) string {
+	const hex = "0123456789ABCDEF"
+
+	var encoded strings.Builder
+	encoded.Grow(len(name))
+	for i := 0; i < len(name); i++ {
+		c := name[i]
+		if c >= 'a' && c <= 'z' ||
+			c >= 'A' && c <= 'Z' ||
+			c >= '0' && c <= '9' ||
+			c == '-' || c == '_' || c == '.' {
+			encoded.WriteByte(c)
+			continue
+		}
+		encoded.WriteByte('%')
+		encoded.WriteByte(hex[c>>4])
+		encoded.WriteByte(hex[c&0x0f])
+	}
+	return encoded.String()
 }
 
 type applyBatchInfo struct {
@@ -1606,13 +1627,11 @@ func prepareFSForDiffAsFile(
 		fullFilePath = path.Join(stmt.OutputOpt.DirPath, fileName)
 	}
 
-	sqlRetHint = fmt.Sprintf(
-		"DELETE FROM %s.%s, INSERT INTO %s.%s",
-		tblStuff.baseRel.GetTableDef(ctx).DbName,
-		tblStuff.baseRel.GetTableName(),
+	baseTableName := qualifiedTableName(
 		tblStuff.baseRel.GetTableDef(ctx).DbName,
 		tblStuff.baseRel.GetTableName(),
 	)
+	sqlRetHint = fmt.Sprintf("DELETE FROM %s, INSERT INTO %s", baseTableName, baseTableName)
 
 	var (
 		targetFS   fileservice.FileService

@@ -82,6 +82,49 @@ func TestDataBranchOutputMakeFileName(t *testing.T) {
 	require.Regexp(t, regexp.MustCompile(`^diff_t2_sp2_t1_sp1_\d{8}_\d{6}$`), got)
 }
 
+func TestDataBranchOutputFileNameAndHintQuotePathSeparators(t *testing.T) {
+	ctx := context.Background()
+	ses := newValidateSession(t)
+
+	ctrl := gomock.NewController(t)
+	baseRel := mock_frontend.NewMockRelation(ctrl)
+	tarRel := mock_frontend.NewMockRelation(ctrl)
+	baseRel.EXPECT().GetTableName().Return("base/name`quoted").AnyTimes()
+	baseRel.EXPECT().GetTableDef(gomock.Any()).Return(&plan.TableDef{
+		DbName: "db/name`quoted",
+		Name:   "base/name`quoted",
+	}).AnyTimes()
+	tarRel.EXPECT().GetTableName().Return(`child\name:quoted`).AnyTimes()
+
+	outputDir := t.TempDir()
+	stmt := &tree.DataBranchDiff{
+		BaseTable: tree.TableName{
+			AtTsExpr: &tree.AtTimeStamp{SnapshotName: "base/snapshot 1"},
+		},
+		TargetTable: tree.TableName{
+			AtTsExpr: &tree.AtTimeStamp{SnapshotName: `target\snapshot%1`},
+		},
+		OutputOpt: &tree.DiffOutputOpt{DirPath: outputDir},
+	}
+	tblStuff := tableStuff{baseRel: baseRel, tarRel: tarRel}
+
+	filePath, hint, _, release, cleanup, err := prepareFSForDiffAsFile(ctx, ses, stmt, tblStuff)
+	require.NoError(t, err)
+	require.NotNil(t, release)
+	require.NotNil(t, cleanup)
+	t.Cleanup(release)
+	t.Cleanup(cleanup)
+
+	require.Equal(t, outputDir, filepath.Dir(filePath))
+	require.Regexp(t, regexp.MustCompile(
+		`^diff_child%5Cname%3Aquoted_target%5Csnapshot%251_base%2Fname%60quoted_base%2Fsnapshot%201_\d{8}_\d{6}\.sql$`,
+	), filepath.Base(filePath))
+	require.Equal(t,
+		"DELETE FROM `db/name``quoted`.`base/name``quoted`, INSERT INTO `db/name``quoted`.`base/name``quoted`",
+		hint,
+	)
+}
+
 func TestDataBranchOutputTableSpec(t *testing.T) {
 	ctx := context.Background()
 	ses := newValidateSession(t)
