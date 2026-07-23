@@ -747,21 +747,26 @@ func TestStreamServerWithSequenceNotMatch(t *testing.T) {
 		})
 
 		v, err := c.NewStream(context.Background(), testAddr, false)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		st := v.(*stream)
 		defer func() {
 			assert.NoError(t, st.Close(false))
 		}()
 
+		rc, err := st.Receive()
+		require.NoError(t, err)
+		require.NotNil(t, rc)
+
 		st.sequence = 2
 		req := newTestMessage(st.ID())
-		assert.NoError(t, st.Send(ctx, req))
+		require.NoError(t, st.Send(ctx, req))
 
-		rc, err := st.Receive()
-		assert.NoError(t, err)
-		assert.NotNil(t, rc)
-		resp := <-rc
-		assert.Nil(t, resp)
+		select {
+		case resp := <-rc:
+			assert.Nil(t, resp)
+		case <-ctx.Done():
+			t.Fatal("stream receiver was not terminated after sequence mismatch")
+		}
 	})
 }
 

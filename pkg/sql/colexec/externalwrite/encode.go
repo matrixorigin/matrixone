@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 var (
@@ -181,13 +182,15 @@ func (w *externalWriter) writeCSVField(buf *bytes.Buffer, value []byte, quote bo
 	}
 }
 
-func (w *externalWriter) writeCSVHeader() error {
+func (w *externalWriter) writeCSVHeader(analyzer process.Analyzer) error {
 	buf := &bytes.Buffer{}
 	ncol := len(w.cfg.Attrs)
 	for j, name := range w.cfg.Attrs {
 		w.writeCSVField(buf, []byte(name), w.cfg.EnclosedBy != 0, j == ncol-1)
 	}
-	_, err := w.fw.Write(buf.Bytes())
+	_, err := process.MeasureFilesystemWait(analyzer, func() (int, error) {
+		return w.fw.Write(buf.Bytes())
+	})
 	return err
 }
 
