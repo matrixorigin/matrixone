@@ -311,6 +311,16 @@ build: config cgo thirdparties jieba-dict
 	$(info [Build binary])
 	$(GOEXPERIMENT_OPT) $(CGO_OPTS) $(GO) build $(GO_MODULE_MODE) $(TAGS) $(RACE_OPT) $(GOLDFLAGS) $(DEBUG_OPT) $(GOBUILD_OPT) -o $(BIN_NAME) ./cmd/mo-service
 
+# Build with native libraries supplied by a prebuilt image. This target is for
+# CI image builds: unlike build, it must not rebuild cgo or thirdparties after
+# the source tree has been copied into the builder.
+.PHONY: build-with-prebuilt-native
+build-with-prebuilt-native: config jieba-dict
+	@test -f "$(CGO_DIR)/libmo.so" || test -f "$(CGO_DIR)/libmo.dylib"
+	@test -f "$(THIRDPARTIES_INSTALL_DIR)/lib/libusearch_c.so" || test -f "$(THIRDPARTIES_INSTALL_DIR)/lib/libusearch_c.dylib"
+	$(info [Build binary with prebuilt native libraries])
+	$(CGO_OPTS) go build $(GO_MODULE_MODE) $(TAGS) $(RACE_OPT) $(GOLDFLAGS) $(DEBUG_OPT) $(GOBUILD_OPT) -o $(BIN_NAME) ./cmd/mo-service
+
 # https://wiki.musl-libc.org/getting-started.html
 # https://musl.cc/
 .PHONY: musl-install

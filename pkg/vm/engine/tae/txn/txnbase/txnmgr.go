@@ -385,13 +385,17 @@ func (mgr *TxnManager) loadOrStoreTxn(
 
 	skipFlags := TxnSkipFlag(mgr.txns.skipFlags.Load())
 	if skipFlags.Skip(flag) {
+		mgr.txns.wg.Done()
 		offline = true
+		retTxn = newTxn
+		return
 	}
 
 	actual, loaded := mgr.txns.store.LoadOrStore(
 		newTxn.GetID(), newTxn,
 	)
 	if loaded {
+		mgr.txns.wg.Done()
 		retTxn = actual.(txnif.AsyncTxn)
 		offline = retTxn.GetStore().IsOffline()
 	} else {
