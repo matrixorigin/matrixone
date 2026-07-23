@@ -86,10 +86,11 @@ func newCodecTestProcess(t *testing.T) (*Process, client.TxnOperator) {
 		TimeZone:                            time.FixedZone("UTC+8", 8*3600),
 		LockWaitTimeout:                     7,
 		LockWaitTimeoutSet:                  true,
-		ExplicitZeroTemporalCastReturnsNull: true,
 		QueryId:                             []string{"stmt-qid"},
+		MatrixOneNativeMode:                 true,
 		LogLevel:                            zap.WarnLevel,
 		SessionId:                           uuid.MustParse("11111111-2222-3333-4444-555555555555"),
+		ExplicitZeroTemporalCastReturnsNull: true,
 	}
 	sp := NewStmtProfile(uuid.MustParse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"), uuid.MustParse("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"))
 	sp.SetTxnId([]byte("txn-profile-123456"))
@@ -138,11 +139,13 @@ func TestProcessCodecHelpers(t *testing.T) {
 			TimeZone:                            timeBytes,
 			LockWaitTimeout:                     9,
 			LockWaitTimeoutSet:                  true,
+			MatrixoneNativeMode:                 true,
 			ExplicitZeroTemporalCastReturnsNull: true,
 		})
 		require.NoError(t, err)
 		require.Equal(t, "u", info.User)
 		require.Equal(t, int64(9), info.LockWaitTimeout)
+		require.True(t, info.MatrixOneNativeMode)
 		require.True(t, info.LockWaitTimeoutSet)
 		require.True(t, info.ExplicitZeroTemporalCastReturnsNull)
 		require.Equal(t, "UTC", info.TimeZone.String())
@@ -204,6 +207,7 @@ func TestBuildProcessInfoAndMockProcessInfoWithPro(t *testing.T) {
 	require.Equal(t, int64(42), info.AffectedRows)
 	require.Equal(t, uint64(99), info.SessionInfo.ConnectionId)
 	require.Equal(t, int64(7), info.SessionInfo.LockWaitTimeout)
+	require.True(t, info.SessionInfo.MatrixoneNativeMode)
 	require.True(t, info.SessionInfo.ExplicitZeroTemporalCastReturnsNull)
 	require.True(t, info.SessionInfo.LockWaitTimeoutSet)
 	require.Equal(t, pipeline.SessionLoggerInfo_Warn, info.SessionLogger.LogLevel)
@@ -251,6 +255,7 @@ func TestCodecServiceEncodeDecodeAndLookup(t *testing.T) {
 	require.Equal(t, info.UnixTime, decodedProc.Base.UnixTime)
 	require.Equal(t, info.SessionInfo.User, decodedProc.Base.SessionInfo.User)
 	require.Equal(t, info.SessionInfo.LockWaitTimeout, decodedProc.Base.SessionInfo.LockWaitTimeout)
+	require.Equal(t, info.SessionInfo.MatrixoneNativeMode, decodedProc.Base.SessionInfo.MatrixOneNativeMode)
 	require.True(t, decodedProc.Base.SessionInfo.ExplicitZeroTemporalCastReturnsNull)
 	require.Equal(t, info.SessionInfo.LockWaitTimeoutSet, decodedProc.Base.SessionInfo.LockWaitTimeoutSet)
 	require.NotNil(t, decodedProc.GetPrepareParams())

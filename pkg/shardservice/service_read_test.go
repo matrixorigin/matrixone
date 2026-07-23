@@ -208,12 +208,23 @@ func TestReadValidatesAllRemoteShardsBeforeSending(t *testing.T) {
 	runServicesTest(
 		t,
 		"cn1,cn2,cn3",
-		func(ctx context.Context, _ *server, services []*service) {
+		func(_ context.Context, server *server, services []*service) {
 			s := services[0]
 			table := uint64(1)
-			mustAddTestShards(t, ctx, s, table, 3, 1, services[1:]...)
+			require.Eventually(t, func() bool {
+				server.r.RLock()
+				defer server.r.RUnlock()
+				return len(server.r.cns) == len(services)
+			}, 10*time.Second, 10*time.Millisecond)
+			func() {
+				setupCtx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+				defer cancel()
+				mustAddTestShards(t, setupCtx, s, table, 3, 1, services[1:]...)
+			}()
 			for _, service := range services {
-				waitReplicaCount(table, service, 1)
+				require.Eventually(t, func() bool {
+					return service.TableReplicaCount(table) == 1
+				}, 10*time.Second, 10*time.Millisecond)
 			}
 
 			cache, err := s.getShards(table)
@@ -253,8 +264,10 @@ func TestReadValidatesAllRemoteShardsBeforeSending(t *testing.T) {
 			client := &countingMethodBasedClient{MethodBasedClient: s.remote.client}
 			s.remote.client = client
 			adjustCalls := make(map[uint64]int)
+			readCtx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+			defer cancel()
 			err = s.Read(
-				ctx,
+				readCtx,
 				ReadRequest{
 					TableID: table,
 					Param: shard.ReadParam{Process: pipeline.ProcessInfo{
@@ -266,6 +279,7 @@ func TestReadValidatesAllRemoteShardsBeforeSending(t *testing.T) {
 				}),
 			)
 			require.Error(t, err)
+			require.ErrorContains(t, err, "incompatible or unknown commit")
 			require.Zero(t, client.asyncCalls.Load())
 			require.Len(t, adjustCalls, len(remoteTargets))
 			for _, calls := range adjustCalls {

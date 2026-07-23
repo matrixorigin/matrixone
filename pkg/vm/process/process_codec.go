@@ -94,16 +94,17 @@ func (proc *Process) BuildProcessInfo(
 		}
 
 		procInfo.SessionInfo = pipeline.SessionInfo{
-			User:               proc.Base.SessionInfo.GetUser(),
-			Host:               proc.Base.SessionInfo.GetHost(),
-			Role:               proc.Base.SessionInfo.GetRole(),
-			ConnectionId:       proc.Base.SessionInfo.GetConnectionID(),
-			Database:           proc.Base.SessionInfo.GetDatabase(),
-			Version:            proc.Base.SessionInfo.GetVersion(),
-			TimeZone:           timeBytes,
-			QueryId:            proc.Base.SessionInfo.QueryId,
-			LockWaitTimeout:    resolveLockWaitTimeoutSeconds(proc),
-			LockWaitTimeoutSet: proc.Base.SessionInfo.LockWaitTimeoutSet,
+			User:                proc.Base.SessionInfo.GetUser(),
+			Host:                proc.Base.SessionInfo.GetHost(),
+			Role:                proc.Base.SessionInfo.GetRole(),
+			ConnectionId:        proc.Base.SessionInfo.GetConnectionID(),
+			Database:            proc.Base.SessionInfo.GetDatabase(),
+			Version:             proc.Base.SessionInfo.GetVersion(),
+			TimeZone:            timeBytes,
+			QueryId:             proc.Base.SessionInfo.QueryId,
+			LockWaitTimeout:     resolveLockWaitTimeoutSeconds(proc),
+			LockWaitTimeoutSet:  proc.Base.SessionInfo.LockWaitTimeoutSet,
+			MatrixoneNativeMode: proc.Base.SessionInfo.MatrixOneNativeMode,
 		}
 		nullifyZeroTemporal, err := ResolveExplicitZeroTemporalCastReturnsNull(proc)
 		if err != nil {
@@ -323,6 +324,7 @@ func ConvertToProcessSessionInfo(
 		QueryId:                             sei.QueryId,
 		LockWaitTimeout:                     sei.LockWaitTimeout,
 		LockWaitTimeoutSet:                  sei.LockWaitTimeoutSet,
+		MatrixOneNativeMode:                 sei.MatrixoneNativeMode,
 		ExplicitZeroTemporalCastReturnsNull: sei.ExplicitZeroTemporalCastReturnsNull,
 	}
 	t := time.Time{}
