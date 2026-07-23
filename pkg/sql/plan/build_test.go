@@ -115,6 +115,39 @@ func TestPreparedSetVariablesCollectScalarSubqueryParams(t *testing.T) {
 	require.Len(t, prepare.ParamTypes, 1)
 }
 
+func TestPreparedSetVariablesCollectScalarAggregateParams(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	p, err := runOneStmt(mock, t,
+		"prepare stmt1 from 'set @answer = (select sum(cast(? as signed)))'")
+	require.NoError(t, err)
+
+	prepare := p.GetDcl().GetPrepare()
+	require.NotNil(t, prepare)
+	require.Len(t, prepare.ParamTypes, 1)
+}
+
+func TestPreparedSetVariablesCollectScalarGroupByParams(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	p, err := runOneStmt(mock, t,
+		"prepare stmt1 from 'set @answer = (select max(1) group by cast(? as signed))'")
+	require.NoError(t, err)
+
+	prepare := p.GetDcl().GetPrepare()
+	require.NotNil(t, prepare)
+	require.Len(t, prepare.ParamTypes, 1)
+}
+
+func TestPreparedSetVariablesCollectWindowParams(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	p, err := runOneStmt(mock, t,
+		"prepare stmt1 from 'set @answer = (select sum(cast(? as signed)) over (partition by cast(? as signed) order by cast(? as signed)))'")
+	require.NoError(t, err)
+
+	prepare := p.GetDcl().GetPrepare()
+	require.NotNil(t, prepare)
+	require.Len(t, prepare.ParamTypes, 3)
+}
+
 func TestPreparedSetVariablesKeepGlobalParamOrderAcrossSubqueries(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	p, err := runOneStmt(mock, t,

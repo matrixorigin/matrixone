@@ -135,6 +135,47 @@ func TestHasTrailingZeros(t *testing.T) {
 	}
 }
 
+func TestNormalizePrepareParamRefsIsIdempotentAcrossVisitedAliases(t *testing.T) {
+	newParam := func(pos int32) *plan.Expr {
+		return &plan.Expr{Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: pos}}}
+	}
+	window := &plan.Expr{
+		Expr: &plan.Expr_W{
+			W: &plan.WindowSpec{
+				WindowFunc:  newParam(1),
+				PartitionBy: []*plan.Expr{newParam(2)},
+				OrderBy: []*plan.OrderBySpec{{
+					Expr: newParam(3),
+				}},
+				Frame: &plan.FrameClause{
+					Start: &plan.FrameBound{Val: newParam(4)},
+					End:   &plan.FrameBound{Val: newParam(5)},
+				},
+			},
+		},
+	}
+	queryPlan := &plan.Plan{
+		Plan: &plan.Plan_Query{
+			Query: &plan.Query{
+				Steps: []int32{0},
+				Nodes: []*plan.Node{{
+					ProjectList: []*plan.Expr{window},
+					WinSpecList: []*plan.Expr{window},
+				}},
+			},
+		},
+	}
+
+	require.NoError(t, NormalizePrepareParamRefs(context.Background(), queryPlan))
+	require.Equal(t, []int32{0, 1, 2, 3, 4}, []int32{
+		window.GetW().WindowFunc.GetP().Pos,
+		window.GetW().PartitionBy[0].GetP().Pos,
+		window.GetW().OrderBy[0].Expr.GetP().Pos,
+		window.GetW().Frame.Start.Val.GetP().Pos,
+		window.GetW().Frame.End.Val.GetP().Pos,
+	})
+}
+
 func TestFillValuesOfParamsInPlanDoesNotMutatePreparedPlan(t *testing.T) {
 	source := &plan.Expr{Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 1}}}
 	binaryLiteral := &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{
