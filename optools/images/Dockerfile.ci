@@ -47,11 +47,17 @@ ARG BUILD_VERSION
 RUN branch_name="${BUILD_BRANCH_NAME:-$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)}" && \
     commit_id="${BUILD_COMMIT_ID:-$(git rev-parse --short HEAD 2>/dev/null || true)}" && \
     mo_version="${BUILD_VERSION:-$(git symbolic-ref -q --short HEAD || git describe --tags --exact-match 2>/dev/null || true)}" && \
+    if [ -z "$commit_id" ]; then \
+        echo "BUILD_COMMIT_ID is required when the build context excludes .git"; \
+        exit 1; \
+    fi && \
     if [ "$TYPECHECK" = "1" ]; then \
         make build-with-prebuilt-native TYPECHECK=1 BRANCH_NAME="$branch_name" LAST_COMMIT_ID="$commit_id" MO_VERSION="$mo_version"; \
     else \
         make build-with-prebuilt-native BRANCH_NAME="$branch_name" LAST_COMMIT_ID="$commit_id" MO_VERSION="$mo_version"; \
-    fi
+    fi && \
+    LD_LIBRARY_PATH="$PWD/cgo:$PWD/thirdparties/install/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+        ./mo-service -version | grep -Fx "  Git commit ID: $commit_id"
 
 FROM scratch AS go-cache-export
 COPY --from=builder /root/.cache/go-build /root/.cache/go-build

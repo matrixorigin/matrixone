@@ -6,7 +6,6 @@ logs/
 # Ignore IDE files
 .vscode/
 .idea/
-.git/
 *.swp
 *.swo
 
