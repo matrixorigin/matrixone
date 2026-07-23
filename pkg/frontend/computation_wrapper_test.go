@@ -221,6 +221,31 @@ func TestInitExecuteStmtParamPreservesBinaryFlagPerUserVariable(t *testing.T) {
 	cw.proc.SetPrepareParams(nil)
 }
 
+func TestPreparedSetExpressionParamsAfterInit(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(
+		t, 108, "set @prepared_set_value = ? + 1")
+	defer prepareStmt.Close()
+
+	install := func(value string) *vector.Vector {
+		params := vector.NewVec(types.T_text.ToType())
+		require.NoError(t, vector.AppendBytes(params, []byte(value), false, cw.proc.Mp()))
+		prepareStmt.params = params
+
+		_, _, stmt, _, err := initExecuteStmtParam(
+			execCtx, ses, cw, nil, prepareStmt.Name)
+		require.NoError(t, err)
+		require.IsType(t, &tree.SetVar{}, stmt)
+		require.Equal(t, value, cw.proc.GetPrepareParams().GetStringAt(0))
+		return params
+	}
+
+	first := install("41")
+	second := install("9")
+	first.Free(cw.proc.Mp())
+	require.Equal(t, "9", cw.proc.GetPrepareParams().GetStringAt(0))
+	require.Same(t, second, prepareStmt.params)
+}
+
 func TestInitExecuteStmtParamFreesParamsOnResolveError(t *testing.T) {
 	ses, prepareStmt, cw, _ := newPreparedExecuteEnvForSQL(t, 103, "select ?, ?")
 	defer prepareStmt.Close()

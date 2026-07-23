@@ -3367,6 +3367,30 @@ func TestSerializePlanToJson(t *testing.T) {
 	}
 }
 
+func TestPreparedSetExpressionPlanModeIsExplicit(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "select ? + 1 from dual", 1)
+	require.NoError(t, err)
+
+	_, err = buildPlanWithPrepareMode(
+		ctx, nil, plan.NewEmptyCompilerContext(), stmt, false)
+	require.ErrorContains(t, err, "only prepare statement can use ? expr")
+
+	preparedPlan, err := buildPlanWithPrepareMode(
+		ctx, nil, plan.NewEmptyCompilerContext(), stmt, true)
+	require.NoError(t, err)
+	require.True(t, preparedPlan.GetIsPrepare())
+}
+
+func TestPreparedSetExpressionDispatchIsExplicit(t *testing.T) {
+	direct := &ExecCtx{cw: &TxnComputationWrapper{}}
+	prepared := &ExecCtx{cw: &TxnComputationWrapper{ifIsExeccute: true}}
+
+	require.False(t, preparedSetExpression(direct))
+	require.True(t, preparedSetExpression(prepared))
+	require.False(t, preparedSetExpression(&ExecCtx{}))
+}
+
 func TestMarshalPlanHandlerSanitizesNonFinitePlanStats(t *testing.T) {
 	uid, err := uuid.NewV7()
 	require.NoError(t, err)

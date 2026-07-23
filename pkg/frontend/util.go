@@ -185,6 +185,16 @@ func WildcardMatch(pattern, target string) bool {
 
 // getExprValue executes the expression and returns the value.
 func getExprValue(e tree.Expr, ses *Session, execCtx *ExecCtx, isBin ...*bool) (interface{}, error) {
+	return getExprValueWithPrepareMode(e, ses, execCtx, false, isBin...)
+}
+
+func getExprValueWithPrepareMode(
+	e tree.Expr,
+	ses *Session,
+	execCtx *ExecCtx,
+	preparedExpression bool,
+	isBin ...*bool,
+) (interface{}, error) {
 	/*
 		CORNER CASE:
 			SET character_set_results = utf8; // e = tree.UnresolvedName{'utf8'}.
@@ -236,7 +246,8 @@ func getExprValue(e tree.Expr, ses *Session, execCtx *ExecCtx, isBin ...*bool) (
 		ses:    ses,
 	}
 	defer tempExecCtx.Close()
-	err = executeStmtInSameSession(tempExecCtx.reqCtx, ses, &tempExecCtx, compositedSelect)
+	err = executeStmtInSameSession(
+		tempExecCtx.reqCtx, ses, &tempExecCtx, compositedSelect, preparedExpression)
 	if err != nil {
 		return nil, err
 	}
@@ -1692,6 +1703,9 @@ type UserInput struct {
 	sqlSourceType             []string
 	isRestore                 bool
 	isBinaryProtExecute       bool
+	// isPreparedExpression marks a nested SET-derived expression that is being
+	// evaluated as part of prepared-statement execution.
+	isPreparedExpression bool
 	// isInternalInput mark this UserInput is come from mo internal.
 	// replace old logic: (stmt != nil)
 	// cc isInternal()
@@ -1737,6 +1751,10 @@ func (ui *UserInput) getSqlSourceTypes() []string {
 // currently, we use it to handle the 'set_var' statement.
 func (ui *UserInput) isInternal() bool {
 	return ui.isInternalInput
+}
+
+func (ui *UserInput) isPreparedExpr() bool {
+	return ui != nil && ui.isPreparedExpression
 }
 
 func (ui *UserInput) genSqlSourceType(ses FeSession) {
