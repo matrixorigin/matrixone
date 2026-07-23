@@ -125,7 +125,7 @@ func transferTombstoneObjects(
 					zap.Int("tail", len(tail)))
 			}
 
-			bat := colexec.AllocCNS3ResultBat(true, false)
+			bat := colexec.AllocCNS3ResultBat(true)
 			if err = bat.PreExtend(txn.proc.Mp(), len(slist)); err != nil {
 				return err
 			}
