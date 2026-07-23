@@ -33,7 +33,7 @@ where table_id = (select rel_id from mo_catalog.mo_tables
 where relname='t' and reldatabase='cagra_replicated')
 and name='ix' and algo_table_type='cagra_index';
 ➤ algo[12,-1,0]  ¦  algo_table_type[12,-1,0]  ¦  algo_params[12,-1,0]  𝄀
-cagra  ¦  cagra_index  ¦  {"distribution_mode":"replicated","graph_degree":"8","intermediate_graph_degree":"16","itopk_size":"32","op_type":"vector_l2_ops","quantization":"float32"}
+cagra  ¦  cagra_index  ¦  {"distribution_mode":"replicated","graph_degree":"8","intermediate_graph_degree":"16","itopk_size":"32","op_type":"vector_l2_ops","quantization":"float32","session_vars":{"cfg":{"cagra_threads_build":{"t":"I","v":7},"lower_case_table_names":{"t":"I","v":1}}}}
 select id from t order by l2_distance(v, '[1,1,1,1,1,1,1,1]') limit 1;
 ➤ id[-5,64,0]  𝄀
 1
