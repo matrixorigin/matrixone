@@ -1089,38 +1089,6 @@ func TestCombinedRelData_DataSlice(t *testing.T) {
 	})
 }
 
-func TestCombinedRelData_GetShardIDList(t *testing.T) {
-	data := &CombinedRelData{}
-
-	assert.PanicsWithValue(t, "not implemented", func() {
-		data.GetShardIDList()
-	})
-}
-
-func TestCombinedRelData_GetShardID(t *testing.T) {
-	data := &CombinedRelData{}
-
-	assert.PanicsWithValue(t, "not implemented", func() {
-		data.GetShardID(0)
-	})
-}
-
-func TestCombinedRelData_SetShardID(t *testing.T) {
-	data := &CombinedRelData{}
-
-	assert.PanicsWithValue(t, "not implemented", func() {
-		data.SetShardID(0, 1)
-	})
-}
-
-func TestCombinedRelData_AppendShardID(t *testing.T) {
-	data := &CombinedRelData{}
-
-	assert.PanicsWithValue(t, "not implemented", func() {
-		data.AppendShardID(1)
-	})
-}
-
 func TestCombinedRelData_SetBlockInfo(t *testing.T) {
 	data := &CombinedRelData{}
 
@@ -1550,20 +1518,6 @@ func (m *mockRelData) BuildEmptyRelData(preAllocSize int) engine.RelData {
 
 func (m *mockRelData) DataCnt() int {
 	return m.dataCnt
-}
-
-func (m *mockRelData) GetShardIDList() []uint64 {
-	return nil
-}
-
-func (m *mockRelData) GetShardID(i int) uint64 {
-	return 0
-}
-
-func (m *mockRelData) SetShardID(i int, id uint64) {
-}
-
-func (m *mockRelData) AppendShardID(id uint64) {
 }
 
 func (m *mockRelData) Split(i int) []engine.RelData {
