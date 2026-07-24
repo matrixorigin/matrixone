@@ -705,11 +705,18 @@ drop table grouping_uuid;
 
 -- Grouping NULL normalization must preserve vector projection types.
 drop table if exists grouping_vector;
-create table grouping_vector (v32 vecf32(3), v64 vecf64(3));
+create table grouping_vector (
+    v32 vecf32(3),
+    v64 vecf64(3),
+    vbf16 vecbf16(3),
+    vf16 vecf16(3),
+    vi8 vecint8(3),
+    vu8 vecuint8(3)
+);
 insert into grouping_vector values
-    ('[1, 2, 3]', '[1, 2, 3]'),
-    ('[4, 5, 6]', '[4, 5, 6]'),
-    (null, null);
+    ('[1, 2, 3]', '[1, 2, 3]', '[1, 2, 3]', '[1, 2, 3]', '[-128, 0, 127]', '[0, 1, 255]'),
+    ('[4, 5, 6]', '[4, 5, 6]', '[4, 5, 6]', '[4, 5, 6]', '[-1, 1, 2]', '[2, 3, 4]'),
+    (null, null, null, null, null, null);
 select distinct v32
 from grouping_vector
 group by v32 with rollup
@@ -718,6 +725,22 @@ select distinct v64
 from grouping_vector
 group by cube(v64)
 order by v64;
+select distinct vbf16
+from grouping_vector
+group by vbf16 with rollup
+order by vbf16;
+select distinct vf16
+from grouping_vector
+group by cube(vf16)
+order by vf16;
+select distinct vi8
+from grouping_vector
+group by vi8 with rollup
+order by vi8;
+select distinct vu8
+from grouping_vector
+group by cube(vu8)
+order by vu8;
 drop table grouping_vector;
 
 -- DISTINCT must preserve subtotal and grand-total rows for NOT NULL inputs.

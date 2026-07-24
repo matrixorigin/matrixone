@@ -18,3 +18,26 @@ grouping-set DISTINCT 分支用同一 projection 表达式同时构造
 
 - 运行 planner 定向及全量 CGo UT、真实 sequence BVT、build、覆盖率、静态检查。
 - 完成全差异 self-review 后提交并正常推送，不 force push，不修改 GitHub thread。
+
+## PR #25335 第十轮 review 修复
+
+### 有效问题
+
+最新 `mo/main` 已新增 `VECBF16`、`VECF16`、`VECINT8`、`VECUINT8`，但 IFF
+只为 `VECF32`、`VECF64` 提供执行分派和公共类型规则。单一窄向量会在 `iffFn`
+panic，不同窄向量混用还会按参数顺序选择有损结果类型。
+
+### 修复方案
+
+1. 合并最新 `mo/main`，以精确合并态修复和验证。
+2. 为六种向量 OID 补齐 IFF 执行分派，并集中定义向量公共类型规则。
+3. 同 OID 要求维度一致；`VECF32` 与 `VECF64` 无损提升为 `VECF64`；其他不同
+   OID 若不存在明确无损公共类型则在绑定期拒绝，确保结果与参数顺序无关。
+4. 扩展 function/planner 单测覆盖六种同类型、双向混合、维度和边界值；增加
+   六种向量 DISTINCT ROLLUP 真实执行回归。
+
+### 验证
+
+- 运行 function/planner 定向及全量 CGo UT、真实 rollup BVT、build、覆盖率、
+  静态检查和 `git diff --check`。
+- 完成全差异 self-review 后提交并正常推送，不 force push，不修改 GitHub thread。

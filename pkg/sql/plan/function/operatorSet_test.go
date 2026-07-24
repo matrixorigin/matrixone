@@ -471,6 +471,10 @@ func TestIffCheck_PreservesVectorResultTypes(t *testing.T) {
 	for _, typ := range []types.Type{
 		types.New(types.T_array_float32, 3, 0),
 		types.New(types.T_array_float64, 3, 0),
+		types.New(types.T_array_bf16, 3, 0),
+		types.New(types.T_array_float16, 3, 0),
+		types.New(types.T_array_int8, 3, 0),
+		types.New(types.T_array_uint8, 3, 0),
 	} {
 		t.Run(typ.Oid.String(), func(t *testing.T) {
 			result := iffCheck(nil, []types.Type{
@@ -505,6 +509,37 @@ func TestIffCheck_VectorCommonType(t *testing.T) {
 	require.Equal(t, succeedWithCast, result.status)
 	require.Equal(t, vecf64, result.finalType[1])
 	require.Equal(t, vecf64, result.finalType[2])
+
+	vectorTypes := []types.T{
+		types.T_array_float32,
+		types.T_array_float64,
+		types.T_array_bf16,
+		types.T_array_float16,
+		types.T_array_int8,
+		types.T_array_uint8,
+	}
+	for i := 0; i < len(vectorTypes); i++ {
+		for j := i + 1; j < len(vectorTypes); j++ {
+			for _, branches := range [][2]types.T{
+				{vectorTypes[i], vectorTypes[j]},
+				{vectorTypes[j], vectorTypes[i]},
+			} {
+				result = iffCheck(nil, []types.Type{
+					types.T_bool.ToType(),
+					types.New(branches[0], 2, 0),
+					types.New(branches[1], 2, 0),
+				})
+				if (branches[0] == types.T_array_float32 && branches[1] == types.T_array_float64) ||
+					(branches[0] == types.T_array_float64 && branches[1] == types.T_array_float32) {
+					require.Equal(t, succeedWithCast, result.status)
+					require.Equal(t, types.T_array_float64, result.finalType[1].Oid)
+					continue
+				}
+				require.Equal(t, failedFunctionParametersWrong, result.status,
+					"%s and %s must not pick an order-dependent lossy type", branches[0], branches[1])
+			}
+		}
+	}
 }
 
 func TestIffConditionTruthyAt(t *testing.T) {
@@ -603,6 +638,30 @@ func TestIffFn_VectorResults(t *testing.T) {
 			values: [][]float64{{1, 2, 3}, {4, 5, 6}},
 			want:   [][]float64{{1, 2, 3}, {8, 9, 10}},
 		},
+		{
+			name:   "vecbf16",
+			typ:    types.T_array_bf16.ToType(),
+			values: [][]types.BF16{{1, 2, 3}, {4, 5, 6}},
+			want:   [][]types.BF16{{1, 2, 3}, {8, 9, 10}},
+		},
+		{
+			name:   "vecf16",
+			typ:    types.T_array_float16.ToType(),
+			values: [][]types.Float16{{1, 2, 3}, {4, 5, 6}},
+			want:   [][]types.Float16{{1, 2, 3}, {8, 9, 10}},
+		},
+		{
+			name:   "vecint8",
+			typ:    types.T_array_int8.ToType(),
+			values: [][]int8{{-128, 2, 127}, {4, 5, 6}},
+			want:   [][]int8{{-128, 2, 127}, {8, 9, 10}},
+		},
+		{
+			name:   "vecuint8",
+			typ:    types.T_array_uint8.ToType(),
+			values: [][]uint8{{0, 2, 255}, {4, 5, 6}},
+			want:   [][]uint8{{0, 2, 255}, {8, 9, 10}},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -612,6 +671,14 @@ func TestIffFn_VectorResults(t *testing.T) {
 				falseValues = [][]float32{{7, 8, 9}, {8, 9, 10}}
 			case types.T_array_float64:
 				falseValues = [][]float64{{7, 8, 9}, {8, 9, 10}}
+			case types.T_array_bf16:
+				falseValues = [][]types.BF16{{7, 8, 9}, {8, 9, 10}}
+			case types.T_array_float16:
+				falseValues = [][]types.Float16{{7, 8, 9}, {8, 9, 10}}
+			case types.T_array_int8:
+				falseValues = [][]int8{{7, 8, 9}, {8, 9, 10}}
+			case types.T_array_uint8:
+				falseValues = [][]uint8{{7, 8, 9}, {8, 9, 10}}
 			}
 			tc := NewFunctionTestCase(proc,
 				[]FunctionTestInput{

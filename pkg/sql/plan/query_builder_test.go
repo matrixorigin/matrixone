@@ -4966,7 +4966,14 @@ func TestGroupingSetDistinctOrderKeepsNestedVolatileCall(t *testing.T) {
 }
 
 func TestGroupingSetDistinctVectorProjects(t *testing.T) {
-	for _, typ := range []types.T{types.T_array_float32, types.T_array_float64} {
+	for _, typ := range []types.T{
+		types.T_array_float32,
+		types.T_array_float64,
+		types.T_array_bf16,
+		types.T_array_float16,
+		types.T_array_int8,
+		types.T_array_uint8,
+	} {
 		t.Run(typ.String(), func(t *testing.T) {
 			mock := NewMockOptimizer(true)
 			vectorCol := mock.ctxt.tables["bind_select"].Cols[0]
@@ -4999,6 +5006,37 @@ func TestIffVectorCommonType(t *testing.T) {
 		"select if(false, cast('[1,2]' as vecf32(2)), cast('[3,4,5]' as vecf32(3)))")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "invalid argument function if")
+
+	vectorTypes := []struct {
+		name    string
+		literal string
+	}{
+		{name: "vecf32", literal: "[1,2]"},
+		{name: "vecf64", literal: "[1.0000000001,2]"},
+		{name: "vecbf16", literal: "[1,2]"},
+		{name: "vecf16", literal: "[1,2]"},
+		{name: "vecint8", literal: "[-128,127]"},
+		{name: "vecuint8", literal: "[0,255]"},
+	}
+	for i := 0; i < len(vectorTypes); i++ {
+		for j := i + 1; j < len(vectorTypes); j++ {
+			for _, branches := range [][2]int{{i, j}, {j, i}} {
+				left, right := vectorTypes[branches[0]], vectorTypes[branches[1]]
+				p, err := runOneStmt(mock, t,
+					fmt.Sprintf("select if(false, cast('%s' as %s(2)), cast('%s' as %s(2)))",
+						left.literal, left.name, right.literal, right.name))
+				if (left.name == "vecf32" && right.name == "vecf64") ||
+					(left.name == "vecf64" && right.name == "vecf32") {
+					require.NoError(t, err)
+					root := p.GetQuery().Nodes[p.GetQuery().Steps[0]]
+					require.Equal(t, int32(types.T_array_float64), root.ProjectList[0].Typ.Id)
+					continue
+				}
+				require.Error(t, err)
+				require.Contains(t, err.Error(), "invalid argument function if")
+			}
+		}
+	}
 }
 
 func TestNormalizeGroupingSetDistinctProjectsTypedNull(t *testing.T) {
@@ -5011,6 +5049,10 @@ func TestNormalizeGroupingSetDistinctProjectsTypedNull(t *testing.T) {
 		types.T_uuid,
 		types.T_array_float32,
 		types.T_array_float64,
+		types.T_array_bf16,
+		types.T_array_float16,
+		types.T_array_int8,
+		types.T_array_uint8,
 	} {
 		t.Run(typ.String(), func(t *testing.T) {
 			project := GetColExpr(
