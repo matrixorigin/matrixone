@@ -17,6 +17,7 @@ package lockservice
 import (
 	"context"
 	"fmt"
+	goruntime "runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -264,6 +265,205 @@ func TestKeeperIntervalJitterIsBounded(t *testing.T) {
 		require.LessOrEqual(t, got, interval+window)
 	}
 	require.Equal(t, time.Duration(0), jitterKeeperInterval(0))
+}
+
+func TestKeepRemoteLockReusesBindScratch(t *testing.T) {
+	logger := getLogger("")
+	client := &bindCursorClient{submitted: make(map[uint64]int)}
+	tables := &lockTableHolders{
+		service: "local",
+		logger:  logger,
+		holders: make(map[uint32]*lockTableHolder),
+	}
+	const bindCount = 3
+	for i := range bindCount {
+		bind := pb.LockTable{
+			Table:       uint64(i + 1),
+			OriginTable: uint64(i + 1),
+			ServiceID:   "peer",
+			Version:     1,
+			Valid:       true,
+		}
+		tables.set(
+			bind.Group,
+			bind.Table,
+			newRemoteLockTable(
+				"local",
+				time.Second,
+				bind,
+				client,
+				func(pb.LockTable) {},
+				logger,
+			),
+		)
+	}
+	keeper := &lockTableKeeper{
+		serviceID:   "local",
+		client:      client,
+		groupTables: tables,
+		service:     &service{serviceID: "local", logger: logger},
+	}
+	scratch := make([]pb.LockTable, 0, 1)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	_, grown := keeper.doKeepRemoteLock(ctx, nil, scratch)
+	cancel()
+	require.GreaterOrEqual(t, cap(grown), bindCount)
+	grownBacking := &grown[:cap(grown)][0]
+
+	ctx, cancel = context.WithTimeout(context.Background(), 10*time.Millisecond)
+	_, reused := keeper.doKeepRemoteLock(ctx, nil, grown)
+	cancel()
+	require.Equal(t, cap(grown), cap(reused))
+	require.Same(t, grownBacking, &reused[:cap(reused)][0])
+
+	collectScratch := make([]pb.LockTable, 0, bindCount)
+	var collected []pb.LockTable
+	allocs := testing.AllocsPerRun(100, func() {
+		collected = collectKeepRemoteLockBinds("local", tables, collectScratch)
+		goruntime.KeepAlive(collected)
+	})
+	require.Zero(t, allocs)
+	require.Len(t, collected, bindCount)
+}
+
+func TestCollectKeepRemoteLockBindsClearsStaleScratch(t *testing.T) {
+	logger := getLogger("")
+	tables := &lockTableHolders{
+		service: "local",
+		logger:  logger,
+		holders: make(map[uint32]*lockTableHolder),
+	}
+	bind := pb.LockTable{
+		Table:       1,
+		OriginTable: 1,
+		ServiceID:   "peer",
+		Version:     1,
+		Valid:       true,
+	}
+	tables.set(
+		bind.Group,
+		bind.Table,
+		newRemoteLockTable(
+			"local",
+			time.Second,
+			bind,
+			nil,
+			func(pb.LockTable) {},
+			logger,
+		),
+	)
+	scratch := []pb.LockTable{
+		{ServiceID: "old-1", AllocatorID: "allocator-1"},
+		{
+			ServiceID:        "old-2",
+			AllocatorID:      "allocator-2",
+			XXX_unrecognized: []byte("old-payload"),
+		},
+		{ServiceID: "old-3", AllocatorID: "allocator-3"},
+	}
+
+	binds := collectKeepRemoteLockBinds("local", tables, scratch)
+
+	require.Len(t, binds, 1)
+	for _, stale := range scratch[len(binds):] {
+		require.Equal(t, pb.LockTable{}, stale)
+	}
+
+	emptyTables := &lockTableHolders{
+		service: "local",
+		logger:  logger,
+		holders: make(map[uint32]*lockTableHolder),
+	}
+	binds = collectKeepRemoteLockBinds("local", emptyTables, binds)
+	require.Empty(t, binds)
+	require.Equal(t, pb.LockTable{}, scratch[0])
+}
+
+func TestPrepareKeepRemoteLockPeersDoesNotAllocatePerBind(t *testing.T) {
+	const (
+		bindCount = 10_000
+		peerCount = 100
+	)
+	source := makeKeepRemoteLockBenchmarkBinds(bindCount, peerCount)
+	binds := make([]pb.LockTable, bindCount)
+	peers := make([]keepRemoteLockPeerWork, 0, peerCount)
+
+	allocs := testing.AllocsPerRun(10, func() {
+		copy(binds, source)
+		peers = prepareKeepRemoteLockPeers(binds, peers[:0])
+		goruntime.KeepAlive(peers)
+	})
+
+	require.Zero(t, allocs)
+	require.Len(t, peers, peerCount)
+}
+
+func TestPrepareKeepRemoteLockPeersClearsStaleScratch(t *testing.T) {
+	oldBinds := []pb.LockTable{
+		{ServiceID: "peer-1"},
+		{ServiceID: "peer-2"},
+		{ServiceID: "peer-3"},
+	}
+	peers := prepareKeepRemoteLockPeers(
+		oldBinds,
+		make([]keepRemoteLockPeerWork, 0, len(oldBinds)),
+	)
+	require.Len(t, peers, len(oldBinds))
+
+	peers = prepareKeepRemoteLockPeers(
+		[]pb.LockTable{{ServiceID: "peer-1"}},
+		peers,
+	)
+
+	require.Len(t, peers, 1)
+	for _, stale := range peers[:cap(peers)][len(peers):] {
+		require.Empty(t, stale.serviceID)
+		require.Nil(t, stale.binds)
+	}
+	peers = prepareKeepRemoteLockPeers(nil, peers)
+	require.Empty(t, peers)
+	for _, stale := range peers[:cap(peers)] {
+		require.Empty(t, stale.serviceID)
+		require.Nil(t, stale.binds)
+	}
+}
+
+func BenchmarkPrepareKeepRemoteLockPeers10K(b *testing.B) {
+	const (
+		bindCount = 10_000
+		peerCount = 100
+	)
+	source := makeKeepRemoteLockBenchmarkBinds(bindCount, peerCount)
+	binds := make([]pb.LockTable, bindCount)
+	peers := make([]keepRemoteLockPeerWork, 0, peerCount)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		copy(binds, source)
+		peers = prepareKeepRemoteLockPeers(binds, peers[:0])
+	}
+	goruntime.KeepAlive(peers)
+}
+
+func makeKeepRemoteLockBenchmarkBinds(
+	bindCount int,
+	peerCount int,
+) []pb.LockTable {
+	peerIDs := make([]string, peerCount)
+	for i := range peerIDs {
+		peerIDs[i] = fmt.Sprintf("peer-%03d", i)
+	}
+	binds := make([]pb.LockTable, bindCount)
+	for i := range binds {
+		reversed := bindCount - i - 1
+		binds[i] = pb.LockTable{
+			Group:     uint32(reversed % 8),
+			Table:     uint64(reversed + 1),
+			ServiceID: peerIDs[reversed%peerCount],
+			Version:   1,
+		}
+	}
+	return binds
 }
 
 func TestKeepRemoteLockHasBoundedInflight(t *testing.T) {
@@ -591,6 +791,70 @@ func TestKeepRemoteLockWorkCursorIsFairAcrossSlowRounds(t *testing.T) {
 	require.Len(t, client.submitted, bindCount)
 	for table := uint64(1); table <= bindCount; table++ {
 		require.Equal(t, 1, client.submitted[table])
+	}
+}
+
+func TestKeepRemoteLockPeerCursorIsFairAcrossSlowRounds(t *testing.T) {
+	logger := getLogger("")
+	client := &bindCursorClient{submitted: make(map[uint64]int)}
+	tables := &lockTableHolders{
+		service: "local",
+		logger:  logger,
+		holders: map[uint32]*lockTableHolder{},
+	}
+	const peerCount = keepRemoteLockBatchSize * 2
+	for i := range peerCount {
+		bind := pb.LockTable{
+			Table:       uint64(i + 1),
+			OriginTable: uint64(i + 1),
+			ServiceID:   fmt.Sprintf("peer-%03d", i),
+			Version:     1,
+			Valid:       true,
+		}
+		tables.set(
+			bind.Group,
+			bind.Table,
+			newRemoteLockTable(
+				"local",
+				time.Second,
+				bind,
+				client,
+				func(pb.LockTable) {},
+				logger,
+			),
+		)
+	}
+	keeper := &lockTableKeeper{
+		serviceID:   "local",
+		client:      client,
+		groupTables: tables,
+		service:     &service{serviceID: "local", logger: logger},
+	}
+
+	runRound := func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+		keeper.doKeepRemoteLock(ctx, nil, nil)
+		cancel()
+	}
+	runRound()
+	runRound()
+
+	client.mu.Lock()
+	require.Len(t, client.submitted, peerCount)
+	for table := uint64(1); table <= peerCount; table++ {
+		require.Equal(t, 1, client.submitted[table])
+	}
+	client.mu.Unlock()
+
+	runRound()
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	for table := uint64(1); table <= peerCount; table++ {
+		want := 1
+		if table <= keepRemoteLockBatchSize {
+			want = 2
+		}
+		require.Equal(t, want, client.submitted[table])
 	}
 }
 
