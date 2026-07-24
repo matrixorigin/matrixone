@@ -155,34 +155,43 @@ func (p *termPostings) fillBlock(b int, outDocs []int64, outTfs []uint8) int {
 }
 
 // fillBlockPositions decodes block b's per-doc token positions into out[:blen],
-// returning the block length. Build-side views the flat positions slice; loaded-side
-// varint-decodes only block b's slice of posRaw (via blockPosOff) — the per-block
-// analogue of fillBlock, so the phrase cursor holds ONE block's positions (O(BlockSize))
-// instead of the whole list. out[i] is (re)allocated to that doc's position count.
+// returning the block length. loaded-side varint-decodes only block b's slice of posRaw
+// (via blockPosOff) — the per-block analogue of fillBlock, so the phrase cursor holds ONE
+// block's positions (O(BlockSize)) instead of the whole list.
+//
+// out[i] is REUSED in place (out[i] = append(out[i][:0], …)): out is a pooled phraseBuf
+// buffer (getPhraseBuf), and reallocating a fresh []int32 per doc per block both churned
+// the allocator under concurrent phrase load and left the pool holding stale per-doc
+// arrays. Reusing keeps each slot at its high-water capacity and makes the pool actually
+// pool. The build-side branch COPIES the flat slice into the owned out[i] (rather than
+// aliasing p.positions) so a buffer reused later on a loaded segment can never write back
+// into build data. matchPhrase reads positions via range / sortedContainsInt32, both of
+// which treat a nil and an empty slice identically, so the degenerate (no-data / corrupt)
+// slots leave out[i] empty rather than nil.
 func (p *termPostings) fillBlockPositions(b int, out [][]int32) int {
 	blen := p.blockLen(b)
-	if p.positions != nil { // build-side: view into the flat slice
+	if p.positions != nil { // build-side: copy the flat slice into the buffer's own arrays
 		lo := b * BlockSize
-		copy(out[:blen], p.positions[lo:lo+blen])
+		for i := 0; i < blen; i++ {
+			out[i] = append(out[i][:0], p.positions[lo+i]...)
+		}
 		return blen
 	}
 	data := p.posRaw[p.blockPosOff[b]:p.blockPosOff[b+1]]
 	off := 0
 	for i := 0; i < blen; i++ {
+		out[i] = out[i][:0] // reuse the pooled backing array; empty ≡ nil for the reader
 		if off >= len(data) {
-			out[i] = nil
 			continue
 		}
 		pc, n := binary.Uvarint(data[off:])
 		if n <= 0 {
-			out[i] = nil
 			continue
 		}
 		off += n
 		if pc > uint64(len(data)-off) { // corrupt guard (each gap is >= 1 byte)
 			pc = uint64(len(data) - off)
 		}
-		doc := make([]int32, pc)
 		var pp int32
 		for m := uint64(0); m < pc; m++ {
 			g, k := binary.Uvarint(data[off:])
@@ -191,9 +200,8 @@ func (p *termPostings) fillBlockPositions(b int, out [][]int32) int {
 			}
 			off += k
 			pp += int32(g)
-			doc[m] = pp
+			out[i] = append(out[i], pp)
 		}
-		out[i] = doc
 	}
 	return blen
 }

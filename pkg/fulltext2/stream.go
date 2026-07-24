@@ -198,10 +198,21 @@ func (idx *Index) StreamQuery(pattern []byte, boolean bool, parser string, algo 
 		if terms, ok := disjunctiveTerms(q); ok {
 			return idx.streamDisjunction(terms, algo, filter, sink)
 		}
+	} else {
+		// NL mode = exact positional phrase. Stream it ONE SEGMENT AT A TIME (peak =
+		// one segment's phrase matches, freed before the next) instead of the old
+		// SearchQuery(globalN) fallback, whose bounded top-K sized to globalN
+		// materialized the whole live corpus for a low-selectivity phrase.
+		slots, err := phraseSlots(pat, p)
+		if err != nil {
+			return err
+		}
+		return idx.streamPhrase(slots, algo, filter, sink)
 	}
 
-	// Non-disjunctive: fall back to the materializing search (unbounded k) and push its
-	// results through the sink. The candidate set is intrinsic to these query shapes.
+	// Boolean, non-disjunctive (MUST / MUST-NOT / mixed phrase): the candidate set is
+	// intrinsic to the operators, so fall back to the materializing search and push its
+	// results through the sink. Streaming this shape is a further step (its own change).
 	results, err := idx.SearchQuery(pattern, boolean, parser, algo, int(idx.globalN), filter)
 	if err != nil {
 		return err
@@ -210,6 +221,51 @@ func (idx *Index) StreamQuery(pattern []byte, boolean bool, parser string, algo 
 		sink.pushAny(r.Pk, r.Score)
 		if sink.err != nil {
 			return sink.err
+		}
+	}
+	sink.flush()
+	return sink.err
+}
+
+// streamPhrase emits every live phrase match (pk, score) through sink WITHOUT a global
+// top-K heap or a globalN result slice — the streaming analogue of SearchPhrase for the
+// no-LIMIT NL path. A phrase has ONE idf² (a positive constant, so it does not change
+// rank but does set the absolute score to match the LIMIT path), which needs the total
+// live df, so this makes two cheap passes: pass 1 counts the live phrase df; pass 2
+// scores + streams. Peak Go heap is O(one segment's matchPhrase hits) (freed before the
+// next segment), NOT O(globalN). Mirrors SearchPhrase's scoring (partial × idf²) exactly.
+func (idx *Index) streamPhrase(slots []phraseSlot, algo ScoreAlgo, filter docfilter.MembershipFilter, sink *streamSink) error {
+	if idx.globalN == 0 || len(slots) == 0 {
+		return nil
+	}
+	// Pass 1: distinct live phrase df (filter-independent, matching SearchPhrase's df).
+	df := 0
+	for si, seg := range idx.segments {
+		for _, h := range seg.matchPhrase(slots) {
+			if idx.isLive(si, h.ord) {
+				df++
+			}
+		}
+	}
+	if df == 0 {
+		return nil
+	}
+	idf2 := float32(idfSquared(idx.globalN, df))
+
+	// Pass 2: score + stream each live, WHERE-admitted match in doc order per segment.
+	for si, seg := range idx.segments {
+		allow := mkAllow(seg, filter)
+		for _, h := range seg.matchPhrase(slots) {
+			if !idx.isLive(si, h.ord) {
+				continue
+			}
+			if allowed(allow, h.ord) {
+				partial := seg.scoreTerm(algo, float64(h.tf), 1.0, h.ord, idx.globalAvgDocLen)
+				sink.pushAny(seg.pk(h.ord), partial*idf2)
+				if sink.err != nil {
+					return sink.err
+				}
+			}
 		}
 	}
 	sink.flush()
