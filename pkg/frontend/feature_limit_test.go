@@ -84,7 +84,7 @@ func TestCheckBranchQuotaLocksFiniteQuota(t *testing.T) {
 	bh.sql2result[countSQL] = newMrsForSnapshotCount([][]interface{}{{int64(0)}})
 
 	require.NoError(t, checkBranchQuota(context.Background(), ses, bh, 1))
-	require.Equal(t, []string{registrySQL, quotaSQL, lockedQuotaSQL, countSQL}, bh.executedSQLs)
+	require.Equal(t, []string{registrySQL, quotaSQL, lockedQuotaSQL, lockedQuotaSQL, countSQL}, bh.executedSQLs)
 }
 
 func TestCheckBranchQuotaUsesLockedQuota(t *testing.T) {
@@ -110,7 +110,7 @@ func TestCheckBranchQuotaUsesLockedQuota(t *testing.T) {
 	bh.sql2result[lockedQuotaSQL] = newMrsForFeatureLimit([][]interface{}{{int64(-1)}})
 
 	require.NoError(t, checkBranchQuota(context.Background(), ses, bh, 1))
-	require.Equal(t, []string{registrySQL, quotaSQL, lockedQuotaSQL}, bh.executedSQLs)
+	require.Equal(t, []string{registrySQL, quotaSQL, lockedQuotaSQL, lockedQuotaSQL}, bh.executedSQLs)
 }
 
 func TestCheckBranchQuotaDoesNotLockUnlimitedQuota(t *testing.T) {
@@ -170,7 +170,7 @@ func TestCheckBranchQuotaInitializesMissingQuotaWithBackExec(t *testing.T) {
 	require.NoError(t, checkBranchQuota(context.Background(), ses, bh, 1))
 	require.Equal(
 		t,
-		[]string{registrySQL, quotaSQL, insertSQL, lockedQuotaSQL, countSQL},
+		[]string{registrySQL, quotaSQL, insertSQL, lockedQuotaSQL, lockedQuotaSQL, countSQL},
 		bh.executedSQLs,
 	)
 }

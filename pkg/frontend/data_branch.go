@@ -421,11 +421,11 @@ func dataBranchCreateDatabase(
 	}
 	stats.Add(&authStats)
 
-	if receipts, err = handleCloneDatabaseWithSource(execCtx, ses, bh, &stmt.CloneDatabase, &source); err != nil {
+	if err = checkBranchQuota(execCtx.reqCtx, ses, bh, source.branchTableCount()); err != nil {
 		return
 	}
 
-	if err = checkBranchQuota(execCtx.reqCtx, ses, bh, int64(len(receipts))); err != nil {
+	if receipts, err = handleCloneDatabaseWithSource(execCtx, ses, bh, &stmt.CloneDatabase, &source); err != nil {
 		return
 	}
 

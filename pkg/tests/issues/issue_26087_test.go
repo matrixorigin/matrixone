@@ -46,7 +46,11 @@ func TestIssue26087ConcurrentDataBranchQuota(t *testing.T) {
 			execSQLRequire(t, ctx, sysDB, "set role moadmin")
 
 			accountName := "issue_26087"
-			defer execSQLMaybe(t, ctx, sysDB, "drop account if exists "+accountName)
+			defer func() {
+				cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cleanupCancel()
+				execSQLMaybe(t, cleanupCtx, sysDB, "drop account if exists "+accountName)
+			}()
 			execSQLRequire(t, ctx, sysDB, "drop account if exists "+accountName)
 			accountID := testutils.CreateAccount(t, c, accountName, "111")
 			execSQLRequire(t, ctx, sysDB, "select mo_feature_registry_upsert('branch', 'Branch feature', '{\"allowed_scope\":[]}', true)")
@@ -59,7 +63,7 @@ func TestIssue26087ConcurrentDataBranchQuota(t *testing.T) {
 				"select rel_id from mo_catalog.mo_tables where reldatabase = 'mo_catalog' and relname = 'mo_feature_limit'",
 			).Scan(&featureLimitTableID))
 
-			tenantDB, err := sql.Open("mysql", fmt.Sprintf("%s#root#moadmin:111@tcp(127.0.0.1:%d)/", accountName, port))
+			tenantDB, err := sql.Open("mysql", fmt.Sprintf("%s#root#accountadmin:111@tcp(127.0.0.1:%d)/", accountName, port))
 			require.NoError(t, err)
 			defer tenantDB.Close()
 			tenantDB.SetMaxOpenConns(2)
@@ -70,42 +74,64 @@ func TestIssue26087ConcurrentDataBranchQuota(t *testing.T) {
 
 			conn1, err := tenantDB.Conn(ctx)
 			require.NoError(t, err)
-			defer conn1.Close()
 			conn2, err := tenantDB.Conn(ctx)
 			require.NoError(t, err)
-			defer conn2.Close()
+
+			execCtx, cancelExec := context.WithCancel(ctx)
+			var pendingCreate chan error
+			defer func() {
+				cancelExec()
+				cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cleanupCancel()
+				_, _ = conn1.ExecContext(cleanupCtx, "rollback")
+				if pendingCreate != nil {
+					select {
+					case <-pendingCreate:
+					case <-cleanupCtx.Done():
+					}
+				}
+				_, _ = conn2.ExecContext(cleanupCtx, "rollback")
+				_ = conn1.Close()
+				_ = conn2.Close()
+			}()
 
 			execConn := func(conn *sql.Conn, statement string) error {
-				_, execErr := conn.ExecContext(ctx, statement)
+				_, execErr := conn.ExecContext(execCtx, statement)
 				return execErr
 			}
+			ls := lockservice.GetLockServiceByServiceID(cn.ServiceID())
+			waitForQuotaWaiter := func() {
+				require.Eventually(t, func() bool {
+					found := false
+					ls.IterLocks(func(tableID uint64, _ [][]byte, lock lockservice.Lock) bool {
+						if tableID != featureLimitTableID {
+							return true
+						}
+						lock.IterWaiters(func(_ pblock.WaitTxn) bool {
+							found = true
+							return false
+						})
+						return !found
+					})
+					return found
+				}, 30*time.Second, 10*time.Millisecond, "second branch creator did not wait for the quota-row lock")
+			}
+
 			require.NoError(t, execConn(conn1, "begin"))
 			require.NoError(t, execConn(conn1, "data branch create table branch_quota_race.b1 from branch_quota_race.src{snapshot='issue_26087_sp'}"))
 
 			createDone := make(chan error, 1)
-			go func() {
-				createDone <- execConn(conn2, "data branch create table branch_quota_race.b2 from branch_quota_race.src{snapshot='issue_26087_sp'}")
-			}()
+			pendingCreate = createDone
+			go func(done chan<- error) {
+				done <- execConn(conn2, "data branch create table branch_quota_race.b2 from branch_quota_race.src{snapshot='issue_26087_sp'}")
+			}(createDone)
 
-			ls := lockservice.GetLockServiceByServiceID(cn.ServiceID())
-			require.Eventually(t, func() bool {
-				found := false
-				ls.IterLocks(func(tableID uint64, _ [][]byte, lock lockservice.Lock) bool {
-					if tableID != featureLimitTableID {
-						return true
-					}
-					lock.IterWaiters(func(_ pblock.WaitTxn) bool {
-						found = true
-						return false
-					})
-					return !found
-				})
-				return found
-			}, 30*time.Second, 10*time.Millisecond, "second branch creator did not wait for the quota-row lock")
+			waitForQuotaWaiter()
 
 			require.NoError(t, execConn(conn1, "commit"))
 			select {
 			case createErr := <-createDone:
+				pendingCreate = nil
 				require.Error(t, createErr)
 				require.Contains(t, createErr.Error(), "feature BRANCH with scope  has reached the limit of 1")
 				require.NotContains(t, strings.ToLower(createErr.Error()), "txn need retry")
@@ -114,10 +140,42 @@ func TestIssue26087ConcurrentDataBranchQuota(t *testing.T) {
 			}
 
 			var branchCount int
-			require.NoError(t, tenantDB.QueryRowContext(ctx,
+			require.NoError(t, conn1.QueryRowContext(execCtx,
 				"select count(*) from mo_catalog.mo_tables where reldatabase = 'branch_quota_race' and relname in ('b1', 'b2')",
 			).Scan(&branchCount))
 			require.Equal(t, 1, branchCount)
+
+			require.NoError(t, execConn(conn1, "data branch delete table branch_quota_race.b1"))
+			require.NoError(t, execConn(conn1, "create database branch_quota_source"))
+			require.NoError(t, execConn(conn1, "create table branch_quota_source.t1 (a int primary key)"))
+			require.NoError(t, execConn(conn1, "create table branch_quota_source.t2 (a int primary key)"))
+			execSQLRequire(t, ctx, sysDB, fmt.Sprintf("select mo_feature_limit_upsert(%d, 'branch', '', 3)", accountID))
+
+			require.NoError(t, execConn(conn1, "begin"))
+			require.NoError(t, execConn(conn1, "data branch create table branch_quota_race.b1 from branch_quota_race.src{snapshot='issue_26087_sp'}"))
+			require.NoError(t, execConn(conn2, "begin"))
+			createDone = make(chan error, 1)
+			pendingCreate = createDone
+			go func(done chan<- error) {
+				done <- execConn(conn2, "data branch create database branch_quota_destination from branch_quota_source")
+			}(createDone)
+
+			waitForQuotaWaiter()
+			require.NoError(t, execConn(conn1, "commit"))
+			select {
+			case createErr := <-createDone:
+				pendingCreate = nil
+				require.NoError(t, createErr)
+			case <-time.After(30 * time.Second):
+				t.Fatal("database branch creator did not return after the quota-row lock was released")
+			}
+			require.NoError(t, execConn(conn2, "commit"))
+
+			var databaseBranchCount int
+			require.NoError(t, conn1.QueryRowContext(execCtx,
+				"select count(*) from mo_catalog.mo_tables where reldatabase = 'branch_quota_destination' and relname in ('t1', 't2')",
+			).Scan(&databaseBranchCount))
+			require.Equal(t, 2, databaseBranchCount)
 		},
 	)
 }

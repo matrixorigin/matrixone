@@ -22,6 +22,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -179,6 +180,38 @@ func lockFeatureQuota(
 		"select quota from %s.%s where account_id = %d and feature_code = '%s' and scope = '%s' for update",
 		catalog.MO_CATALOG, catalog.MO_FEATURE_LIMIT, accId, code, scope,
 	)
+
+	if sqlRet, err = runSqlWithBackExec(ctx, ses, bh, sql); err != nil {
+		return 0, err
+	}
+	sqlRet.Close()
+	sqlRet = executor.Result{}
+
+	// A locking read can wait without refreshing its transaction snapshot.
+	// Advance it while retaining the quota-row lock, then re-read the quota and
+	// active branch metadata from a snapshot that includes the prior creator.
+	if backExec, ok := bh.(*backExec); ok {
+		txnOp := backExec.backSes.GetTxnHandler().GetTxn()
+		if txnOp == nil {
+			return 0, moerr.NewInternalErrorNoCtx("missing transaction for branch quota snapshot refresh")
+		}
+		rt := moruntime.ServiceRuntime(ses.service)
+		if rt == nil {
+			return 0, moerr.NewInternalErrorNoCtx("missing service runtime for branch quota snapshot refresh")
+		}
+		now, _ := rt.Clock().Now()
+		txnClient := getPu(ses.service).TxnClient
+		if txnClient == nil {
+			return 0, moerr.NewInternalErrorNoCtx("missing transaction client for branch quota snapshot refresh")
+		}
+		applied, waitErr := txnClient.WaitLogTailAppliedAt(ctx, now)
+		if waitErr != nil {
+			return 0, waitErr
+		}
+		if err = txnOp.GetWorkspace().AdvanceSnapshot(ctx, applied); err != nil {
+			return 0, err
+		}
+	}
 
 	if sqlRet, err = runSqlWithBackExec(ctx, ses, bh, sql); err != nil {
 		return 0, err
