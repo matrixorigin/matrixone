@@ -2126,6 +2126,24 @@ func TestRenderCreateTableDDLFromSchema_PreservesArrayType(t *testing.T) {
 	assert.NotContains(t, ddl, "`tags` JSON")
 }
 
+func TestRenderCreateTableDDLFromSchema_AcceptsUnicodeComment(t *testing.T) {
+	ddl := RenderCreateTableDDLFromSchema(&TableSchema{
+		TableName: "ca_comprehensive_dataset",
+		Columns: []TableColumn{
+			{Name: "question_vector", SQLType: "VECF64(1024)", Comment: "摘要的向量集"},
+		},
+	})
+
+	assert.Contains(t, ddl, "COMMENT '摘要的向量集'")
+
+	ddl = RenderCreateTableDDLFromSchema(&TableSchema{
+		TableName: "invalid_comment",
+		Comment:   string([]byte{0xff}),
+		Columns:   []TableColumn{{Name: "id", SQLType: "INT"}},
+	})
+	assert.Empty(t, ddl)
+}
+
 func TestRenderCreateTableDDLFromSchema_PreservesTypedArrayMetadata(t *testing.T) {
 	ddl := RenderCreateTableDDLFromSchema(&TableSchema{
 		TableName: "t_array",
