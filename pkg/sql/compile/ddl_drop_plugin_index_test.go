@@ -39,9 +39,8 @@ func (s *stubIndexSearch) Search(*sqlexec.SqlProcess, any, vectorindex.RuntimeCo
 func (s *stubIndexSearch) SearchFloat32(*sqlexec.SqlProcess, any, vectorindex.RuntimeConfig, []int64, []float32) error {
 	return nil
 }
-func (s *stubIndexSearch) Load(*sqlexec.SqlProcess) error                  { return nil }
-func (s *stubIndexSearch) UpdateConfig(veccache.VectorIndexSearchIf) error { return nil }
-func (s *stubIndexSearch) Destroy()                                        { s.destroyed = true }
+func (s *stubIndexSearch) Load(*sqlexec.SqlProcess) error { return nil }
+func (s *stubIndexSearch) Destroy()                       { s.destroyed = true }
 
 // seedCachedIndex puts an entry in the vector-index cache under key, as a
 // completed search would, and returns the stub so the test can see Destroy().

@@ -195,13 +195,6 @@ func TestHnswSearchUnlockSynchronizesWithWaitPredicate(t *testing.T) {
 	require.Zero(t, s.Concurrency.Load())
 }
 
-func TestHnswSearchUpdateConfig(t *testing.T) {
-	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(3)}
-	tblcfg := vectorindex.IndexTableConfig{}
-	s := NewHnswSearch[float32](idxcfg, tblcfg)
-	require.NoError(t, s.UpdateConfig(nil))
-}
-
 func TestHnsw(t *testing.T) {
 	m := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool(t, "", m)

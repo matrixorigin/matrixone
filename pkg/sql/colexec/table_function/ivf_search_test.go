@@ -160,10 +160,6 @@ func (m *MockIvfSearch[T]) SearchFloat32(sqlproc *sqlexec.SqlProcess, query any,
 	return nil
 }
 
-func (m *MockIvfSearch[T]) UpdateConfig(newalgo cache.VectorIndexSearchIf) error {
-	return nil
-}
-
 func newMockIvfAlgoFn(idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig) (cache.VectorIndexSearchIf, error) {
 	return &MockIvfSearch[float32]{Idxcfg: idxcfg, Tblcfg: tblcfg}, nil
 }

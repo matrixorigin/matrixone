@@ -175,11 +175,6 @@ func TestIvfflatSearchFloat32_BadQueryType(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestIvfflatUpdateConfig(t *testing.T) {
-	s := &IvfflatSearch[float32]{}
-	require.NoError(t, s.UpdateConfig(nil))
-}
-
 func TestIvfSearchRace(t *testing.T) {
 
 	runSql = mock_runSql

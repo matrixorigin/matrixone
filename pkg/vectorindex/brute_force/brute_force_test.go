@@ -383,7 +383,6 @@ func TestUsearchBruteForceLifecycle(t *testing.T) {
 
 	bf := idx.(*UsearchBruteForceIndex[float32])
 	require.NoError(t, bf.Load(nil))
-	require.NoError(t, bf.UpdateConfig(nil))
 
 	// Destroy with allocator
 	bf.Destroy()
@@ -398,7 +397,6 @@ func TestGoBruteForceLifecycle(t *testing.T) {
 
 	bf := idx.(*GoBruteForceIndex[float32, float32])
 	require.NoError(t, bf.Load(nil))
-	require.NoError(t, bf.UpdateConfig(nil))
 	bf.Destroy()
 }
 
