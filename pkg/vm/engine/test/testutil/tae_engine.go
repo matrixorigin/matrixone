@@ -63,8 +63,7 @@ func (ts *TestTxnStorage) Shard() metadata.TNShard {
 	return GetDefaultTNShard()
 }
 
-func (ts *TestTxnStorage) Start() error    { return nil }
-func (ts *TestTxnStorage) CancelRecovery() {}
+func (ts *TestTxnStorage) Start() error { return nil }
 func (ts *TestTxnStorage) Close(destroy bool) error {
 	var firstErr error
 	if err := ts.GetDB().Close(); err != nil {
@@ -116,18 +115,6 @@ func (ts *TestTxnStorage) Commit(ctx context.Context, request *txn.TxnRequest, r
 }
 
 func (ts *TestTxnStorage) Rollback(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
-	return nil
-}
-func (ts *TestTxnStorage) Prepare(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
-	return nil
-}
-func (ts *TestTxnStorage) GetStatus(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
-	return nil
-}
-func (ts *TestTxnStorage) CommitTNShard(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
-	return nil
-}
-func (ts *TestTxnStorage) RollbackTNShard(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
 	return nil
 }
 func (ts *TestTxnStorage) Debug(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
