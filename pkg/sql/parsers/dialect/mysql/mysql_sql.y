@@ -12256,6 +12256,10 @@ frame_bound:
     {
         $$ = &tree.FrameBound{Type: tree.Following, Expr: $1}
     }
+|   VALUE_ARG FOLLOWING
+    {
+        $$ = &tree.FrameBound{Type: tree.Following, Expr: tree.NewParamExpr(yylex.(*Lexer).GetParamIndex())}
+    }
 |	interval_expr FOLLOWING
 	{
 		$$ = &tree.FrameBound{Type: tree.Following, Expr: $1}
@@ -12273,6 +12277,10 @@ frame_bound_start:
 |   num_literal PRECEDING
     {
         $$ = &tree.FrameBound{Type: tree.Preceding, Expr: $1}
+    }
+|   VALUE_ARG PRECEDING
+    {
+        $$ = &tree.FrameBound{Type: tree.Preceding, Expr: tree.NewParamExpr(yylex.(*Lexer).GetParamIndex())}
     }
 |	interval_expr PRECEDING
 	{
