@@ -21,6 +21,7 @@ import (
 	"math"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -115,7 +116,7 @@ func ParseViewDependencyKey(viewKey string) (string, *Snapshot, error) {
 	encodedKey, encodedSnapshot, ok := strings.Cut(
 		viewKey[len(viewDependencyKeyPrefix):], ".")
 	if !ok || encodedKey == "" || encodedSnapshot == "" {
-		return "", nil, fmt.Errorf("invalid encoded view dependency")
+		return "", nil, moerr.NewInternalErrorNoCtx("invalid encoded view dependency")
 	}
 	key, err := base64.RawURLEncoding.DecodeString(encodedKey)
 	if err != nil {
