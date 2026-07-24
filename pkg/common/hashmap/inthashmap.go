@@ -92,9 +92,17 @@ func (itr *intHashMapIterator) encodeHashKeys(vecs []*vector.Vector, start, coun
 		case 2:
 			fillKeys[uint16](itr, vec, 2, start, count)
 		case 4:
-			fillKeys[uint32](itr, vec, 4, start, count)
+			if vec.GetType().Oid == types.T_float32 {
+				fillKeysNormalized[float32](itr, vec, 4, start, count, canonicalFloat32Zero)
+			} else {
+				fillKeys[uint32](itr, vec, 4, start, count)
+			}
 		case 8:
-			fillKeys[uint64](itr, vec, 8, start, count)
+			if vec.GetType().Oid == types.T_float64 {
+				fillKeysNormalized[float64](itr, vec, 8, start, count, canonicalFloat64Zero)
+			} else {
+				fillKeys[uint64](itr, vec, 8, start, count)
+			}
 		default:
 			if !vec.IsConst() && vec.GetArea() == nil {
 				fillVarlenaKey(itr, vec, start, count)
@@ -106,6 +114,17 @@ func (itr *intHashMapIterator) encodeHashKeys(vecs []*vector.Vector, start, coun
 }
 
 func fillKeys[T types.FixedSizeT](itr *intHashMapIterator, vec *vector.Vector, size uint32, start int, n int) {
+	fillKeysNormalized[T](itr, vec, size, start, n, nil)
+}
+
+func fillKeysNormalized[T types.FixedSizeT](
+	itr *intHashMapIterator,
+	vec *vector.Vector,
+	size uint32,
+	start int,
+	n int,
+	normalize func(T) T,
+) {
 	keys := itr.keys
 	keyOffs := itr.keyOffs
 	if vec.IsConstNull() {
@@ -121,16 +140,20 @@ func fillKeys[T types.FixedSizeT](itr *intHashMapIterator, vec *vector.Vector, s
 		}
 	} else if vec.IsConst() {
 		ptr := vector.GetPtrAt[T](vec, 0)
+		value := *ptr
+		if normalize != nil {
+			value = normalize(value)
+		}
 		// The old code was too stupid and would lead to out-of-bounds writing
 		if !itr.mp.hasNull {
 			for i := 0; i < n; i++ {
-				*(*T)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = *ptr
+				*(*T)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = value
 			}
 			uint32AddScalar(size, keyOffs[:n], keyOffs[:n])
 		} else {
 			for i := 0; i < n; i++ {
 				*(*int8)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = 0
-				*(*T)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i]+1)) = *ptr
+				*(*T)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i]+1)) = value
 			}
 			uint32AddScalar(1+size, keyOffs[:n], keyOffs[:n])
 		}
@@ -139,13 +162,21 @@ func fillKeys[T types.FixedSizeT](itr *intHashMapIterator, vec *vector.Vector, s
 			for i := 0; i < n; i++ {
 				*(*int8)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = 0
 				ptr := vector.GetPtrAt[T](vec, int64(i+start))
-				*(*T)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i]+1)) = *ptr
+				value := *ptr
+				if normalize != nil {
+					value = normalize(value)
+				}
+				*(*T)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i]+1)) = value
 			}
 			uint32AddScalar(1+size, keyOffs[:n], keyOffs[:n])
 		} else {
 			for i := 0; i < n; i++ {
 				ptr := vector.GetPtrAt[T](vec, int64(i+start))
-				*(*T)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = *ptr
+				value := *ptr
+				if normalize != nil {
+					value = normalize(value)
+				}
+				*(*T)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = value
 			}
 			uint32AddScalar(size, keyOffs[:n], keyOffs[:n])
 		}
@@ -159,7 +190,11 @@ func fillKeys[T types.FixedSizeT](itr *intHashMapIterator, vec *vector.Vector, s
 				} else {
 					*(*int8)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = 0
 					ptr := vector.GetPtrAt[T](vec, int64(i+start))
-					*(*T)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i]+1)) = *ptr
+					value := *ptr
+					if normalize != nil {
+						value = normalize(value)
+					}
+					*(*T)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i]+1)) = value
 					keyOffs[i] += 1 + size
 				}
 			}
@@ -170,11 +205,29 @@ func fillKeys[T types.FixedSizeT](itr *intHashMapIterator, vec *vector.Vector, s
 					continue
 				}
 				ptr := vector.GetPtrAt[T](vec, int64(i+start))
-				*(*T)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = *ptr
+				value := *ptr
+				if normalize != nil {
+					value = normalize(value)
+				}
+				*(*T)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = value
 				keyOffs[i] += size
 			}
 		}
 	}
+}
+
+func canonicalFloat32Zero(value float32) float32 {
+	if value == 0 {
+		return 0
+	}
+	return value
+}
+
+func canonicalFloat64Zero(value float64) float64 {
+	if value == 0 {
+		return 0
+	}
+	return value
 }
 
 func fillVarlenaKey(itr *intHashMapIterator, vec *vector.Vector, start int, n int) {

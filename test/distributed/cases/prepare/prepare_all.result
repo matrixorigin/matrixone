@@ -20,7 +20,7 @@ EXECUTE s1 USING @ui_max;
 ➤ pk[4,32,0]  ¦  ui[-5,64,0]  ¦  si[-5,64,0]  𝄀
 1  ¦  18446744073709551615  ¦  9223372036854775807
 EXECUTE s1 USING @si_min;
-[unknown result because it is related to issue#7278]
+➤ pk[4,32,0]  ¦  ui[-5,64,0]  ¦  si[-5,64,0]
 EXECUTE s1 USING @si_max;
 ➤ pk[4,32,0]  ¦  ui[-5,64,0]  ¦  si[-5,64,0]
 DEALLOCATE PREPARE s1;
@@ -28,7 +28,7 @@ PREPARE s2 FROM 'SELECT * FROM numbers WHERE si=?';
 EXECUTE s2 USING @ui_min;
 ➤ pk[4,32,0]  ¦  ui[-5,64,0]  ¦  si[-5,64,0]
 EXECUTE s2 USING @ui_max;
-Data truncation: data out of range: data type int64, value '18446744073709551615'
+➤ pk[4,32,0]  ¦  ui[-5,64,0]  ¦  si[-5,64,0]
 EXECUTE s2 USING @si_min;
 ➤ pk[4,32,0]  ¦  ui[-5,64,0]  ¦  si[-5,64,0]  𝄀
 0  ¦  0  ¦  -9223372036854775808
@@ -637,12 +637,13 @@ EXECUTE s USING @maxint;
 DEALLOCATE PREPARE s;
 PREPARE s FROM 'SELECT 0.0 + ?';
 EXECUTE s USING @maxint;
-➤ 0.0 + ?[8,53,1]  𝄀
-1.8446744073709552E19
+➤ 0.0 + ?[3,38,1]  𝄀
+18446744073709551615.0
 DEALLOCATE PREPARE s;
 PREPARE s FROM 'SELECT 0 + ?';
 EXECUTE s USING @maxint;
-Data truncation: data out of range: data type int64, value '18446744073709551615'
+➤ 0 + ?[3,38,0]  𝄀
+18446744073709551615
 DEALLOCATE PREPARE s;
 PREPARE s FROM 'SELECT concat(?,"")';
 EXECUTE s USING @maxint;
@@ -658,17 +659,17 @@ select b from prepare_bit_numeric order by b;
 18446744073709551615
 prepare s from 'select ? + b from prepare_bit_numeric where b = 0';
 execute s using @maxint;
-➤ ? + b[-5,64,0]  𝄀
+➤ ? + prepare_bit_numeric.b[-5,64,0]  𝄀
 18446744073709551615
 deallocate prepare s;
 prepare s from 'select (? + 0.5) + b from prepare_bit_numeric where b = 0';
 execute s using @maxint;
-➤ (? + 0.5) + b[3,38,1]  𝄀
+➤ ? + 0.5 + prepare_bit_numeric.b[3,38,1]  𝄀
 18446744073709551615.5
 deallocate prepare s;
 prepare s from 'select b + (0.5 + ?) from prepare_bit_numeric where b = 0';
 execute s using @maxint;
-➤ b + (0.5 + ?)[3,38,1]  𝄀
+➤ prepare_bit_numeric.b + (0.5 + ?)[3,38,1]  𝄀
 18446744073709551615.5
 deallocate prepare s;
 drop table prepare_bit_numeric;

@@ -9,7 +9,7 @@ select cast(cast('2006-08-10' as date) as decimal(20,6)) as date_decimal_scale;
 ➤ date_decimal_scale[3,20,6]  𝄀
 20060810.000000
 select cast('2024-01-02' as date) + 0 as date_plus_zero;
-➤ date_plus_zero[-5,64,0]  𝄀
+➤ date_plus_zero[3,18,0]  𝄀
 20240102
 select cast('2024-01-02' as date) = 20240102 as date_eq_compact_int;
 ➤ date_eq_compact_int[-7,1,0]  𝄀
@@ -64,7 +64,7 @@ select cast(cast('2024' as year) as decimal(20,0)) as year_decimal;
 ➤ year_decimal[3,20,0]  𝄀
 2024
 select cast('2024' as year) + 0 as year_plus_zero;
-➤ year_plus_zero[-5,64,0]  𝄀
+➤ year_plus_zero[3,18,0]  𝄀
 2024
 select cast('2024' as year) = cast(2024 as decimal(20,0)) as year_eq_decimal;
 ➤ year_eq_decimal[-7,1,0]  𝄀

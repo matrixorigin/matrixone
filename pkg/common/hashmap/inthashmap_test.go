@@ -16,6 +16,7 @@ package hashmap
 
 import (
 	"io"
+	"math"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -23,6 +24,26 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/stretchr/testify/require"
 )
+
+func TestIntHashMapCanonicalizesSignedFloatingZero(t *testing.T) {
+	m := mpool.MustNewZero()
+	hashMap, err := NewIntHashMap(false, m)
+	require.NoError(t, err)
+	defer func() {
+		hashMap.Free()
+		require.Equal(t, int64(0), m.Stats().NumCurrBytes.Load())
+	}()
+
+	float64Vec := vector.NewVec(types.T_float64.ToType())
+	require.NoError(t, vector.AppendFixedList(float64Vec, []float64{
+		math.Copysign(0, -1), 0,
+	}, nil, m))
+	defer float64Vec.Free(m)
+	iterator := hashMap.NewIterator()
+	groups, _, err := iterator.Insert(0, 2, []*vector.Vector{float64Vec})
+	require.NoError(t, err)
+	require.Equal(t, []uint64{1, 1}, groups)
+}
 
 func TestIntHashMap_Iterator(t *testing.T) {
 	{

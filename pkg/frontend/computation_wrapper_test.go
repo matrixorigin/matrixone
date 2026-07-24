@@ -46,6 +46,34 @@ type mockCompile struct {
 	releaseFunc func()
 }
 
+func TestDecodePreparedParamValuePreservesNumericProtocolType(t *testing.T) {
+	paramTypes := []byte{
+		byte(defines.MYSQL_TYPE_LONGLONG), 0,
+		byte(defines.MYSQL_TYPE_LONGLONG), 0x80,
+		byte(defines.MYSQL_TYPE_DOUBLE), 0,
+		byte(defines.MYSQL_TYPE_NEWDECIMAL), 0,
+		byte(defines.MYSQL_TYPE_VAR_STRING), 0,
+	}
+	tests := []struct {
+		raw           string
+		index         int
+		expected      any
+		numericString bool
+	}{
+		{raw: "-7", index: 0, expected: int64(-7)},
+		{raw: "7", index: 1, expected: uint64(7)},
+		{raw: "1.5", index: 2, expected: float64(1.5)},
+		{raw: "1.25", index: 3, expected: "1.25", numericString: true},
+		{raw: "1.25", index: 4, expected: "1.25"},
+	}
+	for _, test := range tests {
+		value, numericString, err := decodePreparedParamValue([]byte(test.raw), paramTypes, test.index)
+		require.NoError(t, err)
+		require.Equal(t, test.expected, value)
+		require.Equal(t, test.numericString, numericString)
+	}
+}
+
 func TestResourceAttemptOwnerEligible(t *testing.T) {
 	require.True(t, resourceAttemptOwnerEligible(&Session{}))
 	require.False(t, resourceAttemptOwnerEligible(&backSession{}))
@@ -242,7 +270,7 @@ func TestInitExecuteStmtParamFreesParamsOnResolveError(t *testing.T) {
 			{Expr: &plan.Expr_V{V: &plan.VarRef{Name: "second"}}},
 		},
 	}
-	params, _, _, err := buildExecuteUserParams(cw.proc, execPlan.Args)
+	params, _, _, err := buildExecuteUserParams(ses, cw.proc, execPlan.Args)
 	require.ErrorIs(t, err, assert.AnError)
 	require.Zero(t, params.Length())
 	require.Nil(t, params.GetData())
@@ -292,7 +320,7 @@ func TestBuildExecuteUserParamsHonorsStoredProcedureScope(t *testing.T) {
 		{Expr: &plan.Expr_V{V: &plan.VarRef{Name: "local_shadow"}}},
 		{Expr: &plan.Expr_V{V: &plan.VarRef{Name: "session_only"}}},
 	}
-	params, paramVals, paramIsBin, err := buildExecuteUserParams(cw.proc, args)
+	params, paramVals, paramIsBin, err := buildExecuteUserParams(ses, cw.proc, args)
 	require.NoError(t, err)
 	defer params.Free(cw.proc.Mp())
 

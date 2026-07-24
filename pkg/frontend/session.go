@@ -347,9 +347,24 @@ func (ses *Session) SetUserDefinedVar(name string, value interface{}, sql string
 }
 
 func (ses *Session) setUserDefinedVar(name string, value interface{}, sql string, isBin bool) error {
+	return ses.setUserDefinedVarWithNumericString(name, value, sql, isBin, false)
+}
+
+func (ses *Session) setUserDefinedVarWithNumericString(
+	name string,
+	value interface{},
+	sql string,
+	isBin bool,
+	numericString bool,
+) error {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	ses.userDefinedVars[strings.ToLower(name)] = &UserDefinedVar{Value: value, Sql: sql, IsBin: isBin}
+	ses.userDefinedVars[strings.ToLower(name)] = &UserDefinedVar{
+		Value:         value,
+		Sql:           sql,
+		IsBin:         isBin,
+		NumericString: numericString,
+	}
 	return nil
 }
 

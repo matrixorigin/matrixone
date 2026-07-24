@@ -1109,40 +1109,6 @@ func TestNumericColumnStringLiteralUsesForcedIndexEndToEnd(t *testing.T) {
 	require.NotEmpty(t, findIndexScanNameForTable(queryPlan.GetQuery(), "numeric_index_t"))
 }
 
-func TestPreparedMixedStringNumericComparisonUsesApproximateTypeEndToEnd(t *testing.T) {
-	mock := NewMockOptimizer(true)
-	addMixedStringNumericIndexTablesForTest(mock)
-
-	prepared, err := runOneStmt(mock, t, `
-		prepare mixed_numeric from '
-			select id
-			from string_index_t force index(idx_a)
-			where a = ?'`)
-	require.NoError(t, err)
-	queryPlan, err := FillValuesOfParamsInPlan(
-		context.Background(),
-		resolveQueryPlan(prepared),
-		[]any{ParamValue{Value: int64(9007199254740993)}},
-	)
-	require.NoError(t, err)
-	require.Empty(t, findIndexScanNameForTable(queryPlan.GetQuery(), "string_index_t"))
-	for _, node := range queryPlan.GetQuery().Nodes {
-		for _, filter := range node.FilterList {
-			if filter.GetF() == nil || filter.GetF().Func.ObjName != "=" {
-				continue
-			}
-			if HasColExpr(filter.GetF().Args[0], -1) == -1 &&
-				HasColExpr(filter.GetF().Args[1], -1) == -1 {
-				continue
-			}
-			require.Equal(t, int32(types.T_float64), filter.GetF().Args[0].Typ.Id)
-			require.Equal(t, int32(types.T_float64), filter.GetF().Args[1].Typ.Id)
-			return
-		}
-	}
-	t.Fatal("comparison filter not found")
-}
-
 func TestMixedStringNumericJoinSkipsForcedIndexEndToEnd(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	addMixedStringNumericIndexTablesForTest(mock)

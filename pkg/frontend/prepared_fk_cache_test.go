@@ -92,3 +92,42 @@ func TestShouldCachePrepareCompileRejectsRuntimeTypedStringComparison(t *testing
 	}
 	require.True(t, shouldCachePrepareCompile(p))
 }
+
+func TestShouldCachePrepareCompileScansBetweenAndOrderBy(t *testing.T) {
+	stringColumn := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_varchar)},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
+	}
+	param := func(pos int32) *plan.Expr {
+		return &plan.Expr{
+			Typ:  plan.Type{Id: int32(types.T_varchar)},
+			Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: pos}},
+		}
+	}
+	between := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_bool)},
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{ObjName: "between"},
+			Args: []*plan.Expr{stringColumn, param(0), param(1)},
+		}},
+	}
+	orderComparison := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_bool)},
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{ObjName: "="},
+			Args: []*plan.Expr{stringColumn, param(2)},
+		}},
+	}
+	queryPlan := func(node *plan.Node) *plan.Plan {
+		return &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{Nodes: []*plan.Node{node}}}}
+	}
+
+	require.False(t, shouldCachePrepareCompile(queryPlan(&plan.Node{
+		NodeType:   plan.Node_TABLE_SCAN,
+		FilterList: []*plan.Expr{between},
+	})))
+	require.False(t, shouldCachePrepareCompile(queryPlan(&plan.Node{
+		NodeType: plan.Node_SORT,
+		OrderBy:  []*plan.OrderBySpec{{Expr: orderComparison}},
+	})))
+}

@@ -140,7 +140,7 @@ insert into test12 values(NULL);
 insert into test11 select * from test12;
 select cast(col1 as decimal(20,15)) from test11;
 ➤ cast(col1 as decimal(20, 15))[3,20,15]  𝄀
-122059.000000000000000  𝄀
+99999.999999999999999  𝄀
 10145.000000000000000  𝄀
 null
 insert into test13 select * from test12;
@@ -184,22 +184,22 @@ insert into test17 values('1990-01-01',10);
 insert into test17 values('2023-04-18',20);
 insert into test17 values(NULL,30);
 select col1 + col2 from test17;
-➤ col1 + col2[-5,64,0]  𝄀
+➤ col1 + col2[3,18,0]  𝄀
 19900111  𝄀
 20230438  𝄀
 null
 select col1 - col2 from test17;
-➤ col1 - col2[-5,64,0]  𝄀
+➤ col1 - col2[3,18,0]  𝄀
 19900091  𝄀
 20230398  𝄀
 null
 select col1 * 100 from test17;
-➤ col1 * 100[-5,64,0]  𝄀
+➤ col1 * 100[3,38,0]  𝄀
 1990010100  𝄀
 2023041800  𝄀
 null
 select col1 % 2 from test17;
-➤ col1 % 2[-5,64,0]  𝄀
+➤ col1 % 2[3,18,0]  𝄀
 1  𝄀
 0  𝄀
 null
@@ -208,24 +208,24 @@ drop table if exists test18;
 create table test18(col1 date,col2 date);
 insert into test18 values('1997-01-13','2005-01-26');
 select col1 - col2 from test18;
-➤ col1 - col2[-5,64,0]  𝄀
--2935
+➤ col1 - col2[3,18,0]  𝄀
+-80013
 select col2 - col1 from test18;
-➤ col2 - col1[-5,64,0]  𝄀
-2935
+➤ col2 - col1[3,18,0]  𝄀
+80013
 drop table test18;
 drop table if exists test19;
 create table test19(col1 date,col2 datetime);
 insert into test19 values('1997-01-13','2005-01-26 01:05:06.156');
 insert into test19 values('2023-04-18','1997-01-01 00:00:00');
 select col1 - col2 from test19;
-➤ col1 - col2[-5,64,0]  𝄀
--253587906  𝄀
-829699200
+➤ col1 - col2[3,18,0]  𝄀
+-20050106040393  𝄀
+-19970080769582
 select col2 - col1 from test19;
-➤ col2 - col1[-5,64,0]  𝄀
-253587906  𝄀
--829699200
+➤ col2 - col1[3,18,0]  𝄀
+20050106040393  𝄀
+19970080769582
 drop table test19;
 drop table if exists test14;
 create table test14(col1 int,col2 datetime);
@@ -248,17 +248,17 @@ select col1 * col2 from test14;
 40460834020290  𝄀
 null
 select col1 + col2 from test14;
-➤ col1 + col2[3,38,0]  𝄀
+➤ col1 + col2[3,18,0]  𝄀
 20200113122060  𝄀
 20230417010147  𝄀
 null
 select col1 - col2 from test14;
-➤ col1 - col2[3,38,0]  𝄀
+➤ col1 - col2[3,18,0]  𝄀
 -20200113122058  𝄀
 -20230417010143  𝄀
 null
 select col2 % col1 from test14;
-➤ col2 % col1[3,38,0]  𝄀
+➤ col2 % col1[3,18,0]  𝄀
 0  𝄀
 1  𝄀
 null
@@ -311,9 +311,9 @@ select * from datetime01;
 2000-12-12 12:58:58  ¦  1969-03-03 01:05:59  𝄀
 1996-04-06 01:01:01  ¦  2019-05-04 23:12:29
 select col1 - col2 from datetime01;
-➤ col1 - col2[-5,64,0]  𝄀
-1002887579  𝄀
--728259088
+➤ col1 - col2[3,18,3]  𝄀
+310909115299.000  𝄀
+-230098221128.000
 drop table datetime01;
 drop table if exists time01;
 create table time01(col1 int,col2 time);
@@ -469,12 +469,12 @@ select * from timestamp01;
 -22220  ¦  2023-04-17 01:01:45  𝄀
 123654  ¦  null
 select col1 + col2 from timestamp01;
-➤ col1 + col2[3,38,0]  𝄀
+➤ col1 + col2[3,18,0]  𝄀
 20200113132059  𝄀
 20230416987925  𝄀
 null
 select col1 - col2 from timestamp01;
-➤ col1 - col2[3,38,0]  𝄀
+➤ col1 - col2[3,18,0]  𝄀
 -20200113112059  𝄀
 -20230417032365  𝄀
 null
@@ -489,7 +489,7 @@ select col2 / col1 from timestamp01;
 -910459811.437669  𝄀
 null
 select col2 % col1 from timestamp01;
-➤ col2 % col1[3,38,0]  𝄀
+➤ col2 % col1[3,18,0]  𝄀
 2059  𝄀
 9725  𝄀
 null

@@ -3031,27 +3031,68 @@ func FillValuesOfParamsInPlan(ctx context.Context, preparePlan *Plan, paramVals 
 }
 
 type ParamValue struct {
-	Value any
-	IsBin bool
+	Value         any
+	IsBin         bool
+	NumericString bool
+}
+
+type prepareParamValuesKey struct{}
+
+func AttachPrepareParamValues(ctx context.Context, values []any) context.Context {
+	return context.WithValue(ctx, prepareParamValuesKey{}, values)
+}
+
+func preparedParamValueFromContext(ctx context.Context, pos int32) (*plan.Expr, bool, error) {
+	values, ok := ctx.Value(prepareParamValuesKey{}).([]any)
+	if !ok || pos < 0 || int(pos) >= len(values) {
+		return nil, false, nil
+	}
+	value := values[pos]
+	isBin := false
+	numericString := false
+	if param, ok := value.(ParamValue); ok {
+		value = param.Value
+		isBin = param.IsBin
+		numericString = param.NumericString
+	}
+	if value == nil {
+		expr := makePlan2NullConstExprWithType()
+		typ := types.T_text.ToType()
+		expr.Typ = makePlan2Type(&typ)
+		return expr, true, nil
+	}
+	if numericString {
+		expr, err := makePlan2DecimalExprWithType(ctx, fmt.Sprint(value))
+		return expr, true, err
+	}
+	return makePreparedParamConstExpr(value, isBin), true, nil
 }
 
 func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) error {
 	params := make([]*Expr, len(paramVals))
+	var err error
 	for i, val := range paramVals {
 		isBin := false
+		numericString := false
 		if param, ok := val.(ParamValue); ok {
 			val = param.Value
 			isBin = param.IsBin
+			numericString = param.NumericString
 		}
 		if val == nil {
 			params[i] = makePlan2NullConstExprWithType()
+		} else if numericString {
+			params[i], err = makePlan2DecimalExprWithType(ctx, fmt.Sprint(val))
+			if err != nil {
+				return err
+			}
 		} else {
 			params[i] = makePreparedParamConstExpr(val, isBin)
 		}
 	}
 	paramRule := NewResetParamRefRule(ctx, params)
 	VisitQuery := NewVisitPlan(plan0, []VisitPlanRule{paramRule})
-	err := VisitQuery.Visit(ctx)
+	err = VisitQuery.Visit(ctx)
 	if err != nil {
 		return err
 	}

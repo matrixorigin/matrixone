@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"maps"
+	"strconv"
 	"sync/atomic"
 	"time"
 
@@ -376,8 +377,13 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 		}
 
 		if retComp == nil {
-			if len(cwft.paramVals) > 0 && planHasRuntimeTypedStringComparison(cwft.plan) {
-				cwft.plan, err = plan2.FillValuesOfParamsInPlan(execCtx.reqCtx, cwft.plan, cwft.paramVals)
+			if len(cwft.paramVals) > 0 {
+				compilerContext := cwft.ses.GetTxnCompileCtx()
+				originalContext := compilerContext.GetContext()
+				parameterContext := plan2.AttachPrepareParamValues(originalContext, cwft.paramVals)
+				compilerContext.SetContext(parameterContext)
+				cwft.plan, err = buildPlan(parameterContext, cwft.ses, compilerContext, cwft.stmt)
+				compilerContext.SetContext(originalContext)
 				if err != nil {
 					return nil, err
 				}
@@ -702,7 +708,7 @@ func initExecuteStmtParam(execCtx *ExecCtx, ses *Session, cwft *TxnComputationWr
 			return nil, nil, nil, originSQL, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
 		}
 		cwft.proc.SetPrepareParams(prepareStmt.params)
-		cwft.paramVals, err = preparedParamValues(cwft.proc)
+		cwft.paramVals, err = preparedParamValues(cwft.proc, prepareStmt.ParamTypes)
 		if err != nil {
 			return nil, nil, nil, originSQL, err
 		}
@@ -710,7 +716,7 @@ func initExecuteStmtParam(execCtx *ExecCtx, ses *Session, cwft *TxnComputationWr
 		if len(execPlan.Args) != numParams {
 			return nil, nil, nil, originSQL, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
 		}
-		params, paramVals, paramIsBin, err := buildExecuteUserParams(cwft.proc, execPlan.Args)
+		params, paramVals, paramIsBin, err := buildExecuteUserParams(ses, cwft.proc, execPlan.Args)
 		if err != nil {
 			return nil, nil, nil, originSQL, err
 		}
@@ -738,7 +744,7 @@ func initExecuteStmtParam(execCtx *ExecCtx, ses *Session, cwft *TxnComputationWr
 	return retComp, preparePlan.Plan, prepareStmt.PrepareStmt, originSQL, nil
 }
 
-func preparedParamValues(proc *process.Process) ([]any, error) {
+func preparedParamValues(proc *process.Process, paramTypes []byte) ([]any, error) {
 	params := proc.GetPrepareParams()
 	if params == nil || params.Length() == 0 {
 		return nil, nil
@@ -752,12 +758,51 @@ func preparedParamValues(proc *process.Process) ([]any, error) {
 		if err != nil {
 			return nil, err
 		}
-		values[i] = plan2.ParamValue{Value: string(raw), IsBin: proc.GetPrepareParamIsBin(i)}
+		value, numericString, err := decodePreparedParamValue(raw, paramTypes, i)
+		if err != nil {
+			return nil, err
+		}
+		values[i] = plan2.ParamValue{
+			Value:         value,
+			IsBin:         proc.GetPrepareParamIsBin(i),
+			NumericString: numericString,
+		}
 	}
 	return values, nil
 }
 
+func decodePreparedParamValue(raw []byte, paramTypes []byte, index int) (any, bool, error) {
+	if index*2+1 >= len(paramTypes) {
+		return string(raw), false, nil
+	}
+	mysqlType := defines.MysqlType(paramTypes[index*2])
+	unsigned := paramTypes[index*2+1]&0x80 != 0
+	text := string(raw)
+	switch mysqlType {
+	case defines.MYSQL_TYPE_BIT, defines.MYSQL_TYPE_TINY, defines.MYSQL_TYPE_SHORT,
+		defines.MYSQL_TYPE_YEAR, defines.MYSQL_TYPE_INT24, defines.MYSQL_TYPE_LONG,
+		defines.MYSQL_TYPE_LONGLONG:
+		if unsigned || mysqlType == defines.MYSQL_TYPE_BIT {
+			value, err := strconv.ParseUint(text, 10, 64)
+			return value, false, err
+		}
+		value, err := strconv.ParseInt(text, 10, 64)
+		return value, false, err
+	case defines.MYSQL_TYPE_FLOAT:
+		value, err := strconv.ParseFloat(text, 32)
+		return float32(value), false, err
+	case defines.MYSQL_TYPE_DOUBLE:
+		value, err := strconv.ParseFloat(text, 64)
+		return value, false, err
+	case defines.MYSQL_TYPE_DECIMAL, defines.MYSQL_TYPE_NEWDECIMAL:
+		return text, true, nil
+	default:
+		return text, false, nil
+	}
+}
+
 func buildExecuteUserParams(
+	ses *Session,
 	proc *process.Process,
 	args []*plan.Expr,
 ) (params *vector.Vector, paramVals []any, paramIsBin []bool, err error) {
@@ -787,7 +832,18 @@ func buildExecuteUserParams(
 				return
 			}
 		}
-		paramVals[i] = plan2.ParamValue{Value: param, IsBin: paramIsBin[i]}
+		numericString := false
+		if !exprImpl.V.System {
+			variable, getErr := ses.GetUserDefinedVar(exprImpl.V.Name)
+			if getErr == nil {
+				numericString = variable.NumericString
+			}
+		}
+		paramVals[i] = plan2.ParamValue{
+			Value:         param,
+			IsBin:         paramIsBin[i],
+			NumericString: numericString,
+		}
 	}
 	return
 }
@@ -811,26 +867,12 @@ func shouldCachePrepareCompile(p *plan.Plan) bool {
 			return false
 		}
 		for _, expr := range preparedRuntimeTypedExprs(node) {
-			if hasRuntimeTypedStringComparison(expr) {
+			if containsPreparedParam(expr) {
 				return false
 			}
 		}
 	}
 	return !query.GetHasForeignKeyAction()
-}
-
-func planHasRuntimeTypedStringComparison(p *plan.Plan) bool {
-	if p == nil || p.GetQuery() == nil {
-		return false
-	}
-	for _, node := range p.GetQuery().GetNodes() {
-		for _, expr := range preparedRuntimeTypedExprs(node) {
-			if hasRuntimeTypedStringComparison(expr) {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 func preparedRuntimeTypedExprs(node *plan.Node) []*plan.Expr {
@@ -846,31 +888,10 @@ func preparedRuntimeTypedExprs(node *plan.Node) []*plan.Expr {
 	exprs = append(exprs, node.GetGroupBy()...)
 	exprs = append(exprs, node.GetAggList()...)
 	exprs = append(exprs, node.GetWinSpecList()...)
+	for _, orderBy := range node.GetOrderBy() {
+		exprs = append(exprs, orderBy.GetExpr())
+	}
 	return exprs
-}
-
-func hasRuntimeTypedStringComparison(expr *plan.Expr) bool {
-	fn := expr.GetF()
-	if fn == nil || fn.Func == nil {
-		return false
-	}
-	switch fn.Func.ObjName {
-	case "=", "<=>", "<", "<=", ">", ">=", "<>":
-		if len(fn.Args) == 2 {
-			leftType := types.T(fn.Args[0].Typ.Id)
-			rightType := types.T(fn.Args[1].Typ.Id)
-			if leftType.IsMySQLString() && containsPreparedParam(fn.Args[1]) ||
-				rightType.IsMySQLString() && containsPreparedParam(fn.Args[0]) {
-				return true
-			}
-		}
-	}
-	for _, arg := range fn.Args {
-		if hasRuntimeTypedStringComparison(arg) {
-			return true
-		}
-	}
-	return false
 }
 
 func containsPreparedParam(expr *plan.Expr) bool {

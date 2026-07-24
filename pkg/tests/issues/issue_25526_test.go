@@ -107,6 +107,25 @@ func TestIssue25526PreparedUpdateJoinSecondExecute(t *testing.T) {
 			}
 			require.NoError(t, rows.Err())
 			require.Equal(t, []string{"closed:13.83", "closed:35.19"}, got)
+
+			mustExec(t, ctx, conn, "create table string_values(s varchar(16))")
+			mustExec(t, ctx, conn, "insert into string_values values ('1'),('1abc'),('2')")
+			queryStmt, err := conn.PrepareContext(ctx,
+				"select s from string_values where s = ? order by s")
+			require.NoError(t, err)
+			defer queryStmt.Close()
+
+			rows, err = queryStmt.QueryContext(ctx, int64(1))
+			require.NoError(t, err)
+			defer rows.Close()
+			got = got[:0]
+			for rows.Next() {
+				var value string
+				require.NoError(t, rows.Scan(&value))
+				got = append(got, value)
+			}
+			require.NoError(t, rows.Err())
+			require.Equal(t, []string{"1", "1abc"}, got)
 		},
 	)
 }

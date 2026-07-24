@@ -552,6 +552,39 @@ func TestMixedStringNumericCastTypes(t *testing.T) {
 		require.NoError(t, err)
 		requireArgTypes(t, expr, types.T_decimal64, types.T_decimal64)
 	})
+
+	t.Run("temporal arithmetic normalizes integer scale", func(t *testing.T) {
+		integer := makeCol(types.T_int64, 1)
+		integer.Typ.Scale = -1
+		expr, err := BindFuncExprImplByPlanExpr(ctx, "+", []*plan.Expr{
+			makeCol(types.T_datetime, 0),
+			integer,
+		})
+		require.NoError(t, err)
+		require.Equal(t, int32(0), expr.GetF().Args[1].Typ.Scale)
+	})
+
+	t.Run("datetime arithmetic uses decimal128 and preserves numeric scale", func(t *testing.T) {
+		datetime := makeCol(types.T_datetime, 0)
+		datetime.Typ.Scale = 6
+		decimal := makeCol(types.T_decimal64, 1)
+		decimal.Typ.Width = 18
+		decimal.Typ.Scale = 8
+		expr, err := BindFuncExprImplByPlanExpr(ctx, "+", []*plan.Expr{datetime, decimal})
+		require.NoError(t, err)
+		requireArgTypes(t, expr, types.T_decimal128, types.T_decimal128)
+		require.Equal(t, int32(6), expr.GetF().Args[0].Typ.Scale)
+		require.Equal(t, int32(8), expr.GetF().Args[1].Typ.Scale)
+	})
+
+	t.Run("time arithmetic does not narrow decimal128", func(t *testing.T) {
+		timeExpr := makeCol(types.T_time, 0)
+		decimal := makeCol(types.T_decimal128, 1)
+		decimal.Typ.Width = 38
+		expr, err := BindFuncExprImplByPlanExpr(ctx, "+", []*plan.Expr{timeExpr, decimal})
+		require.NoError(t, err)
+		requireArgTypes(t, expr, types.T_decimal128, types.T_decimal128)
+	})
 }
 
 func TestBindNameConstConstArgs(t *testing.T) {

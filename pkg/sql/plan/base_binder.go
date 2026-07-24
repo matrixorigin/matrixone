@@ -315,6 +315,9 @@ func unwrapParenExpr(astExpr tree.Expr) tree.Expr {
 }
 
 func (b *baseBinder) baseBindParam(astExpr *tree.ParamExpr, depth int32, isRoot bool) (expr *plan.Expr, err error) {
+	if value, ok, err := preparedParamValueFromContext(b.GetContext(), int32(astExpr.Offset-1)); ok || err != nil {
+		return value, err
+	}
 	typ := types.T_text.ToType()
 	param := &Expr{
 		Typ: makePlan2Type(&typ),
@@ -3681,6 +3684,8 @@ func approximateStringNumericCastTypes(
 				return nil, false
 			}
 			hasString = true
+		case argsType[i].Oid == types.T_interval:
+			return nil, false
 		case numericOperator && argsType[i].IsTemporal():
 			hasString = true
 			hasTemporal = true
@@ -3700,7 +3705,23 @@ func approximateStringNumericCastTypes(
 	castTypes := append([]types.Type(nil), argsType...)
 	targetType := types.T_float64.ToType()
 	if hasTemporal {
-		targetType = types.New(types.T_decimal64, 18, temporalScale)
+		targetOid := temporalNumericTargetOid(argsType[:valueArgs])
+		for i := 0; i < valueArgs; i++ {
+			scale := int32(0)
+			if argsType[i].Oid.IsDecimal() {
+				scale = argsType[i].Scale
+			} else if argsType[i].IsTemporal() {
+				scale = temporalScale
+			}
+			width := int32(18)
+			if targetOid == types.T_decimal128 {
+				width = 38
+			} else if targetOid == types.T_decimal256 {
+				width = 65
+			}
+			castTypes[i] = types.New(targetOid, width, scale)
+		}
+		return castTypes, true
 	} else if integerDiv {
 		targetType = types.New(types.T_decimal256, 65, 30)
 	}
@@ -3708,6 +3729,21 @@ func approximateStringNumericCastTypes(
 		castTypes[i] = targetType
 	}
 	return castTypes, true
+}
+
+func temporalNumericTargetOid(argsType []types.Type) types.T {
+	targetOid := types.T_decimal64
+	for _, argType := range argsType {
+		switch {
+		case argType.Oid == types.T_decimal256:
+			targetOid = types.T_decimal256
+		case targetOid != types.T_decimal256 &&
+			(argType.Oid == types.T_decimal128 ||
+				(argType.IsTemporal() && argType.Scale > 4)):
+			targetOid = types.T_decimal128
+		}
+	}
+	return targetOid
 }
 
 func rewriteExactNumericColumnStringLiterals(

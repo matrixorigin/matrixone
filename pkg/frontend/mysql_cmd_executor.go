@@ -901,6 +901,7 @@ func doSetVar(ses *Session, execCtx *ExecCtx, sv *tree.SetVar, sql string) error
 	var err error = nil
 	var ok bool
 	var userVarIsBin bool
+	var userVarNumericString bool
 	setVarFunc := func(system, global bool, name string, value interface{}, sql string) error {
 		var oldValueRaw interface{}
 		if system {
@@ -937,7 +938,7 @@ func doSetVar(ses *Session, execCtx *ExecCtx, sv *tree.SetVar, sql string) error
 				}
 			}
 		} else {
-			err = ses.setUserDefinedVar(name, value, sql, userVarIsBin)
+			err = ses.setUserDefinedVarWithNumericString(name, value, sql, userVarIsBin, userVarNumericString)
 			if err != nil {
 				return err
 			}
@@ -949,10 +950,26 @@ func doSetVar(ses *Session, execCtx *ExecCtx, sv *tree.SetVar, sql string) error
 		name := assign.Name
 		var value interface{}
 		userVarIsBin = false
+		userVarNumericString = false
 
 		value, err = getExprValue(assign.Value, ses, execCtx, &userVarIsBin)
 		if err != nil {
 			return err
+		}
+		if _, ok := value.(string); ok {
+			if literal, ok := assign.Value.(*tree.NumVal); ok {
+				switch literal.Kind() {
+				case tree.Int:
+					text := value.(string)
+					if parsed, parseErr := strconv.ParseInt(text, 10, 64); parseErr == nil {
+						value = parsed
+					} else if parsed, parseErr := strconv.ParseUint(text, 10, 64); parseErr == nil {
+						value = parsed
+					}
+				case tree.Float:
+					userVarNumericString = true
+				}
+			}
 		}
 
 		if systemVar, ok := gSysVarsDefs[name]; ok {
