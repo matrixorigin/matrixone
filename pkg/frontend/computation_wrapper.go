@@ -376,6 +376,12 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 		}
 
 		if retComp == nil {
+			if len(cwft.paramVals) > 0 && planHasRuntimeTypedStringComparison(cwft.plan) {
+				cwft.plan, err = plan2.FillValuesOfParamsInPlan(execCtx.reqCtx, cwft.plan, cwft.paramVals)
+				if err != nil {
+					return nil, err
+				}
+			}
 			var schedulingSQLMode *string
 			if cwft.hasPreparedSchedulingSQLMode {
 				schedulingSQLMode = &cwft.preparedSchedulingSQLMode
@@ -804,8 +810,84 @@ func shouldCachePrepareCompile(p *plan.Plan) bool {
 			// revisited without weakening the generic prepared-statement cache.
 			return false
 		}
+		for _, expr := range preparedRuntimeTypedExprs(node) {
+			if hasRuntimeTypedStringComparison(expr) {
+				return false
+			}
+		}
 	}
 	return !query.GetHasForeignKeyAction()
+}
+
+func planHasRuntimeTypedStringComparison(p *plan.Plan) bool {
+	if p == nil || p.GetQuery() == nil {
+		return false
+	}
+	for _, node := range p.GetQuery().GetNodes() {
+		for _, expr := range preparedRuntimeTypedExprs(node) {
+			if hasRuntimeTypedStringComparison(expr) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func preparedRuntimeTypedExprs(node *plan.Node) []*plan.Expr {
+	if node == nil {
+		return nil
+	}
+	exprs := make([]*plan.Expr, 0,
+		len(node.GetProjectList())+len(node.GetFilterList())+len(node.GetOnList())+
+			len(node.GetGroupBy())+len(node.GetAggList())+len(node.GetWinSpecList()))
+	exprs = append(exprs, node.GetProjectList()...)
+	exprs = append(exprs, node.GetFilterList()...)
+	exprs = append(exprs, node.GetOnList()...)
+	exprs = append(exprs, node.GetGroupBy()...)
+	exprs = append(exprs, node.GetAggList()...)
+	exprs = append(exprs, node.GetWinSpecList()...)
+	return exprs
+}
+
+func hasRuntimeTypedStringComparison(expr *plan.Expr) bool {
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil {
+		return false
+	}
+	switch fn.Func.ObjName {
+	case "=", "<=>", "<", "<=", ">", ">=", "<>":
+		if len(fn.Args) == 2 {
+			leftType := types.T(fn.Args[0].Typ.Id)
+			rightType := types.T(fn.Args[1].Typ.Id)
+			if leftType.IsMySQLString() && containsPreparedParam(fn.Args[1]) ||
+				rightType.IsMySQLString() && containsPreparedParam(fn.Args[0]) {
+				return true
+			}
+		}
+	}
+	for _, arg := range fn.Args {
+		if hasRuntimeTypedStringComparison(arg) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsPreparedParam(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	if expr.GetP() != nil {
+		return true
+	}
+	if fn := expr.GetF(); fn != nil {
+		for _, arg := range fn.Args {
+			if containsPreparedParam(arg) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func createCompile(

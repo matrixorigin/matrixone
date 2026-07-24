@@ -2006,14 +2006,23 @@ func isUnsafeStringKeyComparison(left, right *plan.Expr) bool {
 		return false
 	}
 	leftType, rightType := types.T(left.Typ.Id), types.T(right.Typ.Id)
-	if _, ok := implicitNumericCastFromString(left); ok && isNumericTypeID(rightType) {
+	if leftType == types.T_float64 && rightType == types.T_float64 {
+		return false
+	}
+	if source, ok := implicitNumericCastFromString(left); ok && isNumericTypeID(rightType) {
+		if source.GetLit() != nil && right.GetCol() != nil && leftType == rightType {
+			return false
+		}
 		return true
 	}
-	if _, ok := implicitNumericCastFromString(right); ok && isNumericTypeID(leftType) {
+	if source, ok := implicitNumericCastFromString(right); ok && isNumericTypeID(leftType) {
+		if source.GetLit() != nil && left.GetCol() != nil && leftType == rightType {
+			return false
+		}
 		return true
 	}
-	return leftType.IsMySQLString() && rightType == types.T_any && containsDynamicParam(right) ||
-		rightType.IsMySQLString() && leftType == types.T_any && containsDynamicParam(left)
+	return leftType.IsMySQLString() && containsDynamicParam(right) ||
+		rightType.IsMySQLString() && containsDynamicParam(left)
 }
 
 func isUnsafeStringKeyPredicate(fn *plan.Function) bool {

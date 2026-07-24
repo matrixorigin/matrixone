@@ -180,34 +180,32 @@ id
 SELECT * from t_bigint WHERE id = 1.1e0;
 id
 SELECT * from t_bigint WHERE id = '1.1';
-invalid argument cast to int, bad value 1.1
+id
 SELECT * from t_bigint WHERE id = '1.1e0';
-invalid argument cast to int, bad value 1.1e0
+id
 SELECT * from t_bigint WHERE id IN (1.1, 2.2);
 id
 SELECT * from t_bigint WHERE id IN (1.1e0, 2.2e0);
 id
 SELECT * from t_bigint WHERE id IN ('1.1', '2.2');
-invalid argument cast to int, bad value 1.1
+id
 SELECT * from t_bigint WHERE id IN ('1.1e0', '2.2e0');
-invalid argument cast to int, bad value 1.1e0
+id
 SELECT * from t_bigint WHERE id BETWEEN 1.1 AND 1.9;
 id
 SELECT * from t_bigint WHERE id BETWEEN 1.1e0 AND 1.9e0;
 id
 SELECT * from t_bigint WHERE id BETWEEN '1.1' AND '1.9';
-invalid argument cast to int, bad value 1.1
+id
 SELECT * from t_bigint WHERE id BETWEEN '1.1e0' AND '1.9e0';
-invalid argument cast to int, bad value 1.1e0
+id
 INSERT INTO t_bigint VALUES (9007199254740992), (9007199254740993), (-9007199254740993);
 SELECT * from t_bigint WHERE id = '9007199254740993';
 id
-9007199254740992
 9007199254740993
 SELECT * from t_bigint WHERE id = '9007199254740992';
 id
 9007199254740992
-9007199254740993
 SELECT * from t_bigint WHERE id = '-9007199254740993';
 id
 -9007199254740993
@@ -219,7 +217,6 @@ id
 9007199254740993
 SELECT * from t_bigint WHERE id BETWEEN '9007199254740992.5' AND '9007199254740993.5';
 id
-9007199254740992
 9007199254740993
 DELETE FROM t_bigint WHERE id > 2 or id < 0;
 drop table t1;
@@ -569,12 +566,12 @@ s
 9007199254740993
 select i from t_numeric_string_reverse where i <=> '9007199254740993' order by i;
 i
-9007199254740992
 9007199254740993
 prepare numeric_string_stmt from 'select s from t_numeric_string_reverse force index(idx_numeric_string_s) where s = ? order by s';
 set @numeric_string_param = 9007199254740993;
 execute numeric_string_stmt using @numeric_string_param;
 s
+9007199254740992
 9007199254740993
 deallocate prepare numeric_string_stmt;
 drop table t_numeric_string_reverse;
@@ -602,8 +599,28 @@ s
 1abc
 9007199254740992
 9007199254740993
+create table t_numeric_string_join_decimal(d decimal(65, 0));
+insert into t_numeric_string_join_decimal values (9007199254740993);
+select l.s from t_numeric_string_join_left l
+join t_numeric_string_join_decimal r on l.s = r.d order by l.s;
+s
+9007199254740992
+9007199254740993
+drop table t_numeric_string_join_decimal;
 drop table t_numeric_string_join_left;
 drop table t_numeric_string_join_right;
+select cast(9007199254740992 as decimal(65, 0)) = '9007199254740993';
+cast(9007199254740992 as decimal(65)) = 9007199254740993
+1
+select '9007199254740993' div 1;
+9007199254740993 div 1
+9007199254740993
+select '9223372036854775807' div 1;
+9223372036854775807 div 1
+9223372036854775807
+select '5.5' div 2;
+5.5 div 2
+2
 drop table if exists t_numeric_string_composite_pk;
 create table t_numeric_string_composite_pk(a int, b varchar(80), primary key(a, b));
 insert into t_numeric_string_composite_pk values (1, '2'), (1, '3'), (1, '10'), (1, '1abc');

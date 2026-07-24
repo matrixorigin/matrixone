@@ -3241,7 +3241,20 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 			}
 			if name == "in" {
 				for _, expr := range orExprList {
-					tmpExpr, err := BindFuncExprImplByPlanExpr(ctx, "=", []*Expr{DeepCopyExpr(args[0]), expr})
+					left := DeepCopyExpr(args[0])
+					right := expr
+					if shouldUseApproximateStringNumericComparison(left, right) {
+						floatType := types.T_float64.ToType()
+						left, err = appendCastBeforeExpr(ctx, left, makePlan2Type(&floatType))
+						if err != nil {
+							return nil, err
+						}
+						right, err = appendCastBeforeExpr(ctx, right, makePlan2Type(&floatType))
+						if err != nil {
+							return nil, err
+						}
+					}
+					tmpExpr, err := BindFuncExprImplByPlanExpr(ctx, "=", []*Expr{left, right})
 					if err != nil {
 						return nil, err
 					}
@@ -3277,13 +3290,23 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 	for idx, expr := range args {
 		argsType[idx] = makeTypeByPlan2Expr(expr)
 	}
+	exactColumnCastTypes := rewriteExactNumericColumnStringLiterals(ctx, name, args, argsType)
 
 	var funcID int64
 	var returnType types.Type
 	var argsCastType []types.Type
 
 	// get function definition
-	fGet, err := function.GetFunctionByName(ctx, name, argsType)
+	lookupTypes := argsType
+	var forcedCastTypes []types.Type
+	if len(exactColumnCastTypes) > 0 {
+		lookupTypes = exactColumnCastTypes
+		forcedCastTypes = exactColumnCastTypes
+	} else if castTypes, ok := approximateStringNumericCastTypes(name, args, argsType); ok {
+		lookupTypes = castTypes
+		forcedCastTypes = castTypes
+	}
+	fGet, err := function.GetFunctionByName(ctx, name, lookupTypes)
 	if err != nil {
 		if name == "between" {
 			leftFn, err := BindFuncExprImplByPlanExpr(ctx, ">=", []*plan.Expr{DeepCopyExpr(args[0]), args[1]})
@@ -3300,14 +3323,6 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		}
 
 		return nil, err
-	}
-	var forcedCastTypes []types.Type
-	if castTypes, ok := approximateStringNumericCastTypes(name, args, argsType); ok {
-		fGet, err = function.GetFunctionByName(ctx, name, castTypes)
-		if err != nil {
-			return nil, err
-		}
-		forcedCastTypes = castTypes
 	}
 
 	funcID = fGet.GetEncodedOverloadID()
@@ -3631,6 +3646,7 @@ func approximateStringNumericCastTypes(
 ) ([]types.Type, bool) {
 	var valueArgs int
 	numericOperator := false
+	integerDiv := false
 	switch name {
 	case "=", "<=>", "<", "<=", ">", ">=", "<>":
 		valueArgs = 2
@@ -3638,9 +3654,13 @@ func approximateStringNumericCastTypes(
 		valueArgs = 3
 	case "in_range":
 		valueArgs = 3
-	case "+", "-", "*", "/", "%", "div", "mod":
+	case "+", "-", "*", "/", "%", "mod":
 		valueArgs = 2
 		numericOperator = true
+	case "div":
+		valueArgs = 2
+		numericOperator = true
+		integerDiv = true
 	default:
 		return nil, false
 	}
@@ -3648,16 +3668,26 @@ func approximateStringNumericCastTypes(
 		return nil, false
 	}
 
-	hasString, hasNumeric := false, false
+	hasString, hasNumeric, hasTemporal := false, false, false
+	var temporalScale int32
 	for i := 0; i < valueArgs; i++ {
-		if containsDynamicParam(args[i]) || isEnumDisplayValueExpr(args[i]) {
+		if isEnumDisplayValueExpr(args[i]) {
 			return nil, false
 		}
 		oid := types.T(args[i].Typ.Id)
 		switch {
 		case oid.IsMySQLString() && oid != types.T_enum && !isEnumPlanType(&args[i].Typ):
+			if containsDynamicParam(args[i]) {
+				return nil, false
+			}
 			hasString = true
-		case argsType[i].IsNumeric() && argsType[i].Oid != types.T_decimal256:
+		case numericOperator && argsType[i].IsTemporal():
+			hasString = true
+			hasTemporal = true
+			if argsType[i].Scale > temporalScale {
+				temporalScale = argsType[i].Scale
+			}
+		case argsType[i].IsNumeric():
 			hasNumeric = true
 		default:
 			return nil, false
@@ -3668,10 +3698,96 @@ func approximateStringNumericCastTypes(
 	}
 
 	castTypes := append([]types.Type(nil), argsType...)
+	targetType := types.T_float64.ToType()
+	if hasTemporal {
+		targetType = types.New(types.T_decimal64, 18, temporalScale)
+	} else if integerDiv {
+		targetType = types.New(types.T_decimal256, 65, 30)
+	}
 	for i := 0; i < valueArgs; i++ {
-		castTypes[i] = types.T_float64.ToType()
+		castTypes[i] = targetType
 	}
 	return castTypes, true
+}
+
+func rewriteExactNumericColumnStringLiterals(
+	ctx context.Context,
+	name string,
+	args []*Expr,
+	argsType []types.Type,
+) []types.Type {
+	valueArgs := 0
+	switch name {
+	case "=", "<=>", "<", "<=", ">", ">=", "<>":
+		valueArgs = 2
+	case "between", "in_range":
+		valueArgs = 3
+	default:
+		return nil
+	}
+	castTypes, ok := exactNumericColumnStringLiteralCastTypes(args, argsType, valueArgs)
+	if !ok {
+		return nil
+	}
+	var maxScale int32
+	for i := 0; i < valueArgs; i++ {
+		if args[i].GetCol() != nil {
+			continue
+		}
+		literal := args[i].GetLit()
+		if literal == nil || literal.IsBin {
+			return nil
+		}
+		decimalExpr, err := makePlan2DecimalExprWithType(ctx, literal.GetSval())
+		if err != nil {
+			return nil
+		}
+		args[i] = decimalExpr
+		argsType[i] = makeTypeByPlan2Expr(decimalExpr)
+		if argsType[i].Scale > maxScale {
+			maxScale = argsType[i].Scale
+		}
+	}
+	if maxScale > 0 &&
+		(name == "=" || name == "<=>" || name == "<>" || name == "between" || name == "in_range") {
+		decimalType := types.New(types.T_decimal256, 65, maxScale)
+		for i := 0; i < valueArgs; i++ {
+			castTypes[i] = decimalType
+		}
+	}
+	return castTypes
+}
+
+func exactNumericColumnStringLiteralCastTypes(
+	args []*Expr,
+	argsType []types.Type,
+	valueArgs int,
+) ([]types.Type, bool) {
+	for colIdx := 0; colIdx < valueArgs; colIdx++ {
+		if args[colIdx].GetCol() == nil || !argsType[colIdx].IsNumeric() {
+			continue
+		}
+		allStringLiterals := true
+		for i := 0; i < valueArgs; i++ {
+			if i == colIdx {
+				continue
+			}
+			if literal := args[i].GetLit(); literal == nil ||
+				!types.T(args[i].Typ.Id).IsMySQLString() {
+				allStringLiterals = false
+				break
+			}
+		}
+		if !allStringLiterals {
+			continue
+		}
+		castTypes := append([]types.Type(nil), argsType...)
+		for i := 0; i < valueArgs; i++ {
+			castTypes[i] = argsType[colIdx]
+		}
+		return castTypes, true
+	}
+	return nil, false
 }
 
 func isEnumDisplayValueExpr(expr *Expr) bool {

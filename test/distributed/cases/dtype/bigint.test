@@ -304,8 +304,18 @@ select l.s from t_numeric_string_join_left l force index for join(idx_numeric_st
 join t_numeric_string_join_right r on l.s = r.i order by l.s;
 select l.s from t_numeric_string_join_left l force index for join(idx_numeric_string_join_as)
 join t_numeric_string_join_right r on l.a = r.a and l.s = r.i order by l.s;
+create table t_numeric_string_join_decimal(d decimal(65, 0));
+insert into t_numeric_string_join_decimal values (9007199254740993);
+select l.s from t_numeric_string_join_left l
+join t_numeric_string_join_decimal r on l.s = r.d order by l.s;
+drop table t_numeric_string_join_decimal;
 drop table t_numeric_string_join_left;
 drop table t_numeric_string_join_right;
+
+select cast(9007199254740992 as decimal(65, 0)) = '9007199254740993';
+select '9007199254740993' div 1;
+select '9223372036854775807' div 1;
+select '5.5' div 2;
 
 drop table if exists t_numeric_string_composite_pk;
 create table t_numeric_string_composite_pk(a int, b varchar(80), primary key(a, b));

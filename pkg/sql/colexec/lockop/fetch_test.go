@@ -45,6 +45,19 @@ func TestFetchVarlenaRowsRejectsSchemaVector(t *testing.T) {
 	require.False(t, ok)
 	require.Nil(t, rows)
 	require.Equal(t, lock.Granularity_Row, granularity)
+
+	ok, rows, granularity = fetchVarlenaRows(
+		nil,
+		types.NewPacker(),
+		types.T_varchar.ToType(),
+		1,
+		false,
+		nil,
+		nil,
+	)
+	require.False(t, ok)
+	require.Nil(t, rows)
+	require.Equal(t, lock.Granularity_Row, granularity)
 }
 
 func TestFetchBoolRows(t *testing.T) {

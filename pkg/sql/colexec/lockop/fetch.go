@@ -694,7 +694,7 @@ func fetchVarlenaRows(
 	lockTable bool,
 	filter RowsFilter,
 	filterCols []int32) (bool, [][]byte, lock.Granularity) {
-	if !vec.GetType().IsVarlen() {
+	if vec == nil || !vec.GetType().IsVarlen() {
 		return false, nil, lock.Granularity_Row
 	}
 

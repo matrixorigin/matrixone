@@ -1081,6 +1081,8 @@ func addMixedStringNumericIndexTablesForTest(mock *MockOptimizer) {
 
 	addTable("string_index_t", 25361, planpb.Type{Id: int32(types.T_varchar)}, true)
 	addTable("numeric_join_t", 25362, planpb.Type{Id: int32(types.T_int64)}, false)
+	addTable("numeric_index_t", 25363, planpb.Type{Id: int32(types.T_int64)}, true)
+	addTable("decimal256_join_t", 25364, planpb.Type{Id: int32(types.T_decimal256), Width: 65}, false)
 }
 
 func TestMixedStringNumericComparisonSkipsForcedIndexEndToEnd(t *testing.T) {
@@ -1095,6 +1097,52 @@ func TestMixedStringNumericComparisonSkipsForcedIndexEndToEnd(t *testing.T) {
 	require.Empty(t, findIndexScanNameForTable(queryPlan.GetQuery(), "string_index_t"))
 }
 
+func TestNumericColumnStringLiteralUsesForcedIndexEndToEnd(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	addMixedStringNumericIndexTablesForTest(mock)
+
+	queryPlan, err := runOneStmt(mock, t, `
+		select id
+		from numeric_index_t force index(idx_a)
+		where a = '9007199254740993'`)
+	require.NoError(t, err)
+	require.NotEmpty(t, findIndexScanNameForTable(queryPlan.GetQuery(), "numeric_index_t"))
+}
+
+func TestPreparedMixedStringNumericComparisonUsesApproximateTypeEndToEnd(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	addMixedStringNumericIndexTablesForTest(mock)
+
+	prepared, err := runOneStmt(mock, t, `
+		prepare mixed_numeric from '
+			select id
+			from string_index_t force index(idx_a)
+			where a = ?'`)
+	require.NoError(t, err)
+	queryPlan, err := FillValuesOfParamsInPlan(
+		context.Background(),
+		resolveQueryPlan(prepared),
+		[]any{ParamValue{Value: int64(9007199254740993)}},
+	)
+	require.NoError(t, err)
+	require.Empty(t, findIndexScanNameForTable(queryPlan.GetQuery(), "string_index_t"))
+	for _, node := range queryPlan.GetQuery().Nodes {
+		for _, filter := range node.FilterList {
+			if filter.GetF() == nil || filter.GetF().Func.ObjName != "=" {
+				continue
+			}
+			if HasColExpr(filter.GetF().Args[0], -1) == -1 &&
+				HasColExpr(filter.GetF().Args[1], -1) == -1 {
+				continue
+			}
+			require.Equal(t, int32(types.T_float64), filter.GetF().Args[0].Typ.Id)
+			require.Equal(t, int32(types.T_float64), filter.GetF().Args[1].Typ.Id)
+			return
+		}
+	}
+	t.Fatal("comparison filter not found")
+}
+
 func TestMixedStringNumericJoinSkipsForcedIndexEndToEnd(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	addMixedStringNumericIndexTablesForTest(mock)
@@ -1106,6 +1154,34 @@ func TestMixedStringNumericJoinSkipsForcedIndexEndToEnd(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, planHasIndexJoin(queryPlan))
 	require.Empty(t, findIndexScanNameForTable(queryPlan.GetQuery(), "string_index_t"))
+	for _, node := range queryPlan.GetQuery().Nodes {
+		if node.NodeType == planpb.Node_JOIN {
+			require.True(t, IsEquiJoin2(node.OnList))
+			return
+		}
+	}
+	t.Fatal("join node not found")
+}
+
+func TestDecimal256StringJoinRemainsEquiJoinEndToEnd(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	addMixedStringNumericIndexTablesForTest(mock)
+
+	queryPlan, err := runOneStmt(mock, t, `
+		select l.id
+		from string_index_t l
+		join decimal256_join_t r on l.a = r.a`)
+	require.NoError(t, err)
+	for _, node := range queryPlan.GetQuery().Nodes {
+		if node.NodeType != planpb.Node_JOIN {
+			continue
+		}
+		require.True(t, IsEquiJoin2(node.OnList))
+		require.Equal(t, int32(types.T_float64), node.OnList[0].GetF().Args[0].Typ.Id)
+		require.Equal(t, int32(types.T_float64), node.OnList[0].GetF().Args[1].Typ.Id)
+		return
+	}
+	t.Fatal("join node not found")
 }
 
 func findFirstIndexScanName(p *Plan) string {

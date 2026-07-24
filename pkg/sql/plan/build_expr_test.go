@@ -15,11 +15,13 @@
 package plan
 
 import (
+	"math"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
@@ -504,6 +506,53 @@ func TestMakeTimeExtremeExactSecondBindAndExecute(t *testing.T) {
 			result, err := executor.Eval(proc, nil, nil)
 			require.NoError(t, err)
 			require.True(t, result.GetNulls().Contains(0))
+		})
+	}
+}
+
+func TestMixedStringNumericBoundaryBindAndExecute(t *testing.T) {
+	tests := []struct {
+		name string
+		sql  string
+		want int64
+	}{
+		{
+			name: "decimal256 comparison uses approximate value",
+			sql:  "select cast(cast(9007199254740992 as decimal(65, 0)) = '9007199254740993' as signed)",
+			want: 1,
+		},
+		{
+			name: "integer div preserves adjacent integer",
+			sql:  "select '9007199254740993' div 1",
+			want: 9007199254740993,
+		},
+		{
+			name: "integer div preserves int64 maximum",
+			sql:  "select '9223372036854775807' div 1",
+			want: math.MaxInt64,
+		},
+		{
+			name: "integer div retains fractional input before truncation",
+			sql:  "select '5.5' div 2",
+			want: 2,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			pl, err := runOneExprStmt(mock, t, test.sql)
+			require.NoError(t, err)
+
+			expr := pl.GetQuery().Nodes[1].ProjectList[0]
+			proc := testutil.NewProc(t)
+			defer proc.Free()
+			executor, err := colexec.NewExpressionExecutor(proc, expr)
+			require.NoError(t, err)
+			defer executor.Free()
+			result, err := executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+			require.NoError(t, err)
+			require.Equal(t, test.want, vector.MustFixedColWithTypeCheck[int64](result)[0])
 		})
 	}
 }
