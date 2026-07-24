@@ -1020,12 +1020,7 @@ func TestQueryWorkloadPolicyRefreshUsesOwnedAccountIdentity(t *testing.T) {
 		},
 	)
 
-	previousManager := GWorkloadPolicyManager
-	manager := newWorkloadPolicyManager(time.Minute, nil)
-	GWorkloadPolicyManager = manager
-	t.Cleanup(func() {
-		GWorkloadPolicyManager = previousManager
-	})
+	manager := GWorkloadPolicyManager
 	state := manager.acquire(ownedAccountID)
 	defer manager.release(state)
 	applied, _, err := manager.Apply(
@@ -1841,12 +1836,7 @@ func TestAlterQueryWorkloadPolicyCommitsAppliesAndPublishes(t *testing.T) {
 	stub := gostub.StubFunc(&NewBackgroundExec, exec)
 	defer stub.Reset()
 
-	previousManager := GWorkloadPolicyManager
-	manager := newWorkloadPolicyManager(time.Minute, nil)
-	GWorkloadPolicyManager = manager
-	defer func() {
-		GWorkloadPolicyManager = previousManager
-	}()
+	manager := GWorkloadPolicyManager
 	state := manager.acquire(accountID)
 	defer manager.release(state)
 

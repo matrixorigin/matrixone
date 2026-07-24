@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -26,9 +27,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 )
 
@@ -54,6 +58,7 @@ func TestIe(t *testing.T) {
 			executor := newIe(sid)
 			executor.ApplySessionOverride(ie.NewOptsBuilder().Username("dump").Finish())
 			sess := executor.newCmdSession(ctx, ie.NewOptsBuilder().Database("mo_catalog").Internal(true).Finish())
+			defer sess.Close()
 			assert.Equal(t, "dump", sess.GetResponser().GetStr(USERNAME))
 
 			err := executor.Exec(ctx, "whatever", ie.NewOptsBuilder().Finish())
@@ -63,6 +68,99 @@ func TestIe(t *testing.T) {
 			assert.Equal(t, uint64(0), res.RowCount())
 		},
 	)
+}
+
+func TestInternalExecutorLoadsAccountWorkloadPolicy(t *testing.T) {
+	const (
+		service   = "internal-executor-workload-policy-test"
+		accountID = uint32(91)
+	)
+	mp := mpool.MustNewZero()
+	memResult := executor.NewMemResult(
+		[]types.Type{
+			types.T_text.ToType(),
+			types.T_uint64.ToType(),
+		},
+		mp,
+	)
+	memResult.NewBatchWithRowCount(1)
+	require.NoError(t, executor.AppendStringRows(
+		memResult,
+		0,
+		[]string{`{"version":1,"policies":{"internal":{"pool":"internal-pool","labels":{"role":"internal"}}}}`},
+	))
+	require.NoError(t, executor.AppendFixedRows(
+		memResult,
+		1,
+		[]uint64{1},
+	))
+	accountResult := executor.NewMemResult(
+		[]types.Type{types.T_varchar.ToType()},
+		mp,
+	)
+	accountResult.NewBatchWithRowCount(1)
+	require.NoError(t, executor.AppendStringRows(
+		accountResult,
+		0,
+		[]string{"tenant-91"},
+	))
+
+	runtime.RunTest(
+		service,
+		func(rt runtime.Runtime) {
+			InitServerLevelVars(service)
+			setPu(service, config.NewParameterUnit(
+				&config.FrontendParameters{},
+				nil,
+				nil,
+				nil,
+			))
+			rt.SetGlobalVariables(
+				runtime.InternalSQLExecutor,
+				&workloadPolicySQLExecutor{
+					exec: func(
+						ctx context.Context,
+						sql string,
+						opts executor.Options,
+					) (executor.Result, error) {
+						require.True(t, workloadPolicyBypassed(ctx))
+						if strings.Contains(sql, "from mo_catalog.mo_account") {
+							require.Equal(t, uint32(sysAccountID), opts.AccountID())
+							return accountResult.GetResult(), nil
+						}
+						require.Equal(t, accountID, opts.AccountID())
+						return memResult.GetResult(), nil
+					},
+				},
+			)
+
+			ctx := defines.AttachAccountId(context.Background(), accountID)
+			sess := newIe(service).newCmdSession(
+				ctx,
+				ie.NewOptsBuilder().Internal(true).Finish(),
+			)
+			defer sess.Close()
+
+			policy := queryWorkloadPolicySnapshotAt(ctx, sess)
+			require.Empty(t, policy.InvalidReason)
+			require.Equal(
+				t,
+				"internal-pool",
+				policy.Rules[schedule.WorkloadInternal].PoolIdentity,
+			)
+			resolved := schedule.ResolveWorkloadPolicy(
+				schedule.WorkloadDescriptor{
+					Internal: true,
+					Tenant:   sess.GetTenantInfo().GetTenant(),
+				},
+				policy,
+			)
+			require.Equal(t, schedule.WorkloadInternal, resolved.WorkloadClass)
+			require.Equal(t, "internal-pool", resolved.Pool.Identity)
+			require.Equal(t, "tenant-91", resolved.Pool.Labels["account"])
+		},
+	)
+	require.Zero(t, mp.CurrNB())
 }
 
 func TestIeProto(t *testing.T) {
@@ -160,6 +258,7 @@ func Test_internalProtocol_Write(t *testing.T) {
 	assert.Nil(t, ip.WriteEOFOrOK(0, 1))
 
 	ses := executorVar.newCmdSession(ctx, ie.NewOptsBuilder().Finish())
+	defer ses.Close()
 	col1 := &MysqlColumn{}
 	col1.SetName("col1")
 	col1.SetColumnType(defines.MYSQL_TYPE_LONG)

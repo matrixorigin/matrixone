@@ -123,6 +123,12 @@ func (ti *TenantInfo) GetTenant() string {
 	return ti.getTenantUnsafe()
 }
 
+func (ti *TenantInfo) SetTenant(tenant string) {
+	ti.mu.Lock()
+	defer ti.mu.Unlock()
+	ti.Tenant = tenant
+}
+
 func (ti *TenantInfo) getTenantUnsafe() string {
 	return ti.Tenant
 }

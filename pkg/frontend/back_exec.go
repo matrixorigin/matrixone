@@ -1010,12 +1010,6 @@ type backSession struct {
 	effectiveMatrixOneNativeMode    bool
 	hasEffectiveMatrixOneNativeMode bool
 	forcePessimisticRC              bool
-	// lastTxnSnapshotTS records the snapshot chosen for the most recently
-	// started statement transaction. Catalog readers expose it as a
-	// visible-through revision (SnapshotTS.Prev()) so catalog refreshes and
-	// cross-CN commit notifications share one monotonic ordering domain.
-	txnSnapshotMu     sync.Mutex
-	lastTxnSnapshotTS timestamp.Timestamp
 	// lastAffectedRows carries the previous statement's ROW_COUNT() value into
 	// the next process created by this background executor.
 	lastAffectedRows int64

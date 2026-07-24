@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -238,6 +239,52 @@ func (ie *internalExecutor) newCmdSession(ctx context.Context, opts ie.SessionOv
 	sess.lastCommitTS = now
 
 	sess.initLogger()
+
+	// Internal executors create a fresh Session for every statement and do not
+	// run the client authentication path that calls InitSystemVariables. They
+	// still need to share the account-level workload policy snapshot so an
+	// internal workload rule is not silently bypassed. Acquire only after the
+	// fallible session initialization above; the local guard owns the reference
+	// until it transfers to the caller and Session.Close.
+	state := GWorkloadPolicyManager.acquire(sess.GetTenantInfo().GetTenantID())
+	sess.workloadPolicy.Store(state)
+	releaseState := true
+	defer func() {
+		if releaseState {
+			sess.workloadPolicy.Store(nil)
+			GWorkloadPolicyManager.release(state)
+		}
+	}()
+	if tenantName := state.cachedAccountName(); tenantName != "" &&
+		sess.GetTenantInfo().GetTenant() == "" {
+		sess.GetTenantInfo().SetTenant(tenantName)
+	}
+	if sess.GetIsInternal() &&
+		!workloadPolicyBypassed(ctx) &&
+		state.snapshot.Load() == nil {
+		// RefreshAsync waits for the first snapshot and becomes asynchronous
+		// only after a usable snapshot exists.
+		_ = GWorkloadPolicyManager.RefreshAsync(
+			ctx,
+			ie.service,
+			state.accountID,
+			state,
+		)
+	}
+	policy := GWorkloadPolicyManager.cached(state)
+	if _, configured := policy.Rules[schedule.WorkloadInternal]; sess.GetIsInternal() &&
+		configured &&
+		sess.GetTenantInfo().GetTenant() == "" {
+		if tenantName, err := loadWorkloadPolicyAccountNameByService(
+			ctx,
+			ie.service,
+			state.accountID,
+		); err == nil {
+			state.rememberAccountName(tenantName)
+			sess.GetTenantInfo().SetTenant(tenantName)
+		}
+	}
+	releaseState = false
 	return sess
 }
 

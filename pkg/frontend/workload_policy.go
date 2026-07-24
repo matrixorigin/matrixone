@@ -88,12 +88,31 @@ type workloadPolicyRefresh struct {
 type accountWorkloadPolicy struct {
 	mu           sync.Mutex
 	snapshot     atomic.Pointer[workloadPolicySnapshot]
+	accountName  atomic.Pointer[string]
 	refreshAfter atomic.Int64
 	refreshing   *workloadPolicyRefresh
 	accountID    uint32
 	references   uint64
 	failures     uint8
 	removed      bool
+}
+
+func (state *accountWorkloadPolicy) rememberAccountName(name string) {
+	name = strings.TrimSpace(name)
+	if state == nil || name == "" {
+		return
+	}
+	state.accountName.Store(&name)
+}
+
+func (state *accountWorkloadPolicy) cachedAccountName() string {
+	if state == nil {
+		return ""
+	}
+	if name := state.accountName.Load(); name != nil {
+		return *name
+	}
+	return ""
 }
 
 type workloadPolicyLoader func(
@@ -533,26 +552,9 @@ func loadWorkloadPolicyFromCatalogByService(
 	accountID uint32,
 ) (string, uint64, error) {
 	ctx = withWorkloadPolicyBypass(ctx)
-	rt := moruntime.ServiceRuntime(service)
-	if rt == nil {
-		return "", 0, moerr.NewInternalError(
-			ctx,
-			"workload policy runtime is not initialized",
-		)
-	}
-	value, ok := rt.GetGlobalVariables(moruntime.InternalSQLExecutor)
-	if !ok {
-		return "", 0, moerr.NewInternalError(
-			ctx,
-			"workload policy internal SQL executor is not initialized",
-		)
-	}
-	sqlExecutor, ok := value.(executor.SQLExecutor)
-	if !ok || sqlExecutor == nil {
-		return "", 0, moerr.NewInternalError(
-			ctx,
-			"workload policy internal SQL executor has invalid type",
-		)
+	sqlExecutor, err := workloadPolicySQLExecutorForService(ctx, service)
+	if err != nil {
+		return "", 0, err
 	}
 	sql := fmt.Sprintf(
 		"select policy, revision from %s.%s where account_id = %d",
@@ -608,6 +610,97 @@ func loadWorkloadPolicyFromCatalogByService(
 		)
 	}
 	return raw, revision, nil
+}
+
+func workloadPolicySQLExecutorForService(
+	ctx context.Context,
+	service string,
+) (executor.SQLExecutor, error) {
+	rt := moruntime.ServiceRuntime(service)
+	if rt == nil {
+		return nil, moerr.NewInternalError(
+			ctx,
+			"workload policy runtime is not initialized",
+		)
+	}
+	value, ok := rt.GetGlobalVariables(moruntime.InternalSQLExecutor)
+	if !ok {
+		return nil, moerr.NewInternalError(
+			ctx,
+			"workload policy internal SQL executor is not initialized",
+		)
+	}
+	sqlExecutor, ok := value.(executor.SQLExecutor)
+	if !ok || sqlExecutor == nil {
+		return nil, moerr.NewInternalError(
+			ctx,
+			"workload policy internal SQL executor has invalid type",
+		)
+	}
+	return sqlExecutor, nil
+}
+
+func loadWorkloadPolicyAccountNameByService(
+	ctx context.Context,
+	service string,
+	accountID uint32,
+) (string, error) {
+	ctx = withWorkloadPolicyBypass(ctx)
+	sqlExecutor, err := workloadPolicySQLExecutorForService(ctx, service)
+	if err != nil {
+		return "", err
+	}
+	sql := fmt.Sprintf(
+		"select account_name from %s.mo_account where account_id = %d",
+		catalog.MO_CATALOG,
+		accountID,
+	)
+	result, err := sqlExecutor.Exec(
+		ctx,
+		sql,
+		executor.Options{}.
+			WithAccountID(sysAccountID).
+			WithDatabase(catalog.MO_CATALOG).
+			WithStatementOption(
+				executor.StatementOption{}.WithDisableLog(),
+			),
+	)
+	if err != nil {
+		return "", err
+	}
+	defer result.Close()
+
+	var accountName string
+	found := false
+	for _, rows := range result.Batches {
+		if rows == nil || rows.RowCount() == 0 {
+			continue
+		}
+		if found || rows.RowCount() != 1 || len(rows.Vecs) < 1 {
+			return "", moerr.NewInternalErrorf(
+				ctx,
+				"expected one account row for account %d",
+				accountID,
+			)
+		}
+		accountName = rows.Vecs[0].GetStringAt(0)
+		found = true
+	}
+	if !found {
+		return "", moerr.NewInternalErrorf(
+			ctx,
+			"account %d does not exist",
+			accountID,
+		)
+	}
+	if strings.TrimSpace(accountName) == "" {
+		return "", moerr.NewInternalErrorf(
+			ctx,
+			"account %d has an empty name",
+			accountID,
+		)
+	}
+	return accountName, nil
 }
 
 func loadWorkloadPolicyFromCatalogWithExec(

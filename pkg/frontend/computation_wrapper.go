@@ -1314,17 +1314,16 @@ func queryWorkloadPolicySnapshotAt(
 		state := workloadPolicyState(ses)
 		if state == nil {
 			// Foreground policy ownership is established by
-			// InitSystemVariables. A session that has not completed that
-			// initialization (for example an internal/direct session) must not
-			// lazily create account state or recursively execute catalog SQL
-			// from the compile path.
+			// InitSystemVariables; internal executor sessions acquire it when
+			// they are created. Other partially initialized/direct sessions
+			// must not implicitly create control-plane state here.
 			return schedule.WorkloadPolicySet{}
 		}
-		if state.snapshot.Load() == nil {
+		if state.snapshot.Load() == nil && !ses.GetIsInternal() {
 			// InitSystemVariables may intentionally run without a background
-			// executor for direct/internal sessions. Only an initialization
-			// attempt with catalog access establishes the first snapshot;
-			// compile must not become an implicit control-plane loader.
+			// executor for direct sessions. Only internal executor sessions may
+			// synchronously establish a first snapshot here; their catalog read
+			// carries the workload-policy bypass context.
 			return schedule.WorkloadPolicySet{}
 		}
 		if err := GWorkloadPolicyManager.RefreshAsync(
