@@ -1839,7 +1839,8 @@ func Test_fliterByAccountAndFilename(t *testing.T) {
 				},
 				Cols: []*plan.ColDef{
 					{
-						Name: catalog.ExternalFilePath,
+						ColId: catalog.ExternalFilePathColId,
+						Name:  catalog.ExternalFilePath,
 						Typ: plan.Type{
 							Id:    int32(types.T_varchar),
 							Width: types.MaxVarcharLen,
@@ -1938,10 +1939,18 @@ func filePruningTestNode(physicalCols ...string) *plan.Node {
 	cols := make([]*plan.ColDef, 0, len(physicalCols)+1)
 	physicalPositions := make(map[string]int32, len(physicalCols))
 	for i, name := range physicalCols {
-		cols = append(cols, &plan.ColDef{Name: name, Typ: plan.Type{Id: int32(types.T_varchar)}})
+		cols = append(cols, &plan.ColDef{
+			ColId: uint64(i + 1),
+			Name:  name,
+			Typ:   plan.Type{Id: int32(types.T_varchar)},
+		})
 		physicalPositions[name] = int32(i)
 	}
-	cols = append(cols, &plan.ColDef{Name: catalog.ExternalFilePath, Typ: plan.Type{Id: int32(types.T_varchar)}})
+	cols = append(cols, &plan.ColDef{
+		ColId: catalog.ExternalFilePathColId,
+		Name:  catalog.ExternalFilePath,
+		Typ:   plan.Type{Id: int32(types.T_varchar)},
+	})
 	return &plan.Node{
 		NodeType: plan.Node_EXTERNAL_SCAN,
 		TableDef: &plan.TableDef{Cols: cols},
@@ -2161,6 +2170,51 @@ func TestFilterByAccountAndFilenameKeepsPhysicalColumnsAtRowLevel(t *testing.T) 
 	}
 }
 
+func TestFilterByAccountAndFilenamePrunesAfterColumnRemap(t *testing.T) {
+	likeFn, err := function.GetFunctionByName(context.Background(), "like", []types.Type{
+		types.T_varchar.ToType(), types.T_varchar.ToType(),
+	})
+	require.NoError(t, err)
+
+	// Production shape after pruning (a, b, __mo_filepath) to
+	// (a, __mo_filepath): ColPos 1 is local, while the physical-column map
+	// intentionally keeps b's original file-field position 1.
+	node := &plan.Node{
+		NodeType: plan.Node_EXTERNAL_SCAN,
+		TableDef: &plan.TableDef{Cols: []*plan.ColDef{
+			{ColId: 1, Name: "a", Typ: plan.Type{Id: int32(types.T_varchar)}},
+			{
+				ColId: catalog.ExternalFilePathColId,
+				Name:  catalog.ExternalFilePath,
+				Typ:   plan.Type{Id: int32(types.T_varchar)},
+			},
+		}},
+		ExternScan: &plan.ExternScan{
+			Type: int32(plan.ExternType_EXTERNAL_TB),
+			TbColToDataCol: map[string]int32{
+				"a": 0,
+				"b": 1,
+			},
+		},
+	}
+	filter := filePruningFunction("like", likeFn.GetEncodedOverloadID(), types.T_bool,
+		filePruningColumn(1, catalog.ExternalFilePath),
+		filePruningStringLiteral("%/csv/%"))
+	node.FilterList = []*plan.Expr{filter}
+
+	fileList := []string{"etl:/logs/csv/a.csv", "etl:/logs/tae/a.blk"}
+	fileSize := []int64{10, 20}
+	gotFiles, gotSizes, leftover, err := filterByAccountAndFilename(
+		context.Background(), node, testutil.NewProc(t), fileList, fileSize,
+	)
+
+	require.NoError(t, err)
+	require.Equal(t, fileList[:1], gotFiles)
+	require.Equal(t, fileSize[:1], gotSizes)
+	require.Empty(t, leftover)
+	require.Equal(t, []*plan.Expr{filter}, node.FilterList)
+}
+
 func TestFilterByAccountAndFilenameKeepsMixedColumnFilterAtRowLevel(t *testing.T) {
 	const tableName = "ext"
 	varcharType := plan.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen, Table: tableName}
@@ -2193,7 +2247,7 @@ func TestFilterByAccountAndFilenameKeepsMixedColumnFilterAtRowLevel(t *testing.T
 		TableDef: &plan.TableDef{Cols: []*plan.ColDef{
 			{Name: "account", Typ: varcharType},
 			{Name: "account_id", Typ: varcharType},
-			{Name: catalog.ExternalFilePath, Typ: varcharType},
+			{ColId: catalog.ExternalFilePathColId, Name: catalog.ExternalFilePath, Typ: varcharType},
 		}},
 		FilterList: []*plan.Expr{filter},
 		ExternScan: &plan.ExternScan{

@@ -31,10 +31,18 @@ func plannerFilePruningNode(physicalCols ...string) *pbplan.Node {
 	cols := make([]*pbplan.ColDef, 0, len(physicalCols)+1)
 	physicalPositions := make(map[string]int32, len(physicalCols))
 	for i, name := range physicalCols {
-		cols = append(cols, &pbplan.ColDef{Name: name, Typ: pbplan.Type{Id: int32(types.T_varchar)}})
+		cols = append(cols, &pbplan.ColDef{
+			ColId: uint64(i + 1),
+			Name:  name,
+			Typ:   pbplan.Type{Id: int32(types.T_varchar)},
+		})
 		physicalPositions[name] = int32(i)
 	}
-	cols = append(cols, &pbplan.ColDef{Name: catalog.ExternalFilePath, Typ: pbplan.Type{Id: int32(types.T_varchar)}})
+	cols = append(cols, &pbplan.ColDef{
+		ColId: catalog.ExternalFilePathColId,
+		Name:  catalog.ExternalFilePath,
+		Typ:   pbplan.Type{Id: int32(types.T_varchar)},
+	})
 	return &pbplan.Node{
 		NodeType: pbplan.Node_EXTERNAL_SCAN,
 		TableDef: &pbplan.TableDef{Cols: cols},
@@ -223,6 +231,48 @@ func TestExternalFileFilteringKeepsPhysicalColumnsAtRowLevel(t *testing.T) {
 			require.Equal(t, []*pbplan.Expr{filter}, node.FilterList)
 		})
 	}
+}
+
+func TestExternalFileFilteringPrunesAfterColumnRemap(t *testing.T) {
+	likeFn, err := function.GetFunctionByName(context.Background(), "like", []types.Type{
+		types.T_varchar.ToType(), types.T_varchar.ToType(),
+	})
+	require.NoError(t, err)
+
+	node := &pbplan.Node{
+		NodeType: pbplan.Node_EXTERNAL_SCAN,
+		TableDef: &pbplan.TableDef{Cols: []*pbplan.ColDef{
+			{ColId: 1, Name: "a", Typ: pbplan.Type{Id: int32(types.T_varchar)}},
+			{
+				ColId: catalog.ExternalFilePathColId,
+				Name:  catalog.ExternalFilePath,
+				Typ:   pbplan.Type{Id: int32(types.T_varchar)},
+			},
+		}},
+		ExternScan: &pbplan.ExternScan{
+			Type: int32(pbplan.ExternType_EXTERNAL_TB),
+			TbColToDataCol: map[string]int32{
+				"a": 0,
+				"b": 1,
+			},
+		},
+	}
+	filter := plannerFilePruningFunction("like", likeFn.GetEncodedOverloadID(), types.T_bool,
+		plannerFilePruningColumn(1, catalog.ExternalFilePath),
+		plannerFilePruningStringLiteral("%/csv/%"))
+	node.FilterList = []*pbplan.Expr{filter}
+
+	fileList := []string{"etl:/logs/csv/a.csv", "etl:/logs/tae/a.blk"}
+	fileSize := []int64{10, 20}
+	gotFiles, gotSizes, leftover, err := filterByAccountAndFilename(
+		context.Background(), node, testutil.NewProc(t), fileList, fileSize,
+	)
+
+	require.NoError(t, err)
+	require.Equal(t, fileList[:1], gotFiles)
+	require.Equal(t, fileSize[:1], gotSizes)
+	require.Empty(t, leftover)
+	require.Equal(t, []*pbplan.Expr{filter}, node.FilterList)
 }
 
 func TestExternalFileFilteringReusesPreparedFilter(t *testing.T) {

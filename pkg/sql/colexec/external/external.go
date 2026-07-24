@@ -321,16 +321,7 @@ func isFileLevelColumn(node *plan.Node, col *plan.ColRef) bool {
 	if node.TableDef.Cols[colPos].Name != catalog.ExternalFilePath {
 		return false
 	}
-
-	// QueryBuilder appends __mo_filepath after recording every physical column
-	// position in TbColToDataCol.  A physical column with the same (or a dotted)
-	// name must stay at row level.
-	for _, physicalColPos := range node.ExternScan.TbColToDataCol {
-		if physicalColPos == col.ColPos {
-			return false
-		}
-	}
-	return true
+	return node.TableDef.Cols[colPos].ColId == catalog.ExternalFilePathColId
 }
 
 func isSafeFileLevelFunction(ref *plan.ObjectRef) bool {

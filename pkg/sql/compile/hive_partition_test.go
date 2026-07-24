@@ -301,7 +301,11 @@ func TestGetHivePartitionFileListCoverageHack(t *testing.T) {
 		TableDef: &plan.TableDef{Cols: []*plan.ColDef{
 			{Name: "id", Typ: plan.Type{Id: int32(types.T_int32)}},
 			{Name: "year", Typ: plan.Type{Id: int32(types.T_int32)}},
-			{Name: catalog.ExternalFilePath, Typ: plan.Type{Id: int32(types.T_varchar)}},
+			{
+				ColId: catalog.ExternalFilePathColId,
+				Name:  catalog.ExternalFilePath,
+				Typ:   plan.Type{Id: int32(types.T_varchar)},
+			},
 		}},
 		FilterList: []*plan.Expr{{
 			Typ: plan.Type{Id: int32(types.T_bool)},

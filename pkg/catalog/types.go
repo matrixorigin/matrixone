@@ -40,6 +40,10 @@ const (
 	PartitionSubTableWildcard = "\\%!\\%%\\%!\\%%"
 
 	ExternalFilePath = "__mo_filepath"
+	// ExternalFilePathColId identifies the synthetic filepath column that the
+	// query builder appends to external scans. It survives column-position
+	// remapping, unlike TbColToDataCol's original file-field indexes.
+	ExternalFilePathColId = ^uint64(0)
 
 	// MOAutoIncrTable mo auto increment table name
 	MOAutoIncrTable = "mo_increment_columns"

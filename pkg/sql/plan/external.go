@@ -50,13 +50,7 @@ func isFileLevelColumn(node *plan.Node, col *plan.ColRef) bool {
 	if node.TableDef.Cols[colPos].Name != catalog.ExternalFilePath {
 		return false
 	}
-
-	for _, physicalColPos := range node.ExternScan.TbColToDataCol {
-		if physicalColPos == col.ColPos {
-			return false
-		}
-	}
-	return true
+	return node.TableDef.Cols[colPos].ColId == catalog.ExternalFilePathColId
 }
 
 func isSafeFileLevelFunction(ref *plan.ObjectRef) bool {
