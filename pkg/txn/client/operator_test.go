@@ -929,20 +929,6 @@ func TestWriteOnCommittedTxn(t *testing.T) {
 	})
 }
 
-func TestWriteOnCommittingTxn(t *testing.T) {
-	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
-		ts.setManual(func(result *rpc.SendResult, err error) (*rpc.SendResult, error) {
-			for idx := range result.Responses {
-				result.Responses[idx].Txn = &txn.TxnMeta{Status: txn.TxnStatus_Committing}
-			}
-			return result, err
-		})
-		result, err := tc.Write(ctx, []txn.TxnRequest{txn.NewTxnRequest(&txn.CNOpRequest{OpCode: 1})})
-		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnClosed))
-		assert.Empty(t, result)
-	})
-}
-
 func TestSnapshotTxnOperator(t *testing.T) {
 	runOperatorTests(t, func(_ context.Context, tc *txnOperator, _ *testTxnSender) {
 		assert.NoError(t, tc.AddLockTable(lock.LockTable{Table: 1}))
@@ -959,7 +945,7 @@ func TestSnapshotTxnOperator(t *testing.T) {
 		tc2.opts.coordinator = true
 		assert.Equal(t, tc.opts.options, tc2.opts.options)
 		assert.Equal(t, 1, len(tc2.mu.lockTables))
-	}, WithTxnReadyOnly(), WithTxnDisable1PCOpt())
+	}, WithTxnReadyOnly())
 }
 
 func TestApplySnapshotTxnOperator(t *testing.T) {
@@ -1349,6 +1335,21 @@ func TestCommitUnknownRetainsAdmissionUntilResolution(t *testing.T) {
 			return users == 0 && active == 0 && waiting == 0
 		}, time.Second, 10*time.Millisecond)
 	}, WithLockService(resolver), WithMaxActiveTxn(1))
+}
+
+func TestCommitRejectsMultipleTNShards(t *testing.T) {
+	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, _ *testTxnSender) {
+		tc.mu.Lock()
+		tc.mu.txn.TNShards = []metadata.TNShard{
+			{TNShardRecord: metadata.TNShardRecord{ShardID: 1}},
+			{TNShardRecord: metadata.TNShardRecord{ShardID: 2}},
+		}
+		tc.mu.Unlock()
+
+		err := tc.Commit(ctx)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
+		require.Equal(t, txn.TxnStatus_Aborted, tc.Status())
+	})
 }
 
 func TestCommitUnknownResolutionAfterClientCloseDoesNotReactivateWaiter(t *testing.T) {
@@ -2262,7 +2263,7 @@ func TestClosedOperatorRejectsSequentialPublicTerminalCalls(t *testing.T) {
 		{name: "commit", run: (*txnOperator).Commit},
 		{name: "rollback", run: (*txnOperator).Rollback},
 		{name: "write-and-commit", run: func(tc *txnOperator, ctx context.Context) error {
-			result, err := tc.WriteAndCommit(ctx, []txn.TxnRequest{newTNRequest(2, 2)})
+			result, err := tc.WriteAndCommit(ctx, []txn.TxnRequest{newTNRequest(1, 1)})
 			if result != nil {
 				result.Release()
 			}

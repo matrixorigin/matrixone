@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/stretchr/testify/require"
 )
 
@@ -70,4 +71,51 @@ func TestLoadOrStoreTxnSkipsTrackingInReadonlyMode(t *testing.T) {
 	_, exists := mgr.txns.store.Load("offline")
 	require.False(t, exists)
 	waitTxnManagerEmpty(t, mgr)
+}
+
+func TestSingleTNCommitAndRollbackLifecycle(t *testing.T) {
+	newManager := func(t *testing.T) *TxnManager {
+		t.Helper()
+		mgr := NewTxnManager(NoopStoreFactory, nil, types.NewMockHLCClock(1))
+		mgr.Start(context.Background())
+		t.Cleanup(mgr.Stop)
+		return mgr
+	}
+
+	t.Run("commit", func(t *testing.T) {
+		mgr := newManager(t)
+		txn, err := mgr.StartTxn(nil)
+		require.NoError(t, err)
+		require.NoError(t, txn.Commit(context.Background()))
+		require.Equal(t, txnif.TxnStateCommitted, txn.GetTxnState(false))
+		waitTxnManagerEmpty(t, mgr)
+	})
+
+	t.Run("rollback", func(t *testing.T) {
+		mgr := newManager(t)
+		txn, err := mgr.StartTxn(nil)
+		require.NoError(t, err)
+		require.NoError(t, txn.Rollback(context.Background()))
+		require.Equal(t, txnif.TxnStateRollbacked, txn.GetTxnState(false))
+		waitTxnManagerEmpty(t, mgr)
+	})
+}
+
+func TestSingleTNInvalidStateAndReplayRollback(t *testing.T) {
+	ctx := NewEmptyTxnCtx()
+	require.Error(t, ctx.ToCommittedLocked())
+
+	replayTxn := NewPersistedTxn(
+		newTxnManagerForLifecycleTest(),
+		NewTxnCtx([]byte("replay"), types.TS{}, types.TS{}),
+		&NoopTxnStore{},
+		1,
+		nil,
+		nil,
+		nil,
+		nil,
+	)
+	require.Panics(t, func() {
+		_ = replayTxn.rollback1PC(context.Background())
+	})
 }
