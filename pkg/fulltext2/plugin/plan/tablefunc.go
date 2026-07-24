@@ -48,9 +48,20 @@ var fulltext2CreateColDefs = []*plan.ColDef{
 	{Name: "status", Typ: plan.Type{Id: int32(types.T_int32), Width: 4}},
 }
 
+// FullText2CompactFuncName is the standalone MERGE-compaction TVF:
+// `fulltext2_compact(db, store, meta, capacity[, position_free[, posting_capacity]])`.
+// No driving table; args are passed as-is (no leading param strip, unlike
+// search/create). Output: a single `live_docs` count row.
+const FullText2CompactFuncName = "fulltext2_compact"
+
+var fulltext2CompactColDefs = []*plan.ColDef{
+	{Name: "live_docs", Typ: plan.Type{Id: int32(types.T_int64), NotNullable: true}},
+}
+
 func init() {
 	planplugin.RegisterTableFunc(FullText2SearchFuncName, buildFullText2Search)
 	planplugin.RegisterTableFunc(FullText2CreateFuncName, buildFullText2Create)
+	planplugin.RegisterTableFunc(FullText2CompactFuncName, buildFullText2Compact)
 }
 
 // buildFullText2Create — arg list: [param, TableConfig(JSON), pk, cols...].
@@ -80,6 +91,30 @@ func buildFullText2Create(pb planplugin.PlanBuilder, tbl *tree.TableFunction, ct
 		BindingTags:     []int32{pb.GenNewBindTag()},
 		TblFuncExprList: exprs,
 		Children:        children,
+	}
+	return pb.AppendNode(node, ctx), nil
+}
+
+// buildFullText2Compact — the standalone `fulltext2_compact(db, store, meta,
+// capacity, ...)` MERGE table function. No driving table; the varchar args are
+// passed through as-is (no leading param strip). Mirrors the search/create
+// registration so the plan-side dispatch routes through the plugin registry
+// (query_builder.go) instead of a hardcoded switch case.
+func buildFullText2Compact(pb planplugin.PlanBuilder, tbl *tree.TableFunction, ctx planplugin.BindContext, exprs []*plan.Expr, children []int32) (int32, error) {
+	colDefs := planplugin.DeepCopyColDefList(fulltext2CompactColDefs)
+	node := &plan.Node{
+		NodeType: plan.Node_FUNCTION_SCAN,
+		Stats:    &plan.Stats{},
+		TableDef: &plan.TableDef{
+			TableType: "func_table",
+			TblFunc: &plan.TableFunction{
+				Name: FullText2CompactFuncName,
+			},
+			Cols: colDefs,
+		},
+		BindingTags:     []int32{pb.GenNewBindTag()},
+		Children:        children,
+		TblFuncExprList: exprs,
 	}
 	return pb.AppendNode(node, ctx), nil
 }

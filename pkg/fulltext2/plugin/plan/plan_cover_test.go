@@ -393,3 +393,24 @@ func TestBuildFullText2Search_OK(t *testing.T) {
 	require.False(t, node.TableDef.TblFunc.IsSingle)
 	require.Len(t, node.TblFuncExprList, 3) // param stripped from the 4 args
 }
+
+// --- tablefunc.go: buildFullText2Compact -----------------------------------
+
+func TestBuildFullText2Compact_OK(t *testing.T) {
+	b := newStubPlanBuilder()
+	id, err := buildFullText2Compact(b, numValTblFunc(`{}`), nil, makeArgs(4), nil)
+	require.NoError(t, err)
+	node := b.nodes[id]
+	require.Equal(t, plan.Node_FUNCTION_SCAN, node.NodeType)
+	require.Equal(t, FullText2CompactFuncName, node.TableDef.TblFunc.Name)
+	require.Len(t, node.TblFuncExprList, 4) // args passed as-is (no param strip)
+	require.Len(t, node.TableDef.Cols, 1)
+	require.Equal(t, "live_docs", node.TableDef.Cols[0].Name)
+}
+
+// the compact builder is wired into the plan-side TVF registry, so the plan
+// dispatch routes it through indexplugin instead of a hardcoded switch case.
+func TestFullText2Compact_Registered(t *testing.T) {
+	_, ok := planplugin.TableFunc(FullText2CompactFuncName)
+	require.True(t, ok)
+}
