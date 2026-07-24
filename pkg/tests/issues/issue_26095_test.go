@@ -69,7 +69,6 @@ func TestIssue26095ConcurrentDataBranchDeletion(t *testing.T) {
 	}
 	base := strings.ToLower(testutils.GetDatabaseName(t))
 	for _, account := range accounts {
-		account := account
 		t.Run(account.name, func(t *testing.T) {
 			for round := 0; round < account.roundCount; round++ {
 				t.Run(fmt.Sprintf("plain_drop_table_round_%d", round), func(t *testing.T) {
