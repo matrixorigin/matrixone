@@ -377,7 +377,7 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 		}
 
 		if retComp == nil {
-			if len(cwft.paramVals) > 0 && planHasRuntimeTypedComparison(cwft.plan) {
+			if planNeedsRuntimeTypedComparison(cwft.plan, cwft.paramVals) {
 				compilerContext := cwft.ses.GetTxnCompileCtx()
 				originalContext := compilerContext.GetContext()
 				parameterContext := plan2.AttachPrepareParamValues(originalContext, cwft.paramVals)
@@ -885,6 +885,73 @@ func planHasRuntimeTypedComparison(p *plan.Plan) bool {
 				return true
 			}
 		}
+	}
+	return false
+}
+
+func planNeedsRuntimeTypedComparison(p *plan.Plan, paramVals []any) bool {
+	if p == nil || p.GetQuery() == nil {
+		return false
+	}
+	for _, node := range p.GetQuery().GetNodes() {
+		for _, expr := range preparedRuntimeTypedExprs(node) {
+			if hasRuntimeNumericComparison(expr, paramVals) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func hasRuntimeNumericComparison(expr *plan.Expr, paramVals []any) bool {
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil {
+		return false
+	}
+	switch fn.Func.ObjName {
+	case "=", "<=>", "<", "<=", ">", ">=", "<>", "between", "in_range":
+		if containsRuntimeNumericParam(expr, paramVals) {
+			return true
+		}
+	}
+	for _, arg := range fn.Args {
+		if hasRuntimeNumericComparison(arg, paramVals) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsRuntimeNumericParam(expr *plan.Expr, paramVals []any) bool {
+	if expr == nil {
+		return false
+	}
+	if param := expr.GetP(); param != nil {
+		pos := int(param.Pos)
+		return pos >= 0 && pos < len(paramVals) && isRuntimeNumericParam(paramVals[pos])
+	}
+	if fn := expr.GetF(); fn != nil {
+		for _, arg := range fn.Args {
+			if containsRuntimeNumericParam(arg, paramVals) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func isRuntimeNumericParam(value any) bool {
+	if param, ok := value.(plan2.ParamValue); ok {
+		if param.NumericString {
+			return true
+		}
+		value = param.Value
+	}
+	switch value.(type) {
+	case int, int8, int16, int32, int64,
+		uint, uint8, uint16, uint32, uint64,
+		float32, float64:
+		return true
 	}
 	return false
 }

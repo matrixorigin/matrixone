@@ -261,7 +261,11 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 
 	case *tree.ParamExpr:
 		if !b.builder.isPrepareStatement {
-			err = moerr.NewInvalidInput(b.GetContext(), "only prepare statement can use ? expr")
+			var ok bool
+			expr, ok, err = preparedParamValueFromContext(b.GetContext(), int32(exprImpl.Offset-1))
+			if !ok && err == nil {
+				err = moerr.NewInvalidInput(b.GetContext(), "only prepare statement can use ? expr")
+			}
 		} else {
 			expr, err = b.baseBindParam(exprImpl, depth, isRoot)
 		}

@@ -593,3 +593,35 @@ func TestTxnComputationWrapperDoesNotPersistNormalLocalTraceOnCompileError(t *te
 	assert.Nil(t, stmt.ExecPlan)
 	assert.True(t, motrace.StatementInfoFilter(stmt))
 }
+
+func TestPlanNeedsRuntimeTypedComparison(t *testing.T) {
+	param := func(pos int32) *plan.Expr {
+		return &plan.Expr{Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: pos}}}
+	}
+	comparison := func(args ...*plan.Expr) *plan.Expr {
+		return &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{ObjName: "in_range"},
+			Args: args,
+		}}}
+	}
+	queryPlan := func(expr *plan.Expr) *plan.Plan {
+		return &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
+			Nodes: []*plan.Node{{FilterList: []*plan.Expr{expr}}},
+		}}}
+	}
+
+	require.False(t, planNeedsRuntimeTypedComparison(queryPlan(comparison(param(0), param(1))), []any{
+		plan2.ParamValue{Value: nil},
+		plan2.ParamValue{Value: "missing"},
+	}))
+	require.True(t, planNeedsRuntimeTypedComparison(queryPlan(comparison(param(0))), []any{
+		plan2.ParamValue{Value: int64(1)},
+	}))
+	require.True(t, planNeedsRuntimeTypedComparison(queryPlan(comparison(param(0))), []any{
+		plan2.ParamValue{Value: "1.0", NumericString: true},
+	}))
+	require.False(t, planNeedsRuntimeTypedComparison(queryPlan(comparison(param(0))), []any{
+		plan2.ParamValue{Value: "1"},
+		plan2.ParamValue{Value: int64(1)},
+	}))
+}
