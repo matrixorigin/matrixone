@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net"
 	"runtime/debug"
 	"sync"
 	"testing"
@@ -117,6 +118,69 @@ func TestNewService(t *testing.T) {
 	)
 	require.NoError(t, err)
 	assert.NoError(t, service.Close())
+}
+
+func TestNewServiceWithRetryStopsAfterMaxAttempts(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, listener.Close())
+	})
+
+	cfg := getServiceTestConfig()
+	defer vfs.ReportLeakedFD(cfg.FS, t)
+	cfg.RaftAddress = listener.Addr().String()
+	cfg.RaftListenAddress = listener.Addr().String()
+
+	attempts := 0
+	service, err := NewServiceWithRetry(
+		func() Config {
+			attempts++
+			return cfg
+		},
+		newFS(),
+		nil,
+	)
+
+	require.Nil(t, service)
+	require.Error(t, err)
+	require.ErrorContains(t, err, "address already in use")
+	require.Equal(t, serviceStartMaxAttempts, attempts)
+}
+
+func TestNewServiceWithRetryStopsOnConfigError(t *testing.T) {
+	expected := errors.New("generate config")
+	attempts := 0
+
+	service, err := newServiceWithRetry(
+		func() (Config, error) {
+			attempts++
+			return Config{}, expected
+		},
+		nil,
+		nil,
+	)
+
+	require.Nil(t, service)
+	require.ErrorIs(t, err, expected)
+	require.Equal(t, 1, attempts)
+}
+
+func TestNewServiceWithRetryStopsOnNonRetryableError(t *testing.T) {
+	attempts := 0
+
+	service, err := NewServiceWithRetry(
+		func() Config {
+			attempts++
+			return Config{}
+		},
+		nil,
+		nil,
+	)
+
+	require.Nil(t, service)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrBadConfig))
+	require.Equal(t, 1, attempts)
 }
 
 func TestNewServiceClosesStoreOnMetadataFailure(t *testing.T) {

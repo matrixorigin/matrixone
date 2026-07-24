@@ -29,23 +29,28 @@ func NewTestService(fs vfs.FS) (*Service, ClientConfig, error) {
 	runtime.SetupServiceBasedRuntime(serviceID, runtime.ServiceRuntime(""))
 
 	var cfg Config
-	genCfg := func() Config {
-		cfg = DefaultConfig()
-		cfg.UUID = serviceID
-		cfg.RTTMillisecond = 10
-		cfg.RaftAddress = getTestRaftAddress()
-		cfg.GossipPort = getTestGossipPort()
-		cfg.GossipSeedAddresses = []string{
-			getTestGossipAddress(cfg.GossipPort),
+	genCfg := func() (Config, error) {
+		ports, err := getAvailablePorts(3)
+		if err != nil {
+			return Config{}, err
 		}
-		cfg.DeploymentID = 1
-		cfg.FS = fs
-		cfg.LogServicePort = getTestServicePort()
-		cfg.DisableWorkers = true
-		return cfg
+		next := DefaultConfig()
+		next.UUID = serviceID
+		next.RTTMillisecond = 10
+		next.RaftAddress = getTestServiceAddress(ports[0])
+		next.GossipPort = ports[1]
+		next.GossipSeedAddresses = []string{
+			getTestGossipAddress(next.GossipPort),
+		}
+		next.DeploymentID = 1
+		next.FS = fs
+		next.LogServicePort = ports[2]
+		next.DisableWorkers = true
+		cfg = next
+		return cfg, nil
 	}
 
-	service, err := NewServiceWithRetry(genCfg,
+	service, err := newServiceWithRetry(genCfg,
 		newFS(),
 		nil,
 		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {

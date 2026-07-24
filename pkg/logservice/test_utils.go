@@ -16,6 +16,7 @@ package logservice
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/rand"
 	"sync"
@@ -38,41 +39,72 @@ type allocatedPorts struct {
 	ports map[int]struct{}
 }
 
+const (
+	testPortMin   = 21024
+	testPortLimit = 65535
+	testPortCount = testPortLimit - testPortMin
+)
+
+var errNoAvailableTestPort = errors.New("no available test port")
+
 var randomPorts = allocatedPorts{
 	ports: map[int]struct{}{},
 }
 
+func (a *allocatedPorts) allocate(
+	count int,
+	occupied map[uint16]struct{},
+	start int,
+) ([]int, error) {
+	if count <= 0 || count > testPortCount {
+		return nil, fmt.Errorf("%w: invalid requested count %d", errNoAvailableTestPort, count)
+	}
+	if start < 0 || start >= testPortCount {
+		return nil, fmt.Errorf("%w: invalid start offset %d", errNoAvailableTestPort, start)
+	}
+
+	a.Lock()
+	defer a.Unlock()
+	if a.ports == nil {
+		a.ports = make(map[int]struct{})
+	}
+
+	available := make([]int, 0, count)
+	for offset := 0; offset < testPortCount && len(available) < count; offset++ {
+		port := testPortMin + (start+offset)%testPortCount
+		if _, ok := a.ports[port]; ok {
+			continue
+		}
+		if _, ok := occupied[uint16(port)]; ok {
+			continue
+		}
+		available = append(available, port)
+	}
+	if len(available) != count {
+		return nil, fmt.Errorf(
+			"%w: requested %d in range [%d, %d)",
+			errNoAvailableTestPort,
+			count,
+			testPortMin,
+			testPortLimit,
+		)
+	}
+	for _, port := range available {
+		a.ports[port] = struct{}{}
+	}
+	return available, nil
+}
+
+func getAvailablePorts(count int) ([]int, error) {
+	return randomPorts.allocate(count, listAllPorts(), rand.Intn(testPortCount))
+}
+
 func getAvailablePort() int {
-	genPort := func() int {
-		rand.New(rand.NewSource(time.Now().UnixNano()))
-		return rand.Intn(65535-21024) + 21024
+	ports, err := getAvailablePorts(1)
+	if err != nil {
+		panic(err)
 	}
-	checkPort := func(p int) bool {
-		randomPorts.Lock()
-		defer randomPorts.Unlock()
-		_, ok := randomPorts.ports[p]
-		if ok {
-			return false
-		}
-		ports := listAllPorts()
-		if len(ports) != 0 {
-			_, occupied := ports[uint16(p)]
-			if occupied {
-				return false
-			} else {
-				randomPorts.ports[p] = struct{}{}
-				return true
-			}
-		}
-		randomPorts.ports[p] = struct{}{}
-		return true
-	}
-	for {
-		p := genPort()
-		if checkPort(p) {
-			return p
-		}
-	}
+	return ports[0]
 }
 
 var getClientConfig = func(readOnly bool, svcAddress ...string) ClientConfig {

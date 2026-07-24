@@ -19,10 +19,12 @@ package logservice
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
@@ -44,7 +46,8 @@ import (
 )
 
 const (
-	LogServiceRPCName = "logservice-server"
+	LogServiceRPCName       = "logservice-server"
+	serviceStartMaxAttempts = 10
 )
 
 type Lsn = uint64
@@ -238,23 +241,50 @@ func NewService(
 
 // NewServiceWithRetry mainly used in tests which create new service.
 // If an error occurred and the error is syscall.EADDRINUSE, retry to
-// create a new service instance.
+// create a new service instance up to serviceStartMaxAttempts times.
 func NewServiceWithRetry(
 	genCfg func() Config,
 	fileService fileservice.FileService,
 	shutdownC chan struct{},
 	opts ...Option,
 ) (*Service, error) {
-	for {
-		s, err := NewService(genCfg(), fileService, shutdownC, opts...)
+	return newServiceWithRetry(
+		func() (Config, error) {
+			return genCfg(), nil
+		},
+		fileService,
+		shutdownC,
+		opts...,
+	)
+}
+
+func newServiceWithRetry(
+	genCfg func() (Config, error),
+	fileService fileservice.FileService,
+	shutdownC chan struct{},
+	opts ...Option,
+) (*Service, error) {
+	var lastErr error
+	for attempt := 1; attempt <= serviceStartMaxAttempts; attempt++ {
+		cfg, err := genCfg()
 		if err != nil {
-			if strings.Contains(err.Error(), "address already in use") {
-				continue
-			}
 			return nil, err
 		}
-		return s, nil
+		s, err := NewService(cfg, fileService, shutdownC, opts...)
+		if err == nil {
+			return s, nil
+		}
+		if !errors.Is(err, syscall.EADDRINUSE) &&
+			!strings.Contains(strings.ToLower(err.Error()), "address already in use") {
+			return nil, err
+		}
+		lastErr = err
 	}
+	return nil, fmt.Errorf(
+		"failed to create log service after %d attempts: %w",
+		serviceStartMaxAttempts,
+		lastErr,
+	)
 }
 
 func (s *Service) Start() error {

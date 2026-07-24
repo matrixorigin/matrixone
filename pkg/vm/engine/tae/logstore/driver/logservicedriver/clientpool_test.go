@@ -87,9 +87,9 @@ func TestNewClientDoesNotRetryBadConfig(t *testing.T) {
 			return nil, wrapped
 		},
 		64,
-		DefaultRetryTimes,
-		DefaultRetryInterval,
-		DefaultRetryDuration,
+		3,
+		time.Millisecond,
+		time.Second,
 	)
 
 	require.Nil(t, client)
