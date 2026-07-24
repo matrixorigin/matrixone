@@ -893,6 +893,305 @@ Year: 2021    70000.00
 Year: 2022    150000.00
 Year: Total    220000.00
 drop table sales_mixed_types;
+drop table if exists grouping_order;
+create table grouping_order (
+region varchar(8),
+product varchar(8),
+amount int
+);
+insert into grouping_order values
+(null, 'tea', 10),
+(null, 'tea', 20),
+('east', null, 5),
+('east', 'coffee', 7),
+('east', 'tea', null),
+('west', 'tea', 3);
+select
+if(grouping(region), 'ROLLUP', if(region is null, 'NULL', region)) as region_label,
+grouping(region) as grp_region,
+if(grouping(product), 'ROLLUP', if(product is null, 'NULL', product)) as product_label,
+grouping(product) as grp_product,
+count(*) as count_all,
+count(amount) as count_amount,
+sum(amount) as sum_amount
+from grouping_order
+group by region, product with rollup
+order by grouping(region), region_label, grouping(product), product_label;
+region_label    grp_region    product_label    grp_product    count_all    count_amount    sum_amount
+NULL    0    tea    0    2    2    30
+NULL    0    ROLLUP    1    2    2    30
+east    0    NULL    0    1    1    5
+east    0    coffee    0    1    1    7
+east    0    tea    0    1    0    null
+east    0    ROLLUP    1    3    2    12
+west    0    tea    0    1    1    3
+west    0    ROLLUP    1    1    1    3
+ROLLUP    1    ROLLUP    1    6    5    45
+select *, count(*) as cnt
+from grouping_order
+group by region, product, amount with rollup
+order by grouping(region), 1, 2, 3;
+region	product	amount	cnt
+null	null	null	2
+null	tea	null	2
+null	tea	10	1
+null	tea	20	1
+east	null	null	1
+east	null	null	3
+east	null	5	1
+east	coffee	null	1
+east	coffee	7	1
+east	tea	null	1
+east	tea	null	1
+west	null	null	1
+west	tea	null	1
+west	tea	3	1
+null	null	null	6
+select *, count(*) as cnt
+from grouping_order
+group by region, product, amount with rollup
+order by 4 desc, 1, 2, 3;
+region	product	amount	cnt
+null	null	null	6
+east	null	null	3
+null	null	null	2
+null	tea	null	2
+null	tea	10	1
+null	tea	20	1
+east	null	null	1
+east	null	5	1
+east	coffee	null	1
+east	coffee	7	1
+east	tea	null	1
+east	tea	null	1
+west	null	null	1
+west	tea	null	1
+west	tea	3	1
+select *, count(*) as cnt
+from grouping_order
+group by region, product, amount with rollup
+order by 6;
+SQL syntax error: ORDER BY position 6 is not in select list
+select distinct *, grouping(region) as gr
+from grouping_order
+group by region, product, amount with rollup
+order by grouping(region), 1, 2, 3;
+region	product	amount	gr
+null	null	null	0
+null	tea	null	0
+null	tea	10	0
+null	tea	20	0
+east	null	null	0
+east	null	5	0
+east	coffee	null	0
+east	coffee	7	0
+east	tea	null	0
+west	null	null	0
+west	tea	null	0
+west	tea	3	0
+null	null	null	1
+select distinct region, grouping(region) as gr
+from grouping_order
+group by region, product with rollup
+order by grouping(region), region;
+region	gr
+null	0
+east	0
+west	0
+null	1
+select count(*) as visible_regions
+from (
+select distinct region
+from grouping_order
+group by region, product with rollup
+order by rand()
+) as ordered_distinct;
+visible_regions
+3
+select distinct grouping(region) as gr, amount
+from grouping_order
+group by region, amount with rollup
+order by grouping(region) + amount;
+gr	amount
+1	null
+0	null
+0	3
+0	5
+0	7
+0	10
+0	20
+select distinct grouping(region), abs(amount) as amount
+from grouping_order
+group by region, product, amount with rollup
+order by grouping(region) + amount;
+SQL syntax error: for SELECT DISTINCT, ORDER BY expressions must appear in select list
+select distinct region, grouping(region) as gr
+from grouping_order
+group by grouping sets((region, product), (region), ())
+order by grouping(region), region;
+region	gr
+null	0
+east	0
+west	0
+null	1
+drop table if exists grouping_order2;
+create table grouping_order2 (city varchar(8), qty int);
+insert into grouping_order2 values ('x', 1), ('y', 2);
+select distinct t1.*, grouping(region) as gr, t2.*
+from grouping_order t1, grouping_order2 t2
+group by region, product, amount, city, qty with rollup
+order by grouping(region), region, product, amount, city, qty;
+region	product	amount	gr	city	qty
+null	null	null	0	null	null
+null	tea	null	0	null	null
+null	tea	10	0	null	null
+null	tea	10	0	x	null
+null	tea	10	0	x	1
+null	tea	10	0	y	null
+null	tea	10	0	y	2
+null	tea	20	0	null	null
+null	tea	20	0	x	null
+null	tea	20	0	x	1
+null	tea	20	0	y	null
+null	tea	20	0	y	2
+east	null	null	0	null	null
+east	null	5	0	null	null
+east	null	5	0	x	null
+east	null	5	0	x	1
+east	null	5	0	y	null
+east	null	5	0	y	2
+east	coffee	null	0	null	null
+east	coffee	7	0	null	null
+east	coffee	7	0	x	null
+east	coffee	7	0	x	1
+east	coffee	7	0	y	null
+east	coffee	7	0	y	2
+east	tea	null	0	null	null
+east	tea	null	0	x	null
+east	tea	null	0	x	1
+east	tea	null	0	y	null
+east	tea	null	0	y	2
+west	null	null	0	null	null
+west	tea	null	0	null	null
+west	tea	3	0	null	null
+west	tea	3	0	x	null
+west	tea	3	0	x	1
+west	tea	3	0	y	null
+west	tea	3	0	y	2
+null	null	null	1	null	null
+drop table grouping_order2;
+drop table if exists grouping_uuid;
+create table grouping_uuid (snapshot_id uuid);
+insert into grouping_uuid values
+('00000000-0000-0000-0000-000000000001'),
+('00000000-0000-0000-0000-000000000002'),
+(null);
+select distinct snapshot_id
+from grouping_uuid
+group by snapshot_id with rollup
+order by snapshot_id;
+snapshot_id
+null
+00000000-0000-0000-0000-000000000001
+00000000-0000-0000-0000-000000000002
+drop table grouping_uuid;
+drop table if exists grouping_vector;
+create table grouping_vector (
+v32 vecf32(3),
+v64 vecf64(3),
+vbf16 vecbf16(3),
+vf16 vecf16(3),
+vi8 vecint8(3),
+vu8 vecuint8(3)
+);
+insert into grouping_vector values
+('[1, 2, 3]', '[1, 2, 3]', '[1, 2, 3]', '[1, 2, 3]', '[-128, 0, 127]', '[0, 1, 255]'),
+('[4, 5, 6]', '[4, 5, 6]', '[4, 5, 6]', '[4, 5, 6]', '[-1, 1, 2]', '[2, 3, 4]'),
+(null, null, null, null, null, null);
+select distinct v32
+from grouping_vector
+group by v32 with rollup
+order by v32;
+v32
+null
+[1, 2, 3]
+[4, 5, 6]
+select distinct v64
+from grouping_vector
+group by cube(v64)
+order by v64;
+v64
+null
+[1, 2, 3]
+[4, 5, 6]
+select distinct vbf16
+from grouping_vector
+group by vbf16 with rollup
+order by vbf16;
+vbf16
+null
+[1, 2, 3]
+[4, 5, 6]
+select distinct vf16
+from grouping_vector
+group by cube(vf16)
+order by vf16;
+vf16
+null
+[1, 2, 3]
+[4, 5, 6]
+select distinct vi8
+from grouping_vector
+group by vi8 with rollup
+order by vi8;
+vi8
+null
+[-128, 0, 127]
+[-1, 1, 2]
+select distinct vu8
+from grouping_vector
+group by cube(vu8)
+order by vu8;
+vu8
+null
+[0, 1, 255]
+[2, 3, 4]
+drop table grouping_vector;
+drop table if exists grouping_not_null;
+create table grouping_not_null (a int not null, b int not null);
+insert into grouping_not_null values (1, 10), (2, 20);
+select distinct a, grouping(a) as ga
+from grouping_not_null
+group by a with rollup
+order by ga, a;
+a	ga
+1	0
+2	0
+null	1
+select distinct a, b, grouping(a) as ga, grouping(b) as gb
+from grouping_not_null
+group by cube(a, b)
+order by ga, gb, a, b;
+a	b	ga	gb
+1	10	0	0
+2	20	0	0
+1	null	0	1
+2	null	0	1
+null	10	1	0
+null	20	1	0
+null	null	1	1
+select distinct a, b, grouping(a) as ga, grouping(b) as gb
+from grouping_not_null
+group by grouping sets ((a, b), (a), ())
+order by ga, gb, a, b;
+a	b	ga	gb
+1	10	0	0
+2	20	0	0
+1	null	0	1
+2	null	0	1
+null	null	1	1
+drop table grouping_not_null;
+drop table grouping_order;
 create table rollup_window_sales(region varchar(20), product varchar(20), qty int);
 insert into rollup_window_sales values
 ('east', 'apple', 10),

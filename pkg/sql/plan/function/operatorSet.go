@@ -436,6 +436,9 @@ var (
 		types.T_varchar, types.T_char, types.T_blob, types.T_text, types.T_json,
 		types.T_decimal64, types.T_decimal128, types.T_decimal256,
 		types.T_timestamp, types.T_time, types.T_datalink,
+		types.T_array_float32, types.T_array_float64,
+		types.T_array_bf16, types.T_array_float16,
+		types.T_array_int8, types.T_array_uint8,
 	}
 )
 
@@ -452,6 +455,38 @@ func iffCheck(_ []overload, inputs []types.Type) checkResult {
 		}
 
 		source := []types.Type{inputs[1], inputs[2]}
+		if source[0].Oid.IsArrayRelate() || source[1].Oid.IsArrayRelate() {
+			vectorIdx := 0
+			if !source[0].Oid.IsArrayRelate() {
+				vectorIdx = 1
+			}
+			otherIdx := 1 - vectorIdx
+			if !source[otherIdx].Oid.IsArrayRelate() &&
+				source[otherIdx].Oid != types.T_any &&
+				!source[otherIdx].Oid.IsMySQLString() {
+				return newCheckResultWithFailure(failedFunctionParametersWrong)
+			}
+			retType := source[vectorIdx]
+			if source[otherIdx].Oid.IsArrayRelate() {
+				if source[0].Width != source[1].Width {
+					return newCheckResultWithFailure(failedFunctionParametersWrong)
+				}
+				switch {
+				case source[0].Oid == source[1].Oid:
+					retType = source[0]
+				case source[0].Oid == types.T_array_float32 && source[1].Oid == types.T_array_float64,
+					source[0].Oid == types.T_array_float64 && source[1].Oid == types.T_array_float32:
+					retType = types.New(types.T_array_float64, source[0].Width, 0)
+				default:
+					return newCheckResultWithFailure(failedFunctionParametersWrong)
+				}
+			}
+			finalTypes := []types.Type{conditionType, retType, retType}
+			if needCast || source[0] != retType || source[1] != retType {
+				return newCheckResultWithCast(0, finalTypes)
+			}
+			return newCheckResultWithSuccess(0)
+		}
 		if retType, ok := mixedStringNumericToVarchar(source); ok {
 			return newCheckResultWithCast(0, []types.Type{conditionType, retType, retType})
 		}
@@ -607,7 +642,9 @@ func iffFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pro
 		return generalIffFn[types.Timestamp](parameters, result, proc, length, selectList)
 	case types.T_enum:
 		return generalIffFn[types.Enum](parameters, result, proc, length, selectList)
-	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_datalink, types.T_json:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_datalink, types.T_json,
+		types.T_array_float32, types.T_array_float64,
+		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8:
 		return strIffFn(parameters, result, proc, length, selectList)
 	}
 	panic("unreached code")
