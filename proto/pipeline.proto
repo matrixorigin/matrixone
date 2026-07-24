@@ -53,6 +53,7 @@ enum Status {
 }
 
 message Message {
+  option (gogoproto.goproto_stringer) = false;
   Status sid = 1;
   Method cmd = 2;
   bytes err = 3;
@@ -378,6 +379,7 @@ message parquet_row_group_shard {
 }
 
 message IcebergDataFileTask {
+  option (gogoproto.goproto_stringer) = false;
   string file_path = 1;
   string file_format = 2;
   int64 file_size = 3;
@@ -395,6 +397,7 @@ message IcebergDataFileTask {
 }
 
 message IcebergDeleteFileTask {
+  option (gogoproto.goproto_stringer) = false;
   string delete_type = 1;
   string delete_file_path = 2;
   string referenced_data_file = 3;
@@ -442,6 +445,7 @@ message IcebergPlanningStats {
 }
 
 message ExternalScan {
+  option (gogoproto.goproto_stringer) = false;
   repeated plan.ExternAttr attrs = 1 [(gogoproto.nullable) = false];
   repeated int64 file_size = 2;
   repeated file_offset file_offset_total = 3;
@@ -523,6 +527,7 @@ message SampleFunc {
 }
 
 message Instruction {
+  option (gogoproto.goproto_stringer) = false;
   // Op specified the operator code of an instruction.
   int32 op = 1;
   // Idx specified the anaylze information index.
@@ -673,6 +678,7 @@ message SessionLoggerInfo {
 }
 
 message Pipeline {
+  option (gogoproto.goproto_stringer) = false;
   enum PipelineType {
     Merge = 0;
     Normal = 1;

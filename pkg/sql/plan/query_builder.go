@@ -395,6 +395,7 @@ func getRowCarrierTypeCost(typ plan.Type) rowCarrierCost {
 		return rowCarrierCost{width: 32}
 	case types.T_char, types.T_varchar, types.T_blob, types.T_json, types.T_text,
 		types.T_binary, types.T_varbinary, types.T_array_float32, types.T_array_float64,
+		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8,
 		types.T_datalink, types.T_geometry, types.T_geometry32:
 		width := int64(typ.Width)
 		if width <= 0 {
@@ -5903,7 +5904,7 @@ func (builder *QueryBuilder) bindGroupBy(
 			return
 		}
 
-		colPos := groupBinder.ctx.groupByAst[tree.String(helpFunc.truncate, dialect.MYSQL)]
+		colPos := groupBinder.ctx.groupByAst[semanticAstKey(helpFunc.truncate)]
 		boundTimeWindowGroupBy = &plan.Expr{
 			Typ: groupBinder.ctx.groups[colPos].Typ,
 			Expr: &plan.Expr_Col{
@@ -6805,11 +6806,11 @@ func (builder *QueryBuilder) appendSampleNode(
 	}
 
 	for name, id := range ctx.groupByAst {
-		builder.nameByColRef[[2]int32{ctx.groupTag, id}] = name
+		builder.nameByColRef[[2]int32{ctx.groupTag, id}] = semanticAstDisplayName(name)
 	}
 
 	for name, id := range ctx.sampleByAst {
-		builder.nameByColRef[[2]int32{ctx.sampleTag, id}] = name
+		builder.nameByColRef[[2]int32{ctx.sampleTag, id}] = semanticAstDisplayName(name)
 	}
 
 	newNodeID = nodeID
@@ -6866,11 +6867,11 @@ func (builder *QueryBuilder) appendAggNode(
 	}
 
 	for name, id := range ctx.groupByAst {
-		builder.nameByColRef[[2]int32{ctx.groupTag, id}] = name
+		builder.nameByColRef[[2]int32{ctx.groupTag, id}] = semanticAstDisplayName(name)
 	}
 
 	for name, id := range ctx.aggregateByAst {
-		builder.nameByColRef[[2]int32{ctx.aggregateTag, id}] = name
+		builder.nameByColRef[[2]int32{ctx.aggregateTag, id}] = semanticAstDisplayName(name)
 	}
 
 	newNodeID = nodeID
@@ -6938,7 +6939,7 @@ func (builder *QueryBuilder) appendTimeWindowNode(
 	}, ctx)
 
 	for name, id := range ctx.timeByAst {
-		builder.nameByColRef[[2]int32{ctx.timeTag, id}] = name
+		builder.nameByColRef[[2]int32{ctx.timeTag, id}] = semanticAstDisplayName(name)
 	}
 
 	if astTimeWindow.Fill != nil {
@@ -6993,7 +6994,7 @@ func (builder *QueryBuilder) appendWindowNode(
 	}
 
 	for name, id := range ctx.windowByAst {
-		builder.nameByColRef[[2]int32{ctx.windowTag, id}] = name
+		builder.nameByColRef[[2]int32{ctx.windowTag, id}] = semanticAstDisplayName(name)
 	}
 
 	_, postWindowHavingList := splitWindowDependentHavingFilters(boundHavingList, ctx.windowTag)

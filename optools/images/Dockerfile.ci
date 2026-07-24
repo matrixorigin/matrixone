@@ -1,0 +1,79 @@
+ARG BUILDER_IMAGE=matrixorigin/golang:1.26.4-ubuntu22.04
+ARG NATIVE_IMAGE=matrixorigin/golang:1.26.4-ubuntu22.04
+ARG GO_CACHE_IMAGE=matrixorigin/golang:1.26.4-ubuntu22.04
+ARG RUNTIME_IMAGE=matrixorigin/ubuntu:22.04
+
+FROM ${BUILDER_IMAGE} AS native
+
+ARG GOPROXY="https://proxy.golang.org,direct"
+ENV GOWORK=off
+RUN go env -w GOPROXY=${GOPROXY}
+
+WORKDIR /go/src/github.com/matrixorigin/matrixone
+COPY thirdparties thirdparties
+RUN make -C thirdparties
+COPY cgo cgo
+RUN make -C cgo
+RUN mkdir -p /root/.cache/go-build /go/pkg/mod
+
+FROM ${GO_CACHE_IMAGE} AS go-cache
+FROM ${NATIVE_IMAGE} AS builder
+
+ARG GOPROXY="https://proxy.golang.org,direct"
+ENV GOWORK=off
+RUN go env -w GOPROXY=${GOPROXY}
+
+WORKDIR /go/src/github.com/matrixorigin/matrixone
+
+COPY --from=go-cache /root/.cache/go-build /root/.cache/go-build
+COPY --from=go-cache /go/pkg/mod /go/pkg/mod
+
+COPY go.mod go.mod
+COPY go.sum go.sum
+RUN module_files="$(sha256sum go.mod go.sum)" && \
+    go mod download && \
+    if [ "$module_files" != "$(sha256sum go.mod go.sum)" ]; then \
+        echo "go mod download changed go.mod/go.sum; run make mod-tidy"; \
+        exit 1; \
+    fi
+
+COPY . .
+
+ARG TYPECHECK=0
+ARG BUILD_BRANCH_NAME
+ARG BUILD_COMMIT_ID
+ARG BUILD_VERSION
+
+RUN branch_name="${BUILD_BRANCH_NAME:-$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)}" && \
+    commit_id="${BUILD_COMMIT_ID:-$(git rev-parse --short HEAD 2>/dev/null || true)}" && \
+    mo_version="${BUILD_VERSION:-$(git symbolic-ref -q --short HEAD || git describe --tags --exact-match 2>/dev/null || true)}" && \
+    if [ -z "$commit_id" ]; then \
+        echo "BUILD_COMMIT_ID is required when the build context excludes .git"; \
+        exit 1; \
+    fi && \
+    if [ "$TYPECHECK" = "1" ]; then \
+        make build-with-prebuilt-native TYPECHECK=1 BRANCH_NAME="$branch_name" LAST_COMMIT_ID="$commit_id" MO_VERSION="$mo_version"; \
+    else \
+        make build-with-prebuilt-native BRANCH_NAME="$branch_name" LAST_COMMIT_ID="$commit_id" MO_VERSION="$mo_version"; \
+    fi && \
+    LD_LIBRARY_PATH="$PWD/cgo:$PWD/thirdparties/install/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+        ./mo-service -version | grep -Fx "  Git commit ID: $commit_id"
+
+FROM scratch AS go-cache-export
+COPY --from=builder /root/.cache/go-build /root/.cache/go-build
+COPY --from=builder /go/pkg/mod /go/pkg/mod
+
+FROM ${RUNTIME_IMAGE}
+
+COPY --from=builder /go/src/github.com/matrixorigin/matrixone/mo-service /mo-service
+COPY --from=builder /go/src/github.com/matrixorigin/matrixone/etc /etc
+COPY --from=builder /go/src/github.com/matrixorigin/matrixone/thirdparties/install/lib/*.so /usr/local/lib
+COPY --from=builder /go/src/github.com/matrixorigin/matrixone/cgo/*.so /usr/local/lib
+COPY --from=builder /go/src/github.com/matrixorigin/matrixone/pkg/monlp/tokenizer/dict /usr/local/share/jieba
+ENV MO_JIEBA_DICT_DIR=/usr/local/share/jieba
+
+RUN ldconfig && /mo-service -h
+
+WORKDIR /
+EXPOSE 6001
+ENTRYPOINT [ "/mo-service", "-debug-http=:12345", "-launch", "/etc/quickstart/launch.toml"]

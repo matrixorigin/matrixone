@@ -101,4 +101,7 @@ sleep(1)    col    seq    key    path    index    value    this
 select sleep(15);
 sleep(15)
 0
+select count(distinct statement_type) = 4 and count(*) = count(cast(json_unquote(json_extract(stats, '$[16]')) as bigint)) and min(cast(json_unquote(json_extract(stats, '$[16]')) as bigint)) = 1 and max(cast(json_unquote(json_extract(stats, '$[16]')) as bigint)) = 1 and max(cast(json_unquote(json_extract(stats, '$[11]')) as bigint) & 8) = 0 as ddl_accounting_ok from system.statement_info where account = 'bvt_query_type' and status = 'Success' and aggr_count = 0 and statement_type in ('Create Index','Create Table','Drop Database','Drop Table') and cast(json_unquote(json_extract(stats, '$[0]')) as bigint) = 6;
+ddl_accounting_ok
+1
 drop account if exists bvt_query_type;

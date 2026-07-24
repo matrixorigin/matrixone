@@ -15,10 +15,12 @@
 package fileservice
 
 import (
+	"context"
 	"io"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 )
 
 type readCloser struct {
@@ -47,6 +49,21 @@ func (c *countingReader) Read(data []byte) (int, error) {
 	n, err := c.R.Read(data)
 	c.C.Add(int64(n))
 	return n, err
+}
+
+func recordS3PutRequest(ctx context.Context, extraCounterSets ...*perfcounter.CounterSet) {
+	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
+		counter.FileService.S3.Put.Add(1)
+	}, extraCounterSets...)
+}
+
+func recordS3AcceptedBytes(ctx context.Context, bytes int64, extraCounterSets ...*perfcounter.CounterSet) {
+	if bytes <= 0 {
+		return
+	}
+	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
+		counter.FileService.S3WriteSize.Add(bytes)
+	}, extraCounterSets...)
 }
 
 type exactSizeReader struct {

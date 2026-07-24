@@ -20,6 +20,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+// childrenProcessPreparer lets an operator establish a separate process
+// lifetime for the subtree it owns. The operator itself is still prepared
+// with its parent's process.
+type childrenProcessPreparer interface {
+	PrepareChildrenProcess(*process.Process) *process.Process
+}
+
 // call each operator's string function to show a query plan
 func String(rootOp Operator, buf *bytes.Buffer) {
 	HandleAllOp(rootOp, func(parentOp Operator, op Operator) error {
@@ -33,9 +40,20 @@ func String(rootOp Operator, buf *bytes.Buffer) {
 
 // do init work for each operator by calling its prepare function
 func Prepare(op Operator, proc *process.Process) error {
-	return HandleAllOp(op, func(parentOp Operator, op Operator) error {
-		return op.Prepare(proc)
-	})
+	if op == nil {
+		return nil
+	}
+
+	childrenProc := proc
+	if preparer, ok := op.(childrenProcessPreparer); ok {
+		childrenProc = preparer.PrepareChildrenProcess(proc)
+	}
+	for _, child := range op.GetOperatorBase().Children {
+		if err := Prepare(child, childrenProc); err != nil {
+			return err
+		}
+	}
+	return op.Prepare(proc)
 }
 
 func ModifyOutputOpNodeIdx(rootOp Operator, proc *process.Process) {
