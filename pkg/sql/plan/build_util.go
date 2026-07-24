@@ -505,11 +505,15 @@ func buildGeneratedExpr(col *tree.ColumnTableDef, typ plan.Type, existingCols []
 		return nil, err
 	}
 
-	// A generated CHAR/VARCHAR column is materialized as a real column write, so
-	// use the strict assignment cast: an over-length value is rejected instead of
-	// being silently truncated, matching column DEFAULT / ON UPDATE and the DML
-	// assignment paths.
-	genExpr, err := makePlan2AssignmentCastExpr(proc.Ctx, planExpr, typ)
+	// A stored generated CHAR/VARCHAR value is a real column write that is
+	// evaluated at DML time, so it follows DML assignment semantics: use the
+	// sql_mode-gated cast_assign instead of cast_strict. Non-strict mode
+	// truncates, strict mode rejects with 1406, matching how ordinary columns
+	// are written (forceAssignmentCastExpr). INSERT IGNORE truncation is applied
+	// where the generated expression is reused (see bind_insert). Non-CHAR/VARCHAR
+	// targets keep the generic cast, unchanged.
+	funcName := assignmentCastFunctionName(typ, false, proc)
+	genExpr, err := makePlan2CastExprWithName(proc.Ctx, planExpr, typ, funcName)
 	if err != nil {
 		return nil, err
 	}
@@ -657,6 +661,28 @@ func inlineGeneratedColExpr(expr *plan.Expr, colIdxToProjPos map[int32]int32, pr
 			inlineGeneratedColExpr(item, colIdxToProjPos, projList1)
 		}
 	}
+}
+
+// applyGeneratedColumnAssignmentCast upgrades persisted legacy cast_strict
+// wrappers to cast_assign and uses cast_ignore for INSERT/UPDATE IGNORE. This
+// keeps generated-column assignment semantics compatible across catalog
+// versions without rewriting catalog rows.
+func (builder *QueryBuilder) applyGeneratedColumnAssignmentCast(expr *plan.Expr, isIgnore bool) *plan.Expr {
+	if expr == nil {
+		return expr
+	}
+	f := expr.GetF()
+	if f == nil || f.Func == nil ||
+		(f.Func.ObjName != "cast_assign" && f.Func.ObjName != "cast_strict") ||
+		len(f.Args) == 0 {
+		return expr
+	}
+	funcName := assignmentCastFunctionName(expr.Typ, isIgnore, builder.compCtx.GetProcess())
+	assignmentCast, err := forceCastExprWithName(builder.GetContext(), f.Args[0], expr.Typ, funcName)
+	if err != nil {
+		return expr
+	}
+	return assignmentCast
 }
 
 // substituteColRefsInExpr replaces ColRef(0, colIdx) in a generated column expression

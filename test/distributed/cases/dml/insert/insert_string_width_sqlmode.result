@@ -1,0 +1,218 @@
+drop database if exists insert_str_width;
+create database insert_str_width;
+use insert_str_width;
+set @old_sql_mode = @@sql_mode;
+create table t (c varchar(3));
+set session sql_mode = 'STRICT_TRANS_TABLES';
+insert into t values ('abcd');
+Data truncation: Can't cast 'abcd' to VARCHAR type. Src length 4 is larger than Dest length 3
+insert into t values ('abc   ');
+select c, char_length(c) from t;
+➤ c[12,-1,0]  ¦  char_length(c)[-5,64,0]  𝄀
+abc  ¦  3
+set session sql_mode = '';
+insert into t values ('wxyz');
+select c, char_length(c) from t order by c;
+➤ c[12,-1,0]  ¦  char_length(c)[-5,64,0]  𝄀
+abc  ¦  3  𝄀
+wxy  ¦  3
+set session sql_mode = 'STRICT_TRANS_TABLES';
+truncate table t;
+insert ignore into t values ('abcd');
+select c, char_length(c) from t;
+➤ c[12,-1,0]  ¦  char_length(c)[-5,64,0]  𝄀
+abc  ¦  3
+truncate table t;
+insert ignore into t values (repeat('x', 4));
+select c, char_length(c) from t;
+➤ c[12,-1,0]  ¦  char_length(c)[-5,64,0]  𝄀
+xxx  ¦  3
+truncate table t;
+set session sql_mode = 'STRICT_TRANS_TABLES';
+prepare stmt_width_lenient from 'insert into t values (''prep'')';
+set session sql_mode = '';
+execute stmt_width_lenient;
+select c, char_length(c) from t;
+➤ c[12,-1,0]  ¦  char_length(c)[-5,64,0]  𝄀
+pre  ¦  3
+deallocate prepare stmt_width_lenient;
+truncate table t;
+set session sql_mode = '';
+prepare stmt_width_strict from 'insert into t values (''fail'')';
+set session sql_mode = 'STRICT_TRANS_TABLES';
+execute stmt_width_strict;
+Data truncation: Can't cast 'fail' to VARCHAR type. Src length 4 is larger than Dest length 3
+select count(*) from t;
+➤ count(*)[-5,64,0]  𝄀
+0
+deallocate prepare stmt_width_strict;
+create table src (c varchar(10));
+insert into src values ('1234567');
+truncate table t;
+set session sql_mode = 'STRICT_TRANS_TABLES';
+insert into t select c from src;
+Data truncation: Can't cast column from VARCHAR type to VARCHAR type because of one or more values in that column. Src length 7 is larger than Dest length 3
+set session sql_mode = '';
+insert into t select c from src;
+select c, char_length(c) from t;
+➤ c[12,-1,0]  ¦  char_length(c)[-5,64,0]  𝄀
+123  ¦  3
+truncate table t;
+set session sql_mode = '';
+insert into t values ('ab');
+set session sql_mode = 'STRICT_TRANS_TABLES';
+update t set c = 'abcd';
+Data truncation: Can't cast 'abcd' to VARCHAR type. Src length 4 is larger than Dest length 3
+set session sql_mode = '';
+update t set c = 'abcd';
+select c, char_length(c) from t;
+➤ c[12,-1,0]  ¦  char_length(c)[-5,64,0]  𝄀
+abc  ¦  3
+create table p (id int primary key, c varchar(3));
+insert into p values (1, 'ab');
+set session sql_mode = 'STRICT_TRANS_TABLES';
+insert into p values (1, 'xx') on duplicate key update c = 'abcd';
+Data truncation: Can't cast 'abcd' to VARCHAR type. Src length 4 is larger than Dest length 3
+set session sql_mode = '';
+insert into p values (1, 'xx') on duplicate key update c = 'abcd';
+select id, c, char_length(c) from p;
+➤ id[4,32,0]  ¦  c[12,-1,0]  ¦  char_length(c)[-5,64,0]  𝄀
+1  ¦  abc  ¦  3
+create table pkv (c varchar(3) primary key);
+set session sql_mode = 'STRICT_TRANS_TABLES';
+insert into pkv values ('abc');
+insert ignore into pkv values ('abcd');
+select c, char_length(c) from pkv;
+➤ c[12,-1,0]  ¦  char_length(c)[-5,64,0]  𝄀
+abc  ¦  3
+drop table pkv;
+set session sql_mode = '';
+create table d (c varchar(3) default 'abcd');
+Invalid default value for 'abcd'
+set session sql_mode = 'STRICT_TRANS_TABLES';
+create table d (c varchar(3) default 'abcd');
+Invalid default value for 'abcd'
+create table g (id int primary key, t text, v varchar(1) generated always as (coalesce(t, '')) stored);
+set session sql_mode = '';
+insert into g values (1, 'ab');
+select id, v, char_length(v) from g;
+➤ id[4,32,0]  ¦  v[12,-1,0]  ¦  char_length(v)[-5,64,0]  𝄀
+1  ¦  a  ¦  1
+set session sql_mode = 'STRICT_TRANS_TABLES';
+insert into g values (2, 'cd');
+Data truncation: Can't cast column from TEXT type to VARCHAR type because of one or more values in that column. Src length 2 is larger than Dest length 1
+insert ignore into g values (2, 'cd');
+select id, v, char_length(v) from g order by id;
+➤ id[4,32,0]  ¦  v[12,-1,0]  ¦  char_length(v)[-5,64,0]  𝄀
+1  ¦  a  ¦  1  𝄀
+2  ¦  c  ¦  1
+set session sql_mode = '';
+update g set t = 'xy' where id = 1;
+select id, v, char_length(v) from g where id = 1;
+➤ id[4,32,0]  ¦  v[12,-1,0]  ¦  char_length(v)[-5,64,0]  𝄀
+1  ¦  x  ¦  1
+drop table g;
+create table jsrc (jc json);
+create table vdst (vc varchar(3));
+insert into jsrc values ('"abc   "');
+set session sql_mode = 'STRICT_TRANS_TABLES';
+insert into vdst select jc from jsrc;
+select vc, char_length(vc) from vdst;
+➤ vc[12,-1,0]  ¦  char_length(vc)[-5,64,0]  𝄀
+abc  ¦  3
+truncate table jsrc;
+insert into jsrc values ('"abcd"');
+insert into vdst select jc from jsrc;
+Data truncation: Can't cast column from JSON type to VARCHAR type because of one or more values in that column. Src length 4 is larger than Dest length 3
+select count(*) from vdst;
+➤ count(*)[-5,64,0]  𝄀
+1
+drop table jsrc;
+drop table vdst;
+create table traditional_dst (c varchar(3));
+set session sql_mode = 'TRADITIONAL';
+insert into traditional_dst values ('abcd');
+Data truncation: Can't cast 'abcd' to VARCHAR type. Src length 4 is larger than Dest length 3
+select count(*) from traditional_dst;
+➤ count(*)[-5,64,0]  𝄀
+0
+drop table traditional_dst;
+create table geometry_src (g geometry);
+create table geometry_dst (c varchar(3));
+insert into geometry_src values (st_geomfromtext('POINT(1 2)'));
+set session sql_mode = 'STRICT_TRANS_TABLES';
+insert into geometry_dst select g from geometry_src;
+Data truncation: Can't cast column from GEOMETRY type to VARCHAR type because of one or more values in that column. Src length 10 is larger than Dest length 3
+insert into geometry_dst values (st_geomfromtext('POINT(1 2)'));
+Data truncation: Can't cast 'POINT(1 2)' to VARCHAR type. Src length 10 is larger than Dest length 3
+select count(*) from geometry_dst;
+➤ count(*)[-5,64,0]  𝄀
+0
+set session sql_mode = '';
+insert into geometry_dst select g from geometry_src;
+insert into geometry_dst values (st_geomfromtext('POINT(1 2)'));
+select c, char_length(c) from geometry_dst order by c;
+➤ c[12,-1,0]  ¦  char_length(c)[-5,64,0]  𝄀
+POI  ¦  3  𝄀
+POI  ¦  3
+select cast(st_geomfromtext('POINT(1 2)') as char(3));
+➤ cast(st_geomfromtext(POINT(1 2)) as char(3))[1,3,0]  𝄀
+POI
+drop table geometry_src;
+drop table geometry_dst;
+create table geometry_zero_src (g geometry, g32 geometry32);
+create table geometry_zero_char (c char(0));
+create table geometry_zero_varchar (c varchar(0));
+insert into geometry_zero_src values (
+st_geomfromtext('POINT(1 2)'),
+cast(st_geomfromtext('POINT(1 2)') as geometry32)
+);
+set session sql_mode = 'STRICT_TRANS_TABLES';
+insert into geometry_zero_varchar values (st_geomfromtext('POINT(1 2)'));
+Data truncation: Can't cast 'POINT(1 2)' to VARCHAR type. Src length 10 is larger than Dest length 0
+insert into geometry_zero_char values (
+cast(st_geomfromtext('POINT(1 2)') as geometry32)
+);
+Data truncation: Can't cast 'POINT(1 2)' to CHAR type. Src length 10 is larger than Dest length 0
+insert into geometry_zero_varchar select g from geometry_zero_src;
+Data truncation: Can't cast column from GEOMETRY type to VARCHAR type because of one or more values in that column. Src length 10 is larger than Dest length 0
+insert into geometry_zero_char select g32 from geometry_zero_src;
+Data truncation: Can't cast column from GEOMETRY32 type to CHAR type because of one or more values in that column. Src length 10 is larger than Dest length 0
+set session sql_mode = '';
+insert into geometry_zero_varchar values (st_geomfromtext('POINT(1 2)'));
+insert into geometry_zero_char values (
+cast(st_geomfromtext('POINT(1 2)') as geometry32)
+);
+insert into geometry_zero_varchar select g from geometry_zero_src;
+insert into geometry_zero_char select g32 from geometry_zero_src;
+select count(*), sum(char_length(c)) from geometry_zero_varchar;
+➤ count(*)[-5,64,0]  ¦  sum(char_length(c))[3,38,0]  𝄀
+2  ¦  0
+select count(*), sum(char_length(c)) from geometry_zero_char;
+➤ count(*)[-5,64,0]  ¦  sum(char_length(c))[3,38,0]  𝄀
+2  ¦  0
+set session sql_mode = 'STRICT_TRANS_TABLES';
+insert ignore into geometry_zero_varchar values (st_geomfromtext('POINT(1 2)'));
+insert ignore into geometry_zero_char select g32 from geometry_zero_src;
+select count(*), sum(char_length(c)) from geometry_zero_varchar;
+➤ count(*)[-5,64,0]  ¦  sum(char_length(c))[3,38,0]  𝄀
+3  ¦  0
+select count(*), sum(char_length(c)) from geometry_zero_char;
+➤ count(*)[-5,64,0]  ¦  sum(char_length(c))[3,38,0]  𝄀
+3  ¦  0
+select char_length(cast(st_geomfromtext('POINT(1 2)') as char(0)));
+➤ char_length(cast(st_geomfromtext(POINT(1 2)) as char(0)))[-5,64,0]  𝄀
+0
+select char_length(cast(
+cast(st_geomfromtext('POINT(1 2)') as geometry32) as varchar(0)
+));
+➤ char_length(cast(cast(st_geomfromtext(POINT(1 2)) as geometry) as varchar(0)))[-5,64,0]  𝄀
+0
+drop table geometry_zero_src;
+drop table geometry_zero_char;
+drop table geometry_zero_varchar;
+drop database insert_str_width;
+set session sql_mode = @old_sql_mode;
+select @@sql_mode = @old_sql_mode;
+➤ @@sql_mode = @old_sql_mode[-7,1,0]  𝄀
+1

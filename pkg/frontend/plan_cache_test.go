@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -262,6 +263,35 @@ func TestSessionSQLModePresenceChangeClearsPlanCache(t *testing.T) {
 	require.NoError(t, ses.SetSessionSysVar(ctx, "SQL_MODE", "STRICT_TRANS_TABLES,MATRIXONE_NATIVE"))
 	require.False(t, ses.isCached("cached-sql"))
 	require.Equal(t, 1, stmt.freed)
+}
+
+func TestSessionProtocolVersionChangeInvalidatesPlanCache(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
+	rt := moruntime.ServiceRuntime("")
+	defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+
+	for _, test := range []struct {
+		name string
+		from int64
+		to   int64
+	}{
+		{name: "upgrade", from: defines.MORPCVersion4, to: defines.MORPCVersion5},
+		{name: "rollback", from: defines.MORPCVersion5, to: defines.MORPCVersion4},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, test.from)
+			ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
+			stmt := &trackedStatement{}
+			ses.cachePlan("cached-sql", []tree.Statement{stmt}, []*plan.Plan{{}})
+			require.NotNil(t, ses.getCachedPlan("cached-sql"))
+
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, test.to)
+			require.Nil(t, ses.getCachedPlan("cached-sql"))
+			require.False(t, ses.isCached("cached-sql"))
+			require.Equal(t, 1, stmt.freed)
+		})
+	}
 }
 
 func TestSessionSQLModePresenceMatcherUsesExactToken(t *testing.T) {

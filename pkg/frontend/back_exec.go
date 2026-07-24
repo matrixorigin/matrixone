@@ -1536,3 +1536,10 @@ func (backSes *backSession) GetSqlModeNoAutoValueOnZero() (bool, bool) {
 	}
 	return backSes.upstream.GetSqlModeNoAutoValueOnZero()
 }
+
+func (backSes *backSession) AddWarning(code uint16, msg string) {
+	if backSes == nil || backSes.upstream == nil {
+		return
+	}
+	backSes.upstream.AddWarning(code, msg)
+}

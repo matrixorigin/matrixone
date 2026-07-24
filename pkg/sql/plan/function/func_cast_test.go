@@ -24,10 +24,10 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
-
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -2841,7 +2841,7 @@ func Test_strToStr_TextToCharVarchar(t *testing.T) {
 			err := to.PreExtendAndReset(len(tt.inputs))
 			require.NoError(t, err)
 
-			err = strToStr(ctx, nil, from, to, len(tt.inputs), tt.toType, false)
+			err = strToStr(ctx, nil, from, to, len(tt.inputs), tt.toType, false, false, false)
 
 			if tt.wantErr {
 				require.Error(t, err)
@@ -2922,10 +2922,12 @@ func Test_strToStr_StrictStringWidth(t *testing.T) {
 			defer to.Free()
 			require.NoError(t, to.PreExtendAndReset(1))
 
-			err := strToStr(ctx, nil, from, to, 1, tt.toType, tt.strict)
+			err := strToStr(ctx, nil, from, to, 1, tt.toType, tt.strict, false, false)
 			if tt.wantErr {
 				require.Error(t, err)
-				require.Contains(t, err.Error(), "larger than Dest length")
+				// DDL (cast_strict, allowTrailingSpaceTrim=false) returns
+				// 1067 ER_INVALID_DEFAULT instead of 1406.
+				require.Contains(t, err.Error(), "Invalid default value")
 				return
 			}
 			require.NoError(t, err)
@@ -3021,7 +3023,7 @@ func Test_CastVarcharToGeometryRejectTooManyPoints(t *testing.T) {
 	err := to.PreExtendAndReset(1)
 	require.NoError(t, err)
 
-	err = strToStr(context.Background(), proc, from, to, 1, types.T_geometry.ToType(), false)
+	err = strToStr(context.Background(), proc, from, to, 1, types.T_geometry.ToType(), false, false, false)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "max_points_in_geometry=3")
 }
@@ -3828,6 +3830,141 @@ func TestCastNumericTokenInvalidInputErrors(t *testing.T) {
 	_, err = prefixedDigitsToDecimalString("2", 2)
 	require.ErrorContains(t, err, "invalid input:")
 	require.ErrorContains(t, err, "invalid numeric string")
+}
+
+// TestShortenValueString covers the value-preview helper used by the cast error
+// formatters: short values are returned verbatim, over-100-rune values are
+// truncated to 100 runes plus an ellipsis, and truncation is by rune (not byte)
+// so multibyte content is not split mid-character.
+func TestShortenValueString(t *testing.T) {
+	require.Equal(t, "abc", shortenValueString("abc"))
+
+	exactly100 := strings.Repeat("a", 100)
+	require.Equal(t, exactly100, shortenValueString(exactly100))
+
+	over100 := strings.Repeat("a", 101)
+	got := shortenValueString(over100)
+	require.Equal(t, strings.Repeat("a", 100)+"...", got)
+
+	// Multibyte: 120 runes -> first 100 runes + "...", counted by rune.
+	multibyte := strings.Repeat("你", 120)
+	gotMB := shortenValueString(multibyte)
+	require.Equal(t, strings.Repeat("你", 100)+"...", gotMB)
+}
+
+// TestFormatCastError and TestFormatDataTruncationError cover the three message
+// shapes produced by the cast error formatters (const value, const NULL, and
+// non-const column) and assert the MySQL error code each maps to.
+func TestFormatCastError(t *testing.T) {
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+	toType := types.New(types.T_varchar, 3, 0)
+
+	// const non-null value
+	constVec, err := vector.NewConstBytes(types.New(types.T_varchar, 4, 0), []byte("abcd"), 1, mp)
+	require.NoError(t, err)
+	defer constVec.Free(mp)
+	err1 := formatCastError(ctx, constVec, toType, "Src length 4 is larger than Dest length 3")
+	require.Contains(t, err1.Error(), "Can't cast 'abcd' from VARCHAR type to VARCHAR type.")
+	require.Contains(t, err1.Error(), "Src length 4 is larger than Dest length 3")
+	require.Equal(t, uint16(moerr.ER_UNKNOWN_ERROR), err1.(*moerr.Error).MySQLCode())
+
+	// const NULL
+	nullVec := vector.NewConstNull(types.New(types.T_varchar, 4, 0), 1, mp)
+	defer nullVec.Free(mp)
+	err2 := formatCastError(ctx, nullVec, toType, "")
+	require.Contains(t, err2.Error(), "Can't cast 'NULL' as VARCHAR type.")
+
+	// non-const column
+	colVec := testutil.MakeVarcharVector([]string{"abcd", "efgh"}, nil, mp)
+	defer colVec.Free(mp)
+	err3 := formatCastError(ctx, colVec, toType, "Src length 4 is larger than Dest length 3")
+	require.Contains(t, err3.Error(), "Can't cast column from VARCHAR type to VARCHAR type because of one or more values in that column.")
+
+	// long value exercises shortenValueString within the formatter
+	longVec, err := vector.NewConstBytes(types.New(types.T_varchar, 200, 0), []byte(strings.Repeat("x", 200)), 1, mp)
+	require.NoError(t, err)
+	defer longVec.Free(mp)
+	err4 := formatCastError(ctx, longVec, toType, "")
+	require.Contains(t, err4.Error(), strings.Repeat("x", 100)+"...")
+}
+
+func TestFormatDataTruncationError(t *testing.T) {
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+	toType := types.New(types.T_varchar, 3, 0)
+
+	// const non-null value -> ErrCastWidthExceeded, mapped to ER_DATA_TOO_LONG
+	// (1406). The mo-side message is bare (no "Data truncation:" prefix); that
+	// wrapper is added client-side by the JDBC driver.
+	constVec, err := vector.NewConstBytes(types.New(types.T_varchar, 4, 0), []byte("abcd"), 1, mp)
+	require.NoError(t, err)
+	defer constVec.Free(mp)
+	err1 := formatDataTruncationError(
+		ctx,
+		constVec,
+		toType,
+		"Src length 4 is larger than Dest length 3",
+		true,
+	)
+	require.Contains(t, err1.Error(), "Can't cast 'abcd' to VARCHAR type.")
+	require.NotContains(t, err1.Error(), "Data truncation:")
+	moErr1 := err1.(*moerr.Error)
+	require.Equal(t, moerr.ErrCastWidthExceeded, moErr1.ErrorCode())
+	require.Equal(t, uint16(moerr.ER_DATA_TOO_LONG), moErr1.MySQLCode())
+
+	// const NULL
+	nullVec := vector.NewConstNull(types.New(types.T_varchar, 4, 0), 1, mp)
+	defer nullVec.Free(mp)
+	err2 := formatDataTruncationError(ctx, nullVec, toType, "", true)
+	require.Contains(t, err2.Error(), "Can't cast 'NULL' as VARCHAR type.")
+
+	// non-const column
+	colVec := testutil.MakeVarcharVector([]string{"abcd", "efgh"}, nil, mp)
+	defer colVec.Free(mp)
+	err3 := formatDataTruncationError(
+		ctx,
+		colVec,
+		toType,
+		"Src length 4 is larger than Dest length 3",
+		true,
+	)
+	require.Contains(t, err3.Error(), "Can't cast column from VARCHAR type to VARCHAR type because of one or more values in that column.")
+
+	// Generic casts and non-CHAR/VARCHAR targets preserve the legacy internal
+	// error contract even if the caller accidentally marks the operation as an
+	// assignment.
+	genericErr := formatDataTruncationError(ctx, constVec, toType, "")
+	require.Equal(t, moerr.ErrInternal, genericErr.(*moerr.Error).ErrorCode())
+	binaryErr := formatDataTruncationError(
+		ctx,
+		constVec,
+		types.New(types.T_varbinary, 3, 0),
+		"",
+		true,
+	)
+	require.Equal(t, moerr.ErrInternal, binaryErr.(*moerr.Error).ErrorCode())
+}
+
+// TestIsStrictSqlModeSessionInfoFallback covers the branches TestIsStrictSqlMode
+// (in func_cast_width_test.go) does not: when no session resolver is present,
+// isStrictSqlMode falls back to the serialized SessionInfo.SqlMode, normalizing
+// the empty sentinel to non-strict.
+func TestIsStrictSqlModeSessionInfoFallback(t *testing.T) {
+	// no resolver, fall back to SessionInfo.SqlMode (strict)
+	procFallback := testutil.NewProcess(t)
+	procFallback.Base.SessionInfo.SqlMode = "STRICT_TRANS_TABLES"
+	require.True(t, isStrictSqlMode(procFallback))
+
+	// no resolver, non-strict SessionInfo.SqlMode
+	procLenient := testutil.NewProcess(t)
+	procLenient.Base.SessionInfo.SqlMode = "NO_ENGINE_SUBSTITUTION"
+	require.False(t, isStrictSqlMode(procLenient))
+
+	// no resolver, SessionInfo.SqlMode is the empty sentinel -> non-strict
+	procSentinel := testutil.NewProcess(t)
+	procSentinel.Base.SessionInfo.SqlMode = process.EmptySqlModeSentinel
+	require.False(t, isStrictSqlMode(procSentinel))
 }
 
 func TestParseFloatCastString(t *testing.T) {

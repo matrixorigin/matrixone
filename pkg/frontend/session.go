@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"math"
 	"net"
 	"runtime"
 	"strconv"
@@ -35,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -56,6 +58,21 @@ import (
 var (
 	MaxPrepareNumberInOneSession atomic.Uint32
 )
+
+func currentProtocolVersion(proc *process.Process) int64 {
+	if proc == nil {
+		return defines.MORPCLatestVersion
+	}
+	value, ok := moruntime.ServiceRuntime(proc.GetService()).GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return defines.MORPCVersion4
+	}
+	version, ok := value.(int64)
+	if !ok {
+		return defines.MORPCVersion4
+	}
+	return version
+}
 
 func init() {
 	MaxPrepareNumberInOneSession.Store(100000)
@@ -151,7 +168,8 @@ type Session struct {
 
 	ddlOwnerRoleID uint32
 
-	errInfo *errInfo
+	errInfo  *errInfo
+	warnings *errInfo
 
 	cache       *privilegeCache
 	ruleCache   map[string]string // rewrite rule cache, nil means not loaded
@@ -699,10 +717,6 @@ func (e *errInfo) push(code uint16, msg string) {
 	e.msgs = append(e.msgs, msg)
 }
 
-func (e *errInfo) length() int {
-	return len(e.codes)
-}
-
 func NewSession(
 	connCtx context.Context,
 	service string,
@@ -727,6 +741,11 @@ func NewSession(
 			service:        service,
 		},
 		errInfo: &errInfo{
+			codes:  make([]uint16, 0, MoDefaultErrorCount),
+			msgs:   make([]string, 0, MoDefaultErrorCount),
+			maxCnt: MoDefaultErrorCount,
+		},
+		warnings: &errInfo{
 			codes:  make([]uint16, 0, MoDefaultErrorCount),
 			msgs:   make([]string, 0, MoDefaultErrorCount),
 			maxCnt: MoDefaultErrorCount,
@@ -884,6 +903,7 @@ func (ses *Session) Close() {
 	ses.tenant = nil
 	ses.priv = nil
 	ses.errInfo = nil
+	ses.warnings = nil
 	ses.cache = nil
 	ses.debugStr = ""
 	ses.tStmt = nil
@@ -942,7 +962,7 @@ func (ses *Session) IsBackgroundSession() bool {
 	return false
 }
 
-func (ses *Session) cachePlan(sql string, stmts []tree.Statement, plans []*plan.Plan) {
+func (ses *Session) cachePlan(sql string, stmts []tree.Statement, plans []*plan.Plan, versions ...int64) {
 	if len(sql) == 0 {
 		return
 	}
@@ -952,7 +972,11 @@ func (ses *Session) cachePlan(sql string, stmts []tree.Statement, plans []*plan.
 		freeStmts(stmts)
 		return
 	}
-	ses.planCache.cache(sql, stmts, plans)
+	protocolVersion := currentProtocolVersion(ses.proc)
+	if len(versions) > 0 {
+		protocolVersion = versions[0]
+	}
+	ses.planCache.cache(sql, stmts, plans, protocolVersion)
 }
 
 func (ses *Session) getCachedPlan(sql string) *cachedPlan {
@@ -964,7 +988,12 @@ func (ses *Session) getCachedPlan(sql string) *cachedPlan {
 	if ses.planCache == nil {
 		return nil
 	}
-	return ses.planCache.get(sql)
+	cached := ses.planCache.get(sql)
+	if cached != nil && cached.protocolVersion != currentProtocolVersion(ses.proc) {
+		ses.planCache.remove(sql)
+		return nil
+	}
+	return cached
 }
 
 func (ses *Session) isCached(sql string) bool {
@@ -1890,13 +1919,71 @@ func (ses *Session) SetNewResponse(category int, affectedRows uint64, cmd int, d
 	// If the stmt has next stmt, should add SERVER_MORE_RESULTS_EXISTS to the server status.
 	var resp *Response
 	serverStatus := ses.GetTxnHandler().GetServerStatus()
+	warnings := ses.WarningCount()
 	if !isLastStmt {
-		resp = NewResponse(category, affectedRows, 0, 0,
+		resp = NewResponse(category, affectedRows, 0, warnings,
 			serverStatus|SERVER_MORE_RESULTS_EXISTS, cmd, d)
 	} else {
-		resp = NewResponse(category, affectedRows, 0, 0, serverStatus, cmd, d)
+		resp = NewResponse(category, affectedRows, 0, warnings, serverStatus, cmd, d)
 	}
 	return resp
+}
+
+func (ses *Session) AddWarning(code uint16, msg string) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	if ses.warnings == nil {
+		ses.warnings = &errInfo{maxCnt: MoDefaultErrorCount}
+	}
+	ses.warnings.push(code, msg)
+}
+
+func (ses *Session) ClearWarnings() {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	if ses.warnings == nil {
+		return
+	}
+	ses.warnings.codes = ses.warnings.codes[:0]
+	ses.warnings.msgs = ses.warnings.msgs[:0]
+}
+
+func (ses *Session) WarningCount() uint16 {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	if ses.warnings == nil {
+		return 0
+	}
+	if len(ses.warnings.codes) > math.MaxUint16 {
+		return math.MaxUint16
+	}
+	return uint16(len(ses.warnings.codes))
+}
+
+func (ses *Session) warningSnapshot() ([]uint16, []string) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	if ses.warnings == nil {
+		return nil, nil
+	}
+	return append([]uint16(nil), ses.warnings.codes...), append([]string(nil), ses.warnings.msgs...)
+}
+
+func (ses *Session) showConditionSnapshot(stmt tree.Statement) (string, []uint16, []string) {
+	if _, ok := stmt.(*tree.ShowWarnings); ok {
+		codes, msgs := ses.warningSnapshot()
+		return "Warning", codes, msgs
+	}
+	info := ses.GetErrInfo()
+	return "Error", info.codes, info.msgs
+}
+
+func (ses *Session) prepareWarningsForStatement(stmt tree.Statement) {
+	switch stmt.(type) {
+	case *tree.ShowWarnings, *tree.ShowErrors:
+	default:
+		ses.ClearWarnings()
+	}
 }
 
 // StatusSession implements the queryservice.Session interface.

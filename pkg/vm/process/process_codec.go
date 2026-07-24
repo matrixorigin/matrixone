@@ -105,6 +105,7 @@ func (proc *Process) BuildProcessInfo(
 			LockWaitTimeout:     resolveLockWaitTimeoutSeconds(proc),
 			LockWaitTimeoutSet:  proc.Base.SessionInfo.LockWaitTimeoutSet,
 			MatrixoneNativeMode: proc.Base.SessionInfo.MatrixOneNativeMode,
+			SqlMode:             resolveSqlMode(proc),
 		}
 	}
 	{ // log info
@@ -320,6 +321,7 @@ func ConvertToProcessSessionInfo(
 		LockWaitTimeout:     sei.LockWaitTimeout,
 		LockWaitTimeoutSet:  sei.LockWaitTimeoutSet,
 		MatrixOneNativeMode: sei.MatrixoneNativeMode,
+		SqlMode:             sei.SqlMode,
 	}
 	t := time.Time{}
 	err := t.UnmarshalBinary(sei.TimeZone)
@@ -328,6 +330,26 @@ func ConvertToProcessSessionInfo(
 	}
 	sessionInfo.TimeZone = t.Location()
 	return sessionInfo, nil
+}
+
+func resolveSqlMode(proc *Process) string {
+	if proc == nil {
+		return ""
+	}
+	if f := proc.GetResolveVariableFunc(); f != nil {
+		if v, err := f("sql_mode", true, false); err == nil {
+			if s, ok := v.(string); ok {
+				if s == "" {
+					return EmptySqlModeSentinel // explicitly non-strict
+				}
+				return s
+			}
+		}
+	}
+	// Resolver is nil on a remote CN (no session). Fall back to the sql_mode
+	// captured from the upstream CN so it survives a second forward
+	// (encode -> decode -> encode); otherwise the next hop defaults to strict.
+	return proc.Base.SessionInfo.SqlMode
 }
 
 func resolveLockWaitTimeoutSeconds(proc *Process) int64 {

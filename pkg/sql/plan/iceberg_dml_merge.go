@@ -709,7 +709,7 @@ func icebergMergeAssignmentValueExpr(ctx CompilerContext, expr *planpb.Expr, tar
 			return nil, err
 		}
 	}
-	return forceAssignmentCastExpr(ctx.GetContext(), value, targetCol.Typ)
+	return forceAssignmentCastExprWithProcess(ctx.GetContext(), value, targetCol.Typ, false, ctx.GetProcess())
 }
 
 func icebergMergeActionExpr(ctx CompilerContext, projects []*planpb.Expr, shape icebergMergeProjectionShape, isUnmatchedExpr *planpb.Expr) (*planpb.Expr, error) {

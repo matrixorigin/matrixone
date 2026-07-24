@@ -38,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -48,6 +49,16 @@ import (
 type legacyZeroRunSQLTxnOperator struct {
 	client.TxnOperator
 	exited chan uint64
+}
+
+type warningMysqlWriter struct {
+	testMysqlWriter
+	warnings uint16
+}
+
+func (w *warningMysqlWriter) WriteEOFOrOK(warnings uint16, _ uint16) error {
+	w.warnings = warnings
+	return nil
 }
 
 func (op *legacyZeroRunSQLTxnOperator) EnterRunSqlWithTokenAndSQL(context.CancelFunc, string) uint64 {
@@ -1052,4 +1063,67 @@ func TestSession_Cleanup(t *testing.T) {
 	rt.ses = ses
 	ctx4 := rt.getCleanupContext()
 	assert.Equal(t, ses.txnHandler.txnCtx, ctx4)
+}
+
+func TestSessionWarningsReachProtocolResponse(t *testing.T) {
+	ses := &Session{
+		feSessionImpl: feSessionImpl{txnHandler: &TxnHandler{}},
+		warnings: &errInfo{
+			codes:  make([]uint16, 0, 2),
+			msgs:   make([]string, 0, 2),
+			maxCnt: 2,
+		},
+	}
+
+	ses.AddWarning(moerr.WARN_DATA_TRUNCATED, "Data truncated")
+	ses.AddWarning(moerr.ER_TRUNCATED_WRONG_VALUE, "Truncated incorrect value")
+	require.Equal(t, uint16(2), ses.WarningCount())
+
+	codes, msgs := ses.warningSnapshot()
+	require.Equal(t, []uint16{moerr.WARN_DATA_TRUNCATED, moerr.ER_TRUNCATED_WRONG_VALUE}, codes)
+	require.Equal(t, []string{"Data truncated", "Truncated incorrect value"}, msgs)
+
+	response := ses.SetNewResponse(OkResponse, 1, int(COM_QUERY), "", true)
+	require.Equal(t, uint16(2), response.warnings)
+
+	level, codes, msgs := ses.showConditionSnapshot(&tree.ShowWarnings{})
+	require.Equal(t, "Warning", level)
+	require.Len(t, codes, 2)
+	require.Len(t, msgs, 2)
+	ses.prepareWarningsForStatement(&tree.ShowWarnings{})
+	require.Equal(t, uint16(2), ses.WarningCount())
+
+	ses.errInfo = &errInfo{codes: []uint16{moerr.ER_UNKNOWN_ERROR}, msgs: []string{"error"}}
+	level, codes, msgs = ses.showConditionSnapshot(&tree.ShowErrors{})
+	require.Equal(t, "Error", level)
+	require.Equal(t, []uint16{moerr.ER_UNKNOWN_ERROR}, codes)
+	require.Equal(t, []string{"error"}, msgs)
+
+	ses.prepareWarningsForStatement(&tree.Select{})
+	require.Zero(t, ses.WarningCount())
+	ses.AddWarning(moerr.WARN_DATA_TRUNCATED, "Data truncated")
+	(&backSession{}).AddWarning(moerr.WARN_DATA_TRUNCATED, "ignored")
+	(&backSession{feSessionImpl: feSessionImpl{upstream: ses}}).AddWarning(moerr.WARN_DATA_TRUNCATED, "forwarded")
+	require.Equal(t, uint16(2), ses.WarningCount())
+	ses.ClearWarnings()
+	require.Zero(t, ses.WarningCount())
+}
+
+func TestStreamResultResponseCarriesWarnings(t *testing.T) {
+	ses := &Session{
+		feSessionImpl: feSessionImpl{txnHandler: &TxnHandler{}},
+		warnings: &errInfo{
+			codes: []uint16{moerr.ER_TRUNCATED_WRONG_VALUE},
+			msgs:  []string{"Truncated incorrect value"},
+		},
+	}
+	writer := &warningMysqlWriter{}
+	resper := NewMysqlResp(writer)
+	err := resper.respStreamResultRow(ses, &ExecCtx{
+		reqCtx:     context.Background(),
+		stmt:       &tree.ShowWarnings{},
+		isLastStmt: true,
+	})
+	require.NoError(t, err)
+	require.Equal(t, uint16(1), writer.warnings)
 }

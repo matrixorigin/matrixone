@@ -305,7 +305,11 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 						return 0, err
 					}
 				} else {
-					selectNode.ProjectList[colPos], err = forceAssignmentCastExpr(builder.GetContext(), updateExpr, col.Typ)
+					selectNode.ProjectList[colPos], err = builder.forceAssignmentCastExpr(
+						updateExpr,
+						col.Typ,
+						stmt.Ignore,
+					)
 					if err != nil {
 						return 0, err
 					}
@@ -387,7 +391,11 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			if col.GeneratedCol == nil {
 				continue
 			}
-			genExpr := substituteColRefsInExpr(col.GeneratedCol.Expr, selectNode.ProjectList, colOffsets[i])
+			genExpr := builder.applyGeneratedColumnAssignmentCast(
+				DeepCopyExpr(col.GeneratedCol.Expr),
+				stmt.Ignore,
+			)
+			genExpr = substituteColRefsInExpr(genExpr, selectNode.ProjectList, colOffsets[i])
 
 			oldPos := oldColName2Idx[alias+"."+col.Name]
 			newColName2Idx[alias+"."+col.Name] = oldPos

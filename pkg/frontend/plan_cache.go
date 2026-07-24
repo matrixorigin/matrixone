@@ -22,9 +22,10 @@ import (
 )
 
 type cachedPlan struct {
-	sql   string
-	stmts []tree.Statement
-	plans []*plan.Plan
+	sql             string
+	stmts           []tree.Statement
+	plans           []*plan.Plan
+	protocolVersion int64
 }
 
 // planCache uses LRU to cache plan for the same sql
@@ -50,7 +51,11 @@ func freeStmts(stmts []tree.Statement) {
 	}
 }
 
-func (pc *planCache) cache(sql string, stmts []tree.Statement, plans []*plan.Plan) {
+func (pc *planCache) cache(sql string, stmts []tree.Statement, plans []*plan.Plan, versions ...int64) {
+	protocolVersion := currentProtocolVersion(nil)
+	if len(versions) > 0 {
+		protocolVersion = versions[0]
+	}
 	if pc.cachePool == nil {
 		pc.cachePool = make(map[string]*list.Element)
 		pc.lruList = list.New()
@@ -64,11 +69,21 @@ func (pc *planCache) cache(sql string, stmts []tree.Statement, plans []*plan.Pla
 	}
 	if element, ok := pc.cachePool[sql]; ok {
 		freeStmts(element.Value.(*cachedPlan).stmts)
-		element.Value = &cachedPlan{sql: sql, stmts: stmts, plans: plans}
+		element.Value = &cachedPlan{
+			sql:             sql,
+			stmts:           stmts,
+			plans:           plans,
+			protocolVersion: protocolVersion,
+		}
 		pc.lruList.MoveToFront(element)
 		return
 	}
-	element := pc.lruList.PushFront(&cachedPlan{sql: sql, stmts: stmts, plans: plans})
+	element := pc.lruList.PushFront(&cachedPlan{
+		sql:             sql,
+		stmts:           stmts,
+		plans:           plans,
+		protocolVersion: protocolVersion,
+	})
 	pc.cachePool[sql] = element
 	if pc.lruList.Len() > pc.capacity {
 		toRemove := pc.lruList.Back()
@@ -76,6 +91,19 @@ func (pc *planCache) cache(sql string, stmts []tree.Statement, plans []*plan.Pla
 		delete(pc.cachePool, toRemove.Value.(*cachedPlan).sql)
 		freeStmts(toRemove.Value.(*cachedPlan).stmts)
 	}
+}
+
+func (pc *planCache) remove(sql string) {
+	if pc.cachePool == nil {
+		return
+	}
+	element, ok := pc.cachePool[sql]
+	if !ok {
+		return
+	}
+	pc.lruList.Remove(element)
+	delete(pc.cachePool, sql)
+	freeStmts(element.Value.(*cachedPlan).stmts)
 }
 
 // get gets a cached plan by its sql

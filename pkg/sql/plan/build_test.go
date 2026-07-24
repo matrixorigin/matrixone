@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -289,8 +290,8 @@ func planHasTextToVarcharCastWithWidth(p *Plan, width int32) bool {
 	return planHasTextToVarcharCastWithNameAndWidth(p, "", width)
 }
 
-func planHasTextToVarcharStrictCastWithWidth(p *Plan, width int32) bool {
-	return planHasTextToVarcharCastWithNameAndWidth(p, "cast_strict", width)
+func planHasTextToVarcharAssignCastWithWidth(p *Plan, width int32) bool {
+	return planHasTextToVarcharCastWithNameAndWidth(p, "cast_assign", width)
 }
 
 func planHasTextToVarcharCastWithNameAndWidth(p *Plan, funcName string, width int32) bool {
@@ -306,7 +307,8 @@ func planHasTextToVarcharCastWithNameAndWidth(p *Plan, funcName string, width in
 		if f := expr.GetF(); f != nil {
 			nameMatches := f.Func.GetObjName() == funcName
 			if funcName == "" {
-				nameMatches = f.Func.GetObjName() == "cast" || f.Func.GetObjName() == "cast_strict"
+				name := f.Func.GetObjName()
+				nameMatches = name == "cast" || name == "cast_strict" || name == "cast_assign"
 			}
 			if nameMatches && len(f.Args) > 0 &&
 				f.Args[0].Typ.Id == int32(types.T_text) &&
@@ -405,22 +407,26 @@ func TestUpdateVarcharFromTextKeepsVarcharWidthCast(t *testing.T) {
 	assert.True(t, planHasTextToVarcharCastWithWidth(logicPlan, 255))
 }
 
-func TestInsertSelectVarcharFromTextUsesStrictAssignmentCast(t *testing.T) {
+func TestInsertSelectVarcharFromTextUsesAssignmentCast(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	addTextCastTableForTest(mock)
 
+	// INSERT ... SELECT is an assignment path: it routes CHAR/VARCHAR targets
+	// through cast_assign, which enforces width at runtime per sql_mode.
 	logicPlan, err := runOneStmt(mock, t, "insert into text_cast_t(id, vc) select id, txt from text_cast_t")
 	assert.NoError(t, err)
-	assert.True(t, planHasTextToVarcharStrictCastWithWidth(logicPlan, 255))
+	assert.True(t, planHasTextToVarcharAssignCastWithWidth(logicPlan, 255))
 }
 
-func TestOnDuplicateUpdateVarcharFromTextUsesStrictAssignmentCast(t *testing.T) {
+func TestOnDuplicateUpdateVarcharFromTextUsesAssignmentCast(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	addTextCastTableForTest(mock)
 
+	// ON DUPLICATE KEY UPDATE is an assignment path (not INSERT IGNORE), so it
+	// routes the CHAR/VARCHAR target through the sql_mode-gated cast_assign.
 	logicPlan, err := runOneStmt(mock, t, "insert into text_cast_t(id, txt, vc) values (1, repeat('a', 260), '') on duplicate key update vc = txt")
 	assert.NoError(t, err)
-	assert.True(t, planHasTextToVarcharStrictCastWithWidth(logicPlan, 255))
+	assert.True(t, planHasTextToVarcharAssignCastWithWidth(logicPlan, 255))
 }
 
 // test single table plan building
@@ -1518,6 +1524,55 @@ func TestUpdateIgnoreUsesIgnoreDedupAction(t *testing.T) {
 		}
 	}
 	require.True(t, found, "UPDATE IGNORE of a primary key should include a DEDUP join")
+}
+
+func TestUpdateIgnoreUsesAssignmentIgnoreCast(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	logicPlan, err := runOneStmt(mock, t,
+		"UPDATE IGNORE NATION SET N_NAME = CAST('abcdefghijklmnopqrstuvwxyz' AS TEXT)")
+	require.NoError(t, err)
+	require.True(t,
+		planHasTextToVarcharCastWithNameAndWidth(logicPlan, "cast_ignore", 25),
+		"UPDATE IGNORE assignment should use cast_ignore",
+	)
+
+	logicPlan, err = runOneStmt(mock, t,
+		"UPDATE NATION SET N_NAME = CAST('abcdefghijklmnopqrstuvwxyz' AS TEXT)")
+	require.NoError(t, err)
+	require.True(t,
+		planHasTextToVarcharCastWithNameAndWidth(logicPlan, "cast_assign", 25),
+		"ordinary UPDATE assignment should use cast_assign",
+	)
+}
+
+func TestLegacyUpdateIgnoreUsesAssignmentIgnoreCast(t *testing.T) {
+	newBuilder := func() (*QueryBuilder, []*dmlPlanCtx) {
+		builder := NewQueryBuilder(plan.Query_UPDATE, NewMockCompilerContext(true), false, true)
+		builder.qry.Nodes = append(builder.qry.Nodes, &plan.Node{
+			ProjectList: []*plan.Expr{{
+				Typ:  plan.Type{Id: int32(types.T_text)},
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{}},
+			}},
+		})
+		return builder, []*dmlPlanCtx{{
+			tableDef: &plan.TableDef{Cols: []*plan.ColDef{{
+				Name: "c",
+				Typ:  plan.Type{Id: int32(types.T_varchar), Width: 3},
+			}}},
+			updateColLength: 1,
+			updateColPosMap: map[string]int{
+				"c": 0,
+			},
+		}}
+	}
+
+	builder, planContexts := newBuilder()
+	require.NoError(t, rewriteUpdateQueryLastNode(builder, planContexts, 0, true))
+	require.Equal(t, "cast_ignore", builder.qry.Nodes[0].ProjectList[0].GetF().GetFunc().GetObjName())
+
+	builder, planContexts = newBuilder()
+	require.NoError(t, rewriteUpdateQueryLastNode(builder, planContexts, 0, false))
+	require.Equal(t, "cast_assign", builder.qry.Nodes[0].ProjectList[0].GetF().GetFunc().GetObjName())
 }
 
 func TestUpdateRecomputesCompositeClusterByKey(t *testing.T) {
@@ -2623,6 +2678,88 @@ func TestReplacePKTable(t *testing.T) {
 		"REPLACE INTO dept (deptno, badcol) VALUES (1, 2)", // column not exist
 	}
 	runTestShouldError(mock, t, sqls)
+}
+
+func TestReplaceRewritesLegacyGeneratedColumnCast(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	tableDef := mock.ctxt.tables["dept"]
+	require.NotNil(t, tableDef)
+
+	var source, generated *plan.ColDef
+	var sourcePos int32
+	for i, col := range tableDef.Cols {
+		switch strings.ToLower(col.Name) {
+		case "deptno":
+			source = col
+			sourcePos = int32(i)
+		case "dname":
+			generated = col
+		}
+	}
+	require.NotNil(t, source)
+	require.NotNil(t, generated)
+	sourceExpr := &plan.Expr{
+		Typ: source.Typ,
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				RelPos: 0,
+				ColPos: sourcePos,
+				Name:   source.Name,
+			},
+		},
+	}
+	legacyExpr, err := forceCastExprWithName(t.Context(), sourceExpr, generated.Typ, "cast_strict")
+	require.NoError(t, err)
+	generated.GeneratedCol = &plan.GeneratedCol{Expr: legacyExpr, IsStored: true}
+
+	stmt, err := mysql.ParseOne(t.Context(), "REPLACE INTO dept (deptno, loc) VALUES (1, 'NY')", 1)
+	require.NoError(t, err)
+	built, err := mock.Optimize(stmt)
+	require.NoError(t, err)
+	foundGeneratedAssignment := false
+	for _, node := range built.Nodes {
+		for _, expr := range node.ProjectList {
+			f := expr.GetF()
+			if f != nil &&
+				f.GetFunc().GetObjName() == "cast_assign" &&
+				expr.Typ.Width == generated.Typ.Width &&
+				len(f.Args) > 0 &&
+				f.Args[0].Typ.Id == source.Typ.Id {
+				foundGeneratedAssignment = true
+			}
+		}
+	}
+	require.True(t, foundGeneratedAssignment)
+}
+
+func TestAssignmentCastRollingUpgradePlanGate(t *testing.T) {
+	proc := testutil.NewProc(nil)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+
+	build := func(version int64) string {
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
+		mock := NewMockOptimizer(true)
+		stmt, err := mysql.ParseOne(
+			t.Context(),
+			"INSERT INTO dept (deptno, dname, loc) SELECT 1, 'Sales', 'NY'",
+			1,
+		)
+		require.NoError(t, err)
+		built, err := mock.Optimize(stmt)
+		require.NoError(t, err)
+		data, err := json.Marshal(built)
+		require.NoError(t, err)
+		return string(data)
+	}
+
+	mixedVersionPlan := build(defines.MORPCVersion4)
+	require.Contains(t, mixedVersionPlan, `"obj_name":"cast_strict"`)
+	require.NotContains(t, mixedVersionPlan, `"obj_name":"cast_assign"`)
+	require.NotContains(t, mixedVersionPlan, `"obj_name":"cast_ignore"`)
+
+	upgradedPlan := build(defines.MORPCVersion5)
+	require.Contains(t, upgradedPlan, `"obj_name":"cast_assign"`)
 }
 
 func TestReplaceSetColRefAsDefault(t *testing.T) {

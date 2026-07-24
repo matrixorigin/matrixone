@@ -659,6 +659,7 @@ message SessionInfo {
   int64 lock_wait_timeout = 10;
   bool lock_wait_timeout_set = 11;
   bool matrixone_native_mode = 12;
+  string sql_mode = 13;
 }
 
 message SessionLoggerInfo {
