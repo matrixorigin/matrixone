@@ -1,0 +1,34 @@
+set experimental_fulltext2_index = 1;
+create stage ft2stage URL='file://$resources/fulltext/';
+create table dl (id bigint primary key, fpath datalink, FULLTEXT2 ftidx(fpath));
+insert into dl values (0, 'stage://ft2stage/mo.pdf'), (1, 'stage://ft2stage/chinese.pdf');
+select sleep(30);
+➤ sleep(30)[-6,8,0]  𝄀
+0
+select id from dl where match(fpath) against('matrixone');
+➤ id[-5,64,0]  𝄀
+0
+select id from dl where match(fpath) against('慢慢地' in natural language mode);
+➤ id[-5,64,0]  𝄀
+1
+select id from dl where match(fpath) against('ft2stage');
+➤ id[-5,64,0]
+select id from dl where match(fpath) against('mo');
+➤ id[-5,64,0]
+create table dl2 (id bigint primary key, fpath datalink, FULLTEXT2 ftidx(fpath));
+insert into dl2 values (0, 'stage://ft2stage/mo.pdf');
+select sleep(30);
+➤ sleep(30)[-6,8,0]  𝄀
+0
+update dl2 set fpath='stage://ft2stage/file-sample_100kB.docx' where id=0;
+select sleep(30);
+➤ sleep(30)[-6,8,0]  𝄀
+0
+select id from dl2 where match(fpath) against('Nulla facilisi' in natural language mode);
+➤ id[-5,64,0]  𝄀
+0
+select id from dl2 where match(fpath) against('matrixone');
+➤ id[-5,64,0]
+drop table dl;
+drop table dl2;
+drop stage ft2stage;

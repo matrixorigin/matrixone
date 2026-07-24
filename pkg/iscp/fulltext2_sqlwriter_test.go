@@ -58,37 +58,35 @@ func TestFulltext2WriterRowText(t *testing.T) {
 	w.textTypes = []int32{int32(types.T_varchar), int32(types.T_varchar)}
 
 	// two text columns joined with '\n'.
-	txt, err := w.rowText([]any{int64(1), []byte("hello"), "world"})
+	txt, err := w.rowText(context.Background(), []any{int64(1), []byte("hello"), "world"})
 	require.NoError(t, err)
 	require.Equal(t, "hello\nworld", txt)
 
 	// any NULL indexed column → whole doc yields no tokens.
-	txt, err = w.rowText([]any{int64(1), nil, "world"})
+	txt, err = w.rowText(context.Background(), []any{int64(1), nil, "world"})
 	require.NoError(t, err)
 	require.Equal(t, "", txt)
 
 	// json parser flattens each column's values.
 	wj := newFT2Writer(fulltext2.ParserJSON)
-	txt, err = wj.rowText([]any{int64(1), []byte(`{"a":"matrix"}`)})
+	txt, err = wj.rowText(context.Background(), []any{int64(1), []byte(`{"a":"matrix"}`)})
 	require.NoError(t, err)
 	require.Contains(t, txt, "matrix")
 
 	// json_value parser flattens to whole atomic values.
 	wjv := newFT2Writer(fulltext2.ParserJSONValue)
-	txt, err = wjv.rowText([]any{int64(1), []byte(`{"a":"origin"}`)})
+	txt, err = wjv.rowText(context.Background(), []any{int64(1), []byte(`{"a":"origin"}`)})
 	require.NoError(t, err)
 	require.Contains(t, txt, "origin")
 }
 
-// TestFulltext2WriterDatalinkFallback: with no FileService attached (rootFS==nil, e.g.
-// tests / a CN with no executor FS) a datalink column falls back to indexing the URL
+// TestFulltext2WriterDatalinkFallback: with no resolver context (cnEngine==nil, e.g. unit tests) a datalink column falls back to indexing the URL
 // string rather than panicking or erroring.
 func TestFulltext2WriterDatalinkFallback(t *testing.T) {
 	w := newFT2Writer(fulltext2.ParserNgram)
 	w.textTypes = []int32{int32(types.T_datalink)} // the single indexed column is a datalink
-	w.rootFS = nil                                 // no FileService
 
-	txt, err := w.rowText([]any{int64(1), "file:///docs/a.txt"})
+	txt, err := w.rowText(context.Background(), []any{int64(1), "file:///docs/a.txt"})
 	require.NoError(t, err)
 	require.Equal(t, "file:///docs/a.txt", txt) // URL fallback, no resolution
 }

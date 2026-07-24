@@ -126,13 +126,14 @@ func NewIndexConsumer(cnUUID string,
 		return nil, err
 	}
 
-	// Give the fulltext2 sink the CN root FileService (published on the ISCP executor)
-	// so it can resolve DATALINK columns to file content during CDC — parity with the
-	// sync build. Done here (before any Insert) because the write path itself has no proc.
+	// Give the fulltext2 sink the CN engine/txn handles so it can open a short txn with a
+	// FULL sqlproc to resolve DATALINK columns to file CONTENT during CDC (stage:// +
+	// PDF/DOCX extraction) — parity with the sync build. Done here because the write path
+	// itself has no proc. Only when the index actually has a datalink column.
 	if w, ok := sqlwriter.(*Fulltext2SqlWriter); ok && w.datalinkPos {
-		if exec, ok := GetExecutorRuntime(cnUUID); ok {
-			w.rootFS = exec.rootFS
-		}
+		w.cnEngine = cnEngine
+		w.cnTxnClient = cnTxnClient
+		w.cnUUID = cnUUID
 	}
 
 	c := &IndexConsumer{cnUUID: cnUUID,

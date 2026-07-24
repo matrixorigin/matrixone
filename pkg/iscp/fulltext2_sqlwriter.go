@@ -16,20 +16,22 @@ package iscp
 
 import (
 	"context"
+	"fmt"
 	"strings"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/datalink"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fulltext2"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 const defaultFulltext2Capacity int64 = 1000000
@@ -49,41 +51,76 @@ type Fulltext2SqlWriter struct {
 	capacity   int64                 // max docs per delta segment (max_index_capacity)
 	postingCap int64                 // max postings per delta segment (max_postings_capacity)
 
-	// rootFS is the CN root FileService (set by NewIndexConsumer from GetExecutorRuntime),
-	// used to resolve DATALINK columns to their file CONTENT during CDC — parity with the
-	// sync build (fulltext2_create resolves datalink via GetPlainText). nil ⇒ datalink
-	// columns index the URL string (fallback when no executor FS is attached, e.g. tests).
-	rootFS      fileservice.FileService
-	datalinkPos bool             // any textPos column is a datalink (skip the proc build when none)
-	dlProc      *process.Process // lazily-built proc carrying rootFS, for datalink GetPlainText
+	// cnEngine/cnTxnClient/cnUUID are the CDC consumer's handles (set by NewIndexConsumer),
+	// used to open a short txn with a FULL sqlproc so a DATALINK column can be resolved to
+	// its file CONTENT during CDC — catalog-backed stage:// resolution + PDF/DOCX text
+	// extraction, exactly as the sync build does (fulltext2_create GetPlainText). A minimal
+	// FileService-only proc is NOT enough: stage:// needs catalog/txn. nil (e.g. unit tests)
+	// ⇒ datalink columns index the URL string.
+	cnEngine    engine.Engine
+	cnTxnClient client.TxnClient
+	cnUUID      string
+	datalinkPos bool // any textPos column is a datalink
 
 	cdc   *fulltext2.Cdc
 	ndata int
 	last  string
 }
 
-// datalinkProc lazily builds a minimal proc that carries only the CN root FileService,
-// enough for datalink.GetPlainText (a file read) — no txn/lock/etc. A background context
-// is fine: the CDC sinker is already a background loop, and a datalink read has no
-// per-request cancellation to honor. Built once and reused across rows/flushes.
-func (w *Fulltext2SqlWriter) datalinkProc() *process.Process {
-	if w.dlProc == nil {
-		w.dlProc = process.NewTopProcess(context.Background(), mpool.MustNewZero(),
-			nil, nil, w.rootFS, nil, nil, nil, nil, nil, nil)
+// datalinkText resolves a datalink column to its file's plain text (PDF/DOCX extracted),
+// exactly as the sync build does in fulltext2_create.rowTerms, so a datalink column is
+// indexed by CONTENT consistently whether a row arrives at CREATE or via CDC. It opens a
+// short txn to get a FULL sqlproc, then resolves via SELECT load_text(cast(url as datalink))
+// run by the internal SQL executor (which has a real proc: FileService + catalog for
+// stage://). The bare background sqlproc has Proc==nil, so calling datalink.GetPlainText
+// directly panics — hence the SQL round-trip. load_text (not load_file) returns the
+// EXTRACTED plain text (PDF/DOCX parsed), the same text the synchronous build indexes, so
+// CDC and build tokenize identically.
+//
+// On any resolution error the error is PROPAGATED (not swallowed) — parity with the sync
+// build (fulltext2_create returns the error on a bad datalink). The ISCP consumer then
+// retries the iteration without advancing the watermark, so a transient failure self-heals
+// and a permanently-bad datalink surfaces as a stalled-job error rather than silently
+// indexing the URL string (which would bake wrong terms into the index forever).
+func (w *Fulltext2SqlWriter) datalinkText(ctx context.Context, rawurl string) (out []byte, err error) {
+	if w.cnEngine == nil {
+		// no resolver context attached (unit tests) — index the URL string.
+		return []byte(rawurl), nil
 	}
-	return w.dlProc
-}
-
-// resolveDatalink turns a datalink URL into its file's plain text (PDF/DOCX extracted),
-// exactly as the sync build does in fulltext2_create.rowTerms — so a datalink column is
-// indexed by CONTENT consistently whether a row arrives at CREATE or via CDC.
-func (w *Fulltext2SqlWriter) resolveDatalink(url string) ([]byte, error) {
-	proc := w.datalinkProc()
-	dl, err := datalink.NewDatalink(url, proc)
+	// A panic in the resolution path must not crash the CDC consumer goroutine (that would
+	// stall ALL maintenance for the index); convert it to an error so the iteration retries.
+	defer func() {
+		if r := recover(); r != nil {
+			out = nil
+			err = moerr.NewInternalErrorNoCtx(fmt.Sprintf("fulltext2 datalink resolve panic for %q: %v", rawurl, r))
+		}
+	}()
+	accID, _ := defines.GetAccountId(ctx)
+	err = runTxnWithSqlContext(ctx, w.cnEngine, w.cnTxnClient, w.cnUUID, accID, time.Minute, nil, nil,
+		func(sqlproc *sqlexec.SqlProcess, _ any) error {
+			sql := fmt.Sprintf("SELECT load_text(cast(%s as datalink))", sqlquote.String(rawurl))
+			res, e := sqlexec.RunSql(sqlproc, sql)
+			if e != nil {
+				return e
+			}
+			defer res.Close()
+			for _, b := range res.Batches {
+				if b == nil || len(b.Vecs) == 0 || b.Vecs[0] == nil || b.Vecs[0].Length() == 0 {
+					continue
+				}
+				if b.Vecs[0].IsNull(0) {
+					continue // empty content → no tokens (matches the sync build's empty-doc skip)
+				}
+				content := b.Vecs[0].GetBytesAt(0)
+				out = append([]byte(nil), content...) // copy out before the txn (and its mpool) unwinds
+				return nil
+			}
+			return nil
+		})
 	if err != nil {
 		return nil, err
 	}
-	return dl.GetPlainText(proc)
+	return out, nil
 }
 
 var _ IndexSqlWriter = (*Fulltext2SqlWriter)(nil)
@@ -171,7 +208,7 @@ func (w *Fulltext2SqlWriter) Reset() {
 
 func (w *Fulltext2SqlWriter) Insert(ctx context.Context, row []any) error {
 	w.last = vectorindex.CDC_INSERT
-	text, err := w.rowText(row)
+	text, err := w.rowText(ctx, row)
 	if err != nil {
 		return err
 	}
@@ -182,7 +219,7 @@ func (w *Fulltext2SqlWriter) Insert(ctx context.Context, row []any) error {
 
 func (w *Fulltext2SqlWriter) Upsert(ctx context.Context, row []any) error {
 	w.last = vectorindex.CDC_UPSERT
-	text, err := w.rowText(row)
+	text, err := w.rowText(ctx, row)
 	if err != nil {
 		return err
 	}
@@ -206,10 +243,10 @@ func (w *Fulltext2SqlWriter) Delete(ctx context.Context, row []any) error {
 // it). For a json parser each column is flattened to its leaf values PER COLUMN
 // (FlattenJSONColumn), exactly as rowTerms does, so CdcTokenizer then just ngrams the
 // flattened text (it no longer re-flattens). A datalink column is resolved to its file
-// CONTENT via the CN root FileService (resolveDatalink) — parity with the sync build's
-// GetPlainText, so identical values index identically whether seen at CREATE or via CDC;
-// with no FileService attached (w.rootFS==nil, e.g. tests) it falls back to the URL.
-func (w *Fulltext2SqlWriter) rowText(row []any) (string, error) {
+// CONTENT via load_text (datalinkText) — parity with the sync build's GetPlainText, so
+// identical values index identically whether seen at CREATE or via CDC; a resolution error
+// is propagated (the CDC iteration retries), matching the sync build.
+func (w *Fulltext2SqlWriter) rowText(ctx context.Context, row []any) (string, error) {
 	for _, pos := range w.textPos {
 		if row[pos] == nil {
 			return "", nil
@@ -236,14 +273,15 @@ func (w *Fulltext2SqlWriter) rowText(row []any) (string, error) {
 				return "", err
 			}
 			b.Write(ft)
-		} else if types.T(w.textTypes[i]) == types.T_datalink && w.rootFS != nil {
-			// Resolve the datalink to its file CONTENT (parity with the sync build);
-			// falls back to the URL string when no FileService is attached (w.rootFS==nil).
-			content, err := w.resolveDatalink(ftRowText(row[pos]))
+		} else if types.T(w.textTypes[i]) == types.T_datalink {
+			// Resolve the datalink to its file CONTENT (parity with the sync build). Any
+			// resolution error is propagated so the CDC iteration retries (see datalinkText);
+			// with no resolver attached (unit tests) it indexes the URL string.
+			dt, err := w.datalinkText(ctx, ftRowText(row[pos]))
 			if err != nil {
 				return "", err
 			}
-			b.Write(content)
+			b.Write(dt)
 		} else {
 			b.WriteString(ftRowText(row[pos]))
 		}
