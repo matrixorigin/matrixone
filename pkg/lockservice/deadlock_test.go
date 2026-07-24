@@ -15,6 +15,7 @@
 package lockservice
 
 import (
+	"context"
 	"encoding/hex"
 	"testing"
 	"time"
@@ -23,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestCheckWithDeadlock(t *testing.T) {
@@ -43,7 +45,7 @@ func TestCheckWithDeadlock(t *testing.T) {
 
 		d := newDeadlockDetector(
 			runtime.DefaultRuntime().Logger(),
-			func(txn pb.WaitTxn, w *waiters) (bool, error) {
+			func(_ context.Context, txn pb.WaitTxn, w *waiters) (bool, error) {
 				for _, v := range m[string(txn.TxnID)] {
 					if !w.add(v, "") {
 						return false, nil
@@ -79,6 +81,34 @@ func TestCheckWithDeadlock(t *testing.T) {
 	})
 }
 
+func TestDeadlockDetectorCloseCancelsCheck(t *testing.T) {
+	started := make(chan struct{}, 1)
+	aborted := make(chan struct{}, 1)
+	d := newDeadlockDetector(
+		runtime.DefaultRuntime().Logger(),
+		func(ctx context.Context, _ pb.WaitTxn, _ *waiters) (bool, error) {
+			select {
+			case started <- struct{}{}:
+			default:
+			}
+			<-ctx.Done()
+			return false, ctx.Err()
+		},
+		func(pb.WaitTxn, error) { aborted <- struct{}{} },
+	)
+	require.NoError(t, d.check([]byte("holder"), pb.WaitTxn{TxnID: []byte("waiter")}))
+	<-started
+	d.close()
+	select {
+	case <-aborted:
+		t.Fatal("deadlock abort callback ran after detector cancellation")
+	default:
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	require.Empty(t, d.mu.activeCheckTxn)
+}
+
 func TestCheckWithDeadlockWith2Txn(t *testing.T) {
 	reuse.RunReuseTests(func() {
 		txn1 := []byte("t1")
@@ -95,7 +125,7 @@ func TestCheckWithDeadlockWith2Txn(t *testing.T) {
 
 		d := newDeadlockDetector(
 			runtime.DefaultRuntime().Logger(),
-			func(txn pb.WaitTxn, w *waiters) (bool, error) {
+			func(_ context.Context, txn pb.WaitTxn, w *waiters) (bool, error) {
 				for _, v := range depends[string(txn.TxnID)] {
 					if !w.add(v, "") {
 						return false, nil
@@ -122,6 +152,76 @@ func TestCheckWithDeadlockWith2Txn(t *testing.T) {
 			assert.Fail(t, "can not found dead lock")
 		case <-time.After(time.Millisecond * 100):
 		}
+	})
+}
+
+func TestCheckBusyDoesNotLeaveTxnMarkedActive(t *testing.T) {
+	reuse.RunReuseTests(func() {
+		holdTxn := []byte("holder")
+		waitTxn := pb.WaitTxn{TxnID: []byte("waiter")}
+
+		d := &detector{
+			logger: runtime.DefaultRuntime().Logger(),
+			c:      make(chan deadlockTxn, 1),
+		}
+		d.mu.activeCheckTxn = make(map[string]struct{}, 1)
+		d.c <- deadlockTxn{}
+
+		assert.ErrorIs(t, d.check(holdTxn, waitTxn), ErrDeadlockCheckBusy)
+		_, ok := d.mu.activeCheckTxn[string(waitTxn.TxnID)]
+		assert.False(t, ok)
+
+		<-d.c
+		assert.NoError(t, d.check(holdTxn, waitTxn))
+		_, ok = d.mu.activeCheckTxn[string(waitTxn.TxnID)]
+		assert.True(t, ok)
+		assert.Len(t, d.c, 1)
+	})
+}
+
+func TestOwnerLocalDeadlockPathUsesWaitEdges(t *testing.T) {
+	reuse.RunReuseTests(func() {
+		logger := runtime.DefaultRuntime().Logger()
+		txn1 := pb.WaitTxn{TxnID: []byte("txn1"), CreatedOn: "cn1"}
+		txn2 := pb.WaitTxn{TxnID: []byte("txn2"), CreatedOn: "cn1"}
+		txn3 := pb.WaitTxn{TxnID: []byte("txn3"), CreatedOn: "cn1"}
+
+		w1 := acquireWaiter(txn1, "owner-local-edge-test", logger)
+		defer w1.close("owner-local-edge-test", logger)
+		w1.setStatus(blocking)
+		w2 := acquireWaiter(txn2, "owner-local-edge-test", logger)
+		defer w2.close("owner-local-edge-test", logger)
+		w2.setStatus(blocking)
+
+		graph := map[ownerLocalTxnKey][]ownerLocalWaitEdge{
+			newOwnerLocalTxnKey(txn1): {{
+				waiter:  w1,
+				waitFor: []ownerLocalTxnKey{newOwnerLocalTxnKey(txn2)},
+			}},
+			newOwnerLocalTxnKey(txn2): {{
+				waiter:  w2,
+				waitFor: []ownerLocalTxnKey{newOwnerLocalTxnKey(txn3)},
+			}},
+		}
+
+		path, found := findOwnerLocalDeadlockPath(
+			graph,
+			newOwnerLocalTxnKey(txn3),
+			[]ownerLocalTxnKey{newOwnerLocalTxnKey(txn1)})
+		assert.True(t, found)
+		assert.Equal(t, []ownerLocalTxnKey{
+			newOwnerLocalTxnKey(txn3),
+			newOwnerLocalTxnKey(txn1),
+			newOwnerLocalTxnKey(txn2),
+			newOwnerLocalTxnKey(txn3),
+		}, path)
+
+		w2.setStatus(notified)
+		_, found = findOwnerLocalDeadlockPath(
+			graph,
+			newOwnerLocalTxnKey(txn3),
+			[]ownerLocalTxnKey{newOwnerLocalTxnKey(txn1)})
+		assert.False(t, found)
 	})
 }
 
@@ -212,7 +312,7 @@ func TestCheckWithComplexDeadlock(t *testing.T) {
 		// Create the deadlock detector
 		d := newDeadlockDetector(
 			runtime.DefaultRuntime().Logger(),
-			func(txn pb.WaitTxn, w *waiters) (bool, error) {
+			func(_ context.Context, txn pb.WaitTxn, w *waiters) (bool, error) {
 				for _, v := range depends[string(txn.TxnID)] {
 					if !w.add(v, "") {
 						return false, nil
@@ -293,7 +393,7 @@ func TestCheckDeadlock(t *testing.T) {
 		// Create the deadlock detector
 		d := newDeadlockDetector(
 			runtime.DefaultRuntime().Logger(),
-			func(txn pb.WaitTxn, w *waiters) (bool, error) {
+			func(_ context.Context, txn pb.WaitTxn, w *waiters) (bool, error) {
 				for _, v := range depends[string(txn.TxnID)] {
 					if !w.add(v, "") {
 						return false, nil

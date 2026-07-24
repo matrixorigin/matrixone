@@ -105,6 +105,31 @@ func TestCrossAccGet(t *testing.T) {
 	}))
 }
 
+func TestHasNewerVersion(t *testing.T) {
+	cc := NewCatalog()
+	cc.tables.data.Set(&TableItem{
+		AccountId:  1,
+		DatabaseId: 2,
+		Name:       "t",
+		Id:         3,
+		Version:    2,
+		Ts:         timestamp.Timestamp{PhysicalTime: 200},
+	})
+
+	require.True(t, cc.HasNewerVersion(&TableChangeQuery{
+		AccountId: 1, DatabaseId: 2, Name: "t", TableId: 3, Version: 1,
+		Ts: timestamp.Timestamp{PhysicalTime: 100},
+	}))
+	require.False(t, cc.HasNewerVersion(&TableChangeQuery{
+		AccountId: 1, DatabaseId: 2, Name: "t", TableId: 3, Version: 2,
+		Ts: timestamp.Timestamp{PhysicalTime: 100},
+	}))
+	require.False(t, cc.HasNewerVersion(&TableChangeQuery{
+		AccountId: 1, DatabaseId: 2, Name: "t", TableId: 3, Version: 1,
+		Ts: timestamp.Timestamp{PhysicalTime: 300},
+	}))
+}
+
 func TestTables(t *testing.T) {
 	mp := mpool.MustNewZero()
 	cc := NewCatalog()

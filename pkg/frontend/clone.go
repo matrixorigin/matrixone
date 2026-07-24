@@ -17,7 +17,7 @@ package frontend
 import (
 	"context"
 	"fmt"
-	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -27,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -87,7 +86,7 @@ func getBackExecutor(
 		bh.ClearExecResultSet()
 		return bh, func(err error) error {
 			bh.Close()
-			return nil
+			return err
 		}, nil
 	}
 
@@ -126,6 +125,57 @@ func resolveSnapshot(
 	}
 
 	return snapshot, nil
+}
+
+func newMoTimestampHint(snapshotTS int64) *tree.AtTimeStamp {
+	origin := strconv.FormatInt(snapshotTS, 10)
+	return &tree.AtTimeStamp{
+		Type: tree.ATMOTIMESTAMP,
+		Expr: tree.NewNumVal[int64](snapshotTS, origin, false, tree.P_int64),
+	}
+}
+
+func cloneTableRestoreSQL(stmt *tree.CloneTable, snapshotTS int64) string {
+	restoreStmt := *stmt
+	restoreStmt.ToAccountOpt = nil
+	restoreStmt.CopyGrants = false
+	if snapshotTS != 0 {
+		restoreStmt.SrcTable.AtTsExpr = newMoTimestampHint(snapshotTS)
+	}
+	return tree.StringWithOpts(
+		&restoreStmt,
+		dialect.MYSQL,
+		tree.WithQuoteIdentifier(),
+		tree.WithSingleQuoteString(),
+	)
+}
+
+func cloneTargetTableExists(ctx context.Context, bh BackgroundExec, dbName, tableName string, accountID uint32) (bool, error) {
+	sql, err := getSqlForCheckDatabaseTableWithSnapshot(ctx, dbName, tableName, accountID, 0)
+	if err != nil {
+		return false, err
+	}
+	bh.ClearExecResultSet()
+	if err = bh.Exec(ctx, sql); err != nil {
+		return false, err
+	}
+
+	erArray, err := getResultSet(ctx, bh)
+	if err != nil {
+		return false, err
+	}
+	return execResultArrayHasData(erArray), nil
+}
+
+func newQualifiedCloneTableName(dbName, tblName string, atTsExpr *tree.AtTimeStamp) tree.TableName {
+	return *tree.NewTableName(
+		tree.Identifier(tblName),
+		tree.ObjectNamePrefix{
+			SchemaName:     tree.Identifier(dbName),
+			ExplicitSchema: true,
+		},
+		atTsExpr,
+	)
 }
 
 func getOpAndToAccountId(
@@ -206,6 +256,11 @@ func handleCloneTable(
 		return
 	}
 
+	if stmt.CopyGrants && stmt.ToAccountOpt != nil {
+		err = moerr.NewInvalidInputNoCtx("COPY GRANTS cannot be used with TO ACCOUNT")
+		return
+	}
+
 	if snapshot == nil && opAccountId != toAccountId {
 		err = moerr.NewInternalErrorNoCtxf("clone table between different accounts need a snapshot")
 		return
@@ -214,6 +269,10 @@ func handleCloneTable(
 	fromAccountId = opAccountId
 	if snapshot != nil && snapshot.Tenant != nil {
 		fromAccountId = snapshot.Tenant.TenantID
+	}
+	if stmt.CopyGrants && fromAccountId != toAccountId {
+		err = moerr.NewInvalidInputNoCtx("COPY GRANTS cannot be used when cloning across accounts")
+		return
 	}
 
 	if stmt.SrcTable.SchemaName == "" {
@@ -261,11 +320,8 @@ func handleCloneTable(
 
 	ctx = defines.AttachAccountId(reqCtx, toAccountId)
 
-	sql := execCtx.input.sql
-	if stmt.ToAccountOpt != nil {
-		// create table to account x
-		sql, _, _ = strings.Cut(strings.ToLower(sql), " to account ")
-	}
+	var sql string
+	var dstTableExistedBeforeRestore bool
 
 	if snapshot == nil {
 		if snapshotTS, err = tryToIncreaseTxnPhysicalTS(
@@ -273,13 +329,37 @@ func handleCloneTable(
 		); err != nil {
 			return
 		}
+	}
+	sql = cloneTableRestoreSQL(stmt, snapshotTS)
 
-		sql, _ = strings.CutSuffix(sql, ";")
-		sql = sql + fmt.Sprintf(" {MO_TS = %d}", snapshotTS)
+	if stmt.CopyGrants && stmt.CreateTable.IfNotExists {
+		if dstTableExistedBeforeRestore, err = cloneTargetTableExists(
+			ctx,
+			bh,
+			stmt.CreateTable.Table.SchemaName.String(),
+			stmt.CreateTable.Table.ObjectName.String(),
+			toAccountId,
+		); err != nil {
+			return
+		}
 	}
 
 	if err = bh.ExecRestore(ctx, sql, opAccountId, toAccountId); err != nil {
 		return
+	}
+
+	if stmt.CopyGrants && !dstTableExistedBeforeRestore {
+		copyGrantsSnapshotTS := snapshotTS
+		if snapshot != nil && snapshot.TS != nil {
+			copyGrantsSnapshotTS = snapshot.TS.PhysicalTime
+		}
+		if err = copyTablePrivileges(ctx, ses, bh,
+			stmt.SrcTable.SchemaName.String(), stmt.SrcTable.ObjectName.String(),
+			stmt.CreateTable.Table.SchemaName.String(), stmt.CreateTable.Table.ObjectName.String(),
+			fromAccountId, toAccountId, copyGrantsSnapshotTS,
+		); err != nil {
+			return
+		}
 	}
 
 	receipt.srcDb = stmt.SrcTable.SchemaName.String()
@@ -300,8 +380,6 @@ func handleCloneTable(
 
 	return
 }
-
-var snapConditionRegex = regexp.MustCompile(`\{[^}]+}`)
 
 // create database x clone y {MO_TS, SNAPSHOT}
 // create database x clone y {MO_TS, SNAPSHOT} to account t
@@ -329,8 +407,7 @@ func handleCloneDatabaseWithSource(
 
 		ctx1 context.Context
 
-		snapCondition string
-		sortedViews   []string
+		sortedViews []string
 
 		snapshotTS int64
 		source     cloneDatabaseSource
@@ -372,9 +449,7 @@ func handleCloneDatabaseWithSource(
 		return
 	}
 
-	snapCondition = snapConditionRegex.FindString(execCtx.input.sql)
-
-	if len(snapCondition) == 0 {
+	if stmt.AtTsExpr == nil {
 		// consider the following example:
 		// (within a session)
 		//   ...
@@ -395,43 +470,30 @@ func handleCloneDatabaseWithSource(
 	}
 
 	cloneTable := func(dstDb, dstTbl, srcDb, srcTbl string) error {
-		sql := fmt.Sprintf(
-			"create table %s.%s clone %s.%s",
-			quoteIdentifierForSQL(dstDb),
-			quoteIdentifierForSQL(dstTbl),
-			quoteIdentifierForSQL(srcDb),
-			quoteIdentifierForSQL(srcTbl),
-		)
-
-		if len(snapCondition) != 0 {
-			sql = sql + " " + snapCondition
-		} else {
-			sql = sql + fmt.Sprintf(" {MO_TS = %d}", snapshotTS)
+		srcTable := newQualifiedCloneTableName(srcDb, srcTbl, stmt.AtTsExpr)
+		if stmt.AtTsExpr == nil && snapshotTS != 0 {
+			srcTable.AtTsExpr = newMoTimestampHint(snapshotTS)
 		}
-
-		if stmt.ToAccountOpt != nil {
-			sql = sql + fmt.Sprintf(" to account %s", quoteIdentifierForSQL(stmt.ToAccountOpt.AccountName.String()))
+		dstTable := newQualifiedCloneTableName(dstDb, dstTbl, nil)
+		cloneStmt := &tree.CloneTable{
+			SrcTable: srcTable,
+			CreateTable: tree.CreateTable{
+				Table:         dstTable,
+				LikeTableName: srcTable,
+				IsAsLike:      true,
+			},
+			ToAccountOpt: stmt.ToAccountOpt,
 		}
 
 		var (
 			receipt     cloneReceipt
-			cloneStmts  []tree.Statement
 			tempExecCtx = &ExecCtx{
 				reqCtx: reqCtx,
-				input:  &UserInput{sql: sql},
 			}
 		)
 
-		if cloneStmts, err = parsers.Parse(reqCtx, dialect.MYSQL, sql, 0); err != nil {
-			return err
-		}
-
-		defer func() {
-			cloneStmts[0].Free()
-		}()
-
 		if receipt, err = handleCloneTable(
-			tempExecCtx, ses, cloneStmts[0].(*tree.CloneTable), bh,
+			tempExecCtx, ses, cloneStmt, bh,
 		); err != nil {
 			return err
 		}

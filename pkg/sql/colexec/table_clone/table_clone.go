@@ -107,12 +107,11 @@ func (tc *TableClone) Reset(proc *process.Process, pipelineFailed bool, err erro
 }
 
 func (tc *TableClone) String(buf *bytes.Buffer) {
-	//TODO implement me
-	panic("implement me")
+	buf.WriteString("TableClone")
 }
 
 func (tc *TableClone) OpType() vm.OpType {
-	return 0
+	return vm.TableClone
 }
 
 func initRelAndReader(
@@ -160,12 +159,20 @@ func initRelAndReader(
 					return err
 				}
 
+				// A multi-table index (e.g. ivfflat: metadata/centroids/entries,
+				// hnsw: metadata/storage) has several IndexDefs that share one
+				// IndexName but differ by IndexAlgoTableType. Keying by IndexName
+				// alone collides, so only the last hidden table would survive in
+				// the map and be cloned. Disambiguate by IndexAlgoTableType; the
+				// (IndexName, IndexAlgoTableType) pair matches src<->dst.
+				key := pName + "." + idx.IndexName + "." + idx.IndexAlgoTableType
+
 				if idxReaderMap != nil {
-					idxReaderMap[pName+"."+idx.IndexName] = tmpReader
+					idxReaderMap[key] = tmpReader
 				}
 
 				if idxRelMap != nil {
-					idxRelMap[pName+"."+idx.IndexName] = tmpRel
+					idxRelMap[key] = tmpRel
 				}
 			}
 		}
@@ -187,14 +194,20 @@ func initRelAndReader(
 				return err
 			}
 
+			// See the partitioned branch above: a multi-table index shares one
+			// IndexName across its hidden tables (ivfflat metadata/centroids/
+			// entries), so key by (IndexName, IndexAlgoTableType) to avoid the
+			// collision that would clone only the last hidden table.
+			key := idx.IndexName + "." + idx.IndexAlgoTableType
+
 			if idxReaderMap != nil {
-				if idxReaderMap[idx.IndexName], err = disttae.NewTableMetaReader(ctx, tmpRel); err != nil {
+				if idxReaderMap[key], err = disttae.NewTableMetaReader(ctx, tmpRel); err != nil {
 					return err
 				}
 			}
 
 			if idxRelMap != nil {
-				idxRelMap[idx.IndexName] = tmpRel
+				idxRelMap[key] = tmpRel
 			}
 		}
 	}
@@ -216,8 +229,8 @@ func (tc *TableClone) Prepare(proc *process.Process) error {
 	txnMeta := proc.GetTxnOperator().Txn()
 	proc.GetTxnOperator().GetWorkspace().SetCloneTxn(txnMeta.SnapshotTS.PhysicalTime)
 
-	tc.dataObjBat = colexec.AllocCNS3ResultBat(false, false)
-	tc.tombstoneObjBat = colexec.AllocCNS3ResultBat(true, false)
+	tc.dataObjBat = colexec.AllocCNS3ResultBat(false)
+	tc.tombstoneObjBat = colexec.AllocCNS3ResultBat(true)
 
 	tc.srcRel = make(map[string]engine.Relation)
 	tc.srcReader = make(map[string]engine.Reader)
@@ -277,8 +290,7 @@ func (tc *TableClone) Prepare(proc *process.Process) error {
 	)
 
 	partitioned =
-		pSrv != nil &&
-			pSrv.Enabled() &&
+		pSrv.Enabled() &&
 			features.IsPartitioned(tc.Ctx.SrcTblDef.FeatureFlag)
 
 	// src tables

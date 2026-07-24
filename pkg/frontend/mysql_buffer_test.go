@@ -29,9 +29,12 @@ import (
 	"github.com/prashantv/gostub"
 	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 )
 
 func ReadPacketForTest(c *Conn) ([]byte, error) {
@@ -141,6 +144,102 @@ func generateRandomBytes(n int) []byte {
 	randomIndex := rand.Intn(len(data))
 	data[randomIndex] = 1
 	return data
+}
+
+func TestConnCountsCompletedOutputPackets(t *testing.T) {
+	_, conn := newTestConn(t, NewLeakCheckAllocator())
+	defer conn.Close()
+	ses := &Session{}
+	conn.SetSession(ses)
+
+	for range 2 {
+		assert.NoError(t, conn.BeginPacket())
+		assert.NoError(t, conn.Append([]byte("x")...))
+		assert.NoError(t, conn.FinishedPacket())
+	}
+	assert.NoError(t, conn.Flush())
+	assert.Equal(t, int64(2), ses.GetFlushPacketCnt())
+
+	assert.NoError(t, conn.Write([]byte{defines.OKHeader}))
+	assert.Equal(t, int64(3), ses.GetFlushPacketCnt())
+}
+
+func TestLegacyPacketCounterAliases(t *testing.T) {
+	ses := &Session{}
+	ses.CountFlushPackage(2)
+	ses.CountFlushPackage(3)
+	assert.Equal(t, int64(5), ses.GetFlushPacketCnt())
+	assert.Equal(t, int64(5), ses.GetFlushPacketCnt())
+}
+
+type partialWriteConn struct {
+	testConn
+	limit int
+}
+
+func (c *partialWriteConn) Write(buf []byte) (int, error) {
+	n := min(c.limit, len(buf))
+	c.data = append(c.data, buf[:n]...)
+	return n, io.ErrUnexpectedEOF
+}
+
+func TestConnCountsPartialWriteFacts(t *testing.T) {
+	underlying := &partialWriteConn{limit: 5}
+	sv, err := getSystemVariables("test/system_vars_config.toml")
+	assert.NoError(t, err)
+	setSessionAlloc("", NewLeakCheckAllocator())
+	conn, err := NewIOSession(underlying, config.NewParameterUnit(sv, nil, nil, nil), "")
+	assert.NoError(t, err)
+	defer conn.Close()
+	ses := &Session{}
+	conn.SetSession(ses)
+
+	data := append(makePacket([]byte("a"), 0), makePacket([]byte("b"), 1)...)
+	assert.ErrorIs(t, conn.WriteToConn(data), io.ErrUnexpectedEOF)
+	assert.Equal(t, 5, ses.GetOutputBytes())
+	assert.Equal(t, int64(1), ses.GetFlushPacketCnt())
+}
+
+func TestConnMeasuresOnlyPhysicalOutputWrite(t *testing.T) {
+	underlying := &partialWriteConn{limit: 5}
+	sv, err := getSystemVariables("test/system_vars_config.toml")
+	assert.NoError(t, err)
+	setSessionAlloc("", NewLeakCheckAllocator())
+	conn, err := NewIOSession(underlying, config.NewParameterUnit(sv, nil, nil, nil), "")
+	assert.NoError(t, err)
+	defer conn.Close()
+
+	tracker := new(responseOutputWaitTracker)
+	conn.setResponseOutputWaitTracker(tracker)
+	counter := new(perfcounter.CounterSet)
+	err = conn.withOutputCounter(counter, func() error {
+		return conn.WriteToConn([]byte("physical-write"))
+	})
+	assert.ErrorIs(t, err, io.ErrUnexpectedEOF)
+	assert.Positive(t, counter.ProtocolOutputWaitNS.Load())
+	assert.Equal(t, counter.ProtocolOutputWaitNS.Load(), tracker.totalNS.Load())
+	assert.Equal(t, tracker.totalNS.Load(), tracker.operatorNS.Load())
+	assert.Nil(t, conn.outputCounter.Load())
+	assert.Same(t, tracker, conn.responseOutputWait.Load())
+	conn.setResponseOutputWaitTracker(nil)
+}
+
+func TestConnMeasuresDelayedBufferedFlush(t *testing.T) {
+	underlying, conn := newTestConn(t, NewLeakCheckAllocator())
+	defer conn.Close()
+
+	tracker := new(responseOutputWaitTracker)
+	conn.setResponseOutputWaitTracker(tracker)
+	assert.NoError(t, conn.BeginPacket())
+	assert.NoError(t, conn.Append([]byte("buffered")...))
+	assert.NoError(t, conn.FinishedPacket())
+	assert.Empty(t, underlying.data)
+	assert.Zero(t, tracker.totalNS.Load())
+
+	assert.NoError(t, conn.Flush())
+	assert.NotEmpty(t, underlying.data)
+	assert.Positive(t, tracker.totalNS.Load())
+	assert.Zero(t, tracker.operatorNS.Load())
 }
 
 func TestMySQLProtocolRead(t *testing.T) {
@@ -911,6 +1010,213 @@ func Test_NewIOSessionFailed(t *testing.T) {
 	conn2 := conn.RawConn()
 	conn.UseConn(conn2)
 	conn.RawConn()
+}
+
+func TestNewIOSessionWithOptions(t *testing.T) {
+	const bufferSize = 16
+
+	sv, err := getSystemVariables("test/system_vars_config.toml")
+	require.NoError(t, err)
+	pu := config.NewParameterUnit(sv, nil, nil, nil)
+
+	t.Run("invalid buffer size", func(t *testing.T) {
+		conn, err := NewIOSessionWithOptions(
+			&testConn{},
+			pu,
+			"",
+			WithIOSessionBufferSize(HeaderLengthOfTheProtocol-1),
+		)
+		assert.Error(t, err)
+		assert.Nil(t, conn)
+	})
+
+	t.Run("invalid allowed packet size", func(t *testing.T) {
+		conn, err := NewIOSessionWithOptions(
+			&testConn{},
+			pu,
+			"",
+			WithIOSessionAllowedPacketSize(0),
+		)
+		assert.Error(t, err)
+		assert.Nil(t, conn)
+	})
+
+	t.Run("default is backward compatible", func(t *testing.T) {
+		allocator := NewLeakCheckAllocator()
+		conn, err := NewIOSessionWithOptions(
+			&testConn{},
+			pu,
+			"",
+			WithIOSessionAllocator(allocator),
+		)
+		require.NoError(t, err)
+		assert.Equal(t, fixBufferSize, conn.fixBuf.BufferLen())
+		assert.Equal(t, uint64(fixBufferSize), allocator.allocated)
+		assert.NoError(t, conn.Close())
+		assert.True(t, allocator.CheckBalance())
+	})
+
+	t.Run("small buffer reads exact and larger packets", func(t *testing.T) {
+		for _, payloadSize := range []int{bufferSize - HeaderLengthOfTheProtocol, 3 * bufferSize} {
+			t.Run(fmt.Sprintf("payload-%d", payloadSize), func(t *testing.T) {
+				allocator := NewLeakCheckAllocator()
+				payload := bytes.Repeat([]byte{byte(payloadSize)}, payloadSize)
+				rawConn := &testConn{data: makePacket(payload, 0)}
+				conn, err := NewIOSessionWithOptions(
+					rawConn,
+					pu,
+					"",
+					WithIOSessionBufferSize(bufferSize),
+					WithIOSessionAllocator(allocator),
+				)
+				require.NoError(t, err)
+				actual, err := conn.Read()
+				assert.NoError(t, err)
+				assert.Equal(t, payload, actual)
+				assert.Equal(t, bufferSize, conn.fixBuf.BufferLen())
+				assert.Equal(t, uint64(bufferSize), allocator.allocated)
+				assert.NoError(t, conn.Close())
+				assert.True(t, allocator.CheckBalance())
+			})
+		}
+	})
+
+	t.Run("dynamic write buffer is released on reset", func(t *testing.T) {
+		allocator := NewLeakCheckAllocator()
+		conn, err := NewIOSessionWithOptions(
+			&testConn{},
+			pu,
+			"",
+			WithIOSessionBufferSize(bufferSize),
+			WithIOSessionAllocator(allocator),
+		)
+		require.NoError(t, err)
+		assert.NoError(t, conn.BeginPacket())
+		assert.NoError(t, conn.Append(bytes.Repeat([]byte{1}, 3*bufferSize)...))
+		assert.Greater(t, allocator.allocated-allocator.freed, uint64(bufferSize))
+
+		conn.Reset()
+		assert.Equal(t, uint64(bufferSize), allocator.allocated-allocator.freed)
+		assert.NoError(t, conn.Close())
+		assert.True(t, allocator.CheckBalance())
+	})
+
+	t.Run("oversized packet is rejected without dynamic retention", func(t *testing.T) {
+		allocator := NewLeakCheckAllocator()
+		payload := bytes.Repeat([]byte{1}, bufferSize+1)
+		conn, err := NewIOSessionWithOptions(
+			&testConn{data: makePacket(payload, 0)},
+			pu,
+			"",
+			WithIOSessionBufferSize(bufferSize),
+			WithIOSessionAllowedPacketSize(bufferSize),
+			WithIOSessionAllocator(allocator),
+		)
+		require.NoError(t, err)
+		actual, err := conn.Read()
+		assert.Error(t, err)
+		assert.Nil(t, actual)
+		assert.Equal(t, uint64(bufferSize), allocator.allocated-allocator.freed)
+		assert.NoError(t, conn.Close())
+		assert.True(t, allocator.CheckBalance())
+	})
+
+	t.Run("load local packet limit is enforced before payload allocation", func(t *testing.T) {
+		for _, payloadSize := range []int{bufferSize, bufferSize + 1} {
+			t.Run(fmt.Sprintf("payload-%d", payloadSize), func(t *testing.T) {
+				allocator := NewLeakCheckAllocator()
+				payload := bytes.Repeat([]byte{1}, payloadSize)
+				rawConn := &testConn{data: makePacket(payload, 0)}
+				conn, err := NewIOSessionWithOptions(
+					rawConn,
+					pu,
+					"",
+					WithIOSessionBufferSize(bufferSize),
+					WithIOSessionAllowedPacketSize(bufferSize),
+					WithIOSessionAllocator(allocator),
+				)
+				require.NoError(t, err)
+
+				actual, err := conn.ReadLoadLocalPacket()
+				if payloadSize == bufferSize {
+					assert.NoError(t, err)
+					assert.Equal(t, payload, actual)
+					assert.Empty(t, rawConn.data)
+					assert.Equal(t, uint64(2*bufferSize), allocator.allocated-allocator.freed)
+				} else {
+					assert.Error(t, err)
+					assert.Nil(t, actual)
+					assert.Equal(t, payload, rawConn.data)
+					assert.Equal(t, uint64(bufferSize), allocator.allocated-allocator.freed)
+				}
+				assert.NoError(t, conn.Close())
+				assert.True(t, allocator.CheckBalance())
+			})
+		}
+	})
+
+	t.Run("oversized load local packet releases the reusable buffer", func(t *testing.T) {
+		allocator := NewLeakCheckAllocator()
+		allowedPayload := bytes.Repeat([]byte{1}, bufferSize)
+		oversizedPayload := bytes.Repeat([]byte{2}, bufferSize+1)
+		rawConn := &testConn{data: append(
+			makePacket(allowedPayload, 0),
+			makePacket(oversizedPayload, 1)...,
+		)}
+		conn, err := NewIOSessionWithOptions(
+			rawConn,
+			pu,
+			"",
+			WithIOSessionBufferSize(bufferSize),
+			WithIOSessionAllowedPacketSize(bufferSize),
+			WithIOSessionAllocator(allocator),
+		)
+		require.NoError(t, err)
+
+		actual, err := conn.ReadLoadLocalPacket()
+		require.NoError(t, err)
+		assert.Equal(t, allowedPayload, actual)
+		assert.Equal(t, uint64(2*bufferSize), allocator.allocated-allocator.freed)
+
+		actual, err = conn.ReadLoadLocalPacket()
+		assert.Error(t, err)
+		assert.Nil(t, actual)
+		assert.Nil(t, conn.loadLocalBuf.data)
+		assert.Equal(t, oversizedPayload, rawConn.data)
+		assert.Equal(t, uint64(bufferSize), allocator.allocated-allocator.freed)
+		assert.NoError(t, conn.Close())
+		assert.True(t, allocator.CheckBalance())
+	})
+
+	t.Run("shared allocator bounds aggregate session buffers", func(t *testing.T) {
+		allocator := NewSessionAllocator(&config.ParameterUnit{
+			SV: &config.FrontendParameters{GuestMmuLimitation: 2 * bufferSize},
+		})
+		newSession := func() (*Conn, error) {
+			return NewIOSessionWithOptions(
+				&testConn{},
+				pu,
+				"",
+				WithIOSessionBufferSize(bufferSize),
+				WithIOSessionAllocator(allocator),
+			)
+		}
+
+		first, err := newSession()
+		require.NoError(t, err)
+		second, err := newSession()
+		require.NoError(t, err)
+		third, err := newSession()
+		assert.Error(t, err)
+		assert.Nil(t, third)
+
+		require.NoError(t, first.Close())
+		third, err = newSession()
+		require.NoError(t, err)
+		require.NotNil(t, third)
+		require.NoError(t, second.Close())
+		require.NoError(t, third.Close())
+	})
 }
 
 func testDefer1(t *testing.T) {

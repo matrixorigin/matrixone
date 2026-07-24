@@ -42,6 +42,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	icebergapi "github.com/matrixorigin/matrixone/pkg/iceberg/api"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/partitionservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -50,6 +51,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
+	icebergsql "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -567,6 +569,7 @@ const (
 	SaveQueryResult    = "save_query_result"
 	QueryResultMaxsize = "query_result_maxsize"
 	QueryResultTimeout = "query_result_timeout"
+	ProtectedDatabases = "protected_databases"
 )
 
 type objectType int
@@ -957,45 +960,53 @@ var (
 	}
 	// predefined tables of the database mo_catalog in every account
 	predefinedTables = map[string]int8{
-		"mo_database":                 0,
-		"mo_tables":                   0,
-		"mo_columns":                  0,
-		"mo_account":                  0,
-		"mo_user":                     0,
-		"mo_role":                     0,
-		"mo_user_grant":               0,
-		"mo_role_grant":               0,
-		"mo_role_privs":               0,
-		"mo_user_defined_function":    0,
-		"mo_stored_procedure":         0,
-		"mo_mysql_compatibility_mode": 0,
-		catalog.MOAutoIncrTable:       0,
-		"mo_indexes":                  0,
-		"mo_table_partitions":         0,
-		"mo_pubs":                     0,
-		"mo_stages":                   0,
-		"mo_sessions":                 0,
-		"mo_configurations":           0,
-		"mo_locks":                    0,
-		"mo_variables":                0,
-		"mo_transactions":             0,
-		"mo_cache":                    0,
-		"mo_foreign_keys":             0,
-		"mo_snapshots":                0,
-		"mo_subs":                     0,
-		"mo_shards":                   0,
-		"mo_shards_metadata":          0,
-		"mo_cdc_task":                 0,
-		"mo_cdc_watermark":            0,
-		catalog.MO_TABLE_STATS:        0,
-		catalog.MO_ACCOUNT_LOCK:       0,
-		catalog.MO_MERGE_SETTINGS:     0,
-		catalog.MO_ISCP_LOG:           0,
-		catalog.MO_INDEX_UPDATE:       0,
-		catalog.MO_BRANCH_METADATA:    0,
-		catalog.MO_FEATURE_LIMIT:      0,
-		catalog.MO_FEATURE_REGISTRY:   0,
-		catalog.MO_ROLE_RULE:          0,
+		"mo_database":                   0,
+		"mo_tables":                     0,
+		"mo_columns":                    0,
+		"mo_account":                    0,
+		"mo_user":                       0,
+		"mo_role":                       0,
+		"mo_user_grant":                 0,
+		"mo_role_grant":                 0,
+		"mo_role_privs":                 0,
+		"mo_user_defined_function":      0,
+		"mo_stored_procedure":           0,
+		"mo_mysql_compatibility_mode":   0,
+		catalog.MOAutoIncrTable:         0,
+		"mo_indexes":                    0,
+		"mo_table_partitions":           0,
+		"mo_pubs":                       0,
+		"mo_stages":                     0,
+		"mo_sessions":                   0,
+		"mo_configurations":             0,
+		"mo_locks":                      0,
+		"mo_variables":                  0,
+		"mo_transactions":               0,
+		"mo_cache":                      0,
+		"mo_foreign_keys":               0,
+		"mo_snapshots":                  0,
+		"mo_subs":                       0,
+		"mo_shards":                     0,
+		"mo_shards_metadata":            0,
+		"mo_cdc_task":                   0,
+		"mo_cdc_watermark":              0,
+		catalog.MO_TABLE_STATS:          0,
+		catalog.MO_ACCOUNT_LOCK:         0,
+		catalog.MO_MERGE_SETTINGS:       0,
+		catalog.MO_ISCP_LOG:             0,
+		catalog.MO_INDEX_UPDATE:         0,
+		catalog.MO_BRANCH_METADATA:      0,
+		catalog.MO_FEATURE_LIMIT:        0,
+		catalog.MO_FEATURE_REGISTRY:     0,
+		catalog.MO_ROLE_RULE:            0,
+		icebergsql.TableCatalogs:        0,
+		icebergsql.TablePrincipalMap:    0,
+		icebergsql.TableResidencyPolicy: 0,
+		icebergsql.TableTables:          0,
+		icebergsql.TableRefs:            0,
+		icebergsql.TablePublishJobs:     0,
+		icebergsql.TableOrphanFiles:     0,
+		icebergsql.TableMaintenanceJobs: 0,
 	}
 	createDbInformationSchemaSql = "create database information_schema;"
 	createAutoTableSql           = MoCatalogMoAutoIncrTableDDL
@@ -1046,6 +1057,14 @@ var (
 		MoCatalogFeatureRegistryDDL,
 		MoCatalogFeatureRegistryInitData,
 		MoCatalogMoRoleRuleDDL,
+		icebergsql.CatalogsDDL,
+		icebergsql.PrincipalMapDDL,
+		icebergsql.ResidencyPolicyDDL,
+		icebergsql.TablesDDL,
+		icebergsql.RefsDDL,
+		icebergsql.PublishJobsDDL,
+		icebergsql.OrphanFilesDDL,
+		icebergsql.MaintenanceJobsDDL,
 	}
 
 	// drop tables for the tenant
@@ -1066,6 +1085,16 @@ var (
 		`drop view if exists mo_catalog.mo_cache;`,
 		`drop table if exists mo_catalog.mo_snapshots;`,
 		`drop table if exists mo_catalog.mo_role_rule;`,
+	}
+	dropIcebergSqls = []string{
+		`drop table if exists mo_catalog.mo_iceberg_refs;`,
+		`drop table if exists mo_catalog.mo_iceberg_maintenance_jobs;`,
+		`drop table if exists mo_catalog.mo_iceberg_orphan_files;`,
+		`drop table if exists mo_catalog.mo_iceberg_publish_jobs;`,
+		`drop table if exists mo_catalog.mo_iceberg_tables;`,
+		`drop table if exists mo_catalog.mo_iceberg_residency_policy;`,
+		`drop table if exists mo_catalog.mo_iceberg_principal_map;`,
+		`drop table if exists mo_catalog.mo_iceberg_catalogs;`,
 	}
 	dropMoMysqlCompatibilityModeSql = `drop table if exists mo_catalog.mo_mysql_compatibility_mode;`
 	dropAutoIcrColSql               = fmt.Sprintf("drop table if exists mo_catalog.`%s`;", catalog.MOAutoIncrTable)
@@ -1106,7 +1135,8 @@ var (
 			comment,
 			character_set_client,
 			collation_connection,
-			database_collation) values ("%s",%d,'%s',"%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s");`
+			database_collation,
+			sql_mode) values ("%s",%d,'%s',"%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s");`
 
 	updateMoUserDefinedFunctionFormat = `update mo_catalog.mo_user_defined_function
 			set owner = %d, 
@@ -1121,7 +1151,8 @@ var (
 			    comment = '%s',
 			    character_set_client = '%s',
 			    collation_connection = '%s',
-			    database_collation = '%s'
+			    database_collation = '%s',
+			    sql_mode = '%s'
 			where function_id = %d;`
 
 	initMoStoredProcedureFormat = `insert into mo_catalog.mo_stored_procedure(
@@ -1129,6 +1160,7 @@ var (
 		args,
 		lang,
 		body,
+		sql_mode,
 		db,
 		definer,
 		modified_time,
@@ -1138,13 +1170,14 @@ var (
 		comment,
 		character_set_client,
 		collation_connection,
-		database_collation) values ('%s','%s','%s','%s','%s','%s','%s','%s','%s','%s','%s','%s','%s', '%s');`
+		database_collation) values ('%s','%s','%s','%s','%s','%s','%s','%s','%s','%s','%s','%s','%s','%s', '%s');`
 
 	updateMoStoredProcedureFormat = `update mo_catalog.mo_stored_procedure
 			set 
 			    args = '%s',
 				lang = '%s',
 			    body = '%s',
+				sql_mode = '%s',
 				db = '%s',
 			    definer = '%s',
 			    modified_time = '%s',
@@ -1343,11 +1376,10 @@ const (
        									    and privilege_id = %d 
        									    and privilege_level = "%s";`
 
-	checkDatabaseFormat = `select dat_id from mo_catalog.mo_database where datname = "%s";`
+	checkDatabaseFormat          = `select dat_id from mo_catalog.mo_database where datname = "%s";`
+	checkDatabaseByAccountFormat = `select dat_id from mo_catalog.mo_database where datname = "%s" and account_id = %d;`
 
 	checkDatabaseWithOwnerFormat = `select dat_id, owner from mo_catalog.mo_database where datname = "%s" and account_id = %d;`
-
-	checkDatabaseTableFormat = `select rel_logical_id from mo_catalog.mo_tables where relname = "%s" and reldatabase = "%s" and account_id = %d;`
 
 	checkDatabaseViewFormat = `select rel_logical_id from mo_catalog.mo_tables where relname = "%s" and reldatabase = "%s" and relkind = "v" and account_id = %d;`
 
@@ -1493,7 +1525,7 @@ const (
 				where rp.obj_id = 0
 					and rp.obj_type = "%s"
 					and rp.role_id = %d
-					and rp.privilege_id = %d
+					and rp.privilege_id in (%s)
 					and rp.privilege_level = "%s";`
 
 	getUserRolesExpectPublicRoleFormat = `select role.role_id, role.role_name 
@@ -1587,7 +1619,7 @@ const (
 
 	getAccountIdAndStatusFormat = `select account_id,status from mo_catalog.mo_account where account_name = '%s';`
 
-	fetchSqlOfSpFormat = `select lang, body, args from mo_catalog.mo_stored_procedure where name = '%s' and db = '%s' order by proc_id;`
+	fetchSqlOfSpFormat = `select lang, body, args, sql_mode from mo_catalog.mo_stored_procedure where name = '%s' and db = '%s' order by proc_id;`
 
 	getTableColumnDefFormat = `select attname, atttyp, attnum, attnotnull, att_default, att_is_auto_increment, att_is_hidden from mo_catalog.mo_columns where account_id = %d and att_database = '%s' and att_relname = '%s' order by attnum;`
 )
@@ -2035,7 +2067,42 @@ func getSqlForCheckRoleHasDatabaseLevelForDatabase(ctx context.Context, roleId i
 }
 
 func getSqlForCheckRoleHasAccountLevelForStar(roleId int64, privId PrivilegeType) string {
-	return fmt.Sprintf(checkRoleHasAccountLevelForStarFormat, objectTypeAccount, roleId, privId, privilegeLevelStar)
+	return getSqlForCheckRoleHasAccountLevelForStarWithSysScope(roleId, privId, false)
+}
+
+func getSqlForCheckRoleHasAccountLevelForStarWithSysScope(roleId int64, privId PrivilegeType, includeSysScopeAccountAll bool) string {
+	return fmt.Sprintf(checkRoleHasAccountLevelForStarFormat, objectTypeAccount, roleId, privilegeTypeListSQL(objectTypeAccount, privId, includeSysScopeAccountAll), privilegeLevelStar)
+}
+
+func privilegeTypeWithCoveringPrivileges(objTyp objectType, privId PrivilegeType) []PrivilegeType {
+	return privilegeTypeWithCoveringPrivilegesForScope(objTyp, privId, false)
+}
+
+func privilegeTypeWithCoveringPrivilegesForScope(objTyp objectType, privId PrivilegeType, includeSysScopeAccountAll bool) []PrivilegeType {
+	if objTyp != objectTypeAccount {
+		return []PrivilegeType{privId}
+	}
+	if privId == PrivilegeTypeAccountAll || privId == PrivilegeTypeAccountOwnership {
+		return []PrivilegeType{privId}
+	}
+	switch privId.Scope() {
+	case PrivilegeScopeAccount:
+		return []PrivilegeType{privId, PrivilegeTypeAccountAll}
+	case PrivilegeScopeSys:
+		if includeSysScopeAccountAll {
+			return []PrivilegeType{privId, PrivilegeTypeAccountAll}
+		}
+	}
+	return []PrivilegeType{privId}
+}
+
+func privilegeTypeListSQL(objTyp objectType, privId PrivilegeType, includeSysScopeAccountAll bool) string {
+	privs := privilegeTypeWithCoveringPrivilegesForScope(objTyp, privId, includeSysScopeAccountAll)
+	parts := make([]string, 0, len(privs))
+	for _, p := range privs {
+		parts = append(parts, fmt.Sprintf("%d", p))
+	}
+	return strings.Join(parts, ",")
 }
 
 func getSqlForgetUserRolesExpectPublicRole(pRoleId int, userId uint32) string {
@@ -2054,6 +2121,18 @@ func getSqlForCheckDatabase(ctx context.Context, dbName string) (string, error) 
 	return fmt.Sprintf(checkDatabaseFormat, dbName), nil
 }
 
+func getSqlForCheckDatabaseByAccount(ctx context.Context, dbName string) (string, error) {
+	err := inputNameIsInvalid(ctx, dbName)
+	if err != nil {
+		return "", err
+	}
+	accountID, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(checkDatabaseByAccountFormat, dbName, accountID), nil
+}
+
 func getSqlForCheckDatabaseWithOwner(ctx context.Context, dbName string, accountId int64) (string, error) {
 	err := inputNameIsInvalid(ctx, dbName)
 	if err != nil {
@@ -2067,12 +2146,6 @@ func getSqlForCheckDatabaseTable(
 	dbName string,
 	tableName string,
 ) (string, error) {
-
-	err := inputNameIsInvalid(ctx, dbName, tableName)
-	if err != nil {
-		return "", err
-	}
-
 	var (
 		account uint32
 	)
@@ -2083,9 +2156,31 @@ func getSqlForCheckDatabaseTable(
 		return "", moerr.NewInternalErrorNoCtx("no account id found in the ctx")
 	}
 
-	// we need the account id here to filter out the same dbName and tableName that exist in the
-	// different accounts.
-	return fmt.Sprintf(checkDatabaseTableFormat, tableName, dbName, account), nil
+	return getSqlForCheckDatabaseTableWithSnapshot(ctx, dbName, tableName, account, 0)
+}
+
+func getSqlForCheckDatabaseTableWithSnapshot(
+	ctx context.Context,
+	dbName string,
+	tableName string,
+	account uint32,
+	snapshotTS int64,
+) (string, error) {
+	err := inputNameIsInvalid(ctx, dbName, tableName)
+	if err != nil {
+		return "", err
+	}
+
+	snapshotSpec := ""
+	if snapshotTS != 0 {
+		snapshotSpec = fmt.Sprintf(" {MO_TS = %d}", snapshotTS)
+	}
+
+	// The account id disambiguates identical database/table names across tenants.
+	return fmt.Sprintf(
+		`select rel_logical_id from mo_catalog.mo_tables%s where relname = "%s" and reldatabase = "%s" and account_id = %d;`,
+		snapshotSpec, tableName, dbName, account,
+	), nil
 }
 
 func getSqlForCheckDatabaseView(
@@ -2354,6 +2449,10 @@ type privilege struct {
 	canExecInRestricted bool
 	// can execute in password expired status
 	canExecInPasswordExpired bool
+	needMatchedRole          bool
+	matchedRoleID            int64
+	// databases that may be written by statement-level DDL or account/database operations
+	writeDatabaseTargets []string
 }
 
 func (p *privilege) objectType() objectType {
@@ -2570,9 +2669,13 @@ type privilegeCache struct {
 func (pc *privilegeCache) has(objTyp objectType, plt privilegeLevelType, dbName, tableName string, priv PrivilegeType) bool {
 	pc.total.Add(1)
 	privSet := pc.getPrivilegeSet(objTyp, plt, dbName, tableName)
-	if privSet != nil && privSet.Contains(priv) {
-		pc.hit.Add(1)
-		return true
+	if privSet != nil {
+		for _, p := range privilegeTypeWithCoveringPrivileges(objTyp, priv) {
+			if privSet.Contains(p) {
+				pc.hit.Add(1)
+				return true
+			}
+		}
 	}
 	return false
 }
@@ -3224,7 +3327,7 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *alterAccount) (err er
 	var accountExist bool
 	var accountStatus string
 	account := ses.GetTenantInfo()
-	if !(account.IsSysTenant() && account.IsMoAdminRole()) {
+	if !account.IsSysTenant() {
 		return moerr.NewInternalErrorf(ctx, "tenant %s user %s role %s do not have the privilege to alter the account",
 			account.GetTenant(), account.GetUser(), account.GetDefaultRole())
 	}
@@ -3498,21 +3601,15 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *alterAccount) (err er
 	return err
 }
 
-// doSetSecondaryRoleAll set the session role of the user with smallness role_id
+// doSetSecondaryRoleAll validates user role metadata before enabling all secondary roles.
+// The current primary role must not change; SET SECONDARY ROLE ALL only affects secondary roles.
 func doSetSecondaryRoleAll(ctx context.Context, ses *Session) (err error) {
 	var sql string
 	var userId uint32
-	var erArray []ExecResult
-	var roleId int64
-	var roleName string
 
 	account := ses.GetTenantInfo()
 	// get current user_id
 	userId = account.GetUserID()
-
-	// init role_id and role_name
-	roleId = publicRoleID
-	roleName = publicRoleName
 
 	// step1:get all roles expect public
 	bh := ses.GetBackgroundExec(ctx)
@@ -3533,26 +3630,7 @@ func doSetSecondaryRoleAll(ctx context.Context, ses *Session) (err error) {
 		return err
 	}
 
-	erArray, err = getResultSet(ctx, bh)
-	if err != nil {
-		return err
-	}
-	if execResultArrayHasData(erArray) {
-		roleId, err = erArray[0].GetInt64(ctx, 0, 0)
-		if err != nil {
-			return err
-		}
-
-		roleName, err = erArray[0].GetString(ctx, 0, 1)
-		if err != nil {
-			return err
-		}
-	}
-
-	// step2 : switch the default role and role id;
-	account.SetDefaultRoleID(uint32(roleId))
-	account.SetDefaultRole(roleName)
-
+	_, err = getResultSet(ctx, bh)
 	return err
 }
 
@@ -3649,6 +3727,7 @@ func doSwitchRole(ctx context.Context, ses *Session, sr *tree.SetRole) (err erro
 		account.SetDefaultRole(sr.Role.UserName)
 		// then, reset secondary role to none
 		account.SetUseSecondaryRole(false)
+		ses.InvalidatePrivilegeCache()
 
 		return err
 	}
@@ -4192,6 +4271,14 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 			}
 		}
 
+		for _, sql = range dropIcebergSqls {
+			ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, sql)
+			rtnErr = bh.Exec(deleteCtx, sql)
+			if rtnErr != nil {
+				return rtnErr
+			}
+		}
+
 		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, getSubsSql)
 		// alter sub_account field in mo_pubs which contains accountName
 		subInfos, rtnErr := getSubInfosFromSub(deleteCtx, bh, "")
@@ -4327,6 +4414,12 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 		return rtnErr
 	}
 
+	// The whole account is being removed, so cross-database foreign key
+	// metadata does not need to be rewritten while each database is dropped.
+	// Rewriting it can create a delete+insert catalog pair for a table in a
+	// database that will be dropped later in this transaction.
+	ctx = context.WithValue(ctx, defines.IgnoreForeignKey{}, true)
+
 	// disable foreign key checks
 	ctx = context.WithValue(ctx, defines.DisableFkCheck{}, true)
 
@@ -4410,6 +4503,7 @@ func postProcessCdc(
 			task.TaskStatus_CancelRequested,
 			targetAccountID,
 			"",
+			false,
 			ses.GetService(),
 			taskservice.WithAccountID(taskservice.EQ, uint32(targetAccountID)),
 			taskservice.WithTaskType(taskservice.EQ, task.TaskType_CreateCdc.String()),
@@ -4420,6 +4514,7 @@ func postProcessCdc(
 			task.TaskStatus_PauseRequested,
 			targetAccountID,
 			"",
+			false,
 			ses.GetService(),
 			taskservice.WithAccountID(taskservice.EQ, uint32(targetAccountID)),
 			taskservice.WithTaskType(taskservice.EQ, task.TaskType_CreateCdc.String()),
@@ -4430,6 +4525,7 @@ func postProcessCdc(
 			task.TaskStatus_ResumeRequested,
 			targetAccountID,
 			"",
+			false,
 			ses.GetService(),
 			taskservice.WithAccountID(taskservice.EQ, uint32(targetAccountID)),
 			taskservice.WithTaskType(taskservice.EQ, task.TaskType_CreateCdc.String()),
@@ -5132,6 +5228,139 @@ func getDatabaseOrTableId(ctx context.Context, bh BackgroundExec, isDb bool, dbN
 	} else {
 		return 0, moerr.NewInternalErrorf(ctx, `there is no table "%s" in database "%s"`, tableName, dbName)
 	}
+}
+
+func copyTablePrivileges(
+	ctx context.Context,
+	ses *Session,
+	bh BackgroundExec,
+	srcDB, srcTable, dstDB, dstTable string,
+	srcAccountID, dstAccountID uint32,
+	snapshotTS int64,
+) error {
+	srcCtx := defines.AttachAccountId(ctx, srcAccountID)
+	dstCtx := defines.AttachAccountId(ctx, dstAccountID)
+
+	srcObjID, err := getTableIdWithSnapshot(srcCtx, bh, srcDB, srcTable, srcAccountID, snapshotTS)
+	if err != nil {
+		return err
+	}
+	dstObjID, err := getTableIdWithSnapshot(dstCtx, bh, dstDB, dstTable, dstAccountID, 0)
+	if err != nil {
+		return err
+	}
+
+	snapshotSpec := ""
+	if snapshotTS != 0 {
+		snapshotSpec = fmt.Sprintf(" {MO_TS = %d}", snapshotTS)
+	}
+	sql := fmt.Sprintf(
+		`select role_id, role_name, privilege_id, privilege_name, privilege_level, with_grant_option
+		 from mo_catalog.mo_role_privs%s
+		 where obj_type = "%s" and obj_id = %d
+		 order by role_id, privilege_id, privilege_level;`,
+		snapshotSpec, objectTypeTable.String(), srcObjID,
+	)
+	bh.ClearExecResultSet()
+	if err = bh.Exec(srcCtx, sql); err != nil {
+		return err
+	}
+
+	erArray, err := getResultSet(srcCtx, bh)
+	if err != nil {
+		return err
+	}
+	if !execResultArrayHasData(erArray) {
+		return nil
+	}
+
+	var operationUserID int64
+	if account := ses.GetTenantInfo(); account != nil {
+		operationUserID = int64(account.GetUserID())
+	} else {
+		operationUserID = int64(defines.GetUserId(ctx))
+	}
+
+	for row := uint64(0); row < erArray[0].GetRowCount(); row++ {
+		roleID, err := erArray[0].GetInt64(ctx, row, 0)
+		if err != nil {
+			return err
+		}
+		roleName, err := erArray[0].GetString(ctx, row, 1)
+		if err != nil {
+			return err
+		}
+		privilegeID, err := erArray[0].GetInt64(ctx, row, 2)
+		if err != nil {
+			return err
+		}
+		privilegeName, err := erArray[0].GetString(ctx, row, 3)
+		if err != nil {
+			return err
+		}
+		privilegeLevel, err := erArray[0].GetString(ctx, row, 4)
+		if err != nil {
+			return err
+		}
+		withGrantOptionStr, err := erArray[0].GetString(ctx, row, 5)
+		if err != nil {
+			return err
+		}
+		withGrantOption, err := strconv.ParseBool(strings.TrimSpace(withGrantOptionStr))
+		if err != nil {
+			return moerr.NewInvalidInputNoCtxf("invalid with_grant_option value %q", withGrantOptionStr)
+		}
+
+		insertSQL := fmt.Sprintf(
+			insertRolePrivsFormat,
+			roleID,
+			roleName,
+			objectTypeTable.String(),
+			dstObjID,
+			privilegeID,
+			privilegeName,
+			privilegeLevel,
+			operationUserID,
+			types.CurrentTimestamp().String2(time.UTC, 0),
+			withGrantOption,
+		)
+		bh.ClearExecResultSet()
+		if err = bh.Exec(dstCtx, insertSQL); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func getTableIdWithSnapshot(
+	ctx context.Context,
+	bh BackgroundExec,
+	dbName, tableName string,
+	accountID uint32,
+	snapshotTS int64,
+) (int64, error) {
+	sql, err := getSqlForCheckDatabaseTableWithSnapshot(ctx, dbName, tableName, accountID, snapshotTS)
+	if err != nil {
+		return 0, err
+	}
+	bh.ClearExecResultSet()
+	if err = bh.Exec(ctx, sql); err != nil {
+		return 0, err
+	}
+
+	erArray, err := getResultSet(ctx, bh)
+	if err != nil {
+		return 0, err
+	}
+	if execResultArrayHasData(erArray) {
+		id, err := erArray[0].GetInt64(ctx, 0, 0)
+		if err != nil {
+			return 0, err
+		}
+		return id, nil
+	}
+	return 0, moerr.NewInternalErrorf(ctx, `there is no table "%s" in database "%s"`, tableName, dbName)
 }
 
 func getViewId(ctx context.Context, bh BackgroundExec, dbName, viewName string) (int64, error) {
@@ -6033,7 +6262,31 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 	writeDatabaseAndTableDirectly := false
 	var clusterTable bool
 	var clusterTableOperation clusterTableOperationType
+	needMatchedRole := false
 	dbName := ""
+	writeDatabaseTargets := make([]string, 0, 2)
+	appendWriteTableNameDatabaseName := func(name *tree.TableName) {
+		if name != nil {
+			writeDatabaseTargets = append(writeDatabaseTargets, string(name.SchemaName))
+		}
+	}
+	appendWriteTableNamesDatabaseNames := func(names tree.TableNames) {
+		for _, name := range names {
+			appendWriteTableNameDatabaseName(name)
+		}
+	}
+	writeFunctionNameDatabaseName := func(name *tree.FunctionName) string {
+		if name == nil {
+			return ""
+		}
+		return string(name.Name.SchemaName)
+	}
+	writeProcedureNameDatabaseName := func(name *tree.ProcedureName) string {
+		if name == nil {
+			return ""
+		}
+		return string(name.Name.SchemaName)
+	}
 	switch st := stmt.(type) {
 	case *tree.CreateAccount:
 		typs = append(typs, PrivilegeTypeCreateAccount)
@@ -6042,10 +6295,13 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 	case *tree.AlterAccount:
 		typs = append(typs, PrivilegeTypeAlterAccount)
 	case *tree.UpgradeStatement:
-		typs = append(typs, PrivilegeTypeUpgradeAccount)
-		objType = objectTypeNone
-		kind = privilegeKindSpecial
-		special = specialTagAdmin
+		if st.Target != nil && st.Target.IsALLAccount {
+			objType = objectTypeNone
+			kind = privilegeKindSpecial
+			special = specialTagAdmin
+		} else {
+			typs = append(typs, PrivilegeTypeUpgradeAccount)
+		}
 		canExecInRestricted = true
 	case *tree.CreateUser:
 		if st.Role == nil {
@@ -6118,10 +6374,17 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		special = specialTagAdmin
 	case *tree.CreateDatabase:
 		typs = append(typs, PrivilegeTypeCreateDatabase, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership*/)
+		needMatchedRole = true
+		writeDatabaseTargets = append(writeDatabaseTargets, string(st.Name))
 	case *tree.DropDatabase:
 		typs = append(typs, PrivilegeTypeDropDatabase, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership*/)
 		writeDatabaseAndTableDirectly = true
 		dbName = string(st.Name)
+		writeDatabaseTargets = append(writeDatabaseTargets, string(st.Name))
+	case *tree.CreateIcebergCatalog, *tree.AlterIcebergCatalog, *tree.DropIcebergCatalog:
+		objType = objectTypeNone
+		kind = privilegeKindSpecial
+		special = specialTagAdmin
 	case *tree.ShowDatabases:
 		typs = append(typs, PrivilegeTypeShowDatabases, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership*/)
 		canExecInRestricted = true
@@ -6139,7 +6402,9 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 	case *tree.CreateTable:
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeCreateTable, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
+		needMatchedRole = true
 		writeDatabaseAndTableDirectly = true
+		appendWriteTableNameDatabaseName(&st.Table)
 		if st.IsClusterTable {
 			clusterTable = true
 			clusterTableOperation = clusterTableCreate
@@ -6149,6 +6414,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeCreateView, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
 		writeDatabaseAndTableDirectly = true
+		appendWriteTableNameDatabaseName(st.Name)
 		if st.Name != nil {
 			dbName = string(st.Name.SchemaName)
 		}
@@ -6156,6 +6422,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeCreateView, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
 		writeDatabaseAndTableDirectly = true
+		appendWriteTableNameDatabaseName(st.SourceName)
 		if st.SourceName != nil {
 			dbName = string(st.SourceName.SchemaName)
 		}
@@ -6163,6 +6430,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeCreateView, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
 		writeDatabaseAndTableDirectly = true
+		appendWriteTableNameDatabaseName(st.TableName)
 		if st.TableName != nil {
 			dbName = string(st.TableName.SchemaName)
 		}
@@ -6170,6 +6438,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
 		writeDatabaseAndTableDirectly = true
+		appendWriteTableNameDatabaseName(st.Name)
 		if st.Name != nil {
 			dbName = string(st.Name.SchemaName)
 		}
@@ -6177,6 +6446,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
 		writeDatabaseAndTableDirectly = true
+		appendWriteTableNameDatabaseName(st.Name)
 		if st.Name != nil {
 			dbName = string(st.Name.SchemaName)
 		}
@@ -6184,21 +6454,27 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeAlterView, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
 		writeDatabaseAndTableDirectly = true
+		appendWriteTableNameDatabaseName(st.Name)
 		if st.Name != nil {
 			dbName = string(st.Name.SchemaName)
 		}
 	case *tree.AlterDataBaseConfig:
 		objType = objectTypeNone
 		kind = privilegeKindNone
+		if !st.IsAccountLevel {
+			writeDatabaseTargets = append(writeDatabaseTargets, st.DbName)
+		}
 	case *tree.CreateFunction:
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeCreateView, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
 		writeDatabaseAndTableDirectly = true
+		writeDatabaseTargets = append(writeDatabaseTargets, writeFunctionNameDatabaseName(st.Name))
 
 	case *tree.AlterTable:
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeAlterTable, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
 		writeDatabaseAndTableDirectly = true
+		appendWriteTableNameDatabaseName(st.Table)
 		if st.Table != nil {
 			dbName = string(st.Table.SchemaName)
 		}
@@ -6210,10 +6486,23 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeAlterTable, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
 		writeDatabaseAndTableDirectly = true
+		for _, alter := range st.AlterTables {
+			if alter == nil {
+				continue
+			}
+			appendWriteTableNameDatabaseName(alter.Table)
+			for _, opt := range alter.Options {
+				if renameOpt, ok := opt.(*tree.AlterOptionTableName); ok && renameOpt.Name != nil {
+					target := renameOpt.Name.ToTableName()
+					writeDatabaseTargets = append(writeDatabaseTargets, string(target.SchemaName))
+				}
+			}
+		}
 	case *tree.CreateProcedure:
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeCreateView, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
 		writeDatabaseAndTableDirectly = true
+		writeDatabaseTargets = append(writeDatabaseTargets, writeProcedureNameDatabaseName(st.Name))
 	case *tree.CallStmt: // TODO: redesign privilege for calling a procedure
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeCreateView, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
@@ -6222,6 +6511,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeDropTable, PrivilegeTypeDropObject, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
 		writeDatabaseAndTableDirectly = true
+		appendWriteTableNamesDatabaseNames(st.Names)
 		if len(st.Names) != 0 {
 			dbName = string(st.Names[0].SchemaName)
 		}
@@ -6233,6 +6523,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeDropView, PrivilegeTypeDropObject, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
 		writeDatabaseAndTableDirectly = true
+		appendWriteTableNamesDatabaseNames(st.Names)
 		if len(st.Names) != 0 {
 			dbName = string(st.Names[0].SchemaName)
 		}
@@ -6240,6 +6531,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeDropObject, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
 		writeDatabaseAndTableDirectly = true
+		appendWriteTableNamesDatabaseNames(st.Names)
 		if len(st.Names) != 0 {
 			dbName = string(st.Names[0].SchemaName)
 		}
@@ -6247,10 +6539,12 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeCreateView, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
 		writeDatabaseAndTableDirectly = true
+		writeDatabaseTargets = append(writeDatabaseTargets, writeFunctionNameDatabaseName(st.Name))
 	case *tree.DropProcedure:
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeCreateView, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
 		writeDatabaseAndTableDirectly = true
+		writeDatabaseTargets = append(writeDatabaseTargets, writeProcedureNameDatabaseName(st.Name))
 	case *tree.Select:
 		objType = objectTypeTable
 		typs = append(typs, PrivilegeTypeSelect, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
@@ -6281,8 +6575,27 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		objType = objectTypeTable
 		typs = append(typs, PrivilegeTypeInsert, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
 		writeDatabaseAndTableDirectly = true
+		appendWriteTableNameDatabaseName(st.Table)
 		if st.Table != nil {
 			dbName = string(st.Table.SchemaName)
+		}
+	case *tree.DumpTable:
+		objType = objectTypeNone
+		kind = privilegeKindSpecial
+		special = specialTagAdmin
+		writeDatabaseAndTableDirectly = true
+		appendWriteTableNameDatabaseName(st.Table)
+		if st.Table != nil {
+			dbName = string(st.Table.Schema())
+		}
+	case *tree.LoadTable:
+		objType = objectTypeNone
+		kind = privilegeKindSpecial
+		special = specialTagAdmin
+		writeDatabaseAndTableDirectly = true
+		appendWriteTableNameDatabaseName(st.Table)
+		if st.Table != nil {
+			dbName = string(st.Table.Schema())
 		}
 	case *tree.Update:
 		objType = objectTypeTable
@@ -6293,10 +6606,25 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		typs = append(typs, PrivilegeTypeDelete, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
 		writeDatabaseAndTableDirectly = true
 		canExecInRestricted = true
+	case *tree.Merge:
+		objType = objectTypeTable
+		typs = append(typs, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
+		if actionPrivs := mergeActionPrivilegeTypes(st); len(actionPrivs) > 0 {
+			items := make([]privilegeItem, 0, len(actionPrivs))
+			for _, typ := range actionPrivs {
+				items = append(items, privilegeItem{privilegeTyp: typ})
+			}
+			extraEntries = append(extraEntries, privilegeEntry{
+				privilegeEntryTyp: privilegeEntryTypeCompound,
+				compound:          &compoundEntry{items: items},
+			})
+		}
+		writeDatabaseAndTableDirectly = true
 	case *tree.CreateIndex:
 		objType = objectTypeTable
 		typs = append(typs, PrivilegeTypeIndex, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
 		writeDatabaseAndTableDirectly = true
+		appendWriteTableNameDatabaseName(st.Table)
 		if st.Table != nil {
 			dbName = string(st.Table.SchemaName)
 		}
@@ -6304,6 +6632,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		objType = objectTypeTable
 		typs = append(typs, PrivilegeTypeIndex, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
 		writeDatabaseAndTableDirectly = true
+		appendWriteTableNameDatabaseName(st.TableName)
 		if st.TableName != nil {
 			dbName = string(st.TableName.SchemaName)
 		}
@@ -6316,9 +6645,15 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		*tree.ShowBackendServers, *tree.ShowStages, *tree.ShowConnectors, *tree.DropConnector,
 		*tree.PauseDaemonTask, *tree.CancelDaemonTask, *tree.ResumeDaemonTask, *tree.ShowRecoveryWindow,
 		*tree.ShowSQLTasks, *tree.ShowSQLTaskRuns,
-		*tree.ShowRules:
+		*tree.ShowRules, *tree.CheckTableStmt, *tree.ShowProfileStmt,
+		*tree.AnalyzeStmt:
 		objType = objectTypeNone
 		kind = privilegeKindNone
+		canExecInRestricted = true
+	case *tree.ShowIcebergCatalogs, *tree.ShowIcebergNamespaces, *tree.ShowIcebergTables:
+		objType = objectTypeNone
+		kind = privilegeKindSpecial
+		special = specialTagAdmin
 		canExecInRestricted = true
 	case *tree.CreateSQLTask, *tree.AlterSQLTask, *tree.DropSQLTask, *tree.ExecuteSQLTask:
 		objType = objectTypeNone
@@ -6404,14 +6739,21 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		typs = append(typs, PrivilegeTypeAccountAll)
 		objType = objectTypeDatabase
 		kind = privilegeKindNone
+		if st.Level == tree.RESTORELEVELDATABASE || st.Level == tree.RESTORELEVELTABLE {
+			writeDatabaseTargets = append(writeDatabaseTargets, string(st.DatabaseName))
+		}
 	case *tree.CreatePitr, *tree.DropPitr, *tree.AlterPitr, *tree.RestorePitr:
 		typs = append(typs, PrivilegeTypeAccountAll)
 		objType = objectTypeDatabase
 		kind = privilegeKindNone
+		if st, ok := stmt.(*tree.RestorePitr); ok && (st.Level == tree.RESTORELEVELDATABASE || st.Level == tree.RESTORELEVELTABLE) {
+			writeDatabaseTargets = append(writeDatabaseTargets, string(st.DatabaseName))
+		}
 	case *tree.TruncateTable:
 		objType = objectTypeTable
 		typs = append(typs, PrivilegeTypeTruncate, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
 		writeDatabaseAndTableDirectly = true
+		appendWriteTableNameDatabaseName(st.Name)
 		if st.Name != nil {
 			dbName = string(st.Name.SchemaName)
 		}
@@ -6456,10 +6798,12 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		objType = objectTypeTable
 		typs = append(typs, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
 		writeDatabaseAndTableDirectly = true
+		appendWriteTableNameDatabaseName(&st.CreateTable.Table)
 	case *tree.CloneDatabase:
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeDatabaseAll, PrivilegeTypeAccountAll)
 		writeDatabaseAndTableDirectly = true
+		writeDatabaseTargets = append(writeDatabaseTargets, string(st.DstDatabase))
 	case *tree.DataBranchCreateTable,
 		*tree.DataBranchDeleteTable,
 		*tree.DataBranchMerge,
@@ -6469,8 +6813,22 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		*tree.DataBranchDeleteDatabase:
 		objType = objectTypeNone
 		kind = privilegeKindNone
+		switch st := stmt.(type) {
+		case *tree.DataBranchCreateTable:
+			appendWriteTableNameDatabaseName(&st.CreateTable.Table)
+		case *tree.DataBranchDeleteTable:
+			appendWriteTableNameDatabaseName(&st.TableName)
+		case *tree.DataBranchCreateDatabase:
+			writeDatabaseTargets = append(writeDatabaseTargets, string(st.DstDatabase))
+		case *tree.DataBranchDeleteDatabase:
+			writeDatabaseTargets = append(writeDatabaseTargets, string(st.DatabaseName))
+		case *tree.DataBranchMerge:
+			appendWriteTableNameDatabaseName(&st.DstTable)
+		case *tree.DataBranchPick:
+			appendWriteTableNameDatabaseName(&st.DstTable)
+		}
 	default:
-		panic(fmt.Sprintf("does not have the privilege definition of the statement %s", stmt))
+		panic(fmt.Sprintf("does not have the privilege definition of statement type %T", stmt))
 	}
 
 	entries := make([]privilegeEntry, len(typs))
@@ -6489,7 +6847,37 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		clusterTableOperation:         clusterTableOperation,
 		canExecInRestricted:           canExecInRestricted,
 		canExecInPasswordExpired:      canExecInPasswordExpired,
+		writeDatabaseTargets:          writeDatabaseTargets,
+		needMatchedRole:               needMatchedRole,
 	}
+}
+
+func mergeActionPrivilegeTypes(stmt *tree.Merge) []PrivilegeType {
+	if stmt == nil {
+		return nil
+	}
+	seen := make(map[PrivilegeType]struct{}, 3)
+	for _, clause := range stmt.Clauses {
+		if clause == nil {
+			continue
+		}
+		switch clause.Action {
+		case tree.MergeActionInsert:
+			seen[PrivilegeTypeInsert] = struct{}{}
+		case tree.MergeActionUpdate:
+			seen[PrivilegeTypeUpdate] = struct{}{}
+		case tree.MergeActionDelete:
+			seen[PrivilegeTypeDelete] = struct{}{}
+		}
+	}
+	ordered := []PrivilegeType{PrivilegeTypeInsert, PrivilegeTypeUpdate, PrivilegeTypeDelete}
+	out := make([]PrivilegeType, 0, len(seen))
+	for _, typ := range ordered {
+		if _, ok := seen[typ]; ok {
+			out = append(out, typ)
+		}
+	}
+	return out
 }
 
 // privilege will be done on the table
@@ -6639,6 +7027,10 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 			} else if node.NodeType == plan.Node_PRE_INSERT ||
 				node.NodeType == plan.Node_PRE_INSERT_UK ||
 				node.NodeType == plan.Node_PRE_INSERT_SK {
+				if q.StmtType == plan.Query_MERGE &&
+					node.GetExtraOptions() == icebergapi.DMLMergePlanExtraOptions {
+					continue
+				}
 				var objRef *plan.ObjectRef
 				var tableDef *plan.TableDef
 				if node.PreInsertCtx != nil {
@@ -6702,6 +7094,10 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 					}
 				}
 			} else if node.NodeType == plan.Node_INSERT {
+				if q.StmtType == plan.Query_MERGE &&
+					node.GetExtraOptions() == icebergapi.DMLMergePlanExtraOptions {
+					continue
+				}
 				var objRef *plan.ObjectRef
 				if node.InsertCtx != nil && node.InsertCtx.Ref != nil {
 					objRef = node.InsertCtx.Ref
@@ -6759,6 +7155,9 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 				}
 			} else if node.NodeType == plan.Node_MULTI_UPDATE {
 				for _, updateCtx := range node.UpdateCtxList {
+					if updateCtx == nil || updateCtx.ObjRef == nil || updateCtx.TableDef == nil {
+						continue
+					}
 					originViews := node.GetOriginViews()
 					directView := node.GetDirectView()
 					scanSnapshot := node.GetScanSnapshot()
@@ -6838,6 +7237,223 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 		}
 	}
 	return pts
+}
+
+func addReplaceDeletePrivilegeTips(arr privilegeTipsArray, p *plan2.Plan) privilegeTipsArray {
+	if p.GetQuery() == nil {
+		return arr
+	}
+
+	hasTip := make(map[[3]string]struct{}, len(arr))
+	for _, tip := range arr {
+		hasTip[[3]string{tip.typ.String(), tip.databaseName, tip.tableName}] = struct{}{}
+	}
+
+	for _, node := range p.GetQuery().GetNodes() {
+		if node.NodeType != plan.Node_MULTI_UPDATE {
+			continue
+		}
+		for _, updateCtx := range node.UpdateCtxList {
+			if updateCtx == nil || updateCtx.ObjRef == nil || updateCtx.TableDef == nil {
+				continue
+			}
+			dbName := updateCtx.ObjRef.GetSchemaName()
+			tableName := updateCtx.ObjRef.GetObjName()
+			if dbName == "" {
+				dbName = updateCtx.TableDef.DbName
+			}
+			if tableName == "" {
+				tableName = updateCtx.TableDef.Name
+			}
+			if tableName == "" || isIndexTable(tableName) || replaceTargetIsInsertOnly(updateCtx, node, p.GetQuery()) {
+				continue
+			}
+
+			key := [3]string{PrivilegeTypeDelete.String(), dbName, tableName}
+			if _, ok := hasTip[key]; ok {
+				continue
+			}
+			hasTip[key] = struct{}{}
+
+			isCluster := updateCtx.TableDef.TableType == catalog.SystemClusterRel
+			if !isCluster {
+				isCluster = isClusterTable(dbName, tableName)
+			}
+			arr = append(arr, privilegeTips{
+				typ:                   PrivilegeTypeDelete,
+				objType:               objectTypeTable,
+				databaseName:          dbName,
+				tableName:             tableName,
+				isClusterTable:        isCluster,
+				clusterTableOperation: clusterTableModify,
+				originViews:           node.GetOriginViews(),
+				directView:            node.GetDirectView(),
+				scanSnapshot:          node.GetScanSnapshot(),
+			})
+		}
+	}
+	return arr
+}
+
+func replaceTargetIsInsertOnly(updateCtx *plan.UpdateCtx, multiUpdateNode *plan.Node, query *plan.Query) bool {
+	if updateCtx == nil {
+		return false
+	}
+	tableDef := updateCtx.TableDef
+	if tableDef == nil || tableDef.Pkey == nil {
+		return false
+	}
+	if tableDef.Pkey.PkeyColName != catalog.FakePrimaryKeyColName {
+		return false
+	}
+	if replaceDeleteColsAlwaysStaticNull(updateCtx, multiUpdateNode, query) {
+		return true
+	}
+	for _, idx := range tableDef.Indexes {
+		if idx.Unique {
+			return false
+		}
+	}
+	return true
+}
+
+func replaceDeleteColsAlwaysStaticNull(updateCtx *plan.UpdateCtx, multiUpdateNode *plan.Node, query *plan.Query) bool {
+	if updateCtx == nil || query == nil || len(updateCtx.DeleteCols) == 0 {
+		return false
+	}
+	nodesByTag := replaceNodesByTag(query)
+	for _, deleteCol := range updateCtx.DeleteCols {
+		if !replaceColRefAlwaysStaticNull(deleteCol, multiUpdateNode, query, nodesByTag) {
+			return false
+		}
+	}
+	return true
+}
+
+func replaceNodesByTag(query *plan.Query) map[int32]*plan.Node {
+	nodesByTag := make(map[int32]*plan.Node, len(query.GetNodes()))
+	for _, node := range query.GetNodes() {
+		for _, tag := range node.GetBindingTags() {
+			nodesByTag[tag] = node
+		}
+	}
+	return nodesByTag
+}
+
+func replaceColRefAlwaysStaticNull(
+	colRef plan.ColRef,
+	contextNode *plan.Node,
+	query *plan.Query,
+	nodesByTag map[int32]*plan.Node,
+) bool {
+	return replaceExprAlwaysStaticNull(&plan.Expr{
+		Expr: &plan.Expr_Col{Col: &colRef},
+	}, contextNode, query, nodesByTag, 0)
+}
+
+func replaceExprAlwaysStaticNull(
+	expr *plan.Expr,
+	contextNode *plan.Node,
+	query *plan.Query,
+	nodesByTag map[int32]*plan.Node,
+	depth int,
+) bool {
+	if expr == nil || depth > 32 {
+		return false
+	}
+	if lit := expr.GetLit(); lit != nil {
+		return lit.GetIsnull()
+	}
+	if colRef := expr.GetCol(); colRef != nil {
+		node := nodesByTag[colRef.GetRelPos()]
+		if node == nil && contextNode != nil {
+			node = replaceInputNodeByOrdinal(contextNode, query, colRef.GetRelPos())
+		}
+		if node == nil {
+			return false
+		}
+		colPos := int(colRef.GetColPos())
+		switch node.GetNodeType() {
+		case plan.Node_PROJECT:
+			if colPos < 0 || colPos >= len(node.GetProjectList()) {
+				return false
+			}
+			return replaceExprAlwaysStaticNull(node.GetProjectList()[colPos], node, query, nodesByTag, depth+1)
+		case plan.Node_VALUE_SCAN:
+			rowsetData := node.GetRowsetData()
+			if rowsetData == nil || colPos < 0 || colPos >= len(rowsetData.GetCols()) {
+				return false
+			}
+			colData := rowsetData.GetCols()[colPos]
+			if colData == nil || len(colData.GetData()) == 0 {
+				return false
+			}
+			for _, rowExpr := range colData.GetData() {
+				if rowExpr == nil || !replaceExprAlwaysStaticNull(rowExpr.GetExpr(), node, query, nodesByTag, depth+1) {
+					return false
+				}
+			}
+			return true
+		case plan.Node_LOCK_OP:
+			child := replaceInputNodeByOrdinal(node, query, 0)
+			if child == nil {
+				return false
+			}
+			return replaceNodeOutputAlwaysStaticNull(child, colPos, query, nodesByTag, depth+1)
+		}
+	}
+	if fn := expr.GetF(); fn != nil {
+		args := fn.GetArgs()
+		if len(args) == 1 && replaceFunctionPreservesNull(fn) {
+			return replaceExprAlwaysStaticNull(args[0], contextNode, query, nodesByTag, depth+1)
+		}
+	}
+	return false
+}
+
+func replaceNodeOutputAlwaysStaticNull(
+	node *plan.Node,
+	colPos int,
+	query *plan.Query,
+	nodesByTag map[int32]*plan.Node,
+	depth int,
+) bool {
+	if node == nil || depth > 32 {
+		return false
+	}
+	switch node.GetNodeType() {
+	case plan.Node_PROJECT:
+		if colPos < 0 || colPos >= len(node.GetProjectList()) {
+			return false
+		}
+		return replaceExprAlwaysStaticNull(node.GetProjectList()[colPos], node, query, nodesByTag, depth+1)
+	case plan.Node_LOCK_OP:
+		child := replaceInputNodeByOrdinal(node, query, 0)
+		if child == nil {
+			return false
+		}
+		return replaceNodeOutputAlwaysStaticNull(child, colPos, query, nodesByTag, depth+1)
+	}
+	return false
+}
+
+func replaceInputNodeByOrdinal(node *plan.Node, query *plan.Query, ordinal int32) *plan.Node {
+	if node == nil || query == nil || ordinal < 0 || int(ordinal) >= len(node.GetChildren()) {
+		return nil
+	}
+	childID := node.GetChildren()[ordinal]
+	if childID < 0 || int(childID) >= len(query.GetNodes()) {
+		return nil
+	}
+	return query.GetNodes()[childID]
+}
+
+func replaceFunctionPreservesNull(fn *plan.Function) bool {
+	if fn == nil || fn.GetFunc() == nil {
+		return false
+	}
+	fnName := strings.ToLower(fn.GetFunc().GetObjName())
+	return strings.Contains(fnName, "cast")
 }
 
 // convertPrivilegeTipsToPrivilege constructs the privilege entries from the privilege tips from the plan
@@ -6986,6 +7602,9 @@ func getSqlForPrivilege2(ctx context.Context, ses *Session, roleId int64, entry 
 	if len(entry.databaseName) == 0 {
 		entry.databaseName = ses.GetDatabaseName()
 	}
+	if entry.objType == objectTypeAccount && pl == privilegeLevelStar && ses.GetTenantInfo() != nil {
+		return getSqlForCheckRoleHasAccountLevelForStarWithSysScope(roleId, entry.privilegeId, ses.GetTenantInfo().IsSysTenant()), nil
+	}
 	return getSqlForPrivilege(ctx, roleId, entry, pl)
 }
 
@@ -7086,27 +7705,29 @@ func verifyViewPrivilegeForRole(
 
 // determineRoleSetHasPrivilegeSet decides the role set has at least one privilege of the privilege set.
 // The algorithm 2.
-func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses *Session, roleIds *btree.Set[int64], priv *privilege, enableCache bool) (bool, error) {
+func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses *Session, roleIds *btree.Set[int64], priv *privilege, enableCache bool) (bool, int64, error) {
 	var err error
 	var pls []privilegeLevelType
-
 	var yes bool
 	var yes2 bool
+
 	// there is no privilege needs, just approve
 	if len(priv.entries) == 0 {
-		return false, nil
+		return false, 0, nil
 	}
 
 	cache := ses.GetPrivilegeCache()
+	usePrivilegeCache := enableCache && !priv.needMatchedRole
 
-	for _, roleId := range roleIds.Keys() {
+	for _, roleId := range orderedRoleIDsForPrivilegeCheck(ses, roleIds, priv.needMatchedRole) {
 		for _, entry := range priv.entries {
 			if entry.privilegeEntryTyp == privilegeEntryTypeGeneral {
 				pls, err = getPrivilegeLevelsOfObjectType(ctx, entry.objType)
 				if err != nil {
-					return false, err
+					return false, 0, err
 				}
 
+				yes = false
 				yes2 = verifyLightPrivilege(ses,
 					entry.databaseName,
 					priv.writeDatabaseAndTableDirectly,
@@ -7114,132 +7735,163 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 					priv.clusterTableOperation)
 
 				if yes2 {
-					yes, err = verifyPrivilegeEntryInMultiPrivilegeLevels(ctx, bh, ses, cache, roleId, entry, pls, enableCache)
+					yes, err = verifyPrivilegeEntryInMultiPrivilegeLevels(ctx, bh, ses, cache, roleId, entry, pls, usePrivilegeCache)
 					if err != nil {
-						return false, err
+						return false, 0, err
 					}
 				}
 
 				if yes {
-					return true, nil
+					return true, roleId, nil
 				}
 			} else if entry.privilegeEntryTyp == privilegeEntryTypeCompound {
-				if entry.compound != nil {
-					allTrue := true
-					// multi privileges take effect together
-					for _, mi := range entry.compound.items {
-						if mi.privilegeTyp == PrivilegeTypeCanGrantRoleToOthersInCreateUser {
-							yes, err = determineUserCanGrantRolesToOthersInternal(ctx, bh, ses, []*tree.Role{mi.role})
-							if err != nil {
-								return false, err
-							}
-							if yes {
-								from := &verifiedRole{
-									typ:  roleType,
-									name: mi.role.UserName,
-								}
-								for _, user := range mi.users {
-									to := &verifiedRole{
-										typ:  userType,
-										name: user.Username,
-									}
-									err = verifySpecialRolesInGrant(ctx, ses.GetTenantInfo(), from, to)
-									if err != nil {
-										return false, err
-									}
-								}
-							}
-						} else {
-							tempEntry := privilegeEntriesMap[mi.privilegeTyp]
-							tempEntry.databaseName = mi.dbName
-							tempEntry.tableName = mi.tableName
-							tempEntry.privilegeEntryTyp = privilegeEntryTypeGeneral
-							tempEntry.compound = nil
-							pls, err = getPrivilegeLevelsOfObjectType(ctx, tempEntry.objType)
-							if err != nil {
-								return false, err
-							}
+				if entry.compound == nil {
+					continue
+				}
 
-							yes = false
-							writeDirectly := priv.writeDatabaseAndTableDirectly
-							if (tempEntry.objType == objectTypeTable || tempEntry.objType == objectTypeView) && mi.privilegeTyp == PrivilegeTypeSelect {
-								writeDirectly = false
+				allTrue := true
+				matchedRoleID := int64(0)
+				// multi privileges take effect together
+				for _, mi := range entry.compound.items {
+					if mi.privilegeTyp == PrivilegeTypeCanGrantRoleToOthersInCreateUser {
+						yes, err = determineUserCanGrantRolesToOthersInternal(ctx, bh, ses, []*tree.Role{mi.role})
+						if err != nil {
+							return false, 0, err
+						}
+						if yes {
+							from := &verifiedRole{
+								typ:  roleType,
+								name: mi.role.UserName,
 							}
-							yes2 = verifyLightPrivilege(ses,
-								tempEntry.databaseName,
-								writeDirectly,
-								mi.isClusterTable,
-								mi.clusterTableOperation)
-							if yes2 {
-								viewChain := mi.originViews
-								directView := mi.directView
-								var viewSnapshot *plan.Snapshot
-								if directView != "" {
-									baseKey, ts, ok := splitViewSnapshotSuffix(directView)
-									if ok {
-										viewSnapshot = &plan.Snapshot{TS: &timestamp.Timestamp{PhysicalTime: ts}}
-										if mi.scanSnapshot != nil && mi.scanSnapshot.Tenant != nil {
-											viewSnapshot.Tenant = mi.scanSnapshot.Tenant
-										}
-										directView = baseKey
-									}
+							for _, user := range mi.users {
+								to := &verifiedRole{
+									typ:  userType,
+									name: user.Username,
 								}
-								if len(viewChain) == 0 && directView != "" {
-									viewChain = []string{directView}
-								}
-
-								checkRoleId := roleId
-								viewAllowed := true
-								skipBaseCheck := false
-								if len(viewChain) > 0 {
-									checkRoleId, viewAllowed, skipBaseCheck, err = resolveViewChainPrivilegeContext(
-										ctx,
-										bh,
-										ses,
-										cache,
-										roleId,
-										mi.privilegeTyp,
-										viewChain,
-										tempEntry.databaseName,
-										viewSnapshot,
-										enableCache,
-									)
-									if err != nil {
-										return false, err
-									}
-								}
-
-								if viewAllowed {
-									if skipBaseCheck {
-										yes = true
-									} else {
-										useCache := enableCache && cache != nil && checkRoleId == roleId
-										cacheToUse := cache
-										if !useCache {
-											cacheToUse = nil
-										}
-										yes, err = verifyPrivilegeEntryInMultiPrivilegeLevels(ctx, bh, ses, cacheToUse, checkRoleId, tempEntry, pls, useCache)
-										if err != nil {
-											return false, err
-										}
-									}
+								err = verifySpecialRolesInGrant(ctx, ses.GetTenantInfo(), from, to)
+								if err != nil {
+									return false, 0, err
 								}
 							}
 						}
-						if !yes {
-							allTrue = false
-							break
+					} else {
+						tempEntry := privilegeEntriesMap[mi.privilegeTyp]
+						tempEntry.objType = mi.objType
+						tempEntry.databaseName = mi.dbName
+						tempEntry.tableName = mi.tableName
+						tempEntry.privilegeEntryTyp = privilegeEntryTypeGeneral
+						tempEntry.compound = nil
+						pls, err = getPrivilegeLevelsOfObjectType(ctx, tempEntry.objType)
+						if err != nil {
+							return false, 0, err
+						}
+
+						yes = false
+						writeDirectly := priv.writeDatabaseAndTableDirectly
+						if (tempEntry.objType == objectTypeTable || tempEntry.objType == objectTypeView) && mi.privilegeTyp == PrivilegeTypeSelect {
+							writeDirectly = false
+						}
+						yes2 = verifyLightPrivilege(ses,
+							tempEntry.databaseName,
+							writeDirectly,
+							mi.isClusterTable,
+							mi.clusterTableOperation)
+						if yes2 {
+							viewChain := mi.originViews
+							directView := mi.directView
+							var viewSnapshot *plan.Snapshot
+							if directView != "" {
+								baseKey, ts, ok := splitViewSnapshotSuffix(directView)
+								if ok {
+									viewSnapshot = &plan.Snapshot{TS: &timestamp.Timestamp{PhysicalTime: ts}}
+									if mi.scanSnapshot != nil && mi.scanSnapshot.Tenant != nil {
+										viewSnapshot.Tenant = mi.scanSnapshot.Tenant
+									}
+									directView = baseKey
+								}
+							}
+							if len(viewChain) == 0 && directView != "" {
+								viewChain = []string{directView}
+							}
+
+							checkRoleId := roleId
+							viewAllowed := true
+							skipBaseCheck := false
+							if len(viewChain) > 0 {
+								checkRoleId, viewAllowed, skipBaseCheck, err = resolveViewChainPrivilegeContext(
+									ctx,
+									bh,
+									ses,
+									cache,
+									roleId,
+									mi.privilegeTyp,
+									viewChain,
+									tempEntry.databaseName,
+									viewSnapshot,
+									usePrivilegeCache,
+								)
+								if err != nil {
+									return false, 0, err
+								}
+							}
+
+							if viewAllowed {
+								if skipBaseCheck {
+									yes = true
+								} else {
+									useCache := usePrivilegeCache && cache != nil && checkRoleId == roleId
+									cacheToUse := cache
+									if !useCache {
+										cacheToUse = nil
+									}
+									yes, err = verifyPrivilegeEntryInMultiPrivilegeLevels(ctx, bh, ses, cacheToUse, checkRoleId, tempEntry, pls, useCache)
+									if err != nil {
+										return false, 0, err
+									}
+								}
+								if yes && matchedRoleID == 0 {
+									matchedRoleID = checkRoleId
+								}
+							}
 						}
 					}
-
-					if allTrue {
-						return allTrue, nil
+					if !yes {
+						allTrue = false
+						break
 					}
+				}
+
+				if allTrue {
+					if matchedRoleID == 0 {
+						matchedRoleID = roleId
+					}
+					return allTrue, matchedRoleID, nil
 				}
 			}
 		}
 	}
-	return false, nil
+	return false, 0, nil
+}
+
+func orderedRoleIDsForPrivilegeCheck(ses *Session, roleIds *btree.Set[int64], preferPrimaryRole bool) []int64 {
+	keys := roleIds.Keys()
+	if !preferPrimaryRole || ses == nil || ses.GetTenantInfo() == nil {
+		return keys
+	}
+
+	primaryRoleID := int64(ses.GetTenantInfo().GetDefaultRoleID())
+	if !roleIds.Contains(primaryRoleID) {
+		return keys
+	}
+
+	ordered := make([]int64, 0, len(keys))
+	ordered = append(ordered, primaryRoleID)
+	for _, roleID := range keys {
+		if roleID != primaryRoleID {
+			ordered = append(ordered, roleID)
+		}
+	}
+	return ordered
 }
 
 // determineUserHasPrivilegeSet decides the privileges of user can satisfy the requirement of the privilege set
@@ -7251,6 +7903,7 @@ func determineUserHasPrivilegeSet(ctx context.Context, ses *Session, priv *privi
 	var ok bool
 	var grantedIds *btree.Set[int64]
 	var enableCache bool
+	var matchedRoleID int64
 	stats.Reset()
 
 	// check privilege cache first
@@ -7262,12 +7915,13 @@ func determineUserHasPrivilegeSet(ctx context.Context, ses *Session, priv *privi
 	if err != nil {
 		return false, stats, err
 	}
-	if enableCache {
+	if enableCache && !priv.needMatchedRole {
 		yes, err = checkPrivilegeInCache(ctx, ses, priv, enableCache)
 		if err != nil {
 			return false, stats, err
 		}
 		if yes {
+			priv.matchedRoleID = int64(ses.GetTenantInfo().GetDefaultRoleID())
 			return true, stats, nil
 		}
 	}
@@ -7293,6 +7947,9 @@ func determineUserHasPrivilegeSet(ctx context.Context, ses *Session, priv *privi
 	roleSetOfVisited := &btree.Set[int64]{}
 	// simple mo_role_grant cache
 	cacheOfMoRoleGrant := &btree.Map[int64, *btree.Set[int64]]{}
+	// roleRoot maps each visited inherited role back to the active role that brought it
+	// into the privilege search. DDL ownership should follow that active role.
+	roleRoot := make(map[int64]int64)
 
 	// step 1: The Set R1 {default role id}
 	// The primary role (in use)
@@ -7316,16 +7973,19 @@ func determineUserHasPrivilegeSet(ctx context.Context, ses *Session, priv *privi
 	// init RVisited = Rk
 	roleSetOfKthIteration.Scan(func(roleId int64) bool {
 		roleSetOfVisited.Insert(roleId)
+		roleRoot[roleId] = roleId
 		return true
 	})
 
 	// Call the algorithm 2.
 	// If the result of the algorithm 2 is true, Then return true;
-	yes, err = determineRoleSetHasPrivilegeSet(ctx, bh, ses, roleSetOfKthIteration, priv, enableCache)
+	yes, matchedRoleID, err = determineRoleSetHasPrivilegeSet(ctx, bh, ses, roleSetOfKthIteration, priv, enableCache)
 	if err != nil {
 		return false, stats, err
 	}
 	if yes {
+		matchedRoleID = matchedActiveRoleID(priv, matchedRoleID, roleRoot)
+		priv.matchedRoleID = matchedRoleID
 		ret = true
 		return ret, stats, err
 	}
@@ -7361,10 +8021,17 @@ func determineUserHasPrivilegeSet(ctx context.Context, ses *Session, priv *privi
 		roleSetOfKPlusOneThIteration.Clear()
 
 		// get roleB of roleA
-		for _, roleA := range roleSetOfKthIteration.Keys() {
+		for _, roleA := range orderedRoleIDsForPrivilegeCheck(ses, roleSetOfKthIteration, priv.needMatchedRole) {
+			rootRoleID := roleRoot[roleA]
+			if rootRoleID == 0 {
+				rootRoleID = roleA
+			}
 			if grantedIds, ok = cacheOfMoRoleGrant.Get(roleA); ok {
 				for _, grantedId := range grantedIds.Keys() {
 					roleSetOfKPlusOneThIteration.Insert(grantedId)
+					if _, exists := roleRoot[grantedId]; !exists {
+						roleRoot[grantedId] = rootRoleID
+					}
 				}
 				continue
 			}
@@ -7393,6 +8060,7 @@ func determineUserHasPrivilegeSet(ctx context.Context, ses *Session, priv *privi
 						roleSetOfVisited.Insert(roleB)
 						roleSetOfKPlusOneThIteration.Insert(roleB)
 						grantedIds.Insert(roleB)
+						roleRoot[roleB] = rootRoleID
 					}
 				}
 			}
@@ -7406,18 +8074,30 @@ func determineUserHasPrivilegeSet(ctx context.Context, ses *Session, priv *privi
 
 		// Call the algorithm 2.
 		// If the result of the algorithm 2 is true, Then return true;
-		yes, err = determineRoleSetHasPrivilegeSet(ctx, bh, ses, roleSetOfKPlusOneThIteration, priv, enableCache)
+		yes, matchedRoleID, err = determineRoleSetHasPrivilegeSet(ctx, bh, ses, roleSetOfKPlusOneThIteration, priv, enableCache)
 		if err != nil {
 			return false, stats, err
 		}
 
 		if yes {
+			matchedRoleID = matchedActiveRoleID(priv, matchedRoleID, roleRoot)
+			priv.matchedRoleID = matchedRoleID
 			ret = true
 			return ret, stats, err
 		}
 		roleSetOfKthIteration, roleSetOfKPlusOneThIteration = roleSetOfKPlusOneThIteration, roleSetOfKthIteration
 	}
 	return ret, stats, err
+}
+
+func matchedActiveRoleID(priv *privilege, matchedRoleID int64, roleRoot map[int64]int64) int64 {
+	if priv == nil || !priv.needMatchedRole || matchedRoleID <= 0 {
+		return matchedRoleID
+	}
+	if rootRoleID, ok := roleRoot[matchedRoleID]; ok && rootRoleID > 0 {
+		return rootRoleID
+	}
+	return matchedRoleID
 }
 
 const (
@@ -7666,21 +8346,38 @@ func authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ctx con
 	if priv.objectType() != objectTypeAccount && priv.objectType() != objectTypeDatabase { // do nothing
 		return true, stats, nil
 	}
+	if !checkProtectedDatabaseWriteByPrivilege(ctx, ses, priv) {
+		return false, stats, nil
+	}
 	ok, delta, err := determineUserHasPrivilegeSet(ctx, ses, priv)
 	if err != nil {
 		return false, stats, err
 	}
 	stats.Add(&delta)
+	if ok {
+		setDDLOwnerRoleFromPrivilege(ses, stmt, priv)
+	}
+
+	if st, isDropTable := stmt.(*tree.DropTable); isDropTable && len(st.Names) > 1 {
+		ok, delta, err = authenticateMultiDropTableTargets(ctx, ses, st)
+		stats.Add(&delta)
+		return ok, stats, err
+	}
 
 	// double check privilege of drop table
 	if !ok && ses.GetFromRealUser() && ses.GetTenantInfo() != nil && ses.GetTenantInfo().IsSysTenant() {
 		switch st := stmt.(type) {
 		case *tree.DropTable:
-			dbName := string(st.Names[0].SchemaName)
-			if len(dbName) == 0 {
-				dbName = ses.GetDatabaseName()
+			for _, name := range st.Names {
+				dbName := string(name.SchemaName)
+				if len(dbName) == 0 {
+					dbName = ses.GetDatabaseName()
+				}
+				if !isClusterTable(dbName, string(name.ObjectName)) {
+					return false, stats, nil
+				}
 			}
-			return isClusterTable(dbName, string(st.Names[0].ObjectName)), stats, nil
+			return true, stats, nil
 		case *tree.AlterTable:
 			dbName := string(st.Table.SchemaName)
 			if len(dbName) == 0 {
@@ -7718,24 +8415,163 @@ func authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ctx con
 			}
 			return checkRoleWhetherDatabaseOwner(ctx, ses, dbName, ok)
 		case *tree.DropTable:
-			// get the databasename and tablename
-			if len(st.Names) != 1 {
-				return ok, stats, nil
+			for _, name := range st.Names {
+				dbName := string(name.SchemaName)
+				if len(dbName) == 0 {
+					dbName = ses.GetDatabaseName()
+				}
+				if _, inSet := sysDatabases[dbName]; inSet {
+					return ok, stats, nil
+				}
+				tbName := string(name.ObjectName)
+				owned, delta, err := checkRoleWhetherTableOwner(ctx, ses, dbName, tbName, ok)
+				stats.Add(&delta)
+				if err != nil || !owned {
+					return owned, stats, err
+				}
 			}
-			dbName := string(st.Names[0].SchemaName)
-			if len(dbName) == 0 {
-				dbName = ses.GetDatabaseName()
-			}
-			if _, inSet := sysDatabases[dbName]; inSet {
-				return ok, stats, nil
-			}
-			tbName := string(st.Names[0].ObjectName)
-			return checkRoleWhetherTableOwner(ctx, ses, dbName, tbName, ok)
-		case *tree.CloneTable, *tree.CloneDatabase:
+			return true, stats, nil
+		case *tree.CloneTable, *tree.CloneDatabase,
+			*tree.DataBranchDiff, *tree.DataBranchMerge, *tree.DataBranchPick,
+			*tree.DataBranchCreateTable, *tree.DataBranchCreateDatabase,
+			*tree.DataBranchDeleteTable, *tree.DataBranchDeleteDatabase:
 			return true, stats, nil
 		}
 	}
 	return ok, stats, nil
+}
+
+func setDDLOwnerRoleFromPrivilege(ses *Session, stmt tree.Statement, priv *privilege) {
+	if ses == nil || priv == nil || priv.matchedRoleID <= 0 {
+		return
+	}
+	switch stmt.(type) {
+	case *tree.CreateDatabase, *tree.CreateTable:
+		ses.SetDDLOwnerRoleID(uint32(priv.matchedRoleID))
+	}
+}
+
+func getRoleNameByID(ctx context.Context, ses *Session, roleID uint32) (string, error) {
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+	return getRoleNameByIDWithBackgroundExec(ctx, bh, roleID)
+}
+
+func getRoleNameByIDWithBackgroundExec(ctx context.Context, bh BackgroundExec, roleID uint32) (string, error) {
+	bh.ClearExecResultSet()
+	if err := bh.Exec(ctx, getSqlForRoleNameOfRoleId(int64(roleID))); err != nil {
+		return "", err
+	}
+	erArray, err := getResultSet(ctx, bh)
+	if err != nil {
+		return "", err
+	}
+	if !execResultArrayHasData(erArray) {
+		return "", moerr.NewInternalErrorf(ctx, "there is no role id %d", roleID)
+	}
+	return erArray[0].GetString(ctx, 0, 0)
+}
+
+func getRoleNameByIDIfExistsWithBackgroundExec(ctx context.Context, bh BackgroundExec, roleID uint32) (string, error) {
+	bh.ClearExecResultSet()
+	if err := bh.Exec(ctx, getSqlForRoleNameOfRoleId(int64(roleID))); err != nil {
+		return "", err
+	}
+	erArray, err := getResultSet(ctx, bh)
+	if err != nil {
+		return "", err
+	}
+	if !execResultArrayHasData(erArray) {
+		return "", nil
+	}
+	return erArray[0].GetString(ctx, 0, 0)
+}
+
+func getObjectOwnerRoleName(ctx context.Context, bh BackgroundExec, sql string) (string, error) {
+	bh.ClearExecResultSet()
+	if err := bh.Exec(ctx, sql); err != nil {
+		return "", err
+	}
+	erArray, err := getResultSet(ctx, bh)
+	if err != nil {
+		return "", err
+	}
+	if !execResultArrayHasData(erArray) {
+		return "", nil
+	}
+	owner, err := erArray[0].GetInt64(ctx, 0, 0)
+	if err != nil {
+		return "", err
+	}
+	if owner < 0 {
+		return "", moerr.NewInternalErrorf(ctx, "invalid owner role id %d", owner)
+	}
+	return getRoleNameByIDIfExistsWithBackgroundExec(ctx, bh, uint32(owner))
+}
+
+func getDatabaseOwnerRoleName(ctx context.Context, bh BackgroundExec, dbName string) (string, error) {
+	return getObjectOwnerRoleName(ctx, bh, getSqlForGetOwnerOfDatabase(dbName))
+}
+
+func getTableOwnerRoleName(ctx context.Context, bh BackgroundExec, dbName, tableName string) (string, error) {
+	return getObjectOwnerRoleName(ctx, bh, getSqlForGetOwnerOfTable(dbName, tableName))
+}
+
+func shouldSkipImplicitOwnershipRevoke(ses *Session, roleName string) bool {
+	if ses == nil || len(roleName) == 0 {
+		return true
+	}
+	return ses.GetTenantInfo().IsNameOfAdminRoles(roleName)
+}
+
+func authenticateMultiDropTableTargets(ctx context.Context, ses *Session, st *tree.DropTable) (bool, statistic.StatsArray, error) {
+	var stats statistic.StatsArray
+	stats.Reset()
+	if st == nil {
+		return true, stats, nil
+	}
+
+	for _, name := range st.Names {
+		dbName := string(name.SchemaName)
+		if len(dbName) == 0 {
+			dbName = ses.GetDatabaseName()
+		}
+		tbName := string(name.ObjectName)
+
+		if ses.GetFromRealUser() && ses.GetTenantInfo() != nil && ses.GetTenantInfo().IsSysTenant() && isClusterTable(dbName, tbName) {
+			continue
+		}
+
+		targetPriv := determinePrivilegeSetOfStatement(&tree.DropTable{
+			Names: tree.TableNames{name},
+		})
+		ok, delta, err := determineUserHasPrivilegeSet(ctx, ses, targetPriv)
+		stats.Add(&delta)
+		if err != nil {
+			return false, stats, err
+		}
+		if ok {
+			continue
+		}
+
+		if ses.GetFromRealUser() && ses.GetTenantInfo() != nil && targetPriv.kind == privilegeKindGeneral {
+			if _, inSet := sysDatabases[dbName]; inSet {
+				return false, stats, nil
+			}
+
+			owned, delta, err := checkRoleWhetherTableOwner(ctx, ses, dbName, tbName, false)
+			stats.Add(&delta)
+			if err != nil {
+				return false, stats, err
+			}
+			if owned {
+				continue
+			}
+		}
+
+		return false, stats, nil
+	}
+	return true, stats, nil
 }
 
 func checkRoleWhetherTableOwner(ctx context.Context, ses *Session, dbName, tbName string, ok bool) (bool, statistic.StatsArray, error) {
@@ -7910,6 +8746,9 @@ func authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(ctx conte
 	stats.Reset()
 
 	if st, ok := stmt.(*tree.CreateTable); ok && st.IsAsSelect {
+		if !checkProtectedDatabaseWrite(ctx, ses, string(st.Table.SchemaName)) {
+			return false, stats, nil
+		}
 		// CTAS needs source-query SELECT privilege even when target-table CREATE
 		// is valid, so we check the source plan explicitly here.
 		ok, delta, err := authenticateCreateTableAsSelectSourcePrivilege(ctx, ses, st)
@@ -7932,6 +8771,12 @@ func authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(ctx conte
 			return true, stats, nil
 		}
 		arr := extractPrivilegeTipsFromPlan(p)
+		if _, ok := stmt.(*tree.Replace); ok {
+			arr = addReplaceDeletePrivilegeTips(arr, p)
+		}
+		if mergeStmt, ok := stmt.(*tree.Merge); ok {
+			arr = appendMergeActionPrivilegeTips(ses, mergeStmt, p, arr)
+		}
 		if len(arr) == 0 {
 			if ins, ok := stmt.(*tree.Insert); ok {
 				dbName, tableName, ok := getInsertTargetTableName(ins, ses)
@@ -7949,6 +8794,9 @@ func authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(ctx conte
 		}
 		if len(arr) == 0 {
 			return true, stats, nil
+		}
+		if !checkProtectedDatabaseWriteByPrivilegeTips(ctx, ses, arr) {
+			return false, stats, nil
 		}
 		convertPrivilegeTipsToPrivilege(priv, arr)
 		ok, delta, err := determineUserHasPrivilegeSet(ctx, ses, priv)
@@ -7970,6 +8818,97 @@ func getInsertTargetTableName(stmt *tree.Insert, ses *Session) (string, string, 
 	if alias, ok := tbl.(*tree.AliasedTableExpr); ok {
 		tbl = alias.Expr
 	}
+	name, ok := tbl.(*tree.TableName)
+	if !ok || name == nil {
+		return "", "", false
+	}
+	dbName := string(name.SchemaName)
+	if dbName == "" {
+		dbName = ses.GetDatabaseName()
+	}
+	tableName := string(name.ObjectName)
+	if dbName == "" || tableName == "" {
+		return "", "", false
+	}
+	return dbName, tableName, true
+}
+
+func appendMergeActionPrivilegeTips(
+	ses *Session,
+	stmt *tree.Merge,
+	p *plan.Plan,
+	arr privilegeTipsArray,
+) privilegeTipsArray {
+	actionPrivs := mergeActionPrivilegeTypes(stmt)
+	if len(actionPrivs) == 0 {
+		return arr
+	}
+	dbName, tableName, ok := getMergeTargetTableName(stmt, ses)
+	var tableDef *plan.TableDef
+	if p != nil && p.GetQuery() != nil {
+		for _, node := range p.GetQuery().GetNodes() {
+			if node.GetExtraOptions() != icebergapi.DMLMergePlanExtraOptions {
+				continue
+			}
+			if node.GetInsertCtx() != nil && node.GetInsertCtx().GetRef() != nil {
+				ref := node.GetInsertCtx().GetRef()
+				if ref.GetSchemaName() != "" {
+					dbName = ref.GetSchemaName()
+				}
+				if ref.GetObjName() != "" {
+					tableName = ref.GetObjName()
+				}
+				ok = dbName != "" && tableName != ""
+			} else if node.GetObjRef() != nil {
+				ref := node.GetObjRef()
+				if ref.GetSchemaName() != "" {
+					dbName = ref.GetSchemaName()
+				}
+				if ref.GetObjName() != "" {
+					tableName = ref.GetObjName()
+				}
+				ok = dbName != "" && tableName != ""
+			}
+			tableDef = node.GetTableDef()
+			break
+		}
+	}
+	if !ok {
+		return arr
+	}
+	mergeClusterTable := isClusterTable(dbName, tableName)
+	if tableDef != nil && tableDef.GetTableType() == catalog.SystemClusterRel {
+		mergeClusterTable = true
+	}
+	for _, typ := range actionPrivs {
+		arr = append(arr, privilegeTips{
+			typ:                   typ,
+			objType:               objectTypeTable,
+			databaseName:          dbName,
+			tableName:             tableName,
+			isClusterTable:        mergeClusterTable,
+			clusterTableOperation: clusterTableModify,
+		})
+	}
+	return arr
+}
+
+func getMergeTargetTableName(stmt *tree.Merge, ses *Session) (string, string, bool) {
+	if stmt == nil || stmt.Target == nil {
+		return "", "", false
+	}
+	tbl := stmt.Target
+	for {
+		switch t := tbl.(type) {
+		case *tree.AliasedTableExpr:
+			tbl = t.Expr
+		case *tree.ParenTableExpr:
+			tbl = t.Expr
+		default:
+			goto done
+		}
+	}
+done:
 	name, ok := tbl.(*tree.TableName)
 	if !ok || name == nil {
 		return "", "", false
@@ -8899,6 +9838,10 @@ func authenticateUserCanExecuteStatementWithObjectTypeNone(ctx context.Context, 
 	}
 	tenant := ses.GetTenantInfo()
 
+	if !checkProtectedDatabaseWriteByPrivilege(ctx, ses, priv) {
+		return false, stats, nil
+	}
+
 	if priv.privilegeKind() == privilegeKindNone { // do nothing
 		return true, stats, nil
 	} else if priv.privilegeKind() == privilegeKindSpecial { // GrantPrivilege, RevokePrivilege
@@ -8942,6 +9885,10 @@ func authenticateUserCanExecuteStatementWithObjectTypeNone(ctx context.Context, 
 			// SQL tasks execute later as a stored definer, so V1 task management is admin only.
 			return tenant.IsAdminRole(), nil
 		}
+		checkIcebergCatalogPrivilege := func() (bool, error) {
+			// Iceberg catalog definitions and metadata views are account-wide control-plane state.
+			return tenant.IsAdminRole(), nil
+		}
 
 		switch gp := stmt.(type) {
 		case *tree.Grant:
@@ -8977,20 +9924,26 @@ func authenticateUserCanExecuteStatementWithObjectTypeNone(ctx context.Context, 
 			return yes, stats, err
 		case *tree.ShowAccountUpgrade:
 			return tenant.IsMoAdminRole(), stats, nil
+		case *tree.UpgradeStatement:
+			return tenant.IsMoAdminRole(), stats, nil
 		case *tree.ShowLogserviceReplicas, *tree.ShowLogserviceStores,
 			*tree.ShowLogserviceSettings, *tree.SetLogserviceSettings:
 			yes, err := checkShowLogservicePrivilege()
 			return yes, stats, err
-		case *tree.UpgradeStatement:
-			return tenant.IsMoAdminRole(), stats, nil
 		case *tree.BackupStart:
 			yes, err := checkBackUpStartPrivilege()
 			return yes, stats, err
+		case *tree.DumpTable, *tree.LoadTable:
+			return tenant.IsAdminRole(), stats, nil
 		case *tree.CreateCDC, *tree.ShowCDC, *tree.PauseCDC, *tree.DropCDC, *tree.ResumeCDC, *tree.RestartCDC:
 			yes, err := checkCdcTaskPrivilege()
 			return yes, stats, err
 		case *tree.CreateSQLTask, *tree.AlterSQLTask, *tree.DropSQLTask, *tree.ExecuteSQLTask:
 			yes, err := checkSQLTaskPrivilege()
+			return yes, stats, err
+		case *tree.CreateIcebergCatalog, *tree.AlterIcebergCatalog, *tree.DropIcebergCatalog,
+			*tree.ShowIcebergCatalogs, *tree.ShowIcebergNamespaces, *tree.ShowIcebergTables:
+			yes, err := checkIcebergCatalogPrivilege()
 			return yes, stats, err
 		}
 	}
@@ -9031,7 +9984,7 @@ func checkDatabaseExistsOrNot(ctx context.Context, bh BackgroundExec, dbName str
 	var err error
 	ctx, span := trace.Debug(ctx, "checkTenantExistsOrNot")
 	defer span.End()
-	sqlForCheckDatabase, err = getSqlForCheckDatabase(ctx, dbName)
+	sqlForCheckDatabase, err = getSqlForCheckDatabaseByAccount(ctx, dbName)
 	if err != nil {
 		return false, err
 	}
@@ -9074,7 +10027,7 @@ func InitGeneralTenant(ctx context.Context, bh BackgroundExec, ses *Session, ca 
 	tenant := ses.GetTenantInfo()
 	finalVersion := ses.rm.baseService.GetFinalVersion()
 
-	if !(tenant.IsSysTenant() && tenant.IsMoAdminRole()) {
+	if !tenant.IsSysTenant() {
 		return moerr.NewInternalErrorf(ctx, "tenant %s user %s role %s do not have the privilege to create the new account", tenant.GetTenant(), tenant.GetUser(), tenant.GetDefaultRole())
 	}
 	start := time.Now()
@@ -10143,6 +11096,7 @@ func InitFunction(ses *Session, execCtx *ExecCtx, tenant *TenantInfo, cf *tree.C
 		body = string(byt)
 	}
 	body = escapeSQLStringForDoubleQuotes(body)
+	parserSQLMode := plan2.EscapeFormat(sessionSQLModeForParser(ses))
 
 	if execResultArrayHasData(erArray) { // replace
 		var id int64
@@ -10154,7 +11108,7 @@ func InitFunction(ses *Session, execCtx *ExecCtx, tenant *TenantInfo, cf *tree.C
 			ses.GetTenantInfo().GetDefaultRoleID(),
 			string(argsJson),
 			retTypeStr, body, cf.Language,
-			tenant.GetUser(), types.CurrentTimestamp().String2(time.UTC, 0), "FUNCTION", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci",
+			tenant.GetUser(), types.CurrentTimestamp().String2(time.UTC, 0), "FUNCTION", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci", parserSQLMode,
 			int32(id))
 	} else { // create
 		initMoUdf = fmt.Sprintf(initMoUserDefinedFunctionFormat,
@@ -10162,7 +11116,7 @@ func InitFunction(ses *Session, execCtx *ExecCtx, tenant *TenantInfo, cf *tree.C
 			ses.GetTenantInfo().GetDefaultRoleID(),
 			string(argsJson),
 			retTypeStr, body, cf.Language, dbName,
-			tenant.GetUser(), types.CurrentTimestamp().String2(time.UTC, 0), types.CurrentTimestamp().String2(time.UTC, 0), "FUNCTION", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci")
+			tenant.GetUser(), types.CurrentTimestamp().String2(time.UTC, 0), types.CurrentTimestamp().String2(time.UTC, 0), "FUNCTION", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci", parserSQLMode)
 	}
 
 	err = bh.Exec(execCtx.reqCtx, initMoUdf)
@@ -10206,6 +11160,7 @@ func InitProcedure(ctx context.Context, ses *Session, tenant *TenantInfo, cp *tr
 	var initMoProcedure string
 	var dbName string
 	var checkExistence string
+	parserSQLMode := sessionSQLModeForParser(ses)
 	var argsJson []byte
 	// var fmtctx *tree.FmtCtx
 	var erArray []ExecResult
@@ -10281,14 +11236,14 @@ func InitProcedure(ctx context.Context, ses *Session, tenant *TenantInfo, cp *tr
 		}
 		initMoProcedure = fmt.Sprintf(updateMoStoredProcedureFormat,
 			string(argsJson),
-			cp.Lang, plan2.EscapeFormat(cp.Body), dbName,
+			cp.Lang, plan2.EscapeFormat(cp.Body), plan2.EscapeFormat(parserSQLMode), dbName,
 			tenant.GetUser(), types.CurrentTimestamp().String2(time.UTC, 0), "PROCEDURE", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci",
 			int32(id))
 	} else {
 		initMoProcedure = fmt.Sprintf(initMoStoredProcedureFormat,
 			string(cp.Name.Name.ObjectName),
 			string(argsJson),
-			cp.Lang, plan2.EscapeFormat(cp.Body), dbName,
+			cp.Lang, plan2.EscapeFormat(cp.Body), plan2.EscapeFormat(parserSQLMode), dbName,
 			tenant.GetUser(), types.CurrentTimestamp().String2(time.UTC, 0), types.CurrentTimestamp().String2(time.UTC, 0), "PROCEDURE", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci")
 	}
 	err = bh.Exec(ctx, initMoProcedure)
@@ -10578,10 +11533,25 @@ func GetVersionCompatibility(ctx context.Context, ses *Session, dbName string) (
 	return resultConfig, err
 }
 
-func doInterpretCall(ctx context.Context, ses FeSession, call *tree.CallStmt, bg bool) ([]ExecResult, error) {
+func doInterpretCall(
+	ctx context.Context,
+	ses FeSession,
+	call *tree.CallStmt,
+	bg bool,
+	callerAffectedRows int64,
+	affectedRows *int64,
+) ([]ExecResult, error) {
+	if parsed, ok, err := parseIcebergBuiltinCall(ctx, call); ok || err != nil {
+		if err != nil {
+			return nil, err
+		}
+		erArray, err := executeIcebergBuiltinCall(ctx, ses, parsed)
+		return erArray, err
+	}
 	// fetch related
 	var spLang string
 	var spBody string
+	var spSQLMode string
 	var dbName string
 	var sql string
 	var argstr string
@@ -10642,6 +11612,10 @@ func doInterpretCall(ctx context.Context, ses FeSession, call *tree.CallStmt, bg
 		if err != nil {
 			return nil, err
 		}
+		spSQLMode, err = erArray[0].GetString(ctx, 0, 3)
+		if err != nil {
+			return nil, err
+		}
 
 		// perform argument length validation
 		// postpone argument type check until actual execution of its procedure body. This will be handled by the binder.
@@ -10679,23 +11653,21 @@ func doInterpretCall(ctx context.Context, ses FeSession, call *tree.CallStmt, bg
 	interpreter.argsMap = argsMap
 	interpreter.argsAttr = argsAttr
 	interpreter.outParamMap = make(map[string]interface{})
+	interpreter.initialAffectedRows = callerAffectedRows
 
 	switch spLang {
 	case "sql":
-		stmt, err := parsers.Parse(ctx, dialect.MYSQL, spBody, 1)
+		stmt, err := parseStoredProcedureBody(ctx, ses, spBody, spSQLMode)
 		if err != nil {
 			return nil, err
 		}
-		defer func() {
-			for _, st := range stmt {
-				st.Free()
-			}
-		}()
+		defer freeStatements(stmt)
 
-		err = interpreter.ExecuteSp(stmt[0], dbName)
+		err = interpreter.ExecuteSp(stmt[0], dbName, bg)
 		if err != nil {
 			return nil, err
 		}
+		*affectedRows = interpreter.lastAffectedRows
 		return interpreter.GetResult(), nil
 
 	case "starlark":
@@ -10703,6 +11675,7 @@ func doInterpretCall(ctx context.Context, ses FeSession, call *tree.CallStmt, bg
 		if err != nil {
 			return nil, err
 		}
+		*affectedRows = interpreter.lastAffectedRows
 		return interpreter.GetResult(), nil
 
 	default:
@@ -10710,14 +11683,31 @@ func doInterpretCall(ctx context.Context, ses FeSession, call *tree.CallStmt, bg
 	}
 }
 
+func parseStoredProcedureBody(ctx context.Context, ses FeSession, sql string, sqlMode string) ([]tree.Statement, error) {
+	return parsers.ParseWithSQLMode(
+		ctx,
+		dialect.MYSQL,
+		sql,
+		parserLowerCaseTableNames(ses),
+		sqlMode,
+	)
+}
+
 func doGrantPrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.Statement) error {
 	var err error
 	var sql string
+	var curRole string
 	tenantInfo := ses.GetTenantInfo()
 	if tenantInfo == nil || tenantInfo.IsAdminRole() {
 		return err
 	}
-	curRole := tenantInfo.GetDefaultRole()
+	curRole = tenantInfo.GetDefaultRole()
+	if roleID := ses.GetDDLOwnerRoleID(); roleID != 0 {
+		curRole, err = getRoleNameByID(ctx, ses, roleID)
+		if err != nil {
+			return err
+		}
+	}
 	if len(curRole) == 0 {
 		return err
 	}
@@ -10767,13 +11757,8 @@ func doGrantPrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.Sta
 
 func doRevokePrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.Statement) error {
 	var err error
-	var sql string
 	tenantInfo := ses.GetTenantInfo()
 	if tenantInfo == nil || tenantInfo.IsAdminRole() {
-		return err
-	}
-	curRole := tenantInfo.GetDefaultRole()
-	if len(curRole) == 0 {
 		return err
 	}
 
@@ -10787,37 +11772,52 @@ func doRevokePrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.St
 		tenantCtx = defines.AttachAccount(ctx, tenantInfo.GetTenantID(), tenantInfo.GetUserID(), uint32(accountAdminRoleID))
 	}
 
-	// 2.grant database privilege
-	switch st := stmt.(type) {
-	case *tree.DropDatabase:
-		sql = getSqlForRevokeOwnershipFromDatabase(string(st.Name), curRole)
-	case *tree.DropTable:
-		// get database name
-		var dbName string
-		if len(st.Names[0].SchemaName) == 0 {
-			dbName = ses.GetDatabaseName()
-		} else {
-			dbName = string(st.Names[0].SchemaName)
-		}
-		// get table name
-		tableName := string(st.Names[0].ObjectName)
-		sql = getSqlForRevokeOwnershipFromTable(dbName, tableName, curRole)
-	}
-
-	rp, err := mysql.Parse(tenantCtx, sql, 1)
-	if err != nil {
-		return err
-	}
-
 	bh := ses.GetShareTxnBackgroundExec(ctx, false)
 	defer bh.Close()
 
-	err = doRevokePrivilege(tenantCtx, ses, &rp[0].(*tree.Revoke).RevokePrivilege, bh)
-	if err != nil {
-		return err
-	}
+	// 2.grant database privilege
+	switch st := stmt.(type) {
+	case *tree.DropDatabase:
+		curRole, err := getDatabaseOwnerRoleName(tenantCtx, bh, string(st.Name))
+		if err != nil || shouldSkipImplicitOwnershipRevoke(ses, curRole) {
+			return err
+		}
+		sql := getSqlForRevokeOwnershipFromDatabase(string(st.Name), curRole)
+		rp, err := mysql.Parse(tenantCtx, sql, 1)
+		if err != nil {
+			return err
+		}
+		return doRevokePrivilege(tenantCtx, ses, &rp[0].(*tree.Revoke).RevokePrivilege, bh)
+	case *tree.DropTable:
+		sqls := make([]string, 0, len(st.Names))
+		for _, name := range st.Names {
+			dbName := string(name.SchemaName)
+			if len(dbName) == 0 {
+				dbName = ses.GetDatabaseName()
+			}
+			curRole, err := getTableOwnerRoleName(tenantCtx, bh, dbName, string(name.ObjectName))
+			if err != nil {
+				return err
+			}
+			if shouldSkipImplicitOwnershipRevoke(ses, curRole) {
+				continue
+			}
+			sqls = append(sqls, getSqlForRevokeOwnershipFromTable(dbName, string(name.ObjectName), curRole))
+		}
 
-	return err
+		for _, sql := range sqls {
+			rp, err := mysql.Parse(tenantCtx, sql, 1)
+			if err != nil {
+				return err
+			}
+
+			if err = doRevokePrivilege(tenantCtx, ses, &rp[0].(*tree.Revoke).RevokePrivilege, bh); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	return nil
 }
 
 func doSetGlobalSystemVariable(ctx context.Context, ses *Session, varName string, varValue interface{}) (err error) {

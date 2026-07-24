@@ -111,6 +111,78 @@ func TestRemoteDataSource_ApplyTombstones(t *testing.T) {
 	require.Equal(t, 1, len(left))
 }
 
+func TestNewRemoteDataSource_StripsFirstEmptyBlock(t *testing.T) {
+	relData := NewBlockListRelationData(0)
+	relData.AppendBlockInfo(&objectio.EmptyBlockInfo)
+	realBlock := objectio.BlockInfo{
+		BlockID: types.Blockid{1},
+	}
+	relData.AppendBlockInfo(&realBlock)
+
+	ds := NewRemoteDataSource(context.Background(), nil, timestamp.Timestamp{}, relData)
+	require.Equal(t, 1, ds.data.DataCnt())
+
+	blk, state, err := ds.Next(context.Background(), nil, nil, nil, 0, nil, nil, nil)
+	require.NoError(t, err)
+	require.Equal(t, engine.Persisted, state)
+	require.False(t, blk.IsMemBlk())
+	require.Equal(t, realBlock.BlockID, blk.BlockID)
+
+	blk, state, err = ds.Next(context.Background(), nil, nil, nil, 0, nil, nil, nil)
+	require.NoError(t, err)
+	require.Nil(t, blk)
+	require.Equal(t, engine.End, state)
+}
+
+func TestNewRemoteDataSource_StripsOnlyEmptyBlock(t *testing.T) {
+	relData := NewBlockListRelationData(0)
+	relData.AppendBlockInfo(&objectio.EmptyBlockInfo)
+
+	ds := NewRemoteDataSource(context.Background(), nil, timestamp.Timestamp{}, relData)
+	require.Equal(t, 0, ds.data.DataCnt())
+
+	blk, state, err := ds.Next(context.Background(), nil, nil, nil, 0, nil, nil, nil)
+	require.NoError(t, err)
+	require.Nil(t, blk)
+	require.Equal(t, engine.End, state)
+}
+
+func TestNewRemoteDataSource_StripsObjListFirstEmptyBlock(t *testing.T) {
+	objID := objectio.NewObjectid()
+	stats := objectio.NewObjectStatsWithObjectID(&objID, false, false, false)
+	require.NoError(t, objectio.SetObjectStatsBlkCnt(stats, 2))
+	require.NoError(t, objectio.SetObjectStatsRowCnt(stats, objectio.BlockMaxRows*2))
+	relData := &ObjListRelData{
+		NeedFirstEmpty: true,
+	}
+	relData.AppendObj(stats)
+
+	ds := NewRemoteDataSource(context.Background(), nil, timestamp.Timestamp{}, relData)
+	require.Equal(t, 2, ds.data.DataCnt())
+	require.Equal(t, stats.ConstructBlockInfo(0).BlockID, ds.data.GetBlockInfo(0).BlockID)
+	require.Equal(t, stats.ConstructBlockInfo(1).BlockID, ds.data.GetBlockInfo(1).BlockID)
+}
+
+func TestStripFirstEmptyBlock_EdgeCases(t *testing.T) {
+	require.Nil(t, stripFirstEmptyBlock(nil))
+
+	var objList *ObjListRelData
+	require.Nil(t, stripFirstEmptyBlock(objList))
+
+	var blockList *BlockListRelData
+	require.Nil(t, stripFirstEmptyBlock(blockList))
+
+	emptyRelData := BuildEmptyRelData()
+	require.True(t, emptyRelData == stripFirstEmptyBlock(emptyRelData))
+
+	relData := NewBlockListRelationData(0)
+	realBlock := objectio.BlockInfo{BlockID: types.Blockid{2}}
+	relData.AppendBlockInfo(&realBlock)
+	stripped := stripFirstEmptyBlock(relData)
+	require.Equal(t, 1, stripped.DataCnt())
+	require.Equal(t, realBlock.BlockID, stripped.GetBlockInfo(0).BlockID)
+}
+
 func TestObjListRelData(t *testing.T) { // for test coverage
 	objlistRelData := &ObjListRelData{
 		NeedFirstEmpty: true,
@@ -125,43 +197,6 @@ func TestObjListRelData(t *testing.T) { // for test coverage
 	buf, err := objlistRelData.MarshalBinary()
 	require.NoError(t, err)
 	objlistRelData.UnmarshalBinary(buf)
-}
-
-func TestObjListRelData1(t *testing.T) {
-	defer func() {
-		r := recover()
-		fmt.Println("panic recover", r)
-	}()
-	objlistRelData := &ObjListRelData{}
-	objlistRelData.GetShardIDList()
-}
-
-func TestObjListRelData2(t *testing.T) {
-	defer func() {
-		r := recover()
-		fmt.Println("panic recover", r)
-	}()
-	objlistRelData := &ObjListRelData{}
-	objlistRelData.GetShardID(1)
-
-}
-
-func TestObjListRelData3(t *testing.T) {
-	defer func() {
-		r := recover()
-		fmt.Println("panic recover", r)
-	}()
-	objlistRelData := &ObjListRelData{}
-	objlistRelData.SetShardID(1, 1)
-}
-
-func TestObjListRelData4(t *testing.T) {
-	defer func() {
-		r := recover()
-		fmt.Println("panic recover", r)
-	}()
-	objlistRelData := &ObjListRelData{}
-	objlistRelData.AppendShardID(1)
 }
 
 func TestFastApplyDeletesByRowIds(t *testing.T) {

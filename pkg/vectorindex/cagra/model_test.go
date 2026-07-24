@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"math/rand"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -129,19 +130,19 @@ func makeIndexBatch(proc *process.Process, tarPath string) *batch.Batch {
 
 // buildTestModel builds, trains and saves a CagraModel, returning it with Index==nil and
 // Path/Checksum/FileSize set. The caller is responsible for removing the tar file.
-func buildTestModel(t *testing.T, id string, ids []int64) *CagraModel[float32] {
+func buildTestModel(t *testing.T, id string, ids []int64) *CagraModel[float32, float32] {
 	t.Helper()
 
 	idxcfg := testIdxcfg()
 	data := generateTestData(testNVectors, testDim)
 
-	m, err := NewCagraModelForBuild[float32](id, idxcfg, 1, []int{0})
+	m, err := NewCagraModelForBuild[float32, float32](id, idxcfg, 1, []int{0})
 	require.NoError(t, err)
 
 	err = m.InitEmpty(testNVectors)
 	require.NoError(t, err)
 
-	err = m.AddChunkFloat(data, testNVectors, ids)
+	err = m.AddChunkQuantize(data, testNVectors, ids)
 	require.NoError(t, err)
 
 	err = m.Build()
@@ -173,8 +174,16 @@ func TestModelStreamError(t *testing.T) {
 	runSql_streaming = mock_runSql_streaming_error
 	defer func() { runSql_streaming = orig }()
 
+	// LoadIndex fires a tag=1 CDC event-log goroutine via runSql; mock it
+	// to return empty so it doesn't hit the production executor.
+	origRunSql := runSql
+	runSql = func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
+		return executor.Result{Mp: proc.Mp()}, nil
+	}
+	defer func() { runSql = origRunSql }()
+
 	// Manually create a model descriptor as if loaded from metadata.
-	idx := &CagraModel[float32]{
+	idx := &CagraModel[float32, float32]{
 		Id:       "test-stream-err",
 		FileSize: 1024, // non-zero triggers DB download
 		Checksum: "fake-checksum",
@@ -202,13 +211,13 @@ func TestModelBuildAndLoad(t *testing.T) {
 	}
 
 	// ---- Build ----
-	built, err := NewCagraModelForBuild[float32]("test-build", idxcfg, 1, []int{0})
+	built, err := NewCagraModelForBuild[float32, float32]("test-build", idxcfg, 1, []int{0})
 	require.NoError(t, err)
 
 	err = built.InitEmpty(testNVectors)
 	require.NoError(t, err)
 
-	err = built.AddChunkFloat(data, testNVectors, ids)
+	err = built.AddChunkQuantize(data, testNVectors, ids)
 	require.NoError(t, err)
 
 	err = built.Build()
@@ -228,8 +237,17 @@ func TestModelBuildAndLoad(t *testing.T) {
 	require.NotEmpty(t, checksum)
 	defer os.Remove(tarPath)
 
+	// LoadIndex always fires the tag=1 CDC event-log SELECT (even when
+	// Path is already set and the tar download is skipped). Mock it to
+	// return empty so it doesn't hit the production executor.
+	origRunSql := runSql
+	runSql = func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
+		return executor.Result{Mp: proc.Mp()}, nil
+	}
+	defer func() { runSql = origRunSql }()
+
 	// ---- Load from local tar (skips DB download since Path is set) ----
-	loader := &CagraModel[float32]{
+	loader := &CagraModel[float32, float32]{
 		Id:       "test-build",
 		Path:     tarPath,
 		Checksum: checksum,
@@ -305,6 +323,12 @@ func TestModelLoadFromDB(t *testing.T) {
 	// Also mock runSql for LoadMetadata.
 	origRunSql := runSql
 	runSql = func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+		// LoadIndex also fires the tag=1 CDC event-log SELECT in parallel
+		// with the model tar streaming. Return an empty result — the test
+		// exercises the no-CDC-delta path.
+		if strings.Contains(sql, "AND tag = 1") {
+			return executor.Result{Mp: proc.Mp()}, nil
+		}
 		res := executor.Result{
 			Mp: proc.Mp(),
 			Batches: []*batch.Batch{
@@ -316,7 +340,7 @@ func TestModelLoadFromDB(t *testing.T) {
 	defer func() { runSql = origRunSql }()
 
 	// LoadMetadata — creates a model from DB metadata.
-	models, err := LoadMetadata[float32](sqlproc, tblcfg.DbName, tblcfg.MetadataTable)
+	models, err := LoadMetadata[float32, float32](sqlproc, tblcfg.DbName, tblcfg.MetadataTable)
 	require.NoError(t, err)
 	require.Equal(t, 1, len(models))
 
@@ -346,7 +370,7 @@ func TestModelNil(t *testing.T) {
 	var tblcfg vectorindex.IndexTableConfig
 
 	// Zero-value model: no index, no path.
-	idx := &CagraModel[float32]{}
+	idx := &CagraModel[float32, float32]{}
 
 	// InitEmpty fails because Devices is empty.
 	err := idx.InitEmpty(10)
@@ -362,7 +386,7 @@ func TestModelNil(t *testing.T) {
 	require.NotNil(t, err)
 
 	// AddChunkFloat fails because Index is nil.
-	err = idx.AddChunkFloat([]float32{1, 2}, 1, []int64{1})
+	err = idx.AddChunkQuantize([]float32{1, 2}, 1, []int64{1})
 	require.NotNil(t, err)
 
 	// Search fails because Index is nil.
@@ -370,7 +394,7 @@ func TestModelNil(t *testing.T) {
 	require.NotNil(t, err)
 
 	// Search with nil query fails.
-	idx2 := &CagraModel[float32]{} // still nil Index
+	idx2 := &CagraModel[float32, float32]{} // still nil Index
 	_, _, err = idx2.Search(nil, 1)
 	require.NotNil(t, err)
 
@@ -408,7 +432,7 @@ func TestModelEmptyBuild(t *testing.T) {
 	idxcfg := testIdxcfg()
 	tblcfg := testTblcfg()
 
-	built, err := NewCagraModelForBuild[float32]("test-empty", idxcfg, 1, []int{0})
+	built, err := NewCagraModelForBuild[float32, float32]("test-empty", idxcfg, 1, []int{0})
 	require.NoError(t, err)
 
 	// InitEmpty with 0 would fail in CAGRA, so test saveToFile directly on empty Len.

@@ -157,7 +157,7 @@ func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (plan
 				// create table t1(a char) -> DisplayWith = -1；but get width=1 in MySQL and PgSQL
 				if fstr == "char" || fstr == "binary" {
 					width = 1
-				} else if fstr == "vecf32" || fstr == "vecf64" {
+				} else if fstr == types.ArrayFloat32SQLName || fstr == types.ArrayFloat64SQLName || fstr == types.ArrayBF16SQLName || fstr == types.ArrayFloat16SQLName || fstr == types.ArrayInt8SQLName || fstr == types.ArrayUint8SQLName {
 					width = types.MaxArrayDimension
 				} else {
 					width = types.MaxVarcharLen
@@ -168,7 +168,7 @@ func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (plan
 				return plan.Type{}, moerr.NewOutOfRangef(ctx, fstr, " typeLen is over the MaxCharLen: %v", types.MaxCharLen)
 			} else if (fstr == "varchar" || fstr == "varbinary") && width > types.MaxVarcharLen {
 				return plan.Type{}, moerr.NewOutOfRangef(ctx, fstr, " typeLen is over the MaxVarcharLen: %v", types.MaxVarcharLen)
-			} else if fstr == "vecf32" || fstr == "vecf64" {
+			} else if fstr == types.ArrayFloat32SQLName || fstr == types.ArrayFloat64SQLName || fstr == types.ArrayBF16SQLName || fstr == types.ArrayFloat16SQLName || fstr == types.ArrayInt8SQLName || fstr == types.ArrayUint8SQLName {
 				if width > types.MaxArrayDimension {
 					return plan.Type{}, moerr.NewOutOfRangef(ctx, fstr, " typeLen is over the MaxVectorLen : %v", types.MaxArrayDimension)
 				}
@@ -183,10 +183,18 @@ func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (plan
 				return plan.Type{Id: int32(types.T_binary), Width: width}, nil
 			case "varchar":
 				return plan.Type{Id: int32(types.T_varchar), Width: width}, nil
-			case "vecf32":
+			case types.ArrayFloat32SQLName:
 				return plan.Type{Id: int32(types.T_array_float32), Width: width}, nil
-			case "vecf64":
+			case types.ArrayFloat64SQLName:
 				return plan.Type{Id: int32(types.T_array_float64), Width: width}, nil
+			case types.ArrayBF16SQLName:
+				return plan.Type{Id: int32(types.T_array_bf16), Width: width}, nil
+			case types.ArrayFloat16SQLName:
+				return plan.Type{Id: int32(types.T_array_float16), Width: width}, nil
+			case types.ArrayInt8SQLName:
+				return plan.Type{Id: int32(types.T_array_int8), Width: width}, nil
+			case types.ArrayUint8SQLName:
+				return plan.Type{Id: int32(types.T_array_uint8), Width: width}, nil
 			}
 			// varbinary
 			return plan.Type{Id: int32(types.T_varbinary), Width: width}, nil
@@ -365,7 +373,7 @@ func buildDefaultExpr(col *tree.ColumnTableDef, typ plan.Type, proc *process.Pro
 		}
 	}
 
-	defaultExpr, err := makePlan2CastExpr(proc.Ctx, planExpr, typ)
+	defaultExpr, err := makePlan2AssignmentCastExpr(proc.Ctx, planExpr, typ)
 	if err != nil {
 		return nil, err
 	}
@@ -405,7 +413,7 @@ func buildOnUpdate(col *tree.ColumnTableDef, typ plan.Type, proc *process.Proces
 		return nil, err
 	}
 
-	onUpdateExpr, err := makePlan2CastExpr(proc.Ctx, planExpr, typ)
+	onUpdateExpr, err := makePlan2AssignmentCastExpr(proc.Ctx, planExpr, typ)
 	if err != nil {
 		return nil, err
 	}
@@ -497,7 +505,11 @@ func buildGeneratedExpr(col *tree.ColumnTableDef, typ plan.Type, existingCols []
 		return nil, err
 	}
 
-	genExpr, err := makePlan2CastExpr(proc.Ctx, planExpr, typ)
+	// A generated CHAR/VARCHAR column is materialized as a real column write, so
+	// use the strict assignment cast: an over-length value is rejected instead of
+	// being silently truncated, matching column DEFAULT / ON UPDATE and the DML
+	// assignment paths.
+	genExpr, err := makePlan2AssignmentCastExpr(proc.Ctx, planExpr, typ)
 	if err != nil {
 		return nil, err
 	}
@@ -690,6 +702,36 @@ func substituteColRefsInExpr(expr *plan.Expr, projList []*plan.Expr, offset int3
 		}
 	default:
 		return expr
+	}
+}
+
+// collectRefColPos returns the ColPos of every base-table column reference
+// (RelPos == 0) inside expr, e.g. the source columns of a generated column's
+// definition expression.
+func collectRefColPos(expr *plan.Expr) []int32 {
+	if expr == nil {
+		return nil
+	}
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		if e.Col.RelPos == 0 {
+			return []int32{e.Col.ColPos}
+		}
+		return nil
+	case *plan.Expr_F:
+		var res []int32
+		for _, arg := range e.F.Args {
+			res = append(res, collectRefColPos(arg)...)
+		}
+		return res
+	case *plan.Expr_List:
+		var res []int32
+		for _, item := range e.List.List {
+			res = append(res, collectRefColPos(item)...)
+		}
+		return res
+	default:
+		return nil
 	}
 }
 

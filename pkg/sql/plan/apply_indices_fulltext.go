@@ -15,13 +15,12 @@ package plan
 
 import (
 	"fmt"
-	"strconv"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
@@ -60,15 +59,38 @@ func (builder *QueryBuilder) applyIndicesForProjectionUsingFullTextIndex(nodeID 
 
 	// check equal fulltext_match func and only compute once for equal function()
 	eqmap := builder.findEqualFullTextMatchFunc(projNode, scanNode, projids, filterids)
+	var paginationLimit, paginationOffset *plan.Expr
+	if projNode.Limit != nil || projNode.Offset != nil {
+		paginationLimit, paginationOffset = projNode.Limit, projNode.Offset
+	}
+	if scanNode.Limit != nil || scanNode.Offset != nil {
+		paginationLimit, paginationOffset = scanNode.Limit, scanNode.Offset
+	}
+	if sortNode != nil && (sortNode.Limit != nil || sortNode.Offset != nil) {
+		paginationLimit, paginationOffset = sortNode.Limit, sortNode.Offset
+	}
+	internalLimit, internalOffset := paginationLimit, paginationOffset
+	if sortNode != nil {
+		// The fulltext function returns relevance order. It is not safe to
+		// truncate that stream before an explicit sort on another expression.
+		internalLimit, internalOffset = nil, nil
+	}
 
 	idxID, filter_node_ids, proj_node_ids, err := builder.applyJoinFullTextIndices(nodeID, projNode, scanNode,
-		filterids, filterIndexDefs, projids, projIndexDef, eqmap, colRefCnt, idxColMap)
+		internalLimit, internalOffset, filterids, filterIndexDefs, projids, projIndexDef, eqmap, colRefCnt, idxColMap)
 	if err != nil {
 		return -1, err
 	}
+	// Pagination belongs to the result of the base-table/fulltext join, never
+	// to the base scan and fulltext stream independently. Both inputs are
+	// unordered, so paginating them separately can select disjoint subsets.
+	scanNode.Limit = nil
+	scanNode.Offset = nil
 
 	if sortNode != nil {
 		sortNode.Children[0] = idxID
+		sortNode.Limit = DeepCopyExpr(paginationLimit)
+		sortNode.Offset = DeepCopyExpr(paginationOffset)
 
 	} else {
 
@@ -116,14 +138,10 @@ func (builder *QueryBuilder) applyIndicesForProjectionUsingFullTextIndex(nodeID 
 			NodeType: plan.Node_SORT,
 			Children: []int32{idxID},
 			OrderBy:  orderByScore,
-			Limit:    DeepCopyExpr(scanNode.Limit),
-			Offset:   DeepCopyExpr(scanNode.Offset),
+			Limit:    DeepCopyExpr(paginationLimit),
+			Offset:   DeepCopyExpr(paginationOffset),
 			SpillMem: builder.sortSpillMem,
 		}, ctx)
-
-		// move scanNode.Limit to sortNode
-		scanNode.Limit = nil
-		scanNode.Offset = nil
 
 		projNode.Children[0] = sortByID
 	}
@@ -170,10 +188,15 @@ func (builder *QueryBuilder) applyIndicesForAggUsingFullTextIndex(nodeID int32, 
 	eqmap := make(map[int32]int32)
 
 	idxID, _, _, err := builder.applyJoinFullTextIndices(nodeID, projNode, scanNode,
-		filterids, filterIndexDefs, projids, projIndexDefs, eqmap, colRefCnt, idxColMap)
+		scanNode.Limit, scanNode.Offset, filterids, filterIndexDefs, projids, projIndexDefs, eqmap, colRefCnt, idxColMap)
 	if err != nil {
 		return -1, err
 	}
+	joinNode := builder.qry.Nodes[idxID]
+	joinNode.Limit = DeepCopyExpr(scanNode.Limit)
+	joinNode.Offset = DeepCopyExpr(scanNode.Offset)
+	scanNode.Limit = nil
+	scanNode.Offset = nil
 
 	aggNode.Children[0] = idxID
 
@@ -181,6 +204,7 @@ func (builder *QueryBuilder) applyIndicesForAggUsingFullTextIndex(nodeID int32, 
 }
 
 func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *plan.Node, scanNode *plan.Node,
+	paginationLimit, paginationOffset *plan.Expr,
 	filterids []int32, filter_indexDefs []*plan.IndexDef,
 	projids []int32, proj_indexDefs []*plan.IndexDef, eqmap map[int32]int32,
 	colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, []int32, []int32, error) {
@@ -206,12 +230,6 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 		scanNode.FilterList = append(scanNode.FilterList[:ftid], scanNode.FilterList[ftid+1:]...)
 	}
 
-	// apply pushdown limit when no filter
-	var limitExpr *plan.Expr
-	if len(scanNode.FilterList) == 0 && scanNode.Limit != nil {
-		limitExpr = scanNode.Limit
-	}
-
 	indexDefs = append(indexDefs, filter_indexDefs...)
 
 	// Check Equal fulltext_match function
@@ -234,6 +252,15 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 		}
 	}
 
+	// A single fulltext stream can safely keep LIMIT+OFFSET candidates. With
+	// multiple streams, limiting each input before their intersection can drop
+	// documents that belong to the final top page, so leave those inputs
+	// unbounded until a joint top-k implementation exists.
+	var limitExpr *plan.Expr
+	if len(scanNode.FilterList) == 0 && len(ft_filters) == 1 {
+		limitExpr, _ = buildCandidateLimit(paginationLimit, paginationOffset)
+	}
+
 	// buildFullTextIndexScan
 	var last_node_id int32
 	var last_ftnode_pkcol *Expr
@@ -244,42 +271,34 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 		idxtblname := fmt.Sprintf("`%s`.`%s`", scanNode.ObjRef.SchemaName, idxdef.IndexTableName)
 		srctblname := fmt.Sprintf("`%s`.`%s`", scanNode.ObjRef.SchemaName, scanNode.TableDef.Name)
 		fn := ftidxscan.GetF()
-		pattern := fn.Args[0].GetLit().GetSval()
-		mode := fn.Args[1].GetLit().GetI64Val()
-
-		fulltext_func := tree.NewCStr(fulltext_index_scan_func_name, 1)
-		alias_name := fmt.Sprintf("mo_fulltext_alias_%d", i)
 		params := idxdef.IndexAlgoParams
+		aliasName := fmt.Sprintf("mo_fulltext_alias_%d", i)
 
-		var exprs tree.Exprs
-		exprs = append(exprs, tree.NewNumVal[string](params, params, false, tree.P_char))
-		exprs = append(exprs, tree.NewNumVal[string](srctblname, srctblname, false, tree.P_char))
-		exprs = append(exprs, tree.NewNumVal[string](idxtblname, idxtblname, false, tree.P_char))
-		exprs = append(exprs, tree.NewNumVal[string](pattern, pattern, false, tree.P_char))
-		exprs = append(exprs, tree.NewNumVal[int64](mode, strconv.FormatInt(mode, 10), false, tree.P_int64))
+		modeLit := fn.Args[1].GetLit()
+		if modeLit == nil {
+			return -1, nil, nil, moerr.NewInvalidInput(builder.GetContext(), "fulltext search mode must be a constant")
+		}
+		mode := modeLit.GetI64Val()
 
-		name := tree.NewUnresolvedName(fulltext_func)
-
-		// TableFuncion AST
-		tmpTableFunc := &tree.AliasedTableExpr{
-			Expr: &tree.TableFunction{
-				Func: &tree.FuncExpr{
-					Func:     tree.FuncName2ResolvableFunctionReference(name),
-					FuncName: fulltext_func,
-					Exprs:    exprs,
-					Type:     tree.FUNC_TYPE_TABLE,
-				},
-			},
-			As: tree.AliasClause{
-				Alias: tree.Identifier(alias_name),
-			},
+		sql := ""
+		if patternLit := fn.Args[0].GetLit(); patternLit != nil {
+			fullTextSQL, err := builder.getFullTextIndexScanSql(params, idxtblname, patternLit.GetSval(), mode)
+			if err != nil {
+				return -1, nil, nil, err
+			}
+			sql = fullTextSQL
 		}
 
-		curr_ftnode_id, err := builder.buildTable(tmpTableFunc, ctx, -1, nil)
+		exprs := []*plan.Expr{
+			makePlan2StringConstExprWithType(srctblname),
+			makePlan2StringConstExprWithType(idxtblname),
+			DeepCopyExpr(fn.Args[0]),
+			DeepCopyExpr(fn.Args[1]),
+		}
+		curr_ftnode_id, err := builder.buildFullTextIndexScanNode(ctx, exprs, nil, params, sql)
 		if err != nil {
 			return -1, nil, nil, err
 		}
-
 		// save the created fulltext node to either filter or projection
 		// check equal fulltext_match() and return node id to correct project position
 		if i < proj_offset {
@@ -302,6 +321,9 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 
 		curr_ftnode := builder.qry.Nodes[curr_ftnode_id]
 		curr_ftnode_tag := curr_ftnode.BindingTags[0]
+		for colPos, colDef := range curr_ftnode.TableDef.Cols {
+			builder.nameByColRef[[2]int32{curr_ftnode_tag, int32(colPos)}] = aliasName + "." + colDef.Name
+		}
 		curr_ftnode_pkcol := &Expr{
 			Typ: pkType,
 			Expr: &plan.Expr_Col{
@@ -599,6 +621,81 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 	return joinnodeID, ret_filter_node_ids, ret_proj_node_ids, nil
 }
 
+func (builder *QueryBuilder) scanHasMatchedFullTextFilter(node *plan.Node) bool {
+	filterids, _ := builder.getFullTextMatchFiltersFromScanNode(node)
+	return len(filterids) > 0
+}
+
+func (builder *QueryBuilder) applyFullTextFiltersForJoinChildren(nodeID int32, joinNode *plan.Node,
+	colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (bool, error) {
+	if joinNode == nil || joinNode.JoinType != plan.Node_INNER {
+		return false, nil
+	}
+
+	changed := false
+	for i, childID := range joinNode.Children {
+		child := builder.qry.Nodes[childID]
+		if child == nil || child.NodeType != plan.Node_TABLE_SCAN {
+			continue
+		}
+
+		newNodeID, ok, err := builder.applyFullTextFiltersForScanInJoin(nodeID, child, colRefCnt, idxColMap)
+		if err != nil {
+			return false, err
+		}
+		if ok {
+			joinNode.Children[i] = newNodeID
+			changed = true
+		}
+	}
+
+	return changed, nil
+}
+
+func (builder *QueryBuilder) applyFullTextFiltersForScanInJoin(nodeID int32, scanNode *plan.Node,
+	colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, bool, error) {
+	filterids, filterIndexDefs := builder.getFullTextMatchFiltersFromScanNode(scanNode)
+	if len(filterids) == 0 {
+		return scanNode.NodeId, false, nil
+	}
+
+	ctxNodeID := builder.fullTextRewriteContextNodeID(nodeID, scanNode)
+	newNodeID, _, _, err := builder.applyJoinFullTextIndices(
+		ctxNodeID,
+		nil,
+		scanNode,
+		scanNode.Limit,
+		scanNode.Offset,
+		filterids,
+		filterIndexDefs,
+		nil,
+		nil,
+		map[int32]int32{},
+		colRefCnt,
+		idxColMap,
+	)
+	if err != nil {
+		return -1, false, err
+	}
+	joinNode := builder.qry.Nodes[newNodeID]
+	joinNode.Limit = DeepCopyExpr(scanNode.Limit)
+	joinNode.Offset = DeepCopyExpr(scanNode.Offset)
+	scanNode.Limit = nil
+	scanNode.Offset = nil
+
+	return newNodeID, true, nil
+}
+
+func (builder *QueryBuilder) fullTextRewriteContextNodeID(preferredNodeID int32, scanNode *plan.Node) int32 {
+	if preferredNodeID >= 0 && int(preferredNodeID) < len(builder.ctxByNode) && builder.ctxByNode[preferredNodeID] != nil {
+		return preferredNodeID
+	}
+	if scanNode != nil && scanNode.NodeId >= 0 && int(scanNode.NodeId) < len(builder.ctxByNode) && builder.ctxByNode[scanNode.NodeId] != nil {
+		return scanNode.NodeId
+	}
+	return preferredNodeID
+}
+
 func (builder *QueryBuilder) equalsFullTextMatchFunc(fn1 *plan.Function, fn2 *plan.Function) bool {
 
 	nargs1 := len(fn1.Args)
@@ -608,17 +705,9 @@ func (builder *QueryBuilder) equalsFullTextMatchFunc(fn1 *plan.Function, fn2 *pl
 		return false
 	}
 
-	// check search pattern and mode
-	var pattern1, pattern2 string
-	var mode1, mode2 int64
-
-	pattern1 = fn1.Args[0].GetLit().GetSval()
-	mode1 = fn1.Args[1].GetLit().GetI64Val()
-
-	pattern2 = fn2.Args[0].GetLit().GetSval()
-	mode2 = fn2.Args[1].GetLit().GetI64Val()
-
-	if pattern1 != pattern2 || mode1 != mode2 {
+	// Pattern arguments may be bound parameters, so compare the bound
+	// expression tree instead of dereferencing literal strings.
+	if !exprStructuralEqual(fn1.Args[0], fn2.Args[0]) || !exprStructuralEqual(fn1.Args[1], fn2.Args[1]) {
 		return false
 	}
 
@@ -652,13 +741,48 @@ func (builder *QueryBuilder) findEqualFullTextMatchFunc(projNode *plan.Node, sca
 }
 
 func (builder *QueryBuilder) findMatchFullTextIndex(fn *plan.Function, scanNode *plan.Node) *plan.IndexDef {
+	if fn == nil || scanNode == nil || scanNode.TableDef == nil || len(scanNode.BindingTags) == 0 {
+		return nil
+	}
+	if len(fn.Args) < 3 || fn.Args[1].GetLit() == nil {
+		return nil
+	}
+	if scanNode.TableDef.Pkey == nil || scanNode.TableDef.Pkey.PkeyColName == "" {
+		return nil
+	}
+
+	scanTag := scanNode.BindingTags[0]
+	argColNames := make([]string, 0, len(fn.Args)-2)
+	for j := 2; j < len(fn.Args); j++ {
+		col := fn.Args[j].GetCol()
+		if col == nil || col.RelPos != scanTag {
+			return nil
+		}
+
+		colName := col.Name
+		if colName == "" {
+			if col.ColPos < 0 || int(col.ColPos) >= len(scanNode.TableDef.Cols) {
+				return nil
+			}
+			colName = scanNode.TableDef.Cols[col.ColPos].Name
+		}
+		argColNames = append(argColNames, colName)
+	}
 
 	nargs := len(fn.Args) - 2
 	for _, idx := range scanNode.TableDef.Indexes {
+		if idx == nil || !idx.TableExist || !catalog.IsFullTextIndexAlgo(idx.IndexAlgo) {
+			continue
+		}
+		if len(idx.Parts) != nargs {
+			continue
+		}
+
 		nfound := 0
 		for _, p := range idx.Parts {
-			for j := 2; j < len(fn.Args); j++ {
-				if strings.EqualFold(p, fn.Args[j].GetCol().GetName()) {
+			partName := catalog.ResolveAlias(p)
+			for _, colName := range argColNames {
+				if strings.EqualFold(partName, colName) || strings.EqualFold(p, colName) {
 					// found
 					nfound++
 					break

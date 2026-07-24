@@ -42,6 +42,10 @@ var (
 	ErrLockTableNotFound = moerr.NewLockTableNotFoundNoCtx()
 	// ErrLockConflict lock option conflict
 	ErrLockConflict = moerr.NewLockConflictNoCtx()
+	// ErrLockTimeout lock table timeout
+	ErrLockTimeout = moerr.NewLockWaitTimeoutNoCtx()
+	// ErrRemoteLockWaitTimeout remote lock owner-side wait timeout
+	ErrRemoteLockWaitTimeout = moerr.NewRemoteLockWaitTimeoutNoCtx()
 )
 
 // Option lockservice option
@@ -116,15 +120,51 @@ type LockService interface {
 
 	// GetWaitingList get special txnID's waiting list
 	GetWaitingList(ctx context.Context, txnID []byte) (bool, []pb.WaitTxn, error)
+	// GetLockHolder returns the current holder of a row lock if it exists.
+	GetLockHolder(ctx context.Context, tableID uint64, row []byte, options pb.LockOptions) (pb.WaitTxn, bool, error)
 	// ForceRefreshLockTableBinds force refresh all lock tables binds
 	ForceRefreshLockTableBinds(targets []uint64, matcher func(bind pb.LockTable) bool)
 	// GetLockTableBind returns lock table bind
 	GetLockTableBind(group uint32, tableID uint64) (pb.LockTable, error)
+	// GetLatestLockTableBind returns the latest lock table bind from lock table allocator.
+	GetLatestLockTableBind(bind pb.LockTable) (pb.LockTable, error)
 	// IterLocks iter all locks on current lock service. len(keys) == 2 if is range lock,
 	// len(keys) == 1 if is row lock. And keys only valid in current iter func call.
 	IterLocks(func(tableID uint64, keys [][]byte, lock Lock) bool)
 	// CloseRemoteLockTable close lock table
 	CloseRemoteLockTable(group uint32, tableID, version uint64) (bool, error)
+}
+
+// UnknownCommitResolver resolves a Commit whose request may have reached TN but
+// whose final response was not received by CN. It must not release the txn's
+// locks until the allocator proves that the txn cannot still be committing.
+// The optional completion callback is invoked exactly once after terminal
+// lock cleanup.
+//
+// This is deliberately separate from LockService: callers that only perform
+// regular lock operations do not need to implement the exceptional protocol.
+type UnknownCommitResolver interface {
+	ResolveCommitUnknown(
+		txnID []byte,
+		commitDeadline time.Time,
+		commitSequence uint64,
+		onResolved func(),
+	) error
+}
+
+// CommitSequenceProvider allocates a source-CN-local sequence for Commit
+// admission. A lockservice incarnation has one allocator, so a newer sequence
+// proves that a Commit was created after a fenced unknown Commit on that CN.
+type CommitSequenceProvider interface {
+	NextCommitSequence() uint64
+}
+
+// CommitRequestMeta carries optional wire metadata used only at TN admission.
+// A zero value is reserved for legacy/internal callers and is rejected while a
+// persistent unknown-commit fence is active.
+type CommitRequestMeta struct {
+	DeadlineUnixNano int64
+	Sequence         uint64
 }
 
 type ResumeLockService interface {
@@ -155,7 +195,9 @@ type lockTable interface {
 	// Unlock release a set of locks, if txn was committed, commitTS is not empty
 	unlock(txn *activeTxn, ls *cowSlice, commitTS timestamp.Timestamp, mutations ...pb.ExtraMutation)
 	// getLock get a lock
-	getLock(key []byte, txn pb.WaitTxn, fn func(Lock))
+	getLock(ctx context.Context, key []byte, txn pb.WaitTxn, fn func(Lock)) error
+	// getLockHolder returns the current holder if the lock is actively held.
+	getLockHolder(ctx context.Context, key []byte) (pb.WaitTxn, bool, error)
 	// getBind returns lock table binding
 	getBind() pb.LockTable
 	// close close the locktable
@@ -183,8 +225,14 @@ type LockTableAllocator interface {
 	// periodically to keep the binding in place. If no heartbeat is sent for a long
 	// period of time to maintain the binding, the binding will become invalid.
 	KeepLockTableBind(serviceID string) bool
-	// Valid check for changes in the binding relationship of a specific lock-table.
-	Valid(serviceID string, txnID []byte, binds []pb.LockTable) ([]uint64, error)
+	// Valid checks lock-table bindings and registers a successful commit attempt.
+	// commitMeta carries the absolute Commit deadline and source-CN sequence
+	// when the caller has them. A zero value is accepted for legacy/internal
+	// callers unless an unknown-commit fence is active.
+	// Every successful call must be paired with exactly one FinishCommit call.
+	Valid(serviceID string, txnID []byte, binds []pb.LockTable, commitMeta ...CommitRequestMeta) ([]uint64, error)
+	// FinishCommit marks the end of a commit attempt registered by Valid.
+	FinishCommit(serviceID string, txnID []byte)
 	// AddCannotCommit add cannot commit txn.
 	AddCannotCommit(values []pb.OrphanTxn) [][]byte
 	// AddInvalidService add invalid service
@@ -239,7 +287,8 @@ type Server interface {
 // LockOptions options for lock
 type LockOptions struct {
 	pb.LockOptions
-	async bool
+	async                      bool
+	remoteLockOwnerWaitTimeout time.Duration
 }
 
 // Lock stores specific lock information. Since there are a large number of lock objects

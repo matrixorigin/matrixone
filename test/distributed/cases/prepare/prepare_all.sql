@@ -474,6 +474,25 @@ PREPARE s FROM 'SELECT concat(?,"")';
 EXECUTE s USING @maxint;
 DEALLOCATE PREPARE s;
 
+drop table if exists prepare_bit_numeric;
+create table prepare_bit_numeric (b bit(64));
+insert into prepare_bit_numeric values (0), (18446744073709551615);
+select b from prepare_bit_numeric order by b;
+
+prepare s from 'select ? + b from prepare_bit_numeric where b = 0';
+execute s using @maxint;
+deallocate prepare s;
+
+prepare s from 'select (? + 0.5) + b from prepare_bit_numeric where b = 0';
+execute s using @maxint;
+deallocate prepare s;
+
+prepare s from 'select b + (0.5 + ?) from prepare_bit_numeric where b = 0';
+execute s using @maxint;
+deallocate prepare s;
+
+drop table prepare_bit_numeric;
+
 --test order by clause contains placeholder
 CREATE DATABASE mocloud_meta;
 PREPARE mo_stmt_id_1 FROM SELECT SCHEMA_NAME from Information_schema.SCHEMATA where SCHEMA_NAME LIKE ? ORDER BY SCHEMA_NAME=? DESC,SCHEMA_NAME limit 1;
@@ -482,6 +501,31 @@ SET @dbname2 = 'mocloud_meta';
 EXECUTE mo_stmt_id_1 USING @dbname1, @dbname2;
 DEALLOCATE PREPARE mo_stmt_id_1;
 DROP DATABASE mocloud_meta;
+
+-- test prepared REPLACE via unquoted prepareable_stmt grammar (same path as binary protocol COM_STMT_PREPARE)
+drop table if exists replace_prepare;
+CREATE TABLE replace_prepare (a INT PRIMARY KEY, b INT);
+INSERT INTO replace_prepare VALUES (1, 10), (2, 20);
+PREPARE rp1 FROM replace into replace_prepare values (?, ?);
+SET @k = 1;
+SET @v = 100;
+EXECUTE rp1 USING @k, @v;
+SET @k = 3;
+SET @v = 30;
+EXECUTE rp1 USING @k, @v;
+SELECT * FROM replace_prepare ORDER BY a;
+DEALLOCATE PREPARE rp1;
+
+drop table if exists replace_prepare_src;
+CREATE TABLE replace_prepare_src (a INT, b INT);
+INSERT INTO replace_prepare_src VALUES (2, 222), (4, 44);
+PREPARE rp2 FROM replace into replace_prepare (a, b) select a, b from replace_prepare_src where a > ?;
+SET @t = 1;
+EXECUTE rp2 USING @t;
+SELECT * FROM replace_prepare ORDER BY a;
+DEALLOCATE PREPARE rp2;
+drop table if exists replace_prepare;
+drop table if exists replace_prepare_src;
 
 # reset
 SET TIME_ZONE = "SYSTEM";

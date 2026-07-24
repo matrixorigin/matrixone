@@ -21,6 +21,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/golang/mock/gomock"
@@ -29,9 +30,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	pbtimestamp "github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/panjf2000/ants/v2"
@@ -50,7 +53,8 @@ func TestDataBranchOutputConfigAndQualifiedTableName(t *testing.T) {
 	require.Equal(t, "\n", cfg.Lines.TerminatedBy.Value)
 	require.False(t, cfg.Header)
 
-	require.Equal(t, "db.t", qualifiedTableName("db", "t"))
+	require.Equal(t, "`db`.`t`", qualifiedTableName("db", "t"))
+	require.Equal(t, "`d``b`.`t``1`", qualifiedTableName("d`b", "t`1"))
 }
 
 func TestDataBranchOutputMakeFileName(t *testing.T) {
@@ -76,6 +80,304 @@ func TestDataBranchOutputMakeFileName(t *testing.T) {
 		tblStuff,
 	)
 	require.Regexp(t, regexp.MustCompile(`^diff_t2_sp2_t1_sp1_\d{8}_\d{6}$`), got)
+}
+
+func TestDataBranchOutputTableSpec(t *testing.T) {
+	ctx := context.Background()
+	ses := newValidateSession(t)
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	baseRel := mock_frontend.NewMockRelation(ctrl)
+	tarRel := mock_frontend.NewMockRelation(ctrl)
+	baseRel.EXPECT().GetTableDef(gomock.Any()).Return(&plan.TableDef{
+		DbName: "base_db",
+		Name:   "base_t",
+		Cols: []*plan.ColDef{
+			{Name: "id", ColId: 1, Seqnum: 0, Typ: plan.Type{Id: int32(types.T_int64), NotNullable: true}},
+			{Name: "name", ColId: 2, Seqnum: 1, Typ: plan.Type{Id: int32(types.T_varchar), Width: 20}},
+			{Name: "__mo_diff_source", ColId: 3, Seqnum: 2, Typ: plan.Type{Id: int32(types.T_varchar), Width: 20}},
+			{Name: "__mo_diff_flag", ColId: 4, Seqnum: 3, Typ: plan.Type{Id: int32(types.T_varchar), Width: 20}},
+		},
+	}).AnyTimes()
+	tarRel.EXPECT().GetTableDef(gomock.Any()).Return(&plan.TableDef{
+		DbName: "target_db",
+		Name:   "target_t",
+		Cols: []*plan.ColDef{
+			{Name: "id", ColId: 1, Seqnum: 0, Typ: plan.Type{Id: int32(types.T_int64), NotNullable: true}},
+			{Name: "name", ColId: 2, Seqnum: 1, Typ: plan.Type{Id: int32(types.T_varchar), Width: 20}},
+			{Name: "__mo_diff_source", ColId: 3, Seqnum: 2, Typ: plan.Type{Id: int32(types.T_varchar), Width: 20}},
+			{Name: "__mo_diff_flag", ColId: 4, Seqnum: 3, Typ: plan.Type{Id: int32(types.T_varchar), Width: 20}},
+		},
+	}).AnyTimes()
+
+	tblStuff := tableStuff{baseRel: baseRel, tarRel: tarRel}
+	tblStuff.def.colNames = []string{"id", "name", "__mo_diff_source", "__mo_diff_flag"}
+	tblStuff.def.colTypes = []types.Type{
+		types.T_int64.ToType(),
+		types.T_varchar.ToType(),
+		types.T_varchar.ToType(),
+		types.T_varchar.ToType(),
+	}
+	tblStuff.def.visibleIdxes = []int{0, 1, 2, 3}
+
+	outName := tree.NewTableName(
+		tree.Identifier("diff_out"),
+		tree.ObjectNamePrefix{SchemaName: tree.Identifier("out_db"), ExplicitSchema: true},
+		nil,
+	)
+
+	t.Run("all columns retain source names and avoid metadata collisions", func(t *testing.T) {
+		output, err := newDiffOutputTable(ctx, ses, &tree.DataBranchDiff{
+			OutputOpt: &tree.DiffOutputOpt{As: *outName},
+		}, tblStuff)
+		require.NoError(t, err)
+		require.Equal(t, "out_db", output.databaseName)
+		require.Equal(t, "diff_out", output.tableName)
+		require.Equal(t, []string{
+			"__mo_diff_source_1", "__mo_diff_flag_1",
+			"id", "name", "__mo_diff_source", "__mo_diff_flag",
+		}, output.columnNames)
+		require.Equal(t, []int{0, 1, 2, 3}, output.projectedIdxes)
+
+		sql, err := output.createSQL(ctx, tblStuff)
+		require.NoError(t, err)
+		require.Contains(t, sql, "create table `out_db`.`diff_out` (")
+		require.Contains(t, sql, "`__mo_diff_source_1` varchar(255) default null")
+		require.Contains(t, sql, "`__mo_diff_flag_1` varchar(16) default null")
+		require.Contains(t, sql, "`id` BIGINT not null")
+		require.NotContains(t, sql, " as select ")
+	})
+
+	t.Run("base snapshot supplies the materialized schema", func(t *testing.T) {
+		snapshotTS := pbtimestamp.Timestamp{PhysicalTime: 42}
+		snapshotTblStuff := tblStuff
+		snapshotTblStuff.baseSnap = &plan.Snapshot{TS: &snapshotTS}
+
+		output, err := newDiffOutputTable(ctx, ses, &tree.DataBranchDiff{
+			OutputOpt: &tree.DiffOutputOpt{As: *outName},
+		}, snapshotTblStuff)
+		require.NoError(t, err)
+		sql, err := output.createSQL(ctx, snapshotTblStuff)
+		require.NoError(t, err)
+		require.Contains(t, sql, "`id` BIGINT not null")
+		require.NotContains(t, sql, "{mo_ts=")
+	})
+
+	t.Run("projected columns retain request order", func(t *testing.T) {
+		output, err := newDiffOutputTable(ctx, ses, &tree.DataBranchDiff{
+			OutputOpt: &tree.DiffOutputOpt{As: *outName},
+			Columns: tree.IdentifierList{
+				tree.Identifier("name"), tree.Identifier("id"), tree.Identifier("name"),
+			},
+		}, tblStuff)
+		require.NoError(t, err)
+		require.Equal(t, []int{1, 0}, output.projectedIdxes)
+		require.Equal(t, []string{"__mo_diff_source", "__mo_diff_flag", "name", "id"}, output.columnNames)
+	})
+
+	t.Run("renamed target column retains target name and base type", func(t *testing.T) {
+		renamedTargetDef := tblStuff.tarRel.GetTableDef(ctx)
+		renamedTargetDef.Cols[1].Name = "display_name"
+		renamedTblStuff := tblStuff
+		renamedTblStuff.def.colNames = []string{"id", "display_name", "__mo_diff_source", "__mo_diff_flag"}
+
+		output, err := newDiffOutputTable(ctx, ses, &tree.DataBranchDiff{
+			OutputOpt: &tree.DiffOutputOpt{As: *outName},
+			Columns:   tree.IdentifierList{tree.Identifier("display_name")},
+		}, renamedTblStuff)
+		require.NoError(t, err)
+
+		sql, err := output.createSQL(ctx, renamedTblStuff)
+		require.NoError(t, err)
+		require.Contains(t, sql, "`display_name` VARCHAR(20) default null")
+		require.NotContains(t, sql, "`name` VARCHAR(20) default null")
+	})
+}
+
+func TestDataBranchDiffCanExecuteInUncommittedTransaction(t *testing.T) {
+	can, err := statementCanBeExecutedInUncommittedTransaction(
+		context.Background(), newValidateSession(t), &tree.DataBranchDiff{},
+	)
+	require.NoError(t, err)
+	require.True(t, can)
+}
+
+func TestMaterializeDiffOutputAsTable_InsertFailureDropsDestination(t *testing.T) {
+	ctx := context.Background()
+	ses := newValidateSession(t)
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	baseRel := mock_frontend.NewMockRelation(ctrl)
+	tarRel := mock_frontend.NewMockRelation(ctrl)
+	baseRel.EXPECT().GetTableDef(gomock.Any()).Return(&plan.TableDef{
+		DbName: "base_db",
+		Name:   "base_t",
+		Cols: []*plan.ColDef{
+			{Name: "id", ColId: 1, Seqnum: 0, Typ: plan.Type{Id: int32(types.T_int64), NotNullable: true}},
+		},
+	}).AnyTimes()
+	tarRel.EXPECT().GetTableDef(gomock.Any()).Return(&plan.TableDef{
+		DbName: "target_db",
+		Name:   "target_t",
+		Cols: []*plan.ColDef{
+			{Name: "id", ColId: 1, Seqnum: 0, Typ: plan.Type{Id: int32(types.T_int64), NotNullable: true}},
+		},
+	}).AnyTimes()
+
+	tblStuff := tableStuff{baseRel: baseRel, tarRel: tarRel}
+	tblStuff.def.colNames = []string{"id"}
+	tblStuff.def.colTypes = []types.Type{types.T_int64.ToType()}
+	tblStuff.def.visibleIdxes = []int{0}
+	tblStuff.def.pkColIdx = 0
+	tblStuff.retPool = &retBatchList{}
+	tblStuff.bufPool = &sync.Pool{New: func() any { return &bytes.Buffer{} }}
+
+	bat := tblStuff.retPool.acquireRetBatch(tblStuff, false)
+	require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(1), false, mp))
+	bat.SetRowCount(1)
+	defer tblStuff.retPool.freeAllRetBatches(mp)
+
+	phase, err := newDataBranchOutputAsTablePhase(ctx, ses.proc)
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, phase.close())
+	}()
+	require.NoError(t, phase.spool.append(batchWithKind{name: "branch", kind: diffUpdate, batch: bat}))
+	phase.markProducerDone()
+
+	bh := mock_frontend.NewMockBackgroundExec(ctrl)
+	var sqls []string
+	bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
+		sqls = append(sqls, sql)
+		if strings.HasPrefix(sql, "insert into") {
+			return moerr.NewInternalErrorNoCtx("injected insert failure")
+		}
+		return nil
+	}).Times(3)
+	bh.EXPECT().ClearExecResultSet().Times(2)
+
+	dst := tree.NewTableName(
+		tree.Identifier("diff_out"),
+		tree.ObjectNamePrefix{SchemaName: tree.Identifier("out_db"), ExplicitSchema: true},
+		nil,
+	)
+	err = phase.materialize(
+		ctx,
+		func() {},
+		ses,
+		bh,
+		&tree.DataBranchDiff{OutputOpt: &tree.DiffOutputOpt{As: *dst}},
+		tblStuff,
+	)
+	require.ErrorContains(t, err, "injected insert failure")
+	require.Len(t, sqls, 3)
+	require.True(t, strings.HasPrefix(sqls[0], "create table `out_db`.`diff_out`"))
+	require.True(t, strings.HasPrefix(sqls[1], "insert into `out_db`.`diff_out`"))
+	require.Equal(t, "drop table if exists `out_db`.`diff_out`", sqls[2])
+}
+
+func TestDataBranchOutputAsTablePhase_BlocksOutputSQLUntilProducerCompletes(t *testing.T) {
+	ctx := context.Background()
+	ses := newValidateSession(t)
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	phase, err := newDataBranchOutputAsTablePhase(ctx, ses.proc)
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, phase.close())
+	}()
+
+	tblStuff := tableStuff{retPool: &retBatchList{}}
+	tblStuff.def.colNames = []string{"id"}
+	tblStuff.def.colTypes = []types.Type{types.T_int64.ToType()}
+	tblStuff.def.pkColIdx = 0
+	bat := tblStuff.retPool.acquireRetBatch(tblStuff, false)
+	require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(1), false, mp))
+	bat.SetRowCount(1)
+	defer tblStuff.retPool.freeAllRetBatches(mp)
+
+	retCh := make(chan batchWithKind)
+	producerSent := make(chan struct{})
+	allowProducerFinish := make(chan struct{})
+	drained := make(chan error, 1)
+	go func() {
+		drained <- phase.drain(ctx, func() {}, tblStuff.retPool, retCh)
+	}()
+	go func() {
+		retCh <- batchWithKind{name: "branch", kind: diffUpdate, batch: bat}
+		close(producerSent)
+		<-allowProducerFinish
+		close(retCh)
+	}()
+	<-producerSent
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	bh := mock_frontend.NewMockBackgroundExec(ctrl)
+	dst := tree.NewTableName(
+		tree.Identifier("diff_out"),
+		tree.ObjectNamePrefix{SchemaName: tree.Identifier("out_db"), ExplicitSchema: true},
+		nil,
+	)
+	err = phase.materialize(
+		ctx,
+		func() {},
+		ses,
+		bh,
+		&tree.DataBranchDiff{OutputOpt: &tree.DiffOutputOpt{As: *dst}},
+		tblStuff,
+	)
+	require.ErrorContains(t, err, "before diff production completed")
+
+	close(allowProducerFinish)
+	require.NoError(t, <-drained)
+}
+
+func TestDataBranchOutputSpool_RoundTrip(t *testing.T) {
+	ctx := context.Background()
+	ses := newValidateSession(t)
+	spool, err := newDataBranchOutputSpool(ctx, ses.proc)
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, spool.close())
+	}()
+
+	bat := batch.NewWithSize(2)
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_varbinary.ToType())
+	require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(42), false, ses.proc.Mp()))
+	require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte{0, '\'', '\\', 0xff}, false, ses.proc.Mp()))
+	bat.SetRowCount(1)
+	defer bat.Clean(ses.proc.Mp())
+
+	require.NoError(t, spool.append(batchWithKind{name: "branch_1", kind: diffUpdate, batch: bat}))
+	require.NoError(t, spool.rewind())
+
+	got, ok, err := spool.next()
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, "branch_1", got.name)
+	require.Equal(t, diffUpdate, got.kind)
+	require.Equal(t, 1, got.batch.RowCount())
+	require.Equal(t, int64(42), vector.MustFixedColNoTypeCheck[int64](got.batch.Vecs[0])[0])
+	require.Equal(t, []byte{0, '\'', '\\', 0xff}, got.batch.Vecs[1].GetBytesAt(0))
+
+	_, ok, err = spool.next()
+	require.NoError(t, err)
+	require.False(t, ok)
+}
+
+func TestDataBranchOutputSpoolRejectsOversizedMetadata(t *testing.T) {
+	size := int32(dataBranchOutputSpoolMaxMetadataSize + 1)
+	_, err := readDataBranchOutputSpoolString(bytes.NewReader(types.EncodeInt32(&size)))
+	require.ErrorContains(t, err, "metadata is too large")
 }
 
 func TestDataBranchOutputBuildOutputSchema(t *testing.T) {
@@ -119,6 +421,59 @@ func TestDataBranchOutputBuildOutputSchema(t *testing.T) {
 		col1, err := mrs.GetColumn(ctx, 1)
 		require.NoError(t, err)
 		require.Equal(t, "flag", col1.Name())
+	})
+
+	t.Run("default output preserves decimal metadata", func(t *testing.T) {
+		decimalTblStuff := tblStuff
+		decimalTblStuff.def.colNames = []string{"id", "price"}
+		decimalTblStuff.def.colTypes = []types.Type{
+			types.T_int64.ToType(),
+			types.New(types.T_decimal64, 10, 2),
+		}
+		decimalTblStuff.def.visibleIdxes = []int{0, 1}
+
+		ses.SetMysqlResultSet(&MysqlResultSet{})
+		stmt := &tree.DataBranchDiff{
+			TargetTable: *target,
+			BaseTable:   *base,
+			OutputOpt:   nil,
+		}
+		require.NoError(t, buildOutputSchema(ctx, ses, stmt, decimalTblStuff))
+
+		mrs := ses.GetMysqlResultSet()
+		col, err := mrs.GetColumn(ctx, 3)
+		require.NoError(t, err)
+		require.Equal(t, "price", col.Name())
+		require.Equal(t, defines.MYSQL_TYPE_DECIMAL, col.ColumnType())
+		require.Equal(t, uint32(12), col.Length())
+		mysqlCol, ok := col.(*MysqlColumn)
+		require.True(t, ok)
+		require.Equal(t, uint8(2), mysqlCol.Decimal())
+	})
+
+	t.Run("default output preserves year metadata", func(t *testing.T) {
+		yearTblStuff := tblStuff
+		yearTblStuff.def.colNames = []string{"id", "y"}
+		yearTblStuff.def.colTypes = []types.Type{
+			types.T_int64.ToType(),
+			types.T_year.ToType(),
+		}
+		yearTblStuff.def.visibleIdxes = []int{0, 1}
+
+		ses.SetMysqlResultSet(&MysqlResultSet{})
+		stmt := &tree.DataBranchDiff{
+			TargetTable: *target,
+			BaseTable:   *base,
+			OutputOpt:   nil,
+		}
+		require.NoError(t, buildOutputSchema(ctx, ses, stmt, yearTblStuff))
+
+		mrs := ses.GetMysqlResultSet()
+		col, err := mrs.GetColumn(ctx, 3)
+		require.NoError(t, err)
+		require.Equal(t, "y", col.Name())
+		require.Equal(t, defines.MYSQL_TYPE_YEAR, col.ColumnType())
+		require.Equal(t, uint32(types.MaxVarcharLen), col.Length())
 	})
 
 	t.Run("summary output", func(t *testing.T) {
@@ -176,6 +531,20 @@ func TestDataBranchOutputBuildOutputSchema(t *testing.T) {
 		col1, err := mrs.GetColumn(ctx, 1)
 		require.NoError(t, err)
 		require.Equal(t, "HINT", col1.Name())
+	})
+
+	t.Run("output as table acknowledges its materialized result", func(t *testing.T) {
+		ses.SetMysqlResultSet(&MysqlResultSet{})
+		stmt := &tree.DataBranchDiff{
+			TargetTable: *target,
+			BaseTable:   *base,
+			OutputOpt: &tree.DiffOutputOpt{As: *tree.NewTableName(
+				tree.Identifier("diff_out"), tree.ObjectNamePrefix{}, nil,
+			)},
+		}
+		require.NoError(t, buildOutputSchema(ctx, ses, stmt, tblStuff))
+		require.Equal(t, uint64(1), ses.GetMysqlResultSet().GetColumnCount())
+		require.Equal(t, "TABLE CREATED", ses.GetMysqlResultSet().Columns[0].Name())
 	})
 
 	t.Run("unsupported output", func(t *testing.T) {
@@ -427,6 +796,9 @@ func TestDataBranchOutputWriteRowValues(t *testing.T) {
 	alwaysTupleBuf := &bytes.Buffer{}
 	require.NoError(t, writeDeleteRowValuesAsTuple(nil, tblStuff, row, alwaysTupleBuf))
 	require.Equal(t, "(7,'alice')", alwaysTupleBuf.String())
+
+	emptyKeyBuf := &bytes.Buffer{}
+	require.Error(t, writeDeleteRowValuesWithColIdxes(nil, tblStuff, row, nil, emptyKeyBuf, false))
 }
 
 func TestDataBranchOutputWriteDeleteRowSQLFull(t *testing.T) {
@@ -449,7 +821,7 @@ func TestDataBranchOutputWriteDeleteRowSQLFull(t *testing.T) {
 	row := []any{int64(9), nil}
 	buf := &bytes.Buffer{}
 	require.NoError(t, writeDeleteRowSQLFull(context.Background(), nil, tblStuff, row, buf))
-	require.Equal(t, "delete from db1.t1 where id = 9 and name is null limit 1;\n", buf.String())
+	require.Equal(t, "delete from `db1`.`t1` where `id` = 9 and `name` is null limit 1;\n", buf.String())
 }
 
 func TestDataBranchOutputExecSQLStatementsWithWriteFile(t *testing.T) {
@@ -470,14 +842,15 @@ func TestDataBranchOutputExecSQLStatementsWithWriteFile(t *testing.T) {
 	require.Equal(t, "select 1;\ninsert into t values (1);\n", out.String())
 }
 
-func TestDataBranchOutputInitAndDropPKTablesWithWriteFile(t *testing.T) {
-	pkInfo := &pkBatchInfo{
-		dbName:       "db1",
-		baseTable:    "base_t",
-		deleteTable:  "__mo_diff_del_x",
-		insertTable:  "__mo_diff_ins_x",
-		pkNames:      []string{"id"},
-		visibleNames: []string{"id", "name"},
+func TestDataBranchOutputInitAndDropApplyTablesWithWriteFile(t *testing.T) {
+	batchInfo := &applyBatchInfo{
+		dbName:           "db1",
+		baseTable:        "base_t",
+		deleteTable:      "__mo_diff_del_x",
+		insertTable:      "__mo_diff_ins_x",
+		deleteKeyNames:   []string{"id"},
+		deleteStageNames: []string{"branch_apply_key_0"},
+		visibleNames:     []string{"id", "name"},
 	}
 
 	var out bytes.Buffer
@@ -486,14 +859,14 @@ func TestDataBranchOutputInitAndDropPKTablesWithWriteFile(t *testing.T) {
 		return err
 	}
 
-	require.NoError(t, initPKTables(context.Background(), nil, nil, pkInfo, writeFile))
-	require.NoError(t, dropPKTables(context.Background(), nil, nil, pkInfo, writeFile))
+	require.NoError(t, initApplyTables(context.Background(), nil, nil, batchInfo, writeFile))
+	require.NoError(t, dropApplyTables(context.Background(), nil, nil, batchInfo, writeFile))
 
 	got := out.String()
-	require.Contains(t, got, "drop table if exists db1.__mo_diff_del_x;\n")
-	require.Contains(t, got, "drop table if exists db1.__mo_diff_ins_x;\n")
-	require.Contains(t, got, "create table db1.__mo_diff_del_x as select id from db1.base_t where 1=0;\n")
-	require.Contains(t, got, "create table db1.__mo_diff_ins_x as select id,name from db1.base_t where 1=0;\n")
+	require.Contains(t, got, "drop table if exists `db1`.`__mo_diff_del_x`;\n")
+	require.Contains(t, got, "drop table if exists `db1`.`__mo_diff_ins_x`;\n")
+	require.Contains(t, got, "create table `db1`.`__mo_diff_del_x` as select `id` as `branch_apply_key_0` from `db1`.`base_t` where 1=0;\n")
+	require.Contains(t, got, "create table `db1`.`__mo_diff_ins_x` as select `id`,`name` from `db1`.`base_t` where 1=0;\n")
 }
 
 func TestDataBranchOutputFlushSqlValuesWithWriteFile(t *testing.T) {
@@ -510,16 +883,18 @@ func TestDataBranchOutputFlushSqlValuesWithWriteFile(t *testing.T) {
 		baseRel: baseRel,
 	}
 	tblStuff.def.colNames = []string{"id", "name"}
+	tblStuff.def.visibleIdxes = []int{0, 1}
 	tblStuff.def.pkColIdx = 0
 	tblStuff.def.pkColIdxes = []int{0, 1}
 
-	pkInfo := &pkBatchInfo{
-		dbName:       "db1",
-		baseTable:    "t1",
-		deleteTable:  "__mo_diff_del_x",
-		insertTable:  "__mo_diff_ins_x",
-		pkNames:      []string{"id", "name"},
-		visibleNames: []string{"id", "name"},
+	batchInfo := &applyBatchInfo{
+		dbName:           "db1",
+		baseTable:        "t1",
+		deleteTable:      "__mo_diff_del_x",
+		insertTable:      "__mo_diff_ins_x",
+		deleteKeyNames:   []string{"id", "name"},
+		deleteStageNames: []string{"branch_apply_key_0", "branch_apply_key_1"},
+		visibleNames:     []string{"id", "name"},
 	}
 
 	var out bytes.Buffer
@@ -548,7 +923,7 @@ func TestDataBranchOutputFlushSqlValuesWithWriteFile(t *testing.T) {
 		bytes.NewBufferString("(1,'a')"),
 		true,
 		false,
-		pkInfo,
+		batchInfo,
 		writeFile,
 	))
 
@@ -566,19 +941,19 @@ func TestDataBranchOutputFlushSqlValuesWithWriteFile(t *testing.T) {
 
 	got := out.String()
 	require.Contains(t, got, "delete from db1.t1 where id = 1 limit 1;\n")
-	require.Contains(t, got, "insert into db1.__mo_diff_del_x values (1,'a');\n")
-	require.Contains(t, got, "delete from db1.t1 where (id,name) in (select id,name from db1.__mo_diff_del_x);\n")
-	require.Contains(t, got, "insert into db1.t1 values (2,'b');\n")
+	require.Contains(t, got, "insert into `db1`.`__mo_diff_del_x` values (1,'a');\n")
+	require.Contains(t, got, "delete from `db1`.`t1` where (`id`,`name`) in (select `branch_apply_key_0`,`branch_apply_key_1` from `db1`.`__mo_diff_del_x`);\n")
+	require.Contains(t, got, "insert into `db1`.`t1` (`id`,`name`) values (2,'b');\n")
 }
 
 func TestDataBranchOutputTryFlushDeletesOrInserts(t *testing.T) {
-	pkInfo := &pkBatchInfo{
-		dbName:       "db1",
-		baseTable:    "t1",
-		deleteTable:  "__mo_diff_del_x",
-		insertTable:  "__mo_diff_ins_x",
-		pkNames:      []string{"id"},
-		visibleNames: []string{"id", "name"},
+	batchInfo := &applyBatchInfo{
+		dbName:         "db1",
+		baseTable:      "t1",
+		deleteTable:    "__mo_diff_del_x",
+		insertTable:    "__mo_diff_ins_x",
+		deleteKeyNames: []string{"id"},
+		visibleNames:   []string{"id", "name"},
 	}
 
 	t.Run("force flush both buffers", func(t *testing.T) {
@@ -602,7 +977,7 @@ func TestDataBranchOutputTryFlushDeletesOrInserts(t *testing.T) {
 			0,
 			0,
 			false,
-			pkInfo,
+			batchInfo,
 			&deleteCnt,
 			deleteBuf,
 			&insertCnt,
@@ -614,8 +989,8 @@ func TestDataBranchOutputTryFlushDeletesOrInserts(t *testing.T) {
 		require.Equal(t, 0, insertCnt)
 		require.Equal(t, 0, deleteBuf.Len())
 		require.Equal(t, 0, insertBuf.Len())
-		require.Contains(t, out.String(), "delete from db1.t1 where id in (select id from db1.__mo_diff_del_x);\n")
-		require.Contains(t, out.String(), "insert into db1.t1 (id,name) select id,name from db1.__mo_diff_ins_x;\n")
+		require.Contains(t, out.String(), "delete from `db1`.`t1` where `id` in (select `id` from `db1`.`__mo_diff_del_x`);\n")
+		require.Contains(t, out.String(), "insert into `db1`.`t1` (`id`,`name`) select `id`,`name` from `db1`.`__mo_diff_ins_x`;\n")
 	})
 
 	t.Run("do nothing when thresholds are not reached", func(t *testing.T) {
@@ -639,7 +1014,7 @@ func TestDataBranchOutputTryFlushDeletesOrInserts(t *testing.T) {
 			1,
 			1,
 			false,
-			pkInfo,
+			batchInfo,
 			&deleteCnt,
 			deleteBuf,
 			&insertCnt,
@@ -671,7 +1046,7 @@ func TestDataBranchOutputTryFlushDeletesOrInserts(t *testing.T) {
 			1,
 			1,
 			false,
-			pkInfo,
+			batchInfo,
 			&deleteCnt,
 			deleteBuf,
 			&insertCnt,
@@ -681,15 +1056,15 @@ func TestDataBranchOutputTryFlushDeletesOrInserts(t *testing.T) {
 		require.NoError(t, err)
 
 		got := out.String()
-		deletePos := strings.Index(got, "insert into db1.__mo_diff_del_x")
-		insertPos := strings.Index(got, "insert into db1.__mo_diff_ins_x")
+		deletePos := strings.Index(got, "insert into `db1`.`__mo_diff_del_x`")
+		insertPos := strings.Index(got, "insert into `db1`.`__mo_diff_ins_x`")
 		require.NotEqual(t, -1, deletePos)
 		require.NotEqual(t, -1, insertPos)
 		require.Less(t, deletePos, insertPos)
 	})
 }
 
-func TestDataBranchOutputNewPKBatchInfo(t *testing.T) {
+func TestDataBranchOutputBuildDataBranchApplyLayout(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -708,27 +1083,57 @@ func TestDataBranchOutputNewPKBatchInfo(t *testing.T) {
 	tblStuff.def.visibleIdxes = []int{0, 1, 2}
 	tblStuff.def.pkKind = normalKind
 
-	info := newPKBatchInfo(context.Background(), &Session{}, tblStuff)
+	deleteByFullRow, deleteKeyColIdxes, info := buildDataBranchApplyLayout(
+		context.Background(), &Session{}, tblStuff, dataBranchApplyModeOnlineMerge,
+	)
+	require.False(t, deleteByFullRow)
+	require.Equal(t, []int{0, 2}, deleteKeyColIdxes)
 	require.NotNil(t, info)
 	require.Equal(t, "db1", info.dbName)
 	require.Equal(t, "t1", info.baseTable)
-	require.Equal(t, []string{"id", "age"}, info.pkNames)
+	require.Equal(t, []string{"id", "age"}, info.deleteKeyNames)
+	require.Equal(t, []string{"branch_apply_key_0", "branch_apply_key_1"}, info.deleteStageNames)
 	require.Equal(t, []string{"id", "name", "age"}, info.visibleNames)
+	require.False(t, info.disableInsertStage)
 	require.True(t, strings.HasPrefix(info.deleteTable, "__mo_diff_del_"))
 	require.True(t, strings.HasPrefix(info.insertTable, "__mo_diff_ins_"))
 
-	tblStuff.def.pkKind = fakeKind
-	require.Nil(t, newPKBatchInfo(context.Background(), &Session{}, tblStuff))
+	fakeTblStuff := newFakePKBranchTableStuff(ctrl)
+	deleteByFullRow, deleteKeyColIdxes, info = buildDataBranchApplyLayout(
+		context.Background(), &Session{}, fakeTblStuff, dataBranchApplyModeOnlineMerge,
+	)
+	require.False(t, deleteByFullRow)
+	require.Equal(t, []int{2}, deleteKeyColIdxes)
+	require.NotNil(t, info)
+	require.Equal(t, []string{"__mo_fake_pk_col"}, info.deleteKeyNames)
+	require.Equal(t, []string{"branch_apply_key_0"}, info.deleteStageNames)
+	require.Equal(t, []string{"id", "name"}, info.visibleNames)
+	require.True(t, info.disableInsertStage)
+
+	deleteByFullRow, deleteKeyColIdxes, info = buildDataBranchApplyLayout(
+		context.Background(), &Session{}, fakeTblStuff, dataBranchApplyModeOnlinePKOnly,
+	)
+	require.False(t, deleteByFullRow)
+	require.Equal(t, []int{0, 1}, deleteKeyColIdxes)
+	require.NotNil(t, info)
+	require.False(t, info.disableInsertStage)
+
+	deleteByFullRow, deleteKeyColIdxes, info = buildDataBranchApplyLayout(
+		context.Background(), &Session{}, fakeTblStuff, dataBranchApplyModePortableSQL,
+	)
+	require.True(t, deleteByFullRow)
+	require.Nil(t, deleteKeyColIdxes)
+	require.Nil(t, info)
 }
 
 func TestDataBranchOutputAppenderAppendRowAndFlushAll(t *testing.T) {
-	pkInfo := &pkBatchInfo{
-		dbName:       "db1",
-		baseTable:    "t1",
-		deleteTable:  "__mo_diff_del_x",
-		insertTable:  "__mo_diff_ins_x",
-		pkNames:      []string{"id"},
-		visibleNames: []string{"id", "name"},
+	batchInfo := &applyBatchInfo{
+		dbName:         "db1",
+		baseTable:      "t1",
+		deleteTable:    "__mo_diff_del_x",
+		insertTable:    "__mo_diff_ins_x",
+		deleteKeyNames: []string{"id"},
+		visibleNames:   []string{"id", "name"},
 	}
 
 	t.Run("append delete in full-row mode", func(t *testing.T) {
@@ -740,7 +1145,7 @@ func TestDataBranchOutputAppenderAppendRowAndFlushAll(t *testing.T) {
 		appender := sqlValuesAppender{
 			ctx:             context.Background(),
 			deleteByFullRow: true,
-			pkInfo:          pkInfo,
+			batchInfo:       batchInfo,
 			deleteCnt:       &deleteCnt,
 			deleteBuf:       deleteBuf,
 			insertCnt:       &insertCnt,
@@ -762,7 +1167,7 @@ func TestDataBranchOutputAppenderAppendRowAndFlushAll(t *testing.T) {
 		appender := sqlValuesAppender{
 			ctx:             context.Background(),
 			deleteByFullRow: false,
-			pkInfo:          pkInfo,
+			batchInfo:       batchInfo,
 			deleteCnt:       &deleteCnt,
 			deleteBuf:       deleteBuf,
 			insertCnt:       &insertCnt,
@@ -789,7 +1194,7 @@ func TestDataBranchOutputAppenderAppendRowAndFlushAll(t *testing.T) {
 		appender := sqlValuesAppender{
 			ctx:             context.Background(),
 			deleteByFullRow: false,
-			pkInfo:          pkInfo,
+			batchInfo:       batchInfo,
 			deleteCnt:       &deleteCnt,
 			deleteBuf:       deleteBuf,
 			insertCnt:       &insertCnt,
@@ -802,8 +1207,8 @@ func TestDataBranchOutputAppenderAppendRowAndFlushAll(t *testing.T) {
 		require.Equal(t, 0, insertCnt)
 		require.Equal(t, 0, deleteBuf.Len())
 		require.Equal(t, 0, insertBuf.Len())
-		require.Contains(t, out.String(), "insert into db1.__mo_diff_del_x values (1);")
-		require.Contains(t, out.String(), "insert into db1.__mo_diff_ins_x values (1,'a');")
+		require.Contains(t, out.String(), "insert into `db1`.`__mo_diff_del_x` values (1);")
+		require.Contains(t, out.String(), "insert into `db1`.`__mo_diff_ins_x` values (1,'a');")
 	})
 }
 
@@ -917,12 +1322,13 @@ func TestDataBranchOutputAppendBatchRowsAsSQLValues(t *testing.T) {
 		deleteBuf := &bytes.Buffer{}
 		insertBuf := &bytes.Buffer{}
 		appender := sqlValuesAppender{
-			ctx:       context.Background(),
-			tblStuff:  tblStuff,
-			deleteCnt: &deleteCnt,
-			deleteBuf: deleteBuf,
-			insertCnt: &insertCnt,
-			insertBuf: insertBuf,
+			ctx:               context.Background(),
+			tblStuff:          tblStuff,
+			deleteKeyColIdxes: []int{0},
+			deleteCnt:         &deleteCnt,
+			deleteBuf:         deleteBuf,
+			insertCnt:         &insertCnt,
+			insertBuf:         insertBuf,
 		}
 
 		insertBat := buildVisibleComparisonBatch(t, ses.proc.Mp(), [][]any{
@@ -967,12 +1373,13 @@ func TestDataBranchOutputAppendBatchRowsAsSQLValues(t *testing.T) {
 		deleteBuf := &bytes.Buffer{}
 		insertBuf := &bytes.Buffer{}
 		appender := sqlValuesAppender{
-			ctx:       context.Background(),
-			tblStuff:  tblStuff,
-			deleteCnt: &deleteCnt,
-			deleteBuf: deleteBuf,
-			insertCnt: &insertCnt,
-			insertBuf: insertBuf,
+			ctx:               context.Background(),
+			tblStuff:          tblStuff,
+			deleteKeyColIdxes: []int{0},
+			deleteCnt:         &deleteCnt,
+			deleteBuf:         deleteBuf,
+			insertCnt:         &insertCnt,
+			insertBuf:         insertBuf,
 		}
 
 		bat := batch.NewWithSize(2)
@@ -997,4 +1404,215 @@ func TestDataBranchOutputAppendBatchRowsAsSQLValues(t *testing.T) {
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "batch shape mismatch")
 	})
+}
+
+func TestDataBranchOutputNoPKDeleteModes(t *testing.T) {
+	ses := newValidateSession(t)
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	tblStuff := newFakePKBranchTableStuff(ctrl)
+
+	t.Run("online merge deletes by fake pk", func(t *testing.T) {
+		var out bytes.Buffer
+		writeFile := func(b []byte) error {
+			_, err := out.Write(b)
+			return err
+		}
+
+		tmpValsBuffer := &bytes.Buffer{}
+		deleteCnt := 0
+		insertCnt := 0
+		deleteBuf := &bytes.Buffer{}
+		insertBuf := &bytes.Buffer{}
+		appender := newSQLValuesAppender(
+			context.Background(),
+			ses,
+			nil,
+			tblStuff,
+			dataBranchApplyModeOnlineMerge,
+			&deleteCnt,
+			deleteBuf,
+			&insertCnt,
+			insertBuf,
+			writeFile,
+		)
+
+		deleteBat := buildFakePKComparisonBatch(t, ses.proc.Mp(), [][]any{
+			{int64(1), "alpha", uint64(101)},
+			{int64(2), "beta", uint64(202)},
+		})
+		defer deleteBat.Clean(ses.proc.Mp())
+
+		require.NoError(t, appendBatchRowsAsSQLValues(
+			context.Background(),
+			ses,
+			tblStuff,
+			batchWithKind{kind: diffDelete, batch: deleteBat},
+			tmpValsBuffer,
+			appender,
+		))
+		require.Equal(t, 2, deleteCnt)
+		require.Equal(t, "(101),(202)", deleteBuf.String())
+		require.True(t, appender.batchInfo.disableInsertStage)
+		require.NoError(t, appender.flushAll())
+
+		got := out.String()
+		require.Contains(t, got, "insert into `db1`.`__mo_diff_del_")
+		require.Contains(t, got, "values (101),(202);")
+		require.Equal(t, []string{"branch_apply_key_0"}, appender.batchInfo.deleteStageNames)
+		require.Contains(t, got, "delete from `db1`.`base` where `__mo_fake_pk_col` in (select `branch_apply_key_0` from `db1`.`__mo_diff_del_")
+		require.NotContains(t, got, "delete from `db1`.`base` where `id` =")
+	})
+
+	t.Run("portable sql deletes by full row", func(t *testing.T) {
+		tmpValsBuffer := &bytes.Buffer{}
+		deleteCnt := 0
+		insertCnt := 0
+		deleteBuf := &bytes.Buffer{}
+		insertBuf := &bytes.Buffer{}
+		appender := newSQLValuesAppender(
+			context.Background(),
+			ses,
+			nil,
+			tblStuff,
+			dataBranchApplyModePortableSQL,
+			&deleteCnt,
+			deleteBuf,
+			&insertCnt,
+			insertBuf,
+			nil,
+		)
+
+		deleteBat := buildFakePKComparisonBatch(t, ses.proc.Mp(), [][]any{
+			{int64(1), "alpha", uint64(101)},
+			{int64(2), "beta", uint64(202)},
+		})
+		defer deleteBat.Clean(ses.proc.Mp())
+
+		require.NoError(t, appendBatchRowsAsSQLValues(
+			context.Background(),
+			ses,
+			tblStuff,
+			batchWithKind{kind: diffDelete, batch: deleteBat},
+			tmpValsBuffer,
+			appender,
+		))
+		require.True(t, appender.deleteByFullRow)
+		require.Nil(t, appender.batchInfo)
+		require.Equal(t, 2, deleteCnt)
+		require.Contains(t, deleteBuf.String(), "delete from `db1`.`base` where `id` = 1 and `name` = 'alpha' limit 1;\n")
+		require.Contains(t, deleteBuf.String(), "delete from `db1`.`base` where `id` = 2 and `name` = 'beta' limit 1;\n")
+		require.NotContains(t, deleteBuf.String(), "__mo_fake_pk_col")
+	})
+
+	t.Run("online merge inserts keep direct insert path", func(t *testing.T) {
+		var out bytes.Buffer
+		writeFile := func(b []byte) error {
+			_, err := out.Write(b)
+			return err
+		}
+
+		tmpValsBuffer := &bytes.Buffer{}
+		deleteCnt := 0
+		insertCnt := 0
+		deleteBuf := &bytes.Buffer{}
+		insertBuf := &bytes.Buffer{}
+		appender := newSQLValuesAppender(
+			context.Background(),
+			ses,
+			nil,
+			tblStuff,
+			dataBranchApplyModeOnlineMerge,
+			&deleteCnt,
+			deleteBuf,
+			&insertCnt,
+			insertBuf,
+			writeFile,
+		)
+
+		insertBat := buildFakePKInsertBatchWithoutFakePKValue(t, ses.proc.Mp(), [][]any{
+			{int64(3), "gamma"},
+		})
+		defer insertBat.Clean(ses.proc.Mp())
+
+		require.NoError(t, appendBatchRowsAsSQLValues(
+			context.Background(),
+			ses,
+			tblStuff,
+			batchWithKind{kind: diffInsert, batch: insertBat},
+			tmpValsBuffer,
+			appender,
+		))
+		require.True(t, appender.batchInfo.disableInsertStage)
+		require.NoError(t, appender.flushAll())
+		require.Contains(t, out.String(), "insert into `db1`.`base` (`id`,`name`) values (3,'gamma');")
+		require.NotContains(t, out.String(), "__mo_diff_ins_")
+	})
+}
+
+func newFakePKBranchTableStuff(ctrl *gomock.Controller) tableStuff {
+	baseRel := mock_frontend.NewMockRelation(ctrl)
+	baseDef := &plan.TableDef{
+		DbName: "db1",
+		Name:   "base",
+		Pkey: &plan.PrimaryKeyDef{
+			Names:       []string{"__mo_fake_pk_col"},
+			PkeyColName: "__mo_fake_pk_col",
+		},
+	}
+
+	baseRel.EXPECT().GetTableName().Return("base").AnyTimes()
+	baseRel.EXPECT().GetTableDef(gomock.Any()).Return(baseDef).AnyTimes()
+
+	var tblStuff tableStuff
+	tblStuff.baseRel = baseRel
+	tblStuff.def.colNames = []string{"id", "name", "__mo_fake_pk_col"}
+	tblStuff.def.colTypes = []types.Type{
+		types.T_int64.ToType(),
+		types.T_varchar.ToType(),
+		types.T_uint64.ToType(),
+	}
+	tblStuff.def.visibleIdxes = []int{0, 1}
+	tblStuff.def.pkColIdx = 2
+	tblStuff.def.pkColIdxes = []int{0, 1}
+	tblStuff.def.pkKind = fakeKind
+	return tblStuff
+}
+
+func buildFakePKComparisonBatch(t *testing.T, mp *mpool.MPool, rows [][]any) *batch.Batch {
+	t.Helper()
+
+	bat := batch.NewWithSize(3)
+	bat.SetAttributes([]string{"id", "name", "__mo_fake_pk_col"})
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+	bat.Vecs[2] = vector.NewVec(types.T_uint64.ToType())
+
+	for _, row := range rows {
+		require.Len(t, row, 3)
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], row[0].(int64), false, mp))
+		require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte(row[1].(string)), false, mp))
+		require.NoError(t, vector.AppendFixed(bat.Vecs[2], row[2].(uint64), false, mp))
+	}
+	bat.SetRowCount(len(rows))
+	return bat
+}
+
+func buildFakePKInsertBatchWithoutFakePKValue(t *testing.T, mp *mpool.MPool, rows [][]any) *batch.Batch {
+	t.Helper()
+
+	bat := batch.NewWithSize(3)
+	bat.SetAttributes([]string{"id", "name", "__mo_fake_pk_col"})
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+	bat.Vecs[2] = vector.NewVec(types.T_uint64.ToType())
+
+	for _, row := range rows {
+		require.Len(t, row, 2)
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], row[0].(int64), false, mp))
+		require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte(row[1].(string)), false, mp))
+	}
+	bat.SetRowCount(len(rows))
+	return bat
 }

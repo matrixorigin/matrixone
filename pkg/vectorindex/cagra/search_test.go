@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -33,7 +34,7 @@ import (
 
 // loadedModel builds an index, saves it to a tar, then reloads it into GPU
 // memory from the local file. Returns the model with Index != nil.
-func loadedModel(t *testing.T, id string) *CagraModel[float32] {
+func loadedModel(t *testing.T, id string) *CagraModel[float32, float32] {
 	t.Helper()
 	built := buildTestModel(t, id, nil)
 	tarPath := built.Path
@@ -43,7 +44,16 @@ func loadedModel(t *testing.T, id string) *CagraModel[float32] {
 	proc := testutil.NewProcessWithMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
-	loader := &CagraModel[float32]{
+	// LoadIndex always fires the tag=1 CDC event-log SELECT in parallel
+	// with the model tar load. Mock it to return empty for the duration of
+	// the LoadIndex call.
+	origRunSql := runSql
+	runSql = func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
+		return executor.Result{Mp: proc.Mp()}, nil
+	}
+	defer func() { runSql = origRunSql }()
+
+	loader := &CagraModel[float32, float32]{
 		Id:       id,
 		Path:     tarPath,
 		Checksum: built.Checksum,
@@ -62,7 +72,7 @@ func TestCagraSearchEmpty(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
-	s := NewCagraSearch[float32](testIdxcfg(), testTblcfg(), []int{0})
+	s := NewCagraSearch[float32, float32](testIdxcfg(), testTblcfg(), []int{0})
 	require.Empty(t, s.Indexes)
 
 	rt := vectorindex.RuntimeConfig{Limit: 4}
@@ -88,8 +98,8 @@ func TestCagraSearchTypeMismatch(t *testing.T) {
 	idx := loadedModel(t, "type-mismatch")
 	defer idx.Destroy()
 
-	s := NewCagraSearch[float32](testIdxcfg(), testTblcfg(), []int{0})
-	s.Indexes = []*CagraModel[float32]{idx}
+	s := NewCagraSearch[float32, float32](testIdxcfg(), testTblcfg(), []int{0})
+	s.Indexes = []*CagraModel[float32, float32]{idx}
 
 	rt := vectorindex.RuntimeConfig{Limit: 4}
 
@@ -107,9 +117,9 @@ func TestCagraSearchAndSearchFloat32(t *testing.T) {
 	idx := loadedModel(t, "search-single")
 	defer idx.Destroy()
 
-	s := NewCagraSearch[float32](testIdxcfg(), testTblcfg(), []int{0})
-	s.Indexes = []*CagraModel[float32]{idx}
-	s.MultiIndex = s.buildMultiIndex()
+	s := NewCagraSearch[float32, float32](testIdxcfg(), testTblcfg(), []int{0})
+	s.Indexes = []*CagraModel[float32, float32]{idx}
+	s.MultiIndex, _ = s.buildMultiIndex()
 
 	data := generateTestData(testNVectors, testDim)
 	query := data[:testDim] // first vector; internal ID 0 should be closest
@@ -148,9 +158,9 @@ func TestCagraSearchMultipleIndexes(t *testing.T) {
 	idx1 := loadedModel(t, "multi-1")
 	defer idx1.Destroy()
 
-	s := NewCagraSearch[float32](testIdxcfg(), testTblcfg(), []int{0})
-	s.Indexes = []*CagraModel[float32]{idx0, idx1}
-	s.MultiIndex = s.buildMultiIndex()
+	s := NewCagraSearch[float32, float32](testIdxcfg(), testTblcfg(), []int{0})
+	s.Indexes = []*CagraModel[float32, float32]{idx0, idx1}
+	s.MultiIndex, _ = s.buildMultiIndex()
 
 	data := generateTestData(testNVectors, testDim)
 	query := data[:testDim]
@@ -177,9 +187,12 @@ func TestCagraSearchLoad(t *testing.T) {
 	tarPath := built.Path
 	defer os.Remove(tarPath)
 
-	// Mock runSql for LoadMetadata.
+	// Mock runSql for LoadMetadata + tag=1 CDC event log (returns empty).
 	origRunSql := runSql
 	runSql = func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+		if strings.Contains(sql, "AND tag = 1") {
+			return executor.Result{Mp: proc.Mp()}, nil
+		}
 		res := executor.Result{
 			Mp: proc.Mp(),
 			Batches: []*batch.Batch{
@@ -199,7 +212,7 @@ func TestCagraSearchLoad(t *testing.T) {
 	}
 	defer func() { runSql_streaming = origStream }()
 
-	s := NewCagraSearch[float32](testIdxcfg(), testTblcfg(), []int{0})
+	s := NewCagraSearch[float32, float32](testIdxcfg(), testTblcfg(), []int{0})
 	err := s.Load(sqlproc)
 	require.NoError(t, err)
 	require.Equal(t, 1, len(s.Indexes))

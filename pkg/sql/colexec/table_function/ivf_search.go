@@ -23,12 +23,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	catalogplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/catalog"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/quantizer"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -57,13 +60,21 @@ var (
 )
 
 func newIvfAlgoFn(idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig) (veccache.VectorIndexSearchIf, error) {
-	switch idxcfg.Ivfflat.VectorType {
+	// The centroid search index is typed by the CENTROID storage type, not the
+	// entry/input type. For narrow entries the centroids are f32 (decoupled), so
+	// this returns IvfflatSearch[float32]. CentroidType == 0 (old indexes) means
+	// "same as entry".
+	ct := idxcfg.Ivfflat.CentroidType
+	if ct == 0 {
+		ct = idxcfg.Ivfflat.VectorType
+	}
+	switch ct {
 	case int32(types.T_array_float32):
 		return ivfflat.NewIvfflatSearch[float32](idxcfg, tblcfg), nil
 	case int32(types.T_array_float64):
 		return ivfflat.NewIvfflatSearch[float64](idxcfg, tblcfg), nil
 	default:
-		return nil, moerr.NewInternalErrorNoCtx("newIvfAlgoFn: invalid vector type")
+		return nil, moerr.NewInternalErrorNoCtx("newIvfAlgoFn: invalid centroid type")
 	}
 }
 
@@ -118,10 +129,17 @@ func ivfSearchPrepare(proc *process.Process, arg *TableFunction) (tvfState, erro
 	var err error
 	st := &ivfSearchState{}
 
+	st.limit, err = evalLimitExpression(proc, arg.IndexReaderParam.GetLimit(), 1)
+	if err != nil {
+		return nil, err
+	}
+
 	arg.ctr.executorsForArgs, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, arg.Args)
 	arg.ctr.argVecs = make([]*vector.Vector, len(arg.Args))
+	if err != nil {
+		return nil, err
+	}
 
-	st.limit = max(arg.IndexReaderParam.GetLimit().GetLit().GetU64Val(), uint64(1))
 	st.indexReaderParam = arg.IndexReaderParam
 
 	return st, err
@@ -176,7 +194,7 @@ func (u *ivfSearchState) start(tf *TableFunction, proc *process.Process, nthRow 
 
 		// f32vec
 		faVec := tf.ctr.argVecs[1]
-		if faVec.GetType().Oid != types.T_array_float32 && faVec.GetType().Oid != types.T_array_float64 {
+		if !catalogplugin.SupportsVectorType(ivfflatCatalogHooks, faVec.GetType().Oid) {
 			return moerr.NewInvalidInput(proc.Ctx, "Second argument (vector must be a vecf32 or vecf64 type")
 		}
 
@@ -196,7 +214,26 @@ func (u *ivfSearchState) start(tf *TableFunction, proc *process.Process, nthRow 
 			return err
 		}
 		u.idxcfg.Ivfflat.Version = version                 // version from meta table
-		u.idxcfg.Ivfflat.VectorType = u.tblcfg.KeyPartType // array float32 or array float64
+		u.idxcfg.Ivfflat.VectorType = u.tblcfg.KeyPartType // entry/input type
+		// Centroid type is decoupled: f32 for narrow entries (must match the f32
+		// centroid hidden table from schema.go), else same as the entry type.
+		switch types.T(u.tblcfg.KeyPartType) {
+		case types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8:
+			u.idxcfg.Ivfflat.CentroidType = int32(types.T_array_float32)
+		default:
+			u.idxcfg.Ivfflat.CentroidType = u.tblcfg.KeyPartType
+		}
+		// QUANTIZATION: entries are stored as the quantization (down-cast) type,
+		// independent of the base column. The centroids are forced to f32 (decoupled
+		// — accurate assignment, fast f32 search) for ANY base type, including f64;
+		// the query is decoded to f32 for the centroid search and to the entry type
+		// for the re-rank. VectorType = the entry/quantization type.
+		if u.param.Quantization != "" {
+			if qt, ok := quantizer.ToVectorType(u.param.Quantization); ok {
+				u.idxcfg.Ivfflat.VectorType = int32(qt)
+				u.idxcfg.Ivfflat.CentroidType = int32(types.T_array_float32)
+			}
+		}
 
 		u.batch = tf.createResultBatch()
 		u.inited = true
@@ -215,22 +252,56 @@ func (u *ivfSearchState) start(tf *TableFunction, proc *process.Process, nthRow 
 
 	faVec := tf.ctr.argVecs[1]
 
-	switch faVec.GetType().Oid {
-	case types.T_array_float32:
-		return runIvfSearchVector[float32](tf, u, proc, faVec, nthRow)
-	case types.T_array_float64:
+	// Dispatch on the CENTROID type, not the base type. Only a plain f64 index
+	// (f64 base, no quantization) keeps f64 centroids; every other case — f32 base,
+	// narrow base, or any base under QUANTIZATION — searches f32 centroids, so the
+	// query is decoded to float32 regardless of its column type.
+	if u.idxcfg.Ivfflat.CentroidType == int32(types.T_array_float64) {
 		return runIvfSearchVector[float64](tf, u, proc, faVec, nthRow)
-	default:
-		return moerr.NewInternalError(proc.Ctx, "vector is not array_float32 or array_float64")
 	}
+	return runIvfSearchVectorToF32(tf, u, proc, faVec, nthRow)
 }
 
 func runIvfSearchVector[T types.RealNumbers](tf *TableFunction, u *ivfSearchState, proc *process.Process, faVec *vector.Vector, nthRow int) (err error) {
 	if faVec.IsNull(uint64(nthRow)) {
 		return nil
 	}
+	return runIvfSearchQuery(tf, u, proc, types.BytesToArray[T](faVec.GetBytesAt(nthRow)))
+}
 
-	fa := types.BytesToArray[T](faVec.GetBytesAt(nthRow))
+// runIvfSearchVectorToF32 decodes the query (of any vector column type: f32, f64,
+// or narrow bf16/f16/int8) to float32 and runs the float32 centroid search. The
+// SQL re-rank then encodes the query in the entry/quantization type.
+func runIvfSearchVectorToF32(tf *TableFunction, u *ivfSearchState, proc *process.Process, faVec *vector.Vector, nthRow int) error {
+	if faVec.IsNull(uint64(nthRow)) {
+		return nil
+	}
+	b := faVec.GetBytesAt(nthRow)
+	var fa []float32
+	switch faVec.GetType().Oid {
+	case types.T_array_float32:
+		fa = types.BytesToArray[float32](b)
+	case types.T_array_float64:
+		f64 := types.BytesToArray[float64](b)
+		fa = make([]float32, len(f64))
+		for i, x := range f64 {
+			fa[i] = float32(x)
+		}
+	case types.T_array_bf16:
+		fa = types.BF16ToFloat32Slice(types.BytesToArray[types.BF16](b))
+	case types.T_array_float16:
+		fa = types.Float16ToFloat32Slice(types.BytesToArray[types.Float16](b))
+	case types.T_array_int8:
+		fa = types.Int8ToFloat32Slice(types.BytesToArray[int8](b))
+	case types.T_array_uint8:
+		fa = types.Uint8ToFloat32Slice(types.BytesToArray[uint8](b))
+	default:
+		return moerr.NewInternalError(proc.Ctx, "unsupported ivfflat vector type")
+	}
+	return runIvfSearchQuery(tf, u, proc, fa)
+}
+
+func runIvfSearchQuery[T types.RealNumbers](tf *TableFunction, u *ivfSearchState, proc *process.Process, fa []T) (err error) {
 	if uint(len(fa)) != u.idxcfg.Ivfflat.Dimensions {
 		return moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("vector ops between different dimensions (%d, %d) is not permitted.", u.idxcfg.Ivfflat.Dimensions, len(fa)))
 	}
@@ -239,7 +310,7 @@ func runIvfSearchVector[T types.RealNumbers](tf *TableFunction, u *ivfSearchStat
 	if err != nil {
 		return err
 	}
-	key := fmt.Sprintf("%s:%d", u.tblcfg.IndexTable, u.idxcfg.Ivfflat.Version)
+	key := ivfSearchCacheKey(u.tblcfg.IndexTable, u.idxcfg.Ivfflat.Version, u.indexReaderParam)
 	rt := vectorindex.RuntimeConfig{
 		Limit:             uint(u.limit),
 		Probe:             uint(u.tblcfg.Nprobe),
@@ -256,7 +327,34 @@ func runIvfSearchVector[T types.RealNumbers](tf *TableFunction, u *ivfSearchStat
 	}
 
 	opStats := tf.OpAnalyzer.GetOpStats()
-	opStats.BackgroundQueries = append(opStats.BackgroundQueries, rt.BackgroundQueries...)
+	if shouldRecordIvfSearchBackgroundQueries(proc, u.indexReaderParam) {
+		opStats.BackgroundQueries = append(opStats.BackgroundQueries, rt.BackgroundQueries...)
+	}
 
 	return nil
+}
+
+func isRemoteRunContext(proc *process.Process) bool {
+	if proc == nil || proc.Ctx == nil {
+		return false
+	}
+	v, _ := proc.Ctx.Value(defines.RemoteRunContext{}).(bool)
+	return v
+}
+
+func shouldRecordIvfSearchBackgroundQueries(proc *process.Process, param *plan.IndexReaderParam) bool {
+	// A Multi-CN query has one partition executing on its coordinator. Record
+	// that local plan as the representative entries scan, regardless of its
+	// partition index. Remote physical plans use JSON for operator statistics;
+	// plan.Expr contains protobuf oneofs that cannot be decoded through that
+	// JSON path, so remote partitions must not carry background query plans.
+	return !isRemoteRunContext(proc)
+}
+
+func ivfSearchCacheKey(indexTable string, version int64, param *plan.IndexReaderParam) string {
+	key := fmt.Sprintf("%s:%d", indexTable, version)
+	if param.GetPartitionCnCnt() > 1 {
+		key = fmt.Sprintf("%s:%d/%d", key, param.GetPartitionCnIdx(), param.GetPartitionCnCnt())
+	}
+	return key
 }

@@ -1634,6 +1634,16 @@ func TestEncodeRowCoversManyTypes(t *testing.T) {
 			},
 		},
 		{
+			name: "year",
+			typ:  types.T_year.ToType(),
+			append: func(vec *vector.Vector) {
+				require.NoError(t, vector.AppendFixed(vec, types.MoYear(2024), false, mp))
+			},
+			assert: func(v any) {
+				require.Equal(t, types.MoYear(2024), v.(types.MoYear))
+			},
+		},
+		{
 			name: "bit",
 			typ:  types.T_bit.ToType(),
 			append: func(vec *vector.Vector) {
@@ -1650,7 +1660,7 @@ func TestEncodeRowCoversManyTypes(t *testing.T) {
 				require.NoError(t, vector.AppendFixed(vec, types.Enum(42), false, mp))
 			},
 			assert: func(v any) {
-				require.Equal(t, uint16(42), uint16(v.(uint16)))
+				require.Equal(t, types.Enum(42), v.(types.Enum))
 			},
 		},
 		{
@@ -2120,8 +2130,8 @@ func TestEncodeDecodedValue_AllTypes(t *testing.T) {
 		{name: "decimal128", typ: types.T_decimal128.ToType(), value: types.Decimal128{B0_63: 1, B64_127: 2}, expect: types.Decimal128{B0_63: 1, B64_127: 2}},
 		{name: "uuid", typ: types.T_uuid.ToType(), value: types.Uuid{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}, expect: types.Uuid{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}},
 		{name: "bit", typ: types.T_bit.ToType(), value: uint64(10), expect: uint64(10)},
-		{name: "enum_value", typ: types.T_enum.ToType(), value: types.Enum(7), expect: uint16(7)},
-		{name: "enum_uint16", typ: types.T_enum.ToType(), value: uint16(9), expect: uint16(9)},
+		{name: "enum_value", typ: types.T_enum.ToType(), value: types.Enum(7), expect: types.Enum(7)},
+		{name: "enum_uint16", typ: types.T_enum.ToType(), value: uint16(9), expect: types.Enum(9)},
 		{name: "ts_bytes", typ: types.T_TS.ToType(), value: []byte{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11}, expect: []byte{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11}},
 		{name: "default_bytes", typ: types.T_any.ToType(), value: []byte("fallback"), expect: []byte("fallback")},
 	}

@@ -156,6 +156,99 @@ func TestSplitSqlBySemicolon(t *testing.T) {
 	require.Equal(t, "", ret[0])
 }
 
+func TestSplitSqlByStatementCompoundBody(t *testing.T) {
+	ctx := context.Background()
+	compound := "create task task_quotes when ('gate' = 'gate') as begin\n" +
+		"  insert into gate_sink select 'gate-ok';\n" +
+		"  select case when 1 = 1 then 'PASS' else 'FAIL' end;\n" +
+		"end"
+
+	got, err := SplitSqlByStatement(ctx, compound+";")
+	require.NoError(t, err)
+	require.Equal(t, []string{compound}, got)
+
+	got, err = SplitSqlByStatement(ctx, compound+"; select 2")
+	require.NoError(t, err)
+	require.Equal(t, []string{compound, "select 2"}, got)
+}
+
+func TestSplitSqlByStatementPreservesFragmentContract(t *testing.T) {
+	ctx := context.Background()
+	got, err := SplitSqlByStatement(ctx,
+		"select ';' as semi /* block ; */;; -- comment ;\nselect 2; /* tail ; comment */")
+	require.NoError(t, err)
+	require.Equal(t, []string{
+		"select ';' as semi /* block ; */",
+		"",
+		"-- comment ;\nselect 2",
+		"/* tail ; comment */",
+	}, got)
+}
+
+func TestSplitSqlByStatementUsesSQLMode(t *testing.T) {
+	ctx := context.Background()
+	sql := `select 'a\'; select 1`
+
+	got, err := SplitSqlByStatementWithSQLMode(ctx, sql, "NO_BACKSLASH_ESCAPES")
+	require.NoError(t, err)
+	require.Equal(t, []string{`select 'a\'`, "select 1"}, got)
+}
+
+func TestSplitSqlByStatementExecutableCommentTerminator(t *testing.T) {
+	ctx := context.Background()
+	tests := []struct {
+		name    string
+		sql     string
+		sqlMode string
+		want    []string
+	}{
+		{
+			name: "single versioned statement",
+			sql:  "/*!40101 use mysql_ddl_test_db_3; */",
+			want: []string{"/*!40101 use mysql_ddl_test_db_3; */"},
+		},
+		{
+			name: "followed by ordinary statement",
+			sql:  "/*!40101 use mysql_ddl_test_db_3; */ select 1;",
+			want: []string{"/*!40101 use mysql_ddl_test_db_3; */", "select 1"},
+		},
+		{
+			name: "multiple executable comments",
+			sql:  "/*!40101 select 1; */ /*!40101 select 2; */",
+			want: []string{"/*!40101 select 1; */", "/*!40101 select 2; */"},
+		},
+		{
+			name: "outer statement delimiter",
+			sql:  "/*!40101 select 1 */; select 2;",
+			want: []string{"/*!40101 select 1 */", "select 2"},
+		},
+		{
+			name: "quoted terminator text",
+			sql:  "/*!40101 select 'x*/y'; */",
+			want: []string{"/*!40101 select 'x*/y'; */"},
+		},
+		{
+			name:    "ansi quoted terminator text",
+			sql:     `/*!40101 select "x*/y"; */`,
+			sqlMode: "ANSI_QUOTES",
+			want:    []string{`/*!40101 select "x*/y"; */`},
+		},
+		{
+			name: "outer delimiter preserves empty fragment contract",
+			sql:  "/*!40101 select 1; */;",
+			want: []string{"/*!40101 select 1; */", ""},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := SplitSqlByStatementWithSQLMode(ctx, test.sql, test.sqlMode)
+			require.NoError(t, err)
+			require.Equal(t, test.want, got)
+		})
+	}
+}
+
 func TestHandleSqlForRecord(t *testing.T) {
 	// Test remove /* cloud_user */ prefix
 	var ret []string
@@ -285,6 +378,7 @@ func TestHandleSqlForRecord(t *testing.T) {
 }
 
 func TestExtractLeadingHints(t *testing.T) {
+	ctx := context.Background()
 	// Case 1: Provided multi-line optimizer hint with smart quotes (not JSON-parseable)
 	sql1 := `/*+ { “rewrites” : {
 “t1”: “select a, b, c from t1 where a = 100”,
@@ -294,7 +388,8 @@ func TestExtractLeadingHints(t *testing.T) {
 
 Select * from t1, t2 where t1.a = t2.x`
 
-	got := extractLeadingHints(sql1)
+	got, err := extractLeadingHints(ctx, sql1)
+	require.NoError(t, err)
 	require.Equal(t, 1, len(got))
 	expected1 := ` { “rewrites” : {
 “t1”: “select a, b, c from t1 where a = 100”,
@@ -305,7 +400,8 @@ Select * from t1, t2 where t1.a = t2.x`
 
 	// Case 2: Valid JSON hint, verify JSON parsability
 	sql2 := `/*+ {"rewrites": {"t1": "select 1", "T2": "select 2"}} */ select 1;`
-	got = extractLeadingHints(sql2)
+	got, err = extractLeadingHints(ctx, sql2)
+	require.NoError(t, err)
 	require.Equal(t, 1, len(got))
 	var payload map[string]any
 	require.NoError(t, json.Unmarshal([]byte(got[0]), &payload))
@@ -316,27 +412,30 @@ Select * from t1, t2 where t1.a = t2.x`
 
 	// Case 3: Consecutive hints and multi-statements alignment
 	sql3 := `/*+ session=on */ /*++trace=on*/ /*+ use_nl(t1) */ select 1; /*+ h2 */ select 2; select 3;`
-	got = extractLeadingHints(sql3)
+	got, err = extractLeadingHints(ctx, sql3)
+	require.NoError(t, err)
 	require.Equal(t, 3, len(got))
 	require.Equal(t, ` session=on `, got[0])
 	require.Equal(t, ` h2 `, got[1])
 	require.Equal(t, "", got[2])
 
 	// Case 4: Empty input returns one empty hint
-	got = extractLeadingHints("")
+	got, err = extractLeadingHints(ctx, "")
+	require.NoError(t, err)
 	require.Equal(t, 1, len(got))
 	require.Equal(t, "", got[0])
 
 	// Case 5: Multi statements without hints
-	got = extractLeadingHints("select 1; select 2;")
+	got, err = extractLeadingHints(ctx, "select 1; select 2;")
+	require.NoError(t, err)
 	require.Equal(t, 2, len(got))
 	require.Equal(t, "", got[0])
 	require.Equal(t, "", got[1])
 
-	// Case 6: Unterminated hint collects inner content till EOF
-	got = extractLeadingHints("/*+ abc")
-	require.Equal(t, 1, len(got))
-	require.Equal(t, " abc", got[0])
+	// Case 6: Unterminated hints surface the parser error.
+	got, err = extractLeadingHints(ctx, "/*+ abc")
+	require.Error(t, err)
+	require.Nil(t, got)
 }
 
 // helper to parse and then apply AddRewriteHints
@@ -359,7 +458,9 @@ func TestAddRewriteHints_ValidSimple(t *testing.T) {
 	require.True(t, ok)
 	require.NotNil(t, sel.RewriteOption)
 	require.Contains(t, sel.RewriteOption.Rewrites, "db1.t1")
-	r := sel.RewriteOption.Rewrites["db1.t1"]
+	chain := sel.RewriteOption.Rewrites["db1.t1"]
+	require.Len(t, chain, 1)
+	r := chain[0]
 	require.Equal(t, "t1", r.TableName)
 	require.Equal(t, "db1", r.DbName)
 	switch r.Stmt.(type) {
@@ -380,13 +481,79 @@ func TestAddRewriteHints_ValidWithBangPlusComment(t *testing.T) {
 	require.True(t, ok)
 	require.NotNil(t, sel.RewriteOption)
 	require.Contains(t, sel.RewriteOption.Rewrites, "db2.t2")
-	r := sel.RewriteOption.Rewrites["db2.t2"]
+	chain := sel.RewriteOption.Rewrites["db2.t2"]
+	require.Len(t, chain, 1)
+	r := chain[0]
 	require.Equal(t, "t2", r.TableName)
 	require.Equal(t, "db2", r.DbName)
 	switch r.Stmt.(type) {
 	case *tree.Select, *tree.ParenSelect:
 	default:
 		t.Fatalf("unexpected rewrite stmt type: %T", r.Stmt)
+	}
+}
+
+func TestAddRewriteHints_RemapDb(t *testing.T) {
+	t.Run("valid multi", func(t *testing.T) {
+		stmts, err := parseAndApply(t, `/*+ {"remapdb": {"a": "b", "x": "y"}} */ select * from a.t`)
+		require.NoError(t, err)
+		sel, ok := stmts[0].(*tree.Select)
+		require.True(t, ok)
+		require.NotNil(t, sel.RewriteOption)
+		require.Equal(t, map[string]string{"a": "b", "x": "y"}, sel.RewriteOption.RemapDb)
+	})
+	t.Run("invalid identifier", func(t *testing.T) {
+		_, err := parseAndApply(t, `/*+ {"remapdb": {"a.b": "c"}} */ select 1`)
+		require.ErrorContains(t, err, "valid identifiers")
+	})
+	t.Run("chaining rejected", func(t *testing.T) {
+		_, err := parseAndApply(t, `/*+ {"remapdb": {"x": "y", "y": "z"}} */ select 1`)
+		require.ErrorContains(t, err, "must not be both a source and a destination")
+	})
+	t.Run("self map rejected", func(t *testing.T) {
+		_, err := parseAndApply(t, `/*+ {"remapdb": {"x": "x"}} */ select 1`)
+		require.ErrorContains(t, err, "must not be both a source and a destination")
+	})
+	t.Run("system database source rejected", func(t *testing.T) {
+		for _, src := range []string{"mysql", "information_schema", "system", "system_metrics", "mo_catalog", "mo_anything"} {
+			_, err := parseAndApply(t, `/*+ {"remapdb": {"`+src+`": "y"}} */ select 1`)
+			require.ErrorContains(t, err, "must not remap a system database", "src=%s", src)
+		}
+	})
+	t.Run("system database destination rejected", func(t *testing.T) {
+		_, err := parseAndApply(t, `/*+ {"remapdb": {"x": "mo_catalog"}} */ select 1`)
+		require.ErrorContains(t, err, "must not remap a system database")
+	})
+}
+
+func TestIsSystemDatabase(t *testing.T) {
+	for _, n := range []string{"mysql", "MySQL", "information_schema", "system", "system_metrics", "mo_catalog", "mo_task", "mo_foo", "MO_BAR"} {
+		require.True(t, IsSystemDatabase(n), n)
+	}
+	for _, n := range []string{"db1", "users", "moose", "system2", "mo", "mox"} {
+		require.False(t, IsSystemDatabase(n), n)
+	}
+}
+
+func TestAddRewriteHints_ChainArray(t *testing.T) {
+	sql := `/*+ {"rewrites": {"db1.t1": ["select * from db1.t1 where a < 4", "select * from db1.t1 where a > 1"]}} */ select * from db1.t1`
+	stmts, err := parseAndApply(t, sql)
+	require.NoError(t, err)
+	require.Len(t, stmts, 1)
+
+	sel, ok := stmts[0].(*tree.Select)
+	require.True(t, ok)
+	require.NotNil(t, sel.RewriteOption)
+	chain := sel.RewriteOption.Rewrites["db1.t1"]
+	require.Len(t, chain, 2)
+	for _, r := range chain {
+		require.Equal(t, "t1", r.TableName)
+		require.Equal(t, "db1", r.DbName)
+		switch r.Stmt.(type) {
+		case *tree.Select, *tree.ParenSelect:
+		default:
+			t.Fatalf("unexpected rewrite stmt type: %T", r.Stmt)
+		}
 	}
 }
 
@@ -480,6 +647,46 @@ func TestAddRewriteHints_ParenSelectTopLevel(t *testing.T) {
 	}
 	require.NotNil(t, ps.Select)
 	require.NotNil(t, ps.Select.RewriteOption)
+}
+
+func TestAddRewriteHints_TrailingLineComment(t *testing.T) {
+	// A trailing "stmt; -- comment" splits into two fragments but parses into a
+	// single statement. The comment-only tail must not be counted, otherwise the
+	// hint/statement counts mismatch and this valid query is rejected.
+	t.Run("select with trailing line comment", func(t *testing.T) {
+		stmts, err := parseAndApply(t, "select 1; -- a trailing comment")
+		require.NoError(t, err)
+		require.Len(t, stmts, 1)
+	})
+
+	t.Run("use with trailing line comment", func(t *testing.T) {
+		stmts, err := parseAndApply(t, "use db1; -- USE is not remapped")
+		require.NoError(t, err)
+		require.Len(t, stmts, 1)
+	})
+
+	t.Run("trailing block comment", func(t *testing.T) {
+		stmts, err := parseAndApply(t, "select 1; /* trailing block */")
+		require.NoError(t, err)
+		require.Len(t, stmts, 1)
+	})
+
+	t.Run("hint survives with trailing comment", func(t *testing.T) {
+		stmts, err := parseAndApply(t, "/*+ {\"rewrites\": {\"db1.t1\": \"select 1\"}} */ select * from db1.t1; -- tail")
+		require.NoError(t, err)
+		require.Len(t, stmts, 1)
+		sel := stmts[0].(*tree.Select)
+		require.NotNil(t, sel.RewriteOption)
+		require.Contains(t, sel.RewriteOption.Rewrites, "db1.t1")
+	})
+
+	t.Run("comment-only input is accepted", func(t *testing.T) {
+		stmts, err := parseAndApply(t, "-- just a comment")
+		require.NoError(t, err)
+		require.Len(t, stmts, 1)
+		_, ok := stmts[0].(*tree.EmptyStmt)
+		require.True(t, ok)
+	})
 }
 
 func TestAddRewriteHints_ParseHintsBug_MismatchedInputs(t *testing.T) {

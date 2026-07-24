@@ -18,8 +18,9 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"sort"
+	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -138,8 +139,6 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 		pname = "PreInsert UniqueKey"
 	case plan.Node_PRE_INSERT_SK:
 		pname = "PreInsert SecondaryKey"
-	case plan.Node_ON_DUPLICATE_KEY:
-		pname = "On Duplicate Key"
 	case plan.Node_FUZZY_FILTER:
 		pname = "Fuzzy Filter for duplicate key"
 	case plan.Node_LOCK_OP:
@@ -294,6 +293,16 @@ func (ndesc *NodeDescribeImpl) GetTableDef(ctx context.Context, options *Explain
 
 func (ndesc *NodeDescribeImpl) GetExtraInfo(ctx context.Context, options *ExplainOptions) ([]string, error) {
 	lines := make([]string, 0)
+
+	if ndesc.Node.NodeType == plan.Node_EXTERNAL_SCAN &&
+		ndesc.Node.GetExternScan() != nil &&
+		ndesc.Node.GetExternScan().GetIcebergScan() != nil {
+		icebergInfo, err := ndesc.GetIcebergScanInfo(ctx, options)
+		if err != nil {
+			return nil, err
+		}
+		lines = append(lines, icebergInfo)
+	}
 
 	// Get Sort list info
 	if len(ndesc.Node.OrderBy) > 0 {
@@ -474,6 +483,47 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(ctx context.Context, options *Explai
 		}
 	}
 	return lines, nil
+}
+
+func (ndesc *NodeDescribeImpl) GetIcebergScanInfo(ctx context.Context, options *ExplainOptions) (string, error) {
+	if options.Format == EXPLAIN_FORMAT_JSON {
+		return "", moerr.NewNYI(ctx, "explain format json")
+	} else if options.Format == EXPLAIN_FORMAT_DOT {
+		return "", moerr.NewNYI(ctx, "explain format dot")
+	}
+	scan := ndesc.Node.GetExternScan().GetIcebergScan()
+	parts := []string{
+		"catalog_id=" + strconv.FormatUint(scan.GetCatalogId(), 10),
+	}
+	if scan.GetMappingId() != 0 {
+		parts = append(parts, "mapping_id="+strconv.FormatUint(scan.GetMappingId(), 10))
+	}
+	if scan.GetNamespace() != "" {
+		parts = append(parts, "namespace="+scan.GetNamespace())
+	}
+	if scan.GetTable() != "" {
+		parts = append(parts, "table="+scan.GetTable())
+	}
+	if scan.GetRef() != "" {
+		parts = append(parts, "ref="+scan.GetRef())
+	}
+	if scan.GetSnapshotId() != 0 {
+		parts = append(parts, "snapshot_id="+strconv.FormatInt(scan.GetSnapshotId(), 10))
+	}
+	if scan.GetTimestampAsOf() != 0 {
+		parts = append(parts, "timestamp_as_of_ms="+strconv.FormatInt(scan.GetTimestampAsOf(), 10))
+	}
+	if scan.GetReadMode() != "" {
+		parts = append(parts, "read_mode="+scan.GetReadMode())
+	}
+	if len(scan.GetProjectedFieldIds()) > 0 {
+		parts = append(parts, fmt.Sprintf("projected_field_ids=%v", scan.GetProjectedFieldIds()))
+	}
+	if scan.GetFilterDigest() != "" {
+		parts = append(parts, "filter_digest="+scan.GetFilterDigest())
+	}
+	parts = append(parts, fmt.Sprintf("residual_filter=%t", len(ndesc.Node.GetFilterList()) > 0 || scan.GetFilterDigest() != ""))
+	return "Iceberg: " + strings.Join(parts, ", "), nil
 }
 
 func (ndesc *NodeDescribeImpl) GetFullTextSql(ctx context.Context, options *ExplainOptions) (string, error) {
@@ -1123,9 +1173,7 @@ func (a AnalyzeInfoDescribeImpl) GetDescription(ctx context.Context, options *Ex
 	majordop := len(a.AnalyzeInfo.TimeConsumedArrayMajor)
 	if majordop > 1 {
 		fmt.Fprintf(buf, " %v_time=[", majorStr)
-		sort.Slice(a.AnalyzeInfo.TimeConsumedArrayMajor, func(i, j int) bool {
-			return a.AnalyzeInfo.TimeConsumedArrayMajor[i] < a.AnalyzeInfo.TimeConsumedArrayMajor[j]
-		})
+		slices.Sort(a.AnalyzeInfo.TimeConsumedArrayMajor)
 		if majordop > 4 {
 			var totalTime int64
 			for i := range a.AnalyzeInfo.TimeConsumedArrayMajor {
@@ -1159,9 +1207,7 @@ func (a AnalyzeInfoDescribeImpl) GetDescription(ctx context.Context, options *Ex
 			}
 
 			fmt.Fprintf(buf, " %v_time=[", minorStr)
-			sort.Slice(a.AnalyzeInfo.TimeConsumedArrayMinor, func(i, j int) bool {
-				return a.AnalyzeInfo.TimeConsumedArrayMinor[i] < a.AnalyzeInfo.TimeConsumedArrayMinor[j]
-			})
+			slices.Sort(a.AnalyzeInfo.TimeConsumedArrayMinor)
 			if minordop > 4 {
 				var totalTime int64
 				for i := range a.AnalyzeInfo.TimeConsumedArrayMinor {

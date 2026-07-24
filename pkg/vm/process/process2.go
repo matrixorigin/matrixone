@@ -87,6 +87,7 @@ func NewTopProcess(
 
 		// 2. fields from make.
 		LastInsertID: new(uint64),
+		AffectedRows: new(int64),
 
 		// 3. other fields.
 		logger:             util.GetLogger(sid),
@@ -113,9 +114,7 @@ func (proc *Process) NewNoContextChildProc(dataEntryCount int) *Process {
 	if dataEntryCount > 0 {
 		child.Reg.MergeReceivers = make([]*WaitRegister, dataEntryCount)
 		for i := range child.Reg.MergeReceivers {
-			child.Reg.MergeReceivers[i] = &WaitRegister{
-				Ch2: make(chan PipelineSignal, 1),
-			}
+			child.Reg.MergeReceivers[i] = NewPipelineEdge(1, 0)
 		}
 	}
 	return child
@@ -131,10 +130,9 @@ func (proc *Process) NewNoContextChildProcWithChannel(dataEntryCount int, channe
 	if dataEntryCount > 0 {
 		child.Reg.MergeReceivers = make([]*WaitRegister, dataEntryCount)
 		for i := range child.Reg.MergeReceivers {
-			child.Reg.MergeReceivers[i] = &WaitRegister{
-				Ch2:         make(chan PipelineSignal, channelBufferSize[i]),
-				NilBatchCnt: int(nilbatchCnt[i]),
-			}
+			child.Reg.MergeReceivers[i] = NewPipelineEdge(
+				int(channelBufferSize[i]),
+				int(nilbatchCnt[i]))
 		}
 	}
 	return child
@@ -242,6 +240,7 @@ func (proc *Process) Free() {
 		proc.Base.messageBoard.Reset()
 		proc.Base.messageBoard = nil
 	}
+	proc.setPrepareParams(nil, nil, false)
 }
 
 type QueryBaseContext struct {

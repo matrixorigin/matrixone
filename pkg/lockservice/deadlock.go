@@ -25,6 +25,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"go.uber.org/zap"
 )
 
 var (
@@ -36,7 +38,7 @@ var (
 type detector struct {
 	logger            *log.MOLogger
 	c                 chan deadlockTxn
-	waitTxnsFetchFunc func(pb.WaitTxn, *waiters) (bool, error)
+	waitTxnsFetchFunc func(context.Context, pb.WaitTxn, *waiters) (bool, error)
 	waitTxnAbortFunc  func(pb.WaitTxn, error)
 	ignoreTxns        sync.Map // txnID -> any
 	stopper           *stopper.Stopper
@@ -54,7 +56,7 @@ type detector struct {
 // txn.
 func newDeadlockDetector(
 	logger *log.MOLogger,
-	waitTxnsFetchFunc func(pb.WaitTxn, *waiters) (bool, error),
+	waitTxnsFetchFunc func(context.Context, pb.WaitTxn, *waiters) (bool, error),
 	waitTxnAbortFunc func(pb.WaitTxn, error),
 ) *detector {
 	d := &detector{
@@ -80,6 +82,9 @@ func (d *detector) close() {
 	d.mu.closed = true
 	d.mu.Unlock()
 	d.stopper.Stop()
+	d.mu.Lock()
+	clear(d.mu.activeCheckTxn)
+	d.mu.Unlock()
 	close(d.c)
 }
 
@@ -94,6 +99,8 @@ func (d *detector) check(
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.mu.closed {
+		v2.TxnDeadlockDetectorEnqueueCounter.WithLabelValues("closed").Inc()
+		v2.TxnDeadlockDetectorQueueDepthGauge.Set(float64(len(d.c)))
 		return ErrDeadlockDetectorClosed
 	}
 
@@ -105,19 +112,30 @@ func (d *detector) check(
 
 	key := util.UnsafeBytesToString(txn.TxnID)
 	if _, ok := d.mu.activeCheckTxn[key]; ok {
+		v2.TxnDeadlockDetectorEnqueueCounter.WithLabelValues("dedup_skipped").Inc()
+		v2.TxnDeadlockDetectorQueueDepthGauge.Set(float64(len(d.c)))
 		return nil
 	}
-	d.mu.activeCheckTxn[key] = struct{}{}
 
 	select {
 	case d.c <- deadlockTxn{
 		holdTxnID: holdTxnID,
 		waitTxn:   txn,
 	}:
+		d.mu.activeCheckTxn[key] = struct{}{}
+		v2.TxnDeadlockDetectorEnqueueCounter.WithLabelValues("queued").Inc()
 	default:
 		// too many txns waiting for deadlock check, just return error
+		v2.TxnDeadlockDetectorEnqueueCounter.WithLabelValues("busy").Inc()
+		v2.TxnDeadlockDetectorQueueDepthGauge.Set(float64(len(d.c)))
+		d.logger.Warn("deadlock_detector_enqueue_busy",
+			zap.Int("queue-depth", len(d.c)),
+			zap.Int("queue-capacity", cap(d.c)),
+			zap.String("wait-txn", hex.EncodeToString(txn.TxnID)),
+			zap.String("hold-txn", hex.EncodeToString(holdTxnID)))
 		return ErrDeadlockCheckBusy
 	}
+	v2.TxnDeadlockDetectorQueueDepthGauge.Set(float64(len(d.c)))
 	return nil
 }
 
@@ -126,12 +144,16 @@ func (d *detector) doCheck(ctx context.Context) {
 
 	w := &waiters{ignoreTxns: &d.ignoreTxns}
 	for {
+		if ctx.Err() != nil {
+			return
+		}
 		select {
 		case <-ctx.Done():
 			return
 		case txn := <-d.c:
+			v2.TxnDeadlockDetectorQueueDepthGauge.Set(float64(len(d.c)))
 			w.reset(txn)
-			hasDeadlock, deadlockTxn, err := d.checkDeadlock(w)
+			hasDeadlock, deadlockTxn, err := d.checkDeadlock(ctx, w)
 			if hasDeadlock {
 				if err == nil {
 					err = ErrDeadLockDetected
@@ -146,11 +168,14 @@ func (d *detector) doCheck(ctx context.Context) {
 	}
 }
 
-func (d *detector) checkDeadlock(w *waiters) (bool, pb.WaitTxn, error) {
+func (d *detector) checkDeadlock(ctx context.Context, w *waiters) (bool, pb.WaitTxn, error) {
 	for {
+		if err := ctx.Err(); err != nil {
+			return false, pb.WaitTxn{}, err
+		}
 		// find deadlock
 		txn := w.getCheckTargetTxn()
-		added, err := d.waitTxnsFetchFunc(txn, w)
+		added, err := d.waitTxnsFetchFunc(ctx, txn, w)
 		if err != nil {
 			logCheckDeadLockFailed(d.logger, txn, w.root.startTxn(), err)
 			return false, pb.WaitTxn{}, err

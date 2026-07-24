@@ -34,8 +34,9 @@
 # make install-static-check-tools
 # make static-check
 #
-# To construct a directory named vendor in the main module’s root directory that contains copies of all packages needed to support builds and tests of packages in the main module.
-# make vendor
+# To stage protobuf imports without changing Go package resolution -
+#
+# make proto-vendor
 #
 # To compile mo-service with GPU support,
 # 1. install CUDA toolkit (version 12.0, 13.0, or above)
@@ -48,9 +49,19 @@
 #  % cd matrixone
 #  % MO_CL_CUDA=1 make
 
+# Go toolchain (override with `make GO=/path/to/go ...`); defaults to `go`.
+# Requires Go 1.26+ for the arch-specific SIMD kernels (built by default on x86_64).
+ifeq ($(GO),)
+	GO=go
+endif
+
 # where am I
 ROOT_DIR = $(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
 BIN_NAME := mo-service
+# MatrixOne is a single-module repository. Official Make targets must not
+# inherit a parent or user-selected go.work that can replace dependencies.
+override GOWORK := off
+export GOWORK
 UNAME_S := $(shell uname -s | tr A-Z a-z)
 UNAME_M := $(shell uname -m)
 GOPATH := $(shell go env GOPATH)
@@ -59,7 +70,11 @@ BRANCH_NAME=$(shell git rev-parse --abbrev-ref HEAD)
 LAST_COMMIT_ID=$(shell git rev-parse --short HEAD)
 BUILD_TIME=$(shell date +%s)
 MO_VERSION=$(shell git symbolic-ref -q --short HEAD || git describe --tags --exact-match)
-GO_MODULE=$(shell go list -m)
+# Resolve packages from the checksummed module graph. Generated vendor trees can
+# omit non-Go assets such as C and C++ header-only dependencies.
+GO_MODULE_MODE := -mod=readonly
+GO_MODULE=$(shell go list $(GO_MODULE_MODE) -m)
+PROTO_VENDOR_DIR := $(ROOT_DIR)/.proto-vendor
 
 # check the MUSL_TARGET from https://musl.cc
 # make MUSL_TARGET=aarch64-linux musl to cross make the aarch64 linux executable
@@ -106,6 +121,13 @@ help:
 	@echo "  make ut                 - Run unit tests"
 	@echo "  make ci                 - Run CI tests (BVT + optional UT)"
 	@echo "  make compose            - Run docker compose BVT tests"
+	@echo "  make test-iceberg-e2e-local - Run local Nessie/MinIO/MO Iceberg E2E smoke"
+	@echo "  make test-iceberg-local - Run legacy local Iceberg CI gates"
+	@echo "  make test-iceberg-nightly - Run enabled Iceberg external nightly gates"
+	@echo "  make test-iceberg-golden-real - Run real-file Iceberg golden cross-engine scenarios"
+	@echo "  make test-iceberg-external-templates - Validate external Iceberg scenario templates"
+	@echo "  make test-iceberg-readiness - Generate external Iceberg test readiness report"
+	@echo "  make test-iceberg-external-coverage - Verify external reports cover expected ICE-TEST ids"
 	@echo ""
 	@echo "Local Development with MinIO:"
 	@echo "  make dev-up-minio-local     - Start MinIO service (local storage)"
@@ -114,6 +136,14 @@ help:
 	@echo "  make dev-status-minio-local - Show MinIO service status"
 	@echo "  make dev-logs-minio-local   - Show MinIO logs"
 	@echo "  make dev-clean-minio-local  - Clean MinIO data"
+	@echo "  make dev-up-iceberg-tier-a  - Start MinIO + Nessie for Iceberg Tier A tests"
+	@echo "  make dev-up-iceberg-tier-a-brew - Start Iceberg Tier A services via local brew binaries"
+	@echo "  make dev-down-iceberg-tier-a-brew - Stop local brew Iceberg Tier A services"
+	@echo "  make dev-status-iceberg-tier-a-brew - Show local brew Iceberg Tier A service status"
+	@echo "  make dev-seed-iceberg-tier-a - Seed deterministic Iceberg Tier A tables"
+	@echo "  make dev-test-iceberg-tier-a - Run Iceberg Tier A integration tests"
+	@echo "  make dev-seed-iceberg-tier-b-nyc-tlc - Seed NYC TLC public dataset into local Iceberg"
+	@echo "  make dev-test-iceberg-tier-b-nyc-tlc - Run NYC TLC Tier B public dataset checks"
 	@echo "  make launch-minio           - Build and start MO with MinIO storage"
 	@echo "  make launch-minio-debug     - Build (debug) and start MO with MinIO"
 	@echo ""
@@ -138,7 +168,10 @@ help:
 	@echo "  make static-check       - Run static analysis"
 	@echo ""
 	@echo "Other:"
-	@echo "  make vendor-build       - Build vendor directory"
+	@echo "  make config             - Verify the read-only production/test package graph"
+	@echo "  make mod-tidy           - Synchronize go.mod and go.sum"
+	@echo "  make proto-vendor       - Stage protobuf imports for code generation"
+	@echo "  make vendor-build       - Alias for proto-vendor"
 	@echo "  make pb                 - Generate protobuf files"
 	@echo ""
 	@echo "For more details:"
@@ -146,13 +179,16 @@ help:
 	@echo "  See README.md and BUILD.md for full documentation"
 
 ###############################################################################
-# build vendor directory
+# stage protobuf imports outside the module's vendor directory
 ###############################################################################
 
-.PHONY: vendor-build
-vendor-build:
-	$(info [go mod vendor])
-	@go mod vendor
+.PHONY: proto-vendor vendor-build
+proto-vendor: config
+	$(info [Stage protobuf imports])
+	rm -rf "$(PROTO_VENDOR_DIR)"
+	@GOFLAGS="$(GOFLAGS) $(GO_MODULE_MODE)" GOPROXY="$(GOPROXY)" go mod vendor -o "$(PROTO_VENDOR_DIR)"
+
+vendor-build: proto-vendor
 
 ###############################################################################
 # code generation
@@ -160,16 +196,28 @@ vendor-build:
 
 .PHONY: config
 config:
-	$(info [Create build config])
-	@go mod tidy
+	$(info [Verify Go package graph])
+	@for i in 1 2 3; do \
+		GOPROXY="$(GOPROXY)" go list $(GO_MODULE_MODE) -test ./... >/dev/null && exit 0; \
+		echo "go package graph verification failed (attempt $$i/3), retrying..."; \
+		sleep $$((i * 5)); \
+	done; \
+	echo "go package graph verification failed after 3 attempts"; \
+	exit 1
+
+.PHONY: mod-tidy
+mod-tidy:
+	$(info [Synchronize Go module metadata])
+	@GOPROXY="$(GOPROXY)" go mod tidy
 
 .PHONY: generate-pb
-generate-pb:
-	$(ROOT_DIR)/proto/gen.sh
+generate-pb: proto-vendor
+	PROTO_VENDOR_DIR="$(PROTO_VENDOR_DIR)" "$(ROOT_DIR)/proto/gen.sh"
 
 # Generate protobuf files
 .PHONY: pb
-pb: vendor-build generate-pb fmt
+pb: generate-pb
+	@$(MAKE) fmt
 	$(info all protos are generated)
 
 ###############################################################################
@@ -184,6 +232,32 @@ RACE_OPT :=
 DEBUG_OPT :=
 CGO_DEBUG_OPT :=
 TAGS :=
+
+# Env-var prefix for the build command. On x86_64 the arch-specific SIMD kernels in
+# pkg/vectorindex/metric are compiled by default (ARCHSIMD=1): GOAMD64 defaults to v3
+# (Haswell baseline -- AVX2/FMA/BMI, required by the Go simd experiment) and
+# GOEXPERIMENT defaults to simd (enables the goexperiment.simd build tag on Go 1.26+).
+# Disable the SIMD kernels with:
+#   make ARCHSIMD=0 build                       # plain x86 build, no SIMD kernels
+# Either default can still be overridden individually, e.g. `make GOAMD64=v4 build`.
+GOEXPERIMENT_OPT ?=
+ifeq ("$(UNAME_M)", "x86_64")
+  ARCHSIMD ?= 1
+  ifeq ($(ARCHSIMD),1)
+	# DECISION (owner: cpegeric): raising the default x86 baseline to v3 (Haswell:
+	# AVX2/FMA/BMI) is intentional. The narrow-vector (bf16/f16/int8/uint8) SIMD
+	# kernels in pkg/vectorindex/metric require it, and the Go simd experiment
+	# mandates a v3 baseline. Pre-Haswell CPUs must build with `make ARCHSIMD=0`.
+	GOAMD64 ?= v3
+	GOEXPERIMENT_SIMD ?= simd
+  endif
+  ifneq ($(GOAMD64),)
+	GOEXPERIMENT_OPT += GOAMD64=$(GOAMD64)
+  endif
+  ifneq ($(GOEXPERIMENT_SIMD),)
+	GOEXPERIMENT_OPT += GOEXPERIMENT=$(GOEXPERIMENT_SIMD)
+  endif
+endif
 
 ifeq ($(MO_CL_CUDA),1)
   ifeq ($(CONDA_PREFIX),)
@@ -235,7 +309,17 @@ jieba-dict:
 .PHONY: build
 build: config cgo thirdparties jieba-dict
 	$(info [Build binary])
-	$(CGO_OPTS) go build $(TAGS) $(RACE_OPT) $(GOLDFLAGS) $(DEBUG_OPT) $(GOBUILD_OPT) -o $(BIN_NAME) ./cmd/mo-service
+	$(GOEXPERIMENT_OPT) $(CGO_OPTS) $(GO) build $(GO_MODULE_MODE) $(TAGS) $(RACE_OPT) $(GOLDFLAGS) $(DEBUG_OPT) $(GOBUILD_OPT) -o $(BIN_NAME) ./cmd/mo-service
+
+# Build with native libraries supplied by a prebuilt image. This target is for
+# CI image builds: unlike build, it must not rebuild cgo or thirdparties after
+# the source tree has been copied into the builder.
+.PHONY: build-with-prebuilt-native
+build-with-prebuilt-native: config jieba-dict
+	@test -f "$(CGO_DIR)/libmo.so" || test -f "$(CGO_DIR)/libmo.dylib"
+	@test -f "$(THIRDPARTIES_INSTALL_DIR)/lib/libusearch_c.so" || test -f "$(THIRDPARTIES_INSTALL_DIR)/lib/libusearch_c.dylib"
+	$(info [Build binary with prebuilt native libraries])
+	$(CGO_OPTS) go build $(GO_MODULE_MODE) $(TAGS) $(RACE_OPT) $(GOLDFLAGS) $(DEBUG_OPT) $(GOBUILD_OPT) -o $(BIN_NAME) ./cmd/mo-service
 
 # https://wiki.musl-libc.org/getting-started.html
 # https://musl.cc/
@@ -265,13 +349,13 @@ musl: override TAGS := -tags musl
 musl: musl-install musl-cgo config musl-thirdparties jieba-dict
 musl:
 	$(info [Build binary(musl)])
-	$(CGO_OPTS) go build $(TAGS) $(RACE_OPT) $(GOLDFLAGS) $(DEBUG_OPT) $(GOBUILD_OPT) -o $(BIN_NAME) ./cmd/mo-service
+	$(GOEXPERIMENT_OPT) $(CGO_OPTS) $(GO) build $(GO_MODULE_MODE) $(TAGS) $(RACE_OPT) $(GOLDFLAGS) $(DEBUG_OPT) $(GOBUILD_OPT) -o $(BIN_NAME) ./cmd/mo-service
 
 # build mo-tool
 .PHONY: mo-tool
 mo-tool: config cgo thirdparties
 	$(info [Build mo-tool tool])
-	$(CGO_OPTS) go build $(GOLDFLAGS) -o mo-tool ./cmd/mo-tool
+	$(GOEXPERIMENT_OPT) $(CGO_OPTS) $(GO) build $(GO_MODULE_MODE) $(GOLDFLAGS) -o mo-tool ./cmd/mo-tool
 
 # build mo-service binary for debugging with go's race detector enabled
 # produced executable is 10x slower and consumes much more memory
@@ -307,7 +391,8 @@ endif
 ###############################################################################
 UT_PARALLEL ?= 1
 ENABLE_UT ?= "false"
-GOPROXY ?= "https://proxy.golang.com.cn,direct"
+GOPROXY ?= https://proxy.golang.com.cn,https://goproxy.cn,https://proxy.golang.org
+export GOPROXY
 LAUNCH ?= "launch"
 
 .PHONY: ci
@@ -325,6 +410,66 @@ ci:
 ci-clean:
 	@docker rmi matrixorigin/matrixone:local-ci
 	@docker image prune -f
+
+.PHONY: test-iceberg-core
+test-iceberg-core:
+	@optools/iceberg_ci.bash core
+
+.PHONY: test-iceberg-embedded
+test-iceberg-embedded:
+	@optools/iceberg_ci.bash embedded
+
+.PHONY: test-iceberg-adapter
+test-iceberg-adapter:
+	@optools/iceberg_ci.bash adapter
+
+.PHONY: test-iceberg-golden
+test-iceberg-golden:
+	@optools/iceberg_ci.bash golden
+
+.PHONY: test-iceberg-golden-real
+test-iceberg-golden-real:
+	@optools/iceberg_ci.bash golden-real
+
+.PHONY: test-iceberg-external-templates
+test-iceberg-external-templates:
+	@optools/iceberg_ci.bash external-templates
+
+.PHONY: test-iceberg-coverage
+test-iceberg-coverage:
+	@optools/iceberg_ci.bash coverage
+
+.PHONY: test-iceberg-preflight
+test-iceberg-preflight:
+	@optools/iceberg_ci.bash preflight
+
+.PHONY: test-iceberg-artifact
+test-iceberg-artifact:
+	@optools/iceberg_ci.bash artifact
+
+.PHONY: test-iceberg-external-coverage
+test-iceberg-external-coverage:
+	@optools/iceberg_ci.bash external-coverage
+
+.PHONY: test-iceberg-dashboard
+test-iceberg-dashboard:
+	@optools/iceberg_ci.bash dashboard
+
+.PHONY: test-iceberg-readiness
+test-iceberg-readiness:
+	@optools/iceberg_ci.bash readiness
+
+.PHONY: test-iceberg-e2e-local
+test-iceberg-e2e-local:
+	@optools/iceberg_ci.bash e2e-local
+
+.PHONY: test-iceberg-local
+test-iceberg-local:
+	@optools/iceberg_ci.bash local
+
+.PHONY: test-iceberg-nightly
+test-iceberg-nightly:
+	@optools/iceberg_ci.bash nightly
 
 
 ###############################################################################
@@ -954,6 +1099,7 @@ dev-up-minio-local:
 	@echo "✅ MinIO started!"
 	@echo "  - API: http://127.0.0.1:9000"
 	@echo "  - Console: http://127.0.0.1:9001"
+	@echo "  - Nessie: http://127.0.0.1:19120"
 	@echo "  - Access Key: minio"
 	@echo "  - Secret Key: minio123"
 	@echo "  - Data directory: $(MINIO_DATA_DIR)"
@@ -977,6 +1123,77 @@ dev-status-minio-local:
 .PHONY: dev-logs-minio-local
 dev-logs-minio-local:
 	@cd $(MINIO_DIR) && docker compose logs -f minio
+
+.PHONY: dev-up-iceberg-tier-a
+dev-up-iceberg-tier-a: dev-up-minio-local
+	@echo "Waiting for Nessie Iceberg REST catalog..."
+	@for i in $$(seq 1 60); do \
+		if curl -fsS --max-time 5 http://127.0.0.1:19120/iceberg/v1/config >/dev/null 2>&1; then \
+			break; \
+		fi; \
+		if [ "$$i" -eq 60 ]; then \
+			echo "Timed out waiting for Nessie Iceberg REST catalog" >&2; \
+			cd $(MINIO_DIR) && docker compose logs --tail=80 nessie >&2 || true; \
+			exit 1; \
+		fi; \
+		sleep 1; \
+	done
+	@echo "✅ Iceberg Tier A services started"
+	@echo "  - REST catalog: http://127.0.0.1:19120/iceberg"
+	@echo "  - Warehouse: s3://mo-iceberg/warehouse"
+
+.PHONY: dev-down-iceberg-tier-a
+dev-down-iceberg-tier-a: dev-down-minio-local
+
+.PHONY: dev-up-iceberg-tier-a-brew
+dev-up-iceberg-tier-a-brew:
+	@$(MINIO_DIR)/tier-a/start-brew-tier-a.sh
+
+.PHONY: dev-down-iceberg-tier-a-brew
+dev-down-iceberg-tier-a-brew:
+	@$(MINIO_DIR)/tier-a/stop-brew-tier-a.sh
+
+.PHONY: dev-status-iceberg-tier-a-brew
+dev-status-iceberg-tier-a-brew:
+	@printf "MinIO: "; curl -fsS http://127.0.0.1:9000/minio/health/live >/dev/null && echo up || echo down
+	@printf "Nessie: "; curl -fsS http://127.0.0.1:19120/iceberg/v1/config >/dev/null && echo up || echo down
+
+.PHONY: dev-logs-iceberg-tier-a-brew
+dev-logs-iceberg-tier-a-brew:
+	@tail -n 200 -f $(MINIO_DIR)/mo-data/logs/minio.log $(MINIO_DIR)/mo-data/logs/nessie.log
+
+.PHONY: dev-status-iceberg-tier-a
+dev-status-iceberg-tier-a:
+	@cd $(MINIO_DIR) && docker compose ps
+
+.PHONY: dev-logs-iceberg-tier-a
+dev-logs-iceberg-tier-a:
+	@cd $(MINIO_DIR) && docker compose logs -f minio nessie
+
+.PHONY: dev-seed-iceberg-tier-a
+dev-seed-iceberg-tier-a: dev-up-iceberg-tier-a
+	@$(MINIO_DIR)/tier-a/seed-iceberg-tier-a.sh
+
+.PHONY: dev-test-iceberg-tier-a
+dev-test-iceberg-tier-a:
+	@test -f $(MINIO_DIR)/tier-a/tier_a.generated.env || (echo "Missing $(MINIO_DIR)/tier-a/tier_a.generated.env. Run make dev-seed-iceberg-tier-a first."; exit 1)
+	@. $(MINIO_DIR)/tier-a/tier_a.generated.env && \
+		MO_ICEBERG_ALLOW_PLAIN_HTTP=1 \
+		MO_ICEBERG_REPORT_DIR=$${MO_ICEBERG_REPORT_DIR:-test/iceberg/reports/run_$$(date -u +%Y%m%dT%H%M%SZ)} \
+		go test ./pkg/sql/iceberg -run TestIcebergTierA -count=1
+
+.PHONY: dev-seed-iceberg-tier-b-nyc-tlc
+dev-seed-iceberg-tier-b-nyc-tlc: dev-up-iceberg-tier-a
+	@$(MINIO_DIR)/tier-b/seed-nyc-tlc-iceberg.sh
+
+.PHONY: dev-test-iceberg-tier-b-nyc-tlc
+dev-test-iceberg-tier-b-nyc-tlc:
+	@test -f $(MINIO_DIR)/tier-b/tier_b_nyc_tlc.generated.env || (echo "Missing $(MINIO_DIR)/tier-b/tier_b_nyc_tlc.generated.env. Run make dev-seed-iceberg-tier-b-nyc-tlc first."; exit 1)
+	@. $(MINIO_DIR)/tier-b/tier_b_nyc_tlc.generated.env && \
+		MO_ICEBERG_ALLOW_PLAIN_HTTP=1 \
+		MO_ICEBERG_CI_PROFILE=tier-b \
+		MO_ICEBERG_REPORT_DIR=$${MO_ICEBERG_REPORT_DIR:-test/iceberg/reports/nyc_tlc_$$(date -u +%Y%m%dT%H%M%SZ)} \
+		$(MAKE) test-iceberg-nightly
 
 .PHONY: dev-clean-minio-local
 dev-clean-minio-local:
@@ -1002,7 +1219,7 @@ launch-minio: build dev-up-minio-local
 	@echo "Starting MatrixOne with MinIO storage..."
 	@echo "  Launch config: $(MINIO_DIR)/launch.toml"
 	@echo ""
-	@./mo-service -launch $(MINIO_DIR)/launch.toml
+	@MO_ICEBERG_ALLOW_PLAIN_HTTP=1 ./mo-service -launch $(MINIO_DIR)/launch.toml
 
 .PHONY: launch-minio-debug
 launch-minio-debug: debug dev-up-minio-local
@@ -1010,7 +1227,7 @@ launch-minio-debug: debug dev-up-minio-local
 	@echo "Starting MatrixOne (debug mode) with MinIO storage..."
 	@echo "  Launch config: $(MINIO_DIR)/launch.toml"
 	@echo ""
-	@./mo-service -launch $(MINIO_DIR)/launch.toml
+	@MO_ICEBERG_ALLOW_PLAIN_HTTP=1 ./mo-service -launch $(MINIO_DIR)/launch.toml
 
 ###############################################################################
 # clean
@@ -1023,6 +1240,7 @@ clean:
 	@go clean -testcache
 	rm -f $(BIN_NAME)
 	rm -rf $(ROOT_DIR)/vendor
+	rm -rf "$(PROTO_VENDOR_DIR)"
 	rm -rf $(MUSL_DIR)
 	rm -rf /tmp/$(MUSL_TAR)
 	$(MAKE) -C cgo clean
@@ -1040,13 +1258,13 @@ fmt:
 
 .PHONY: install-static-check-tools
 install-static-check-tools:
-	@curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | bash -s -- -b $(GOPATH)/bin v2.6.2
+	@GOBIN="$(GOPATH)/bin" go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.6.2
 	@go install github.com/matrixorigin/linter/cmd/molint@latest
 	@go install github.com/apache/skywalking-eyes/cmd/license-eye@v0.4.0
 
 .PHONY: static-check
 static-check: config err-check
-	$(CGO_OPTS) go vet -vettool=`which molint` ./...
+	$(CGO_OPTS) go vet $(GO_MODULE_MODE) -vettool=`which molint` ./...
 	$(CGO_OPTS) license-eye -c .licenserc.yml header check
 	$(CGO_OPTS) license-eye -c .licenserc.yml dep check
 	$(CGO_OPTS) golangci-lint run -v -c .golangci.yml ./...
@@ -1066,19 +1284,19 @@ err-check:
 ifneq ("$(strip $(fmtErrs))$(strip $(errNews))", "")
  ifneq ("$(strip $(fmtErrs))", "")
 		$(warning 'fmt.Errorf()' is found.)
-		$(warning One of 'fmt.Errorf()' is called at: $(shell printf "%s\n" $(fmtErrs) | head -1))
+		$(warning One of 'fmt.Errorf()' is called at: $(firstword $(fmtErrs)))
  endif
  ifneq ("$(strip $(errNews))", "")
 		$(warning 'errors.New()' is found.)
-		$(warning One of 'errors.New()' is called at: $(shell printf "%s\n" $(errNews) | head -1))
+		$(warning One of 'errors.New()' is called at: $(firstword $(errNews)))
  endif
  ifneq ("$(strip $(withTimeout))", "")
 		$(warning 'context.WithTimeout' is found.)
-		$(warning One of 'context.WithTimeout' is called at: $(shell printf "%s\n" $(withTimeout) | head -1))
+		$(warning One of 'context.WithTimeout' is called at: $(firstword $(withTimeout)))
  endif
  ifneq ("$(strip $(withDeadline))", "")
 		$(warning 'context.WithDeadline' is found.)
-		$(warning One of 'context.WithDeadline' is called at: $(shell printf "%s\n" $(withDeadline) | head -1))
+		$(warning One of 'context.WithDeadline' is called at: $(firstword $(withDeadline)))
  endif
 	$(error Use moerr instead.)
 else

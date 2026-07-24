@@ -46,6 +46,7 @@ import (
 
 	"github.com/RoaringBitmap/roaring/v2"
 	hll "github.com/axiomhq/hyperloglog"
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
@@ -56,7 +57,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/datalink"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/geo"
+	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/lengthutf8"
@@ -229,7 +233,7 @@ var (
 	}
 )
 
-func NormalizeL2Array[T types.RealNumbers](parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func NormalizeL2Array[T types.ArrayElement](parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	source := vector.GenerateFunctionStrParameter(parameters[0])
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
@@ -286,11 +290,47 @@ func NormalizeL2Array[T types.RealNumbers](parameters []*vector.Vector, result v
 
 			*outArrayF64Ptr = outArrayF64
 			arrayF64Pool.Put(outArrayF64Ptr)
+		case types.T_array_bf16:
+			_ = appendNormalizedNarrowArray[types.BF16](rs, data)
+		case types.T_array_float16:
+			_ = appendNormalizedNarrowArray[types.Float16](rs, data)
+		case types.T_array_int8:
+			// A normalized vector is a unit vector, which cannot be represented in
+			// an integer element type (components round to 0/±1 and the norm is no
+			// longer 1), so int8/uint8 normalize_l2 widens the result to vecf32.
+			// The overload's retType is T_array_float32 to match (see list_builtIn).
+			_ = appendNormalizedIntArrayAsFloat32[int8](rs, data)
+		case types.T_array_uint8:
+			_ = appendNormalizedIntArrayAsFloat32[uint8](rs, data)
 		}
 
 	}
 
 	return nil
+}
+
+// appendNormalizedNarrowArray normalizes a bf16/f16 vector by upcasting to
+// float32, normalizing in float32, then narrowing back to T. bf16/f16 are
+// floating-point so they can hold a (near-)unit vector; int8/uint8 cannot and
+// use appendNormalizedIntArrayAsFloat32 instead.
+func appendNormalizedNarrowArray[T types.ArrayElement](rs *vector.FunctionResult[types.Varlena], data []byte) error {
+	in := types.ToFloat32Array[T](types.BytesToArray[T](data))
+	out := make([]float32, len(in))
+	_ = moarray.NormalizeL2(in, out)
+	return rs.AppendBytes(types.ArrayToBytes[T](types.FromFloat32Array[T](out)), false)
+}
+
+// appendNormalizedIntArrayAsFloat32 normalizes an integer-typed (int8/uint8)
+// vector and writes the result as float32. A unit vector cannot be represented
+// in an integer element type — narrowing back would round components to 0/±1 so
+// the norm is no longer 1 (e.g. normalize_l2([0,1,2,3]::vecuint8) would become
+// [0,0,1,1], whose norm is √2). Widening the result to vecf32 keeps the unit-norm
+// contract; the int8/uint8 overloads declare retType T_array_float32 to match.
+func appendNormalizedIntArrayAsFloat32[T types.ArrayElement](rs *vector.FunctionResult[types.Varlena], data []byte) error {
+	in := types.ToFloat32Array[T](types.BytesToArray[T](data))
+	out := make([]float32, len(in))
+	_ = moarray.NormalizeL2(in, out)
+	return rs.AppendBytes(types.ArrayToBytes[float32](out), false)
 }
 
 func L1NormArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -307,7 +347,7 @@ func L2NormArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.Func
 	}, selectList)
 }
 
-func VectorDimsArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func VectorDimsArray[T types.ArrayElement](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opUnaryBytesToFixed[int64](ivecs, result, proc, length, func(in []byte) (out int64) {
 		_in := types.BytesToArray[T](in)
 		return int64(len(_in))
@@ -624,8 +664,17 @@ func bitCountFromFloat[T constraints.Float](v T, proc *process.Process) (uint64,
 	if rounded <= float64(math.MinInt64) {
 		return bitCountFromUint64(minInt64BitPattern), nil
 	}
+	if rounded < 0 {
+		return bitCountFromUint64(uint64(int64(rounded))), nil
+	}
 	if rounded >= ULLONG_MAX_DOUBLE {
 		return bitCountFromUint64(uint64(math.MaxUint64)), nil
+	}
+	// Converting a negative float directly to uint64 is undefined in Go (the
+	// result is implementation-specific: two's-complement on amd64, 0 on arm64),
+	// so route negatives through int64 first and reinterpret the bit pattern.
+	if rounded < 0 {
+		return bitCountFromSignedInt64Pattern(int64(rounded)), nil
 	}
 	return bitCountFromUint64(uint64(rounded)), nil
 }
@@ -4512,6 +4561,19 @@ func Values(parameters []*vector.Vector, result vector.FunctionResultWrapper, pr
 	return err
 }
 
+func builtInNameConst(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	fromVec := parameters[1]
+	toVec := result.GetResultVector()
+	toVec.Reset(*toVec.GetType())
+
+	for i := 0; i < length; i++ {
+		if err := toVec.UnionOne(fromVec, int64(i), proc.Mp()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func TimestampToHour(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opUnaryFixedToFixed[types.Timestamp, uint8](ivecs, result, proc, length, func(v types.Timestamp) uint8 {
 		return uint8(v.ToDatetime(proc.GetSessionInfo().TimeZone).Hour())
@@ -4525,10 +4587,9 @@ func DatetimeToHour(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 }
 
 func TimeToHour(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryFixedToFixed[types.Time, uint8](ivecs, result, proc, length, func(v types.Time) uint8 {
+	return opUnaryFixedToFixed[types.Time, uint32](ivecs, result, proc, length, func(v types.Time) uint32 {
 		hour, _, _, _, _ := v.ClockFormat()
-		// HOUR function returns 0-23, so we need to take modulo 24
-		return uint8(hour % 24)
+		return uint32(hour)
 	}, selectList)
 }
 
@@ -5668,7 +5729,7 @@ func FromBase64(parameters []*vector.Vector, result vector.FunctionResultWrapper
 // VecFromBase64 decodes a base64-encoded string into a vector (vecf32 or vecf64).
 // The base64 payload must be the raw little-endian bytes of the vector elements,
 // as produced by to_base64(vecf32_col) or to_base64(vecf64_col).
-func VecFromBase64[T types.RealNumbers](parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func VecFromBase64[T types.ArrayElement](parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	source := vector.GenerateFunctionStrParameter(parameters[0])
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
@@ -5678,6 +5739,14 @@ func VecFromBase64[T types.RealNumbers](parameters []*vector.Vector, result vect
 		elemSize = 4
 	case float64:
 		elemSize = 8
+	case types.BF16, types.Float16:
+		elemSize = 2
+	case int8, uint8:
+		elemSize = 1
+	default:
+		// Guard: an unhandled element type would leave elemSize==0 and panic at
+		// the `n % elemSize` check below. Fail explicitly instead.
+		return moerr.NewInternalErrorNoCtx("vec_from_base64: unsupported vector element type")
 	}
 
 	// Pre-extend area: peek at the first non-null input to estimate per-row decoded size.
@@ -5711,11 +5780,11 @@ func VecFromBase64[T types.RealNumbers](parameters []*vector.Vector, result vect
 		}
 		n, err := base64.StdEncoding.Decode(buf, data)
 		if err != nil {
-			return moerr.NewInternalErrorNoCtxf("vecf%d_from_base64: invalid base64 input", elemSize*8)
+			return moerr.NewInternalErrorNoCtx("vec_from_base64: invalid base64 input")
 		}
 
 		if n%elemSize != 0 {
-			return moerr.NewInternalErrorNoCtxf("vecf%d_from_base64: decoded length %d is not a multiple of %d bytes", elemSize*8, n, elemSize)
+			return moerr.NewInternalErrorNoCtxf("vec_from_base64: decoded length %d is not a multiple of %d bytes", n, elemSize)
 		}
 
 		if err = rs.AppendBytes(buf[:n], false); err != nil {
@@ -6775,8 +6844,8 @@ func RolesGraphml(ivecs []*vector.Vector, result vector.FunctionResultWrapper, p
 }
 
 func RowCount(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opNoneParamToFixed[uint64](result, proc, length, func() uint64 {
-		return 0
+	return opNoneParamToFixed[int64](result, proc, length, func() int64 {
+		return proc.GetAffectedRows()
 	})
 }
 
@@ -6952,6 +7021,515 @@ func Sleep[T uint64 | float64](ivecs []*vector.Vector, result vector.FunctionRes
 				return err
 			}
 		}
+	}
+	return nil
+}
+
+const userLevelLockTableID uint64 = 1 << 62
+
+type userLevelLockKey struct {
+	owner string
+	name  string
+}
+
+var userLevelLocks = struct {
+	sync.Mutex
+	// userLevelLocks is process-local state for the current CN. It tracks only
+	// refcounts and lock names seen by sessions running in this process.
+	//owner, lockname -> count
+	counts map[userLevelLockKey]uint64
+	//owner -> lockername
+	byOwner map[string]map[string]struct{}
+}{
+	counts:  make(map[userLevelLockKey]uint64),
+	byOwner: make(map[string]map[string]struct{}),
+}
+
+func userLevelLockOwner(proc *process.Process) string {
+	if proc == nil || proc.GetSessionInfo() == nil {
+		return ""
+	}
+	si := proc.GetSessionInfo()
+	if si.SessionId != uuid.Nil {
+		return si.SessionId.String()
+	}
+	if proc.GetLockService() != nil {
+		return fmt.Sprintf("%s:%d", proc.GetLockService().GetServiceID(), si.GetConnectionID())
+	}
+	return fmt.Sprintf("%d", si.GetConnectionID())
+}
+
+func userLevelLockConnectionID(proc *process.Process) uint64 {
+	if proc == nil || proc.GetSessionInfo() == nil {
+		return 0
+	}
+	return proc.GetSessionInfo().GetConnectionID()
+}
+
+// maxUserLevelLockNameLength is the MySQL-compatible maximum length for
+// user-level lock names (GET_LOCK, RELEASE_LOCK, IS_FREE_LOCK, IS_USED_LOCK).
+const maxUserLevelLockNameLength = 64
+
+// normalizeUserLevelLockName validates and normalizes a MySQL user-level lock name.
+// It returns the normalized (lowercased) name, or an error if the name is empty or
+// exceeds maxUserLevelLockNameLength characters (MySQL enforces 64 characters, not bytes).
+func normalizeUserLevelLockName(name string) (string, error) {
+	if len(name) == 0 {
+		return "", moerr.NewInternalErrorNoCtx("user-level lock name must not be empty")
+	}
+	if strings.IndexByte(name, 0) >= 0 {
+		return "", moerr.NewInternalErrorNoCtx("user-level lock name must not contain NUL bytes")
+	}
+	normalized := strings.ToLower(name)
+	if utf8.RuneCountInString(normalized) > maxUserLevelLockNameLength {
+		return "", moerr.NewInternalErrorNoCtxf(
+			"user-level lock name exceeds maximum length of %d characters",
+			maxUserLevelLockNameLength,
+		)
+	}
+	return normalized, nil
+}
+
+func userLevelLockTxnID(owner string, connID uint64, name string) []byte {
+	return []byte(fmt.Sprintf("mo-user-level-lock\x00%s\x00%s\x00%d", owner, name, connID))
+}
+
+func userLevelLockTxnIDOld(owner, name string) []byte {
+	return []byte("mo-user-level-lock\x00" + owner + "\x00" + name)
+}
+
+func userLevelLockProbeTxnID(owner string, connID uint64, name, probeType string) []byte {
+	return []byte(fmt.Sprintf("mo-user-level-lock-probe\x00%s\x00%s\x00%s\x00%d", probeType, owner, name, connID))
+}
+
+func userLevelLockConnectionIDFromTxnID(txnID []byte) (uint64, bool) {
+	// The user-level lock txnID format uses NUL as a field separator. Lock names
+	// are validated to reject NUL bytes, and owners are derived from session IDs
+	// / connection IDs, so splitting here is safe for supported inputs.
+	parts := strings.Split(string(txnID), "\x00")
+	if len(parts) < 3 || len(parts) > 4 || parts[0] != "mo-user-level-lock" {
+		return 0, false
+	}
+	if len(parts) == 3 {
+		return 0, false
+	}
+	connID, err := strconv.ParseUint(parts[3], 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return connID, true
+}
+
+func userLevelLockRow(proc *process.Process, name string) []byte {
+	account := ""
+	if proc != nil && proc.GetSessionInfo() != nil {
+		account = proc.GetSessionInfo().Account
+	}
+	return []byte(account + "\x00" + name)
+}
+
+func userLevelLockService(proc *process.Process) (lockservice.LockService, error) {
+	if proc == nil || proc.GetLockService() == nil {
+		return nil, moerr.NewInternalErrorNoCtx("GET_LOCK requires lock service")
+	}
+	return proc.GetLockService(), nil
+}
+
+func unlockUserLevelLockTxnIDs(ctx context.Context, ls lockservice.LockService, owner string, connID uint64, name string) error {
+	if err := ls.Unlock(ctx, userLevelLockTxnID(owner, connID, name), timestamp.Timestamp{}); err != nil {
+		return err
+	}
+	return ls.Unlock(ctx, userLevelLockTxnIDOld(owner, name), timestamp.Timestamp{})
+}
+
+func userLevelLockOptions(policy lockpb.WaitPolicy) lockpb.LockOptions {
+	return lockpb.LockOptions{
+		Granularity: lockpb.Granularity_Row,
+		Mode:        lockpb.LockMode_Exclusive,
+		Policy:      policy,
+	}
+}
+
+func userLevelLockContext(proc *process.Process, timeout float64) (context.Context, context.CancelFunc, lockpb.WaitPolicy) {
+	ctx := context.Background()
+	if proc != nil && proc.Ctx != nil {
+		ctx = proc.Ctx
+	}
+	if timeout == 0 {
+		return ctx, func() {}, lockpb.WaitPolicy_FastFail
+	}
+	if timeout > 0 {
+		ctx, cancel := context.WithTimeout(ctx, time.Duration(timeout*float64(time.Second)))
+		return ctx, cancel, lockpb.WaitPolicy_Wait
+	}
+	return ctx, func() {}, lockpb.WaitPolicy_Wait
+}
+
+func userLevelLockConflictOrTimeout(err error) bool {
+	return moerr.IsMoErrCode(err, moerr.ErrLockConflict) ||
+		errors.Is(err, lockservice.ErrLockConflict) ||
+		errors.Is(err, context.DeadlineExceeded)
+}
+
+func trackUserLevelLock(owner, name string) {
+	key := userLevelLockKey{owner: owner, name: name}
+	userLevelLocks.Lock()
+	defer userLevelLocks.Unlock()
+
+	userLevelLocks.counts[key]++
+	if userLevelLocks.byOwner[owner] == nil {
+		userLevelLocks.byOwner[owner] = make(map[string]struct{})
+	}
+	userLevelLocks.byOwner[owner][name] = struct{}{}
+}
+
+func userLevelLockRefCount(owner, name string) uint64 {
+	userLevelLocks.Lock()
+	defer userLevelLocks.Unlock()
+	return userLevelLocks.counts[userLevelLockKey{owner: owner, name: name}]
+}
+
+func untrackUserLevelLock(owner, name string) (uint64, bool) {
+	key := userLevelLockKey{owner: owner, name: name}
+	userLevelLocks.Lock()
+	defer userLevelLocks.Unlock()
+
+	count := userLevelLocks.counts[key]
+	if count == 0 {
+		return 0, false
+	}
+	if count > 1 {
+		userLevelLocks.counts[key] = count - 1
+		return count - 1, true
+	}
+	delete(userLevelLocks.counts, key)
+	if names := userLevelLocks.byOwner[owner]; names != nil {
+		delete(names, name)
+		if len(names) == 0 {
+			delete(userLevelLocks.byOwner, owner)
+		}
+	}
+	return 0, true
+}
+
+func untrackAllUserLevelLock(owner, name string) (uint64, bool) {
+	key := userLevelLockKey{owner: owner, name: name}
+	userLevelLocks.Lock()
+	defer userLevelLocks.Unlock()
+
+	count := userLevelLocks.counts[key]
+	if count == 0 {
+		return 0, false
+	}
+	delete(userLevelLocks.counts, key)
+	if names := userLevelLocks.byOwner[owner]; names != nil {
+		delete(names, name)
+		if len(names) == 0 {
+			delete(userLevelLocks.byOwner, owner)
+		}
+	}
+	return count, true
+}
+
+func userLevelLocksForOwner(owner string) []string {
+	userLevelLocks.Lock()
+	defer userLevelLocks.Unlock()
+
+	names := userLevelLocks.byOwner[owner]
+	if len(names) == 0 {
+		return nil
+	}
+	result := make([]string, 0, len(names))
+	for name := range names {
+		result = append(result, name)
+	}
+	sort.Strings(result)
+	return result
+}
+
+func getUserLevelLock(name string, timeout float64, proc *process.Process) (int64, error) {
+	name, err := normalizeUserLevelLockName(name)
+	if err != nil {
+		return 0, err
+	}
+	ls, err := userLevelLockService(proc)
+	if err != nil {
+		return 0, err
+	}
+	//owner = sessionid or serviceid:connectionid  or  connectionid
+	owner := userLevelLockOwner(proc)
+	//connectionid
+	connID := userLevelLockConnectionID(proc)
+	//owner+lockname -> count
+	//serviceid:connectionid + lockname -> count
+	if userLevelLockRefCount(owner, name) > 0 {
+		//count++
+		//owner -> lockname
+		trackUserLevelLock(owner, name)
+		return 1, nil
+	}
+
+	ctx, cancel, policy := userLevelLockContext(proc, timeout)
+	defer cancel()
+
+	_, err = ls.Lock(
+		ctx,
+		userLevelLockTableID,
+		[][]byte{userLevelLockRow(proc, name)},
+		userLevelLockTxnID(owner, connID, name),
+		userLevelLockOptions(policy))
+	if err != nil {
+		if userLevelLockConflictOrTimeout(err) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	trackUserLevelLock(owner, name)
+	return 1, nil
+}
+
+// releaseUserLevelLock releases a user-level lock.
+// It returns (value, isNull, error):
+//   - (1, false, nil): lock was released by this call.
+//   - (0, false, nil): lock exists but is held by another session.
+//   - (0, true, nil):  lock does not exist (MySQL returns NULL).
+func releaseUserLevelLock(name string, proc *process.Process) (int64, bool, error) {
+	name, err := normalizeUserLevelLockName(name)
+	if err != nil {
+		return 0, false, err
+	}
+	ls, err := userLevelLockService(proc)
+	if err != nil {
+		return 0, false, err
+	}
+	owner := userLevelLockOwner(proc)
+	connID := userLevelLockConnectionID(proc)
+	count := userLevelLockRefCount(owner, name)
+	if count == 0 {
+		// Probe the lockservice to distinguish "lock does not exist" (NULL)
+		// from "lock exists but held by another session" (0).
+		_, probeErr := ls.Lock(
+			proc.Ctx,
+			userLevelLockTableID,
+			[][]byte{userLevelLockRow(proc, name)},
+			userLevelLockProbeTxnID(owner, connID, name, "release"),
+			userLevelLockOptions(lockpb.WaitPolicy_FastFail))
+		if probeErr != nil {
+			if userLevelLockConflictOrTimeout(probeErr) {
+				// Lock exists but is held by another session.
+				return 0, false, nil
+			}
+			return 0, false, probeErr
+		}
+		// Lock did not exist — we acquired it via the probe. Release it and
+		// return NULL to signal the lock was already free.
+		if err := ls.Unlock(proc.Ctx, userLevelLockProbeTxnID(owner, connID, name, "release"), timestamp.Timestamp{}); err != nil {
+			return 0, false, err
+		}
+		return 0, true, nil
+	}
+	if count > 1 {
+		untrackUserLevelLock(owner, name)
+		return 1, false, nil
+	}
+	if err := unlockUserLevelLockTxnIDs(proc.Ctx, ls, owner, connID, name); err != nil {
+		return 0, false, err
+	}
+	untrackUserLevelLock(owner, name)
+	return 1, false, nil
+}
+
+func isUserLevelLockFree(name string, proc *process.Process) (int64, error) {
+	name, err := normalizeUserLevelLockName(name)
+	if err != nil {
+		return 0, err
+	}
+	ls, err := userLevelLockService(proc)
+	if err != nil {
+		return 0, err
+	}
+	owner := userLevelLockOwner(proc)
+	connID := userLevelLockConnectionID(proc)
+	_, err = ls.Lock(
+		proc.Ctx,
+		userLevelLockTableID,
+		[][]byte{userLevelLockRow(proc, name)},
+		userLevelLockProbeTxnID(owner, connID, name, "is_free"),
+		userLevelLockOptions(lockpb.WaitPolicy_FastFail))
+	if err != nil {
+		if userLevelLockConflictOrTimeout(err) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	if err := ls.Unlock(proc.Ctx, userLevelLockProbeTxnID(owner, connID, name, "is_free"), timestamp.Timestamp{}); err != nil {
+		return 0, err
+	}
+	return 1, nil
+}
+
+func isUserLevelLockUsed(name string, proc *process.Process) (uint64, bool, error) {
+	name, err := normalizeUserLevelLockName(name)
+	if err != nil {
+		return 0, false, err
+	}
+	ls, err := userLevelLockService(proc)
+	if err != nil {
+		return 0, false, err
+	}
+
+	holder, ok, err := ls.GetLockHolder(
+		proc.Ctx,
+		userLevelLockTableID,
+		userLevelLockRow(proc, name),
+		userLevelLockOptions(lockpb.WaitPolicy_FastFail))
+	if err != nil {
+		if moerr.IsMoErrCode(err, moerr.ErrNotSupported) {
+			return 0, true, nil
+		}
+		return 0, false, err
+	}
+	if !ok {
+		return 0, true, nil
+	}
+	holderConnID, ok := userLevelLockConnectionIDFromTxnID(holder.TxnID)
+	if !ok {
+		return 0, true, nil
+	}
+	return holderConnID, false, nil
+}
+
+func releaseAllUserLevelLocks(proc *process.Process) (int64, error) {
+	if proc == nil || proc.GetLockService() == nil {
+		return 0, nil
+	}
+	owner := userLevelLockOwner(proc)
+	connID := userLevelLockConnectionID(proc)
+	var released int64
+	for _, name := range userLevelLocksForOwner(owner) {
+		if userLevelLockRefCount(owner, name) == 0 {
+			continue
+		}
+		if err := unlockUserLevelLockTxnIDs(context.Background(), proc.GetLockService(), owner, connID, name); err != nil {
+			logutil.Warn(fmt.Sprintf("releaseAllUserLevelLocks unlock failed: owner=%s lock=%s err=%v", owner, name, err))
+			return released, err
+		}
+		if count, held := untrackAllUserLevelLock(owner, name); held {
+			released += int64(count)
+		}
+	}
+	return released, nil
+}
+
+func ReleaseUserLevelLocks(proc *process.Process) {
+	_, _ = releaseAllUserLevelLocks(proc)
+}
+
+func GetLock(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	names := vector.GenerateFunctionStrParameter(ivecs[0])
+	timeouts := vector.GenerateFunctionFixedTypeParameter[float64](ivecs[1])
+	rs := vector.MustFunctionResult[int64](result)
+
+	for i := uint64(0); i < uint64(length); i++ {
+		name, nameNull := names.GetStrValue(i)
+		timeout, timeoutNull := timeouts.GetValue(i)
+		if nameNull || timeoutNull {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		value, err := getUserLevelLock(string(name), timeout, proc)
+		if err != nil {
+			return err
+		}
+		if err := rs.Append(value, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func ReleaseLock(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	names := vector.GenerateFunctionStrParameter(ivecs[0])
+	rs := vector.MustFunctionResult[int64](result)
+
+	for i := uint64(0); i < uint64(length); i++ {
+		name, null := names.GetStrValue(i)
+		if null {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		value, isNull, err := releaseUserLevelLock(string(name), proc)
+		if err != nil {
+			return err
+		}
+		if err := rs.Append(value, isNull); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func IsFreeLock(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	names := vector.GenerateFunctionStrParameter(ivecs[0])
+	rs := vector.MustFunctionResult[int64](result)
+
+	for i := uint64(0); i < uint64(length); i++ {
+		name, null := names.GetStrValue(i)
+		if null {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		value, err := isUserLevelLockFree(string(name), proc)
+		if err != nil {
+			return err
+		}
+		if err := rs.Append(value, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func IsUsedLock(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	names := vector.GenerateFunctionStrParameter(ivecs[0])
+	rs := vector.MustFunctionResult[uint64](result)
+
+	for i := uint64(0); i < uint64(length); i++ {
+		name, null := names.GetStrValue(i)
+		if null {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		value, isNull, err := isUserLevelLockUsed(string(name), proc)
+		if err != nil {
+			return err
+		}
+		if err := rs.Append(value, isNull); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func ReleaseAllLocks(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[int64](result)
+	rsVec := rs.GetResultVector()
+	rss := vector.MustFixedColNoTypeCheck[int64](rsVec)
+
+	for i := 0; i < length; i++ {
+		released, err := releaseAllUserLevelLocks(proc)
+		if err != nil {
+			return err
+		}
+		rss[i] = released
 	}
 	return nil
 }

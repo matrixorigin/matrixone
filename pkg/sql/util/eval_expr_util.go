@@ -547,10 +547,16 @@ func SetInsertValueBool(proc *process.Process, numVal *tree.NumVal) (canInsert b
 func SetInsertValueString(proc *process.Process, numVal *tree.NumVal, typ *types.Type) (canInsert bool, val []byte, err error) {
 	canInsert = true
 
-	checkStrLen := func(s string) ([]byte, error) {
+	checkStrLen := func(s string, binaryLiteral bool) ([]byte, error) {
 		destLen := int(typ.Width)
-		if typ.Oid != types.T_text && typ.Oid != types.T_datalink && typ.Oid != types.T_binary && destLen != 0 && !typ.Oid.IsArrayRelate() {
-			if utf8.RuneCountInString(s) > destLen {
+		checkWidth := typ.Oid != types.T_text && typ.Oid != types.T_datalink &&
+			(typ.Oid != types.T_binary || binaryLiteral) && destLen != 0 && !typ.Oid.IsArrayRelate()
+		if checkWidth {
+			srcLen := utf8.RuneCountInString(s)
+			if binaryLiteral && (typ.Oid == types.T_binary || typ.Oid == types.T_varbinary) {
+				srcLen = len(s)
+			}
+			if srcLen > destLen {
 				return nil, function.FormatCastErrorForInsertValue(proc.Ctx, s, *typ, fmt.Sprintf("Src length %v is larger than Dest length %v", len(s), destLen))
 			}
 		}
@@ -589,6 +595,54 @@ func SetInsertValueString(proc *process.Process, numVal *tree.NumVal, typ *types
 				}
 
 				v = types.ArrayToBytes[float64](_v)
+
+			case types.T_array_bf16:
+				_v, err := types.StringToArray[types.BF16](s)
+				if err != nil {
+					return nil, err
+				}
+
+				if len(_v) != destLen {
+					return nil, moerr.NewArrayDefMismatchNoCtx(int(typ.Width), len(_v))
+				}
+
+				v = types.ArrayToBytes[types.BF16](_v)
+
+			case types.T_array_float16:
+				_v, err := types.StringToArray[types.Float16](s)
+				if err != nil {
+					return nil, err
+				}
+
+				if len(_v) != destLen {
+					return nil, moerr.NewArrayDefMismatchNoCtx(int(typ.Width), len(_v))
+				}
+
+				v = types.ArrayToBytes[types.Float16](_v)
+
+			case types.T_array_int8:
+				_v, err := types.StringToArray[int8](s)
+				if err != nil {
+					return nil, err
+				}
+
+				if len(_v) != destLen {
+					return nil, moerr.NewArrayDefMismatchNoCtx(int(typ.Width), len(_v))
+				}
+
+				v = types.ArrayToBytes[int8](_v)
+
+			case types.T_array_uint8:
+				_v, err := types.StringToArray[uint8](s)
+				if err != nil {
+					return nil, err
+				}
+
+				if len(_v) != destLen {
+					return nil, moerr.NewArrayDefMismatchNoCtx(int(typ.Width), len(_v))
+				}
+
+				v = types.ArrayToBytes[uint8](_v)
 			default:
 				return nil, moerr.NewInternalErrorNoCtxf("%s is not supported array type", typ.String())
 
@@ -615,21 +669,28 @@ func SetInsertValueString(proc *process.Process, numVal *tree.NumVal, typ *types
 		} else {
 			s = "0"
 		}
-		if val, err = checkStrLen(s); err != nil {
+		if val, err = checkStrLen(s, false); err != nil {
 			canInsert = false
 		}
 		return
 
 	case tree.P_int64, tree.P_uint64, tree.P_char, tree.P_decimal, tree.P_float64:
 		s := numVal.String()
-		if val, err = checkStrLen(s); err != nil {
+		if val, err = checkStrLen(s, false); err != nil {
 			canInsert = false
 		}
 		return
 
 	case tree.P_hexnum:
 		s := numVal.String()[2:]
+		if len(s)%2 != 0 {
+			s = "0" + s
+		}
 		if val, err = hex.DecodeString(s); err != nil {
+			canInsert = false
+			return
+		}
+		if val, err = checkStrLen(string(val), true); err != nil {
 			canInsert = false
 		}
 		return

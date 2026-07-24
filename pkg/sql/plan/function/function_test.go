@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/stretchr/testify/assert"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -42,6 +43,42 @@ func Test_fixedTypeCastRule1(t *testing.T) {
 		{
 			shouldCast: false,
 			in:         [2]types.Type{types.T_int64.ToType(), types.T_int64.ToType()},
+		},
+
+		{
+			shouldCast: true,
+			in:         [2]types.Type{types.T_binary.ToType(), types.T_varbinary.ToType()},
+			want:       [2]types.Type{types.T_varbinary.ToType(), types.T_varbinary.ToType()},
+		},
+
+		{
+			shouldCast: true,
+			in:         [2]types.Type{types.T_varbinary.ToType(), types.T_binary.ToType()},
+			want:       [2]types.Type{types.T_varbinary.ToType(), types.T_varbinary.ToType()},
+		},
+
+		{
+			shouldCast: true,
+			in:         [2]types.Type{types.T_binary.ToType(), types.T_blob.ToType()},
+			want:       [2]types.Type{types.T_blob.ToType(), types.T_blob.ToType()},
+		},
+
+		{
+			shouldCast: true,
+			in:         [2]types.Type{types.T_blob.ToType(), types.T_binary.ToType()},
+			want:       [2]types.Type{types.T_blob.ToType(), types.T_blob.ToType()},
+		},
+
+		{
+			shouldCast: true,
+			in:         [2]types.Type{types.T_binary.ToType(), types.T_text.ToType()},
+			want:       [2]types.Type{types.T_blob.ToType(), types.T_blob.ToType()},
+		},
+
+		{
+			shouldCast: true,
+			in:         [2]types.Type{types.T_text.ToType(), types.T_binary.ToType()},
+			want:       [2]types.Type{types.T_blob.ToType(), types.T_blob.ToType()},
 		},
 
 		{
@@ -87,6 +124,16 @@ func Test_fixedTypeCastRule2(t *testing.T) {
 			shouldCast: true,
 			in:         [2]types.Type{types.T_int64.ToType(), types.T_int32.ToType()},
 			want:       [2]types.Type{types.T_float64.ToType(), types.T_float64.ToType()},
+		},
+		{
+			shouldCast: true,
+			in:         [2]types.Type{types.T_uint64.ToType(), types.T_int64.ToType()},
+			want:       [2]types.Type{types.T_decimal128.ToType(), types.T_decimal128.ToType()},
+		},
+		{
+			shouldCast: true,
+			in:         [2]types.Type{types.T_int64.ToType(), types.T_uint64.ToType()},
+			want:       [2]types.Type{types.T_decimal128.ToType(), types.T_decimal128.ToType()},
 		},
 
 		{
@@ -193,6 +240,20 @@ func Test_GetFunctionByName(t *testing.T) {
 			shouldCast: true, requireTyp: []types.Type{types.T_float64.ToType(), types.T_float64.ToType()},
 			requireRet: types.T_float64.ToType(),
 		},
+		{
+			name: "/", args: []types.Type{types.T_uint64.ToType(), types.T_int64.ToType()},
+			shouldErr:  false,
+			requireFid: DIV, requireOid: 0,
+			shouldCast: true, requireTyp: []types.Type{types.T_decimal128.ToType(), types.T_decimal128.ToType()},
+			requireRet: types.New(types.T_decimal128, 38, 6),
+		},
+		{
+			name: "/", args: []types.Type{types.T_int64.ToType(), types.T_uint64.ToType()},
+			shouldErr:  false,
+			requireFid: DIV, requireOid: 0,
+			shouldCast: true, requireTyp: []types.Type{types.T_decimal128.ToType(), types.T_decimal128.ToType()},
+			requireRet: types.New(types.T_decimal128, 38, 6),
+		},
 
 		{
 			name: "from_unixtime", args: []types.Type{types.New(types.T_decimal256, 65, 0)},
@@ -250,6 +311,24 @@ func Test_GetFunctionByName(t *testing.T) {
 			shouldCast: false,
 			requireRet: types.T_varchar.ToType(),
 		},
+		{
+			name: "date_trunc", args: []types.Type{types.T_varchar.ToType(), types.T_varchar.ToType()},
+			shouldErr: true,
+		},
+		{
+			name: "date_trunc", args: []types.Type{types.T_varchar.ToType(), types.T_datetime.ToTypeWithScale(6)},
+			shouldErr:  false,
+			requireFid: DATE_TRUNC, requireOid: 0,
+			shouldCast: false,
+			requireRet: types.T_datetime.ToType(),
+		},
+		{
+			name: "date_trunc", args: []types.Type{types.T_varchar.ToType(), types.T_timestamp.ToType()},
+			shouldErr:  false,
+			requireFid: DATE_TRUNC, requireOid: 2,
+			shouldCast: false,
+			requireRet: types.T_timestamp.ToType(),
+		},
 	}
 
 	proc := testutil.NewProcess(t)
@@ -271,6 +350,214 @@ func Test_GetFunctionByName(t *testing.T) {
 				}
 			}
 			require.Equal(t, c.requireRet, get.retType, msg)
+		}
+	}
+}
+
+func TestMakeTimeReturnScale(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	integerResult, err := GetFunctionByName(proc.Ctx, "maketime", []types.Type{
+		types.T_int64.ToType(),
+		types.T_int64.ToType(),
+		types.T_int64.ToType(),
+	})
+	require.NoError(t, err)
+	require.Equal(t, types.T_time.ToType(), integerResult.retType)
+
+	fractionalResult, err := GetFunctionByName(proc.Ctx, "maketime", []types.Type{
+		types.T_int64.ToType(),
+		types.T_int64.ToType(),
+		types.New(types.T_decimal128, 20, 6),
+	})
+	require.NoError(t, err)
+	require.True(t, fractionalResult.needCast)
+	require.Equal(t, types.T_varchar, fractionalResult.targetTypes[2].Oid)
+	require.Equal(t, int32(6), fractionalResult.targetTypes[2].Scale)
+	require.Equal(t, types.T_time.ToTypeWithScale(6), fractionalResult.retType)
+
+	defaultFloatResult, err := GetFunctionByName(proc.Ctx, "maketime", []types.Type{
+		types.T_int64.ToType(),
+		types.T_int64.ToType(),
+		{Oid: types.T_float64, Size: 8, Scale: -1},
+	})
+	require.NoError(t, err)
+	require.Equal(t, types.T_time.ToTypeWithScale(6), defaultFloatResult.retType)
+}
+
+func TestMakeTimeDecimalHourMinuteUseExactOverloads(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	decimalType := types.New(types.T_decimal128, 30, 20)
+	decimal256Type := types.New(types.T_decimal256, 65, 30)
+
+	tests := []struct {
+		inputs []types.Type
+		args   []types.T
+	}{
+		{[]types.Type{decimalType, types.T_int64.ToType(), types.T_int64.ToType()}, []types.T{types.T_decimal128, types.T_float64, types.T_float64}},
+		{[]types.Type{decimalType, types.T_varchar.ToType(), types.T_int64.ToType()}, []types.T{types.T_decimal128, types.T_varchar, types.T_float64}},
+		{[]types.Type{decimalType, decimalType, types.T_int64.ToType()}, []types.T{types.T_decimal128, types.T_decimal128, types.T_float64}},
+		{[]types.Type{decimalType, types.T_int64.ToType(), types.T_varchar.ToType()}, []types.T{types.T_decimal128, types.T_float64, types.T_varchar}},
+		{[]types.Type{decimalType, types.T_varchar.ToType(), types.T_varchar.ToType()}, []types.T{types.T_decimal128, types.T_varchar, types.T_varchar}},
+		{[]types.Type{types.T_int64.ToType(), decimalType, types.T_int64.ToType()}, []types.T{types.T_float64, types.T_decimal128, types.T_float64}},
+		{[]types.Type{types.T_varchar.ToType(), decimalType, types.T_int64.ToType()}, []types.T{types.T_varchar, types.T_decimal128, types.T_float64}},
+		{[]types.Type{types.T_int64.ToType(), decimalType, types.T_varchar.ToType()}, []types.T{types.T_float64, types.T_decimal128, types.T_varchar}},
+		{[]types.Type{types.T_varchar.ToType(), decimalType, types.T_varchar.ToType()}, []types.T{types.T_varchar, types.T_decimal128, types.T_varchar}},
+		{[]types.Type{decimalType, decimalType, types.New(types.T_decimal128, 20, 6)}, []types.T{types.T_decimal128, types.T_decimal128, types.T_varchar}},
+		{[]types.Type{decimal256Type, types.T_int64.ToType(), types.T_int64.ToType()}, []types.T{types.T_decimal256, types.T_float64, types.T_float64}},
+		{[]types.Type{types.T_int64.ToType(), decimal256Type, types.T_int64.ToType()}, []types.T{types.T_float64, types.T_decimal256, types.T_float64}},
+		{[]types.Type{decimal256Type, decimalType, types.T_varchar.ToType()}, []types.T{types.T_decimal256, types.T_decimal128, types.T_varchar}},
+		{[]types.Type{decimalType, decimal256Type, types.T_varchar.ToType()}, []types.T{types.T_decimal128, types.T_decimal256, types.T_varchar}},
+		{[]types.Type{decimal256Type, decimal256Type, types.T_varchar.ToType()}, []types.T{types.T_decimal256, types.T_decimal256, types.T_varchar}},
+	}
+
+	for _, test := range tests {
+		result, err := GetFunctionByName(proc.Ctx, "maketime", test.inputs)
+		require.NoError(t, err)
+		require.True(t, result.needCast)
+		selected, err := GetFunctionById(proc.Ctx, result.GetEncodedOverloadID())
+		require.NoError(t, err)
+		require.Equal(t, test.args, selected.args)
+	}
+}
+
+func TestMakeTimeDecimal256OverloadMatrix(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	decimal128Type := types.New(types.T_decimal128, 30, 20)
+	decimal256Type := types.New(types.T_decimal256, 65, 30)
+	type typeChoice struct {
+		input  types.Type
+		target types.T
+	}
+	hourMinuteChoices := []typeChoice{
+		{types.T_int64.ToType(), types.T_float64},
+		{types.T_varchar.ToType(), types.T_varchar},
+		{decimal128Type, types.T_decimal128},
+		{decimal256Type, types.T_decimal256},
+	}
+	secondChoices := []typeChoice{
+		{types.T_int64.ToType(), types.T_float64},
+		{types.T_varchar.ToType(), types.T_varchar},
+	}
+
+	for _, hour := range hourMinuteChoices {
+		for _, minute := range hourMinuteChoices {
+			if hour.target != types.T_decimal256 && minute.target != types.T_decimal256 {
+				continue
+			}
+			for _, second := range secondChoices {
+				result, err := GetFunctionByName(proc.Ctx, "maketime", []types.Type{hour.input, minute.input, second.input})
+				require.NoError(t, err)
+				selected, err := GetFunctionById(proc.Ctx, result.GetEncodedOverloadID())
+				require.NoError(t, err)
+				require.Equal(t, []types.T{hour.target, minute.target, second.target}, selected.args)
+			}
+		}
+	}
+}
+
+func TestMakeTimeStringSecondUsesExactOverload(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	result, err := GetFunctionByName(proc.Ctx, "maketime", []types.Type{
+		types.T_int64.ToType(),
+		types.T_int64.ToType(),
+		types.T_varchar.ToType(),
+	})
+	require.NoError(t, err)
+	require.True(t, result.needCast)
+	require.Len(t, result.targetTypes, 3)
+	require.Equal(t, types.T_float64, result.targetTypes[0].Oid)
+	require.Equal(t, types.T_float64, result.targetTypes[1].Oid)
+	require.Equal(t, types.T_varchar, result.targetTypes[2].Oid)
+	require.Equal(t, int32(-1), result.targetTypes[2].Scale)
+	require.Equal(t, types.T_time.ToTypeWithScale(6), result.retType)
+}
+
+func TestMakeTimeStringArgumentTargets(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defaultFloat := types.T_float64.ToType()
+	defaultFloat.Scale = -1
+	scaledFloat := types.T_float64.ToTypeWithScale(1)
+
+	tests := []struct {
+		name         string
+		inputs       []types.Type
+		overloadArgs []types.T
+		needCast     bool
+		targets      []types.Type
+		returnType   types.Type
+	}{
+		{
+			name: "varchar hour and minute with double second",
+			inputs: []types.Type{
+				types.T_varchar.ToType(), types.T_varchar.ToType(), defaultFloat,
+			},
+			overloadArgs: []types.T{types.T_varchar, types.T_varchar, types.T_float64},
+			returnType:   types.T_time.ToTypeWithScale(6),
+		},
+		{
+			name: "all varchar",
+			inputs: []types.Type{
+				types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType(),
+			},
+			overloadArgs: []types.T{types.T_varchar, types.T_varchar, types.T_varchar},
+			needCast:     true,
+			targets: []types.Type{
+				types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_varchar.ToTypeWithScale(-1),
+			},
+			returnType: types.T_time.ToTypeWithScale(6),
+		},
+		{
+			name: "only hour is varchar",
+			inputs: []types.Type{
+				types.T_varchar.ToType(), scaledFloat, scaledFloat,
+			},
+			overloadArgs: []types.T{types.T_varchar, types.T_float64, types.T_float64},
+			returnType:   types.T_time.ToTypeWithScale(1),
+		},
+		{
+			name: "only minute is varchar",
+			inputs: []types.Type{
+				scaledFloat, types.T_varchar.ToType(), scaledFloat,
+			},
+			overloadArgs: []types.T{types.T_float64, types.T_varchar, types.T_float64},
+			returnType:   types.T_time.ToTypeWithScale(1),
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result, err := GetFunctionByName(proc.Ctx, "maketime", test.inputs)
+			require.NoError(t, err)
+			require.Equal(t, test.needCast, result.needCast)
+			require.Equal(t, test.targets, result.targetTypes)
+			require.Equal(t, test.returnType, result.retType)
+
+			selected, err := GetFunctionById(proc.Ctx, result.GetEncodedOverloadID())
+			require.NoError(t, err)
+			require.Equal(t, test.overloadArgs, selected.args)
+		})
+	}
+}
+
+func TestMakeTimeBinaryArgumentsUseNumericOverloads(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	binaryTypes := []types.T{types.T_binary, types.T_varbinary, types.T_blob}
+
+	for _, binaryType := range binaryTypes {
+		for position := range 3 {
+			inputs := []types.Type{
+				types.T_int64.ToType(),
+				types.T_int64.ToType(),
+				types.T_int64.ToType(),
+			}
+			inputs[position] = binaryType.ToType()
+
+			result, err := GetFunctionByName(proc.Ctx, "maketime", inputs)
+			require.NoError(t, err)
+			require.True(t, result.needCast)
+			require.Equal(t, types.T_int64, result.targetTypes[position].Oid)
 		}
 	}
 }
@@ -328,6 +615,44 @@ func TestGetFunctionByNameAESDecryptReturnsBlob(t *testing.T) {
 func TestGetFunctionIsWinfunByName(t *testing.T) {
 	assert.Equal(t, true, GetFunctionIsWinFunByName("rank"))
 	assert.Equal(t, false, GetFunctionIsWinFunByName("floor"))
+}
+
+func TestUserLevelLockBuiltinRegistration(t *testing.T) {
+	cases := []struct {
+		name string
+		id   int
+		args []types.T
+		ret  types.Type
+	}{
+		{name: "get_lock", id: GET_LOCK, args: []types.T{types.T_varchar, types.T_float64}, ret: types.T_int64.ToType()},
+		{name: "release_lock", id: RELEASE_LOCK, args: []types.T{types.T_varchar}, ret: types.T_int64.ToType()},
+		{name: "is_free_lock", id: IS_FREE_LOCK, args: []types.T{types.T_varchar}, ret: types.T_int64.ToType()},
+		{name: "is_used_lock", id: IS_USED_LOCK, args: []types.T{types.T_varchar}, ret: types.T_uint64.ToType()},
+		{name: "release_all_locks", id: RELEASE_ALL_LOCKS, args: []types.T{}, ret: types.T_int64.ToType()},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var fn *FuncNew
+			for i := range supportedControlBuiltIns {
+				if supportedControlBuiltIns[i].functionId == tc.id {
+					fn = &supportedControlBuiltIns[i]
+					break
+				}
+			}
+			require.NotNil(t, fn)
+			require.Equal(t, plan.Function_STRICT, fn.class)
+			require.Equal(t, STANDARD_FUNCTION, fn.layout)
+			require.Len(t, fn.Overloads, 1)
+
+			overload := fn.Overloads[0]
+			require.Equal(t, tc.args, overload.args)
+			require.True(t, overload.volatile)
+			require.True(t, overload.realTimeRelated)
+			require.Equal(t, tc.ret, overload.retType(nil))
+			require.NotNil(t, overload.newOp())
+		})
+	}
 }
 
 func TestRunPositionCharFunctionDirectly(t *testing.T) {

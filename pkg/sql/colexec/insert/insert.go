@@ -26,10 +26,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/externalwrite"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -121,6 +125,41 @@ func (insert *Insert) Prepare(proc *process.Process) error {
 	}
 
 	insert.ctr.state = vm.Build
+	if insert.ToExternal {
+		insert.ctr.extCounter = new(perfcounter.CounterSet)
+		cfg := insert.InsertCtx.ExternalConfig
+		cfg.Attrs = insert.InsertCtx.Attrs
+		// Prefer the per-execution statement start over the compile-time value:
+		// prepared statements reuse the cached Compile across EXECUTEs, so the
+		// config's Stmt would otherwise stay frozen at the first execution and
+		// time-directive patterns would keep writing into the first day's path.
+		// (Remote CNs lack StartTS on the context and keep the proto-carried
+		// value, which the sender resolves the same way at encode time.)
+		if v := proc.Ctx.Value(defines.StartTS{}); v != nil {
+			if t, ok := v.(time.Time); ok {
+				cfg.Stmt = t
+			}
+		}
+		if cfg.TimeZone == nil {
+			// Resolved here rather than at compile time so that an operator rebuilt
+			// on a remote CN (whose process carries the session info) renders
+			// TIMESTAMP values in the session's time zone too.
+			cfg.TimeZone = proc.GetSessionInfo().TimeZone
+		}
+		insert.ctr.extWriter = externalwrite.NewExternalWriter(proc, cfg)
+		// ColDefs aligned with Attrs, for the NOT NULL check (the minimal
+		// external-insert plan runs no PreInsert, which normally enforces it).
+		byName := make(map[string]*plan.ColDef, len(insert.InsertCtx.TableDef.Cols))
+		for _, col := range insert.InsertCtx.TableDef.Cols {
+			byName[col.GetOriginCaseName()] = col
+		}
+		insert.ctr.extCols = make([]*plan.ColDef, len(insert.InsertCtx.Attrs))
+		for j, attr := range insert.InsertCtx.Attrs {
+			insert.ctr.extCols[j] = byName[attr]
+		}
+		insert.ctr.affectedRows = 0
+		return nil
+	}
 	if insert.ToWriteS3 {
 		fs, err := colexec.GetSharedFSFromProc(proc)
 		if err != nil {
@@ -135,7 +174,7 @@ func (insert *Insert) Prepare(proc *process.Process) error {
 			sinkerOpts = append(sinkerOpts, ioutil.WithPipelineFlush())
 		}
 		s3Writer := colexec.NewCNS3DataWriter(
-			proc.Mp(), fs, insert.InsertCtx.TableDef, -1, insert.isMemoryTable(),
+			proc.Mp(), fs, insert.InsertCtx.TableDef, -1, false,
 			sinkerOpts...)
 
 		insert.ctr.s3Writer = s3Writer
@@ -159,11 +198,8 @@ func (insert *Insert) Prepare(proc *process.Process) error {
 				return err
 			}
 			insert.ctr.source = rel
-		} else {
-			err := insert.ctr.source.Reset(proc.GetTxnOperator())
-			if err != nil {
-				return err
-			}
+		} else if err := insert.ctr.source.Reset(proc.GetTxnOperator()); err != nil {
+			return err
 		}
 
 		if insert.ctr.buf == nil {
@@ -185,10 +221,104 @@ func (insert *Insert) Call(proc *process.Process) (vm.CallResult, error) {
 		analyzer.AddInsertTime(t)
 	}()
 
+	if insert.ToExternal {
+		return insert.insert_external(proc, analyzer)
+	}
 	if insert.ToWriteS3 {
 		return insert.insert_s3(proc, analyzer)
 	}
 	return insert.insert_table(proc, analyzer)
+}
+
+// checkExternalNotNull rejects NULLs in NOT NULL columns. ctr.extCols is
+// aligned with InsertCtx.Attrs (and therefore with the leading batch vectors).
+func (insert *Insert) checkExternalNotNull(proc *process.Process, bat *batch.Batch) error {
+	for j, col := range insert.ctr.extCols {
+		if col == nil || j >= len(bat.Vecs) {
+			continue
+		}
+		// Either signal marks the column NOT NULL: the explicit flag, or the
+		// default-value descriptor PreInsert's check relies on.
+		notNull := col.NotNull || (col.Default != nil && !col.Default.NullAbility)
+		if !notNull {
+			continue
+		}
+		vec := bat.Vecs[j]
+		if vec.IsConstNull() || nulls.Any(vec.GetNulls()) {
+			return moerr.NewConstraintViolationf(proc.Ctx, "Column '%s' cannot be null", insert.InsertCtx.Attrs[j])
+		}
+	}
+	return nil
+}
+
+// insert_external writes a batch into a writable external table's backing file.
+// One operator instance owns one ExternalWriter and therefore one output file.
+// The file is finalized when the input stream ends (nil batch).
+func (insert *Insert) insert_external(proc *process.Process, analyzer process.Analyzer) (vm.CallResult, error) {
+	input, err := vm.ChildrenCall(insert.GetChildren(0), proc, analyzer)
+	if err != nil {
+		return input, err
+	}
+
+	if input.Batch == nil {
+		// End of input: flush and finalize the file.
+		if insert.ctr.extWriter != nil {
+			ctx := insert.externalWriterContext(proc.Ctx)
+			_, cerr := process.MeasureFilesystemWait(analyzer, func() (uint64, error) {
+				return insert.ctr.extWriter.Close(ctx)
+			})
+			insert.harvestExternalWriter(analyzer)
+			if cerr != nil {
+				return input, cerr
+			}
+			insert.ctr.extWriter = nil
+		}
+		return input, nil
+	}
+	if input.Batch.IsEmpty() {
+		return input, nil
+	}
+
+	// NOT NULL enforcement normally happens in the PreInsert operator, which the
+	// minimal external-insert plan does not run.
+	if err = insert.checkExternalNotNull(proc, input.Batch); err != nil {
+		return input, err
+	}
+	ctx := insert.externalWriterContext(proc.Ctx)
+	if err = insert.ctr.extWriter.WriteBatch(ctx, input.Batch, analyzer); err != nil {
+		return input, err
+	}
+
+	rows := uint64(input.Batch.RowCount())
+	analyzer.AddWrittenRows(int64(rows))
+	if insert.InsertCtx.AddAffectedRows {
+		atomic.AddUint64(&insert.ctr.affectedRows, rows)
+	}
+	return input, nil
+}
+
+func (insert *Insert) externalWriterContext(ctx context.Context) context.Context {
+	if insert.ctr.extCounter == nil {
+		return ctx
+	}
+	return perfcounter.AttachS3RequestKey(ctx, insert.ctr.extCounter)
+}
+
+func (insert *Insert) harvestExternalWriter(analyzer process.Analyzer) {
+	if insert.ctr.extCounter == nil {
+		return
+	}
+	process.HarvestExternalCounterSet(analyzer, insert.ctr.extCounter)
+	insert.ctr.extCounter = nil
+}
+
+func (insert *Insert) abortExternalWriter(proc *process.Process) {
+	ctx := insert.externalWriterContext(proc.Ctx)
+	process.MeasureTerminalFilesystemWait(insert.OpAnalyzer, func() {
+		insert.ctr.extWriter.Abort(ctx)
+	})
+	insert.ctr.extWriter = nil
+	insert.harvestExternalWriter(insert.OpAnalyzer)
 }
 
 func (insert *Insert) insert_s3(proc *process.Process, analyzer process.Analyzer) (result vm.CallResult, err error) {
@@ -198,7 +328,7 @@ func (insert *Insert) insert_s3(proc *process.Process, analyzer process.Analyzer
 	}()
 	defer func() {
 		if err != nil {
-			insert.releaseS3MemGrant()
+			insert.refreshAndReleaseS3MemGrant()
 		}
 	}()
 
@@ -243,14 +373,12 @@ func (insert *Insert) insert_s3(proc *process.Process, analyzer process.Analyzer
 		writer := insert.ctr.s3Writer
 		// handle the last Batch that batchSize less than DefaultBlockMaxRows
 		// for more info, refer to the comments about reSizeBatch.
-		//
-		// data returned to the result would be raw data if it is a memory table.
-		err := flushTailBatch(proc, writer, &result, analyzer, insert.isMemoryTable())
+		err := flushTailBatch(proc, writer, &result, analyzer)
 		if err != nil {
 			insert.ctr.state = vm.End
 			return result, err
 		}
-		insert.releaseS3MemGrant()
+		insert.refreshAndReleaseS3MemGrant()
 		insert.ctr.state = vm.End
 		return result, nil
 	}
@@ -267,7 +395,7 @@ type forceRefreshThrottler interface {
 }
 
 func (insert *Insert) acquireS3WriteMemory(proc *process.Process, analyzer process.Analyzer, size int) error {
-	if insert.isMemoryTable() || insert.ctr.s3MemThrottler == nil || size <= 0 {
+	if insert.ctr.s3MemThrottler == nil || size <= 0 {
 		return nil
 	}
 
@@ -335,17 +463,19 @@ func forcedRefresh(throttler interface{ Refresh() }) {
 }
 
 func (insert *Insert) flushS3WriterOnMemoryPressure(proc *process.Process, analyzer process.Analyzer) (err error) {
-	if insert.isMemoryTable() || insert.ctr.s3Writer == nil {
+	if insert.ctr.s3Writer == nil {
 		insert.releaseS3MemGrant()
 		return nil
 	}
 	defer func() {
 		if err != nil {
-			insert.releaseS3MemGrant()
+			insert.refreshAndReleaseS3MemGrant()
 		}
 	}()
 
-	releaseFlushSlot, err := acquireFlushSlot(proc.Ctx)
+	releaseFlushSlot, err := process.MeasureFilesystemWait(analyzer, func() (func(), error) {
+		return acquireFlushSlot(proc.Ctx)
+	})
 	if err != nil {
 		return err
 	}
@@ -354,14 +484,12 @@ func (insert *Insert) flushS3WriterOnMemoryPressure(proc *process.Process, analy
 	crs := analyzer.GetOpCounterSet()
 	newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
 
-	blockInfoBat, err := insert.ctr.s3Writer.SyncAndFillBlockInfoBat(newCtx)
+	blockInfoBat, err := process.MeasureFilesystemWait(analyzer, func() (*batch.Batch, error) {
+		return insert.ctr.s3Writer.SyncAndFillBlockInfoBat(newCtx)
+	})
 	if err != nil {
 		return err
 	}
-
-	analyzer.AddS3RequestCount(crs)
-	analyzer.AddFileServiceCacheInfo(crs)
-	analyzer.AddDiskIO(crs)
 
 	if blockInfoBat != nil && blockInfoBat.RowCount() > 0 {
 		insert.ctr.buf, err = insert.ctr.buf.Append(proc.Ctx, proc.GetMPool(), blockInfoBat)
@@ -371,11 +499,7 @@ func (insert *Insert) flushS3WriterOnMemoryPressure(proc *process.Process, analy
 		insert.ctr.s3Writer.ResetBlockInfoBat()
 	}
 
-	insert.releaseS3MemGrant()
-
-	// After flushing, release throttle grant and force-refresh so subsequent
-	// acquires by this or other workers see the freed capacity immediately.
-	forcedRefresh(insert.ctr.s3MemThrottler)
+	insert.refreshAndReleaseS3MemGrant()
 	return nil
 }
 
@@ -445,14 +569,13 @@ func (insert *Insert) insert_table(proc *process.Process, analyzer process.Analy
 	newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
 
 	// insert into table, insertBat will be deeply copied into txn's workspace.
-	err := insert.ctr.source.Write(newCtx, insert.ctr.buf)
+	err := process.MeasureFilesystemWaitErr(analyzer, func() error {
+		return insert.ctr.source.Write(newCtx, insert.ctr.buf)
+	})
 	if err != nil {
 		return input, err
 	}
 	analyzer.AddWrittenRows(int64(insert.ctr.buf.RowCount()))
-	analyzer.AddS3RequestCount(crs)
-	analyzer.AddFileServiceCacheInfo(crs)
-	analyzer.AddDiskIO(crs)
 
 	if insert.InsertCtx.AddAffectedRows {
 		atomic.AddUint64(&insert.ctr.affectedRows, affectedRows)
@@ -466,7 +589,6 @@ func flushTailBatch(
 	writer *colexec.CNS3Writer,
 	result *vm.CallResult,
 	analyzer process.Analyzer,
-	isMemoryTable bool,
 ) error {
 
 	var (
@@ -474,32 +596,27 @@ func flushTailBatch(
 		bat *batch.Batch
 	)
 
-	if !isMemoryTable {
-		crs := analyzer.GetOpCounterSet()
+	crs := analyzer.GetOpCounterSet()
 
-		newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
+	newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
 
-		if _, err = writer.Sync(newCtx); err != nil {
-			return err
-		}
-
-		analyzer.AddS3RequestCount(crs)
-		analyzer.AddFileServiceCacheInfo(crs)
-		analyzer.AddDiskIO(crs)
-
-		if bat, err = writer.FillBlockInfoBat(); err != nil {
-			return err
-		}
-
-		result.Batch, err = result.Batch.Append(proc.Ctx, proc.GetMPool(), bat)
-		if err != nil {
-			return err
-		}
-
-		writer.ResetBlockInfoBat()
-
-		return nil
+	if err = process.MeasureFilesystemWaitErr(analyzer, func() error {
+		_, syncErr := writer.Sync(newCtx)
+		return syncErr
+	}); err != nil {
+		return err
 	}
 
-	return writer.OutputInMemoryData(result.Batch)
+	if bat, err = writer.FillBlockInfoBat(); err != nil {
+		return err
+	}
+
+	result.Batch, err = result.Batch.Append(proc.Ctx, proc.GetMPool(), bat)
+	if err != nil {
+		return err
+	}
+
+	writer.ResetBlockInfoBat()
+
+	return nil
 }

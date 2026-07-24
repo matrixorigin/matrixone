@@ -27,13 +27,15 @@ type TGenericOfIn interface {
 }
 
 type opOperatorFixedIn[T TGenericOfIn] struct {
-	ready bool
-	mp    map[T]bool
+	ready   bool
+	hasNull bool
+	mp      map[T]bool
 }
 
 type opOperatorStrIn struct {
-	ready bool
-	mp    map[string]bool
+	ready   bool
+	hasNull bool
+	mp      map[string]bool
 }
 
 func newOpOperatorFixedIn[T TGenericOfIn]() *opOperatorFixedIn[T] {
@@ -50,15 +52,22 @@ func newOpOperatorStrIn() *opOperatorStrIn {
 
 func (op *opOperatorFixedIn[T]) init(tuple *vector.Vector) {
 	op.ready = true
+	op.hasNull = false
 
 	if tuple.IsConstNull() {
+		op.hasNull = true
 		op.mp = make(map[T]bool)
 		return
 	}
 	p := vector.GenerateFunctionFixedTypeParameter[T](tuple)
 
 	if tuple.IsConst() {
-		v, _ := p.GetValue(0)
+		v, null := p.GetValue(0)
+		if null {
+			op.hasNull = true
+			op.mp = make(map[T]bool)
+			return
+		}
 		op.mp = make(map[T]bool, 1)
 		op.mp[v] = true
 		return
@@ -67,23 +76,32 @@ func (op *opOperatorFixedIn[T]) init(tuple *vector.Vector) {
 	op.mp = make(map[T]bool, tuple.Length())
 	for i := uint64(0); i < uint64(tuple.Length()); i++ {
 		v, null := p.GetValue(i)
-		if !null {
-			op.mp[v] = true
+		if null {
+			op.hasNull = true
+			continue
 		}
+		op.mp[v] = true
 	}
 }
 
 func (op *opOperatorStrIn) init(tuple *vector.Vector) {
 	op.ready = true
+	op.hasNull = false
 
 	if tuple.IsConstNull() {
+		op.hasNull = true
 		op.mp = make(map[string]bool)
 		return
 	}
 	p := vector.GenerateFunctionStrParameter(tuple)
 
 	if tuple.IsConst() {
-		v, _ := p.GetStrValue(0)
+		v, null := p.GetStrValue(0)
+		if null {
+			op.hasNull = true
+			op.mp = make(map[string]bool)
+			return
+		}
 		op.mp = make(map[string]bool, 1)
 		op.mp[string(v)] = true
 		return
@@ -92,9 +110,11 @@ func (op *opOperatorStrIn) init(tuple *vector.Vector) {
 	op.mp = make(map[string]bool)
 	for i := uint64(0); i < uint64(tuple.Length()); i++ {
 		v, null := p.GetStrValue(i)
-		if !null {
-			op.mp[string(v)] = true
+		if null {
+			op.hasNull = true
+			continue
 		}
+		op.mp[string(v)] = true
 	}
 }
 
@@ -113,6 +133,12 @@ func (op *opOperatorFixedIn[T]) operatorIn(parameters []*vector.Vector, result v
 			}
 		} else {
 			_, ok := op.mp[v]
+			if !ok && op.hasNull {
+				if err := rs.Append(false, true); err != nil {
+					return err
+				}
+				continue
+			}
 			if err := rs.Append(ok, false); err != nil {
 				return err
 			}
@@ -136,6 +162,12 @@ func (op *opOperatorFixedIn[T]) operatorNotIn(parameters []*vector.Vector, resul
 			}
 		} else {
 			_, ok := op.mp[v]
+			if !ok && op.hasNull {
+				if err := rs.Append(false, true); err != nil {
+					return err
+				}
+				continue
+			}
 			if err := rs.Append(!ok, false); err != nil {
 				return err
 			}
@@ -159,6 +191,12 @@ func (op *opOperatorStrIn) operatorIn(parameters []*vector.Vector, result vector
 			}
 		} else {
 			_, ok := op.mp[string(v)]
+			if !ok && op.hasNull {
+				if err := rs.Append(false, true); err != nil {
+					return err
+				}
+				continue
+			}
 			if err := rs.Append(ok, false); err != nil {
 				return err
 			}
@@ -182,6 +220,12 @@ func (op *opOperatorStrIn) operatorNotIn(parameters []*vector.Vector, result vec
 			}
 		} else {
 			_, ok := op.mp[string(v)]
+			if !ok && op.hasNull {
+				if err := rs.Append(false, true); err != nil {
+					return err
+				}
+				continue
+			}
 			if err := rs.Append(!ok, false); err != nil {
 				return err
 			}

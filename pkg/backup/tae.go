@@ -23,7 +23,7 @@ import (
 	"os"
 	"path"
 	runtime2 "runtime"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -289,6 +289,20 @@ func execBackup(
 	protectionMgr *backupProtectionManager, // Optional: nil for tests, non-nil for production
 	globalIndex *GlobalFileIndex, // Optional: global file index for checking if file already backed up
 ) error {
+	if len(names) < 2 {
+		return moerr.NewInternalErrorf(
+			ctx,
+			"incomplete backup checkpoint response: expected backup time and checkpoint location, got %d field(s)",
+			len(names),
+		)
+	}
+	if names[0] == "" {
+		return moerr.NewInternalError(ctx, "incomplete backup checkpoint response: backup time is empty")
+	}
+	if names[1] == "" {
+		return moerr.NewInternalError(ctx, "incomplete backup checkpoint response: checkpoint location is empty")
+	}
+
 	backupTime := names[0]
 	trimString := names[1]
 	names = names[1:]
@@ -320,7 +334,7 @@ func execBackup(
 			continue
 		}
 		ckpStr := strings.Split(name, ":")
-		if len(ckpStr) != 2 && i > 0 {
+		if (i == 0 && len(ckpStr) != 5) || (i > 0 && len(ckpStr) != 2) {
 			return moerr.NewInternalError(ctx, fmt.Sprintf("invalid checkpoint string: %v", ckpStr))
 		}
 		metaLoc := ckpStr[0]
@@ -556,8 +570,14 @@ func copyFileAndGetMetaFiles(
 	if len(metaFiles) == 0 {
 		return taeFileList, metaFiles, mFiles, nil
 	}
-	sort.Slice(metaFiles, func(i, j int) bool {
-		return metaFiles[i].GetEnd().LT(metaFiles[j].GetEnd())
+	slices.SortFunc(metaFiles, func(a, b ioutil.TSRangeFile) int {
+		if a.GetEnd().LT(b.GetEnd()) {
+			return -1
+		}
+		if b.GetEnd().LT(a.GetEnd()) {
+			return 1
+		}
+		return 0
 	})
 
 	return taeFileList, metaFiles, mFiles, nil
@@ -591,15 +611,20 @@ func CopyGCDir(
 		filesList := make([]*taeFile, 0)
 		needCopy := true
 		for _, object := range objects {
-			checksum, err = CopyFileWithRetry(ctx, srcFs, dstFs, object.ObjectName().String(), "")
+			objectName := object.ObjectName().String()
+			checksum, err = CopyFileWithRetry(ctx, srcFs, dstFs, objectName, "")
 			if err != nil {
-				logutil.Warnf("[Backup] copy file %v failed", object.ObjectName().String())
+				logutil.Warnf("[Backup] copy file %v failed", objectName)
 				needCopy = false
 				break
 			}
+			entry, err := dstFs.StatFile(ctx, objectName)
+			if err != nil {
+				return nil, err
+			}
 			filesList = append(filesList, &taeFile{
-				path:     object.ObjectName().String(),
-				size:     files[metaFile.GetIdx()].Size,
+				path:     objectName,
+				size:     entry.Size,
 				checksum: checksum,
 				needCopy: true,
 				ts:       backup,
@@ -613,7 +638,7 @@ func CopyGCDir(
 
 	for i, metaFile := range copyFiles {
 		name := metaFile.GetName()
-		if i == len(metaFiles)-1 {
+		if i == len(copyFiles)-1 {
 			if !min.IsEmpty() && metaFile.GetEnd().LT(&min) {
 				// It means that the gc consumption is too slow, and the gc water level needs to be raised.
 				// Otherwise, the gc will not work after the cluster is restored because it cannot find the checkpoint.

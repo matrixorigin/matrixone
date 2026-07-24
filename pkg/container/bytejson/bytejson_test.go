@@ -19,6 +19,7 @@ import (
 	"errors"
 	"io"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -31,6 +32,22 @@ func TestLiteral(t *testing.T) {
 		require.Nil(t, err)
 		require.Equal(t, x, bj.String())
 	}
+}
+
+func TestParserFreesCompletedRootWhenTokenizerRejectsSuffix(t *testing.T) {
+	p := parser{src: []byte(`{}x`)}
+	_, err := p.do()
+	require.Error(t, err)
+	require.Empty(t, p.stack)
+	require.Nil(t, p.top.V)
+}
+
+func TestParserFreesWideCompletedRootWhenTokenizerRejectsSuffix(t *testing.T) {
+	p := parser{src: []byte(`{"values":[` + strings.Repeat(`0,`, 1024) + `0]}x`)}
+	_, err := p.do()
+	require.Error(t, err)
+	require.Empty(t, p.stack)
+	require.Nil(t, p.top.V)
 }
 
 func TestNumber(t *testing.T) {
@@ -214,6 +231,307 @@ func TestQuery(t *testing.T) {
 			out2 := bj.QuerySimple([]*Path{&path})
 			require.JSONEq(t, kase.outStr, out2.String())
 		}
+	}
+}
+
+func TestQueryWithExistsPreservesJSONNull(t *testing.T) {
+	bj, err := ParseFromString(`{"a":null,"b":1,"items":[null,2]}`)
+	require.NoError(t, err)
+
+	parsePaths := func(pathStrings ...string) []*Path {
+		paths := make([]*Path, len(pathStrings))
+		for i, pathString := range pathStrings {
+			path, parseErr := ParseJsonPath(pathString)
+			require.NoError(t, parseErr)
+			paths[i] = &path
+		}
+		return paths
+	}
+
+	tests := []struct {
+		name   string
+		paths  []string
+		result string
+		exists bool
+	}{
+		{name: "existing null", paths: []string{"$.a"}, result: "null", exists: true},
+		{name: "missing", paths: []string{"$.missing"}, result: "null", exists: false},
+		{name: "null and value", paths: []string{"$.a", "$.b"}, result: "[null,1]", exists: true},
+		{name: "all null", paths: []string{"$.a", "$.a"}, result: "[null,null]", exists: true},
+		{name: "null and missing", paths: []string{"$.a", "$.missing"}, result: "[null]", exists: true},
+		{name: "wildcard", paths: []string{"$.items[*]"}, result: "[null,2]", exists: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			paths := parsePaths(test.paths...)
+			result, exists := bj.QueryWithExists(paths)
+			require.Equal(t, test.exists, exists)
+			require.JSONEq(t, test.result, result.String())
+
+			allSimple := true
+			for _, path := range paths {
+				allSimple = allSimple && path.IsSimple()
+			}
+			if allSimple {
+				simpleResult, simpleExists := bj.QuerySimpleWithExists(paths)
+				require.Equal(t, test.exists, simpleExists)
+				require.JSONEq(t, test.result, simpleResult.String())
+			}
+		})
+	}
+}
+
+func TestQueryWithExistsAutowrapsScalarIndexZero(t *testing.T) {
+	tests := []struct {
+		name    string
+		json    string
+		path    string
+		expects string
+	}{
+		{name: "root null", json: `null`, path: `$[0]`, expects: `null`},
+		{name: "nested null", json: `{"a":null}`, path: `$.a[0]`, expects: `null`},
+		{name: "root scalar range", json: `1`, path: `$[0 to 0]`, expects: `[1]`},
+		{name: "array wildcard", json: `[null]`, path: `$[*]`, expects: `[null]`},
+		{name: "array range", json: `[null]`, path: `$[0 to 0]`, expects: `[null]`},
+		{name: "object wildcard", json: `{"a":null}`, path: `$.*`, expects: `[null]`},
+		{name: "recursive descent", json: `{"a":null}`, path: `$**.a`, expects: `[null]`},
+		{name: "empty object range", json: `{}`, path: `$[0 to 0]`, expects: `[{}]`},
+		{name: "object last range", json: `{"a":1,"b":2}`, path: `$[last to last]`, expects: `[{"a":1,"b":2}]`},
+		{name: "object last range then key", json: `{"a":null,"b":2}`, path: `$[last to last].a`, expects: `[null]`},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			bj, err := ParseFromString(test.json)
+			require.NoError(t, err)
+			path, err := ParseJsonPath(test.path)
+			require.NoError(t, err)
+
+			result, exists := bj.QueryWithExists([]*Path{&path})
+			require.True(t, exists)
+			require.JSONEq(t, test.expects, result.String())
+
+			if path.IsSimple() {
+				simpleResult, simpleExists := bj.QuerySimpleWithExists([]*Path{&path})
+				require.True(t, simpleExists)
+				require.JSONEq(t, test.expects, simpleResult.String())
+			}
+		})
+	}
+}
+
+func TestQueryWithExistsEmptyArrayRangeDoesNotMatch(t *testing.T) {
+	tests := []struct {
+		name string
+		json string
+		path string
+	}{
+		{name: "root numeric range", json: `[]`, path: `$[0 to 0]`},
+		{name: "root last range", json: `[]`, path: `$[last to last]`},
+		{name: "nested numeric range", json: `{"a":[]}`, path: `$.a[0 to 0]`},
+		{name: "nested last range", json: `{"a":[]}`, path: `$.a[last to last]`},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			bj, err := ParseFromString(test.json)
+			require.NoError(t, err)
+			path, err := ParseJsonPath(test.path)
+			require.NoError(t, err)
+
+			_, exists := bj.QueryWithExists([]*Path{&path})
+			require.False(t, exists)
+		})
+	}
+}
+
+func TestQueryWithExistsArrayRangeOverlap(t *testing.T) {
+	tests := []struct {
+		name    string
+		json    string
+		path    string
+		exists  bool
+		expects string
+	}{
+		{name: "json null right of array", json: `[null]`, path: `$[1 to 1]`},
+		{name: "right of array", json: `[0,1,2]`, path: `$[5 to 6]`},
+		{name: "left of array", json: `[0,1,2]`, path: `$[last-8 to last-7]`},
+		{name: "overlap right edge", json: `[0,1,2]`, path: `$[2 to 6]`, exists: true, expects: `[2]`},
+		{name: "overlap left edge", json: `[0,1,2]`, path: `$[last-8 to last-2]`, exists: true, expects: `[0]`},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			bj, err := ParseFromString(test.json)
+			require.NoError(t, err)
+			path, err := ParseJsonPath(test.path)
+			require.NoError(t, err)
+
+			result, exists := bj.QueryWithExists([]*Path{&path})
+			require.Equal(t, test.exists, exists)
+			if test.exists {
+				require.JSONEq(t, test.expects, result.String())
+			}
+		})
+	}
+}
+
+func TestQuerySimpleContainPath(t *testing.T) {
+	kases := []struct {
+		name    string
+		jsonStr string
+		pathStr string
+		outStr  string
+		exists  bool
+	}{
+		{
+			name:    "root scalar autowrap",
+			jsonStr: `1`,
+			pathStr: `$[0]`,
+			outStr:  `1`,
+			exists:  true,
+		},
+		{
+			name:    "root scalar nonzero index misses",
+			jsonStr: `1`,
+			pathStr: `$[1]`,
+			outStr:  `null`,
+			exists:  false,
+		},
+		{
+			name:    "object scalar child autowrap",
+			jsonStr: `{"a":1}`,
+			pathStr: `$.a[0]`,
+			outStr:  `1`,
+			exists:  true,
+		},
+		{
+			name:    "nested scalar child autowrap",
+			jsonStr: `{"a":[{"b":1}]}`,
+			pathStr: `$.a[0].b[0]`,
+			outStr:  `1`,
+			exists:  true,
+		},
+		{
+			name:    "string scalar child autowrap",
+			jsonStr: `{"a":"x"}`,
+			pathStr: `$.a[0]`,
+			outStr:  `"x"`,
+			exists:  true,
+		},
+		{
+			name:    "normal array path still works",
+			jsonStr: `[1,2,3]`,
+			pathStr: `$[1]`,
+			outStr:  `2`,
+			exists:  true,
+		},
+	}
+
+	for _, kase := range kases {
+		t.Run(kase.name, func(t *testing.T) {
+			bj, err := ParseFromString(kase.jsonStr)
+			require.NoError(t, err)
+			path, err := ParseJsonPath(kase.pathStr)
+			require.NoError(t, err)
+
+			out, exists := bj.QuerySimpleContainPath(&path)
+			require.Equal(t, kase.exists, exists)
+			require.JSONEq(t, kase.outStr, out.String())
+		})
+	}
+}
+
+func TestPathExists(t *testing.T) {
+	kases := []struct {
+		name    string
+		jsonStr string
+		pathStr string
+		exists  bool
+	}{
+		{
+			name:    "json null is an existing path",
+			jsonStr: `{"a":null}`,
+			pathStr: `$.a`,
+			exists:  true,
+		},
+		{
+			name:    "missing key is not an existing path",
+			jsonStr: `{}`,
+			pathStr: `$.a`,
+			exists:  false,
+		},
+		{
+			name:    "scalar index zero autowraps",
+			jsonStr: `{"a":1}`,
+			pathStr: `$.a[0]`,
+			exists:  true,
+		},
+		{
+			name:    "scalar nonzero index misses",
+			jsonStr: `{"a":1}`,
+			pathStr: `$.a[1]`,
+			exists:  false,
+		},
+		{
+			name:    "object wildcard finds a value",
+			jsonStr: `{"a":1}`,
+			pathStr: `$.*`,
+			exists:  true,
+		},
+		{
+			name:    "array wildcard on an empty array misses",
+			jsonStr: `[]`,
+			pathStr: `$[*]`,
+			exists:  false,
+		},
+		{
+			name:    "array wildcard finds an element",
+			jsonStr: `[1,2,3]`,
+			pathStr: `$[*]`,
+			exists:  true,
+		},
+		{
+			name:    "recursive descent finds a json null",
+			jsonStr: `{"a":{"b":null}}`,
+			pathStr: `$**.b`,
+			exists:  true,
+		},
+		{
+			name:    "recursive descent finds an array index",
+			jsonStr: `{"a":true,"b":[1,2,{"c":[4,5,{"d":[6,7,8,9,10]}]}]}`,
+			pathStr: `$**[4]`,
+			exists:  true,
+		},
+		{
+			name:    "recursive descent reports a missing array index",
+			jsonStr: `{"a":true,"b":[1,2,{"c":[4,5,{"d":[6,7,8,9,10]}]}]}`,
+			pathStr: `$**.c[3]`,
+			exists:  false,
+		},
+		{
+			name:    "recursive descent and wildcard find an array value",
+			jsonStr: `[1,2,3]`,
+			pathStr: `$**[*]`,
+			exists:  true,
+		},
+		{
+			name:    "array range with no elements misses",
+			jsonStr: `[1]`,
+			pathStr: `$[1 to 2]`,
+			exists:  false,
+		},
+	}
+
+	for _, kase := range kases {
+		t.Run(kase.name, func(t *testing.T) {
+			bj, err := ParseFromString(kase.jsonStr)
+			require.NoError(t, err)
+			path, err := ParseJsonPath(kase.pathStr)
+			require.NoError(t, err)
+			require.Equal(t, kase.exists, bj.PathExists(&path))
+		})
 	}
 }
 

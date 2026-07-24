@@ -16,17 +16,18 @@ package hashjoin
 
 import (
 	"bytes"
-	"fmt"
-	"time"
 
-	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/spillutil"
+	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -57,6 +58,8 @@ func (hashJoin *HashJoin) String(buf *bytes.Buffer) {
 		}
 	case plan.Node_SINGLE:
 		buf.WriteString(": single join ")
+	case plan.Node_MARK:
+		buf.WriteString(": hash mark join ")
 	case plan.Node_OUTER:
 		buf.WriteString(": full outer join ")
 	}
@@ -67,6 +70,12 @@ func (hashJoin *HashJoin) OpType() vm.OpType {
 }
 
 func (hashJoin *HashJoin) Prepare(proc *process.Process) (err error) {
+	if hashJoin.IsMark() {
+		if err := hashJoin.validateMarkJoin(proc); err != nil {
+			return err
+		}
+	}
+
 	if hashJoin.OpAnalyzer == nil {
 		hashJoin.OpAnalyzer = process.NewAnalyzer(hashJoin.GetIdx(), hashJoin.IsFirst, hashJoin.IsLast, opName)
 	} else {
@@ -81,22 +90,50 @@ func (hashJoin *HashJoin) Prepare(proc *process.Process) (err error) {
 	}
 
 	if len(ctr.eqCondVecs) == 0 {
-		ctr.eqCondVecs = make([]*vector.Vector, len(hashJoin.EqConds[0]))
-		ctr.eqCondExecs = make([]colexec.ExpressionExecutor, len(hashJoin.EqConds[0]))
-		ctr.eqCondExecs, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, hashJoin.EqConds[0])
+		eqCondExecs, err := colexec.NewExpressionExecutorsFromPlanExpressions(proc, hashJoin.EqConds[0])
 		if err != nil {
 			return err
 		}
 
+		var nonEqCondExec colexec.ExpressionExecutor
 		if hashJoin.NonEqCond != nil {
-			ctr.nonEqCondExec, err = colexec.NewExpressionExecutor(proc, hashJoin.NonEqCond)
+			nonEqCondExec, err = colexec.NewExpressionExecutor(proc, hashJoin.NonEqCond)
 			if err != nil {
+				for _, exec := range eqCondExecs {
+					exec.Free()
+				}
 				return err
 			}
 		}
+
+		ctr.eqCondVecs = make([]*vector.Vector, len(hashJoin.EqConds[0]))
+		ctr.eqCondExecs = eqCondExecs
+		ctr.nonEqCondExec = nonEqCondExec
 	}
 
 	return err
+}
+
+func (hashJoin *HashJoin) validateMarkJoin(proc *process.Process) error {
+	if hashJoin.NonEqCond != nil {
+		return moerr.NewInternalError(proc.Ctx, "hash MARK join does not support residual conditions")
+	}
+	if len(hashJoin.EqConds) != 2 || len(hashJoin.EqConds[0]) == 0 || len(hashJoin.EqConds[0]) != len(hashJoin.EqConds[1]) {
+		return moerr.NewInternalError(proc.Ctx, "hash MARK join requires matching non-empty probe and build keys")
+	}
+	if len(hashJoin.EqConds[0]) > 1 {
+		for i := range hashJoin.EqConds[0] {
+			if !hashJoin.EqConds[0][i].Typ.NotNullable || !hashJoin.EqConds[1][i].Typ.NotNullable {
+				return moerr.NewInternalError(proc.Ctx, "hash MARK join requires composite keys to be not nullable")
+			}
+		}
+	}
+	for _, result := range hashJoin.ResultCols {
+		if result.Rel != 0 && result.Rel != -1 {
+			return moerr.NewInternalErrorf(proc.Ctx, "hash MARK join has unexpected result relation %d", result.Rel)
+		}
+	}
+	return nil
 }
 
 func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
@@ -115,7 +152,7 @@ func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				return result, err
 			}
 
-			if ctr.mp == nil && len(ctr.spillQueue) == 0 && !hashJoin.EmitUnmatchedProbe() {
+			if ctr.mp == nil && ctr.spillEngine == nil && !hashJoin.EmitUnmatchedProbe() && !hashJoin.IsMark() {
 				// TODO: early terminate the probe side for shuffle join
 				if !hashJoin.IsShuffle {
 					ctr.state = End
@@ -156,7 +193,7 @@ func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
 					continue
 				}
 
-				if ctr.mp == nil && !hashJoin.EmitUnmatchedProbe() {
+				if ctr.mp == nil && !ctr.probeEmitUnmatched && !ctr.probeMark {
 					continue
 				}
 
@@ -220,7 +257,12 @@ func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				return result, err
 			}
 
-			if ctr.rightRowsMatched == nil || (hashJoin.NumCPU > 1 && !hashJoin.IsMerger) {
+			// Only enter Finalize when syncBitmap ran to completion and set
+			// the iterator. It stays nil for non-merger workers, when there
+			// is no bitmap at all, or when the merger observed teardown (a
+			// worker sent a nil bitmap on Reset, or the context was
+			// canceled) — in all these cases there is nothing to finalize.
+			if ctr.rightMatchedIter == nil {
 				ctr.state = End
 			} else {
 				ctr.state = Finalize
@@ -238,13 +280,10 @@ func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				ctr.state = End
 
 				// For spilled join, clean up current bucket and move to next
-				if len(ctr.spillQueue) > 0 || ctr.probeBucketActive {
+				if (ctr.spillEngine != nil) && (ctr.spillEngine.HasMoreBuckets() || ctr.spillEngine.IsProbing()) {
 					ctr.rightRowsMatched = nil
 					ctr.cleanHashMap()
-
-					if len(ctr.spillQueue) > 0 || ctr.probeBucketActive {
-						ctr.state = Probe
-					}
+					ctr.state = Probe
 				}
 				continue
 			}
@@ -261,102 +300,73 @@ func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
 
 func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process) (err error) {
 	ctr := &hashJoin.ctr
-	start := time.Now()
-	defer analyzer.WaitStop(start)
-
-	ctr.mp, err = message.ReceiveJoinMap(hashJoin.JoinMapTag, hashJoin.IsShuffle, hashJoin.ShuffleIdx, proc.GetMessageBoard(), proc.Ctx)
+	ctr.mp, err = process.MeasureWait(analyzer, resource.WaitOther, func() (*message.JoinMap, error) {
+		return message.ReceiveJoinMap(hashJoin.JoinMapTag, hashJoin.IsShuffle, hashJoin.ShuffleIdx, proc.GetMessageBoard(), proc.Ctx)
+	})
 	if err != nil {
 		return err
 	}
 
+	// Pre-compute per-query flags for the probe loop.
+	ctr.probeEmitUnmatched = hashJoin.EmitUnmatchedProbe()
+	ctr.probeRightSemiAnti = !hashJoin.IsRightSemi() && !hashJoin.IsAnti()
+	ctr.probeRightJoin = hashJoin.IsRightJoin
+	ctr.probeSingle = hashJoin.IsSingle()
+	ctr.probeLeftSingle = hashJoin.IsLeftSingle()
+	ctr.probeLeftSemi = hashJoin.IsLeftSemi()
+	ctr.probeLeftAnti = hashJoin.IsLeftAnti()
+	ctr.probeMark = hashJoin.IsMark()
+	ctr.buildHasNullKey = false
+	ctr.globalBuildRowCnt = 0
+
 	if ctr.mp != nil {
 		ctr.maxAllocSize = max(ctr.maxAllocSize, ctr.mp.Size())
+		ctr.buildHasNullKey = ctr.mp.HasNullKey()
+		ctr.globalBuildRowCnt = ctr.mp.GetRowCount()
 
 		// Handle spilled build side
 		if ctr.mp.IsSpilled() {
-			spilledBuildFds := ctr.mp.TakeSpillBuildFds()
-
-			// Register build fds in spillQueue immediately so cleanupSpillFiles
-			// can close them even if we return early (e.g. context cancelled).
-			// Generate unique baseNames for sub-bucket naming during re-spill.
-			uid, err := uuid.NewV7()
-			if err != nil {
+			engine := spillutil.NewSpillEngine(spillutil.SpillEngineConfig{
+				BuildKeyExprs:           hashJoin.EqConds[1],
+				SpillThreshold:          ctr.spillThreshold,
+				NeedsProbeForEmptyBuild: hashJoin.EmitUnmatchedProbe() || hashJoin.IsMark(),
+				NeedsBuildForEmptyProbe: hashJoin.EmitUnmatchedBuild(),
+				HashOnPK:                hashJoin.HashOnPK,
+				NeedAllocateSels:        !hashJoin.HashOnPK,
+				NeedBatches:             hashJoin.NeedBuildBatches(),
+			})
+			engine.InitFromSpilledMap(ctr.mp.TakeSpillBuildFds())
+			if err := engine.ScatterProbeTable(proc,
+				func() (*batch.Batch, error) {
+					input, err := vm.ChildrenCall(hashJoin.GetChildren(0), proc, analyzer)
+					return input.Batch, err
+				},
+				analyzer,
+				func(bat *batch.Batch) ([]*vector.Vector, error) {
+					if err := ctr.evalJoinCondition(bat, proc); err != nil {
+						return nil, err
+					}
+					return ctr.eqCondVecs, nil
+				},
+			); err != nil {
+				ctr.mp.Free()
+				ctr.mp = nil
+				engine.Cleanup(proc)
 				return err
 			}
-			uidStr := uid.String()
-			ctr.spillQueue = make([]spillBucket, len(spilledBuildFds))
-			for i, fd := range spilledBuildFds {
-				ctr.spillQueue[i] = spillBucket{
-					buildFd:  fd,
-					baseName: fmt.Sprintf("%s_%d", uidStr, i),
-					depth:    1,
-				}
-			}
-
-			// Create writers for probe side (files created lazily on first write).
-			// Disable writers for empty-build buckets so scatter discards those
-			// probe rows immediately, matching the re-spill validBuckets pattern.
-			spillWriters, err := createRootProbeSpillBucketFiles()
-			if err != nil {
-				return err
-			}
-			needsProbeForEmpty := hashJoin.EmitUnmatchedProbe()
-			if !needsProbeForEmpty {
-				for i := range spilledBuildFds {
-					if spilledBuildFds[i] == nil {
-						spillWriters[i].name = ""
-					}
-				}
-			}
-			spillBuffers := make([]*batch.Batch, spillNumBuckets)
-
-			defer func() {
-				for i := range spillWriters {
-					spillWriters[i].close()
-				}
-				for _, buf := range spillBuffers {
-					if buf != nil {
-						buf.Clean(proc.Mp())
-					}
-				}
-			}()
-
-			// Spill each probe batch as it arrives
-			for {
-				input, err := vm.ChildrenCall(hashJoin.GetChildren(0), proc, analyzer)
-				if err != nil {
-					return err
-				}
-				if input.Batch == nil {
-					break
-				}
-				if !input.Batch.IsEmpty() {
-					if err := ctr.appendProbeBatchToSpillFiles(proc, input.Batch, spillWriters, spillBuffers, analyzer, 0); err != nil {
-						return err
-					}
-				}
-			}
-
-			// Flush remaining buffered data
-			for i, buf := range spillBuffers {
-				if _, err := ctr.flushBucketBuffer(proc, buf, &spillWriters[i], analyzer); err != nil {
-					return err
-				}
-			}
-
-			// Transfer probe fd ownership into spillQueue.
-			// handOffFd seeks fd to 0; returns nil if probe bucket was empty.
-			for i := range ctr.spillQueue {
-				ctr.spillQueue[i].probeFd = spillWriters[i].handOffFd()
-			}
-
+			ctr.mp.Free()
+			ctr.spillEngine = engine
 			ctr.mp = nil
-			return err
+			return nil
 		}
 	}
 
+	if ctr.mp == nil {
+		return
+	}
 	ctr.rightBats = ctr.mp.GetBatches()
 	ctr.rightRowCnt = ctr.mp.GetRowCount()
+	ctr.probeHashOnPK = hashJoin.HashOnPK || ctr.mp.HashOnUnique()
 
 	if hashJoin.EmitUnmatchedBuild() {
 		if ctr.rightRowCnt > 0 {
@@ -369,15 +379,66 @@ func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process
 }
 
 func (hashJoin *HashJoin) getInputBatch(proc *process.Process, analyzer process.Analyzer) (vm.CallResult, error) {
-	// For unspilled join, simply call children.
-	// In spill mode, spillQueue can become empty while we are still reading the
-	// currently loaded bucket via probeBucketReader.
-	if len(hashJoin.ctr.spillQueue) == 0 && !hashJoin.ctr.probeBucketActive {
+	if hashJoin.ctr.spillEngine == nil {
 		return vm.ChildrenCall(hashJoin.GetChildren(0), proc, analyzer)
 	}
-
-	// For spilled join, load bucket and return probe batches
 	return hashJoin.getSpilledInputBatch(proc, analyzer)
+}
+
+func (hashJoin *HashJoin) getSpilledInputBatch(proc *process.Process, analyzer process.Analyzer) (vm.CallResult, error) {
+	var result vm.CallResult
+	ctr := &hashJoin.ctr
+	engine := ctr.spillEngine
+
+	for {
+		// Read next probe batch from current bucket.
+		if ctr.probeBucketActive {
+			bat, err := engine.NextProbeBatch(proc)
+			if err != nil {
+				return result, err
+			}
+			if bat != nil {
+				result.Batch = bat
+				return result, nil
+			}
+			// EOF on probe file.
+			engine.FinishBucket()
+			ctr.probeBucketActive = false
+			if ctr.rightRowsMatched != nil {
+				return result, nil // trigger Finalize for unmatched right rows
+			}
+			ctr.cleanHashMap()
+		}
+
+		// Load next bucket via engine convenience method.
+		if ctr.mp == nil {
+			ok, err := engine.AdvanceToNextBucket(proc, analyzer,
+				func(jm *message.JoinMap, res spillutil.BucketResult) {
+					if res == spillutil.BucketReady {
+						ctr.mp = jm
+						ctr.rightBats = jm.GetBatches()
+						ctr.rightRowCnt = jm.GetRowCount()
+						ctr.probeHashOnPK = hashJoin.HashOnPK || ctr.mp.HashOnUnique()
+						if hashJoin.EmitUnmatchedBuild() && ctr.rightRowCnt > 0 {
+							ctr.rightRowsMatched = &bitmap.Bitmap{}
+							ctr.rightRowsMatched.InitWithSize(ctr.rightRowCnt)
+							ctr.rightMatchedIter = nil
+						}
+					}
+				})
+			if err != nil {
+				return result, err
+			}
+			if !ok {
+				return result, nil
+			}
+			ctr.itr = nil
+			ctr.probeState = psNextBatch
+			ctr.lastIdx = 0
+			ctr.vsIdx = 0
+			ctr.probeBucketActive = true
+		}
+	}
 }
 
 func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *vm.CallResult) error {
@@ -428,8 +489,30 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 			ctr.lastIdx++
 			ctr.vsIdx++
 
+			if ctr.probeMark {
+				markValue := z != 0 && v != 0
+				markNull := !markValue && (z == 0 || ctr.buildHasNullKey)
+				if err = ctr.appendOneMark(hashJoin, proc, row, markValue, markNull); err != nil {
+					return err
+				}
+				resRowCnt++
+
+				if ctr.vsIdx < len(ctr.vs) {
+					ctr.probeState = psBatchRow
+				} else {
+					ctr.probeState = psNextBatch
+				}
+
+				if resRowCnt >= colexec.DefaultBatchSize {
+					ctr.resBat.AddRowCount(resRowCnt)
+					result.Batch = ctr.resBat
+					return nil
+				}
+				continue
+			}
+
 			if z == 0 || v == 0 {
-				if hashJoin.EmitUnmatchedProbe() {
+				if ctr.probeEmitUnmatched {
 					ctr.appendOneNotMatch(hashJoin, proc, row)
 					resRowCnt++
 				}
@@ -447,9 +530,9 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 				continue
 			}
 
-			if hashJoin.HashOnPK || ctr.mp.HashOnUnique() {
+			if ctr.probeHashOnPK {
 				if hashJoin.NonEqCond == nil {
-					if !hashJoin.IsRightSemi() && !hashJoin.IsAnti() {
+					if ctr.probeRightSemiAnti {
 						err = ctr.appendOneMatch(hashJoin, proc, row, idx1, idx2)
 						if err != nil {
 							return err
@@ -458,9 +541,9 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 						resRowCnt++
 					}
 
-					if hashJoin.IsRightJoin {
-						if hashJoin.IsSingle() && ctr.rightRowsMatched.Contains(uint64(idx)) {
-							return moerr.NewInternalError(proc.Ctx, "scalar subquery returns more than 1 row")
+					if ctr.probeRightJoin {
+						if ctr.probeSingle && ctr.rightRowsMatched.Contains(uint64(idx)) {
+							return moerr.NewErrSubqueryNo1Row(proc.Ctx)
 						}
 
 						ctr.rightRowsMatched.Add(uint64(idx))
@@ -472,7 +555,7 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 					}
 
 					if ok {
-						if !hashJoin.IsRightSemi() && !hashJoin.IsAnti() {
+						if ctr.probeRightSemiAnti {
 							err = ctr.appendOneMatch(hashJoin, proc, row, idx1, idx2)
 							if err != nil {
 								return err
@@ -481,14 +564,14 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 							resRowCnt++
 						}
 
-						if hashJoin.IsRightJoin {
-							if hashJoin.IsSingle() && ctr.rightRowsMatched.Contains(uint64(idx)) {
-								return moerr.NewInternalError(proc.Ctx, "scalar subquery returns more than 1 row")
+						if ctr.probeRightJoin {
+							if ctr.probeSingle && ctr.rightRowsMatched.Contains(uint64(idx)) {
+								return moerr.NewErrSubqueryNo1Row(proc.Ctx)
 							}
 
 							ctr.rightRowsMatched.Add(uint64(idx))
 						}
-					} else if hashJoin.EmitUnmatchedProbe() {
+					} else if ctr.probeEmitUnmatched {
 						err = ctr.appendOneNotMatch(hashJoin, proc, row)
 						if err != nil {
 							return err
@@ -501,15 +584,15 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 				ctr.leftRowMatched = false
 
 				if hashJoin.NonEqCond == nil {
-					if hashJoin.IsLeftSingle() {
+					if ctr.probeLeftSingle {
 						if len(ctr.sels) > 1 {
-							return moerr.NewInternalError(proc.Ctx, "scalar subquery returns more than 1 row")
+							return moerr.NewErrSubqueryNo1Row(proc.Ctx)
 						}
-					} else if hashJoin.IsLeftSemi() {
+					} else if ctr.probeLeftSemi {
 						ctr.appendOneNotMatch(hashJoin, proc, row)
 						resRowCnt++
 						ctr.sels = nil
-					} else if hashJoin.IsLeftAnti() {
+					} else if ctr.probeLeftAnti {
 						ctr.sels = nil
 					}
 				}
@@ -536,17 +619,17 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 			// remove processed sels
 			ctr.sels = ctr.sels[processCount:]
 			if hashJoin.NonEqCond == nil {
-				if hashJoin.IsRightJoin {
+				if ctr.probeRightJoin {
 					for _, sel := range sels {
-						if hashJoin.IsSingle() && ctr.rightRowsMatched.Contains(uint64(sel)) {
-							return moerr.NewInternalError(proc.Ctx, "scalar subquery returns more than 1 row")
+						if ctr.probeSingle && ctr.rightRowsMatched.Contains(uint64(sel)) {
+							return moerr.NewErrSubqueryNo1Row(proc.Ctx)
 						}
 
 						ctr.rightRowsMatched.Add(uint64(sel))
 					}
 				}
 
-				if !hashJoin.IsRightSemi() && !hashJoin.IsAnti() {
+				if ctr.probeRightSemiAnti {
 					for j, rp := range hashJoin.ResultCols {
 						if rp.Rel == 0 {
 							err = ctr.resBat.Vecs[j].UnionMulti(ctr.leftBat.Vecs[rp.Pos], row, processCount, proc.Mp())
@@ -577,26 +660,26 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 					}
 
 					if ok {
-						if hashJoin.IsRightJoin {
-							if hashJoin.IsSingle() && ctr.rightRowsMatched.Contains(uint64(sel)) {
-								return moerr.NewInternalError(proc.Ctx, "scalar subquery returns more than 1 row")
+						if ctr.probeRightJoin {
+							if ctr.probeSingle && ctr.rightRowsMatched.Contains(uint64(sel)) {
+								return moerr.NewErrSubqueryNo1Row(proc.Ctx)
 							}
 
 							ctr.rightRowsMatched.Add(uint64(sel))
 						} else {
-							if hashJoin.IsSingle() && ctr.leftRowMatched {
-								return moerr.NewInternalError(proc.Ctx, "scalar subquery returns more than 1 row")
+							if ctr.probeSingle && ctr.leftRowMatched {
+								return moerr.NewErrSubqueryNo1Row(proc.Ctx)
 							}
 						}
 
 						ctr.leftRowMatched = true
 
-						if !hashJoin.IsRightSemi() && !hashJoin.IsAnti() {
+						if ctr.probeRightSemiAnti {
 							ctr.appendOneMatch(hashJoin, proc, int64(row), idx1, idx2)
 							resRowCnt++
 						}
 
-						if hashJoin.IsLeftSemi() {
+						if ctr.probeLeftSemi {
 							ctr.sels = nil
 							break
 						}
@@ -604,7 +687,7 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 				}
 
 				if len(ctr.sels) == 0 &&
-					!ctr.leftRowMatched && hashJoin.EmitUnmatchedProbe() {
+					!ctr.leftRowMatched && ctr.probeEmitUnmatched {
 					ctr.appendOneNotMatch(hashJoin, proc, int64(row))
 					resRowCnt++
 				}
@@ -635,6 +718,13 @@ func (ctr *container) emptyProbe(hashJoin *HashJoin, proc *process.Process, resu
 			if err != nil {
 				return err
 			}
+		} else if hashJoin.IsMark() {
+			if rp.Rel != -1 {
+				return moerr.NewInternalErrorNoCtxf("hash mark join has unexpected result relation %d", rp.Rel)
+			}
+			if err := ctr.appendMarkForEmptyBuildBucket(ctr.resBat.Vecs[i], proc, rowCnt); err != nil {
+				return err
+			}
 		} else {
 			if err := vector.SetConstNull(ctr.resBat.Vecs[i], rowCnt, proc.Mp()); err != nil {
 				return err
@@ -645,6 +735,37 @@ func (ctr *container) emptyProbe(hashJoin *HashJoin, proc *process.Process, resu
 	result.Batch = ctr.resBat
 	ctr.lastIdx = 0
 	ctr.leftBat = nil
+	return nil
+}
+
+// appendMarkForEmptyBuildBucket evaluates a MARK join when the current spill
+// bucket has no build rows. A local empty bucket does not imply a globally
+// empty build side: global build emptiness and global build NULLs still decide
+// the SQL three-valued result.
+func (ctr *container) appendMarkForEmptyBuildBucket(marker *vector.Vector, proc *process.Process, rowCnt int) error {
+	if ctr.globalBuildRowCnt == 0 {
+		return vector.SetConstFixed(marker, false, rowCnt, proc.Mp())
+	}
+	if ctr.buildHasNullKey {
+		return vector.SetConstNull(marker, rowCnt, proc.Mp())
+	}
+
+	if err := ctr.evalJoinCondition(ctr.leftBat, proc); err != nil {
+		return err
+	}
+	if err := vector.AppendMultiFixed(marker, false, false, rowCnt, proc.Mp()); err != nil {
+		return err
+	}
+	for _, vec := range ctr.eqCondVecs {
+		if vec.IsConstNull() {
+			marker.GetNulls().AddRange(0, uint64(rowCnt))
+			return nil
+		}
+		if !vec.GetNulls().Any() {
+			continue
+		}
+		nulls.Or(marker.GetNulls(), vec.GetNulls(), marker.GetNulls())
+	}
 	return nil
 }
 
@@ -664,16 +785,24 @@ func (ctr *container) syncBitmap(hashJoin *HashJoin, proc *process.Process) erro
 
 			for cnt := 1; cnt < int(hashJoin.NumCPU); cnt++ {
 				v := colexec.ReceiveBitmapFromChannel(proc.Ctx, hashJoin.Channel)
-				if v != nil {
-					matchedCnt += v.Count()
-					ctr.rightRowsMatched.Or(v)
-				} else {
+				if v == nil {
+					// A worker was torn down before syncing (its Reset sends
+					// nil) or the context was canceled. The merge is aborted,
+					// but keep draining this generation's remaining messages
+					// so no stale bitmap is left behind in the shared
+					// channel, then bail out without initializing the
+					// iterator — Call routes to End and nothing is finalized.
+					for cnt++; cnt < int(hashJoin.NumCPU); cnt++ {
+						colexec.ReceiveBitmapFromChannel(proc.Ctx, hashJoin.Channel)
+					}
 					return nil
 				}
+				matchedCnt += v.Count()
+				ctr.rightRowsMatched.Or(v)
 			}
 
-			if hashJoin.IsSingle() && matchedCnt > ctr.rightRowsMatched.Count() {
-				return moerr.NewInternalError(proc.Ctx, "scalar subquery returns more than 1 row")
+			if ctr.probeSingle && matchedCnt > ctr.rightRowsMatched.Count() {
+				return moerr.NewErrSubqueryNo1Row(proc.Ctx)
 			}
 
 			close(hashJoin.Channel)
@@ -761,6 +890,30 @@ func (ctr *container) appendOneMatch(hashJoin *HashJoin, proc *process.Process, 
 	return nil
 }
 
+func (ctr *container) appendOneMark(
+	hashJoin *HashJoin,
+	proc *process.Process,
+	leftRow int64,
+	value bool,
+	isNull bool,
+) error {
+	for i, rp := range hashJoin.ResultCols {
+		switch rp.Rel {
+		case 0:
+			if err := ctr.resBat.Vecs[i].UnionOne(ctr.leftBat.Vecs[rp.Pos], leftRow, proc.Mp()); err != nil {
+				return err
+			}
+		case -1:
+			if err := vector.AppendFixed(ctr.resBat.Vecs[i], value, isNull, proc.Mp()); err != nil {
+				return err
+			}
+		default:
+			return moerr.NewInternalErrorNoCtxf("hash mark join has unexpected result relation %d", rp.Rel)
+		}
+	}
+	return nil
+}
+
 func (ctr *container) evalNonEqCondition(bat *batch.Batch, row int64, proc *process.Process, idx1, idx2 int64) (bool, error) {
 	err := colexec.SetJoinBatchValues(ctr.joinBats[0], bat, row, 1, ctr.cfs1)
 	if err != nil {
@@ -806,10 +959,13 @@ func (hashJoin *HashJoin) resetResultBat() {
 		ctr.resBat = batch.NewOffHeapWithSize(len(hashJoin.ResultCols))
 
 		for i, rp := range hashJoin.ResultCols {
-			if rp.Rel == 0 {
+			switch rp.Rel {
+			case 0:
 				ctr.resBat.Vecs[i] = vector.NewOffHeapVecWithType(hashJoin.LeftTypes[rp.Pos])
-			} else {
+			case 1:
 				ctr.resBat.Vecs[i] = vector.NewOffHeapVecWithType(hashJoin.RightTypes[rp.Pos])
+			case -1:
+				ctr.resBat.Vecs[i] = vector.NewOffHeapVecWithType(types.T_bool.ToType())
 			}
 		}
 	}

@@ -21,11 +21,17 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	hll "github.com/axiomhq/hyperloglog"
+	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/lockservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -35,6 +41,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/geo"
+	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 )
 
@@ -252,6 +259,38 @@ func initNormalizeL2ArrayTestCase() []tcTemp {
 				},
 				[]bool{true, false, false, false, false, false}),
 		},
+		{
+			// int8 input normalizes to a unit vector, which cannot be represented
+			// as int8 — the result must widen to vecf32 (not round back to int8).
+			info: "test normalize_l2 int8 array -> float32",
+			typ:  types.T_array_int8,
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_array_int8.ToType(),
+					[][]int8{{1, 2, 3, 4}, {-1, 2, 3, 4}},
+					[]bool{false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_array_float32.ToType(), false,
+				[][]float32{
+					{0.18257418, 0.36514837, 0.5477226, 0.73029673},
+					{-0.18257418, 0.36514837, 0.5477226, 0.73029673},
+				},
+				[]bool{false, false}),
+		},
+		{
+			info: "test normalize_l2 uint8 array -> float32",
+			typ:  types.T_array_uint8,
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_array_uint8.ToType(),
+					[][]uint8{{0, 1, 2, 3}, {10, 20, 30, 40}},
+					[]bool{false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_array_float32.ToType(), false,
+				[][]float32{
+					{0, 0.26726124, 0.5345225, 0.80178374},
+					{0.18257418, 0.36514837, 0.5477226, 0.73029673},
+				},
+				[]bool{false, false}),
+		},
 	}
 }
 
@@ -266,6 +305,10 @@ func TestNormalizeL2Array(t *testing.T) {
 			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, NormalizeL2Array[float32])
 		case types.T_array_float64:
 			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, NormalizeL2Array[float64])
+		case types.T_array_int8:
+			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, NormalizeL2Array[int8])
+		case types.T_array_uint8:
+			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, NormalizeL2Array[uint8])
 		}
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
@@ -3852,6 +3895,9 @@ func initHourTestCase() []tcTemp {
 	t1, _ := types.ParseTime("15:30:45", 6)
 	t2, _ := types.ParseTime("00:00:00", 6)
 	t3, _ := types.ParseTime("23:59:59", 6)
+	t4, _ := types.ParseTime("272:59:59", 6)
+	t5, _ := types.ParseTime("-272:59:59", 6)
+	t6 := types.TimeFromClock(false, types.MaxHourInTime, 59, 59, 0)
 
 	return []tcTemp{
 		{
@@ -3883,12 +3929,12 @@ func initHourTestCase() []tcTemp {
 			typ:  types.T_time,
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_time.ToType(),
-					[]types.Time{t1, t2, t3},
-					[]bool{false, false, false}),
+					[]types.Time{t1, t2, t3, t4, t5, t6},
+					[]bool{false, false, false, false, false, false}),
 			},
-			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
-				[]uint8{15, 0, 23},
-				[]bool{false, false, false}),
+			expect: NewFunctionTestResult(types.T_uint32.ToType(), false,
+				[]uint32{15, 0, 23, 272, 272, uint32(types.MaxHourInTime)},
+				[]bool{false, false, false, false, false, false}),
 		},
 	}
 }
@@ -4498,6 +4544,55 @@ func TestVecFromBase64(t *testing.T) {
 	fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, VecFromBase64[float64])
 	s, info = fcTC.Run()
 	require.True(t, s, fmt.Sprintf("vecf64 case failed: %s", info))
+}
+
+// TestVecFromBase64Narrow exercises VecFromBase64's narrow elemSize branches
+// (int8=1, bf16/f16=2) and its error paths via the function-UT harness.
+func TestVecFromBase64Narrow(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	mkInput := func(b64 string) []FunctionTestInput {
+		return []FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), []string{b64}, []bool{})}
+	}
+	runCase := func(in []FunctionTestInput, res FunctionTestResult, fn fEvalFn) (bool, string) {
+		fcTC := NewFunctionTestCase(proc, in, res, fn)
+		return fcTC.Run()
+	}
+
+	// int8 roundtrip (elemSize 1).
+	i8 := []int8{1, -2, 127, -128}
+	ok, info := runCase(mkInput(types.ArrayToBase64(i8)),
+		NewFunctionTestResult(types.T_array_int8.ToType(), false, [][]int8{i8}, []bool{}), VecFromBase64[int8])
+	require.Truef(t, ok, "vecint8 roundtrip: %s", info)
+
+	// uint8 roundtrip (elemSize 1). Regression: with the uint8 case missing from
+	// the decoder, elemSize was 0 and `n % elemSize` panicked (divide by zero).
+	u8 := []uint8{0, 255, 128, 1}
+	ok, info = runCase(mkInput(types.ArrayToBase64(u8)),
+		NewFunctionTestResult(types.T_array_uint8.ToType(), false, [][]uint8{u8}, []bool{}), VecFromBase64[uint8])
+	require.Truef(t, ok, "vecuint8 roundtrip: %s", info)
+
+	// bf16 roundtrip (elemSize 2).
+	bf := types.Float32ToBF16Slice([]float32{1.5, -2.25, 0, 8})
+	ok, info = runCase(mkInput(types.ArrayToBase64(bf)),
+		NewFunctionTestResult(types.T_array_bf16.ToType(), false, [][]types.BF16{bf}, []bool{}), VecFromBase64[types.BF16])
+	require.Truef(t, ok, "vecbf16 roundtrip: %s", info)
+
+	// f16 roundtrip.
+	f16 := types.Float32ToFloat16Slice([]float32{1.5, -2.25, 0, 8})
+	ok, info = runCase(mkInput(types.ArrayToBase64(f16)),
+		NewFunctionTestResult(types.T_array_float16.ToType(), false, [][]types.Float16{f16}, []bool{}), VecFromBase64[types.Float16])
+	require.Truef(t, ok, "vecf16 roundtrip: %s", info)
+
+	// invalid base64 -> error.
+	ok, info = runCase(mkInput("!!!not-base64!!!"),
+		NewFunctionTestResult(types.T_array_int8.ToType(), true, [][]int8{nil}, []bool{}), VecFromBase64[int8])
+	require.Truef(t, ok, "invalid base64 should error: %s", info)
+
+	// "AQID" decodes to 3 bytes, not a multiple of 2 (bf16 elemSize) -> error.
+	ok, info = runCase(mkInput("AQID"),
+		NewFunctionTestResult(types.T_array_bf16.ToType(), true, [][]types.BF16{nil}, []bool{}), VecFromBase64[types.BF16])
+	require.Truef(t, ok, "odd length should error: %s", info)
 }
 
 func initValidatePasswordStrengthTestCase() []tcTemp {
@@ -6987,6 +7082,21 @@ func TestPi(t *testing.T) {
 	}
 }
 
+func TestRowCount(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	// ROW_COUNT() reads the affected rows recorded on the process, including
+	// the -1 sentinel used after result-set statements.
+	for _, want := range []int64{0, 1, 2, 100, -1} {
+		proc.SetAffectedRows(want)
+		fcTC := NewFunctionTestCase(proc,
+			[]FunctionTestInput{NewFunctionTestInput(types.T_int8.ToType(), []int8{0}, []bool{false})},
+			NewFunctionTestResult(types.T_int64.ToType(), false, []int64{want}, []bool{false}),
+			RowCount)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("row_count want %d, err info is '%s'", want, info))
+	}
+}
+
 func initUTCTimestampTestCase() []tcTemp {
 	return []tcTemp{
 		{
@@ -7144,6 +7254,948 @@ func TestSleep(t *testing.T) {
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func resetUserLevelLocksForTest(t *testing.T) {
+	t.Helper()
+	userLevelLocks.Lock()
+	userLevelLocks.counts = make(map[userLevelLockKey]uint64)
+	userLevelLocks.byOwner = make(map[string]map[string]struct{})
+	userLevelLocks.Unlock()
+}
+
+func newUserLevelLockTestProcess(t *testing.T, ls lockservice.LockService, account string) *process.Process {
+	proc := testutil.NewProcess(t)
+	proc.Base.LockService = ls
+	proc.GetSessionInfo().SessionId = uuid.New()
+	proc.GetSessionInfo().ConnectionID = uint64(time.Now().Nanosecond())
+	proc.GetSessionInfo().Account = account
+	return proc
+}
+
+type userLevelLockTestState struct {
+	sync.Mutex
+	locks map[string]string
+}
+
+type userLevelLockTestService struct {
+	id               string
+	state            *userLevelLockTestState
+	unlockErr        error
+	unlockErrByTxnID map[string]error
+}
+
+type userLevelLockNotSupportedService struct {
+	lockservice.LockService
+}
+
+func (s *userLevelLockNotSupportedService) GetLockHolder(context.Context, uint64, []byte, lockpb.LockOptions) (lockpb.WaitTxn, bool, error) {
+	return lockpb.WaitTxn{}, false, moerr.NewNotSupportedNoCtx("GetLockHolder")
+}
+
+func (s *userLevelLockTestService) GetServiceID() string {
+	return s.id
+}
+
+func (s *userLevelLockTestService) GetConfig() lockservice.Config {
+	return lockservice.Config{ServiceID: s.id}
+}
+
+func (s *userLevelLockTestService) Lock(ctx context.Context, tableID uint64, rows [][]byte, txnID []byte, options lockpb.LockOptions) (lockpb.Result, error) {
+	key := string(rows[0])
+	owner := string(txnID)
+	for {
+		s.state.Lock()
+		holder := s.state.locks[key]
+		if holder == "" || holder == owner {
+			s.state.locks[key] = owner
+			s.state.Unlock()
+			return lockpb.Result{}, nil
+		}
+		s.state.Unlock()
+
+		if options.Policy == lockpb.WaitPolicy_FastFail {
+			return lockpb.Result{}, lockservice.ErrLockConflict
+		}
+
+		timer := time.NewTimer(5 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return lockpb.Result{}, ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
+func (s *userLevelLockTestService) Unlock(ctx context.Context, txnID []byte, commitTS timestamp.Timestamp, mutations ...lockpb.ExtraMutation) error {
+	if s.unlockErr != nil {
+		return s.unlockErr
+	}
+	if s.unlockErrByTxnID != nil {
+		if err := s.unlockErrByTxnID[string(txnID)]; err != nil {
+			return err
+		}
+	}
+	owner := string(txnID)
+	s.state.Lock()
+	defer s.state.Unlock()
+	for key, holder := range s.state.locks {
+		if holder == owner {
+			delete(s.state.locks, key)
+		}
+	}
+	return nil
+}
+
+func (s *userLevelLockTestService) IsOrphanTxn(context.Context, []byte) (bool, error) {
+	return false, nil
+}
+
+func (s *userLevelLockTestService) Close() error {
+	return nil
+}
+
+func (s *userLevelLockTestService) GetWaitingList(ctx context.Context, txnID []byte) (bool, []lockpb.WaitTxn, error) {
+	return false, nil, nil
+}
+
+func (s *userLevelLockTestService) GetLockHolder(ctx context.Context, tableID uint64, row []byte, options lockpb.LockOptions) (lockpb.WaitTxn, bool, error) {
+	s.state.Lock()
+	defer s.state.Unlock()
+	holder := s.state.locks[string(row)]
+	if holder == "" {
+		return lockpb.WaitTxn{}, false, nil
+	}
+	return lockpb.WaitTxn{TxnID: []byte(holder)}, true, nil
+}
+
+func (s *userLevelLockTestService) ForceRefreshLockTableBinds(targets []uint64, matcher func(bind lockpb.LockTable) bool) {
+}
+
+func (s *userLevelLockTestService) GetLockTableBind(group uint32, tableID uint64) (lockpb.LockTable, error) {
+	return lockpb.LockTable{}, nil
+}
+
+func (s *userLevelLockTestService) GetLatestLockTableBind(bind lockpb.LockTable) (lockpb.LockTable, error) {
+	return bind, nil
+}
+
+func (s *userLevelLockTestService) IterLocks(func(tableID uint64, keys [][]byte, lock lockservice.Lock) bool) {
+}
+
+func (s *userLevelLockTestService) CloseRemoteLockTable(group uint32, tableID, version uint64) (bool, error) {
+	return false, nil
+}
+
+func runUserLevelLockTest(t *testing.T, fn func([]lockservice.LockService)) {
+	t.Helper()
+	resetUserLevelLocksForTest(t)
+	state := &userLevelLockTestState{locks: make(map[string]string)}
+	fn([]lockservice.LockService{
+		&userLevelLockTestService{id: "user-level-lock-1", state: state},
+		&userLevelLockTestService{id: "user-level-lock-2", state: state},
+	})
+	resetUserLevelLocksForTest(t)
+}
+
+func TestUserLevelLockConnectionIDFromProbeTxnID(t *testing.T) {
+	txnID := userLevelLockProbeTxnID("owner-1", 1001, "probe_lock", "is_free")
+	connID, ok := userLevelLockConnectionIDFromTxnID(txnID)
+	require.False(t, ok)
+	require.Equal(t, uint64(0), connID)
+}
+
+func TestUserLevelLockFunctions(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc := newUserLevelLockTestProcess(t, services[0], "acc")
+
+		cases := []struct {
+			name   string
+			inputs []FunctionTestInput
+			expect FunctionTestResult
+			fn     fEvalFn
+		}{
+			{
+				name: "get lock succeeds",
+				inputs: []FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{"prisma_migrate_lock"}, []bool{false}),
+					NewFunctionTestInput(types.T_float64.ToType(), []float64{0}, []bool{false}),
+				},
+				expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{1}, []bool{false}),
+				fn:     GetLock,
+			},
+			{
+				name: "held lock is not free",
+				inputs: []FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{"prisma_migrate_lock"}, []bool{false}),
+				},
+				expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{false}),
+				fn:     IsFreeLock,
+			},
+			{
+				name: "used lock returns holder connection id",
+				inputs: []FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{"prisma_migrate_lock"}, []bool{false}),
+				},
+				expect: NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{proc.GetSessionInfo().ConnectionID}, []bool{false}),
+				fn:     IsUsedLock,
+			},
+			{
+				name: "release held lock",
+				inputs: []FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{"prisma_migrate_lock"}, []bool{false}),
+				},
+				expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{1}, []bool{false}),
+				fn:     ReleaseLock,
+			},
+			{
+				name: "released lock is free",
+				inputs: []FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{"prisma_migrate_lock"}, []bool{false}),
+				},
+				expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{1}, []bool{false}),
+				fn:     IsFreeLock,
+			},
+			{
+				name: "get lock returns null for null name",
+				inputs: []FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{""}, []bool{true}),
+					NewFunctionTestInput(types.T_float64.ToType(), []float64{0}, []bool{false}),
+				},
+				expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{true}),
+				fn:     GetLock,
+			},
+		}
+
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, tc.fn)
+				s, info := fcTC.Run()
+				require.True(t, s, info)
+			})
+		}
+	})
+}
+
+func TestUserLevelLockFunctionNullInputs(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc := newUserLevelLockTestProcess(t, services[0], "acc")
+
+		cases := []struct {
+			name   string
+			inputs []FunctionTestInput
+			expect FunctionTestResult
+			fn     fEvalFn
+		}{
+			{
+				name: "release lock returns null for null name",
+				inputs: []FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{""}, []bool{true}),
+				},
+				expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{true}),
+				fn:     ReleaseLock,
+			},
+			{
+				name: "is free lock returns null for null name",
+				inputs: []FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{""}, []bool{true}),
+				},
+				expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{true}),
+				fn:     IsFreeLock,
+			},
+			{
+				name: "is used lock returns null for null name",
+				inputs: []FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{""}, []bool{true}),
+				},
+				expect: NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{0}, []bool{true}),
+				fn:     IsUsedLock,
+			},
+		}
+
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, tc.fn)
+				s, info := fcTC.Run()
+				require.True(t, s, info)
+			})
+		}
+	})
+}
+
+func TestUserLevelLockContention(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc1 := newUserLevelLockTestProcess(t, services[0], "acc")
+		proc2 := newUserLevelLockTestProcess(t, services[1], "acc")
+
+		v, err := getUserLevelLock("busy_lock", 0, proc1)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+		v, err = getUserLevelLock("busy_lock", 0, proc2)
+		require.NoError(t, err)
+		require.Equal(t, int64(0), v)
+		v, isNull, err := releaseUserLevelLock("busy_lock", proc2)
+		require.NoError(t, err)
+		require.False(t, isNull)
+		require.Equal(t, int64(0), v)
+		v, isNull, err = releaseUserLevelLock("busy_lock", proc1)
+		require.NoError(t, err)
+		require.False(t, isNull)
+		require.Equal(t, int64(1), v)
+		v, err = getUserLevelLock("busy_lock", 0, proc2)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+	})
+}
+
+func TestUserLevelLockWaitThenAcquire(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc1 := newUserLevelLockTestProcess(t, services[0], "acc")
+		proc2 := newUserLevelLockTestProcess(t, services[1], "acc")
+		v, err := getUserLevelLock("wait_lock", 0, proc1)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+
+		var wg sync.WaitGroup
+		wg.Add(1)
+		resultC := make(chan int64, 1)
+		errC := make(chan error, 1)
+		go func() {
+			defer wg.Done()
+			v, err := getUserLevelLock("wait_lock", -1, proc2)
+			resultC <- v
+			errC <- err
+		}()
+
+		time.Sleep(100 * time.Millisecond)
+		v, isNull, err := releaseUserLevelLock("wait_lock", proc1)
+		require.NoError(t, err)
+		require.False(t, isNull)
+		require.Equal(t, int64(1), v)
+		wg.Wait()
+		require.NoError(t, <-errC)
+		require.Equal(t, int64(1), <-resultC)
+	})
+}
+
+func TestUserLevelLockTimeoutAndCancellation(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc1 := newUserLevelLockTestProcess(t, services[0], "acc")
+		proc2 := newUserLevelLockTestProcess(t, services[1], "acc")
+		v, err := getUserLevelLock("timeout_lock", 0, proc1)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+
+		v, err = getUserLevelLock("timeout_lock", 0.05, proc2)
+		require.NoError(t, err)
+		require.Equal(t, int64(0), v)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		proc2.BuildPipelineContext(ctx)
+		done := make(chan error, 1)
+		go func() {
+			_, err := getUserLevelLock("timeout_lock", -1, proc2)
+			done <- err
+		}()
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+		require.ErrorIs(t, <-done, context.Canceled)
+	})
+}
+
+func TestUserLevelLockReentrantRefCount(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc1 := newUserLevelLockTestProcess(t, services[0], "acc")
+		proc2 := newUserLevelLockTestProcess(t, services[1], "acc")
+		v, err := getUserLevelLock("reentrant_lock", 0, proc1)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+		v, err = getUserLevelLock("reentrant_lock", 0, proc1)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+
+		v, isNull, err := releaseUserLevelLock("reentrant_lock", proc1)
+		require.NoError(t, err)
+		require.False(t, isNull)
+		require.Equal(t, int64(1), v)
+		v, err = getUserLevelLock("reentrant_lock", 0, proc2)
+		require.NoError(t, err)
+		require.Equal(t, int64(0), v)
+
+		v, isNull, err = releaseUserLevelLock("reentrant_lock", proc1)
+		require.NoError(t, err)
+		require.False(t, isNull)
+		require.Equal(t, int64(1), v)
+		v, err = getUserLevelLock("reentrant_lock", 0, proc2)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+	})
+}
+
+func TestReleaseUserLevelLocksCleanup(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc1 := newUserLevelLockTestProcess(t, services[0], "acc")
+		proc2 := newUserLevelLockTestProcess(t, services[1], "acc")
+		v, err := getUserLevelLock("cleanup_lock", 0, proc1)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+
+		ReleaseUserLevelLocks(proc1)
+
+		v, err = getUserLevelLock("cleanup_lock", 0, proc2)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+	})
+}
+
+func TestUserLevelLockConcurrentSessionOperations(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		const (
+			workers    = 8
+			iterations = 40
+		)
+
+		lockName := "concurrent_lock"
+		procs := make([]*process.Process, 0, workers)
+		for i := 0; i < workers; i++ {
+			procs = append(procs, newUserLevelLockTestProcess(t, services[i%len(services)], "acc"))
+		}
+
+		start := make(chan struct{})
+		errCh := make(chan error, workers)
+		var wg sync.WaitGroup
+
+		for idx, proc := range procs {
+			wg.Add(1)
+			go func(worker int, proc *process.Process) {
+				defer wg.Done()
+				<-start
+
+				for iter := 0; iter < iterations; iter++ {
+					value, err := getUserLevelLock(lockName, 0, proc)
+					if err != nil {
+						errCh <- fmt.Errorf("worker %d iter %d get lock: %w", worker, iter, err)
+						return
+					}
+					if value == 1 {
+						if iter%3 == 0 {
+							reentrant, err := getUserLevelLock(lockName, 0, proc)
+							if err != nil {
+								errCh <- fmt.Errorf("worker %d iter %d reentrant get: %w", worker, iter, err)
+								return
+							}
+							if reentrant != 1 {
+								errCh <- fmt.Errorf("worker %d iter %d expected reentrant get to succeed, got %d", worker, iter, reentrant)
+								return
+							}
+						}
+
+						if iter%2 == 0 {
+							released, isNull, err := releaseUserLevelLock(lockName, proc)
+							if err != nil {
+								errCh <- fmt.Errorf("worker %d iter %d release lock: %w", worker, iter, err)
+								return
+							}
+							if isNull || released != 1 {
+								errCh <- fmt.Errorf("worker %d iter %d unexpected release result: released=%d isNull=%v", worker, iter, released, isNull)
+								return
+							}
+						} else {
+							released, err := releaseAllUserLevelLocks(proc)
+							if err != nil {
+								errCh <- fmt.Errorf("worker %d iter %d release_all: %w", worker, iter, err)
+								return
+							}
+							if released < 1 {
+								errCh <- fmt.Errorf("worker %d iter %d expected release_all to release at least one lock, got %d", worker, iter, released)
+								return
+							}
+						}
+					} else {
+						_, _, err := isUserLevelLockUsed(lockName, proc)
+						if err != nil {
+							errCh <- fmt.Errorf("worker %d iter %d is_used_lock: %w", worker, iter, err)
+							return
+						}
+						if iter%5 == 0 {
+							released, err := releaseAllUserLevelLocks(proc)
+							if err != nil {
+								errCh <- fmt.Errorf("worker %d iter %d release_all: %w", worker, iter, err)
+								return
+							}
+							if released != 0 {
+								errCh <- fmt.Errorf("worker %d iter %d expected release_all to release 0 locks, got %d", worker, iter, released)
+								return
+							}
+						}
+					}
+				}
+			}(idx, proc)
+		}
+
+		close(start)
+		wg.Wait()
+		close(errCh)
+		for err := range errCh {
+			require.NoError(t, err)
+		}
+
+		for _, proc := range procs {
+			released, err := releaseAllUserLevelLocks(proc)
+			require.NoError(t, err)
+			require.Equal(t, int64(0), released)
+		}
+
+		finalProc := newUserLevelLockTestProcess(t, services[0], "acc")
+		value, err := getUserLevelLock(lockName, 0, finalProc)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), value)
+		released, isNull, err := releaseUserLevelLock(lockName, finalProc)
+		require.NoError(t, err)
+		require.False(t, isNull)
+		require.Equal(t, int64(1), released)
+	})
+}
+
+func TestIsUsedLockReturnsHolderConnectionID(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc1 := newUserLevelLockTestProcess(t, services[0], "acc")
+		proc2 := newUserLevelLockTestProcess(t, services[1], "acc")
+		proc1.GetSessionInfo().ConnectionID = 1001
+		proc2.GetSessionInfo().ConnectionID = 1002
+
+		v, err := getUserLevelLock("holder_lock", 0, proc1)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+
+		holder, isNull, err := isUserLevelLockUsed("holder_lock", proc2)
+		require.NoError(t, err)
+		require.False(t, isNull)
+		require.Equal(t, uint64(1001), holder)
+
+		holder, isNull, err = isUserLevelLockUsed("missing_holder_lock", proc2)
+		require.NoError(t, err)
+		require.True(t, isNull)
+		require.Equal(t, uint64(0), holder)
+	})
+}
+
+func TestIsUsedLockReturnsNullForLegacyHolderTxnID(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc := newUserLevelLockTestProcess(t, services[0], "acc")
+		state := services[0].(*userLevelLockTestService).state
+		state.Lock()
+		state.locks[string(userLevelLockRow(proc, "legacy_holder"))] = string(userLevelLockTxnIDOld(userLevelLockOwner(proc), "legacy_holder"))
+		state.Unlock()
+
+		holder, isNull, err := isUserLevelLockUsed("legacy_holder", proc)
+		require.NoError(t, err)
+		require.True(t, isNull)
+		require.Equal(t, uint64(0), holder)
+	})
+}
+
+func TestIsUsedLockReturnsNullWhenHolderLookupNotSupported(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc := newUserLevelLockTestProcess(t, &userLevelLockNotSupportedService{LockService: services[0]}, "acc")
+
+		holder, isNull, err := isUserLevelLockUsed("holder_lookup_not_supported", proc)
+		require.NoError(t, err)
+		require.True(t, isNull)
+		require.Equal(t, uint64(0), holder)
+	})
+}
+
+func TestIsUsedLockReturnsZeroConnectionID(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc := newUserLevelLockTestProcess(t, services[0], "acc")
+		state := services[0].(*userLevelLockTestService).state
+		state.Lock()
+		state.locks[string(userLevelLockRow(proc, "zero_conn_holder"))] = string(userLevelLockTxnID(userLevelLockOwner(proc), 0, "zero_conn_holder"))
+		state.Unlock()
+
+		holder, isNull, err := isUserLevelLockUsed("zero_conn_holder", proc)
+		require.NoError(t, err)
+		require.False(t, isNull)
+		require.Equal(t, uint64(0), holder)
+	})
+}
+
+func TestIsUsedLockReturnsNullForMalformedHolderTxnID(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc := newUserLevelLockTestProcess(t, services[0], "acc")
+		state := services[0].(*userLevelLockTestService).state
+		state.Lock()
+		state.locks[string(userLevelLockRow(proc, "bad_holder"))] = "not-a-user-level-lock-txn"
+		state.Unlock()
+
+		holder, isNull, err := isUserLevelLockUsed("bad_holder", proc)
+		require.NoError(t, err)
+		require.True(t, isNull)
+		require.Equal(t, uint64(0), holder)
+	})
+}
+
+func TestReleaseAllUserLevelLocksReturnsReleasedCount(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc1 := newUserLevelLockTestProcess(t, services[0], "acc")
+		proc2 := newUserLevelLockTestProcess(t, services[1], "acc")
+
+		v, err := getUserLevelLock("release_all_a", 0, proc1)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+		v, err = getUserLevelLock("release_all_a", 0, proc1)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+		v, err = getUserLevelLock("release_all_b", 0, proc1)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+
+		released, err := releaseAllUserLevelLocks(proc1)
+		require.NoError(t, err)
+		require.Equal(t, int64(3), released)
+		released, err = releaseAllUserLevelLocks(proc1)
+		require.NoError(t, err)
+		require.Equal(t, int64(0), released)
+
+		v, err = getUserLevelLock("release_all_a", 0, proc2)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+		v, isNull, err := releaseUserLevelLock("release_all_a", proc2)
+		require.NoError(t, err)
+		require.False(t, isNull)
+		require.Equal(t, int64(1), v)
+
+		fcTC := NewFunctionTestCase(
+			proc1,
+			nil,
+			NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{false}),
+			ReleaseAllLocks,
+		)
+		s, info := fcTC.Run()
+		require.True(t, s, info)
+	})
+}
+
+func TestReleaseAllUserLevelLocksReturnsCountWhenUnlockFails(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc1 := newUserLevelLockTestProcess(t, services[0], "acc")
+		proc2 := newUserLevelLockTestProcess(t, services[1], "acc")
+		services[0].(*userLevelLockTestService).unlockErr = moerr.NewInternalErrorNoCtx("unlock failed")
+
+		v, err := getUserLevelLock("release_all_fail_a", 0, proc1)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+		v, err = getUserLevelLock("release_all_fail_a", 0, proc1)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+		v, err = getUserLevelLock("release_all_fail_b", 0, proc1)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+
+		released, err := releaseAllUserLevelLocks(proc1)
+		require.Error(t, err)
+		require.Equal(t, int64(0), released)
+
+		released, err = releaseAllUserLevelLocks(proc1)
+		require.Error(t, err)
+		require.Equal(t, int64(0), released)
+
+		services[0].(*userLevelLockTestService).unlockErr = nil
+		released, err = releaseAllUserLevelLocks(proc1)
+		require.NoError(t, err)
+		require.Equal(t, int64(3), released)
+
+		v, err = getUserLevelLock("release_all_fail_a", 0, proc2)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+	})
+}
+
+func TestReleaseAllUserLevelLocksStopsAtFirstUnlockFailure(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc1 := newUserLevelLockTestProcess(t, services[0], "acc")
+		proc2 := newUserLevelLockTestProcess(t, services[1], "acc")
+		service := services[0].(*userLevelLockTestService)
+		owner := userLevelLockOwner(proc1)
+		connID := userLevelLockConnectionID(proc1)
+
+		v, err := getUserLevelLock("release_all_partial_a", 0, proc1)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+		v, err = getUserLevelLock("release_all_partial_a", 0, proc1)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+		v, err = getUserLevelLock("release_all_partial_b", 0, proc1)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+
+		service.unlockErrByTxnID = map[string]error{
+			string(userLevelLockTxnID(owner, connID, "release_all_partial_b")): moerr.NewInternalErrorNoCtx("unlock failed"),
+		}
+
+		released, err := releaseAllUserLevelLocks(proc1)
+		require.Error(t, err)
+		require.Equal(t, int64(2), released)
+
+		v, err = getUserLevelLock("release_all_partial_a", 0, proc2)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+
+		v, err = getUserLevelLock("release_all_partial_b", 0, proc2)
+		require.NoError(t, err)
+		require.Equal(t, int64(0), v)
+
+		service.unlockErrByTxnID = nil
+		released, err = releaseAllUserLevelLocks(proc1)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), released)
+
+		v, err = getUserLevelLock("release_all_partial_b", 0, proc2)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+	})
+}
+
+func TestReleaseLockLegacyTxnIDCompatible(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc1 := newUserLevelLockTestProcess(t, services[0], "acc")
+		proc2 := newUserLevelLockTestProcess(t, services[1], "acc")
+		owner := userLevelLockOwner(proc1)
+		state := services[0].(*userLevelLockTestService).state
+		name := "legacy_release"
+
+		state.Lock()
+		state.locks[string(userLevelLockRow(proc1, name))] = string(userLevelLockTxnIDOld(owner, name))
+		state.Unlock()
+		trackUserLevelLock(owner, name)
+
+		v, isNull, err := releaseUserLevelLock(name, proc1)
+		require.NoError(t, err)
+		require.False(t, isNull)
+		require.Equal(t, int64(1), v)
+
+		v, err = getUserLevelLock(name, 0, proc2)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+	})
+}
+
+func TestReleaseAllUserLevelLocksLegacyTxnIDCompatible(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc1 := newUserLevelLockTestProcess(t, services[0], "acc")
+		proc2 := newUserLevelLockTestProcess(t, services[1], "acc")
+		owner := userLevelLockOwner(proc1)
+		state := services[0].(*userLevelLockTestService).state
+
+		state.Lock()
+		state.locks[string(userLevelLockRow(proc1, "legacy_all_a"))] = string(userLevelLockTxnIDOld(owner, "legacy_all_a"))
+		state.locks[string(userLevelLockRow(proc1, "legacy_all_b"))] = string(userLevelLockTxnIDOld(owner, "legacy_all_b"))
+		state.Unlock()
+		trackUserLevelLock(owner, "legacy_all_a")
+		trackUserLevelLock(owner, "legacy_all_a")
+		trackUserLevelLock(owner, "legacy_all_b")
+
+		released, err := releaseAllUserLevelLocks(proc1)
+		require.NoError(t, err)
+		require.Equal(t, int64(3), released)
+
+		v, err := getUserLevelLock("legacy_all_a", 0, proc2)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+
+		v, err = getUserLevelLock("legacy_all_b", 0, proc2)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+	})
+}
+
+func TestReleaseLockNeverCreatedReturnsNull(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc1 := newUserLevelLockTestProcess(t, services[0], "acc")
+		v, isNull, err := releaseUserLevelLock("missing_lock", proc1)
+		require.NoError(t, err)
+		require.True(t, isNull, "RELEASE_LOCK on never-created lock should return NULL")
+		require.Equal(t, int64(0), v)
+	})
+}
+
+func TestReleaseLockAlreadyReleasedReturnsNull(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc1 := newUserLevelLockTestProcess(t, services[0], "acc")
+		v, err := getUserLevelLock("release_twice", 0, proc1)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+
+		v, isNull, err := releaseUserLevelLock("release_twice", proc1)
+		require.NoError(t, err)
+		require.False(t, isNull)
+		require.Equal(t, int64(1), v)
+
+		v, isNull, err = releaseUserLevelLock("release_twice", proc1)
+		require.NoError(t, err)
+		require.True(t, isNull, "RELEASE_LOCK on already-released lock should return NULL")
+		require.Equal(t, int64(0), v)
+	})
+}
+
+func TestReleaseLockHeldByOtherSessionReturnsZero(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc1 := newUserLevelLockTestProcess(t, services[0], "acc")
+		proc2 := newUserLevelLockTestProcess(t, services[1], "acc")
+
+		v, err := getUserLevelLock("other_session", 0, proc1)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+
+		v, isNull, err := releaseUserLevelLock("other_session", proc2)
+		require.NoError(t, err)
+		require.False(t, isNull, "RELEASE_LOCK held by other session should return 0 (not NULL)")
+		require.Equal(t, int64(0), v)
+	})
+}
+
+func TestUserLevelLockNameTooLong(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc1 := newUserLevelLockTestProcess(t, services[0], "acc")
+		overlong := strings.Repeat("x", maxUserLevelLockNameLength+1)
+
+		_, err := getUserLevelLock(overlong, 0, proc1)
+		require.Error(t, err)
+
+		_, _, err = releaseUserLevelLock(overlong, proc1)
+		require.Error(t, err)
+
+		_, err = isUserLevelLockFree(overlong, proc1)
+		require.Error(t, err)
+	})
+}
+
+func TestUserLevelLockNameMaxLength(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc1 := newUserLevelLockTestProcess(t, services[0], "acc")
+		exact64 := strings.Repeat("x", maxUserLevelLockNameLength)
+
+		v, err := getUserLevelLock(exact64, 0, proc1)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+
+		v, isNull, err := releaseUserLevelLock(exact64, proc1)
+		require.NoError(t, err)
+		require.False(t, isNull)
+		require.Equal(t, int64(1), v)
+
+		v, err = isUserLevelLockFree(exact64, proc1)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+	})
+}
+
+func TestUserLevelLockEmptyName(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc1 := newUserLevelLockTestProcess(t, services[0], "acc")
+
+		_, err := getUserLevelLock("", 0, proc1)
+		require.Error(t, err, "GET_LOCK with empty name should return error")
+
+		_, _, err = releaseUserLevelLock("", proc1)
+		require.Error(t, err, "RELEASE_LOCK with empty name should return error")
+
+		_, err = isUserLevelLockFree("", proc1)
+		require.Error(t, err, "IS_FREE_LOCK with empty name should return error")
+	})
+}
+
+func TestUserLevelLockNameContainsNUL(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc1 := newUserLevelLockTestProcess(t, services[0], "acc")
+		name := "bad\x00lock"
+
+		_, err := getUserLevelLock(name, 0, proc1)
+		require.Error(t, err)
+
+		_, _, err = releaseUserLevelLock(name, proc1)
+		require.Error(t, err)
+
+		_, err = isUserLevelLockFree(name, proc1)
+		require.Error(t, err)
+
+		_, _, err = isUserLevelLockUsed(name, proc1)
+		require.Error(t, err)
+	})
+}
+
+func TestUserLevelLockCaseInsensitive(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc1 := newUserLevelLockTestProcess(t, services[0], "acc")
+		proc2 := newUserLevelLockTestProcess(t, services[1], "acc")
+
+		// Session A acquires lock with mixed-case name.
+		v, err := getUserLevelLock("Case_Lock", 0, proc1)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
+
+		// Session B attempts to acquire the same lock with different case —
+		// MySQL treats these as the same lock, so B should fail to acquire.
+		v, err = getUserLevelLock("CASE_LOCK", 0, proc2)
+		require.NoError(t, err)
+		require.Equal(t, int64(0), v, "case-insensitive: session B should not acquire lock held by A")
+
+		// Session B should also fail with lowercase variant.
+		v, err = getUserLevelLock("case_lock", 0, proc2)
+		require.NoError(t, err)
+		require.Equal(t, int64(0), v, "case-insensitive: session B should not acquire lock held by A")
+
+		// IS_FREE_LOCK should also be case-insensitive: lock is held, so it's not free.
+		v, err = isUserLevelLockFree("case_lock", proc2)
+		require.NoError(t, err)
+		require.Equal(t, int64(0), v, "case-insensitive IS_FREE_LOCK should see lock as held")
+
+		// Session A releases the lock.
+		v, isNull, err := releaseUserLevelLock("case_LOCK", proc1)
+		require.NoError(t, err)
+		require.False(t, isNull)
+		require.Equal(t, int64(1), v, "case-insensitive release should succeed for lock owner")
+
+		// Now session B can acquire the lock.
+		v, err = getUserLevelLock("case_lock", 0, proc2)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v, "after release, session B should acquire the lock")
+
+		// Cleanup.
+		releaseUserLevelLock("CASE_LOCK", proc2)
+	})
+}
+
+func TestUserLevelLockMultibyteBoundary(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc1 := newUserLevelLockTestProcess(t, services[0], "acc")
+
+		// 64 Chinese characters — each is 3 bytes in UTF-8, so 192 bytes total.
+		// MySQL enforces the limit in characters, not bytes, so this should be valid.
+		exact64chars := strings.Repeat("中", maxUserLevelLockNameLength)
+
+		v, err := getUserLevelLock(exact64chars, 0, proc1)
+		require.NoError(t, err, "64 Chinese characters should be valid")
+		require.Equal(t, int64(1), v)
+
+		v, isNull, err := releaseUserLevelLock(exact64chars, proc1)
+		require.NoError(t, err)
+		require.False(t, isNull)
+		require.Equal(t, int64(1), v)
+
+		// 65 Chinese characters — exceeds the 64-character limit.
+		overlongChars := strings.Repeat("中", maxUserLevelLockNameLength+1)
+		_, err = getUserLevelLock(overlongChars, 0, proc1)
+		require.Error(t, err, "65 Chinese characters should be rejected")
+
+		_, _, err = releaseUserLevelLock(overlongChars, proc1)
+		require.Error(t, err)
+
+		_, err = isUserLevelLockFree(overlongChars, proc1)
+		require.Error(t, err)
+	})
 }
 
 func initBitCastTestCase() []tcTemp {

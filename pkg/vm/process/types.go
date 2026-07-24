@@ -70,14 +70,12 @@ func NewRegMsg(bat *batch.Batch) *RegisterMessage {
 	}
 }
 
-// WaitRegister channel
-type WaitRegister struct {
-	// Ch2, data receiver's channel for receive-action-signal.
-	Ch2 chan PipelineSignal
-
-	// how many nil-batches this channel can receive, default 0 means every nil batch close channel
-	NilBatchCnt int
-}
+// WaitRegister is the historical name for a pipeline edge.
+//
+// Keep the old type name at API boundaries, but do not keep a second state
+// object. Ch2, the nil-batch counter, and typed terminal state all live in
+// PipelineEdge.
+type WaitRegister = PipelineEdge
 
 // Register used in execution pipeline and shared with all operators of the same pipeline.
 type Register struct {
@@ -113,6 +111,9 @@ type SessionInfo struct {
 	Database             string
 	Version              string
 	TimeZone             *time.Location
+	LockWaitTimeout      int64
+	LockWaitTimeoutSet   bool // distinguishes an explicit zero from an unset value
+	MatrixOneNativeMode  bool
 	StorageEngine        engine.Engine
 	QueryId              []string
 	ResultColTypes       []types.Type
@@ -324,19 +325,34 @@ type BaseProcess struct {
 	PartitionService partitionservice.PartitionService
 	IncrService      incrservice.AutoIncrementService
 
-	LastInsertID        *uint64
-	LoadLocalReader     *io.PipeReader
-	Aicm                *defines.AutoIncrCacheManager
-	resolveVariableFunc func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)
-	prepareParams       *vector.Vector
-	QueryClient         qclient.QueryClient
-	Hakeeper            logservice.CNHAKeeperClient
-	UdfService          udf.Service
-	WaitPolicy          lock.WaitPolicy
-	messageBoard        *message.MessageBoard
-	logger              *log.MOLogger
-	TxnOperator         client.TxnOperator
-	CloneTxnOperator    client.TxnOperator
+	LastInsertID *uint64
+	// AffectedRows carries the number of rows affected by the previous
+	// statement in the same session, used by the ROW_COUNT() builtin.
+	// It follows MySQL semantics: -1 after a result-set statement (e.g. SELECT),
+	// 0 after DDL, and the affected row count after DML.
+	AffectedRows             *int64
+	LoadLocalReader          *io.PipeReader
+	Aicm                     *defines.AutoIncrCacheManager
+	resolveVariableFunc      func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)
+	resolveVariableIsBinFunc func(varName string, isSystemVar, isGlobalVar bool) (bool, error)
+	prepareParams            *vector.Vector
+	prepareParamsIsBin       []bool
+	prepareParamsOwned       bool
+	QueryClient              qclient.QueryClient
+	Hakeeper                 logservice.CNHAKeeperClient
+	UdfService               udf.Service
+	WaitPolicy               lock.WaitPolicy
+	messageBoard             *message.MessageBoard
+	logger                   *log.MOLogger
+	TxnOperator              client.TxnOperator
+	CloneTxnOperator         client.TxnOperator
+	// incrStatementDisabled marks a process that executes internal SQL on a
+	// caller-owned transaction without opening a statement of its own
+	// (executor.Options.WithDisableIncrStatement). Compiles on such a process
+	// must not advance the workspace snapshot write offset: that is a
+	// statement-boundary action, and moving the boundary mid-statement breaks
+	// the positional visibility of the caller's workspace entries.
+	incrStatementDisabled bool
 
 	// post dml sqls run right after all pipelines finished.
 	PostDmlSqlList *threadsafe.Slice[string]
@@ -347,6 +363,21 @@ type BaseProcess struct {
 	// DivByZeroErrorMode caches whether division by zero should error (true) or return NULL (false)
 	// -1: not initialized, 0: return NULL, 1: return error
 	DivByZeroErrorMode int32
+
+	// IsFrontend reports whether this proc is attached to a frontend
+	// client session (mysql client query or the in-frontend backSession
+	// that pkg/frontend/back_exec.go drives). Defaults false — every
+	// other proc (internal SQL executor invocations from idxcron,
+	// ProcessInitSQL, bootstrap, cron jobs, task service, …) is
+	// background. pkg/sql/compile/sql_executor.go's NewTopProcess sets
+	// this from opts.IsFrontend(); the two frontend proc-construction
+	// sites in pkg/frontend (mysql_cmd_executor, back_exec) set it
+	// directly. This is the canonical signal for code that needs to
+	// distinguish "have a session" from "don't" — relying on
+	// proc.resolveVariableFunc being nil is unreliable because
+	// background paths also attach resolvers (idxcron via the task's
+	// captured Metadata, ProcessInitSQL via executor.DefaultResolveVariable).
+	IsFrontend bool
 }
 
 // Process contains context used in query execution
@@ -441,12 +472,37 @@ func (proc *Process) GetPrepareParamsAt(i int) ([]byte, error) {
 	}
 }
 
+func (proc *Process) GetPrepareParamIsBin(i int) bool {
+	return i >= 0 && i < len(proc.Base.prepareParamsIsBin) && proc.Base.prepareParamsIsBin[i]
+}
+
+// SetIncrStatementDisabled marks this process (and every child process
+// sharing its BaseProcess) as running internal SQL that must not advance the
+// workspace snapshot write offset. See BaseProcess.incrStatementDisabled.
+func (proc *Process) SetIncrStatementDisabled(disabled bool) {
+	proc.Base.incrStatementDisabled = disabled
+}
+
+// IncrStatementDisabled reports whether compiles on this process must skip
+// advancing the workspace snapshot write offset.
+func (proc *Process) IncrStatementDisabled() bool {
+	return proc.Base.incrStatementDisabled
+}
+
 func (proc *Process) SetResolveVariableFunc(f func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)) {
 	proc.Base.resolveVariableFunc = f
 }
 
 func (proc *Process) GetResolveVariableFunc() func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
 	return proc.Base.resolveVariableFunc
+}
+
+func (proc *Process) SetResolveVariableIsBinFunc(f func(varName string, isSystemVar, isGlobalVar bool) (bool, error)) {
+	proc.Base.resolveVariableIsBinFunc = f
+}
+
+func (proc *Process) GetResolveVariableIsBinFunc() func(varName string, isSystemVar, isGlobalVar bool) (bool, error) {
+	return proc.Base.resolveVariableIsBinFunc
 }
 
 func (proc *Process) SetLastInsertID(num uint64) {
@@ -463,6 +519,19 @@ func (proc *Process) GetLastInsertID() uint64 {
 	if proc.Base.LastInsertID != nil {
 		num := atomic.LoadUint64(proc.Base.LastInsertID)
 		return num
+	}
+	return 0
+}
+
+func (proc *Process) SetAffectedRows(num int64) {
+	if proc.Base.AffectedRows != nil {
+		atomic.StoreInt64(proc.Base.AffectedRows, num)
+	}
+}
+
+func (proc *Process) GetAffectedRows() int64 {
+	if proc.Base.AffectedRows != nil {
+		return atomic.LoadInt64(proc.Base.AffectedRows)
 	}
 	return 0
 }

@@ -116,12 +116,13 @@ func TestApplyIndicesForSortUsingIvfflat_PushdownOptimization(t *testing.T) {
 		}
 
 		vecCtx := &vectorSortContext{
-			scanNode:   scanNode,
-			sortNode:   &plan.Node{NodeType: plan.Node_SORT, Offset: &plan.Expr{}},
-			projNode:   &plan.Node{NodeType: plan.Node_PROJECT, Children: []int32{scanNodeID}},
-			distFnExpr: distFnExpr,
-			limit:      &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_U64Val{U64Val: 10}}}},
-			rankOption: &plan.RankOption{Mode: "pre"},
+			scanNode:    scanNode,
+			sortNode:    &plan.Node{NodeType: plan.Node_SORT, Offset: &plan.Expr{}},
+			projNode:    &plan.Node{NodeType: plan.Node_PROJECT, Children: []int32{scanNodeID}},
+			distFnExpr:  distFnExpr,
+			limit:       &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_U64Val{U64Val: 10}}}},
+			resultLimit: makePlan2Uint64ConstExprWithType(10),
+			rankOption:  &plan.RankOption{Mode: "pre"},
 		}
 
 		_, err := builder.applyIndicesForSortUsingIvfflat(scanNodeID, vecCtx, multiTableIndex, nil, nil)
@@ -162,12 +163,13 @@ func TestApplyIndicesForSortUsingIvfflat_PushdownOptimization(t *testing.T) {
 		}
 
 		vecCtx := &vectorSortContext{
-			scanNode:   scanNode,
-			sortNode:   &plan.Node{NodeType: plan.Node_SORT, Offset: &plan.Expr{}},
-			projNode:   &plan.Node{NodeType: plan.Node_PROJECT, Children: []int32{scanNodeID}},
-			distFnExpr: distFnExpr,
-			limit:      &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_U64Val{U64Val: 10}}}},
-			rankOption: &plan.RankOption{Mode: "pre"},
+			scanNode:    scanNode,
+			sortNode:    &plan.Node{NodeType: plan.Node_SORT, Offset: &plan.Expr{}},
+			projNode:    &plan.Node{NodeType: plan.Node_PROJECT, Children: []int32{scanNodeID}},
+			distFnExpr:  distFnExpr,
+			limit:       &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_U64Val{U64Val: 10}}}},
+			resultLimit: makePlan2Uint64ConstExprWithType(10),
+			rankOption:  &plan.RankOption{Mode: "pre"},
 		}
 
 		_, err := builder.applyIndicesForSortUsingIvfflat(scanNodeID, vecCtx, multiTableIndex, nil, nil)
@@ -328,12 +330,13 @@ func TestApplyIndicesForSortUsingIvfflat_OuterScanRegularIndexPreservesProtectio
 	}
 
 	vecCtx := &vectorSortContext{
-		scanNode:   scanNode,
-		sortNode:   &plan.Node{NodeType: plan.Node_SORT},
-		projNode:   &plan.Node{NodeType: plan.Node_PROJECT, Children: []int32{scanNodeID}},
-		distFnExpr: distFnExpr,
-		limit:      &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_U64Val{U64Val: 10}}}},
-		rankOption: &plan.RankOption{Mode: "pre"},
+		scanNode:    scanNode,
+		sortNode:    &plan.Node{NodeType: plan.Node_SORT},
+		projNode:    &plan.Node{NodeType: plan.Node_PROJECT, Children: []int32{scanNodeID}},
+		distFnExpr:  distFnExpr,
+		limit:       &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_U64Val{U64Val: 10}}}},
+		resultLimit: makePlan2Uint64ConstExprWithType(10),
+		rankOption:  &plan.RankOption{Mode: "pre"},
 	}
 
 	colRefCnt := map[[2]int32]int{
@@ -498,12 +501,13 @@ func TestApplyIndicesForSortUsingIvfflat_OuterScanIndexOnlyUsesOptimizedPk(t *te
 	}
 
 	vecCtx := &vectorSortContext{
-		scanNode:   scanNode,
-		sortNode:   &plan.Node{NodeType: plan.Node_SORT},
-		projNode:   &plan.Node{NodeType: plan.Node_PROJECT, Children: []int32{scanNodeID}},
-		distFnExpr: distFnExpr,
-		limit:      &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_U64Val{U64Val: 10}}}},
-		rankOption: &plan.RankOption{Mode: "pre"},
+		scanNode:    scanNode,
+		sortNode:    &plan.Node{NodeType: plan.Node_SORT},
+		projNode:    &plan.Node{NodeType: plan.Node_PROJECT, Children: []int32{scanNodeID}},
+		distFnExpr:  distFnExpr,
+		limit:       &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_U64Val{U64Val: 10}}}},
+		resultLimit: makePlan2Uint64ConstExprWithType(10),
+		rankOption:  &plan.RankOption{Mode: "pre"},
 	}
 
 	colRefCnt := map[[2]int32]int{

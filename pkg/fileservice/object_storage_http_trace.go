@@ -37,6 +37,23 @@ func newObjectStorageHTTPTrace(upstream ObjectStorage) *objectStorageHTTPTrace {
 
 var _ ObjectStorage = new(objectStorageHTTPTrace)
 var _ ParallelMultipartWriter = new(objectStorageHTTPTrace)
+var _ objectStorageCopier = new(objectStorageHTTPTrace)
+
+func (o *objectStorageHTTPTrace) CopyObject(
+	ctx context.Context,
+	src ObjectStorage,
+	srcKey string,
+	dstKey string,
+) (bool, error) {
+	copier, ok := o.upstream.(objectStorageCopier)
+	if !ok {
+		return false, nil
+	}
+	traceInfo := o.newTraceInfo()
+	defer o.closeTraceInfo(traceInfo)
+	ctx = httptrace.WithClientTrace(ctx, traceInfo.trace)
+	return copier.CopyObject(ctx, src, srcKey, dstKey)
+}
 
 func (o *objectStorageHTTPTrace) Delete(ctx context.Context, keys ...string) (err error) {
 	traceInfo := o.newTraceInfo()

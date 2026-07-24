@@ -27,7 +27,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -147,7 +146,7 @@ func Test_newBuffer2Sql_base(t *testing.T) {
 	buf := NewItemBuffer()
 	byteBuf := new(bytes.Buffer)
 	assert.Equal(t, true, buf.IsEmpty())
-	buf.Add(&MOSpan{})
+	buf.Add(&MOZapLog{})
 	assert.Equal(t, false, buf.IsEmpty())
 	assert.Equal(t, false, buf.ShouldFlush())
 	assert.Equal(t, "", buf.GetBatch(context.TODO(), byteBuf))
@@ -411,61 +410,6 @@ func Test_genCsvData(t *testing.T) {
 		args args
 		want any
 	}{
-		{
-			name: "single_span",
-			args: args{
-				in: []IBuffer2SqlItem{
-					&MOSpan{
-						SpanConfig: trace.SpanConfig{SpanContext: trace.SpanContext{TraceID: _1TraceID, SpanID: _1SpanID}, Parent: trace.NoopSpan{}},
-						Name:       "span1",
-						StartTime:  dummyBaseTime,
-						EndTime:    dummyBaseTime.Add(time.Microsecond),
-						Duration:   time.Microsecond,
-						tracer:     gTracer.(*MOTracer),
-					},
-				},
-				buf: buf,
-			},
-			want: `span_info,node_uuid,Standalone,0000000000000001,00000000-0000-0000-0000-000000000001,,1970-01-01 00:00:00.000001,,,,{},0,,,span1,0,1970-01-01 00:00:00.000000,1970-01-01 00:00:00.000001,1000,"{""Node"":{""node_uuid"":""node_uuid"",""node_type"":""Standalone""},""version"":""v0.test.0""}",internal,,
-`,
-		},
-		{
-			name: "multi_span",
-			args: args{
-				in: []IBuffer2SqlItem{
-					&MOSpan{
-						SpanConfig: trace.SpanConfig{SpanContext: trace.SpanContext{TraceID: _1TraceID, SpanID: _1SpanID, Kind: trace.SpanKindStatement}, Parent: trace.NoopSpan{}},
-						Name:       "span1",
-						StartTime:  dummyBaseTime,
-						EndTime:    dummyBaseTime.Add(time.Microsecond),
-						Duration:   time.Microsecond,
-						tracer:     gTracer.(*MOTracer),
-					},
-					&MOSpan{
-						SpanConfig: trace.SpanConfig{SpanContext: trace.SpanContext{TraceID: _1TraceID, SpanID: _2SpanID, Kind: trace.SpanKindRemote}, Parent: trace.NoopSpan{}},
-						Name:       "span2",
-						StartTime:  dummyBaseTime.Add(time.Microsecond),
-						EndTime:    dummyBaseTime.Add(time.Millisecond),
-						Duration:   time.Millisecond - time.Microsecond,
-						tracer:     gTracer.(*MOTracer),
-					},
-					&MOSpan{
-						SpanConfig: trace.SpanConfig{SpanContext: trace.SpanContext{TraceID: _1TraceID, SpanID: _2SpanID, Kind: trace.SpanKindRemote}, Parent: trace.NoopSpan{}},
-						Name:       "empty_end",
-						StartTime:  dummyBaseTime.Add(time.Microsecond),
-						Duration:   0,
-						tracer:     gTracer.(*MOTracer),
-						//EndTime:    table.ZeroTime,
-						ExtraFields: []zap.Field{zap.String("str", "field"), zap.Int64("int", 0)},
-					},
-				},
-				buf: buf,
-			},
-			want: `span_info,node_uuid,Standalone,0000000000000001,00000000-0000-0000-0000-000000000001,,1970-01-01 00:00:00.000001,,,,{},0,,,span1,0,1970-01-01 00:00:00.000000,1970-01-01 00:00:00.000001,1000,"{""Node"":{""node_uuid"":""node_uuid"",""node_type"":""Standalone""},""version"":""v0.test.0""}",statement,,
-span_info,node_uuid,Standalone,0000000000000002,00000000-0000-0000-0000-000000000001,,1970-01-01 00:00:00.001000,,,,{},0,,,span2,0,1970-01-01 00:00:00.000001,1970-01-01 00:00:00.001000,999000,"{""Node"":{""node_uuid"":""node_uuid"",""node_type"":""Standalone""},""version"":""v0.test.0""}",remote,,
-span_info,node_uuid,Standalone,0000000000000002,00000000-0000-0000-0000-000000000001,,0001-01-01 00:00:00.000000,,,,"{""str"":""field"",""int"":0}",0,,,empty_end,0,1970-01-01 00:00:00.000001,0001-01-01 00:00:00.000000,0,"{""Node"":{""node_uuid"":""node_uuid"",""node_type"":""Standalone""},""version"":""v0.test.0""}",remote,,
-`,
-		},
 		{
 			name: "single_zap",
 			args: args{
@@ -799,8 +743,8 @@ func Test_genCsvData_LongQueryTime(t *testing.T) {
 				queryT: int64(time.Second),
 			},
 			want: `00000000-0000-0000-0000-000000000001,00000000000000000000000000000001,00000000-0000-0000-0000-000000000001,MO,0,moroot,,system,show tables,,show tables,node_uuid,Standalone,0001-01-01 00:00:00.000000,0001-01-01 00:00:00.000000,999999999,Running,0,,{},0,0,"[0,0,0,0,0,0,0,0,0,0,0]",,,0,,0,1,0,0.0000
-00000000-0000-0000-0000-000000000001,00000000000000000000000000000001,00000000-0000-0000-0000-000000000001,MO,0,moroot,,system,show tables,,show tables,node_uuid,Standalone,1970-01-01 00:00:00.000000,1970-01-01 00:00:00.000000,999999999,Running,0,,"{""code"":200,""message"":""no exec plan""}",0,0,"[5,0,0,0,0,0,0,0,0,0,0]",,,0,,0,2,0,0.0000
-00000000-0000-0000-0000-000000000002,00000000000000000000000000000001,00000000-0000-0000-0000-000000000001,MO,0,moroot,,system,show databases,dcl,show databases,node_uuid,Standalone,1970-01-01 00:00:00.000001,1970-01-01 00:00:01.000001,1000000000,Failed,20101,internal error: test error,"{""key"":""val""}",1,1,"[5,1,2.000,3,4,5,0,0,44.0161,0,0]",,,0,internal,0,3,0,44.0161
+00000000-0000-0000-0000-000000000001,00000000000000000000000000000001,00000000-0000-0000-0000-000000000001,MO,0,moroot,,system,show tables,,show tables,node_uuid,Standalone,1970-01-01 00:00:00.000000,1970-01-01 00:00:00.000000,999999999,Running,0,,"{""code"":200,""message"":""no exec plan""}",0,0,"[6,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]",,,0,,0,2,0,0.0000
+00000000-0000-0000-0000-000000000002,00000000000000000000000000000001,00000000-0000-0000-0000-000000000001,MO,0,moroot,,system,show databases,dcl,show databases,node_uuid,Standalone,1970-01-01 00:00:00.000001,1970-01-01 00:00:01.000001,1000000000,Failed,20101,internal error: test error,"{""key"":""val""}",1,1,"[6,1,2.000,3,4,5,0,0,44.0161,0,0,0,0,0,0,0,0]",,,0,internal,0,3,0,44.0161
 `,
 		},
 	}

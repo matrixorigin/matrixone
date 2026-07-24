@@ -721,14 +721,74 @@ const (
 	// merged from upstream/main (renumbered to avoid colliding with the GIS block above)
 	CAST_JSON_TO_ARRAY = 513
 
-	BIT_COUNT   = 514
-	IS_UUID     = 515
-	UUID_TO_BIN = 516
-	BIN_TO_UUID = 517
+	BIT_COUNT         = 514
+	IS_UUID           = 515
+	UUID_TO_BIN       = 516
+	BIN_TO_UUID       = 517
+	NAME_CONST        = 518
+	GET_LOCK          = 519
+	RELEASE_LOCK      = 520
+	IS_FREE_LOCK      = 521
+	IS_USED_LOCK      = 522
+	RELEASE_ALL_LOCKS = 523
+
+	// S2 geometry (github.com/golang/geo/s2) cell functions. A CellId is a
+	// BIGINT UNSIGNED (uint64). See docs/design/s2h3_funcs.md.
+	S2_CELLID               = 524
+	S2_CELLID_LEVEL         = 525
+	S2_CELLID_CENTER        = 526
+	S2_CELLID_AREA          = 527
+	S2_CELLID_PARENT        = 528
+	S2_CELLID_EDGENEIGHBORS = 529
+	S2_CELLID_ALLNEIGHBORS  = 530
+	S2_CELLID_ARENEIGHBORS  = 531
+
+	// H3 hierarchical hexagonal index (github.com/uber/h3-go) functions. An
+	// H3Index is a BIGINT UNSIGNED (uint64). See docs/design/s2h3_funcs.md.
+	H3_H3INDEX              = 532
+	H3_H3INDEX_RESOLUTION   = 533
+	H3_H3INDEX_CENTER       = 534
+	H3_H3INDEX_BOUNDARY     = 535
+	H3_H3INDEX_PARENT       = 536
+	H3_H3INDEX_NEIGHBORS    = 537
+	H3_H3INDEX_ARENEIGHBORS = 538
+
+	// GIS numeric point constructors: ST_Point(x, y) -> GEOMETRY (POINT),
+	// ST_Point32(x, y) -> GEOMETRY32 (POINT), where x is longitude/X and y is
+	// latitude/Y.
+	ST_POINT   = 539
+	ST_POINT32 = 540
+
+	// function `cast_strict`
+	CAST_STRICT                  = 541
+	DATE_TRUNC                   = 542
+	JSON_CONTAINS                = 543
+	JSON_REMOVE                  = 544
+	JSON_CONTAINS_PATH           = 545
+	INTERNAL_JSON_ORDERING_PARAM = 546
+	JSON_MERGE_PATCH             = 547
+	JSON_MERGE_PRESERVE          = 548
+	JSON_OVERLAPS                = 549
+
+	// vec{bf16,f16,int8}_from_base64: decode a base64 payload of the narrow type's
+	// raw bytes into that narrow vector type — the narrow siblings of
+	// vecf32_from_base64 / vecf64_from_base64. Used by the ivfflat narrow re-rank,
+	// where the query must be a constant narrow vec literal matching the narrow
+	// entries (a cast of vecf32_from_base64 does not constant-fold, breaking the
+	// ORDER BY index pushdown).
+	// Renumbered after the main merge, which took 524-548 for the S2/H3/ST_POINT/
+	// CAST_STRICT/DATE_TRUNC/JSON_CONTAINS/JSON_REMOVE and the new JSON_CONTAINS_PATH/
+	// INTERNAL_JSON_ORDERING_PARAM/JSON_MERGE_PATCH/JSON_MERGE_PRESERVE functions (545-548).
+	// These IDs are referenced by name only (name map + list_builtIn registration), so
+	// renumbering is safe.
+	VECBF16_FROM_BASE64  = 550
+	VECF16_FROM_BASE64   = 551
+	VECINT8_FROM_BASE64  = 552
+	VECUINT8_FROM_BASE64 = 553
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 518
+	FUNCTION_END_NUMBER = 554
 )
 
 // functionIdRegister is what function we have registered already.
@@ -765,6 +825,7 @@ var functionIdRegister = map[string]int32{
 	"case":         CASE,
 	"coalesce":     COALESCE,
 	"cast":         CAST,
+	"cast_strict":  CAST_STRICT,
 	"bit_cast":     BIT_CAST,
 	"is":           IS,
 	"is_not":       ISNOT,
@@ -1001,14 +1062,21 @@ var functionIdRegister = map[string]int32{
 	"json_objectagg":                 JSON_OBJECTAGG,
 	"json_quote":                     JSON_QUOTE,
 	"json_unquote":                   JSON_UNQUOTE,
+	JsonOrderingParamFunctionName:    INTERNAL_JSON_ORDERING_PARAM,
 	"json_row":                       JSON_ROW,
 	"json_set":                       JSON_SET,
 	"json_insert":                    JSON_INSERT,
 	"json_replace":                   JSON_REPLACE,
+	"json_remove":                    JSON_REMOVE,
 	"hll_cardinality":                HLL_CARDINALITY,
 	"json_type":                      JSON_TYPE,
 	"json_valid":                     JSON_VALID,
 	"json_length":                    JSON_LENGTH,
+	"json_contains":                  JSON_CONTAINS,
+	"json_contains_path":             JSON_CONTAINS_PATH,
+	"json_merge_patch":               JSON_MERGE_PATCH,
+	"json_merge_preserve":            JSON_MERGE_PRESERVE,
+	"json_overlaps":                  JSON_OVERLAPS,
 	"json_keys":                      JSON_KEYS,
 	"json_pretty":                    JSON_PRETTY,
 	"json_schema_valid":              JSON_SCHEMA_VALID,
@@ -1038,6 +1106,10 @@ var functionIdRegister = map[string]int32{
 	"from_base64":                    FROM_BASE64,
 	"vecf32_from_base64":             VECF32_FROM_BASE64,
 	"vecf64_from_base64":             VECF64_FROM_BASE64,
+	"vecbf16_from_base64":            VECBF16_FROM_BASE64,
+	"vecf16_from_base64":             VECF16_FROM_BASE64,
+	"vecint8_from_base64":            VECINT8_FROM_BASE64,
+	"vecuint8_from_base64":           VECUINT8_FROM_BASE64,
 	"serial":                         SERIAL,
 	"serial_full":                    SERIAL_FULL,
 	"serial_extract":                 SERIAL_EXTRACT,
@@ -1074,6 +1146,11 @@ var functionIdRegister = map[string]int32{
 	"field":                          FIELD,
 	"format":                         FORMAT,
 	"sleep":                          SLEEP,
+	"get_lock":                       GET_LOCK,
+	"release_lock":                   RELEASE_LOCK,
+	"is_free_lock":                   IS_FREE_LOCK,
+	"is_used_lock":                   IS_USED_LOCK,
+	"release_all_locks":              RELEASE_ALL_LOCKS,
 	"split_part":                     SPLIT_PART,
 	"insert":                         INSERT,
 	"instr":                          INSTR,
@@ -1105,6 +1182,7 @@ var functionIdRegister = map[string]int32{
 	"mo_explain_phy":                 MO_EXPLAIN_PHY,
 	"git_version":                    GIT_VERSION,
 	"build_version":                  BUILD_VERSION,
+	"name_const":                     NAME_CONST,
 	"values":                         VALUES,
 	"binary":                         BINARY,
 	"internal_char_length":           INTERNAL_CHAR_LENGTH,
@@ -1134,6 +1212,8 @@ var functionIdRegister = map[string]int32{
 	"st_geometryfromtext":            ST_GEOMFROMTEXT,
 	"st_geomfromwkb":                 ST_GEOMFROMWKB,
 	"st_geomfrombinary":              ST_GEOMFROMWKB,
+	"st_point":                       ST_POINT,
+	"st_point32":                     ST_POINT32,
 	"st_pointfromtext":               ST_POINTFROMTEXT,
 	"st_linefromtext":                ST_LINEFROMTEXT,
 	"st_linestringfromtext":          ST_LINEFROMTEXT,
@@ -1196,6 +1276,26 @@ var functionIdRegister = map[string]int32{
 	"st_difference":                  ST_DIFFERENCE,
 	"st_symdifference":               ST_SYMDIFFERENCE,
 	"st_buffer":                      ST_BUFFER,
+	"s2_cellid":                      S2_CELLID,
+	"s2_cellid_level":                S2_CELLID_LEVEL,
+	"s2_cellid_center":               S2_CELLID_CENTER,
+	"s2_cellid_area":                 S2_CELLID_AREA,
+	"s2_cellid_parent":               S2_CELLID_PARENT,
+	"s2_cellid_edgeneighbours":       S2_CELLID_EDGENEIGHBORS,
+	"s2_cellid_edgeneighbors":        S2_CELLID_EDGENEIGHBORS,
+	"s2_cellid_allneighbours":        S2_CELLID_ALLNEIGHBORS,
+	"s2_cellid_allneighbors":         S2_CELLID_ALLNEIGHBORS,
+	"s2_cellid_areneighbours":        S2_CELLID_ARENEIGHBORS,
+	"s2_cellid_areneighbors":         S2_CELLID_ARENEIGHBORS,
+	"h3_h3index":                     H3_H3INDEX,
+	"h3_h3index_resolution":          H3_H3INDEX_RESOLUTION,
+	"h3_h3index_center":              H3_H3INDEX_CENTER,
+	"h3_h3index_boundary":            H3_H3INDEX_BOUNDARY,
+	"h3_h3index_parent":              H3_H3INDEX_PARENT,
+	"h3_h3index_neighbours":          H3_H3INDEX_NEIGHBORS,
+	"h3_h3index_neighbors":           H3_H3INDEX_NEIGHBORS,
+	"h3_h3index_areneighbours":       H3_H3INDEX_ARENEIGHBORS,
+	"h3_h3index_areneighbors":        H3_H3INDEX_ARENEIGHBORS,
 	"st_geometrytype":                ST_GEOMETRYTYPE,
 	"st_x":                           ST_X,
 	"st_y":                           ST_Y,
@@ -1287,4 +1387,7 @@ var functionIdRegister = map[string]int32{
 
 	// fault inject function
 	"fault_inject": FAULT_INJECT,
+
+	// date_trunc function
+	"date_trunc": DATE_TRUNC,
 }

@@ -1,6 +1,12 @@
 .idea/
 .kiro/
 .cursor/
+.claude/*
+!.claude/skills/
+!.claude/skills/*/
+!.claude/skills/*/SKILL.md
+!.claude/skills/*/references/
+!.claude/skills/*/references/*.md
 /CLAUDE.md
 *.o
 *.a
@@ -10,7 +16,10 @@
 *.swp
 *.fatbin
 *.py
+!pkg/iceberg/metadata/testdata/generate_golden_vectors.py
+!optools/iceberg_external_runner.py
 *.sh
+!etc/launch-minio-local/tier-b/seed-nyc-tlc-iceberg.sh
 bin/
 y.go
 *.output
@@ -24,12 +33,16 @@ tags
 coverage.txt
 out.txt
 logs/
+test/iceberg/reports/
+**/derby.log
+**/metastore_db/
 prometheus-local-data/
 prometheus-data/
 grafana-local-data/
 grafana-data/
 sdk_demo/
 vendor/
+/.proto-vendor/
 gen_config
 main
 mo-tool
@@ -81,3 +94,9 @@ etc/docker-multi-cn-local-disk/*.toml
 # python
 **/__pycache__/
 *.pyc
+.agents/*
+!.agents/skills/
+!.agents/skills/*/
+!.agents/skills/*/SKILL.md
+!.agents/skills/*/references/
+!.agents/skills/*/references/*.md

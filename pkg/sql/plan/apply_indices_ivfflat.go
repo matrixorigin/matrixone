@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	ivfflatplan "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 )
 
@@ -341,7 +342,7 @@ func (builder *QueryBuilder) prepareIvfIndexContext(vecCtx *vectorSortContext, m
 
 func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCtx *vectorSortContext, multiTableIndex *MultiTableIndex, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
 
-	if vecCtx == nil || vecCtx.sortNode == nil || vecCtx.scanNode == nil {
+	if !hasCompleteVectorPagination(vecCtx) || vecCtx.sortNode == nil || vecCtx.scanNode == nil {
 		return nodeID, nil
 	}
 
@@ -402,10 +403,10 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 			TableType: "func_table", //test if ok
 			//Name:               tbl.String(),
 			TblFunc: &plan.TableFunction{
-				Name:  kIVFSearchFuncName,
+				Name:  ivfflatplan.IVFFLATSearchFuncName,
 				Param: []byte(ivfCtx.params),
 			},
-			Cols: DeepCopyColDefList(kIVFSearchColDefs),
+			Cols: DeepCopyColDefList(ivfflatplan.IVFFLATSearchColDefs),
 		},
 		BindingTags: []int32{tableFuncTag},
 		Children:    vectorSearchProviderChildren(vecCtx),
@@ -452,7 +453,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 			// default, but we keep it as fixed buckets so the plan is predictable.
 			overFetchFactor := calculateFilteredPostModeOverFetchFactor(originalLimit)
 
-			newLimit := max(uint64(float64(originalLimit)*overFetchFactor), originalLimit+10)
+			newLimit := calculateOverFetchLimit(originalLimit, overFetchFactor)
 
 			if ivfCtx.isAutoMode {
 				logutil.Debugf(
@@ -764,13 +765,14 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 			Flag: vecCtx.sortDirection,
 		},
 	}
+	resultLimit, resultOffset := vectorResultPagination(vecCtx)
 
 	sortByID := builder.appendNode(&plan.Node{
 		NodeType:   plan.Node_SORT,
 		Children:   []int32{joinRootID},
 		OrderBy:    orderByScore,
-		Limit:      limit,                         // Apply LIMIT after sorting
-		Offset:     DeepCopyExpr(sortNode.Offset), // Apply OFFSET after sorting
+		Limit:      resultLimit,
+		Offset:     resultOffset,
 		RankOption: DeepCopyRankOption(vecCtx.rankOption),
 		SpillMem:   builder.sortSpillMem,
 	}, ctx)

@@ -75,35 +75,18 @@ func DeepCopyUpdateCtxList(updateCtxList []*plan.UpdateCtx) []*plan.UpdateCtx {
 	result := make([]*plan.UpdateCtx, len(updateCtxList))
 	for i, ctx := range updateCtxList {
 		result[i] = &plan.UpdateCtx{
-			ObjRef:             DeepCopyObjectRef(ctx.ObjRef),
-			TableDef:           DeepCopyTableDef(ctx.TableDef, true),
-			InsertCols:         slices.Clone(ctx.InsertCols),
-			DeleteCols:         slices.Clone(ctx.DeleteCols),
-			PartitionCols:      slices.Clone(ctx.PartitionCols),
-			SkipInsertOnNullPk: ctx.SkipInsertOnNullPk,
-			InsertPkColIdx:     ctx.InsertPkColIdx,
+			ObjRef:                DeepCopyObjectRef(ctx.ObjRef),
+			TableDef:              DeepCopyTableDef(ctx.TableDef, true),
+			InsertCols:            slices.Clone(ctx.InsertCols),
+			DeleteCols:            slices.Clone(ctx.DeleteCols),
+			PartitionCols:         slices.Clone(ctx.PartitionCols),
+			SkipInsertOnNullPk:    ctx.SkipInsertOnNullPk,
+			InsertPkColIdx:        ctx.InsertPkColIdx,
+			CountDeleteAffectRows: ctx.CountDeleteAffectRows,
 		}
 	}
 
 	return result
-}
-
-func DeepCopyOnDuplicateKeyCtx(ctx *plan.OnDuplicateKeyCtx) *plan.OnDuplicateKeyCtx {
-	if ctx == nil {
-		return nil
-	}
-	newCtx := &plan.OnDuplicateKeyCtx{
-		OnDuplicateIdx: slices.Clone(ctx.OnDuplicateIdx),
-	}
-
-	if ctx.OnDuplicateExpr != nil {
-		newCtx.OnDuplicateExpr = make(map[string]*Expr)
-		for k, v := range ctx.OnDuplicateExpr {
-			newCtx.OnDuplicateExpr[k] = DeepCopyExpr(v)
-		}
-	}
-
-	return newCtx
 }
 
 func DeepCopyInsertCtx(ctx *plan.InsertCtx) *plan.InsertCtx {
@@ -213,23 +196,33 @@ func DeepCopyRankOption(opt *plan.RankOption) *plan.RankOption {
 
 func DeepCopyNode(node *plan.Node) *plan.Node {
 	newNode := &Node{
-		NodeType:         node.NodeType,
-		NodeId:           node.NodeId,
-		ExtraOptions:     node.ExtraOptions,
-		Children:         slices.Clone(node.Children),
-		JoinType:         node.JoinType,
-		IsRightJoin:      node.IsRightJoin,
-		BindingTags:      slices.Clone(node.BindingTags),
-		Limit:            DeepCopyExpr(node.Limit),
-		Offset:           DeepCopyExpr(node.Offset),
-		ProjectList:      DeepCopyExprList(node.ProjectList),
-		OnList:           DeepCopyExprList(node.OnList),
-		FilterList:       DeepCopyExprList(node.FilterList),
-		BlockFilterList:  DeepCopyExprList(node.BlockFilterList),
-		GroupBy:          DeepCopyExprList(node.GroupBy),
-		GroupingFlag:     slices.Clone(node.GroupingFlag),
-		AggList:          DeepCopyExprList(node.AggList),
-		OrderBy:          DeepCopyOrderBySpecList(node.OrderBy),
+		NodeType:        node.NodeType,
+		NodeId:          node.NodeId,
+		ExtraOptions:    node.ExtraOptions,
+		Children:        slices.Clone(node.Children),
+		JoinType:        node.JoinType,
+		IsRightJoin:     node.IsRightJoin,
+		BindingTags:     slices.Clone(node.BindingTags),
+		Limit:           DeepCopyExpr(node.Limit),
+		Offset:          DeepCopyExpr(node.Offset),
+		ProjectList:     DeepCopyExprList(node.ProjectList),
+		OnList:          DeepCopyExprList(node.OnList),
+		FilterList:      DeepCopyExprList(node.FilterList),
+		BlockFilterList: DeepCopyExprList(node.BlockFilterList),
+		GroupBy:         DeepCopyExprList(node.GroupBy),
+		GroupingFlag:    slices.Clone(node.GroupingFlag),
+		AggList:         DeepCopyExprList(node.AggList),
+		OrderBy:         DeepCopyOrderBySpecList(node.OrderBy),
+		Interval:        DeepCopyExpr(node.Interval),
+		Sliding:         DeepCopyExpr(node.Sliding),
+		Timestamp:       DeepCopyExpr(node.Timestamp),
+		WEnd:            DeepCopyExpr(node.WEnd),
+		FillType:        node.FillType,
+		FillVal:         DeepCopyExprList(node.FillVal),
+
+		TimeWindowPartitionBy:     DeepCopyExprList(node.TimeWindowPartitionBy),
+		TimeWindowPartitionColPos: slices.Clone(node.TimeWindowPartitionColPos),
+
 		DeleteCtx:        DeepCopyDeleteCtx(node.DeleteCtx),
 		TblFuncExprList:  DeepCopyExprList(node.TblFuncExprList),
 		ClusterTable:     DeepCopyClusterTable(node.GetClusterTable()),
@@ -238,7 +231,6 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		SourceStep:       node.SourceStep,
 		PreInsertCtx:     DeepCopyPreInsertCtx(node.PreInsertCtx),
 		PreInsertUkCtx:   DeepCopyPreInsertUkCtx(node.PreInsertUkCtx),
-		OnDuplicateKey:   DeepCopyOnDuplicateKeyCtx(node.OnDuplicateKey),
 		LockTargets:      make([]*plan.LockTarget, len(node.LockTargets)),
 		AnalyzeInfo:      DeepCopyAnalyzeInfo(node.AnalyzeInfo),
 		IsEnd:            node.IsEnd,
@@ -305,8 +297,11 @@ func DeepCopyIndexReaderParam(oldParam *plan.IndexReaderParam) *plan.IndexReader
 	}
 
 	ret := &plan.IndexReaderParam{
-		OrderBy: DeepCopyOrderBySpecList(oldParam.OrderBy),
-		Limit:   DeepCopyExpr(oldParam.Limit),
+		OrderBy:        DeepCopyOrderBySpecList(oldParam.OrderBy),
+		Limit:          DeepCopyExpr(oldParam.Limit),
+		OrigFuncName:   oldParam.OrigFuncName,
+		PartitionCnCnt: oldParam.PartitionCnCnt,
+		PartitionCnIdx: oldParam.PartitionCnIdx,
 	}
 
 	if oldParam.DistRange != nil {
@@ -470,6 +465,24 @@ func DeepCopySampleFuncSpec(source *plan.SampleFuncSpec) *plan.SampleFuncSpec {
 	}
 }
 
+// CloneTableDefForPlan returns a planner-owned TableDef shell. When withCols is
+// true, the Cols slice can also be changed without modifying table. Column
+// definitions and all other schema metadata are shared and must be treated as
+// immutable; callers that change nested schema objects must use DeepCopyTableDef.
+func CloneTableDefForPlan(table *plan.TableDef, withCols bool) *plan.TableDef {
+	if table == nil {
+		return nil
+	}
+
+	cloned := *table
+	if withCols {
+		cloned.Cols = slices.Clone(table.Cols)
+	} else {
+		cloned.Cols = nil
+	}
+	return &cloned
+}
+
 func DeepCopyTableDef(table *plan.TableDef, withCols bool) *plan.TableDef {
 	if table == nil {
 		return nil
@@ -494,6 +507,7 @@ func DeepCopyTableDef(table *plan.TableDef, withCols bool) *plan.TableDef {
 		TableLockType:  table.TableLockType,
 		IsTemporary:    table.IsTemporary,
 		AutoIncrOffset: table.AutoIncrOffset,
+		AutoIncrEpoch:  table.AutoIncrEpoch,
 		DbName:         table.DbName,
 		DbId:           table.DbId,
 		FeatureFlag:    table.FeatureFlag,
@@ -600,11 +614,12 @@ func DeepCopyColData(col *plan.ColData) *plan.ColData {
 
 func DeepCopyQuery(qry *plan.Query) *plan.Query {
 	newQry := &plan.Query{
-		StmtType: qry.StmtType,
-		Steps:    qry.Steps,
-		Nodes:    make([]*plan.Node, len(qry.Nodes)),
-		Params:   DeepCopyExprList(qry.Params),
-		Headings: qry.Headings,
+		StmtType:            qry.StmtType,
+		Steps:               qry.Steps,
+		Nodes:               make([]*plan.Node, len(qry.Nodes)),
+		Params:              DeepCopyExprList(qry.Params),
+		Headings:            qry.Headings,
+		HasForeignKeyAction: qry.HasForeignKeyAction,
 	}
 	for idx, node := range qry.Nodes {
 		newQry.Nodes[idx] = DeepCopyNode(node)
@@ -703,6 +718,9 @@ func DeepCopyDataDefinition(old *plan.DataDefinition) *plan.DataDefinition {
 			Actions:           make([]*plan.AlterTable_Action, len(df.AlterTable.Actions)),
 		}
 		for i, action := range df.AlterTable.Actions {
+			if action == nil {
+				continue
+			}
 			switch act := action.Action.(type) {
 			case *plan.AlterTable_Action_Drop:
 				AlterTable.Actions[i] = &plan.AlterTable_Action{
@@ -858,7 +876,8 @@ func DeepCopyExpr(expr *Expr) *Expr {
 	case *plan.Expr_Lit:
 		pc := &plan.Literal{
 			Isnull: item.Lit.GetIsnull(),
-			Src:    item.Lit.Src,
+			IsBin:  item.Lit.GetIsBin(),
+			Src:    DeepCopyExpr(item.Lit.Src),
 		}
 
 		switch c := item.Lit.Value.(type) {

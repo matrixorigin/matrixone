@@ -16,7 +16,7 @@ package compute
 
 import (
 	"bytes"
-	"sort"
+	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -32,8 +32,14 @@ func SortAndDedup[T any](
 	if len(vals) < 1 {
 		return vals
 	}
-	sort.Slice(vals, func(i, j int) bool {
-		return lessFn(&vals[i], &vals[j])
+	slices.SortFunc(vals, func(a, b T) int {
+		if lessFn(&a, &b) {
+			return -1
+		}
+		if lessFn(&b, &a) {
+			return 1
+		}
+		return 0
 	})
 	pos := 1
 	for start, end := 1, len(vals); start < end; start++ {
@@ -245,7 +251,8 @@ func GetOffsetByVal(data containers.Vector, v any, skipmask *nulls.Bitmap) (offs
 			skipmask)
 	case types.T_char, types.T_varchar, types.T_blob,
 		types.T_binary, types.T_varbinary, types.T_json, types.T_text,
-		types.T_array_float32, types.T_array_float64, types.T_datalink:
+		types.T_array_float32, types.T_array_float64,
+		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8, types.T_datalink:
 		// data is retrieved from DN vector, hence T_array can be handled here.
 		val := v.([]byte)
 		start, end := 0, data.Length()-1

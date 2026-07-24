@@ -17,6 +17,7 @@ package function
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -818,6 +819,228 @@ func TestJsonExtractConstNullPath(t *testing.T) {
 	})
 }
 
+func TestJsonExtractPreservesJSONNull(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	tests := []struct {
+		name string
+		typ  types.Type
+		docs []string
+	}{
+		{
+			name: "varchar input",
+			typ:  types.T_varchar.ToType(),
+			docs: []string{`{"a":null}`, `{}`, ``},
+		},
+		{
+			name: "json input",
+			typ:  types.T_json.ToType(),
+			docs: []string{
+				mustJsonBinaryString(t, `{"a":null}`),
+				mustJsonBinaryString(t, `{}`),
+				``,
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			vec := runJsonFunctionWithSelectList(t, proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(test.typ, test.docs, []bool{false, false, true}),
+					NewFunctionTestInput(types.T_varchar.ToType(),
+						[]string{"$.a", "$.a", "$.a"}, []bool{false, false, false}),
+				},
+				types.T_json.ToType(), newOpBuiltInJsonExtract().jsonExtract, nil)
+
+			require.False(t, vec.IsNull(0))
+			require.Equal(t, "null", jsonVectorRowString(t, vec, 0))
+			require.True(t, vec.IsNull(1))
+			require.True(t, vec.IsNull(2))
+		})
+	}
+}
+
+func TestJsonExtractIgnoreAllRows(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	vec := runJsonFunctionWithSelectList(t, proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{`not json`, `still not json`}, []bool{false, false}),
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{`bad path`, `also bad path`}, []bool{false, false}),
+		},
+		types.T_json.ToType(), newOpBuiltInJsonExtract().jsonExtract,
+		&FunctionSelectList{AllNull: true})
+
+	require.True(t, vec.IsNull(0))
+	require.True(t, vec.IsNull(1))
+}
+
+func TestJsonExtractMultiplePathsPreserveJSONNull(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	vec := runJsonFunctionWithSelectList(t, proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{`{"a":null,"b":1}`, `{"a":null}`}, []bool{false, false}),
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{"$.a", "$.a"}, []bool{false, false}),
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{"$.b", "$.missing"}, []bool{false, false}),
+		},
+		types.T_json.ToType(), newOpBuiltInJsonExtract().jsonExtract, nil)
+
+	require.False(t, vec.IsNull(0))
+	require.Equal(t, "[null, 1]", jsonVectorRowString(t, vec, 0))
+	require.False(t, vec.IsNull(1))
+	require.Equal(t, "[null]", jsonVectorRowString(t, vec, 1))
+}
+
+func TestJsonExtractWildcardPreservesJSONNull(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	tests := []struct {
+		name string
+		typ  types.Type
+		doc  string
+	}{
+		{name: "varchar input", typ: types.T_varchar.ToType(), doc: `{"items":[null,1]}`},
+		{name: "json input", typ: types.T_json.ToType(), doc: mustJsonBinaryString(t, `{"items":[null,1]}`)},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			vec := runJsonFunctionWithSelectList(t, proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(test.typ, []string{test.doc}, []bool{false}),
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{"$.items[*]"}, []bool{false}),
+				},
+				types.T_json.ToType(), newOpBuiltInJsonExtract().jsonExtract, nil)
+
+			require.False(t, vec.IsNull(0))
+			require.Equal(t, "[null, 1]", jsonVectorRowString(t, vec, 0))
+		})
+	}
+}
+
+func TestJsonExtractAutowrapsJSONNullIndexZero(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	tests := []struct {
+		name string
+		doc  string
+		path string
+	}{
+		{name: "root null", doc: `null`, path: `$[0]`},
+		{name: "nested null", doc: `{"a":null}`, path: `$.a[0]`},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			vec := runJsonFunctionWithSelectList(t, proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{test.doc}, []bool{false}),
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{test.path}, []bool{false}),
+				},
+				types.T_json.ToType(), newOpBuiltInJsonExtract().jsonExtract, nil)
+
+			require.False(t, vec.IsNull(0))
+			require.Equal(t, "null", jsonVectorRowString(t, vec, 0))
+		})
+	}
+}
+
+func TestJsonExtractPreservesSingleMatchMultiValuePathArray(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	tests := []struct {
+		name     string
+		doc      string
+		path     string
+		expected string
+	}{
+		{name: "scalar range", doc: `1`, path: `$[0 to 0]`, expected: `[1]`},
+		{name: "index wildcard", doc: `[null]`, path: `$[*]`, expected: `[null]`},
+		{name: "range", doc: `[null]`, path: `$[0 to 0]`, expected: `[null]`},
+		{name: "key wildcard", doc: `{"a":null}`, path: `$.*`, expected: `[null]`},
+		{name: "recursive descent", doc: `{"a":null}`, path: `$**.a`, expected: `[null]`},
+		{name: "empty object range", doc: `{}`, path: `$[0 to 0]`, expected: `[{}]`},
+		{name: "object last range", doc: `{"a":1,"b":2}`, path: `$[last to last]`, expected: `[{"a":1,"b":2}]`},
+		{name: "object last range then key", doc: `{"a":null,"b":2}`, path: `$[last to last].a`, expected: `[null]`},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			vec := runJsonFunctionWithSelectList(t, proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{test.doc}, []bool{false}),
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{test.path}, []bool{false}),
+				},
+				types.T_json.ToType(), newOpBuiltInJsonExtract().jsonExtract, nil)
+
+			require.False(t, vec.IsNull(0))
+			require.JSONEq(t, test.expected, jsonVectorRowString(t, vec, 0))
+		})
+	}
+}
+
+func TestJsonExtractEmptyArrayRangeReturnsSQLNull(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	tests := []struct {
+		name string
+		doc  string
+		path string
+	}{
+		{name: "root numeric range", doc: `[]`, path: `$[0 to 0]`},
+		{name: "root last range", doc: `[]`, path: `$[last to last]`},
+		{name: "nested numeric range", doc: `{"a":[]}`, path: `$.a[0 to 0]`},
+		{name: "nested last range", doc: `{"a":[]}`, path: `$.a[last to last]`},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			vec := runJsonFunctionWithSelectList(t, proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{test.doc}, []bool{false}),
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{test.path}, []bool{false}),
+				},
+				types.T_json.ToType(), newOpBuiltInJsonExtract().jsonExtract, nil)
+
+			require.True(t, vec.IsNull(0))
+		})
+	}
+}
+
+func TestJsonExtractArrayRangeOverlap(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	tests := []struct {
+		name     string
+		doc      string
+		path     string
+		expected string
+		sqlNull  bool
+	}{
+		{name: "json null right of array", doc: `[null]`, path: `$[1 to 1]`, sqlNull: true},
+		{name: "right of array", doc: `[0,1,2]`, path: `$[5 to 6]`, sqlNull: true},
+		{name: "left of array", doc: `[0,1,2]`, path: `$[last-8 to last-7]`, sqlNull: true},
+		{name: "overlap right edge", doc: `[0,1,2]`, path: `$[2 to 6]`, expected: `[2]`},
+		{name: "overlap left edge", doc: `[0,1,2]`, path: `$[last-8 to last-2]`, expected: `[0]`},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			vec := runJsonFunctionWithSelectList(t, proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{test.doc}, []bool{false}),
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{test.path}, []bool{false}),
+				},
+				types.T_json.ToType(), newOpBuiltInJsonExtract().jsonExtract, nil)
+
+			require.Equal(t, test.sqlNull, vec.IsNull(0))
+			if !test.sqlNull {
+				require.JSONEq(t, test.expected, jsonVectorRowString(t, vec, 0))
+			}
+		})
+	}
+}
+
 func TestJsonExtractConstNullPathAfterNonSimplePath(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	op := newOpBuiltInJsonExtract()
@@ -913,6 +1136,461 @@ func TestJsonModifyContinuesAfterNullRows(t *testing.T) {
 	})
 }
 
+func TestJsonRemove(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	t.Run("removes object array and nested values", func(t *testing.T) {
+		vec := runJsonFunctionWithSelectList(t, proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`{"a":1,"b":2}`, `["a",["b","c"],"d"]`, `{"a":{"b":1,"c":2},"d":3}`},
+					[]bool{false, false, false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"$.a", "$[1]", "$.a.b"},
+					[]bool{false, false, false}),
+			},
+			types.T_json.ToType(), newOpBuiltInJsonRemove().buildJsonRemove, nil)
+
+		require.Equal(t, `{"b": 2}`, jsonVectorRowString(t, vec, 0))
+		require.Equal(t, `["a", "d"]`, jsonVectorRowString(t, vec, 1))
+		require.Equal(t, `{"a": {"c": 2}, "d": 3}`, jsonVectorRowString(t, vec, 2))
+	})
+
+	t.Run("missing path is noop and paths are applied left to right", func(t *testing.T) {
+		vec := runJsonFunctionWithSelectList(t, proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`{"a":1}`, `["a","b","c","d"]`},
+					[]bool{false, false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"$.b", "$[1]"},
+					[]bool{false, false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"$.a.b", "$[1]"},
+					[]bool{false, false}),
+			},
+			types.T_json.ToType(), newOpBuiltInJsonRemove().buildJsonRemove, nil)
+
+		require.Equal(t, `{"a": 1}`, jsonVectorRowString(t, vec, 0))
+		require.Equal(t, `["a", "d"]`, jsonVectorRowString(t, vec, 1))
+	})
+
+	t.Run("mysql array index boundaries", func(t *testing.T) {
+		vec := runJsonFunctionWithSelectList(t, proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`[1,2,3]`, `[1,2,3]`, `[1,2,3]`, `[1,2,3]`},
+					[]bool{false, false, false, false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"$[0]", "$[1]", "$[2]", "$[3]"},
+					[]bool{false, false, false, false}),
+			},
+			types.T_json.ToType(), newOpBuiltInJsonRemove().buildJsonRemove, nil)
+
+		require.Equal(t, `[2, 3]`, jsonVectorRowString(t, vec, 0))
+		require.Equal(t, `[1, 3]`, jsonVectorRowString(t, vec, 1))
+		require.Equal(t, `[1, 2]`, jsonVectorRowString(t, vec, 2))
+		require.Equal(t, `[1, 2, 3]`, jsonVectorRowString(t, vec, 3))
+	})
+
+	t.Run("json typed input", func(t *testing.T) {
+		vec := runJsonFunctionWithSelectList(t, proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_json.ToType(),
+					[]string{mustJsonBinaryString(t, `{"a":1,"b":[2,3]}`)},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"$.b[0]"}, []bool{false}),
+			},
+			types.T_json.ToType(), newOpBuiltInJsonRemove().buildJsonRemove, nil)
+
+		require.Equal(t, `{"a": 1, "b": [3]}`, jsonVectorRowString(t, vec, 0))
+	})
+
+	t.Run("array index zero autowrap", func(t *testing.T) {
+		vec := runJsonFunctionWithSelectList(t, proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`{"a":1,"b":2}`, `{"a":1,"b":2}`, `1`},
+					[]bool{false, false, false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"$.a[0]", "$[0].a", "$[0]"},
+					[]bool{false, false, false}),
+			},
+			types.T_json.ToType(), newOpBuiltInJsonRemove().buildJsonRemove, nil)
+
+		require.Equal(t, `{"b": 2}`, jsonVectorRowString(t, vec, 0))
+		require.Equal(t, `{"b": 2}`, jsonVectorRowString(t, vec, 1))
+		require.Equal(t, `1`, jsonVectorRowString(t, vec, 2))
+	})
+
+	t.Run("mysql nested and multi path examples", func(t *testing.T) {
+		vec := runJsonFunctionWithSelectList(t, proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{
+						`[ { "a": true }, { "b": false }, { "c": null }, { "a": null } ]`,
+						`{"a":"foo","b":[true,{"c":123}]}`,
+						`{"a":"foo","b":[true,{"c":123,"d":456}]}`,
+						`{"a":"foo","b":[true,{"c":123,"d":456}]}`,
+						`123`,
+					},
+					[]bool{false, false, false, false, false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"$[0].a", "$.b[1]", "$.b[1].c", "$.b[1].e", "$.a"},
+					[]bool{false, false, false, false, false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"$[2].c", "$.missing", "$.missing", "$.missing", "$.missing"},
+					[]bool{false, false, false, false, false}),
+			},
+			types.T_json.ToType(), newOpBuiltInJsonRemove().buildJsonRemove, nil)
+
+		require.Equal(t, `[{}, {"b": false}, {}, {"a": null}]`, jsonVectorRowString(t, vec, 0))
+		require.Equal(t, `{"a": "foo", "b": [true]}`, jsonVectorRowString(t, vec, 1))
+		require.Equal(t, `{"a": "foo", "b": [true, {"d": 456}]}`, jsonVectorRowString(t, vec, 2))
+		require.Equal(t, `{"a": "foo", "b": [true, {"c": 123, "d": 456}]}`, jsonVectorRowString(t, vec, 3))
+		require.Equal(t, `123`, jsonVectorRowString(t, vec, 4))
+	})
+
+	t.Run("mysql deep autowrap", func(t *testing.T) {
+		vec := runJsonFunctionWithSelectList(t, proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{
+						`{}`,
+						`[]`,
+						`{"a":{"b":1,"c":2}}`,
+						`[{"a":[{"b":1,"c":2},123]},456]`,
+					},
+					[]bool{false, false, false, false}),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"$[0][0].a[0][0].b"}, []bool{false}),
+			},
+			types.T_json.ToType(), newOpBuiltInJsonRemove().buildJsonRemove, nil)
+
+		require.Equal(t, `{}`, jsonVectorRowString(t, vec, 0))
+		require.Equal(t, `[]`, jsonVectorRowString(t, vec, 1))
+		require.Equal(t, `{"a": {"c": 2}}`, jsonVectorRowString(t, vec, 2))
+		require.Equal(t, `[{"a": [{"c": 2}, 123]}, 456]`, jsonVectorRowString(t, vec, 3))
+	})
+
+	t.Run("quoted star is object key", func(t *testing.T) {
+		vec := runJsonFunctionWithSelectList(t, proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`{"*":1,"a":2}`},
+					[]bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`$."*"`}, []bool{false}),
+			},
+			types.T_json.ToType(), newOpBuiltInJsonRemove().buildJsonRemove, nil)
+
+		require.Equal(t, `{"a": 2}`, jsonVectorRowString(t, vec, 0))
+	})
+}
+
+func TestJsonRemoveNullAndInvalidPaths(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	t.Run("null document and null path return null", func(t *testing.T) {
+		vec := runJsonFunctionWithSelectList(t, proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"", `{"a":1}`, `{"a":1}`},
+					[]bool{true, false, false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"$.a", "", "$.a"},
+					[]bool{false, true, false}),
+			},
+			types.T_json.ToType(), newOpBuiltInJsonRemove().buildJsonRemove, nil)
+
+		require.True(t, vec.IsNull(0))
+		require.True(t, vec.IsNull(1))
+		require.Equal(t, `{}`, jsonVectorRowString(t, vec, 2))
+	})
+
+	t.Run("null path after prior path returns null", func(t *testing.T) {
+		vec := runJsonFunctionWithSelectList(t, proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`[1,{"a":true,"b":false,"c":null},5]`, `[1,{"a":true,"b":false,"c":null},5]`},
+					[]bool{false, false}),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"$[1]"}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"$[2]", ""},
+					[]bool{false, true}),
+			},
+			types.T_json.ToType(), newOpBuiltInJsonRemove().buildJsonRemove, nil)
+
+		require.Equal(t, `[1, 5]`, jsonVectorRowString(t, vec, 0))
+		require.True(t, vec.IsNull(1))
+	})
+
+	t.Run("json null document remains json null", func(t *testing.T) {
+		vec := runJsonFunctionWithSelectList(t, proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`null`, `null`},
+					[]bool{false, false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"$[0]", "$.missing"},
+					[]bool{false, false}),
+			},
+			types.T_json.ToType(), newOpBuiltInJsonRemove().buildJsonRemove, nil)
+
+		require.False(t, vec.IsNull(0))
+		require.Equal(t, `null`, jsonVectorRowString(t, vec, 0))
+		require.False(t, vec.IsNull(1))
+		require.Equal(t, `null`, jsonVectorRowString(t, vec, 1))
+	})
+
+	for _, pathStr := range []string{"$", "$.*", "$**.a"} {
+		t.Run(fmt.Sprintf("rejects path %s", pathStr), func(t *testing.T) {
+			tc := tcTemp{
+				info: "json_remove rejects invalid modify path",
+				inputs: []FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{`{"a":1}`}, []bool{false}),
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{pathStr}, []bool{false}),
+				},
+				expect: NewFunctionTestResult(types.T_json.ToType(), true, nil, nil),
+			}
+			fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, newOpBuiltInJsonRemove().buildJsonRemove)
+			s, info := fcTC.Run()
+			require.True(t, s, info)
+		})
+	}
+}
+
+func TestJsonRemoveCheckFn(t *testing.T) {
+	ctx := context.Background()
+	_, err := GetFunctionByName(ctx, "json_remove", []types.Type{
+		types.T_json.ToType(),
+		types.T_varchar.ToType(),
+	})
+	require.NoError(t, err)
+
+	_, err = GetFunctionByName(ctx, "json_remove", []types.Type{
+		types.T_json.ToType(),
+	})
+	require.Error(t, err)
+
+	_, err = GetFunctionByName(ctx, "json_remove", []types.Type{
+		types.T_json.ToType(),
+		types.T_json.ToType(),
+	})
+	require.Error(t, err)
+
+	_, err = GetFunctionByName(ctx, "json_remove", []types.Type{
+		types.T_int64.ToType(),
+		types.T_varchar.ToType(),
+	})
+	require.Error(t, err)
+
+	_, err = GetFunctionByName(ctx, "json_remove", []types.Type{
+		types.T_varchar.ToType(),
+		types.T_int64.ToType(),
+	})
+	require.Error(t, err)
+
+	_, err = GetFunctionByName(ctx, "json_remove", []types.Type{
+		types.T_any.ToType(),
+		types.T_varchar.ToType(),
+	})
+	require.NoError(t, err)
+
+	_, err = GetFunctionByName(ctx, "json_remove", []types.Type{
+		types.T_varchar.ToType(),
+		types.T_any.ToType(),
+	})
+	require.NoError(t, err)
+}
+
+func TestJsonRemoveIgnoreAllRows(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	selectList := &FunctionSelectList{AllNull: true}
+	vec := runJsonFunctionWithSelectList(t, proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{`not json`, `still not json`},
+				[]bool{false, false}),
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{`bad path`, `also bad path`},
+				[]bool{false, false}),
+		},
+		types.T_json.ToType(), newOpBuiltInJsonRemove().buildJsonRemove, selectList)
+
+	require.True(t, vec.IsNull(0))
+	require.True(t, vec.IsNull(1))
+}
+
+func TestJsonMergeCheckFn(t *testing.T) {
+	ctx := context.Background()
+	for _, fn := range []string{"json_merge_patch", "json_merge_preserve"} {
+		_, err := GetFunctionByName(ctx, fn, []types.Type{
+			types.T_json.ToType(),
+			types.T_varchar.ToType(),
+		})
+		require.NoError(t, err, fn)
+
+		_, err = GetFunctionByName(ctx, fn, []types.Type{types.T_json.ToType()})
+		require.Error(t, err, fn)
+
+		_, err = GetFunctionByName(ctx, fn, []types.Type{
+			types.T_int64.ToType(),
+			types.T_varchar.ToType(),
+		})
+		require.Error(t, err, fn)
+
+		_, err = GetFunctionByName(ctx, fn, []types.Type{
+			types.T_any.ToType(),
+			types.T_varchar.ToType(),
+		})
+		require.NoError(t, err, fn)
+	}
+}
+
+func TestJsonMerge(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	t.Run("patch follows RFC 7396 and preserves MySQL null state", func(t *testing.T) {
+		vec := runJsonFunctionWithSelectList(t, proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`{"a":1,"nested":{"keep":1,"remove":2}}`, ``, `{"a":1}`, `{"a":1}`},
+					[]bool{false, true, false, false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`{"b":2,"nested":{"remove":null,"add":3}}`, `[1,2]`, ``, ``},
+					[]bool{false, false, true, true}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`{}`, `[1,2]`, `{"b":2}`, `2`},
+					[]bool{false, false, false, false}),
+			},
+			types.T_json.ToType(), newOpBuiltInJsonMerge().buildJsonMergePatch, nil)
+
+		require.Equal(t, `{"a": 1, "b": 2, "nested": {"add": 3, "keep": 1}}`, jsonVectorRowString(t, vec, 0))
+		require.Equal(t, `[1, 2]`, jsonVectorRowString(t, vec, 1))
+		require.True(t, vec.IsNull(2))
+		require.Equal(t, `2`, jsonVectorRowString(t, vec, 3))
+	})
+
+	t.Run("preserve merges recursively and SQL null remains null", func(t *testing.T) {
+		vec := runJsonFunctionWithSelectList(t, proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_json.ToType(),
+					[]string{mustJsonBinaryString(t, `{"a":{"x":1},"array":[1]}`), mustJsonBinaryString(t, `{"a":1}`)},
+					[]bool{false, false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`{"a":{"y":2},"array":[2],"value":null}`, ``},
+					[]bool{false, true}),
+			},
+			types.T_json.ToType(), newOpBuiltInJsonMerge().buildJsonMergePreserve, nil)
+
+		require.Equal(t, `{"a": {"x": 1, "y": 2}, "array": [1, 2], "value": null}`, jsonVectorRowString(t, vec, 0))
+		require.True(t, vec.IsNull(1))
+	})
+
+	t.Run("json literal null is a non-null JSON result", func(t *testing.T) {
+		vec := runJsonFunctionWithSelectList(t, proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`{"a":"foo"}`}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`null`}, []bool{false}),
+			},
+			types.T_json.ToType(), newOpBuiltInJsonMerge().buildJsonMergePatch, nil)
+
+		require.False(t, vec.IsNull(0))
+		require.Equal(t, `null`, jsonVectorRowString(t, vec, 0))
+	})
+}
+
+func TestJsonMergeDepthValidation(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	overDepthArray := `[` + nestedJSONMergeObject(100, `1`) + `]`
+	overDepthObject := nestedJSONMergeObject(101, `1`)
+
+	t.Run("final non-object replacement is rejected", func(t *testing.T) {
+		testCase := NewFunctionTestCase(
+			proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`{}`}, nil),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{overDepthArray}, nil),
+			},
+			NewFunctionTestResult(types.T_json.ToType(), true, nil, nil),
+			newOpBuiltInJsonMerge().buildJsonMergePatch,
+		)
+		require.NoError(t, testCase.result.PreExtendAndReset(testCase.fnLength))
+		err := testCase.fn(
+			testCase.parameters,
+			testCase.result,
+			testCase.proc,
+			testCase.fnLength,
+			nil,
+		)
+		require.ErrorContains(t, err, "json document nesting depth exceeds 100")
+	})
+
+	tests := []struct {
+		name   string
+		fn     fEvalFn
+		inputs []FunctionTestInput
+	}{
+		{
+			name: "patch rejects over-depth target before scalar replacement",
+			fn:   newOpBuiltInJsonMerge().buildJsonMergePatch,
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{overDepthObject}, nil),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`1`}, nil),
+			},
+		},
+		{
+			name: "patch validates object while target is unknown",
+			fn:   newOpBuiltInJsonMerge().buildJsonMergePatch,
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{``}, []bool{true}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{overDepthObject}, nil),
+			},
+		},
+		{
+			name: "preserve validates argument before following SQL null",
+			fn:   newOpBuiltInJsonMerge().buildJsonMergePreserve,
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{overDepthObject}, nil),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{``}, []bool{true}),
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			testCase := NewFunctionTestCase(
+				proc,
+				tt.inputs,
+				NewFunctionTestResult(types.T_json.ToType(), true, nil, nil),
+				tt.fn,
+			)
+			require.NoError(t, testCase.result.PreExtendAndReset(testCase.fnLength))
+			err := testCase.fn(
+				testCase.parameters,
+				testCase.result,
+				testCase.proc,
+				testCase.fnLength,
+				nil,
+			)
+			require.ErrorContains(t, err, "json document nesting depth exceeds 100")
+		})
+	}
+}
+
+func TestJsonMergeIgnoreAllRowsMaterializesLength(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	vec := runJsonFunctionWithSelectList(t, proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{`not json`, `still not json`}, []bool{false, false}),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{`not json`, `still not json`}, []bool{false, false}),
+		},
+		types.T_json.ToType(), newOpBuiltInJsonMerge().buildJsonMergePatch, &FunctionSelectList{AllNull: true})
+
+	require.Equal(t, 2, vec.Length())
+	require.True(t, vec.IsNull(0))
+	require.True(t, vec.IsNull(1))
+}
+
 func TestJsonSetCheckFn(t *testing.T) {
 	ctx := context.Background()
 	_, err := GetFunctionByName(ctx, "json_set", []types.Type{
@@ -936,6 +1614,583 @@ func TestJsonSetCheckFn(t *testing.T) {
 		types.T_int64.ToType(),
 	})
 	require.Error(t, err)
+}
+
+func TestJsonContainsCheckFn(t *testing.T) {
+	ctx := context.Background()
+
+	_, err := GetFunctionByName(ctx, "json_contains", []types.Type{
+		types.T_json.ToType(),
+		types.T_json.ToType(),
+	})
+	require.NoError(t, err)
+
+	_, err = GetFunctionByName(ctx, "json_contains", []types.Type{
+		types.T_varchar.ToType(),
+		types.T_varchar.ToType(),
+		types.T_varchar.ToType(),
+	})
+	require.NoError(t, err)
+
+	_, err = GetFunctionByName(ctx, "json_contains", []types.Type{
+		types.T_json.ToType(),
+	})
+	require.Error(t, err)
+
+	_, err = GetFunctionByName(ctx, "json_contains", []types.Type{
+		types.T_json.ToType(),
+		types.T_json.ToType(),
+		types.T_json.ToType(),
+	})
+	require.Error(t, err)
+}
+
+func TestJsonContainsPathCheckFn(t *testing.T) {
+	ctx := context.Background()
+
+	_, err := GetFunctionByName(ctx, "json_contains_path", []types.Type{
+		types.T_json.ToType(),
+		types.T_varchar.ToType(),
+		types.T_varchar.ToType(),
+	})
+	require.NoError(t, err)
+
+	_, err = GetFunctionByName(ctx, "json_contains_path", []types.Type{
+		types.T_varchar.ToType(),
+		types.T_varchar.ToType(),
+		types.T_varchar.ToType(),
+		types.T_varchar.ToType(),
+	})
+	require.NoError(t, err)
+
+	_, err = GetFunctionByName(ctx, "json_contains_path", []types.Type{
+		types.T_json.ToType(),
+		types.T_varchar.ToType(),
+	})
+	require.Error(t, err)
+
+	_, err = GetFunctionByName(ctx, "json_contains_path", []types.Type{
+		types.T_json.ToType(),
+		types.T_json.ToType(),
+		types.T_varchar.ToType(),
+	})
+	require.Error(t, err)
+}
+
+func TestJsonContains(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	t.Run("with path", func(t *testing.T) {
+		tc := tcTemp{
+			info: "json_contains with path",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{
+						`{"tags":["x","y"]}`,
+						`{"a":1,"b":2,"c":{"d":4}}`,
+						`{"a":1,"b":2,"c":{"d":4}}`,
+						`{"a":1,"b":2,"c":{"d":4}}`,
+						`{"a":1,"b":2,"c":{"d":4}}`,
+						`{"a":1}`,
+						`{"a":null}`,
+						`{"a":1}`,
+						`{"a":1}`,
+					},
+					[]bool{false, false, false, false, false, false, false, true, false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`"x"`, `1`, `1`, `{"d":4}`, `{"d":4}`, `1`, `null`, `1`, `1`},
+					[]bool{false, false, false, false, false, false, false, false, false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`$.tags`, `$.a`, `$.b`, `$.c`, `$.a`, `$.missing`, `$.a`, `$.a`, `$.a[0]`},
+					[]bool{false, false, false, false, false, false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{1, 1, 0, 1, 0, 0, 1, 0, 1},
+				[]bool{false, false, false, false, false, true, false, true, false}),
+		}
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, newOpBuiltInJsonContains().jsonContains)
+		s, info := fcTC.Run()
+		require.True(t, s, info)
+	})
+
+	t.Run("without path", func(t *testing.T) {
+		tc := tcTemp{
+			info: "json_contains without path",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`[1,2,3]`, `{"a":1,"b":{"c":2}}`, `["a","b"]`, `[{"a":1},{"b":2}]`, `true`},
+					[]bool{false, false, false, false, false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`[1,3]`, `{"b":{"c":2}}`, `"c"`, `{"b":2}`, `true`},
+					[]bool{false, false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{1, 1, 0, 1, 1},
+				[]bool{false, false, false, false, false}),
+		}
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, newOpBuiltInJsonContains().jsonContains)
+		s, info := fcTC.Run()
+		require.True(t, s, info)
+	})
+
+	t.Run("mysql json_no_table containment regressions", func(t *testing.T) {
+		notNulls := make([]bool, 21)
+		tc := tcTemp{
+			info: "json_contains mysql json_no_table containment regressions",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{
+						`[1,[2.0,3.0]]`,
+						`[1,2,[3,[4,5]],6,7]`,
+						`[1,3,5]`,
+						`[{"b":4,"a":7}]`,
+						`[{"b":4,"a":7},5]`,
+						`[{"b":4,"a":7},5.0]`,
+						`[null,1,[2,3],true,false]`,
+						`[null,1,[2,3],true,false]`,
+						`[true,false]`,
+						`[1,2]`,
+						`[1,2,[4]]`,
+						`[1,2,[4,5]]`,
+						`[1,2,[4,5]]`,
+						`[]`,
+						`[]`,
+						`[]`,
+						`[]`,
+						`[]`,
+						`{}`,
+						`{}`,
+						`{"a":1}`,
+					},
+					notNulls),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{
+						`[2.0]`,
+						`5`,
+						`[5,3,1,5]`,
+						`[{"a":7},{"b":4}]`,
+						`[5,{"a":7,"b":4}]`,
+						`[5,{"a":7.0E0,"b":4}]`,
+						`[null,1,[3],false]`,
+						`[null,1,[4],false]`,
+						`[[true]]`,
+						`[[1]]`,
+						`{"b":2}`,
+						`[1,2,3,4,5,6,7,8,9]`,
+						`[111111111111111111]`,
+						`{"a":1}`,
+						`[1,2,3,4,5]`,
+						`[1,2,3,4,{"a":1}]`,
+						`{"a":[1,2,3,4,5]}`,
+						`[]`,
+						`{}`,
+						`{"a":1}`,
+						`{"a":1,"b":2}`,
+					},
+					notNulls),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0},
+				notNulls),
+		}
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, newOpBuiltInJsonContains().jsonContains)
+		s, info := fcTC.Run()
+		require.True(t, s, info)
+	})
+
+	t.Run("numeric cross type", func(t *testing.T) {
+		tc := tcTemp{
+			info: "json_contains numeric cross type",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`1`, `{"a":1}`, `[1,2,3]`, `-1`, `[1,2.0,3]`},
+					[]bool{false, false, false, false, false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`1.0`, `{"a":1.0}`, `[1.0,3.0]`, `-1.0`, `[1.0,2,3.0]`},
+					[]bool{false, false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{1, 1, 1, 1, 1},
+				[]bool{false, false, false, false, false}),
+		}
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, newOpBuiltInJsonContains().jsonContains)
+		s, info := fcTC.Run()
+		require.True(t, s, info)
+	})
+
+	t.Run("numeric exact equality", func(t *testing.T) {
+		tc := tcTemp{
+			info: "json_contains numeric exact equality",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{
+						`1`,
+						`9007199254740993`,
+						`[1]`,
+						`{"a":1}`,
+						`0`,
+						`18446744073709551615`,
+						`18446744073709551615`,
+					},
+					[]bool{false, false, false, false, false, false, false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{
+						`1.000000009`,
+						`9007199254740992.0`,
+						`[1.000000009]`,
+						`{"a":1.000000009}`,
+						`-0.0`,
+						`18446744073709551615.0`,
+						`18446744073709551614.0`,
+					},
+					[]bool{false, false, false, false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{0, 0, 0, 0, 1, 0, 0},
+				[]bool{false, false, false, false, false, false, false}),
+		}
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, newOpBuiltInJsonContains().jsonContains)
+		s, info := fcTC.Run()
+		require.True(t, s, info)
+	})
+
+	t.Run("typed json input", func(t *testing.T) {
+		tc := tcTemp{
+			info: "json_contains typed json input",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_json.ToType(),
+					[]string{
+						mustJsonBinaryString(t, `{"a":1,"b":[1,2,3]}`),
+						mustJsonBinaryString(t, `[1,2,3]`),
+						mustJsonBinaryString(t, `{"a":false}`),
+					},
+					[]bool{false, false, false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`1`, `[1.0,3.0]`, `false`},
+					[]bool{false, false, false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`$.a[0]`, `$`, `$.a[0]`},
+					[]bool{false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{1, 1, 1},
+				[]bool{false, false, false}),
+		}
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, newOpBuiltInJsonContains().jsonContains)
+		s, info := fcTC.Run()
+		require.True(t, s, info)
+	})
+
+	t.Run("strict scalar type matching", func(t *testing.T) {
+		tc := tcTemp{
+			info: "json_contains strict scalar type matching",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`"1"`, `1`, `true`, `{"a":"1"}`, `{"a":1}`, `{"a":false}`, `{"a":false}`},
+					[]bool{false, false, false, false, false, false, false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`1`, `"1"`, `1`, `1`, `"1"`, `false`, `true`},
+					[]bool{false, false, false, false, false, false, false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`$`, `$`, `$`, `$.a`, `$.a`, `$.a`, `$.a`},
+					[]bool{false, false, false, false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{0, 0, 0, 0, 0, 1, 0},
+				[]bool{false, false, false, false, false, false, false}),
+		}
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, newOpBuiltInJsonContains().jsonContains)
+		s, info := fcTC.Run()
+		require.True(t, s, info)
+	})
+
+	t.Run("scalar autowrap path variants", func(t *testing.T) {
+		tc := tcTemp{
+			info: "json_contains scalar autowrap path variants",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`1`, `1`, `{"a":true}`, `{"a":"x"}`, `{"a":[{"b":1}]}`},
+					[]bool{false, false, false, false, false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`1`, `1`, `true`, `"x"`, `1`},
+					[]bool{false, false, false, false, false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`$[0]`, `$[1]`, `$.a[0]`, `$.a[0]`, `$.a[0].b[0]`},
+					[]bool{false, false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{1, 0, 1, 1, 1},
+				[]bool{false, true, false, false, false}),
+		}
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, newOpBuiltInJsonContains().jsonContains)
+		s, info := fcTC.Run()
+		require.True(t, s, info)
+	})
+}
+
+func TestJsonContainsErrors(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	t.Run("invalid candidate json", func(t *testing.T) {
+		tc := tcTemp{
+			info: "json_contains invalid candidate",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`{"a":"x"}`}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`x`}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`$.a`}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), true, nil, nil),
+		}
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, newOpBuiltInJsonContains().jsonContains)
+		s, info := fcTC.Run()
+		require.True(t, s, info)
+	})
+
+	t.Run("wildcard path", func(t *testing.T) {
+		tc := tcTemp{
+			info: "json_contains wildcard path",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`[1,2]`}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`1`}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`$[*]`}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), true, nil, nil),
+		}
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, newOpBuiltInJsonContains().jsonContains)
+		s, info := fcTC.Run()
+		require.True(t, s, info)
+	})
+}
+
+func TestJsonContainsPath(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	tc := tcTemp{
+		info: "json_contains_path matches json null and short circuits later null paths",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{`{"a":null}`, `{}`, `{"a":1}`, `{"a":1}`, `{"a":1}`, `{"a":1}`},
+				[]bool{false, false, false, false, false, false}),
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{`all`, `all`, `one`, `all`, `one`, `all`},
+				[]bool{false, false, false, false, false, false}),
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{`$.a`, `$.a`, `$.a`, `$.missing`, `$.missing`, `$.a`},
+				[]bool{false, false, false, false, false, false}),
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{`$`, `$.missing`, ``, ``, ``, ``},
+				[]bool{false, false, true, true, true, true}),
+		},
+		expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+			[]int64{1, 0, 1, 0, 0, 0},
+			[]bool{false, false, false, false, true, true}),
+	}
+	fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, newOpBuiltInJsonContainsPath().jsonContainsPath)
+	s, info := fcTC.Run()
+	require.True(t, s, info)
+}
+
+func TestJsonContainsPathMySQLRegressionSemantics(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	complexDoc := `{"a":true,"b":[1,2,{"c":[4,5,{"d":[6,7,8,9,10]}]}]}`
+	tc := tcTemp{
+		info: "json_contains_path supports MySQL all one wildcard and recursive path cases",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{complexDoc, complexDoc, `{"a":true,"b":[1,2]}`, `{"a":1,"b":2}`},
+				[]bool{false, false, false, false}),
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{`all`, `one`, `ALL`, `oNe`},
+				[]bool{false, false, false, false}),
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{`$**[1]`, `$.c`, `$.b[0]`, `$.*`},
+				[]bool{false, false, false, false}),
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{`$.b[0]`, `$**[1]`, `$.b[1]`, `$.missing`},
+				[]bool{false, false, false, false}),
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{`$.c`, `$.b[0]`, `$`, `$.b`},
+				[]bool{false, false, false, false}),
+		},
+		expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+			[]int64{0, 1, 1, 1},
+			[]bool{false, false, false, false}),
+	}
+	fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, newOpBuiltInJsonContainsPath().jsonContainsPath)
+	s, info := fcTC.Run()
+	require.True(t, s, info)
+
+	typedJSON := tcTemp{
+		info: "json_contains_path accepts typed json documents",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_json.ToType(),
+				[]string{mustJsonBinaryString(t, `{"a":null,"b":[1,2]}`)}, []bool{false}),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{`all`}, []bool{false}),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{`$.a`}, []bool{false}),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{`$.b[1]`}, []bool{false}),
+		},
+		expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{1}, []bool{false}),
+	}
+	fcTC = NewFunctionTestCase(proc, typedJSON.inputs, typedJSON.expect, newOpBuiltInJsonContainsPath().jsonContainsPath)
+	s, info = fcTC.Run()
+	require.True(t, s, info)
+}
+
+func TestJsonContainsPathEvaluationOrder(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	tests := []struct {
+		name   string
+		inputs []FunctionTestInput
+		expect FunctionTestResult
+	}{
+		{
+			name: "one skips a later invalid path after a hit",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`{"a":1}`}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`one`}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`$.a`}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`$[`}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{1}, []bool{false}),
+		},
+		{
+			name: "all skips a later invalid path after a miss",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`{"a":1}`}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`all`}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`$.missing`}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`$[`}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{false}),
+		},
+		{
+			name: "invalid document is evaluated before a later null path",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`{"a":`}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`one`}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{``}, []bool{true}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), true, nil, nil),
+		},
+		{
+			name: "invalid mode is evaluated before a later null path",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`{"a":1}`}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{`invalid`}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{``}, []bool{true}),
+			},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), true, nil, nil),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fcTC := NewFunctionTestCase(proc, tt.inputs, tt.expect, newOpBuiltInJsonContainsPath().jsonContainsPath)
+			s, info := fcTC.Run()
+			require.True(t, s, info)
+		})
+	}
+}
+
+func TestJsonContainsPathConstantCacheInvalidation(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	op := newOpBuiltInJsonContainsPath()
+
+	modeOne, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte("one"), 1, proc.Mp())
+	require.NoError(t, err)
+	mode, isNull, err := op.getMode(modeOne, vector.GenerateFunctionStrParameter(modeOne), 0, proc)
+	require.NoError(t, err)
+	require.False(t, isNull)
+	require.Equal(t, jsonContainsPathOne, mode)
+
+	modeAll, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte("all"), 1, proc.Mp())
+	require.NoError(t, err)
+	mode, isNull, err = op.getMode(modeAll, vector.GenerateFunctionStrParameter(modeAll), 0, proc)
+	require.NoError(t, err)
+	require.False(t, isNull)
+	require.Equal(t, jsonContainsPathAll, mode)
+
+	op.pathCache = make([]jsonContainsPathPathCache, 1)
+	pathA, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte("$.a"), 1, proc.Mp())
+	require.NoError(t, err)
+	parsedA, isNull, err := op.getPath(pathA, vector.GenerateFunctionStrParameter(pathA), 0, 0, proc)
+	require.NoError(t, err)
+	require.False(t, isNull)
+
+	pathB, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte("$.b"), 1, proc.Mp())
+	require.NoError(t, err)
+	parsedB, isNull, err := op.getPath(pathB, vector.GenerateFunctionStrParameter(pathB), 0, 0, proc)
+	require.NoError(t, err)
+	require.False(t, isNull)
+	require.NotSame(t, parsedA, parsedB)
+	require.Equal(t, `$.b`, op.pathCache[0].text)
+}
+
+func TestJsonContainsSelectList(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	t.Run("ignore all rows", func(t *testing.T) {
+		selectList := &FunctionSelectList{AllNull: true}
+		vec := runJsonFunctionWithSelectList(t, proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`not json`, `still not json`},
+					[]bool{false, false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`not json`, `still not json`},
+					[]bool{false, false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`bad path`, `$[*]`},
+					[]bool{false, false}),
+			},
+			types.T_int64.ToType(), newOpBuiltInJsonContains().jsonContains, selectList)
+
+		require.Equal(t, 2, vec.Length())
+		require.True(t, vec.IsNull(0))
+		require.True(t, vec.IsNull(1))
+	})
+
+	t.Run("skip selected rows", func(t *testing.T) {
+		selectList := &FunctionSelectList{AnyNull: true, SelectList: []bool{false, true}}
+		vec := runJsonFunctionWithSelectList(t, proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`not json`, `{"tags":["x","y"]}`},
+					[]bool{false, false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`not json`, `"x"`},
+					[]bool{false, false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`bad path`, `$.tags`},
+					[]bool{false, false}),
+			},
+			types.T_int64.ToType(), newOpBuiltInJsonContains().jsonContains, selectList)
+
+		require.True(t, vec.IsNull(0))
+		v, null := vector.GenerateFunctionFixedTypeParameter[int64](vec).GetValue(1)
+		require.False(t, null)
+		require.Equal(t, int64(1), v)
+	})
+
+	t.Run("null path row continues", func(t *testing.T) {
+		vec := runJsonFunctionWithSelectList(t, proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`{"a":1}`, `{"a":1}`},
+					[]bool{false, false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{`1`, `1`},
+					[]bool{false, false}),
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"", `$.a`},
+					[]bool{true, false}),
+			},
+			types.T_int64.ToType(), newOpBuiltInJsonContains().jsonContains, nil)
+
+		require.True(t, vec.IsNull(0))
+		v, null := vector.GenerateFunctionFixedTypeParameter[int64](vec).GetValue(1)
+		require.False(t, null)
+		require.Equal(t, int64(1), v)
+	})
 }
 
 func TestJsonSetValueTypes(t *testing.T) {
@@ -1523,6 +2778,18 @@ func mustJsonBinaryString(t *testing.T, raw string) string {
 	data, err := bj.Marshal()
 	require.NoError(t, err)
 	return string(data)
+}
+
+func nestedJSONMergeObject(depth int, leaf string) string {
+	var builder strings.Builder
+	for range depth {
+		builder.WriteString(`{"a":`)
+	}
+	builder.WriteString(leaf)
+	for range depth {
+		builder.WriteByte('}')
+	}
+	return builder.String()
 }
 
 func jsonVectorRowString(t *testing.T, vec *vector.Vector, row uint64) string {

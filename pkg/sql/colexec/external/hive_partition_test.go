@@ -1906,12 +1906,21 @@ func TestFillConstantVector_Bool(t *testing.T) {
 
 func TestFillConstantVector_UnsupportedVector(t *testing.T) {
 	proc := testutil.NewProc(t)
-	vec := vector.NewVec(types.T_array_float32.ToType())
-	col := &plan.ColDef{Name: "emb", Typ: plan.Type{Id: int32(types.T_array_float32)}}
+	// Vectors (any element width) cannot be a hive partition column.
+	for _, id := range []types.T{
+		types.T_array_float32, types.T_array_float64,
+		types.T_array_bf16, types.T_array_float16,
+		types.T_array_int8, types.T_array_uint8,
+	} {
+		t.Run(id.String(), func(t *testing.T) {
+			vec := vector.NewVec(id.ToType())
+			col := &plan.ColDef{Name: "emb", Typ: plan.Type{Id: int32(id)}}
 
-	err := fillConstantVector(vec, "[1,2,3]", col, 1, proc, "/test")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "unsupported")
+			err := fillConstantVector(vec, "[1,2,3]", col, 1, proc, "/test")
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "unsupported partition column type VECTOR")
+		})
+	}
 }
 
 func TestFillPartitionColumns_DefaultPartNull(t *testing.T) {
@@ -2763,10 +2772,11 @@ func TestHivePartitionListCache_Singleflight(t *testing.T) {
 	ResetHivePartitionListCacheForTest()
 	var calls atomic.Int32
 	started := make(chan struct{})
+	var startedOnce sync.Once
 	release := make(chan struct{})
 	listDir := func(ctx context.Context, prefix string) iter.Seq2[*fileservice.DirEntry, error] {
 		calls.Add(1)
-		close(started)
+		startedOnce.Do(func() { close(started) })
 		<-release
 		return func(yield func(*fileservice.DirEntry, error) bool) {
 			yield(&fileservice.DirEntry{Name: "year=2024", IsDir: true}, nil)

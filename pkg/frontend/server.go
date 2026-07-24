@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -46,6 +47,11 @@ var initConnectionID uint32 = 1000
 
 // ConnIDAllocKey is used get connection ID from HAKeeper.
 var ConnIDAllocKey = "____server_conn_id"
+
+const (
+	clientDisconnectProbeInterval = 5 * time.Second
+	clientDisconnectProbeGrace    = 30 * time.Second
+)
 
 // MOServer MatrixOne Server
 type MOServer struct {
@@ -94,9 +100,30 @@ func (mo *MOServer) Start() error {
 	logutil.Infof("Server Listening on : %s ", mo.addr)
 	mo.running = true
 	mo.startTempTableGC(24 * time.Hour)
+	mo.startConnectionLivenessMonitor()
 	mo.startListener()
 	setMoServerStarted(mo.service, true)
 	return nil
+}
+
+func (mo *MOServer) startConnectionLivenessMonitor() {
+	if mo == nil || mo.rm == nil || mo.rm.ctx == nil {
+		return
+	}
+	mo.wg.Add(1)
+	go func() {
+		defer mo.wg.Done()
+		ticker := time.NewTicker(clientDisconnectProbeInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-mo.rm.ctx.Done():
+				return
+			case now := <-ticker.C:
+				mo.rm.cancelDisconnectedRequests(now, clientDisconnectProbeGrace, connectionPeerClosed)
+			}
+		}
+	}()
 }
 
 func (mo *MOServer) Stop() error {
@@ -108,14 +135,9 @@ func (mo *MOServer) Stop() error {
 	mo.running = false
 	mo.mu.Unlock()
 
-	var errors []error
+	var err error
 	for _, listener := range mo.listeners {
-		if err := listener.Close(); err != nil {
-			errors = append(errors, err)
-		}
-	}
-	if len(errors) > 0 {
-		return errors[0]
+		err = errors.Join(err, listener.Close())
 	}
 
 	logutil.Debug("application listener closed")
@@ -129,7 +151,7 @@ func (mo *MOServer) Stop() error {
 	mo.rm.killNetConns()
 
 	logutil.Debug("application stopped")
-	return nil
+	return err
 }
 
 func (mo *MOServer) IsRunning() bool {

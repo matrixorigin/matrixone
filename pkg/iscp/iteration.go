@@ -34,14 +34,18 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"go.uber.org/zap"
 )
 
 type DataRetrieverConsumer interface {
 	DataRetriever
-	SetNextBatch(*ISCPData)
+	SetNextBatch(*ISCPData) bool
 	SetError(error)
+	Cancel(error)
+	IsCanceled() bool
 	Close()
 }
 
@@ -58,12 +62,28 @@ func ExecuteIteration(
 	iterCtx *IterationContext,
 	mp *mpool.MPool,
 ) (err error) {
+	return ExecuteIterationWithRuntime(ctx, nil, cnUUID, cnEngine, cnTxnClient, iterCtx, mp)
+}
+
+func ExecuteIterationWithRuntime(
+	ctx context.Context,
+	runtime *ISCPTaskExecutor,
+	cnUUID string,
+	cnEngine engine.Engine,
+	cnTxnClient client.TxnClient,
+	iterCtx *IterationContext,
+	mp *mpool.MPool,
+) (err error) {
+	iterCtx = runtime.filterFencedIteration(iterCtx)
+	if iterCtx == nil {
+		return nil
+	}
 	packer := types.NewPacker()
 	defer packer.Close()
 
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
 	ctxWithoutTimeout := ctx
-	ctx, cancel := context.WithTimeout(ctx, time.Hour)
+	ctx, cancel := context.WithTimeoutCause(ctx, time.Hour, moerr.NewInternalErrorNoCtx("iscp iteration timeout"))
 	defer cancel()
 
 	nowTs := cnEngine.LatestLogtailAppliedTime()
@@ -100,6 +120,9 @@ func ExecuteIteration(
 		iterCtx.jobIDs,
 	)
 	if err != nil {
+		if isPermanentError(err) {
+			return nil
+		}
 		return
 	}
 	preLSN := make([]uint64, len(iterCtx.jobNames))
@@ -133,9 +156,25 @@ func ExecuteIteration(
 		}
 	}
 	if needInit {
-		ctxWithAccount := context.WithValue(ctx, defines.TenantIDKey{}, iterCtx.accountID)
-		err = ProcessInitSQL(ctxWithAccount, cnUUID, cnEngine, cnTxnClient, jobSpecs[0].ConsumerInfo.InitSQL)
+		err = runInitSQLWithRuntime(
+			ctx,
+			runtime,
+			iterCtx,
+			func(initCtx context.Context) error {
+				ctxWithAccount := context.WithValue(initCtx, defines.TenantIDKey{}, iterCtx.accountID)
+				return ProcessInitSQL(
+					ctxWithAccount, cnUUID, cnEngine, cnTxnClient,
+					jobSpecs[0].ConsumerInfo.InitSQL,
+					jobSpecs[0].ConsumerInfo.SrcTable.DBName,
+					jobSpecs[0].ConsumerInfo.SrcTable.TableName,
+					jobSpecs[0].ConsumerInfo.IndexName,
+				)
+			},
+		)
 		if err != nil {
+			if errors.Is(err, errInitSQLJobFenced) {
+				return nil
+			}
 			return
 		}
 		statuses[0] = prevStatus[0]
@@ -241,34 +280,10 @@ func ExecuteIteration(
 	if len(tableDef.Pkey.Names) == 1 {
 		insCompositedPkColIdx = int(tableDef.Name2ColIndex[tableDef.Pkey.Names[0]])
 	}
-	allocateAtomicBatchIfNeed := func(atomicBatch *AtomicBatch) *AtomicBatch {
-		if atomicBatch == nil {
-			atomicBatch = NewAtomicBatch(mp)
-		}
-		return atomicBatch
-	}
 
-	dataRetrievers := make([]DataRetrieverConsumer, len(consumers))
 	typ := ISCPDataType_Tail
 	if iterCtx.fromTS.IsEmpty() {
 		typ = ISCPDataType_Snapshot
-	}
-	waitGroups := make([]sync.WaitGroup, len(consumers))
-	for i := range consumers {
-		if consumers[i] == nil {
-			continue
-		}
-		dataRetrievers[i] = NewDataRetriever(
-			ctxWithoutTimeout,
-			iterCtx.accountID,
-			iterCtx.tableID,
-			iterCtx.jobNames[i],
-			iterCtx.jobIDs[i],
-			statuses[i],
-			iterCtx.lsn[i],
-			typ,
-		)
-		defer dataRetrievers[i].Close()
 	}
 
 	err = FlushJobStatusOnIterationState(
@@ -290,7 +305,100 @@ func ExecuteIteration(
 		return
 	}
 
-	ctxWithCancel, cancel := context.WithCancel(ctxWithoutTimeout)
+	runISCPTaskIterationConsumers(
+		ctxWithoutTimeout,
+		runtime,
+		iterCtx,
+		changes,
+		consumers,
+		statuses,
+		typ,
+		packer,
+		mp,
+		insTSColIdx,
+		insCompositedPkColIdx,
+		delTSColIdx,
+		delCompositedPkColIdx,
+	)
+	for i, status := range statuses {
+		if runtime != nil && runtime.IsJobFenced(NewJobRuntimeKey(iterCtx.accountID, iterCtx.tableID, iterCtx.jobNames[i], iterCtx.jobIDs[i])) {
+			continue
+		}
+		if status.ErrorCode != 0 || typ == ISCPDataType_Snapshot {
+			state := ISCPJobState_Completed
+			if status.PermanentlyFailed() {
+				state = ISCPJobState_Error
+			}
+			watermark := status.From
+			if status.ErrorCode == 0 {
+				watermark = status.To
+			}
+			err = flushFinalJobStatusOnIterationState(
+				ctx,
+				cnUUID,
+				cnEngine,
+				cnTxnClient,
+				iterCtx,
+				i,
+				status,
+				watermark,
+				state,
+			)
+			if err != nil {
+				logutil.Error(
+					"ISCP-Task iteration flush job status failed",
+					zap.Error(err),
+				)
+			}
+		}
+	}
+
+	return nil
+}
+
+func runISCPTaskIterationConsumers(
+	ctx context.Context,
+	runtime *ISCPTaskExecutor,
+	iterCtx *IterationContext,
+	changes engine.ChangesHandle,
+	consumers []Consumer,
+	statuses []*JobStatus,
+	typ int8,
+	packer *types.Packer,
+	mp *mpool.MPool,
+	insTSColIdx int,
+	insCompositedPkColIdx int,
+	delTSColIdx int,
+	delCompositedPkColIdx int,
+) {
+	ctxWithCancel, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	dataRetrievers := make([]DataRetrieverConsumer, len(consumers))
+	for i := range consumers {
+		if consumers[i] == nil {
+			continue
+		}
+		dataRetrievers[i] = NewDataRetriever(
+			ctxWithCancel,
+			iterCtx.accountID,
+			iterCtx.tableID,
+			iterCtx.jobNames[i],
+			iterCtx.jobIDs[i],
+			statuses[i],
+			iterCtx.lsn[i],
+			typ,
+		)
+		defer dataRetrievers[i].Close()
+	}
+
+	allocateAtomicBatchIfNeed := func(atomicBatch *AtomicBatch) *AtomicBatch {
+		if atomicBatch == nil {
+			atomicBatch = NewAtomicBatch(mp)
+		}
+		return atomicBatch
+	}
+
 	changeHandelWg := sync.WaitGroup{}
 	changeHandelWg.Add(1)
 	go func() {
@@ -298,7 +406,6 @@ func ExecuteIteration(
 		defer func() {
 			logutil.Infof("ISCP-Task iteration %s, data length %d", iterCtx.String(), dataLength)
 		}()
-		defer cancel()
 		defer changeHandelWg.Done()
 		for {
 			select {
@@ -367,9 +474,26 @@ func ExecuteIteration(
 			}
 
 			noMoreData := data.noMoreData
-			data.Set(len(consumers))
-			for i := range consumers {
-				dataRetrievers[i].SetNextBatch(data)
+			active := make([]DataRetrieverConsumer, 0, len(dataRetrievers))
+			for i := range dataRetrievers {
+				if dataRetrievers[i] != nil && !dataRetrievers[i].IsCanceled() {
+					active = append(active, dataRetrievers[i])
+				}
+			}
+			data.Set(len(active))
+			if len(active) == 0 {
+				data.Close()
+			}
+			for _, retriever := range active {
+				if objectio.WaitInjected(objectio.FJ_ISCPCancelFanoutBeforeSend) {
+					logutil.Infof("ISCP-Task cancel fault wait %s", objectio.FJ_ISCPCancelFanoutBeforeSend)
+				}
+				if msg, injected := objectio.ISCPExecutorInjected(); injected && strings.HasPrefix(msg, "iscp:fanout-before-send:") {
+					logutil.Infof("ISCP-Task injected hook %s", msg)
+				}
+				if !retriever.SetNextBatch(data) {
+					data.Done()
+				}
 			}
 
 			if noMoreData {
@@ -378,6 +502,7 @@ func ExecuteIteration(
 		}
 	}()
 
+	waitGroups := make([]sync.WaitGroup, len(consumers))
 	for i, consumerEntry := range consumers {
 		if dataRetrievers[i] == nil {
 			continue
@@ -385,9 +510,37 @@ func ExecuteIteration(
 		waitGroups[i].Add(1)
 		go func(i int) {
 			defer waitGroups[i].Done()
-			ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, catalog.System_Account)
-			err := consumerEntry.Consume(ctx, dataRetrievers[i])
+			consumerCtx, consumerCancel := context.WithCancel(ctx)
+			defer consumerCancel()
+			consumerCtx = context.WithValue(consumerCtx, defines.TenantIDKey{}, catalog.System_Account)
+			var handle *RunningJobConsumer
+			key := NewJobRuntimeKey(iterCtx.accountID, iterCtx.tableID, iterCtx.jobNames[i], iterCtx.jobIDs[i])
+			if runtime != nil {
+				var ok bool
+				handle, ok = runtime.RegisterRunningConsumer(
+					key,
+					iterCtx.jobIDs[i],
+					iterCtx.lsn[i],
+					consumerCancel,
+					dataRetrievers[i].Cancel,
+				)
+				if !ok {
+					dataRetrievers[i].Cancel(moerr.NewInternalErrorNoCtx("iscp job consumer canceled"))
+					return
+				}
+				if objectio.WaitInjected(objectio.FJ_ISCPCancelAfterRegisterConsumer) {
+					logutil.Infof("ISCP-Task cancel fault wait %s job=%s", objectio.FJ_ISCPCancelAfterRegisterConsumer, iterCtx.jobNames[i])
+				}
+				if msg, injected := objectio.ISCPExecutorInjected(); injected && msg == "iscp:after-register-consumer:"+iterCtx.jobNames[i] {
+					logutil.Infof("ISCP-Task injected hook %s", msg)
+				}
+				defer runtime.UnregisterRunningConsumer(handle)
+			}
+			err := consumerEntry.Consume(consumerCtx, dataRetrievers[i])
 			if err != nil {
+				if runtime != nil && runtime.IsJobFenced(key) {
+					return
+				}
 				logutil.Error(
 					"ISCP-Task sink consume failed",
 					zap.Uint32("tenantID", iterCtx.accountID),
@@ -408,49 +561,42 @@ func ExecuteIteration(
 
 	cancel()
 	changeHandelWg.Wait()
-	for i, status := range statuses {
-		if status.ErrorCode != 0 || typ == ISCPDataType_Snapshot {
-			state := ISCPJobState_Completed
-			if status.PermanentlyFailed() {
-				state = ISCPJobState_Error
-			}
-			watermark := status.From
-			if status.ErrorCode == 0 {
-				watermark = status.To
-			}
-			err = retry(
-				ctx,
-				func() error {
-					return FlushJobStatusOnIterationState(
-						ctx,
-						cnUUID,
-						cnEngine,
-						cnTxnClient,
-						iterCtx.accountID,
-						iterCtx.tableID,
-						[]string{iterCtx.jobNames[i]},
-						[]uint64{iterCtx.jobIDs[i]},
-						[]uint64{iterCtx.lsn[i]},
-						[]*JobStatus{status},
-						watermark,
-						state,
-						iterCtx.lsn,
-					)
-				},
-				SubmitRetryTimes,
-				DefaultRetryInterval,
-				SubmitRetryDuration,
-			)
-			if err != nil {
-				logutil.Error(
-					"ISCP-Task iteration flush job status failed",
-					zap.Error(err),
-				)
-			}
-		}
-	}
+}
 
-	return nil
+func flushFinalJobStatusOnIterationState(
+	ctx context.Context,
+	cnUUID string,
+	cnEngine engine.Engine,
+	cnTxnClient client.TxnClient,
+	iterCtx *IterationContext,
+	jobIdx int,
+	status *JobStatus,
+	watermark types.TS,
+	state int8,
+) error {
+	return retry(
+		ctx,
+		func() error {
+			return FlushJobStatusOnIterationState(
+				ctx,
+				cnUUID,
+				cnEngine,
+				cnTxnClient,
+				iterCtx.accountID,
+				iterCtx.tableID,
+				[]string{iterCtx.jobNames[jobIdx]},
+				[]uint64{iterCtx.jobIDs[jobIdx]},
+				[]uint64{iterCtx.lsn[jobIdx]},
+				[]*JobStatus{status},
+				watermark,
+				state,
+				[]uint64{iterCtx.lsn[jobIdx]},
+			)
+		},
+		SubmitRetryTimes,
+		DefaultRetryInterval,
+		SubmitRetryDuration,
+	)
 }
 
 var FlushJobStatusOnIterationState = func(
@@ -468,9 +614,9 @@ var FlushJobStatusOnIterationState = func(
 	state int8,
 	prevLSN []uint64,
 ) (err error) {
-
+	jobStatuses = normalizeJobStatuses(jobStatuses, lsns)
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
-	ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
+	ctx, cancel := context.WithTimeoutCause(ctx, time.Minute*5, moerr.NewInternalErrorNoCtx("iscp flush job status timeout"))
 	defer cancel()
 	txnWriter, err := getTxn(ctx, cnEngine, cnTxnClient, "iscp iteration")
 	if err != nil {
@@ -494,7 +640,6 @@ var FlushJobStatusOnIterationState = func(
 		}
 	}()
 	for i := range jobNames {
-		jobStatuses[i].LSN = lsns[i]
 		err = FlushStatus(
 			ctx,
 			cnUUID,
@@ -546,8 +691,27 @@ func FlushStatus(
 	if err != nil {
 		return
 	}
-	result.Close()
+	defer result.Close()
+	if result.AffectedRows != 1 {
+		return moerr.NewInternalErrorNoCtxf("iscp flush status: update affected %d rows for job %s (id=%d), expected 1",
+			result.AffectedRows, jobName, jobID)
+	}
 	return
+}
+
+func normalizeJobStatuses(jobStatuses []*JobStatus, lsns []uint64) []*JobStatus {
+	if len(jobStatuses) != len(lsns) {
+		normalized := make([]*JobStatus, len(lsns))
+		copy(normalized, jobStatuses)
+		jobStatuses = normalized
+	}
+	for i := range lsns {
+		if jobStatuses[i] == nil {
+			jobStatuses[i] = &JobStatus{}
+		}
+		jobStatuses[i].LSN = lsns[i]
+	}
+	return jobStatuses
 }
 
 var GetJobSpecs = func(
@@ -565,7 +729,7 @@ var GetJobSpecs = func(
 	jobIDs []uint64,
 ) (jobSpec []*JobSpec, prevStatus []*JobStatus, err error) {
 	var buf bytes.Buffer
-	buf.WriteString("SELECT job_spec, job_status FROM mo_catalog.mo_iscp_log WHERE")
+	buf.WriteString("SELECT job_name, job_id, job_spec, job_status FROM mo_catalog.mo_iscp_log WHERE")
 	for i, jobName := range jobName {
 		if i > 0 {
 			buf.WriteString(" OR")
@@ -583,41 +747,75 @@ var GetJobSpecs = func(
 		prevLSNs[i] = lsns[i] - 1
 	}
 	defer execResult.Close()
+	expectedJobs := make(map[JobKey]int, len(jobName))
+	for i := range jobName {
+		expectedJobs[JobKey{JobName: jobName[i], JobID: jobIDs[i]}] = i
+	}
 	jobSpec = make([]*JobSpec, len(jobName))
 	prevStatus = make([]*JobStatus, len(jobName))
+	var foundRows int
+	var permanentErrMsg string
 	execResult.ReadRows(func(rows int, cols []*vector.Vector) bool {
-		if rows != len(jobName) {
-			errMsg := fmt.Sprintf("invalid rows %d, expected %d", rows, len(jobName))
-			FlushPermanentErrorMessage(
-				ctx,
-				cnUUID,
-				cnEngine,
-				cnTxnClient,
-				tenantId,
-				tableID,
-				jobName,
-				jobIDs,
-				lsns,
-				jobStatuses,
-				types.MaxTs(),
-				errMsg,
-				prevLSNs,
-			)
-		}
+		currentJobNames := executor.GetStringRows(cols[0])
+		currentJobIDs := vector.MustFixedColWithTypeCheck[uint64](cols[1])
 		for i := 0; i < rows; i++ {
-			jobSpec[i], err = UnmarshalJobSpec([]byte(cols[0].GetStringAt(i)))
-			if err != nil {
+			jobIdx, ok := expectedJobs[JobKey{JobName: currentJobNames[i], JobID: currentJobIDs[i]}]
+			if !ok {
+				permanentErrMsg = fmt.Sprintf("unexpected job %s/%d", currentJobNames[i], currentJobIDs[i])
 				return false
 			}
-			prevStatus[i], err = UnmarshalJobStatus([]byte(cols[1].GetStringAt(i)))
-			if err != nil {
+			if jobSpec[jobIdx] != nil || prevStatus[jobIdx] != nil {
+				permanentErrMsg = fmt.Sprintf("duplicate job %s/%d", currentJobNames[i], currentJobIDs[i])
 				return false
 			}
+			jobSpec[jobIdx], err = UnmarshalJobSpec([]byte(cols[2].GetStringAt(i)))
+			if err != nil {
+				permanentErrMsg = err.Error()
+				return false
+			}
+			prevStatus[jobIdx], err = UnmarshalJobStatus([]byte(cols[3].GetStringAt(i)))
+			if err != nil {
+				permanentErrMsg = err.Error()
+				return false
+			}
+			foundRows++
 		}
 		return true
 	})
+	if permanentErrMsg == "" && foundRows != len(jobName) {
+		permanentErrMsg = fmt.Sprintf("invalid rows %d, expected %d", foundRows, len(jobName))
+	}
+	if permanentErrMsg != "" {
+		err = FlushPermanentErrorMessage(
+			ctx,
+			cnUUID,
+			cnEngine,
+			cnTxnClient,
+			tenantId,
+			tableID,
+			jobName,
+			jobIDs,
+			lsns,
+			jobStatuses,
+			types.MaxTs(),
+			permanentErrMsg,
+			prevLSNs,
+		)
+		if err == nil {
+			err = errPermanent
+		}
+		return nil, nil, err
+	}
 	return
 }
+
+type permanentError struct{}
+
+func (permanentError) Error() string {
+	return "permanent error"
+}
+
+var errPermanent error = permanentError{}
 
 func FlushPermanentErrorMessage(
 	ctx context.Context,
@@ -642,8 +840,9 @@ func FlushPermanentErrorMessage(
 		zap.Any("jobIDs", jobIDs),
 		zap.String("errMsg", errMsg),
 	)
-	ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
+	ctx, cancel := context.WithTimeoutCause(ctx, time.Minute*5, moerr.NewInternalErrorNoCtx("iscp flush permanent error message timeout"))
 	defer cancel()
+	jobStatuses = normalizeJobStatuses(jobStatuses, lsns)
 	return FlushJobStatusOnIterationState(
 		ctx,
 		cnUUID,
@@ -661,9 +860,9 @@ func FlushPermanentErrorMessage(
 	)
 }
 
-// TODO
 func isPermanentError(err error) bool {
-	return err.Error() == "permanent error"
+	var target permanentError
+	return errors.As(err, &target)
 }
 
 func (status *JobStatus) SetError(err error) {
@@ -694,12 +893,135 @@ func NewIterationContext(accountID uint32, tableID uint64, jobNames []string, jo
 	}
 }
 
+// initSQLSessionVars loads the source table's def and returns the target
+// index's captured session_vars blob (algo_params.session_vars, JSON text), or
+// nil if absent. Load failures (Database/Relation) and the IndexParamsSessionVars
+// parse error are returned so the caller can fail the InitSQL rather than
+// silently rebuild with defaults; an absent blob (no index match, or no
+// session_vars key) is (nil, nil) — legitimate, skip the overlay.
+func initSQLSessionVars(ctx context.Context, cnEngine engine.Engine, txnOp client.TxnOperator, dbName, tableName, indexName string) ([]byte, error) {
+	if dbName == "" || tableName == "" || indexName == "" {
+		return nil, nil
+	}
+	db, err := cnEngine.Database(ctx, dbName, txnOp)
+	if err != nil {
+		return nil, err
+	}
+	rel, err := db.Relation(ctx, tableName, nil)
+	if err != nil {
+		return nil, err
+	}
+	tableDef := rel.CopyTableDef(ctx)
+	if tableDef == nil {
+		return nil, nil
+	}
+	for _, idx := range tableDef.Indexes {
+		if idx.IndexName != indexName {
+			continue
+		}
+		sv, serr := catalog.IndexParamsSessionVars(idx.IndexAlgoParams)
+		if serr != nil {
+			return nil, serr
+		}
+		return sv, nil
+	}
+	return nil, nil
+}
+
+// initSQLResolver builds the system-variable resolver for an InitSQL build.
+// When sessionVars (the index's captured algo_params.session_vars) is present,
+// its typed values overlay the process defaults so the background build
+// (cagra_create/ivfpq_create/...) reproduces the create-time config (e.g.
+// kmeans_train_percent); every other var falls through to
+// executor.DefaultResolveVariable. With no sessionVars it IS
+// DefaultResolveVariable (may be nil — caller guards), preserving prior
+// behaviour. Note md.ResolveVariableFunc errors on a var it doesn't hold, so
+// the wrapper falls back on error rather than propagating it.
+func initSQLResolver(sessionVars []byte) (func(string, bool, bool) (interface{}, error), error) {
+	def := executor.DefaultResolveVariable
+	if len(sessionVars) == 0 {
+		// No captured session_vars (old index / non-vector / no build vars):
+		// skip the overlay and resolve through the process default. Not an error.
+		return def, nil
+	}
+	// session_vars is JSON *text* (from algo_params), so parse it with the text
+	// parser (NewMetadataFromJson → bytejson.ParseFromString). NewMetadata uses
+	// bj.Unmarshal, which expects the binary bytejson encoding and would silently
+	// mis-parse the text → md.bj garbage → every lookup falls back.
+	md, err := sqlexec.NewMetadataFromJson(string(sessionVars))
+	if err != nil {
+		// session_vars is present but unparseable — surface the error rather than
+		// silently rebuilding with defaults (which would corrupt the index).
+		return nil, err
+	}
+	if md == nil {
+		return def, nil
+	}
+	return func(name string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+		// Captured vars resolve from the overlay; everything else (timezone,
+		// sql_mode, …) falls through to the process default — that per-variable
+		// fallback is expected, unlike the parse-failure case above.
+		if v, verr := md.ResolveVariableFunc(name, isSystemVar, isGlobalVar); verr == nil && v != nil {
+			return v, nil
+		}
+		if def != nil {
+			return def(name, isSystemVar, isGlobalVar)
+		}
+		return nil, nil
+	}, nil
+}
+
+type initSQLJobFencedError struct{}
+
+func (initSQLJobFencedError) Error() string {
+	return "iscp init sql job fenced"
+}
+
+func (initSQLJobFencedError) Is(target error) bool {
+	_, ok := target.(initSQLJobFencedError)
+	return ok
+}
+
+var errInitSQLJobFenced error = initSQLJobFencedError{}
+
+func runInitSQLWithRuntime(
+	ctx context.Context,
+	runtime *ISCPTaskExecutor,
+	iterCtx *IterationContext,
+	run func(context.Context) error,
+) error {
+	if run == nil {
+		return nil
+	}
+	if runtime == nil {
+		return run(ctx)
+	}
+	key := NewJobRuntimeKey(iterCtx.accountID, iterCtx.tableID, iterCtx.jobNames[0], iterCtx.jobIDs[0])
+	initCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	handle, ok := runtime.RegisterRunningConsumer(
+		key,
+		iterCtx.jobIDs[0],
+		iterCtx.lsn[0],
+		cancel,
+		nil,
+	)
+	if !ok {
+		return errInitSQLJobFenced
+	}
+	defer runtime.UnregisterRunningConsumer(handle)
+	return run(initCtx)
+}
+
 func ProcessInitSQL(
 	ctx context.Context,
 	cnUUID string,
 	cnEngine engine.Engine,
 	cnTxnClient client.TxnClient,
 	sql string,
+	dbName string,
+	tableName string,
+	indexName string,
 ) (err error) {
 	decoded, err := base64.StdEncoding.DecodeString(sql)
 	if err != nil {
@@ -714,7 +1036,9 @@ func ProcessInitSQL(
 		0)
 	txnOp, err := cnTxnClient.New(ctx, nowTs, createByOpt)
 	if txnOp != nil {
-		defer txnOp.Commit(ctx)
+		defer func() {
+			err = finishInitSQLTxn(ctx, txnOp, err)
+		}()
 	}
 	// injection is for ut
 
@@ -728,10 +1052,65 @@ func ProcessInitSQL(
 	if err != nil {
 		return
 	}
-	result, err := ExecWithResult(ctx, sql, cnUUID, txnOp)
+
+	// Fetch the target index's captured build-time session vars from
+	// algo_params.session_vars (recorded at CREATE INDEX). The InitSQL build
+	// (cagra_create/ivfpq_create/...) resolves vars like kmeans_train_percent
+	// through this process's resolver; overlaying the captured values lets the
+	// background rebuild reproduce the create-time config instead of process
+	// defaults. A load/parse failure is surfaced; an absent blob yields nil.
+	sessionVars, svErr := initSQLSessionVars(ctx, cnEngine, txnOp, dbName, tableName, indexName)
+	if svErr != nil {
+		err = svErr
+		return
+	}
+
+	// Run the InitSQL through sqlexec's background SqlContext rather than the
+	// frontend back-exec. sqlexec.RunSql (SqlContext path) runs IsFrontend=false
+	// and passes the SqlContext's ResolveVariableFunc straight into the executor
+	// opts, so the overlay built from algo_params.session_vars
+	// (kmeans_train_percent etc.) actually reaches the cuvs build. The frontend
+	// back-exec instead resets the proc resolver to the back session's default
+	// (back_exec.go), silently dropping the overlay. initSQLResolver overlays the
+	// captured session_vars on top of executor.DefaultResolveVariable.
+	accountId, aerr := defines.GetAccountId(ctx)
+	if aerr != nil {
+		err = aerr
+		return
+	}
+	resolver, rerr := initSQLResolver(sessionVars)
+	if rerr != nil {
+		err = rerr
+		return
+	}
+	sqlctx := sqlexec.NewSqlContext(ctx, cnUUID, txnOp, accountId, resolver)
+	sqlproc := sqlexec.NewSqlProcessWithContext(sqlctx)
+	result, err := sqlexec.RunSql(sqlproc, sql)
 	if err != nil {
 		return
 	}
 	defer result.Close()
+	if err = ctx.Err(); err != nil {
+		return
+	}
 	return
+}
+
+func finishInitSQLTxn(ctx context.Context, txnOp client.TxnOperator, err error) error {
+	if txnOp == nil {
+		return err
+	}
+	cleanupCtx, cancel := context.WithTimeoutCause(
+		context.WithoutCancel(ctx),
+		time.Minute*5,
+		moerr.NewInternalErrorNoCtx("iscp init sql txn finish timeout"),
+	)
+	defer cancel()
+	if err != nil {
+		if rollbackErr := txnOp.Rollback(cleanupCtx); rollbackErr != nil {
+			return errors.Join(err, rollbackErr)
+		}
+		return err
+	}
+	return txnOp.Commit(cleanupCtx)
 }

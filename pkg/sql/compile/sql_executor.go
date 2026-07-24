@@ -42,6 +42,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
@@ -66,6 +67,12 @@ func ensureExecutorContext(ctx context.Context) context.Context {
 		return context.Background()
 	}
 	return ctx
+}
+
+func newInternalStatementContext(parent context.Context) context.Context {
+	return statistic.ContextWithStatsInfo(
+		ensureExecutorContext(parent),
+		statistic.NewStatsInfo())
 }
 
 // NewSQLExecutor returns a internal used sql service. It can execute sql in current CN.
@@ -284,6 +291,14 @@ func (exec *txnExecutor) Exec(
 	sql string,
 	statementOption executor.StatementOption,
 ) (executor.Result, error) {
+	parentCtx := exec.ctx
+	exec.ctx = newInternalStatementContext(parentCtx)
+	defer func() {
+		// The fresh StatsInfo is statement-owned. Do not retain it in a
+		// long-lived transaction executor or build an unbounded context chain.
+		exec.ctx = parentCtx
+	}()
+
 	// NOTE: This code is to restore tenantID information in the Context when temporarily switching tenants
 	// so that it can be restored to its original state after completing the task.
 	var originCtx context.Context
@@ -374,11 +389,28 @@ func (exec *txnExecutor) Exec(
 	// Attach original frontend session to support session-scoped metadata
 	// (e.g. temporary-table alias mapping) in internal SQL compilation.
 	proc.Session = getInternalExecutorSession(exec.ctx)
+	// A DisableIncrStatement execution runs on the caller's transaction
+	// without opening a statement, so its compile must not advance the
+	// workspace snapshot write offset (the statement boundary).
+	proc.SetIncrStatementDisabled(exec.opts.DisableIncrStatement())
 	proc.SetResolveVariableFunc(exec.opts.ResolveVariableFunc())
 
 	if exec.opts.ResolveVariableFunc() != nil {
 		proc.SetResolveVariableFunc(exec.opts.ResolveVariableFunc())
 	}
+
+	// Propagate the "is this frontend?" signal onto the proc — same
+	// pattern as ResolveVariableFunc above. The Options default is
+	// IsFrontend=false (background) so every caller of the internal
+	// SQL executor that doesn't explicitly opt in is treated as
+	// background; frontend code that runs session-bound internal SQL
+	// opts in via opts.WithFrontend(true). Detection sites (e.g.
+	// IdxcronMetadata) consult proc.Base.IsFrontend rather than
+	// inferring from resolver behaviour, which is unreliable because
+	// background paths set resolvers too (idxcron's task.Metadata,
+	// ProcessInitSQL's executor.DefaultResolveVariable).
+	proc.Base.IsFrontend = exec.opts.IsFrontend()
+	applyExecutorLockWaitTimeout(proc, exec.opts)
 
 	prepared := false
 	if statementOption.HasParams() {
@@ -592,12 +624,36 @@ func (exec *txnExecutor) LockTable(table string) error {
 		nil,
 		exec.s.taskservice,
 	)
+	proc.Base.IsFrontend = exec.opts.IsFrontend()
+	applyExecutorLockWaitTimeout(proc, exec.opts)
 	proc.Base.SessionInfo.TimeZone = exec.opts.GetTimeZone()
 	proc.Base.SessionInfo.Buf = exec.s.buf
 	defer func() {
 		proc.Free()
 	}()
 	return doLockTable(exec.s.eng, proc, rel, false)
+}
+
+// applyExecutorLockWaitTimeout copies a per-execution background budget into
+// SessionInfo, whose background lock-timeout precedence is above the default
+// variable resolver. LockWaitTimeoutSet preserves an explicit zero so reusing
+// a transaction does not resurrect its stale timeout. SessionInfo stores whole
+// seconds, so positive fractions are rounded up rather than becoming zero.
+func applyExecutorLockWaitTimeout(proc *process.Process, opts executor.Options) {
+	if proc == nil || !opts.HasLockWaitTimeout() {
+		return
+	}
+	timeout := opts.LockWaitTimeout()
+	proc.Base.SessionInfo.LockWaitTimeoutSet = true
+	if timeout <= 0 {
+		proc.Base.SessionInfo.LockWaitTimeout = 0
+		return
+	}
+	seconds := int64(timeout / time.Second)
+	if timeout%time.Second != 0 {
+		seconds++
+	}
+	proc.Base.SessionInfo.LockWaitTimeout = seconds
 }
 
 func (exec *txnExecutor) Txn() client.TxnOperator {

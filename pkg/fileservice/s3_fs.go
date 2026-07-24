@@ -16,13 +16,14 @@ package fileservice
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"io"
 	"iter"
 	pathpkg "path"
 	"runtime"
-	"sort"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -40,9 +41,10 @@ import (
 
 // S3FS is a FileService implementation backed by S3
 type S3FS struct {
-	name      string
-	storage   ObjectStorage
-	keyPrefix string
+	name       string
+	storage    ObjectStorage
+	rawStorage ObjectStorage
+	keyPrefix  string
 
 	memCache    *MemCache
 	diskCache   *DiskCache
@@ -130,6 +132,8 @@ func NewS3FS(
 
 	}
 
+	fs.rawStorage = fs.storage
+
 	// limit number of concurrent operations
 	concurrency := args.Concurrency
 	if concurrency == 0 {
@@ -157,6 +161,82 @@ func NewS3FS(
 	}
 
 	return fs, nil
+}
+
+var _ ObjectCopier = new(S3FS)
+
+// CopyObject performs a provider-side copy when both file services are backed
+// by compatible object-store SDKs. It intentionally returns (false, nil) for
+// incompatible backends so callers can retain a streaming fallback.
+func (s *S3FS) CopyObject(
+	ctx context.Context,
+	srcFS FileService,
+	srcPath string,
+	dstPath string,
+) (bool, error) {
+	src, srcPath, err := resolveS3CopySource(srcFS, srcPath)
+	if err != nil || src == nil {
+		return false, err
+	}
+	copier, ok := s.storage.(objectStorageCopier)
+	if !ok {
+		return false, nil
+	}
+	srcParsed, err := ParsePathAtService(srcPath, src.name)
+	if err != nil {
+		return false, err
+	}
+	dstParsed, err := ParsePathAtService(dstPath, s.name)
+	if err != nil {
+		return false, err
+	}
+	srcKey := src.pathToKey(srcParsed.File)
+	dstKey := s.pathToKey(dstParsed.File)
+	exists, err := s.storage.Exists(ctx, dstKey)
+	if err != nil {
+		return false, err
+	}
+	if exists {
+		return false, moerr.NewFileAlreadyExistsNoCtx(dstPath)
+	}
+	return DoWithRetryContext(
+		ctx,
+		"CopyObject",
+		func() (bool, error) {
+			return copier.CopyObject(ctx, src.rawStorage, srcKey, dstKey)
+		},
+		maxRetryAttemps,
+		IsRetryableError,
+	)
+}
+
+func resolveS3CopySource(fs FileService, filePath string) (*S3FS, string, error) {
+	switch f := fs.(type) {
+	case *S3FS:
+		return f, filePath, nil
+	case *subPathFS:
+		p, err := f.toUpstreamPath(filePath)
+		if err != nil {
+			return nil, "", err
+		}
+		return resolveS3CopySource(f.upstream, p)
+	case *FileServices:
+		p, err := ParsePathAtService(filePath, "")
+		if err != nil {
+			return nil, "", err
+		}
+		name := p.Service
+		if name == "" {
+			name = f.defaultName
+		}
+		upstream, ok := f.mappings[strings.ToLower(name)]
+		if !ok {
+			return nil, "", moerr.NewNoServiceNoCtx(name)
+		}
+		return resolveS3CopySource(upstream, filePath)
+	default:
+		return nil, "", nil
+	}
 }
 
 func (s *S3FS) AllocateCacheData(ctx context.Context, size int) fscache.Data {
@@ -429,8 +509,8 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (bytesWritten int, er
 	}
 
 	// sort
-	sort.Slice(vector.Entries, func(i, j int) bool {
-		return vector.Entries[i].Offset < vector.Entries[j].Offset
+	slices.SortFunc(vector.Entries, func(a, b IOEntry) int {
+		return cmp.Compare(a.Offset, b.Offset)
 	})
 
 	// reader
@@ -462,13 +542,24 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (bytesWritten int, er
 	}
 	key := s.pathToKey(path.File)
 	enableParallel := false
-	switch s.parallelMode {
+	parallelMode := s.parallelMode
+	if mode, ok := parallelModeFromContext(ctx); ok {
+		parallelMode = mode
+	}
+	switch parallelMode {
 	case ParallelForce:
 		enableParallel = true
 	case ParallelAuto:
 		if size == nil || *size >= minMultipartPartSize {
 			enableParallel = true
 		}
+	}
+	if size == nil {
+		logutil.Info("s3 write unknown-size stream",
+			zap.String("key", key),
+			zap.Uint8("parallel-mode", uint8(parallelMode)),
+			zap.Bool("parallel-enabled", enableParallel),
+		)
 	}
 
 	if pmw, ok := s.storage.(ParallelMultipartWriter); ok && pmw.SupportsParallelMultipart() &&
@@ -490,6 +581,7 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (bytesWritten int, er
 		}
 		metric.FSWriteDurationStorage.Observe(time.Since(storageStart).Seconds())
 	}
+	bytesWritten = int(n.Load())
 
 	// write to disk cache
 	if writeDiskCache {
@@ -503,10 +595,20 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (bytesWritten int, er
 		metric.FSWriteDurationDiskCacheSet.Observe(time.Since(diskCacheStart).Seconds())
 	}
 
-	return int(n.Load()), nil
+	return bytesWritten, nil
 }
 
 func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
+	// A merge leader must not wake its waiters until successful cache updates
+	// have completed. Cache updates are deferred below, so register this defer
+	// first and let their later defers run before the merge is marked done.
+	var finishMerge func()
+	defer func() {
+		if finishMerge != nil {
+			finishMerge()
+		}
+	}()
+
 	// Record S3 IO and netwokIO(un memory IO) time Consumption
 	stats := statistic.StatsInfoFromContext(ctx)
 	ioStart := time.Now()
@@ -660,7 +762,7 @@ read_disk_cache:
 		}
 		done, wait := s.ioMerger.Merge(mergeKey, waitDuration)
 		if done != nil {
-			defer done()
+			finishMerge = done
 			stats.AddS3FSReadIOMergerTimeConsumption(time.Since(startLock))
 			metric.FSReadDurationIOMerger.Observe(time.Since(startLock).Seconds())
 			LogEvent(ctx, str_ioMerger_Merge_initiate)

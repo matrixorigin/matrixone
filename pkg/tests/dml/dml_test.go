@@ -30,9 +30,11 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/embed"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 )
 
 func TestDeleteAndSelect(t *testing.T) {
@@ -181,6 +183,94 @@ func TestDataBranchDiffAsFile(t *testing.T) {
 		})
 }
 
+func dataBranchScaleRows(full, short int) int {
+	if testing.Short() {
+		return short
+	}
+	return full
+}
+
+func TestCloneCommitFailureRollbackKeepsSourceFiles(t *testing.T) {
+	embed.RunBaseClusterTests(
+		func(c embed.Cluster) {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*240)
+			defer cancel()
+
+			cn1, err := c.GetCNService(0)
+			require.NoError(t, err)
+
+			port := cn1.GetServiceConfig().CN.Frontend.Port
+			dsn := fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", port)
+			sqlDB, err := sql.Open("mysql", dsn)
+			require.NoError(t, err)
+			defer sqlDB.Close()
+
+			runCloneCommitFailureRollbackKeepsSourceFiles(t, ctx, sqlDB)
+		})
+}
+
+func runCloneCommitFailureRollbackKeepsSourceFiles(t *testing.T, parentCtx context.Context, db *sql.DB) {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(parentCtx, time.Second*120)
+	defer cancel()
+
+	dbName := testutils.GetDatabaseName(t)
+	execSQLDB(t, ctx, db, fmt.Sprintf("create database `%s`", dbName))
+	defer func() {
+		execSQLDB(t, ctx, db, "use mo_catalog")
+		execSQLDB(t, ctx, db, fmt.Sprintf("drop database if exists `%s`", dbName))
+	}()
+	execSQLDB(t, ctx, db, fmt.Sprintf("use `%s`", dbName))
+	execSQLDB(t, ctx, db, "create table src (id int primary key, value int, note varchar(32))")
+
+	// Force the source insert and clone transaction to use CN object files, then
+	// fail commit after workspace dump to exercise rollback with clone metadata alive.
+	fault.Enable()
+	defer fault.Disable()
+
+	removeForceFlush, err := objectio.SimpleInject(objectio.FJ_CNWorkspaceForceFlush)
+	require.NoError(t, err)
+	defer removeForceFlush()
+
+	execSQLDB(t, ctx, db, "insert into src select result, result * 10, concat('seed_', cast(result as char)) from generate_series(1,5000) g")
+	require.Equal(t, 5000, queryRowCount(t, ctx, db, "select count(*) from src"))
+
+	removeCommitFailure, err := objectio.SimpleInject(objectio.FJ_CNCommitAfterWorkspaceDumpFailed)
+	require.NoError(t, err)
+	defer removeCommitFailure()
+
+	conn, err := db.Conn(ctx)
+	require.NoError(t, err)
+	connClosed := false
+	defer func() {
+		if !connClosed {
+			_ = conn.Close()
+		}
+	}()
+
+	_, err = conn.ExecContext(ctx, fmt.Sprintf("use `%s`", dbName))
+	require.NoError(t, err)
+	_, err = conn.ExecContext(ctx, "begin")
+	require.NoError(t, err)
+	_, err = conn.ExecContext(ctx, "create table clone_t clone src")
+	require.NoError(t, err)
+	_, err = conn.ExecContext(ctx, "alter table clone_t add column added int default 7")
+	require.NoError(t, err)
+	_, err = conn.ExecContext(ctx, "commit")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "injected commit failure after workspace dump")
+	_ = conn.Close()
+	connClosed = true
+
+	removeCommitFailure()
+
+	require.Equal(t, 0, queryRowCount(t, ctx, db,
+		fmt.Sprintf("select count(*) from information_schema.tables where table_schema = '%s' and table_name = 'clone_t'", dbName)))
+	require.Equal(t, 5000, queryRowCount(t, ctx, db, "select count(*) from src"))
+	require.Equal(t, 50, queryRowCount(t, ctx, db, "select count(*) from src where id mod 100 = 0"))
+}
+
 func runSinglePKWithBase(t *testing.T, parentCtx context.Context, db *sql.DB) {
 	t.Helper()
 
@@ -215,7 +305,7 @@ func runSinglePKWithBase(t *testing.T, parentCtx context.Context, db *sql.DB) {
 
 	sqlContent := readSQLFile(t, diffPath)
 	lowerContent := strings.ToLower(sqlContent)
-	require.Contains(t, lowerContent, fmt.Sprintf("insert into %s.%s", strings.ToLower(dbName), base))
+	require.Contains(t, lowerContent, "insert into "+diffSQLTable(dbName, base))
 
 	applyDiffStatements(t, ctx, db, sqlContent)
 	assertTablesEqual(t, ctx, db, dbName, branch, base)
@@ -255,8 +345,8 @@ func runMultiPKWithBase(t *testing.T, parentCtx context.Context, db *sql.DB) {
 
 	sqlContent := readSQLFile(t, diffPath)
 	lowerContent := strings.ToLower(sqlContent)
-	require.Contains(t, lowerContent, fmt.Sprintf("insert into %s.%s", strings.ToLower(dbName), base))
-	require.Contains(t, lowerContent, fmt.Sprintf("delete from %s.%s where (org_id,event_id)", strings.ToLower(dbName), base))
+	require.Contains(t, lowerContent, "insert into "+diffSQLTable(dbName, base))
+	require.Contains(t, lowerContent, "delete from "+diffSQLTable(dbName, base)+" where "+diffSQLColumns("org_id", "event_id"))
 
 	applyDiffStatements(t, ctx, db, sqlContent)
 	assertTablesEqual(t, ctx, db, dbName, branch, base)
@@ -353,6 +443,8 @@ func runLargeCompositeDiff(t *testing.T, parentCtx context.Context, db *sql.DB) 
 	branch := "composite_branch"
 	diffDir := t.TempDir()
 	diffLiteral := strings.ReplaceAll(diffDir, "'", "''")
+	baseRows := dataBranchScaleRows(10000, 2000)
+	insertRows := dataBranchScaleRows(800, 200)
 
 	execSQLDB(t, ctx, db, fmt.Sprintf("create database `%s`", dbName))
 	defer func() {
@@ -383,7 +475,7 @@ select
 	g.result * 0.001 as ratio,
 	concat('seed-', g.result %% 200) as memo,
 	date_add('2024-01-01 00:00:00', interval g.result second) as created_at
-from generate_series(1, 10000) as g`, base)
+from generate_series(1, %d) as g`, base, baseRows)
 	execSQLDB(t, ctx, db, baseInsert)
 
 	execSQLDB(t, ctx, db, fmt.Sprintf("data branch create table %s from %s", branch, base))
@@ -398,7 +490,7 @@ select
 	g.result * 0.002 as ratio,
 	concat('new-', g.result %% 500) as memo,
 	date_add('2024-02-01 00:00:00', interval g.result second) as created_at
-from generate_series(10001, 10800) as g`, branch)
+from generate_series(%d, %d) as g`, branch, baseRows+1, baseRows+insertRows)
 	execSQLDB(t, ctx, db, newInserts)
 
 	execSQLDB(t, ctx, db, fmt.Sprintf(
@@ -415,8 +507,8 @@ from generate_series(10001, 10800) as g`, branch)
 
 	sqlContent := readSQLFile(t, diffPath)
 	lowerContent := strings.ToLower(sqlContent)
-	require.Contains(t, lowerContent, fmt.Sprintf("insert into %s.%s", strings.ToLower(dbName), base))
-	require.Contains(t, lowerContent, fmt.Sprintf("delete from %s.%s", strings.ToLower(dbName), base))
+	require.Contains(t, lowerContent, "insert into "+diffSQLTable(dbName, base))
+	require.Contains(t, lowerContent, "delete from "+diffSQLTable(dbName, base))
 
 	applyDiffStatements(t, ctx, db, sqlContent)
 	assertTablesEqual(t, ctx, db, dbName, branch, base)
@@ -486,6 +578,7 @@ func runCSVLoadSimple(t *testing.T, parentCtx context.Context, db *sql.DB) {
 	target := "csv_massive_target"
 	diffDir := t.TempDir()
 	diffLiteral := strings.ReplaceAll(diffDir, "'", "''")
+	rowCount := dataBranchScaleRows(1000*100, int(objectio.BlockMaxRows)*2)
 
 	execSQLDB(t, ctx, db, fmt.Sprintf("create database `%s`", dbName))
 	defer func() {
@@ -495,7 +588,7 @@ func runCSVLoadSimple(t *testing.T, parentCtx context.Context, db *sql.DB) {
 	execSQLDB(t, ctx, db, fmt.Sprintf("use `%s`", dbName))
 	execSQLDB(t, ctx, db, fmt.Sprintf("create table %s (a int primary key, b int)", base))
 	execSQLDB(t, ctx, db, fmt.Sprintf("create table %s like %s", target, base))
-	execSQLDB(t, ctx, db, fmt.Sprintf("insert into %s select *, * from generate_series(1, %d) g", target, 1000*100))
+	execSQLDB(t, ctx, db, fmt.Sprintf("insert into %s select *, * from generate_series(1, %d) g", target, rowCount))
 
 	diffStmt := fmt.Sprintf("data branch diff %s against %s output file '%s'", target, base, diffLiteral)
 	diffPath := execDiffAndFetchFile(t, ctx, db, diffStmt)
@@ -678,6 +771,7 @@ func runDiffOutputLimitLargeBase(t *testing.T, parentCtx context.Context, db *sq
 	dbName := testutils.GetDatabaseName(t)
 	base := "limit_large_t1"
 	branch := "limit_large_t2"
+	rowCount := dataBranchScaleRows(8192*100, 8192*8)
 
 	execSQLDB(t, ctx, db, fmt.Sprintf("create database `%s`", dbName))
 	defer func() {
@@ -687,7 +781,7 @@ func runDiffOutputLimitLargeBase(t *testing.T, parentCtx context.Context, db *sq
 	execSQLDB(t, ctx, db, fmt.Sprintf("use `%s`", dbName))
 
 	execSQLDB(t, ctx, db, fmt.Sprintf("create table %s (a int primary key, b int, c time)", base))
-	execSQLDB(t, ctx, db, fmt.Sprintf("insert into %s select *, *, '12:34:56' from generate_series(1, 8192*100)g", base))
+	execSQLDB(t, ctx, db, fmt.Sprintf("insert into %s select *, *, '12:34:56' from generate_series(1, %d)g", base, rowCount))
 
 	execSQLDB(t, ctx, db, fmt.Sprintf("data branch create table %s from %s", branch, base))
 
@@ -850,8 +944,8 @@ func runDiffOutputToStage(t *testing.T, parentCtx context.Context, db *sql.DB) {
 	require.NotEmpty(t, payload, "stage diff payload is empty")
 
 	sqlContent := strings.ToLower(string(payload))
-	require.Contains(t, sqlContent, fmt.Sprintf("insert into %s.%s", strings.ToLower(dbName), base))
-	require.Contains(t, sqlContent, fmt.Sprintf("delete from %s.%s", strings.ToLower(dbName), base))
+	require.Contains(t, sqlContent, "insert into "+diffSQLTable(dbName, base))
+	require.Contains(t, sqlContent, "delete from "+diffSQLTable(dbName, base))
 
 	applyDiffStatements(t, ctx, db, string(payload))
 	assertTablesEqual(t, ctx, db, dbName, branch, base)
@@ -889,8 +983,8 @@ func runUpdateSplitDiffAsFile(t *testing.T, parentCtx context.Context, db *sql.D
 
 	sqlContent := readSQLFile(t, diffPath)
 	lowerContent := strings.ToLower(sqlContent)
-	require.Contains(t, lowerContent, fmt.Sprintf("insert into %s.%s", strings.ToLower(dbName), base))
-	require.Contains(t, lowerContent, fmt.Sprintf("delete from %s.%s where id in", strings.ToLower(dbName), base))
+	require.Contains(t, lowerContent, "insert into "+diffSQLTable(dbName, base))
+	require.Contains(t, lowerContent, "delete from "+diffSQLTable(dbName, base)+" where "+diffSQLIdent("id")+" in")
 	require.NotContains(t, lowerContent, "update ")
 
 	applyDiffStatements(t, ctx, db, sqlContent)
@@ -930,8 +1024,8 @@ func runCompositeUpdateSplitDiffAsFile(t *testing.T, parentCtx context.Context, 
 
 	sqlContent := readSQLFile(t, diffPath)
 	lowerContent := strings.ToLower(sqlContent)
-	require.Contains(t, lowerContent, fmt.Sprintf("insert into %s.%s", strings.ToLower(dbName), base))
-	require.Contains(t, lowerContent, fmt.Sprintf("delete from %s.%s where (org_id,event_id) in", strings.ToLower(dbName), base))
+	require.Contains(t, lowerContent, "insert into "+diffSQLTable(dbName, base))
+	require.Contains(t, lowerContent, "delete from "+diffSQLTable(dbName, base)+" where "+diffSQLColumns("org_id", "event_id")+" in")
 	require.Contains(t, lowerContent, "null")
 	require.NotContains(t, lowerContent, "update ")
 
@@ -984,8 +1078,8 @@ func runNoPKDuplicateDiffAsFile(t *testing.T, parentCtx context.Context, db *sql
 
 	sqlContent := readSQLFile(t, diffPath)
 	lowerContent := strings.ToLower(sqlContent)
-	require.Contains(t, lowerContent, fmt.Sprintf("insert into %s.%s", strings.ToLower(dbName), base))
-	require.Contains(t, lowerContent, fmt.Sprintf("delete from %s.%s", strings.ToLower(dbName), base))
+	require.Contains(t, lowerContent, "insert into "+diffSQLTable(dbName, base))
+	require.Contains(t, lowerContent, "delete from "+diffSQLTable(dbName, base))
 	require.Contains(t, lowerContent, "limit 1")
 	require.Contains(t, lowerContent, "is null")
 	require.NotContains(t, lowerContent, "update ")
@@ -1043,8 +1137,8 @@ create table %s (
 
 	sqlContent := readSQLFile(t, diffPath)
 	lowerContent := strings.ToLower(sqlContent)
-	require.Contains(t, lowerContent, fmt.Sprintf("insert into %s.%s", strings.ToLower(dbName), base))
-	require.Contains(t, lowerContent, fmt.Sprintf("delete from %s.%s", strings.ToLower(dbName), base))
+	require.Contains(t, lowerContent, "insert into "+diffSQLTable(dbName, base))
+	require.Contains(t, lowerContent, "delete from "+diffSQLTable(dbName, base))
 	require.Contains(t, lowerContent, "null")
 	require.Contains(t, lowerContent, "''")
 	require.NotContains(t, lowerContent, "update ")
@@ -1100,6 +1194,22 @@ func readSQLFile(t *testing.T, path string) string {
 	require.NoError(t, err)
 	require.NotEmpty(t, data, "diff sql output is empty")
 	return string(data)
+}
+
+func diffSQLIdent(name string) string {
+	return "`" + strings.ReplaceAll(strings.ToLower(name), "`", "``") + "`"
+}
+
+func diffSQLTable(dbName, tableName string) string {
+	return diffSQLIdent(dbName) + "." + diffSQLIdent(tableName)
+}
+
+func diffSQLColumns(cols ...string) string {
+	quoted := make([]string, 0, len(cols))
+	for _, col := range cols {
+		quoted = append(quoted, diffSQLIdent(col))
+	}
+	return "(" + strings.Join(quoted, ",") + ")"
 }
 
 func applyDiffStatements(t *testing.T, ctx context.Context, db *sql.DB, sqlContent string) {

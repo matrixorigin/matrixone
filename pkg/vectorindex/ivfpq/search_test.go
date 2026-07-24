@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -33,7 +34,7 @@ import (
 
 // loadedModel builds an index, saves it, then reloads it into GPU memory from
 // the local tar file. Returns the model with Index != nil.
-func loadedModel(t *testing.T, id string) *IvfpqModel[float32] {
+func loadedModel(t *testing.T, id string) *IvfpqModel[float32, float32] {
 	t.Helper()
 	built := buildTestModel(t, id, nil)
 	tarPath := built.Path
@@ -43,7 +44,16 @@ func loadedModel(t *testing.T, id string) *IvfpqModel[float32] {
 	proc := testutil.NewProcessWithMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
-	loader := &IvfpqModel[float32]{
+	// LoadIndex always fires tag=1 / tag=2 SELECTs in parallel with the
+	// model tar load. Mock those to return empty for the duration of the
+	// LoadIndex call.
+	origRunSql := runSql
+	runSql = func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
+		return executor.Result{Mp: proc.Mp()}, nil
+	}
+	defer func() { runSql = origRunSql }()
+
+	loader := &IvfpqModel[float32, float32]{
 		Id:       id,
 		Path:     tarPath,
 		Checksum: built.Checksum,
@@ -62,7 +72,7 @@ func TestIvfpqSearchEmpty(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
-	s := NewIvfpqSearch[float32](testIdxcfg(), testTblcfg(), []int{0})
+	s := NewIvfpqSearch[float32, float32](testIdxcfg(), testTblcfg(), []int{0})
 	require.Empty(t, s.Indexes)
 
 	rt := vectorindex.RuntimeConfig{Limit: 4}
@@ -88,9 +98,9 @@ func TestIvfpqSearchTypeMismatch(t *testing.T) {
 	idx := loadedModel(t, "type-mismatch")
 	defer idx.Destroy()
 
-	s := NewIvfpqSearch[float32](testIdxcfg(), testTblcfg(), []int{0})
-	s.Indexes = []*IvfpqModel[float32]{idx}
-	s.MultiIndex = s.buildMultiIndex()
+	s := NewIvfpqSearch[float32, float32](testIdxcfg(), testTblcfg(), []int{0})
+	s.Indexes = []*IvfpqModel[float32, float32]{idx}
+	s.MultiIndex, _ = s.buildMultiIndex()
 
 	rt := vectorindex.RuntimeConfig{Limit: 4}
 
@@ -108,9 +118,9 @@ func TestIvfpqSearchAndSearchFloat32(t *testing.T) {
 	idx := loadedModel(t, "search-single")
 	defer idx.Destroy()
 
-	s := NewIvfpqSearch[float32](testIdxcfg(), testTblcfg(), []int{0})
-	s.Indexes = []*IvfpqModel[float32]{idx}
-	s.MultiIndex = s.buildMultiIndex()
+	s := NewIvfpqSearch[float32, float32](testIdxcfg(), testTblcfg(), []int{0})
+	s.Indexes = []*IvfpqModel[float32, float32]{idx}
+	s.MultiIndex, _ = s.buildMultiIndex()
 
 	data := generateTestData(testNVectors, testDim)
 	query := data[:testDim]
@@ -146,9 +156,9 @@ func TestIvfpqSearchMultipleIndexes(t *testing.T) {
 	idx1 := loadedModel(t, "multi-1")
 	defer idx1.Destroy()
 
-	s := NewIvfpqSearch[float32](testIdxcfg(), testTblcfg(), []int{0})
-	s.Indexes = []*IvfpqModel[float32]{idx0, idx1}
-	s.MultiIndex = s.buildMultiIndex()
+	s := NewIvfpqSearch[float32, float32](testIdxcfg(), testTblcfg(), []int{0})
+	s.Indexes = []*IvfpqModel[float32, float32]{idx0, idx1}
+	s.MultiIndex, _ = s.buildMultiIndex()
 
 	data := generateTestData(testNVectors, testDim)
 	query := data[:testDim]
@@ -175,6 +185,9 @@ func TestIvfpqSearchLoad(t *testing.T) {
 
 	origRunSql := runSql
 	runSql = func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+		if strings.Contains(sql, "AND tag = 1") || strings.Contains(sql, "AND tag = 2") {
+			return executor.Result{Mp: proc.Mp()}, nil
+		}
 		res := executor.Result{
 			Mp: proc.Mp(),
 			Batches: []*batch.Batch{
@@ -193,7 +206,7 @@ func TestIvfpqSearchLoad(t *testing.T) {
 	}
 	defer func() { runSql_streaming = origStream }()
 
-	s := NewIvfpqSearch[float32](testIdxcfg(), testTblcfg(), []int{0})
+	s := NewIvfpqSearch[float32, float32](testIdxcfg(), testTblcfg(), []int{0})
 	err := s.Load(sqlproc)
 	require.NoError(t, err)
 	require.Equal(t, 1, len(s.Indexes))

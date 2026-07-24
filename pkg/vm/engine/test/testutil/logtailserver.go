@@ -27,18 +27,24 @@ import (
 
 type testClientSession struct {
 	tailReceiveQueue chan morpc.Message
+	ctx              context.Context
+	cancel           context.CancelFunc
 }
 
 func (cs *testClientSession) SessionCtx() context.Context {
-	//TODO implement me
-	panic("implement me")
+	return cs.ctx
 }
 
-func (cs *testClientSession) Close() error { return nil }
+func (cs *testClientSession) Close() error {
+	cs.cancel()
+	return nil
+}
 func (cs *testClientSession) Write(ctx context.Context, response morpc.Message) error {
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
+	case <-cs.ctx.Done():
+		return cs.ctx.Err()
 
 	case cs.tailReceiveQueue <- response:
 	}
@@ -53,9 +59,12 @@ func (cs *testClientSession) DeleteCache(cacheID uint64)                        
 func (cs *testClientSession) GetCache(cacheID uint64) (morpc.MessageCache, error) { return nil, nil }
 func (cs *testClientSession) RemoteAddress() string                               { return "" }
 
-func newTestClientSession(dst chan morpc.Message) *testClientSession {
+func newTestClientSession(parent context.Context, dst chan morpc.Message) *testClientSession {
+	ctx, cancel := context.WithCancel(parent)
 	return &testClientSession{
 		tailReceiveQueue: dst,
+		ctx:              ctx,
+		cancel:           cancel,
 	}
 }
 

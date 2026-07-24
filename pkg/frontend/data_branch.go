@@ -17,8 +17,8 @@ package frontend
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
-	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -52,6 +52,31 @@ import (
 )
 
 const dataBranchMetadataIDBatchSize = 512
+
+func isDataBranchUserVisibleColumn(col *plan.ColDef) bool {
+	if col == nil {
+		return false
+	}
+	if col.Hidden {
+		return false
+	}
+	switch col.Name {
+	case catalog.Row_ID, catalog.FakePrimaryKeyColName, catalog.CPrimaryKeyColName:
+		return false
+	default:
+		return true
+	}
+}
+
+func dataBranchFakePKColIdxes(tblDef *plan.TableDef) []int {
+	idxes := make([]int, 0, len(tblDef.Cols))
+	for i, col := range tblDef.Cols {
+		if isDataBranchUserVisibleColumn(col) {
+			idxes = append(idxes, i)
+		}
+	}
+	return idxes
+}
 
 func newBranchHashmapAllocator(limitRate float64) *branchHashmapAllocator {
 	throttler := rscthrottler.NewMemThrottler(
@@ -302,11 +327,10 @@ func dataBranchCreateTable(
 	stmt *tree.DataBranchCreateTable,
 ) (err error) {
 	var (
-		bh          BackgroundExec
-		deferred    func(error) error
-		receipt     cloneReceipt
-		cloneStmt   *tree.CloneTable
-		tempExecCtx *ExecCtx
+		bh        BackgroundExec
+		deferred  func(error) error
+		receipt   cloneReceipt
+		cloneStmt *tree.CloneTable
 	)
 
 	if bh, deferred, err = getBackExecutor(execCtx.reqCtx, ses); err != nil {
@@ -334,23 +358,9 @@ func dataBranchCreateTable(
 		ses.GetTxnCompileCtx().SetDatabase(oldDefault)
 	}()
 
-	//data branch create table xxx from yyy snap_opt to_account_op;
-	re := regexp.MustCompile(`(?i)^DATA\s+BRANCH\s+CREATE\s+TABLE\s+(\S+)\s+FROM\s+(.+?);?$`)
-	srcAndDst := re.FindStringSubmatch(execCtx.input.sql)
-	if srcAndDst == nil {
-		return moerr.NewInternalErrorNoCtxf("cannot find src and dst table: %s", execCtx.input.sql)
-	}
-
-	sql := fmt.Sprintf("CREATE TABLE %s CLONE %s", srcAndDst[1], srcAndDst[2])
-
 	execCtx.reqCtx = context.WithValue(execCtx.reqCtx, tree.CloneLevelCtxKey{}, tree.NormalCloneLevelTable)
 
-	tempExecCtx = &ExecCtx{
-		reqCtx: execCtx.reqCtx,
-		input:  &UserInput{sql: sql},
-	}
-
-	if receipt, err = handleCloneTable(tempExecCtx, ses, cloneStmt, bh); err != nil {
+	if receipt, err = handleCloneTable(execCtx, ses, cloneStmt, bh); err != nil {
 		return
 	}
 
@@ -705,15 +715,16 @@ func diffMergeAgency(
 		return
 	}
 	var (
-		done      bool
-		wg        = new(sync.WaitGroup)
-		outputErr atomic.Value
-		retBatCh  = make(chan batchWithKind, 10)
-		stopCh    = make(chan struct{})
-		stopOnce  sync.Once
-		emit      emitFunc
-		stop      func()
-		waited    bool
+		done        bool
+		wg          = new(sync.WaitGroup)
+		outputErr   atomic.Value
+		retBatCh    = make(chan batchWithKind, 10)
+		stopCh      = make(chan struct{})
+		stopOnce    sync.Once
+		emit        emitFunc
+		stop        func()
+		waited      bool
+		outputPhase *dataBranchOutputAsTablePhase
 	)
 
 	defer func() {
@@ -746,6 +757,17 @@ func diffMergeAgency(
 
 		if done {
 			return
+		}
+
+		if diffStmt.OutputOpt != nil && diffStmt.OutputOpt.As.ObjectName != "" {
+			if outputPhase, err = newDataBranchOutputAsTablePhase(ctx, ses.proc); err != nil {
+				return
+			}
+			defer func() {
+				if closeErr := outputPhase.close(); closeErr != nil {
+					err = errors.Join(err, closeErr)
+				}
+			}()
 		}
 	}
 
@@ -794,9 +816,15 @@ func diffMergeAgency(
 			// 4. as table
 			// 5. as file
 
-			if err2 := satisfyDiffOutputOpt(
-				ctx, cancel, stop, ses, bh, diffStmt, dagInfo, tblStuff, outputCh,
-			); err2 != nil {
+			var err2 error
+			if outputPhase != nil {
+				err2 = outputPhase.drain(ctx, cancel, tblStuff.retPool, outputCh)
+			} else {
+				err2 = satisfyDiffOutputOpt(
+					ctx, cancel, stop, ses, bh, diffStmt, dagInfo, tblStuff, outputCh,
+				)
+			}
+			if err2 != nil {
 				outputErr.Store(err2)
 			}
 		} else if pickStmt != nil {
@@ -839,7 +867,12 @@ func diffMergeAgency(
 	wg.Wait()
 
 	if outputErr.Load() != nil {
-		err = outputErr.Load().(error)
+		return outputErr.Load().(error)
+	}
+
+	if outputPhase != nil {
+		outputPhase.markProducerDone()
+		return outputPhase.materialize(ctx, cancel, ses, bh, diffStmt, tblStuff)
 	}
 
 	return err
@@ -858,6 +891,9 @@ func handleBranchMerge(
 	ses *Session,
 	stmt *tree.DataBranchMerge,
 ) (err error) {
+	if dataBranchMergeTxnNotAllowed(ses) {
+		return moerr.NewInternalError(execCtx.reqCtx, dataBranchMergePickTxnErrorInfo())
+	}
 
 	if stmt.ConflictOpt == nil {
 		stmt.ConflictOpt = &tree.ConflictOpt{
@@ -886,8 +922,11 @@ func validate(
 		return nil
 	}
 
-	if diffStmt.OutputOpt != nil && diffStmt.OutputOpt.As.ObjectName != "" {
-		return moerr.NewNotSupportedNoCtx("DATA BRANCH DIFF OUTPUT AS")
+	if diffStmt.OutputOpt != nil && diffStmt.OutputOpt.As.ObjectName != "" &&
+		diffStmt.OutputOpt.As.AtTsExpr != nil {
+		return moerr.NewInvalidInputNoCtx(
+			"destination snapshot option is not supported for DATA BRANCH DIFF OUTPUT AS",
+		)
 	}
 
 	if diffStmt.OutputOpt != nil && len(diffStmt.OutputOpt.DirPath) > 0 {
@@ -934,11 +973,6 @@ func getTableStuff(
 
 	if baseTblDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
 		tblStuff.def.pkKind = fakeKind
-		for i, col := range baseTblDef.Cols {
-			if col.Name != catalog.FakePrimaryKeyColName && col.Name != catalog.Row_ID {
-				tblStuff.def.pkColIdxes = append(tblStuff.def.pkColIdxes, i)
-			}
-		}
 	} else if baseTblDef.Pkey.CompPkeyCol != nil {
 		// case 2: composite pk, combined all pks columns as the PK
 		tblStuff.def.pkKind = compositeKind
@@ -968,12 +1002,12 @@ func getTableStuff(
 		tblStuff.def.colNames = append(tblStuff.def.colNames, col.Name)
 		tblStuff.def.colTypes = append(tblStuff.def.colTypes, t)
 
-		if col.Name == catalog.FakePrimaryKeyColName ||
-			col.Name == catalog.CPrimaryKeyColName {
-			continue
+		if isDataBranchUserVisibleColumn(col) {
+			tblStuff.def.visibleIdxes = append(tblStuff.def.visibleIdxes, i)
 		}
-
-		tblStuff.def.visibleIdxes = append(tblStuff.def.visibleIdxes, i)
+	}
+	if tblStuff.def.pkKind == fakeKind {
+		tblStuff.def.pkColIdxes = dataBranchFakePKColIdxes(baseTblDef)
 	}
 
 	tblStuff.retPool = &retBatchList{}
@@ -1078,7 +1112,7 @@ func isSchemaEquivalent(leftDef, rightDef *plan.TableDef) bool {
 			return false
 		}
 
-		if leftDef.Cols[i].Typ.Id != rightDef.Cols[i].Typ.Id {
+		if !isDataBranchLogicalTypeEquivalent(leftDef.Cols[i].Typ, rightDef.Cols[i].Typ) {
 			return false
 		}
 
@@ -1100,6 +1134,19 @@ func isSchemaEquivalent(leftDef, rightDef *plan.TableDef) bool {
 	}
 
 	return true
+}
+
+// isDataBranchLogicalTypeEquivalent compares the type metadata that controls
+// both DIFF value interpretation and OUTPUT AS table DDL. A relation ID can be
+// preserved by an inplace ALTER, so matching column IDs and OIDs alone do not
+// guarantee that values valid on one side can be materialized into the other.
+func isDataBranchLogicalTypeEquivalent(left, right plan.Type) bool {
+	return left.Id == right.Id &&
+		left.Width == right.Width &&
+		left.Scale == right.Scale &&
+		left.Enumvalues == right.Enumvalues &&
+		left.NotNullable == right.NotNullable &&
+		left.AutoIncr == right.AutoIncr
 }
 
 func getRelationById(
@@ -1707,6 +1754,14 @@ func buildSideCollectRange(
 			windowEnd  types.TS
 			nodeCTS    types.TS
 		)
+		// An ancestor must be resolved at the child clone timestamp, not at
+		// the endpoint snapshot. The ancestor may have been altered, dropped,
+		// or recreated after the child was forked.
+		nodeSnapshot := endpointSP
+		if i < len(selfPath)-1 {
+			nodeSnapshot = selfPathTS[i+1]
+		}
+		nodeSnapshotPB := nodeSnapshot.ToTimestamp()
 
 		// Resolve the relation handle for this node.
 		switch {
@@ -1720,7 +1775,7 @@ func buildSideCollectRange(
 			if rel, err = getRelationById(
 				ctx, ses, bh, nodeID, &plan2.Snapshot{
 					Tenant: &plan.SnapshotTenant{TenantID: ses.GetAccountId()},
-					TS:     &timestamp.Timestamp{PhysicalTime: endpointSP.Physical()},
+					TS:     &nodeSnapshotPB,
 				},
 			); err != nil {
 				return
@@ -1735,7 +1790,7 @@ func buildSideCollectRange(
 		} else {
 			ctsList, err2 := getTablesCreationCommitTS(
 				ctx, ses, rel, rel,
-				[]types.TS{endpointSP, endpointSP},
+				[]types.TS{nodeSnapshot, nodeSnapshot},
 			)
 			if err2 != nil {
 				err = err2

@@ -391,6 +391,10 @@ func (o *testOperator) HasLockTable(table uint64) bool {
 	return true
 }
 
+func (o *testOperator) CheckLockTableBinds(ctx context.Context) error {
+	return nil
+}
+
 func (o *testOperator) UpdateSnapshot(ctx context.Context, ts timestamp.Timestamp) error {
 	panic("should not call")
 }
@@ -444,7 +448,7 @@ func (o *testOperator) NextSequence() uint64 {
 }
 
 func (o *testOperator) EnterRunSqlWithTokenAndSQL(_ context.CancelFunc, _ string) uint64 {
-	return 0
+	return 1
 }
 
 func (o *testOperator) ExitRunSqlWithToken(_ uint64) {}

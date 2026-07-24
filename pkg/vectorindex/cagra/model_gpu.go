@@ -28,11 +28,14 @@ import (
 	"github.com/detailyang/go-fallocate"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/cuvs"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	cuvscdc "github.com/matrixorigin/matrixone/pkg/vectorindex/cuvs"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
@@ -43,9 +46,9 @@ var runSql_streaming = sqlexec.RunStreamingSql
 // CagraModel wraps a GpuCagra index and handles load/save to the secondary index tables.
 // The serialized form is a tar file produced by cuvs.Pack / cuvs.Unpack.
 // T must satisfy cuvs.VectorType (float32 | Float16 | int8 | uint8).
-type CagraModel[T cuvs.VectorType] struct {
+type CagraModel[B, Q cuvs.VectorType] struct {
 	Id          string
-	Index       *cuvs.GpuCagra[T]
+	Index       *cuvs.GpuCagra[B, Q]
 	Path        string // local tar file path; empty when index is in GPU memory only
 	FileSize    int64
 	MaxCapacity uint64
@@ -63,12 +66,41 @@ type CagraModel[T cuvs.VectorType] struct {
 	Dirty bool
 	View  bool
 	Len   int64
+
+	// CDC delete state — pkids that the unified-log replay marked for deletion
+	// (DELETE record with no later INSERT). Replayed through Index.DeleteIds
+	// after Unpack to apply to the in-memory cuvs deleted_bitset_.
+	DeletedPkids []int64
+
+	// CDC insert overflow — pkids that the replay left in the brute-force
+	// overflow (INSERT record with no later DELETE). Brute-force searched at
+	// query time and merged with main-index results. F32 regardless of T
+	// (quantizer params live in the model tar, not available at CDC write
+	// time).
+	OverflowPkids []int64
+	OverflowVecs  []B // len = len(OverflowPkids) * dim (native base type B)
+
+	// INCLUDE column data carried alongside each overflow row. Layout
+	// matches the EncodeEventRecord INSERT-record include section:
+	// row-major in column-meta order, then ceil(ncols/8) trailing bytes per
+	// row for the null mask. Empty when the index has no INCLUDE columns.
+	OverflowIncludeBytes []byte
+	IncludeBytesPerRow   int
+
+	// OverflowColMetaJSON carries the persisted INCLUDE-column layout
+	// recovered from the CdcOpHeader record in tag=1 chunk_id=0 when
+	// this synthetic CDC-tail model is the only one in s.Indexes
+	// (small-data-only index, no tag=0 sub-index was ever built).
+	// buildOverflow consults this when GetFilterColMetaJSON() can't be
+	// asked of a main-index. Empty for the normal "tag=1 alongside
+	// tag=0" case.
+	OverflowColMetaJSON string
 }
 
 // NewCagraModelForBuild creates a CagraModel ready for bulk-build.
 // Call InitEmpty once the total vector count is known, then AddChunk, then Build.
-func NewCagraModelForBuild[T cuvs.VectorType](id string, cfg vectorindex.IndexConfig, nthread uint32, devices []int) (*CagraModel[T], error) {
-	return &CagraModel[T]{
+func NewCagraModelForBuild[B, Q cuvs.VectorType](id string, cfg vectorindex.IndexConfig, nthread uint32, devices []int) (*CagraModel[B, Q], error) {
+	return &CagraModel[B, Q]{
 		Id:      id,
 		Idxcfg:  cfg,
 		NThread: nthread,
@@ -77,7 +109,7 @@ func NewCagraModelForBuild[T cuvs.VectorType](id string, cfg vectorindex.IndexCo
 }
 
 // cagraConfig returns the cuvs types derived from idx.Idxcfg.
-func (idx *CagraModel[T]) cagraConfig() (cuvsMetric cuvs.DistanceType, bp cuvs.CagraBuildParams, mode cuvs.DistributionMode, err error) {
+func (idx *CagraModel[B, Q]) cagraConfig() (cuvsMetric cuvs.DistanceType, bp cuvs.CagraBuildParams, mode cuvs.DistributionMode, err error) {
 	cfg := idx.Idxcfg.CuvsCagra
 	var ok bool
 	cuvsMetric, ok = metric.MetricTypeToCuvsMetric[metric.MetricType(cfg.Metric)]
@@ -92,13 +124,16 @@ func (idx *CagraModel[T]) cagraConfig() (cuvsMetric cuvs.DistanceType, bp cuvs.C
 	if cfg.GraphDegree > 0 {
 		bp.GraphDegree = cfg.GraphDegree
 	}
+	if cfg.QuantizerTrainLimit > 0 {
+		bp.QuantizerTrainLimit = cfg.QuantizerTrainLimit
+	}
 	mode = cuvs.DistributionMode(cfg.DistributionMode)
 	return
 }
 
 // InitEmpty allocates the GPU buffer for totalCount vectors.
 // Must be called after NewCagraModelForBuild and before any AddChunk call.
-func (idx *CagraModel[T]) InitEmpty(totalCount uint64) error {
+func (idx *CagraModel[B, Q]) InitEmpty(totalCount uint64) error {
 	if idx.Index != nil {
 		return moerr.NewInternalErrorNoCtx("CagraModel: index already initialized")
 	}
@@ -106,7 +141,7 @@ func (idx *CagraModel[T]) InitEmpty(totalCount uint64) error {
 	if err != nil {
 		return err
 	}
-	gi, err := cuvs.NewGpuCagraEmpty[T](
+	gi, err := cuvs.NewGpuCagraEmpty[B, Q](
 		totalCount,
 		uint32(idx.Idxcfg.CuvsCagra.Dimensions),
 		cuvsMetric,
@@ -128,7 +163,7 @@ func (idx *CagraModel[T]) InitEmpty(totalCount uint64) error {
 }
 
 // AddChunk appends a chunk of typed vectors to the pre-allocated GPU buffer.
-func (idx *CagraModel[T]) AddChunk(chunk []T, chunkCount uint64, ids []int64) error {
+func (idx *CagraModel[B, Q]) AddChunk(chunk []Q, chunkCount uint64, ids []int64) error {
 	if idx.Index == nil {
 		return moerr.NewInternalErrorNoCtx("CagraModel: index not initialized; call InitEmpty first")
 	}
@@ -144,17 +179,14 @@ func (idx *CagraModel[T]) AddChunk(chunk []T, chunkCount uint64, ids []int64) er
 	return nil
 }
 
-// AddChunkFloat appends a chunk of float32 vectors, quantizing on the fly when T is a 1-byte type.
-func (idx *CagraModel[T]) AddChunkFloat(chunk []float32, chunkCount uint64, ids []int64) error {
+// AddChunkQuantize appends a chunk of base-typed (B) vectors, quantizing
+// natively to the 1-byte storage type Q (int8/uint8). Used for a vecf16 base
+// with QUANTIZATION=int8/uint8 — no f32 detour.
+func (idx *CagraModel[B, Q]) AddChunkQuantize(chunk []B, chunkCount uint64, ids []int64) error {
 	if idx.Index == nil {
 		return moerr.NewInternalErrorNoCtx("CagraModel: index not initialized; call InitEmpty first")
 	}
-	/*
-		if len(ids) > 0 {
-			logutil.Infof("[DEBUG] CagraModel.AddChunkFloat: chunkCount=%d, first_id=%d, last_id=%d", chunkCount, ids[0], ids[len(ids)-1])
-		}
-	*/
-	if err := idx.Index.AddChunkFloat(chunk, chunkCount, ids); err != nil {
+	if err := idx.Index.AddChunkQuantize(chunk, chunkCount, ids); err != nil {
 		return err
 	}
 	idx.Len += int64(chunkCount)
@@ -162,7 +194,7 @@ func (idx *CagraModel[T]) AddChunkFloat(chunk []float32, chunkCount uint64, ids 
 }
 
 // Build constructs the CAGRA graph from the loaded vectors and starts the worker pool.
-func (idx *CagraModel[T]) Build() error {
+func (idx *CagraModel[B, Q]) Build() error {
 	if idx.Index == nil {
 		return moerr.NewInternalErrorNoCtx("CagraModel: index not initialized")
 	}
@@ -174,7 +206,7 @@ func (idx *CagraModel[T]) Build() error {
 }
 
 // Destroy frees GPU memory and removes the local tar file if present.
-func (idx *CagraModel[T]) Destroy() error {
+func (idx *CagraModel[B, Q]) Destroy() error {
 	if idx.Index != nil {
 		if err := idx.Index.Destroy(); err != nil {
 			return err
@@ -193,7 +225,7 @@ func (idx *CagraModel[T]) Destroy() error {
 // saveToFile serializes the CAGRA index to a local tar file and updates idx.Path / idx.Checksum.
 // If the index is clean (not dirty) or nil, it is a no-op.
 // On success the GPU memory is freed and idx.Index is set to nil.
-func (idx *CagraModel[T]) saveToFile() error {
+func (idx *CagraModel[B, Q]) saveToFile() error {
 	if idx.Index == nil {
 		return nil
 	}
@@ -249,7 +281,7 @@ func (idx *CagraModel[T]) saveToFile() error {
 
 // ToSql generates INSERT SQL statements to store the model in the secondary index storage table.
 // Mirrors HnswModel.ToSql — callers are responsible for generating the metadata INSERT.
-func (idx *CagraModel[T]) ToSql(cfg vectorindex.IndexTableConfig) ([]string, error) {
+func (idx *CagraModel[B, Q]) ToSql(cfg vectorindex.IndexTableConfig) ([]string, error) {
 	if err := idx.saveToFile(); err != nil {
 		return nil, err
 	}
@@ -271,7 +303,7 @@ func (idx *CagraModel[T]) ToSql(cfg vectorindex.IndexTableConfig) ([]string, err
 	logutil.Infof("CagraModel.ToSql idx %s, len = %d\n", idx.Id, idx.Len)
 
 	sqls := make([]string, 0, 5)
-	sqlPrefix := fmt.Sprintf("INSERT INTO `%s`.`%s` VALUES ", cfg.DbName, cfg.IndexTable)
+	sqlPrefix := fmt.Sprintf("INSERT INTO %s VALUES ", sqlquote.QualifiedIdent(cfg.DbName, cfg.IndexTable))
 	values := make([]string, 0, int64(math.Ceil(float64(filesz)/float64(vectorindex.MaxChunkSize))))
 	n := 0
 	chunkid := int64(0)
@@ -281,7 +313,7 @@ func (idx *CagraModel[T]) ToSql(cfg vectorindex.IndexTableConfig) ([]string, err
 			chunksz = filesz - offset
 		}
 		url := fmt.Sprintf("file://%s?offset=%d&size=%d", idx.Path, offset, chunksz)
-		tuple := fmt.Sprintf("('%s', %d, load_file(cast('%s' as datalink)), 0)", idx.Id, chunkid, url)
+		tuple := fmt.Sprintf("('%s', %d, load_file(cast('%s' as datalink)), %d)", idx.Id, chunkid, url, vectorindex.Tag_ModelChunk)
 		values = append(values, tuple)
 		offset += chunksz
 		chunkid++
@@ -299,27 +331,27 @@ func (idx *CagraModel[T]) ToSql(cfg vectorindex.IndexTableConfig) ([]string, err
 }
 
 // ToDeleteSql generates DELETE SQL for both the storage and metadata tables.
-func (idx *CagraModel[T]) ToDeleteSql(cfg vectorindex.IndexTableConfig) ([]string, error) {
+func (idx *CagraModel[B, Q]) ToDeleteSql(cfg vectorindex.IndexTableConfig) ([]string, error) {
 	sqls := make([]string, 0, 2)
-	sqls = append(sqls, fmt.Sprintf("DELETE FROM `%s`.`%s` WHERE %s = '%s'",
-		cfg.DbName, cfg.IndexTable, catalog.Cagra_TblCol_Storage_Index_Id, idx.Id))
-	sqls = append(sqls, fmt.Sprintf("DELETE FROM `%s`.`%s` WHERE %s = '%s'",
-		cfg.DbName, cfg.MetadataTable, catalog.Cagra_TblCol_Metadata_Index_Id, idx.Id))
+	sqls = append(sqls, fmt.Sprintf("DELETE FROM %s WHERE %s = %s",
+		sqlquote.QualifiedIdent(cfg.DbName, cfg.IndexTable), catalog.Cagra_TblCol_Storage_Index_Id, sqlquote.String(idx.Id)))
+	sqls = append(sqls, fmt.Sprintf("DELETE FROM %s WHERE %s = %s",
+		sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable), catalog.Cagra_TblCol_Metadata_Index_Id, sqlquote.String(idx.Id)))
 	return sqls, nil
 }
 
 // Empty returns true when no vectors have been added.
-func (idx *CagraModel[T]) Empty() bool {
+func (idx *CagraModel[B, Q]) Empty() bool {
 	return idx.Len == 0
 }
 
 // Full returns true when the index has reached its maximum capacity.
-func (idx *CagraModel[T]) Full() bool {
+func (idx *CagraModel[B, Q]) Full() bool {
 	return idx.MaxCapacity > 0 && uint64(idx.Len) >= idx.MaxCapacity
 }
 
 // Search performs a KNN search and returns external PKs with distances.
-func (idx *CagraModel[T]) Search(query []T, limit uint32) (keys []int64, distances []float32, err error) {
+func (idx *CagraModel[B, Q]) Search(query []Q, limit uint32) (keys []int64, distances []float32, err error) {
 	if idx.Index == nil {
 		return nil, nil, moerr.NewInternalErrorNoCtx("CagraModel: index not loaded")
 	}
@@ -335,7 +367,7 @@ func (idx *CagraModel[T]) Search(query []T, limit uint32) (keys []int64, distanc
 }
 
 // loadChunk reads one streaming result batch and writes each chunk at the correct file offset.
-func (idx *CagraModel[T]) loadChunk(ctx context.Context,
+func (idx *CagraModel[B, Q]) loadChunk(ctx context.Context,
 	sqlproc *sqlexec.SqlProcess,
 	stream_chan chan executor.Result,
 	error_chan chan error,
@@ -378,7 +410,12 @@ func (idx *CagraModel[T]) loadChunk(ctx context.Context,
 // LoadIndex downloads the tar from the database, unpacks it, and loads the CAGRA index into GPU memory.
 // Mirrors HnswModel.LoadIndex.
 // idx.Devices must be set before calling LoadIndex.
-func (idx *CagraModel[T]) LoadIndex(
+//
+// Two storage tags are loaded in parallel:
+//   - tag=0: model tar chunks (streaming, multi-GB)
+//   - tag=1: CDC event log (small KB–MB; replayed once after Unpack to derive
+//     the deleted-pkid set and the brute-force overflow)
+func (idx *CagraModel[B, Q]) LoadIndex(
 	sqlproc *sqlexec.SqlProcess,
 	idxcfg vectorindex.IndexConfig,
 	tblcfg vectorindex.IndexTableConfig,
@@ -405,6 +442,23 @@ func (idx *CagraModel[T]) LoadIndex(
 		return moerr.NewInternalErrorNoCtx("CagraModel: checksum is empty; cannot load from database")
 	}
 
+	// Fire the tag=1 event-log fetch in parallel with the model tar streaming.
+	// Replay (which needs includeBytesPerRow from the loaded cuvs index) is
+	// deferred until after Unpack — we only fetch the raw chunks here.
+	var (
+		dim         = int(idxcfg.CuvsCagra.Dimensions)
+		eventChunks []cuvscdc.EventChunk
+	)
+
+	// Fetch the tag=1 CDC chunks first, SEQUENTIALLY: this and the model-tar
+	// (tag=ModelChunk) streaming load below both execute SQL on sqlproc's single
+	// txn operator, which is not safe to drive concurrently. eventChunks is only
+	// replayed later (after Unpack), so fetching it up front changes nothing.
+	eventChunks, err = idx.loadCdcEventsFromDB(sqlproc, tblcfg)
+	if err != nil {
+		return err
+	}
+
 	if len(idx.Path) == 0 {
 		// Download the tar file from the database via streaming SQL.
 		fp, err = os.CreateTemp("", "cagra")
@@ -429,8 +483,8 @@ func (idx *CagraModel[T]) LoadIndex(
 			return err
 		}
 
-		sql := fmt.Sprintf("SELECT chunk_id, data FROM `%s`.`%s` WHERE index_id = '%s'",
-			tblcfg.DbName, tblcfg.IndexTable, idx.Id)
+		sql := fmt.Sprintf("SELECT chunk_id, data FROM %s WHERE index_id = %s AND tag = %d",
+			sqlquote.QualifiedIdent(tblcfg.DbName, tblcfg.IndexTable), sqlquote.String(idx.Id), vectorindex.Tag_ModelChunk)
 
 		ctx, cancel := context.WithCancelCause(sqlproc.GetTopContext())
 		defer cancel(nil)
@@ -497,8 +551,8 @@ func (idx *CagraModel[T]) LoadIndex(
 		return err
 	}
 
-	gi, err := cuvs.NewGpuCagraEmpty[T](
-		uint64(tblcfg.IndexCapacity),
+	gi, err := cuvs.NewGpuCagraEmpty[B, Q](
+		uint64(idxcfg.IndexCapacity),
 		uint32(idxcfg.CuvsCagra.Dimensions),
 		cuvsMetric,
 		bp,
@@ -522,12 +576,45 @@ func (idx *CagraModel[T]) LoadIndex(
 
 	gi.SetBatchWindow(tblcfg.BatchWindow)
 
+	// The model tar carries the INCLUDE col meta; pull it and replay the
+	// fetched tag=1 event log at the right INSERT-record size.
+	colMetaJSON := gi.GetFilterColMetaJSON()
+	includeBytesPerRow := 0
+	if colMetaJSON != "" {
+		ibpr, e := cuvscdc.CdcIncludeBytesPerRow(colMetaJSON)
+		if e != nil {
+			gi.Destroy()
+			return e
+		}
+		includeBytesPerRow = ibpr
+	}
+	delPkids, ovPkids, ovVecs, ovInc, err := replayEventChunks[B](eventChunks, dim, includeBytesPerRow)
+	if err != nil {
+		gi.Destroy()
+		return err
+	}
+	idx.DeletedPkids = delPkids
+	idx.OverflowPkids = ovPkids
+	idx.OverflowVecs = ovVecs
+	idx.OverflowIncludeBytes = ovInc
+	idx.IncludeBytesPerRow = includeBytesPerRow
+
+	// Replay CDC deletes onto the freshly-loaded cuvs index. delete_id is
+	// idempotent and silently no-ops on pkids the cuvs id_map doesn't know
+	// (e.g. a row that was inserted post-build and now lives only in
+	// OverflowPkids — that case is handled at search time).
+	if err = gi.DeleteIds(idx.DeletedPkids); err != nil {
+		gi.Destroy()
+		return err
+	}
+
 	idx.Index = gi
 	idx.View = view
 	idx.Len = int64(gi.Len())
 	idx.MaxCapacity = uint64(gi.Cap())
 
-	logutil.Debugf("CagraModel.LoadIndex idx %s, len = %d\n", idx.Id, idx.Len)
+	logutil.Debugf("CagraModel.LoadIndex idx %s, len = %d, deletes = %d, overflow = %d\n",
+		idx.Id, idx.Len, len(idx.DeletedPkids), len(idx.OverflowPkids))
 
 	if view {
 		// Remove the local tar; the index is fully in GPU memory.
@@ -541,7 +628,7 @@ func (idx *CagraModel[T]) LoadIndex(
 }
 
 // Unload persists dirty state to a local tar file and frees GPU memory.
-func (idx *CagraModel[T]) Unload() error {
+func (idx *CagraModel[B, Q]) Unload() error {
 	if idx.Index == nil {
 		return nil
 	}
@@ -560,10 +647,87 @@ func (idx *CagraModel[T]) Unload() error {
 	return nil
 }
 
+// loadCdcEventsFromDB reads the tag=1 event-log rows for this index and
+// returns one EventChunk per row. The caller (LoadIndex / search) sorts by
+// chunk_id before replay since record ordering across chunks encodes the
+// temporal ordering between DELETE and INSERT events for the same pkid.
+func (idx *CagraModel[B, Q]) loadCdcEventsFromDB(
+	sqlproc *sqlexec.SqlProcess,
+	tblcfg vectorindex.IndexTableConfig,
+) ([]cuvscdc.EventChunk, error) {
+	sql := cuvscdc.CdcLoadEventsSql(tblcfg, idx.Id)
+	res, err := runSql(sqlproc, sql)
+	if err != nil {
+		return nil, err
+	}
+	defer res.Close()
+
+	var chunks []cuvscdc.EventChunk
+	for _, bat := range res.Batches {
+		idVec := bat.Vecs[0]
+		dataVec := bat.Vecs[1]
+		for i := 0; i < bat.RowCount(); i++ {
+			raw := dataVec.GetRawBytesAt(i)
+			cp := make([]byte, len(raw))
+			copy(cp, raw)
+			chunks = append(chunks, cuvscdc.EventChunk{
+				ChunkId: vector.GetFixedAtWithTypeCheck[int64](idVec, i),
+				Data:    cp,
+			})
+		}
+	}
+	return chunks, nil
+}
+
+// replayEventChunks sorts the chunks by chunk_id, replays the records, and
+// flattens the (deleted, overflow) replay state into the parallel slices the
+// CagraModel struct carries (pkids/vecs/include layout that buildOverflow
+// expects). Pass includeBytesPerRow=0 for indexes without INCLUDE columns.
+func replayEventChunks[B cuvs.VectorType](
+	chunks []cuvscdc.EventChunk,
+	dim int,
+	includeBytesPerRow int,
+) ([]int64, []int64, []B, []byte, error) {
+	if len(chunks) == 0 {
+		return nil, nil, nil, nil, nil
+	}
+	cuvscdc.SortChunks(chunks)
+	// The codec stores vectors as opaque bytes; the per-row byte length is
+	// dim * sizeof(B). Reinterpret each row's bytes back to the native base
+	// type B for the overflow brute force — no f32 detour.
+	vecBytesPerRow := dim * int(util.UnsafeSizeOf[B]())
+	state, err := cuvscdc.ReplayEventLog(chunks, vecBytesPerRow, includeBytesPerRow)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	deletedPkids := state.Deleted
+	if len(deletedPkids) == 0 {
+		deletedPkids = nil
+	}
+	if len(state.Overflow) == 0 {
+		return deletedPkids, nil, nil, nil, nil
+	}
+	ovPkids := make([]int64, len(state.Overflow))
+	ovVecs := make([]B, len(state.Overflow)*dim)
+	ovVecBytes := util.UnsafeSliceToBytes(ovVecs)
+	var ovInc []byte
+	if includeBytesPerRow > 0 {
+		ovInc = make([]byte, len(state.Overflow)*includeBytesPerRow)
+	}
+	for i, e := range state.Overflow {
+		ovPkids[i] = e.Pkid
+		copy(ovVecBytes[i*vecBytesPerRow:(i+1)*vecBytesPerRow], e.Vec)
+		if includeBytesPerRow > 0 {
+			copy(ovInc[i*includeBytesPerRow:(i+1)*includeBytesPerRow], e.Include)
+		}
+	}
+	return deletedPkids, ovPkids, ovVecs, ovInc, nil
+}
+
 // LoadMetadata loads CagraModel descriptors from the metadata table.
 // Each returned model has Id, Checksum, Timestamp, and FileSize set; Index is nil.
-func LoadMetadata[T cuvs.VectorType](sqlproc *sqlexec.SqlProcess, dbname string, metatbl string) ([]*CagraModel[T], error) {
-	sql := fmt.Sprintf("SELECT * FROM `%s`.`%s` ORDER BY timestamp ASC", dbname, metatbl)
+func LoadMetadata[B, Q cuvs.VectorType](sqlproc *sqlexec.SqlProcess, dbname string, metatbl string) ([]*CagraModel[B, Q], error) {
+	sql := fmt.Sprintf("SELECT * FROM %s ORDER BY timestamp ASC", sqlquote.QualifiedIdent(dbname, metatbl))
 	res, err := runSql(sqlproc, sql)
 	if err != nil {
 		return nil, err
@@ -575,7 +739,7 @@ func LoadMetadata[T cuvs.VectorType](sqlproc *sqlexec.SqlProcess, dbname string,
 		total += bat.RowCount()
 	}
 
-	indexes := make([]*CagraModel[T], 0, total)
+	indexes := make([]*CagraModel[B, Q], 0, total)
 	for _, bat := range res.Batches {
 		idVec := bat.Vecs[0]
 		chksumVec := bat.Vecs[1]
@@ -586,7 +750,7 @@ func LoadMetadata[T cuvs.VectorType](sqlproc *sqlexec.SqlProcess, dbname string,
 			chksum := chksumVec.GetStringAt(i)
 			ts := vector.GetFixedAtWithTypeCheck[int64](tsVec, i)
 			fs := vector.GetFixedAtWithTypeCheck[int64](fsVec, i)
-			idx := &CagraModel[T]{Id: id, Checksum: chksum, Timestamp: ts, FileSize: fs}
+			idx := &CagraModel[B, Q]{Id: id, Checksum: chksum, Timestamp: ts, FileSize: fs}
 			indexes = append(indexes, idx)
 		}
 	}

@@ -62,7 +62,8 @@ type LocalDispatch func(metadata.TNShard) TxnRequestHandleFunc
 
 // SendResult wrapping []txn.TxnResponse for reuse
 type SendResult struct {
-	Responses []txn.TxnResponse
-	streams   map[uint64]morpc.Stream
-	pool      *sync.Pool
+	Responses     []txn.TxnResponse
+	streams       map[uint64]morpc.Stream
+	localHandlers map[uint64]TxnRequestHandleFunc
+	pool          *sync.Pool
 }

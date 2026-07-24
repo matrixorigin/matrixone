@@ -166,15 +166,24 @@ select distinct a from t1 where cos(a)<=cos(b) order by a desc;
 
 -- @suite
 -- @setup
+drop table if exists t1_cot_safe;
+drop table if exists t1_cot_nested_safe;
 drop table if exists t1;
 create table t1(a int,b float);
 insert into t1 values(0,0),(-15,-20),(-22,-12.5);
 insert into t1 values(0,360),(30,390),(90,450),(180,270),(180,180);
+create table t1_cot_safe(a int,b float);
+insert into t1_cot_safe select * from t1 where a <> 0 and b <> 0;
+create table t1_cot_nested_safe(a int,b float);
+insert into t1_cot_nested_safe select * from t1_cot_safe where a <> 90;
 -- @case
 -- @desc:test for func cot() select
-select cot(a*pi()/180) as cota,cot(b*pi()/180) cotb from t1;
-select cot(a*pi()/180)*cot(b*pi()/180) as cotab,cot(cot(a*pi()/180)) as c from t1;
-select b from t1 where cot(a*pi()/180)<=cot(b*pi()/180) order by a;
+select cot(a*pi()/180) as cota,cot(b*pi()/180) cotb from t1_cot_safe;
+select cot(a*pi()/180)*cot(b*pi()/180) as cotab,cot(cot(a*pi()/180)) as c from t1_cot_nested_safe;
+select b from t1_cot_safe where cot(a*pi()/180)<=cot(b*pi()/180) order by a;
+select cot(0);
+drop table if exists t1_cot_nested_safe;
+drop table if exists t1_cot_safe;
 
 drop table if exists t1;
 create table t1(a date, b datetime,c varchar(30));
@@ -500,7 +509,7 @@ select trim(null from null) from t1;
 drop table t1;
 
 create table testt(i int, j int, k int, d1 decimal(10, 2), d2 decimal(10, 2), ts1 timestamp, ts2 timestamp, t varchar(100));
-insert into testt select result, result % 7, result + 1, result + 3.14, result + 2.72, current_timestamp, current_timestamp, 'foo' || result from generate_series(1, 100) tmpt;
+insert into testt select result, result % 7, result + 1, result + 3.14, result + 2.72, current_timestamp, current_timestamp, concat('foo', result) from generate_series(1, 100) tmpt;
 select greatest(1, 2, 3);
 select least(1, 2, 3);
 select greatest(3, 2, 1);

@@ -17,6 +17,7 @@ package iscp
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"slices"
 
@@ -29,6 +30,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -37,8 +39,10 @@ import (
 	// "github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
@@ -116,6 +120,16 @@ func extractRowFromVector(ctx context.Context, vec *vector.Vector, i int, row []
 		//|   �?   @  @@                  |
 		//+------------------------------+
 		row[i] = vector.GetArrayAt[float32](vec, rowIndex)
+	case types.T_array_float16:
+		// vecf16: extract natively as []types.Float16 (2 bytes/element). The
+		// cuvs CDC writer reinterprets these bytes verbatim — no f32 widening.
+		row[i] = vector.GetArrayAt[types.Float16](vec, rowIndex)
+	case types.T_array_bf16:
+		row[i] = vector.GetArrayAt[types.BF16](vec, rowIndex)
+	case types.T_array_int8:
+		row[i] = vector.GetArrayAt[int8](vec, rowIndex)
+	case types.T_array_uint8:
+		row[i] = vector.GetArrayAt[uint8](vec, rowIndex)
 	case types.T_array_float64:
 		row[i] = vector.GetArrayAt[float64](vec, rowIndex)
 	case types.T_date:
@@ -257,6 +271,23 @@ func convertColIntoSql(
 		value := data.([]float64)
 		typstr := typ.DescString()
 		sqlBuff = appendString(sqlBuff, fmt.Sprintf("CAST('%s' as %s)", types.ArrayToString(value), typstr))
+	case types.T_array_float16:
+		// Narrow base columns (vecf16/bf16/int8/uint8). ArrayToString renders the
+		// half/bf16 bit pattern back to its decimal value and the int8/uint8 codes
+		// to integers, so CAST('[...]' as vecXXX(n)) reconstructs the same vector
+		// the ivfflat entry projection expects (matches the synchronous build,
+		// which reads the base column directly in SQL).
+		value := data.([]types.Float16)
+		sqlBuff = appendString(sqlBuff, fmt.Sprintf("CAST('%s' as %s)", types.ArrayToString(value), typ.DescString()))
+	case types.T_array_bf16:
+		value := data.([]types.BF16)
+		sqlBuff = appendString(sqlBuff, fmt.Sprintf("CAST('%s' as %s)", types.ArrayToString(value), typ.DescString()))
+	case types.T_array_int8:
+		value := data.([]int8)
+		sqlBuff = appendString(sqlBuff, fmt.Sprintf("CAST('%s' as %s)", types.ArrayToString(value), typ.DescString()))
+	case types.T_array_uint8:
+		value := data.([]uint8)
+		sqlBuff = appendString(sqlBuff, fmt.Sprintf("CAST('%s' as %s)", types.ArrayToString(value), typ.DescString()))
 	case types.T_date:
 		value := data.(types.Date)
 		sqlBuff = appendByte(sqlBuff, '\'')
@@ -391,7 +422,7 @@ func getTxn(
 	}
 	err = cnEngine.New(ctx, op)
 	if err != nil {
-		return nil, err
+		return nil, errors.Join(err, op.Rollback(ctx))
 	}
 	return op, nil
 }
@@ -439,32 +470,61 @@ func checkLease(
 	}
 	defer txn.Commit(ctxWithTimeout)
 
-	sql := `select task_runner from mo_task.sys_daemon_task where task_type = "ISCP" and task_runner is not null`
-	result, err := ExecWithResult(ctxWithTimeout, sql, cnUUID, txn)
+	var runner string
+	runner, err = GetTaskRunner(ctxWithTimeout, cnUUID, txn)
 	if err != nil {
 		return
 	}
-	defer result.Close()
-	result.ReadRows(func(rows int, cols []*vector.Vector) bool {
-		if rows != 1 {
-			err = moerr.NewInternalErrorNoCtx(fmt.Sprintf("unexpected rows count: %d", rows))
-			return false
-		}
-		runner := cols[0].GetStringAt(0)
-		if runner == "" {
-			err = moerr.NewInternalErrorNoCtx("task runner is null")
-			return false
-		}
-		if runner == cnUUID {
-			ok = true
-		} else {
-			logutil.Errorf(
-				"ISCP-Task check lease failed, runner: %s, expected: %s",
-				runner,
-				cnUUID,
-			)
-		}
-		return false
-	})
+	if runner == "" {
+		return
+	}
+	if runner == cnUUID {
+		ok = true
+	} else {
+		logutil.Errorf(
+			"ISCP-Task check lease failed, runner: %s, expected: %s",
+			runner,
+			cnUUID,
+		)
+	}
 	return
+}
+
+func GetTaskRunner(
+	ctx context.Context,
+	cnUUID string,
+	txn client.TxnOperator,
+) (string, error) {
+	ctxWithSysAccount := context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+	ctxWithTimeout, cancel := context.WithTimeoutCause(ctxWithSysAccount, time.Minute*5, moerr.NewInternalErrorNoCtx("iscp get task runner timeout"))
+	defer cancel()
+
+	sql := `select task_runner from mo_task.sys_daemon_task where task_type = "ISCP" and task_runner is not null`
+	result, err := ExecWithResult(ctxWithTimeout, sql, cnUUID, txn)
+	if err != nil {
+		return "", err
+	}
+	defer result.Close()
+	return readSingleTaskRunner(result)
+}
+
+func readSingleTaskRunner(result executor.Result) (string, error) {
+	runners := make([]string, 0, 1)
+	result.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		if rows == 0 {
+			return true
+		}
+		runners = append(runners, executor.GetStringRows(cols[0])...)
+		return len(runners) < 2
+	})
+	if len(runners) == 0 {
+		return "", nil
+	}
+	if len(runners) != 1 {
+		return "", moerr.NewInternalErrorNoCtx(fmt.Sprintf("unexpected rows count: %d", len(runners)))
+	}
+	if runners[0] == "" {
+		return "", moerr.NewInternalErrorNoCtx("task runner is null")
+	}
+	return runners[0], nil
 }

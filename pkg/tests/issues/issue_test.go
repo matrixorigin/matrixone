@@ -464,6 +464,12 @@ func TestCNFlushS3Deletes(t *testing.T) {
 
 			exec := cn.RawService().(cnservice.Service).GetSQLExecutor()
 			require.NotNil(t, exec)
+			rowCount := 512 * 1024
+			if testing.Short() {
+				// A rowid plus its primary key still crosses the 1 MiB flush
+				// threshold at this size, without making PR CI process 512K rows.
+				rowCount = 64 * 1024
+			}
 
 			{
 				_, err := exec.Exec(ctx, "create database a;", executor.Options{})
@@ -477,7 +483,7 @@ func TestCNFlushS3Deletes(t *testing.T) {
 					executor.Options{}.WithDatabase("a"))
 				require.NoError(t, err)
 
-				_, err = exec.Exec(ctx, "insert into t1 select *,'yep' from generate_series(1,512*1024)g;",
+				_, err = exec.Exec(ctx, fmt.Sprintf("insert into t1 select *,'yep' from generate_series(1,%d)g;", rowCount),
 					executor.Options{}.WithDatabase("a"))
 				require.NoError(t, err)
 
@@ -487,13 +493,13 @@ func TestCNFlushS3Deletes(t *testing.T) {
 
 				resp.ReadRows(func(rows int, cols []*vector.Vector) bool {
 					cnt := vector.GetFixedAtWithTypeCheck[int64](cols[0], 0)
-					require.Equal(t, int64(512*1024), cnt)
+					require.Equal(t, int64(rowCount), cnt)
 					return true
 				})
 			}
 
 			deletion.SetCNFlushDeletesThreshold(1)
-			defer deletion.SetCNFlushDeletesThreshold(32)
+			defer deletion.SetCNFlushDeletesThreshold(5)
 
 			{
 				_, err := exec.Exec(ctx, "delete from t1 where a > 1;", executor.Options{}.WithDatabase("a"))
@@ -948,28 +954,33 @@ func TestSpeedupAbortAllTxn(t *testing.T) {
 	op, err := c.GetCNService(0)
 	require.NoError(t, err)
 
-	waitC := make(chan struct{})
+	waitC := make(chan struct{}, 1)
 	cn := op.RawService().(cnservice.Service)
 	eng := cn.GetEngine().(*disttae.Engine)
 	logtailClient := eng.PushClient()
 	logtailClient.SetReconnectHandler(func() {
-		waitC <- struct{}{}
+		select {
+		case waitC <- struct{}{}:
+		default:
+		}
 	})
 
 	c1 := make(chan struct{})
 	c2 := make(chan struct{})
 	actionC := make(chan struct{})
+	errC := make(chan error, 2)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*120)
+	defer cancel()
 	var wg sync.WaitGroup
 	wg.Add(2)
 
 	taskservice.DebugCtlTaskFramework(true)
+	defer taskservice.DebugCtlTaskFramework(false)
 
 	// active will commit failed
 	go func() {
 		defer wg.Done()
 
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second*120)
-		defer cancel()
 		exec := cn.GetSQLExecutor()
 		err := exec.ExecTxn(
 			ctx,
@@ -978,67 +989,94 @@ func TestSpeedupAbortAllTxn(t *testing.T) {
 					"create database TestSpeedupAbortAllTxn",
 					executor.StatementOption{},
 				)
-				require.NoError(t, err)
+				if err != nil {
+					return err
+				}
 				res.Close()
 				close(c1)
 
 				// wait txn in active
-				<-c2
+				select {
+				case <-c2:
+				case <-ctx.Done():
+					return ctx.Err()
+				}
 				close(actionC)
 
-				<-waitC
+				select {
+				case <-waitC:
+				case <-ctx.Done():
+					return ctx.Err()
+				}
 
 				// Wait for push client to be fully ready before returning.
 				// reconnectHandler is called before push client is fully recovered,
 				// so we need to wait here to avoid committing when push client is not ready.
 				for !eng.PushClient().IsSubscriberReady() {
-					time.Sleep(time.Millisecond * 10)
+					select {
+					case <-ctx.Done():
+						return ctx.Err()
+					case <-time.After(time.Millisecond * 10):
+					}
 				}
 
 				return nil
 			},
 			executor.Options{}.WithDatabase("mo_catalog").WithUserTxn(),
 		)
-		require.NoError(t, err)
+		errC <- err
 	}()
 
 	// wait active txn will canceled
 	go func() {
 		defer wg.Done()
 
-		<-c1
-
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second*120)
-		defer cancel()
+		select {
+		case <-c1:
+		case <-ctx.Done():
+			errC <- ctx.Err()
+			return
+		}
 
 		tc := cn.GetTxnClient()
+		var notifyActive sync.Once
 		_, err := tc.New(
 			ctx,
 			timestamp.Timestamp{},
 			client.WithUserTxn(),
 			client.WithWaitActiveHandle(
 				func() {
-					close(c2)
+					notifyActive.Do(func() {
+						close(c2)
+					})
 				},
 			),
 		)
-		require.NoError(t, err)
+		errC <- err
 	}()
 
-	<-actionC
+	select {
+	case <-actionC:
+	case <-ctx.Done():
+		require.NoError(t, ctx.Err())
+	}
 	require.NoError(t, logtailClient.Disconnect())
-	waitLogtailResume(cn)
+	require.NoError(t, waitLogtailResume(ctx, cn))
 
 	wg.Wait()
+	close(errC)
+	for err := range errC {
+		require.NoError(t, err)
+	}
 }
 
-func waitLogtailResume(cn cnservice.Service) {
+func waitLogtailResume(ctx context.Context, cn cnservice.Service) error {
 	exec := cn.GetSQLExecutor()
 	fn := func() error {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+		execCtx, cancel := context.WithTimeout(ctx, time.Second*5)
 		defer cancel()
 		res, err := exec.Exec(
-			ctx,
+			execCtx,
 			"select * from mo_tables",
 			executor.Options{}.WithDatabase("mo_catalog"),
 		)
@@ -1049,11 +1087,17 @@ func waitLogtailResume(cn cnservice.Service) {
 		return nil
 	}
 
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
 	for {
 		if err := fn(); err == nil {
-			return
+			return nil
 		}
-		time.Sleep(time.Second)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
 	}
 }
 

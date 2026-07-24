@@ -26,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -57,6 +56,8 @@ var cmd2State = map[string]bool{
 	"enable":  true,
 	"disable": false,
 }
+
+const TraceSpanRetiredResponse = "span tracing is no longer supported"
 
 func checkParameter(param string, ignoreUUID bool) (args []string, threshold int64, err error) {
 	param = strings.ToLower(param)
@@ -150,18 +151,11 @@ func handleTraceSpan(
 	}, nil
 }
 
-func UpdateCurrentCNTraceSpan(cmd string, spans string, threshold int64) string {
-	var succeed, failed []string
-	ss := strings.Split(spans, ",")
-	for _, t := range ss {
-		if trace.SetMoCtledSpanState(t, cmd2State[cmd], threshold) {
-			succeed = append(succeed, t)
-		} else {
-			failed = append(failed, t)
-		}
-	}
-
-	return fmt.Sprintf("%v %sd, %v failed", succeed, cmd, failed)
+// UpdateCurrentCNTraceSpan keeps the query/TN RPC protocol compatible with old
+// clients while making it explicit that the removed Span runtime cannot be
+// re-enabled.
+func UpdateCurrentCNTraceSpan(_ string, _ string, _ int64) string {
+	return TraceSpanRetiredResponse
 }
 
 func TransferRequest2OtherCNs(

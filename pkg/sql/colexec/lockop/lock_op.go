@@ -19,7 +19,8 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
-	"sort"
+	"math"
+	"slices"
 	"strings"
 	"time"
 
@@ -30,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -41,6 +43,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/trace"
+	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -101,23 +104,19 @@ func (lockOp *LockOp) Prepare(proc *process.Process) error {
 	}
 	if len(lockOp.ctr.relations) == 0 {
 		lockOp.ctr.relations = make([]engine.Relation, len(lockOp.targets))
-		for i, target := range lockOp.targets {
-			if target.objRef != nil {
-				rel, err := colexec.GetRelAndPartitionRelsByObjRef(proc.Ctx, proc, lockOp.engine, target.objRef)
-				if err != nil {
-					return err
-				}
-				lockOp.ctr.relations[i] = rel
-			}
+	}
+	for i, target := range lockOp.targets {
+		if target.objRef == nil {
+			continue
 		}
-	} else {
-		for i, target := range lockOp.targets {
-			if target.objRef != nil {
-				err := lockOp.ctr.relations[i].Reset(proc.GetTxnOperator())
-				if err != nil {
-					return err
-				}
+		if lockOp.ctr.relations[i] == nil {
+			rel, err := colexec.GetRelAndPartitionRelsByObjRef(proc.Ctx, proc, lockOp.engine, target.objRef)
+			if err != nil {
+				return err
 			}
+			lockOp.ctr.relations[i] = rel
+		} else if err := lockOp.ctr.relations[i].Reset(proc.GetTxnOperator()); err != nil {
+			return err
 		}
 	}
 	if lockOp.ctr.parker == nil {
@@ -316,6 +315,19 @@ func LockTable(
 	tableID uint64,
 	pkType types.Type,
 	changeDef bool) error {
+	return LockTableWithContext(proc.Ctx, eng, proc, tableID, pkType, changeDef)
+}
+
+// LockTableWithContext locks a table using the caller-owned statement context.
+// Self-handled statements do not build a pipeline, so proc.Ctx may still refer
+// to an already-finished pipeline from the preceding statement.
+func LockTableWithContext(
+	ctx context.Context,
+	eng engine.Engine,
+	proc *process.Process,
+	tableID uint64,
+	pkType types.Type,
+	changeDef bool) error {
 	txnOp := proc.GetTxnOperator()
 	if !txnOp.Txn().IsPessimistic() {
 		return nil
@@ -323,7 +335,7 @@ func LockTable(
 	parker := types.NewPacker()
 	defer parker.Close()
 
-	stats := statistic.StatsInfoFromContext(proc.Ctx)
+	stats := statistic.StatsInfoFromContext(ctx)
 	analyzer := process.NewTempAnalyzer()
 	defer func() {
 		waitLockTime := analyzer.GetOpStats().GetMetricByKey(process.OpWaitLockTime)
@@ -342,7 +354,7 @@ func LockTable(
 		WithLockTable(true, changeDef).
 		WithFetchLockRowsFunc(GetFetchRowsFunc(pkType))
 	_, defChanged, refreshTS, err := doLock(
-		proc.Ctx,
+		ctx,
 		eng,
 		analyzer,
 		nil,
@@ -548,6 +560,15 @@ func doLock(
 		// FIXME: in launch model, multi-cn will use same process level runtime. So lockservice will be wrong.
 		if txn.LockService != lockService.GetServiceID() {
 			lockService = lockservice.GetLockServiceByServiceID(txn.LockService)
+		}
+	}
+
+	// Attach the current statement/session lock_wait_timeout to the lock options.
+	if d := lockWaitTimeout(proc, txnOp); d > 0 {
+		options.LockWaitDeadline = time.Now().Add(d).UnixNano()
+		options, err = refreshLockWaitOptions(options)
+		if err != nil {
+			return false, false, timestamp.Timestamp{}, err
 		}
 	}
 
@@ -781,6 +802,73 @@ type lockRetryState struct {
 	useMemoryRetrySlot   bool
 }
 
+func lockWaitTimeout(proc *process.Process, txnOp client.TxnOperator) time.Duration {
+	txnTimeout := client.LockWaitTimeoutFromTxn(txnOp)
+	var explicitProcessTimeout bool
+	// Background/internal execution may carry a per-execution value in the
+	// process or txn options while its resolver only exposes compiled global
+	// defaults. Prefer the caller-owned budget in that case. Frontend execution
+	// keeps resolver-first semantics so SET SESSION and statement overrides are
+	// observed even after a transaction has started.
+	if proc != nil && proc.Base != nil && !proc.Base.IsFrontend {
+		if proc.GetSessionInfo() != nil {
+			explicitProcessTimeout = proc.GetSessionInfo().LockWaitTimeoutSet
+			if seconds := proc.GetSessionInfo().LockWaitTimeout; seconds > 0 {
+				return time.Duration(seconds) * time.Second
+			}
+		}
+		if !explicitProcessTimeout && txnTimeout > 0 {
+			return txnTimeout
+		}
+	}
+	if proc != nil && proc.GetResolveVariableFunc() != nil {
+		if v, err := proc.GetResolveVariableFunc()("lock_wait_timeout", true, false); err == nil {
+			switch n := v.(type) {
+			case int64:
+				if n > 0 {
+					return time.Duration(n) * time.Second
+				}
+			case int:
+				if n > 0 {
+					return time.Duration(n) * time.Second
+				}
+			case uint64:
+				if n > 0 {
+					return time.Duration(n) * time.Second
+				}
+			}
+		}
+	}
+	if proc != nil && proc.GetSessionInfo() != nil {
+		if seconds := proc.GetSessionInfo().LockWaitTimeout; seconds > 0 {
+			return time.Duration(seconds) * time.Second
+		}
+	}
+	if explicitProcessTimeout {
+		// Explicit zero means "clear this execution's override", not
+		// "wait forever". Use the shared product fallback when no resolver is
+		// installed. This also matches the positive legacy value serialized for
+		// old pipeline peers that do not understand LockWaitTimeoutSet.
+		return time.Duration(defines.DefaultLockWaitTimeoutSeconds) * time.Second
+	}
+	return txnTimeout
+}
+
+func refreshLockWaitOptions(options lock.LockOptions) (lock.LockOptions, error) {
+	if options.LockWaitDeadline <= 0 {
+		return options, nil
+	}
+	remaining := time.Until(time.Unix(0, options.LockWaitDeadline))
+	if remaining <= 0 {
+		return options, lockservice.ErrLockTimeout
+	}
+	options.LockWaitTimeout = int64(math.Ceil(remaining.Seconds()))
+	if options.LockWaitTimeout <= 0 {
+		options.LockWaitTimeout = 1
+	}
+	return options, nil
+}
+
 func lockWithRetry(
 	ctx context.Context,
 	lockService lockservice.LockService,
@@ -798,12 +886,20 @@ func lockWithRetry(
 	var err error
 	retryState := lockRetryState{}
 
+	options, err = refreshLockWaitOptions(options)
+	if err != nil {
+		return result, err
+	}
 	result, err = LockWithMayUpgrade(ctx, lockService, tableID, rows, txnID, options, fetchFunc, vec, opts, pkType)
 	if !canRetryLock(ctx, tableID, txnOp, err, &retryState) {
 		return result, getLockRetryExitError(ctx, err)
 	}
 
 	for {
+		options, err = refreshLockWaitOptions(options)
+		if err != nil {
+			return result, err
+		}
 		result, err = lockService.Lock(ctx, tableID, rows, txnID, options)
 		if !canRetryLock(ctx, tableID, txnOp, err, &retryState) {
 			return result, getLockRetryExitError(ctx, err)
@@ -823,6 +919,11 @@ func LockWithMayUpgrade(
 	opts LockOptions,
 	pkType types.Type,
 ) (lock.Result, error) {
+	var err error
+	options, err = refreshLockWaitOptions(options)
+	if err != nil {
+		return lock.Result{}, err
+	}
 	result, err := lockService.Lock(ctx, tableID, rows, txnID, options)
 	if !moerr.IsMoErrCode(err, moerr.ErrLockNeedUpgrade) {
 		return result, err
@@ -841,6 +942,10 @@ func LockWithMayUpgrade(
 		opts.filterCols,
 	)
 	options.Granularity = ng
+	options, err = refreshLockWaitOptions(options)
+	if err != nil {
+		return lock.Result{}, err
+	}
 	return lockService.Lock(ctx, tableID, nrows, txnID, options)
 }
 
@@ -1379,8 +1484,8 @@ func dedupLockRows(rows [][]byte) [][]byte {
 	if len(rows) <= 1 {
 		return rows
 	}
-	sort.Slice(rows, func(i, j int) bool {
-		return bytes.Compare(rows[i], rows[j]) < 0
+	slices.SortFunc(rows, func(a, b []byte) int {
+		return bytes.Compare(a, b)
 	})
 	deduped := rows[:1]
 	for i := 1; i < len(rows); i++ {
@@ -1433,25 +1538,20 @@ func hasNewVersionInRange(
 
 	crs := analyzer.GetOpCounterSet()
 	newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
-	defer func() {
-		if analyzer != nil {
-			analyzer.AddS3RequestCount(crs)
-			analyzer.AddFileServiceCacheInfo(crs)
-			analyzer.AddDiskIO(crs)
-		}
-	}()
 
 	fromTS := types.BuildTS(from.PhysicalTime, from.LogicalTime)
 	toTS := types.BuildTS(to.PhysicalTime, to.LogicalTime)
 
-	changed, err := rel.PrimaryKeysMayBeModified(newCtx, fromTS, toTS, bat, idx, partitionIdx)
+	changed, err := process.MeasureFilesystemWait(analyzer, func() (bool, error) {
+		return rel.PrimaryKeysMayBeModified(newCtx, fromTS, toTS, bat, idx, partitionIdx)
+	})
 
 	return changed, err
 }
 
 func analyzeLockWaitTime(analyzer process.Analyzer, start time.Time) {
 	if analyzer != nil {
-		analyzer.WaitStop(start)
+		process.StopAnalyzerWait(analyzer, start, resource.WaitLock)
 		analyzer.AddWaitLockTime(start)
 	}
 }
@@ -1502,8 +1602,5 @@ func lockTargetWithRows(
 	bat.Vecs[target.primaryColumnIndexInBatch] = vec
 	bat.SetRowCount(vec.Length())
 
-	anal := lockOp.OpAnalyzer
-	anal.Start()
-	defer anal.Stop()
-	return performLock(bat, proc, lockOp, anal, idx)
+	return performLock(bat, proc, lockOp, lockOp.OpAnalyzer, idx)
 }

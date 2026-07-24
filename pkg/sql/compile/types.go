@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	icebergapi "github.com/matrixorigin/matrixone/pkg/iceberg/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -32,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -199,17 +201,25 @@ type Scope struct {
 
 	ScopeAnalyzer *ScopeAnalyzer
 
+	// resourceExecutedLocally distinguishes a planned remote scope that fell
+	// back to MergeRun from a scope that was actually dispatched. It is
+	// execution-local state and must be cleared before scope reuse.
+	resourceExecutedLocally bool
+
 	RemoteReceivRegInfos []RemoteReceivRegInfo
 }
 
-// ipAddrMatch return true if the node-addr of the scope matches to local address.
-//
-// once node-addr is just empty, it means local.
+// ipAddrMatch returns true if the scope should run on the local CN. Historically
+// an empty scope address means local; non-empty malformed addresses must not be
+// silently treated as local.
 func (s *Scope) ipAddrMatch(local string) bool {
 	if len(s.NodeInfo.Addr) == 0 {
 		return true
 	}
-	return isSameCN(s.NodeInfo.Addr, local)
+	if len(local) == 0 {
+		return false
+	}
+	return sameExecutionAddr(s.NodeInfo.Addr, local)
 }
 
 // holdAnyCannotRemoteOperator returns error message
@@ -283,7 +293,11 @@ type Compile struct {
 
 	MessageBoard *message.MessageBoard
 
-	cnList engine.Nodes
+	cnList                engine.Nodes
+	queryPlacement        schedule.QueryDecision
+	querySchedulingIntent schedule.SchedulingIntent
+	schedulingTrace       *schedule.TraceRecorder
+	schedulingAttempt     schedule.TraceAttemptID
 	// ast
 	stmt tree.Statement
 
@@ -305,12 +319,20 @@ type Compile struct {
 
 	filterExprExes []colexec.ExpressionExecutor
 
+	// compiledRightSingleNodes records semantic right-SINGLE nodes actually
+	// visited by compilePlanScope. It is statement-local and remains empty for
+	// queries without right-SINGLE joins.
+	compiledRightSingleNodes []int32
+
 	needLockMeta bool
 	needBlock    bool
 	isPrepare    bool
 	disableRetry bool
 	isInternal   bool
-	hasMergeOp   bool
+	// resourceAttemptOwnerEligible is set only for the top-level statement
+	// Compile. The statement root still arbitrates the single actual owner.
+	resourceAttemptOwnerEligible bool
+	hasMergeOp                   bool
 
 	// ncpu set as system.GoRoutines() while NewCompile, instead of global static value.
 	ncpu int
@@ -321,6 +343,9 @@ type Compile struct {
 	ignorePublish            bool
 	ignoreCheckExperimental  bool
 	disableLock              bool
+
+	icebergScanPlanner icebergapi.ScanPlanner
+	icebergScanPlans   map[int32]*icebergapi.IcebergScanPlan
 }
 
 type RemoteReceivRegInfo struct {

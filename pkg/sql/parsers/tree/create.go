@@ -942,6 +942,7 @@ type CreateTable struct {
 	PartitionOption    *PartitionOption
 	ClusterByOption    *ClusterByOption
 	Param              *ExternParam
+	IcebergParam       *IcebergTableParam
 	AsSource           *Select
 	IsDynamicTable     bool
 	DTOptions          []TableOption
@@ -963,7 +964,7 @@ func (node *CreateTable) Format(ctx *FmtCtx) {
 	if node.IsClusterTable {
 		ctx.WriteString(" cluster")
 	}
-	if node.Param != nil {
+	if node.Param != nil || node.IcebergParam != nil {
 		ctx.WriteString(" external")
 	}
 	if node.IsDynamicTable {
@@ -1002,7 +1003,7 @@ func (node *CreateTable) Format(ctx *FmtCtx) {
 		}
 	} else {
 
-		if !node.IsAsSelect {
+		if !node.IsAsSelect && !(node.IcebergParam != nil && len(node.Defs) == 0) {
 			ctx.WriteString(" (")
 			for i, def := range node.Defs {
 				if i != 0 {
@@ -1026,6 +1027,11 @@ func (node *CreateTable) Format(ctx *FmtCtx) {
 			ctx.WriteString(prefix)
 			t.Format(ctx)
 		}
+	}
+
+	if node.IcebergParam != nil {
+		ctx.WriteByte(' ')
+		node.IcebergParam.Format(ctx)
 	}
 
 	if node.PartitionOption != nil {
@@ -2133,6 +2139,10 @@ type IndexOption struct {
 	Quantization             string
 	DistributionMode         string
 	ITopkSize                int64
+	KmeansTrainPercent       int64
+	KmeansMaxIteration       int64
+	MaxIndexCapacity         int64
+	QuantizerTrainLimit      int64
 	IncludeColumns           []*UnresolvedName
 }
 
@@ -2147,6 +2157,8 @@ func (node *IndexOption) Format(ctx *FmtCtx) {
 		node.IntermediateGraphDegree != 0 || node.GraphDegree != 0 ||
 		node.Quantization != "" || node.DistributionMode != "" ||
 		node.BitsPerCode != 0 || node.ITopkSize != 0 ||
+		node.KmeansTrainPercent != 0 || node.KmeansMaxIteration != 0 ||
+		node.MaxIndexCapacity != 0 || node.QuantizerTrainLimit != 0 ||
 		len(node.IncludeColumns) != 0 {
 		ctx.WriteByte(' ')
 	}
@@ -2240,6 +2252,26 @@ func (node *IndexOption) Format(ctx *FmtCtx) {
 	if node.ITopkSize != 0 {
 		ctx.WriteString("ITOPK_SIZE ")
 		ctx.WriteString(strconv.FormatInt(node.ITopkSize, 10))
+		ctx.WriteByte(' ')
+	}
+	if node.KmeansTrainPercent != 0 {
+		ctx.WriteString("KMEANS_TRAIN_PERCENT ")
+		ctx.WriteString(strconv.FormatInt(node.KmeansTrainPercent, 10))
+		ctx.WriteByte(' ')
+	}
+	if node.KmeansMaxIteration != 0 {
+		ctx.WriteString("KMEANS_MAX_ITERATION ")
+		ctx.WriteString(strconv.FormatInt(node.KmeansMaxIteration, 10))
+		ctx.WriteByte(' ')
+	}
+	if node.MaxIndexCapacity != 0 {
+		ctx.WriteString("MAX_INDEX_CAPACITY ")
+		ctx.WriteString(strconv.FormatInt(node.MaxIndexCapacity, 10))
+		ctx.WriteByte(' ')
+	}
+	if node.QuantizerTrainLimit != 0 {
+		ctx.WriteString("QUANTIZER_TRAIN_LIMIT ")
+		ctx.WriteString(strconv.FormatInt(node.QuantizerTrainLimit, 10))
 		ctx.WriteByte(' ')
 	}
 	if len(node.IncludeColumns) != 0 {
@@ -3869,7 +3901,7 @@ type Partition struct {
 
 func (node *Partition) Format(ctx *FmtCtx) {
 	ctx.WriteString("partition ")
-	ctx.WriteString(string(node.Name))
+	ctx.WriteIdentifier(node.Name)
 	if node.Values != nil {
 		ctx.WriteByte(' ')
 		node.Values.Format(ctx)
@@ -4014,7 +4046,7 @@ type SubPartition struct {
 
 func (node *SubPartition) Format(ctx *FmtCtx) {
 	ctx.WriteString("subpartition ")
-	ctx.WriteString(string(node.Name))
+	ctx.WriteIdentifier(node.Name)
 
 	if node.Options != nil {
 		prefix := " "

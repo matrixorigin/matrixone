@@ -1,7 +1,7 @@
 module github.com/matrixorigin/matrixone
 
 // Minimum Go version required
-go 1.25.4
+go 1.26.4
 
 require (
 	github.com/BurntSushi/toml v1.2.1
@@ -23,7 +23,7 @@ require (
 	github.com/aws/smithy-go v1.22.1
 	github.com/axiomhq/hyperloglog v0.2.6
 	github.com/buger/jsonparser v1.1.1
-	github.com/bytedance/sonic v1.15.0
+	github.com/bytedance/sonic v1.15.2
 	github.com/cakturk/go-netstat v0.0.0-20200220111822-e5b49efee7a5
 	github.com/cespare/xxhash/v2 v2.3.0
 	github.com/charmbracelet/bubbletea v1.3.10
@@ -52,6 +52,7 @@ require (
 	github.com/google/pprof v0.0.0-20260302011040-a15ffb7f9dcc
 	github.com/google/shlex v0.0.0-20191202100458-e7afc7fbc510
 	github.com/google/uuid v1.6.0
+	github.com/hamba/avro/v2 v2.31.0
 	github.com/hashicorp/memberlist v0.3.1
 	github.com/hayageek/threadsafe v1.0.1
 	github.com/itchyny/gojq v0.12.16
@@ -92,6 +93,7 @@ require (
 	github.com/tidwall/btree v1.7.0
 	github.com/tidwall/pretty v1.2.1
 	github.com/tmc/langchaingo v0.1.13
+	github.com/uber/h3-go/v4 v4.5.0
 	github.com/unum-cloud/usearch/golang v0.0.0-20260524141737-9fd6b0115dcd
 	github.com/xeipuuv/gojsonschema v1.2.0
 	github.com/yanyiwu/gojieba v1.4.7
@@ -102,6 +104,7 @@ require (
 	golang.org/x/exp v0.0.0-20260312153236-7ab1446f8b90
 	golang.org/x/sync v0.20.0
 	golang.org/x/sys v0.42.0
+	golang.org/x/time v0.15.0
 	gonum.org/v1/gonum v0.14.0
 	google.golang.org/grpc v1.65.0
 	google.golang.org/protobuf v1.36.11
@@ -135,7 +138,7 @@ require (
 	github.com/bits-and-blooms/bitset v1.24.2 // indirect
 	github.com/bufbuild/protocompile v0.6.0 // indirect
 	github.com/bytedance/gopkg v0.1.3 // indirect
-	github.com/bytedance/sonic/loader v0.5.0 // indirect
+	github.com/bytedance/sonic/loader v0.5.1 // indirect
 	github.com/charmbracelet/colorprofile v0.2.3-0.20250311203215-f60798e515dc // indirect
 	github.com/charmbracelet/lipgloss v1.1.0 // indirect
 	github.com/charmbracelet/x/ansi v0.10.1 // indirect
@@ -157,11 +160,12 @@ require (
 	github.com/getsentry/sentry-go v0.12.0 // indirect
 	github.com/go-ini/ini v1.67.0 // indirect
 	github.com/go-ole/go-ole v1.2.6 // indirect
+	github.com/go-viper/mapstructure/v2 v2.4.0 // indirect
 	github.com/gobwas/glob v0.2.3 // indirect
 	github.com/godbus/dbus/v5 v5.0.4 // indirect
 	github.com/golang-collections/collections v0.0.0-20130729185459-604e922904d3 // indirect
 	github.com/golang/protobuf v1.5.4 // indirect
-	github.com/golang/snappy v0.0.4 // indirect
+	github.com/golang/snappy v1.0.0 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/google/go-querystring v1.1.0 // indirect
 	github.com/gopherjs/gopherjs v1.12.80 // indirect
@@ -250,7 +254,6 @@ require (
 	golang.org/x/mod v0.34.0 // indirect
 	golang.org/x/net v0.52.0 // indirect
 	golang.org/x/text v0.35.0 // indirect
-	golang.org/x/time v0.15.0 // indirect
 	golang.org/x/tools v0.43.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20240814211410-ddb44dafa142 // indirect
 	gopkg.in/ini.v1 v1.67.0 // indirect
@@ -264,7 +267,7 @@ replace github.com/hashicorp/memberlist => github.com/matrixorigin/memberlist v0
 replace (
 	github.com/elastic/gosigar v0.14.2 => github.com/matrixorigin/gosigar v0.14.3-0.20241204071856-40aab500bfac
 	github.com/fagongzi/goetty/v2 v2.0.3-0.20230628075727-26c9a2fd5fb8 => github.com/matrixorigin/goetty/v2 v2.0.0-20240611082008-a4de209fff3d
-	github.com/lni/dragonboat/v4 v4.0.0-20220815145555-6f622e8bcbef => github.com/matrixorigin/dragonboat/v4 v4.0.0-20251214113216-2ddf81ef2a85
+	github.com/lni/dragonboat/v4 v4.0.0-20220815145555-6f622e8bcbef => github.com/matrixorigin/dragonboat/v4 v4.0.0-20260706084232-ea0aa61b062b
 	github.com/lni/goutils v1.3.1-0.20220604063047-388d67b4dbc4 => github.com/matrixorigin/goutils v1.3.1-0.20220604063047-388d67b4dbc4
 	github.com/lni/vfs v0.2.1-0.20220616104132-8852fd867376 => github.com/matrixorigin/vfs v0.2.1-0.20220616104132-8852fd867376
 )

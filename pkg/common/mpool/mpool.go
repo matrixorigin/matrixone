@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/util/stack"
 )
 
@@ -54,6 +55,61 @@ type MPoolStats struct {
 	// xpool frees are really bugs.  we always record them for debugging.
 	mu        sync.Mutex
 	xpoolFree map[string]detailInfo
+}
+
+// ResourcePeakEpoch is an opaque, statement-scoped observation token.  Its
+// peak remains readable after the epoch is ended, but allocations are only
+// published while the token is the pool's current epoch.
+type ResourcePeakEpoch struct {
+	owner *MPool
+	peak  atomic.Int64
+	ended atomic.Bool
+}
+
+// resourceMemoryStats observes successful off-heap allocation ownership only.
+// It is deliberately separate from MPoolStats: the latter preserves legacy
+// admission behavior and may temporarily record a reservation that is later
+// compensated when an allocation exceeds a cap.
+type resourceMemoryStats struct {
+	allocated     atomic.Int64
+	freed         atomic.Int64
+	live          atomic.Int64
+	peak          atomic.Int64
+	crossPoolFree atomic.Int64
+}
+
+func (s *resourceMemoryStats) recordAlloc(sz int64) int64 {
+	s.allocated.Add(sz)
+	curr := s.live.Add(sz)
+	for {
+		peak := s.peak.Load()
+		if curr <= peak || s.peak.CompareAndSwap(peak, curr) {
+			return curr
+		}
+	}
+}
+
+func (s *resourceMemoryStats) recordFree(sz int64) {
+	s.freed.Add(sz)
+	s.live.Add(-sz)
+}
+
+func (e *ResourcePeakEpoch) recordPeak(curr int64) {
+	if e == nil || curr < 0 || e.ended.Load() {
+		return
+	}
+	for {
+		peak := e.peak.Load()
+		if curr <= peak {
+			return
+		}
+		if e.ended.Load() {
+			return
+		}
+		if e.peak.CompareAndSwap(peak, curr) {
+			return
+		}
+	}
 }
 
 func (s *MPoolStats) Init() {
@@ -100,11 +156,14 @@ func (s *MPoolStats) RecordAlloc(tag string, sz int64) int64 {
 	s.NumAllocBytes.Add(sz)
 	curr := s.NumCurrBytes.Add(sz)
 	hwm := s.HighWaterMark.Load()
-	if curr > hwm {
-		swapped := s.HighWaterMark.CompareAndSwap(hwm, curr)
-		if swapped && curr/GB != hwm/GB {
-			logutil.Infof("MPool %s new high watermark\n%s", tag, s.Report("    "))
+	for curr > hwm {
+		if s.HighWaterMark.CompareAndSwap(hwm, curr) {
+			if curr/GB != hwm/GB {
+				logutil.Infof("MPool %s new high watermark\n%s", tag, s.Report("    "))
+			}
+			break
 		}
+		hwm = s.HighWaterMark.Load()
 	}
 	return curr
 }
@@ -255,11 +314,13 @@ func (d *mpoolDetails) reportJson() string {
 
 // The memory pool.
 type MPool struct {
-	id      int64      // mpool generated, used to look up the MPool
-	tag     string     // user supplied, for debug/inspect
-	cap     int64      // pool capacity
-	stats   MPoolStats // stats
-	details *mpoolDetails
+	id       int64      // mpool generated, used to look up the MPool
+	tag      string     // user supplied, for debug/inspect
+	cap      int64      // pool capacity
+	stats    MPoolStats // stats
+	resource resourceMemoryStats
+	epoch    atomic.Pointer[ResourcePeakEpoch]
+	details  *mpoolDetails
 
 	noLock bool
 	ptrs   map[unsafe.Pointer]memHdr
@@ -282,6 +343,15 @@ func (mp *MPool) recordPtrHdr(ptr unsafe.Pointer, pHdr memHdr) error {
 		return nil
 	}
 }
+
+func (mp *MPool) getPtrHdr(ptr unsafe.Pointer) (memHdr, bool) {
+	if !mp.noLock {
+		return gGetPtr(ptr)
+	}
+	hdr, ok := mp.ptrs[ptr]
+	return hdr, ok
+}
+
 func (mp *MPool) removePtrHdr(ptr unsafe.Pointer) (memHdr, bool) {
 	if !mp.noLock {
 		return gRemovePtr(ptr)
@@ -440,6 +510,100 @@ func (mp *MPool) CurrNB() int64 {
 	return mp.stats.NumCurrBytes.Load()
 }
 
+// ResourcePeakLiveBytes returns the peak observed by token.  Ended tokens
+// remain readable so the owner can seal the statement after workers quiesce;
+// a token belonging to another open epoch is rejected.
+func (mp *MPool) ResourcePeakLiveBytes(token *ResourcePeakEpoch) (uint64, bool) {
+	if mp == nil || token == nil || token.owner != mp {
+		return 0, false
+	}
+	if !token.ended.Load() && mp.epoch.Load() != token {
+		return 0, false
+	}
+	peak := token.peak.Load()
+	if peak < 0 {
+		return 0, false
+	}
+	return uint64(peak), true
+}
+
+// ResourceSnapshot returns exact allocator-domain facts for a quiescent MPool
+// epoch. Negative counters are flagged instead of being converted to uint64.
+func (mp *MPool) ResourceSnapshot() (resource.MemoryDomainSummary, resource.QualityFlags) {
+	allocated := mp.resource.allocated.Load()
+	freed := mp.resource.freed.Load()
+	peak := mp.resource.peak.Load()
+	live := mp.resource.live.Load()
+	cross := mp.resource.crossPoolFree.Load()
+	if allocated < 0 || freed < 0 || peak < 0 || live < 0 || cross < 0 {
+		return resource.MemoryDomainSummary{}, resource.QualityInvariantFailure
+	}
+	summary := resource.MemoryDomainSummary{
+		AllocatedBytes:     uint64(allocated),
+		FreedBytes:         uint64(freed),
+		PeakLiveBytes:      uint64(peak),
+		LiveBytesAtSeal:    uint64(live),
+		CrossPoolFreeCount: uint64(cross),
+	}
+	return summary, summary.Validate()
+}
+
+// StartResourcePeakEpoch starts a peak-occupancy observation at the current
+// live-byte baseline. Only one observation may be open on a pool at a time.
+// The lifetime high-water mark is deliberately left untouched.
+func (mp *MPool) StartResourcePeakEpoch() *ResourcePeakEpoch {
+	if mp == nil {
+		return nil
+	}
+	if mp.resource.live.Load() < 0 {
+		return nil
+	}
+	token := &ResourcePeakEpoch{owner: mp}
+	if !mp.epoch.CompareAndSwap(nil, token) {
+		return nil
+	}
+	// Publish the baseline after claiming ownership. Allocations racing the
+	// claim update the token and recordPeak keeps the larger value.
+	token.recordPeak(mp.resource.live.Load())
+	return token
+}
+
+// EndResourcePeakEpoch closes exactly token and returns its final peak.  A
+// wrong, stale, or already-ended token cannot clear a newer epoch.
+func (mp *MPool) EndResourcePeakEpoch(token *ResourcePeakEpoch) (uint64, bool) {
+	if mp == nil || token == nil || token.owner != mp {
+		return 0, false
+	}
+	// Validate ownership before changing the token so passing a token to the
+	// wrong pool does not poison the epoch owned by its original pool.
+	if mp.epoch.Load() != token {
+		return 0, false
+	}
+	if !token.ended.CompareAndSwap(false, true) {
+		return 0, false
+	}
+	if !mp.epoch.CompareAndSwap(token, nil) {
+		// This should only be reachable for a malformed caller racing pool
+		// teardown. Preserve the token's ended state and report failure.
+		return 0, false
+	}
+	peak := token.peak.Load()
+	if peak < 0 {
+		return 0, false
+	}
+	return uint64(peak), true
+}
+
+func (mp *MPool) recordResourcePeak(curr int64) {
+	if mp == nil || curr < 0 {
+		return
+	}
+	token := mp.epoch.Load()
+	if token != nil {
+		token.recordPeak(curr)
+	}
+}
+
 func DeleteMPool(mp *MPool) {
 	start := time.Now()
 	defer func() {
@@ -549,6 +713,7 @@ func (mp *MPool) alloc(detailk string, sz int64, offHeap bool) ([]byte, error) {
 		if err != nil {
 			panic(err)
 		}
+		mp.recordResourcePeak(mp.resource.recordAlloc(sz))
 		if mp.details != nil {
 			mp.details.recordAlloc(detailk, sz)
 		}
@@ -603,7 +768,9 @@ func (mp *MPool) freePtr(detailk string, ptr unsafe.Pointer) {
 				simpleCAllocator().Deallocate(unsafe.Slice((*byte)(ptr), sz), uint64(sz))
 			}
 		} else {
-			(otherPool.(*MPool)).freePtrInternal(detailk, ptr, hdr)
+			owner := otherPool.(*MPool)
+			owner.resource.crossPoolFree.Add(1)
+			owner.freePtrInternal(detailk, ptr, hdr)
 		}
 		return
 	}
@@ -625,6 +792,7 @@ func (mp *MPool) freePtrInternal(detailk string, ptr unsafe.Pointer, hdr memHdr)
 	profileRecordFree(uintptr(ptr), sz)
 	mp.stats.RecordFree(mp.tag, sz)
 	globalStats.RecordFree("global", sz)
+	mp.resource.recordFree(sz)
 	if mp.details != nil {
 		mp.details.recordFree(detailk, sz)
 	}
@@ -675,41 +843,116 @@ func (mp *MPool) Grow2(old []byte, old2 []byte, sz int, offHeap bool) ([]byte, e
 // ReallocZero is like Realloc, but it clears the memory.
 func (mp *MPool) ReallocZero(old []byte, sz int, offHeap bool) ([]byte, error) {
 	detailk := mp.getDetailK()
-	if cap(old) == 0 {
+	if sz < 0 || sz > CapLimit-kMemHdrSz {
+		return nil, moerr.NewInternalErrorNoCtxf(
+			"mpool memory allocation exceed limit with requested size %d",
+			sz,
+		)
+	}
+
+	// Resizing within the caller-visible capacity cannot change allocator
+	// provenance or ownership, so keep this common path lock-free.
+	if cap(old) > 0 {
+		oldLength := len(old)
+		if sz <= oldLength {
+			return old[:sz], nil
+		}
+		if sz <= cap(old) {
+			resized := old[:sz]
+			clear(resized[oldLength:])
+			return resized, nil
+		}
+	}
+
+	oldptr := unsafe.Pointer(unsafe.SliceData(old))
+	var hdr memHdr
+	var ok bool
+	if oldptr != nil {
+		hdr, ok = mp.getPtrHdr(oldptr)
+	}
+	if !ok {
+		if len(old) != 0 || cap(old) != 0 {
+			return nil, moerr.NewInternalErrorNoCtx(
+				"invalid realloc pointer: allocation metadata not found",
+			)
+		}
 		return mp.allocWithDetailK(detailk, int64(sz), offHeap)
 	}
 
-	if !offHeap {
-		return mp.reAllocWithDetailK(detailk, old, int64(sz), offHeap, false)
+	if !hdr.CheckGuard() || hdr.allocSz <= 0 {
+		return nil, moerr.NewInternalErrorNoCtx(
+			"invalid realloc pointer: corrupt allocation metadata",
+		)
 	}
 
-	oldsz := len(old)
-	oldcap := cap(old)
-	if sz <= oldsz {
-		return old[:sz], nil
-	} else if sz <= oldcap {
-		old = old[:sz]
-		clear(old[oldsz:])
-		return old, nil
+	oldSize := int(hdr.allocSz)
+	if len(old) > oldSize || cap(old) > oldSize {
+		return nil, moerr.NewInternalErrorNoCtxf(
+			"realloc view exceeds recorded allocation size, len %d, cap %d, recorded %d",
+			len(old),
+			cap(old),
+			oldSize,
+		)
 	}
 
-	oldptr := unsafe.Pointer(&old[0])
-	newbs, err := simpleCAllocator().ReallocZero(old, uint64(sz))
+	// Reconstruct the full allocation from stable mpool metadata. Callers such
+	// as PtrLen intentionally retain only a pointer and logical length, so their
+	// slice capacity is not allocator provenance and may be smaller than the
+	// backing allocation.
+	fullAllocation := unsafe.Slice((*byte)(oldptr), oldSize)
+	oldLength := len(old)
+	if sz <= oldSize {
+		resized := fullAllocation[:sz]
+		if sz > oldLength {
+			clear(resized[oldLength:])
+		}
+		return resized, nil
+	}
+
+	// Only resize in place when the source and destination are off-heap and
+	// owned by this pool. Other provenance/ownership transitions use the normal
+	// allocate-copy-free path so accounting and cross-pool cleanup stay correct.
+	if !hdr.offHeap || !offHeap || hdr.poolId != mp.id {
+		return mp.reAllocWithDetailK(
+			detailk,
+			fullAllocation[:oldLength],
+			int64(sz),
+			offHeap,
+			false,
+		)
+	}
+
+	newbs, err := simpleCAllocator().ReallocZero(
+		fullAllocation[:oldLength],
+		uint64(oldSize),
+		uint64(sz),
+	)
 	if err != nil {
 		return nil, err
 	}
 	newptr := unsafe.Pointer(&newbs[0])
-	mp.removePtrHdr(oldptr)
-	mp.recordPtrHdr(newptr, memHdr{
-		poolId:  mp.id,
+	removedHdr, removed := mp.removePtrHdr(oldptr)
+	if !removed || removedHdr != hdr {
+		panic(moerr.NewInternalErrorNoCtx(
+			"allocation metadata changed during realloc",
+		))
+	}
+	newHdr := memHdr{
+		poolId:  hdr.poolId,
 		allocSz: int32(sz),
-		offHeap: offHeap,
-	})
-	profileRecordRealloc(3, uintptr(oldptr), uintptr(newptr), int64(oldcap), int64(sz))
-	globalStats.RecordFree("global", int64(oldcap))
-	mp.stats.RecordFree(mp.tag, int64(oldcap))
+		offHeap: true,
+	}
+	newHdr.SetGuard()
+	if err := mp.recordPtrHdr(newptr, newHdr); err != nil {
+		panic(err)
+	}
+	profileRecordRealloc(3, uintptr(oldptr), uintptr(newptr), int64(oldSize), int64(sz))
+	globalStats.RecordFree("global", int64(oldSize))
+	mp.stats.RecordFree(mp.tag, int64(oldSize))
 	globalStats.RecordAlloc("global", int64(sz))
 	mp.stats.RecordAlloc(mp.tag, int64(sz))
+	mp.resource.recordFree(int64(oldSize))
+	mp.recordResourcePeak(mp.resource.recordAlloc(int64(sz)))
 	return newbs, nil
 }
 
@@ -823,6 +1066,14 @@ func gRecordPtr(ptr unsafe.Pointer, hdr memHdr) error {
 	}
 	shard.m[ptr] = hdr
 	return nil
+}
+
+func gGetPtr(ptr unsafe.Pointer) (memHdr, bool) {
+	shard := getPtrShard(ptr)
+	shard.mu.Lock()
+	defer shard.mu.Unlock()
+	hdr, ok := shard.m[ptr]
+	return hdr, ok
 }
 
 func gRemovePtr(ptr unsafe.Pointer) (memHdr, bool) {

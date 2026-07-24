@@ -449,6 +449,17 @@ func (zm ZM) getValue(buf []byte) any {
 		return types.BytesToArray[float32](buf)
 	case types.T_array_float64:
 		return types.BytesToArray[float64](buf)
+	// Narrow vector element types. Omitting them made MO_TABLE_COL_MAX panic on
+	// a table that merely CONTAINS a bf16/f16/int8/uint8 vector column, without
+	// the query touching it.
+	case types.T_array_bf16:
+		return types.BytesToArray[types.BF16](buf)
+	case types.T_array_float16:
+		return types.BytesToArray[types.Float16](buf)
+	case types.T_array_int8:
+		return types.BytesToArray[int8](buf)
+	case types.T_array_uint8:
+		return types.BytesToArray[uint8](buf)
 	}
 	panic(fmt.Sprintf("unsupported type: %v", zm.GetType()))
 }
@@ -747,6 +758,12 @@ func (zm ZM) PrefixIn(vec *vector.Vector) bool {
 // anyIn has been called, so there must be a subvector in this zonemap
 // return lower bound and upper bound
 func (zm ZM) SubVecIn(vec *vector.Vector) (int, int) {
+	if vec.IsConstNull() {
+		return 0, 0
+	}
+	if vec.GetNulls().Any() {
+		return 0, vec.Length()
+	}
 	if vec.Length() <= 3 {
 		return 0, vec.Length()
 	}
@@ -1040,6 +1057,12 @@ func (zm ZM) SubVecIn(vec *vector.Vector) (int, int) {
 }
 
 func (zm ZM) AnyIn(vec *vector.Vector) bool {
+	if vec.IsConstNull() {
+		return false
+	}
+	if vec.GetNulls().Any() {
+		return zm.anyInNullableVec(vec)
+	}
 	switch vec.GetType().Oid {
 	case types.T_bool:
 		col := vector.MustFixedColNoTypeCheck[bool](vec)
@@ -1278,6 +1301,19 @@ func (zm ZM) AnyIn(vec *vector.Vector) bool {
 	default:
 		return true
 	}
+}
+
+func (zm ZM) anyInNullableVec(vec *vector.Vector) bool {
+	for i := 0; i < vec.Length(); i++ {
+		if vec.IsNull(uint64(i)) {
+			continue
+		}
+		value := vec.GetRawBytesAt(i)
+		if zm.AnyLEByValue(value) && zm.AnyGEByValue(value) {
+			return true
+		}
+	}
+	return false
 }
 
 // max = v1.max+v2.max

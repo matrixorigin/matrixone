@@ -106,6 +106,8 @@ const (
 	FPShowVariables
 	FPShowErrors
 	FPAnalyzeStmt
+	FPCheckTableStmt
+	FPShowProfileStmt
 	FPExplainStmt
 	FPInternalCmdFieldList
 	FPInternalCmdGetSnapshotTs
@@ -200,6 +202,8 @@ const (
 	FPInternalExecutorExec
 	FPInternalExecutorQuery
 	FPHandleAnalyzeStmt
+	FPHandleCheckTableStmt
+	FPHandleShowProfileStmt
 	FPShowPublications
 	FPCreateCDC
 	FPPauseCDC
@@ -292,20 +296,31 @@ func (ec *engineColumnInfo) GetType() types.T {
 }
 
 type PrepareStmt struct {
-	Name           string
-	Sql            string
-	PreparePlan    *plan.Plan
-	PrepareStmt    tree.Statement
-	ParamTypes     []byte
-	ColDefData     [][]byte
-	IsCloudNonuser bool
-	proc           *process.Process
+	Name            string
+	Sql             string
+	PreparePlan     *plan.Plan
+	PrepareStmt     tree.Statement
+	NativeMode      bool
+	ParamTypes      []byte
+	ColDefData      [][]byte
+	IsCloudNonuser  bool
+	proc            *process.Process
+	remapDb         map[string]string
+	defaultDatabase string
 
 	params              *vector.Vector
 	getFromSendLongData map[int]struct{}
 
 	compile *compile.Compile
 	Ts      timestamp.Timestamp
+	// tempTableVersion is the session temporary-table mapping version used to
+	// build PreparePlan and compile.
+	tempTableVersion uint64
+
+	// schedulingSQLMode freezes the lexical mode used when Sql was prepared.
+	// EXECUTE must not reinterpret optimizer comments after session sql_mode
+	// changes.
+	schedulingSQLMode string
 }
 
 /*
@@ -607,6 +622,7 @@ type BackgroundExecOption struct {
 type BackgroundExec interface {
 	Close()
 	Exec(context.Context, string) error
+	ExecWithSQLMode(context.Context, string, string) error
 	ExecRestore(context.Context, string, uint32, uint32) error
 	ExecStmt(context.Context, tree.Statement) error
 	GetExecResultSet() []interface{}
@@ -664,6 +680,7 @@ func (prepareStmt *PrepareStmt) Close() {
 	if prepareStmt.ColDefData != nil {
 		prepareStmt.ColDefData = nil
 	}
+	prepareStmt.remapDb = nil
 }
 
 func (prepareStmt *PrepareStmt) resetBinaryParamState() {
@@ -869,6 +886,10 @@ type ExecCtx struct {
 	reqCtx      context.Context
 	prepareStmt *PrepareStmt
 	runResult   *util.RunResult
+	// rootSQLOverride is the authoritative SQL for a statement planned
+	// recursively inside this request, such as the statement owned by PREPARE.
+	// A nil value falls back to the session SQL.
+	rootSQLOverride *string
 	//stmt will be replaced by the Execute
 	stmt tree.Statement
 	//isLastStmt : true denotes the last statement in the query
@@ -894,12 +915,33 @@ type ExecCtx struct {
 	results           []ExecResult
 	prepareColDef     [][]byte
 	isIssue3482       bool
+	// remapDb is the effective database remap (role/session/inline merged) for
+	// this statement. It is applied at the AST level to qualified references by
+	// applyRemapDb, and to the current database (for unqualified references) by
+	// TxnCompilerContext.DefaultDatabase. nil when the rewrite feature is off or
+	// no remapdb is configured.
+	remapDb map[string]string
+	// rewriteEnabled is captured once when the request is parsed. It keeps
+	// nested SQL (notably PREPARE ... FROM 'sql'/@var) on the same policy
+	// snapshot even if an earlier statement in the request changes the session
+	// switch before the nested SQL is planned.
+	rewriteEnabled bool
+}
+
+func (execCtx *ExecCtx) withRootSQL(rootSQL string, fn func() error) error {
+	previous := execCtx.rootSQLOverride
+	execCtx.rootSQLOverride = &rootSQL
+	defer func() {
+		execCtx.rootSQLOverride = previous
+	}()
+	return fn()
 }
 
 func (execCtx *ExecCtx) Close() {
 	execCtx.reqCtx = nil
 	execCtx.prepareStmt = nil
 	execCtx.runResult = nil
+	execCtx.rootSQLOverride = nil
 	execCtx.stmt = nil
 	execCtx.tenant = ""
 	execCtx.userName = ""
@@ -915,6 +957,7 @@ func (execCtx *ExecCtx) Close() {
 	execCtx.resper = nil
 	execCtx.results = nil
 	execCtx.prepareColDef = nil
+	execCtx.rewriteEnabled = false
 }
 
 // outputCallBackFunc is the callback function to send the result to the client.
@@ -1370,6 +1413,15 @@ func (ses *Session) SetGlobalSysVar(ctx context.Context, name string, val interf
 		}
 	}
 
+	if name == ProtectedDatabases {
+		if newValue, ok := val.(string); ok && len(protectedDatabaseSetFromString(ses, newValue)) == 0 {
+			oldValue, _ := ses.GetGlobalSysVar(name)
+			if oldString, ok := oldValue.(string); ok && len(protectedDatabaseSetFromString(ses, oldString)) != 0 {
+				return moerr.NewInternalErrorNoCtx("protected_databases cannot be cleared directly")
+			}
+		}
+	}
+
 	// save to table first
 	if err = doSetGlobalSystemVariable(ctx, ses, name, val); err != nil {
 		return
@@ -1413,6 +1465,10 @@ func (ses *Session) GetSessionSysVar(name string) (interface{}, error) {
 
 func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val interface{}) (err error) {
 	name = strings.ToLower(name)
+	oldMatrixOneNative := false
+	if name == "sql_mode" {
+		oldMatrixOneNative = ses.sqlModeHasMatrixOneNative()
+	}
 
 	def, ok := gSysVarsDefs[name]
 	if !ok {
@@ -1437,6 +1493,16 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 		}
 	}
 
+	// Validate remap_rewrites at SET time so an invalid value is rejected up
+	// front and can never be stored. Without this the value would only fail
+	// later in rewriteSQL, which runs on every statement and would make the
+	// session unable to even clear the bad value.
+	if name == "remap_rewrites" {
+		if err = validateRemapRewrites(ctx, val); err != nil {
+			return err
+		}
+	}
+
 	// ensure session system variables container exists in embed/basic cluster
 	if ses.sesSysVars == nil {
 		ses.sesSysVars = &SystemVariables{mp: make(map[string]interface{})}
@@ -1452,7 +1518,7 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 		ses.sesSysVars.Set(name, val)
 	}
 	if err == nil && name == "sql_mode" {
-		ses.updateSqlModeNoAutoValueOnZero(val)
+		ses.updateSqlModeCaches(oldMatrixOneNative, val)
 	}
 
 	// Update rewriteEnabled cache when enable_remap_hint is changed
@@ -1460,6 +1526,14 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 		if on, convErr := valueIsBoolTrue(val); convErr == nil {
 			ses.rewriteEnabled.Store(on)
 		}
+	}
+
+	// A prepared statement bakes in the rewrite/remap state captured at PREPARE
+	// time (the injected hint and the remapdb applied to its AST). Changing that
+	// state must invalidate the cached prepared statements, otherwise a later
+	// EXECUTE would run with a stale remap. Drop them so they re-prepare.
+	if err == nil && (name == "remap_rewrites" || name == "enable_remap_hint") {
+		ses.RemoveAllPrepareStmts()
 	}
 	return
 }

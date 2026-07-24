@@ -15,7 +15,9 @@
 package compile
 
 import (
+	"context"
 	"fmt"
+	"time"
 	"unsafe"
 
 	"github.com/google/uuid"
@@ -55,7 +57,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/onduplicatekey"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/postdml"
@@ -90,8 +91,57 @@ func encodeScope(s *Scope) ([]byte, error) {
 	return p.Marshal()
 }
 
+func icebergPlanningStatsToPipeline(stats process.ParquetProfileStats) *pipeline.IcebergPlanningStats {
+	if stats.Empty() {
+		return nil
+	}
+	return &pipeline.IcebergPlanningStats{
+		MetadataBytes:         stats.IcebergMetadataBytes,
+		ManifestListBytes:     stats.IcebergManifestListBytes,
+		ManifestBytes:         stats.IcebergManifestBytes,
+		ManifestsSelected:     stats.IcebergManifestsSelected,
+		ManifestsPruned:       stats.IcebergManifestsPruned,
+		DataFilesSelected:     stats.IcebergDataFilesSelected,
+		DataFilesPruned:       stats.IcebergDataFilesPruned,
+		DataFileBytesSelected: stats.IcebergDataFileBytesSelected,
+		DataFileBytesPruned:   stats.IcebergDataFileBytesPruned,
+		PlanningCacheHits:     stats.IcebergPlanningCacheHits,
+		PlanningCacheMiss:     stats.IcebergPlanningCacheMiss,
+	}
+}
+
+func icebergPlanningStatsFromPipeline(stats *pipeline.IcebergPlanningStats) process.ParquetProfileStats {
+	if stats == nil {
+		return process.ParquetProfileStats{}
+	}
+	return process.ParquetProfileStats{
+		IcebergMetadataBytes:         stats.GetMetadataBytes(),
+		IcebergManifestListBytes:     stats.GetManifestListBytes(),
+		IcebergManifestBytes:         stats.GetManifestBytes(),
+		IcebergManifestsSelected:     stats.GetManifestsSelected(),
+		IcebergManifestsPruned:       stats.GetManifestsPruned(),
+		IcebergDataFilesSelected:     stats.GetDataFilesSelected(),
+		IcebergDataFilesPruned:       stats.GetDataFilesPruned(),
+		IcebergDataFileBytesSelected: stats.GetDataFileBytesSelected(),
+		IcebergDataFileBytesPruned:   stats.GetDataFileBytesPruned(),
+		IcebergPlanningCacheHits:     stats.GetPlanningCacheHits(),
+		IcebergPlanningCacheMiss:     stats.GetPlanningCacheMiss(),
+	}
+}
+
 // decodeScope decode a pipeline.Pipeline from bytes, and generate a Scope from it.
 func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.Engine) (*Scope, error) {
+	if isRemote && proc != nil {
+		if proc.Ctx == nil {
+			proc.Ctx = context.Background()
+		}
+		proc.Ctx = context.WithValue(proc.Ctx, defines.RemoteRunContext{}, true)
+		topCtx := proc.GetTopContext()
+		if topCtx == nil {
+			topCtx = context.Background()
+		}
+		proc.ReplaceTopCtx(context.WithValue(topCtx, defines.RemoteRunContext{}, true))
+	}
 	// unmarshal to pipeline
 	p := &pipeline.Pipeline{}
 	err := p.Unmarshal(data)
@@ -435,6 +485,22 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			Attrs:           t.InsertCtx.Attrs,
 			AddAffectedRows: t.InsertCtx.AddAffectedRows,
 			TableDef:        t.InsertCtx.TableDef,
+			ToExternal:      t.ToExternal,
+		}
+		if t.ToExternal {
+			// The rest of the writer config is rebuilt from TableDef on the
+			// receiving CN; the statement-start timestamp and the session time
+			// zone travel so every CN expands WRITE_FILE_PATTERN time directives
+			// and renders TIMESTAMP values identically. Resolve the timestamp
+			// the same way the local Prepare does (prepared statements reuse
+			// the compiled operator, so the config value may be stale).
+			stmtAt := externalInsertStmtTime(proc, t.InsertCtx.ExternalConfig.Stmt)
+			in.Insert.ExternalStmtUnixNano = stmtAt.UnixNano()
+			if loc := proc.GetSessionInfo().TimeZone; loc != nil {
+				in.Insert.ExternalTzName = loc.String()
+				_, off := stmtAt.In(loc).Zone()
+				in.Insert.ExternalTzOffsetSec = int32(off)
+			}
 		}
 	case *deletion.Deletion:
 		in.Delete = &pipeline.Deletion{
@@ -449,16 +515,6 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			AddAffectedRows: t.DeleteCtx.AddAffectedRows,
 			Ref:             t.DeleteCtx.Ref,
 			PrimaryKeyIdx:   int32(t.DeleteCtx.PrimaryKeyIdx),
-		}
-	case *onduplicatekey.OnDuplicatekey:
-		in.OnDuplicateKey = &pipeline.OnDuplicateKey{
-			Attrs:              t.Attrs,
-			InsertColCount:     t.InsertColCount,
-			UniqueColCheckExpr: t.UniqueColCheckExpr,
-			UniqueCols:         t.UniqueCols,
-			OnDuplicateIdx:     t.OnDuplicateIdx,
-			OnDuplicateExpr:    t.OnDuplicateExpr,
-			IsIgnore:           t.IsIgnore,
 		}
 	case *fuzzyfilter.FuzzyFilter:
 		in.FuzzyFilter = &pipeline.FuzzyFilter{
@@ -504,6 +560,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		in.Shuffle.ShuffleRangesInt64 = t.ShuffleRangeInt64
 		in.Shuffle.RuntimeFilterSpec = t.RuntimeFilterSpec
 		in.Shuffle.ShuffleExpr = t.ShuffleExpr
+		in.Shuffle.DrainAllBuckets = t.DrainAllBuckets
 	case *dispatch.Dispatch:
 		in.Dispatch = &pipeline.Dispatch{IsSink: t.IsSink, ShuffleType: t.ShuffleType, RecSink: t.RecSink, RecCte: t.RecCTE, FuncId: int32(t.FuncId)}
 		in.Dispatch.ShuffleRegIdxLocal = make([]int32, len(t.ShuffleRegIdxLocal))
@@ -566,6 +623,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			JoinMapTag:             t.JoinMapTag,
 			RuntimeFilterBuildList: t.RuntimeFilterSpecs,
 		}
+		in.SpillMem = t.SpillThreshold
 	case *loopjoin.LoopJoin:
 		relList, colList := getRelColList(t.ResultCols)
 		in.LoopJoin = &pipeline.LoopJoin{
@@ -594,6 +652,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		in.ProductL2 = &pipeline.ProductL2{
 			RelList:      relList,
 			ColList:      colList,
+			Expr:         t.OnExpr,
 			JoinMapTag:   t.JoinMapTag,
 			VectorOpType: t.VectorOpType,
 		}
@@ -643,28 +702,40 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		}
 	case *table_function.TableFunction:
 		in.TableFunction = &pipeline.TableFunction{
-			Attrs:    t.Attrs,
-			Rets:     t.Rets,
-			Args:     t.Args,
-			Params:   t.Params,
-			Name:     t.FuncName,
-			IsSingle: t.IsSingle,
+			Attrs:                  t.Attrs,
+			Rets:                   t.Rets,
+			Args:                   t.Args,
+			Params:                 t.Params,
+			Name:                   t.FuncName,
+			IsSingle:               t.IsSingle,
+			IndexReaderParam:       t.IndexReaderParam,
+			RuntimeFilterProbeList: t.RuntimeFilterSpecs,
 		}
 
 	case *external.External:
 		in.ExternalScan = &pipeline.ExternalScan{
-			Attrs:                  t.Es.Attrs,
-			ColumnListLen:          t.Es.ColumnListLen,
-			Cols:                   t.Es.Cols,
-			FileSize:               t.Es.FileSize,
-			FileOffsetTotal:        t.Es.FileOffsetTotal,
-			CreateSql:              t.Es.CreateSql,
-			FileList:               t.Es.FileList,
-			Filter:                 t.Es.Filter.FilterExpr,
-			StrictSqlMode:          t.Es.StrictSqlMode,
-			ParallelLoad:           t.Es.ParallelLoad,
-			LoadEmptyNumericAsZero: t.Es.LoadEmptyNumericAsZero,
-			ParquetRowGroupShards:  t.Es.ParquetRowGroupShards,
+			Attrs:                       t.Es.Attrs,
+			ColumnListLen:               t.Es.ColumnListLen,
+			Cols:                        t.Es.Cols,
+			FileSize:                    t.Es.FileSize,
+			FileOffsetTotal:             t.Es.FileOffsetTotal,
+			CreateSql:                   t.Es.CreateSql,
+			FileList:                    t.Es.FileList,
+			Filter:                      t.Es.Filter.FilterExpr,
+			StrictSqlMode:               t.Es.StrictSqlMode,
+			ParallelLoad:                t.Es.ParallelLoad,
+			LoadEmptyNumericAsZero:      t.Es.LoadEmptyNumericAsZero,
+			ParquetRowGroupShards:       t.Es.ParquetRowGroupShards,
+			IcebergDataTasks:            t.Es.IcebergDataTasks,
+			IcebergDeleteTasks:          t.Es.IcebergDeleteTasks,
+			IcebergColumns:              t.Es.IcebergColumns,
+			IcebergSnapshot:             t.Es.IcebergSnapshot,
+			IcebergObjectIoRef:          t.Es.IcebergObjectIORef,
+			IcebergHiddenReadColumns:    t.Es.IcebergHiddenReadCols,
+			NeedRowOrdinal:              t.Es.NeedRowOrdinal,
+			IcebergPlanningStats:        icebergPlanningStatsToPipeline(t.Es.IcebergPlanningStats),
+			IcebergDeleteMaxMemoryBytes: t.Es.IcebergDeleteMaxMemoryBytes,
+			IcebergDeleteSpillEnabled:   t.Es.IcebergDeleteSpillEnabled,
 		}
 		in.ProjectList = t.ProjectList
 	case *source.Source:
@@ -701,6 +772,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			HashOnPk:                  t.HashOnPK,
 			NeedBatches:               t.NeedBatches,
 			NeedAllocateSels:          t.NeedAllocateSels,
+			TrackNullKeys:             t.TrackNullKeys,
 			IsShuffle:                 t.IsShuffle,
 			Conditions:                t.Conditions,
 			JoinMapTag:                t.JoinMapTag,
@@ -716,6 +788,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			DedupDeleteMarkerColIdx:   t.DedupDeleteMarkerColIdx,
 			DedupDeleteKeepColIdxList: t.DedupDeleteKeepColIdxList,
 		}
+		in.SpillMem = t.SpillThreshold
 	case *indexbuild.IndexBuild:
 		in.IndexBuild = &pipeline.Indexbuild{
 			RuntimeFilterSpec: t.RuntimeFilterSpec,
@@ -745,6 +818,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			OldColCapturePlaceholderIdxList: t.OldColCapturePlaceholderIdxList,
 			OldColCaptureProbeIdxList:       t.OldColCaptureProbeIdxList,
 		}
+		in.SpillMem = t.SpillThreshold
 	case *rightdedupjoin.RightDedupJoin:
 		relList, colList := getRelColList(t.Result)
 		in.RightDedupJoin = &pipeline.RightDedupJoin{
@@ -765,6 +839,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			UpdateColIdxList:       t.UpdateColIdxList,
 			UpdateColExprList:      t.UpdateColExprList,
 		}
+		in.SpillMem = t.SpillThreshold
 	case *apply.Apply:
 		relList, colList := getRelColList(t.Result)
 		in.Apply = &pipeline.Apply{
@@ -774,21 +849,24 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			Types:     convertToPlanTypes(t.Typs),
 		}
 		in.TableFunction = &pipeline.TableFunction{
-			Attrs:    t.TableFunction.Attrs,
-			Rets:     t.TableFunction.Rets,
-			Args:     t.TableFunction.Args,
-			Params:   t.TableFunction.Params,
-			Name:     t.TableFunction.FuncName,
-			IsSingle: t.TableFunction.IsSingle,
+			Attrs:                  t.TableFunction.Attrs,
+			Rets:                   t.TableFunction.Rets,
+			Args:                   t.TableFunction.Args,
+			Params:                 t.TableFunction.Params,
+			Name:                   t.TableFunction.FuncName,
+			IsSingle:               t.TableFunction.IsSingle,
+			IndexReaderParam:       t.TableFunction.IndexReaderParam,
+			RuntimeFilterProbeList: t.TableFunction.RuntimeFilterSpecs,
 		}
 	case *multi_update.MultiUpdate:
 		updateCtxList := make([]*plan.UpdateCtx, len(t.MultiUpdateCtx))
 		for i, muCtx := range t.MultiUpdateCtx {
 			updateCtxList[i] = &plan.UpdateCtx{
-				ObjRef:             muCtx.ObjRef,
-				TableDef:           muCtx.TableDef,
-				SkipInsertOnNullPk: muCtx.SkipInsertOnNullPk,
-				InsertPkColIdx:     int32(muCtx.InsertPkColIdx),
+				ObjRef:                muCtx.ObjRef,
+				TableDef:              muCtx.TableDef,
+				SkipInsertOnNullPk:    muCtx.SkipInsertOnNullPk,
+				InsertPkColIdx:        int32(muCtx.InsertPkColIdx),
+				CountDeleteAffectRows: t.CountDeleteAffectRows,
 			}
 
 			updateCtxList[i].InsertCols = make([]plan.ColRef, len(muCtx.InsertCols))
@@ -860,6 +938,31 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		op = arg
 	case vm.Insert:
 		t := opr.GetInsert()
+		if t.ToExternal {
+			// Writable external table: rebuild the external writer config from
+			// TableDef's stored ExternParam, against the sender's statement-start
+			// timestamp.
+			arg, err := buildExternalInsertArg(context.TODO(), t.Ref, t.TableDef,
+				t.AddAffectedRows, eng, time.Unix(0, t.ExternalStmtUnixNano))
+			if err != nil {
+				return nil, err
+			}
+			// Use the sender's session time zone rather than this CN's
+			// reconstructed session info: the generic codec round-trips zones
+			// as a year-1 fixed offset (LMT), shifting rendered TIMESTAMPs.
+			// Fall back to the offset at statement time when the zone name is
+			// not loadable here ("Local", "", or missing tzdata).
+			if name := t.ExternalTzName; name != "" && name != "Local" {
+				if loc, lerr := time.LoadLocation(name); lerr == nil {
+					arg.InsertCtx.ExternalConfig.TimeZone = loc
+				}
+			}
+			if arg.InsertCtx.ExternalConfig.TimeZone == nil && t.ExternalTzName != "" {
+				arg.InsertCtx.ExternalConfig.TimeZone = time.FixedZone("", int(t.ExternalTzOffsetSec))
+			}
+			op = arg
+			break
+		}
 		arg := insert.NewArgument()
 		arg.ToWriteS3 = t.ToWriteS3
 		arg.InsertCtx = &insert.InsertCtx{
@@ -907,17 +1010,6 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg := preinsertsecondaryindex.NewArgument()
 		arg.PreInsertCtx = t.GetPreInsertSkCtx()
 		op = arg
-	case vm.OnDuplicateKey:
-		t := opr.GetOnDuplicateKey()
-		arg := onduplicatekey.NewArgument()
-		arg.Attrs = t.Attrs
-		arg.InsertColCount = t.InsertColCount
-		arg.UniqueColCheckExpr = t.UniqueColCheckExpr
-		arg.UniqueCols = t.UniqueCols
-		arg.OnDuplicateIdx = t.OnDuplicateIdx
-		arg.OnDuplicateExpr = t.OnDuplicateExpr
-		arg.IsIgnore = t.IsIgnore
-		op = arg
 	case vm.FuzzyFilter:
 		t := opr.GetFuzzyFilter()
 		arg := fuzzyfilter.NewArgument()
@@ -939,6 +1031,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.ShuffleRangeUint64 = t.ShuffleRangesUint64
 		arg.RuntimeFilterSpec = t.RuntimeFilterSpec
 		arg.ShuffleExpr = t.ShuffleExpr
+		arg.DrainAllBuckets = t.DrainAllBuckets
 		op = arg
 	case vm.Dispatch:
 		t := opr.GetDispatch()
@@ -1047,6 +1140,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.Result = convertToResultPos(t.RelList, t.ColList)
 		arg.OnExpr = t.Expr
 		arg.JoinMapTag = t.JoinMapTag
+		arg.VectorOpType = t.VectorOpType
 		op = arg
 	case vm.Projection:
 		arg := projection.NewArgument()
@@ -1065,7 +1159,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 	case vm.Intersect:
 		op = intersect.NewArgument()
 	case vm.IntersectAll:
-		op = intersect.NewArgument()
+		op = intersectall.NewArgument()
 	case vm.Minus:
 		op = minus.NewArgument()
 	case vm.Connector:
@@ -1109,23 +1203,35 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.FuncName = opr.TableFunction.Name
 		arg.Params = opr.TableFunction.Params
 		arg.IsSingle = opr.TableFunction.IsSingle
+		arg.IndexReaderParam = opr.TableFunction.IndexReaderParam
+		arg.RuntimeFilterSpecs = opr.TableFunction.RuntimeFilterProbeList
 		op = arg
 	case vm.External:
 		t := opr.GetExternalScan()
 		op = external.NewArgument().WithEs(
 			&external.ExternalParam{
 				ExParamConst: external.ExParamConst{
-					Attrs:                  t.Attrs,
-					ColumnListLen:          t.ColumnListLen,
-					FileSize:               t.FileSize,
-					FileOffsetTotal:        t.FileOffsetTotal,
-					Cols:                   t.Cols,
-					CreateSql:              t.CreateSql,
-					FileList:               t.FileList,
-					StrictSqlMode:          t.StrictSqlMode,
-					ParallelLoad:           t.ParallelLoad,
-					LoadEmptyNumericAsZero: t.LoadEmptyNumericAsZero,
-					ParquetRowGroupShards:  t.ParquetRowGroupShards,
+					Attrs:                       t.Attrs,
+					ColumnListLen:               t.ColumnListLen,
+					FileSize:                    t.FileSize,
+					FileOffsetTotal:             t.FileOffsetTotal,
+					Cols:                        t.Cols,
+					CreateSql:                   t.CreateSql,
+					FileList:                    t.FileList,
+					StrictSqlMode:               t.StrictSqlMode,
+					ParallelLoad:                t.ParallelLoad,
+					LoadEmptyNumericAsZero:      t.LoadEmptyNumericAsZero,
+					ParquetRowGroupShards:       t.ParquetRowGroupShards,
+					IcebergDataTasks:            t.IcebergDataTasks,
+					IcebergDeleteTasks:          t.IcebergDeleteTasks,
+					IcebergColumns:              t.IcebergColumns,
+					IcebergSnapshot:             t.IcebergSnapshot,
+					IcebergObjectIORef:          t.IcebergObjectIoRef,
+					IcebergHiddenReadCols:       t.IcebergHiddenReadColumns,
+					NeedRowOrdinal:              t.NeedRowOrdinal,
+					IcebergPlanningStats:        icebergPlanningStatsFromPipeline(t.IcebergPlanningStats),
+					IcebergDeleteMaxMemoryBytes: t.IcebergDeleteMaxMemoryBytes,
+					IcebergDeleteSpillEnabled:   t.IcebergDeleteSpillEnabled,
 				},
 				ExParam: external.ExParam{
 					Fileparam: new(external.ExFileparam),
@@ -1168,6 +1274,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.HashOnPK = t.HashOnPk
 		arg.NeedBatches = t.NeedBatches
 		arg.NeedAllocateSels = t.NeedAllocateSels
+		arg.TrackNullKeys = t.TrackNullKeys
 		arg.IsShuffle = t.IsShuffle
 		arg.Conditions = t.Conditions
 		arg.JoinMapTag = t.JoinMapTag
@@ -1182,6 +1289,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.DelColIdx = t.DelColIdx
 		arg.DedupDeleteMarkerColIdx = t.DedupDeleteMarkerColIdx
 		arg.DedupDeleteKeepColIdxList = t.DedupDeleteKeepColIdxList
+		arg.SpillThreshold = opr.SpillMem
 		op = arg
 	case vm.IndexBuild:
 		arg := indexbuild.NewArgument()
@@ -1241,6 +1349,8 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.TableFunction.FuncName = opr.TableFunction.Name
 		arg.TableFunction.Params = opr.TableFunction.Params
 		arg.TableFunction.IsSingle = opr.TableFunction.IsSingle
+		arg.TableFunction.IndexReaderParam = opr.TableFunction.IndexReaderParam
+		arg.TableFunction.RuntimeFilterSpecs = opr.TableFunction.RuntimeFilterProbeList
 		op = arg
 	case vm.MultiUpdate:
 		arg := multi_update.NewArgument()
@@ -1252,6 +1362,9 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 
 		arg.MultiUpdateCtx = make([]*multi_update.MultiUpdateCtx, len(t.UpdateCtxList))
 		for i, muCtx := range t.UpdateCtxList {
+			if muCtx.CountDeleteAffectRows {
+				arg.CountDeleteAffectRows = true
+			}
 
 			arg.MultiUpdateCtx[i] = &multi_update.MultiUpdateCtx{
 				ObjRef:             muCtx.ObjRef,

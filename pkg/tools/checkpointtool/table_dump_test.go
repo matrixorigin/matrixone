@@ -1,0 +1,3061 @@
+// Copyright 2021 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package checkpointtool
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/util/csvparser"
+	"github.com/matrixorigin/matrixone/pkg/tools/objecttool"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/ckputil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func TestCSVPipelineErrorKeepsNonCanceledRootCause(t *testing.T) {
+	root := errors.New("remote read failed")
+
+	assert.ErrorIs(t, csvPipelineError(context.Canceled, root), root)
+	assert.ErrorIs(t, csvPipelineError(root, context.Canceled), root)
+	assert.ErrorIs(t, csvPipelineError(context.Canceled, context.Canceled), context.Canceled)
+	assert.NoError(t, csvPipelineError(nil, nil))
+}
+
+func TestComposeAtUsesLatestUsableGlobalCheckpoint(t *testing.T) {
+	older := checkpoint.NewCheckpointEntry("", types.BuildTS(1, 0), types.BuildTS(10, 0), checkpoint.ET_Global)
+	newer := checkpoint.NewCheckpointEntry("", types.BuildTS(11, 0), types.BuildTS(20, 0), checkpoint.ET_Global)
+	reader := &CheckpointReader{
+		entries: []*checkpoint.CheckpointEntry{newer, older},
+		getTablesForTest: func(_ *CheckpointReader, entry *checkpoint.CheckpointEntry) ([]*TableInfo, error) {
+			return []*TableInfo{{TableID: uint64(entry.GetEnd().Physical())}}, nil
+		},
+	}
+
+	view, err := reader.ComposeAt(types.BuildTS(20, 0))
+	require.NoError(t, err)
+	require.NotNil(t, view.BaseEntry)
+	assert.Equal(t, 0, view.BaseEntry.Index)
+	assert.Contains(t, view.Tables, uint64(20))
+	assert.NotContains(t, view.Tables, uint64(10))
+}
+
+func TestComposeAtIncludesBoundaryIncrementalAndFailsRequiredGap(t *testing.T) {
+	baseEntry := checkpoint.NewCheckpointEntry("", types.BuildTS(1, 0), types.BuildTS(10, 0), checkpoint.ET_Global)
+	boundaryIncr := checkpoint.NewCheckpointEntry("", types.BuildTS(10, 0), types.BuildTS(15, 0), checkpoint.ET_Incremental)
+	reader := &CheckpointReader{
+		ctx:     context.Background(),
+		entries: []*checkpoint.CheckpointEntry{baseEntry, boundaryIncr},
+		getTablesForTest: func(_ *CheckpointReader, entry *checkpoint.CheckpointEntry) ([]*TableInfo, error) {
+			switch entry {
+			case baseEntry:
+				return []*TableInfo{{TableID: 1}}, nil
+			case boundaryIncr:
+				return []*TableInfo{{TableID: 2}}, nil
+			default:
+				return nil, nil
+			}
+		},
+	}
+
+	view, err := reader.ComposeAt(types.BuildTS(15, 0))
+	require.NoError(t, err)
+	require.Len(t, view.Incrementals, 1)
+	require.Contains(t, view.Tables, uint64(2))
+
+	reader.getTablesForTest = func(_ *CheckpointReader, entry *checkpoint.CheckpointEntry) ([]*TableInfo, error) {
+		if entry == boundaryIncr {
+			return nil, moerr.NewFileNotFoundNoCtx("missing-ickp")
+		}
+		return []*TableInfo{{TableID: 1}}, nil
+	}
+	_, err = reader.ComposeAt(types.BuildTS(15, 0))
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), "got %v", err)
+	require.ErrorContains(t, err, "required incremental checkpoint")
+}
+
+func TestComposeAtIncludesIncrementalCoveringSnapshot(t *testing.T) {
+	baseEntry := checkpoint.NewCheckpointEntry("", types.BuildTS(1, 0), types.BuildTS(10, 0), checkpoint.ET_Global)
+	coveringIncr := checkpoint.NewCheckpointEntry("", types.BuildTS(10, 0), types.BuildTS(20, 0), checkpoint.ET_Incremental)
+	reader := &CheckpointReader{
+		ctx:     context.Background(),
+		entries: []*checkpoint.CheckpointEntry{coveringIncr, baseEntry},
+		getTablesForTest: func(_ *CheckpointReader, entry *checkpoint.CheckpointEntry) ([]*TableInfo, error) {
+			switch entry {
+			case baseEntry:
+				return []*TableInfo{{TableID: 1}}, nil
+			case coveringIncr:
+				return []*TableInfo{{TableID: 2}}, nil
+			default:
+				return nil, nil
+			}
+		},
+	}
+
+	view, err := reader.ComposeAt(types.BuildTS(15, 0))
+	require.NoError(t, err)
+	require.Len(t, view.Incrementals, 1)
+	require.Contains(t, view.Tables, uint64(2))
+}
+
+func TestComposeAtFailsMissingMiddleIncremental(t *testing.T) {
+	baseEntry := checkpoint.NewCheckpointEntry("", types.BuildTS(1, 0), types.BuildTS(10, 0), checkpoint.ET_Global)
+	firstIncr := checkpoint.NewCheckpointEntry("", types.BuildTS(10, 0), types.BuildTS(15, 0), checkpoint.ET_Incremental)
+	gappedIncr := checkpoint.NewCheckpointEntry("", types.BuildTS(20, 0), types.BuildTS(25, 0), checkpoint.ET_Incremental)
+	reader := &CheckpointReader{
+		ctx:     context.Background(),
+		entries: []*checkpoint.CheckpointEntry{gappedIncr, firstIncr, baseEntry},
+		getTablesForTest: func(_ *CheckpointReader, entry *checkpoint.CheckpointEntry) ([]*TableInfo, error) {
+			return []*TableInfo{{TableID: uint64(entry.GetEnd().Physical())}}, nil
+		},
+	}
+
+	_, err := reader.ComposeAt(types.BuildTS(25, 0))
+	require.Error(t, err)
+	require.ErrorContains(t, err, "checkpoint chain cannot cover")
+}
+
+func TestGetTableEntriesAtReturnsNonMissingObjectEntryError(t *testing.T) {
+	readErr := errors.New("decode checkpoint entry failed")
+	entry := checkpoint.NewCheckpointEntry("", types.BuildTS(1, 0), types.BuildTS(10, 0), checkpoint.ET_Global)
+	reader := &CheckpointReader{
+		entries: []*checkpoint.CheckpointEntry{entry},
+		getTablesForTest: func(_ *CheckpointReader, _ *checkpoint.CheckpointEntry) ([]*TableInfo, error) {
+			return []*TableInfo{{TableID: 42, DataRanges: []ckputil.TableRange{{TableID: 42}}}}, nil
+		},
+		getObjectEntriesForTest: func(_ *CheckpointReader, _ *checkpoint.CheckpointEntry, _ uint64) ([]*ObjectEntryInfo, []*ObjectEntryInfo, error) {
+			return nil, nil, readErr
+		},
+	}
+
+	_, _, err := reader.getTableEntriesAt(context.Background(), 42, types.BuildTS(10, 0))
+	require.ErrorIs(t, err, readErr)
+}
+
+func TestBuildLogicalTableViewComposedIncludesLiveBaseRowsAtIncremental(t *testing.T) {
+	ctx := context.Background()
+	fs, stats := writeLogicalTableTestObject(t, "logical-composed.obj")
+	defer fs.Close(ctx)
+	base := checkpoint.NewCheckpointEntry("", types.BuildTS(1, 0), types.BuildTS(10, 0), checkpoint.ET_Global)
+	incr := checkpoint.NewCheckpointEntry("", types.BuildTS(10, 0), types.BuildTS(20, 0), checkpoint.ET_Incremental)
+	baseObject := &ObjectEntryInfo{ObjectStats: stats, CreateTime: types.BuildTS(2, 0)}
+	reader := &CheckpointReader{
+		ctx:     context.Background(),
+		fs:      fs,
+		mp:      mpool.MustNewZero(),
+		entries: []*checkpoint.CheckpointEntry{incr, base},
+		getTablesForTest: func(_ *CheckpointReader, _ *checkpoint.CheckpointEntry) ([]*TableInfo, error) {
+			return []*TableInfo{{TableID: 42, DataRanges: []ckputil.TableRange{{TableID: 42}}}}, nil
+		},
+		getObjectEntriesForTest: func(_ *CheckpointReader, entry *checkpoint.CheckpointEntry, tableID uint64) ([]*ObjectEntryInfo, []*ObjectEntryInfo, error) {
+			require.Equal(t, uint64(42), tableID)
+			if entry == base {
+				return []*ObjectEntryInfo{baseObject}, nil, nil
+			}
+			return nil, nil, nil
+		},
+	}
+
+	view, err := reader.BuildLogicalTableViewComposedLimited(ctx, 42, types.BuildTS(20, 0), 10, 1<<20)
+	require.NoError(t, err)
+	require.Len(t, view.Rows, 2)
+	require.Equal(t, []string{"1", "alice"}, view.DataRow(view.Rows[0]))
+}
+
+func TestGetTableEntriesAtReturnsMissingSelectedObjectEntries(t *testing.T) {
+	entry := checkpoint.NewCheckpointEntry("", types.BuildTS(1, 0), types.BuildTS(10, 0), checkpoint.ET_Global)
+	reader := &CheckpointReader{
+		ctx:     context.Background(),
+		entries: []*checkpoint.CheckpointEntry{entry},
+		getTablesForTest: func(_ *CheckpointReader, _ *checkpoint.CheckpointEntry) ([]*TableInfo, error) {
+			return []*TableInfo{{TableID: 42, DataRanges: []ckputil.TableRange{{TableID: 42}}}}, nil
+		},
+		getObjectEntriesForTest: func(_ *CheckpointReader, _ *checkpoint.CheckpointEntry, _ uint64) ([]*ObjectEntryInfo, []*ObjectEntryInfo, error) {
+			return nil, nil, moerr.NewFileNotFoundNoCtx("missing-selected")
+		},
+	}
+
+	_, _, err := reader.getTableEntriesAt(context.Background(), 42, types.BuildTS(10, 0))
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), "got %v", err)
+	require.ErrorContains(t, err, "required checkpoint object entries")
+}
+
+func TestWriteCSVChunksConsumesOrderedStreamAcrossEmptyBlockPastOldBudget(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	chunks := make(chan csvPipelineChunk, 2)
+	done := make(chan error, 1)
+	counters := &csvPipelineCounters{}
+
+	go writeCSVChunks(ctx, io.Discard, chunks, counters, cancel, done)
+	payload := bytes.Repeat([]byte("x"), 1<<20)
+	chunks <- csvPipelineChunk{objectIdx: 0, blockIdx: 0, data: []byte("first\n")}
+	// Block 1 is empty and therefore has no event. Later ordered blocks total
+	// more than the former 512 MiB reorder budget but are written immediately.
+	for blockIdx := 2; blockIdx < 2+513; blockIdx++ {
+		chunks <- csvPipelineChunk{objectIdx: 0, blockIdx: blockIdx, data: payload}
+	}
+	chunks <- csvPipelineChunk{objectIdx: 0, objectDone: true}
+	close(chunks)
+
+	require.NoError(t, <-done)
+	require.Greater(t, counters.writtenBytes.Load(), int64(2*csvPipelineWorkerMemory))
+}
+
+func TestWriteCSVChunksRejectsOutOfOrderObjectsAndBlocks(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	chunks := make(chan csvPipelineChunk, 1)
+	done := make(chan error, 1)
+	counters := &csvPipelineCounters{}
+	var buf bytes.Buffer
+
+	go writeCSVChunks(ctx, &buf, chunks, counters, cancel, done)
+	chunks <- csvPipelineChunk{objectIdx: 1, blockIdx: 0, data: []byte("future\n")}
+
+	err := <-done
+	require.Error(t, err)
+	require.ErrorContains(t, err, "out-of-order object")
+	assert.Empty(t, buf.String())
+
+	ctx, cancel = context.WithCancel(context.Background())
+	defer cancel()
+	chunks = make(chan csvPipelineChunk, 3)
+	done = make(chan error, 1)
+	counters = &csvPipelineCounters{}
+	go writeCSVChunks(ctx, io.Discard, chunks, counters, cancel, done)
+	chunks <- csvPipelineChunk{objectIdx: 0, blockIdx: 2, data: []byte("later\n")}
+	chunks <- csvPipelineChunk{objectIdx: 0, blockIdx: 1, data: []byte("earlier\n")}
+	err = <-done
+	require.ErrorContains(t, err, "out-of-order block")
+
+	ctx, cancel = context.WithCancel(context.Background())
+	defer cancel()
+	chunks = make(chan csvPipelineChunk, 2)
+	done = make(chan error, 1)
+	writeErr := errors.New("write failed")
+	go writeCSVChunks(ctx, errWriter{err: writeErr}, chunks, counters, cancel, done)
+	chunks <- csvPipelineChunk{objectIdx: 0, blockIdx: 0, data: []byte("a\n")}
+	close(chunks)
+	require.ErrorIs(t, <-done, writeErr)
+}
+
+func TestWaitForCSVMemoryReturnsBoundedLowMemoryError(t *testing.T) {
+	counters := &csvPipelineCounters{}
+	counters.memoryFloor.Store(1 << 30)
+	err := waitForCSVMemoryWithReader(
+		context.Background(),
+		counters,
+		time.Millisecond,
+		func() (uint64, uint64, bool) { return 2 << 30, 128 << 20, true },
+	)
+	require.ErrorContains(t, err, "memory remained below floor")
+	require.Equal(t, int64(128<<20), counters.memoryAvailable.Load())
+}
+
+type errWriter struct {
+	err error
+}
+
+func (w errWriter) Write([]byte) (int, error) {
+	return 0, w.err
+}
+
+func TestProcessCSVObjectChunksFailsMissingVisibleObject(t *testing.T) {
+	ctx := context.Background()
+	fs, err := fileservice.NewLocalFS(ctx, "local", t.TempDir(), fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	defer fs.Close(ctx)
+
+	reader := &CheckpointReader{
+		ctx: ctx,
+		fs:  fs,
+		mp:  mpool.MustNewZero(),
+	}
+	chunks := make(chan csvPipelineChunk, 1)
+	err = reader.processCSVObjectChunks(
+		ctx,
+		chunks,
+		&csvPipelineCounters{},
+		types.BuildTS(10, 0),
+		nil,
+		nil,
+		csvPipelineObjectJob{objectIdx: 0, entry: newTestObjectEntryInfo(9, 1, 0)},
+	)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), "got %v", err)
+	require.ErrorContains(t, err, "visible data object not found")
+	require.Empty(t, chunks)
+}
+
+func encodedSQLType(t *testing.T, typ types.Type) string {
+	t.Helper()
+	data, err := types.Encode(&typ)
+	require.NoError(t, err)
+	return string(data)
+}
+
+func encodedDefault(t *testing.T, origin string, nullable bool) string {
+	t.Helper()
+	data, err := types.Encode(&plan.Default{OriginString: origin, NullAbility: nullable})
+	require.NoError(t, err)
+	return string(data)
+}
+
+func encodedConstraint(t *testing.T, constraints ...engine.Constraint) string {
+	t.Helper()
+	def := &engine.ConstraintDef{
+		Cts: constraints,
+	}
+	data, err := def.MarshalBinary()
+	require.NoError(t, err)
+	return string(data)
+}
+
+func encodedPrimaryKeyConstraint(t *testing.T, names ...string) engine.Constraint {
+	t.Helper()
+	pkeyColName := ""
+	if len(names) == 1 {
+		pkeyColName = names[0]
+	} else if len(names) > 1 {
+		pkeyColName = catalog.CPrimaryKeyColName
+	}
+	return &engine.PrimaryKeyDef{
+		Pkey: &plan.PrimaryKeyDef{
+			PkeyColName: pkeyColName,
+			Names:       names,
+		},
+	}
+}
+
+func TestCSVProjectionAndOrderingHelpers(t *testing.T) {
+	assert.Equal(t, []string{"b", "", "a"}, projectCSVRow([]string{"a", "b"}, []int{1, 3, 0}))
+	assert.Equal(t, []bool{true, false, false}, projectCSVNulls([]bool{false, true}, []int{1, 2, 0}))
+
+	rows := []exportedCSVRow{
+		{values: []string{"b", "1"}},
+		{values: []string{"a", "2"}},
+		{values: []string{"a"}},
+	}
+	sortCSVRowsLexical(rows)
+	assert.Equal(t, [][]string{{"a"}, {"a", "2"}, {"b", "1"}}, [][]string{rows[0].values, rows[1].values, rows[2].values})
+
+	cols := []objecttool.ColInfo{
+		{SeqNum: 4, Type: types.T_int64.ToType()},
+		{SeqNum: 9, Type: types.T_varchar.ToType()},
+	}
+	assert.Equal(t, []int{1, 7, 0}, dataIndexesForSeqNums(cols, []int{9, 7, 4}))
+
+	projected := buildProjectedTypes(cols, []int{1, -1, 0})
+	require.Len(t, projected, 3)
+	assert.Equal(t, types.T_varchar, projected[0].Oid)
+	assert.Equal(t, types.T_any, projected[1].Oid)
+	assert.Equal(t, types.T_int64, projected[2].Oid)
+}
+
+func TestCSVOptionsAndSmallHelperBranches(t *testing.T) {
+	defaults := defaultCSVExportOptions()
+	require.True(t, defaults.IncludeMetadata)
+	require.True(t, defaults.IncludeHeader)
+	require.Equal(t, CSVRowOrderStorage, defaults.RowOrder)
+
+	opts := resolveCSVExportOptions([]CSVExportOption{
+		WithCSVMetaComments(false),
+		WithCSVHeader(false),
+		WithCSVRowOrder(CSVRowOrderLexical),
+	})
+	require.False(t, opts.IncludeMetadata)
+	require.False(t, opts.IncludeHeader)
+	require.Equal(t, CSVRowOrderLexical, opts.RowOrder)
+
+	order, err := ParseCSVRowOrder(" LEXICAL ")
+	require.NoError(t, err)
+	require.Equal(t, CSVRowOrderLexical, order)
+	order, err = ParseCSVRowOrder("")
+	require.NoError(t, err)
+	require.Equal(t, CSVRowOrderStorage, order)
+	_, err = ParseCSVRowOrder("unknown")
+	require.Error(t, err)
+
+	require.Empty(t, schemaForLayout(catalogLayout{}, 999999))
+	require.Equal(t, []string{"a", "c"}, catalogSchemaWithout([]string{"a", "b", "c"}, "b"))
+	require.Equal(t, []TableColumn{{Name: "b", ClusterBy: true}}, clusterByColumns([]TableColumn{{Name: "a"}, {Name: "b", ClusterBy: true}}))
+	require.Equal(t, []TableColumn{{Name: "missing", Position: 1}}, primaryKeyColumns([]TableColumn{{Name: "a"}}, []string{"missing"}))
+	require.Equal(t, -1, dataIndexForSeqNum(&LogicalTableView{ColSeqNums: []uint16{3, 5}}, 9))
+	require.Equal(t, 1, compareCSVRowsLexical([]string{"a", "b"}, []string{"a"}))
+	require.Equal(t, -1, compareCSVRowsLexical([]string{"a"}, []string{"a", "b"}))
+	require.Equal(t, 0, compareCSVRowsLexical([]string{"a"}, []string{"a"}))
+	require.Equal(t, "", cellAt([]string{"a"}, -1))
+	require.Equal(t, "", cellAt([]string{"a"}, 1))
+	require.Equal(t, "a", cellAt([]string{"a"}, 0))
+	require.Equal(t, 9, parseIntCellDefault("bad", 9))
+	require.True(t, needsExplicitPartitionDefinitions(" RANGE "))
+	require.True(t, needsExplicitPartitionDefinitions("list"))
+	require.False(t, needsExplicitPartitionDefinitions("hash"))
+	require.True(t, isFullTextIndex(&indexDDLInfo{algo: catalog.MOIndexFullTextAlgo.ToString()}))
+	require.True(t, isFullTextIndex(&indexDDLInfo{indexType: "FULLTEXT"}))
+	require.False(t, isFullTextIndex(nil))
+	require.Equal(t, "TIME", scaledSQLType("TIME", 0))
+	require.Equal(t, "TIME(6)", scaledSQLType("TIME", 6))
+	require.Equal(t, uint64(1<<30), csvPipelineMemoryFloorFromTotal(0, false))
+	require.Equal(t, uint64((512<<20)/csvPipelineFreeRatio), csvPipelineMemoryFloorFromTotal(512<<20, true))
+	require.Equal(t, uint64(1<<30), csvPipelineMemoryFloorFromTotal(8<<30, true))
+	require.Equal(t, uint64(2<<30), csvPipelineMemoryFloorFromTotal(20<<30, true))
+	require.Equal(t, []TableColumn{{Name: "a"}, {Name: "b"}}, tableLoadColumns([]TableColumn{
+		{Name: "a"},
+		{Name: "generated", Generated: "a + b"},
+		{Name: "b"},
+	}))
+
+	released := 0
+	block := &csvPipelineBlock{
+		releaseCommitTS: func() { released++ },
+		release:         func() { released++ },
+	}
+	block.releaseBlock()
+	block.releaseBlock()
+	require.Equal(t, 2, released)
+	require.Nil(t, block.releaseCommitTS)
+	require.Nil(t, block.release)
+
+	plan := csvPipelineWorkerCount(1)
+	require.Equal(t, 1, plan.readerWorkers)
+	require.Equal(t, 1, plan.processorWorkers)
+	require.GreaterOrEqual(t, plan.readQueueCapacity, 1)
+}
+
+func TestCSVScalarFormattingAndSQLTypeMapping(t *testing.T) {
+	var buf bytes.Buffer
+	appendCSVInt(&buf, -12)
+	buf.WriteByte(',')
+	appendCSVUint(&buf, 34)
+	buf.WriteByte(',')
+	appendCSVFloat(&buf, 1.25, 64)
+	buf.WriteByte(',')
+	appendZeroPaddedInt(&buf, 7, 3)
+	assert.Equal(t, "-12,34,1.25,007", buf.String())
+
+	buf.Reset()
+	appendEscapedSQLLoadString(&buf, `a"b\c`, '"')
+	assert.Equal(t, `a""b\\c`, buf.String())
+
+	buf.Reset()
+	appendEscapedSQLLoadBytes(&buf, []byte{0, '\b', '\n', '\r', '\t', 0x1a, '\\', '"'}, '"')
+	assert.Equal(t, `\0\b\n\r\t\Z\\""`, buf.String())
+
+	tests := []struct {
+		sql string
+		oid types.T
+	}{
+		{sql: "varchar(10)", oid: types.T_varchar},
+		{sql: "json", oid: types.T_json},
+		{sql: "geometry", oid: types.T_geometry},
+		{sql: "decimal(10,2)", oid: types.T_decimal128},
+		{sql: "timestamp(6)", oid: types.T_timestamp},
+		{sql: "datetime", oid: types.T_datetime},
+		{sql: "time", oid: types.T_time},
+		{sql: "date", oid: types.T_date},
+		{sql: "double", oid: types.T_float64},
+		{sql: "float", oid: types.T_float32},
+		{sql: "bool", oid: types.T_bool},
+		{sql: "bigint unsigned", oid: types.T_int64},
+		{sql: "int", oid: types.T_int32},
+		{sql: "unknown", oid: types.T_any},
+	}
+	for _, tt := range tests {
+		t.Run(tt.sql, func(t *testing.T) {
+			assert.Equal(t, tt.oid, sqlTypeStringToType(tt.sql).Oid)
+		})
+	}
+}
+
+func TestDumpPreparedTableCSVWithRealObjectData(t *testing.T) {
+	ctx := context.Background()
+	fs, stats := writeLogicalTableTestObject(t, "dump-prepared.obj")
+	defer fs.Close(ctx)
+	reader := &CheckpointReader{
+		ctx: ctx,
+		fs:  fs,
+		mp:  mpool.MustNewZero(),
+	}
+	data := &TableDumpData{
+		TableID: 42,
+		Schema: &TableSchema{
+			TableName: "t",
+			Columns: []TableColumn{
+				{Name: "id", SQLType: "INT", Position: 1, PhysicalPosition: 0},
+				{Name: "name", SQLType: "VARCHAR", Position: 2, PhysicalPosition: 1},
+			},
+		},
+		DataEntries: []*ObjectEntryInfo{{
+			ObjectStats: stats,
+			CreateTime:  types.BuildTS(1, 0),
+		}},
+	}
+
+	var out bytes.Buffer
+	require.NoError(t, reader.DumpPreparedTableCSV(
+		ctx,
+		&out,
+		data,
+		types.BuildTS(200, 0),
+		WithCSVHeader(true),
+		WithCSVMetaComments(true),
+		WithCSVRowOrder(CSVRowOrderStorage),
+	))
+	got := out.String()
+	require.Contains(t, got, "-- Table: t")
+	require.Contains(t, got, "-- Visible rows: 2 (deleted: 0, physical: 2)")
+	require.Contains(t, got, "id,name\n")
+	require.Contains(t, got, "1,\"alice\"\n")
+	require.Contains(t, got, "2,\"bob\"\n")
+
+	require.ErrorContains(t, reader.DumpPreparedTableCSV(ctx, &out, nil, types.BuildTS(200, 0)), "missing prepared")
+	require.ErrorContains(t, reader.DumpPreparedTableCSV(ctx, &out, &TableDumpData{TableID: 7}, types.BuildTS(200, 0)), "cannot resolve visible columns")
+}
+
+func TestPrepareTableDumpDataForTablesEmptySelection(t *testing.T) {
+	entry := checkpoint.NewCheckpointEntry("", types.BuildTS(1, 0), types.BuildTS(10, 0), checkpoint.ET_Global)
+	reader := &CheckpointReader{
+		ctx:     context.Background(),
+		entries: []*checkpoint.CheckpointEntry{entry},
+		getTablesForTest: func(_ *CheckpointReader, _ *checkpoint.CheckpointEntry) ([]*TableInfo, error) {
+			return []*TableInfo{{TableID: 42}}, nil
+		},
+	}
+
+	data, err := reader.PrepareTableDumpDataForTables(context.Background(), nil, types.BuildTS(10, 0))
+	require.NoError(t, err)
+	require.Empty(t, data)
+}
+
+func TestPrepareTableDumpDataForTablesReturnsMissingSelectedObjectEntries(t *testing.T) {
+	entry := checkpoint.NewCheckpointEntry("", types.BuildTS(1, 0), types.BuildTS(10, 0), checkpoint.ET_Global)
+	reader := &CheckpointReader{
+		ctx:     context.Background(),
+		entries: []*checkpoint.CheckpointEntry{entry},
+		getTablesForTest: func(_ *CheckpointReader, _ *checkpoint.CheckpointEntry) ([]*TableInfo, error) {
+			return []*TableInfo{{TableID: moTablesID, DataRanges: []ckputil.TableRange{{TableID: moTablesID}}}}, nil
+		},
+		getObjectsForTablesTest: func(_ *CheckpointReader, _ *checkpoint.CheckpointEntry, _ map[uint64]struct{}) (map[uint64][]*ObjectEntryInfo, map[uint64][]*ObjectEntryInfo, error) {
+			return nil, nil, moerr.NewFileNotFoundNoCtx("missing-selected")
+		},
+		getLogicalViewForTest: func(_ *CheckpointReader, _ uint64) (*LogicalTableView, error) {
+			return &LogicalTableView{}, nil
+		},
+	}
+
+	_, err := reader.PrepareTableDumpDataForTables(context.Background(), []uint64{moTablesID}, types.BuildTS(10, 0))
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), "got %v", err)
+	require.ErrorContains(t, err, "required checkpoint object entries")
+}
+
+func TestPrepareTableDumpDataForTablesMaterializesCatalogViewsOnce(t *testing.T) {
+	entry := checkpoint.NewCheckpointEntry("", types.BuildTS(1, 0), types.BuildTS(10, 0), checkpoint.ET_Global)
+	moTablesView := &LogicalTableView{
+		Headers: append([]string{"object", "block", "row"}, catalog.MoTablesSchema...),
+		Rows: [][]string{
+			moTablesCatalogTestRow(t, "100", "t1", "db", "10", "r", "1", ""),
+			moTablesCatalogTestRow(t, "101", "t2", "db", "10", "r", "1", ""),
+			moTablesCatalogTestRow(t, "200", catalog.MO_INDEXES, catalog.MO_CATALOG, "20", "r", "0", ""),
+			moTablesCatalogTestRow(t, "201", catalog.MO_INDEXES, catalog.MO_CATALOG, "20", "r", "1", ""),
+		},
+	}
+	moColumnsView := &LogicalTableView{
+		Headers: append([]string{"object", "block", "row"}, catalog.MoColumnsSchema...),
+		Rows: [][]string{
+			moColumnsTestRow(t, "100", "t1", "id", encodedSQLType(t, types.T_int32.ToType()), "1", "1", "0"),
+			moColumnsTestRow(t, "101", "t2", "id", encodedSQLType(t, types.T_int32.ToType()), "1", "1", "0"),
+		},
+	}
+	moIndexesView := &LogicalTableView{
+		Headers: append([]string{"object", "block", "row"}, moIndexesHeaders...),
+		Rows: [][]string{
+			moIndexesCatalogTestRow(t, "1", "100", "idx_t1_id", "INDEX", "", "", "id", "1"),
+		},
+	}
+	calls := make(map[uint64]int)
+	reader := &CheckpointReader{
+		ctx:     context.Background(),
+		entries: []*checkpoint.CheckpointEntry{entry},
+		getTablesForTest: func(_ *CheckpointReader, _ *checkpoint.CheckpointEntry) ([]*TableInfo, error) {
+			return []*TableInfo{{TableID: 100}, {TableID: 101}}, nil
+		},
+		getObjectsForTablesTest: func(_ *CheckpointReader, _ *checkpoint.CheckpointEntry, _ map[uint64]struct{}) (map[uint64][]*ObjectEntryInfo, map[uint64][]*ObjectEntryInfo, error) {
+			return nil, nil, nil
+		},
+		getLogicalViewForTest: func(_ *CheckpointReader, tableID uint64) (*LogicalTableView, error) {
+			calls[tableID]++
+			switch tableID {
+			case moTablesID:
+				return moTablesView, nil
+			case moColumnsID:
+				return moColumnsView, nil
+			case 201:
+				return moIndexesView, nil
+			default:
+				return nil, moerr.NewInternalErrorNoCtxf("unexpected catalog table %d", tableID)
+			}
+		},
+	}
+
+	data, err := reader.PrepareTableDumpDataForTables(context.Background(), []uint64{100, 101}, types.BuildTS(10, 0))
+	require.NoError(t, err)
+	require.Len(t, data, 2)
+	require.Equal(t, 1, calls[moTablesID])
+	require.Equal(t, 1, calls[moColumnsID])
+	require.Zero(t, calls[200])
+	require.Equal(t, 1, calls[201])
+	require.True(t, data[100].IndexesPrepared)
+	require.True(t, data[101].IndexesPrepared)
+	require.Equal(t, []string{"ALTER TABLE `t1` ADD KEY `idx_t1_id`(`id`);"}, data[100].IndexDDLs)
+	require.Empty(t, data[101].IndexDDLs)
+}
+
+func TestRenderColumnSQLTypeEnumSetAndArrayBranches(t *testing.T) {
+	cases := []struct {
+		name string
+		col  TableColumn
+		want string
+	}{
+		{"plain", TableColumn{SQLType: "INT"}, "INT"},
+		{"json array", TableColumn{SQLType: "JSON", EnumValues: "array(int)"}, "ARRAY(int)"},
+		{"json non array", TableColumn{SQLType: "JSON", EnumValues: "plain"}, "JSON"},
+		{"enum bare values", TableColumn{SQLType: "ENUM", EnumValues: "a,'b,c',\"d\""}, "ENUM('a','b,c',\"d\")"},
+		{"enum already typed", TableColumn{SQLType: "ENUM", EnumValues: "ENUM('x')"}, "ENUM('x')"},
+		{"set parens", TableColumn{SQLType: "SET", EnumValues: "(x,y)"}, "SET('x','y')"},
+		{"bigint unsigned set", TableColumn{SQLType: "BIGINT UNSIGNED", EnumValues: "red,blue"}, "SET('red','blue')"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, renderColumnSQLType(tc.col))
+		})
+	}
+
+	require.Equal(t, []string{"'a,b'", " c", " 'd''e'", " f\\", "g"}, splitEnumSetValues("'a,b', c, 'd''e', f\\,g"))
+	require.Equal(t, "x,y", stripEnumSetValueParens(" ( x,y ) "))
+	require.True(t, isQuotedSQLString(`"x"`))
+	require.False(t, isQuotedSQLString(`x`))
+}
+
+func TestAppendColumnDDLAttributesBranches(t *testing.T) {
+	var sb strings.Builder
+	appendColumnDDLAttributes(&sb, TableColumn{
+		Generated:       "a + 1",
+		GeneratedStored: true,
+		NotNull:         true,
+		Comment:         "generated",
+	})
+	require.Equal(t, " NOT NULL GENERATED ALWAYS AS (a + 1) STORED COMMENT 'generated'", sb.String())
+
+	sb.Reset()
+	appendColumnDDLAttributes(&sb, TableColumn{
+		Generated: "a + 1",
+	})
+	require.Equal(t, " GENERATED ALWAYS AS (a + 1) VIRTUAL", sb.String())
+
+	sb.Reset()
+	appendColumnDDLAttributes(&sb, TableColumn{
+		AutoIncrement: true,
+		HasDefault:    true,
+		Default:       "5",
+	})
+	require.Equal(t, " NOT NULL AUTO_INCREMENT", sb.String())
+
+	sb.Reset()
+	appendColumnDDLAttributes(&sb, TableColumn{
+		HasDefault: true,
+		OnUpdate:   "'tick'",
+	})
+	require.Equal(t, " DEFAULT NULL ON UPDATE 'tick'", sb.String())
+}
+
+func TestNormalizeKeysAndRenderForeignKeyBranches(t *testing.T) {
+	unique := normalizedUniqueKeys([]TableUniqueKey{
+		{Columns: []string{" id ", ""}, Unique: true},
+		{Name: "id", Columns: []string{"id"}, Unique: true},
+		{Name: "ft", Columns: []string{"body"}, Algo: " fulltext ", AlgoParams: " parser ngram ", Comment: " c "},
+		{Columns: nil},
+	})
+	require.Len(t, unique, 2)
+	require.Equal(t, "id", unique[0].Name)
+	require.True(t, unique[0].Unique)
+	require.Equal(t, "fulltext", unique[1].Algo)
+	require.Equal(t, "parser ngram", unique[1].AlgoParams)
+	require.Equal(t, "c", unique[1].Comment)
+
+	foreign := normalizedForeignKeys([]TableForeignKey{
+		{Columns: []string{" col ", ""}, ReferTable: "parent", ReferColumns: []string{" id "}},
+		{Columns: []string{"col"}, ReferTable: "parent", ReferColumns: []string{"id"}},
+		{Name: "z", Columns: []string{"a"}, ReferTable: "", ReferColumns: []string{"id"}},
+		{Name: "bad", Columns: []string{"a", "b"}, ReferTable: "p", ReferColumns: []string{"id"}},
+	})
+	require.Len(t, foreign, 1)
+	require.Equal(t, "col", foreign[0].Name)
+	require.Equal(t, "parent", foreign[0].ReferTable)
+	require.Equal(t, []string{"id"}, foreign[0].ReferColumns)
+
+	clause := renderForeignKeyClause(TableForeignKey{
+		Name:          "fk",
+		Columns:       []string{"child"},
+		ReferDatabase: "parent_db",
+		ReferTable:    "parent",
+		ReferColumns:  []string{"id"},
+		OnDelete:      plan.ForeignKeyDef_SET_NULL,
+		OnUpdate:      plan.ForeignKeyDef_NO_ACTION,
+	})
+	require.Equal(t, "CONSTRAINT `fk` FOREIGN KEY (`child`) REFERENCES `parent_db`.`parent` (`id`) ON DELETE SET NULL ON UPDATE NO ACTION", clause)
+	require.Equal(t,
+		"ALTER TABLE `child` ADD CONSTRAINT `fk` FOREIGN KEY (`child`) REFERENCES `parent_db`.`parent` (`id`) ON DELETE SET NULL ON UPDATE NO ACTION;",
+		RenderAddForeignKeyDDL("child", TableForeignKey{
+			Name:          "fk",
+			Columns:       []string{"child"},
+			ReferDatabase: "parent_db",
+			ReferTable:    "parent",
+			ReferColumns:  []string{"id"},
+			OnDelete:      plan.ForeignKeyDef_SET_NULL,
+			OnUpdate:      plan.ForeignKeyDef_NO_ACTION,
+		}),
+	)
+
+	require.Equal(t, "CASCADE", renderFKAction(plan.ForeignKeyDef_CASCADE))
+	require.Equal(t, "SET DEFAULT", renderFKAction(plan.ForeignKeyDef_SET_DEFAULT))
+	require.Equal(t, "RESTRICT", renderFKAction(plan.ForeignKeyDef_RESTRICT))
+}
+
+func TestSchemaFallbackAndCatalogLayoutHelpers(t *testing.T) {
+	builtin := &TableSchema{
+		TableName:    "mo_tables",
+		DatabaseName: "mo_catalog",
+		CreateSQL:    "CREATE TABLE mo_tables (id BIGINT)",
+		Columns:      []TableColumn{{Name: "id", SQLType: "BIGINT"}},
+	}
+	schema := mergeBuiltinSchemaFallback(&TableSchema{TableName: "2"}, builtin, 2)
+	require.Equal(t, "mo_tables", schema.TableName)
+	require.Equal(t, "mo_catalog", schema.DatabaseName)
+	require.Equal(t, builtin.CreateSQL, schema.CreateSQL)
+	require.Equal(t, builtin.Columns, schema.Columns)
+
+	kept := mergeBuiltinSchemaFallback(&TableSchema{
+		TableName:    "custom",
+		DatabaseName: "db",
+		CreateSQL:    "sql",
+		Columns:      []TableColumn{{Name: "x"}},
+	}, builtin, 2)
+	require.Equal(t, "custom", kept.TableName)
+	require.Equal(t, "db", kept.DatabaseName)
+	require.Equal(t, "sql", kept.CreateSQL)
+	require.Equal(t, "x", kept.Columns[0].Name)
+
+	layout := inferBuiltinCatalogLayout(moTablesID, &LogicalTableView{
+		Headers: append(logicalTableViewMetaHeaders, make([]string, len(catalog.MoTablesSchema))...),
+	}, nil)
+	require.NotEmpty(t, schemaForLayout(layout, moTablesID))
+
+	matches := catalogLayoutMatches(len(catalog.MoTablesSchema)+2, moTablesID)
+	require.NotEmpty(t, matches)
+	require.GreaterOrEqual(t, catalogColIndexForLayout(currentCatalogLayout, moTablesID, "relname", 1), 0)
+	require.Equal(t, -1, catalogColIndexForLayout(currentCatalogLayout, moTablesID, "missing", 0))
+}
+
+func TestCatalogDatabaseRowsHeadersAndCloneHelpers(t *testing.T) {
+	view := &LogicalTableView{
+		Headers: []string{"object", "block", "row", "dat_id", "datname", "account_id"},
+		Rows: [][]string{
+			{"obj", "0", "0", "7", "db1", "3"},
+			{"obj", "0", "1", "7", "db1", "3"},
+			{"obj", "0", "2", "0", "skip", "3"},
+			{"obj", "0", "3", "8", "", "3"},
+			{"obj", "0", "4", "9", "db2", "bad"},
+		},
+	}
+	dbs := buildCatalogDatabasesFromMoDatabaseRows(view)
+	require.Len(t, dbs, 2)
+	require.Equal(t, TableCatalogEntry{AccountID: 3, DatabaseID: 7, DatabaseName: "db1"}, dbs[0])
+	require.Equal(t, TableCatalogEntry{AccountID: 0, DatabaseID: 9, DatabaseName: "db2"}, dbs[1])
+
+	merged := mergeCatalogDatabaseEntries([]TableCatalogEntry{dbs[0]}, dbs)
+	require.Len(t, merged, 2)
+	require.Contains(t, catalogDatabaseEntryKey(merged[0]), "db1")
+
+	require.Nil(t, buildCatalogDatabasesFromMoDatabaseRowsAt(view, -1, 1, 2))
+
+	headerView := &LogicalTableView{
+		Headers:    []string{"object", "block", "row", "col_0", "col_1", "col_2"},
+		ColSeqNums: []uint16{2, 0, 99},
+	}
+	applyCatalogHeadersBySeqNums(headerView, []string{"a", "b", "c"})
+	require.Equal(t, []string{"object", "block", "row", "c", "a", "col_2"}, headerView.Headers)
+
+	fallbackView := &LogicalTableView{Headers: []string{"x"}, ColSeqNums: nil}
+	applyCatalogHeadersBySeqNums(fallbackView, []string{"a", "b"})
+	require.Equal(t, []string{"object", "block", "row", "a", "b"}, fallbackView.Headers)
+
+	require.False(t, isMissingCheckpointTableError(nil, 42))
+	require.True(t, isMissingCheckpointTableError(errors.New("table 42 not found in checkpoint"), 42))
+	require.False(t, isMissingCheckpointTableError(errors.New("table 43 not found in checkpoint"), 42))
+
+	original := &TableSchema{
+		TableName:    "t",
+		DatabaseName: "db",
+		AccountID:    1,
+		CreateSQL:    "create",
+		Comment:      "comment",
+		Partition:    "partition",
+		PrimaryKey:   []string{"id"},
+		ClusterBy:    []string{"id"},
+		Columns:      []TableColumn{{Name: "id", SQLType: "INT"}},
+		UniqueKeys:   []TableUniqueKey{{Name: "u", Columns: []string{"id"}}},
+		ForeignKeys:  []TableForeignKey{{Name: "fk", Columns: []string{"id"}, ReferColumns: []string{"pid"}}},
+	}
+	clone := cloneTableSchema(original)
+	require.Equal(t, original, clone)
+	require.NotSame(t, original, clone)
+	original.PrimaryKey[0] = "changed"
+	original.ClusterBy[0] = "changed"
+	original.Columns[0].Name = "changed"
+	original.UniqueKeys[0].Columns[0] = "changed"
+	original.ForeignKeys[0].ReferColumns[0] = "changed"
+	require.Equal(t, "id", clone.PrimaryKey[0])
+	require.Equal(t, "id", clone.ClusterBy[0])
+	require.Equal(t, "id", clone.Columns[0].Name)
+	require.Equal(t, "id", clone.UniqueKeys[0].Columns[0])
+	require.Equal(t, "pid", clone.ForeignKeys[0].ReferColumns[0])
+	require.Nil(t, cloneTableSchema(nil))
+}
+
+func TestCatalogMergeHelpers(t *testing.T) {
+	baseDBs := []TableCatalogEntry{{AccountID: 1, DatabaseID: 10, DatabaseName: "db"}}
+	mergedDBs := mergeCatalogDatabaseEntries(baseDBs, []TableCatalogEntry{
+		{AccountID: 1, DatabaseID: 10, DatabaseName: "DB"},
+		{AccountID: 2, DatabaseID: 20, DatabaseName: "extra"},
+	})
+	require.Len(t, mergedDBs, 2)
+	assert.Equal(t, uint64(20), mergedDBs[1].DatabaseID)
+	assert.Equal(t, baseDBs[0], mergedDBs[0])
+
+	baseTables := []TableCatalogEntry{{TableID: 1, TableName: "bad name"}}
+	mergedTables := mergeCatalogTableEntries(baseTables, []TableCatalogEntry{
+		{TableID: 1, DatabaseID: 7, DatabaseName: "db", TableName: "good_name", RelKind: "r"},
+		{TableID: 2, DatabaseID: 8, DatabaseName: "db2", TableName: "other", RelKind: "v"},
+	})
+	require.Len(t, mergedTables, 2)
+	assert.Equal(t, "good_name", mergedTables[0].TableName)
+	assert.Equal(t, uint64(7), mergedTables[0].DatabaseID)
+	assert.Equal(t, uint64(2), mergedTables[1].TableID)
+
+	assert.True(t, betterCatalogTableEntry(
+		TableCatalogEntry{TableID: 3, DatabaseID: 9, DatabaseName: "db", TableName: "t", RelKind: "e"},
+		TableCatalogEntry{TableID: 3},
+	))
+	assert.False(t, betterCatalogTableEntry(
+		TableCatalogEntry{TableID: 3},
+		TableCatalogEntry{TableID: 3, DatabaseID: 9, DatabaseName: "db", TableName: "t", RelKind: "e"},
+	))
+
+	childConstraint := encodedConstraint(t, &engine.ForeignKeyDef{Fkeys: []*plan.ForeignKeyDef{
+		{Cols: []uint64{1, 2}, ForeignTbl: 10, ForeignCols: []uint64{1}},
+		{Cols: []uint64{1}, ForeignTbl: 10, ForeignCols: []uint64{1}, OnDelete: plan.ForeignKeyDef_SET_NULL},
+	}})
+	fks := decodeForeignKeysFromMoTablesConstraint(
+		childConstraint,
+		20,
+		map[uint64]TableCatalogEntry{10: {DatabaseName: "db", TableName: "parent"}},
+		map[uint64]map[uint64]string{
+			20: {1: "parent_id"},
+			10: {1: "id"},
+		},
+	)
+	require.Len(t, fks, 1)
+	require.Equal(t, "parent_id", fks[0].Name)
+	require.Equal(t, []string{"parent_id"}, fks[0].Columns)
+	require.Equal(t, []string{"id"}, fks[0].ReferColumns)
+	require.Empty(t, decodeForeignKeysFromMoTablesConstraint("bad", 20, nil, nil))
+	require.Nil(t, namesForColumnIDs(map[uint64]string{1: ""}, []uint64{1}))
+}
+
+func TestCatalogRowsAndHeaderHelpers(t *testing.T) {
+	tableRecords := buildCatalogTablesFromCSVRecords(
+		[]string{"rel_id", "relname", "reldatabase", "reldatabase_id", "relkind", "account_id"},
+		[][]string{
+			{"11", "tbl", "db", "22", "r", "3"},
+			{"11", "duplicate", "db", "22", "r", "3"},
+			{"0", "bad", "db", "22", "r", "3"},
+			{"12", "bad name", "db", "22", "r", "3"},
+			{"13", "tbl2", "db2", "bad", "invalid", "bad"},
+		},
+	)
+	require.Len(t, tableRecords, 2)
+	assert.Equal(t, TableCatalogEntry{
+		TableID:      11,
+		AccountID:    3,
+		DatabaseID:   22,
+		DatabaseName: "db",
+		TableName:    "tbl",
+		RelKind:      "r",
+	}, tableRecords[0])
+	assert.Equal(t, TableCatalogEntry{
+		TableID:      12,
+		AccountID:    3,
+		DatabaseID:   22,
+		DatabaseName: "db",
+		TableName:    "bad name",
+		RelKind:      "r",
+	}, tableRecords[1])
+
+	dbView := &LogicalTableView{
+		Headers: []string{"dat_id", "datname", "account_id"},
+		Rows: [][]string{
+			{"31", "db", "4"},
+			{"31", "db", "4"},
+			{"bad", "db_bad", "4"},
+			{"32", "bad name", "4"},
+			{"33", "db2", "bad"},
+		},
+	}
+	dbRecords := buildCatalogDatabasesFromMoDatabaseRows(dbView)
+	require.Len(t, dbRecords, 3)
+	assert.Equal(t, TableCatalogEntry{AccountID: 4, DatabaseID: 31, DatabaseName: "db"}, dbRecords[0])
+	assert.Equal(t, TableCatalogEntry{AccountID: 4, DatabaseID: 32, DatabaseName: "bad name"}, dbRecords[1])
+	assert.Equal(t, TableCatalogEntry{AccountID: 0, DatabaseID: 33, DatabaseName: "db2"}, dbRecords[2])
+
+	view := &LogicalTableView{
+		Headers:    []string{"object", "block", "row", "col_0", "col_1"},
+		ColSeqNums: []uint16{0, 1},
+	}
+	applyCatalogColumnHeaders(view, moTablesID)
+	assert.Equal(t, catalog.MoTablesSchema[0], view.Headers[logicalViewMetaCols])
+	assert.Equal(t, catalog.MoTablesSchema[1], view.Headers[logicalViewMetaCols+1])
+
+	seqView := &LogicalTableView{
+		Headers:    []string{"object", "block", "row", "col_0", "col_1"},
+		ColSeqNums: []uint16{1, 0},
+	}
+	applyCatalogHeadersBySeqNums(seqView, []string{"first", "second"})
+	assert.Equal(t, []string{"object", "block", "row", "second", "first"}, seqView.Headers)
+
+	fallbackView := &LogicalTableView{Headers: []string{"a"}}
+	applyCatalogHeadersBySeqNums(fallbackView, []string{"x", "y"})
+	assert.Equal(t, []string{"object", "block", "row", "x", "y"}, fallbackView.Headers)
+}
+
+func TestCatalogHighLevelMethodsWithLogicalViewHook(t *testing.T) {
+	ctx := context.Background()
+	moTablesView := &LogicalTableView{
+		Headers: append([]string{"object", "block", "row"}, catalog.MoTablesSchema...),
+		Rows: [][]string{
+			moTablesCatalogTestRow(t, "100", "users", "appdb", "10", "r", "1", ""),
+			moTablesCatalogTestRow(t, "200", catalog.MO_INDEXES, catalog.MO_CATALOG, "20", "r", "0", ""),
+			moTablesCatalogTestRow(t, "201", catalog.MO_INDEXES, catalog.MO_CATALOG, "20", "r", "1", ""),
+		},
+	}
+	moDatabaseView := &LogicalTableView{
+		Headers: append([]string{"object", "block", "row"}, catalog.MoDatabaseSchema...),
+		Rows: [][]string{
+			moDatabaseCatalogTestRow(t, "10", "appdb", "1"),
+		},
+	}
+	moColumnsView := &LogicalTableView{
+		Headers: append([]string{"object", "block", "row"}, catalog.MoColumnsSchema...),
+		Rows: [][]string{
+			moColumnsTestRow(t, "100", "users", "id", encodedSQLType(t, types.T_int32.ToType()), "1", "1", "0"),
+			moColumnsTestRow(t, "100", "users", "name", encodedSQLType(t, types.New(types.T_varchar, 50, 0)), "2", "0", "1"),
+		},
+	}
+	moIndexesView := &LogicalTableView{
+		Headers: append([]string{"object", "block", "row"}, moIndexesHeaders...),
+		Rows: [][]string{
+			moIndexesCatalogTestRow(t, "1", "100", "idx_users_name", "INDEX", "", "", "name", "1"),
+		},
+	}
+	reader := &CheckpointReader{}
+	reader.SetGetLogicalViewForTest(func(_ *CheckpointReader, tableID uint64) (*LogicalTableView, error) {
+		switch tableID {
+		case moTablesID:
+			return moTablesView, nil
+		case moDatabaseID:
+			return moDatabaseView, nil
+		case moColumnsID:
+			return moColumnsView, nil
+		case 201:
+			return moIndexesView, nil
+		case 200:
+			return &LogicalTableView{Headers: append([]string{"object", "block", "row"}, moIndexesHeaders...)}, nil
+		default:
+			return nil, moerr.NewInternalErrorNoCtxf("missing table %d", tableID)
+		}
+	})
+
+	tables, err := reader.ListCatalogTables(ctx, types.BuildTS(10, 0), TableListOptions{})
+	require.NoError(t, err)
+	require.Len(t, tables, 3)
+	tableNames := make([]string, 0, len(tables))
+	for _, table := range tables {
+		tableNames = append(tableNames, table.TableName)
+	}
+	require.Contains(t, tableNames, "users")
+
+	dbs, err := reader.ListCatalogDatabases(ctx, types.BuildTS(10, 0), TableListOptions{})
+	require.NoError(t, err)
+	require.Contains(t, []string{dbs[0].DatabaseName, dbs[1].DatabaseName}, "appdb")
+
+	ddl, err := reader.ShowCreateTable(ctx, 100, types.BuildTS(10, 0))
+	require.NoError(t, err)
+	require.Contains(t, ddl, "CREATE TABLE `users`")
+	require.Contains(t, ddl, "`name` VARCHAR(50)")
+
+	indexes, err := reader.ShowCreateIndexStatements(ctx, 100, "users", types.BuildTS(10, 0))
+	require.NoError(t, err)
+	require.Equal(t, []string{"ALTER TABLE `users` ADD KEY `idx_users_name`(`name`);"}, indexes)
+}
+
+func TestMoColumnExpressionDecoders(t *testing.T) {
+	assert.Empty(t, decodeMoColumnDefault(""))
+	assert.Equal(t, "42", decodeMoColumnDefault(encodedDefault(t, " 42 ", true)))
+	assert.Equal(t, "current_timestamp()", decodeMoColumnDefault(" current_timestamp() "))
+	assert.Empty(t, decodeMoColumnDefault(string([]byte{0xff})))
+
+	onUpdate, err := types.Encode(&plan.OnUpdate{OriginString: " now() "})
+	require.NoError(t, err)
+	assert.Equal(t, "now()", decodeMoColumnOnUpdate(string(onUpdate)))
+	assert.Equal(t, "now()", decodeMoColumnOnUpdate(" now() "))
+	assert.Empty(t, decodeMoColumnOnUpdate(string([]byte{0xff})))
+
+	generated, err := types.Encode(&plan.GeneratedCol{OriginString: " a + b ", IsStored: true})
+	require.NoError(t, err)
+	expr, stored := decodeMoColumnGenerated(string(generated))
+	assert.Equal(t, "a + b", expr)
+	assert.True(t, stored)
+
+	expr, stored = decodeMoColumnGenerated(" a + b ")
+	assert.Equal(t, "a + b", expr)
+	assert.False(t, stored)
+	expr, stored = decodeMoColumnGenerated(string([]byte{0xff}))
+	assert.Empty(t, expr)
+	assert.False(t, stored)
+
+	assert.True(t, isPrintableDDLExpression(""))
+	assert.True(t, isPrintableDDLExpression(" a +\n b "))
+	assert.False(t, isPrintableDDLExpression(string([]byte{0xff})))
+
+	typ := types.T_decimal64.ToTypeWithScale(2)
+	raw, err := types.Encode(&typ)
+	require.NoError(t, err)
+	sqlType, ok := decodeMoColumnSQLType(string(raw))
+	require.True(t, ok)
+	require.Equal(t, "DECIMAL(18,2)", sqlType)
+	_, ok = decodeMoColumnSQLType(string([]byte{0xff}))
+	require.False(t, ok)
+	debug := debugMoColumnTypeCell(string(raw), []string{"obj", "3", "7"})
+	assert.Contains(t, debug, "decode_err=<nil>")
+	assert.Contains(t, debug, "DECIMAL64")
+	assert.Contains(t, debug, "block=3")
+	assert.Contains(t, debug, "row=7")
+	assert.Equal(t, "616263", debugHexPrefix("abcdef", 3))
+}
+
+func moTablesCatalogTestRow(t *testing.T, relID, relName, dbName, dbID, relKind, accountID, createSQL string) []string {
+	t.Helper()
+	data := make([]string, len(catalog.MoTablesSchema))
+	setCatalogCell(t, catalog.MoTablesSchema, data, catalog.SystemRelAttr_ID, relID)
+	setCatalogCell(t, catalog.MoTablesSchema, data, catalog.SystemRelAttr_Name, relName)
+	setCatalogCell(t, catalog.MoTablesSchema, data, catalog.SystemRelAttr_DBName, dbName)
+	setCatalogCell(t, catalog.MoTablesSchema, data, catalog.SystemRelAttr_DBID, dbID)
+	setCatalogCell(t, catalog.MoTablesSchema, data, catalog.SystemRelAttr_Kind, relKind)
+	setCatalogCell(t, catalog.MoTablesSchema, data, catalog.SystemRelAttr_AccID, accountID)
+	setCatalogCell(t, catalog.MoTablesSchema, data, catalog.SystemRelAttr_CreateSQL, createSQL)
+	return append([]string{"obj", "0", relID}, data...)
+}
+
+func moDatabaseCatalogTestRow(t *testing.T, dbID, dbName, accountID string) []string {
+	t.Helper()
+	data := make([]string, len(catalog.MoDatabaseSchema))
+	setCatalogCell(t, catalog.MoDatabaseSchema, data, catalog.SystemDBAttr_ID, dbID)
+	setCatalogCell(t, catalog.MoDatabaseSchema, data, catalog.SystemDBAttr_Name, dbName)
+	setCatalogCell(t, catalog.MoDatabaseSchema, data, catalog.SystemDBAttr_AccID, accountID)
+	return append([]string{"obj", "0", dbID}, data...)
+}
+
+func moIndexesCatalogTestRow(t *testing.T, id, tableID, name, indexType, algo, params, columnName, ordinal string) []string {
+	t.Helper()
+	data := make([]string, len(moIndexesHeaders))
+	setCatalogCell(t, moIndexesHeaders, data, "id", id)
+	setCatalogCell(t, moIndexesHeaders, data, "table_id", tableID)
+	setCatalogCell(t, moIndexesHeaders, data, "name", name)
+	setCatalogCell(t, moIndexesHeaders, data, "type", indexType)
+	setCatalogCell(t, moIndexesHeaders, data, catalog.IndexAlgoName, algo)
+	setCatalogCell(t, moIndexesHeaders, data, catalog.IndexAlgoParams, params)
+	setCatalogCell(t, moIndexesHeaders, data, "column_name", columnName)
+	setCatalogCell(t, moIndexesHeaders, data, "ordinal_position", ordinal)
+	return append([]string{"obj", "0", id}, data...)
+}
+
+func setCatalogCell(t *testing.T, headers []string, row []string, name string, value string) {
+	t.Helper()
+	for i, header := range headers {
+		if header == name {
+			row[i] = value
+			return
+		}
+	}
+	t.Fatalf("missing catalog header %s", name)
+}
+
+// TestWriteCSV_empty tests writing an empty logical view to CSV.
+func TestWriteCSV_empty(t *testing.T) {
+	schema := &TableSchema{
+		TableName:    "test_table",
+		DatabaseName: "test_db",
+		Columns: []TableColumn{
+			{Name: "id", SQLType: "BIGINT", Position: 1, PhysicalPosition: 0},
+			{Name: "name", SQLType: "VARCHAR(100)", Position: 2, PhysicalPosition: 1},
+		},
+	}
+	view := &LogicalTableView{
+		Headers: []string{"object", "block", "row", "col_0", "col_1"},
+		Rows:    [][]string{},
+	}
+
+	var buf bytes.Buffer
+	err := WriteCSV(&buf, schema, view)
+	require.NoError(t, err)
+
+	output := buf.String()
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+	// Skip comment lines to find the CSV header
+	csvStart := 0
+	for i, line := range lines {
+		if !strings.HasPrefix(line, "--") {
+			csvStart = i
+			break
+		}
+	}
+	require.GreaterOrEqual(t, len(lines), csvStart+1, "expected at least a header line")
+	assert.Equal(t, "id,name", lines[csvStart])
+}
+
+func TestDumpPreparedTableCSV_EmptyTableWritesHeader(t *testing.T) {
+	reader := &CheckpointReader{}
+	data := &TableDumpData{
+		TableID: 334019,
+		Schema: &TableSchema{
+			TableName:    "t_empty",
+			DatabaseName: "ckp_tables",
+			Columns: []TableColumn{
+				{Name: "id", SQLType: "INT", Position: 1, PhysicalPosition: 0},
+				{Name: "name", SQLType: "VARCHAR(64)", Position: 2, PhysicalPosition: 1},
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	err := reader.DumpPreparedTableCSV(
+		context.Background(),
+		&buf,
+		data,
+		types.TS{},
+		WithCSVMetaComments(false),
+		WithCSVHeader(true),
+	)
+	require.NoError(t, err)
+	assert.Equal(t, "id,name\n", buf.String())
+}
+
+func TestDumpTableCSVUsesBuiltinCatalogSchemaForEmptyData(t *testing.T) {
+	reader := &CheckpointReader{ctx: context.Background()}
+	var buf bytes.Buffer
+
+	err := reader.DumpTableCSV(context.Background(), &buf, moTablesID, types.BuildTS(10, 0), nil, nil, WithCSVMetaComments(false), WithCSVHeader(true))
+	require.NoError(t, err)
+	require.Contains(t, buf.String(), "rel_id,relname,reldatabase")
+
+	err = reader.DumpTableCSV(context.Background(), &buf, 334019, types.BuildTS(10, 0), nil, nil)
+	require.ErrorContains(t, err, "cannot resolve visible columns")
+}
+
+func TestShowCreateTableBuiltinFallbackAndErrors(t *testing.T) {
+	reader := &CheckpointReader{ctx: context.Background()}
+
+	ddl, err := reader.ShowCreateTable(context.Background(), moTablesID, types.BuildTS(10, 0))
+	require.NoError(t, err)
+	require.Contains(t, ddl, "CREATE TABLE `mo_tables`")
+
+	_, err = reader.ShowCreateTable(context.Background(), 334019, types.BuildTS(10, 0))
+	require.ErrorContains(t, err, "cannot resolve exact schema")
+
+	_, err = reader.ShowCreateIndexStatements(context.Background(), 334019, "t", types.BuildTS(10, 0))
+	require.ErrorContains(t, err, "read mo_tables")
+}
+
+func TestIsTableDataUnavailable(t *testing.T) {
+	assert.False(t, isTableDataUnavailable(assert.AnError))
+	assert.False(t, isTableDataUnavailable(nil))
+	assert.True(t, isTableDataUnavailable(fmt.Errorf("internal error: table 334019 not found in checkpoint at ts 1-0")))
+	assert.True(t, isTableDataUnavailable(fmt.Errorf("internal error: no data entries for table 334019")))
+	assert.False(t, isTableDataUnavailable(fmt.Errorf("compose checkpoint failed")))
+}
+
+// TestWriteCSV_withData tests writing data rows to CSV.
+func TestWriteCSV_withData(t *testing.T) {
+	schema := &TableSchema{
+		TableName:    "users",
+		DatabaseName: "mydb",
+		CreateSQL:    "CREATE TABLE users (id BIGINT, name VARCHAR(100), age INT)",
+		Columns: []TableColumn{
+			{Name: "id", SQLType: "BIGINT", Position: 1, PhysicalPosition: 0},
+			{Name: "name", SQLType: "VARCHAR(100)", Position: 2, PhysicalPosition: 1},
+			{Name: "age", SQLType: "INT", Position: 3, PhysicalPosition: 2},
+		},
+	}
+	view := &LogicalTableView{
+		Headers: []string{"object", "block", "row", "col_0", "col_1", "col_2"},
+		Rows: [][]string{
+			{"obj1", "0", "0", "1", "Alice", "30"},
+			{"obj1", "0", "1", "2", "Bob", "25"},
+			{"obj2", "1", "0", "3", "Charlie, Jr.", "35"},
+			{"obj2", "1", "1", "4", "NULL", "NULL"},
+		},
+		VisibleRows: 4,
+	}
+
+	var buf bytes.Buffer
+	err := WriteCSV(&buf, schema, view)
+	require.NoError(t, err)
+
+	output := buf.String()
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+
+	// Skip comment lines
+	var dataLines []string
+	for _, line := range lines {
+		if !strings.HasPrefix(line, "--") {
+			dataLines = append(dataLines, line)
+		}
+	}
+
+	assert.Equal(t, 5, len(dataLines)) // header + 4 rows
+	assert.Equal(t, "id,name,age", dataLines[0])
+	assert.Equal(t, `1,"Alice",30`, dataLines[1])
+	assert.Equal(t, `2,"Bob",25`, dataLines[2])
+	assert.Equal(t, `3,"Charlie, Jr.",35`, dataLines[3])
+	assert.Equal(t, `4,"NULL",NULL`, dataLines[4])
+}
+
+func TestWriteProjectedCSVRowFromVecsFastPath(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vecInt := vector.NewVec(types.T_int64.ToType())
+	vecDecimal := vector.NewVec(types.T_decimal64.ToTypeWithScale(2))
+	vecDecimal128 := vector.NewVec(types.T_decimal128.ToTypeWithScale(5))
+	vecDate := vector.NewVec(types.T_date.ToType())
+	vecString := vector.NewVec(types.T_varchar.ToType())
+	vecNull := vector.NewVec(types.T_int32.ToType())
+	defer vecInt.Free(mp)
+	defer vecDecimal.Free(mp)
+	defer vecDecimal128.Free(mp)
+	defer vecDate.Free(mp)
+	defer vecString.Free(mp)
+	defer vecNull.Free(mp)
+
+	require.NoError(t, vector.AppendFixed(vecInt, int64(-42), false, mp))
+	decimal, err := types.ParseDecimal64("-123.40", 18, 2)
+	require.NoError(t, err)
+	require.NoError(t, vector.AppendFixed(vecDecimal, decimal, false, mp))
+	decimal128, err := types.ParseDecimal128("123456789012345.67890", 30, 5)
+	require.NoError(t, err)
+	require.NoError(t, vector.AppendFixed(vecDecimal128, decimal128, false, mp))
+	require.NoError(t, vector.AppendFixed(vecDate, types.DateFromCalendar(2024, 6, 1), false, mp))
+	require.NoError(t, vector.AppendBytes(vecString, []byte(`a"b\c`), false, mp))
+	require.NoError(t, vector.AppendFixed(vecNull, int32(0), true, mp))
+
+	var buf bytes.Buffer
+	err = writeProjectedCSVRowFromVecs(
+		&buf,
+		[]types.Type{
+			types.T_int64.ToType(),
+			types.T_decimal64.ToTypeWithScale(2),
+			types.T_decimal128.ToTypeWithScale(5),
+			types.T_date.ToType(),
+			types.T_varchar.ToType(),
+			types.T_int32.ToType(),
+		},
+		[]*vector.Vector{vecInt, vecDecimal, vecDecimal128, vecDate, vecString, vecNull},
+		[]int{0, 1, 2, 3, 4, 5},
+		0,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, "-42,-123.40,123456789012345.67890,2024-06-01,\"a\"\"b\\\\c\",\\N\n", buf.String())
+}
+
+func TestAppendCSVUnquotedVecValueScalarTypes(t *testing.T) {
+	mp := mpool.MustNewZero()
+	timeVal, err := types.ParseTime("12:30:45.123", 3)
+	require.NoError(t, err)
+	datetimeVal, err := types.ParseDatetime("2024-01-02 03:04:05.123", 3)
+	require.NoError(t, err)
+	timestampVal, err := types.ParseTimestamp(time.Local, "2024-01-02 03:04:05.123", 3)
+	require.NoError(t, err)
+
+	cases := []struct {
+		name string
+		typ  types.Type
+		fill func(*vector.Vector)
+		want string
+	}{
+		{name: "bool true", typ: types.T_bool.ToType(), fill: func(v *vector.Vector) { require.NoError(t, vector.AppendFixed(v, true, false, mp)) }, want: "true"},
+		{name: "bool false", typ: types.T_bool.ToType(), fill: func(v *vector.Vector) { require.NoError(t, vector.AppendFixed(v, false, false, mp)) }, want: "false"},
+		{name: "int8", typ: types.T_int8.ToType(), fill: func(v *vector.Vector) { require.NoError(t, vector.AppendFixed(v, int8(-8), false, mp)) }, want: "-8"},
+		{name: "int16", typ: types.T_int16.ToType(), fill: func(v *vector.Vector) { require.NoError(t, vector.AppendFixed(v, int16(-16), false, mp)) }, want: "-16"},
+		{name: "int32", typ: types.T_int32.ToType(), fill: func(v *vector.Vector) { require.NoError(t, vector.AppendFixed(v, int32(-32), false, mp)) }, want: "-32"},
+		{name: "uint8", typ: types.T_uint8.ToType(), fill: func(v *vector.Vector) { require.NoError(t, vector.AppendFixed(v, uint8(8), false, mp)) }, want: "8"},
+		{name: "uint16", typ: types.T_uint16.ToType(), fill: func(v *vector.Vector) { require.NoError(t, vector.AppendFixed(v, uint16(16), false, mp)) }, want: "16"},
+		{name: "uint32", typ: types.T_uint32.ToType(), fill: func(v *vector.Vector) { require.NoError(t, vector.AppendFixed(v, uint32(32), false, mp)) }, want: "32"},
+		{name: "uint64", typ: types.T_uint64.ToType(), fill: func(v *vector.Vector) { require.NoError(t, vector.AppendFixed(v, uint64(64), false, mp)) }, want: "64"},
+		{name: "float32", typ: types.T_float32.ToType(), fill: func(v *vector.Vector) { require.NoError(t, vector.AppendFixed(v, float32(1.25), false, mp)) }, want: "1.25"},
+		{name: "float64", typ: types.T_float64.ToType(), fill: func(v *vector.Vector) { require.NoError(t, vector.AppendFixed(v, float64(2.5), false, mp)) }, want: "2.5"},
+		{name: "time", typ: types.T_time.ToTypeWithScale(3), fill: func(v *vector.Vector) { require.NoError(t, vector.AppendFixed(v, timeVal, false, mp)) }, want: "12:30:45.123"},
+		{name: "datetime", typ: types.T_datetime.ToTypeWithScale(3), fill: func(v *vector.Vector) { require.NoError(t, vector.AppendFixed(v, datetimeVal, false, mp)) }, want: "2024-01-02 03:04:05.123"},
+		{name: "timestamp", typ: types.T_timestamp.ToTypeWithScale(3), fill: func(v *vector.Vector) { require.NoError(t, vector.AppendFixed(v, timestampVal, false, mp)) }, want: "2024-01-02 03:04:05.123"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			vec := vector.NewVec(tc.typ)
+			defer vec.Free(mp)
+			tc.fill(vec)
+			var buf bytes.Buffer
+			appendCSVUnquotedVecValue(&buf, tc.typ, vec, 0)
+			require.Equal(t, tc.want, buf.String())
+		})
+	}
+
+	constVec := vector.NewConstNull(types.T_int32.ToType(), 3, mp)
+	defer constVec.Free(mp)
+	require.Equal(t, 0, vectorRowIndex(constVec, 2))
+}
+
+func TestCSVDDLAndCatalogHelperEdges(t *testing.T) {
+	require.Equal(t, "NULL", formatDDLDefault(""))
+	require.Equal(t, "NULL", formatDDLDefault(" null "))
+	require.Equal(t, "'a''b'", formatDDLDefault("'a'b'"))
+	require.Equal(t, "current_timestamp()", formatDDLDefault("current_timestamp()"))
+
+	var buf bytes.Buffer
+	appendDecimal128(&buf, types.Decimal128{}, 3)
+	require.Equal(t, "0.000", buf.String())
+	buf.Reset()
+	decimal128, err := types.ParseDecimal128("-42", 38, 0)
+	require.NoError(t, err)
+	appendDecimal128(&buf, decimal128, 0)
+	require.Equal(t, "-42", buf.String())
+
+	tables := []TableCatalogEntry{
+		{AccountID: 2, DatabaseID: 20, DatabaseName: "b", TableName: "t2", TableID: 2},
+		{AccountID: 1, DatabaseID: 10, DatabaseName: "a", TableName: "t1", TableID: 1},
+		{AccountID: 1, DatabaseID: 11, DatabaseName: "a", TableName: "t3", TableID: 3},
+	}
+	accountID := uint32(1)
+	databaseID := uint64(10)
+	filtered := filterCatalogTablesForList(tables, TableListOptions{AccountID: &accountID, DatabaseID: &databaseID})
+	require.Equal(t, []TableCatalogEntry{tables[1]}, filtered)
+	require.True(t, betterCatalogTableEntry(
+		TableCatalogEntry{TableID: 9, DatabaseName: "db", TableName: "t", DatabaseID: 1, RelKind: "r"},
+		TableCatalogEntry{TableID: 9},
+	))
+	require.False(t, betterCatalogTableEntry(
+		TableCatalogEntry{TableID: 9},
+		TableCatalogEntry{TableID: 9, DatabaseName: "db", TableName: "t", DatabaseID: 1, RelKind: "r"},
+	))
+	require.Equal(t, -1, compareCSVRowsLexical([]string{"a"}, []string{"a", "b"}))
+	require.Equal(t, 1, compareCSVRowsLexical([]string{"b"}, []string{"a"}))
+	require.Equal(t, 0, compareCSVRowsLexical([]string{"a"}, []string{"a"}))
+}
+
+// TestWriteCSV_withCreateSQLHeader tests the header comment from CreateSQL.
+func TestWriteCSV_withCreateSQLHeader(t *testing.T) {
+	schema := &TableSchema{
+		TableName:    "t1",
+		DatabaseName: "db1",
+		CreateSQL:    "CREATE TABLE t1 (id BIGINT)",
+		Columns: []TableColumn{
+			{Name: "id", SQLType: "BIGINT", Position: 1, PhysicalPosition: 0},
+		},
+	}
+	view := &LogicalTableView{
+		Headers: []string{"object", "block", "row", "col_0"},
+		Rows: [][]string{
+			{"obj1", "0", "0", "42"},
+		},
+	}
+
+	var buf bytes.Buffer
+	err := WriteCSV(&buf, schema, view)
+	require.NoError(t, err)
+
+	output := buf.String()
+	assert.Contains(t, output, "-- CREATE TABLE t1 (id BIGINT)")
+	assert.Contains(t, output, "-- Database: db1")
+	assert.Contains(t, output, "-- Table: t1")
+}
+
+func TestWriteCSV_WithoutMetadataComments(t *testing.T) {
+	schema := &TableSchema{
+		TableName:    "t1",
+		DatabaseName: "db1",
+		CreateSQL:    "CREATE TABLE t1 (id BIGINT)",
+		Columns: []TableColumn{
+			{Name: "id", SQLType: "BIGINT", Position: 1, PhysicalPosition: 0},
+		},
+	}
+	view := &LogicalTableView{
+		Headers: []string{"object", "block", "row", "col_0"},
+		Rows: [][]string{
+			{"obj1", "0", "0", "42"},
+		},
+	}
+
+	var buf bytes.Buffer
+	err := WriteCSV(&buf, schema, view, WithCSVMetaComments(false))
+	require.NoError(t, err)
+
+	output := strings.TrimSpace(buf.String())
+	assert.Equal(t, "id\n42", output)
+	assert.NotContains(t, output, "-- CREATE TABLE")
+}
+
+// TestWriteCSV_mismatchedColumns verifies that position-based column mapping
+// only includes columns matching the schema positions.
+func TestWriteCSV_mismatchedColumns(t *testing.T) {
+	schema := &TableSchema{
+		TableName: "t1",
+		Columns: []TableColumn{
+			{Name: "a", SQLType: "INT", Position: 1, PhysicalPosition: 0},
+		},
+	}
+	view := &LogicalTableView{
+		Headers: []string{"object", "block", "row", "col_0", "col_1"},
+		Rows: [][]string{
+			{"obj1", "0", "0", "1", "extra"},
+		},
+	}
+
+	var buf bytes.Buffer
+	err := WriteCSV(&buf, schema, view)
+	require.NoError(t, err)
+
+	output := buf.String()
+	// Skip comment lines
+	var dataLines []string
+	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
+		if !strings.HasPrefix(line, "--") {
+			dataLines = append(dataLines, line)
+		}
+	}
+	// Position-based: only column at position 0 (a) is included, extra columns dropped
+	assert.Equal(t, "a", dataLines[0])
+	assert.Equal(t, "1", dataLines[1])
+}
+
+// TestBuildSchemaFromMoTablesRow tests extracting a TableSchema from mo_tables row data.
+func TestBuildSchemaFromMoTablesRow(t *testing.T) {
+	// mo_tables physical layout: rel_id, relname, reldatabase, ...
+	// After meta cols stripped, data cols = [rel_id, relname, reldatabase, reldatabase_id, ..., rel_createsql]
+	view := &LogicalTableView{
+		Headers: []string{
+			"object", "block", "row",
+			"rel_id", "relname", "reldatabase", "reldatabase_id",
+			"col_4", "col_5", "col_6", "rel_createsql",
+		},
+	}
+
+	// Full row with meta + data: rel_id="12345", relname="my_table", reldatabase="my_db", rel_createsql="CREATE TABLE my_table (x INT)"
+	fullRow := []string{
+		"obj1", "0", "0", // meta cols
+		"12345", "my_table", "my_db", "100", "x", "x", "x", "CREATE TABLE my_table (x INT)",
+	}
+
+	schema := buildSchemaFromMoTablesRow(view, fullRow)
+	assert.Equal(t, "my_table", schema.TableName)
+	assert.Equal(t, "my_db", schema.DatabaseName)
+	assert.Equal(t, "CREATE TABLE my_table (x INT)", schema.CreateSQL)
+}
+
+// TestBuildColumnsFromMoColumnsRows tests building column list from mo_columns rows.
+func TestBuildColumnsFromMoColumnsRows(t *testing.T) {
+	// mo_columns physical layout: ..., att_relname_id, att_relname, attname, atttyp, attnum, ..., att_is_hidden
+	view := &LogicalTableView{
+		Headers: []string{
+			"object", "block", "row",
+			"col_0", "col_1", "col_2", "col_3",
+			"att_relname_id", "att_relname", "attname", "atttyp", "attnum",
+			"col_9", "col_10", "col_11", "col_12", "col_13", "col_14", "col_15", "col_16", "col_17",
+			"att_is_hidden",
+			"col_19", "col_20", "col_21", "attr_seqnum",
+		},
+		Rows: [][]string{
+			{"obj1", "0", "0", "", "", "", "", "12345", "my_table", "id", "BIGINT", "1", "", "", "", "", "", "", "", "", "", "0", "", "", "", "0"},
+			{"obj1", "0", "1", "", "", "", "", "12345", "my_table", "name", "VARCHAR(100)", "2", "", "", "", "", "", "", "", "", "", "0", "", "", "", "1"},
+			{"obj1", "0", "2", "", "", "", "", "12345", "my_table", "_hidden_col", "INT", "3", "", "", "", "", "", "", "", "", "", "1", "", "", "", "2"},
+		},
+	}
+
+	cols := buildColumnsFromMoColumnsRows(view, 12345)
+	require.Len(t, cols, 2) // hidden column filtered
+
+	assert.Equal(t, "id", cols[0].Name)
+	assert.Equal(t, "BIGINT", cols[0].SQLType)
+	assert.Equal(t, 1, cols[0].Position)
+	assert.Equal(t, 0, cols[0].PhysicalPosition)
+
+	assert.Equal(t, "name", cols[1].Name)
+	assert.Equal(t, "VARCHAR(100)", cols[1].SQLType)
+	assert.Equal(t, 2, cols[1].Position)
+	assert.Equal(t, 1, cols[1].PhysicalPosition)
+}
+
+func TestBuildColumnsFromMoColumnsRows_FallbackToAttnumWhenSeqnumMissing(t *testing.T) {
+	view := &LogicalTableView{
+		Headers: []string{
+			"object", "block", "row",
+			"col_0", "col_1", "col_2", "col_3",
+			"att_relname_id", "att_relname", "attname", "atttyp", "attnum",
+			"col_9", "col_10", "col_11", "col_12", "col_13", "col_14", "col_15", "col_16", "col_17",
+			"att_is_hidden",
+		},
+		Rows: [][]string{
+			{"obj1", "0", "0", "", "", "", "", "12345", "my_table", "id", "BIGINT", "1", "", "", "", "", "", "", "", "", "", "0"},
+			{"obj1", "0", "1", "", "", "", "", "12345", "my_table", "name", "VARCHAR(100)", "2", "", "", "", "", "", "", "", "", "", "0"},
+		},
+	}
+
+	cols := buildColumnsFromMoColumnsRows(view, 12345)
+	require.Len(t, cols, 2)
+	assert.Equal(t, 0, cols[0].PhysicalPosition)
+	assert.Equal(t, 1, cols[1].PhysicalPosition)
+}
+
+func TestBuildColumnsFromMoColumnsRows_GenericPreCPKWithPhysicalPrefix(t *testing.T) {
+	const (
+		tableID = uint64(12345)
+		offset  = 1
+	)
+
+	headers := []string{"object", "block", "row"}
+	for i := 0; i < len(preCPKLayout.moColumnsSchema)+offset; i++ {
+		headers = append(headers, fmt.Sprintf("col_%d", i))
+	}
+
+	row := func(metaRow, name, typ, attnum, hidden, seqnum string) []string {
+		data := make([]string, len(preCPKLayout.moColumnsSchema)+offset)
+		setCatalogValue := func(colName, value string) {
+			idx := catalogColIndexForLayout(preCPKLayout, moColumnsID, colName, offset)
+			require.GreaterOrEqual(t, idx, 0)
+			data[idx] = value
+		}
+		data[0] = "physical-prefix"
+		setCatalogValue("att_relname_id", fmt.Sprintf("%d", tableID))
+		setCatalogValue("attname", name)
+		setCatalogValue("atttyp", typ)
+		setCatalogValue("attnum", attnum)
+		setCatalogValue("att_is_hidden", hidden)
+		setCatalogValue("attr_seqnum", seqnum)
+		return append([]string{"obj1", "0", metaRow}, data...)
+	}
+
+	view := &LogicalTableView{
+		Headers: headers,
+		Rows: [][]string{
+			row("0", "id", "INT", "1", "0", "0"),
+			row("1", "name", "VARCHAR(100)", "2", "0", "1"),
+			row("2", "__mo_rowid", "ROWID", "0", "1", "2"),
+		},
+	}
+
+	cols := buildColumnsFromMoColumnsRows(view, tableID)
+	require.Len(t, cols, 2)
+	assert.Equal(t, "id", cols[0].Name)
+	assert.Equal(t, 0, cols[0].PhysicalPosition)
+	assert.Equal(t, "name", cols[1].Name)
+	assert.Equal(t, 1, cols[1].PhysicalPosition)
+
+	ddl := buildCreateTableFromMoColumns(view, tableID)
+	assert.Contains(t, ddl, "`id` INT")
+	assert.Contains(t, ddl, "`name` VARCHAR(100)")
+	assert.NotContains(t, ddl, "__mo_rowid")
+}
+
+func TestCreateTableDDLFromCatalogViews_PrefersMoColumnsOverStaleCreateSQL(t *testing.T) {
+	moTablesView := &LogicalTableView{
+		Headers: []string{
+			"object", "block", "row",
+			"rel_id", "relname", "reldatabase", "reldatabase_id",
+			"col_4", "col_5", "col_6", "rel_createsql",
+		},
+		Rows: [][]string{
+			{
+				"obj1", "0", "0",
+				"12345", "t", "db", "100",
+				"", "", "", "CREATE TABLE t (a INT, b VARCHAR(100))",
+			},
+		},
+	}
+	moColumnsView := &LogicalTableView{
+		Headers: []string{"object", "block", "row", "att_relname_id", "attname", "atttyp", "attnum", "att_is_hidden"},
+		Rows: [][]string{
+			{"obj1", "0", "0", "12345", "a", encodedSQLType(t, types.T_int32.ToType()), "1", "0"},
+			{"obj1", "0", "1", "12345", "c", encodedSQLType(t, types.T_int64.ToType()), "2", "0"},
+		},
+	}
+
+	ddl := createTableDDLFromCatalogViews(12345, moTablesView, moColumnsView)
+	assert.Contains(t, ddl, "CREATE TABLE `t`")
+	assert.Contains(t, ddl, "`a` INT")
+	assert.Contains(t, ddl, "`c` BIGINT")
+	assert.NotContains(t, ddl, "`b`")
+}
+
+func TestCreateTableDDLFromCatalogViews_DoesNotFallbackToRelCreateSQL(t *testing.T) {
+	moTablesView := &LogicalTableView{
+		Headers: []string{
+			"object", "block", "row",
+			"rel_id", "relname", "reldatabase", "reldatabase_id",
+			"col_4", "col_5", "col_6", "rel_createsql",
+		},
+		Rows: [][]string{
+			{
+				"obj1", "0", "0",
+				"12345", "employees", "db", "100",
+				"", "", "", "CREATE TABLE employees (id INT)",
+			},
+		},
+	}
+
+	assert.Empty(t, createTableDDLFromCatalogViews(12345, moTablesView, nil))
+}
+
+func TestCreateTableDDLFromCatalogViews_DecodesMoColumnTypes(t *testing.T) {
+	moTablesView := &LogicalTableView{
+		Headers: []string{
+			"object", "block", "row",
+			"rel_id", "relname", "reldatabase", "reldatabase_id",
+			"col_4", "col_5", "col_6", "rel_createsql",
+		},
+		Rows: [][]string{
+			{
+				"obj1", "0", "0",
+				"333999", "parent", "ckp_constraints", "333997",
+				"", "", "", "CREATE TABLE `ckp_constraints`.`parent` (`old` INT)",
+			},
+		},
+	}
+	moColumnsView := &LogicalTableView{
+		Headers: []string{"object", "block", "row", "att_relname_id", "attname", "atttyp", "attnum", "att_is_hidden"},
+		Rows: [][]string{
+			{"obj1", "0", "0", "333999", "id", encodedSQLType(t, types.T_int32.ToType()), "1", "0"},
+			{"obj1", "0", "1", "333999", "code", encodedSQLType(t, types.New(types.T_varchar, 20, 0)), "2", "0"},
+		},
+	}
+
+	ddl := createTableDDLFromCatalogViews(333999, moTablesView, moColumnsView)
+	assert.Contains(t, ddl, "CREATE TABLE `parent`")
+	assert.Contains(t, ddl, "`id` INT")
+	assert.Contains(t, ddl, "`code` VARCHAR(20)")
+	assert.NotContains(t, ddl, "`old`")
+}
+
+func TestCreateTableDDLFromCatalogViews_IncludesColumnAndTableAttributes(t *testing.T) {
+	moTablesView := &LogicalTableView{
+		Headers: []string{
+			"object", "block", "row",
+			"rel_id", "relname", "reldatabase", "reldatabase_id",
+			"relpersistence", "relkind", "rel_comment", "rel_createsql", "constraint",
+		},
+		Rows: [][]string{
+			{
+				"obj1", "0", "0",
+				"333999", "parent", "ckp_constraints", "333997",
+				"", "r", "parent table comment", "CREATE TABLE `ckp_constraints`.`parent` (`old` INT)", encodedConstraint(
+					t,
+					encodedPrimaryKeyConstraint(t, "id"),
+					&engine.IndexDef{Indexes: []*plan.IndexDef{
+						{IndexName: "code", Parts: []string{"code"}, Unique: true},
+						{IndexName: "idx_parent_note", Parts: []string{"note"}},
+						{IndexName: "ivf_500", Parts: []string{"embedding"}, IndexAlgo: "ivfflat", IndexAlgoParams: `{"lists":"500","op_type":"vector_l2_ops"}`},
+						{IndexName: "ivf_2000", Parts: []string{"embedding"}, IndexAlgo: "ivfflat", IndexAlgoParams: `{"lists":"2000","op_type":"vector_l2_ops"}`},
+					}},
+				),
+			},
+		},
+	}
+
+	headers := append([]string{"object", "block", "row"}, catalog.MoColumnsSchema...)
+	row := func(name, typ, attnum, notNull, hasDefault, defaultExpr, constraintType, comment, seqnum string) []string {
+		data := make([]string, len(catalog.MoColumnsSchema))
+		set := func(colName, value string) {
+			for i, header := range catalog.MoColumnsSchema {
+				if header == colName {
+					data[i] = value
+					return
+				}
+			}
+			t.Fatalf("missing mo_columns header %s", colName)
+		}
+		set(catalog.SystemColAttr_RelID, "333999")
+		set(catalog.SystemColAttr_RelName, "parent")
+		set(catalog.SystemColAttr_Name, name)
+		set(catalog.SystemColAttr_Type, typ)
+		set(catalog.SystemColAttr_Num, attnum)
+		set(catalog.SystemColAttr_NullAbility, notNull)
+		set(catalog.SystemColAttr_HasExpr, hasDefault)
+		set(catalog.SystemColAttr_DefaultExpr, defaultExpr)
+		set(catalog.SystemColAttr_ConstraintType, constraintType)
+		set(catalog.SystemColAttr_Comment, comment)
+		set(catalog.SystemColAttr_IsHidden, "0")
+		set(catalog.SystemColAttr_Seqnum, seqnum)
+		return append([]string{"obj1", "0", attnum}, data...)
+	}
+	moColumnsView := &LogicalTableView{
+		Headers: headers,
+		Rows: [][]string{
+			row("id", encodedSQLType(t, types.T_int32.ToType()), "1", "1", "0", "", "p", "", "0"),
+			row("code", encodedSQLType(t, types.New(types.T_varchar, 20, 0)), "2", "1", "0", "", "", "", "1"),
+			row("note", encodedSQLType(t, types.New(types.T_varchar, 100, 0)), "3", "0", "1", encodedDefault(t, "'parent-default'", true), "", "parent note", "2"),
+			row("embedding", encodedSQLType(t, types.New(types.T_array_float32, 128, 0)), "4", "0", "0", "", "", "", "3"),
+		},
+	}
+	partitionMetadataView := &LogicalTableView{
+		Headers: []string{
+			"object", "block", "row",
+			"table_id", "table_name", "database_name", "partition_method", "partition_description", "partition_count",
+		},
+		Rows: [][]string{
+			{
+				"obj1", "0", "0",
+				"333999", "parent", "ckp_constraints", "Key", "key algorithm = 2 (`id`, `tenant_id`)", "4",
+			},
+		},
+	}
+
+	ddl := createTableDDLFromCatalogViews(333999, moTablesView, moColumnsView, partitionMetadataView)
+	assert.Contains(t, ddl, "CREATE TABLE `parent`")
+	assert.Contains(t, ddl, "`id` INT NOT NULL")
+	assert.Contains(t, ddl, "`code` VARCHAR(20) NOT NULL")
+	assert.Contains(t, ddl, "`note` VARCHAR(100) DEFAULT 'parent-default' COMMENT 'parent note'")
+	assert.Contains(t, ddl, "PRIMARY KEY (`id`)")
+	assert.Contains(t, ddl, "UNIQUE KEY `code`(`code`)")
+	assert.Contains(t, ddl, "KEY `idx_parent_note`(`note`)")
+	assert.Contains(t, ddl, "KEY `ivf_500` USING ivfflat(`embedding`) lists = 500  op_type 'vector_l2_ops'")
+	assert.Contains(t, ddl, "KEY `ivf_2000` USING ivfflat(`embedding`) lists = 2000  op_type 'vector_l2_ops'")
+	assert.Contains(t, ddl, "COMMENT='parent table comment'")
+	assert.Contains(t, ddl, "partition by key algorithm = 2 (`id`, `tenant_id`) partitions 4")
+	assert.NotContains(t, ddl, "`old`")
+}
+
+func TestCreateTableDDLFromCatalogViews_PreservesCompositeClusterByFromMoColumns(t *testing.T) {
+	moTablesView := &LogicalTableView{
+		Headers: []string{
+			"object", "block", "row",
+			"rel_id", "relname", "reldatabase", "reldatabase_id",
+			"relpersistence", "relkind", "rel_comment",
+		},
+		Rows: [][]string{
+			{
+				"obj1", "0", "0",
+				"272528", "statement_info", "system", "272500",
+				"", "r", "record each statement and stats info[mo_no_del_hint]",
+			},
+		},
+	}
+
+	moColumnsView := &LogicalTableView{
+		Headers: append([]string{"object", "block", "row"}, catalog.MoColumnsSchema...),
+		Rows: [][]string{
+			moColumnsTestRow(t, "272528", "statement_info", "request_at", encodedSQLType(t, types.New(types.T_datetime, 0, 6)), "1", "1", "0"),
+			moColumnsTestRow(t, "272528", "statement_info", "account_id", encodedSQLType(t, types.T_uint32.ToType()), "2", "0", "1"),
+			moColumnsTestRow(t, "272528", "statement_info", "__mo_cbkey_010request_at010account_id", encodedSQLType(t, types.T_varchar.ToType()), "3", "0", "2", catalog.SystemColAttr_IsHidden, "1", catalog.SystemColAttr_IsClusterBy, "1"),
+		},
+	}
+
+	ddl := createTableDDLFromCatalogViews(272528, moTablesView, moColumnsView)
+	assert.Contains(t, ddl, "CREATE TABLE `statement_info`")
+	assert.Contains(t, ddl, "`request_at` DATETIME(6) NOT NULL")
+	assert.Contains(t, ddl, "`account_id` INT UNSIGNED")
+	assert.NotContains(t, ddl, "__mo_cbkey_010request_at010account_id")
+	assert.Contains(t, ddl, "COMMENT='record each statement and stats info[mo_no_del_hint]' CLUSTER BY (`request_at`, `account_id`)")
+}
+
+func moColumnsTestRow(t *testing.T, relID, relName, name, typ, attnum, notNull, seqnum string, extra ...string) []string {
+	t.Helper()
+	data := make([]string, len(catalog.MoColumnsSchema))
+	set := func(colName, value string) {
+		for i, header := range catalog.MoColumnsSchema {
+			if header == colName {
+				data[i] = value
+				return
+			}
+		}
+		t.Fatalf("missing mo_columns header %s", colName)
+	}
+	set(catalog.SystemColAttr_RelID, relID)
+	set(catalog.SystemColAttr_RelName, relName)
+	set(catalog.SystemColAttr_Name, name)
+	set(catalog.SystemColAttr_Type, typ)
+	set(catalog.SystemColAttr_Num, attnum)
+	set(catalog.SystemColAttr_NullAbility, notNull)
+	set(catalog.SystemColAttr_IsHidden, "0")
+	set(catalog.SystemColAttr_Seqnum, seqnum)
+	for i := 0; i+1 < len(extra); i += 2 {
+		set(extra[i], extra[i+1])
+	}
+	return append([]string{"obj1", "0", attnum}, data...)
+}
+
+func TestCreateTableDDLFromCatalogViews_IncludesForeignKeys(t *testing.T) {
+	moTablesHeaders := append([]string{"object", "block", "row"}, catalog.MoTablesSchema...)
+	tableRow := func(relID, relName, dbName, dbID, constraint string) []string {
+		data := make([]string, len(catalog.MoTablesSchema))
+		set := func(colName, value string) {
+			for i, header := range catalog.MoTablesSchema {
+				if header == colName {
+					data[i] = value
+					return
+				}
+			}
+			t.Fatalf("missing mo_tables header %s", colName)
+		}
+		set(catalog.SystemRelAttr_ID, relID)
+		set(catalog.SystemRelAttr_Name, relName)
+		set(catalog.SystemRelAttr_DBName, dbName)
+		set(catalog.SystemRelAttr_DBID, dbID)
+		set(catalog.SystemRelAttr_Kind, "r")
+		set(catalog.SystemRelAttr_Constraint, constraint)
+		return append([]string{"obj", "0", relID}, data...)
+	}
+	moTablesView := &LogicalTableView{
+		Headers: moTablesHeaders,
+		Rows: [][]string{
+			tableRow("100", "parent", "ckp_constraints", "10", encodedConstraint(t, encodedPrimaryKeyConstraint(t, "id"))),
+			tableRow("101", "child_cascade", "ckp_constraints", "10", encodedConstraint(t,
+				&engine.ForeignKeyDef{Fkeys: []*plan.ForeignKeyDef{{
+					Name:        "fk_child_cascade_parent",
+					Cols:        []uint64{2},
+					ForeignTbl:  100,
+					ForeignCols: []uint64{1},
+					OnDelete:    plan.ForeignKeyDef_CASCADE,
+					OnUpdate:    plan.ForeignKeyDef_RESTRICT,
+				}}},
+			)),
+		},
+	}
+
+	moColumnsHeaders := append([]string{"object", "block", "row"}, catalog.MoColumnsSchema...)
+	columnRow := func(relID, relName, colID, name, typ, attnum, notNull string) []string {
+		data := make([]string, len(catalog.MoColumnsSchema))
+		set := func(colName, value string) {
+			for i, header := range catalog.MoColumnsSchema {
+				if header == colName {
+					data[i] = value
+					return
+				}
+			}
+			t.Fatalf("missing mo_columns header %s", colName)
+		}
+		set(catalog.SystemColAttr_UniqName, colID)
+		set(catalog.SystemColAttr_RelID, relID)
+		set(catalog.SystemColAttr_RelName, relName)
+		set(catalog.SystemColAttr_Name, name)
+		set(catalog.SystemColAttr_Type, typ)
+		set(catalog.SystemColAttr_Num, attnum)
+		set(catalog.SystemColAttr_NullAbility, notNull)
+		set(catalog.SystemColAttr_IsHidden, "0")
+		set(catalog.SystemColAttr_Seqnum, attnum)
+		return append([]string{"obj", "0", attnum}, data...)
+	}
+	moColumnsView := &LogicalTableView{
+		Headers: moColumnsHeaders,
+		Rows: [][]string{
+			columnRow("100", "parent", "100-id", "id", encodedSQLType(t, types.T_int32.ToType()), "1", "1"),
+			columnRow("101", "child_cascade", "101-id", "id", encodedSQLType(t, types.T_int32.ToType()), "1", "1"),
+			columnRow("101", "child_cascade", "101-parent_id", "parent_id", encodedSQLType(t, types.T_int32.ToType()), "2", "0"),
+		},
+	}
+
+	ddl := createTableDDLFromCatalogViews(101, moTablesView, moColumnsView)
+	assert.Contains(t, ddl, "CONSTRAINT `fk_child_cascade_parent` FOREIGN KEY (`parent_id`) REFERENCES `ckp_constraints`.`parent` (`id`) ON DELETE CASCADE ON UPDATE RESTRICT")
+}
+
+func TestCloneTableSchemaCopiesForeignKeys(t *testing.T) {
+	schema := &TableSchema{
+		TableName: "child_restrict",
+		Columns: []TableColumn{
+			{Name: "id", SQLType: "INT", Position: 1, NotNull: true},
+			{Name: "parent_id", SQLType: "INT", Position: 2, NotNull: true},
+		},
+		PrimaryKey: []string{"id"},
+		ForeignKeys: []TableForeignKey{{
+			Name:         "fk_child_restrict_parent",
+			Columns:      []string{"parent_id"},
+			ReferTable:   "parent",
+			ReferColumns: []string{"id"},
+			OnDelete:     plan.ForeignKeyDef_RESTRICT,
+			OnUpdate:     plan.ForeignKeyDef_RESTRICT,
+		}},
+	}
+
+	ddl := RenderCreateTableDDLFromSchema(cloneTableSchema(schema))
+	assert.Contains(t, ddl, "CONSTRAINT `fk_child_restrict_parent` FOREIGN KEY (`parent_id`) REFERENCES `parent` (`id`) ON DELETE RESTRICT ON UPDATE RESTRICT")
+}
+
+func TestBuildPartitionClauseFromMetadata_UsesSeqNumsWithHiddenColumn(t *testing.T) {
+	view := &LogicalTableView{
+		Headers: append([]string{"object", "block", "row"}, "col_0", "col_1", "col_2", "col_3", "col_4", "col_5", "col_6"),
+		ColSeqNums: []uint16{
+			6, // hidden/cpkey column before visible catalog columns
+			0, 1, 2, 3, 4, 5,
+		},
+		Rows: [][]string{
+			{
+				"obj1", "0", "0",
+				"hidden-key",
+				"334023", "t_hash_partition", "ckp_tables", "Hash", "hash (`id`)", "4",
+			},
+		},
+	}
+	applyCatalogHeadersBySeqNums(view, moPartitionMetadataHeaders)
+
+	assert.Equal(t, "partition by hash (`id`) partitions 4", buildPartitionClauseFromMetadata(view, 334023))
+}
+
+func TestBuildPartitionClauseFromMetadata_FallsBackToRowShape(t *testing.T) {
+	view := &LogicalTableView{
+		Headers: []string{"object", "block", "row", "col_0", "col_1", "col_2", "col_3", "col_4", "col_5"},
+		Rows: [][]string{
+			{
+				"obj1", "0", "0",
+				"272577", "t_hash_partition", "ckp_tables", "Hash", "hash (`id`)", "4",
+			},
+		},
+	}
+
+	assert.Equal(t, "partition by hash (`id`) partitions 4", buildPartitionClauseFromMetadata(view, 272577))
+}
+
+func TestBuildPartitionClauseFromMetadata_IncludesRangePartitionDefinitions(t *testing.T) {
+	metadataView := &LogicalTableView{
+		Headers: append([]string{"object", "block", "row"}, moPartitionMetadataHeaders...),
+		Rows: [][]string{
+			{"obj1", "0", "0", "272882", "t_range_partition", "ckp_partition_options", "Range", "range (`id`)", "4"},
+		},
+	}
+	tablesView := &LogicalTableView{
+		Headers: append([]string{"object", "block", "row"}, moPartitionTablesHeaders...),
+		Rows: [][]string{
+			{"obj1", "0", "0", "272883", "%!%p0%!%t_range_partition", "272882", "p0", "0", "values less than (100)", ""},
+			{"obj1", "0", "1", "272884", "%!%p1%!%t_range_partition", "272882", "p1", "1", "values less than (200)", ""},
+			{"obj1", "0", "2", "272885", "%!%pmax%!%t_range_partition", "272882", "pmax", "2", "values less than MAXVALUE", ""},
+		},
+	}
+
+	assert.Equal(t, "partition by range (`id`) (\n  partition `p0` values less than (100),\n  partition `p1` values less than (200),\n  partition `pmax` values less than MAXVALUE\n)", buildPartitionClauseFromMetadata(metadataView, 272882, tablesView))
+}
+
+func TestBuildPartitionClauseFromMetadata_IncludesListPartitionDefinitions(t *testing.T) {
+	metadataView := &LogicalTableView{
+		Headers: append([]string{"object", "block", "row"}, moPartitionMetadataHeaders...),
+		Rows: [][]string{
+			{"obj1", "0", "0", "272895", "t_list_columns_partition", "ckp_partition_options", "List", "list columns (`category`)", "3"},
+		},
+	}
+	tablesView := &LogicalTableView{
+		Headers: append([]string{"object", "block", "row"}, moPartitionTablesHeaders...),
+		Rows: [][]string{
+			{"obj1", "0", "1", "272897", "%!%p_b%!%t_list_columns_partition", "272895", "p_b", "1", "values in ('b')", ""},
+			{"obj1", "0", "0", "272896", "%!%p_a%!%t_list_columns_partition", "272895", "p_a", "0", "values in ('a')", ""},
+		},
+	}
+
+	assert.Equal(t, "partition by list columns (`category`) (\n  partition `p_a` values in ('a'),\n  partition `p_b` values in ('b')\n)", buildPartitionClauseFromMetadata(metadataView, 272895, tablesView))
+}
+
+func TestBuildPartitionTableIDMap(t *testing.T) {
+	view := &LogicalTableView{
+		Headers: append([]string{"object", "block", "row"}, moPartitionTablesHeaders...),
+		Rows: [][]string{
+			{"obj1", "0", "0", "272578", "%!%p0%!%t_hash_partition", "272577", "p0", "0", "", ""},
+			{"obj1", "0", "1", "272579", "%!%p1%!%t_hash_partition", "272577", "p1", "1", "", ""},
+			{"obj1", "0", "2", "272580", "%!%p0%!%other", "999999", "p0", "0", "", ""},
+		},
+	}
+
+	got := buildPartitionTableIDMap(view, map[uint64]struct{}{272577: {}})
+	assert.Equal(t, []uint64{272578, 272579}, got[272577])
+}
+
+func TestBuildPartitionTableIDMap_FallsBackToRowShape(t *testing.T) {
+	view := &LogicalTableView{
+		Headers: []string{"object", "block", "row", "col_0", "col_1", "col_2", "col_3", "col_4", "col_5"},
+		Rows: [][]string{
+			{"obj1", "0", "1", "334040", "%!%p1%!%t_hash_partition", "334039", "p1", "1", "", ""},
+			{"obj1", "0", "0", "334041", "%!%p0%!%t_hash_partition", "334039", "p0", "0", "", ""},
+		},
+	}
+
+	got := buildPartitionTableIDMap(view, map[uint64]struct{}{334039: {}})
+	assert.Equal(t, []uint64{334041, 334040}, got[334039])
+}
+
+func TestCreateTableDDLFromCatalogViews_IgnoresMoColumnsPrimaryWithoutConstraint(t *testing.T) {
+	moTablesView := &LogicalTableView{
+		Headers: []string{
+			"object", "block", "row",
+			"rel_id", "relname", "reldatabase", "reldatabase_id",
+			"relpersistence", "relkind", "rel_comment", "rel_createsql", "constraint",
+		},
+		Rows: [][]string{
+			{
+				"obj1", "0", "0",
+				"334100", "t_int_signed", "ckp_types", "334099",
+				"", "r", "", "", "",
+			},
+		},
+	}
+
+	headers := append([]string{"object", "block", "row"}, catalog.MoColumnsSchema...)
+	row := func(name, typ, attnum, notNull, constraintType, seqnum string) []string {
+		data := make([]string, len(catalog.MoColumnsSchema))
+		set := func(colName, value string) {
+			for i, header := range catalog.MoColumnsSchema {
+				if header == colName {
+					data[i] = value
+					return
+				}
+			}
+			t.Fatalf("missing mo_columns header %s", colName)
+		}
+		set(catalog.SystemColAttr_RelID, "334100")
+		set(catalog.SystemColAttr_RelName, "t_int_signed")
+		set(catalog.SystemColAttr_Name, name)
+		set(catalog.SystemColAttr_Type, typ)
+		set(catalog.SystemColAttr_Num, attnum)
+		set(catalog.SystemColAttr_NullAbility, notNull)
+		set(catalog.SystemColAttr_ConstraintType, constraintType)
+		set(catalog.SystemColAttr_IsHidden, "0")
+		set(catalog.SystemColAttr_Seqnum, seqnum)
+		return append([]string{"obj1", "0", attnum}, data...)
+	}
+	moColumnsView := &LogicalTableView{
+		Headers: headers,
+		Rows: [][]string{
+			row("id", encodedSQLType(t, types.T_int32.ToType()), "1", "1", "p", "0"),
+			row("c_tiny", encodedSQLType(t, types.T_int8.ToType()), "2", "0", "", "1"),
+			row("c_small", encodedSQLType(t, types.T_int16.ToType()), "3", "0", "", "2"),
+			row("c_int", encodedSQLType(t, types.T_int32.ToType()), "4", "0", "", "3"),
+			row("c_big", encodedSQLType(t, types.T_int64.ToType()), "5", "0", "", "4"),
+		},
+	}
+
+	ddl := createTableDDLFromCatalogViews(334100, moTablesView, moColumnsView)
+	assert.Contains(t, ddl, "`id` INT NOT NULL")
+	assert.NotContains(t, ddl, "PRIMARY KEY")
+}
+
+func TestRenderCreateTableDDLFromSchema_PrefersColumnsOverCreateSQL(t *testing.T) {
+	ddl := RenderCreateTableDDLFromSchema(&TableSchema{
+		TableName: "t",
+		CreateSQL: "CREATE TABLE t (a INT, b VARCHAR(100))",
+		Columns: []TableColumn{
+			{Name: "a", SQLType: "INT", Position: 1},
+			{Name: "c", SQLType: "BIGINT", Position: 2},
+		},
+	})
+
+	assert.Contains(t, ddl, "`a` INT")
+	assert.Contains(t, ddl, "`c` BIGINT")
+	assert.NotContains(t, ddl, "`b`")
+}
+
+func TestRenderCreateTableDDLFromSchema_DoesNotFallbackToCreateSQLWhenColumnTypesAreBinary(t *testing.T) {
+	ddl := RenderCreateTableDDLFromSchema(&TableSchema{
+		TableName: "t",
+		CreateSQL: "CREATE TABLE t (a INT)",
+		Columns: []TableColumn{
+			{Name: "a", SQLType: string([]byte{'A', 0, 0xff})},
+		},
+	})
+
+	assert.Empty(t, ddl)
+}
+
+func TestRenderCreateTableDDLFromSchema_PreservesArrayType(t *testing.T) {
+	ddl := RenderCreateTableDDLFromSchema(&TableSchema{
+		TableName: "t_array",
+		Columns: []TableColumn{
+			{Name: "id", SQLType: "INT", Position: 1},
+			{Name: "tags", SQLType: "ARRAY(VARCHAR(20))", Position: 2},
+		},
+	})
+
+	assert.Contains(t, ddl, "`tags` ARRAY(VARCHAR(20))")
+	assert.NotContains(t, ddl, "`tags` JSON")
+}
+
+func TestRenderCreateTableDDLFromSchema_PreservesTypedArrayMetadata(t *testing.T) {
+	ddl := RenderCreateTableDDLFromSchema(&TableSchema{
+		TableName: "t_array",
+		Columns: []TableColumn{
+			{Name: "id", SQLType: "INT", Position: 1},
+			{Name: "tags", SQLType: "JSON", EnumValues: "array(varchar(20))", Position: 2},
+		},
+	})
+
+	assert.Contains(t, ddl, "`tags` ARRAY(varchar(20))")
+	assert.NotContains(t, ddl, "`tags` JSON")
+}
+
+func TestIsPrintableCreateTableSQLAcceptsExternalTable(t *testing.T) {
+	assert.True(t, isPrintableCreateTableSQL("CREATE EXTERNAL TABLE ext_csv (id INT) INFILE {'filepath'='/tmp/ext.csv','format'='csv'}"))
+}
+
+func TestIsPrintableCreateTableSQLAcceptsView(t *testing.T) {
+	assert.True(t, isPrintableCreateTableSQL("CREATE VIEW `ckp_views`.`v_normal` AS SELECT id FROM `ckp_tables`.`t_normal`"))
+}
+
+func TestIsPrintableExternalParamJSON(t *testing.T) {
+	assert.True(t, isPrintableExternalParamJSON(`{"ExParamConst":{"Option":["filepath","/tmp/ext.csv","format","csv"]}}`))
+	assert.False(t, isPrintableExternalParamJSON(`CREATE EXTERNAL TABLE ext_csv (id INT)`))
+}
+
+func TestFindTableSchemaFromMoTablesUsesCatalogLayoutFallback(t *testing.T) {
+	schema := schemaForLayout(currentCatalogLayout, moTablesID)
+	headers := append([]string{}, logicalTableViewMetaHeaders...)
+	for range schema {
+		headers = append(headers, "")
+	}
+	row := make([]string, len(headers))
+	row[0], row[1], row[2] = "obj", "0", "0"
+	data := row[logicalViewMetaCols:]
+	for i, name := range schema {
+		switch name {
+		case "rel_id":
+			data[i] = "272746"
+		case "relname":
+			data[i] = "ext_csv_local"
+		case "reldatabase":
+			data[i] = "ckp25010_external"
+		case "rel_createsql":
+			data[i] = `{"ExParamConst":{"Option":["filepath","/tmp/ext.csv","format","csv"]}}`
+		}
+	}
+
+	got := findTableSchemaFromMoTables(&LogicalTableView{Headers: headers, Rows: [][]string{row}}, 272746)
+	require.NotNil(t, got)
+	assert.Equal(t, "ext_csv_local", got.TableName)
+	assert.Equal(t, "ckp25010_external", got.DatabaseName)
+	assert.Contains(t, got.CreateSQL, "ExParamConst")
+	assert.Contains(t, got.CreateSQL, "filepath")
+}
+
+func TestRenderCreateTableDDLFromSchema_EnumSetValues(t *testing.T) {
+	ddl := RenderCreateTableDDLFromSchema(&TableSchema{
+		TableName: "t_enum_set",
+		Columns: []TableColumn{
+			{Name: "c_enum", SQLType: "ENUM", EnumValues: "red,green,blue", Position: 1},
+			{Name: "c_set", SQLType: "BIGINT UNSIGNED", EnumValues: "a,b,c", Position: 2},
+		},
+	})
+
+	assert.Contains(t, ddl, "`c_enum` ENUM('red','green','blue')")
+	assert.Contains(t, ddl, "`c_set` SET('a','b','c')")
+}
+
+func TestRenderCreateTableDDLFromSchema_AutoIncrementSkipsDefaultNull(t *testing.T) {
+	ddl := RenderCreateTableDDLFromSchema(&TableSchema{
+		TableName: "t_auto",
+		Columns: []TableColumn{
+			{Name: "id", SQLType: "BIGINT UNSIGNED", Position: 1, AutoIncrement: true, HasDefault: true},
+		},
+	})
+
+	assert.Contains(t, ddl, "`id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT")
+	assert.NotContains(t, ddl, "AUTO_INCREMENT DEFAULT NULL")
+}
+
+func TestRenderCreateTableDDLFromSchema_FullTextParserAndAnonymousName(t *testing.T) {
+	ddl := RenderCreateTableDDLFromSchema(&TableSchema{
+		TableName: "fulltext_test",
+		Columns: []TableColumn{
+			{Name: "id", SQLType: "BIGINT", Position: 1, NotNull: true},
+			{Name: "content", SQLType: "TEXT", Position: 2},
+			{Name: "question", SQLType: "TEXT", Position: 3},
+		},
+		UniqueKeys: []TableUniqueKey{
+			{
+				Columns:    []string{"content"},
+				Algo:       catalog.MOIndexFullTextAlgo.ToString(),
+				AlgoParams: `{"parser":"ngram"}`,
+			},
+			{
+				Name:       "idx_ft_question",
+				Columns:    []string{"question"},
+				Algo:       catalog.MOIndexFullTextAlgo.ToString(),
+				AlgoParams: `{"parser":"ngram"}`,
+			},
+		},
+	})
+
+	assert.Contains(t, ddl, "FULLTEXT (`content`) WITH PARSER ngram")
+	assert.Contains(t, ddl, "FULLTEXT `idx_ft_question`(`question`) WITH PARSER ngram")
+	assert.NotContains(t, ddl, "FULLTEXT KEY")
+	assert.NotContains(t, ddl, "FULLTEXT `content`")
+}
+
+func TestRenderCreateTableDDLFromSchema_PreservesIndexOrder(t *testing.T) {
+	ddl := RenderCreateTableDDLFromSchema(&TableSchema{
+		TableName: "file_working",
+		Columns: []TableColumn{
+			{Name: "id", SQLType: "BIGINT", Position: 1, NotNull: true},
+			{Name: "source_file_path", SQLType: "VARCHAR(256)", Position: 2},
+			{Name: "sink_file_path", SQLType: "VARCHAR(256)", Position: 3},
+			{Name: "hash", SQLType: "VARCHAR(128)", Position: 4},
+			{Name: "dup_file_path", SQLType: "VARCHAR(256)", Position: 5},
+		},
+		PrimaryKey: []string{"id"},
+		UniqueKeys: []TableUniqueKey{
+			{Name: "source_file_path", Columns: []string{"source_file_path"}},
+			{Name: "sink_file_path", Columns: []string{"sink_file_path"}},
+			{Name: "hash", Columns: []string{"hash"}},
+			{Name: "dup_file_path", Columns: []string{"dup_file_path"}},
+		},
+	})
+
+	sourceIdx := strings.Index(ddl, "KEY `source_file_path`")
+	sinkIdx := strings.Index(ddl, "KEY `sink_file_path`")
+	hashIdx := strings.Index(ddl, "KEY `hash`")
+	dupIdx := strings.Index(ddl, "KEY `dup_file_path`")
+	require.NotEqual(t, -1, sourceIdx)
+	require.NotEqual(t, -1, sinkIdx)
+	require.NotEqual(t, -1, hashIdx)
+	require.NotEqual(t, -1, dupIdx)
+	assert.True(t, sourceIdx < sinkIdx && sinkIdx < hashIdx && hashIdx < dupIdx, ddl)
+}
+
+func TestBuildCreateIndexStatementsFromMoIndexes_FullTextParserAndCatalogOrder(t *testing.T) {
+	headers := append([]string{"object", "block", "row"}, moIndexesHeaders...)
+	row := func(id, name, indexType, algo, params, col, ordinal string) []string {
+		data := make([]string, len(moIndexesHeaders))
+		set := func(header, value string) {
+			for i, h := range moIndexesHeaders {
+				if h == header {
+					data[i] = value
+					return
+				}
+			}
+			t.Fatalf("missing mo_indexes header %s", header)
+		}
+		set("id", id)
+		set("table_id", "42")
+		set("name", name)
+		set("type", indexType)
+		set(catalog.IndexAlgoName, algo)
+		set(catalog.IndexAlgoParams, params)
+		set("column_name", col)
+		set("ordinal_position", ordinal)
+		return append([]string{"obj1", "0", id}, data...)
+	}
+
+	got, err := buildCreateIndexStatementsFromMoIndexes(&LogicalTableView{
+		Headers: headers,
+		Rows: [][]string{
+			row("4", "source_file_path", "INDEX", "", "", "source_file_path", "1"),
+			row("2", "hash", "INDEX", "", "", "hash", "1"),
+			row("3", "sink_file_path", "INDEX", "", "", "sink_file_path", "1"),
+			row("1", "idx_ft_question", "FULLTEXT", catalog.MOIndexFullTextAlgo.ToString(), `{"parser":"ngram"}`, "question", "1"),
+		},
+	}, 42, "ca_comprehensive_dataset")
+
+	require.NoError(t, err)
+	require.Equal(t, []string{
+		"ALTER TABLE `ca_comprehensive_dataset` ADD FULLTEXT `idx_ft_question`(`question`) WITH PARSER ngram;",
+		"ALTER TABLE `ca_comprehensive_dataset` ADD KEY `hash`(`hash`);",
+		"ALTER TABLE `ca_comprehensive_dataset` ADD KEY `sink_file_path`(`sink_file_path`);",
+		"ALTER TABLE `ca_comprehensive_dataset` ADD KEY `source_file_path`(`source_file_path`);",
+	}, got)
+}
+
+func TestDecodeMoColumnEncodedSQLType_TemporalScale(t *testing.T) {
+	sqlType, ok := decodeMoColumnEncodedSQLType(encodedSQLType(t, types.New(types.T_time, 0, 6)))
+	require.True(t, ok)
+	assert.Equal(t, "TIME(6)", sqlType)
+
+	sqlType, ok = decodeMoColumnEncodedSQLType(encodedSQLType(t, types.New(types.T_datetime, 0, 3)))
+	require.True(t, ok)
+	assert.Equal(t, "DATETIME(3)", sqlType)
+
+	sqlType, ok = decodeMoColumnEncodedSQLType(encodedSQLType(t, types.New(types.T_timestamp, 0, 6)))
+	require.True(t, ok)
+	assert.Equal(t, "TIMESTAMP(6)", sqlType)
+}
+
+func TestBuildCatalogTablesFromMoTablesRows_GenericWithTrailingColumns(t *testing.T) {
+	headers := []string{"object", "block", "row"}
+	for i := 0; i < len(preCPKLayout.moTablesSchema)+2; i++ {
+		headers = append(headers, fmt.Sprintf("col_%d", i))
+	}
+	row := func(relID, relName, dbName, dbID, relKind, accountID string) []string {
+		data := make([]string, len(preCPKLayout.moTablesSchema)+2)
+		data[0] = relID
+		data[1] = relName
+		data[2] = dbName
+		data[3] = dbID
+		data[5] = relKind
+		data[11] = accountID
+		return append([]string{"obj1", "0", relID}, data...)
+	}
+	view := &LogicalTableView{
+		Headers: headers,
+		Rows: [][]string{
+			row("1001", "orders", "tpch_10g", "9001", "r", "7"),
+			row("1002", "revenue0", "tpch_10g", "9001", "v", "7"),
+		},
+	}
+
+	tables := buildCatalogTablesFromMoTablesRows(view)
+	require.Len(t, tables, 2)
+	assert.Equal(t, uint64(1001), tables[0].TableID)
+	assert.Equal(t, uint32(7), tables[0].AccountID)
+	assert.Equal(t, uint64(9001), tables[0].DatabaseID)
+	assert.Equal(t, "tpch_10g", tables[0].DatabaseName)
+	assert.Equal(t, "orders", tables[0].TableName)
+	assert.Equal(t, "r", tables[0].RelKind)
+	assert.Equal(t, "revenue0", tables[1].TableName)
+	assert.Equal(t, "v", tables[1].RelKind)
+}
+
+func TestBuildCatalogDatabasesFromMoDatabaseRows_IncludesDatabaseWithoutTables(t *testing.T) {
+	headers := []string{"object", "block", "row"}
+	for i := 0; i < len(currentCatalogLayout.moDatabaseSchema); i++ {
+		headers = append(headers, fmt.Sprintf("col_%d", i))
+	}
+	row := func(datID, datName, accountID, datType string) []string {
+		data := make([]string, len(currentCatalogLayout.moDatabaseSchema))
+		data[0] = datID
+		data[1] = datName
+		data[7] = accountID
+		data[8] = datType
+		return append([]string{"obj1", "0", datID}, data...)
+	}
+	view := &LogicalTableView{
+		Headers: headers,
+		Rows: [][]string{
+			row("335900", "ckp_pubsub_sub_all", "415", catalog.SystemDBTypeSubscription),
+		},
+	}
+
+	databases := buildCatalogDatabasesFromMoDatabaseRows(view)
+	require.Len(t, databases, 1)
+	assert.Equal(t, uint32(415), databases[0].AccountID)
+	assert.Equal(t, uint64(335900), databases[0].DatabaseID)
+	assert.Equal(t, "ckp_pubsub_sub_all", databases[0].DatabaseName)
+	assert.Empty(t, databases[0].TableName)
+	assert.Zero(t, databases[0].TableID)
+}
+
+func TestBuildCatalogTablesFromMoTablesRows_UsesTemporaryDisplayName(t *testing.T) {
+	headers := []string{"object", "block", "row"}
+	for i := 0; i < len(preCPKLayout.moTablesSchema); i++ {
+		headers = append(headers, fmt.Sprintf("col_%d", i))
+	}
+	data := make([]string, len(preCPKLayout.moTablesSchema))
+	data[0] = "1003"
+	data[1] = "__mo_tmp_123e4567e89b12d3a456426614174000_ckp_temp_t_session_only"
+	data[2] = "ckp_temp"
+	data[3] = "9002"
+	data[5] = "r"
+	data[11] = "7"
+	view := &LogicalTableView{
+		Headers: headers,
+		Rows:    [][]string{append([]string{"obj1", "0", "0"}, data...)},
+	}
+
+	tables := buildCatalogTablesFromMoTablesRows(view)
+	require.Len(t, tables, 1)
+	assert.Equal(t, "t_session_only", tables[0].TableName)
+}
+
+func TestBuildCatalogTablesFromMoTablesRowsKeepsQuotedIdentifierNames(t *testing.T) {
+	view := &LogicalTableView{
+		Headers: append([]string{"object", "block", "row"}, catalog.MoTablesSchema...),
+		Rows: [][]string{
+			moTablesCatalogTestRow(t, "1004", "order items", "sales-db", "9003", "r", "7", ""),
+			moTablesCatalogTestRow(t, "1005", "tick`table", "quoted db", "9003", "r", "7", ""),
+		},
+	}
+
+	tables := buildCatalogTablesFromMoTablesRows(view)
+	require.Len(t, tables, 2)
+	assert.Equal(t, "order items", tables[0].TableName)
+	assert.Equal(t, "sales-db", tables[0].DatabaseName)
+	assert.Equal(t, "tick`table", tables[1].TableName)
+	assert.Equal(t, "quoted db", tables[1].DatabaseName)
+}
+
+func TestDisplayTableName(t *testing.T) {
+	assert.Equal(t, "orders", displayTableName("db1", "orders"))
+	assert.Equal(t, "t1", displayTableName("db1", "__mo_tmp_123e4567e89b12d3a456426614174000_db1_t1"))
+	assert.Equal(t, "__mo_tmp_123e4567e89b12d3a456426614174000_other_t1", displayTableName("db1", "__mo_tmp_123e4567e89b12d3a456426614174000_other_t1"))
+	assert.Equal(t, "__mo_tmp_bad", displayTableName("db1", "__mo_tmp_bad"))
+}
+
+func TestListCatalogTablesDoesNotFilterRelKinds(t *testing.T) {
+	tables := []TableCatalogEntry{
+		{TableID: 1, TableName: "orders", DatabaseName: "db1", RelKind: "r"},
+		{TableID: 2, TableName: "ext_orders", DatabaseName: "db1", RelKind: "e"},
+		{TableID: 3, TableName: "orders_v", DatabaseName: "db1", RelKind: "v"},
+		{TableID: 4, TableName: "cluster_orders", DatabaseName: "db1", RelKind: "cluster"},
+	}
+	filtered := filterCatalogTablesForList(tables, TableListOptions{})
+
+	require.Len(t, filtered, 4)
+	names := make([]string, 0, len(filtered))
+	for _, table := range filtered {
+		names = append(names, table.TableName)
+	}
+	assert.ElementsMatch(t, []string{"orders", "ext_orders", "orders_v", "cluster_orders"}, names)
+}
+
+func TestIsMissingCheckpointTableError(t *testing.T) {
+	err := moerr.NewInternalErrorf(context.Background(), "table %d not found in checkpoint at ts %s", uint64(272419), "1-0")
+	assert.True(t, isMissingCheckpointTableError(err, 272419))
+	assert.False(t, isMissingCheckpointTableError(err, 272420))
+	assert.False(t, isMissingCheckpointTableError(nil, 272419))
+}
+
+func TestInferCatalogLayout(t *testing.T) {
+	tests := []struct {
+		name      string
+		dataWidth int
+		tableID   uint64
+		layout    string
+		offset    int
+		ok        bool
+	}{
+		{name: "current_tables", dataWidth: len(catalog.MoTablesSchema), tableID: moTablesID, layout: currentCatalogLayout.name, offset: 0, ok: true},
+		{name: "current_tables_fakepk", dataWidth: len(catalog.MoTablesSchema) + 1, tableID: moTablesID, layout: currentCatalogLayout.name, offset: 1, ok: true},
+		{name: "current_columns_fakepk", dataWidth: len(catalog.MoColumnsSchema) + 1, tableID: moColumnsID, layout: currentCatalogLayout.name, offset: 1, ok: true},
+		{name: "pre_cpk_tables", dataWidth: len(preCPKLayout.moTablesSchema), tableID: moTablesID, layout: preCPKLayout.name, offset: 0, ok: true},
+		{name: "pre_cpk_columns", dataWidth: len(preCPKLayout.moColumnsSchema), tableID: moColumnsID, layout: preCPKLayout.name, offset: 0, ok: true},
+		{name: "legacy3_tables", dataWidth: len(legacy3CatalogLayout.moTablesSchema), tableID: moTablesID, layout: legacy3CatalogLayout.name, offset: 0, ok: true},
+		{name: "legacy3_columns", dataWidth: len(legacy3CatalogLayout.moColumnsSchema), tableID: moColumnsID, layout: legacy3CatalogLayout.name, offset: 0, ok: true},
+		{name: "unknown_tables", dataWidth: 7, tableID: moTablesID, ok: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			layout, offset, ok := inferCatalogLayout(tt.dataWidth, tt.tableID)
+			assert.Equal(t, tt.ok, ok)
+			if !tt.ok {
+				return
+			}
+			assert.Equal(t, tt.layout, layout.name)
+			assert.Equal(t, tt.offset, offset)
+		})
+	}
+}
+
+func TestFallbackCatalogColIndex_UnknownLayoutDoesNotGuessCurrent(t *testing.T) {
+	view := &LogicalTableView{
+		Headers: []string{"object", "block", "row", "col_0", "col_1", "col_2", "col_3", "col_4", "col_5", "col_6"},
+	}
+	assert.Equal(t, -1, fallbackCatalogColIndex(view, moTablesID, "rel_createsql"))
+}
+
+// TestLogicalTableViewWithSchema_mergeHeaders merges schema column names using position-based mapping.
+func TestLogicalTableViewWithSchema_mergeHeaders(t *testing.T) {
+	schema := &TableSchema{
+		TableName: "t1",
+		Columns: []TableColumn{
+			{Name: "id", SQLType: "BIGINT", Position: 1, PhysicalPosition: 0},
+			{Name: "val", SQLType: "INT", Position: 2, PhysicalPosition: 1},
+		},
+	}
+	view := &LogicalTableView{
+		Headers: []string{"object", "block", "row", "col_0", "col_1"},
+		Rows: [][]string{
+			{"obj1", "0", "0", "42", "100"},
+		},
+	}
+
+	merged := MergeLogicalViewWithSchema(view, schema)
+	assert.Equal(t, []string{"id", "val"}, merged.Headers)
+	// Data rows only include columns matching schema positions
+	require.Len(t, merged.Rows, 1)
+	assert.Equal(t, []string{"42", "100"}, merged.Rows[0])
+}
+
+func TestMergeLogicalViewWithSchema_requiresResolvedSchema(t *testing.T) {
+	view := &LogicalTableView{
+		Headers: []string{"object", "block", "row", "col_0", "col_1"},
+		Rows: [][]string{
+			{"obj1", "0", "0", "42", "100"},
+		},
+		VisibleRows:  1,
+		DeletedRows:  0,
+		PhysicalRows: 1,
+	}
+
+	merged := MergeLogicalViewWithSchema(view, &TableSchema{})
+	assert.Empty(t, merged.Headers)
+	assert.Empty(t, merged.Rows)
+	assert.Equal(t, 1, merged.VisibleRows)
+	assert.Equal(t, 1, merged.PhysicalRows)
+}
+
+func TestMergeLogicalViewWithSchema_UsesPhysicalPosition(t *testing.T) {
+	schema := &TableSchema{
+		TableName: "shifted",
+		Columns: []TableColumn{
+			{Name: "id", SQLType: "VARCHAR(36)", Position: 1, PhysicalPosition: 4},
+			{Name: "task_id", SQLType: "VARCHAR(36)", Position: 2, PhysicalPosition: 5},
+		},
+	}
+	view := &LogicalTableView{
+		Headers: []string{"object", "block", "row", "col_0", "col_1", "col_2", "col_3", "col_4", "col_5"},
+		Rows: [][]string{
+			{"obj1", "0", "0", "ignored0", "ignored1", "ignored2", "ignored3", "case-001", "task-001"},
+		},
+	}
+
+	merged := MergeLogicalViewWithSchema(view, schema)
+	require.Len(t, merged.Rows, 1)
+	assert.Equal(t, []string{"case-001", "task-001"}, merged.Rows[0])
+}
+
+func TestWriteCSVExcludesGeneratedColumnsFromLoadInput(t *testing.T) {
+	schema := &TableSchema{Columns: []TableColumn{
+		{Name: "a", SQLType: "INT", PhysicalPosition: 0},
+		{Name: "b", SQLType: "INT", PhysicalPosition: 1},
+		{Name: "c", SQLType: "INT", PhysicalPosition: 2, Generated: "a + b", GeneratedStored: true},
+	}}
+	view := &LogicalTableView{
+		Headers: []string{"object", "block", "row", "col_0", "col_1", "col_2"},
+		Rows:    [][]string{{"obj", "0", "0", "1", "2", "3"}},
+	}
+
+	var buf bytes.Buffer
+	require.NoError(t, WriteCSV(&buf, schema, view, WithCSVHeader(true), WithCSVMetaComments(false)))
+	require.Equal(t, "a,b\n1,2\n", buf.String())
+}
+
+// TestMergeLogicalViewWithSchema_hiddenColumns verifies that hidden columns (e.g. __mo_fake_pk_col,
+// __mo_cpkey_col) are excluded from the merged view using position-based column mapping.
+func TestMergeLogicalViewWithSchema_hiddenColumns(t *testing.T) {
+	// Simulate: physical columns = [__mo_fake_pk_col(hidden,pos=0), id(pos=1), name(pos=2), __mo_cpkey_col(hidden,pos=3)]
+	// Schema only has visible columns: id(pos=1), name(pos=2)
+	schema := &TableSchema{
+		TableName: "users",
+		Columns: []TableColumn{
+			{Name: "id", SQLType: "BIGINT", Position: 1, PhysicalPosition: 1},
+			{Name: "name", SQLType: "VARCHAR(100)", Position: 2, PhysicalPosition: 2},
+		},
+	}
+
+	// The LogicalTableView has all 4 physical columns + 3 meta columns = 7 total
+	view := &LogicalTableView{
+		Headers: []string{"object", "block", "row", "col_0", "col_1", "col_2", "col_3"},
+		Rows: [][]string{
+			{"obj1", "0", "0", "fake_pk_123", "1", "Alice", "cpkey_456"},
+			{"obj1", "0", "1", "fake_pk_789", "2", "Bob", "cpkey_999"},
+		},
+	}
+
+	merged := MergeLogicalViewWithSchema(view, schema)
+
+	// Headers should only contain visible columns
+	assert.Equal(t, []string{"id", "name"}, merged.Headers)
+
+	// Data rows: only columns at positions 1 and 2 (skip pos 0 and pos 3)
+	require.Len(t, merged.Rows, 2)
+	assert.Equal(t, []string{"1", "Alice"}, merged.Rows[0])
+	assert.Equal(t, []string{"2", "Bob"}, merged.Rows[1])
+
+	// Full CSV round-trip
+	var buf bytes.Buffer
+	err := WriteCSV(&buf, schema, view)
+	require.NoError(t, err)
+
+	output := buf.String()
+	assert.Contains(t, output, "id,name")
+	assert.Contains(t, output, `1,"Alice"`)
+	assert.Contains(t, output, `2,"Bob"`)
+	assert.NotContains(t, output, "fake_pk") // hidden columns excluded
+	assert.NotContains(t, output, "cpkey")   // hidden columns excluded
+}
+
+func TestMergeLogicalViewWithSchema_LargeSparsePhysicalPositions(t *testing.T) {
+	const physicalCols = 128
+	headers := []string{"object", "block", "row"}
+	row := []string{"obj1", "0", "0"}
+	for i := 0; i < physicalCols; i++ {
+		headers = append(headers, fmt.Sprintf("col_%d", i))
+		row = append(row, fmt.Sprintf("v%d", i))
+	}
+
+	schema := &TableSchema{
+		TableName: "wide_table",
+		Columns: []TableColumn{
+			{Name: "first", Position: 1, PhysicalPosition: 0},
+			{Name: "middle", Position: 2, PhysicalPosition: 63},
+			{Name: "last", Position: 3, PhysicalPosition: 127},
+		},
+	}
+	view := &LogicalTableView{
+		Headers: headers,
+		Rows:    [][]string{row},
+	}
+
+	merged := MergeLogicalViewWithSchema(view, schema)
+	require.Len(t, merged.Rows, 1)
+	assert.Equal(t, []string{"v0", "v63", "v127"}, merged.Rows[0])
+}
+
+func TestBuildCreateIndexStatementsFromMoIndexes_IVFFlat(t *testing.T) {
+	view := &LogicalTableView{
+		Headers: []string{
+			"table_id", "name", "type", "algo", "algo_params", "comment",
+			"column_name", "ordinal_position", "hidden",
+		},
+		Rows: [][]string{
+			{"272535", "PRIMARY", "PRIMARY", "", "", "", "id", "1", "0"},
+			{"272535", "ivf_2000", "MULTIPLE", "ivfflat", `{"lists":"2000","op_type":"vector_l2_ops"}`, "", "embedding", "1", "0"},
+			{"272535", "ivf_2000", "MULTIPLE", "ivfflat", `{"lists":"2000","op_type":"vector_l2_ops"}`, "", "embedding", "1", "0"},
+			{"272535", "ivf_2000", "MULTIPLE", "ivfflat", `{"lists":"2000","op_type":"vector_l2_ops"}`, "", "__mo_alias_embedding", "1", "0"},
+			{"999999", "other_idx", "MULTIPLE", "", "", "", "v", "1", "0"},
+		},
+	}
+
+	stmts, err := buildCreateIndexStatementsFromMoIndexes(view, 272535, "items_gist")
+	require.NoError(t, err)
+	require.Equal(t, []string{
+		"ALTER TABLE `items_gist` ADD KEY `ivf_2000` USING ivfflat(`embedding`) lists = 2000  op_type 'vector_l2_ops' ;",
+	}, stmts)
+}
+
+func TestBuildCreateIndexStatementsFromMoIndexes_FullText(t *testing.T) {
+	view := &LogicalTableView{
+		Headers: []string{
+			"table_id", "name", "type", "algo", "algo_params", "comment",
+			"column_name", "ordinal_position", "hidden",
+		},
+		Rows: [][]string{
+			{"272535", "idx_doc", "MULTIPLE", "fulltext", "", "", "doc", "1", "0"},
+		},
+	}
+
+	stmts, err := buildCreateIndexStatementsFromMoIndexes(view, 272535, "t_fulltext")
+	require.NoError(t, err)
+	require.Equal(t, []string{
+		"ALTER TABLE `t_fulltext` ADD FULLTEXT `idx_doc`(`doc`);",
+	}, stmts)
+}
+
+func TestWriteCSV_LexicalRowOrder(t *testing.T) {
+	schema := &TableSchema{
+		TableName: "sorted",
+		Columns: []TableColumn{
+			{Name: "id", Position: 1, PhysicalPosition: 0},
+			{Name: "name", Position: 2, PhysicalPosition: 1},
+		},
+	}
+	view := &LogicalTableView{
+		Headers: []string{"object", "block", "row", "col_0", "col_1"},
+		Rows: [][]string{
+			{"obj2", "0", "1", "2", "zeta"},
+			{"obj1", "0", "0", "1", "beta"},
+			{"obj3", "0", "0", "1", "alpha"},
+		},
+	}
+
+	var buf bytes.Buffer
+	err := WriteCSV(&buf, schema, view, WithCSVMetaComments(false), WithCSVRowOrder(CSVRowOrderLexical))
+	require.NoError(t, err)
+
+	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
+	require.Equal(t, []string{
+		"id,name",
+		"1,alpha",
+		"1,beta",
+		"2,zeta",
+	}, lines)
+}
+
+// TestColumnSchemaRoundTrip tests the full pipeline: rows → columns → schema → CSV header.
+func TestColumnSchemaRoundTrip(t *testing.T) {
+	moColumnsView := &LogicalTableView{
+		Headers: []string{
+			"object", "block", "row",
+			"col_0", "col_1", "col_2", "col_3",
+			"att_relname_id", "att_relname", "attname", "atttyp", "attnum",
+			"col_9", "col_10", "col_11", "col_12", "col_13", "col_14", "col_15", "col_16", "col_17",
+			"att_is_hidden",
+			"col_19", "col_20", "col_21", "attr_seqnum",
+		},
+		Rows: [][]string{
+			{"obj1", "0", "0", "", "", "", "", "12345", "my_table", "a", "INT", "1", "", "", "", "", "", "", "", "", "", "0", "", "", "", "0"},
+			{"obj1", "0", "1", "", "", "", "", "12345", "my_table", "b", "TEXT", "2", "", "", "", "", "", "", "", "", "", "0", "", "", "", "1"},
+			{"obj1", "0", "2", "", "", "", "", "12345", "my_table", "c", "FLOAT", "3", "", "", "", "", "", "", "", "", "", "0", "", "", "", "2"},
+		},
+	}
+
+	cols := buildColumnsFromMoColumnsRows(moColumnsView, 12345)
+	require.Len(t, cols, 3)
+
+	schema := &TableSchema{
+		TableName:    "roundtrip",
+		DatabaseName: "test",
+		Columns:      cols,
+		CreateSQL:    "CREATE TABLE roundtrip (a INT, b TEXT, c FLOAT)",
+	}
+
+	dataView := &LogicalTableView{
+		Headers: []string{"object", "block", "row", "col_0", "col_1", "col_2"},
+		Rows: [][]string{
+			{"obj1", "0", "0", "1", "hello", "1.500000"},
+			{"obj1", "0", "1", "2", "world", "2.000000"},
+		},
+	}
+
+	var buf bytes.Buffer
+	err := WriteCSV(&buf, schema, dataView)
+	require.NoError(t, err)
+
+	output := buf.String()
+	assert.Contains(t, output, "a,b,c")
+	assert.Contains(t, output, `1,"hello",1.500000`)
+
+	// Verify comments are present
+	assert.Contains(t, output, "-- CREATE TABLE roundtrip")
+	assert.Contains(t, output, "-- Database: test")
+	fmt.Println(output)
+}
+
+func TestBuildCreateTableFromMoColumns(t *testing.T) {
+	// Simulate mo_columns data for a user table (id=100) with 3 columns
+	view := &LogicalTableView{
+		Headers: []string{
+			"object", "block", "row",
+			"att_relname_id", "attname", "atttyp", "attnum", "att_is_hidden",
+		},
+		Rows: [][]string{
+			// id BIGINT, pos=0
+			{"", "0", "0", "100", "id", "BIGINT", "1", "0"},
+			// name VARCHAR(100), pos=1
+			{"", "0", "1", "100", "name", "VARCHAR(100)", "2", "0"},
+			// __mo_fake_pk_col, pos=2, hidden -> skipped
+			{"", "0", "2", "100", "__mo_fake_pk_col", "VARCHAR(65535)", "3", "1"},
+		},
+	}
+
+	ddl := buildCreateTableFromMoColumns(view, 100)
+	assert.NotEmpty(t, ddl)
+	assert.Contains(t, ddl, "BIGINT")
+	assert.Contains(t, ddl, "VARCHAR(100)")
+	assert.NotContains(t, ddl, "__mo_fake_pk_col")
+	assert.Contains(t, ddl, "CREATE TABLE")
+}
+
+func TestHardcodedCreateTableForLegacy3Dev(t *testing.T) {
+	ddl := hardcodedCreateTableForLayout(catalog.MO_TABLES_ID, legacy3CatalogLayout)
+	assert.Contains(t, ddl, "CREATE TABLE `mo_tables`")
+	assert.NotContains(t, ddl, "rel_logical_id")
+	assert.NotContains(t, ddl, "extra_info")
+	assert.NotContains(t, ddl, catalog.SystemRelAttr_CPKey)
+
+	ddl = hardcodedCreateTableForLayout(catalog.MO_COLUMNS_ID, legacy3CatalogLayout)
+	assert.Contains(t, ddl, "CREATE TABLE `mo_columns`")
+	assert.NotContains(t, ddl, "attr_generated")
+	assert.NotContains(t, ddl, "attr_has_generated")
+	assert.NotContains(t, ddl, catalog.SystemColAttr_CPKey)
+}
+
+func TestBuildCreateTableFromMoColumns_empty(t *testing.T) {
+	view := &LogicalTableView{
+		Headers: []string{"object", "block", "row", "att_relname_id", "attname", "atttyp", "attnum", "att_is_hidden"},
+		Rows: [][]string{
+			{"", "0", "0", "200", "x", "INT", "1", "0"},
+		},
+	}
+	ddl := buildCreateTableFromMoColumns(view, 999) // different table id
+	assert.Empty(t, ddl)
+}
+
+func TestHardcodedCreateTable(t *testing.T) {
+	tests := []struct {
+		tableID  uint64
+		wantName string
+	}{
+		{catalog.MO_TABLES_ID, "mo_tables"},
+		{catalog.MO_COLUMNS_ID, "mo_columns"},
+		{catalog.MO_DATABASE_ID, "mo_database"},
+		{999999, ""}, // unknown table should return empty
+	}
+
+	for _, tt := range tests {
+		t.Run(fmt.Sprintf("table-%d", tt.tableID), func(t *testing.T) {
+			ddl := hardcodedCreateTableForLayout(tt.tableID, currentCatalogLayout)
+			if tt.wantName == "" {
+				assert.Empty(t, ddl)
+			} else {
+				assert.Contains(t, ddl, tt.wantName)
+				assert.Contains(t, ddl, "CREATE TABLE")
+			}
+		})
+	}
+}
+
+func TestBuiltinTableSchemaForLayout_CurrentVisibleColumnsOnly(t *testing.T) {
+	schema := builtinTableSchemaForLayout(currentCatalogLayout, catalog.MO_TABLES_ID)
+	require.NotNil(t, schema)
+	assert.Equal(t, "mo_tables", schema.TableName)
+	assert.Equal(t, "mo_catalog", schema.DatabaseName)
+	assert.NotEmpty(t, schema.CreateSQL)
+
+	names := make([]string, 0, len(schema.Columns))
+	for _, col := range schema.Columns {
+		names = append(names, col.Name)
+		assert.Equal(t, col.Position, col.PhysicalPosition)
+	}
+	assert.Contains(t, names, "rel_logical_id")
+	assert.NotContains(t, names, "extra_info")
+	assert.NotContains(t, names, catalog.SystemRelAttr_CPKey)
+}
+
+func TestBuiltinTableSchemaForLayout_Legacy3Compatibility(t *testing.T) {
+	tablesSchema := builtinTableSchemaForLayout(legacy3CatalogLayout, catalog.MO_TABLES_ID)
+	require.NotNil(t, tablesSchema)
+	tableNames := make([]string, 0, len(tablesSchema.Columns))
+	for _, col := range tablesSchema.Columns {
+		tableNames = append(tableNames, col.Name)
+	}
+	assert.NotContains(t, tableNames, "rel_logical_id")
+	assert.NotContains(t, tableNames, "extra_info")
+	assert.NotContains(t, tableNames, catalog.SystemRelAttr_CPKey)
+
+	columnsSchema := builtinTableSchemaForLayout(legacy3CatalogLayout, catalog.MO_COLUMNS_ID)
+	require.NotNil(t, columnsSchema)
+	columnNames := make([]string, 0, len(columnsSchema.Columns))
+	for _, col := range columnsSchema.Columns {
+		columnNames = append(columnNames, col.Name)
+	}
+	assert.NotContains(t, columnNames, "attr_has_generated")
+	assert.NotContains(t, columnNames, "attr_generated")
+	assert.NotContains(t, columnNames, catalog.SystemColAttr_CPKey)
+}
+
+func TestReadTableSchema_BuiltinFallbackForSystemTable(t *testing.T) {
+	reader := &CheckpointReader{}
+	schema := reader.ReadTableSchema(context.Background(), catalog.MO_TABLES_ID, types.TS{}, nil)
+
+	require.NotNil(t, schema)
+	assert.Equal(t, "mo_tables", schema.TableName)
+	assert.Equal(t, "mo_catalog", schema.DatabaseName)
+	require.NotEmpty(t, schema.Columns)
+
+	names := make([]string, 0, len(schema.Columns))
+	for _, col := range schema.Columns {
+		names = append(names, col.Name)
+	}
+	assert.Contains(t, names, "relname")
+	assert.NotContains(t, names, "extra_info")
+	assert.NotContains(t, names, catalog.SystemRelAttr_CPKey)
+}
+
+func TestWriteCSVMetadata(t *testing.T) {
+	var buf bytes.Buffer
+	err := writeCSVMetadata(&buf, &TableSchema{
+		TableName:    "t1",
+		DatabaseName: "db1",
+		CreateSQL:    "CREATE TABLE t1 (id INT)",
+	}, logicalTableStats{
+		VisibleRows:  10,
+		DeletedRows:  3,
+		PhysicalRows: 13,
+	})
+	require.NoError(t, err)
+	out := buf.String()
+	assert.Contains(t, out, "-- CREATE TABLE t1 (id INT)")
+	assert.Contains(t, out, "-- Database: db1")
+	assert.Contains(t, out, "-- Table: t1")
+	assert.Contains(t, out, "-- Visible rows: 10 (deleted: 3, physical: 13)")
+}
+
+func TestWriteSQLLoadCSVRow_NullAndEscaping(t *testing.T) {
+	var buf bytes.Buffer
+	types := []types.Type{types.T_varchar.ToType(), types.T_int64.ToType(), types.T_json.ToType()}
+	err := writeSQLLoadCSVRow(&buf, types, []string{`a"b\c`, "42", `{"x":"y"}`}, []bool{false, true, false})
+	require.NoError(t, err)
+	assert.Equal(t, "\"a\"\"b\\\\c\",\\N,\"{\"\"x\"\":\"\"y\"\"}\"\n", buf.String())
+}
+
+func TestWriteSQLLoadCSVRow_RoundTripsThroughCSVParser(t *testing.T) {
+	var buf bytes.Buffer
+	colTypes := []types.Type{types.T_varchar.ToType(), types.T_int64.ToType(), types.T_json.ToType()}
+	err := writeSQLLoadCSVRow(&buf, colTypes, []string{`a"b\c`, "42", `{"x":"y"}`}, []bool{false, true, false})
+	require.NoError(t, err)
+
+	parser, err := csvparser.NewCSVParser(&csvparser.CSVConfig{
+		FieldsTerminatedBy: ",",
+		FieldsEnclosedBy:   `"`,
+		FieldsEscapedBy:    `\`,
+		LinesTerminatedBy:  "\n",
+		Null:               []string{`\N`},
+		UnescapedQuote:     true,
+	}, strings.NewReader(buf.String()), csvparser.ReadBlockSize, false)
+	require.NoError(t, err)
+
+	row, err := parser.Read(nil)
+	require.NoError(t, err)
+	require.Len(t, row, 3)
+	assert.Equal(t, `a"b\c`, row[0].Val)
+	assert.False(t, row[0].IsNull)
+	assert.True(t, row[0].HasStringQuote)
+	assert.True(t, row[1].IsNull)
+	assert.Equal(t, `{"x":"y"}`, row[2].Val)
+	assert.False(t, row[2].IsNull)
+	assert.True(t, row[2].HasStringQuote)
+}
+
+func TestWriteSQLLoadCSVFieldFromVec_BitUsesPackedBytes(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := vector.NewVec(types.New(types.T_bit, 1, 0))
+	require.NoError(t, vector.AppendFixed(vec, uint64(1), false, mp))
+
+	var buf bytes.Buffer
+	require.NoError(t, writeSQLLoadCSVFieldFromVec(&buf, *vec.GetType(), []*vector.Vector{vec}, 0, 0))
+	assert.Equal(t, "\"\x01\"", buf.String())
+}
+
+func TestWriteSQLLoadCSVFieldFromVec_JSONUsesVisibleText(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := vector.NewVec(types.T_json.ToType())
+	bj, err := types.ParseStringToByteJson(`{"name":"mo","n":1}`)
+	require.NoError(t, err)
+	stored, err := types.EncodeJson(bj)
+	require.NoError(t, err)
+	require.NoError(t, vector.AppendBytes(vec, stored, false, mp))
+
+	var buf bytes.Buffer
+	require.NoError(t, writeSQLLoadCSVFieldFromVec(&buf, *vec.GetType(), []*vector.Vector{vec}, 0, 0))
+	assert.Equal(t, `"{""n"": 1, ""name"": ""mo""}"`, buf.String())
+}
+
+func TestWriteSQLLoadCSVFieldFromVec_TemporalKeepsScale(t *testing.T) {
+	mp := mpool.MustNewZero()
+	timeVec := vector.NewVec(types.New(types.T_time, 0, 6))
+	datetimeVec := vector.NewVec(types.New(types.T_datetime, 0, 3))
+	timestampVec := vector.NewVec(types.New(types.T_timestamp, 0, 6))
+	require.NoError(t, vector.AppendFixed(timeVec, types.TimeFromClock(false, 11, 22, 33, 123456), false, mp))
+	require.NoError(t, vector.AppendFixed(datetimeVec, types.DatetimeFromClock(2024, 1, 2, 3, 4, 5, 123000), false, mp))
+	require.NoError(t, vector.AppendFixed(timestampVec, types.FromClockZone(time.Local, 2024, 1, 2, 3, 4, 5, 123456), false, mp))
+
+	var buf bytes.Buffer
+	require.NoError(t, writeSQLLoadCSVFieldFromVec(&buf, *timeVec.GetType(), []*vector.Vector{timeVec}, 0, 0))
+	assert.Equal(t, "11:22:33.123456", buf.String())
+	buf.Reset()
+	require.NoError(t, writeSQLLoadCSVFieldFromVec(&buf, *datetimeVec.GetType(), []*vector.Vector{datetimeVec}, 0, 0))
+	assert.Equal(t, "2024-01-02 03:04:05.123", buf.String())
+	buf.Reset()
+	require.NoError(t, writeSQLLoadCSVFieldFromVec(&buf, *timestampVec.GetType(), []*vector.Vector{timestampVec}, 0, 0))
+	assert.Equal(t, "2024-01-02 03:04:05.123456", buf.String())
+}
+
+func TestWriteSQLLoadCSVFieldFromVec_BinaryEscapesControlBytes(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := vector.NewVec(types.T_blob.ToType())
+	require.NoError(t, vector.AppendBytes(vec, []byte{'a', '\n', 0, '\r', '\t', 0x1a, '"', '\\'}, false, mp))
+
+	var buf bytes.Buffer
+	require.NoError(t, writeSQLLoadCSVFieldFromVec(&buf, *vec.GetType(), []*vector.Vector{vec}, 0, 0))
+	assert.Equal(t, `"a\n\0\r\t\Z""\\"`, buf.String())
+}
+
+func TestWriteSQLLoadCSVFieldFromVec_NarrowVectorsQuoted(t *testing.T) {
+	mp := mpool.MustNewZero()
+
+	// Every narrow vector type renders via RowToString as "[1, 2]" — the comma
+	// would split into a spurious CSV column if emitted unquoted. All four must
+	// go through the quoted path and round-trip back as a single field.
+	int8Vec := vector.NewVec(types.New(types.T_array_int8, 2, 0))
+	require.NoError(t, vector.AppendArray[int8](int8Vec, []int8{1, 2}, false, mp))
+	uint8Vec := vector.NewVec(types.New(types.T_array_uint8, 2, 0))
+	require.NoError(t, vector.AppendArray[uint8](uint8Vec, []uint8{3, 4}, false, mp))
+	bf16Vec := vector.NewVec(types.New(types.T_array_bf16, 2, 0))
+	require.NoError(t, vector.AppendArray[types.BF16](bf16Vec, []types.BF16{types.BF16FromFloat32(1), types.BF16FromFloat32(2)}, false, mp))
+	f16Vec := vector.NewVec(types.New(types.T_array_float16, 2, 0))
+	require.NoError(t, vector.AppendArray[types.Float16](f16Vec, []types.Float16{types.Float16FromFloat32(1), types.Float16FromFloat32(2)}, false, mp))
+
+	for _, vec := range []*vector.Vector{int8Vec, uint8Vec, bf16Vec, f16Vec} {
+		require.True(t, shouldQuoteSQLLoadType(*vec.GetType()),
+			"narrow vector %s must be quoted", vec.GetType().Oid)
+
+		var buf bytes.Buffer
+		require.NoError(t, writeSQLLoadCSVFieldFromVec(&buf, *vec.GetType(), []*vector.Vector{vec}, 0, 0))
+		out := buf.String()
+		require.True(t, strings.HasPrefix(out, `"`) && strings.HasSuffix(out, `"`),
+			"%s field must be enclosed in quotes, got %q", vec.GetType().Oid, out)
+
+		// The quoted value must parse back as exactly one field (no comma split).
+		parser, err := csvparser.NewCSVParser(&csvparser.CSVConfig{
+			FieldsTerminatedBy: ",",
+			FieldsEnclosedBy:   `"`,
+			FieldsEscapedBy:    `\`,
+			LinesTerminatedBy:  "\n",
+			Null:               []string{`\N`},
+			UnescapedQuote:     true,
+		}, strings.NewReader(out+"\n"), csvparser.ReadBlockSize, false)
+		require.NoError(t, err)
+		row, err := parser.Read(nil)
+		require.NoError(t, err)
+		require.Len(t, row, 1, "%s must round-trip as a single CSV field, got %v", vec.GetType().Oid, row)
+		require.True(t, row[0].HasStringQuote)
+	}
+}
+
+func TestParseCSVRowOrder(t *testing.T) {
+	order, err := ParseCSVRowOrder("storage")
+	require.NoError(t, err)
+	assert.Equal(t, CSVRowOrderStorage, order)
+
+	order, err = ParseCSVRowOrder("lexical")
+	require.NoError(t, err)
+	assert.Equal(t, CSVRowOrderLexical, order)
+
+	_, err = ParseCSVRowOrder("unknown")
+	require.Error(t, err)
+}

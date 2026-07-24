@@ -75,20 +75,20 @@ func (update *MultiUpdate) delete_table(
 	rowCount = deleteBatch.Vecs[0].Length()
 	if rowCount > 0 {
 		deleteBatch.SetRowCount(rowCount)
+
 		tableType := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].tableType
 		update.addDeleteAffectRows(tableType, uint64(rowCount))
 		source := update.ctr.updateCtxInfos[updateCtx.TableDef.Name].Source
 
 		crs := analyzer.GetOpCounterSet()
 		newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
-		err = source.Delete(newCtx, deleteBatch, catalog.Row_ID)
+		err = process.MeasureFilesystemWaitErr(analyzer, func() error {
+			return source.Delete(newCtx, deleteBatch, catalog.Row_ID)
+		})
 		if err != nil {
 			return err
 		}
 		analyzer.AddDeletedRows(int64(deleteBatch.RowCount()))
-		analyzer.AddS3RequestCount(crs)
-		analyzer.AddFileServiceCacheInfo(crs)
-		analyzer.AddDiskIO(crs)
 	}
 	return
 }

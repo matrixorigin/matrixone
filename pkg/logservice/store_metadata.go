@@ -297,6 +297,7 @@ func (l *store) removeMetadata(shardID uint64, replicaID uint64) {
 		}
 	}
 	l.mu.metadata.Shards = shards
+	delete(l.mu.skippedZombies, zombieKey{shardID: shardID, replicaID: replicaID})
 	l.mustSaveMetadata()
 }
 

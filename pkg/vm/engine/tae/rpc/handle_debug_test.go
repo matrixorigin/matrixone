@@ -50,7 +50,7 @@ func TestHandleBackup(t *testing.T) {
 	h := mockTAEHandle(context.Background(), t, &options.Options{})
 
 	req := &cmd_util.Checkpoint{
-		FlushDuration: time.Second,
+		FlushDuration: 10 * time.Second,
 	}
 	resp := &api.SyncLogTailResp{}
 
@@ -59,6 +59,29 @@ func TestHandleBackup(t *testing.T) {
 	if cb != nil {
 		cb()
 	}
+}
+
+func TestContextForBackupCheckpoint(t *testing.T) {
+	t.Run("inherit caller cancellation without an explicit timeout", func(t *testing.T) {
+		parent, cancelParent := context.WithCancel(context.Background())
+		ctx, cancel := contextForBackupCheckpoint(parent, 0)
+		defer cancel()
+
+		_, hasDeadline := ctx.Deadline()
+		require.False(t, hasDeadline)
+
+		cancelParent()
+		require.ErrorIs(t, ctx.Err(), context.Canceled)
+	})
+
+	t.Run("honor an explicit timeout", func(t *testing.T) {
+		ctx, cancel := contextForBackupCheckpoint(context.Background(), time.Minute)
+		defer cancel()
+
+		deadline, hasDeadline := ctx.Deadline()
+		require.True(t, hasDeadline)
+		require.WithinDuration(t, time.Now().Add(time.Minute), deadline, time.Second)
+	})
 }
 
 func TestHandleDiskCleaner_AddCheckerTTL(t *testing.T) {

@@ -100,10 +100,8 @@ func getUpdateTableInfo(ctx CompilerContext, stmt *tree.Update) (*dmlTableInfo, 
 	}
 
 	// A PostgreSQL-style UPDATE ... FROM may match a single target row from
-	// multiple source rows. Force the agg-based dedup path (any_value over
-	// the target's primary key) just like the classic multi-table syntax
-	// would; without this flag the fallback planner would silently produce
-	// duplicate-row writes.
+	// multiple source rows. Mark it for dedup so the planner does not
+	// produce duplicate-row writes.
 	if stmt.From != nil && len(stmt.From.Tables) > 0 {
 		tblInfo.needAggFilter = true
 	}
@@ -260,10 +258,27 @@ func getUpdateTableInfo(ctx CompilerContext, stmt *tree.Update) (*dmlTableInfo, 
 	return newTblInfo, nil
 }
 
-func checkTableType(ctx context.Context, tableDef *TableDef) error {
+func checkTableType(ctx context.Context, tableDef *TableDef, op string) error {
 	if tableDef.TableType == catalog.SystemSourceRel {
 		return moerr.NewInvalidInput(ctx, "cannot insert/update/delete from source")
 	} else if tableDef.TableType == catalog.SystemExternalRel {
+		isIceberg, err := IsIcebergTableDef(ctx, tableDef)
+		if err != nil {
+			return err
+		}
+		if isIceberg {
+			if op == "insert" {
+				return nil
+			}
+			return moerr.NewInvalidInput(ctx, "cannot update/delete from Iceberg table mapping in P1 append phase")
+		}
+		// A writable external table (created with WRITE_FILE_PATTERN) accepts
+		// INSERT/LOAD; everything else on an external table is rejected.
+		if op == "insert" {
+			if _, ok := GetWriteFilePattern(getExternParamFromTableDef(tableDef)); ok {
+				return nil
+			}
+		}
 		return moerr.NewInvalidInput(ctx, "cannot insert/update/delete from external table")
 	} else if tableDef.TableType == catalog.SystemViewRel {
 		return moerr.NewInvalidInput(ctx, "cannot insert/update/delete from view")
@@ -324,7 +339,7 @@ func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo
 		return moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 	}
 
-	if err := checkTableType(ctx.GetContext(), tableDef); err != nil {
+	if err := checkTableType(ctx.GetContext(), tableDef, tblInfo.typ); err != nil {
 		return err
 	}
 
@@ -503,6 +518,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 		astSlt = stmt.Rows
 
 		subCtx := NewBindContext(builder, bindCtx)
+		subCtx.numericProjectionTypes = insertProjectionTypes(insertColumns, tableDef)
 		info.rootId, err = builder.bindSelect(astSlt, subCtx, false)
 		if err != nil {
 			return false, nil, nil, err
@@ -513,6 +529,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 		astSlt = slt.Select
 
 		subCtx := NewBindContext(builder, bindCtx)
+		subCtx.numericProjectionTypes = insertProjectionTypes(insertColumns, tableDef)
 		info.rootId, err = builder.bindSelect(astSlt, subCtx, false)
 		if err != nil {
 			return false, nil, nil, err
@@ -605,7 +622,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 				return false, nil, nil, err
 			}
 		} else {
-			projExpr, err = forceCastExpr(builder.GetContext(), projExpr, tableDef.Cols[colIdx].Typ)
+			projExpr, err = forceAssignmentCastExpr(builder.GetContext(), projExpr, tableDef.Cols[colIdx].Typ)
 			if err != nil {
 				return false, nil, nil, err
 			}
@@ -655,8 +672,11 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 	// select 'select 0, _t.column_0 from (select * from values (1)) _t(column_0)
 	projectList := make([]*Expr, 0, len(tableDef.Cols))
 	pkCols := make(map[string]struct{})
-	for _, name := range tableDef.Pkey.Names {
-		pkCols[name] = struct{}{}
+	// External tables have no primary key (not even a fake hidden one).
+	if tableDef.Pkey != nil {
+		for _, name := range tableDef.Pkey.Names {
+			pkCols[name] = struct{}{}
+		}
 	}
 	for _, col := range tableDef.Cols {
 		if oldExpr, exists := insertColToExpr[col.Name]; exists {
@@ -724,7 +744,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 			stmt.OnDuplicateUpdate = nil
 		}
 
-		rightTableDef := DeepCopyTableDef(tableDef, true)
+		rightTableDef := CloneTableDefForPlan(tableDef, true)
 		rightObjRef := DeepCopyObjectRef(tableObjRef)
 		uniqueCols, uniqueColNames := GetUniqueColAndIdxFromTableDef(rightTableDef)
 		if rightTableDef.Pkey != nil && rightTableDef.Pkey.PkeyColName == catalog.CPrimaryKeyColName {
@@ -784,7 +804,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 							return false, nil, nil, err
 						}
 					}
-					defExpr, err = forceCastExpr(builder.GetContext(), defExpr, col.Typ)
+					defExpr, err = forceAssignmentCastExpr(builder.GetContext(), defExpr, col.Typ)
 					if err != nil {
 						return false, nil, nil, err
 					}
@@ -989,6 +1009,8 @@ func checkNotNull(ctx context.Context, expr *Expr, tableDef *TableDef, col *ColD
 
 var ForceCastExpr = forceCastExpr
 
+var ForceAssignmentCastExpr = forceAssignmentCastExpr
+
 func forceCastExpr2(ctx context.Context, expr *Expr, t2 types.Type, targetType *plan.Expr) (*Expr, error) {
 	if targetType.Typ.Id == 0 {
 		return expr, nil
@@ -1002,14 +1024,21 @@ func forceCastExpr2(ctx context.Context, expr *Expr, t2 types.Type, targetType *
 	}
 
 	targetType.Typ.NotNullable = expr.Typ.NotNullable
-	fGet, err := function.GetFunctionByName(ctx, "cast", []types.Type{t1, t2})
+	// Assigning a value to a real CHAR/VARCHAR(N) column must keep the strict
+	// width check: an over-length value errors instead of being silently
+	// truncated. Generic casts stay lenient (MySQL-compatible truncation).
+	funcName := "cast"
+	if t2.Oid == types.T_char || t2.Oid == types.T_varchar {
+		funcName = "cast_strict"
+	}
+	fGet, err := function.GetFunctionByName(ctx, funcName, []types.Type{t1, t2})
 	if err != nil {
 		return nil, err
 	}
 	return &plan.Expr{
 		Expr: &plan.Expr_F{
 			F: &plan.Function{
-				Func: &ObjectRef{Obj: fGet.GetEncodedOverloadID(), ObjName: "cast"},
+				Func: &ObjectRef{Obj: fGet.GetEncodedOverloadID(), ObjName: funcName},
 				Args: []*Expr{expr, targetType},
 			},
 		},
@@ -1018,6 +1047,18 @@ func forceCastExpr2(ctx context.Context, expr *Expr, t2 types.Type, targetType *
 }
 
 func forceCastExpr(ctx context.Context, expr *Expr, targetType Type) (*Expr, error) {
+	return forceCastExprWithName(ctx, expr, targetType, "cast")
+}
+
+func forceAssignmentCastExpr(ctx context.Context, expr *Expr, targetType Type) (*Expr, error) {
+	funcName := "cast"
+	if targetType.Id == int32(types.T_char) || targetType.Id == int32(types.T_varchar) {
+		funcName = "cast_strict"
+	}
+	return forceCastExprWithName(ctx, expr, targetType, funcName)
+}
+
+func forceCastExprWithName(ctx context.Context, expr *Expr, targetType Type, funcName string) (*Expr, error) {
 	if targetType.Id == 0 {
 		return expr, nil
 	}
@@ -1030,7 +1071,7 @@ func forceCastExpr(ctx context.Context, expr *Expr, targetType Type) (*Expr, err
 	}
 
 	targetType.NotNullable = expr.Typ.NotNullable
-	fGet, err := function.GetFunctionByName(ctx, "cast", []types.Type{t1, t2})
+	fGet, err := function.GetFunctionByName(ctx, funcName, []types.Type{t1, t2})
 	if err != nil {
 		return nil, err
 	}
@@ -1043,7 +1084,7 @@ func forceCastExpr(ctx context.Context, expr *Expr, targetType Type) (*Expr, err
 	return &plan.Expr{
 		Expr: &plan.Expr_F{
 			F: &plan.Function{
-				Func: &ObjectRef{Obj: fGet.GetEncodedOverloadID(), ObjName: "cast"},
+				Func: &ObjectRef{Obj: fGet.GetEncodedOverloadID(), ObjName: funcName},
 				Args: []*Expr{expr, t},
 			},
 		},
@@ -1605,13 +1646,13 @@ func appendPrimaryConstraintPlan(
 			if pkSize > 1 {
 				pkSize++
 			}
-			scanTableDef := DeepCopyTableDef(tableDef, false)
+			scanTableDef := CloneTableDefForPlan(tableDef, false)
 			scanTableDef.Cols = make([]*ColDef, pkSize)
 			for _, col := range tableDef.Cols {
 				if i, ok := pkNameMap[col.Name]; ok {
-					scanTableDef.Cols[i] = DeepCopyColDef(col)
+					scanTableDef.Cols[i] = col
 				} else if col.Name == scanTableDef.Pkey.PkeyColName {
-					scanTableDef.Cols[pkSize-1] = DeepCopyColDef(col)
+					scanTableDef.Cols[pkSize-1] = col
 					break
 				}
 			}
@@ -1698,13 +1739,13 @@ func appendPrimaryConstraintPlan(
 
 			if isUpdate && updatePkCol { // update stmt && pk included in update cols
 				lastNodeId = appendSinkScanNode(builder, bindCtx, sourceStep)
-				scanTableDef := DeepCopyTableDef(tableDef, false)
+				scanTableDef := CloneTableDefForPlan(tableDef, false)
 
 				rowIdIdx := len(tableDef.Cols)
 				rowIdDef := MakeRowIdColDef()
 				tableDef.Cols = append(tableDef.Cols, rowIdDef)
 
-				scanTableDef.Cols = []*plan.ColDef{DeepCopyColDef(tableDef.Cols[pkPos]), DeepCopyColDef(rowIdDef)}
+				scanTableDef.Cols = []*plan.ColDef{tableDef.Cols[pkPos], rowIdDef}
 
 				scanPkExpr := &Expr{
 					Typ: pkTyp,

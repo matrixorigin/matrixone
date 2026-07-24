@@ -7,7 +7,7 @@ format = "console"
 max-size = 512
 
 [[fileservice]]
-backend = "DISK"
+backend = "DISK-V2"
 data-dir = "./etc/launch-minio-local/mo-data"
 name = "LOCAL"
 
@@ -57,3 +57,10 @@ port = 6001
 disableMetric = false
 enable-metric-to-prom = true
 status-port = 7001
+
+[cn.frontend.iceberg]
+enable = true
+enable-write = true
+enable-delete = true
+enable-dml = true
+enable-maintenance = true

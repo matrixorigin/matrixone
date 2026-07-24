@@ -71,8 +71,9 @@ namespace matrixone {
 //
 // OVERVIEW
 // --------
-// gpu_ivf_pq_t<T> implements an IVF-PQ (Inverted File with Product Quantization)
-// approximate nearest-neighbor index backed by cuVS.
+// gpu_ivf_pq_t<B, T> implements an IVF-PQ (Inverted File with Product Quantization)
+// approximate nearest-neighbor index backed by cuVS (B = base/source element
+// type, T = storage element type; T is 1-byte for scalar-quantized indexes).
 //
 // cuVS type: cuvs::neighbors::ivf_pq::index<int64_t>
 //   Note: the cuVS IVF-PQ index type is NOT templated on T — it always stores
@@ -111,10 +112,10 @@ namespace matrixone {
 //   dataset_device_ptr_ holds the build dataset on device (reset after extend).
 //
 // REPLICATED:
-//   replicated_indices_[dev_id] holds a full copy per GPU (cast to ivf_pq_index*).
+//   replicated_indices_[rank] holds a full copy per rank (cast to ivf_pq_index*).
 //   The replicated dataset pointers (replicated_datasets_) are used during build
 //   and erased after the first extend on each device.
-//   search_internal / search_float_internal use per-thread cached index ptr
+//   search_internal / search_quantize_internal use per-thread cached index ptr
 //   (handle.get_index_ptr()) to avoid repeated map lookups.
 //
 // SHARDED:
@@ -143,7 +144,7 @@ namespace matrixone {
 //   For REPLICATED: uses per-thread cached index ptr to avoid mutex on hot path.
 //   For SHARDED: called once per shard with the shard's local index.
 //
-// search_float_internal(handle, float* queries, ...)
+// search_quantize_internal(handle, B* queries, ...)
 //   Converts float → T on device (quantize for 1-byte T, half-cast for T=half,
 //   direct copy for T=float), then searches the same way as search_internal.
 //
@@ -152,7 +153,7 @@ namespace matrixone {
 //   - SHARDED: sync_shard_bitset() → bitset_filter over shard-local bit slice
 //     Bit j of the shard bitset = global bit (rank * rows_per_shard + j)
 //
-// search_batchable_typed() / search_batchable_float() just submit the search to
+// search_batchable_typed() / search_batchable_quantize() just submit the search to
 // the worker; request-level batching, when enabled (batch_window() > 0),
 // happens inside search_internal via cuVS dynamic_batching (see dynamic_batching.hpp).
 //
@@ -177,18 +178,19 @@ struct ivf_pq_search_result_t {
 /**
  * @brief gpu_ivf_pq_t implements an IVF-PQ index that can run on a single GPU or sharded/replicated across multiple GPUs.
  */
-template <typename T>
-class gpu_ivf_pq_t : public gpu_index_base_t<T, ivf_pq_build_params_t, int64_t> {
+template <typename B, typename T>
+class gpu_ivf_pq_t : public gpu_index_base_t<B, T, ivf_pq_build_params_t, int64_t> {
 public:
+    using base_type    = B;
+    using storage_type = T;
     using ivf_pq_index = cuvs::neighbors::ivf_pq::index<int64_t>;
     using search_result_t = ivf_pq_search_result_t;
     // Inherited dependent type — bring into scope so search_internal can take a
     // const host_mask_bundle_t* parameter without `typename Base::...` everywhere.
-    using host_mask_bundle_t = typename gpu_index_base_t<T, ivf_pq_build_params_t, int64_t>::host_mask_bundle_t;
+    using host_mask_bundle_t = typename gpu_index_base_t<B, T, ivf_pq_build_params_t, int64_t>::host_mask_bundle_t;
 
     // Internal index storage
     std::unique_ptr<ivf_pq_index> index_;
-    std::string data_filename_;    // raw feature-vector file → load_host_matrix in build()
     std::string index_filename_;   // serialized index file → load() in build()
 
     // cuVS dynamic_batching wrappers, keyed by (device_id, k=limit, n_probes).
@@ -210,6 +212,7 @@ public:
         this->count = count_vectors;
         this->metric = m;
         this->build_params = bp;
+        this->set_quantizer_train_limit(bp.quantizer_train_limit);
         this->dist_mode = mode;
         this->devices_ = devices;
         this->current_offset_ = count_vectors;
@@ -241,6 +244,7 @@ public:
         this->count = total_count;
         this->metric = m;
         this->build_params = bp;
+        this->set_quantizer_train_limit(bp.quantizer_train_limit);
         this->dist_mode = mode;
         this->devices_ = devices;
         this->current_offset_ = 0;
@@ -258,26 +262,6 @@ public:
         }
     }
 
-    // Constructor for loading metadata from file (used for tests and data-file builds)
-    gpu_ivf_pq_t(const std::string& filename, distance_type_t m,
-                    const ivf_pq_build_params_t& bp, const std::vector<int>& devices,
-                    uint32_t nthread, distribution_mode_t mode) {
-
-        this->metric = m;
-        this->build_params = bp;
-        this->dist_mode = mode;
-        this->devices_ = devices;
-        this->data_filename_ = filename;
-
-        std::vector<int> worker_devices = this->devices_;
-        if (mode == DistributionMode_SINGLE_GPU && !worker_devices.empty()) {
-            worker_devices = {worker_devices[0]};
-        }
-        this->worker = std::make_unique<cuvs_worker_t>(nthread, worker_devices, mode);
-
-        this->current_offset_ = 0;
-    }
-
     // Constructor for loading a serialized IVF-PQ index from file
     gpu_ivf_pq_t(const std::string& filename, uint32_t dimension, distance_type_t m,
                     const ivf_pq_build_params_t& bp, const std::vector<int>& devices,
@@ -286,6 +270,7 @@ public:
         this->dimension = dimension;
         this->metric = m;
         this->build_params = bp;
+        this->set_quantizer_train_limit(bp.quantizer_train_limit);
         this->dist_mode = mode;
         this->devices_ = devices;
         this->index_filename_ = filename;
@@ -319,7 +304,6 @@ public:
                   << " dim=" << this->dimension
                   << " is_loaded_=" << (this->is_loaded_ ? "true" : "false")
                   << " index_filename_=" << (this->index_filename_.empty() ? "(none)" : this->index_filename_)
-                  << " data_filename_=" << (this->data_filename_.empty() ? "(none)" : this->data_filename_)
                   << " flattened_host_dataset.size()=" << this->flattened_host_dataset.size()
                   << " devices.size()=" << this->devices_.size()
                   << " n_lists=" << this->build_params.n_lists
@@ -339,15 +323,7 @@ public:
         }
         try {
             std::unique_lock<std::shared_mutex> lock(this->mutex_);
-            if (!this->data_filename_.empty() && this->flattened_host_dataset.empty()) {
-                uint64_t rows, cols;
-                load_host_matrix<T>(this->data_filename_, this->flattened_host_dataset, rows, cols);
-                this->count = rows;
-                this->dimension = static_cast<uint32_t>(cols);
-                this->current_offset_ = this->count;
-            } else {
-                this->count = this->current_offset_;
-            }
+            this->count = this->current_offset_;
             if (this->flattened_host_dataset.size() > (size_t)this->count * this->dimension)
                 this->flattened_host_dataset.resize((size_t)this->count * this->dimension);
         } catch (const std::exception& e) {
@@ -368,6 +344,9 @@ public:
                 return;
             }
         }
+        // 1-byte storage T: train the B-source quantizer on the buffered B
+        // sample, transform B->T, and store as T. For float/half storage this
+        // is a no-op.
         this->train_quantizer_if_needed();
         if (!this->worker) throw std::runtime_error("Worker not initialized");
 
@@ -497,16 +476,23 @@ public:
                 raft::resource::sync_stream(*res);
                 log_mem("REPLICATED:before-cuvs-build");
 
-                auto local_idx = std::make_unique<ivf_pq_index>(cuvs::neighbors::ivf_pq::build(
-                    *res, index_params, raft::make_const_mdspan(dataset_device)));
+                // Serialize concurrent builds on the same physical device — cuVS
+                // kmeans is not safe to run twice at once on one GPU (see
+                // device_build_mutex). No-op across distinct real GPUs.
+                std::unique_ptr<ivf_pq_index> local_idx;
+                {
+                    std::lock_guard<std::mutex> build_lk(matrixone::device_build_mutex(handle.get_device_id()));
+                    local_idx = std::make_unique<ivf_pq_index>(cuvs::neighbors::ivf_pq::build(
+                        *res, index_params, raft::make_const_mdspan(dataset_device)));
+                }
                 log_mem("REPLICATED:after-cuvs-build");
 
                 handle.set_index_ptr(static_cast<const ivf_pq_index*>(local_idx.get()));
 
                 {
                     std::unique_lock<std::shared_mutex> lock(this->mutex_);
-                    this->replicated_indices_[handle.get_device_id()] = std::shared_ptr<ivf_pq_index>(std::move(local_idx));
-                    this->replicated_datasets_[handle.get_device_id()] = std::move(dataset_storage);
+                    this->replicated_indices_[handle.get_rank()] = std::shared_ptr<ivf_pq_index>(std::move(local_idx));
+                    this->replicated_datasets_[handle.get_rank()] = std::move(dataset_storage);
                 }
                 handle.sync();
             } else if (this->dist_mode == DistributionMode_SHARDED) {
@@ -542,16 +528,23 @@ public:
                 raft::resource::sync_stream(*res);
                 log_mem("SHARDED:before-cuvs-build");
 
-                auto local_idx = std::make_unique<ivf_pq_index>(cuvs::neighbors::ivf_pq::build(
-                    *res, index_params, raft::make_const_mdspan(dataset_device)));
+                // Serialize concurrent builds on the same physical device — cuVS
+                // kmeans is not safe to run twice at once on one GPU (see
+                // device_build_mutex). No-op across distinct real GPUs.
+                std::unique_ptr<ivf_pq_index> local_idx;
+                {
+                    std::lock_guard<std::mutex> build_lk(matrixone::device_build_mutex(handle.get_device_id()));
+                    local_idx = std::make_unique<ivf_pq_index>(cuvs::neighbors::ivf_pq::build(
+                        *res, index_params, raft::make_const_mdspan(dataset_device)));
+                }
                 log_mem("SHARDED:after-cuvs-build");
 
                 handle.set_index_ptr(static_cast<const ivf_pq_index*>(local_idx.get()));
 
                 {
                     std::unique_lock<std::shared_mutex> lock(this->mutex_);
-                    this->replicated_indices_[handle.get_device_id()] = std::shared_ptr<ivf_pq_index>(std::move(local_idx));
-                    this->replicated_datasets_[handle.get_device_id()] = std::move(dataset_storage);
+                    this->replicated_indices_[handle.get_rank()] = std::shared_ptr<ivf_pq_index>(std::move(local_idx));
+                    this->replicated_datasets_[handle.get_rank()] = std::move(dataset_storage);
                 }
                 handle.sync();
             } else {
@@ -571,8 +564,12 @@ public:
                 raft::resource::sync_stream(*res);
                 log_mem("SINGLE_GPU:before-cuvs-build");
 
-                auto new_idx = std::make_unique<ivf_pq_index>(cuvs::neighbors::ivf_pq::build(
-                    *res, index_params, raft::make_const_mdspan(dataset_device)));
+                std::unique_ptr<ivf_pq_index> new_idx;
+                {
+                    std::lock_guard<std::mutex> build_lk(matrixone::device_build_mutex(handle.get_device_id()));
+                    new_idx = std::make_unique<ivf_pq_index>(cuvs::neighbors::ivf_pq::build(
+                        *res, index_params, raft::make_const_mdspan(dataset_device)));
+                }
                 log_mem("SINGLE_GPU:after-cuvs-build");
 
                 handle.sync();
@@ -624,38 +621,50 @@ public:
             ivf_pq_index* idx_ptr;
             {
                 std::shared_lock<std::shared_mutex> lock(this->mutex_);
-                auto it = this->replicated_indices_.find(handle.get_device_id());
+                auto it = this->replicated_indices_.find(handle.get_rank());
                 if (it == this->replicated_indices_.end())
                     throw std::runtime_error("extend_internal: no index for device");
                 idx_ptr = static_cast<ivf_pq_index*>(it->second.get());
             }
-            cuvs::neighbors::ivf_pq::extend(*res,
-                raft::make_const_mdspan(new_vecs_device), indices_opt, idx_ptr);
+            {
+                // Serialize index-mutating cuVS calls on the same physical device.
+                std::lock_guard<std::mutex> build_lk(matrixone::device_build_mutex(handle.get_device_id()));
+                cuvs::neighbors::ivf_pq::extend(*res,
+                    raft::make_const_mdspan(new_vecs_device), indices_opt, idx_ptr);
+            }
             {
                 std::unique_lock<std::shared_mutex> lock(this->mutex_);
-                this->replicated_datasets_.erase(handle.get_device_id());
+                this->replicated_datasets_.erase(handle.get_rank());
             }
         } else if (this->dist_mode == DistributionMode_SHARDED) {
             // Only the last shard's device calls this; seq_ids are already shard-local.
             ivf_pq_index* idx_ptr;
             {
                 std::shared_lock<std::shared_mutex> lock(this->mutex_);
-                auto it = this->replicated_indices_.find(handle.get_device_id());
+                auto it = this->replicated_indices_.find(handle.get_rank());
                 if (it == this->replicated_indices_.end())
                     throw std::runtime_error("extend_internal: no SHARDED index for device");
                 idx_ptr = static_cast<ivf_pq_index*>(it->second.get());
             }
-            cuvs::neighbors::ivf_pq::extend(*res,
-                raft::make_const_mdspan(new_vecs_device), indices_opt, idx_ptr);
+            {
+                // Serialize index-mutating cuVS calls on the same physical device.
+                std::lock_guard<std::mutex> build_lk(matrixone::device_build_mutex(handle.get_device_id()));
+                cuvs::neighbors::ivf_pq::extend(*res,
+                    raft::make_const_mdspan(new_vecs_device), indices_opt, idx_ptr);
+            }
             {
                 // Erase only the last shard's stale build dataset; other shards' entries remain valid.
                 std::unique_lock<std::shared_mutex> lock(this->mutex_);
-                this->replicated_datasets_.erase(handle.get_device_id());
+                this->replicated_datasets_.erase(handle.get_rank());
             }
         } else {
             if (!index_) throw std::runtime_error("extend_internal: index not built");
-            cuvs::neighbors::ivf_pq::extend(*res,
-                raft::make_const_mdspan(new_vecs_device), indices_opt, index_.get());
+            {
+                // Serialize index-mutating cuVS calls on the same physical device.
+                std::lock_guard<std::mutex> build_lk(matrixone::device_build_mutex(handle.get_device_id()));
+                cuvs::neighbors::ivf_pq::extend(*res,
+                    raft::make_const_mdspan(new_vecs_device), indices_opt, index_.get());
+            }
             {
                 std::unique_lock<std::shared_mutex> lock(this->mutex_);
                 this->dataset_device_ptr_.reset();
@@ -682,38 +691,50 @@ public:
             ivf_pq_index* idx_ptr;
             {
                 std::shared_lock<std::shared_mutex> lock(this->mutex_);
-                auto it = this->replicated_indices_.find(handle.get_device_id());
+                auto it = this->replicated_indices_.find(handle.get_rank());
                 if (it == this->replicated_indices_.end())
                     throw std::runtime_error("extend_internal_float: no index for device");
                 idx_ptr = static_cast<ivf_pq_index*>(it->second.get());
             }
-            cuvs::neighbors::ivf_pq::extend(*res,
-                raft::make_const_mdspan(new_vecs_device), indices_opt, idx_ptr);
+            {
+                // Serialize index-mutating cuVS calls on the same physical device.
+                std::lock_guard<std::mutex> build_lk(matrixone::device_build_mutex(handle.get_device_id()));
+                cuvs::neighbors::ivf_pq::extend(*res,
+                    raft::make_const_mdspan(new_vecs_device), indices_opt, idx_ptr);
+            }
             {
                 std::unique_lock<std::shared_mutex> lock(this->mutex_);
-                this->replicated_datasets_.erase(handle.get_device_id());
+                this->replicated_datasets_.erase(handle.get_rank());
             }
         } else if (this->dist_mode == DistributionMode_SHARDED) {
             // Only the last shard's device calls this; seq_ids are already shard-local.
             ivf_pq_index* idx_ptr;
             {
                 std::shared_lock<std::shared_mutex> lock(this->mutex_);
-                auto it = this->replicated_indices_.find(handle.get_device_id());
+                auto it = this->replicated_indices_.find(handle.get_rank());
                 if (it == this->replicated_indices_.end())
                     throw std::runtime_error("extend_internal_float: no SHARDED index for device");
                 idx_ptr = static_cast<ivf_pq_index*>(it->second.get());
             }
-            cuvs::neighbors::ivf_pq::extend(*res,
-                raft::make_const_mdspan(new_vecs_device), indices_opt, idx_ptr);
+            {
+                // Serialize index-mutating cuVS calls on the same physical device.
+                std::lock_guard<std::mutex> build_lk(matrixone::device_build_mutex(handle.get_device_id()));
+                cuvs::neighbors::ivf_pq::extend(*res,
+                    raft::make_const_mdspan(new_vecs_device), indices_opt, idx_ptr);
+            }
             {
                 // Erase only the last shard's stale build dataset; other shards' entries remain valid.
                 std::unique_lock<std::shared_mutex> lock(this->mutex_);
-                this->replicated_datasets_.erase(handle.get_device_id());
+                this->replicated_datasets_.erase(handle.get_rank());
             }
         } else {
             if (!index_) throw std::runtime_error("extend_internal_float: index not built");
-            cuvs::neighbors::ivf_pq::extend(*res,
-                raft::make_const_mdspan(new_vecs_device), indices_opt, index_.get());
+            {
+                // Serialize index-mutating cuVS calls on the same physical device.
+                std::lock_guard<std::mutex> build_lk(matrixone::device_build_mutex(handle.get_device_id()));
+                cuvs::neighbors::ivf_pq::extend(*res,
+                    raft::make_const_mdspan(new_vecs_device), indices_opt, index_.get());
+            }
             {
                 std::unique_lock<std::shared_mutex> lock(this->mutex_);
                 this->dataset_device_ptr_.reset();
@@ -763,8 +784,34 @@ public:
         return this->search_wait(job_id);
     }
 
-    // Async T-typed filtered search. Mirrors search_float_with_filter_async
-    // but uses search_internal (T) instead of search_float_internal (float).
+    // Quantize a B-source query to the 1-byte storage type T via the B-source
+    // quantizer, writing num_queries*dimension T values into `out`. The caller
+    // then runs the normal native search(const T*) path — so sharding, overflow
+    // and result merge are reused unchanged. No f32 detour.
+    void quantize_query(const B* queries_data, uint64_t num_queries, T* out) {
+        if constexpr (sizeof(T) != 1) {
+            throw std::runtime_error("quantize_query requires a 1-byte storage type (int8/uint8)");
+        } else {
+            uint64_t job = this->worker->submit_main(
+                [this, queries_data, num_queries, out](raft_handle_wrapper_t& handle) -> std::any {
+                    auto res = handle.get_raft_resources();
+                    auto q_b_host = raft::make_host_matrix_view<const B, int64_t>(queries_data, num_queries, this->dimension);
+                    auto q_b_dev = raft::make_device_matrix<B, int64_t>(*res, num_queries, this->dimension);
+                    raft::copy(*res, q_b_dev.view(), q_b_host);
+                    if (!this->quantizer_.is_trained()) throw std::runtime_error("quantizer not trained");
+                    auto q_t_dev = raft::make_device_matrix<T, int64_t>(*res, num_queries, this->dimension);
+                    this->quantizer_.template transform<T>(*res, q_b_dev.view(), q_t_dev.data_handle(), true);
+                    raft::copy(*res, raft::make_host_matrix_view<T, int64_t>(out, num_queries, this->dimension), q_t_dev.view());
+                    handle.sync();
+                    return std::any();
+                });
+            auto r = this->worker->wait(job).get();
+            if (r.error) std::rethrow_exception(r.error);
+        }
+    }
+
+    // Async T-typed filtered search. Mirrors search_quantize_with_filter_async
+    // but uses search_internal (T) instead of search_quantize_internal (B).
     uint64_t search_with_filter_async(const T* queries_data, uint64_t num_queries,
                                       uint32_t query_dimension, uint32_t limit,
                                       const ivf_pq_search_params_t& sp,
@@ -1000,7 +1047,7 @@ public:
         if (!local_index) {
             if (!this->replicated_indices_.empty()) {
                 std::shared_lock<std::shared_mutex> lock(this->mutex_);
-                auto it = this->replicated_indices_.find(handle.get_device_id());
+                auto it = this->replicated_indices_.find(handle.get_rank());
                 if (it != this->replicated_indices_.end()) {
                     auto shared_idx = std::static_pointer_cast<ivf_pq_index>(it->second);
                     local_index = shared_idx.get();
@@ -1027,9 +1074,9 @@ public:
 
         if (local_index) {
             // Reuse per-thread grow-only workspace buffers (Step C). Allocated
-            // once per worker thread out of the RMM pool installed by
-            // ensure_rmm_pool_for_device, then resized lazily to the largest
-            // num_queries seen so far. Eliminates 4-5 cudaMallocs per search.
+            // once per worker thread out of the RMM pool (via worker_pool_mr in
+            // ensure_uvec_), then resized lazily to the largest num_queries seen
+            // so far. Eliminates 4-5 cudaMallocs per search.
             auto& q_buf = handle.template q_dev_buf<T>(static_cast<size_t>(num_queries) * this->dimension);
             auto queries_device = raft::make_device_matrix_view<T, int64_t>(
                 q_buf.data(), static_cast<int64_t>(num_queries), static_cast<int64_t>(this->dimension));
@@ -1179,44 +1226,46 @@ public:
             }
         }
 
-        transform_distance(this->metric, search_res.distances);
+        transform_distance(this->metric, search_res.distances, this->quantized_l2_dequant_factor());
         return search_res;
     }
 
-    // Sync float entry — wraps search_float_async + search_wait.
-    search_result_t search_float(const float* queries_data, uint64_t num_queries, uint32_t query_dimension, uint32_t limit, const ivf_pq_search_params_t& sp) {
-        uint64_t job_id = this->search_float_async(queries_data, num_queries, query_dimension, limit, sp);
+    // Sync quantize entry — wraps search_quantize_async + search_wait.
+    search_result_t search_quantize(const B* queries_data, uint64_t num_queries, uint32_t query_dimension, uint32_t limit, const ivf_pq_search_params_t& sp) {
+        uint64_t job_id = this->search_quantize_async(queries_data, num_queries, query_dimension, limit, sp);
         return this->search_wait(job_id);
     }
 
-    // Sync float filtered entry — wraps search_float_with_filter_async + search_wait.
-    search_result_t search_float_with_filter(const float* queries_data, uint64_t num_queries,
+    // Sync quantize filtered entry — wraps search_quantize_with_filter_async + search_wait.
+    search_result_t search_quantize_with_filter(const B* queries_data, uint64_t num_queries,
                                              uint32_t query_dimension, uint32_t limit,
                                              const ivf_pq_search_params_t& sp,
                                              const std::string& preds_json) {
-        uint64_t job_id = this->search_float_with_filter_async(queries_data, num_queries, query_dimension, limit, sp, preds_json);
+        uint64_t job_id = this->search_quantize_with_filter_async(queries_data, num_queries, query_dimension, limit, sp, preds_json);
         return this->search_wait(job_id);
     }
 
-    // Async variant of search_float_with_filter. Builds the host mask bundle on
+    // Async variant of search_quantize_with_filter. Builds the host mask bundle on
     // the calling thread (same off-worker pattern as the sync filter), copies
     // queries into a shared_ptr so they outlive the Go caller, captures both in
     // the worker lambda, and returns a job_id that search_wait() can collect.
     // Used by the multi-index filter path so per-shard searches run in parallel.
-    uint64_t search_float_with_filter_async(const float* queries_data, uint64_t num_queries,
+    // The query is the BASE type B (float or half); search_quantize_internal
+    // converts it to storage T.
+    uint64_t search_quantize_with_filter_async(const B* queries_data, uint64_t num_queries,
                                             uint32_t query_dimension, uint32_t limit,
                                             const ivf_pq_search_params_t& sp,
                                             const std::string& preds_json) {
         if (!queries_data) throw std::invalid_argument("search_async: queries_data is null");
         if (num_queries == 0) throw std::invalid_argument("search_async: num_queries is 0");
         if (this->dimension == 0) throw std::runtime_error("search_async: index dimension is 0");
-        // Reject mismatched caller dim. search_float_internal sizes its H2D
+        // Reject mismatched caller dim. search_quantize_internal sizes its H2D
         // extent by this->dimension (query_dimension param is unused inside),
         // so passing a different value here would either OOB-read or
         // under-copy host queries. See the T-typed sibling at line ~762.
         if (query_dimension != this->dimension) {
             throw std::invalid_argument(
-                "search_float_with_filter_async: query_dimension (" + std::to_string(query_dimension) +
+                "search_quantize_with_filter_async: query_dimension (" + std::to_string(query_dimension) +
                 ") does not match index dimension (" + std::to_string(this->dimension) + ")");
         }
         {
@@ -1225,7 +1274,7 @@ public:
         }
         if (!this->worker) throw std::runtime_error("Worker not initialized");
 
-        auto queries_copy = std::make_shared<std::vector<float>>(queries_data, queries_data + num_queries * query_dimension);
+        auto queries_copy = std::make_shared<std::vector<B>>(queries_data, queries_data + num_queries * query_dimension);
 
         if (this->dist_mode == DistributionMode_SHARDED) {
             // Bitmap eval runs on the caller's (Go) thread; per-shard searches
@@ -1234,7 +1283,7 @@ public:
             auto shard_masks = this->build_filter_shard_masks(preds_json);
             auto shard_search_task = [this, num_queries, query_dimension, limit, sp, queries_copy, shard_masks](raft_handle_wrapper_t& gpu_handle) -> std::any {
                 int rank = gpu_handle.get_rank();
-                return this->search_float_internal(gpu_handle, queries_copy->data(), num_queries, query_dimension, limit, sp, /*preds_json=*/"", shard_masks[rank].get());
+                return this->search_quantize_internal(gpu_handle, queries_copy->data(), num_queries, query_dimension, limit, sp, /*preds_json=*/"", shard_masks[rank].get());
             };
             auto job_ids = this->worker->submit_all_devices_no_wait(shard_search_task);
             return this->worker->submit_composite_pending(std::move(job_ids), num_queries, limit);
@@ -1246,19 +1295,19 @@ public:
         // would force serialization through main_thread_ and lose batching.
         auto mask = this->build_filter_single_mask(preds_json);
         auto task = [this, num_queries, query_dimension, limit, sp, queries_copy, mask](raft_handle_wrapper_t& handle) -> std::any {
-            return this->search_float_internal(handle, queries_copy->data(), num_queries, query_dimension, limit, sp, /*preds_json=*/"", mask.get());
+            return this->search_quantize_internal(handle, queries_copy->data(), num_queries, query_dimension, limit, sp, /*preds_json=*/"", mask.get());
         };
         return this->worker->submit(task);
     }
 
-    uint64_t search_float_async(const float* queries_data, uint64_t num_queries, uint32_t query_dimension, uint32_t limit, const ivf_pq_search_params_t& sp) {
+    uint64_t search_quantize_async(const B* queries_data, uint64_t num_queries, uint32_t query_dimension, uint32_t limit, const ivf_pq_search_params_t& sp) {
         if (!queries_data) throw std::invalid_argument("search_async: queries_data is null");
         if (num_queries == 0) throw std::invalid_argument("search_async: num_queries is 0");
         if (this->dimension == 0) throw std::runtime_error("search_async: index dimension is 0");
-        // Reject mismatched caller dim — see search_float_with_filter_async.
+        // Reject mismatched caller dim — see search_quantize_with_filter_async.
         if (query_dimension != this->dimension) {
             throw std::invalid_argument(
-                "search_float_async: query_dimension (" + std::to_string(query_dimension) +
+                "search_quantize_async: query_dimension (" + std::to_string(query_dimension) +
                 ") does not match index dimension (" + std::to_string(this->dimension) + ")");
         }
         {
@@ -1266,13 +1315,13 @@ public:
             if (!this->is_loaded_ || (!index_ && this->replicated_indices_.empty())) throw std::runtime_error("search_async: index not loaded");
         }
 
-        auto queries_copy = std::make_shared<std::vector<float>>(queries_data, queries_data + num_queries * query_dimension);
+        auto queries_copy = std::make_shared<std::vector<B>>(queries_data, queries_data + num_queries * query_dimension);
 
         if (this->dist_mode == DistributionMode_SHARDED) {
             // Same shape as search_async — fan out, hand back a composite id,
             // let search_wait() do the merge on the caller's thread.
             auto shard_search_task = [this, num_queries, query_dimension, limit, sp, queries_copy](raft_handle_wrapper_t& gpu_handle) -> std::any {
-                return this->search_float_internal(gpu_handle, queries_copy->data(), num_queries, query_dimension, limit, sp);
+                return this->search_quantize_internal(gpu_handle, queries_copy->data(), num_queries, query_dimension, limit, sp);
             };
             auto job_ids = this->worker->submit_all_devices_no_wait(shard_search_task);
             return this->worker->submit_composite_pending(std::move(job_ids), num_queries, limit);
@@ -1280,22 +1329,26 @@ public:
 
         // Single-GPU / replicated: the helper decides standalone vs fused; the
         // shared_ptr keeps the copied queries alive until the search runs.
-        return this->search_batchable_float(queries_copy, queries_copy->data(), num_queries, limit, sp);
+        return this->search_batchable_quantize(queries_copy, queries_copy->data(), num_queries, limit, sp);
     }
 
-    // float32-input search. Mirrors search_batchable_typed but calls
-    // search_float_internal; request-level batching (if enabled) happens inside it.
-    uint64_t search_batchable_float(std::shared_ptr<std::vector<float>> owner, const float* queries_data,
+    // Base-typed (B) quantize search. Mirrors search_batchable_typed but calls
+    // search_quantize_internal; request-level batching (if enabled) happens inside it.
+    uint64_t search_batchable_quantize(std::shared_ptr<std::vector<B>> owner, const B* queries_data,
                                     uint64_t num_queries, uint32_t limit, const ivf_pq_search_params_t& sp) {
         if (!this->worker) throw std::runtime_error("Worker not initialized");
         auto task = [this, owner, queries_data, num_queries, limit, sp](raft_handle_wrapper_t& handle) -> std::any {
-            return this->search_float_internal(handle, queries_data, num_queries, this->dimension, limit, sp);
+            return this->search_quantize_internal(handle, queries_data, num_queries, this->dimension, limit, sp);
         };
         return this->worker->submit(task);
     }
 
     // See `search_internal` for the contract on `prebuilt`.
-    search_result_t search_float_internal(raft_handle_wrapper_t& handle, const float* queries_data, uint64_t num_queries, uint32_t /*query_dimension*/,
+    // Takes the query in the BASE element type B (float or half) and converts
+    // it to the storage type T on-device — see the cagra search_quantize_internal
+    // comment. B==T copies straight, sizeof(T)==1 quantizes B -> int8/uint8, and
+    // the (B=float, T=half) instantiation casts f32 -> f16 on the host.
+    search_result_t search_quantize_internal(raft_handle_wrapper_t& handle, const B* queries_data, uint64_t num_queries, uint32_t /*query_dimension*/,
                         uint32_t limit, const ivf_pq_search_params_t& sp, const std::string& preds_json = "", const host_mask_bundle_t* prebuilt = nullptr) {
         auto res = handle.get_raft_resources();
         // Step C: reuse the per-thread T-typed query workspace buffer.
@@ -1304,29 +1357,28 @@ public:
         auto q_dev_t = raft::make_device_matrix_view<T, int64_t>(
             q_buf_t.data(), static_cast<int64_t>(num_queries), static_cast<int64_t>(this->dimension));
 
-        if constexpr (std::is_same_v<T, float>) {
-            raft::copy(*res, q_dev_t, raft::make_host_matrix_view<const float, int64_t>(queries_data, num_queries, this->dimension));
-        } else if constexpr (std::is_same_v<T, __half>) {
-            // Cast fp32 → fp16 on the host (F16C / AVX, IEEE round-to-nearest-even
-            // — bit-identical to mdspan_copy_kernel<__half>) into a pinned
-            // staging buffer, then a single H2D copy moves half the bytes.
-            // This eliminates one device alloc (q_dev_f), one full H2D fp32
-            // upload, and the per-search mdspan_copy_kernel<__half> dispatch.
+        if constexpr (std::is_same_v<T, B>) {
+            // B == T (float->float or half->half): no conversion.
+            raft::copy(*res, q_dev_t, raft::make_host_matrix_view<const T, int64_t>(queries_data, num_queries, this->dimension));
+        } else if constexpr (sizeof(T) == 1) {
+            // sizeof(T) == 1: quantize the base-typed query B -> int8/uint8.
+            // Stage the B query on its own per-thread device workspace (distinct
+            // from q_buf_t — see q_dev_buf<U>), then transform B -> T on-device.
+            if (!this->quantizer_.is_trained()) throw std::runtime_error("Quantizer not trained");
+            auto& q_buf_b = handle.template q_dev_buf<B>(n_q_elems);
+            auto q_dev_b = raft::make_device_matrix_view<B, int64_t>(
+                q_buf_b.data(), static_cast<int64_t>(num_queries), static_cast<int64_t>(this->dimension));
+            raft::copy(*res, q_dev_b, raft::make_host_matrix_view<const B, int64_t>(queries_data, num_queries, this->dimension));
+            this->quantizer_.template transform<T>(*res, q_dev_b, q_buf_t.data(), true);
+        } else {
+            // B != T and sizeof(T) != 1: only (B=float, T=half). Cast fp32 → fp16
+            // on the host (F16C / AVX, IEEE round-to-nearest-even — bit-identical
+            // to mdspan_copy_kernel<__half>) into a pinned staging buffer, then a
+            // single H2D copy moves half the bytes.
             __half* host_h = handle.ensure_host_half_buf(n_q_elems);
             matrixone::cast_float_to_half_host(queries_data, host_h, n_q_elems);
             raft::copy(*res, q_dev_t,
                 raft::make_host_matrix_view<const __half, int64_t>(host_h, num_queries, this->dimension));
-        } else {
-            // sizeof(T) == 1: int8 quantizer path keeps an fp32 device copy
-            // because quantizer_.transform reads it on-device. Reuse the
-            // per-thread float workspace too.
-            auto& q_buf_f = handle.q_dev_buf_float(n_q_elems);
-            auto q_dev_f = raft::make_device_matrix_view<float, int64_t>(
-                q_buf_f.data(), static_cast<int64_t>(num_queries), static_cast<int64_t>(this->dimension));
-            raft::copy(*res, q_dev_f, raft::make_host_matrix_view<const float, int64_t>(queries_data, num_queries, this->dimension));
-
-            if (!this->quantizer_.is_trained()) throw std::runtime_error("Quantizer not trained");
-            this->quantizer_.template transform<T>(*res, q_dev_f, q_buf_t.data(), true);
         }
         // Legacy path syncs to drain queries DMA before the stack-local host
         // bitmap inside build_search_bitset goes through its own sync. Prebuilt
@@ -1367,7 +1419,7 @@ public:
         if (!local_index) {
             if (!this->replicated_indices_.empty()) {
                 std::shared_lock<std::shared_mutex> lock(this->mutex_);
-                auto it = this->replicated_indices_.find(handle.get_device_id());
+                auto it = this->replicated_indices_.find(handle.get_rank());
                 if (it != this->replicated_indices_.end()) {
                     auto shared_idx = std::static_pointer_cast<ivf_pq_index>(it->second);
                     local_index = shared_idx.get();
@@ -1512,7 +1564,7 @@ public:
             }
         }
 
-        transform_distance(this->metric, search_res.distances);
+        transform_distance(this->metric, search_res.distances, this->quantized_l2_dequant_factor());
         return search_res;
     }
 
@@ -1524,7 +1576,7 @@ public:
                 auto res = handle.get_raft_resources();
                 const ivf_pq_index* local_index = nullptr;
                 if (!this->replicated_indices_.empty()) {
-                    auto it = this->replicated_indices_.find(handle.get_device_id());
+                    auto it = this->replicated_indices_.find(handle.get_rank());
                     if (it != this->replicated_indices_.end()) {
                         local_index = std::static_pointer_cast<ivf_pq_index>(it->second).get();
                     }
@@ -1549,7 +1601,14 @@ public:
                 if constexpr (sizeof(T) == 1) {
                     if (!this->quantizer_.is_trained()) throw std::runtime_error("Quantizer not trained");
                     auto centers_float_view = raft::make_device_matrix_view<const float, int64_t>(centers_view.data_handle(), n_centers, dim_ext);
-                    this->quantizer_.template transform<T>(*res, centers_float_view, centers_device_target.data_handle(), true);
+                    if constexpr (std::is_same_v<B, float>) {
+                        this->quantizer_.template transform<T>(*res, centers_float_view, centers_device_target.data_handle(), true);
+                    } else {
+                        // B == half: cast cuVS's float centers to half, then transform.
+                        auto centers_b = raft::make_device_matrix<B, int64_t>(*res, n_centers, dim_ext);
+                        raft::copy(*res, centers_b.view(), centers_float_view);
+                        this->quantizer_.template transform<T>(*res, centers_b.view(), centers_device_target.data_handle(), true);
+                    }
                 } else {
                     raft::copy(*res, centers_device_target.view(), centers_view);
                 }
@@ -1573,7 +1632,7 @@ public:
     }
 
     std::string info() const override {
-        std::string json = gpu_index_base_t<T, ivf_pq_build_params_t, int64_t>::info();
+        std::string json = gpu_index_base_t<B, T, ivf_pq_build_params_t, int64_t>::info();
         json += ", \"type\": \"IVF-PQ\", \"ivf_pq\": {";
         if (index_) json += "\"mode\": \"Single-GPU\", \"size\": " + std::to_string(index_->size());
         else if (!this->replicated_indices_.empty()) json += "\"mode\": \"Local-Indices\", \"ranks\": " + std::to_string(this->replicated_indices_.size());
@@ -1596,8 +1655,8 @@ public:
                     cuvs::neighbors::ivf_pq::serialize(*(handle.get_raft_resources()), filename, *index_);
                 } else {
                     // REPLICATED: serialize the local replica if present, else any other.
-                    int dev_id = handle.get_device_id();
-                    auto it = this->replicated_indices_.find(dev_id);
+                    int key = handle.get_rank();
+                    auto it = this->replicated_indices_.find(key);
                     if (it == this->replicated_indices_.end())
                         it = this->replicated_indices_.begin();
                     if (it == this->replicated_indices_.end())
@@ -1636,7 +1695,7 @@ public:
                 if (this->dist_mode == DistributionMode_SINGLE_GPU) {
                     index_ = std::move(local_idx);
                 } else {
-                    this->replicated_indices_[handle.get_device_id()] =
+                    this->replicated_indices_[handle.get_rank()] =
                         std::shared_ptr<ivf_pq_index>(std::move(local_idx));
                 }
             }
@@ -1700,8 +1759,8 @@ public:
         } else if (this->dist_mode == DistributionMode_REPLICATED) {
             uint64_t job_id = this->worker->submit_main(
                 [&](raft_handle_wrapper_t& handle) -> std::any {
-                    int dev_id = handle.get_device_id();
-                    auto it = this->replicated_indices_.find(dev_id);
+                    int key = handle.get_rank();
+                    auto it = this->replicated_indices_.find(key);
                     if (it == this->replicated_indices_.end())
                         it = this->replicated_indices_.begin();
                     if (it == this->replicated_indices_.end())
@@ -1721,7 +1780,7 @@ public:
                 [&](raft_handle_wrapper_t& handle) -> std::any {
                     int rank = handle.get_rank();
                     std::string shard_file = dir + "/shard_" + std::to_string(rank) + ".bin";
-                    auto it = this->replicated_indices_.find(handle.get_device_id());
+                    auto it = this->replicated_indices_.find(handle.get_rank());
                     if (it != this->replicated_indices_.end()) {
                         cuvs::neighbors::ivf_pq::serialize(
                             *(handle.get_raft_resources()), shard_file,
@@ -1820,7 +1879,7 @@ public:
                     this->count           = static_cast<uint64_t>(local_idx->size());
                     this->dimension       = static_cast<uint32_t>(local_idx->dim());
                     this->current_offset_ = this->count;
-                    this->replicated_indices_[handle.get_device_id()] =
+                    this->replicated_indices_[handle.get_rank()] =
                         std::shared_ptr<ivf_pq_index>(std::move(local_idx));
                     return std::any();
                 }
@@ -1843,7 +1902,7 @@ public:
                     // (idempotent). count / current_offset_ are aggregate values
                     // pulled from the manifest after submit, below.
                     this->dimension = static_cast<uint32_t>(local_idx->dim());
-                    this->replicated_indices_[handle.get_device_id()] =
+                    this->replicated_indices_[handle.get_rank()] =
                         std::shared_ptr<ivf_pq_index>(std::move(local_idx));
                     return std::any();
                 }
@@ -1868,13 +1927,22 @@ public:
         // dynb_cache_ has its own mutex, so this is safe vs. an in-flight search
         // (which keeps the wrapper alive via its own shared_ptr).
         this->dynb_cache_.clear();
+        // ALL GPU-memory holders must also be freed *before* worker->stop().
+        // index_ / replicated_* / quantizer_ / dataset_device_ptr_ free device
+        // memory back into the per-device RMM pool; that free must run while the
+        // worker's CUDA streams are still alive. Freeing after stop() tags the
+        // pool's freed blocks with destroyed streams, which later poisons an
+        // unrelated GPU allocation (e.g. a pairwise-distance device_buffer)
+        // and aborts in the pool's do_deallocate (cudaErrorInvalidResourceHandle).
+        {
+            std::unique_lock<std::shared_mutex> lock(this->mutex_);
+            index_.reset();
+            this->replicated_indices_.clear();
+            this->replicated_datasets_.clear();
+            this->quantizer_.reset();
+            this->dataset_device_ptr_.reset();
+        }
         if (this->worker) this->worker->stop();
-        std::unique_lock<std::shared_mutex> lock(this->mutex_);
-        index_.reset();
-        this->replicated_indices_.clear();
-        this->replicated_datasets_.clear();
-        this->quantizer_.reset();
-        this->dataset_device_ptr_.reset();
     }
 
     uint32_t get_dim() const { return this->dimension; }

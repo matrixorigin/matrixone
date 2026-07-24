@@ -17,7 +17,9 @@ package function
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
@@ -432,6 +434,158 @@ func Test_IffCheck_MixedTypes(t *testing.T) {
 	}
 }
 
+func TestIffCheck_PreservesSupportedConditionTypes(t *testing.T) {
+	tests := []struct {
+		name string
+		cond types.Type
+		want types.Type
+	}{
+		{"null", types.T_any.ToType(), types.T_bool.ToType()},
+		{"int", types.T_int64.ToType(), types.T_int64.ToType()},
+		{"float", types.T_float64.ToType(), types.T_float64.ToType()},
+		{"decimal", types.New(types.T_decimal128, 20, 4), types.New(types.T_decimal128, 20, 4)},
+		{"bit", types.T_bit.ToType(), types.T_bit.ToType()},
+		{"varchar", types.T_varchar.ToType(), types.T_varchar.ToType()},
+		{"binary", types.T_binary.ToType(), types.T_binary.ToType()},
+		{"varbinary", types.T_varbinary.ToType(), types.T_varbinary.ToType()},
+		{"blob", types.T_blob.ToType(), types.T_blob.ToType()},
+		{"text", types.T_text.ToType(), types.T_text.ToType()},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := iffCheck(nil, []types.Type{
+				tt.cond,
+				types.T_int64.ToType(),
+				types.T_int64.ToType(),
+			})
+			require.NotEqual(t, failedFunctionParametersWrong, result.status)
+			if result.status == succeedWithCast {
+				require.Equal(t, tt.want, result.finalType[0])
+			}
+		})
+	}
+}
+
+func TestIffConditionTruthyAt(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	stringVec := newVectorByType(proc.Mp(), types.T_varchar.ToType(),
+		[]string{
+			"0", "  -2.5 ", "+0x10", "0b1010", "NaN", "1abc", "bad", "",
+			".5xyz", "1e2foo", "1eabc", "-0suffix", "   ",
+		}, nil)
+	for row, want := range []bool{
+		false, true, true, true, true, true, false, false,
+		true, true, true, false, false,
+	} {
+		got, err := IffConditionTruthyAt(stringVec, uint64(row), SQLCompatibilityMySQL)
+		require.NoError(t, err)
+		require.Equal(t, want, got)
+	}
+	for _, row := range []uint64{5, 6, 7, 8, 9, 10, 11, 12} {
+		_, err := IffConditionTruthyAt(stringVec, row, SQLCompatibilityMatrixOne)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+	}
+
+	binaryVec := newVectorByType(proc.Mp(), types.T_varbinary.ToType(),
+		[]string{"\x00", "16", "\x10", "0x10\x00"}, nil)
+	binaryVec.SetIsBin(true)
+	for row, want := range []bool{false, true, true, true} {
+		got, err := IffConditionTruthyAt(binaryVec, uint64(row), SQLCompatibilityMySQL)
+		require.NoError(t, err)
+		require.Equal(t, want, got)
+	}
+
+	intVec := newVectorByType(proc.Mp(), types.T_int64.ToType(), []int64{0, -1, 9}, nil)
+	intVec.GetNulls().Add(2)
+	for row, want := range []bool{false, true, false} {
+		got, err := IffConditionTruthyAt(intVec, uint64(row), SQLCompatibilityMySQL)
+		require.NoError(t, err)
+		require.Equal(t, want, got)
+	}
+
+	floatVec := newVectorByType(proc.Mp(), types.T_float64.ToType(), []float64{0, -0.1, 1}, nil)
+	floatVec.GetNulls().Add(2)
+	for row, want := range []bool{false, true, false} {
+		got, err := IffConditionTruthyAt(floatVec, uint64(row), SQLCompatibilityMySQL)
+		require.NoError(t, err)
+		require.Equal(t, want, got)
+	}
+
+	decimalVec := newVectorByType(proc.Mp(), types.New(types.T_decimal64, 10, 1), []types.Decimal64{0, 1, 1}, nil)
+	decimalVec.GetNulls().Add(2)
+	for row, want := range []bool{false, true, false} {
+		got, err := IffConditionTruthyAt(decimalVec, uint64(row), SQLCompatibilityMySQL)
+		require.NoError(t, err)
+		require.Equal(t, want, got)
+	}
+
+	bitVec := newVectorByType(proc.Mp(), types.T_bit.ToType(), []uint64{0, 1, 1}, nil)
+	bitVec.GetNulls().Add(2)
+	for row, want := range []bool{false, true, false} {
+		got, err := IffConditionTruthyAt(bitVec, uint64(row), SQLCompatibilityMySQL)
+		require.NoError(t, err)
+		require.Equal(t, want, got)
+	}
+}
+
+func TestIffFn_StringCondition(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	tc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"0", "0x10", "  -2.5 "}, nil),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{10, 11, 12}, nil),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{20, 21, 22}, nil),
+		},
+		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{20, 11, 12}, nil), iffFn)
+	succeed, info := tc.Run()
+	require.True(t, succeed, info)
+}
+
+func TestIffFn_DecimalConditionBatch(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	tc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.New(types.T_decimal64, 10, 1), []types.Decimal64{0, 1, 1}, []bool{false, false, true}),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{10, 11, 12}, nil),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{20, 21, 22}, nil),
+		},
+		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{20, 11, 22}, nil), iffFn)
+	succeed, info := tc.Run()
+	require.True(t, succeed, info)
+}
+
+func TestIffFn_SkipsInactiveRows(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	tc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"0x10", "bad", "0"}, nil),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{10, 11, 12}, nil),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{20, 21, 22}, nil),
+		},
+		NewFunctionTestResult(types.T_int64.ToType(), false, nil, nil), iffFn)
+
+	require.NoError(t, tc.result.PreExtendAndReset(tc.fnLength))
+	err := iffFn(tc.parameters, tc.result, proc, tc.fnLength,
+		&FunctionSelectList{AnyNull: true, SelectList: []bool{true, false, true}})
+	require.NoError(t, err)
+	result := tc.result.GetResultVector()
+	require.Equal(t, tc.fnLength, result.Length())
+	require.Equal(t, int64(10), vector.GetFixedAtNoTypeCheck[int64](result, 0))
+	require.True(t, result.GetNulls().Contains(1))
+	require.Equal(t, int64(22), vector.GetFixedAtNoTypeCheck[int64](result, 2))
+
+	require.NoError(t, tc.result.PreExtendAndReset(tc.fnLength))
+	err = iffFn(tc.parameters, tc.result, proc, tc.fnLength, &FunctionSelectList{AllNull: true})
+	require.NoError(t, err)
+	result = tc.result.GetResultVector()
+	require.Equal(t, tc.fnLength, result.Length())
+	for i := uint64(0); i < uint64(tc.fnLength); i++ {
+		require.True(t, result.GetNulls().Contains(i))
+	}
+}
+
 func Test_CaseCheck_MixedStringNumeric(t *testing.T) {
 	inputs := []types.Type{
 		types.T_bool.ToType(),
@@ -706,6 +860,34 @@ func Test_IffCheck_Decimal256OverflowFails(t *testing.T) {
 	require.Equal(t, failedFunctionParametersWrong, result.status)
 }
 
+func Test_CaseCheck_TextStringBranchesStayText(t *testing.T) {
+	inputs := []types.Type{
+		types.T_bool.ToType(),
+		types.T_text.ToType(),
+		types.New(types.T_varchar, 255, 0),
+	}
+	result := caseCheck(nil, inputs)
+	require.Equal(t, succeedWithCast, result.status)
+	require.Len(t, result.finalType, len(inputs))
+	require.Equal(t, types.T_bool, result.finalType[0].Oid)
+	require.Equal(t, types.T_text, result.finalType[1].Oid)
+	require.Equal(t, types.T_text, result.finalType[2].Oid)
+}
+
+func Test_IffCheck_TextStringBranchesStayText(t *testing.T) {
+	inputs := []types.Type{
+		types.T_bool.ToType(),
+		types.T_text.ToType(),
+		types.New(types.T_varchar, 255, 0),
+	}
+	result := iffCheck(nil, inputs)
+	require.Equal(t, succeedWithCast, result.status)
+	require.Len(t, result.finalType, len(inputs))
+	require.Equal(t, types.T_bool, result.finalType[0].Oid)
+	require.Equal(t, types.T_text, result.finalType[1].Oid)
+	require.Equal(t, types.T_text, result.finalType[2].Oid)
+}
+
 func Test_CoalesceCheck_MixedStringNumeric(t *testing.T) {
 	overloads := []overload{
 		{args: []types.T{types.T_varchar}},
@@ -724,6 +906,26 @@ func Test_CoalesceCheck_MixedStringNumeric(t *testing.T) {
 	for _, typ := range result.finalType {
 		require.True(t, typ.Oid.IsMySQLString())
 		require.Equal(t, int32(types.MaxVarBinaryLen), typ.Width)
+	}
+}
+
+func Test_CoalesceCheck_TextStringBranchesStayText(t *testing.T) {
+	overloads := []overload{
+		{args: []types.T{types.T_varchar}},
+		{args: []types.T{types.T_char}},
+		{args: []types.T{types.T_text}},
+	}
+	inputs := []types.Type{
+		types.T_text.ToType(),
+		types.New(types.T_varchar, 255, 0),
+		types.New(types.T_char, 1, 0),
+	}
+	result := coalesceCheck(overloads, inputs)
+	require.Equal(t, succeedWithCast, result.status)
+	require.Equal(t, 2, result.idx)
+	require.Len(t, result.finalType, len(inputs))
+	for _, typ := range result.finalType {
+		require.Equal(t, types.T_text, typ.Oid)
 	}
 }
 

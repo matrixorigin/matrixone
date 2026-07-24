@@ -132,7 +132,10 @@ var (
 	ErrClientClosing = moerr.NewClientClosedNoCtx()
 )
 
-const defaultAutoCreateWaitTimeout = 0 // 0 means wait until context deadline (legacy behavior)
+const (
+	defaultAutoCreateWaitTimeout = 0 // 0 means wait until context deadline (legacy behavior)
+	maxConcurrentBackendCleanups = 64
+)
 
 // RetryPolicy defines retry behavior for morpc client operations.
 type RetryPolicy struct {
@@ -302,6 +305,18 @@ type client struct {
 	factory     BackendFactory
 	createC     chan string
 	gcInactiveC chan string
+	closedC     chan struct{}
+
+	// backendCleanup owns closes after a backend has been detached from pool
+	// admission, including asynchronous retirement and synchronous targeted
+	// reset. Add is serialized by mu and is forbidden after mu.closing becomes
+	// true, so Close can safely wait after sealing admission.
+	backendCleanup      sync.WaitGroup
+	backendCleanupSlots chan struct{}
+	// backendCreate covers factory I/O that passed the closing/generation gate.
+	// Add is performed under mu before the I/O starts, so Close can seal new
+	// admissions and then safely join every already-started create.
+	backendCreate sync.WaitGroup
 
 	mu struct {
 		sync.Mutex
@@ -309,6 +324,15 @@ type client struct {
 		closed   bool // true when Close() is completed
 		backends map[string][]Backend
 		ops      map[string]*op
+		// backendGeneration invalidates create requests captured before a
+		// targeted reset. Pointer identity avoids ABA when an entry is evicted
+		// and later recreated for the same remote.
+		backendGeneration map[string]*backendGeneration
+		// creating deduplicates factory I/O per remote generation without
+		// holding mu across DNS or network connection work. Its completion
+		// channel lets top-level operations wait for an actual state change
+		// instead of polling with exponential backoff.
+		creating map[string]*backendCreateState
 	}
 
 	circuitBreakers *CircuitBreakerManager
@@ -339,9 +363,16 @@ func NewClient(
 		metrics:     newMetrics(name),
 		factory:     factory,
 		gcInactiveC: make(chan string),
+		closedC:     make(chan struct{}),
+		backendCleanupSlots: make(
+			chan struct{},
+			maxConcurrentBackendCleanups,
+		),
 	}
 	c.mu.backends = make(map[string][]Backend)
 	c.mu.ops = make(map[string]*op)
+	c.mu.backendGeneration = make(map[string]*backendGeneration)
+	c.mu.creating = make(map[string]*backendCreateState)
 
 	for _, opt := range options {
 		opt(c)
@@ -428,9 +459,11 @@ func (c *client) Send(ctx context.Context, backend string, request Message) (*Fu
 		panic("client Send nil context")
 	}
 
-	// Check circuit breaker before attempting
-	if !c.circuitBreakers.Allow(backend) {
-		return nil, c.circuitBreakers.GetError(backend)
+	// Pin the breaker incarnation for this request. A targeted backend reset
+	// detaches it, so a late result cannot affect the replacement generation.
+	breaker := c.circuitBreakers.newHandle(backend)
+	if !breaker.Allow() {
+		return nil, breaker.Error()
 	}
 
 	policy := c.options.retryPolicy
@@ -440,12 +473,12 @@ func (c *client) Send(ctx context.Context, backend string, request Message) (*Fu
 
 	for {
 		// Check circuit breaker before each retry attempt
-		if !c.circuitBreakers.Allow(backend) {
+		if !breaker.Allow() {
 			// Don't record failure - circuit is already open
-			return nil, c.circuitBreakers.GetError(backend)
+			return nil, breaker.Error()
 		}
 
-		b, err := c.getBackend(backend, false)
+		b, backendCreate, err := c.getBackendForOperation(backend, false)
 		if err != nil {
 			// Handle circuit breaker errors - both open and half-open (exhausted probes) reject immediately
 			if errors.Is(err, ErrCircuitOpen) || errors.Is(err, ErrCircuitHalfOpen) {
@@ -463,7 +496,7 @@ func (c *client) Send(ctx context.Context, backend string, request Message) (*Fu
 				shouldContinue, waitErr := c.handleAutoCreateWait(ctx, backend, &creationStart, retryCount)
 				if !shouldContinue {
 					// Record circuit breaker failure on timeout
-					c.circuitBreakers.RecordFailure(backend)
+					breaker.RecordFailure()
 					return nil, waitErr
 				}
 
@@ -475,18 +508,24 @@ func (c *client) Send(ctx context.Context, backend string, request Message) (*Fu
 						zap.Int("retries", retryCount),
 						zap.Error(err))
 					// Record circuit breaker failure on max retries
-					c.circuitBreakers.RecordFailure(backend)
+					breaker.RecordFailure()
 					return nil, err
 				}
 
 				// Calculate next backoff with jitter
 				backoff = policy.nextBackoff(backoff)
-				if backoff > 0 {
-					select {
-					case <-ctx.Done():
-						return nil, ctx.Err()
-					case <-time.After(backoff):
+				if waitErr := c.waitBackendChange(
+					ctx,
+					backend,
+					creationStart,
+					backendCreate,
+					backoff,
+				); waitErr != nil {
+					if !errors.Is(waitErr, context.Canceled) &&
+						!errors.Is(waitErr, context.DeadlineExceeded) {
+						breaker.RecordFailure()
 					}
+					return nil, waitErr
 				}
 				continue
 			}
@@ -494,14 +533,15 @@ func (c *client) Send(ctx context.Context, backend string, request Message) (*Fu
 			// Don't count client-level errors (like ErrClientClosed) as circuit breaker failures
 			// Only count backend-related errors
 			if !moerr.IsMoErrCode(err, moerr.ErrClientClosed) {
-				c.circuitBreakers.RecordFailure(backend)
+				breaker.RecordFailure()
 			}
 			return nil, err
 		}
 
 		f, err := b.Send(ctx, request)
-		if err != nil && err == backendClosed {
-			c.circuitBreakers.RecordFailure(backend)
+		if isBackendClosedError(err) {
+			c.retireBackend(backend, b)
+			breaker.RecordFailure()
 			retryCount++
 			// Check if max retries exceeded (0 means unlimited)
 			if policy.MaxRetries > 0 && retryCount >= policy.MaxRetries {
@@ -513,8 +553,8 @@ func (c *client) Send(ctx context.Context, backend string, request Message) (*Fu
 			}
 
 			// Check circuit breaker after failure
-			if !c.circuitBreakers.Allow(backend) {
-				return nil, c.circuitBreakers.GetError(backend)
+			if !breaker.Allow() {
+				return nil, breaker.Error()
 			}
 
 			// Calculate next backoff with jitter
@@ -536,9 +576,9 @@ func (c *client) Send(ctx context.Context, backend string, request Message) (*Fu
 			continue
 		}
 		if err == nil {
-			c.circuitBreakers.RecordSuccess(backend)
+			breaker.RecordSuccess()
 		} else {
-			c.circuitBreakers.RecordFailure(backend)
+			breaker.RecordFailure()
 		}
 		return f, err
 	}
@@ -549,9 +589,9 @@ func (c *client) NewStream(ctx context.Context, backend string, lock bool) (Stre
 		panic("client NewStream nil context")
 	}
 
-	// Check circuit breaker before attempting
-	if !c.circuitBreakers.Allow(backend) {
-		return nil, c.circuitBreakers.GetError(backend)
+	breaker := c.circuitBreakers.newHandle(backend)
+	if !breaker.Allow() {
+		return nil, breaker.Error()
 	}
 
 	policy := c.options.retryPolicy
@@ -561,9 +601,9 @@ func (c *client) NewStream(ctx context.Context, backend string, lock bool) (Stre
 
 	for {
 		// Check circuit breaker before each retry attempt
-		if !c.circuitBreakers.Allow(backend) {
+		if !breaker.Allow() {
 			// Don't record failure - circuit is already open
-			return nil, c.circuitBreakers.GetError(backend)
+			return nil, breaker.Error()
 		}
 
 		// Check context before attempting
@@ -573,7 +613,7 @@ func (c *client) NewStream(ctx context.Context, backend string, lock bool) (Stre
 		default:
 		}
 
-		b, err := c.getBackend(backend, lock)
+		b, backendCreate, err := c.getBackendForOperation(backend, lock)
 		if err != nil {
 			// Handle circuit breaker errors - both open and half-open (exhausted probes) reject immediately
 			if errors.Is(err, ErrCircuitOpen) || errors.Is(err, ErrCircuitHalfOpen) {
@@ -591,7 +631,7 @@ func (c *client) NewStream(ctx context.Context, backend string, lock bool) (Stre
 				shouldContinue, waitErr := c.handleAutoCreateWait(ctx, backend, &creationStart, retryCount)
 				if !shouldContinue {
 					// Record circuit breaker failure on timeout
-					c.circuitBreakers.RecordFailure(backend)
+					breaker.RecordFailure()
 					return nil, waitErr
 				}
 
@@ -603,32 +643,45 @@ func (c *client) NewStream(ctx context.Context, backend string, lock bool) (Stre
 						zap.Int("retries", retryCount),
 						zap.Error(err))
 					// Record circuit breaker failure on max retries
-					c.circuitBreakers.RecordFailure(backend)
+					breaker.RecordFailure()
 					return nil, err
 				}
 
 				// Calculate next backoff with jitter
 				backoff = policy.nextBackoff(backoff)
-				if backoff > 0 {
-					select {
-					case <-ctx.Done():
-						return nil, ctx.Err()
-					case <-time.After(backoff):
+				if waitErr := c.waitBackendChange(
+					ctx,
+					backend,
+					creationStart,
+					backendCreate,
+					backoff,
+				); waitErr != nil {
+					if !errors.Is(waitErr, context.Canceled) &&
+						!errors.Is(waitErr, context.DeadlineExceeded) {
+						breaker.RecordFailure()
 					}
+					return nil, waitErr
 				}
 				continue
 			}
 
 			// Don't count client-level errors (like ErrClientClosed) as circuit breaker failures
 			if !moerr.IsMoErrCode(err, moerr.ErrClientClosed) {
-				c.circuitBreakers.RecordFailure(backend)
+				breaker.RecordFailure()
 			}
 			return nil, err
 		}
 
 		st, err := b.NewStream(lock)
-		if err != nil && err == backendClosed {
-			c.circuitBreakers.RecordFailure(backend)
+		if err != nil && lock {
+			// getBackendForOperation acquired this lock on behalf of the stream.
+			// Ownership transfers only after NewStream succeeds; on every error the
+			// client remains the owner and must release it.
+			b.Unlock()
+		}
+		if isBackendClosedError(err) {
+			c.retireBackend(backend, b)
+			breaker.RecordFailure()
 			retryCount++
 			// Check if max retries exceeded
 			if policy.MaxRetries > 0 && retryCount >= policy.MaxRetries {
@@ -640,8 +693,8 @@ func (c *client) NewStream(ctx context.Context, backend string, lock bool) (Stre
 			}
 
 			// Check circuit breaker after failure
-			if !c.circuitBreakers.Allow(backend) {
-				return nil, c.circuitBreakers.GetError(backend)
+			if !breaker.Allow() {
+				return nil, breaker.Error()
 			}
 
 			// Calculate next backoff with jitter
@@ -663,9 +716,9 @@ func (c *client) NewStream(ctx context.Context, backend string, lock bool) (Stre
 			continue
 		}
 		if err == nil {
-			c.circuitBreakers.RecordSuccess(backend)
+			breaker.RecordSuccess()
 		} else {
-			c.circuitBreakers.RecordFailure(backend)
+			breaker.RecordFailure()
 		}
 		return st, err
 	}
@@ -676,9 +729,9 @@ func (c *client) Ping(ctx context.Context, backend string) error {
 		panic("client Ping nil context")
 	}
 
-	// Check circuit breaker before attempting
-	if !c.circuitBreakers.Allow(backend) {
-		return c.circuitBreakers.GetError(backend)
+	breaker := c.circuitBreakers.newHandle(backend)
+	if !breaker.Allow() {
+		return breaker.Error()
 	}
 
 	policy := c.options.retryPolicy
@@ -687,7 +740,7 @@ func (c *client) Ping(ctx context.Context, backend string) error {
 	var creationStart time.Time
 
 	for {
-		b, err := c.getBackend(backend, false)
+		b, backendCreate, err := c.getBackendForOperation(backend, false)
 		if err != nil {
 			// Handle circuit breaker errors - both open and half-open (exhausted probes) reject immediately
 			if errors.Is(err, ErrCircuitOpen) || errors.Is(err, ErrCircuitHalfOpen) {
@@ -705,7 +758,7 @@ func (c *client) Ping(ctx context.Context, backend string) error {
 				shouldContinue, waitErr := c.handleAutoCreateWait(ctx, backend, &creationStart, retryCount)
 				if !shouldContinue {
 					// Record circuit breaker failure on timeout
-					c.circuitBreakers.RecordFailure(backend)
+					breaker.RecordFailure()
 					return waitErr
 				}
 
@@ -717,33 +770,40 @@ func (c *client) Ping(ctx context.Context, backend string) error {
 						zap.Int("retries", retryCount),
 						zap.Error(err))
 					// Record circuit breaker failure on max retries
-					c.circuitBreakers.RecordFailure(backend)
+					breaker.RecordFailure()
 					return err
 				}
 
 				// Calculate next backoff with jitter
 				backoff = policy.nextBackoff(backoff)
-				if backoff > 0 {
-					select {
-					case <-ctx.Done():
-						return ctx.Err()
-					case <-time.After(backoff):
+				if waitErr := c.waitBackendChange(
+					ctx,
+					backend,
+					creationStart,
+					backendCreate,
+					backoff,
+				); waitErr != nil {
+					if !errors.Is(waitErr, context.Canceled) &&
+						!errors.Is(waitErr, context.DeadlineExceeded) {
+						breaker.RecordFailure()
 					}
+					return waitErr
 				}
 				continue
 			}
 
 			// Don't count client-level errors (like ErrClientClosed) as circuit breaker failures
 			if !moerr.IsMoErrCode(err, moerr.ErrClientClosed) {
-				c.circuitBreakers.RecordFailure(backend)
+				breaker.RecordFailure()
 			}
 			return err
 		}
 
 		f, err := b.SendInternal(ctx, &flagOnlyMessage{flag: flagPing})
 		if err != nil {
-			if err == backendClosed {
-				c.circuitBreakers.RecordFailure(backend)
+			if isBackendClosedError(err) {
+				c.retireBackend(backend, b)
+				breaker.RecordFailure()
 				retryCount++
 				// Check if max retries exceeded
 				if policy.MaxRetries > 0 && retryCount >= policy.MaxRetries {
@@ -755,8 +815,8 @@ func (c *client) Ping(ctx context.Context, backend string) error {
 				}
 
 				// Check circuit breaker after failure
-				if !c.circuitBreakers.Allow(backend) {
-					return c.circuitBreakers.GetError(backend)
+				if !breaker.Allow() {
+					return breaker.Error()
 				}
 
 				// Calculate next backoff with jitter
@@ -777,15 +837,15 @@ func (c *client) Ping(ctx context.Context, backend string) error {
 				}
 				continue
 			}
-			c.circuitBreakers.RecordFailure(backend)
+			breaker.RecordFailure()
 			return err
 		}
 		_, err = f.Get()
 		f.Close()
 		if err == nil {
-			c.circuitBreakers.RecordSuccess(backend)
+			breaker.RecordSuccess()
 		} else {
-			c.circuitBreakers.RecordFailure(backend)
+			breaker.RecordFailure()
 		}
 		return err
 	}
@@ -793,37 +853,48 @@ func (c *client) Ping(ctx context.Context, backend string) error {
 
 func (c *client) Close() error {
 	c.mu.Lock()
-	wasClosed := c.mu.closed
-	if wasClosed {
+	if c.mu.closed {
 		c.mu.Unlock()
+		return nil
+	}
+	if c.mu.closing {
+		closedC := c.closedC
+		c.mu.Unlock()
+		<-closedC
 		return nil
 	}
 	// Set closing state first
 	c.mu.closing = true
+	for remote := range c.mu.creating {
+		c.invalidateBackendCreateLocked(remote)
+	}
+	backends := c.detachAllBackendsLocked()
+	c.updatePoolSizeMetricsLocked()
 	c.mu.Unlock()
 
-	// Close all backends
-	c.mu.Lock()
-	for _, backends := range c.mu.backends {
-		for _, b := range backends {
-			b.Close()
-		}
+	// Explicit client shutdown remains synchronous. Backends already retired by
+	// an operation are absent from this snapshot and are joined below instead of
+	// being closed twice.
+	for _, backend := range backends {
+		backend.Close()
 	}
-	// Mark as fully closed
-	c.mu.closed = true
-	c.mu.Unlock()
+	c.backendCleanup.Wait()
+	c.backendCreate.Wait()
 
 	// Unregister from global GC manager
 	globalClientGC.unregister(c)
 
-	// Update active client count (only if client was successfully created)
-	if !wasClosed {
-		activeGauge := v2.NewRPCClientActiveGaugeByName(c.name)
-		activeGauge.Dec()
-	}
+	// Update active client count (only the Close owner reaches here).
+	activeGauge := v2.NewRPCClientActiveGaugeByName(c.name)
+	activeGauge.Dec()
 
 	c.stopper.Stop()
 	close(c.createC)
+
+	c.mu.Lock()
+	c.mu.closed = true
+	close(c.closedC)
+	c.mu.Unlock()
 	return nil
 }
 
@@ -838,63 +909,150 @@ func (c *client) CloseBackend() error {
 	return nil
 }
 
+// CloseBackendFor synchronously detaches one remote and invalidates any
+// asynchronous create requests queued before this call.
+func (c *client) CloseBackendFor(remote string) error {
+	c.mu.Lock()
+	backends := c.mu.backends[remote]
+	// The reset remains synchronous for its caller, but register ownership before
+	// detaching so a concurrent client Close cannot miss this teardown.
+	c.backendCleanup.Add(len(backends))
+	delete(c.mu.backendGeneration, remote)
+	c.invalidateBackendCreateLocked(remote)
+	delete(c.mu.backends, remote)
+	delete(c.mu.ops, remote)
+	c.updatePoolSizeMetricsLocked()
+	// Detach breaker state in the same reset critical section as the backend
+	// generation. A request either captures the complete old incarnation or a
+	// complete new one, never a new backend generation with the old breaker.
+	c.circuitBreakers.RemoveBreaker(remote)
+	c.mu.Unlock()
+
+	// Close outside c.mu: backend shutdown can wait for worker goroutines, and
+	// no new caller should be blocked from creating the replacement meanwhile.
+	for _, backend := range backends {
+		func() {
+			defer c.backendCleanup.Done()
+			backend.Close()
+		}()
+	}
+	return nil
+}
+
 func (c *client) getBackend(backend string, lock bool) (Backend, error) {
+	b, _, err := c.getBackendForOperation(backend, lock)
+	return b, err
+}
+
+// getBackendForOperation returns a completion signal when the lookup is
+// waiting on an asynchronous backend create. The signal is captured from the
+// same remote generation that produced ErrBackendCreating, so reset and create
+// completion can wake callers without polling or stale-generation confusion.
+func (c *client) getBackendForOperation(
+	backend string,
+	lock bool,
+) (Backend, *backendCreateState, error) {
 	// Fast-fail: check circuit breaker before acquiring lock
 	// This prevents blocking on lock acquisition for known-bad backends
 	if !c.circuitBreakers.Allow(backend) {
-		return nil, c.circuitBreakers.GetError(backend)
+		return nil, nil, c.circuitBreakers.GetError(backend)
 	}
 
 	c.mu.Lock()
-	b, err := c.getBackendLocked(backend, lock)
+	// Preserve the healthy-backend fast path. Only compact terminal capacity
+	// after selection misses; doing a full slice rewrite before every Send/Ping
+	// would add avoidable work to the per-operation hot path.
+	b, err := c.getBackendLockedWithCreate(backend, lock, false)
+	inactive := 0
+	if b == nil && (err == nil || isBackendClosedError(err)) {
+		inactive = c.detachInactiveForCleanupLocked(backend)
+		if inactive > 0 {
+			// Re-evaluate selection and capacity in the same client-state snapshot
+			// after terminal entries have been removed.
+			b, err = c.getBackendLockedWithCreate(backend, lock, false)
+		}
+	}
+	// Cleanup ownership was transferred before each backend was detached. The
+	// foreground operation only releases the state snapshot here; it never waits
+	// for backend shutdown.
+	unlock := func() {
+		c.mu.Unlock()
+	}
+	// Selection and create admission must use the same client-state snapshot.
+	// Otherwise a backend can be published after selection returns nil but
+	// before creation is queued, causing a stale lookup to overgrow the pool.
 	poolSize := len(c.mu.backends[backend])
 	if err != nil {
-		c.mu.Unlock()
-		return nil, err
+		unlock()
+		return nil, nil, err
 	}
 	if b != nil {
-		c.mu.Unlock()
-		return b, nil
+		unlock()
+		return b, nil, nil
 	}
 
 	// No backend available in pool
 	canCreate := c.canCreateLocked(backend)
 	enableAutoCreate := c.options.enableAutoCreate
 	hasBackends := poolSize > 0
-	c.mu.Unlock() // Release lock before any potentially blocking operation
+	var generation *backendGeneration
+	if canCreate && enableAutoCreate {
+		generation = c.backendGenerationLocked(backend)
+	}
 
 	// If pool has backends but all are busy, wait for one to become available
 	// This applies regardless of enableAutoCreate setting
 	if hasBackends && !canCreate {
 		c.metrics.backendUnavailableCounter.Inc()
-		return nil, ErrBackendCreating // Triggers wait/retry logic
+		unlock()
+		return nil, nil, ErrBackendCreating // Triggers wait/retry logic
 	}
 
 	// Strictly gate creation on enableAutoCreate flag
 	if !enableAutoCreate {
 		// No backends exist and auto-create is disabled - fail fast
-		return nil, moerr.NewNoAvailableBackendNoCtx()
+		unlock()
+		return nil, nil, moerr.NewNoAvailableBackendNoCtx()
 	}
 
-	creationQueued := false
 	if canCreate {
-		// Try to enqueue creation task with backpressure handling
-		if !globalClientGC.triggerCreate(c, backend) {
-			// Queue is full - fallback to existing creation path with proper bookkeeping
-			return c.createBackendWithBookkeeping(backend, lock)
+		// Admit creation while the lookup snapshot is still protected by c.mu.
+		// The non-blocking queue send is safe under the lock; factory I/O remains
+		// outside the lock in both the worker and synchronous-fallback paths.
+		backendCreate, queued := globalClientGC.triggerCreateAtGenerationLocked(
+			c,
+			backend,
+			generation,
+		)
+		if queued {
+			unlock()
+			return nil, backendCreate, ErrBackendCreating
 		}
-		creationQueued = true
-	}
 
-	if creationQueued {
-		return nil, ErrBackendCreating
+		// The async queue is full. Claim the same observed demand before
+		// releasing c.mu, then perform only the factory I/O outside the lock.
+		// No successful publication can slip between observation and claim.
+		backendCreate = newBackendCreateState(generation)
+		c.mu.creating[backend] = backendCreate
+		unlock()
+		b, err = c.createBackendForClaimedGeneration(backend, lock, generation)
+		return b, nil, err
 	}
 
 	// Pool is empty and cannot create - return ErrNoAvailableBackend to trigger wait logic
-	return nil, moerr.NewNoAvailableBackendNoCtx()
+	unlock()
+	return nil, nil, moerr.NewNoAvailableBackendNoCtx()
 }
 
 func (c *client) getBackendLocked(backend string, lock bool) (Backend, error) {
+	return c.getBackendLockedWithCreate(backend, lock, true)
+}
+
+func (c *client) getBackendLockedWithCreate(
+	backend string,
+	lock bool,
+	create bool,
+) (Backend, error) {
 	if c.mu.closing {
 		return nil, ErrClientClosing
 	}
@@ -943,7 +1101,7 @@ func (c *client) getBackendLocked(backend string, lock bool) (Backend, error) {
 			b.Lock()
 		}
 		// Only try to create when no available backend was found; avoid unbounded growth when backends are locked.
-		if b == nil {
+		if create && b == nil {
 			c.maybeCreateLocked(backend)
 		}
 		return b, nil
@@ -973,40 +1131,116 @@ func (c *client) tryCreate(backend string) bool {
 		return false
 	}
 
-	return globalClientGC.triggerCreate(c, backend)
+	_, ok := globalClientGC.triggerCreateAtGenerationLocked(
+		c,
+		backend,
+		c.backendGenerationLocked(backend),
+	)
+	return ok
 }
 
 func (c *client) createBackendWithBookkeeping(backend string, lock bool) (Backend, error) {
-	// Use existing creation path with proper bookkeeping, but avoid holding the lock
-	// during network I/O. We double-check limits after creation to avoid overfilling
-	// if another goroutine created a backend in the meantime.
 	c.mu.Lock()
-	if c.mu.closed {
+	generation := c.backendGenerationLocked(backend)
+	c.mu.Unlock()
+	return c.createBackendWithBookkeepingAtGeneration(backend, lock, generation)
+}
+
+func (c *client) createBackendWithBookkeepingAtGeneration(
+	backend string,
+	lock bool,
+	generation *backendGeneration,
+) (Backend, error) {
+	if generation == nil {
+		return nil, moerr.NewBackendClosedNoCtx()
+	}
+	c.mu.Lock()
+	if c.mu.closing || c.mu.closed {
 		c.mu.Unlock()
 		return nil, moerr.NewClientClosedNoCtx()
+	}
+	if c.mu.backendGeneration[backend] != generation {
+		c.mu.Unlock()
+		return nil, moerr.NewBackendClosedNoCtx()
+	}
+	if c.mu.creating == nil {
+		c.mu.creating = make(map[string]*backendCreateState)
+	}
+	if c.mu.creating[backend] != nil {
+		c.mu.Unlock()
+		return nil, ErrBackendCreating
 	}
 	if !c.canCreateLocked(backend) {
 		c.mu.Unlock()
 		return nil, moerr.NewBackendClosedNoCtx()
 	}
+	c.mu.creating[backend] = newBackendCreateState(generation)
 	c.mu.Unlock()
+	return c.createBackendForClaimedGeneration(backend, lock, generation)
+}
+
+// createBackendForClaimedGeneration performs factory I/O for a create request
+// that already owns the queued/in-flight slot for this remote generation.
+func (c *client) createBackendForClaimedGeneration(
+	backend string,
+	lock bool,
+	generation *backendGeneration,
+) (Backend, error) {
+	if generation == nil {
+		return nil, moerr.NewBackendClosedNoCtx()
+	}
+	c.mu.Lock()
+	if c.mu.closing || c.mu.closed {
+		c.releaseBackendCreateLocked(backend, generation)
+		c.mu.Unlock()
+		return nil, moerr.NewClientClosedNoCtx()
+	}
+	if c.mu.backendGeneration[backend] != generation ||
+		!c.hasBackendCreateLocked(backend, generation) {
+		c.mu.Unlock()
+		return nil, moerr.NewBackendClosedNoCtx()
+	}
+	if !c.canCreateLocked(backend) {
+		c.releaseBackendCreateLocked(backend, generation)
+		c.mu.Unlock()
+		return nil, moerr.NewBackendClosedNoCtx()
+	}
+	c.backendCreate.Add(1)
+	c.mu.Unlock()
+	defer c.backendCreate.Done()
 
 	// Create backend using factory with metrics (same as doCreate) without holding the lock.
 	b, err := c.doCreate(backend)
-	if err != nil {
-		return nil, err
-	}
 
 	// Re-acquire lock to add to pool, validating limits again.
 	c.mu.Lock()
-	defer c.mu.Unlock()
+	claimActive := c.hasBackendCreateLocked(backend, generation)
+	if err != nil {
+		c.failBackendCreateLocked(backend, generation)
+		c.mu.Unlock()
+		return nil, err
+	}
 
-	if c.mu.closed {
+	clientClosed := c.mu.closing || c.mu.closed
+	if !claimActive || clientClosed {
+		c.releaseBackendCreateLocked(backend, generation)
+		c.mu.Unlock()
 		b.Close()
-		return nil, moerr.NewClientClosedNoCtx()
+		if clientClosed {
+			return nil, moerr.NewClientClosedNoCtx()
+		}
+		return nil, moerr.NewBackendClosedNoCtx()
+	}
+	if c.mu.backendGeneration[backend] != generation {
+		c.releaseBackendCreateLocked(backend, generation)
+		c.mu.Unlock()
+		b.Close()
+		return nil, moerr.NewBackendClosedNoCtx()
 	}
 	if !c.canCreateLocked(backend) {
 		// Another goroutine may have filled the pool while we were creating.
+		c.releaseBackendCreateLocked(backend, generation)
+		c.mu.Unlock()
 		b.Close()
 		return nil, moerr.NewBackendClosedNoCtx()
 	}
@@ -1026,8 +1260,107 @@ func (c *client) createBackendWithBookkeeping(backend string, lock bool) (Backen
 
 	// Update metrics (same as existing creation path)
 	c.updatePoolSizeMetricsLocked()
+	// Publish the backend before waking waiters. They can observe the closed
+	// completion channel immediately, but must acquire c.mu after this unlock
+	// before selecting the newly available backend.
+	c.releaseBackendCreateLocked(backend, generation)
+	c.mu.Unlock()
 
 	return b, nil
+}
+
+func (c *client) releaseBackendCreate(backend string, generation *backendGeneration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.releaseBackendCreateLocked(backend, generation)
+}
+
+const maxBackendGenerationEntries = 4096
+
+type backendGeneration struct {
+	// Keep the allocation non-zero-sized so distinct generations always have
+	// distinct pointer identities.
+	_ byte
+}
+
+type backendCreateState struct {
+	generation *backendGeneration
+	done       chan struct{}
+	// failed is published before done is closed. Waiters retain retry backoff
+	// after factory failures, while successful creates and invalidations wake
+	// immediately to re-evaluate client state.
+	failed bool
+}
+
+func newBackendCreateState(generation *backendGeneration) *backendCreateState {
+	return &backendCreateState{
+		generation: generation,
+		done:       make(chan struct{}),
+	}
+}
+
+func (c *client) hasBackendCreateLocked(
+	backend string,
+	generation *backendGeneration,
+) bool {
+	state := c.mu.creating[backend]
+	return state != nil && state.generation == generation
+}
+
+func (c *client) releaseBackendCreateLocked(
+	backend string,
+	generation *backendGeneration,
+) {
+	state := c.mu.creating[backend]
+	if state == nil || state.generation != generation {
+		return
+	}
+	delete(c.mu.creating, backend)
+	close(state.done)
+}
+
+func (c *client) failBackendCreateLocked(
+	backend string,
+	generation *backendGeneration,
+) {
+	state := c.mu.creating[backend]
+	if state == nil || state.generation != generation {
+		return
+	}
+	state.failed = true
+	delete(c.mu.creating, backend)
+	close(state.done)
+}
+
+func (c *client) invalidateBackendCreateLocked(backend string) {
+	state := c.mu.creating[backend]
+	if state == nil {
+		return
+	}
+	delete(c.mu.creating, backend)
+	close(state.done)
+}
+
+func (c *client) backendGenerationLocked(remote string) *backendGeneration {
+	if c.mu.backendGeneration == nil {
+		c.mu.backendGeneration = make(map[string]*backendGeneration)
+	}
+	if generation := c.mu.backendGeneration[remote]; generation != nil {
+		return generation
+	}
+	if len(c.mu.backendGeneration) >= maxBackendGenerationEntries {
+		// Eviction invalidates outstanding creates for the victim. A later request
+		// allocates a distinct token, so an evicted stale request cannot be
+		// re-admitted even when the same address returns (no ABA).
+		for victim := range c.mu.backendGeneration {
+			delete(c.mu.backendGeneration, victim)
+			c.invalidateBackendCreateLocked(victim)
+			break
+		}
+	}
+	generation := &backendGeneration{}
+	c.mu.backendGeneration[remote] = generation
+	return generation
 }
 
 func (c *client) triggerGCInactive(remote string) {
@@ -1036,31 +1369,131 @@ func (c *client) triggerGCInactive(remote string) {
 		zap.String("remote", remote))
 }
 
-func (c *client) doRemoveInactive(remote string) {
+func isBackendClosedError(err error) bool {
+	return err != nil &&
+		(errors.Is(err, backendClosed) || moerr.IsMoErrCode(err, moerr.ErrBackendClosed))
+}
+
+// retireBackend makes an operation-level closed result visible to pool
+// selection immediately. Background inactive GC remains a safety net, not a
+// prerequisite for foreground recovery.
+func (c *client) retireBackend(remote string, backend Backend) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.mu.closing || c.mu.closed {
+		// Close owns the pool snapshot once closing is published.
+		return
+	}
+	if c.detachBackendForCleanupLocked(remote, backend) {
+		c.updatePoolSizeMetricsLocked()
+	}
+}
+
+func (c *client) doRemoveInactive(remote string) {
+	c.mu.Lock()
 
 	// Check if client is closed
-	if c.mu.closed {
+	if c.mu.closing || c.mu.closed {
+		c.mu.Unlock()
 		return
 	}
 
-	backends, ok := c.mu.backends[remote]
+	_, ok := c.mu.backends[remote]
 	if !ok {
+		c.mu.Unlock()
 		return
 	}
 
-	newBackends := backends[:0]
-	for _, backend := range backends {
-		if backend.LastActiveTime() == (time.Time{}) {
-			backend.Close()
-			continue
-		}
-		newBackends = append(newBackends, backend)
-	}
-	c.mu.backends[remote] = newBackends
+	c.detachInactiveForCleanupLocked(remote)
 
 	c.updatePoolSizeMetricsLocked()
+	c.mu.Unlock()
+}
+
+// detachBackendForCleanupLocked removes every pool slot that refers to backend
+// only after cleanup ownership is admitted. If cleanup is saturated, keeping
+// the backend in the pool preserves a hard resource bound by making it continue
+// to count against replacement capacity.
+func (c *client) detachBackendForCleanupLocked(remote string, backend Backend) bool {
+	backends, ok := c.mu.backends[remote]
+	if !ok {
+		return false
+	}
+
+	found := false
+	for _, candidate := range backends {
+		if candidate == backend {
+			found = true
+			break
+		}
+	}
+	if !found || !c.tryStartBackendCleanupLocked(backend) {
+		return false
+	}
+
+	active := backends[:0]
+	for _, candidate := range backends {
+		if candidate != backend {
+			active = append(active, candidate)
+		}
+	}
+	clear(backends[len(active):])
+	c.mu.backends[remote] = active
+	return true
+}
+
+func (c *client) detachAllBackendsLocked() []Backend {
+	var detached []Backend
+	for remote, backends := range c.mu.backends {
+		detached = append(detached, backends...)
+		clear(backends)
+		delete(c.mu.backends, remote)
+	}
+	return detached
+}
+
+// tryStartBackendCleanupLocked transfers cleanup ownership to the client. The
+// fixed-size slot channel bounds stuck cleanup goroutines. The caller must keep
+// a backend in the pool when admission fails so it still consumes capacity.
+func (c *client) tryStartBackendCleanupLocked(backend Backend) bool {
+	select {
+	case c.backendCleanupSlots <- struct{}{}:
+		c.backendCleanup.Add(1)
+		go func() {
+			defer c.backendCleanup.Done()
+			defer func() { <-c.backendCleanupSlots }()
+			backend.Close()
+		}()
+		return true
+	default:
+		return false
+	}
+}
+
+// detachInactiveForCleanupLocked removes terminal backends from the pool's
+// capacity model only when their bounded cleanup has been admitted.
+func (c *client) detachInactiveForCleanupLocked(remote string) int {
+	backends, ok := c.mu.backends[remote]
+	if !ok {
+		return 0
+	}
+
+	detached := 0
+	active := backends[:0]
+	for _, backend := range backends {
+		if backend.LastActiveTime() == (time.Time{}) &&
+			c.tryStartBackendCleanupLocked(backend) {
+			detached++
+			continue
+		}
+		active = append(active, backend)
+	}
+	// A shorter slice still keeps its entire pointer-containing backing array
+	// reachable. Clear the compacted tail so removed backends (and their stream
+	// pools/connections) can be collected while this remote remains in the map.
+	clear(backends[len(active):])
+	c.mu.backends[remote] = active
+	return detached
 }
 
 // doRemoveInactiveAll removes all explicitly closed (inactive) backends for every remote.
@@ -1068,54 +1501,45 @@ func (c *client) doRemoveInactive(remote string) {
 // the idle timeout (e.g. 1 minute). Safe to call on closed client (no-op).
 func (c *client) doRemoveInactiveAll() {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 
-	if c.mu.closed {
+	if c.mu.closing || c.mu.closed {
+		c.mu.Unlock()
 		return
 	}
 
-	for remote, backends := range c.mu.backends {
-		newBackends := backends[:0]
-		for _, backend := range backends {
-			if backend.LastActiveTime() == (time.Time{}) {
-				backend.Close()
-				continue
-			}
-			newBackends = append(newBackends, backend)
-		}
-		c.mu.backends[remote] = newBackends
+	for remote := range c.mu.backends {
+		c.detachInactiveForCleanupLocked(remote)
 	}
 	c.updatePoolSizeMetricsLocked()
+	c.mu.Unlock()
 }
 
 func (c *client) closeIdleBackends() int {
 	// Check if client is closed before processing
 	c.mu.Lock()
-	if c.mu.closed {
+	if c.mu.closing || c.mu.closed {
 		c.mu.Unlock()
 		return 0
 	}
 
-	var idleBackends []Backend
+	closed := 0
 	for k, backends := range c.mu.backends {
-		var newBackends []Backend
+		newBackends := backends[:0]
 		for _, b := range backends {
 			if !b.Locked() &&
-				time.Since(b.LastActiveTime()) > c.options.maxIdleDuration {
-				idleBackends = append(idleBackends, b)
+				time.Since(b.LastActiveTime()) > c.options.maxIdleDuration &&
+				c.tryStartBackendCleanupLocked(b) {
+				closed++
 				continue
 			}
 			newBackends = append(newBackends, b)
 		}
+		clear(backends[len(newBackends):])
 		c.mu.backends[k] = newBackends
 	}
 	c.updatePoolSizeMetricsLocked()
 	c.mu.Unlock()
-
-	for _, b := range idleBackends {
-		b.Close()
-	}
-	return len(idleBackends)
+	return closed
 }
 
 func (c *client) createBackendLocked(backend string) (Backend, error) {
@@ -1197,12 +1621,7 @@ func (c *client) handleAutoCreateWait(ctx context.Context, backend string, creat
 	if timeout := c.options.autoCreateWaitTimeout; timeout > 0 {
 		elapsed := time.Since(*creationStart)
 		if elapsed >= timeout {
-			c.logger.Warn("auto-create backend timed out",
-				zap.String("backend", backend),
-				zap.Duration("waited", elapsed),
-				zap.Duration("timeout", timeout))
-			c.metrics.autoCreateTimeoutCounter.Inc()
-			return false, ErrBackendCreateTimeout
+			return false, c.autoCreateTimeoutError(backend, elapsed, timeout)
 		}
 	}
 
@@ -1215,6 +1634,123 @@ func (c *client) handleAutoCreateWait(ctx context.Context, backend string, creat
 	}
 
 	return true, nil
+}
+
+// waitBackendChange waits on a real asynchronous-create state transition when
+// one exists. Backoff remains the fallback for states that have no completion
+// owner (for example, a fully busy pool). This preserves retry throttling while
+// removing the latency amplification where a backend becomes ready near the
+// start of a long exponential-backoff interval.
+func (c *client) waitBackendChange(
+	ctx context.Context,
+	backend string,
+	creationStart time.Time,
+	backendCreate *backendCreateState,
+	backoff time.Duration,
+) error {
+	if backendCreate != nil {
+		if err := c.waitBackendCreateCompletion(
+			ctx,
+			backend,
+			creationStart,
+			backendCreate,
+		); err != nil {
+			return err
+		}
+		if !backendCreate.failed {
+			return nil
+		}
+	}
+
+	return c.waitBackendRetryBackoff(ctx, backend, creationStart, backoff)
+}
+
+func (c *client) waitBackendCreateCompletion(
+	ctx context.Context,
+	backend string,
+	creationStart time.Time,
+	backendCreate *backendCreateState,
+) error {
+	select {
+	case <-backendCreate.done:
+		return nil
+	default:
+	}
+
+	timeout := c.options.autoCreateWaitTimeout
+	if timeout <= 0 {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-backendCreate.done:
+			return nil
+		}
+	}
+
+	remaining := timeout - time.Since(creationStart)
+	if remaining <= 0 {
+		return c.autoCreateTimeoutError(backend, time.Since(creationStart), timeout)
+	}
+	timer := time.NewTimer(remaining)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-backendCreate.done:
+		return nil
+	case <-timer.C:
+		return c.autoCreateTimeoutError(backend, time.Since(creationStart), timeout)
+	}
+}
+
+func (c *client) waitBackendRetryBackoff(
+	ctx context.Context,
+	backend string,
+	creationStart time.Time,
+	backoff time.Duration,
+) error {
+	if backoff <= 0 {
+		return nil
+	}
+
+	wait := backoff
+	timedByCreateTimeout := false
+	if timeout := c.options.autoCreateWaitTimeout; timeout > 0 {
+		remaining := timeout - time.Since(creationStart)
+		if remaining <= 0 {
+			return c.autoCreateTimeoutError(backend, time.Since(creationStart), timeout)
+		}
+		if remaining < wait {
+			wait = remaining
+			timedByCreateTimeout = true
+		}
+	}
+
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		if timedByCreateTimeout {
+			timeout := c.options.autoCreateWaitTimeout
+			return c.autoCreateTimeoutError(backend, time.Since(creationStart), timeout)
+		}
+		return nil
+	}
+}
+
+func (c *client) autoCreateTimeoutError(
+	backend string,
+	waited time.Duration,
+	timeout time.Duration,
+) error {
+	c.logger.Warn("auto-create backend timed out",
+		zap.String("backend", backend),
+		zap.Duration("waited", waited),
+		zap.Duration("timeout", timeout))
+	c.metrics.autoCreateTimeoutCounter.Inc()
+	return ErrBackendCreateTimeout
 }
 
 type op struct {
