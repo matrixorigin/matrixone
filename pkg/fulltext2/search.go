@@ -341,21 +341,24 @@ func sortedIndexInt64(a []int64, v int64) int {
 // list). It is the phrase analogue of wandIter, but also carries the block's positions.
 type phraseCursor struct {
 	tp     *termPostings
-	off    int32     // this slot's byte offset within the phrase
-	idx    int       // current global posting index (0..df-1)
-	curBlk int       // block currently decoded into bDocs/bPos (-1 = none)
-	blen   int       // valid entries in bDocs/bPos
-	bDocs  []int64   // decoded docIDs of curBlk (cap BlockSize)
-	bPos   [][]int32 // decoded positions of curBlk (cap BlockSize)
-	tfbuf  []uint8   // scratch for fillBlock's tfs (phrase ignores tf)
+	off    int32      // this slot's byte offset within the phrase
+	idx    int        // current global posting index (0..df-1)
+	curBlk int        // block currently decoded into bDocs/bPos (-1 = none)
+	blen   int        // valid entries in bDocs/bPos
+	bDocs  []int64    // decoded docIDs of curBlk (cap BlockSize); backed by buf
+	bPos   [][]int32  // decoded positions of curBlk (cap BlockSize); backed by buf
+	tfbuf  []uint8    // scratch for fillBlock's tfs (phrase ignores tf); backed by buf
+	buf    *phraseBuf // pooled backing for bDocs/bPos/tfbuf; returned by releasePhraseCursors
 }
 
 func newPhraseCursor(tp *termPostings, off int32) *phraseCursor {
+	b := getPhraseBuf()
 	return &phraseCursor{
 		tp: tp, off: off, curBlk: -1,
-		bDocs: make([]int64, BlockSize),
-		bPos:  make([][]int32, BlockSize),
-		tfbuf: make([]uint8, BlockSize),
+		bDocs: b.docs,
+		bPos:  b.pos,
+		tfbuf: b.tfs,
+		buf:   b,
 	}
 }
 
@@ -411,6 +414,7 @@ func (c *phraseCursor) skipTo(target int64) {
 // cursor — independent of corpus size, vs the fallback's whole-posting-list materialize.
 func (s *Segment) matchPhraseCursor(slots []phraseSlot) []docTf {
 	cursors := make([]*phraseCursor, len(slots))
+	defer releasePhraseCursors(cursors) // recycle block buffers, incl. the early-return path
 	rare := 0
 	for i, sl := range slots {
 		pl, ok := s.lookup(sl.term)

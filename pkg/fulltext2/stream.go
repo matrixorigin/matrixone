@@ -70,6 +70,7 @@ func (s *streamSink) flush() {
 func (s *Segment) streamWAND(clauses []clause, algo ScoreAlgo, gs *globalStats, allow Membership, sink *streamSink) {
 	avgDocLen := gs.avgdl(s)
 	iters := s.buildWandIters(clauses, algo, gs, avgDocLen)
+	defer releaseWandIters(iters) // recycle the per-cursor block buffers
 	if len(iters) == 0 {
 		return
 	}

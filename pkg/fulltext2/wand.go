@@ -52,11 +52,12 @@ import (
 type wandIter struct {
 	tp        *termPostings
 	idx       int
-	curBlk    int     // block index currently decoded into bDocs/bTfs (-1 = none)
-	blen      int     // valid entries in bDocs/bTfs
-	cur       int64   // cached doc() for the current idx (math.MaxInt64 when exhausted)
-	bDocs     []int64 // decoded docIDs of curBlk (cap BlockSize)
-	bTfs      []uint8 // decoded tfs of curBlk (cap BlockSize)
+	curBlk    int      // block index currently decoded into bDocs/bTfs (-1 = none)
+	blen      int      // valid entries in bDocs/bTfs
+	cur       int64    // cached doc() for the current idx (math.MaxInt64 when exhausted)
+	bDocs     []int64  // decoded docIDs of curBlk (cap BlockSize); backed by buf
+	bTfs      []uint8  // decoded tfs of curBlk (cap BlockSize); backed by buf
+	buf       *wandBuf // pooled backing for bDocs/bTfs; returned by releaseWandIters
 	idf2      float64
 	weight    float32
 	maxImpact float32 // term-level upper bound of this term's weighted contribution
@@ -231,11 +232,13 @@ func (s *Segment) buildWandIters(clauses []clause, algo ScoreAlgo, gs *globalSta
 			continue
 		}
 		idf2 := gs.idfFor(s, c.terms[0], pl)
+		b := getWandBuf()
 		it := &wandIter{
 			tp:        pl,
 			curBlk:    -1,
-			bDocs:     make([]int64, BlockSize),
-			bTfs:      make([]uint8, BlockSize),
+			bDocs:     b.docs,
+			bTfs:      b.tfs,
+			buf:       b,
 			idf2:      idf2,
 			weight:    c.weight,
 			maxImpact: c.weight * s.termMaxImpact(algo, idf2, pl, avgDocLen),
@@ -250,6 +253,7 @@ func (s *Segment) searchWAND(clauses []clause, algo ScoreAlgo, k int, allow Memb
 	avgDocLen := gs.avgdl(s)
 
 	iters := s.buildWandIters(clauses, algo, gs, avgDocLen)
+	defer releaseWandIters(iters) // recycle the per-cursor block buffers
 	if len(iters) == 0 {
 		return nil
 	}
