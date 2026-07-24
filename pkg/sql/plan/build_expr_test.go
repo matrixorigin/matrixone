@@ -535,6 +535,47 @@ func TestEnumDisplayValueToJSONUsesJSONQuoteInPlannerCasts(t *testing.T) {
 	require.Equal(t, "json_quote", expr.GetF().Func.ObjName)
 }
 
+func TestJSONSourceCastsAreNotSkipped(t *testing.T) {
+	ctx := NewMockCompilerContext(true).GetContext()
+	jsonExpr := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_json)},
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{ColPos: 0, Name: "j"},
+		},
+	}
+
+	textType := plan.Type{Id: int32(types.T_text)}
+	expr, err := appendCastBeforeExpr(ctx, DeepCopyExpr(jsonExpr), textType)
+	require.NoError(t, err)
+	require.Equal(t, int32(types.T_text), expr.Typ.Id)
+	require.Equal(t, "cast", expr.GetF().Func.ObjName)
+
+	_, err = makePlan2CastExpr(ctx, DeepCopyExpr(jsonExpr), plan.Type{Id: int32(types.T_blob)})
+	require.Error(t, err)
+}
+
+func TestJSONComparisonsCastBothOperandsToCommonType(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		sql  string
+		want types.T
+	}{
+		{name: "numeric", sql: "select cast('3' as json) > 1", want: types.T_int64},
+		{name: "string", sql: "select cast('\"active\"' as json) = 'active'", want: types.T_varchar},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			pl, err := runOneExprStmt(mock, t, tc.sql)
+			require.NoError(t, err)
+
+			args := pl.GetQuery().Nodes[1].ProjectList[0].GetF().Args
+			require.Len(t, args, 2)
+			require.Equal(t, int32(tc.want), args[0].Typ.Id)
+			require.Equal(t, int32(tc.want), args[1].Typ.Id)
+		})
+	}
+}
+
 func runOneExprStmt(opt Optimizer, t *testing.T, sql string) (*plan.Plan, error) {
 	stmts, err := mysql.Parse(opt.CurrentContext().GetContext(), sql, 1)
 	if err != nil {

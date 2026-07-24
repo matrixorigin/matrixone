@@ -1017,11 +1017,12 @@ func forceCastExpr2(ctx context.Context, expr *Expr, t2 types.Type, targetType *
 		return expr, nil
 	}
 	var err error
-	expr, err = rewriteEnumDisplayValueToJSONCast(ctx, expr, targetType.Typ)
+	var rewritten bool
+	expr, rewritten, err = rewriteEnumDisplayValueToJSONCast(ctx, expr, targetType.Typ)
 	if err != nil {
 		return nil, err
 	}
-	if expr.Typ.Id == int32(types.T_json) {
+	if rewritten {
 		return expr, nil
 	}
 	if isTypedArrayPlanType(&targetType.Typ) {
@@ -1069,22 +1070,24 @@ func forceAssignmentCastExpr(ctx context.Context, expr *Expr, targetType Type) (
 
 func (builder *QueryBuilder) forceProjectedAssignmentCastExpr(expr, sourceExpr *Expr, targetType Type) (*Expr, error) {
 	var err error
-	expr, err = builder.rewriteProjectedEnumDisplayValueToJSONCast(expr, sourceExpr, targetType)
-	if err != nil || expr.Typ.Id == int32(types.T_json) {
+	var rewritten bool
+	expr, rewritten, err = builder.rewriteProjectedEnumDisplayValueToJSONCast(expr, sourceExpr, targetType)
+	if err != nil || rewritten {
 		return expr, err
 	}
 	return forceAssignmentCastExpr(builder.GetContext(), expr, targetType)
 }
 
-func (builder *QueryBuilder) rewriteProjectedEnumDisplayValueToJSONCast(expr, sourceExpr *Expr, targetType Type) (*Expr, error) {
+func (builder *QueryBuilder) rewriteProjectedEnumDisplayValueToJSONCast(expr, sourceExpr *Expr, targetType Type) (*Expr, bool, error) {
 	if builder == nil || expr == nil || sourceExpr == nil ||
 		targetType.Id != int32(types.T_json) || sourceExpr.Typ.Id == int32(types.T_enum) {
-		return expr, nil
+		return expr, false, nil
 	}
 	if builder.isProjectedEnumDisplayValueExpr(sourceExpr, nil) {
-		return quoteEnumDisplayValueAsJSON(builder.GetContext(), expr)
+		quoted, err := quoteEnumDisplayValueAsJSON(builder.GetContext(), expr)
+		return quoted, err == nil, err
 	}
-	return expr, nil
+	return expr, false, nil
 }
 
 func (builder *QueryBuilder) isProjectedEnumDisplayValueExpr(expr *Expr, visited map[[2]int32]struct{}) bool {
@@ -1152,11 +1155,12 @@ func forceCastExprWithName(ctx context.Context, expr *Expr, targetType Type, fun
 		return expr, nil
 	}
 	var err error
-	expr, err = rewriteEnumDisplayValueToJSONCast(ctx, expr, targetType)
+	var rewritten bool
+	expr, rewritten, err = rewriteEnumDisplayValueToJSONCast(ctx, expr, targetType)
 	if err != nil {
 		return nil, err
 	}
-	if expr.Typ.Id == int32(types.T_json) {
+	if rewritten {
 		return expr, nil
 	}
 	if isTypedArrayPlanType(&targetType) {
