@@ -190,7 +190,8 @@ type VectorIndexCache struct {
 	started        atomic.Bool
 	exited         atomic.Bool
 	once           sync.Once
-	hkTicks        int // HouseKeeping tick counter, gates the IsStale sweep cadence
+	hkTicks        int         // HouseKeeping tick counter, gates the IsStale sweep cadence
+	staleChecking  atomic.Bool // single-flight guard for the async freshness sweep
 }
 
 func NewVectorIndexCache() *VectorIndexCache {
@@ -226,8 +227,16 @@ func (c *VectorIndexCache) serve() {
 				c.Destroy()
 				return
 			case <-c.ticker.C:
-				// delete expired index
+				// delete expired index (fast, no SQL) — always runs synchronously so TTL
+				// reclamation and shutdown never wait on a freshness read.
 				c.HouseKeeping()
+				c.hkTicks++
+				if c.hkTicks%stalenessCheckEveryNTicks == 0 && c.staleChecking.CompareAndSwap(false, true) {
+					go func() {
+						defer c.staleChecking.Store(false)
+						c.checkStale()
+					}()
+				}
 			}
 		}
 	}()
@@ -260,21 +269,14 @@ func (c *VectorIndexCache) HouseKeeping() {
 			logutil.Debugf("[veccache] evicted expired/stale index %s from cache", k)
 		}
 	}
-
-	// Cross-CN freshness: every Nth tick, ask each StaleChecker entry whether its loaded
-	// index has fallen behind the persisted one (CDC append / REBUILD on another CN) and
-	// force-expire the stale ones so the NEXT sweep reclaims them and the next search
-	// reloads. Runs AFTER the expiry sweep, so a just-marked entry is reclaimed next tick
-	// (mark now, remove next cycle) — never inline, keeping Search pure-read.
-	c.hkTicks++
-	if c.hkTicks%stalenessCheckEveryNTicks == 0 {
-		c.checkStale()
-	}
 }
 
-// checkStale asks every loaded StaleChecker entry whether it is stale and force-expires the
-// stale ones. The IsStale calls (each opens a short background txn) are collected out of the
-// IndexMap.Range callback so a slow meta read never holds up the map iteration.
+// checkStale asks every loaded StaleChecker entry whether it is stale and marks the stale ones
+// (the next HouseKeeping sweep reclaims them; Search stays pure-read). Runs on its own
+// goroutine off the ticker (see serve), single-flighted, because each IsStale opens a short
+// background txn — so a slow/stalled executor delays only the next freshness sweep, never TTL
+// eviction or shutdown. The IsStale calls are collected out of the IndexMap.Range callback so a
+// slow meta read never holds up the map iteration, and the loop bails on shutdown.
 func (c *VectorIndexCache) checkStale() {
 	type staleEntry struct {
 		s   *VectorIndexSearch
@@ -293,6 +295,11 @@ func (c *VectorIndexCache) checkStale() {
 		return true
 	})
 	for _, e := range entries {
+		// Bail promptly on shutdown so a K-entry sweep of ≤1-min SQL reads can't keep this
+		// goroutine (and any resources it pins) alive long after Destroy.
+		if c.exited.Load() {
+			return
+		}
 		stale, err := e.sc.IsStale()
 		if err != nil {
 			// A query error usually means the index was dropped/rebuilt out from under us —
@@ -357,21 +364,9 @@ func (c *VectorIndexCache) Search(sqlproc *sqlexec.SqlProcess, key string, newal
 // remove key from cache
 // Remove drops a cached index by key so the next Search reloads it. Callers use
 // it after a mutation (CDC append, CREATE/REBUILD/MERGE) makes the cached copy
-// stale.
-//
-// Decision (known gap — deferred to a follow-up PR): Remove is LOCAL to this
-// process. It evicts only the calling CN's map; a different CN holding a warm
-// entry for the same key keeps serving the pre-mutation index. And because
-// Search calls extend() on every hit (see VectorIndexSearch.Search), a hot
-// entry's ExpireAt is pushed forward indefinitely, so it never ages out on its
-// own either — a remote CN can serve stale results for as long as it stays
-// queried. This affects EVERY index type that uses this cache (fulltext2, bm25,
-// and all vector plugins), not any one algorithm, so the fix belongs here at the
-// cache layer — e.g. fold a persisted, atomically-bumped generation into the
-// cache key (Search reloads when the stored generation moves), or add a
-// cluster-wide invalidation broadcast — and lands across all index types in a
-// separate change rather than a per-algorithm workaround. Until then, cross-CN
-// coherence relies on the idle TTL of an UNqueried entry.
+// stale. It is LOCAL to this process — a prompt local optimization only; cross-CN
+// coherence is handled by the pull-based freshness check (StaleChecker/IsStale via
+// HouseKeeping), which evicts a remote CN's warm-but-stale entry on its own.
 func (c *VectorIndexCache) Remove(key string) {
 	value, loaded := c.IndexMap.LoadAndDelete(key)
 	if loaded {

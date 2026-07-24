@@ -185,7 +185,15 @@ func NewHnswSync[T types.RealNumbers](sqlproc *sqlexec.SqlProcess,
 	// assume CDC run in single thread
 	// model id for CDC is cdc:1:0:timestamp
 	uid := fmt.Sprintf("%s:%d:%d", "cdc", 1, 0)
-	ts := time.Now().Unix()
+	// UnixMicro (not Unix seconds): the create path writes UnixMicro timestamps
+	// (hnsw_create ToInsertSql), and the metadata timestamp doubles as the cross-CN cache
+	// freshness generation (MAX(timestamp), see cachegen). A seconds-resolution CDC row is
+	// ~1e6x smaller than a create-time UnixMicro row, so it never becomes MAX(timestamp) in a
+	// multi-model index (only the dirty model is replaced) — the generation would not advance
+	// and a warm remote CN would serve stale results. UnixMicro makes each save's timestamp
+	// strictly larger than all prior rows (monotonic generation) and avoids same-second
+	// collisions (which also collided the "uid:ts" model id).
+	ts := time.Now().UnixMicro()
 	sync := &HnswSync[T]{indexes: indexes, idxcfg: idxcfg, tblcfg: idxtblcfg, uid: uid, ts: ts, idxname: idxname}
 
 	// save all model to local by LoadIndex and Unload
@@ -581,7 +589,10 @@ func (s *HnswSync[T]) Update(sqlproc *sqlexec.SqlProcess, cdc *vectorindex.Vecto
 
 func (s *HnswSync[T]) Save(sqlproc *sqlexec.SqlProcess) error {
 	// save to files and then save to database
-	s.ts = time.Now().Unix()
+	// UnixMicro (not Unix seconds) — see NewHnswSync: the metadata timestamp is the cross-CN
+	// cache freshness generation, so it must be microsecond-resolution + strictly increasing
+	// per save, matching the create path (hnsw_create UnixMicro).
+	s.ts = time.Now().UnixMicro()
 	sqls, err := s.ToSql(s.ts)
 	if err != nil {
 		return err
