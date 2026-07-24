@@ -3,149 +3,149 @@ create database db2;
 use db2;
 CREATE TABLE t1 (a INTEGER PRIMARY KEY, b CHAR(10));
 desc t1;
-Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null        
-b    CHAR(10)    YES        null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+a  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+b  ¦  CHAR(10)  ¦  YES  ¦    ¦  null  ¦    ¦  
 insert into t1 values(1, 'ab');
 insert into t1 values(2, 'ac');
 insert into t1 values(3, 'ad');
 select * from t1;
-a    b
-1    ab
-2    ac
-3    ad
+➤ a[4,32,0]  ¦  b[1,10,0]  𝄀
+1  ¦  ab  𝄀
+2  ¦  ac  𝄀
+3  ¦  ad
 alter table t1 change a x VARCHAR(20);
 desc t1;
-Field    Type    Null    Key    Default    Extra    Comment
-x    VARCHAR(20)    NO    PRI    null        
-b    CHAR(10)    YES        null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+x  ¦  VARCHAR(20)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+b  ¦  CHAR(10)  ¦  YES  ¦    ¦  null  ¦    ¦  
 select * from t1;
-x    b
-1    ab
-2    ac
-3    ad
+➤ x[12,-1,0]  ¦  b[1,10,0]  𝄀
+1  ¦  ab  𝄀
+2  ¦  ac  𝄀
+3  ¦  ad
 drop table if exists t1;
 CREATE TABLE t1 (a INTEGER PRIMARY KEY, b CHAR(10), c date);
 desc t1;
-Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null        
-b    CHAR(10)    YES        null        
-c    DATE(0)    YES        null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+a  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+b  ¦  CHAR(10)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+c  ¦  DATE(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
 insert into t1 values(1, 'ab', '1980-12-17');
 insert into t1 values(2, 'ac', '1981-02-20');
 insert into t1 values(3, 'ad', '1981-02-22');
 select * from t1;
-a    b    c
-1    ab    1980-12-17
-2    ac    1981-02-20
-3    ad    1981-02-22
+➤ a[4,32,0]  ¦  b[1,10,0]  ¦  c[91,64,0]  𝄀
+1  ¦  ab  ¦  1980-12-17  𝄀
+2  ¦  ac  ¦  1981-02-20  𝄀
+3  ¦  ad  ¦  1981-02-22
 alter table t1 change a x VARCHAR(20) after b;
 desc t1;
-Field    Type    Null    Key    Default    Extra    Comment
-b    CHAR(10)    YES        null        
-x    VARCHAR(20)    NO    PRI    null        
-c    DATE(0)    YES        null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+b  ¦  CHAR(10)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+x  ¦  VARCHAR(20)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+c  ¦  DATE(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
 select * from t1;
-b    x    c
-ab    1    1980-12-17
-ac    2    1981-02-20
-ad    3    1981-02-22
+➤ b[1,10,0]  ¦  x[12,-1,0]  ¦  c[91,64,0]  𝄀
+ab  ¦  1  ¦  1980-12-17  𝄀
+ac  ¦  2  ¦  1981-02-20  𝄀
+ad  ¦  3  ¦  1981-02-22
 drop table if exists t1;
 CREATE TABLE t1 (a INTEGER PRIMARY KEY, b CHAR(10), c date);
 desc t1;
-Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null        
-b    CHAR(10)    YES        null        
-c    DATE(0)    YES        null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+a  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+b  ¦  CHAR(10)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+c  ¦  DATE(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
 insert into t1 values(1, 'ab', '1980-12-17');
 insert into t1 values(2, 'ac', '1981-02-20');
 insert into t1 values(3, 'ad', '1981-02-22');
 select * from t1;
-a    b    c
-1    ab    1980-12-17
-2    ac    1981-02-20
-3    ad    1981-02-22
+➤ a[4,32,0]  ¦  b[1,10,0]  ¦  c[91,64,0]  𝄀
+1  ¦  ab  ¦  1980-12-17  𝄀
+2  ¦  ac  ¦  1981-02-20  𝄀
+3  ¦  ad  ¦  1981-02-22
 alter table t1 change a x VARCHAR(20) after c;
 desc t1;
-Field    Type    Null    Key    Default    Extra    Comment
-b    CHAR(10)    YES        null        
-c    DATE(0)    YES        null        
-x    VARCHAR(20)    NO    PRI    null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+b  ¦  CHAR(10)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+c  ¦  DATE(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+x  ¦  VARCHAR(20)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦  
 select * from t1;
-b    c    x
-ab    1980-12-17    1
-ac    1981-02-20    2
-ad    1981-02-22    3
+➤ b[1,10,0]  ¦  c[91,64,0]  ¦  x[12,-1,0]  𝄀
+ab  ¦  1980-12-17  ¦  1  𝄀
+ac  ¦  1981-02-20  ¦  2  𝄀
+ad  ¦  1981-02-22  ¦  3
 drop table if exists t1;
 CREATE TABLE t1 (a INTEGER, b CHAR(10), c date, PRIMARY KEY(a));
 desc t1;
-Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null        
-b    CHAR(10)    YES        null        
-c    DATE(0)    YES        null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+a  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+b  ¦  CHAR(10)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+c  ¦  DATE(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
 insert into t1 values(1, 'ab', '1980-12-17');
 insert into t1 values(2, 'ac', '1981-02-20');
 insert into t1 values(3, 'ad', '1981-02-22');
 select * from t1;
-a    b    c
-1    ab    1980-12-17
-2    ac    1981-02-20
-3    ad    1981-02-22
+➤ a[4,32,0]  ¦  b[1,10,0]  ¦  c[91,64,0]  𝄀
+1  ¦  ab  ¦  1980-12-17  𝄀
+2  ¦  ac  ¦  1981-02-20  𝄀
+3  ¦  ad  ¦  1981-02-22
 alter table t1 change b x VARCHAR(20) first;
 desc t1;
-Field    Type    Null    Key    Default    Extra    Comment
-x    VARCHAR(20)    YES        null        
-a    INT(32)    NO    PRI    null        
-c    DATE(0)    YES        null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+x  ¦  VARCHAR(20)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+a  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+c  ¦  DATE(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
 select * from t1;
-x    a    c
-ab    1    1980-12-17
-ac    2    1981-02-20
-ad    3    1981-02-22
+➤ x[12,-1,0]  ¦  a[4,32,0]  ¦  c[91,64,0]  𝄀
+ab  ¦  1  ¦  1980-12-17  𝄀
+ac  ¦  2  ¦  1981-02-20  𝄀
+ad  ¦  3  ¦  1981-02-22
 drop table if exists t1;
 CREATE TABLE t1 (a INTEGER PRIMARY KEY, b CHAR(10), c date, d decimal(7,2));
 desc t1;
-Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null        
-b    CHAR(10)    YES        null        
-c    DATE(0)    YES        null        
-d    DECIMAL(7,2)    YES        null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+a  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+b  ¦  CHAR(10)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+c  ¦  DATE(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+d  ¦  DECIMAL(7,2)  ¦  YES  ¦    ¦  null  ¦    ¦  
 insert into t1 values(1, 'ab', '1980-12-17', 800);
 insert into t1 values(2, 'ac', '1981-02-20', 1600);
 insert into t1 values(3, 'ad', '1981-02-22', 500);
 select * from t1;
-a    b    c    d
-1    ab    1980-12-17    800.00
-2    ac    1981-02-20    1600.00
-3    ad    1981-02-22    500.00
+➤ a[4,32,0]  ¦  b[1,10,0]  ¦  c[91,64,0]  ¦  d[3,7,2]  𝄀
+1  ¦  ab  ¦  1980-12-17  ¦  800.00  𝄀
+2  ¦  ac  ¦  1981-02-20  ¦  1600.00  𝄀
+3  ¦  ad  ¦  1981-02-22  ¦  500.00
 alter table t1 change b x VARCHAR(20), change d y int unsigned;
 desc t1;
-Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null        
-x    VARCHAR(20)    YES        null        
-c    DATE(0)    YES        null        
-y    INT UNSIGNED(32)    YES        null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+a  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+x  ¦  VARCHAR(20)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+c  ¦  DATE(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+y  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  null  ¦    ¦  
 select * from t1;
-a    x    c    y
-1    ab    1980-12-17    800
-2    ac    1981-02-20    1600
-3    ad    1981-02-22    500
+➤ a[4,32,0]  ¦  x[12,-1,0]  ¦  c[91,64,0]  ¦  y[4,32,0]  𝄀
+1  ¦  ab  ¦  1980-12-17  ¦  800  𝄀
+2  ¦  ac  ¦  1981-02-20  ¦  1600  𝄀
+3  ¦  ad  ¦  1981-02-22  ¦  500
 drop table if exists t1;
 CREATE TABLE t1 (a INTEGER PRIMARY KEY, b CHAR(10), c date, d decimal(7,2));
 desc t1;
-Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null        
-b    CHAR(10)    YES        null        
-c    DATE(0)    YES        null        
-d    DECIMAL(7,2)    YES        null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+a  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+b  ¦  CHAR(10)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+c  ¦  DATE(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+d  ¦  DECIMAL(7,2)  ¦  YES  ¦    ¦  null  ¦    ¦  
 insert into t1 values(1, 'ab', '1980-12-17', 800);
 insert into t1 values(2, 'ac', '1981-02-20', 1600);
 insert into t1 values(3, 'ad', '1981-02-22', 500);
 select * from t1;
-a    b    c    d
-1    ab    1980-12-17    800.00
-2    ac    1981-02-20    1600.00
-3    ad    1981-02-22    500.00
+➤ a[4,32,0]  ¦  b[1,10,0]  ¦  c[91,64,0]  ¦  d[3,7,2]  𝄀
+1  ¦  ab  ¦  1980-12-17  ¦  800.00  𝄀
+2  ¦  ac  ¦  1981-02-20  ¦  1600.00  𝄀
+3  ¦  ad  ¦  1981-02-22  ¦  500.00
 alter table t1 change a x VARCHAR(20) PRIMARY KEY;
 Multiple primary key defined
 alter table t1 change b x VARCHAR(20) PRIMARY KEY;
@@ -154,380 +154,380 @@ alter table t1 change b z VARCHAR(20) first, change d m int unsigned after b;
 Unknown column 'b' in 'Columns Set'
 ALTER TABLE t1 CHANGE a a INT NOT NULL;
 desc t1;
-Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null        
-b    CHAR(10)    YES        null        
-c    DATE(0)    YES        null        
-d    DECIMAL(7,2)    YES        null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+a  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+b  ¦  CHAR(10)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+c  ¦  DATE(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+d  ¦  DECIMAL(7,2)  ¦  YES  ¦    ¦  null  ¦    ¦  
 select * from t1;
-a    b    c    d
-1    ab    1980-12-17    800.00
-2    ac    1981-02-20    1600.00
-3    ad    1981-02-22    500.00
+➤ a[4,32,0]  ¦  b[1,10,0]  ¦  c[91,64,0]  ¦  d[3,7,2]  𝄀
+1  ¦  ab  ¦  1980-12-17  ¦  800.00  𝄀
+2  ¦  ac  ¦  1981-02-20  ¦  1600.00  𝄀
+3  ¦  ad  ¦  1981-02-22  ¦  500.00
 alter table t1 change b z VARCHAR(20) first, change d m int unsigned after z;
 desc t1;
-Field    Type    Null    Key    Default    Extra    Comment
-z    VARCHAR(20)    YES        null        
-m    INT UNSIGNED(32)    YES        null        
-a    INT(32)    NO    PRI    null        
-c    DATE(0)    YES        null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+z  ¦  VARCHAR(20)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+m  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+a  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+c  ¦  DATE(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
 select * from t1;
-z    m    a    c
-ab    800    1    1980-12-17
-ac    1600    2    1981-02-20
-ad    500    3    1981-02-22
+➤ z[12,-1,0]  ¦  m[4,32,0]  ¦  a[4,32,0]  ¦  c[91,64,0]  𝄀
+ab  ¦  800  ¦  1  ¦  1980-12-17  𝄀
+ac  ¦  1600  ¦  2  ¦  1981-02-20  𝄀
+ad  ¦  500  ¦  3  ¦  1981-02-22
 drop table if exists t1;
 CREATE TABLE t1(a INTEGER, b CHAR(10), c datetime, d decimal(7,2), PRIMARY KEY(a, b));
 desc t1;
-Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null        
-b    CHAR(10)    NO    PRI    null        
-c    DATETIME(0)    YES        null        
-d    DECIMAL(7,2)    YES        null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+a  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+b  ¦  CHAR(10)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+c  ¦  DATETIME(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+d  ¦  DECIMAL(7,2)  ¦  YES  ¦    ¦  null  ¦    ¦  
 insert into t1 values(1, 'ab', '1980-12-17 11:34:45', 800);
 insert into t1 values(2, 'ac', '1981-02-20 10:34:45', 1600);
 insert into t1 values(3, 'ad', '1981-02-22 09:34:45', 500);
 select * from t1;
-a    b    c    d
-1    ab    1980-12-17 11:34:45    800.00
-2    ac    1981-02-20 10:34:45    1600.00
-3    ad    1981-02-22 09:34:45    500.00
+➤ a[4,32,0]  ¦  b[1,10,0]  ¦  c[93,64,0]  ¦  d[3,7,2]  𝄀
+1  ¦  ab  ¦  1980-12-17 11:34:45  ¦  800.00  𝄀
+2  ¦  ac  ¦  1981-02-20 10:34:45  ¦  1600.00  𝄀
+3  ¦  ad  ¦  1981-02-22 09:34:45  ¦  500.00
 alter table t1 change c x datetime default '2023-06-21 12:34:45' on update CURRENT_TIMESTAMP;
 desc t1;
-Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null        
-b    CHAR(10)    NO    PRI    null        
-x    DATETIME(0)    YES        2023-06-21 12:34:45        
-d    DECIMAL(7,2)    YES        null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+a  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+b  ¦  CHAR(10)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+x  ¦  DATETIME(0)  ¦  YES  ¦    ¦  2023-06-21 12:34:45  ¦    ¦    𝄀
+d  ¦  DECIMAL(7,2)  ¦  YES  ¦    ¦  null  ¦    ¦  
 select * from t1;
-a    b    x    d
-1    ab    1980-12-17 11:34:45    800.00
-2    ac    1981-02-20 10:34:45    1600.00
-3    ad    1981-02-22 09:34:45    500.00
+➤ a[4,32,0]  ¦  b[1,10,0]  ¦  x[93,64,0]  ¦  d[3,7,2]  𝄀
+1  ¦  ab  ¦  1980-12-17 11:34:45  ¦  800.00  𝄀
+2  ¦  ac  ¦  1981-02-20 10:34:45  ¦  1600.00  𝄀
+3  ¦  ad  ¦  1981-02-22 09:34:45  ¦  500.00
 alter table t1 change x y date;
 desc t1;
-Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null        
-b    CHAR(10)    NO    PRI    null        
-y    DATE(0)    YES        null        
-d    DECIMAL(7,2)    YES        null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+a  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+b  ¦  CHAR(10)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+y  ¦  DATE(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+d  ¦  DECIMAL(7,2)  ¦  YES  ¦    ¦  null  ¦    ¦  
 select * from t1;
-a    b    y    d
-1    ab    1980-12-17    800.00
-2    ac    1981-02-20    1600.00
-3    ad    1981-02-22    500.00
+➤ a[4,32,0]  ¦  b[1,10,0]  ¦  y[91,64,0]  ¦  d[3,7,2]  𝄀
+1  ¦  ab  ¦  1980-12-17  ¦  800.00  𝄀
+2  ¦  ac  ¦  1981-02-20  ¦  1600.00  𝄀
+3  ¦  ad  ¦  1981-02-22  ¦  500.00
 drop table if exists t1;
 CREATE TABLE t1 (a INTEGER, b CHAR(10), c datetime PRIMARY KEY default '2023-06-21' on update CURRENT_TIMESTAMP);
 desc t1;
-Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    YES        null        
-b    CHAR(10)    YES        null        
-c    DATETIME(0)    NO    PRI    2023-06-21        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+a  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+b  ¦  CHAR(10)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+c  ¦  DATETIME(0)  ¦  NO  ¦  PRI  ¦  2023-06-21  ¦    ¦  
 insert into t1 values(1, 'ab', '1980-12-17');
 insert into t1 values(2, 'ac', '1981-02-20');
 insert into t1 values(3, 'ad', '1981-02-22');
 select * from t1;
-a    b    c
-1    ab    1980-12-17 00:00:00
-2    ac    1981-02-20 00:00:00
-3    ad    1981-02-22 00:00:00
+➤ a[4,32,0]  ¦  b[1,10,0]  ¦  c[93,64,0]  𝄀
+1  ¦  ab  ¦  1980-12-17 00:00:00  𝄀
+2  ¦  ac  ¦  1981-02-20 00:00:00  𝄀
+3  ¦  ad  ¦  1981-02-22 00:00:00
 alter table t1 change c x date first;
 desc t1;
-Field    Type    Null    Key    Default    Extra    Comment
-x    DATE(0)    NO    PRI    null        
-a    INT(32)    YES        null        
-b    CHAR(10)    YES        null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+x  ¦  DATE(0)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+a  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+b  ¦  CHAR(10)  ¦  YES  ¦    ¦  null  ¦    ¦  
 select * from t1;
-x    a    b
-1980-12-17    1    ab
-1981-02-20    2    ac
-1981-02-22    3    ad
+➤ x[91,64,0]  ¦  a[4,32,0]  ¦  b[1,10,0]  𝄀
+1980-12-17  ¦  1  ¦  ab  𝄀
+1981-02-20  ¦  2  ¦  ac  𝄀
+1981-02-22  ¦  3  ¦  ad
 alter table t1 change x y datetime default '2023-06-21';
 desc t1;
-Field    Type    Null    Key    Default    Extra    Comment
-y    DATETIME(0)    NO    PRI    2023-06-21        
-a    INT(32)    YES        null        
-b    CHAR(10)    YES        null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+y  ¦  DATETIME(0)  ¦  NO  ¦  PRI  ¦  2023-06-21  ¦    ¦    𝄀
+a  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+b  ¦  CHAR(10)  ¦  YES  ¦    ¦  null  ¦    ¦  
 select * from t1;
-y    a    b
-1980-12-17 00:00:00    1    ab
-1981-02-20 00:00:00    2    ac
-1981-02-22 00:00:00    3    ad
+➤ y[93,64,0]  ¦  a[4,32,0]  ¦  b[1,10,0]  𝄀
+1980-12-17 00:00:00  ¦  1  ¦  ab  𝄀
+1981-02-20 00:00:00  ¦  2  ¦  ac  𝄀
+1981-02-22 00:00:00  ¦  3  ¦  ad
 drop table if exists t1;
 CREATE TABLE t1(a INTEGER PRIMARY KEY, b CHAR(10), c date, d decimal(7,2), UNIQUE KEY(a, b));
 desc t1;
-Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null        
-b    CHAR(10)    YES        null        
-c    DATE(0)    YES        null        
-d    DECIMAL(7,2)    YES        null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+a  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+b  ¦  CHAR(10)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+c  ¦  DATE(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+d  ¦  DECIMAL(7,2)  ¦  YES  ¦    ¦  null  ¦    ¦  
 insert into t1 values(1, 'ab', '1980-12-17', 800);
 insert into t1 values(2, 'ac', '1981-02-20', 1600);
 insert into t1 values(3, 'ad', '1981-02-22', 500);
 select * from t1;
-a    b    c    d
-1    ab    1980-12-17    800.00
-2    ac    1981-02-20    1600.00
-3    ad    1981-02-22    500.00
+➤ a[4,32,0]  ¦  b[1,10,0]  ¦  c[91,64,0]  ¦  d[3,7,2]  𝄀
+1  ¦  ab  ¦  1980-12-17  ¦  800.00  𝄀
+2  ¦  ac  ¦  1981-02-20  ¦  1600.00  𝄀
+3  ¦  ad  ¦  1981-02-22  ¦  500.00
 alter table t1 change b x VARCHAR(20);
 show index from t1;
-Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t1    0    a    1    a    A    0    NULL    NULL                        YES    a
-t1    0    a    2    x    A    0    NULL    NULL    YES                    YES    x
-t1    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    a
+➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
+t1  ¦  0  ¦  a  ¦  1  ¦  a  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  a  𝄀
+t1  ¦  0  ¦  a  ¦  2  ¦  x  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  x  𝄀
+t1  ¦  0  ¦  PRIMARY  ¦  1  ¦  a  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  a
 desc t1;
-Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null        
-x    VARCHAR(20)    YES        null        
-c    DATE(0)    YES        null        
-d    DECIMAL(7,2)    YES        null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+a  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+x  ¦  VARCHAR(20)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+c  ¦  DATE(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+d  ¦  DECIMAL(7,2)  ¦  YES  ¦    ¦  null  ¦    ¦  
 select * from t1;
-a    x    c    d
-1    ab    1980-12-17    800.00
-2    ac    1981-02-20    1600.00
-3    ad    1981-02-22    500.00
+➤ a[4,32,0]  ¦  x[12,-1,0]  ¦  c[91,64,0]  ¦  d[3,7,2]  𝄀
+1  ¦  ab  ¦  1980-12-17  ¦  800.00  𝄀
+2  ¦  ac  ¦  1981-02-20  ¦  1600.00  𝄀
+3  ¦  ad  ¦  1981-02-22  ¦  500.00
 alter table t1 change x y VARCHAR(20) UNIQUE KEY;
 show index from t1;
-Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t1    0    a    1    a    A    0    NULL    NULL                        YES    a
-t1    0    a    2    y    A    0    NULL    NULL    YES                    YES    y
-t1    0    y    1    y    A    0    NULL    NULL    YES                    YES    y
-t1    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    a
+➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
+t1  ¦  0  ¦  a  ¦  1  ¦  a  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  a  𝄀
+t1  ¦  0  ¦  a  ¦  2  ¦  y  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  y  𝄀
+t1  ¦  0  ¦  y  ¦  1  ¦  y  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  y  𝄀
+t1  ¦  0  ¦  PRIMARY  ¦  1  ¦  a  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  a
 desc t1;
-Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null        
-y    VARCHAR(20)    YES    UNI    null        
-c    DATE(0)    YES        null        
-d    DECIMAL(7,2)    YES        null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+a  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+y  ¦  VARCHAR(20)  ¦  YES  ¦  UNI  ¦  null  ¦    ¦    𝄀
+c  ¦  DATE(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+d  ¦  DECIMAL(7,2)  ¦  YES  ¦    ¦  null  ¦    ¦  
 select * from t1;
-a    y    c    d
-1    ab    1980-12-17    800.00
-2    ac    1981-02-20    1600.00
-3    ad    1981-02-22    500.00
+➤ a[4,32,0]  ¦  y[12,-1,0]  ¦  c[91,64,0]  ¦  d[3,7,2]  𝄀
+1  ¦  ab  ¦  1980-12-17  ¦  800.00  𝄀
+2  ¦  ac  ¦  1981-02-20  ¦  1600.00  𝄀
+3  ¦  ad  ¦  1981-02-22  ¦  500.00
 alter table t1 change y z VARCHAR(20) UNIQUE KEY;
 show index from t1;
-Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t1    0    a    1    a    A    0    NULL    NULL                        YES    a
-t1    0    a    2    z    A    0    NULL    NULL    YES                    YES    z
-t1    0    y    1    z    A    0    NULL    NULL    YES                    YES    z
-t1    0    z    1    z    A    0    NULL    NULL    YES                    YES    z
-t1    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    a
+➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
+t1  ¦  0  ¦  a  ¦  1  ¦  a  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  a  𝄀
+t1  ¦  0  ¦  a  ¦  2  ¦  z  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  z  𝄀
+t1  ¦  0  ¦  y  ¦  1  ¦  z  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  z  𝄀
+t1  ¦  0  ¦  z  ¦  1  ¦  z  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  z  𝄀
+t1  ¦  0  ¦  PRIMARY  ¦  1  ¦  a  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  a
 desc t1;
-Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null        
-z    VARCHAR(20)    YES    UNI    null        
-c    DATE(0)    YES        null        
-d    DECIMAL(7,2)    YES        null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+a  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+z  ¦  VARCHAR(20)  ¦  YES  ¦  UNI  ¦  null  ¦    ¦    𝄀
+c  ¦  DATE(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+d  ¦  DECIMAL(7,2)  ¦  YES  ¦    ¦  null  ¦    ¦  
 select * from t1;
-a    z    c    d
-1    ab    1980-12-17    800.00
-2    ac    1981-02-20    1600.00
-3    ad    1981-02-22    500.00
+➤ a[4,32,0]  ¦  z[12,-1,0]  ¦  c[91,64,0]  ¦  d[3,7,2]  𝄀
+1  ¦  ab  ¦  1980-12-17  ¦  800.00  𝄀
+2  ¦  ac  ¦  1981-02-20  ¦  1600.00  𝄀
+3  ¦  ad  ¦  1981-02-22  ¦  500.00
 drop table if exists t1;
 CREATE TABLE t1(a INTEGER PRIMARY KEY, b CHAR(10), c date, d decimal(7,2), UNIQUE KEY(a, b));
 desc t1;
-Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null        
-b    CHAR(10)    YES        null        
-c    DATE(0)    YES        null        
-d    DECIMAL(7,2)    YES        null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+a  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+b  ¦  CHAR(10)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+c  ¦  DATE(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+d  ¦  DECIMAL(7,2)  ¦  YES  ¦    ¦  null  ¦    ¦  
 insert into t1 values(1, 'ab', '1980-12-17', 800);
 insert into t1 values(2, 'ac', '1981-02-20', 1600);
 insert into t1 values(3, 'ad', '1981-02-22', 500);
 select * from t1;
-a    b    c    d
-1    ab    1980-12-17    800.00
-2    ac    1981-02-20    1600.00
-3    ad    1981-02-22    500.00
+➤ a[4,32,0]  ¦  b[1,10,0]  ¦  c[91,64,0]  ¦  d[3,7,2]  𝄀
+1  ¦  ab  ¦  1980-12-17  ¦  800.00  𝄀
+2  ¦  ac  ¦  1981-02-20  ¦  1600.00  𝄀
+3  ¦  ad  ¦  1981-02-22  ¦  500.00
 alter table t1 rename column a to x;
 show index from t1;
-Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t1    0    a    1    x    A    0    NULL    NULL                        YES    x
-t1    0    a    2    b    A    0    NULL    NULL    YES                    YES    b
-t1    0    PRIMARY    1    x    A    0    NULL    NULL                        YES    x
+➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
+t1  ¦  0  ¦  a  ¦  2  ¦  b  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  b  𝄀
+t1  ¦  0  ¦  a  ¦  1  ¦  x  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  x  𝄀
+t1  ¦  0  ¦  PRIMARY  ¦  1  ¦  x  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  x
 desc t1;
-Field    Type    Null    Key    Default    Extra    Comment
-x    INT(32)    NO    PRI    null        
-b    CHAR(10)    YES        null        
-c    DATE(0)    YES        null        
-d    DECIMAL(7,2)    YES        null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+x  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+b  ¦  CHAR(10)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+c  ¦  DATE(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+d  ¦  DECIMAL(7,2)  ¦  YES  ¦    ¦  null  ¦    ¦  
 select * from t1;
-x    b    c    d
-1    ab    1980-12-17    800.00
-2    ac    1981-02-20    1600.00
-3    ad    1981-02-22    500.00
+➤ x[4,32,0]  ¦  b[1,10,0]  ¦  c[91,64,0]  ¦  d[3,7,2]  𝄀
+1  ¦  ab  ¦  1980-12-17  ¦  800.00  𝄀
+2  ¦  ac  ¦  1981-02-20  ¦  1600.00  𝄀
+3  ¦  ad  ¦  1981-02-22  ¦  500.00
 alter table t1 rename column b to y;
 show index from t1;
-Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t1    0    a    1    x    A    0    NULL    NULL                        YES    x
-t1    0    a    2    y    A    0    NULL    NULL    YES                    YES    y
-t1    0    PRIMARY    1    x    A    0    NULL    NULL                        YES    x
+➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
+t1  ¦  0  ¦  a  ¦  1  ¦  x  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  x  𝄀
+t1  ¦  0  ¦  PRIMARY  ¦  1  ¦  x  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  x  𝄀
+t1  ¦  0  ¦  a  ¦  2  ¦  y  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  y
 desc t1;
-Field    Type    Null    Key    Default    Extra    Comment
-x    INT(32)    NO    PRI    null        
-y    CHAR(10)    YES        null        
-c    DATE(0)    YES        null        
-d    DECIMAL(7,2)    YES        null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+x  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+y  ¦  CHAR(10)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+c  ¦  DATE(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+d  ¦  DECIMAL(7,2)  ¦  YES  ¦    ¦  null  ¦    ¦  
 select * from t1;
-x    y    c    d
-1    ab    1980-12-17    800.00
-2    ac    1981-02-20    1600.00
-3    ad    1981-02-22    500.00
+➤ x[4,32,0]  ¦  y[1,10,0]  ¦  c[91,64,0]  ¦  d[3,7,2]  𝄀
+1  ¦  ab  ¦  1980-12-17  ¦  800.00  𝄀
+2  ¦  ac  ¦  1981-02-20  ¦  1600.00  𝄀
+3  ¦  ad  ¦  1981-02-22  ¦  500.00
 drop table if exists t1;
 CREATE TABLE t1(a INTEGER PRIMARY KEY, b CHAR(10), c date, d decimal(7,2), INDEX(a, b), KEY(c));
 desc t1;
-Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null        
-b    CHAR(10)    YES        null        
-c    DATE(0)    YES    MUL    null        
-d    DECIMAL(7,2)    YES        null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+a  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+b  ¦  CHAR(10)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+c  ¦  DATE(0)  ¦  YES  ¦  MUL  ¦  null  ¦    ¦    𝄀
+d  ¦  DECIMAL(7,2)  ¦  YES  ¦    ¦  null  ¦    ¦  
 insert into t1 values(1, 'ab', '1980-12-17', 800);
 insert into t1 values(2, 'ac', '1981-02-20', 1600);
 insert into t1 values(3, 'ad', '1981-02-22', 500);
 select * from t1;
-a    b    c    d
-1    ab    1980-12-17    800.00
-2    ac    1981-02-20    1600.00
-3    ad    1981-02-22    500.00
+➤ a[4,32,0]  ¦  b[1,10,0]  ¦  c[91,64,0]  ¦  d[3,7,2]  𝄀
+1  ¦  ab  ¦  1980-12-17  ¦  800.00  𝄀
+2  ¦  ac  ¦  1981-02-20  ¦  1600.00  𝄀
+3  ¦  ad  ¦  1981-02-22  ¦  500.00
 alter table t1 change c x datetime;
 show index from t1;
-Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t1    1    a    1    a    A    0    NULL    NULL                        YES    a
-t1    1    a    2    b    A    0    NULL    NULL    YES                    YES    b
-t1    1    c    1    x    A    0    NULL    NULL    YES                    YES    x
-t1    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    a
+➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
+t1  ¦  1  ¦  a  ¦  1  ¦  a  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  a  𝄀
+t1  ¦  1  ¦  a  ¦  2  ¦  b  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  b  𝄀
+t1  ¦  1  ¦  c  ¦  1  ¦  x  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  x  𝄀
+t1  ¦  0  ¦  PRIMARY  ¦  1  ¦  a  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  a
 desc t1;
-Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null        
-b    CHAR(10)    YES        null        
-x    DATETIME(0)    YES    MUL    null        
-d    DECIMAL(7,2)    YES        null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+a  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+b  ¦  CHAR(10)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+x  ¦  DATETIME(0)  ¦  YES  ¦  MUL  ¦  null  ¦    ¦    𝄀
+d  ¦  DECIMAL(7,2)  ¦  YES  ¦    ¦  null  ¦    ¦  
 select * from t1;
-a    b    x    d
-1    ab    1980-12-17 00:00:00    800.00
-2    ac    1981-02-20 00:00:00    1600.00
-3    ad    1981-02-22 00:00:00    500.00
+➤ a[4,32,0]  ¦  b[1,10,0]  ¦  x[93,64,0]  ¦  d[3,7,2]  𝄀
+1  ¦  ab  ¦  1980-12-17 00:00:00  ¦  800.00  𝄀
+2  ¦  ac  ¦  1981-02-20 00:00:00  ¦  1600.00  𝄀
+3  ¦  ad  ¦  1981-02-22 00:00:00  ¦  500.00
 alter table t1 change x y VARCHAR(20) KEY;
 Multiple primary key defined
 alter table t1 change x y VARCHAR(20) UNIQUE KEY;
 show index from t1;
-Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t1    0    y    1    y    A    0    NULL    NULL    YES                    YES    y
-t1    1    a    1    a    A    0    NULL    NULL                        YES    a
-t1    1    a    2    b    A    0    NULL    NULL    YES                    YES    b
-t1    1    c    1    y    A    0    NULL    NULL    YES                    YES    y
-t1    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    a
+➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
+t1  ¦  0  ¦  y  ¦  1  ¦  y  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  y  𝄀
+t1  ¦  1  ¦  a  ¦  1  ¦  a  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  a  𝄀
+t1  ¦  1  ¦  a  ¦  2  ¦  b  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  b  𝄀
+t1  ¦  1  ¦  c  ¦  1  ¦  y  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  y  𝄀
+t1  ¦  0  ¦  PRIMARY  ¦  1  ¦  a  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  a
 desc t1;
-Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null        
-b    CHAR(10)    YES        null        
-y    VARCHAR(20)    YES    UNI    null        
-d    DECIMAL(7,2)    YES        null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+a  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+b  ¦  CHAR(10)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+y  ¦  VARCHAR(20)  ¦  YES  ¦  UNI  ¦  null  ¦    ¦    𝄀
+d  ¦  DECIMAL(7,2)  ¦  YES  ¦    ¦  null  ¦    ¦  
 select * from t1;
-a    b    y    d
-1    ab    1980-12-17 00:00:00    800.00
-2    ac    1981-02-20 00:00:00    1600.00
-3    ad    1981-02-22 00:00:00    500.00
+➤ a[4,32,0]  ¦  b[1,10,0]  ¦  y[12,-1,0]  ¦  d[3,7,2]  𝄀
+1  ¦  ab  ¦  1980-12-17 00:00:00  ¦  800.00  𝄀
+2  ¦  ac  ¦  1981-02-20 00:00:00  ¦  1600.00  𝄀
+3  ¦  ad  ¦  1981-02-22 00:00:00  ¦  500.00
 drop table if exists t1;
 create table t1(a int unsigned, b varchar(15) NOT NULL, c date, d decimal(7,2), primary key(a));
 desc t1;
-Field    Type    Null    Key    Default    Extra    Comment
-a    INT UNSIGNED(32)    NO    PRI    null        
-b    VARCHAR(15)    NO        null        
-c    DATE(0)    YES        null        
-d    DECIMAL(7,2)    YES        null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+a  ¦  INT UNSIGNED(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+b  ¦  VARCHAR(15)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+c  ¦  DATE(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+d  ¦  DECIMAL(7,2)  ¦  YES  ¦    ¦  null  ¦    ¦  
 insert into t1 values (7369,'SMITH','1980-12-17',800);
 insert into t1 values  (7499,'ALLEN','1981-02-20',1600);
 insert into t1 values (7521,'WARD','1981-02-22',1250);
 insert into t1 values  (7566,'JONES','1981-04-02',2975);
 insert into t1 values  (7654,'MARTIN','1981-09-28',1250);
 select * from t1;
-a    b    c    d
-7369    SMITH    1980-12-17    800.00
-7499    ALLEN    1981-02-20    1600.00
-7521    WARD    1981-02-22    1250.00
-7566    JONES    1981-04-02    2975.00
-7654    MARTIN    1981-09-28    1250.00
+➤ a[4,32,0]  ¦  b[12,-1,0]  ¦  c[91,64,0]  ¦  d[3,7,2]  𝄀
+7369  ¦  SMITH  ¦  1980-12-17  ¦  800.00  𝄀
+7499  ¦  ALLEN  ¦  1981-02-20  ¦  1600.00  𝄀
+7521  ¦  WARD  ¦  1981-02-22  ¦  1250.00  𝄀
+7566  ¦  JONES  ¦  1981-04-02  ¦  2975.00  𝄀
+7654  ¦  MARTIN  ¦  1981-09-28  ¦  1250.00
 alter table t1 change a x int auto_increment;
 desc t1;
-Field    Type    Null    Key    Default    Extra    Comment
-x    INT(32)    NO    PRI    null    auto_increment    
-b    VARCHAR(15)    NO        null        
-c    DATE(0)    YES        null        
-d    DECIMAL(7,2)    YES        null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+x  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦  auto_increment  ¦    𝄀
+b  ¦  VARCHAR(15)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+c  ¦  DATE(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+d  ¦  DECIMAL(7,2)  ¦  YES  ¦    ¦  null  ¦    ¦  
 select * from t1;
-x    b    c    d
-7369    SMITH    1980-12-17    800.00
-7499    ALLEN    1981-02-20    1600.00
-7521    WARD    1981-02-22    1250.00
-7566    JONES    1981-04-02    2975.00
-7654    MARTIN    1981-09-28    1250.00
+➤ x[4,32,0]  ¦  b[12,-1,0]  ¦  c[91,64,0]  ¦  d[3,7,2]  𝄀
+7369  ¦  SMITH  ¦  1980-12-17  ¦  800.00  𝄀
+7499  ¦  ALLEN  ¦  1981-02-20  ¦  1600.00  𝄀
+7521  ¦  WARD  ¦  1981-02-22  ¦  1250.00  𝄀
+7566  ¦  JONES  ¦  1981-04-02  ¦  2975.00  𝄀
+7654  ¦  MARTIN  ¦  1981-09-28  ¦  1250.00
 alter table t1 change d y decimal(6,2);
 desc t1;
-Field    Type    Null    Key    Default    Extra    Comment
-x    INT(32)    NO    PRI    null    auto_increment    
-b    VARCHAR(15)    NO        null        
-c    DATE(0)    YES        null        
-y    DECIMAL(6,2)    YES        null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+x  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦  auto_increment  ¦    𝄀
+b  ¦  VARCHAR(15)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+c  ¦  DATE(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+y  ¦  DECIMAL(6,2)  ¦  YES  ¦    ¦  null  ¦    ¦  
 select * from t1;
-x    b    c    y
-7369    SMITH    1980-12-17    800.00
-7499    ALLEN    1981-02-20    1600.00
-7521    WARD    1981-02-22    1250.00
-7566    JONES    1981-04-02    2975.00
-7654    MARTIN    1981-09-28    1250.00
+➤ x[4,32,0]  ¦  b[12,-1,0]  ¦  c[91,64,0]  ¦  y[3,6,2]  𝄀
+7369  ¦  SMITH  ¦  1980-12-17  ¦  800.00  𝄀
+7499  ¦  ALLEN  ¦  1981-02-20  ¦  1600.00  𝄀
+7521  ¦  WARD  ¦  1981-02-22  ¦  1250.00  𝄀
+7566  ¦  JONES  ¦  1981-04-02  ¦  2975.00  𝄀
+7654  ¦  MARTIN  ¦  1981-09-28  ¦  1250.00
 drop table if exists t1;
 CREATE TABLE t1(a INTEGER, b CHAR(10), c datetime, d decimal(7,2), PRIMARY KEY(a, b));
 desc t1;
-Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null        
-b    CHAR(10)    NO    PRI    null        
-c    DATETIME(0)    YES        null        
-d    DECIMAL(7,2)    YES        null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+a  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+b  ¦  CHAR(10)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+c  ¦  DATETIME(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+d  ¦  DECIMAL(7,2)  ¦  YES  ¦    ¦  null  ¦    ¦  
 insert into t1 values(1, 'ab', '1980-12-17 11:34:45', 800);
 insert into t1 values(2, 'ac', '1981-02-20 10:34:45', 1600);
 insert into t1 values(3, 'ad', '1981-02-22 09:34:45', 500);
 select * from t1;
-a    b    c    d
-1    ab    1980-12-17 11:34:45    800.00
-2    ac    1981-02-20 10:34:45    1600.00
-3    ad    1981-02-22 09:34:45    500.00
+➤ a[4,32,0]  ¦  b[1,10,0]  ¦  c[93,64,0]  ¦  d[3,7,2]  𝄀
+1  ¦  ab  ¦  1980-12-17 11:34:45  ¦  800.00  𝄀
+2  ¦  ac  ¦  1981-02-20 10:34:45  ¦  1600.00  𝄀
+3  ¦  ad  ¦  1981-02-22 09:34:45  ¦  500.00
 alter table t1 change a x decimal(7,2);
 desc t1;
-Field    Type    Null    Key    Default    Extra    Comment
-x    DECIMAL(7,2)    NO    PRI    null        
-b    CHAR(10)    NO    PRI    null        
-c    DATETIME(0)    YES        null        
-d    DECIMAL(7,2)    YES        null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+x  ¦  DECIMAL(7,2)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+b  ¦  CHAR(10)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+c  ¦  DATETIME(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+d  ¦  DECIMAL(7,2)  ¦  YES  ¦    ¦  null  ¦    ¦  
 select * from t1;
-x    b    c    d
-1.00    ab    1980-12-17 11:34:45    800.00
-2.00    ac    1981-02-20 10:34:45    1600.00
-3.00    ad    1981-02-22 09:34:45    500.00
+➤ x[3,7,2]  ¦  b[1,10,0]  ¦  c[93,64,0]  ¦  d[3,7,2]  𝄀
+1.00  ¦  ab  ¦  1980-12-17 11:34:45  ¦  800.00  𝄀
+2.00  ¦  ac  ¦  1981-02-20 10:34:45  ¦  1600.00  𝄀
+3.00  ¦  ad  ¦  1981-02-22 09:34:45  ¦  500.00
 alter table t1 rename column b to y;
 desc t1;
-Field    Type    Null    Key    Default    Extra    Comment
-x    DECIMAL(7,2)    NO    PRI    null        
-y    CHAR(10)    NO    PRI    null        
-c    DATETIME(0)    YES        null        
-d    DECIMAL(7,2)    YES        null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+x  ¦  DECIMAL(7,2)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+y  ¦  CHAR(10)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+c  ¦  DATETIME(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+d  ¦  DECIMAL(7,2)  ¦  YES  ¦    ¦  null  ¦    ¦  
 select * from t1;
-x    y    c    d
-1.00    ab    1980-12-17 11:34:45    800.00
-2.00    ac    1981-02-20 10:34:45    1600.00
-3.00    ad    1981-02-22 09:34:45    500.00
+➤ x[3,7,2]  ¦  y[1,10,0]  ¦  c[93,64,0]  ¦  d[3,7,2]  𝄀
+1.00  ¦  ab  ¦  1980-12-17 11:34:45  ¦  800.00  𝄀
+2.00  ¦  ac  ¦  1981-02-20 10:34:45  ¦  1600.00  𝄀
+3.00  ¦  ad  ¦  1981-02-22 09:34:45  ¦  500.00
 alter table t1 rename column c to z;
 desc t1;
-Field    Type    Null    Key    Default    Extra    Comment
-x    DECIMAL(7,2)    NO    PRI    null        
-y    CHAR(10)    NO    PRI    null        
-z    DATETIME(0)    YES        null        
-d    DECIMAL(7,2)    YES        null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+x  ¦  DECIMAL(7,2)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+y  ¦  CHAR(10)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+z  ¦  DATETIME(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+d  ¦  DECIMAL(7,2)  ¦  YES  ¦    ¦  null  ¦    ¦  
 select * from t1;
-x    y    z    d
-1.00    ab    1980-12-17 11:34:45    800.00
-2.00    ac    1981-02-20 10:34:45    1600.00
-3.00    ad    1981-02-22 09:34:45    500.00
+➤ x[3,7,2]  ¦  y[1,10,0]  ¦  z[93,64,0]  ¦  d[3,7,2]  𝄀
+1.00  ¦  ab  ¦  1980-12-17 11:34:45  ¦  800.00  𝄀
+2.00  ¦  ac  ¦  1981-02-20 10:34:45  ¦  1600.00  𝄀
+3.00  ¦  ad  ¦  1981-02-22 09:34:45  ¦  500.00
 drop table if exists dept;
 create table dept(
 deptno varchar(20),
@@ -574,258 +574,258 @@ alter table emp change deptno deptno varchar(10);
 Cannot change column 'deptno': used in a foreign key constraint 'c1'
 alter table emp change deptno deptno varchar(25);
 desc emp;
-Field    Type    Null    Key    Default    Extra    Comment
-empno    INT UNSIGNED(32)    NO    PRI    null    auto_increment    
-ename    VARCHAR(15)    YES        null        
-job    VARCHAR(10)    YES        null        
-mgr    INT UNSIGNED(32)    YES        null        
-hiredate    DATE(0)    YES        null        
-sal    DECIMAL(7,2)    YES        null        
-comm    DECIMAL(7,2)    YES        null        
-deptno    VARCHAR(25)    YES    MUL    null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+empno  ¦  INT UNSIGNED(32)  ¦  NO  ¦  PRI  ¦  null  ¦  auto_increment  ¦    𝄀
+ename  ¦  VARCHAR(15)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+job  ¦  VARCHAR(10)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+mgr  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+hiredate  ¦  DATE(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+sal  ¦  DECIMAL(7,2)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+comm  ¦  DECIMAL(7,2)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+deptno  ¦  VARCHAR(25)  ¦  YES  ¦  MUL  ¦  null  ¦    ¦  
 select * from emp;
-empno    ename    job    mgr    hiredate    sal    comm    deptno
-7369    SMITH    CLERK    7902    1980-12-17    800.00    null    20
-7499    ALLEN    SALESMAN    7698    1981-02-20    1600.00    300.00    30
-7521    WARD    SALESMAN    7698    1981-02-22    1250.00    500.00    30
-7566    JONES    MANAGER    7839    1981-04-02    2975.00    null    20
-7654    MARTIN    SALESMAN    7698    1981-09-28    1250.00    1400.00    30
-7698    BLAKE    MANAGER    7839    1981-05-01    2850.00    null    30
-7782    CLARK    MANAGER    7839    1981-06-09    2450.00    null    10
-7788    SCOTT    ANALYST    7566    0087-07-13    3000.00    null    20
-7839    KING    PRESIDENT    null    1981-11-17    5000.00    null    10
-7844    TURNER    SALESMAN    7698    1981-09-08    1500.00    0.00    30
-7876    ADAMS    CLERK    7788    0087-07-13    1100.00    null    20
-7900    JAMES    CLERK    7698    1981-12-03    950.00    null    30
-7902    FORD    ANALYST    7566    1981-12-03    3000.00    null    20
-7934    MILLER    CLERK    7782    1982-01-23    1300.00    null    10
+➤ empno[4,32,0]  ¦  ename[12,-1,0]  ¦  job[12,-1,0]  ¦  mgr[4,32,0]  ¦  hiredate[91,64,0]  ¦  sal[3,7,2]  ¦  comm[3,7,2]  ¦  deptno[12,-1,0]  𝄀
+7369  ¦  SMITH  ¦  CLERK  ¦  7902  ¦  1980-12-17  ¦  800.00  ¦  null  ¦  20  𝄀
+7499  ¦  ALLEN  ¦  SALESMAN  ¦  7698  ¦  1981-02-20  ¦  1600.00  ¦  300.00  ¦  30  𝄀
+7521  ¦  WARD  ¦  SALESMAN  ¦  7698  ¦  1981-02-22  ¦  1250.00  ¦  500.00  ¦  30  𝄀
+7566  ¦  JONES  ¦  MANAGER  ¦  7839  ¦  1981-04-02  ¦  2975.00  ¦  null  ¦  20  𝄀
+7654  ¦  MARTIN  ¦  SALESMAN  ¦  7698  ¦  1981-09-28  ¦  1250.00  ¦  1400.00  ¦  30  𝄀
+7698  ¦  BLAKE  ¦  MANAGER  ¦  7839  ¦  1981-05-01  ¦  2850.00  ¦  null  ¦  30  𝄀
+7782  ¦  CLARK  ¦  MANAGER  ¦  7839  ¦  1981-06-09  ¦  2450.00  ¦  null  ¦  10  𝄀
+7788  ¦  SCOTT  ¦  ANALYST  ¦  7566  ¦  0087-07-13  ¦  3000.00  ¦  null  ¦  20  𝄀
+7839  ¦  KING  ¦  PRESIDENT  ¦  null  ¦  1981-11-17  ¦  5000.00  ¦  null  ¦  10  𝄀
+7844  ¦  TURNER  ¦  SALESMAN  ¦  7698  ¦  1981-09-08  ¦  1500.00  ¦  0.00  ¦  30  𝄀
+7876  ¦  ADAMS  ¦  CLERK  ¦  7788  ¦  0087-07-13  ¦  1100.00  ¦  null  ¦  20  𝄀
+7900  ¦  JAMES  ¦  CLERK  ¦  7698  ¦  1981-12-03  ¦  950.00  ¦  null  ¦  30  𝄀
+7902  ¦  FORD  ¦  ANALYST  ¦  7566  ¦  1981-12-03  ¦  3000.00  ¦  null  ¦  20  𝄀
+7934  ¦  MILLER  ¦  CLERK  ¦  7782  ¦  1982-01-23  ¦  1300.00  ¦  null  ¦  10
 alter table emp change deptno deptId varchar(25);
 desc emp;
-Field    Type    Null    Key    Default    Extra    Comment
-empno    INT UNSIGNED(32)    NO    PRI    null    auto_increment    
-ename    VARCHAR(15)    YES        null        
-job    VARCHAR(10)    YES        null        
-mgr    INT UNSIGNED(32)    YES        null        
-hiredate    DATE(0)    YES        null        
-sal    DECIMAL(7,2)    YES        null        
-comm    DECIMAL(7,2)    YES        null        
-deptId    VARCHAR(25)    YES    MUL    null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+empno  ¦  INT UNSIGNED(32)  ¦  NO  ¦  PRI  ¦  null  ¦  auto_increment  ¦    𝄀
+ename  ¦  VARCHAR(15)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+job  ¦  VARCHAR(10)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+mgr  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+hiredate  ¦  DATE(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+sal  ¦  DECIMAL(7,2)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+comm  ¦  DECIMAL(7,2)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+deptId  ¦  VARCHAR(25)  ¦  YES  ¦  MUL  ¦  null  ¦    ¦  
 select * from emp;
-empno    ename    job    mgr    hiredate    sal    comm    deptid
-7369    SMITH    CLERK    7902    1980-12-17    800.00    null    20
-7499    ALLEN    SALESMAN    7698    1981-02-20    1600.00    300.00    30
-7521    WARD    SALESMAN    7698    1981-02-22    1250.00    500.00    30
-7566    JONES    MANAGER    7839    1981-04-02    2975.00    null    20
-7654    MARTIN    SALESMAN    7698    1981-09-28    1250.00    1400.00    30
-7698    BLAKE    MANAGER    7839    1981-05-01    2850.00    null    30
-7782    CLARK    MANAGER    7839    1981-06-09    2450.00    null    10
-7788    SCOTT    ANALYST    7566    0087-07-13    3000.00    null    20
-7839    KING    PRESIDENT    null    1981-11-17    5000.00    null    10
-7844    TURNER    SALESMAN    7698    1981-09-08    1500.00    0.00    30
-7876    ADAMS    CLERK    7788    0087-07-13    1100.00    null    20
-7900    JAMES    CLERK    7698    1981-12-03    950.00    null    30
-7902    FORD    ANALYST    7566    1981-12-03    3000.00    null    20
-7934    MILLER    CLERK    7782    1982-01-23    1300.00    null    10
+➤ empno[4,32,0]  ¦  ename[12,-1,0]  ¦  job[12,-1,0]  ¦  mgr[4,32,0]  ¦  hiredate[91,64,0]  ¦  sal[3,7,2]  ¦  comm[3,7,2]  ¦  deptid[12,-1,0]  𝄀
+7369  ¦  SMITH  ¦  CLERK  ¦  7902  ¦  1980-12-17  ¦  800.00  ¦  null  ¦  20  𝄀
+7499  ¦  ALLEN  ¦  SALESMAN  ¦  7698  ¦  1981-02-20  ¦  1600.00  ¦  300.00  ¦  30  𝄀
+7521  ¦  WARD  ¦  SALESMAN  ¦  7698  ¦  1981-02-22  ¦  1250.00  ¦  500.00  ¦  30  𝄀
+7566  ¦  JONES  ¦  MANAGER  ¦  7839  ¦  1981-04-02  ¦  2975.00  ¦  null  ¦  20  𝄀
+7654  ¦  MARTIN  ¦  SALESMAN  ¦  7698  ¦  1981-09-28  ¦  1250.00  ¦  1400.00  ¦  30  𝄀
+7698  ¦  BLAKE  ¦  MANAGER  ¦  7839  ¦  1981-05-01  ¦  2850.00  ¦  null  ¦  30  𝄀
+7782  ¦  CLARK  ¦  MANAGER  ¦  7839  ¦  1981-06-09  ¦  2450.00  ¦  null  ¦  10  𝄀
+7788  ¦  SCOTT  ¦  ANALYST  ¦  7566  ¦  0087-07-13  ¦  3000.00  ¦  null  ¦  20  𝄀
+7839  ¦  KING  ¦  PRESIDENT  ¦  null  ¦  1981-11-17  ¦  5000.00  ¦  null  ¦  10  𝄀
+7844  ¦  TURNER  ¦  SALESMAN  ¦  7698  ¦  1981-09-08  ¦  1500.00  ¦  0.00  ¦  30  𝄀
+7876  ¦  ADAMS  ¦  CLERK  ¦  7788  ¦  0087-07-13  ¦  1100.00  ¦  null  ¦  20  𝄀
+7900  ¦  JAMES  ¦  CLERK  ¦  7698  ¦  1981-12-03  ¦  950.00  ¦  null  ¦  30  𝄀
+7902  ¦  FORD  ¦  ANALYST  ¦  7566  ¦  1981-12-03  ¦  3000.00  ¦  null  ¦  20  𝄀
+7934  ¦  MILLER  ¦  CLERK  ¦  7782  ¦  1982-01-23  ¦  1300.00  ¦  null  ¦  10
 drop table if exists t1;
 CREATE TABLE t1(a INTEGER PRIMARY KEY, b CHAR(10), c date, d decimal(7,2), UNIQUE KEY(a, b));
 desc t1;
-Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null        
-b    CHAR(10)    YES        null        
-c    DATE(0)    YES        null        
-d    DECIMAL(7,2)    YES        null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+a  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+b  ¦  CHAR(10)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+c  ¦  DATE(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+d  ¦  DECIMAL(7,2)  ¦  YES  ¦    ¦  null  ¦    ¦  
 insert into t1 values(1, 'ab', '1980-12-17', 800);
 insert into t1 values(2, 'ac', '1981-02-20', 1600);
 insert into t1 values(3, 'ad', '1981-02-22', 500);
 select * from t1;
-a    b    c    d
-1    ab    1980-12-17    800.00
-2    ac    1981-02-20    1600.00
-3    ad    1981-02-22    500.00
+➤ a[4,32,0]  ¦  b[1,10,0]  ¦  c[91,64,0]  ¦  d[3,7,2]  𝄀
+1  ¦  ab  ¦  1980-12-17  ¦  800.00  𝄀
+2  ¦  ac  ¦  1981-02-20  ¦  1600.00  𝄀
+3  ¦  ad  ¦  1981-02-22  ¦  500.00
 alter table t1 alter column a set default 100;
 show index from t1;
-Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t1    0    a    1    a    A    0    NULL    NULL                        YES    a
-t1    0    a    2    b    A    0    NULL    NULL    YES                    YES    b
-t1    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    a
+➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
+t1  ¦  0  ¦  a  ¦  1  ¦  a  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  a  𝄀
+t1  ¦  0  ¦  a  ¦  2  ¦  b  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  b  𝄀
+t1  ¦  0  ¦  PRIMARY  ¦  1  ¦  a  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  a
 desc t1;
-Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    100        
-b    CHAR(10)    YES        null        
-c    DATE(0)    YES        null        
-d    DECIMAL(7,2)    YES        null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+a  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  100  ¦    ¦    𝄀
+b  ¦  CHAR(10)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+c  ¦  DATE(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+d  ¦  DECIMAL(7,2)  ¦  YES  ¦    ¦  null  ¦    ¦  
 select * from t1;
-a    b    c    d
-1    ab    1980-12-17    800.00
-2    ac    1981-02-20    1600.00
-3    ad    1981-02-22    500.00
+➤ a[4,32,0]  ¦  b[1,10,0]  ¦  c[91,64,0]  ¦  d[3,7,2]  𝄀
+1  ¦  ab  ¦  1980-12-17  ¦  800.00  𝄀
+2  ¦  ac  ¦  1981-02-20  ¦  1600.00  𝄀
+3  ¦  ad  ¦  1981-02-22  ¦  500.00
 alter table t1 alter column a drop default;
 show index from t1;
-Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t1    0    a    1    a    A    0    NULL    NULL                        YES    a
-t1    0    a    2    b    A    0    NULL    NULL    YES                    YES    b
-t1    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    a
+➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
+t1  ¦  0  ¦  a  ¦  1  ¦  a  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  a  𝄀
+t1  ¦  0  ¦  a  ¦  2  ¦  b  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  b  𝄀
+t1  ¦  0  ¦  PRIMARY  ¦  1  ¦  a  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  a
 desc t1;
-Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null        
-b    CHAR(10)    YES        null        
-c    DATE(0)    YES        null        
-d    DECIMAL(7,2)    YES        null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+a  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+b  ¦  CHAR(10)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+c  ¦  DATE(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+d  ¦  DECIMAL(7,2)  ¦  YES  ¦    ¦  null  ¦    ¦  
 select * from t1;
-a    b    c    d
-1    ab    1980-12-17    800.00
-2    ac    1981-02-20    1600.00
-3    ad    1981-02-22    500.00
+➤ a[4,32,0]  ¦  b[1,10,0]  ¦  c[91,64,0]  ¦  d[3,7,2]  𝄀
+1  ¦  ab  ¦  1980-12-17  ¦  800.00  𝄀
+2  ¦  ac  ¦  1981-02-20  ¦  1600.00  𝄀
+3  ¦  ad  ¦  1981-02-22  ¦  500.00
 alter table t1 alter column b set visible;
 show index from t1;
-Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t1    0    a    1    a    A    0    NULL    NULL                        YES    a
-t1    0    a    2    b    A    0    NULL    NULL    YES                    YES    b
-t1    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    a
+➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
+t1  ¦  0  ¦  a  ¦  1  ¦  a  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  a  𝄀
+t1  ¦  0  ¦  a  ¦  2  ¦  b  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  b  𝄀
+t1  ¦  0  ¦  PRIMARY  ¦  1  ¦  a  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  a
 desc t1;
-Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null        
-b    CHAR(10)    YES        null        
-c    DATE(0)    YES        null        
-d    DECIMAL(7,2)    YES        null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+a  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+b  ¦  CHAR(10)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+c  ¦  DATE(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+d  ¦  DECIMAL(7,2)  ¦  YES  ¦    ¦  null  ¦    ¦  
 select * from t1;
-a    b    c    d
-1    ab    1980-12-17    800.00
-2    ac    1981-02-20    1600.00
-3    ad    1981-02-22    500.00
+➤ a[4,32,0]  ¦  b[1,10,0]  ¦  c[91,64,0]  ¦  d[3,7,2]  𝄀
+1  ¦  ab  ¦  1980-12-17  ¦  800.00  𝄀
+2  ¦  ac  ¦  1981-02-20  ¦  1600.00  𝄀
+3  ¦  ad  ¦  1981-02-22  ¦  500.00
 drop table if exists t1;
 CREATE TABLE t1(a INTEGER PRIMARY KEY, b CHAR(10), c date default '1990-12-17', d decimal(7,2), UNIQUE KEY(a, b));
 desc t1;
-Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null        
-b    CHAR(10)    YES        null        
-c    DATE(0)    YES        1990-12-17        
-d    DECIMAL(7,2)    YES        null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+a  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+b  ¦  CHAR(10)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+c  ¦  DATE(0)  ¦  YES  ¦    ¦  1990-12-17  ¦    ¦    𝄀
+d  ¦  DECIMAL(7,2)  ¦  YES  ¦    ¦  null  ¦    ¦  
 insert into t1 values(1, 'ab', '1980-12-17', 800);
 insert into t1 values(2, 'ac', '1981-02-20', 1600);
 insert into t1 values(3, 'ad', '1981-02-22', 500);
 select * from t1;
-a    b    c    d
-1    ab    1980-12-17    800.00
-2    ac    1981-02-20    1600.00
-3    ad    1981-02-22    500.00
+➤ a[4,32,0]  ¦  b[1,10,0]  ¦  c[91,64,0]  ¦  d[3,7,2]  𝄀
+1  ¦  ab  ¦  1980-12-17  ¦  800.00  𝄀
+2  ¦  ac  ¦  1981-02-20  ¦  1600.00  𝄀
+3  ¦  ad  ¦  1981-02-22  ¦  500.00
 alter table t1 alter column c set default '2003-12-17';
 show index from t1;
-Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t1    0    a    1    a    A    0    NULL    NULL                        YES    a
-t1    0    a    2    b    A    0    NULL    NULL    YES                    YES    b
-t1    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    a
+➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
+t1  ¦  0  ¦  a  ¦  1  ¦  a  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  a  𝄀
+t1  ¦  0  ¦  a  ¦  2  ¦  b  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  b  𝄀
+t1  ¦  0  ¦  PRIMARY  ¦  1  ¦  a  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  a
 desc t1;
-Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null        
-b    CHAR(10)    YES        null        
-c    DATE(0)    YES        2003-12-17        
-d    DECIMAL(7,2)    YES        null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+a  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+b  ¦  CHAR(10)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+c  ¦  DATE(0)  ¦  YES  ¦    ¦  2003-12-17  ¦    ¦    𝄀
+d  ¦  DECIMAL(7,2)  ¦  YES  ¦    ¦  null  ¦    ¦  
 select * from t1;
-a    b    c    d
-1    ab    1980-12-17    800.00
-2    ac    1981-02-20    1600.00
-3    ad    1981-02-22    500.00
+➤ a[4,32,0]  ¦  b[1,10,0]  ¦  c[91,64,0]  ¦  d[3,7,2]  𝄀
+1  ¦  ab  ¦  1980-12-17  ¦  800.00  𝄀
+2  ¦  ac  ¦  1981-02-20  ¦  1600.00  𝄀
+3  ¦  ad  ¦  1981-02-22  ¦  500.00
 alter table t1 alter column c drop default;
 show index from t1;
-Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t1    0    a    1    a    A    0    NULL    NULL                        YES    a
-t1    0    a    2    b    A    0    NULL    NULL    YES                    YES    b
-t1    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    a
+➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
+t1  ¦  0  ¦  a  ¦  1  ¦  a  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  a  𝄀
+t1  ¦  0  ¦  a  ¦  2  ¦  b  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  b  𝄀
+t1  ¦  0  ¦  PRIMARY  ¦  1  ¦  a  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  a
 desc t1;
-Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null        
-b    CHAR(10)    YES        null        
-c    DATE(0)    YES        null        
-d    DECIMAL(7,2)    YES        null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+a  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+b  ¦  CHAR(10)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+c  ¦  DATE(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+d  ¦  DECIMAL(7,2)  ¦  YES  ¦    ¦  null  ¦    ¦  
 select * from t1;
-a    b    c    d
-1    ab    1980-12-17    800.00
-2    ac    1981-02-20    1600.00
-3    ad    1981-02-22    500.00
+➤ a[4,32,0]  ¦  b[1,10,0]  ¦  c[91,64,0]  ¦  d[3,7,2]  𝄀
+1  ¦  ab  ¦  1980-12-17  ¦  800.00  𝄀
+2  ¦  ac  ¦  1981-02-20  ¦  1600.00  𝄀
+3  ¦  ad  ¦  1981-02-22  ¦  500.00
 alter table t1 alter column b set invisible;
 show index from t1;
-Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-t1    0    a    1    a    A    0    NULL    NULL                        YES    a
-t1    0    a    2    b    A    0    NULL    NULL    YES                    YES    b
-t1    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    a
+➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
+t1  ¦  0  ¦  a  ¦  1  ¦  a  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  a  𝄀
+t1  ¦  0  ¦  a  ¦  2  ¦  b  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  b  𝄀
+t1  ¦  0  ¦  PRIMARY  ¦  1  ¦  a  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  a
 desc t1;
-Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null        
-b    CHAR(10)    YES        null        
-c    DATE(0)    YES        null        
-d    DECIMAL(7,2)    YES        null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+a  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+b  ¦  CHAR(10)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+c  ¦  DATE(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+d  ¦  DECIMAL(7,2)  ¦  YES  ¦    ¦  null  ¦    ¦  
 select * from t1;
-a    b    c    d
-1    ab    1980-12-17    800.00
-2    ac    1981-02-20    1600.00
-3    ad    1981-02-22    500.00
+➤ a[4,32,0]  ¦  b[1,10,0]  ¦  c[91,64,0]  ¦  d[3,7,2]  𝄀
+1  ¦  ab  ¦  1980-12-17  ¦  800.00  𝄀
+2  ¦  ac  ¦  1981-02-20  ¦  1600.00  𝄀
+3  ¦  ad  ¦  1981-02-22  ¦  500.00
 drop table if exists t1;
 CREATE TABLE t1(a INTEGER PRIMARY KEY, b CHAR(10), c date, d decimal(7,2), UNIQUE KEY(a, b));
 desc t1;
-Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null        
-b    CHAR(10)    YES        null        
-c    DATE(0)    YES        null        
-d    DECIMAL(7,2)    YES        null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+a  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+b  ¦  CHAR(10)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+c  ¦  DATE(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+d  ¦  DECIMAL(7,2)  ¦  YES  ¦    ¦  null  ¦    ¦  
 insert into t1 values(1, 'ab', '1980-12-17', 800);
 insert into t1 values(2, 'ac', '1981-02-20', 1600);
 insert into t1 values(3, 'ad', '1981-02-22', 500);
 select * from t1;
-a    b    c    d
-1    ab    1980-12-17    800.00
-2    ac    1981-02-20    1600.00
-3    ad    1981-02-22    500.00
+➤ a[4,32,0]  ¦  b[1,10,0]  ¦  c[91,64,0]  ¦  d[3,7,2]  𝄀
+1  ¦  ab  ¦  1980-12-17  ¦  800.00  𝄀
+2  ¦  ac  ¦  1981-02-20  ¦  1600.00  𝄀
+3  ¦  ad  ¦  1981-02-22  ¦  500.00
 alter table t1 order by a DESC, b ASC;
 desc t1;
-Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null        
-b    CHAR(10)    YES        null        
-c    DATE(0)    YES        null        
-d    DECIMAL(7,2)    YES        null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+a  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+b  ¦  CHAR(10)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+c  ¦  DATE(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+d  ¦  DECIMAL(7,2)  ¦  YES  ¦    ¦  null  ¦    ¦  
 select * from t1;
-a    b    c    d
-1    ab    1980-12-17    800.00
-2    ac    1981-02-20    1600.00
-3    ad    1981-02-22    500.00
+➤ a[4,32,0]  ¦  b[1,10,0]  ¦  c[91,64,0]  ¦  d[3,7,2]  𝄀
+1  ¦  ab  ¦  1980-12-17  ¦  800.00  𝄀
+2  ¦  ac  ¦  1981-02-20  ¦  1600.00  𝄀
+3  ¦  ad  ¦  1981-02-22  ¦  500.00
 alter table t1 order by a DESC, c;
 desc t1;
-Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null        
-b    CHAR(10)    YES        null        
-c    DATE(0)    YES        null        
-d    DECIMAL(7,2)    YES        null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+a  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+b  ¦  CHAR(10)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+c  ¦  DATE(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+d  ¦  DECIMAL(7,2)  ¦  YES  ¦    ¦  null  ¦    ¦  
 select * from t1;
-a    b    c    d
-1    ab    1980-12-17    800.00
-2    ac    1981-02-20    1600.00
-3    ad    1981-02-22    500.00
+➤ a[4,32,0]  ¦  b[1,10,0]  ¦  c[91,64,0]  ¦  d[3,7,2]  𝄀
+1  ¦  ab  ¦  1980-12-17  ¦  800.00  𝄀
+2  ¦  ac  ¦  1981-02-20  ¦  1600.00  𝄀
+3  ¦  ad  ¦  1981-02-22  ¦  500.00
 drop table t1;
 drop table if exists t1;
 CREATE TABLE t1(col1 int not null, col2 varchar(10));
 insert into t1 values (1, '137iu2');
 insert into t1 values (1, '73ujf34f');
 select * from t1;
-col1    col2
-1    137iu2
-1    73ujf34f
+➤ col1[4,32,0]  ¦  col2[12,-1,0]  𝄀
+1  ¦  137iu2  𝄀
+1  ¦  73ujf34f
 alter table t1 change col1 col1 int primary key;
 Duplicate entry '1' for key 'col1'
 desc t1;
-Field    Type    Null    Key    Default    Extra    Comment
-col1    INT(32)    NO        null        
-col2    VARCHAR(10)    YES        null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+col1  ¦  INT(32)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+col2  ¦  VARCHAR(10)  ¦  YES  ¦    ¦  null  ¦    ¦  
 alter table t1 change col2 col2 varchar(10) primary key;
 desc t1;
-Field    Type    Null    Key    Default    Extra    Comment
-col1    INT(32)    NO        null        
-col2    VARCHAR(10)    NO    PRI    null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+col1  ¦  INT(32)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+col2  ¦  VARCHAR(10)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦  
 insert into t1 values (1, 'cdsdsa');
 select * from t1;
-col1    col2
-1    137iu2
-1    73ujf34f
-1    cdsdsa
+➤ col1[4,32,0]  ¦  col2[12,-1,0]  𝄀
+1  ¦  137iu2  𝄀
+1  ¦  73ujf34f  𝄀
+1  ¦  cdsdsa
 drop table t1;
 drop table if exists name01;
 create table name01 (col1 int, col2 decimal);
@@ -833,8 +833,11 @@ insert into name01 values (1, 378292);
 insert into name01 values (2, 3289.111111);
 alter table name01 change column col1 `数据库管理系统数据库操作系统数据库系统数据库` int;
 show create table name01;
-Table    Create Table
-name01    CREATE TABLE `name01` (\n  `数据库管理系统数据库操作系统数据库系统数据库` int DEFAULT NULL,\n  `col2` decimal(38,0) DEFAULT NULL\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+name01  ¦  CREATE TABLE `name01` (
+  `数据库管理系统数据库操作系统数据库系统数据库` int DEFAULT NULL,
+  `col2` decimal(38,0) DEFAULT NULL
+)
 drop table name01;
 drop table if exists name02;
 create table name02 (col1 int, col2 decimal);
@@ -842,8 +845,11 @@ insert into name02 values (1, 378292);
 insert into name02 values (2, 3289.111111);
 alter table name02 change column col1  `cwhueh   3u2j4kfker` int;
 show create table name02;
-Table    Create Table
-name02    CREATE TABLE `name02` (\n  `cwhueh   3u2j4kfker` int DEFAULT NULL,\n  `col2` decimal(38,0) DEFAULT NULL\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+name02  ¦  CREATE TABLE `name02` (
+  `cwhueh   3u2j4kfker` int DEFAULT NULL,
+  `col2` decimal(38,0) DEFAULT NULL
+)
 drop table name02;
 drop table if exists name03;
 create table name03 (col1 int, col2 decimal);
@@ -851,40 +857,55 @@ insert into name03 values (1, 378292);
 insert into name03 values (2, 3289.111111);
 alter table name03 change column col1 `RAVHJBWUIHNJCDW****&&*((()(*&^&^%^^&^*&` int;
 show create table name03;
-Table    Create Table
-name03    CREATE TABLE `name03` (\n  `RAVHJBWUIHNJCDW****&&*((()(*&^&^%^^&^*&` int DEFAULT NULL,\n  `col2` decimal(38,0) DEFAULT NULL\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+name03  ¦  CREATE TABLE `name03` (
+  `RAVHJBWUIHNJCDW****&&*((()(*&^&^%^^&^*&` int DEFAULT NULL,
+  `col2` decimal(38,0) DEFAULT NULL
+)
 drop table name03;
 drop table if exists name04;
 create table name04 (col1 int, col2 varchar(10));
 alter table name04 change column col1 col1New varchar(10);
 show create table name04;
-Table    Create Table
-name04    CREATE TABLE `name04` (\n  `col1New` varchar(10) DEFAULT NULL,\n  `col2` varchar(10) DEFAULT NULL\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+name04  ¦  CREATE TABLE `name04` (
+  `col1New` varchar(10) DEFAULT NULL,
+  `col2` varchar(10) DEFAULT NULL
+)
 alter table name04 change column col2 col2New char(20);
 show create table name04;
-Table    Create Table
-name04    CREATE TABLE `name04` (\n  `col1New` varchar(10) DEFAULT NULL,\n  `col2New` char(20) DEFAULT NULL\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+name04  ¦  CREATE TABLE `name04` (
+  `col1New` varchar(10) DEFAULT NULL,
+  `col2New` char(20) DEFAULT NULL
+)
 drop table name04;
 drop table if exists name05;
 create table name05 (col1 int, col2 decimal);
 insert into name05 values (1, 37829734);
 insert into name05 values (2, 3289.111111);
 select * from name05;
-col1    col2
-1    37829734
-2    3289
+➤ col1[4,32,0]  ¦  col2[3,38,0]  𝄀
+1  ¦  37829734  𝄀
+2  ¦  3289
 alter table name05 change column col1 col1 float;
 show create table name05;
-Table    Create Table
-name05    CREATE TABLE `name05` (\n  `col1` float DEFAULT NULL,\n  `col2` decimal(38,0) DEFAULT NULL\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+name05  ¦  CREATE TABLE `name05` (
+  `col1` float DEFAULT NULL,
+  `col2` decimal(38,0) DEFAULT NULL
+)
 delete from name05 where col2 = 3289;
 select * from name05;
-col1    col2
-1.0    37829734
+➤ col1[7,24,0]  ¦  col2[3,38,0]  𝄀
+1.0  ¦  37829734
 alter table name05 change column col1 col1 int;
 show create table name05;
-Table    Create Table
-name05    CREATE TABLE `name05` (\n  `col1` int DEFAULT NULL,\n  `col2` decimal(38,0) DEFAULT NULL\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+name05  ¦  CREATE TABLE `name05` (
+  `col1` int DEFAULT NULL,
+  `col2` decimal(38,0) DEFAULT NULL
+)
 drop table name05;
 drop table if exists bool01;
 create table bool01 (col1 int, col2 char);
@@ -892,23 +913,26 @@ insert into bool01 values (1, 'q');
 insert into bool01 values (2, 'a');
 insert into bool01 values (10, '3');
 select * from bool01;
-col1    col2
-1    q
-2    a
-10    3
+➤ col1[4,32,0]  ¦  col2[1,1,0]  𝄀
+1  ¦  q  𝄀
+2  ¦  a  𝄀
+10  ¦  3
 alter table bool01 change col2 col2New bool after col1;
 invalid input: 'q' is not a valid bool expression
 show create table bool01;
-Table    Create Table
-bool01    CREATE TABLE `bool01` (\n  `col1` int DEFAULT NULL,\n  `col2` char(1) DEFAULT NULL\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+bool01  ¦  CREATE TABLE `bool01` (
+  `col1` int DEFAULT NULL,
+  `col2` char(1) DEFAULT NULL
+)
 show columns from bool01;
-Field    Type    Null    Key    Default    Extra    Comment
-col1    INT(32)    YES        null        
-col2    CHAR(1)    YES        null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+col1  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+col2  ¦  CHAR(1)  ¦  YES  ¦    ¦  null  ¦    ¦  
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'bool01' and COLUMN_NAME not like '__mo%';
-table_name    COLUMN_NAME    data_type    is_nullable
-bool01    col1    INT    YES
-bool01    col2    CHAR    YES
+➤ table_name[12,-1,0]  ¦  COLUMN_NAME[12,-1,0]  ¦  data_type[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
+bool01  ¦  col1  ¦  INT  ¦  YES  𝄀
+bool01  ¦  col2  ¦  CHAR  ¦  YES
 drop table bool01;
 drop table if exists char01;
 create table char01 (col1 int, col2 char);
@@ -917,27 +941,30 @@ insert into char01 values (2, '*');
 insert into char01 values (10, '3');
 insert into char01 values (20, '数');
 select * from char01;
-col1    col2
-1    q
-2    *
-10    3
-20    数
+➤ col1[4,32,0]  ¦  col2[1,1,0]  𝄀
+1  ¦  q  𝄀
+2  ¦  *  𝄀
+10  ¦  3  𝄀
+20  ¦  数
 alter table char01 change col2 col2New varchar(20) after col1;
 show create table char01;
-Table    Create Table
-char01    CREATE TABLE `char01` (\n  `col1` int DEFAULT NULL,\n  `col2New` varchar(20) DEFAULT NULL\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+char01  ¦  CREATE TABLE `char01` (
+  `col1` int DEFAULT NULL,
+  `col2New` varchar(20) DEFAULT NULL
+)
 insert into char01 values (100, '**(*(&(*UJHI');
 truncate table char01;
 select * from char01;
-col1    col2new
+➤ col1[4,32,0]  ¦  col2new[12,-1,0]
 show columns from char01;
-Field    Type    Null    Key    Default    Extra    Comment
-col1    INT(32)    YES        null        
-col2New    VARCHAR(20)    YES        null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+col1  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+col2New  ¦  VARCHAR(20)  ¦  YES  ¦    ¦  null  ¦    ¦  
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'char01' and COLUMN_NAME not like '__mo%';
-table_name    COLUMN_NAME    data_type    is_nullable
-char01    col1    INT    YES
-char01    col2New    VARCHAR    YES
+➤ table_name[12,-1,0]  ¦  COLUMN_NAME[12,-1,0]  ¦  data_type[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
+char01  ¦  col1  ¦  INT  ¦  YES  𝄀
+char01  ¦  col2New  ¦  VARCHAR  ¦  YES
 drop table char01;
 drop table if exists char02;
 create table char02 (col1 int, col2 varchar(10));
@@ -945,42 +972,45 @@ insert into char02 values (1, 'w43234rfq');
 insert into char02 values (2, 'a32f4');
 insert into char02 values (10, '3432t43r4f');
 select * from char02;
-col1    col2
-1    w43234rfq
-2    a32f4
-10    3432t43r4f
+➤ col1[4,32,0]  ¦  col2[12,-1,0]  𝄀
+1  ¦  w43234rfq  𝄀
+2  ¦  a32f4  𝄀
+10  ¦  3432t43r4f
 alter table char02 change col2 col2New char(20) first;
 show create table char02;
-Table    Create Table
-char02    CREATE TABLE `char02` (\n  `col2New` char(20) DEFAULT NULL,\n  `col1` int DEFAULT NULL\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+char02  ¦  CREATE TABLE `char02` (
+  `col2New` char(20) DEFAULT NULL,
+  `col1` int DEFAULT NULL
+)
 insert into char02 values ('738fewhu&^YUH', 100);
 select * from char02;
-col2new    col1
-w43234rfq    1
-a32f4    2
-3432t43r4f    10
-738fewhu&^YUH    100
+➤ col2new[1,20,0]  ¦  col1[4,32,0]  𝄀
+w43234rfq  ¦  1  𝄀
+a32f4  ¦  2  𝄀
+3432t43r4f  ¦  10  𝄀
+738fewhu&^YUH  ¦  100
 update char02 set col1 = 100 where col2New = 'w43234rfq';
 select * from char02;
-col2new    col1
-a32f4    2
-3432t43r4f    10
-738fewhu&^YUH    100
-w43234rfq    100
+➤ col2new[1,20,0]  ¦  col1[4,32,0]  𝄀
+a32f4  ¦  2  𝄀
+3432t43r4f  ¦  10  𝄀
+738fewhu&^YUH  ¦  100  𝄀
+w43234rfq  ¦  100
 delete from char02 where col2New = 'a32f4';
 select * from char02;
-col2new    col1
-3432t43r4f    10
-738fewhu&^YUH    100
-w43234rfq    100
+➤ col2new[1,20,0]  ¦  col1[4,32,0]  𝄀
+3432t43r4f  ¦  10  𝄀
+738fewhu&^YUH  ¦  100  𝄀
+w43234rfq  ¦  100
 show columns from char02;
-Field    Type    Null    Key    Default    Extra    Comment
-col2New    CHAR(20)    YES        null        
-col1    INT(32)    YES        null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+col2New  ¦  CHAR(20)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+col1  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦  
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'char02' and COLUMN_NAME not like '__mo%';
-table_name    COLUMN_NAME    data_type    is_nullable
-char02    col1    INT    YES
-char02    col2New    CHAR    YES
+➤ table_name[12,-1,0]  ¦  COLUMN_NAME[12,-1,0]  ¦  data_type[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
+char02  ¦  col1  ¦  INT  ¦  YES  𝄀
+char02  ¦  col2New  ¦  CHAR  ¦  YES
 drop table char02;
 drop table if exists char03;
 create table char03 (col1 int, col2 char(10));
@@ -988,23 +1018,26 @@ insert into char03 values (1, 'ahu323ew32');
 insert into char03 values (2, '367283r343');
 insert into char03 values (3, null);
 select * from char03;
-col1    col2
-1    ahu323ew32
-2    367283r343
-3    null
+➤ col1[4,32,0]  ¦  col2[1,10,0]  𝄀
+1  ¦  ahu323ew32  𝄀
+2  ¦  367283r343  𝄀
+3  ¦  null
 alter table char03 change col2 col2New varchar(5);
 internal error: Can't cast column from CHAR type to VARCHAR type because of one or more values in that column. Src length 10 is larger than Dest length 5
 show create table char03;
-Table    Create Table
-char03    CREATE TABLE `char03` (\n  `col1` int DEFAULT NULL,\n  `col2` char(10) DEFAULT NULL\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+char03  ¦  CREATE TABLE `char03` (
+  `col1` int DEFAULT NULL,
+  `col2` char(10) DEFAULT NULL
+)
 show columns from char03;
-Field    Type    Null    Key    Default    Extra    Comment
-col1    INT(32)    YES        null        
-col2    CHAR(10)    YES        null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+col1  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+col2  ¦  CHAR(10)  ¦  YES  ¦    ¦  null  ¦    ¦  
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'char03' and COLUMN_NAME not like '__mo%';
-table_name    COLUMN_NAME    data_type    is_nullable
-char03    col1    INT    YES
-char03    col2    CHAR    YES
+➤ table_name[12,-1,0]  ¦  COLUMN_NAME[12,-1,0]  ¦  data_type[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
+char03  ¦  col1  ¦  INT  ¦  YES  𝄀
+char03  ¦  col2  ¦  CHAR  ¦  YES
 drop table char03;
 drop table if exists char04;
 create table char04 (col1 varchar(200), col2 char(10));
@@ -1012,32 +1045,35 @@ insert into char04 values (null, 'ahu323ew32');
 insert into char04 values ('23789178942u1uj3ridjfh2d28u49u4ueji32jf2f32ef32894rjk32nv432f432f', '367283r343');
 insert into char04 values ('32jhbfchjecmwd%^&^(*&)UJHFRE%^T&YUHIJKNM', null);
 select * from char04;
-col1    col2
-null    ahu323ew32
-23789178942u1uj3ridjfh2d28u49u4ueji32jf2f32ef32894rjk32nv432f432f    367283r343
-32jhbfchjecmwd%^&^(*&)UJHFRE%^T&YUHIJKNM    null
+➤ col1[12,-1,0]  ¦  col2[1,10,0]  𝄀
+null  ¦  ahu323ew32  𝄀
+23789178942u1uj3ridjfh2d28u49u4ueji32jf2f32ef32894rjk32nv432f432f  ¦  367283r343  𝄀
+32jhbfchjecmwd%^&^(*&)UJHFRE%^T&YUHIJKNM  ¦  null
 alter table char04 change col1 col1New varchar(100) not null;
 constraint violation: Column 'col1New' cannot be null
 alter table char04 change col2 col2New char(10) not null;
 constraint violation: Column 'col2New' cannot be null
 show create table char04;
-Table    Create Table
-char04    CREATE TABLE `char04` (\n  `col1` varchar(200) DEFAULT NULL,\n  `col2` char(10) DEFAULT NULL\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+char04  ¦  CREATE TABLE `char04` (
+  `col1` varchar(200) DEFAULT NULL,
+  `col2` char(10) DEFAULT NULL
+)
 insert into char04 values (4, 'eyuiwqewq3');
 select * from char04;
-col1    col2
-null    ahu323ew32
-23789178942u1uj3ridjfh2d28u49u4ueji32jf2f32ef32894rjk32nv432f432f    367283r343
-32jhbfchjecmwd%^&^(*&)UJHFRE%^T&YUHIJKNM    null
-4    eyuiwqewq3
+➤ col1[12,-1,0]  ¦  col2[1,10,0]  𝄀
+null  ¦  ahu323ew32  𝄀
+23789178942u1uj3ridjfh2d28u49u4ueji32jf2f32ef32894rjk32nv432f432f  ¦  367283r343  𝄀
+32jhbfchjecmwd%^&^(*&)UJHFRE%^T&YUHIJKNM  ¦  null  𝄀
+4  ¦  eyuiwqewq3
 show columns from char04;
-Field    Type    Null    Key    Default    Extra    Comment
-col1    VARCHAR(200)    YES        null        
-col2    CHAR(10)    YES        null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+col1  ¦  VARCHAR(200)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+col2  ¦  CHAR(10)  ¦  YES  ¦    ¦  null  ¦    ¦  
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'char04' and COLUMN_NAME not like '__mo%';
-table_name    COLUMN_NAME    data_type    is_nullable
-char04    col1    VARCHAR    YES
-char04    col2    CHAR    YES
+➤ table_name[12,-1,0]  ¦  COLUMN_NAME[12,-1,0]  ¦  data_type[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
+char04  ¦  col1  ¦  VARCHAR  ¦  YES  𝄀
+char04  ¦  col2  ¦  CHAR  ¦  YES
 drop table char04;
 drop table if exists text01;
 create table text01 (col1 text primary key , col2 mediumtext unique index, col3 longtext);
@@ -1055,7 +1091,7 @@ SQL parser error: table "text01" does not exist
 show columns from text01;
 no such table db2.text01
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'text01' and COLUMN_NAME not like '__mo%';
-table_name    COLUMN_NAME    data_type    is_nullable
+➤ table_name[12,-1,0]  ¦  COLUMN_NAME[12,-1,0]  ¦  data_type[12,-1,0]  ¦  is_nullable[12,-1,0]
 drop table text01;
 no such table db2.text01
 drop table if exists alter03;
@@ -1063,29 +1099,33 @@ create table alter03 (col1 int, col2 binary, col3 decimal);
 insert into alter03 values (1, 'e', 324214.2134123);
 insert into alter03 values (2, '4', -242134.3231432);
 select * from alter03;
-col1    col2    col3
-1    e    324214
-2    4    -242134
+➤ col1[4,32,0]  ¦  col2[12,3,0]  ¦  col3[3,38,0]  𝄀
+1  ¦  e  ¦  324214  𝄀
+2  ¦  4  ¦  -242134
 alter table alter03 change col1 col1New decimal after col3, change col2 col2New varbinary(20);
 show create table alter03;
-Table    Create Table
-alter03    CREATE TABLE `alter03` (\n  `col2New` varbinary(20) DEFAULT NULL,\n  `col3` decimal(38,0) DEFAULT NULL,\n  `col1New` decimal(38,0) DEFAULT NULL\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+alter03  ¦  CREATE TABLE `alter03` (
+  `col2New` varbinary(20) DEFAULT NULL,
+  `col3` decimal(38,0) DEFAULT NULL,
+  `col1New` decimal(38,0) DEFAULT NULL
+)
 insert into alter03 values ('32143124', 42432321.000, 132432.214234);
 select * from alter03;
-col2new    col3    col1new
-e    324214    1
-4    -242134    2
-32143124    42432321    132432
+➤ col2new[12,60,0]  ¦  col3[3,38,0]  ¦  col1new[3,38,0]  𝄀
+e  ¦  324214  ¦  1  𝄀
+4  ¦  -242134  ¦  2  𝄀
+32143124  ¦  42432321  ¦  132432
 show columns from alter03;
-Field    Type    Null    Key    Default    Extra    Comment
-col2New    VARBINARY(20)    YES        null        
-col3    DECIMAL(38,0)    YES        null        
-col1New    DECIMAL(38,0)    YES        null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+col2New  ¦  VARBINARY(20)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+col3  ¦  DECIMAL(38,0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+col1New  ¦  DECIMAL(38,0)  ¦  YES  ¦    ¦  null  ¦    ¦  
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'alter03' and COLUMN_NAME not like '__mo%';
-table_name    COLUMN_NAME    data_type    is_nullable
-alter03    col1New    DECIMAL    YES
-alter03    col2New    VARBINARY    YES
-alter03    col3    DECIMAL    YES
+➤ table_name[12,-1,0]  ¦  COLUMN_NAME[12,-1,0]  ¦  data_type[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
+alter03  ¦  col1New  ¦  DECIMAL  ¦  YES  𝄀
+alter03  ¦  col2New  ¦  VARBINARY  ¦  YES  𝄀
+alter03  ¦  col3  ¦  DECIMAL  ¦  YES
 drop table alter03;
 drop table if exists alter04;
 create table alter04 (col1 int not null default 100 primary key );
@@ -1093,42 +1133,49 @@ insert into alter04 values ();
 insert into alter04 values (101);
 alter table alter04 change col1 col1New int auto_increment;
 show create table alter04;
-Table    Create Table
-alter04    CREATE TABLE `alter04` (\n  `col1New` int NOT NULL AUTO_INCREMENT,\n  PRIMARY KEY (`col1New`)\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+alter04  ¦  CREATE TABLE `alter04` (
+  `col1New` int NOT NULL AUTO_INCREMENT,
+  PRIMARY KEY (`col1New`)
+)
 insert into alter04 values ();
 insert into alter04 values ();
 select * from alter04;
-col1new
-100
-101
-102
+➤ col1new[4,32,0]  𝄀
+100  𝄀
+101  𝄀
+102  𝄀
 103
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'alter04' and COLUMN_NAME not like '__mo%';
-table_name    COLUMN_NAME    data_type    is_nullable
-alter04    col1New    INT    NO
+➤ table_name[12,-1,0]  ¦  COLUMN_NAME[12,-1,0]  ¦  data_type[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
+alter04  ¦  col1New  ¦  INT  ¦  NO
 drop table alter04;
 drop table if exists alter05;
 create table alter05 (col1 int primary key auto_increment);
 insert into alter05 values ();
 insert into alter05 values ();
 select * from alter05;
-col1
-1
+➤ col1[4,32,0]  𝄀
+1  𝄀
 2
 alter table alter05 change col1 col1New int unique key;
 show create table alter05;
-Table    Create Table
-alter05    CREATE TABLE `alter05` (\n  `col1New` int NOT NULL,\n  PRIMARY KEY (`col1New`),\n  UNIQUE KEY `col1new` (`col1New`)\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+alter05  ¦  CREATE TABLE `alter05` (
+  `col1New` int NOT NULL,
+  PRIMARY KEY (`col1New`),
+  UNIQUE KEY `col1new` (`col1New`)
+)
 show columns from alter05;
-Field    Type    Null    Key    Default    Extra    Comment
-col1New    INT(32)    NO    PRI    null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+col1New  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦  
 select * from alter05;
-col1new
-1
+➤ col1new[4,32,0]  𝄀
+1  𝄀
 2
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'alter05' and COLUMN_NAME not like '__mo%';
-table_name    COLUMN_NAME    data_type    is_nullable
-alter05    col1New    INT    NO
+➤ table_name[12,-1,0]  ¦  COLUMN_NAME[12,-1,0]  ¦  data_type[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
+alter05  ¦  col1New  ¦  INT  ¦  NO
 drop table alter05;
 drop table if exists primary01;
 create table primary01 (col1 int, col2 text);
@@ -1136,56 +1183,64 @@ insert into primary01 values (1, 'wq432r43rf32y2493821ijfk2env3ui4y33i24');
 insert into primary01 values (2, '243ewfvefreverewfcwr');
 alter table primary01 change col1 col1New float primary key;
 show create table primary01;
-Table    Create Table
-primary01    CREATE TABLE `primary01` (\n  `col1New` float NOT NULL,\n  `col2` text DEFAULT NULL,\n  PRIMARY KEY (`col1New`)\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+primary01  ¦  CREATE TABLE `primary01` (
+  `col1New` float NOT NULL,
+  `col2` text DEFAULT NULL,
+  PRIMARY KEY (`col1New`)
+)
 insert into primary01 values (1, '432r2f234day89ujfw42342');
-Duplicate entry '1' for key 'col1[Nn]ew'
+Duplicate entry '1' for key 'col1new'
 insert into primary01 values (2378.32423, '234242))())_');
 select * from primary01;
-col1new    col2
-1.0    wq432r43rf32y2493821ijfk2env3ui4y33i24
-2.0    243ewfvefreverewfcwr
-2378.3242    234242))())_
+➤ col1new[7,24,0]  ¦  col2[12,0,0]  𝄀
+1.0  ¦  wq432r43rf32y2493821ijfk2env3ui4y33i24  𝄀
+2.0  ¦  243ewfvefreverewfcwr  𝄀
+2378.3242  ¦  234242))())_
 show columns from primary01;
-Field    Type    Null    Key    Default    Extra    Comment
-col1New    FLOAT(0)    NO    PRI    null        
-col2    TEXT(0)    YES        null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+col1New  ¦  FLOAT(0)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+col2  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
 update primary01 set col2 = 'whuihedjwqncew' where col1 = 1;
 invalid input: column col1 does not exist
 update primary01 set col2 = 'whuihedjwqncew' where col1New = 1;
 select * from primary01;
-col1new    col2
-2.0    243ewfvefreverewfcwr
-2378.3242    234242))())_
-1.0    whuihedjwqncew
+➤ col1new[7,24,0]  ¦  col2[12,0,0]  𝄀
+2.0  ¦  243ewfvefreverewfcwr  𝄀
+2378.3242  ¦  234242))())_  𝄀
+1.0  ¦  whuihedjwqncew
 delete from primary01 where col1 = 1;
 invalid input: column col1 does not exist
 delete from primary01 where col1New = 1;
 select * from primary01;
-col1new    col2
-2.0    243ewfvefreverewfcwr
-2378.3242    234242))())_
+➤ col1new[7,24,0]  ¦  col2[12,0,0]  𝄀
+2.0  ¦  243ewfvefreverewfcwr  𝄀
+2378.3242  ¦  234242))())_
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'primary01' and COLUMN_NAME not like '__mo%';
-table_name    COLUMN_NAME    data_type    is_nullable
-primary01    col1New    FLOAT    NO
-primary01    col2    TEXT    YES
+➤ table_name[12,-1,0]  ¦  COLUMN_NAME[12,-1,0]  ¦  data_type[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
+primary01  ¦  col1New  ¦  FLOAT  ¦  NO  𝄀
+primary01  ¦  col2  ¦  TEXT  ¦  YES
 drop table primary01;
 drop table if exists primary02;
 create table primary02(col1 int, col2 binary(10));
 insert into primary02 values (1, '32143');
 insert into primary02 values (2, '3e');
 select * from primary02;
-col1    col2
-1    32143     
-2    3e        
+➤ col1[4,32,0]  ¦  col2[12,30,0]  𝄀
+1  ¦  32143       𝄀
+2  ¦  3e        
 alter table primary02 change col1 col1New int primary key;
 show create table primary02;
-Table    Create Table
-primary02    CREATE TABLE `primary02` (\n  `col1New` int NOT NULL,\n  `col2` binary(10) DEFAULT NULL,\n  PRIMARY KEY (`col1New`)\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+primary02  ¦  CREATE TABLE `primary02` (
+  `col1New` int NOT NULL,
+  `col2` binary(10) DEFAULT NULL,
+  PRIMARY KEY (`col1New`)
+)
 show columns from primary02;
-Field    Type    Null    Key    Default    Extra    Comment
-col1New    INT(32)    NO    PRI    null        
-col2    BINARY(10)    YES        null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+col1New  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+col2  ¦  BINARY(10)  ¦  YES  ¦    ¦  null  ¦    ¦  
 insert into primary02 (col1, col2) VALUES (3, 'ehuwu32');
 Unknown column 'col1' in 'primary02'
 delete from primary02 where col1 = 1;
@@ -1193,12 +1248,12 @@ invalid input: column col1 does not exist
 delete from primary02 where col1New = 1;
 update primary02 set col1New = 100 where col1New = 1;
 select * from primary02;
-col1new    col2
-2    3e        
+➤ col1new[4,32,0]  ¦  col2[12,30,0]  𝄀
+2  ¦  3e        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'primary02' and COLUMN_NAME not like '__mo%';
-table_name    COLUMN_NAME    data_type    is_nullable
-primary02    col1New    INT    NO
-primary02    col2    BINARY    YES
+➤ table_name[12,-1,0]  ¦  COLUMN_NAME[12,-1,0]  ¦  data_type[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
+primary02  ¦  col1New  ¦  INT  ¦  NO  𝄀
+primary02  ¦  col2  ¦  BINARY  ¦  YES
 drop table primary02;
 drop table if exists primary03;
 create table primary03(col1 int, col2 binary(10));
@@ -1206,26 +1261,30 @@ insert into primary03 values (1, '32143');
 insert into primary03 values (2, '3e');
 alter table primary03 change col1 col1New int primary key;
 show create table primary03;
-Table    Create Table
-primary03    CREATE TABLE `primary03` (\n  `col1New` int NOT NULL,\n  `col2` binary(10) DEFAULT NULL,\n  PRIMARY KEY (`col1New`)\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+primary03  ¦  CREATE TABLE `primary03` (
+  `col1New` int NOT NULL,
+  `col2` binary(10) DEFAULT NULL,
+  PRIMARY KEY (`col1New`)
+)
 insert into primary03 (col1New, col2) values (3, '*');
 insert into primary03 values (3, 'assad');
-Duplicate entry '3' for key 'col1[Nn]ew'
+Duplicate entry '3' for key 'col1new'
 update from primary03 set col2 = 'database' where col1New = 3;
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 11 near " from primary03 set col2 = 'database' where col1New = 3;";
 select * from primary03;
-col1new    col2
-1    32143     
-2    3e        
-3    *         
+➤ col1new[4,32,0]  ¦  col2[12,30,0]  𝄀
+1  ¦  32143       𝄀
+2  ¦  3e          𝄀
+3  ¦  *         
 show columns from primary03;
-Field    Type    Null    Key    Default    Extra    Comment
-col1New    INT(32)    NO    PRI    null        
-col2    BINARY(10)    YES        null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+col1New  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+col2  ¦  BINARY(10)  ¦  YES  ¦    ¦  null  ¦    ¦  
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'primary03' and COLUMN_NAME not like '__mo%';
-table_name    COLUMN_NAME    data_type    is_nullable
-primary03    col1New    INT    NO
-primary03    col2    BINARY    YES
+➤ table_name[12,-1,0]  ¦  COLUMN_NAME[12,-1,0]  ¦  data_type[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
+primary03  ¦  col1New  ¦  INT  ¦  NO  𝄀
+primary03  ¦  col2  ¦  BINARY  ¦  YES
 drop table primary03;
 drop table if exists primary04;
 create table primary04(col1 int primary key ,col2 varbinary(20));
@@ -1234,27 +1293,31 @@ insert into primary04 values (2, '324543##');
 alter table primary04 change col1 col1New float;
 alter table primary04 change col2 col2New varbinary(50);
 show create table primary04;
-Table    Create Table
-primary04    CREATE TABLE `primary04` (\n  `col1New` float NOT NULL,\n  `col2New` varbinary(50) DEFAULT NULL,\n  PRIMARY KEY (`col1New`)\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+primary04  ¦  CREATE TABLE `primary04` (
+  `col1New` float NOT NULL,
+  `col2New` varbinary(50) DEFAULT NULL,
+  PRIMARY KEY (`col1New`)
+)
 insert into primary04 values (1, '324342__');
-Duplicate entry '1' for key 'col1[Nn]ew'
+Duplicate entry '1' for key 'col1new'
 insert into primary04 values (3, 'qw');
 delete from primary04 where col2 = 'qfreqvreq';
 invalid input: column col2 does not exist
 delete from primary04 where col2New = 'qfreqvreq';
 update primary04 set col2New = 'ewhueifjnweknd3242e' where col1New = 1;
 select * from primary04;
-col1new    col2new
-2.0    324543##
-3.0    qw
+➤ col1new[7,24,0]  ¦  col2new[12,150,0]  𝄀
+2.0  ¦  324543##  𝄀
+3.0  ¦  qw
 show columns from primary04;
-Field    Type    Null    Key    Default    Extra    Comment
-col1New    FLOAT(0)    NO    PRI    null        
-col2New    VARBINARY(50)    YES        null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+col1New  ¦  FLOAT(0)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+col2New  ¦  VARBINARY(50)  ¦  YES  ¦    ¦  null  ¦    ¦  
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'primary04' and COLUMN_NAME not like '__mo%';
-table_name    COLUMN_NAME    data_type    is_nullable
-primary04    col1New    FLOAT    NO
-primary04    col2New    VARBINARY    YES
+➤ table_name[12,-1,0]  ¦  COLUMN_NAME[12,-1,0]  ¦  data_type[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
+primary04  ¦  col1New  ¦  FLOAT  ¦  NO  𝄀
+primary04  ¦  col2New  ¦  VARBINARY  ¦  YES
 drop table primary04;
 drop table if exists primary05;
 create table primary05(col1 int primary key ,col2 varbinary(20));
@@ -1263,12 +1326,16 @@ insert into primary05 values (2, '324543##');
 alter table primary05 change col2 col2New binary(30) primary key;
 Multiple primary key defined
 show create table primary05;
-Table    Create Table
-primary05    CREATE TABLE `primary05` (\n  `col1` int NOT NULL,\n  `col2` varbinary(20) DEFAULT NULL,\n  PRIMARY KEY (`col1`)\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+primary05  ¦  CREATE TABLE `primary05` (
+  `col1` int NOT NULL,
+  `col2` varbinary(20) DEFAULT NULL,
+  PRIMARY KEY (`col1`)
+)
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'primary05' and COLUMN_NAME not like '__mo%';
-table_name    COLUMN_NAME    data_type    is_nullable
-primary05    col1    INT    NO
-primary05    col2    VARBINARY    YES
+➤ table_name[12,-1,0]  ¦  COLUMN_NAME[12,-1,0]  ¦  data_type[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
+primary05  ¦  col1  ¦  INT  ¦  NO  𝄀
+primary05  ¦  col2  ¦  VARBINARY  ¦  YES
 drop table primary05;
 drop table if exists primary06;
 create table primary06(col1 int primary key ,col2 varbinary(20));
@@ -1277,12 +1344,16 @@ insert into primary06 values (2, '324543##');
 alter table primary06 change col1 col1New int unsigned primary key;
 Multiple primary key defined
 show create table primary06;
-Table    Create Table
-primary06    CREATE TABLE `primary06` (\n  `col1` int NOT NULL,\n  `col2` varbinary(20) DEFAULT NULL,\n  PRIMARY KEY (`col1`)\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+primary06  ¦  CREATE TABLE `primary06` (
+  `col1` int NOT NULL,
+  `col2` varbinary(20) DEFAULT NULL,
+  PRIMARY KEY (`col1`)
+)
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'primary06' and COLUMN_NAME not like '__mo%';
-table_name    COLUMN_NAME    data_type    is_nullable
-primary06    col1    INT    NO
-primary06    col2    VARBINARY    YES
+➤ table_name[12,-1,0]  ¦  COLUMN_NAME[12,-1,0]  ¦  data_type[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
+primary06  ¦  col1  ¦  INT  ¦  NO  𝄀
+primary06  ¦  col2  ¦  VARBINARY  ¦  YES
 drop table primary06;
 drop table if exists primary07;
 create table primary07(col1 int ,col2 float, col3 decimal, primary key (col1, col2));
@@ -1293,13 +1364,18 @@ All parts of a PRIMARY KEY must be NOT NULL; if you need NULL in a key, use UNIQ
 alter table primary07 change col2 col2New int default null;
 All parts of a PRIMARY KEY must be NOT NULL; if you need NULL in a key, use UNIQUE instead
 show create table primary07;
-Table    Create Table
-primary07    CREATE TABLE `primary07` (\n  `col1` int NOT NULL,\n  `col2` float NOT NULL,\n  `col3` decimal(38,0) DEFAULT NULL,\n  PRIMARY KEY (`col1`,`col2`)\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+primary07  ¦  CREATE TABLE `primary07` (
+  `col1` int NOT NULL,
+  `col2` float NOT NULL,
+  `col3` decimal(38,0) DEFAULT NULL,
+  PRIMARY KEY (`col1`,`col2`)
+)
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'primary07' and COLUMN_NAME not like '__mo%';
-table_name    COLUMN_NAME    data_type    is_nullable
-primary07    col1    INT    NO
-primary07    col2    FLOAT    NO
-primary07    col3    DECIMAL    YES
+➤ table_name[12,-1,0]  ¦  COLUMN_NAME[12,-1,0]  ¦  data_type[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
+primary07  ¦  col1  ¦  INT  ¦  NO  𝄀
+primary07  ¦  col2  ¦  FLOAT  ¦  NO  𝄀
+primary07  ¦  col3  ¦  DECIMAL  ¦  YES
 drop table primary07;
 drop table if exists primary08;
 create table primary08(col1 int ,col2 float, col3 decimal, primary key (col1, col2));
@@ -1308,25 +1384,34 @@ insert into primary08 values (2, -324.2342432423, -1243.42334234242);
 alter table primary08 change col1 col1New double not null;
 alter table primary08 change col2 col2New decimal(28,10);
 show create table primary08;
-Table    Create Table
-primary08    CREATE TABLE `primary08` (\n  `col1New` double NOT NULL,\n  `col2New` decimal(28,10) NOT NULL,\n  `col3` decimal(38,0) DEFAULT NULL,\n  PRIMARY KEY (`col1New`,`col2New`)\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+primary08  ¦  CREATE TABLE `primary08` (
+  `col1New` double NOT NULL,
+  `col2New` decimal(28,10) NOT NULL,
+  `col3` decimal(38,0) DEFAULT NULL,
+  PRIMARY KEY (`col1New`,`col2New`)
+)
 insert into primary08 values (3, 73829.273897298374823, 38298390.3242223);
 update primary08 set col2 = 32432.3242424242 where col1 = 1;
-internal error: column 'col2' not found in table 
+internal error: column 'col2' not found in table
 update primary08 set col2New = 32432.3242424242 where col1New = 1;
 delete from primary08 where col1 = 1;
 invalid input: column col1 does not exist
 delete from primary08 where col1New = 2;
 select * from primary08;
-col1new    col2new    col3
-3.0    73829.2738972984    38298390
-1.0    32432.3242424242    3214312
+➤ col1new[8,54,0]  ¦  col2new[3,28,10]  ¦  col3[3,38,0]  𝄀
+3.0  ¦  73829.2738972984  ¦  38298390  𝄀
+1.0  ¦  32432.3242424242  ¦  3214312
 drop table primary08;
 drop table if exists primary09;
 create table primary09 (col1 int primary key, col2 decimal);
 show create table primary09;
-Table    Create Table
-primary09    CREATE TABLE `primary09` (\n  `col1` int NOT NULL,\n  `col2` decimal(38,0) DEFAULT NULL,\n  PRIMARY KEY (`col1`)\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+primary09  ¦  CREATE TABLE `primary09` (
+  `col1` int NOT NULL,
+  `col2` decimal(38,0) DEFAULT NULL,
+  PRIMARY KEY (`col1`)
+)
 insert into primary09 values(1, 3412.324);
 insert into primary09 values (-10, 323943.2343);
 alter table primary09 change col1 col1New float default null;
@@ -1337,62 +1422,81 @@ SQL parser error: You have an error in your SQL syntax; check the manual that co
 drop table if exists index01;";
 CREATE TABLE index01(a INTEGER not null , b CHAR(10), c date, d decimal(7,2), UNIQUE KEY(a, b));
 show create table index01;
-Table    Create Table
-index01    CREATE TABLE `index01` (\n  `a` int NOT NULL,\n  `b` char(10) DEFAULT NULL,\n  `c` date DEFAULT NULL,\n  `d` decimal(7,2) DEFAULT NULL,\n  UNIQUE KEY `a` (`a`,`b`)\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+index01  ¦  CREATE TABLE `index01` (
+  `a` int NOT NULL,
+  `b` char(10) DEFAULT NULL,
+  `c` date DEFAULT NULL,
+  `d` decimal(7,2) DEFAULT NULL,
+  UNIQUE KEY `a` (`a`,`b`)
+)
 insert into index01 values(1, 'ab', '1980-12-17', 800);
 insert into index01 values(2, 'ac', '1981-02-20', 1600);
 insert into index01 values(3, 'ad', '1981-02-22', 500);
 select * from index01;
-a    b    c    d
-1    ab    1980-12-17    800.00
-2    ac    1981-02-20    1600.00
-3    ad    1981-02-22    500.00
+➤ a[4,32,0]  ¦  b[1,10,0]  ¦  c[91,64,0]  ¦  d[3,7,2]  𝄀
+1  ¦  ab  ¦  1980-12-17  ¦  800.00  𝄀
+2  ¦  ac  ¦  1981-02-20  ¦  1600.00  𝄀
+3  ¦  ad  ¦  1981-02-22  ¦  500.00
 alter table index01 change b bNew VARCHAR(20);
 show create table index01;
-Table    Create Table
-index01    CREATE TABLE `index01` (\n  `a` int NOT NULL,\n  `bNew` varchar(20) DEFAULT NULL,\n  `c` date DEFAULT NULL,\n  `d` decimal(7,2) DEFAULT NULL,\n  UNIQUE KEY `a` (`a`,`bNew`)\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+index01  ¦  CREATE TABLE `index01` (
+  `a` int NOT NULL,
+  `bNew` varchar(20) DEFAULT NULL,
+  `c` date DEFAULT NULL,
+  `d` decimal(7,2) DEFAULT NULL,
+  UNIQUE KEY `a` (`a`,`bNew`)
+)
 show index from index01;
-Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-index01    0    a    1    a    A    0    NULL    NULL                        YES    a
-index01    0    a    2    bNew    A    0    NULL    NULL    YES                    YES    bNew
+➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
+index01  ¦  0  ¦  a  ¦  1  ¦  a  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  a  𝄀
+index01  ¦  0  ¦  a  ¦  2  ¦  bNew  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  bNew
 alter table index01 change bNew bNewNew VARCHAR(20) UNIQUE KEY;
 show index from index01;
-Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-index01    0    a    1    a    A    0    NULL    NULL                        YES    a
-index01    0    a    2    bNewNew    A    0    NULL    NULL    YES                    YES    bNewNew
-index01    0    bnewnew    1    bNewNew    A    0    NULL    NULL    YES                    YES    bNewNew
+➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
+index01  ¦  0  ¦  a  ¦  1  ¦  a  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  a  𝄀
+index01  ¦  0  ¦  a  ¦  2  ¦  bNewNew  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  bNewNew  𝄀
+index01  ¦  0  ¦  bnewnew  ¦  1  ¦  bNewNew  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  bNewNew
 show create table index01;
-Table    Create Table
-index01    CREATE TABLE `index01` (\n  `a` int NOT NULL,\n  `bNewNew` varchar(20) DEFAULT NULL,\n  `c` date DEFAULT NULL,\n  `d` decimal(7,2) DEFAULT NULL,\n  UNIQUE KEY `a` (`a`,`bNewNew`),\n  UNIQUE KEY `bnewnew` (`bNewNew`)\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+index01  ¦  CREATE TABLE `index01` (
+  `a` int NOT NULL,
+  `bNewNew` varchar(20) DEFAULT NULL,
+  `c` date DEFAULT NULL,
+  `d` decimal(7,2) DEFAULT NULL,
+  UNIQUE KEY `a` (`a`,`bNewNew`),
+  UNIQUE KEY `bnewnew` (`bNewNew`)
+)
 insert into index01 (a, b, c, d) values (5, 'bh', '1999-01-01', 3000);
 Unknown column 'b' in 'index01'
 insert into index01 (a, bnewNEW, c, d) values (5, 'bh', '1999-01-01', 3000);
 select * from index01;
-a    bnewnew    c    d
-1    ab    1980-12-17    800.00
-2    ac    1981-02-20    1600.00
-3    ad    1981-02-22    500.00
-5    bh    1999-01-01    3000.00
+➤ a[4,32,0]  ¦  bnewnew[12,-1,0]  ¦  c[91,64,0]  ¦  d[3,7,2]  𝄀
+1  ¦  ab  ¦  1980-12-17  ¦  800.00  𝄀
+2  ¦  ac  ¦  1981-02-20  ¦  1600.00  𝄀
+3  ¦  ad  ¦  1981-02-22  ¦  500.00  𝄀
+5  ¦  bh  ¦  1999-01-01  ¦  3000.00
 delete from index01 where b = 'ab';
 invalid input: column b does not exist
 delete from index01 where bnewNew = 'ab';
 select * from index01;
-a    bnewnew    c    d
-2    ac    1981-02-20    1600.00
-3    ad    1981-02-22    500.00
-5    bh    1999-01-01    3000.00
+➤ a[4,32,0]  ¦  bnewnew[12,-1,0]  ¦  c[91,64,0]  ¦  d[3,7,2]  𝄀
+2  ¦  ac  ¦  1981-02-20  ¦  1600.00  𝄀
+3  ¦  ad  ¦  1981-02-22  ¦  500.00  𝄀
+5  ¦  bh  ¦  1999-01-01  ¦  3000.00
 update index01 set c = '2022-12-12' where bNewNeW = 'ac';
 select * from index01;
-a    bnewnew    c    d
-3    ad    1981-02-22    500.00
-5    bh    1999-01-01    3000.00
-2    ac    2022-12-12    1600.00
+➤ a[4,32,0]  ¦  bnewnew[12,-1,0]  ¦  c[91,64,0]  ¦  d[3,7,2]  𝄀
+3  ¦  ad  ¦  1981-02-22  ¦  500.00  𝄀
+5  ¦  bh  ¦  1999-01-01  ¦  3000.00  𝄀
+2  ¦  ac  ¦  2022-12-12  ¦  1600.00
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'index01' and COLUMN_NAME not like '__mo%';
-table_name    COLUMN_NAME    data_type    is_nullable
-index01    a    INT    NO
-index01    bNewNew    VARCHAR    YES
-index01    c    DATE    YES
-index01    d    DECIMAL    YES
+➤ table_name[12,-1,0]  ¦  COLUMN_NAME[12,-1,0]  ¦  data_type[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
+index01  ¦  a  ¦  INT  ¦  NO  𝄀
+index01  ¦  bNewNew  ¦  VARCHAR  ¦  YES  𝄀
+index01  ¦  c  ¦  DATE  ¦  YES  𝄀
+index01  ¦  d  ¦  DECIMAL  ¦  YES
 drop table index01;
 drop table if exists index02;
 CREATE TABLE index02(a INTEGER PRIMARY KEY, b CHAR(10), c date, d decimal(7,2), INDEX(a, b), KEY(c));
@@ -1400,48 +1504,65 @@ insert into index02 values(1, 'ab', '1980-12-17', 800);
 insert into index02 values(2, 'ac', '1981-02-20', 1600);
 insert into index02 values(3, 'ad', '1981-02-22', 500);
 select * from index02;
-a    b    c    d
-1    ab    1980-12-17    800.00
-2    ac    1981-02-20    1600.00
-3    ad    1981-02-22    500.00
+➤ a[4,32,0]  ¦  b[1,10,0]  ¦  c[91,64,0]  ¦  d[3,7,2]  𝄀
+1  ¦  ab  ¦  1980-12-17  ¦  800.00  𝄀
+2  ¦  ac  ¦  1981-02-20  ¦  1600.00  𝄀
+3  ¦  ad  ¦  1981-02-22  ¦  500.00
 alter table index02 change b bNewNew VARCHAR(20) KEY;
 Multiple primary key defined
 show create table index02;
-Table    Create Table
-index02    CREATE TABLE `index02` (\n  `a` int NOT NULL,\n  `b` char(10) DEFAULT NULL,\n  `c` date DEFAULT NULL,\n  `d` decimal(7,2) DEFAULT NULL,\n  PRIMARY KEY (`a`),\n  KEY `a` (`a`,`b`),\n  KEY `c` (`c`)\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+index02  ¦  CREATE TABLE `index02` (
+  `a` int NOT NULL,
+  `b` char(10) DEFAULT NULL,
+  `c` date DEFAULT NULL,
+  `d` decimal(7,2) DEFAULT NULL,
+  PRIMARY KEY (`a`),
+  KEY `a` (`a`,`b`),
+  KEY `c` (`c`)
+)
 alter table index02 change b bnewNew VARCHAR(20) UNIQUE KEY;
 show index from index02;
-Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
-index02    0    bnewnew    1    bnewNew    A    0    NULL    NULL    YES                    YES    bnewNew
-index02    1    a    1    a    A    0    NULL    NULL                        YES    a
-index02    1    a    2    bnewNew    A    0    NULL    NULL    YES                    YES    bnewNew
-index02    1    c    1    c    A    0    NULL    NULL    YES                    YES    c
-index02    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    a
+➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
+index02  ¦  0  ¦  bnewnew  ¦  1  ¦  bnewNew  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  bnewNew  𝄀
+index02  ¦  1  ¦  a  ¦  1  ¦  a  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  a  𝄀
+index02  ¦  1  ¦  a  ¦  2  ¦  bnewNew  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  bnewNew  𝄀
+index02  ¦  1  ¦  c  ¦  1  ¦  c  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  c  𝄀
+index02  ¦  0  ¦  PRIMARY  ¦  1  ¦  a  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  a
 show create table index02;
-Table    Create Table
-index02    CREATE TABLE `index02` (\n  `a` int NOT NULL,\n  `bnewNew` varchar(20) DEFAULT NULL,\n  `c` date DEFAULT NULL,\n  `d` decimal(7,2) DEFAULT NULL,\n  PRIMARY KEY (`a`),\n  UNIQUE KEY `bnewnew` (`bnewNew`),\n  KEY `a` (`a`,`bnewNew`),\n  KEY `c` (`c`)\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+index02  ¦  CREATE TABLE `index02` (
+  `a` int NOT NULL,
+  `bnewNew` varchar(20) DEFAULT NULL,
+  `c` date DEFAULT NULL,
+  `d` decimal(7,2) DEFAULT NULL,
+  PRIMARY KEY (`a`),
+  UNIQUE KEY `bnewnew` (`bnewNew`),
+  KEY `a` (`a`,`bnewNew`),
+  KEY `c` (`c`)
+)
 insert into index02 values (4, 'ab', '2000-10-10', 10000);
-Duplicate entry 'ab' for key '(.*)'
+Duplicate entry 'ab' for key 'bnewnew'
 insert into index02 values (5, 'gh', '1999-12-31', 20000);
 delete from index02 where bnewnew = 'ab';
 update index02 set bnewnew = 'database' where bnewnEW = 'ad';
 desc index02;
-Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    PRI    null        
-bnewNew    VARCHAR(20)    YES    UNI    null        
-c    DATE(0)    YES    MUL    null        
-d    DECIMAL(7,2)    YES        null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+a  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+bnewNew  ¦  VARCHAR(20)  ¦  YES  ¦  UNI  ¦  null  ¦    ¦    𝄀
+c  ¦  DATE(0)  ¦  YES  ¦  MUL  ¦  null  ¦    ¦    𝄀
+d  ¦  DECIMAL(7,2)  ¦  YES  ¦    ¦  null  ¦    ¦  
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'index02' and COLUMN_NAME not like '__mo%';
-table_name    COLUMN_NAME    data_type    is_nullable
-index02    a    INT    NO
-index02    bnewNew    VARCHAR    YES
-index02    c    DATE    YES
-index02    d    DECIMAL    YES
+➤ table_name[12,-1,0]  ¦  COLUMN_NAME[12,-1,0]  ¦  data_type[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
+index02  ¦  a  ¦  INT  ¦  NO  𝄀
+index02  ¦  bnewNew  ¦  VARCHAR  ¦  YES  𝄀
+index02  ¦  c  ¦  DATE  ¦  YES  𝄀
+index02  ¦  d  ¦  DECIMAL  ¦  YES
 select * from index02;
-a    bnewnew    c    d
-2    ac    1981-02-20    1600.00
-5    gh    1999-12-31    20000.00
-3    database    1981-02-22    500.00
+➤ a[4,32,0]  ¦  bnewnew[12,-1,0]  ¦  c[91,64,0]  ¦  d[3,7,2]  𝄀
+2  ¦  ac  ¦  1981-02-20  ¦  1600.00  𝄀
+5  ¦  gh  ¦  1999-12-31  ¦  20000.00  𝄀
+3  ¦  database  ¦  1981-02-22  ¦  500.00
 drop table if exists foreign01;
 create table foreign01(col1 int primary key,
 col2 varchar(20),
@@ -1453,33 +1574,57 @@ col2 int,
 col3 int primary key,
 constraint `c1` foreign key(col1) references foreign01(col1));
 show create table foreign01;
-Table    Create Table
-foreign01    CREATE TABLE `foreign01` (\n  `col1` int NOT NULL,\n  `col2` varchar(20) DEFAULT NULL,\n  `col3` int DEFAULT NULL,\n  `col4` bigint DEFAULT NULL,\n  PRIMARY KEY (`col1`)\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+foreign01  ¦  CREATE TABLE `foreign01` (
+  `col1` int NOT NULL,
+  `col2` varchar(20) DEFAULT NULL,
+  `col3` int DEFAULT NULL,
+  `col4` bigint DEFAULT NULL,
+  PRIMARY KEY (`col1`)
+)
 show create table foreign02;
-Table    Create Table
-foreign02    CREATE TABLE `foreign02` (\n  `col1` int DEFAULT NULL,\n  `col2` int DEFAULT NULL,\n  `col3` int NOT NULL,\n  PRIMARY KEY (`col3`),\n  CONSTRAINT `c1` FOREIGN KEY (`col1`) REFERENCES `foreign01` (`col1`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+foreign02  ¦  CREATE TABLE `foreign02` (
+  `col1` int DEFAULT NULL,
+  `col2` int DEFAULT NULL,
+  `col3` int NOT NULL,
+  PRIMARY KEY (`col3`),
+  CONSTRAINT `c1` FOREIGN KEY (`col1`) REFERENCES `foreign01` (`col1`) ON DELETE RESTRICT ON UPDATE RESTRICT
+)
 insert into foreign01 values(1,'sfhuwe',1,1);
 insert into foreign01 values(2,'37829901k3d',2,2);
 insert into foreign02 values(1,1,1);
 insert into foreign02 values(2,2,2);
 select * from foreign01;
-col1    col2    col3    col4
-1    sfhuwe    1    1
-2    37829901k3d    2    2
+➤ col1[4,32,0]  ¦  col2[12,-1,0]  ¦  col3[4,32,0]  ¦  col4[-5,64,0]  𝄀
+1  ¦  sfhuwe  ¦  1  ¦  1  𝄀
+2  ¦  37829901k3d  ¦  2  ¦  2
 select * from foreign02;
-col1    col2    col3
-1    1    1
-2    2    2
+➤ col1[4,32,0]  ¦  col2[4,32,0]  ¦  col3[4,32,0]  𝄀
+1  ¦  1  ¦  1  𝄀
+2  ¦  2  ¦  2
 alter table foreign01 change col1 col1New decimal;
 Columns participating in a foreign key are renamed
 alter table foreign02 change col1 col1New float after col3;
 Cannot change column 'col1': used in a foreign key constraint 'c1'
 show create table foreign01;
-Table    Create Table
-foreign01    CREATE TABLE `foreign01` (\n  `col1` int NOT NULL,\n  `col2` varchar(20) DEFAULT NULL,\n  `col3` int DEFAULT NULL,\n  `col4` bigint DEFAULT NULL,\n  PRIMARY KEY (`col1`)\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+foreign01  ¦  CREATE TABLE `foreign01` (
+  `col1` int NOT NULL,
+  `col2` varchar(20) DEFAULT NULL,
+  `col3` int DEFAULT NULL,
+  `col4` bigint DEFAULT NULL,
+  PRIMARY KEY (`col1`)
+)
 show create table foreign02;
-Table    Create Table
-foreign02    CREATE TABLE `foreign02` (\n  `col1` int DEFAULT NULL,\n  `col2` int DEFAULT NULL,\n  `col3` int NOT NULL,\n  PRIMARY KEY (`col3`),\n  CONSTRAINT `c1` FOREIGN KEY (`col1`) REFERENCES `foreign01` (`col1`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+foreign02  ¦  CREATE TABLE `foreign02` (
+  `col1` int DEFAULT NULL,
+  `col2` int DEFAULT NULL,
+  `col3` int NOT NULL,
+  PRIMARY KEY (`col3`),
+  CONSTRAINT `c1` FOREIGN KEY (`col1`) REFERENCES `foreign01` (`col1`) ON DELETE RESTRICT ON UPDATE RESTRICT
+)
 alter table foreign01 change col2 col2New varchar(100);
 alter table foreign02 change col2 col2new double after col3;
 insert into foreign01 values(3,'bcguwgheinwqneku678',2,2);
@@ -1492,30 +1637,42 @@ update foreign01 set col2 = 'database ewueh ' where col1 = 1;
 internal error: column 'col2' not found in table 
 update foreign01 set col2New = 'database ewueh ' where col1 = 1;
 select * from foreign01;
-col1    col2new    col3    col4
-2    37829901k3d    2    2
-3    bcguwgheinwqneku678    2    2
-1    database ewueh     1    1
+➤ col1[4,32,0]  ¦  col2new[12,-1,0]  ¦  col3[4,32,0]  ¦  col4[-5,64,0]  𝄀
+2  ¦  37829901k3d  ¦  2  ¦  2  𝄀
+3  ¦  bcguwgheinwqneku678  ¦  2  ¦  2  𝄀
+1  ¦  database ewueh   ¦  1  ¦  1
 select * from foreign02;
-col1    col3    col2new
-1    1    1.0
+➤ col1[4,32,0]  ¦  col3[4,32,0]  ¦  col2new[8,54,0]  𝄀
+1  ¦  1  ¦  1.0
 show create table foreign01;
-Table    Create Table
-foreign01    CREATE TABLE `foreign01` (\n  `col1` int NOT NULL,\n  `col2New` varchar(100) DEFAULT NULL,\n  `col3` int DEFAULT NULL,\n  `col4` bigint DEFAULT NULL,\n  PRIMARY KEY (`col1`)\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+foreign01  ¦  CREATE TABLE `foreign01` (
+  `col1` int NOT NULL,
+  `col2New` varchar(100) DEFAULT NULL,
+  `col3` int DEFAULT NULL,
+  `col4` bigint DEFAULT NULL,
+  PRIMARY KEY (`col1`)
+)
 show create table foreign02;
-Table    Create Table
-foreign02    CREATE TABLE `foreign02` (\n  `col1` int DEFAULT NULL,\n  `col3` int NOT NULL,\n  `col2new` double DEFAULT NULL,\n  PRIMARY KEY (`col3`),\n  CONSTRAINT `c1` FOREIGN KEY (`col1`) REFERENCES `foreign01` (`col1`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+foreign02  ¦  CREATE TABLE `foreign02` (
+  `col1` int DEFAULT NULL,
+  `col3` int NOT NULL,
+  `col2new` double DEFAULT NULL,
+  PRIMARY KEY (`col3`),
+  CONSTRAINT `c1` FOREIGN KEY (`col1`) REFERENCES `foreign01` (`col1`) ON DELETE RESTRICT ON UPDATE RESTRICT
+)
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'foreign01' and COLUMN_NAME not like '__mo%';
-table_name    COLUMN_NAME    data_type    is_nullable
-foreign01    col1    INT    NO
-foreign01    col2New    VARCHAR    YES
-foreign01    col3    INT    YES
-foreign01    col4    BIGINT    YES
+➤ table_name[12,-1,0]  ¦  COLUMN_NAME[12,-1,0]  ¦  data_type[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
+foreign01  ¦  col1  ¦  INT  ¦  NO  𝄀
+foreign01  ¦  col2New  ¦  VARCHAR  ¦  YES  𝄀
+foreign01  ¦  col3  ¦  INT  ¦  YES  𝄀
+foreign01  ¦  col4  ¦  BIGINT  ¦  YES
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'foreign02' and COLUMN_NAME not like '__mo%';
-table_name    COLUMN_NAME    data_type    is_nullable
-foreign02    col1    INT    YES
-foreign02    col2new    DOUBLE    YES
-foreign02    col3    INT    NO
+➤ table_name[12,-1,0]  ¦  COLUMN_NAME[12,-1,0]  ¦  data_type[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
+foreign02  ¦  col1  ¦  INT  ¦  YES  𝄀
+foreign02  ¦  col2new  ¦  DOUBLE  ¦  YES  𝄀
+foreign02  ¦  col3  ¦  INT  ¦  NO
 drop table foreign02;
 drop table foreign01;
 drop table if exists decimal01;
@@ -1525,21 +1682,28 @@ insert into decimal01 values (32487329847923424, -4324324324.3297932749028949373
 alter table decimal01 change column col1 col1New decimal(38,6);
 alter table decimal01 change col2 col2New38782ufdhwg43o2uih4f32f4 decimal(38,9);
 show create table decimal01;
-Table    Create Table
-decimal01    CREATE TABLE `decimal01` (\n  `col1New` decimal(38,6) DEFAULT NULL,\n  `col2New38782ufdhwg43o2uih4f32f4` decimal(38,9) DEFAULT NULL\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+decimal01  ¦  CREATE TABLE `decimal01` (
+  `col1New` decimal(38,6) DEFAULT NULL,
+  `col2New38782ufdhwg43o2uih4f32f4` decimal(38,9) DEFAULT NULL
+)
 select * from decimal01;
-col1new    col2new38782ufdhwg43o2uih4f32f4
-23746723468723.000000    38208439024234.432423424
-32487329847923424.000000    -4324324324.329793275
+➤ col1new[3,38,6]  ¦  col2new38782ufdhwg43o2uih4f32f4[3,38,9]  𝄀
+23746723468723.000000  ¦  38208439024234.432423424  𝄀
+32487329847923424.000000  ¦  -4324324324.329793275
 truncate table decimal01;
 alter table decimal01 add column col3 decimal(19,0) first;
 show create table decimal01;
-Table    Create Table
-decimal01    CREATE TABLE `decimal01` (\n  `col3` decimal(19,0) DEFAULT NULL,\n  `col1New` decimal(38,6) DEFAULT NULL,\n  `col2New38782ufdhwg43o2uih4f32f4` decimal(38,9) DEFAULT NULL\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+decimal01  ¦  CREATE TABLE `decimal01` (
+  `col3` decimal(19,0) DEFAULT NULL,
+  `col1New` decimal(38,6) DEFAULT NULL,
+  `col2New38782ufdhwg43o2uih4f32f4` decimal(38,9) DEFAULT NULL
+)
 insert into decimal01 values (37298342.123, -37829342.3244234, -283794324.2342);
 select * from decimal01;
-col3    col1new    col2new38782ufdhwg43o2uih4f32f4
-37298342    -37829342.324423    -283794324.234200000
+➤ col3[3,19,0]  ¦  col1new[3,38,6]  ¦  col2new38782ufdhwg43o2uih4f32f4[3,38,9]  𝄀
+37298342  ¦  -37829342.324423  ¦  -283794324.234200000
 drop table decimal01;
 drop table if exists null01;
 create table null01(col1 int default null, col2 binary(10));
@@ -1548,16 +1712,19 @@ insert into null01 values (null, '3e');
 alter table null01 change col1 col1hwjefewv int not null;
 constraint violation: Column 'col1hwjefewv' cannot be null
 show create table null01;
-Table    Create Table
-null01    CREATE TABLE `null01` (\n  `col1` int DEFAULT NULL,\n  `col2` binary(10) DEFAULT NULL\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+null01  ¦  CREATE TABLE `null01` (
+  `col1` int DEFAULT NULL,
+  `col2` binary(10) DEFAULT NULL
+)
 select * from null01;
-col1    col2
-1    32143     
-null    3e        
+➤ col1[4,32,0]  ¦  col2[12,30,0]  𝄀
+1  ¦  32143       𝄀
+null  ¦  3e        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'null01' and COLUMN_NAME not like '__mo%';
-table_name    COLUMN_NAME    data_type    is_nullable
-null01    col1    INT    YES
-null01    col2    BINARY    YES
+➤ table_name[12,-1,0]  ¦  COLUMN_NAME[12,-1,0]  ¦  data_type[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
+null01  ¦  col1  ¦  INT  ¦  YES  𝄀
+null01  ¦  col2  ¦  BINARY  ¦  YES
 drop table null01;
 drop table if exists null02;
 create table null02(col1 int default null, col2 varbinary(100));
@@ -1565,20 +1732,23 @@ insert into null02 values (1, '32143');
 insert into null02 values (2, '3e');
 alter table null02 change col1 col1New int not null;
 show create table null02;
-Table    Create Table
-null02    CREATE TABLE `null02` (\n  `col1New` int NOT NULL,\n  `col2` varbinary(100) DEFAULT NULL\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+null02  ¦  CREATE TABLE `null02` (
+  `col1New` int NOT NULL,
+  `col2` varbinary(100) DEFAULT NULL
+)
 insert into null02 values (null, '1');
 constraint violation: Column 'col1New' cannot be null
 insert into null02 values (342, 'aesd');
 select * from null02;
-col1new    col2
-1    32143
-2    3e
-342    aesd
+➤ col1new[4,32,0]  ¦  col2[12,300,0]  𝄀
+1  ¦  32143  𝄀
+2  ¦  3e  𝄀
+342  ¦  aesd
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'null02' and COLUMN_NAME not like '__mo%';
-table_name    COLUMN_NAME    data_type    is_nullable
-null02    col1New    INT    NO
-null02    col2    VARBINARY    YES
+➤ table_name[12,-1,0]  ¦  COLUMN_NAME[12,-1,0]  ¦  data_type[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
+null02  ¦  col1New  ¦  INT  ¦  NO  𝄀
+null02  ¦  col2  ¦  VARBINARY  ¦  YES
 drop table null02;
 drop table if exists cast01;
 create table cast01 (col1 int, col2 smallint, col3 bigint unsigned, col4 tinyint unsigned);
@@ -1587,71 +1757,91 @@ insert into cast01 values (329884234, 32767, 3828493, 21);
 insert into cast01 values (-29302423, 32, 324242132321, 10);
 insert into cast01 values (null, null, null, null);
 select * from cast01;
-col1    col2    col3    col4
-1    -32768    12352314214243242    0
-329884234    32767    3828493    21
--29302423    32    324242132321    10
-null    null    null    null
+➤ col1[4,32,0]  ¦  col2[5,16,0]  ¦  col3[-5,64,0]  ¦  col4[-6,8,0]  𝄀
+1  ¦  -32768  ¦  12352314214243242  ¦  0  𝄀
+329884234  ¦  32767  ¦  3828493  ¦  21  𝄀
+-29302423  ¦  32  ¦  324242132321  ¦  10  𝄀
+null  ¦  null  ¦  null  ¦  null
 alter table cast01 change col1 col1New float;
 show create table cast01;
-Table    Create Table
-cast01    CREATE TABLE `cast01` (\n  `col1New` float DEFAULT NULL,\n  `col2` smallint DEFAULT NULL,\n  `col3` bigint unsigned DEFAULT NULL,\n  `col4` tinyint unsigned DEFAULT NULL\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+cast01  ¦  CREATE TABLE `cast01` (
+  `col1New` float DEFAULT NULL,
+  `col2` smallint DEFAULT NULL,
+  `col3` bigint unsigned DEFAULT NULL,
+  `col4` tinyint unsigned DEFAULT NULL
+)
 insert into cast01 values (3271.312432, null, 323254324321432, 100);
 select * from cast01;
-col1new    col2    col3    col4
-1.0    -32768    12352314214243242    0
-3.2988422E8    32767    3828493    21
--2.9302424E7    32    324242132321    10
-null    null    null    null
-3271.3125    null    323254324321432    100
+➤ col1new[7,24,0]  ¦  col2[5,16,0]  ¦  col3[-5,64,0]  ¦  col4[-6,8,0]  𝄀
+1.0  ¦  -32768  ¦  12352314214243242  ¦  0  𝄀
+3.2988422E8  ¦  32767  ¦  3828493  ¦  21  𝄀
+-2.9302424E7  ¦  32  ¦  324242132321  ¦  10  𝄀
+null  ¦  null  ¦  null  ¦  null  𝄀
+3271.3125  ¦  null  ¦  323254324321432  ¦  100
 alter table cast01 change col2 col2New double first;
 show create table cast01;
-Table    Create Table
-cast01    CREATE TABLE `cast01` (\n  `col2New` double DEFAULT NULL,\n  `col1New` float DEFAULT NULL,\n  `col3` bigint unsigned DEFAULT NULL,\n  `col4` tinyint unsigned DEFAULT NULL\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+cast01  ¦  CREATE TABLE `cast01` (
+  `col2New` double DEFAULT NULL,
+  `col1New` float DEFAULT NULL,
+  `col3` bigint unsigned DEFAULT NULL,
+  `col4` tinyint unsigned DEFAULT NULL
+)
 insert into cast01 values (3271834.2134, -3892843.214, 328943232, 255);
 select * from cast01;
-col2new    col1new    col3    col4
--32768.0    1.0    12352314214243242    0
-32767.0    3.2988422E8    3828493    21
-32.0    -2.9302424E7    324242132321    10
-null    null    null    null
-null    3271.3125    323254324321432    100
-3271834.2134    -3892843.2    328943232    255
+➤ col2new[8,54,0]  ¦  col1new[7,24,0]  ¦  col3[-5,64,0]  ¦  col4[-6,8,0]  𝄀
+-32768.0  ¦  1.0  ¦  12352314214243242  ¦  0  𝄀
+32767.0  ¦  3.2988422E8  ¦  3828493  ¦  21  𝄀
+32.0  ¦  -2.9302424E7  ¦  324242132321  ¦  10  𝄀
+null  ¦  null  ¦  null  ¦  null  𝄀
+null  ¦  3271.3125  ¦  323254324321432  ¦  100  𝄀
+3271834.2134  ¦  -3892843.2  ¦  328943232  ¦  255
 alter table cast01 change col3 col3New double;
 show create table cast01;
-Table    Create Table
-cast01    CREATE TABLE `cast01` (\n  `col2New` double DEFAULT NULL,\n  `col1New` float DEFAULT NULL,\n  `col3New` double DEFAULT NULL,\n  `col4` tinyint unsigned DEFAULT NULL\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+cast01  ¦  CREATE TABLE `cast01` (
+  `col2New` double DEFAULT NULL,
+  `col1New` float DEFAULT NULL,
+  `col3New` double DEFAULT NULL,
+  `col4` tinyint unsigned DEFAULT NULL
+)
 insert into cast01 values (3271834.2134, -3892843.214, 328943232.3234, 255);
 select * from cast01;
-col2new    col1new    col3new    col4
--32768.0    1.0    1.2352314214243242E16    0
-32767.0    3.2988422E8    3828493.0    21
-32.0    -2.9302424E7    3.24242132321E11    10
-null    null    null    null
-null    3271.3125    3.23254324321432E14    100
-3271834.2134    -3892843.2    3.28943232E8    255
-3271834.2134    -3892843.2    3.289432323234E8    255
+➤ col2new[8,54,0]  ¦  col1new[7,24,0]  ¦  col3new[8,54,0]  ¦  col4[-6,8,0]  𝄀
+-32768.0  ¦  1.0  ¦  1.2352314214243242E16  ¦  0  𝄀
+32767.0  ¦  3.2988422E8  ¦  3828493.0  ¦  21  𝄀
+32.0  ¦  -2.9302424E7  ¦  3.24242132321E11  ¦  10  𝄀
+null  ¦  null  ¦  null  ¦  null  𝄀
+null  ¦  3271.3125  ¦  3.23254324321432E14  ¦  100  𝄀
+3271834.2134  ¦  -3892843.2  ¦  3.28943232E8  ¦  255  𝄀
+3271834.2134  ¦  -3892843.2  ¦  3.289432323234E8  ¦  255
 alter table cast01 change col4 col4New decimal(28,10) after col2New;
 show create table cast01;
-Table    Create Table
-cast01    CREATE TABLE `cast01` (\n  `col2New` double DEFAULT NULL,\n  `col4New` decimal(28,10) DEFAULT NULL,\n  `col1New` float DEFAULT NULL,\n  `col3New` double DEFAULT NULL\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+cast01  ¦  CREATE TABLE `cast01` (
+  `col2New` double DEFAULT NULL,
+  `col4New` decimal(28,10) DEFAULT NULL,
+  `col1New` float DEFAULT NULL,
+  `col3New` double DEFAULT NULL
+)
 insert into cast01 values (3271834.2134, -3823243.4324, 328943232.3234, -32423.43243);
 select * from cast01;
-col2new    col4new    col1new    col3new
--32768.0    0E-10    1.0    1.2352314214243242E16
-32767.0    21.0000000000    3.2988422E8    3828493.0
-32.0    10.0000000000    -2.9302424E7    3.24242132321E11
-null    null    null    null
-null    100.0000000000    3271.3125    3.23254324321432E14
-3271834.2134    255.0000000000    -3892843.2    3.28943232E8
-3271834.2134    255.0000000000    -3892843.2    3.289432323234E8
-3271834.2134    -3823243.4324000000    3.2894323E8    -32423.43243
+➤ col2new[8,54,0]  ¦  col4new[3,28,10]  ¦  col1new[7,24,0]  ¦  col3new[8,54,0]  𝄀
+-32768.0  ¦  0E-10  ¦  1.0  ¦  1.2352314214243242E16  𝄀
+32767.0  ¦  21.0000000000  ¦  3.2988422E8  ¦  3828493.0  𝄀
+32.0  ¦  10.0000000000  ¦  -2.9302424E7  ¦  3.24242132321E11  𝄀
+null  ¦  null  ¦  null  ¦  null  𝄀
+null  ¦  100.0000000000  ¦  3271.3125  ¦  3.23254324321432E14  𝄀
+3271834.2134  ¦  255.0000000000  ¦  -3892843.2  ¦  3.28943232E8  𝄀
+3271834.2134  ¦  255.0000000000  ¦  -3892843.2  ¦  3.289432323234E8  𝄀
+3271834.2134  ¦  -3823243.4324000000  ¦  3.2894323E8  ¦  -32423.43243
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'cast01' and COLUMN_NAME not like '__mo%';
-table_name    COLUMN_NAME    data_type    is_nullable
-cast01    col1New    FLOAT    YES
-cast01    col2New    DOUBLE    YES
-cast01    col3New    DOUBLE    YES
-cast01    col4New    DECIMAL    YES
+➤ table_name[12,-1,0]  ¦  COLUMN_NAME[12,-1,0]  ¦  data_type[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
+cast01  ¦  col1New  ¦  FLOAT  ¦  YES  𝄀
+cast01  ¦  col2New  ¦  DOUBLE  ¦  YES  𝄀
+cast01  ¦  col3New  ¦  DOUBLE  ¦  YES  𝄀
+cast01  ¦  col4New  ¦  DECIMAL  ¦  YES
 drop table cast01;
 drop table if exists cast02;
 create table cast02 (col1 float, col2 double, col3 decimal(30,5), col4 decimal(37,1));
@@ -1659,66 +1849,86 @@ insert into cast02 values (1.321341, -32768.32142, 1235231421424.321424213412432
 insert into cast02 values (329884234.3242, null, 3828493, 21);
 insert into cast02 values (93024232.32324, -32.243142, 324242132321, null);
 select * from cast02;
-col1    col2    col3    col4
-1.321341    -32768.32142    1235231421424.32142    12342.4
-3.2988422E8    null    3828493.00000    21.0
-9.302423E7    -32.243142    324242132321.00000    null
+➤ col1[7,24,0]  ¦  col2[8,54,0]  ¦  col3[3,30,5]  ¦  col4[3,37,1]  𝄀
+1.321341  ¦  -32768.32142  ¦  1235231421424.32142  ¦  12342.4  𝄀
+3.2988422E8  ¦  null  ¦  3828493.00000  ¦  21.0  𝄀
+9.302423E7  ¦  -32.243142  ¦  324242132321.00000  ¦  null
 alter table cast02 change col1 col1New int unsigned;
 show create table cast02;
-Table    Create Table
-cast02    CREATE TABLE `cast02` (\n  `col1New` int unsigned DEFAULT NULL,\n  `col2` double DEFAULT NULL,\n  `col3` decimal(30,5) DEFAULT NULL,\n  `col4` decimal(37,1) DEFAULT NULL\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+cast02  ¦  CREATE TABLE `cast02` (
+  `col1New` int unsigned DEFAULT NULL,
+  `col2` double DEFAULT NULL,
+  `col3` decimal(30,5) DEFAULT NULL,
+  `col4` decimal(37,1) DEFAULT NULL
+)
 insert into cast02 values (2724.327832, null, 32325432421432, 100.3322142142);
 select * from cast02;
-col1new    col2    col3    col4
-1    -32768.32142    1235231421424.32142    12342.4
-329884224    null    3828493.00000    21.0
-93024232    -32.243142    324242132321.00000    null
-2724    null    32325432421432.00000    100.3
+➤ col1new[4,32,0]  ¦  col2[8,54,0]  ¦  col3[3,30,5]  ¦  col4[3,37,1]  𝄀
+1  ¦  -32768.32142  ¦  1235231421424.32142  ¦  12342.4  𝄀
+329884224  ¦  null  ¦  3828493.00000  ¦  21.0  𝄀
+93024232  ¦  -32.243142  ¦  324242132321.00000  ¦  null  𝄀
+2724  ¦  null  ¦  32325432421432.00000  ¦  100.3
 alter table cast02 change col2 col22361738278472874382 bigint;
 show create table cast02;
-Table    Create Table
-cast02    CREATE TABLE `cast02` (\n  `col1New` int unsigned DEFAULT NULL,\n  `col22361738278472874382` bigint DEFAULT NULL,\n  `col3` decimal(30,5) DEFAULT NULL,\n  `col4` decimal(37,1) DEFAULT NULL\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+cast02  ¦  CREATE TABLE `cast02` (
+  `col1New` int unsigned DEFAULT NULL,
+  `col22361738278472874382` bigint DEFAULT NULL,
+  `col3` decimal(30,5) DEFAULT NULL,
+  `col4` decimal(37,1) DEFAULT NULL
+)
 insert into cast02 values (1000, 323421423421342, 328943232.321424, -255.321151234);
 select * from cast02;
-col1new    col22361738278472874382    col3    col4
-1    -32768    1235231421424.32142    12342.4
-329884224    null    3828493.00000    21.0
-93024232    -32    324242132321.00000    null
-2724    null    32325432421432.00000    100.3
-1000    323421423421342    328943232.32142    -255.3
+➤ col1new[4,32,0]  ¦  col22361738278472874382[-5,64,0]  ¦  col3[3,30,5]  ¦  col4[3,37,1]  𝄀
+1  ¦  -32768  ¦  1235231421424.32142  ¦  12342.4  𝄀
+329884224  ¦  null  ¦  3828493.00000  ¦  21.0  𝄀
+93024232  ¦  -32  ¦  324242132321.00000  ¦  null  𝄀
+2724  ¦  null  ¦  32325432421432.00000  ¦  100.3  𝄀
+1000  ¦  323421423421342  ¦  328943232.32142  ¦  -255.3
 alter table cast02 change col3 col3vhejwh4i3uh4r bigint unsigned;
 show create table cast02;
-Table    Create Table
-cast02    CREATE TABLE `cast02` (\n  `col1New` int unsigned DEFAULT NULL,\n  `col22361738278472874382` bigint DEFAULT NULL,\n  `col3vhejwh4i3uh4r` bigint unsigned DEFAULT NULL,\n  `col4` decimal(37,1) DEFAULT NULL\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+cast02  ¦  CREATE TABLE `cast02` (
+  `col1New` int unsigned DEFAULT NULL,
+  `col22361738278472874382` bigint DEFAULT NULL,
+  `col3vhejwh4i3uh4r` bigint unsigned DEFAULT NULL,
+  `col4` decimal(37,1) DEFAULT NULL
+)
 insert into cast02 values (32718, 100, 32894323237289, 234);
 select * from cast02;
-col1new    col22361738278472874382    col3vhejwh4i3uh4r    col4
-1    -32768    1235231421424    12342.4
-329884224    null    3828493    21.0
-93024232    -32    324242132321    null
-2724    null    32325432421432    100.3
-1000    323421423421342    328943232    -255.3
-32718    100    32894323237289    234.0
+➤ col1new[4,32,0]  ¦  col22361738278472874382[-5,64,0]  ¦  col3vhejwh4i3uh4r[-5,64,0]  ¦  col4[3,37,1]  𝄀
+1  ¦  -32768  ¦  1235231421424  ¦  12342.4  𝄀
+329884224  ¦  null  ¦  3828493  ¦  21.0  𝄀
+93024232  ¦  -32  ¦  324242132321  ¦  null  𝄀
+2724  ¦  null  ¦  32325432421432  ¦  100.3  𝄀
+1000  ¦  323421423421342  ¦  328943232  ¦  -255.3  𝄀
+32718  ¦  100  ¦  32894323237289  ¦  234.0
 alter table cast02 change col4 col4cdhewjruekhwjf smallint first;
 show create table cast02;
-Table    Create Table
-cast02    CREATE TABLE `cast02` (\n  `col4cdhewjruekhwjf` smallint DEFAULT NULL,\n  `col1New` int unsigned DEFAULT NULL,\n  `col22361738278472874382` bigint DEFAULT NULL,\n  `col3vhejwh4i3uh4r` bigint unsigned DEFAULT NULL\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+cast02  ¦  CREATE TABLE `cast02` (
+  `col4cdhewjruekhwjf` smallint DEFAULT NULL,
+  `col1New` int unsigned DEFAULT NULL,
+  `col22361738278472874382` bigint DEFAULT NULL,
+  `col3vhejwh4i3uh4r` bigint unsigned DEFAULT NULL
+)
 insert into cast02 values (234, 32718, 100, 32894323237289);
 select * from cast02;
-col4cdhewjruekhwjf    col1new    col22361738278472874382    col3vhejwh4i3uh4r
-12342    1    -32768    1235231421424
-21    329884224    null    3828493
-null    93024232    -32    324242132321
-100    2724    null    32325432421432
--255    1000    323421423421342    328943232
-234    32718    100    32894323237289
-234    32718    100    32894323237289
+➤ col4cdhewjruekhwjf[5,16,0]  ¦  col1new[4,32,0]  ¦  col22361738278472874382[-5,64,0]  ¦  col3vhejwh4i3uh4r[-5,64,0]  𝄀
+12342  ¦  1  ¦  -32768  ¦  1235231421424  𝄀
+21  ¦  329884224  ¦  null  ¦  3828493  𝄀
+null  ¦  93024232  ¦  -32  ¦  324242132321  𝄀
+100  ¦  2724  ¦  null  ¦  32325432421432  𝄀
+-255  ¦  1000  ¦  323421423421342  ¦  328943232  𝄀
+234  ¦  32718  ¦  100  ¦  32894323237289  𝄀
+234  ¦  32718  ¦  100  ¦  32894323237289
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'cast02' and COLUMN_NAME not like '__mo%';
-table_name    COLUMN_NAME    data_type    is_nullable
-cast02    col1New    INT UNSIGNED    YES
-cast02    col22361738278472874382    BIGINT    YES
-cast02    col3vhejwh4i3uh4r    BIGINT UNSIGNED    YES
-cast02    col4cdhewjruekhwjf    SMALLINT    YES
+➤ table_name[12,-1,0]  ¦  COLUMN_NAME[12,-1,0]  ¦  data_type[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
+cast02  ¦  col1New  ¦  INT UNSIGNED  ¦  YES  𝄀
+cast02  ¦  col22361738278472874382  ¦  BIGINT  ¦  YES  𝄀
+cast02  ¦  col3vhejwh4i3uh4r  ¦  BIGINT UNSIGNED  ¦  YES  𝄀
+cast02  ¦  col4cdhewjruekhwjf  ¦  SMALLINT  ¦  YES
 drop table cast02;
 drop table if exists cast03;
 create table cast03 (col1 smallint unsigned, col2 float, col3 double, col4 decimal);
@@ -1727,21 +1937,26 @@ insert into cast03 values (200, -213443.321412, 32424.342424242, 0.3829434243242
 insert into cast03 (col1, col2, col3, col4) values (null, null, null, null);
 alter table cast03 change col1 colNew  char(50), change col2 col2New char(100), change col3 col3New varchar(50), change col4 Newdwhjvb32v varchar(15) first;
 show create table cast03;
-Table    Create Table
-cast03    CREATE TABLE `cast03` (\n  `Newdwhjvb32v` varchar(15) DEFAULT NULL,\n  `colNew` char(50) DEFAULT NULL,\n  `col2New` char(100) DEFAULT NULL,\n  `col3New` varchar(50) DEFAULT NULL\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+cast03  ¦  CREATE TABLE `cast03` (
+  `Newdwhjvb32v` varchar(15) DEFAULT NULL,
+  `colNew` char(50) DEFAULT NULL,
+  `col2New` char(100) DEFAULT NULL,
+  `col3New` varchar(50) DEFAULT NULL
+)
 insert into cast03 values ('3243342', '3242f()', '4728947234342,', '457328990r3if943i4u9owiuo4ewfr3w4r3fre');
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'cast03' and COLUMN_NAME not like '__mo%';
-table_name    COLUMN_NAME    data_type    is_nullable
-cast03    Newdwhjvb32v    VARCHAR    YES
-cast03    col2New    CHAR    YES
-cast03    col3New    VARCHAR    YES
-cast03    colNew    CHAR    YES
+➤ table_name[12,-1,0]  ¦  COLUMN_NAME[12,-1,0]  ¦  data_type[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
+cast03  ¦  Newdwhjvb32v  ¦  VARCHAR  ¦  YES  𝄀
+cast03  ¦  col2New  ¦  CHAR  ¦  YES  𝄀
+cast03  ¦  col3New  ¦  VARCHAR  ¦  YES  𝄀
+cast03  ¦  colNew  ¦  CHAR  ¦  YES
 select * from cast03;
-newdwhjvb32v    colnew    col2new    col3new
-8329498352    1    323242.34    23432.3242
-0    200    -213443.33    32424.342424242
-null    null    null    null
-3243342    3242f()    4728947234342,    457328990r3if943i4u9owiuo4ewfr3w4r3fre
+➤ newdwhjvb32v[12,-1,0]  ¦  colnew[1,50,0]  ¦  col2new[1,100,0]  ¦  col3new[12,-1,0]  𝄀
+8329498352  ¦  1  ¦  323242.34  ¦  23432.3242  𝄀
+0  ¦  200  ¦  -213443.33  ¦  32424.342424242  𝄀
+null  ¦  null  ¦  null  ¦  null  𝄀
+3243342  ¦  3242f()  ¦  4728947234342,  ¦  457328990r3if943i4u9owiuo4ewfr3w4r3fre
 drop table cast03;
 drop table if exists cast04;
 create table cast04 (col1 char, col2 varchar, col3 text, col4 blob);
@@ -1751,26 +1966,36 @@ insert into cast04 values (null, null, null, null);
 alter table cast04 change col1 col1hwejnejfwdewfr int unsigned;
 alter table cast04 change col2 col237289738yiuhckehvjnkehifewjdhwenbvrferf decimal(34,4) after col4;
 show create table cast04;
-Table    Create Table
-cast04    CREATE TABLE `cast04` (\n  `col1hwejnejfwdewfr` int unsigned DEFAULT NULL,\n  `col3` text DEFAULT NULL,\n  `col4` blob DEFAULT NULL,\n  `col237289738yiuhckehvjnkehifewjdhwenbvrferf` decimal(34,4) DEFAULT NULL\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+cast04  ¦  CREATE TABLE `cast04` (
+  `col1hwejnejfwdewfr` int unsigned DEFAULT NULL,
+  `col3` text DEFAULT NULL,
+  `col4` blob DEFAULT NULL,
+  `col237289738yiuhckehvjnkehifewjdhwenbvrferf` decimal(34,4) DEFAULT NULL
+)
 alter table cast04 change col3 col3njwkeyhuijre double, change col4 ewh3ui2ou3i2f4 float not null;
 constraint violation: Column 'ewh3ui2ou3i2f4' cannot be null
 show create table cast04;
-Table    Create Table
-cast04    CREATE TABLE `cast04` (\n  `col1hwejnejfwdewfr` int unsigned DEFAULT NULL,\n  `col3` text DEFAULT NULL,\n  `col4` blob DEFAULT NULL,\n  `col237289738yiuhckehvjnkehifewjdhwenbvrferf` decimal(34,4) DEFAULT NULL\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+cast04  ¦  CREATE TABLE `cast04` (
+  `col1hwejnejfwdewfr` int unsigned DEFAULT NULL,
+  `col3` text DEFAULT NULL,
+  `col4` blob DEFAULT NULL,
+  `col237289738yiuhckehvjnkehifewjdhwenbvrferf` decimal(34,4) DEFAULT NULL
+)
 insert into cast04 values ();
 select * from cast04;
-col1hwejnejfwdewfr    col3    col4    col237289738yiuhckehvjnkehifewjdhwenbvrferf
-1    328    327482739.32413    -281321.2131
-0    -332134324.2432423423423    -1032412.4324    3412234321.0000
-null    null    null    null
-null    null    null    null
+➤ col1hwejnejfwdewfr[4,32,0]  ¦  col3[12,0,0]  ¦  col4[12,0,0]  ¦  col237289738yiuhckehvjnkehifewjdhwenbvrferf[3,34,4]  𝄀
+1  ¦  328  ¦  327482739.32413  ¦  -281321.2131  𝄀
+0  ¦  -332134324.2432423423423  ¦  -1032412.4324  ¦  3412234321.0000  𝄀
+null  ¦  null  ¦  null  ¦  null  𝄀
+null  ¦  null  ¦  null  ¦  null
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'cast04' and COLUMN_NAME not like '__mo%';
-table_name    COLUMN_NAME    data_type    is_nullable
-cast04    col1hwejnejfwdewfr    INT UNSIGNED    YES
-cast04    col237289738yiuhckehvjnkehifewjdhwenbvrferf    DECIMAL    YES
-cast04    col3    TEXT    YES
-cast04    col4    BLOB    YES
+➤ table_name[12,-1,0]  ¦  COLUMN_NAME[12,-1,0]  ¦  data_type[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
+cast04  ¦  col1hwejnejfwdewfr  ¦  INT UNSIGNED  ¦  YES  𝄀
+cast04  ¦  col237289738yiuhckehvjnkehifewjdhwenbvrferf  ¦  DECIMAL  ¦  YES  𝄀
+cast04  ¦  col3  ¦  TEXT  ¦  YES  𝄀
+cast04  ¦  col4  ¦  BLOB  ¦  YES
 drop table cast04;
 drop table if exists cast05;
 create table cast05 (col1 date);
@@ -1778,46 +2003,51 @@ insert into cast05 values ('1997-01-13');
 insert into cast05 values ('2023-12-12');
 insert into cast05 values (null);
 select * from cast05;
-col1
-1997-01-13
-2023-12-12
+➤ col1[91,64,0]  𝄀
+1997-01-13  𝄀
+2023-12-12  𝄀
 null
 alter table cast05 change col1 ahgedbjwq varchar(100);
 alter table cast05 change ahgedbjwq YUYHJB datetime first;
 select * from cast05;
-yuyhjb
-1997-01-13 00:00:00
-2023-12-12 00:00:00
+➤ yuyhjb[93,64,0]  𝄀
+1997-01-13 00:00:00  𝄀
+2023-12-12 00:00:00  𝄀
 null
 show create table cast05;
-Table    Create Table
-cast05    CREATE TABLE `cast05` (\n  `YUYHJB` datetime DEFAULT NULL\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+cast05  ¦  CREATE TABLE `cast05` (
+  `YUYHJB` datetime DEFAULT NULL
+)
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'cast05' and COLUMN_NAME not like '__mo%';
-table_name    COLUMN_NAME    data_type    is_nullable
-cast05    YUYHJB    DATETIME    YES
+➤ table_name[12,-1,0]  ¦  COLUMN_NAME[12,-1,0]  ¦  data_type[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
+cast05  ¦  YUYHJB  ¦  DATETIME  ¦  YES
 drop table cast05;
 drop table if exists abnormal02;
 create table abnormal02 (col1 int unsigned not null, col2 smallint unsigned);
 insert into abnormal02 values (2147483647, 255);
 insert into abnormal02 values (3242334, 10);
 select * from abnormal02;
-col1    col2
-2147483647    255
-3242334    10
+➤ col1[4,32,0]  ¦  col2[5,16,0]  𝄀
+2147483647  ¦  255  𝄀
+3242334  ¦  10
 alter table abnormal02 change col1 YYYU&*&*&&& int;
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 40 near "&*&*&&& int;";
 alter table abnormal02 change col2 ehwuh3YUUUHHHB smallint;
 select * from abnormal02;
-col1    ehwuh3yuuuhhhb
-2147483647    255
-3242334    10
+➤ col1[4,32,0]  ¦  ehwuh3yuuuhhhb[5,16,0]  𝄀
+2147483647  ¦  255  𝄀
+3242334  ¦  10
 show create table abnormal02;
-Table    Create Table
-abnormal02    CREATE TABLE `abnormal02` (\n  `col1` int unsigned NOT NULL,\n  `ehwuh3YUUUHHHB` smallint DEFAULT NULL\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+abnormal02  ¦  CREATE TABLE `abnormal02` (
+  `col1` int unsigned NOT NULL,
+  `ehwuh3YUUUHHHB` smallint DEFAULT NULL
+)
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'abnormal02' and COLUMN_NAME not like '__mo%';
-table_name    COLUMN_NAME    data_type    is_nullable
-abnormal02    col1    INT UNSIGNED    NO
-abnormal02    ehwuh3YUUUHHHB    SMALLINT    YES
+➤ table_name[12,-1,0]  ¦  COLUMN_NAME[12,-1,0]  ¦  data_type[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
+abnormal02  ¦  col1  ¦  INT UNSIGNED  ¦  NO  𝄀
+abnormal02  ¦  ehwuh3YUUUHHHB  ¦  SMALLINT  ¦  YES
 drop table abnormal02;
 drop table if exists abnormal01;
 create table abnormal01 (col1 int, col2 bigint, col3 decimal);
@@ -1825,10 +2055,10 @@ insert into abnormal01 values (2147483647, 9223372036854775807, 3291843920.32783
 insert into abnormal01 values (-21843243, 832942343241999999, -2787343243.2343);
 insert into abnormal01 values (null, null, null);
 select * from abnormal01;
-col1    col2    col3
-2147483647    9223372036854775807    3291843920
--21843243    832942343241999999    -2787343243
-null    null    null
+➤ col1[4,32,0]  ¦  col2[-5,64,0]  ¦  col3[3,38,0]  𝄀
+2147483647  ¦  9223372036854775807  ¦  3291843920  𝄀
+-21843243  ¦  832942343241999999  ¦  -2787343243  𝄀
+null  ¦  null  ¦  null
 alter table abnormal01 change col2 col2COLLLHNNHHHH int;
 Data truncation: data out of range: data type int32, value '9223372036854775807'
 alter table abnormal01 change col1 whu3hkjwedn&32783u2j smallint;
@@ -1836,111 +2066,126 @@ SQL parser error: You have an error in your SQL syntax; check the manual that co
 alter table abnormal01 change col3 decimal(10,0);
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 43 near "(10,0);";
 select * from abnormal01;
-col1    col2    col3
-2147483647    9223372036854775807    3291843920
--21843243    832942343241999999    -2787343243
-null    null    null
+➤ col1[4,32,0]  ¦  col2[-5,64,0]  ¦  col3[3,38,0]  𝄀
+2147483647  ¦  9223372036854775807  ¦  3291843920  𝄀
+-21843243  ¦  832942343241999999  ¦  -2787343243  𝄀
+null  ¦  null  ¦  null
 show create table abnormal01;
-Table    Create Table
-abnormal01    CREATE TABLE `abnormal01` (\n  `col1` int DEFAULT NULL,\n  `col2` bigint DEFAULT NULL,\n  `col3` decimal(38,0) DEFAULT NULL\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+abnormal01  ¦  CREATE TABLE `abnormal01` (
+  `col1` int DEFAULT NULL,
+  `col2` bigint DEFAULT NULL,
+  `col3` decimal(38,0) DEFAULT NULL
+)
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'abnormal01' and COLUMN_NAME not like '__mo%';
-table_name    COLUMN_NAME    data_type    is_nullable
-abnormal01    col1    INT    YES
-abnormal01    col2    BIGINT    YES
-abnormal01    col3    DECIMAL    YES
+➤ table_name[12,-1,0]  ¦  COLUMN_NAME[12,-1,0]  ¦  data_type[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
+abnormal01  ¦  col1  ¦  INT  ¦  YES  𝄀
+abnormal01  ¦  col2  ¦  BIGINT  ¦  YES  𝄀
+abnormal01  ¦  col3  ¦  DECIMAL  ¦  YES
 drop table abnormal01;
 drop table if exists abnormal02;
 create table abnormal02 (col1 int not null, col2 smallint);
 insert into abnormal02 values (-2147483647, 255);
 insert into abnormal02 values (3242334, -10);
 select * from abnormal02;
-col1    col2
--2147483647    255
-3242334    -10
+➤ col1[4,32,0]  ¦  col2[5,16,0]  𝄀
+-2147483647  ¦  255  𝄀
+3242334  ¦  -10
 alter table abnormal02 change col1 col1New int unsigned;
 Data truncation: data out of range: data type uint, value '-2147483647'
 alter table abnormal02 change col2 col2New smallint smallint unsigned;
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 60 near " smallint unsigned;";
 select * from abnormal02;
-col1    col2
--2147483647    255
-3242334    -10
+➤ col1[4,32,0]  ¦  col2[5,16,0]  𝄀
+-2147483647  ¦  255  𝄀
+3242334  ¦  -10
 show create table abnormal02;
-Table    Create Table
-abnormal02    CREATE TABLE `abnormal02` (\n  `col1` int NOT NULL,\n  `col2` smallint DEFAULT NULL\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+abnormal02  ¦  CREATE TABLE `abnormal02` (
+  `col1` int NOT NULL,
+  `col2` smallint DEFAULT NULL
+)
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'abnormal02' and COLUMN_NAME not like '__mo%';
-table_name    COLUMN_NAME    data_type    is_nullable
-abnormal02    col1    INT    NO
-abnormal02    col2    SMALLINT    YES
+➤ table_name[12,-1,0]  ¦  COLUMN_NAME[12,-1,0]  ¦  data_type[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
+abnormal02  ¦  col1  ¦  INT  ¦  NO  𝄀
+abnormal02  ¦  col2  ¦  SMALLINT  ¦  YES
 drop table abnormal02;
 drop table if exists abnormal03;
 create table abnormal03 (col1 datetime, col2 blob);
 insert into abnormal03 values ('1997-01-13 00:00:00', '342ewfyuehcdeiuopwu4jo3lekwdfhiu48woi3jrdnefrbwui34f');
 insert into abnormal03 values ('2012-01-13 23:23:59', '63298ufh3jcweuiv4h32jhf432ouy4hu3enjwfnwje4n3bj24f34573');
 select * from abnormal03;
-col1    col2
-1997-01-13 00:00:00    342ewfyuehcdeiuopwu4jo3lekwdfhiu48woi3jrdnefrbwui34f
-2012-01-13 23:23:59    63298ufh3jcweuiv4h32jhf432ouy4hu3enjwfnwje4n3bj24f34573
+➤ col1[93,64,0]  ¦  col2[12,0,0]  𝄀
+1997-01-13 00:00:00  ¦  342ewfyuehcdeiuopwu4jo3lekwdfhiu48woi3jrdnefrbwui34f  𝄀
+2012-01-13 23:23:59  ¦  63298ufh3jcweuiv4h32jhf432ouy4hu3enjwfnwje4n3bj24f34573
 alter table abnormal03 change col1 col1time varchar(100);
 alter table abnormal03 change col2 col2int int;
 invalid argument cast to int, bad value 342ewfyuehcdeiuopwu4jo3lekwdfhiu48woi3jrdnefrbwui34f
 select * from abnormal03;
-col1time    col2
-1997-01-13 00:00:00    342ewfyuehcdeiuopwu4jo3lekwdfhiu48woi3jrdnefrbwui34f
-2012-01-13 23:23:59    63298ufh3jcweuiv4h32jhf432ouy4hu3enjwfnwje4n3bj24f34573
+➤ col1time[12,-1,0]  ¦  col2[12,0,0]  𝄀
+1997-01-13 00:00:00  ¦  342ewfyuehcdeiuopwu4jo3lekwdfhiu48woi3jrdnefrbwui34f  𝄀
+2012-01-13 23:23:59  ¦  63298ufh3jcweuiv4h32jhf432ouy4hu3enjwfnwje4n3bj24f34573
 show create table abnormal03;
-Table    Create Table
-abnormal03    CREATE TABLE `abnormal03` (\n  `col1time` varchar(100) DEFAULT NULL,\n  `col2` blob DEFAULT NULL\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+abnormal03  ¦  CREATE TABLE `abnormal03` (
+  `col1time` varchar(100) DEFAULT NULL,
+  `col2` blob DEFAULT NULL
+)
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'abnormal03' and COLUMN_NAME not like '__mo%';
-table_name    COLUMN_NAME    data_type    is_nullable
-abnormal03    col1time    VARCHAR    YES
-abnormal03    col2    BLOB    YES
+➤ table_name[12,-1,0]  ¦  COLUMN_NAME[12,-1,0]  ¦  data_type[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
+abnormal03  ¦  col1time  ¦  VARCHAR  ¦  YES  𝄀
+abnormal03  ¦  col2  ¦  BLOB  ¦  YES
 drop table abnormal03;
 drop table if exists abnormal04;
 create table abnormal04 (col1 json, col2 enum('a', 'b'));
 insert into abnormal04 values (('{"x": 17, "x": "red"}'),'a');
 insert into abnormal04 values (('{"x": 17, "x": "red", "x": [3, 5, 7]}'), 'b');
 select * from abnormal04;
-col1    col2
-{"x": "red"}    a
-{"x": [3, 5, 7]}    b
+➤ col1[-1,2147483647,0]  ¦  col2[12,-1,0]  𝄀
+{"x": "red"}  ¦  a  𝄀
+{"x": [3, 5, 7]}  ¦  b
 alter table abnormal04 change col1 col1NewCOl float;
-invalid argument operator cast, bad value [JSON -> FLOAT]
 alter table abnormal04 change col2 col2NewCOL int;
 invalid argument cast to int, bad value a
 select * from abnormal04;
-col1    col2
-{"x": "red"}    a
-{"x": [3, 5, 7]}    b
+➤ col1newcol[7,24,0]  ¦  col2[12,-1,0]  𝄀
+NaN  ¦  a  𝄀
+0.0  ¦  b
 show create table abnormal04;
-Table    Create Table
-abnormal04    CREATE TABLE `abnormal04` (\n  `col1` json DEFAULT NULL,\n  `col2` enum('a','b') DEFAULT NULL\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+abnormal04  ¦  CREATE TABLE `abnormal04` (
+  `col1NewCOl` float DEFAULT NULL,
+  `col2` enum('a','b') DEFAULT NULL
+)
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'abnormal04' and COLUMN_NAME not like '__mo%';
-table_name    COLUMN_NAME    data_type    is_nullable
-abnormal04    col1    JSON    YES
-abnormal04    col2    ENUM    YES
+➤ table_name[12,-1,0]  ¦  COLUMN_NAME[12,-1,0]  ¦  data_type[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
+abnormal04  ¦  col1NewCOl  ¦  FLOAT  ¦  YES  𝄀
+abnormal04  ¦  col2  ¦  ENUM  ¦  YES
 drop table abnormal04;
 drop table if exists abnormal05;
 create temporary table abnormal05 (col1 datetime, col2 blob);
 insert into abnormal05 values ('1997-01-13 00:00:00', '342ewfyuehcdeiuopwu4jo3lekwdfhiu48woi3jrdnefrbwui34f');
 insert into abnormal05 values ('2012-01-13 23:23:59', '63298ufh3jcweuiv4h32jhf432ouy4hu3enjwfnwje4n3bj24f34573');
 select * from abnormal05;
-col1    col2
-1997-01-13 00:00:00    342ewfyuehcdeiuopwu4jo3lekwdfhiu48woi3jrdnefrbwui34f
-2012-01-13 23:23:59    63298ufh3jcweuiv4h32jhf432ouy4hu3enjwfnwje4n3bj24f34573
+➤ col1[93,64,0]  ¦  col2[12,0,0]  𝄀
+1997-01-13 00:00:00  ¦  342ewfyuehcdeiuopwu4jo3lekwdfhiu48woi3jrdnefrbwui34f  𝄀
+2012-01-13 23:23:59  ¦  63298ufh3jcweuiv4h32jhf432ouy4hu3enjwfnwje4n3bj24f34573
 alter table abnormal05 change col1 col1_euwhnew float;
 alter table for temporary table is not yet implemented
 alter table abnormal05 change col2 col2_njkwhew int;
 alter table for temporary table is not yet implemented
 select * from abnormal05;
-col1    col2
-1997-01-13 00:00:00    342ewfyuehcdeiuopwu4jo3lekwdfhiu48woi3jrdnefrbwui34f
-2012-01-13 23:23:59    63298ufh3jcweuiv4h32jhf432ouy4hu3enjwfnwje4n3bj24f34573
+➤ col1[93,64,0]  ¦  col2[12,0,0]  𝄀
+1997-01-13 00:00:00  ¦  342ewfyuehcdeiuopwu4jo3lekwdfhiu48woi3jrdnefrbwui34f  𝄀
+2012-01-13 23:23:59  ¦  63298ufh3jcweuiv4h32jhf432ouy4hu3enjwfnwje4n3bj24f34573
 show create table abnormal05;
-Table    Create Table
-abnormal05    CREATE TEMPORARY TABLE `abnormal05` (\n  `col1` datetime DEFAULT NULL,\n  `col2` blob DEFAULT NULL\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+abnormal05  ¦  CREATE TEMPORARY TABLE `abnormal05` (
+  `col1` datetime DEFAULT NULL,
+  `col2` blob DEFAULT NULL
+)
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'abnormal05' and COLUMN_NAME not like '__mo%';
-table_name    COLUMN_NAME    data_type    is_nullable
+➤ table_name[12,-1,0]  ¦  COLUMN_NAME[12,-1,0]  ¦  data_type[12,-1,0]  ¦  is_nullable[12,-1,0]
 drop table abnormal05;
 drop table if exists view01;
 drop table if exists view02;
@@ -1952,15 +2197,17 @@ create table view02 (a int);
 insert into view02 values (1);
 create view v0 as select view01.a, view02.a as b from view01 left join view02 using(a);
 show create view v0;
-View    Create View    character_set_client    collation_connection
-v0    create view v0 as select view01.a, view02.a as b from view01 left join view02 using(a);    utf8mb4    utf8mb4_general_ci
+➤ View[12,-1,0]  ¦  Create View[12,-1,0]  ¦  character_set_client[12,-1,0]  ¦  collation_connection[12,-1,0]  𝄀
+v0  ¦  create view v0 as select view01.a, view02.a as b from view01 left join view02 using(a);  ¦  utf8mb4  ¦  utf8mb4_general_ci
 alter table view01 change a aCOL float;
 show create table view01;
-Table    Create Table
-view01    CREATE TABLE `view01` (\n  `aCOL` float DEFAULT NULL\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+view01  ¦  CREATE TABLE `view01` (
+  `aCOL` float DEFAULT NULL
+)
 show create view v0;
-View    Create View    character_set_client    collation_connection
-v0    create view v0 as select view01.a, view02.a as b from view01 left join view02 using(a);    utf8mb4    utf8mb4_general_ci
+➤ View[12,-1,0]  ¦  Create View[12,-1,0]  ¦  character_set_client[12,-1,0]  ¦  collation_connection[12,-1,0]  𝄀
+v0  ¦  create view v0 as select view01.a, view02.a as b from view01 left join view02 using(a);  ¦  utf8mb4  ¦  utf8mb4_general_ci
 drop table view01;
 drop table view02;
 drop view v0;
@@ -1971,16 +2218,19 @@ insert into cluster01 values (2, -2893428);
 alter table cluster01 change col2 col2worejnfenrororiri float;
 alter table cluster01 change col1 iwijwehfndatabasectm double after col2worejnfenrororiri;
 show create table cluster01;
-Table    Create Table
-cluster01    CREATE TABLE `cluster01` (\n  `col2worejnfenrororiri` float DEFAULT NULL,\n  `iwijwehfndatabasectm` double DEFAULT NULL\n) CLUSTER BY (`iwijwehfndatabasectm`)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+cluster01  ¦  CREATE TABLE `cluster01` (
+  `col2worejnfenrororiri` float DEFAULT NULL,
+  `iwijwehfndatabasectm` double DEFAULT NULL
+) CLUSTER BY (`iwijwehfndatabasectm`)
 select * from cluster01;
-col2worejnfenrororiri    iwijwehfndatabasectm
-3.892349E8    1.0
--2893428.0    2.0
+➤ col2worejnfenrororiri[7,24,0]  ¦  iwijwehfndatabasectm[8,54,0]  𝄀
+3.892349E8  ¦  1.0  𝄀
+-2893428.0  ¦  2.0
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'cluster01' and COLUMN_NAME not like '__mo%';
-table_name    COLUMN_NAME    data_type    is_nullable
-cluster01    col2worejnfenrororiri    FLOAT    YES
-cluster01    iwijwehfndatabasectm    DOUBLE    YES
+➤ table_name[12,-1,0]  ¦  COLUMN_NAME[12,-1,0]  ¦  data_type[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
+cluster01  ¦  col2worejnfenrororiri  ¦  FLOAT  ¦  YES  𝄀
+cluster01  ¦  iwijwehfndatabasectm  ¦  DOUBLE  ¦  YES
 drop table cluster01;
 drop table if exists time01;
 create table time01 (col1 date, col2 datetime, col3 timestamp, col4 time);
@@ -1988,26 +2238,31 @@ insert into time01 values ('2020-01-01', '2000-10-10 12:12:12', '2020-01-01 12:2
 insert into time01 values ('1997-01-13', null, '2020-01-01 23:23:59.100000', '23:23:59');
 insert into time01 (col1, col2, col3, col4) values ('2030-12-31', '2031-09-09 01:01:01', '2013-12-12 10:10:10.125000', '10:12:12');
 select * from time01;
-col1    col2    col3    col4
-2020-01-01    2000-10-10 12:12:12    2020-01-01 12:23:59    01:01:29
-1997-01-13    null    2020-01-01 23:23:59    23:23:59
-2030-12-31    2031-09-09 01:01:01    2013-12-12 10:10:10    10:12:12
+➤ col1[91,64,0]  ¦  col2[93,64,0]  ¦  col3[93,64,0]  ¦  col4[92,64,0]  𝄀
+2020-01-01  ¦  2000-10-10 12:12:12  ¦  2020-01-01 12:23:59  ¦  01:01:29  𝄀
+1997-01-13  ¦  null  ¦  2020-01-01 23:23:59  ¦  23:23:59  𝄀
+2030-12-31  ¦  2031-09-09 01:01:01  ¦  2013-12-12 10:10:10  ¦  10:12:12
 alter table time01 change col1 col1sbavhehfiwuejn int, change col2 col2chwjvhejkwbhjgeh int first, change col3 col3cvwheuhjhjk int after col1, change col4 col4ushebjfevce int;
 Unknown column 'col1' in 'Columns Set'
 show create table time01;
-Table    Create Table
-time01    CREATE TABLE `time01` (\n  `col1` date DEFAULT NULL,\n  `col2` datetime DEFAULT NULL,\n  `col3` timestamp NULL DEFAULT NULL,\n  `col4` time DEFAULT NULL\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+time01  ¦  CREATE TABLE `time01` (
+  `col1` date DEFAULT NULL,
+  `col2` datetime DEFAULT NULL,
+  `col3` timestamp NULL DEFAULT NULL,
+  `col4` time DEFAULT NULL
+)
 select * from time01;
-col1    col2    col3    col4
-2020-01-01    2000-10-10 12:12:12    2020-01-01 12:23:59    01:01:29
-1997-01-13    null    2020-01-01 23:23:59    23:23:59
-2030-12-31    2031-09-09 01:01:01    2013-12-12 10:10:10    10:12:12
+➤ col1[91,64,0]  ¦  col2[93,64,0]  ¦  col3[93,64,0]  ¦  col4[92,64,0]  𝄀
+2020-01-01  ¦  2000-10-10 12:12:12  ¦  2020-01-01 12:23:59  ¦  01:01:29  𝄀
+1997-01-13  ¦  null  ¦  2020-01-01 23:23:59  ¦  23:23:59  𝄀
+2030-12-31  ¦  2031-09-09 01:01:01  ¦  2013-12-12 10:10:10  ¦  10:12:12
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'time01' and COLUMN_NAME not like '__mo%';
-table_name    COLUMN_NAME    data_type    is_nullable
-time01    col1    DATE    YES
-time01    col2    DATETIME    YES
-time01    col3    TIMESTAMP    YES
-time01    col4    TIME    YES
+➤ table_name[12,-1,0]  ¦  COLUMN_NAME[12,-1,0]  ¦  data_type[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
+time01  ¦  col1  ¦  DATE  ¦  YES  𝄀
+time01  ¦  col2  ¦  DATETIME  ¦  YES  𝄀
+time01  ¦  col3  ¦  TIMESTAMP  ¦  YES  𝄀
+time01  ¦  col4  ¦  TIME  ¦  YES
 drop table time01;
 drop table if exists time02;
 create table time02 (col2 datetime, col3 timestamp, col4 time);
@@ -2015,25 +2270,29 @@ insert into time02 values ('2000-10-10 12:12:12', '2020-01-01 12:23:59.323000', 
 insert into time02 values ( null, '2020-01-01 23:23:59.125000', '23:23:59');
 insert into time02 (col2, col3, col4) values ('2031-09-09 01:01:01', '2013-12-12 10:10:10.125000', '10:12:12');
 select * from time02;
-col2    col3    col4
-2000-10-10 12:12:12    2020-01-01 12:23:59    01:01:29
-null    2020-01-01 23:23:59    23:23:59
-2031-09-09 01:01:01    2013-12-12 10:10:10    10:12:12
+➤ col2[93,64,0]  ¦  col3[93,64,0]  ¦  col4[92,64,0]  𝄀
+2000-10-10 12:12:12  ¦  2020-01-01 12:23:59  ¦  01:01:29  𝄀
+null  ¦  2020-01-01 23:23:59  ¦  23:23:59  𝄀
+2031-09-09 01:01:01  ¦  2013-12-12 10:10:10  ¦  10:12:12
 alter table time02 change col2 decimal(20,10) first, change col3 decimal after col2, change col4 decimal(38,0);
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 39 near "(20,10) first, change col3 decimal after col2, change col4 decimal(38,0);";
 show create table time02;
-Table    Create Table
-time02    CREATE TABLE `time02` (\n  `col2` datetime DEFAULT NULL,\n  `col3` timestamp NULL DEFAULT NULL,\n  `col4` time DEFAULT NULL\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+time02  ¦  CREATE TABLE `time02` (
+  `col2` datetime DEFAULT NULL,
+  `col3` timestamp NULL DEFAULT NULL,
+  `col4` time DEFAULT NULL
+)
 select * from time02;
-col2    col3    col4
-2000-10-10 12:12:12    2020-01-01 12:23:59    01:01:29
-null    2020-01-01 23:23:59    23:23:59
-2031-09-09 01:01:01    2013-12-12 10:10:10    10:12:12
+➤ col2[93,64,0]  ¦  col3[93,64,0]  ¦  col4[92,64,0]  𝄀
+2000-10-10 12:12:12  ¦  2020-01-01 12:23:59  ¦  01:01:29  𝄀
+null  ¦  2020-01-01 23:23:59  ¦  23:23:59  𝄀
+2031-09-09 01:01:01  ¦  2013-12-12 10:10:10  ¦  10:12:12
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'time02' and COLUMN_NAME not like '__mo%';
-table_name    COLUMN_NAME    data_type    is_nullable
-time02    col2    DATETIME    YES
-time02    col3    TIMESTAMP    YES
-time02    col4    TIME    YES
+➤ table_name[12,-1,0]  ¦  COLUMN_NAME[12,-1,0]  ¦  data_type[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
+time02  ¦  col2  ¦  DATETIME  ¦  YES  𝄀
+time02  ¦  col3  ¦  TIMESTAMP  ¦  YES  𝄀
+time02  ¦  col4  ¦  TIME  ¦  YES
 drop table time02;
 drop table if exists prepare01;
 create table prepare01(col1 int, col2 char);
@@ -2041,13 +2300,21 @@ insert into prepare01 values (1,'a'),(2,'b'),(3,'c');
 prepare s1 from 'alter table prepare01 change col1 col1dheuwhvcer decimal primary key';
 execute s1;
 show create table prepare01;
-Table    Create Table
-prepare01    CREATE TABLE `prepare01` (\n  `col1dheuwhvcer` decimal(38,0) NOT NULL,\n  `col2` char(1) DEFAULT NULL,\n  PRIMARY KEY (`col1dheuwhvcer`)\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+prepare01  ¦  CREATE TABLE `prepare01` (
+  `col1dheuwhvcer` decimal(38,0) NOT NULL,
+  `col2` char(1) DEFAULT NULL,
+  PRIMARY KEY (`col1dheuwhvcer`)
+)
 prepare s2 from 'alter table prepare01 change col2 col2chuwhe varchar(100) not null';
 execute s2;
 show create table prepare01;
-Table    Create Table
-prepare01    CREATE TABLE `prepare01` (\n  `col1dheuwhvcer` decimal(38,0) NOT NULL,\n  `col2chuwhe` varchar(100) NOT NULL,\n  PRIMARY KEY (`col1dheuwhvcer`)\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+prepare01  ¦  CREATE TABLE `prepare01` (
+  `col1dheuwhvcer` decimal(38,0) NOT NULL,
+  `col2chuwhe` varchar(100) NOT NULL,
+  PRIMARY KEY (`col1dheuwhvcer`)
+)
 drop table prepare01;
 drop role if exists role_r1;
 drop user if exists role_u1;
@@ -2072,8 +2339,10 @@ SQL parser error: You have an error in your SQL syntax; check the manual that co
 show create table test01;
 no such table alter_table_change_column.test01
 show create table test01;
-Table    Create Table
-test01    CREATE TABLE `test01` (\n  `col1` int DEFAULT NULL\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+test01  ¦  CREATE TABLE `test01` (
+  `col1` int DEFAULT NULL
+)
 drop table test01;
 drop role role_r1;
 drop user role_u1;
@@ -2083,45 +2352,64 @@ insert into mix01 values (1, 23849234.324, '2100-01-01', 'qy83uhfbh234y78y&*%^&%
 insert into mix01 values (2, 773892.32748000000000, '1997-01-13', '38782yhbf3uhy4iendb32gefdc7y834uh2neujdr2h4f3v43');
 insert into mix01 values (3, -82913942.3434, null, null);
 select * from mix01;
-col1    col2    col3    col4
-1    23849234    2100-01-01    qy83uhfbh234y78y&*%^&%$$$E%^&Y*UIJNHBGVFTY^&Y*UJHBGVTF^&*U(OK
-2    773892    1997-01-13    38782yhbf3uhy4iendb32gefdc7y834uh2neujdr2h4f3v43
-3    -82913942    null    null
+➤ col1[4,32,0]  ¦  col2[3,38,0]  ¦  col3[91,64,0]  ¦  col4[12,-1,0]  𝄀
+1  ¦  23849234  ¦  2100-01-01  ¦  qy83uhfbh234y78y&*%^&%$$$E%^&Y*UIJNHBGVFTY^&Y*UJHBGVTF^&*U(OK  𝄀
+2  ¦  773892  ¦  1997-01-13  ¦  38782yhbf3uhy4iendb32gefdc7y834uh2neujdr2h4f3v43  𝄀
+3  ¦  -82913942  ¦  null  ¦  null
 alter table mix01 add column col1_2 binary after col1;
 show create table mix01;
-Table    Create Table
-mix01    CREATE TABLE `mix01` (\n  `col1` int NOT NULL,\n  `col1_2` binary(1) DEFAULT NULL,\n  `col2` decimal(38,0) DEFAULT NULL,\n  `col3` date DEFAULT NULL,\n  `col4` varchar(100) DEFAULT NULL\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+mix01  ¦  CREATE TABLE `mix01` (
+  `col1` int NOT NULL,
+  `col1_2` binary(1) DEFAULT NULL,
+  `col2` decimal(38,0) DEFAULT NULL,
+  `col3` date DEFAULT NULL,
+  `col4` varchar(100) DEFAULT NULL
+)
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'mix01' and COLUMN_NAME not like '__mo%';
-table_name    COLUMN_NAME    data_type    is_nullable
-mix01    col1    INT    NO
-mix01    col1_2    BINARY    YES
-mix01    col2    DECIMAL    YES
-mix01    col3    DATE    YES
-mix01    col4    VARCHAR    YES
+➤ table_name[12,-1,0]  ¦  COLUMN_NAME[12,-1,0]  ¦  data_type[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
+mix01  ¦  col1  ¦  INT  ¦  NO  𝄀
+mix01  ¦  col1_2  ¦  BINARY  ¦  YES  𝄀
+mix01  ¦  col2  ¦  DECIMAL  ¦  YES  𝄀
+mix01  ¦  col3  ¦  DATE  ¦  YES  𝄀
+mix01  ¦  col4  ¦  VARCHAR  ¦  YES
 alter table mix01 change column col1_2 col1_2New varbinary(10) first;
 show create table mix01;
-Table    Create Table
-mix01    CREATE TABLE `mix01` (\n  `col1_2New` varbinary(10) DEFAULT NULL,\n  `col1` int NOT NULL,\n  `col2` decimal(38,0) DEFAULT NULL,\n  `col3` date DEFAULT NULL,\n  `col4` varchar(100) DEFAULT NULL\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+mix01  ¦  CREATE TABLE `mix01` (
+  `col1_2New` varbinary(10) DEFAULT NULL,
+  `col1` int NOT NULL,
+  `col2` decimal(38,0) DEFAULT NULL,
+  `col3` date DEFAULT NULL,
+  `col4` varchar(100) DEFAULT NULL
+)
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'mix01' and COLUMN_NAME not like '__mo%';
-table_name    COLUMN_NAME    data_type    is_nullable
-mix01    col1    INT    NO
-mix01    col1_2New    VARBINARY    YES
-mix01    col2    DECIMAL    YES
-mix01    col3    DATE    YES
-mix01    col4    VARCHAR    YES
+➤ table_name[12,-1,0]  ¦  COLUMN_NAME[12,-1,0]  ¦  data_type[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
+mix01  ¦  col1  ¦  INT  ¦  NO  𝄀
+mix01  ¦  col1_2New  ¦  VARBINARY  ¦  YES  𝄀
+mix01  ¦  col2  ¦  DECIMAL  ¦  YES  𝄀
+mix01  ¦  col3  ¦  DATE  ¦  YES  𝄀
+mix01  ¦  col4  ¦  VARCHAR  ¦  YES
 truncate table mix01;
 alter table mix01 add column col5 int;
 show create table mix01;
-Table    Create Table
-mix01    CREATE TABLE `mix01` (\n  `col1_2New` varbinary(10) DEFAULT NULL,\n  `col1` int NOT NULL,\n  `col2` decimal(38,0) DEFAULT NULL,\n  `col3` date DEFAULT NULL,\n  `col4` varchar(100) DEFAULT NULL,\n  `col5` int DEFAULT NULL\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+mix01  ¦  CREATE TABLE `mix01` (
+  `col1_2New` varbinary(10) DEFAULT NULL,
+  `col1` int NOT NULL,
+  `col2` decimal(38,0) DEFAULT NULL,
+  `col3` date DEFAULT NULL,
+  `col4` varchar(100) DEFAULT NULL,
+  `col5` int DEFAULT NULL
+)
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'mix01' and COLUMN_NAME not like '__mo%';
-table_name    COLUMN_NAME    data_type    is_nullable
-mix01    col1    INT    NO
-mix01    col1_2New    VARBINARY    YES
-mix01    col2    DECIMAL    YES
-mix01    col3    DATE    YES
-mix01    col4    VARCHAR    YES
-mix01    col5    INT    YES
+➤ table_name[12,-1,0]  ¦  COLUMN_NAME[12,-1,0]  ¦  data_type[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
+mix01  ¦  col1  ¦  INT  ¦  NO  𝄀
+mix01  ¦  col1_2New  ¦  VARBINARY  ¦  YES  𝄀
+mix01  ¦  col2  ¦  DECIMAL  ¦  YES  𝄀
+mix01  ¦  col3  ¦  DATE  ¦  YES  𝄀
+mix01  ¦  col4  ¦  VARCHAR  ¦  YES  𝄀
+mix01  ¦  col5  ¦  INT  ¦  YES
 drop table mix01;
 drop table if exists table01;
 begin;
@@ -2130,80 +2418,83 @@ insert into table01 values(100,200);
 alter table table01 change column col1 NewCol1 float;
 commit;
 select * from table01;
-newcol1    col2
-100.0    200
+➤ newcol1[7,24,0]  ¦  col2[3,38,0]  𝄀
+100.0  ¦  200
 select newcol1 from table01;
-newcol1
+➤ newcol1[7,24,0]  𝄀
 100.0
 drop table table01;
 drop table if exists t1;
 create table t1(name varchar(25));
 insert into t1 values ('A'),('B'),('C');
 select * from t1;
-name
-A
-B
+➤ name[12,-1,0]  𝄀
+A  𝄀
+B  𝄀
 C
 alter table t1 modify column name enum('A','B');
 internal error: convert to MySQL enum failed: item C is not in enum [A B]
 alter table t1 modify column name enum('A','B','C');
 alter table t1 modify column name enum('A','B','C','D'), add column age int;
 select * from t1;
-name    age
-A    null
-B    null
-C    null
+➤ name[12,-1,0]  ¦  age[4,32,0]  𝄀
+A  ¦  null  𝄀
+B  ¦  null  𝄀
+C  ¦  null
 insert into t1 values('D', 29);
 show create table t1;
-Table    Create Table
-t1    CREATE TABLE `t1` (\n  `name` enum('A','B','C','D') DEFAULT NULL,\n  `age` int DEFAULT NULL\n)
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+t1  ¦  CREATE TABLE `t1` (
+  `name` enum('A','B','C','D') DEFAULT NULL,
+  `age` int DEFAULT NULL
+)
 desc t1;
-Field    Type    Null    Key    Default    Extra    Comment
-name    ENUM('A','B','C','D')    YES        null        
-age    INT(32)    YES        null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+name  ¦  ENUM('A','B','C','D')  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+age  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦  
 drop table t1;
 drop table if exists tb_3;
 create table tb_3 (c1 varchar(25) not null, c2 varchar(25) not null, c3 varchar(25) not null, c4 int , primary key pk1(c1, c2, c3));
 desc tb_3;
-Field    Type    Null    Key    Default    Extra    Comment
-c1    VARCHAR(25)    NO    PRI    null        
-c2    VARCHAR(25)    NO    PRI    null        
-c3    VARCHAR(25)    NO    PRI    null        
-c4    INT(32)    YES        null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+c1  ¦  VARCHAR(25)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+c2  ¦  VARCHAR(25)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+c3  ¦  VARCHAR(25)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+c4  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦  
 alter table tb_3 modify c1 VARCHAR(30) not null;
 desc tb_3;
-Field    Type    Null    Key    Default    Extra    Comment
-c1    VARCHAR(30)    NO    PRI    null        
-c2    VARCHAR(25)    NO    PRI    null        
-c3    VARCHAR(25)    NO    PRI    null        
-c4    INT(32)    YES        null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+c1  ¦  VARCHAR(30)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+c2  ¦  VARCHAR(25)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+c3  ¦  VARCHAR(25)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+c4  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦  
 alter table tb_3 modify c1 VARCHAR(30);
 desc tb_3;
-Field    Type    Null    Key    Default    Extra    Comment
-c1    VARCHAR(30)    NO    PRI    null        
-c2    VARCHAR(25)    NO    PRI    null        
-c3    VARCHAR(25)    NO    PRI    null        
-c4    INT(32)    YES        null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+c1  ¦  VARCHAR(30)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+c2  ¦  VARCHAR(25)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+c3  ¦  VARCHAR(25)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+c4  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦  
 alter table tb_3 modify c1 VARCHAR(40);
 desc tb_3;
-Field    Type    Null    Key    Default    Extra    Comment
-c1    VARCHAR(40)    NO    PRI    null        
-c2    VARCHAR(25)    NO    PRI    null        
-c3    VARCHAR(25)    NO    PRI    null        
-c4    INT(32)    YES        null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+c1  ¦  VARCHAR(40)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+c2  ¦  VARCHAR(25)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+c3  ¦  VARCHAR(25)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+c4  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦  
 alter table tb_3 modify c4 VARCHAR(40);
 desc tb_3;
-Field    Type    Null    Key    Default    Extra    Comment
-c1    VARCHAR(40)    NO    PRI    null        
-c2    VARCHAR(25)    NO    PRI    null        
-c3    VARCHAR(25)    NO    PRI    null        
-c4    VARCHAR(40)    YES        null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+c1  ¦  VARCHAR(40)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+c2  ¦  VARCHAR(25)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+c3  ¦  VARCHAR(25)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+c4  ¦  VARCHAR(40)  ¦  YES  ¦    ¦  null  ¦    ¦  
 alter table tb_3 modify c4 VARCHAR(40) NOT null;
 desc tb_3;
-Field    Type    Null    Key    Default    Extra    Comment
-c1    VARCHAR(40)    NO    PRI    null        
-c2    VARCHAR(25)    NO    PRI    null        
-c3    VARCHAR(25)    NO    PRI    null        
-c4    VARCHAR(40)    NO        null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+c1  ¦  VARCHAR(40)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+c2  ¦  VARCHAR(25)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+c3  ¦  VARCHAR(25)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+c4  ¦  VARCHAR(40)  ¦  NO  ¦    ¦  null  ¦    ¦  
 drop table tb_3;
 drop database db2;
