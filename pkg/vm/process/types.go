@@ -17,6 +17,7 @@ package process
 import (
 	"context"
 	"io"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -346,6 +347,13 @@ type BaseProcess struct {
 	logger                   *log.MOLogger
 	TxnOperator              client.TxnOperator
 	CloneTxnOperator         client.TxnOperator
+	// userLevelLockIdentity is session-scoped rather than statement-scoped.
+	// SessionInfo is rebuilt before every statement, so keeping this identity
+	// there would lose the synthetic transaction owner while locks are held.
+	userLevelLockIdentityMu sync.Mutex
+	userLevelLockOwner      string
+	userLevelLockConnID     uint64
+	userLevelLockGeneration string
 	// incrStatementDisabled marks a process that executes internal SQL on a
 	// caller-owned transaction without opening a statement of its own
 	// (executor.Options.WithDisableIncrStatement). Compiles on such a process
@@ -598,6 +606,41 @@ func (si *SessionInfo) GetCollation() string {
 
 func (si *SessionInfo) GetConnectionID() uint64 {
 	return si.ConnectionID
+}
+
+// GetUserLevelLockIdentity returns the immutable user-level lock identity
+// pinned to this top process. Child processes share BaseProcess and therefore
+// observe the same session identity.
+func (proc *Process) GetUserLevelLockIdentity() (string, uint64) {
+	if proc == nil || proc.Base == nil {
+		return "", 0
+	}
+	proc.Base.userLevelLockIdentityMu.Lock()
+	defer proc.Base.userLevelLockIdentityMu.Unlock()
+	return proc.Base.userLevelLockOwner, proc.Base.userLevelLockConnID
+}
+
+// PinUserLevelLockIdentity installs the user-level lock identity once for the
+// lifetime of this top process. It is intentionally not reset after the last
+// lock is released: a concurrent acquisition must not be assigned a different
+// synthetic transaction owner, and SET CONNECTION ID must not mutate it.
+func (proc *Process) PinUserLevelLockIdentity(owner string, connID uint64) (string, uint64) {
+	if proc == nil || proc.Base == nil {
+		return "", 0
+	}
+	proc.Base.userLevelLockIdentityMu.Lock()
+	defer proc.Base.userLevelLockIdentityMu.Unlock()
+	if proc.Base.userLevelLockOwner == "" {
+		if proc.Base.userLevelLockGeneration == "" {
+			proc.Base.userLevelLockGeneration = uuid.New().String()
+		}
+		if proc.Base.userLevelLockGeneration != "" && strings.Count(owner, ":") < 2 {
+			owner = owner + ":" + proc.Base.userLevelLockGeneration
+		}
+		proc.Base.userLevelLockOwner = owner
+		proc.Base.userLevelLockConnID = connID
+	}
+	return proc.Base.userLevelLockOwner, proc.Base.userLevelLockConnID
 }
 
 func (si *SessionInfo) GetDatabase() string {

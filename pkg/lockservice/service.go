@@ -396,7 +396,49 @@ func (s *service) Unlock(
 	mutations ...pb.ExtraMutation) error {
 	// Keep ordinary unlock behavior unchanged: it retries remote cleanup until
 	// completion even when the caller's request context has ended.
-	return s.unlockWithContext(context.Background(), txnID, commitTS, mutations...)
+	unlockCtx := context.Background()
+	start := time.Now()
+	defer func() {
+		v2.TxnUnlockDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
+
+	if err := s.wait(unlockCtx); err != nil {
+		return err
+	}
+
+	s.beginTxnClosure()
+	defer s.endTxnClosure()
+
+	txn := s.activeTxnHolder.deleteActiveTxn(txnID)
+	if txn == nil {
+		return nil
+	}
+
+	txn.Lock()
+	defer txn.Unlock()
+	if !bytes.Equal(txn.txnID, txnID) {
+		return nil
+	}
+
+	defer logUnlockTxn(s.logger, txn)()
+	binds := txn.lockTableBindsLocked()
+	if err := txn.closeWithContext(unlockCtx, txnID, commitTS, func(group uint32, table uint64) (lockTable, error) {
+		return s.getLockTable(unlockCtx, group, table)
+	}, s.logger, mutations...); err != nil {
+		return err
+	}
+	s.reduceCanMoveGroupTables(binds)
+	s.tryCompleteDrain()
+	s.deadlockDetector.txnClosed(txnID)
+	return nil
+}
+
+func (s *service) UnlockWithContext(
+	ctx context.Context,
+	txnID []byte,
+	commitTS timestamp.Timestamp,
+	mutations ...pb.ExtraMutation) error {
+	return s.unlockWithContext(ctx, txnID, commitTS, mutations...)
 }
 
 // unlockUnknownCommit is used only after Commit returned an unknown outcome.
@@ -499,10 +541,11 @@ func (s *service) unlockWithContext(
 
 	defer logUnlockTxn(s.logger, txn)()
 	binds := txn.lockTableBindsLocked()
-	err := txn.closeWithContext(ctx, txnID, commitTS, func(group uint32, table uint64) (lockTable, error) {
+	err := txn.closeWithoutFreeWithContext(ctx, txnID, commitTS, func(group uint32, table uint64) (lockTable, error) {
 		return s.getLockTable(ctx, group, table)
 	}, s.logger, mutations...)
 	if err != nil {
+		s.activeTxnHolder.restoreActiveTxn(txn)
 		return err
 	}
 	s.reduceCanMoveGroupTables(binds)
@@ -511,6 +554,7 @@ func (s *service) unlockWithContext(
 	// the abort transaction. When a transaction is unlocked, the deadlock detector
 	// needs to be notified to release memory.
 	s.deadlockDetector.txnClosed(txnID)
+	reuse.Free(txn, nil)
 	return nil
 }
 
@@ -1474,6 +1518,7 @@ type activeTxnHolder interface {
 	getActiveTxn(txnID []byte, create bool, remoteService string) *activeTxn
 	hasActiveTxn(txnID []byte) bool
 	deleteActiveTxn(txnID []byte) *activeTxn
+	restoreActiveTxn(txn *activeTxn) bool
 	fenceByBindChanged(bind pb.LockTable) int
 	keepRemoteActiveTxn(remoteService string)
 	keepRemoteLockBindActive(remoteService string, bind pb.LockTable)
@@ -1636,6 +1681,26 @@ func (h *mapBasedTxnHolder) deleteActiveTxn(txnID []byte) *activeTxn {
 	}
 	shard.Unlock()
 	return entry.txn
+}
+
+func (h *mapBasedTxnHolder) restoreActiveTxn(txn *activeTxn) bool {
+	if txn == nil {
+		return false
+	}
+	shard := h.getActiveTxnShard(txn.txnKey)
+	shard.Lock()
+	if entry, ok := shard.txns[txn.txnKey]; ok {
+		shard.Unlock()
+		return entry.txn == txn
+	}
+	h.activeTxnCount.Add(1)
+	shard.txns[txn.txnKey] = activeTxnEntry{txn: txn, remoteService: txn.remoteService}
+	shard.Unlock()
+
+	if txn.remoteService != "" {
+		h.keepRemoteActiveTxn(txn.remoteService)
+	}
+	return true
 }
 
 func (h *mapBasedTxnHolder) fenceByBindChanged(bind pb.LockTable) int {

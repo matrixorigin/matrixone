@@ -53,10 +53,12 @@ select release_all_locks();
 select is_free_lock('user_lock_bvt_multi_a');
 select is_free_lock('user_lock_bvt_multi_b');
 
+-- User-level lock names are case-insensitive.
 select get_lock('User_Lock_Bvt_Case', 0);
 select is_free_lock('user_lock_bvt_case');
 select release_lock('USER_LOCK_BVT_CASE');
 select is_free_lock('user_lock_bvt_case');
+select release_lock('User_Lock_Bvt_Case');
 
 drop table user_lock_bvt_holder;
 drop database user_lock_bvt_db;

@@ -1608,6 +1608,84 @@ func TestReLockSuccWithLockTableBindChanged(t *testing.T) {
 	)
 }
 
+func TestUnlockWithContextKeepsTxnForRetryAfterRemoteTimeout(t *testing.T) {
+	runLockServiceTestsWithLevel(
+		t,
+		zapcore.DebugLevel,
+		[]string{"s1", "s2"},
+		time.Second,
+		func(alloc *lockTableAllocator, s []*service) {
+			l1 := s[0]
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+
+			txnID := []byte("user-lock-cleanup")
+			option := pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+			_, err := l1.Lock(ctx, 0, [][]byte{{1}}, txnID, option)
+			require.NoError(t, err)
+
+			localTable := l1.tableGroups.get(0, 0)
+			bind := localTable.getBind()
+			client := &blockingUnlockClient{unlockStarted: make(chan struct{}, 1)}
+			l1.tableGroups.Lock()
+			l1.tableGroups.holders[0].tables[0] = &remoteLockTable{
+				bind:   bind,
+				client: client,
+				logger: l1.logger,
+			}
+			l1.tableGroups.Unlock()
+
+			unlockCtx, unlockCancel := context.WithTimeout(context.Background(), time.Millisecond*50)
+			defer unlockCancel()
+			err = l1.UnlockWithContext(unlockCtx, txnID, timestamp.Timestamp{})
+			require.ErrorIs(t, err, context.DeadlineExceeded)
+			require.NotNil(t, l1.activeTxnHolder.getActiveTxn(txnID, false, ""))
+
+			l1.tableGroups.Lock()
+			l1.tableGroups.holders[0].tables[0] = localTable
+			l1.tableGroups.Unlock()
+			require.NoError(t, l1.Unlock(ctx, txnID, timestamp.Timestamp{}))
+			require.Nil(t, l1.activeTxnHolder.getActiveTxn(txnID, false, ""))
+		},
+		nil,
+	)
+}
+
+func TestUnlockIgnoresCanceledCallerContextForTransactionCleanup(t *testing.T) {
+	runLockServiceTestsWithLevel(
+		t,
+		zapcore.DebugLevel,
+		[]string{"s1"},
+		time.Second,
+		func(alloc *lockTableAllocator, s []*service) {
+			l1 := s[0]
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+
+			txnID := []byte("timed-out-statement-cleanup")
+			option := pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+			_, err := l1.Lock(ctx, 0, [][]byte{{1}}, txnID, option)
+			require.NoError(t, err)
+
+			canceledCtx, cancelCanceledCtx := context.WithCancel(context.Background())
+			cancelCanceledCtx()
+			require.NoError(t, l1.Unlock(canceledCtx, txnID, timestamp.Timestamp{}))
+
+			_, err = l1.Lock(ctx, 0, [][]byte{{1}}, []byte("contender"), option)
+			require.NoError(t, err)
+		},
+		nil,
+	)
+}
+
 func TestIssue4007(t *testing.T) {
 	runLockServiceTestsWithLevel(
 		t,
@@ -5026,6 +5104,41 @@ func TestRowLockWithFailFast(t *testing.T) {
 
 					_, err = s.Lock(ctx, table, rows, txn2, option)
 					require.Error(t, ErrLockConflict, err)
+				})
+		})
+	}
+}
+
+func TestRowLockFastFailConflictActiveTxnCleanup(t *testing.T) {
+	for name, runner := range runners {
+		t.Run(name, func(t *testing.T) {
+			table := uint64(0)
+			runner(
+				t,
+				table,
+				func(
+					ctx context.Context,
+					s *service,
+					lt *localLockTable) {
+					option := newTestRowExclusiveOptions()
+					option.Policy = pb.WaitPolicy_FastFail
+					rows := newTestRows(1)
+					holderTxn := newTestTxnID(1)
+					conflictTxn := newTestTxnID(2)
+
+					_, err := s.Lock(ctx, table, rows, holderTxn, option)
+					require.NoError(t, err)
+					defer func() {
+						assert.NoError(t, s.Unlock(ctx, holderTxn, timestamp.Timestamp{}))
+					}()
+
+					_, err = s.Lock(ctx, table, rows, conflictTxn, option)
+					require.Error(t, err)
+					require.ErrorIs(t, err, ErrLockConflict)
+					require.NotNil(t, s.activeTxnHolder.getActiveTxn(conflictTxn, false, ""))
+
+					require.NoError(t, s.Unlock(ctx, conflictTxn, timestamp.Timestamp{}))
+					require.Nil(t, s.activeTxnHolder.getActiveTxn(conflictTxn, false, ""))
 				})
 		})
 	}
