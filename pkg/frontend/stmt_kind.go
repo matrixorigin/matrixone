@@ -54,6 +54,14 @@ func IsPrepareStatement(stmt tree.Statement) bool {
 	return false
 }
 
+func isDataBranchCreateStatement(stmt tree.Statement) bool {
+	switch stmt.(type) {
+	case *tree.DataBranchCreateTable, *tree.DataBranchCreateDatabase:
+		return true
+	}
+	return false
+}
+
 // IsDDL checks the statement is the DDL statement.
 func IsDDL(stmt tree.Statement) bool {
 	switch stmt.(type) {

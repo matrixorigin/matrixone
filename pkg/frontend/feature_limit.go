@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
+	pbtxn "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
@@ -91,6 +92,9 @@ func featureLimitChecker(
 	// Serialize finite branch quota checks on the account's quota row. The lock
 	// is held by the caller's background transaction through metadata insertion.
 	if featureCode == featureCodeBranch && limitQuota > 0 {
+		if err = checkBranchQuotaTxn(bh); err != nil {
+			return err
+		}
 		if limitQuota, err = lockFeatureQuota(ctx, ses, bh, accId, featureCode, featureScope); err != nil {
 			return err
 		}
@@ -160,6 +164,23 @@ func featureLimitChecker(
 	return nil
 }
 
+func checkBranchQuotaTxn(bh BackgroundExec) error {
+	backExec, ok := bh.(*backExec)
+	if !ok {
+		return nil
+	}
+	txnOp := backExec.backSes.GetTxnHandler().GetTxn()
+	if txnOp == nil {
+		return moerr.NewInternalErrorNoCtx("missing transaction for finite branch quota")
+	}
+	txnMeta := txnOp.Txn()
+	if txnMeta.Mode != pbtxn.TxnMode_Pessimistic || txnMeta.Isolation != pbtxn.TxnIsolation_RC {
+		return moerr.NewInternalErrorNoCtx(
+			"finite branch quota requires a pessimistic read committed transaction; retry outside the active transaction")
+	}
+	return nil
+}
+
 func lockFeatureQuota(
 	ctx context.Context,
 	ses *Session,
@@ -194,6 +215,11 @@ func lockFeatureQuota(
 		txnOp := backExec.backSes.GetTxnHandler().GetTxn()
 		if txnOp == nil {
 			return 0, moerr.NewInternalErrorNoCtx("missing transaction for branch quota snapshot refresh")
+		}
+		txnMeta := txnOp.Txn()
+		if txnMeta.Mode != pbtxn.TxnMode_Pessimistic || txnMeta.Isolation != pbtxn.TxnIsolation_RC {
+			return 0, moerr.NewInternalErrorNoCtx(
+				"finite branch quota requires a pessimistic read committed transaction; retry outside the active transaction")
 		}
 		rt := moruntime.ServiceRuntime(ses.service)
 		if rt == nil {

@@ -23,9 +23,11 @@ import (
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	pblock "github.com/matrixorigin/matrixone/pkg/pb/lock"
+	pbtxn "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
 	"github.com/stretchr/testify/require"
 )
@@ -176,6 +178,75 @@ func TestIssue26087ConcurrentDataBranchQuota(t *testing.T) {
 				"select count(*) from mo_catalog.mo_tables where reldatabase = 'branch_quota_destination' and relname in ('t1', 't2')",
 			).Scan(&databaseBranchCount))
 			require.Equal(t, 2, databaseBranchCount)
+
+			require.NoError(t, execConn(conn1, "data branch delete table branch_quota_race.b1"))
+			require.NoError(t, execConn(conn1, "data branch delete database branch_quota_destination"))
+			execSQLRequire(t, ctx, sysDB, fmt.Sprintf("select mo_feature_limit_upsert(%d, 'branch', '', 1)", accountID))
+
+			rt := moruntime.ServiceRuntime(cn.ServiceID())
+			oldMode, hadMode := rt.GetGlobalVariables(moruntime.TxnMode)
+			oldIsolation, hadIsolation := rt.GetGlobalVariables(moruntime.TxnIsolation)
+			rt.SetGlobalVariables(moruntime.TxnMode, pbtxn.TxnMode_Optimistic)
+			rt.SetGlobalVariables(moruntime.TxnIsolation, pbtxn.TxnIsolation_SI)
+			defer func() {
+				if hadMode {
+					rt.SetGlobalVariables(moruntime.TxnMode, oldMode)
+				} else {
+					rt.SetGlobalVariables(moruntime.TxnMode, pbtxn.TxnMode_Pessimistic)
+				}
+				if hadIsolation {
+					rt.SetGlobalVariables(moruntime.TxnIsolation, oldIsolation)
+				} else {
+					rt.SetGlobalVariables(moruntime.TxnIsolation, pbtxn.TxnIsolation_RC)
+				}
+			}()
+
+			require.NoError(t, execConn(conn1, "begin"))
+			explicitErr := execConn(conn1,
+				"data branch create table branch_quota_race.explicit_branch from branch_quota_race.src{snapshot='issue_26087_sp'}")
+			require.Error(t, explicitErr)
+			require.Contains(t, explicitErr.Error(),
+				"finite branch quota requires a pessimistic read committed transaction; retry outside the active transaction")
+			require.NoError(t, execConn(conn1, "rollback"))
+
+			optimisticDB, err := sql.Open("mysql", fmt.Sprintf("%s#root#accountadmin:111@tcp(127.0.0.1:%d)/", accountName, port))
+			require.NoError(t, err)
+			defer optimisticDB.Close()
+			const creators = 8
+			optimisticDB.SetMaxOpenConns(creators)
+			type createResult struct {
+				name string
+				err  error
+			}
+			start := make(chan struct{})
+			results := make(chan createResult, creators)
+			for i := 0; i < creators; i++ {
+				name := fmt.Sprintf("optimistic_branch_%d", i)
+				go func() {
+					<-start
+					_, createErr := optimisticDB.ExecContext(ctx, fmt.Sprintf(
+						"data branch create table branch_quota_race.%s from branch_quota_race.src{snapshot='issue_26087_sp'}", name))
+					results <- createResult{name: name, err: createErr}
+				}()
+			}
+			close(start)
+
+			successes := 0
+			for i := 0; i < creators; i++ {
+				select {
+				case result := <-results:
+					if result.err == nil {
+						successes++
+						continue
+					}
+					require.Containsf(t, result.err.Error(),
+						"feature BRANCH with scope  has reached the limit of 1", "creator %s", result.name)
+					require.NotContains(t, strings.ToLower(result.err.Error()), "txn need retry")
+				case <-time.After(30 * time.Second):
+					t.Fatal("optimistic branch creators did not finish")
+				}
+			}
+			require.Equal(t, 1, successes)
 		},
 	)
 }
