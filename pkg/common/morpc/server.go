@@ -375,7 +375,7 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 				}
 
 				written := responses[:0]
-				timeout := time.Duration(0)
+				var writeDeadline time.Time
 				closeNeedClose := func() {
 					for _, f := range needClose {
 						f.Close()
@@ -414,13 +414,14 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 						f.messageSent(err)
 						continue
 					}
+					deadline := time.Now().Add(v)
 
 					if !cs.assignStreamSequence(&f.send) {
 						cs.releaseMessage(f.send)
 						f.messageSent(backendClosed)
 						continue
 					}
-					timeout += v
+					writeDeadline = earliestDeadline(writeDeadline, deadline)
 					// Record the information of some responses in advance, because after flush,
 					// these responses will be released, thus avoiding causing data race.
 					if ce != nil {
@@ -431,7 +432,7 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 					}
 					conn := cs.conn.RawConn()
 					if _, ok := f.send.Message.(PayloadMessage); ok && conn != nil {
-						conn.SetWriteDeadline(time.Now().Add(v))
+						conn.SetWriteDeadline(deadline)
 					}
 					if err := cs.conn.Write(f.send, goetty.WriteOptions{}); err != nil {
 						s.logger.Error("write response failed",
@@ -453,6 +454,7 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 
 				if len(written) > 0 {
 					s.metrics.outputBytesCounter.Add(float64(cs.conn.OutBuf().Readable()))
+					timeout := remainingDeadlineTimeout(writeDeadline, time.Now())
 					err := cs.conn.Flush(timeout)
 					if err != nil {
 						if ce != nil {
