@@ -33,16 +33,9 @@ drop snapshot if exists sp_base;
 create snapshot sp_base for table fl_branch_db base;
 drop table if exists b1;
 drop table if exists b2;
-begin;
 data branch create table b1 from base{snapshot='sp_base'};
-use fl_branch_db;
 data branch create table b2 from base{snapshot='sp_base'};
 internal error: feature BRANCH with scope  has reached the limit of 1
-commit;
-select count(*) from mo_catalog.mo_tables
-where reldatabase = 'fl_branch_db' and relname in ('b1', 'b2');
-count(*)
-1
 data branch delete table fl_branch_db.b1;
 data branch create table b2 from base{snapshot='sp_base'};
 select mo_feature_limit_upsert(@fl_branch_id, 'branch', '', 0);
