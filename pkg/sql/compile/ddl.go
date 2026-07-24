@@ -517,9 +517,14 @@ func reindexSpecifiedParams(stmt tree.Statement, indexName string) map[string]st
 	addInt(catalog.IndexAlgoParamKmeansTrainPercent, opt.KmeansTrainPercent)
 	addInt(catalog.IndexAlgoParamKmeansMaxIteration, opt.KmeansMaxIteration)
 	addInt(catalog.IndexAlgoParamMaxIndexCapacity, opt.MaxIndexCapacity)
-	// NOTE: quantization is intentionally NOT handled by reindex. The vecf16
-	// branch owns the quantization work (per-backend validity, BF16, ...), so
-	// reindex neither merges nor rejects it here — revisit once that lands.
+	addInt(catalog.IndexAlgoParamQuantizerTrainLimit, opt.QuantizerTrainLimit)
+	// quantization is normalized to lowercase here (matching the CREATE INDEX
+	// path) so case-sensitive consumers (GPU build switch / quantizer) behave
+	// identically; the per-backend VALUE check (which names a given algorithm
+	// accepts) is done in each plugin's ValidateReindexParams.
+	if opt.Quantization != "" {
+		m[catalog.Quantization] = catalog.ToLower(opt.Quantization)
+	}
 	return m
 }
 
@@ -2743,7 +2748,80 @@ func (s *Scope) DropIndex(c *Compile) error {
 		return err
 	}
 
+	//6. Plugin-mediated drop hook — mirrors the HandleCreateIndex dispatch in
+	// CreateIndex. Vector-index plugins use it to evict their in-process search
+	// cache for the dropped index, so GPU/host resources are freed NOW instead of
+	// lingering until the 5-min VectorIndexCacheTTL housekeeping. Without this the
+	// hook (pkg/vectorindex/*/plugin/compile HandleDropIndex) was never invoked.
+	dispatchPluginDropIndexes(s, c, d, qry.Database, qry.Table, oldTableDef, qry.IndexName)
+
 	return nil
+}
+
+// dispatchPluginDropIndexes invokes each index plugin's HandleDropIndex for the
+// plugin indexes on tableDef, so plugin-owned in-process state (today: the
+// vector-index search cache, holding host + GPU memory) is released at DROP
+// time rather than at the 5-min VectorIndexCacheTTL sweep.
+//
+// indexName != "" restricts the dispatch to that one index (DROP INDEX);
+// indexName == "" covers every plugin index on the table (DROP TABLE — and
+// therefore DROP DATABASE, which drops its tables one at a time).
+//
+// Best-effort by design: eviction failures are logged, never returned, because
+// the TTL sweep is the backstop and a cache miss only costs a reload.
+func dispatchPluginDropIndexes(
+	s *Scope,
+	c *Compile,
+	d engine.Database,
+	dbName string,
+	tblName string,
+	tableDef *plan.TableDef,
+	indexName string,
+) {
+	if tableDef == nil {
+		return
+	}
+
+	// Group by (algo, index name), not by algo alone: HandleDropIndex takes ONE
+	// index's defs keyed by algo table type, so two indexes of the same algo on
+	// the same table (possible under DROP TABLE) must not share a
+	// MultiTableIndex — the second would overwrite the first's defs and only one
+	// cache entry would be evicted. order[] keeps the dispatch deterministic.
+	groups := make(map[string]*MultiTableIndex)
+	order := make([]string, 0, len(tableDef.Indexes))
+	for _, idef := range tableDef.Indexes {
+		if idef.Unique || !indexplugin.IsPluginAlgo(idef.IndexAlgo) {
+			continue
+		}
+		if indexName != "" && idef.IndexName != indexName {
+			continue
+		}
+		algo := catalog.ToLower(idef.IndexAlgo)
+		key := algo + "." + idef.IndexName
+		mti, ok := groups[key]
+		if !ok {
+			mti = &MultiTableIndex{IndexAlgo: algo, IndexDefs: make(map[string]*plan.IndexDef)}
+			groups[key] = mti
+			order = append(order, key)
+		}
+		mti.IndexDefs[catalog.ToLower(idef.IndexAlgoTableType)] = idef
+	}
+	if len(groups) == 0 {
+		return
+	}
+
+	dctx := newPluginCompileCtx(s, c, tableDef.TblId, nil, d, dbName, tableDef, nil)
+	for _, key := range order {
+		mti := groups[key]
+		p, ok := indexplugin.Get(mti.IndexAlgo)
+		if !ok {
+			continue
+		}
+		if e := p.Compile().HandleDropIndex(dctx, mti.IndexDefs); e != nil {
+			logutil.Warnf("[plugin] %s HandleDropIndex %s.%s/%s: %v",
+				mti.IndexAlgo, dbName, tblName, key, e)
+		}
+	}
 }
 
 func makeNewDropConstraint(oldCt *engine.ConstraintDef, dropName string) (*engine.ConstraintDef, []string, error) {
@@ -3383,6 +3461,13 @@ func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable) error {
 	if err != nil {
 		return err
 	}
+
+	// Plugin-mediated drop hook for EVERY plugin index on the table — the
+	// DROP TABLE counterpart of the DROP INDEX dispatch. DROP DATABASE reaches
+	// this too, since it drops its tables one at a time. Without it a dropped
+	// table's vector index stayed in the search cache (and kept its host + GPU
+	// memory) until the 5-min VectorIndexCacheTTL sweep.
+	dispatchPluginDropIndexes(s, c, dbSource, dbName, tblName, rel.GetTableDef(c.proc.Ctx), "")
 
 	// delete all index objects record of the table in mo_catalog.mo_indexes
 	if !qry.IsView && qry.Database != catalog.MO_CATALOG && qry.Table != catalog.MO_INDEXES {

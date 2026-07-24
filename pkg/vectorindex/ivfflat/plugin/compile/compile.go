@@ -34,6 +34,7 @@ import (
 	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	compileplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/compile"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -41,6 +42,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
+	ivfflatruntime "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin/runtime"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/quantizer"
 )
 
 // Kept local so the plugin package stays independent of the cron executor,
@@ -83,11 +86,24 @@ func (Hooks) RestoreInitSQL(ctx compileplugin.CompileContext, indexDefs map[stri
 // inline — that persistence stays at the SQL-layer call site, so this
 // hook only performs the map merge.
 func (Hooks) ValidateReindexParams(old map[string]string, alter compileplugin.ReindexParamUpdate) (map[string]string, error) {
-	return compileplugin.MergeReindexParams(old, alter, "ivfflat",
+	// Merge first, then validate the EFFECTIVE quantization via the per-algo
+	// catalog hook (the single home shared with CREATE; the value the reindex
+	// set, or the index's stored value when the statement omitted it — e.g. the
+	// idxcron-issued rebuild).
+	merged, err := compileplugin.MergeReindexParams(old, alter, "ivfflat",
 		catalog.IndexAlgoParamLists,
 		catalog.IndexAlgoParamKmeansTrainPercent,
 		catalog.IndexAlgoParamKmeansMaxIteration,
+		catalog.Quantization,
 	)
+	if err != nil {
+		return nil, err
+	}
+	if err := (ivfflatruntime.CatalogHooks{}).ValidQuantization(
+		merged[catalog.Quantization], merged[catalog.IndexAlgoParamOpType]); err != nil {
+		return nil, err
+	}
+	return merged, nil
 }
 
 // HandleDropIndex: IVF-FLAT generic hidden-table deletion is performed
@@ -96,6 +112,13 @@ func (Hooks) ValidateReindexParams(old map[string]string, alter compileplugin.Re
 // (pkg/sql/compile/ddl.go DropIndex path). No additional cleanup here.
 func (Hooks) HandleDropIndex(_ compileplugin.CompileContext, defs map[string]*plan.IndexDef) error {
 	logutil.Infof("[plugin] ivfflat HandleDropIndex: defs=%d", len(defs))
+	// Evict the cached search index immediately rather than waiting for the
+	// 5-min VectorIndexCacheTTL. Prefix form because the search key carries the
+	// meta-table version (and a /cnIdx/cnCnt suffix when the read is split
+	// across CNs) — see the create-side RemovePrefix.
+	if centroidsDef, ok := defs[catalog.SystemSI_IVFFLAT_TblType_Centroids]; ok {
+		cache.Cache.RemovePrefix(fmt.Sprintf("%s:", centroidsDef.IndexTableName))
+	}
 	return nil
 }
 
@@ -181,8 +204,11 @@ func runCreateOrReindex(ctx compileplugin.CompileContext, indexDefs map[string]*
 		return err
 	}
 
-	// remove the cache with version 0
-	cache.Cache.Remove(fmt.Sprintf("%s:0", centroidsDef.IndexTableName))
+	// Drop every cached generation of this index table, not just ":0" — the
+	// search key is "<indexTable>:<version>" with the version read from the meta
+	// table, so a rebuilt index sits under ":1", ":2", ... and a ":0"-only
+	// eviction would leave the live entry behind.
+	cache.Cache.RemovePrefix(fmt.Sprintf("%s:", centroidsDef.IndexTableName))
 
 	// 3. count rows in the source table
 	totalCnt, err := indexColCount(ctx, metaDef, qryDatabase, originalTableDef)
@@ -195,18 +221,33 @@ func runCreateOrReindex(ctx compileplugin.CompileContext, indexDefs map[string]*
 		return err
 	}
 
-	// 4.b populate centroids table
-	if err = ivfIndexCentroidsTable(ctx, centroidsDef, qryDatabase, originalTableDef,
-		totalCnt, metaDef.IndexTableName, forceSync); err != nil {
-		return err
-	}
-
-	if !async || forceSync {
-		// 4.c populate entries table
-		if err = ivfIndexEntriesTable(ctx, entriesDef, qryDatabase, originalTableDef,
-			metaDef.IndexTableName, centroidsDef.IndexTableName); err != nil {
+	// 4.b + 4.c: build the index. Both kmeans (4.b) and entry assignment (4.c)
+	// scan the source table, but queries never re-read it (re-rank fetches only a
+	// handful of rows), so run the build's reads with SkipMemoryCacheWrites — this
+	// one-shot source scan must not evict the index-entry working set the queries
+	// actually hit from the fileservice cache. The optional-interface keeps the
+	// CompileContext interface (and its plugin mocks) untouched; non-supporting
+	// contexts just build directly.
+	buildIndex := func() error {
+		if err := ivfIndexCentroidsTable(ctx, centroidsDef, qryDatabase, originalTableDef,
+			totalCnt, metaDef.IndexTableName, forceSync); err != nil {
 			return err
 		}
+		if !async || forceSync {
+			if err := ivfIndexEntriesTable(ctx, entriesDef, qryDatabase, originalTableDef,
+				metaDef.IndexTableName, centroidsDef.IndexTableName); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if r, ok := ctx.(interface{ RunWithSourceReadCacheSkip(func() error) error }); ok {
+		err = r.RunWithSourceReadCacheSkip(buildIndex)
+	} else {
+		err = buildIndex()
+	}
+	if err != nil {
+		return err
 	}
 
 	// 4.d delete older entries in index table.
@@ -243,6 +284,33 @@ func indexColCount(ctx compileplugin.CompileContext, indexDef *plan.IndexDef,
 		return false
 	})
 	return n, nil
+}
+
+// readQuantizeBound reads a scalar DOUBLE metadata value (e.g. quantize_min /
+// quantize_max) by key. found=false when the row is absent (e.g. a pre-quantizer
+// index), in which case the caller falls back to a raw cast.
+func readQuantizeBound(ctx compileplugin.CompileContext, qryDatabase, metaTbl, key string) (val float64, found bool, err error) {
+	sql := fmt.Sprintf("SELECT CAST(`%s` AS DOUBLE) FROM `%s`.`%s` WHERE `%s` = '%s'",
+		catalog.SystemSI_IVFFLAT_TblCol_Metadata_val, qryDatabase, metaTbl,
+		catalog.SystemSI_IVFFLAT_TblCol_Metadata_key, key)
+	rs, err := ctx.RunSqlWithResult(sql)
+	if err != nil {
+		return 0, false, err
+	}
+	defer rs.Close()
+	rs.ReadRows(func(_ int, cols []*vector.Vector) bool {
+		if len(cols) == 0 {
+			return false
+		}
+		rows := executor.GetFixedRows[float64](cols[0])
+		if len(rows) == 0 {
+			return false
+		}
+		val = rows[0]
+		found = true
+		return false
+	})
+	return val, found, nil
 }
 
 // ivfIndexMetaTable is lifted from Scope.handleIvfIndexMetaTable
@@ -395,6 +463,51 @@ func ivfIndexEntriesTable(
 		return err
 	}
 
+	// QUANTIZATION: if set, entries are stored as the quantization type (the entry
+	// column was created with that type in schema.go), so the SELECT casts the
+	// base vectors to it. The CENTROIDX assignment still uses the f32 base column.
+	indexColName := indexDef.Parts[0]
+	entrySelectExpr := fmt.Sprintf("`%s`", indexColName)
+	if qv, qerr := sonic.Get([]byte(indexDef.IndexAlgoParams), catalog.Quantization); qerr == nil {
+		if qstr, serr := qv.String(); serr == nil && qstr != "" {
+			if qt, ok := quantizer.ToVectorType(qstr); ok {
+				var dim int32
+				for _, c := range originalTableDef.Cols {
+					if c.Name == indexColName {
+						dim = c.Typ.Width
+						break
+					}
+				}
+				if qt == types.T_array_int8 || qt == types.T_array_uint8 {
+					// cuVS-style asymmetric scalar quantizer: map the trained
+					// [min,max] (stored in metadata by ivf_create) onto the full int8
+					// range [-128,127] (or uint8 [0,255]) via q(x)=round(x*mul+add).
+					// float16 needs no scale.
+					qmin, ok1, err := readQuantizeBound(ctx, qryDatabase, metadataTableName, catalog.SystemSI_IVFFLAT_Metadata_QuantizeMin)
+					if err != nil {
+						return err
+					}
+					qmax, ok2, err := readQuantizeBound(ctx, qryDatabase, metadataTableName, catalog.SystemSI_IVFFLAT_Metadata_QuantizeMax)
+					if err != nil {
+						return err
+					}
+					col := fmt.Sprintf("`%s`", indexColName)
+					if ok1 && ok2 && qt == types.T_array_int8 {
+						mul, add := quantizer.Int8Params(qmin, qmax)
+						entrySelectExpr = quantizer.Int8EntrySQL(col, mul, add, dim)
+					} else if ok1 && ok2 {
+						mul, add := quantizer.Uint8Params(qmin, qmax)
+						entrySelectExpr = quantizer.Uint8EntrySQL(col, mul, add, dim)
+					} else {
+						entrySelectExpr = quantizer.CastSQL(col, qt, dim)
+					}
+				} else {
+					entrySelectExpr = quantizer.CastSQL(fmt.Sprintf("`%s`", indexColName), qt, dim)
+				}
+			}
+		}
+	}
+
 	var originalTblPkColsCommaSeparated, originalTblPkColMaySerial string
 	if originalTableDef.Pkey.PkeyColName == catalog.CPrimaryKeyColName {
 		for i, part := range originalTableDef.Pkey.Names {
@@ -433,14 +546,14 @@ func ivfIndexEntriesTable(
 
 	indexColumnName := indexDef.Parts[0]
 	centroidsCrossL2JoinTbl := fmt.Sprintf("%s "+
-		"SELECT `%s`, `%s`,  %s, `%s`"+
+		"SELECT `%s`, `%s`,  %s, %s"+
 		" FROM `%s`.`%s` CENTROIDX ('%s') join %s "+
 		" using (`%s`, `%s`) ",
 		insertSQL,
 		catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
 		catalog.SystemSI_IVFFLAT_TblCol_Centroids_id,
 		originalTblPkColMaySerial,
-		indexColumnName,
+		entrySelectExpr, // base column, or cast(base as <quant type>) under QUANTIZATION
 		qryDatabase,
 		originalTableDef.Name,
 		optype,
