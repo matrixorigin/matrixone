@@ -1228,12 +1228,12 @@ func ConvertTz(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 			if err = rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
-			return nil
+			continue
 		} else if len(fromTz) == 0 || len(toTz) == 0 {
 			if err = rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
-			return nil
+			continue
 		} else {
 			if !ivecs[1].IsConst() {
 				fromLoc = convertTimezone(string(fromTz))
@@ -1245,7 +1245,7 @@ func ConvertTz(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 				if err = rs.AppendBytes(nil, true); err != nil {
 					return err
 				}
-				return nil
+				continue
 			}
 			maxStartTime := time.Date(9999, 12, 31, 23, 59, 59, 0, fromLoc)
 			maxEndTime := time.Date(9999, 12, 31, 23, 59, 59, 0, toLoc)
@@ -1279,6 +1279,10 @@ func ConvertTz(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 }
 
 func convertTimezone(tz string) *time.Location {
+	if tz == "" {
+		return nil
+	}
+
 	loc, err := time.LoadLocation(tz)
 	if err != nil && tz[0] != '+' && tz[0] != '-' {
 		return nil

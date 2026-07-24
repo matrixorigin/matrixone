@@ -13144,6 +13144,91 @@ func TestConvertTzZeroDatetimeReturnsNull(t *testing.T) {
 	require.True(t, succeed, info)
 }
 
+func TestConvertTzKeepsBatchShapeForInvalidRows(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	first, err := types.ParseDatetime("2024-01-01 00:00:00", 6)
+	require.NoError(t, err)
+	third, err := types.ParseDatetime("2024-01-03 00:00:00", 6)
+	require.NoError(t, err)
+
+	validResult := []string{"2024-01-01 01:00:00", "", "2024-01-03 01:00:00"}
+	validNulls := []bool{false, true, false}
+	allNullResult := []string{"", "", ""}
+	allNulls := []bool{true, true, true}
+	validDates := []types.Datetime{first, first, third}
+	utc := NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"+00:00"}, nil)
+	plusOne := NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"+01:00"}, nil)
+
+	for _, test := range []struct {
+		name   string
+		inputs []FunctionTestInput
+		expect FunctionTestResult
+	}{
+		{
+			name: "zero datetime in the middle does not truncate later rows",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_datetime.ToType(), []types.Datetime{first, types.ZeroDatetime, third}, nil),
+				utc,
+				plusOne,
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, validResult, validNulls),
+		},
+		{
+			name: "SQL null datetime in the middle does not truncate later rows",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_datetime.ToType(), validDates, []bool{false, true, false}),
+				utc,
+				plusOne,
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, validResult, validNulls),
+		},
+		{
+			name: "empty timezone in the middle does not truncate later rows",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_datetime.ToType(), validDates, nil),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"+00:00", "", "+00:00"}, nil),
+				plusOne,
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, validResult, validNulls),
+		},
+		{
+			name: "invalid timezone in the middle does not truncate later rows",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_datetime.ToType(), validDates, nil),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"+00:00", "invalid", "+00:00"}, nil),
+				plusOne,
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, validResult, validNulls),
+		},
+		{
+			name: "constant invalid timezone returns null for every row",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_datetime.ToType(), validDates, nil),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"invalid"}, nil),
+				plusOne,
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, allNullResult, allNulls),
+		},
+		{
+			name: "constant empty timezone returns null for every row without panic",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_datetime.ToType(), validDates, nil),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{""}, nil),
+				plusOne,
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, allNullResult, allNulls),
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			testCase := NewFunctionTestCase(proc, test.inputs, test.expect, ConvertTz)
+			require.NotPanics(t, func() {
+				succeed, info := testCase.Run()
+				require.True(t, succeed, info)
+			})
+		})
+	}
+}
+
 func TestAddAndSubTimeZeroTemporalReturnsNull(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	zeroDatetime := NewFunctionTestInput(types.T_datetime.ToType(), []types.Datetime{types.ZeroDatetime}, nil)
