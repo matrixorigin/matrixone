@@ -231,7 +231,10 @@ func (arg *mergeShowArg) Run() error {
 	if arg.tbl != nil {
 		target = catalog.ToMergeTable(arg.tbl)
 	}
-	answer := arg.ctx.db.MergeScheduler.Query(target)
+	answer, err := arg.ctx.db.MergeScheduler.Query(context.Background(), target)
+	if err != nil {
+		return err
+	}
 	out.WriteString(fmt.Sprintf(
 		"auto merge for all: %v, msg queue len: %d\n",
 		answer.GlobalAutoMergeOn,

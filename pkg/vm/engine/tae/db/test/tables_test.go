@@ -174,8 +174,10 @@ func TestTxn1(t *testing.T) {
 			blkCnt += uint32(objIt.GetObject().BlkCnt())
 		}
 		objIt.Close()
-		assert.Equal(t, expectObjCnt, objCnt)
-		assert.Equal(t, expectBlkCnt, blkCnt)
+		// Appendable objects are created committed outside the creating
+		// transaction, so the explicitly created empty object is visible here.
+		assert.Equal(t, expectObjCnt+1, objCnt)
+		assert.Equal(t, expectBlkCnt+1, blkCnt)
 	}
 	t.Log(db.Catalog.SimplePPString(common.PPL1))
 }

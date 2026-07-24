@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/tidwall/btree"
 	"go.uber.org/zap"
 )
@@ -312,6 +313,50 @@ func (l *ObjectList) DeleteAllEntries(id *objectio.ObjectId) error {
 		panic("concurrent mutation")
 	}
 	return nil
+}
+
+func (l *ObjectList) UpdateCreateTS(id *objectio.ObjectId, ts types.TS) (*ObjectEntry, error) {
+	l.Lock()
+	defer l.Unlock()
+	oldTS, ok := l.maxTs_objectID[*id]
+	if !ok {
+		return nil, moerr.GetOkExpectedEOB()
+	}
+	oldTree := l.tree.Load()
+	newTree := oldTree.Copy()
+	nodes := l.getNodesSnap(newTree, oldTS, id, true)
+	if len(nodes) == 0 {
+		return nil, moerr.GetOkExpectedEOB()
+	}
+	oldNode := nodes[0]
+	newNode := oldNode.Clone()
+	if oldNode.IsDEntry() {
+		newPrev := oldNode.prevVersion.Clone()
+		newPrev.CreatedAt = ts
+		newPrev.CreateNode = txnbase.NewTxnMVCCNodeWithTS(ts)
+		newPrev.nextVersion = newNode
+		newNode.CreatedAt = ts
+		newNode.CreateNode = txnbase.NewTxnMVCCNodeWithTS(ts)
+		newNode.prevVersion = newPrev
+		newTree.Delete(oldNode)
+		newTree.Delete(oldNode.prevVersion)
+		newTree.Set(newNode)
+		newTree.Set(newPrev)
+	} else {
+		newNode.CreatedAt = ts
+		newNode.CreateNode = txnbase.NewTxnMVCCNodeWithTS(ts)
+		newTree.Delete(oldNode)
+		newTree.Set(newNode)
+	}
+	maxTS := newNode.CreatedAt
+	if maxTS.LT(&newNode.DeletedAt) {
+		maxTS = newNode.DeletedAt
+	}
+	l.maxTs_objectID[*id] = maxTS
+	if !l.tree.CompareAndSwap(oldTree, newTree) {
+		panic("concurrent mutation")
+	}
+	return newNode, nil
 }
 
 // WaitUntilCommitted waits for entries in txn active zone with prepareTS > ts to move to committed zone.

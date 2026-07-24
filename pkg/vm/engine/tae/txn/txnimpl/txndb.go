@@ -344,6 +344,32 @@ func (db *txnDB) CreateObject(tid uint64, isTombstone bool) (obj handle.Object, 
 	}
 	return table.CreateObject(isTombstone)
 }
+
+func validateCreateObjectOpt(opt *objectio.CreateObjOpt) error {
+	if opt == nil {
+		return moerr.NewInvalidInputNoCtx("CreateObjectWithOpt requires non-nil options")
+	}
+	if opt.Stats == nil {
+		return moerr.NewInvalidInputNoCtx("CreateObjectWithOpt requires object stats")
+	}
+	return nil
+}
+
+func (db *txnDB) CreateObjectWithOpt(tid uint64, opt *objectio.CreateObjOpt, isTombstone bool) (obj handle.Object, err error) {
+	if err = validateCreateObjectOpt(opt); err != nil {
+		return
+	}
+	if err = db.store.WantWrite("CreateObjectWithOpt"); err != nil {
+		return
+	}
+	var table *txnTable
+	if table, err = db.getOrSetTable(tid); err != nil {
+		return
+	}
+	opt.WithIsTombstone(isTombstone)
+	return table.CreateObjectWithOpt(opt)
+}
+
 func (db *txnDB) CreateNonAppendableObject(tid uint64, opt *objectio.CreateObjOpt, isTombstone bool) (obj handle.Object, err error) {
 	if err = db.store.WantWrite("CreateNonAppendableObject"); err != nil {
 		return
