@@ -50,3 +50,9 @@ DROP TABLE t1;
 SELECT TIMEDIFF('2000-01-01 23:59:59', '2000-01-01 00:00:00') AS max_day_diff;
 SELECT TIMEDIFF('2000-01-02 00:00:00', '2000-01-01 00:00:00') AS day_boundary;
 SELECT TIMEDIFF('2000-01-01 00:00:00', '2000-01-02 00:00:00') AS negative_day_boundary;
+
+# Zero calendar operands return NULL. Exercise both operand positions and both typed/string paths.
+SELECT TIMEDIFF(CAST('0000-00-00 00:00:00' AS DATETIME), CAST('2024-01-01 00:00:00' AS DATETIME)) AS typed_zero_first;
+SELECT TIMEDIFF(CAST('2024-01-01 00:00:00' AS DATETIME), CAST('0000-00-00 00:00:00' AS DATETIME)) AS typed_zero_second;
+SELECT TIMEDIFF('0000-00-00 00:00:00', '2024-01-01 00:00:00') AS string_zero_first;
+SELECT TIMEDIFF('2024-01-01 00:00:00', '0000-00-00 00:00:00') AS string_zero_second;

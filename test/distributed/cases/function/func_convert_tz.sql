@@ -47,3 +47,6 @@ select convert_tz(c3,'+00:00', '+08:00'),c3 from convert_table;
 
 --date function
 select convert_tz(str_to_date('2022-05-27 11:30:00','%Y-%m-%d %H:%i:%s'),'-05:00', '+05:30')as dtime;
+
+-- zero DATETIME is not a complete calendar value
+select convert_tz(cast('0000-00-00 00:00:00' as datetime), '+00:00', '+01:00') as zero_datetime;

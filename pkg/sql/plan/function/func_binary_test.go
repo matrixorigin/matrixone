@@ -13127,3 +13127,133 @@ func TestParameterIntervalsCoverSegmentNearEpsilonBoundary(t *testing.T) {
 	gap := []geometryParamInterval{{start: 0, end: 0.4}, {start: 0.6, end: 1.0}}
 	require.False(t, parameterIntervalsCoverSegment(gap))
 }
+
+func TestConvertTzZeroDatetimeReturnsNull(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	testCase := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_datetime.ToType(), []types.Datetime{types.ZeroDatetime}, nil),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"+00:00"}, nil),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"+01:00"}, nil),
+		},
+		NewFunctionTestResult(types.T_varchar.ToType(), false, []string{""}, []bool{true}),
+		ConvertTz,
+	)
+	succeed, info := testCase.Run()
+	require.True(t, succeed, info)
+}
+
+func TestAddAndSubTimeZeroTemporalReturnsNull(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	zeroDatetime := NewFunctionTestInput(types.T_datetime.ToType(), []types.Datetime{types.ZeroDatetime}, nil)
+	zeroTimestamp := NewFunctionTestInput(types.T_timestamp.ToType(), []types.Timestamp{types.ZeroTimestamp}, nil)
+	zeroDatetimeString := NewFunctionTestInput(types.T_varchar.ToType(), []string{"0000-00-00 00:00:00"}, nil)
+	timeArg := NewFunctionTestInput(types.T_varchar.ToType(), []string{"00:00:01"}, nil)
+
+	for _, test := range []struct {
+		name   string
+		input  FunctionTestInput
+		expect FunctionTestResult
+		fn     fEvalFn
+	}{
+		{
+			name:   "addtime typed datetime",
+			input:  zeroDatetime,
+			expect: NewFunctionTestResult(types.T_datetime.ToType(), false, []types.Datetime{0}, []bool{true}),
+			fn:     AddTime,
+		},
+		{
+			name:   "subtime typed datetime",
+			input:  zeroDatetime,
+			expect: NewFunctionTestResult(types.T_datetime.ToType(), false, []types.Datetime{0}, []bool{true}),
+			fn:     SubTime,
+		},
+		{
+			name:   "addtime typed timestamp",
+			input:  zeroTimestamp,
+			expect: NewFunctionTestResult(types.T_timestamp.ToType(), false, []types.Timestamp{0}, []bool{true}),
+			fn:     AddTime,
+		},
+		{
+			name:   "subtime typed timestamp",
+			input:  zeroTimestamp,
+			expect: NewFunctionTestResult(types.T_timestamp.ToType(), false, []types.Timestamp{0}, []bool{true}),
+			fn:     SubTime,
+		},
+		{
+			name:   "addtime string datetime",
+			input:  zeroDatetimeString,
+			expect: NewFunctionTestResult(types.New(types.T_datetime, 0, 6), false, []types.Datetime{0}, []bool{true}),
+			fn:     AddTime,
+		},
+		{
+			name:   "subtime string datetime",
+			input:  zeroDatetimeString,
+			expect: NewFunctionTestResult(types.New(types.T_datetime, 0, 6), false, []types.Datetime{0}, []bool{true}),
+			fn:     SubTime,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			testCase := NewFunctionTestCase(proc, []FunctionTestInput{test.input, timeArg}, test.expect, test.fn)
+			succeed, info := testCase.Run()
+			require.True(t, succeed, info)
+		})
+	}
+}
+
+func TestTimeDiffZeroDatetimeReturnsNull(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	validDatetime, err := types.ParseDatetime("2024-01-01 00:00:00", 6)
+	require.NoError(t, err)
+
+	for _, test := range []struct {
+		name   string
+		inputs []FunctionTestInput
+		expect FunctionTestResult
+		fn     fEvalFn
+	}{
+		{
+			name: "typed datetime",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_datetime.ToType(), []types.Datetime{types.ZeroDatetime}, nil),
+				NewFunctionTestInput(types.T_datetime.ToType(), []types.Datetime{validDatetime}, nil),
+			},
+			expect: NewFunctionTestResult(types.T_time.ToType(), false, []types.Time{0}, []bool{true}),
+			fn:     TimeDiff[types.Datetime],
+		},
+		{
+			name: "typed datetime zero second operand",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_datetime.ToType(), []types.Datetime{validDatetime}, nil),
+				NewFunctionTestInput(types.T_datetime.ToType(), []types.Datetime{types.ZeroDatetime}, nil),
+			},
+			expect: NewFunctionTestResult(types.T_time.ToType(), false, []types.Time{0}, []bool{true}),
+			fn:     TimeDiff[types.Datetime],
+		},
+		{
+			name: "string datetime",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"0000-00-00 00:00:00"}, nil),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"2024-01-01 00:00:00"}, nil),
+			},
+			expect: NewFunctionTestResult(types.New(types.T_time, 0, 6), false, []types.Time{0}, []bool{true}),
+			fn:     TimeDiffString,
+		},
+		{
+			name: "string datetime zero second operand",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"2024-01-01 00:00:00"}, nil),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"0000-00-00 00:00:00"}, nil),
+			},
+			expect: NewFunctionTestResult(types.New(types.T_time, 0, 6), false, []types.Time{0}, []bool{true}),
+			fn:     TimeDiffString,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			testCase := NewFunctionTestCase(proc, test.inputs, test.expect, test.fn)
+			succeed, info := testCase.Run()
+			require.True(t, succeed, info)
+		})
+	}
+}

@@ -1224,7 +1224,7 @@ func ConvertTz(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 		fromTz, null2 := fromTzs.GetStrValue(i)
 		toTz, null3 := toTzs.GetStrValue(i)
 
-		if null1 || null2 || null3 {
+		if null1 || null2 || null3 || date == types.ZeroDatetime {
 			if err = rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
@@ -3201,7 +3201,7 @@ func addTimeToDatetime(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 		dt, null1 := datetimes.GetValue(i)
 		time2Str, null2 := time2Param.GetStrValue(i)
 
-		if null1 || null2 {
+		if null1 || null2 || dt == types.ZeroDatetime {
 			if err := rs.Append(types.Datetime(0), true); err != nil {
 				return err
 			}
@@ -3251,7 +3251,7 @@ func addTimeToTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrap
 		ts, null1 := timestamps.GetValue(i)
 		time2Str, null2 := time2Param.GetStrValue(i)
 
-		if null1 || null2 {
+		if null1 || null2 || ts == types.ZeroTimestamp {
 			if err := rs.Append(types.Timestamp(0), true); err != nil {
 				return err
 			}
@@ -3320,6 +3320,12 @@ func addTimeToString(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 			}
 			// Convert time to datetime (using today's date)
 			dt = time1.ToDatetime(scale)
+		}
+		if dt == types.ZeroDatetime {
+			if err := rs.Append(types.Datetime(0), true); err != nil {
+				return err
+			}
+			continue
 		}
 
 		// Parse time2 string
@@ -3447,7 +3453,7 @@ func subTimeFromDatetime(ivecs []*vector.Vector, result vector.FunctionResultWra
 		dt, null1 := datetimes.GetValue(i)
 		time2Str, null2 := time2Param.GetStrValue(i)
 
-		if null1 || null2 {
+		if null1 || null2 || dt == types.ZeroDatetime {
 			if err := rs.Append(types.Datetime(0), true); err != nil {
 				return err
 			}
@@ -3497,7 +3503,7 @@ func subTimeFromTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWr
 		ts, null1 := timestamps.GetValue(i)
 		time2Str, null2 := time2Param.GetStrValue(i)
 
-		if null1 || null2 {
+		if null1 || null2 || ts == types.ZeroTimestamp {
 			if err := rs.Append(types.Timestamp(0), true); err != nil {
 				return err
 			}
@@ -3566,6 +3572,12 @@ func subTimeFromString(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 			}
 			// Convert time to datetime (using today's date)
 			dt = time1.ToDatetime(scale)
+		}
+		if dt == types.ZeroDatetime {
+			if err := rs.Append(types.Datetime(0), true); err != nil {
+				return err
+			}
+			continue
 		}
 
 		// Parse time2 string
@@ -6894,7 +6906,52 @@ func Power(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *proce
 }
 
 func TimeDiff[T types.Time | types.Datetime](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	if _, isDatetime := any(*new(T)).(types.Datetime); isDatetime {
+		return timeDiffDatetime(ivecs, result, proc, length, selectList)
+	}
 	return opBinaryFixedFixedToFixedWithErrorCheck[T, T, types.Time](ivecs, result, proc, length, timeDiff[T], selectList)
+}
+
+func timeDiffDatetime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	p1 := vector.GenerateFunctionFixedTypeParameter[types.Datetime](ivecs[0])
+	p2 := vector.GenerateFunctionFixedTypeParameter[types.Datetime](ivecs[1])
+	rs := vector.MustFunctionResult[types.Time](result)
+
+	if selectList != nil && selectList.IgnoreAllRow() {
+		for i := uint64(0); i < uint64(length); i++ {
+			if err := rs.Append(types.Time(0), true); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && selectList.Contains(i) {
+			if err := rs.Append(types.Time(0), true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		v1, null1 := p1.GetValue(i)
+		v2, null2 := p2.GetValue(i)
+		if null1 || null2 || v1 == types.ZeroDatetime || v2 == types.ZeroDatetime {
+			if err := rs.Append(types.Time(0), true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		timeDiff, err := timeDiff[types.Datetime](v1, v2)
+		if err != nil {
+			return err
+		}
+		if err := rs.Append(timeDiff, false); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func timeDiff[T types.Time | types.Datetime](v1, v2 T) (types.Time, error) {
@@ -6978,6 +7035,12 @@ func TimeDiffString(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 			}
 			// Convert time to datetime (using today's date)
 			dt2 = time2.ToDatetime(scale)
+		}
+		if dt1 == types.ZeroDatetime || dt2 == types.ZeroDatetime {
+			if err := rs.Append(types.Time(0), true); err != nil {
+				return err
+			}
+			continue
 		}
 
 		// Calculate difference: expr1 - expr2
