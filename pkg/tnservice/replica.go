@@ -162,30 +162,6 @@ func (r *replica) close(destroy bool) error {
 	return r.closeErr
 }
 
-func (r *replica) cancelRecovery() {
-	r.mu.RLock()
-	starting := r.mu.starting
-	txnService := r.service
-	r.mu.RUnlock()
-	if !starting {
-		return
-	}
-	if txnService == nil {
-		// Once start is reserved, startReserved either publishes the service or
-		// finishStart reports that startup ended without one.
-		select {
-		case <-r.serviceC:
-		case <-r.startedC:
-		}
-		r.mu.RLock()
-		txnService = r.service
-		r.mu.RUnlock()
-	}
-	if txnService != nil {
-		txnService.CancelRecovery()
-	}
-}
-
 func (r *replica) closeOnceFn() error {
 	r.mu.RLock()
 	starting := r.mu.starting
@@ -193,9 +169,6 @@ func (r *replica) closeOnceFn() error {
 	if !starting {
 		return nil
 	}
-	// Recovery may block Start indefinitely while waiting for a participant.
-	r.cancelRecovery()
-
 	r.waitStartCompleted()
 	r.mu.Lock()
 	for r.mu.activeCalls > 0 {
@@ -230,18 +203,7 @@ func (r *replica) handleLocalRequest(ctx context.Context, request *txn.TxnReques
 	defer lease.release()
 	prepareResponse(request, response)
 
-	switch request.Method {
-	case txn.TxnMethod_GetStatus:
-		return lease.service.GetStatus(lease.ctx, request, response)
-	case txn.TxnMethod_Prepare:
-		return lease.service.Prepare(lease.ctx, request, response)
-	case txn.TxnMethod_CommitTNShard:
-		return lease.service.CommitTNShard(lease.ctx, request, response)
-	case txn.TxnMethod_RollbackTNShard:
-		return lease.service.RollbackTNShard(lease.ctx, request, response)
-	default:
-		return moerr.NewNotSupportedf(lease.ctx, "unknown txn request method: %s", request.Method.String())
-	}
+	return moerr.NewNotSupportedf(lease.ctx, "unknown txn request method: %s", request.Method.String())
 }
 
 func (r *replica) waitStarted(ctx context.Context) error {
