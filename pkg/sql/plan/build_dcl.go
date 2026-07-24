@@ -16,10 +16,12 @@ package plan
 
 import (
 	"math"
+	"strconv"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
@@ -56,6 +58,11 @@ func getPreparePlan(ctx CompilerContext, stmt tree.Statement) (*Plan, error) {
 }
 
 func buildPrepare(stmt tree.Prepare, ctx CompilerContext) (*Plan, error) {
+	// Views belong to the statement currently being built. Query/DML builders
+	// replace this state, but pure DDL builders do not, so clear the previous
+	// statement's dependencies before planning this PREPARE.
+	ctx.SetViews(nil)
+
 	var preparePlan *Plan
 	var preparedStmt tree.Statement
 	var err error
@@ -337,12 +344,35 @@ func collectPrepareDdlSchemas(ctx CompilerContext, stmt tree.Statement, prepareP
 func collectPrepareViewSchemas(ctx CompilerContext) ([]*plan.ObjectRef, error) {
 	var schemas []*plan.ObjectRef
 	for _, viewKey := range ctx.GetViews() {
-		viewKey, _, _ = strings.Cut(viewKey, ViewSnapshotKeySuffix)
+		snapshot := ctx.GetSnapshot()
+		var err error
+		viewKey, dependencySnapshot, err := parseViewDependencyKeySnapshot(viewKey)
+		if err != nil {
+			return nil, moerr.NewInternalErrorf(
+				ctx.GetContext(), "invalid view dependency snapshot: %v", err)
+		}
+		if dependencySnapshot != nil {
+			snapshot = dependencySnapshot
+		} else if suffix := strings.LastIndex(viewKey, ViewSnapshotKeySuffix); suffix >= 0 {
+			physicalTime, err := strconv.ParseInt(
+				viewKey[suffix+len(ViewSnapshotKeySuffix):], 10, 64)
+			if err != nil {
+				return nil, moerr.NewInternalErrorf(
+					ctx.GetContext(), "invalid view dependency snapshot %q", viewKey)
+			}
+			viewKey = viewKey[:suffix]
+			snapshot = &Snapshot{
+				TS: &timestamp.Timestamp{PhysicalTime: physicalTime},
+			}
+			if contextSnapshot := ctx.GetSnapshot(); contextSnapshot != nil {
+				snapshot.Tenant = contextSnapshot.Tenant
+			}
+		}
 		databaseName, tableName, ok := strings.Cut(viewKey, "#")
 		if !ok || databaseName == "" || tableName == "" {
 			return nil, moerr.NewInternalErrorf(ctx.GetContext(), "invalid view dependency %q", viewKey)
 		}
-		objRef, tableDef, err := ctx.Resolve(databaseName, tableName, ctx.GetSnapshot())
+		objRef, tableDef, err := ctx.Resolve(databaseName, tableName, snapshot)
 		if err != nil {
 			return nil, err
 		}

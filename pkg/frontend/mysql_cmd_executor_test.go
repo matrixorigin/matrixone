@@ -2629,6 +2629,15 @@ func TestHandleAnalyzeStmtRestoresOuterExecCtxOnError(t *testing.T) {
 	require.Same(t, outerExecCtx, ses.GetTxnCompileCtx().execCtx)
 }
 
+func TestSetExecCtxClearsPreviousStatementViews(t *testing.T) {
+	tcc := &TxnCompilerContext{}
+	tcc.SetViews([]string{"db#stale_view"})
+
+	tcc.SetExecCtx(&ExecCtx{reqCtx: context.Background()})
+
+	require.Empty(t, tcc.GetViews())
+}
+
 func TestCreatePrepareStmtRestoresCurrentExecCtx(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()

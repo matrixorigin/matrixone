@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -23,6 +24,7 @@ import (
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
 )
 
@@ -44,6 +46,10 @@ type viewDependencyCompilerContext struct {
 
 func (c *viewDependencyCompilerContext) GetViews() []string {
 	return c.views
+}
+
+func (c *viewDependencyCompilerContext) SetViews(views []string) {
+	c.views = append([]string(nil), views...)
 }
 
 func (c *viewDependencyCompilerContext) GetSnapshot() *Snapshot {
@@ -370,19 +376,24 @@ func TestResetPreparePlanCollectsExternalAndSourceScans(t *testing.T) {
 
 func TestCollectPrepareViewSchemasPreservesIdentity(t *testing.T) {
 	mock := NewMockCompilerContext(false)
-	snapshot := &Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 42}}
+	snapshot := &Snapshot{
+		TS:     &timestamp.Timestamp{PhysicalTime: 42, LogicalTime: 7},
+		Tenant: &SnapshotTenant{TenantID: 11, TenantName: "publisher"},
+	}
+	viewKey, err := FormatViewDependencyKeyWithSnapshot("sub#src_v", snapshot)
+	require.NoError(t, err)
 	ctx := &viewDependencyCompilerContext{
 		MockCompilerContext: mock,
 		views: []string{
-			"sub#src_v",
-			FormatViewKeyWithSnapshot("sub#src_v", snapshot),
+			viewKey,
 		},
-		snapshot: snapshot,
 	}
 	ctx.resolve = func(databaseName, tableName string, gotSnapshot *Snapshot) (*ObjectRef, *TableDef, error) {
 		require.Equal(t, "sub", databaseName)
 		require.Equal(t, "src_v", tableName)
-		require.Same(t, snapshot, gotSnapshot)
+		require.NotSame(t, snapshot, gotSnapshot)
+		require.Equal(t, snapshot.TS, gotSnapshot.TS)
+		require.Equal(t, snapshot.Tenant, gotSnapshot.Tenant)
 		return &ObjectRef{
 				SchemaName: "publisher_db", ObjName: tableName, Obj: 20,
 				SubscriptionName: databaseName, PubInfo: &planpb.PubInfo{TenantId: 11},
@@ -397,6 +408,141 @@ func TestCollectPrepareViewSchemasPreservesIdentity(t *testing.T) {
 	require.Equal(t, "sub", schemas[0].SubscriptionName)
 	require.Equal(t, int32(11), schemas[0].GetPubInfo().GetTenantId())
 	require.Equal(t, int64(30), schemas[0].Server)
+}
+
+func TestViewDependencySnapshotKeyValidation(t *testing.T) {
+	key, err := FormatViewDependencyKeyWithSnapshot("db#v", nil)
+	require.NoError(t, err)
+	require.Equal(t, "db#v", key)
+
+	base, snapshot, err := parseViewDependencyKeySnapshot(key)
+	require.NoError(t, err)
+	require.Equal(t, "db#v", base)
+	require.Nil(t, snapshot)
+
+	_, _, err = parseViewDependencyKeySnapshot("db#v" + viewDependencySnapshotKeySuffix + "!")
+	require.Error(t, err)
+	_, _, err = parseViewDependencyKeySnapshot("db#v" + viewDependencySnapshotKeySuffix + "eA")
+	require.Error(t, err)
+}
+
+func TestBindViewRecordsCompleteTableSnapshot(t *testing.T) {
+	viewJSON, err := json.Marshal(ViewData{
+		Stmt:            "create view v as select 1",
+		DefaultDatabase: "db",
+	})
+	require.NoError(t, err)
+	snapshot := &Snapshot{
+		TS:     &timestamp.Timestamp{PhysicalTime: 42, LogicalTime: 7},
+		Tenant: &SnapshotTenant{TenantID: 11, TenantName: "publisher"},
+	}
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(false), true, false)
+	bindCtx := NewBindContext(builder, nil)
+
+	_, err = builder.bindView(
+		bindCtx,
+		&TableDef{ViewSql: &planpb.ViewDef{View: string(viewJSON)}},
+		snapshot,
+		&ObjectRef{},
+		"db",
+		"v",
+	)
+	require.NoError(t, err)
+	require.Len(t, bindCtx.views, 1)
+
+	base, recorded, err := parseViewDependencyKeySnapshot(bindCtx.views[0])
+	require.NoError(t, err)
+	require.Equal(t, "db#v", base)
+	require.Equal(t, snapshot.TS, recorded.TS)
+	require.Equal(t, snapshot.Tenant, recorded.Tenant)
+
+	nodeID, err := builder.bindView(
+		NewBindContext(builder, nil),
+		&TableDef{ViewSql: &planpb.ViewDef{}},
+		nil,
+		&ObjectRef{},
+		"db",
+		"empty",
+	)
+	require.NoError(t, err)
+	require.Zero(t, nodeID)
+}
+
+func TestCollectPrepareViewSchemasRejectsInvalidDependencies(t *testing.T) {
+	for _, testCase := range []struct {
+		name  string
+		view  string
+		match string
+	}{
+		{
+			name:  "encoded snapshot",
+			view:  "db#v" + viewDependencySnapshotKeySuffix + "!",
+			match: "invalid view dependency snapshot",
+		},
+		{
+			name:  "legacy snapshot",
+			view:  "db#v" + ViewSnapshotKeySuffix + "bad",
+			match: "invalid view dependency snapshot",
+		},
+		{
+			name:  "view key",
+			view:  "invalid",
+			match: "invalid view dependency",
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			ctx := &viewDependencyCompilerContext{
+				MockCompilerContext: NewMockCompilerContext(false),
+				views:               []string{testCase.view},
+				resolve: func(string, string, *Snapshot) (*ObjectRef, *TableDef, error) {
+					t.Fatal("invalid dependency must fail before resolution")
+					return nil, nil, nil
+				},
+			}
+			_, err := collectPrepareViewSchemas(ctx)
+			require.ErrorContains(t, err, testCase.match)
+		})
+	}
+}
+
+func TestCollectPrepareViewSchemasPropagatesResolutionFailures(t *testing.T) {
+	resolveErr := errors.New("resolve failed")
+	ctx := &viewDependencyCompilerContext{
+		MockCompilerContext: NewMockCompilerContext(false),
+		views:               []string{"db#v"},
+		resolve: func(string, string, *Snapshot) (*ObjectRef, *TableDef, error) {
+			return nil, nil, resolveErr
+		},
+	}
+	_, err := collectPrepareViewSchemas(ctx)
+	require.ErrorIs(t, err, resolveErr)
+
+	ctx.resolve = func(string, string, *Snapshot) (*ObjectRef, *TableDef, error) {
+		return nil, nil, nil
+	}
+	_, err = collectPrepareViewSchemas(ctx)
+	require.ErrorContains(t, err, "no such table db.v")
+}
+
+func TestBuildPrepareClearsViewsFromPreviousStatement(t *testing.T) {
+	ctx := &viewDependencyCompilerContext{
+		MockCompilerContext: NewMockCompilerContext(false),
+		views:               []string{"dropped_db#dropped_view"},
+		resolve: func(databaseName, tableName string, _ *Snapshot) (*ObjectRef, *TableDef, error) {
+			require.NotEqual(t, "dropped_db", databaseName)
+			require.NotEqual(t, "dropped_view", tableName)
+			return nil, nil, nil
+		},
+	}
+
+	prepared, err := buildPrepare(
+		tree.NewPrepareString("s", "drop table if exists unrelated"),
+		ctx,
+	)
+	require.NoError(t, err)
+	require.Empty(t, ctx.GetViews())
+	require.Len(t, prepared.GetDcl().GetPrepare().GetSchemas(), 1)
+	require.Equal(t, "unrelated", prepared.GetDcl().GetPrepare().GetSchemas()[0].ObjName)
 }
 
 func TestResetPreparePlanPreservesSubscriptionIdentity(t *testing.T) {

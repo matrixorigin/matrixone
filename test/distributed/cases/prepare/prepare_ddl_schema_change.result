@@ -329,6 +329,27 @@ order by ordinal_position;
 ➤ column_name[12,-1,0]  ¦  data_type[12,-1,0]  𝄀
 b  ¦  BIGINT
 deallocate prepare prepared_view_dependency_stmt;
+create table stale_view_base (a int);
+create view stale_view_dependency as select * from stale_view_base;
+select * from stale_view_dependency;
+➤ a[4,32,0]
+drop view stale_view_dependency;
+prepare unrelated_after_view_stmt from 'drop table if exists unrelated_after_view';
+execute unrelated_after_view_stmt;
+deallocate prepare unrelated_after_view_stmt;
+drop snapshot if exists prepared_view_snapshot;
+create table prepared_snapshot_base (a int);
+insert into prepared_snapshot_base values (1);
+create view prepared_snapshot_view as select * from prepared_snapshot_base;
+create snapshot prepared_view_snapshot for account;
+drop view prepared_snapshot_view;
+prepare historical_view_stmt from
+'select * from prepared_snapshot_view {snapshot = ''prepared_view_snapshot''}';
+execute historical_view_stmt;
+➤ a[4,32,0]  𝄀
+1
+deallocate prepare historical_view_stmt;
+drop snapshot prepared_view_snapshot;
 create external table prepared_external_source (a int)
 infile{"filepath"='$resources/external_table_file/ex_table_number.csv'}
 fields terminated by ',' enclosed by '\"' lines terminated by '\n';

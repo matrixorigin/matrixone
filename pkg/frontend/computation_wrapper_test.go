@@ -199,7 +199,7 @@ func TestInitExecuteStmtParamPreservesBinaryFlagPerUserVariable(t *testing.T) {
 		},
 	}
 
-	_, _, _, _, err = initExecuteStmtParam(execCtx, ses, cw, execPlan, "")
+	_, _, _, _, _, err = initExecuteStmtParam(execCtx, ses, cw, execPlan, "")
 	require.NoError(t, err)
 	require.True(t, cw.proc.GetPrepareParamIsBin(0))
 	require.False(t, cw.proc.GetPrepareParamIsBin(1))
@@ -208,7 +208,7 @@ func TestInitExecuteStmtParamPreservesBinaryFlagPerUserVariable(t *testing.T) {
 
 	params := cw.proc.GetPrepareParams()
 	require.NoError(t, ses.SetUserDefinedVar("binary_param", "now-text", ""))
-	_, _, _, _, err = initExecuteStmtParam(execCtx, ses, cw, execPlan, "")
+	_, _, _, _, _, err = initExecuteStmtParam(execCtx, ses, cw, execPlan, "")
 	require.NoError(t, err)
 	require.Zero(t, params.Length(), "the previous owned params must be released on successful replacement")
 	require.Nil(t, params.GetData())
@@ -456,7 +456,7 @@ func TestInitExecuteStmtParamUsesTxnSnapshotAfterRebuild(t *testing.T) {
 	ses.proc.Base.TxnOperator = txnOperator
 	ses.advanceDDLVersion()
 
-	_, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	_, _, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
 	require.NoError(t, err)
 	require.Equal(t, snapshot, prepareStmt.Ts)
 	require.Equal(t, ses.getDDLVersion(), prepareStmt.ddlVersion)
@@ -488,13 +488,69 @@ func TestInitExecuteStmtParamReusesCachedCompileWhenNoSchemaChange(t *testing.T)
 		cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
 	prepareStmt.compile = sentinel
 
-	retComp, retPlan, retStmt, _, err := initExecuteStmtParam(
+	retComp, retPlan, retStmt, _, _, err := initExecuteStmtParam(
 		execCtx, ses, cw, nil, prepareStmt.Name)
 	require.NoError(t, err)
 	require.Same(t, sentinel, retComp)
 	require.Same(t, sentinel, prepareStmt.compile)
 	require.NotNil(t, retPlan)
 	require.NotNil(t, retStmt)
+}
+
+func TestInitExecuteStmtParamTransfersFreshCloneOwnership(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnv(t, 101)
+	defer prepareStmt.Close()
+
+	clone := &tree.CloneTable{}
+	clone.SrcTable.ObjectName = "src"
+	clone.CreateTable.Table.ObjectName = "dst"
+	prepareStmt.cloneSQL = preparedCloneSQL(clone, "prepare_db")
+
+	_, _, executionStmt, _, owned, err := initExecuteStmtParam(
+		execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.True(t, owned)
+
+	executionClone := executionStmt.(*tree.CloneTable)
+	require.Equal(t, tree.Identifier("prepare_db"), executionClone.SrcTable.SchemaName)
+	cw.stmt = executionStmt
+	cw.ifIsExeccute = true
+	cw.executeStmtOwned = owned
+	cw.Free()
+
+	require.Empty(t, executionClone.SrcTable.SchemaName)
+	require.Empty(t, executionClone.SrcTable.ObjectName)
+	require.Empty(t, executionClone.CreateTable.Table.SchemaName)
+	require.Empty(t, executionClone.CreateTable.Table.ObjectName)
+}
+
+func TestTxnComputationWrapperKeepsSharedPreparedStatement(t *testing.T) {
+	stmt := &trackedStatement{}
+	cw := &TxnComputationWrapper{
+		stmt:             stmt,
+		ifIsExeccute:     true,
+		executeStmtOwned: false,
+	}
+
+	cw.Free()
+	require.Zero(t, stmt.freed)
+}
+
+func TestCompilerContextReleasesFreshCloneForExplainExecute(t *testing.T) {
+	ses, prepareStmt, cw, _ := newPreparedExecuteEnv(t, 101)
+	defer prepareStmt.Close()
+	ses.GetTxnCompileCtx().tcw = cw
+
+	clone := &tree.CloneTable{}
+	clone.SrcTable.ObjectName = "src"
+	clone.CreateTable.Table.ObjectName = "dst"
+	prepareStmt.cloneSQL = preparedCloneSQL(clone, "prepare_db")
+
+	_, stmt, err := ses.GetTxnCompileCtx().InitExecuteStmtParam(
+		&plan.Execute{Name: prepareStmt.Name},
+	)
+	require.NoError(t, err)
+	require.Nil(t, stmt, "EXPLAIN consumes only the prepared plan and must release its fresh CLONE AST")
 }
 
 func TestInitExecuteStmtParamReusesStableSubscriptionSelect(t *testing.T) {
@@ -511,7 +567,7 @@ func TestInitExecuteStmtParamReusesStableSubscriptionSelect(t *testing.T) {
 		cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
 	prepareStmt.compile = sentinel
 
-	retComp, _, _, _, err := initExecuteStmtParamWithResolver(
+	retComp, _, _, _, _, err := initExecuteStmtParamWithResolver(
 		execCtx, ses, cw, nil, prepareStmt.Name,
 		func(string, string, *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
 			return &plan.ObjectRef{
@@ -545,7 +601,7 @@ func BenchmarkInitExecuteStmtParamReusesStableSubscriptionSelect(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
-		_, _, _, _, err := initExecuteStmtParamWithResolver(
+		_, _, _, _, _, err := initExecuteStmtParamWithResolver(
 			execCtx, ses, cw, nil, prepareStmt.Name, resolve)
 		if err != nil {
 			b.Fatal(err)
@@ -569,7 +625,7 @@ func TestInitExecuteStmtParamRebuildsWhenTempTableMappingChanges(t *testing.T) {
 	oldPlan := prepareStmt.PreparePlan
 	ses.AddTempTable("db1", "unrelated", "temp-unrelated")
 
-	retComp, retPlan, retStmt, _, err := initExecuteStmtParam(
+	retComp, retPlan, retStmt, _, _, err := initExecuteStmtParam(
 		execCtx, ses, cw, nil, prepareStmt.Name)
 	require.NoError(t, err)
 	require.Nil(t, retComp)
@@ -595,7 +651,7 @@ func TestInitExecuteStmtParamKeepsOldStateWhenColumnMetadataRefreshFails(t *test
 	}
 
 	ses.AddTempTable("db1", "unrelated", "temp-unrelated")
-	_, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	_, _, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
 	require.EqualError(t, err, "column metadata refresh failed")
 	require.Same(t, oldPlan, prepareStmt.PreparePlan)
 	require.Equal(t, oldColDefData, prepareStmt.ColDefData)
@@ -613,7 +669,7 @@ func TestInitExecuteStmtParamRebuildsPreparedPlanWhenSQLModePresenceChanges(t *t
 	execCtx.reqCtx = defines.AttachAccountId(execCtx.reqCtx, catalog.System_Account)
 	require.NoError(t, ses.SetSessionSysVar(execCtx.reqCtx, "sql_mode", "MATRIXONE_NATIVE"))
 
-	retComp, retPlan, retStmt, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	retComp, retPlan, retStmt, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
 	require.NoError(t, err)
 	require.Nil(t, retComp)
 	require.NotNil(t, retPlan)
@@ -632,7 +688,7 @@ func TestInitExecuteStmtParamBypassesButRetainsCachedTopologyForExplicitScheduli
 	prepareStmt.compile = sentinel
 	require.NoError(t, ses.SetSessionSysVar(context.Background(), queryMaxWorkers, int64(2)))
 
-	retComp, retPlan, retStmt, _, err := initExecuteStmtParam(
+	retComp, retPlan, retStmt, _, _, err := initExecuteStmtParam(
 		execCtx, ses, cw, nil, prepareStmt.Name)
 	require.NoError(t, err)
 	require.Nil(t, retComp)

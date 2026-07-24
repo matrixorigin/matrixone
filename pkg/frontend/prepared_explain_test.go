@@ -39,7 +39,7 @@ func TestPreparedExplainUsesBinaryParameterValues(t *testing.T) {
 	prepareStmt.params = vector.NewVec(types.T_text.ToType())
 	require.NoError(t, vector.AppendBytes(prepareStmt.params, []byte("42"), false, cw.proc.Mp()))
 
-	_, queryPlan, savedStmt, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	_, queryPlan, savedStmt, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
 	require.NoError(t, err)
 	require.IsType(t, &tree.ExplainStmt{}, savedStmt)
 	require.Equal(t, []any{plan2.ParamValue{Value: "42", IsBin: false}}, cw.ParamVals())
@@ -58,7 +58,7 @@ func TestHandlePreparedExplainDoesNotRebuildUnderlyingStatement(t *testing.T) {
 
 	prepareStmt.params = vector.NewVec(types.T_text.ToType())
 	require.NoError(t, vector.AppendBytes(prepareStmt.params, []byte("42"), false, cw.proc.Mp()))
-	_, queryPlan, savedStmt, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	_, queryPlan, savedStmt, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
 	require.NoError(t, err)
 
 	explainStmt := savedStmt.(*tree.ExplainStmt)
