@@ -330,9 +330,16 @@ func (sp *ShufflePool) syncBatch(buf *batch.Batch) {
 	sp.peak = max(sp.peak, sp.current)
 }
 
-func (sp *ShufflePool) syncBatchSet(bs *batch.BatchSet) {
-	for i := 0; i < bs.Length(); i++ {
-		sp.syncBatch(bs.Get(i))
+func (sp *ShufflePool) syncBatchSetFrom(bs *batch.BatchSet, start int) {
+	sp.memoryLock.Lock()
+	defer sp.memoryLock.Unlock()
+	for i := start; i < bs.Length(); i++ {
+		buf := bs.Get(i)
+		allocated := int64(buf.Allocated())
+		previous := sp.tracked[buf]
+		sp.tracked[buf] = allocated
+		sp.current += allocated - previous
+		sp.peak = max(sp.peak, sp.current)
 	}
 }
 
@@ -550,14 +557,19 @@ func (sp *ShufflePool) tryWrite(
 				return bucket, offset, wait, false, nil
 			}
 
-			oldReady := sp.batchSets[bucket].ReadyCount()
+			batchSet := sp.batchSets[bucket]
+			oldReady := batchSet.ReadyCount()
+			oldLength := batchSet.Length()
 			buf := sp.getBatchFromPool()
-			consumed, writeErr := sp.batchSets[bucket].Union(proc.Mp(), srcBatch, chunk, buf)
+			consumed, writeErr := batchSet.Union(proc.Mp(), srcBatch, chunk, buf)
 			if !consumed && buf != nil {
 				sp.putBatchToPool(buf, proc.Mp())
 			}
-			sp.syncBatchSet(sp.batchSets[bucket])
-			actualDelta := sp.batchSets[bucket].ReadyCount() - oldReady
+			// Union can only grow the previous writable tail and append new
+			// batches. Full batches before that tail are immutable, so avoid
+			// rescanning the entire bucket after every chunk.
+			sp.syncBatchSetFrom(batchSet, max(0, oldLength-1))
+			actualDelta := batchSet.ReadyCount() - oldReady
 			if actualDelta < readyDelta {
 				sp.releaseReady(int32(bucket), readyDelta-actualDelta)
 			}
