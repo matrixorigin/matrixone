@@ -1534,6 +1534,9 @@ func Test_fliterByAccountAndFilename(t *testing.T) {
 		return &plan.Node{
 			NodeType: plan.Node_EXTERNAL_SCAN,
 			Stats:    &plan.Stats{},
+			ExternScan: &plan.ExternScan{
+				Type: int32(plan.ExternType_EXTERNAL_TB),
+			},
 			TableDef: &plan.TableDef{
 				TableType: "func_table",
 				TblFunc: &plan.TableFunction{
@@ -1627,10 +1630,376 @@ func Test_fliterByAccountAndFilename(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, got1, err := filterByAccountAndFilename(context.TODO(), tt.args.node, tt.args.proc, tt.args.fileList, tt.args.fileSize)
+			got, got1, leftover, err := filterByAccountAndFilename(context.TODO(), tt.args.node, tt.args.proc, tt.args.fileList, tt.args.fileSize)
 			require.Nil(t, err)
 			require.Equal(t, tt.want, got)
 			require.Equal(t, tt.want1, got1)
+			require.Empty(t, leftover)
+		})
+	}
+}
+
+func filePruningTestNode(physicalCols ...string) *plan.Node {
+	cols := make([]*plan.ColDef, 0, len(physicalCols)+1)
+	physicalPositions := make(map[string]int32, len(physicalCols))
+	for i, name := range physicalCols {
+		cols = append(cols, &plan.ColDef{Name: name, Typ: plan.Type{Id: int32(types.T_varchar)}})
+		physicalPositions[name] = int32(i)
+	}
+	cols = append(cols, &plan.ColDef{Name: catalog.ExternalFilePath, Typ: plan.Type{Id: int32(types.T_varchar)}})
+	return &plan.Node{
+		NodeType: plan.Node_EXTERNAL_SCAN,
+		TableDef: &plan.TableDef{Cols: cols},
+		ExternScan: &plan.ExternScan{
+			Type:           int32(plan.ExternType_EXTERNAL_TB),
+			TbColToDataCol: physicalPositions,
+		},
+	}
+}
+
+func filePruningColumn(pos int32, name string) *plan.Expr {
+	return &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_varchar)},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: pos, Name: name}},
+	}
+}
+
+func filePruningStringLiteral(value string) *plan.Expr {
+	return &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_varchar)},
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+			Value: &plan.Literal_Sval{Sval: value},
+		}},
+	}
+}
+
+func filePruningBoolLiteral(value bool) *plan.Expr {
+	return &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_bool)},
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+			Value: &plan.Literal_Bval{Bval: value},
+		}},
+	}
+}
+
+func filePruningFunction(name string, id int64, typ types.T, args ...*plan.Expr) *plan.Expr {
+	return &plan.Expr{
+		Typ: plan.Type{Id: int32(typ)},
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{Obj: id, ObjName: name},
+			Args: args,
+		}},
+	}
+}
+
+func filePruningEqual(left, right *plan.Expr) *plan.Expr {
+	return filePruningFunction("=", function.EqualFunctionEncodedID, types.T_bool, left, right)
+}
+
+func TestFileLevelColumnUsesSchemaPosition(t *testing.T) {
+	node := filePruningTestNode("customer.account", "customer.__mo_filepath", "account", catalog.ExternalFilePath)
+	virtualPos := int32(len(node.TableDef.Cols) - 1)
+	physicalFilepathNode := &plan.Node{
+		TableDef: &plan.TableDef{Cols: []*plan.ColDef{{Name: catalog.ExternalFilePath}}},
+		ExternScan: &plan.ExternScan{TbColToDataCol: map[string]int32{
+			catalog.ExternalFilePath: 0,
+		}},
+	}
+	wrongLastColumnNode := &plan.Node{
+		TableDef:   &plan.TableDef{Cols: []*plan.ColDef{{Name: "account"}}},
+		ExternScan: &plan.ExternScan{},
+	}
+
+	tests := []struct {
+		name string
+		node *plan.Node
+		col  *plan.ColRef
+		want bool
+	}{
+		{name: "virtual filepath", node: node, col: &plan.ColRef{ColPos: virtualPos, Name: "ext.__mo_filepath"}, want: true},
+		{name: "dotted physical account", node: node, col: &plan.ColRef{ColPos: 0, Name: "customer.account"}},
+		{name: "dotted physical filepath", node: node, col: &plan.ColRef{ColPos: 1, Name: "customer.__mo_filepath"}},
+		{name: "physical account", node: node, col: &plan.ColRef{ColPos: 2, Name: "account"}},
+		{name: "physical exact filepath", node: node, col: &plan.ColRef{ColPos: 3, Name: catalog.ExternalFilePath}},
+		{name: "physical filepath in metadata", node: physicalFilepathNode, col: &plan.ColRef{ColPos: 0, Name: catalog.ExternalFilePath}},
+		{name: "last column has different name", node: wrongLastColumnNode, col: &plan.ColRef{ColPos: 0, Name: catalog.ExternalFilePath}},
+		{name: "out of range", node: node, col: &plan.ColRef{ColPos: 99, Name: catalog.ExternalFilePath}},
+		{name: "missing node", col: &plan.ColRef{ColPos: virtualPos, Name: catalog.ExternalFilePath}},
+		{name: "missing column", node: node},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, isFileLevelColumn(tt.node, tt.col))
+		})
+	}
+}
+
+func TestFileLevelFilterClassifiesBoundaryExpressions(t *testing.T) {
+	require.False(t, isSafeFileLevelFunction(nil))
+	literal := func() *plan.Expr {
+		return &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{}}}
+	}
+	list := func(items ...*plan.Expr) *plan.Expr {
+		return &plan.Expr{Expr: &plan.Expr_List{List: &plan.ExprList{List: items}}}
+	}
+
+	node := filePruningTestNode("account_id")
+	virtualColumn := filePruningColumn(1, "ext."+catalog.ExternalFilePath)
+	physicalColumn := filePruningColumn(0, "ext.account_id")
+	virtualFilter := filePruningEqual(virtualColumn, filePruningStringLiteral("/x"))
+	physicalFilter := filePruningEqual(physicalColumn, filePruningStringLiteral("x"))
+
+	classificationTests := []struct {
+		name           string
+		expr           *plan.Expr
+		hasFileLevel   bool
+		hasUnsupported bool
+	}{
+		{name: "nil expression", expr: nil},
+		{name: "empty expression", expr: &plan.Expr{}, hasUnsupported: true},
+		{name: "nil column", expr: &plan.Expr{Expr: &plan.Expr_Col{}}, hasUnsupported: true},
+		{name: "nil function", expr: &plan.Expr{Expr: &plan.Expr_F{}}, hasUnsupported: true},
+		{name: "nil list", expr: &plan.Expr{Expr: &plan.Expr_List{}}},
+		{name: "literal", expr: literal()},
+		{
+			name:         "virtual list",
+			expr:         list(virtualColumn, literal()),
+			hasFileLevel: true,
+		},
+		{
+			name:           "mixed function",
+			expr:           filePruningEqual(virtualColumn, physicalColumn),
+			hasFileLevel:   true,
+			hasUnsupported: true,
+		},
+		{
+			name:           "mixed list",
+			expr:           list(virtualColumn, physicalColumn),
+			hasFileLevel:   true,
+			hasUnsupported: true,
+		},
+		{
+			name:           "unsupported expression",
+			expr:           &plan.Expr{Expr: &plan.Expr_Raw{Raw: &plan.RawColRef{}}},
+			hasUnsupported: true,
+		},
+	}
+
+	for _, tt := range classificationTests {
+		t.Run("columns/"+tt.name, func(t *testing.T) {
+			hasFileLevel, hasUnsupported := classifyFileLevelColumns(node, tt.expr)
+			require.Equal(t, tt.hasFileLevel, hasFileLevel)
+			require.Equal(t, tt.hasUnsupported, hasUnsupported)
+		})
+	}
+
+	filterTests := []struct {
+		name string
+		expr *plan.Expr
+		want bool
+	}{
+		{name: "nil expression", expr: nil},
+		{name: "non function", expr: literal()},
+		{name: "nil function", expr: &plan.Expr{Expr: &plan.Expr_F{}}},
+		{name: "missing function metadata", expr: &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{}}}},
+		{name: "unknown function", expr: filePruningFunction("unknown", -1, types.T_bool, virtualFilter)},
+		{name: "empty or", expr: filePruningFunction("or", int64(function.OR)<<32, types.T_bool)},
+		{name: "or with virtual branches", expr: filePruningFunction("or", int64(function.OR)<<32, types.T_bool, virtualFilter, virtualFilter), want: true},
+		{name: "or with physical branch", expr: filePruningFunction("or", int64(function.OR)<<32, types.T_bool, virtualFilter, physicalFilter)},
+	}
+
+	for _, tt := range filterTests {
+		t.Run("filter/"+tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, isFileLevelFilter(node, tt.expr))
+		})
+	}
+
+	randFn, err := function.GetFunctionByName(context.Background(), "rand", nil)
+	require.NoError(t, err)
+	lessFn, err := function.GetFunctionByName(context.Background(), "<", []types.Type{types.T_float64.ToType(), types.T_float64.ToType()})
+	require.NoError(t, err)
+	randExpr := filePruningFunction("rand", randFn.GetEncodedOverloadID(), types.T_float64)
+	randFilter := filePruningFunction("<", lessFn.GetEncodedOverloadID(), types.T_bool, randExpr, &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_float64)},
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Dval{Dval: 0.5}}},
+	})
+	volatileFilter := filePruningFunction("and", function.AndFunctionEncodedID, types.T_bool, randFilter, virtualFilter)
+	require.False(t, isFileLevelFilter(node, volatileFilter), "volatile predicates must stay at row level")
+
+	currentDateFn, err := function.GetFunctionByName(context.Background(), "current_date", nil)
+	require.NoError(t, err)
+	realtimeFilter := filePruningFunction("and", function.AndFunctionEncodedID, types.T_bool,
+		filePruningFunction("current_date", currentDateFn.GetEncodedOverloadID(), types.T_date), virtualFilter)
+	require.False(t, isFileLevelFilter(node, realtimeFilter), "time-dependent predicates must stay at row level")
+}
+
+func TestFilterByAccountAndFilenameKeepsPhysicalColumnsAtRowLevel(t *testing.T) {
+	tests := []struct {
+		name       string
+		columnName string
+	}{
+		{name: "physical account", columnName: "account"},
+		{name: "dotted physical account", columnName: "customer.account"},
+		{name: "dotted physical filepath", columnName: "customer.__mo_filepath"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			filter := filePruningEqual(filePruningColumn(0, tt.columnName), filePruningStringLiteral("row-account"))
+			node := filePruningTestNode(tt.columnName)
+			node.FilterList = []*plan.Expr{filter}
+
+			fileList := []string{"etl:/path-account/file.csv"}
+			fileSize := []int64{1}
+			gotFiles, gotSizes, leftover, err := filterByAccountAndFilename(
+				context.Background(), node, testutil.NewProc(t), fileList, fileSize,
+			)
+
+			require.NoError(t, err)
+			require.Equal(t, fileList, gotFiles)
+			require.Equal(t, fileSize, gotSizes)
+			require.Equal(t, []*plan.Expr{filter}, leftover,
+				"physical-column filter must remain a row-level filter")
+			require.Equal(t, []*plan.Expr{filter}, node.FilterList, "filtering must not mutate the reusable plan")
+		})
+	}
+}
+
+func TestFilterByAccountAndFilenameKeepsMixedColumnFilterAtRowLevel(t *testing.T) {
+	const tableName = "ext"
+	varcharType := plan.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen, Table: tableName}
+	filter := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_bool)},
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{Obj: function.EqualFunctionEncodedID, ObjName: "="},
+			Args: []*plan.Expr{
+				{
+					Typ: varcharType,
+					Expr: &plan.Expr_Col{Col: &plan.ColRef{
+						RelPos: 0,
+						ColPos: 0,
+						Name:   tableName + ".account",
+					}},
+				},
+				{
+					Typ: varcharType,
+					Expr: &plan.Expr_Col{Col: &plan.ColRef{
+						RelPos: 0,
+						ColPos: 1,
+						Name:   tableName + ".account_id",
+					}},
+				},
+			},
+		}},
+	}
+	node := &plan.Node{
+		NodeType: plan.Node_EXTERNAL_SCAN,
+		TableDef: &plan.TableDef{Cols: []*plan.ColDef{
+			{Name: "account", Typ: varcharType},
+			{Name: "account_id", Typ: varcharType},
+			{Name: catalog.ExternalFilePath, Typ: varcharType},
+		}},
+		FilterList: []*plan.Expr{filter},
+		ExternScan: &plan.ExternScan{
+			Type: int32(plan.ExternType_EXTERNAL_TB),
+			TbColToDataCol: map[string]int32{
+				"account": 0, "account_id": 1,
+			},
+		},
+	}
+
+	fileList := []string{"etl:/tenant/file.csv"}
+	fileSize := []int64{1}
+	gotFiles, gotSizes, leftover, err := filterByAccountAndFilename(
+		context.Background(), node, testutil.NewProc(t), fileList, fileSize,
+	)
+
+	require.NoError(t, err)
+	require.Equal(t, fileList, gotFiles)
+	require.Equal(t, fileSize, gotSizes)
+	require.Equal(t, []*plan.Expr{filter}, leftover,
+		"a filter that also references a physical column must remain at row level")
+	require.Equal(t, []*plan.Expr{filter}, node.FilterList)
+}
+
+func TestFilterByAccountAndFilenameReusesPreparedFilter(t *testing.T) {
+	proc := testutil.NewProc(t)
+	node := filePruningTestNode()
+	filepathColumn := filePruningColumn(0, catalog.ExternalFilePath)
+	parameter := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_varchar)},
+		Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}},
+	}
+	filter := filePruningEqual(filepathColumn, parameter)
+	node.FilterList = []*plan.Expr{filter}
+
+	params, err := proc.AllocVectorOfRows(types.T_varchar.ToType(), 1, nil)
+	require.NoError(t, err)
+	proc.SetPrepareParams(params)
+	t.Cleanup(func() {
+		proc.SetPrepareParams(nil)
+		params.Free(proc.Mp())
+	})
+
+	fileList := []string{"etl:/a.csv", "etl:/b.csv"}
+	fileSize := []int64{10, 20}
+	require.NoError(t, vector.SetStringAt(params, 0, fileList[0], proc.Mp()))
+	gotFiles, gotSizes, leftover, err := filterByAccountAndFilename(
+		context.Background(), node, proc, fileList, fileSize,
+	)
+	require.NoError(t, err)
+	require.Equal(t, fileList[:1], gotFiles)
+	require.Equal(t, fileSize[:1], gotSizes)
+	require.Empty(t, leftover)
+	require.Equal(t, []*plan.Expr{filter}, node.FilterList)
+
+	require.NoError(t, vector.SetStringAt(params, 0, fileList[1], proc.Mp()))
+	gotFiles, gotSizes, leftover, err = filterByAccountAndFilename(
+		context.Background(), node, proc, fileList, fileSize,
+	)
+	require.NoError(t, err)
+	require.Equal(t, fileList[1:], gotFiles)
+	require.Equal(t, fileSize[1:], gotSizes)
+	require.Empty(t, leftover)
+	require.Equal(t, []*plan.Expr{filter}, node.FilterList, "each EXECUTE must see the original predicate")
+}
+
+func TestFilterByAccountAndFilenameBroadcastsConstantResults(t *testing.T) {
+	ifFn, err := function.GetFunctionByName(context.Background(), "if", []types.Type{
+		types.T_bool.ToType(), types.T_bool.ToType(), types.T_bool.ToType(),
+	})
+	require.NoError(t, err)
+
+	fileList := []string{"etl:/a.csv", "etl:/b.csv"}
+	fileSize := []int64{10, 20}
+	for _, test := range []struct {
+		name      string
+		thenValue bool
+		wantFiles []string
+		wantSizes []int64
+	}{
+		{name: "constant true", thenValue: true, wantFiles: fileList, wantSizes: fileSize},
+		{name: "constant false", thenValue: false, wantFiles: []string{}, wantSizes: []int64{}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			node := filePruningTestNode()
+			filepathFilter := filePruningEqual(
+				filePruningStringLiteral("never-selected"),
+				filePruningColumn(0, catalog.ExternalFilePath),
+			)
+			filter := filePruningFunction("if", ifFn.GetEncodedOverloadID(), types.T_bool,
+				filePruningBoolLiteral(true), filePruningBoolLiteral(test.thenValue), filepathFilter)
+			node.FilterList = []*plan.Expr{filter}
+
+			gotFiles, gotSizes, leftover, err := filterByAccountAndFilename(
+				context.Background(), node, testutil.NewProc(t), fileList, fileSize,
+			)
+			require.NoError(t, err)
+			require.Equal(t, test.wantFiles, gotFiles)
+			require.Equal(t, test.wantSizes, gotSizes)
+			require.Empty(t, leftover)
+			require.Equal(t, []*plan.Expr{filter}, node.FilterList)
 		})
 	}
 }

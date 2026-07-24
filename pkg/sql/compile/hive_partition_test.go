@@ -73,8 +73,12 @@ func TestRunFilePathFilters_LeftoverContainsUnconsumed(t *testing.T) {
 	fileList := []string{"/warehouse/data/year=2024/f.parquet"}
 	fileSize := []int64{100}
 
+	node := &plan.Node{
+		TableDef:   td,
+		ExternScan: &plan.ExternScan{Type: int32(plan.ExternType_EXTERNAL_TB)},
+	}
 	outFileList, outFileSize, leftover, err := runFilePathFilters(
-		proc.Ctx, proc, td, []*plan.Expr{orExpr}, fileList, fileSize)
+		proc.Ctx, proc, node, []*plan.Expr{orExpr}, fileList, fileSize)
 	require.NoError(t, err)
 
 	assert.Equal(t, fileList, outFileList,
@@ -106,10 +110,14 @@ func TestToLowerSet(t *testing.T) {
 func TestRunFilePathFilters_NoFilters(t *testing.T) {
 	proc := testutil.NewProc(t)
 	td := &plan.TableDef{Cols: []*plan.ColDef{{Name: catalog.ExternalFilePath}}}
+	node := &plan.Node{
+		TableDef:   td,
+		ExternScan: &plan.ExternScan{Type: int32(plan.ExternType_EXTERNAL_TB)},
+	}
 	// Empty fpFilters → FilterFileList short-circuits, returns fileList unchanged.
 	fileList := []string{"/a.parquet"}
 	fileSize := []int64{10}
-	out, outSz, leftover, err := runFilePathFilters(proc.Ctx, proc, td, nil, fileList, fileSize)
+	out, outSz, leftover, err := runFilePathFilters(proc.Ctx, proc, node, nil, fileList, fileSize)
 	require.NoError(t, err)
 	assert.Equal(t, fileList, out)
 	assert.Equal(t, fileSize, outSz)
@@ -284,6 +292,12 @@ func TestGetHivePartitionFileListCoverageHack(t *testing.T) {
 	})
 	c := &Compile{proc: proc}
 	node := &plan.Node{
+		ExternScan: &plan.ExternScan{
+			Type: int32(plan.ExternType_EXTERNAL_TB),
+			TbColToDataCol: map[string]int32{
+				"id": 0, "year": 1,
+			},
+		},
 		TableDef: &plan.TableDef{Cols: []*plan.ColDef{
 			{Name: "id", Typ: plan.Type{Id: int32(types.T_int32)}},
 			{Name: "year", Typ: plan.Type{Id: int32(types.T_int32)}},
