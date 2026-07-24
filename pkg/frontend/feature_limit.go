@@ -86,6 +86,13 @@ func featureLimitChecker(
 	if limitQuota, err = queryQuota(ctx, ses, bh, accId, featureCode, featureScope); err != nil {
 		return err
 	}
+	// Serialize finite branch quota checks on the account's quota row. The lock
+	// is held by the caller's background transaction through metadata insertion.
+	if featureCode == featureCodeBranch && limitQuota > 0 {
+		if limitQuota, err = lockFeatureQuota(ctx, ses, bh, accId, featureCode, featureScope); err != nil {
+			return err
+		}
+	}
 
 	if limitQuota == 0 {
 		// disabled this feature
@@ -118,7 +125,7 @@ func featureLimitChecker(
 	} else if featureCode == featureCodeBranch {
 		ctx = defines.AttachAccountId(ctx, sysAccountID)
 		sql = fmt.Sprintf(
-			"select count(*) from %s.%s where creator = %d and table_deleted = false",
+			"select count(*) from %s.%s where creator = %d and table_deleted = false for update",
 			catalog.MO_CATALOG, catalog.MO_BRANCH_METADATA, accId,
 		)
 	} else {
@@ -145,6 +152,37 @@ func featureLimitChecker(
 	}
 
 	return nil
+}
+
+func lockFeatureQuota(
+	ctx context.Context,
+	ses *Session,
+	bh BackgroundExec,
+	accId uint32,
+	code string,
+	scope string,
+) (quota int64, err error) {
+	var sqlRet executor.Result
+	defer func() {
+		sqlRet.Close()
+	}()
+
+	ctx = defines.AttachAccountId(ctx, sysAccountID)
+	code = strings.ToUpper(strings.TrimSpace(code))
+	scope = strings.ToLower(strings.TrimSpace(scope))
+	sql := fmt.Sprintf(
+		"select quota from %s.%s where account_id = %d and feature_code = '%s' and scope = '%s' for update",
+		catalog.MO_CATALOG, catalog.MO_FEATURE_LIMIT, accId, code, scope,
+	)
+
+	if sqlRet, err = runSql(ctx, ses, bh, sql, nil, nil); err != nil {
+		return 0, err
+	}
+	if len(sqlRet.Batches) != 1 || sqlRet.Batches[0].RowCount() != 1 {
+		return 0, moerr.NewInternalErrorNoCtxf("lock quota for %s(%s) failed", code, scope)
+	}
+
+	return vector.GetFixedAtNoTypeCheck[int64](sqlRet.Batches[0].Vecs[0], 0), nil
 }
 
 func queryQuota(
