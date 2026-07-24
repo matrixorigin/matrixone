@@ -750,8 +750,8 @@ func (store *txnStore) WaitWalAndTail(ctx context.Context) (err error) {
 	}
 	moprobe.WithRegion(ctx, moprobe.TxnStoreWaitWALFlush, func() {
 		for _, e := range store.logs {
-			if err = e.WaitDone(); err != nil {
-				break
+			if waitErr := e.WaitDone(); waitErr != nil && err == nil {
+				err = waitErr
 			}
 			e.Free()
 		}

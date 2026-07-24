@@ -613,7 +613,7 @@ namespace {
 
 // Minimal derived index used as a stand-in for the real index types. We never
 // call start()/build()/search() — only the filter ingest + persistence methods.
-struct test_index_t : public gpu_index_base_t<float, int, int64_t> {
+struct test_index_t : public gpu_index_base_t<float, float, int, int64_t> {
     test_index_t() {
         // Populate the fields write_manifest reads so the file is valid JSON.
         this->dimension = 4;
@@ -630,7 +630,7 @@ std::string make_tmp_dir(const std::string& tag) {
     // Best-effort cleanup from prior runs.
     std::string rm = "rm -rf " + path;
     ::system(rm.c_str());
-    gpu_index_base_t<float, int, int64_t>::ensure_dir(path);
+    gpu_index_base_t<float, float, int, int64_t>::ensure_dir(path);
     return path;
 }
 

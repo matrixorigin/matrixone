@@ -15,6 +15,7 @@
 package fileservice
 
 import (
+	"context"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -34,37 +35,51 @@ func DoWithRetry[T any](
 	maxAttemps int,
 	isRetryable func(error) bool,
 ) (res T, err error) {
+	return DoWithRetryContext(context.Background(), what, fn, maxAttemps, isRetryable)
+}
+
+func DoWithRetryContext[T any](
+	ctx context.Context,
+	what string,
+	fn func() (T, error),
+	maxAttemps int,
+	isRetryable func(error) bool,
+) (res T, err error) {
 	defer catch(&err)
 
 	numRetries := 0
 	sleep := initialRetryInterval
 
 	for {
-		res, err = fn()
-		if err != nil {
-			if isRetryable(err) {
-				maxAttemps--
-
-				if sleep < maxRetryInterval {
-					sleep = time.Duration(float64(sleep) * retryIntervalFactor)
-				}
-				time.Sleep(sleep)
-
-				numRetries++
-				if numRetries%5 == 0 {
-					logutil.Info("file service retry",
-						zap.Any("times", numRetries),
-						zap.Any("what", what),
-					)
-				}
-
-				if maxAttemps <= 0 {
-					return
-				}
-				continue
-			}
+		if err = ctx.Err(); err != nil {
 			return
 		}
-		return
+		res, err = fn()
+		if err == nil || !isRetryable(err) {
+			return
+		}
+		maxAttemps--
+		if maxAttemps <= 0 {
+			return
+		}
+		if sleep < maxRetryInterval {
+			sleep = time.Duration(float64(sleep) * retryIntervalFactor)
+		}
+		timer := time.NewTimer(sleep)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			err = ctx.Err()
+			return
+		case <-timer.C:
+		}
+
+		numRetries++
+		if numRetries%5 == 0 {
+			logutil.Info("file service retry",
+				zap.Any("times", numRetries),
+				zap.Any("what", what),
+			)
+		}
 	}
 }

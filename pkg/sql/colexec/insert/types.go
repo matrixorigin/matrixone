@@ -19,6 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/externalwrite"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -48,6 +49,9 @@ type container struct {
 	// extWriter is used when ToExternal is set: it encodes batches and appends
 	// them to a single file in a stage (writable external table).
 	extWriter externalwrite.ExternalWriter
+	// extCounter is owned by extWriter's complete asynchronous lifetime. It is
+	// harvested only after Close or Abort has joined the writer goroutine.
+	extCounter *perfcounter.CounterSet
 	// extCols are the ColDefs aligned with InsertCtx.Attrs, for the external
 	// path's NOT NULL check.
 	extCols []*plan.ColDef
@@ -128,8 +132,7 @@ func (insert *Insert) Reset(proc *process.Process, pipelineFailed bool, err erro
 	// failed or was cancelled: discard the half-written file rather than
 	// finalizing it into the stage where readers would see partial rows.
 	if insert.ctr.extWriter != nil {
-		insert.ctr.extWriter.Abort(proc.Ctx)
-		insert.ctr.extWriter = nil
+		insert.abortExternalWriter(proc)
 	}
 	insert.ctr.state = vm.Build
 
@@ -158,8 +161,7 @@ func (insert *Insert) Free(proc *process.Process, pipelineFailed bool, err error
 	// See Reset: a writer still alive at Free means the stream did not end
 	// cleanly; abort instead of persisting a partial file.
 	if insert.ctr.extWriter != nil {
-		insert.ctr.extWriter.Abort(proc.Ctx)
-		insert.ctr.extWriter = nil
+		insert.abortExternalWriter(proc)
 	}
 	insert.ctr.extCols = nil
 
