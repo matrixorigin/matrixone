@@ -14,7 +14,12 @@
 
 package fulltext2
 
-import "sync"
+import (
+	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+)
 
 // Per-query cursor block buffers are BlockSize-sized and short-lived: buildWandIters
 // makes one pair per term and newPhraseCursor one triple per slot, then they die when
@@ -87,5 +92,30 @@ func releasePhraseCursors(cursors []*phraseCursor) {
 		c.bDocs = nil
 		c.bPos = nil
 		c.tfbuf = nil
+	}
+}
+
+// The no-LIMIT streaming path emits one vectorindex.ColumnBuffer per streamBatch rows.
+// Its Data backing is recycled here so a million-row result does not allocate a fresh
+// buffer per batch. GC-managed: a buffer never Put back (an aborted/drained query) is
+// just reclaimed — a missed reuse, not a leak. The struct lives in vectorindex (the Emit
+// contract references it); the POOLING POLICY lives here with its only user, fulltext2.
+var columnBufferPool = sync.Pool{New: func() any { return &vectorindex.ColumnBuffer{} }}
+
+// GetColumnBuffer returns a reset ColumnBuffer of pk type t. The streaming producer Gets
+// one per batch; the consumer PutColumnBuffers it back once it has copied Data out.
+func GetColumnBuffer(t types.T) *vectorindex.ColumnBuffer {
+	k := columnBufferPool.Get().(*vectorindex.ColumnBuffer)
+	k.Type = t
+	k.Reset()
+	return k
+}
+
+// PutColumnBuffer returns a ColumnBuffer to the pool. Call only after the batch is fully
+// consumed (its Data copied out); the buffer must not be referenced afterward. Exported
+// because the consumer (pkg/sql/colexec/table_function) returns the batch it received.
+func PutColumnBuffer(k *vectorindex.ColumnBuffer) {
+	if k != nil {
+		columnBufferPool.Put(k)
 	}
 }

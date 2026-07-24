@@ -94,7 +94,8 @@ func (u *fulltext2SearchState) stopStream() {
 	}
 	u.cancel()
 	if u.streamCh != nil {
-		for range u.streamCh { // drain to the producer's close()
+		for b := range u.streamCh { // drain to the producer's close()
+			fulltext2.PutColumnBuffer(b.keys) // recycle drained (unconsumed) batches
 		}
 	}
 	u.cancel = nil
@@ -140,6 +141,7 @@ func (u *fulltext2SearchState) call(tf *TableFunction, proc *process.Process) (v
 				}
 			}
 			u.batch.SetRowCount(b.keys.N)
+			fulltext2.PutColumnBuffer(b.keys) // batch copied into u.batch; recycle its buffer
 			return vm.CallResult{Status: vm.ExecNext, Batch: u.batch}, nil
 		case <-proc.Ctx.Done():
 			return vm.CancelResult, proc.Ctx.Err()

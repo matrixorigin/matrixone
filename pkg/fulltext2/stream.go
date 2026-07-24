@@ -33,22 +33,31 @@ const streamBatch = 8192
 // records it and stops (the walk checks stopped and bails).
 type streamSink struct {
 	emit    func(keys *vectorindex.ColumnBuffer, distances []float64) error
-	keys    vectorindex.ColumnBuffer
+	keys    *vectorindex.ColumnBuffer // pooled; nil until the first push after a flush
+	pkType  types.T
 	scores  []float64
-	fixedW  int // fixed pk width; 0 ⇒ varlena. Cached from keys.Type.
+	fixedW  int // fixed pk width; 0 ⇒ varlena
 	err     error
 	stopped bool
 }
 
-// newStreamSink resolves the index's pk type (all segments share it) into the typed
-// batch. Callers create it only after the globalN==0 early-out, so segments is non-empty.
+// newStreamSink resolves the index's pk type (all segments share it). The batch buffer
+// itself is fetched from the pool lazily on the first push. Callers create it only after
+// the globalN==0 early-out, so segments is non-empty.
 func newStreamSink(idx *Index, emit func(keys *vectorindex.ColumnBuffer, distances []float64) error) *streamSink {
 	pkType := idx.segments[0].PkType
 	w, fixed := fixedPkByteWidth(pkType)
 	if !fixed {
 		w = 0
 	}
-	return &streamSink{emit: emit, keys: vectorindex.ColumnBuffer{Type: types.T(pkType)}, fixedW: w}
+	return &streamSink{emit: emit, pkType: types.T(pkType), fixedW: w}
+}
+
+// ensure lazily fetches a pooled batch buffer of the sink's pk type.
+func (s *streamSink) ensure() {
+	if s.keys == nil {
+		s.keys = GetColumnBuffer(s.pkType)
+	}
 }
 
 // pushPk appends the pk at (seg, ord) to the typed batch WITHOUT boxing, decoding it
@@ -57,7 +66,8 @@ func (s *streamSink) pushPk(seg *Segment, ord int64, score float32) {
 	if s.stopped {
 		return
 	}
-	seg.appendPkTo(&s.keys, s.fixedW, ord)
+	s.ensure()
+	seg.appendPkTo(s.keys, s.fixedW, ord)
 	s.scores = append(s.scores, float64(score))
 	if s.keys.N >= streamBatch {
 		s.flush()
@@ -70,7 +80,8 @@ func (s *streamSink) pushAny(pk any, score float32) {
 	if s.stopped {
 		return
 	}
-	appendAnyPk(&s.keys, s.fixedW, pk)
+	s.ensure()
+	appendAnyPk(s.keys, s.fixedW, pk)
 	s.scores = append(s.scores, float64(score))
 	if s.keys.N >= streamBatch {
 		s.flush()
@@ -78,18 +89,19 @@ func (s *streamSink) pushAny(pk any, score float32) {
 }
 
 func (s *streamSink) flush() {
-	if s.stopped || s.keys.N == 0 {
+	if s.stopped || s.keys == nil || s.keys.N == 0 {
 		return
 	}
-	// Hand THIS batch to emit as a distinct object (a struct copy: the Data backing is
-	// shared, but the sink then starts a fresh batch so it never mutates the emitted one).
-	batch := s.keys
-	if e := s.emit(&batch, s.scores); e != nil {
+	if e := s.emit(s.keys, s.scores); e != nil {
 		s.err = e
 		s.stopped = true
+		PutColumnBuffer(s.keys) // emit didn't hand it off; recycle here
+		s.keys = nil
 		return
 	}
-	s.keys = vectorindex.ColumnBuffer{Type: batch.Type} // fresh Data on next append
+	// Ownership of this batch passes to the consumer, which PutColumnBuffers it back once
+	// it has copied Data out; the sink lazily Gets a fresh one on the next push.
+	s.keys = nil
 	s.scores = nil
 }
 

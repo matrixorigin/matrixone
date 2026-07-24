@@ -277,27 +277,8 @@ type RuntimeConfig struct {
 	Emit func(keys *ColumnBuffer, distances []float64) error
 }
 
-// ColumnBuffer is a batch of primary keys in a TYPED, box-free columnar form, used by
-// the fulltext2 no-LIMIT streaming path (RuntimeConfig.Emit). A pk column has ONE
-// type, so every key in a batch is uniformly fixed-width or varlena and Type alone
-// disambiguates Data:
-//   - fixed-width type (int/uint/temporal/decimal): Data is N contiguous width-byte
-//     little-endian values (no length prefix; width is implied by Type).
-//   - varlena type (varchar/blob/json/uuid): Data is N [u32 len][content] entries.
-//
-// Neither form boxes into any, and Data is a copy (not a view into the segment mmap),
-// so an in-flight batch survives segment eviction.
-type ColumnBuffer struct {
-	Type types.T
-	Data []byte // fixed: N×width bytes; varlena: [u32 len][content] entries
-	N    int    // element count
-}
-
-// Reset clears a ColumnBuffer for reuse without dropping its backing buffer.
-func (k *ColumnBuffer) Reset() {
-	k.Data = k.Data[:0]
-	k.N = 0
-}
+// ColumnBuffer (the typed, box-free streaming key batch used by Emit) lives in
+// columnbuffer.go.
 
 type VectorIndexCdc[T types.RealNumbers] struct {
 	// Start string                   `json:"start"`
