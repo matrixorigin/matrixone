@@ -263,6 +263,26 @@ func firstSelectExpr(t *testing.T, stmt tree.Statement) tree.Expr {
 	return clause.Exprs[0].Expr
 }
 
+func extractFirstWindowSpec(t *testing.T, stmt tree.Statement) *tree.WindowSpec {
+	t.Helper()
+	window, ok := firstSelectExpr(t, stmt).(*tree.FuncExpr)
+	require.True(t, ok)
+	require.NotNil(t, window.WindowSpec)
+	return window.WindowSpec
+}
+
+func TestPreparedWindowFrameMarkers(t *testing.T) {
+	stmt, err := ParseOne(context.Background(),
+		"select sum(n_nationkey) over (order by n_nationkey rows between ? preceding and ? following) from nation",
+		1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	window := extractFirstWindowSpec(t, stmt)
+	require.IsType(t, &tree.ParamExpr{}, window.Frame.Start.Expr)
+	require.IsType(t, &tree.ParamExpr{}, window.Frame.End.Expr)
+}
+
 func firstColumnType(t *testing.T, stmt tree.Statement) tree.InternalType {
 	t.Helper()
 	createTable, ok := stmt.(*tree.CreateTable)
