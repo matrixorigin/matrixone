@@ -142,7 +142,7 @@ func CompactSegments(sqlproc *sqlexec.SqlProcess, cfg TableConfig, capacity, pos
 }
 
 func runCompactSql(sqlproc *sqlexec.SqlProcess, sql string) error {
-	res, err := sqlexec.RunSql(sqlproc, sql)
+	res, err := runSql(sqlproc, sql)
 	if err != nil {
 		return err
 	}

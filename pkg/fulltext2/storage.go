@@ -61,6 +61,15 @@ type TableConfig struct {
 	FromSource   bool `json:"from_source,omitempty"`
 }
 
+// runSql / runStreamingSql indirect the sqlexec executor entry points so unit tests can
+// mock the DB round-trips (metadata reads, base/tail chunk loads, budget gates,
+// compaction). Production points them at the real executor; tests swap them for fakes
+// that return synthetic result batches, optionally dispatching by SQL text.
+var (
+	runSql          = sqlexec.RunSql
+	runStreamingSql = sqlexec.RunStreamingSql
+)
+
 // SubIndexId is the index_id for the i-th tag=0 base sub-index of a build
 // identified by uid (which must carry a per-build-unique component so concurrent
 // builds never collide). Load enumerates ids from the metadata table.
@@ -179,7 +188,7 @@ func readMetadata(sqlproc *sqlexec.SqlProcess, cfg TableConfig, id string) (chec
 		catalog.FullText2Index_TblCol_Metadata_Recency,
 		sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable),
 		catalog.FullText2Index_TblCol_Metadata_Index_Id, sqlquote.String(id))
-	res, err := sqlexec.RunSql(sqlproc, sql)
+	res, err := runSql(sqlproc, sql)
 	if err != nil {
 		return "", 0, 0, false, err
 	}
@@ -219,7 +228,7 @@ func checkBaseLoadBudget(sqlproc *sqlexec.SqlProcess, cfg TableConfig) error {
 	// result (GetFixedAtNoTypeCheck[int64] would misread a decimal vector).
 	sql := fmt.Sprintf("SELECT CAST(COALESCE(SUM(%s), 0) AS SIGNED) FROM %s",
 		catalog.FullText2Index_TblCol_Metadata_Nrow, sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable))
-	res, err := sqlexec.RunSql(sqlproc, sql)
+	res, err := runSql(sqlproc, sql)
 	if err != nil {
 		return err
 	}
@@ -255,7 +264,7 @@ func checkBaseLoadBudget(sqlproc *sqlexec.SqlProcess, cfg TableConfig) error {
 func LoadAllBases(sqlproc *sqlexec.SqlProcess, cfg TableConfig) ([]*Segment, error) {
 	idSQL := fmt.Sprintf("SELECT %s FROM %s",
 		catalog.FullText2Index_TblCol_Metadata_Index_Id, sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable))
-	res, err := sqlexec.RunSql(sqlproc, idSQL)
+	res, err := runSql(sqlproc, idSQL)
 	if err != nil {
 		return nil, err
 	}
@@ -437,7 +446,7 @@ func checkTailLoadBudget(sqlproc *sqlexec.SqlProcess, cfg TableConfig) error {
 		catalog.FullText2Index_TblCol_Storage_Data, sqlquote.QualifiedIdent(cfg.DbName, cfg.IndexTable),
 		catalog.FullText2Index_TblCol_Storage_Index_Id, sqlquote.String(vectorindex.CdcTailId),
 		catalog.FullText2Index_TblCol_Storage_Tag, int(vectorindex.Tag_CdcEvents))
-	res, err := sqlexec.RunSql(sqlproc, sql)
+	res, err := runSql(sqlproc, sql)
 	if err != nil {
 		return err
 	}
@@ -482,7 +491,7 @@ func LoadTailSegments(sqlproc *sqlexec.SqlProcess, cfg TableConfig) ([]*Segment,
 		sqlquote.QualifiedIdent(cfg.DbName, cfg.IndexTable),
 		catalog.FullText2Index_TblCol_Storage_Index_Id, sqlquote.String(vectorindex.CdcTailId),
 		catalog.FullText2Index_TblCol_Storage_Tag, int(vectorindex.Tag_CdcEvents))
-	res, err := sqlexec.RunSql(sqlproc, sql)
+	res, err := runSql(sqlproc, sql)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -570,7 +579,7 @@ func streamChunkRowsToFile(sqlproc *sqlexec.SqlProcess, sql string, baseChunk, b
 			close(streamCh)
 			wg.Done()
 		}()
-		if _, e := sqlexec.RunStreamingSql(ctx, sqlproc, sql, streamCh, errorCh); e != nil {
+		if _, e := runStreamingSql(ctx, sqlproc, sql, streamCh, errorCh); e != nil {
 			errorCh <- e
 		}
 	}()
@@ -670,7 +679,7 @@ func NextTailChunkIdSql(cfg TableConfig) string {
 // NextTailChunkId runs NextTailChunkIdSql — the next append position for the CDC
 // sinker.
 func NextTailChunkId(sqlproc *sqlexec.SqlProcess, cfg TableConfig) (int64, error) {
-	res, err := sqlexec.RunSql(sqlproc, NextTailChunkIdSql(cfg))
+	res, err := runSql(sqlproc, NextTailChunkIdSql(cfg))
 	if err != nil {
 		return 0, err
 	}
@@ -703,7 +712,7 @@ func SumBaseNrow(sqlproc *sqlexec.SqlProcess, cfg TableConfig) (int64, error) {
 }
 
 func scanInt64(sqlproc *sqlexec.SqlProcess, sql string) (int64, error) {
-	res, err := sqlexec.RunSql(sqlproc, sql)
+	res, err := runSql(sqlproc, sql)
 	if err != nil {
 		return 0, err
 	}
