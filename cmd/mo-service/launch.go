@@ -32,7 +32,12 @@ import (
 )
 
 var (
-	cnProxy goetty.Proxy
+	cnProxy                 goetty.Proxy
+	launchStartService      = startService
+	launchStartDynamic      = startDynamicCluster
+	launchNewProxy          = goetty.NewProxy
+	launchNewHAKeeperClient = logservice.NewCNHAKeeperClient
+	launchSleep             = time.Sleep
 )
 
 func startCluster(
@@ -50,7 +55,7 @@ func startCluster(
 	}
 
 	if cfg.Dynamic.Enable {
-		return startDynamicCluster(ctx, cfg, stopper, shutdownC)
+		return launchStartDynamic(ctx, cfg, stopper, shutdownC)
 	}
 
 	/*
@@ -98,7 +103,7 @@ func startLogServiceCluster(
 		if err := parseConfigFromFile(file, cfg); err != nil {
 			return err
 		}
-		if err := startService(ctx, cfg, stopper, shutdownC); err != nil {
+		if err := launchStartService(ctx, cfg, stopper, shutdownC); err != nil {
 			return err
 		}
 	}
@@ -122,7 +127,7 @@ func startTNServiceCluster(
 		if err := parseConfigFromFile(file, cfg); err != nil {
 			return err
 		}
-		if err := startService(ctx, cfg, stopper, shutdownC); err != nil {
+		if err := launchStartService(ctx, cfg, stopper, shutdownC); err != nil {
 			return err
 		}
 	}
@@ -148,14 +153,14 @@ func startCNServiceCluster(
 			return err
 		}
 		upstreams = append(upstreams, fmt.Sprintf("127.0.0.1:%d", cfg.getCNServiceConfig().Frontend.Port))
-		if err := startService(ctx, cfg, stopper, shutdownC); err != nil {
+		if err := launchStartService(ctx, cfg, stopper, shutdownC); err != nil {
 			return err
 		}
 	}
 
 	if shouldStartBuiltinCNProxy(len(upstreams), *withProxy) {
 		// TODO: make configurable for 6001
-		cnProxy = goetty.NewProxy("0.0.0.0:6001", logutil.GetGlobalLogger().Named("mysql-proxy"))
+		cnProxy = launchNewProxy("0.0.0.0:6001", logutil.GetGlobalLogger().Named("mysql-proxy"))
 		for _, address := range upstreams {
 			cnProxy.AddUpStream(address, time.Second*10)
 		}
@@ -186,7 +191,7 @@ func startProxyServiceCluster(
 		if err := parseConfigFromFile(file, cfg); err != nil {
 			return err
 		}
-		if err := startService(ctx, cfg, stopper, shutdownC); err != nil {
+		if err := launchStartService(ctx, cfg, stopper, shutdownC); err != nil {
 			return err
 		}
 	}
@@ -209,7 +214,7 @@ func startPythonUdfServiceCluster(
 		if err := parseConfigFromFile(file, cfg); err != nil {
 			return err
 		}
-		if err := startService(ctx, cfg, stopper, shutdownC); err != nil {
+		if err := launchStartService(ctx, cfg, stopper, shutdownC); err != nil {
 			return err
 		}
 	}
@@ -223,7 +228,7 @@ func waitHAKeeperReady(
 	getClient := func() (logservice.CNHAKeeperClient, error) {
 		ctx, cancel := context.WithTimeoutCause(context.Background(), time.Second*5, moerr.CauseWaitHAKeeperReader1)
 		defer cancel()
-		client, err := logservice.NewCNHAKeeperClient(ctx, service, cfg)
+		client, err := launchNewHAKeeperClient(ctx, service, cfg)
 		if err != nil {
 			err = moerr.AttachCause(ctx, err)
 			logutil.Errorf("hakeeper not ready, err: %v", err)
@@ -243,7 +248,7 @@ func waitHAKeeperReady(
 			if err == nil {
 				return client, nil
 			}
-			time.Sleep(time.Second)
+			launchSleep(time.Second)
 		}
 	}
 }
@@ -262,7 +267,7 @@ func waitHAKeeperRunning(client logservice.CNHAKeeperClient) error {
 			state.State != logpb.HAKeeperRunning {
 			// not ready
 			logutil.Info("retry.wait.hakeeper.running")
-			time.Sleep(time.Second)
+			launchSleep(time.Second)
 			continue
 		}
 		return err
@@ -299,7 +304,7 @@ func waitAnyShardReady(client logservice.CNHAKeeperClient) error {
 			logutil.Info("wait.tn.ready.ready.completed")
 			return nil
 		}
-		time.Sleep(time.Second)
+		launchSleep(time.Second)
 	}
 }
 
