@@ -246,38 +246,6 @@ func (store *txnStore) LogTxnEntry(dbId uint64, tableId uint64, entry txnif.TxnE
 	return db.LogTxnEntry(tableId, entry, readedObject, readedTombstone)
 }
 
-func (store *txnStore) LogTxnState(sync bool) (logEntry entry.Entry, err error) {
-	cmd := txnbase.NewTxnStateCmd(
-		store.txn.GetID(),
-		store.txn.GetTxnState(false),
-		store.txn.GetCommitTS(),
-	)
-	// MarshalBinary already uses sync.Pool internally and handles copy
-	var buf []byte
-	if buf, err = cmd.MarshalBinary(); err != nil {
-		return
-	}
-	logEntry = entry.GetBase()
-	logEntry.SetType(IOET_WALEntry_TxnRecord)
-	if err = logEntry.SetPayload(buf); err != nil {
-		return
-	}
-	info := &entry.Info{
-		Group: wal.GroupC,
-	}
-	logEntry.SetInfo(info)
-	var lsn uint64
-	lsn, err = store.driver.AppendEntry(wal.GroupC, logEntry)
-	if err != nil {
-		return
-	}
-	if sync {
-		err = logEntry.WaitDone()
-	}
-	logutil.Debugf("LogTxnState LSN=%d, Size=%d", lsn, len(buf))
-	return
-}
-
 func (store *txnStore) Close() error {
 	var err error
 	for _, db := range store.dbs {

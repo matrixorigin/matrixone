@@ -25,7 +25,6 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -38,12 +37,10 @@ import (
 var _ TxnService = (*service)(nil)
 
 type service struct {
-	sid     string
-	logger  *log.MOLogger
-	shard   metadata.TNShard
-	storage storage.TxnStorage
-	// sender is owned by the TN store and shared by all replica services.
-	sender    rpc.TxnSender
+	sid       string
+	logger    *log.MOLogger
+	shard     metadata.TNShard
+	storage   storage.TxnStorage
 	stopper   *stopper.Stopper
 	allocator lockservice.LockTableAllocator
 
@@ -60,14 +57,9 @@ type service struct {
 	// due to the network, resulting in the transaction information being written back to the map.
 	// We use the zombieTimeout setting to solve this problem, so that when a transaction exceeds the zombieTimeout
 	// threshold in the map, it is cleaned up.
-	transactions   sync.Map // string(txn.id) -> txnContext
-	zombieTimeout  time.Duration
-	pool           sync.Pool
-	recoveryC      chan struct{}
-	recoveryOnce   sync.Once
-	recoveryCtx    context.Context
-	recoveryCancel context.CancelFunc
-	txnC           chan txn.TxnMeta
+	transactions  sync.Map // string(txn.id) -> txnContext
+	zombieTimeout time.Duration
+	pool          sync.Pool
 }
 
 // NewTxnService create TxnService
@@ -75,17 +67,15 @@ func NewTxnService(
 	sid string,
 	shard metadata.TNShard,
 	storage storage.TxnStorage,
-	sender rpc.TxnSender,
+	_ rpc.TxnSender,
 	zombieTimeout time.Duration,
 	allocator lockservice.LockTableAllocator,
 ) TxnService {
 	logger := util.GetLogger(sid)
-	recoveryCtx, recoveryCancel := context.WithCancel(context.Background())
 	s := &service{
 		sid:     sid,
 		logger:  logger,
 		shard:   shard,
-		sender:  sender,
 		storage: storage,
 		pool: sync.Pool{
 			New: func() any {
@@ -95,12 +85,8 @@ func NewTxnService(
 			shard.ShardID,
 			shard.ReplicaID),
 			stopper.WithLogger(logger.RawLogger())),
-		zombieTimeout:  zombieTimeout,
-		recoveryC:      make(chan struct{}),
-		recoveryCtx:    recoveryCtx,
-		recoveryCancel: recoveryCancel,
-		txnC:           make(chan txn.TxnMeta, 16),
-		allocator:      allocator,
+		zombieTimeout: zombieTimeout,
+		allocator:     allocator,
 	}
 	if err := s.stopper.RunTask(s.gcZombieTxn); err != nil {
 		s.logger.Fatal("start gc zombie txn failed",
@@ -115,25 +101,12 @@ func (s *service) Shard() metadata.TNShard {
 
 func (s *service) Start() error {
 	if err := s.storage.Start(); err != nil {
-		s.finishRecovery()
 		return err
 	}
-	s.logger.Info("txn.service.start.recovery")
-	s.startRecovery()
-	s.logger.Info("txn.service.end.recovery")
 	return nil
 }
 
-// CancelRecovery interrupts recovery without closing storage. TN replica
-// shutdown uses this to unblock Start before running the normal Close path.
-func (s *service) CancelRecovery() {
-	s.recoveryCancel()
-}
-
 func (s *service) Close(destroy bool) error {
-	s.CancelRecovery()
-	s.finishRecovery()
-	s.waitRecoveryCompleted()
 	s.stopper.Stop()
 	closer := s.storage.Close
 	if destroy {
@@ -249,78 +222,6 @@ func (s *service) releaseTxnContext(txnCtx *txnContext) {
 	s.pool.Put(txnCtx)
 }
 
-func (s *service) parallelSendWithRetry(
-	ctx context.Context,
-	requests []txn.TxnRequest,
-	ignoreTxnErrorCodes map[uint16]struct{}) *rpc.SendResult {
-	const (
-		initialBackoff = 100 * time.Millisecond
-		maxBackoff     = time.Second
-	)
-	backoff := initialBackoff
-	for {
-		select {
-		case <-ctx.Done():
-			return nil
-		default:
-			util.LogTxnSendRequests(s.logger, requests)
-			result, err := s.sender.Send(ctx, requests)
-			if err != nil {
-				err = moerr.AttachCause(ctx, err)
-				util.LogTxnSendRequestsFailed(s.logger, requests, err)
-				if !waitRetryBackoff(ctx, backoff) {
-					return nil
-				}
-				backoff = nextParallelSendRetryBackoff(backoff, maxBackoff)
-				continue
-			}
-			util.LogTxnReceivedResponses(s.logger, result.Responses)
-			hasError := false
-			for _, resp := range result.Responses {
-				if resp.TxnError != nil {
-					_, ok := ignoreTxnErrorCodes[uint16(resp.TxnError.Code)]
-					if !ok {
-						hasError = true
-					}
-				}
-			}
-			if !hasError {
-				return result
-			}
-			result.Release()
-			if !waitRetryBackoff(ctx, backoff) {
-				return nil
-			}
-			backoff = nextParallelSendRetryBackoff(backoff, maxBackoff)
-		}
-	}
-}
-
-func waitRetryBackoff(ctx context.Context, backoff time.Duration) bool {
-	if backoff <= 0 {
-		return ctx.Err() == nil
-	}
-	timer := time.NewTimer(backoff)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return false
-	case <-timer.C:
-		return ctx.Err() == nil
-	}
-}
-
-func nextParallelSendRetryBackoff(backoff, maxBackoff time.Duration) time.Duration {
-	if backoff <= 0 {
-		return maxBackoff
-	}
-	backoff *= 2
-	if backoff > maxBackoff {
-		return maxBackoff
-	}
-	return backoff
-}
-
 type txnContext struct {
 	logger   *log.MOLogger
 	nt       *notifier
@@ -328,8 +229,7 @@ type txnContext struct {
 
 	mu struct {
 		sync.RWMutex
-		requests []txn.TxnRequest
-		txn      txn.TxnMeta
+		txn txn.TxnMeta
 	}
 }
 
@@ -361,13 +261,6 @@ func (c *txnContext) getTxn() txn.TxnMeta {
 	return c.getTxnLocked()
 }
 
-func (c *txnContext) updateTxn(txn txn.TxnMeta) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	c.updateTxnLocked(txn)
-}
-
 func (c *txnContext) getTxnLocked() txn.TxnMeta {
 	return c.mu.txn
 }
@@ -380,7 +273,6 @@ func (c *txnContext) updateTxnLocked(txn txn.TxnMeta) {
 func (c *txnContext) resetLocked() {
 	c.nt.close(c.mu.txn.Status)
 	c.nt = nil
-	c.mu.requests = c.mu.requests[:0]
 	c.mu.txn = txn.TxnMeta{}
 }
 

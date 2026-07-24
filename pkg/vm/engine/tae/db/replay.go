@@ -334,6 +334,11 @@ func (replayer *WalReplayer) OnReplayTxn(cmd txnif.TxnCmd, lsn uint64) {
 	var err error
 	replayer.readCount++
 	txnCmd := cmd.(*txnbase.TxnCmd)
+	if len(txnCmd.Participants) > 1 {
+		panic(moerr.NewNotSupportedNoCtxf(
+			"replay of a transaction spanning %d TN shards", len(txnCmd.Participants),
+		))
+	}
 	// If WAL entry splits, they share same prepareTS
 	if txnCmd.PrepareTS.LT(&replayer.maxTs) {
 		return
@@ -351,13 +356,15 @@ func (replayer *WalReplayer) OnReplayTxn(cmd txnif.TxnCmd, lsn uint64) {
 	if err = replayer.db.TxnMgr.OnReplayTxn(txn); err != nil {
 		panic(err)
 	}
-	if txn.Is2PC() {
-		if _, err = txn.Prepare(replayer.db.Opts.Ctx); err != nil {
-			panic(err)
-		}
-	} else {
-		if err = txn.Commit(replayer.db.Opts.Ctx); err != nil {
-			panic(err)
-		}
+	commitReplayTxn(replayer.db.Opts.Ctx, txn)
+}
+
+type replayCommitter interface {
+	Commit(context.Context) error
+}
+
+func commitReplayTxn(ctx context.Context, txn replayCommitter) {
+	if err := txn.Commit(ctx); err != nil {
+		panic(err)
 	}
 }
