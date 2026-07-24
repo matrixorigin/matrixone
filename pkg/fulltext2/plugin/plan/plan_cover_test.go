@@ -224,6 +224,22 @@ func TestBuildFullTextIndexDefs_UnsupportedColType(t *testing.T) {
 	require.Error(t, err)
 }
 
+// TestBuildFullTextIndexDefs_UnsupportedPkType: a FLOAT/DOUBLE primary key must be
+// rejected at CREATE (the segment pk codec can't encode it) rather than accepted and
+// failing later at build/CDC — the SupportedPrimaryKeyTypes/encodePk parity guard.
+func TestBuildFullTextIndexDefs_UnsupportedPkType(t *testing.T) {
+	m := textColMap("id", "body")
+	m["id"].Typ.Id = int32(types.T_float64) // codec has no float case
+	_, _, err := Hooks{}.BuildFullTextIndexDefs(newStubCompilerContext(), ftIndex("ft", "body"), m, nil, "id")
+	require.ErrorContains(t, err, "primary key type")
+
+	// a codec-supported pk (int64) clears the pk-type gate.
+	ok := textColMap("id", "body")
+	ok["id"].Typ.Id = int32(types.T_int64)
+	_, _, err = Hooks{}.BuildFullTextIndexDefs(newStubCompilerContext(), ftIndex("ft", "body"), ok, nil, "id")
+	require.NoError(t, err)
+}
+
 func TestBuildFullTextIndexDefs_BadParser(t *testing.T) {
 	idx := ftIndex("ft", "body")
 	idx.IndexOption = &tree.IndexOption{ParserName: "bogus"}

@@ -63,7 +63,6 @@ type VectorIndexSearchIf interface {
 	// GPU implementations write float32 distances directly; CPU implementations convert on write.
 	SearchFloat32(proc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig, outKeys []int64, outDists []float32) error
 	Load(*sqlexec.SqlProcess) error
-	UpdateConfig(VectorIndexSearchIf) error
 	Destroy()
 }
 
@@ -73,7 +72,6 @@ type VectorIndexSearch struct {
 	ExpireAt   atomic.Int64
 	LastUpdate atomic.Int64
 	Status     atomic.Int32 // 0 - NOT INIT, 1 - LOADED, 2 - marked as outdated,  3 - DESTROYED,  4 or above ERRCODE
-	Outdated   atomic.Bool
 	Algo       VectorIndexSearchIf
 	Cond       *sync.Cond // NOTE: this is RWCond. Wait() will use mutex.RLock() and mutex.RUnlock()
 }
@@ -144,12 +142,10 @@ func (s *VectorIndexSearch) Search(sqlproc *sqlexec.SqlProcess, newalgo VectorIn
 		}
 	}
 
-	// if error mark as outdated
-	err = s.Algo.UpdateConfig(newalgo)
-	if err != nil {
-		s.Outdated.Store(true)
-	}
-
+	// The cached index's configuration is immutable for its lifetime (a config change
+	// evicts the entry via Cache.Remove), so there is nothing to refresh from newalgo
+	// here. Search is therefore pure-read under the shared read lock — no mutation of the
+	// cached algo, so concurrent searches on one entry cannot race on its config.
 	s.extend(false)
 	return s.Algo.Search(sqlproc, query, rt)
 }
@@ -218,7 +214,7 @@ func (c *VectorIndexCache) HouseKeeping() {
 
 	c.IndexMap.Range(func(key, value any) bool {
 		algo := value.(*VectorIndexSearch)
-		if algo.Expired() || algo.Outdated.Load() {
+		if algo.Expired() {
 			expiredkeys = append(expiredkeys, key.(string))
 		}
 		return true

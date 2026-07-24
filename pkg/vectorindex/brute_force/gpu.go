@@ -215,10 +215,6 @@ func (idx *GpuAdhocBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries
 	return
 }
 
-func (idx *GpuAdhocBruteForceIndex[T]) UpdateConfig(sif cache.VectorIndexSearchIf) error {
-	return nil
-}
-
 func (idx *GpuAdhocBruteForceIndex[T]) Destroy() {
 	idx.dataset = nil
 }
@@ -422,10 +418,6 @@ func (idx *GpuBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries any,
 	}
 	retkeys = keys
 	return
-}
-
-func (idx *GpuBruteForceIndex[T]) UpdateConfig(sif cache.VectorIndexSearchIf) error {
-	return nil
 }
 
 func (idx *GpuBruteForceIndex[T]) Destroy() {

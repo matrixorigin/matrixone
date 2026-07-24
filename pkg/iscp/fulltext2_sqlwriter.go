@@ -20,11 +20,16 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/datalink"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/fulltext2"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 const defaultFulltext2Capacity int64 = 1000000
@@ -40,12 +45,45 @@ type Fulltext2SqlWriter struct {
 	pkType     int32                 // types.T of the source primary key
 	pkPos      int32                 // pk column index in the extracted row
 	textPos    []int32               // indexed text columns (all idxdef.Parts) — multi-column joins with '\n'
+	textTypes  []int32               // types.T of each textPos column (to detect T_datalink), textPos-aligned
 	capacity   int64                 // max docs per delta segment (max_index_capacity)
 	postingCap int64                 // max postings per delta segment (max_postings_capacity)
+
+	// rootFS is the CN root FileService (set by NewIndexConsumer from GetExecutorRuntime),
+	// used to resolve DATALINK columns to their file CONTENT during CDC — parity with the
+	// sync build (fulltext2_create resolves datalink via GetPlainText). nil ⇒ datalink
+	// columns index the URL string (fallback when no executor FS is attached, e.g. tests).
+	rootFS      fileservice.FileService
+	datalinkPos bool             // any textPos column is a datalink (skip the proc build when none)
+	dlProc      *process.Process // lazily-built proc carrying rootFS, for datalink GetPlainText
 
 	cdc   *fulltext2.Cdc
 	ndata int
 	last  string
+}
+
+// datalinkProc lazily builds a minimal proc that carries only the CN root FileService,
+// enough for datalink.GetPlainText (a file read) — no txn/lock/etc. A background context
+// is fine: the CDC sinker is already a background loop, and a datalink read has no
+// per-request cancellation to honor. Built once and reused across rows/flushes.
+func (w *Fulltext2SqlWriter) datalinkProc() *process.Process {
+	if w.dlProc == nil {
+		w.dlProc = process.NewTopProcess(context.Background(), mpool.MustNewZero(),
+			nil, nil, w.rootFS, nil, nil, nil, nil, nil, nil)
+	}
+	return w.dlProc
+}
+
+// resolveDatalink turns a datalink URL into its file's plain text (PDF/DOCX extracted),
+// exactly as the sync build does in fulltext2_create.rowTerms — so a datalink column is
+// indexed by CONTENT consistently whether a row arrives at CREATE or via CDC.
+func (w *Fulltext2SqlWriter) resolveDatalink(url string) ([]byte, error) {
+	proc := w.datalinkProc()
+	dl, err := datalink.NewDatalink(url, proc)
+	if err != nil {
+		return nil, err
+	}
+	return dl.GetPlainText(proc)
 }
 
 var _ IndexSqlWriter = (*Fulltext2SqlWriter)(nil)
@@ -74,8 +112,16 @@ func NewFulltext2SqlWriter(algo string, jobID JobID, info *ConsumerInfo, tablede
 	pkPos := tabledef.Name2ColIndex[tabledef.Pkey.PkeyColName]
 	pkTyp := tabledef.Cols[pkPos].Typ
 	textPos := make([]int32, 0, len(idxdef.Parts))
+	textTypes := make([]int32, 0, len(idxdef.Parts))
+	datalinkPos := false
 	for _, p := range idxdef.Parts {
-		textPos = append(textPos, tabledef.Name2ColIndex[p])
+		ci := tabledef.Name2ColIndex[p]
+		textPos = append(textPos, ci)
+		ty := tabledef.Cols[ci].Typ.Id
+		textTypes = append(textTypes, ty)
+		if types.T(ty) == types.T_datalink {
+			datalinkPos = true
+		}
 	}
 
 	// parser + capacity from algo_params (the sinker runs in an internal ISCP proc
@@ -100,13 +146,15 @@ func NewFulltext2SqlWriter(algo string, jobID JobID, info *ConsumerInfo, tablede
 	}
 
 	return &Fulltext2SqlWriter{
-		cfg:        fulltext2.TableConfig{DbName: info.DBName, IndexTable: storage, MetadataTable: meta, Parser: flat["parser"], PositionFree: flat[catalog.IndexAlgoParamPositionFree] == "true"},
-		pkType:     int32(pkTyp.Id),
-		pkPos:      pkPos,
-		textPos:    textPos,
-		capacity:   capacity,
-		postingCap: postingCap,
-		cdc:        fulltext2.NewCdc(int32(pkTyp.Id)),
+		cfg:         fulltext2.TableConfig{DbName: info.DBName, IndexTable: storage, MetadataTable: meta, Parser: flat["parser"], PositionFree: flat[catalog.IndexAlgoParamPositionFree] == "true"},
+		pkType:      int32(pkTyp.Id),
+		pkPos:       pkPos,
+		textPos:     textPos,
+		textTypes:   textTypes,
+		datalinkPos: datalinkPos,
+		capacity:    capacity,
+		postingCap:  postingCap,
+		cdc:         fulltext2.NewCdc(int32(pkTyp.Id)),
 	}, nil
 }
 
@@ -157,8 +205,10 @@ func (w *Fulltext2SqlWriter) Delete(ctx context.Context, row []any) error {
 // row identically (a doc's searchability must not depend on which path indexed
 // it). For a json parser each column is flattened to its leaf values PER COLUMN
 // (FlattenJSONColumn), exactly as rowTerms does, so CdcTokenizer then just ngrams the
-// flattened text (it no longer re-flattens). datalink columns are NOT resolved here —
-// CDC of a datalink column indexes the URL string; file-content datalink is build-only.
+// flattened text (it no longer re-flattens). A datalink column is resolved to its file
+// CONTENT via the CN root FileService (resolveDatalink) — parity with the sync build's
+// GetPlainText, so identical values index identically whether seen at CREATE or via CDC;
+// with no FileService attached (w.rootFS==nil, e.g. tests) it falls back to the URL.
 func (w *Fulltext2SqlWriter) rowText(row []any) (string, error) {
 	for _, pos := range w.textPos {
 		if row[pos] == nil {
@@ -186,6 +236,14 @@ func (w *Fulltext2SqlWriter) rowText(row []any) (string, error) {
 				return "", err
 			}
 			b.Write(ft)
+		} else if types.T(w.textTypes[i]) == types.T_datalink && w.rootFS != nil {
+			// Resolve the datalink to its file CONTENT (parity with the sync build);
+			// falls back to the URL string when no FileService is attached (w.rootFS==nil).
+			content, err := w.resolveDatalink(ftRowText(row[pos]))
+			if err != nil {
+				return "", err
+			}
+			b.Write(content)
 		} else {
 			b.WriteString(ftRowText(row[pos]))
 		}

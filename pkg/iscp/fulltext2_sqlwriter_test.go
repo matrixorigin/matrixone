@@ -28,11 +28,12 @@ import (
 
 func newFT2Writer(parser string) *Fulltext2SqlWriter {
 	return &Fulltext2SqlWriter{
-		cfg:     fulltext2.TableConfig{DbName: "db", IndexTable: "__store", MetadataTable: "__meta", Parser: parser},
-		pkType:  int32(types.T_int64),
-		pkPos:   0,
-		textPos: []int32{1},
-		cdc:     fulltext2.NewCdc(int32(types.T_int64)),
+		cfg:       fulltext2.TableConfig{DbName: "db", IndexTable: "__store", MetadataTable: "__meta", Parser: parser},
+		pkType:    int32(types.T_int64),
+		pkPos:     0,
+		textPos:   []int32{1},
+		textTypes: []int32{int32(types.T_varchar)},
+		cdc:       fulltext2.NewCdc(int32(types.T_int64)),
 	}
 }
 
@@ -54,6 +55,7 @@ func TestFtRowTextAndCopyPk(t *testing.T) {
 func TestFulltext2WriterRowText(t *testing.T) {
 	w := newFT2Writer(fulltext2.ParserNgram)
 	w.textPos = []int32{1, 2}
+	w.textTypes = []int32{int32(types.T_varchar), int32(types.T_varchar)}
 
 	// two text columns joined with '\n'.
 	txt, err := w.rowText([]any{int64(1), []byte("hello"), "world"})
@@ -76,6 +78,41 @@ func TestFulltext2WriterRowText(t *testing.T) {
 	txt, err = wjv.rowText([]any{int64(1), []byte(`{"a":"origin"}`)})
 	require.NoError(t, err)
 	require.Contains(t, txt, "origin")
+}
+
+// TestFulltext2WriterDatalinkFallback: with no FileService attached (rootFS==nil, e.g.
+// tests / a CN with no executor FS) a datalink column falls back to indexing the URL
+// string rather than panicking or erroring.
+func TestFulltext2WriterDatalinkFallback(t *testing.T) {
+	w := newFT2Writer(fulltext2.ParserNgram)
+	w.textTypes = []int32{int32(types.T_datalink)} // the single indexed column is a datalink
+	w.rootFS = nil                                 // no FileService
+
+	txt, err := w.rowText([]any{int64(1), "file:///docs/a.txt"})
+	require.NoError(t, err)
+	require.Equal(t, "file:///docs/a.txt", txt) // URL fallback, no resolution
+}
+
+// TestNewFulltext2SqlWriterDatalinkDetected: a datalink indexed column is flagged
+// (datalinkPos) and its type recorded, so rowText knows to resolve it to file content.
+func TestNewFulltext2SqlWriterDatalinkDetected(t *testing.T) {
+	tabledef := &plan.TableDef{
+		Name2ColIndex: map[string]int32{"id": 0, "doc": 1},
+		Cols: []*plan.ColDef{
+			{Name: "id", Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: "doc", Typ: plan.Type{Id: int32(types.T_datalink)}},
+		},
+		Pkey: &plan.PrimaryKeyDef{PkeyColName: "id"},
+	}
+	indexdef := []*plan.IndexDef{
+		{IndexName: "ft2", IndexAlgoTableType: catalog.FullText2Index_TblType_Storage, IndexTableName: "__store", Parts: []string{"doc"}, IndexAlgoParams: `{"parser":"ngram"}`},
+		{IndexName: "ft2", IndexAlgoTableType: catalog.FullText2Index_TblType_Metadata, IndexTableName: "__meta", Parts: []string{"doc"}},
+	}
+	wr, err := NewFulltext2SqlWriter("fulltext2", JobID{}, &ConsumerInfo{DBName: "db"}, tabledef, indexdef)
+	require.NoError(t, err)
+	w := wr.(*Fulltext2SqlWriter)
+	require.True(t, w.datalinkPos)
+	require.Equal(t, []int32{int32(types.T_datalink)}, w.textTypes)
 }
 
 func TestFulltext2WriterOps(t *testing.T) {

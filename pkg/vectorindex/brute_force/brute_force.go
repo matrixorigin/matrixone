@@ -299,10 +299,6 @@ func (idx *UsearchBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries 
 	return
 }
 
-func (idx *UsearchBruteForceIndex[T]) UpdateConfig(sif cache.VectorIndexSearchIf) error {
-	return nil
-}
-
 func (idx *UsearchBruteForceIndex[T]) Destroy() {
 	if idx.deallocator != nil {
 		idx.deallocator.Deallocate()
@@ -314,10 +310,6 @@ func (idx *UsearchBruteForceIndex[T]) Destroy() {
 }
 
 func (idx *GoBruteForceIndex[T, R]) Load(sqlproc *sqlexec.SqlProcess) error {
-	return nil
-}
-
-func (idx *GoBruteForceIndex[T, R]) UpdateConfig(sif cache.VectorIndexSearchIf) error {
 	return nil
 }
 

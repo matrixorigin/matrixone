@@ -432,8 +432,3 @@ func (s *IvfpqSearch[B, Q]) Destroy() {
 	}
 	s.Indexes = nil
 }
-
-// UpdateConfig implements cache.VectorIndexSearchIf.
-func (s *IvfpqSearch[B, Q]) UpdateConfig(newalgo cache.VectorIndexSearchIf) error {
-	return nil
-}

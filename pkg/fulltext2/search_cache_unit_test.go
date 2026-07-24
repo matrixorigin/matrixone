@@ -133,17 +133,13 @@ func TestFulltext2SearchStreamingEmit(t *testing.T) {
 	}
 }
 
-func TestFulltext2SearchUpdateConfigAndDestroy(t *testing.T) {
+func TestFulltext2SearchDestroy(t *testing.T) {
 	s := loadedSearch(t)
 
-	// UpdateConfig from a fresh handle copies its cfg.
-	next := NewFulltext2Search(TableConfig{IndexTable: "__store", Parser: ParserGojieba})
-	require.NoError(t, s.UpdateConfig(next))
-	require.Equal(t, ParserGojieba, s.cfg.Parser)
-
-	// a nil / non-matching handle is a no-op (no panic, cfg unchanged).
-	require.NoError(t, s.UpdateConfig(nil))
-	require.Equal(t, ParserGojieba, s.cfg.Parser)
+	// The cached config is immutable for the entry's lifetime (no UpdateConfig hook —
+	// a config change evicts the entry), so Search is pure-read; here we just pin that
+	// the constructed cfg is what Load queries with and that Destroy tears down cleanly.
+	require.Equal(t, ParserDefault, s.cfg.Parser)
 
 	// Destroy frees and clears the loaded index.
 	s.Destroy()

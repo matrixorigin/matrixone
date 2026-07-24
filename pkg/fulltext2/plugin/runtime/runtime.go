@@ -81,9 +81,23 @@ func (CatalogHooks) IsVectorIndex() bool                    { return false } // 
 func (CatalogHooks) SupportedOpTypes() map[string]string    { return nil }
 func (CatalogHooks) SupportedIncludeColumnTypes() []types.T { return nil }
 
-// SupportedPrimaryKeyTypes — nil = no PK-type constraint (the segment pk codec
-// accepts int/varchar/uuid/temporal/decimal; validated at build).
-func (CatalogHooks) SupportedPrimaryKeyTypes() []types.T { return nil }
+// SupportedPrimaryKeyTypes lists EXACTLY the pk types the segment codec (pkcodec.go
+// encodePk/decodePk) can round-trip. It is deliberately NOT nil ("any type"): a nil let
+// a FLOAT / DOUBLE (or any other unsupported) primary key pass CREATE INDEX validation
+// and then fail at build / CDC with "unsupported pk type" — an accepted DDL that dies at
+// runtime. Keep this in lockstep with encodePk's switch so DDL validation and the codec
+// agree.
+func (CatalogHooks) SupportedPrimaryKeyTypes() []types.T {
+	return []types.T{
+		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_bit, types.T_decimal64, types.T_decimal128,
+		types.T_date, types.T_datetime, types.T_time, types.T_timestamp,
+		types.T_char, types.T_varchar, types.T_text,
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_json,
+		types.T_datalink, types.T_uuid,
+	}
+}
 
 // ValidQuantization — no quantization.
 func (CatalogHooks) ValidQuantization(_, _ string) error { return nil }

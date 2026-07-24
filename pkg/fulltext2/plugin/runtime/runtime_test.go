@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	catalogplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/catalog"
 	"github.com/stretchr/testify/require"
 )
@@ -54,7 +55,15 @@ func TestCatalogHooks(t *testing.T) {
 	require.Nil(t, h.SupportedVectorTypes())
 	require.Nil(t, h.SupportedOpTypes())
 	require.Nil(t, h.SupportedIncludeColumnTypes())
-	require.Nil(t, h.SupportedPrimaryKeyTypes())
+	// SupportedPrimaryKeyTypes mirrors the pk codec's domain (NOT nil "any type"): it
+	// includes int/varchar/uuid/temporal/decimal but must EXCLUDE FLOAT/DOUBLE, which the
+	// codec cannot encode — else a float pk would pass CREATE and fail at build.
+	pkTypes := h.SupportedPrimaryKeyTypes()
+	require.NotEmpty(t, pkTypes)
+	require.Contains(t, pkTypes, types.T_int64)
+	require.Contains(t, pkTypes, types.T_varchar)
+	require.NotContains(t, pkTypes, types.T_float32)
+	require.NotContains(t, pkTypes, types.T_float64)
 
 	// IsVectorIndex — fulltext2 is a fulltext-family engine, NOT an ANN vector index;
 	// this is the capability behind indexplugin.IsVectorIndexAlgo, so a misreport here

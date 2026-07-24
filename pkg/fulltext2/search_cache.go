@@ -169,15 +169,6 @@ func (s *Fulltext2Search) SearchFloat32(proc *sqlexec.SqlProcess, query any, rt 
 	return moerr.NewInternalError(proc.GetContext(), "fulltext2 search: SearchFloat32 not supported")
 }
 
-// UpdateConfig refreshes the table config from a freshly-built search handle (the
-// cache passes the newest one on each call).
-func (s *Fulltext2Search) UpdateConfig(newalgo veccache.VectorIndexSearchIf) error {
-	if n, ok := newalgo.(*Fulltext2Search); ok {
-		s.cfg = n.cfg
-	}
-	return nil
-}
-
 // Destroy munmaps the loaded index's base segments (their posting blocks + positions
 // are views into those mappings), then drops it. The cache holds the write lock
 // around this, so no search is in flight.

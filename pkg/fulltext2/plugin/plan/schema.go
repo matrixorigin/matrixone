@@ -22,11 +22,17 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	ftv2rt "github.com/matrixorigin/matrixone/pkg/fulltext2/plugin/runtime"
+	catalogplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/catalog"
 	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
+
+// fulltext2CatalogHooks is the runtime catalog contract used here for pk-type
+// validation, so DDL rejects a primary key the segment codec can't encode.
+var fulltext2CatalogHooks = ftv2rt.CatalogHooks{}
 
 // BuildFullTextIndexDefs constructs a fulltext2 index's two hidden tables — a
 // chunked segment store + a metadata table (bm25 layout) — from CREATE FULLTEXT2
@@ -41,6 +47,14 @@ func (Hooks) BuildFullTextIndexDefs(
 ) ([]*plan.IndexDef, []*plan.TableDef, error) {
 	if pkeyName == "" || pkeyName == catalog.FakePrimaryKeyColName {
 		return nil, nil, moerr.NewInternalErrorNoCtx("primary key cannot be empty for fulltext2 index")
+	}
+	// Reject a primary key the segment pk codec can't encode (e.g. FLOAT/DOUBLE) HERE,
+	// at CREATE, instead of letting an accepted DDL fail later at build/CDC. A composite
+	// PK is a synthesized CP key absent from colMap (ok=false) and is encoded as bytes, so
+	// it is intentionally not gated.
+	if col, ok := colMap[pkeyName]; ok && !catalogplugin.SupportsPrimaryKeyType(fulltext2CatalogHooks, types.T(col.Typ.Id)) {
+		return nil, nil, moerr.NewNotSupported(ctx.GetContext(),
+			fmt.Sprintf("fulltext2 index does not support primary key type '%s'", types.T(col.Typ.Id).String()))
 	}
 
 	// Reject a duplicate fulltext2 index on the same column set.

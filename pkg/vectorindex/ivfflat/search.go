@@ -538,7 +538,3 @@ func (s *IvfflatSearch[T]) SearchFloat32(proc *sqlexec.SqlProcess, query any, rt
 	}
 	return nil
 }
-
-func (s *IvfflatSearch[T]) UpdateConfig(newalgo cache.VectorIndexSearchIf) error {
-	return nil
-}
