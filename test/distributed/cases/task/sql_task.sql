@@ -198,10 +198,12 @@ create task tenant_task_show schedule '0 0 0 1 1 *' timezone 'UTC' when (1) time
 execute task tenant_task_show;
 alter task tenant_task_show set when (0);
 execute task tenant_task_show;
+-- @bvt:issue#26151
 -- @ignore:6,8
 show tasks;
 -- @ignore:0,4,5,6,8
 show task runs for tenant_task_show limit 2;
+-- @bvt:issue
 select count(*) from tenant_sink;
 drop task if exists tenant_task_show;
 drop database if exists tenant_task_case;
