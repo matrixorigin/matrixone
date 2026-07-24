@@ -211,6 +211,13 @@ func IndexParamsToStringList(indexParams string) (string, error) {
 		res += fmt.Sprintf(" %s = %s ", Hour, val)
 	}
 
+	// SECOND is the async-index AUTO_UPDATE compaction cadence (idxcron reads it as the
+	// explicit interval). Like DAY/HOUR it must round-trip through SHOW CREATE / checkpoint
+	// restore for every async index type, else the cadence silently reverts to the default.
+	if val, ok := result[Second]; ok {
+		res += fmt.Sprintf(" %s = %s ", Second, val)
+	}
+
 	if val, ok := result[Quantization]; ok {
 		res += fmt.Sprintf(" %s '%s' ", Quantization, val)
 	}

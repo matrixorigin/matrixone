@@ -527,7 +527,11 @@ func renderCreateTableDDLFullWithForeignKeysAndClusterBy(tableName string, cols 
 		sb.WriteString("  ")
 		fullText := isFullTextKey(key)
 		if fullText {
-			sb.WriteString("FULLTEXT ")
+			if isFullText2Key(key) {
+				sb.WriteString("FULLTEXT2 ")
+			} else {
+				sb.WriteString("FULLTEXT ")
+			}
 		} else if key.Unique {
 			sb.WriteString("UNIQUE ")
 		}
@@ -4898,7 +4902,17 @@ func isFullTextIndex(info *indexDDLInfo) bool {
 }
 
 func isFullTextKey(key TableUniqueKey) bool {
-	return catalog.IsFullTextIndexAlgo(key.Algo)
+	// Both classic FULLTEXT and FULLTEXT2 render as a fulltext-family clause (no KEY/USING
+	// suffix, WITH PARSER + options). Recognizing only classic here would emit
+	// `KEY ... USING fulltext2` for a FULLTEXT2 constraint reconstructed from mo_tables,
+	// which restore routes to BuildSecondaryIndexDefs — that rejects fulltext2 (it needs
+	// BuildFullTextIndexDefs), breaking checkpoint restore. The keyword itself is chosen by
+	// isFullText2Key at the render site.
+	return catalog.IsFullTextIndexAlgo(key.Algo) || catalog.IsFullText2IndexAlgo(key.Algo)
+}
+
+func isFullText2Key(key TableUniqueKey) bool {
+	return catalog.IsFullText2IndexAlgo(key.Algo)
 }
 
 func appendIndexAlgorithmDDL(sb *strings.Builder, algo string) {

@@ -46,3 +46,24 @@ func TestIndexParamsToStringListFulltext2Options(t *testing.T) {
 	require.NoError(t, err)
 	require.NotContains(t, s2, IndexAlgoParamPositionFree)
 }
+
+// TestIndexParamsToStringListAsyncCadence pins that the AUTO_UPDATE compaction cadence —
+// DAY / HOUR / SECOND — round-trips through the shared SHOW CREATE / checkpoint-restore
+// renderer. SECOND in particular was dropped, so an async index (fulltext2 / ivfflat /
+// cagra / ivfpq — all persist it) created with SECOND=5 silently lost its cadence on
+// SHOW CREATE / checkpoint restore and reverted to the idxcron default interval.
+func TestIndexParamsToStringListAsyncCadence(t *testing.T) {
+	params, err := IndexParamsMapToJsonString(map[string]string{
+		AutoUpdate: "true",
+		Day:        "1",
+		Hour:       "2",
+		Second:     "5",
+	})
+	require.NoError(t, err)
+
+	s, err := IndexParamsToStringList(params)
+	require.NoError(t, err)
+	require.Contains(t, s, Day+" = 1")
+	require.Contains(t, s, Hour+" = 2")
+	require.Contains(t, s, Second+" = 5")
+}

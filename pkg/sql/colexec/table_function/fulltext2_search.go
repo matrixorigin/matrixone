@@ -128,6 +128,11 @@ func (u *fulltext2SearchState) call(tf *TableFunction, proc *process.Process) (v
 				}
 				return vm.CancelResult, nil
 			}
+			// b.keys ownership was received from the producer; recycle it on EVERY exit
+			// from here (incl. the append error paths below), else a mid-stream mpool
+			// failure leaks the pooled buffer. Safe to defer: AppendColumnBuffer copies
+			// into u.batch, so u.batch never aliases b.keys.
+			defer fulltext2.PutColumnBuffer(b.keys)
 			// Typed bulk decode of the pk column — no per-pk boxing (the mirror of the
 			// producer's box-free encode).
 			if err := fulltext2.AppendColumnBuffer(b.keys, u.batch.Vecs[0], proc.Mp()); err != nil {
@@ -136,12 +141,15 @@ func (u *fulltext2SearchState) call(tf *TableFunction, proc *process.Process) (v
 			if withScore {
 				for i := 0; i < b.keys.N; i++ {
 					// score column is T_float32 (matches ftIndexColdefs / classic fulltext);
-					// the engine computes float64 relevance, narrow it on append.
-					vector.AppendFixed[float32](u.batch.Vecs[1], float32(b.distances[i]), false, proc.Mp())
+					// the engine computes float64 relevance, narrow it on append. Propagate
+					// the append error — otherwise SetRowCount below would publish a batch
+					// with fewer scores than keys (a malformed, mismatched-length batch).
+					if err := vector.AppendFixed[float32](u.batch.Vecs[1], float32(b.distances[i]), false, proc.Mp()); err != nil {
+						return vm.CancelResult, err
+					}
 				}
 			}
 			u.batch.SetRowCount(b.keys.N)
-			fulltext2.PutColumnBuffer(b.keys) // batch copied into u.batch; recycle its buffer
 			return vm.CallResult{Status: vm.ExecNext, Batch: u.batch}, nil
 		case <-proc.Ctx.Done():
 			return vm.CancelResult, proc.Ctx.Err()
