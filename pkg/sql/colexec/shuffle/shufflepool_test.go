@@ -313,6 +313,83 @@ func TestShufflePoolRecycleCacheUsesWorkerBound(t *testing.T) {
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
+func TestShufflePoolRecycleCacheReusesAcrossPhasedBuckets(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	sp := NewShufflePool(2, 1, false)
+	defer sp.abort(proc.Mp())
+
+	pooled := make(map[*batch.Batch]struct{}, sp.readyLimit)
+	for range sp.readyLimit {
+		bat := batch.NewOffHeapWithSize(1)
+		bat.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int64.ToType())
+		require.NoError(t, bat.Vecs[0].PreExtend(128, proc.Mp()))
+		bat.ShuffleIDX = 0
+		pooled[bat] = struct{}{}
+		sp.putBatchToPool(bat, proc.Mp())
+	}
+	require.Len(t, sp.batchPools[0], sp.readyLimit)
+	require.Empty(t, sp.batchPools[1])
+
+	input := testutil.NewBatch(
+		[]types.Type{types.T_int64.ToType()}, false, 128, proc.Mp())
+	defer input.Clean(proc.Mp())
+	done, err := writeBatchToBucketForTest(sp, input, proc, 1)
+	require.NoError(t, err)
+	require.True(t, done)
+
+	output := sp.getLastBatch(1)
+	require.NotNil(t, output)
+	defer sp.discardBatch(output, proc.Mp())
+	_, reused := pooled[output]
+	require.True(t, reused, "an active bucket must reuse a buffer cached by an idle bucket")
+	require.Equal(t, sp.readyLimit-1, sp.batchPoolLength())
+}
+
+func BenchmarkShufflePoolRecycleCachePhasedBuckets(b *testing.B) {
+	proc := testutil.NewProcessWithMPool(b, "", mpool.MustNewZero())
+	defer proc.Free()
+	sp := NewShufflePool(2, 1, false)
+	defer sp.abort(proc.Mp())
+
+	const rows = 1024
+	for range sp.readyLimit {
+		bat := batch.NewOffHeapWithSize(1)
+		bat.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int64.ToType())
+		if err := bat.Vecs[0].PreExtend(rows, proc.Mp()); err != nil {
+			b.Fatal(err)
+		}
+		bat.ShuffleIDX = 0
+		sp.putBatchToPool(bat, proc.Mp())
+	}
+	input := testutil.NewBatch(
+		[]types.Type{types.T_int64.ToType()}, false, rows, proc.Mp())
+	defer input.Clean(proc.Mp())
+	sels := make([][]int32, sp.bucketNum)
+	sels[1] = make([]int32, rows)
+	for i := range sels[1] {
+		sels[1][i] = int32(i)
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		done, err := writeSelectionsForTest(sp, input, sels, proc)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if !done {
+			b.Fatal("phased bucket write was backpressured")
+		}
+		output := sp.getLastBatch(1)
+		if output == nil {
+			b.Fatal("phased bucket write produced no output")
+		}
+		sp.putBatchToPool(output, proc.Mp())
+	}
+	b.StopTimer()
+}
+
 func TestShufflePoolPeakIsReportedByExactlyOneHolder(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()

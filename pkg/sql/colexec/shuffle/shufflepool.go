@@ -107,9 +107,6 @@ func NewShufflePool(bucketNum int32, maxHolders int32, drainAll bool) *ShufflePo
 		sp.endingWaiters[i] = make(chan bool, 1)
 		sp.bucketSpaceWaiters[i] = make(chan struct{})
 	}
-	for i := range sp.memoryShards {
-		sp.memoryShards[i].tracked = make(map[*batch.Batch]int64)
-	}
 	return sp
 }
 
@@ -329,6 +326,37 @@ func (sp *ShufflePool) putBatchToPoolLocked(bucket int32, buf *batch.Batch, m *m
 
 // getBatchFromPoolLocked is called with batchLocks[bucket] held.
 func (sp *ShufflePool) getBatchFromPoolLocked(bucket int32) *batch.Batch {
+	if buf := sp.popBatchFromPoolLocked(bucket); buf != nil {
+		return buf
+	}
+	if sp.batchPoolCount.Load() == 0 {
+		return nil
+	}
+
+	// Cached batches are schema-compatible across buckets in one shuffle pool.
+	// Steal from an idle bucket so it cannot monopolize the global cache bound
+	// after the input distribution changes. TryLock is required here because
+	// the caller already owns its bucket lock and another writer may be doing
+	// the symmetric steal.
+	for offset := int32(1); offset < sp.bucketNum; offset++ {
+		donor := bucket + offset
+		if donor >= sp.bucketNum {
+			donor -= sp.bucketNum
+		}
+		if !sp.batchLocks[donor].TryLock() {
+			continue
+		}
+		buf := sp.popBatchFromPoolLocked(donor)
+		sp.batchLocks[donor].Unlock()
+		if buf != nil {
+			return buf
+		}
+	}
+	return nil
+}
+
+// popBatchFromPoolLocked is called with batchLocks[bucket] held.
+func (sp *ShufflePool) popBatchFromPoolLocked(bucket int32) *batch.Batch {
 	pool := sp.batchPools[bucket]
 	if len(pool) == 0 {
 		return nil
@@ -358,6 +386,9 @@ func (sp *ShufflePool) syncBatch(buf *batch.Batch) {
 	shard := sp.memoryShard(buf)
 	shard.Lock()
 	allocated := int64(buf.Allocated())
+	if shard.tracked == nil {
+		shard.tracked = make(map[*batch.Batch]int64)
+	}
 	previous := shard.tracked[buf]
 	shard.tracked[buf] = allocated
 	shard.Unlock()
