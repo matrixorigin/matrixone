@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/stretchr/testify/require"
 
@@ -140,6 +141,309 @@ func makeCurrentRowFrame() *plan.FrameClause {
 		Type:  plan.FrameClause_ROWS,
 		Start: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
 		End:   &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+	}
+}
+
+func makePreparedRowsBoundExpr(t *testing.T, pos int32) *plan.Expr {
+	t.Helper()
+	param := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_text)},
+		Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: pos}},
+	}
+	targetType := plan.Type{Id: int32(types.T_uint64), NotNullable: true}
+	expr, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), "cast", []*plan.Expr{
+		param,
+		{Typ: targetType, Expr: &plan.Expr_T{T: &plan.TargetType{}}},
+	})
+	require.NoError(t, err)
+	return expr
+}
+
+func makePreparedRowsFrame(t *testing.T, startPos, endPos int32) *plan.FrameClause {
+	t.Helper()
+	return &plan.FrameClause{
+		Type: plan.FrameClause_ROWS,
+		Start: &plan.FrameBound{
+			Type: plan.FrameBound_PRECEDING,
+			Val:  makePreparedRowsBoundExpr(t, startPos),
+		},
+		End: &plan.FrameBound{
+			Type: plan.FrameBound_FOLLOWING,
+			Val:  makePreparedRowsBoundExpr(t, endPos),
+		},
+	}
+}
+
+func makeWindowWithFrame(frame *plan.FrameClause) *Window {
+	spec := makeWindowSpec()
+	spec.GetW().Frame = frame
+	return &Window{
+		WinSpecList: []*plan.Expr{spec},
+		Aggs:        []aggexec.AggFuncExecExpression{newAggExpr()},
+	}
+}
+
+func setWindowPrepareParams(t *testing.T, proc *process.Process, values ...*string) *vector.Vector {
+	t.Helper()
+	params := vector.NewVec(types.T_text.ToType())
+	for _, value := range values {
+		var raw []byte
+		isNull := value == nil
+		if value != nil {
+			raw = []byte(*value)
+		}
+		require.NoError(t, vector.AppendBytes(params, raw, isNull, proc.Mp()))
+	}
+	proc.SetPrepareParams(params)
+	return params
+}
+
+func stringPtr(value string) *string {
+	return &value
+}
+
+func requirePreparedRowsBoundUnchanged(t *testing.T, expr *plan.Expr, pos int32) {
+	t.Helper()
+	require.NotNil(t, expr.GetF())
+	require.NotEmpty(t, expr.GetF().Args)
+	require.NotNil(t, expr.GetF().Args[0].GetP())
+	require.Equal(t, pos, expr.GetF().Args[0].GetP().Pos)
+}
+
+func TestWindowPrepareMaterializesRowsFrameBounds(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	planned := makePreparedRowsFrame(t, 0, 1)
+	arg := makeWindowWithFrame(planned)
+	firstParams := setWindowPrepareParams(t, proc, stringPtr("1"), stringPtr("2"))
+
+	require.NoError(t, arg.Prepare(proc))
+	require.Len(t, arg.ctr.runtimeFrames, 1)
+	require.NotSame(t, planned, arg.ctr.runtimeFrames[0])
+	require.Equal(t, uint64(1), arg.ctr.runtimeFrames[0].Start.Val.GetLit().GetU64Val())
+	require.Equal(t, uint64(2), arg.ctr.runtimeFrames[0].End.Val.GetLit().GetU64Val())
+	requirePreparedRowsBoundUnchanged(t, planned.Start.Val, 0)
+	requirePreparedRowsBoundUnchanged(t, planned.End.Val, 1)
+
+	arg.Reset(proc, false, nil)
+	require.Nil(t, arg.ctr.runtimeFrames)
+
+	proc.SetPrepareParams(nil)
+	firstParams.Free(proc.Mp())
+	secondParams := setWindowPrepareParams(t, proc, stringPtr("3"), stringPtr("4"))
+	require.NoError(t, arg.Prepare(proc))
+	require.Equal(t, uint64(3), arg.ctr.runtimeFrames[0].Start.Val.GetLit().GetU64Val())
+	require.Equal(t, uint64(4), arg.ctr.runtimeFrames[0].End.Val.GetLit().GetU64Val())
+	requirePreparedRowsBoundUnchanged(t, planned.Start.Val, 0)
+	requirePreparedRowsBoundUnchanged(t, planned.End.Val, 1)
+
+	arg.Free(proc, false, nil)
+	require.Nil(t, arg.ctr.runtimeFrames)
+	proc.SetPrepareParams(nil)
+	secondParams.Free(proc.Mp())
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestWindowPrepareValidatesRowsFrameBounds(t *testing.T) {
+	tests := []struct {
+		name       string
+		value      *string
+		missing    bool
+		emptyParam bool
+		want       uint64
+		wantErr    bool
+	}{
+		{name: "zero", value: stringPtr("0"), want: 0},
+		{name: "maximum", value: stringPtr("18446744073709551615"), want: math.MaxUint64},
+		{name: "negative", value: stringPtr("-1"), wantErr: true},
+		{name: "fractional", value: stringPtr("1.5"), wantErr: true},
+		{name: "null", value: nil, wantErr: true},
+		{name: "overflow", value: stringPtr("18446744073709551616"), wantErr: true},
+		{name: "conversion failure", value: stringPtr("not-a-number"), wantErr: true},
+		{name: "missing vector", missing: true, wantErr: true},
+		{name: "missing element", emptyParam: true, wantErr: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			planned := makePreparedRowsFrame(t, 0, 0)
+			arg := makeWindowWithFrame(planned)
+			var params *vector.Vector
+			switch {
+			case test.missing:
+				proc.SetPrepareParams(nil)
+			case test.emptyParam:
+				params = setWindowPrepareParams(t, proc)
+			default:
+				params = setWindowPrepareParams(t, proc, test.value)
+			}
+
+			err := arg.Prepare(proc)
+			if test.wantErr {
+				require.Error(t, err)
+				require.Nil(t, arg.ctr.runtimeFrames)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, test.want, arg.ctr.runtimeFrames[0].Start.Val.GetLit().GetU64Val())
+				require.Equal(t, test.want, arg.ctr.runtimeFrames[0].End.Val.GetLit().GetU64Val())
+			}
+			requirePreparedRowsBoundUnchanged(t, planned.Start.Val, 0)
+			requirePreparedRowsBoundUnchanged(t, planned.End.Val, 0)
+
+			arg.Free(proc, false, nil)
+			proc.SetPrepareParams(nil)
+			if params != nil {
+				params.Free(proc.Mp())
+			}
+			proc.Free()
+			require.Zero(t, proc.Mp().CurrNB())
+		})
+	}
+}
+
+func TestWindowPrepareClearsPartialRowsFrameBoundsOnError(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	valid := makePreparedRowsFrame(t, 0, 0)
+	invalid := makePreparedRowsFrame(t, 1, 1)
+	arg := makeWindowWithFrame(valid)
+	secondSpec := makeWindowSpec()
+	secondSpec.GetW().Frame = invalid
+	arg.WinSpecList = append(arg.WinSpecList, secondSpec)
+	arg.Aggs = append(arg.Aggs, newAggExpr())
+	params := setWindowPrepareParams(t, proc, stringPtr("1"), stringPtr("-1"))
+
+	require.Error(t, arg.Prepare(proc))
+	require.Nil(t, arg.ctr.runtimeFrames)
+	requirePreparedRowsBoundUnchanged(t, valid.Start.Val, 0)
+	requirePreparedRowsBoundUnchanged(t, invalid.Start.Val, 1)
+
+	arg.Free(proc, false, nil)
+	proc.SetPrepareParams(nil)
+	params.Free(proc.Mp())
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestWindowPrepareHandlesNilAndLiteralFrameBounds(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	literal := &plan.FrameClause{
+		Type: plan.FrameClause_ROWS,
+		Start: &plan.FrameBound{
+			Type: plan.FrameBound_PRECEDING,
+			Val:  plan2.MakePlan2Uint64ConstExprWithType(1),
+		},
+		End: &plan.FrameBound{
+			Type: plan.FrameBound_FOLLOWING,
+			Val:  plan2.MakePlan2Uint64ConstExprWithType(2),
+		},
+	}
+	arg := makeWindowWithFrame(nil)
+	secondSpec := makeWindowSpec()
+	secondSpec.GetW().Frame = literal
+	arg.WinSpecList = append(arg.WinSpecList, secondSpec)
+	arg.Aggs = append(arg.Aggs, newAggExpr())
+
+	require.NoError(t, arg.Prepare(proc))
+	require.Len(t, arg.ctr.runtimeFrames, 2)
+	require.Nil(t, arg.ctr.runtimeFrames[0])
+	require.NotSame(t, literal, arg.ctr.runtimeFrames[1])
+	require.NotSame(t, literal.Start, arg.ctr.runtimeFrames[1].Start)
+	require.NotSame(t, literal.End, arg.ctr.runtimeFrames[1].End)
+	require.Same(t, literal.Start.Val, arg.ctr.runtimeFrames[1].Start.Val)
+	require.Same(t, literal.End.Val, arg.ctr.runtimeFrames[1].End.Val)
+
+	arg.Free(proc, false, nil)
+	require.Nil(t, arg.ctr.runtimeFrames)
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestWindowPrepareFrameBoundsStayUnpublishedAfterLaterError(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	planned := makePreparedRowsFrame(t, 0, 0)
+	arg := makeWindowWithFrame(planned)
+	aggID := arg.Aggs[0].GetAggID()
+	arg.Aggs[0] = aggexec.MakeAggFunctionExpression(aggID, false, []*plan.Expr{{}}, nil)
+	params := setWindowPrepareParams(t, proc, stringPtr("1"))
+
+	require.Error(t, arg.Prepare(proc))
+	require.Nil(t, arg.ctr.runtimeFrames)
+	requirePreparedRowsBoundUnchanged(t, planned.Start.Val, 0)
+	requirePreparedRowsBoundUnchanged(t, planned.End.Val, 0)
+
+	arg.Free(proc, false, nil)
+	proc.SetPrepareParams(nil)
+	params.Free(proc.Mp())
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestWindowPrepareFrameBoundsFeedAggregateConsumer(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	planned := makePreparedRowsFrame(t, 0, 1)
+	arg := makeWindowWithFrame(planned)
+	bat := makeInt32Batch(proc.Mp(), []int32{10, 20, 30, 40})
+	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
+	arg.AppendChild(op)
+	params := setWindowPrepareParams(t, proc, stringPtr("1"), stringPtr("1"))
+
+	require.NoError(t, arg.Prepare(proc))
+	result, err := vm.Exec(arg, proc)
+	require.NoError(t, err)
+	require.Equal(t, []int64{30, 60, 90, 70},
+		vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[1]))
+	requirePreparedRowsBoundUnchanged(t, planned.Start.Val, 0)
+	requirePreparedRowsBoundUnchanged(t, planned.End.Val, 1)
+
+	arg.Free(proc, false, nil)
+	op.Free(proc, false, nil)
+	proc.SetPrepareParams(nil)
+	params.Free(proc.Mp())
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestWindowPrepareFrameBoundsFeedValueConsumers(t *testing.T) {
+	tests := []struct {
+		name string
+		want []int32
+	}{
+		{name: "first_value", want: []int32{10, 10, 20, 30}},
+		{name: "last_value", want: []int32{20, 30, 40, 40}},
+		{name: "nth_value", want: []int32{10, 10, 20, 30}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			planned := makePreparedRowsFrame(t, 0, 1)
+			spec := makeValueWindowSpecWithName(test.name, int32(types.T_int32))
+			spec.GetW().Frame = planned
+			arg := &Window{
+				WinSpecList: []*plan.Expr{spec},
+				Aggs:        []aggexec.AggFuncExecExpression{makeValueWindowAggExpr(test.name)},
+			}
+			bat := makeInt32Batch(proc.Mp(), []int32{10, 20, 30, 40})
+			op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
+			arg.AppendChild(op)
+			params := setWindowPrepareParams(t, proc, stringPtr("1"), stringPtr("1"))
+
+			require.NoError(t, arg.Prepare(proc))
+			result, err := vm.Exec(arg, proc)
+			require.NoError(t, err)
+			require.Equal(t, test.want,
+				vector.MustFixedColWithTypeCheck[int32](result.Batch.Vecs[1]))
+			requirePreparedRowsBoundUnchanged(t, planned.Start.Val, 0)
+			requirePreparedRowsBoundUnchanged(t, planned.End.Val, 1)
+
+			arg.Free(proc, false, nil)
+			op.Free(proc, false, nil)
+			proc.SetPrepareParams(nil)
+			params.Free(proc.Mp())
+			proc.Free()
+			require.Zero(t, proc.Mp().CurrNB())
+		})
 	}
 }
 

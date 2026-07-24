@@ -55,6 +55,21 @@ func (window *Window) Prepare(proc *process.Process) (err error) {
 
 	ctr := &window.ctr
 
+	// Runtime frames belong to one Prepare generation. Build them off to the
+	// side and publish only after the rest of Prepare succeeds, so neither a
+	// bound-evaluation error nor a later setup error exposes partial state.
+	ctr.runtimeFrames = nil
+	runtimeFrames := make([]*plan.FrameClause, len(window.WinSpecList))
+	for i, expr := range window.WinSpecList {
+		if expr == nil || expr.GetW() == nil {
+			continue
+		}
+		runtimeFrames[i], err = materializeRowsFrame(proc, expr.GetW().Frame)
+		if err != nil {
+			return err
+		}
+	}
+
 	if len(ctr.aggVecs) == 0 {
 		ctr.aggVecs = make([]colexec.ExprEvalVector, len(window.Aggs))
 		for i, ag := range window.Aggs {
@@ -70,7 +85,94 @@ func (window *Window) Prepare(proc *process.Process) (err error) {
 		ctr.status = receiveAll
 	}
 
+	ctr.runtimeFrames = runtimeFrames
 	return nil
+}
+
+func materializeRowsFrame(proc *process.Process, planned *plan.FrameClause) (*plan.FrameClause, error) {
+	if planned == nil {
+		return nil, nil
+	}
+
+	runtimeFrame := &plan.FrameClause{Type: planned.Type}
+	var err error
+	if planned.Type == plan.FrameClause_ROWS {
+		runtimeFrame.Start, err = materializeRowsBound(proc, planned.Start)
+		if err != nil {
+			return nil, err
+		}
+		runtimeFrame.End, err = materializeRowsBound(proc, planned.End)
+		if err != nil {
+			return nil, err
+		}
+		return runtimeFrame, nil
+	}
+
+	runtimeFrame.Start = cloneFrameBound(planned.Start)
+	runtimeFrame.End = cloneFrameBound(planned.End)
+	return runtimeFrame, nil
+}
+
+func cloneFrameBound(planned *plan.FrameBound) *plan.FrameBound {
+	if planned == nil {
+		return nil
+	}
+	return &plan.FrameBound{
+		Type:      planned.Type,
+		UnBounded: planned.UnBounded,
+		Val:       planned.Val,
+	}
+}
+
+func materializeRowsBound(proc *process.Process, planned *plan.FrameBound) (*plan.FrameBound, error) {
+	runtimeBound := cloneFrameBound(planned)
+	if planned == nil || planned.Val == nil || planned.Val.GetLit() != nil {
+		return runtimeBound, nil
+	}
+	if proc == nil || proc.GetPrepareParams() == nil {
+		return nil, moerr.NewInvalidInputNoCtx("window frame bound parameter is missing")
+	}
+
+	executor, err := colexec.NewExpressionExecutor(proc, planned.Val)
+	if err != nil {
+		return nil, err
+	}
+	defer executor.Free()
+
+	vec, err := executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+	if err != nil {
+		return nil, err
+	}
+	if vec == nil || vec.Length() != 1 {
+		return nil, moerr.NewInvalidInput(proc.Ctx, "window frame bound must evaluate to exactly one value")
+	}
+	if vec.IsNull(0) {
+		return nil, moerr.NewInvalidInput(proc.Ctx, "window frame bound cannot be NULL")
+	}
+	if vec.GetType().Oid != types.T_uint64 {
+		return nil, moerr.NewInvalidInputf(
+			proc.Ctx,
+			"window frame bound must evaluate to uint64, got %s",
+			vec.GetType().String(),
+		)
+	}
+
+	runtimeBound.Val = &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_uint64)},
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+			Value: &plan.Literal_U64Val{
+				U64Val: vector.MustFixedColWithTypeCheck[uint64](vec)[0],
+			},
+		}},
+	}
+	return runtimeBound, nil
+}
+
+func (ctr *container) frameAt(idx int, planned *plan.FrameClause) *plan.FrameClause {
+	if idx >= 0 && idx < len(ctr.runtimeFrames) && ctr.runtimeFrames[idx] != nil {
+		return ctr.runtimeFrames[idx]
+	}
+	return planned
 }
 
 func (window *Window) Call(proc *process.Process) (vm.CallResult, error) {
@@ -309,7 +411,7 @@ func (ctr *container) processFunc(idx int, ap *Window, proc *process.Process, an
 				start, end = buildPartitionInterval(ctr.ps, j, n)
 			}
 
-			left, right, err := ctr.buildInterval(j, start, end, ap.WinSpecList[idx].Expr.(*plan.Expr_W).W.Frame)
+			left, right, err := ctr.buildInterval(j, start, end, ctr.frameAt(idx, w.Frame))
 			if err != nil {
 				return err
 			}
@@ -462,7 +564,7 @@ func (ctr *container) processValueFunc(idx int, ap *Window, proc *process.Proces
 			if ctr.ps != nil {
 				start, end = buildPartitionInterval(ctr.ps, j, n)
 			}
-			left, right, err := ctr.buildInterval(j, start, end, w.Frame)
+			left, right, err := ctr.buildInterval(j, start, end, ctr.frameAt(idx, w.Frame))
 			if err != nil {
 				return nil, err
 			}
@@ -489,7 +591,7 @@ func (ctr *container) processValueFunc(idx int, ap *Window, proc *process.Proces
 			if ctr.ps != nil {
 				start, end = buildPartitionInterval(ctr.ps, j, n)
 			}
-			left, right, err := ctr.buildInterval(j, start, end, w.Frame)
+			left, right, err := ctr.buildInterval(j, start, end, ctr.frameAt(idx, w.Frame))
 			if err != nil {
 				return nil, err
 			}
@@ -535,7 +637,7 @@ func (ctr *container) processValueFunc(idx int, ap *Window, proc *process.Proces
 			if ctr.ps != nil {
 				start, end = buildPartitionInterval(ctr.ps, j, n)
 			}
-			left, right, err := ctr.buildInterval(j, start, end, w.Frame)
+			left, right, err := ctr.buildInterval(j, start, end, ctr.frameAt(idx, w.Frame))
 			if err != nil {
 				return nil, err
 			}
