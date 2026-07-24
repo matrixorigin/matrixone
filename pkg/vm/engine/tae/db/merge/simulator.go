@@ -86,15 +86,13 @@ func (c *fakeClock) Until(t time.Time) time.Duration {
 // region: resource controller
 
 type simRscController struct {
-	sync.Mutex
 	limit    atomic.Int64
-	reserved int64
+	reserved atomic.Int64
 }
 
 func newSimRscController(initLimit int64) *simRscController {
 	c := &simRscController{
-		limit:    atomic.Int64{},
-		reserved: 0,
+		limit: atomic.Int64{},
 	}
 	c.setMemLimit(initLimit)
 	return c
@@ -110,22 +108,30 @@ func (c *simRscController) Refresh() {}
 func (c *simRscController) PrintUsage() {}
 
 func (c *simRscController) Acquire(estMem int64) (int64, bool) {
-	c.reserved += estMem
-	return c.Available() - estMem, true
+	c.reserved.Add(estMem)
+	return c.Available(), true
 }
 
 func (c *simRscController) Release(estMem int64) int64 {
-	c.reserved -= estMem
-	if c.reserved < 0 {
-		c.reserved = 0
-		logutil.Warnf("simRscController: releaseResources: %d", estMem)
+	for {
+		reserved := c.reserved.Load()
+		next := reserved - estMem
+		if next < 0 {
+			next = 0
+		}
+		if c.reserved.CompareAndSwap(reserved, next) {
+			if reserved < estMem {
+				logutil.Warnf("simRscController: releaseResources: %d", estMem)
+			}
+			break
+		}
 	}
 
 	return c.Available()
 }
 
 func (c *simRscController) Available() int64 {
-	avail := c.limit.Load() - c.reserved
+	avail := c.limit.Load() - c.reserved.Load()
 	if avail < 0 {
 		avail = 0
 	}
@@ -470,7 +476,7 @@ func (e *SExecutor) ExecuteFor(target catalog.MergeTable, task mergeTask) bool {
 
 	e.clock.AfterFunc(taskCost, func() {
 		if task.doneCB != nil {
-			task.doneCB.f()
+			task.doneCB.OnExecDone(nil)
 		}
 		for range newObjCount {
 			e.scatalog.mergeSched.OnCreateNonAppendObject(target)

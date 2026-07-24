@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"math/rand"
 	"slices"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -208,28 +209,49 @@ func (a *MergeScheduler) OnMergeDone(table catalog.MergeTable, esize int) {
 }
 
 func (a *MergeScheduler) taskObserverFactory(
-	generation *mergeSchedulerGeneration,
-	t catalog.MergeTable,
+	supp *todoSupporter,
 	size int,
+	rc rscthrottler.RSCThrottler,
 ) *taskObserver {
 	return &taskObserver{f: func() {
-		a.sendMsgForGeneration(generation, &MMsg{
-			Kind: MMsgKindTableChange,
-			Value: MMsgTableChange{
-				Table:    t,
-				DoneTask: true,
-				EstSize:  size,
-			},
-		})
+		supp.DoneTask()
+		rc.Release(int64(size))
 	}}
 }
 
 type taskObserver struct {
-	f func()
+	mu        sync.Mutex
+	admitted  bool
+	completed bool
+	f         func()
 }
 
 func (o *taskObserver) OnExecDone(_ any) {
-	o.f()
+	o.mu.Lock()
+	if o.completed {
+		o.mu.Unlock()
+		return
+	}
+	o.completed = true
+	run := o.admitted
+	o.mu.Unlock()
+	if run {
+		o.f()
+	}
+}
+
+func (o *taskObserver) Admit() {
+	o.mu.Lock()
+	if o.admitted {
+		o.mu.Unlock()
+		return
+	}
+	o.admitted = true
+	run := o.completed
+	o.mu.Unlock()
+	if run {
+		o.f()
+	}
 }
 
 func (a *MergeScheduler) CNActiveObjectsString() string { return "" }
@@ -678,7 +700,7 @@ func (pq *todoPQ) Update(item *todoItem, ready time.Time) {
 }
 
 type todoSupporter struct {
-	mergingTaskCnt         int
+	mergingTaskCnt         atomic.Int64
 	vaccumTrigCount        int
 	objectOperations       int
 	totalDataMergeCnt      int
@@ -696,14 +718,23 @@ type todoSupporter struct {
 }
 
 func (m *todoSupporter) DoneTask() {
-	m.mergingTaskCnt--
-	if m.mergingTaskCnt < 0 {
-		logutil.Error("MergeExecutorEvent",
-			zap.String("event", "mergingTaskCnt < 0"),
-			zap.String("table", m.todo.table.GetNameDesc()),
-		)
-		m.mergingTaskCnt = 0
+	for {
+		count := m.mergingTaskCnt.Load()
+		if count <= 0 {
+			logutil.Error("MergeExecutorEvent",
+				zap.String("event", "mergingTaskCnt <= 0"),
+				zap.String("table", m.todo.table.GetNameDesc()),
+			)
+			return
+		}
+		if m.mergingTaskCnt.CompareAndSwap(count, count-1) {
+			return
+		}
 	}
+}
+
+func (m *todoSupporter) AddTask() {
+	m.mergingTaskCnt.Add(1)
 }
 
 func (a *MergeScheduler) ioVacuumCheck(
@@ -1086,7 +1117,7 @@ func (a *MergeScheduler) handleQuery(msg MMsgQuery) {
 			answer.NextCheckDue = a.clock.Until(supp.todo.readyAt)
 			answer.DataMergeCnt = supp.totalDataMergeCnt
 			answer.TombstoneMergeCnt = supp.totalTombstoneMergeCnt
-			answer.PendingMergeCnt = supp.mergingTaskCnt
+			answer.PendingMergeCnt = int(supp.mergingTaskCnt.Load())
 			answer.VaccumTrigCount = supp.vaccumTrigCount
 			answer.LastVaccumCheck = a.clock.Since(supp.lastVacuumCheckTime)
 			if len(supp.triggers) > 0 {
@@ -1186,7 +1217,7 @@ func (a *MergeScheduler) doSched(
 	now := a.clock.Now()
 
 	// this table is merging, postpone the task
-	if supp.mergingTaskCnt > 0 {
+	if supp.mergingTaskCnt.Load() > 0 {
 		a.pq.Update(todo, now.Add(a.baseInterval/2))
 		return
 	}
@@ -1223,25 +1254,27 @@ func (a *MergeScheduler) doSched(
 
 	// Gather tasks
 
+	rc := a.rc
 	tasks := a.pad.gatherByTrigger(
 		context.Background(),
 		trigger,
 		supp.lastMergeTime,
-		a.rc,
+		rc,
 	)
 
 	afterGather := a.clock.Now()
 	// Schedule tasks
 	for _, task := range tasks {
-		task.doneCB = a.taskObserverFactory(generation, todo.table, task.eSize)
+		task.doneCB = a.taskObserverFactory(supp, task.eSize, rc)
 		if a.executor.ExecuteFor(todo.table, task) {
-			a.rc.Acquire(int64(task.eSize))
+			rc.Acquire(int64(task.eSize))
+			supp.AddTask()
+			task.doneCB.Admit()
 			if task.isTombstone {
 				supp.totalTombstoneMergeCnt++
 			} else {
 				supp.totalDataMergeCnt++
 			}
-			supp.mergingTaskCnt++
 			if !task.isTombstone && task.oSize > common.DefaultMaxOsizeObjBytes {
 				supp.vaccumTrigCount++
 			}

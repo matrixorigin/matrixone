@@ -44,6 +44,15 @@ func (e *dummyExecutor) ExecuteFor(table catalog.MergeTable, task mergeTask) boo
 	return true
 }
 
+type delayedCompletionExecutor struct {
+	tasks chan mergeTask
+}
+
+func (e *delayedCompletionExecutor) ExecuteFor(_ catalog.MergeTable, task mergeTask) bool {
+	e.tasks <- task
+	return true
+}
+
 type dummyCatalogSource struct {
 	settingsFn func() (*batch.Batch, func())
 	initTables []catalog.MergeTable
@@ -545,6 +554,90 @@ func TestStoppedGenerationIOCannotCrossRestart(t *testing.T) {
 	require.Empty(t, staleAnswer)
 	require.Never(t, staleIOProcessed.Load, 50*time.Millisecond, time.Millisecond)
 	require.Empty(t, currentGeneration.ioChan)
+}
+
+func TestMergeCompletionAccountingSurvivesRestart(t *testing.T) {
+	db := catalog.MockDBEntryWithAccInfo(1, 1001)
+	table := catalog.ToMergeTable(catalog.MockTableEntryWithDB(db, 1001))
+	source := &dummyCatalogSource{initTables: []catalog.MergeTable{table}}
+	executor := &delayedCompletionExecutor{tasks: make(chan mergeTask, 1)}
+	rc := newSimRscController(common.Const1GBytes)
+	sched := NewMergeScheduler(time.Hour, source, executor, NewStdClock())
+	sched.PatchTestRscController(rc)
+	sched.Start()
+	t.Cleanup(sched.Stop)
+
+	initialAvailable := rc.Available()
+	require.NoError(t, sched.SendTrigger(
+		NewMMsgTaskTrigger(table).WithAssignedTasks([]mergeTask{{
+			objs: []*objectio.ObjectStats{
+				newTestObjectStats(
+					t,
+					1,
+					2,
+					8*common.Const1MBytes,
+					1000,
+					1,
+					nil,
+					0,
+				),
+			},
+			note: "delayed completion across restart",
+		}}),
+	))
+
+	var admitted mergeTask
+	select {
+	case admitted = <-executor.tasks:
+	case <-time.After(time.Second):
+		t.Fatal("merge task was not admitted")
+	}
+	require.Positive(t, admitted.eSize)
+	answer, err := sched.Query(context.Background(), table)
+	require.NoError(t, err)
+	require.Equal(t, 1, answer.PendingMergeCnt)
+	require.Equal(t, initialAvailable-int64(admitted.eSize), rc.Available())
+
+	sched.Stop()
+	sched.Start()
+
+	admitted.doneCB.OnExecDone(nil)
+	answer, err = sched.Query(context.Background(), table)
+	require.NoError(t, err)
+	require.Zero(t, answer.PendingMergeCnt)
+	require.Equal(t, initialAvailable, rc.Available())
+
+	// Completion observers are allowed to be notified only once. A duplicate
+	// notification must not underflow the task count or release memory twice.
+	admitted.doneCB.OnExecDone(nil)
+	answer, err = sched.Query(context.Background(), table)
+	require.NoError(t, err)
+	require.Zero(t, answer.PendingMergeCnt)
+	require.Equal(t, initialAvailable, rc.Available())
+}
+
+func TestTaskObserverAdmissionAndCompletionExactlyOnce(t *testing.T) {
+	var calls atomic.Int64
+	observer := &taskObserver{f: func() {
+		calls.Add(1)
+	}}
+
+	const workers = 100
+	var wg sync.WaitGroup
+	for i := range workers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if i%2 == 0 {
+				observer.Admit()
+			} else {
+				observer.OnExecDone(nil)
+			}
+		}()
+	}
+	wg.Wait()
+
+	require.Equal(t, int64(1), calls.Load())
 }
 
 func TestLaunchPad(t *testing.T) {
