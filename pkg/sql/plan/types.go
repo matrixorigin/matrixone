@@ -78,7 +78,7 @@ type SnapshotTenant = plan.SnapshotTenant
 type ExternAttr = plan.ExternAttr
 
 const ViewSnapshotKeySuffix = "@ts="
-const viewDependencySnapshotKeySuffix = "@snapshot="
+const viewDependencyKeyPrefix = "\x00mo_view_dependency\x00"
 
 // FormatViewKeyWithSnapshot appends snapshot information to a view key for privilege checks.
 func FormatViewKeyWithSnapshot(viewKey string, snapshot *Snapshot) string {
@@ -99,17 +99,29 @@ func FormatViewDependencyKeyWithSnapshot(viewKey string, snapshot *Snapshot) (st
 	if err != nil {
 		return "", err
 	}
-	return viewKey + viewDependencySnapshotKeySuffix +
+	return viewDependencyKeyPrefix +
+		base64.RawURLEncoding.EncodeToString([]byte(viewKey)) + "." +
 		base64.RawURLEncoding.EncodeToString(data), nil
 }
 
-func parseViewDependencyKeySnapshot(viewKey string) (string, *Snapshot, error) {
-	suffix := strings.LastIndex(viewKey, viewDependencySnapshotKeySuffix)
-	if suffix < 0 {
+// ParseViewDependencyKey returns the catalog key and the optional table-level
+// snapshot recorded while binding a view. Encoded dependency keys start with a
+// NUL sentinel, which cannot occur in a SQL identifier, so ordinary view names
+// cannot be mistaken for dependency metadata.
+func ParseViewDependencyKey(viewKey string) (string, *Snapshot, error) {
+	if !strings.HasPrefix(viewKey, viewDependencyKeyPrefix) {
 		return viewKey, nil, nil
 	}
-	data, err := base64.RawURLEncoding.DecodeString(
-		viewKey[suffix+len(viewDependencySnapshotKeySuffix):])
+	encodedKey, encodedSnapshot, ok := strings.Cut(
+		viewKey[len(viewDependencyKeyPrefix):], ".")
+	if !ok || encodedKey == "" || encodedSnapshot == "" {
+		return "", nil, fmt.Errorf("invalid encoded view dependency")
+	}
+	key, err := base64.RawURLEncoding.DecodeString(encodedKey)
+	if err != nil {
+		return "", nil, err
+	}
+	data, err := base64.RawURLEncoding.DecodeString(encodedSnapshot)
 	if err != nil {
 		return "", nil, err
 	}
@@ -117,7 +129,7 @@ func parseViewDependencyKeySnapshot(viewKey string) (string, *Snapshot, error) {
 	if err = snapshot.Unmarshal(data); err != nil {
 		return "", nil, err
 	}
-	return viewKey[:suffix], snapshot, nil
+	return string(key), snapshot, nil
 }
 
 type CompilerContext interface {

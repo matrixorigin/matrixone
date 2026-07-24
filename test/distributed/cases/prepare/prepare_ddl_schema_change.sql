@@ -294,6 +294,11 @@ prepare unrelated_after_view_stmt from 'drop table if exists unrelated_after_vie
 execute unrelated_after_view_stmt;
 deallocate prepare unrelated_after_view_stmt;
 
+create view `prepared_view@snapshot=x` as select a from stale_view_base;
+prepare special_view_name_stmt from 'select * from `prepared_view@snapshot=x`';
+execute special_view_name_stmt;
+deallocate prepare special_view_name_stmt;
+
 drop snapshot if exists prepared_view_snapshot;
 create table prepared_snapshot_base (a int);
 insert into prepared_snapshot_base values (1);

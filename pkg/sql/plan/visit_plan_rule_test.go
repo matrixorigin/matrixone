@@ -327,6 +327,29 @@ func TestAppendPrepareSchemasKeepsSameNameFromDifferentPublishers(t *testing.T) 
 	require.Len(t, schemas, 2)
 }
 
+func TestAppendPrepareSchemasKeepsSamePublisherTableFromDifferentSubscriptions(t *testing.T) {
+	schemas := appendPrepareSchemas(nil,
+		&planpb.ObjectRef{
+			SchemaName: "publisher_db", ObjName: "tbl", Db: 10, Obj: 20,
+			SubscriptionName: "subscription_one",
+			PubInfo:          &planpb.PubInfo{TenantId: 1},
+		},
+		&planpb.ObjectRef{
+			SchemaName: "publisher_db", ObjName: "tbl", Db: 10, Obj: 20,
+			SubscriptionName: "subscription_two",
+			PubInfo:          &planpb.PubInfo{TenantId: 1},
+		},
+		&planpb.ObjectRef{
+			SchemaName: "publisher_db", ObjName: "tbl", Db: 10, Obj: 20,
+			SubscriptionName: "subscription_one",
+			PubInfo:          &planpb.PubInfo{TenantId: 1},
+		},
+	)
+	require.Len(t, schemas, 2)
+	require.Equal(t, "subscription_one", schemas[0].SubscriptionName)
+	require.Equal(t, "subscription_two", schemas[1].SubscriptionName)
+}
+
 func TestResetPreparePlanCollectsDdlQuerySchemas(t *testing.T) {
 	ddlPlan := &planpb.Plan{Plan: &planpb.Plan_Ddl{Ddl: &planpb.DataDefinition{
 		Query: &planpb.Query{
@@ -410,19 +433,55 @@ func TestCollectPrepareViewSchemasPreservesIdentity(t *testing.T) {
 	require.Equal(t, int64(30), schemas[0].Server)
 }
 
+func TestCollectPrepareViewSchemasKeepsLogicalSubscriptions(t *testing.T) {
+	ctx := &viewDependencyCompilerContext{
+		MockCompilerContext: NewMockCompilerContext(false),
+		views:               []string{"subscription_one#v", "subscription_two#v"},
+	}
+	ctx.resolve = func(databaseName, tableName string, _ *Snapshot) (*ObjectRef, *TableDef, error) {
+		return &ObjectRef{
+				SchemaName:       "publisher_db",
+				ObjName:          tableName,
+				Obj:              20,
+				SubscriptionName: databaseName,
+				PubInfo:          &planpb.PubInfo{TenantId: 11},
+			}, &TableDef{
+				DbName: "publisher_db", Name: tableName,
+				DbId: 10, TblId: 20, Version: 30,
+			}, nil
+	}
+
+	schemas, err := collectPrepareViewSchemas(ctx)
+	require.NoError(t, err)
+	require.Len(t, schemas, 2)
+	require.Equal(t, "subscription_one", schemas[0].SubscriptionName)
+	require.Equal(t, "subscription_two", schemas[1].SubscriptionName)
+}
+
 func TestViewDependencySnapshotKeyValidation(t *testing.T) {
 	key, err := FormatViewDependencyKeyWithSnapshot("db#v", nil)
 	require.NoError(t, err)
 	require.Equal(t, "db#v", key)
 
-	base, snapshot, err := parseViewDependencyKeySnapshot(key)
+	base, snapshot, err := ParseViewDependencyKey(key)
 	require.NoError(t, err)
 	require.Equal(t, "db#v", base)
 	require.Nil(t, snapshot)
 
-	_, _, err = parseViewDependencyKeySnapshot("db#v" + viewDependencySnapshotKeySuffix + "!")
+	for _, ordinaryKey := range []string{
+		"db#v@snapshot=x",
+		"db@snapshot=x#v",
+		"db#v@ts=not-a-timestamp",
+	} {
+		base, snapshot, err = ParseViewDependencyKey(ordinaryKey)
+		require.NoError(t, err)
+		require.Equal(t, ordinaryKey, base)
+		require.Nil(t, snapshot)
+	}
+
+	_, _, err = ParseViewDependencyKey(viewDependencyKeyPrefix + "!")
 	require.Error(t, err)
-	_, _, err = parseViewDependencyKeySnapshot("db#v" + viewDependencySnapshotKeySuffix + "eA")
+	_, _, err = ParseViewDependencyKey(viewDependencyKeyPrefix + "eA.!")
 	require.Error(t, err)
 }
 
@@ -450,7 +509,7 @@ func TestBindViewRecordsCompleteTableSnapshot(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, bindCtx.views, 1)
 
-	base, recorded, err := parseViewDependencyKeySnapshot(bindCtx.views[0])
+	base, recorded, err := ParseViewDependencyKey(bindCtx.views[0])
 	require.NoError(t, err)
 	require.Equal(t, "db#v", base)
 	require.Equal(t, snapshot.TS, recorded.TS)
@@ -476,12 +535,7 @@ func TestCollectPrepareViewSchemasRejectsInvalidDependencies(t *testing.T) {
 	}{
 		{
 			name:  "encoded snapshot",
-			view:  "db#v" + viewDependencySnapshotKeySuffix + "!",
-			match: "invalid view dependency snapshot",
-		},
-		{
-			name:  "legacy snapshot",
-			view:  "db#v" + ViewSnapshotKeySuffix + "bad",
+			view:  viewDependencyKeyPrefix + "!",
 			match: "invalid view dependency snapshot",
 		},
 		{

@@ -1891,6 +1891,11 @@ func genKey(dbName, tblName string) string {
 	return fmt.Sprintf("%s%s%s", dbName, KeySep, tblName)
 }
 
+func normalizeViewDependencyKey(key string) (string, error) {
+	key, _, err := plan2.ParseViewDependencyKey(key)
+	return key, err
+}
+
 func splitKey(key string) (string, string) {
 	parts := strings.Split(key, KeySep)
 	if len(parts) >= 2 {

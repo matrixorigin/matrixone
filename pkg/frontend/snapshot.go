@@ -1488,6 +1488,10 @@ func sortedViewInfos(
 
 		g.addVertex(key)
 		for _, depView := range compCtx.GetViews() {
+			depView, err = normalizeViewDependencyKey(depView)
+			if err != nil {
+				return nil, err
+			}
 			g.addEdge(depView, key)
 		}
 	}

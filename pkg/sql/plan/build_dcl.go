@@ -16,12 +16,10 @@ package plan
 
 import (
 	"math"
-	"strconv"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
@@ -346,27 +344,13 @@ func collectPrepareViewSchemas(ctx CompilerContext) ([]*plan.ObjectRef, error) {
 	for _, viewKey := range ctx.GetViews() {
 		snapshot := ctx.GetSnapshot()
 		var err error
-		viewKey, dependencySnapshot, err := parseViewDependencyKeySnapshot(viewKey)
+		viewKey, dependencySnapshot, err := ParseViewDependencyKey(viewKey)
 		if err != nil {
 			return nil, moerr.NewInternalErrorf(
 				ctx.GetContext(), "invalid view dependency snapshot: %v", err)
 		}
 		if dependencySnapshot != nil {
 			snapshot = dependencySnapshot
-		} else if suffix := strings.LastIndex(viewKey, ViewSnapshotKeySuffix); suffix >= 0 {
-			physicalTime, err := strconv.ParseInt(
-				viewKey[suffix+len(ViewSnapshotKeySuffix):], 10, 64)
-			if err != nil {
-				return nil, moerr.NewInternalErrorf(
-					ctx.GetContext(), "invalid view dependency snapshot %q", viewKey)
-			}
-			viewKey = viewKey[:suffix]
-			snapshot = &Snapshot{
-				TS: &timestamp.Timestamp{PhysicalTime: physicalTime},
-			}
-			if contextSnapshot := ctx.GetSnapshot(); contextSnapshot != nil {
-				snapshot.Tenant = contextSnapshot.Tenant
-			}
 		}
 		databaseName, tableName, ok := strings.Cut(viewKey, "#")
 		if !ok || databaseName == "" || tableName == "" {
@@ -412,8 +396,11 @@ func appendPrepareSchemas(schemas []*plan.ObjectRef, refs ...*plan.ObjectRef) []
 			sameTenant := (schema.PubInfo == nil && ref.PubInfo == nil) ||
 				(schema.PubInfo != nil && ref.PubInfo != nil &&
 					schema.PubInfo.GetTenantId() == ref.PubInfo.GetTenantId())
-			sameID := sameTenant && schema.Obj != 0 && ref.Obj != 0 && schema.Db == ref.Db && schema.Obj == ref.Obj
-			sameName := sameTenant && schema.SchemaName == ref.SchemaName && schema.ObjName == ref.ObjName
+			sameSubscription := schema.SubscriptionName == ref.SubscriptionName
+			sameID := sameTenant && sameSubscription &&
+				schema.Obj != 0 && ref.Obj != 0 && schema.Db == ref.Db && schema.Obj == ref.Obj
+			sameName := sameTenant && sameSubscription &&
+				schema.SchemaName == ref.SchemaName && schema.ObjName == ref.ObjName
 			if sameID || sameName {
 				duplicate = true
 				break
