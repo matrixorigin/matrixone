@@ -17,7 +17,10 @@ package frontend
 import (
 	"testing"
 
+	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/require"
+
+	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 )
 
 func TestCloneDatabaseSourceBranchTableCount(t *testing.T) {
@@ -30,4 +33,24 @@ func TestCloneDatabaseSourceBranchTableCount(t *testing.T) {
 	}
 
 	require.Equal(t, int64(2), source.branchTableCount())
+}
+
+func TestCloneSnapshotTxnOperator(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	outerTxn := mock_frontend.NewMockTxnOperator(ctrl)
+	branchTxn := mock_frontend.NewMockTxnOperator(ctrl)
+	ses := newFeatureLimitTestSession(t)
+	ses.proc.Base.TxnOperator = outerTxn
+
+	t.Run("normal clone keeps frontend transaction", func(t *testing.T) {
+		bh := ses.InitBackExec(branchTxn, "", fakeDataSetFetcher2)
+		require.Same(t, outerTxn, cloneSnapshotTxnOperator(ses, bh))
+	})
+
+	t.Run("data branch uses owning background transaction", func(t *testing.T) {
+		bh := ses.InitBackExec(branchTxn, "", fakeDataSetFetcher2, &BackgroundExecOption{
+			forcePessimisticRC: true,
+		})
+		require.Same(t, branchTxn, cloneSnapshotTxnOperator(ses, bh))
+	})
 }
