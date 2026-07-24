@@ -15,11 +15,22 @@
 package fulltext2
 
 import (
+	"encoding/binary"
 	"errors"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/stretchr/testify/require"
 )
+
+// int64ColumnBuffer decodes an int64-pk ColumnBuffer batch (Fixed, width 8) back to []int64.
+func int64ColumnBuffer(k *vectorindex.ColumnBuffer) []int64 {
+	out := make([]int64, k.N)
+	for i := 0; i < k.N; i++ {
+		out[i] = int64(binary.LittleEndian.Uint64(k.Data[i*8:]))
+	}
+	return out
+}
 
 // TestStreamQuery pins the no-LIMIT streaming path: StreamQuery must emit EXACTLY the
 // same (pk, score) set the materialized SearchQuery(k=all) produces — for both the
@@ -35,12 +46,12 @@ func TestStreamQuery(t *testing.T) {
 	collect := func(pattern string, boolean bool) map[int64]float64 {
 		m := map[int64]float64{}
 		err := split.StreamQuery([]byte(pattern), boolean, ParserDefault, BM25, nil,
-			func(keys []any, dists []float64) error {
-				require.LessOrEqual(t, len(keys), streamBatch)
-				for i, k := range keys {
-					_, dup := m[k.(int64)]
-					require.Falsef(t, dup, "pk %d emitted twice", k.(int64))
-					m[k.(int64)] = dists[i]
+			func(keys *vectorindex.ColumnBuffer, dists []float64) error {
+				require.LessOrEqual(t, keys.N, streamBatch)
+				for i, k := range int64ColumnBuffer(keys) {
+					_, dup := m[k]
+					require.Falsef(t, dup, "pk %d emitted twice", k)
+					m[k] = dists[i]
 				}
 				return nil
 			})
@@ -66,6 +77,6 @@ func TestStreamQuery(t *testing.T) {
 	// emit-error path: the callback error propagates and stops the walk.
 	sentinel := errors.New("consumer aborted")
 	err := split.StreamQuery([]byte("alpha beta"), true, ParserDefault, BM25, nil,
-		func(keys []any, dists []float64) error { return sentinel })
+		func(keys *vectorindex.ColumnBuffer, dists []float64) error { return sentinel })
 	require.ErrorIs(t, err, sentinel)
 }

@@ -62,9 +62,10 @@ type fulltext2SearchState struct {
 }
 
 // ft2StreamBatch is one emitted batch (<= streamBatch rows); the producer hands
-// ownership to the consumer, so the slices are not reused.
+// ownership to the consumer, so the buffers are not reused. keys is a TYPED, box-free
+// ColumnBuffer (fixed-width or varlena) — no per-pk interface allocation.
 type ft2StreamBatch struct {
-	keys      []any
+	keys      *vectorindex.ColumnBuffer
 	distances []float64
 }
 
@@ -126,15 +127,19 @@ func (u *fulltext2SearchState) call(tf *TableFunction, proc *process.Process) (v
 				}
 				return vm.CancelResult, nil
 			}
-			for i := range b.keys {
-				vector.AppendAny(u.batch.Vecs[0], b.keys[i], false, proc.Mp())
-				if withScore {
+			// Typed bulk decode of the pk column — no per-pk boxing (the mirror of the
+			// producer's box-free encode).
+			if err := fulltext2.AppendColumnBuffer(b.keys, u.batch.Vecs[0], proc.Mp()); err != nil {
+				return vm.CancelResult, err
+			}
+			if withScore {
+				for i := 0; i < b.keys.N; i++ {
 					// score column is T_float32 (matches ftIndexColdefs / classic fulltext);
 					// the engine computes float64 relevance, narrow it on append.
 					vector.AppendFixed[float32](u.batch.Vecs[1], float32(b.distances[i]), false, proc.Mp())
 				}
 			}
-			u.batch.SetRowCount(len(b.keys))
+			u.batch.SetRowCount(b.keys.N)
 			return vm.CallResult{Status: vm.ExecNext, Batch: u.batch}, nil
 		case <-proc.Ctx.Done():
 			return vm.CancelResult, proc.Ctx.Err()
@@ -264,7 +269,7 @@ func (u *fulltext2SearchState) start(tf *TableFunction, proc *process.Process, n
 		u.errCh = make(chan error, 1)
 		ctx, cancel := context.WithCancel(proc.Ctx)
 		u.cancel = cancel
-		rt := vectorindex.RuntimeConfig{Emit: func(keys []any, dists []float64) error {
+		rt := vectorindex.RuntimeConfig{Emit: func(keys *vectorindex.ColumnBuffer, dists []float64) error {
 			select {
 			case u.streamCh <- ft2StreamBatch{keys: keys, distances: dists}:
 				return nil

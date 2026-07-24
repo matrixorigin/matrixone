@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 )
 
 // benchWandSegment builds a loaded segment with `nterms` distinct terms Zipf-ish
@@ -97,4 +98,18 @@ func BenchmarkSearchWANDParallel(b *testing.B) {
 			_ = seg.searchWAND(cs, BM25, 10, nil, gs)
 		}
 	})
+}
+
+// BenchmarkStreamAlloc reports allocs/op for the no-LIMIT streaming path. With typed
+// ColumnBuffer the per-pk boxing is gone: a batch allocates only its Data/scores buffers
+// (a few allocs per 8192 rows) instead of one boxed interface per doc.
+func BenchmarkStreamAlloc(b *testing.B) {
+	seg, cs := benchWandSegment(b, 20000, 40)
+	idx := NewIndex([]*Segment{seg}, nil)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		sink := newStreamSink(idx, func(k *vectorindex.ColumnBuffer, d []float64) error { return nil })
+		_ = idx.streamDisjunction(cs, BM25, nil, sink)
+	}
 }

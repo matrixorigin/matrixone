@@ -15,50 +15,99 @@
 package fulltext2
 
 import (
+	"encoding/binary"
 	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 )
 
 // streamBatch is the max rows a streamSink buffers before flushing to emit
 // (matches bm25's streamBatch).
 const streamBatch = 8192
 
-// streamSink batches (pk, score) results and flushes them to emit in bounded chunks,
-// so a no-LIMIT query returns every matching doc WITHOUT ever materializing them all.
-// On an emit error it records it and stops (the walk checks stopped and bails), so a
-// cancelled consumer terminates the walk promptly. Mirrors bm25's streamSink.
+// streamSink batches (pk, score) results into a TYPED, box-free vectorindex.ColumnBuffer
+// and flushes to emit in bounded chunks, so a no-LIMIT query returns every matching doc
+// WITHOUT materializing them all and WITHOUT boxing a pk per doc. On an emit error it
+// records it and stops (the walk checks stopped and bails).
 type streamSink struct {
-	emit    func(keys []any, distances []float64) error
-	keys    []any
+	emit    func(keys *vectorindex.ColumnBuffer, distances []float64) error
+	keys    vectorindex.ColumnBuffer
 	scores  []float64
+	fixedW  int // fixed pk width; 0 ⇒ varlena. Cached from keys.Type.
 	err     error
 	stopped bool
 }
 
-func (s *streamSink) push(pk any, score float32) {
+// newStreamSink resolves the index's pk type (all segments share it) into the typed
+// batch. Callers create it only after the globalN==0 early-out, so segments is non-empty.
+func newStreamSink(idx *Index, emit func(keys *vectorindex.ColumnBuffer, distances []float64) error) *streamSink {
+	pkType := idx.segments[0].PkType
+	w, fixed := fixedPkByteWidth(pkType)
+	if !fixed {
+		w = 0
+	}
+	return &streamSink{emit: emit, keys: vectorindex.ColumnBuffer{Type: types.T(pkType)}, fixedW: w}
+}
+
+// pushPk appends the pk at (seg, ord) to the typed batch WITHOUT boxing, decoding it
+// straight from the segment docmap into ColumnBuffer.Data.
+func (s *streamSink) pushPk(seg *Segment, ord int64, score float32) {
 	if s.stopped {
 		return
 	}
-	s.keys = append(s.keys, pk)
+	seg.appendPkTo(&s.keys, s.fixedW, ord)
 	s.scores = append(s.scores, float64(score))
-	if len(s.keys) >= streamBatch {
+	if s.keys.N >= streamBatch {
+		s.flush()
+	}
+}
+
+// pushAny appends an already-boxed pk (the materialized-fallback path: NL phrase / full
+// boolean) by re-encoding its concrete value into ColumnBuffer.Data — no NEW box.
+func (s *streamSink) pushAny(pk any, score float32) {
+	if s.stopped {
+		return
+	}
+	appendAnyPk(&s.keys, s.fixedW, pk)
+	s.scores = append(s.scores, float64(score))
+	if s.keys.N >= streamBatch {
 		s.flush()
 	}
 }
 
 func (s *streamSink) flush() {
-	if s.stopped || len(s.keys) == 0 {
+	if s.stopped || s.keys.N == 0 {
 		return
 	}
-	if e := s.emit(s.keys, s.scores); e != nil {
+	// Hand THIS batch to emit as a distinct object (a struct copy: the Data backing is
+	// shared, but the sink then starts a fresh batch so it never mutates the emitted one).
+	batch := s.keys
+	if e := s.emit(&batch, s.scores); e != nil {
 		s.err = e
 		s.stopped = true
 		return
 	}
-	// Hand ownership of the batch to emit; the next batch reallocates on append.
-	s.keys = nil
+	s.keys = vectorindex.ColumnBuffer{Type: batch.Type} // fresh Data on next append
 	s.scores = nil
+}
+
+// appendPkTo decodes the pk at ord from seg's docmap into k.Data with no boxing: a
+// fixed-width pk contributes its width bytes; a varlena pk its [u32 len][content] entry.
+func (s *Segment) appendPkTo(k *vectorindex.ColumnBuffer, fixedW int, ord int64) {
+	if s.pks != nil { // build-side segment: re-encode the already-boxed value
+		appendAnyPk(k, fixedW, s.pks[ord])
+		return
+	}
+	off := int(s.pkOffsets[ord])
+	l := int(binary.LittleEndian.Uint32(s.pkRaw[off:]))
+	if fixedW > 0 {
+		k.Data = append(k.Data, s.pkRaw[off+4:off+4+fixedW]...) // width bytes, no len prefix
+	} else {
+		k.Data = append(k.Data, s.pkRaw[off:off+4+l]...) // [u32 len][content] verbatim
+	}
+	k.N++
 }
 
 // streamWAND does a heap-free document-at-a-time OR merge over one segment: it visits
@@ -92,7 +141,7 @@ func (s *Segment) streamWAND(clauses []clause, algo ScoreAlgo, gs *globalStats, 
 					score += it.weight * s.scoreTerm(algo, float64(it.tf()), it.idf2, minDoc, avgDocLen)
 				}
 			}
-			sink.push(s.pk(minDoc), score)
+			sink.pushPk(s, minDoc, score)
 		}
 		for _, it := range iters {
 			if it.doc() == minDoc {
@@ -111,11 +160,11 @@ func (s *Segment) streamWAND(clauses []clause, algo ScoreAlgo, gs *globalStats, 
 // with MUST/MUST-NOT/phrase) has an intrinsically materialized candidate set, so it
 // runs the normal search unbounded and pushes the result through the same sink — a
 // uniform emit interface, and still no separate paginated copy in the caller.
-func (idx *Index) StreamQuery(pattern []byte, boolean bool, parser string, algo ScoreAlgo, filter docfilter.MembershipFilter, emit func(keys []any, distances []float64) error) error {
+func (idx *Index) StreamQuery(pattern []byte, boolean bool, parser string, algo ScoreAlgo, filter docfilter.MembershipFilter, emit func(keys *vectorindex.ColumnBuffer, distances []float64) error) error {
 	if idx.globalN == 0 {
 		return nil
 	}
-	sink := &streamSink{emit: emit}
+	sink := newStreamSink(idx, emit)
 	p := normalizeParser(parser)
 
 	// Resolve the query the same way SearchQuery does, but prefer the streaming
@@ -146,7 +195,7 @@ func (idx *Index) StreamQuery(pattern []byte, boolean bool, parser string, algo 
 		return err
 	}
 	for _, r := range results {
-		sink.push(r.Pk, r.Score)
+		sink.pushAny(r.Pk, r.Score)
 		if sink.err != nil {
 			return sink.err
 		}
@@ -160,7 +209,7 @@ func (idx *Index) StreamQuery(pattern []byte, boolean bool, parser string, algo 
 // heap-free via streamWAND — the position-free analogue of StreamQuery's disjunctive
 // branch, but a CJK run is tokenized to OR terms instead of a positional phrase, so it
 // works on a POSITION_FREE index.
-func (idx *Index) StreamBagOfWords(pattern []byte, parser string, algo ScoreAlgo, filter docfilter.MembershipFilter, emit func(keys []any, distances []float64) error) error {
+func (idx *Index) StreamBagOfWords(pattern []byte, parser string, algo ScoreAlgo, filter docfilter.MembershipFilter, emit func(keys *vectorindex.ColumnBuffer, distances []float64) error) error {
 	if idx.globalN == 0 {
 		return nil
 	}
@@ -172,7 +221,7 @@ func (idx *Index) StreamBagOfWords(pattern []byte, parser string, algo ScoreAlgo
 	if !ok {
 		return nil // no resolvable tokens → nothing to stream
 	}
-	return idx.streamDisjunction(terms, algo, filter, &streamSink{emit: emit})
+	return idx.streamDisjunction(terms, algo, filter, newStreamSink(idx, emit))
 }
 
 // streamDisjunction streams a pure OR of terms heap-free across all segments (global

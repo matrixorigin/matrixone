@@ -268,11 +268,35 @@ type RuntimeConfig struct {
 
 	// Emit, when non-nil, requests a STREAMING search: instead of returning all
 	// results at once, the index yields them in bounded batches by calling Emit
-	// once per batch (Search then returns empty keys/distances). Only the bm25
-	// index honors it, and only for the no-LIMIT case (return every matching
-	// doc, ranked by an upstream ORDER BY) — so it walks and streams without a
-	// top-K heap. Other algorithms ignore this field.
-	Emit func(keys []any, distances []float64) error
+	// once per batch (Search then returns empty keys/distances). Only the fulltext2
+	// index honors it, and only for the no-LIMIT case (return every matching doc,
+	// ranked by an upstream ORDER BY) — so it walks and streams without a top-K heap.
+	// Other algorithms ignore this field. Keys are a typed, box-free ColumnBuffer
+	// (fixed-width or varlena) rather than []any, so a million-row stream does not
+	// allocate a million boxed interfaces.
+	Emit func(keys *ColumnBuffer, distances []float64) error
+}
+
+// ColumnBuffer is a batch of primary keys in a TYPED, box-free columnar form, used by
+// the fulltext2 no-LIMIT streaming path (RuntimeConfig.Emit). A pk column has ONE
+// type, so every key in a batch is uniformly fixed-width or varlena and Type alone
+// disambiguates Data:
+//   - fixed-width type (int/uint/temporal/decimal): Data is N contiguous width-byte
+//     little-endian values (no length prefix; width is implied by Type).
+//   - varlena type (varchar/blob/json/uuid): Data is N [u32 len][content] entries.
+//
+// Neither form boxes into any, and Data is a copy (not a view into the segment mmap),
+// so an in-flight batch survives segment eviction.
+type ColumnBuffer struct {
+	Type types.T
+	Data []byte // fixed: N×width bytes; varlena: [u32 len][content] entries
+	N    int    // element count
+}
+
+// Reset clears a ColumnBuffer for reuse without dropping its backing buffer.
+func (k *ColumnBuffer) Reset() {
+	k.Data = k.Data[:0]
+	k.N = 0
 }
 
 type VectorIndexCdc[T types.RealNumbers] struct {
