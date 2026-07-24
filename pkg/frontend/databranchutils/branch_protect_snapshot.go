@@ -230,12 +230,39 @@ func BuildBranchSnapshotDeleteSQL(snames []string) string {
 	return b.String()
 }
 
-// ReclaimBranchSnapshotsCore runs the shared reclaim algorithm. It is the
-// single source of truth for the "flip table_deleted → compute drop list →
-// delete mo_snapshots rows" pipeline. Both the frontend path (data branch
-// delete) and the compile path (plain DROP TABLE) route through it via the
-// wrapper in their respective packages. Test code can drive it directly by
-// passing mock closures, which is what UT-U5/UT-U6/UT-U7 rely on.
+// MarkAndReclaimBranchSnapshotsCore runs the complete shared reclaim pipeline.
+// loadDAG must acquire the mo_branch_metadata coordination lock. Keeping the
+// lock before markDeleted gives every deletion path the same lock order and
+// prevents concurrent sibling drops from each updating one row before trying
+// to lock the complete relation.
+func MarkAndReclaimBranchSnapshotsCore(
+	deadTIDs []uint64,
+	loadDAG func() (BranchReclaimDag, error),
+	markDeleted func() error,
+	execDelete func(snames []string) error,
+) error {
+	if len(deadTIDs) == 0 {
+		return nil
+	}
+	dag, err := loadDAG()
+	if err != nil {
+		return err
+	}
+	if err = markDeleted(); err != nil {
+		return err
+	}
+	for _, tid := range deadTIDs {
+		if node, ok := dag.Info[tid]; ok {
+			node.Deleted = true
+			dag.Info[tid] = node
+		}
+	}
+	return reclaimBranchSnapshotsFromDAG(deadTIDs, dag, execDelete)
+}
+
+// ReclaimBranchSnapshotsCore computes and executes reclaim after the caller
+// has already persisted table_deleted. It remains available for callers and
+// tests that provide an already-updated DAG.
 func ReclaimBranchSnapshotsCore(
 	deadTIDs []uint64,
 	loadDAG func() (BranchReclaimDag, error),
@@ -248,6 +275,14 @@ func ReclaimBranchSnapshotsCore(
 	if err != nil {
 		return err
 	}
+	return reclaimBranchSnapshotsFromDAG(deadTIDs, dag, execDelete)
+}
+
+func reclaimBranchSnapshotsFromDAG(
+	deadTIDs []uint64,
+	dag BranchReclaimDag,
+	execDelete func(snames []string) error,
+) error {
 	drops := ComputeBranchReclaimDropList(dag, deadTIDs)
 	if len(drops) == 0 {
 		return nil

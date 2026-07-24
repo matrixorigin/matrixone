@@ -525,26 +525,23 @@ func dataBranchDeleteTable(
 	}
 
 	{
-		var dropRet executor.Result
-		defer func() {
-			dropRet.Close()
-		}()
-
 		dropSQL := fmt.Sprintf(
 			"drop table %s.%s",
 			quoteIdentifierForSQL(dbName),
 			quoteIdentifierForSQL(tblName),
 		)
-		if dropRet, err = runSql(execCtx.reqCtx, ses, bh, dropSQL, nil, nil); err != nil {
+		// Execute the nested DDL as a real background statement. The internal
+		// SQL fast path deliberately disables statement retry, but a concurrent
+		// branch reclaim can require an RC retry after waiting for the metadata
+		// coordination lock.
+		bh.ClearExecResultSet()
+		if err = bh.Exec(execCtx.reqCtx, dropSQL); err != nil {
 			return
 		}
+		bh.ClearExecResultSet()
 	}
 
-	if err = markBranchTablesDeleted(execCtx.reqCtx, ses, bh, accId, []uint64{tblID}); err != nil {
-		return
-	}
-
-	if err = reclaimBranchSnapshotsWithBH(execCtx.reqCtx, ses, bh, []uint64{tblID}); err != nil {
+	if err = reclaimBranchSnapshotsWithBH(execCtx.reqCtx, ses, bh, accId, []uint64{tblID}); err != nil {
 		return
 	}
 
@@ -597,11 +594,7 @@ func dataBranchDeleteDatabase(
 		}
 	}
 
-	if err = markBranchTablesDeleted(execCtx.reqCtx, ses, bh, accId, tableIDs); err != nil {
-		return
-	}
-
-	if err = reclaimBranchSnapshotsWithBH(execCtx.reqCtx, ses, bh, tableIDs); err != nil {
+	if err = reclaimBranchSnapshotsWithBH(execCtx.reqCtx, ses, bh, accId, tableIDs); err != nil {
 		return
 	}
 
