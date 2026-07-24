@@ -23,6 +23,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
@@ -42,7 +43,7 @@ func (c AutoColumn) getInsertSQL() string {
 		values(%d, '%s', %d, %d, %d)`,
 		incrTableName,
 		c.TableID,
-		c.ColName,
+		sqlquote.EscapeString(c.ColName),
 		c.ColIndex,
 		c.Offset,
 		c.Step)
@@ -106,7 +107,7 @@ func (s *sqlStore) Allocate(
 	fetchSQL := fmt.Sprintf(`select offset, step from %s where table_id = %d and col_name = '%s' for update`,
 		incrTableName,
 		tableID,
-		colName)
+		sqlquote.EscapeString(colName))
 	opts := executor.Options{}.
 		WithDatabase(database).
 		WithTxn(txnOp).
@@ -177,7 +178,7 @@ func (s *sqlStore) Allocate(
 					incrTableName,
 					next,
 					tableID,
-					colName,
+					sqlquote.EscapeString(colName),
 					current)
 				start = time.Now()
 				res, err = te.Exec(sql, executor.StatementOption{}.WithDisableLog())
@@ -296,9 +297,80 @@ func (s *sqlStore) UpdateMinValue(
 			incrTableName,
 			minValue,
 			tableID,
-			col,
+			sqlquote.EscapeString(col),
 			minValue),
 		opts)
+	if err != nil {
+		return err
+	}
+	defer res.Close()
+	return nil
+}
+
+func (s *sqlStore) SetOffset(
+	ctx context.Context,
+	tableID uint64,
+	colName string,
+	offset uint64,
+	txnOp client.TxnOperator,
+) error {
+	opts := executor.Options{}.
+		WithDatabase(database).
+		WithTxn(txnOp)
+	if txnOp == nil {
+		opts = opts.
+			WithWaitCommittedLogApplied().
+			WithEnableTrace().
+			WithDisableWaitPaused().
+			WithStatementOption(executor.StatementOption{}.WithDisableLog())
+	} else {
+		opts = opts.WithDisableIncrStatement()
+	}
+	res, err := s.exec.Exec(
+		ctx,
+		fmt.Sprintf(
+			"update %s set offset = %d where table_id = %d and col_name = '%s' and offset < %d",
+			incrTableName, offset, tableID, sqlquote.EscapeString(colName), offset,
+		),
+		opts,
+	)
+	if err != nil {
+		return err
+	}
+	defer res.Close()
+	return nil
+}
+
+// ForceSetOffset sets the offset of an auto-increment column to any value,
+// bypassing the monotonic guard. Only called from service.SetOffset during
+// ALTER TABLE AUTO_INCREMENT, which holds an exclusive DDL lock.
+func (s *sqlStore) ForceSetOffset(
+	ctx context.Context,
+	tableID uint64,
+	colName string,
+	offset uint64,
+	txnOp client.TxnOperator,
+) error {
+	opts := executor.Options{}.
+		WithDatabase(database).
+		WithTxn(txnOp)
+	if txnOp == nil {
+		opts = opts.
+			WithWaitCommittedLogApplied().
+			WithEnableTrace().
+			WithDisableWaitPaused().
+			WithStatementOption(executor.StatementOption{}.WithDisableLog())
+	} else {
+		opts = opts.WithDisableIncrStatement()
+	}
+	res, err := s.exec.Exec(
+		ctx,
+		fmt.Sprintf(
+			"update %s set offset = %d where table_id = %d and col_name = '%s'",
+			incrTableName, offset, tableID, sqlquote.EscapeString(colName),
+		),
+		opts,
+	)
 	if err != nil {
 		return err
 	}

@@ -104,10 +104,11 @@ var (
 	CauseAllocateTasks = NewInternalError(context.Background(), "allocateTask")
 	CauseTruncateTasks = NewInternalError(context.Background(), "truncateTasks")
 	//pkg/incrservice
-	CauseDoAllocate    = NewInternalError(context.Background(), "doAllocate")
-	CauseDoUpdate      = NewInternalError(context.Background(), "doUpdate")
-	CauseDestroyTables = NewInternalError(context.Background(), "destroyTables")
-	CauseAllocate      = NewInternalError(context.Background(), "allocate")
+	CauseDoAllocate       = NewInternalError(context.Background(), "doAllocate")
+	CauseDoUpdate         = NewInternalError(context.Background(), "doUpdate")
+	CauseDoForceSetOffset = NewInternalError(context.Background(), "doForceSetOffset")
+	CauseDestroyTables    = NewInternalError(context.Background(), "destroyTables")
+	CauseAllocate         = NewInternalError(context.Background(), "allocate")
 	//pkg/lockservice
 	CauseCleanCommitState          = NewInternalError(context.Background(), "cleanCommitState")
 	CauseValidateService           = NewInternalError(context.Background(), "validateService")

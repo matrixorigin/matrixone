@@ -20,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -56,23 +57,7 @@ func (s *memStore) Create(
 	defer s.Unlock()
 	m := s.caches
 	if txnOp != nil {
-		m = make(map[uint64][]AutoColumn)
-		s.uncommitted[string(txnOp.Txn().ID)] = m
-		txnOp.AppendEventCallback(
-			client.ClosedEvent,
-			client.NewTxnEventCallback(
-				func(ctx context.Context, txnOp client.TxnOperator, event client.TxnEvent, v any) error {
-					txnMeta := event.Txn
-					s.Lock()
-					defer s.Unlock()
-					delete(s.uncommitted, string(txnMeta.ID))
-					if txnMeta.Status == txn.TxnStatus_Committed {
-						for k, v := range m {
-							s.caches[k] = v
-						}
-					}
-					return nil
-				}))
+		m = s.getOrCreateTxnMapLocked(txnOp)
 	}
 
 	caches := m[tableID]
@@ -90,6 +75,50 @@ func (s *memStore) Create(
 	}
 	m[tableID] = caches
 	return nil
+}
+
+func (s *memStore) getOrCreateTxnMapLocked(txnOp client.TxnOperator) map[uint64][]AutoColumn {
+	txnKey := string(txnOp.Txn().ID)
+	if m, ok := s.uncommitted[txnKey]; ok {
+		return m
+	}
+	m := make(map[uint64][]AutoColumn)
+	s.uncommitted[txnKey] = m
+	txnOp.AppendEventCallback(
+		client.ClosedEvent,
+		client.NewTxnEventCallback(
+			func(ctx context.Context, txnOp client.TxnOperator, event client.TxnEvent, v any) error {
+				txnMeta := event.Txn
+				s.Lock()
+				defer s.Unlock()
+				delete(s.uncommitted, string(txnMeta.ID))
+				if txnMeta.Status == txn.TxnStatus_Committed {
+					for k, v := range m {
+						s.caches[k] = v
+					}
+				}
+				return nil
+			}))
+	return m
+}
+
+func (s *memStore) getOrCloneTxnTableLocked(
+	ctx context.Context,
+	tableID uint64,
+	txnOp client.TxnOperator,
+) (map[uint64][]AutoColumn, error) {
+	if m, ok := s.uncommitted[string(txnOp.Txn().ID)]; ok {
+		if _, exists := m[tableID]; exists {
+			return m, nil
+		}
+	}
+	cols, ok := s.caches[tableID]
+	if !ok {
+		return nil, moerr.NewInternalErrorf(ctx, "incrservice: table %d not found in memStore", tableID)
+	}
+	m := s.getOrCreateTxnMapLocked(txnOp)
+	m[tableID] = append([]AutoColumn(nil), cols...)
+	return m, nil
 }
 
 func (s *memStore) GetColumns(
@@ -129,7 +158,7 @@ func (s *memStore) Allocate(
 			c = &cols[i]
 		}
 	}
-	if !ok {
+	if c == nil {
 		panic("missing incr column record")
 	}
 
@@ -165,14 +194,79 @@ func (s *memStore) UpdateMinValue(
 			c = &cols[i]
 		}
 	}
-	if !ok {
+	if c == nil {
 		panic("missing incr column record")
 	}
 
-	if c != nil && c.Offset < minValue {
+	if c.Offset < minValue {
 		c.Offset = minValue
 	}
 	return nil
+}
+
+func (s *memStore) SetOffset(
+	ctx context.Context,
+	tableID uint64,
+	colName string,
+	offset uint64,
+	txnOp client.TxnOperator,
+) error {
+	s.Lock()
+	defer s.Unlock()
+	m := s.caches
+	if txnOp != nil {
+		var err error
+		m, err = s.getOrCloneTxnTableLocked(ctx, tableID, txnOp)
+		if err != nil {
+			return err
+		}
+	}
+	cols, ok := m[tableID]
+	if !ok {
+		return moerr.NewInternalErrorf(ctx, "incrservice: table %d not found in memStore", tableID)
+	}
+	for i := range cols {
+		if cols[i].ColName == colName {
+			if cols[i].Offset < offset {
+				cols[i].Offset = offset
+			}
+			return nil
+		}
+	}
+	return moerr.NewInternalErrorf(ctx, "incrservice: column %s not found for table %d in memStore", colName, tableID)
+}
+
+// ForceSetOffset sets the offset of an auto-increment column to any value,
+// bypassing the monotonic guard. Only called from service.SetOffset during
+// ALTER TABLE AUTO_INCREMENT, which holds an exclusive DDL lock.
+func (s *memStore) ForceSetOffset(
+	ctx context.Context,
+	tableID uint64,
+	colName string,
+	offset uint64,
+	txnOp client.TxnOperator,
+) error {
+	s.Lock()
+	defer s.Unlock()
+	m := s.caches
+	if txnOp != nil {
+		var err error
+		m, err = s.getOrCloneTxnTableLocked(ctx, tableID, txnOp)
+		if err != nil {
+			return err
+		}
+	}
+	cols, ok := m[tableID]
+	if !ok {
+		return moerr.NewInternalErrorf(ctx, "incrservice: table %d not found in memStore", tableID)
+	}
+	for i := range cols {
+		if cols[i].ColName == colName {
+			cols[i].Offset = offset
+			return nil
+		}
+	}
+	return moerr.NewInternalErrorf(ctx, "incrservice: column %s not found for table %d in memStore", colName, tableID)
 }
 
 func (s *memStore) Delete(
