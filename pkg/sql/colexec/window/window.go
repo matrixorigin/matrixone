@@ -37,6 +37,22 @@ import (
 
 const opName = "window"
 
+// A Window call can spend a long time inside one frame evaluation, especially
+// for running frames whose aggregate work is quadratic in the partition size.
+// Keep the cancellation polling overhead bounded while still allowing KILL
+// QUERY / KILL CONNECTION to interrupt that work promptly.
+const cancellationCheckInterval = 1024
+
+func checkCanceled(proc *process.Process, iteration int) error {
+	if iteration&(cancellationCheckInterval-1) != 0 {
+		return nil
+	}
+	if err, canceled := vm.CancelCheck(proc); canceled {
+		return err
+	}
+	return nil
+}
+
 func (window *Window) String(buf *bytes.Buffer) {
 	buf.WriteString(opName)
 	buf.WriteString(": window")
@@ -80,6 +96,9 @@ func (window *Window) Call(proc *process.Process) (vm.CallResult, error) {
 	ctr := &window.ctr
 
 	for {
+		if err, canceled := vm.CancelCheck(proc); canceled {
+			return vm.CancelResult, err
+		}
 		switch ctr.status {
 		case receiveAll:
 			for {
@@ -154,6 +173,9 @@ func (window *Window) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 			// calculate
 			for i, w := range window.WinSpecList {
+				if err = checkCanceled(proc, 0); err != nil {
+					return result, err
+				}
 				// sort and partitions
 				if window.Fs = makeOrderBy(w); window.Fs != nil {
 					if len(ctr.orderVecs) == 0 {
@@ -277,7 +299,13 @@ func (ctr *container) processFunc(idx int, ap *Window, proc *process.Process, an
 
 		o := 0
 		for p := 1; p < len(ctr.ps); p++ {
+			if err = checkCanceled(proc, p); err != nil {
+				return err
+			}
 			for ; o < len(ctr.os); o++ {
+				if err = checkCanceled(proc, o); err != nil {
+					return err
+				}
 
 				if ctr.os[o] <= ctr.ps[p] {
 					// For NTILE, pass both os vector and bucket count vector
@@ -302,6 +330,9 @@ func (ctr *container) processFunc(idx int, ap *Window, proc *process.Process, an
 	} else {
 		// plan.Function_AGG
 		for j := 0; j < n; j++ {
+			if err = checkCanceled(proc, j); err != nil {
+				return err
+			}
 
 			start, end := 0, n
 
@@ -326,6 +357,9 @@ func (ctr *container) processFunc(idx int, ap *Window, proc *process.Process, an
 			}
 
 			for k := left; k < right; k++ {
+				if err = checkCanceled(proc, k-left); err != nil {
+					return err
+				}
 				if err = ctr.batAggs[idx].Fill(j, k, ctr.aggVecs[idx].Vec); err != nil {
 					return err
 				}
@@ -390,6 +424,9 @@ func (ctr *container) processValueFunc(idx int, ap *Window, proc *process.Proces
 			defaultVec = ctr.aggVecs[idx].Vec[2]
 		}
 		for j := 0; j < n; j++ {
+			if err = checkCanceled(proc, j); err != nil {
+				return nil, err
+			}
 			offset, ok := constOffset, constOK
 			if offsetVec != nil && !offsetVec.IsConst() {
 				offset, ok = getInt64FromVec(offsetVec, j)
@@ -430,6 +467,9 @@ func (ctr *container) processValueFunc(idx int, ap *Window, proc *process.Proces
 			defaultVec = ctr.aggVecs[idx].Vec[2]
 		}
 		for j := 0; j < n; j++ {
+			if err = checkCanceled(proc, j); err != nil {
+				return nil, err
+			}
 			offset, ok := constOffset, constOK
 			if offsetVec != nil && !offsetVec.IsConst() {
 				offset, ok = getInt64FromVec(offsetVec, j)
@@ -458,6 +498,9 @@ func (ctr *container) processValueFunc(idx int, ap *Window, proc *process.Proces
 
 	case "first_value":
 		for j := 0; j < n; j++ {
+			if err = checkCanceled(proc, j); err != nil {
+				return nil, err
+			}
 			start, end := 0, n
 			if ctr.ps != nil {
 				start, end = buildPartitionInterval(ctr.ps, j, n)
@@ -485,6 +528,9 @@ func (ctr *container) processValueFunc(idx int, ap *Window, proc *process.Proces
 
 	case "last_value":
 		for j := 0; j < n; j++ {
+			if err = checkCanceled(proc, j); err != nil {
+				return nil, err
+			}
 			start, end := 0, n
 			if ctr.ps != nil {
 				start, end = buildPartitionInterval(ctr.ps, j, n)
@@ -521,6 +567,9 @@ func (ctr *container) processValueFunc(idx int, ap *Window, proc *process.Proces
 			}
 		}
 		for j := 0; j < n; j++ {
+			if err = checkCanceled(proc, j); err != nil {
+				return nil, err
+			}
 			nthVal, ok := constNth, constOK
 			if nthVec != nil && !nthVec.IsConst() {
 				nthVal, ok = getInt64FromVec(nthVec, j)
@@ -834,14 +883,23 @@ func (ctr *container) processOrder(idx int, ap *Window, bat *batch.Batch, proc *
 	// }
 	ctr.sels = make([]int64, rowCount)
 	for i := 0; i < rowCount; i++ {
+		if err := checkCanceled(proc, i); err != nil {
+			return false, err
+		}
 		ctr.sels[i] = int64(i)
 	}
 
 	// skip sort for const vector
 	if !ovec.IsConst() {
+		if err := checkCanceled(proc, 0); err != nil {
+			return false, err
+		}
 		nullCnt := ovec.GetNulls().Count()
 		if nullCnt < ovec.Length() {
 			sort.Sort(ctr.desc[0], ctr.nullsLast[0], nullCnt > 0, ctr.sels, ovec)
+		}
+		if err := checkCanceled(proc, 0); err != nil {
+			return false, err
 		}
 	}
 
@@ -853,6 +911,9 @@ func (ctr *container) processOrder(idx int, ap *Window, bat *batch.Batch, proc *
 
 	i, j := 1, len(ctr.orderVecs)
 	for ; i < j; i++ {
+		if err := checkCanceled(proc, 0); err != nil {
+			return false, err
+		}
 		desc := ctr.desc[i]
 		nullsLast := ctr.nullsLast[i]
 		ps = partition.Partition(ctr.sels, ds, ps, ovec)
@@ -862,6 +923,9 @@ func (ctr *container) processOrder(idx int, ap *Window, bat *batch.Batch, proc *
 			nullCnt := vec.GetNulls().Count()
 			if nullCnt < vec.Length() {
 				for i, j := 0, len(ps); i < j; i++ {
+					if err := checkCanceled(proc, i); err != nil {
+						return false, err
+					}
 					if i == j-1 {
 						sort.Sort(desc, nullsLast, nullCnt > 0, ctr.sels[ps[i]:], vec)
 					} else {
@@ -869,6 +933,9 @@ func (ctr *container) processOrder(idx int, ap *Window, bat *batch.Batch, proc *
 					}
 				}
 			}
+		}
+		if err := checkCanceled(proc, 0); err != nil {
+			return false, err
 		}
 		ovec = vec
 		if n == i {
