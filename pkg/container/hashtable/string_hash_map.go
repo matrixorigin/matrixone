@@ -39,9 +39,8 @@ var StrKeyPadding [16]byte
 type StringHashMap struct {
 	mp *mpool.MPool
 
-	blockCellCnt    uint64
-	blockMaxElemCnt uint64
-	cellCntMask     uint64
+	blockCellCnt uint64
+	cellCntMask  uint64
 
 	cellCnt uint64
 	elemCnt uint64
@@ -81,7 +80,6 @@ func (ht *StringHashMap) allocate(index int, ncells int) error {
 func (ht *StringHashMap) Init(mp *mpool.MPool) (err error) {
 	ht.mp = mp
 	ht.blockCellCnt = kInitialCellCnt
-	ht.blockMaxElemCnt = maxElemCnt(kInitialCellCnt, strCellSize)
 	ht.elemCnt = 0
 	ht.cellCnt = kInitialCellCnt
 	ht.cellCntMask = kInitialCellCnt - 1
@@ -172,7 +170,7 @@ func (ht *StringHashMap) findEmptyCell(state *[3]uint64) *StringHashMapCell {
 func (ht *StringHashMap) ResizeOnDemand(n uint64) error {
 
 	targetCnt := ht.elemCnt + n
-	if targetCnt <= uint64(len(ht.cells))*ht.blockMaxElemCnt {
+	if targetCnt <= maxElemCnt(ht.cellCnt, strCellSize) {
 		return nil
 	}
 
@@ -240,7 +238,6 @@ func (ht *StringHashMap) ResizeOnDemand(n uint64) error {
 
 		if newAlloc <= maxBlockSize {
 			ht.blockCellCnt = newCellCnt
-			ht.blockMaxElemCnt = newMaxElemCnt
 
 			if err := ht.allocate(0, int(newCellCnt)); err != nil {
 				return err
@@ -248,7 +245,6 @@ func (ht *StringHashMap) ResizeOnDemand(n uint64) error {
 
 		} else {
 			ht.blockCellCnt = maxStrCellCntPerBlock
-			ht.blockMaxElemCnt = maxElemCnt(ht.blockCellCnt, strCellSize)
 
 			newBlockNum := newAlloc / maxBlockSize
 			ht.cells = make([][]StringHashMapCell, newBlockNum)

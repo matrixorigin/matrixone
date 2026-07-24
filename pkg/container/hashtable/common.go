@@ -21,8 +21,12 @@ import (
 const (
 	kInitialCellCntBits = 10
 	kInitialCellCnt     = 1 << kInitialCellCntBits
-	maxBlockSize        = 256 * (1 << 20)
-	MB                  = 1 << 20
+	// Keep mmap-backed hash tables segmented once they become large. Growing one
+	// contiguous table repeatedly faults almost twice the final table size before
+	// the old mappings can be released. Segments cap that transient work while
+	// preserving deterministic release when the table is freed.
+	maxBlockSize = 4 * (1 << 20)
+	MB           = 1 << 20
 )
 
 func maxElemCnt(cellCnt, cellSize uint64) uint64 {

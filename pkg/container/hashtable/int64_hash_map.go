@@ -32,9 +32,8 @@ type Int64HashMapCell struct {
 type Int64HashMap struct {
 	mp *mpool.MPool
 
-	blockCellCnt    uint64
-	blockMaxElemCnt uint64
-	cellCntMask     uint64
+	blockCellCnt uint64
+	cellCntMask  uint64
 
 	cellCnt uint64
 	elemCnt uint64
@@ -75,7 +74,6 @@ func (ht *Int64HashMap) allocate(index int, ncells int) error {
 func (ht *Int64HashMap) Init(mp *mpool.MPool) (err error) {
 	ht.mp = mp
 	ht.blockCellCnt = kInitialCellCnt
-	ht.blockMaxElemCnt = maxElemCnt(kInitialCellCnt, intCellSize)
 	ht.cellCntMask = kInitialCellCnt - 1
 	ht.elemCnt = 0
 	ht.cellCnt = kInitialCellCnt
@@ -171,7 +169,7 @@ func (ht *Int64HashMap) findEmptyCell(hash uint64) *Int64HashMapCell {
 
 func (ht *Int64HashMap) ResizeOnDemand(cnt int) error {
 	targetCnt := ht.elemCnt + uint64(cnt)
-	if targetCnt <= uint64(len(ht.cells))*ht.blockMaxElemCnt {
+	if targetCnt <= maxElemCnt(ht.cellCnt, intCellSize) {
 		return nil
 	}
 
@@ -239,7 +237,6 @@ func (ht *Int64HashMap) ResizeOnDemand(cnt int) error {
 
 		if newAllocSize <= maxBlockSize {
 			ht.blockCellCnt = newCellCnt
-			ht.blockMaxElemCnt = newMaxElemCnt
 
 			if err := ht.allocate(0, int(newCellCnt)); err != nil {
 				return err
@@ -247,7 +244,6 @@ func (ht *Int64HashMap) ResizeOnDemand(cnt int) error {
 
 		} else {
 			ht.blockCellCnt = maxIntCellCntPerBlock
-			ht.blockMaxElemCnt = maxElemCnt(ht.blockCellCnt, intCellSize)
 
 			newBlockNum := newAllocSize / maxBlockSize
 			ht.cells = make([][]Int64HashMapCell, newBlockNum)
