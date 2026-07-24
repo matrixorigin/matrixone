@@ -33,7 +33,7 @@ import (
 )
 
 func TestIssue26087ConcurrentDataBranchQuota(t *testing.T) {
-	embed.RunBaseClusterTests(
+	require.NoError(t, embed.RunBaseClusterTests(
 		func(c embed.Cluster) {
 			ctx, cancel := context.WithTimeout(context.Background(), 240*time.Second)
 			defer cancel()
@@ -211,14 +211,14 @@ func TestIssue26087ConcurrentDataBranchQuota(t *testing.T) {
 			require.NoError(t, execConn(conn1, "rollback"))
 
 			require.NoError(t, execConn(conn1, "set autocommit = 0"))
-			require.NoError(t, execConn(conn1,
-				"data branch create table branch_quota_race.implicit_branch from branch_quota_race.src{snapshot='issue_26087_sp'}"))
 			var modeProbeCount int
 			require.NoError(t, conn1.QueryRowContext(execCtx,
 				"select count(*) from branch_quota_race.mode_probe",
 			).Scan(&modeProbeCount))
 			require.Zero(t, modeProbeCount)
 			require.NoError(t, execConn(conn2, "insert into branch_quota_race.mode_probe values (1)"))
+			require.NoError(t, execConn(conn1,
+				"data branch create table branch_quota_race.implicit_branch from branch_quota_race.src"))
 			require.NoError(t, conn1.QueryRowContext(execCtx,
 				"select count(*) from branch_quota_race.mode_probe",
 			).Scan(&modeProbeCount))
@@ -294,5 +294,5 @@ func TestIssue26087ConcurrentDataBranchQuota(t *testing.T) {
 			).Scan(&optimisticBranchCount))
 			require.Equal(t, 1, optimisticBranchCount)
 		},
-	)
+	))
 }

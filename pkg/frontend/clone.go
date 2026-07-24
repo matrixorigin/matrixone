@@ -326,7 +326,7 @@ func handleCloneTable(
 
 	if snapshot == nil {
 		if snapshotTS, err = tryToIncreaseTxnPhysicalTS(
-			reqCtx, ses.proc.GetTxnOperator(),
+			reqCtx, bh.(*backExec).backSes.GetTxnHandler().GetTxn(),
 		); err != nil {
 			return
 		}
@@ -464,7 +464,7 @@ func handleCloneDatabaseWithSource(
 		// so we try to increase the txn physical ts here to make sure the snapshot TS
 		// the clone will get is greater than P2.
 		if snapshotTS, err = tryToIncreaseTxnPhysicalTS(
-			reqCtx, ses.proc.GetTxnOperator(),
+			reqCtx, bh.(*backExec).backSes.GetTxnHandler().GetTxn(),
 		); err != nil {
 			return
 		}
