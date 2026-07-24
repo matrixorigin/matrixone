@@ -159,7 +159,7 @@ func statementCanBeExecutedInUncommittedTransaction(
 	case *tree.CreateSequence: //Case1, Case3 above
 		return ses.IsBackgroundSession() || !ses.GetTxnHandler().OptionBitsIsSet(OPTION_BEGIN), nil
 		//dml statement
-	case *tree.Insert, *tree.Update, *tree.Delete, *tree.Select, *tree.Load, *tree.MoDump, *tree.ValuesStatement, *tree.Replace:
+	case *tree.Insert, *tree.Update, *tree.Delete, *tree.Select, *tree.Load, *tree.MoDump, *tree.DumpTable, *tree.LoadTable, *tree.ValuesStatement, *tree.Replace:
 		return true, nil
 		//transaction
 	case *tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction, *tree.SavePoint, *tree.ReleaseSavePoint, *tree.RollbackToSavePoint:
@@ -254,8 +254,15 @@ func statementCanBeExecutedInUncommittedTransaction(
 		*tree.DataBranchDeleteDatabase,
 		*tree.DataBranchDiff:
 		return true, nil
+	case *tree.DataBranchMerge:
+		// MERGE reuses an explicit BEGIN transaction, but cannot run inside an
+		// implicit autocommit=0 transaction because that path would manage and
+		// commit a separate background transaction.
+		return ses.IsBackgroundSession() || ses.GetTxnHandler().OptionBitsIsSet(OPTION_BEGIN), nil
 	case *tree.DataBranchPick:
-		return false, nil
+		// PICK manages its own transaction and cannot follow an outer user
+		// transaction. Background sessions reuse the caller's shared transaction.
+		return ses.IsBackgroundSession(), nil
 	case *tree.CallStmt:
 		// Call procedure can be executed in an uncommitted transaction, usually used in
 		// nested procedure call.

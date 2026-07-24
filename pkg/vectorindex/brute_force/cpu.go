@@ -25,7 +25,7 @@ import (
 // gpuMode is accepted-but-ignored in non-gpu builds — CPU is the only
 // option here. The signature matches the gpu.go version so callers
 // pass the flag uniformly regardless of build tag.
-func NewBruteForceIndex[T types.RealNumbers](dataset [][]T,
+func NewBruteForceIndex[T types.ArrayElement](dataset [][]T,
 	dimension uint,
 	m metric.MetricType,
 	elemsz uint,

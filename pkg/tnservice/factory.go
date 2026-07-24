@@ -18,7 +18,6 @@ import (
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
@@ -26,9 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/mem"
-	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
 	taestorage "github.com/matrixorigin/matrixone/pkg/txn/storage/tae"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/logservicedriver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 )
@@ -36,7 +33,6 @@ import (
 var (
 	supportTxnStorageBackends = map[StorageType]struct{}{
 		StorageMEMKV: {},
-		StorageMEM:   {},
 		StorageTAE:   {},
 	}
 )
@@ -47,9 +43,6 @@ func (s *store) createTxnStorage(
 	txnServer rpc.TxnServer,
 ) (storage.TxnStorage, error) {
 	switch s.cfg.Txn.Storage.Backend {
-	case StorageMEM:
-		return s.newMemTxnStorage(shard, s.hakeeperClient)
-
 	case StorageMEMKV:
 		factory := s.createLogServiceClientFactroy(shard)
 		logClient, err := factory()
@@ -98,23 +91,6 @@ func (s *store) newLogServiceClient(shard metadata.TNShard) (logservice.Client, 
 		return nil, moerr.AttachCause(ctx, err)
 	}
 	return client, nil
-}
-
-func (s *store) newMemTxnStorage(
-	shard metadata.TNShard,
-	hakeeper logservice.TNHAKeeperClient,
-) (storage.TxnStorage, error) {
-	// should it be no fixed or a certain size?
-	mp, err := mpool.NewMPool("mem_txn_storge", 0, mpool.NoFixed)
-	if err != nil {
-		return nil, err
-	}
-	return memorystorage.NewMemoryStorage(
-		s.cfg.UUID,
-		mp,
-		s.rt.Clock(),
-		memoryengine.NewHakeeperIDGenerator(hakeeper),
-	)
 }
 
 func (s *store) newMemKVStorage(shard metadata.TNShard, logClient logservice.Client) (storage.TxnStorage, error) {

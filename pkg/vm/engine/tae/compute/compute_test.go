@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"github.com/RoaringBitmap/roaring/v2"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -25,6 +26,28 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// TestGetOffsetByValNarrowArray covers GetOffsetByVal binary search over a
+// narrow vector array column (vecint8 here). The array case compares raw bytes;
+// it previously listed only vecf32/vecf64, so a narrow array fell through.
+func TestGetOffsetByValNarrowArray(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	mp := mpool.MustNewZero()
+	typ := types.New(types.T_array_int8, 2, 0)
+	vec := containers.MakeVector(typ, mp)
+	defer vec.Close()
+	// byte-sorted rows so binary search is well-defined
+	vec.Append(types.ArrayToBytes([]int8{1, 1}), false)
+	vec.Append(types.ArrayToBytes([]int8{2, 2}), false)
+	vec.Append(types.ArrayToBytes([]int8{3, 3}), false)
+
+	off, exist := GetOffsetByVal(vec, types.ArrayToBytes([]int8{2, 2}), nil)
+	require.True(t, exist)
+	require.Equal(t, 1, off)
+
+	_, exist = GetOffsetByVal(vec, types.ArrayToBytes([]int8{9, 9}), nil)
+	require.False(t, exist)
+}
 
 func TestSortAndDedup(t *testing.T) {
 	defer testutils.AfterTest(t)()

@@ -30,6 +30,12 @@ func TestValidateRejectsInvalidLogtailRPCMessageSize(t *testing.T) {
 	}
 }
 
+func TestValidateRejectsRemovedMemoryStorage(t *testing.T) {
+	c := &Config{UUID: "tn1"}
+	c.Txn.Storage.Backend = "MEM"
+	assert.ErrorContains(t, c.Validate(), "txn storage backend not support")
+}
+
 func TestValidate(t *testing.T) {
 	c := &Config{}
 	assert.Error(t, c.Validate())

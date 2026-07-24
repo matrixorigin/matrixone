@@ -377,8 +377,8 @@ func Exec(op Operator, proc *process.Process) (CallResult, error) {
 
 func ChildrenCall(op Operator, proc *process.Process, anal process.Analyzer) (CallResult, error) {
 	beforeChildrenCall := time.Now()
+	defer anal.ChildrenCallStop(beforeChildrenCall)
 	result, err := Exec(op, proc)
-	anal.ChildrenCallStop(beforeChildrenCall)
 	if err == nil {
 		anal.Input(result.Batch)
 	}

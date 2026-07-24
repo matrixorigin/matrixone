@@ -212,3 +212,51 @@ func TestAllocateAndPublishCommitTSErrorDoesNotPublish(t *testing.T) {
 	require.ErrorIs(t, err, publishErr)
 	require.True(t, mgr.MaxCommittedTS.Load().LT(&ts))
 }
+
+func newTxnManagerForLifecycleTest() *TxnManager {
+	mgr := &TxnManager{}
+	mgr.txns.store = new(sync.Map)
+	return mgr
+}
+
+func newTxnForLifecycleTest(mgr *TxnManager, id string) *Txn {
+	return NewTxn(mgr, &NoopTxnStore{}, []byte(id), types.TS{}, types.TS{})
+}
+
+func waitTxnManagerEmpty(t *testing.T, mgr *TxnManager) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	require.NoError(t, mgr.WaitEmpty(ctx))
+}
+
+func TestLoadOrStoreTxnBalancesLifecycleWaiterWhenLoaded(t *testing.T) {
+	mgr := newTxnManagerForLifecycleTest()
+	first, loaded, offline := mgr.loadOrStoreTxn(
+		newTxnForLifecycleTest(mgr, "txn"), TxnFlag_Normal)
+	require.False(t, loaded)
+	require.False(t, offline)
+
+	actual, loaded, offline := mgr.loadOrStoreTxn(
+		newTxnForLifecycleTest(mgr, "txn"), TxnFlag_Normal)
+	require.True(t, loaded)
+	require.False(t, offline)
+	require.Same(t, first, actual)
+
+	require.NoError(t, mgr.DeleteTxn("txn"))
+	waitTxnManagerEmpty(t, mgr)
+}
+
+func TestLoadOrStoreTxnSkipsTrackingInReadonlyMode(t *testing.T) {
+	mgr := newTxnManagerForLifecycleTest()
+	mgr.txns.skipFlags.Store(uint64(TxnFlag_Normal))
+	txn := newTxnForLifecycleTest(mgr, "offline")
+
+	actual, loaded, offline := mgr.loadOrStoreTxn(txn, TxnFlag_Normal)
+	require.False(t, loaded)
+	require.True(t, offline)
+	require.Same(t, txn, actual)
+	_, exists := mgr.txns.store.Load("offline")
+	require.False(t, exists)
+	waitTxnManagerEmpty(t, mgr)
+}

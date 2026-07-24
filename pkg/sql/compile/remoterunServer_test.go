@@ -170,7 +170,7 @@ func TestNewCompile_CreatesCorrectStructure(t *testing.T) {
 	defer ctrl.Finish()
 
 	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
-	// Use mock engine instead of testengine
+	// Use a mock engine to isolate structure construction.
 	mockEngine := mock_frontend.NewMockEngine(ctrl)
 	// Create a valid MessageCenter for SetMultiCN to work
 	// SetMultiCN requires a non-nil MessageCenter with initialized RwMutex

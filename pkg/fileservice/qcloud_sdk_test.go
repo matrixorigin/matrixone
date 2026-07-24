@@ -17,15 +17,18 @@ package fileservice
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"math/rand/v2"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/stretchr/testify/require"
 	"github.com/tencentyun/cos-go-sdk-v5"
 )
 
@@ -87,6 +90,68 @@ func TestQCloudSDK(t *testing.T) {
 		}
 	})
 
+}
+
+func TestNewQCloudSDKNoBucketValidation(t *testing.T) {
+	sdk, err := NewQCloudSDK(context.Background(), ObjectStorageArguments{
+		Name:               "qcloud-new",
+		Bucket:             "bucket",
+		Region:             "ap-guangzhou",
+		KeyID:              "id",
+		KeySecret:          "secret",
+		SessionToken:       "token",
+		NoBucketValidation: true,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sdk.name != "qcloud-new" || sdk.client == nil {
+		t.Fatalf("unexpected sdk: %#v", sdk)
+	}
+	if sdk.client.Conf.RetryOpt.Count != 0 {
+		t.Fatalf("expected SDK retry disabled, got %d", sdk.client.Conf.RetryOpt.Count)
+	}
+
+	t.Setenv("AWS_ACCESS_KEY_ID", "env-id")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "env-secret")
+	t.Setenv("AWS_SESSION_TOKEN", "env-token")
+	sdk, err = NewQCloudSDK(context.Background(), ObjectStorageArguments{
+		Bucket:             "bucket",
+		Region:             "ap-guangzhou",
+		NoBucketValidation: true,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sdk.client == nil {
+		t.Fatalf("expected client")
+	}
+}
+
+func TestQCloudSDKCopyObject(t *testing.T) {
+	var copySource string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		copySource = r.Header.Get("x-cos-copy-source")
+		w.Header().Set("Content-Type", "application/xml")
+		_, _ = io.WriteString(w, `<CopyObjectResult><ETag>"etag"</ETag><LastModified>2026-01-01T00:00:00Z</LastModified></CopyObjectResult>`)
+	}))
+	defer server.Close()
+
+	domain := newObjectStorageCopyCredentialDomain("id", "secret")
+	src := newTestCOSClient(t, server)
+	src.copySourceHost = "source.example.com"
+	src.copyCredentialDomain = domain
+	dst := newTestCOSClient(t, server)
+	dst.copyCredentialDomain = domain
+
+	copied, err := dst.CopyObject(context.Background(), src, "source/key", "destination/key")
+	require.NoError(t, err)
+	require.True(t, copied)
+	require.Equal(t, "source.example.com/source/key", copySource)
+
+	copied, err = dst.CopyObject(context.Background(), dummyObjectStorage{}, "source", "destination")
+	require.NoError(t, err)
+	require.False(t, copied)
 }
 
 func TestQCloudSDKWriteRetriesSeekablePut(t *testing.T) {
@@ -184,9 +249,152 @@ func TestWrappedNetTimeoutRetryable(t *testing.T) {
 }
 
 func TestServerClosedIdleConnectionRetryable(t *testing.T) {
-	err := fmt.Errorf("Post %q: http: server closed idle connection", "https://example.com/object")
+	err := fmt.Errorf(`Put "https://bucket.cos.ap-guangzhou.myqcloud.com/object?partNumber=716&uploadId=id": http: server closed idle connection`)
 	if !IsRetryableError(err) {
 		t.Fatalf("expected server closed idle connection to be retryable")
+	}
+}
+
+func TestQCloudSDKBasicObjectOperations(t *testing.T) {
+	const body = "hello object"
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		key := strings.TrimPrefix(r.URL.Path, "/")
+		switch {
+		case r.Method == http.MethodGet && key == "" && !strings.Contains(r.URL.RawQuery, "marker=page2"):
+			w.Header().Set("Content-Type", "application/xml")
+			_, _ = io.WriteString(w, `<ListBucketResult><Name>bucket</Name><Prefix>dir/</Prefix><MaxKeys>2</MaxKeys><IsTruncated>true</IsTruncated><Contents><Key>dir/file1</Key><Size>11</Size></Contents><CommonPrefixes><Prefix>dir/sub/</Prefix></CommonPrefixes><NextMarker>page2</NextMarker></ListBucketResult>`)
+		case r.Method == http.MethodGet && key == "" && strings.Contains(r.URL.RawQuery, "marker=page2"):
+			w.Header().Set("Content-Type", "application/xml")
+			_, _ = io.WriteString(w, `<ListBucketResult><Name>bucket</Name><Prefix>dir/</Prefix><Marker>page2</Marker><IsTruncated>false</IsTruncated><Contents><Key>dir/file2</Key><Size>7</Size></Contents></ListBucketResult>`)
+		case r.Method == http.MethodHead && key == "missing":
+			w.Header().Set("Content-Type", "application/xml")
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = io.WriteString(w, `<Error><Code>NoSuchKey</Code><Message>not found</Message></Error>`)
+		case r.Method == http.MethodHead:
+			w.Header().Set("Content-Length", "12")
+			w.WriteHeader(http.StatusOK)
+		case r.Method == http.MethodGet && key == "missing":
+			w.Header().Set("Content-Type", "application/xml")
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = io.WriteString(w, `<Error><Code>NoSuchKey</Code><Message>not found</Message></Error>`)
+		case r.Method == http.MethodGet:
+			data := []byte(body)
+			if rangeHeader := r.Header.Get("Range"); rangeHeader != "" && rangeHeader != "bytes=0-" {
+				data = data[1:5]
+			}
+			_, _ = w.Write(data)
+		case r.Method == http.MethodDelete:
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodPost && strings.Contains(r.URL.RawQuery, "delete"):
+			w.Header().Set("Content-Type", "application/xml")
+			_, _ = io.ReadAll(r.Body)
+			_, _ = io.WriteString(w, `<DeleteResult></DeleteResult>`)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	sdk := newTestCOSClient(t, server)
+	sdk.listMaxKeys = 2
+
+	entries := make([]DirEntry, 0, 3)
+	for entry, err := range sdk.List(context.Background(), "dir/") {
+		if err != nil {
+			t.Fatalf("list: %v", err)
+		}
+		entries = append(entries, *entry)
+	}
+	if fmt.Sprint(entries) != fmt.Sprint([]DirEntry{
+		{Name: "dir/file1", Size: 11},
+		{IsDir: true, Name: "dir/sub/"},
+		{Name: "dir/file2", Size: 7},
+	}) {
+		t.Fatalf("unexpected entries: %#v", entries)
+	}
+
+	size, err := sdk.Stat(context.Background(), "dir/file1")
+	if err != nil || size != 12 {
+		t.Fatalf("stat got size %d err %v", size, err)
+	}
+	_, err = sdk.Stat(context.Background(), "missing")
+	if !moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+		t.Fatalf("expected file not found, got %v", err)
+	}
+
+	exists, err := sdk.Exists(context.Background(), "dir/file1")
+	if err != nil || !exists {
+		t.Fatalf("exists got %v, %v", exists, err)
+	}
+	exists, err = sdk.Exists(context.Background(), "missing")
+	if err != nil || exists {
+		t.Fatalf("missing exists got %v, %v", exists, err)
+	}
+
+	reader, err := sdk.Read(context.Background(), "dir/file1", nil, nil)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	if err := reader.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	if string(data) != body {
+		t.Fatalf("body = %q", data)
+	}
+
+	min, max := int64(1), int64(5)
+	reader, err = sdk.Read(context.Background(), "dir/file1", &min, &max)
+	if err != nil {
+		t.Fatalf("range read: %v", err)
+	}
+	data, err = io.ReadAll(reader)
+	if err != nil {
+		t.Fatalf("range read body: %v", err)
+	}
+	if err := reader.Close(); err != nil {
+		t.Fatalf("range close: %v", err)
+	}
+	if string(data) != "ello" {
+		t.Fatalf("range body = %q", data)
+	}
+
+	reader, err = sdk.Read(context.Background(), "missing", nil, nil)
+	if reader != nil || !moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+		t.Fatalf("expected nil reader and file not found, got %v, %v", reader, err)
+	}
+
+	if !sdk.SupportsParallelMultipart() {
+		t.Fatalf("expected parallel multipart support")
+	}
+	if err := sdk.Delete(context.Background()); err != nil {
+		t.Fatalf("empty delete: %v", err)
+	}
+	if err := sdk.Delete(context.Background(), "dir/file1"); err != nil {
+		t.Fatalf("single delete: %v", err)
+	}
+	if err := sdk.Delete(context.Background(), "dir/file1", "dir/file2"); err != nil {
+		t.Fatalf("multi delete: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	seen := false
+	for entry, err := range sdk.List(ctx, "dir/") {
+		if entry != nil || !errors.Is(err, context.Canceled) {
+			t.Fatalf("canceled list got %v, %v", entry, err)
+		}
+		seen = true
+	}
+	if !seen {
+		t.Fatalf("expected canceled list result")
+	}
+	if err := sdk.Delete(ctx, "dir/file1"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected canceled delete, got %v", err)
 	}
 }
 

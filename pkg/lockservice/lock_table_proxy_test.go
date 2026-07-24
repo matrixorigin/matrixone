@@ -805,8 +805,12 @@ func TestProxyRetryPreservesAppliedHandoffRepresentative(t *testing.T) {
 				err error
 			}
 			exclusiveDone := make(chan result, 1)
+			// Waiter notification is asynchronous. Give this phase its own budget
+			// so setup time or temporary runner starvation cannot consume it.
+			exclusiveCtx, exclusiveCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer exclusiveCancel()
 			go func() {
-				_, err := s1.Lock(ctx, tableID, [][]byte{row}, exclusiveTxn, newTestRowExclusiveOptions())
+				_, err := s1.Lock(exclusiveCtx, tableID, [][]byte{row}, exclusiveTxn, newTestRowExclusiveOptions())
 				exclusiveDone <- result{err: err}
 			}()
 			waitWaiters(t, s1, tableID, row, 1)
@@ -824,8 +828,8 @@ func TestProxyRetryPreservesAppliedHandoffRepresentative(t *testing.T) {
 			select {
 			case r := <-exclusiveDone:
 				require.NoError(t, r.err)
-			case <-ctx.Done():
-				require.NoError(t, ctx.Err())
+			case <-exclusiveCtx.Done():
+				require.NoError(t, exclusiveCtx.Err())
 			}
 			require.NoError(t, s1.Unlock(ctx, exclusiveTxn, timestamp.Timestamp{}))
 		},
