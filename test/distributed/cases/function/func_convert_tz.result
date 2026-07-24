@@ -113,10 +113,19 @@ select convert_tz(str_to_date('2022-05-27 11:30:00','%Y-%m-%d %H:%i:%s'),'-05:00
 select convert_tz(cast('0000-00-00 00:00:00' as datetime), '+00:00', '+01:00') as zero_datetime;
 ➤ zero_datetime[12,-1,0]  𝄀
 null
+set @old_sql_mode = @@sql_mode;
+set sql_mode = '';
 drop table if exists convert_tz_zero_batch;
-create table convert_tz_zero_batch(dt datetime);
-insert into convert_tz_zero_batch values ('0000-00-00 00:00:00'), ('2024-01-01 00:00:00');
-truncated type datetime value 0000-00-00 00:00:00 for column value, 1
-select convert_tz(dt, '+00:00', '+01:00') as converted, dt from convert_tz_zero_batch order by dt;
-➤ converted[12,-1,0]  ¦  dt[93,64,0]
+create table convert_tz_zero_batch(id int, dt datetime);
+insert into convert_tz_zero_batch values
+(1, '2024-01-01 00:00:00'),
+(2, '0000-00-00 00:00:00'),
+(3, '2024-01-03 00:00:00');
+select id, convert_tz(dt, '+00:00', '+01:00') as converted, dt
+from convert_tz_zero_batch order by id;
+➤ id[4,32,0]  ¦  converted[12,-1,0]  ¦  dt[93,64,0]  𝄀
+1  ¦  2024-01-01 01:00:00  ¦  2024-01-01 00:00:00  𝄀
+2  ¦  null  ¦  0000-00-00 00:00:00  𝄀
+3  ¦  2024-01-03 01:00:00  ¦  2024-01-03 00:00:00
 drop table convert_tz_zero_batch;
+set sql_mode = @old_sql_mode;

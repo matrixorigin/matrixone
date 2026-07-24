@@ -51,9 +51,17 @@ select convert_tz(str_to_date('2022-05-27 11:30:00','%Y-%m-%d %H:%i:%s'),'-05:00
 -- zero DATETIME is not a complete calendar value
 select convert_tz(cast('0000-00-00 00:00:00' as datetime), '+00:00', '+01:00') as zero_datetime;
 
--- An invalid row must not stop later rows in the same vector batch.
+-- A zero DATETIME in the middle of a batch must not stop later rows.
+-- Allow the zero value through the table write path, then restore the session mode.
+set @old_sql_mode = @@sql_mode;
+set sql_mode = '';
 drop table if exists convert_tz_zero_batch;
-create table convert_tz_zero_batch(dt datetime);
-insert into convert_tz_zero_batch values ('0000-00-00 00:00:00'), ('2024-01-01 00:00:00');
-select convert_tz(dt, '+00:00', '+01:00') as converted, dt from convert_tz_zero_batch order by dt;
+create table convert_tz_zero_batch(id int, dt datetime);
+insert into convert_tz_zero_batch values
+    (1, '2024-01-01 00:00:00'),
+    (2, '0000-00-00 00:00:00'),
+    (3, '2024-01-03 00:00:00');
+select id, convert_tz(dt, '+00:00', '+01:00') as converted, dt
+from convert_tz_zero_batch order by id;
 drop table convert_tz_zero_batch;
+set sql_mode = @old_sql_mode;
