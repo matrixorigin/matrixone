@@ -242,13 +242,28 @@ func TestIssue26087ConcurrentDataBranchQuota(t *testing.T) {
 				name string
 				err  error
 			}
+			optimisticCtx, cancelOptimistic := context.WithCancel(ctx)
 			start := make(chan struct{})
 			results := make(chan createResult, creators)
+			received := 0
+			defer func() {
+				cancelOptimistic()
+				drainCtx, drainCancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer drainCancel()
+				for received < creators {
+					select {
+					case <-results:
+						received++
+					case <-drainCtx.Done():
+						return
+					}
+				}
+			}()
 			for i := 0; i < creators; i++ {
 				name := fmt.Sprintf("optimistic_branch_%d", i)
 				go func() {
 					<-start
-					_, createErr := optimisticDB.ExecContext(ctx, fmt.Sprintf(
+					_, createErr := optimisticDB.ExecContext(optimisticCtx, fmt.Sprintf(
 						"data branch create table branch_quota_race.%s from branch_quota_race.src{snapshot='issue_26087_sp'}", name))
 					results <- createResult{name: name, err: createErr}
 				}()
@@ -259,6 +274,7 @@ func TestIssue26087ConcurrentDataBranchQuota(t *testing.T) {
 			for i := 0; i < creators; i++ {
 				select {
 				case result := <-results:
+					received++
 					if result.err == nil {
 						successes++
 						continue
