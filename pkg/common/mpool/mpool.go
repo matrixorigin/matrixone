@@ -1046,6 +1046,16 @@ var simpleCAllocator = sync.OnceValue(func() *malloc.SimpleCAllocator {
 		v2.MallocGauge.WithLabelValues("mpool-inuse-objects"),
 		v2.OffHeapInuseGauge.WithLabelValues("mpool"),
 	)
+	sca.EnableMmapCache(
+		func() uint64 {
+			// Cached mappings are reclaimable and short-lived, but keep their
+			// virtual address space bounded relative to the configured memory
+			// limit. One GiB covers the large hash-table working set without
+			// allowing libc-style unbounded arena retention.
+			return uint64(min(GlobalCap()/4, GB))
+		},
+		v2.OffHeapInuseGauge.WithLabelValues("mpool-cache"),
+	)
 	return sca
 })
 
