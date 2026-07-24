@@ -2124,8 +2124,9 @@ func (c *Compile) runSqlWithSystemTenant(sql string) error {
 // shared reclaim core from the databranchutils package, and submits the
 // resulting DELETE via a sys-tenant executor.
 //
-// Called synchronously by the plain `DROP TABLE` path after flipping
-// table_deleted=true for the affected tid (design §9.2 / §10).
+// Called synchronously by the plain `DROP TABLE` path. It acquires the DAG
+// lock before flipping table_deleted=true for the affected tid (design §9.2 /
+// §10).
 func (c *Compile) reclaimBranchProtectSnapshots(deadTIDs []uint64) error {
 	if len(deadTIDs) == 0 {
 		return nil
@@ -2204,11 +2205,17 @@ func (c *Compile) reclaimBranchProtectSnapshots(deadTIDs []uint64) error {
 		})
 		return databranchutils.NewBranchReclaimDag(rows), nil
 	}
+	markDeleted := func() error {
+		return c.runSqlWithSystemTenant(fmt.Sprintf(
+			"update %s.%s set table_deleted = true where table_id in (%s)",
+			catalog.MO_CATALOG, catalog.MO_BRANCH_METADATA, idList.String(),
+		))
+	}
 	execDelete := func(snames []string) error {
 		sql := databranchutils.BuildBranchSnapshotDeleteSQL(snames)
 		return c.runSqlWithSystemTenant(sql)
 	}
-	return databranchutils.ReclaimBranchSnapshotsCore(deadTIDs, loadDAG, execDelete)
+	return databranchutils.MarkAndReclaimBranchSnapshotsCore(deadTIDs, loadDAG, markDeleted, execDelete)
 }
 
 func (s *Scope) CreateView(c *Compile) error {
@@ -3533,11 +3540,6 @@ func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable) error {
 			"delete from mo_catalog.mo_merge_settings where account_id = %d and tid = %d",
 			accountID, tblID,
 		),
-
-		fmt.Sprintf(
-			"update mo_catalog.mo_branch_metadata set table_deleted = true where table_id = %d",
-			tblID,
-		),
 	}
 
 	for _, ss := range sqls {
@@ -3550,11 +3552,12 @@ func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable) error {
 		}
 	}
 
-	// Branch Protect Snapshot reclaim: after flipping table_deleted=true for
-	// this tid, check whether any subtree has become fully deleted and if so
-	// release the corresponding `__mo_branch_*` snapshots. This must run
-	// synchronously so drop paths have identical semantics in the frontend
-	// and compile-layer paths (design §5.3 / §9.2).
+	// Branch Protect Snapshot reclaim: lock the complete metadata DAG before
+	// flipping table_deleted=true for this tid, then check whether any subtree
+	// has become fully deleted and release the corresponding
+	// `__mo_branch_*` snapshots. This must run synchronously so drop paths have
+	// identical semantics in the frontend and compile-layer paths (design
+	// §5.3 / §9.2).
 	if err = c.reclaimBranchProtectSnapshots([]uint64{tblID}); err != nil {
 		logutil.Error("reclaim branch protect snapshots failed",
 			zap.Uint64("tblID", tblID),

@@ -277,6 +277,50 @@ func TestReclaimCore_DropList(t *testing.T) {
 	require.Zero(t, deleterCalls)
 }
 
+func TestMarkAndReclaimCore_LocksBeforeMark(t *testing.T) {
+	var calls []string
+	var got []string
+	err := databranchutils.MarkAndReclaimBranchSnapshotsCore(
+		[]uint64{2},
+		func() (databranchutils.BranchReclaimDag, error) {
+			calls = append(calls, "load-and-lock")
+			return databranchutils.NewBranchReclaimDag([]databranchutils.DataBranchMetadata{
+				{TableID: 2, PTableID: 1, CloneTS: 100, TableDeleted: false},
+			}), nil
+		},
+		func() error {
+			calls = append(calls, "mark-deleted")
+			return nil
+		},
+		func(snames []string) error {
+			calls = append(calls, "delete-snapshot")
+			got = append([]string(nil), snames...)
+			return nil
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, []string{"load-and-lock", "mark-deleted", "delete-snapshot"}, calls)
+	require.Equal(t, []string{"__mo_branch_2"}, got)
+
+	sentinel := errors.New("mark failed")
+	deleteCalls := 0
+	err = databranchutils.MarkAndReclaimBranchSnapshotsCore(
+		[]uint64{2},
+		func() (databranchutils.BranchReclaimDag, error) {
+			return databranchutils.NewBranchReclaimDag([]databranchutils.DataBranchMetadata{
+				{TableID: 2, PTableID: 1, CloneTS: 100, TableDeleted: false},
+			}), nil
+		},
+		func() error { return sentinel },
+		func([]string) error {
+			deleteCalls++
+			return nil
+		},
+	)
+	require.ErrorIs(t, err, sentinel)
+	require.Zero(t, deleteCalls)
+}
+
 // ---------------------------------------------------------------------------
 // UT-U6 — AncestorWalk: a deep chain climbs to the root
 // ---------------------------------------------------------------------------
