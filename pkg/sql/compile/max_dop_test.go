@@ -16,6 +16,7 @@ package compile
 
 import (
 	"errors"
+	"strconv"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -219,6 +220,41 @@ func TestScopeNodeWithMcpuKeepsWorkerIdentity(t *testing.T) {
 	require.Equal(t, 1, node.Mcpu)
 }
 
+func TestNormalizeMcpuForPlanBounds(t *testing.T) {
+	require.Equal(t, int32(1), normalizeMcpuForPlan(0))
+	require.Equal(t, int32(8), normalizeMcpuForPlan(8))
+
+	if strconv.IntSize == 64 {
+		aboveMaxInt32 := int64(1 << 31)
+		require.Equal(t, int32(1<<31-1), normalizeMcpuForPlan(int(aboveMaxInt32)))
+	}
+}
+
+func TestExecutionNodeCPUUsesActualWorkerCapacity(t *testing.T) {
+	c := NewMockCompile(t)
+	c.addr = "ingress:6001"
+	c.ncpu = 64
+	c.cnList = engine.Nodes{{
+		Id:   "target",
+		Addr: "target:6001",
+		Mcpu: 8,
+	}}
+
+	require.Equal(t, 8, c.executionNodeCPU(engine.Node{
+		Id:   "target",
+		Addr: "target:6001",
+		Mcpu: 64,
+	}))
+	require.Equal(t, 64, c.executionNodeCPU(engine.Node{
+		Addr: "ingress:6001",
+		Mcpu: 1,
+	}))
+	require.Equal(t, 4, c.executionNodeCPU(engine.Node{
+		Addr: "other:6001",
+		Mcpu: 4,
+	}))
+}
+
 func TestConstructScopeForExternalNodeKeepsWorkerIdentity(t *testing.T) {
 	c := NewMockCompile(t)
 	c.addr = "local:6001"
@@ -232,7 +268,23 @@ func TestConstructScopeForExternalNodeKeepsWorkerIdentity(t *testing.T) {
 
 	require.Equal(t, "remote", scope.NodeInfo.Id)
 	require.Equal(t, "remote:6001", scope.NodeInfo.Addr)
-	require.Equal(t, 1, scope.NodeInfo.Mcpu)
+	require.Equal(t, 8, scope.NodeInfo.Mcpu)
+	require.Equal(t, Remote, scope.Magic)
+
+	serialScope := c.constructScopeForExternalNode(engine.Node{
+		Id:   "remote",
+		Addr: "remote:6001",
+		Mcpu: 8,
+	}, false)
+	require.Equal(t, 1, serialScope.NodeInfo.Mcpu)
+	require.Equal(t, Remote, serialScope.Magic)
+
+	localScope := c.constructScopeForExternalNode(engine.Node{
+		Id:   "local",
+		Addr: "local:6001",
+		Mcpu: 8,
+	}, false)
+	require.Equal(t, Merge, localScope.Magic)
 }
 
 func TestSameExecutionNodeUsesIdentityAndDoesNotMatchEmptyAddressToRemote(t *testing.T) {

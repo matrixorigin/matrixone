@@ -39,6 +39,8 @@ type SchedulingPreviewRequest struct {
 	Username   string
 	CNLabel    map[string]string
 	Intent     schedule.SchedulingIntent
+	Policy     schedule.WorkloadPolicySet
+	Workload   schedule.WorkloadClass
 	TxnHasDDL  bool
 }
 
@@ -63,6 +65,8 @@ func PreviewQueryScheduling(req SchedulingPreviewRequest) schedule.Trace {
 		uid:                   req.Username,
 		cnLabel:               req.CNLabel,
 		querySchedulingIntent: req.Intent,
+		workloadPolicySet:     req.Policy.Clone(),
+		workloadClassHint:     req.Workload,
 		ncpu:                  system.GoMaxProcs(),
 		execType:              plan2.GetExecType(req.Query, req.TxnHasDDL, false),
 	}

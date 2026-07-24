@@ -1036,6 +1036,7 @@ func (backSes *backSession) initFeSes(
 	backSes.timeZone = ses.GetTimeZone()
 	backSes.respr = defResper
 	backSes.service = ses.GetService()
+	backSes.workloadPolicy.Store(workloadPolicyState(ses))
 	if parent, ok := ses.(*backSession); ok {
 		backSes.parentBackSession = parent
 	}

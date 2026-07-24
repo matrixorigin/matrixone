@@ -18,12 +18,16 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/prashantv/gostub"
+
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
 func TestIcebergOrphanCleanupTenantUpgradeEntries(t *testing.T) {
-	if len(tenantUpgEntries) != 4 {
-		t.Fatalf("expected 4 Iceberg tenant upgrades, got %d", len(tenantUpgEntries))
+	if len(tenantUpgEntries) != 5 {
+		t.Fatalf("expected workload policy plus 4 Iceberg tenant upgrades, got %d", len(tenantUpgEntries))
 	}
 	allocator := tenantUpgEntries[0]
 	if allocator.UpgType != versions.MODIFY_COLUMN || allocator.TableName != "mo_iceberg_catalogs" {
@@ -38,7 +42,7 @@ func TestIcebergOrphanCleanupTenantUpgradeEntries(t *testing.T) {
 	if strings.Contains(allocatorSQL, "drop primary key") {
 		t.Fatalf("catalog allocator upgrade should preserve the account-scoped primary key: %s", allocator.UpgSql)
 	}
-	for _, entry := range tenantUpgEntries[1:] {
+	for _, entry := range tenantUpgEntries[1:4] {
 		if entry.UpgType != versions.ADD_COLUMN {
 			t.Fatalf("%s should be ADD_COLUMN", entry.TableName)
 		}
@@ -52,6 +56,21 @@ func TestIcebergOrphanCleanupTenantUpgradeEntries(t *testing.T) {
 			t.Fatalf("orphan cleanup upgrade SQL must not drop objects: %s", entry.UpgSql)
 		}
 	}
+
+	workloadPolicy := tenantUpgEntries[4]
+	if workloadPolicy.UpgType != versions.CREATE_NEW_TABLE ||
+		workloadPolicy.TableName != catalog.MO_QUERY_WORKLOAD_POLICY {
+		t.Fatalf("unexpected workload policy upgrade: %+v", workloadPolicy)
+	}
+	for _, want := range []string{
+		"create table",
+		"primary key(account_id)",
+		"revision bigint unsigned",
+	} {
+		if !strings.Contains(strings.ToLower(workloadPolicy.UpgSql), want) {
+			t.Fatalf("workload policy upgrade SQL missing %q: %s", want, workloadPolicy.UpgSql)
+		}
+	}
 }
 
 func TestIcebergOrphanCleanupVersionHandleMetadataAndClusterNoop(t *testing.T) {
@@ -62,8 +81,56 @@ func TestIcebergOrphanCleanupVersionHandleMetadataAndClusterNoop(t *testing.T) {
 	if meta.VersionOffset != uint32(len(tenantUpgEntries)+len(clusterUpgEntries)) {
 		t.Fatalf("unexpected version offset: %+v", meta)
 	}
+	if meta.Version != catalog.MO_QUERY_WORKLOAD_POLICY_MIN_VERSION ||
+		meta.VersionOffset < catalog.MO_QUERY_WORKLOAD_POLICY_MIN_VERSION_OFFSET {
+		t.Fatalf(
+			"workload policy capability %s offset %d is not covered by version metadata: %+v",
+			catalog.MO_QUERY_WORKLOAD_POLICY_MIN_VERSION,
+			catalog.MO_QUERY_WORKLOAD_POLICY_MIN_VERSION_OFFSET,
+			meta,
+		)
+	}
 	err := Handler.HandleCreateFrameworkDeps(nil)
 	if err == nil || !strings.Contains(err.Error(), "Only v1.2.0") {
 		t.Fatalf("unexpected framework deps error: %v", err)
+	}
+}
+
+func TestQueryWorkloadPolicyUpgradeChecksTargetTenantTable(t *testing.T) {
+	const accountID = uint32(42)
+	var called bool
+	stub := gostub.Stub(
+		&versions.CheckTableDefinition,
+		func(
+			txn executor.TxnExecutor,
+			actualAccountID uint32,
+			schema string,
+			table string,
+		) (bool, error) {
+			called = true
+			if txn != nil {
+				t.Fatal("unexpected transaction")
+			}
+			if actualAccountID != accountID ||
+				schema != catalog.MO_CATALOG ||
+				table != catalog.MO_QUERY_WORKLOAD_POLICY {
+				t.Fatalf(
+					"unexpected table check: account=%d table=%s.%s",
+					actualAccountID,
+					schema,
+					table,
+				)
+			}
+			return true, nil
+		},
+	)
+	defer stub.Reset()
+
+	exists, err := createQueryWorkloadPolicyTable().CheckFunc(nil, accountID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !exists || !called {
+		t.Fatalf("workload policy upgrade check was not delegated")
 	}
 }

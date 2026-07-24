@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/iceberg/api"
 	"github.com/matrixorigin/matrixone/pkg/iscp"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
@@ -107,6 +108,7 @@ func (s *service) initQueryCommandHandler() {
 	s.queryService.AddHandleFunc(query.CmdMethod_CtlPrefetchOnSubscribed, s.handleCtlPrefetchOnSubscribed, false)
 	s.queryService.AddHandleFunc(query.CmdMethod_ISCPDrainConsumer, s.handleISCPDrainConsumer, false)
 	s.queryService.AddHandleFunc(query.CmdMethod_IcebergCacheInvalidate, s.handleIcebergCacheInvalidate, false)
+	s.queryService.AddHandleFunc(query.CmdMethod_WorkloadPolicyUpdate, s.handleWorkloadPolicyUpdate, false)
 }
 
 func (s *service) handleKillConn(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
@@ -123,6 +125,12 @@ func (s *service) handleKillConn(ctx context.Context, req *query.Request, resp *
 	}
 	logutil.Infof("[handle kill request] handle kill conn, add account id %d, version %d to kill queue", req.KillConnRequest.AccountID, req.KillConnRequest.Version)
 	accountMgr.EnKillQueue(req.KillConnRequest.AccountID, req.KillConnRequest.Version)
+	if req.KillConnRequest.AccountID >= 0 &&
+		req.KillConnRequest.AccountID <= int64(^uint32(0)) {
+		frontend.GWorkloadPolicyManager.Remove(
+			uint32(req.KillConnRequest.AccountID),
+		)
+	}
 
 	resp.KillConnResponse = &query.KillConnResponse{
 		Success: true,
@@ -146,6 +154,41 @@ func (s *service) handleAlterAccount(ctx context.Context, req *query.Request, re
 	accountMgr.AlterRoutineStatue(req.AlterAccountRequest.TenantId, req.AlterAccountRequest.Status)
 	resp.AlterAccountResponse = &query.AlterAccountResponse{
 		AlterSuccess: true,
+	}
+	return nil
+}
+
+func (s *service) handleWorkloadPolicyUpdate(
+	ctx context.Context,
+	req *query.Request,
+	resp *query.Response,
+	_ *morpc.Buffer,
+) error {
+	if req == nil || req.WorkloadPolicyUpdateRequest == nil {
+		return moerr.NewInvalidInput(ctx, "bad workload policy update request")
+	}
+	update := req.WorkloadPolicyUpdateRequest
+	if update.Probe {
+		resp.WorkloadPolicyUpdateResponse = &query.WorkloadPolicyUpdateResponse{
+			Supported: true,
+		}
+		return nil
+	}
+	if update.Revision == 0 {
+		return moerr.NewInvalidInput(ctx, "workload policy update revision is zero")
+	}
+	applied, revision, err := frontend.GWorkloadPolicyManager.Apply(
+		update.AccountID,
+		update.Policy,
+		update.Revision,
+	)
+	if err != nil {
+		return moerr.NewInvalidInputf(ctx, "invalid workload policy update: %v", err)
+	}
+	resp.WorkloadPolicyUpdateResponse = &query.WorkloadPolicyUpdateResponse{
+		Applied:   applied,
+		Revision:  revision,
+		Supported: true,
 	}
 	return nil
 }

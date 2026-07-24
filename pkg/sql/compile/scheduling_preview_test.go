@@ -56,6 +56,85 @@ func TestPreviewQuerySchedulingDoesNotDiscoverCandidatesForLocalQuery(t *testing
 	require.Equal(t, string(schedule.PoolResolutionNotRequired), query.PoolResolution)
 }
 
+func TestPreviewQuerySchedulingUsesSameWorkloadPolicyBoundaryAsExecution(t *testing.T) {
+	policySet, err := schedule.ParseWorkloadPolicyConfig(`{
+		"version": 1,
+		"policies": {
+			"load": {
+				"pool": "tenant-etl",
+				"labels": {"role": "etl"},
+				"current_cn": "excluded"
+			}
+		}
+	}`)
+	require.NoError(t, err)
+	provider := &schedulerProviderTestEngine{
+		schedulerTestEngine: &schedulerTestEngine{},
+		candidates: engine.QueryCandidates{{
+			Service: metadata.CNService{
+				ServiceID: "etl", PipelineServiceAddress: "etl:6001",
+				WorkState: metadata.WorkState_Working,
+			},
+			Mcpu: 8,
+		}},
+		resolvedNodes: engine.Nodes{{
+			Id: "etl", Addr: "etl:6001", Mcpu: 8,
+			WorkState: metadata.WorkState_Working,
+		}},
+	}
+
+	trace := PreviewQueryScheduling(SchedulingPreviewRequest{
+		Query: &plan.Query{
+			Nodes: []*plan.Node{{NodeType: plan.Node_TABLE_SCAN}},
+		},
+		Engine:   provider,
+		Address:  "tp:6001",
+		Tenant:   "tenant-a",
+		CNLabel:  map[string]string{"account": "tenant-a", "role": "tp"},
+		Intent:   schedule.SchedulingIntent{WorkerSet: schedule.WorkerSetPolicy{Mode: schedule.WorkerSetAll}},
+		Policy:   policySet,
+		Workload: schedule.WorkloadLoad,
+	})
+
+	require.Len(t, trace.Attempts, 1)
+	query := trace.Attempts[0].Query
+	require.NotNil(t, query)
+	require.Equal(t, "load", query.WorkloadClass)
+	require.Equal(t, "account-global", query.WorkloadPolicySource)
+	require.Equal(t, policySet.Generation, query.WorkloadPolicyGeneration)
+	require.Equal(t, "tenant-etl", query.RequestedPool)
+	require.Equal(t, "etl", query.Selected[0].ID)
+	require.Equal(t, map[string]string{
+		"account": "tenant-a",
+		"role":    "etl",
+	}, provider.poolRequest.TargetLabels)
+	require.Equal(t, map[string]string{
+		"account": "tenant-a",
+		"role":    "tp",
+	}, provider.poolRequest.CNLabel)
+}
+
+func TestPreviewQuerySchedulingRejectsInvalidPolicyBeforeDiscovery(t *testing.T) {
+	provider := &schedulerProviderTestEngine{
+		schedulerTestEngine: &schedulerTestEngine{},
+	}
+	trace := PreviewQueryScheduling(SchedulingPreviewRequest{
+		Query: &plan.Query{
+			Nodes: []*plan.Node{{NodeType: plan.Node_TABLE_SCAN}},
+		},
+		Engine: provider,
+		Policy: schedule.WorkloadPolicySet{
+			InvalidReason: "corrupt account policy",
+		},
+	})
+
+	require.Zero(t, provider.discoveryCalls)
+	require.Zero(t, provider.resolutionCalls)
+	require.NotNil(t, trace.Attempts[0].Query)
+	require.False(t, trace.Attempts[0].Query.Satisfied)
+	require.Equal(t, schedule.ReasonInvalidSchedulingIntent, trace.Attempts[0].Query.Reason)
+}
+
 func TestPreviewQuerySchedulingRecordsUnhappyPathsWithoutReturningError(t *testing.T) {
 	t.Run("nil query", func(t *testing.T) {
 		trace := PreviewQueryScheduling(SchedulingPreviewRequest{})

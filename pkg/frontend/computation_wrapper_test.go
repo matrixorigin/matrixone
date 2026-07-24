@@ -22,10 +22,13 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -35,6 +38,8 @@ import (
 	util2 "github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
+	"github.com/matrixorigin/matrixone/pkg/version"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -44,6 +49,22 @@ type mockCompile struct {
 	runFunc     func(uint64) (*util2.RunResult, error)
 	getPlanFunc func() *plan.Plan
 	releaseFunc func()
+}
+
+type preparedPolicyTestCluster struct {
+	clusterservice.MOCluster
+	cns []metadata.CNService
+}
+
+func (c preparedPolicyTestCluster) GetCNServiceWithoutWorkingState(
+	_ clusterservice.Selector,
+	apply func(metadata.CNService) bool,
+) {
+	for _, cn := range c.cns {
+		if !apply(cn) {
+			return
+		}
+	}
 }
 
 func TestResourceAttemptOwnerEligible(t *testing.T) {
@@ -432,6 +453,86 @@ func TestInitExecuteStmtParamBypassesButRetainsCachedTopologyForExplicitScheduli
 	require.Same(t, sentinel, prepareStmt.compile)
 	require.NotNil(t, retPlan)
 	require.NotNil(t, retStmt)
+}
+
+func TestInitExecuteStmtParamRebuildsCachedTopologyAfterPolicyGenerationAppears(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnv(t, 107)
+	defer prepareStmt.Close()
+
+	const (
+		tenantName = "tenant-a"
+		localAddr  = "local:6001"
+	)
+	ses.SetTenantInfo(&TenantInfo{
+		Tenant:        tenantName,
+		User:          "user-a",
+		DefaultRole:   "role-a",
+		TenantID:      42,
+		UserID:        43,
+		DefaultRoleID: 44,
+	})
+	ses.GetTxnHandler().storage = &engine.EntireEngine{Engine: &disttae.Engine{}}
+	pu := getPu("")
+	previousClusterNodes := append(engine.Nodes(nil), pu.ClusterNodes...)
+	pu.ClusterNodes = engine.Nodes{{Addr: localAddr, Mcpu: 1}}
+	t.Cleanup(func() {
+		pu.ClusterNodes = previousClusterNodes
+	})
+	previousRuntime := moruntime.ServiceRuntime("")
+	rt := moruntime.DefaultRuntime()
+	rt.SetGlobalVariables(moruntime.ClusterService, preparedPolicyTestCluster{
+		cns: []metadata.CNService{{
+			ServiceID:              "local-cn",
+			PipelineServiceAddress: localAddr,
+			Labels: map[string]metadata.LabelList{
+				"account": {Labels: []string{tenantName}},
+				"role":    {Labels: []string{"tp"}},
+			},
+			WorkState: metadata.WorkState_Working,
+			CommitID:  version.CommitID,
+			CPUTotal:  1,
+		}},
+	})
+	moruntime.SetupServiceBasedRuntime("", rt)
+	t.Cleanup(func() {
+		moruntime.SetupServiceBasedRuntime("", previousRuntime)
+	})
+
+	sentinel := compile.NewCompile(
+		"", "", prepareStmt.Sql, "", "", nil,
+		cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
+	prepareStmt.compile = sentinel
+	ses.workloadPolicy.Store(GWorkloadPolicyManager.acquire(42))
+	t.Cleanup(func() {
+		GWorkloadPolicyManager.Remove(42)
+	})
+	applied, _, err := GWorkloadPolicyManager.Apply(42, `{
+		"version": 1,
+		"policies": {
+			"tp": {
+				"pool": "tenant-tp",
+				"labels": {"role": "tp"},
+				"current_cn": "required"
+			}
+		}
+	}`, 1)
+	require.NoError(t, err)
+	require.True(t, applied)
+
+	retComp, retPlan, retStmt, _, err := initExecuteStmtParam(
+		execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.NotNil(t, retComp)
+	require.NotSame(t, sentinel, retComp)
+	require.Same(t, retComp, prepareStmt.compile)
+	require.NotNil(t, retPlan)
+	require.NotNil(t, retStmt)
+
+	reused, _, _, _, err := initExecuteStmtParam(
+		execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.Same(t, retComp, reused)
+	require.Same(t, retComp, prepareStmt.compile)
 }
 
 func TestRebuildPreparePlanUsesPreparedRootSQL(t *testing.T) {

@@ -52,11 +52,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -534,6 +536,183 @@ func TestCompileExternValueScan(t *testing.T) {
 	require.NoError(t, checkScopeWithExpectedList(rs[0], []vm.OpType{vm.External}))
 }
 
+func TestCompileExternValueScanUsesConfiguredWorkloadTarget(t *testing.T) {
+	testCompile := NewMockCompile(t)
+	testCompile.addr = "tp-local:6001"
+	testCompile.execType = plan2.ExecTypeTP
+	testCompile.anal = &AnalyzeModule{qry: &plan.Query{}}
+	testCompile.cnList = engine.Nodes{{
+		Id: "etl-remote", Addr: "etl-remote:6001", Mcpu: 8,
+	}}
+	testCompile.queryPlacement = schedule.QueryDecision{
+		WorkloadPolicy: schedule.EffectiveWorkloadPolicy{
+			Applied: true,
+			Routing: schedule.WorkloadRoutingSingle,
+		},
+	}
+	param := &tree.ExternParam{
+		ExParamConst: tree.ExParamConst{Filepath: "inline.csv"},
+	}
+	node := &plan.Node{
+		TableDef:   &plan.TableDef{},
+		ExternScan: &plan.ExternScan{},
+	}
+
+	scopes, err := testCompile.compileExternValueScan(node, param, true)
+	require.NoError(t, err)
+	require.Len(t, scopes, 1)
+	require.Equal(t, "etl-remote", scopes[0].NodeInfo.Id)
+	require.Equal(t, "etl-remote:6001", scopes[0].NodeInfo.Addr)
+	require.Equal(t, 1, scopes[0].NodeInfo.Mcpu)
+	require.Equal(t, Remote, scopes[0].Magic)
+	require.Equal(t, "etl-remote:6001", getEngineNode(testCompile).Addr)
+	parallelScope := testCompile.constructScopeForExternalNode(
+		testCompile.cnList[0],
+		true,
+	)
+	require.Equal(t, Remote, parallelScope.Magic)
+	require.Equal(t, 8, parallelScope.NodeInfo.Mcpu)
+}
+
+func TestWorkloadPolicyKeepsLocalOnlyPlanNodesOnConfiguredTarget(t *testing.T) {
+	testCompile := NewMockCompile(t)
+	testCompile.addr = "tp-local:6001"
+	testCompile.execType = plan2.ExecTypeAP_MULTICN
+	testCompile.anal = &AnalyzeModule{qry: &plan.Query{}}
+	testCompile.pn = &plan.Plan{
+		Plan: &plan.Plan_Query{Query: &plan.Query{}},
+	}
+	testCompile.cnList = engine.Nodes{
+		{Id: "ap-remote", Addr: "ap-remote:6001", Mcpu: 8},
+		{Id: "ap-remote-2", Addr: "ap-remote-2:6001", Mcpu: 4},
+	}
+	testCompile.queryPlacement = schedule.QueryDecision{
+		WorkloadPolicy: schedule.EffectiveWorkloadPolicy{
+			Applied: true,
+			Routing: schedule.WorkloadRoutingMulti,
+		},
+	}
+
+	sourceNode := testCompile.singleSourceExecutionNode()
+	require.Equal(t, "ap-remote", sourceNode.Id)
+	require.Equal(t, "ap-remote:6001", sourceNode.Addr)
+	require.Equal(t, 8, testCompile.executionNodeCPU(sourceNode))
+
+	sourceScopes, err := testCompile.compileSourceScanWithSizeLoader(
+		&plan.Node{TableDef: &plan.TableDef{}},
+		func(
+			_ context.Context,
+			configs map[string]interface{},
+		) (int64, error) {
+			require.Empty(t, configs)
+			return 2 * StreamMaxInterval, nil
+		},
+	)
+	require.NoError(t, err)
+	require.Len(t, sourceScopes, 2)
+	for _, scope := range sourceScopes {
+		require.Equal(t, "ap-remote", scope.NodeInfo.Id)
+		require.Equal(t, "ap-remote:6001", scope.NodeInfo.Addr)
+		require.Equal(t, 1, scope.NodeInfo.Mcpu)
+		require.Equal(t, Remote, scope.Magic)
+	}
+
+	valueScopes, err := testCompile.compileValueScan(&plan.Node{})
+	require.NoError(t, err)
+	require.Equal(t, "ap-remote", valueScopes[0].NodeInfo.Id)
+	require.Equal(t, "ap-remote:6001", valueScopes[0].NodeInfo.Addr)
+	require.Equal(t, 1, valueScopes[0].NodeInfo.Mcpu)
+	require.Equal(t, Remote, valueScopes[0].Magic)
+
+	tableFunctionNode := &plan.Node{
+		TableDef: &plan.TableDef{
+			TblFunc: &plan.TableFunction{},
+		},
+	}
+	tableScopes, err := testCompile.compileSingleTableFunction(tableFunctionNode)
+	require.NoError(t, err)
+	require.Equal(t, "ap-remote", tableScopes[0].NodeInfo.Id)
+	require.Equal(t, "ap-remote:6001", tableScopes[0].NodeInfo.Addr)
+	require.Equal(t, 1, tableScopes[0].NodeInfo.Mcpu)
+	require.Equal(t, Remote, tableScopes[0].Magic)
+
+	testCompile.queryPlacement = schedule.QueryDecision{}
+	legacyNode := testCompile.singleSourceExecutionNode()
+	require.Equal(t, "tp-local:6001", legacyNode.Addr)
+	legacyScope := testCompile.constructWorkloadScopeForExternal(
+		"legacy-external:6001",
+		false,
+	)
+	require.Equal(t, "legacy-external:6001", legacyScope.NodeInfo.Addr)
+	require.Equal(t, 1, legacyScope.NodeInfo.Mcpu)
+	require.Equal(t, Merge, legacyScope.Magic)
+}
+
+func TestWorkloadPolicyKeepsGenerateSeriesAndInfileFanoutInsideTargetPool(t *testing.T) {
+	testCompile := NewMockCompile(t)
+	testCompile.addr = "tp-local:6001"
+	testCompile.execType = plan2.ExecTypeAP_MULTICN
+	testCompile.anal = &AnalyzeModule{qry: &plan.Query{}}
+	testCompile.pn = &plan.Plan{
+		Plan: &plan.Plan_Query{Query: &plan.Query{}},
+	}
+	testCompile.cnList = engine.Nodes{
+		{Id: "ap-1", Addr: "ap-1:6001", Mcpu: 1},
+		{Id: "ap-2", Addr: "ap-2:6001", Mcpu: 1},
+	}
+	testCompile.queryPlacement = schedule.QueryDecision{
+		Workers: []schedule.Worker{
+			{ID: "ap-1", Addr: "ap-1:6001", Mcpu: 1},
+			{ID: "ap-2", Addr: "ap-2:6001", Mcpu: 1},
+		},
+		WorkloadPolicy: schedule.EffectiveWorkloadPolicy{
+			Applied: true,
+			Routing: schedule.WorkloadRoutingMulti,
+		},
+	}
+	tableFunctionNode := &plan.Node{
+		TableDef: &plan.TableDef{
+			TblFunc: &plan.TableFunction{},
+		},
+	}
+	scopes, err := testCompile.compileGenerateSeriesParallel(
+		tableFunctionNode,
+		nil,
+		2,
+		false,
+		[][2]int64{{0, 0}, {1, 1}},
+		1,
+	)
+	require.NoError(t, err)
+	require.Equal(t, []string{"ap-1:6001", "ap-2:6001"}, []string{
+		scopes[0].NodeInfo.Addr,
+		scopes[1].NodeInfo.Addr,
+	})
+	require.Equal(t, Remote, scopes[0].Magic)
+	require.Equal(t, Remote, scopes[1].Magic)
+	firstSeries, ok := scopes[0].RootOp.(*table_function.TableFunction)
+	require.True(t, ok)
+	require.Equal(t, [][2]int64{{0, 0}}, firstSeries.OffsetTotal)
+	secondSeries, ok := scopes[1].RootOp.(*table_function.TableFunction)
+	require.True(t, ok)
+	require.Equal(t, [][2]int64{{1, 1}}, secondSeries.OffsetTotal)
+
+	fanout := testCompile.getHiveFileFanoutNodes(
+		&tree.ExternParam{ExParamConst: tree.ExParamConst{ScanType: tree.INFILE}},
+		2,
+	)
+	require.Len(t, fanout, 2)
+	require.ElementsMatch(t, []string{"ap-1:6001", "ap-2:6001"}, []string{
+		fanout[0].Addr,
+		fanout[1].Addr,
+	})
+	for _, node := range fanout {
+		scope := testCompile.constructScopeForExternalNode(node, false)
+		require.Equal(t, Remote, scope.Magic)
+		require.Equal(t, node.Id, scope.NodeInfo.Id)
+	}
+}
+
 func TestCompileExternScanParallelWrite(t *testing.T) {
 	testCompile := NewMockCompile(t)
 	testCompile.cnList = engine.Nodes{engine.Node{Addr: "cn1:6001", Mcpu: 4}, engine.Node{Addr: "cn2:6001", Mcpu: 4}}
@@ -596,6 +775,82 @@ func TestCompileExternScanParallelWriteSourceScopeHasCorrectAddr(t *testing.T) {
 		"RemoteRegs must be empty; a non-empty RemoteRegs with SendToAnyLocalFunc causes 'should not send to remote' error")
 	require.Len(t, dispatchOp.LocalRegs, len(rs),
 		"all merge scopes are on the current CN so LocalRegs must cover every merge scope")
+}
+
+func TestCompileExternScanParallelWriteKeepsConfiguredTargetStagesColocated(t *testing.T) {
+	testCompile := NewMockCompile(t)
+	testCompile.addr = "tp-local:6001"
+	testCompile.execType = plan2.ExecTypeTP
+	testCompile.anal = &AnalyzeModule{qry: &plan.Query{}}
+	testCompile.cnList = engine.Nodes{{
+		Id: "etl-remote", Addr: "etl-remote:6001", Mcpu: 8,
+	}}
+	testCompile.queryPlacement = schedule.QueryDecision{
+		WorkloadPolicy: schedule.EffectiveWorkloadPolicy{
+			Applied: true,
+			Routing: schedule.WorkloadRoutingSingle,
+		},
+	}
+	param := &tree.ExternParam{
+		ExParamConst: tree.ExParamConst{Filepath: "load.csv"},
+	}
+	node := &plan.Node{
+		TableDef:   &plan.TableDef{},
+		ExternScan: &plan.ExternScan{},
+		Stats:      &plan.Stats{Cost: 1000000, Rowsize: 2000},
+	}
+
+	scopes, err := testCompile.compileExternScanParallelWrite(
+		node,
+		param,
+		[]string{"load.csv"},
+		[]int64{100000},
+		true,
+	)
+	require.NoError(t, err)
+	require.Len(t, scopes, 8)
+	source := scopes[0].PreScopes[0]
+	require.Equal(t, "etl-remote:6001", source.NodeInfo.Addr)
+	for _, scope := range scopes {
+		require.Equal(t, "etl-remote:6001", scope.NodeInfo.Addr)
+	}
+	dispatchOp, ok := source.RootOp.(*dispatch.Dispatch)
+	require.True(t, ok)
+	require.Equal(t, dispatch.SendToAnyLocalFunc, dispatchOp.FuncId)
+	require.Empty(t, dispatchOp.RemoteRegs)
+}
+
+func TestSingleRemoteWorkloadGroupsSiblingLocalDispatchScopes(t *testing.T) {
+	testCompile := NewMockCompile(t)
+	testCompile.addr = "ingress:6001"
+	testCompile.anal = &AnalyzeModule{qry: &plan.Query{}}
+	testCompile.proc.Base.TxnOperator = fakeTxnOperator{}
+	testCompile.cnList = engine.Nodes{{
+		Id: "etl-remote", Addr: "etl-remote:6001", Mcpu: 2,
+	}}
+	testCompile.queryPlacement = schedule.QueryDecision{
+		WorkloadPolicy: schedule.EffectiveWorkloadPolicy{
+			Applied: true,
+			Routing: schedule.WorkloadRoutingSingle,
+		},
+	}
+
+	targets := []*Scope{
+		testCompile.constructLoadMergeScope(),
+		testCompile.constructLoadMergeScope(),
+	}
+	source := testCompile.constructWorkloadScopeForExternal(testCompile.addr, false)
+	dispatchOp, err := constructLocalDispatchFromScopes(0, targets, source)
+	require.NoError(t, err)
+	source.setRootOperator(dispatchOp)
+	targets[0].PreScopes = append(targets[0].PreScopes, source)
+	require.False(t, checkPipelineStandaloneExecutableAtRemote(targets[0]))
+
+	grouped := testCompile.groupShuffleBucketsByCNIfNeeded(targets)
+	require.Len(t, grouped, 1)
+	require.Equal(t, Remote, grouped[0].Magic)
+	require.Len(t, grouped[0].PreScopes, 2)
+	require.True(t, checkPipelineStandaloneExecutableAtRemote(grouped[0]))
 }
 
 func TestConstructLocalDispatchFromScopesRejectsRemoteTarget(t *testing.T) {

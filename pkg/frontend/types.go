@@ -999,6 +999,9 @@ type feSessionImpl struct {
 
 	// gSysVars is a pointer to account's sys vars (saved in GSysVarsMgr)
 	gSysVars *SystemVariables
+	// workloadPolicy is the account-level, immutable policy cache referenced by
+	// this session. It is separate from MySQL-compatible system variables.
+	workloadPolicy atomic.Pointer[accountWorkloadPolicy]
 	// sesSysVars is session level sys vars; init as a copy of account's sys vars
 	sesSysVars *SystemVariables
 
@@ -1121,6 +1124,7 @@ func (ses *feSessionImpl) Reset() {
 	ses.sql = ""
 	ses.runSQLTokens = nil
 	ses.gSysVars = nil
+	ses.workloadPolicy.Store(nil)
 	ses.sesSysVars = nil
 	ses.allResultSet = nil
 	ses.tenant = nil
@@ -1580,6 +1584,10 @@ func (ses *feSessionImpl) GetSql() string {
 
 func (ses *feSessionImpl) GetAccountId() uint32 {
 	return ses.accountId
+}
+
+func (ses *feSessionImpl) getWorkloadPolicyState() *accountWorkloadPolicy {
+	return ses.workloadPolicy.Load()
 }
 
 func (ses *feSessionImpl) SetAccountId(u uint32) {

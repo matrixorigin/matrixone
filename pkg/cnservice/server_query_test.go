@@ -62,6 +62,83 @@ import (
 var dummyBadRequestErr = moerr.NewInternalError(context.TODO(), "bad request")
 var dummyErr = moerr.NewInternalError(context.TODO(), "dummy error")
 
+func TestServiceHandleWorkloadPolicyUpdateIgnoresInactiveAccount(t *testing.T) {
+	const accountID = uint32(math.MaxUint32 - 1)
+	s := &service{}
+
+	probeResp := &query.Response{}
+	require.NoError(t, s.handleWorkloadPolicyUpdate(
+		context.Background(),
+		&query.Request{WorkloadPolicyUpdateRequest: &query.WorkloadPolicyUpdateRequest{
+			Probe: true,
+		}},
+		probeResp,
+		nil,
+	))
+	require.True(t, probeResp.WorkloadPolicyUpdateResponse.Supported)
+	require.False(t, probeResp.WorkloadPolicyUpdateResponse.Applied)
+	require.Zero(t, probeResp.WorkloadPolicyUpdateResponse.Revision)
+
+	newPolicy := `{"version":1,"policies":{"ap":{"pool":"new","labels":{"role":"ap"}}}}`
+	resp := &query.Response{}
+	err := s.handleWorkloadPolicyUpdate(
+		context.Background(),
+		&query.Request{WorkloadPolicyUpdateRequest: &query.WorkloadPolicyUpdateRequest{
+			AccountID: accountID,
+			Policy:    newPolicy,
+			Revision:  20,
+		}},
+		resp,
+		nil,
+	)
+	require.NoError(t, err)
+	require.True(t, resp.WorkloadPolicyUpdateResponse.Supported)
+	require.False(t, resp.WorkloadPolicyUpdateResponse.Applied)
+	require.Zero(t, resp.WorkloadPolicyUpdateResponse.Revision)
+
+	resp = &query.Response{}
+	err = s.handleWorkloadPolicyUpdate(
+		context.Background(),
+		&query.Request{WorkloadPolicyUpdateRequest: &query.WorkloadPolicyUpdateRequest{
+			AccountID: accountID,
+			Policy:    `{"version":1,"policies":{"ap":{"pool":"old","labels":{"role":"ap"}}}}`,
+			Revision:  10,
+		}},
+		resp,
+		nil,
+	)
+	require.NoError(t, err)
+	require.True(t, resp.WorkloadPolicyUpdateResponse.Supported)
+	require.False(t, resp.WorkloadPolicyUpdateResponse.Applied)
+	require.Zero(t, resp.WorkloadPolicyUpdateResponse.Revision)
+
+	require.Error(t, s.handleWorkloadPolicyUpdate(
+		context.Background(),
+		&query.Request{},
+		&query.Response{},
+		nil,
+	))
+	require.Error(t, s.handleWorkloadPolicyUpdate(
+		context.Background(),
+		&query.Request{WorkloadPolicyUpdateRequest: &query.WorkloadPolicyUpdateRequest{
+			AccountID: accountID,
+			Policy:    newPolicy,
+		}},
+		&query.Response{},
+		nil,
+	))
+	require.ErrorContains(t, s.handleWorkloadPolicyUpdate(
+		context.Background(),
+		&query.Request{WorkloadPolicyUpdateRequest: &query.WorkloadPolicyUpdateRequest{
+			AccountID: accountID,
+			Policy:    `{"version":`,
+			Revision:  1,
+		}},
+		&query.Response{},
+		nil,
+	), "invalid workload policy update")
+}
+
 func Test_service_handleISCPDrainConsumerRenewFenceOnly(t *testing.T) {
 	require.True(t, fault.Enable())
 	defer fault.Disable()

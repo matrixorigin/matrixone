@@ -922,33 +922,34 @@ var (
 		"mo_task":            0,
 	}
 	sysWantedTables = map[string]int8{
-		"mo_user":                     0,
-		"mo_account":                  0,
-		"mo_role":                     0,
-		"mo_user_grant":               0,
-		"mo_role_grant":               0,
-		"mo_role_privs":               0,
-		"mo_user_defined_function":    0,
-		"mo_stored_procedure":         0,
-		"mo_mysql_compatibility_mode": 0,
-		"mo_stages":                   0,
-		catalog.MOAutoIncrTable:       0,
-		"mo_sessions":                 0,
-		"mo_configurations":           0,
-		"mo_locks":                    0,
-		"mo_variables":                0,
-		"mo_transactions":             0,
-		"mo_cache":                    0,
-		"mo_snapshots":                0,
-		"mo_cdc_task":                 0,
-		"mo_cdc_watermark":            0,
-		catalog.MO_TABLE_STATS:        0,
-		catalog.MO_MERGE_SETTINGS:     0,
-		catalog.MO_ISCP_LOG:           0,
-		catalog.MO_INDEX_UPDATE:       0,
-		catalog.MO_BRANCH_METADATA:    0,
-		catalog.MO_FEATURE_LIMIT:      0,
-		catalog.MO_FEATURE_REGISTRY:   0,
+		"mo_user":                        0,
+		"mo_account":                     0,
+		"mo_role":                        0,
+		"mo_user_grant":                  0,
+		"mo_role_grant":                  0,
+		"mo_role_privs":                  0,
+		"mo_user_defined_function":       0,
+		"mo_stored_procedure":            0,
+		"mo_mysql_compatibility_mode":    0,
+		catalog.MO_QUERY_WORKLOAD_POLICY: 0,
+		"mo_stages":                      0,
+		catalog.MOAutoIncrTable:          0,
+		"mo_sessions":                    0,
+		"mo_configurations":              0,
+		"mo_locks":                       0,
+		"mo_variables":                   0,
+		"mo_transactions":                0,
+		"mo_cache":                       0,
+		"mo_snapshots":                   0,
+		"mo_cdc_task":                    0,
+		"mo_cdc_watermark":               0,
+		catalog.MO_TABLE_STATS:           0,
+		catalog.MO_MERGE_SETTINGS:        0,
+		catalog.MO_ISCP_LOG:              0,
+		catalog.MO_INDEX_UPDATE:          0,
+		catalog.MO_BRANCH_METADATA:       0,
+		catalog.MO_FEATURE_LIMIT:         0,
+		catalog.MO_FEATURE_REGISTRY:      0,
 	}
 	sysAccountTables = map[string]struct{}{
 		catalog.MOVersionTable:       {},
@@ -960,53 +961,54 @@ var (
 	}
 	// predefined tables of the database mo_catalog in every account
 	predefinedTables = map[string]int8{
-		"mo_database":                   0,
-		"mo_tables":                     0,
-		"mo_columns":                    0,
-		"mo_account":                    0,
-		"mo_user":                       0,
-		"mo_role":                       0,
-		"mo_user_grant":                 0,
-		"mo_role_grant":                 0,
-		"mo_role_privs":                 0,
-		"mo_user_defined_function":      0,
-		"mo_stored_procedure":           0,
-		"mo_mysql_compatibility_mode":   0,
-		catalog.MOAutoIncrTable:         0,
-		"mo_indexes":                    0,
-		"mo_table_partitions":           0,
-		"mo_pubs":                       0,
-		"mo_stages":                     0,
-		"mo_sessions":                   0,
-		"mo_configurations":             0,
-		"mo_locks":                      0,
-		"mo_variables":                  0,
-		"mo_transactions":               0,
-		"mo_cache":                      0,
-		"mo_foreign_keys":               0,
-		"mo_snapshots":                  0,
-		"mo_subs":                       0,
-		"mo_shards":                     0,
-		"mo_shards_metadata":            0,
-		"mo_cdc_task":                   0,
-		"mo_cdc_watermark":              0,
-		catalog.MO_TABLE_STATS:          0,
-		catalog.MO_ACCOUNT_LOCK:         0,
-		catalog.MO_MERGE_SETTINGS:       0,
-		catalog.MO_ISCP_LOG:             0,
-		catalog.MO_INDEX_UPDATE:         0,
-		catalog.MO_BRANCH_METADATA:      0,
-		catalog.MO_FEATURE_LIMIT:        0,
-		catalog.MO_FEATURE_REGISTRY:     0,
-		catalog.MO_ROLE_RULE:            0,
-		icebergsql.TableCatalogs:        0,
-		icebergsql.TablePrincipalMap:    0,
-		icebergsql.TableResidencyPolicy: 0,
-		icebergsql.TableTables:          0,
-		icebergsql.TableRefs:            0,
-		icebergsql.TablePublishJobs:     0,
-		icebergsql.TableOrphanFiles:     0,
-		icebergsql.TableMaintenanceJobs: 0,
+		"mo_database":                    0,
+		"mo_tables":                      0,
+		"mo_columns":                     0,
+		"mo_account":                     0,
+		"mo_user":                        0,
+		"mo_role":                        0,
+		"mo_user_grant":                  0,
+		"mo_role_grant":                  0,
+		"mo_role_privs":                  0,
+		"mo_user_defined_function":       0,
+		"mo_stored_procedure":            0,
+		"mo_mysql_compatibility_mode":    0,
+		catalog.MO_QUERY_WORKLOAD_POLICY: 0,
+		catalog.MOAutoIncrTable:          0,
+		"mo_indexes":                     0,
+		"mo_table_partitions":            0,
+		"mo_pubs":                        0,
+		"mo_stages":                      0,
+		"mo_sessions":                    0,
+		"mo_configurations":              0,
+		"mo_locks":                       0,
+		"mo_variables":                   0,
+		"mo_transactions":                0,
+		"mo_cache":                       0,
+		"mo_foreign_keys":                0,
+		"mo_snapshots":                   0,
+		"mo_subs":                        0,
+		"mo_shards":                      0,
+		"mo_shards_metadata":             0,
+		"mo_cdc_task":                    0,
+		"mo_cdc_watermark":               0,
+		catalog.MO_TABLE_STATS:           0,
+		catalog.MO_ACCOUNT_LOCK:          0,
+		catalog.MO_MERGE_SETTINGS:        0,
+		catalog.MO_ISCP_LOG:              0,
+		catalog.MO_INDEX_UPDATE:          0,
+		catalog.MO_BRANCH_METADATA:       0,
+		catalog.MO_FEATURE_LIMIT:         0,
+		catalog.MO_FEATURE_REGISTRY:      0,
+		catalog.MO_ROLE_RULE:             0,
+		icebergsql.TableCatalogs:         0,
+		icebergsql.TablePrincipalMap:     0,
+		icebergsql.TableResidencyPolicy:  0,
+		icebergsql.TableTables:           0,
+		icebergsql.TableRefs:             0,
+		icebergsql.TablePublishJobs:      0,
+		icebergsql.TableOrphanFiles:      0,
+		icebergsql.TableMaintenanceJobs:  0,
 	}
 	createDbInformationSchemaSql = "create database information_schema;"
 	createAutoTableSql           = MoCatalogMoAutoIncrTableDDL
@@ -1029,6 +1031,7 @@ var (
 		MoCatalogMoRolePrivsDDL,
 		MoCatalogMoUserDefinedFunctionDDL,
 		MoCatalogMoMysqlCompatibilityModeDDL,
+		MoCatalogMoQueryWorkloadPolicyDDL,
 		MoCatalogMoSnapshotsDDL,
 		MoCatalogMoPubsDDL,
 		MoCatalogMoSubsDDL,
@@ -1076,6 +1079,7 @@ var (
 		`drop table if exists mo_catalog.mo_role_privs;`,
 		`drop table if exists mo_catalog.mo_user_defined_function;`,
 		`drop table if exists mo_catalog.mo_stored_procedure;`,
+		fmt.Sprintf(`drop table if exists mo_catalog.%s;`, catalog.MO_QUERY_WORKLOAD_POLICY),
 		`drop table if exists mo_catalog.mo_stages;`,
 		`drop view if exists mo_catalog.mo_sessions;`,
 		`drop view if exists mo_catalog.mo_configurations;`,
@@ -3546,6 +3550,9 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *alterAccount) (err er
 	if accountExist {
 		if aa.StatusOption.Exist && aa.StatusOption.Option == tree.AccountStatusSuspend {
 			ses.getRoutineManager().accountRoutine.EnKillQueue(int64(targetAccountId), version)
+			if targetAccountId <= uint64(^uint32(0)) {
+				GWorkloadPolicyManager.Remove(uint32(targetAccountId))
+			}
 			logutil.Infof("[set suspend] set account id %d, version %d suspend", targetAccountId, version)
 			if err := postDropSuspendAccount(ctx, ses, aa.Name, int64(targetAccountId), version); err != nil {
 				ses.Errorf(ctx, "post alter account suspend error: %s", err.Error())
@@ -4433,6 +4440,9 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 	}
 	// if drop the account, add the account to kill queue
 	ses.getRoutineManager().accountRoutine.EnKillQueue(accountId, version)
+	if accountId > 0 && accountId <= int64(^uint32(0)) {
+		GWorkloadPolicyManager.Remove(uint32(accountId))
+	}
 
 	if err := postDropSuspendAccount(ctx, ses, da.Name, accountId, version); err != nil {
 		ses.Errorf(ctx, "post drop account error: %s", err.Error())
@@ -6464,6 +6474,9 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		if !st.IsAccountLevel {
 			writeDatabaseTargets = append(writeDatabaseTargets, st.DbName)
 		}
+	case *tree.AlterAccountConfig:
+		objType = objectTypeNone
+		kind = privilegeKindNone
 	case *tree.CreateFunction:
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeCreateView, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)

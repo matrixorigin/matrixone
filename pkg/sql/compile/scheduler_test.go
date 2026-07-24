@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	motestutil "github.com/matrixorigin/matrixone/pkg/testutil"
@@ -66,6 +67,26 @@ type schedulerProviderTestEngine struct {
 	mutateLabels     bool
 }
 
+type schedulerCurrentProviderTestEngine struct {
+	*schedulerProviderTestEngine
+	currentCandidates engine.QueryCandidates
+	currentErr        error
+	currentCalls      int
+	currentServiceID  string
+}
+
+func (e *schedulerCurrentProviderTestEngine) DiscoverCurrentQueryCandidate(
+	ctx context.Context,
+	serviceID string,
+) (engine.QueryCandidates, error) {
+	e.currentCalls++
+	e.currentServiceID = serviceID
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return e.currentCandidates, e.currentErr
+}
+
 func (e *schedulerProviderTestEngine) DiscoverQueryCandidates(ctx context.Context) (engine.QueryCandidates, error) {
 	e.discoveryCalls++
 	if err := ctx.Err(); err != nil {
@@ -83,8 +104,13 @@ func (e *schedulerProviderTestEngine) ResolveQueryCandidatePool(
 	e.resolvedSnapshot = candidates
 	e.poolRequest = request
 	e.poolRequest.CNLabel = cloneCNLabels(request.CNLabel)
+	e.poolRequest.TargetLabels = cloneCNLabels(request.TargetLabels)
 	if e.mutateLabels {
-		request.CNLabel["mutated"] = "true"
+		if request.TargetLabels != nil {
+			request.TargetLabels["mutated"] = "true"
+		} else {
+			request.CNLabel["mutated"] = "true"
+		}
 	}
 	if err := ctx.Err(); err != nil {
 		return engine.ResolvedQueryPool{}, err
@@ -395,6 +421,421 @@ func TestScheduleQueryWorkersUsesIndependentCandidateProviders(t *testing.T) {
 	require.Equal(t, schedule.PoolResolutionTenantLabels, c.queryPlacement.CandidateResolution.PoolResolution)
 	require.Equal(t, 3, c.queryPlacement.CandidateResolution.DiscoveredCount)
 	require.Equal(t, 2, c.queryPlacement.ResolvedCandidateCount)
+}
+
+func TestScheduleQueryWorkersUsesWorkloadTargetPoolInsteadOfIngressPool(t *testing.T) {
+	policySet, err := schedule.ParseWorkloadPolicyConfig(`{
+		"version": 1,
+		"policies": {
+			"ap": {
+				"pool": "tenant-ap",
+				"labels": {"role": "ap"},
+				"current_cn": "excluded"
+			}
+		}
+	}`)
+	require.NoError(t, err)
+
+	c := NewMockCompile(t)
+	c.addr = "tp-local:6001"
+	c.execType = plan2.ExecTypeAP_ONECN
+	c.tenant = "tenant-a"
+	c.cnLabel = map[string]string{"account": "tenant-a", "role": "tp"}
+	provider := &schedulerProviderTestEngine{
+		schedulerTestEngine: &schedulerTestEngine{},
+		candidates: engine.QueryCandidates{
+			{Service: metadata.CNService{
+				ServiceID: "tp-local", PipelineServiceAddress: "tp-local:6001",
+				WorkState: metadata.WorkState_Working,
+			}, Mcpu: 4},
+			{Service: metadata.CNService{
+				ServiceID: "ap-remote", PipelineServiceAddress: "ap-remote:6001",
+				WorkState: metadata.WorkState_Working,
+			}, Mcpu: 8},
+		},
+		resolvedNodes: engine.Nodes{{
+			Id: "ap-remote", Addr: "ap-remote:6001", Mcpu: 8,
+			WorkState: metadata.WorkState_Working,
+		}},
+		mutateLabels: true,
+	}
+	c.e = provider
+	c.SetWorkloadPolicy(policySet, "")
+
+	nodes, err := c.scheduleQueryWorkers()
+	require.NoError(t, err)
+	require.Equal(t, engine.Nodes{{
+		Id: "ap-remote", Addr: "ap-remote:6001", Mcpu: 8,
+		WorkState: metadata.WorkState_Working,
+	}}, nodes)
+	require.Equal(t, map[string]string{
+		"account": "tenant-a",
+		"role":    "ap",
+	}, provider.poolRequest.TargetLabels)
+	require.Equal(t, map[string]string{
+		"account": "tenant-a",
+		"role":    "tp",
+	}, provider.poolRequest.CNLabel)
+	require.Equal(t, "tenant-ap", provider.poolRequest.RequestedPool)
+	require.Equal(t, engine.QueryPoolFallbackStrict, provider.poolRequest.FallbackPolicy)
+	require.Equal(t, schedule.WorkloadAP, c.queryPlacement.WorkloadPolicy.WorkloadClass)
+	require.Equal(t, schedule.WorkloadRoutingSingle, c.queryPlacement.WorkloadPolicy.Routing)
+	require.Equal(t, schedule.CurrentCNExcluded, c.queryPlacement.CurrentCNPolicy)
+	require.Equal(t, schedule.WorkerSetMax, c.queryPlacement.Intent.WorkerSet.Mode)
+	require.Equal(t, 1, c.queryPlacement.Intent.WorkerSet.MaxWorkers)
+	require.Equal(t, "tp-local:6001", c.queryPlacement.CurrentCN.Addr)
+	require.Equal(t, "tp-local:6001", c.currentCNWorker().Addr)
+	c.cnList = nodes
+	require.Equal(t, "ap-remote:6001", getEngineNode(c).Addr)
+	require.Equal(t, "tp", c.cnLabel["role"])
+}
+
+func TestScheduleQueryWorkersClassifiesAndRoutesLoadIndependentlyOfExecType(t *testing.T) {
+	policySet, err := schedule.ParseWorkloadPolicyConfig(`{
+		"version": 1,
+		"policies": {
+			"load": {
+				"pool": "tenant-etl",
+				"labels": {"role": "etl"},
+				"current_cn": "excluded"
+			}
+		}
+	}`)
+	require.NoError(t, err)
+
+	c := NewMockCompile(t)
+	c.addr = "tp-local:6001"
+	c.execType = plan2.ExecTypeTP
+	c.stmt = &tree.Load{}
+	c.tenant = "tenant-a"
+	c.cnLabel = map[string]string{"account": "tenant-a", "role": "tp"}
+	c.e = &schedulerProviderTestEngine{
+		schedulerTestEngine: &schedulerTestEngine{},
+		candidates: engine.QueryCandidates{{
+			Service: metadata.CNService{
+				ServiceID: "etl-remote", PipelineServiceAddress: "etl-remote:6001",
+				WorkState: metadata.WorkState_Working,
+			},
+			Mcpu: 6,
+		}},
+		resolvedNodes: engine.Nodes{{
+			Id: "etl-remote", Addr: "etl-remote:6001", Mcpu: 6,
+			WorkState: metadata.WorkState_Working,
+		}},
+	}
+	c.SetWorkloadPolicy(policySet, "")
+
+	nodes, err := c.scheduleQueryWorkers()
+	require.NoError(t, err)
+	require.Equal(t, "etl-remote:6001", nodes[0].Addr)
+	require.Equal(t, schedule.WorkloadLoad, c.queryPlacement.WorkloadPolicy.WorkloadClass)
+	require.Equal(t, schedule.WorkloadRoutingSingle, c.queryPlacement.WorkloadPolicy.Routing)
+}
+
+func TestScheduleQueryWorkersTPPolicyVerifiesCurrentPoolWithoutRelocation(t *testing.T) {
+	policySet, err := schedule.ParseWorkloadPolicyConfig(`{
+		"version": 1,
+		"policies": {
+			"tp": {
+				"pool": "tenant-tp",
+				"labels": {"role": "tp"},
+				"current_cn": "required"
+			}
+		}
+	}`)
+	require.NoError(t, err)
+
+	c := NewMockCompile(t)
+	c.addr = "tp-local:6001"
+	c.execType = plan2.ExecTypeTP
+	c.tenant = "tenant-a"
+	c.cnLabel = map[string]string{"account": "tenant-a", "role": "tp"}
+	c.e = &schedulerProviderTestEngine{
+		schedulerTestEngine: &schedulerTestEngine{},
+		candidates: engine.QueryCandidates{{
+			Service: metadata.CNService{
+				ServiceID: "tp-local", PipelineServiceAddress: "tp-local:6001",
+				WorkState: metadata.WorkState_Working,
+			},
+			Mcpu: 4,
+		}},
+		resolvedNodes: engine.Nodes{{
+			Id: "tp-local", Addr: "tp-local:6001", Mcpu: 4,
+			WorkState: metadata.WorkState_Working,
+		}},
+	}
+	c.SetWorkloadPolicy(policySet, "")
+
+	nodes, err := c.scheduleQueryWorkers()
+	require.NoError(t, err)
+	require.Equal(t, "tp-local:6001", nodes[0].Addr)
+	require.Equal(t, schedule.WorkloadRoutingLocal, c.queryPlacement.WorkloadPolicy.Routing)
+	require.Equal(t, schedule.ReasonRequiredCurrentCN, c.queryPlacement.Reason)
+}
+
+func TestScheduleQueryWorkersTPPolicyDiscoversOnlyCurrentCN(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	lockSvc := mock_lock.NewMockLockService(ctrl)
+	lockSvc.EXPECT().GetConfig().Return(lockservice.Config{ServiceID: "tp-local"}).AnyTimes()
+
+	policySet, err := schedule.ParseWorkloadPolicyConfig(`{
+		"version": 1,
+		"policies": {
+			"tp": {
+				"pool": "tenant-tp",
+				"labels": {"role": "tp"},
+				"current_cn": "required"
+			}
+		}
+	}`)
+	require.NoError(t, err)
+
+	base := &schedulerProviderTestEngine{
+		schedulerTestEngine: &schedulerTestEngine{},
+		resolvedNodes: engine.Nodes{{
+			Id: "tp-local", Addr: "tp-local:6001", Mcpu: 4,
+			WorkState: metadata.WorkState_Working,
+		}},
+	}
+	provider := &schedulerCurrentProviderTestEngine{
+		schedulerProviderTestEngine: base,
+		currentCandidates: engine.QueryCandidates{{
+			Service: metadata.CNService{
+				ServiceID: "tp-local", PipelineServiceAddress: "tp-local:6001",
+				WorkState: metadata.WorkState_Working,
+			},
+			Mcpu: 4,
+		}},
+	}
+	c := NewMockCompile(t)
+	c.proc.Base.LockService = lockSvc
+	c.addr = "tp-local:6001"
+	c.execType = plan2.ExecTypeTP
+	c.tenant = "tenant-a"
+	c.cnLabel = map[string]string{"account": "tenant-a", "role": "tp"}
+	c.e = provider
+	c.SetWorkloadPolicy(policySet, "")
+
+	nodes, err := c.scheduleQueryWorkers()
+	require.NoError(t, err)
+	require.Equal(t, "tp-local", provider.currentServiceID)
+	require.Equal(t, 1, provider.currentCalls)
+	require.Zero(t, provider.discoveryCalls)
+	require.Len(t, provider.resolvedSnapshot, 1)
+	require.Equal(t, "tp-local:6001", nodes[0].Addr)
+}
+
+func TestPreparedWorkloadPolicyRefreshIsClassScoped(t *testing.T) {
+	apOnly := schedule.WorkloadPolicySet{
+		Rules: map[schedule.WorkloadClass]schedule.WorkloadPolicyRule{
+			schedule.WorkloadAP: {PoolIdentity: "ap"},
+		},
+	}
+	tpOnly := schedule.WorkloadPolicySet{
+		Rules: map[schedule.WorkloadClass]schedule.WorkloadPolicyRule{
+			schedule.WorkloadTP: {
+				PoolIdentity: "tp",
+				Labels:       map[string]string{"role": "tp"},
+			},
+		},
+	}
+	c := &Compile{execType: plan2.ExecTypeTP}
+
+	require.False(t, c.NeedsPreparedWorkloadPolicyRefresh(apOnly))
+	require.True(t, c.NeedsPreparedWorkloadPolicyRefresh(tpOnly))
+
+	c.workloadPolicySet = tpOnly.Clone()
+	require.False(t, c.NeedsPreparedWorkloadPolicyRefresh(tpOnly.Clone()))
+	require.True(t, c.NeedsPreparedWorkloadPolicyRefresh(schedule.WorkloadPolicySet{
+		Rules: map[schedule.WorkloadClass]schedule.WorkloadPolicyRule{
+			schedule.WorkloadTP: {
+				PoolIdentity: "tp-new",
+				Labels:       map[string]string{"role": "tp"},
+			},
+		},
+	}))
+	require.True(t, c.NeedsPreparedWorkloadPolicyRefresh(schedule.WorkloadPolicySet{}))
+	c.workloadPolicySet = schedule.WorkloadPolicySet{}
+	require.True(t, c.NeedsPreparedWorkloadPolicyRefresh(
+		schedule.WorkloadPolicySet{InvalidReason: "corrupt catalog value"},
+	))
+}
+
+func TestInternalDDLRemainsMaintenanceWorkload(t *testing.T) {
+	c := &Compile{
+		isInternal: true,
+		execType:   plan2.ExecTypeTP,
+		stmt:       &tree.CreateTable{},
+	}
+	require.Equal(t, schedule.WorkloadMaintenance, c.queryWorkloadClass())
+
+	c.stmt = &tree.Select{}
+	require.Equal(t, schedule.WorkloadInternal, c.queryWorkloadClass())
+}
+
+func TestScheduleQueryWorkersTPPolicyRejectsRelocationOutsideTargetPool(t *testing.T) {
+	policySet, err := schedule.ParseWorkloadPolicyConfig(`{
+		"version": 1,
+		"policies": {
+			"tp": {
+				"pool": "tenant-tp",
+				"labels": {"role": "tp"},
+				"current_cn": "required"
+			}
+		}
+	}`)
+	require.NoError(t, err)
+
+	c := NewMockCompile(t)
+	c.addr = "ingress:6001"
+	c.execType = plan2.ExecTypeTP
+	c.tenant = "tenant-a"
+	c.e = &schedulerProviderTestEngine{
+		schedulerTestEngine: &schedulerTestEngine{},
+		candidates: engine.QueryCandidates{{
+			Service: metadata.CNService{
+				ServiceID: "other-tp", PipelineServiceAddress: "other-tp:6001",
+				WorkState: metadata.WorkState_Working,
+			},
+			Mcpu: 4,
+		}},
+		resolvedNodes: engine.Nodes{{
+			Id: "other-tp", Addr: "other-tp:6001", Mcpu: 4,
+			WorkState: metadata.WorkState_Working,
+		}},
+	}
+	c.SetWorkloadPolicy(policySet, "")
+
+	_, err = c.scheduleQueryWorkers()
+	require.ErrorContains(t, err, schedule.ReasonRequiredCurrentOutsidePool)
+	require.Equal(t, schedule.ReasonRequiredCurrentOutsidePool, c.queryPlacement.Reason)
+	require.Empty(t, c.queryPlacement.Workers)
+}
+
+func TestScheduleQueryWorkersMultiCNPolicyStaysInsideStrictTargetPool(t *testing.T) {
+	policySet, err := schedule.ParseWorkloadPolicyConfig(`{
+		"version": 1,
+		"policies": {
+			"ap": {
+				"pool": "tenant-ap",
+				"labels": {"role": "ap"},
+				"current_cn": "excluded",
+				"max_workers": 2
+			}
+		}
+	}`)
+	require.NoError(t, err)
+
+	c := NewMockCompile(t)
+	c.addr = "ingress:6001"
+	c.execType = plan2.ExecTypeAP_MULTICN
+	c.tenant = "tenant-a"
+	c.cnLabel = map[string]string{"account": "tenant-a", "role": "tp"}
+	provider := &schedulerProviderTestEngine{
+		schedulerTestEngine: &schedulerTestEngine{},
+		candidates: engine.QueryCandidates{
+			{Service: metadata.CNService{
+				ServiceID: "ingress", PipelineServiceAddress: "ingress:6001",
+				WorkState: metadata.WorkState_Working,
+			}, Mcpu: 4},
+			{Service: metadata.CNService{
+				ServiceID: "ap-1", PipelineServiceAddress: "ap-1:6001",
+				WorkState: metadata.WorkState_Working,
+			}, Mcpu: 8},
+			{Service: metadata.CNService{
+				ServiceID: "ap-2", PipelineServiceAddress: "ap-2:6001",
+				WorkState: metadata.WorkState_Working,
+			}, Mcpu: 12},
+		},
+		resolvedNodes: engine.Nodes{
+			{Id: "ap-1", Addr: "ap-1:6001", Mcpu: 8, WorkState: metadata.WorkState_Working},
+			{Id: "ap-2", Addr: "ap-2:6001", Mcpu: 12, WorkState: metadata.WorkState_Working},
+		},
+	}
+	c.e = provider
+	c.SetWorkloadPolicy(policySet, "")
+
+	nodes, err := c.scheduleQueryWorkers()
+	require.NoError(t, err)
+	require.Len(t, nodes, 2)
+	require.ElementsMatch(t, []string{"ap-1:6001", "ap-2:6001"}, []string{
+		nodes[0].Addr,
+		nodes[1].Addr,
+	})
+	require.Equal(t, engine.QueryPoolFallbackStrict, provider.poolRequest.FallbackPolicy)
+	require.Equal(t, map[string]string{
+		"account": "tenant-a",
+		"role":    "ap",
+	}, provider.poolRequest.TargetLabels)
+}
+
+func TestScheduleQueryWorkersStrictWorkloadPoolNeverFallsBackToIngress(t *testing.T) {
+	policySet, err := schedule.ParseWorkloadPolicyConfig(`{
+		"version": 1,
+		"policies": {
+			"ap": {
+				"pool": "tenant-ap",
+				"labels": {"role": "ap"}
+			}
+		}
+	}`)
+	require.NoError(t, err)
+
+	c := NewMockCompile(t)
+	c.addr = "ingress:6001"
+	c.execType = plan2.ExecTypeAP_MULTICN
+	c.tenant = "tenant-a"
+	c.e = &schedulerProviderTestEngine{
+		schedulerTestEngine: &schedulerTestEngine{},
+		resolvedNodes:       engine.Nodes{},
+	}
+	c.SetWorkloadPolicy(policySet, "")
+
+	_, err = c.scheduleQueryWorkers()
+	require.ErrorContains(t, err, schedule.ReasonNoCandidateCN)
+	require.Equal(t, schedule.ReasonNoCandidateCN, c.queryPlacement.Reason)
+	require.Empty(t, c.queryPlacement.Workers)
+}
+
+func TestScheduleQueryWorkersRejectsUnroutableSingleWorkloadTarget(t *testing.T) {
+	policySet, err := schedule.ParseWorkloadPolicyConfig(`{
+		"version": 1,
+		"policies": {
+			"ap": {
+				"pool": "tenant-ap",
+				"labels": {"role": "ap"},
+				"current_cn": "excluded"
+			}
+		}
+	}`)
+	require.NoError(t, err)
+
+	c := NewMockCompile(t)
+	c.addr = "tp-local:6001"
+	c.execType = plan2.ExecTypeAP_ONECN
+	c.tenant = "tenant-a"
+	c.cnLabel = map[string]string{"account": "tenant-a", "role": "tp"}
+	c.e = &schedulerProviderTestEngine{
+		schedulerTestEngine: &schedulerTestEngine{},
+		candidates: engine.QueryCandidates{{
+			Service: metadata.CNService{
+				ServiceID: "ap-unroutable",
+				WorkState: metadata.WorkState_Working,
+			},
+			Mcpu: 4,
+		}},
+		resolvedNodes: engine.Nodes{{
+			Id: "ap-unroutable", Mcpu: 4,
+			WorkState: metadata.WorkState_Working,
+		}},
+	}
+	c.SetWorkloadPolicy(policySet, "")
+
+	_, err = c.scheduleQueryWorkers()
+	require.ErrorContains(t, err, "cannot satisfy placement")
+	require.Equal(t, schedule.ReasonExcludedCurrentCN, c.queryPlacement.Reason)
+	require.Equal(t, schedule.ReasonDroppedUnroutableCN, c.queryPlacement.Dropped[0].Reason)
 }
 
 func TestScheduleQueryWorkersFallsBackWhenResolvedPoolIsEmpty(t *testing.T) {

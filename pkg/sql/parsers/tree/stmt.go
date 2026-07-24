@@ -240,6 +240,10 @@ func (node *AlterDataBaseConfig) StmtKind() StmtKind {
 	return frontendStatusTyp
 }
 
+func (node *AlterAccountConfig) StmtKind() StmtKind {
+	return frontendStatusTyp
+}
+
 func (node *CreateUser) StmtKind() StmtKind {
 	return frontendStatusTyp
 }

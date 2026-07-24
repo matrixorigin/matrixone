@@ -1546,14 +1546,23 @@ func writeExplainResult(
 		// EXPLAIN EXECUTE replaces the outer EXECUTE plan with the prepared
 		// query above. Its scheduling intent belongs to that same inner SQL,
 		// not to the outer EXPLAIN fragment.
+		workloadClass := queryWorkloadClassHint(stmt.Statement)
 		if execute, ok := stmt.Statement.(*tree.Execute); ok {
 			if prepared, getErr := ses.GetPrepareStmt(reqCtx, string(execute.Name)); getErr == nil {
 				rawSQL = prepared.Sql
 				sqlMode = &prepared.schedulingSQLMode
+				workloadClass = queryWorkloadClassHint(prepared.PrepareStmt)
 			}
 		}
 		schedulingPreview := previewQuerySchedulingWithSQLMode(
-			reqCtx, ses, exPlan.GetQuery(), txnHaveDDL, rawSQL, sqlMode)
+			reqCtx,
+			ses,
+			exPlan.GetQuery(),
+			txnHaveDDL,
+			rawSQL,
+			sqlMode,
+			workloadClass,
+		)
 		appendSchedulingExplain(buffer, schedulingPreview)
 	}
 	if err = reqCtx.Err(); err != nil {
@@ -1590,7 +1599,15 @@ func previewQueryScheduling(
 	if len(statementSQL) > 0 {
 		rawSQL = statementSQL[0]
 	}
-	return previewQuerySchedulingWithSQLMode(ctx, ses, query, txnHaveDDL, rawSQL, nil)
+	return previewQuerySchedulingWithSQLMode(
+		ctx,
+		ses,
+		query,
+		txnHaveDDL,
+		rawSQL,
+		nil,
+		"",
+	)
 }
 
 func previewQuerySchedulingWithSQLMode(
@@ -1600,6 +1617,7 @@ func previewQuerySchedulingWithSQLMode(
 	txnHaveDDL bool,
 	rawSQL string,
 	sqlMode *string,
+	workloadClass schedule.WorkloadClass,
 ) schedule.Trace {
 	if ctx == nil {
 		ctx = context.Background()
@@ -1616,9 +1634,14 @@ func previewQuerySchedulingWithSQLMode(
 	if info := ses.GetTenantInfo(); info != nil {
 		tenant = info.GetTenant()
 	}
+	policySet := queryWorkloadPolicySnapshotAt(previewCtx, ses)
 	intent := querySchedulingIntentForStatement(ses, rawSQL)
 	if sqlMode != nil {
-		intent = querySchedulingIntentForStatementWithSQLMode(ses, rawSQL, *sqlMode)
+		intent = querySchedulingIntentForStatementWithSQLMode(
+			ses,
+			rawSQL,
+			*sqlMode,
+		)
 	}
 	return compile.PreviewQueryScheduling(compile.SchedulingPreviewRequest{
 		Context:    previewCtx,
@@ -1631,8 +1654,23 @@ func previewQuerySchedulingWithSQLMode(
 		Username:   ses.GetUserName(),
 		CNLabel:    ses.getCNLabels(),
 		Intent:     intent,
+		Policy:     policySet,
+		Workload:   workloadClass,
 		TxnHasDDL:  txnHaveDDL,
 	})
+}
+
+func queryWorkloadClassHint(stmt tree.Statement) schedule.WorkloadClass {
+	if stmt == nil {
+		return ""
+	}
+	if _, ok := stmt.(*tree.Load); ok {
+		return schedule.WorkloadLoad
+	}
+	if stmt.GetQueryType() == tree.QueryTypeDDL {
+		return schedule.WorkloadMaintenance
+	}
+	return ""
 }
 
 func appendSchedulingExplain(buffer *explain.ExplainDataBuffer, trace schedule.Trace) {
@@ -1893,7 +1931,7 @@ func createPrepareStmt(
 		(!prepareSchedulingIntent.Explicit ||
 			schedule.ValidateSchedulingIntent(prepareSchedulingIntent) != "") {
 		//only DQL & DML will pre compile
-		comp, err = createCompile(execCtx, ses, ses.proc, originSQL, originSQL, &schedulingSQLMode, saveStmt, preparePlan.GetDcl().GetPrepare().Plan, ses.GetOutputCallback(execCtx), true, nil)
+		comp, err = createCompile(execCtx, ses, ses.proc, originSQL, originSQL, &schedulingSQLMode, saveStmt, preparePlan.GetDcl().GetPrepare().Plan, ses.GetOutputCallback(execCtx), true, nil, nil)
 		if err != nil {
 			if !moerr.IsMoErrCode(err, moerr.ErrCantCompileForPrepare) {
 				return nil, err
@@ -2137,6 +2175,14 @@ func handleAlterDataBaseConfig(ses FeSession, execCtx *ExecCtx, ad *tree.AlterDa
 // handleAlterAccountConfig alter a account's mysql_compatibility_mode
 func handleAlterAccountConfig(ses FeSession, execCtx *ExecCtx, st *tree.AlterDataBaseConfig) error {
 	return doAlterAccountConfig(execCtx.reqCtx, ses.(*Session), st)
+}
+
+func handleAlterQueryWorkloadPolicy(
+	ses FeSession,
+	execCtx *ExecCtx,
+	st *tree.AlterAccountConfig,
+) error {
+	return doAlterQueryWorkloadPolicy(execCtx.reqCtx, ses.(*Session), st)
 }
 
 // handleCreateUser creates the user for the tenant

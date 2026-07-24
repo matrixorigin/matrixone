@@ -68,10 +68,15 @@ type QueryCandidates []QueryCandidate
 // resolve the allowed CN pool. It deliberately contains no worker-selection
 // policy such as subset size or ranking.
 type QueryCandidatePoolRequest struct {
-	IsInternal     bool
-	Tenant         string
-	Username       string
-	CNLabel        map[string]string
+	IsInternal bool
+	Tenant     string
+	Username   string
+	// CNLabel is the historical ingress selector supplied by the proxy. It is
+	// used only when TargetLabels is nil.
+	CNLabel map[string]string
+	// TargetLabels is the operator-authorized workload selector. A non-nil
+	// value, including an empty map, must never be widened from CNLabel.
+	TargetLabels   map[string]string
 	RequestedPool  string
 	FallbackPolicy QueryPoolFallbackPolicy
 }
@@ -114,9 +119,18 @@ type QueryCandidateDiscoverer interface {
 	DiscoverQueryCandidates(context.Context) (QueryCandidates, error)
 }
 
+// CurrentQueryCandidateDiscoverer is an optional fast path for policies whose
+// routing contract requires execution on the ingress CN. It avoids building a
+// full cluster inventory merely to verify that one CN still belongs to the
+// authorized pool.
+type CurrentQueryCandidateDiscoverer interface {
+	DiscoverCurrentQueryCandidate(context.Context, string) (QueryCandidates, error)
+}
+
 // QueryCandidatePoolResolver is the matching optional capability that applies
 // tenant and label policy to an already-discovered candidate snapshot.
-// Implementations must treat candidates and request.CNLabel as read-only.
+// Implementations must treat candidates, request.CNLabel, and
+// request.TargetLabels as read-only.
 type QueryCandidatePoolResolver interface {
 	ResolveQueryCandidatePool(context.Context, QueryCandidates, QueryCandidatePoolRequest) (ResolvedQueryPool, error)
 }

@@ -48,6 +48,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -57,6 +58,52 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+func TestCompileStepsKeepsClientOutputOffRemotePipeline(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	c := NewCompile(
+		"local-cn:6001",
+		"",
+		"select 1",
+		"",
+		"",
+		newStubEngine(),
+		proc,
+		nil,
+		false,
+		nil,
+		time.Now(),
+	)
+	c.execType = plan2.ExecTypeAP_ONECN
+	query := &plan.Query{
+		StmtType: plan.Query_SELECT,
+		Nodes:    []*plan.Node{{NodeType: plan.Node_VALUE_SCAN}},
+	}
+	c.anal = newAnalyzeModule()
+	c.anal.qry = query
+	c.anal.curNodeIdx = 0
+	defer c.Release()
+
+	remote := newScope(Remote)
+	remote.NodeInfo = engine.Node{Id: "remote-cn", Addr: "remote-cn:6001", Mcpu: 1}
+	remote.Proc = proc.NewNoContextChildProc(0)
+	remote.setRootOperator(value_scan.NewArgument())
+
+	result, err := c.compileSteps(query, []*Scope{remote}, 0)
+	require.NoError(t, err)
+	c.scopes = result
+	require.Len(t, result, 1)
+	require.Equal(t, Merge, result[0].Magic)
+	require.Equal(t, vm.Output, result[0].RootOp.OpType())
+	require.Len(t, result[0].PreScopes, 1)
+	require.Equal(t, vm.Connector, remote.RootOp.OpType())
+
+	encoded, withoutOutput := getScopeForRemoteRunEncoding(remote)
+	require.False(t, withoutOutput)
+	require.NotEqual(t, vm.Output, encoded.RootOp.OpType())
+	_, err = encodeScope(encoded)
+	require.NoError(t, err)
+}
 
 func TestCompileRunPreservesBinaryPrepareParamAcrossRetries(t *testing.T) {
 	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
