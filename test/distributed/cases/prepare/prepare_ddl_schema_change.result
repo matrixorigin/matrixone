@@ -344,12 +344,12 @@ execute special_view_name_stmt;
 deallocate prepare special_view_name_stmt;
 set save_query_result = on;
 /* save_result */ select 7 as prepared_result_scan_value;
-➤ prepared_result_scan_value[5,64,0]  𝄀
+➤ prepared_result_scan_value[-5,64,0]  𝄀
 7
 prepare prepared_result_scan_stmt from
 'select * from result_scan(last_query_id(-1)) as r';
 execute prepared_result_scan_stmt;
-➤ prepared_result_scan_value[5,64,0]  𝄀
+➤ prepared_result_scan_value[-5,64,0]  𝄀
 7
 deallocate prepare prepared_result_scan_stmt;
 create database `prepared#view_db`;
