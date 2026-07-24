@@ -26,6 +26,7 @@ import (
 	"github.com/cespare/xxhash/v2"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -586,6 +587,109 @@ func TestDetermineShuffleForLatePlanStep(t *testing.T) {
 	require.False(t, join.Stats.HashmapStats.Shuffle)
 	require.Empty(t, join.RuntimeFilterProbeList)
 	require.Empty(t, join.RuntimeFilterBuildList)
+}
+
+func TestDetermineShuffleForMarkJoin(t *testing.T) {
+	tests := []struct {
+		name        string
+		notNullable bool
+		sameSide    bool
+		afterRemap  bool
+		wantShuffle bool
+	}{
+		{
+			name:        "non-null keys can shuffle",
+			notNullable: true,
+			wantShuffle: true,
+		},
+		{
+			name:        "non-null keys can shuffle after remap",
+			notNullable: true,
+			afterRemap:  true,
+			wantShuffle: true,
+		},
+		{
+			name: "nullable keys stay broadcast",
+		},
+		{
+			name:        "same-side equality stays broadcast",
+			notNullable: true,
+			sameSide:    true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			left := &plan.Node{
+				NodeType:    plan.Node_TABLE_SCAN,
+				BindingTags: []int32{10},
+				Stats:       &plan.Stats{Outcnt: 10_000_000, HashmapStats: &plan.HashMapStats{}},
+			}
+			right := &plan.Node{
+				NodeType:    plan.Node_TABLE_SCAN,
+				BindingTags: []int32{20},
+				Stats:       &plan.Stats{Outcnt: 3_000_000, HashmapStats: &plan.HashMapStats{}},
+			}
+			leftRel, rightRel := int32(10), int32(20)
+			if tt.afterRemap {
+				leftRel, rightRel = 0, 1
+			}
+			condition := makeMarkShuffleEquality(t, tt.notNullable, leftRel, rightRel)
+			if tt.sameSide {
+				condition.GetF().Args[1].GetCol().RelPos = leftRel
+			}
+			node := &plan.Node{
+				NodeType: plan.Node_JOIN,
+				JoinType: plan.Node_MARK,
+				Children: []int32{0, 1},
+				OnList:   []*plan.Expr{condition},
+				Stats: &plan.Stats{HashmapStats: &plan.HashMapStats{
+					// Verify that ineligible MARK plans also clear stale
+					// shuffle metadata instead of reaching the compiler.
+					Shuffle:     true,
+					HashmapSize: 3_000_000,
+				}},
+			}
+			builder := &QueryBuilder{qry: &plan.Query{Nodes: []*plan.Node{left, right}}}
+
+			determineShuffleForJoinWithColRefMode(node, builder, tt.afterRemap)
+
+			require.Equal(t, tt.wantShuffle, node.Stats.HashmapStats.Shuffle)
+			if tt.wantShuffle {
+				require.Equal(t, int32(0), node.Stats.HashmapStats.ShuffleColIdx)
+				require.Equal(t, plan.ShuffleType_Hash, node.Stats.HashmapStats.ShuffleType)
+			} else {
+				require.Equal(t, int32(-1), node.Stats.HashmapStats.ShuffleColIdx)
+			}
+		})
+	}
+}
+
+func makeMarkShuffleEquality(t *testing.T, notNullable bool, leftRel, rightRel int32) *plan.Expr {
+	t.Helper()
+
+	typ := types.T_int64.ToType()
+	equal, err := function.GetFunctionByName(context.Background(), "=", []types.Type{typ, typ})
+	require.NoError(t, err)
+
+	args := make([]*plan.Expr, 2)
+	for i, relPos := range []int32{leftRel, rightRel} {
+		args[i] = &plan.Expr{
+			Typ: plan.Type{Id: int32(types.T_int64), NotNullable: notNullable},
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{
+				RelPos: relPos,
+				ColPos: 0,
+			}},
+		}
+	}
+	return &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_bool), NotNullable: notNullable},
+		Ndv: 100_000,
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{Obj: equal.GetEncodedOverloadID(), ObjName: "="},
+			Args: args,
+		}},
+	}
 }
 
 func TestGetRangeShuffleIndexForZM(t *testing.T) {
