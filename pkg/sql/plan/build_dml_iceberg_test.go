@@ -198,6 +198,51 @@ func TestIcebergUpdateBuildsDMLWriteIntent(t *testing.T) {
 	}
 }
 
+func TestIcebergUpdateIgnoreUsesIgnoreAssignmentCast(t *testing.T) {
+	ctx := newIcebergTestCompilerContext(t, nil)
+	ctx.tables["gold_orders"].Cols = append(ctx.tables["gold_orders"].Cols,
+		&planpb.ColDef{
+			Name:    "region",
+			Typ:     planpb.Type{Id: int32(types.T_varchar), Width: 1, Table: "gold_orders"},
+			Default: &planpb.Default{NullAbility: true},
+		},
+	)
+
+	stmt, err := mysql.ParseOne(
+		context.Background(),
+		"update ignore gold_orders set region = 'XX'",
+		1,
+	)
+	if err != nil {
+		t.Fatalf("parse update ignore: %v", err)
+	}
+	p, err := BuildPlan(ctx, stmt, false)
+	if err != nil {
+		t.Fatalf("build Iceberg update ignore plan: %v", err)
+	}
+
+	var dmlSink *planpb.Node
+	for _, node := range p.GetQuery().GetNodes() {
+		if node.GetExtraOptions() == icebergapi.DMLUpdatePlanExtraOptions {
+			dmlSink = node
+			break
+		}
+	}
+	if dmlSink == nil {
+		t.Fatal("expected Iceberg UPDATE IGNORE DML sink node")
+	}
+	updateProject := icebergDMLSinkChildProject(t, p.GetQuery(), dmlSink)
+	regionIdx := tableDefColIndex(dmlSink.GetTableDef(), "region")
+	if regionIdx < 0 {
+		t.Fatalf("UPDATE IGNORE DML sink is missing region: %+v", dmlSink.GetTableDef())
+	}
+	expr := updateProject.GetProjectList()[regionIdx]
+	if expr.GetF().GetFunc().GetObjName() != "cast_ignore" {
+		t.Fatalf("Iceberg UPDATE IGNORE region cast = %q, want cast_ignore: %+v",
+			expr.GetF().GetFunc().GetObjName(), expr)
+	}
+}
+
 func TestIcebergUpdateRewritesDMLScanFilterColumnPositions(t *testing.T) {
 	ctx := newIcebergTestCompilerContext(t, nil)
 	ctx.tables["gold_orders"].Cols = []*planpb.ColDef{

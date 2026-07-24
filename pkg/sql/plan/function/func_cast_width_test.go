@@ -397,6 +397,8 @@ func TestJSONToStrWidthEnforcement(t *testing.T) {
 		{"nonstrict_truncate", `"abcd"`, false, true, "abc", false, 0},
 		{"trailing_space_not_exempt_ddl", `"abc   "`, true, false, "", true, moerr.ErrInvalidDefault},
 		{"multibyte_trailing_space_exempt", `"你好世   "`, true, true, "你好世", false, 0},
+		{"multibyte_fits_strict", `"你好"`, true, true, "你好", false, 0},
+		{"multibyte_fits_nonstrict", `"你好"`, false, true, "你好", false, 0},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

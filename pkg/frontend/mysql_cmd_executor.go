@@ -1876,6 +1876,7 @@ func createPrepareStmt(
 	}
 
 	var preparePlan *plan.Plan
+	protocolVersion := currentProtocolVersion(ses.proc)
 	err := execCtx.withRootSQL(originSQL, func() (err error) {
 		preparePlan, err = buildPlanWithAuthorization(execCtx.reqCtx, ses, ses.GetTxnCompileCtx(), stmt)
 		return err
@@ -1917,6 +1918,7 @@ func createPrepareStmt(
 		remapDb:             maps.Clone(execCtx.remapDb),
 		defaultDatabase:     ses.GetTxnCompileCtx().GetDatabase(),
 		tempTableVersion:    ses.GetTempTableVersion(),
+		protocolVersion:     protocolVersion,
 		getFromSendLongData: make(map[int]struct{}),
 		schedulingSQLMode:   schedulingSQLMode,
 	}
@@ -3010,6 +3012,7 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 		for i, stmt := range cached.stmts {
 			tcw := InitTxnComputationWrapper(ses, stmt, proc)
 			tcw.plan = cached.plans[i]
+			tcw.protocolVersion = cached.protocolVersion
 			tcw.SetRemapDb(statementRemaps[i])
 			tcw.SetSchedulingSQL(statementSchedulingSQL[i])
 			cws = append(cws, tcw)
@@ -4532,6 +4535,16 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 
 	} // end of for
 
+	cacheProtocolVersion := currentProtocolVersion(proc)
+	if canCache && !ses.isCached(input.getHash()) {
+		for _, cw := range cws {
+			tcw, ok := cw.(*TxnComputationWrapper)
+			if !ok || tcw.protocolVersion != cacheProtocolVersion {
+				canCache = false
+				break
+			}
+		}
+	}
 	if canCache && !ses.isCached(input.getHash()) {
 		plans := make([]*plan.Plan, len(cws))
 		stmts := make([]tree.Statement, len(cws))
@@ -4545,7 +4558,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 			cw.Clear()
 		}
 		Cached = true
-		ses.cachePlan(input.getHash(), stmts, plans)
+		ses.cachePlan(input.getHash(), stmts, plans, cacheProtocolVersion)
 	}
 
 	return nil

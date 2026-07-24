@@ -7340,25 +7340,28 @@ func jsonToStr(
 			// contain Unicode characters. Mirror strToStr's semantics so the
 			// trailing-space exemption and sql_mode gating apply to JSON too.
 			destLen := int(toType.Width)
-			if (toType.Oid == types.T_char || toType.Oid == types.T_varchar) && utf8.RuneCountInString(str) > destLen {
-				if (allowTrailingSpaceTrim && overLenIsAllTrailingSpaces(str, destLen)) || !strictStringWidth {
-					val = []byte(truncateStringByRunes(str, destLen))
-					addCastWarningFromContext(ctx, str)
-				} else if allowTrailingSpaceTrim {
-					extraInfo := fmt.Sprintf(
-						"Src length %v is larger than Dest length %v",
-						utf8.RuneCountInString(str),
-						destLen,
-					)
-					if reportDataTooLong {
-						// DML assignment cast — reject with 1406 ER_DATA_TOO_LONG.
-						return formatDataTruncationError(ctx, from.GetSourceVector(), toType, extraInfo, true)
+			if toType.Oid == types.T_char || toType.Oid == types.T_varchar {
+				runeCount := utf8.RuneCountInString(str)
+				if runeCount > destLen {
+					if (allowTrailingSpaceTrim && overLenIsAllTrailingSpaces(str, destLen)) || !strictStringWidth {
+						val = []byte(truncateStringByRunes(str, destLen))
+						addCastWarningFromContext(ctx, str)
+					} else if allowTrailingSpaceTrim {
+						extraInfo := fmt.Sprintf(
+							"Src length %v is larger than Dest length %v",
+							runeCount,
+							destLen,
+						)
+						if reportDataTooLong {
+							// DML assignment cast — reject with 1406 ER_DATA_TOO_LONG.
+							return formatDataTruncationError(ctx, from.GetSourceVector(), toType, extraInfo, true)
+						}
+						return formatDataTruncationError(ctx, from.GetSourceVector(), toType, extraInfo)
+					} else {
+						// DDL (cast_strict) default/on-update value — reject with
+						// 1067 ER_INVALID_DEFAULT, matching MySQL semantics.
+						return moerr.NewErrInvalidDefault(ctx, str)
 					}
-					return formatDataTruncationError(ctx, from.GetSourceVector(), toType, extraInfo)
-				} else {
-					// DDL (cast_strict) default/on-update value — reject with
-					// 1067 ER_INVALID_DEFAULT, matching MySQL semantics.
-					return moerr.NewErrInvalidDefault(ctx, str)
 				}
 			} else {
 				val = truncateCastBytesResult(ctx, val, toType, strictStringWidth)

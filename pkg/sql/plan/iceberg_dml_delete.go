@@ -711,7 +711,7 @@ func buildIcebergUpdateReplacementProjects(ctx context.Context, query *plan.Quer
 			if err != nil {
 				return nil, err
 			}
-			expr, err = forceAssignmentCastExprWithProcess(ctx, expr, col.Typ, false, builder.compCtx.GetProcess())
+			expr, err = forceAssignmentCastExprWithProcess(ctx, expr, col.Typ, stmt.Ignore, builder.compCtx.GetProcess())
 			if err != nil {
 				return nil, err
 			}
