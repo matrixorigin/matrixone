@@ -23,7 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 )
 
@@ -58,7 +57,6 @@ func (store *NoopTxnStore) PrepareCommit() error                 { return nil }
 func (store *NoopTxnStore) ApplyRollback() error                 { return nil }
 func (store *NoopTxnStore) PreApplyCommit() error                { return nil }
 func (store *NoopTxnStore) ApplyCommit() error                   { return nil }
-func (store *NoopTxnStore) Apply2PCPrepare() error               { return nil }
 func (store *NoopTxnStore) PrepareWAL() error                    { return nil }
 
 func (store *NoopTxnStore) DoneWaitEvent(cnt int)            {}
@@ -150,9 +148,6 @@ func (store *NoopTxnStore) GetValue(
 }
 
 func (store *NoopTxnStore) LogTxnEntry(dbId, tableId uint64, entry txnif.TxnEntry, readedObject, readedTombstone []*common.ID) (err error) {
-	return
-}
-func (store *NoopTxnStore) LogTxnState(sync bool) (logEntry entry.Entry, err error) {
 	return
 }
 
