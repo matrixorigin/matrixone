@@ -1680,22 +1680,21 @@ select * from abnormal04;
 {"x": "red"}  ¦  a  𝄀
 {"x": [3, 5, 7]}  ¦  b
 alter table abnormal04 modify col1 float;
-invalid argument operator cast, bad value [JSON -> FLOAT]
 alter table abnormal04 modify col2 int;
 invalid argument cast to int, bad value a
 select * from abnormal04;
-➤ col1[-1,2147483647,0]  ¦  col2[12,-1,0]  𝄀
-{"x": "red"}  ¦  a  𝄀
-{"x": [3, 5, 7]}  ¦  b
+➤ col1[7,24,0]  ¦  col2[12,-1,0]  𝄀
+NaN  ¦  a  𝄀
+0.0  ¦  b
 show create table abnormal04;
 ➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
 abnormal04  ¦  CREATE TABLE `abnormal04` (
-  `col1` json DEFAULT NULL,
+  `col1` float DEFAULT NULL,
   `col2` enum('a','b') DEFAULT NULL
 )
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'abnormal04' and COLUMN_NAME not like '__mo%';
 ➤ table_name[12,-1,0]  ¦  COLUMN_NAME[12,-1,0]  ¦  data_type[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
-abnormal04  ¦  col1  ¦  JSON  ¦  YES  𝄀
+abnormal04  ¦  col1  ¦  FLOAT  ¦  YES  𝄀
 abnormal04  ¦  col2  ¦  ENUM  ¦  YES
 drop table abnormal04;
 drop table if exists abnormal05;
@@ -2012,12 +2011,11 @@ president  ¦  CREATE TABLE `president` (
   `impeached` int DEFAULT NULL
 )
 ALTER TABLE president MODIFY nth JSON;
-not supported: currently unsupport change from original type INT to JSON 
 show create table president;
 ➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
 president  ¦  CREATE TABLE `president` (
   `name` varchar(100) NOT NULL,
-  `nth` int NOT NULL,
+  `nth` json DEFAULT NULL,
   `impeached` int DEFAULT NULL
 )
 DROP TABLE president;
