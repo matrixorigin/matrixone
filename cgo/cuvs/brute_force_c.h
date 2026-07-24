@@ -31,10 +31,10 @@ typedef void* gpu_brute_force_c;
 typedef void* gpu_brute_force_search_result_c;
 
 // Constructor for gpu_brute_force_t
-gpu_brute_force_c gpu_brute_force_new(const void* dataset_data, uint64_t count_vectors, uint32_t dimension, distance_type_t metric, uint32_t nthread, int device_id, quantization_t qtype, const int64_t* ids, void* errmsg);
+gpu_brute_force_c gpu_brute_force_new(const void* dataset_data, uint64_t count_vectors, uint32_t dimension, distance_type_t metric, uint32_t nthread, int device_id, quantization_t btype, quantization_t qtype, const int64_t* ids, void* errmsg);
 
 // Constructor for an empty index (pre-allocates)
-gpu_brute_force_c gpu_brute_force_new_empty(uint64_t total_count, uint32_t dimension, distance_type_t metric, uint32_t nthread, int device_id, quantization_t qtype, const int64_t* ids, void* errmsg);
+gpu_brute_force_c gpu_brute_force_new_empty(uint64_t total_count, uint32_t dimension, distance_type_t metric, uint32_t nthread, int device_id, quantization_t btype, quantization_t qtype, const int64_t* ids, void* errmsg);
 
 // Starts the worker and initializes resources
 void gpu_brute_force_start(gpu_brute_force_c index_c, void* errmsg);
@@ -45,20 +45,21 @@ void gpu_brute_force_build(gpu_brute_force_c index_c, void* errmsg);
 // Add chunk of data (same type as index quantization)
 void gpu_brute_force_add_chunk(gpu_brute_force_c index_c, const void* chunk_data, uint64_t chunk_count, const int64_t* ids, void* errmsg);
 
-// Add chunk of data (from float, with on-the-fly conversion if needed)
-void gpu_brute_force_add_chunk_float(gpu_brute_force_c index_c, const float* chunk_data, uint64_t chunk_count, const int64_t* ids, void* errmsg);
+// Add chunk of base-typed (B) data; converts B -> storage T (the add counterpart
+// of search_quantize: native store when B==T, f32->f16 cast, or learned SQ for 1-byte).
+void gpu_brute_force_add_chunk_quantize(gpu_brute_force_c index_c, const void* chunk_data, uint64_t chunk_count, const int64_t* ids, void* errmsg);
 
 // Performs a search operation
 gpu_brute_force_search_result_c gpu_brute_force_search(gpu_brute_force_c index_c, const void* queries_data, uint64_t num_queries, uint32_t query_dimension, uint32_t limit, void* errmsg);
 
-// Performs a search operation with float32 queries
-gpu_brute_force_search_result_c gpu_brute_force_search_float(gpu_brute_force_c index_c, const float* queries_data, uint64_t num_queries, uint32_t query_dimension, uint32_t limit, void* errmsg);
+// Performs a search operation with base-typed (B) queries; quantizes B -> storage T internally.
+gpu_brute_force_search_result_c gpu_brute_force_search_quantize(gpu_brute_force_c index_c, const void* queries_data, uint64_t num_queries, uint32_t query_dimension, uint32_t limit, void* errmsg);
 
 // Asynchronous search functions
-uint64_t gpu_brute_force_search_async(gpu_brute_force_c index_c, const void* queries_data, uint64_t num_queries, 
+uint64_t gpu_brute_force_search_async(gpu_brute_force_c index_c, const void* queries_data, uint64_t num_queries,
                                          uint32_t query_dimension, uint32_t limit, void* errmsg);
 
-uint64_t gpu_brute_force_search_float_async(gpu_brute_force_c index_c, const float* queries_data, uint64_t num_queries, 
+uint64_t gpu_brute_force_search_quantize_async(gpu_brute_force_c index_c, const void* queries_data, uint64_t num_queries,
                                               uint32_t query_dimension, uint32_t limit, void* errmsg);
 
 gpu_brute_force_search_result_c gpu_brute_force_search_wait(gpu_brute_force_c index_c, uint64_t job_id, void* errmsg);
@@ -88,19 +89,29 @@ gpu_brute_force_search_result_c gpu_brute_force_search_with_filter(gpu_brute_for
                                                                     uint32_t limit, const char* preds_json,
                                                                     void* errmsg);
 
-gpu_brute_force_search_result_c gpu_brute_force_search_float_with_filter(gpu_brute_force_c index_c,
-                                                                          const float* queries_data,
+gpu_brute_force_search_result_c gpu_brute_force_search_quantize_with_filter(gpu_brute_force_c index_c,
+                                                                          const void* queries_data,
                                                                           uint64_t num_queries, uint32_t query_dimension,
                                                                           uint32_t limit, const char* preds_json,
                                                                           void* errmsg);
 
-// Async variant of gpu_brute_force_search_float_with_filter. Returns a job_id
+// Async variant of gpu_brute_force_search_quantize_with_filter. Returns a job_id
 // that is collected with the existing gpu_brute_force_search_wait.
-uint64_t gpu_brute_force_search_float_with_filter_async(gpu_brute_force_c index_c,
-                                                         const float* queries_data,
+uint64_t gpu_brute_force_search_quantize_with_filter_async(gpu_brute_force_c index_c,
+                                                         const void* queries_data,
                                                          uint64_t num_queries, uint32_t query_dimension,
                                                          uint32_t limit, const char* preds_json,
                                                          void* errmsg);
+
+// Native-typed (T) async variant of gpu_brute_force_search_with_filter: the
+// query stays in the index element type T (f32 or f16), no widening. Returns a
+// job_id collected with gpu_brute_force_search_wait. Lets the filtered overflow
+// stay native half.
+uint64_t gpu_brute_force_search_with_filter_async(gpu_brute_force_c index_c,
+                                                  const void* queries_data,
+                                                  uint64_t num_queries, uint32_t query_dimension,
+                                                  uint32_t limit, const char* preds_json,
+                                                  void* errmsg);
 
 // Returns the capacity of the index buffer
 uint64_t gpu_brute_force_cap(gpu_brute_force_c index_c);

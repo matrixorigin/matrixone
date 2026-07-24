@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/brute_force"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/quantizer"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
 
@@ -47,6 +48,11 @@ var runSql = sqlexec.RunSql
 type IvfflatSearchIndex[T types.RealNumbers] struct {
 	Version   int64
 	Centroids cache.VectorIndexSearchIf
+	// QuantMul/QuantAdd are the int8 scalar-quantizer params (q(x)=round(x*mul+add))
+	// derived from the trained [min,max] in metadata; the query uses the same
+	// transform as the entries. Defaults (1,0) = identity when not int8-quantized.
+	QuantMul float64
+	QuantAdd float64
 }
 
 // This is the Ivf search implementation that implement VectorIndexSearchIf interface
@@ -127,16 +133,63 @@ func (idx *IvfflatSearchIndex[T]) LoadCentroids(proc *sqlexec.SqlProcess, idxcfg
 func (idx *IvfflatSearchIndex[T]) LoadIndex(proc *sqlexec.SqlProcess, idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig, nthread int64) (err error) {
 
 	idx.Version = idxcfg.Ivfflat.Version
+	idx.QuantMul = 1.0
+	idx.QuantAdd = 0.0
 
 	err = idx.LoadCentroids(proc, idxcfg, tblcfg, nthread)
 	if err != nil {
 		return err
 	}
 
+	// int8/uint8 QUANTIZATION: load the trained [min,max] and derive the same
+	// transform the entries were quantized with, so the query maps identically.
+	if vt := types.T(idxcfg.Ivfflat.VectorType); vt == types.T_array_int8 || vt == types.T_array_uint8 {
+		if err = idx.loadQuantizeBounds(proc, tblcfg, vt); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
-func (idx *IvfflatSearchIndex[T]) findCentroids(sqlproc *sqlexec.SqlProcess, query []T, distfn metric.DistanceFunction[T], idxcfg vectorindex.IndexConfig, probe uint, _ int64) ([]int64, error) {
+func (idx *IvfflatSearchIndex[T]) loadQuantizeBounds(proc *sqlexec.SqlProcess, tblcfg vectorindex.IndexTableConfig, vt types.T) error {
+	// Fetch both trained bounds in one round-trip; the metadata table is
+	// small and this runs once per index load.
+	sql := fmt.Sprintf("SELECT `%s`, CAST(`%s` AS DOUBLE) FROM `%s`.`%s` WHERE `%s` IN ('%s', '%s')",
+		catalog.SystemSI_IVFFLAT_TblCol_Metadata_key, catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
+		tblcfg.DbName, tblcfg.MetadataTable, catalog.SystemSI_IVFFLAT_TblCol_Metadata_key,
+		catalog.SystemSI_IVFFLAT_Metadata_QuantizeMin, catalog.SystemSI_IVFFLAT_Metadata_QuantizeMax)
+	res, err := runSql(proc, sql)
+	if err != nil {
+		return err
+	}
+	defer res.Close()
+
+	var qmin, qmax float64
+	var ok1, ok2 bool
+	for _, bat := range res.Batches {
+		keyVec, valVec := bat.Vecs[0], bat.Vecs[1]
+		for i := 0; i < bat.RowCount(); i++ {
+			val := vector.GetFixedAtNoTypeCheck[float64](valVec, i)
+			switch keyVec.GetStringAt(i) {
+			case catalog.SystemSI_IVFFLAT_Metadata_QuantizeMin:
+				qmin, ok1 = val, true
+			case catalog.SystemSI_IVFFLAT_Metadata_QuantizeMax:
+				qmax, ok2 = val, true
+			}
+		}
+	}
+	if ok1 && ok2 {
+		if vt == types.T_array_uint8 {
+			idx.QuantMul, idx.QuantAdd = quantizer.Uint8Params(qmin, qmax)
+		} else {
+			idx.QuantMul, idx.QuantAdd = quantizer.Int8Params(qmin, qmax)
+		}
+	}
+	return nil
+}
+
+func (idx *IvfflatSearchIndex[T]) findCentroids(sqlproc *sqlexec.SqlProcess, query []T, idxcfg vectorindex.IndexConfig, probe uint, _ int64) ([]int64, error) {
 
 	if idx.Centroids == nil {
 		// empty index has id = 1
@@ -244,12 +297,7 @@ func (idx *IvfflatSearchIndex[T]) Search(
 	nthread int64,
 ) (keys any, distances []float64, err error) {
 
-	distfn, err := metric.ResolveDistanceFn[T](metric.MetricType(idxcfg.Ivfflat.Metric))
-	if err != nil {
-		return
-	}
-
-	centroids_ids, err := idx.findCentroids(sqlproc, query, distfn, idxcfg, rt.Probe, nthread)
+	centroids_ids, err := idx.findCentroids(sqlproc, query, idxcfg, rt.Probe, nthread)
 	if err != nil {
 		return
 	}
@@ -280,6 +328,36 @@ func (idx *IvfflatSearchIndex[T]) Search(
 		vecFromB64Fn = "vecf64_from_base64"
 	}
 
+	// Re-rank distance. The ENTRY must stay a plain column so the ORDER BY
+	// index-param pushdown (readutil.SetIndexParam) can identify it — wrapping it
+	// in a CAST makes Args[0] a function and panics. The query must be a CONSTANT
+	// vec literal of the SAME (narrow) type as the entries, or the pushdown can't
+	// fold it and the pushed top-limit stays 0 ("top limit must be positive"). A
+	// cast of vecf32_from_base64(...) does NOT fold (vector casts aren't constant-
+	// folded), so for narrow entries quantize the f32 query to the entry type here
+	// and pass it via vec{bf16,f16,int8}_from_base64 — a STRICT decode that folds
+	// to a narrow literal, the narrow sibling of vecf32_from_base64. f32/f64 use
+	// the plain f32 base64 decode.
+	entryCol := fmt.Sprintf("`%s`", catalog.SystemSI_IVFFLAT_TblCol_Entries_entry)
+	queryExpr := fmt.Sprintf("%s('%s')", vecFromB64Fn, queryB64)
+	if qf32, ok := any(query).([]float32); ok {
+		switch types.T(idxcfg.Ivfflat.VectorType) {
+		case types.T_array_bf16:
+			queryExpr = fmt.Sprintf("vecbf16_from_base64('%s')", types.ArrayToBase64(types.Float32ToBF16Slice(qf32)))
+		case types.T_array_float16:
+			queryExpr = fmt.Sprintf("vecf16_from_base64('%s')", types.ArrayToBase64(types.Float32ToFloat16Slice(qf32)))
+		case types.T_array_int8:
+			// apply the same q(x)=x*mul+add transform as the entries, then round+clamp
+			// to int8. (mul,add)=(1,0) falls back to the raw cast (no quantizer).
+			sq := quantizer.ApplyInt8(qf32, idx.QuantMul, idx.QuantAdd)
+			queryExpr = fmt.Sprintf("vecint8_from_base64('%s')", types.ArrayToBase64(sq))
+		case types.T_array_uint8:
+			// same transform as int8, narrowed to the unsigned [0,255] range.
+			sq := quantizer.ApplyUint8(qf32, idx.QuantMul, idx.QuantAdd)
+			queryExpr = fmt.Sprintf("vecuint8_from_base64('%s')", types.ArrayToBase64(sq))
+		}
+	}
+
 	if sqlproc != nil && sqlproc.ExactPkFilter != "" {
 		// Exact PK path: WaitUniqueJoinKeys converted small key set into ExactPkFilter.
 		// Query entries directly by pk list, skip centroid-based filtering.
@@ -294,12 +372,11 @@ func (idx *IvfflatSearchIndex[T]) Search(
 		// a plain filtered read that returns the full candidate set; the downstream
 		// Node_SORT + LIMIT k does the ranking and truncation.
 		sql = fmt.Sprintf(
-			"SELECT `%s`, %s(`%s`, %s('%s')) as vec_dist FROM `%s`.`%s` WHERE `%s` = %d AND `%s` IN (%s)",
+			"SELECT `%s`, %s(%s, %s) as vec_dist FROM `%s`.`%s` WHERE `%s` = %d AND `%s` IN (%s)",
 			catalog.SystemSI_IVFFLAT_TblCol_Entries_pk,
 			metric.MetricTypeToDistFuncName[metric.MetricType(idxcfg.Ivfflat.Metric)],
-			catalog.SystemSI_IVFFLAT_TblCol_Entries_entry,
-			vecFromB64Fn,
-			queryB64,
+			entryCol,
+			queryExpr,
 			tblcfg.DbName, tblcfg.EntriesTable,
 			catalog.SystemSI_IVFFLAT_TblCol_Entries_version,
 			idx.Version,
@@ -309,12 +386,11 @@ func (idx *IvfflatSearchIndex[T]) Search(
 	} else {
 		// Standard centroid-based path with optional CBloomFilter pre-filtering.
 		sql = fmt.Sprintf(
-			"SELECT `%s`, %s(`%s`, %s('%s')) as vec_dist FROM `%s`.`%s` WHERE `%s` = %d AND `%s` IN (%s) ORDER BY vec_dist LIMIT %d",
+			"SELECT `%s`, %s(%s, %s) as vec_dist FROM `%s`.`%s` WHERE `%s` = %d AND `%s` IN (%s) ORDER BY vec_dist LIMIT %d",
 			catalog.SystemSI_IVFFLAT_TblCol_Entries_pk,
 			metric.MetricTypeToDistFuncName[metric.MetricType(idxcfg.Ivfflat.Metric)],
-			catalog.SystemSI_IVFFLAT_TblCol_Entries_entry,
-			vecFromB64Fn,
-			queryB64,
+			entryCol,
+			queryExpr,
 			tblcfg.DbName, tblcfg.EntriesTable,
 			catalog.SystemSI_IVFFLAT_TblCol_Entries_version,
 			idx.Version,
@@ -325,8 +401,6 @@ func (idx *IvfflatSearchIndex[T]) Search(
 	}
 
 	//fmt.Println("IVFFlat SQL: ", sql)
-	//os.Stderr.WriteString(sql)
-	//os.Stderr.WriteString("\n")
 
 	res, err := runSql(sqlproc, sql)
 	if err != nil {
@@ -361,12 +435,30 @@ func (idx *IvfflatSearchIndex[T]) Search(
 			resid = append(resid, pk)
 
 			dist := vector.GetFixedAtNoTypeCheck[float64](distVec, i)
-			dist = metric.DistanceTransformIvfflat(dist, metric.DistFuncNameToMetricType[rt.OrigFuncName], metric.MetricType(idxcfg.Ivfflat.Metric))
+			dist = idx.scoreFromQuantized(dist, rt.OrigFuncName, metric.MetricType(idxcfg.Ivfflat.Metric))
 			distances = append(distances, dist)
 		}
 	}
 
 	return resid, distances, nil
+}
+
+// scoreFromQuantized converts a raw distance the SQL entries query measured in
+// the QUANTIZED domain back to the source scale, then applies the index's
+// squared-L2 -> L2 conversion (DistanceTransformIvfflat).
+//
+// For int8/uint8 QUANTIZATION the entries and query are both mapped by the same
+// affine transform q(x)=mul*x+add, so the squared L2 in the quantized domain is
+// mul^2 times the source squared L2 (||q(a)-q(b)||^2 = mul^2*||a-b||^2 — the add
+// offset cancels). We divide it out here, in the index's squared-L2 metric space
+// and BEFORE the squared->L2 conversion, so returned distances (and range
+// predicates expressed in source units) read on the source scale. QuantMul==1
+// for f32/f64/bf16/f16 (identity quantizer), so this is a no-op there.
+func (idx *IvfflatSearchIndex[T]) scoreFromQuantized(raw float64, origFuncName string, metricType metric.MetricType) float64 {
+	if idx.QuantMul != 0 && idx.QuantMul != 1 {
+		raw /= idx.QuantMul * idx.QuantMul
+	}
+	return metric.DistanceTransformIvfflat(raw, metric.DistFuncNameToMetricType[origFuncName], metricType)
 }
 
 func (idx *IvfflatSearchIndex[T]) Destroy() {

@@ -96,13 +96,13 @@ func TestNotify(t *testing.T) {
 		assert.False(t, w.mu.notified)
 	}()
 
-	nt.addWaiter(w, txn.TxnStatus_Prepared)
+	nt.addWaiter(w, txn.TxnStatus_Committed)
 	assert.Equal(t, 0, nt.notify(txn.TxnStatus_Active))
-	assert.Equal(t, 1, nt.notify(txn.TxnStatus_Prepared))
+	assert.Equal(t, 1, nt.notify(txn.TxnStatus_Committed))
 
 	s, err := w.wait(context.Background())
 	assert.NoError(t, err)
-	assert.Equal(t, txn.TxnStatus_Prepared, s)
+	assert.Equal(t, txn.TxnStatus_Committed, s)
 }
 
 func TestNotifyWithFinalStatus(t *testing.T) {
@@ -111,7 +111,7 @@ func TestNotifyWithFinalStatus(t *testing.T) {
 	w := acquireWaiter()
 	defer w.close()
 
-	nt.addWaiter(w, txn.TxnStatus_Prepared)
+	nt.addWaiter(w, txn.TxnStatus_Committed)
 
 	nt.close(txn.TxnStatus_Aborted)
 
@@ -124,14 +124,14 @@ func TestNotifyAfterWaiterClose(t *testing.T) {
 	nt := acquireNotifier()
 
 	w := acquireWaiter()
-	nt.addWaiter(w, txn.TxnStatus_Prepared)
+	nt.addWaiter(w, txn.TxnStatus_Committed)
 
 	w.close()
 	assert.Equal(t, 1, w.mu.ref)
 	assert.True(t, w.mu.closed)
 	assert.False(t, w.mu.notified)
 
-	assert.Equal(t, 0, nt.notify(txn.TxnStatus_Prepared))
+	assert.Equal(t, 0, nt.notify(txn.TxnStatus_Committed))
 
 	assert.Equal(t, 0, w.mu.ref)
 	assert.False(t, w.mu.closed)

@@ -29,7 +29,7 @@ const GPUThresholdSQL = GPUThresholdSync / 4
 // gpuMode is accepted-but-ignored in non-gpu builds — CPU is the only
 // option here. The signature matches the gpu.go variant so callers
 // pass the flag uniformly.
-func PairWiseDistance[T types.RealNumbers](
+func PairWiseDistance[T types.ArrayElement](
 	x [][]T,
 	y [][]T,
 	metric MetricType,
@@ -38,7 +38,7 @@ func PairWiseDistance[T types.RealNumbers](
 	return GoPairWiseDistance(x, y, metric)
 }
 
-func PairwiseDistanceLaunch[T types.RealNumbers](
+func PairwiseDistanceLaunch[T types.ArrayElement](
 	x [][]T,
 	y [][]T,
 	metric MetricType,

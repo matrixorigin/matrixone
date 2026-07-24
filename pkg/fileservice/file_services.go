@@ -43,6 +43,32 @@ func NewFileServices(defaultName string, fss ...FileService) (*FileServices, err
 }
 
 var _ FileService = &FileServices{}
+var _ ObjectCopier = &FileServices{}
+
+func (f *FileServices) CopyObject(
+	ctx context.Context,
+	srcFS FileService,
+	srcPath string,
+	dstPath string,
+) (bool, error) {
+	p, err := ParsePathAtService(dstPath, "")
+	if err != nil {
+		return false, err
+	}
+	name := p.Service
+	if name == "" {
+		name = f.defaultName
+	}
+	dstFS, err := Get[FileService](f, name)
+	if err != nil {
+		return false, err
+	}
+	copier, ok := dstFS.(ObjectCopier)
+	if !ok {
+		return false, nil
+	}
+	return copier.CopyObject(ctx, srcFS, srcPath, dstPath)
+}
 
 func (f *FileServices) Delete(ctx context.Context, filePaths ...string) error {
 	for _, filePath := range filePaths {
