@@ -139,10 +139,11 @@ func (node *AppendNode) ApplyCommit(id string) error {
 	}
 	node.TxnMVCCNode.ApplyCommit(id)
 	listener := node.mvcc.GetAppendListener()
-	if listener == nil {
-		return nil
+	var err error
+	if listener != nil {
+		err = listener(node)
 	}
-	return listener(node)
+	return err
 }
 
 func (node *AppendNode) ApplyRollback() (err error) {
