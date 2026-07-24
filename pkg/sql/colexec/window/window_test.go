@@ -186,6 +186,21 @@ func TestWindowFrameEvaluationHonorsCancellation(t *testing.T) {
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
+func TestWindowCallHonorsPreCancellation(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	ctx, cancel := context.WithCancel(proc.Ctx)
+	proc.Ctx = ctx
+	cancel()
+
+	arg := &Window{}
+	result, err := arg.Call(proc)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Equal(t, vm.CancelResult, result)
+
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
 func resetChildren(arg *Window, m *mpool.MPool) {
 	bat := colexec.MakeMockBatchs(m)
 	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
@@ -656,6 +671,65 @@ func TestWindowOrdersPartitionedInput(t *testing.T) {
 	op.Free(proc, false, nil)
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestWindowOrderHonorsCancellation(t *testing.T) {
+	testCases := []struct {
+		name   string
+		checks int32
+	}{
+		{name: "building selections", checks: 1},
+		{name: "before first sort", checks: 2},
+		{name: "after first sort", checks: 3},
+		{name: "before secondary sort", checks: 4},
+		{name: "during partition sort", checks: 5},
+		{name: "after secondary sort", checks: 6},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			bat := batch.NewWithSize(2)
+			bat.Vecs[0] = testutil.MakeInt32Vector([]int32{2, 1, 2, 1}, nil, proc.Mp())
+			bat.Vecs[1] = testutil.MakeInt32Vector([]int32{20, 10, 10, 20}, nil, proc.Mp())
+			bat.SetRowCount(4)
+
+			partitionExpr := newColExpr(0)
+			orderExpr := newColExpr(1)
+			spec := &plan.Expr{
+				Expr: &plan.Expr_W{W: &plan.WindowSpec{
+					Name:        "row_number",
+					WindowFunc:  newFunExpr("row_number"),
+					PartitionBy: []*plan.Expr{partitionExpr},
+					OrderBy: []*plan.OrderBySpec{
+						{Expr: partitionExpr},
+						{Expr: orderExpr},
+					},
+				}},
+			}
+			arg := &Window{
+				WinSpecList: []*plan.Expr{spec},
+				Aggs:        []aggexec.AggFuncExecExpression{newRowNumberAggExpr(t)},
+			}
+			require.NoError(t, arg.Prepare(proc))
+			arg.Fs = makeOrderBy(spec)
+			arg.ctr.orderVecs = make([]colexec.ExprEvalVector, len(arg.Fs))
+			for i := range arg.Fs {
+				var err error
+				arg.ctr.orderVecs[i], err = colexec.MakeEvalVector(proc, []*plan.Expr{arg.Fs[i].Expr})
+				require.NoError(t, err)
+			}
+
+			proc.Ctx = newCancelAfterDoneChecksContext(proc.Ctx, tc.checks)
+			_, err := arg.ctr.processOrder(0, arg, bat, proc)
+			require.ErrorIs(t, err, context.Canceled)
+
+			arg.Free(proc, true, err)
+			bat.Clean(proc.Mp())
+			proc.Free()
+			require.Equal(t, int64(0), proc.Mp().CurrNB())
+		})
+	}
 }
 
 func newFunExpr(name string) *plan.Expr {
