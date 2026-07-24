@@ -17,13 +17,19 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/txn/clock"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
 func newFeatureLimitTestSession(t *testing.T) *Session {
@@ -125,4 +131,36 @@ func TestCheckBranchQuotaDoesNotLockUnlimitedQuota(t *testing.T) {
 
 	require.NoError(t, checkBranchQuota(context.Background(), ses, bh, 1))
 	require.Equal(t, []string{registrySQL, quotaSQL}, bh.executedSQLs)
+}
+
+func TestRunSqlWithBackExecBypassesInternalExecutor(t *testing.T) {
+	ses := newFeatureLimitTestSession(t)
+	bh := &backgroundExecTest{}
+	bh.init()
+
+	const sql = "select quota from mo_catalog.mo_feature_limit for update"
+	bh.sql2result[sql] = newMrsForFeatureLimit([][]interface{}{{int64(1)}})
+
+	var internalCalled atomic.Bool
+	rt := moruntime.NewRuntime(
+		metadata.ServiceType_CN,
+		ses.service,
+		nil,
+		moruntime.WithClock(clock.NewHLCClock(func() int64 { return time.Now().UnixNano() }, 0)),
+	)
+	moruntime.SetupServiceBasedRuntime(ses.service, rt)
+	rt.SetGlobalVariables(moruntime.InternalSQLExecutor, executor.NewMemExecutor(
+		func(string) (executor.Result, error) {
+			internalCalled.Store(true)
+			return executor.Result{}, nil
+		},
+	))
+
+	result, err := runSqlWithBackExec(context.Background(), ses, bh, sql)
+	require.NoError(t, err)
+	defer result.Close()
+	require.False(t, internalCalled.Load())
+	require.Equal(t, []string{sql}, bh.executedSQLs)
+	require.Len(t, result.Batches, 1)
+	require.Equal(t, 1, result.Batches[0].RowCount())
 }

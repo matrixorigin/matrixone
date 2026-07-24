@@ -72,11 +72,12 @@ func featureLimitChecker(
 	increment int64,
 ) (err error) {
 	var (
-		limitQuota int64
-		sql        string
-		sqlRet     executor.Result
-		accName    = ses.GetTenantInfo().Tenant
-		accId      = ses.GetTenantInfo().TenantID
+		limitQuota  int64
+		sql         string
+		sqlRet      executor.Result
+		lockingRead bool
+		accName     = ses.GetTenantInfo().Tenant
+		accId       = ses.GetTenantInfo().TenantID
 	)
 
 	defer func() {
@@ -124,6 +125,7 @@ func featureLimitChecker(
 		)
 	} else if featureCode == featureCodeBranch {
 		ctx = defines.AttachAccountId(ctx, sysAccountID)
+		lockingRead = true
 		sql = fmt.Sprintf(
 			"select count(*) from %s.%s where creator = %d and table_deleted = false for update",
 			catalog.MO_CATALOG, catalog.MO_BRANCH_METADATA, accId,
@@ -132,9 +134,12 @@ func featureLimitChecker(
 		return moerr.NewInternalErrorNoCtxf("no such feature %s with scope %s", featureCode, featureScope)
 	}
 
-	if sqlRet, err = runSql(
-		ctx, ses, bh, sql, nil, nil,
-	); err != nil {
+	if lockingRead {
+		sqlRet, err = runSqlWithBackExec(ctx, ses, bh, sql)
+	} else {
+		sqlRet, err = runSql(ctx, ses, bh, sql, nil, nil)
+	}
+	if err != nil {
 		return err
 	}
 
@@ -175,7 +180,7 @@ func lockFeatureQuota(
 		catalog.MO_CATALOG, catalog.MO_FEATURE_LIMIT, accId, code, scope,
 	)
 
-	if sqlRet, err = runSql(ctx, ses, bh, sql, nil, nil); err != nil {
+	if sqlRet, err = runSqlWithBackExec(ctx, ses, bh, sql); err != nil {
 		return 0, err
 	}
 	if len(sqlRet.Batches) != 1 || sqlRet.Batches[0].RowCount() != 1 {

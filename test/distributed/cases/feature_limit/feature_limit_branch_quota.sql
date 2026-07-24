@@ -46,13 +46,27 @@ insert into base values (1, 'a'), (2, 'b');
 drop snapshot if exists sp_base;
 create snapshot sp_base for table fl_branch_db base;
 
--- Create 1 branch table, the second should fail with quota = 1.
+-- Hold the first branch transaction open. The concurrent creator must wait for
+-- its quota-row lock, refresh its RC snapshot, and then fail with the quota
+-- error rather than ErrTxnNeedRetry.
 drop table if exists b1;
 drop table if exists b2;
+begin;
 data branch create table b1 from base{snapshot='sp_base'};
+-- @session
+-- @session:id=2&user=fl_branch_acc:admin&password=111{
+use fl_branch_db;
+-- @wait:1:commit
 data branch create table b2 from base{snapshot='sp_base'};
+-- @session}
+-- @session:id=1{
+commit;
+select count(*) from mo_catalog.mo_tables
+where reldatabase = 'fl_branch_db' and relname in ('b1', 'b2');
+-- @session}
 
 -- Delete b1 so active branch count goes back to 0, then b2 should succeed.
+-- @session:id=1&user=fl_branch_acc:admin&password=111
 data branch delete table fl_branch_db.b1;
 data branch create table b2 from base{snapshot='sp_base'};
 
@@ -82,6 +96,7 @@ drop table base;
 drop database fl_branch_db;
 
 -- Branch CREATE DATABASE consumes quota by number of cloned tables.
+-- @session:id=1&user=fl_branch_acc:admin&password=111
 drop database if exists src_db;
 create database src_db;
 use src_db;
