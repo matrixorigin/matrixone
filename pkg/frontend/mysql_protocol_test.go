@@ -5478,6 +5478,58 @@ func Test_appendResultSetBinaryRow2_DateTimeHandling(t *testing.T) {
 	})
 }
 
+func TestBinaryProtocolZeroTemporalEncoding(t *testing.T) {
+	sv, err := getSystemVariables("test/system_vars_config.toml")
+	require.NoError(t, err)
+	pu := config.NewParameterUnit(sv, nil, nil, nil)
+	pu.SV.SkipCheckUser = true
+	pu.SV.KillRountinesInterval = 0
+	setSessionAlloc("", NewLeakCheckAllocator())
+	setPu("", pu)
+	tc := &testConn{}
+	ioses, err := NewIOSession(tc, pu, "")
+	require.NoError(t, err)
+	proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
+
+	encode := func(t *testing.T, appendValue func() error) []byte {
+		t.Helper()
+		tc.data = tc.data[:0]
+		require.NoError(t, proto.beginPacket())
+		require.NoError(t, appendValue())
+		require.NoError(t, proto.finishedPacket())
+		require.NoError(t, proto.flush())
+		require.Greater(t, len(tc.data), 4)
+		payloadLen := int(uint32(tc.data[0]) | uint32(tc.data[1])<<8 | uint32(tc.data[2])<<16)
+		payload := tc.data[4:]
+		require.Len(t, payload, payloadLen)
+		return payload
+	}
+
+	t.Run("zero date uses zero-length encoding", func(t *testing.T) {
+		require.Equal(t, []byte{0}, encode(t, func() error {
+			return proto.appendDate(types.ZeroDate)
+		}))
+	})
+
+	t.Run("minimum date keeps its calendar fields", func(t *testing.T) {
+		require.Equal(t, []byte{4, 1, 0, 1, 1}, encode(t, func() error {
+			return proto.appendDate(types.Date(0))
+		}))
+	})
+
+	t.Run("zero datetime uses zero-length encoding", func(t *testing.T) {
+		require.Equal(t, []byte{0}, encode(t, func() error {
+			return proto.appendDatetime(types.ZeroDatetime)
+		}))
+	})
+
+	t.Run("minimum datetime keeps its calendar fields", func(t *testing.T) {
+		require.Equal(t, []byte{4, 1, 0, 1, 1}, encode(t, func() error {
+			return proto.appendDatetime(types.Datetime(0))
+		}))
+	})
+}
+
 // Test_appendResultSetBinaryRow2_TimeMicroseconds asserts the exact wire bytes of a
 // binary-protocol row containing a TIME value followed by another column. The TIME
 // microsecond part must occupy exactly 4 bytes; writing more shifts every later
