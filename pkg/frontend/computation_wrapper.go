@@ -875,20 +875,6 @@ func shouldCachePrepareCompile(p *plan.Plan) bool {
 	return !query.GetHasForeignKeyAction()
 }
 
-func planHasRuntimeTypedComparison(p *plan.Plan) bool {
-	if p == nil || p.GetQuery() == nil {
-		return false
-	}
-	for _, node := range p.GetQuery().GetNodes() {
-		for _, expr := range preparedRuntimeTypedExprs(node) {
-			if hasRuntimeTypedComparison(expr) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
 func planNeedsRuntimeTypedComparison(p *plan.Plan, paramVals []any) bool {
 	if p == nil || p.GetQuery() == nil {
 		return false
