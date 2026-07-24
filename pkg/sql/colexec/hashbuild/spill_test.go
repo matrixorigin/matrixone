@@ -17,8 +17,10 @@ package hashbuild
 import (
 	"context"
 	"os"
+	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -59,6 +61,46 @@ func TestComputeXXHashBuild(t *testing.T) {
 		computeXXHash([]*vector.Vector{vec}, hashValues)
 		require.Equal(t, hashValues[0], hashValues[1])
 	})
+}
+
+func TestSpillBufferRowsForBatch(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	require.Equal(t, spillBufferMaxRows, spillBufferRowsForBatch(nil))
+
+	empty := batch.NewWithSize(0)
+	require.Equal(t, spillBufferMaxRows, spillBufferRowsForBatch(empty))
+
+	narrow := batch.NewWithSize(1)
+	narrow.Vecs[0] = testutil.MakeInt32Vector(make([]int32, 128), nil, proc.Mp())
+	narrow.SetRowCount(128)
+	defer narrow.Clean(proc.Mp())
+	require.Equal(t, spillBufferMaxRows, spillBufferRowsForBatch(narrow))
+
+	wideValues := make([]string, 16)
+	for i := range wideValues {
+		wideValues[i] = strings.Repeat("x", 16*common.KiB)
+	}
+	wide := batch.NewWithSize(1)
+	wide.Vecs[0] = testutil.MakeVarcharVector(wideValues, nil, proc.Mp())
+	wide.SetRowCount(len(wideValues))
+	defer wide.Clean(proc.Mp())
+	wideRows := spillBufferRowsForBatch(wide)
+	require.Greater(t, wideRows, 1)
+	require.Less(t, wideRows, spillBufferMaxRows)
+	bytesPerRow := (wide.Size()-1)/wide.RowCount() + 1
+	require.LessOrEqual(t, wideRows*bytesPerRow, spillBucketBufferTargetBytes)
+
+	oversized := batch.NewWithSize(1)
+	oversized.Vecs[0] = testutil.MakeVarcharVector(
+		[]string{strings.Repeat("x", spillBucketBufferTargetBytes+common.MiB)},
+		nil,
+		proc.Mp(),
+	)
+	oversized.SetRowCount(1)
+	defer oversized.Clean(proc.Mp())
+	require.Equal(t, 1, spillBufferRowsForBatch(oversized))
 }
 
 func TestFlushBucketBufferBuild(t *testing.T) {
@@ -192,7 +234,7 @@ func TestLargeBufferFlushBuild(t *testing.T) {
 	}()
 
 	// Create large batch
-	size := spillBufferSize + 100
+	size := spillBufferMaxRows + 100
 	values := make([]int32, size)
 	for i := range values {
 		values[i] = int32(i)
@@ -360,7 +402,7 @@ func TestAppendBuildBatchMultipleFlushes(t *testing.T) {
 	}()
 
 	// Create large batch to trigger buffer flushes
-	size := spillBufferSize * 2
+	size := spillBufferMaxRows * 2
 	values := make([]int32, size)
 	for i := range values {
 		values[i] = int32(i)

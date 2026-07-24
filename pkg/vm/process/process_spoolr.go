@@ -16,14 +16,14 @@ package process
 
 import (
 	"context"
+	"reflect"
 	"slices"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/pSpool"
-	"reflect"
-	"time"
 )
 
 var (
@@ -258,6 +258,47 @@ func WaitRegisterChannelState(reg *WaitRegister) (int, int) {
 		return 0, 0
 	}
 	return len(reg.Ch2), cap(reg.Ch2)
+}
+
+// WaitPipelineSignalCapacity blocks until the receiver channel has room for a
+// new signal. It is used by senders before pulling more input from upstream so
+// downstream backpressure can slow batch production before additional spool
+// memory is allocated.
+func WaitPipelineSignalCapacity(ctx context.Context, reg *WaitRegister) bool {
+	if reg == nil || reg.Ch2 == nil {
+		return false
+	}
+	if cap(reg.Ch2) == 0 {
+		return true
+	}
+	if ctx != nil && ctx.Err() != nil {
+		return false
+	}
+	select {
+	case <-reg.Done():
+		return false
+	default:
+	}
+	if len(reg.Ch2) < cap(reg.Ch2) {
+		return true
+	}
+	if ctx == nil {
+		ctx = context.TODO()
+	}
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if len(reg.Ch2) < cap(reg.Ch2) {
+			return true
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-reg.Done():
+			return false
+		case <-ticker.C:
+		}
+	}
 }
 
 // Action will get the input batch from one place according to which type this signal is.

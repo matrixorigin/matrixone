@@ -103,11 +103,23 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+const loadMergeReceiverChannelBufferSize = 1
+
 var constBat *batch.Batch
 
 func init() {
 	constBat = batch.NewWithSize(0)
 	constBat.SetRowCount(1)
+}
+
+func mergeReceiverChannelBufferSize(s *Scope) int {
+	if s != nil && s.Proc != nil && s.Proc.Base.LoadTag {
+		return loadMergeReceiverChannelBufferSize
+	}
+	if s == nil || s.NodeInfo.Mcpu < 1 {
+		return 1
+	}
+	return s.NodeInfo.Mcpu
 }
 
 type operatorDupContext struct {

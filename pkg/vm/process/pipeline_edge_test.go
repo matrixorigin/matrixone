@@ -119,6 +119,52 @@ func TestPipelineEdgeSendDataNilContextDoesNotPanic(t *testing.T) {
 	}
 }
 
+func TestWaitPipelineSignalCapacityWaitsUntilChannelDrains(t *testing.T) {
+	edge := NewPipelineEdge(1, 1)
+	edge.Ch2 <- NewPipelineSignalToDirectly(nil, nil, nil)
+
+	done := make(chan bool, 1)
+	go func() {
+		done <- WaitPipelineSignalCapacity(context.Background(), edge)
+	}()
+
+	select {
+	case got := <-done:
+		t.Fatalf("WaitPipelineSignalCapacity returned before channel drained: %v", got)
+	case <-time.After(10 * time.Millisecond):
+	}
+
+	<-edge.Ch2
+	select {
+	case got := <-done:
+		if !got {
+			t.Fatal("WaitPipelineSignalCapacity returned false after channel drained")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("WaitPipelineSignalCapacity did not return after channel drained")
+	}
+}
+
+func TestWaitPipelineSignalCapacityReturnsOnContextCancel(t *testing.T) {
+	edge := NewPipelineEdge(1, 1)
+	edge.Ch2 <- NewPipelineSignalToDirectly(nil, nil, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if WaitPipelineSignalCapacity(ctx, edge) {
+		t.Fatal("WaitPipelineSignalCapacity returned true with cancelled context")
+	}
+}
+
+func TestWaitPipelineSignalCapacityReturnsOnTerminalEdge(t *testing.T) {
+	edge := NewPipelineEdge(1, 1)
+	edge.Abort(moerr.NewInternalErrorNoCtx("abort"))
+
+	if WaitPipelineSignalCapacity(context.Background(), edge) {
+		t.Fatal("WaitPipelineSignalCapacity returned true for a terminal edge with spare capacity")
+	}
+}
+
 // TestPipelineEdgeTrySendEndOnFullChannel verifies that TrySendEnd
 // succeeds when the channel has buffer space.
 func TestPipelineEdgeTrySendEndOnFullChannel(t *testing.T) {
