@@ -7178,6 +7178,9 @@ func resetUserLevelLocksForTest(t *testing.T) {
 	userLevelLocks.byOwner = make(map[string]map[string]struct{})
 	userLevelLocks.txnIDs = make(map[userLevelLockKey][][]byte)
 	userLevelLocks.ownerSessions = make(map[string]string)
+	userLevelLocks.pendingCleanups = make(map[detachedUserLevelLockCleanupKey]detachedUserLevelLockCleanupRequest)
+	userLevelLocks.retainedCloseCleanups = make(map[string]retainedUserLevelLockCloseCleanup)
+	userLevelLocks.retainedCleanupStarted = false
 	userLevelLocks.Unlock()
 	resetDetachedUserLevelLockCleanupsForTest()
 }
@@ -8485,7 +8488,7 @@ func TestReleaseUserLevelLocksOnSessionCloseDetachedCleanupReleasesAfterRecovery
 	}
 }
 
-func TestReleaseUserLevelLocksOnSessionCloseWaitsForSaturatedHandoffAndRecovery(t *testing.T) {
+func TestReleaseUserLevelLocksOnSessionCloseRetainsSaturatedHandoffAndRecovers(t *testing.T) {
 	runUserLevelLockTest(t, func(services []lockservice.LockService) {
 		service := services[0].(*userLevelLockTestService)
 		service.blockUnlock.Store(true)
@@ -8522,32 +8525,12 @@ func TestReleaseUserLevelLocksOnSessionCloseWaitsForSaturatedHandoffAndRecovery(
 		}
 		detachedUserLevelLockCleanups.Unlock()
 
-		done := make(chan struct{})
-		go func() {
-			releaseUserLevelLocksOnSessionCloseWithTimeout(holder, 10*time.Millisecond)
-			close(done)
-		}()
-
-		select {
-		case <-done:
-			require.Fail(t, "session close returned before cleanup ownership handoff")
-		case <-time.After(50 * time.Millisecond):
-		}
+		releaseUserLevelLocksOnSessionCloseWithTimeout(holder, 10*time.Millisecond)
 		require.NotEmpty(t, UserLevelLocksForMigration(holder))
-
-		detachedUserLevelLockCleanups.Lock()
-		<-detachedUserLevelLockCleanups.backlog
-		detachedUserLevelLockCleanups.Unlock()
-
-		require.Eventually(t, func() bool {
-			select {
-			case <-done:
-				return true
-			default:
-				return false
-			}
-		}, time.Second, 10*time.Millisecond)
-		require.Empty(t, UserLevelLocksForMigration(holder))
+		userLevelLocks.Lock()
+		_, retained := userLevelLocks.retainedCloseCleanups[owner]
+		userLevelLocks.Unlock()
+		require.True(t, retained)
 
 		v, err = getUserLevelLock(lockName, 0, contender)
 		require.NoError(t, err)
@@ -8560,23 +8543,24 @@ func TestReleaseUserLevelLocksOnSessionCloseWaitsForSaturatedHandoffAndRecovery(
 			select {
 			case <-detachedUserLevelLockCleanups.queue:
 			default:
-				detachedUserLevelLockCleanups.Unlock()
-				goto drainBacklog
+				goto backlogDrainDone
 			}
 		}
-	drainBacklog:
+	backlogDrainDone:
 		for {
-			detachedUserLevelLockCleanups.Lock()
 			select {
-			case req := <-detachedUserLevelLockCleanups.backlog:
-				detachedUserLevelLockCleanups.Unlock()
-				require.True(t, enqueueDetachedUserLevelLockTxnCleanup(req.ls, req.key, req.txnIDs))
+			case <-detachedUserLevelLockCleanups.backlog:
 			default:
 				detachedUserLevelLockCleanups.Unlock()
 				goto waitForCleanup
 			}
 		}
 	waitForCleanup:
+		progress, _ := runRetainedUserLevelLockCleanupPass()
+		require.True(t, progress)
+		require.Eventually(t, func() bool {
+			return len(UserLevelLocksForMigration(holder)) == 0
+		}, 3*time.Second, 10*time.Millisecond)
 		require.Eventually(t, func() bool {
 			v, err := getUserLevelLock(lockName, 0, contender)
 			return err == nil && v == 1
@@ -9023,7 +9007,7 @@ func fillDetachedUserLevelLockCleanupAdmissionForTest(
 func TestFailedAttemptCleanupWaitsForBacklogAdmissionAndTransfersOwnership(t *testing.T) {
 	runUserLevelLockTest(t, func(services []lockservice.LockService) {
 		service := services[0].(*userLevelLockTestService)
-		service.unlockErr = moerr.NewInternalErrorNoCtx("forced cleanup unlock failure")
+		service.blockUnlock.Store(true)
 		key := detachedUserLevelLockCleanupKey{
 			serviceID: service.GetServiceID(),
 			owner:     "owner-failed-attempt-backlog",
@@ -9066,13 +9050,86 @@ func TestFailedAttemptCleanupWaitsForBacklogAdmissionAndTransfersOwnership(t *te
 		require.NoError(t, <-done)
 		detachedUserLevelLockCleanups.Lock()
 		require.Len(t, detachedUserLevelLockCleanups.backlog, userLevelLockDetachedCleanupBacklog)
-		req := <-detachedUserLevelLockCleanups.backlog
+		found := false
 		for len(detachedUserLevelLockCleanups.backlog) > 0 {
-			req = <-detachedUserLevelLockCleanups.backlog
+			req := <-detachedUserLevelLockCleanups.backlog
+			if req.key == key && bytes.Equal(req.txnIDs[0], txnID) {
+				found = true
+			}
 		}
 		detachedUserLevelLockCleanups.Unlock()
-		require.Equal(t, key, req.key)
-		require.Equal(t, [][]byte{txnID}, req.txnIDs)
+		require.True(t, found)
+	})
+}
+
+func TestTimedOutFailedAttemptCleanupRetainsOwnershipAfterSaturatedHandoff(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		service := services[0].(*userLevelLockTestService)
+		service.blockUnlock.Store(true)
+		key := detachedUserLevelLockCleanupKey{
+			serviceID: service.GetServiceID(),
+			owner:     "owner-timeout-retained",
+			name:      "lock-timeout-retained",
+			connID:    1001,
+			kind:      "get_lock_failed",
+		}
+		txnID := []byte("txn-timeout-retained")
+		service.state.Lock()
+		service.state.locks["row-timeout-retained"] = string(txnID)
+		service.state.Unlock()
+		fillDetachedUserLevelLockCleanupAdmissionForTest(service, key, [][]byte{txnID})
+		detachedUserLevelLockCleanups.Lock()
+		detachedUserLevelLockCleanups.backlog = make(chan detachedUserLevelLockCleanupRequest, userLevelLockDetachedCleanupBacklog)
+		detachedUserLevelLockCleanups.backlogStarted = true
+		for i := 0; i < userLevelLockDetachedCleanupBacklog; i++ {
+			detachedUserLevelLockCleanups.backlog <- detachedUserLevelLockCleanupRequest{
+				ls:     service,
+				key:    key,
+				txnIDs: [][]byte{[]byte(fmt.Sprintf("queued-timeout-%d", i))},
+			}
+		}
+		detachedUserLevelLockCleanups.Unlock()
+
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		require.NoError(t, cleanupFailedUserLevelLockTxn(ctx, service, key, txnID))
+		userLevelLocks.Lock()
+		_, retained := userLevelLocks.pendingCleanups[key]
+		userLevelLocks.Unlock()
+		require.True(t, retained)
+
+		service.blockUnlock.Store(false)
+		detachedUserLevelLockCleanups.Lock()
+		detachedUserLevelLockCleanups.entries = make(map[detachedUserLevelLockCleanupKey]*detachedUserLevelLockCleanupEntry)
+		for {
+			select {
+			case <-detachedUserLevelLockCleanups.queue:
+			default:
+				goto timeoutQueueDrained
+			}
+		}
+	timeoutQueueDrained:
+		for {
+			select {
+			case <-detachedUserLevelLockCleanups.backlog:
+			default:
+				goto timeoutBacklogDrained
+			}
+		}
+	timeoutBacklogDrained:
+		detachedUserLevelLockCleanups.Unlock()
+		progress, _ := runRetainedUserLevelLockCleanupPass()
+		require.True(t, progress)
+
+		require.Eventually(t, func() bool {
+			userLevelLocks.Lock()
+			_, retained := userLevelLocks.pendingCleanups[key]
+			userLevelLocks.Unlock()
+			service.state.Lock()
+			held := service.state.locks["row-timeout-retained"]
+			service.state.Unlock()
+			return !retained && held == ""
+		}, 3*time.Second, 10*time.Millisecond)
 	})
 }
 

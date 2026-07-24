@@ -7015,6 +7015,14 @@ type detachedUserLevelLockCleanupRequest struct {
 	txnIDs [][]byte
 }
 
+type retainedUserLevelLockCloseCleanup struct {
+	ls        lockservice.LockService
+	owners    []string
+	owner     string
+	sessionID string
+	connID    uint64
+}
+
 type UserLevelLockState struct {
 	Name   string
 	Count  uint64
@@ -7036,12 +7044,17 @@ var userLevelLocks = struct {
 	// ownerSessions marks which session currently owns the local refcount state.
 	// It prevents an old migrated session from discarding refcounts already
 	// restored for a new session that intentionally keeps the same owner key.
-	ownerSessions map[string]string
+	ownerSessions          map[string]string
+	pendingCleanups        map[detachedUserLevelLockCleanupKey]detachedUserLevelLockCleanupRequest
+	retainedCloseCleanups  map[string]retainedUserLevelLockCloseCleanup
+	retainedCleanupStarted bool
 }{
-	counts:        make(map[userLevelLockKey]uint64),
-	byOwner:       make(map[string]map[string]struct{}),
-	txnIDs:        make(map[userLevelLockKey][][]byte),
-	ownerSessions: make(map[string]string),
+	counts:                make(map[userLevelLockKey]uint64),
+	byOwner:               make(map[string]map[string]struct{}),
+	txnIDs:                make(map[userLevelLockKey][][]byte),
+	ownerSessions:         make(map[string]string),
+	pendingCleanups:       make(map[detachedUserLevelLockCleanupKey]detachedUserLevelLockCleanupRequest),
+	retainedCloseCleanups: make(map[string]retainedUserLevelLockCloseCleanup),
 }
 
 var detachedUserLevelLockCleanups = struct {
@@ -7269,7 +7282,7 @@ func cleanupFailedUserLevelLockTxn(
 	if len(txnID) == 0 {
 		return nil
 	}
-	attemptCtx, cancel := userLevelLockCleanupAttemptContext(ctx)
+	attemptCtx, cancel := userLevelLockCleanupAttemptContext(context.Background())
 	defer cancel()
 	if err := unlockUserLevelLockTxnID(attemptCtx, ls, txnID); err == nil {
 		return nil
@@ -7277,7 +7290,10 @@ func cleanupFailedUserLevelLockTxn(
 	if handoffDetachedUserLevelLockTxnCleanup(ctx, ls, key, [][]byte{txnID}) {
 		return nil
 	}
-	return moerr.NewInternalErrorNoCtxf("user-level lock cleanup handoff failed for %s", key.name)
+	if retainDetachedUserLevelLockTxnCleanup(ls, key, [][]byte{txnID}) {
+		return nil
+	}
+	return moerr.NewInternalErrorNoCtxf("user-level lock cleanup retain failed for %s", key.name)
 }
 
 func userLevelLockTxnIDs(owner string, connID uint64, name string) [][]byte {
@@ -7700,6 +7716,153 @@ func handoffDetachedUserLevelLockBacklogCleanups(ctx context.Context, requests [
 			return false
 		}
 	}
+}
+
+func retainDetachedUserLevelLockTxnCleanup(ls lockservice.LockService, key detachedUserLevelLockCleanupKey, txnIDs [][]byte) bool {
+	if ls == nil || key.serviceID == "" || key.owner == "" || key.name == "" || len(txnIDs) == 0 {
+		return false
+	}
+	userLevelLocks.Lock()
+	req := userLevelLocks.pendingCleanups[key]
+	if req.ls == nil {
+		req = detachedUserLevelLockCleanupRequest{ls: ls, key: key}
+	}
+	entry := &detachedUserLevelLockCleanupEntry{txnIDs: cloneUserLevelLockTxnIDs(req.txnIDs)}
+	if !mergeDetachedUserLevelLockTxnIDs(entry, txnIDs) {
+		userLevelLocks.Unlock()
+		return false
+	}
+	req.txnIDs = cloneUserLevelLockTxnIDs(entry.txnIDs)
+	userLevelLocks.pendingCleanups[key] = req
+	startRetainedUserLevelLockCleanupWorkerLocked()
+	userLevelLocks.Unlock()
+	return true
+}
+
+func retainUserLevelLockCloseCleanup(ls lockservice.LockService, owners []string, owner, sessionID string, connID uint64) bool {
+	if ls == nil || owner == "" || len(owners) == 0 {
+		return false
+	}
+	userLevelLocks.Lock()
+	userLevelLocks.retainedCloseCleanups[owner] = retainedUserLevelLockCloseCleanup{
+		ls:        ls,
+		owners:    append([]string(nil), owners...),
+		owner:     owner,
+		sessionID: sessionID,
+		connID:    connID,
+	}
+	startRetainedUserLevelLockCleanupWorkerLocked()
+	userLevelLocks.Unlock()
+	return true
+}
+
+func startRetainedUserLevelLockCleanupWorkerLocked() {
+	if userLevelLocks.retainedCleanupStarted {
+		return
+	}
+	userLevelLocks.retainedCleanupStarted = true
+	go runRetainedUserLevelLockCleanupWorker()
+}
+
+func runRetainedUserLevelLockCleanupWorker() {
+	backoff := userLevelLockDetachedCleanupInitialBackoff
+	for {
+		progress, remaining := runRetainedUserLevelLockCleanupPass()
+		if !remaining {
+			userLevelLocks.Lock()
+			if len(userLevelLocks.pendingCleanups) == 0 && len(userLevelLocks.retainedCloseCleanups) == 0 {
+				userLevelLocks.retainedCleanupStarted = false
+				userLevelLocks.Unlock()
+				return
+			}
+			userLevelLocks.Unlock()
+		}
+		if progress {
+			backoff = userLevelLockDetachedCleanupInitialBackoff
+			continue
+		}
+		time.Sleep(backoff)
+		if backoff < userLevelLockDetachedCleanupMaxBackoff {
+			backoff *= 2
+			if backoff > userLevelLockDetachedCleanupMaxBackoff {
+				backoff = userLevelLockDetachedCleanupMaxBackoff
+			}
+		}
+	}
+}
+
+func runRetainedUserLevelLockCleanupPass() (bool, bool) {
+	progress := false
+	remaining := false
+
+	userLevelLocks.Lock()
+	pending := make([]detachedUserLevelLockCleanupRequest, 0, len(userLevelLocks.pendingCleanups))
+	for _, req := range userLevelLocks.pendingCleanups {
+		pending = append(pending, detachedUserLevelLockCleanupRequest{
+			ls:     req.ls,
+			key:    req.key,
+			txnIDs: cloneUserLevelLockTxnIDs(req.txnIDs),
+		})
+	}
+	closeCleanups := make([]retainedUserLevelLockCloseCleanup, 0, len(userLevelLocks.retainedCloseCleanups))
+	for _, retained := range userLevelLocks.retainedCloseCleanups {
+		closeCleanups = append(closeCleanups, retainedUserLevelLockCloseCleanup{
+			ls:        retained.ls,
+			owners:    append([]string(nil), retained.owners...),
+			owner:     retained.owner,
+			sessionID: retained.sessionID,
+			connID:    retained.connID,
+		})
+	}
+	userLevelLocks.Unlock()
+
+	for _, req := range pending {
+		attemptCtx, cancel := context.WithTimeout(context.Background(), userLevelLockDetachedCleanupAttemptTimeout)
+		err := unlockUserLevelLockTxnIDs(attemptCtx, req.ls, req.txnIDs)
+		cancel()
+		if err == nil {
+			userLevelLocks.Lock()
+			delete(userLevelLocks.pendingCleanups, req.key)
+			userLevelLocks.Unlock()
+			progress = true
+			continue
+		}
+		handoffCtx, handoffCancel := context.WithTimeout(context.Background(), userLevelLockDetachedCleanupAttemptTimeout)
+		handoffOK := handoffDetachedUserLevelLockTxnCleanup(handoffCtx, req.ls, req.key, req.txnIDs)
+		handoffCancel()
+		if handoffOK {
+			userLevelLocks.Lock()
+			delete(userLevelLocks.pendingCleanups, req.key)
+			userLevelLocks.Unlock()
+			progress = true
+			continue
+		}
+		remaining = true
+	}
+
+	for _, retained := range closeCleanups {
+		states := userLevelLocksForOwnerSession(retained.owner, retained.sessionID)
+		if len(states) == 0 {
+			userLevelLocks.Lock()
+			delete(userLevelLocks.retainedCloseCleanups, retained.owner)
+			userLevelLocks.Unlock()
+			progress = true
+			continue
+		}
+		handoffCtx, handoffCancel := context.WithTimeout(context.Background(), userLevelLockDetachedCleanupAttemptTimeout)
+		handoffOK := handoffDetachedUserLevelLockCleanups(handoffCtx, retained.ls, retained.owners, retained.connID, states)
+		handoffCancel()
+		if handoffOK {
+			detachUserLevelLocksForOwner(retained.owner, retained.sessionID)
+			userLevelLocks.Lock()
+			delete(userLevelLocks.retainedCloseCleanups, retained.owner)
+			userLevelLocks.Unlock()
+			progress = true
+			continue
+		}
+		remaining = true
+	}
+	return progress, remaining
 }
 
 func startDetachedUserLevelLockCleanupWorkers() {
@@ -8352,12 +8515,23 @@ func releaseUserLevelLocksOnSessionCloseWithTimeout(proc *process.Process, timeo
 			return
 		}
 		connID := userLevelLockConnectionID(proc)
-		if handoffDetachedUserLevelLockCleanups(context.Background(), proc.GetLockService(), userLevelLockOwnerCandidates(proc), connID, states) {
+		handoffCtx, handoffCancel := context.WithTimeout(context.Background(), timeout)
+		handoffOK := handoffDetachedUserLevelLockCleanups(handoffCtx, proc.GetLockService(), userLevelLockOwnerCandidates(proc), connID, states)
+		handoffCancel()
+		if handoffOK {
 			detached := detachUserLevelLocksForOwner(owner, sessionID)
 			logutil.Warn(fmt.Sprintf(
 				"ReleaseUserLevelLocksOnSessionClose transferred cleanup ownership after release failure: owner=%s locks=%d err=%v",
 				owner,
 				detached,
+				err,
+			))
+			return
+		}
+		if retainUserLevelLockCloseCleanup(proc.GetLockService(), userLevelLockOwnerCandidates(proc), owner, sessionID, connID) {
+			logutil.Warn(fmt.Sprintf(
+				"ReleaseUserLevelLocksOnSessionClose retained cleanup ownership for async retry after release failure: owner=%s err=%v",
+				owner,
 				err,
 			))
 			return
