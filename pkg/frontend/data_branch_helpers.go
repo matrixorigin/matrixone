@@ -180,18 +180,33 @@ func runSql(
 	ctx context.Context, ses *Session, bh BackgroundExec, sql string,
 	streamChan chan executor.Result, errChan chan error,
 ) (sqlRet executor.Result, err error) {
+	return runSqlWithMode(ctx, ses, bh, sql, streamChan, errChan, false)
+}
 
-	useBackExec := false
+func runSqlWithBackExec(
+	ctx context.Context, ses *Session, bh BackgroundExec, sql string,
+) (sqlRet executor.Result, err error) {
+	// Locking reads must use the statement execution path so an RC snapshot
+	// refresh after a lock wait can retry within the caller's transaction.
+	return runSqlWithMode(ctx, ses, bh, sql, nil, nil, true)
+}
+
+func runSqlWithMode(
+	ctx context.Context, ses *Session, bh BackgroundExec, sql string,
+	streamChan chan executor.Result, errChan chan error, forceBackExec bool,
+) (sqlRet executor.Result, err error) {
+
+	useBackExec := forceBackExec
 	trimmedLower := strings.ToLower(strings.TrimSpace(sql))
-	if strings.HasPrefix(trimmedLower, "drop database") {
+	if !useBackExec && strings.HasPrefix(trimmedLower, "drop database") {
 		// Internal executor does not support DROP DATABASE (IsPublishing panics).
 		useBackExec = true
-	} else if dataBranchTempSQLNeedsBackExec(trimmedLower) {
+	} else if !useBackExec && dataBranchTempSQLNeedsBackExec(trimmedLower) {
 		// Branch diff/merge/pick temp tables do repeated DDL/DML in one shared txn.
 		// The internal SQL fast path skips per-statement workspace increments and can
 		// hit ErrTxnNeedRetryWithDefChanged in RC mode while these temp definitions churn.
 		useBackExec = true
-	} else if strings.Contains(strings.ToLower(snapConditionRegex.FindString(sql)), "snapshot") {
+	} else if !useBackExec && strings.Contains(strings.ToLower(snapConditionRegex.FindString(sql)), "snapshot") {
 		// SQLExecutor cannot resolve snapshot by name.
 		useBackExec = true
 	}
@@ -212,19 +227,29 @@ func runSql(
 	}
 
 	if useBackExec {
+		_, realBackExec := bh.(*backExec)
+		if forceBackExec && realBackExec {
+			bh.ClearExecResultBatches()
+		}
 		// export as CSV need this
 		// bh.(*backExec).backSes.SetMysqlResultSet(&MysqlResultSet{})
 		//for range tblStuff.def.visibleIdxes {
 		//	bh.(*backExec).backSes.mrs.AddColumn(&MysqlColumn{})
 		//}
 		if err = bh.Exec(ctx, sql); err != nil {
+			if forceBackExec && realBackExec {
+				bh.ClearExecResultBatches()
+			}
 			return
 		}
-		if _, ok := bh.(*backExec); ok {
+		if realBackExec {
 			bh.ClearExecResultSet()
-			sqlRet.Mp = ses.proc.Mp()
-			sqlRet.Batches = bh.GetExecResultBatches()
-			return
+			if !forceBackExec {
+				sqlRet.Mp = ses.proc.Mp()
+				sqlRet.Batches = bh.GetExecResultBatches()
+				return
+			}
+			return copyAndClearBackExecResult(ses, bh)
 		}
 
 		rs := bh.GetExecResultSet()
@@ -276,6 +301,24 @@ func runSql(
 		return sqlRet, err
 	}
 
+	return sqlRet, nil
+}
+
+func copyAndClearBackExecResult(
+	ses *Session,
+	bh BackgroundExec,
+) (sqlRet executor.Result, err error) {
+	sqlRet.Mp = ses.proc.Mp()
+	defer bh.ClearExecResultBatches()
+
+	for _, bat := range bh.GetExecResultBatches() {
+		var copied *batch.Batch
+		if copied, err = bat.Dup(sqlRet.Mp); err != nil {
+			sqlRet.Close()
+			return executor.Result{}, err
+		}
+		sqlRet.Batches = append(sqlRet.Batches, copied)
+	}
 	return sqlRet, nil
 }
 
