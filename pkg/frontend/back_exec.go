@@ -997,6 +997,7 @@ type backSession struct {
 	parentBackSession               *backSession
 	effectiveMatrixOneNativeMode    bool
 	hasEffectiveMatrixOneNativeMode bool
+	forcePessimisticRC              bool
 	// lastAffectedRows carries the previous statement's ROW_COUNT() value into
 	// the next process created by this background executor.
 	lastAffectedRows int64
