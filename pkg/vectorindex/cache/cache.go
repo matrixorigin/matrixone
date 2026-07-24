@@ -283,6 +283,23 @@ func (c *VectorIndexCache) Search(sqlproc *sqlexec.SqlProcess, key string, newal
 }
 
 // remove key from cache
+// Remove drops a cached index by key so the next Search reloads it. Callers use
+// it after a mutation (CDC append, CREATE/REBUILD/MERGE) makes the cached copy
+// stale.
+//
+// Decision (known gap — deferred to a follow-up PR): Remove is LOCAL to this
+// process. It evicts only the calling CN's map; a different CN holding a warm
+// entry for the same key keeps serving the pre-mutation index. And because
+// Search calls extend() on every hit (see VectorIndexSearch.Search), a hot
+// entry's ExpireAt is pushed forward indefinitely, so it never ages out on its
+// own either — a remote CN can serve stale results for as long as it stays
+// queried. This affects EVERY index type that uses this cache (fulltext2, bm25,
+// and all vector plugins), not any one algorithm, so the fix belongs here at the
+// cache layer — e.g. fold a persisted, atomically-bumped generation into the
+// cache key (Search reloads when the stored generation moves), or add a
+// cluster-wide invalidation broadcast — and lands across all index types in a
+// separate change rather than a per-algorithm workaround. Until then, cross-CN
+// coherence relies on the idle TTL of an UNqueried entry.
 func (c *VectorIndexCache) Remove(key string) {
 	value, loaded := c.IndexMap.LoadAndDelete(key)
 	if loaded {

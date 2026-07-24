@@ -251,6 +251,13 @@ func IndexParamsToStringList(indexParams string) (string, error) {
 		res += fmt.Sprintf(" %s = %s ", IndexAlgoParamMaxPostingsCapacity, val)
 	}
 
+	// POSITION_FREE is recorded only when TRUE (absence ⇒ positional). Render it so a
+	// SHOW CREATE / checkpoint-restore DDL rebuilds a position-free fulltext2 index as
+	// position-free instead of silently reverting to the phrase-capable positional one.
+	if val, ok := result[IndexAlgoParamPositionFree]; ok && val == "true" {
+		res += fmt.Sprintf(" %s = %s ", IndexAlgoParamPositionFree, val)
+	}
+
 	if val, ok := result[IndexAlgoParamQuantizerTrainLimit]; ok {
 		res += fmt.Sprintf(" %s = %s ", IndexAlgoParamQuantizerTrainLimit, val)
 	}

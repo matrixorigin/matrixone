@@ -56,6 +56,11 @@ func TestCatalogHooks(t *testing.T) {
 	require.Nil(t, h.SupportedIncludeColumnTypes())
 	require.Nil(t, h.SupportedPrimaryKeyTypes())
 
+	// IsVectorIndex — fulltext2 is a fulltext-family engine, NOT an ANN vector index;
+	// this is the capability behind indexplugin.IsVectorIndexAlgo, so a misreport here
+	// would let fulltext2 wrongly enter vector-index collection / ANN dispatch.
+	require.False(t, h.IsVectorIndex())
+
 	// ExperimentalFlag — the experimental_fulltext2_index gate.
 	require.Equal(t, Fulltext2IndexFlag, h.ExperimentalFlag())
 	require.Equal(t, "experimental_fulltext2_index", h.ExperimentalFlag())

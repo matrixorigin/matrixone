@@ -278,6 +278,31 @@ func (b *Builder) Add(word string, pos int32, pk any) error {
 	return nil
 }
 
+// SetDoc REPLACES a pk's document terms with words (assigning a fresh ord on first
+// sight), rather than appending like Add. It is the CDC upsert primitive: a later
+// upsert of a pk already present in this open segment must supersede — not merge with —
+// its earlier terms (Add would leave both the old and new terms searchable under the
+// same live doc). A zero-word upsert produces a live 0-term doc: it carries the pk +
+// this segment's Recency, so it SHADOWS any lower-Recency copy (base or an earlier tail
+// segment) at query time while itself matching nothing — the way an upsert to empty /
+// NULL text removes the old version from search. Positions/Terms are reset in place so
+// repeated SetDoc of one pk does not grow the backing arrays unboundedly.
+func (b *Builder) SetDoc(pk any, words []WordPos) {
+	ord := b.docOrd(pk)
+	d := &b.docs[ord]
+	b.postings -= int64(len(d.Terms)) // drop the prior version's postings before rewriting
+	d.Terms = d.Terms[:0]
+	d.Positions = d.Positions[:0]
+	for _, w := range words {
+		if w.Word == "" {
+			continue // never index an empty token (mirrors Add's guard)
+		}
+		d.Terms = append(d.Terms, w.Word)
+		d.Positions = append(d.Positions, w.Pos)
+	}
+	b.postings += int64(len(d.Terms))
+}
+
 // NumDocs returns the number of distinct documents added so far.
 func (b *Builder) NumDocs() int { return len(b.docs) }
 

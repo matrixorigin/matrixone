@@ -120,7 +120,9 @@ func RunFulltext2(c *IndexConsumer, ctx context.Context, errch chan error, r Dat
 				// Evict the cached search index so the next query reloads tag=0 + the
 				// freshly-appended tag=1 frames, instead of serving the warm (stale)
 				// cache until its idle TTL. Only when frames were actually written.
-				// Local to this CN's cache.
+				// NOTE: this eviction is LOCAL to this CN — cross-CN cache coherence is
+				// a known cache-layer gap deferred to a follow-up PR (see the Decision
+				// block on veccache.VectorIndexCache.Remove).
 				if len(segs) > 0 {
 					veccache.Cache.Remove(w.cfg.IndexTable)
 					logutil.Infof("[ftv2-sink] evicted search cache for index=%s", w.cfg.IndexTable)

@@ -316,6 +316,84 @@ func TestCompactSegmentsFoldsTail(t *testing.T) {
 	require.True(t, insertRan, "MERGE must persist the rebuilt base")
 }
 
+// twoIdBatch renders a 2-row index_id enumerate result.
+func twoIdBatch(mp *mpool.MPool, a, b string) *batch.Batch {
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	_ = vector.AppendBytes(bat.Vecs[0], []byte(a), false, mp)
+	_ = vector.AppendBytes(bat.Vecs[0], []byte(b), false, mp)
+	bat.SetRowCount(2)
+	return bat
+}
+
+// loadOneBase round-trips a real serialized segment through LoadFromStorage (mocked
+// metadata + chunk stream), returning the mapped segment.
+func loadOneBase(t *testing.T, sp *sqlexec.SqlProcess, mp *mpool.MPool, cfg TableConfig, id string) *Segment {
+	t.Helper()
+	b := NewBuilder(id, int32(types.T_int64))
+	feed(t, b, int64(1), "hello")
+	seg, err := b.Finish()
+	require.NoError(t, err)
+	seg.Id = id
+	buf, err := seg.Serialize()
+	require.NoError(t, err)
+	swapRunSql(t, func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
+		return executor.Result{Mp: mp, Batches: []*batch.Batch{metaBatch(mp, vectorindex.CheckSumFromBuffer(buf), int64(len(buf)), 0)}}, nil
+	})
+	swapRunStreamingSql(t, func(_ context.Context, _ *sqlexec.SqlProcess, _ string, sc chan executor.Result, _ chan error) (executor.Result, error) {
+		sc <- executor.Result{Mp: mp, Batches: []*batch.Batch{chunkBatch(mp, buf)}}
+		return executor.Result{}, nil
+	})
+	m, err := LoadFromStorage(sp, cfg, id)
+	require.NoError(t, err)
+	return m
+}
+
+// TestFreeSegsReleasesMmap pins that freeSegs munmaps a loaded segment (nils mmapData),
+// the primitive LoadAllBases now uses to avoid leaking on a partial load.
+func TestFreeSegsReleasesMmap(t *testing.T) {
+	sp, mp := mockSqlProc(t)
+	cfg := testStorageCfg()
+	m := loadOneBase(t, sp, mp, cfg, "s0")
+	require.NotNil(t, m.mmapData) // mapped
+	freeSegs([]*Segment{m, nil})  // nil entry must be a no-op
+	require.Nil(t, m.mmapData)    // munmapped
+}
+
+// TestLoadAllBasesFreesOnPartialFailure: enumerate returns two ids; base "s0" maps, then
+// base "s1" fails (metadata missing). LoadAllBases must free the already-mapped s0 before
+// returning the error rather than leaking its mmap (+ spill file) — the #4 fix.
+func TestLoadAllBasesFreesOnPartialFailure(t *testing.T) {
+	sp, mp := mockSqlProc(t)
+	cfg := testStorageCfg()
+
+	b := NewBuilder("s0", int32(types.T_int64))
+	feed(t, b, int64(1), "hello")
+	seg, err := b.Finish()
+	require.NoError(t, err)
+	buf, err := seg.Serialize()
+	require.NoError(t, err)
+
+	swapRunSql(t, func(_ *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+		switch {
+		case strings.Contains(sql, "'s1'"): // readMetadata for s1 → missing → LoadFromStorage errors
+			return executor.Result{Mp: mp, Batches: nil}, nil
+		case strings.Contains(sql, "checksum"): // readMetadata for s0
+			return executor.Result{Mp: mp, Batches: []*batch.Batch{metaBatch(mp, vectorindex.CheckSumFromBuffer(buf), int64(len(buf)), 0)}}, nil
+		default: // enumerate index_id → [s0, s1]
+			return executor.Result{Mp: mp, Batches: []*batch.Batch{twoIdBatch(mp, "s0", "s1")}}, nil
+		}
+	})
+	swapRunStreamingSql(t, func(_ context.Context, _ *sqlexec.SqlProcess, _ string, sc chan executor.Result, _ chan error) (executor.Result, error) {
+		sc <- executor.Result{Mp: mp, Batches: []*batch.Batch{chunkBatch(mp, buf)}}
+		return executor.Result{}, nil
+	})
+
+	bases, err := LoadAllBases(sp, cfg)
+	require.Error(t, err, "s1 fails to load")
+	require.Nil(t, bases, "no partial slice is returned (s0 was freed)")
+}
+
 // TestCompactSegmentsNoDelta covers the early-out: empty bases + empty tail ⇒ nothing to
 // compact.
 func TestCompactSegmentsNoDelta(t *testing.T) {

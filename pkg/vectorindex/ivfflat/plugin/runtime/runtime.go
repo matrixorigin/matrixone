@@ -135,6 +135,8 @@ func (CatalogHooks) SupportedVectorTypes() []types.T {
 	}
 }
 
+func (CatalogHooks) IsVectorIndex() bool { return true }
+
 // SupportedPrimaryKeyTypes: IVF-FLAT imposes no PK-type constraint — the
 // primary key may be any type. nil = "no constraint".
 func (CatalogHooks) SupportedPrimaryKeyTypes() []types.T { return nil }

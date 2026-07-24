@@ -96,7 +96,7 @@ func All() []AlgoPlugin {
 
 // IsVectorIndexAlgo reports whether algo is a registered vector
 // index algorithm (HNSW, CAGRA, IVF-PQ, IVF-FLAT) — i.e. plugin-
-// registered AND not the fulltext algorithm. Replaces the chain
+// registered AND of the vector KIND. Replaces the chain
 //
 //	catalog.IsIvfIndexAlgo(a) || catalog.IsHnswIndexAlgo(a) ||
 //	catalog.IsCagraIndexAlgo(a) || catalog.IsIvfpqIndexAlgo(a)
@@ -104,12 +104,21 @@ func All() []AlgoPlugin {
 // at every site that needs to gate "is this a multi-table vector
 // index?". Use IsFullTextIndexAlgo for fulltext and IsPluginAlgo for
 // "registered with the plugin system, vector OR fulltext".
+//
+// Kind is classified by the plugin's static CAPABILITY (Catalog().IsVectorIndex()),
+// not by an algo-name check: vector plugins (HNSW / IVF-FLAT / IVF-PQ / CAGRA)
+// declare true, the fulltext-family plugins (classic fulltext AND fulltext2)
+// declare false. This keeps fulltext2 correctly NON-vector without a second
+// fulltext algo-name exception here; a future fulltext-style engine is classified
+// right for free. (Previously this special-cased only classic fulltext by name, so
+// a registered fulltext2 wrongly reported as a vector index and had to be excluded
+// again ad hoc at call sites, e.g. compile/ddl.go.)
 func IsVectorIndexAlgo(algo string) bool {
-	if IsFullTextIndexAlgo(algo) {
+	p, ok := Get(algo)
+	if !ok {
 		return false
 	}
-	_, ok := Get(algo)
-	return ok
+	return p.Catalog().IsVectorIndex()
 }
 
 // IsFullTextIndexAlgo reports whether algo is the fulltext index

@@ -8717,20 +8717,20 @@ index_option_list:
 	    } else if opt2.AlgoParamM > 0 {
 	      opt1.AlgoParamM = opt2.AlgoParamM
 	    } else if opt2.HnswEfConstruction > 0 {
- 	      opt1.HnswEfConstruction = opt2.HnswEfConstruction
+	      opt1.HnswEfConstruction = opt2.HnswEfConstruction
             } else if opt2.HnswEfSearch > 0 {
 	      opt1.HnswEfSearch = opt2.HnswEfSearch
- 	    } else if opt2.Async {
+	    } else if opt2.Async {
 	      opt1.Async = opt2.Async
- 	    } else if opt2.ForceSync {
+	    } else if opt2.ForceSync {
 	      opt1.ForceSync = opt2.ForceSync
- 	    } else if opt2.Merge {
+	    } else if opt2.Merge {
 	      opt1.Merge = opt2.Merge
- 	    } else if opt2.AutoUpdate {
+	    } else if opt2.AutoUpdate {
 	      opt1.AutoUpdate = opt2.AutoUpdate
- 	    } else if opt2.Day > 0 {
+	    } else if opt2.Day > 0 {
 	      opt1.Day = opt2.Day
- 	    } else if opt2.Hour > 0 {
+	    } else if opt2.Hour > 0 {
 	      opt1.Hour = opt2.Hour
 	    } else if opt2.Second > 0 {
 	      opt1.Second = opt2.Second

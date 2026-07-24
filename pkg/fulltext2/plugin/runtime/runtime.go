@@ -77,6 +77,7 @@ func (CatalogHooks) ExperimentalFlag() string { return Fulltext2IndexFlag }
 // SupportedVectorTypes / SupportedOpTypes / SupportedIncludeColumnTypes —
 // fulltext2 has no vector/op-type/include concept.
 func (CatalogHooks) SupportedVectorTypes() []types.T        { return nil }
+func (CatalogHooks) IsVectorIndex() bool                    { return false } // fulltext-family, not ANN
 func (CatalogHooks) SupportedOpTypes() map[string]string    { return nil }
 func (CatalogHooks) SupportedIncludeColumnTypes() []types.T { return nil }
 

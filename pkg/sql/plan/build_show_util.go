@@ -241,20 +241,32 @@ func ConstructCreateTableSQL(
 						}
 					}
 
-					val, err = sonic.Get([]byte(indexdef.IndexAlgoParams), catalog.Async)
-					// ignore err != nil --> value not found
-					if err == nil {
-						async, err := val.StrictString()
+					if catalog.IsFullText2IndexAlgo(indexdef.IndexAlgo) {
+						// fulltext2 carries persisted build options (position_free,
+						// max_index_capacity, max_postings_capacity) plus async / cron
+						// scheduling. Render the FULL set via the shared list so SHOW CREATE
+						// round-trips — a rebuild from parser-only DDL would silently drop
+						// POSITION_FREE and the capacities and build a different index.
+						paramStr, err := catalog.IndexParamsToStringList(indexdef.IndexAlgoParams)
 						if err != nil {
-							// value exists but not string type
 							return "", nil, err
 						}
+						indexStr += paramStr
+					} else {
+						val, err = sonic.Get([]byte(indexdef.IndexAlgoParams), catalog.Async)
+						// ignore err != nil --> value not found
+						if err == nil {
+							async, err := val.StrictString()
+							if err != nil {
+								// value exists but not string type
+								return "", nil, err
+							}
 
-						if async == "true" {
-							indexStr += " ASYNC"
+							if async == "true" {
+								indexStr += " ASYNC"
+							}
 						}
 					}
-
 				}
 
 			} else {

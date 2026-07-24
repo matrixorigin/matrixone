@@ -283,6 +283,11 @@ func LoadAllBases(sqlproc *sqlexec.SqlProcess, cfg TableConfig) ([]*Segment, err
 	for _, id := range ids {
 		m, lerr := LoadFromStorage(sqlproc, cfg, id)
 		if lerr != nil {
+			// Free the segments already mapped this call before bailing: each owns an
+			// mmap (+ a linked /tmp spill file on the fallback path), so returning without
+			// freeing leaks them, and a retrying caller (query reload / MERGE) accumulates
+			// both. Mirrors LoadTailSegments' freeSegs(bases) on its own error path.
+			freeSegs(bases)
 			return nil, lerr
 		}
 		bases = append(bases, m)

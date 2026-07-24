@@ -33,6 +33,15 @@ type Hooks interface {
 	// callers index by name.
 	HiddenTableTypes() []string
 
+	// IsVectorIndex reports the index KIND: true for an ANN vector index
+	// (HNSW / IVF-FLAT / IVF-PQ / CAGRA), false for a fulltext-family engine
+	// (classic fulltext, fulltext2). It is the static per-plugin classification
+	// behind indexplugin.IsVectorIndexAlgo, so the multi-table-vector-index
+	// gate is a capability the plugin declares — not an algorithm-name exception
+	// each call site has to keep in sync. A new fulltext-style engine returns
+	// false here and is classified correctly everywhere for free.
+	IsVectorIndex() bool
+
 	// ParamsFromTree extracts and validates the WITH(...) options from a
 	// CREATE INDEX statement, returning the canonical params map that gets
 	// JSON-encoded into mo_indexes. Replaces one switch arm of

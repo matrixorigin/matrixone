@@ -81,14 +81,20 @@ func (t *TailBuilder) AddBatch(cdc *Cdc) error {
 		e := &cdc.Events[i]
 		switch e.Op {
 		case cdcInsert, cdcUpsert:
+			words := t.tokenize(e.Text)
+			// An INSERT of empty / zero-token text has nothing to index and no prior
+			// version to shadow, so skip it (matches the base build, which drops empty
+			// docs). An UPSERT of empty / NULL text MUST still emit a doc so it shadows
+			// the old indexed version — SetDoc writes a live 0-term doc for that.
+			if len(words) == 0 && e.Op == cdcInsert {
+				continue
+			}
 			if t.cur == nil {
 				t.cur = NewBuilder(fmt.Sprintf("cdctail-%d", t.seq), t.pkType, t.opts...)
 			}
-			for _, w := range t.tokenize(e.Text) {
-				if err := t.cur.Add(w.Word, w.Pos, e.Pk); err != nil {
-					return err
-				}
-			}
+			// REPLACE, not append: a repeated upsert of one pk within this open segment
+			// supersedes its earlier terms (Add would merge old+new under one live doc).
+			t.cur.SetDoc(e.Pk, words)
 			if ReachedSegmentCap(t.cur, t.capacity, t.postingCap) {
 				if err := t.seal(); err != nil {
 					return err

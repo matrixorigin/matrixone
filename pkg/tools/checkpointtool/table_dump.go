@@ -4853,7 +4853,15 @@ func renderCreateIndexStatement(tableName string, info *indexDDLInfo) (string, e
 	sb.WriteString(" ADD ")
 	fullText := isFullTextIndex(info)
 	if fullText {
-		sb.WriteString("FULLTEXT ")
+		// fulltext2 is a DISTINCT engine (WAND positional / position-free), not classic
+		// fulltext — emit FULLTEXT2 so a checkpoint-restore rebuild keeps the engine
+		// instead of silently downgrading it to classic FULLTEXT (which ignores the
+		// positional/position-free build and its capacity/scheduling options).
+		if catalog.IsFullText2IndexAlgo(info.algo) {
+			sb.WriteString("FULLTEXT2 ")
+		} else {
+			sb.WriteString("FULLTEXT ")
+		}
 	} else if strings.EqualFold(info.indexType, "UNIQUE") {
 		sb.WriteString("UNIQUE ")
 	}
@@ -4885,7 +4893,8 @@ func isFullTextIndex(info *indexDDLInfo) bool {
 	if info == nil {
 		return false
 	}
-	return catalog.IsFullTextIndexAlgo(info.algo) || strings.EqualFold(info.indexType, "FULLTEXT")
+	return catalog.IsFullTextIndexAlgo(info.algo) || catalog.IsFullText2IndexAlgo(info.algo) ||
+		strings.EqualFold(info.indexType, "FULLTEXT")
 }
 
 func isFullTextKey(key TableUniqueKey) bool {
