@@ -16,6 +16,7 @@ package lockservice
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -44,17 +45,19 @@ type closeTrackingRPCClient struct {
 	closed      []string
 	closeErrors map[string]error
 	sent        []string
+	closedC     chan string
 }
 
 type refreshOnDemandCluster struct {
 	clusterservice.MOCluster
-	before      metadata.CNService
-	after       metadata.CNService
-	refreshed   bool
-	synchronous bool
-	refreshing  chan struct{}
-	refreshDone chan struct{}
-	refreshErr  error
+	before             metadata.CNService
+	after              metadata.CNService
+	refreshed          bool
+	synchronous        bool
+	refreshing         chan struct{}
+	refreshDone        chan struct{}
+	refreshErr         error
+	cancelAfterRefresh context.CancelFunc
 }
 
 type blockedClusterClient struct {
@@ -105,6 +108,9 @@ func (c *refreshOnDemandCluster) Refresh(ctx context.Context) error {
 		return c.refreshErr
 	}
 	c.refreshed = true
+	if c.cancelAfterRefresh != nil {
+		c.cancelAfterRefresh()
+	}
 	return nil
 }
 
@@ -119,6 +125,9 @@ func (c *closeTrackingRPCClient) Send(
 
 func (c *closeTrackingRPCClient) CloseBackendFor(remote string) error {
 	c.closed = append(c.closed, remote)
+	if c.closedC != nil {
+		c.closedC <- remote
+	}
 	return c.closeErrors[remote]
 }
 
@@ -710,11 +719,13 @@ func TestResetBackendPinsAndReplacesResolvedEndpoint(t *testing.T) {
 
 	normalRPCClient := &closeTrackingRPCClient{}
 	activeTxnRPCClient := &closeTrackingRPCClient{}
+	keeperRPCClient := &closeTrackingRPCClient{}
 	endpoint := "10.0.0.1:18101"
 	c := &client{
 		cluster:          cluster,
 		client:           normalRPCClient,
 		activeTxnClient:  activeTxnRPCClient,
+		keeperClient:     keeperRPCClient,
 		recoveryBackends: make(map[string]recoveryBackend),
 		resolveBackend: func(context.Context, string) (string, error) {
 			return endpoint, nil
@@ -726,6 +737,7 @@ func TestResetBackendPinsAndReplacesResolvedEndpoint(t *testing.T) {
 	require.Equal(t, "10.0.0.1:18101", c.activeTxnBackend("cn-id", "cn.example:18101"))
 	require.Empty(t, normalRPCClient.closed)
 	require.Equal(t, []string{
+		"cn.example:18101",
 		"cn.example:18101",
 		"10.0.0.1:18101",
 	}, activeTxnRPCClient.closed)
@@ -746,11 +758,22 @@ func TestResetBackendPinsAndReplacesResolvedEndpoint(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []string{"cn.example:18101"}, normalRPCClient.sent)
 
+	_, err = c.AsyncSend(context.Background(), &lock.Request{
+		Method:    lock.Method_KeepRemoteLock,
+		LockTable: lock.LockTable{ServiceID: serviceID},
+	})
+	require.NoError(t, err)
+	require.Equal(t, []string{"cn.example:18101"}, keeperRPCClient.sent)
+	require.Equal(t, []string{"cn.example:18101"}, normalRPCClient.sent)
+
 	endpoint = "10.0.0.2:18101"
 	require.NoError(t, c.ResetBackend(context.Background(), serviceID))
 	require.Equal(t, "10.0.0.2:18101", c.activeTxnBackend("cn-id", "cn.example:18101"))
 	require.Empty(t, normalRPCClient.closed)
 	require.Equal(t, []string{
+		"cn.example:18101",
+		"cn.example:18101",
+		"10.0.0.1:18101",
 		"cn.example:18101",
 		"10.0.0.1:18101",
 		"cn.example:18101",
@@ -795,6 +818,7 @@ func TestResetBackendRefreshesNonEmptyStaleAddress(t *testing.T) {
 	require.True(t, cluster.synchronous)
 	require.Equal(t, []string{
 		"old.example:18101",
+		"old.example:18101",
 		"new.example:18101",
 		"10.0.0.2:18101",
 	}, activeTxnRPCClient.closed)
@@ -836,6 +860,8 @@ func TestResetBackendRejectsFailedDiscoveryRefresh(t *testing.T) {
 	err := c.ResetBackend(context.Background(), "0000000000000000000cn-id")
 	require.ErrorIs(t, err, refreshErr)
 	require.Equal(t, []string{
+		"stale.example:18101",
+		"10.0.0.1:18101",
 		"stale.example:18101",
 		"10.0.0.1:18101",
 	}, activeTxnRPCClient.closed)
@@ -914,6 +940,43 @@ func TestResetBackendClusterStartupWaitHonorsContext(t *testing.T) {
 	c.releaseRecoveryReset()
 }
 
+func TestKeeperAsyncSendClusterStartupWaitHonorsContext(t *testing.T) {
+	service := t.Name()
+	runtime.SetupServiceBasedRuntime(service, runtime.DefaultRuntime())
+	hakeeper := &blockedClusterClient{
+		started: make(chan struct{}, 1),
+		release: make(chan struct{}),
+	}
+	cluster := clusterservice.NewMOCluster(service, hakeeper, time.Hour)
+	defer func() {
+		close(hakeeper.release)
+		cluster.Close()
+	}()
+
+	select {
+	case <-hakeeper.started:
+	case <-time.After(time.Second):
+		t.Fatal("cluster refresh did not start")
+	}
+
+	c := &client{
+		service: service,
+		cluster: cluster,
+		logger:  getLogger(service),
+	}
+	req := acquireRequest()
+	req.Method = lock.Method_KeepRemoteLock
+	req.LockTable.ServiceID = "missing"
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	f, err := c.AsyncSend(ctx, req)
+	require.Nil(t, f)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Less(t, time.Since(started), time.Second)
+}
+
 func TestResetBackendSlowRefreshDoesNotBlockActiveTxnRouteLookup(t *testing.T) {
 	refreshing := make(chan struct{})
 	refreshDone := make(chan struct{})
@@ -974,6 +1037,145 @@ func TestResetBackendSlowRefreshDoesNotBlockActiveTxnRouteLookup(t *testing.T) {
 	}
 }
 
+func TestResetBackendRepeatsFinalBarrierForSameAddress(t *testing.T) {
+	const address = "same.example:18101"
+	cluster := &refreshOnDemandCluster{
+		before: metadata.CNService{
+			ServiceID:          "cn-id",
+			LockServiceAddress: address,
+		},
+		after: metadata.CNService{
+			ServiceID:          "cn-id",
+			LockServiceAddress: address,
+		},
+	}
+	activeTxnRPCClient := &closeTrackingRPCClient{}
+	c := &client{
+		cluster:          cluster,
+		activeTxnClient:  activeTxnRPCClient,
+		recoveryBackends: make(map[string]recoveryBackend),
+		resolveBackend: func(_ context.Context, value string) (string, error) {
+			return value, nil
+		},
+	}
+
+	require.NoError(t,
+		c.ResetBackend(context.Background(), "0000000000000000000cn-id"))
+	require.Equal(t, []string{address, address}, activeTxnRPCClient.closed,
+		"the post-refresh close must fence a generation recreated during refresh")
+}
+
+func TestResetBackendFinalBarrierRunsAfterResolver(t *testing.T) {
+	const address = "same.example:18101"
+	cluster := &refreshOnDemandCluster{
+		before: metadata.CNService{
+			ServiceID:          "cn-id",
+			LockServiceAddress: address,
+		},
+		after: metadata.CNService{
+			ServiceID:          "cn-id",
+			LockServiceAddress: address,
+		},
+	}
+	resolving := make(chan struct{})
+	releaseResolver := make(chan struct{})
+	activeTxnRPCClient := &closeTrackingRPCClient{
+		closedC: make(chan string, 4),
+	}
+	c := &client{
+		cluster:          cluster,
+		activeTxnClient:  activeTxnRPCClient,
+		recoveryBackends: make(map[string]recoveryBackend),
+		resolveBackend: func(_ context.Context, value string) (string, error) {
+			close(resolving)
+			<-releaseResolver
+			return value, nil
+		},
+	}
+
+	resetDone := make(chan error, 1)
+	go func() {
+		resetDone <- c.ResetBackend(
+			context.Background(),
+			"0000000000000000000cn-id",
+		)
+	}()
+	select {
+	case <-resolving:
+	case <-time.After(time.Second):
+		close(releaseResolver)
+		t.Fatal("reset did not enter resolver")
+	}
+	require.Equal(t, address, <-activeTxnRPCClient.closedC)
+	select {
+	case remote := <-activeTxnRPCClient.closedC:
+		close(releaseResolver)
+		t.Fatalf("final barrier ran before resolver completed: %s", remote)
+	default:
+	}
+
+	close(releaseResolver)
+	require.NoError(t, <-resetDone)
+	require.Equal(t, address, <-activeTxnRPCClient.closedC,
+		"same-address generation recreated during resolve must be closed")
+	require.Equal(t, []string{address, address}, activeTxnRPCClient.closed)
+}
+
+func TestResetBackendFinalBarrierRunsOnRefreshExitErrors(t *testing.T) {
+	const address = "same.example:18101"
+	for _, test := range []struct {
+		name               string
+		refreshErr         error
+		cancelAfterRefresh bool
+	}{
+		{name: "refresh-error", refreshErr: errors.New("refresh failed")},
+		{name: "post-refresh-lookup-error", cancelAfterRefresh: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			cluster := &refreshOnDemandCluster{
+				before: metadata.CNService{
+					ServiceID:          "cn-id",
+					LockServiceAddress: address,
+				},
+				after: metadata.CNService{
+					ServiceID:          "cn-id",
+					LockServiceAddress: address,
+				},
+				refreshErr: test.refreshErr,
+			}
+			if test.cancelAfterRefresh {
+				cluster.cancelAfterRefresh = cancel
+			}
+			activeTxnRPCClient := &closeTrackingRPCClient{}
+			c := &client{
+				cluster:         cluster,
+				activeTxnClient: activeTxnRPCClient,
+				recoveryBackends: map[string]recoveryBackend{
+					"cn-id": {
+						discovered: address,
+						endpoint:   "10.0.0.1:18101",
+					},
+				},
+				resolveBackend: func(_ context.Context, value string) (string, error) {
+					return value, nil
+				},
+			}
+
+			require.Error(t,
+				c.ResetBackend(ctx, "0000000000000000000cn-id"))
+			require.Equal(t, []string{
+				address,
+				"10.0.0.1:18101",
+				address,
+				"10.0.0.1:18101",
+			}, activeTxnRPCClient.closed,
+				"the post-refresh barrier must run before every error exit")
+		})
+	}
+}
+
 func TestResetBackendCloseFailureAttemptsAllRoutesAndClearsCache(t *testing.T) {
 	cluster := &refreshOnDemandCluster{
 		before: metadata.CNService{
@@ -1006,6 +1208,9 @@ func TestResetBackendCloseFailureAttemptsAllRoutesAndClearsCache(t *testing.T) {
 	err := c.ResetBackend(context.Background(), "0000000000000000000cn-id")
 	require.ErrorIs(t, err, closeErr)
 	require.Equal(t, []string{
+		"prior.example:18101",
+		"10.0.0.1:18101",
+		"old.example:18101",
 		"prior.example:18101",
 		"10.0.0.1:18101",
 		"old.example:18101",

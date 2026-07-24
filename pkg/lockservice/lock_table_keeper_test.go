@@ -16,6 +16,8 @@ package lockservice
 
 import (
 	"context"
+	"fmt"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -28,6 +30,153 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type countingAsyncClient struct {
+	Client
+	threshold int64
+	count     atomic.Int64
+	reached   chan struct{}
+	overflow  chan struct{}
+	once      sync.Once
+	overOnce  sync.Once
+}
+
+type peerIsolationClient struct {
+	Client
+	slowPeer    string
+	healthyPeer string
+	healthySent chan struct{}
+	once        sync.Once
+}
+
+type globalBoundClient struct {
+	Client
+	active    atomic.Int64
+	maxActive atomic.Int64
+	submitted atomic.Int64
+	reached   chan struct{}
+	overflow  chan struct{}
+	once      sync.Once
+	overOnce  sync.Once
+}
+
+type refreshFairnessClient struct {
+	Client
+	mu        sync.Mutex
+	refreshed map[uint64]int
+}
+
+type bindCursorClient struct {
+	Client
+	mu        sync.Mutex
+	submitted map[uint64]int
+}
+
+func (c *bindCursorClient) AsyncSend(
+	ctx context.Context,
+	req *pb.Request,
+) (*morpc.Future, error) {
+	c.mu.Lock()
+	c.submitted[req.LockTable.Table]++
+	c.mu.Unlock()
+	<-ctx.Done()
+	releaseRequest(req)
+	return nil, ctx.Err()
+}
+
+func (c *bindCursorClient) Send(
+	ctx context.Context,
+	_ *pb.Request,
+) (*pb.Response, error) {
+	return nil, ctx.Err()
+}
+
+func (c *refreshFairnessClient) AsyncSend(
+	_ context.Context,
+	req *pb.Request,
+) (*morpc.Future, error) {
+	releaseRequest(req)
+	return nil, context.Canceled
+}
+
+func (c *refreshFairnessClient) Send(
+	_ context.Context,
+	req *pb.Request,
+) (*pb.Response, error) {
+	c.mu.Lock()
+	c.refreshed[req.GetBind.Table]++
+	c.mu.Unlock()
+	return nil, context.Canceled
+}
+
+func (c *globalBoundClient) AsyncSend(
+	ctx context.Context,
+	req *pb.Request,
+) (*morpc.Future, error) {
+	submitted := c.submitted.Add(1)
+	active := c.active.Add(1)
+	defer c.active.Add(-1)
+	for {
+		maxActive := c.maxActive.Load()
+		if active <= maxActive || c.maxActive.CompareAndSwap(maxActive, active) {
+			break
+		}
+	}
+	if active == keepRemoteLockBatchSize {
+		c.once.Do(func() { close(c.reached) })
+	}
+	if submitted > keepRemoteLockBatchSize {
+		c.overOnce.Do(func() { close(c.overflow) })
+	}
+	<-ctx.Done()
+	releaseRequest(req)
+	return nil, ctx.Err()
+}
+
+func (c *globalBoundClient) Send(
+	ctx context.Context,
+	_ *pb.Request,
+) (*pb.Response, error) {
+	return nil, ctx.Err()
+}
+
+func (c *peerIsolationClient) AsyncSend(
+	ctx context.Context,
+	req *pb.Request,
+) (*morpc.Future, error) {
+	if req.LockTable.ServiceID == c.healthyPeer {
+		c.once.Do(func() { close(c.healthySent) })
+		releaseRequest(req)
+		return nil, context.Canceled
+	}
+	if req.LockTable.ServiceID == c.slowPeer {
+		<-ctx.Done()
+		releaseRequest(req)
+		return nil, ctx.Err()
+	}
+	releaseRequest(req)
+	return nil, context.Canceled
+}
+
+func (c *peerIsolationClient) Send(
+	ctx context.Context,
+	_ *pb.Request,
+) (*pb.Response, error) {
+	return nil, ctx.Err()
+}
+
+func (c *countingAsyncClient) AsyncSend(
+	ctx context.Context,
+	req *pb.Request,
+) (*morpc.Future, error) {
+	n := c.count.Add(1)
+	if n == c.threshold {
+		c.once.Do(func() { close(c.reached) })
+	} else if n > c.threshold {
+		c.overOnce.Do(func() { close(c.overflow) })
+	}
+	return c.Client.AsyncSend(ctx, req)
+}
 
 func TestKeeper(t *testing.T) {
 	runRPCTests(
@@ -104,6 +253,345 @@ func TestKeeper(t *testing.T) {
 			<-c2
 		},
 	)
+}
+
+func TestKeeperIntervalJitterIsBounded(t *testing.T) {
+	const interval = time.Second
+	const window = interval / keeperIntervalJitterFraction
+	for i := 0; i < 1000; i++ {
+		got := jitterKeeperInterval(interval)
+		require.GreaterOrEqual(t, got, interval-window)
+		require.LessOrEqual(t, got, interval+window)
+	}
+	require.Equal(t, time.Duration(0), jitterKeeperInterval(0))
+}
+
+func TestKeepRemoteLockHasBoundedInflight(t *testing.T) {
+	runRPCTests(
+		t,
+		func(client Client, server Server) {
+			firstEntered := make(chan struct{})
+			releaseHandlers := make(chan struct{})
+			var firstOnce sync.Once
+			server.RegisterMethodHandler(
+				pb.Method_KeepRemoteLock,
+				func(
+					ctx context.Context,
+					cancel context.CancelFunc,
+					req *pb.Request,
+					resp *pb.Response,
+					cs morpc.ClientSession,
+				) {
+					firstOnce.Do(func() { close(firstEntered) })
+					select {
+					case <-releaseHandlers:
+						writeResponse(getLogger(""), cancel, resp, nil, cs)
+					case <-ctx.Done():
+						writeResponse(getLogger(""), cancel, resp, ctx.Err(), cs)
+					}
+				},
+			)
+
+			tracked := &countingAsyncClient{
+				Client:    client,
+				threshold: keepRemoteLockBatchSize,
+				reached:   make(chan struct{}),
+				overflow:  make(chan struct{}),
+			}
+			logger := getLogger("")
+			tables := &lockTableHolders{
+				service: "s1",
+				logger:  logger,
+				holders: map[uint32]*lockTableHolder{},
+			}
+			for i := 0; i < keepRemoteLockBatchSize+1; i++ {
+				bind := pb.LockTable{
+					Group:       0,
+					Table:       uint64(i + 1),
+					OriginTable: uint64(i + 1),
+					ServiceID:   "s2",
+					Version:     1,
+					Valid:       true,
+				}
+				tables.set(
+					bind.Group,
+					bind.Table,
+					newRemoteLockTable(
+						"s1",
+						time.Second,
+						bind,
+						tracked,
+						func(pb.LockTable) {},
+						logger,
+					),
+				)
+			}
+
+			keeper := &lockTableKeeper{
+				serviceID:   "s1",
+				client:      tracked,
+				groupTables: tables,
+				service:     &service{serviceID: "s1", logger: logger},
+			}
+			done := make(chan struct{})
+			go func() {
+				keeper.doKeepRemoteLock(context.Background(), nil, nil)
+				close(done)
+			}()
+
+			select {
+			case <-tracked.reached:
+			case <-time.After(time.Second):
+				t.Fatal("keeper did not fill the first bounded batch")
+			}
+			select {
+			case <-firstEntered:
+			case <-time.After(time.Second):
+				t.Fatal("first keep-remote request did not reach the server")
+			}
+			select {
+			case <-tracked.overflow:
+				t.Fatalf("keeper exceeded the in-flight limit of %d", keepRemoteLockBatchSize)
+			case <-time.After(100 * time.Millisecond):
+			}
+
+			close(releaseHandlers)
+			select {
+			case <-done:
+			case <-time.After(2 * time.Second):
+				t.Fatal("keeper did not finish after responses were released")
+			}
+			require.Equal(t, int64(keepRemoteLockBatchSize+1), tracked.count.Load())
+		},
+	)
+}
+
+func TestKeepRemoteLockSlowPeerDoesNotBlockHealthyPeer(t *testing.T) {
+	logger := getLogger("")
+	client := &peerIsolationClient{
+		slowPeer:    "slow",
+		healthyPeer: "healthy",
+		healthySent: make(chan struct{}),
+	}
+	tables := &lockTableHolders{
+		service: "local",
+		logger:  logger,
+		holders: map[uint32]*lockTableHolder{},
+	}
+	addRemote := func(table uint64, serviceID string) {
+		bind := pb.LockTable{
+			Table:       table,
+			OriginTable: table,
+			ServiceID:   serviceID,
+			Version:     1,
+			Valid:       true,
+		}
+		tables.set(
+			bind.Group,
+			bind.Table,
+			newRemoteLockTable(
+				"local",
+				time.Second,
+				bind,
+				client,
+				func(pb.LockTable) {},
+				logger,
+			),
+		)
+	}
+	for i := 0; i < keepRemoteLockBatchSize; i++ {
+		addRemote(uint64(i+1), client.slowPeer)
+	}
+	addRemote(1000, client.healthyPeer)
+
+	keeper := &lockTableKeeper{
+		serviceID:   "local",
+		client:      client,
+		groupTables: tables,
+		service:     &service{serviceID: "local", logger: logger},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		keeper.doKeepRemoteLock(ctx, nil, nil)
+		close(done)
+	}()
+
+	select {
+	case <-client.healthySent:
+	case <-ctx.Done():
+		t.Fatal("healthy peer keepalive was blocked by the slow peer")
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("keeper round exceeded its shared deadline")
+	}
+}
+
+func TestKeepRemoteLockHasGlobalInflightBoundAcrossPeers(t *testing.T) {
+	logger := getLogger("")
+	client := &globalBoundClient{
+		reached:  make(chan struct{}),
+		overflow: make(chan struct{}),
+	}
+	tables := &lockTableHolders{
+		service: "local",
+		logger:  logger,
+		holders: map[uint32]*lockTableHolder{},
+	}
+	for i := 0; i < keepRemoteLockBatchSize*2; i++ {
+		bind := pb.LockTable{
+			Table:       uint64(i + 1),
+			OriginTable: uint64(i + 1),
+			ServiceID:   fmt.Sprintf("peer-%03d", i),
+			Version:     1,
+			Valid:       true,
+		}
+		tables.set(
+			bind.Group,
+			bind.Table,
+			newRemoteLockTable(
+				"local",
+				time.Second,
+				bind,
+				client,
+				func(pb.LockTable) {},
+				logger,
+			),
+		)
+	}
+	keeper := &lockTableKeeper{
+		serviceID:   "local",
+		client:      client,
+		groupTables: tables,
+		service:     &service{serviceID: "local", logger: logger},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		keeper.doKeepRemoteLock(ctx, nil, nil)
+		close(done)
+	}()
+
+	select {
+	case <-client.reached:
+	case <-time.After(time.Second):
+		t.Fatal("keeper did not fill the global in-flight window")
+	}
+	select {
+	case <-client.overflow:
+		t.Fatalf("keeper exceeded the global in-flight limit of %d", keepRemoteLockBatchSize)
+	case <-time.After(100 * time.Millisecond):
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("keeper did not stop after cancellation")
+	}
+	require.Equal(t, int64(keepRemoteLockBatchSize), client.maxActive.Load())
+	require.Equal(t, int64(keepRemoteLockBatchSize), client.submitted.Load())
+}
+
+func TestKeepRemoteLockRefreshWindowIsFairAcrossRounds(t *testing.T) {
+	logger := getLogger("")
+	client := &refreshFairnessClient{refreshed: make(map[uint64]int)}
+	tables := &lockTableHolders{
+		service: "local",
+		logger:  logger,
+		holders: map[uint32]*lockTableHolder{},
+	}
+	const bindCount = maxKeepRemoteLockRefreshes * 2
+	for i := 0; i < bindCount; i++ {
+		bind := pb.LockTable{
+			Table:       uint64(i + 1),
+			OriginTable: uint64(i + 1),
+			ServiceID:   "peer",
+			Version:     1,
+			Valid:       true,
+		}
+		tables.set(
+			bind.Group,
+			bind.Table,
+			newRemoteLockTable(
+				"local",
+				time.Second,
+				bind,
+				client,
+				func(pb.LockTable) {},
+				logger,
+			),
+		)
+	}
+	keeper := &lockTableKeeper{
+		serviceID:   "local",
+		client:      client,
+		groupTables: tables,
+		service:     &service{serviceID: "local", logger: logger},
+	}
+
+	keeper.doKeepRemoteLock(context.Background(), nil, nil)
+	keeper.doKeepRemoteLock(context.Background(), nil, nil)
+
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	require.Len(t, client.refreshed, bindCount)
+	for table := uint64(1); table <= bindCount; table++ {
+		require.Equal(t, 1, client.refreshed[table])
+	}
+}
+
+func TestKeepRemoteLockWorkCursorIsFairAcrossSlowRounds(t *testing.T) {
+	logger := getLogger("")
+	client := &bindCursorClient{submitted: make(map[uint64]int)}
+	tables := &lockTableHolders{
+		service: "local",
+		logger:  logger,
+		holders: map[uint32]*lockTableHolder{},
+	}
+	const bindCount = keepRemoteLockBatchSize * 2
+	for i := 0; i < bindCount; i++ {
+		bind := pb.LockTable{
+			Table:       uint64(i + 1),
+			OriginTable: uint64(i + 1),
+			ServiceID:   "slow-peer",
+			Version:     1,
+			Valid:       true,
+		}
+		tables.set(
+			bind.Group,
+			bind.Table,
+			newRemoteLockTable(
+				"local",
+				time.Second,
+				bind,
+				client,
+				func(pb.LockTable) {},
+				logger,
+			),
+		)
+	}
+	keeper := &lockTableKeeper{
+		serviceID:   "local",
+		client:      client,
+		groupTables: tables,
+		service:     &service{serviceID: "local", logger: logger},
+	}
+
+	for range 2 {
+		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		keeper.doKeepRemoteLock(ctx, nil, nil)
+		cancel()
+	}
+
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	require.Len(t, client.submitted, bindCount)
+	for table := uint64(1); table <= bindCount; table++ {
+		require.Equal(t, 1, client.submitted[table])
+	}
 }
 
 func TestKeepBindFailedWillRemoveAllLocalLockTable(t *testing.T) {
