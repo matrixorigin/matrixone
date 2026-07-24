@@ -8337,28 +8337,42 @@ func ReleaseUserLevelLocksOnSessionClose(proc *process.Process) {
 }
 
 func releaseUserLevelLocksOnSessionCloseWithTimeout(proc *process.Process, timeout time.Duration) {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-	if _, err := releaseAllUserLevelLocksWithContext(ctx, proc); err != nil {
+	backoff := userLevelLockDetachedCleanupInitialBackoff
+	for {
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		_, err := releaseAllUserLevelLocksWithContext(ctx, proc)
+		cancel()
+		if err == nil {
+			return
+		}
 		owner := userLevelLockOwner(proc)
+		sessionID := userLevelLockSessionID(proc)
+		states := userLevelLocksForOwnerSession(owner, sessionID)
+		if len(states) == 0 {
+			return
+		}
 		connID := userLevelLockConnectionID(proc)
-		states := userLevelLocksForOwnerSession(owner, userLevelLockSessionID(proc))
-		handoffCtx, handoffCancel := context.WithTimeout(context.Background(), timeout)
-		defer handoffCancel()
-		if handoffDetachedUserLevelLockCleanups(handoffCtx, proc.GetLockService(), userLevelLockOwnerCandidates(proc), connID, states) {
-			detached := detachUserLevelLocksForOwner(owner, userLevelLockSessionID(proc))
+		if handoffDetachedUserLevelLockCleanups(context.Background(), proc.GetLockService(), userLevelLockOwnerCandidates(proc), connID, states) {
+			detached := detachUserLevelLocksForOwner(owner, sessionID)
 			logutil.Warn(fmt.Sprintf(
 				"ReleaseUserLevelLocksOnSessionClose transferred cleanup ownership after release failure: owner=%s locks=%d err=%v",
 				owner,
 				detached,
 				err,
 			))
-		} else {
-			logutil.Warn(fmt.Sprintf(
-				"ReleaseUserLevelLocksOnSessionClose retained local cleanup state after release failure: owner=%s err=%v",
-				owner,
-				err,
-			))
+			return
+		}
+		logutil.Warn(fmt.Sprintf(
+			"ReleaseUserLevelLocksOnSessionClose retained local cleanup state after release failure and will retry handoff: owner=%s err=%v",
+			owner,
+			err,
+		))
+		time.Sleep(backoff)
+		if backoff < userLevelLockDetachedCleanupMaxBackoff {
+			backoff *= 2
+			if backoff > userLevelLockDetachedCleanupMaxBackoff {
+				backoff = userLevelLockDetachedCleanupMaxBackoff
+			}
 		}
 	}
 }
