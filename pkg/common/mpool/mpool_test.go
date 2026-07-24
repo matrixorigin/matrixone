@@ -243,23 +243,39 @@ func TestMPoolResourcePeakEpochConcurrentAllocations(t *testing.T) {
 	require.NotNil(t, epoch)
 
 	const workers = 16
+	const allocationSize = 1024
 	var wg sync.WaitGroup
+	release := make(chan struct{})
+	results := make(chan error, workers)
 	wg.Add(workers)
 	for i := 0; i < workers; i++ {
 		go func() {
 			defer wg.Done()
-			buf, err := mp.Alloc(1024, true)
+			buf, err := mp.Alloc(allocationSize, true)
+			results <- err
 			if err != nil {
 				return
 			}
+			<-release
 			mp.Free(buf)
 		}()
 	}
+
+	var allocErr error
+	for i := 0; i < workers; i++ {
+		if err := <-results; err != nil && allocErr == nil {
+			allocErr = err
+		}
+	}
+	close(release)
 	wg.Wait()
+	require.NoError(t, allocErr)
+
 	peak, ok := mp.EndResourcePeakEpoch(epoch)
 	require.True(t, ok)
-	require.GreaterOrEqual(t, peak, uint64(1024))
-	require.GreaterOrEqual(t, uint64(mp.Stats().HighWaterMark.Load()), peak)
+	expected := uint64(workers * allocationSize)
+	require.Equal(t, expected, peak)
+	require.Equal(t, expected, uint64(mp.Stats().HighWaterMark.Load()))
 }
 
 func TestMpoolReAllocate(t *testing.T) {

@@ -207,16 +207,34 @@ func TestHnsw(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
-	// stub runSql function
+	oldRunSQL := runSql
+	oldRunSQLStreaming := runSql_streaming
+	oldTTL := cache.VectorIndexCacheTTL
+	oldCache := cache.Cache
+
+	// Stub the SQL functions and isolate the process-global cache state.
 	runSql = mock_runSql
 	runSql_streaming = mock_runSql_streaming
-
-	// init cache
-	cache.VectorIndexCacheTTL = 2 * time.Second
-	cache.VectorIndexCacheTTL = 2 * time.Second
-	cache.Cache = cache.NewVectorIndexCache()
-
-	time.Sleep(1999 * time.Millisecond)
+	cacheTTL := 2 * time.Second
+	nthread := 64
+	iterations := 20000
+	if testing.Short() {
+		// PR CI needs the concurrent load/search/expiry transitions, not the
+		// production-scale stress count.
+		cacheTTL = 100 * time.Millisecond
+		nthread = 16
+		iterations = 1000
+	}
+	cache.VectorIndexCacheTTL = cacheTTL
+	testCache := cache.NewVectorIndexCache()
+	cache.Cache = testCache
+	t.Cleanup(func() {
+		testCache.Destroy()
+		cache.Cache = oldCache
+		cache.VectorIndexCacheTTL = oldTTL
+		runSql = oldRunSQL
+		runSql_streaming = oldRunSQLStreaming
+	})
 
 	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(3)}
 	idxcfg.Usearch.Metric = usearch.L2sq
@@ -224,13 +242,12 @@ func TestHnsw(t *testing.T) {
 	fp32a := []float32{0, 1, 2}
 
 	var wg sync.WaitGroup
-	nthread := 64
 
 	for i := 0; i < nthread; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for j := 0; j < 20000; j++ {
+			for j := 0; j < iterations; j++ {
 				cache.Cache.Once()
 
 				algo := NewHnswSearch[float32](idxcfg, tblcfg)
@@ -249,8 +266,14 @@ func TestHnsw(t *testing.T) {
 
 	wg.Wait()
 
-	time.Sleep(3 * time.Second)
-	cache.Cache.Destroy()
+	require.Eventually(t, func() bool {
+		empty := true
+		testCache.IndexMap.Range(func(_, _ any) bool {
+			empty = false
+			return false
+		})
+		return empty
+	}, 3*cacheTTL, 10*time.Millisecond, "cache entry must expire after searches stop")
 }
 
 func makeMetaBatch(proc *process.Process) *batch.Batch {

@@ -93,6 +93,11 @@ func (CatalogHooks) SupportedVectorTypes() []types.T {
 // SupportedPrimaryKeyTypes: requires an int64 primary key.
 func (CatalogHooks) SupportedPrimaryKeyTypes() []types.T { return []types.T{types.T_int64} }
 
+// ValidQuantization: HNSW (usearch) validates quantization on its own
+// param-build path (ParamsFromTree), and REINDEX does not accept a quantization
+// change, so there is nothing to gate here.
+func (CatalogHooks) ValidQuantization(_, _ string) error { return nil }
+
 // SupportedIncludeColumnTypes: this index has no INCLUDE-column support.
 func (CatalogHooks) SupportedIncludeColumnTypes() []types.T { return nil }
 

@@ -97,3 +97,41 @@ func TestCompareGeneric(t *testing.T) {
 	assert.Equal(t, -1, Compare(blockId_1_1036[:], rowid_1_1291_1036[:], types.T_Rowid, 0, 0))
 	assert.Equal(t, 0, Compare(blockId_1_1291[:], rowid_1_1291_1036[:], types.T_Rowid, 0, 0))
 }
+
+// Compare/CompareGeneric enumerated only vecf32/vecf64 and PANIC on the default,
+// so a bf16/f16/int8/uint8 vector value crashed the process where the same value
+// as vecf32 merely compared. Assert ordering, not just non-panic: a comparator
+// that returned a constant would also survive a smoke test.
+func TestCompareNarrowVectorTypes(t *testing.T) {
+	lt := func(name string, small, big, dup []byte, oid types.T) {
+		t.Helper()
+		assert.Equal(t, 0, Compare(small, dup, oid, 0, 0), name+" equal")
+		assert.True(t, Compare(small, big, oid, 0, 0) < 0, name+" less")
+		assert.True(t, Compare(big, small, oid, 0, 0) > 0, name+" greater")
+		// CompareGeneric takes the same payload boxed in any.
+		assert.Equal(t, 0, CompareGeneric(any(small), any(dup), oid), name+" generic equal")
+		assert.True(t, CompareGeneric(any(small), any(big), oid) < 0, name+" generic less")
+	}
+
+	bf := func(v ...float32) []byte {
+		return types.ArrayToBytes[types.BF16](types.Float32ToBF16Slice(v))
+	}
+	f16 := func(v ...float32) []byte {
+		return types.ArrayToBytes[types.Float16](types.Float32ToFloat16Slice(v))
+	}
+	lt("bf16", bf(1, 2), bf(1, 3), bf(1, 2), types.T_array_bf16)
+	lt("f16", f16(1, 2), f16(1, 3), f16(1, 2), types.T_array_float16)
+
+	lt("int8",
+		types.ArrayToBytes[int8]([]int8{-5, 2}),
+		types.ArrayToBytes[int8]([]int8{-5, 3}),
+		types.ArrayToBytes[int8]([]int8{-5, 2}),
+		types.T_array_int8)
+
+	// uint8 specifically: a signed comparator would order 200 before 100.
+	lt("uint8",
+		types.ArrayToBytes[uint8]([]uint8{1, 100}),
+		types.ArrayToBytes[uint8]([]uint8{1, 200}),
+		types.ArrayToBytes[uint8]([]uint8{1, 100}),
+		types.T_array_uint8)
+}

@@ -53,7 +53,7 @@ func TestMultiGpuIndex(t *testing.T) {
 
 	// IVF-Flat
 	bpIvf := DefaultIvfFlatBuildParams()
-	idx2, err := NewGpuIvfFlat[float32](dataset2, count2, dimension, metric, bpIvf, devices, nthread, SingleGpu, nil)
+	idx2, err := NewGpuIvfFlat[float32, float32](dataset2, count2, dimension, metric, bpIvf, devices, nthread, SingleGpu, nil)
 	assert.NoError(t, err)
 	err = idx2.Start()
 	assert.NoError(t, err)
@@ -61,7 +61,7 @@ func TestMultiGpuIndex(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Brute Force
-	bf, err := NewGpuBruteForce[float32](dataset1, count1, dimension, metric, nthread, 0)
+	bf, err := NewGpuBruteForce[float32, float32](dataset1, count1, dimension, metric, nthread, 0)
 	assert.NoError(t, err)
 	err = bf.Start()
 	assert.NoError(t, err)
@@ -93,7 +93,7 @@ func TestMultiGpuIndex(t *testing.T) {
 
 	// --- Test Specialized MultiGpuIvfFlat ---
 	t.Run("SpecializedIvfFlat", func(t *testing.T) {
-		mivf := NewMultiGpuIvfFlat[float32]([]*GpuIvfFlat[float32]{idx2}, bf, dimension, metric)
+		mivf := NewMultiGpuIvfFlat[float32, float32]([]*GpuIvfFlat[float32, float32]{idx2}, bf, dimension, metric)
 
 		numQueries := uint64(5)
 		limit := uint32(10)

@@ -406,6 +406,15 @@ func checkInsertBatch(userBatch *containers.Batch, bat *batch.Batch, t *testing.
 	assert.Equal(t, bat.Vecs[len(userBatch.Vecs)].Length(), length)
 }
 
+func changesHandleTestRowCount() int {
+	if testing.Short() {
+		// Four blocks still cover compaction plus snapshot/tail iteration while
+		// keeping the race-enabled PR test bounded.
+		return objectio.BlockMaxRows * 4
+	}
+	return objectio.BlockMaxRows * 20
+}
+
 func TestChangesHandle3(t *testing.T) {
 	catalog.SetupDefines("")
 
@@ -429,7 +438,8 @@ func TestChangesHandle3(t *testing.T) {
 	startTS := taeHandler.GetDB().TxnMgr.Now()
 	schema := catalog2.MockSchemaAll(23, 9)
 	schema.Name = tableName
-	bat := catalog2.MockBatch(schema, 163840)
+	rowCount := changesHandleTestRowCount()
+	bat := catalog2.MockBatch(schema, rowCount)
 	mp := common.DebugAllocator
 
 	ctx, cancel = context.WithTimeout(ctx, time.Minute*5)
@@ -443,9 +453,11 @@ func TestChangesHandle3(t *testing.T) {
 	txn, rel = testutil2.GetRelation(t, accountId, taeHandler.GetDB(), databaseName, tableName)
 	id := rel.GetMeta().(*catalog2.TableEntry).AsCommonID()
 	iter := rel.MakeObjectIt(false)
+	deletedRows := 0
 	for iter.Next() {
 		obj := iter.GetObject()
 		err = rel.RangeDelete(obj.Fingerprint(), 0, 0, handle.DT_Normal)
+		deletedRows++
 	}
 	require.Nil(t, err)
 	require.Nil(t, txn.Commit(ctx))
@@ -477,12 +489,13 @@ func TestChangesHandle3(t *testing.T) {
 			totalRows += data.Vecs[0].Length()
 			data.Clean(mp)
 		}
-		assert.Equal(t, totalRows, 163820)
+		assert.Equal(t, rowCount-deletedRows, totalRows)
 		assert.NoError(t, handle.Close())
 
 		handle, err = rel.CollectChanges(ctx, startTS, taeHandler.GetDB().TxnMgr.Now(), true, mp)
 		assert.NoError(t, err)
 		totalRows = 0
+		totalTombstones := 0
 		for {
 			data, tombstone, hint, err := handle.Next(ctx, mp)
 			if data == nil && tombstone == nil {
@@ -492,7 +505,7 @@ func TestChangesHandle3(t *testing.T) {
 			if tombstone != nil {
 				assert.Equal(t, hint, engine.ChangesHandle_Tail_done)
 				checkTombstoneBatch(tombstone, schema.GetPrimaryKey().Type, t)
-				assert.Equal(t, tombstone.Vecs[0].Length(), 20)
+				totalTombstones += tombstone.Vecs[0].Length()
 				tombstone.Clean(mp)
 			}
 			if data != nil {
@@ -501,7 +514,8 @@ func TestChangesHandle3(t *testing.T) {
 				data.Clean(mp)
 			}
 		}
-		assert.Equal(t, totalRows, 163840)
+		assert.Equal(t, deletedRows, totalTombstones)
+		assert.Equal(t, rowCount, totalRows)
 		assert.NoError(t, handle.Close())
 	}
 }
@@ -1146,7 +1160,8 @@ func TestChangesHandleStaleFiles5(t *testing.T) {
 	startTS := taeHandler.GetDB().TxnMgr.Now()
 	schema := catalog2.MockSchemaAll(23, 9)
 	schema.Name = tableName
-	bat := catalog2.MockBatch(schema, 163840)
+	rowCount := changesHandleTestRowCount()
+	bat := catalog2.MockBatch(schema, rowCount)
 	mp := common.DebugAllocator
 
 	ctx, cancel = context.WithTimeout(ctx, time.Minute*5)
@@ -1160,9 +1175,11 @@ func TestChangesHandleStaleFiles5(t *testing.T) {
 	txn, rel = testutil2.GetRelation(t, accountId, taeHandler.GetDB(), databaseName, tableName)
 	id := rel.GetMeta().(*catalog2.TableEntry).AsCommonID()
 	iter := rel.MakeObjectIt(false)
+	deletedRows := 0
 	for iter.Next() {
 		obj := iter.GetObject()
 		err = rel.RangeDelete(obj.Fingerprint(), 0, 0, handle.DT_Normal)
+		deletedRows++
 	}
 	require.Nil(t, err)
 	require.Nil(t, txn.Commit(ctx))
@@ -1181,6 +1198,7 @@ func TestChangesHandleStaleFiles5(t *testing.T) {
 		handle, err := rel.CollectChanges(ctx, startTS, taeHandler.GetDB().TxnMgr.Now(), true, mp)
 		assert.NoError(t, err)
 		totalRows := 0
+		totalTombstones := 0
 		for {
 			data, tombstone, hint, err := handle.Next(ctx, mp)
 			if data == nil && tombstone == nil {
@@ -1190,7 +1208,7 @@ func TestChangesHandleStaleFiles5(t *testing.T) {
 			if tombstone != nil {
 				assert.Equal(t, hint, engine.ChangesHandle_Tail_done)
 				checkTombstoneBatch(tombstone, schema.GetPrimaryKey().Type, t)
-				assert.Equal(t, tombstone.Vecs[0].Length(), 20)
+				totalTombstones += tombstone.Vecs[0].Length()
 				tombstone.Clean(mp)
 			}
 			if data != nil {
@@ -1199,7 +1217,8 @@ func TestChangesHandleStaleFiles5(t *testing.T) {
 				data.Clean(mp)
 			}
 		}
-		assert.Equal(t, totalRows, 163840)
+		assert.Equal(t, deletedRows, totalTombstones)
+		assert.Equal(t, rowCount, totalRows)
 		assert.NoError(t, handle.Close())
 	}
 }

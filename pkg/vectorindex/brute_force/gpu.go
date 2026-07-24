@@ -65,8 +65,8 @@ func NewAdhocBruteForceIndex[T types.RealNumbers](dataset [][]T,
 	switch dset := any(dataset).(type) {
 	case [][]float32:
 		return NewGpuAdhocBruteForceIndex[float32](dset, dimension, m, elemsz)
-	case [][]uint16:
-		// Convert [][]uint16 to [][]cuvs.Float16 to pass to NewGpuAdhocBruteForceIndex
+	case [][]types.Float16:
+		// types.Float16 (NOT a bare uint16, which could also be BF16) -> cuvs.Float16.
 		f16dset := make([][]cuvs.Float16, len(dset))
 		for i, v := range dset {
 			f16dset[i] = util.UnsafeSliceCast[cuvs.Float16](v)
@@ -224,7 +224,7 @@ func (idx *GpuAdhocBruteForceIndex[T]) Destroy() {
 }
 
 type GpuBruteForceIndex[T cuvs.VectorType] struct {
-	index     *cuvs.GpuBruteForce[T]
+	index     *cuvs.GpuBruteForce[T, T]
 	dimension uint
 	count     uint
 }
@@ -248,7 +248,7 @@ func resolveCuvsDistance(m metric.MetricType) cuvs.DistanceType {
 	}
 }
 
-func NewBruteForceIndex[T types.RealNumbers](dataset [][]T,
+func NewBruteForceIndex[T types.ArrayElement](dataset [][]T,
 	dimension uint,
 	m metric.MetricType,
 	elemsz uint,
@@ -261,20 +261,20 @@ func NewBruteForceIndex[T types.RealNumbers](dataset [][]T,
 		return NewCpuBruteForceIndex[T](dataset, dimension, m, elemsz)
 	}
 
+	// cuVS brute force supports float32 and Float16 only. Switch on the distinct
+	// Go named type so types.BF16 (also uint16-backed) is never mistaken for f16.
 	switch dset := any(dataset).(type) {
-	case [][]float64:
-		return NewCpuBruteForceIndex[T](dataset, dimension, m, elemsz)
 	case [][]float32:
 		return NewGpuBruteForceIndex[float32](dset, dimension, m, elemsz, nthread)
-	case [][]uint16:
-		// Convert [][]uint16 to [][]cuvs.Float16 to pass to NewGpuBruteForceIndex
+	case [][]types.Float16:
 		f16dset := make([][]cuvs.Float16, len(dset))
 		for i, v := range dset {
 			f16dset[i] = util.UnsafeSliceCast[cuvs.Float16](v)
 		}
 		return NewGpuBruteForceIndex[cuvs.Float16](f16dset, dimension, m, elemsz, nthread)
 	default:
-		return nil, moerr.NewInternalErrorNoCtx("type not supported for BruteForceIndex")
+		// float64, bf16, int8, uint8 -> pure-Go CPU brute force.
+		return NewCpuBruteForceIndex[T](dataset, dimension, m, elemsz)
 	}
 }
 
@@ -320,7 +320,7 @@ func NewGpuBruteForceIndex[T cuvs.VectorType](dataset [][]T,
 	}
 
 	deviceID := cuvs.GetNextGpuDeviceId()
-	km, err := cuvs.NewGpuBruteForce[T](flattened, uint64(len(dataset)), uint32(dimension), resolveCuvsDistance(m), uint32(nthread), deviceID)
+	km, err := cuvs.NewGpuBruteForce[T, T](flattened, uint64(len(dataset)), uint32(dimension), resolveCuvsDistance(m), uint32(nthread), deviceID)
 	if err != nil {
 		return nil, err
 	}

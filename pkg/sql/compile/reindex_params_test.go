@@ -38,6 +38,7 @@ func TestReindexSpecifiedParams(t *testing.T) {
 		IntermediateGraphDegree: 128,
 		GraphDegree:             64,
 		ITopkSize:               256,
+		Quantization:            "Float16", // mixed case -> normalized to lowercase
 		KmeansTrainPercent:      5,
 		KmeansMaxIteration:      30,
 		MaxIndexCapacity:        2000,
@@ -56,6 +57,7 @@ func TestReindexSpecifiedParams(t *testing.T) {
 		catalog.IntermediateGraphDegree:          "128",
 		catalog.GraphDegree:                      "64",
 		catalog.ITopkSize:                        "256",
+		catalog.Quantization:                     "float16", // normalized from "Float16"
 		catalog.IndexAlgoParamKmeansTrainPercent: "5",
 		catalog.IndexAlgoParamKmeansMaxIteration: "30",
 		catalog.IndexAlgoParamMaxIndexCapacity:   "2000",

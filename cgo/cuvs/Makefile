@@ -128,6 +128,19 @@ test_kmeans: obj/test/test_kmeans.o $(OBJS)
 	@echo "Linking $@"
 	$(NVCC) $(LDFLAGS) $^ $(LIBS) -o $@
 
+# Standalone reproducer for the uint8 quantization recall collapse
+# (f32->uint8 and f16->uint8). Has its own main(); runs in isolation
+# rather than as part of the full test_cuvs_worker suite.
+uint8_quant_bug: obj/test/uint8_quant_bug.o $(OBJS)
+	@echo "Linking $@"
+	$(NVCC) $(LDFLAGS) $^ $(LIBS) -o $@
+
+# Real-dataset (wiki_all_1M) version of the uint8 collapse reproducer. Loads the
+# .fbin base/queries + .ibin ground truth and grades recall@k at 1M scale.
+wiki1m_uint8_bug: obj/test/wiki1m_uint8_bug.o $(OBJS)
+	@echo "Linking $@"
+	$(NVCC) $(LDFLAGS) $^ $(LIBS) -o $@
+
 # Standalone reproducer for the cuvs::neighbors::dynamic_batching deadlock
 # (conservative_dispatch=true). Intentionally depends on nothing in this
 # project — links only against the cuVS / RAFT / RMM libraries we already

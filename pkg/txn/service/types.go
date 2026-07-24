@@ -21,20 +21,17 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 )
 
-// TxnService is a transaction service that runs on the DNStore and is used to receive transaction requests
-// from the CN. In the case of a 2 pc distributed transaction, it acts as a transaction coordinator to handle
-// distributed transactions.
+// TxnService is a transaction service that runs on the TNStore and receives
+// transaction requests from the CN.
 //
 // The TxnService is managed by the DNStore and a TxnService serves only one DNShard.
 //
-// The txn service use Clock-SI to implement distributed transaction.
+// The txn service uses Clock-SI for transaction processing.
 type TxnService interface {
 	// Shard returns the metadata of DNShard
 	Shard() metadata.TNShard
 	// Start start the txn service
 	Start() error
-	// CancelRecovery interrupts a Start blocked in recovery without closing storage.
-	CancelRecovery()
 	// Close close the txn service. Destroy TxnStorage if destroy is true.
 	Close(destroy bool) error
 
@@ -47,19 +44,6 @@ type TxnService interface {
 	Commit(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error
 	// Rollback handle txn rollback request from CN. For reuse, the response is provided by the caller
 	Rollback(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error
-
-	// Prepare handle txn prepare request from coordinator DN. For reuse, the response is provided by
-	// the caller
-	Prepare(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error
-	// GetStatus handle get txn status in current DNShard request from coordinator DN. For reuse, the
-	// response is provided by the caller.
-	GetStatus(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error
-	// CommitTNShard handle commit txn data in current DNShard request from coordinator DN. For reuse, the
-	// response is provided by the caller.
-	CommitTNShard(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error
-	// RollbackTNShard handle rollback txn data in current DNShard request from coordinator DN. For reuse,
-	// the response is provided by the caller.
-	RollbackTNShard(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error
 
 	// Debug handle txn debug request from CN. For reuse, the response is provided by the caller
 	Debug(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error

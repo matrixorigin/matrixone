@@ -83,6 +83,18 @@ type Hooks interface {
 	// and fulltext return nil, so SupportsIncludeColumnType reports false.
 	SupportedIncludeColumnTypes() []types.T
 
+	// ValidQuantization reports whether QUANTIZATION='quant' is usable by this
+	// algorithm under op_type 'op', returning a descriptive error when not
+	// (nil = valid). It is the single per-algorithm rule for the
+	// (quantization, op_type) pair, so CREATE (plan-side schema validation) and
+	// REINDEX (compile-side ValidateReindexParams) gate it identically instead
+	// of duplicating the check. An empty quant means "no quantization / default
+	// storage" (valid); an empty op means "no metric in play" (only the
+	// storage-type rule applies). Example: the cuvs (CAGRA / IVF-PQ) backend
+	// rejects int8/uint8 with inner-product / cosine because its affine scalar
+	// quantizer only preserves L2 geometry.
+	ValidQuantization(quant, op string) error
+
 	// ExperimentalFlag returns the experimental-feature flag name that
 	// must be enabled (set to true via SET / system var) for this
 	// algorithm to be usable. Returns "" for non-experimental
