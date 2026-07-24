@@ -405,7 +405,7 @@ func sqlTaskInt64(v any) int64 {
 %token <str> TIME TIMESTAMP DATETIME YEAR
 %token <str> CHAR VARCHAR BOOL CHARACTER VARBINARY NCHAR
 %token <str> TEXT TINYTEXT MEDIUMTEXT LONGTEXT DATALINK
-%token <str> BLOB TINYBLOB MEDIUMBLOB LONGBLOB JSON ENUM UUID VECF32 VECF64
+%token <str> BLOB TINYBLOB MEDIUMBLOB LONGBLOB JSON ENUM UUID VECF32 VECF64 VECBF16 VECF16 VECINT8 VECUINT8
 %token <str> GEOMETRY POINT LINESTRING POLYGON GEOMETRYCOLLECTION MULTIPOINT MULTILINESTRING MULTIPOLYGON
 %token <str> GEOMETRY32 GEOGRAPHY GEOGRAPHY32 POINT32 LINESTRING32 POLYGON32 GEOMETRYCOLLECTION32 MULTIPOINT32 MULTILINESTRING32 MULTIPOLYGON32
 %token <str> INT1 INT2 INT3 INT4 INT8 S3OPTION STAGEOPTION
@@ -442,7 +442,7 @@ func sqlTaskInt64(v any) int64 {
 
 // Secondary Index
 %token <str> PARSER VISIBLE INVISIBLE BTREE HASH RTREE BSI IVFFLAT MASTER HNSW CAGRA IVFPQ
-%token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN LISTS OP_TYPE REINDEX EF_SEARCH EF_CONSTRUCTION M ASYNC FORCE_SYNC AUTO_UPDATE INTERMEDIATE_GRAPH_DEGREE GRAPH_DEGREE QUANTIZATION BITS_PER_CODE DISTRIBUTION_MODE ITOPK_SIZE INCLUDE KMEANS_TRAIN_PERCENT KMEANS_MAX_ITERATION MAX_INDEX_CAPACITY
+%token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN LISTS OP_TYPE REINDEX EF_SEARCH EF_CONSTRUCTION M ASYNC FORCE_SYNC AUTO_UPDATE INTERMEDIATE_GRAPH_DEGREE GRAPH_DEGREE QUANTIZATION BITS_PER_CODE DISTRIBUTION_MODE ITOPK_SIZE INCLUDE KMEANS_TRAIN_PERCENT KMEANS_MAX_ITERATION MAX_INDEX_CAPACITY QUANTIZER_TRAIN_LIMIT
 
 // Alter
 %token <str> EXPIRE ACCOUNT ACCOUNTS UNLOCK DAY NEVER PUMP MYSQL_COMPATIBILITY_MODE UNIQUE_CHECK_ON_AUTOINCR
@@ -586,6 +586,9 @@ func sqlTaskInt64(v any) int64 {
 // Logservice
 %token <str> LOGSERVICE REPLICAS STORES SETTINGS
 
+// Native table object transfer
+%token <str> DUMP METADATA
+
 %type <statement> stmt block_stmt block_type_stmt normal_stmt
 %type <statements> stmt_list stmt_list_return
 %type <statement> create_stmt insert_stmt insert_no_with_stmt delete_stmt merge_stmt drop_stmt alter_stmt truncate_table_stmt alter_sequence_stmt upgrade_stmt
@@ -612,7 +615,7 @@ func sqlTaskInt64(v any) int64 {
 %type <statement> set_stmt set_variable_stmt set_password_stmt set_role_stmt set_default_role_stmt set_transaction_stmt set_connection_id_stmt set_logservice_non_voting_replica_num
 %type <statement> lock_stmt lock_table_stmt unlock_table_stmt
 %type <statement> revoke_stmt grant_stmt
-%type <statement> load_data_stmt
+%type <statement> load_data_stmt load_table_stmt dump_table_stmt
 %type <statement> analyze_stmt check_table_stmt show_profile_stmt
 %type <statement> prepare_stmt prepareable_stmt deallocate_stmt execute_stmt reset_stmt
 %type <statement> replace_stmt
@@ -1039,6 +1042,7 @@ normal_stmt:
     create_stmt
 |   upgrade_stmt
 |   call_stmt
+|   dump_table_stmt
 |   mo_dump_stmt
 |   insert_stmt
 |   replace_stmt
@@ -1064,6 +1068,7 @@ normal_stmt:
 |   revoke_stmt
 |   grant_stmt
 |   load_data_stmt
+|   load_table_stmt
 |   load_extension_stmt
 |   do_stmt
 |   values_stmt
@@ -1877,6 +1882,22 @@ load_data_stmt:
         $$.(*tree.Load).Param.Tail = $9
         $$.(*tree.Load).Param.Parallel = $10
         $$.(*tree.Load).Param.Strict = $11
+    }
+
+dump_table_stmt:
+    DUMP TABLE table_name TO STRING
+    {
+        $$ = &tree.DumpTable{Table: $3, Path: $5}
+    }
+|   DUMP TABLE table_name TO STRING METADATA ONLY
+    {
+        $$ = &tree.DumpTable{Table: $3, Path: $5, MetadataOnly: true}
+    }
+
+load_table_stmt:
+    LOAD TABLE table_name FROM STRING
+    {
+        $$ = &tree.LoadTable{Table: $3, Path: $5}
     }
 
 load_extension_stmt:
@@ -8712,6 +8733,8 @@ index_option_list:
               opt1.KmeansMaxIteration = opt2.KmeansMaxIteration
             } else if opt2.MaxIndexCapacity > 0 {
               opt1.MaxIndexCapacity = opt2.MaxIndexCapacity
+            } else if opt2.QuantizerTrainLimit > 0 {
+              opt1.QuantizerTrainLimit = opt2.QuantizerTrainLimit
             } else if len(opt2.IncludeColumns) > 0 {
               opt1.IncludeColumns = opt2.IncludeColumns
             }
@@ -8872,6 +8895,17 @@ index_option:
 	}
 	io := tree.NewIndexOption()
 	io.KmeansTrainPercent = val
+	$$ = io
+    }
+|   QUANTIZER_TRAIN_LIMIT equal_opt INTEGRAL
+    {
+	val := int64($3.(int64))
+	if val <= 0 {
+		yylex.Error("QUANTIZER_TRAIN_LIMIT should be greater than 0")
+		return 1
+	}
+	io := tree.NewIndexOption()
+	io.QuantizerTrainLimit = val
 	$$ = io
     }
 |   KMEANS_MAX_ITERATION equal_opt INTEGRAL
@@ -14177,6 +14211,58 @@ char_type:
             },
         }
     }
+|   VECBF16 length_option_opt
+    {
+        locale := ""
+        $$ = &tree.T{
+            InternalType: tree.InternalType{
+                Family: tree.ArrayFamily,
+                Locale: &locale,
+                FamilyString: $1,
+                DisplayWith: $2,
+                Oid:uint32(defines.MYSQL_TYPE_VARCHAR),
+            },
+        }
+    }
+|   VECF16 length_option_opt
+    {
+        locale := ""
+        $$ = &tree.T{
+            InternalType: tree.InternalType{
+                Family: tree.ArrayFamily,
+                Locale: &locale,
+                FamilyString: $1,
+                DisplayWith: $2,
+                Oid:uint32(defines.MYSQL_TYPE_VARCHAR),
+            },
+        }
+    }
+|   VECINT8 length_option_opt
+    {
+        locale := ""
+        $$ = &tree.T{
+            InternalType: tree.InternalType{
+                Family: tree.ArrayFamily,
+                Locale: &locale,
+                FamilyString: $1,
+                DisplayWith: $2,
+                Oid:uint32(defines.MYSQL_TYPE_VARCHAR),
+            },
+        }
+    }
+|   VECUINT8 length_option_opt
+    {
+        locale := ""
+        $$ = &tree.T{
+            InternalType: tree.InternalType{
+                Family: tree.ArrayFamily,
+                Locale: &locale,
+                FamilyString: $1,
+                DisplayWith: $2,
+                Oid:uint32(defines.MYSQL_TYPE_VARCHAR),
+            },
+        }
+    }
 | ENUM '(' enum_values ')'
     {
         locale := ""
@@ -14646,6 +14732,7 @@ non_reserved_keyword:
 |   DECIMAL
 |   DYNAMIC
 |   DISK
+|   DUMP
 |   DO
 |   DOUBLE
 |   DIRECTORY
@@ -14698,12 +14785,17 @@ non_reserved_keyword:
 |   JSON
 |   VECF32
 |   VECF64
+|   VECBF16
+|   VECF16
+|   VECINT8
+|   VECUINT8
 |   KEY_BLOCK_SIZE
 |   LISTS
 |   OP_TYPE
 |   KMEANS_TRAIN_PERCENT
 |   KMEANS_MAX_ITERATION
 |   MAX_INDEX_CAPACITY
+|   QUANTIZER_TRAIN_LIMIT
 |   KEYS
 |   LANGUAGE
 |   LESS
@@ -14720,6 +14812,7 @@ non_reserved_keyword:
 |   MEDIUMINT
 |   MEDIUMTEXT
 |   MEMORY
+|   METADATA
 |   MODE
 |   MULTILINESTRING
 |   MULTIPOINT

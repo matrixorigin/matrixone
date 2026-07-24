@@ -41,7 +41,9 @@ const (
 )
 
 func MockCallback(from, to timestamp.Timestamp, closeCB func(), tails ...logtail.TableLogtail) error {
-	defer closeCB()
+	if closeCB != nil {
+		defer closeCB()
+	}
 	if len(tails) == 0 {
 		return nil
 	}
@@ -318,9 +320,16 @@ func (mgr *Manager) generateLogtailWithTxn(txn *txnWithLogtails) {
 		// Send ts in order to initialize waterline of logtail service
 		mgr.eventOnce.Do(func() {
 			logutil.Info("logtail.mgr.init.waterline", zap.String("ts", from.ToString()))
-			callback.call(from.ToTimestamp(), from.ToTimestamp(), txn.closeCB)
+			// This event carries only a watermark. It never owns transaction
+			// batches: the following real event is their sole owner, which lets
+			// server shutdown drain callbacks exactly once.
+			_ = callback.call(from.ToTimestamp(), from.ToTimestamp(), nil)
 		})
-		callback.call(from.ToTimestamp(), to.ToTimestamp(), txn.closeCB, *txn.tails...)
+		if err := callback.call(from.ToTimestamp(), to.ToTimestamp(), txn.closeCB, *txn.tails...); err != nil {
+			// The callback did not accept ownership (for example the push
+			// server is already closed), so release collected batches locally.
+			txn.closeCB()
+		}
 	} else {
 		txn.closeCB()
 	}

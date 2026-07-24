@@ -460,6 +460,62 @@ func TestCloneTableParseFormattedMoTimestamp(t *testing.T) {
 	require.Equal(t, tree.ATMOTIMESTAMP, cloneStmt.SrcTable.AtTsExpr.Type)
 }
 
+func TestTableDumpAndLoadParse(t *testing.T) {
+	tests := []struct {
+		sql   string
+		check func(*testing.T, tree.Statement)
+	}{
+		{
+			sql: "dump table db1.t1 to '/tmp/t1'",
+			check: func(t *testing.T, stmt tree.Statement) {
+				dump, ok := stmt.(*tree.DumpTable)
+				require.True(t, ok)
+				require.Equal(t, tree.Identifier("db1"), dump.Table.Schema())
+				require.Equal(t, tree.Identifier("t1"), dump.Table.Name())
+				require.Equal(t, "/tmp/t1", dump.Path)
+				require.False(t, dump.MetadataOnly)
+				require.Equal(t, "dump table db1.t1 to '/tmp/t1'", tree.String(dump, dialect.MYSQL))
+				require.Equal(t, "dump table", dump.GetStatementType())
+				require.Equal(t, tree.QueryTypeOth, dump.GetQueryType())
+				require.Equal(t, "tree.DumpTable", dump.TypeName())
+				require.Equal(t, "dump table", dump.String())
+				dump.Free()
+			},
+		},
+		{
+			sql: "dump table t1 to 'file:///tmp/t1' metadata only",
+			check: func(t *testing.T, stmt tree.Statement) {
+				dump, ok := stmt.(*tree.DumpTable)
+				require.True(t, ok)
+				require.True(t, dump.MetadataOnly)
+			},
+		},
+		{
+			sql: "load table db2.t1 from '/tmp/t1'",
+			check: func(t *testing.T, stmt tree.Statement) {
+				load, ok := stmt.(*tree.LoadTable)
+				require.True(t, ok)
+				require.Equal(t, tree.Identifier("db2"), load.Table.Schema())
+				require.Equal(t, tree.Identifier("t1"), load.Table.Name())
+				require.Equal(t, "/tmp/t1", load.Path)
+				require.Equal(t, "load table db2.t1 from '/tmp/t1'", tree.String(load, dialect.MYSQL))
+				require.Equal(t, "load table", load.GetStatementType())
+				require.Equal(t, tree.QueryTypeDML, load.GetQueryType())
+				require.Equal(t, "tree.LoadTable", load.TypeName())
+				require.Equal(t, "load table", load.String())
+				load.Free()
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.sql, func(t *testing.T) {
+			stmt, err := ParseOne(context.Background(), test.sql, 1)
+			require.NoError(t, err)
+			test.check(t, stmt)
+		})
+	}
+}
+
 func TestDataBranchCreateTableParsesWithLeadingComment(t *testing.T) {
 	stmt, err := ParseOne(
 		context.TODO(),
@@ -2259,6 +2315,9 @@ var (
 			input:  "create index idx using ivfflat on A (a) LISTS 10 op_type 'vector_l2_ops' kmeans_train_percent 5 kmeans_max_iteration 30",
 			output: "create index idx using ivfflat on a (a) LISTS 10 OP_TYPE vector_l2_ops KMEANS_TRAIN_PERCENT 5 KMEANS_MAX_ITERATION 30 ",
 		}, {
+			input:  "create index idx using ivfpq on A (a) LISTS 10 op_type 'vector_l2_ops' quantization 'int8' quantizer_train_limit 5000",
+			output: "create index idx using ivfpq on a (a) LISTS 10 OP_TYPE vector_l2_ops QUANTIZATION int8 QUANTIZER_TRAIN_LIMIT 5000 ",
+		}, {
 			input:  "create index idx using hnsw on A (a) M 16 max_index_capacity = 500000",
 			output: "create index idx using hnsw on a (a) M 16 MAX_INDEX_CAPACITY 500000 ",
 		}, {
@@ -3789,6 +3848,50 @@ var (
 		{
 			input:  "create table t1 (id bigint primary key, embedding vecf32(3), payload json, tags array(varchar(20)))",
 			output: "create table t1 (id bigint primary key, embedding vecf32(3), payload json, tags array(varchar(20)))",
+		},
+		{
+			input:  "create table t1(a vecbf16(3), b vecf16(3), c vecint8(3))",
+			output: "create table t1 (a vecbf16(3), b vecf16(3), c vecint8(3))",
+		},
+		{
+			input:  "create table t1(a vecbf16(128), b vecf16(65535), c vecint8(1))",
+			output: "create table t1 (a vecbf16(128), b vecf16(65535), c vecint8(1))",
+		},
+		{
+			input:  "create table t1(a vecuint8(3))",
+			output: "create table t1 (a vecuint8(3))",
+		},
+		{
+			input:  "create table t1(a vecuint8(128), b vecuint8(65535), c vecuint8(1))",
+			output: "create table t1 (a vecuint8(128), b vecuint8(65535), c vecuint8(1))",
+		},
+		{
+			input:  "select cast('[1,2,3]' as vecbf16(3))",
+			output: "select cast([1,2,3] as vecbf16(3))",
+		},
+		{
+			input:  "select cast('[1,2,3]' as vecf16(3))",
+			output: "select cast([1,2,3] as vecf16(3))",
+		},
+		{
+			input:  "select cast('[1,2,3]' as vecint8(3))",
+			output: "select cast([1,2,3] as vecint8(3))",
+		},
+		{
+			input:  "select cast(b as vecint8(3)) from t1",
+			output: "select cast(b as vecint8(3)) from t1",
+		},
+		{
+			input:  "select cast('[1,2,3]' as vecuint8(3))",
+			output: "select cast([1,2,3] as vecuint8(3))",
+		},
+		{
+			input:  "select cast(b as vecuint8(3)) from t1",
+			output: "select cast(b as vecuint8(3)) from t1",
+		},
+		{
+			input:  "select l2_distance(a, b) from t1",
+			output: "select l2_distance(a, b) from t1",
 		},
 		{
 			input:  "alter table tbl1 drop constraint fk_name",
