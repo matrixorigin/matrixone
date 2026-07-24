@@ -533,6 +533,7 @@ func TestHashBuildIsShuffle(t *testing.T) {
 	for cycle := 0; cycle < 2; cycle++ {
 		if cycle > 0 {
 			tc.arg.Reset(tc.proc, false, nil)
+			require.Zero(t, tc.arg.ctr.spillBufferRowLimit)
 			tc.marg.Reset(tc.proc, false, nil)
 			tc.proc.GetMessageBoard().Reset()
 		}
@@ -551,6 +552,7 @@ func TestHashBuildIsShuffle(t *testing.T) {
 		ok, err := vm.Exec(tc.arg, tc.proc)
 		require.NoError(t, err)
 		require.Equal(t, vm.ExecStop, ok.Status)
+		require.Greater(t, tc.arg.ctr.spillBufferRowLimit, 0)
 		jm, err := message.ReceiveJoinMap(tc.arg.JoinMapTag, true, tc.arg.ShuffleIdx, tc.proc.GetMessageBoard(), tc.proc.Ctx)
 		require.NoError(t, err)
 		require.NotNil(t, jm)

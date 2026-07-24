@@ -19,6 +19,7 @@ import (
 	"os"
 
 	"github.com/cespare/xxhash/v2"
+	"github.com/matrixorigin/matrixone/pkg/common"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -30,10 +31,38 @@ import (
 )
 
 const (
-	spillNumBuckets = 32
-	spillMagic      = 0x12345678DEADBEEF
-	spillBufferSize = 8192 // Buffer 8192 rows before flushing
+	spillNumBuckets              = 32
+	spillMagic                   = 0x12345678DEADBEEF
+	spillBufferMaxRows           = 8192
+	spillBucketBufferTargetBytes = 4 * common.MiB
 )
+
+func spillBufferRowsForBatch(bat *batch.Batch) int {
+	if bat == nil || bat.RowCount() <= 0 {
+		return spillBufferMaxRows
+	}
+	size := bat.Size()
+	if size <= 0 {
+		return spillBufferMaxRows
+	}
+	// Round up so the estimated buffer stays at or below the byte target.
+	bytesPerRow := (size-1)/bat.RowCount() + 1
+	rows := spillBucketBufferTargetBytes / bytesPerRow
+	if rows < 1 {
+		return 1
+	}
+	if rows > spillBufferMaxRows {
+		return spillBufferMaxRows
+	}
+	return rows
+}
+
+func (ctr *container) setSpillBufferRowLimit(bat *batch.Batch) {
+	rows := spillBufferRowsForBatch(bat)
+	if ctr.spillBufferRowLimit == 0 || rows < ctr.spillBufferRowLimit {
+		ctr.spillBufferRowLimit = rows
+	}
+}
 
 func (ctr *container) flushBucketBuffer(proc *process.Process, bat *batch.Batch, file *os.File, analyzer process.Analyzer) (int64, error) {
 	if bat == nil || bat.RowCount() == 0 {
@@ -107,6 +136,7 @@ func (ctr *container) appendBuildBatchToSpillFiles(proc *process.Process, bat *b
 	if bat.RowCount() == 0 {
 		return nil
 	}
+	ctr.setSpillBufferRowLimit(bat)
 
 	// Evaluate hash keys using pre-initialized executors (reuse cached slice)
 	if cap(ctr.spillKeyVecs) < len(executors) {
@@ -158,7 +188,10 @@ func (ctr *container) appendBuildBatchToSpillFiles(proc *process.Process, bat *b
 			for i, vec := range bat.Vecs {
 				typ := *vec.GetType()
 				buf.Vecs[i] = vector.NewOffHeapVecWithType(typ)
-				buf.Vecs[i].PreExtend(spillBufferSize, proc.Mp())
+				if err := buf.Vecs[i].PreExtend(ctr.spillBufferRowLimit, proc.Mp()); err != nil {
+					buf.Clean(proc.Mp())
+					return err
+				}
 			}
 			buffers[bucketId] = buf
 		}
@@ -172,7 +205,7 @@ func (ctr *container) appendBuildBatchToSpillFiles(proc *process.Process, bat *b
 		buf.SetRowCount(buf.RowCount() + len(sels))
 
 		// Flush if buffer is full
-		if buf.RowCount() >= spillBufferSize {
+		if buf.RowCount() >= ctr.spillBufferRowLimit {
 			file, err := ctr.ensureSpillFile(proc, files, bucketId)
 			if err != nil {
 				return err
