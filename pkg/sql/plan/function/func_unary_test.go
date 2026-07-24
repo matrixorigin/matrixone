@@ -9133,6 +9133,133 @@ func TestTimedOutFailedAttemptCleanupRetainsOwnershipAfterSaturatedHandoff(t *te
 	})
 }
 
+func TestSuccessfulProbeCleanupRetainsOwnershipAfterSaturatedHandoff(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		service := services[0].(*userLevelLockTestService)
+		proc := newUserLevelLockTestProcess(t, services[0], "acc")
+		owner, connID := ensureUserLevelLockIdentity(proc)
+		name := "probe_retained_after_saturation"
+		key := detachedUserLevelLockCleanupKey{
+			serviceID: service.GetServiceID(),
+			owner:     owner,
+			name:      name,
+			connID:    connID,
+			kind:      "probe:release",
+		}
+		txnID := userLevelLockProbeTxnID(owner, connID, name, "release")
+		service.state.Lock()
+		service.state.locks[string(userLevelLockRow(proc, name))] = string(txnID)
+		service.state.Unlock()
+		service.blockUnlock.Store(true)
+		fillDetachedUserLevelLockCleanupAdmissionForTest(service, key, [][]byte{txnID})
+		detachedUserLevelLockCleanups.Lock()
+		for i := 0; i < userLevelLockDetachedCleanupBacklog; i++ {
+			detachedUserLevelLockCleanups.backlog <- detachedUserLevelLockCleanupRequest{
+				ls:     service,
+				key:    key,
+				txnIDs: [][]byte{[]byte(fmt.Sprintf("queued-probe-%d", i))},
+			}
+		}
+		detachedUserLevelLockCleanups.Unlock()
+
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		err := unlockUserLevelLockProbe(ctx, service, owner, connID, name, "release")
+		require.Error(t, err)
+		userLevelLocks.Lock()
+		_, retained := userLevelLocks.pendingCleanups[key]
+		userLevelLocks.Unlock()
+		require.True(t, retained)
+
+		service.blockUnlock.Store(false)
+		detachedUserLevelLockCleanups.Lock()
+		detachedUserLevelLockCleanups.entries = make(map[detachedUserLevelLockCleanupKey]*detachedUserLevelLockCleanupEntry)
+		for {
+			select {
+			case <-detachedUserLevelLockCleanups.queue:
+			default:
+				goto probeQueueDrained
+			}
+		}
+	probeQueueDrained:
+		for {
+			select {
+			case <-detachedUserLevelLockCleanups.backlog:
+			default:
+				goto probeBacklogDrained
+			}
+		}
+	probeBacklogDrained:
+		detachedUserLevelLockCleanups.Unlock()
+		progress, _ := runRetainedUserLevelLockCleanupPass()
+		require.True(t, progress)
+		require.Eventually(t, func() bool {
+			userLevelLocks.Lock()
+			_, retained := userLevelLocks.pendingCleanups[key]
+			userLevelLocks.Unlock()
+			service.state.Lock()
+			held := service.state.locks[string(userLevelLockRow(proc, name))]
+			service.state.Unlock()
+			return !retained && held == ""
+		}, 3*time.Second, 10*time.Millisecond)
+	})
+}
+
+func TestRetainedCleanupRemovesOnlyProcessedTxnIDs(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		service := services[0].(*userLevelLockTestService)
+		service.blockUnlock.Store(true)
+		key := detachedUserLevelLockCleanupKey{
+			serviceID: service.GetServiceID(),
+			owner:     "owner-retained-partial",
+			name:      "lock-retained-partial",
+			connID:    1001,
+			kind:      "get_lock_failed",
+		}
+		txn1 := []byte("txn-retained-1")
+		txn2 := []byte("txn-retained-2")
+		require.True(t, retainDetachedUserLevelLockTxnCleanup(service, key, [][]byte{txn1}))
+		userLevelLocks.Lock()
+		snapshot := userLevelLocks.pendingCleanups[key]
+		userLevelLocks.Unlock()
+		require.True(t, retainDetachedUserLevelLockTxnCleanup(service, key, [][]byte{txn2}))
+
+		userLevelLocks.Lock()
+		removeRetainedUserLevelLockPendingTxnIDsLocked(key, snapshot.txnIDs)
+		remaining := cloneUserLevelLockTxnIDs(userLevelLocks.pendingCleanups[key].txnIDs)
+		userLevelLocks.Unlock()
+		require.Equal(t, [][]byte{txn2}, remaining)
+	})
+}
+
+func TestRetainedCleanupAdmissionIsBounded(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		service := services[0].(*userLevelLockTestService)
+		service.blockUnlock.Store(true)
+		for i := 0; i < userLevelLockRetainedCleanupMaxEntries; i++ {
+			key := detachedUserLevelLockCleanupKey{
+				serviceID: service.GetServiceID(),
+				owner:     fmt.Sprintf("owner-retained-bound-%d", i),
+				name:      fmt.Sprintf("lock-retained-bound-%d", i),
+				connID:    uint64(i + 1),
+				kind:      "get_lock_failed",
+			}
+			require.True(t, retainDetachedUserLevelLockTxnCleanup(service, key, [][]byte{[]byte(fmt.Sprintf("txn-%d", i))}))
+		}
+		key := detachedUserLevelLockCleanupKey{
+			serviceID: service.GetServiceID(),
+			owner:     "owner-retained-overflow",
+			name:      "lock-retained-overflow",
+			connID:    9999,
+			kind:      "get_lock_failed",
+		}
+		require.False(t, retainDetachedUserLevelLockTxnCleanup(service, key, [][]byte{[]byte("txn-overflow")}))
+		userLevelLocks.Lock()
+		require.Len(t, userLevelLocks.pendingCleanups, userLevelLockRetainedCleanupMaxEntries)
+		userLevelLocks.Unlock()
+	})
+}
+
 func TestDetachedUserLevelLockCleanupBacklogBatchAdmissionIsAtomic(t *testing.T) {
 	runUserLevelLockTest(t, func(services []lockservice.LockService) {
 		service := services[0].(*userLevelLockTestService)

@@ -6986,6 +6986,7 @@ const userLevelLockDetachedCleanupOverflowShards = 16
 const userLevelLockDetachedCleanupMaxTxnIDsPerEntry = 2048
 const userLevelLockDetachedCleanupWorkers = 4
 const userLevelLockDetachedCleanupBacklog = 64
+const userLevelLockRetainedCleanupMaxEntries = userLevelLockDetachedCleanupMaxEntries
 
 type userLevelLockKey struct {
 	owner string
@@ -7725,6 +7726,10 @@ func retainDetachedUserLevelLockTxnCleanup(ls lockservice.LockService, key detac
 	userLevelLocks.Lock()
 	req := userLevelLocks.pendingCleanups[key]
 	if req.ls == nil {
+		if len(userLevelLocks.pendingCleanups)+len(userLevelLocks.retainedCloseCleanups) >= userLevelLockRetainedCleanupMaxEntries {
+			userLevelLocks.Unlock()
+			return false
+		}
 		req = detachedUserLevelLockCleanupRequest{ls: ls, key: key}
 	}
 	entry := &detachedUserLevelLockCleanupEntry{txnIDs: cloneUserLevelLockTxnIDs(req.txnIDs)}
@@ -7744,6 +7749,11 @@ func retainUserLevelLockCloseCleanup(ls lockservice.LockService, owners []string
 		return false
 	}
 	userLevelLocks.Lock()
+	if _, ok := userLevelLocks.retainedCloseCleanups[owner]; !ok &&
+		len(userLevelLocks.pendingCleanups)+len(userLevelLocks.retainedCloseCleanups) >= userLevelLockRetainedCleanupMaxEntries {
+		userLevelLocks.Unlock()
+		return false
+	}
 	userLevelLocks.retainedCloseCleanups[owner] = retainedUserLevelLockCloseCleanup{
 		ls:        ls,
 		owners:    append([]string(nil), owners...),
@@ -7822,7 +7832,7 @@ func runRetainedUserLevelLockCleanupPass() (bool, bool) {
 		cancel()
 		if err == nil {
 			userLevelLocks.Lock()
-			delete(userLevelLocks.pendingCleanups, req.key)
+			removeRetainedUserLevelLockPendingTxnIDsLocked(req.key, req.txnIDs)
 			userLevelLocks.Unlock()
 			progress = true
 			continue
@@ -7832,7 +7842,7 @@ func runRetainedUserLevelLockCleanupPass() (bool, bool) {
 		handoffCancel()
 		if handoffOK {
 			userLevelLocks.Lock()
-			delete(userLevelLocks.pendingCleanups, req.key)
+			removeRetainedUserLevelLockPendingTxnIDsLocked(req.key, req.txnIDs)
 			userLevelLocks.Unlock()
 			progress = true
 			continue
@@ -7863,6 +7873,21 @@ func runRetainedUserLevelLockCleanupPass() (bool, bool) {
 		remaining = true
 	}
 	return progress, remaining
+}
+
+func removeRetainedUserLevelLockPendingTxnIDsLocked(key detachedUserLevelLockCleanupKey, txnIDs [][]byte) {
+	req := userLevelLocks.pendingCleanups[key]
+	if req.ls == nil {
+		return
+	}
+	entry := &detachedUserLevelLockCleanupEntry{txnIDs: cloneUserLevelLockTxnIDs(req.txnIDs)}
+	removeDetachedUserLevelLockTxnIDs(entry, txnIDs)
+	if len(entry.txnIDs) == 0 {
+		delete(userLevelLocks.pendingCleanups, key)
+		return
+	}
+	req.txnIDs = cloneUserLevelLockTxnIDs(entry.txnIDs)
+	userLevelLocks.pendingCleanups[key] = req
 }
 
 func startDetachedUserLevelLockCleanupWorkers() {
@@ -8009,18 +8034,19 @@ func unlockUserLevelLockProbe(ctx context.Context, ls lockservice.LockService, o
 	if err == nil {
 		return nil
 	}
+	key := detachedUserLevelLockCleanupKey{
+		serviceID: ls.GetServiceID(),
+		owner:     owner,
+		name:      name,
+		connID:    connID,
+		kind:      "probe:" + probeType,
+	}
 	if !handoffDetachedUserLevelLockTxnCleanup(
 		ctx,
 		ls,
-		detachedUserLevelLockCleanupKey{
-			serviceID: ls.GetServiceID(),
-			owner:     owner,
-			name:      name,
-			connID:    connID,
-			kind:      "probe:" + probeType,
-		},
+		key,
 		[][]byte{txnID},
-	) {
+	) && !retainDetachedUserLevelLockTxnCleanup(ls, key, [][]byte{txnID}) {
 		return moerr.NewInternalErrorNoCtxf("user-level lock probe cleanup queue is full for %s", name)
 	}
 	return err
