@@ -4677,6 +4677,50 @@ func TestGroupingSetDistinctGlobalDedup(t *testing.T) {
 		"non-distinct grouping-set has no whole-result de-dup above the union")
 }
 
+func TestGroupingSetDistinctMaterializesVolatileProjectionOnce(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	tests := []struct {
+		name         string
+		groupBy      string
+		wantNextvals int
+	}{
+		{name: "rollup", groupBy: "a with rollup", wantNextvals: 2},
+		{name: "cube", groupBy: "cube(a, b)", wantNextvals: 4},
+		{name: "grouping sets", groupBy: "grouping sets ((a, b), (a), ())", wantNextvals: 3},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			p, err := runOneStmt(mock, t,
+				"select distinct nextval('grouping_distinct_seq') "+
+					"from select_test.bind_select group by "+test.groupBy)
+			require.NoError(t, err)
+
+			nextvals := 0
+			var countNextvals func(*plan.Expr)
+			countNextvals = func(expr *plan.Expr) {
+				if expr == nil {
+					return
+				}
+				if fn := expr.GetF(); fn != nil {
+					if fn.Func != nil && strings.EqualFold(fn.Func.ObjName, "nextval") {
+						nextvals++
+					}
+					for _, arg := range fn.Args {
+						countNextvals(arg)
+					}
+				}
+			}
+			for _, node := range p.GetQuery().Nodes {
+				for _, project := range node.ProjectList {
+					countNextvals(project)
+				}
+			}
+			require.Equal(t, test.wantNextvals, nextvals)
+		})
+	}
+}
+
 func TestGroupingSetDistinctOrderByHiddenKeyAfterDedup(t *testing.T) {
 	mock := NewMockOptimizer(true)
 
@@ -4974,7 +5018,11 @@ func TestNormalizeGroupingSetDistinctProjectsTypedNull(t *testing.T) {
 				bindCtx.projectTag,
 				0,
 			)
-			normalized, err := normalizeGroupingSetDistinctProjects(builder.GetContext(), []*plan.Expr{project})
+			normalized, err := normalizeGroupingSetDistinctProjects(
+				builder.GetContext(),
+				[]*plan.Expr{project},
+				[]*plan.Expr{project},
+			)
 			require.NoError(t, err)
 			require.Len(t, normalized, 1)
 

@@ -736,6 +736,33 @@ select distinct a, b, grouping(a) as ga, grouping(b) as gb
 from grouping_not_null
 group by grouping sets ((a, b), (a), ())
 order by ga, gb, a, b;
+
+-- Volatile projections are materialized once per output row before grouping
+-- provenance is normalized for the global DISTINCT.
+create sequence grouping_distinct_rollup_seq;
+select distinct nextval('grouping_distinct_rollup_seq') as n
+from grouping_not_null
+group by a with rollup
+order by n;
+select currval('grouping_distinct_rollup_seq');
+drop sequence grouping_distinct_rollup_seq;
+
+create sequence grouping_distinct_cube_seq;
+select distinct nextval('grouping_distinct_cube_seq') as n
+from grouping_not_null
+group by cube(a)
+order by n;
+select currval('grouping_distinct_cube_seq');
+drop sequence grouping_distinct_cube_seq;
+
+create sequence grouping_distinct_sets_seq;
+select distinct nextval('grouping_distinct_sets_seq') as n
+from grouping_not_null
+group by grouping sets ((a), ())
+order by n;
+select currval('grouping_distinct_sets_seq');
+drop sequence grouping_distinct_sets_seq;
+
 drop table grouping_not_null;
 
 drop table grouping_order;

@@ -1151,6 +1151,42 @@ a	b	ga	gb
 1	null	0	1
 2	null	0	1
 null	null	1	1
+create sequence grouping_distinct_rollup_seq;
+select distinct nextval('grouping_distinct_rollup_seq') as n
+from grouping_not_null
+group by a with rollup
+order by n;
+n
+1
+2
+select currval('grouping_distinct_rollup_seq');
+nextval(grouping_distinct_rollup_seq)
+2
+drop sequence grouping_distinct_rollup_seq;
+create sequence grouping_distinct_cube_seq;
+select distinct nextval('grouping_distinct_cube_seq') as n
+from grouping_not_null
+group by cube(a)
+order by n;
+n
+1
+2
+select currval('grouping_distinct_cube_seq');
+nextval(grouping_distinct_cube_seq)
+2
+drop sequence grouping_distinct_cube_seq;
+create sequence grouping_distinct_sets_seq;
+select distinct nextval('grouping_distinct_sets_seq') as n
+from grouping_not_null
+group by grouping sets ((a), ())
+order by n;
+n
+1
+2
+select currval('grouping_distinct_sets_seq');
+nextval(grouping_distinct_sets_seq)
+2
+drop sequence grouping_distinct_sets_seq;
 drop table grouping_not_null;
 drop table grouping_order;
 create table rollup_window_sales(region varchar(20), product varchar(20), qty int);

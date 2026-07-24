@@ -4055,17 +4055,11 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 
 	// append PROJECT node
 	if ctx.normalizeGroupingSetDistinct {
-		normalized, normalizeErr := normalizeGroupingSetDistinctProjects(
-			builder.GetContext(),
-			ctx.projects[:resultLen],
-		)
-		if normalizeErr != nil {
-			err = normalizeErr
-			return
-		}
-		ctx.projects = append(normalized, ctx.projects[resultLen:]...)
+		nodeID, err = builder.appendGroupingSetDistinctProjectionNode(ctx, nodeID, resultLen, notCacheable)
+	} else {
+		nodeID, err = builder.appendProjectionNode(ctx, nodeID, notCacheable)
 	}
-	if nodeID, err = builder.appendProjectionNode(ctx, nodeID, notCacheable); err != nil {
+	if err != nil {
 		return
 	}
 
@@ -6127,10 +6121,11 @@ type groupingSetOrderResolution struct {
 func normalizeGroupingSetDistinctProjects(
 	ctx context.Context,
 	projects []*plan.Expr,
+	originalProjects []*plan.Expr,
 ) ([]*plan.Expr, error) {
 	normalized := make([]*plan.Expr, len(projects))
 	for i, project := range projects {
-		if fn := project.GetF(); fn != nil && fn.Func != nil &&
+		if fn := originalProjects[i].GetF(); fn != nil && fn.Func != nil &&
 			strings.EqualFold(fn.Func.ObjName, "grouping") {
 			normalized[i] = DeepCopyExpr(project)
 			continue
@@ -7065,6 +7060,55 @@ func (builder *QueryBuilder) appendProjectionNode(
 		NotCacheable: notCacheable,
 	}, ctx)
 
+	newNodeID = nodeID
+	return
+}
+
+func (builder *QueryBuilder) appendGroupingSetDistinctProjectionNode(
+	ctx *BindContext,
+	nodeID int32,
+	resultLen int,
+	notCacheable bool,
+) (newNodeID int32, err error) {
+	for i, proj := range ctx.projects {
+		if nodeID, proj, err = builder.flattenSubqueries(nodeID, proj, ctx); err != nil {
+			return
+		}
+		ctx.projects[i] = proj
+	}
+
+	originalProjects := ctx.projects
+	materializedTag := builder.genNewBindTag()
+	nodeID = builder.appendNode(&plan.Node{
+		NodeType:     plan.Node_PROJECT,
+		ProjectList:  originalProjects,
+		Children:     []int32{nodeID},
+		BindingTags:  []int32{materializedTag},
+		NotCacheable: notCacheable,
+	}, ctx)
+
+	materializedProjects := make([]*plan.Expr, len(originalProjects))
+	for i, project := range originalProjects {
+		materializedProjects[i] = GetColExpr(project.Typ, materializedTag, int32(i))
+	}
+	normalized, normalizeErr := normalizeGroupingSetDistinctProjects(
+		builder.GetContext(),
+		materializedProjects[:resultLen],
+		originalProjects[:resultLen],
+	)
+	if normalizeErr != nil {
+		err = normalizeErr
+		return
+	}
+	ctx.projects = append(normalized, materializedProjects[resultLen:]...)
+
+	nodeID = builder.appendNode(&plan.Node{
+		NodeType:     plan.Node_PROJECT,
+		ProjectList:  ctx.projects,
+		Children:     []int32{nodeID},
+		BindingTags:  []int32{ctx.projectTag},
+		NotCacheable: notCacheable,
+	}, ctx)
 	newNodeID = nodeID
 	return
 }
