@@ -857,10 +857,20 @@ func isLegalLine(param *tree.ExternParam, cols []*plan.ColDef, fields []csvparse
 }
 
 func makeType(typ *plan.Type, flag bool) types.Type {
-	if flag {
+	if flag && !isDirectParallelLoadType(types.T(typ.Id)) {
 		return types.New(types.T_varchar, 0, 0)
 	}
 	return types.New(types.T(typ.Id), typ.Width, typ.Scale)
+}
+
+// isDirectParallelLoadType identifies types that must be decoded by the
+// external scan even when LOAD DATA is parallel.  Decoding vector values as
+// varchar first retains both the CSV representation and the binary vector in
+// the pipeline while the project casts the value.  Vectors are already parsed
+// by getColData in the non-parallel path, so keeping their target type here
+// avoids that duplicate large allocation.
+func isDirectParallelLoadType(id types.T) bool {
+	return id == types.T_array_float32 || id == types.T_array_float64
 }
 
 func getRealAttrCnt(attrs []plan.ExternAttr) int {
@@ -1160,7 +1170,7 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 		return moerr.NewInternalErrorf(param.Ctx, "Data too long for column '%s' at row %d", colName, rowIdx+1)
 	}
 
-	if param.ParallelLoad {
+	if param.ParallelLoad && !isDirectParallelLoadType(id) {
 		err := vector.AppendBytes(vec, []byte(field.Val), false, mp)
 		if err != nil {
 			return err

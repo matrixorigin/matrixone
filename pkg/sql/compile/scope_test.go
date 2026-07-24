@@ -555,6 +555,21 @@ func TestCompileExternScanParallelWrite(t *testing.T) {
 	require.NoError(t, checkScopeWithExpectedList(rs[0].PreScopes[0], []vm.OpType{vm.External, vm.Dispatch}))
 }
 
+func TestGetLoadWriteS3ParallelSizeCapsLoad(t *testing.T) {
+	testCompile := NewMockCompile(t)
+	testCompile.ncpu = 16
+	testCompile.anal = &AnalyzeModule{qry: &plan.Query{}}
+	n := &plan.Node{Stats: &plan.Stats{
+		Cost:    float64(colexec.WriteS3Threshold * 16),
+		Rowsize: 1,
+	}}
+
+	require.Equal(t, 16, testCompile.getLoadWriteS3ParallelSize(n, 16))
+
+	testCompile.anal.qry.LoadTag = true
+	require.Equal(t, loadWriteS3ParallelSizeLimit, testCompile.getLoadWriteS3ParallelSize(n, 16))
+}
+
 // TestCompileExternScanParallelWriteSourceScopeHasCorrectAddr verifies the
 // regression fix for #25554: compileExternScanParallelWrite constructs the
 // source scope with the current CN address so sameExecutionNode correctly
@@ -627,6 +642,29 @@ func TestConstructLocalDispatchFromScopesRejectsRemoteTarget(t *testing.T) {
 	require.Equal(t, beforeNilBatchCnt, untouchedTarget.Proc.Reg.MergeReceivers[0].NilBatchCnt,
 		"validation failure must not partially mutate earlier targets")
 	require.Empty(t, remoteTarget.RemoteReceivRegInfos)
+}
+
+func TestNewMergeScopeLimitsLoadReceiverChannelBuffer(t *testing.T) {
+	testCompile := NewMockCompile(t)
+	testCompile.anal = &AnalyzeModule{qry: &plan.Query{}}
+
+	normalScope := &Scope{
+		NodeInfo: engine.Node{Addr: "cn1:6001", Mcpu: 8},
+		Proc:     testCompile.proc.NewNoContextChildProc(0),
+	}
+	normalMerge := testCompile.newMergeScope([]*Scope{normalScope})
+	_, normalCap := process.WaitRegisterChannelState(normalMerge.Proc.Reg.MergeReceivers[0])
+	require.Equal(t, 8, normalCap)
+
+	loadProc := testCompile.proc.NewNoContextChildProc(0)
+	loadProc.Base.LoadTag = true
+	loadScope := &Scope{
+		NodeInfo: engine.Node{Addr: "cn1:6001", Mcpu: 8},
+		Proc:     loadProc,
+	}
+	loadMerge := testCompile.newMergeScope([]*Scope{loadScope})
+	_, loadCap := process.WaitRegisterChannelState(loadMerge.Proc.Reg.MergeReceivers[0])
+	require.Equal(t, loadMergeReceiverChannelBufferSize, loadCap)
 }
 
 func TestConstructLocalDispatchFromScopesRejectsInvalidInputs(t *testing.T) {
@@ -2422,4 +2460,51 @@ func TestRuntimeFilterResultKeepsItsOriginatingSpec(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestShuffleJoinStageNodesKeepsSinkScanReceiversLocal(t *testing.T) {
+	c := NewMockCompile(t)
+	c.addr = "cn-local:6001"
+	c.cnList = engine.Nodes{
+		{Id: "cn-local", Addr: "cn-local:6001", Mcpu: 8},
+		{Id: "cn-remote", Addr: "cn-remote:6001", Mcpu: 8},
+	}
+
+	sinkMerge := merge.NewArgument().WithSinkScan(true)
+	root := projection.NewArgument()
+	root.AppendChild(sinkMerge)
+	sinkScope := &Scope{
+		RootOp:   root,
+		NodeInfo: engine.Node{Id: "cn-local", Addr: "cn-local:6001", Mcpu: 1},
+	}
+
+	stageNodes, local := c.shuffleJoinStageNodes([]*Scope{sinkScope}, nil)
+	require.True(t, local)
+	require.Len(t, stageNodes, 1)
+	require.Equal(t, "cn-local:6001", stageNodes[0].Addr)
+
+	normalScope := &Scope{RootOp: merge.NewArgument()}
+	stageNodes, local = c.shuffleJoinStageNodes([]*Scope{normalScope}, nil)
+	require.False(t, local)
+	require.Len(t, stageNodes, 2)
+}
+
+func TestAttachShuffleDispatchSourceFallsBackToFirstReceiver(t *testing.T) {
+	receivers := []*Scope{
+		{NodeInfo: engine.Node{Id: "cn-local", Addr: "cn-local:6001", Mcpu: 1}},
+		{NodeInfo: engine.Node{Id: "cn-local", Addr: "cn-local:6001", Mcpu: 1}},
+	}
+	remoteSource := &Scope{NodeInfo: engine.Node{Id: "cn-remote", Addr: "cn-remote:6001", Mcpu: 8}}
+
+	attachShuffleDispatchSource(receivers, remoteSource, true)
+	require.Equal(t, []*Scope{remoteSource}, receivers[0].PreScopes)
+	require.Empty(t, receivers[1].PreScopes)
+
+	localSource := &Scope{NodeInfo: engine.Node{Id: "cn-local", Addr: "cn-local:6001", Mcpu: 8}}
+	attachShuffleDispatchSource(receivers[1:], localSource, false)
+	require.Equal(t, []*Scope{localSource}, receivers[1].PreScopes)
+
+	unmatched := []*Scope{{NodeInfo: engine.Node{Id: "cn-local", Addr: "cn-local:6001", Mcpu: 1}}}
+	attachShuffleDispatchSource(unmatched, remoteSource, false)
+	require.Empty(t, unmatched[0].PreScopes)
 }

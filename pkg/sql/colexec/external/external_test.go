@@ -1820,3 +1820,30 @@ func Test_getColData_VecDimensionCheck(t *testing.T) {
 		})
 	}
 }
+
+func TestGetColDataParallelLoadVectorIsDecodedDirectly(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	vecTyp := types.New(types.T_array_float32, 3, 0)
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vector.NewVec(vecTyp)
+	defer bat.Clean(proc.Mp())
+
+	param := &ExternalParam{ExParamConst: ExParamConst{
+		ParallelLoad: true,
+		Cols:         []*plan.ColDef{{Typ: plan.Type{Id: int32(types.T_array_float32), Width: 3}}},
+		Ctx:          context.Background(),
+		Extern:       &tree.ExternParam{},
+	}}
+	attr := plan.ExternAttr{ColIndex: 0, ColName: "v", ColFieldIndex: 0}
+	require.NoError(t, getColData(bat, []csvparser.Field{{Val: "[1,2,3]"}}, 0, param, proc.Mp(), attr, proc))
+	require.Equal(t, []float32{1, 2, 3}, types.BytesToArray[float32](bat.Vecs[0].GetBytesAt(0)))
+}
+
+func TestMakeTypeParallelLoadKeepsVectorType(t *testing.T) {
+	vectorType := makeType(&plan.Type{Id: int32(types.T_array_float32), Width: 3}, true)
+	require.Equal(t, types.T_array_float32, vectorType.Oid)
+	require.Equal(t, int32(3), vectorType.Width)
+	require.Equal(t, types.T_varchar, makeType(&plan.Type{Id: int32(types.T_int64)}, true).Oid)
+}

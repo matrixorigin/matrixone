@@ -3274,3 +3274,24 @@ func TestGroupShuffleBucketsByCNIfNeeded_Gating(t *testing.T) {
 	c.cnList = engine.Nodes{engine.Node{Addr: "cn1:6001", Mcpu: 2}}
 	require.Equal(t, 4, len(c.groupShuffleBucketsByCNIfNeeded(ss)))
 }
+
+func TestCoordinatorLocalShuffleAttachesRemoteDispatchSource(t *testing.T) {
+	c := NewMockCompile(t)
+	proc := c.proc
+	receivers := make([]*Scope, 2)
+	for i := range receivers {
+		receivers[i] = &Scope{
+			Magic:    Remote,
+			NodeInfo: engine.Node{Addr: "cn-local:6001", Mcpu: 1},
+			Proc:     proc.NewContextChildProc(1),
+		}
+		receivers[i].setRootOperator(merge.NewArgument())
+	}
+
+	remoteSource := newDispatchSrcScopeForTest(proc, "cn-remote:6001", nil, receivers)
+	attachShuffleDispatchSource(receivers, remoteSource, true)
+
+	require.Contains(t, receivers[0].PreScopes, remoteSource)
+	require.True(t, checkPipelineStandaloneExecutableAtRemote(remoteSource),
+		"remote source only has remote receiver routes and must remain remotely executable")
+}
