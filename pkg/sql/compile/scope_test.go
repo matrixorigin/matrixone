@@ -577,23 +577,49 @@ func TestCompileExternValueScanUsesConfiguredWorkloadTarget(t *testing.T) {
 func TestWorkloadPolicyKeepsLocalOnlyPlanNodesOnConfiguredTarget(t *testing.T) {
 	testCompile := NewMockCompile(t)
 	testCompile.addr = "tp-local:6001"
-	testCompile.execType = plan2.ExecTypeAP_ONECN
+	testCompile.execType = plan2.ExecTypeAP_MULTICN
 	testCompile.anal = &AnalyzeModule{qry: &plan.Query{}}
 	testCompile.pn = &plan.Plan{
 		Plan: &plan.Plan_Query{Query: &plan.Query{}},
 	}
-	testCompile.cnList = engine.Nodes{{
-		Id: "ap-remote", Addr: "ap-remote:6001", Mcpu: 8,
-	}}
+	testCompile.cnList = engine.Nodes{
+		{Id: "ap-remote", Addr: "ap-remote:6001", Mcpu: 8},
+		{Id: "ap-remote-2", Addr: "ap-remote-2:6001", Mcpu: 4},
+	}
 	testCompile.queryPlacement = schedule.QueryDecision{
 		WorkloadPolicy: schedule.EffectiveWorkloadPolicy{
 			Applied: true,
-			Routing: schedule.WorkloadRoutingSingle,
+			Routing: schedule.WorkloadRoutingMulti,
 		},
+	}
+
+	sourceNode := testCompile.singleSourceExecutionNode()
+	require.Equal(t, "ap-remote", sourceNode.Id)
+	require.Equal(t, "ap-remote:6001", sourceNode.Addr)
+	require.Equal(t, 8, testCompile.executionNodeCPU(sourceNode))
+
+	sourceScopes, err := testCompile.compileSourceScanWithSizeLoader(
+		&plan.Node{TableDef: &plan.TableDef{}},
+		func(
+			_ context.Context,
+			configs map[string]interface{},
+		) (int64, error) {
+			require.Empty(t, configs)
+			return 2 * StreamMaxInterval, nil
+		},
+	)
+	require.NoError(t, err)
+	require.Len(t, sourceScopes, 2)
+	for _, scope := range sourceScopes {
+		require.Equal(t, "ap-remote", scope.NodeInfo.Id)
+		require.Equal(t, "ap-remote:6001", scope.NodeInfo.Addr)
+		require.Equal(t, 1, scope.NodeInfo.Mcpu)
+		require.Equal(t, Remote, scope.Magic)
 	}
 
 	valueScopes, err := testCompile.compileValueScan(&plan.Node{})
 	require.NoError(t, err)
+	require.Equal(t, "ap-remote", valueScopes[0].NodeInfo.Id)
 	require.Equal(t, "ap-remote:6001", valueScopes[0].NodeInfo.Addr)
 	require.Equal(t, 1, valueScopes[0].NodeInfo.Mcpu)
 	require.Equal(t, Remote, valueScopes[0].Magic)
@@ -605,9 +631,21 @@ func TestWorkloadPolicyKeepsLocalOnlyPlanNodesOnConfiguredTarget(t *testing.T) {
 	}
 	tableScopes, err := testCompile.compileSingleTableFunction(tableFunctionNode)
 	require.NoError(t, err)
+	require.Equal(t, "ap-remote", tableScopes[0].NodeInfo.Id)
 	require.Equal(t, "ap-remote:6001", tableScopes[0].NodeInfo.Addr)
 	require.Equal(t, 1, tableScopes[0].NodeInfo.Mcpu)
 	require.Equal(t, Remote, tableScopes[0].Magic)
+
+	testCompile.queryPlacement = schedule.QueryDecision{}
+	legacyNode := testCompile.singleSourceExecutionNode()
+	require.Equal(t, "tp-local:6001", legacyNode.Addr)
+	legacyScope := testCompile.constructWorkloadScopeForExternal(
+		"legacy-external:6001",
+		false,
+	)
+	require.Equal(t, "legacy-external:6001", legacyScope.NodeInfo.Addr)
+	require.Equal(t, 1, legacyScope.NodeInfo.Mcpu)
+	require.Equal(t, Merge, legacyScope.Magic)
 }
 
 func TestWorkloadPolicyKeepsGenerateSeriesAndInfileFanoutInsideTargetPool(t *testing.T) {
