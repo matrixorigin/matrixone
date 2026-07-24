@@ -15,6 +15,7 @@
 package logservicedriver
 
 import (
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -73,6 +74,28 @@ func TestNewClientPoolPanicsWhenFactoryAlwaysFail(t *testing.T) {
 	require.PanicsWithError(t, moerr.NewInternalErrorNoCtx("always fail").Error(), func() {
 		newClientPool(cfg)
 	})
+}
+
+func TestNewClientDoesNotRetryBadConfig(t *testing.T) {
+	var attempts atomic.Int32
+	expected := moerr.NewBadConfigNoCtx("invalid log service client config")
+	wrapped := fmt.Errorf("create client: %w", expected)
+
+	client, err := NewClient(
+		func() (logservice.Client, error) {
+			attempts.Add(1)
+			return nil, wrapped
+		},
+		64,
+		DefaultRetryTimes,
+		DefaultRetryInterval,
+		DefaultRetryDuration,
+	)
+
+	require.Nil(t, client)
+	require.ErrorIs(t, err, expected)
+	require.EqualError(t, err, wrapped.Error())
+	require.Equal(t, int32(1), attempts.Load())
 }
 
 func TestGetOnFlyDoesNotBlockPoolGetWhileCreatingClient(t *testing.T) {

@@ -87,5 +87,7 @@ func TestNewTestServicesUseIndependentPorts(t *testing.T) {
 		require.NoError(t, service2.Close())
 	})
 
+	require.NotEqual(t, service1.store.cfg.RaftServiceAddr(), service2.store.cfg.RaftServiceAddr())
+	require.NotEqual(t, service1.store.cfg.GossipServiceAddr(), service2.store.cfg.GossipServiceAddr())
 	require.NotEqual(t, ccfg1.ServiceAddresses, ccfg2.ServiceAddresses)
 }

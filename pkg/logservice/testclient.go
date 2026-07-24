@@ -25,20 +25,23 @@ import (
 )
 
 func NewTestService(fs vfs.FS) (*Service, ClientConfig, error) {
+	serviceID := uuid.New().String()
+	runtime.SetupServiceBasedRuntime(serviceID, runtime.ServiceRuntime(""))
+
 	var cfg Config
 	genCfg := func() Config {
 		cfg = DefaultConfig()
-		cfg.UUID = uuid.New().String()
+		cfg.UUID = serviceID
 		cfg.RTTMillisecond = 10
 		cfg.RaftAddress = getTestRaftAddress()
 		cfg.GossipPort = getTestGossipPort()
-		cfg.GossipSeedAddresses = []string{getTestGossipAddress(cfg.GossipPort)}
+		cfg.GossipSeedAddresses = []string{
+			getTestGossipAddress(cfg.GossipPort),
+		}
 		cfg.DeploymentID = 1
 		cfg.FS = fs
 		cfg.LogServicePort = getTestServicePort()
 		cfg.DisableWorkers = true
-
-		runtime.SetupServiceBasedRuntime(cfg.UUID, runtime.ServiceRuntime(""))
 		return cfg
 	}
 

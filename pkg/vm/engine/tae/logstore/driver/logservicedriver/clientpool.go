@@ -16,6 +16,7 @@ package logservicedriver
 
 import (
 	"context"
+	"errors"
 	"io"
 	"sync"
 	"time"
@@ -144,6 +145,13 @@ func NewClient(
 
 		logutil.Errorf("WAL-Replay failed to create log service client (attempt %d/%d): %v",
 			attempt+1, retryTimes, err)
+
+		// Configuration errors are permanent. Retrying them only delays startup
+		// failure and can hide the original initialization error for minutes.
+		var moErr *moerr.Error
+		if errors.As(err, &moErr) && moErr.ErrorCode() == moerr.ErrBadConfig {
+			return nil, err
+		}
 
 		// Don't sleep after the last attempt
 		if attempt < retryTimes-1 {
