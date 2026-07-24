@@ -15,6 +15,7 @@
 package shuffle
 
 import (
+	"sync"
 	"testing"
 	"time"
 
@@ -339,6 +340,37 @@ func TestShufflePoolPeakIsReportedByExactlyOneHolder(t *testing.T) {
 	require.Zero(t, args[0].OpAnalyzer.GetOpStats().MemorySize)
 	args[1].Reset(proc, false, nil)
 	require.Positive(t, args[1].OpAnalyzer.GetOpStats().MemorySize)
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestShufflePoolMemoryAccountingAcrossShards(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	sp := NewShufflePool(64, 64, false)
+
+	batches := make([]*batch.Batch, 64)
+	var expected int64
+	for i := range batches {
+		batches[i] = batch.NewOffHeapWithSize(1)
+		batches[i].Vecs[0] = vector.NewOffHeapVecWithType(types.T_int64.ToType())
+		require.NoError(t, batches[i].Vecs[0].PreExtend(128+i, proc.Mp()))
+		expected += int64(batches[i].Allocated())
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(len(batches))
+	for _, bat := range batches {
+		go func() {
+			defer wg.Done()
+			sp.putBatchToPool(bat, proc.Mp())
+		}()
+	}
+	wg.Wait()
+
+	require.Equal(t, expected, sp.current.Load())
+	require.Equal(t, expected, sp.memoryPeak())
+	sp.abort(proc.Mp())
+	require.Zero(t, sp.current.Load())
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 

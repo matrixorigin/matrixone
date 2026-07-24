@@ -18,13 +18,23 @@ import (
 	"context"
 	"sync"
 	"sync/atomic"
+	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"golang.org/x/sys/cpu"
 )
+
+const shuffleMemoryShardCount = 64
+
+type shuffleMemoryShard struct {
+	sync.Mutex
+	tracked map[*batch.Batch]int64
+	_       cpu.CacheLinePad
+}
 
 type ShufflePool struct {
 	bucketNum  int32
@@ -62,10 +72,9 @@ type ShufflePool struct {
 	readyBuckets       chan int32
 	finalCursor        atomic.Uint32
 
-	memoryLock sync.Mutex
-	tracked    map[*batch.Batch]int64
-	current    int64
-	peak       int64
+	memoryShards [shuffleMemoryShardCount]shuffleMemoryShard
+	current      atomic.Int64
+	peak         atomic.Int64
 }
 
 func NewShufflePool(bucketNum int32, maxHolders int32, drainAll bool) *ShufflePool {
@@ -87,7 +96,6 @@ func NewShufflePool(bucketNum int32, maxHolders int32, drainAll bool) *ShufflePo
 		spaceWaiter:        make(chan struct{}),
 		bucketReadyCounts:  make([]int, bucketNum),
 		bucketSpaceWaiters: make([]chan struct{}, bucketNum),
-		tracked:            make(map[*batch.Batch]int64),
 		producers:          make(map[int32]context.CancelCauseFunc),
 	}
 	if allBuckets {
@@ -98,6 +106,9 @@ func NewShufflePool(bucketNum int32, maxHolders int32, drainAll bool) *ShufflePo
 		sp.batchWaiters[i] = make(chan bool, 1)
 		sp.endingWaiters[i] = make(chan bool, 1)
 		sp.bucketSpaceWaiters[i] = make(chan struct{})
+	}
+	for i := range sp.memoryShards {
+		sp.memoryShards[i].tracked = make(map[*batch.Batch]int64)
 	}
 	return sp
 }
@@ -321,41 +332,54 @@ func (sp *ShufflePool) getBatchFromPool() *batch.Batch {
 }
 
 func (sp *ShufflePool) syncBatch(buf *batch.Batch) {
-	sp.memoryLock.Lock()
-	defer sp.memoryLock.Unlock()
+	shard := sp.memoryShard(buf)
+	shard.Lock()
 	allocated := int64(buf.Allocated())
-	previous := sp.tracked[buf]
-	sp.tracked[buf] = allocated
-	sp.current += allocated - previous
-	sp.peak = max(sp.peak, sp.current)
+	previous := shard.tracked[buf]
+	shard.tracked[buf] = allocated
+	shard.Unlock()
+	sp.addMemory(allocated - previous)
 }
 
 func (sp *ShufflePool) syncBatchSetFrom(bs *batch.BatchSet, start int) {
-	sp.memoryLock.Lock()
-	defer sp.memoryLock.Unlock()
 	for i := start; i < bs.Length(); i++ {
-		buf := bs.Get(i)
-		allocated := int64(buf.Allocated())
-		previous := sp.tracked[buf]
-		sp.tracked[buf] = allocated
-		sp.current += allocated - previous
-		sp.peak = max(sp.peak, sp.current)
+		sp.syncBatch(bs.Get(i))
 	}
 }
 
 func (sp *ShufflePool) forgetBatch(buf *batch.Batch) {
-	sp.memoryLock.Lock()
-	defer sp.memoryLock.Unlock()
-	if allocated, ok := sp.tracked[buf]; ok {
-		sp.current -= allocated
-		delete(sp.tracked, buf)
+	shard := sp.memoryShard(buf)
+	shard.Lock()
+	allocated, ok := shard.tracked[buf]
+	if ok {
+		delete(shard.tracked, buf)
+	}
+	shard.Unlock()
+	if ok {
+		sp.current.Add(-allocated)
+	}
+}
+
+func (sp *ShufflePool) memoryShard(buf *batch.Batch) *shuffleMemoryShard {
+	idx := (uintptr(unsafe.Pointer(buf)) >> 6) & (shuffleMemoryShardCount - 1)
+	return &sp.memoryShards[idx]
+}
+
+func (sp *ShufflePool) addMemory(delta int64) {
+	if delta == 0 {
+		return
+	}
+	current := sp.current.Add(delta)
+	for {
+		peak := sp.peak.Load()
+		if current <= peak || sp.peak.CompareAndSwap(peak, current) {
+			return
+		}
 	}
 }
 
 func (sp *ShufflePool) memoryPeak() int64 {
-	sp.memoryLock.Lock()
-	defer sp.memoryLock.Unlock()
-	return sp.peak
+	return sp.peak.Load()
 }
 
 func (sp *ShufflePool) reserveReady(bucket int32, count int) (<-chan struct{}, bool) {
