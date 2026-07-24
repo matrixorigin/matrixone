@@ -17,12 +17,15 @@
 package ivfpq
 
 import (
+	"context"
 	"math"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/cuvs"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/cachegen"
 	cuvscdc "github.com/matrixorigin/matrixone/pkg/vectorindex/cuvs"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
@@ -37,6 +40,15 @@ type IvfpqSearch[B, Q cuvs.VectorType] struct {
 	Overflow      cuvs.BruteForceOverflow[B] // CDC insert overflow; nil when no overflow records exist
 	Devices       []int
 	ThreadsSearch int64
+
+	// Generation captured at Load for the cross-CN cache freshness check (IsStale): a
+	// REBUILD/MERGE bumps MAX(metadata.timestamp); a CDC append bumps the (CdcTailId,tag=1)
+	// tail chunk_id. cnUUID/accountID re-query in the background. genValid=false ⇒ no-op.
+	cnUUID     string
+	accountID  uint32
+	loadedTs   int64
+	loadedTail int64
+	genValid   bool
 }
 
 func NewIvfpqSearch[B, Q cuvs.VectorType](idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig, devices []int) *IvfpqSearch[B, Q] {
@@ -170,7 +182,34 @@ func (s *IvfpqSearch[B, Q]) Load(sqlproc *sqlexec.SqlProcess) (err error) {
 		return err
 	}
 	s.MultiIndex, err = s.buildMultiIndex()
-	return err
+	if err != nil {
+		return err
+	}
+	// Capture the generation + durable handles for IsStale (best-effort; same txn as the load).
+	s.cnUUID = sqlproc.GetService()
+	if acc, e := sqlproc.GetAccountID(); e == nil {
+		if ts, tail, e2 := cachegen.LoadCdcGeneration(sqlproc, s.Tblcfg); e2 == nil {
+			s.accountID, s.loadedTs, s.loadedTail, s.genValid = acc, ts, tail, true
+		}
+	}
+	return nil
+}
+
+// IsStale reports whether the loaded index has fallen behind the persisted one (REBUILD bumps
+// the metadata timestamp; a CDC append bumps the tag=1 tail chunk_id), for the VectorIndexCache
+// cross-CN freshness check. Runs on the housekeeping goroutine via a background auto-commit txn.
+// A query error ⇒ (true, err): the index was likely dropped/rebuilt, reclaim the dead entry.
+func (s *IvfpqSearch[B, Q]) IsStale() (bool, error) {
+	if !s.genValid || s.cnUUID == "" {
+		return false, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	ts, tail, err := cachegen.QueryCdcGeneration(ctx, s.cnUUID, s.accountID, s.Tblcfg)
+	if err != nil {
+		return true, err
+	}
+	return ts != s.loadedTs || tail != s.loadedTail, nil
 }
 
 // loadCdcTail mirrors cagra.CagraSearch.loadCdcTail — see that for the

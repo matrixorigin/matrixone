@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/cachegen"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
@@ -304,7 +305,7 @@ func (s *HnswSearch[T]) Load(sqlproc *sqlexec.SqlProcess) error {
 	// matches the loaded snapshot.
 	s.cnUUID = sqlproc.GetService()
 	if acc, e := sqlproc.GetAccountID(); e == nil {
-		if ts, tail, e2 := vectorindex.LoadCdcGeneration(sqlproc, s.Tblcfg); e2 == nil {
+		if ts, tail, e2 := cachegen.LoadCdcGeneration(sqlproc, s.Tblcfg); e2 == nil {
 			s.accountID, s.loadedTs, s.loadedTail, s.genValid = acc, ts, tail, true
 		}
 	}
@@ -322,7 +323,7 @@ func (s *HnswSearch[T]) IsStale() (bool, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	ts, tail, err := vectorindex.QueryCdcGeneration(ctx, s.cnUUID, s.accountID, s.Tblcfg)
+	ts, tail, err := cachegen.QueryCdcGeneration(ctx, s.cnUUID, s.accountID, s.Tblcfg)
 	if err != nil {
 		return true, err
 	}
