@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"math"
 	"sync"
 	"time"
@@ -67,12 +66,8 @@ func NewGetTxnRequest(ks [][]byte) txn.TxnRequest {
 type EventType int
 
 var (
-	// PrepareType prepare event
-	PrepareType = EventType(0)
 	// CommitType commit event
 	CommitType = EventType(1)
-	// CommittingType committing type
-	CommittingType = EventType(2)
 	// RollbackType rollback type
 	RollbackType = EventType(3)
 )
@@ -133,20 +128,18 @@ func (kv *KVTxnStorage) GetUncommittedKV() *KV {
 	return kv.uncommitted
 }
 
-func (kv *KVTxnStorage) StartRecovery(ctx context.Context, c chan txn.TxnMeta) {
-	defer close(c)
-
+func (kv *KVTxnStorage) recover(ctx context.Context) error {
 	if kv.recoverFrom < 1 {
-		return
+		return nil
 	}
 
 	for {
 		logs, lsn, err := kv.logClient.Read(ctx, kv.recoverFrom, math.MaxUint64)
 		if err != nil {
 			if ctx.Err() != nil {
-				return
+				return context.Cause(ctx)
 			}
-			panic(err)
+			return err
 		}
 
 		for _, log := range logs {
@@ -154,48 +147,25 @@ func (kv *KVTxnStorage) StartRecovery(ctx context.Context, c chan txn.TxnMeta) {
 				klog := &KVLog{}
 				klog.MustUnmarshal(log.Data)
 
-				switch klog.Txn.Status {
-				case txn.TxnStatus_Prepared:
-					req := &message{}
-					req.Keys = klog.Keys
-					req.Values = klog.Values
-					_, err := kv.Write(ctx, klog.Txn, setOpCode, req.mustMarshal())
-					if err != nil {
-						panic(err)
-					}
-				case txn.TxnStatus_Committed:
+				if klog.Txn.Status == txn.TxnStatus_Committed {
 					kv.Lock()
-					if len(klog.Keys) == 0 {
-						kv.commitKeysLocked(klog.Txn, kv.getWriteKeysLocked(klog.Txn))
-					} else {
+					if len(klog.Keys) > 0 {
 						kv.commitWithKVLogLocked(klog)
 					}
 					kv.Unlock()
-				case txn.TxnStatus_Committing:
-					kv.Lock()
-					newTxn := kv.changeUncommittedTxnStatusLocked(klog.Txn.ID, txn.TxnStatus_Committing)
-					newTxn.CommitTS = klog.Txn.CommitTS
-					kv.Unlock()
-				default:
-					panic(fmt.Sprintf("invalid txn status %s", klog.Txn.Status.String()))
-				}
-
-				select {
-				case <-ctx.Done():
-					return
-				case c <- klog.Txn:
 				}
 			}
 		}
 
 		if lsn == kv.recoverFrom {
-			return
+			return nil
 		}
+		kv.recoverFrom = lsn
 	}
 }
 
 func (kv *KVTxnStorage) Start() error {
-	return nil
+	return kv.recover(context.Background())
 }
 
 func (kv *KVTxnStorage) Close(ctx context.Context) error {
@@ -218,12 +188,6 @@ func (kv *KVTxnStorage) Read(ctx context.Context, txnMeta txn.TxnMeta, op uint32
 
 	result := newReadResult(req.Keys, txnMeta, kv.continueRead)
 	for idx, key := range req.Keys {
-		if t, ok := kv.uncommittedKeyTxnMap[string(key)]; ok && needWait(*t, txnMeta) {
-			result.waitTxns = append(result.waitTxns, t.ID)
-			result.unreaded = append(result.unreaded, idx)
-			continue
-		}
-
 		result.values[idx] = kv.readValue(key, txnMeta)
 	}
 	return result, nil
@@ -240,10 +204,6 @@ func (kv *KVTxnStorage) continueRead(rs *readResult) bool {
 	for _, idx := range rs.unreaded {
 		key := rs.keys[idx]
 		txnMeta := rs.txnMeta
-		if t, ok := kv.uncommittedKeyTxnMap[string(key)]; ok && needWait(*t, txnMeta) {
-			return false
-		}
-
 		rs.values[idx] = kv.readValue(key, txnMeta)
 	}
 	return true
@@ -289,59 +249,6 @@ func (kv *KVTxnStorage) Write(ctx context.Context, txnMeta txn.TxnMeta, op uint3
 	return nil, nil
 }
 
-func (kv *KVTxnStorage) Prepare(ctx context.Context, txnMeta txn.TxnMeta) (timestamp.Timestamp, error) {
-	kv.Lock()
-	defer kv.Unlock()
-
-	if _, ok := kv.uncommittedTxn[string(txnMeta.ID)]; !ok {
-		return timestamp.Timestamp{}, moerr.NewMissingTxnNoCtx()
-	}
-
-	txnMeta.PreparedTS, _ = kv.clock.Now()
-	writeKeys := kv.getWriteKeysLocked(txnMeta)
-	if kv.hasConflict(txnMeta.SnapshotTS,
-		timestamp.Timestamp{PhysicalTime: math.MaxInt64, LogicalTime: math.MaxUint32},
-		writeKeys) {
-		return timestamp.Timestamp{}, moerr.NewTxnWriteConflictNoCtx("")
-	}
-
-	log := kv.getLogWithDataLocked(txnMeta)
-	log.Txn.Status = txn.TxnStatus_Prepared
-	lsn, err := kv.saveLog(log)
-	if err != nil {
-		return timestamp.Timestamp{}, err
-	}
-
-	newTxn := kv.changeUncommittedTxnStatusLocked(txnMeta.ID, txn.TxnStatus_Prepared)
-	newTxn.PreparedTS = txnMeta.PreparedTS
-	newTxn.TNShards = txnMeta.TNShards
-	kv.recoverFrom = lsn
-	kv.eventC <- Event{Txn: *newTxn, Type: PrepareType}
-	return txnMeta.PreparedTS, nil
-}
-
-func (kv *KVTxnStorage) Committing(ctx context.Context, txnMeta txn.TxnMeta) error {
-	kv.Lock()
-	defer kv.Unlock()
-
-	if _, ok := kv.uncommittedTxn[string(txnMeta.ID)]; !ok {
-		return moerr.NewMissingTxnNoCtx()
-	}
-
-	log := &KVLog{Txn: txnMeta}
-	log.Txn.Status = txn.TxnStatus_Committing
-	lsn, err := kv.saveLog(log)
-	if err != nil {
-		return err
-	}
-
-	newTxn := kv.changeUncommittedTxnStatusLocked(txnMeta.ID, txn.TxnStatus_Committing)
-	newTxn.CommitTS = txnMeta.CommitTS
-	kv.recoverFrom = lsn
-	kv.eventC <- Event{Txn: *newTxn, Type: CommittingType}
-	return nil
-}
-
 func (kv *KVTxnStorage) Commit(
 	ctx context.Context,
 	txnMeta txn.TxnMeta,
@@ -364,14 +271,12 @@ func (kv *KVTxnStorage) Commit(
 	}
 
 	var log *KVLog
-	if txnMeta.Status == txn.TxnStatus_Active {
-		log = kv.getLogWithDataLocked(txnMeta)
-	} else if txnMeta.Status == txn.TxnStatus_Prepared ||
-		txnMeta.Status == txn.TxnStatus_Committing {
-		log = &KVLog{Txn: txnMeta}
-	} else {
-		panic(fmt.Sprintf("commit with invalid status: %s", txnMeta.Status))
+	if txnMeta.Status != txn.TxnStatus_Active {
+		return timestamp.Timestamp{}, moerr.NewNotSupportedNoCtxf(
+			"commit transaction in status %s", txnMeta.Status,
+		)
 	}
+	log = kv.getLogWithDataLocked(txnMeta)
 	log.Txn.Status = txn.TxnStatus_Committed
 	log.Txn.CommitTS = txnMeta.CommitTS
 	lsn, err := kv.saveLog(log)
@@ -496,26 +401,6 @@ func (kv *KVTxnStorage) commitKeysLocked(txnMeta txn.TxnMeta, keys [][]byte) {
 		kv.committed.Set(key, txnMeta.CommitTS, v)
 	}
 	delete(kv.uncommittedTxn, string(txnMeta.ID))
-}
-
-func (kv *KVTxnStorage) changeUncommittedTxnStatusLocked(id []byte, status txn.TxnStatus) *txn.TxnMeta {
-	newTxn := kv.uncommittedTxn[string(id)]
-	newTxn.Status = status
-	return newTxn
-}
-
-func needWait(writeTxn, readTxn txn.TxnMeta) bool {
-	if bytes.Equal(writeTxn.ID, readTxn.ID) {
-		return false
-	}
-
-	switch writeTxn.Status {
-	case txn.TxnStatus_Prepared:
-		return readTxn.SnapshotTS.Greater(writeTxn.PreparedTS)
-	case txn.TxnStatus_Committing:
-		return readTxn.SnapshotTS.Greater(writeTxn.CommitTS)
-	}
-	return false
 }
 
 var (

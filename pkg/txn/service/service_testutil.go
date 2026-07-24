@@ -189,15 +189,7 @@ func (s *TestSender) AddTxnService(ts TxnService) {
 	s.router[s.getRouteKey(txn.TxnMethod_Write, ts.Shard())] = ts.Write
 	s.router[s.getRouteKey(txn.TxnMethod_Commit, ts.Shard())] = ts.Commit
 	s.router[s.getRouteKey(txn.TxnMethod_Rollback, ts.Shard())] = ts.Rollback
-	s.router[s.getRouteKey(txn.TxnMethod_Prepare, ts.Shard())] = ts.Prepare
-	s.router[s.getRouteKey(txn.TxnMethod_GetStatus, ts.Shard())] = ts.GetStatus
-	s.router[s.getRouteKey(txn.TxnMethod_CommitTNShard, ts.Shard())] = ts.CommitTNShard
-	s.router[s.getRouteKey(txn.TxnMethod_RollbackTNShard, ts.Shard())] = ts.RollbackTNShard
 	s.router[s.getRouteKey(txn.TxnMethod_DEBUG, ts.Shard())] = ts.Debug
-}
-
-func (s *TestSender) setFilter(filter func(*txn.TxnRequest) bool) {
-	s.filter = filter
 }
 
 // Send TxnSender send
@@ -289,56 +281,12 @@ func NewTestCommitRequest(wTxn txn.TxnMeta) txn.TxnRequest {
 	}
 }
 
-// NewTestCommitShardRequest create a commit DNShard request
-func NewTestCommitShardRequest(wTxn txn.TxnMeta) txn.TxnRequest {
-	return txn.TxnRequest{
-		Method: txn.TxnMethod_CommitTNShard,
-		Txn:    wTxn,
-		CommitTNShardRequest: &txn.TxnCommitTNShardRequest{
-			TNShard: wTxn.TNShards[0],
-		},
-	}
-}
-
-// NewTestRollbackShardRequest create a rollback DNShard request
-func NewTestRollbackShardRequest(wTxn txn.TxnMeta) txn.TxnRequest {
-	return txn.TxnRequest{
-		Method: txn.TxnMethod_RollbackTNShard,
-		Txn:    wTxn,
-		RollbackTNShardRequest: &txn.TxnRollbackTNShardRequest{
-			TNShard: wTxn.TNShards[0],
-		},
-	}
-}
-
 // NewTestRollbackRequest create a rollback request
 func NewTestRollbackRequest(wTxn txn.TxnMeta) txn.TxnRequest {
 	return txn.TxnRequest{
 		Method:          txn.TxnMethod_Rollback,
 		Txn:             wTxn,
 		RollbackRequest: &txn.TxnRollbackRequest{},
-	}
-}
-
-// NewTestPrepareRequest create a prepare request
-func NewTestPrepareRequest(wTxn txn.TxnMeta, shard uint64) txn.TxnRequest {
-	return txn.TxnRequest{
-		Method: txn.TxnMethod_Prepare,
-		Txn:    wTxn,
-		PrepareRequest: &txn.TxnPrepareRequest{
-			TNShard: NewTestTNShard(shard),
-		},
-	}
-}
-
-// NewTestGetStatusRequest  create a get status request
-func NewTestGetStatusRequest(wTxn txn.TxnMeta, shard uint64) txn.TxnRequest {
-	return txn.TxnRequest{
-		Method: txn.TxnMethod_GetStatus,
-		Txn:    wTxn,
-		GetStatusRequest: &txn.TxnGetStatusRequest{
-			TNShard: NewTestTNShard(shard),
-		},
 	}
 }
 

@@ -30,9 +30,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	mock_executor "github.com/matrixorigin/matrixone/pkg/util/executor/test"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -64,6 +68,55 @@ func TestApplyTableDetectorOptions(t *testing.T) {
 	assert.Equal(t, DefaultCleanupWarnThreshold, defaultOpts.CleanupWarnThreshold)
 }
 
+func makeConstraintSQLValue(t *testing.T, constraints ...engine.Constraint) string {
+	t.Helper()
+
+	if len(constraints) == 0 {
+		return ""
+	}
+	data, err := (&engine.ConstraintDef{Cts: constraints}).MarshalBinary()
+	require.NoError(t, err)
+	return string(data)
+}
+
+func makeForeignKeyConstraintSQLValue(t *testing.T) string {
+	t.Helper()
+
+	return makeConstraintSQLValue(t, &engine.ForeignKeyDef{
+		Fkeys: []*plan.ForeignKeyDef{
+			{
+				Name:       "fk_child_parent",
+				Cols:       []uint64{2},
+				ForeignTbl: 1000,
+				ForeignCols: []uint64{
+					1,
+				},
+			},
+		},
+	})
+}
+
+func TestTableHasForeignKeyConstraint(t *testing.T) {
+	hasForeignKey, err := tableHasForeignKeyConstraint(nil)
+	require.NoError(t, err)
+	assert.False(t, hasForeignKey)
+
+	primaryKeyOnly := makeConstraintSQLValue(t, &engine.PrimaryKeyDef{
+		Pkey: &plan.PrimaryKeyDef{PkeyColName: "id"},
+	})
+	hasForeignKey, err = tableHasForeignKeyConstraint([]byte(primaryKeyOnly))
+	require.NoError(t, err)
+	assert.False(t, hasForeignKey)
+
+	foreignKey := makeForeignKeyConstraintSQLValue(t)
+	hasForeignKey, err = tableHasForeignKeyConstraint([]byte(foreignKey))
+	require.NoError(t, err)
+	assert.True(t, hasForeignKey)
+
+	_, err = tableHasForeignKeyConstraint([]byte{byte(engine.ForeignKey)})
+	require.Error(t, err)
+}
+
 func TestTableScanner1(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -71,13 +124,14 @@ func TestTableScanner1(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
 
-	bat := batch.New([]string{"tblId", "tblName", "dbId", "dbName", "createSql", "accountId"})
+	bat := batch.New([]string{"tblId", "tblName", "dbId", "dbName", "createSql", "accountId", "constraint"})
 	bat.Vecs[0] = testutil.MakeUint64Vector([]uint64{1}, nil, proc.Mp())
 	bat.Vecs[1] = testutil.MakeVarcharVector([]string{"tblName"}, nil, proc.Mp())
 	bat.Vecs[2] = testutil.MakeUint64Vector([]uint64{1}, nil, proc.Mp())
 	bat.Vecs[3] = testutil.MakeVarcharVector([]string{"dbName"}, nil, proc.Mp())
 	bat.Vecs[4] = testutil.MakeVarcharVector([]string{"createSql"}, nil, proc.Mp())
 	bat.Vecs[5] = testutil.MakeUint32Vector([]uint32{1}, nil, proc.Mp())
+	bat.Vecs[6] = testutil.MakeVarcharVector([]string{""}, nil, proc.Mp())
 	bat.SetRowCount(1)
 	res := executor.Result{
 		Mp:      proc.Mp(),
@@ -154,6 +208,251 @@ func TestTableScanner1(t *testing.T) {
 	err = td.scanTable()
 	assert.NoError(t, err)
 	assert.Equal(t, 0, len(td.Mp))
+}
+
+func TestAuditTableScannerSkipsForeignKeyTable(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	createSQL := `CREATE TABLE child (
+  id BIGINT PRIMARY KEY,
+  parent_id BIGINT,
+  FOREIGN KEY (parent_id) REFERENCES parent(id)
+)`
+
+	bat := batch.New([]string{"tblId", "tblName", "dbId", "dbName", "createSql", "accountId", "constraint"})
+	bat.Vecs[0] = testutil.MakeUint64Vector([]uint64{1001}, nil, proc.Mp())
+	bat.Vecs[1] = testutil.MakeVarcharVector([]string{"child"}, nil, proc.Mp())
+	bat.Vecs[2] = testutil.MakeUint64Vector([]uint64{10}, nil, proc.Mp())
+	bat.Vecs[3] = testutil.MakeVarcharVector([]string{"source_db"}, nil, proc.Mp())
+	bat.Vecs[4] = testutil.MakeVarcharVector([]string{createSQL}, nil, proc.Mp())
+	bat.Vecs[5] = testutil.MakeUint32Vector([]uint32{1}, nil, proc.Mp())
+	bat.Vecs[6] = testutil.MakeVarcharVector([]string{makeForeignKeyConstraintSQLValue(t)}, nil, proc.Mp())
+	bat.SetRowCount(1)
+	res := executor.Result{
+		Mp:      proc.Mp(),
+		Batches: []*batch.Batch{bat},
+	}
+
+	mockSqlExecutor := mock_executor.NewMockSQLExecutor(ctrl)
+	mockSqlExecutor.EXPECT().Exec(
+		gomock.Any(),
+		CDCSQLBuilder.CollectTableInfoSQL("1", "'source_db'", "'child'"),
+		gomock.Any(),
+	).Return(res, nil)
+
+	td := &TableDetector{
+		Mp:                   make(map[uint32]TblMap),
+		Callbacks:            make(map[string]TableCallback),
+		CallBackAccountId:    make(map[string]uint32),
+		SubscribedAccountIds: make(map[uint32][]string),
+		CallBackDbName:       make(map[string][]string),
+		SubscribedDbNames:    make(map[string][]string),
+		CallBackTableName:    make(map[string][]string),
+		SubscribedTableNames: make(map[string][]string),
+		exec:                 mockSqlExecutor,
+		cleanupPeriod:        time.Hour,
+		cleanupWarn:          DefaultCleanupWarnThreshold,
+	}
+	defer td.Close()
+
+	td.mu.Lock()
+	td.registerLocked("audit-task", 1, []string{"source_db"}, []string{"child"}, func(mp map[uint32]TblMap) error {
+		return nil
+	})
+	td.mu.Unlock()
+
+	err := td.scanTable()
+	require.NoError(t, err)
+	assert.Empty(t, td.Mp)
+}
+
+func TestTableScannerDoesNotSkipForeignKeyTextLiteral(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	createSQL := "CREATE TABLE child (note VARCHAR(32) DEFAULT 'foreign key')"
+
+	bat := batch.New([]string{"tblId", "tblName", "dbId", "dbName", "createSql", "accountId", "constraint"})
+	bat.Vecs[0] = testutil.MakeUint64Vector([]uint64{1001}, nil, proc.Mp())
+	bat.Vecs[1] = testutil.MakeVarcharVector([]string{"child"}, nil, proc.Mp())
+	bat.Vecs[2] = testutil.MakeUint64Vector([]uint64{10}, nil, proc.Mp())
+	bat.Vecs[3] = testutil.MakeVarcharVector([]string{"source_db"}, nil, proc.Mp())
+	bat.Vecs[4] = testutil.MakeVarcharVector([]string{createSQL}, nil, proc.Mp())
+	bat.Vecs[5] = testutil.MakeUint32Vector([]uint32{1}, nil, proc.Mp())
+	bat.Vecs[6] = testutil.MakeVarcharVector([]string{""}, nil, proc.Mp())
+	bat.SetRowCount(1)
+	res := executor.Result{
+		Mp:      proc.Mp(),
+		Batches: []*batch.Batch{bat},
+	}
+
+	mockSqlExecutor := mock_executor.NewMockSQLExecutor(ctrl)
+	mockSqlExecutor.EXPECT().Exec(
+		gomock.Any(),
+		CDCSQLBuilder.CollectTableInfoSQL("1", "'source_db'", "'child'"),
+		gomock.Any(),
+	).Return(res, nil)
+
+	td := &TableDetector{
+		Mp:                   make(map[uint32]TblMap),
+		Callbacks:            make(map[string]TableCallback),
+		CallBackAccountId:    make(map[string]uint32),
+		SubscribedAccountIds: make(map[uint32][]string),
+		CallBackDbName:       make(map[string][]string),
+		SubscribedDbNames:    make(map[string][]string),
+		CallBackTableName:    make(map[string][]string),
+		SubscribedTableNames: make(map[string][]string),
+		exec:                 mockSqlExecutor,
+		cleanupPeriod:        time.Hour,
+		cleanupWarn:          DefaultCleanupWarnThreshold,
+	}
+	defer td.Close()
+
+	td.mu.Lock()
+	td.registerLocked("audit-task", 1, []string{"source_db"}, []string{"child"}, func(mp map[uint32]TblMap) error {
+		return nil
+	})
+	td.mu.Unlock()
+
+	err := td.scanTable()
+	require.NoError(t, err)
+	require.Contains(t, td.Mp, uint32(1))
+	assert.Contains(t, td.Mp[1], "source_db.child")
+}
+
+func TestTableScannerSkipsForeignKeyMetadataWithoutCreateSQLText(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	createSQL := "CREATE TABLE child (id BIGINT PRIMARY KEY, parent_id BIGINT)"
+
+	bat := batch.New([]string{"tblId", "tblName", "dbId", "dbName", "createSql", "accountId", "constraint"})
+	bat.Vecs[0] = testutil.MakeUint64Vector([]uint64{1001}, nil, proc.Mp())
+	bat.Vecs[1] = testutil.MakeVarcharVector([]string{"child"}, nil, proc.Mp())
+	bat.Vecs[2] = testutil.MakeUint64Vector([]uint64{10}, nil, proc.Mp())
+	bat.Vecs[3] = testutil.MakeVarcharVector([]string{"source_db"}, nil, proc.Mp())
+	bat.Vecs[4] = testutil.MakeVarcharVector([]string{createSQL}, nil, proc.Mp())
+	bat.Vecs[5] = testutil.MakeUint32Vector([]uint32{1}, nil, proc.Mp())
+	bat.Vecs[6] = testutil.MakeVarcharVector([]string{makeForeignKeyConstraintSQLValue(t)}, nil, proc.Mp())
+	bat.SetRowCount(1)
+	res := executor.Result{
+		Mp:      proc.Mp(),
+		Batches: []*batch.Batch{bat},
+	}
+
+	mockSqlExecutor := mock_executor.NewMockSQLExecutor(ctrl)
+	mockSqlExecutor.EXPECT().Exec(
+		gomock.Any(),
+		CDCSQLBuilder.CollectTableInfoSQL("1", "'source_db'", "'child'"),
+		gomock.Any(),
+	).Return(res, nil)
+
+	td := &TableDetector{
+		Mp:                   make(map[uint32]TblMap),
+		Callbacks:            make(map[string]TableCallback),
+		CallBackAccountId:    make(map[string]uint32),
+		SubscribedAccountIds: make(map[uint32][]string),
+		CallBackDbName:       make(map[string][]string),
+		SubscribedDbNames:    make(map[string][]string),
+		CallBackTableName:    make(map[string][]string),
+		SubscribedTableNames: make(map[string][]string),
+		exec:                 mockSqlExecutor,
+		cleanupPeriod:        time.Hour,
+		cleanupWarn:          DefaultCleanupWarnThreshold,
+	}
+	defer td.Close()
+
+	td.mu.Lock()
+	td.registerLocked("audit-task", 1, []string{"source_db"}, []string{"child"}, func(mp map[uint32]TblMap) error {
+		return nil
+	})
+	td.mu.Unlock()
+
+	err := td.scanTable()
+	require.NoError(t, err)
+	assert.Empty(t, td.Mp)
+}
+
+func TestTableScannerConstraintDecodeErrorPreservesOldTableMap(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	bat := batch.New([]string{"tblId", "tblName", "dbId", "dbName", "createSql", "accountId", "constraint"})
+	bat.Vecs[0] = testutil.MakeUint64Vector([]uint64{1001, 1002}, nil, proc.Mp())
+	bat.Vecs[1] = testutil.MakeVarcharVector([]string{"child", "broken"}, nil, proc.Mp())
+	bat.Vecs[2] = testutil.MakeUint64Vector([]uint64{10, 10}, nil, proc.Mp())
+	bat.Vecs[3] = testutil.MakeVarcharVector([]string{"source_db", "source_db"}, nil, proc.Mp())
+	bat.Vecs[4] = testutil.MakeVarcharVector([]string{
+		"CREATE TABLE child (id BIGINT PRIMARY KEY)",
+		"CREATE TABLE broken (id BIGINT PRIMARY KEY)",
+	}, nil, proc.Mp())
+	bat.Vecs[5] = testutil.MakeUint32Vector([]uint32{1, 1}, nil, proc.Mp())
+	bat.Vecs[6] = testutil.MakeVarcharVector([]string{"", string([]byte{byte(engine.ForeignKey)})}, nil, proc.Mp())
+	bat.SetRowCount(2)
+	res := executor.Result{
+		Mp:      proc.Mp(),
+		Batches: []*batch.Batch{bat},
+	}
+
+	mockSqlExecutor := mock_executor.NewMockSQLExecutor(ctrl)
+	mockSqlExecutor.EXPECT().Exec(
+		gomock.Any(),
+		CDCSQLBuilder.CollectTableInfoSQL("1", "'source_db'", "*"),
+		gomock.Any(),
+	).Return(res, nil)
+
+	oldInfo := &DbTableInfo{
+		SourceDbId:      9,
+		SourceDbName:    "source_db",
+		SourceTblId:     9001,
+		SourceTblName:   "child",
+		SourceCreateSql: "CREATE TABLE child (old_id BIGINT PRIMARY KEY)",
+		IdChanged:       false,
+	}
+	td := &TableDetector{
+		Mp:                   map[uint32]TblMap{1: {GenDbTblKey("source_db", "child"): oldInfo}},
+		Callbacks:            make(map[string]TableCallback),
+		CallBackAccountId:    make(map[string]uint32),
+		SubscribedAccountIds: make(map[uint32][]string),
+		CallBackDbName:       make(map[string][]string),
+		SubscribedDbNames:    make(map[string][]string),
+		CallBackTableName:    make(map[string][]string),
+		SubscribedTableNames: make(map[string][]string),
+		exec:                 mockSqlExecutor,
+		cleanupPeriod:        time.Hour,
+		cleanupWarn:          DefaultCleanupWarnThreshold,
+	}
+	defer td.Close()
+
+	td.mu.Lock()
+	td.registerLocked("audit-task", 1, []string{"source_db"}, []string{"*"}, func(mp map[uint32]TblMap) error {
+		return nil
+	})
+	td.mu.Unlock()
+
+	err := td.scanTable()
+	require.Error(t, err)
+	require.Contains(t, td.Mp, uint32(1))
+	gotInfo := td.Mp[1][GenDbTblKey("source_db", "child")]
+	require.Same(t, oldInfo, gotInfo)
+	assert.Equal(t, uint64(9), gotInfo.SourceDbId)
+	assert.Equal(t, uint64(9001), gotInfo.SourceTblId)
+	assert.Equal(t, "CREATE TABLE child (old_id BIGINT PRIMARY KEY)", gotInfo.SourceCreateSql)
+	assert.False(t, gotInfo.IdChanged)
+	assert.NotContains(t, td.Mp[1], GenDbTblKey("source_db", "broken"))
 }
 
 func TestTableDetectorRegisterStartsScanAsync(t *testing.T) {
@@ -683,17 +982,21 @@ func TestTableDetectorConcurrentRegister(t *testing.T) {
 func Test_CollectTableInfoSQL(t *testing.T) {
 	var builder cdcSQLBuilder
 	sql := builder.CollectTableInfoSQL("1,2,3", "*", "*")
+	_, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
+	require.NoError(t, err)
 	sql = strings.ToUpper(sql)
 	t.Log(sql)
-	expected := "SELECT  REL_ID,  RELNAME,  RELDATABASE_ID,  " +
-		"RELDATABASE,  REL_CREATESQL,  ACCOUNT_ID " +
-		"FROM `MO_CATALOG`.`MO_TABLES` " +
-		"WHERE  ACCOUNT_ID IN (1,2,3)  AND RELKIND = 'R'  " +
-		"AND RELDATABASE NOT IN ('INFORMATION_SCHEMA','MO_CATALOG','MO_DEBUG','MO_TASK','MYSQL','SYSTEM','SYSTEM_METRICS')"
+	expected := "SELECT  TBL.REL_ID,  TBL.RELNAME,  TBL.RELDATABASE_ID,  " +
+		"TBL.RELDATABASE,  TBL.REL_CREATESQL,  TBL.ACCOUNT_ID,  TBL.`CONSTRAINT` " +
+		"FROM `MO_CATALOG`.`MO_TABLES` TBL " +
+		"WHERE  TBL.ACCOUNT_ID IN (1,2,3)  AND TBL.RELKIND = 'R'  " +
+		"AND TBL.RELDATABASE NOT IN ('INFORMATION_SCHEMA','MO_CATALOG','MO_DEBUG','MO_TASK','MYSQL','SYSTEM','SYSTEM_METRICS')"
 	assert.Equal(t, expected, sql)
 
 	sql = builder.CollectTableInfoSQL("0", "'source_db'", "'orders'")
-	expected = "SELECT  REL_ID,  RELNAME,  RELDATABASE_ID,  RELDATABASE,  REL_CREATESQL,  ACCOUNT_ID FROM `MO_CATALOG`.`MO_TABLES` WHERE  ACCOUNT_ID IN (0)  AND RELDATABASE IN ('SOURCE_DB')  AND RELNAME IN ('ORDERS')  AND RELKIND = 'R'  AND RELDATABASE NOT IN ('INFORMATION_SCHEMA','MO_CATALOG','MO_DEBUG','MO_TASK','MYSQL','SYSTEM','SYSTEM_METRICS')"
+	_, err = parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
+	require.NoError(t, err)
+	expected = "SELECT  TBL.REL_ID,  TBL.RELNAME,  TBL.RELDATABASE_ID,  TBL.RELDATABASE,  TBL.REL_CREATESQL,  TBL.ACCOUNT_ID,  TBL.`CONSTRAINT` FROM `MO_CATALOG`.`MO_TABLES` TBL WHERE  TBL.ACCOUNT_ID IN (0)  AND TBL.RELDATABASE IN ('SOURCE_DB')  AND TBL.RELNAME IN ('ORDERS')  AND TBL.RELKIND = 'R'  AND TBL.RELDATABASE NOT IN ('INFORMATION_SCHEMA','MO_CATALOG','MO_DEBUG','MO_TASK','MYSQL','SYSTEM','SYSTEM_METRICS')"
 	assert.Equal(t, strings.ToUpper(expected), strings.ToUpper(sql))
 }
 
@@ -856,26 +1159,28 @@ func TestTableScanner_UpdateTableInfo(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
 
-	bat1 := batch.New([]string{"tblId", "tblName", "dbId", "dbName", "createSql", "accountId"})
+	bat1 := batch.New([]string{"tblId", "tblName", "dbId", "dbName", "createSql", "accountId", "constraint"})
 	bat1.Vecs[0] = testutil.MakeUint64Vector([]uint64{1001}, nil, proc.Mp())
 	bat1.Vecs[1] = testutil.MakeVarcharVector([]string{"tbl1"}, nil, proc.Mp())
 	bat1.Vecs[2] = testutil.MakeUint64Vector([]uint64{1}, nil, proc.Mp())
 	bat1.Vecs[3] = testutil.MakeVarcharVector([]string{"db1"}, nil, proc.Mp())
 	bat1.Vecs[4] = testutil.MakeVarcharVector([]string{"create table tbl1 (a int)"}, nil, proc.Mp())
 	bat1.Vecs[5] = testutil.MakeUint32Vector([]uint32{1}, nil, proc.Mp())
+	bat1.Vecs[6] = testutil.MakeVarcharVector([]string{""}, nil, proc.Mp())
 	bat1.SetRowCount(1)
 	res1 := executor.Result{
 		Mp:      proc.Mp(),
 		Batches: []*batch.Batch{bat1},
 	}
 
-	bat2 := batch.New([]string{"tblId", "tblName", "dbId", "dbName", "createSql", "accountId"})
+	bat2 := batch.New([]string{"tblId", "tblName", "dbId", "dbName", "createSql", "accountId", "constraint"})
 	bat2.Vecs[0] = testutil.MakeUint64Vector([]uint64{1002}, nil, proc.Mp())
 	bat2.Vecs[1] = testutil.MakeVarcharVector([]string{"tbl1"}, nil, proc.Mp())
 	bat2.Vecs[2] = testutil.MakeUint64Vector([]uint64{1}, nil, proc.Mp())
 	bat2.Vecs[3] = testutil.MakeVarcharVector([]string{"db1"}, nil, proc.Mp())
 	bat2.Vecs[4] = testutil.MakeVarcharVector([]string{"create table tbl1 (a int)"}, nil, proc.Mp())
 	bat2.Vecs[5] = testutil.MakeUint32Vector([]uint32{1}, nil, proc.Mp())
+	bat2.Vecs[6] = testutil.MakeVarcharVector([]string{""}, nil, proc.Mp())
 	bat2.SetRowCount(1)
 	res2 := executor.Result{
 		Mp:      proc.Mp(),

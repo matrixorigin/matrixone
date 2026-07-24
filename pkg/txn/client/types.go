@@ -102,9 +102,7 @@ type TxnState struct {
 	LatestTS timestamp.Timestamp
 }
 
-// TxnOperator operator for transaction clients, handling read and write
-// requests for transactions, and handling distributed transactions across DN
-// nodes.
+// TxnOperator handles transaction client read and write requests.
 // Note: For Error returned by Read/Write/WriteAndCommit/Commit/Rollback, need
 // to check if it is a moerr.ErrDNShardNotFound error, if so, the TN information
 // held is out of date and needs to be reloaded by HAKeeper.
@@ -152,16 +150,15 @@ type TxnOperator interface {
 	// After use, SendResult needs to call the Release method
 	Read(ctx context.Context, ops []txn.TxnRequest) (*rpc.SendResult, error)
 	// Write transaction write operation, and the operator will record the DN
-	// nodes written by the current transaction, and when it finds that multiple
-	// TN nodes are written, it will start distributed transaction processing.
+	// nodes written by the current transaction.
 	// The transaction has been aborted if ErrTxnAborted returned.
 	// After use, SendResult needs to call the Release method
 	Write(ctx context.Context, ops []txn.TxnRequest) (*rpc.SendResult, error)
 	// WriteAndCommit is similar to Write, but commit the transaction after write.
 	// After use, SendResult needs to call the Release method
 	WriteAndCommit(ctx context.Context, ops []txn.TxnRequest) (*rpc.SendResult, error)
-	// Commit the transaction. If data has been written to multiple TN nodes, a
-	// 2pc distributed transaction commit process is used.
+	// Commit the transaction. Transactions spanning multiple TN shards are not
+	// supported.
 	Commit(ctx context.Context) error
 	// Rollback the transaction.
 	Rollback(ctx context.Context) error

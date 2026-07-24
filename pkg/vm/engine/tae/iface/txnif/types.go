@@ -28,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 )
 
 var (
@@ -41,7 +40,7 @@ const (
 	WalPreparing
 )
 
-type Txn2PC interface {
+type TxnLifecycle interface {
 	Freeze(ctx context.Context) error
 	PrepareRollback() error
 	ApplyRollback() error
@@ -57,7 +56,6 @@ type TxnReader interface {
 	RLock()
 	RUnlock()
 	IsReplay() bool
-	Is2PC() bool
 	GetDedupType() DedupPolicy
 	GetID() string
 	GetCtx() []byte
@@ -66,7 +64,6 @@ type TxnReader interface {
 	GetContext() context.Context
 
 	GetPrepareTS() types.TS
-	GetParticipants() []uint64
 	GetSnapshotTS() types.TS
 	SetSnapshotTS(types.TS)
 	SetStartTS(types.TS)
@@ -109,24 +106,16 @@ type TxnChanger interface {
 	RUnlock()
 	ToCommittedLocked() error
 	ToPreparingLocked(ts types.TS) error
-	ToPrepared() error
-	ToPreparedLocked() error
 	ToRollbackedLocked() error
 
 	ToRollbacking(ts types.TS) error
 	ToRollbackingLocked(ts types.TS) error
 	ToUnknownLocked()
-	Prepare(ctx context.Context) (types.TS, error)
-	Committing() error
 	Commit(ctx context.Context) error
 	Rollback(ctx context.Context) error
 	SetCommitTS(cts types.TS) error
 	SetDedupType(skip DedupPolicy)
-	SetParticipants(ids []uint64) error
 	SetError(error)
-
-	CommittingInRecovery() error
-	CommitInRecovery(ctx context.Context) error
 
 	// SetSyncProtectionJobID sets the sync protection job ID for this transaction
 	SetSyncProtectionJobID(jobID string)
@@ -134,7 +123,6 @@ type TxnChanger interface {
 
 type TxnWriter interface {
 	LogTxnEntry(dbId, tableId uint64, entry TxnEntry, readedObject, readedTombstone []*common.ID) error
-	LogTxnState(sync bool) (entry.Entry, error)
 }
 
 type TxnAsyncer interface {
@@ -169,7 +157,7 @@ type BaseTxn interface {
 type AsyncTxn interface {
 	TxnUnsafe
 	TxnTest
-	Txn2PC
+	TxnLifecycle
 	TxnHandle
 	TxnAsyncer
 	TxnReader
@@ -263,7 +251,7 @@ type Tracer interface {
 type TxnStore interface {
 	io.Closer
 	Tracer
-	Txn2PC
+	TxnLifecycle
 	TxnUnsafe
 	BindTxn(AsyncTxn, bool)
 	GetLSN() uint64
@@ -312,7 +300,6 @@ type TxnStore interface {
 	AddTxnEntry(TxnEntry)
 
 	LogTxnEntry(dbId, tableId uint64, entry TxnEntry, readedObject, readedTombstone []*common.ID) error
-	LogTxnState(sync bool) (entry.Entry, error)
 	DoneWaitEvent(cnt int)
 	AddWaitEvent(cnt int)
 

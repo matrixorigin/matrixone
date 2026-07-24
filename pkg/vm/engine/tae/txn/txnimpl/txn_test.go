@@ -32,7 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/wal"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
@@ -102,7 +101,6 @@ func TestReplayOnePCRebuildsAutoIncrementDMLWatermark(t *testing.T) {
 	prepareTS := types.BuildTS(11, 0)
 	commitTS := types.BuildTS(12, 0)
 	replayTxn := newPreparingEpochTestTxn(t, "replay-1pc", startTS, prepareTS)
-	assert.False(t, replayTxn.Is2PC())
 	replayTxn.GetMemo().AddTable(dbEntry.ID, tableEntry.ID)
 	assert.NoError(t, replayTxn.SetCommitTS(commitTS))
 	store := &replayTxnStore{Cmd: &txnbase.TxnCmd{ComposedCmd: txnbase.NewComposedCmd()}, Observer: noopReplayObserver{}, catalog: c}
@@ -111,36 +109,6 @@ func TestReplayOnePCRebuildsAutoIncrementDMLWatermark(t *testing.T) {
 	assert.True(t, tableEntry.ShouldRetryAutoIncrementAlter(startTS.Prev()))
 	assert.NoError(t, store.applyCommit(replayTxn))
 	assert.Equal(t, commitTS, tableEntry.GetLatestKnownDMLPrepare())
-}
-
-func TestReplayPreparedRollbackReleasesAutoIncrementFence(t *testing.T) {
-	c := catalog.MockCatalog(nil)
-	defer c.Close()
-	mgr := txnbase.NewTxnManager(catalog.MockTxnStoreFactory(c), catalog.MockTxnFactory(c), types.NewMockHLCClock(1))
-	mgr.Start(context.Background())
-	defer mgr.Stop()
-
-	setupTxn, err := mgr.StartTxn(nil)
-	assert.NoError(t, err)
-	dbEntry, err := c.CreateDBEntry("replay_rollback", "", "", setupTxn)
-	assert.NoError(t, err)
-	tableEntry, err := dbEntry.CreateTableEntry(catalog.MockSchemaAll(3, 1), setupTxn, nil)
-	assert.NoError(t, err)
-	assert.NoError(t, setupTxn.Commit(context.Background()))
-
-	startTS := types.BuildTS(10, 0)
-	replayTxn := newPreparingEpochTestTxn(t, "replay-2pc", startTS, types.BuildTS(11, 0))
-	assert.NoError(t, replayTxn.SetParticipants([]uint64{1, 2}))
-	assert.True(t, replayTxn.Is2PC())
-	replayTxn.GetMemo().AddTable(dbEntry.ID, tableEntry.ID)
-	store := &replayTxnStore{Cmd: &txnbase.TxnCmd{ComposedCmd: txnbase.NewComposedCmd()}, Observer: noopReplayObserver{}, catalog: c}
-
-	assert.NoError(t, store.prepareCommit(replayTxn))
-	assert.True(t, tableEntry.ShouldRetryAutoIncrementAlter(startTS))
-	assert.NoError(t, store.applyRollback(replayTxn))
-	assert.False(t, tableEntry.ShouldRetryAutoIncrementAlter(startTS))
-	watermark := tableEntry.GetLatestKnownDMLPrepare()
-	assert.True(t, watermark.IsEmpty())
 }
 
 type waitingSchemaTxn struct {
@@ -1162,66 +1130,6 @@ func TestDedup1(t *testing.T) {
 	}
 	t.Log(c.SimplePPString(common.PPL1))
 }
-
-func TestLogTxnState(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	ctx := context.Background()
-	testutils.EnsureNoLeak(t)
-	dir := testutils.InitTestEnv(ModuleName, t)
-	c, mgr, driver := initTestContext(ctx, t, dir)
-	defer driver.Close()
-	defer c.Close()
-	defer mgr.Stop()
-
-	// Test with sync=false
-	{
-		txn, _ := mgr.StartTxn(nil)
-		store := txn.GetStore().(*txnStore)
-		logEntry, err := store.LogTxnState(false)
-		assert.NoError(t, err)
-		assert.NotNil(t, logEntry)
-		assert.Equal(t, IOET_WALEntry_TxnRecord, logEntry.GetType())
-		info := logEntry.GetInfo()
-		assert.NotNil(t, info)
-		entryInfo, ok := info.(*entry.Info)
-		assert.True(t, ok)
-		assert.Equal(t, wal.GroupC, entryInfo.Group)
-	}
-
-	// Test with sync=true
-	{
-		txn, _ := mgr.StartTxn(nil)
-		store := txn.GetStore().(*txnStore)
-		logEntry, err := store.LogTxnState(true)
-		assert.NoError(t, err)
-		assert.NotNil(t, logEntry)
-		assert.Equal(t, IOET_WALEntry_TxnRecord, logEntry.GetType())
-		info := logEntry.GetInfo()
-		assert.NotNil(t, info)
-		entryInfo, ok := info.(*entry.Info)
-		assert.True(t, ok)
-		assert.Equal(t, wal.GroupC, entryInfo.Group)
-		// When sync=true, WaitDone() should be called, so the entry should be done
-		// We can verify this by checking if the entry is ready
-	}
-
-	// Test with a transaction that has some operations
-	{
-		txn, _ := mgr.StartTxn(nil)
-		_, err := txn.CreateDatabase("testdb", "", "")
-		assert.NoError(t, err)
-		store := txn.GetStore().(*txnStore)
-		logEntry, err := store.LogTxnState(false)
-		assert.NoError(t, err)
-		assert.NotNil(t, logEntry)
-		assert.Equal(t, IOET_WALEntry_TxnRecord, logEntry.GetType())
-		// Verify the payload is set
-		payload := logEntry.GetPayload()
-		assert.NotNil(t, payload)
-		assert.Greater(t, len(payload), 0)
-	}
-}
-
 func TestCreateAppendableObjectWithOptions(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)

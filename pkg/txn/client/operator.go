@@ -76,6 +76,8 @@ var (
 
 	//runningSQLWaitTimeout = 2 * time.Minute
 	runningSQLWaitTimeout = 30 * time.Second
+
+	errMultiTNTransaction = "transactions spanning more than one TN shard are unsupported"
 )
 
 const lockTableBindCheckInterval = 3 * time.Minute
@@ -113,16 +115,6 @@ func WithUserTxn() TxnOption {
 func WithTxnReadyOnly() TxnOption {
 	return func(tc *txnOperator) {
 		tc.opts.options = tc.opts.options.WithReadOnly()
-	}
-}
-
-// WithTxnDisable1PCOpt disable 1pc opt on distributed transaction. By default, mo enables 1pc
-// optimization for distributed transactions. For write operations, if all partitions' prepares are
-// executed successfully, then the transaction is considered committed and returned directly to the
-// client. Partitions' prepared data are committed asynchronously.
-func WithTxnDisable1PCOpt() TxnOption {
-	return func(tc *txnOperator) {
-		tc.opts.options = tc.opts.options.WithDisable1PC()
 	}
 }
 
@@ -1560,6 +1552,10 @@ func (tc *txnOperator) doWrite(
 	}
 
 	if commit {
+		if len(tc.mu.txn.TNShards) > 1 {
+			tc.markAbortedLocked()
+			return nil, moerr.NewNotSupported(ctx, errMultiTNTransaction)
+		}
 		if len(tc.mu.txn.TNShards) == 0 { // commit no write handled txn
 			tc.mu.txn.Status = txn.TxnStatus_Committed
 			return nil, nil
@@ -1578,7 +1574,6 @@ func (tc *txnOperator) doWrite(
 			Flag:   txn.SkipResponseFlag,
 			CommitRequest: &txn.TxnCommitRequest{
 				Payload:          txnReqs,
-				Disable1PCOpt:    tc.opts.options.Is1PCDisabled(),
 				DeadlineUnixNano: commitDeadline.UnixNano(),
 				CommitSequence:   commitSequence,
 			}})
@@ -1875,8 +1870,7 @@ func (tc *txnOperator) checkResponseTxnStatusForReadWrite(resp txn.TxnResponse) 
 	switch txnMeta.Status {
 	case txn.TxnStatus_Active:
 		return nil
-	case txn.TxnStatus_Aborted, txn.TxnStatus_Aborting,
-		txn.TxnStatus_Committed, txn.TxnStatus_Committing:
+	case txn.TxnStatus_Aborted, txn.TxnStatus_Committed:
 		return moerr.NewTxnClosedNoCtx(tc.reset.txnID)
 	default:
 		return moerr.NewInternalErrorNoCtxf(

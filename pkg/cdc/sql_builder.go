@@ -248,19 +248,20 @@ const (
 		"table_name = '%s'"
 
 	CDCCollectTableInfoSqlTemplate = "SELECT " +
-		" rel_id, " +
-		" relname, " +
-		" reldatabase_id, " +
-		" reldatabase, " +
-		" rel_createsql, " +
-		" account_id " +
-		"FROM `mo_catalog`.`mo_tables` " +
+		" tbl.rel_id, " +
+		" tbl.relname, " +
+		" tbl.reldatabase_id, " +
+		" tbl.reldatabase, " +
+		" tbl.rel_createsql, " +
+		" tbl.account_id, " +
+		" tbl.`constraint` " +
+		"FROM `mo_catalog`.`mo_tables` tbl " +
 		"WHERE " +
-		" account_id IN (%s) " +
+		" tbl.account_id IN (%s) " +
 		"%s" +
 		"%s" +
-		" AND relkind = '%s' " +
-		" AND reldatabase NOT IN (%s)"
+		" AND tbl.relkind = '%s' " +
+		" AND tbl.reldatabase NOT IN (%s)"
 	CDCInsertMOISCPLogSqlTemplate = `REPLACE INTO mo_catalog.mo_iscp_log (` +
 		`account_id,` +
 		`table_id,` +
@@ -475,6 +476,7 @@ var CDCSQLTemplates = [CDCSqlTemplateCount]struct {
 			"reldatabase",
 			"rel_createsql",
 			"account_id",
+			"constraint",
 		},
 	},
 	CDCGetWatermarkWhereSqlTemplate_Idx: {
@@ -1071,13 +1073,13 @@ func (b cdcSQLBuilder) CollectTableInfoSQL(accountIDs string, dbNames string, ta
 			if dbNames == "*" {
 				return ""
 			}
-			return " AND reldatabase IN (" + dbNames + ") "
+			return " AND tbl.reldatabase IN (" + dbNames + ") "
 		}(),
 		func() string {
 			if tableNames == "*" {
 				return ""
 			}
-			return " AND relname IN (" + tableNames + ") "
+			return " AND tbl.relname IN (" + tableNames + ") "
 		}(),
 		catalog.SystemOrdinaryRel,
 		AddSingleQuotesJoin(catalog.SystemDatabases),

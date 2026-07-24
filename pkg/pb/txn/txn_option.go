@@ -15,10 +15,12 @@
 package txn
 
 var (
-	txnFeatureUserTxn           = uint32(1 << 0)
-	txnFeatureReadOnly          = uint32(1 << 1)
-	txnFeatureCacheWrite        = uint32(1 << 2)
-	txnFeatureDisable1PC        = uint32(1 << 3)
+	txnFeatureUserTxn    = uint32(1 << 0)
+	txnFeatureReadOnly   = uint32(1 << 1)
+	txnFeatureCacheWrite = uint32(1 << 2)
+	// Bit 3 used to disable the obsolete distributed 1PC optimization.
+	// Keep it unused so snapshots that contain later feature bits retain their
+	// interpretation.
 	txnFeatureCheckDup          = uint32(1 << 4)
 	txnFeatureDisableTrace      = uint32(1 << 5)
 	txnFeatureDisableWaitPaused = uint32(1 << 6)
@@ -36,11 +38,6 @@ func (m TxnOptions) WithDisableTrace() TxnOptions {
 
 func (m TxnOptions) WithEnableCheckDup() TxnOptions {
 	m.Features |= txnFeatureCheckDup
-	return m
-}
-
-func (m TxnOptions) WithDisable1PC() TxnOptions {
-	m.Features |= txnFeatureDisable1PC
 	return m
 }
 
@@ -81,10 +78,6 @@ func (m TxnOptions) ReadOnly() bool {
 
 func (m TxnOptions) CheckDupEnabled() bool {
 	return m.featureEnabled(txnFeatureCheckDup)
-}
-
-func (m TxnOptions) Is1PCDisabled() bool {
-	return m.featureEnabled(txnFeatureDisable1PC)
 }
 
 func (m TxnOptions) featureEnabled(feature uint32) bool {
