@@ -11464,7 +11464,13 @@ func TestTransferInMerge(t *testing.T) {
 	schema.Extra.BlockMaxRows = 8192
 	schema.Extra.ObjectMaxBlocks = 256
 	tae.BindSchema(schema)
-	bat := catalog.MockBatch(schema, 400000)
+	rowCount := 400000
+	if testing.Short() {
+		// Eight blocks retain the multi-block merge and delete-transfer path;
+		// non-short runs keep the original production-scale stress workload.
+		rowCount = int(schema.Extra.BlockMaxRows) * 8
+	}
+	bat := catalog.MockBatch(schema, rowCount)
 	defer bat.Close()
 	tae.CreateRelAndAppend(bat, true)
 	tae.CompactBlocks(true)

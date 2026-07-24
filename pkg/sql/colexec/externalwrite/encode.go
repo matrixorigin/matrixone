@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 var (
@@ -181,13 +182,15 @@ func (w *externalWriter) writeCSVField(buf *bytes.Buffer, value []byte, quote bo
 	}
 }
 
-func (w *externalWriter) writeCSVHeader() error {
+func (w *externalWriter) writeCSVHeader(analyzer process.Analyzer) error {
 	buf := &bytes.Buffer{}
 	ncol := len(w.cfg.Attrs)
 	for j, name := range w.cfg.Attrs {
 		w.writeCSVField(buf, []byte(name), w.cfg.EnclosedBy != 0, j == ncol-1)
 	}
-	_, err := w.fw.Write(buf.Bytes())
+	_, err := process.MeasureFilesystemWait(analyzer, func() (int, error) {
+		return w.fw.Write(buf.Bytes())
+	})
 	return err
 }
 
@@ -249,6 +252,16 @@ func (w *externalWriter) csvValue(vec *vector.Vector, i int) (val []byte, quote 
 		return []byte(types.BytesToArrayToString[float32](vec.GetBytesAt(i))), true, nil
 	case types.T_array_float64:
 		return []byte(types.BytesToArrayToString[float64](vec.GetBytesAt(i))), true, nil
+	// Narrow vector element types — BytesToArrayToString is generic over
+	// types.ArrayElement and already formats BF16/Float16/int8/uint8.
+	case types.T_array_bf16:
+		return []byte(types.BytesToArrayToString[types.BF16](vec.GetBytesAt(i))), true, nil
+	case types.T_array_float16:
+		return []byte(types.BytesToArrayToString[types.Float16](vec.GetBytesAt(i))), true, nil
+	case types.T_array_int8:
+		return []byte(types.BytesToArrayToString[int8](vec.GetBytesAt(i))), true, nil
+	case types.T_array_uint8:
+		return []byte(types.BytesToArrayToString[uint8](vec.GetBytesAt(i))), true, nil
 	case types.T_date:
 		return []byte(vector.GetFixedAtNoTypeCheck[types.Date](vec, i).String()), false, nil
 	case types.T_datetime:
@@ -405,6 +418,21 @@ func (w *externalWriter) appendJSONValue(buf *bytes.Buffer, vec *vector.Vector, 
 		return appendJSONFloatArray(w, buf, types.BytesToArray[float32](vec.GetBytesAt(i)), 32)
 	case types.T_array_float64:
 		return appendJSONFloatArray(w, buf, types.BytesToArray[float64](vec.GetBytesAt(i)), 64)
+	// Narrow vector element types. appendJSONFloatArray is constrained to
+	// float32|float64, so widen first: BF16/Float16 via ToFloat32 (exact), and
+	// int8/uint8 are small integers that float32 represents exactly.
+	case types.T_array_bf16:
+		return appendJSONFloatArray(w, buf,
+			types.BF16ToFloat32Slice(types.BytesToArray[types.BF16](vec.GetBytesAt(i))), 32)
+	case types.T_array_float16:
+		return appendJSONFloatArray(w, buf,
+			types.Float16ToFloat32Slice(types.BytesToArray[types.Float16](vec.GetBytesAt(i))), 32)
+	case types.T_array_int8:
+		return appendJSONFloatArray(w, buf,
+			types.Int8ToFloat32Slice(types.BytesToArray[int8](vec.GetBytesAt(i))), 32)
+	case types.T_array_uint8:
+		return appendJSONFloatArray(w, buf,
+			types.Uint8ToFloat32Slice(types.BytesToArray[uint8](vec.GetBytesAt(i))), 32)
 	case types.T_date:
 		appendJSONString(buf, []byte(vector.GetFixedAtNoTypeCheck[types.Date](vec, i).String()))
 		return nil

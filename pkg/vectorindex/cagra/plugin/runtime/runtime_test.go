@@ -181,3 +181,16 @@ func TestCagraJoinIncludeColumns(t *testing.T) {
 	}
 	require.Equal(t, "a,b", joinIncludeColumns(cols))
 }
+
+// TestCagraValidQuantization exercises the per-algo (quant, op) catalog hook
+// shared by CREATE and REINDEX.
+func TestCagraValidQuantization(t *testing.T) {
+	h := CatalogHooks{}
+	require.NoError(t, h.ValidQuantization("", "vector_ip_ops"))        // no quantization
+	require.NoError(t, h.ValidQuantization("float16", "vector_ip_ops")) // f16 fine with any op
+	require.NoError(t, h.ValidQuantization("int8", "vector_l2_ops"))    // int8 + L2 ok
+	require.Error(t, h.ValidQuantization("int8", "vector_ip_ops"))      // int8 + ip rejected
+	require.Error(t, h.ValidQuantization("uint8", "vector_cosine_ops")) // uint8 + cosine rejected
+	require.Error(t, h.ValidQuantization("bf16", "vector_l2_ops"))      // bad value
+	require.Error(t, h.ValidQuantization("float64", "vector_l2_ops"))   // bad value
+}

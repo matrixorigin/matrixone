@@ -15,6 +15,7 @@
 package compile
 
 import (
+	"context"
 	"testing"
 
 	"github.com/golang/mock/gomock"
@@ -25,7 +26,34 @@ import (
 
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/util/resource"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 )
+
+func TestNewInternalStatementContextPreservesRootAndClaimsStatsOnce(t *testing.T) {
+	root := resource.NewRoot(resource.ConnExternal)
+	parentStats := statistic.NewStatsInfo()
+	parent := resource.ContextWithRoot(
+		statistic.ContextWithStatsInfo(context.Background(), parentStats),
+		root)
+
+	child := newInternalStatementContext(parent)
+	childStats := statistic.StatsInfoFromContext(child)
+	childAgain := newInternalStatementContext(parent)
+	childAgainStats := statistic.StatsInfoFromContext(childAgain)
+
+	require.Same(t, root, resource.RootFromContext(child))
+	require.NotNil(t, childStats)
+	require.NotSame(t, parentStats, childStats)
+	require.NotSame(t, childStats, childAgainStats)
+
+	for _, stats := range []*statistic.StatsInfo{parentStats, childStats, childAgainStats} {
+		_, ok := stats.ClaimRootPhaseResource()
+		require.True(t, ok)
+		_, ok = stats.ClaimRootPhaseResource()
+		require.False(t, ok)
+	}
+}
 
 func Test_panic(t *testing.T) {
 	r := func() {
