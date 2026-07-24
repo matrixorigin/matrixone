@@ -56,7 +56,6 @@ const (
 	MO_INDEX_COLUMN_NAME          = "column_name"
 	MO_INDEX_ORDINAL_POSITION     = "ordinal_position"
 	MO_INDEX_TABLE_NAME           = "index_table_name"
-	MO_INDEX_INCLUDED_COLUMNS     = catalog.IndexIncludedColumns
 	MO_INDEX_PRIKEY               = catalog.CPrimaryKeyColName
 )
 
@@ -77,7 +76,6 @@ var MO_INDEX_COLTYPE = map[string]types.T{
 	MO_INDEX_ORDINAL_POSITION:     types.T_uint32,
 	MO_INDEX_OPTIONS:              types.T_text,
 	MO_INDEX_TABLE_NAME:           types.T_varchar,
-	MO_INDEX_INCLUDED_COLUMNS:     types.T_text,
 	MO_INDEX_PRIKEY:               types.T_varchar,
 }
 
@@ -201,8 +199,8 @@ func InsertOneIndexMetadata(eg engine.Engine, ctx context.Context, db engine.Dat
 
 func buildInsertIndexMetaBatch(tableId uint64, databaseId uint64, ct *engine.ConstraintDef, eg engine.Engine, proc *process.Process) (*batch.Batch, error) {
 	bat := &batch.Batch{
-		Attrs: make([]string, 17),
-		Vecs:  make([]*vector.Vector, 17),
+		Attrs: make([]string, 16),
+		Vecs:  make([]*vector.Vector, 16),
 	}
 	bat.Attrs[0] = MO_INDEX_ID
 	bat.Attrs[1] = MO_INDEX_TABLE_ID
@@ -219,8 +217,7 @@ func buildInsertIndexMetaBatch(tableId uint64, databaseId uint64, ct *engine.Con
 	bat.Attrs[12] = MO_INDEX_ORDINAL_POSITION
 	bat.Attrs[13] = MO_INDEX_OPTIONS
 	bat.Attrs[14] = MO_INDEX_TABLE_NAME
-	bat.Attrs[15] = MO_INDEX_INCLUDED_COLUMNS
-	bat.Attrs[16] = MO_INDEX_PRIKEY
+	bat.Attrs[15] = MO_INDEX_PRIKEY
 
 	vec_id := vector.NewVec(MO_INDEX_COLTYPE[MO_INDEX_ID].ToType())
 	bat.Vecs[0] = vec_id
@@ -266,9 +263,6 @@ func buildInsertIndexMetaBatch(tableId uint64, databaseId uint64, ct *engine.Con
 
 	vec_index_table := vector.NewVec(MO_INDEX_COLTYPE[MO_INDEX_TABLE_NAME].ToType())
 	bat.Vecs[14] = vec_index_table
-
-	vec_included_columns := vector.NewVec(MO_INDEX_COLTYPE[MO_INDEX_INCLUDED_COLUMNS].ToType())
-	bat.Vecs[15] = vec_included_columns
 
 	var indexId uint64
 	var err error
@@ -373,18 +367,6 @@ func buildInsertIndexMetaBatch(tableId uint64, databaseId uint64, ct *engine.Con
 					if err != nil {
 						return nil, err
 					}
-					includedColumns, err := catalog.MarshalIncludeColumnsValue(index.IncludedColumns)
-					if err != nil {
-						return nil, err
-					}
-					if includedColumns == "" {
-						err = vector.AppendBytes(vec_included_columns, []byte(""), true, proc.Mp())
-					} else {
-						err = vector.AppendBytes(vec_included_columns, []byte(includedColumns), false, proc.Mp())
-					}
-					if err != nil {
-						return nil, err
-					}
 				}
 			}
 		case *engine.PrimaryKeyDef:
@@ -458,10 +440,6 @@ func buildInsertIndexMetaBatch(tableId uint64, databaseId uint64, ct *engine.Con
 					if err != nil {
 						return nil, err
 					}
-					err = vector.AppendBytes(vec_included_columns, []byte(""), true, proc.Mp())
-					if err != nil {
-						return nil, err
-					}
 				}
 			}
 
@@ -474,7 +452,7 @@ func buildInsertIndexMetaBatch(tableId uint64, databaseId uint64, ct *engine.Con
 	if err != nil {
 		return nil, err
 	}
-	bat.Vecs[16] = vecPrikey
+	bat.Vecs[15] = vecPrikey
 
 	bat.SetRowCount(bat.GetVector(0).Length())
 	return bat, nil

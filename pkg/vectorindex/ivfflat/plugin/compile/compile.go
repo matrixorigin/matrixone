@@ -482,7 +482,7 @@ func ivfIndexEntriesTable(
 	srcAlias := "src"
 	centroidsAlias := "centroids_cur"
 	indexColName := indexDef.Parts[0]
-	entrySelectExpr := sqlquote.QualifiedIdent(srcAlias, indexColName)
+	entrySelectExpr := sqlquote.Ident(indexColName)
 	if qv, qerr := sonic.Get([]byte(indexDef.IndexAlgoParams), catalog.Quantization); qerr == nil {
 		if qstr, serr := qv.String(); serr == nil && qstr != "" {
 			if qt, ok := quantizer.ToVectorType(qstr); ok {
@@ -506,7 +506,7 @@ func ivfIndexEntriesTable(
 					if err != nil {
 						return err
 					}
-					col := sqlquote.QualifiedIdent(srcAlias, indexColName)
+					col := sqlquote.Ident(indexColName)
 					if ok1 && ok2 && qt == types.T_array_int8 {
 						mul, add := quantizer.Int8Params(qmin, qmax)
 						entrySelectExpr = quantizer.Int8EntrySQL(col, mul, add, dim)
@@ -517,7 +517,7 @@ func ivfIndexEntriesTable(
 						entrySelectExpr = quantizer.CastSQL(col, qt, dim)
 					}
 				} else {
-					entrySelectExpr = quantizer.CastSQL(sqlquote.QualifiedIdent(srcAlias, indexColName), qt, dim)
+					entrySelectExpr = quantizer.CastSQL(sqlquote.Ident(indexColName), qt, dim)
 				}
 			}
 		}
@@ -555,7 +555,7 @@ func ivfIndexEntriesTable(
 		selectCols = append(selectCols, sqlquote.QualifiedIdent(srcAlias, includeCol))
 	}
 
-	insertSQL := fmt.Sprintf("INSERT INTO %s (%s) ",
+	insertSQL := fmt.Sprintf("insert into %s (%s) ",
 		sqlquote.QualifiedIdent(qryDatabase, indexDef.IndexTableName),
 		joinQuotedIdentifiers(insertCols),
 	)

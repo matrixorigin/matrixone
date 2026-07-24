@@ -88,15 +88,7 @@ func parseIncludedColumnsFromParams(indexAlgoParams string) ([]string, error) {
 	if err != nil || joined == "" {
 		return nil, nil
 	}
-	raw := strings.Split(joined, ",")
-	out := make([]string, 0, len(raw))
-	for _, n := range raw {
-		n = strings.TrimSpace(n)
-		if n != "" {
-			out = append(out, n)
-		}
-	}
-	return out, nil
+	return catalog.ParseIncludeColumnsValue(joined)
 }
 
 // filterJSONPred mirrors one entry of the predicate array (see file header

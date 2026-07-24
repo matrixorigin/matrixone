@@ -341,6 +341,12 @@ func TestNewIvfflatSqlWriterUpsertWithIncludeColumns(t *testing.T) {
 		ivfflatIncludeColSpec{name: "title", typ: types.T_varchar, width: 64},
 		ivfflatIncludeColSpec{name: "rank", typ: types.T_int32},
 	)
+	// Catalog-loaded definitions do not carry the runtime-only proto field. IVF
+	// INCLUDE metadata must therefore remain recoverable from algo_params.
+	for _, indexDef := range tabledef.Indexes {
+		indexDef.IncludedColumns = nil
+		indexDef.IndexAlgoParams = `{"included_columns":"title,rank","lists":"16","op_type":"vector_l2_ops"}`
+	}
 	consumerInfo := newTestConsumerInfo()
 	jobID := newTestJobID()
 

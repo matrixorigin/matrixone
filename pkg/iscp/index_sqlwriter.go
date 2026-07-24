@@ -590,7 +590,10 @@ func NewIvfflatSqlWriter(algo string, jobID JobID, info *ConsumerInfo, tabledef 
 	w.pkType = &types.Type{Oid: types.T(typ.Id), Width: typ.Width, Scale: typ.Scale}
 
 	nparts := len(w.indexdef[0].Parts)
-	includeCols := ivfflatIncludeColumnsFromIndexDefs(w.indexdef)
+	includeCols, err := ivfflatIncludeColumnsFromIndexDefs(w.indexdef)
+	if err != nil {
+		return nil, err
+	}
 	w.includeCols = append(w.includeCols[:0], includeCols...)
 	w.partsPos = make([]int32, nparts+len(includeCols))
 	w.partsType = make([]*types.Type, nparts+len(includeCols))
@@ -632,13 +635,34 @@ func NewIvfflatSqlWriter(algo string, jobID JobID, info *ConsumerInfo, tabledef 
 	return w, nil
 }
 
-func ivfflatIncludeColumnsFromIndexDefs(indexdefs []*plan.IndexDef) []string {
+func ivfflatIncludeColumnsFromIndexDefs(indexdefs []*plan.IndexDef) ([]string, error) {
 	for _, idx := range indexdefs {
 		if idx != nil && len(idx.IncludedColumns) > 0 {
-			return idx.IncludedColumns
+			return idx.IncludedColumns, nil
 		}
 	}
-	return nil
+	for _, idx := range indexdefs {
+		if idx == nil || idx.IndexAlgoParams == "" {
+			continue
+		}
+		params, err := catalog.IndexParamsStringToMap(idx.IndexAlgoParams)
+		if err != nil {
+			return nil, err
+		}
+		raw := params[catalog.IncludedColumns]
+		if raw == "" {
+			raw = params["include_columns"]
+		}
+		if raw == "" {
+			continue
+		}
+		cols, err := catalog.ParseIncludeColumnsValue(raw)
+		if err != nil {
+			return nil, err
+		}
+		return cols, nil
+	}
+	return nil, nil
 }
 
 // REPLACE INTO __mo_index_secondary_0197786c-285f-70cb-9337-e484a3ff92c4(__mo_index_centroid_fk_version, __mo_index_centroid_fk_id, __mo_index_pri_col, __mo_index_centroid_fk_entry)

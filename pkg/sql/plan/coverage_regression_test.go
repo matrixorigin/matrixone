@@ -170,7 +170,7 @@ func TestChangeColumnRenamesClusterByAndTracksIvfIncludeMetadata(t *testing.T) {
 	require.Equal(t, "title", alterCtx.alterColMap["headline"].sexprStr)
 	require.Equal(t, "headline", alterCtx.changColDefMap[3].Name)
 	require.Len(t, alterCtx.UpdateSqls, 3)
-	require.Contains(t, strings.Join(alterCtx.UpdateSqls, "\n"), "included_columns")
+	require.Contains(t, strings.Join(alterCtx.UpdateSqls, "\n"), "set algo_params")
 	require.Equal(t, []string{"headline", "note"}, copyTable.Indexes[0].IncludedColumns)
 	require.NotContains(t, copyTable.Indexes[0].IndexAlgoParams, "include_columns")
 }

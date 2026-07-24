@@ -113,10 +113,9 @@ const (
 	IntermediateGraphDegree = "intermediate_graph_degree"
 	GraphDegree             = "graph_degree"
 	ITopkSize               = "itopk_size"
-	// IncludedColumns is catalog/build metadata. SHOW CREATE renders INCLUDE
-	// from plan.IndexDef.IncludedColumns, not from flat algo_params, to avoid
-	// duplicate INCLUDE clauses when both locations are populated for
-	// compatibility.
+	// IncludedColumns persists INCLUDE metadata inside algo_params. Consumers
+	// prefer plan.IndexDef.IncludedColumns when present and fall back to this key
+	// for catalog-loaded definitions.
 	IncludedColumns = "included_columns"
 
 	// Index-defining build params, settable as CREATE INDEX options (parsed by
@@ -130,17 +129,6 @@ const (
 
 	IndexAlgoParamPrefixLengths = "prefix_lengths"
 )
-
-func MarshalIncludeColumnsValue(cols []string) (string, error) {
-	if len(cols) == 0 {
-		return "", nil
-	}
-	data, err := json.Marshal(cols)
-	if err != nil {
-		return "", err
-	}
-	return string(data), nil
-}
 
 func ParseIncludeColumnsValue(raw string) ([]string, error) {
 	raw = strings.TrimSpace(raw)

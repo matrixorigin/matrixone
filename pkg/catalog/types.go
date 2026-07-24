@@ -259,10 +259,9 @@ const (
 	SystemRelAttr_LogicalID      = "rel_logical_id"
 
 	// 'mo_indexes' table
-	IndexAlgoName        = "algo"
-	IndexAlgoTableType   = "algo_table_type"
-	IndexAlgoParams      = "algo_params"
-	IndexIncludedColumns = "included_columns"
+	IndexAlgoName      = "algo"
+	IndexAlgoTableType = "algo_table_type"
+	IndexAlgoParams    = "algo_params"
 
 	// 'mo_columns' table
 	SystemColAttr_UniqName        = "att_uniq_name"

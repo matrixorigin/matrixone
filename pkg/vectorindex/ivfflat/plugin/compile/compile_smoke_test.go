@@ -159,11 +159,11 @@ func TestIvfflatEntriesTableQuotesIdentifiers(t *testing.T) {
 	require.Len(t, ctx.sqls, 3)
 
 	mappingSQL := ctx.sqls[1]
-	require.Contains(t, mappingSQL, "INSERT INTO "+sqlquote.QualifiedIdent("db`name", "entries`tbl"))
+	require.Contains(t, mappingSQL, "insert into "+sqlquote.QualifiedIdent("db`name", "entries`tbl"))
 	require.Contains(t, mappingSQL, sqlquote.QualifiedIdent("db`name", "base`tbl"))
 	require.Contains(t, mappingSQL, sqlquote.QualifiedIdent("db`name", "centroids`tbl"))
 	require.Contains(t, mappingSQL, sqlquote.QualifiedIdent("db`name", "meta`tbl"))
-	require.Contains(t, mappingSQL, sqlquote.QualifiedIdent("src", "vec`col"))
+	require.Contains(t, mappingSQL, sqlquote.Ident("vec`col"))
 	require.Contains(t, mappingSQL, sqlquote.QualifiedIdent("src", "payload`col"))
 	require.Contains(t, mappingSQL, sqlquote.Ident(catalog.SystemSI_IVFFLAT_IncludeColPrefix+"payload`col"))
 	require.NotContains(t, mappingSQL, "`db`name`")

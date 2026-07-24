@@ -55,13 +55,12 @@ func includedColumnAffected(indexDef *planpb.IndexDef, colName string) (bool, er
 	return false, nil
 }
 
-func renameIncludedColumnsForAlgo(tableDef *planpb.TableDef, algo, oldColName, newColName string, syncAlgoParams bool) ([]string, error) {
+func renameIncludedColumnsForAlgo(tableDef *planpb.TableDef, algo, oldColName, newColName string) ([]string, error) {
 	if tableDef == nil || oldColName == newColName {
 		return nil, nil
 	}
 
 	type includeUpdate struct {
-		cols       []string
 		algoParams string
 	}
 	updatedByIndexName := make(map[string]includeUpdate)
@@ -79,20 +78,18 @@ func renameIncludedColumnsForAlgo(tableDef *planpb.TableDef, algo, oldColName, n
 		}
 
 		indexDef.IncludedColumns = newIncludedColumns
-		update := includeUpdate{cols: newIncludedColumns}
-		if syncAlgoParams {
-			params, err := catalog.IndexParamsStringToMap(indexDef.IndexAlgoParams)
-			if err != nil {
-				return nil, err
-			}
-			delete(params, "include_columns")
-			params[catalog.IncludedColumns] = strings.Join(newIncludedColumns, ",")
-			update.algoParams, err = catalog.IndexParamsMapToJsonString(params)
-			if err != nil {
-				return nil, err
-			}
-			indexDef.IndexAlgoParams = update.algoParams
+		params, err := catalog.IndexParamsStringToMap(indexDef.IndexAlgoParams)
+		if err != nil {
+			return nil, err
 		}
+		delete(params, "include_columns")
+		params[catalog.IncludedColumns] = strings.Join(newIncludedColumns, ",")
+		algoParams, err := catalog.IndexParamsMapToJsonString(params)
+		if err != nil {
+			return nil, err
+		}
+		indexDef.IndexAlgoParams = algoParams
+		update := includeUpdate{algoParams: algoParams}
 		updatedByIndexName[indexDef.IndexName] = update
 	}
 
@@ -109,17 +106,9 @@ func renameIncludedColumnsForAlgo(tableDef *planpb.TableDef, algo, oldColName, n
 	sqls := make([]string, 0, len(indexNames))
 	for _, indexName := range indexNames {
 		update := updatedByIndexName[indexName]
-		encoded, err := catalog.MarshalIncludeColumnsValue(update.cols)
-		if err != nil {
-			return nil, err
-		}
-		setClause := fmt.Sprintf("included_columns = '%s'", sqlquote.EscapeString(encoded))
-		if syncAlgoParams {
-			setClause += fmt.Sprintf(", algo_params = '%s'", sqlquote.EscapeString(update.algoParams))
-		}
 		sqls = append(sqls, fmt.Sprintf(
-			"update `mo_catalog`.`mo_indexes` set %s where table_id = %d and name = '%s' ; ",
-			setClause, tableDef.TblId, sqlquote.EscapeString(indexName)))
+			"update `mo_catalog`.`mo_indexes` set algo_params = '%s' where table_id = %d and name = '%s' ; ",
+			sqlquote.EscapeString(update.algoParams), tableDef.TblId, sqlquote.EscapeString(indexName)))
 	}
 	return sqls, nil
 }

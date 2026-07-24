@@ -87,12 +87,15 @@ func TestUpdateRenameColumnInTableDefRenamesIvfIncludeMetadata(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Len(t, sqls, 1)
-	require.Contains(t, sqls[0], `set included_columns = '["headline","category"]'`)
+	require.Contains(t, sqls[0], `set algo_params = '{"included_columns":"headline,category","lists":"2","op_type":"vector_l2_ops"}'`)
 	require.Contains(t, sqls[0], "name = 'idx_ivf'")
 
 	for _, indexDef := range tableDef.Indexes {
 		require.Equal(t, []string{"headline", "category"}, indexDef.IncludedColumns)
-		require.NotContains(t, indexDef.IndexAlgoParams, "include_columns")
+		params, err := catalog.IndexParamsStringToMap(indexDef.IndexAlgoParams)
+		require.NoError(t, err)
+		require.Equal(t, "headline,category", params[catalog.IncludedColumns])
+		require.NotContains(t, params, "include_columns")
 	}
 	require.Equal(t, "headline", tableDef.Cols[1].Name)
 	require.Equal(t, "headline", tableDef.Cols[1].OriginName)
@@ -117,11 +120,10 @@ func TestRenameIncludedColumnsForAlgoSyncsAlgoParams(t *testing.T) {
 		},
 	}
 
-	sqls, err := renameIncludedColumnsForAlgo(tableDef, catalog.MoIndexCagraAlgo.ToString(), "title", "headline", true)
+	sqls, err := renameIncludedColumnsForAlgo(tableDef, catalog.MoIndexCagraAlgo.ToString(), "title", "headline")
 	require.NoError(t, err)
 	require.Len(t, sqls, 1)
-	require.Contains(t, sqls[0], `included_columns = '["headline","category"]'`)
-	require.Contains(t, sqls[0], `algo_params = '{"included_columns":"headline,category","op_type":"vector_l2_ops"}'`)
+	require.Contains(t, sqls[0], `set algo_params = '{"included_columns":"headline,category","op_type":"vector_l2_ops"}'`)
 
 	for _, indexDef := range tableDef.Indexes {
 		require.Equal(t, []string{"headline", "category"}, indexDef.IncludedColumns)
@@ -149,11 +151,10 @@ func TestRenameIncludedColumnsForAlgoFallsBackToLegacyAlgoParams(t *testing.T) {
 		},
 	}
 
-	sqls, err := renameIncludedColumnsForAlgo(tableDef, catalog.MoIndexCagraAlgo.ToString(), "title", "headline", true)
+	sqls, err := renameIncludedColumnsForAlgo(tableDef, catalog.MoIndexCagraAlgo.ToString(), "title", "headline")
 	require.NoError(t, err)
 	require.Len(t, sqls, 1)
-	require.Contains(t, sqls[0], `included_columns = '["headline","category"]'`)
-	require.Contains(t, sqls[0], `algo_params = '{"included_columns":"headline,category","op_type":"vector_l2_ops"}'`)
+	require.Contains(t, sqls[0], `set algo_params = '{"included_columns":"headline,category","op_type":"vector_l2_ops"}'`)
 
 	for _, indexDef := range tableDef.Indexes {
 		require.Equal(t, []string{"headline", "category"}, indexDef.IncludedColumns)

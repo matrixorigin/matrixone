@@ -28,7 +28,7 @@ func (Hooks) HandleAlterDropColumn(_ *planpb.TableDef, indexDef *planpb.IndexDef
 }
 
 func (Hooks) HandleAlterRenameColumn(tableDef *planpb.TableDef, oldColName, newColName string) ([]string, error) {
-	return planplugin.RenameIncludedColumnsForAlgo(tableDef, catalog.MoIndexCagraAlgo.ToString(), oldColName, newColName, true)
+	return planplugin.RenameIncludedColumnsForAlgo(tableDef, catalog.MoIndexCagraAlgo.ToString(), oldColName, newColName)
 }
 
 func (Hooks) UpdateColumnRequiresIndexRewrite(_ *planpb.TableDef, indexDef *planpb.IndexDef, colName string) (bool, error) {

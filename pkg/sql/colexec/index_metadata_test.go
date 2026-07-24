@@ -203,7 +203,7 @@ func TestInsertOneIndexMetadata(t *testing.T) {
 	}
 }
 
-func TestBuildInsertIndexMetaBatchIncludedColumnsLayout(t *testing.T) {
+func TestBuildInsertIndexMetaBatchUsesExistingMoIndexesLayout(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -220,7 +220,7 @@ func TestBuildInsertIndexMetaBatchIncludedColumnsLayout(t *testing.T) {
 						Parts:              []string{"embedding"},
 						IndexAlgo:          catalog.MoIndexIvfFlatAlgo.ToString(),
 						IndexAlgoTableType: catalog.SystemSI_IVFFLAT_TblType_Entries,
-						IndexAlgoParams:    `{"lists":"2","op_type":"vector_l2_ops"}`,
+						IndexAlgoParams:    `{"included_columns":"title,category","lists":"2","op_type":"vector_l2_ops"}`,
 						IndexTableName:     "__mo_index_entries_idx_vec",
 						TableExist:         true,
 						IncludedColumns:    []string{"title", "category"},
@@ -250,12 +250,11 @@ func TestBuildInsertIndexMetaBatchIncludedColumnsLayout(t *testing.T) {
 		MO_INDEX_ORDINAL_POSITION,
 		MO_INDEX_OPTIONS,
 		MO_INDEX_TABLE_NAME,
-		MO_INDEX_INCLUDED_COLUMNS,
 		MO_INDEX_PRIKEY,
 	}, bat.Attrs)
 	require.Equal(t, 1, bat.RowCount())
-	require.Equal(t, [][]byte{[]byte(`["title","category"]`)}, vector.InefficientMustBytesCol(bat.Vecs[15]))
-	require.NotNil(t, bat.Vecs[16])
+	require.Equal(t, [][]byte{[]byte(`{"included_columns":"title,category","lists":"2","op_type":"vector_l2_ops"}`)}, vector.InefficientMustBytesCol(bat.Vecs[7]))
+	require.NotNil(t, bat.Vecs[15])
 }
 
 // Define an anonymous function to construct the table structure
