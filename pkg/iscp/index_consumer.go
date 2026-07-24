@@ -540,6 +540,13 @@ func (c *IndexConsumer) Consume(ctx context.Context, r DataRetriever) error {
 
 	datatype := r.GetDataType()
 
+	// Give the fulltext2 writer the SOURCE tenant so it resolves a DATALINK stage:// under
+	// the account that owns the table — the consumer ctx tenant is System_Account here
+	// (iteration.go), which is the wrong tenant for a per-account stage lookup.
+	if w, ok := c.sqlWriter.(*Fulltext2SqlWriter); ok {
+		w.srcAccountID = r.GetAccountID()
+	}
+
 	// create thread to poll sql
 	var wg sync.WaitGroup
 	wg.Add(1)
