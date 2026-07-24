@@ -112,6 +112,7 @@ func reclaimBranchSnapshotsWithBH(
 	ctx context.Context,
 	ses *Session,
 	bh BackgroundExec,
+	accountID uint32,
 	deadTIDs []uint64,
 ) error {
 	if len(deadTIDs) == 0 {
@@ -124,6 +125,9 @@ func reclaimBranchSnapshotsWithBH(
 	)
 	loadDAG := func() (databranchutils.BranchReclaimDag, error) {
 		return loadBranchDAGWithBH(ctx, bh)
+	}
+	markDeleted := func() error {
+		return markBranchTablesDeleted(ctx, ses, bh, accountID, deadTIDs)
 	}
 	execDelete := func(snames []string) error {
 		sysCtx := defines.AttachAccountId(ctx, sysAccountID)
@@ -139,8 +143,7 @@ func reclaimBranchSnapshotsWithBH(
 		)
 		return nil
 	}
-	_ = ses
-	return databranchutils.ReclaimBranchSnapshotsCore(deadTIDs, loadDAG, execDelete)
+	return databranchutils.MarkAndReclaimBranchSnapshotsCore(deadTIDs, loadDAG, markDeleted, execDelete)
 }
 
 // getBranchParentAccountName resolves the account name for the source
