@@ -487,6 +487,26 @@ func TestIffCheck_PreservesVectorResultTypes(t *testing.T) {
 	}
 }
 
+func TestIffCheck_PreservesBinaryResultTypes(t *testing.T) {
+	for _, typ := range []types.Type{
+		types.New(types.T_binary, 8, 0),
+		types.New(types.T_varbinary, 16, 0),
+	} {
+		t.Run(typ.Oid.String(), func(t *testing.T) {
+			for _, other := range []types.Type{types.T_any.ToType(), typ} {
+				result := iffCheck(nil, []types.Type{
+					types.T_bool.ToType(),
+					typ,
+					other,
+				})
+				require.Equal(t, succeedWithCast, result.status)
+				require.Equal(t, typ, result.finalType[1])
+				require.Equal(t, typ, result.finalType[2])
+			}
+		})
+	}
+}
+
 func TestIffCheck_VectorCommonType(t *testing.T) {
 	vecf32 := types.New(types.T_array_float32, 2, 0)
 	vecf64 := types.New(types.T_array_float64, 2, 0)
@@ -616,6 +636,28 @@ func TestIffFn_StringCondition(t *testing.T) {
 		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{20, 11, 12}, nil), iffFn)
 	succeed, info := tc.Run()
 	require.True(t, succeed, info)
+}
+
+func TestIffFn_BinaryResults(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, typ := range []types.Type{
+		types.New(types.T_binary, 4, 0),
+		types.New(types.T_varbinary, 4, 0),
+	} {
+		t.Run(typ.Oid.String(), func(t *testing.T) {
+			tc := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(types.T_bool.ToType(), []bool{true, false}, nil),
+					NewFunctionTestInput(typ, []string{"\x00\x01\xfe\xff", "\x10\x20"}, nil),
+					NewFunctionTestInput(typ, []string{"\xaa\xbb", "\x80\x00\x7f\xff"}, nil),
+				},
+				NewFunctionTestResult(typ, false, []string{"\x00\x01\xfe\xff", "\x80\x00\x7f\xff"}, nil),
+				iffFn,
+			)
+			succeed, info := tc.Run()
+			require.True(t, succeed, info)
+		})
+	}
 }
 
 func TestIffFn_VectorResults(t *testing.T) {

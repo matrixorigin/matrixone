@@ -487,6 +487,20 @@ func iffCheck(_ []overload, inputs []types.Type) checkResult {
 			}
 			return newCheckResultWithSuccess(0)
 		}
+		if source[0].Oid == types.T_binary || source[0].Oid == types.T_varbinary ||
+			source[1].Oid == types.T_binary || source[1].Oid == types.T_varbinary {
+			binaryIdx := 0
+			if source[0].Oid == types.T_any {
+				binaryIdx = 1
+			}
+			otherIdx := 1 - binaryIdx
+			if source[otherIdx].Oid == types.T_any || source[otherIdx].Oid == source[binaryIdx].Oid {
+				retType := source[binaryIdx]
+				setMaxWidthFromSource(&retType, source)
+				finalTypes := []types.Type{conditionType, retType, retType}
+				return newCheckResultWithCast(0, finalTypes)
+			}
+		}
 		if retType, ok := mixedStringNumericToVarchar(source); ok {
 			return newCheckResultWithCast(0, []types.Type{conditionType, retType, retType})
 		}
@@ -642,7 +656,8 @@ func iffFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pro
 		return generalIffFn[types.Timestamp](parameters, result, proc, length, selectList)
 	case types.T_enum:
 		return generalIffFn[types.Enum](parameters, result, proc, length, selectList)
-	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_datalink, types.T_json,
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary,
+		types.T_blob, types.T_text, types.T_datalink, types.T_json,
 		types.T_array_float32, types.T_array_float64,
 		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8:
 		return strIffFn(parameters, result, proc, length, selectList)

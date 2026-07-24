@@ -3007,7 +3007,22 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 				targetArgType = argsCastType[0]
 			}
 
-			if targetArgType.Oid == types.T_binary || targetArgType.Oid == types.T_varbinary {
+			preserveGroupingBinary := distinct && groupingOrderResolve != nil &&
+				(tmpArgsType[0].Oid == types.T_binary || tmpArgsType[0].Oid == types.T_varbinary)
+			for _, typ := range tmpArgsType[1:] {
+				if typ.Oid != tmpArgsType[0].Oid {
+					preserveGroupingBinary = false
+					break
+				}
+			}
+			if preserveGroupingBinary {
+				targetArgType = tmpArgsType[0]
+				for _, typ := range tmpArgsType[1:] {
+					if typ.Width > targetArgType.Width {
+						targetArgType.Width = typ.Width
+					}
+				}
+			} else if targetArgType.Oid == types.T_binary || targetArgType.Oid == types.T_varbinary {
 				targetArgType = types.T_blob.ToType()
 			}
 			targetType = makePlan2Type(&targetArgType)

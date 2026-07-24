@@ -1157,6 +1157,35 @@ null
 [0, 1, 255]
 [2, 3, 4]
 drop table grouping_vector;
+drop table if exists grouping_binary;
+create table grouping_binary (b binary(4), vb varbinary(4));
+insert into grouping_binary values
+(x'0001feff', x'0001feff'),
+(x'80007fff', x'80007fff'),
+(null, null);
+select hex(b) as b
+from (
+select distinct b
+from grouping_binary
+group by b with rollup
+) dt
+order by b;
+b
+null
+0001FEFF
+80007FFF
+select hex(vb) as vb
+from (
+select distinct vb
+from grouping_binary
+group by cube(vb)
+) dt
+order by vb;
+vb
+null
+0001FEFF
+80007FFF
+drop table grouping_binary;
 drop table if exists grouping_not_null;
 create table grouping_not_null (a int not null, b int not null);
 insert into grouping_not_null values (1, 10), (2, 20);

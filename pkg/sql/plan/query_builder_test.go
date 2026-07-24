@@ -4989,6 +4989,35 @@ func TestGroupingSetDistinctVectorProjects(t *testing.T) {
 	}
 }
 
+func TestGroupingSetDistinctBinaryProjects(t *testing.T) {
+	for _, typ := range []types.T{types.T_binary, types.T_varbinary} {
+		t.Run(typ.String(), func(t *testing.T) {
+			mock := NewMockOptimizer(true)
+			binaryCol := mock.ctxt.tables["bind_select"].Cols[0]
+			binaryCol.Name = "v"
+			binaryCol.OriginName = "v"
+			binaryCol.Typ = plan.Type{Id: int32(typ), Width: 8}
+
+			p, err := runOneStmt(mock, t,
+				"select distinct v from select_test.bind_select group by v with rollup")
+			require.NoError(t, err)
+
+			foundNormalization := false
+			for _, node := range p.GetQuery().Nodes {
+				if node.NodeType != plan.Node_PROJECT || len(node.Children) != 1 ||
+					p.GetQuery().Nodes[node.Children[0]].NodeType != plan.Node_UNION_ALL {
+					continue
+				}
+				foundNormalization = true
+				require.NotEmpty(t, node.ProjectList)
+				require.Equal(t, int32(typ), node.ProjectList[0].Typ.Id)
+				require.Equal(t, int32(8), node.ProjectList[0].Typ.Width)
+			}
+			require.True(t, foundNormalization)
+		})
+	}
+}
+
 func TestIffVectorCommonType(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	for _, query := range []string{
@@ -5044,6 +5073,8 @@ func TestNormalizeGroupingSetDistinctProjectsTypedNull(t *testing.T) {
 	for _, typ := range []types.T{
 		types.T_int64,
 		types.T_varchar,
+		types.T_binary,
+		types.T_varbinary,
 		types.T_decimal128,
 		types.T_date,
 		types.T_uuid,
@@ -5076,6 +5107,7 @@ func TestNormalizeGroupingSetDistinctProjectsTypedNull(t *testing.T) {
 			require.NotNil(t, nullLiteral)
 			require.True(t, nullLiteral.Isnull)
 			require.Equal(t, int32(typ), ifExpr.Args[1].Typ.Id)
+			require.Equal(t, int32(typ), normalized[0].Typ.Id)
 		})
 	}
 

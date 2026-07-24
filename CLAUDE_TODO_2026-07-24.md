@@ -63,3 +63,25 @@ panic，不同窄向量混用还会按参数顺序选择有损结果类型。
 - 串行运行完整 rollup BVT、planner 定向及全量 CGo UT、静态检查和
   `git diff --check`。
 - 完成全差异 self-review 后提交并正常推送，不 force push，不修改 GitHub thread。
+
+## PR #25335 第十二轮 review 修复
+
+### 有效问题
+
+grouping-set DISTINCT 的 NULL 物化会为 `BINARY/VARBINARY` 构造 synthetic IF，
+但 IFF 返回候选和执行分派未包含这两种类型，绑定器会退化选择 `BLOB`，改变结果
+列元数据及二进制类型语义。
+
+### 修复方案
+
+1. 为 IFF 增加同类 `BINARY`、`VARBINARY` 与 typed NULL 的专用公共类型推导，
+   并接入现有 varlen 执行路径。
+2. 增加 function 类型推导与执行 UT，校验类型、宽度和原始字节保持不变。
+3. 扩展 planner typed-NULL 矩阵，并增加 DISTINCT ROLLUP/CUBE 的真实元数据及
+   结果回归。
+
+### 验证
+
+- 运行 function/planner 定向及全量 CGo UT、完整 rollup BVT、build、覆盖率、
+  静态检查和 `git diff --check`。
+- 完成全差异 self-review 后提交并正常推送，不 force push，不修改 GitHub thread。

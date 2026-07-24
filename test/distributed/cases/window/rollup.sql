@@ -743,6 +743,29 @@ group by cube(vu8)
 order by vu8;
 drop table grouping_vector;
 
+-- Grouping NULL normalization must preserve binary metadata and bytes.
+drop table if exists grouping_binary;
+create table grouping_binary (b binary(4), vb varbinary(4));
+insert into grouping_binary values
+    (x'0001feff', x'0001feff'),
+    (x'80007fff', x'80007fff'),
+    (null, null);
+select hex(b) as b
+from (
+    select distinct b
+    from grouping_binary
+    group by b with rollup
+) dt
+order by b;
+select hex(vb) as vb
+from (
+    select distinct vb
+    from grouping_binary
+    group by cube(vb)
+) dt
+order by vb;
+drop table grouping_binary;
+
 -- DISTINCT must preserve subtotal and grand-total rows for NOT NULL inputs.
 drop table if exists grouping_not_null;
 create table grouping_not_null (a int not null, b int not null);
