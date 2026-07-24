@@ -951,3 +951,23 @@ SELECT CAST(300.00 AS DECIMAL(20,2)) - 3999 AS dec128_minus_int_large_negative;
 -- Reverse operand order is a related decimal-int diff-scale subtraction shape.
 SELECT 301 - CAST(300.00 AS DECIMAL(12,2)) AS int_minus_decimal_positive_one;
 SELECT 200 - CAST(300.00 AS DECIMAL(12,2)) AS int_minus_decimal_negative_hundred;
+
+-- Non-equi joins materialize an integer literal as a batch-wide decimal constant.
+DROP TABLE IF EXISTS decimal_join_left;
+DROP TABLE IF EXISTS decimal_join_right;
+CREATE TABLE decimal_join_left(id INT, v DECIMAL(10,2));
+CREATE TABLE decimal_join_right(id INT, v DECIMAL(10,2));
+INSERT INTO decimal_join_left VALUES (1,10.00),(2,20.00);
+INSERT INTO decimal_join_right VALUES (11,2.00),(12,15.00);
+
+SELECT l.id AS l_id, r.id AS r_id
+FROM decimal_join_left l RIGHT JOIN decimal_join_right r ON l.v <= r.v + 8
+ORDER BY r.id, l.id;
+
+SELECT l.id AS l_id, r.id AS r_id
+FROM decimal_join_left l JOIN decimal_join_right r
+ON l.v BETWEEN r.v AND r.v + 8
+ORDER BY r.id, l.id;
+
+DROP TABLE decimal_join_left;
+DROP TABLE decimal_join_right;
