@@ -3163,6 +3163,16 @@ func boolToStr(
 				result = []byte("1")
 			}
 			result = truncateCastBytesResult(ctx, result, toType, strictStringWidth...)
+			if len(result) > int(toType.Width) &&
+				(toType.Oid == types.T_char || toType.Oid == types.T_varchar) {
+				return formatDataTruncationError(
+					ctx,
+					from.GetSourceVector(),
+					toType,
+					fmt.Sprintf("%v is larger than Dest length %v", v, toType.Width),
+					assignmentCast(strictStringWidth),
+				)
+			}
 			if toType.Oid == types.T_binary {
 				for len(result) < int(toType.Width) {
 					result = append(result, 0)
@@ -6959,7 +6969,8 @@ func strToStr(
 		return nil
 	}
 
-	if totype.Oid != types.T_text && destLen != 0 {
+	if totype.Oid != types.T_text &&
+		(destLen != 0 || totype.Oid == types.T_char || totype.Oid == types.T_varchar) {
 		for i = 0; i < l; i++ {
 			v, null := from.GetStrValue(i)
 			if null {
@@ -7827,10 +7838,10 @@ func truncateCastBytesResult(ctx context.Context, result []byte, toType types.Ty
 	if len(strictStringWidth) > 0 && strictStringWidth[0] {
 		return result
 	}
-	if toType.Width <= 0 {
+	if toType.Oid != types.T_char && toType.Oid != types.T_varchar {
 		return result
 	}
-	if toType.Oid != types.T_char && toType.Oid != types.T_varchar {
+	if toType.Width < 0 {
 		return result
 	}
 	if len(result) <= int(toType.Width) {

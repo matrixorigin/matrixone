@@ -101,6 +101,124 @@ func TestStrToStrWidthEnforcement(t *testing.T) {
 	}
 }
 
+func TestZeroWidthCharVarcharAssignment(t *testing.T) {
+	type castFunc func(
+		[]*vector.Vector,
+		vector.FunctionResultWrapper,
+		*process.Process,
+		int,
+		*FunctionSelectList,
+	) error
+
+	run := func(
+		t *testing.T,
+		sourceType types.T,
+		targetType types.T,
+		sqlMode string,
+		input string,
+		cast castFunc,
+	) (string, error) {
+		t.Helper()
+		proc := testutil.NewProcess(t)
+		proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+			require.Equal(t, "sql_mode", name)
+			return sqlMode, nil
+		})
+
+		var src *vector.Vector
+		switch sourceType {
+		case types.T_text:
+			src = vector.NewVec(types.T_text.ToType())
+			require.NoError(t, vector.AppendBytes(src, []byte(input), false, proc.Mp()))
+		case types.T_int64:
+			src = vector.NewVec(types.T_int64.ToType())
+			require.NoError(t, vector.AppendFixed(src, int64(1), false, proc.Mp()))
+		case types.T_bool:
+			src = vector.NewVec(types.T_bool.ToType())
+			require.NoError(t, vector.AppendFixed(src, true, false, proc.Mp()))
+		default:
+			t.Fatalf("unsupported zero-width test source %s", sourceType)
+		}
+		defer src.Free(proc.Mp())
+
+		target := types.New(targetType, 0, 0)
+		dst := vector.NewVec(target)
+		defer dst.Free(proc.Mp())
+		result := vector.NewFunctionResultWrapper(target, proc.Mp())
+		defer result.Free()
+		require.NoError(t, result.PreExtendAndReset(1))
+
+		if err := cast([]*vector.Vector{src, dst}, result, proc, 1, nil); err != nil {
+			return "", err
+		}
+		got, null := vector.GenerateFunctionStrParameter(result.GetResultVector()).GetStrValue(0)
+		require.False(t, null)
+		return string(got), nil
+	}
+
+	for _, targetType := range []types.T{types.T_char, types.T_varchar} {
+		for _, source := range []struct {
+			name  string
+			typ   types.T
+			input string
+		}{
+			{name: "string", typ: types.T_text, input: "x"},
+			{name: "integer", typ: types.T_int64},
+			{name: "boolean", typ: types.T_bool},
+		} {
+			t.Run(targetType.String()+"/"+source.name+"/strict", func(t *testing.T) {
+				_, err := run(
+					t, source.typ, targetType, "STRICT_TRANS_TABLES", source.input, NewAssignCast)
+				require.Error(t, err)
+				moErr := err.(*moerr.Error)
+				require.Equal(t, moerr.ErrCastWidthExceeded, moErr.ErrorCode())
+				require.Equal(t, uint16(moerr.ER_DATA_TOO_LONG), moErr.MySQLCode())
+			})
+			t.Run(targetType.String()+"/"+source.name+"/nonstrict", func(t *testing.T) {
+				got, err := run(t, source.typ, targetType, "", source.input, NewAssignCast)
+				require.NoError(t, err)
+				require.Empty(t, got)
+			})
+			t.Run(targetType.String()+"/"+source.name+"/ignore", func(t *testing.T) {
+				got, err := run(
+					t, source.typ, targetType, "STRICT_TRANS_TABLES", source.input, NewAssignIgnoreCast)
+				require.NoError(t, err)
+				require.Empty(t, got)
+			})
+		}
+
+		t.Run(targetType.String()+"/empty_string/strict", func(t *testing.T) {
+			got, err := run(t, types.T_text, targetType, "STRICT_TRANS_TABLES", "", NewAssignCast)
+			require.NoError(t, err)
+			require.Empty(t, got)
+		})
+	}
+}
+
+func TestTruncateCastBytesResultWidthBounds(t *testing.T) {
+	cases := []struct {
+		name   string
+		input  string
+		target types.Type
+		strict bool
+		want   string
+	}{
+		{name: "char_zero", input: "x", target: types.New(types.T_char, 0, 0), want: ""},
+		{name: "varchar_zero", input: "x", target: types.New(types.T_varchar, 0, 0), want: ""},
+		{name: "zero_empty", target: types.New(types.T_varchar, 0, 0), want: ""},
+		{name: "strict_defers_error", input: "x", target: types.New(types.T_varchar, 0, 0), strict: true, want: "x"},
+		{name: "negative_is_unbounded", input: "x", target: types.New(types.T_varchar, -1, 0), want: "x"},
+		{name: "text_is_unbounded", input: "x", target: types.T_text.ToType(), want: "x"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := truncateCastBytesResult(
+				context.Background(), []byte(c.input), c.target, c.strict)
+			require.Equal(t, c.want, string(got))
+		})
+	}
+}
+
 func TestOverLenIsAllTrailingSpaces(t *testing.T) {
 	require.True(t, overLenIsAllTrailingSpaces("abc ", 3))
 	require.True(t, overLenIsAllTrailingSpaces("abc   ", 3))
