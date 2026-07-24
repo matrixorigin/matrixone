@@ -190,6 +190,9 @@ func (h *txnRelation) CreateObject(isTombstone bool) (obj handle.Object, err err
 }
 
 func (h *txnRelation) CreateObjectWithOpt(isTombstone bool, opt *objectio.CreateObjOpt) (obj handle.Object, err error) {
+	if err = validateCreateObjectOpt(opt); err != nil {
+		return
+	}
 	return h.Txn.GetStore().CreateObjectWithOpt(h.table.entry.GetDB().ID, h.table.entry.GetID(), isTombstone, opt)
 }
 

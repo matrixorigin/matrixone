@@ -19,6 +19,7 @@ import (
 	"context"
 	"iter"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -113,7 +114,6 @@ func TestHandleTaskTriggerNilPointerFixed(t *testing.T) {
 	scheduler := &MergeScheduler{
 		supps:   make(map[uint64]*todoSupporter),
 		msgChan: make(chan *MMsg, 4096),
-		ioChan:  make(chan *MMsg, 256),
 		clock:   NewStdClock(),
 	}
 
@@ -131,7 +131,7 @@ func TestHandleTaskTriggerNilPointerFixed(t *testing.T) {
 	// After the fix: This should NOT panic
 	// The early nil check should return gracefully
 	require.NotPanics(t, func() {
-		scheduler.handleTaskTrigger(msg)
+		scheduler.handleTaskTrigger(nil, msg)
 	}, "Should not panic after moving nil check before vacuum check")
 }
 
@@ -146,14 +146,14 @@ func TestDoSchedNilSupporter(t *testing.T) {
 	mockTable := catalog.ToMergeTable(table)
 
 	require.NotPanics(t, func() {
-		scheduler.doSched(&todoItem{table: mockTable})
+		scheduler.doSched(nil, &todoItem{table: mockTable})
 	})
 
 	todo := &todoItem{table: mockTable, readyAt: scheduler.clock.Now()}
 	heap.Push(&scheduler.pq, todo)
 
 	require.NotPanics(t, func() {
-		scheduler.doSched(todo)
+		scheduler.doSched(nil, todo)
 	})
 	require.Equal(t, 0, scheduler.pq.Len())
 }
@@ -433,6 +433,7 @@ func TestQueryAndStopBoundedWhenIOQueueFull(t *testing.T) {
 		NewStdClock(),
 	)
 	sched.Start()
+	generation := sched.generation.Load()
 
 	var releaseOnce sync.Once
 	releaseIO := func() {
@@ -454,13 +455,13 @@ func TestQueryAndStopBoundedWhenIOQueueFull(t *testing.T) {
 		t.Fatal("vacuum I/O did not start")
 	}
 
-	for i := 0; i <= cap(sched.ioChan); i++ {
+	for i := 0; i <= cap(generation.ioChan); i++ {
 		require.NoError(t, sched.SendTrigger(
 			NewMMsgTaskTrigger(table).WithVacuumCheck(DefaultVacuumOpts),
 		))
 	}
 	require.Eventually(t, func() bool {
-		return len(sched.ioChan) == cap(sched.ioChan)
+		return len(generation.ioChan) == cap(generation.ioChan)
 	}, time.Second, time.Millisecond)
 
 	queryCtx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
@@ -493,18 +494,57 @@ func TestQueryAndStopBoundedWhenIOQueueFull(t *testing.T) {
 	releaseIO()
 }
 
-func TestClosedGenerationNeverEnqueuesIO(t *testing.T) {
-	sched := &MergeScheduler{
-		ioChan: make(chan *MMsg, 256),
-	}
-	stopCh := make(chan struct{})
-	close(stopCh)
-	msg := &MMsg{Kind: MMsgKindVacuumCheck}
+func TestStoppedGenerationIOCannotCrossRestart(t *testing.T) {
+	source := &dummyCatalogSource{}
+	sched := NewMergeScheduler(
+		time.Hour,
+		source,
+		&dummyExecutor{},
+		NewStdClock(),
+	)
+	sched.Start()
+	stoppedGeneration := sched.generation.Load()
+	sched.Stop()
 
-	for range cap(sched.ioChan) * 4 {
-		require.False(t, sched.sendIOForGeneration(&stopCh, msg))
+	sched.Start()
+	t.Cleanup(sched.Stop)
+	currentGeneration := sched.generation.Load()
+	require.NotSame(t, stoppedGeneration, currentGeneration)
+	require.NotEqual(t, stoppedGeneration.ioChan, currentGeneration.ioChan)
+
+	staleMsg := &MMsg{Kind: MMsgKindVacuumCheck}
+	for range cap(stoppedGeneration.ioChan) * 4 {
+		require.False(t, sched.sendIOForGeneration(stoppedGeneration, staleMsg))
 	}
-	require.Empty(t, sched.ioChan)
+	require.Empty(t, stoppedGeneration.ioChan)
+	require.Empty(t, currentGeneration.ioChan)
+
+	// Simulate the exact race where an old callback passed its stop check and
+	// completes the send only after Stop returned and a new generation started.
+	// Its message stays on the stopped generation's private queue.
+	var staleIOProcessed atomic.Bool
+	stoppedGeneration.ioChan <- &MMsg{
+		Kind: MMsgKindConfigBootstrap,
+		Value: MMsgConfigBootstrap{
+			ReadSettingsBatch: func() (*batch.Batch, func()) {
+				staleIOProcessed.Store(true)
+				return nil, func() {}
+			},
+		},
+		generation: stoppedGeneration,
+	}
+
+	staleAnswer := make(chan *QueryAnswer, 1)
+	sched.msgChan <- &MMsg{
+		Kind:       MMsgKindQuery,
+		Value:      MMsgQuery{Answer: staleAnswer},
+		generation: stoppedGeneration,
+	}
+	_, err := sched.Query(context.Background(), nil)
+	require.NoError(t, err)
+	require.Empty(t, staleAnswer)
+	require.Never(t, staleIOProcessed.Load, 50*time.Millisecond, time.Millisecond)
+	require.Empty(t, currentGeneration.ioChan)
 }
 
 func TestLaunchPad(t *testing.T) {
