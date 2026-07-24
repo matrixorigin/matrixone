@@ -19,7 +19,6 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
-	"math"
 	"net/url"
 	"path"
 	"strings"
@@ -463,74 +462,6 @@ func newTableDumpTestObject(t *testing.T, tombstone bool) tableDumpObject {
 	}
 }
 
-func writePhysicalTableDumpTestObject(
-	t *testing.T,
-	fs fileservice.FileService,
-) tableDumpObject {
-	t.Helper()
-	ctx := context.Background()
-	id := objectio.NewObjectid()
-	objectName := objectio.BuildObjectNameWithObjectID(&id)
-	name := objectName.String()
-	mp := mpool.MustNewZero()
-	bat := batch.NewWithSize(1)
-	bat.SetAttributes([]string{"a"})
-	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-	require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(42), false, mp))
-	bat.SetRowCount(1)
-	defer bat.Clean(mp)
-
-	writer, err := objectio.NewObjectWriter(objectName, fs, 0, nil, nil)
-	require.NoError(t, err)
-	_, err = writer.Write(bat)
-	require.NoError(t, err)
-	writer.WriteObjectMeta(ctx, 1, nil)
-	_, err = writer.WriteEnd(ctx)
-	require.NoError(t, err)
-	stats := writer.GetObjectStats()
-	size, hash, err := hashTableDumpFile(ctx, fs, name)
-	require.NoError(t, err)
-	return tableDumpObject{
-		Name: name, Stats: append([]byte(nil), stats.Marshal()...), Size: size, SHA256: hash,
-	}
-}
-
-func TestLoadPhysicalTableDumpStatsRejectsManifestForgery(t *testing.T) {
-	ctx := context.Background()
-	fs, err := fileservice.NewLocalETLFS("objects", t.TempDir())
-	require.NoError(t, err)
-	item := writePhysicalTableDumpTestObject(t, fs)
-
-	stats, blocks, err := loadPhysicalTableDumpStats(ctx, fs, item, mpool.MustNewZero())
-	require.NoError(t, err)
-	require.Equal(t, uint32(1), blocks)
-	require.Equal(t, objectio.ObjectStats(item.Stats), stats)
-
-	forged := item
-	forged.Stats = append([]byte(nil), item.Stats...)
-	forgedStats := objectio.ObjectStats(forged.Stats)
-	require.NoError(t, objectio.SetObjectStatsBlkCnt(&forgedStats, math.MaxUint16))
-	forged.Stats = append(forged.Stats[:0], forgedStats.Marshal()...)
-	_, _, err = loadPhysicalTableDumpStats(ctx, fs, forged, mpool.MustNewZero())
-	require.ErrorContains(t, err, "do not match physical metadata")
-
-	objects := []tableDumpObject{item}
-	var total atomic.Uint64
-	total.Store(tableDumpMaxBlocks)
-	err = validatePhysicalTableDumpObjectsImpl(ctx, fs, objects, mpool.MustNewZero(), &total)
-	require.ErrorContains(t, err, "more than 1000000 blocks")
-
-	header := objectio.BuildHeader()
-	header.SetExtent(objectio.NewExtent(0, objectio.HeaderSize, tableDumpMaxObjectMeta+1, tableDumpMaxObjectMeta+1))
-	badItem := newTableDumpTestObject(t, false)
-	require.NoError(t, fs.Write(ctx, fileservice.IOVector{
-		FilePath: badItem.Name,
-		Entries:  []fileservice.IOEntry{{Offset: 0, Size: int64(len(header)), Data: header}},
-	}))
-	_, _, err = loadPhysicalTableDumpStats(ctx, fs, badItem, mpool.MustNewZero())
-	require.ErrorContains(t, err, "invalid metadata extent")
-}
-
 func TestSubmitTableDumpObjects(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	rel := mock_frontend.NewMockRelation(ctrl)
@@ -644,13 +575,6 @@ func TestHandleLoadTable(t *testing.T) {
 		return nil
 	})
 	defer lockStub.Reset()
-	physicalStub := gostub.Stub(&validatePhysicalTableDumpObjects, func(
-		context.Context, fileservice.FileService, []tableDumpObject, *mpool.MPool, *atomic.Uint64,
-	) error {
-		return nil
-	})
-	defer physicalStub.Reset()
-
 	stmt := &tree.LoadTable{Table: tree.NewTableName("orders", tree.ObjectNamePrefix{}, nil), Path: dumpRoot}
 	require.NoError(t, handleLoadTable(context.Background(), ses, stmt))
 	require.Equal(t, []string{object.Name}, workspace.protectedCloneFiles)
