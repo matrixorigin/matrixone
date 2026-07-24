@@ -14,10 +14,75 @@ load data local infile '$resources/load_data/issue_25366_load_data_local_adjuste
 into table t_load
 fields terminated by ',' lines terminated by '\n';
 select id, i, d, dt, vc, hex(vc), nullable_i from t_load order by id;
-id	i	d	dt	vc	hex(vc)	nullable_i
-1	12	12.35	2024-01-02	abcd	61626364	null
-2	0	10.00	0001-01-01	abcd	61626364	0
-3	0	0.00	0001-01-01	xy	7879	7
+➤ id[4,32,0]  ¦  i[4,32,0]  ¦  d[3,5,2]  ¦  dt[91,64,0]  ¦  vc[12,-1,0]  ¦  hex(vc)[12,-1,0]  ¦  nullable_i[4,32,0]  𝄀
+1  ¦  12  ¦  12.35  ¦  2024-01-02  ¦  abcd  ¦  61626364  ¦  null  𝄀
+2  ¦  0  ¦  10.00  ¦  0000-00-00  ¦  abcd  ¦  61626364  ¦  0  𝄀
+3  ¦  0  ¦  0.00  ¦  0000-00-00  ¦  xy  ¦  7879  ¦  7
+set @old_time_zone = @@time_zone;
+set time_zone = '+00:00';
+create table t_load_temporal(
+id int primary key,
+d date,
+dt datetime,
+ts timestamp
+);
+load data local infile '$resources/load_data/issue_25366_load_data_local_temporal.csv'
+into table t_load_temporal
+fields terminated by ',' lines terminated by '\n';
+select id, d, dt, ts from t_load_temporal order by id;
+➤ id[4,32,0]  ¦  d[91,64,0]  ¦  dt[93,64,0]  ¦  ts[93,64,0]  𝄀
+1  ¦  2024-01-02  ¦  2024-01-02 03:04:05  ¦  2024-01-02 03:04:05  𝄀
+2  ¦  0000-00-00  ¦  2024-01-02 03:04:05  ¦  2024-01-02 03:04:05  𝄀
+3  ¦  2024-01-02  ¦  0000-00-00 00:00:00  ¦  2024-01-02 03:04:05  𝄀
+4  ¦  2024-01-02  ¦  2024-01-02 03:04:05  ¦  0000-00-00 00:00:00  𝄀
+5  ¦  0000-00-00  ¦  0000-00-00 00:00:00  ¦  0000-00-00 00:00:00  𝄀
+6  ¦  1970-01-01  ¦  1970-01-01 00:00:01  ¦  1970-01-01 00:00:01  𝄀
+7  ¦  1970-01-01  ¦  1970-01-01 00:00:00  ¦  0000-00-00 00:00:00
+set sql_mode = 'STRICT_TRANS_TABLES';
+truncate table t_load_temporal;
+load data local infile '$resources/load_data/issue_25366_load_data_local_temporal.csv'
+into table t_load_temporal
+fields terminated by ',' lines terminated by '\n' ignore 1 lines;
+internal error: the input value '2024-02-31' is not Date type for column 1
+select count(*) as strict_invalid_date_rows from t_load_temporal;
+➤ strict_invalid_date_rows[-5,64,0]  𝄀
+0
+truncate table t_load_temporal;
+load data local infile '$resources/load_data/issue_25366_load_data_local_temporal.csv'
+into table t_load_temporal
+fields terminated by ',' lines terminated by '\n' ignore 2 lines;
+internal error: the input value '2024-02-31 25:61:61' is not Datetime type for column 2
+select count(*) as strict_invalid_datetime_rows from t_load_temporal;
+➤ strict_invalid_datetime_rows[-5,64,0]  𝄀
+0
+truncate table t_load_temporal;
+load data local infile '$resources/load_data/issue_25366_load_data_local_temporal.csv'
+into table t_load_temporal
+fields terminated by ',' lines terminated by '\n' ignore 3 lines;
+internal error: the input value 'not-a-timestamp' is not Timestamp type for column 3
+select count(*) as strict_invalid_timestamp_rows from t_load_temporal;
+➤ strict_invalid_timestamp_rows[-5,64,0]  𝄀
+0
+truncate table t_load_temporal;
+load data local infile '$resources/load_data/issue_25366_load_data_local_temporal.csv'
+into table t_load_temporal
+fields terminated by ',' lines terminated by '\n' ignore 6 lines;
+internal error: the input value '1970-01-01 00:00:00' is not Timestamp type for column 3
+select count(*) as strict_timestamp_below_minimum_rows from t_load_temporal;
+➤ strict_timestamp_below_minimum_rows[-5,64,0]  𝄀
+0
+set sql_mode = 'STRICT_TRANS_TABLES,NO_ZERO_DATE';
+truncate table t_load_temporal;
+load data local infile '$resources/load_data/issue_25366_load_data_local_temporal.csv'
+ignore into table t_load_temporal
+fields terminated by ',' lines terminated by '\n' ignore 4 lines;
+select id, d, dt, ts from t_load_temporal order by id;
+➤ id[4,32,0]  ¦  d[91,64,0]  ¦  dt[93,64,0]  ¦  ts[93,64,0]  𝄀
+5  ¦  0000-00-00  ¦  0000-00-00 00:00:00  ¦  0000-00-00 00:00:00  𝄀
+6  ¦  1970-01-01  ¦  1970-01-01 00:00:01  ¦  1970-01-01 00:00:01  𝄀
+7  ¦  1970-01-01  ¦  1970-01-01 00:00:00  ¦  0000-00-00 00:00:00
+set sql_mode = '';
+set time_zone = @old_time_zone;
 set sql_mode = 'STRICT_TRANS_TABLES';
 truncate table t_load;
 load data local infile '$resources/load_data/issue_25366_load_data_local_adjusted.csv'
@@ -25,7 +90,7 @@ into table t_load
 fields terminated by ',' lines terminated by '\n';
 internal error: the input value 'abc' is not int32 type for column 1
 select count(*) from t_load;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 0
 set sql_mode = '';
 truncate table t_load;
@@ -34,7 +99,7 @@ into table t_load
 fields terminated by ',' lines terminated by '\n';
 internal error: the input value 'abc' is not int32 type for column 1
 select count(*) from t_load;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 0
 create table t_quoted_int(id int primary key, i int);
 load data local infile '$resources/load_data/issue_25366_quoted_invalid_int.csv'
@@ -42,7 +107,7 @@ into table t_quoted_int
 fields terminated by ',' enclosed by '"' lines terminated by '\n';
 internal error: the input value 'abc' is not int32 type for column 1
 select count(*) from t_quoted_int;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 0
 set sql_mode = 'STRICT_TRANS_TABLES';
 truncate table t_quoted_int;
@@ -51,7 +116,7 @@ into table t_quoted_int
 fields terminated by ',' enclosed by '"' lines terminated by '\n';
 internal error: the input value 'abc' is not int32 type for column 1
 select count(*) from t_quoted_int;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 0
 set sql_mode = '';
 truncate table t_quoted_int;
@@ -60,7 +125,7 @@ into table t_quoted_int
 fields terminated by ',' enclosed by '"' lines terminated by '\n';
 internal error: the input value 'abc' is not int32 type for column 1
 select count(*) from t_quoted_int;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 0
 create table t_quoted_decimal(id int primary key, d decimal(5,2));
 load data local infile '$resources/load_data/issue_25366_quoted_invalid_decimal.csv'
@@ -68,10 +133,11 @@ into table t_quoted_decimal
 fields terminated by ',' enclosed by '"' lines terminated by '\n';
 internal error: the input value '10x' is invalid Decimal64 type for column 1
 select count(*) from t_quoted_decimal;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 0
 set sql_mode = default;
 drop table t_quoted_decimal;
 drop table t_quoted_int;
+drop table t_load_temporal;
 drop table t_load;
 drop database issue_25366_load_data_local_adjusted;

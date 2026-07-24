@@ -283,6 +283,23 @@ func makeInterval() types.Datetime {
 	return t
 }
 
+func TestFirstWindowKeepsZeroDatetimeDistinctFromEpoch(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	ts := vector.NewVec(types.T_datetime.ToType())
+	require.NoError(t, vector.AppendFixedList(ts, []types.Datetime{types.ZeroDatetime}, nil, proc.Mp()))
+	ts.SetLength(1)
+	defer ts.Free(proc.Mp())
+
+	window := &TimeWin{Interval: types.Datetime(types.MicroSecsPerSec), Sliding: types.Datetime(types.MicroSecsPerSec)}
+	ctr := container{tsVec: []*vector.Vector{ts}}
+	require.NoError(t, ctr.firstWindow(window))
+
+	require.Equal(t, types.ZeroDatetime, ctr.left)
+	require.Equal(t, types.ZeroDatetime, ctr.right)
+	require.Equal(t, types.ZeroDatetime, ctr.nextLeft)
+	require.Equal(t, types.ZeroDatetime, ctr.nextRight)
+}
+
 // singleAggInfo is the basic information of single column agg.
 type singleAggInfo struct {
 	aggID    int64
