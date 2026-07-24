@@ -28,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
-	"github.com/matrixorigin/matrixone/pkg/vectorindex/cachegen"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
@@ -46,15 +45,17 @@ type HnswSearch[T types.RealNumbers] struct {
 	Cond          *sync.Cond
 	ThreadsSearch int64
 
-	// Generation captured at Load for the cross-CN cache freshness check (IsStale). hnsw
-	// rebuilds its model on CDC (new metadata timestamp), so loadedTs alone moves; loadedTail
-	// is the shared (CdcTailId,tag=1) read (constant for hnsw). cnUUID/accountID re-query in
-	// the background. genValid=false (capture failed / unit tests) ⇒ IsStale is a no-op.
-	cnUUID     string
-	accountID  uint32
-	loadedTs   int64
-	loadedTail int64
-	genValid   bool
+	// Generation captured at Load for the cross-CN cache freshness check (IsStale), read from the
+	// metadata table as (MAX(timestamp), COUNT(*) model rows) — see hnswGenerationSqls. loadedTs
+	// moves on any surviving-row change (CDC append / in-place rewrite / REBUILD / MERGE); loadedCount
+	// moves when a model is emptied and its row is deleted with no compensating insert (which would
+	// otherwise leave MAX(timestamp) unchanged). cnUUID/accountID re-query in the background.
+	// genValid=false (capture failed) ⇒ IsStale reports stale so the entry is evicted and reloaded.
+	cnUUID      string
+	accountID   uint32
+	loadedTs    int64
+	loadedCount int64
+	genValid    bool
 }
 
 func NewHnswSearch[T types.RealNumbers](idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig) *HnswSearch[T] {
@@ -306,15 +307,16 @@ func (s *HnswSearch[T]) Load(sqlproc *sqlexec.SqlProcess) error {
 	// rather than pinning it forever — see IsStale.
 	s.cnUUID = sqlproc.GetService()
 	if acc, e := sqlproc.GetAccountID(); e == nil {
-		if ts, tail, e2 := cachegen.LoadCdcGeneration(sqlproc, s.Tblcfg); e2 == nil {
-			s.accountID, s.loadedTs, s.loadedTail, s.genValid = acc, ts, tail, true
+		if ts, count, e2 := loadHnswGeneration(sqlproc, s.Tblcfg); e2 == nil {
+			s.accountID, s.loadedTs, s.loadedCount, s.genValid = acc, ts, count, true
 		}
 	}
 	return nil
 }
 
-// IsStale reports whether the loaded model has fallen behind the persisted index (a REBUILD on
-// another CN bumps the metadata timestamp), for the VectorIndexCache cross-CN freshness check.
+// IsStale reports whether the loaded model has fallen behind the persisted index — a REBUILD/MERGE
+// or in-place rewrite bumps MAX(metadata.timestamp), and an emptied model drops COUNT(*) of model
+// rows — for the VectorIndexCache cross-CN freshness check.
 // Runs on the housekeeping goroutine via a background auto-commit txn (cnUUID/accountID captured
 // at load). A query error ⇒ (true, err): the index was likely dropped/rebuilt, so reclaim the
 // dead entry. No captured generation (capture failed at load, or no service to re-query) ⇒
@@ -328,11 +330,11 @@ func (s *HnswSearch[T]) IsStale() (bool, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	ts, tail, err := cachegen.QueryCdcGeneration(ctx, s.cnUUID, s.accountID, s.Tblcfg)
+	ts, count, err := queryHnswGeneration(ctx, s.cnUUID, s.accountID, s.Tblcfg)
 	if err != nil {
 		return true, err
 	}
-	return ts != s.loadedTs || tail != s.loadedTail, nil
+	return ts != s.loadedTs || count != s.loadedCount, nil
 }
 
 // check config and update some parameters such as ef_search

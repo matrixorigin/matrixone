@@ -24,6 +24,7 @@ import (
 	"time"
 
 	fallocate "github.com/detailyang/go-fallocate"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -408,7 +409,7 @@ func TestHnswSyncNextTimestampMonotonic(t *testing.T) {
 }
 
 // TestHnswSearchIsStaleQueryError covers the IsStale query path: with a captured generation but
-// an unresolvable CN service, QueryCdcGeneration errors, and IsStale treats a query error as
+// an unresolvable CN service, queryHnswGeneration errors, and IsStale treats a query error as
 // stale (so a dropped/rebuilt index's dead cache entry is reclaimed) while surfacing the error.
 func TestHnswSearchIsStaleQueryError(t *testing.T) {
 	s := &HnswSearch[float32]{
@@ -419,4 +420,86 @@ func TestHnswSearchIsStaleQueryError(t *testing.T) {
 	stale, err := s.IsStale()
 	require.Error(t, err)
 	require.True(t, stale)
+}
+
+// TestHnswGenerationSqls pins the two-part generation: MAX(timestamp) AND COUNT(*) over the
+// metadata table. COUNT(*) is the deletion-sensitive half — without it, emptying a model (which
+// deletes its metadata row with no compensating insert) would not move the generation.
+func TestHnswGenerationSqls(t *testing.T) {
+	tsSQL, countSQL := hnswGenerationSqls(vectorindex.IndexTableConfig{DbName: "db", MetadataTable: "__meta"})
+	require.Contains(t, tsSQL, "MAX(timestamp)")
+	require.Contains(t, tsSQL, "`db`.`__meta`")
+	require.Contains(t, countSQL, "COUNT(*)")
+	require.Contains(t, countSQL, "`db`.`__meta`")
+}
+
+func genInt64Result(t *testing.T, mp *mpool.MPool, v int64) executor.Result {
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed[int64](bat.Vecs[0], v, false, mp))
+	bat.SetRowCount(1)
+	return executor.Result{Mp: mp, Batches: []*batch.Batch{bat}}
+}
+
+// TestHnswSearchIsStaleEmptyModelDropsCount is the regression for the empty-model generation gap:
+// CDC empties the lower-timestamp model in a two-model index, so its metadata row is DELETED with
+// no insert. MAX(timestamp) stays pinned at the surviving model's 200 — unchanged from load — so
+// a timestamp-only generation would report fresh and the remote cache would keep serving the
+// deleted vectors forever. COUNT(*) drops 2→1, so the (ts, count) generation still changes and
+// IsStale correctly reports stale.
+func TestHnswSearchIsStaleEmptyModelDropsCount(t *testing.T) {
+	mp := mpool.MustNewZero()
+	old := runSqlAutoCommit
+	defer func() { runSqlAutoCommit = old }()
+
+	// current on-disk generation: MAX(timestamp)=200 (unchanged), COUNT(*)=1 (emptied model's row gone).
+	runSqlAutoCommit = func(_ context.Context, _ string, _ uint32, _, sql string) (executor.Result, error) {
+		if strings.Contains(sql, "COUNT(*)") {
+			return genInt64Result(t, mp, 1), nil
+		}
+		return genInt64Result(t, mp, 200), nil
+	}
+	cfg := vectorindex.IndexTableConfig{DbName: "db", MetadataTable: "m", IndexTable: "s"}
+
+	// loaded at (ts=200, count=2): two models, the lower-ts one about to be emptied.
+	s := &HnswSearch[float32]{genValid: true, cnUUID: "cn", Tblcfg: cfg, loadedTs: 200, loadedCount: 2}
+	stale, err := s.IsStale()
+	require.NoError(t, err)
+	require.True(t, stale, "emptied model drops COUNT(*) even though MAX(timestamp) is unchanged")
+
+	// control: loaded at the current generation (ts=200, count=1) → not stale.
+	s2 := &HnswSearch[float32]{genValid: true, cnUUID: "cn", Tblcfg: cfg, loadedTs: 200, loadedCount: 1}
+	stale, err = s2.IsStale()
+	require.NoError(t, err)
+	require.False(t, stale)
+}
+
+// TestLoadHnswGenerationHappy stubs the live-txn reader to cover the two-read (timestamp, count)
+// load path plus the second-read error branch.
+func TestLoadHnswGenerationHappy(t *testing.T) {
+	mp := mpool.MustNewZero()
+	cfg := vectorindex.IndexTableConfig{DbName: "db", MetadataTable: "m", IndexTable: "s"}
+	old := runSql
+	defer func() { runSql = old }()
+
+	runSql = func(_ *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+		if strings.Contains(sql, "COUNT(*)") {
+			return genInt64Result(t, mp, 3), nil // model count
+		}
+		return genInt64Result(t, mp, 150), nil // MAX(timestamp)
+	}
+	ts, count, err := loadHnswGeneration(nil, cfg)
+	require.NoError(t, err)
+	require.Equal(t, int64(150), ts)
+	require.Equal(t, int64(3), count)
+
+	// count read errors → propagated.
+	runSql = func(_ *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+		if strings.Contains(sql, "COUNT(*)") {
+			return executor.Result{}, moerr.NewInternalErrorNoCtx("count read failed")
+		}
+		return genInt64Result(t, mp, 150), nil
+	}
+	_, _, err = loadHnswGeneration(nil, cfg)
+	require.Error(t, err)
 }
