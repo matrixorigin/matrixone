@@ -28,11 +28,21 @@ import (
 	"golang.org/x/sys/cpu"
 )
 
-const shuffleMemoryShardCount = 64
+const (
+	shuffleMemoryShardCount   = 64
+	shuffleBatchPoolShardSize = 2
+)
 
 type shuffleMemoryShard struct {
 	sync.Mutex
 	tracked map[*batch.Batch]int64
+	_       cpu.CacheLinePad
+}
+
+type shuffleBatchPoolShard struct {
+	sync.Mutex
+	batches [shuffleBatchPoolShardSize]*batch.Batch
+	count   int
 	_       cpu.CacheLinePad
 }
 
@@ -51,11 +61,15 @@ type ShufflePool struct {
 	cleaned    bool
 	producers  map[int32]context.CancelCauseFunc
 
-	batchSets      []*batch.BatchSet
-	batchLocks     []sync.Mutex
-	closed         []bool
-	batchPools     [][]*batch.Batch
-	batchPoolCount atomic.Int64
+	batchSets  []*batch.BatchSet
+	batchLocks []sync.Mutex
+	closed     []bool
+
+	// Recycle storage is sharded by the local holder bound, not by the global
+	// bucket count. This keeps lookup O(1), gives each concurrent holder two
+	// cache slots, and prevents one previously hot bucket from consuming the
+	// capacity needed to warm every other holder shard.
+	batchPools []shuffleBatchPoolShard
 
 	batchWaiters   []chan bool
 	endingWaiters  []chan bool
@@ -80,6 +94,7 @@ type ShufflePool struct {
 func NewShufflePool(bucketNum int32, maxHolders int32, drainAll bool) *ShufflePool {
 	allBuckets := drainAll
 	readyLimit := max(2, int(maxHolders)*2)
+	batchPoolShards := max(1, int(maxHolders))
 	sp := &ShufflePool{
 		bucketNum:          bucketNum,
 		maxHolders:         maxHolders,
@@ -89,7 +104,7 @@ func NewShufflePool(bucketNum int32, maxHolders int32, drainAll bool) *ShufflePo
 		closed:             make([]bool, bucketNum),
 		batchWaiters:       make([]chan bool, bucketNum),
 		endingWaiters:      make([]chan bool, bucketNum),
-		batchPools:         make([][]*batch.Batch, bucketNum),
+		batchPools:         make([]shuffleBatchPoolShard, batchPoolShards),
 		anyBatchWaiter:     make(chan struct{}, 1),
 		endingWaiter:       make(chan struct{}),
 		readyLimit:         readyLimit,
@@ -287,91 +302,66 @@ func (sp *ShufflePool) closeConsumer(bucket int32, m *mpool.MPool) {
 }
 
 func (sp *ShufflePool) cleanBatchPool(m *mpool.MPool) {
-	for bucket := range sp.batchPools {
-		for _, bat := range sp.batchPools[bucket] {
+	for i := range sp.batchPools {
+		shard := &sp.batchPools[i]
+		shard.Lock()
+		pool := shard.batches
+		count := shard.count
+		clear(shard.batches[:count])
+		shard.count = 0
+		shard.Unlock()
+		for _, bat := range pool[:count] {
 			sp.forgetBatch(bat)
 			bat.Clean(m)
 		}
-		sp.batchPools[bucket] = nil
 	}
-	sp.batchPoolCount.Store(0)
 }
 
 func (sp *ShufflePool) putBatchToPool(buf *batch.Batch, m *mpool.MPool) {
 	sp.syncBatch(buf)
-	bucket := buf.ShuffleIDX
-	if bucket < 0 || bucket >= sp.bucketNum {
-		bucket = 0
+	shard := sp.batchPoolShard(buf.ShuffleIDX)
+	shard.Lock()
+	if shard.count < len(shard.batches) {
+		shard.batches[shard.count] = buf
+		shard.count++
+		shard.Unlock()
+		return
 	}
-	sp.batchLocks[bucket].Lock()
-	sp.putBatchToPoolLocked(bucket, buf, m)
-	sp.batchLocks[bucket].Unlock()
-}
-
-// putBatchToPoolLocked is called with batchLocks[bucket] held.
-func (sp *ShufflePool) putBatchToPoolLocked(bucket int32, buf *batch.Batch, m *mpool.MPool) {
-	for {
-		count := sp.batchPoolCount.Load()
-		if count >= int64(sp.readyLimit) {
-			break
-		}
-		if sp.batchPoolCount.CompareAndSwap(count, count+1) {
-			sp.batchPools[bucket] = append(sp.batchPools[bucket], buf)
-			return
-		}
-	}
+	shard.Unlock()
 	sp.forgetBatch(buf)
 	buf.Clean(m)
 }
 
-// getBatchFromPoolLocked is called with batchLocks[bucket] held.
-func (sp *ShufflePool) getBatchFromPoolLocked(bucket int32) *batch.Batch {
-	if buf := sp.popBatchFromPoolLocked(bucket); buf != nil {
-		return buf
-	}
-	if sp.batchPoolCount.Load() == 0 {
+func (sp *ShufflePool) getBatchFromPool(bucket int32) *batch.Batch {
+	shard := sp.batchPoolShard(bucket)
+	shard.Lock()
+	if shard.count == 0 {
+		shard.Unlock()
 		return nil
 	}
-
-	// Cached batches are schema-compatible across buckets in one shuffle pool.
-	// Steal from an idle bucket so it cannot monopolize the global cache bound
-	// after the input distribution changes. TryLock is required here because
-	// the caller already owns its bucket lock and another writer may be doing
-	// the symmetric steal.
-	for offset := int32(1); offset < sp.bucketNum; offset++ {
-		donor := bucket + offset
-		if donor >= sp.bucketNum {
-			donor -= sp.bucketNum
-		}
-		if !sp.batchLocks[donor].TryLock() {
-			continue
-		}
-		buf := sp.popBatchFromPoolLocked(donor)
-		sp.batchLocks[donor].Unlock()
-		if buf != nil {
-			return buf
-		}
-	}
-	return nil
-}
-
-// popBatchFromPoolLocked is called with batchLocks[bucket] held.
-func (sp *ShufflePool) popBatchFromPoolLocked(bucket int32) *batch.Batch {
-	pool := sp.batchPools[bucket]
-	if len(pool) == 0 {
-		return nil
-	}
-	last := len(pool) - 1
-	buf := pool[last]
-	sp.batchPools[bucket] = pool[:last]
-	if sp.batchPoolCount.Add(-1) < 0 {
-		panic("shuffle pool negative recycle batch count")
-	}
+	shard.count--
+	buf := shard.batches[shard.count]
+	shard.batches[shard.count] = nil
+	shard.Unlock()
 	return buf
 }
 
 func (sp *ShufflePool) batchPoolLength() int {
-	return int(sp.batchPoolCount.Load())
+	length := 0
+	for i := range sp.batchPools {
+		shard := &sp.batchPools[i]
+		shard.Lock()
+		length += shard.count
+		shard.Unlock()
+	}
+	return length
+}
+
+func (sp *ShufflePool) batchPoolShard(bucket int32) *shuffleBatchPoolShard {
+	if bucket < 0 {
+		bucket = 0
+	}
+	return &sp.batchPools[int(bucket)%len(sp.batchPools)]
 }
 
 func (sp *ShufflePool) discardBatch(buf *batch.Batch, m *mpool.MPool) {
@@ -638,11 +628,10 @@ func (sp *ShufflePool) tryWrite(
 			batchSet := sp.batchSets[bucket]
 			oldReady := batchSet.ReadyCount()
 			oldLength := batchSet.Length()
-			buf := sp.getBatchFromPoolLocked(int32(bucket))
+			buf := sp.getBatchFromPool(int32(bucket))
 			consumed, writeErr := batchSet.Union(proc.Mp(), srcBatch, chunk, buf)
 			if !consumed && buf != nil {
-				sp.syncBatch(buf)
-				sp.putBatchToPoolLocked(int32(bucket), buf, proc.Mp())
+				sp.putBatchToPool(buf, proc.Mp())
 			}
 			// Union can only grow the previous writable tail and append new
 			// batches. Full batches before that tail are immutable, so avoid
