@@ -17,7 +17,9 @@ package incrservice
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -180,6 +182,40 @@ func TestAsyncAlloc(t *testing.T) {
 				wg.Wait()
 			}
 		})
+}
+
+func TestAllocatorEnqueueHoldsCloseLockUntilSendCompletes(t *testing.T) {
+	a := &allocator{c: make(chan action, 1), done: make(chan struct{})}
+	a.c <- action{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	result := make(chan error, 1)
+	go func() { result <- a.enqueue(ctx, action{}) }()
+
+	require.Eventually(t, func() bool {
+		if a.mu.TryLock() {
+			a.mu.Unlock()
+			return false
+		}
+		return true
+	}, time.Second, time.Millisecond)
+	cancel()
+	require.ErrorIs(t, <-result, context.Canceled)
+}
+
+func TestAllocatorCloseDrainsAcceptedActions(t *testing.T) {
+	runAllocatorTests(t, func(va valueAllocator) {
+		a := va.(*allocator)
+		ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+		require.NoError(t, a.store.Create(ctx, 0, []AutoColumn{{ColName: "auto", Step: 1}}, nil))
+		var completed atomic.Int64
+		for range 100 {
+			require.NoError(t, a.asyncAllocate(ctx, 0, "auto", 1, nil,
+				func(uint64, uint64, timestamp.Timestamp, error) { completed.Add(1) }))
+		}
+		a.close()
+		require.Equal(t, int64(100), completed.Load())
+	})
 }
 
 func runAllocatorTests(

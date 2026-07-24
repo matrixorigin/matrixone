@@ -7329,7 +7329,10 @@ func TestSnapshotGC(t *testing.T) {
 	snapWG.Wait()
 	wg.Wait()
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
-	testutil.WaitAllCheckpointsFinished(t, db)
+	ckpCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	err = db.ForceCheckpoint(ckpCtx, db.TxnMgr.Now())
+	cancel()
+	require.NoError(t, err)
 	testutils.WaitExpect(5000, func() bool {
 		return db.DiskCleaner.GetCleaner().GetMinMerged() != nil
 	})
