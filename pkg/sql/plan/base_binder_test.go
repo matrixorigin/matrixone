@@ -471,6 +471,89 @@ func TestBindFuncExprImplByPlanExpr_JsonOrderingWithDynamicParam(t *testing.T) {
 	})
 }
 
+func TestMixedStringNumericCastTypes(t *testing.T) {
+	ctx := context.Background()
+	makeCol := func(typ types.T, pos int32) *plan.Expr {
+		return &plan.Expr{
+			Typ:  plan.Type{Id: int32(typ)},
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: pos}},
+		}
+	}
+	requireArgTypes := func(t *testing.T, expr *plan.Expr, expected ...types.T) {
+		t.Helper()
+		require.Len(t, expr.GetF().Args, len(expected))
+		for i, typ := range expected {
+			require.Equal(t, int32(typ), expr.GetF().Args[i].Typ.Id)
+		}
+	}
+
+	t.Run("numeric column and string literal stay exact", func(t *testing.T) {
+		expr, err := BindFuncExprImplByPlanExpr(ctx, "=", []*plan.Expr{
+			makeCol(types.T_int64, 0),
+			makePlan2StringConstExprWithType("9007199254740993"),
+		})
+		require.NoError(t, err)
+		requireArgTypes(t, expr, types.T_int64, types.T_int64)
+		require.NotNil(t, expr.GetF().Args[0].GetCol())
+	})
+
+	t.Run("numeric column string range uses exact decimal bounds", func(t *testing.T) {
+		expr, err := BindFuncExprImplByPlanExpr(ctx, "between", []*plan.Expr{
+			makeCol(types.T_int64, 0),
+			makePlan2StringConstExprWithType("9007199254740992.5"),
+			makePlan2StringConstExprWithType("9007199254740993.5"),
+		})
+		require.NoError(t, err)
+		requireArgTypes(t, expr, types.T_decimal256, types.T_decimal256, types.T_decimal256)
+		for _, arg := range expr.GetF().Args {
+			require.True(t, types.T(arg.Typ.Id).IsDecimal())
+		}
+	})
+
+	t.Run("runtime numeric parameter uses approximate comparison", func(t *testing.T) {
+		param := &plan.Expr{
+			Typ:  plan.Type{Id: int32(types.T_int64)},
+			Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}},
+		}
+		expr, err := BindFuncExprImplByPlanExpr(ctx, "=", []*plan.Expr{
+			makeCol(types.T_varchar, 0),
+			param,
+		})
+		require.NoError(t, err)
+		requireArgTypes(t, expr, types.T_float64, types.T_float64)
+	})
+
+	t.Run("decimal256 and string use approximate comparison", func(t *testing.T) {
+		decimal := makeCol(types.T_decimal256, 0)
+		decimal.Typ.Width = 65
+		expr, err := BindFuncExprImplByPlanExpr(ctx, "=", []*plan.Expr{
+			decimal,
+			makeCol(types.T_varchar, 1),
+		})
+		require.NoError(t, err)
+		requireArgTypes(t, expr, types.T_float64, types.T_float64)
+	})
+
+	t.Run("integer div keeps exact operand", func(t *testing.T) {
+		expr, err := BindFuncExprImplByPlanExpr(ctx, "div", []*plan.Expr{
+			makePlan2StringConstExprWithType("9007199254740993"),
+			makePlan2Int64ConstExprWithType(1),
+		})
+		require.NoError(t, err)
+		require.NotEqual(t, int32(types.T_float64), expr.GetF().Args[0].Typ.Id)
+		require.NotEqual(t, int32(types.T_float64), expr.GetF().Args[1].Typ.Id)
+	})
+
+	t.Run("time arithmetic uses approximate numeric operands", func(t *testing.T) {
+		expr, err := BindFuncExprImplByPlanExpr(ctx, "-", []*plan.Expr{
+			makeCol(types.T_time, 0),
+			makeCol(types.T_time, 1),
+		})
+		require.NoError(t, err)
+		requireArgTypes(t, expr, types.T_decimal64, types.T_decimal64)
+	})
+}
+
 func TestBindNameConstConstArgs(t *testing.T) {
 	for _, tc := range []struct {
 		name string

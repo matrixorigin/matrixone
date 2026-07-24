@@ -1028,7 +1028,7 @@ func forceCastExpr2(ctx context.Context, expr *Expr, t2 types.Type, targetType *
 	// width check: an over-length value errors instead of being silently
 	// truncated. Generic casts stay lenient (MySQL-compatible truncation).
 	funcName := "cast"
-	if t2.Oid == types.T_char || t2.Oid == types.T_varchar {
+	if t2.Oid == types.T_char || t2.Oid == types.T_varchar || t2.IsNumeric() {
 		funcName = "cast_strict"
 	}
 	fGet, err := function.GetFunctionByName(ctx, funcName, []types.Type{t1, t2})
@@ -1052,7 +1052,8 @@ func forceCastExpr(ctx context.Context, expr *Expr, targetType Type) (*Expr, err
 
 func forceAssignmentCastExpr(ctx context.Context, expr *Expr, targetType Type) (*Expr, error) {
 	funcName := "cast"
-	if targetType.Id == int32(types.T_char) || targetType.Id == int32(types.T_varchar) {
+	if targetType.Id == int32(types.T_char) || targetType.Id == int32(types.T_varchar) ||
+		isNumericAssignmentTarget(targetType) {
 		funcName = "cast_strict"
 	}
 	return forceCastExprWithName(ctx, expr, targetType, funcName)

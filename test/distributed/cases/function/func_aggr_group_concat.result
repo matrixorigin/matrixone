@@ -65,7 +65,8 @@ drop table if exists t1;
 create table t1(a int, b char(1));
 insert into t1 values (1, 'a');
 select group_concat(a) as bb, case b when 1 then '是' else '否' end aa from t1;
-invalid argument cast to int, bad value a
+bb    aa
+1    否
 select group_concat(b) as bb, case a when 1 then '是' else '否' end aa from t1;
 bb    aa
 a    是

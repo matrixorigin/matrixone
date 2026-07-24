@@ -18,7 +18,9 @@ import (
 	"context"
 	"fmt"
 	"hash/fnv"
+	"math"
 	"strconv"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -1297,6 +1299,9 @@ func extractEqualConst(expr *plan.Expr) (*plan.Expr, *plan.Expr, bool) {
 	if fn == nil || len(fn.Args) != 2 || fn.Func.ObjName != "=" {
 		return nil, nil, false
 	}
+	if isMixedExactNumericStringExprs(fn.Args[0], fn.Args[1]) {
+		return nil, nil, false
+	}
 	if fn.Args[0].GetCol() != nil && fn.Args[1].GetLit() != nil {
 		return fn.Args[0], fn.Args[1], true
 	}
@@ -1314,6 +1319,9 @@ func extractNotEqualConstForDomain(expr *plan.Expr) (*domainFilterOperand, *plan
 	if fn.Func.ObjName != "!=" && fn.Func.ObjName != "<>" {
 		return nil, nil, false
 	}
+	if isMixedExactNumericStringExprs(fn.Args[0], fn.Args[1]) {
+		return nil, nil, false
+	}
 	if operand, ok := extractDomainFilterOperand(fn.Args[0]); ok && fn.Args[1].GetLit() != nil {
 		return operand, fn.Args[1], true
 	}
@@ -1326,6 +1334,9 @@ func extractNotEqualConstForDomain(expr *plan.Expr) (*domainFilterOperand, *plan
 func extractEqualConstForDomain(expr *plan.Expr) (*domainFilterOperand, *plan.Expr, bool) {
 	fn := expr.GetF()
 	if fn == nil || len(fn.Args) != 2 || fn.Func.ObjName != "=" {
+		return nil, nil, false
+	}
+	if isMixedExactNumericStringExprs(fn.Args[0], fn.Args[1]) {
 		return nil, nil, false
 	}
 	if operand, ok := extractDomainFilterOperand(fn.Args[0]); ok && fn.Args[1].GetLit() != nil {
@@ -1480,6 +1491,9 @@ func classifyDomainConjunct(expr *plan.Expr) (*plan.Expr, domainKind, []*plan.Ex
 
 func classifyDomainEquality(fn *plan.Function, kind domainKind) (*plan.Expr, domainKind, []*plan.Expr) {
 	if len(fn.Args) != 2 {
+		return nil, domainOther, nil
+	}
+	if isMixedExactNumericStringExprs(fn.Args[0], fn.Args[1]) {
 		return nil, domainOther, nil
 	}
 	var colExpr, constExpr *plan.Expr
@@ -1640,11 +1654,60 @@ func constLiteralKeyForOperand(expr *plan.Expr, operand *domainFilterOperand) (s
 }
 
 func integralCastLiteralKey(lit *plan.Literal, typ plan.Type, target plan.Type) (string, bool) {
+	if types.T(target.Id) == types.T_float64 {
+		// String columns compared with numeric constants go through
+		// DOUBLE, so the domain key is the literal's exact float64 bit
+		// pattern: two literals get the same key iff they compare equal
+		// at runtime after the cast.
+		v, ok := float64LiteralValue(lit, typ)
+		if !ok {
+			return "", false
+		}
+		if v == 0 {
+			v = 0
+		}
+		return fmt.Sprintf("%d/%x", target.Id, math.Float64bits(v)), true
+	}
 	normalized, ok := normalizedIntegralLiteral(lit, typ, types.T(target.Id))
 	if !ok {
 		return "", false
 	}
 	return fmt.Sprintf("%d/%s", target.Id, normalized), true
+}
+
+// float64LiteralValue evaluates a literal as float64 for domain-key
+// purposes.  It is conservative: any literal whose runtime double value
+// is not fully determined by a strict parse (trailing garbage, overflow,
+// NaN/Inf) makes the whole domain rewrite bail out.
+func float64LiteralValue(lit *plan.Literal, typ plan.Type) (float64, bool) {
+	if lit == nil || lit.Isnull {
+		return 0, false
+	}
+	var v float64
+	if s, ok := literalStringValue(lit, typ); ok {
+		parsed, err := strconv.ParseFloat(strings.TrimSpace(s), 64)
+		if err != nil {
+			return 0, false
+		}
+		v = parsed
+	} else if i, ok := literalSignedValue(lit); ok {
+		v = float64(i)
+	} else if u, ok := literalUnsignedValue(lit); ok {
+		v = float64(u)
+	} else {
+		switch lit.Value.(type) {
+		case *plan.Literal_Fval:
+			v = float64(lit.GetFval())
+		case *plan.Literal_Dval:
+			v = lit.GetDval()
+		default:
+			return 0, false
+		}
+	}
+	if math.IsNaN(v) || math.IsInf(v, 0) {
+		return 0, false
+	}
+	return v, true
 }
 
 func normalizedIntegralLiteral(lit *plan.Literal, typ plan.Type, target types.T) (string, bool) {
@@ -1775,7 +1838,9 @@ func normalizeUnsignedIntegralLiteral(v uint64, target types.T) (string, bool) {
 }
 
 func isSupportedIntegralDomainCast(typ plan.Type) bool {
-	return isSupportedIntegralType(types.T(typ.Id))
+	// float64 covers string columns compared with numeric constants,
+	// which route through DOUBLE (see comparisonTypeCastRule).
+	return isSupportedIntegralType(types.T(typ.Id)) || types.T(typ.Id) == types.T_float64
 }
 
 func isSupportedIntegralType(t types.T) bool {
@@ -1899,6 +1964,92 @@ func hasNonNilFunctionArgs(fn *plan.Function, argCount int) bool {
 	return true
 }
 
+func isMixedExactNumericStringExprs(left, right *plan.Expr) bool {
+	if left == nil || right == nil {
+		return false
+	}
+	leftType, rightType := types.T(left.Typ.Id), types.T(right.Typ.Id)
+	stringAndExact := func(str, numeric types.T) bool {
+		return str.IsMySQLString() && (numeric.IsInteger() || numeric.IsDecimal())
+	}
+	return stringAndExact(leftType, rightType) || stringAndExact(rightType, leftType)
+}
+
+func implicitNumericCastFromString(expr *plan.Expr) (*plan.Expr, bool) {
+	if expr == nil || !isNumericTypeID(types.T(expr.Typ.Id)) {
+		return nil, false
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || fn.Func.ObjName != "cast" || len(fn.Args) != 2 {
+		return nil, false
+	}
+	_, overloadID := function.DecodeOverloadID(fn.Func.Obj)
+	if overloadID != 0 {
+		return nil, false
+	}
+	source := fn.Args[0]
+	if source == nil || !types.T(source.Typ.Id).IsMySQLString() {
+		return nil, false
+	}
+	return source, true
+}
+
+func isNumericTypeID(typ types.T) bool {
+	return typ.IsInteger() || typ.IsFloat() || typ.IsDecimal() || typ == types.T_bit
+}
+
+func isUnsafeStringKeyComparison(left, right *plan.Expr) bool {
+	if isMixedExactNumericStringExprs(left, right) {
+		return true
+	}
+	if left == nil || right == nil {
+		return false
+	}
+	leftType, rightType := types.T(left.Typ.Id), types.T(right.Typ.Id)
+	if leftType == types.T_float64 && rightType == types.T_float64 {
+		return false
+	}
+	if source, ok := implicitNumericCastFromString(left); ok && isNumericTypeID(rightType) {
+		if source.GetLit() != nil && right.GetCol() != nil && leftType == rightType {
+			return false
+		}
+		return true
+	}
+	if source, ok := implicitNumericCastFromString(right); ok && isNumericTypeID(leftType) {
+		if source.GetLit() != nil && left.GetCol() != nil && leftType == rightType {
+			return false
+		}
+		return true
+	}
+	return leftType.IsMySQLString() && containsDynamicParam(right) ||
+		rightType.IsMySQLString() && containsDynamicParam(left)
+}
+
+func isUnsafeStringKeyPredicate(fn *plan.Function) bool {
+	if fn == nil || fn.Func == nil {
+		return false
+	}
+
+	switch fn.Func.ObjName {
+	case "=", ">", ">=", "<", "<=":
+		return len(fn.Args) == 2 && isUnsafeStringKeyComparison(fn.Args[0], fn.Args[1])
+	case "between", "in_range":
+		return len(fn.Args) >= 3 &&
+			(isUnsafeStringKeyComparison(fn.Args[0], fn.Args[1]) ||
+				isUnsafeStringKeyComparison(fn.Args[0], fn.Args[2]))
+	case "in":
+		return len(fn.Args) == 2 && isUnsafeStringKeyComparison(fn.Args[0], fn.Args[1])
+	case "or":
+		for _, arg := range fn.Args {
+			if isUnsafeStringKeyPredicate(arg.GetF()) {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
 func (builder *QueryBuilder) bindCompositeKeySerial(args []*plan.Expr) (*plan.Expr, bool) {
 	expr, err := bindFuncExprAndConstFold(builder.GetContext(), builder.compCtx.GetProcess(), "serial", args)
 	return expr, err == nil && expr != nil
@@ -1928,6 +2079,9 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 		if fn == nil || fn.Func == nil {
 			continue
 		}
+		if isUnsafeStringKeyPredicate(fn) {
+			continue
+		}
 
 		funcName := fn.Func.ObjName
 		if funcName == "=" {
@@ -1937,7 +2091,6 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 			if isRuntimeConstExpr(fn.Args[0]) && fn.Args[1].GetCol() != nil {
 				fn.Args[0], fn.Args[1] = fn.Args[1], fn.Args[0]
 			}
-
 			col := fn.Args[0].GetCol()
 			if col == nil || !isRuntimeConstExpr(fn.Args[1]) {
 				continue
@@ -2036,6 +2189,10 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 
 				mergedFn := subExpr.GetF()
 				if !hasNonNilFunctionArgs(mergedFn, 2) || mergedFn.Args[0].GetCol() == nil || !isRuntimeConstExpr(mergedFn.Args[1]) {
+					newOrArgs = append(newOrArgs, subExpr)
+					continue
+				}
+				if isUnsafeStringKeyComparison(mergedFn.Args[0], mergedFn.Args[1]) {
 					newOrArgs = append(newOrArgs, subExpr)
 					continue
 				}
@@ -2168,6 +2325,9 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 		}
 		fn := expr.GetF()
 		if fn == nil || fn.Func == nil {
+			continue
+		}
+		if isUnsafeStringKeyPredicate(fn) {
 			continue
 		}
 		col, isLower := classifyRangeBound(fn)

@@ -19,7 +19,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"reflect"
 	"regexp"
 	"sync"
 	"testing"
@@ -71,8 +70,12 @@ func init() {
 func createMockTableDetectorForTest() func(cnUUID string) *cdc.TableDetector {
 	return func(cnUUID string) *cdc.TableDetector {
 		detector := &cdc.TableDetector{
-			Mp:                   make(map[uint32]cdc.TblMap),
-			Callbacks:            make(map[string]cdc.TableCallback),
+			Mp: make(map[uint32]cdc.TblMap),
+			Callbacks: map[string]cdc.TableCallback{
+				"__test_permanent_dummy__": func(map[uint32]cdc.TblMap) error {
+					return nil
+				},
+			},
 			CallBackAccountId:    make(map[string]uint32),
 			SubscribedAccountIds: make(map[uint32][]string),
 			CallBackDbName:       make(map[string][]string),
@@ -80,20 +83,6 @@ func createMockTableDetectorForTest() func(cnUUID string) *cdc.TableDetector {
 			CallBackTableName:    make(map[string][]string),
 			SubscribedTableNames: make(map[string][]string),
 		}
-
-		// Set scanTableFn to no-op to prevent panic in scanTableLoop
-		detectorValue := reflect.ValueOf(detector).Elem()
-		scanTableFnField := detectorValue.FieldByName("scanTableFn")
-		if scanTableFnField.IsValid() && scanTableFnField.CanSet() {
-			scanTableFnField.Set(reflect.ValueOf(func() error {
-				return nil
-			}))
-		}
-
-		// Call RegisterIfAbsent to properly initialize cancel field
-		detector.RegisterIfAbsent("__test_permanent_dummy__", 1, []string{}, []string{}, func(map[uint32]cdc.TblMap) error {
-			return nil
-		})
 
 		return detector
 	}

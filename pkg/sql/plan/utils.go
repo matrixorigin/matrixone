@@ -3044,23 +3044,9 @@ func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) error {
 			isBin = param.IsBin
 		}
 		if val == nil {
-			pc := &plan.Literal{
-				Isnull: true,
-				Value:  &plan.Literal_Sval{Sval: ""},
-			}
-			params[i] = &plan.Expr{
-				Expr: &plan.Expr_Lit{
-					Lit: pc,
-				},
-			}
+			params[i] = makePlan2NullConstExprWithType()
 		} else {
-			pc := &plan.Literal{IsBin: isBin}
-			pc.Value = &plan.Literal_Sval{Sval: fmt.Sprintf("%v", val)}
-			params[i] = &plan.Expr{
-				Expr: &plan.Expr_Lit{
-					Lit: pc,
-				},
-			}
+			params[i] = makePreparedParamConstExpr(val, isBin)
 		}
 	}
 	paramRule := NewResetParamRefRule(ctx, params)
@@ -3070,6 +3056,43 @@ func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) error {
 		return err
 	}
 	return nil
+}
+
+func makePreparedParamConstExpr(value any, isBin bool) *plan.Expr {
+	switch val := value.(type) {
+	case bool:
+		return makePlan2BoolConstExprWithType(val)
+	case int8:
+		return makePlan2Int8ConstExprWithType(val)
+	case int16:
+		return makePlan2Int16ConstExprWithType(val)
+	case int32:
+		return makePlan2Int32ConstExprWithType(val)
+	case int64:
+		return makePlan2Int64ConstExprWithType(val)
+	case int:
+		return makePlan2Int64ConstExprWithType(int64(val))
+	case uint8:
+		return makePlan2Uint8ConstExprWithType(val)
+	case uint16:
+		return makePlan2Uint16ConstExprWithType(val)
+	case uint32:
+		return makePlan2Uint32ConstExprWithType(val)
+	case uint64:
+		return makePlan2Uint64ConstExprWithType(val)
+	case uint:
+		return makePlan2Uint64ConstExprWithType(uint64(val))
+	case float32:
+		return makePlan2Float32ConstExprWithType(val)
+	case float64:
+		return makePlan2Float64ConstExprWithType(val)
+	case []byte:
+		return makePlan2StringConstExprWithType(string(val), isBin)
+	case string:
+		return makePlan2StringConstExprWithType(val, isBin)
+	default:
+		return makePlan2StringConstExprWithType(fmt.Sprintf("%v", val), isBin)
+	}
 }
 
 // XXX: Any code relying on Name in ColRef, except for "explain", is bad design and practically buggy.

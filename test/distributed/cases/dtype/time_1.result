@@ -215,13 +215,20 @@ t1    t2    t3
 -838:59:59    838:59:59    22:00:00
 12:00:01    00:00:19    02:34:03
 select * from time_01 where t1 > (select t2 from time_03 where t1 = '10:14:12');
-invalid argument cast to int, bad value 10:14:12
+t1    t2    t3
 select t1,t2,t3 from time_01 where t1 < any(select t2 from time_03 where t1 = '10:14:12');
-invalid argument cast to int, bad value 10:14:12
+t1    t2    t3
 select t1,t2,t3 from time_01 where t1 >= all(select t2 from time_03 where t1 = '10:14:12');
-invalid argument cast to int, bad value 10:14:12
+t1    t2    t3
+-838:59:59    838:59:59    22:00:00
+00:00:00    00:00:00    00:00:00
+null    null    null
+00:00:23    00:11:22    00:11:22
+10:14:12    00:00:04    -10:12:19
+24:59:10    24:02:01    24:20:34
+12:00:01    00:00:19    02:34:03
 select t1,t2,t3 from time_01 where t1 >= some(select t2 from time_03 where t1 = '10:14:12');
-invalid argument cast to int, bad value 10:14:12
+t1    t2    t3
 select * from time_01 where exists(select t2 from time_03);
 t1    t2    t3
 -838:59:59    838:59:59    22:00:00

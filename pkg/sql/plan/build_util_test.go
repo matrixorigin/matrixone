@@ -65,6 +65,20 @@ func Test_replaceFuncId(t *testing.T) {
 	assert.NotNil(t, case1Expr)
 }
 
+func TestApproximateStringNumericComparisonExcludesEnum(t *testing.T) {
+	enumExpr := &Expr{Typ: Type{Id: int32(types.T_enum)}}
+	intExpr := &Expr{Typ: Type{Id: int32(types.T_int64)}}
+	require.False(t, shouldUseApproximateStringNumericComparison(enumExpr, intExpr))
+
+	enumDisplayExpr := &Expr{
+		Typ: Type{Id: int32(types.T_varchar)},
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &ObjectRef{ObjName: moEnumCastIndexToValueFun},
+		}},
+	}
+	require.False(t, shouldUseApproximateStringNumericComparison(enumDisplayExpr, intExpr))
+}
+
 // TestRewriteCountNotNullColToStarcount ensures plan-level rewrite sets both ObjName and Obj
 // so runtime uses countStarExec; regression test for count(not_null_col) performance fix.
 func TestRewriteCountNotNullColToStarcount(t *testing.T) {
@@ -515,8 +529,8 @@ func TestBuildDefaultExprFitsVarchar(t *testing.T) {
 	require.Equal(t, "abc", defaultValue.Expr.GetLit().GetSval())
 }
 
-// makePlan2AssignmentCastExpr routes CHAR/VARCHAR targets through cast_strict,
-// while explicit casts via makePlan2CastExpr keep the lenient generic cast.
+// makePlan2AssignmentCastExpr routes CHAR/VARCHAR and numeric targets through
+// cast_strict, while explicit casts keep the lenient generic cast.
 func TestMakePlan2AssignmentCastExprUsesStrictForCharVarchar(t *testing.T) {
 	ctx := context.Background()
 	srcText := &Expr{Typ: plan.Type{Id: int32(types.T_text)}}
@@ -533,10 +547,15 @@ func TestMakePlan2AssignmentCastExprUsesStrictForCharVarchar(t *testing.T) {
 		require.Equal(t, "cast", genericExpr.GetF().GetFunc().GetObjName())
 	}
 
-	// Non-string targets stay on the generic cast even for assignment.
+	// Numeric assignments use their own parsing and rounding mode.
 	intExpr, err := makePlan2AssignmentCastExpr(ctx, DeepCopyExpr(srcText), plan.Type{Id: int32(types.T_int64)})
 	require.NoError(t, err)
-	require.Equal(t, "cast", intExpr.GetF().GetFunc().GetObjName())
+	require.Equal(t, "cast_strict", intExpr.GetF().GetFunc().GetObjName())
+
+	// Other non-string targets stay on the generic cast.
+	dateExpr, err := makePlan2AssignmentCastExpr(ctx, DeepCopyExpr(srcText), plan.Type{Id: int32(types.T_date)})
+	require.NoError(t, err)
+	require.Equal(t, "cast", dateExpr.GetF().GetFunc().GetObjName())
 }
 
 // A generated CHAR/VARCHAR column is materialized as a real column write, so

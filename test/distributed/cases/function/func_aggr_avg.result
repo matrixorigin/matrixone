@@ -297,9 +297,11 @@ select grp, sum(a)+count(a)+avg(a)+std(a)+variance(a)+bit_or(a)+bit_and(a)+min(a
 2  ¦  20.25  𝄀
 3  ¦  45.48316324759439
 select min(c)+0 as min_c_numeric from t1;
-invalid argument cast to int, bad value C
+➤ min_c_numeric[8,54,0]  𝄀
+0.0
 select max(c)+0 as max_c_numeric from t1;
-invalid argument cast to int, bad value c
+➤ max_c_numeric[8,54,0]  𝄀
+0.0
 create table t2 (grp int, a bigint unsigned, c char(10));
 insert into t2 select grp,max(a)+max(grp),max(c) from t1 group by grp;
 select * from t2;

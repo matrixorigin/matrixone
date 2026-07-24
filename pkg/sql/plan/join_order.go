@@ -143,12 +143,13 @@ func isEquiCond(expr *plan.Expr, leftTags, rightTags map[int32]bool) bool {
 
 		lside, rside := getJoinSide(e.F.Args[0], leftTags, rightTags, 0), getJoinSide(e.F.Args[1], leftTags, rightTags, 0)
 		if lside == JoinSideLeft && rside == JoinSideRight {
-			return true
 		} else if lside == JoinSideRight && rside == JoinSideLeft {
 			// swap to make sure left and right is in order
 			e.F.Args[0], e.F.Args[1] = e.F.Args[1], e.F.Args[0]
-			return true
+		} else {
+			return false
 		}
+		return !isUnsafeStringKeyComparison(e.F.Args[0], e.F.Args[1])
 	}
 
 	return false
@@ -158,18 +159,21 @@ func isEquiCond(expr *plan.Expr, leftTags, rightTags map[int32]bool) bool {
 // Can only be used after optimizer!!!
 func IsEquiJoin2(exprs []*plan.Expr) bool {
 	for _, expr := range exprs {
-		if e, ok := expr.Expr.(*plan.Expr_F); ok {
-			if !IsEqualFunc(e.F.Func.GetObj()) {
-				continue
-			}
-			lpos, rpos := HasColExpr(e.F.Args[0], -1), HasColExpr(e.F.Args[1], -1)
-			if lpos == -1 || rpos == -1 || (lpos == rpos) {
-				continue
-			}
+		if IsEquiJoinKeyExpr(expr) {
 			return true
 		}
 	}
 	return false
+}
+
+func IsEquiJoinKeyExpr(expr *plan.Expr) bool {
+	e, ok := expr.Expr.(*plan.Expr_F)
+	if !ok || !IsEqualFunc(e.F.Func.GetObj()) || len(e.F.Args) != 2 {
+		return false
+	}
+	lpos, rpos := HasColExpr(e.F.Args[0], -1), HasColExpr(e.F.Args[1], -1)
+	return lpos != -1 && rpos != -1 && lpos != rpos &&
+		!isUnsafeStringKeyComparison(e.F.Args[0], e.F.Args[1])
 }
 
 func IsEqualFunc(id int64) bool {

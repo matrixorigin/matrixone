@@ -523,6 +523,9 @@ func (builder *QueryBuilder) applyIndicesForFilters(nodeID int32, node *plan.Nod
 			if fn == nil {
 				goto END0
 			}
+			if isUnsafeStringKeyPredicate(fn) {
+				goto END0
+			}
 
 			switch fn.Func.ObjName {
 			case "=":
@@ -1633,7 +1636,7 @@ func tryMatchMoreLeadingFilters(idxDef *IndexDef, node *plan.Node, pos int32) []
 		found := false
 		for j := range node.FilterList {
 			fn := node.FilterList[j].GetF()
-			if fn == nil {
+			if fn == nil || isUnsafeStringKeyPredicate(fn) {
 				continue
 			}
 			switch fn.Func.ObjName {
@@ -1658,7 +1661,7 @@ func tryMatchMoreLeadingFilters(idxDef *IndexDef, node *plan.Node, pos int32) []
 }
 
 func checkIndexFilter(fn *plan.Function) (int, *plan.ColRef) {
-	if fn == nil {
+	if fn == nil || isUnsafeStringKeyPredicate(fn) {
 		return UnsupportedIndexCondition, nil
 	}
 	switch fn.Func.ObjName {
@@ -2560,6 +2563,9 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 	col2Cond := make(map[int32]int)
 	for i, expr := range node.OnList {
 		if !isEquiCond(expr, leftTags, rightTags) {
+			continue
+		}
+		if isUnsafeStringKeyPredicate(expr.GetF()) {
 			continue
 		}
 

@@ -27,6 +27,39 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestFetchVarlenaRowsRejectsSchemaVector(t *testing.T) {
+	mp := mpool.MustNew("test")
+	vec, err := vector.NewConstFixed(types.T_int32.ToType(), int32(1), 1, mp)
+	require.NoError(t, err)
+	defer vec.Free(mp)
+
+	ok, rows, granularity := fetchVarlenaRows(
+		vec,
+		types.NewPacker(),
+		types.T_varchar.ToType(),
+		1,
+		false,
+		nil,
+		nil,
+	)
+	require.False(t, ok)
+	require.Nil(t, rows)
+	require.Equal(t, lock.Granularity_Row, granularity)
+
+	ok, rows, granularity = fetchVarlenaRows(
+		nil,
+		types.NewPacker(),
+		types.T_varchar.ToType(),
+		1,
+		false,
+		nil,
+		nil,
+	)
+	require.False(t, ok)
+	require.Nil(t, rows)
+	require.Equal(t, lock.Granularity_Row, granularity)
+}
+
 func TestFetchBoolRows(t *testing.T) {
 	values := []bool{false, true}
 	runFetchRowsTest(

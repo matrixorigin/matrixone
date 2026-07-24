@@ -215,10 +215,36 @@ func (rule *ResetParamRefRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
 	var err error
 	switch exprImpl := e.Expr.(type) {
 	case *plan.Expr_F:
+		if exprImpl.F.Func.GetObjName() == "cast" &&
+			len(exprImpl.F.Args) > 0 &&
+			containsDynamicParam(exprImpl.F.Args[0]) {
+			if param := exprImpl.F.Args[0].GetP(); param != nil {
+				if int(param.Pos) >= len(rule.params) {
+					return nil, moerr.NewInternalErrorf(
+						context.TODO(),
+						"get prepare params error, index %d not exists",
+						int(param.Pos),
+					)
+				}
+				return DeepCopyExpr(rule.params[int(param.Pos)]), nil
+			}
+			return rule.ApplyExpr(exprImpl.F.Args[0])
+		}
 		needResetFunction := false
 		for i, arg := range exprImpl.F.Args {
-			if _, ok := arg.Expr.(*plan.Expr_P); ok {
+			if containsDynamicParam(arg) {
 				needResetFunction = true
+			}
+			if param, ok := arg.Expr.(*plan.Expr_P); ok {
+				if int(param.P.Pos) >= len(rule.params) {
+					return nil, moerr.NewInternalErrorf(
+						context.TODO(),
+						"get prepare params error, index %d not exists",
+						int(param.P.Pos),
+					)
+				}
+				exprImpl.F.Args[i] = DeepCopyExpr(rule.params[int(param.P.Pos)])
+				continue
 			}
 			exprImpl.F.Args[i], err = rule.ApplyExpr(arg)
 			if err != nil {

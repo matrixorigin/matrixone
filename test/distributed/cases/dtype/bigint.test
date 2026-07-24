@@ -106,6 +106,15 @@ SELECT * from t_bigint WHERE id BETWEEN 1.1 AND 1.9;
 SELECT * from t_bigint WHERE id BETWEEN 1.1e0 AND 1.9e0;
 SELECT * from t_bigint WHERE id BETWEEN '1.1' AND '1.9';
 SELECT * from t_bigint WHERE id BETWEEN '1.1e0' AND '1.9e0';
+# VARCHAR-vs-number comparisons follow MySQL approximate-number semantics
+INSERT INTO t_bigint VALUES (9007199254740992), (9007199254740993), (-9007199254740993);
+SELECT * from t_bigint WHERE id = '9007199254740993';
+SELECT * from t_bigint WHERE id = '9007199254740992';
+SELECT * from t_bigint WHERE id = '-9007199254740993';
+SELECT * from t_bigint WHERE id > '9007199254740992.5';
+SELECT * from t_bigint WHERE id IN ('9007199254740993', '1.5');
+SELECT * from t_bigint WHERE id BETWEEN '9007199254740992.5' AND '9007199254740993.5';
+DELETE FROM t_bigint WHERE id > 2 or id < 0;
 drop table t1;
 CREATE TABLE t1 (a BIGINT);
 insert INTO t1 VALUES (1);
@@ -265,3 +274,61 @@ insert into t3 values(100);
 insert into t3 values(-1000);
 select maxvalue from t1;
 drop table t3;
+
+drop table if exists t_numeric_string_reverse;
+create table t_numeric_string_reverse(s varchar(80), i bigint, index idx_numeric_string_s(s));
+insert into t_numeric_string_reverse values ('9007199254740992', 9007199254740992), ('9007199254740993', 9007199254740993), ('1.7', 1), ('1abc', 1), ('1e-50', 0), ('0x10', 0);
+select s from t_numeric_string_reverse force index(idx_numeric_string_s) where s = 1 order by s;
+select s from t_numeric_string_reverse force index(idx_numeric_string_s) where s > 1 and s < 2 order by s;
+select s from t_numeric_string_reverse force index(idx_numeric_string_s) where s = 0 order by s;
+select s from t_numeric_string_reverse force index(idx_numeric_string_s) where s = 9007199254740993 order by s;
+select s from t_numeric_string_reverse force index(idx_numeric_string_s) where s <=> 9007199254740993 order by s;
+select s from t_numeric_string_reverse force index(idx_numeric_string_s) where s in (9007199254740993) order by s;
+select s from t_numeric_string_reverse force index(idx_numeric_string_s) where s between 9007199254740993 and 9007199254740993 order by s;
+select i from t_numeric_string_reverse where i <=> '9007199254740993' order by i;
+prepare numeric_string_stmt from 'select s from t_numeric_string_reverse force index(idx_numeric_string_s) where s = ? order by s';
+set @numeric_string_param = 9007199254740993;
+execute numeric_string_stmt using @numeric_string_param;
+deallocate prepare numeric_string_stmt;
+drop table t_numeric_string_reverse;
+
+drop table if exists t_numeric_string_join_left;
+drop table if exists t_numeric_string_join_right;
+create table t_numeric_string_join_left(a int, s varchar(80), index idx_numeric_string_join_s(s), index idx_numeric_string_join_as(a, s));
+create table t_numeric_string_join_right(a int, i bigint);
+insert into t_numeric_string_join_left values (1, '1abc'), (1, '9007199254740992'), (1, '9007199254740993');
+insert into t_numeric_string_join_right values (1, 1), (1, 9007199254740993);
+select l.s from t_numeric_string_join_left l
+join t_numeric_string_join_right r on l.s = r.i order by l.s;
+select l.s from t_numeric_string_join_left l force index for join(idx_numeric_string_join_s)
+join t_numeric_string_join_right r on l.s = r.i order by l.s;
+select l.s from t_numeric_string_join_left l force index for join(idx_numeric_string_join_as)
+join t_numeric_string_join_right r on l.a = r.a and l.s = r.i order by l.s;
+create table t_numeric_string_join_decimal(d decimal(65, 0));
+insert into t_numeric_string_join_decimal values (9007199254740993);
+select l.s from t_numeric_string_join_left l
+join t_numeric_string_join_decimal r on l.s = r.d order by l.s;
+drop table t_numeric_string_join_decimal;
+drop table t_numeric_string_join_left;
+drop table t_numeric_string_join_right;
+
+select cast(9007199254740992 as decimal(65, 0)) = '9007199254740993';
+select '9007199254740993' div 1;
+select '9223372036854775807' div 1;
+select '5.5' div 2;
+
+drop table if exists t_numeric_string_composite_pk;
+create table t_numeric_string_composite_pk(a int, b varchar(80), primary key(a, b));
+insert into t_numeric_string_composite_pk values (1, '2'), (1, '3'), (1, '10'), (1, '1abc');
+select b from t_numeric_string_composite_pk where a = 1 and b > 2 and b < 10 order by b;
+select b from t_numeric_string_composite_pk where a = 1 and b between 2 and 10 order by b;
+select b from t_numeric_string_composite_pk where a = 1 and b in (2, 10) order by b;
+drop table t_numeric_string_composite_pk;
+
+drop table if exists t_numeric_string_composite_cb;
+create table t_numeric_string_composite_cb(a int, b varchar(80)) cluster by (a, b);
+insert into t_numeric_string_composite_cb values (1, '2'), (1, '3'), (1, '10'), (1, '1abc');
+select b from t_numeric_string_composite_cb where a = 1 and b > 2 and b < 10 order by b;
+select b from t_numeric_string_composite_cb where a = 1 and b between 2 and 10 order by b;
+select b from t_numeric_string_composite_cb where a = 1 and b in (2, 10) order by b;
+drop table t_numeric_string_composite_cb;

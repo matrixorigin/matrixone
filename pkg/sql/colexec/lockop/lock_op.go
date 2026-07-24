@@ -137,7 +137,13 @@ func (lockOp *LockOp) Prepare(proc *process.Process) error {
 func (lockOp *LockOp) Call(proc *process.Process) (vm.CallResult, error) {
 	txnOp := proc.GetTxnOperator()
 	if !txnOp.Txn().IsPessimistic() {
-		return vm.Exec(lockOp.GetChildren(0), proc)
+		result, err := vm.Exec(lockOp.GetChildren(0), proc)
+		if err == nil && result.Batch != nil &&
+			!result.Batch.IsEmpty() &&
+			hasMismatchedLockTargetType(result.Batch, lockOp.targets) {
+			result.Batch = batch.EmptyBatch
+		}
+		return result, err
 	}
 
 	// for the case like `select for update`, need to lock whole batches before send it to next operator
@@ -167,6 +173,10 @@ func callNonBlocking(
 	if result.Batch.IsEmpty() {
 		return result, err
 	}
+	if hasMismatchedLockTargetType(result.Batch, lockOp.targets) {
+		result.Batch = batch.EmptyBatch
+		return result, nil
+	}
 
 	lockOp.ctr.lockCount += int64(result.Batch.RowCount())
 	if err = performLock(result.Batch, proc, lockOp, analyzer, -1); err != nil {
@@ -174,6 +184,30 @@ func callNonBlocking(
 	}
 
 	return result, nil
+}
+
+func hasMismatchedLockTargetType(bat *batch.Batch, targets []lockTarget) bool {
+	// A prepared DML scan that finds no rows can return its one-row constant
+	// schema batch. It has no physical primary-key vector and must not be
+	// treated as table data by the lock or update operators.
+	if bat.RowCount() != 1 {
+		return false
+	}
+	for _, target := range targets {
+		idx := int(target.primaryColumnIndexInBatch)
+		if idx < 0 || idx >= len(bat.Vecs) {
+			return false
+		}
+		vec := bat.Vecs[idx]
+		if !vec.IsConst() {
+			continue
+		}
+		if vec.GetType().Oid == target.primaryColumnType.Oid {
+			continue
+		}
+		return true
+	}
+	return false
 }
 
 // if input vec is not allnull and has null, return a copy vector without null value
