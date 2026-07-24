@@ -21,6 +21,9 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	commonmpool "github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 )
 
 func TestHashBuildBudgetExactLimitAndOverflow(t *testing.T) {
@@ -696,6 +699,755 @@ func TestHashBuildBudgetClosedSkipsCapProvider(t *testing.T) {
 	}
 	if got := calls.Load(); got != 0 {
 		t.Fatalf("closed provider calls=%d, want 0", got)
+	}
+}
+
+func TestHashBuildBudgetCompatibilityAndObservabilitySurface(t *testing.T) {
+	var nilBudget *HashBuildBudget
+	if !nilBudget.Snapshot().Closed ||
+		nilBudget.AggregateCap() != 0 ||
+		nilBudget.CNHashCap() != 0 ||
+		nilBudget.QueryCap() != 0 ||
+		nilBudget.AggregateUsed() != 0 ||
+		nilBudget.CNHashUsed() != 0 ||
+		nilBudget.Current() != 0 ||
+		nilBudget.Capacity() != 0 ||
+		!nilBudget.Closed() ||
+		nilBudget.SpillDiskCap() != 0 ||
+		nilBudget.SpillDiskUsed() != 0 ||
+		nilBudget.SpillFDCap() != 0 ||
+		nilBudget.SpillFDUsed() != 0 {
+		t.Fatal("nil budget accessors must report an inert closed budget")
+	}
+	nilBudget.Close()
+	if err := nilBudget.SetSpillCaps(1, 1); !errors.Is(err, ErrHashBuildBudgetInvalid) {
+		t.Fatalf("nil SetSpillCaps error = %v", err)
+	}
+
+	var nilGeneration *HashBuildBudgetGeneration
+	if nilGeneration.ID() != 0 ||
+		nilGeneration.Cap() != 0 ||
+		nilGeneration.QueryCap() != 0 ||
+		nilGeneration.Capacity() != 0 ||
+		nilGeneration.Used() != 0 ||
+		nilGeneration.Current() != 0 ||
+		!nilGeneration.Closed() ||
+		nilGeneration.SpillDiskCap() != 0 ||
+		nilGeneration.SpillDiskUsed() != 0 ||
+		nilGeneration.SpillFDCap() != 0 ||
+		nilGeneration.SpillFDUsed() != 0 ||
+		!nilGeneration.Snapshot().Closed {
+		t.Fatal("nil generation accessors must report an inert closed generation")
+	}
+	nilGeneration.Close()
+	if nilGeneration.TryReserve(1) {
+		t.Fatal("nil generation reservation succeeded")
+	}
+
+	for _, kind := range []HashBuildBudgetErrorKind{
+		HashBuildBudgetErrorAdmission,
+		HashBuildBudgetErrorClosed,
+		HashBuildBudgetErrorInvalid,
+		HashBuildBudgetErrorCeilingMissing,
+	} {
+		err := &HashBuildBudgetError{Kind: kind}
+		if err.Error() == "" || err.Unwrap() == nil {
+			t.Fatalf("kind %d did not expose an error", kind)
+		}
+	}
+	var nilBudgetErr *HashBuildBudgetError
+	if nilBudgetErr.Error() != "<nil>" || nilBudgetErr.Unwrap() != nil || nilBudgetErr.Is(ErrHashBuildBudgetAdmission) {
+		t.Fatal("nil budget error must remain inert")
+	}
+	for _, tc := range []struct {
+		kind   HashBuildBudgetErrorKind
+		target error
+	}{
+		{HashBuildBudgetErrorAdmission, ErrHashBuildBudgetAdmission},
+		{HashBuildBudgetErrorClosed, ErrHashBuildBudgetAdmission},
+		{HashBuildBudgetErrorClosed, ErrHashBuildBudgetClosed},
+		{HashBuildBudgetErrorInvalid, ErrHashBuildBudgetInvalid},
+		{HashBuildBudgetErrorCeilingMissing, ErrHashBuildCeilingMissing},
+	} {
+		if !(&HashBuildBudgetError{Kind: tc.kind}).Is(tc.target) {
+			t.Fatalf("kind %d did not match %v", tc.kind, tc.target)
+		}
+	}
+	if (&HashBuildBudgetError{Kind: HashBuildBudgetErrorKind(255)}).Is(ErrHashBuildBudgetInvalid) {
+		t.Fatal("unknown error kind matched a sentinel")
+	}
+	message := &HashBuildBudgetError{Message: "explicit"}
+	if message.Error() != "explicit" {
+		t.Fatalf("explicit message = %q", message.Error())
+	}
+
+	b, err := NewHashBuildBudgetWithSpillCaps(100, 80, 200, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.AggregateCap() != 100 || b.CNHashCap() != 100 || b.Capacity() != 100 || b.QueryCap() != 80 {
+		t.Fatal("budget cap aliases disagree")
+	}
+	if b.SpillDiskCap() != 200 || b.SpillFDCap() != 10 {
+		t.Fatal("explicit spill caps were not installed")
+	}
+	if err = b.SetSpillCaps(0, 0); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := b.Snapshot()
+	if snapshot.AggregateCap != 100 || snapshot.AggregateUsed != 0 || snapshot.Closed {
+		t.Fatalf("unexpected budget snapshot: %+v", snapshot)
+	}
+
+	g, err := b.OpenGenerationWithLimits(7, 50, 100, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if g.ID() != 7 || g.Cap() != 50 || g.QueryCap() != 50 || g.Capacity() != 50 {
+		t.Fatal("generation identity or cap aliases disagree")
+	}
+	if g.SpillDiskCap() != 100 || g.SpillFDCap() != 5 || g.Current() != 0 {
+		t.Fatal("generation spill caps or current usage are wrong")
+	}
+	if !g.TryReserve(1) {
+		t.Fatal("TryReserve rejected an admissible charge")
+	}
+	token, err := g.Reserve(8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if token.GenerationID() != 7 || token.Size() != 8 || token.Released() {
+		t.Fatal("memory reservation accessors are inconsistent")
+	}
+	if ok, reconcileErr := token.Reconcile(6); !ok || reconcileErr != nil {
+		t.Fatalf("compatibility reconcile failed: ok=%v err=%v", ok, reconcileErr)
+	}
+	moved := token.TransferOwnership()
+	if moved == nil || !token.Released() || moved.GenerationID() != 7 {
+		t.Fatal("memory ownership transfer failed")
+	}
+	if !moved.Release() {
+		t.Fatal("transferred memory reservation did not release")
+	}
+
+	disk, err := g.ReserveSpillDiskBytes(12)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fd, err := g.ReserveSpillFileDescriptors(2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if disk.Size() != 12 || disk.Released() || fd.Size() != 2 || fd.Released() {
+		t.Fatal("spill reservation accessors are inconsistent")
+	}
+	if ok, reconcileErr := disk.Reconcile(10); !ok || reconcileErr != nil {
+		t.Fatalf("disk reconcile failed: ok=%v err=%v", ok, reconcileErr)
+	}
+	if ok, reconcileErr := fd.Reconcile(1); !ok || reconcileErr != nil {
+		t.Fatalf("fd reconcile failed: ok=%v err=%v", ok, reconcileErr)
+	}
+	movedDisk := disk.TransferTo()
+	movedFD := fd.TransferOwnership()
+	if movedDisk == nil || movedFD == nil || !disk.Released() || !fd.Released() {
+		t.Fatal("spill ownership transfer failed")
+	}
+	if !movedDisk.Release() || !movedFD.Release() {
+		t.Fatal("transferred spill reservations did not release")
+	}
+	stats := g.Stats()
+	if stats.ID != 7 ||
+		g.Peak() == 0 ||
+		g.ReserveCount() == 0 ||
+		g.ReconcileCount() == 0 ||
+		g.ReleaseCount() == 0 ||
+		g.RejectCount() != 0 {
+		t.Fatalf("unexpected generation stats: %+v", stats)
+	}
+
+	other, err := b.NewGeneration(8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other.Close()
+	query, err := b.OpenQueryBudget(9)
+	if err != nil {
+		t.Fatal(err)
+	}
+	query.Close()
+	explicit, err := b.OpenGenerationWithCapAndSpill(10, 40, 80, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	explicit.Close()
+	g.Close()
+	b.Close()
+	if !b.Closed() || !g.Closed() {
+		t.Fatal("close accessors did not observe terminal state")
+	}
+
+	ceiling, err := ResolveHashBuildBudget(HashBuildCeilingInputs{HostMemTotal: 8 << 30})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fromCeiling, err := NewHashBuildBudgetFromCeiling(ceiling)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fromCeiling.Close()
+}
+
+func TestHashBuildBudgetCompatibilityUnhappyPaths(t *testing.T) {
+	var nilProcess *Process
+	if _, err := nilProcess.GetHashBuildBudget(); !errors.Is(err, ErrHashBuildBudgetInvalid) {
+		t.Fatalf("nil process error = %v", err)
+	}
+
+	var nilBudget *HashBuildBudget
+	if _, err := nilBudget.OpenGeneration(1); !errors.Is(err, ErrHashBuildBudgetInvalid) {
+		t.Fatalf("nil budget generation error = %v", err)
+	}
+	if _, err := nilBudget.OpenGenerationWithCap(1, 1); !errors.Is(err, ErrHashBuildBudgetInvalid) {
+		t.Fatalf("nil budget explicit generation error = %v", err)
+	}
+
+	b, err := NewHashBuildBudgetWithSpillCaps(100, 80, 20, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = b.OpenGenerationWithCap(1, 0); !errors.Is(err, ErrHashBuildBudgetInvalid) {
+		t.Fatalf("zero generation cap error = %v", err)
+	}
+	if _, err = b.OpenGenerationWithCap(1, 101); !errors.Is(err, ErrHashBuildBudgetInvalid) {
+		t.Fatalf("oversized generation cap error = %v", err)
+	}
+
+	g, err := b.OpenGenerationWithSpillCaps(1, 80, 10, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := b.OpenGenerationWithSpillCaps(2, 80, 20, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defaults, err := b.OpenGenerationWithSpillCaps(3, 80, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if defaults.SpillDiskCap() != 20 || defaults.SpillFDCap() != 4 {
+		t.Fatal("default generation spill caps were not clamped to the CN caps")
+	}
+	defaults.Close()
+
+	disk, err := g.ReserveSpillDisk(8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = disk.Grow(2); err != nil {
+		t.Fatal(err)
+	}
+	if err = disk.Grow(1); !errors.Is(err, ErrHashBuildBudgetAdmission) {
+		t.Fatalf("query disk admission error = %v", err)
+	}
+	if _, err = other.ReserveSpillDisk(11); !errors.Is(err, ErrHashBuildBudgetAdmission) {
+		t.Fatalf("CN disk admission error = %v", err)
+	}
+	if ok, reconcileErr := disk.ReconcileDown(11); ok || !errors.Is(reconcileErr, ErrHashBuildReservationUpward) {
+		t.Fatalf("upward disk reconcile: ok=%v err=%v", ok, reconcileErr)
+	}
+
+	fd, err := g.ReserveSpillFD(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = g.ReserveSpillFD(2); !errors.Is(err, ErrHashBuildBudgetAdmission) {
+		t.Fatalf("query FD admission error = %v", err)
+	}
+	otherFD, err := other.ReserveSpillFD(3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = other.ReserveSpillFD(1); !errors.Is(err, ErrHashBuildBudgetAdmission) {
+		t.Fatalf("CN FD admission error = %v", err)
+	}
+	if ok, reconcileErr := fd.ReconcileDown(2); ok || !errors.Is(reconcileErr, ErrHashBuildReservationUpward) {
+		t.Fatalf("upward FD reconcile: ok=%v err=%v", ok, reconcileErr)
+	}
+
+	memory, err := g.Reserve(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	movedMemory := memory.TransferTo()
+	if movedMemory == nil || memory.Transfer() != nil || memory.Release() {
+		t.Fatal("inactive memory token accepted a second terminal transition")
+	}
+	if !movedMemory.Release() || movedMemory.Release() {
+		t.Fatal("memory release was not exactly once")
+	}
+
+	g.Close()
+	if _, err = g.ReserveSpillDisk(1); !errors.Is(err, ErrHashBuildBudgetClosed) {
+		t.Fatalf("closed disk reservation error = %v", err)
+	}
+	if _, err = g.ReserveSpillFD(1); !errors.Is(err, ErrHashBuildBudgetClosed) {
+		t.Fatalf("closed FD reservation error = %v", err)
+	}
+	if err = disk.Grow(1); !errors.Is(err, ErrHashBuildBudgetClosed) {
+		t.Fatalf("closed disk growth error = %v", err)
+	}
+	if !disk.Release() || disk.Release() || disk.Transfer() != nil {
+		t.Fatal("disk release was not exactly once")
+	}
+	if _, reconcileErr := disk.ReconcileDown(0); !errors.Is(reconcileErr, ErrHashBuildReservationInactive) {
+		t.Fatalf("inactive disk reconcile error = %v", reconcileErr)
+	}
+	if !fd.Release() || fd.Release() || fd.Transfer() != nil {
+		t.Fatal("FD release was not exactly once")
+	}
+	if _, reconcileErr := fd.ReconcileDown(0); !errors.Is(reconcileErr, ErrHashBuildReservationInactive) {
+		t.Fatalf("inactive FD reconcile error = %v", reconcileErr)
+	}
+	otherFD.Release()
+
+	var nilMemory *HashBuildReservation
+	var nilDisk *HashBuildSpillDiskReservation
+	var nilFD *HashBuildSpillFDReservation
+	var nilGeneration *HashBuildBudgetGeneration
+	if nilMemory.Size() != 0 || nilMemory.GenerationID() != 0 || !nilMemory.Released() ||
+		nilMemory.Release() || nilMemory.Transfer() != nil || nilMemory.TransferTo() != nil ||
+		nilDisk.Size() != 0 || !nilDisk.Released() || nilDisk.Release() ||
+		nilDisk.Transfer() != nil || nilDisk.TransferOwnership() != nil ||
+		nilFD.Size() != 0 || !nilFD.Released() || nilFD.Release() ||
+		nilFD.Transfer() != nil || nilFD.TransferTo() != nil {
+		t.Fatal("nil reservation must remain inert")
+	}
+	if _, err = nilGeneration.ReserveSpillDisk(1); !errors.Is(err, ErrHashBuildBudgetInvalid) {
+		t.Fatalf("nil disk generation error = %v", err)
+	}
+	if _, err = nilGeneration.ReserveSpillFD(1); !errors.Is(err, ErrHashBuildBudgetInvalid) {
+		t.Fatalf("nil FD generation error = %v", err)
+	}
+	if _, reconcileErr := nilMemory.Reconcile(0); !errors.Is(reconcileErr, ErrHashBuildReservationInactive) {
+		t.Fatalf("nil memory reconcile error = %v", reconcileErr)
+	}
+	if _, reconcileErr := nilDisk.Reconcile(0); !errors.Is(reconcileErr, ErrHashBuildReservationInactive) {
+		t.Fatalf("nil disk reconcile error = %v", reconcileErr)
+	}
+	if _, reconcileErr := nilFD.Reconcile(0); !errors.Is(reconcileErr, ErrHashBuildReservationInactive) {
+		t.Fatalf("nil FD reconcile error = %v", reconcileErr)
+	}
+	if err = nilMemory.Grow(1); !errors.Is(err, ErrHashBuildReservationInactive) {
+		t.Fatalf("nil memory growth error = %v", err)
+	}
+	if err = nilDisk.Grow(1); !errors.Is(err, ErrHashBuildReservationInactive) {
+		t.Fatalf("nil disk growth error = %v", err)
+	}
+
+	b.Close()
+	if _, err = b.OpenGeneration(3); !errors.Is(err, ErrHashBuildBudgetClosed) {
+		t.Fatalf("closed budget generation error = %v", err)
+	}
+	if _, err = b.OpenGenerationWithCap(3, 1); !errors.Is(err, ErrHashBuildBudgetClosed) {
+		t.Fatalf("closed budget explicit generation error = %v", err)
+	}
+}
+
+func TestGetHashBuildBudgetInitializesAndReusesCNAggregate(t *testing.T) {
+	const localService = "__process_local_cn__"
+	hashBuildCNBudgets.Delete(localService)
+	t.Cleanup(func() { hashBuildCNBudgets.Delete(localService) })
+
+	first := &Process{Base: &BaseProcess{Lim: Limitation{
+		Size:      2 << 20,
+		SpillSize: 4 << 20,
+	}}}
+	firstGeneration, err := first.GetHashBuildBudget()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstGeneration.Cap() != 2<<20 || firstGeneration.SpillDiskCap() != 4<<20 {
+		t.Fatalf("unexpected first generation limits: %+v", firstGeneration.Snapshot())
+	}
+	cached, err := first.GetHashBuildBudget()
+	if err != nil || cached != firstGeneration {
+		t.Fatalf("process-local generation was not cached: generation=%p err=%v", cached, err)
+	}
+
+	second := &Process{Base: &BaseProcess{Lim: Limitation{Size: 1 << 20}}}
+	secondGeneration, err := second.GetHashBuildBudget()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if secondGeneration == firstGeneration ||
+		secondGeneration.budget != firstGeneration.budget ||
+		secondGeneration.Cap() != 1<<20 {
+		t.Fatal("second process did not reuse the CN aggregate with its own generation")
+	}
+
+	aggregate := firstGeneration.budget
+	firstGeneration.Close()
+	secondGeneration.Close()
+	aggregate.Close()
+}
+
+func TestHashBuildBudgetDefensiveAndProviderFailurePaths(t *testing.T) {
+	for _, limits := range [][2]uint64{{0, 1}, {1, 0}, {1, 2}} {
+		if _, err := NewHashBuildBudget(limits[0], limits[1]); !errors.Is(err, ErrHashBuildBudgetInvalid) {
+			t.Fatalf("invalid limits %v returned %v", limits, err)
+		}
+		if _, err := NewHashBuildBudgetWithSpillCaps(limits[0], limits[1], 1, 1); !errors.Is(err, ErrHashBuildBudgetInvalid) {
+			t.Fatalf("invalid spill budget limits %v returned %v", limits, err)
+		}
+	}
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Fatal("MustNewHashBuildBudget did not panic for invalid limits")
+			}
+		}()
+		MustNewHashBuildBudget(0, 0)
+	}()
+
+	var nilBudget *HashBuildBudget
+	if _, _, _, err := nilBudget.refreshAggregateCap(false, 0); !errors.Is(err, ErrHashBuildBudgetInvalid) {
+		t.Fatalf("nil refresh error = %v", err)
+	}
+	nilBudget.SetAggregateCapProvider(func() (uint64, error) { return 1, nil })
+	if err := nilBudget.UpdateAggregateCap(1); !errors.Is(err, ErrHashBuildBudgetInvalid) {
+		t.Fatalf("nil cap update error = %v", err)
+	}
+
+	b, err := NewHashBuildBudgetWithSpillCaps(math.MaxUint64, math.MaxUint64, 10, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g, err := b.OpenGenerationWithSpillCaps(1, math.MaxUint64, 10, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = b.OpenGenerationWithSpillCaps(2, 0, 0, 0); !errors.Is(err, ErrHashBuildBudgetInvalid) {
+		t.Fatalf("invalid spill generation error = %v", err)
+	}
+	disk, err := g.ReserveSpillDisk(5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = b.SetSpillCaps(4, 10); !errors.Is(err, ErrHashBuildBudgetAdmission) {
+		t.Fatalf("spill cap reduction error = %v", err)
+	}
+	disk.Release()
+
+	b.capNow = nil
+	if err = b.UpdateAggregateCap(math.MaxUint64); err != nil {
+		t.Fatal(err)
+	}
+	b.SetAggregateCapProvider(func() (uint64, error) { return 0, nil })
+	if _, err = g.Reserve(1); !errors.Is(err, ErrHashBuildCeilingMissing) {
+		t.Fatalf("zero provider ceiling error = %v", err)
+	}
+	b.capCached = true
+	b.capRefreshTTL = time.Hour
+	b.capRefreshAt = time.Now()
+	b.capRefreshEpoch = 2
+	b.capRefreshErr = nil
+	called := false
+	b.capProvider = func() (uint64, error) {
+		called = true
+		return 1, nil
+	}
+	if _, _, refreshed, err := b.refreshAggregateCap(true, 1); err != nil || refreshed || called {
+		t.Fatalf("concurrent refresh was not reused: refreshed=%v called=%v err=%v", refreshed, called, err)
+	}
+
+	failing, err := NewHashBuildBudget(100, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	failingGeneration, err := failing.OpenGeneration(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	providerErr := errors.New("provider failed")
+	failing.SetAggregateCapProvider(func() (uint64, error) { return 0, providerErr })
+	if _, err = failingGeneration.Reserve(1); !errors.Is(err, providerErr) {
+		t.Fatalf("reserve provider error = %v", err)
+	}
+	token := &HashBuildReservation{
+		budget:     failing,
+		generation: failingGeneration,
+		core:       &hashBuildReservationCore{size: 1},
+	}
+	if err = token.Grow(1); !errors.Is(err, providerErr) {
+		t.Fatalf("grow provider error = %v", err)
+	}
+
+	forceReserve, err := NewHashBuildBudget(10, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	forceReserve.capRefreshTTL = time.Hour
+	forceReserveGeneration, err := forceReserve.OpenGeneration(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reserveCalls := 0
+	forceReserve.SetAggregateCapProvider(func() (uint64, error) {
+		reserveCalls++
+		if reserveCalls == 1 {
+			return 5, nil
+		}
+		return 0, providerErr
+	})
+	seed, err := forceReserveGeneration.Reserve(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seed.Release()
+	if _, err = forceReserveGeneration.Reserve(6); !errors.Is(err, providerErr) {
+		t.Fatalf("forced reserve refresh error = %v", err)
+	}
+
+	forceGrow, err := NewHashBuildBudget(10, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	forceGrow.capRefreshTTL = time.Hour
+	forceGrowGeneration, err := forceGrow.OpenGeneration(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	growCalls := 0
+	forceGrow.SetAggregateCapProvider(func() (uint64, error) {
+		growCalls++
+		if growCalls == 1 {
+			return 5, nil
+		}
+		return 0, providerErr
+	})
+	growToken, err := forceGrowGeneration.Reserve(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = growToken.Grow(5); !errors.Is(err, providerErr) {
+		t.Fatalf("forced grow refresh error = %v", err)
+	}
+	growToken.Release()
+
+	rescueGrow, err := NewHashBuildBudget(10, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rescueGrow.capRefreshTTL = time.Hour
+	rescueGeneration, err := rescueGrow.OpenGeneration(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rescueCalls := 0
+	rescueGrow.SetAggregateCapProvider(func() (uint64, error) {
+		rescueCalls++
+		if rescueCalls == 1 {
+			return 5, nil
+		}
+		return 10, nil
+	})
+	rescueToken, err := rescueGeneration.Reserve(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = rescueToken.Grow(5); err != nil || rescueToken.Size() != 6 {
+		t.Fatalf("forced growth rescue: size=%d err=%v", rescueToken.Size(), err)
+	}
+	rescueToken.Release()
+
+	noProvider, err := NewHashBuildBudget(5, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	noProviderGeneration, err := noProvider.OpenGeneration(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	noProviderToken, err := noProviderGeneration.Reserve(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = noProviderToken.Grow(5); !errors.Is(err, ErrHashBuildBudgetAdmission) {
+		t.Fatalf("non-provider aggregate growth error = %v", err)
+	}
+	noProviderToken.Release()
+
+	empty, err := NewHashBuildBudget(100, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = empty.resolveCNCapSample(HashBuildCeilingInputs{}); !errors.Is(err, ErrHashBuildCeilingMissing) {
+		t.Fatalf("empty live sample error = %v", err)
+	}
+	previousCap := commonmpool.GlobalCap()
+	commonmpool.InitCap(2 << 30)
+	previousHint := fileservice.GlobalMemoryCacheSizeHint.Swap(32 << 20)
+	func() {
+		defer commonmpool.InitCap(previousCap)
+		defer fileservice.GlobalMemoryCacheSizeHint.Store(previousHint)
+		if _, err = empty.sampleCNCap(); err != nil {
+			t.Fatalf("live CN sample error = %v", err)
+		}
+	}()
+	empty.capNow = nil
+	empty.installCNCapProvider(HashBuildCeilingInputs{HostMemTotal: 1 << 30})
+	empty.mergeObservedCNCap(HashBuildCeilingInputs{
+		CgroupMemoryMax: 512 << 20,
+		HostMemTotal:    768 << 20,
+		GlobalMpoolCap:  640 << 20,
+		FileCacheHint:   32 << 20,
+	}, 50)
+	if empty.AggregateCap() != 50 {
+		t.Fatalf("merged aggregate cap = %d", empty.AggregateCap())
+	}
+
+	closedBudget, err := NewHashBuildBudget(10, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	closedGeneration, err := closedBudget.OpenGeneration(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	closedGeneration.closed = true
+	closedBudget.mu.Lock()
+	_, err, rejected := closedGeneration.reserveLocked(1, true)
+	closedBudget.mu.Unlock()
+	if rejected || !errors.Is(err, ErrHashBuildBudgetClosed) {
+		t.Fatalf("closed reserveLocked: rejected=%v err=%v", rejected, err)
+	}
+	closedToken := &HashBuildReservation{
+		budget:     closedBudget,
+		generation: closedGeneration,
+		core:       &hashBuildReservationCore{size: 1},
+	}
+	if err, rejected = closedToken.growLocked(1, true); rejected || !errors.Is(err, ErrHashBuildBudgetClosed) {
+		t.Fatalf("closed growLocked: rejected=%v err=%v", rejected, err)
+	}
+	closedToken.core.state.Store(hashBuildReservationReleased)
+	if err, rejected = closedToken.growLocked(1, true); rejected || !errors.Is(err, ErrHashBuildReservationInactive) {
+		t.Fatalf("inactive growLocked: rejected=%v err=%v", rejected, err)
+	}
+	budgetless := &HashBuildReservation{core: &hashBuildReservationCore{}}
+	if budgetless.Released() {
+		t.Fatal("active budgetless token reported released")
+	}
+
+	overflowBudget, err := NewHashBuildBudget(math.MaxUint64, math.MaxUint64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	overflowGeneration, err := overflowBudget.OpenGeneration(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	overflow := &HashBuildReservation{
+		budget:     overflowBudget,
+		generation: overflowGeneration,
+		core:       &hashBuildReservationCore{size: math.MaxUint64},
+	}
+	if err = overflow.Grow(0); err != nil {
+		t.Fatal(err)
+	}
+	if err = overflow.Grow(1); !errors.Is(err, ErrHashBuildBudgetInvalid) {
+		t.Fatalf("overflow growth error = %v", err)
+	}
+	overflowDisk := &HashBuildSpillDiskReservation{
+		budget:     overflowBudget,
+		generation: overflowGeneration,
+		core:       &hashBuildReservationCore{size: math.MaxUint64},
+	}
+	overflowBudget.spillDiskCap = math.MaxUint64
+	overflowGeneration.spillDiskCap = math.MaxUint64
+	if err = overflowDisk.Grow(0); err != nil {
+		t.Fatal(err)
+	}
+	if err = overflowDisk.Grow(1); !errors.Is(err, ErrHashBuildBudgetInvalid) {
+		t.Fatalf("overflow disk growth error = %v", err)
+	}
+	overflowDisk.core.state.Store(hashBuildReservationReleased)
+	if err = overflowDisk.Grow(1); !errors.Is(err, ErrHashBuildReservationInactive) {
+		t.Fatalf("inactive disk growth error = %v", err)
+	}
+	cnDiskBudget, err := NewHashBuildBudgetWithSpillCaps(100, 100, 10, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cnDiskFirst, err := cnDiskBudget.OpenGenerationWithSpillCaps(1, 100, 10, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cnDiskSecond, err := cnDiskBudget.OpenGenerationWithSpillCaps(2, 100, 10, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstDisk, err := cnDiskFirst.ReserveSpillDisk(6)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondDisk, err := cnDiskSecond.ReserveSpillDisk(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = secondDisk.Grow(4); !errors.Is(err, ErrHashBuildBudgetAdmission) {
+		t.Fatalf("CN disk growth error = %v", err)
+	}
+	firstDisk.Release()
+	secondDisk.Release()
+
+	corruptMemory := &HashBuildReservation{
+		budget:     overflowBudget,
+		generation: overflowGeneration,
+		core:       &hashBuildReservationCore{size: 5},
+	}
+	if ok, reconcileErr := corruptMemory.ReconcileDown(0); ok || !errors.Is(reconcileErr, ErrHashBuildReservationInactive) {
+		t.Fatalf("corrupt memory reconcile: ok=%v err=%v", ok, reconcileErr)
+	}
+	if !corruptMemory.Release() || overflowBudget.AggregateUsed() != 0 || overflowGeneration.Used() != 0 {
+		t.Fatal("defensive memory release did not clamp corrupt counters")
+	}
+
+	corruptDisk := &HashBuildSpillDiskReservation{
+		budget:     overflowBudget,
+		generation: overflowGeneration,
+		core:       &hashBuildReservationCore{size: 5},
+	}
+	if ok, reconcileErr := corruptDisk.ReconcileDown(0); ok || !errors.Is(reconcileErr, ErrHashBuildReservationInactive) {
+		t.Fatalf("corrupt disk reconcile: ok=%v err=%v", ok, reconcileErr)
+	}
+	if !corruptDisk.Release() {
+		t.Fatal("defensive disk release failed")
+	}
+	corruptFD := &HashBuildSpillFDReservation{
+		budget:     overflowBudget,
+		generation: overflowGeneration,
+		core:       &hashBuildReservationCore{size: 5},
+	}
+	if ok, reconcileErr := corruptFD.ReconcileDown(0); ok || !errors.Is(reconcileErr, ErrHashBuildReservationInactive) {
+		t.Fatalf("corrupt FD reconcile: ok=%v err=%v", ok, reconcileErr)
+	}
+	if !corruptFD.Release() {
+		t.Fatal("defensive FD release failed")
+	}
+
+	largeHint, err := ResolveHashBuildCeiling(HashBuildCeilingInputs{
+		HostMemTotal:  10 << 30,
+		FileCacheHint: 9 << 30,
+	})
+	if err != nil || largeHint.RequestedReserve != 9<<30 {
+		t.Fatalf("large cache hint ceiling = %+v, err=%v", largeHint, err)
+	}
+	tiny, err := ResolveHashBuildCeiling(HashBuildCeilingInputs{HostMemTotal: 128 << 20})
+	if err != nil || tiny.CNHashCap == 0 {
+		t.Fatalf("tiny ceiling = %+v, err=%v", tiny, err)
+	}
+	if _, err = ResolveHashBuildCeiling(HashBuildCeilingInputs{HostMemTotal: 1}); !errors.Is(err, ErrHashBuildCeilingMissing) {
+		t.Fatalf("zero resulting CN cap error = %v", err)
 	}
 }
 

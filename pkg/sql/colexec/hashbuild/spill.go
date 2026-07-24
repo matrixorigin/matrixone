@@ -140,20 +140,6 @@ func spillEmergencyBudgetBytes(bat *batch.Batch) (uint64, error) {
 	return need, nil
 }
 
-func (ctr *container) reserveSpillScratch(bat *batch.Batch) (*process.HashBuildReservation, error) {
-	if ctr.hashmapBuilder.budget == nil {
-		return nil, nil
-	}
-	bytes, err := spillBudgetBytes(bat)
-	if err != nil {
-		return nil, err
-	}
-	if bytes == 0 {
-		return nil, nil
-	}
-	return ctr.hashmapBuilder.budget.Reserve(bytes)
-}
-
 func (ctr *container) ensureSpillScratchReservation(bat *batch.Batch, analyzer process.Analyzer) error {
 	if ctr.hashmapBuilder.budget == nil {
 		return nil
@@ -597,13 +583,6 @@ func (ctr *container) flushSpillBuffers(files []*os.File, analyzer process.Analy
 		}
 	}
 	return firstErr
-}
-
-func (ctr *container) discardSpillBuffers() {
-	for bucket := range ctr.spillBucketWriteBufs {
-		ctr.spillBucketWriteBufs[bucket].Reset()
-		ctr.spillBucketWriteRows[bucket] = 0
-	}
 }
 
 func (ctr *container) appendBuildBatchToSpillFiles(proc *process.Process, bat *batch.Batch, files []*os.File, buffers []*batch.Batch, executors []colexec.ExpressionExecutor, analyzer process.Analyzer) error {

@@ -15,11 +15,13 @@
 package spillutil
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"strings"
 	"testing"
@@ -1360,6 +1362,202 @@ func TestSpillFileFormatMultipleBatches(t *testing.T) {
 	require.Equal(t, 3, batchCount)
 	require.Equal(t, 6, totalRows)
 	reader.Close()
+}
+
+func TestBucketReaderMergesAdjacentAccountedRecords(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	budget, err := process.NewHashBuildBudget(16<<20, 16<<20)
+	require.NoError(t, err)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+
+	var buf bytes.Buffer
+	writer := BucketWriter{Name: "merge_records", Budget: generation}
+	for _, values := range [][]int32{{1, 2}, {3, 4, 5}} {
+		bat := makeInt32Batch(proc, values)
+		require.NoError(t, FlushBucketBatch(proc, bat, &writer, &buf, nil))
+		bat.Clean(proc.Mp())
+	}
+	file, err := writer.handOffSpillFile()
+	require.NoError(t, err)
+
+	reader := BucketReader{mergeRecords: true}
+	require.NoError(t, reader.EnsureBuffer(generation))
+	reader.ResetForSpillFile(file)
+	reuse := batch.NewOffHeapWithSize(0)
+	got, err := reader.ReadBatch(proc, reuse)
+	require.NoError(t, err)
+	require.Equal(t, 5, got.RowCount())
+	require.Positive(t, generation.Used())
+	_, err = reader.ReadBatch(proc, reuse)
+	require.ErrorIs(t, err, io.EOF)
+	reuse.Clean(proc.Mp())
+	reader.Close()
+	require.Zero(t, generation.Used())
+	require.Zero(t, generation.SpillDiskUsed())
+	require.Zero(t, generation.SpillFDUsed())
+}
+
+func TestBucketReaderMergeErrorReleasesAllOwnership(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	budget, err := process.NewHashBuildBudget(1<<20, 1<<20)
+	require.NoError(t, err)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+
+	readerToken, err := generation.Reserve(1)
+	require.NoError(t, err)
+	sourceToken, err := generation.Reserve(1)
+	require.NoError(t, err)
+	extraToken, err := generation.Reserve(1)
+	require.NoError(t, err)
+	reader := BucketReader{batchToken: readerToken, batchCharge: 1}
+	dst := makeInt32Batch(proc, []int32{1})
+	src := makeInt32Batch(proc, []int32{2})
+	want := errors.New("merge failed")
+	require.ErrorIs(t, reader.mergeReadError(proc, dst, src, sourceToken, want, extraToken, nil), want)
+	require.Nil(t, reader.batchToken)
+	require.Zero(t, reader.batchCharge)
+	require.Zero(t, generation.Used())
+	require.True(t, readerToken.Released())
+	require.True(t, sourceToken.Released())
+	require.True(t, extraToken.Released())
+
+	require.ErrorIs(t, reader.mergeReadError(proc, nil, nil, nil, want, nil), want)
+}
+
+func TestSpillEngineInitFromOwnedFilesAndErrorClassification(t *testing.T) {
+	first, err := os.CreateTemp(t.TempDir(), "owned-build")
+	require.NoError(t, err)
+	owned := message.NewSpillFile(first, 7, 11, nil)
+	engine := NewSpillEngine(SpillEngineConfig{})
+	engine.InitFromSpilledFiles([]*message.SpillFile{owned, nil})
+	require.Len(t, engine.buckets, 2)
+	require.Same(t, owned, engine.buckets[0].BuildFd)
+	require.Equal(t, int64(7), engine.buckets[0].BuildRows)
+	require.Equal(t, 1, engine.buckets[0].Depth)
+	require.Nil(t, engine.buckets[1].BuildFd)
+	require.Zero(t, engine.buckets[1].BuildRows)
+
+	require.False(t, isBudgetAdmission(nil))
+	require.False(t, isBudgetAdmission(io.EOF))
+	require.True(t, isBudgetAdmission(process.ErrHashBuildBudgetAdmission))
+	require.True(t, isBudgetAdmission(process.ErrHashBuildBudgetClosed))
+	require.ErrorIs(t, noProgressError(nil, 3), process.ErrHashBuildBudgetAdmission)
+	require.NoError(t, owned.Close())
+}
+
+func TestSpillSizeHelpersRejectInvalidAndOverflowInputs(t *testing.T) {
+	require.ErrorIs(t, writeBucketPayload(nil, nil, 0, nil, nil), process.ErrHashBuildBudgetInvalid)
+	require.NoError(t, marshalSpillRecord(nil, &bytes.Buffer{}))
+
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	var header bytes.Buffer
+	negativeRows := int64(-1)
+	zero := int64(0)
+	header.Write(types.EncodeInt64(&negativeRows))
+	header.Write(types.EncodeInt64(&zero))
+	reader := BucketReader{reader: bufio.NewReader(&header)}
+	_, _, _, err := reader.readBatchRecord(proc, batch.NewOffHeapWithSize(0), nil, 0, false)
+	require.Error(t, err)
+
+	makeHeader := func(batchSize int64) *bufio.Reader {
+		var data bytes.Buffer
+		rows := int64(0)
+		data.Write(types.EncodeInt64(&rows))
+		data.Write(types.EncodeInt64(&batchSize))
+		return bufio.NewReader(&data)
+	}
+	budgetForHeader, err := process.NewHashBuildBudget(1, 1)
+	require.NoError(t, err)
+	headerGeneration, err := budgetForHeader.OpenGeneration(1)
+	require.NoError(t, err)
+	reader = BucketReader{reader: makeHeader(math.MaxInt64), budget: headerGeneration}
+	_, _, _, err = reader.readBatchRecord(proc, batch.NewOffHeapWithSize(0), nil, 0, false)
+	require.ErrorIs(t, err, process.ErrHashBuildBudgetInvalid)
+	reader = BucketReader{reader: makeHeader(1), budget: headerGeneration}
+	_, _, _, err = reader.readBatchRecord(proc, batch.NewOffHeapWithSize(0), nil, 0, false)
+	require.ErrorIs(t, err, process.ErrHashBuildBudgetAdmission)
+	headerToken, err := headerGeneration.Reserve(1)
+	require.NoError(t, err)
+	reader = BucketReader{reader: makeHeader(1), budget: headerGeneration}
+	_, returnedToken, _, err := reader.readBatchRecord(proc, batch.NewOffHeapWithSize(0), headerToken, 1, false)
+	require.ErrorIs(t, err, process.ErrHashBuildBudgetAdmission)
+	require.Same(t, headerToken, returnedToken)
+	headerToken.Release()
+
+	_, ok := addUint64(math.MaxUint64, 1)
+	require.False(t, ok)
+	_, ok = mulUint64(math.MaxUint64, 2)
+	require.False(t, ok)
+	_, ok = intToUint64(-1)
+	require.False(t, ok)
+	_, ok = predictedCapacity(-1, 1)
+	require.False(t, ok)
+	_, ok = predictedCapacity(1, math.MaxUint64)
+	require.False(t, ok)
+
+	_, ok = batchRetainedBytes(nil)
+	require.False(t, ok)
+	invalidRows := batch.NewOffHeapWithSize(0)
+	invalidRows.SetRowCount(-1)
+	_, ok = batchRetainedBytes(invalidRows)
+	require.False(t, ok)
+
+	valid := batch.NewOffHeapWithSize(0)
+	valid.SetRowCount(0)
+	_, ok = predictMergedRetainedBytes(nil, valid)
+	require.False(t, ok)
+	invalidRows = batch.NewOffHeapWithSize(0)
+	invalidRows.SetRowCount(-1)
+	_, ok = predictMergedRetainedBytes(invalidRows, valid)
+	require.False(t, ok)
+	mismatched := batch.NewOffHeapWithSize(1)
+	mismatched.SetRowCount(0)
+	_, ok = predictMergedRetainedBytes(valid, mismatched)
+	require.False(t, ok)
+	nilVectorDst := batch.NewOffHeapWithSize(1)
+	nilVectorDst.SetRowCount(0)
+	nilVectorSrc := batch.NewOffHeapWithSize(1)
+	nilVectorSrc.SetRowCount(0)
+	_, ok = predictMergedRetainedBytes(nilVectorDst, nilVectorSrc)
+	require.False(t, ok)
+	hugeRowsDst := batch.NewOffHeapWithSize(0)
+	hugeRowsDst.SetRowCount(maxIntValue())
+	hugeRowsSrc := batch.NewOffHeapWithSize(0)
+	hugeRowsSrc.SetRowCount(1)
+	_, ok = predictMergedRetainedBytes(hugeRowsDst, hugeRowsSrc)
+	require.False(t, ok)
+
+	mp := mpool.MustNewZero()
+	fixed := testutil.MakeInt32Vector([]int32{1}, nil, mp)
+	defer fixed.Free(mp)
+	_, ok = mergedVarlenAreaAdd(nil, 1)
+	require.False(t, ok)
+	_, ok = mergedVarlenAreaAdd(fixed, 1)
+	require.False(t, ok)
+	constNull := vector.NewConstNull(types.T_varchar.ToType(), 1, mp)
+	defer constNull.Free(mp)
+	bytes, ok := mergedVarlenAreaAdd(constNull, 0)
+	require.True(t, ok)
+	require.Zero(t, bytes)
+	bytes, ok = mergedVarlenAreaAdd(constNull, 1)
+	require.True(t, ok)
+	require.Zero(t, bytes)
+
+	require.NoError(t, reconcileReadReservation(nil, 0))
+	budget, err := process.NewHashBuildBudget(10, 10)
+	require.NoError(t, err)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	token, err := generation.Reserve(1)
+	require.NoError(t, err)
+	require.ErrorIs(t, reconcileReadReservation(token, 2), process.ErrHashBuildBudgetInvalid)
+	require.True(t, token.Release())
+	require.ErrorIs(t, reconcileReadReservation(token, 0), process.ErrHashBuildReservationInactive)
 }
 
 func TestScatterSkipsDisabledWriters(t *testing.T) {
