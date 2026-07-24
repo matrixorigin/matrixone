@@ -129,7 +129,7 @@ func (c *LogtailClient) Subscribe(
 			Table: &table,
 		},
 	}
-	return c.sendRequest(request)
+	return c.sendRequest(ctx, request)
 }
 
 // Unsubscribe cancel subscription for table.
@@ -149,7 +149,7 @@ func (c *LogtailClient) Unsubscribe(
 			Table: &table,
 		},
 	}
-	return c.sendRequest(request)
+	return c.sendRequest(ctx, request)
 }
 
 func (c *LogtailClient) BreakoutReceive() {
@@ -224,10 +224,12 @@ func (c *LogtailClient) streamBroken() bool {
 	return false
 }
 
-func (c *LogtailClient) sendRequest(request *LogtailRequest) error {
+func (c *LogtailClient) sendRequest(ctx context.Context, request *LogtailRequest) error {
 	select {
 	case <-c.ctx.Done():
 		return c.ctx.Err()
+	case <-ctx.Done():
+		return ctx.Err()
 
 	case c.requestC <- request:
 		return nil

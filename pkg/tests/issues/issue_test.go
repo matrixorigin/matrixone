@@ -464,6 +464,12 @@ func TestCNFlushS3Deletes(t *testing.T) {
 
 			exec := cn.RawService().(cnservice.Service).GetSQLExecutor()
 			require.NotNil(t, exec)
+			rowCount := 512 * 1024
+			if testing.Short() {
+				// A rowid plus its primary key still crosses the 1 MiB flush
+				// threshold at this size, without making PR CI process 512K rows.
+				rowCount = 64 * 1024
+			}
 
 			{
 				_, err := exec.Exec(ctx, "create database a;", executor.Options{})
@@ -477,7 +483,7 @@ func TestCNFlushS3Deletes(t *testing.T) {
 					executor.Options{}.WithDatabase("a"))
 				require.NoError(t, err)
 
-				_, err = exec.Exec(ctx, "insert into t1 select *,'yep' from generate_series(1,512*1024)g;",
+				_, err = exec.Exec(ctx, fmt.Sprintf("insert into t1 select *,'yep' from generate_series(1,%d)g;", rowCount),
 					executor.Options{}.WithDatabase("a"))
 				require.NoError(t, err)
 
@@ -487,13 +493,13 @@ func TestCNFlushS3Deletes(t *testing.T) {
 
 				resp.ReadRows(func(rows int, cols []*vector.Vector) bool {
 					cnt := vector.GetFixedAtWithTypeCheck[int64](cols[0], 0)
-					require.Equal(t, int64(512*1024), cnt)
+					require.Equal(t, int64(rowCount), cnt)
 					return true
 				})
 			}
 
 			deletion.SetCNFlushDeletesThreshold(1)
-			defer deletion.SetCNFlushDeletesThreshold(32)
+			defer deletion.SetCNFlushDeletesThreshold(5)
 
 			{
 				_, err := exec.Exec(ctx, "delete from t1 where a > 1;", executor.Options{}.WithDatabase("a"))

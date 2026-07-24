@@ -535,6 +535,25 @@ func TestGetArgsFromDistFnForJoinBranches(t *testing.T) {
 		Args: []*plan.Expr{providerArg, scanArg},
 	}, 2, scanTag)
 	require.False(t, found)
+
+	// Narrow vector element types (bf16/f16/int8/uint8) must push down the JOIN too,
+	// matching the direct getArgsFromDistFn (which uses IsArrayRelate). The old
+	// hardcoded f32/f64 check made these fall through to brute-force execution.
+	for _, narrow := range []types.T{
+		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8,
+	} {
+		nTyp := plan.Type{Id: int32(narrow)}
+		nScan := newVectorJoinColExpr(scanTag, 1, "v", nTyp)
+		nProvider := newVectorJoinColExpr(providerTag, 1, "v", nTyp)
+		key, value, found := builder.getArgsFromDistFnForJoin(&plan.Function{
+			Func: &plan.ObjectRef{ObjName: "l2_distance"},
+			Args: []*plan.Expr{nProvider, nScan},
+		}, 1, scanTag)
+		require.True(t, found, "narrow vector %v join must push down", narrow)
+		require.Equal(t, nScan, key)
+		require.Equal(t, nProvider, value)
+		require.Equal(t, nScan.Typ, nProvider.Typ)
+	}
 }
 
 func TestExtractJoinThroughProviderVectorArgBranches(t *testing.T) {

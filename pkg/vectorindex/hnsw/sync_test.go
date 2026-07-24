@@ -167,17 +167,34 @@ func TestSyncUpsertWithEmpty(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
+	oldRunSQL := runSql
+	oldRunSQLStreaming := runSql_streaming
+	oldRunTxn := runTxn
+	t.Cleanup(func() {
+		runSql = oldRunSQL
+		runSql_streaming = oldRunSQLStreaming
+		runTxn = oldRunTxn
+	})
 	runSql = mock_runSql_empty
 	runSql_streaming = mock_runSql_streaming
 	runTxn = mock_runTxn
 
 	indexes := mockMoIndexes()
-	cdc := vectorindex.VectorIndexCdc[float32]{Data: make([]vectorindex.VectorIndexCdcEntry[float32], 0, 1000)}
+	entryCount := 1000
+	if testing.Short() {
+		// The test covers the all-UPSERT-to-insert path and parallel dispatch,
+		// not index scale. 128 entries still exercise multi-worker dispatch
+		// while avoiding 1,000 native index inserts under -race.
+		entryCount = 128
+	}
+	cdc := vectorindex.VectorIndexCdc[float32]{
+		Data: make([]vectorindex.VectorIndexCdcEntry[float32], 0, entryCount),
+	}
 
 	key := int64(1000)
 	v := []float32{0.1, 0.2, 0.3}
 
-	for i := 0; i < 1000; i++ {
+	for i := 0; i < entryCount; i++ {
 		e := vectorindex.VectorIndexCdcEntry[float32]{Type: vectorindex.CDC_UPSERT, PKey: key, Vec: v}
 		cdc.Data = append(cdc.Data, e)
 		key += 1
@@ -190,6 +207,8 @@ func TestSyncUpsertWithEmpty(t *testing.T) {
 	require.Nil(t, err)
 	err = sync.RunOnce(sqlproc, &cdc)
 	require.Nil(t, err)
+	require.Equal(t, int32(len(cdc.Data)), sync.ninsert.Load())
+	require.Zero(t, sync.nupdate.Load())
 }
 
 func TestSyncVariableError(t *testing.T) {
