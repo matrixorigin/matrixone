@@ -17,6 +17,7 @@ package issues
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -27,13 +28,43 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	pblock "github.com/matrixorigin/matrixone/pkg/pb/lock"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	pbtxn "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
 	"github.com/stretchr/testify/require"
 )
 
+func runIssue26087AuthenticatedClusterTest(fn func(embed.Cluster)) (err error) {
+	c, err := embed.NewCluster(
+		embed.WithCNCount(1),
+		embed.WithTesting(),
+		embed.WithPreStart(func(svc embed.ServiceOperator) {
+			if svc.ServiceType() != metadata.ServiceType_CN {
+				return
+			}
+			svc.Adjust(func(cfg *embed.ServiceConfig) {
+				cfg.CN.LockService.MaxFixedSliceSize = 10001
+				cfg.CN.LockService.MaxLockRowCount = 10000
+				cfg.CN.Frontend.SkipCheckUser = false
+			})
+		}),
+	)
+	if err != nil {
+		return err
+	}
+	if err = c.Start(); err != nil {
+		_ = c.Close()
+		return err
+	}
+	defer func() {
+		err = errors.Join(err, c.Close())
+	}()
+	fn(c)
+	return nil
+}
+
 func TestIssue26087ConcurrentDataBranchQuota(t *testing.T) {
-	require.NoError(t, embed.RunBaseClusterTests(
+	require.NoError(t, runIssue26087AuthenticatedClusterTest(
 		func(c embed.Cluster) {
 			ctx, cancel := context.WithTimeout(context.Background(), 240*time.Second)
 			defer cancel()
@@ -69,6 +100,9 @@ func TestIssue26087ConcurrentDataBranchQuota(t *testing.T) {
 			require.NoError(t, err)
 			defer tenantDB.Close()
 			tenantDB.SetMaxOpenConns(2)
+			var tenantAccountID uint32
+			require.NoError(t, tenantDB.QueryRowContext(ctx, "select current_account_id()").Scan(&tenantAccountID))
+			require.Equal(t, uint32(accountID), tenantAccountID)
 			execSQLRequire(t, ctx, tenantDB, "create database branch_quota_race")
 			execSQLRequire(t, ctx, tenantDB, "create table branch_quota_race.src (a int primary key)")
 			execSQLRequire(t, ctx, tenantDB, "create table branch_quota_race.mode_probe (a int primary key)")
