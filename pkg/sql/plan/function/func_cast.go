@@ -5101,6 +5101,34 @@ func decimal64ToDecimal128Array(
 
 	if !from.WithAnyNullValue() {
 		v := vector.MustFixedColWithTypeCheck[types.Decimal64](from.GetSourceVector())
+		if from.GetSourceVector().IsConst() {
+			fromdec := types.Decimal128{B0_63: uint64(v[0])}
+			if v[0].Sign() {
+				fromdec.B64_127 = ^fromdec.B64_127
+			}
+
+			result := fromdec
+			var err error
+			if totype.Width < fromtype.Width {
+				result, err = types.ParseDecimal128(
+					fromdec.Format(fromtype.Scale),
+					totype.Width,
+					totype.Scale,
+				)
+			} else if totype.Scale != fromtype.Scale {
+				result, err = fromdec.Scale(totype.Scale - fromtype.Scale)
+			}
+			if err != nil {
+				return err
+			}
+
+			dst := vector.MustFixedColNoTypeCheck[types.Decimal128](to.GetResultVector())
+			for i := 0; i < length; i++ {
+				dst[i] = result
+			}
+			return nil
+		}
+
 		if totype.Width < fromtype.Width {
 			for i := 0; i < length; i++ {
 				fromdec := types.Decimal128{B0_63: uint64(v[i]), B64_127: 0}
