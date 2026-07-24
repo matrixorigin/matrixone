@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"math"
 	"strings"
@@ -77,6 +78,7 @@ type SnapshotTenant = plan.SnapshotTenant
 type ExternAttr = plan.ExternAttr
 
 const ViewSnapshotKeySuffix = "@ts="
+const viewDependencySnapshotKeySuffix = "@snapshot="
 
 // FormatViewKeyWithSnapshot appends snapshot information to a view key for privilege checks.
 func FormatViewKeyWithSnapshot(viewKey string, snapshot *Snapshot) string {
@@ -84,6 +86,38 @@ func FormatViewKeyWithSnapshot(viewKey string, snapshot *Snapshot) string {
 		return viewKey
 	}
 	return fmt.Sprintf("%s%s%d", viewKey, ViewSnapshotKeySuffix, snapshot.TS.PhysicalTime)
+}
+
+// FormatViewDependencyKeyWithSnapshot preserves the complete table-level
+// snapshot used to resolve a view. The privilege path only needs physical time,
+// but prepared-plan invalidation must resolve the same MVCC and tenant identity.
+func FormatViewDependencyKeyWithSnapshot(viewKey string, snapshot *Snapshot) (string, error) {
+	if !IsSnapshotValid(snapshot) {
+		return viewKey, nil
+	}
+	data, err := snapshot.Marshal()
+	if err != nil {
+		return "", err
+	}
+	return viewKey + viewDependencySnapshotKeySuffix +
+		base64.RawURLEncoding.EncodeToString(data), nil
+}
+
+func parseViewDependencyKeySnapshot(viewKey string) (string, *Snapshot, error) {
+	suffix := strings.LastIndex(viewKey, viewDependencySnapshotKeySuffix)
+	if suffix < 0 {
+		return viewKey, nil, nil
+	}
+	data, err := base64.RawURLEncoding.DecodeString(
+		viewKey[suffix+len(viewDependencySnapshotKeySuffix):])
+	if err != nil {
+		return "", nil, err
+	}
+	snapshot := &Snapshot{}
+	if err = snapshot.Unmarshal(data); err != nil {
+		return "", nil, err
+	}
+	return viewKey[:suffix], snapshot, nil
 }
 
 type CompilerContext interface {

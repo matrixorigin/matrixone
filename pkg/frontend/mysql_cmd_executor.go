@@ -57,7 +57,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
@@ -1875,6 +1874,7 @@ func createPrepareStmt(
 		ses.GetTxnCompileCtx().SetExecCtx(execCtx)
 	}
 
+	cloneSQL := preparedCloneSQL(saveStmt, ses.GetTxnCompileCtx().GetDatabase())
 	var preparePlan *plan.Plan
 	err := execCtx.withRootSQL(originSQL, func() (err error) {
 		preparePlan, err = buildPlanWithAuthorization(execCtx.reqCtx, ses, ses.GetTxnCompileCtx(), stmt)
@@ -1883,6 +1883,7 @@ func createPrepareStmt(
 	if err != nil {
 		return nil, err
 	}
+	prepareTs := currentTxnSnapshotTS(ses)
 
 	schedulingSQLMode := sessionSQLModeForParser(ses)
 	prepareSchedulingIntent := querySchedulingIntentForStatementWithSQLMode(
@@ -1917,6 +1918,8 @@ func createPrepareStmt(
 		remapDb:             maps.Clone(execCtx.remapDb),
 		defaultDatabase:     ses.GetTxnCompileCtx().GetDatabase(),
 		tempTableVersion:    ses.GetTempTableVersion(),
+		ddlVersion:          ses.getDDLVersion(),
+		cloneSQL:            cloneSQL,
 		getFromSendLongData: make(map[int]struct{}),
 		schedulingSQLMode:   schedulingSQLMode,
 	}
@@ -1932,8 +1935,60 @@ func createPrepareStmt(
 		sqlSourceTypes := execCtx.input.getSqlSourceTypes()
 		prepareStmt.IsCloudNonuser = slices.Contains(sqlSourceTypes, constant.CloudNoUserSql)
 	}
-	prepareStmt.Ts = timestamp.Timestamp{PhysicalTime: time.Now().Unix()}
+	prepareStmt.Ts = prepareTs
 	return prepareStmt, nil
+}
+
+func preparedCloneSQL(stmt tree.Statement, defaultDatabase string) string {
+	clone, ok := stmt.(*tree.CloneTable)
+	if !ok {
+		return ""
+	}
+	executionClone := *clone
+	executionClone.SrcTable = clone.SrcTable
+	executionClone.CreateTable = clone.CreateTable
+	if executionClone.SrcTable.SchemaName == "" {
+		executionClone.SrcTable.SchemaName = tree.Identifier(defaultDatabase)
+	}
+	executionClone.SrcTable.ExplicitSchema = true
+	if executionClone.CreateTable.Table.SchemaName == "" && executionClone.ToAccountOpt == nil {
+		executionClone.CreateTable.Table.SchemaName = tree.Identifier(defaultDatabase)
+	}
+	executionClone.CreateTable.Table.ExplicitSchema =
+		executionClone.CreateTable.Table.SchemaName != ""
+	return tree.StringWithOpts(
+		&executionClone,
+		dialect.MYSQL,
+		tree.WithQuoteIdentifier(),
+		tree.WithSingleQuoteString(),
+	)
+}
+
+func freshPreparedCloneStatement(
+	ctx context.Context,
+	prepareStmt *PrepareStmt,
+) (tree.Statement, bool, error) {
+	if prepareStmt == nil {
+		return nil, false, moerr.NewInternalError(ctx, "prepared statement is nil")
+	}
+	if prepareStmt.cloneSQL == "" {
+		return prepareStmt.PrepareStmt, false, nil
+	}
+	stmts, err := mysql.ParseWithSQLMode(ctx, prepareStmt.cloneSQL, 0, prepareStmt.schedulingSQLMode)
+	if err != nil {
+		return nil, false, err
+	}
+	if len(stmts) != 1 {
+		for _, stmt := range stmts {
+			stmt.Free()
+		}
+		return nil, false, moerr.NewInternalError(ctx, "prepared clone SQL must contain exactly one statement")
+	}
+	if _, ok := stmts[0].(*tree.CloneTable); !ok {
+		stmts[0].Free()
+		return nil, false, moerr.NewInternalError(ctx, "prepared clone SQL did not parse as CLONE TABLE")
+	}
+	return stmts[0], true, nil
 }
 
 func doDeallocate(ses *Session, execCtx *ExecCtx, st *tree.Deallocate) error {
@@ -3894,8 +3949,25 @@ func executeStmtWithWorkspace(ses FeSession,
 	}()
 
 	err = executeStmtWithIncrStmt(ses, statsArr, execCtx, txnOp)
+	recordSessionDDL(ses, execCtx, err)
 
 	return
+}
+
+func recordSessionDDL(ses FeSession, execCtx *ExecCtx, err error) {
+	if err != nil || execCtx == nil {
+		return
+	}
+	var queryPlan *plan.Plan
+	if cw, ok := execCtx.cw.(*TxnComputationWrapper); ok {
+		queryPlan = cw.Plan()
+	}
+	if !changesSessionCatalog(execCtx.stmt, queryPlan) {
+		return
+	}
+	if session, ok := ses.(*Session); ok {
+		session.advanceDDLVersion()
+	}
 }
 
 func executeStmtWithIncrStmt(ses FeSession,

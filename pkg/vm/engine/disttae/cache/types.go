@@ -43,13 +43,16 @@ const (
 )
 
 type TableChangeQuery struct {
-	AccountId  uint32
-	DatabaseId uint64
-	Name       string
-	Version    uint32
-	TableId    uint64
-	Ts         timestamp.Timestamp
+	AccountId    uint32
+	DatabaseId   uint64
+	DatabaseName string
+	Name         string
+	Version      uint32
+	TableId      uint64
+	Ts           timestamp.Timestamp
 }
+
+const tableChangeBucketCount = 4096
 
 // catalog cache
 type CatalogCache struct {
@@ -58,7 +61,14 @@ type CatalogCache struct {
 		start types.TS
 		end   types.TS
 	}
-	gcMu sync.Mutex
+	gcMu        sync.Mutex
+	tableChange struct {
+		sync.RWMutex
+		// Account IDs hash into a fixed number of monotonic high-watermark
+		// buckets. Collisions can only cause conservative replanning; they
+		// cannot hide a change, and memory use is independent of tenant churn.
+		byAccount [tableChangeBucketCount]timestamp.Timestamp
+	}
 	//tables and database is safe to be read concurrently.
 	tables    *tableCache
 	databases *databaseCache

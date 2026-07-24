@@ -51,17 +51,11 @@ func NewGetParamRule() *GetParamRule {
 }
 
 func (rule *GetParamRule) MatchNode(node *Node) bool {
-	if node.NodeType == plan.Node_TABLE_SCAN || node.NodeType == plan.Node_INSERT {
-		rule.schemas = append(rule.schemas, &plan.ObjectRef{
-			Server:     int64(node.TableDef.Version), //we use this unused field to store table's version
-			Db:         int64(node.TableDef.DbId),
-			Schema:     int64(node.TableDef.DbId),
-			Obj:        node.ObjRef.Obj,
-			ServerName: node.ObjRef.ServerName,
-			DbName:     node.ObjRef.DbName,
-			SchemaName: node.ObjRef.SchemaName,
-			ObjName:    node.ObjRef.ObjName,
-		})
+	if node.NodeType == plan.Node_TABLE_SCAN ||
+		node.NodeType == plan.Node_EXTERNAL_SCAN ||
+		node.NodeType == plan.Node_SOURCE_SCAN ||
+		node.NodeType == plan.Node_INSERT {
+		rule.schemas = append(rule.schemas, prepareSchemaRef(node.ObjRef, node.TableDef))
 		if node.NodeType == plan.Node_TABLE_SCAN && node.ObjRef != nil && node.TableDef != nil {
 			for _, indexDef := range node.TableDef.Indexes {
 				if indexplugin.IsPluginAlgo(indexDef.IndexAlgo) && indexDef.IndexTableName != "" {
@@ -75,16 +69,7 @@ func (rule *GetParamRule) MatchNode(node *Node) bool {
 		}
 	} else if node.NodeType == plan.Node_MULTI_UPDATE {
 		for _, updateCtx := range node.UpdateCtxList {
-			rule.schemas = append(rule.schemas, &plan.ObjectRef{
-				Server:     int64(updateCtx.TableDef.Version), //we use this unused field to store table's version
-				Db:         int64(updateCtx.TableDef.DbId),
-				Schema:     int64(updateCtx.TableDef.DbId),
-				Obj:        updateCtx.ObjRef.Obj,
-				ServerName: updateCtx.ObjRef.ServerName,
-				DbName:     updateCtx.ObjRef.DbName,
-				SchemaName: updateCtx.ObjRef.SchemaName,
-				ObjName:    updateCtx.ObjRef.ObjName,
-			})
+			rule.schemas = append(rule.schemas, prepareSchemaRef(updateCtx.ObjRef, updateCtx.TableDef))
 		}
 	}
 	return false
