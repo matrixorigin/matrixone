@@ -37,12 +37,35 @@ import (
 )
 
 type MinioSDK struct {
-	name            string
-	bucket          string
-	core            *minio.Core
-	client          *minio.Client
-	perfCounterSets []*perfcounter.CounterSet
-	listMaxKeys     int
+	name                 string
+	endpoint             string
+	bucket               string
+	core                 *minio.Core
+	client               *minio.Client
+	copyCredentialDomain objectStorageCopyCredentialDomain
+	perfCounterSets      []*perfcounter.CounterSet
+	listMaxKeys          int
+}
+
+var _ objectStorageCopier = new(MinioSDK)
+
+func (a *MinioSDK) CopyObject(
+	ctx context.Context,
+	src ObjectStorage,
+	srcKey string,
+	dstKey string,
+) (bool, error) {
+	s, ok := src.(*MinioSDK)
+	if !ok || !strings.EqualFold(a.endpoint, s.endpoint) ||
+		!a.copyCredentialDomain.matches(s.copyCredentialDomain) {
+		return false, nil
+	}
+	_, err := a.client.CopyObject(
+		ctx,
+		minio.CopyDestOptions{Bucket: a.bucket, Object: dstKey},
+		minio.CopySrcOptions{Bucket: s.bucket, Object: srcKey},
+	)
+	return true, err
 }
 
 func NewMinioSDK(
@@ -204,10 +227,14 @@ func NewMinioSDK(
 	}
 
 	return &MinioSDK{
-		name:            args.Name,
-		bucket:          args.Bucket,
-		client:          client,
-		core:            core,
+		name:     args.Name,
+		endpoint: args.Endpoint,
+		bucket:   args.Bucket,
+		client:   client,
+		core:     core,
+		copyCredentialDomain: newObjectStorageCopyCredentialDomain(
+			keyID, keySecret, sessionToken, args.RoleARN, args.ExternalID,
+		),
 		perfCounterSets: perfCounterSets,
 	}, nil
 }
@@ -495,7 +522,8 @@ func (a *MinioSDK) listObjects(ctx context.Context, prefix string, marker string
 func (a *MinioSDK) statObject(ctx context.Context, key string) (minio.ObjectInfo, error) {
 	ctx, task := gotrace.NewTask(ctx, "MinioSDK.statObject")
 	defer task.End()
-	return DoWithRetry(
+	return DoWithRetryContext(
+		ctx,
 		"s3 head object",
 		func() (minio.ObjectInfo, error) {
 			perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
@@ -524,14 +552,12 @@ func (a *MinioSDK) putObject(
 	defer task.End()
 	// not retryable because Reader may be half consumed
 	//TODO set expire
-	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
-		counter.FileService.S3.Put.Add(1)
-	}, a.perfCounterSets...)
+	recordS3PutRequest(ctx, a.perfCounterSets...)
 	size := int64(-1)
 	if sizeHint != nil {
 		size = *sizeHint
 	}
-	return a.client.PutObject(
+	info, err := a.client.PutObject(
 		ctx,
 		a.bucket,
 		key,
@@ -539,6 +565,10 @@ func (a *MinioSDK) putObject(
 		size,
 		minio.PutObjectOptions{},
 	)
+	if err == nil {
+		recordS3AcceptedBytes(ctx, info.Size, a.perfCounterSets...)
+	}
+	return info, err
 }
 
 func (a *MinioSDK) getObject(ctx context.Context, key string, min *int64, max *int64) (io.ReadCloser, error) {

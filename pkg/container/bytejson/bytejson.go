@@ -113,6 +113,16 @@ func (bj *ByteJson) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+func (bj *ByteJson) unmarshalJSONWithDepthLimit(data []byte, maxDepth int) error {
+	bs, err := parseJsonByte(data, maxDepth)
+	if err != nil {
+		return err
+	}
+	bj.Data = bs[1:]
+	bj.Type = TpCode(bs[0])
+	return nil
+}
+
 func (bj ByteJson) IsNull() bool {
 	return bj.Type == TpCodeLiteral && bj.Data[0] == LiteralNull
 }
@@ -914,7 +924,11 @@ func ParseJsonByteFromString(s string) ([]byte, error) {
 }
 
 func ParseJsonByte(data []byte) ([]byte, error) {
-	n, err := ParseNode(data)
+	return parseJsonByte(data, 0)
+}
+
+func parseJsonByte(data []byte, maxDepth int) ([]byte, error) {
+	n, err := parseNode(data, maxDepth)
 	if err != nil {
 		return nil, err
 	}
@@ -934,16 +948,22 @@ func ParseNodeString(s string) (Node, error) {
 }
 
 func ParseNode(data []byte) (Node, error) {
-	p := parser{src: data}
+	return parseNode(data, 0)
+}
+
+func parseNode(data []byte, maxDepth int) (Node, error) {
+	p := parser{src: data, maxDepth: maxDepth}
 	return p.do()
 }
 
 type parser struct {
-	src   []byte
-	stack []*Group
-	tz    *json2.Tokenizer
-	state func(*parser) int
-	top   Node
+	src      []byte
+	stack    []*Group
+	tz       *json2.Tokenizer
+	state    func(*parser) int
+	top      Node
+	maxDepth int
+	depthErr error
 }
 
 func (p *parser) do() (Node, error) {
@@ -963,6 +983,9 @@ func (p *parser) do() (Node, error) {
 			for _, g := range p.stack {
 				g.free()
 			}
+			if p.depthErr != nil {
+				return z, p.depthErr
+			}
 			if errors.Is(p.tz.Err, io.EOF) {
 				return z, io.ErrUnexpectedEOF
 			}
@@ -974,9 +997,12 @@ func (p *parser) do() (Node, error) {
 		case scanEnd:
 			if p.tz.Next() {
 				p.top.Free()
+				p.top = Node{}
 				return z, moerr.NewInvalidInputNoCtxf("invalid json: %s", p.src)
 			}
 			if p.tz.Err != nil {
+				p.top.Free()
+				p.top = Node{}
 				return z, moerr.NewInternalErrorNoCtxf("parse json: %v", p.tz.Err)
 			}
 			return p.top, nil
@@ -995,11 +1021,15 @@ func (p *parser) stateBeginValue() int {
 
 	switch k.Class() {
 	case json2.Array:
-		p.openGroup(k)
+		if !p.openGroup(k) {
+			return scanError
+		}
 		p.state = (*parser).stateBeginValueOrEmpty
 		return scanContinue
 	case json2.Object:
-		p.openGroup(k)
+		if !p.openGroup(k) {
+			return scanError
+		}
 		p.state = (*parser).stateObjectKeyOrEmpty
 		return scanContinue
 	}
@@ -1091,10 +1121,16 @@ func (p *parser) stateEndValue() int {
 	return scanError
 }
 
-func (p *parser) openGroup(k json2.Kind) {
+func (p *parser) openGroup(k json2.Kind) bool {
+	if p.maxDepth > 0 && len(p.stack) >= p.maxDepth {
+		p.depthErr = newJSONDocumentDepthError(p.maxDepth)
+		p.tz.Err = p.depthErr
+		return false
+	}
 	g := reuse.Alloc[Group](nil)
 	g.Obj = k == json2.Object
 	p.stack = append(p.stack, g)
+	return true
 }
 
 func (p *parser) closeGroup() {

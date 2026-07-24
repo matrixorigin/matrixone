@@ -33,6 +33,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/require"
 	costypes "github.com/tencentyun/cos-go-sdk-v5"
@@ -235,10 +236,12 @@ func TestAwsParallelMultipartSuccess(t *testing.T) {
 	state.uploadID = "uid-success"
 
 	sdk := newTestAWSClient(t, server)
+	counter := new(perfcounter.CounterSet)
+	ctx := perfcounter.WithCounterSet(context.Background(), counter)
 
 	data := bytes.Repeat([]byte("a"), int(minMultipartPartSize+1))
 	size := int64(len(data))
-	err := sdk.WriteMultipartParallel(context.Background(), "object", bytes.NewReader(data), &size, &ParallelMultipartOption{
+	err := sdk.WriteMultipartParallel(ctx, "object", bytes.NewReader(data), &size, &ParallelMultipartOption{
 		PartSize:    minMultipartPartSize,
 		Concurrency: 2,
 	})
@@ -253,6 +256,12 @@ func TestAwsParallelMultipartSuccess(t *testing.T) {
 	}
 	if len(state.completeBody) == 0 {
 		t.Fatalf("complete body not recorded")
+	}
+	if got := counter.FileService.S3.Put.Load(); got != 2 {
+		t.Fatalf("expected 2 physical PUT requests, got %d", got)
+	}
+	if got := counter.FileService.S3WriteSize.Load(); got != size {
+		t.Fatalf("expected %d accepted bytes, got %d", size, got)
 	}
 }
 
@@ -331,17 +340,25 @@ func TestAwsMultipartTooManyParts(t *testing.T) {
 }
 
 func TestAwsMultipartUploadPartError(t *testing.T) {
-	server, _ := newMockAWSServer(t, 1)
+	server, _ := newMockAWSServer(t, 2)
 	defer server.Close()
 
 	sdk := newTestAWSClient(t, server)
+	counter := new(perfcounter.CounterSet)
+	ctx := perfcounter.WithCounterSet(context.Background(), counter)
 	data := bytes.Repeat([]byte("p"), int(minMultipartPartSize*2))
 	size := int64(len(data))
-	if err := sdk.WriteMultipartParallel(context.Background(), "object", bytes.NewReader(data), &size, &ParallelMultipartOption{
+	if err := sdk.WriteMultipartParallel(ctx, "object", bytes.NewReader(data), &size, &ParallelMultipartOption{
 		PartSize:    minMultipartPartSize,
-		Concurrency: 2,
+		Concurrency: 1,
 	}); err == nil {
 		t.Fatalf("expected upload part error")
+	}
+	if got := counter.FileService.S3.Put.Load(); got < 2 {
+		t.Fatalf("expected successful and failed PUT attempts, got %d", got)
+	}
+	if got := counter.FileService.S3WriteSize.Load(); got != minMultipartPartSize {
+		t.Fatalf("expected first accepted part bytes %d, got %d", minMultipartPartSize, got)
 	}
 }
 
@@ -782,9 +799,11 @@ func TestCOSParallelMultipartSuccess(t *testing.T) {
 	state.uploadID = "cos-uid"
 
 	sdk := newTestCOSClient(t, server)
+	counter := new(perfcounter.CounterSet)
+	ctx := perfcounter.WithCounterSet(context.Background(), counter)
 	data := bytes.Repeat([]byte("c"), int(minMultipartPartSize+2))
 	size := int64(len(data))
-	err := sdk.WriteMultipartParallel(context.Background(), "object", bytes.NewReader(data), &size, &ParallelMultipartOption{
+	err := sdk.WriteMultipartParallel(ctx, "object", bytes.NewReader(data), &size, &ParallelMultipartOption{
 		PartSize:    minMultipartPartSize,
 		Concurrency: 2,
 	})
@@ -799,6 +818,12 @@ func TestCOSParallelMultipartSuccess(t *testing.T) {
 	}
 	if len(state.completeBody) == 0 {
 		t.Fatalf("complete body not recorded")
+	}
+	if got := counter.FileService.S3.Put.Load(); got != 2 {
+		t.Fatalf("expected 2 physical PUT requests, got %d", got)
+	}
+	if got := counter.FileService.S3WriteSize.Load(); got != size {
+		t.Fatalf("expected %d accepted bytes, got %d", size, got)
 	}
 }
 
@@ -875,17 +900,25 @@ func TestCOSMultipartTooManyParts(t *testing.T) {
 }
 
 func TestCOSMultipartUploadPartError(t *testing.T) {
-	server, _ := newMockCOSServer(t, 1)
+	server, _ := newMockCOSServer(t, 2)
 	defer server.Close()
 
 	sdk := newTestCOSClient(t, server)
+	counter := new(perfcounter.CounterSet)
+	ctx := perfcounter.WithCounterSet(context.Background(), counter)
 	data := bytes.Repeat([]byte("h"), int(minMultipartPartSize*2))
 	size := int64(len(data))
-	if err := sdk.WriteMultipartParallel(context.Background(), "object", bytes.NewReader(data), &size, &ParallelMultipartOption{
+	if err := sdk.WriteMultipartParallel(ctx, "object", bytes.NewReader(data), &size, &ParallelMultipartOption{
 		PartSize:    minMultipartPartSize,
-		Concurrency: 2,
+		Concurrency: 1,
 	}); err == nil {
 		t.Fatalf("expected upload part error")
+	}
+	if got := counter.FileService.S3.Put.Load(); got < 2 {
+		t.Fatalf("expected successful and failed PUT attempts, got %d", got)
+	}
+	if got := counter.FileService.S3WriteSize.Load(); got != minMultipartPartSize {
+		t.Fatalf("expected first accepted part bytes %d, got %d", minMultipartPartSize, got)
 	}
 }
 

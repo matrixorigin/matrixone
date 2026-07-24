@@ -17,7 +17,6 @@ package rightdedupjoin
 import (
 	"bytes"
 	"strings"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
@@ -29,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/spillutil"
+	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -191,9 +191,9 @@ func (rightDedupJoin *RightDedupJoin) Call(proc *process.Process) (vm.CallResult
 
 func (rightDedupJoin *RightDedupJoin) build(analyzer process.Analyzer, proc *process.Process) (err error) {
 	ctr := &rightDedupJoin.ctr
-	start := time.Now()
-	defer analyzer.WaitStop(start)
-	ctr.mp, err = message.ReceiveJoinMap(rightDedupJoin.JoinMapTag, rightDedupJoin.IsShuffle, rightDedupJoin.ShuffleIdx, proc.GetMessageBoard(), proc.Ctx)
+	ctr.mp, err = process.MeasureWait(analyzer, resource.WaitOther, func() (*message.JoinMap, error) {
+		return message.ReceiveJoinMap(rightDedupJoin.JoinMapTag, rightDedupJoin.IsShuffle, rightDedupJoin.ShuffleIdx, proc.GetMessageBoard(), proc.Ctx)
+	})
 	if err != nil {
 		return
 	}

@@ -20,7 +20,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
@@ -91,7 +90,7 @@ func (b *GroupBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*pl
 	}
 
 	if isRoot && !b.ctx.isGroupingSet {
-		astStr := tree.String(astExpr, dialect.MYSQL)
+		astStr := semanticAstKey(astExpr)
 		// Independently written prepared expressions have different parameter
 		// identities even when their formatted SQL is identical. Ordinal and alias
 		// GROUP BY references are guaranteed to reuse the SELECT expression itself.
@@ -118,7 +117,7 @@ func (b *GroupBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*pl
 	}
 
 	if isRoot && b.ctx.isGroupingSet {
-		astStr := tree.String(astExpr, dialect.MYSQL)
+		astStr := semanticAstKey(astExpr)
 		pos, ok := b.ctx.groupByAst[astStr]
 		if containsDynamicParam(expr) {
 			pos, ok = b.ctx.groupByParamAst[parameterizedGroupByKey(astStr, expr)]

@@ -57,9 +57,6 @@ func (mergeGroup *MergeGroup) Call(proc *process.Process) (vm.CallResult, error)
 		return vm.CancelResult, err
 	}
 
-	mergeGroup.OpAnalyzer.Start()
-	defer mergeGroup.OpAnalyzer.Stop()
-
 	switch mergeGroup.ctr.state {
 	case vm.Build:
 		// receive data and merge.

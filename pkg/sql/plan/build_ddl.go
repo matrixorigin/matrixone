@@ -196,7 +196,8 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef, er
 	tableDef.Cols = cols
 
 	// Check alter and change the viewsql.
-	viewSql := ctx.GetRootSql()
+	rootSQL := ctx.GetRootSql()
+	viewSql := rootSQL
 	// remove sql hint
 	viewSql = cleanHint(viewSql)
 	if len(viewSql) != 0 {
@@ -227,7 +228,7 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef, er
 		},
 		{
 			Key:   catalog.SystemRelAttr_CreateSQL,
-			Value: ctx.GetRootSql(),
+			Value: rootSQL,
 		},
 	}
 	tableDef.Defs = append(tableDef.Defs, &plan.TableDef_DefType{
@@ -1267,7 +1268,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 					if colType.GetId() == int32(types.T_json) {
 						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("JSON column '%s' cannot be in primary key", colNameOrigin))
 					}
-					if colType.GetId() == int32(types.T_array_float32) || colType.GetId() == int32(types.T_array_float64) {
+					if types.T(colType.GetId()).IsArrayRelate() {
 						return moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("VECTOR column '%s' cannot be in primary key", colNameOrigin))
 					}
 					if isEnumPlanType(&colType) {
@@ -5196,7 +5197,10 @@ func validateAndSetHivePartitionOptions(ctx context.Context, stmt *tree.CreateTa
 			return moerr.NewBadConfigf(ctx, "partition column '%s' cannot be a generated column", pc)
 		}
 		typId := types.T(col.Typ.Id)
-		if typId == types.T_array_float32 || typId == types.T_array_float64 {
+		if typId.IsArrayRelate() {
+			// IsArrayRelate covers all six vector types: a vector can never
+			// round-trip through a `col=value` path component, so the rejection
+			// applies to the narrow types exactly as it does to vecf32/vecf64.
 			return moerr.NewBadConfigf(ctx, "partition column '%s' cannot be a VECTOR type", pc)
 		}
 		canonical := strings.ToLower(col.Name)

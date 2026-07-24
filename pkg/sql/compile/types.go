@@ -201,6 +201,11 @@ type Scope struct {
 
 	ScopeAnalyzer *ScopeAnalyzer
 
+	// resourceExecutedLocally distinguishes a planned remote scope that fell
+	// back to MergeRun from a scope that was actually dispatched. It is
+	// execution-local state and must be cleared before scope reuse.
+	resourceExecutedLocally bool
+
 	RemoteReceivRegInfos []RemoteReceivRegInfo
 }
 
@@ -324,7 +329,10 @@ type Compile struct {
 	isPrepare    bool
 	disableRetry bool
 	isInternal   bool
-	hasMergeOp   bool
+	// resourceAttemptOwnerEligible is set only for the top-level statement
+	// Compile. The statement root still arbitrates the single actual owner.
+	resourceAttemptOwnerEligible bool
+	hasMergeOp                   bool
 
 	// ncpu set as system.GoRoutines() while NewCompile, instead of global static value.
 	ncpu int

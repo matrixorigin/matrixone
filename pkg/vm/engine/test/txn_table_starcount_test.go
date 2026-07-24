@@ -414,7 +414,7 @@ func TestStarCountPersistedInsertsMultipleObjectStatsInOneBatch(t *testing.T) {
 	require.NoError(t, err)
 
 	proc := rel.GetProcess().(*process.Process)
-	insertBat := colexec.AllocCNS3ResultBat(false, false)
+	insertBat := colexec.AllocCNS3ResultBat(false)
 	defer insertBat.Clean(proc.Mp())
 
 	// One batch with 3 ObjectStats (10 + 20 + 30 = 60 rows total)

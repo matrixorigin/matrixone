@@ -67,6 +67,16 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 		if err != nil {
 			return
 		}
+	case *tree.DumpTable:
+		err = handleDumpTable(execCtx.reqCtx, ses, st)
+		if err != nil {
+			return
+		}
+	case *tree.LoadTable:
+		err = handleLoadTable(execCtx.reqCtx, ses, st)
+		if err != nil {
+			return
+		}
 	case *tree.PrepareStmt:
 		ses.EnterFPrint(FPPrepareStmt)
 		defer ses.ExitFPrint(FPPrepareStmt)

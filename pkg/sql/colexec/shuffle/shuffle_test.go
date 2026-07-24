@@ -17,11 +17,13 @@ package shuffle
 import (
 	"bytes"
 	"context"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
@@ -31,6 +33,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -44,6 +47,75 @@ type shuffleTestCase struct {
 	arg   *Shuffle
 	types []types.Type
 	proc  *process.Process
+}
+
+type failingShuffleChild struct {
+	*colexec.MockOperator
+	err error
+}
+
+func (child *failingShuffleChild) Call(*process.Process) (vm.CallResult, error) {
+	return vm.CancelResult, child.err
+}
+
+type preparedContextShuffleChild struct {
+	*colexec.MockOperator
+	preparedCtx context.Context
+	prepareErr  error
+}
+
+func (child *preparedContextShuffleChild) Prepare(proc *process.Process) error {
+	child.preparedCtx = proc.Ctx
+	if child.prepareErr != nil {
+		return child.prepareErr
+	}
+	return child.MockOperator.Prepare(proc)
+}
+
+type blockingShuffleChild struct {
+	*colexec.MockOperator
+	started         chan struct{}
+	exited          chan struct{}
+	resetBeforeExit bool
+}
+
+func (child *blockingShuffleChild) Call(proc *process.Process) (vm.CallResult, error) {
+	close(child.started)
+	<-proc.Ctx.Done()
+	if child.exited != nil {
+		close(child.exited)
+	}
+	return vm.CancelResult, context.Cause(proc.Ctx)
+}
+
+func (child *blockingShuffleChild) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	if child.exited != nil {
+		select {
+		case <-child.exited:
+		default:
+			child.resetBeforeExit = true
+		}
+	}
+	child.MockOperator.Reset(proc, pipelineFailed, err)
+}
+
+type handoffThenBlockingShuffleChild struct {
+	*colexec.MockOperator
+	bat     *batch.Batch
+	blocked chan struct{}
+	calls   int
+}
+
+func (child *handoffThenBlockingShuffleChild) Call(proc *process.Process) (vm.CallResult, error) {
+	if child.calls == 0 {
+		child.calls++
+		result := vm.NewCallResult()
+		result.Batch = child.bat
+		return result, nil
+	}
+	close(child.blocked)
+	<-proc.Ctx.Done()
+	return vm.CancelResult, context.Cause(proc.Ctx)
 }
 
 func makeTestCases(t *testing.T) []shuffleTestCase {
@@ -283,6 +355,87 @@ func makeTestCases(t *testing.T) []shuffleTestCase {
 			},
 		},
 	}
+}
+
+func TestFixedBucketShufflePreparesChildWithQueryScopedProducerContext(t *testing.T) {
+	mp := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+	queryCtx := proc.Base.GetContextBase().BuildQueryCtx(proc.Ctx)
+	proc.BuildPipelineContext(queryCtx)
+	consumerCtx := proc.Ctx
+
+	child := &preparedContextShuffleChild{MockOperator: colexec.NewMockOperator()}
+	arg := NewArgument()
+	arg.BucketNum = 1
+	arg.CurrentShuffleIdx = 0
+	arg.ShuffleColIdx = 0
+	arg.ShuffleType = int32(plan.ShuffleType_Hash)
+	arg.SetShufflePool(NewShufflePool(1, 1, false))
+	arg.AppendChild(child)
+
+	require.NoError(t, vm.Prepare(arg, proc))
+	require.NotNil(t, child.preparedCtx)
+	require.False(t, consumerCtx == child.preparedCtx)
+
+	proc.Cancel(nil)
+	select {
+	case <-child.preparedCtx.Done():
+		t.Fatal("consumer pipeline cancellation reached the producer child")
+	default:
+	}
+
+	proc.ResetQueryContext()
+	select {
+	case <-child.preparedCtx.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("query cancellation did not reach the producer child")
+	}
+
+	arg.Reset(proc, false, nil)
+	child.Reset(proc, false, nil)
+	arg.Free(proc, false, nil)
+	child.Free(proc, false, nil)
+	arg.Release()
+	proc.Free()
+	require.Equal(t, int64(0), mp.CurrNB())
+}
+
+func TestFixedBucketShufflePrepareFailureCancelsPreparedProducerProcess(t *testing.T) {
+	sentinel := errors.New("prepare failed")
+	mp := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+	queryCtx := proc.Base.GetContextBase().BuildQueryCtx(proc.Ctx)
+	proc.BuildPipelineContext(queryCtx)
+
+	child := &preparedContextShuffleChild{
+		MockOperator: colexec.NewMockOperator(),
+		prepareErr:   sentinel,
+	}
+	arg := NewArgument()
+	arg.BucketNum = 1
+	arg.CurrentShuffleIdx = 0
+	arg.ShuffleColIdx = 0
+	arg.ShuffleType = int32(plan.ShuffleType_Hash)
+	arg.SetShufflePool(NewShufflePool(1, 1, false))
+	arg.AppendChild(child)
+	p := pipeline.NewMerge(arg)
+
+	_, err := p.Run(proc)
+	require.ErrorIs(t, err, sentinel)
+	producerCtx := child.preparedCtx
+	require.NotNil(t, producerCtx)
+	p.Cleanup(proc, true, true, err)
+	select {
+	case <-producerCtx.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("prepare failure leaked the producer process context")
+	}
+
+	arg.Free(proc, true, sentinel)
+	child.Free(proc, true, sentinel)
+	arg.Release()
+	proc.Free()
+	require.Equal(t, int64(0), mp.CurrNB())
 }
 
 func runShuffleCase(t *testing.T, tc shuffleTestCase, hasnull bool) {
@@ -544,7 +697,9 @@ func TestEvalAndShuffleSingleBucketExpressionRoutesForeignBucketThroughPool(t *t
 	}()
 
 	input := batch.NewWithSize(1)
-	input.Vecs[0] = testutil.NewInt64Vector(4, types.T_int64.ToType(), mp, false, nil, []int64{value, value, value, value})
+	var err error
+	input.Vecs[0], err = vector.NewConstFixed(types.T_int64.ToType(), value, 4, mp)
+	require.NoError(t, err)
 	input.SetRowCount(4)
 	defer input.Clean(mp)
 	output, err := arg.evalAndShuffle(input, proc)
@@ -693,6 +848,471 @@ func TestShuffleSharedPoolFixedBucketWorkersPreserveRows(t *testing.T) {
 		totalRows += result.rows
 	}
 	require.Equal(t, rowsPerWorker*len(args), totalRows)
+}
+
+func TestNestedFixedBucketShufflesMakeProgressUnderBackpressure(t *testing.T) {
+	const (
+		bucketNum = int32(2)
+		rows      = objectio.BlockMaxRows * 4
+	)
+	mp := mpool.MustNewZero()
+	procs := []*process.Process{
+		testutil.NewProcessWithMPool(t, "", mp),
+		testutil.NewProcessWithMPool(t, "", mp),
+	}
+	innerPool := NewShufflePool(bucketNum, bucketNum, false)
+	outerPool := NewShufflePool(bucketNum, bucketNum, false)
+	inners := make([]*Shuffle, bucketNum)
+	outers := make([]*Shuffle, bucketNum)
+
+	valueForBucket := func(target uint64) int64 {
+		for value := int64(0); ; value++ {
+			if plan2.SimpleInt64HashToRange(uint64(value), uint64(bucketNum)) == target {
+				return value
+			}
+		}
+	}
+	innerKey := valueForBucket(0)
+	outerKey := valueForBucket(1)
+
+	for i := range outers {
+		var inputs []*batch.Batch
+		if i == 0 {
+			input := batch.NewWithSize(2)
+			innerValues := make([]int64, rows)
+			outerValues := make([]int64, rows)
+			for row := range rows {
+				innerValues[row] = innerKey
+				outerValues[row] = outerKey
+			}
+			input.Vecs[0] = testutil.NewInt64Vector(rows, types.T_int64.ToType(), mp, false, nil, innerValues)
+			input.Vecs[1] = testutil.NewInt64Vector(rows, types.T_int64.ToType(), mp, false, nil, outerValues)
+			input.SetRowCount(rows)
+			inputs = []*batch.Batch{input}
+		}
+
+		inner := NewArgument()
+		inner.BucketNum = bucketNum
+		inner.CurrentShuffleIdx = int32(i)
+		inner.ShuffleColIdx = 0
+		inner.ShuffleType = int32(plan.ShuffleType_Hash)
+		inner.SetShufflePool(innerPool)
+		inner.AppendChild(colexec.NewMockOperator().WithBatchs(inputs))
+		inners[i] = inner
+
+		outer := NewArgument()
+		outer.BucketNum = bucketNum
+		outer.CurrentShuffleIdx = int32(i)
+		outer.ShuffleColIdx = 1
+		outer.ShuffleType = int32(plan.ShuffleType_Hash)
+		outer.SetShufflePool(outerPool)
+		outer.AppendChild(inner)
+		outers[i] = outer
+		require.NoError(t, vm.Prepare(outer, procs[i]))
+	}
+
+	type workerResult struct {
+		rows int
+		err  error
+	}
+	results := make(chan workerResult, len(outers))
+	for i := range outers {
+		go func(arg *Shuffle, proc *process.Process) {
+			result := workerResult{}
+			for {
+				callResult, err := vm.Exec(arg, proc)
+				if err != nil {
+					result.err = err
+					break
+				}
+				if callResult.Batch == nil || callResult.Status == vm.ExecStop {
+					break
+				}
+				if !callResult.Batch.IsEmpty() {
+					result.rows += callResult.Batch.RowCount()
+				}
+			}
+			results <- result
+		}(outers[i], procs[i])
+	}
+
+	totalRows := 0
+	for range outers {
+		select {
+		case result := <-results:
+			require.NoError(t, result.err)
+			totalRows += result.rows
+		case <-time.After(5 * time.Second):
+			for _, proc := range procs {
+				proc.Cancel(context.DeadlineExceeded)
+			}
+			t.Fatal("nested fixed-bucket shuffles deadlocked")
+		}
+	}
+	require.Equal(t, rows, totalRows)
+
+	for i := range outers {
+		require.NoError(t, vm.HandleAllOp(outers[i], func(_ vm.Operator, op vm.Operator) error {
+			op.Reset(procs[i], false, nil)
+			return nil
+		}))
+	}
+	for i := range outers {
+		require.NoError(t, vm.HandleAllOp(outers[i], func(_ vm.Operator, op vm.Operator) error {
+			op.Free(procs[i], false, nil)
+			return nil
+		}))
+		inners[i].Release()
+		outers[i].Release()
+		procs[i].Free()
+	}
+	require.Equal(t, int64(0), mp.CurrNB())
+}
+
+func TestFixedBucketShuffleDirectHandoffPreservesBatchOwnership(t *testing.T) {
+	mp := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+	input := batch.NewWithSize(1)
+	value := int64(0)
+	for plan2.SimpleInt64HashToRange(uint64(value), 2) != 0 {
+		value++
+	}
+	var err error
+	input.Vecs[0], err = vector.NewConstFixed(types.T_int64.ToType(), value, 4, mp)
+	require.NoError(t, err)
+	input.SetRowCount(4)
+	source := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+	arg := NewArgument()
+	arg.BucketNum = 2
+	arg.CurrentShuffleIdx = 0
+	arg.ShuffleColIdx = 0
+	arg.ShuffleType = int32(plan.ShuffleType_Hash)
+	arg.SetShufflePool(NewShufflePool(2, 1, false))
+	arg.AppendChild(source)
+	require.NoError(t, vm.Prepare(arg, proc))
+
+	result, err := vm.Exec(arg, proc)
+	require.NoError(t, err)
+	require.Same(t, input, result.Batch)
+	result, err = vm.Exec(arg, proc)
+	require.NoError(t, err)
+	require.Nil(t, result.Batch)
+
+	inputSize := int64(input.Size())
+	arg.Reset(proc, false, nil)
+	require.Equal(t, int64(4), arg.OpAnalyzer.GetOpStats().InputRows)
+	require.Equal(t, inputSize, arg.OpAnalyzer.GetOpStats().InputSize)
+	source.Reset(proc, false, nil)
+	arg.Free(proc, false, nil)
+	source.Free(proc, false, nil)
+	arg.Release()
+	proc.Free()
+	require.Equal(t, int64(0), mp.CurrNB())
+}
+
+func TestFixedBucketShuffleEarlyConsumerCloseDoesNotBlockOtherBuckets(t *testing.T) {
+	const (
+		bucketNum = int32(2)
+		rows      = objectio.BlockMaxRows * 4
+	)
+	mp := mpool.MustNewZero()
+	procs := []*process.Process{
+		testutil.NewProcessWithMPool(t, "", mp),
+		testutil.NewProcessWithMPool(t, "", mp),
+	}
+	pool := NewShufflePool(bucketNum, bucketNum, false)
+	args := make([]*Shuffle, bucketNum)
+	sources := make([]*colexec.MockOperator, bucketNum)
+	value := int64(0)
+	for plan2.SimpleInt64HashToRange(uint64(value), uint64(bucketNum)) != 1 {
+		value++
+	}
+	for i := range args {
+		values := make([]int64, rows)
+		for row := range rows {
+			values[row] = value
+		}
+		input := batch.NewWithSize(1)
+		input.Vecs[0] = testutil.NewInt64Vector(rows, types.T_int64.ToType(), mp, false, nil, values)
+		input.SetRowCount(rows)
+		sources[i] = colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+		arg := NewArgument()
+		arg.BucketNum = bucketNum
+		arg.CurrentShuffleIdx = int32(i)
+		arg.ShuffleColIdx = 0
+		arg.ShuffleType = int32(plan.ShuffleType_Hash)
+		arg.SetShufflePool(pool)
+		arg.AppendChild(sources[i])
+		args[i] = arg
+		require.NoError(t, vm.Prepare(arg, procs[i]))
+	}
+
+	args[0].startLocalProducer(procs[0])
+	resetDone := make(chan struct{})
+	go func() {
+		args[0].Reset(procs[0], false, nil)
+		close(resetDone)
+	}()
+
+	received := 0
+	for {
+		result, err := vm.Exec(args[1], procs[1])
+		require.NoError(t, err)
+		if result.Batch == nil || result.Status == vm.ExecStop {
+			break
+		}
+		if !result.Batch.IsEmpty() {
+			received += result.Batch.RowCount()
+		}
+	}
+	require.Equal(t, rows*2, received)
+	select {
+	case <-resetDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("closing one bucket left its producer blocked")
+	}
+
+	args[1].Reset(procs[1], false, nil)
+	for i := range args {
+		sources[i].Reset(procs[i], false, nil)
+		args[i].Free(procs[i], false, nil)
+		sources[i].Free(procs[i], false, nil)
+		args[i].Release()
+		procs[i].Free()
+	}
+	require.Equal(t, int64(0), mp.CurrNB())
+}
+
+func TestFixedBucketShuffleStopsProducersWhenEveryConsumerCloses(t *testing.T) {
+	mp := mpool.MustNewZero()
+	procs := []*process.Process{
+		testutil.NewProcessWithMPool(t, "", mp),
+		testutil.NewProcessWithMPool(t, "", mp),
+	}
+	pool := NewShufflePool(2, 2, false)
+	args := make([]*Shuffle, 2)
+	children := make([]*handoffThenBlockingShuffleChild, 2)
+	for i := range args {
+		value := int64(0)
+		for plan2.SimpleInt64HashToRange(uint64(value), 2) != uint64(i) {
+			value++
+		}
+		input := batch.NewWithSize(1)
+		var err error
+		input.Vecs[0], err = vector.NewConstFixed(types.T_int64.ToType(), value, 1, mp)
+		require.NoError(t, err)
+		input.SetRowCount(1)
+		child := &handoffThenBlockingShuffleChild{
+			MockOperator: colexec.NewMockOperator().WithBatchs([]*batch.Batch{input}),
+			bat:          input,
+			blocked:      make(chan struct{}),
+		}
+		arg := NewArgument()
+		arg.BucketNum = 2
+		arg.CurrentShuffleIdx = int32(i)
+		arg.ShuffleColIdx = 0
+		arg.ShuffleType = int32(plan.ShuffleType_Hash)
+		arg.SetShufflePool(pool)
+		arg.AppendChild(child)
+		children[i] = child
+		args[i] = arg
+		require.NoError(t, vm.Prepare(arg, procs[i]))
+		result, err := vm.Exec(arg, procs[i])
+		require.NoError(t, err)
+		require.Same(t, input, result.Batch)
+	}
+
+	firstReset := make(chan struct{})
+	go func() {
+		args[0].Reset(procs[0], false, nil)
+		close(firstReset)
+	}()
+	select {
+	case <-children[0].blocked:
+	case <-time.After(5 * time.Second):
+		t.Fatal("producer did not continue after its consumer closed")
+	}
+	select {
+	case <-firstReset:
+		t.Fatal("one closed consumer incorrectly stopped a producer needed by its sibling")
+	default:
+	}
+
+	secondReset := make(chan struct{})
+	go func() {
+		args[1].Reset(procs[1], false, nil)
+		close(secondReset)
+	}()
+	for _, done := range []chan struct{}{firstReset, secondReset} {
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Fatal("all closed consumers did not stop every producer")
+		}
+	}
+
+	for i := range args {
+		children[i].Reset(procs[i], false, nil)
+		args[i].Free(procs[i], false, nil)
+		children[i].Free(procs[i], false, nil)
+		args[i].Release()
+		procs[i].Free()
+	}
+	require.Equal(t, int64(0), mp.CurrNB())
+}
+
+func TestFixedBucketShuffleProducerErrorWakesEveryConsumer(t *testing.T) {
+	sentinel := errors.New("producer failed")
+	mp := mpool.MustNewZero()
+	procs := []*process.Process{
+		testutil.NewProcessWithMPool(t, "", mp),
+		testutil.NewProcessWithMPool(t, "", mp),
+	}
+	pool := NewShufflePool(2, 2, false)
+	args := make([]*Shuffle, 2)
+	for i := range args {
+		arg := NewArgument()
+		arg.BucketNum = 2
+		arg.CurrentShuffleIdx = int32(i)
+		arg.ShuffleColIdx = 0
+		arg.ShuffleType = int32(plan.ShuffleType_Hash)
+		arg.SetShufflePool(pool)
+		if i == 0 {
+			arg.AppendChild(&failingShuffleChild{MockOperator: colexec.NewMockOperator(), err: sentinel})
+		} else {
+			arg.AppendChild(colexec.NewMockOperator())
+		}
+		args[i] = arg
+		require.NoError(t, vm.Prepare(arg, procs[i]))
+	}
+
+	results := make(chan error, len(args))
+	for i := range args {
+		go func(arg *Shuffle, proc *process.Process) {
+			_, err := vm.Exec(arg, proc)
+			results <- err
+		}(args[i], procs[i])
+	}
+	for range args {
+		select {
+		case err := <-results:
+			require.ErrorIs(t, err, sentinel)
+		case <-time.After(5 * time.Second):
+			t.Fatal("producer error did not wake every consumer")
+		}
+	}
+
+	for i := range args {
+		args[i].Reset(procs[i], true, sentinel)
+		args[i].GetChildren(0).Reset(procs[i], true, sentinel)
+		args[i].Free(procs[i], true, sentinel)
+		args[i].GetChildren(0).Free(procs[i], true, sentinel)
+		args[i].Release()
+		procs[i].Free()
+	}
+	require.Equal(t, int64(0), mp.CurrNB())
+}
+
+func TestFixedBucketShuffleFailedResetJoinsBlockedProducer(t *testing.T) {
+	sentinel := errors.New("query failed")
+	mp := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc.BuildPipelineContext(proc.Ctx)
+	started := make(chan struct{})
+	child := &blockingShuffleChild{MockOperator: colexec.NewMockOperator(), started: started}
+	arg := NewArgument()
+	arg.BucketNum = 1
+	arg.CurrentShuffleIdx = 0
+	arg.ShuffleColIdx = 0
+	arg.ShuffleType = int32(plan.ShuffleType_Hash)
+	arg.SetShufflePool(NewShufflePool(1, 1, false))
+	arg.AppendChild(child)
+	require.NoError(t, vm.Prepare(arg, proc))
+
+	callDone := make(chan error, 1)
+	go func() {
+		_, err := vm.Exec(arg, proc)
+		callDone <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("local producer did not start")
+	}
+	proc.Cancel(sentinel)
+	select {
+	case err := <-callDone:
+		require.Error(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("pipeline cancellation did not wake the local consumer")
+	}
+
+	resetDone := make(chan struct{})
+	go func() {
+		arg.Reset(proc, true, sentinel)
+		close(resetDone)
+	}()
+	select {
+	case <-resetDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("failed reset did not cancel and join the local producer")
+	}
+
+	child.Reset(proc, true, sentinel)
+	arg.Free(proc, true, sentinel)
+	child.Free(proc, true, sentinel)
+	arg.Release()
+	proc.Free()
+	require.Equal(t, int64(0), mp.CurrNB())
+}
+
+func TestPipelineCleanupJoinsFixedBucketProducerBeforeResettingChild(t *testing.T) {
+	sentinel := errors.New("query failed")
+	mp := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc.BuildPipelineContext(proc.Ctx)
+	started := make(chan struct{})
+	exited := make(chan struct{})
+	child := &blockingShuffleChild{
+		MockOperator: colexec.NewMockOperator(),
+		started:      started,
+		exited:       exited,
+	}
+	arg := NewArgument()
+	arg.BucketNum = 1
+	arg.CurrentShuffleIdx = 0
+	arg.ShuffleColIdx = 0
+	arg.ShuffleType = int32(plan.ShuffleType_Hash)
+	arg.SetShufflePool(NewShufflePool(1, 1, false))
+	arg.AppendChild(child)
+	require.NoError(t, vm.Prepare(arg, proc))
+
+	callDone := make(chan error, 1)
+	go func() {
+		_, err := vm.Exec(arg, proc)
+		callDone <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("local producer did not start")
+	}
+	proc.Cancel(sentinel)
+	select {
+	case <-callDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("pipeline call did not observe cancellation")
+	}
+
+	p := pipeline.New(0, nil, arg)
+	p.Cleanup(proc, true, true, sentinel)
+	require.False(t, child.resetBeforeExit)
+
+	arg.Free(proc, true, sentinel)
+	child.Free(proc, true, sentinel)
+	arg.Release()
+	proc.Free()
+	require.Equal(t, int64(0), mp.CurrNB())
 }
 
 func getInputBats(tc shuffleTestCase, hasnull bool) []*batch.Batch {

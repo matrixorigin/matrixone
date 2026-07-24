@@ -525,9 +525,8 @@ const (
 type EngineType int8
 
 const (
-	Disttae EngineType = iota
-	Memory
-	UNKNOWN
+	Disttae EngineType = 0
+	UNKNOWN EngineType = 2
 )
 
 func (def *ConstraintDef) MarshalBinary() (data []byte, err error) {
@@ -887,10 +886,9 @@ type Tombstoner interface {
 type RelDataType uint8
 
 const (
-	RelDataEmpty RelDataType = iota
-	RelDataShardIDList
-	RelDataBlockList
-	RelDataObjList
+	RelDataEmpty     RelDataType = 0
+	RelDataBlockList RelDataType = 2
+	RelDataObjList   RelDataType = 3
 )
 
 type RelData interface {
@@ -907,14 +905,6 @@ type RelData interface {
 	BuildEmptyRelData(preAllocSize int) RelData
 	DataCnt() int
 
-	// specified interface
-
-	// for memory engine shard id list
-	GetShardIDList() []uint64
-	GetShardID(i int) uint64
-	SetShardID(i int, id uint64)
-	AppendShardID(id uint64)
-
 	// for block info list
 	Split(i int) []RelData
 	GetBlockInfoSlice() objectio.BlockInfoSlice
@@ -922,22 +912,6 @@ type RelData interface {
 	SetBlockInfo(i int, blk *objectio.BlockInfo)
 	AppendBlockInfo(blk *objectio.BlockInfo)
 	AppendBlockInfoSlice(objectio.BlockInfoSlice)
-}
-
-// ForRangeShardID [begin, end)
-func ForRangeShardID(
-	begin, end int,
-	relData RelData,
-	onShardID func(shardID uint64) (bool, error)) error {
-	slice := relData.GetShardIDList()
-
-	for idx := begin; idx < end; idx++ {
-		if ok, err := onShardID(slice[idx]); !ok || err != nil {
-			return err
-		}
-	}
-
-	return nil
 }
 
 // ForRangeBlockInfo [begin, end)

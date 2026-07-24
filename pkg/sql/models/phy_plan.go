@@ -17,14 +17,16 @@ package models
 import (
 	"encoding/json"
 
+	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type PhyPlan struct {
-	Version     string     `json:"version"`
-	RetryTime   int        `json:"retryTime,omitempty"`
-	LocalScope  []PhyScope `json:"scope,omitempty"`
-	RemoteScope []PhyScope `json:"RemoteScope,omitempty"`
+	Version     string                             `json:"version"`
+	RetryTime   int                                `json:"retryTime,omitempty"`
+	LocalScope  []PhyScope                         `json:"scope,omitempty"`
+	RemoteScope []PhyScope                         `json:"RemoteScope,omitempty"`
+	Resource    *resource.StatementResourceSummary `json:"resource,omitempty"`
 }
 
 type PhyScope struct {

@@ -259,6 +259,38 @@ func initNormalizeL2ArrayTestCase() []tcTemp {
 				},
 				[]bool{true, false, false, false, false, false}),
 		},
+		{
+			// int8 input normalizes to a unit vector, which cannot be represented
+			// as int8 — the result must widen to vecf32 (not round back to int8).
+			info: "test normalize_l2 int8 array -> float32",
+			typ:  types.T_array_int8,
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_array_int8.ToType(),
+					[][]int8{{1, 2, 3, 4}, {-1, 2, 3, 4}},
+					[]bool{false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_array_float32.ToType(), false,
+				[][]float32{
+					{0.18257418, 0.36514837, 0.5477226, 0.73029673},
+					{-0.18257418, 0.36514837, 0.5477226, 0.73029673},
+				},
+				[]bool{false, false}),
+		},
+		{
+			info: "test normalize_l2 uint8 array -> float32",
+			typ:  types.T_array_uint8,
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_array_uint8.ToType(),
+					[][]uint8{{0, 1, 2, 3}, {10, 20, 30, 40}},
+					[]bool{false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_array_float32.ToType(), false,
+				[][]float32{
+					{0, 0.26726124, 0.5345225, 0.80178374},
+					{0.18257418, 0.36514837, 0.5477226, 0.73029673},
+				},
+				[]bool{false, false}),
+		},
 	}
 }
 
@@ -273,6 +305,10 @@ func TestNormalizeL2Array(t *testing.T) {
 			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, NormalizeL2Array[float32])
 		case types.T_array_float64:
 			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, NormalizeL2Array[float64])
+		case types.T_array_int8:
+			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, NormalizeL2Array[int8])
+		case types.T_array_uint8:
+			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, NormalizeL2Array[uint8])
 		}
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
@@ -3859,6 +3895,9 @@ func initHourTestCase() []tcTemp {
 	t1, _ := types.ParseTime("15:30:45", 6)
 	t2, _ := types.ParseTime("00:00:00", 6)
 	t3, _ := types.ParseTime("23:59:59", 6)
+	t4, _ := types.ParseTime("272:59:59", 6)
+	t5, _ := types.ParseTime("-272:59:59", 6)
+	t6 := types.TimeFromClock(false, types.MaxHourInTime, 59, 59, 0)
 
 	return []tcTemp{
 		{
@@ -3890,12 +3929,12 @@ func initHourTestCase() []tcTemp {
 			typ:  types.T_time,
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_time.ToType(),
-					[]types.Time{t1, t2, t3},
-					[]bool{false, false, false}),
+					[]types.Time{t1, t2, t3, t4, t5, t6},
+					[]bool{false, false, false, false, false, false}),
 			},
-			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
-				[]uint8{15, 0, 23},
-				[]bool{false, false, false}),
+			expect: NewFunctionTestResult(types.T_uint32.ToType(), false,
+				[]uint32{15, 0, 23, 272, 272, uint32(types.MaxHourInTime)},
+				[]bool{false, false, false, false, false, false}),
 		},
 	}
 }
@@ -4505,6 +4544,55 @@ func TestVecFromBase64(t *testing.T) {
 	fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, VecFromBase64[float64])
 	s, info = fcTC.Run()
 	require.True(t, s, fmt.Sprintf("vecf64 case failed: %s", info))
+}
+
+// TestVecFromBase64Narrow exercises VecFromBase64's narrow elemSize branches
+// (int8=1, bf16/f16=2) and its error paths via the function-UT harness.
+func TestVecFromBase64Narrow(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	mkInput := func(b64 string) []FunctionTestInput {
+		return []FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), []string{b64}, []bool{})}
+	}
+	runCase := func(in []FunctionTestInput, res FunctionTestResult, fn fEvalFn) (bool, string) {
+		fcTC := NewFunctionTestCase(proc, in, res, fn)
+		return fcTC.Run()
+	}
+
+	// int8 roundtrip (elemSize 1).
+	i8 := []int8{1, -2, 127, -128}
+	ok, info := runCase(mkInput(types.ArrayToBase64(i8)),
+		NewFunctionTestResult(types.T_array_int8.ToType(), false, [][]int8{i8}, []bool{}), VecFromBase64[int8])
+	require.Truef(t, ok, "vecint8 roundtrip: %s", info)
+
+	// uint8 roundtrip (elemSize 1). Regression: with the uint8 case missing from
+	// the decoder, elemSize was 0 and `n % elemSize` panicked (divide by zero).
+	u8 := []uint8{0, 255, 128, 1}
+	ok, info = runCase(mkInput(types.ArrayToBase64(u8)),
+		NewFunctionTestResult(types.T_array_uint8.ToType(), false, [][]uint8{u8}, []bool{}), VecFromBase64[uint8])
+	require.Truef(t, ok, "vecuint8 roundtrip: %s", info)
+
+	// bf16 roundtrip (elemSize 2).
+	bf := types.Float32ToBF16Slice([]float32{1.5, -2.25, 0, 8})
+	ok, info = runCase(mkInput(types.ArrayToBase64(bf)),
+		NewFunctionTestResult(types.T_array_bf16.ToType(), false, [][]types.BF16{bf}, []bool{}), VecFromBase64[types.BF16])
+	require.Truef(t, ok, "vecbf16 roundtrip: %s", info)
+
+	// f16 roundtrip.
+	f16 := types.Float32ToFloat16Slice([]float32{1.5, -2.25, 0, 8})
+	ok, info = runCase(mkInput(types.ArrayToBase64(f16)),
+		NewFunctionTestResult(types.T_array_float16.ToType(), false, [][]types.Float16{f16}, []bool{}), VecFromBase64[types.Float16])
+	require.Truef(t, ok, "vecf16 roundtrip: %s", info)
+
+	// invalid base64 -> error.
+	ok, info = runCase(mkInput("!!!not-base64!!!"),
+		NewFunctionTestResult(types.T_array_int8.ToType(), true, [][]int8{nil}, []bool{}), VecFromBase64[int8])
+	require.Truef(t, ok, "invalid base64 should error: %s", info)
+
+	// "AQID" decodes to 3 bytes, not a multiple of 2 (bf16 elemSize) -> error.
+	ok, info = runCase(mkInput("AQID"),
+		NewFunctionTestResult(types.T_array_bf16.ToType(), true, [][]types.BF16{nil}, []bool{}), VecFromBase64[types.BF16])
+	require.Truef(t, ok, "odd length should error: %s", info)
 }
 
 func initValidatePasswordStrengthTestCase() []tcTemp {

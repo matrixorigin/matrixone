@@ -58,3 +58,21 @@ func TestVisitPlanExploresIndexReaderParam(t *testing.T) {
 	require.Equal(t, uint64(7), node.IndexReaderParam.DistRange.LowerBound.GetLit().GetU64Val())
 	require.Equal(t, uint64(7), node.IndexReaderParam.DistRange.UpperBound.GetLit().GetU64Val())
 }
+
+func TestVisitPlanExploresAggregateAndGroupExpressions(t *testing.T) {
+	paramExpr := func(pos int32) *planpb.Expr {
+		return &planpb.Expr{Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: pos}}}
+	}
+	node := &planpb.Node{
+		NodeId:   0,
+		AggList:  []*planpb.Expr{paramExpr(0)},
+		GroupBy:  []*planpb.Expr{paramExpr(1)},
+		NodeType: planpb.Node_AGG,
+	}
+	query := &planpb.Query{Nodes: []*planpb.Node{node}, Steps: []int32{0}}
+	visitor := NewVisitPlan(&planpb.Plan{Plan: &planpb.Plan_Query{Query: query}}, []VisitPlanRule{replaceParamWithSevenRule{}})
+
+	require.NoError(t, visitor.Visit(context.Background()))
+	require.Equal(t, uint64(7), node.AggList[0].GetLit().GetU64Val())
+	require.Equal(t, uint64(7), node.GroupBy[0].GetLit().GetU64Val())
+}

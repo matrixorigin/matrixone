@@ -108,7 +108,8 @@ func (idx *simpleTableIndex) KeyToVector(kType types.Type) containers.Vector {
 		for k := range idx.tree {
 			vec.Append([]byte(k.(string)), false)
 		}
-	case types.T_array_float32, types.T_array_float64:
+	case types.T_array_float32, types.T_array_float64,
+		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8:
 		// No usage for this func.
 		for k := range idx.tree {
 			vec.Append(k.([]byte), false)

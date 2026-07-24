@@ -844,7 +844,6 @@ func TestGossipInSimulatedCluster(t *testing.T) {
 					info, ok := service.getShardInfo(context.Background(), shardID, false, false)
 					if !ok || info.LeaderID == 0 {
 						notReady++
-						wait()
 						continue
 					}
 					if shardID == 1 && info.Epoch != 0 {
@@ -855,6 +854,7 @@ func TestGossipInSimulatedCluster(t *testing.T) {
 					break
 				}
 				require.True(t, retry < iterations-1)
+				wait()
 			}
 			require.True(t, cci != 0)
 			// all good now, add a replica to shard 1
@@ -886,7 +886,6 @@ func TestGossipInSimulatedCluster(t *testing.T) {
 					info, ok := service.getShardInfo(context.Background(), 1, false, false)
 					if !ok || info.LeaderID == 0 || len(info.Replicas) != 4 {
 						notReady++
-						wait()
 						continue
 					}
 				}
@@ -894,6 +893,7 @@ func TestGossipInSimulatedCluster(t *testing.T) {
 					break
 				}
 				require.True(t, retry < iterations-1)
+				wait()
 			}
 			// restart a service, watch how long will it take to get all required
 			// shard info
@@ -918,7 +918,6 @@ func TestGossipInSimulatedCluster(t *testing.T) {
 					info, ok := service.getShardInfo(context.Background(), shardID, false, false)
 					if !ok || info.LeaderID == 0 {
 						notReady++
-						wait()
 						continue
 					}
 				}
@@ -926,6 +925,7 @@ func TestGossipInSimulatedCluster(t *testing.T) {
 					break
 				}
 				require.True(t, retry < iterations-1)
+				wait()
 			}
 		},
 	)

@@ -388,6 +388,8 @@ type messageSenderOnClient struct {
 
 	// gaugeDecOnce ensures PipelineMessageSenderGauge.Dec() is called at most once when close() runs.
 	gaugeDecOnce sync.Once
+	terminalMu   sync.Mutex
+	terminalSeen bool
 }
 
 func newMessageSenderOnClient(
@@ -595,24 +597,17 @@ func (sender *messageSenderOnClient) receiveBatch() (bat *batch.Batch, over bool
 		}
 
 		m = val.(*pipeline.Message)
+		if m.IsEndMessage() && len(m.GetAnalyse()) > 0 {
+			if err = sender.dealRemoteTerminal(m.GetAnalyse()); err != nil {
+				return nil, false, err
+			}
+		}
 		if info, get := m.TryToGetMoErr(); get {
 			sender.markTerminal(m, false)
 			return nil, false, info
 		}
 		if m.IsEndMessage() {
 			sender.markTerminal(m, true)
-
-			anaData := m.GetAnalyse()
-			if len(anaData) > 0 {
-				var p models.PhyPlan
-				err = json.Unmarshal(anaData, &p)
-				if err != nil {
-					sender.markTerminal(m, false)
-					return nil, false, err
-				}
-
-				sender.dealRemoteAnalysis(p)
-			}
 			return nil, true, nil
 		}
 
@@ -712,6 +707,9 @@ func (sender *messageSenderOnClient) waitingTheStopResponse() {
 			message := val.(*pipeline.Message)
 
 			if message.IsEndMessage() || len(message.GetErr()) > 0 {
+				if len(message.GetAnalyse()) > 0 {
+					_ = sender.dealRemoteTerminal(message.GetAnalyse())
+				}
 				// StopSending is also a clean teardown when the original server
 				// worker answers with its negotiated terminal response. The later FIN
 				// still waits for the same server cleanup barrier. Unnegotiated or
@@ -788,6 +786,31 @@ func (sender *messageSenderOnClient) dealRemoteAnalysis(p models.PhyPlan) {
 		return
 	}
 	sender.anal.AppendRemotePhyPlan(p)
+}
+
+func (sender *messageSenderOnClient) dealRemoteTerminal(data []byte) error {
+	sender.terminalMu.Lock()
+	defer sender.terminalMu.Unlock()
+	if sender.terminalSeen {
+		return nil
+	}
+	var envelope remoteTerminalEnvelope
+	if err := json.Unmarshal(data, &envelope); err != nil {
+		return err
+	}
+	if len(envelope.LocalScope) > 0 {
+		sender.dealRemoteAnalysis(envelope.PhyPlan)
+	}
+	if sender.anal != nil && envelope.TerminalResourceVersion > 0 {
+		sender.anal.appendRemoteResource(
+			envelope.Delta,
+			envelope.Memory,
+			envelope.MissingFragmentCount,
+			envelope.MissingMemoryDomainCount,
+		)
+	}
+	sender.terminalSeen = true
+	return nil
 }
 
 func (sender *messageSenderOnClient) close() {

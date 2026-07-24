@@ -14,13 +14,8 @@
 
 // Package idxcron carries the shared cuvs idxcron Updatable body.
 //
-// Lives one directory away from pkg/vectorindex/idxcron (the cron
-// consumer/executor) to avoid a test-only import cycle on the GPU
-// tag: pkg/vectorindex/idxcron tests pull in pkg/sql/plan via
-// testengine, pkg/sql/plan pulls in pkg/indexplugin/all, and on the
-// GPU tag that pulls in pkg/vectorindex/cagra/plugin/idxcron which
-// needs the shared helper. Putting the helper in a separate package
-// breaks the cycle.
+// It is kept separate from the cron consumer/executor because CAGRA and
+// IVF-PQ plugins share this algorithm-specific rebuild policy.
 package idxcron
 
 import (

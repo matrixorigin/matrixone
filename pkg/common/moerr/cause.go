@@ -260,8 +260,6 @@ var (
 	CauseShardingLocalReader           = NewInternalError(context.Background(), "ShardingLocalReader Close")
 	CauseHakeeperIDGeneratorNew        = NewInternalError(context.Background(), "HakeeperIDGenerator New")
 	CauseHakeeperIDGeneratorNewIDByKey = NewInternalError(context.Background(), "HakeeperIDGenerator NewIDByKey")
-	//pkg/vm/engine/memoryengine
-	CauseDoTxnRequest = NewInternalError(context.Background(), "DoTxnRequest")
 	//pkg/vm/engine/tae/common
 	CauseRetryWithIntervalAndTimeout = NewInternalError(context.Background(), "RetryWithIntervalAndTimeout")
 	//pkg/vm/engine/tae/db/merge

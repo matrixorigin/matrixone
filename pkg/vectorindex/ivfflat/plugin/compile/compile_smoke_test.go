@@ -17,6 +17,7 @@ package compile
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	compileplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/compile"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -87,6 +88,21 @@ func TestIvfflatValidateReindexParams_Passthrough(t *testing.T) {
 	got, err := Hooks{}.ValidateReindexParams(old, compileplugin.ReindexParamUpdate{})
 	require.NoError(t, err)
 	require.Equal(t, old, got)
+}
+
+// TestIvfflatValidateReindexParams_Quantization: IVF-FLAT honors a narrow-type
+// quantization on reindex (same set as CREATE) and rejects unknown values.
+func TestIvfflatValidateReindexParams_Quantization(t *testing.T) {
+	got, err := Hooks{}.ValidateReindexParams(nil, compileplugin.ReindexParamUpdate{
+		Params: map[string]string{catalog.Quantization: "int8"},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "int8", got[catalog.Quantization])
+
+	_, err = Hooks{}.ValidateReindexParams(nil, compileplugin.ReindexParamUpdate{
+		Params: map[string]string{catalog.Quantization: "garbage"},
+	})
+	require.Error(t, err)
 }
 
 // TestIvfflatIdxcronMetadata_BackgroundLog covers the entry log line

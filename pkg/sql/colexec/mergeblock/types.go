@@ -213,12 +213,13 @@ func splitObjectStats(mergeBlock *MergeBlock, proc *process.Process,
 			newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
 
 			// comes from old version cn
-			objStats, objDataMeta, err = disttae.ConstructObjStatsByLoadObjMeta(newCtx, blkInfo.MetaLocation(), fs)
+			err = process.MeasureFilesystemWaitErr(analyzer, func() error {
+				objStats, objDataMeta, err = disttae.ConstructObjStatsByLoadObjMeta(newCtx, blkInfo.MetaLocation(), fs)
+				return err
+			})
 			if err != nil {
 				return err
 			}
-			analyzer.AddS3RequestCount(crs)
-			analyzer.AddDiskIO(crs)
 
 			vector.AppendBytes(destVec, objStats.Marshal(), false, proc.GetMPool())
 		} else {

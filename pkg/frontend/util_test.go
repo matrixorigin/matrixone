@@ -17,7 +17,7 @@ package frontend
 import (
 	"container/list"
 	"context"
-	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"math"
 	"sort"
@@ -50,14 +50,170 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func init() {
 	testutil.SetupAutoIncrService("")
+}
+
+type accountingMysqlWriter struct {
+	testMysqlWriter
+	bytes         int64
+	packets       int64
+	calls         int
+	outputTracker *responseOutputWaitTracker
+}
+
+func (w *accountingMysqlWriter) CalculateOutTrafficBytes(reset bool) (int64, int64) {
+	w.calls++
+	bytes, packets := w.bytes, w.packets
+	if reset {
+		w.bytes = 0
+		w.packets = 0
+	}
+	return bytes, packets
+}
+
+func (w *accountingMysqlWriter) setResponseOutputWaitTracker(tracker *responseOutputWaitTracker) {
+	w.outputTracker = tracker
+}
+
+func TestFailedStatementSealsAfterTerminalResponse(t *testing.T) {
+	provider := motrace.GetTracerProvider()
+	wasEnabled := provider.IsEnable()
+	provider.SetEnable(true)
+	defer provider.SetEnable(wasEnabled)
+
+	ctx := context.Background()
+	writer := &accountingMysqlWriter{}
+	ses := &Session{feSessionImpl: feSessionImpl{respr: NewMysqlResp(writer)}}
+	root := resource.NewRoot(resource.ConnExternal)
+	ctx = resource.ContextWithRoot(ctx, root)
+	statsInfo := statistic.NewStatsInfo()
+	statsInfo.ParseStage.ParseDuration = 7 * time.Nanosecond
+	ctx = statistic.ContextWithStatsInfo(ctx, statsInfo)
+	require.True(t, root.MergeExecution(resource.ExecutionSummary{
+		Usage:        resource.Usage{ExclusiveActiveNS: 10},
+		AttemptCount: 1,
+	}))
+	stmt := motrace.NewStatementInfo()
+	stmt.RequestAt = time.Now()
+	stmt.SetResourceRoot(root)
+	memoryPool := mpool.MustNew("statement-resource-test")
+	defer mpool.DeleteMPool(memoryPool)
+	retained, allocErr := memoryPool.Alloc(32, true)
+	require.NoError(t, allocErr)
+	defer memoryPool.Free(retained)
+	stmt.SetResourceMemoryPoolEpoch(memoryPool, memoryPool.StartResourcePeakEpoch())
+	allocation, allocErr := memoryPool.Alloc(64, true)
+	require.NoError(t, allocErr)
+	memoryPool.Free(allocation)
+	ses.SetTStmt(stmt)
+
+	writer.bytes = 99
+	writer.packets = 9
+	ses.beginResponseAccounting()
+	require.Equal(t, 1, writer.calls)
+	require.NotNil(t, writer.outputTracker)
+	writer.outputTracker.totalNS.Add(13)
+	execErr := moerr.NewInternalErrorNoCtx("failed")
+	require.True(t, ses.deferStatementCompletion(execErr))
+	require.Same(t, stmt, ses.GetStmtInfo())
+
+	writer.bytes = 17
+	writer.packets = 1
+	ses.finishResponseAccounting(ctx, execErr, true)
+	require.Nil(t, ses.GetStmtInfo())
+	require.Equal(t, 2, writer.calls)
+	require.Nil(t, writer.outputTracker)
+	summary := root.PreResponseSummary()
+	require.Equal(t, uint64(17), summary.Usage.ExclusiveActiveNS)
+	require.Equal(t, uint64(17), summary.Usage.ClientEgressBytes)
+	require.Equal(t, uint64(1), summary.OutputPacketCount)
+	require.Equal(t, uint64(13), summary.Usage.WaitNS[resource.WaitOutput])
+	require.Equal(t, uint64(96), summary.Memory.MaxDomainPeakLiveBytes)
+	require.Zero(t, summary.MissingMemoryDomainCount)
+	withoutCU := statistic.FromResourceSummary(summary, 0)
+	cuCfg := config.NewOBCUConfig()
+	cuCfg.SetDefaultValues()
+	projected := statistic.FromResourceSummary(
+		summary,
+		motrace.CalculateCUWithCfg(withoutCU, int64(stmt.Duration), cuCfg),
+	)
+	var persisted statistic.StatsArray
+	require.NoError(t, json.Unmarshal(projected.ToJsonString(), &persisted))
+	require.Equal(t, float64(statistic.StatsArrayVersion6), persisted.GetVersion())
+	require.Equal(t, float64(17), persisted.GetTimeConsumed())
+	require.Equal(t, float64(96), persisted.GetMemorySize())
+	require.Equal(t, float64(17), persisted.GetOutTrafficBytes())
+	require.Equal(t, float64(1), persisted.GetOutPacketCount())
+	require.Equal(t, float64(1), persisted.GetAttemptCount())
+	require.Zero(t, persisted.GetQualityFlags())
+	require.GreaterOrEqual(t, persisted.GetCU(), float64(0))
+}
+
+func TestStatementlessRequestConsumesResponseCounters(t *testing.T) {
+	writer := &accountingMysqlWriter{bytes: 23, packets: 2}
+	ses := &Session{feSessionImpl: feSessionImpl{respr: NewMysqlResp(writer)}}
+
+	ses.beginResponseAccounting()
+	require.Equal(t, 1, writer.calls)
+	writer.bytes = 7
+	writer.packets = 1
+	ses.finishResponseAccounting(context.Background(), nil, false)
+
+	require.Equal(t, 2, writer.calls)
+	require.Nil(t, writer.outputTracker)
+	require.Zero(t, writer.bytes)
+	require.Zero(t, writer.packets)
+}
+
+func TestResponseOutputCounterRotatesAcrossStatements(t *testing.T) {
+	writer := &accountingMysqlWriter{}
+	ses := &Session{feSessionImpl: feSessionImpl{respr: NewMysqlResp(writer)}}
+	ses.beginResponseAccounting()
+
+	first := writer.outputTracker
+	require.NotNil(t, first)
+	first.totalNS.Add(11)
+	first.operatorNS.Add(3)
+	firstRoot := resource.NewRoot(resource.ConnExternal)
+	var operatorUsage resource.Usage
+	operatorUsage.WaitNS[resource.WaitOutput] = 3
+	require.True(t, firstRoot.MergeExecution(resource.ExecutionSummary{Usage: operatorUsage}))
+	firstCtx := resource.ContextWithRoot(context.Background(), firstRoot)
+	finishStatementAccounting(firstCtx, ses, nil)
+	require.Equal(t, uint64(11), firstRoot.PreResponseSummary().Usage.WaitNS[resource.WaitOutput])
+
+	second := writer.outputTracker
+	require.NotNil(t, second)
+	require.NotSame(t, first, second)
+	second.totalNS.Add(17)
+	secondRoot := resource.NewRoot(resource.ConnExternal)
+	secondCtx := resource.ContextWithRoot(context.Background(), secondRoot)
+	ses.finishResponseAccounting(secondCtx, nil, false)
+	require.Equal(t, uint64(17), secondRoot.PreResponseSummary().Usage.WaitNS[resource.WaitOutput])
+	require.Nil(t, writer.outputTracker)
+}
+
+func TestDerivedStatementLeavesParentResponseAccountingOpen(t *testing.T) {
+	writer := &accountingMysqlWriter{bytes: 23, packets: 2}
+	ses := &Session{feSessionImpl: feSessionImpl{respr: NewMysqlResp(writer)}}
+	ses.ReplaceDerivedStmt(true)
+
+	ctx := resource.ContextWithRoot(context.Background(), resource.NewRoot(resource.ConnExternal))
+	finishStatementAccounting(ctx, ses, nil)
+
+	require.Zero(t, writer.calls)
+	require.Equal(t, int64(23), writer.bytes)
+	require.Equal(t, int64(2), writer.packets)
 }
 
 type testColumnWithoutDecimalScale struct {
@@ -600,15 +756,7 @@ func TestGetExprValue(t *testing.T) {
 		table.EXPECT().TableDefs(gomock.Any()).Return(defs, nil).AnyTimes()
 		table.EXPECT().GetEngineType().Return(engine.Disttae).AnyTimes()
 
-		var ranges memoryengine.ShardIdSlice
-		id := make([]byte, 8)
-		binary.LittleEndian.PutUint64(id, 1)
-		ranges.Append(id)
-
-		relData := &memoryengine.MemRelationData{
-			Shards: ranges,
-		}
-		table.EXPECT().Ranges(gomock.Any(), gomock.Any()).Return(relData, nil).AnyTimes()
+		table.EXPECT().Ranges(gomock.Any(), gomock.Any()).Return(readutil.BuildEmptyRelData(), nil).AnyTimes()
 		//table.EXPECT().NewReader(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, moerr.NewInvalidInputNoCtx("new reader failed")).AnyTimes()
 
 		eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).Return(db, nil).AnyTimes()

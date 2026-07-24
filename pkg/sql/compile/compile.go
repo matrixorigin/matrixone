@@ -302,6 +302,7 @@ func (c *Compile) clear() {
 	c.startAt = time.Time{}
 	c.needLockMeta = false
 	c.isInternal = false
+	c.resourceAttemptOwnerEligible = false
 	c.isPrepare = false
 	c.hasMergeOp = false
 	c.needBlock = false
@@ -6288,6 +6289,13 @@ func (c *Compile) fatalLog(retry int, err error) {
 
 func (c *Compile) SetOriginSQL(sql string) {
 	c.originSQL = sql
+}
+
+// SetResourceAttemptOwnerEligible marks this Compile as the top-level
+// statement candidate allowed to publish retry generations. The statement
+// resource root enforces that at most one eligible Compile becomes the owner.
+func (c *Compile) SetResourceAttemptOwnerEligible() {
+	c.resourceAttemptOwnerEligible = true
 }
 
 func (c *Compile) SetBuildPlanFunc(buildPlanFunc func(ctx context.Context) (*plan2.Plan, error)) {

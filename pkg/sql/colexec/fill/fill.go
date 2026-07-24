@@ -761,7 +761,9 @@ func appendValue(v, w *vector.Vector, j int, proc *process.Process) error {
 		err = vector.AppendFixed(v, vector.GetFixedAtNoTypeCheck[types.Rowid](w, j), false, proc.Mp())
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary,
 		types.T_json, types.T_blob, types.T_text,
-		types.T_array_float32, types.T_array_float64, types.T_datalink:
+		types.T_array_float32, types.T_array_float64,
+		types.T_array_bf16, types.T_array_float16,
+		types.T_array_int8, types.T_array_uint8, types.T_datalink:
 		err = vector.AppendBytes(v, w.GetBytesAt(j), false, proc.Mp())
 	default:
 		panic(fmt.Sprintf("unexpect type %s for function set value in fill query", v.GetType()))
@@ -821,7 +823,9 @@ func setValue(v, w *vector.Vector, i, j int, proc *process.Process) error {
 		err = vector.SetFixedAtNoTypeCheck(v, i, vector.GetFixedAtNoTypeCheck[types.Rowid](w, j))
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary,
 		types.T_json, types.T_blob, types.T_text,
-		types.T_array_float32, types.T_array_float64, types.T_datalink:
+		types.T_array_float32, types.T_array_float64,
+		types.T_array_bf16, types.T_array_float16,
+		types.T_array_int8, types.T_array_uint8, types.T_datalink:
 		err = vector.SetBytesAt(v, i, w.GetBytesAt(j), proc.Mp())
 	default:
 		panic(fmt.Sprintf("unexpect type %s for function set value in fill query", v.GetType()))

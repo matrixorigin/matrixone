@@ -316,6 +316,32 @@ func checkPKDupGeneric[T comparable](
 	return false, ""
 }
 
+// checkPKDupArray de-duplicates a narrow vector (bf16/f16/int8/uint8) primary-key
+// column by its textual form, mirroring the T_array_float32/float64 cases. Vector
+// columns are rejected as primary keys at DDL admission (build_ddl.go inline,
+// checkPrimaryKeyPartType for ALTER, build_index_util.go for table-level), so this
+// is defense-in-depth: it keeps checkPKDup from reaching its default panic if a
+// narrow-vector pk ever arrives here.
+func checkPKDupArray[T types.ArrayElement](
+	mp map[any]bool,
+	t *types.Type,
+	pk *vector.Vector,
+	start, count int) (bool, string) {
+	nsp := pk.GetNulls()
+	for i := start; i < start+count; i++ {
+		if nsp.Contains(uint64(i)) {
+			continue
+		}
+		v := types.ArrayToString[T](vector.GetArrayAt[T](pk, i))
+		if _, ok := mp[v]; ok {
+			entry := common.TypeStringValue(*t, pk.GetBytesAt(i), false)
+			return true, entry
+		}
+		mp[v] = true
+	}
+	return false, ""
+}
+
 func checkPKDup(
 	mp map[any]bool,
 	pk *vector.Vector,
@@ -430,6 +456,22 @@ func checkPKDup(
 				return true, entry
 			}
 			mp[v] = true
+		}
+	case types.T_array_bf16:
+		if found, entry := checkPKDupArray[types.BF16](mp, colType, pk, start, count); found {
+			return true, entry
+		}
+	case types.T_array_float16:
+		if found, entry := checkPKDupArray[types.Float16](mp, colType, pk, start, count); found {
+			return true, entry
+		}
+	case types.T_array_int8:
+		if found, entry := checkPKDupArray[int8](mp, colType, pk, start, count); found {
+			return true, entry
+		}
+	case types.T_array_uint8:
+		if found, entry := checkPKDupArray[uint8](mp, colType, pk, start, count); found {
+			return true, entry
 		}
 	default:
 		panic(moerr.NewInternalErrorNoCtxf("%s not supported", pk.GetType().String()))
@@ -2172,7 +2214,7 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 
 			if objBlkDeletion[*stats.ObjectName().ObjectId()] == nil {
 				// clean object, no deletion on it
-				bat := colexec.AllocCNS3ResultBat(false, false)
+				bat := colexec.AllocCNS3ResultBat(false)
 				if err := bat.Vecs[0].UnionBatch(entry.bat.Vecs[0],
 					int64(offset), int(stats.BlkCnt()), nil, txn.proc.Mp()); err != nil {
 					return err
@@ -2605,6 +2647,7 @@ func (txn *Transaction) Rollback(ctx context.Context) error {
 			zap.String("txn", hex.EncodeToString(txn.op.Txn().ID)),
 		)
 	}
+	_, loadCleanupErr := txn.deleteLoadFiles(ctx, nil)
 
 	// For CCPR transactions, call OnTxnRollback to clean up the cache and GC objects
 	// Skip normal GCObjsByIdxRange for CCPR transactions because:
@@ -2619,7 +2662,7 @@ func (txn *Transaction) Rollback(ctx context.Context) error {
 		}
 	}
 	txn.delTransaction()
-	return nil
+	return loadCleanupErr
 }
 
 func (txn *Transaction) delTransaction() {
@@ -2648,6 +2691,7 @@ func (txn *Transaction) delTransaction() {
 	txn.haveDDL.Store(false)
 	colexec.MustGetServer(txn.engine.service).DeleteTxnSegmentIds(txn.op.Txn().ID)
 	txn.cnObjsSummary = nil
+	txn.loadFiles = nil
 	txn.hasS3Op.Store(false)
 	txn.removed = true
 

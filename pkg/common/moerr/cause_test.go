@@ -251,8 +251,6 @@ var causeArray = []error{
 	CauseHakeeperIDGeneratorNew,
 	CauseHakeeperIDGeneratorNewIDByKey,
 
-	CauseDoTxnRequest,
-
 	CauseRetryWithIntervalAndTimeout,
 
 	CauseCleanUpUselessFiles,

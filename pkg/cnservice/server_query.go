@@ -531,7 +531,7 @@ func (s *service) handleMigrateConnFrom(
 	}
 	rm := s.mo.GetRoutineManager()
 	resp.MigrateConnFromResponse = &query.MigrateConnFromResponse{}
-	if err := rm.MigrateConnectionFrom(req.MigrateConnFromRequest, resp.MigrateConnFromResponse); err != nil {
+	if err := rm.MigrateConnectionFromWithContext(ctx, req.MigrateConnFromRequest, resp.MigrateConnFromResponse); err != nil {
 		logutil.Errorf("failed to migrate conn from: %v", err)
 		return err
 	}
@@ -592,7 +592,7 @@ func (s *service) handleResetSession(
 	}
 	rm := s.mo.GetRoutineManager()
 	resp.ResetSessionResponse = &query.ResetSessionResponse{}
-	if err := rm.ResetSession(req.ResetSessionRequest, resp.ResetSessionResponse); err != nil {
+	if err := rm.ResetSessionWithContext(ctx, req.ResetSessionRequest, resp.ResetSessionResponse); err != nil {
 		logutil.Errorf("failed to reset session: %v", err)
 		return err
 	}

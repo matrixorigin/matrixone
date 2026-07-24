@@ -65,8 +65,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
-	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
-
 	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/matrixorigin/matrixone/pkg/udf/pythonservice"
@@ -623,16 +621,6 @@ func (s *service) initEngine(
 			return err
 		}
 
-	case EngineMemory:
-		if err := s.initMemoryEngine(cancelMoServerCtx, pu); err != nil {
-			return err
-		}
-
-	case EngineNonDistributedMemory:
-		if err := s.initMemoryEngineNonDist(cancelMoServerCtx, pu); err != nil {
-			return err
-		}
-
 	default:
 		return moerr.NewInternalErrorf(ctx, "unknown engine type: %s", s.cfg.Engine.Type)
 
@@ -701,77 +689,10 @@ func (s *service) initClusterService() {
 }
 
 func (s *service) getTxnSender() (sender rpc.TxnSender, err error) {
-	// handleTemp is used to manipulate memorystorage stored for temporary table created by sessions.
-	// processing of temporary table is currently on local, so we need to add a WithLocalDispatch logic to service.
-	handleTemp := func(d metadata.TNShard) rpc.TxnRequestHandleFunc {
-		if d.Address != defines.TEMPORARY_TABLE_TN_ADDR {
-			return nil
-		}
-
-		// read, write, commit and rollback for temporary tables
-		return func(ctx context.Context, req *txn.TxnRequest, resp *txn.TxnResponse) (err error) {
-			storage, ok := ctx.Value(defines.TemporaryTN{}).(*memorystorage.Storage)
-			if !ok {
-				panic("tempStorage should never be nil")
-			}
-
-			resp.RequestID = req.RequestID
-			resp.Txn = &req.Txn
-			resp.Method = req.Method
-			resp.Flag = req.Flag
-
-			switch req.Method {
-			case txn.TxnMethod_Read:
-				res, err := storage.Read(
-					ctx,
-					req.Txn,
-					req.CNRequest.OpCode,
-					req.CNRequest.Payload,
-				)
-				if err != nil {
-					resp.TxnError = txn.WrapError(err, moerr.ErrTAERead)
-				} else {
-					payload, err := res.Read()
-					if err != nil {
-						panic(err)
-					}
-					resp.CNOpResponse = &txn.CNOpResponse{Payload: payload}
-					res.Release()
-				}
-			case txn.TxnMethod_Write:
-				payload, err := storage.Write(
-					ctx,
-					req.Txn,
-					req.CNRequest.OpCode,
-					req.CNRequest.Payload,
-				)
-				if err != nil {
-					resp.TxnError = txn.WrapError(err, moerr.ErrTAEWrite)
-				} else {
-					resp.CNOpResponse = &txn.CNOpResponse{Payload: payload}
-				}
-			case txn.TxnMethod_Commit:
-				_, err = storage.Commit(ctx, req.Txn, nil, nil)
-				if err == nil {
-					resp.Txn.Status = txn.TxnStatus_Committed
-				}
-			case txn.TxnMethod_Rollback:
-				err = storage.Rollback(ctx, req.Txn)
-				if err == nil {
-					resp.Txn.Status = txn.TxnStatus_Aborted
-				}
-			default:
-				return moerr.NewNotSupportedf(ctx, "unknown txn request method: %s", req.Method.String())
-			}
-			return err
-		}
-	}
-
 	s.initTxnSenderOnce.Do(func() {
 		sender, err = rpc.NewSender(
 			s.cfg.RPC,
 			runtime.ServiceRuntime(s.cfg.UUID),
-			rpc.WithSenderLocalDispatch(handleTemp),
 		)
 		if err != nil {
 			return

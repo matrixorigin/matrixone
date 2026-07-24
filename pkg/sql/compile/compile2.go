@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"encoding/hex"
+	"math"
 	gotrace "runtime/trace"
 	"strings"
 	"time"
@@ -198,6 +199,11 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 
 	// update the top context with some trace information and values.
 	execTopContext, span := trace.Start(c.proc.GetTopContext(), "Compile.Run", trace.WithKind(trace.SpanKindStatement))
+	resourceRecorder := newExecutionResourceRecorder(
+		execTopContext,
+		c.resourceAttemptOwnerEligible,
+	)
+	defer resourceRecorder.publish()
 
 	// statistical information record and trace.
 	runStart := time.Now()
@@ -244,27 +250,71 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	var retryTimes = 0
 	queryResult = &util2.RunResult{}
 	v2.TxnStatementTotalCounter.Inc()
+	attemptStart := time.Now()
+	attemptOpen := true
+	var attemptPreRunWall time.Duration
+	var attemptRemoteWait time.Duration
+	attemptScopes := runC.scopes
+	attemptAnal := runC.anal
+	var coordinatorPhaseStart time.Time
+	var coordinatorPhaseBase time.Duration
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			if attemptOpen {
+				if !coordinatorPhaseStart.IsZero() {
+					attemptPreRunWall = coordinatorPhaseBase + time.Since(coordinatorPhaseStart)
+				} else if attemptPreRunWall == 0 {
+					attemptPreRunWall = time.Since(attemptStart)
+				}
+				resourceRecorder.finishAttempt(
+					uint64(retryTimes), attemptStart, attemptPreRunWall, attemptRemoteWait, stats,
+					attemptScopes, attemptAnal, c.addr, false,
+				)
+				attemptOpen = false
+			}
+			panic(recovered)
+		}
+	}()
+	var carriedPreRunWall time.Duration
+	resetStatsInfoPreRun(stats, isInExecutor)
 	for {
+		coordinatorPhaseStart = time.Time{}
+		coordinatorPhaseBase = 0
 		// Record the time from the beginning of Run to just before runOnce().
 		preRunOnceStart := time.Now()
+		coordinatorPhaseStart = preRunOnceStart
+		coordinatorPhaseBase = carriedPreRunWall
+		var preRunWall time.Duration
 		// Before compile.runOnce, Reset the 'StatsInfo' execution related resources in context
-		resetStatsInfoPreRun(stats, isInExecutor)
 
 		// running.
 		if err = runC.prePipelineInitializer(); err == nil {
+			preRunWall = carriedPreRunWall + time.Since(preRunOnceStart)
+			attemptPreRunWall = preRunWall
 			runC.MessageBoard.BeforeRunonce()
 			// Calculate time spent between the start and runOnce execution
 			if !isInExecutor {
 				stats.StoreCompilePreRunOnceDuration(time.Since(preRunOnceStart))
 			}
+			coordinatorPhaseStart = time.Time{}
+			coordinatorPhaseBase = 0
 
 			if err = runC.runOnce(); err == nil {
+				err = runC.proc.GetQueryContextError()
+			}
+			if err == nil {
 				if runC.anal != nil {
 					runC.anal.retryTimes = retryTimes
 				}
 				break
 			}
 		}
+		if preRunWall == 0 {
+			preRunWall = carriedPreRunWall + time.Since(preRunOnceStart)
+		}
+		attemptPreRunWall = preRunWall
+		coordinatorPhaseStart = time.Time{}
+		coordinatorPhaseBase = 0
 
 		c.fatalLog(retryTimes, err)
 		if !c.canRetry(err) {
@@ -287,14 +337,13 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 					err = moerr.NewCannotCommitOrphan(execTopContext)
 				}
 			}
+			resourceRecorder.finishAttempt(
+				uint64(retryTimes), attemptStart, preRunWall, attemptRemoteWait, stats,
+				attemptScopes, attemptAnal, c.addr, false,
+			)
+			attemptOpen = false
 			return nil, err
 		}
-
-		retryTimes++
-		if runC != c {
-			releaseRetryCompile(runC)
-		}
-		c.retryTimes = retryTimes
 		defChanged := moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged)
 		forcePreMode := moerr.IsMoErrCode(err, moerr.ErrVectorNeedRetryWithPreMode)
 		if forcePreMode {
@@ -318,16 +367,68 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 			}
 		}
 
-		if runC, err = c.prepareRetry(defChanged || forcePreMode); err != nil {
+		retryTransitionStart := time.Now()
+		coordinatorPhaseStart = retryTransitionStart
+		coordinatorPhaseBase = preRunWall
+		transitionErr := c.prepareRetryTransition(&attemptRemoteWait)
+		transitionWall := time.Since(retryTransitionStart)
+		coordinatorPhaseStart = time.Time{}
+		coordinatorPhaseBase = 0
+		attemptPreRunWall = preRunWall + transitionWall
+		if transitionErr != nil {
+			err = transitionErr
+			resourceRecorder.finishAttempt(
+				uint64(retryTimes), attemptStart, attemptPreRunWall, attemptRemoteWait, stats,
+				attemptScopes, attemptAnal, c.addr, false,
+			)
+			attemptOpen = false
 			return nil, err
 		}
+		resourceRecorder.finishAttempt(
+			uint64(retryTimes), attemptStart, attemptPreRunWall, attemptRemoteWait, stats,
+			attemptScopes, attemptAnal, c.addr, true,
+		)
+		attemptOpen = false
+		if runC != c {
+			releaseRetryCompile(runC)
+		}
+		runC = c
+
+		retryTimes++
+		c.retryTimes = retryTimes
+		attemptStart = time.Now()
+		attemptOpen = true
+		attemptPreRunWall = 0
+		attemptRemoteWait = 0
+		attemptScopes = nil
+		attemptAnal = nil
+		coordinatorPhaseStart = attemptStart
+		coordinatorPhaseBase = 0
+		stats.ResetRetryAttemptResource()
+		resetStatsInfoPreRun(stats, isInExecutor)
+
+		nextRunC, buildErr := c.buildRetryCompile(defChanged || forcePreMode)
+		carriedPreRunWall = time.Since(attemptStart)
+		attemptPreRunWall = carriedPreRunWall
+		if buildErr != nil {
+			err = buildErr
+			resourceRecorder.finishAttempt(
+				uint64(retryTimes), attemptStart, attemptPreRunWall, attemptRemoteWait, stats,
+				attemptScopes, attemptAnal, c.addr, false,
+			)
+			attemptOpen = false
+			return nil, err
+		}
+		runC = nextRunC
+		attemptScopes = runC.scopes
+		attemptAnal = runC.anal
 
 		// rebuild context for the retry.
 		runC.InitPipelineContextToRetryQuery()
-	}
-
-	if err = runC.proc.GetQueryContextError(); err != nil {
-		return nil, err
+		carriedPreRunWall = time.Since(attemptStart)
+		attemptPreRunWall = carriedPreRunWall
+		coordinatorPhaseStart = time.Time{}
+		coordinatorPhaseBase = 0
 	}
 	queryResult.AffectRows = runC.getAffectedRows()
 	if c.uid != "mo_logger" &&
@@ -344,9 +445,27 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		err = txnOperator.GetWorkspace().Adjust(writeOffset)
 	}
 
-	//if !isInExecutor {
+	// Keep the attempt open through plan analysis. Adjust can fail and analysis
+	// can panic, so neither path may inherit a prematurely sealed success
+	// outcome. The panic defer above remains the single terminal owner until
+	// this call returns.
 	c.AnalyzeExecPlan(runC, queryResult, stats, isExplainPhyPlan, option)
-	//}
+
+	resourceRecorder.finishAttempt(
+		uint64(retryTimes), attemptStart, attemptPreRunWall, attemptRemoteWait, stats,
+		attemptScopes, attemptAnal, c.addr, false,
+	)
+	attemptOpen = false
+	resourceRecorder.publish()
+	// AnalyzeExecPlan builds the physical plan before execution resources are
+	// published. Refresh its live snapshot after publication; the frontend
+	// replaces this with the terminal sealed summary before persistence.
+	if c.anal != nil {
+		c.attachResourceSummary(c.anal.phyPlan)
+	}
+	if isExplainPhyPlan {
+		c.refreshExplainPhyPlanBuffer(runC, queryResult, option)
+	}
 
 	return queryResult, err
 }
@@ -542,8 +661,9 @@ func rewriteAutoModeInTableExpr(expr tree.TableExpr) bool {
 	}
 }
 
-// prepareRetry rebuild a new Compile object for retrying the query.
-func (c *Compile) prepareRetry(defChanged bool) (*Compile, error) {
+// prepareRetryTransition quiesces the failed generation and advances its
+// transaction workspace. It is charged to the attempt that requested retry.
+func (c *Compile) prepareRetryTransition(remoteWait *time.Duration) error {
 	v2.TxnStatementRetryCounter.Inc()
 	c.proc.GetTxnOperator().GetWorkspace().IncrSQLCount()
 
@@ -554,30 +674,58 @@ func (c *Compile) prepareRetry(defChanged bool) (*Compile, error) {
 			if sqlText == "" {
 				sqlText = c.sql
 			}
-			if err := coordinator.CancelAndWaitRunningSQLWithSQL(topContext, c.runSqlToken, sqlText); err != nil {
-				return nil, err
+			if err := measureRetryRemoteWait(remoteWait, func() error {
+				return coordinator.CancelAndWaitRunningSQLWithSQL(topContext, c.runSqlToken, sqlText)
+			}); err != nil {
+				return err
 			}
 		} else if coordinator, ok := txnOp.(runSQLCoordinator); ok {
-			if err := coordinator.CancelAndWaitRunningSQL(topContext, c.runSqlToken); err != nil {
-				return nil, err
+			if err := measureRetryRemoteWait(remoteWait, func() error {
+				return coordinator.CancelAndWaitRunningSQL(topContext, c.runSqlToken)
+			}); err != nil {
+				return err
 			}
 		}
 	}
 
 	// clear the workspace of the failed statement
 	if e := c.proc.GetTxnOperator().GetWorkspace().RollbackLastStatement(topContext); e != nil {
-		return nil, e
+		return e
 	}
 
 	// increase the statement id
 	if e := c.proc.GetTxnOperator().GetWorkspace().IncrStatementID(topContext, false); e != nil {
-		return nil, e
+		return e
 	}
 
 	// clear PostDmlSqlList
 	c.proc.GetPostDmlSqlList().Clear()
 	// clear stage cache
 	c.proc.GetStageCache().Clear()
+	return nil
+}
+
+func measureRetryRemoteWait(total *time.Duration, wait func() error) (err error) {
+	start := time.Now()
+	defer func() {
+		elapsed := time.Since(start)
+		if total == nil || elapsed <= 0 {
+			return
+		}
+		if *total > time.Duration(math.MaxInt64)-elapsed {
+			*total = time.Duration(math.MaxInt64)
+			return
+		}
+		*total += elapsed
+	}()
+	return wait()
+}
+
+// buildRetryCompile starts the next generation. A build or compile failure is
+// therefore a terminal outcome of that new attempt instead of disappearing
+// into the previous attempt's closing phase.
+func (c *Compile) buildRetryCompile(defChanged bool) (*Compile, error) {
+	topContext := c.proc.GetTopContext()
 
 	// FIXME: the current retry method is quite bad, the overhead is relatively large, and needs to be
 	// improved to refresh expression in the future.
@@ -588,6 +736,10 @@ func (c *Compile) prepareRetry(defChanged bool) (*Compile, error) {
 	runC.SetSchedulingTraceRecorder(c.schedulingTrace)
 	runC.SetOriginSQL(c.originSQL)
 	defer func() {
+		if recovered := recover(); recovered != nil {
+			runC.Release()
+			panic(recovered)
+		}
 		if e != nil {
 			runC.Release()
 		}
@@ -684,7 +836,7 @@ func setContextForParallelScope(parallelScope *Scope, originalContext context.Co
 func (c *Compile) AnalyzeExecPlan(runC *Compile, queryResult *util2.RunResult, stats *statistic.StatsInfo, isExplainPhy bool, option *ExplainOption) {
 	switch c.pn.Plan.(type) {
 	case *plan.Plan_Query:
-		c.handleQueryPlanAnalyze(runC, queryResult, stats, isExplainPhy, option)
+		c.handleQueryPlanAnalyze(runC, stats)
 	case *plan.Plan_Ddl:
 		handleDdlPlanAnalyze(runC, stats)
 	}
@@ -700,29 +852,25 @@ func handleDdlPlanAnalyze(runC *Compile, stats *statistic.StatsInfo) {
 	}
 }
 
-func (c *Compile) handleQueryPlanAnalyze(runC *Compile, queryResult *util2.RunResult, stats *statistic.StatsInfo, isExplainPhy bool, option *ExplainOption) {
+func (c *Compile) handleQueryPlanAnalyze(runC *Compile, stats *statistic.StatsInfo) {
 	if c.anal.phyPlan == nil || !c.UpdatePreparePhyPlan(runC) {
 		c.GenPhyPlan(runC)
 	}
 
 	c.fillPlanNodeAnalyzeInfo(stats)
 
-	if isExplainPhy {
-		topContext := c.proc.GetTopContext()
+}
 
-		statsInfo := statistic.StatsInfoFromContext(topContext)
-		// Use the final (retry) scopes for explain analyze output.
-		scopes := c.scopes
-		if runC != nil && runC != c && len(runC.scopes) > 0 {
-			scopes = runC.scopes
-		}
-		scopeInfo := makeExplainPhyPlanBuffer(scopes, queryResult, statsInfo, c.anal, option)
-
-		// Ensure explain analyze always exposes the final (retry) plan buffer.
-		c.anal.explainPhyBuffer = scopeInfo
-		if runC.anal != nil && runC != c {
-			runC.anal.explainPhyBuffer = scopeInfo
-		}
+func (c *Compile) refreshExplainPhyPlanBuffer(runC *Compile, queryResult *util2.RunResult, option *ExplainOption) {
+	statsInfo := statistic.StatsInfoFromContext(c.proc.GetTopContext())
+	scopes := c.scopes
+	if runC != nil && runC != c && len(runC.scopes) > 0 {
+		scopes = runC.scopes
+	}
+	scopeInfo := makeExplainPhyPlanBuffer(scopes, queryResult, statsInfo, c.anal, option)
+	c.anal.explainPhyBuffer = scopeInfo
+	if runC != nil && runC.anal != nil && runC != c {
+		runC.anal.explainPhyBuffer = scopeInfo
 	}
 }
 

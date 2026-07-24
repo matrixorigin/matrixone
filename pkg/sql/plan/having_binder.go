@@ -235,7 +235,7 @@ func (b *HavingBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, dept
 	}
 
 	colPos := int32(len(b.ctx.aggregates))
-	astStr := tree.String(astExpr, dialect.MYSQL)
+	astStr := semanticAstKey(astExpr)
 	b.ctx.aggregateByAst[astStr] = colPos
 	b.ctx.aggregates = append(b.ctx.aggregates, expr)
 
@@ -463,7 +463,7 @@ func (b *HavingBinder) BindTimeWindowFunc(funcName string, astExpr *tree.FuncExp
 	}
 	b.ctx.times = append(b.ctx.times, expr)
 
-	astStr := tree.String(astExpr, dialect.MYSQL)
+	astStr := semanticAstKey(astExpr)
 	b.ctx.timeByAst[astStr] = colPos
 
 	return makeTimeWindowProjectionExpr(b.GetContext(), b.ctx, astExpr, colPos)

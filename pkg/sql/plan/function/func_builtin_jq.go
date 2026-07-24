@@ -581,6 +581,18 @@ func (op *opBuiltInJsonRow) jsonRow(params []*vector.Vector, result vector.Funct
 		case types.T_array_float64:
 			// vector of float, we will encode them as json array
 			encodeFloatArray[float64](op, params[i], ulen)
+		case types.T_array_bf16:
+			encodeNarrowArray[types.BF16](op, params[i], ulen,
+				func(x types.BF16) float64 { return float64(x.ToFloat32()) })
+		case types.T_array_float16:
+			encodeNarrowArray[types.Float16](op, params[i], ulen,
+				func(x types.Float16) float64 { return float64(x.ToFloat32()) })
+		case types.T_array_int8:
+			encodeNarrowArray[int8](op, params[i], ulen,
+				func(x int8) float64 { return float64(x) })
+		case types.T_array_uint8:
+			encodeNarrowArray[uint8](op, params[i], ulen,
+				func(x uint8) float64 { return float64(x) })
 		case types.T_uuid:
 			encodeFixedStringer[types.Uuid](op, params[i], ulen)
 		case types.T_json:
@@ -704,6 +716,29 @@ func encodeFloatArray[T constraints.Float](op *opBuiltInJsonRow, v *vector.Vecto
 				}
 				ff := float64(val)
 				op.enc[i].encodeFloat64(ff)
+			}
+			op.enc[i].w.WriteByte(']')
+		}
+	}
+}
+
+// encodeNarrowArray is encodeFloatArray for element types that are not
+// constraints.Float: BF16/Float16 need ToFloat32(), int8/uint8 are plain
+// integers. The JSON shape emitted is identical to the f32/f64 arrays.
+func encodeNarrowArray[T types.ArrayElement](op *opBuiltInJsonRow, v *vector.Vector, length uint64, toF64 func(T) float64) {
+	p := vector.GenerateFunctionStrParameter(v)
+	for i := uint64(0); i < length; i++ {
+		v, null := p.GetStrValue(i)
+		if null {
+			op.enc[i].w.WriteString("null")
+		} else {
+			vv := types.BytesToArray[T](v)
+			op.enc[i].w.WriteByte('[')
+			for j, val := range vv {
+				if j > 0 {
+					op.enc[i].w.WriteByte(',')
+				}
+				op.enc[i].encodeFloat64(toF64(val))
 			}
 			op.enc[i].w.WriteByte(']')
 		}
