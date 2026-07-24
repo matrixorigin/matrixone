@@ -333,7 +333,9 @@ func dataBranchCreateTable(
 		cloneStmt *tree.CloneTable
 	)
 
-	if bh, deferred, err = getBackExecutor(execCtx.reqCtx, ses); err != nil {
+	if bh, deferred, err = getBackExecutor(
+		execCtx.reqCtx, ses, &BackgroundExecOption{forcePessimisticRC: true},
+	); err != nil {
 		return
 	}
 
@@ -389,7 +391,9 @@ func dataBranchCreateDatabase(
 	)
 	stats.Reset()
 
-	if bh, deferred, err = getBackExecutor(execCtx.reqCtx, ses); err != nil {
+	if bh, deferred, err = getBackExecutor(
+		execCtx.reqCtx, ses, &BackgroundExecOption{forcePessimisticRC: true},
+	); err != nil {
 		return
 	}
 

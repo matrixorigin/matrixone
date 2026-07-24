@@ -615,7 +615,8 @@ func execResultArrayHasData(arr []ExecResult) bool {
 }
 
 type BackgroundExecOption struct {
-	fromRealUser bool
+	fromRealUser       bool
+	forcePessimisticRC bool
 }
 
 // BackgroundExec executes the sql in background session without network output.

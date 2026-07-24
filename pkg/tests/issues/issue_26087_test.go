@@ -71,6 +71,7 @@ func TestIssue26087ConcurrentDataBranchQuota(t *testing.T) {
 			tenantDB.SetMaxOpenConns(2)
 			execSQLRequire(t, ctx, tenantDB, "create database branch_quota_race")
 			execSQLRequire(t, ctx, tenantDB, "create table branch_quota_race.src (a int primary key)")
+			execSQLRequire(t, ctx, tenantDB, "create table branch_quota_race.mode_probe (a int primary key)")
 			execSQLRequire(t, ctx, tenantDB, "insert into branch_quota_race.src values (1)")
 			execSQLRequire(t, ctx, tenantDB, "create snapshot issue_26087_sp for table branch_quota_race src")
 
@@ -210,19 +211,27 @@ func TestIssue26087ConcurrentDataBranchQuota(t *testing.T) {
 			require.NoError(t, execConn(conn1, "rollback"))
 
 			require.NoError(t, execConn(conn1, "set autocommit = 0"))
-			implicitErr := execConn(conn1,
-				"data branch create table branch_quota_race.implicit_branch from branch_quota_race.src{snapshot='issue_26087_sp'}")
-			require.Error(t, implicitErr)
-			require.Contains(t, implicitErr.Error(),
-				"finite branch quota requires a pessimistic read committed transaction; retry outside the active transaction")
+			require.NoError(t, execConn(conn1,
+				"data branch create table branch_quota_race.implicit_branch from branch_quota_race.src{snapshot='issue_26087_sp'}"))
+			var modeProbeCount int
+			require.NoError(t, conn1.QueryRowContext(execCtx,
+				"select count(*) from branch_quota_race.mode_probe",
+			).Scan(&modeProbeCount))
+			require.Zero(t, modeProbeCount)
+			require.NoError(t, execConn(conn2, "insert into branch_quota_race.mode_probe values (1)"))
+			require.NoError(t, conn1.QueryRowContext(execCtx,
+				"select count(*) from branch_quota_race.mode_probe",
+			).Scan(&modeProbeCount))
+			require.Zero(t, modeProbeCount, "DATA BRANCH must not downgrade the outer SI transaction to RC")
 			require.NoError(t, execConn(conn1, "rollback"))
 			require.NoError(t, execConn(conn1, "set autocommit = 1"))
 
-			var incompatibleBranchCount int
+			var explicitBranchCount int
 			require.NoError(t, conn1.QueryRowContext(execCtx,
-				"select count(*) from mo_catalog.mo_tables where reldatabase = 'branch_quota_race' and relname in ('explicit_branch', 'implicit_branch')",
-			).Scan(&incompatibleBranchCount))
-			require.Zero(t, incompatibleBranchCount)
+				"select count(*) from mo_catalog.mo_tables where reldatabase = 'branch_quota_race' and relname = 'explicit_branch'",
+			).Scan(&explicitBranchCount))
+			require.Zero(t, explicitBranchCount)
+			require.NoError(t, execConn(conn1, "data branch delete table branch_quota_race.implicit_branch"))
 
 			optimisticDB, err := sql.Open("mysql", fmt.Sprintf("%s#root#accountadmin:111@tcp(127.0.0.1:%d)/", accountName, port))
 			require.NoError(t, err)

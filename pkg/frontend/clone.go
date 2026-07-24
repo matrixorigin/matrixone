@@ -73,6 +73,7 @@ type cloneReceipt struct {
 func getBackExecutor(
 	ctx context.Context,
 	ses *Session,
+	opts ...*BackgroundExecOption,
 ) (BackgroundExec, func(error) error, error) {
 
 	var (
@@ -90,7 +91,7 @@ func getBackExecutor(
 		}, nil
 	}
 
-	bh = ses.GetBackgroundExec(ctx)
+	bh = ses.GetBackgroundExec(ctx, opts...)
 	bh.ClearExecResultSet()
 	if err = bh.Exec(ctx, "begin"); err != nil {
 		return nil, func(err error) error {

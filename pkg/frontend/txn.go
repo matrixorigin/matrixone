@@ -446,11 +446,11 @@ func (th *TxnHandler) createTxnOpUnsafe(execCtx *ExecCtx) error {
 		}
 	}
 
-	// A DATA BRANCH create can discover a finite quota only after its transaction
-	// exists. Start an autocommit statement in the mode required by the quota-row
-	// locking read and its post-wait snapshot refresh. A multi-statement transaction
-	// keeps its configured semantics and is validated by the quota checker instead.
-	if execCtx.txnOpt.autoCommit && isDataBranchCreateStatement(execCtx.stmt) {
+	// A DATA BRANCH create can use an independent background transaction for its
+	// quota check and clone. Apply the required mode to that owning transaction;
+	// shared explicit transactions keep their configured semantics and are
+	// validated by the quota checker instead.
+	if backSes, ok := execCtx.ses.(*backSession); ok && backSes.forcePessimisticRC {
 		opts = append(opts,
 			txnclient.WithTxnMode(pbtxn.TxnMode_Pessimistic),
 			txnclient.WithTxnIsolation(pbtxn.TxnIsolation_RC))
