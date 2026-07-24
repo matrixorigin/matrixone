@@ -189,3 +189,15 @@ func TestIvfpqJoinIncludeColumns(t *testing.T) {
 	}
 	require.Equal(t, "a,b", joinIncludeColumns(cols))
 }
+
+// TestIvfpqValidQuantization exercises the per-algo (quant, op) catalog hook
+// shared by CREATE and REINDEX.
+func TestIvfpqValidQuantization(t *testing.T) {
+	h := CatalogHooks{}
+	require.NoError(t, h.ValidQuantization("", "vector_ip_ops"))
+	require.NoError(t, h.ValidQuantization("float16", "vector_ip_ops"))
+	require.NoError(t, h.ValidQuantization("uint8", "vector_l2_ops"))
+	require.Error(t, h.ValidQuantization("int8", "vector_ip_ops"))
+	require.Error(t, h.ValidQuantization("uint8", "vector_cosine_ops"))
+	require.Error(t, h.ValidQuantization("bf16", "vector_l2_ops"))
+}

@@ -76,6 +76,16 @@ func TestNewRoutineGeneratesTraceContext(t *testing.T) {
 	require.False(t, spanContext.IsEmpty())
 }
 
+func TestRequestFinalizationContextPrefersExecutionContext(t *testing.T) {
+	type contextKey struct{}
+	fallback := context.WithValue(context.Background(), contextKey{}, "fallback")
+	enriched := context.WithValue(context.Background(), contextKey{}, "enriched")
+
+	require.Same(t, enriched, requestFinalizationContext(&ExecCtx{reqCtx: enriched}, fallback))
+	require.Same(t, fallback, requestFinalizationContext(&ExecCtx{}, fallback))
+	require.Same(t, fallback, requestFinalizationContext(nil, fallback))
+}
+
 func Test_inc_dec(t *testing.T) {
 	rt := &Routine{}
 	counter := int32(0)
