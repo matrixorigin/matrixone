@@ -174,6 +174,13 @@ func (vq *VisitPlan) exploreNode(ctx context.Context, rule VisitPlanRule, node *
 		}
 	}
 
+	for i := range node.WinSpecList {
+		node.WinSpecList[i], err = rule.ApplyExpr(node.WinSpecList[i])
+		if err != nil {
+			return err
+		}
+	}
+
 	typ := types.New(types.T_varchar, 65000, 0)
 	toTyp := makePlan2Type(&typ)
 	targetTyp := &plan.Expr{

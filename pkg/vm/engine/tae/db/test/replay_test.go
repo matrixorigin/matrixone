@@ -255,8 +255,9 @@ func TestReplayCatalog3(t *testing.T) {
 	assert.Nil(t, err)
 	rel, err = e.GetRelationByName(schema.Name)
 	assert.Nil(t, err)
-	obj, err = rel.CreateObject(false)
+	obj, err = rel.CreateNonAppendableObject(false, nil)
 	assert.Nil(t, err)
+	testutil.MockObjectStats(t, obj)
 	assert.Nil(t, txn.Commit(context.Background()))
 
 	txn, _ = tae.StartTxn(nil)
