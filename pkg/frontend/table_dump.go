@@ -347,31 +347,41 @@ func hashTableDumpFile(ctx context.Context, fs fileservice.FileService, name str
 	return n, hex.EncodeToString(hasher.Sum(nil)), nil
 }
 
-func copyTableDumpFile(ctx context.Context, srcFS, dstFS fileservice.FileService, src, dst string) (int64, string, error) {
+func copyTableDumpFile(
+	ctx context.Context,
+	srcFS, dstFS fileservice.FileService,
+	src, dst string,
+) (size int64, hash string, providerCopied bool, err error) {
 	srcEntry, err := srcFS.StatFile(ctx, src)
 	if err != nil {
-		return 0, "", err
+		return 0, "", false, err
 	}
 	if copier, ok := dstFS.(fileservice.ObjectCopier); ok {
 		copied, err := copier.CopyObject(ctx, srcFS, src, dst)
 		if err != nil {
-			return 0, "", err
+			return 0, "", false, err
 		}
 		if copied {
-			dstSize, hash, err := hashTableDumpFile(ctx, dstFS, dst)
+			dstEntry, err := dstFS.StatFile(ctx, dst)
 			if err != nil {
-				return 0, "", err
+				return 0, "", false, err
 			}
-			if dstSize != srcEntry.Size {
-				return 0, "", moerr.NewInternalErrorNoCtxf(
+			if dstEntry.Size != srcEntry.Size {
+				return 0, "", false, moerr.NewInternalErrorNoCtxf(
 					"server-side object copy size mismatch: source %d, destination %d",
-					srcEntry.Size, dstSize,
+					srcEntry.Size, dstEntry.Size,
 				)
 			}
-			return srcEntry.Size, hash, nil
+			// LOAD TABLE is an administrator-only operation, and CopyObject is a
+			// trusted provider-side primitive. Reading the entire destination back
+			// through CN solely to recompute SHA-256 defeats server-side copy and
+			// makes load time proportional to the fixture size. The provider result
+			// plus the destination size is sufficient here.
+			return srcEntry.Size, "", true, nil
 		}
 	}
-	return streamTableDumpFile(ctx, srcFS, dstFS, src, dst)
+	size, hash, err = streamTableDumpFile(ctx, srcFS, dstFS, src, dst)
+	return size, hash, false, err
 }
 
 func streamTableDumpFile(ctx context.Context, srcFS, dstFS fileservice.FileService, src, dst string) (int64, string, error) {
@@ -910,9 +920,15 @@ func installTableDumpObject(ctx context.Context, dumpFS, targetFS fileservice.Fi
 	} else if !moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
 		return false, err
 	}
-	size, hash, err := copyTableDumpFile(ctx, dumpFS, targetFS, item.FixturePath, item.Name)
+	size, hash, providerCopied, err := copyTableDumpFile(ctx, dumpFS, targetFS, item.FixturePath, item.Name)
 	if err != nil {
 		return true, err
+	}
+	if providerCopied {
+		if size != item.Size {
+			return true, moerr.NewInvalidInputNoCtxf("object %s does not match manifest size", item.Name)
+		}
+		return true, nil
 	}
 	checksumMismatch := item.SHA256 != "" && hash != "" && !strings.EqualFold(hash, item.SHA256)
 	if size != item.Size || checksumMismatch {

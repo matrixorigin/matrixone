@@ -50,8 +50,9 @@ import (
 
 type testTableDumpObjectCopier struct {
 	fileservice.FileService
-	data   []byte
-	copied bool
+	data       []byte
+	copied     bool
+	rejectRead bool
 }
 
 type testConcurrentTableDumpObjectCopier struct {
@@ -203,6 +204,13 @@ func (c *testTableDumpObjectCopier) CopyObject(
 		Entries:  []fileservice.IOEntry{{Offset: 0, Size: int64(len(c.data)), Data: c.data}},
 	})
 	return true, err
+}
+
+func (c *testTableDumpObjectCopier) Read(ctx context.Context, vector *fileservice.IOVector) error {
+	if c.rejectRead {
+		return errors.New("unexpected destination read after provider-side copy")
+	}
+	return c.FileService.Read(ctx, vector)
 }
 
 func TestOpenLocalTableDump(t *testing.T) {
@@ -860,7 +868,7 @@ func TestTableDumpManifestAndCopy(t *testing.T) {
 	require.NoError(t, src.Write(ctx, fileservice.IOVector{
 		FilePath: "obj", Entries: []fileservice.IOEntry{{Offset: 0, Size: int64(len(content)), Data: content}},
 	}))
-	size, hash, err := copyTableDumpFile(ctx, src, fixture, "obj", "objects/obj")
+	size, hash, _, err := copyTableDumpFile(ctx, src, fixture, "obj", "objects/obj")
 	require.NoError(t, err)
 	require.Equal(t, int64(len(content)), size)
 
@@ -881,19 +889,31 @@ func TestTableDumpManifestAndCopy(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, created)
 
+	streamDst, err := fileservice.NewLocalETLFS("stream-dst", t.TempDir())
+	require.NoError(t, err)
+	wrongChecksum := read.Relations[0].Objects[0]
+	wrongChecksum.SHA256 = strings.Repeat("0", sha256.Size*2)
+	created, err = installTableDumpObject(ctx, fixture, streamDst, wrongChecksum)
+	require.Error(t, err)
+	require.True(t, created)
+
 	serverSideDst, err := fileservice.NewLocalETLFS("server-side-dst", t.TempDir())
 	require.NoError(t, err)
-	serverSideCopier := &testTableDumpObjectCopier{FileService: serverSideDst, data: content}
+	serverSideCopier := &testTableDumpObjectCopier{
+		FileService: serverSideDst,
+		data:        content,
+		rejectRead:  true,
+	}
 	created, err = installTableDumpObject(ctx, fixture, serverSideCopier, read.Relations[0].Objects[0])
 	require.NoError(t, err)
 	require.True(t, created)
-	require.NoError(t, verifyTableDumpObject(ctx, serverSideCopier, "obj", size, hash))
+	require.NoError(t, verifyTableDumpObject(ctx, serverSideDst, "obj", size, hash))
 
 	badDst, err := fileservice.NewLocalETLFS("bad-dst", t.TempDir())
 	require.NoError(t, err)
 	badCopier := &testTableDumpObjectCopier{FileService: badDst, data: []byte("corrupt object byte")}
 	created, err = installTableDumpObject(ctx, fixture, badCopier, read.Relations[0].Objects[0])
-	require.Error(t, err)
+	require.NoError(t, err)
 	require.True(t, created)
 	_, err = badDst.StatFile(ctx, "obj")
 	require.NoError(t, err)
@@ -1017,14 +1037,15 @@ func TestCopyTableDumpFilePrefersObjectCopier(t *testing.T) {
 	require.NoError(t, src.Write(ctx, fileservice.IOVector{
 		FilePath: "obj", Entries: []fileservice.IOEntry{{Offset: 0, Size: int64(len(content)), Data: content}},
 	}))
-	copier := &testTableDumpObjectCopier{FileService: dst, data: content}
+	copier := &testTableDumpObjectCopier{FileService: dst, data: content, rejectRead: true}
 
-	size, hash, err := copyTableDumpFile(ctx, src, copier, "obj", "objects/obj")
+	size, hash, providerCopied, err := copyTableDumpFile(ctx, src, copier, "obj", "objects/obj")
 	require.NoError(t, err)
 	require.True(t, copier.copied)
 	require.Equal(t, int64(len(content)), size)
-	require.Equal(t, fmt.Sprintf("%x", sha256.Sum256(content)), hash)
-	require.NoError(t, verifyTableDumpObject(ctx, copier, "objects/obj", size, hash))
+	require.Empty(t, hash)
+	require.True(t, providerCopied)
+	require.NoError(t, verifyTableDumpObject(ctx, dst, "objects/obj", size, ""))
 }
 
 func TestVerifyTableDumpObjectRejectsMissingAndMismatchedData(t *testing.T) {
@@ -1045,7 +1066,7 @@ func TestVerifyTableDumpObjectRejectsMissingAndMismatchedData(t *testing.T) {
 
 	_, _, err = hashTableDumpFile(ctx, fs, "missing")
 	require.Error(t, err)
-	_, _, err = copyTableDumpFile(ctx, fs, fs, "missing", "destination")
+	_, _, _, err = copyTableDumpFile(ctx, fs, fs, "missing", "destination")
 	require.Error(t, err)
 	_, _, err = streamTableDumpFile(ctx, fs, fs, "missing", "destination")
 	require.Error(t, err)
@@ -1061,7 +1082,7 @@ func TestCopyTableDumpFileRejectsServerSideSizeMismatch(t *testing.T) {
 		FilePath: "obj", Entries: []fileservice.IOEntry{{Offset: 0, Size: 3, Data: []byte("src")}},
 	}))
 	copier := &testTableDumpObjectCopier{FileService: dst, data: []byte("different size")}
-	_, _, err = copyTableDumpFile(ctx, src, copier, "obj", "objects/obj")
+	_, _, _, err = copyTableDumpFile(ctx, src, copier, "obj", "objects/obj")
 	require.Error(t, err)
 }
 
@@ -1076,7 +1097,7 @@ func TestCopyTableDumpFileTracksAmbiguousWriteOwnership(t *testing.T) {
 		FilePath: "obj", Entries: []fileservice.IOEntry{{Offset: 0, Size: int64(len(content)), Data: content}},
 	}))
 
-	_, _, err = copyTableDumpFile(
+	_, _, _, err = copyTableDumpFile(
 		ctx, src, &testAmbiguousWriteFileService{FileService: dst}, "obj", "objects/obj",
 	)
 	require.Error(t, err)
