@@ -174,6 +174,12 @@ func (s *service) handleWorkloadPolicyUpdate(
 		return moerr.NewInvalidInput(ctx, "bad workload policy update request")
 	}
 	update := req.WorkloadPolicyUpdateRequest
+	if update.Probe {
+		resp.WorkloadPolicyUpdateResponse = &query.WorkloadPolicyUpdateResponse{
+			Supported: true,
+		}
+		return nil
+	}
 	if update.Revision == 0 {
 		return moerr.NewInvalidInput(ctx, "workload policy update revision is zero")
 	}
@@ -186,8 +192,9 @@ func (s *service) handleWorkloadPolicyUpdate(
 		return moerr.NewInvalidInputf(ctx, "invalid workload policy update: %v", err)
 	}
 	resp.WorkloadPolicyUpdateResponse = &query.WorkloadPolicyUpdateResponse{
-		Applied:  applied,
-		Revision: revision,
+		Applied:   applied,
+		Revision:  revision,
+		Supported: true,
 	}
 	return nil
 }

@@ -74,14 +74,14 @@ type workloadPolicySQLExecutor struct {
 type workloadPolicyQueryClient struct {
 	serviceID string
 
-	mu                sync.Mutex
-	responses         map[string]*query.Response
-	sendErrs          map[string]error
-	methodSendErrs    map[query.CmdMethod]map[string]error
-	protocolVersions  map[string]int64
-	protocolResponses map[string]*query.Response
-	requests          map[string]*query.Request
-	releases          int
+	mu                  sync.Mutex
+	responses           map[string]*query.Response
+	sendErrs            map[string]error
+	methodSendErrs      map[query.CmdMethod]map[string]error
+	publishSendErrs     map[string]error
+	capabilityResponses map[string]*query.Response
+	requests            map[string]*query.Request
+	releases            int
 }
 
 type workloadPolicyMOCluster struct {
@@ -109,13 +109,13 @@ func (c *workloadPolicyMOCluster) GetCNServiceWithoutWorkingState(
 
 func newWorkloadPolicyQueryClient(serviceID string) *workloadPolicyQueryClient {
 	return &workloadPolicyQueryClient{
-		serviceID:         serviceID,
-		responses:         make(map[string]*query.Response),
-		sendErrs:          make(map[string]error),
-		methodSendErrs:    make(map[query.CmdMethod]map[string]error),
-		protocolVersions:  make(map[string]int64),
-		protocolResponses: make(map[string]*query.Response),
-		requests:          make(map[string]*query.Request),
+		serviceID:           serviceID,
+		responses:           make(map[string]*query.Response),
+		sendErrs:            make(map[string]error),
+		methodSendErrs:      make(map[query.CmdMethod]map[string]error),
+		publishSendErrs:     make(map[string]error),
+		capabilityResponses: make(map[string]*query.Response),
+		requests:            make(map[string]*query.Request),
 	}
 }
 
@@ -155,19 +155,21 @@ func (c *workloadPolicyQueryClient) SendMessage(
 			return nil, err
 		}
 	}
-	if request.CmdMethod == query.CmdMethod_GetProtocolVersion {
-		if response, ok := c.protocolResponses[address]; ok {
+	if request.CmdMethod == query.CmdMethod_WorkloadPolicyUpdate &&
+		request.WorkloadPolicyUpdateRequest.Probe {
+		if response, ok := c.capabilityResponses[address]; ok {
 			return response, nil
 		}
-		version, ok := c.protocolVersions[address]
-		if !ok {
-			version = defines.MORPCLatestVersion
-		}
 		return &query.Response{
-			GetProtocolVersion: &query.GetProtocolVersionResponse{
-				Version: version,
+			WorkloadPolicyUpdateResponse: &query.WorkloadPolicyUpdateResponse{
+				Supported: true,
 			},
 		}, nil
+	}
+	if request.CmdMethod == query.CmdMethod_WorkloadPolicyUpdate {
+		if err := c.publishSendErrs[address]; err != nil {
+			return nil, err
+		}
 	}
 	return c.responses[address], nil
 }
@@ -1434,7 +1436,7 @@ func TestWorkloadPolicyActivationRequiresCompatibleRPCProtocol(t *testing.T) {
 	}
 }
 
-func TestWorkloadPolicyActivationRequiresEveryCNProtocol(t *testing.T) {
+func TestWorkloadPolicyActivationRequiresEveryCNCapability(t *testing.T) {
 	result := newWorkloadPolicyVersionResult(
 		catalog.MO_QUERY_WORKLOAD_POLICY_MIN_VERSION,
 		uint64(catalog.MO_QUERY_WORKLOAD_POLICY_MIN_VERSION_OFFSET),
@@ -1445,7 +1447,7 @@ func TestWorkloadPolicyActivationRequiresEveryCNProtocol(t *testing.T) {
 	stub := gostub.StubFunc(&NewBackgroundExec, base)
 	defer stub.Reset()
 
-	t.Run("mixed-version CN blocks activation", func(t *testing.T) {
+	t.Run("missing handler capability blocks activation", func(t *testing.T) {
 		service := t.Name()
 		client := setupWorkloadPolicyQueryCluster(
 			t,
@@ -1463,14 +1465,21 @@ func TestWorkloadPolicyActivationRequiresEveryCNProtocol(t *testing.T) {
 				},
 			},
 		)
-		client.protocolVersions["old-address"] = defines.MORPCVersion5 - 1
+		client.methodSendErrs[query.CmdMethod_WorkloadPolicyUpdate] = map[string]error{
+			"old-address": errors.New("unsupported query command"),
+		}
 
 		err := ensureWorkloadPolicyFeatureReady(
 			context.Background(),
 			&Session{feSessionImpl: feSessionImpl{service: service}},
 		)
-		require.ErrorContains(t, err, "CN cn-old reports version 4")
-		require.Equal(t, 2, client.releases)
+		require.ErrorContains(t, err, "unsupported query command")
+		require.ErrorContains(
+			t,
+			err,
+			"failed to verify workload policy capability on CN cn-old",
+		)
+		require.Equal(t, 1, client.releases)
 	})
 
 	t.Run("unreachable CN blocks activation", func(t *testing.T) {
@@ -1494,7 +1503,7 @@ func TestWorkloadPolicyActivationRequiresEveryCNProtocol(t *testing.T) {
 		require.ErrorContains(
 			t,
 			err,
-			"failed to verify workload policy protocol on CN cn-down",
+			"failed to verify workload policy capability on CN cn-down",
 		)
 		require.Zero(t, client.releases)
 	})
@@ -1528,7 +1537,7 @@ func TestWorkloadPolicyActivationRequiresEveryCNProtocol(t *testing.T) {
 		require.ErrorContains(t, err, "CN cn-no-address has no query address")
 	})
 
-	t.Run("empty protocol response blocks activation", func(t *testing.T) {
+	t.Run("unconfirmed capability blocks activation", func(t *testing.T) {
 		service := t.Name()
 		client := setupWorkloadPolicyQueryCluster(
 			t,
@@ -1539,7 +1548,7 @@ func TestWorkloadPolicyActivationRequiresEveryCNProtocol(t *testing.T) {
 				WorkState:    metadata.WorkState_Working,
 			}},
 		)
-		client.protocolResponses["empty-address"] = &query.Response{}
+		client.capabilityResponses["empty-address"] = &query.Response{}
 
 		err := ensureWorkloadPolicyFeatureReady(
 			context.Background(),
@@ -1548,9 +1557,38 @@ func TestWorkloadPolicyActivationRequiresEveryCNProtocol(t *testing.T) {
 		require.ErrorContains(
 			t,
 			err,
-			"CN cn-empty returned an empty protocol version response",
+			"CN cn-empty did not confirm workload policy capability",
 		)
 		require.Equal(t, 1, client.releases)
+	})
+
+	t.Run("probe is side-effect-free request", func(t *testing.T) {
+		service := t.Name()
+		client := setupWorkloadPolicyQueryCluster(
+			t,
+			service,
+			[]metadata.CNService{{
+				ServiceID:    "cn-ready",
+				QueryAddress: "ready-address",
+				WorkState:    metadata.WorkState_Working,
+			}},
+		)
+
+		require.NoError(
+			t,
+			ensureWorkloadPolicyFeatureReady(
+				context.Background(),
+				&Session{feSessionImpl: feSessionImpl{service: service}},
+			),
+		)
+		client.mu.Lock()
+		defer client.mu.Unlock()
+		request := client.requests["ready-address"]
+		require.Equal(t, query.CmdMethod_WorkloadPolicyUpdate, request.CmdMethod)
+		require.True(t, request.WorkloadPolicyUpdateRequest.Probe)
+		require.Zero(t, request.WorkloadPolicyUpdateRequest.AccountID)
+		require.Empty(t, request.WorkloadPolicyUpdateRequest.Policy)
+		require.Zero(t, request.WorkloadPolicyUpdateRequest.Revision)
 	})
 
 	t.Run("query client is required", func(t *testing.T) {
@@ -1864,9 +1902,7 @@ func TestAlterQueryWorkloadPolicyCommitsAppliesAndPublishes(t *testing.T) {
 	// successful ALTER into a client-visible failure. Catalog reconciliation
 	// is the repair path for the missed CN.
 	client.mu.Lock()
-	client.methodSendErrs[query.CmdMethod_WorkloadPolicyUpdate] = map[string]error{
-		"cn-1": errors.New("injected publish failure"),
-	}
+	client.publishSendErrs["cn-1"] = errors.New("injected publish failure")
 	client.mu.Unlock()
 	revisionResult.Data[0][0] = uint64(13)
 	set := tree.NewAlterAccountConfig(

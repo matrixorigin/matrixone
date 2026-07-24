@@ -179,9 +179,10 @@ The table is installed by the append-only 4.0.5 tenant upgrade at
 `version_offset = 5`, and the publication RPC requires MORPC v5.
 Configuration DDL rejects activation until the latest ready cluster version
 is at least 4.0.5 offset 5 and every CN in the current cluster snapshot
-responds with protocol v5 or later. The all-CN check is required during rolling
-upgrades because a new CN's local protocol version does not prove that an
-already-running old CN supports workload-policy publication or enforcement.
+successfully answers a side-effect-free workload-policy capability probe. The
+all-CN probe is required during rolling upgrades because the protocol version
+is mutable runtime state and does not prove that an already-running old binary
+registered workload-policy publication or enforcement.
 Reads on an older or partially upgraded deployment treat a missing table as
 disabled.
 
