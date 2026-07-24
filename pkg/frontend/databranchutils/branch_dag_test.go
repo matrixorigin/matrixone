@@ -210,11 +210,10 @@ func TestNewDAGCycle(t *testing.T) {
 		if err != nil {
 			t.Fatalf("cyclic DAG construction failed: %v\n%s", err, output)
 		}
-		return
+	} else {
+		// Keep a regression from exhausting the machine's full process stack.
+		debug.SetMaxStack(256 << 10)
 	}
-
-	// Keep a regression from exhausting the machine's full process stack.
-	debug.SetMaxStack(256 << 10)
 
 	dag := NewDAG([]DataBranchMetadata{
 		{TableID: 1, PTableID: 2},
