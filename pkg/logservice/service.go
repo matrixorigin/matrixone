@@ -41,6 +41,7 @@ import (
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/util"
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
@@ -280,10 +281,10 @@ func newServiceWithRetry(
 		}
 		lastErr = err
 	}
-	return nil, fmt.Errorf(
-		"failed to create log service after %d attempts: %w",
-		serviceStartMaxAttempts,
+	return nil, errutil.Wrapf(
 		lastErr,
+		"failed to create log service after %d attempts",
+		serviceStartMaxAttempts,
 	)
 }
 

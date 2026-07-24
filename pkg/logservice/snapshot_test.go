@@ -20,6 +20,7 @@ import (
 
 	"github.com/lni/vfs"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestSnapshotItemValid(t *testing.T) {
@@ -28,13 +29,12 @@ func TestSnapshotItemValid(t *testing.T) {
 		index: 100,
 		dir:   "/tmp/exported",
 	}
+	defer vfs.ReportLeakedFD(si.fs, t)
 	err := si.fs.MkdirAll(si.dir, defaultExportedDirMode)
 	assert.NoError(t, err)
 
-	_, err = si.fs.Create(si.dir + "/snapshot.metadata")
-	assert.NoError(t, err)
-	_, err = si.fs.Create(si.dir + "/snapshot-0000000000000064.gbsnap")
-	assert.NoError(t, err)
+	createAndCloseTestFile(t, si.fs, si.dir+"/snapshot.metadata")
+	createAndCloseTestFile(t, si.fs, si.dir+"/snapshot-0000000000000064.gbsnap")
 
 	v, err := si.Valid()
 	assert.Equal(t, true, v)
@@ -47,13 +47,12 @@ func TestSnapshotItemInValid(t *testing.T) {
 		index: 100,
 		dir:   "/tmp/exported",
 	}
+	defer vfs.ReportLeakedFD(si.fs, t)
 	err := si.fs.MkdirAll(si.dir, defaultExportedDirMode)
 	assert.NoError(t, err)
 
-	_, err = si.fs.Create(si.dir + "/snapshot.m")
-	assert.NoError(t, err)
-	_, err = si.fs.Create(si.dir + "/snapshot-0000000000000064.gbsnap")
-	assert.NoError(t, err)
+	createAndCloseTestFile(t, si.fs, si.dir+"/snapshot.m")
+	createAndCloseTestFile(t, si.fs, si.dir+"/snapshot-0000000000000064.gbsnap")
 
 	v, err := si.Valid()
 	assert.Equal(t, false, v)
@@ -66,11 +65,16 @@ func testPrepareSnapshot(
 	metadataFile := "/snapshot.metadata"
 	err := mgr.cfg.FS.MkdirAll(mgr.snapshotPath(nid, index), defaultExportedDirMode)
 	assert.NoError(t, err)
-	_, err = mgr.cfg.FS.Create(mgr.snapshotPath(nid, index) + metadataFile)
-	assert.NoError(t, err)
-	_, err = mgr.cfg.FS.Create(
+	createAndCloseTestFile(t, mgr.cfg.FS, mgr.snapshotPath(nid, index)+metadataFile)
+	createAndCloseTestFile(t, mgr.cfg.FS,
 		fmt.Sprintf("%s/snapshot-%016X.gbsnap", mgr.snapshotPath(nid, index), index))
-	assert.NoError(t, err)
+}
+
+func createAndCloseTestFile(t *testing.T, fs vfs.FS, path string) {
+	t.Helper()
+	f, err := fs.Create(path)
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
 }
 
 func TestInitSnapshotMgr(t *testing.T) {
@@ -153,11 +157,9 @@ func TestAddSnapshot(t *testing.T) {
 	metadataFile := "/snapshot.bad"
 	err = mgr.cfg.FS.MkdirAll(mgr.snapshotPath(nid, index), defaultExportedDirMode)
 	assert.NoError(t, err)
-	_, err = mgr.cfg.FS.Create(mgr.snapshotPath(nid, index) + metadataFile)
-	assert.NoError(t, err)
-	_, err = mgr.cfg.FS.Create(
+	createAndCloseTestFile(t, mgr.cfg.FS, mgr.snapshotPath(nid, index)+metadataFile)
+	createAndCloseTestFile(t, mgr.cfg.FS,
 		fmt.Sprintf("%s/snapshot-%016X.gbsnap", mgr.snapshotPath(nid, index), index))
-	assert.NoError(t, err)
 	err = mgr.Add(shardID, replicaID, uint64(index))
 	assert.Error(t, err)
 	assert.Equal(t, 2, mgr.Count(shardID, replicaID))
@@ -167,11 +169,9 @@ func TestAddSnapshot(t *testing.T) {
 	metadataFile = "/snapshot.metadata"
 	err = mgr.cfg.FS.MkdirAll(mgr.snapshotPath(nid, index), defaultExportedDirMode)
 	assert.NoError(t, err)
-	_, err = mgr.cfg.FS.Create(mgr.snapshotPath(nid, index) + metadataFile)
-	assert.NoError(t, err)
-	_, err = mgr.cfg.FS.Create(
+	createAndCloseTestFile(t, mgr.cfg.FS, mgr.snapshotPath(nid, index)+metadataFile)
+	createAndCloseTestFile(t, mgr.cfg.FS,
 		fmt.Sprintf("%s/snapshot.gbsnap", mgr.snapshotPath(nid, index)))
-	assert.NoError(t, err)
 	err = mgr.Add(shardID, replicaID, uint64(index))
 	assert.Error(t, err)
 	assert.Equal(t, 2, mgr.Count(shardID, replicaID))

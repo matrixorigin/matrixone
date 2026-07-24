@@ -22,6 +22,7 @@ import (
 	"net"
 	"runtime/debug"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -60,7 +61,9 @@ func runServiceTest(t *testing.T,
 		cfg = getServiceTestConfig()
 		return cfg
 	}
-	defer vfs.ReportLeakedFD(cfg.FS, t)
+	defer func() {
+		vfs.ReportLeakedFD(cfg.FS, t)
+	}()
 	service, err := NewServiceWithRetry(genCfg,
 		newFS(),
 		nil,
@@ -108,7 +111,9 @@ func TestNewService(t *testing.T) {
 		cfg = getServiceTestConfig()
 		return cfg
 	}
-	defer vfs.ReportLeakedFD(cfg.FS, t)
+	defer func() {
+		vfs.ReportLeakedFD(cfg.FS, t)
+	}()
 	service, err := NewServiceWithRetry(genCfg,
 		newFS(),
 		nil,
@@ -145,6 +150,7 @@ func TestNewServiceWithRetryStopsAfterMaxAttempts(t *testing.T) {
 	require.Nil(t, service)
 	require.Error(t, err)
 	require.ErrorContains(t, err, "address already in use")
+	require.ErrorIs(t, err, syscall.EADDRINUSE)
 	require.Equal(t, serviceStartMaxAttempts, attempts)
 }
 
@@ -272,7 +278,9 @@ func TestNewServiceRetry(t *testing.T) {
 			return cfg
 		}
 	}
-	defer vfs.ReportLeakedFD(cfg.FS, t)
+	defer func() {
+		vfs.ReportLeakedFD(cfg.FS, t)
+	}()
 	service, err := NewServiceWithRetry(genCfg,
 		newFS(),
 		nil,

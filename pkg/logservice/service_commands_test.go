@@ -427,7 +427,9 @@ func TestServiceBootstrapShard(t *testing.T) {
 		cfg = getServiceTestConfig()
 		return cfg
 	}
-	defer vfs.ReportLeakedFD(cfg.FS, t)
+	defer func() {
+		vfs.ReportLeakedFD(cfg.FS, t)
+	}()
 	service, err := NewServiceWithRetry(genCfg,
 		newFS(),
 		nil,

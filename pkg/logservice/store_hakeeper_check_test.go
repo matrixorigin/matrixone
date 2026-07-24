@@ -212,15 +212,17 @@ func runHAKeeperStoreTest(t *testing.T, startLogReplica bool, fn func(*testing.T
 		cfg = getStoreTestConfig()
 		return cfg
 	}
-	defer vfs.ReportLeakedFD(cfg.FS, t)
+	defer func() {
+		vfs.ReportLeakedFD(cfg.FS, t)
+	}()
 	store, err := getTestStore(genCfg, startLogReplica, nil)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	defer func() {
 		assert.NoError(t, store.close())
 	}()
 	peers := make(map[uint64]dragonboat.Target)
 	peers[1] = store.id()
-	assert.NoError(t, store.startHAKeeperReplica(1, peers, false))
+	require.NoError(t, store.startHAKeeperReplica(1, peers, false))
 	fn(t, store)
 }
 
@@ -232,7 +234,9 @@ func runHakeeperTaskServiceTest(t *testing.T, fn func(*testing.T, *store, taskse
 		cfg.HAKeeperConfig.CNStoreTimeout.Duration = 5 * time.Second
 		return cfg
 	}
-	defer vfs.ReportLeakedFD(cfg.FS, t)
+	defer func() {
+		vfs.ReportLeakedFD(cfg.FS, t)
+	}()
 
 	taskService := taskservice.NewTaskService(runtime.DefaultRuntime(), taskservice.NewMemTaskStorage())
 	defer func() {
@@ -240,7 +244,7 @@ func runHakeeperTaskServiceTest(t *testing.T, fn func(*testing.T, *store, taskse
 	}()
 
 	store, err := getTestStore(genCfg, false, taskService)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	defer func() {
 		assert.NoError(t, store.close())
 	}()

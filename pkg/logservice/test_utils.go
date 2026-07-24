@@ -16,7 +16,6 @@ package logservice
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"math/rand"
 	"sync"
@@ -27,10 +26,12 @@ import (
 	"github.com/lni/goutils/leaktest"
 	"github.com/lni/vfs"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 )
 
@@ -45,7 +46,7 @@ const (
 	testPortCount = testPortLimit - testPortMin
 )
 
-var errNoAvailableTestPort = errors.New("no available test port")
+var errNoAvailableTestPort = moerr.NewInternalErrorNoCtx("no available test port")
 
 var randomPorts = allocatedPorts{
 	ports: map[int]struct{}{},
@@ -57,10 +58,10 @@ func (a *allocatedPorts) allocate(
 	start int,
 ) ([]int, error) {
 	if count <= 0 || count > testPortCount {
-		return nil, fmt.Errorf("%w: invalid requested count %d", errNoAvailableTestPort, count)
+		return nil, errutil.Wrapf(errNoAvailableTestPort, "invalid requested count %d", count)
 	}
 	if start < 0 || start >= testPortCount {
-		return nil, fmt.Errorf("%w: invalid start offset %d", errNoAvailableTestPort, start)
+		return nil, errutil.Wrapf(errNoAvailableTestPort, "invalid start offset %d", start)
 	}
 
 	a.Lock()
@@ -81,9 +82,9 @@ func (a *allocatedPorts) allocate(
 		available = append(available, port)
 	}
 	if len(available) != count {
-		return nil, fmt.Errorf(
-			"%w: requested %d in range [%d, %d)",
+		return nil, errutil.Wrapf(
 			errNoAvailableTestPort,
+			"requested %d in range [%d, %d)",
 			count,
 			testPortMin,
 			testPortLimit,
@@ -160,7 +161,9 @@ func RunClientTest(
 				cfg = getServiceTestConfig()
 				return cfg
 			}
-			defer vfs.ReportLeakedFD(cfg.FS, t)
+			defer func() {
+				vfs.ReportLeakedFD(cfg.FS, t)
+			}()
 			service, err := NewServiceWithRetry(genCfg,
 				newFS(),
 				nil,
@@ -168,14 +171,14 @@ func RunClientTest(
 					return true
 				}),
 			)
-			assert.NoError(t, err)
+			require.NoError(t, err)
 			defer func() {
 				assert.NoError(t, service.Close())
 			}()
 
 			init := make(map[uint64]string)
 			init[2] = service.ID()
-			assert.NoError(t, service.store.startReplica(1, 2, init, false))
+			require.NoError(t, service.store.startReplica(1, 2, init, false))
 
 			if cCfgFn == nil {
 				cCfgFn = getClientConfig
@@ -185,7 +188,7 @@ func RunClientTest(
 			ctx, cancel := context.WithTimeoutCause(context.Background(), time.Second*3, moerr.CauseRunClientTest)
 			defer cancel()
 			c, err := NewClient(ctx, sid, scfg)
-			assert.NoError(t, err)
+			require.NoError(t, err)
 			defer func() {
 				assert.NoError(t, c.Close())
 			}()

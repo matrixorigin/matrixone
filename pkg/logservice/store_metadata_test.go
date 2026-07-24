@@ -90,7 +90,9 @@ func TestStartReplicas(t *testing.T) {
 		require.NoError(t, mkdirAll(cfg.DataDir, cfg.FS))
 		return cfg
 	}
-	defer vfs.ReportLeakedFD(cfg.FS, t)
+	defer func() {
+		vfs.ReportLeakedFD(cfg.FS, t)
+	}()
 	func() {
 		store, err := getTestStore(genCfg, false, nil)
 		require.NoError(t, err)

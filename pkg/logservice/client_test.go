@@ -105,7 +105,9 @@ func TestClientCanBeConnectedByReverseProxy(t *testing.T) {
 		cfg = getServiceTestConfig()
 		return cfg
 	}
-	defer vfs.ReportLeakedFD(cfg.FS, t)
+	defer func() {
+		vfs.ReportLeakedFD(cfg.FS, t)
+	}()
 	service, err := NewServiceWithRetry(
 		genCfg,
 		newFS(),
@@ -121,7 +123,7 @@ func TestClientCanBeConnectedByReverseProxy(t *testing.T) {
 
 	init := make(map[uint64]string)
 	init[2] = service.ID()
-	assert.NoError(t, service.store.startReplica(1, 2, init, false))
+	require.NoError(t, service.store.startReplica(1, 2, init, false))
 
 	svcAddress := cfg.LogServiceServiceAddr()
 	scfg := ClientConfig{
@@ -182,7 +184,9 @@ func TestClientCreationFallsBackFromUnreachableReplicaAddress(t *testing.T) {
 		cfg = getServiceTestConfig()
 		return cfg
 	}
-	defer vfs.ReportLeakedFD(cfg.FS, t)
+	defer func() {
+		vfs.ReportLeakedFD(cfg.FS, t)
+	}()
 	service, err := NewServiceWithRetry(
 		genCfg,
 		newFS(),
