@@ -173,6 +173,34 @@ func TestSimpleCAllocatorMmapCacheIdleExpiry(t *testing.T) {
 	)
 }
 
+func TestSimpleCAllocatorMmapCacheIgnoresExpiredTimerGeneration(t *testing.T) {
+	const size = simpleCAllocatorMmapThreshold
+	allocator := newCachedTestSimpleCAllocator(
+		func() uint64 { return size },
+		time.Hour,
+	)
+	t.Cleanup(allocator.mmapCache.drain)
+
+	first, err := allocator.Allocate(size)
+	require.NoError(t, err)
+	allocator.Deallocate(first, size)
+
+	allocator.mmapCache.mu.Lock()
+	expiredGeneration := allocator.mmapCache.timerGeneration
+	allocator.mmapCache.mu.Unlock()
+	allocator.mmapCache.drain()
+
+	second, err := allocator.Allocate(size)
+	require.NoError(t, err)
+	allocator.Deallocate(second, size)
+	require.Equal(t, uint64(size), allocator.mmapCache.cachedBytes())
+
+	// Model a callback that became runnable before drain stopped the old timer.
+	// It must not release mappings owned by the new timer generation.
+	allocator.mmapCache.expire(expiredGeneration)
+	require.Equal(t, uint64(size), allocator.mmapCache.cachedBytes())
+}
+
 func TestSimpleCAllocatorMmapCacheConcurrentReuse(t *testing.T) {
 	const (
 		size       = simpleCAllocatorMmapThreshold

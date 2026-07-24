@@ -35,6 +35,9 @@ type simpleCAllocatorMmapCache struct {
 	bytes   uint64
 	lastPut time.Time
 	timer   *time.Timer
+	// timerGeneration prevents a callback that was already runnable when drain
+	// stopped its timer from acting on a later cache generation.
+	timerGeneration uint64
 
 	capacity         func() uint64
 	idle             time.Duration
@@ -106,17 +109,22 @@ func (c *simpleCAllocatorMmapCache) put(slice []byte) bool {
 	c.lastPut = time.Now()
 	c.updateGaugeLocked()
 	if c.timer == nil {
-		c.timer = time.AfterFunc(c.idle, c.expire)
+		c.timerGeneration++
+		generation := c.timerGeneration
+		c.timer = time.AfterFunc(c.idle, func() {
+			c.expire(generation)
+		})
 	} else {
 		c.timer.Reset(c.idle)
 	}
 	return true
 }
 
-func (c *simpleCAllocatorMmapCache) expire() {
+func (c *simpleCAllocatorMmapCache) expire(generation uint64) {
 	c.mu.Lock()
-	// drain may have stopped the timer after its callback became runnable.
-	if c.timer == nil {
+	// drain may have stopped the timer after its callback became runnable and
+	// a subsequent put may already have created another timer.
+	if c.timer == nil || generation != c.timerGeneration {
 		c.mu.Unlock()
 		return
 	}
@@ -130,6 +138,7 @@ func (c *simpleCAllocatorMmapCache) expire() {
 	c.bySize = make(map[uint64][][]byte)
 	c.bytes = 0
 	c.timer = nil
+	c.timerGeneration++
 	c.updateGaugeLocked()
 	c.mu.Unlock()
 
@@ -148,6 +157,7 @@ func (c *simpleCAllocatorMmapCache) drain() {
 		c.timer.Stop()
 		c.timer = nil
 	}
+	c.timerGeneration++
 	entries := c.bySize
 	c.bySize = make(map[uint64][][]byte)
 	c.bytes = 0

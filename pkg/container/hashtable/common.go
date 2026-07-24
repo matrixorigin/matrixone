@@ -15,6 +15,7 @@
 package hashtable
 
 import (
+	"math/bits"
 	"unsafe"
 )
 
@@ -39,6 +40,13 @@ func maxElemCnt(cellCnt, cellSize uint64) uint64 {
 		return cellCnt * 3 / 4
 	}
 	return cellCnt * 4 / 5
+}
+
+func powerOfTwoBits(value uint64) uint8 {
+	if value == 0 || value&(value-1) != 0 {
+		panic("value must be a power of two")
+	}
+	return uint8(bits.TrailingZeros64(value))
 }
 
 // EstimateInt64HashMapSize returns the cell allocation required by an
