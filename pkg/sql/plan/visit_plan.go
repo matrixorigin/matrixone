@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
@@ -256,5 +257,66 @@ func (vq *VisitPlan) Visit(ctx context.Context) error {
 
 	}
 
+	return nil
+}
+
+// visitMissingNodeExprs applies expression rules to node fields that VisitPlan
+// does not currently cover. Keeping this pass separate makes callers safe both
+// before and after those fields are added to the generic visitor: parameter
+// collection is map-backed, and ordinal normalization tracks seen ParamRefs.
+func visitMissingNodeExprs(
+	qry *Query,
+	roots []int32,
+	rules []VisitPlanRule,
+) error {
+	visited := make(map[int32]struct{})
+	var visitNode func(int32) error
+	visitNode = func(nodeID int32) error {
+		if _, ok := visited[nodeID]; ok {
+			return nil
+		}
+		if nodeID < 0 || int(nodeID) >= len(qry.Nodes) {
+			return moerr.NewInternalErrorNoCtx("invalid query node id")
+		}
+		visited[nodeID] = struct{}{}
+		node := qry.Nodes[nodeID]
+		for _, child := range node.Children {
+			if err := visitNode(child); err != nil {
+				return err
+			}
+		}
+		for _, rule := range rules {
+			if !rule.IsApplyExpr() {
+				continue
+			}
+			for i := range node.GroupBy {
+				var err error
+				node.GroupBy[i], err = rule.ApplyExpr(node.GroupBy[i])
+				if err != nil {
+					return err
+				}
+			}
+			for i := range node.AggList {
+				var err error
+				node.AggList[i], err = rule.ApplyExpr(node.AggList[i])
+				if err != nil {
+					return err
+				}
+			}
+			for i := range node.WinSpecList {
+				var err error
+				node.WinSpecList[i], err = rule.ApplyExpr(node.WinSpecList[i])
+				if err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+	for _, root := range roots {
+		if err := visitNode(root); err != nil {
+			return err
+		}
+	}
 	return nil
 }

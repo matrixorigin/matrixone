@@ -897,7 +897,13 @@ func handleCmdFieldList(ses FeSession, execCtx *ExecCtx, icfl *InternalCmdFieldL
 	return err
 }
 
-func doSetVar(ses *Session, execCtx *ExecCtx, sv *tree.SetVar, sql string) error {
+func doSetVar(
+	ses *Session,
+	execCtx *ExecCtx,
+	sv *tree.SetVar,
+	sql string,
+	preparedExpression bool,
+) error {
 	var err error = nil
 	var ok bool
 	var userVarIsBin bool
@@ -950,7 +956,8 @@ func doSetVar(ses *Session, execCtx *ExecCtx, sv *tree.SetVar, sql string) error
 		var value interface{}
 		userVarIsBin = false
 
-		value, err = getExprValue(assign.Value, ses, execCtx, &userVarIsBin)
+		value, err = getExprValueWithPrepareMode(
+			assign.Value, ses, execCtx, preparedExpression, &userVarIsBin)
 		if err != nil {
 			return err
 		}
@@ -1050,12 +1057,21 @@ func doSetVar(ses *Session, execCtx *ExecCtx, sv *tree.SetVar, sql string) error
 handle setvar
 */
 func handleSetVar(ses FeSession, execCtx *ExecCtx, sv *tree.SetVar, sql string) error {
-	err := doSetVar(ses.(*Session), execCtx, sv, sql)
+	err := doSetVar(
+		ses.(*Session), execCtx, sv, sql, preparedSetExpression(execCtx))
 	if err != nil {
 		return err
 	}
 
 	return nil
+}
+
+func preparedSetExpression(execCtx *ExecCtx) bool {
+	if execCtx == nil {
+		return false
+	}
+	cw, ok := execCtx.cw.(*TxnComputationWrapper)
+	return ok && cw.ifIsExeccute
 }
 
 func doShowErrors(ses *Session, execCtx *ExecCtx) error {
@@ -2782,7 +2798,22 @@ func buildMoExplainPhyPlan(
 	return err
 }
 
-func buildPlan(reqCtx context.Context, ses FeSession, ctx plan2.CompilerContext, stmt tree.Statement) (*plan2.Plan, error) {
+func buildPlan(
+	reqCtx context.Context,
+	ses FeSession,
+	ctx plan2.CompilerContext,
+	stmt tree.Statement,
+) (*plan2.Plan, error) {
+	return buildPlanWithPrepareMode(reqCtx, ses, ctx, stmt, false)
+}
+
+func buildPlanWithPrepareMode(
+	reqCtx context.Context,
+	ses FeSession,
+	ctx plan2.CompilerContext,
+	stmt tree.Statement,
+	forcePrepare bool,
+) (*plan2.Plan, error) {
 	var ret *plan2.Plan
 	var err error
 
@@ -2834,7 +2865,7 @@ func buildPlan(reqCtx context.Context, ses FeSession, ctx plan2.CompilerContext,
 		stats.PlanEnd()
 	}()
 
-	isPrepareStmt := false
+	isPrepareStmt := forcePrepare
 	if ses != nil {
 		accId, err := defines.GetAccountId(reqCtx)
 		if err != nil {
@@ -2844,7 +2875,7 @@ func buildPlan(reqCtx context.Context, ses FeSession, ctx plan2.CompilerContext,
 
 		if len(ses.GetSql()) > 8 {
 			prefix := strings.ToLower(ses.GetSql()[:8])
-			isPrepareStmt = prefix == "execute " || prefix == "prepare "
+			isPrepareStmt = isPrepareStmt || prefix == "execute " || prefix == "prepare "
 		}
 	}
 	// Handle specific statement types
@@ -2859,6 +2890,9 @@ func buildPlan(reqCtx context.Context, ses FeSession, ctx plan2.CompilerContext,
 
 	if ret != nil {
 		ret.IsPrepare = isPrepareStmt
+		if forcePrepare {
+			err = plan2.NormalizePrepareParamRefs(reqCtx, ret)
+		}
 		return ret, err
 	}
 
@@ -2886,6 +2920,9 @@ func buildPlan(reqCtx context.Context, ses FeSession, ctx plan2.CompilerContext,
 
 	if ret != nil {
 		ret.IsPrepare = isPrepareStmt
+		if forcePrepare && err == nil {
+			err = plan2.NormalizePrepareParamRefs(reqCtx, ret)
+		}
 	}
 	return ret, err
 }
@@ -2968,6 +3005,13 @@ func checkModify(plan0 *plan.Plan, resolveFn func(string, string, *plan2.Snapsho
 	return false, nil
 }
 
+func cachedPlanForInput(ses *Session, input *UserInput) *cachedPlan {
+	if !input.canUsePlanCache() {
+		return nil
+	}
+	return ses.getCachedPlan(input.getHash())
+}
+
 var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng engine.Engine, proc *process.Process, ses *Session) ([]ComputationWrapper, error) {
 	// COM_QUERY carries the switch captured before its first statement. Other
 	// protocols retain their existing session-level behavior.
@@ -2990,7 +3034,7 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 		tcw.SetRemapDb(execCtx.input.remapDb)
 		cws = append(cws, tcw)
 		return cws, nil
-	} else if cached := ses.getCachedPlan(execCtx.input.getHash()); cached != nil {
+	} else if cached := cachedPlanForInput(ses, execCtx.input); cached != nil {
 		var remapErr error
 		statementSchedulingSQL, schedulingErr := schedulingSQLByStatementWithSQLMode(
 			execCtx.reqCtx, execCtx.input.getSql(), parserSQLMode)
@@ -4355,7 +4399,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		ses.p = nil
 	}()
 
-	canCache := !stagedSQLMode
+	canCache := !stagedSQLMode && input.canUsePlanCache()
 	Cached := false
 	defer func() {
 		execCtx.stmt = nil
