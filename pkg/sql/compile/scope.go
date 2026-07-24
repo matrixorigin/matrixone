@@ -134,6 +134,8 @@ func refreshZeroTemporalWritePolicy(root vm.Operator, reject bool) error {
 }
 
 func (s *Scope) resetForReuse(c *Compile) (err error) {
+	s.resourceExecutedLocally = false
+
 	if err = vm.HandleAllOp(s.RootOp, func(parentOp vm.Operator, op vm.Operator) error {
 		if op.OpType() == vm.Output {
 			op.(*output.Output).Func = c.fill
@@ -446,6 +448,8 @@ func cleanPipelineWitchStartFail(sp *Scope, fail error, isPrepare bool) {
 
 // RemoteRun send the scope to a remote node for execution.
 func (s *Scope) RemoteRun(c *Compile) error {
+	s.resourceExecutedLocally = false
+
 	if s.ScopeAnalyzer == nil {
 		s.ScopeAnalyzer = NewScopeAnalyzer()
 	}

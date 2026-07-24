@@ -147,13 +147,12 @@ func (update *MultiUpdate) check_null_and_insert_main_table(
 
 	crs := analyzer.GetOpCounterSet()
 	newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
-	if err = source.Write(newCtx, insertBatch); err != nil {
+	if err = process.MeasureFilesystemWaitErr(analyzer, func() error {
+		return source.Write(newCtx, insertBatch)
+	}); err != nil {
 		return err
 	}
 	analyzer.AddWrittenRows(int64(newRowCount))
-	analyzer.AddS3RequestCount(crs)
-	analyzer.AddFileServiceCacheInfo(crs)
-	analyzer.AddDiskIO(crs)
 	return nil
 }
 
@@ -233,14 +232,13 @@ func (update *MultiUpdate) insert_table(
 
 	crs := analyzer.GetOpCounterSet()
 	newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
-	err = info.Source.Write(newCtx, writeBatch)
+	err = process.MeasureFilesystemWaitErr(analyzer, func() error {
+		return info.Source.Write(newCtx, writeBatch)
+	})
 	if err != nil {
 		return err
 	}
 	analyzer.AddWrittenRows(int64(writeBatch.RowCount()))
-	analyzer.AddS3RequestCount(crs)
-	analyzer.AddFileServiceCacheInfo(crs)
-	analyzer.AddDiskIO(crs)
 	return
 }
 
@@ -349,14 +347,13 @@ func (update *MultiUpdate) check_null_and_insert_table(
 
 		crs := analyzer.GetOpCounterSet()
 		newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
-		err = source.Write(newCtx, insertBatch)
+		err = process.MeasureFilesystemWaitErr(analyzer, func() error {
+			return source.Write(newCtx, insertBatch)
+		})
 		if err != nil {
 			return err
 		}
 		analyzer.AddWrittenRows(int64(insertBatch.RowCount()))
-		analyzer.AddS3RequestCount(crs)
-		analyzer.AddFileServiceCacheInfo(crs)
-		analyzer.AddDiskIO(crs)
 	}
 	return
 }

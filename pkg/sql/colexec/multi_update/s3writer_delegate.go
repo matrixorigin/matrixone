@@ -590,7 +590,9 @@ func (writer *s3WriterDelegate) sortAndSyncOneTable(
 		// When cleanBatchAfterUse is true, the batch is exclusively owned
 		// (cloned), so we can transfer it to the sinker without copying.
 		if cleanBatchAfterUse {
-			owned, writeErr := s3Writer.WriteOwned(writeCtx, bats[i])
+			owned, writeErr := process.MeasureFilesystemWait(analyzer, func() (bool, error) {
+				return s3Writer.WriteOwned(writeCtx, bats[i])
+			})
 			if writeErr != nil {
 				err = writeErr
 				return
@@ -605,7 +607,9 @@ func (writer *s3WriterDelegate) sortAndSyncOneTable(
 			bats[i] = nil
 			continue
 		}
-		if err = s3Writer.Write(writeCtx, bats[i]); err != nil {
+		if err = process.MeasureFilesystemWaitErr(analyzer, func() error {
+			return s3Writer.Write(writeCtx, bats[i])
+		}); err != nil {
 			return
 		}
 
@@ -615,13 +619,12 @@ func (writer *s3WriterDelegate) sortAndSyncOneTable(
 		bats[i] = nil
 	}
 
-	if _, err = s3Writer.Sync(writeCtx); err != nil {
+	if err = process.MeasureFilesystemWaitErr(analyzer, func() error {
+		_, syncErr := s3Writer.Sync(writeCtx)
+		return syncErr
+	}); err != nil {
 		return
 	}
-
-	analyzer.AddS3RequestCount(counterSet)
-	analyzer.AddFileServiceCacheInfo(counterSet)
-	analyzer.AddDiskIO(counterSet)
 
 	if blockInfoBat, err = s3Writer.FillBlockInfoBat(); err != nil {
 		return
@@ -709,7 +712,9 @@ func (writer *s3WriterDelegate) flushTailAndWriteToOutput(proc *process.Process,
 		if s3w == nil {
 			continue
 		}
-		stats, syncErr := s3w.Sync(writeCtx)
+		stats, syncErr := process.MeasureFilesystemWait(analyzer, func() ([]objectio.ObjectStats, error) {
+			return s3w.Sync(writeCtx)
+		})
 		if syncErr != nil {
 			return syncErr
 		}
@@ -728,9 +733,6 @@ func (writer *s3WriterDelegate) flushTailAndWriteToOutput(proc *process.Process,
 			return
 		}
 	}
-	analyzer.AddS3RequestCount(counterSet)
-	analyzer.AddFileServiceCacheInfo(counterSet)
-	analyzer.AddDiskIO(counterSet)
 
 	// Flush remaining deletes — always call sortAndSync so that accumulated
 	// deleteBatches are processed through prepareDeleteBatches into
