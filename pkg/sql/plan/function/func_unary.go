@@ -7048,6 +7048,7 @@ var userLevelLocks = struct {
 	ownerSessions          map[string]string
 	pendingCleanups        map[detachedUserLevelLockCleanupKey]detachedUserLevelLockCleanupRequest
 	retainedCloseCleanups  map[string]retainedUserLevelLockCloseCleanup
+	cleanupReservations    map[detachedUserLevelLockCleanupKey]uint64
 	retainedCleanupStarted bool
 }{
 	counts:                make(map[userLevelLockKey]uint64),
@@ -7056,6 +7057,7 @@ var userLevelLocks = struct {
 	ownerSessions:         make(map[string]string),
 	pendingCleanups:       make(map[detachedUserLevelLockCleanupKey]detachedUserLevelLockCleanupRequest),
 	retainedCloseCleanups: make(map[string]retainedUserLevelLockCloseCleanup),
+	cleanupReservations:   make(map[detachedUserLevelLockCleanupKey]uint64),
 }
 
 var detachedUserLevelLockCleanups = struct {
@@ -7198,6 +7200,17 @@ func userLevelLockAttemptTxnID(owner string, connID uint64, name string) []byte 
 	return []byte(fmt.Sprintf("mo-user-level-lock\x00%s\x00%s\x00%d\x00%s", owner, name, connID, hex.EncodeToString(attempt[:])))
 }
 
+func userLevelLockFailedAttemptCleanupKey(ls lockservice.LockService, owner string, connID uint64, name, kind string, txnID []byte) detachedUserLevelLockCleanupKey {
+	sum := sha256.Sum256(txnID)
+	return detachedUserLevelLockCleanupKey{
+		serviceID: ls.GetServiceID(),
+		owner:     owner,
+		name:      fmt.Sprintf("%s:%s", name, hex.EncodeToString(sum[:8])),
+		connID:    connID,
+		kind:      kind,
+	}
+}
+
 func userLevelLockTxnIDOld(owner, name string) []byte {
 	return []byte("mo-user-level-lock\x00" + owner + "\x00" + name)
 }
@@ -7286,9 +7299,11 @@ func cleanupFailedUserLevelLockTxn(
 	attemptCtx, cancel := userLevelLockCleanupAttemptContext(context.Background())
 	defer cancel()
 	if err := unlockUserLevelLockTxnID(attemptCtx, ls, txnID); err == nil {
+		releaseRetainedUserLevelLockTxnCleanupSlot(key)
 		return nil
 	}
 	if handoffDetachedUserLevelLockTxnCleanup(ctx, ls, key, [][]byte{txnID}) {
+		releaseRetainedUserLevelLockTxnCleanupSlot(key)
 		return nil
 	}
 	if retainDetachedUserLevelLockTxnCleanup(ls, key, [][]byte{txnID}) {
@@ -7719,14 +7734,63 @@ func handoffDetachedUserLevelLockBacklogCleanups(ctx context.Context, requests [
 	}
 }
 
+func retainedUserLevelLockCleanupEntryCountLocked() int {
+	count := len(userLevelLocks.pendingCleanups) + len(userLevelLocks.retainedCloseCleanups)
+	for key := range userLevelLocks.cleanupReservations {
+		if _, ok := userLevelLocks.pendingCleanups[key]; !ok {
+			count++
+		}
+	}
+	return count
+}
+
+func reserveRetainedUserLevelLockTxnCleanupSlot(ls lockservice.LockService, key detachedUserLevelLockCleanupKey) bool {
+	if ls == nil || key.serviceID == "" || key.owner == "" || key.name == "" {
+		return false
+	}
+	userLevelLocks.Lock()
+	if _, ok := userLevelLocks.pendingCleanups[key]; !ok && userLevelLocks.cleanupReservations[key] == 0 &&
+		retainedUserLevelLockCleanupEntryCountLocked() >= userLevelLockRetainedCleanupMaxEntries {
+		userLevelLocks.Unlock()
+		return false
+	}
+	userLevelLocks.cleanupReservations[key]++
+	userLevelLocks.Unlock()
+	return true
+}
+
+func releaseRetainedUserLevelLockTxnCleanupSlot(key detachedUserLevelLockCleanupKey) {
+	userLevelLocks.Lock()
+	if count := userLevelLocks.cleanupReservations[key]; count > 1 {
+		userLevelLocks.cleanupReservations[key] = count - 1
+	} else {
+		delete(userLevelLocks.cleanupReservations, key)
+	}
+	userLevelLocks.Unlock()
+}
+
+func consumeRetainedUserLevelLockTxnCleanupSlotLocked(key detachedUserLevelLockCleanupKey) bool {
+	count := userLevelLocks.cleanupReservations[key]
+	if count > 1 {
+		userLevelLocks.cleanupReservations[key] = count - 1
+		return true
+	}
+	if count == 1 {
+		delete(userLevelLocks.cleanupReservations, key)
+		return true
+	}
+	return false
+}
+
 func retainDetachedUserLevelLockTxnCleanup(ls lockservice.LockService, key detachedUserLevelLockCleanupKey, txnIDs [][]byte) bool {
 	if ls == nil || key.serviceID == "" || key.owner == "" || key.name == "" || len(txnIDs) == 0 {
 		return false
 	}
 	userLevelLocks.Lock()
 	req := userLevelLocks.pendingCleanups[key]
+	reserved := consumeRetainedUserLevelLockTxnCleanupSlotLocked(key)
 	if req.ls == nil {
-		if len(userLevelLocks.pendingCleanups)+len(userLevelLocks.retainedCloseCleanups) >= userLevelLockRetainedCleanupMaxEntries {
+		if !reserved && retainedUserLevelLockCleanupEntryCountLocked() >= userLevelLockRetainedCleanupMaxEntries {
 			userLevelLocks.Unlock()
 			return false
 		}
@@ -7734,6 +7798,9 @@ func retainDetachedUserLevelLockTxnCleanup(ls lockservice.LockService, key detac
 	}
 	entry := &detachedUserLevelLockCleanupEntry{txnIDs: cloneUserLevelLockTxnIDs(req.txnIDs)}
 	if !mergeDetachedUserLevelLockTxnIDs(entry, txnIDs) {
+		if reserved {
+			userLevelLocks.cleanupReservations[key]++
+		}
 		userLevelLocks.Unlock()
 		return false
 	}
@@ -7750,7 +7817,8 @@ func retainUserLevelLockCloseCleanup(ls lockservice.LockService, owners []string
 	}
 	userLevelLocks.Lock()
 	if _, ok := userLevelLocks.retainedCloseCleanups[owner]; !ok &&
-		len(userLevelLocks.pendingCleanups)+len(userLevelLocks.retainedCloseCleanups) >= userLevelLockRetainedCleanupMaxEntries {
+		userLevelLocks.byOwner[owner] == nil &&
+		retainedUserLevelLockCleanupEntryCountLocked() >= userLevelLockRetainedCleanupMaxEntries {
 		userLevelLocks.Unlock()
 		return false
 	}
@@ -8034,19 +8102,17 @@ func unlockUserLevelLockProbe(ctx context.Context, ls lockservice.LockService, o
 	if err == nil {
 		return nil
 	}
-	key := detachedUserLevelLockCleanupKey{
-		serviceID: ls.GetServiceID(),
-		owner:     owner,
-		name:      name,
-		connID:    connID,
-		kind:      "probe:" + probeType,
-	}
-	if !handoffDetachedUserLevelLockTxnCleanup(
+	key := userLevelLockFailedAttemptCleanupKey(ls, owner, connID, name, "probe:"+probeType, txnID)
+	if handoffDetachedUserLevelLockTxnCleanup(
 		ctx,
 		ls,
 		key,
 		[][]byte{txnID},
-	) && !retainDetachedUserLevelLockTxnCleanup(ls, key, [][]byte{txnID}) {
+	) {
+		releaseRetainedUserLevelLockTxnCleanupSlot(key)
+		return err
+	}
+	if !retainDetachedUserLevelLockTxnCleanup(ls, key, [][]byte{txnID}) {
 		return moerr.NewInternalErrorNoCtxf("user-level lock probe cleanup queue is full for %s", name)
 	}
 	return err
@@ -8307,6 +8373,10 @@ func getUserLevelLock(name string, timeout float64, proc *process.Process) (int6
 	defer cancel()
 
 	txnID := userLevelLockAttemptTxnID(owner, connID, name)
+	cleanupKey := userLevelLockFailedAttemptCleanupKey(ls, owner, connID, name, "get_lock_failed", txnID)
+	if !reserveRetainedUserLevelLockTxnCleanupSlot(ls, cleanupKey) {
+		return 0, moerr.NewInternalErrorNoCtxf("user-level lock cleanup capacity is full for %s", name)
+	}
 	_, err = ls.Lock(
 		ctx,
 		userLevelLockTableID,
@@ -8317,13 +8387,7 @@ func getUserLevelLock(name string, timeout float64, proc *process.Process) (int6
 		cleanupErr := cleanupFailedUserLevelLockTxn(
 			ctx,
 			ls,
-			detachedUserLevelLockCleanupKey{
-				serviceID: ls.GetServiceID(),
-				owner:     owner,
-				name:      name,
-				connID:    connID,
-				kind:      "get_lock_failed",
-			},
+			cleanupKey,
 			txnID,
 		)
 		if cleanupErr != nil {
@@ -8337,6 +8401,7 @@ func getUserLevelLock(name string, timeout float64, proc *process.Process) (int6
 		}
 		return 0, err
 	}
+	releaseRetainedUserLevelLockTxnCleanupSlot(cleanupKey)
 	trackUserLevelLockForSession(owner, userLevelLockSessionID(proc), name, [][]byte{txnID})
 	return 1, nil
 }
@@ -8360,6 +8425,10 @@ func releaseUserLevelLock(name string, proc *process.Process) (int64, bool, erro
 	count := userLevelLockRefCount(owner, name)
 	if count == 0 {
 		probeTxnID := userLevelLockProbeTxnID(owner, connID, name, "release")
+		probeCleanupKey := userLevelLockFailedAttemptCleanupKey(ls, owner, connID, name, "probe:release", probeTxnID)
+		if !reserveRetainedUserLevelLockTxnCleanupSlot(ls, probeCleanupKey) {
+			return 0, false, moerr.NewInternalErrorNoCtxf("user-level lock cleanup capacity is full for %s", name)
+		}
 		// Probe the lockservice to distinguish "lock does not exist" (NULL)
 		// from "lock exists but held by another session" (0).
 		_, probeErr := ls.Lock(
@@ -8372,13 +8441,7 @@ func releaseUserLevelLock(name string, proc *process.Process) (int64, bool, erro
 			cleanupErr := cleanupFailedUserLevelLockTxn(
 				proc.Ctx,
 				ls,
-				detachedUserLevelLockCleanupKey{
-					serviceID: ls.GetServiceID(),
-					owner:     owner,
-					name:      name,
-					connID:    connID,
-					kind:      "probe_release_failed",
-				},
+				probeCleanupKey,
 				probeTxnID,
 			)
 			if cleanupErr != nil {
@@ -8395,6 +8458,7 @@ func releaseUserLevelLock(name string, proc *process.Process) (int64, bool, erro
 		if err := unlockUserLevelLockProbe(proc.Ctx, ls, owner, connID, name, "release"); err != nil {
 			return 0, false, err
 		}
+		releaseRetainedUserLevelLockTxnCleanupSlot(probeCleanupKey)
 		return 0, true, nil
 	}
 	if count > 1 {
@@ -8420,6 +8484,10 @@ func isUserLevelLockFree(name string, proc *process.Process) (int64, error) {
 	owner := userLevelLockOwner(proc)
 	connID := userLevelLockConnectionID(proc)
 	probeTxnID := userLevelLockProbeTxnID(owner, connID, name, "is_free")
+	probeCleanupKey := userLevelLockFailedAttemptCleanupKey(ls, owner, connID, name, "probe:is_free", probeTxnID)
+	if !reserveRetainedUserLevelLockTxnCleanupSlot(ls, probeCleanupKey) {
+		return 0, moerr.NewInternalErrorNoCtxf("user-level lock cleanup capacity is full for %s", name)
+	}
 	_, err = ls.Lock(
 		proc.Ctx,
 		userLevelLockTableID,
@@ -8430,13 +8498,7 @@ func isUserLevelLockFree(name string, proc *process.Process) (int64, error) {
 		cleanupErr := cleanupFailedUserLevelLockTxn(
 			proc.Ctx,
 			ls,
-			detachedUserLevelLockCleanupKey{
-				serviceID: ls.GetServiceID(),
-				owner:     owner,
-				name:      name,
-				connID:    connID,
-				kind:      "probe_is_free_failed",
-			},
+			probeCleanupKey,
 			probeTxnID,
 		)
 		if cleanupErr != nil {
@@ -8450,6 +8512,7 @@ func isUserLevelLockFree(name string, proc *process.Process) (int64, error) {
 	if err := unlockUserLevelLockProbe(proc.Ctx, ls, owner, connID, name, "is_free"); err != nil {
 		return 0, err
 	}
+	releaseRetainedUserLevelLockTxnCleanupSlot(probeCleanupKey)
 	return 1, nil
 }
 
