@@ -3128,12 +3128,19 @@ func makePreparedParamConstExpr(value any, isBin bool) *plan.Expr {
 	case float64:
 		return makePlan2Float64ConstExprWithType(val)
 	case []byte:
-		return makePlan2StringConstExprWithType(string(val), isBin)
+		return makePreparedParamStringConstExpr(string(val), isBin)
 	case string:
-		return makePlan2StringConstExprWithType(val, isBin)
+		return makePreparedParamStringConstExpr(val, isBin)
 	default:
 		return makePlan2StringConstExprWithType(fmt.Sprintf("%v", val), isBin)
 	}
+}
+
+func makePreparedParamStringConstExpr(value string, isBin bool) *plan.Expr {
+	expr := makePlan2StringConstExprWithType(value, isBin)
+	typ := types.T_text.ToType()
+	expr.Typ = makePlan2Type(&typ)
+	return expr
 }
 
 // XXX: Any code relying on Name in ColRef, except for "explain", is bad design and practically buggy.

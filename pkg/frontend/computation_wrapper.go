@@ -377,7 +377,7 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 		}
 
 		if retComp == nil {
-			if len(cwft.paramVals) > 0 {
+			if len(cwft.paramVals) > 0 && planHasRuntimeTypedComparison(cwft.plan) {
 				compilerContext := cwft.ses.GetTxnCompileCtx()
 				originalContext := compilerContext.GetContext()
 				parameterContext := plan2.AttachPrepareParamValues(originalContext, cwft.paramVals)
@@ -867,12 +867,26 @@ func shouldCachePrepareCompile(p *plan.Plan) bool {
 			return false
 		}
 		for _, expr := range preparedRuntimeTypedExprs(node) {
-			if containsPreparedParam(expr) {
+			if hasRuntimeTypedComparison(expr) {
 				return false
 			}
 		}
 	}
 	return !query.GetHasForeignKeyAction()
+}
+
+func planHasRuntimeTypedComparison(p *plan.Plan) bool {
+	if p == nil || p.GetQuery() == nil {
+		return false
+	}
+	for _, node := range p.GetQuery().GetNodes() {
+		for _, expr := range preparedRuntimeTypedExprs(node) {
+			if hasRuntimeTypedComparison(expr) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func preparedRuntimeTypedExprs(node *plan.Node) []*plan.Expr {
@@ -892,6 +906,25 @@ func preparedRuntimeTypedExprs(node *plan.Node) []*plan.Expr {
 		exprs = append(exprs, orderBy.GetExpr())
 	}
 	return exprs
+}
+
+func hasRuntimeTypedComparison(expr *plan.Expr) bool {
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil {
+		return false
+	}
+	switch fn.Func.ObjName {
+	case "=", "<=>", "<", "<=", ">", ">=", "<>", "between", "in_range":
+		if containsPreparedParam(expr) {
+			return true
+		}
+	}
+	for _, arg := range fn.Args {
+		if hasRuntimeTypedComparison(arg) {
+			return true
+		}
+	}
+	return false
 }
 
 func containsPreparedParam(expr *plan.Expr) bool {
