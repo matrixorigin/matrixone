@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"math"
+	"sync/atomic"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -41,6 +42,37 @@ import (
 type winTestCase struct {
 	arg  *Window
 	proc *process.Process
+}
+
+type cancelAfterDoneChecksContext struct {
+	context.Context
+	done      chan struct{}
+	remaining atomic.Int32
+}
+
+func newCancelAfterDoneChecksContext(parent context.Context, checks int32) *cancelAfterDoneChecksContext {
+	ctx := &cancelAfterDoneChecksContext{
+		Context: parent,
+		done:    make(chan struct{}),
+	}
+	ctx.remaining.Store(checks)
+	return ctx
+}
+
+func (c *cancelAfterDoneChecksContext) Done() <-chan struct{} {
+	if c.remaining.Add(-1) == 0 {
+		close(c.done)
+	}
+	return c.done
+}
+
+func (c *cancelAfterDoneChecksContext) Err() error {
+	select {
+	case <-c.done:
+		return context.Canceled
+	default:
+		return nil
+	}
 }
 
 func makeTestCases(t *testing.T) []winTestCase {
@@ -112,6 +144,61 @@ func TestWin(t *testing.T) {
 		tc.proc.Free()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
+}
+
+func TestWindowFrameEvaluationHonorsCancellation(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	const rows = cancellationCheckInterval * 2
+	values := make([]int32, rows)
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = testutil.MakeInt32Vector(values, nil, proc.Mp())
+	bat.SetRowCount(rows)
+
+	arg := &Window{
+		WinSpecList: []*plan.Expr{makeWindowSpec()},
+		Aggs:        []aggexec.AggFuncExecExpression{newAggExpr()},
+	}
+	require.NoError(t, arg.Prepare(proc))
+	arg.ctr.bat = bat
+	require.NoError(t, arg.ctr.evalAggVector(bat, proc))
+
+	arg.ctr.batAggs = make([]aggexec.AggFuncExec, 1)
+	var err error
+	arg.ctr.batAggs[0], err = aggexec.MakeAgg(
+		proc.Mp(),
+		arg.Aggs[0].GetAggID(),
+		arg.Aggs[0].IsDistinct(),
+		types.T_int32.ToType(),
+	)
+	require.NoError(t, err)
+	require.NoError(t, arg.ctr.batAggs[0].GroupGrow(bat.RowCount()))
+
+	// processFunc checks once at the outer row, then every 1024 frame rows.
+	// Cancel on the third check so the test proves an already-running frame is
+	// interrupted, rather than only proving that a pre-canceled call is rejected.
+	proc.Ctx = newCancelAfterDoneChecksContext(proc.Ctx, 3)
+
+	err = arg.ctr.processFunc(0, arg, proc, arg.OpAnalyzer)
+	require.ErrorIs(t, err, context.Canceled)
+
+	arg.Free(proc, true, err)
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestWindowCallHonorsPreCancellation(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	ctx, cancel := context.WithCancel(proc.Ctx)
+	proc.Ctx = ctx
+	cancel()
+
+	arg := &Window{}
+	result, err := arg.Call(proc)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Equal(t, vm.CancelResult, result)
+
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
 func resetChildren(arg *Window, m *mpool.MPool) {
@@ -536,6 +623,113 @@ func TestWindowOrderResultAcrossChunks(t *testing.T) {
 	op.Free(proc, false, nil)
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestWindowOrdersPartitionedInput(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	bat := batch.NewWithSize(2)
+	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{2, 1, 2, 1}, nil, proc.Mp())
+	bat.Vecs[1] = testutil.MakeInt32Vector([]int32{20, 10, 10, 20}, nil, proc.Mp())
+	bat.SetRowCount(4)
+
+	partitionExpr := newColExpr(0)
+	orderExpr := newColExpr(1)
+	arg := &Window{
+		WinSpecList: []*plan.Expr{{
+			Expr: &plan.Expr_W{W: &plan.WindowSpec{
+				Name:        "row_number",
+				WindowFunc:  newFunExpr("row_number"),
+				PartitionBy: []*plan.Expr{partitionExpr},
+				// The planner presents partition expressions before the explicit
+				// ORDER BY expressions to the physical window operator.
+				OrderBy: []*plan.OrderBySpec{
+					{Expr: partitionExpr, Flag: plan.OrderBySpec_NULLS_FIRST},
+					{Expr: orderExpr, Flag: plan.OrderBySpec_DESC | plan.OrderBySpec_NULLS_LAST},
+				},
+			}},
+		}},
+		Aggs: []aggexec.AggFuncExecExpression{newRowNumberAggExpr(t)},
+		OperatorBase: vm.OperatorBase{
+			OperatorInfo: vm.OperatorInfo{Idx: 0},
+		},
+	}
+	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
+	arg.AppendChild(op)
+
+	require.Equal(t, vm.Window, arg.OpType())
+	require.NoError(t, arg.Prepare(proc))
+	result, err := vm.Exec(arg, proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	require.Equal(t, []int32{1, 1, 2, 2},
+		vector.MustFixedColWithTypeCheck[int32](result.Batch.Vecs[0]))
+	require.Equal(t, []int32{20, 10, 20, 10},
+		vector.MustFixedColWithTypeCheck[int32](result.Batch.Vecs[1]))
+	require.Len(t, vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[2]), 4)
+
+	arg.Free(proc, false, nil)
+	op.Free(proc, false, nil)
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestWindowOrderHonorsCancellation(t *testing.T) {
+	testCases := []struct {
+		name   string
+		checks int32
+	}{
+		{name: "building selections", checks: 1},
+		{name: "before first sort", checks: 2},
+		{name: "after first sort", checks: 3},
+		{name: "before secondary sort", checks: 4},
+		{name: "during partition sort", checks: 5},
+		{name: "after secondary sort", checks: 6},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			bat := batch.NewWithSize(2)
+			bat.Vecs[0] = testutil.MakeInt32Vector([]int32{2, 1, 2, 1}, nil, proc.Mp())
+			bat.Vecs[1] = testutil.MakeInt32Vector([]int32{20, 10, 10, 20}, nil, proc.Mp())
+			bat.SetRowCount(4)
+
+			partitionExpr := newColExpr(0)
+			orderExpr := newColExpr(1)
+			spec := &plan.Expr{
+				Expr: &plan.Expr_W{W: &plan.WindowSpec{
+					Name:        "row_number",
+					WindowFunc:  newFunExpr("row_number"),
+					PartitionBy: []*plan.Expr{partitionExpr},
+					OrderBy: []*plan.OrderBySpec{
+						{Expr: partitionExpr},
+						{Expr: orderExpr},
+					},
+				}},
+			}
+			arg := &Window{
+				WinSpecList: []*plan.Expr{spec},
+				Aggs:        []aggexec.AggFuncExecExpression{newRowNumberAggExpr(t)},
+			}
+			require.NoError(t, arg.Prepare(proc))
+			arg.Fs = makeOrderBy(spec)
+			arg.ctr.orderVecs = make([]colexec.ExprEvalVector, len(arg.Fs))
+			for i := range arg.Fs {
+				var err error
+				arg.ctr.orderVecs[i], err = colexec.MakeEvalVector(proc, []*plan.Expr{arg.Fs[i].Expr})
+				require.NoError(t, err)
+			}
+
+			proc.Ctx = newCancelAfterDoneChecksContext(proc.Ctx, tc.checks)
+			_, err := arg.ctr.processOrder(0, arg, bat, proc)
+			require.ErrorIs(t, err, context.Canceled)
+
+			arg.Free(proc, true, err)
+			bat.Clean(proc.Mp())
+			proc.Free()
+			require.Equal(t, int64(0), proc.Mp().CurrNB())
+		})
+	}
 }
 
 func newFunExpr(name string) *plan.Expr {
@@ -1200,5 +1394,72 @@ func TestSearchLeftRightDateTimeTypes(t *testing.T) {
 		r, err = searchRight(0, 4, 0, vec2, nil, false, true)
 		require.NoError(t, err)
 		require.Equal(t, 1, r)
+	})
+}
+
+func intervalExpr(diff int64, unit types.IntervalType) *plan.Expr {
+	return &plan.Expr{
+		Expr: &plan.Expr_List{List: &plan.ExprList{List: []*plan.Expr{
+			{Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+				Value: &plan.Literal_I64Val{I64Val: diff},
+			}}},
+			{Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+				Value: &plan.Literal_I64Val{I64Val: int64(unit)},
+			}}},
+		}}},
+	}
+}
+
+func assertIntervalSearches(t *testing.T, vec *vector.Vector, expr *plan.Expr, wantLeftSub, wantLeftAdd, wantRightSub, wantRightAdd int) {
+	t.Helper()
+	left, err := searchLeft(0, vec.Length(), 1, vec, expr, false, false)
+	require.NoError(t, err)
+	require.Equal(t, wantLeftSub, left)
+	left, err = searchLeft(0, vec.Length(), 1, vec, expr, true, false)
+	require.NoError(t, err)
+	require.Equal(t, wantLeftAdd, left)
+
+	right, err := searchRight(0, vec.Length(), 1, vec, expr, true, false)
+	require.NoError(t, err)
+	require.Equal(t, wantRightSub, right)
+	right, err = searchRight(0, vec.Length(), 1, vec, expr, false, false)
+	require.NoError(t, err)
+	require.Equal(t, wantRightAdd, right)
+}
+
+func TestSearchLeftRightDateTimeIntervals(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
+
+	t.Run("date", func(t *testing.T) {
+		vec := testutil.NewDateVector(0, types.T_date.ToType(), mp, false, nil,
+			[]string{"2024-01-01", "2024-01-02", "2024-01-02", "2024-01-04"})
+		require.NotNil(t, vec)
+		defer vec.Free(mp)
+		assertIntervalSearches(t, vec, intervalExpr(1, types.Day), 0, 3, 1, 3)
+	})
+
+	t.Run("datetime", func(t *testing.T) {
+		vec := testutil.NewDatetimeVector(0, types.T_datetime.ToType(), mp, false, nil,
+			[]string{"2024-01-01 10:00:00", "2024-01-02 10:00:00", "2024-01-02 10:00:00", "2024-01-04 10:00:00"})
+		require.NotNil(t, vec)
+		defer vec.Free(mp)
+		assertIntervalSearches(t, vec, intervalExpr(1, types.Day), 0, 3, 1, 3)
+	})
+
+	t.Run("time", func(t *testing.T) {
+		vec := testutil.NewTimeVector(0, types.T_time.ToType(), mp, false, nil,
+			[]string{"10:00:00", "12:00:00", "12:00:00", "14:00:00"})
+		require.NotNil(t, vec)
+		defer vec.Free(mp)
+		assertIntervalSearches(t, vec, intervalExpr(2, types.Hour), 0, 3, 1, 4)
+	})
+
+	t.Run("timestamp", func(t *testing.T) {
+		vec := testutil.NewTimestampVector(0, types.T_timestamp.ToType(), mp, false, nil,
+			[]string{"2024-01-01 10:00:00", "2024-01-02 10:00:00", "2024-01-02 10:00:00", "2024-01-04 10:00:00"})
+		require.NotNil(t, vec)
+		defer vec.Free(mp)
+		assertIntervalSearches(t, vec, intervalExpr(1, types.Day), 0, 3, 1, 3)
 	})
 }
