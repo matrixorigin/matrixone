@@ -16,6 +16,7 @@ package compile
 
 import (
 	"errors"
+	"strconv"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -217,6 +218,16 @@ func TestScopeNodeWithMcpuKeepsWorkerIdentity(t *testing.T) {
 	require.Equal(t, "cn-1", node.Id)
 	require.Equal(t, "cn-1:6001", node.Addr)
 	require.Equal(t, 1, node.Mcpu)
+}
+
+func TestNormalizeMcpuForPlanBounds(t *testing.T) {
+	require.Equal(t, int32(1), normalizeMcpuForPlan(0))
+	require.Equal(t, int32(8), normalizeMcpuForPlan(8))
+
+	if strconv.IntSize == 64 {
+		aboveMaxInt32 := int64(1 << 31)
+		require.Equal(t, int32(1<<31-1), normalizeMcpuForPlan(int(aboveMaxInt32)))
+	}
 }
 
 func TestExecutionNodeCPUUsesActualWorkerCapacity(t *testing.T) {
