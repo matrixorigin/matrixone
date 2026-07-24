@@ -447,10 +447,10 @@ func (th *TxnHandler) createTxnOpUnsafe(execCtx *ExecCtx) error {
 	}
 
 	// A DATA BRANCH create can discover a finite quota only after its transaction
-	// exists. Start it in the mode required by the quota-row locking read and its
-	// post-wait snapshot refresh. An already active transaction is validated by
-	// the quota checker instead.
-	if isDataBranchCreateStatement(execCtx.stmt) {
+	// exists. Start an autocommit statement in the mode required by the quota-row
+	// locking read and its post-wait snapshot refresh. A multi-statement transaction
+	// keeps its configured semantics and is validated by the quota checker instead.
+	if execCtx.txnOpt.autoCommit && isDataBranchCreateStatement(execCtx.stmt) {
 		opts = append(opts,
 			txnclient.WithTxnMode(pbtxn.TxnMode_Pessimistic),
 			txnclient.WithTxnIsolation(pbtxn.TxnIsolation_RC))

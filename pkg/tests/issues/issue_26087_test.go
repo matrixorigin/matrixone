@@ -209,6 +209,21 @@ func TestIssue26087ConcurrentDataBranchQuota(t *testing.T) {
 				"finite branch quota requires a pessimistic read committed transaction; retry outside the active transaction")
 			require.NoError(t, execConn(conn1, "rollback"))
 
+			require.NoError(t, execConn(conn1, "set autocommit = 0"))
+			implicitErr := execConn(conn1,
+				"data branch create table branch_quota_race.implicit_branch from branch_quota_race.src{snapshot='issue_26087_sp'}")
+			require.Error(t, implicitErr)
+			require.Contains(t, implicitErr.Error(),
+				"finite branch quota requires a pessimistic read committed transaction; retry outside the active transaction")
+			require.NoError(t, execConn(conn1, "rollback"))
+			require.NoError(t, execConn(conn1, "set autocommit = 1"))
+
+			var incompatibleBranchCount int
+			require.NoError(t, conn1.QueryRowContext(execCtx,
+				"select count(*) from mo_catalog.mo_tables where reldatabase = 'branch_quota_race' and relname in ('explicit_branch', 'implicit_branch')",
+			).Scan(&incompatibleBranchCount))
+			require.Zero(t, incompatibleBranchCount)
+
 			optimisticDB, err := sql.Open("mysql", fmt.Sprintf("%s#root#accountadmin:111@tcp(127.0.0.1:%d)/", accountName, port))
 			require.NoError(t, err)
 			defer optimisticDB.Close()
