@@ -299,6 +299,23 @@ prepare special_view_name_stmt from 'select * from `prepared_view@snapshot=x`';
 execute special_view_name_stmt;
 deallocate prepare special_view_name_stmt;
 
+set save_query_result = on;
+/* save_result */ select 7 as prepared_result_scan_value;
+prepare prepared_result_scan_stmt from
+    'select * from result_scan(last_query_id(-1)) as r';
+execute prepared_result_scan_stmt;
+deallocate prepare prepared_result_scan_stmt;
+
+create database `prepared#view_db`;
+create table `prepared#view_db`.src (a int);
+insert into `prepared#view_db`.src values (8);
+create view `prepared#view_db`.v as select a from `prepared#view_db`.src;
+prepare prepared_hash_database_view_stmt from
+    'select * from `prepared#view_db`.v';
+execute prepared_hash_database_view_stmt;
+deallocate prepare prepared_hash_database_view_stmt;
+drop database `prepared#view_db`;
+
 drop snapshot if exists prepared_view_snapshot;
 create table prepared_snapshot_base (a int);
 insert into prepared_snapshot_base values (1);

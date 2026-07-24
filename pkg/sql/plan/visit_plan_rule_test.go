@@ -397,13 +397,30 @@ func TestResetPreparePlanCollectsExternalAndSourceScans(t *testing.T) {
 	}
 }
 
+func TestResetPreparePlanSkipsScanWithoutCatalogIdentity(t *testing.T) {
+	queryPlan := &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{
+		Steps: []int32{0},
+		Nodes: []*planpb.Node{{
+			NodeType: planpb.Node_EXTERNAL_SCAN,
+			TableDef: &planpb.TableDef{
+				Name:      "result_scan",
+				TableType: "query_result",
+			},
+		}},
+	}}}
+
+	schemas, _, err := ResetPreparePlan(NewMockCompilerContext(false), queryPlan)
+	require.NoError(t, err)
+	require.Empty(t, schemas)
+}
+
 func TestCollectPrepareViewSchemasPreservesIdentity(t *testing.T) {
 	mock := NewMockCompilerContext(false)
 	snapshot := &Snapshot{
 		TS:     &timestamp.Timestamp{PhysicalTime: 42, LogicalTime: 7},
 		Tenant: &SnapshotTenant{TenantID: 11, TenantName: "publisher"},
 	}
-	viewKey, err := FormatViewDependencyKeyWithSnapshot("sub#src_v", snapshot)
+	viewKey, err := FormatViewDependencyKey("sub", "src_v", snapshot)
 	require.NoError(t, err)
 	ctx := &viewDependencyCompilerContext{
 		MockCompilerContext: mock,
@@ -459,29 +476,34 @@ func TestCollectPrepareViewSchemasKeepsLogicalSubscriptions(t *testing.T) {
 }
 
 func TestViewDependencySnapshotKeyValidation(t *testing.T) {
-	key, err := FormatViewDependencyKeyWithSnapshot("db#v", nil)
+	key, err := FormatViewDependencyKey("db#part", "v#part", nil)
 	require.NoError(t, err)
-	require.Equal(t, "db#v", key)
 
-	base, snapshot, err := ParseViewDependencyKey(key)
+	databaseName, viewName, snapshot, err := ParseViewDependencyKey(key)
 	require.NoError(t, err)
-	require.Equal(t, "db#v", base)
+	require.Equal(t, "db#part", databaseName)
+	require.Equal(t, "v#part", viewName)
 	require.Nil(t, snapshot)
 
-	for _, ordinaryKey := range []string{
-		"db#v@snapshot=x",
-		"db@snapshot=x#v",
-		"db#v@ts=not-a-timestamp",
+	for _, testCase := range []struct {
+		key      string
+		database string
+		view     string
+	}{
+		{key: "db#v@snapshot=x", database: "db", view: "v@snapshot=x"},
+		{key: "db@snapshot=x#v", database: "db@snapshot=x", view: "v"},
+		{key: "db#v@ts=not-a-timestamp", database: "db", view: "v@ts=not-a-timestamp"},
 	} {
-		base, snapshot, err = ParseViewDependencyKey(ordinaryKey)
+		databaseName, viewName, snapshot, err = ParseViewDependencyKey(testCase.key)
 		require.NoError(t, err)
-		require.Equal(t, ordinaryKey, base)
+		require.Equal(t, testCase.database, databaseName)
+		require.Equal(t, testCase.view, viewName)
 		require.Nil(t, snapshot)
 	}
 
-	_, _, err = ParseViewDependencyKey(viewDependencyKeyPrefix + "!")
+	_, _, _, err = ParseViewDependencyKey(viewDependencyKeyPrefix + "!")
 	require.Error(t, err)
-	_, _, err = ParseViewDependencyKey(viewDependencyKeyPrefix + "eA.!")
+	_, _, _, err = ParseViewDependencyKey(viewDependencyKeyPrefix + "eA.!.")
 	require.Error(t, err)
 }
 
@@ -509,9 +531,10 @@ func TestBindViewRecordsCompleteTableSnapshot(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, bindCtx.views, 1)
 
-	base, recorded, err := ParseViewDependencyKey(bindCtx.views[0])
+	databaseName, viewName, recorded, err := ParseViewDependencyKey(bindCtx.views[0])
 	require.NoError(t, err)
-	require.Equal(t, "db#v", base)
+	require.Equal(t, "db", databaseName)
+	require.Equal(t, "v", viewName)
 	require.Equal(t, snapshot.TS, recorded.TS)
 	require.Equal(t, snapshot.Tenant, recorded.Tenant)
 

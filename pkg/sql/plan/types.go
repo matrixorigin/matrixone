@@ -89,48 +89,58 @@ func FormatViewKeyWithSnapshot(viewKey string, snapshot *Snapshot) string {
 	return fmt.Sprintf("%s%s%d", viewKey, ViewSnapshotKeySuffix, snapshot.TS.PhysicalTime)
 }
 
-// FormatViewDependencyKeyWithSnapshot preserves the complete table-level
-// snapshot used to resolve a view. The privilege path only needs physical time,
-// but prepared-plan invalidation must resolve the same MVCC and tenant identity.
-func FormatViewDependencyKeyWithSnapshot(viewKey string, snapshot *Snapshot) (string, error) {
-	if !IsSnapshotValid(snapshot) {
-		return viewKey, nil
-	}
-	data, err := snapshot.Marshal()
-	if err != nil {
-		return "", err
+// FormatViewDependencyKey preserves database and view identifiers separately,
+// plus the complete optional table-level snapshot used to resolve the view.
+func FormatViewDependencyKey(databaseName, viewName string, snapshot *Snapshot) (string, error) {
+	var snapshotData []byte
+	if IsSnapshotValid(snapshot) {
+		var err error
+		snapshotData, err = snapshot.Marshal()
+		if err != nil {
+			return "", err
+		}
 	}
 	return viewDependencyKeyPrefix +
-		base64.RawURLEncoding.EncodeToString([]byte(viewKey)) + "." +
-		base64.RawURLEncoding.EncodeToString(data), nil
+		base64.RawURLEncoding.EncodeToString([]byte(databaseName)) + "." +
+		base64.RawURLEncoding.EncodeToString([]byte(viewName)) + "." +
+		base64.RawURLEncoding.EncodeToString(snapshotData), nil
 }
 
-// ParseViewDependencyKey returns the catalog key and the optional table-level
-// snapshot recorded while binding a view. Encoded dependency keys start with a
-// NUL sentinel, which cannot occur in a SQL identifier, so ordinary view names
-// cannot be mistaken for dependency metadata.
-func ParseViewDependencyKey(viewKey string) (string, *Snapshot, error) {
+// ParseViewDependencyKey returns the database, view, and optional table-level
+// snapshot recorded while binding a view. Plain database#view keys remain
+// readable for callers that have not recorded the structured dependency form.
+func ParseViewDependencyKey(viewKey string) (string, string, *Snapshot, error) {
 	if !strings.HasPrefix(viewKey, viewDependencyKeyPrefix) {
-		return viewKey, nil, nil
+		databaseName, viewName, ok := strings.Cut(viewKey, "#")
+		if !ok || databaseName == "" || viewName == "" {
+			return "", "", nil, moerr.NewInternalErrorNoCtx("invalid view dependency")
+		}
+		return databaseName, viewName, nil, nil
 	}
-	encodedKey, encodedSnapshot, ok := strings.Cut(
-		viewKey[len(viewDependencyKeyPrefix):], ".")
-	if !ok || encodedKey == "" || encodedSnapshot == "" {
-		return "", nil, moerr.NewInternalErrorNoCtx("invalid encoded view dependency")
+	parts := strings.Split(viewKey[len(viewDependencyKeyPrefix):], ".")
+	if len(parts) != 3 || parts[0] == "" || parts[1] == "" {
+		return "", "", nil, moerr.NewInternalErrorNoCtx("invalid encoded view dependency")
 	}
-	key, err := base64.RawURLEncoding.DecodeString(encodedKey)
+	databaseName, err := base64.RawURLEncoding.DecodeString(parts[0])
 	if err != nil {
-		return "", nil, err
+		return "", "", nil, err
 	}
-	data, err := base64.RawURLEncoding.DecodeString(encodedSnapshot)
+	viewName, err := base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil {
-		return "", nil, err
+		return "", "", nil, err
+	}
+	if parts[2] == "" {
+		return string(databaseName), string(viewName), nil, nil
+	}
+	data, err := base64.RawURLEncoding.DecodeString(parts[2])
+	if err != nil {
+		return "", "", nil, err
 	}
 	snapshot := &Snapshot{}
 	if err = snapshot.Unmarshal(data); err != nil {
-		return "", nil, err
+		return "", "", nil, err
 	}
-	return string(key), snapshot, nil
+	return string(databaseName), string(viewName), snapshot, nil
 }
 
 type CompilerContext interface {

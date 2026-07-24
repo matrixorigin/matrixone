@@ -1892,8 +1892,11 @@ func genKey(dbName, tblName string) string {
 }
 
 func normalizeViewDependencyKey(key string) (string, error) {
-	key, _, err := plan2.ParseViewDependencyKey(key)
-	return key, err
+	databaseName, viewName, _, err := plan2.ParseViewDependencyKey(key)
+	if err != nil {
+		return "", err
+	}
+	return genKey(databaseName, viewName), nil
 }
 
 func splitKey(key string) (string, string) {

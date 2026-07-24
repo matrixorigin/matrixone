@@ -16,7 +16,6 @@ package plan
 
 import (
 	"math"
-	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -343,18 +342,13 @@ func collectPrepareViewSchemas(ctx CompilerContext) ([]*plan.ObjectRef, error) {
 	var schemas []*plan.ObjectRef
 	for _, viewKey := range ctx.GetViews() {
 		snapshot := ctx.GetSnapshot()
-		var err error
-		viewKey, dependencySnapshot, err := ParseViewDependencyKey(viewKey)
+		databaseName, tableName, dependencySnapshot, err := ParseViewDependencyKey(viewKey)
 		if err != nil {
 			return nil, moerr.NewInternalErrorf(
 				ctx.GetContext(), "invalid view dependency snapshot: %v", err)
 		}
 		if dependencySnapshot != nil {
 			snapshot = dependencySnapshot
-		}
-		databaseName, tableName, ok := strings.Cut(viewKey, "#")
-		if !ok || databaseName == "" || tableName == "" {
-			return nil, moerr.NewInternalErrorf(ctx.GetContext(), "invalid view dependency %q", viewKey)
 		}
 		objRef, tableDef, err := ctx.Resolve(databaseName, tableName, snapshot)
 		if err != nil {
