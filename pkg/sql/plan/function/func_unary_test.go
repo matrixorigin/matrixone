@@ -9291,7 +9291,7 @@ func TestSessionCloseRetainsCleanupWhenRetainedCapIsFull(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, int64(1), v)
 
-		for i := 0; i < userLevelLockRetainedCleanupMaxEntries; i++ {
+		for i := 0; i < userLevelLockRetainedCleanupMaxEntries-1; i++ {
 			key := detachedUserLevelLockCleanupKey{
 				serviceID: service.GetServiceID(),
 				owner:     fmt.Sprintf("owner-close-cap-%d", i),
@@ -9330,6 +9330,55 @@ func TestSessionCloseRetainsCleanupWhenRetainedCapIsFull(t *testing.T) {
 		userLevelLocks.Unlock()
 		require.True(t, retained)
 		require.NotEmpty(t, UserLevelLocksForMigration(holder))
+	})
+}
+
+func TestActiveUserLevelLockOwnersBoundRetainedCloseCleanupGrowth(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		service := services[0].(*userLevelLockTestService)
+		userLevelLocks.Lock()
+		for i := 0; i < userLevelLockRetainedCleanupMaxEntries; i++ {
+			owner := fmt.Sprintf("owner-active-close-cap-%d", i)
+			name := fmt.Sprintf("lock-active-close-cap-%d", i)
+			key := userLevelLockKey{owner: owner, name: name}
+			userLevelLocks.counts[key] = 1
+			userLevelLocks.txnIDs[key] = [][]byte{[]byte(fmt.Sprintf("txn-active-close-cap-%d", i))}
+			userLevelLocks.byOwner[owner] = map[string]struct{}{name: {}}
+			userLevelLocks.ownerSessions[owner] = fmt.Sprintf("session-active-close-cap-%d", i)
+		}
+		require.Equal(t, userLevelLockRetainedCleanupMaxEntries, retainedUserLevelLockCleanupEntryCountLocked())
+		userLevelLocks.Unlock()
+
+		proc := newUserLevelLockTestProcess(t, services[0], "acc")
+		v, err := getUserLevelLock("active_close_cap_rejected", 0, proc)
+		require.Error(t, err)
+		require.Equal(t, int64(0), v)
+		service.state.Lock()
+		require.Empty(t, service.state.locks[string(userLevelLockRow(proc, "active_close_cap_rejected"))])
+		service.state.Unlock()
+
+		require.True(t, retainUserLevelLockCloseCleanup(
+			service,
+			[]string{"owner-active-close-cap-0"},
+			"owner-active-close-cap-0",
+			"session-active-close-cap-0",
+			1,
+		))
+		userLevelLocks.Lock()
+		require.Equal(t, userLevelLockRetainedCleanupMaxEntries, retainedUserLevelLockCleanupEntryCountLocked())
+		userLevelLocks.Unlock()
+
+		require.False(t, retainUserLevelLockCloseCleanup(
+			service,
+			[]string{"owner-active-close-cap-overflow"},
+			"owner-active-close-cap-overflow",
+			"session-active-close-cap-overflow",
+			9999,
+		))
+		userLevelLocks.Lock()
+		require.Len(t, userLevelLocks.retainedCloseCleanups, 1)
+		require.Equal(t, userLevelLockRetainedCleanupMaxEntries, retainedUserLevelLockCleanupEntryCountLocked())
+		userLevelLocks.Unlock()
 	})
 }
 

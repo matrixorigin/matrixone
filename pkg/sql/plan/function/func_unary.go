@@ -7736,8 +7736,27 @@ func handoffDetachedUserLevelLockBacklogCleanups(ctx context.Context, requests [
 
 func retainedUserLevelLockCleanupEntryCountLocked() int {
 	count := len(userLevelLocks.pendingCleanups) + len(userLevelLocks.retainedCloseCleanups)
+	activeOwners := make(map[string]struct{}, len(userLevelLocks.byOwner))
+	for owner, names := range userLevelLocks.byOwner {
+		if len(names) == 0 {
+			continue
+		}
+		if _, retained := userLevelLocks.retainedCloseCleanups[owner]; retained {
+			continue
+		}
+		activeOwners[owner] = struct{}{}
+	}
+	count += len(activeOwners)
 	for key := range userLevelLocks.cleanupReservations {
 		if _, ok := userLevelLocks.pendingCleanups[key]; !ok {
+			if key.kind == "session_close" {
+				if _, active := activeOwners[key.owner]; active {
+					continue
+				}
+				if _, retained := userLevelLocks.retainedCloseCleanups[key.owner]; retained {
+					continue
+				}
+			}
 			count++
 		}
 	}
@@ -7782,6 +7801,35 @@ func consumeRetainedUserLevelLockTxnCleanupSlotLocked(key detachedUserLevelLockC
 	return false
 }
 
+func userLevelLockCloseCleanupKey(ls lockservice.LockService, owner string, connID uint64) detachedUserLevelLockCleanupKey {
+	return detachedUserLevelLockCleanupKey{
+		serviceID: ls.GetServiceID(),
+		owner:     owner,
+		name:      owner,
+		connID:    connID,
+		kind:      "session_close",
+	}
+}
+
+func reserveUserLevelLockCloseCleanupSlot(ls lockservice.LockService, owner string, connID uint64) bool {
+	if ls == nil || owner == "" {
+		return false
+	}
+	key := userLevelLockCloseCleanupKey(ls, owner, connID)
+	userLevelLocks.Lock()
+	if len(userLevelLocks.byOwner[owner]) > 0 || userLevelLocks.retainedCloseCleanups[owner].ls != nil {
+		userLevelLocks.Unlock()
+		return true
+	}
+	if userLevelLocks.cleanupReservations[key] == 0 && retainedUserLevelLockCleanupEntryCountLocked() >= userLevelLockRetainedCleanupMaxEntries {
+		userLevelLocks.Unlock()
+		return false
+	}
+	userLevelLocks.cleanupReservations[key]++
+	userLevelLocks.Unlock()
+	return true
+}
+
 func retainDetachedUserLevelLockTxnCleanup(ls lockservice.LockService, key detachedUserLevelLockCleanupKey, txnIDs [][]byte) bool {
 	if ls == nil || key.serviceID == "" || key.owner == "" || key.name == "" || len(txnIDs) == 0 {
 		return false
@@ -7815,9 +7863,17 @@ func retainUserLevelLockCloseCleanup(ls lockservice.LockService, owners []string
 	if ls == nil || owner == "" || len(owners) == 0 {
 		return false
 	}
+	key := userLevelLockCloseCleanupKey(ls, owner, connID)
 	userLevelLocks.Lock()
+	if _, ok := userLevelLocks.retainedCloseCleanups[owner]; !ok {
+		// A real closing owner is already counted while it holds local locks; the
+		// first successful GET_LOCK reserves that active-owner slot before
+		// acquiring the synthetic transaction. Retaining close cleanup reuses that
+		// bounded slot instead of admitting an unbounded new close entry.
+		_ = consumeRetainedUserLevelLockTxnCleanupSlotLocked(key)
+	}
 	if _, ok := userLevelLocks.retainedCloseCleanups[owner]; !ok &&
-		userLevelLocks.byOwner[owner] == nil &&
+		len(userLevelLocks.byOwner[owner]) == 0 &&
 		retainedUserLevelLockCleanupEntryCountLocked() >= userLevelLockRetainedCleanupMaxEntries {
 		userLevelLocks.Unlock()
 		return false
@@ -8373,8 +8429,13 @@ func getUserLevelLock(name string, timeout float64, proc *process.Process) (int6
 	defer cancel()
 
 	txnID := userLevelLockAttemptTxnID(owner, connID, name)
+	closeCleanupKey := userLevelLockCloseCleanupKey(ls, owner, connID)
+	if !reserveUserLevelLockCloseCleanupSlot(ls, owner, connID) {
+		return 0, moerr.NewInternalErrorNoCtxf("user-level lock cleanup capacity is full for %s", name)
+	}
 	cleanupKey := userLevelLockFailedAttemptCleanupKey(ls, owner, connID, name, "get_lock_failed", txnID)
 	if !reserveRetainedUserLevelLockTxnCleanupSlot(ls, cleanupKey) {
+		releaseRetainedUserLevelLockTxnCleanupSlot(closeCleanupKey)
 		return 0, moerr.NewInternalErrorNoCtxf("user-level lock cleanup capacity is full for %s", name)
 	}
 	_, err = ls.Lock(
@@ -8390,6 +8451,7 @@ func getUserLevelLock(name string, timeout float64, proc *process.Process) (int6
 			cleanupKey,
 			txnID,
 		)
+		releaseRetainedUserLevelLockTxnCleanupSlot(closeCleanupKey)
 		if cleanupErr != nil {
 			return 0, cleanupErr
 		}
@@ -8401,8 +8463,9 @@ func getUserLevelLock(name string, timeout float64, proc *process.Process) (int6
 		}
 		return 0, err
 	}
-	releaseRetainedUserLevelLockTxnCleanupSlot(cleanupKey)
 	trackUserLevelLockForSession(owner, userLevelLockSessionID(proc), name, [][]byte{txnID})
+	releaseRetainedUserLevelLockTxnCleanupSlot(closeCleanupKey)
+	releaseRetainedUserLevelLockTxnCleanupSlot(cleanupKey)
 	return 1, nil
 }
 
