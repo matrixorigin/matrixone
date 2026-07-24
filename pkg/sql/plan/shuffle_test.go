@@ -16,6 +16,7 @@ package plan
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"fmt"
 	"math/rand"
@@ -25,6 +26,7 @@ import (
 	"github.com/cespare/xxhash/v2"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -470,6 +472,88 @@ func TestDetermineShuffleForDedupJoin(t *testing.T) {
 				require.Equal(t, int32(-1), node.Stats.HashmapStats.ShuffleColIdx)
 			}
 		})
+	}
+}
+
+func TestDetermineShuffleForMarkJoin(t *testing.T) {
+	tests := []struct {
+		name        string
+		notNullable bool
+		wantShuffle bool
+	}{
+		{
+			name:        "non-null keys can shuffle",
+			notNullable: true,
+			wantShuffle: true,
+		},
+		{
+			name: "nullable keys stay broadcast",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			left := &plan.Node{
+				NodeType:    plan.Node_TABLE_SCAN,
+				BindingTags: []int32{0},
+				Stats:       &plan.Stats{Outcnt: 10_000_000, HashmapStats: &plan.HashMapStats{}},
+			}
+			right := &plan.Node{
+				NodeType:    plan.Node_TABLE_SCAN,
+				BindingTags: []int32{1},
+				Stats:       &plan.Stats{Outcnt: 3_000_000, HashmapStats: &plan.HashMapStats{}},
+			}
+			node := &plan.Node{
+				NodeType: plan.Node_JOIN,
+				JoinType: plan.Node_MARK,
+				Children: []int32{0, 1},
+				OnList:   []*plan.Expr{makeMarkShuffleEquality(t, tt.notNullable)},
+				Stats: &plan.Stats{HashmapStats: &plan.HashMapStats{
+					// Verify that ineligible MARK plans also clear stale
+					// shuffle metadata instead of reaching the compiler.
+					Shuffle:     true,
+					HashmapSize: 3_000_000,
+				}},
+			}
+			builder := &QueryBuilder{qry: &plan.Query{Nodes: []*plan.Node{left, right}}}
+
+			determineShuffleForJoin(node, builder)
+
+			require.Equal(t, tt.wantShuffle, node.Stats.HashmapStats.Shuffle)
+			if tt.wantShuffle {
+				require.Equal(t, int32(0), node.Stats.HashmapStats.ShuffleColIdx)
+				require.Equal(t, plan.ShuffleType_Hash, node.Stats.HashmapStats.ShuffleType)
+			} else {
+				require.Equal(t, int32(-1), node.Stats.HashmapStats.ShuffleColIdx)
+			}
+		})
+	}
+}
+
+func makeMarkShuffleEquality(t *testing.T, notNullable bool) *plan.Expr {
+	t.Helper()
+
+	typ := types.T_int64.ToType()
+	equal, err := function.GetFunctionByName(context.Background(), "=", []types.Type{typ, typ})
+	require.NoError(t, err)
+
+	args := make([]*plan.Expr, 2)
+	for i := range args {
+		args[i] = &plan.Expr{
+			Typ: plan.Type{Id: int32(types.T_int64), NotNullable: notNullable},
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{
+				RelPos: int32(i),
+				ColPos: 0,
+			}},
+		}
+	}
+	return &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_bool), NotNullable: notNullable},
+		Ndv: 100_000,
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{Obj: equal.GetEncodedOverloadID(), ObjName: "="},
+			Args: args,
+		}},
 	}
 }
 

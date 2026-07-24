@@ -480,6 +480,7 @@ func determineShuffleType(col *plan.ColRef, node *plan.Node, builder *QueryBuild
 // to determine if join need to go shuffle
 func determineShuffleForJoin(node *plan.Node, builder *QueryBuilder) {
 	// do not shuffle by default
+	node.Stats.HashmapStats.Shuffle = false
 	node.Stats.HashmapStats.ShuffleColIdx = -1
 	if node.NodeType != plan.Node_JOIN {
 		return
@@ -513,7 +514,7 @@ func determineShuffleForJoin(node *plan.Node, builder *QueryBuilder) {
 			return
 		}
 
-	case plan.Node_INNER, plan.Node_ANTI, plan.Node_SEMI, plan.Node_LEFT, plan.Node_RIGHT, plan.Node_OUTER:
+	case plan.Node_INNER, plan.Node_ANTI, plan.Node_SEMI, plan.Node_LEFT, plan.Node_RIGHT, plan.Node_OUTER, plan.Node_MARK:
 
 	default:
 		return
@@ -535,6 +536,9 @@ func determineShuffleForJoin(node *plan.Node, builder *QueryBuilder) {
 	rightTags := make(map[int32]bool)
 	for _, tag := range builder.enumerateTags(node.Children[1]) {
 		rightTags[tag] = true
+	}
+	if node.JoinType == plan.Node_MARK && !markJoinSupportsShuffle(node, leftTags, rightTags) {
+		return
 	}
 	// for now ,only support the first join condition
 	for i := range node.OnList {
@@ -625,6 +629,27 @@ func determineShuffleForJoin(node *plan.Node, builder *QueryBuilder) {
 			rightChild.Stats.HashmapStats.Ranges = node.Stats.HashmapStats.Ranges
 		}
 	}
+}
+
+// markJoinSupportsShuffle reports whether bucket-local hash state is enough to
+// preserve MARK's three-valued result. Unlike broadcast MARK joins, shuffle
+// buckets do not share the global build row count or the global build-NULL
+// fact. Requiring every equality operand to be statically NOT NULL removes
+// both global dependencies: exact matches are co-located and every non-match
+// is FALSE.
+func markJoinSupportsShuffle(node *plan.Node, leftTags, rightTags map[int32]bool) bool {
+	if node == nil || node.JoinType != plan.Node_MARK || len(node.OnList) == 0 {
+		return false
+	}
+	for _, condition := range node.OnList {
+		fn := condition.GetF()
+		if fn == nil || len(fn.Args) != 2 ||
+			!fn.Args[0].Typ.NotNullable || !fn.Args[1].Typ.NotNullable ||
+			!isEquiCond(condition, leftTags, rightTags) {
+			return false
+		}
+	}
+	return true
 }
 
 func dedupJoinUsesUnsupportedFloatShuffle(node *plan.Node) bool {

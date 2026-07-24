@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 )
 
@@ -88,6 +89,122 @@ func TestCanUseHashMarkJoin(t *testing.T) {
 				OnList:   tt.conditions,
 			}
 			require.Equal(t, tt.want, canUseHashMarkJoin(node))
+		})
+	}
+}
+
+func TestCanUseShuffleHashMarkJoin(t *testing.T) {
+	tests := []struct {
+		name       string
+		conditions []*plan.Expr
+		want       bool
+	}{
+		{
+			name:       "single non-null equality",
+			conditions: []*plan.Expr{makeMarkJoinTestCondition(t, "=", 0, true)},
+			want:       true,
+		},
+		{
+			name:       "single nullable equality needs global build facts",
+			conditions: []*plan.Expr{makeMarkJoinTestCondition(t, "=", 0, false)},
+		},
+		{
+			name: "composite non-null equality",
+			conditions: []*plan.Expr{
+				makeMarkJoinTestCondition(t, "=", 0, true),
+				makeMarkJoinTestCondition(t, "=", 1, true),
+			},
+			want: true,
+		},
+		{
+			name:       "non-equality condition",
+			conditions: []*plan.Expr{makeMarkJoinTestCondition(t, "<", 0, true)},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			node := &plan.Node{
+				NodeType: plan.Node_JOIN,
+				JoinType: plan.Node_MARK,
+				OnList:   tt.conditions,
+			}
+			require.Equal(t, tt.want, canUseShuffleHashMarkJoin(node))
+		})
+	}
+}
+
+func TestConstructShuffleJoinOperatorForMark(t *testing.T) {
+	node := newShuffleJoinTestNode(1)
+	node.JoinType = plan.Node_MARK
+	node.OnList = []*plan.Expr{makeMarkJoinTestCondition(t, "=", 0, true)}
+	left := &plan.Node{ProjectList: []*plan.Expr{makeMarkJoinTestColumn(0, 0, true)}}
+	right := &plan.Node{ProjectList: []*plan.Expr{makeMarkJoinTestColumn(1, 0, true)}}
+	c := newCompileForShuffleJoinTest(t, engine.Nodes{{Addr: "cn1:6001", Mcpu: 1}})
+	scope := newShuffleJoinTestScope(t, c.cnList[0], 1)
+
+	require.NotPanics(t, func() {
+		constructShuffleJoinOP(c, []*Scope{scope}, node, left, right, false)
+	})
+
+	op, ok := scope.RootOp.(*hashjoin.HashJoin)
+	require.True(t, ok)
+	require.Equal(t, plan.Node_MARK, op.JoinType)
+	require.True(t, op.IsShuffle)
+	require.Equal(t, int32(0), op.ShuffleIdx)
+}
+
+func TestCompileShuffleMarkJoinTopologies(t *testing.T) {
+	tests := []struct {
+		name       string
+		stageNodes engine.Nodes
+		wantScopes int
+	}{
+		{
+			name:       "local shared pool",
+			stageNodes: engine.Nodes{{Addr: "cn1:6001", Mcpu: 1}},
+			wantScopes: 1,
+		},
+		{
+			name: "distributed",
+			stageNodes: engine.Nodes{
+				{Addr: "cn1:6001", Mcpu: 1},
+				{Addr: "cn2:6001", Mcpu: 1},
+			},
+			wantScopes: 2,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			node := newShuffleJoinTestNode(1)
+			node.JoinType = plan.Node_MARK
+			node.Stats.HashmapStats.ShuffleMethod = plan.ShuffleMethod_Normal
+			node.OnList = []*plan.Expr{makeMarkJoinTestCondition(t, "=", 0, true)}
+			left := &plan.Node{
+				Stats:       &plan.Stats{Dop: 1},
+				ProjectList: []*plan.Expr{makeMarkJoinTestColumn(0, 0, true)},
+			}
+			right := &plan.Node{
+				Stats:       &plan.Stats{Dop: 1},
+				ProjectList: []*plan.Expr{makeMarkJoinTestColumn(1, 0, true)},
+			}
+			c := newCompileForShuffleJoinTest(t, tt.stageNodes)
+			probe := newShuffleJoinTestScope(t, tt.stageNodes[0], 1)
+			build := newShuffleJoinTestScope(t, tt.stageNodes[0], 1)
+
+			var result []*Scope
+			require.NotPanics(t, func() {
+				result = c.compileShuffleJoin(node, left, right, []*Scope{probe}, []*Scope{build})
+			})
+
+			require.Len(t, result, tt.wantScopes)
+			for _, scope := range result {
+				op, ok := scope.RootOp.(*hashjoin.HashJoin)
+				require.True(t, ok)
+				require.Equal(t, plan.Node_MARK, op.JoinType)
+				require.True(t, op.IsShuffle)
+			}
 		})
 	}
 }

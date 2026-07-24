@@ -3579,6 +3579,9 @@ func (c *Compile) compileUnionAll(node *plan.Node, ss []*Scope, children []*Scop
 
 func (c *Compile) compileJoin(node, left, right *plan.Node, probeScopes, buildScopes []*Scope) []*Scope {
 	if node.Stats.HashmapStats.Shuffle {
+		if node.JoinType == plan.Node_MARK && !canUseShuffleHashMarkJoin(node) {
+			panic(moerr.NewNYI(c.proc.Ctx, "shuffle MARK join requires pure equality predicates with statically non-null keys"))
+		}
 		return c.compileShuffleJoin(node, left, right, probeScopes, buildScopes)
 	}
 
@@ -3682,7 +3685,7 @@ func constructShuffleJoinOP(c *Compile, shuffleJoins []*Scope, node, left, right
 
 	currentFirstFlag := c.anal.isFirst
 	switch node.JoinType {
-	case plan.Node_INNER, plan.Node_LEFT, plan.Node_RIGHT, plan.Node_SEMI, plan.Node_ANTI, plan.Node_OUTER:
+	case plan.Node_INNER, plan.Node_LEFT, plan.Node_RIGHT, plan.Node_SEMI, plan.Node_ANTI, plan.Node_OUTER, plan.Node_MARK:
 		for i := range shuffleJoins {
 			op := constructHashJoin(node, left, leftTypes, rightTypes, c.proc)
 			op.ShuffleIdx = int32(i)
@@ -3794,6 +3797,28 @@ func canUseHashMarkJoin(node *plan.Node) bool {
 		allNotNull = allNotNull && fn.Args[0].Typ.NotNullable && fn.Args[1].Typ.NotNullable
 	}
 	return len(hashConditions) == 1 || allNotNull
+}
+
+// canUseShuffleHashMarkJoin is stricter than canUseHashMarkJoin because each
+// shuffle bucket builds an independent hash table. Nullable MARK keys require
+// global build facts (whether the entire build is empty and whether any key is
+// NULL) to preserve SQL three-valued semantics. Those facts are available to
+// broadcast hash MARK joins, but are not replicated across shuffle buckets.
+//
+// With statically non-null keys on both sides, exact matches are co-located by
+// the shuffle and every non-match is FALSE, so bucket-local state is sufficient.
+func canUseShuffleHashMarkJoin(node *plan.Node) bool {
+	if !canUseHashMarkJoin(node) {
+		return false
+	}
+	for _, condition := range colexec.SplitAndExprs(node.OnList) {
+		fn := condition.GetF()
+		if fn == nil || len(fn.Args) != 2 ||
+			!fn.Args[0].Typ.NotNullable || !fn.Args[1].Typ.NotNullable {
+			return false
+		}
+	}
+	return true
 }
 
 // hashMarkOperandRel returns the single relation referenced by an equality
