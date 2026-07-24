@@ -1,0 +1,186 @@
+set experimental_fulltext_index = 1;
+drop database if exists ft_gojieba_precise;
+create database ft_gojieba_precise;
+use ft_gojieba_precise;
+select f.pos, f.word
+from (
+select cast(column_0 as bigint) as id, column_1 as body
+from (values row(1, '我来到北京清华大学'))
+) as src
+cross apply fulltext_index_tokenize('{"parser":"gojieba"}', 23, id, body) as f;
+➤ pos[4,32,0]  ¦  word[12,-1,0]  𝄀
+0  ¦  我  𝄀
+3  ¦  来到  𝄀
+9  ¦  北京  𝄀
+15  ¦  清华大学  𝄀
+4  ¦  __DocLen
+select f.pos, f.word
+from (
+select cast(column_0 as bigint) as id, column_1 as body
+from (values row(1, 'Hello, WORLD! MatrixOne数据库'))
+) as src
+cross apply fulltext_index_tokenize('{"parser":"gojieba"}', 23, id, body) as f;
+➤ pos[4,32,0]  ¦  word[12,-1,0]  𝄀
+0  ¦  hello  𝄀
+7  ¦  world  𝄀
+14  ¦  matrixone  𝄀
+23  ¦  数据库  𝄀
+4  ¦  __DocLen
+select f.pos, f.word
+from (
+select cast(column_0 as bigint) as id, column_1 as body
+from (values row(1, 'abcdefghijklmnopqrstuvwxyzabcd'))
+) as src
+cross apply fulltext_index_tokenize('{"parser":"gojieba"}', 23, id, body) as f;
+➤ pos[4,32,0]  ¦  word[12,-1,0]  𝄀
+0  ¦  abcdefghijklmnopqrstuvw  𝄀
+1  ¦  __DocLen
+select f.pos, f.word
+from (
+select cast(column_0 as bigint) as id, column_1 as body
+from (values row(1, 'red red red'))
+) as src
+cross apply fulltext_index_tokenize('{"parser":"gojieba"}', 23, id, body) as f;
+➤ pos[4,32,0]  ¦  word[12,-1,0]  𝄀
+0  ¦  red  𝄀
+4  ¦  red  𝄀
+8  ¦  red  𝄀
+3  ¦  __DocLen
+select f.pos, f.word
+from (
+select cast(column_0 as bigint) as id, column_1 as body, column_2 as title
+from (values row(1, '我来到北京', 'MatrixOne 数据库'))
+) as src
+cross apply fulltext_index_tokenize('{"parser":"gojieba"}', 23, id, body, title) as f;
+➤ pos[4,32,0]  ¦  word[12,-1,0]  𝄀
+0  ¦  我  𝄀
+3  ¦  来到  𝄀
+9  ¦  北京  𝄀
+16  ¦  matrixone  𝄀
+26  ¦  数据库  𝄀
+5  ¦  __DocLen
+select f.pos, f.word
+from (
+select cast(column_0 as bigint) as id, column_1 as body
+from (values row(1, '他来到了网易杭研大厦'))
+) as src
+cross apply fulltext_index_tokenize('{"parser":"gojieba"}', 23, id, body) as f;
+➤ pos[4,32,0]  ¦  word[12,-1,0]  𝄀
+0  ¦  他  𝄀
+3  ¦  来到  𝄀
+9  ¦  了  𝄀
+12  ¦  网易  𝄀
+18  ¦  杭  𝄀
+21  ¦  研  𝄀
+24  ¦  大厦  𝄀
+7  ¦  __DocLen
+select count(*)
+from (
+select cast(column_0 as bigint) as id, column_1 as body
+from (values row(1, '     '))
+) as src
+cross apply fulltext_index_tokenize('{"parser":"gojieba"}', 23, id, body) as f;
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*)
+from (
+select cast(column_0 as bigint) as id, column_1 as body
+from (values row(1, '，。！？；：、（）【】'))
+) as src
+cross apply fulltext_index_tokenize('{"parser":"gojieba"}', 23, id, body) as f;
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*)
+from (
+select cast(column_0 as bigint) as id, column_1 as body
+from (values row(1, ''))
+) as src
+cross apply fulltext_index_tokenize('{"parser":"gojieba"}', 23, id, body) as f;
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*)
+from (
+select cast(column_0 as bigint) as id, cast(column_1 as varchar) as body
+from (values row(1, null))
+) as src
+cross apply fulltext_index_tokenize('{"parser":"gojieba"}', 23, id, body) as f;
+➤ count(*)[-5,64,0]  𝄀
+0
+create table docs (
+id int primary key,
+title varchar(255),
+body text,
+tag int
+);
+insert into docs values
+(1, 'TitleOnlyToken', '', 0),
+(2, 'NullTitleToken', null, 0),
+(3, '', 'BodyOnlyToken', 0),
+(4, null, 'NullBodyToken', 0),
+(5, '校园', '我来到北京', 0),
+(6, null, null, 0);
+create fulltext index ft_docs on docs(title, body) with parser gojieba;
+select id from docs
+where match(title, body) against('+titleonlytoken' in boolean mode)
+order by id;
+➤ id[4,32,0]  𝄀
+1
+select id from docs
+where match(title, body) against('+nulltitletoken' in boolean mode)
+order by id;
+➤ id[4,32,0]
+select id from docs
+where match(title, body) against('+bodyonlytoken' in boolean mode)
+order by id;
+➤ id[4,32,0]  𝄀
+3
+select id from docs
+where match(title, body) against('+nullbodytoken' in boolean mode)
+order by id;
+➤ id[4,32,0]
+select id from docs
+where match(title, body) against('"校园我来到"' in boolean mode)
+order by id;
+➤ id[4,32,0]
+select id from docs
+where match(title, body) against('+titleonlytoken +titleonlytoken' in boolean mode)
+order by id;
+➤ id[4,32,0]  𝄀
+1
+select id from docs
+where match(title, body) against('+titleonlytoken +bodyonlytoken' in boolean mode)
+order by id;
+➤ id[4,32,0]
+select id from docs
+where match(title, body) against('' in boolean mode);
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. SQL syntax error: AGAINST('pattern') pattern is empty. at line 2 column 53 near ");";
+update docs set tag = 7 where id = 1;
+select id, tag from docs
+where match(title, body) against('+titleonlytoken' in boolean mode);
+➤ id[4,32,0]  ¦  tag[4,32,0]  𝄀
+1  ¦  7
+update docs set title = 'LifecycleTitle', body = 'LifecycleBody' where id = 6;
+select id from docs
+where match(title, body) against('+lifecycletitle +lifecyclebody' in boolean mode);
+➤ id[4,32,0]  𝄀
+6
+update docs set title = null where id = 6;
+select id from docs
+where match(title, body) against('+lifecyclebody' in boolean mode);
+➤ id[4,32,0]
+update docs set title = '' where id = 6;
+select id from docs
+where match(title, body) against('+lifecyclebody' in boolean mode);
+➤ id[4,32,0]  𝄀
+6
+truncate table docs;
+select count(*) from docs
+where match(title, body) against('+titleonlytoken' in boolean mode);
+➤ count(*)[-5,64,0]  𝄀
+0
+insert into docs values (7, 'AfterTruncate', 'RestoredToken', 0);
+select id from docs
+where match(title, body) against('+aftertruncate +restoredtoken' in boolean mode);
+➤ id[4,32,0]  𝄀
+7
+drop database ft_gojieba_precise;
