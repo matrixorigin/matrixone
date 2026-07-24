@@ -36,24 +36,6 @@ type Handler interface {
 		meta txn.TxnMeta,
 	) error
 
-	HandleCommitting(
-		ctx context.Context,
-		meta txn.TxnMeta,
-	) error
-
-	HandlePrepare(
-		ctx context.Context,
-		meta txn.TxnMeta,
-	) (
-		timestamp.Timestamp,
-		error,
-	)
-
-	HandleStartRecovery(
-		ctx context.Context,
-		ch chan txn.TxnMeta,
-	)
-
 	HandleClose(ctx context.Context) error
 
 	HandleDestroy(ctx context.Context) error
