@@ -119,6 +119,16 @@ select dayofmonth(cast('0000-00-00' as date)) as zero_dayofmonth_date,
        year(cast('0000-00-00' as date)) as zero_year_date,
        year(cast('0000-00-00 00:00:00' as datetime)) as zero_year_datetime;
 
+-- EXTRACT(WEEK) must not pass a zero sentinel into calendar week arithmetic.
+select extract(week from cast('0000-00-00' as date)) as zero_extract_week_date,
+       extract(week from cast('0000-00-00 00:00:00' as datetime)) as zero_extract_week_datetime,
+       extract(week from cast('0000-00-00 00:00:00' as timestamp)) as zero_extract_week_timestamp,
+       extract(week from '0000-00-00 00:00:00') as zero_extract_week_datetime_string,
+       extract(week from '0000-00-00') as zero_extract_week_date_string;
+select extract(week from cast('0001-01-01' as date)) as minimum_extract_week_date,
+       extract(week from cast('0001-01-01 00:00:00' as datetime)) as minimum_extract_week_datetime,
+       extract(week from '0001-01-01') as minimum_extract_week_string;
+
 -- The zero sentinels must not consume the valid minimum calendar value.
 select cast('0001-01-01' as date) as minimum_date,
        cast('0001-01-01 00:00:00' as datetime) as minimum_datetime,

@@ -8935,6 +8935,61 @@ func TestExtract(t *testing.T) {
 	}
 }
 
+func TestExtractWeekZeroTemporalsReturnZero(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	unit := NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"week"}, nil)
+
+	for _, tc := range []struct {
+		name   string
+		inputs []FunctionTestInput
+		expect FunctionTestResult
+		fn     fEvalFn
+	}{
+		{
+			name: "date",
+			inputs: []FunctionTestInput{
+				unit,
+				NewFunctionTestInput(types.T_date.ToType(), []types.Date{types.ZeroDate}, nil),
+			},
+			expect: NewFunctionTestResult(types.T_uint32.ToType(), false, []uint32{0}, nil),
+			fn:     ExtractFromDate,
+		},
+		{
+			name: "datetime",
+			inputs: []FunctionTestInput{
+				unit,
+				NewFunctionTestInput(types.T_datetime.ToType(), []types.Datetime{types.ZeroDatetime}, nil),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"00"}, nil),
+			fn:     ExtractFromDatetime,
+		},
+		{
+			name: "timestamp",
+			inputs: []FunctionTestInput{
+				unit,
+				NewFunctionTestInput(types.T_timestamp.ToType(), []types.Timestamp{types.ZeroTimestamp}, nil),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"00"}, nil),
+			fn:     ExtractFromTimestamp,
+		},
+		{
+			name: "string",
+			inputs: []FunctionTestInput{
+				unit,
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"0000-00-00 00:00:00"}, nil),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"00"}, nil),
+			fn:     ExtractFromVarchar,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			testCase := NewFunctionTestCase(proc, tc.inputs, tc.expect, tc.fn)
+			succeed, info := testCase.Run()
+			require.True(t, succeed, info)
+		})
+	}
+}
+
 // TestExtractMicrosecondFromDateAddString tests EXTRACT(MICROSECOND FROM DATE_ADD(...))
 // This verifies that when DATE_ADD returns a string with fractional seconds,
 // EXTRACT can correctly extract the microseconds even when the string type has scale=0

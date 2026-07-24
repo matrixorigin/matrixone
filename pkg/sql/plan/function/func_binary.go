@@ -6262,7 +6262,9 @@ func ExtractFromDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 		case "day":
 			r = uint32(d.Day())
 		case "week":
-			r = uint32(d.WeekOfYear2())
+			if d != types.ZeroDate {
+				r = uint32(d.WeekOfYear2())
+			}
 		case "month":
 			r = uint32(d.Month())
 		case "quarter":
@@ -6576,7 +6578,11 @@ func extractFromDatetime(unit string, d types.Datetime) (string, error) {
 	case "day":
 		value = fmt.Sprintf("%02d", int(d.ToDate().Day()))
 	case "week":
-		value = fmt.Sprintf("%02d", int(d.ToDate().WeekOfYear2()))
+		if d == types.ZeroDatetime {
+			value = "00"
+		} else {
+			value = fmt.Sprintf("%02d", int(d.ToDate().WeekOfYear2()))
+		}
 	case "month":
 		value = fmt.Sprintf("%02d", int(d.ToDate().Month()))
 	case "quarter":
