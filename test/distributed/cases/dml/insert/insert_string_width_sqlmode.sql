@@ -184,6 +184,50 @@ select cast(st_geomfromtext('POINT(1 2)') as char(3));
 drop table geometry_src;
 drop table geometry_dst;
 
+-- ============================================================
+-- (12) GEOMETRY/GEOMETRY32 honor CHAR/VARCHAR(0) width semantics
+-- ============================================================
+create table geometry_zero_src (g geometry, g32 geometry32);
+create table geometry_zero_char (c char(0));
+create table geometry_zero_varchar (c varchar(0));
+insert into geometry_zero_src values (
+    st_geomfromtext('POINT(1 2)'),
+    cast(st_geomfromtext('POINT(1 2)') as geometry32)
+);
+
+set session sql_mode = 'STRICT_TRANS_TABLES';
+insert into geometry_zero_varchar values (st_geomfromtext('POINT(1 2)'));
+insert into geometry_zero_char values (
+    cast(st_geomfromtext('POINT(1 2)') as geometry32)
+);
+insert into geometry_zero_varchar select g from geometry_zero_src;
+insert into geometry_zero_char select g32 from geometry_zero_src;
+
+set session sql_mode = '';
+insert into geometry_zero_varchar values (st_geomfromtext('POINT(1 2)'));
+insert into geometry_zero_char values (
+    cast(st_geomfromtext('POINT(1 2)') as geometry32)
+);
+insert into geometry_zero_varchar select g from geometry_zero_src;
+insert into geometry_zero_char select g32 from geometry_zero_src;
+select count(*), sum(char_length(c)) from geometry_zero_varchar;
+select count(*), sum(char_length(c)) from geometry_zero_char;
+
+set session sql_mode = 'STRICT_TRANS_TABLES';
+insert ignore into geometry_zero_varchar values (st_geomfromtext('POINT(1 2)'));
+insert ignore into geometry_zero_char select g32 from geometry_zero_src;
+select count(*), sum(char_length(c)) from geometry_zero_varchar;
+select count(*), sum(char_length(c)) from geometry_zero_char;
+
+select char_length(cast(st_geomfromtext('POINT(1 2)') as char(0)));
+select char_length(cast(
+    cast(st_geomfromtext('POINT(1 2)') as geometry32) as varchar(0)
+));
+
+drop table geometry_zero_src;
+drop table geometry_zero_char;
+drop table geometry_zero_varchar;
+
 drop database insert_str_width;
 set session sql_mode = @old_sql_mode;
 select @@sql_mode = @old_sql_mode;

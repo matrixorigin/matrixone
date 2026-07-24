@@ -2446,7 +2446,7 @@ func geometryToTextCast(
 			return err
 		}
 		if (toType.Oid == types.T_char || toType.Oid == types.T_varchar) &&
-			toType.Width > 0 && utf8.RuneCountInString(wkt) > int(toType.Width) {
+			toType.Width >= 0 && utf8.RuneCountInString(wkt) > int(toType.Width) {
 			destLen := int(toType.Width)
 			if (allowTrailingSpaceTrim && overLenIsAllTrailingSpaces(wkt, destLen)) || !strictStringWidth {
 				wkt = truncateStringByRunes(wkt, destLen)

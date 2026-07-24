@@ -160,6 +160,57 @@ select cast(st_geomfromtext('POINT(1 2)') as char(3));
 POI
 drop table geometry_src;
 drop table geometry_dst;
+create table geometry_zero_src (g geometry, g32 geometry32);
+create table geometry_zero_char (c char(0));
+create table geometry_zero_varchar (c varchar(0));
+insert into geometry_zero_src values (
+st_geomfromtext('POINT(1 2)'),
+cast(st_geomfromtext('POINT(1 2)') as geometry32)
+);
+set session sql_mode = 'STRICT_TRANS_TABLES';
+insert into geometry_zero_varchar values (st_geomfromtext('POINT(1 2)'));
+Data truncation: Can't cast 'POINT(1 2)' to VARCHAR type. Src length 10 is larger than Dest length 0
+insert into geometry_zero_char values (
+cast(st_geomfromtext('POINT(1 2)') as geometry32)
+);
+Data truncation: Can't cast 'POINT(1 2)' to CHAR type. Src length 10 is larger than Dest length 0
+insert into geometry_zero_varchar select g from geometry_zero_src;
+Data truncation: Can't cast column from GEOMETRY type to VARCHAR type because of one or more values in that column. Src length 10 is larger than Dest length 0
+insert into geometry_zero_char select g32 from geometry_zero_src;
+Data truncation: Can't cast column from GEOMETRY32 type to CHAR type because of one or more values in that column. Src length 10 is larger than Dest length 0
+set session sql_mode = '';
+insert into geometry_zero_varchar values (st_geomfromtext('POINT(1 2)'));
+insert into geometry_zero_char values (
+cast(st_geomfromtext('POINT(1 2)') as geometry32)
+);
+insert into geometry_zero_varchar select g from geometry_zero_src;
+insert into geometry_zero_char select g32 from geometry_zero_src;
+select count(*), sum(char_length(c)) from geometry_zero_varchar;
+➤ count(*)[-5,64,0]  ¦  sum(char_length(c))[3,38,0]  𝄀
+2  ¦  0
+select count(*), sum(char_length(c)) from geometry_zero_char;
+➤ count(*)[-5,64,0]  ¦  sum(char_length(c))[3,38,0]  𝄀
+2  ¦  0
+set session sql_mode = 'STRICT_TRANS_TABLES';
+insert ignore into geometry_zero_varchar values (st_geomfromtext('POINT(1 2)'));
+insert ignore into geometry_zero_char select g32 from geometry_zero_src;
+select count(*), sum(char_length(c)) from geometry_zero_varchar;
+➤ count(*)[-5,64,0]  ¦  sum(char_length(c))[3,38,0]  𝄀
+3  ¦  0
+select count(*), sum(char_length(c)) from geometry_zero_char;
+➤ count(*)[-5,64,0]  ¦  sum(char_length(c))[3,38,0]  𝄀
+3  ¦  0
+select char_length(cast(st_geomfromtext('POINT(1 2)') as char(0)));
+➤ char_length(cast(st_geomfromtext(POINT(1 2)) as char(0)))[-5,64,0]  𝄀
+0
+select char_length(cast(
+cast(st_geomfromtext('POINT(1 2)') as geometry32) as varchar(0)
+));
+➤ char_length(cast(cast(st_geomfromtext(POINT(1 2)) as geometry) as varchar(0)))[-5,64,0]  𝄀
+0
+drop table geometry_zero_src;
+drop table geometry_zero_char;
+drop table geometry_zero_varchar;
 drop database insert_str_width;
 set session sql_mode = @old_sql_mode;
 select @@sql_mode = @old_sql_mode;

@@ -407,11 +407,14 @@ func TestMultibyteAssignmentErrorUsesCharacterLength(t *testing.T) {
 	require.False(t, strings.Contains(err.Error(), "Src length 12"))
 }
 
-func castGeometryToVarchar(
+func castGeometryToString(
 	t *testing.T,
 	proc *process.Process,
 	input string,
+	sourceType types.T,
+	targetType types.T,
 	width int32,
+	constSource bool,
 	cast func(
 		[]*vector.Vector,
 		vector.FunctionResultWrapper,
@@ -421,9 +424,20 @@ func castGeometryToVarchar(
 	) error,
 ) (string, error) {
 	t.Helper()
-	toType := types.New(types.T_varchar, width, 0)
-	src := vector.NewVec(types.T_geometry.ToType())
-	require.NoError(t, vector.AppendBytes(src, encodeGeometryPayload(input, 0, false), false, proc.Mp()))
+	toType := types.New(targetType, width, 0)
+	payload := encodeGeometryPayload(input, 0, false)
+	if sourceType == types.T_geometry32 {
+		payload = encodeGeometryPayloadFloat32(input)
+	}
+	var src *vector.Vector
+	if constSource {
+		var err error
+		src, err = vector.NewConstBytes(sourceType.ToType(), payload, 1, proc.Mp())
+		require.NoError(t, err)
+	} else {
+		src = vector.NewVec(sourceType.ToType())
+		require.NoError(t, vector.AppendBytes(src, payload, false, proc.Mp()))
+	}
 	defer src.Free(proc.Mp())
 	dst := vector.NewVec(toType)
 	defer dst.Free(proc.Mp())
@@ -447,29 +461,141 @@ func TestGeometryToVarcharWidthEnforcement(t *testing.T) {
 		return proc
 	}
 
-	_, err := castGeometryToVarchar(
+	_, err := castGeometryToString(
 		t,
 		newProc("STRICT_TRANS_TABLES"),
 		"POINT(1 2)",
+		types.T_geometry,
+		types.T_varchar,
 		3,
+		false,
 		NewAssignCast,
 	)
 	require.Error(t, err)
 	require.Equal(t, moerr.ErrCastWidthExceeded, err.(*moerr.Error).ErrorCode())
 
-	got, err := castGeometryToVarchar(t, newProc(""), "POINT(1 2)", 3, NewAssignCast)
+	got, err := castGeometryToString(
+		t,
+		newProc(""),
+		"POINT(1 2)",
+		types.T_geometry,
+		types.T_varchar,
+		3,
+		false,
+		NewAssignCast,
+	)
 	require.NoError(t, err)
 	require.Equal(t, "POI", got)
 
-	got, err = castGeometryToVarchar(
+	got, err = castGeometryToString(
 		t,
 		testutil.NewProcess(t),
 		"POINT(1 2)",
+		types.T_geometry,
+		types.T_varchar,
 		3,
+		false,
 		NewExplicitCast,
 	)
 	require.NoError(t, err)
 	require.Equal(t, "POI", got)
+}
+
+func TestGeometryToZeroWidthCharVarchar(t *testing.T) {
+	newProc := func(sqlMode string) *process.Process {
+		proc := testutil.NewProcess(t)
+		proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+			require.Equal(t, "sql_mode", name)
+			return sqlMode, nil
+		})
+		return proc
+	}
+
+	for _, sourceType := range []types.T{types.T_geometry, types.T_geometry32} {
+		for _, targetType := range []types.T{types.T_char, types.T_varchar} {
+			for _, sourceShape := range []struct {
+				name    string
+				isConst bool
+			}{
+				{name: "column"},
+				{name: "constant", isConst: true},
+			} {
+				prefix := sourceType.String() + "_to_" + targetType.String() + "/" + sourceShape.name
+				t.Run(prefix+"/strict", func(t *testing.T) {
+					_, err := castGeometryToString(
+						t,
+						newProc("STRICT_TRANS_TABLES"),
+						"POINT(1 2)",
+						sourceType,
+						targetType,
+						0,
+						sourceShape.isConst,
+						NewAssignCast,
+					)
+					require.Error(t, err)
+					moErr := err.(*moerr.Error)
+					require.Equal(t, moerr.ErrCastWidthExceeded, moErr.ErrorCode())
+					require.Equal(t, uint16(moerr.ER_DATA_TOO_LONG), moErr.MySQLCode())
+				})
+				t.Run(prefix+"/nonstrict", func(t *testing.T) {
+					got, err := castGeometryToString(
+						t,
+						newProc(""),
+						"POINT(1 2)",
+						sourceType,
+						targetType,
+						0,
+						sourceShape.isConst,
+						NewAssignCast,
+					)
+					require.NoError(t, err)
+					require.Empty(t, got)
+				})
+				t.Run(prefix+"/ignore", func(t *testing.T) {
+					got, err := castGeometryToString(
+						t,
+						newProc("STRICT_TRANS_TABLES"),
+						"POINT(1 2)",
+						sourceType,
+						targetType,
+						0,
+						sourceShape.isConst,
+						NewAssignIgnoreCast,
+					)
+					require.NoError(t, err)
+					require.Empty(t, got)
+				})
+				t.Run(prefix+"/explicit", func(t *testing.T) {
+					got, err := castGeometryToString(
+						t,
+						testutil.NewProcess(t),
+						"POINT(1 2)",
+						sourceType,
+						targetType,
+						0,
+						sourceShape.isConst,
+						NewExplicitCast,
+					)
+					require.NoError(t, err)
+					require.Empty(t, got)
+				})
+			}
+			t.Run(sourceType.String()+"_to_"+targetType.String()+"/negative_width", func(t *testing.T) {
+				got, err := castGeometryToString(
+					t,
+					testutil.NewProcess(t),
+					"POINT(1 2)",
+					sourceType,
+					targetType,
+					-1,
+					false,
+					NewExplicitCast,
+				)
+				require.NoError(t, err)
+				require.Equal(t, "POINT(1 2)", got)
+			})
+		}
+	}
 }
 
 func runJSONToStrWidth(t *testing.T, mp *mpool.MPool, jsonText string, toType types.Type, strict, allowTrim bool) (string, error) {
