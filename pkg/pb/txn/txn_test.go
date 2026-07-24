@@ -33,3 +33,18 @@ func TestErrorTypeConversion(t *testing.T) {
 	assert.Equal(t, txnErr.TxnErrCode, uint32(moerr.ErrTAEError))
 	assert.Equal(t, err, txnErr.UnwrapError())
 }
+
+func TestLegacyProtocolValuesRemainStable(t *testing.T) {
+	assert.Equal(t, TxnStatus(1), TxnStatus_Prepared)
+	assert.Equal(t, TxnStatus(2), TxnStatus_Committing)
+	assert.Equal(t, TxnStatus(3), TxnStatus_Committed)
+	assert.Equal(t, TxnStatus(4), TxnStatus_Aborting)
+	assert.Equal(t, TxnStatus(5), TxnStatus_Aborted)
+
+	assert.Equal(t, TxnMethod(4), TxnMethod_Prepare)
+	assert.Equal(t, TxnMethod(5), TxnMethod_GetStatus)
+	assert.Equal(t, TxnMethod(6), TxnMethod_CommitTNShard)
+	assert.Equal(t, TxnMethod(7), TxnMethod_RollbackTNShard)
+	assert.Equal(t, TxnMethod(8), TxnMethod_RemoveMedata)
+	assert.Equal(t, TxnMethod(9), TxnMethod_DEBUG)
+}
