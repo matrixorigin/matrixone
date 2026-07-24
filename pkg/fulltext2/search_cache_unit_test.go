@@ -18,8 +18,12 @@ import (
 	"math"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/stretchr/testify/require"
@@ -170,4 +174,29 @@ func TestFulltext2SearchDestroy(t *testing.T) {
 	s.Destroy()
 	require.Nil(t, s.idx)
 	require.False(t, s.loaded)
+}
+
+// TestLoadGenerationHappy stubs the package runSql to cover the fulltext2 generation reader
+// (StaleGenSqls + resultScalarInt64 + the two-read LoadGeneration body).
+func TestLoadGenerationHappy(t *testing.T) {
+	mp := mpool.MustNewZero()
+	old := runSql
+	defer func() { runSql = old }()
+	n := 0
+	runSql = func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
+		n++
+		bat := batch.NewWithSize(1)
+		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		v := int64(11)
+		if n == 2 {
+			v = 22
+		}
+		require.NoError(t, vector.AppendFixed[int64](bat.Vecs[0], v, false, mp))
+		bat.SetRowCount(1)
+		return executor.Result{Mp: mp, Batches: []*batch.Batch{bat}}, nil
+	}
+	ts, tail, err := LoadGeneration(nil, TableConfig{DbName: "db", MetadataTable: "m", IndexTable: "s"})
+	require.NoError(t, err)
+	require.Equal(t, int64(11), ts)   // MAX(timestamp)
+	require.Equal(t, int64(22), tail) // MAX(chunk_id) tag=1
 }

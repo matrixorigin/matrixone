@@ -370,3 +370,12 @@ func makeIndexBatch2Files(proc *process.Process, id int) *batch.Batch {
 	bat.SetRowCount(1)
 	return bat
 }
+
+// TestHnswSearchIsStaleNoGeneration: with no generation captured (genValid=false, e.g. a load
+// that never ran or a capture failure), IsStale is a safe no-op — never stale, never errors.
+func TestHnswSearchIsStaleNoGeneration(t *testing.T) {
+	s := &HnswSearch[float32]{}
+	stale, err := s.IsStale()
+	require.NoError(t, err)
+	require.False(t, stale)
+}

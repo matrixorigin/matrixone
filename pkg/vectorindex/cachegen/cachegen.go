@@ -30,6 +30,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
 
+// indirected for unit tests.
+var (
+	runSql           = sqlexec.RunSql
+	runSqlAutoCommit = sqlexec.RunSqlAutoCommit
+)
+
 // CdcGenerationSqls returns the (timestamp, tail-chunk) generation queries shared by every
 // CDC-maintained cuvs/hnsw index, for the VectorIndexCache cross-CN freshness check (IsStale):
 //   - MAX(metadata.timestamp): a REBUILD/MERGE writes a new model row with a fresh timestamp.
@@ -71,13 +77,13 @@ func LoadCdcGeneration(sqlproc *sqlexec.SqlProcess, tblcfg vectorindex.IndexTabl
 		}
 	}()
 	tsSQL, tailSQL := CdcGenerationSqls(tblcfg)
-	res, err := sqlexec.RunSql(sqlproc, tsSQL)
+	res, err := runSql(sqlproc, tsSQL)
 	if err != nil {
 		return 0, 0, err
 	}
 	ts = genScalarInt64(res)
 	res.Close()
-	res, err = sqlexec.RunSql(sqlproc, tailSQL)
+	res, err = runSql(sqlproc, tailSQL)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -96,13 +102,13 @@ func QueryCdcGeneration(ctx context.Context, cnUUID string, accountID uint32, tb
 		}
 	}()
 	tsSQL, tailSQL := CdcGenerationSqls(tblcfg)
-	res, err := sqlexec.RunSqlAutoCommit(ctx, cnUUID, accountID, tblcfg.DbName, tsSQL)
+	res, err := runSqlAutoCommit(ctx, cnUUID, accountID, tblcfg.DbName, tsSQL)
 	if err != nil {
 		return 0, 0, err
 	}
 	ts = genScalarInt64(res)
 	res.Close()
-	res, err = sqlexec.RunSqlAutoCommit(ctx, cnUUID, accountID, tblcfg.DbName, tailSQL)
+	res, err = runSqlAutoCommit(ctx, cnUUID, accountID, tblcfg.DbName, tailSQL)
 	if err != nil {
 		return 0, 0, err
 	}
