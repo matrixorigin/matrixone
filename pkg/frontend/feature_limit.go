@@ -253,9 +253,12 @@ func queryQuota(
 			catalog.MO_CATALOG, catalog.MO_FEATURE_LIMIT, accId, code, scope, quota,
 		)
 
-		if _, err = runSql(
-			ctx, ses, bh, sql, nil, nil,
-		); err != nil {
+		if code == featureCodeBranch {
+			_, err = runSqlWithBackExec(ctx, ses, bh, sql)
+		} else {
+			_, err = runSql(ctx, ses, bh, sql, nil, nil)
+		}
+		if err != nil {
 			return 0, err
 		}
 

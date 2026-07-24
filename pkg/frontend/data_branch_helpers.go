@@ -227,19 +227,29 @@ func runSqlWithMode(
 	}
 
 	if useBackExec {
+		_, realBackExec := bh.(*backExec)
+		if forceBackExec && realBackExec {
+			bh.ClearExecResultBatches()
+		}
 		// export as CSV need this
 		// bh.(*backExec).backSes.SetMysqlResultSet(&MysqlResultSet{})
 		//for range tblStuff.def.visibleIdxes {
 		//	bh.(*backExec).backSes.mrs.AddColumn(&MysqlColumn{})
 		//}
 		if err = bh.Exec(ctx, sql); err != nil {
+			if forceBackExec && realBackExec {
+				bh.ClearExecResultBatches()
+			}
 			return
 		}
-		if _, ok := bh.(*backExec); ok {
+		if realBackExec {
 			bh.ClearExecResultSet()
-			sqlRet.Mp = ses.proc.Mp()
-			sqlRet.Batches = bh.GetExecResultBatches()
-			return
+			if !forceBackExec {
+				sqlRet.Mp = ses.proc.Mp()
+				sqlRet.Batches = bh.GetExecResultBatches()
+				return
+			}
+			return copyAndClearBackExecResult(ses, bh)
 		}
 
 		rs := bh.GetExecResultSet()
@@ -291,6 +301,24 @@ func runSqlWithMode(
 		return sqlRet, err
 	}
 
+	return sqlRet, nil
+}
+
+func copyAndClearBackExecResult(
+	ses *Session,
+	bh BackgroundExec,
+) (sqlRet executor.Result, err error) {
+	sqlRet.Mp = ses.proc.Mp()
+	defer bh.ClearExecResultBatches()
+
+	for _, bat := range bh.GetExecResultBatches() {
+		var copied *batch.Batch
+		if copied, err = bat.Dup(sqlRet.Mp); err != nil {
+			sqlRet.Close()
+			return executor.Result{}, err
+		}
+		sqlRet.Batches = append(sqlRet.Batches, copied)
+	}
 	return sqlRet, nil
 }
 
