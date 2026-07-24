@@ -384,7 +384,7 @@ retryInsertValues:
 	// but conflict detection must still cover every value generated for this batch.
 	lastAllocateTSMap := make(map[string]timestamp.Timestamp)
 	for col := range needReCheck {
-		ts, err := proc.GetIncrService().GetLastAllocateTS(proc.Ctx, tableID, col)
+		ts, err := proc.GetIncrService().GetLastAllocateTS(proc.Ctx, tableID, preInsert.TableDef.AutoIncrEpoch, currentTxn, col)
 		if err != nil {
 			return err
 		}
@@ -394,6 +394,8 @@ retryInsertValues:
 	lastInsertValue, err := proc.GetIncrService().InsertValues(
 		proc.Ctx,
 		tableID,
+		preInsert.TableDef.AutoIncrEpoch,
+		currentTxn,
 		bat.Vecs[preInsert.ColOffset:int(preInsert.ColOffset)+len(preInsert.Attrs)],
 		bat.RowCount(),
 		preInsert.EstimatedRowCount,
