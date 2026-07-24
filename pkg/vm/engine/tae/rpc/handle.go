@@ -604,11 +604,6 @@ func (h *Handle) HandleCommit(
 	if err != nil {
 		return
 	}
-	//if txn is 2PC ,need to set commit timestamp passed by coordinator.
-	if txn.Is2PC() {
-		txn.SetCommitTS(types.TimestampToTS(meta.GetCommitTS()))
-	}
-
 	v2.TxnBeforeCommitDurationHistogram.Observe(time.Since(start).Seconds())
 
 	err = txn.Commit(ctx)
@@ -639,10 +634,6 @@ func (h *Handle) HandleCommit(
 			bigDeleteTbls, hasDDL, err = h.handleRequests(ctx, txn, commitRequests, response, meta)
 			if err != nil && !moerr.IsMoErrCode(err, moerr.ErrTAENeedRetry) {
 				break
-			}
-			//if txn is 2PC ,need to set commit timestamp passed by coordinator.
-			if txn.Is2PC() {
-				txn.SetCommitTS(types.TimestampToTS(meta.GetCommitTS()))
 			}
 			err = txn.Commit(ctx)
 			cts = txn.GetCommitTS().ToTimestamp()

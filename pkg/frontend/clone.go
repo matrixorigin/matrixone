@@ -93,10 +93,8 @@ func getBackExecutor(
 	bh = ses.GetBackgroundExec(ctx)
 	bh.ClearExecResultSet()
 	if err = bh.Exec(ctx, "begin"); err != nil {
-		return nil, func(err error) error {
-			bh.Close()
-			return nil
-		}, err
+		bh.Close()
+		return nil, nil, err
 	}
 
 	deferred = func(err2 error) error {
