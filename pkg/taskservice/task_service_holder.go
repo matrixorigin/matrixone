@@ -93,6 +93,9 @@ func (h *taskServiceHolder) Create(command logservicepb.CreateTaskService) error
 
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if h.mu.closed {
+		return ErrNotReady
+	}
 	if h.mu.service != nil {
 		return nil
 	}
@@ -110,7 +113,7 @@ func (h *taskServiceHolder) Create(command logservicepb.CreateTaskService) error
 func (h *taskServiceHolder) Get() (TaskService, bool) {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
-	if h.mu.service == nil {
+	if h.mu.closed || h.mu.service == nil {
 		return nil, false
 	}
 	return h.mu.service, true
