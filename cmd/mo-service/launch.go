@@ -153,7 +153,7 @@ func startCNServiceCluster(
 		}
 	}
 
-	if len(upstreams) > 1 {
+	if shouldStartBuiltinCNProxy(len(upstreams), *withProxy) {
 		// TODO: make configurable for 6001
 		cnProxy = goetty.NewProxy("0.0.0.0:6001", logutil.GetGlobalLogger().Named("mysql-proxy"))
 		for _, address := range upstreams {
@@ -164,6 +164,10 @@ func startCNServiceCluster(
 		}
 	}
 	return nil
+}
+
+func shouldStartBuiltinCNProxy(upstreamCount int, proxyServiceEnabled bool) bool {
+	return upstreamCount > 1 && !proxyServiceEnabled
 }
 
 func startProxyServiceCluster(

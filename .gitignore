@@ -18,6 +18,7 @@
 *.py
 !pkg/iceberg/metadata/testdata/generate_golden_vectors.py
 !optools/iceberg_external_runner.py
+!suites/scenarios/14_issue_regression/issue_25599_proxy_disconnect_cancel.py
 *.sh
 !etc/launch-minio-local/tier-b/seed-nyc-tlc-iceberg.sh
 bin/
