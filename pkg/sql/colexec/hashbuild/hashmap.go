@@ -354,6 +354,15 @@ func expressionVectorPeak(proc *process.Process, expr *plan.Expr, rows int, dupl
 	return total, nil
 }
 
+// ExpressionVectorPeak exposes the same execution-before-allocation bound used
+// by HashmapBuilder to spill/re-spill callers. Expression evaluators cache
+// intermediate and result vectors, so callers must keep the returned amount
+// reserved until the corresponding executor tree is freed or evaluated again
+// under a replacement reservation.
+func ExpressionVectorPeak(proc *process.Process, expr *plan.Expr, rows int, duplicate bool) (uint64, error) {
+	return expressionVectorPeak(proc, expr, rows, duplicate)
+}
+
 func expressionTreePeak(proc *process.Process, expr *plan.Expr, rows uint64) (total uint64, output uint64, err error) {
 	if expr == nil {
 		return 0, 0, process.ErrHashBuildBudgetInvalid

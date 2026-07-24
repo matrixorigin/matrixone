@@ -196,17 +196,30 @@ func TestCleanCopiedBatchReleasesCoalescedIngressReservations(t *testing.T) {
 	require.Zero(t, generation.Used())
 }
 
-func TestSpillExpressionHashKeyFailsClosedBeforeEvaluatorAllocation(t *testing.T) {
+func TestSpillExpressionHashKeyUsesBoundedAdmission(t *testing.T) {
 	var ctr container
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
-	_, err := ctr.initSpillExprExecs(proc, []*plan.Expr{{
-		Typ:  plan.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen},
-		Expr: &plan.Expr_F{F: &plan.Function{}},
-	}})
-	require.Error(t, err)
-	require.True(t, errors.Is(err, process.ErrHashBuildBudgetInvalid))
-	require.Zero(t, proc.Mp().CurrNB())
+	budget, err := process.NewHashBuildBudget(1<<20, 1<<20)
+	require.NoError(t, err)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	ctr.hashmapBuilder.setBudget(generation)
+	expr := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_int32)},
+		Expr: &plan.Expr_F{F: &plan.Function{Args: []*plan.Expr{
+			newExpr(0, types.T_int32.ToType()),
+			{Typ: plan.Type{Id: int32(types.T_int32)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I32Val{I32Val: 2}}}},
+		}}},
+	}
+	ctr.hashmapBuilder.keyExprs = []*plan.Expr{expr}
+	token, err := ctr.reserveSpillExpressionPeak(proc, 8192)
+	require.NoError(t, err)
+	require.NotNil(t, token)
+	require.Positive(t, token.Size())
+	require.Equal(t, token.Size(), generation.Used())
+	token.Release()
+	require.Zero(t, generation.Used())
 }
 
 func TestExpressionHashKeyReservesDeclaredPeakBeforeEval(t *testing.T) {

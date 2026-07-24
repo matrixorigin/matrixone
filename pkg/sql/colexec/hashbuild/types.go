@@ -97,7 +97,8 @@ type container struct {
 	spillScratchBase uint64
 
 	// cached expression executors for spill (reused across batches)
-	spillExprExecs []colexec.ExpressionExecutor
+	spillExprExecs       []colexec.ExpressionExecutor
+	spillExprReservation *process.HashBuildReservation
 }
 
 // spillFileBundle is deliberately owned by hashbuild.  Build converts each

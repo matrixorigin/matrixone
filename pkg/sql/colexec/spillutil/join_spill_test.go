@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -1624,29 +1625,110 @@ func makeTestEvalKeysFn() func(*batch.Batch) ([]*vector.Vector, error) {
 	}
 }
 
-func TestScatterProbeRejectsExpressionBeforeEvaluation(t *testing.T) {
+func TestScatterProbeAdmitsExpressionBeforeEvaluation(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
+	col := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_int32)},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
+	}
+	modulo, err := plan2.BindFuncExprImplByPlanExpr(
+		proc.Ctx,
+		"%",
+		[]*plan.Expr{col, plan2.MakePlan2Int32ConstExprWithType(2)},
+	)
+	require.NoError(t, err)
+	budget, err := process.NewHashBuildBudget(8<<20, 8<<20)
+	require.NoError(t, err)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
 	engine := NewSpillEngine(SpillEngineConfig{
-		ProbeKeyExprs: []*plan.Expr{{Expr: &plan.Expr_F{F: &plan.Function{}}}},
+		ProbeKeyExprs: []*plan.Expr{modulo},
+		Budget:        generation,
 	})
-	childrenCalled := false
+	engine.InitFromSpilledMap(make([]*os.File, SpillNumBuckets))
+	execs, err := colexec.NewExpressionExecutorsFromPlanExpressions(proc, []*plan.Expr{modulo})
+	require.NoError(t, err)
+	defer func() {
+		for _, exec := range execs {
+			exec.Free()
+		}
+	}()
+	input := makeInt32Batch(proc, []int32{1, 2, 3, 4})
+	defer input.Clean(proc.Mp())
+	childrenCalls := 0
 	evalCalled := false
-	err := engine.ScatterProbeTable(
+	err = engine.ScatterProbeTable(
 		proc,
 		func() (*batch.Batch, error) {
-			childrenCalled = true
+			childrenCalls++
+			if childrenCalls == 1 {
+				return input, nil
+			}
 			return nil, nil
 		},
-		nil,
+		process.NewAnalyzer(0, false, false, "test"),
+		func(bat *batch.Batch) ([]*vector.Vector, error) {
+			evalCalled = true
+			vec, evalErr := execs[0].Eval(proc, []*batch.Batch{bat}, nil)
+			return []*vector.Vector{vec}, evalErr
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, 2, childrenCalls)
+	require.True(t, evalCalled)
+	require.NotNil(t, engine.probeExprReservation)
+	require.Positive(t, generation.Used())
+	engine.Cleanup(proc)
+	require.Zero(t, generation.Used())
+}
+
+func TestScatterProbeExpressionAdmissionRejectsBeforeEval(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	col := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_int32)},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
+	}
+	modulo, err := plan2.BindFuncExprImplByPlanExpr(
+		proc.Ctx,
+		"%",
+		[]*plan.Expr{col, plan2.MakePlan2Int32ConstExprWithType(2)},
+	)
+	require.NoError(t, err)
+	budget, err := process.NewHashBuildBudget(1, 1)
+	require.NoError(t, err)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	engine := NewSpillEngine(SpillEngineConfig{
+		ProbeKeyExprs: []*plan.Expr{modulo},
+		Budget:        generation,
+	})
+	engine.InitFromSpilledMap(make([]*os.File, SpillNumBuckets))
+	input := makeInt32Batch(proc, []int32{1, 2, 3, 4})
+	defer input.Clean(proc.Mp())
+	childrenCalls := 0
+	evalCalled := false
+	err = engine.ScatterProbeTable(
+		proc,
+		func() (*batch.Batch, error) {
+			childrenCalls++
+			if childrenCalls == 1 {
+				return input, nil
+			}
+			return nil, nil
+		},
+		process.NewAnalyzer(0, false, false, "test"),
 		func(*batch.Batch) ([]*vector.Vector, error) {
 			evalCalled = true
 			return nil, nil
 		},
 	)
-	require.ErrorIs(t, err, process.ErrHashBuildBudgetInvalid)
-	require.False(t, childrenCalled)
+	require.ErrorIs(t, err, process.ErrHashBuildBudgetAdmission)
+	require.Equal(t, 1, childrenCalls)
 	require.False(t, evalCalled)
+	engine.Cleanup(proc)
+	require.Zero(t, generation.Used())
 }
 
 func makeInt32Batch(proc *process.Process, vals []int32) *batch.Batch {

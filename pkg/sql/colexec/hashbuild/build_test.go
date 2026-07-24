@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
@@ -662,6 +663,57 @@ func TestHashBuildIsShuffle(t *testing.T) {
 	}
 	tc.arg.Free(tc.proc, false, nil)
 	tc.proc.Free()
+}
+
+func TestShuffleHashBuildSpillsExpressionKey(t *testing.T) {
+	bindProc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	col := newExpr(0, types.T_int32.ToType())
+	modulo, err := plan2.BindFuncExprImplByPlanExpr(
+		bindProc.Ctx,
+		"%",
+		[]*plan.Expr{col, plan2.MakePlan2Int32ConstExprWithType(2)},
+	)
+	require.NoError(t, err)
+
+	tc := newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()}, []*plan.Expr{modulo})
+	tc.arg.IsShuffle = true
+	tc.arg.ShuffleIdx = 0
+	tc.arg.SpillThreshold = 1
+	tc.arg.RuntimeFilterSpec = &plan.RuntimeFilterSpec{Tag: tc.arg.JoinMapTag + 4000}
+	tc.arg.SetChildren([]vm.Operator{tc.marg})
+	require.NoError(t, tc.marg.Prepare(tc.proc))
+	require.NoError(t, tc.arg.Prepare(tc.proc))
+
+	build := batch.NewWithSize(1)
+	build.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 2, 3, 4}, nil, tc.proc.Mp())
+	build.SetRowCount(4)
+	tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(build, nil, tc.proc.Mp())
+	tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(nil, nil, tc.proc.Mp())
+
+	_, err = vm.Exec(tc.arg, tc.proc)
+	require.NoError(t, err)
+	result, err := message.ReceiveJoinMapResult(tc.arg.JoinMapTag, true, tc.arg.ShuffleIdx, tc.proc.GetMessageBoard(), tc.proc.Ctx)
+	require.NoError(t, err)
+	require.True(t, result.IsSuccess())
+	jm := result.JoinMap()
+	require.NotNil(t, jm)
+	require.True(t, jm.IsSpilled())
+	require.Equal(t, int64(4), jm.GetRowCount())
+	for _, file := range jm.TakeSpillBuildFiles() {
+		if file != nil {
+			require.NoError(t, file.Close())
+		}
+	}
+	budget, err := tc.proc.GetHashBuildBudget()
+	require.NoError(t, err)
+	require.Zero(t, budget.Used())
+	require.Zero(t, budget.SpillDiskUsed())
+	require.Zero(t, budget.SpillFDUsed())
+
+	tc.arg.Reset(tc.proc, false, nil)
+	tc.arg.Free(tc.proc, false, nil)
+	tc.proc.Free()
+	bindProc.Free()
 }
 
 func TestShuffleHashBuildResizeRejectReleasesPartialMapAndSpills(t *testing.T) {
