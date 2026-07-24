@@ -177,35 +177,15 @@ func decodePk(pkType int32, b []byte) (any, error) {
 	}
 }
 
-// encodePkLen writes a length-prefixed pk ([u32 len][content]) into the docmap buffer.
-// Fast cases avoid the encodePk allocation; other types fall back to it.
+// encodePkLen writes a length-prefixed pk ([u32 len][content]) into the docmap buffer,
+// deriving the content from encodePk (one codec switch, not a duplicate here).
 func (w *leBuf) encodePkLen(pkType int32, v any) error {
-	switch types.T(pkType) {
-	case types.T_int64:
-		w.u32(8)
-		w.u64(uint64(v.(int64)))
-	case types.T_uint64:
-		w.u32(8)
-		w.u64(v.(uint64))
-	case types.T_int32:
-		w.u32(4)
-		w.u32(uint32(v.(int32)))
-	case types.T_uint32:
-		w.u32(4)
-		w.u32(v.(uint32))
-	case types.T_varchar, types.T_char, types.T_text, types.T_datalink,
-		types.T_binary, types.T_varbinary, types.T_blob, types.T_json:
-		raw := asBytes(v)
-		w.u32(uint32(len(raw)))
-		w.b.Write(raw)
-	default:
-		pkb, err := encodePk(pkType, v)
-		if err != nil {
-			return err
-		}
-		w.u32(uint32(len(pkb)))
-		w.b.Write(pkb)
+	pkb, err := encodePk(pkType, v)
+	if err != nil {
+		return err
 	}
+	w.u32(uint32(len(pkb)))
+	w.b.Write(pkb)
 	return nil
 }
 
@@ -234,122 +214,93 @@ func appendAnyPk(k *vectorindex.ColumnBuffer, fixedW int, v any) {
 // is the docmap pk encoding: fixed-width types are N contiguous width-byte little-endian
 // values; varlena types are N [u32 len][content] entries. vec's type MUST match k.Type.
 func AppendColumnBuffer(k *vectorindex.ColumnBuffer, vec *vector.Vector, mp *mpool.MPool) error {
+	// Each arm loops with an `err == nil` guard and a single `return err` at the end, so
+	// AppendFixed/AppendBytes's error path (which does not fire for a well-typed vector +
+	// valid value) needs no per-arm return block.
 	d := k.Data
+	var err error
 	switch k.Type {
 	case types.T_int64:
-		for i := 0; i < k.N; i++ {
-			if err := vector.AppendFixed(vec, int64(binary.LittleEndian.Uint64(d[i*8:])), false, mp); err != nil {
-				return err
-			}
+		for i := 0; err == nil && i < k.N; i++ {
+			err = vector.AppendFixed(vec, int64(binary.LittleEndian.Uint64(d[i*8:])), false, mp)
 		}
 	case types.T_uint64, types.T_bit:
-		for i := 0; i < k.N; i++ {
-			if err := vector.AppendFixed(vec, binary.LittleEndian.Uint64(d[i*8:]), false, mp); err != nil {
-				return err
-			}
+		for i := 0; err == nil && i < k.N; i++ {
+			err = vector.AppendFixed(vec, binary.LittleEndian.Uint64(d[i*8:]), false, mp)
 		}
 	case types.T_int32:
-		for i := 0; i < k.N; i++ {
-			if err := vector.AppendFixed(vec, int32(binary.LittleEndian.Uint32(d[i*4:])), false, mp); err != nil {
-				return err
-			}
+		for i := 0; err == nil && i < k.N; i++ {
+			err = vector.AppendFixed(vec, int32(binary.LittleEndian.Uint32(d[i*4:])), false, mp)
 		}
 	case types.T_uint32:
-		for i := 0; i < k.N; i++ {
-			if err := vector.AppendFixed(vec, binary.LittleEndian.Uint32(d[i*4:]), false, mp); err != nil {
-				return err
-			}
+		for i := 0; err == nil && i < k.N; i++ {
+			err = vector.AppendFixed(vec, binary.LittleEndian.Uint32(d[i*4:]), false, mp)
 		}
 	case types.T_int16:
-		for i := 0; i < k.N; i++ {
-			if err := vector.AppendFixed(vec, int16(binary.LittleEndian.Uint16(d[i*2:])), false, mp); err != nil {
-				return err
-			}
+		for i := 0; err == nil && i < k.N; i++ {
+			err = vector.AppendFixed(vec, int16(binary.LittleEndian.Uint16(d[i*2:])), false, mp)
 		}
 	case types.T_uint16:
-		for i := 0; i < k.N; i++ {
-			if err := vector.AppendFixed(vec, binary.LittleEndian.Uint16(d[i*2:]), false, mp); err != nil {
-				return err
-			}
+		for i := 0; err == nil && i < k.N; i++ {
+			err = vector.AppendFixed(vec, binary.LittleEndian.Uint16(d[i*2:]), false, mp)
 		}
 	case types.T_int8:
-		for i := 0; i < k.N; i++ {
-			if err := vector.AppendFixed(vec, int8(d[i]), false, mp); err != nil {
-				return err
-			}
+		for i := 0; err == nil && i < k.N; i++ {
+			err = vector.AppendFixed(vec, int8(d[i]), false, mp)
 		}
 	case types.T_uint8:
-		for i := 0; i < k.N; i++ {
-			if err := vector.AppendFixed(vec, d[i], false, mp); err != nil {
-				return err
-			}
+		for i := 0; err == nil && i < k.N; i++ {
+			err = vector.AppendFixed(vec, d[i], false, mp)
 		}
 	case types.T_date:
-		for i := 0; i < k.N; i++ {
-			if err := vector.AppendFixed(vec, types.Date(int32(binary.LittleEndian.Uint32(d[i*4:]))), false, mp); err != nil {
-				return err
-			}
+		for i := 0; err == nil && i < k.N; i++ {
+			err = vector.AppendFixed(vec, types.Date(int32(binary.LittleEndian.Uint32(d[i*4:]))), false, mp)
 		}
 	case types.T_datetime:
-		for i := 0; i < k.N; i++ {
-			if err := vector.AppendFixed(vec, types.Datetime(int64(binary.LittleEndian.Uint64(d[i*8:]))), false, mp); err != nil {
-				return err
-			}
+		for i := 0; err == nil && i < k.N; i++ {
+			err = vector.AppendFixed(vec, types.Datetime(int64(binary.LittleEndian.Uint64(d[i*8:]))), false, mp)
 		}
 	case types.T_time:
-		for i := 0; i < k.N; i++ {
-			if err := vector.AppendFixed(vec, types.Time(int64(binary.LittleEndian.Uint64(d[i*8:]))), false, mp); err != nil {
-				return err
-			}
+		for i := 0; err == nil && i < k.N; i++ {
+			err = vector.AppendFixed(vec, types.Time(int64(binary.LittleEndian.Uint64(d[i*8:]))), false, mp)
 		}
 	case types.T_timestamp:
-		for i := 0; i < k.N; i++ {
-			if err := vector.AppendFixed(vec, types.Timestamp(int64(binary.LittleEndian.Uint64(d[i*8:]))), false, mp); err != nil {
-				return err
-			}
+		for i := 0; err == nil && i < k.N; i++ {
+			err = vector.AppendFixed(vec, types.Timestamp(int64(binary.LittleEndian.Uint64(d[i*8:]))), false, mp)
 		}
 	case types.T_decimal64:
-		for i := 0; i < k.N; i++ {
-			if err := vector.AppendFixed(vec, types.Decimal64(binary.LittleEndian.Uint64(d[i*8:])), false, mp); err != nil {
-				return err
-			}
+		for i := 0; err == nil && i < k.N; i++ {
+			err = vector.AppendFixed(vec, types.Decimal64(binary.LittleEndian.Uint64(d[i*8:])), false, mp)
 		}
 	case types.T_decimal128:
-		for i := 0; i < k.N; i++ {
+		for i := 0; err == nil && i < k.N; i++ {
 			b := d[i*16:]
-			if err := vector.AppendFixed(vec, types.Decimal128{B0_63: binary.LittleEndian.Uint64(b[0:8]), B64_127: binary.LittleEndian.Uint64(b[8:16])}, false, mp); err != nil {
-				return err
-			}
+			err = vector.AppendFixed(vec, types.Decimal128{B0_63: binary.LittleEndian.Uint64(b[0:8]), B64_127: binary.LittleEndian.Uint64(b[8:16])}, false, mp)
 		}
 	case types.T_varchar, types.T_char, types.T_text, types.T_datalink,
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_json:
 		off := 0
-		for i := 0; i < k.N; i++ {
+		for i := 0; err == nil && i < k.N; i++ {
 			l := int(binary.LittleEndian.Uint32(d[off:]))
 			off += 4
-			if err := vector.AppendBytes(vec, d[off:off+l], false, mp); err != nil {
-				return err
-			}
+			err = vector.AppendBytes(vec, d[off:off+l], false, mp)
 			off += l
 		}
 	case types.T_uuid:
 		off := 0
-		for i := 0; i < k.N; i++ {
+		for i := 0; err == nil && i < k.N; i++ {
 			l := int(binary.LittleEndian.Uint32(d[off:]))
 			off += 4
-			u, err := types.ParseUuid(string(d[off : off+l]))
-			if err != nil {
-				return err
-			}
-			if err := vector.AppendFixed(vec, u, false, mp); err != nil {
-				return err
+			var u types.Uuid
+			if u, err = types.ParseUuid(string(d[off : off+l])); err == nil {
+				err = vector.AppendFixed(vec, u, false, mp)
 			}
 			off += l
 		}
 	default:
 		return moerr.NewInternalErrorNoCtxf("fulltext2 stream: unsupported pk type %d", k.Type)
 	}
-	return nil
+	return err
 }
 
 func packUint64(v uint64) []byte {

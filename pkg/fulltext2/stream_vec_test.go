@@ -15,6 +15,7 @@
 package fulltext2
 
 import (
+	"bytes"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -75,4 +76,94 @@ func TestColumnBufferRoundTrip(t *testing.T) {
 	u2, _ := types.ParseUuid("12345678-1234-1234-1234-1234567890ab")
 	require.Equal(t, []types.Uuid{u1, u2},
 		vector.MustFixedColWithTypeCheck[types.Uuid](toVec(types.T_uuid, []any{u1, u2})))
+
+	// remaining AppendColumnBuffer arms: decode without error at the right count, so every
+	// switch case is exercised (a missing case would panic or mis-count).
+	more := []struct {
+		typ  types.T
+		vals []any
+	}{
+		{types.T_uint32, []any{uint32(1), uint32(4000000000)}},
+		{types.T_int16, []any{int16(-30000), int16(30000)}},
+		{types.T_uint16, []any{uint16(60000)}},
+		{types.T_uint8, []any{uint8(200)}},
+		{types.T_date, []any{types.Date(19000)}},
+		{types.T_time, []any{types.Time(123456)}},
+		{types.T_timestamp, []any{types.Timestamp(1700000000)}},
+		{types.T_decimal64, []any{types.Decimal64(42)}},
+		{types.T_char, []any{[]byte("c")}},
+		{types.T_text, []any{[]byte("longer text pk value")}},
+		{types.T_blob, []any{[]byte{0, 1, 2, 255}}},
+		{types.T_json, []any{[]byte(`{"k":1}`)}},
+	}
+	for _, c := range more {
+		require.Equalf(t, len(c.vals), toVec(c.typ, c.vals).Length(), "type %v", c.typ)
+	}
+}
+
+// TestStreamLoadedSegmentAllPkTypes covers the LOADED-segment streaming path (appendPkTo
+// reading the docmap, not the build-side re-encode) plus StreamBagOfWords, across a
+// fixed-width, a varlena, and a uuid pk (the encodePkLen default branch). It serializes →
+// deserializes each segment, streams every doc, and checks the emitted pks via the
+// pooled ColumnBuffer → vector path (AppendColumnBuffer + PutColumnBuffer).
+func TestStreamLoadedSegmentAllPkTypes(t *testing.T) {
+	mp := mpool.MustNewZero()
+	uu, _ := types.ParseUuid("12345678-1234-1234-1234-1234567890ab")
+
+	stream := func(pkType types.T, pks []any) *vector.Vector {
+		b := NewBuilder("ld", int32(pkType))
+		for _, pk := range pks {
+			feed(t, b, pk, "alpha")
+		}
+		seg, err := b.Finish()
+		require.NoError(t, err)
+		blob, err := seg.Serialize()
+		require.NoError(t, err)
+		loaded, err := Deserialize("ld", bytes.NewReader(blob))
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = loaded.dict.Close() })
+
+		idx := NewIndex([]*Segment{loaded}, nil)
+		out := vector.NewVec(pkType.ToType())
+		err = idx.StreamBagOfWords([]byte("alpha"), ParserDefault, BM25, nil,
+			func(k *vectorindex.ColumnBuffer, _ []float64) error {
+				e := AppendColumnBuffer(k, out, mp)
+				PutColumnBuffer(k) // recycle, as the real consumer does
+				return e
+			})
+		require.NoError(t, err)
+		require.Equal(t, len(pks), out.Length())
+		return out
+	}
+
+	// int64 pk → fixed-width loaded path
+	require.ElementsMatch(t, []int64{10, 20, 30},
+		vector.MustFixedColWithTypeCheck[int64](stream(types.T_int64, []any{int64(10), int64(20), int64(30)})))
+
+	// varchar pk → varlena loaded path
+	vv := stream(types.T_varchar, []any{[]byte("k1"), []byte("k2")})
+	got := []string{vv.GetStringAt(0), vv.GetStringAt(1)}
+	require.ElementsMatch(t, []string{"k1", "k2"}, got)
+
+	// uuid pk → encodePkLen default branch + varlena loaded path
+	require.ElementsMatch(t, []types.Uuid{uu},
+		vector.MustFixedColWithTypeCheck[types.Uuid](stream(types.T_uuid, []any{uu})))
+}
+
+// TestStreamBagOfWordsEdges covers the two early-out branches of StreamBagOfWords: an
+// empty index (globalN==0) and a pattern that resolves to no tokens.
+func TestStreamBagOfWordsEdges(t *testing.T) {
+	noEmit := func(*vectorindex.ColumnBuffer, []float64) error {
+		t.Fatal("emit should not be called")
+		return nil
+	}
+	// empty index → globalN == 0 → nil, no emit.
+	require.NoError(t, NewIndex(nil, nil).StreamBagOfWords([]byte("alpha"), ParserDefault, BM25, nil, noEmit))
+
+	// non-empty index but a pattern that tokenizes to nothing → no resolvable tokens → nil.
+	b := NewBuilder("e", int32(types.T_int64))
+	feed(t, b, int64(1), "alpha")
+	seg, err := b.Finish()
+	require.NoError(t, err)
+	require.NoError(t, NewIndex([]*Segment{seg}, nil).StreamBagOfWords([]byte("   "), ParserDefault, BM25, nil, noEmit))
 }
