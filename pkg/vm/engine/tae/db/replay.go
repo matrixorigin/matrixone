@@ -356,7 +356,15 @@ func (replayer *WalReplayer) OnReplayTxn(cmd txnif.TxnCmd, lsn uint64) {
 	if err = replayer.db.TxnMgr.OnReplayTxn(txn); err != nil {
 		panic(err)
 	}
-	if err = txn.Commit(replayer.db.Opts.Ctx); err != nil {
+	commitReplayTxn(replayer.db.Opts.Ctx, txn)
+}
+
+type replayCommitter interface {
+	Commit(context.Context) error
+}
+
+func commitReplayTxn(ctx context.Context, txn replayCommitter) {
+	if err := txn.Commit(ctx); err != nil {
 		panic(err)
 	}
 }

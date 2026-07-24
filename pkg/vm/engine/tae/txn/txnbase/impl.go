@@ -89,12 +89,16 @@ func (txn *Txn) done1PCWithErr(err error) {
 	if err != nil {
 		txn.ToUnknownLocked()
 		txn.SetError(err)
-	} else if txn.State == txnif.TxnStatePreparing {
-		if err := txn.ToCommittedLocked(); err != nil {
-			txn.SetError(err)
+	} else {
+		if txn.State == txnif.TxnStatePreparing {
+			if err := txn.ToCommittedLocked(); err != nil {
+				txn.SetError(err)
+			}
+		} else {
+			if err := txn.ToRollbackedLocked(); err != nil {
+				txn.SetError(err)
+			}
 		}
-	} else if err := txn.ToRollbackedLocked(); err != nil {
-		txn.SetError(err)
 	}
 	txn.WaitGroup.Done()
 	txn.DoneCond.Broadcast()

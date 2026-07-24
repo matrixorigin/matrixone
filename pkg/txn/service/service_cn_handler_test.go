@@ -107,6 +107,53 @@ func TestRollbackRejectsMultipleTNShards(t *testing.T) {
 	require.Nil(t, storage.GetUncommittedTxn(meta.ID))
 }
 
+func TestSingleTNRollback(t *testing.T) {
+	sender := NewTestSender()
+	txnService := NewTestTxnService(t, 1, sender, NewTestClock(0))
+	require.NoError(t, txnService.Start())
+	t.Cleanup(func() {
+		require.NoError(t, txnService.Close(false))
+		require.NoError(t, sender.Close())
+	})
+	sender.AddTxnService(txnService)
+
+	meta := NewTestTxn(1, 1, 1)
+	result, err := sender.Send(context.Background(), []txn.TxnRequest{
+		NewTestWriteRequest(1, meta, 1),
+		NewTestRollbackRequest(meta),
+	})
+	require.NoError(t, err)
+	require.Len(t, result.Responses, 2)
+	require.Nil(t, result.Responses[0].TxnError)
+	require.Nil(t, result.Responses[1].TxnError)
+	require.Equal(t, txn.TxnStatus_Aborted, result.Responses[1].Txn.Status)
+
+	storage := txnService.(*service).storage.(*mem.KVTxnStorage)
+	require.Nil(t, storage.GetUncommittedTxn(meta.ID))
+}
+
+func TestMultiTNCleanupWithoutTxnContext(t *testing.T) {
+	sender := NewTestSender()
+	txnService := NewTestTxnService(t, 1, sender, NewTestClock(0))
+	require.NoError(t, txnService.Start())
+	t.Cleanup(func() {
+		require.NoError(t, txnService.Close(false))
+		require.NoError(t, sender.Close())
+	})
+	sender.AddTxnService(txnService)
+
+	result, err := sender.Send(context.Background(), []txn.TxnRequest{
+		NewTestCommitRequest(NewTestTxn(1, 1, 1, 2)),
+	})
+	require.NoError(t, err)
+	require.Len(t, result.Responses, 1)
+	require.NotNil(t, result.Responses[0].TxnError)
+	require.True(t, moerr.IsMoErrCode(
+		result.Responses[0].TxnError.UnwrapError(),
+		moerr.ErrNotSupported,
+	))
+}
+
 func TestCommitRequestExpired(t *testing.T) {
 	now := time.Unix(0, 100)
 	require.True(t, commitRequestExpired(

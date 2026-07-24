@@ -472,6 +472,20 @@ func TestTxnCmd_WALCompatibility(t *testing.T) {
 	}
 }
 
+func TestTxnCmdSingleTNMetadata(t *testing.T) {
+	mgr := newTxnManagerForLifecycleTest()
+	txn := newTxnForLifecycleTest(mgr, "single-tn")
+	cmd := NewTxnCmd()
+	cmd.Participants = []uint64{1, 2}
+
+	cmd.SetTxn(txn)
+
+	require.Empty(t, cmd.Participants)
+	require.Contains(t, cmd.Desc(), "LegacyParticipants=0")
+	require.Contains(t, cmd.String(), "LegacyParticipants=0")
+	require.Contains(t, cmd.VerboseString(), "LegacyParticipants=0")
+}
+
 func TestTxnStateCmd_LegacyCodecRegistration(t *testing.T) {
 	require.Equal(t, txnif.TxnState(2), txnif.TxnStatePrepared)
 	require.Equal(t, txnif.TxnState(3), txnif.TxnStateCommittingFinished)
