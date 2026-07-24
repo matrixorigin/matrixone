@@ -247,6 +247,12 @@ func TestIssue26087ConcurrentDataBranchQuota(t *testing.T) {
 				}
 			}
 			require.Equal(t, 1, successes)
+
+			var optimisticBranchCount int
+			require.NoError(t, conn1.QueryRowContext(execCtx,
+				"select count(*) from mo_catalog.mo_tables where reldatabase = 'branch_quota_race' and relname like 'optimistic\\_branch\\_%'",
+			).Scan(&optimisticBranchCount))
+			require.Equal(t, 1, optimisticBranchCount)
 		},
 	)
 }
