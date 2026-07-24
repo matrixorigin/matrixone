@@ -2764,7 +2764,8 @@ func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows
 				return 0, nil, nil, err
 			}
 		} else {
-			projExpr, err = forceAssignmentCastExpr(builder.GetContext(), projExpr, tableDef.Cols[colIdx].Typ)
+			projExpr, err = builder.forceProjectedAssignmentCastExpr(
+				projExpr, lastNode.ProjectList[i], tableDef.Cols[colIdx].Typ)
 			if err != nil {
 				return 0, nil, nil, err
 			}

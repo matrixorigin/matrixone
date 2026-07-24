@@ -1,0 +1,404 @@
+select convert('{"a":1}', json) = cast('{"a":1}' as json) as convert_equals_cast;
+➤ convert_equals_cast[-7,1,0]  𝄀
+1
+select json_type(convert('1', json)), json_type(convert('"1"', json));
+➤ json_type(cast(1 as json))[12,-1,0]  ¦  json_type(cast("1" as json))[12,-1,0]  𝄀
+INTEGER  ¦  STRING
+select convert(null, json) is null as sql_null_is_null;
+➤ sql_null_is_null[-7,1,0]  𝄀
+1
+select convert('null', json) is null as json_null_is_sql_null,
+json_type(convert('null', json)) as json_null_type;
+➤ json_null_is_sql_null[-7,1,0]  ¦  json_null_type[12,-1,0]  𝄀
+0  ¦  NULL
+select json_type(convert(true, json)), convert(true, json);
+➤ json_type(cast(true as json))[12,-1,0]  ¦  cast(true as json)[-1,2147483647,0]  𝄀
+BOOLEAN  ¦  true
+select json_type(convert(cast('{"long":"abcdefghijklmnopqrstuvwxyz0123456789"}' as json), json)),
+convert(cast('{"long":"abcdefghijklmnopqrstuvwxyz0123456789"}' as json), json);
+➤ json_type(cast(cast({"long":"abcdefghijklmnopqrstuvwxyz0123456789"} as json) as json))[12,-1,0]  ¦  cast(cast({"long":"abcdefghijklmnopqrstuvwxyz0123456789"} as json) as json)[-1,2147483647,0]  𝄀
+OBJECT  ¦  {"long": "abcdefghijklmnopqrstuvwxyz0123456789"}
+create table convert_json_source(
+id int,
+b binary(16),
+vb varbinary(64),
+bl blob,
+tx text,
+bits bit(4),
+y year
+);
+insert into convert_json_source values
+(1, '{"a":1}', '{"a":1}', '{"a":1}', '{"a":1}', b'1010', 2020);
+select json_type(convert(b, json)), json_unquote(convert(b, json)) from convert_json_source;
+➤ json_type(cast(b as json))[12,-1,0]  ¦  json_unquote(cast(b as json))[12,-1,0]  𝄀
+BLOB  ¦  eyJhIjoxfQAAAAAAAAAAAA==
+select json_type(convert(vb, json)), json_unquote(convert(vb, json)) from convert_json_source;
+➤ json_type(cast(vb as json))[12,-1,0]  ¦  json_unquote(cast(vb as json))[12,-1,0]  𝄀
+BLOB  ¦  eyJhIjoxfQ==
+select json_type(convert(bl, json)), json_unquote(convert(bl, json)) from convert_json_source;
+➤ json_type(cast(bl as json))[12,-1,0]  ¦  json_unquote(cast(bl as json))[12,-1,0]  𝄀
+BLOB  ¦  eyJhIjoxfQ==
+select json_type(convert(tx, json)), json_unquote(convert(tx, json)) from convert_json_source;
+➤ json_type(cast(tx as json))[12,-1,0]  ¦  json_unquote(cast(tx as json))[12,-1,0]  𝄀
+OBJECT  ¦  {"a": 1}
+select json_type(convert(bits, json)), json_unquote(convert(bits, json)) from convert_json_source;
+➤ json_type(cast(bits as json))[12,-1,0]  ¦  json_unquote(cast(bits as json))[12,-1,0]  𝄀
+BLOB  ¦  Cg==
+select json_type(convert(y, json)), convert(y, json) from convert_json_source;
+➤ json_type(cast(y as json))[12,-1,0]  ¦  cast(y as json)[-1,2147483647,0]  𝄀
+INTEGER  ¦  2020
+select json_type(convert(cast(x'ff' as blob), json)),
+json_unquote(convert(cast(x'ff' as blob), json));
+➤ json_type(cast(cast(0xff as blob) as json))[12,-1,0]  ¦  json_unquote(cast(cast(0xff as blob) as json))[12,-1,0]  𝄀
+BLOB  ¦  /w==
+create table convert_json_bit_width(bits bit(9));
+insert into convert_json_bit_width values (b'100001010');
+select json_type(convert(bits, json)), json_unquote(convert(bits, json)) from convert_json_bit_width;
+➤ json_type(cast(bits as json))[12,-1,0]  ¦  json_unquote(cast(bits as json))[12,-1,0]  𝄀
+BLOB  ¦  AQo=
+drop table convert_json_bit_width;
+select json_type(convert(cast(-9223372036854775808 as signed), json));
+➤ json_type(cast(cast(-9223372036854775808 as signed) as json))[12,-1,0]  𝄀
+INTEGER
+select json_type(convert(cast(18446744073709551615 as unsigned), json)),
+convert(cast(18446744073709551615 as unsigned), json);
+➤ json_type(cast(cast(18446744073709551615 as unsigned) as json))[12,-1,0]  ¦  cast(cast(18446744073709551615 as unsigned) as json)[-1,2147483647,0]  𝄀
+INTEGER  ¦  18446744073709551615
+select json_type(convert(cast(1.20 as decimal(10,2)), json)),
+convert(cast(1.20 as decimal(10,2)), json);
+➤ json_type(cast(cast(1.20 as decimal(10, 2)) as json))[12,-1,0]  ¦  cast(cast(1.20 as decimal(10, 2)) as json)[-1,2147483647,0]  𝄀
+DECIMAL  ¦  1.20
+select json_type(convert(cast(1.5 as double), json)),
+convert(cast(1.5 as double), json);
+➤ json_type(cast(cast(1.5 as double) as json))[12,-1,0]  ¦  cast(cast(1.5 as double) as json)[-1,2147483647,0]  𝄀
+DOUBLE  ¦  1.5
+select json_type(convert(cast(12345678901234567890.123456789012345678 as decimal(38,18)), json)),
+convert(cast(12345678901234567890.123456789012345678 as decimal(38,18)), json);
+➤ json_type(cast(cast(12345678901234567890.123456789012345678 as decimal(38, 18)) as json))[12,-1,0]  ¦  cast(cast(12345678901234567890.123456789012345678 as decimal(38, 18)) as json)[-1,2147483647,0]  𝄀
+DECIMAL  ¦  12345678901234567890.123456789012345678
+select json_type(convert(cast('2020-01-02' as date), json)),
+convert(cast('2020-01-02' as date), json);
+➤ json_type(cast(cast(2020-01-02 as date) as json))[12,-1,0]  ¦  cast(cast(2020-01-02 as date) as json)[-1,2147483647,0]  𝄀
+DATE  ¦  "2020-01-02"
+select json_type(convert(cast('10:00:00.1' as time(1)), json)),
+convert(cast('10:00:00.1' as time(1)), json);
+➤ json_type(cast(cast(10:00:00.1 as time(1, 1)) as json))[12,-1,0]  ¦  cast(cast(10:00:00.1 as time(1, 1)) as json)[-1,2147483647,0]  𝄀
+TIME  ¦  "10:00:00.100000"
+select json_type(convert(cast('2020-01-02 03:04:05.120000' as datetime(6)), json)),
+json_unquote(convert(cast('2020-01-02 03:04:05.120000' as datetime(6)), json));
+➤ json_type(cast(cast(2020-01-02 03:04:05.120000 as datetime(6, 6)) as json))[12,-1,0]  ¦  json_unquote(cast(cast(2020-01-02 03:04:05.120000 as datetime(6, 6)) as json))[12,-1,0]  𝄀
+DATETIME  ¦  2020-01-02 03:04:05.120000
+set time_zone = '+00:00';
+create table convert_json_timestamp(id int, ts timestamp(6));
+insert into convert_json_timestamp values
+(1, '2020-01-02 03:04:05.120000'),
+(2, '2020-01-01 23:30:00.000000');
+select id, ts, json_type(convert(ts, json)), json_unquote(convert(ts, json))
+from convert_json_timestamp order by id;
+➤ id[4,32,0]  ¦  ts[93,64,0]  ¦  json_type(cast(ts as json))[12,-1,0]  ¦  json_unquote(cast(ts as json))[12,-1,0]  𝄀
+1  ¦  2020-01-02 03:04:05.120000000  ¦  DATETIME  ¦  2020-01-02 03:04:05.120000  𝄀
+2  ¦  2020-01-01 23:30:00  ¦  DATETIME  ¦  2020-01-01 23:30:00.000000
+set time_zone = '+08:00';
+select id, ts, json_type(convert(ts, json)), json_unquote(convert(ts, json))
+from convert_json_timestamp order by id;
+➤ id[4,32,0]  ¦  ts[93,64,0]  ¦  json_type(cast(ts as json))[12,-1,0]  ¦  json_unquote(cast(ts as json))[12,-1,0]  𝄀
+1  ¦  2020-01-02 11:04:05.120000000  ¦  DATETIME  ¦  2020-01-02 11:04:05.120000  𝄀
+2  ¦  2020-01-02 07:30:00  ¦  DATETIME  ¦  2020-01-02 07:30:00.000000
+set time_zone = '-05:00';
+select id, ts, json_type(convert(ts, json)), json_unquote(convert(ts, json))
+from convert_json_timestamp order by id;
+➤ id[4,32,0]  ¦  ts[93,64,0]  ¦  json_type(cast(ts as json))[12,-1,0]  ¦  json_unquote(cast(ts as json))[12,-1,0]  𝄀
+1  ¦  2020-01-01 22:04:05.120000000  ¦  DATETIME  ¦  2020-01-01 22:04:05.120000  𝄀
+2  ¦  2020-01-01 18:30:00  ¦  DATETIME  ¦  2020-01-01 18:30:00.000000
+drop table convert_json_timestamp;
+set time_zone = '+00:00';
+select json_type(convert(st_geomfromtext('POINT(1 1)'), json)),
+convert(st_geomfromtext('POINT(1 1)'), json);
+➤ json_type(cast(st_geomfromtext(POINT(1 1)) as json))[12,-1,0]  ¦  cast(st_geomfromtext(POINT(1 1)) as json)[-1,2147483647,0]  𝄀
+OBJECT  ¦  {"coordinates": [1, 1], "type": "Point"}
+select json_type(convert(st_geomfromtext('LINESTRING(0 0,1 1)'), json)),
+convert(st_geomfromtext('LINESTRING(0 0,1 1)'), json);
+➤ json_type(cast(st_geomfromtext(LINESTRING(0 0,1 1)) as json))[12,-1,0]  ¦  cast(st_geomfromtext(LINESTRING(0 0,1 1)) as json)[-1,2147483647,0]  𝄀
+OBJECT  ¦  {"coordinates": [[0, 0], [1, 1]], "type": "LineString"}
+select convert(cast(x'00' as blob), json) <
+convert(cast(x'd0' as blob), json) as mo_base64_order;
+➤ mo_base64_order[-7,1,0]  𝄀
+0
+select json_type(convert(cast(b'1' as bit(1)), json)),
+json_unquote(convert(cast(b'1' as bit(1)), json));
+➤ json_type(cast(cast(0b1 as bit(1)) as json))[12,-1,0]  ¦  json_unquote(cast(cast(0b1 as bit(1)) as json))[12,-1,0]  𝄀
+BLOB  ¦  AQ==
+create table convert_json_bit_blob(
+b1 bit(1), b8 bit(8), b9 bit(9),
+bl1 blob, bl8 blob, bl9 blob
+);
+insert into convert_json_bit_blob values
+(b'1', b'11111111', b'100001010', x'01', x'ff', x'010a');
+select json_type(convert(b1, json)), json_unquote(convert(b1, json)),
+json_type(convert(bl1, json)), json_unquote(convert(bl1, json)),
+convert(b1, json) = convert(bl1, json)
+from convert_json_bit_blob;
+➤ json_type(cast(b1 as json))[12,-1,0]  ¦  json_unquote(cast(b1 as json))[12,-1,0]  ¦  json_type(cast(bl1 as json))[12,-1,0]  ¦  json_unquote(cast(bl1 as json))[12,-1,0]  ¦  cast(b1 as json) = cast(bl1 as json)[-7,1,0]  𝄀
+BLOB  ¦  AQ==  ¦  BLOB  ¦  AQ==  ¦  1
+select json_type(convert(b8, json)), json_unquote(convert(b8, json)),
+json_type(convert(bl8, json)), json_unquote(convert(bl8, json)),
+convert(b8, json) = convert(bl8, json)
+from convert_json_bit_blob;
+➤ json_type(cast(b8 as json))[12,-1,0]  ¦  json_unquote(cast(b8 as json))[12,-1,0]  ¦  json_type(cast(bl8 as json))[12,-1,0]  ¦  json_unquote(cast(bl8 as json))[12,-1,0]  ¦  cast(b8 as json) = cast(bl8 as json)[-7,1,0]  𝄀
+BLOB  ¦  /w==  ¦  BLOB  ¦  /w==  ¦  1
+select json_type(convert(b9, json)), json_unquote(convert(b9, json)),
+json_type(convert(bl9, json)), json_unquote(convert(bl9, json)),
+convert(b9, json) = convert(bl9, json)
+from convert_json_bit_blob;
+➤ json_type(cast(b9 as json))[12,-1,0]  ¦  json_unquote(cast(b9 as json))[12,-1,0]  ¦  json_type(cast(bl9 as json))[12,-1,0]  ¦  json_unquote(cast(bl9 as json))[12,-1,0]  ¦  cast(b9 as json) = cast(bl9 as json)[-7,1,0]  𝄀
+BLOB  ¦  AQo=  ¦  BLOB  ¦  AQo=  ¦  1
+drop table convert_json_bit_blob;
+create table convert_json_destination(id int, j json);
+insert into convert_json_destination select 1, bl from convert_json_source;
+insert into convert_json_destination select 2, tx from convert_json_source;
+select id, json_type(j), json_unquote(j) from convert_json_destination order by id;
+➤ id[4,32,0]  ¦  json_type(j)[12,-1,0]  ¦  json_unquote(j)[12,-1,0]  𝄀
+1  ¦  BLOB  ¦  eyJhIjoxfQ==  𝄀
+2  ¦  OBJECT  ¦  {"a": 1}
+drop table convert_json_destination;
+drop table convert_json_source;
+select convert('', json);
+invalid input: json text 
+select convert('NULL', json);
+invalid input: json text NULL
+select convert('not json', json);
+invalid input: json text not json
+select convert(cast('00000000-0000-0000-0000-000000000001' as uuid), json);
+invalid argument operator cast, bad value [UUID JSON]
+create table convert_json_enum(
+id int,
+e_text enum('alpha', 'beta'),
+e_number enum('1', '2'),
+e_json enum('{"a":1}', '{"b":2}'),
+e_quoted enum('a"b', 'c')
+);
+insert into convert_json_enum values
+(1, 'alpha', '1', '{"a":1}', 'a"b'),
+(2, null, null, null, null);
+select id,
+json_type(convert(e_text, json)), convert(e_text, json),
+json_type(convert(e_number, json)), convert(e_number, json),
+json_type(convert(e_json, json)), convert(e_json, json),
+json_type(convert(e_quoted, json)), convert(e_quoted, json)
+from convert_json_enum
+order by id;
+➤ id[4,32,0]  ¦  json_type(cast(e_text as json))[12,-1,0]  ¦  cast(e_text as json)[-1,2147483647,0]  ¦  json_type(cast(e_number as json))[12,-1,0]  ¦  cast(e_number as json)[-1,2147483647,0]  ¦  json_type(cast(e_json as json))[12,-1,0]  ¦  cast(e_json as json)[-1,2147483647,0]  ¦  json_type(cast(e_quoted as json))[12,-1,0]  ¦  cast(e_quoted as json)[-1,2147483647,0]  𝄀
+1  ¦  STRING  ¦  "alpha"  ¦  STRING  ¦  "1"  ¦  STRING  ¦  "{\"a\":1}"  ¦  STRING  ¦  "a\"b"  𝄀
+2  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null
+select convert(e_text, json) = cast(e_text as json) as explicit_cast_matches,
+json_unquote(cast(e_quoted as json)) as quoted_label
+from convert_json_enum
+where id = 1;
+➤ explicit_cast_matches[-7,1,0]  ¦  quoted_label[12,-1,0]  𝄀
+1  ¦  a"b
+create table convert_json_enum_destination(id int, j json);
+insert into convert_json_enum_destination select 1, e_text from convert_json_enum where id = 1;
+insert into convert_json_enum_destination select 2, e_number from convert_json_enum where id = 1;
+insert into convert_json_enum_destination select 3, e_json from convert_json_enum where id = 1;
+insert into convert_json_enum_destination select 4, e_quoted from convert_json_enum where id = 1;
+insert into convert_json_enum_destination select 5, e_json from convert_json_enum where id = 2;
+insert into convert_json_enum_destination
+select 6, e
+from (select e_json as e from convert_json_enum where id = 1) src;
+insert into convert_json_enum_destination
+select id, e
+from (
+select 7 as id, e_json as e from convert_json_enum where id = 1
+union all
+select 8 as id, e_json as e from convert_json_enum where id = 2
+) src;
+insert into convert_json_enum_destination
+select id, e
+from (
+select 15 as id, e_json as e from convert_json_enum where id = 1
+union
+select 16 as id, e_json as e from convert_json_enum where id = 2
+) src;
+insert into convert_json_enum_destination
+select 9, e
+from (
+select e
+from (select e_json as e from convert_json_enum where id = 1) level_one
+) level_two;
+insert into convert_json_enum_destination
+select id, e
+from (
+select 10 as id, e_json as e from convert_json_enum where id = 1
+union all
+select 11 as id, cast('{"b":2}' as varchar) as e
+) src;
+insert into convert_json_enum_destination
+select 12, concat(e_json, '') from convert_json_enum where id = 1;
+insert into convert_json_enum_destination
+select id, e
+from (
+select 13 as id, e_json as e from convert_json_enum where id = 1
+intersect
+select 13 as id, cast('{"a":1}' as varchar) as e
+) src;
+insert into convert_json_enum_destination
+select id, e
+from (
+select 17 as id, e_json as e from convert_json_enum where id = 1
+intersect all
+select 17 as id, cast('{"a":1}' as varchar) as e
+) src;
+insert into convert_json_enum_destination
+select id, e
+from (
+select 14 as id, e_json as e from convert_json_enum where id = 1
+minus
+select 14 as id, cast('{"b":2}' as varchar) as e
+) src;
+insert into convert_json_enum_destination
+select id, e
+from (
+select 18 as id, cast('{"a":1}' as varchar) as e
+from convert_json_enum where id = 1
+intersect
+select 18 as id, e_json as e from convert_json_enum where id = 1
+) src;
+insert into convert_json_enum_destination
+select id, e
+from (
+select 19 as id, cast('{"a":1}' as varchar) as e
+from convert_json_enum where id = 1
+intersect all
+select 19 as id, e_json as e from convert_json_enum where id = 1
+) src;
+insert into convert_json_enum_destination
+select id, e
+from (
+select 20 as id, cast('{"a":1}' as varchar) as e
+from convert_json_enum where id = 1
+minus
+select 20 as id, e_json as e from convert_json_enum where id = 2
+) src;
+insert into convert_json_enum_destination
+select id, e
+from (
+select 21 as id, cast('{"a":1}' as varchar) as e
+union all
+select 22 as id, e_json as e from convert_json_enum where id = 1
+) src;
+insert into convert_json_enum_destination
+select id, e
+from (
+select 23 as id, e_json as e from convert_json_enum where id = 1
+union
+select 24 as id, cast('{"b":2}' as varchar) as e
+) src;
+insert into convert_json_enum_destination
+select id, e
+from (
+select 25 as id, cast('{"a":1}' as varchar) as e
+union
+select 26 as id, e_json as e from convert_json_enum where id = 1
+) src;
+select id, json_type(j), json_unquote(j)
+from convert_json_enum_destination
+order by id;
+➤ id[4,32,0]  ¦  json_type(j)[12,-1,0]  ¦  json_unquote(j)[12,-1,0]  𝄀
+1  ¦  STRING  ¦  alpha  𝄀
+2  ¦  STRING  ¦  1  𝄀
+3  ¦  STRING  ¦  {"a":1}  𝄀
+4  ¦  STRING  ¦  a"b  𝄀
+5  ¦  null  ¦  null  𝄀
+6  ¦  STRING  ¦  {"a":1}  𝄀
+7  ¦  STRING  ¦  {"a":1}  𝄀
+8  ¦  null  ¦  null  𝄀
+9  ¦  STRING  ¦  {"a":1}  𝄀
+10  ¦  OBJECT  ¦  {"a": 1}  𝄀
+11  ¦  OBJECT  ¦  {"b": 2}  𝄀
+12  ¦  OBJECT  ¦  {"a": 1}  𝄀
+13  ¦  STRING  ¦  {"a":1}  𝄀
+14  ¦  STRING  ¦  {"a":1}  𝄀
+15  ¦  STRING  ¦  {"a":1}  𝄀
+16  ¦  null  ¦  null  𝄀
+17  ¦  STRING  ¦  {"a":1}  𝄀
+18  ¦  OBJECT  ¦  {"a": 1}  𝄀
+19  ¦  OBJECT  ¦  {"a": 1}  𝄀
+20  ¦  OBJECT  ¦  {"a": 1}  𝄀
+21  ¦  OBJECT  ¦  {"a": 1}  𝄀
+22  ¦  OBJECT  ¦  {"a": 1}  𝄀
+23  ¦  OBJECT  ¦  {"a": 1}  𝄀
+24  ¦  OBJECT  ¦  {"b": 2}  𝄀
+25  ¦  OBJECT  ¦  {"a": 1}  𝄀
+26  ¦  OBJECT  ¦  {"a": 1}
+select e_json from convert_json_enum
+minus all
+select e_json from convert_json_enum;
+EXCEPT/MINUS ALL clause is not yet implemented
+select json_type(convert(e, json)), json_unquote(convert(e, json))
+from (
+select e_json as e from convert_json_enum where id = 1
+) src;
+➤ json_type(cast(e as json))[12,-1,0]  ¦  json_unquote(cast(e as json))[12,-1,0]  𝄀
+STRING  ¦  {"a":1}
+select id, json_type(cast(e as json)), json_unquote(cast(e as json))
+from (
+select 1 as id, e_json as e from convert_json_enum where id = 1
+union
+select 2 as id, e_json as e from convert_json_enum where id = 1
+) src
+order by id;
+➤ id[-5,64,0]  ¦  json_type(cast(e as json))[12,-1,0]  ¦  json_unquote(cast(e as json))[12,-1,0]  𝄀
+1  ¦  STRING  ¦  {"a":1}  𝄀
+2  ¦  STRING  ¦  {"a":1}
+select id, json_type(convert(e, json)), json_unquote(convert(e, json))
+from (
+select 1 as id, e_json as e from convert_json_enum where id = 1
+union all
+select 2 as id, cast('{"b":2}' as varchar) as e
+) src
+order by id;
+➤ id[-5,64,0]  ¦  json_type(cast(e as json))[12,-1,0]  ¦  json_unquote(cast(e as json))[12,-1,0]  𝄀
+1  ¦  OBJECT  ¦  {"a": 1}  𝄀
+2  ¦  OBJECT  ¦  {"b": 2}
+create table convert_json_enum_update(id int primary key, j json);
+insert into convert_json_enum_update values (1, null), (2, null), (3, null);
+update convert_json_enum_update dst
+join (
+select id, e_json as e from convert_json_enum where id = 1
+) src on dst.id = src.id
+set dst.j = src.e;
+update convert_json_enum_update dst
+join (
+select 2 as id, e_json as e from convert_json_enum where id = 1
+union all
+select 3 as id, cast('{"b":2}' as varchar) as e
+) src on dst.id = src.id
+set dst.j = src.e;
+select id, json_type(j), json_unquote(j)
+from convert_json_enum_update
+order by id;
+➤ id[4,32,0]  ¦  json_type(j)[12,-1,0]  ¦  json_unquote(j)[12,-1,0]  𝄀
+1  ¦  STRING  ¦  {"a":1}  𝄀
+2  ¦  OBJECT  ¦  {"a": 1}  𝄀
+3  ¦  OBJECT  ¦  {"b": 2}
+drop table convert_json_enum_update;
+drop table convert_json_enum_destination;
+drop table convert_json_enum;
+prepare convert_json_parameter from 'select json_type(convert(?, json)), convert(?, json)';
+set @convert_json_param = 123;
+execute convert_json_parameter using @convert_json_param, @convert_json_param;
+➤ json_type(cast(? as json))[12,-1,0]  ¦  cast(? as json)[-1,2147483647,0]  𝄀
+INTEGER  ¦  123
+set @convert_json_param = '{"prepared":true}';
+execute convert_json_parameter using @convert_json_param, @convert_json_param;
+➤ json_type(cast(? as json))[12,-1,0]  ¦  cast(? as json)[-1,2147483647,0]  𝄀
+OBJECT  ¦  {"prepared": true}
+set @convert_json_param = 'null';
+execute convert_json_parameter using @convert_json_param, @convert_json_param;
+➤ json_type(cast(? as json))[12,-1,0]  ¦  cast(? as json)[-1,2147483647,0]  𝄀
+NULL  ¦  null
+set @convert_json_param = null;
+execute convert_json_parameter using @convert_json_param, @convert_json_param;
+➤ json_type(cast(? as json))[12,-1,0]  ¦  cast(? as json)[-1,2147483647,0]  𝄀
+null  ¦  null
+deallocate prepare convert_json_parameter;

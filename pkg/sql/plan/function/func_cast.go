@@ -16,6 +16,7 @@ package function
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
@@ -842,6 +843,31 @@ var supportedTypeCast = map[types.T][]types.T{
 	},
 }
 
+// jsonCastSourceTypes is intentionally narrower than JSON constructors: CAST
+// must not turn implementation-only values (such as enum indexes or rowids)
+// into accidental JSON strings.
+var jsonCastSourceTypes = []types.T{
+	types.T_any, types.T_json,
+	types.T_char, types.T_varchar, types.T_text,
+	types.T_binary, types.T_varbinary, types.T_blob,
+	types.T_bool, types.T_bit,
+	types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+	types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+	types.T_year,
+	types.T_float32, types.T_float64,
+	types.T_decimal64, types.T_decimal128, types.T_decimal256,
+	types.T_date, types.T_time, types.T_datetime, types.T_timestamp,
+	types.T_geometry, types.T_geometry32,
+}
+
+func init() {
+	for _, source := range jsonCastSourceTypes {
+		if !IfTypeCastSupported(source, types.T_json) {
+			supportedTypeCast[source] = append(supportedTypeCast[source], types.T_json)
+		}
+	}
+}
+
 func IfTypeCastSupported(sourceType, targetType types.T) bool {
 	supportList, ok := supportedTypeCast[sourceType]
 	if ok {
@@ -940,6 +966,9 @@ func newCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 		}
 	}
 	strictStringWidth := mode.strictStringWidth()
+	if toType.Oid == types.T_json {
+		return castToJSON(from, result, proc, length, selectList)
+	}
 	if toType.Oid == types.T_decimal256 {
 		return castToDecimal256(proc, from, *toType, result, length, selectList, mode)
 	}
@@ -6628,6 +6657,147 @@ func ConvertJsonBytes(inBytes []byte) ([]byte, error) {
 		return nil, err
 	}
 	return types.EncodeJson(json)
+}
+
+// castToJSON preserves the source type while producing MatrixOne's encoded
+// ByteJson representation. In particular, text is a JSON document, while the
+// binary family is an opaque JSON BLOB.
+func castToJSON(from *vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	if selectList != nil && selectList.IgnoreAllRow() {
+		rs.SetNullResult(uint64(length))
+		return nil
+	}
+	if from.GetType().Oid == types.T_any || from.IsConstNull() {
+		rs.SetNullResult(uint64(length))
+		return nil
+	}
+
+	// Reserve a batch-scoped parameter frame consistently with JSON functions.
+	// Values are read directly below, so fixed vectors never allocate wrappers
+	// in the row loop.
+	rs.UseOptFunctionParamFrame(1)
+	ctx := context.Background()
+	if proc != nil && proc.Ctx != nil {
+		ctx = proc.Ctx
+	}
+
+	for row := 0; row < length; row++ {
+		if selectList != nil && !selectList.ShouldEvalAllRow() && selectList.Contains(uint64(row)) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		if from.IsNull(uint64(row)) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		var (
+			encoded  []byte
+			value    bytejson.ByteJson
+			identity bool
+			err      error
+		)
+		switch from.GetType().Oid {
+		case types.T_json:
+			encoded = from.GetBytesAt(row)
+			identity = true
+		case types.T_char, types.T_varchar, types.T_text:
+			value, err = types.ParseSliceToByteJson(from.GetBytesAt(row))
+		case types.T_binary, types.T_varbinary, types.T_blob:
+			value = newTypedByteJson(bytejson.TpCodeBlob, base64.StdEncoding.EncodeToString(from.GetBytesAt(row)))
+		case types.T_bool:
+			value, err = bytejson.CreateByteJSON(vector.GetFixedAtNoTypeCheck[bool](from, row))
+		case types.T_bit:
+			value, err = bitToJSON(vector.GetFixedAtNoTypeCheck[uint64](from, row), from.GetType().Width, ctx)
+		case types.T_int8:
+			value, err = bytejson.CreateByteJSON(int64(vector.GetFixedAtNoTypeCheck[int8](from, row)))
+		case types.T_int16:
+			value, err = bytejson.CreateByteJSON(int64(vector.GetFixedAtNoTypeCheck[int16](from, row)))
+		case types.T_int32:
+			value, err = bytejson.CreateByteJSON(int64(vector.GetFixedAtNoTypeCheck[int32](from, row)))
+		case types.T_int64:
+			value, err = bytejson.CreateByteJSON(vector.GetFixedAtNoTypeCheck[int64](from, row))
+		case types.T_uint8:
+			value, err = bytejson.CreateByteJSON(uint64(vector.GetFixedAtNoTypeCheck[uint8](from, row)))
+		case types.T_uint16:
+			value, err = bytejson.CreateByteJSON(uint64(vector.GetFixedAtNoTypeCheck[uint16](from, row)))
+		case types.T_uint32:
+			value, err = bytejson.CreateByteJSON(uint64(vector.GetFixedAtNoTypeCheck[uint32](from, row)))
+		case types.T_uint64:
+			value, err = bytejson.CreateByteJSON(vector.GetFixedAtNoTypeCheck[uint64](from, row))
+		case types.T_year:
+			value, err = bytejson.CreateByteJSON(uint64(vector.GetFixedAtNoTypeCheck[types.MoYear](from, row)))
+		case types.T_float32:
+			value, err = finiteFloatToJSON(float64(vector.GetFixedAtNoTypeCheck[float32](from, row)), ctx)
+		case types.T_float64:
+			value, err = finiteFloatToJSON(vector.GetFixedAtNoTypeCheck[float64](from, row), ctx)
+		case types.T_decimal64:
+			value = newTypedByteJson(bytejson.TpCodeDecimal, vector.GetFixedAtNoTypeCheck[types.Decimal64](from, row).Format(from.GetType().Scale))
+		case types.T_decimal128:
+			value = newTypedByteJson(bytejson.TpCodeDecimal, vector.GetFixedAtNoTypeCheck[types.Decimal128](from, row).Format(from.GetType().Scale))
+		case types.T_decimal256:
+			value = newTypedByteJson(bytejson.TpCodeDecimal, vector.GetFixedAtNoTypeCheck[types.Decimal256](from, row).Format(from.GetType().Scale))
+		case types.T_date:
+			value = newTypedByteJson(bytejson.TpCodeDate, vector.GetFixedAtNoTypeCheck[types.Date](from, row).String())
+		case types.T_time:
+			value = newTypedByteJson(bytejson.TpCodeTime, vector.GetFixedAtNoTypeCheck[types.Time](from, row).String2(6))
+		case types.T_datetime:
+			value = newTypedByteJson(bytejson.TpCodeDatetime, vector.GetFixedAtNoTypeCheck[types.Datetime](from, row).String2(6))
+		case types.T_timestamp:
+			value = newTypedByteJson(bytejson.TpCodeDatetime, vector.GetFixedAtNoTypeCheck[types.Timestamp](from, row).String2(jsonSessionTimeZone(proc), 6))
+		case types.T_geometry, types.T_geometry32:
+			var geoJSON []byte
+			geoJSON, err = geometryToGeoJSONBytes(from.GetBytesAt(row))
+			if err == nil {
+				value, err = types.ParseSliceToByteJson(geoJSON)
+				if err == nil && value.Type != bytejson.TpCodeObject {
+					err = moerr.NewInvalidInputf(ctx, "geometry GeoJSON must be an object")
+				}
+			}
+		default:
+			return formatCastError(ctx, from, types.T_json.ToType(), "")
+		}
+		if err != nil {
+			return err
+		}
+		if identity {
+			err = rs.AppendBytes(encoded, false)
+		} else {
+			err = rs.AppendByteJson(value, false)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func finiteFloatToJSON(value float64, ctx context.Context) (bytejson.ByteJson, error) {
+	if math.IsNaN(value) || math.IsInf(value, 0) {
+		return bytejson.ByteJson{}, moerr.NewInvalidInputf(ctx, "cannot cast non-finite float to json")
+	}
+	return bytejson.CreateByteJSON(value)
+}
+
+func bitToJSON(value uint64, width int32, ctx context.Context) (bytejson.ByteJson, error) {
+	if width <= 0 {
+		width = 1
+	}
+	if width > 64 {
+		return bytejson.ByteJson{}, moerr.NewInvalidInputf(ctx, "cannot cast BIT(%d) to json", width)
+	}
+	if width < 64 {
+		value &= uint64(1)<<width - 1
+	}
+	byteLen := int((width + 7) / 8)
+	var raw [8]byte
+	binary.BigEndian.PutUint64(raw[:], value)
+	return newTypedByteJson(bytejson.TpCodeBlob, base64.StdEncoding.EncodeToString(raw[8-byteLen:])), nil
 }
 
 func strToJson(

@@ -156,6 +156,12 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		if err != nil {
 			return
 		}
+		if b.builder != nil {
+			expr, err = b.builder.rewriteProjectedEnumDisplayValueToJSONCast(expr, expr, typ)
+			if err != nil {
+				return
+			}
+		}
 		if useExplicitCastOverload(exprImpl.Type) {
 			expr, err = appendExplicitCastBeforeExpr(b.GetContext(), expr, typ)
 		} else {
@@ -3836,6 +3842,13 @@ func appendExplicitCastBeforeExpr(ctx context.Context, expr *Expr, toType Type) 
 func appendCastBeforeExprWithOverload(
 	ctx context.Context, expr *Expr, toType Type, overloadID int32, isBin ...bool,
 ) (*Expr, error) {
+	expr, err := rewriteEnumDisplayValueToJSONCast(ctx, expr, toType)
+	if err != nil {
+		return nil, err
+	}
+	if expr.Typ.Id == int32(types.T_json) {
+		return expr, nil
+	}
 	toType.NotNullable = expr.Typ.NotNullable
 	argsType := []types.Type{
 		makeTypeByPlan2Expr(expr),
@@ -3867,6 +3880,36 @@ func appendCastBeforeExprWithOverload(
 		},
 		Typ: typ,
 	}, nil
+}
+
+func rewriteEnumDisplayValueToJSONCast(ctx context.Context, expr *Expr, toType Type) (*Expr, error) {
+	if toType.Id != int32(types.T_json) {
+		return expr, nil
+	}
+	if expr.Typ.Id == int32(types.T_enum) {
+		return nil, moerr.NewInvalidArg(ctx, "operator cast", "[ENUM JSON]")
+	}
+	if isEnumDisplayValueExpr(expr) {
+		return quoteEnumDisplayValueAsJSON(ctx, expr)
+	}
+	return expr, nil
+}
+
+func isEnumDisplayValueExpr(expr *Expr) bool {
+	if expr == nil {
+		return false
+	}
+	fn := expr.GetF()
+	return fn != nil && fn.Func != nil && fn.Func.ObjName == moEnumCastIndexToValueFun
+}
+
+func quoteEnumDisplayValueAsJSON(ctx context.Context, expr *Expr) (*Expr, error) {
+	quoted, err := BindFuncExprImplByPlanExpr(ctx, "json_quote", []*Expr{expr})
+	if err != nil {
+		return nil, err
+	}
+	quoted.Typ.NotNullable = expr.Typ.NotNullable
+	return quoted, nil
 }
 
 func resetDateFunctionArgs(ctx context.Context, dateExpr *Expr, intervalExpr *Expr) ([]*Expr, error) {

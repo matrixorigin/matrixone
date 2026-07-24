@@ -414,6 +414,152 @@ func TestInsertSelectVarcharFromTextUsesStrictAssignmentCast(t *testing.T) {
 	assert.True(t, planHasTextToVarcharStrictCastWithWidth(logicPlan, 255))
 }
 
+func TestInsertSelectEnumToJSONQuotesDisplayValue(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	source := mock.ctxt.tables["nation"]
+	source.Cols[1].Typ = plan.Type{
+		Id:         int32(types.T_enum),
+		Enumvalues: `alpha,{"a":1}`,
+	}
+
+	const tableName = "enum_json_destination"
+	idType := plan.Type{Id: int32(types.T_int32), NotNullable: true}
+	jsonType := plan.Type{Id: int32(types.T_json)}
+	rowIDType := plan.Type{Id: int32(types.T_Rowid), NotNullable: true, Width: 16}
+	cols := []*ColDef{
+		{ColId: 0, Name: "id", OriginName: "id", Typ: idType, Primary: true, Pkidx: 1, Default: &plan.Default{}},
+		{ColId: 1, Name: "j", OriginName: "j", Typ: jsonType, Default: &plan.Default{NullAbility: true}},
+		{ColId: 2, Name: catalog.Row_ID, OriginName: catalog.Row_ID, Typ: rowIDType, Hidden: true, Default: &plan.Default{}},
+	}
+	tableDef := &TableDef{
+		TableType: catalog.SystemOrdinaryRel,
+		TblId:     23177,
+		Name:      tableName,
+		Cols:      cols,
+		Pkey: &plan.PrimaryKeyDef{
+			PkeyColName: "id",
+			Cols:        []uint64{0},
+			Names:       []string{"id"},
+			CompPkeyCol: cols[0],
+		},
+	}
+	mock.ctxt.objects[tableName] = &ObjectRef{SchemaName: "tpch", ObjName: tableName, Obj: 23177}
+	mock.ctxt.tables[tableName] = tableDef
+	mock.ctxt.id2name[23177] = tableName
+	mock.ctxt.pks[tableName] = []int{0}
+
+	for _, tc := range []struct {
+		sql       string
+		wantQuote bool
+	}{
+		{sql: "insert into enum_json_destination(id, j) select n_nationkey, n_name from nation", wantQuote: true},
+		{sql: "insert into enum_json_destination(id, j) select id, name from (select n_nationkey as id, n_name as name from nation) src", wantQuote: true},
+		{sql: "insert into enum_json_destination(id, j) select id, name from (select n_nationkey as id, n_name as name from nation union all select n_nationkey, n_name from nation) src", wantQuote: true},
+		{sql: "insert into enum_json_destination(id, j) select id, name from (select n_nationkey as id, n_name as name from nation union select n_nationkey, n_name from nation) src", wantQuote: true},
+		{sql: "insert into enum_json_destination(id, j) select id, name from (select n_nationkey as id, n_name as name from nation intersect select n_nationkey, cast('{\"a\":1}' as varchar) from nation) src", wantQuote: true},
+		{sql: "insert into enum_json_destination(id, j) select id, name from (select n_nationkey as id, n_name as name from nation intersect all select n_nationkey, cast('{\"a\":1}' as varchar) from nation) src", wantQuote: true},
+		{sql: "insert into enum_json_destination(id, j) select id, name from (select n_nationkey as id, n_name as name from nation minus select n_nationkey, cast('{\"a\":1}' as varchar) from nation) src", wantQuote: true},
+		{sql: "insert into enum_json_destination(id, j) select id, name from (select n_nationkey as id, n_name as name from nation union all select n_nationkey, n_comment from nation) src", wantQuote: false},
+		{sql: "insert into enum_json_destination(id, j) select id, name from (select n_nationkey as id, n_comment as name from nation union all select n_nationkey, n_name from nation) src", wantQuote: false},
+		{sql: "insert into enum_json_destination(id, j) select id, name from (select n_nationkey as id, n_name as name from nation union select n_nationkey, n_comment from nation) src", wantQuote: false},
+		{sql: "insert into enum_json_destination(id, j) select id, name from (select n_nationkey as id, n_comment as name from nation union select n_nationkey, n_name from nation) src", wantQuote: false},
+		{sql: "insert into enum_json_destination(id, j) select id, name from (select n_nationkey as id, cast('{\"a\":1}' as varchar) as name from nation intersect select n_nationkey, n_name from nation) src", wantQuote: false},
+		{sql: "insert into enum_json_destination(id, j) select id, name from (select n_nationkey as id, cast('{\"a\":1}' as varchar) as name from nation intersect all select n_nationkey, n_name from nation) src", wantQuote: false},
+		{sql: "insert into enum_json_destination(id, j) select id, name from (select n_nationkey as id, cast('{\"a\":1}' as varchar) as name from nation minus select n_nationkey, n_name from nation) src", wantQuote: false},
+	} {
+		logicPlan, err := runOneStmt(mock, t, tc.sql)
+		require.NoError(t, err, tc.sql)
+
+		foundJSONQuote := false
+		for _, node := range logicPlan.GetQuery().Nodes {
+			for _, expr := range node.ProjectList {
+				if exprContainsFuncName(expr, "json_quote") {
+					foundJSONQuote = true
+				}
+			}
+		}
+		require.Equal(t, tc.wantQuote, foundJSONQuote, "unexpected ENUM display quoting decision: %s", tc.sql)
+	}
+}
+
+func TestProjectedEnumToJSONExplicitCastQuotesDisplayValue(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	source := mock.ctxt.tables["nation"]
+	source.Cols[1].Typ = plan.Type{
+		Id:         int32(types.T_enum),
+		Enumvalues: `alpha,{"a":1}`,
+	}
+
+	for _, tc := range []struct {
+		sql       string
+		wantQuote bool
+	}{
+		{sql: "select convert(name, json) from (select n_name as name from nation) src", wantQuote: true},
+		{sql: "select cast(name as json) from (select n_name as name from nation union all select n_name from nation) src", wantQuote: true},
+		{sql: "select convert(name, json) from (select n_name as name from nation union select n_name from nation) src", wantQuote: true},
+		{sql: "select convert(name, json) from (select n_name as name from nation union all select n_comment from nation) src", wantQuote: false},
+	} {
+		logicPlan, err := runOneStmt(mock, t, tc.sql)
+		require.NoError(t, err, tc.sql)
+
+		foundJSONQuote := false
+		for _, node := range logicPlan.GetQuery().Nodes {
+			for _, expr := range node.ProjectList {
+				if exprContainsFuncName(expr, "json_quote") {
+					foundJSONQuote = true
+				}
+			}
+		}
+		require.Equal(t, tc.wantQuote, foundJSONQuote, "unexpected ENUM display quoting decision: %s", tc.sql)
+	}
+}
+
+func TestUpdateProjectedEnumToJSONQuotesDisplayValue(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	table := mock.ctxt.tables["nation"]
+	table.Cols[1].Typ = plan.Type{
+		Id:         int32(types.T_enum),
+		Enumvalues: `alpha,{"a":1}`,
+	}
+	for _, col := range table.Cols {
+		if col.Name == "n_comment" {
+			col.Typ = plan.Type{Id: int32(types.T_json)}
+			break
+		}
+	}
+
+	for _, tc := range []struct {
+		sql       string
+		wantQuote bool
+	}{
+		{
+			sql:       "update nation n join (select n_nationkey as id, n_name as value from nation) src on n.n_nationkey = src.id set n.n_comment = src.value",
+			wantQuote: true,
+		},
+		{
+			sql:       "update nation n join (select n_nationkey as id, n_name as value from nation union all select n_nationkey, n_name from nation) src on n.n_nationkey = src.id set n.n_comment = src.value",
+			wantQuote: true,
+		},
+		{
+			sql:       "update nation n join (select n_nationkey as id, n_name as value from nation union all select n_nationkey, cast('{\"a\":1}' as varchar) from nation) src on n.n_nationkey = src.id set n.n_comment = src.value",
+			wantQuote: false,
+		},
+	} {
+		logicPlan, err := runOneStmt(mock, t, tc.sql)
+		require.NoError(t, err, tc.sql)
+
+		foundJSONQuote := false
+		for _, node := range logicPlan.GetQuery().Nodes {
+			for _, expr := range node.ProjectList {
+				if exprContainsFuncName(expr, "json_quote") {
+					foundJSONQuote = true
+				}
+			}
+		}
+		require.Equal(t, tc.wantQuote, foundJSONQuote, "unexpected ENUM display quoting decision: %s", tc.sql)
+	}
+}
+
 func TestOnDuplicateUpdateVarcharFromTextUsesStrictAssignmentCast(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	addTextCastTableForTest(mock)

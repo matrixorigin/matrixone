@@ -976,13 +976,15 @@ func StAsWKB(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 // StAsGeoJSON renders a geometry as an RFC 7946 GeoJSON geometry object
 // (full coordinate precision).
 func StAsGeoJSON(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(v []byte) ([]byte, error) {
-		g, err := decodeGeoGeometry(v)
-		if err != nil {
-			return nil, err
-		}
-		return functionUtil.QuickStrToBytes(geo.WriteGeoJSON(g, -1)), nil
-	}, selectList)
+	return opUnaryBytesToBytesWithErrorCheck(ivecs, result, proc, length, geometryToGeoJSONBytes, selectList)
+}
+
+func geometryToGeoJSONBytes(payload []byte) ([]byte, error) {
+	g, err := decodeGeoGeometry(payload)
+	if err != nil {
+		return nil, err
+	}
+	return functionUtil.QuickStrToBytes(geo.WriteGeoJSON(g, -1)), nil
 }
 
 // StGeomFromGeoJSON builds a geometry from a GeoJSON geometry object. Per

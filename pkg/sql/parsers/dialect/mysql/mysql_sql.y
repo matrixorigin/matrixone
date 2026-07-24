@@ -12030,6 +12030,18 @@ mo_cast_type:
 
 mysql_cast_type:
     decimal_type
+|   JSON
+    {
+        locale := ""
+        $$ = &tree.T{
+            InternalType: tree.InternalType{
+                Family:       tree.JsonFamily,
+                FamilyString: $1,
+                Locale:       &locale,
+                Oid:          uint32(defines.MYSQL_TYPE_JSON),
+            },
+        }
+    }
 |   BINARY length_option_opt
     {
         locale := ""

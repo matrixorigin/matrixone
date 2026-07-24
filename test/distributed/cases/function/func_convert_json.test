@@ -1,0 +1,310 @@
+-- CONVERT(expr, JSON) shares CAST(expr AS JSON)'s target type and executor.
+select convert('{"a":1}', json) = cast('{"a":1}' as json) as convert_equals_cast;
+select json_type(convert('1', json)), json_type(convert('"1"', json));
+select convert(null, json) is null as sql_null_is_null;
+select convert('null', json) is null as json_null_is_sql_null,
+       json_type(convert('null', json)) as json_null_type;
+select json_type(convert(true, json)), convert(true, json);
+select json_type(convert(cast('{"long":"abcdefghijklmnopqrstuvwxyz0123456789"}' as json), json)),
+       convert(cast('{"long":"abcdefghijklmnopqrstuvwxyz0123456789"}' as json), json);
+
+-- String family is parsed as JSON document text; binary family is opaque BLOB.
+create table convert_json_source(
+    id int,
+    b binary(16),
+    vb varbinary(64),
+    bl blob,
+    tx text,
+    bits bit(4),
+    y year
+);
+insert into convert_json_source values
+    (1, '{"a":1}', '{"a":1}', '{"a":1}', '{"a":1}', b'1010', 2020);
+
+select json_type(convert(b, json)), json_unquote(convert(b, json)) from convert_json_source;
+select json_type(convert(vb, json)), json_unquote(convert(vb, json)) from convert_json_source;
+select json_type(convert(bl, json)), json_unquote(convert(bl, json)) from convert_json_source;
+select json_type(convert(tx, json)), json_unquote(convert(tx, json)) from convert_json_source;
+select json_type(convert(bits, json)), json_unquote(convert(bits, json)) from convert_json_source;
+select json_type(convert(y, json)), convert(y, json) from convert_json_source;
+select json_type(convert(cast(x'ff' as blob), json)),
+       json_unquote(convert(cast(x'ff' as blob), json));
+
+create table convert_json_bit_width(bits bit(9));
+insert into convert_json_bit_width values (b'100001010');
+select json_type(convert(bits, json)), json_unquote(convert(bits, json)) from convert_json_bit_width;
+drop table convert_json_bit_width;
+
+select json_type(convert(cast(-9223372036854775808 as signed), json));
+select json_type(convert(cast(18446744073709551615 as unsigned), json)),
+       convert(cast(18446744073709551615 as unsigned), json);
+select json_type(convert(cast(1.20 as decimal(10,2)), json)),
+       convert(cast(1.20 as decimal(10,2)), json);
+select json_type(convert(cast(1.5 as double), json)),
+       convert(cast(1.5 as double), json);
+select json_type(convert(cast(12345678901234567890.123456789012345678 as decimal(38,18)), json)),
+       convert(cast(12345678901234567890.123456789012345678 as decimal(38,18)), json);
+select json_type(convert(cast('2020-01-02' as date), json)),
+       convert(cast('2020-01-02' as date), json);
+select json_type(convert(cast('10:00:00.1' as time(1)), json)),
+       convert(cast('10:00:00.1' as time(1)), json);
+select json_type(convert(cast('2020-01-02 03:04:05.120000' as datetime(6)), json)),
+       json_unquote(convert(cast('2020-01-02 03:04:05.120000' as datetime(6)), json));
+set time_zone = '+00:00';
+create table convert_json_timestamp(id int, ts timestamp(6));
+insert into convert_json_timestamp values
+    (1, '2020-01-02 03:04:05.120000'),
+    (2, '2020-01-01 23:30:00.000000');
+select id, ts, json_type(convert(ts, json)), json_unquote(convert(ts, json))
+from convert_json_timestamp order by id;
+set time_zone = '+08:00';
+select id, ts, json_type(convert(ts, json)), json_unquote(convert(ts, json))
+from convert_json_timestamp order by id;
+set time_zone = '-05:00';
+select id, ts, json_type(convert(ts, json)), json_unquote(convert(ts, json))
+from convert_json_timestamp order by id;
+drop table convert_json_timestamp;
+set time_zone = '+00:00';
+select json_type(convert(st_geomfromtext('POINT(1 1)'), json)),
+       convert(st_geomfromtext('POINT(1 1)'), json);
+select json_type(convert(st_geomfromtext('LINESTRING(0 0,1 1)'), json)),
+       convert(st_geomfromtext('LINESTRING(0 0,1 1)'), json);
+
+-- MatrixOne currently compares TpCodeBlob payloads after base64 encoding and
+-- does not preserve MySQL's opaque subtype metadata.
+select convert(cast(x'00' as blob), json) <
+       convert(cast(x'd0' as blob), json) as mo_base64_order;
+
+-- Constant folding must retain BIT width so this follows the BIT -> JSON BLOB path.
+select json_type(convert(cast(b'1' as bit(1)), json)),
+       json_unquote(convert(cast(b'1' as bit(1)), json));
+
+create table convert_json_bit_blob(
+    b1 bit(1), b8 bit(8), b9 bit(9),
+    bl1 blob, bl8 blob, bl9 blob
+);
+insert into convert_json_bit_blob values
+    (b'1', b'11111111', b'100001010', x'01', x'ff', x'010a');
+select json_type(convert(b1, json)), json_unquote(convert(b1, json)),
+       json_type(convert(bl1, json)), json_unquote(convert(bl1, json)),
+       convert(b1, json) = convert(bl1, json)
+from convert_json_bit_blob;
+select json_type(convert(b8, json)), json_unquote(convert(b8, json)),
+       json_type(convert(bl8, json)), json_unquote(convert(bl8, json)),
+       convert(b8, json) = convert(bl8, json)
+from convert_json_bit_blob;
+select json_type(convert(b9, json)), json_unquote(convert(b9, json)),
+       json_type(convert(bl9, json)), json_unquote(convert(bl9, json)),
+       convert(b9, json) = convert(bl9, json)
+from convert_json_bit_blob;
+drop table convert_json_bit_blob;
+
+create table convert_json_destination(id int, j json);
+insert into convert_json_destination select 1, bl from convert_json_source;
+insert into convert_json_destination select 2, tx from convert_json_source;
+select id, json_type(j), json_unquote(j) from convert_json_destination order by id;
+drop table convert_json_destination;
+drop table convert_json_source;
+
+-- Error statements are intentionally isolated so one error cannot hide later cases.
+select convert('', json);
+select convert('NULL', json);
+select convert('not json', json);
+select convert(cast('00000000-0000-0000-0000-000000000001' as uuid), json);
+
+-- ENUM labels become JSON strings. They are not parsed as JSON documents.
+create table convert_json_enum(
+    id int,
+    e_text enum('alpha', 'beta'),
+    e_number enum('1', '2'),
+    e_json enum('{"a":1}', '{"b":2}'),
+    e_quoted enum('a"b', 'c')
+);
+insert into convert_json_enum values
+    (1, 'alpha', '1', '{"a":1}', 'a"b'),
+    (2, null, null, null, null);
+select id,
+       json_type(convert(e_text, json)), convert(e_text, json),
+       json_type(convert(e_number, json)), convert(e_number, json),
+       json_type(convert(e_json, json)), convert(e_json, json),
+       json_type(convert(e_quoted, json)), convert(e_quoted, json)
+from convert_json_enum
+order by id;
+select convert(e_text, json) = cast(e_text as json) as explicit_cast_matches,
+       json_unquote(cast(e_quoted as json)) as quoted_label
+from convert_json_enum
+where id = 1;
+create table convert_json_enum_destination(id int, j json);
+insert into convert_json_enum_destination select 1, e_text from convert_json_enum where id = 1;
+insert into convert_json_enum_destination select 2, e_number from convert_json_enum where id = 1;
+insert into convert_json_enum_destination select 3, e_json from convert_json_enum where id = 1;
+insert into convert_json_enum_destination select 4, e_quoted from convert_json_enum where id = 1;
+insert into convert_json_enum_destination select 5, e_json from convert_json_enum where id = 2;
+insert into convert_json_enum_destination
+select 6, e
+from (select e_json as e from convert_json_enum where id = 1) src;
+insert into convert_json_enum_destination
+select id, e
+from (
+    select 7 as id, e_json as e from convert_json_enum where id = 1
+    union all
+    select 8 as id, e_json as e from convert_json_enum where id = 2
+) src;
+-- UNION DISTINCT preserves ENUM display-value semantics when every branch is ENUM.
+insert into convert_json_enum_destination
+select id, e
+from (
+    select 15 as id, e_json as e from convert_json_enum where id = 1
+    union
+    select 16 as id, e_json as e from convert_json_enum where id = 2
+) src;
+-- Pure projection chains retain ENUM display-value semantics.
+insert into convert_json_enum_destination
+select 9, e
+from (
+    select e
+    from (select e_json as e from convert_json_enum where id = 1) level_one
+) level_two;
+-- A mixed UNION result and computed VARCHAR expression use normal JSON document conversion.
+insert into convert_json_enum_destination
+select id, e
+from (
+    select 10 as id, e_json as e from convert_json_enum where id = 1
+    union all
+    select 11 as id, cast('{"b":2}' as varchar) as e
+) src;
+insert into convert_json_enum_destination
+select 12, concat(e_json, '') from convert_json_enum where id = 1;
+-- INTERSECT and MINUS return rows from the left ENUM display-value projection.
+insert into convert_json_enum_destination
+select id, e
+from (
+    select 13 as id, e_json as e from convert_json_enum where id = 1
+    intersect
+    select 13 as id, cast('{"a":1}' as varchar) as e
+) src;
+insert into convert_json_enum_destination
+select id, e
+from (
+    select 17 as id, e_json as e from convert_json_enum where id = 1
+    intersect all
+    select 17 as id, cast('{"a":1}' as varchar) as e
+) src;
+insert into convert_json_enum_destination
+select id, e
+from (
+    select 14 as id, e_json as e from convert_json_enum where id = 1
+    minus
+    select 14 as id, cast('{"b":2}' as varchar) as e
+) src;
+-- Set-operation output provenance follows the left branch. A left VARCHAR
+-- JSON document must not be reclassified as an ENUM display value.
+insert into convert_json_enum_destination
+select id, e
+from (
+    select 18 as id, cast('{"a":1}' as varchar) as e
+    from convert_json_enum where id = 1
+    intersect
+    select 18 as id, e_json as e from convert_json_enum where id = 1
+) src;
+insert into convert_json_enum_destination
+select id, e
+from (
+    select 19 as id, cast('{"a":1}' as varchar) as e
+    from convert_json_enum where id = 1
+    intersect all
+    select 19 as id, e_json as e from convert_json_enum where id = 1
+) src;
+insert into convert_json_enum_destination
+select id, e
+from (
+    select 20 as id, cast('{"a":1}' as varchar) as e
+    from convert_json_enum where id = 1
+    minus
+    select 20 as id, e_json as e from convert_json_enum where id = 2
+) src;
+-- Mixed UNION provenance is order-independent for both ALL and DISTINCT.
+insert into convert_json_enum_destination
+select id, e
+from (
+    select 21 as id, cast('{"a":1}' as varchar) as e
+    union all
+    select 22 as id, e_json as e from convert_json_enum where id = 1
+) src;
+insert into convert_json_enum_destination
+select id, e
+from (
+    select 23 as id, e_json as e from convert_json_enum where id = 1
+    union
+    select 24 as id, cast('{"b":2}' as varchar) as e
+) src;
+insert into convert_json_enum_destination
+select id, e
+from (
+    select 25 as id, cast('{"a":1}' as varchar) as e
+    union
+    select 26 as id, e_json as e from convert_json_enum where id = 1
+) src;
+select id, json_type(j), json_unquote(j)
+from convert_json_enum_destination
+order by id;
+-- MINUS ALL is parsed but remains unsupported by the planner.
+select e_json from convert_json_enum
+minus all
+select e_json from convert_json_enum;
+
+-- Explicit casts retain projected ENUM display-value provenance.
+select json_type(convert(e, json)), json_unquote(convert(e, json))
+from (
+    select e_json as e from convert_json_enum where id = 1
+) src;
+select id, json_type(cast(e as json)), json_unquote(cast(e as json))
+from (
+    select 1 as id, e_json as e from convert_json_enum where id = 1
+    union
+    select 2 as id, e_json as e from convert_json_enum where id = 1
+) src
+order by id;
+-- A mixed set-operation result remains an ordinary JSON document source.
+select id, json_type(convert(e, json)), json_unquote(convert(e, json))
+from (
+    select 1 as id, e_json as e from convert_json_enum where id = 1
+    union all
+    select 2 as id, cast('{"b":2}' as varchar) as e
+) src
+order by id;
+
+-- UPDATE assignment uses the same projected ENUM provenance rule as INSERT.
+create table convert_json_enum_update(id int primary key, j json);
+insert into convert_json_enum_update values (1, null), (2, null), (3, null);
+update convert_json_enum_update dst
+join (
+    select id, e_json as e from convert_json_enum where id = 1
+) src on dst.id = src.id
+set dst.j = src.e;
+update convert_json_enum_update dst
+join (
+    select 2 as id, e_json as e from convert_json_enum where id = 1
+    union all
+    select 3 as id, cast('{"b":2}' as varchar) as e
+) src on dst.id = src.id
+set dst.j = src.e;
+select id, json_type(j), json_unquote(j)
+from convert_json_enum_update
+order by id;
+drop table convert_json_enum_update;
+drop table convert_json_enum_destination;
+drop table convert_json_enum;
+
+-- MySQL's json_prep_stmts.test covers CAST(? AS JSON); retain the same
+-- runtime-type boundary for CONVERT(? , JSON).
+prepare convert_json_parameter from 'select json_type(convert(?, json)), convert(?, json)';
+set @convert_json_param = 123;
+execute convert_json_parameter using @convert_json_param, @convert_json_param;
+set @convert_json_param = '{"prepared":true}';
+execute convert_json_parameter using @convert_json_param, @convert_json_param;
+set @convert_json_param = 'null';
+execute convert_json_parameter using @convert_json_param, @convert_json_param;
+set @convert_json_param = null;
+execute convert_json_parameter using @convert_json_param, @convert_json_param;
+deallocate prepare convert_json_parameter;
