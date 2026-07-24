@@ -203,7 +203,7 @@ func (c *Compile) GetPlan() *plan.Plan {
 	return c.pn
 }
 
-func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*batch.Batch, *perfcounter.CounterSet) error, sql string) {
+func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*batch.Batch, *perfcounter.CounterSet) error, sql string) error {
 	// clean up the process for a new query.
 	proc.ResetQueryContext()
 	proc.ResetCloneTxnOperator()
@@ -217,8 +217,14 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 	if c.lockMeta != nil {
 		c.lockMeta.reset(c.proc)
 	}
+	rejectZeroTemporal, err := util.RejectZeroTemporalWritePolicy(proc)
+	if err != nil {
+		return err
+	}
 	for _, s := range c.scopes {
-		s.Reset(c)
+		if err = s.reset(c, rejectZeroTemporal); err != nil {
+			return err
+		}
 	}
 
 	for _, e := range c.filterExprExes {
@@ -250,6 +256,7 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 	if c.queryPlacement.Reason != "" {
 		c.recordQuerySchedulingTrace(c.queryPlacement)
 	}
+	return nil
 }
 
 func UpdateScopeTxnOffset(scope *Scope, txnOffset int) {
@@ -1518,12 +1525,14 @@ func StrictSqlMode(proc *process.Process) (error, bool) {
 	if err != nil {
 		return err, false
 	}
-	if modeStr, ok := mode.(string); ok {
-		if strings.Contains(modeStr, "STRICT_TRANS_TABLES") || strings.Contains(modeStr, "STRICT_ALL_TABLES") {
-			return nil, true
-		}
+	return nil, process.IsStrictMode(mode)
+}
+
+func effectiveExternalStrictMode(proc *process.Process, param *tree.ExternParam, strict bool) bool {
+	if !strict || proc == nil || param == nil || param.ExternType != int32(plan.ExternType_LOAD) {
+		return strict
 	}
-	return nil, false
+	return !proc.GetStmtProfile().GetStatementIgnore()
 }
 
 func (c *Compile) getExternParam(proc *process.Process, externScan *plan.ExternScan, createsql string) (*tree.ExternParam, error) {
@@ -1854,6 +1863,7 @@ func (c *Compile) compileExternScanWithPlanNodeID(node *plan.Node, planNodeID in
 		return nil, err
 	}
 
+	strictSqlMode = effectiveExternalStrictMode(c.proc, param, strictSqlMode)
 	if param.ScanType == tree.INLINE {
 		return c.compileExternValueScan(node, param, strictSqlMode)
 	}

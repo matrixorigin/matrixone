@@ -1224,16 +1224,16 @@ func ConvertTz(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 		fromTz, null2 := fromTzs.GetStrValue(i)
 		toTz, null3 := toTzs.GetStrValue(i)
 
-		if null1 || null2 || null3 {
+		if null1 || null2 || null3 || date == types.ZeroDatetime {
 			if err = rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
-			return nil
+			continue
 		} else if len(fromTz) == 0 || len(toTz) == 0 {
 			if err = rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
-			return nil
+			continue
 		} else {
 			if !ivecs[1].IsConst() {
 				fromLoc = convertTimezone(string(fromTz))
@@ -1245,7 +1245,7 @@ func ConvertTz(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 				if err = rs.AppendBytes(nil, true); err != nil {
 					return err
 				}
-				return nil
+				continue
 			}
 			maxStartTime := time.Date(9999, 12, 31, 23, 59, 59, 0, fromLoc)
 			maxEndTime := time.Date(9999, 12, 31, 23, 59, 59, 0, toLoc)
@@ -1279,6 +1279,10 @@ func ConvertTz(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 }
 
 func convertTimezone(tz string) *time.Location {
+	if tz == "" {
+		return nil
+	}
+
 	loc, err := time.LoadLocation(tz)
 	if err != nil && tz[0] != '+' && tz[0] != '-' {
 		return nil
@@ -1324,6 +1328,9 @@ func isDateOverflowMaxError(err error) bool {
 }
 
 func doDateAdd(start types.Date, diff int64, iTyp types.IntervalType) (types.Date, error) {
+	if start == types.ZeroDate {
+		return 0, dateOverflowMaxError
+	}
 	// Check for invalid interval marker (math.MaxInt64 indicates parse error)
 	if diff == math.MaxInt64 {
 		return 0, datetimeOverflowMaxError
@@ -1444,6 +1451,9 @@ func isDatetimeOverflowMaxError(err error) bool {
 }
 
 func doDatetimeAdd(start types.Datetime, diff int64, iTyp types.IntervalType) (types.Datetime, error) {
+	if start == types.ZeroDatetime {
+		return 0, datetimeOverflowMaxError
+	}
 	// Check for invalid interval marker (math.MaxInt64 indicates parse error)
 	if diff == math.MaxInt64 {
 		return 0, datetimeOverflowMaxError
@@ -1575,6 +1585,9 @@ func doDateStringAdd(startStr string, diff int64, iTyp types.IntervalType) (type
 		// Both parsing failed, return the original error (invalid string)
 		return 0, err
 	}
+	if start == types.ZeroDatetime {
+		return 0, datetimeOverflowMaxError
+	}
 	dt, success := start.AddInterval(diff, iTyp, types.DateType)
 	if success {
 		// Check if result is less than minimum valid date (0001-01-01)
@@ -1655,6 +1668,9 @@ func doDateStringAdd(startStr string, diff int64, iTyp types.IntervalType) (type
 }
 
 func doTimestampAdd(loc *time.Location, start types.Timestamp, diff int64, iTyp types.IntervalType) (types.Timestamp, error) {
+	if start == types.ZeroTimestamp {
+		return 0, datetimeOverflowMaxError
+	}
 	// Check for invalid interval marker (math.MaxInt64 indicates parse error)
 	if diff == math.MaxInt64 {
 		return 0, datetimeOverflowMaxError
@@ -1701,6 +1717,15 @@ func Truncate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 		v, null := ivec.GetValue(i)
 		if null {
 			return moerr.NewNotSupported(proc.Ctx, "now args of MO_WIN_TRUNCATE can not be NULL")
+		}
+		// ZeroDatetime is a distinct MySQL zero-date sentinel, not the
+		// 0001-01-01 epoch. It is a valid time-window grouping key but cannot
+		// participate in modulo arithmetic without being aliased to that epoch.
+		if v == types.ZeroDatetime {
+			if err = rs.Append(types.ZeroDatetime, false); err != nil {
+				return err
+			}
+			continue
 		}
 		if err = rs.Append(v-v%t, false); err != nil {
 			return err
@@ -1959,9 +1984,42 @@ func TimestampAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, p
 	}
 	rs.TempSetType(types.New(types.T_timestamp, 0, scale))
 
-	return opBinaryFixedFixedToFixedWithErrorCheck[types.Timestamp, int64, types.Timestamp](ivecs, result, proc, length, func(v1 types.Timestamp, v2 int64) (types.Timestamp, error) {
-		return doTimestampAdd(proc.GetSessionInfo().TimeZone, v1, v2, iTyp)
-	}, selectList)
+	result.UseOptFunctionParamFrame(2)
+	p1 := vector.OptGetParamFromWrapper[types.Timestamp](rs, 0, ivecs[0])
+	p2 := vector.OptGetParamFromWrapper[int64](rs, 1, ivecs[1])
+	rsVec := rs.GetResultVector()
+	rss := vector.MustFixedColNoTypeCheck[types.Timestamp](rsVec)
+	rsNull := rsVec.GetNulls()
+	loc := proc.GetSessionInfo().TimeZone
+	if loc == nil {
+		loc = time.Local
+	}
+	if selectList != nil && selectList.IgnoreAllRow() {
+		nulls.AddRange(rsNull, 0, uint64(length))
+		return nil
+	}
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && !selectList.ShouldEvalAllRow() && selectList.Contains(i) {
+			rsNull.Add(i)
+			continue
+		}
+		v1, null1 := p1.GetValue(i)
+		v2, null2 := p2.GetValue(i)
+		if null1 || null2 || v2 == math.MaxInt64 {
+			rsNull.Add(i)
+			continue
+		}
+		resultTs, err := doTimestampAdd(loc, v1, v2, iTyp)
+		if err != nil {
+			if isDatetimeOverflowMaxError(err) {
+				rsNull.Add(i)
+				continue
+			}
+			return err
+		}
+		rss[i] = resultTs
+	}
+	return nil
 }
 
 func TimeAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
@@ -3156,7 +3214,7 @@ func addTimeToDatetime(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 		dt, null1 := datetimes.GetValue(i)
 		time2Str, null2 := time2Param.GetStrValue(i)
 
-		if null1 || null2 {
+		if null1 || null2 || dt == types.ZeroDatetime {
 			if err := rs.Append(types.Datetime(0), true); err != nil {
 				return err
 			}
@@ -3206,7 +3264,7 @@ func addTimeToTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrap
 		ts, null1 := timestamps.GetValue(i)
 		time2Str, null2 := time2Param.GetStrValue(i)
 
-		if null1 || null2 {
+		if null1 || null2 || ts == types.ZeroTimestamp {
 			if err := rs.Append(types.Timestamp(0), true); err != nil {
 				return err
 			}
@@ -3275,6 +3333,12 @@ func addTimeToString(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 			}
 			// Convert time to datetime (using today's date)
 			dt = time1.ToDatetime(scale)
+		}
+		if dt == types.ZeroDatetime {
+			if err := rs.Append(types.Datetime(0), true); err != nil {
+				return err
+			}
+			continue
 		}
 
 		// Parse time2 string
@@ -3402,7 +3466,7 @@ func subTimeFromDatetime(ivecs []*vector.Vector, result vector.FunctionResultWra
 		dt, null1 := datetimes.GetValue(i)
 		time2Str, null2 := time2Param.GetStrValue(i)
 
-		if null1 || null2 {
+		if null1 || null2 || dt == types.ZeroDatetime {
 			if err := rs.Append(types.Datetime(0), true); err != nil {
 				return err
 			}
@@ -3452,7 +3516,7 @@ func subTimeFromTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWr
 		ts, null1 := timestamps.GetValue(i)
 		time2Str, null2 := time2Param.GetStrValue(i)
 
-		if null1 || null2 {
+		if null1 || null2 || ts == types.ZeroTimestamp {
 			if err := rs.Append(types.Timestamp(0), true); err != nil {
 				return err
 			}
@@ -3522,6 +3586,12 @@ func subTimeFromString(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 			// Convert time to datetime (using today's date)
 			dt = time1.ToDatetime(scale)
 		}
+		if dt == types.ZeroDatetime {
+			if err := rs.Append(types.Datetime(0), true); err != nil {
+				return err
+			}
+			continue
+		}
 
 		// Parse time2 string
 		time2, err := types.ParseTime(functionUtil.QuickBytesToStr(time2Str), scale)
@@ -3552,6 +3622,7 @@ func DateFormat(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 	dates := vector.GenerateFunctionFixedTypeParameter[types.Datetime](ivecs[0])
 	formats := vector.GenerateFunctionStrParameter(ivecs[1])
 	fmt, null2 := formats.GetStrValue(0)
+	null2 = null2 || len(fmt) == 0
 
 	var dateFmtOperator DateFormatFunc
 	switch string(fmt) {
@@ -3583,10 +3654,16 @@ func DateFormat(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 			}
 		} else {
 			buf.Reset()
-			if err = dateFmtOperator(proc.Ctx, d, string(fmt), &buf); err != nil {
+			var isNull bool
+			if isNull, err = dateFmtOperator(proc.Ctx, d, string(fmt), &buf); err != nil {
 				return err
 			}
-			if err = rs.AppendBytes(buf.Bytes(), false); err != nil {
+			if isNull {
+				err = rs.AppendBytes(nil, true)
+			} else {
+				err = rs.AppendBytes(buf.Bytes(), false)
+			}
+			if err != nil {
 				return err
 			}
 		}
@@ -3594,11 +3671,11 @@ func DateFormat(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 	return nil
 }
 
-type DateFormatFunc func(ctx context.Context, datetime types.Datetime, format string, buf *bytes.Buffer) error
+type DateFormatFunc func(ctx context.Context, datetime types.Datetime, format string, buf *bytes.Buffer) (isNull bool, err error)
 
 // DATE_FORMAT       datetime
 // handle '%d/%m/%Y' ->	 22/04/2021
-func date_format_combine_pattern1(ctx context.Context, t types.Datetime, format string, buf *bytes.Buffer) error {
+func date_format_combine_pattern1(_ context.Context, t types.Datetime, format string, buf *bytes.Buffer) (bool, error) {
 	month := int(t.Month())
 	day := int(t.Day())
 	year := int(t.Year())
@@ -3619,11 +3696,11 @@ func date_format_combine_pattern1(ctx context.Context, t types.Datetime, format 
 	buf.WriteByte(byte('0' + (year / 100 % 10)))
 	buf.WriteByte(byte('0' + (year / 10 % 10)))
 	buf.WriteByte(byte('0' + (year % 10)))
-	return nil
+	return false, nil
 }
 
 // handle '%Y%m%d' ->   20210422
-func date_format_combine_pattern2(ctx context.Context, t types.Datetime, format string, buf *bytes.Buffer) error {
+func date_format_combine_pattern2(_ context.Context, t types.Datetime, format string, buf *bytes.Buffer) (bool, error) {
 	year := t.Year()
 	month := int(t.Month())
 	day := int(t.Day())
@@ -3644,22 +3721,22 @@ func date_format_combine_pattern2(ctx context.Context, t types.Datetime, format 
 	// date conversion
 	buf.WriteByte(byte('0' + (day / 10)))
 	buf.WriteByte(byte('0' + (day % 10)))
-	return nil
+	return false, nil
 }
 
 // handle '%Y'  ->   2021
-func date_format_combine_pattern3(ctx context.Context, t types.Datetime, format string, buf *bytes.Buffer) error {
+func date_format_combine_pattern3(_ context.Context, t types.Datetime, format string, buf *bytes.Buffer) (bool, error) {
 	year := t.Year()
 	// Year conversion
 	buf.WriteByte(byte('0' + (year / 1000 % 10)))
 	buf.WriteByte(byte('0' + (year / 100 % 10)))
 	buf.WriteByte(byte('0' + (year / 10 % 10)))
 	buf.WriteByte(byte('0' + (year % 10)))
-	return nil
+	return false, nil
 }
 
 // %Y-%m-%d	               2021-04-22
-func date_format_combine_pattern4(ctx context.Context, t types.Datetime, format string, buf *bytes.Buffer) error {
+func date_format_combine_pattern4(_ context.Context, t types.Datetime, format string, buf *bytes.Buffer) (bool, error) {
 	year := t.Year()
 	month := int(t.Month())
 	day := int(t.Day())
@@ -3682,12 +3759,12 @@ func date_format_combine_pattern4(ctx context.Context, t types.Datetime, format 
 	buf.WriteByte('-')
 	buf.WriteByte(byte('0' + (day / 10)))
 	buf.WriteByte(byte('0' + (day % 10)))
-	return nil
+	return false, nil
 }
 
 // handle '%Y-%m-%d %H:%i:%s'  ->   2004-04-03 13:11:10
 // handle ' %Y-%m-%d %T'   ->   2004-04-03 13:11:10
-func date_format_combine_pattern5(ctx context.Context, t types.Datetime, format string, buf *bytes.Buffer) error {
+func date_format_combine_pattern5(_ context.Context, t types.Datetime, format string, buf *bytes.Buffer) (bool, error) {
 	year := int(t.Year())
 	month := int(t.Month())
 	day := int(t.Day())
@@ -3733,11 +3810,11 @@ func date_format_combine_pattern5(ctx context.Context, t types.Datetime, format 
 	// Second conversion
 	buf.WriteByte(byte('0' + (sec / 10)))
 	buf.WriteByte(byte('0' + (sec % 10)))
-	return nil
+	return false, nil
 }
 
 // handle '%Y/%m/%d'  ->   2010/01/07
-func date_format_combine_pattern6(ctx context.Context, t types.Datetime, format string, buf *bytes.Buffer) error {
+func date_format_combine_pattern6(_ context.Context, t types.Datetime, format string, buf *bytes.Buffer) (bool, error) {
 	year := t.Year()
 	month := int(t.Month())
 	day := int(t.Day())
@@ -3760,12 +3837,12 @@ func date_format_combine_pattern6(ctx context.Context, t types.Datetime, format 
 	buf.WriteByte('/')
 	buf.WriteByte(byte('0' + (day / 10)))
 	buf.WriteByte(byte('0' + (day % 10)))
-	return nil
+	return false, nil
 }
 
 // handle '%Y/%m/%d %H:%i:%s'   ->    2010/01/07 23:12:34
 // handle '%Y/%m/%d %T'   ->    2010/01/07 23:12:34
-func date_format_combine_pattern7(ctx context.Context, t types.Datetime, format string, buf *bytes.Buffer) error {
+func date_format_combine_pattern7(_ context.Context, t types.Datetime, format string, buf *bytes.Buffer) (bool, error) {
 	year := int(t.Year())
 	month := int(t.Month())
 	day := int(t.Day())
@@ -3811,16 +3888,20 @@ func date_format_combine_pattern7(ctx context.Context, t types.Datetime, format 
 	// Second conversion
 	buf.WriteByte(byte('0' + (sec / 10)))
 	buf.WriteByte(byte('0' + (sec % 10)))
-	return nil
+	return false, nil
 }
 
 // datetimeFormat: format the datetime value according to the format string.
-func datetimeFormat(ctx context.Context, datetime types.Datetime, format string, buf *bytes.Buffer) error {
+func datetimeFormat(ctx context.Context, datetime types.Datetime, format string, buf *bytes.Buffer) (bool, error) {
 	inPatternMatch := false
 	for _, b := range format {
 		if inPatternMatch {
-			if err := makeDateFormat(ctx, datetime, b, buf); err != nil {
-				return err
+			isNull, err := makeDateFormat(ctx, datetime, b, buf)
+			if err != nil {
+				return false, err
+			}
+			if isNull {
+				return true, nil
 			}
 			inPatternMatch = false
 			continue
@@ -3833,8 +3914,14 @@ func datetimeFormat(ctx context.Context, datetime types.Datetime, format string,
 			buf.WriteRune(b)
 		}
 	}
-	return nil
+	if inPatternMatch {
+		buf.WriteByte('%')
+	}
+	return false, nil
 }
+
+// MySQL's calc_week underflows a 32-bit uint for the zero-date sentinel.
+const mysqlZeroDateWeekNumber = int(math.MaxUint32/7 + 1)
 
 var (
 	// WeekdayNames lists names of weekdays, which are used in builtin function `date_format`.
@@ -3877,18 +3964,18 @@ var (
 )
 
 // makeDateFormat: Get the format string corresponding to the date according to a single format character
-func makeDateFormat(ctx context.Context, t types.Datetime, b rune, buf *bytes.Buffer) error {
+func makeDateFormat(_ context.Context, t types.Datetime, b rune, buf *bytes.Buffer) (bool, error) {
 	switch b {
 	case 'b':
 		m := t.Month()
 		if m == 0 || m > 12 {
-			return moerr.NewInvalidInputf(ctx, "invalud date format for month '%d'", m)
+			return true, nil
 		}
 		buf.WriteString(MonthNames[m-1][:3])
 	case 'M':
 		m := t.Month()
 		if m == 0 || m > 12 {
-			return moerr.NewInvalidInputf(ctx, "invalud date format for month '%d'", m)
+			return true, nil
 		}
 		buf.WriteString(MonthNames[m-1])
 	case 'm':
@@ -3958,14 +4045,23 @@ func makeDateFormat(ctx context.Context, t types.Datetime, b rune, buf *bytes.Bu
 		fmt.Fprintf(buf, "%02d:%02d:%02d", t.Hour(), t.Minute(), t.Sec())
 	case 'U':
 		w := t.Week(0)
+		if t == types.ZeroDatetime {
+			w = mysqlZeroDateWeekNumber
+		}
 		FormatInt2BufByWidth(w, 2, buf)
 		//buf.WriteString(FormatIntByWidth(w, 2))
 	case 'u':
 		w := t.Week(1)
+		if t == types.ZeroDatetime {
+			w = mysqlZeroDateWeekNumber
+		}
 		FormatInt2BufByWidth(w, 2, buf)
 		//buf.WriteString(FormatIntByWidth(w, 2))
 	case 'V':
 		w := t.Week(2)
+		if t == types.ZeroDatetime {
+			w = mysqlZeroDateWeekNumber
+		}
 		FormatInt2BufByWidth(w, 2, buf)
 		//buf.WriteString(FormatIntByWidth(w, 2))
 	case 'v':
@@ -3973,11 +4069,20 @@ func makeDateFormat(ctx context.Context, t types.Datetime, b rune, buf *bytes.Bu
 		FormatInt2BufByWidth(w, 2, buf)
 		//buf.WriteString(FormatIntByWidth(w, 2))
 	case 'a':
+		if t.Year() == 0 && t.Month() == 0 {
+			return true, nil
+		}
 		weekday := t.DayOfWeek()
 		buf.WriteString(AbbrevWeekdayName[weekday])
 	case 'W':
+		if t.Year() == 0 && t.Month() == 0 {
+			return true, nil
+		}
 		buf.WriteString(t.DayOfWeek().String())
 	case 'w':
+		if t.Year() == 0 && t.Month() == 0 {
+			return true, nil
+		}
 		buf.WriteString(strconv.FormatInt(int64(t.DayOfWeek()), 10))
 	case 'X':
 		year, _ := t.YearWeek(2)
@@ -3988,6 +4093,10 @@ func makeDateFormat(ctx context.Context, t types.Datetime, b rune, buf *bytes.Bu
 			//buf.WriteString(FormatIntByWidth(year, 4))
 		}
 	case 'x':
+		if t == types.ZeroDatetime {
+			buf.WriteString("0001")
+			break
+		}
 		year, _ := t.YearWeek(3)
 		if year < 0 {
 			buf.WriteString(strconv.FormatUint(uint64(math.MaxUint32), 10))
@@ -4004,7 +4113,7 @@ func makeDateFormat(ctx context.Context, t types.Datetime, b rune, buf *bytes.Bu
 	default:
 		buf.WriteRune(b)
 	}
-	return nil
+	return false, nil
 }
 
 // TimeFormat: format the time value according to the format string.
@@ -4169,6 +4278,9 @@ func AbbrDayOfMonth(day int) string {
 }
 
 func doDateSub(start types.Date, diff int64, iTyp types.IntervalType) (types.Date, error) {
+	if start == types.ZeroDate {
+		return 0, datetimeOverflowMaxError
+	}
 	// Check for invalid interval marker (math.MaxInt64 indicates parse error)
 	if diff == math.MaxInt64 {
 		return 0, datetimeOverflowMaxError
@@ -4199,6 +4311,9 @@ func doTimeSub(start types.Time, diff int64, iTyp types.IntervalType) (types.Tim
 }
 
 func doDatetimeSub(start types.Datetime, diff int64, iTyp types.IntervalType) (types.Datetime, error) {
+	if start == types.ZeroDatetime {
+		return 0, datetimeOverflowMaxError
+	}
 	// Check for invalid interval marker (math.MaxInt64 indicates parse error)
 	if diff == math.MaxInt64 {
 		return 0, datetimeOverflowMaxError
@@ -4242,6 +4357,9 @@ func doDateStringSub(startStr string, diff int64, iTyp types.IntervalType) (type
 		// Both parsing failed, return the original error (invalid string)
 		return 0, err
 	}
+	if start == types.ZeroDatetime {
+		return 0, datetimeOverflowMaxError
+	}
 	dt, success := start.AddInterval(-diff, iTyp, types.DateType)
 	if success {
 		return dt, nil
@@ -4279,6 +4397,9 @@ func doDateStringSub(startStr string, diff int64, iTyp types.IntervalType) (type
 }
 
 func doTimestampSub(loc *time.Location, start types.Timestamp, diff int64, iTyp types.IntervalType) (types.Timestamp, error) {
+	if start == types.ZeroTimestamp {
+		return 0, datetimeOverflowMaxError
+	}
 	// Check for invalid interval marker (math.MaxInt64 indicates parse error)
 	if diff == math.MaxInt64 {
 		return 0, datetimeOverflowMaxError
@@ -4303,9 +4424,40 @@ func DateSub(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 	unit, _ := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2]).GetValue(0)
 	iTyp := types.IntervalType(unit)
 
-	return opBinaryFixedFixedToFixedWithErrorCheck[types.Date, int64, types.Date](ivecs, result, proc, length, func(v1 types.Date, v2 int64) (types.Date, error) {
-		return doDateSub(v1, v2, iTyp)
-	}, selectList)
+	result.UseOptFunctionParamFrame(2)
+	rs := vector.MustFunctionResult[types.Date](result)
+	p1 := vector.OptGetParamFromWrapper[types.Date](rs, 0, ivecs[0])
+	p2 := vector.OptGetParamFromWrapper[int64](rs, 1, ivecs[1])
+	rsVec := rs.GetResultVector()
+	rss := vector.MustFixedColNoTypeCheck[types.Date](rsVec)
+	rsNull := rsVec.GetNulls()
+	if selectList != nil && selectList.IgnoreAllRow() {
+		nulls.AddRange(rsNull, 0, uint64(length))
+		return nil
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && !selectList.ShouldEvalAllRow() && selectList.Contains(i) {
+			rsNull.Add(i)
+			continue
+		}
+		v1, null1 := p1.GetValue(i)
+		v2, null2 := p2.GetValue(i)
+		if null1 || null2 || v2 == math.MaxInt64 {
+			rsNull.Add(i)
+			continue
+		}
+		resultDate, err := doDateSub(v1, v2, iTyp)
+		if err != nil {
+			if isDatetimeOverflowMaxError(err) {
+				rsNull.Add(i)
+				continue
+			}
+			return err
+		}
+		rss[i] = resultDate
+	}
+	return nil
 }
 
 func intToDate(v int32) (types.Date, error) {
@@ -5707,7 +5859,7 @@ func FromUnixTimeInt64Format(ivecs []*vector.Vector, result vector.FunctionResul
 		} else {
 			buf.Reset()
 			r := types.DatetimeFromUnix(proc.GetSessionInfo().TimeZone, v)
-			if err = datetimeFormat(proc.Ctx, r, f, &buf); err != nil {
+			if _, err = datetimeFormat(proc.Ctx, r, f, &buf); err != nil {
 				return err
 			}
 			if err = rs.AppendBytes(buf.Bytes(), false); err != nil {
@@ -5739,7 +5891,7 @@ func FromUnixTimeUint64Format(ivecs []*vector.Vector, result vector.FunctionResu
 		} else {
 			buf.Reset()
 			r := types.DatetimeFromUnix(proc.GetSessionInfo().TimeZone, int64(v))
-			if err = datetimeFormat(proc.Ctx, r, f, &buf); err != nil {
+			if _, err = datetimeFormat(proc.Ctx, r, f, &buf); err != nil {
 				return err
 			}
 			if err = rs.AppendBytes(buf.Bytes(), false); err != nil {
@@ -5772,7 +5924,7 @@ func FromUnixTimeFloat64Format(ivecs []*vector.Vector, result vector.FunctionRes
 			buf.Reset()
 			x, y := splitDecimalToIntAndFrac(v)
 			r := types.DatetimeFromUnixWithNsec(proc.GetSessionInfo().TimeZone, x, y)
-			if err = datetimeFormat(proc.Ctx, r, f, &buf); err != nil {
+			if _, err = datetimeFormat(proc.Ctx, r, f, &buf); err != nil {
 				return err
 			}
 			if err = rs.AppendBytes(buf.Bytes(), false); err != nil {
@@ -5809,7 +5961,7 @@ func FromUnixTimeDecimal256Format(ivecs []*vector.Vector, result vector.Function
 		} else {
 			buf.Reset()
 			r := types.DatetimeFromUnixWithNsec(proc.GetSessionInfo().TimeZone, sec, nsec)
-			if err = datetimeFormat(proc.Ctx, r, f, &buf); err != nil {
+			if _, err = datetimeFormat(proc.Ctx, r, f, &buf); err != nil {
 				return err
 			}
 			if err = rs.AppendBytes(buf.Bytes(), false); err != nil {
@@ -6218,7 +6370,7 @@ func YearWeekDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, p
 		}
 
 		date, null := dates.GetValue(i)
-		if null {
+		if null || date == types.ZeroDate {
 			if err := rs.Append(0, true); err != nil {
 				return err
 			}
@@ -6261,7 +6413,7 @@ func YearWeekDatetime(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 		}
 
 		dt, null := datetimes.GetValue(i)
-		if null {
+		if null || dt == types.ZeroDatetime {
 			if err := rs.Append(0, true); err != nil {
 				return err
 			}
@@ -6308,7 +6460,7 @@ func YearWeekTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 		}
 
 		ts, null := timestamps.GetValue(i)
-		if null {
+		if null || ts == types.ZeroTimestamp {
 			if err := rs.Append(0, true); err != nil {
 				return err
 			}
@@ -6376,6 +6528,12 @@ func YearWeekString(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 				}
 				continue
 			}
+			if date == types.ZeroDate {
+				if err := rs.Append(0, true); err != nil {
+					return err
+				}
+				continue
+			}
 			// Use date for YEARWEEK calculation
 			year, week := date.YearWeek(mode)
 			result := int64(year)*100 + int64(week)
@@ -6385,6 +6543,12 @@ func YearWeekString(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 			continue
 		}
 
+		if dt == types.ZeroDatetime {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
 		// Use datetime for YEARWEEK calculation
 		year, week := dt.YearWeek(mode)
 		result := int64(year)*100 + int64(week)
@@ -6759,7 +6923,52 @@ func Power(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *proce
 }
 
 func TimeDiff[T types.Time | types.Datetime](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	if _, isDatetime := any(*new(T)).(types.Datetime); isDatetime {
+		return timeDiffDatetime(ivecs, result, proc, length, selectList)
+	}
 	return opBinaryFixedFixedToFixedWithErrorCheck[T, T, types.Time](ivecs, result, proc, length, timeDiff[T], selectList)
+}
+
+func timeDiffDatetime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	p1 := vector.GenerateFunctionFixedTypeParameter[types.Datetime](ivecs[0])
+	p2 := vector.GenerateFunctionFixedTypeParameter[types.Datetime](ivecs[1])
+	rs := vector.MustFunctionResult[types.Time](result)
+
+	if selectList != nil && selectList.IgnoreAllRow() {
+		for i := uint64(0); i < uint64(length); i++ {
+			if err := rs.Append(types.Time(0), true); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && selectList.Contains(i) {
+			if err := rs.Append(types.Time(0), true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		v1, null1 := p1.GetValue(i)
+		v2, null2 := p2.GetValue(i)
+		if null1 || null2 || v1 == types.ZeroDatetime || v2 == types.ZeroDatetime {
+			if err := rs.Append(types.Time(0), true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		timeDiff, err := timeDiff[types.Datetime](v1, v2)
+		if err != nil {
+			return err
+		}
+		if err := rs.Append(timeDiff, false); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func timeDiff[T types.Time | types.Datetime](v1, v2 T) (types.Time, error) {
@@ -6844,6 +7053,12 @@ func TimeDiffString(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 			// Convert time to datetime (using today's date)
 			dt2 = time2.ToDatetime(scale)
 		}
+		if dt1 == types.ZeroDatetime || dt2 == types.ZeroDatetime {
+			if err := rs.Append(types.Time(0), true); err != nil {
+				return err
+			}
+			continue
+		}
 
 		// Calculate difference: expr1 - expr2
 		resultTime, err := timeDiff[types.Datetime](dt1, dt2)
@@ -6859,6 +7074,19 @@ func TimeDiffString(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 		}
 	}
 	return nil
+}
+
+func appendTimestampDiffResult(
+	rs *vector.FunctionResult[int64],
+	unit []byte,
+	first, second types.Datetime,
+) error {
+	if first == types.ZeroDatetime || second == types.ZeroDatetime {
+		return rs.Append(0, true)
+	}
+	unitStr := strings.ToLower(functionUtil.QuickBytesToStr(unit))
+	res, _ := second.DateTimeDiffWithUnit(unitStr, first)
+	return rs.Append(res, false)
 }
 
 // TimestampDiff: TIMESTAMPDIFF(unit, datetime1, datetime2) - Returns datetime2 - datetime1
@@ -6878,11 +7106,7 @@ func TimestampDiff(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 				return err
 			}
 		} else {
-			// MySQL: TIMESTAMPDIFF(unit, datetime1, datetime2) returns datetime2 - datetime1
-			// DateTimeDiffWithUnit expects lowercase unit string
-			unitStr := strings.ToLower(functionUtil.QuickBytesToStr(v1))
-			res, _ := v3.DateTimeDiffWithUnit(unitStr, v2)
-			if err = rs.Append(res, false); err != nil {
+			if err = appendTimestampDiffResult(rs, v1, v2, v3); err != nil {
 				return err
 			}
 		}
@@ -6912,11 +7136,7 @@ func TimestampDiffDate(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 			// Convert DATE to DATETIME for calculation (time part is 00:00:00)
 			dt2 := v2.ToDatetime()
 			dt3 := v3.ToDatetime()
-			// MySQL: TIMESTAMPDIFF(unit, datetime1, datetime2) returns datetime2 - datetime1
-			// DateTimeDiffWithUnit expects lowercase unit string
-			unitStr := strings.ToLower(functionUtil.QuickBytesToStr(v1))
-			res, _ := dt3.DateTimeDiffWithUnit(unitStr, dt2)
-			if err = rs.Append(res, false); err != nil {
+			if err = appendTimestampDiffResult(rs, v1, dt2, dt3); err != nil {
 				return err
 			}
 		}
@@ -6948,11 +7168,7 @@ func TimestampDiffTimestamp(ivecs []*vector.Vector, result vector.FunctionResult
 			// Convert TIMESTAMP to DATETIME for calculation (considering timezone)
 			dt2 := v2.ToDatetime(loc)
 			dt3 := v3.ToDatetime(loc)
-			// MySQL: TIMESTAMPDIFF(unit, datetime1, datetime2) returns datetime2 - datetime1
-			// DateTimeDiffWithUnit expects lowercase unit string
-			unitStr := strings.ToLower(functionUtil.QuickBytesToStr(v1))
-			res, _ := dt3.DateTimeDiffWithUnit(unitStr, dt2)
-			if err = rs.Append(res, false); err != nil {
+			if err = appendTimestampDiffResult(rs, v1, dt2, dt3); err != nil {
 				return err
 			}
 		}
@@ -7012,11 +7228,7 @@ func TimestampDiffString(ivecs []*vector.Vector, result vector.FunctionResultWra
 			dt3 = date3.ToDatetime()
 		}
 
-		// MySQL: TIMESTAMPDIFF(unit, datetime1, datetime2) returns datetime2 - datetime1
-		// DateTimeDiffWithUnit expects lowercase unit string
-		unitStr := strings.ToLower(functionUtil.QuickBytesToStr(v1))
-		res, _ := dt3.DateTimeDiffWithUnit(unitStr, dt2)
-		if err = rs.Append(res, false); err != nil {
+		if err = appendTimestampDiffResult(rs, v1, dt2, dt3); err != nil {
 			return err
 		}
 	}
@@ -7063,11 +7275,7 @@ func TimestampDiffDateString(ivecs []*vector.Vector, result vector.FunctionResul
 			dt3 = date3.ToDatetime()
 		}
 
-		// MySQL: TIMESTAMPDIFF(unit, datetime1, datetime2) returns datetime2 - datetime1
-		// DateTimeDiffWithUnit expects lowercase unit string
-		unitStr := strings.ToLower(functionUtil.QuickBytesToStr(v1))
-		res, _ := dt3.DateTimeDiffWithUnit(unitStr, dt2)
-		if err = rs.Append(res, false); err != nil {
+		if err = appendTimestampDiffResult(rs, v1, dt2, dt3); err != nil {
 			return err
 		}
 	}
@@ -7114,11 +7322,7 @@ func TimestampDiffStringDate(ivecs []*vector.Vector, result vector.FunctionResul
 		// Convert DATE to DATETIME (time part is 00:00:00)
 		dt3 := v3.ToDatetime()
 
-		// MySQL: TIMESTAMPDIFF(unit, datetime1, datetime2) returns datetime2 - datetime1
-		// DateTimeDiffWithUnit expects lowercase unit string
-		unitStr := strings.ToLower(functionUtil.QuickBytesToStr(v1))
-		res, _ := dt3.DateTimeDiffWithUnit(unitStr, dt2)
-		if err = rs.Append(res, false); err != nil {
+		if err = appendTimestampDiffResult(rs, v1, dt2, dt3); err != nil {
 			return err
 		}
 	}
@@ -7155,11 +7359,7 @@ func TimestampDiffTimestampDate(ivecs []*vector.Vector, result vector.FunctionRe
 		// Convert DATE to DATETIME (time part is 00:00:00)
 		dt3 := v3.ToDatetime()
 
-		// MySQL: TIMESTAMPDIFF(unit, datetime1, datetime2) returns datetime2 - datetime1
-		// DateTimeDiffWithUnit expects lowercase unit string
-		unitStr := strings.ToLower(functionUtil.QuickBytesToStr(v1))
-		res, _ := dt3.DateTimeDiffWithUnit(unitStr, dt2)
-		if err = rs.Append(res, false); err != nil {
+		if err = appendTimestampDiffResult(rs, v1, dt2, dt3); err != nil {
 			return err
 		}
 	}
@@ -7196,11 +7396,7 @@ func TimestampDiffDateTimestamp(ivecs []*vector.Vector, result vector.FunctionRe
 		// Convert TIMESTAMP to DATETIME (considering timezone)
 		dt3 := v3.ToDatetime(loc)
 
-		// MySQL: TIMESTAMPDIFF(unit, datetime1, datetime2) returns datetime2 - datetime1
-		// DateTimeDiffWithUnit expects lowercase unit string
-		unitStr := strings.ToLower(functionUtil.QuickBytesToStr(v1))
-		res, _ := dt3.DateTimeDiffWithUnit(unitStr, dt2)
-		if err = rs.Append(res, false); err != nil {
+		if err = appendTimestampDiffResult(rs, v1, dt2, dt3); err != nil {
 			return err
 		}
 	}
@@ -12354,7 +12550,7 @@ func DateTrunc(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 	for i := uint64(0); i < uint64(length); i++ {
 		unit, null1 := p1.GetStrValue(i)
 		dt, null2 := p2.GetValue(i)
-		if null1 || null2 {
+		if null1 || null2 || dt == types.ZeroDatetime {
 			if err := rs.Append(types.Datetime(0), true); err != nil {
 				return err
 			}
@@ -12420,7 +12616,7 @@ func DateTruncDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 	for i := uint64(0); i < uint64(length); i++ {
 		unit, null1 := p1.GetStrValue(i)
 		d, null2 := p2.GetValue(i)
-		if null1 || null2 {
+		if null1 || null2 || d == types.ZeroDate {
 			if err := rs.Append(types.Date(0), true); err != nil {
 				return err
 			}
@@ -12452,7 +12648,7 @@ func DateTruncTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrap
 	for i := uint64(0); i < uint64(length); i++ {
 		unit, null1 := p1.GetStrValue(i)
 		ts, null2 := p2.GetValue(i)
-		if null1 || null2 {
+		if null1 || null2 || ts == types.ZeroTimestamp {
 			if err := rs.Append(types.Timestamp(0), true); err != nil {
 				return err
 			}

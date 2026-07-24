@@ -854,8 +854,11 @@ func TimestampToDay(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 }
 
 func DayOfYear(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryFixedToFixed[types.Date, uint16](ivecs, result, proc, length, func(v types.Date) uint16 {
-		return v.DayOfYear()
+	return opUnaryFixedToFixedWithNullOnError[types.Date, uint16](ivecs, result, proc, length, func(v types.Date) (uint16, error) {
+		if v == types.ZeroDate {
+			return 0, moerr.NewInvalidInputNoCtx("zero date")
+		}
+		return v.DayOfYear(), nil
 	}, selectList)
 }
 
@@ -6510,7 +6513,7 @@ func DateToWeek(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 		}
 
 		date, null := dates.GetValue(i)
-		if null {
+		if null || date == types.ZeroDate {
 			if err := rs.Append(0, true); err != nil {
 				return err
 			}
@@ -6546,7 +6549,7 @@ func DatetimeToWeek(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 		}
 
 		dt, null := datetimes.GetValue(i)
-		if null {
+		if null || dt == types.ZeroDatetime {
 			if err := rs.Append(0, true); err != nil {
 				return err
 			}
@@ -6611,61 +6614,87 @@ func weekOfYearHelper(d types.Date) int64 {
 // WEEKOFYEAR(date) is equivalent to WEEK(date, 3) which uses ISO 8601 week calculation.
 // WEEKOFYEAR always returns the week number for the year that the date belongs to.
 func DateToWeekOfYear(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryFixedToFixed[types.Date, int64](ivecs, result, proc, length, weekOfYearHelper, selectList)
+	return opUnaryFixedToFixedWithNullOnError[types.Date, int64](ivecs, result, proc, length, func(v types.Date) (int64, error) {
+		if v == types.ZeroDate {
+			return 0, moerr.NewInvalidInputNoCtx("zero date")
+		}
+		return weekOfYearHelper(v), nil
+	}, selectList)
 }
 
 // DatetimeToWeekOfYear returns the calendar week of the datetime as a number in the range from 1 to 53.
 func DatetimeToWeekOfYear(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryFixedToFixed[types.Datetime, int64](ivecs, result, proc, length, func(v types.Datetime) int64 {
-		return weekOfYearHelper(v.ToDate())
+	return opUnaryFixedToFixedWithNullOnError[types.Datetime, int64](ivecs, result, proc, length, func(v types.Datetime) (int64, error) {
+		if v == types.ZeroDatetime {
+			return 0, moerr.NewInvalidInputNoCtx("zero datetime")
+		}
+		return weekOfYearHelper(v.ToDate()), nil
 	}, selectList)
 }
 
 // TimestampToWeekOfYear returns the calendar week of the timestamp as a number in the range from 1 to 53.
 func TimestampToWeekOfYear(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryFixedToFixed[types.Timestamp, int64](ivecs, result, proc, length, func(v types.Timestamp) int64 {
+	return opUnaryFixedToFixedWithNullOnError[types.Timestamp, int64](ivecs, result, proc, length, func(v types.Timestamp) (int64, error) {
+		if v == types.ZeroTimestamp {
+			return 0, moerr.NewInvalidInputNoCtx("zero timestamp")
+		}
 		loc := proc.GetSessionInfo().TimeZone
 		if loc == nil {
 			loc = time.Local
 		}
 		dt := v.ToDatetime(loc)
-		return weekOfYearHelper(dt.ToDate())
+		return weekOfYearHelper(dt.ToDate()), nil
 	}, selectList)
 }
 
 func DateToWeekday(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryFixedToFixed[types.Date, int64](ivecs, result, proc, length, func(v types.Date) int64 {
-		return int64(v.DayOfWeek2())
+	return opUnaryFixedToFixedWithNullOnError[types.Date, int64](ivecs, result, proc, length, func(v types.Date) (int64, error) {
+		if v == types.ZeroDate {
+			return 0, moerr.NewInvalidInputNoCtx("zero date")
+		}
+		return int64(v.DayOfWeek2()), nil
 	}, selectList)
 }
 
 func DatetimeToWeekday(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryFixedToFixed[types.Datetime, int64](ivecs, result, proc, length, func(v types.Datetime) int64 {
-		return int64(v.ToDate().DayOfWeek2())
+	return opUnaryFixedToFixedWithNullOnError[types.Datetime, int64](ivecs, result, proc, length, func(v types.Datetime) (int64, error) {
+		if v == types.ZeroDatetime {
+			return 0, moerr.NewInvalidInputNoCtx("zero datetime")
+		}
+		return int64(v.ToDate().DayOfWeek2()), nil
 	}, selectList)
 }
 
 // DateToDayOfWeek returns the weekday index for date (1 = Sunday, 2 = Monday, ..., 7 = Saturday)
 func DateToDayOfWeek(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryFixedToFixed[types.Date, int64](ivecs, result, proc, length, func(v types.Date) int64 {
+	return opUnaryFixedToFixedWithNullOnError[types.Date, int64](ivecs, result, proc, length, func(v types.Date) (int64, error) {
+		if v == types.ZeroDate {
+			return 0, moerr.NewInvalidInputNoCtx("zero date")
+		}
 		// DayOfWeek() returns 0=Sunday, 1=Monday, ..., 6=Saturday
 		// DAYOFWEEK needs: 1=Sunday, 2=Monday, ..., 7=Saturday
-		return int64(v.DayOfWeek()) + 1
+		return int64(v.DayOfWeek()) + 1, nil
 	}, selectList)
 }
 
 // DatetimeToDayOfWeek returns the weekday index for datetime (1 = Sunday, 2 = Monday, ..., 7 = Saturday)
 func DatetimeToDayOfWeek(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryFixedToFixed[types.Datetime, int64](ivecs, result, proc, length, func(v types.Datetime) int64 {
+	return opUnaryFixedToFixedWithNullOnError[types.Datetime, int64](ivecs, result, proc, length, func(v types.Datetime) (int64, error) {
+		if v == types.ZeroDatetime {
+			return 0, moerr.NewInvalidInputNoCtx("zero datetime")
+		}
 		// DayOfWeek() returns 0=Sunday, 1=Monday, ..., 6=Saturday
 		// DAYOFWEEK needs: 1=Sunday, 2=Monday, ..., 7=Saturday
-		return int64(v.DayOfWeek()) + 1
+		return int64(v.DayOfWeek()) + 1, nil
 	}, selectList)
 }
 
 // TimestampToDayOfWeek returns the weekday index for timestamp (1 = Sunday, 2 = Monday, ..., 7 = Saturday)
 func TimestampToDayOfWeek(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryFixedToFixed[types.Timestamp, int64](ivecs, result, proc, length, func(v types.Timestamp) int64 {
+	return opUnaryFixedToFixedWithNullOnError[types.Timestamp, int64](ivecs, result, proc, length, func(v types.Timestamp) (int64, error) {
+		if v == types.ZeroTimestamp {
+			return 0, moerr.NewInvalidInputNoCtx("zero timestamp")
+		}
 		loc := proc.GetSessionInfo().TimeZone
 		if loc == nil {
 			loc = time.Local
@@ -6673,31 +6702,40 @@ func TimestampToDayOfWeek(ivecs []*vector.Vector, result vector.FunctionResultWr
 		dt := v.ToDatetime(loc)
 		// DayOfWeek() returns 0=Sunday, 1=Monday, ..., 6=Saturday
 		// DAYOFWEEK needs: 1=Sunday, 2=Monday, ..., 7=Saturday
-		return int64(dt.DayOfWeek()) + 1
+		return int64(dt.DayOfWeek()) + 1, nil
 	}, selectList)
 }
 
 // DateToDayName returns the weekday name for date (e.g., "Sunday", "Monday", ...)
 func DateToDayName(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryFixedToStr[types.Date](ivecs, result, proc, length, func(v types.Date) string {
+	return opUnaryFixedToStrWithNullOnError[types.Date](ivecs, result, proc, length, func(v types.Date) (string, error) {
+		if v == types.ZeroDate {
+			return "", moerr.NewInvalidInputNoCtx("zero date")
+		}
 		// DayOfWeek() returns 0=Sunday, 1=Monday, ..., 6=Saturday
 		// Use String() method to get the weekday name
-		return v.DayOfWeek().String()
+		return v.DayOfWeek().String(), nil
 	}, selectList)
 }
 
 // DatetimeToDayName returns the weekday name for datetime (e.g., "Sunday", "Monday", ...)
 func DatetimeToDayName(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryFixedToStr[types.Datetime](ivecs, result, proc, length, func(v types.Datetime) string {
+	return opUnaryFixedToStrWithNullOnError[types.Datetime](ivecs, result, proc, length, func(v types.Datetime) (string, error) {
+		if v == types.ZeroDatetime {
+			return "", moerr.NewInvalidInputNoCtx("zero datetime")
+		}
 		// DayOfWeek() returns 0=Sunday, 1=Monday, ..., 6=Saturday
 		// Use String() method to get the weekday name
-		return v.DayOfWeek().String()
+		return v.DayOfWeek().String(), nil
 	}, selectList)
 }
 
 // TimestampToDayName returns the weekday name for timestamp (e.g., "Sunday", "Monday", ...)
 func TimestampToDayName(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryFixedToStr[types.Timestamp](ivecs, result, proc, length, func(v types.Timestamp) string {
+	return opUnaryFixedToStrWithNullOnError[types.Timestamp](ivecs, result, proc, length, func(v types.Timestamp) (string, error) {
+		if v == types.ZeroTimestamp {
+			return "", moerr.NewInvalidInputNoCtx("zero timestamp")
+		}
 		loc := proc.GetSessionInfo().TimeZone
 		if loc == nil {
 			loc = time.Local
@@ -6705,37 +6743,46 @@ func TimestampToDayName(ivecs []*vector.Vector, result vector.FunctionResultWrap
 		dt := v.ToDatetime(loc)
 		// DayOfWeek() returns 0=Sunday, 1=Monday, ..., 6=Saturday
 		// Use String() method to get the weekday name
-		return dt.DayOfWeek().String()
+		return dt.DayOfWeek().String(), nil
 	}, selectList)
 }
 
 // DateToMonthName returns the month name for date (e.g., "January", "February", ...)
 func DateToMonthName(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryFixedToStr[types.Date](ivecs, result, proc, length, func(v types.Date) string {
+	return opUnaryFixedToStrWithNullOnError[types.Date](ivecs, result, proc, length, func(v types.Date) (string, error) {
+		if v == types.ZeroDate {
+			return "", moerr.NewInvalidInputNoCtx("zero date")
+		}
 		// Month() returns 1-12
 		month := v.Month()
 		if month >= 1 && month <= 12 {
-			return MonthNames[month-1]
+			return MonthNames[month-1], nil
 		}
-		return ""
+		return "", nil
 	}, selectList)
 }
 
 // DatetimeToMonthName returns the month name for datetime (e.g., "January", "February", ...)
 func DatetimeToMonthName(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryFixedToStr[types.Datetime](ivecs, result, proc, length, func(v types.Datetime) string {
+	return opUnaryFixedToStrWithNullOnError[types.Datetime](ivecs, result, proc, length, func(v types.Datetime) (string, error) {
+		if v == types.ZeroDatetime {
+			return "", moerr.NewInvalidInputNoCtx("zero datetime")
+		}
 		// Month() returns 1-12
 		month := v.Month()
 		if month >= 1 && month <= 12 {
-			return MonthNames[month-1]
+			return MonthNames[month-1], nil
 		}
-		return ""
+		return "", nil
 	}, selectList)
 }
 
 // TimestampToMonthName returns the month name for timestamp (e.g., "January", "February", ...)
 func TimestampToMonthName(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryFixedToStr[types.Timestamp](ivecs, result, proc, length, func(v types.Timestamp) string {
+	return opUnaryFixedToStrWithNullOnError[types.Timestamp](ivecs, result, proc, length, func(v types.Timestamp) (string, error) {
+		if v == types.ZeroTimestamp {
+			return "", moerr.NewInvalidInputNoCtx("zero timestamp")
+		}
 		loc := proc.GetSessionInfo().TimeZone
 		if loc == nil {
 			loc = time.Local
@@ -6744,9 +6791,9 @@ func TimestampToMonthName(ivecs []*vector.Vector, result vector.FunctionResultWr
 		// Month() returns 1-12
 		month := dt.Month()
 		if month >= 1 && month <= 12 {
-			return MonthNames[month-1]
+			return MonthNames[month-1], nil
 		}
-		return ""
+		return "", nil
 	}, selectList)
 }
 
@@ -7786,6 +7833,12 @@ func LastDay(
 
 			year := dt.Year()
 			month := dt.Month()
+			if dt == types.ZeroDate || month == 0 {
+				if err := rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
+				continue
+			}
 
 			lastDay := types.LastDay(int32(year), month)
 			resDt := types.DateFromCalendar(int32(year), month, lastDay)

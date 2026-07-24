@@ -178,13 +178,67 @@ func TestRecordStatementSetsIgnoreForInsertIgnore(t *testing.T) {
 	cw := InitTxnComputationWrapper(ses, insertIgnore, proc)
 	_, err := RecordStatement(ctx, ses, proc, cw, time.Now(), "insert ignore into t values (1, 10 / 0)", constant.ExternSql, true)
 	require.NoError(t, err)
-	require.True(t, ses.GetStmtProfile().GetDivByZeroIgnore())
+	require.True(t, ses.GetStmtProfile().GetStatementIgnore())
 
 	insert := &tree.Insert{}
 	cw = InitTxnComputationWrapper(ses, insert, proc)
 	_, err = RecordStatement(ctx, ses, proc, cw, time.Now(), "insert into t values (1, 10 / 0)", constant.ExternSql, true)
 	require.NoError(t, err)
-	require.False(t, ses.GetStmtProfile().GetDivByZeroIgnore())
+	require.False(t, ses.GetStmtProfile().GetStatementIgnore())
+
+	loadIgnoreLines := &tree.Load{
+		DuplicateHandling: &tree.DuplicateKeyError{},
+		Param: &tree.ExternParam{ExParamConst: tree.ExParamConst{
+			Tail: &tree.TailParameter{IgnoredLines: 1},
+		}},
+	}
+	require.False(t, isIgnoreStatement(loadIgnoreLines))
+
+	parsed, err := mysql.Parse(ctx, "load data local infile 'data.csv' ignore into table t fields terminated by ','", 1)
+	require.NoError(t, err)
+	require.Len(t, parsed, 1)
+	require.True(t, isIgnoreStatement(parsed[0]))
+
+	parsed, err = mysql.Parse(ctx, "load data local infile 'data.csv' into table t fields terminated by ',' ignore 1 lines", 1)
+	require.NoError(t, err)
+	require.Len(t, parsed, 1)
+	require.False(t, isIgnoreStatement(parsed[0]))
+}
+
+func TestRecordStatementSetsIgnoreForUpdateIgnore(t *testing.T) {
+	ctx := context.Background()
+	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
+
+	ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
+	proc := ses.GetProc()
+	require.NotNil(t, proc)
+
+	updateIgnore := &tree.Update{Ignore: true}
+	cw := InitTxnComputationWrapper(ses, updateIgnore, proc)
+	_, err := RecordStatement(ctx, ses, proc, cw, time.Now(), "update ignore t set a = 0", constant.ExternSql, true)
+	require.NoError(t, err)
+	require.True(t, ses.GetStmtProfile().GetStatementIgnore())
+}
+
+func TestRecordStatementSetsIgnoreForLoadDataIgnore(t *testing.T) {
+	ctx := context.Background()
+	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
+
+	ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
+	proc := ses.GetProc()
+	require.NotNil(t, proc)
+
+	loadIgnore := &tree.Load{DuplicateHandling: &tree.DuplicateKeyIgnore{}}
+	cw := InitTxnComputationWrapper(ses, loadIgnore, proc)
+	_, err := RecordStatement(ctx, ses, proc, cw, time.Now(), "load data infile 'data.csv' ignore into table t", constant.ExternSql, true)
+	require.NoError(t, err)
+	require.True(t, ses.GetStmtProfile().GetStatementIgnore())
+
+	load := &tree.Load{DuplicateHandling: &tree.DuplicateKeyError{}}
+	cw = InitTxnComputationWrapper(ses, load, proc)
+	_, err = RecordStatement(ctx, ses, proc, cw, time.Now(), "load data infile 'data.csv' into table t", constant.ExternSql, true)
+	require.NoError(t, err)
+	require.False(t, ses.GetStmtProfile().GetStatementIgnore())
 }
 
 func TestRefreshProcessStmtProfileForPreparedStmtUsesInnerInsert(t *testing.T) {
@@ -203,20 +257,26 @@ func TestRefreshProcessStmtProfileForPreparedStmtUsesInnerInsert(t *testing.T) {
 
 	atomic.StoreInt32(&proc.Base.DivByZeroErrorMode, 0)
 	insertIgnore := &tree.Insert{OnDuplicateUpdate: tree.UpdateExprs{nil}}
-	refreshProcessDivByZeroProfileForPreparedStmt(proc, insertIgnore)
+	refreshProcessStmtProfileForPreparedStmt(proc, insertIgnore)
 
-	stmtType, queryType, ignore := proc.GetStmtProfile().GetDivByZeroRuntimeProfile()
+	stmtType, queryType, ignore := proc.GetStmtProfile().GetStatementRuntimeProfile()
 	require.Equal(t, "Insert", stmtType)
 	require.Equal(t, tree.QueryTypeDML, queryType)
 	require.True(t, ignore)
 
-	refreshProcessDivByZeroProfileForPreparedStmt(proc, &tree.Insert{})
-	_, _, ignore = proc.GetStmtProfile().GetDivByZeroRuntimeProfile()
+	refreshProcessStmtProfileForPreparedStmt(proc, &tree.Update{Ignore: true})
+	stmtType, queryType, ignore = proc.GetStmtProfile().GetStatementRuntimeProfile()
+	require.Equal(t, "Update", stmtType)
+	require.Equal(t, tree.QueryTypeDML, queryType)
+	require.True(t, ignore)
+
+	refreshProcessStmtProfileForPreparedStmt(proc, &tree.Insert{})
+	_, _, ignore = proc.GetStmtProfile().GetStatementRuntimeProfile()
 	require.False(t, ignore)
 
-	refreshProcessDivByZeroProfileForPreparedStmt(proc, nil)
+	refreshProcessStmtProfileForPreparedStmt(proc, nil)
 	// nil statement should be a no-op; previous runtime profile remains.
-	_, _, ignore = proc.GetStmtProfile().GetDivByZeroRuntimeProfile()
+	_, _, ignore = proc.GetStmtProfile().GetStatementRuntimeProfile()
 	require.False(t, ignore)
 }
 
@@ -262,7 +322,7 @@ func TestTxnComputationWrapperCompileRefreshesProfileForBinaryExecute(t *testing
 	ret, err := cw.Compile(execCtx, nil)
 	require.NoError(t, err)
 	require.NotNil(t, ret)
-	stmtType, queryType, ignore := proc.GetStmtProfile().GetDivByZeroRuntimeProfile()
+	stmtType, queryType, ignore := proc.GetStmtProfile().GetStatementRuntimeProfile()
 	require.Equal(t, "Select", stmtType)
 	require.Equal(t, tree.QueryTypeDQL, queryType)
 	require.False(t, ignore)

@@ -942,6 +942,52 @@ func shouldApplyLoadDataNonStrictAdjustments(param *ExternalParam) bool {
 		!param.StrictSqlMode
 }
 
+type loadDataTemporalValue struct {
+	date      types.Date
+	datetime  types.Datetime
+	timestamp types.Timestamp
+}
+
+func normalizeLoadDataNonStrictTemporalValue(
+	proc *process.Process,
+	id types.T,
+	scale int32,
+	val string,
+) (string, loadDataTemporalValue) {
+	var parsed loadDataTemporalValue
+	switch id {
+	case types.T_date:
+		var err error
+		parsed.date, err = types.ParseDateCast(val)
+		if err != nil {
+			parsed.date = types.ZeroDate
+			val = "0000-00-00"
+		}
+	case types.T_datetime:
+		var err error
+		parsed.datetime, err = types.ParseDatetime(val, scale)
+		if err != nil {
+			parsed.datetime = types.ZeroDatetime
+			val = "0000-00-00 00:00:00"
+		}
+	case types.T_timestamp:
+		tz := time.Local
+		if proc != nil {
+			tz = proc.GetSessionInfo().TimeZone
+			if tz == nil {
+				tz = time.Local
+			}
+		}
+		var err error
+		parsed.timestamp, err = types.ParseTimestamp(tz, val, scale)
+		if err != nil || !types.ValidTimestamp(parsed.timestamp) {
+			parsed.timestamp = types.ZeroTimestamp
+			val = "0000-00-00 00:00:00"
+		}
+	}
+	return val, parsed
+}
+
 func isLoadNumericZeroFillType(id types.T) bool {
 	switch id {
 	case types.T_bool,
@@ -1132,20 +1178,15 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 		return nil
 	}
 
-	zeroDateAdjusted := false
+	var temporalValue loadDataTemporalValue
 	if loadDataNonStrictAdjustments {
 		switch {
 		case isLoadNumericAdjustedValueType(id):
 			if !field.HasStringQuote {
 				field.Val = loadDataNonStrictNumericPrefix(field.Val)
 			}
-		case id == types.T_date:
-			if _, err := types.ParseDateCast(field.Val); err != nil {
-				zeroDateAdjusted = true
-				if param.ParallelLoad {
-					field.Val = "0000-00-00"
-				}
-			}
+		case id == types.T_date || id == types.T_datetime || id == types.T_timestamp:
+			field.Val, temporalValue = normalizeLoadDataNonStrictTemporalValue(proc, id, col.Typ.Scale, field.Val)
 		case id == types.T_char || id == types.T_varchar:
 			field.Val = truncateLoadDataStringValue(field.Val, col.Typ.Width)
 		}
@@ -1502,10 +1543,8 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 			return err
 		}
 	case types.T_date:
-		var d types.Date
-		if zeroDateAdjusted {
-			d = types.Date(0)
-		} else {
+		d := temporalValue.date
+		if !loadDataNonStrictAdjustments {
 			var err error
 			d, err = types.ParseDateCast(field.Val)
 			if err != nil {
@@ -1528,10 +1567,14 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 			return err
 		}
 	case types.T_datetime:
-		d, err := types.ParseDatetime(field.Val, vec.GetType().Scale)
-		if err != nil {
-			logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-			return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not Datetime type for column %d", field.Val, colIdx)
+		d := temporalValue.datetime
+		if !loadDataNonStrictAdjustments {
+			var err error
+			d, err = types.ParseDatetime(field.Val, vec.GetType().Scale)
+			if err != nil {
+				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
+				return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not Datetime type for column %d", field.Val, colIdx)
+			}
 		}
 		if err := vector.AppendFixed(vec, d, false, mp); err != nil {
 			return err
@@ -1599,17 +1642,24 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 			return err
 		}
 	case types.T_timestamp:
-		t := time.Local
-		if proc != nil {
-			t = proc.GetSessionInfo().TimeZone
-			if t == nil {
-				t = time.Local
+		d := temporalValue.timestamp
+		if !loadDataNonStrictAdjustments {
+			t := time.Local
+			if proc != nil {
+				t = proc.GetSessionInfo().TimeZone
+				if t == nil {
+					t = time.Local
+				}
 			}
-		}
-		d, err := types.ParseTimestamp(t, field.Val, vec.GetType().Scale)
-		if err != nil {
-			logutil.Errorf("parse field[%v] err:%v", field.Val, err)
-			return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not Timestamp type for column %d", field.Val, colIdx)
+			var err error
+			d, err = types.ParseTimestamp(t, field.Val, vec.GetType().Scale)
+			if err != nil {
+				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
+				return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not Timestamp type for column %d", field.Val, colIdx)
+			}
+			if !types.ValidTimestamp(d) {
+				return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not Timestamp type for column %d", field.Val, colIdx)
+			}
 		}
 		if err := vector.AppendFixed(vec, d, false, mp); err != nil {
 			return err

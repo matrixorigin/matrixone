@@ -137,6 +137,27 @@ func runPartArg(t *testing.T, arg *TimeWin, proc *process.Process, in *batch.Bat
 	return
 }
 
+func TestTimeWinSlidingKeepsZeroDatetimeSeparateFromEpoch(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	sliding, err := calcDatetime(5, types.Second)
+	require.NoError(t, err)
+
+	in := makePartInput(t, proc.Mp(), []row{
+		{"0000-00-00 00:00:00", 10, 1},
+		{"0001-01-01 00:00:00", 20, 1},
+	})
+	arg := newPartArg(t, proc, sliding, false)
+	starts, sums, _ := runPartArg(t, arg, proc, in)
+
+	require.Equal(t, []types.Datetime{types.ZeroDatetime, types.DatetimeEpoch}, starts)
+	require.Equal(t, []int64{10, 20}, sums)
+
+	arg.Free(proc, false, nil)
+	in.Clean(proc.Mp())
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
 // Sliding windows carry state across rows, so a partition boundary has to
 // restart that state. Each partition must produce exactly the windows it would
 // have produced on its own.

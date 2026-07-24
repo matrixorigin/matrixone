@@ -31,7 +31,7 @@ func TestPartitionMultiUpdateString(t *testing.T) {
 
 func TestNewPartitionMultiUpdateFrom(t *testing.T) {
 	ps := &PartitionMultiUpdate{
-		raw:     &MultiUpdate{},
+		raw:     &MultiUpdate{RejectZeroTemporal: true},
 		tableID: 1,
 	}
 	op := NewPartitionMultiUpdateFrom(ps)
@@ -39,7 +39,23 @@ func TestNewPartitionMultiUpdateFrom(t *testing.T) {
 	require.Equal(t, ps.raw.Action, op.(*PartitionMultiUpdate).raw.Action)
 	require.Equal(t, ps.raw.IsOnduplicateKeyUpdate, op.(*PartitionMultiUpdate).raw.IsOnduplicateKeyUpdate)
 	require.Equal(t, ps.raw.Engine, op.(*PartitionMultiUpdate).raw.Engine)
+	require.Equal(t, ps.raw.RejectZeroTemporal, op.(*PartitionMultiUpdate).raw.RejectZeroTemporal)
 	require.Equal(t, ps.tableID, op.(*PartitionMultiUpdate).tableID)
+}
+
+func TestPartitionMultiUpdateSetRejectZeroTemporalUpdatesWriters(t *testing.T) {
+	active := &s3WriterDelegate{}
+	free := &s3WriterDelegate{}
+	op := &PartitionMultiUpdate{
+		raw:         &MultiUpdate{},
+		writers:     map[uint64]*s3WriterDelegate{1: active},
+		freeWriters: []*s3WriterDelegate{free},
+	}
+
+	op.SetRejectZeroTemporal(true)
+	require.True(t, op.raw.RejectZeroTemporal)
+	require.True(t, active.rejectZeroTemporal)
+	require.True(t, free.rejectZeroTemporal)
 }
 
 func TestAddInsertAffectRows(t *testing.T) {

@@ -41,3 +41,7 @@ INSERT INTO t1 VALUES ('2007-12-31 23:59:59', '01:00:00'), ('2024-01-01 12:00:00
 SELECT * FROM t1 WHERE ADDTIME(dt, t) > '2008-01-01 00:00:00';
 DROP TABLE t1;
 
+# Zero calendar inputs return NULL before arithmetic. Cover typed and string forms.
+SELECT ADDTIME(CAST('0000-00-00 00:00:00' AS DATETIME), '00:00:01') AS zero_datetime;
+SELECT ADDTIME(CAST('0000-00-00 00:00:00' AS TIMESTAMP), '00:00:01') AS zero_timestamp;
+SELECT ADDTIME('0000-00-00 00:00:00', '00:00:01') AS zero_datetime_string;

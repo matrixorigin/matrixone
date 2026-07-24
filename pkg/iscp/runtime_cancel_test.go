@@ -281,6 +281,69 @@ func TestAddOrUpdateJobDropAtClearsGenerationFence(t *testing.T) {
 	require.Empty(t, iters)
 }
 
+func TestAddOrUpdateJobNormalizesZeroTimestampDropAt(t *testing.T) {
+	exec := newRuntimeTestExecutor()
+	key := NewJobRuntimeKey(1, 2, "index_idx01", 1)
+	table := NewTableEntry(exec, key.AccountID, 1, key.TableID, "db", "tbl")
+	exec.setTable(table)
+
+	err := exec.addOrUpdateJob(
+		key.AccountID,
+		key.TableID,
+		key.JobName,
+		key.JobID,
+		ISCPJobState_Completed,
+		types.BuildTS(1, 0).ToString(),
+		mustEncodeRuntimeJobSpec(t),
+		encodeJSONRows(t, []string{mustMarshalJobStatus(t, 1, JobStage_Running)})[0],
+		types.ZeroTimestamp,
+		false,
+	)
+
+	require.NoError(t, err)
+	job := table.jobs[JobKey{JobName: key.JobName, JobID: key.JobID}]
+	require.NotNil(t, job)
+	require.Equal(t, types.TimestampMinValue, job.dropAt)
+	iters, _ := table.getCandidate()
+	require.Empty(t, iters)
+	require.True(t, table.gcInMemoryJob(0))
+}
+
+func TestAddOrUpdateJobPreservesExistingDropAtSemantics(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		dropAt types.Timestamp
+	}{
+		{name: "null sentinel stays active", dropAt: 0},
+		{name: "normal drop time is preserved", dropAt: types.TimestampMinValue + types.Timestamp(types.MicroSecsPerSec)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			exec := newRuntimeTestExecutor()
+			key := NewJobRuntimeKey(1, 2, "index_idx01", 1)
+			table := NewTableEntry(exec, key.AccountID, 1, key.TableID, "db", "tbl")
+			exec.setTable(table)
+
+			err := exec.addOrUpdateJob(
+				key.AccountID,
+				key.TableID,
+				key.JobName,
+				key.JobID,
+				ISCPJobState_Completed,
+				types.BuildTS(1, 0).ToString(),
+				mustEncodeRuntimeJobSpec(t),
+				encodeJSONRows(t, []string{mustMarshalJobStatus(t, 1, JobStage_Running)})[0],
+				tc.dropAt,
+				false,
+			)
+
+			require.NoError(t, err)
+			job := table.jobs[JobKey{JobName: key.JobName, JobID: key.JobID}]
+			require.NotNil(t, job)
+			require.Equal(t, tc.dropAt, job.dropAt)
+		})
+	}
+}
+
 func TestAddOrUpdateJobDropAtPreservesFenceOnParseFailure(t *testing.T) {
 	exec := newRuntimeTestExecutor()
 	key := NewJobRuntimeKey(1, 2, "index_idx01", 1)

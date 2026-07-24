@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeorder"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightdedupjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -112,6 +113,7 @@ func TestDupOperatorMultiUpdateCountDeleteAffectRows(t *testing.T) {
 	op.Action = multi_update.UpdateWriteTable
 	op.IsOnduplicateKeyUpdate = true
 	op.CountDeleteAffectRows = true
+	op.RejectZeroTemporal = true
 	result := dupOperator(op, 0, 1)
 	if result == nil {
 		t.Fatal("dupOperator returned nil for MultiUpdate")
@@ -127,6 +129,33 @@ func TestDupOperatorMultiUpdateCountDeleteAffectRows(t *testing.T) {
 		t.Errorf("IsOnduplicateKeyUpdate mismatch: got %v, want %v",
 			dupOp.IsOnduplicateKeyUpdate, op.IsOnduplicateKeyUpdate)
 	}
+	if !dupOp.RejectZeroTemporal {
+		t.Error("RejectZeroTemporal not preserved by dupOperator")
+	}
+}
+
+func TestDupOperatorPreInsertRejectZeroTemporal(t *testing.T) {
+	op := preinsert.NewArgument()
+	op.RejectZeroTemporal = true
+	result := dupOperator(op, 0, 1)
+	require.NotNil(t, result)
+	require.True(t, result.(*preinsert.PreInsert).RejectZeroTemporal)
+}
+
+func TestRefreshZeroTemporalWritePolicy(t *testing.T) {
+	pre := preinsert.NewArgument()
+	pre.RejectZeroTemporal = true
+	multi := multi_update.NewArgument()
+	multi.RejectZeroTemporal = true
+	multi.AppendChild(pre)
+
+	require.NoError(t, refreshZeroTemporalWritePolicy(multi, false))
+	require.False(t, multi.RejectZeroTemporal)
+	require.False(t, pre.RejectZeroTemporal)
+
+	require.NoError(t, refreshZeroTemporalWritePolicy(multi, true))
+	require.True(t, multi.RejectZeroTemporal)
+	require.True(t, pre.RejectZeroTemporal)
 }
 
 func TestDupOperatorDispatchRecCTE(t *testing.T) {

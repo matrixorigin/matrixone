@@ -336,6 +336,33 @@ func TestInsertMainTableSkipNullPkChecksNotNullAfterFilter(t *testing.T) {
 	require.Equal(t, int64(0), mp.CurrNB())
 }
 
+func TestInsertMainTableSkipNullPkRejectsZeroTemporalAfterFilter(t *testing.T) {
+	_, ctrl, proc := prepareTestCtx(t, false)
+	defer ctrl.Finish()
+	defer proc.Free()
+
+	op, updateCtx, written := newMainTablePkSecondHarness(t, ctrl)
+	op.RejectZeroTemporal = true
+	updateCtx.TableDef.Cols[0].Typ = plan.Type{Id: int32(types.T_date)}
+
+	dates := vector.NewVec(types.T_date.ToType())
+	require.NoError(t, vector.AppendFixed(dates, types.ZeroDate, false, proc.Mp()))
+	require.NoError(t, vector.AppendFixed(dates, types.ZeroDate, false, proc.Mp()))
+	ids := testutil.MakeInt64Vector([]int64{0, 2}, []uint64{0}, proc.Mp())
+	values := testutil.NewInt32Vector(2, types.T_int32.ToType(), proc.Mp(), false, nil, nil)
+	input := &batch.Batch{
+		Vecs:  []*vector.Vector{dates, ids, values},
+		Attrs: []string{"a", "id", "b"},
+	}
+	input.SetRowCount(2)
+	defer input.Clean(proc.Mp())
+
+	err := op.insert_main_table(proc, process.NewTempAnalyzer(), 0, input)
+	require.Error(t, err)
+	require.Empty(t, *written)
+	op.Free(proc, true, err)
+}
+
 func TestMultiUpdate_Free_RefBatchNoDoubleFree(t *testing.T) {
 	_, ctrl, proc := prepareTestCtx(t, false)
 	defer ctrl.Finish()

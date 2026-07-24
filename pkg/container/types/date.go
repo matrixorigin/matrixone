@@ -63,6 +63,7 @@ const (
 	MinDateYear    = 1
 	MaxMonthInYear = 12
 	MinMonthInYear = 1
+	ZeroDate       = Date(-1)
 )
 
 type TimeType int32
@@ -93,6 +94,9 @@ func isAllDigit(s string) bool {
 // 3.yyyymmdd
 func ParseDateCast(s string) (Date, error) {
 	s = strings.TrimSpace(s)
+	if isZeroDatetimeString(s) {
+		return ZeroDate, nil
+	}
 	if len(s) < 7 && isAllDigit(s) {
 		return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
 	}
@@ -443,6 +447,9 @@ func init() {
 
 // Year takes a date and returns an uint16 number as the year of this date
 func (d Date) Year() uint16 {
+	if d == ZeroDate {
+		return 0
+	}
 	dayNum := int32(d)
 	insideDayInfoTable := dayNum >= dayNumOfTableEpoch && dayNum < dayNumOfTableEpoch+dayInfoTableSize
 	if insideDayInfoTable {
@@ -518,6 +525,9 @@ func (d Date) Quarter() uint32 {
 }
 
 func (d Date) Calendar(full bool) (year int32, month, day uint8, yday uint16) {
+	if d == ZeroDate {
+		return 0, 0, 0, 0
+	}
 	// Account for 400 year cycles.
 	n := d / daysPer400Years
 	y := 400 * n
@@ -853,6 +863,9 @@ func isLeap(year int32) bool {
 }
 
 func (d Date) ToDatetime() Datetime {
+	if d == ZeroDate {
+		return ZeroDatetime
+	}
 	return Datetime(int64(d) * SecsPerDay * MicroSecsPerSec)
 }
 
@@ -861,6 +874,9 @@ func (d Date) ToTime() Time {
 }
 
 func (d Date) ToTimestamp(loc *time.Location) Timestamp {
+	if d == ZeroDate {
+		return ZeroTimestamp
+	}
 	year, mon, day, _ := d.Calendar(true)
 	t := time.Date(int(year), time.Month(mon), int(day), 0, 0, 0, 0, loc)
 	return Timestamp(t.UnixMicro() + unixEpochMicroSecs)

@@ -47,6 +47,33 @@ func getVal(val any) string {
 	}
 }
 
+func rejectZeroTemporalInStrictMode(proc *process.Process, value, typ string) error {
+	reject, err := RejectZeroTemporalWritePolicy(proc)
+	if err != nil {
+		return err
+	}
+	if reject {
+		return moerr.NewTruncatedValueForField(proc.Ctx, typ, value, "value", 1)
+	}
+	return nil
+}
+
+func RejectZeroTemporalWritePolicy(proc *process.Process) (bool, error) {
+	if proc == nil || proc.GetResolveVariableFunc() == nil {
+		return false, nil
+	}
+
+	mode, err := proc.GetResolveVariableFunc()("sql_mode", true, false)
+	if err != nil {
+		return false, err
+	}
+	statementIgnore := false
+	if sp := proc.GetStmtProfile(); sp != nil {
+		statementIgnore = sp.GetStatementIgnore()
+	}
+	return process.IsStrictNoZeroDateMode(mode) && !statementIgnore, nil
+}
+
 func HexToInt(hex string) (uint64, error) {
 	s := hex[2:]
 	return strconv.ParseUint(s, 16, 64)
@@ -323,6 +350,11 @@ func SetInsertValueTimeStamp(proc *process.Process, numVal *tree.NumVal, typ *ty
 			if err != nil {
 				return false, false, res, err
 			}
+			if res == types.ZeroTimestamp {
+				if err = rejectZeroTemporalInStrictMode(proc, s, "datetime"); err != nil {
+					return false, false, res, err
+				}
+			}
 			// Validate TIMESTAMP minimum value: '1970-01-01 00:00:01.000000' (MySQL behavior)
 			// Note: We don't enforce maximum value limit to allow values beyond MySQL's 2038 limit
 			// MySQL behavior: TIMESTAMP column valid range is always UTC [1970-01-01 00:00:01, 2038-01-19 03:14:07]
@@ -330,7 +362,7 @@ func SetInsertValueTimeStamp(proc *process.Process, numVal *tree.NumVal, typ *ty
 			// The value 'res' is already the UTC timestamp after conversion from the session timezone.
 			// So we directly compare 'res' with TimestampMinValue (which is also in UTC).
 			// This matches MySQL: timezones further west (smaller UTC offset) allow earlier local dates.
-			if res < types.TimestampMinValue {
+			if !types.ValidTimestamp(res) {
 				// MySQL error format: "Incorrect datetime value: 'value' for column 'column' at row 1"
 				// Use row 1 as default since we don't have row number in this context
 				return false, false, res, moerr.NewTruncatedValueForField(proc.Ctx, "datetime", s, "ts_min", 1)
@@ -378,6 +410,11 @@ func SetInsertValueDateTime(proc *process.Process, numVal *tree.NumVal, typ *typ
 			isnull = true
 		} else {
 			res, err = types.ParseDatetime(s, typ.Scale)
+			if err == nil && res == types.ZeroDatetime {
+				if err = rejectZeroTemporalInStrictMode(proc, s, "datetime"); err != nil {
+					canInsert = false
+				}
+			}
 		}
 
 	case tree.P_bool:
@@ -489,6 +526,10 @@ func SetInsertValueDate(proc *process.Process, numVal *tree.NumVal, typ *types.T
 			res, err = types.ParseDateCast(s)
 			if err != nil {
 				canInsert = false
+			} else if res == types.ZeroDate {
+				if err = rejectZeroTemporalInStrictMode(proc, s, "date"); err != nil {
+					canInsert = false
+				}
 			}
 		}
 
