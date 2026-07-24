@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/mergeutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -42,6 +43,122 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"go.uber.org/zap"
 )
+
+type lcaProbeLayout struct {
+	attrs       []string
+	types       []types.Type
+	targetIdxes []int
+	enumValues  []string
+}
+
+func lcaProbeResultTargetIndexes(
+	layout lcaProbeLayout,
+	targetColumnCount int,
+	resultColumnCount int,
+	fullTargetLayout bool,
+) ([]int, error) {
+	if fullTargetLayout {
+		if resultColumnCount != targetColumnCount {
+			return nil, moerr.NewInternalErrorNoCtxf(
+				"unexpected LCA probe result width %d for full target layout with %d columns",
+				resultColumnCount, targetColumnCount,
+			)
+		}
+		idxes := make([]int, targetColumnCount)
+		for i := range idxes {
+			idxes[i] = i
+		}
+		return idxes, nil
+	}
+	if resultColumnCount != len(layout.targetIdxes) {
+		return nil, moerr.NewInternalErrorNoCtxf(
+			"unexpected LCA probe result width %d for projected layout with %d columns",
+			resultColumnCount, len(layout.targetIdxes),
+		)
+	}
+	return append([]int(nil), layout.targetIdxes...), nil
+}
+
+// lcaProbeColumnLayout selects compatible common columns from the LCA and
+// target layouts. The caller reconstructs target-only columns as NULL because
+// they are excluded from endpoint comparison and MERGE apply even when an
+// ancestor generation still contains an older representation of the column.
+func lcaProbeColumnLayout(
+	lcaDef *plan2.TableDef,
+	targetDef *plan2.TableDef,
+	targetColNames []string,
+	targetColTypes []types.Type,
+	targetOnlyIdxes []int,
+	lcaColNames []string,
+) (lcaProbeLayout, error) {
+	targetOnly := make(map[int]struct{}, len(targetOnlyIdxes))
+	for _, idx := range targetOnlyIdxes {
+		targetOnly[idx] = struct{}{}
+	}
+	if len(lcaDef.Cols) == 0 {
+		layout := lcaProbeLayout{}
+		for i, name := range targetColNames {
+			if _, ok := targetOnly[i]; ok {
+				continue
+			}
+			layout.attrs = append(layout.attrs, name)
+			layout.types = append(layout.types, targetColTypes[i])
+			layout.targetIdxes = append(layout.targetIdxes, i)
+			layout.enumValues = append(layout.enumValues, "")
+		}
+		return layout, nil
+	}
+	if targetDef == nil {
+		return lcaProbeLayout{}, moerr.NewInternalErrorNoCtx("DATA BRANCH target table definition is unavailable")
+	}
+
+	layout := lcaProbeLayout{}
+	for targetIdx, name := range targetColNames {
+		if _, ok := targetOnly[targetIdx]; ok {
+			continue
+		}
+		targetCol := dataBranchColumnDefByName(targetDef, name)
+		if targetCol == nil {
+			return lcaProbeLayout{}, moerr.NewInternalErrorNoCtxf(
+				"DATA BRANCH target column %q is unavailable", name,
+			)
+		}
+		var lcaCol *plan2.ColDef
+		if targetIdx < len(lcaColNames) && lcaColNames[targetIdx] != "" {
+			lcaCol = dataBranchColumnDefByName(lcaDef, lcaColNames[targetIdx])
+		}
+		if lcaCol == nil {
+			lcaCol = dataBranchColumnDefByLogicalName(lcaDef, targetCol)
+		}
+		candidate := dataBranchColumnDefByName(lcaDef, targetCol.Name)
+		if candidate != nil &&
+			isDataBranchDerivedCompositePKColumn(lcaDef, targetDef, candidate, targetCol) {
+			// A rebuilt composite-key column can reuse the former RowID's
+			// numeric ColId/Seqnum pair. Prefer its canonical derived identity
+			// over that accidental positional collision.
+			lcaCol = candidate
+		}
+		if lcaCol == nil {
+			continue
+		}
+		derivedCompositePK := isDataBranchDerivedCompositePKColumn(
+			lcaDef, targetDef, lcaCol, targetCol,
+		)
+		if lcaCol.Name == catalog.Row_ID ||
+			(!isDataBranchLogicalTypeEquivalent(lcaCol.Typ, targetCol.Typ) &&
+				!(derivedCompositePK && lcaCol.Typ.Id == targetCol.Typ.Id)) {
+			return lcaProbeLayout{}, moerr.NewNotSupportedNoCtxf(
+				"LCA data branch column %s has a different type from the endpoint schema",
+				targetCol.Name,
+			)
+		}
+		layout.attrs = append(layout.attrs, lcaCol.Name)
+		layout.types = append(layout.types, types.New(types.T(lcaCol.Typ.Id), lcaCol.Typ.Width, lcaCol.Typ.Scale))
+		layout.targetIdxes = append(layout.targetIdxes, targetIdx)
+		layout.enumValues = append(layout.enumValues, lcaCol.Typ.Enumvalues)
+	}
+	return layout, nil
+}
 
 // should read the LCA table to get all column values.
 func handleDelsOnLCA(
@@ -58,7 +175,8 @@ func handleDelsOnLCA(
 	}
 
 	var (
-		sqlRet executor.Result
+		sqlRet           executor.Result
+		fullTargetLayout bool
 
 		lcaTblDef    = tblStuff.lcaRel.GetTableDef(ctx)
 		baseTblDef   = tblStuff.baseRel.GetTableDef(ctx)
@@ -68,13 +186,12 @@ func handleDelsOnLCA(
 		expandedPKColIdxes = tblStuff.def.pkColIdxes
 		snapshotTS         = types.TimestampToTS(snapshot)
 	)
-	lcaColDefs, err := dataBranchColumnsByIdentity(targetTblDef, lcaTblDef, tblStuff.def.colNames)
+	lcaLayout, err := lcaProbeColumnLayout(
+		lcaTblDef, targetTblDef, tblStuff.def.colNames, tblStuff.def.colTypes,
+		tblStuff.def.tarOnlyIdxes, tblStuff.def.lcaColNames,
+	)
 	if err != nil {
 		return nil, err
-	}
-	lcaColNames := make([]string, len(lcaColDefs))
-	for i, colDef := range lcaColDefs {
-		lcaColNames[i] = colDef.Name
 	}
 
 	forceReaderProbe := tblStuff.lcaReaderProbeMode != nil && tblStuff.lcaReaderProbeMode.Load()
@@ -83,6 +200,7 @@ func handleDelsOnLCA(
 		if err != nil {
 			return nil, err
 		}
+		fullTargetLayout = true
 	} else {
 		sqlBuf := acquireBuffer(tblStuff.bufPool)
 		valsBuf := acquireBuffer(tblStuff.bufPool)
@@ -153,9 +271,9 @@ func handleDelsOnLCA(
 			}
 		}
 
-		selectCols := make([]string, len(tblStuff.def.colNames)+1)
+		selectCols := make([]string, len(lcaLayout.attrs)+1)
 		selectCols[0] = "pks.__idx_"
-		for i, colName := range lcaColNames {
+		for i, colName := range lcaLayout.attrs {
 			selectCols[i+1] = fmt.Sprintf("lca.%s", quoteIdentifierForSQL(colName))
 		}
 
@@ -169,15 +287,16 @@ func handleDelsOnLCA(
 		)
 		sqlBuf.WriteString(fmt.Sprintf(
 			"right join (values %s) as pks(__idx_,%s) on ",
-			valsBuf.String(), strings.Join(pkNames, ",")),
+			valsBuf.String(), joinQuotedColumnNames(pkNames)),
 		)
 
 		for i := range pkNames {
-			sqlBuf.WriteString(fmt.Sprintf("lca.%s = ", pkNames[i]))
+			quotedPKName := quoteIdentifierForSQL(pkNames[i])
+			sqlBuf.WriteString(fmt.Sprintf("lca.%s = ", quotedPKName))
 			if castType, ok := lcaProbeJoinCastType(colTypes[expandedPKColIdxes[i]]); ok {
-				sqlBuf.WriteString(fmt.Sprintf("cast(pks.%s as %s)", pkNames[i], castType))
+				sqlBuf.WriteString(fmt.Sprintf("cast(pks.%s as %s)", quotedPKName, castType))
 			} else {
-				sqlBuf.WriteString(fmt.Sprintf("pks.%s", pkNames[i]))
+				sqlBuf.WriteString(fmt.Sprintf("pks.%s", quotedPKName))
 			}
 			if i != len(pkNames)-1 {
 				sqlBuf.WriteString(" AND ")
@@ -234,6 +353,7 @@ func handleDelsOnLCA(
 					)
 					return nil, err
 				}
+				fullTargetLayout = true
 				logutil.Info(
 					"DataBranch-LCA-SQL-Fallback-Done",
 					zap.Uint64("table-id", tblStuff.lcaRel.GetTableID(ctx)),
@@ -246,6 +366,7 @@ func handleDelsOnLCA(
 			}
 		}
 	}
+	defer sqlRet.Close()
 
 	if forceReaderProbe {
 		logutil.Debug(
@@ -269,12 +390,28 @@ func handleDelsOnLCA(
 	}
 
 	dBat = tblStuff.retPool.acquireRetBatch(tblStuff, false)
+	defer func() {
+		if err != nil && dBat != nil {
+			tblStuff.retPool.releaseRetBatch(dBat, false)
+			dBat = nil
+		}
+	}()
 
 	sels := make([]int64, 0, 100)
 	joinedRows := 0
 	lcaHitRows := 0
 	lcaMissRows := 0
 	sqlRet.ReadRows(func(rowCnt int, cols []*vector.Vector) bool {
+		if len(cols) == 0 {
+			err = moerr.NewInternalErrorNoCtx("LCA probe returned a batch without index column")
+			return false
+		}
+		var resultTargetIdxes []int
+		if resultTargetIdxes, err = lcaProbeResultTargetIndexes(
+			lcaLayout, len(tblStuff.def.colNames), len(cols)-1, fullTargetLayout,
+		); err != nil {
+			return false
+		}
 		joinedRows += rowCnt
 		for i := range rowCnt {
 			if notExist(cols[1:], i) {
@@ -284,23 +421,50 @@ func handleDelsOnLCA(
 				continue
 			}
 
-			lcaHitRows++
 			for j := 1; j < len(cols); j++ {
+				targetIdx := resultTargetIdxes[j-1]
+				enumValues := ""
+				if layoutIdx := slices.Index(lcaLayout.targetIdxes, targetIdx); layoutIdx >= 0 {
+					enumValues = lcaLayout.enumValues[layoutIdx]
+				}
 				if err = appendLCAProbeValue(
-					dBat.Vecs[j-1], cols[j], i,
-					lcaColDefs[j-1].Typ.GetEnumvalues(), ses.proc.Mp(),
+					dBat.Vecs[targetIdx], cols[j], i,
+					enumValues, ses.proc.Mp(),
 				); err != nil {
 					return false
 				}
 			}
+			lcaHitRows++
 
 		}
 
-		dBat.SetRowCount(dBat.Vecs[0].Length())
 		return true
 	})
-
-	sqlRet.Close()
+	if err != nil {
+		return nil, err
+	}
+	selectedTargetIdxes := make(map[int]struct{}, len(tblStuff.def.colNames))
+	if fullTargetLayout {
+		for targetIdx := range tblStuff.def.colNames {
+			selectedTargetIdxes[targetIdx] = struct{}{}
+		}
+	} else {
+		for _, targetIdx := range lcaLayout.targetIdxes {
+			selectedTargetIdxes[targetIdx] = struct{}{}
+		}
+	}
+	for targetIdx, typ := range tblStuff.def.colTypes {
+		if _, selected := selectedTargetIdxes[targetIdx]; selected {
+			continue
+		}
+		nullVec := vector.NewConstNull(typ, lcaHitRows, ses.proc.Mp())
+		if err = dBat.Vecs[targetIdx].UnionBatch(nullVec, 0, lcaHitRows, nil, ses.proc.Mp()); err != nil {
+			nullVec.Free(ses.proc.Mp())
+			return nil, err
+		}
+		nullVec.Free(ses.proc.Mp())
+	}
+	dBat.SetRowCount(lcaHitRows)
 	logutil.Debug(
 		"DataBranch-LCA-Join-Result",
 		zap.Uint64("table-id", tblStuff.lcaRel.GetTableID(ctx)),
@@ -444,13 +608,21 @@ func runLCAProbeWithReaderFallback(
 	}
 	lcaTblDef := tblStuff.lcaRel.GetTableDef(ctx)
 	targetTblDef := tblStuff.tarRel.GetTableDef(ctx)
-	lcaColDefs, err := dataBranchColumnsByIdentity(targetTblDef, lcaTblDef, tblStuff.def.colNames)
+	lcaLayout, err := lcaProbeColumnLayout(
+		lcaTblDef, targetTblDef, tblStuff.def.colNames, tblStuff.def.colTypes,
+		tblStuff.def.tarOnlyIdxes, tblStuff.def.lcaColNames,
+	)
 	if err != nil {
 		return executor.Result{}, err
 	}
-	lcaColNames := make([]string, len(lcaColDefs))
-	for i, colDef := range lcaColDefs {
-		lcaColNames[i] = colDef.Name
+	lcaPKIdx := slices.IndexFunc(lcaLayout.attrs, func(name string) bool {
+		return strings.EqualFold(name, lcaTblDef.Pkey.PkeyColName)
+	})
+	if lcaPKIdx < 0 {
+		return executor.Result{}, moerr.NewInternalErrorNoCtxf(
+			"data branch: LCA primary key column %q is absent from probe layout",
+			lcaTblDef.Pkey.PkeyColName,
+		)
 	}
 	// Build a sorted IN vector for reader-side PK filtering.
 	// The sorted-search path uses binary search over the IN value array and
@@ -464,8 +636,8 @@ func runLCAProbeWithReaderFallback(
 	pkFilterExpr := readutil.ConstructInExpr(ctx, lcaTblDef.Pkey.PkeyColName, filterVec)
 	prepareCost = time.Since(start)
 
-	tmp := batch.NewWithSize(len(tblStuff.def.colNames))
-	for i, typ := range tblStuff.def.colTypes {
+	tmp := batch.NewWithSize(len(lcaLayout.attrs))
+	for i, typ := range lcaLayout.types {
 		tmp.Vecs[i] = vector.NewVec(typ)
 	}
 	defer tmp.Clean(mp)
@@ -514,14 +686,15 @@ func runLCAProbeWithReaderFallback(
 	}()
 
 	scanStart := time.Now()
-	err = scanSnapshotRelationByID(
+	err = scanSnapshotRelationByIDWithFallback(
 		ctx,
 		"lca-reader-fallback",
 		ses,
 		tblStuff.lcaRel.GetTableID(ctx),
 		snapshotTS,
-		lcaColNames,
-		tblStuff.def.colTypes,
+		tblStuff.lcaRel,
+		lcaLayout.attrs,
+		lcaLayout.types,
 		pkFilterExpr,
 		0,
 		func(readBatch *batch.Batch) error {
@@ -533,7 +706,7 @@ func runLCAProbeWithReaderFallback(
 			}()
 			scannedBatchCnt++
 			scannedRowCnt += readBatch.RowCount()
-			readPK := readBatch.Vecs[tblStuff.def.pkColIdx]
+			readPK := readBatch.Vecs[lcaPKIdx]
 			sels := make([]int64, 0, readBatch.RowCount())
 			keys := make([]string, 0, readBatch.RowCount())
 			filterStart := time.Now()
@@ -555,7 +728,7 @@ func runLCAProbeWithReaderFallback(
 			}
 			base := tmp.Vecs[0].Length()
 			unionStart := time.Now()
-			for colIdx := range tblStuff.def.colNames {
+			for colIdx := range lcaLayout.attrs {
 				if err = tmp.Vecs[colIdx].Union(readBatch.Vecs[colIdx], sels, mp); err != nil {
 					return err
 				}
@@ -613,6 +786,13 @@ func runLCAProbeWithReaderFallback(
 		return executor.Result{}, err
 	}
 
+	sourceIdxByTarget := make([]int, len(tblStuff.def.colNames))
+	for i := range sourceIdxByTarget {
+		sourceIdxByTarget[i] = -1
+	}
+	for sourceIdx, targetIdx := range lcaLayout.targetIdxes {
+		sourceIdxByTarget[targetIdx] = sourceIdx
+	}
 	if !hasAnyHit {
 		for colIdx := range tblStuff.def.colNames {
 			nullConst := vector.NewConstNull(tblStuff.def.colTypes[colIdx], rowCount, mp)
@@ -623,18 +803,36 @@ func runLCAProbeWithReaderFallback(
 			}
 		}
 	} else if len(missedRows) == 0 {
-		for colIdx := range tblStuff.def.colNames {
-			if err = out.Vecs[colIdx+1].UnionBatch(tmp.Vecs[colIdx], 0, rowCount, nil, mp); err != nil {
+		for targetIdx, sourceIdx := range sourceIdxByTarget {
+			if sourceIdx < 0 {
+				nullConst := vector.NewConstNull(tblStuff.def.colTypes[targetIdx], rowCount, mp)
+				err = out.Vecs[targetIdx+1].UnionBatch(nullConst, 0, rowCount, nil, mp)
+				nullConst.Free(mp)
+				if err != nil {
+					return executor.Result{}, err
+				}
+				continue
+			}
+			if err = out.Vecs[targetIdx+1].UnionBatch(tmp.Vecs[sourceIdx], 0, rowCount, nil, mp); err != nil {
 				return executor.Result{}, err
 			}
 		}
 	} else {
-		for colIdx := range tblStuff.def.colNames {
-			if err = out.Vecs[colIdx+1].Union(tmp.Vecs[colIdx], sels, mp); err != nil {
+		for targetIdx, sourceIdx := range sourceIdxByTarget {
+			if sourceIdx < 0 {
+				nullConst := vector.NewConstNull(tblStuff.def.colTypes[targetIdx], rowCount, mp)
+				err = out.Vecs[targetIdx+1].UnionBatch(nullConst, 0, rowCount, nil, mp)
+				nullConst.Free(mp)
+				if err != nil {
+					return executor.Result{}, err
+				}
+				continue
+			}
+			if err = out.Vecs[targetIdx+1].Union(tmp.Vecs[sourceIdx], sels, mp); err != nil {
 				return executor.Result{}, err
 			}
 			for _, rowIdx := range missedRows {
-				nulls.Add(out.Vecs[colIdx+1].GetNulls(), rowIdx)
+				nulls.Add(out.Vecs[targetIdx+1].GetNulls(), rowIdx)
 			}
 		}
 	}
@@ -1162,31 +1360,15 @@ func hashDiffIfNoLCA(
 	copt compositeOption,
 	emit emitFunc,
 	tarDataHashmap databranchutils.BranchHashmap,
-	tarTombstoneHashmap databranchutils.BranchHashmap,
+	_ databranchutils.BranchHashmap,
 	baseDataHashmap databranchutils.BranchHashmap,
-	baseTombstoneHashmap databranchutils.BranchHashmap,
+	_ databranchutils.BranchHashmap,
 ) (err error) {
-
-	if err = tarTombstoneHashmap.ForEachShardParallel(func(cursor databranchutils.ShardCursor) error {
-		return cursor.ForEach(func(key []byte, _ []byte) error {
-			_, err2 := tarDataHashmap.PopByEncodedKey(key, true)
-			return err2
-		})
-
-	}, -1); err != nil {
-		return
-	}
-
-	if err = baseTombstoneHashmap.ForEachShardParallel(func(cursor databranchutils.ShardCursor) error {
-		return cursor.ForEach(func(key []byte, _ []byte) error {
-			_, err2 := baseDataHashmap.PopByEncodedKey(key, true)
-			return err2
-		})
-
-	}, -1); err != nil {
-		return
-	}
-
+	// buildHashmapForTable already reconciles data versions with tombstones by
+	// commit timestamp. Any data row left for a key is the latest live version.
+	// In particular, a bounded UPDATE produces a same-commit data+tombstone
+	// pair; removing the data merely because the marker remains would erase the
+	// update before the two independent tables are compared.
 	return diffDataHelper(ctx, ses, copt, tblStuff, emit, tarDataHashmap, baseDataHashmap)
 }
 
@@ -1204,7 +1386,11 @@ func compareRowInWrappedBatches(
 		return 0, nil
 	}
 
-	for i, colIdx := range tblStuff.def.visibleIdxes {
+	compareIdxes := tblStuff.def.commonIdxes
+	if len(compareIdxes) == 0 {
+		compareIdxes = tblStuff.def.visibleIdxes // backward compat when commonIdxes not set
+	}
+	for _, colIdx := range compareIdxes {
 		if skipPKCols {
 			if slices.Index(tblStuff.def.pkColIdxes, colIdx) != -1 {
 				continue
@@ -1212,8 +1398,8 @@ func compareRowInWrappedBatches(
 		}
 
 		var (
-			vec1 = wrapped1.batch.Vecs[i]
-			vec2 = wrapped2.batch.Vecs[i]
+			vec1 = wrapped1.batch.Vecs[colIdx]
+			vec2 = wrapped2.batch.Vecs[colIdx]
 		)
 
 		if cmp, err := compareSingleValInVector(
@@ -1236,7 +1422,11 @@ func compareTupleWithBatchRow(
 	rowIdx int,
 	skipPKCols bool,
 ) (int, error) {
-	for _, colIdx := range tblStuff.def.visibleIdxes {
+	compareIdxes := tblStuff.def.commonIdxes
+	if len(compareIdxes) == 0 {
+		compareIdxes = tblStuff.def.visibleIdxes // backward compat when commonIdxes not set
+	}
+	for _, colIdx := range compareIdxes {
 		if skipPKCols && slices.Index(tblStuff.def.pkColIdxes, colIdx) != -1 {
 			continue
 		}
@@ -1578,9 +1768,9 @@ func getTupleColumnValue(tuple types.Tuple, tblStuff tableStuff, colIdx int) (an
 		)
 	}
 	switch len(tuple) {
-	case totalColCnt, totalColCnt + 1:
+	case totalColCnt:
 		return normalizeTupleColumnValue(tuple[colIdx], tblStuff.def.colTypes[colIdx])
-	case totalColCnt + 2:
+	case totalColCnt + 1, totalColCnt + 2:
 		return normalizeTupleColumnValue(tuple[colIdx+1], tblStuff.def.colTypes[colIdx])
 	default:
 		return nil, moerr.NewInternalErrorNoCtxf(
@@ -1590,9 +1780,14 @@ func getTupleColumnValue(tuple types.Tuple, tblStuff tableStuff, colIdx int) (an
 	}
 }
 
-func visibleTupleKeyIdxes(tblStuff tableStuff) []int {
-	idxes := make([]int, len(tblStuff.def.visibleIdxes))
-	for i, colIdx := range tblStuff.def.visibleIdxes {
+func fakePKTupleKeyIdxes(tblStuff tableStuff) []int {
+	keyColIdxes := tblStuff.def.commonVisibleIdxes
+	if len(keyColIdxes) == 0 {
+		keyColIdxes = tblStuff.def.visibleIdxes
+	}
+
+	idxes := make([]int, len(keyColIdxes))
+	for i, colIdx := range keyColIdxes {
 		idxes[i] = colIdx + 1
 	}
 	return idxes
@@ -1797,7 +1992,7 @@ func diffDataHelper(
 
 	if tblStuff.def.pkKind == fakeKind {
 		var (
-			keyIdxes   = visibleTupleKeyIdxes(tblStuff)
+			keyIdxes   = fakePKTupleKeyIdxes(tblStuff)
 			newHashmap databranchutils.BranchHashmap
 		)
 
@@ -1870,7 +2065,11 @@ func diffDataHelper(
 					}
 
 					notSame := false
-					for _, idx := range tblStuff.def.visibleIdxes {
+					compareIdxes := tblStuff.def.commonIdxes
+					if len(compareIdxes) == 0 {
+						compareIdxes = tblStuff.def.visibleIdxes // backward compat when commonIdxes not set
+					}
+					for _, idx := range compareIdxes {
 						if slices.Index(tblStuff.def.pkColIdxes, idx) != -1 {
 							// pk columns already compared
 							continue
@@ -2222,6 +2421,8 @@ func buildHashmapForTable(
 				return
 			}
 
+			dataBat = projectBaseBatchToTargetIfNeeded(side, dataBat, tblStuff, mp)
+
 			if dataBat != nil && dataBat.RowCount() > 0 {
 				totalRows += int64(dataBat.RowCount())
 				totalBytes += int64(dataBat.Size())
@@ -2435,4 +2636,410 @@ func buildHashmapForTable(
 	}
 
 	return
+}
+
+// projectBaseBatchToTarget projects a base-side data batch to match the target
+// column layout. Ownership of moved vectors is transferred to the returned
+// batch; any vectors left behind on baseBat are cleaned before returning.
+func projectBaseBatchToTarget(
+	baseBat *batch.Batch,
+	tblStuff *tableStuff,
+	mp *mpool.MPool,
+) *batch.Batch {
+	return projectDataBranchBatchToTarget(
+		baseBat, tblStuff, tblStuff.def.baseColToTarIdx, mp,
+	)
+}
+
+func projectBaseBatchToTargetIfNeeded(
+	side string,
+	dataBat *batch.Batch,
+	tblStuff *tableStuff,
+	mp *mpool.MPool,
+) *batch.Batch {
+	if side != "base" || dataBat == nil || dataBat.RowCount() == 0 ||
+		dataBranchBatchHasTargetLayout(dataBat, tblStuff) {
+		return dataBat
+	}
+	// Legacy table metadata without a source-to-target mapping has no evidence
+	// of a physical layout difference. Preserve the prior path.
+	if len(tblStuff.def.baseColToTarIdx) == 0 {
+		return dataBat
+	}
+	if !dataBranchNeedsHistoricalProjection(
+		tblStuff.def.baseColToTarIdx,
+		len(tblStuff.def.colNames),
+	) {
+		return dataBat
+	}
+	return projectBaseBatchToTarget(dataBat, tblStuff, mp)
+}
+
+func dataBranchSourceColToTargetIdx(
+	sourceDef, targetDef *plan2.TableDef,
+	targetColNames []string,
+	targetOnlyIdxes []int,
+) ([]int, error) {
+	if sourceDef == nil || targetDef == nil {
+		return nil, moerr.NewInternalErrorNoCtx("missing schema for historical data branch projection")
+	}
+	if err := checkDataBranchPrimaryKeyCompatibility(targetDef, sourceDef); err != nil {
+		return nil, moerr.NewNotSupportedNoCtxf(
+			"historical data branch primary key is incompatible with the endpoint schema: %s",
+			err.Error(),
+		)
+	}
+	if sourceDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
+		sourceNames := make([]string, 0, len(sourceDef.Cols))
+		targetNames := make([]string, 0, len(targetDef.Cols))
+		for _, col := range sourceDef.Cols {
+			if col.Name != catalog.Row_ID {
+				sourceNames = append(sourceNames, col.Name)
+			}
+		}
+		for _, col := range targetDef.Cols {
+			if col.Name != catalog.Row_ID {
+				targetNames = append(targetNames, col.Name)
+			}
+		}
+		if len(sourceNames) != len(targetNames) {
+			return nil, moerr.NewNotSupportedNoCtx(
+				"historical data branch fake primary key schema differs from the endpoint schema",
+			)
+		}
+		for i := range sourceNames {
+			if !strings.EqualFold(sourceNames[i], targetNames[i]) {
+				return nil, moerr.NewNotSupportedNoCtx(
+					"historical data branch fake primary key schema differs from the endpoint schema",
+				)
+			}
+		}
+	}
+	targetOnly := make(map[int]struct{}, len(targetOnlyIdxes))
+	for _, idx := range targetOnlyIdxes {
+		targetOnly[idx] = struct{}{}
+	}
+	mapping := make([]int, 0, len(sourceDef.Cols))
+	for _, col := range sourceDef.Cols {
+		if col.Name == catalog.Row_ID {
+			continue
+		}
+		targetCol := dataBranchColumnDefByLogicalName(targetDef, col)
+		targetIdx := -1
+		if targetCol != nil {
+			targetIdx = dataBranchColumnIndexByName(targetColNames, targetCol.Name)
+		}
+		mapping = append(mapping, targetIdx)
+		if targetIdx < 0 {
+			continue
+		}
+		derivedCompositePK :=
+			isDataBranchDerivedCompositePKColumn(sourceDef, targetDef, col, targetCol)
+		sameType := col.Typ.Id == targetCol.Typ.Id &&
+			(dataBranchColumnTypeAttributesEqual(col.Typ, targetCol.Typ) || derivedCompositePK)
+		if !sameType {
+			if _, isTargetOnly := targetOnly[targetIdx]; isTargetOnly {
+				// This column does not exist on the base endpoint and is excluded
+				// from comparison and MERGE apply. Its old physical representation
+				// cannot be moved into the endpoint-typed batch; project it as NULL
+				// and let endpoint hydration restore a current value when needed.
+				mapping[len(mapping)-1] = -1
+				continue
+			}
+			return nil, moerr.NewNotSupportedNoCtxf(
+				"historical data branch column %s has a different type from the endpoint schema",
+				col.Name,
+			)
+		}
+	}
+	return mapping, nil
+}
+
+// isDataBranchDerivedCompositePKColumn reports whether the two columns are the
+// hidden serialization of the same logical composite primary key. COPY ALTER
+// rebuilds this derived column and may assign it a new Seqnum even though the
+// component-column identities, which checkDataBranchPrimaryKeyCompatibility
+// has already validated, remain unchanged.
+func isDataBranchDerivedCompositePKColumn(
+	sourceDef, targetDef *plan2.TableDef,
+	sourceCol, targetCol *plan2.ColDef,
+) bool {
+	if sourceDef == nil || targetDef == nil || sourceCol == nil || targetCol == nil ||
+		sourceDef.Pkey == nil || targetDef.Pkey == nil ||
+		!strings.EqualFold(sourceDef.Pkey.PkeyColName, catalog.CPrimaryKeyColName) ||
+		!strings.EqualFold(targetDef.Pkey.PkeyColName, catalog.CPrimaryKeyColName) ||
+		!strings.EqualFold(sourceCol.Name, catalog.CPrimaryKeyColName) ||
+		!strings.EqualFold(targetCol.Name, catalog.CPrimaryKeyColName) ||
+		len(sourceDef.Pkey.Names) != len(targetDef.Pkey.Names) {
+		return false
+	}
+	for i, sourceName := range sourceDef.Pkey.Names {
+		targetName := targetDef.Pkey.Names[i]
+		if !strings.EqualFold(sourceName, targetName) {
+			return false
+		}
+		sourcePart := dataBranchColumnDefByName(sourceDef, sourceName)
+		targetPart := dataBranchColumnDefByName(targetDef, targetName)
+		if sourcePart == nil || targetPart == nil ||
+			sourcePart.Typ.Id != targetPart.Typ.Id ||
+			!dataBranchColumnTypeAttributesEqual(sourcePart.Typ, targetPart.Typ) ||
+			sourcePart.NotNull != targetPart.NotNull {
+			return false
+		}
+	}
+	return true
+}
+
+// dataBranchNeedsHistoricalProjection reports whether change rows from an
+// older physical table generation have a different data-column layout from
+// the endpoint. A different table ID alone can also mean an ordinary branch
+// ancestor with an identical schema; projecting and hydrating those rows would
+// collapse intermediate UPDATE versions to endpoint values.
+func dataBranchNeedsHistoricalProjection(sourceToTarget []int, targetColCount int) bool {
+	if len(sourceToTarget) != targetColCount {
+		return true
+	}
+	for sourceIdx, targetIdx := range sourceToTarget {
+		if sourceIdx != targetIdx {
+			return true
+		}
+	}
+	return false
+}
+
+func dataBranchTargetLayoutAttrs(tblStuff *tableStuff, hasCommitTS bool) []string {
+	attrs := make([]string, 0, len(tblStuff.def.colNames)+2)
+	attrs = append(attrs, catalog.Row_ID)
+	attrs = append(attrs, tblStuff.def.colNames...)
+	if hasCommitTS {
+		attrs = append(attrs, objectio.DefaultCommitTS_Attr)
+	}
+	return attrs
+}
+
+func dataBranchBatchHasTargetLayout(bat *batch.Batch, tblStuff *tableStuff) bool {
+	if bat == nil || len(bat.Attrs) != bat.VectorCount() {
+		return false
+	}
+	hasCommitTS := bat.VectorCount() == len(tblStuff.def.colNames)+2
+	if !hasCommitTS && bat.VectorCount() != len(tblStuff.def.colNames)+1 {
+		return false
+	}
+	want := dataBranchTargetLayoutAttrs(tblStuff, hasCommitTS)
+	for i := range want {
+		if !strings.EqualFold(bat.Attrs[i], want[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func overlayDataBranchProbeResult(
+	projected *batch.Batch,
+	probe executor.Result,
+	pkTargetIdx int,
+	mp *mpool.MPool,
+) (err error) {
+	if projected == nil || projected.RowCount() == 0 {
+		return nil
+	}
+	prepared := false
+	probe.ReadRows(func(rowCount int, cols []*vector.Vector) bool {
+		if len(cols) < 2 || pkTargetIdx < 0 || pkTargetIdx+1 >= len(cols) {
+			err = moerr.NewInternalErrorNoCtx("invalid endpoint probe layout for historical data branch batch")
+			return false
+		}
+		targetColCount := len(cols) - 1
+		if projected.VectorCount() < targetColCount+1 {
+			err = moerr.NewInternalErrorNoCtxf(
+				"historical data branch batch has %d vectors for %d target columns",
+				projected.VectorCount(), targetColCount,
+			)
+			return false
+		}
+		if !prepared {
+			// Projection represents columns absent from the historical schema as
+			// constant-NULL vectors. Vector.Copy requires a writable flat
+			// destination, so materialize only those constant data columns before
+			// overlaying endpoint values. RowID and commit_ts stay untouched.
+			for targetIdx := 0; targetIdx < targetColCount; targetIdx++ {
+				dst := projected.Vecs[targetIdx+1]
+				if !dst.IsConst() {
+					continue
+				}
+				flat := vector.NewVec(*dst.GetType())
+				if err = flat.UnionBatch(dst, 0, projected.RowCount(), nil, mp); err != nil {
+					flat.Free(mp)
+					return false
+				}
+				dst.Free(mp)
+				projected.Vecs[targetIdx+1] = flat
+			}
+			prepared = true
+		}
+		for row := 0; row < rowCount; row++ {
+			projectedRow := vector.GetFixedAtNoTypeCheck[int64](cols[0], row)
+			if projectedRow < 0 || projectedRow >= int64(projected.RowCount()) {
+				err = moerr.NewInternalErrorNoCtxf(
+					"endpoint probe row index %d out of range %d",
+					projectedRow, projected.RowCount(),
+				)
+				return false
+			}
+			if cols[pkTargetIdx+1].IsNull(uint64(row)) {
+				continue
+			}
+			for targetIdx := 0; targetIdx < targetColCount; targetIdx++ {
+				if err = projected.Vecs[targetIdx+1].Copy(
+					cols[targetIdx+1], projectedRow, int64(row), mp,
+				); err != nil {
+					return false
+				}
+			}
+		}
+		return true
+	})
+	return err
+}
+
+func dataBranchHistoricalProbeStuff(
+	ctx context.Context,
+	tblStuff tableStuff,
+	endpointRel engine.Relation,
+) tableStuff {
+	probeStuff := tblStuff
+	probeStuff.lcaRel = endpointRel
+	if endpointRel.GetTableID(ctx) == tblStuff.tarRel.GetTableID(ctx) {
+		// Target-side hydration restores the current values of columns that
+		// were absent or incompatible in an older physical generation.
+		probeStuff.tarRel = endpointRel
+		probeStuff.def.tarOnlyIdxes = nil
+		probeStuff.def.lcaColNames = nil
+	} else {
+		probeStuff.def.lcaColNames = probeStuff.def.baseColNames
+	}
+	return probeStuff
+}
+
+func hydrateHistoricalDataBranchBatch(
+	ctx context.Context,
+	ses *Session,
+	projected *batch.Batch,
+	tblStuff tableStuff,
+	endpointRel engine.Relation,
+	endpointSnapshot types.TS,
+) (err error) {
+	if projected == nil || projected.RowCount() == 0 {
+		return nil
+	}
+	pkVecIdx := tblStuff.def.pkColIdx + 1 // projected data keeps RowID at Vec[0]
+	if pkVecIdx <= 0 || pkVecIdx >= projected.VectorCount() {
+		return moerr.NewInternalErrorNoCtxf(
+			"historical data branch PK index %d out of range", pkVecIdx,
+		)
+	}
+	tBat := batch.NewWithSize(1)
+	tBat.Vecs[0] = vector.NewVec(*projected.Vecs[pkVecIdx].GetType())
+	defer tBat.Clean(ses.proc.Mp())
+	if err = tBat.Vecs[0].UnionBatch(
+		projected.Vecs[pkVecIdx], 0, projected.RowCount(), nil, ses.proc.Mp(),
+	); err != nil {
+		return err
+	}
+	tBat.SetRowCount(projected.RowCount())
+
+	probeStuff := dataBranchHistoricalProbeStuff(ctx, tblStuff, endpointRel)
+	probe, err := runLCAProbeWithReaderFallback(
+		ctx, ses, tBat, probeStuff, endpointSnapshot,
+	)
+	if err != nil {
+		return err
+	}
+	defer probe.Close()
+	return overlayDataBranchProbeResult(
+		projected, probe, tblStuff.def.pkColIdx, ses.proc.Mp(),
+	)
+}
+
+type historicalDataBranchChangesHandle struct {
+	inner            engine.ChangesHandle
+	sourceMapping    []int
+	tblStuff         tableStuff
+	ses              *Session
+	endpointRel      engine.Relation
+	endpointSnapshot types.TS
+	hydrate          bool
+}
+
+func (h *historicalDataBranchChangesHandle) Next(
+	ctx context.Context,
+	mp *mpool.MPool,
+) (*batch.Batch, *batch.Batch, engine.ChangesHandle_Hint, error) {
+	data, tombstone, hint, err := h.inner.Next(ctx, mp)
+	if err != nil || data == nil || data.RowCount() == 0 {
+		return data, tombstone, hint, err
+	}
+	data = projectDataBranchBatchToTarget(data, &h.tblStuff, h.sourceMapping, mp)
+	if !h.hydrate {
+		return data, tombstone, hint, nil
+	}
+	if err = hydrateHistoricalDataBranchBatch(
+		ctx, h.ses, data, h.tblStuff, h.endpointRel, h.endpointSnapshot,
+	); err != nil {
+		data.Clean(mp)
+		if tombstone != nil {
+			tombstone.Clean(mp)
+		}
+		return nil, nil, hint, err
+	}
+	return data, tombstone, hint, nil
+}
+
+func (h *historicalDataBranchChangesHandle) Close() error {
+	return h.inner.Close()
+}
+
+func projectDataBranchBatchToTarget(
+	sourceBat *batch.Batch,
+	tblStuff *tableStuff,
+	sourceColToTargetIdx []int,
+	mp *mpool.MPool,
+) *batch.Batch {
+	// CollectChanges data batches are laid out as [RowID, data..., commit_ts].
+	// Identify the optional trailing vector from the schema-derived data-column
+	// count so that it cannot be mistaken for a column that needs projection.
+	hasCommitTS := sourceBat.VectorCount() == len(sourceColToTargetIdx)+2
+	outColCount := len(tblStuff.def.colNames) + 1
+	if hasCommitTS {
+		outColCount++
+	}
+	out := batch.NewWithSize(outColCount)
+	out.Vecs[0] = sourceBat.Vecs[0] // RowID
+	sourceBat.Vecs[0] = nil
+	sourceColCount := sourceBat.VectorCount() - 1 // subtract RowID
+	if hasCommitTS {
+		sourceColCount--
+		commitTSIdx := sourceBat.VectorCount() - 1
+		out.Vecs[out.VectorCount()-1] = sourceBat.Vecs[commitTSIdx]
+		sourceBat.Vecs[commitTSIdx] = nil
+	}
+	if sourceColCount > len(sourceColToTargetIdx) {
+		sourceColCount = len(sourceColToTargetIdx)
+	}
+	for sourceColIdx := 0; sourceColIdx < sourceColCount; sourceColIdx++ {
+		tarColIdx := sourceColToTargetIdx[sourceColIdx]
+		if tarColIdx >= 0 && tarColIdx < len(tblStuff.def.colNames) {
+			out.Vecs[tarColIdx+1] = sourceBat.Vecs[sourceColIdx+1]
+			sourceBat.Vecs[sourceColIdx+1] = nil
+		}
+	}
+	for i := range tblStuff.def.colNames {
+		if out.Vecs[i+1] == nil {
+			out.Vecs[i+1] = vector.NewConstNull(tblStuff.def.colTypes[i], sourceBat.RowCount(), mp)
+		}
+	}
+	out.SetRowCount(sourceBat.RowCount())
+	out.SetAttributes(dataBranchTargetLayoutAttrs(tblStuff, hasCommitTS))
+	sourceBat.Clean(mp)
+	return out
 }

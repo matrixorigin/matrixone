@@ -274,6 +274,10 @@ func checkPitrExistOrNot(ctx context.Context, bh BackgroundExec, pitrName string
 	return false, nil
 }
 
+func dataBranchLineagePitrPublicationLockSQL() string {
+	return "select table_id from mo_catalog.mo_branch_metadata for update"
+}
+
 func doCreatePitr(ctx context.Context, ses *Session, stmt *tree.CreatePitr) error {
 	var (
 		err            error
@@ -306,6 +310,17 @@ func doCreatePitr(ctx context.Context, ses *Session, stmt *tree.CreatePitr) erro
 	if err != nil {
 		return err
 	}
+
+	// Lineage compaction locks these same rows before it snapshots active PITR
+	// owners and deletes expired history. Hold the lock through PITR publication
+	// so a concurrent compaction either observes this PITR or completes before
+	// the PITR is created; it cannot delete between the owner read and insert.
+	lineageLockCtx := defines.AttachAccountId(ctx, sysAccountID)
+	bh.ClearExecResultSet()
+	if err = bh.Exec(lineageLockCtx, dataBranchLineagePitrPublicationLockSQL()); err != nil {
+		return err
+	}
+	bh.ClearExecResultSet()
 
 	// 2.only sys can create cluster level pitr
 	tenantInfo := ses.GetTenantInfo()
@@ -832,6 +847,9 @@ func doDropPitr(ctx context.Context, ses *Session, stmt *tree.DropPitr) (err err
 				return err
 			}
 		}
+		if err = compactHistoricalAlterLineageWithBH(ctx, bh, time.Now().UTC()); err != nil {
+			return err
+		}
 	}
 	return err
 }
@@ -902,6 +920,9 @@ func doAlterPitr(ctx context.Context, ses *Session, stmt *tree.AlterPitr) (err e
 
 		err = bh.Exec(ctx, sql)
 		if err != nil {
+			return err
+		}
+		if err = compactHistoricalAlterLineageWithBH(ctx, bh, time.Now().UTC()); err != nil {
 			return err
 		}
 	}

@@ -63,6 +63,16 @@ func checkBranchQuota(
 	return featureLimitChecker(ctx, ses, bh, featureCodeBranch, "", increment)
 }
 
+func branchQuotaUsageSQL(accountID uint32) string {
+	return fmt.Sprintf(
+		"select count(*) from %s.%s where creator = %d and table_deleted = false and level != '%s'",
+		catalog.MO_CATALOG,
+		catalog.MO_BRANCH_METADATA,
+		accountID,
+		databranchutils.AlterLineageLevel,
+	)
+}
+
 func featureLimitChecker(
 	ctx context.Context,
 	ses *Session,
@@ -117,10 +127,7 @@ func featureLimitChecker(
 		)
 	} else if featureCode == featureCodeBranch {
 		ctx = defines.AttachAccountId(ctx, sysAccountID)
-		sql = fmt.Sprintf(
-			"select count(*) from %s.%s where creator = %d and table_deleted = false",
-			catalog.MO_CATALOG, catalog.MO_BRANCH_METADATA, accId,
-		)
+		sql = branchQuotaUsageSQL(accId)
 	} else {
 		return moerr.NewInternalErrorNoCtxf("no such feature %s with scope %s", featureCode, featureScope)
 	}

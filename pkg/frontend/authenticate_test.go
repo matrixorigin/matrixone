@@ -15241,6 +15241,7 @@ func TestDoDropSnapshot(t *testing.T) {
 
 		bh := &backgroundExecTest{}
 		bh.init()
+		registerEmptyHistoricalLineageResults(bh)
 
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
@@ -15291,6 +15292,7 @@ func TestDoDropSnapshot(t *testing.T) {
 
 		err := doDropSnapshot(ctx, ses, ds)
 		convey.So(err, convey.ShouldBeNil)
+		convey.So(bh.executedSQLs, convey.ShouldContain, historicalAlterLineageMetadataSQL())
 	})
 
 	convey.Convey("doDropSnapshot success", t, func() {
@@ -15302,6 +15304,7 @@ func TestDoDropSnapshot(t *testing.T) {
 
 		bh := &backgroundExecTest{}
 		bh.init()
+		registerEmptyHistoricalLineageResults(bh)
 
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()

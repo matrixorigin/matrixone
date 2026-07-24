@@ -27,11 +27,15 @@ import (
 	"time"
 
 	"github.com/golang/mock/gomock"
+	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
 // ---------------------------------------------------------------------------
@@ -59,6 +63,199 @@ func TestBranchSnapshotName(t *testing.T) {
 		// grep for the prefix always find it.
 		require.True(t, strings.HasPrefix(tc.want, databranchutils.BranchSnapshotSnamePrefix))
 	}
+}
+
+func TestParseBranchSnapshotName(t *testing.T) {
+	childID, ok := databranchutils.ParseBranchSnapshotName("__mo_branch_42")
+	require.True(t, ok)
+	require.Equal(t, uint64(42), childID)
+
+	for _, invalid := range []string{"", "user_snapshot", "__mo_branch_", "__mo_branch_bad"} {
+		_, ok = databranchutils.ParseBranchSnapshotName(invalid)
+		require.False(t, ok, invalid)
+	}
+}
+
+func historicalLineageTestResult(rows [][]interface{}, columnCount int) *MysqlResultSet {
+	mrs := &MysqlResultSet{}
+	for i := 0; i < columnCount; i++ {
+		col := &MysqlColumn{}
+		col.SetName(fmt.Sprintf("c%d", i))
+		col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+		mrs.AddColumn(col)
+	}
+	for _, row := range rows {
+		mrs.AddRow(row)
+	}
+	return mrs
+}
+
+func registerEmptyHistoricalLineageResults(bh *backgroundExecTest) {
+	bh.sql2result[historicalAlterLineageMetadataSQL()] = historicalLineageTestResult(nil, 6)
+	bh.sql2result[historicalAlterLineageEdgeSQL()] = historicalLineageTestResult(nil, 6)
+	bh.sql2result[historicalSnapshotSourceSQL()] = historicalLineageTestResult(nil, 6)
+	bh.sql2result[historicalPitrSourceSQL()] = historicalLineageTestResult(nil, 7)
+}
+
+func newHistoricalLineageBackgroundExec(
+	metadataRows, edgeRows, snapshotRows, pitrRows [][]interface{},
+) *backgroundExecTest {
+	bh := &backgroundExecTest{}
+	bh.init()
+	bh.sql2result[historicalAlterLineageMetadataSQL()] = historicalLineageTestResult(metadataRows, 6)
+	bh.sql2result[historicalAlterLineageEdgeSQL()] = historicalLineageTestResult(edgeRows, 6)
+	bh.sql2result[historicalSnapshotSourceSQL()] = historicalLineageTestResult(snapshotRows, 6)
+	bh.sql2result[historicalPitrSourceSQL()] = historicalLineageTestResult(pitrRows, 7)
+	return bh
+}
+
+func TestCompactHistoricalAlterLineageWithBH(t *testing.T) {
+	bh := newHistoricalLineageBackgroundExec(
+		[][]interface{}{{uint64(2), uint64(1), int64(100), uint64(0), "alter", false}},
+		[][]interface{}{{"__mo_branch_2", int64(100), "acc", "db", "t", uint64(1)}},
+		nil,
+		nil,
+	)
+
+	err := compactHistoricalAlterLineageWithBH(
+		context.Background(), bh, time.Unix(0, 1_000).UTC(),
+	)
+	require.NoError(t, err)
+	require.Equal(t, []string{
+		historicalAlterLineageMetadataSQL(),
+		historicalAlterLineageEdgeSQL(),
+		historicalSnapshotSourceSQL(),
+		historicalPitrSourceSQL(),
+		"delete from mo_catalog.mo_snapshots where kind = 'branch' and sname in ('__mo_branch_2')",
+		"delete from mo_catalog.mo_branch_metadata where table_id in (2) and (level = 'alter' or level like 'alter:%')",
+	}, bh.executedSQLs)
+}
+
+func TestCompactHistoricalAlterLineageWithBHRetainsCoveredEdge(t *testing.T) {
+	bh := newHistoricalLineageBackgroundExec(
+		[][]interface{}{{uint64(2), uint64(1), int64(100), uint64(0), "alter", false}},
+		[][]interface{}{{"__mo_branch_2", int64(100), "acc", "db", "t", uint64(1)}},
+		[][]interface{}{{int64(50), "table", "acc", "db", "t", uint64(1)}},
+		nil,
+	)
+
+	err := compactHistoricalAlterLineageWithBH(
+		context.Background(), bh, time.Unix(0, 1_000).UTC(),
+	)
+	require.NoError(t, err)
+	require.Len(t, bh.executedSQLs, 4)
+}
+
+func TestCompactHistoricalAlterLineageWithBHRetainsPitrCoveredEdge(t *testing.T) {
+	bh := newHistoricalLineageBackgroundExec(
+		[][]interface{}{{uint64(2), uint64(1), int64(100), uint64(0), "alter", false}},
+		[][]interface{}{{"__mo_branch_2", int64(100), "acc", "db", "t", uint64(1)}},
+		nil,
+		[][]interface{}{{"table", "acc", "db", "t", uint64(1), int64(1), "h"}},
+	)
+
+	err := compactHistoricalAlterLineageWithBH(
+		context.Background(), bh, time.Unix(3600, 0).UTC(),
+	)
+	require.NoError(t, err)
+	require.Len(t, bh.executedSQLs, 4)
+}
+
+func TestCompactHistoricalAlterLineageWithBHReclaimsDeletedRowsWithoutEdges(t *testing.T) {
+	bh := newHistoricalLineageBackgroundExec(
+		[][]interface{}{
+			{uint64(2), uint64(1), int64(100), uint64(0), "alter", true},
+			{uint64(3), uint64(2), int64(200), uint64(0), "alter", true},
+		},
+		nil,
+		nil,
+		nil,
+	)
+
+	err := compactHistoricalAlterLineageWithBH(
+		context.Background(), bh, time.Unix(0, 1_000).UTC(),
+	)
+	require.NoError(t, err)
+	require.Equal(t, []string{
+		historicalAlterLineageMetadataSQL(),
+		historicalAlterLineageEdgeSQL(),
+		historicalSnapshotSourceSQL(),
+		historicalPitrSourceSQL(),
+		"delete from mo_catalog.mo_snapshots where kind = 'branch' and sname in ('__mo_branch_2','__mo_branch_3')",
+		"delete from mo_catalog.mo_branch_metadata where table_id in (2,3) and (level = 'alter' or level like 'alter:%')",
+	}, bh.executedSQLs)
+}
+
+func TestCompactHistoricalAlterLineageWithBHPropagatesDeleteError(t *testing.T) {
+	bh := newHistoricalLineageBackgroundExec(
+		[][]interface{}{{uint64(2), uint64(1), int64(100), uint64(0), "alter", false}},
+		[][]interface{}{{"__mo_branch_2", int64(100), "acc", "db", "t", uint64(1)}},
+		nil,
+		nil,
+	)
+	wantErr := errors.New("delete snapshot failed")
+	deleteSQL := "delete from mo_catalog.mo_snapshots where kind = 'branch' and sname in ('__mo_branch_2')"
+	bh.sql2err[deleteSQL] = wantErr
+
+	err := compactHistoricalAlterLineageWithBH(
+		context.Background(), bh, time.Unix(0, 1_000).UTC(),
+	)
+	require.ErrorIs(t, err, wantErr)
+	require.NotContains(t, bh.executedSQLs,
+		"delete from mo_catalog.mo_branch_metadata where table_id in (2) and (level = 'alter' or level like 'alter:%')",
+	)
+}
+
+func TestDoDropSnapshotRollsBackCompactionFailure(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+
+	bh := newHistoricalLineageBackgroundExec(
+		[][]interface{}{{uint64(2), uint64(1), int64(100), uint64(0), "alter", false}},
+		[][]interface{}{{"__mo_branch_2", int64(100), "acc", "db", "t", uint64(1)}},
+		nil,
+		nil,
+	)
+	bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+	defer bhStub.Reset()
+
+	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+	pu.SV.SetDefaultValues()
+	pu.SV.KillRountinesInterval = 0
+	setPu("", pu)
+	ctx := context.WithValue(context.Background(), config.ParameterUnitKey, pu)
+	rm, _ := NewRoutineManager(ctx, "")
+	ses.rm = rm
+	ses.SetTenantInfo(&TenantInfo{
+		Tenant:        sysAccountName,
+		User:          rootName,
+		DefaultRole:   moAdminRoleName,
+		TenantID:      sysAccountID,
+		UserID:        rootID,
+		DefaultRoleID: moAdminRoleID,
+	})
+
+	stmt := &tree.DropSnapShot{Name: tree.Identifier("snapshot_test")}
+	checkSQL, _ := getSqlForCheckSnapshot(ctx, "snapshot_test")
+	bh.sql2result[checkSQL] = newMrsForPasswordOfUser([][]interface{}{{0, 0}})
+	kindSQL := "select kind from mo_catalog.mo_snapshots where sname = 'snapshot_test' order by snapshot_id limit 1"
+	bh.sql2result[kindSQL] = newMrsForPasswordOfUser([][]interface{}{{"user"}})
+	userDeleteSQL := getSqlForDropSnapshot("snapshot_test")
+	branchDeleteSQL := "delete from mo_catalog.mo_snapshots where kind = 'branch' and sname in ('__mo_branch_2')"
+	wantErr := errors.New("branch snapshot delete failed")
+	bh.sql2err[branchDeleteSQL] = wantErr
+
+	err := doDropSnapshot(ctx, ses, stmt)
+	require.ErrorIs(t, err, wantErr)
+	require.Contains(t, bh.executedSQLs, "begin;")
+	require.Contains(t, bh.executedSQLs, userDeleteSQL)
+	require.Contains(t, bh.executedSQLs, branchDeleteSQL)
+	require.Contains(t, bh.executedSQLs, "rollback;")
+	require.NotContains(t, bh.executedSQLs, "commit;")
+	require.NotContains(t, bh.executedSQLs,
+		"delete from mo_catalog.mo_branch_metadata where table_id in (2) and (level = 'alter' or level like 'alter:%')",
+	)
 }
 
 // ---------------------------------------------------------------------------
@@ -142,6 +339,20 @@ func TestSubtreeAllDeleted_Linear(t *testing.T) {
 	})
 	require.True(t, dag.SubtreeAllDeleted(3))
 	require.True(t, dag.SubtreeAllDeleted(2))
+}
+
+func TestSubtreeHasLiveNodeThroughDeletedGeneration(t *testing.T) {
+	dag := databranchutils.NewBranchReclaimDag([]databranchutils.DataBranchMetadata{
+		{TableID: 2, PTableID: 1, TableDeleted: true},
+		{TableID: 3, PTableID: 2, TableDeleted: false},
+	})
+
+	require.True(t, dag.SubtreeHasLiveNode(1))
+	require.True(t, dag.SubtreeHasLiveNode(2))
+	require.True(t, dag.SubtreeHasLiveNode(3))
+
+	dag.Info[3] = databranchutils.BranchReclaimNode{ParentTableID: 2, Deleted: true}
+	require.False(t, dag.SubtreeHasLiveNode(1))
 }
 
 // ---------------------------------------------------------------------------
@@ -232,6 +443,25 @@ func TestReclaimCore_DropList(t *testing.T) {
 	require.NoError(t, err)
 	// Drops are sorted lexicographically: __mo_branch_2 < __mo_branch_4.
 	require.Equal(t, []string{"__mo_branch_2", "__mo_branch_4"}, got)
+
+	// ALTER-only generations are owned by the historical-lineage compactor.
+	// The generic drop path must leave their identity snapshots in place so
+	// account/database snapshot scope remains available to that compactor.
+	got = nil
+	err = databranchutils.ReclaimBranchSnapshotsCore(
+		[]uint64{2},
+		func() (databranchutils.BranchReclaimDag, error) {
+			return databranchutils.NewBranchReclaimDag([]databranchutils.DataBranchMetadata{
+				{TableID: 2, PTableID: 1, CloneTS: 100, Level: "alter", TableDeleted: true},
+			}), nil
+		},
+		func(snames []string) error {
+			got = append([]string(nil), snames...)
+			return nil
+		},
+	)
+	require.NoError(t, err)
+	require.Empty(t, got)
 
 	// ---- No dead tids: loader / deleter must not run.
 	loadCalls := 0

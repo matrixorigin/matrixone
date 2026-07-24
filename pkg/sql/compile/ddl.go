@@ -2126,9 +2126,9 @@ func (c *Compile) runSqlWithSystemTenant(sql string) error {
 //
 // Called synchronously by the plain `DROP TABLE` path after flipping
 // table_deleted=true for the affected tid (design §9.2 / §10).
-func (c *Compile) reclaimBranchProtectSnapshots(deadTIDs []uint64) error {
+func (c *Compile) reclaimBranchProtectSnapshots(deadTIDs []uint64) (bool, error) {
 	if len(deadTIDs) == 0 {
-		return nil
+		return false, nil
 	}
 	// Fast path: the vast majority of DROP TABLE operations are on tables
 	// that have nothing to do with data branch. Skip the `FOR UPDATE`
@@ -2151,7 +2151,7 @@ func (c *Compile) reclaimBranchProtectSnapshots(deadTIDs []uint64) error {
 	)
 	probeRes, err := c.runSqlWithResult(probeSQL, int32(catalog.System_Account))
 	if err != nil {
-		return err
+		return false, err
 	}
 	hasBranchRow := false
 	probeRes.ReadRows(func(n int, _ []*vector.Vector) bool {
@@ -2162,7 +2162,7 @@ func (c *Compile) reclaimBranchProtectSnapshots(deadTIDs []uint64) error {
 	})
 	probeRes.Close()
 	if !hasBranchRow {
-		return nil
+		return false, nil
 	}
 
 	loadDAG := func() (databranchutils.BranchReclaimDag, error) {
@@ -2174,7 +2174,7 @@ func (c *Compile) reclaimBranchProtectSnapshots(deadTIDs []uint64) error {
 		// above already confirmed the drop touches mo_branch_metadata,
 		// so the lock scope is limited to real branch drops.
 		querySql := fmt.Sprintf(
-			"select table_id, p_table_id, clone_ts, table_deleted from %s.%s for update",
+			"select table_id, p_table_id, clone_ts, level, table_deleted from %s.%s for update",
 			catalog.MO_CATALOG, catalog.MO_BRANCH_METADATA,
 		)
 		res, err := c.runSqlWithResult(querySql, int32(catalog.System_Account))
@@ -2190,13 +2190,15 @@ func (c *Compile) reclaimBranchProtectSnapshots(deadTIDs []uint64) error {
 			tableIDs := vector.MustFixedColWithTypeCheck[uint64](cols[0])
 			parentIDs := vector.MustFixedColWithTypeCheck[uint64](cols[1])
 			cloneTSs := vector.MustFixedColWithTypeCheck[int64](cols[2])
+			levels := executor.GetStringRows(cols[3])
 			for i := 0; i < n; i++ {
-				deleted := !cols[3].IsNull(uint64(i)) &&
-					vector.GetFixedAtWithTypeCheck[bool](cols[3], i)
+				deleted := !cols[4].IsNull(uint64(i)) &&
+					vector.GetFixedAtWithTypeCheck[bool](cols[4], i)
 				rows = append(rows, databranchutils.DataBranchMetadata{
 					TableID:      tableIDs[i],
 					CloneTS:      cloneTSs[i],
 					PTableID:     parentIDs[i],
+					Level:        levels[i],
 					TableDeleted: deleted,
 				})
 			}
@@ -2208,7 +2210,7 @@ func (c *Compile) reclaimBranchProtectSnapshots(deadTIDs []uint64) error {
 		sql := databranchutils.BuildBranchSnapshotDeleteSQL(snames)
 		return c.runSqlWithSystemTenant(sql)
 	}
-	return databranchutils.ReclaimBranchSnapshotsCore(deadTIDs, loadDAG, execDelete)
+	return true, databranchutils.ReclaimBranchSnapshotsCore(deadTIDs, loadDAG, execDelete)
 }
 
 func (s *Scope) CreateView(c *Compile) error {
@@ -3555,12 +3557,22 @@ func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable) error {
 	// release the corresponding `__mo_branch_*` snapshots. This must run
 	// synchronously so drop paths have identical semantics in the frontend
 	// and compile-layer paths (design §5.3 / §9.2).
-	if err = c.reclaimBranchProtectSnapshots([]uint64{tblID}); err != nil {
+	var branchParticipates bool
+	if branchParticipates, err = c.reclaimBranchProtectSnapshots([]uint64{tblID}); err != nil {
 		logutil.Error("reclaim branch protect snapshots failed",
 			zap.Uint64("tblID", tblID),
 			zap.Error(err),
 		)
 		return err
+	}
+	if branchParticipates {
+		if err = c.compactExpiredAlterDataBranchLineage(time.Time{}); err != nil {
+			logutil.Error("compact historical ALTER lineage failed",
+				zap.Uint64("tblID", tblID),
+				zap.Error(err),
+			)
+			return err
+		}
 	}
 
 	ps := partitionservice.GetService(c.proc.GetService())

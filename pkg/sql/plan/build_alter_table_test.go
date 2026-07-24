@@ -53,6 +53,52 @@ func TestAlterTableAddColumns(t *testing.T) {
 	runTestShouldPass(mock, t, sqls, false, false)
 }
 
+func TestAlterTableCopyPreservesFinalColumnReplacementIdentity(t *testing.T) {
+	for _, sql := range []string{
+		`ALTER TABLE t1 DROP COLUMN b, ADD COLUMN b INT;`,
+		`ALTER TABLE t1 RENAME COLUMN b TO tmp, DROP COLUMN tmp, ADD COLUMN b INT;`,
+		`ALTER TABLE t1 DROP COLUMN b, ADD COLUMN tmp INT, RENAME COLUMN tmp TO b;`,
+	} {
+		t.Run(sql, func(t *testing.T) {
+			logicPlan, err := buildSingleStmt(NewMockOptimizer(false), t, sql)
+			assert.NoError(t, err)
+
+			alter := logicPlan.GetDdl().GetAlterTable()
+			oldCol := FindColumn(alter.TableDef.Cols, "b")
+			newCol := FindColumn(alter.CopyTableDef.Cols, "b")
+			if assert.NotNil(t, oldCol) && assert.NotNil(t, newCol) {
+				assert.NotEqual(t,
+					[]uint64{oldCol.ColId, uint64(oldCol.Seqnum)},
+					[]uint64{newCol.ColId, uint64(newCol.Seqnum)},
+				)
+			}
+		})
+	}
+}
+
+func TestAlterTableCopyPreservesExistingColumnIdentity(t *testing.T) {
+	for _, tc := range []struct {
+		sql       string
+		finalName string
+	}{
+		{`ALTER TABLE t1 ALGORITHM=COPY, MODIFY COLUMN b VARCHAR(20);`, "b"},
+		{`ALTER TABLE t1 RENAME COLUMN b TO bb;`, "bb"},
+	} {
+		t.Run(tc.sql, func(t *testing.T) {
+			logicPlan, err := buildSingleStmt(NewMockOptimizer(false), t, tc.sql)
+			assert.NoError(t, err)
+
+			alter := logicPlan.GetDdl().GetAlterTable()
+			oldCol := FindColumn(alter.TableDef.Cols, "b")
+			newCol := FindColumn(alter.CopyTableDef.Cols, tc.finalName)
+			if assert.NotNil(t, oldCol) && assert.NotNil(t, newCol) {
+				assert.Equal(t, oldCol.ColId, newCol.ColId)
+				assert.Equal(t, oldCol.Seqnum, newCol.Seqnum)
+			}
+		})
+	}
+}
+
 func TestAlterTableRejectsNonGeometrySRIDAttribute(t *testing.T) {
 	mock := NewMockOptimizer(false)
 

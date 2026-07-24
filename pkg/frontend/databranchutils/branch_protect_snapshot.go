@@ -18,7 +18,9 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"go.uber.org/zap"
 )
@@ -28,6 +30,33 @@ import (
 // column is the single source of truth for "is this snapshot managed by
 // branch".
 const BranchSnapshotKind = "branch"
+
+// AlterLineageLevel marks an internal mo_branch_metadata edge created by
+// ALTER's copy-and-swap. It preserves physical history but is not a logical
+// branch fork.
+const AlterLineageLevel = "alter"
+
+func IsAlterLineageLevel(level string) bool {
+	return level == AlterLineageLevel || strings.HasPrefix(level, AlterLineageLevel+":")
+}
+
+func NextAlterLineageLevel(parentLevel string) string {
+	if IsAlterLineageLevel(parentLevel) {
+		return parentLevel
+	}
+	if parentLevel == "" {
+		return AlterLineageLevel
+	}
+	return AlterLineageLevel + ":" + parentLevel
+}
+
+// isLogicalBranchOwnerLevel reports whether a live metadata row represents a
+// logical branch. A plain "alter" row exists only for a historical source,
+// while "alter:<level>" carries the logical ownership inherited across
+// ALTER's copy-and-swap.
+func isLogicalBranchOwnerLevel(level string) bool {
+	return !IsAlterLineageLevel(level) || strings.HasPrefix(level, AlterLineageLevel+":")
+}
 
 // BranchSnapshotSnamePrefix is the sname prefix used by branch-owned snapshot
 // rows. The suffix is the decimal child table id. Keep this in sync with the
@@ -39,6 +68,16 @@ const BranchSnapshotSnamePrefix = "__mo_branch_"
 // the name is globally unique without any additional qualifier.
 func BranchSnapshotName(childTableID uint64) string {
 	return BranchSnapshotSnamePrefix + strconv.FormatUint(childTableID, 10)
+}
+
+// ParseBranchSnapshotName extracts the child table id from a branch-managed
+// snapshot name. It rejects user snapshots and malformed internal names.
+func ParseBranchSnapshotName(name string) (uint64, bool) {
+	if !strings.HasPrefix(name, BranchSnapshotSnamePrefix) {
+		return 0, false
+	}
+	id, err := strconv.ParseUint(strings.TrimPrefix(name, BranchSnapshotSnamePrefix), 10, 64)
+	return id, err == nil
 }
 
 // BranchReclaimDag is an in-memory picture of mo_branch_metadata suitable for
@@ -57,7 +96,41 @@ type BranchReclaimDag struct {
 type BranchReclaimNode struct {
 	ParentTableID uint64
 	CloneTS       int64
+	Creator       uint64
+	Level         string
 	Deleted       bool
+}
+
+// HistoricalLineageEdge identifies the physical table edge protected by an
+// ALTER-owned branch snapshot. The catalog identity fields come from the
+// matching kind='branch' snapshot row.
+type HistoricalLineageEdge struct {
+	ChildTableID  uint64
+	ParentTableID uint64
+	CloneTS       int64
+	AccountName   string
+	DatabaseName  string
+	TableName     string
+}
+
+// HistoricalSource is a normalized user snapshot or active PITR retention
+// window. OldestTS is a fixed snapshot timestamp or the rolling PITR lower
+// bound calculated at the owning statement's timestamp.
+type HistoricalSource struct {
+	Level        string
+	AccountName  string
+	DatabaseName string
+	TableName    string
+	ObjectID     uint64
+	OldestTS     int64
+}
+
+// AlterLineageCompactionPlan lists the paired catalog rows that can be
+// removed without disconnecting a live logical branch or active historical
+// source.
+type AlterLineageCompactionPlan struct {
+	TableIDs      []uint64
+	SnapshotNames []string
 }
 
 // NewBranchReclaimDag builds the reclaim DAG from a flat list of metadata
@@ -71,6 +144,8 @@ func NewBranchReclaimDag(rows []DataBranchMetadata) BranchReclaimDag {
 		dag.Info[r.TableID] = BranchReclaimNode{
 			ParentTableID: r.PTableID,
 			CloneTS:       r.CloneTS,
+			Creator:       r.Creator,
+			Level:         r.Level,
 			Deleted:       r.TableDeleted,
 		}
 		if r.PTableID != 0 {
@@ -78,6 +153,190 @@ func NewBranchReclaimDag(rows []DataBranchMetadata) BranchReclaimDag {
 		}
 	}
 	return dag
+}
+
+// PitrRetentionLowerBound returns the oldest timestamp retained by a PITR at
+// the supplied statement time. It never reads the wall clock itself, keeping
+// frontend and compile-layer decisions on the same boundary.
+func PitrRetentionLowerBound(now time.Time, length int, unit string) (int64, error) {
+	if length < 0 {
+		return 0, moerr.NewInvalidInputNoCtxf("invalid PITR length %d", length)
+	}
+	now = now.UTC()
+	var lower time.Time
+	switch unit {
+	case "h":
+		lower = now.Add(-time.Duration(length) * time.Hour)
+	case "d":
+		lower = now.AddDate(0, 0, -length)
+	case "mo":
+		lower = now.AddDate(0, -length, 0)
+	case "y":
+		lower = now.AddDate(-length, 0, 0)
+	default:
+		return 0, moerr.NewInvalidInputNoCtxf("unknown PITR unit %q", unit)
+	}
+	return lower.UnixNano(), nil
+}
+
+func historicalSourceOwnsComponent(
+	source HistoricalSource,
+	nodeIDs map[uint64]struct{},
+	edges []HistoricalLineageEdge,
+) bool {
+	switch strings.ToLower(source.Level) {
+	case "cluster":
+		return true
+	case "account":
+		for _, edge := range edges {
+			if source.AccountName == edge.AccountName {
+				return true
+			}
+		}
+	case "database":
+		for _, edge := range edges {
+			if source.AccountName == edge.AccountName &&
+				source.DatabaseName == edge.DatabaseName {
+				return true
+			}
+		}
+	case "table":
+		if source.ObjectID != 0 {
+			if _, ok := nodeIDs[source.ObjectID]; ok {
+				return true
+			}
+		}
+		for _, edge := range edges {
+			if source.AccountName == edge.AccountName &&
+				source.DatabaseName == edge.DatabaseName &&
+				source.TableName == edge.TableName {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// ComputeAlterLineageCompactionPlan finds ALTER-only generations that no
+// longer have an owner. A live logical branch conservatively owns its entire
+// connected component so sibling/ancestor LCA paths are never disconnected.
+func ComputeAlterLineageCompactionPlan(
+	dag BranchReclaimDag,
+	edges map[uint64]HistoricalLineageEdge,
+	sources []HistoricalSource,
+) AlterLineageCompactionPlan {
+	visited := make(map[uint64]struct{}, len(dag.Info))
+	plan := AlterLineageCompactionPlan{}
+
+	for start := range dag.Info {
+		if _, ok := visited[start]; ok {
+			continue
+		}
+		component := make([]uint64, 0, 4)
+		stack := []uint64{start}
+		logicalOwner := false
+		for len(stack) > 0 {
+			last := len(stack) - 1
+			tableID := stack[last]
+			stack = stack[:last]
+			if tableID == 0 {
+				continue
+			}
+			if _, ok := visited[tableID]; ok {
+				continue
+			}
+			visited[tableID] = struct{}{}
+			component = append(component, tableID)
+
+			if meta, ok := dag.Info[tableID]; ok {
+				if !meta.Deleted && isLogicalBranchOwnerLevel(meta.Level) {
+					logicalOwner = true
+				}
+				if meta.ParentTableID != 0 {
+					stack = append(stack, meta.ParentTableID)
+				}
+			}
+			stack = append(stack, dag.Children[tableID]...)
+		}
+
+		if logicalOwner {
+			continue
+		}
+		componentNodeIDs := make(map[uint64]struct{}, len(component))
+		componentEdges := make([]HistoricalLineageEdge, 0, len(component))
+		for _, tableID := range component {
+			componentNodeIDs[tableID] = struct{}{}
+			if edge, ok := edges[tableID]; ok {
+				componentEdges = append(componentEdges, edge)
+			}
+		}
+		componentSources := make([]HistoricalSource, 0, len(sources))
+		for _, source := range sources {
+			if historicalSourceOwnsComponent(source, componentNodeIDs, componentEdges) {
+				componentSources = append(componentSources, source)
+			}
+		}
+		for _, tableID := range component {
+			meta, ok := dag.Info[tableID]
+			if !ok || !IsAlterLineageLevel(meta.Level) {
+				continue
+			}
+			edge, ok := edges[tableID]
+			if ok && (edge.ChildTableID != tableID ||
+				edge.ParentTableID != meta.ParentTableID || edge.CloneTS != meta.CloneTS) {
+				continue
+			}
+			// A live row without its identity-matched snapshot is retained
+			// conservatively. A deleted row may legitimately have no snapshot:
+			// plain DROP reclaims branch snapshots before the last historical
+			// owner disappears. Once that owner is gone, deleting the orphaned
+			// metadata row (and the deterministic snapshot name, idempotently)
+			// closes the lifecycle instead of leaking one row per ALTER.
+			if !ok && !meta.Deleted {
+				continue
+			}
+			covered := false
+			for _, source := range componentSources {
+				if source.OldestTS <= meta.CloneTS {
+					covered = true
+					break
+				}
+			}
+			if covered {
+				continue
+			}
+			plan.TableIDs = append(plan.TableIDs, tableID)
+			plan.SnapshotNames = append(plan.SnapshotNames, BranchSnapshotName(tableID))
+		}
+	}
+
+	sort.Slice(plan.TableIDs, func(i, j int) bool { return plan.TableIDs[i] < plan.TableIDs[j] })
+	sort.Strings(plan.SnapshotNames)
+	return plan
+}
+
+// BuildAlterLineageSnapshotDeleteSQL deletes only branch-managed snapshots.
+func BuildAlterLineageSnapshotDeleteSQL(snames []string) string {
+	return BuildBranchSnapshotDeleteSQL(snames)
+}
+
+// BuildAlterLineageMetadataDeleteSQL re-checks ALTER ownership at execution
+// time so a stale compaction plan cannot delete a logical branch row.
+func BuildAlterLineageMetadataDeleteSQL(tableIDs []uint64) string {
+	if len(tableIDs) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.Grow(128 + len(tableIDs)*20)
+	b.WriteString("delete from mo_catalog.mo_branch_metadata where table_id in (")
+	for i, tableID := range tableIDs {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		b.WriteString(strconv.FormatUint(tableID, 10))
+	}
+	b.WriteString(") and (level = 'alter' or level like 'alter:%')")
+	return b.String()
 }
 
 // SubtreeAllDeleted returns true iff `root` and every descendant reachable
@@ -97,6 +356,31 @@ func (d BranchReclaimDag) SubtreeAllDeleted(root uint64) bool {
 	memo := make(map[uint64]bool, len(d.Info))
 	visited := make(map[uint64]struct{}, len(d.Info))
 	return d.subtreeAllDeletedMemo(root, memo, visited)
+}
+
+// SubtreeHasLiveNode reports whether root or any descendant still represents
+// a live physical generation. Unlike SubtreeAllDeleted, it intentionally
+// walks children even when root has no metadata row; root tables commonly
+// appear only as p_table_id. The walk is cycle-safe for corrupted metadata.
+func (d BranchReclaimDag) SubtreeHasLiveNode(root uint64) bool {
+	visited := make(map[uint64]struct{}, len(d.Info))
+	var walk func(uint64) bool
+	walk = func(tableID uint64) bool {
+		if _, ok := visited[tableID]; ok {
+			return false
+		}
+		visited[tableID] = struct{}{}
+		if meta, ok := d.Info[tableID]; ok && !meta.Deleted {
+			return true
+		}
+		for _, childID := range d.Children[tableID] {
+			if walk(childID) {
+				return true
+			}
+		}
+		return false
+	}
+	return walk(root)
 }
 
 func (d BranchReclaimDag) subtreeAllDeletedMemo(
@@ -191,7 +475,15 @@ func ComputeBranchReclaimDropList(dag BranchReclaimDag, deadTIDs []uint64) []str
 	visited := make(map[uint64]struct{}, len(dag.Info))
 	var drops []string
 	for tid := range candidates {
-		if _, ok := dag.Info[tid]; !ok {
+		meta, ok := dag.Info[tid]
+		if !ok {
+			continue
+		}
+		// ALTER generations are reclaimed by ComputeAlterLineageCompactionPlan,
+		// which also accounts for user snapshots and PITRs. Deleting their
+		// identity snapshots here would discard the account/database scope
+		// evidence before that historical-owner check runs.
+		if IsAlterLineageLevel(meta.Level) {
 			continue
 		}
 		if dag.subtreeAllDeletedMemo(tid, memo, visited) {

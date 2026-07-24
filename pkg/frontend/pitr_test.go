@@ -2550,6 +2550,13 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal_To_new_Using_cluster(t *testi
 	})
 }
 
+func TestDataBranchLineagePitrPublicationLockSQL(t *testing.T) {
+	require.Equal(t,
+		"select table_id from mo_catalog.mo_branch_metadata for update",
+		dataBranchLineagePitrPublicationLockSQL(),
+	)
+}
+
 func Test_doCreatePitr(t *testing.T) {
 	convey.Convey("doRestorePitr fail", t, func() {
 		ctrl := gomock.NewController(t)
@@ -3634,4 +3641,70 @@ func Test_getPitrLengthAndUnit(t *testing.T) {
 
 	_, _, _, err = getPitrLengthAndUnit(ctx, bh, "table", "", "", "tbl")
 	assert.Error(t, err)
+}
+
+func newPitrLifecycleTestSession(
+	t *testing.T,
+) (*Session, *backgroundExecTest, context.Context) {
+	t.Helper()
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	bh := &backgroundExecTest{}
+	bh.init()
+	registerEmptyHistoricalLineageResults(bh)
+	bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+	t.Cleanup(func() {
+		bhStub.Reset()
+		ses.Close()
+		ctrl.Finish()
+	})
+
+	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+	pu.SV.SetDefaultValues()
+	pu.SV.KillRountinesInterval = 0
+	setPu("", pu)
+	ctx := context.WithValue(context.Background(), config.ParameterUnitKey, pu)
+	rm, _ := NewRoutineManager(ctx, "")
+	ses.rm = rm
+	ses.SetTenantInfo(&TenantInfo{
+		Tenant:        sysAccountName,
+		User:          rootName,
+		DefaultRole:   moAdminRoleName,
+		TenantID:      sysAccountID,
+		UserID:        rootID,
+		DefaultRoleID: moAdminRoleID,
+	})
+
+	bh.sql2result["begin;"] = nil
+	bh.sql2result["commit;"] = nil
+	bh.sql2result["rollback;"] = nil
+	return ses, bh, ctx
+}
+
+func TestDoDropPitrCompactsHistoricalAlterLineage(t *testing.T) {
+	ses, bh, ctx := newPitrLifecycleTestSession(t)
+	stmt := &tree.DropPitr{Name: "pitr01"}
+
+	checkSQL, err := getSqlForCheckPitr(ctx, "pitr01", sysAccountID)
+	require.NoError(t, err)
+	bh.sql2result[checkSQL] = newMrsForPitrRecord([][]interface{}{{"pitr-id"}})
+	bh.sql2result[getSqlForDropPitr("pitr01", sysAccountID)] = nil
+	otherSQL := fmt.Sprintf(getPitrFormat+" where pitr_name != '%s';", SYSMOCATALOGPITR)
+	bh.sql2result[otherSQL] = newMrsForPitrRecord(nil)
+	bh.sql2result[getSqlForDropPitr(SYSMOCATALOGPITR, sysAccountID)] = nil
+
+	require.NoError(t, doDropPitr(ctx, ses, stmt))
+	require.Contains(t, bh.executedSQLs, historicalAlterLineageMetadataSQL())
+}
+
+func TestDoAlterPitrCompactsHistoricalAlterLineage(t *testing.T) {
+	ses, bh, ctx := newPitrLifecycleTestSession(t)
+	stmt := &tree.AlterPitr{Name: "pitr01", PitrValue: 1, PitrUnit: "h"}
+
+	checkSQL, err := getSqlForCheckPitr(ctx, "pitr01", sysAccountID)
+	require.NoError(t, err)
+	bh.sql2result[checkSQL] = newMrsForPitrRecord([][]interface{}{{"pitr-id"}})
+
+	require.NoError(t, doAlterPitr(ctx, ses, stmt))
+	require.Contains(t, bh.executedSQLs, historicalAlterLineageMetadataSQL())
 }

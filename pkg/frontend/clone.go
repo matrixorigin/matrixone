@@ -17,21 +17,30 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 const (
@@ -68,6 +77,345 @@ type cloneReceipt struct {
 	srcTableID     uint64
 	dstTableID     uint64
 	srcAccountName string
+}
+
+type dataBranchCloneLockCtxKey struct{}
+
+func shouldLockDataBranchCloneSource(snapshot *plan.Snapshot) bool {
+	// A named snapshot already publishes a durable historical owner before the
+	// clone runs. Timestamp hints carry only TS/Tenant, so they still need the
+	// live source-row lock to serialize metadata publication with COPY ALTER.
+	return snapshot == nil || snapshot.ExtraInfo == nil
+}
+
+func isTimestampDataBranchCloneSource(snapshot *plan.Snapshot) bool {
+	return snapshot != nil && snapshot.TS != nil && snapshot.ExtraInfo == nil
+}
+
+func shouldRevalidateTimestampDataBranchCloneSource(
+	ctx context.Context,
+	snapshot *plan.Snapshot,
+) bool {
+	dataBranchClone, _ := ctx.Value(dataBranchCloneLockCtxKey{}).(bool)
+	return dataBranchClone && isTimestampDataBranchCloneSource(snapshot)
+}
+
+func shouldLockNamedDataBranchCloneSnapshot(
+	ctx context.Context,
+	snapshot *plan.Snapshot,
+) bool {
+	dataBranchClone, _ := ctx.Value(dataBranchCloneLockCtxKey{}).(bool)
+	return dataBranchClone && snapshot != nil && snapshot.TS != nil &&
+		snapshot.ExtraInfo != nil && snapshot.ExtraInfo.Name != ""
+}
+
+func namedDataBranchCloneSnapshotLockSQL(
+	ctx context.Context,
+	snapshotName string,
+) (string, error) {
+	if err := inputNameIsInvalid(ctx, snapshotName); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(
+		"%s where sname = '%s' for update",
+		getSnapshotFormat, snapshotName,
+	), nil
+}
+
+func validateNamedDataBranchCloneSnapshotRecord(
+	snapshot *plan.Snapshot,
+	record *snapshotRecord,
+) error {
+	if record == nil || snapshot == nil || snapshot.TS == nil || snapshot.ExtraInfo == nil ||
+		record.snapshotName != snapshot.ExtraInfo.Name ||
+		record.ts != snapshot.TS.PhysicalTime ||
+		record.level != snapshot.ExtraInfo.Level ||
+		record.objId != snapshot.ExtraInfo.ObjId ||
+		record.kind == branchSnapshotKind {
+		return moerr.NewTxnNeedRetryWithDefChangedNoCtx()
+	}
+	return nil
+}
+
+func lockNamedDataBranchCloneSnapshot(
+	ctx context.Context,
+	bh BackgroundExec,
+	snapshot *plan.Snapshot,
+) error {
+	if !shouldLockNamedDataBranchCloneSnapshot(ctx, snapshot) {
+		return nil
+	}
+	sql, err := namedDataBranchCloneSnapshotLockSQL(ctx, snapshot.ExtraInfo.Name)
+	if err != nil {
+		return err
+	}
+	records, err := getSnapshotRecords(ctx, bh, sql)
+	if err != nil {
+		return err
+	}
+	if len(records) != 1 {
+		return moerr.NewTxnNeedRetryWithDefChangedNoCtx()
+	}
+	return validateNamedDataBranchCloneSnapshotRecord(snapshot, records[0])
+}
+
+func validateTimestampDataBranchSourceIDs(
+	selectedTableID, currentTableID uint64,
+	dag *databranchutils.DataBranchDAG,
+) error {
+	if selectedTableID == currentTableID {
+		return nil
+	}
+	if dag != nil {
+		if _, _, _, ok := dag.FindLCA(selectedTableID, currentTableID); ok {
+			return nil
+		}
+	}
+	return moerr.NewInvalidInputNoCtx(
+		"data branch: timestamp source generation is not connected to the current table",
+	)
+}
+
+func validateTimestampDataBranchSourceAfterLock(
+	snapshot *plan.Snapshot,
+	resolveTableID func(*plan.Snapshot) (uint64, error),
+	loadDAG func() (*databranchutils.DataBranchDAG, error),
+) error {
+	if !isTimestampDataBranchCloneSource(snapshot) {
+		return nil
+	}
+	selectedTableID, err := resolveTableID(snapshot)
+	if err != nil {
+		return err
+	}
+	currentTableID, err := resolveTableID(nil)
+	if err != nil {
+		return err
+	}
+	if selectedTableID == currentTableID {
+		return nil
+	}
+	dag, err := loadDAG()
+	if err != nil {
+		return err
+	}
+	return validateTimestampDataBranchSourceIDs(selectedTableID, currentTableID, dag)
+}
+
+func revalidateTimestampDataBranchCloneSource(
+	ctx context.Context,
+	ses *Session,
+	bh BackgroundExec,
+	snapshot *plan.Snapshot,
+	fromAccountID uint32,
+	databaseName, tableName string,
+) error {
+	if !isTimestampDataBranchCloneSource(snapshot) {
+		return nil
+	}
+
+	sourceCtx := defines.AttachAccountId(ctx, fromAccountID)
+	tcc := ses.GetTxnCompileCtx()
+	originalCtx := tcc.GetContext()
+	tcc.SetContext(sourceCtx)
+	defer tcc.SetContext(originalCtx)
+
+	return validateTimestampDataBranchSourceAfterLock(
+		snapshot,
+		func(at *plan.Snapshot) (uint64, error) {
+			_, tableDef, err := tcc.Resolve(databaseName, tableName, at)
+			if err != nil {
+				return 0, err
+			}
+			if tableDef == nil {
+				return 0, moerr.NewNoSuchTable(sourceCtx, databaseName, tableName)
+			}
+			return tableDef.TblId, nil
+		},
+		func() (*databranchutils.DataBranchDAG, error) {
+			return constructBranchDAGForUpdate(ctx, ses, bh)
+		},
+	)
+}
+
+func withDataBranchCloneSourceLock(
+	snapshot *plan.Snapshot,
+	lockSource func() error,
+) error {
+	if !shouldLockDataBranchCloneSource(snapshot) {
+		return nil
+	}
+	return lockSource()
+}
+
+func withDataBranchCloneLockContext(
+	proc *process.Process,
+	ctx context.Context,
+	lockRows func() error,
+) error {
+	oldCtx := proc.Ctx
+	proc.Ctx = ctx
+	defer func() {
+		proc.Ctx = oldCtx
+	}()
+	return lockRows()
+}
+
+func lockDataBranchCloneSource(
+	ctx context.Context,
+	ses *Session,
+	fromAccountID uint32,
+	databaseName, tableName string,
+) error {
+	if locked, _ := ctx.Value(dataBranchCloneLockCtxKey{}).(bool); !locked {
+		return nil
+	}
+	txnOp := ses.proc.GetTxnOperator()
+	if err := validateDataBranchCreateTxn(txnOp.Txn().IsPessimistic()); err != nil {
+		return err
+	}
+	sourceCtx := defines.AttachAccountId(ctx, fromAccountID)
+	eng := ses.proc.GetSessionInfo().StorageEngine
+	db, err := eng.Database(sourceCtx, catalog.MO_CATALOG, txnOp)
+	if err != nil {
+		return err
+	}
+	rel, err := db.Relation(sourceCtx, catalog.MO_TABLES, nil)
+	if err != nil {
+		return err
+	}
+	lockBat, err := dataBranchCloneCatalogLockBatch(
+		ses.proc, fromAccountID, databaseName, tableName,
+	)
+	if err != nil {
+		return err
+	}
+	defer lockBat.Vecs[0].Free(ses.proc.Mp())
+	// ALTER locks this exact mo_tables composite key exclusively. A shared
+	// catalog-row lock serializes source-ID/snapshot selection with ALTER while
+	// allowing source-table DML and sibling branch clones to continue.
+	return withDataBranchCloneLockContext(ses.proc, sourceCtx, func() error {
+		return lockop.LockRows(
+			eng,
+			ses.proc,
+			rel,
+			rel.GetTableID(sourceCtx),
+			lockBat,
+			0,
+			*lockBat.Vecs[0].GetType(),
+			lock.LockMode_Shared,
+			lock.Sharding_None,
+			fromAccountID,
+		)
+	})
+}
+
+func dataBranchCloneCatalogLockBatch(
+	proc *process.Process,
+	accountID uint32,
+	databaseName, tableName string,
+) (*batch.Batch, error) {
+	inputs := make([]*vector.Vector, 3)
+	defer func() {
+		for _, input := range inputs {
+			if input != nil {
+				input.Free(proc.GetMPool())
+			}
+		}
+	}()
+	inputs[0] = vector.NewVec(types.T_uint32.ToType())
+	if err := vector.AppendFixed(inputs[0], accountID, false, proc.GetMPool()); err != nil {
+		return nil, err
+	}
+	for i, name := range []string{databaseName, tableName} {
+		inputs[i+1] = vector.NewVec(types.T_varchar.ToType())
+		if err := vector.AppendBytes(inputs[i+1], []byte(name), false, proc.GetMPool()); err != nil {
+			return nil, err
+		}
+	}
+	encoded, err := function.RunFunctionDirectly(
+		proc, function.SerialFunctionEncodeID, inputs, 1,
+	)
+	if err != nil {
+		return nil, err
+	}
+	bat := batch.NewWithSize(1)
+	bat.SetVector(0, encoded)
+	return bat, nil
+}
+
+func lockDataBranchCloneDatabaseSources(
+	ctx context.Context,
+	ses *Session,
+	source cloneDatabaseSource,
+) error {
+	if locked, _ := ctx.Value(dataBranchCloneLockCtxKey{}).(bool); !locked {
+		return nil
+	}
+	if !shouldLockDataBranchCloneSource(source.snapshot) {
+		return nil
+	}
+	fromAccountID := source.opAccountId
+	if source.snapshot != nil && source.snapshot.Tenant != nil {
+		fromAccountID = source.snapshot.Tenant.TenantID
+	}
+	tables := append([]*tableInfo(nil), source.srcTblInfos...)
+	sort.Slice(tables, func(i, j int) bool {
+		if tables[i].dbName != tables[j].dbName {
+			return tables[i].dbName < tables[j].dbName
+		}
+		return tables[i].tblName < tables[j].tblName
+	})
+	for _, table := range tables {
+		if table.typ == view {
+			continue
+		}
+		if err := lockDataBranchCloneSource(
+			ctx, ses, fromAccountID, table.dbName, table.tblName,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func revalidateTimestampDataBranchCloneDatabaseSource(
+	ctx context.Context,
+	ses *Session,
+	bh BackgroundExec,
+	source cloneDatabaseSource,
+) error {
+	if !shouldRevalidateTimestampDataBranchCloneSource(ctx, source.snapshot) {
+		return nil
+	}
+	if _, err := tryToIncreaseTxnPhysicalTS(ctx, ses.proc.GetTxnOperator()); err != nil {
+		return err
+	}
+	fromAccountID := source.opAccountId
+	if source.snapshot.Tenant != nil {
+		fromAccountID = source.snapshot.Tenant.TenantID
+	}
+	return forEachCloneDatabaseSourceTable(source, func(table *tableInfo) error {
+		return revalidateTimestampDataBranchCloneSource(
+			ctx, ses, bh, source.snapshot, fromAccountID,
+			table.dbName, table.tblName,
+		)
+	})
+}
+
+func forEachCloneDatabaseSourceTable(
+	source cloneDatabaseSource,
+	fn func(*tableInfo) error,
+) error {
+	for _, table := range source.srcTblInfos {
+		if table.typ == view {
+			continue
+		}
+		if err := fn(table); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func getBackExecutor(
@@ -317,6 +665,42 @@ func handleCloneTable(
 		err = moerr.NewInternalErrorNoCtxf("only sys can clone table to another account")
 		return
 	}
+	if err = lockNamedDataBranchCloneSnapshot(
+		defines.AttachAccountId(reqCtx, fromAccountId), bh, snapshot,
+	); err != nil {
+		return
+	}
+	if err = withDataBranchCloneSourceLock(snapshot, func() error {
+		return lockDataBranchCloneSource(
+			reqCtx,
+			ses,
+			fromAccountId,
+			stmt.SrcTable.SchemaName.String(),
+			stmt.SrcTable.ObjectName.String(),
+		)
+	}); err != nil {
+		return
+	}
+	if shouldRevalidateTimestampDataBranchCloneSource(reqCtx, snapshot) {
+		// The timestamp was resolved before waiting for the source-row lock.
+		// Advance the RC snapshot while the lock is held, then ensure an ALTER
+		// that won the lock either preserved a path to the selected generation
+		// or causes this branch creation to fail before publishing metadata.
+		if _, err = tryToIncreaseTxnPhysicalTS(reqCtx, ses.proc.GetTxnOperator()); err != nil {
+			return
+		}
+		if err = revalidateTimestampDataBranchCloneSource(
+			reqCtx,
+			ses,
+			bh,
+			snapshot,
+			fromAccountId,
+			stmt.SrcTable.SchemaName.String(),
+			stmt.SrcTable.ObjectName.String(),
+		); err != nil {
+			return
+		}
+	}
 
 	ctx = defines.AttachAccountId(reqCtx, toAccountId)
 
@@ -441,6 +825,21 @@ func handleCloneDatabaseWithSource(
 			return
 		}
 	}
+	fromAccountID := source.opAccountId
+	if source.snapshot != nil && source.snapshot.Tenant != nil {
+		fromAccountID = source.snapshot.Tenant.TenantID
+	}
+	if err = lockNamedDataBranchCloneSnapshot(
+		defines.AttachAccountId(reqCtx, fromAccountID), bh, source.snapshot,
+	); err != nil {
+		return
+	}
+	if err = lockDataBranchCloneDatabaseSources(reqCtx, ses, source); err != nil {
+		return
+	}
+	if err = revalidateTimestampDataBranchCloneDatabaseSource(reqCtx, ses, bh, source); err != nil {
+		return
+	}
 
 	ctx1 = defines.AttachAccountId(reqCtx, source.toAccountId)
 	if err = bh.Exec(ctx1,
@@ -488,7 +887,9 @@ func handleCloneDatabaseWithSource(
 		var (
 			receipt     cloneReceipt
 			tempExecCtx = &ExecCtx{
-				reqCtx: reqCtx,
+				// Database clone already holds every source-row lock in sorted
+				// order, so nested table clones must not acquire them again.
+				reqCtx: context.WithValue(reqCtx, dataBranchCloneLockCtxKey{}, false),
 			}
 		)
 
@@ -675,7 +1076,10 @@ func updateBranchMetaTable(
 	tcc.SetContext(srcCtx)
 	defer tcc.SetContext(origCtx)
 
-	if _, srcTblDef, err = tcc.Resolve(receipt.srcDb, receipt.srcTbl, nil); err != nil {
+	// The metadata parent must be the physical generation that supplied the
+	// clone data. For snapshot clones that can differ from the table currently
+	// reachable by name after one or more copy-and-swap ALTERs.
+	if _, srcTblDef, err = tcc.Resolve(receipt.srcDb, receipt.srcTbl, receipt.snapshot); err != nil {
 		return err
 	}
 	if srcTblDef == nil {

@@ -18,13 +18,19 @@ type DataBranchMetadata struct {
 	TableID      uint64
 	CloneTS      int64
 	PTableID     uint64
+	Creator      uint64
+	Level        string
 	TableDeleted bool
+	LineageOnly  bool
 }
 
 type dagNode struct {
 	TableID  uint64
 	CloneTS  int64
 	ParentID uint64
+	// LineageOnly marks copy-and-swap generations (for example ALTER)
+	// that preserve one logical branch rather than creating a new fork.
+	LineageOnly bool
 
 	Parent *dagNode
 	Depth  int
@@ -59,6 +65,7 @@ func NewDAG(rows []DataBranchMetadata) *DataBranchDAG {
 
 		node1.CloneTS = row.CloneTS
 		node1.ParentID = row.PTableID
+		node1.LineageOnly = row.LineageOnly
 
 		if _, ok = dag.nodes[row.PTableID]; !ok {
 			node2 = &dagNode{
@@ -112,6 +119,11 @@ func (d *DataBranchDAG) calculateDepth(node *dagNode) int {
 func (d *DataBranchDAG) Exists(tableID uint64) bool {
 	_, ok := d.nodes[tableID]
 	return ok
+}
+
+func (d *DataBranchDAG) IsLineageOnly(tableID uint64) bool {
+	node, ok := d.nodes[tableID]
+	return ok && node.LineageOnly
 }
 
 func (d *DataBranchDAG) HasParent(tableID uint64) bool {
@@ -277,4 +289,32 @@ func (d *DataBranchDAG) PathFromAncestor(descendantID, ancestorID uint64) (
 		node = node.Parent
 	}
 	return nil, nil, false
+}
+
+// PathFromRoot returns the complete top-down physical/logical lineage ending
+// at descendantID. It is used when two endpoints have no shared LCA: each
+// side still has to reconstruct its own state across copy-and-swap ALTER
+// generations instead of scanning only the current physical table.
+func (d *DataBranchDAG) PathFromRoot(descendantID uint64) (
+	tableIDs []uint64,
+	cloneTSes []int64,
+	ok bool,
+) {
+	node, exists := d.nodes[descendantID]
+	if !exists {
+		return nil, nil, false
+	}
+	for steps := 0; node != nil && steps < maxBranchDAGDepth; steps++ {
+		tableIDs = append(tableIDs, node.TableID)
+		cloneTSes = append(cloneTSes, node.CloneTS)
+		node = node.Parent
+	}
+	if node != nil {
+		return nil, nil, false
+	}
+	for i, j := 0, len(tableIDs)-1; i < j; i, j = i+1, j-1 {
+		tableIDs[i], tableIDs[j] = tableIDs[j], tableIDs[i]
+		cloneTSes[i], cloneTSes[j] = cloneTSes[j], cloneTSes[i]
+	}
+	return tableIDs, cloneTSes, true
 }

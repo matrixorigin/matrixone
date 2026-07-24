@@ -177,6 +177,36 @@ func TestDataBranchOutputTableSpec(t *testing.T) {
 		require.Equal(t, []string{"__mo_diff_source", "__mo_diff_flag", "name", "id"}, output.columnNames)
 	})
 
+	t.Run("target-only column uses target type and remains nullable", func(t *testing.T) {
+		targetDef := tarRel.GetTableDef(ctx)
+		targetDef.Cols = append(targetDef.Cols, &plan.ColDef{
+			Name: "extra", ColId: 5, Seqnum: 4,
+			Typ: plan.Type{Id: int32(types.T_int32), NotNullable: true},
+		})
+		defer func() { targetDef.Cols = targetDef.Cols[:len(targetDef.Cols)-1] }()
+
+		targetOnlyTblStuff := tblStuff
+		targetOnlyTblStuff.def.colNames = append(
+			append([]string(nil), tblStuff.def.colNames...), "extra",
+		)
+		targetOnlyTblStuff.def.colTypes = append(
+			append([]types.Type(nil), tblStuff.def.colTypes...), types.T_int32.ToType(),
+		)
+		targetOnlyTblStuff.def.visibleIdxes = append(
+			append([]int(nil), tblStuff.def.visibleIdxes...), 4,
+		)
+		targetOnlyTblStuff.def.tarOnlyIdxes = []int{4}
+
+		output, err := newDiffOutputTable(ctx, ses, &tree.DataBranchDiff{
+			OutputOpt: &tree.DiffOutputOpt{As: *outName},
+		}, targetOnlyTblStuff)
+		require.NoError(t, err)
+		sql, err := output.createSQL(ctx, targetOnlyTblStuff)
+		require.NoError(t, err)
+		require.Contains(t, sql, "`extra` INT default null")
+		require.NotContains(t, sql, "`extra` INT not null")
+	})
+
 	t.Run("renamed target column retains target name and base type", func(t *testing.T) {
 		renamedTargetDef := tblStuff.tarRel.GetTableDef(ctx)
 		renamedTargetDef.Cols[1].Name = "display_name"
@@ -781,7 +811,7 @@ func TestDataBranchOutputWriteRowValues(t *testing.T) {
 	row := []any{int64(7), "alice"}
 
 	insertBuf := &bytes.Buffer{}
-	require.NoError(t, writeInsertRowValues(nil, tblStuff, row, insertBuf))
+	require.NoError(t, writeInsertRowValues(nil, tblStuff, row, insertBuf, tblStuff.def.visibleIdxes))
 	require.Equal(t, "(7,'alice')", insertBuf.String())
 
 	deleteBuf := &bytes.Buffer{}
@@ -1294,6 +1324,31 @@ func TestDataBranchOutputNewSingleWriteAppenderSubmitFail(t *testing.T) {
 
 	_, _, err = newSingleWriteAppender(ctx, pool, etlFS, "diff.sql", nil)
 	require.Error(t, err)
+}
+
+func TestNewApplyBatchInfoUsesCommonVisibleColumnsForEvolvedSchema(t *testing.T) {
+	ctx := context.Background()
+	ses := newValidateSession(t)
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	tblStuff := newTestBranchTableStuff(ctrl)
+	tblStuff.def.colNames = []string{"a", "__mo_cbkey_001a", "c", "b"}
+	tblStuff.def.colTypes = []types.Type{
+		types.T_int64.ToType(),
+		types.T_varchar.ToType(),
+		types.T_int64.ToType(),
+		types.T_int64.ToType(),
+	}
+	tblStuff.def.visibleIdxes = []int{0, 2, 3}
+	tblStuff.def.commonIdxes = []int{0, 1, 3}
+	tblStuff.def.commonVisibleIdxes = []int{0, 3}
+	tblStuff.def.tarOnlyIdxes = []int{2}
+
+	info := newApplyBatchInfo(ctx, ses, tblStuff, []int{0}, false)
+	require.NotNil(t, info)
+	require.Equal(t, []string{"a"}, info.deleteKeyNames)
+	require.Equal(t, []string{"a", "b"}, info.visibleNames)
 }
 
 func TestDataBranchOutputRemoveFileIgnoreError(t *testing.T) {

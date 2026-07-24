@@ -15,13 +15,356 @@
 package frontend
 
 import (
+	"context"
+	"errors"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 )
+
+func TestWithDataBranchCloneLockContext(t *testing.T) {
+	proc := newValidateSession(t).proc
+	oldCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	proc.Ctx = oldCtx
+
+	lockCtx := context.WithValue(context.Background(), struct{}{}, "current")
+	wantErr := errors.New("lock failed")
+	err := withDataBranchCloneLockContext(proc, lockCtx, func() error {
+		require.Same(t, lockCtx, proc.Ctx)
+		require.NoError(t, proc.Ctx.Err())
+		return wantErr
+	})
+
+	require.ErrorIs(t, err, wantErr)
+	require.Same(t, oldCtx, proc.Ctx)
+}
+
+func TestDataBranchCloneCatalogLockBatch(t *testing.T) {
+	ses := newValidateSession(t)
+	mp := ses.proc.Mp()
+	baseline := mp.CurrNB()
+
+	bat, err := dataBranchCloneCatalogLockBatch(ses.proc, 7, "db", "tbl")
+	require.NoError(t, err)
+	require.Len(t, bat.Vecs, 1)
+	require.Equal(t, 1, bat.Vecs[0].Length())
+	require.NotEmpty(t, bat.Vecs[0].GetBytesAt(0))
+	bat.Vecs[0].Free(mp)
+	require.Equal(t, baseline, mp.CurrNB())
+}
+
+func TestShouldLockDataBranchCloneSource(t *testing.T) {
+	timestampSource := &plan.Snapshot{
+		TS: &timestamp.Timestamp{PhysicalTime: 42},
+	}
+	namedSnapshotSource := &plan.Snapshot{
+		TS: &timestamp.Timestamp{PhysicalTime: 42},
+		ExtraInfo: &plan.SnapshotExtraInfo{
+			Name: "snap",
+		},
+	}
+
+	require.True(t, shouldLockDataBranchCloneSource(nil))
+	require.True(t, shouldLockDataBranchCloneSource(timestampSource))
+	require.False(t, shouldLockDataBranchCloneSource(namedSnapshotSource))
+}
+
+func TestShouldRevalidateTimestampDataBranchCloneSource(t *testing.T) {
+	timestampSource := &plan.Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 42}}
+	namedSnapshotSource := &plan.Snapshot{
+		TS:        &timestamp.Timestamp{PhysicalTime: 42},
+		ExtraInfo: &plan.SnapshotExtraInfo{Name: "snap"},
+	}
+
+	require.False(t, shouldRevalidateTimestampDataBranchCloneSource(
+		context.Background(), timestampSource,
+	))
+	dataBranchCtx := context.WithValue(
+		context.Background(), dataBranchCloneLockCtxKey{}, true,
+	)
+	require.True(t, shouldRevalidateTimestampDataBranchCloneSource(
+		dataBranchCtx, timestampSource,
+	))
+	require.False(t, shouldRevalidateTimestampDataBranchCloneSource(
+		dataBranchCtx, namedSnapshotSource,
+	))
+}
+
+func TestShouldLockNamedDataBranchCloneSnapshot(t *testing.T) {
+	ctx := context.WithValue(context.Background(), dataBranchCloneLockCtxKey{}, true)
+	named := &plan.Snapshot{
+		TS:        &timestamp.Timestamp{PhysicalTime: 42},
+		ExtraInfo: &plan.SnapshotExtraInfo{Name: "snap"},
+	}
+	require.True(t, shouldLockNamedDataBranchCloneSnapshot(ctx, named))
+	require.False(t, shouldLockNamedDataBranchCloneSnapshot(context.Background(), named))
+	require.False(t, shouldLockNamedDataBranchCloneSnapshot(ctx,
+		&plan.Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 42}},
+	))
+}
+
+func TestLockNamedDataBranchCloneSnapshot(t *testing.T) {
+	ctx := context.WithValue(context.Background(), dataBranchCloneLockCtxKey{}, true)
+	snapshot := &plan.Snapshot{
+		TS: &timestamp.Timestamp{PhysicalTime: 42},
+		ExtraInfo: &plan.SnapshotExtraInfo{
+			Name:  "snap",
+			Level: "table",
+			ObjId: 7,
+		},
+	}
+	lockSQL, err := namedDataBranchCloneSnapshotLockSQL(ctx, "snap")
+	require.NoError(t, err)
+	require.Equal(t,
+		"select * from mo_catalog.mo_snapshots where sname = 'snap' for update",
+		lockSQL,
+	)
+
+	t.Run("matching snapshot is locked", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		bh.sql2result[lockSQL] = newMrsForSnapshotRecord(
+			"id", "snap", 42, "table", "acc", "db", "tbl", 7,
+		)
+		require.NoError(t, lockNamedDataBranchCloneSnapshot(ctx, bh, snapshot))
+		require.Equal(t, []string{lockSQL}, bh.executedSQLs)
+	})
+
+	for _, tc := range []struct {
+		name   string
+		record *MysqlResultSet
+	}{
+		{name: "drop won the row lock", record: newMrsEmpty()},
+		{name: "same name was recreated", record: newMrsForSnapshotRecord(
+			"new-id", "snap", 43, "table", "acc", "db", "tbl", 7,
+		)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bh := &backgroundExecTest{}
+			bh.init()
+			bh.sql2result[lockSQL] = tc.record
+			err := lockNamedDataBranchCloneSnapshot(ctx, bh, snapshot)
+			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged))
+		})
+	}
+}
+
+func TestBranchDAGSelectSQLLocksTimestampValidation(t *testing.T) {
+	require.NotContains(t, branchDAGSelectSQL(false), "for update")
+	require.Equal(t,
+		"select table_id, clone_ts, p_table_id, level, table_deleted from "+
+			"mo_catalog.mo_branch_metadata for update",
+		branchDAGSelectSQL(true),
+	)
+}
+
+func TestTimestampDataBranchCloneWaitsForAlterPublication(t *testing.T) {
+	timestampSource := &plan.Snapshot{
+		TS: &timestamp.Timestamp{PhysicalTime: 42},
+	}
+	var catalogRow sync.RWMutex
+	catalogRow.Lock() // COPY ALTER holds the exclusive publication lock.
+
+	entered := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- withDataBranchCloneSourceLock(timestampSource, func() error {
+			close(entered)
+			catalogRow.RLock()
+			defer catalogRow.RUnlock()
+			return validateTimestampDataBranchSourceAfterLock(
+				timestampSource,
+				func(at *plan.Snapshot) (uint64, error) {
+					if at != nil {
+						return 1, nil // timestamp selected the old generation
+					}
+					return 2, nil // ALTER published the new current generation
+				},
+				func() (*databranchutils.DataBranchDAG, error) {
+					return databranchutils.NewDAG(nil), nil
+				},
+			)
+		})
+	}()
+
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("timestamp clone did not enter the shared source-lock path")
+	}
+	select {
+	case err := <-done:
+		t.Fatalf("timestamp clone bypassed the ALTER publication lock: %v", err)
+	default:
+	}
+
+	catalogRow.Unlock()
+	select {
+	case err := <-done:
+		require.ErrorContains(t, err, "timestamp source generation is not connected")
+	case <-time.After(time.Second):
+		t.Fatal("timestamp clone did not resume after ALTER released the lock")
+	}
+}
+
+func TestValidateTimestampDataBranchSourceIDs(t *testing.T) {
+	t.Run("same generation", func(t *testing.T) {
+		require.NoError(t, validateTimestampDataBranchSourceIDs(1, 1, nil))
+	})
+
+	t.Run("alter first without lineage is rejected", func(t *testing.T) {
+		dag := databranchutils.NewDAG(nil)
+		err := validateTimestampDataBranchSourceIDs(1, 2, dag)
+		require.ErrorContains(t, err, "timestamp source generation is not connected")
+	})
+
+	t.Run("preserved alter lineage is accepted", func(t *testing.T) {
+		dag := databranchutils.NewDAG([]databranchutils.DataBranchMetadata{
+			{TableID: 2, PTableID: 1, LineageOnly: true},
+		})
+		require.NoError(t, validateTimestampDataBranchSourceIDs(1, 2, dag))
+	})
+}
+
+func TestValidateTimestampDataBranchSourceAfterLock(t *testing.T) {
+	timestampSource := &plan.Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 42}}
+	var resolved []*plan.Snapshot
+	dagLoaded := false
+	err := validateTimestampDataBranchSourceAfterLock(
+		timestampSource,
+		func(at *plan.Snapshot) (uint64, error) {
+			resolved = append(resolved, at)
+			if at != nil {
+				return 1, nil
+			}
+			return 2, nil
+		},
+		func() (*databranchutils.DataBranchDAG, error) {
+			dagLoaded = true
+			return databranchutils.NewDAG([]databranchutils.DataBranchMetadata{
+				{TableID: 2, PTableID: 1, LineageOnly: true},
+			}), nil
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, []*plan.Snapshot{timestampSource, nil}, resolved)
+	require.True(t, dagLoaded)
+}
+
+func TestTimestampDataBranchDatabaseRevalidatesEveryTableAfterAllLocks(t *testing.T) {
+	timestampSource := &plan.Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 42}}
+	var catalogRows sync.RWMutex
+	catalogRows.Lock() // COPY ALTER holds one source row exclusively.
+
+	enteredLockPath := make(chan struct{})
+	allLocksHeld := make(chan struct{})
+	validated := make(chan string, 2)
+	done := make(chan error, 1)
+	go func() {
+		// Database clone acquires all source locks before revalidating any table.
+		close(enteredLockPath)
+		catalogRows.RLock()
+		close(allLocksHeld)
+		defer catalogRows.RUnlock()
+		source := cloneDatabaseSource{srcTblInfos: []*tableInfo{
+			{dbName: "db", tblName: "t1"},
+			{dbName: "db", tblName: "v", typ: view},
+			{dbName: "db", tblName: "t2"},
+		}}
+		done <- forEachCloneDatabaseSourceTable(source, func(table *tableInfo) error {
+			err := validateTimestampDataBranchSourceAfterLock(
+				timestampSource,
+				func(at *plan.Snapshot) (uint64, error) {
+					if at != nil {
+						return 1, nil
+					}
+					return 1, nil
+				},
+				func() (*databranchutils.DataBranchDAG, error) {
+					return databranchutils.NewDAG(nil), nil
+				},
+			)
+			if err != nil {
+				return err
+			}
+			validated <- table.tblName
+			return nil
+		})
+	}()
+
+	<-enteredLockPath
+	select {
+	case <-allLocksHeld:
+		t.Fatal("database clone acquired all locks before ALTER released its row")
+	default:
+	}
+	catalogRows.Unlock()
+	select {
+	case <-allLocksHeld:
+	case <-time.After(time.Second):
+		t.Fatal("database clone did not acquire all source locks")
+	}
+	require.NoError(t, <-done)
+	require.ElementsMatch(t, []string{"t1", "t2"}, []string{<-validated, <-validated})
+}
+
+func TestTimestampDataBranchValidationLockCoversPublication(t *testing.T) {
+	timestampSource := &plan.Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 42}}
+	var lineageRows sync.Mutex
+	validated := make(chan struct{})
+	gcStarted := make(chan struct{})
+	gcDone := make(chan struct{})
+
+	lineageRows.Lock() // SELECT ... FOR UPDATE, held until clone transaction commit.
+	err := validateTimestampDataBranchSourceAfterLock(
+		timestampSource,
+		func(at *plan.Snapshot) (uint64, error) {
+			if at != nil {
+				return 1, nil
+			}
+			return 2, nil
+		},
+		func() (*databranchutils.DataBranchDAG, error) {
+			return databranchutils.NewDAG([]databranchutils.DataBranchMetadata{
+				{TableID: 2, PTableID: 1, LineageOnly: true},
+			}), nil
+		},
+	)
+	require.NoError(t, err)
+	close(validated)
+
+	go func() {
+		close(gcStarted)
+		lineageRows.Lock() // Compaction uses the same FOR UPDATE lock.
+		lineageRows.Unlock()
+		close(gcDone)
+	}()
+
+	<-gcStarted
+	select {
+	case <-gcDone:
+		t.Fatal("lineage compaction passed validation before branch publication")
+	default:
+	}
+	<-validated
+	// updateBranchMetaTable and createBranchProtectSnapshot run before this
+	// transaction commits and releases the lineage-row lock.
+	lineageRows.Unlock()
+	select {
+	case <-gcDone:
+	case <-time.After(time.Second):
+		t.Fatal("lineage compaction did not resume after branch publication")
+	}
+}
 
 func Test_prepareCloneViewSnapshot(t *testing.T) {
 	original := &plan.Snapshot{
