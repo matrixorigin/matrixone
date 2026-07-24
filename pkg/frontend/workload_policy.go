@@ -778,8 +778,9 @@ func ensureWorkloadPolicyFeatureReady(
 		)
 	}
 	// The table upgrade and RPC rollout are separate compatibility barriers.
-	// Refuse the mutation before it commits when mixed-version CNs have kept
-	// the negotiated protocol below the workload-policy RPC version.
+	// This local check fails fast; after the table-version check below, every
+	// CN is queried because local readiness alone cannot prove cluster-wide
+	// readiness during a rolling upgrade.
 	if protocolVersion < defines.MORPCVersion5 {
 		return moerr.NewInternalErrorf(
 			ctx,
@@ -837,7 +838,124 @@ func ensureWorkloadPolicyFeatureReady(
 			readyOffset,
 		)
 	}
-	return nil
+	return ensureWorkloadPolicyRPCReady(ctx, ses)
+}
+
+// ensureWorkloadPolicyRPCReady verifies the capability of every CN in the
+// current cluster snapshot. The local protocol version is not a cluster-wide
+// compatibility barrier during a rolling upgrade: a new CN can default to the
+// latest protocol while an already-running old CN still reports an older one.
+// This check is intentionally confined to the ALTER control plane.
+func ensureWorkloadPolicyRPCReady(
+	ctx context.Context,
+	ses *Session,
+) error {
+	serverVars := getServerLevelVars(ses.GetService())
+	if serverVars == nil || serverVars.Pu.Load() == nil {
+		return moerr.NewInternalError(
+			ctx,
+			"workload policy query client is not initialized",
+		)
+	}
+	qc := getPu(ses.GetService()).QueryClient
+	if qc == nil {
+		return moerr.NewInternalError(
+			ctx,
+			"workload policy query client is not initialized",
+		)
+	}
+
+	checkCtx, cancel := context.WithTimeout(ctx, workloadPolicyPublishTimeout)
+	defer cancel()
+	cluster, err := clusterservice.GetMOClusterWithContext(
+		checkCtx,
+		qc.ServiceID(),
+	)
+	if err != nil {
+		return err
+	}
+
+	var nodes []string
+	nodeIDs := make(map[string]string)
+	if err := clusterservice.GetCNServiceWithoutWorkingStateWithContext(
+		checkCtx,
+		cluster,
+		clusterservice.NewSelectAll(),
+		func(service metadata.CNService) bool {
+			nodes = append(nodes, service.QueryAddress)
+			nodeIDs[service.QueryAddress] = service.ServiceID
+			return true
+		},
+	); err != nil {
+		return err
+	}
+	if len(nodes) == 0 {
+		return moerr.NewInternalError(
+			ctx,
+			"workload policy requires at least one active CN",
+		)
+	}
+	for _, node := range nodes {
+		if node == "" {
+			return moerr.NewInternalErrorf(
+				ctx,
+				"workload policy CN %s has no query address",
+				nodeIDs[node],
+			)
+		}
+	}
+
+	var responseErr error
+	genRequest := func() *query.Request {
+		request := qc.NewRequest(query.CmdMethod_GetProtocolVersion)
+		request.GetProtocolVersion = &query.GetProtocolVersionRequest{}
+		return request
+	}
+	handleValidResponse := func(node string, response *query.Response) {
+		if response == nil || response.GetProtocolVersion == nil {
+			responseErr = errors.Join(
+				responseErr,
+				moerr.NewInternalErrorf(
+					ctx,
+					"CN %s returned an empty protocol version response",
+					nodeIDs[node],
+				),
+			)
+			return
+		}
+		version := response.GetProtocolVersion.Version
+		if version < defines.MORPCVersion5 {
+			responseErr = errors.Join(
+				responseErr,
+				moerr.NewInternalErrorf(
+					ctx,
+					"workload policy requires protocol version %d or later on every CN; CN %s reports version %d",
+					defines.MORPCVersion5,
+					nodeIDs[node],
+					version,
+				),
+			)
+		}
+	}
+	handleInvalidResponse := func(node string) {
+		responseErr = errors.Join(
+			responseErr,
+			moerr.NewInternalErrorf(
+				ctx,
+				"failed to verify workload policy protocol on CN %s",
+				nodeIDs[node],
+			),
+		)
+	}
+	requestErr := queryservice.RequestMultipleCn(
+		checkCtx,
+		nodes,
+		qc,
+		genRequest,
+		handleValidResponse,
+		handleInvalidResponse,
+	)
+	return errors.Join(requestErr, responseErr)
 }
 
 func resolveWorkloadPolicyAccount(

@@ -1563,12 +1563,28 @@ func (c *Compile) workloadTargetNode() (engine.Node, bool) {
 	return c.cnList[0], true
 }
 
+// singleSourceExecutionNode chooses the worker for a physical source that is
+// not distributed across the whole query-worker set. Once a workload policy
+// has resolved an authorized pool, such a source must stay on one of those
+// workers even when the query-level routing mode is multi-worker. The first
+// scheduled worker is deterministic for the statement and keeps the source
+// single-owner without falling back to an out-of-pool ingress CN.
+func (c *Compile) singleSourceExecutionNode() engine.Node {
+	if node, ok := c.workloadTargetNode(); ok {
+		return node
+	}
+	return getEngineNode(c)
+}
+
 func (c *Compile) constructWorkloadScopeForExternal(
 	legacyAddress string,
 	parallel bool,
 ) *Scope {
-	if node, ok := c.workloadTargetNode(); ok {
-		return c.constructScopeForExternalNode(node, parallel)
+	if c.queryPlacement.WorkloadPolicy.Applied {
+		return c.constructScopeForExternalNode(
+			c.singleSourceExecutionNode(),
+			parallel,
+		)
 	}
 	return c.constructScopeForExternal(legacyAddress, parallel)
 }
@@ -1611,6 +1627,25 @@ func (c *Compile) constructLoadMergeScope() *Scope {
 }
 
 func (c *Compile) compileSourceScan(node *plan.Node) ([]*Scope, error) {
+	return c.compileSourceScanWithSizeLoader(
+		node,
+		func(
+			ctx context.Context,
+			configs map[string]interface{},
+		) (int64, error) {
+			return mokafka.GetStreamCurrentSize(
+				ctx,
+				configs,
+				mokafka.NewKafkaAdapter,
+			)
+		},
+	)
+}
+
+func (c *Compile) compileSourceScanWithSizeLoader(
+	node *plan.Node,
+	loadSize func(context.Context, map[string]interface{}) (int64, error),
+) ([]*Scope, error) {
 	_, span := trace.Start(c.proc.Ctx, "compileSourceScan")
 	defer span.End()
 	configs := make(map[string]interface{})
@@ -1623,11 +1658,11 @@ func (c *Compile) compileSourceScan(node *plan.Node) ([]*Scope, error) {
 		}
 	}
 
-	end, err := mokafka.GetStreamCurrentSize(c.proc.Ctx, configs, mokafka.NewKafkaAdapter)
+	end, err := loadSize(c.proc.Ctx, configs)
 	if err != nil {
 		return nil, err
 	}
-	sourceNode := getEngineNode(c)
+	sourceNode := c.singleSourceExecutionNode()
 	parallelism := c.ncpu
 	if c.queryPlacement.WorkloadPolicy.Applied {
 		parallelism = c.executionNodeCPU(sourceNode)
@@ -2029,7 +2064,7 @@ func (c *Compile) compileExternScanWithPlanNodeID(node *plan.Node, planNodeID in
 
 	if len(fileList) == 0 {
 		ret := newScope(Merge)
-		ret.NodeInfo = getEngineNode(c)
+		ret.NodeInfo = c.singleSourceExecutionNode()
 		ret.NodeInfo.Mcpu = 1
 		c.markScopeRemoteWhenNeeded(ret)
 		ret.DataSource = &Source{isConst: true, node: node}
@@ -3226,7 +3261,7 @@ func (c *Compile) generateSeriesParallel(proc *process.Process, node *plan.Node,
 func (c *Compile) compileSingleTableFunction(node *plan.Node) ([]*Scope, error) {
 	currentFirstFlag := c.anal.isFirst
 	ds := newScope(Merge)
-	ds.NodeInfo = getEngineNode(c)
+	ds.NodeInfo = c.singleSourceExecutionNode()
 	ds.DataSource = &Source{isConst: true, node: node}
 	ds.NodeInfo.Mcpu = 1
 	c.markScopeRemoteWhenNeeded(ds)
@@ -3379,7 +3414,7 @@ func (c *Compile) compileTableFunction(node *plan.Node, ss []*Scope) ([]*Scope, 
 
 func (c *Compile) compileValueScan(node *plan.Node) ([]*Scope, error) {
 	ds := newScope(Merge)
-	ds.NodeInfo = getEngineNode(c)
+	ds.NodeInfo = c.singleSourceExecutionNode()
 	ds.DataSource = &Source{isConst: true, node: node}
 	ds.NodeInfo.Mcpu = 1
 	c.markScopeRemoteWhenNeeded(ds)
