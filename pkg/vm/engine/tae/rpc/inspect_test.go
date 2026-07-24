@@ -75,11 +75,7 @@ func TestMergeCommand(t *testing.T) {
 	vector := containers.NewVector(types.T_varchar.ToType())
 	{
 		id := objectio.NewObjectid()
-		stats := objectio.NewObjectStatsWithObjectID(&id, true, true, false)
-		vector.Append(stats.Marshal(), false)
-
-		id = objectio.NewObjectid()
-		stats = objectio.NewObjectStatsWithObjectID(&id, false, true, false)
+		stats := objectio.NewObjectStatsWithObjectID(&id, false, true, false)
 		zm := index.NewZM(types.T_int32, 0)
 		v1 := int32(1)
 		v2 := int32(2)
