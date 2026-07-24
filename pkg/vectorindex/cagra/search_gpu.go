@@ -203,7 +203,9 @@ func (s *CagraSearch[B, Q]) Load(sqlproc *sqlexec.SqlProcess) (err error) {
 	if err != nil {
 		return err
 	}
-	// Capture the generation + durable handles for IsStale (best-effort; same txn as the load).
+	// Capture the generation + durable handles for IsStale (same txn as the load). On capture
+	// failure genValid stays false and IsStale reports the entry as uncheckable-hence-stale
+	// (evict + reload to retry capture) rather than pinning it forever — see IsStale.
 	s.cnUUID = sqlproc.GetService()
 	if acc, e := sqlproc.GetAccountID(); e == nil {
 		if ts, tail, e2 := cachegen.LoadCdcGeneration(sqlproc, s.Tblcfg); e2 == nil {
@@ -217,9 +219,12 @@ func (s *CagraSearch[B, Q]) Load(sqlproc *sqlexec.SqlProcess) (err error) {
 // the metadata timestamp; a CDC append bumps the tag=1 tail chunk_id), for the VectorIndexCache
 // cross-CN freshness check. Runs on the housekeeping goroutine via a background auto-commit txn.
 // A query error ⇒ (true, err): the index was likely dropped/rebuilt, reclaim the dead entry.
+// No captured generation (capture failed at load, or no service to re-query) ⇒ (true, nil): the
+// entry cannot self-check freshness, so evict it to force a reload that retries capture, rather
+// than pinning a hot entry (whose TTL keeps sliding on every search) to serve stale data forever.
 func (s *CagraSearch[B, Q]) IsStale() (bool, error) {
 	if !s.genValid || s.cnUUID == "" {
-		return false, nil
+		return true, nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()

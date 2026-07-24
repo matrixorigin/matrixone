@@ -185,16 +185,11 @@ func NewHnswSync[T types.RealNumbers](sqlproc *sqlexec.SqlProcess,
 	// assume CDC run in single thread
 	// model id for CDC is cdc:1:0:timestamp
 	uid := fmt.Sprintf("%s:%d:%d", "cdc", 1, 0)
-	// UnixMicro (not Unix seconds): the create path writes UnixMicro timestamps
-	// (hnsw_create ToInsertSql), and the metadata timestamp doubles as the cross-CN cache
-	// freshness generation (MAX(timestamp), see cachegen). A seconds-resolution CDC row is
-	// ~1e6x smaller than a create-time UnixMicro row, so it never becomes MAX(timestamp) in a
-	// multi-model index (only the dirty model is replaced) — the generation would not advance
-	// and a warm remote CN would serve stale results. UnixMicro makes each save's timestamp
-	// strictly larger than all prior rows (monotonic generation) and avoids same-second
-	// collisions (which also collided the "uid:ts" model id).
-	ts := time.Now().UnixMicro()
-	sync := &HnswSync[T]{indexes: indexes, idxcfg: idxcfg, tblcfg: idxtblcfg, uid: uid, ts: ts, idxname: idxname}
+	sync := &HnswSync[T]{indexes: indexes, idxcfg: idxcfg, tblcfg: idxtblcfg, uid: uid, idxname: idxname}
+	// Monotonic metadata timestamp (the cross-CN cache-freshness generation) — strictly greater
+	// than every existing model row, not a bare wall-clock value. See nextTimestamp. (Save
+	// recomputes it just before writing; this initial value keeps the uid:ts model id unique.)
+	sync.ts = sync.nextTimestamp()
 
 	// save all model to local by LoadIndex and Unload
 	err = sync.DownloadAll(sqlproc)
@@ -587,12 +582,32 @@ func (s *HnswSync[T]) Update(sqlproc *sqlexec.SqlProcess, cdc *vectorindex.Vecto
 	return nil
 }
 
+// nextTimestamp allocates a metadata timestamp strictly greater than every existing model row.
+// The metadata timestamp is the cross-CN cache-freshness generation (MAX(timestamp), see
+// cachegen), so it must be MONOTONIC — not merely microsecond-resolution wall-clock. time.Now()
+// alone is not enough: CREATE and CDC may run on different CNs with clock skew, or a local clock
+// may step backward, in which case a fresh wall-clock value could be <= an unchanged model row's
+// timestamp; since CDC only replaces the dirty model, MAX(timestamp) would then stay == the
+// value a warm remote CN loaded, and IsStale would miss the update. Allocating above the current
+// max enforces the ordering regardless of the clock. Correct because CDC is single-writer per
+// index (ISCP job ownership): s.indexes (loaded at NewHnswSync) reflects the current persisted
+// max and no concurrent writer can insert between this read and the write.
+func (s *HnswSync[T]) nextTimestamp() int64 {
+	var maxTs int64
+	for _, m := range s.indexes {
+		if m != nil && m.Timestamp > maxTs {
+			maxTs = m.Timestamp
+		}
+	}
+	if now := time.Now().UnixMicro(); now > maxTs {
+		return now
+	}
+	return maxTs + 1
+}
+
 func (s *HnswSync[T]) Save(sqlproc *sqlexec.SqlProcess) error {
 	// save to files and then save to database
-	// UnixMicro (not Unix seconds) — see NewHnswSync: the metadata timestamp is the cross-CN
-	// cache freshness generation, so it must be microsecond-resolution + strictly increasing
-	// per save, matching the create path (hnsw_create UnixMicro).
-	s.ts = time.Now().UnixMicro()
+	s.ts = s.nextTimestamp()
 	sqls, err := s.ToSql(s.ts)
 	if err != nil {
 		return err

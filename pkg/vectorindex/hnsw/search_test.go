@@ -371,11 +371,52 @@ func makeIndexBatch2Files(proc *process.Process, id int) *batch.Batch {
 	return bat
 }
 
-// TestHnswSearchIsStaleNoGeneration: with no generation captured (genValid=false, e.g. a load
-// that never ran or a capture failure), IsStale is a safe no-op — never stale, never errors.
-func TestHnswSearchIsStaleNoGeneration(t *testing.T) {
-	s := &HnswSearch[float32]{}
+// TestHnswSearchIsStaleUncheckableEvicts: the index model loaded fine but generation capture
+// failed (genValid=false — a transient error on the tiny generation SELECT after the model itself
+// loaded). IsStale must report stale, NOT a no-op: an uncheckable entry whose TTL keeps sliding
+// on every search would otherwise serve pre-CDC/rebuild data forever. Reporting stale forces a
+// bounded evict+reload that retries capture and self-heals once it succeeds.
+func TestHnswSearchIsStaleUncheckableEvicts(t *testing.T) {
+	// genValid=false: model present, generation never captured.
+	s := &HnswSearch[float32]{genValid: false, cnUUID: "some-cn"}
 	stale, err := s.IsStale()
 	require.NoError(t, err)
-	require.False(t, stale)
+	require.True(t, stale, "an entry that can't self-check freshness must be evicted, not pinned")
+
+	// no service to re-query with (cnUUID empty) is equally uncheckable → stale.
+	s2 := &HnswSearch[float32]{genValid: true, cnUUID: ""}
+	stale, err = s2.IsStale()
+	require.NoError(t, err)
+	require.True(t, stale)
+}
+
+// TestHnswSyncNextTimestampMonotonic covers the enforced-monotonic generation: even when the
+// existing max timestamp EXCEEDS the writer's wall-clock (cross-CN clock skew, or a local clock
+// stepping backward), nextTimestamp still allocates strictly above it — so MAX(metadata.timestamp)
+// always advances on a CDC save and HnswSearch.IsStale cannot miss the update.
+func TestHnswSyncNextTimestampMonotonic(t *testing.T) {
+	// existing max is 1h in the FUTURE relative to wall-clock.
+	future := time.Now().UnixMicro() + int64(time.Hour/time.Microsecond)
+	s := &HnswSync[float32]{indexes: []*HnswModel[float32]{{Timestamp: future - 1}, {Timestamp: future}}}
+	require.Equal(t, future+1, s.nextTimestamp(), "must advance past the existing max, not use wall-clock")
+
+	// no existing rows → falls back to wall-clock now (bounded).
+	empty := &HnswSync[float32]{}
+	ts := empty.nextTimestamp()
+	require.Positive(t, ts)
+	require.LessOrEqual(t, ts, time.Now().UnixMicro()+1)
+}
+
+// TestHnswSearchIsStaleQueryError covers the IsStale query path: with a captured generation but
+// an unresolvable CN service, QueryCdcGeneration errors, and IsStale treats a query error as
+// stale (so a dropped/rebuilt index's dead cache entry is reclaimed) while surfacing the error.
+func TestHnswSearchIsStaleQueryError(t *testing.T) {
+	s := &HnswSearch[float32]{
+		genValid: true,
+		cnUUID:   "no-such-cn-uuid",
+		Tblcfg:   vectorindex.IndexTableConfig{DbName: "db", MetadataTable: "m", IndexTable: "s"},
+	}
+	stale, err := s.IsStale()
+	require.Error(t, err)
+	require.True(t, stale)
 }

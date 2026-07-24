@@ -731,6 +731,11 @@ func resultScalarInt64(res executor.Result) int64 {
 // LIVE sqlproc/txn — called at load time so the captured generation reflects exactly the
 // txn snapshot the cached index was built from.
 func LoadGeneration(sqlproc *sqlexec.SqlProcess, cfg TableConfig) (ts int64, tail int64, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			ts, tail, err = 0, 0, moerr.NewInternalErrorNoCtx(fmt.Sprintf("LoadGeneration recovered: %v", r))
+		}
+	}()
 	tsSQL, tailSQL := StaleGenSqls(cfg)
 	res, err := runSql(sqlproc, tsSQL)
 	if err != nil {
@@ -751,6 +756,11 @@ func LoadGeneration(sqlproc *sqlexec.SqlProcess, cfg TableConfig) (ts int64, tai
 // (housekeeping goroutine, no live sqlproc) via an executor-managed auto-commit txn, keyed
 // by the CN UUID + tenant captured at load. Used by IsStale.
 func QueryGeneration(ctx context.Context, cnUUID string, accountID uint32, cfg TableConfig) (ts int64, tail int64, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			ts, tail, err = 0, 0, moerr.NewInternalErrorNoCtx(fmt.Sprintf("QueryGeneration recovered: %v", r))
+		}
+	}()
 	tsSQL, tailSQL := StaleGenSqls(cfg)
 	res, err := sqlexec.RunSqlAutoCommit(ctx, cnUUID, accountID, cfg.DbName, tsSQL)
 	if err != nil {

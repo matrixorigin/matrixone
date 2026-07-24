@@ -75,15 +75,17 @@ func TestStaleGenSqls(t *testing.T) {
 	require.Contains(t, tailSQL, vectorindex.CdcTailId) // scoped to the single CDC tail
 }
 
-// TestIsStaleNoGeneration: with no generation captured (unit tests / capture failed →
-// genValid=false, no cnUUID), IsStale is a safe no-op — never reports stale, never errors,
-// so an entry that couldn't self-check simply ages out via TTL instead of churning.
-func TestIsStaleNoGeneration(t *testing.T) {
+// TestIsStaleUncheckableEvicts: the index loaded fine (loadedSearch assembles segments in memory)
+// but no generation was captured (genValid=false — the load-time capture failed). IsStale must
+// report stale, NOT a no-op: an uncheckable entry whose TTL keeps sliding on every search would
+// otherwise serve pre-CDC/rebuild data forever. Reporting stale forces a bounded evict+reload
+// that retries capture and self-heals once it succeeds.
+func TestIsStaleUncheckableEvicts(t *testing.T) {
 	s := loadedSearch(t)
-	require.False(t, s.genValid)
+	require.False(t, s.genValid) // loaded, but generation never captured
 	stale, err := s.IsStale()
 	require.NoError(t, err)
-	require.False(t, stale)
+	require.True(t, stale, "an entry that can't self-check freshness must be evicted, not pinned")
 }
 
 func TestFulltext2SearchEmptyIndex(t *testing.T) {
@@ -199,4 +201,32 @@ func TestLoadGenerationHappy(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int64(11), ts)   // MAX(timestamp)
 	require.Equal(t, int64(22), tail) // MAX(chunk_id) tag=1
+}
+
+// TestLoadGenerationRecover: if the generation read panics (e.g. a background housekeeping call
+// hits a torn-down executor), LoadGeneration must recover it into an error — never let it crash
+// the caller. The caller then leaves genValid=false, and IsStale evicts to retry (see
+// TestIsStaleUncheckableEvicts).
+func TestLoadGenerationRecover(t *testing.T) {
+	old := runSql
+	defer func() { runSql = old }()
+	runSql = func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
+		panic("simulated executor teardown")
+	}
+	_, _, err := LoadGeneration(nil, TableConfig{DbName: "db", MetadataTable: "m", IndexTable: "s"})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "LoadGeneration recovered")
+}
+
+// TestFulltext2IsStaleQueryError: with a captured generation but an unresolvable CN service, the
+// background QueryGeneration read errors (its recover turns the ServiceRuntime panic into an
+// error), and IsStale treats a query error as stale so a dropped/rebuilt index's dead cache entry
+// is reclaimed — while surfacing the error for logging.
+func TestFulltext2IsStaleQueryError(t *testing.T) {
+	s := NewFulltext2Search(TableConfig{DbName: "db", MetadataTable: "m", IndexTable: "s"})
+	s.genValid = true
+	s.cnUUID = "no-such-cn-uuid"
+	stale, err := s.IsStale()
+	require.Error(t, err)
+	require.True(t, stale)
 }

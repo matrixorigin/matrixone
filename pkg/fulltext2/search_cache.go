@@ -104,10 +104,10 @@ func (s *Fulltext2Search) Load(sqlproc *sqlexec.SqlProcess) error {
 	s.idx = NewIndex(segs, deletes)
 	s.loaded = true
 
-	// Capture the generation + durable handles for IsStale. Best-effort: on any failure
-	// genValid stays false and IsStale becomes a no-op (the entry ages out via TTL only) —
-	// no worse than before this check existed. Same txn as the load, so the captured
-	// generation matches the loaded snapshot exactly.
+	// Capture the generation + durable handles for IsStale. Same txn as the load, so the
+	// captured generation matches the loaded snapshot exactly. On any capture failure genValid
+	// stays false and IsStale reports the entry as uncheckable-hence-stale (evict + reload to
+	// retry capture) rather than pinning it in cache forever — see IsStale.
 	s.cnUUID = sqlproc.GetService()
 	if acc, e := sqlproc.GetAccountID(); e == nil {
 		if ts, tail, e2 := LoadGeneration(sqlproc, s.cfg); e2 == nil {
@@ -127,11 +127,14 @@ func (s *Fulltext2Search) Load(sqlproc *sqlexec.SqlProcess) error {
 // dropped/rebuilt out from under us (DROP INDEX, restore), so the dead entry must be
 // reclaimed — the next search reloads, or fails cleanly if the index is truly gone. The err
 // is surfaced only for logging. (A no-op reload for a genuinely-transient blip is cheaper
-// than pinning a possibly-dead entry until TTL.) No captured generation (unit tests / capture
-// failed) ⇒ (false, nil): can't check, don't evict.
+// than pinning a possibly-dead entry until TTL.) No captured generation (capture failed at load,
+// or no service to re-query) ⇒ (true, nil): the entry cannot self-check freshness, so evict it to
+// force a reload that retries capture. Returning (false, nil) would pin a hot entry — whose TTL
+// keeps sliding on every search — in cache indefinitely, serving pre-CDC/rebuild data forever;
+// the bounded reload (one per freshness sweep) self-heals the moment capture succeeds.
 func (s *Fulltext2Search) IsStale() (bool, error) {
 	if !s.genValid || s.cnUUID == "" {
-		return false, nil
+		return true, nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()

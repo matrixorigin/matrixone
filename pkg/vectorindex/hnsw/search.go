@@ -300,9 +300,10 @@ func (s *HnswSearch[T]) Load(sqlproc *sqlexec.SqlProcess) error {
 
 	s.Indexes = indexes
 
-	// Capture the generation + durable handles for IsStale (best-effort; on failure genValid
-	// stays false and IsStale is a no-op). Same txn as the load, so the captured generation
-	// matches the loaded snapshot.
+	// Capture the generation + durable handles for IsStale. Same txn as the load, so the captured
+	// generation matches the loaded snapshot. If capture fails here, genValid stays false and
+	// IsStale reports the entry as uncheckable-hence-stale (evict + reload to retry capture)
+	// rather than pinning it forever — see IsStale.
 	s.cnUUID = sqlproc.GetService()
 	if acc, e := sqlproc.GetAccountID(); e == nil {
 		if ts, tail, e2 := cachegen.LoadCdcGeneration(sqlproc, s.Tblcfg); e2 == nil {
@@ -316,10 +317,14 @@ func (s *HnswSearch[T]) Load(sqlproc *sqlexec.SqlProcess) error {
 // another CN bumps the metadata timestamp), for the VectorIndexCache cross-CN freshness check.
 // Runs on the housekeeping goroutine via a background auto-commit txn (cnUUID/accountID captured
 // at load). A query error ⇒ (true, err): the index was likely dropped/rebuilt, so reclaim the
-// dead entry. No captured generation ⇒ (false, nil).
+// dead entry. No captured generation (capture failed at load, or no service to re-query) ⇒
+// (true, nil): the entry cannot self-check freshness, so evict it to force a reload that retries
+// capture. Returning (false, nil) here would pin a hot entry — whose TTL keeps sliding on every
+// search — in cache indefinitely, serving pre-CDC/rebuild data forever; the bounded reload (one
+// per freshness sweep) self-heals the moment capture succeeds.
 func (s *HnswSearch[T]) IsStale() (bool, error) {
 	if !s.genValid || s.cnUUID == "" {
-		return false, nil
+		return true, nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
