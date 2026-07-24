@@ -57,6 +57,31 @@ func TestFulltext2SearchNewAndUnloaded(t *testing.T) {
 	require.ErrorContains(t, s.SearchFloat32(proc, nil, vectorindex.RuntimeConfig{}, nil, nil), "not supported")
 }
 
+// TestStaleGenSqls pins the cache-freshness generation queries: MAX(timestamp) over the
+// metadata table (REBUILD/MERGE signal) and MAX(chunk_id) over the tag=1 CdcTail (CDC-append
+// signal), scoped to (CdcTailId, tag=1) so a base sub-index cannot mask a fresh append.
+func TestStaleGenSqls(t *testing.T) {
+	cfg := TableConfig{DbName: "db", IndexTable: "__store", MetadataTable: "__meta"}
+	tsSQL, tailSQL := StaleGenSqls(cfg)
+	require.Contains(t, tsSQL, "MAX(timestamp)")
+	require.Contains(t, tsSQL, "`db`.`__meta`")
+	require.Contains(t, tailSQL, "MAX(chunk_id)")
+	require.Contains(t, tailSQL, "`db`.`__store`")
+	require.Contains(t, tailSQL, "tag = 1")             // tag=Tag_CdcEvents
+	require.Contains(t, tailSQL, vectorindex.CdcTailId) // scoped to the single CDC tail
+}
+
+// TestIsStaleNoGeneration: with no generation captured (unit tests / capture failed →
+// genValid=false, no cnUUID), IsStale is a safe no-op — never reports stale, never errors,
+// so an entry that couldn't self-check simply ages out via TTL instead of churning.
+func TestIsStaleNoGeneration(t *testing.T) {
+	s := loadedSearch(t)
+	require.False(t, s.genValid)
+	stale, err := s.IsStale()
+	require.NoError(t, err)
+	require.False(t, stale)
+}
+
 func TestFulltext2SearchEmptyIndex(t *testing.T) {
 	proc := newSearchProc(t)
 	s := NewFulltext2Search(TableConfig{IndexTable: "__store", Parser: ParserDefault})

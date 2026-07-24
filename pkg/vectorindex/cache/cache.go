@@ -24,9 +24,15 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
+
+// stalenessCheckEveryNTicks runs the IsStale freshness sweep every Nth HouseKeeping tick.
+// The ticker is VectorIndexCacheTTL/2 (2.5m), so N=4 ≈ a 10-minute cross-CN freshness
+// cadence — the bound on how long a remote CN can serve a stale index before it ages out.
+const stalenessCheckEveryNTicks = 4
 
 /*
    VectorIndexCache is the generalized cache structure for various algorithm types that share the VectorIndexSearchIf interface.
@@ -66,6 +72,19 @@ type VectorIndexSearchIf interface {
 	Destroy()
 }
 
+// StaleChecker is an OPTIONAL capability an algo's search impl may implement (currently
+// fulltext2). It reports whether the loaded index has fallen behind the persisted index —
+// e.g. a CDC append / REBUILD applied on ANOTHER CN, which the local process-scoped Remove
+// never sees. HouseKeeping calls it periodically and force-expires stale entries so the next
+// search reloads; this is how cross-CN cache coherence is maintained by PULL (each CN checks
+// its own entries) with no invalidation broadcast. Impls MUST run their own short background
+// txn (the check fires on the housekeeping goroutine, not the search path) and MUST return an
+// error rather than "stale" on a transient failure, so a meta-read blip can't trigger a
+// reload storm. An impl that cannot determine freshness returns (false, nil).
+type StaleChecker interface {
+	IsStale() (bool, error)
+}
+
 // base VectorIndex Search structure for VectorIndexSearchIf (see HnswSearch)
 type VectorIndexSearch struct {
 	Mutex      sync.RWMutex
@@ -73,7 +92,9 @@ type VectorIndexSearch struct {
 	LastUpdate atomic.Int64
 	Status     atomic.Int32 // 0 - NOT INIT, 1 - LOADED, 2 - marked as outdated,  3 - DESTROYED,  4 or above ERRCODE
 	Algo       VectorIndexSearchIf
-	Cond       *sync.Cond // NOTE: this is RWCond. Wait() will use mutex.RLock() and mutex.RUnlock()
+	Cond       *sync.Cond  // NOTE: this is RWCond. Wait() will use mutex.RLock() and mutex.RUnlock()
+	stale      atomic.Bool // set by the IsStale freshness check; reclaimed next sweep. Separate from
+	// ExpireAt so a concurrent Search's extend() (sliding TTL) can't un-mark a stale entry.
 }
 
 func (s *VectorIndexSearch) Destroy() {
@@ -113,6 +134,15 @@ func (s *VectorIndexSearch) Expired() bool {
 	ts := s.ExpireAt.Load()
 	now := time.Now().UnixMicro()
 	return (ts > 0 && ts < now)
+}
+
+// markStale flags this entry for reclamation by the NEXT HouseKeeping sweep. Used by the
+// IsStale freshness check to schedule eviction of a stale index without evicting inline (the
+// removal always goes through the single expired/stale-sweep path, keeping Search pure-read).
+// A dedicated flag (not ExpireAt) so a concurrent Search's extend() sliding TTL cannot
+// un-mark a hot stale entry.
+func (s *VectorIndexSearch) markStale() {
+	s.stale.Store(true)
 }
 
 func (s *VectorIndexSearch) extend(update bool) {
@@ -160,6 +190,7 @@ type VectorIndexCache struct {
 	started        atomic.Bool
 	exited         atomic.Bool
 	once           sync.Once
+	hkTicks        int // HouseKeeping tick counter, gates the IsStale sweep cadence
 }
 
 func NewVectorIndexCache() *VectorIndexCache {
@@ -214,7 +245,7 @@ func (c *VectorIndexCache) HouseKeeping() {
 
 	c.IndexMap.Range(func(key, value any) bool {
 		algo := value.(*VectorIndexSearch)
-		if algo.Expired() {
+		if algo.Expired() || algo.stale.Load() {
 			expiredkeys = append(expiredkeys, key.(string))
 		}
 		return true
@@ -226,6 +257,51 @@ func (c *VectorIndexCache) HouseKeeping() {
 			algo := value.(*VectorIndexSearch)
 			algo.Destroy()
 			algo = nil
+			logutil.Debugf("[veccache] evicted expired/stale index %s from cache", k)
+		}
+	}
+
+	// Cross-CN freshness: every Nth tick, ask each StaleChecker entry whether its loaded
+	// index has fallen behind the persisted one (CDC append / REBUILD on another CN) and
+	// force-expire the stale ones so the NEXT sweep reclaims them and the next search
+	// reloads. Runs AFTER the expiry sweep, so a just-marked entry is reclaimed next tick
+	// (mark now, remove next cycle) — never inline, keeping Search pure-read.
+	c.hkTicks++
+	if c.hkTicks%stalenessCheckEveryNTicks == 0 {
+		c.checkStale()
+	}
+}
+
+// checkStale asks every loaded StaleChecker entry whether it is stale and force-expires the
+// stale ones. The IsStale calls (each opens a short background txn) are collected out of the
+// IndexMap.Range callback so a slow meta read never holds up the map iteration.
+func (c *VectorIndexCache) checkStale() {
+	type staleEntry struct {
+		s   *VectorIndexSearch
+		sc  StaleChecker
+		key any
+	}
+	entries := make([]staleEntry, 0, 16)
+	c.IndexMap.Range(func(key, value any) bool {
+		algo := value.(*VectorIndexSearch)
+		if algo.Status.Load() != STATUS_LOADED {
+			return true // skip loading/errored/destroyed entries
+		}
+		if sc, ok := algo.Algo.(StaleChecker); ok {
+			entries = append(entries, staleEntry{algo, sc, key})
+		}
+		return true
+	})
+	for _, e := range entries {
+		stale, err := e.sc.IsStale()
+		if err != nil {
+			// A query error usually means the index was dropped/rebuilt out from under us —
+			// IsStale returns stale=true so the dead entry is reclaimed; log the cause.
+			logutil.Warnf("[veccache] IsStale for index %v errored (treating as stale): %v", e.key, err)
+		}
+		if stale {
+			logutil.Infof("[veccache] index %v is stale — marking for eviction on next sweep", e.key)
+			e.s.markStale()
 		}
 	}
 }

@@ -698,6 +698,75 @@ func NextTailChunkId(sqlproc *sqlexec.SqlProcess, cfg TableConfig) (int64, error
 	return 0, nil
 }
 
+// StaleGenSqls returns the two queries whose results form the cache-freshness generation
+// used by Fulltext2Search.IsStale: MAX(metadata.timestamp) (bumped by a REBUILD/MERGE that
+// writes a new base model row) and MAX(storage.chunk_id) of the tag=1 CdcTail (bumped by a
+// CDC append). A change in EITHER means the loaded index is stale. Two reads because
+// timestamp and tag live in different tables (metadata has no tag; storage has no
+// timestamp). The tail read is scoped to (CdcTailId, tag=1) — the exact CDC delta — so an
+// unrelated base sub-index's higher chunk_id can't mask a fresh append.
+func StaleGenSqls(cfg TableConfig) (tsSQL, tailSQL string) {
+	tsSQL = fmt.Sprintf("SELECT COALESCE(MAX(%s), 0) FROM %s",
+		catalog.FullText2Index_TblCol_Metadata_Timestamp,
+		sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable))
+	tailSQL = fmt.Sprintf("SELECT COALESCE(MAX(%s), -1) FROM %s WHERE %s = %s AND %s = %d",
+		catalog.FullText2Index_TblCol_Storage_Chunk_Id,
+		sqlquote.QualifiedIdent(cfg.DbName, cfg.IndexTable),
+		catalog.FullText2Index_TblCol_Storage_Index_Id, sqlquote.String(vectorindex.CdcTailId),
+		catalog.FullText2Index_TblCol_Storage_Tag, int(vectorindex.Tag_CdcEvents))
+	return
+}
+
+func resultScalarInt64(res executor.Result) int64 {
+	for _, bat := range res.Batches {
+		if bat == nil || bat.RowCount() == 0 {
+			continue
+		}
+		return vector.GetFixedAtNoTypeCheck[int64](bat.Vecs[0], 0)
+	}
+	return 0
+}
+
+// LoadGeneration reads the current (timestamp, tailChunk) generation using the caller's
+// LIVE sqlproc/txn — called at load time so the captured generation reflects exactly the
+// txn snapshot the cached index was built from.
+func LoadGeneration(sqlproc *sqlexec.SqlProcess, cfg TableConfig) (ts int64, tail int64, err error) {
+	tsSQL, tailSQL := StaleGenSqls(cfg)
+	res, err := runSql(sqlproc, tsSQL)
+	if err != nil {
+		return 0, 0, err
+	}
+	ts = resultScalarInt64(res)
+	res.Close()
+	res, err = runSql(sqlproc, tailSQL)
+	if err != nil {
+		return 0, 0, err
+	}
+	tail = resultScalarInt64(res)
+	res.Close()
+	return ts, tail, nil
+}
+
+// QueryGeneration reads the current (timestamp, tailChunk) generation in the BACKGROUND
+// (housekeeping goroutine, no live sqlproc) via an executor-managed auto-commit txn, keyed
+// by the CN UUID + tenant captured at load. Used by IsStale.
+func QueryGeneration(ctx context.Context, cnUUID string, accountID uint32, cfg TableConfig) (ts int64, tail int64, err error) {
+	tsSQL, tailSQL := StaleGenSqls(cfg)
+	res, err := sqlexec.RunSqlAutoCommit(ctx, cnUUID, accountID, cfg.DbName, tsSQL)
+	if err != nil {
+		return 0, 0, err
+	}
+	ts = resultScalarInt64(res)
+	res.Close()
+	res, err = sqlexec.RunSqlAutoCommit(ctx, cnUUID, accountID, cfg.DbName, tailSQL)
+	if err != nil {
+		return 0, 0, err
+	}
+	tail = resultScalarInt64(res)
+	res.Close()
+	return ts, tail, nil
+}
+
 // CountTailChunks returns the number of tag=1 CdcTail chunk rows — the idxcron
 // tail-growth gate (fold once the delta is large enough).
 func CountTailChunks(sqlproc *sqlexec.SqlProcess, cfg TableConfig) (int64, error) {

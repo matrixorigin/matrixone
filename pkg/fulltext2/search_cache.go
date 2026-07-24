@@ -15,10 +15,13 @@
 package fulltext2
 
 import (
+	"context"
 	"math"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
@@ -55,6 +58,17 @@ type Fulltext2Search struct {
 	cfg    TableConfig
 	idx    *Index
 	loaded bool
+
+	// Generation captured at Load (same txn snapshot as the loaded data) for the cache's
+	// cross-CN freshness check (IsStale, called off the housekeeping goroutine): loadedTs =
+	// MAX(metadata.timestamp) (REBUILD/MERGE), loadedTail = MAX(tag=1 CdcTail chunk_id) (CDC
+	// append). cnUUID/accountID are the durable handles to re-query in the background.
+	// genValid is false when capture failed / no resolver (unit tests) → IsStale is a no-op.
+	cnUUID     string
+	accountID  uint32
+	loadedTs   int64
+	loadedTail int64
+	genValid   bool
 }
 
 var _ veccache.VectorIndexSearchIf = (*Fulltext2Search)(nil)
@@ -89,7 +103,46 @@ func (s *Fulltext2Search) Load(sqlproc *sqlexec.SqlProcess) error {
 	segs := append(bases, tails...)
 	s.idx = NewIndex(segs, deletes)
 	s.loaded = true
+
+	// Capture the generation + durable handles for IsStale. Best-effort: on any failure
+	// genValid stays false and IsStale becomes a no-op (the entry ages out via TTL only) —
+	// no worse than before this check existed. Same txn as the load, so the captured
+	// generation matches the loaded snapshot exactly.
+	s.cnUUID = sqlproc.GetService()
+	if acc, e := sqlproc.GetAccountID(); e == nil {
+		if ts, tail, e2 := LoadGeneration(sqlproc, s.cfg); e2 == nil {
+			s.accountID, s.loadedTs, s.loadedTail, s.genValid = acc, ts, tail, true
+		}
+	}
 	return nil
+}
+
+// IsStale reports whether the underlying index has changed since this entry was loaded, by
+// comparing the load-time generation to the current one (a REBUILD/MERGE bumps the metadata
+// timestamp; a CDC append bumps the tag=1 tail chunk_id). Run on the cache housekeeping
+// goroutine (NOT the search path), so it opens its own short auto-commit txn via the durable
+// cnUUID/accountID captured at load.
+//
+// On a query ERROR it returns (true, err): the most likely cause is the index tables were
+// dropped/rebuilt out from under us (DROP INDEX, restore), so the dead entry must be
+// reclaimed — the next search reloads, or fails cleanly if the index is truly gone. The err
+// is surfaced only for logging. (A no-op reload for a genuinely-transient blip is cheaper
+// than pinning a possibly-dead entry until TTL.) No captured generation (unit tests / capture
+// failed) ⇒ (false, nil): can't check, don't evict.
+func (s *Fulltext2Search) IsStale() (bool, error) {
+	if !s.genValid || s.cnUUID == "" {
+		return false, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	ts, tail, err := QueryGeneration(ctx, s.cnUUID, s.accountID, s.cfg)
+	if err != nil {
+		return true, err
+	}
+	stale := ts != s.loadedTs || tail != s.loadedTail
+	logutil.Debugf("[ft2-isstale] index=%s loadedGen=(ts=%d,tail=%d) curGen=(ts=%d,tail=%d) stale=%v",
+		s.cfg.IndexTable, s.loadedTs, s.loadedTail, ts, tail, stale)
+	return stale, nil
 }
 
 // Search runs the WAND positional query (NL exact-phrase or boolean) and returns
