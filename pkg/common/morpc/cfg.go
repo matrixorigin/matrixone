@@ -32,6 +32,7 @@ var (
 	defaultBufferSize            = 1024
 	defaultPayloadCopyBufferSize = 16 * 1024
 	defaultMaxMessageSize        = 1024 * 1024 * 100 // 100MB
+	defaultBackendReadTimeout    = 10 * time.Second
 )
 
 // Config rpc client config
@@ -198,6 +199,7 @@ func (c Config) getBackendOptions(logger *zap.Logger) []BackendOption {
 		WithBackendLogger(logger),
 		WithBackendBusyBufferSize(c.BusyQueueSize),
 		WithBackendBufferSize(c.SendQueueSize),
+		WithBackendReadTimeout(defaultBackendReadTimeout),
 		WithBackendGoettyOptions(goetty.WithSessionRWBUfferSize(
 			int(c.ReadBufferSize),
 			int(c.WriteBufferSize))))
