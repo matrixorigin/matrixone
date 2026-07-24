@@ -19,6 +19,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"math/big"
+	"strconv"
 	"strings"
 	"time"
 
@@ -1498,7 +1500,7 @@ func constructTimeWindow(_ context.Context, node *plan.Node, proc *process.Proce
 		e := f.F.Args[0]
 		aggregationExpressions = append(
 			aggregationExpressions,
-			aggexec.MakeAggFunctionExpression(functionID, isDistinct, f.F.Args, nil))
+			constructAggFunctionExpression(functionID, isDistinct, f.F, proc))
 		typs = append(typs, types.New(types.T(e.Typ.Id), e.Typ.Width, e.Typ.Scale))
 	}
 	wStart := layout.WStartSlot != plan2.TimeWindowSlotNone
@@ -1529,6 +1531,47 @@ func constructTimeWindow(_ context.Context, node *plan.Node, proc *process.Proce
 	return arg
 }
 
+// constructAggFunctionExpression removes executor configuration arguments from
+// special aggregate inputs and evaluates them once while constructing the
+// operator. Keep GROUP, WINDOW, and TIME_WINDOW on the same path so a special
+// aggregate cannot be configured in only some execution modes.
+func constructAggFunctionExpression(
+	functionID int64,
+	isDistinct bool,
+	f *plan.Function,
+	proc *process.Process,
+) aggexec.AggFuncExecExpression {
+	args := f.Args
+	var cfg []byte
+	if len(args) <= 1 || (f.Func.ObjName != plan2.NameGroupConcat &&
+		f.Func.ObjName != plan2.NameClusterCenters &&
+		f.Func.ObjName != plan2.NameApproxPercentile) {
+		return aggexec.MakeAggFunctionExpression(functionID, isDistinct, args, nil)
+	}
+
+	configExpr := args[len(args)-1]
+	if f.Func.ObjName == plan2.NameApproxPercentile {
+		if err := validateApproxPercentileExpr(configExpr); err != nil {
+			panic(err)
+		}
+	}
+	vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(proc, configExpr)
+	if err != nil {
+		panic(err)
+	}
+	defer free()
+
+	if f.Func.ObjName == plan2.NameApproxPercentile {
+		cfg, err = getPercentileConfig(vec)
+		if err != nil {
+			panic(err)
+		}
+	} else {
+		cfg = []byte(vec.GetStringAt(0))
+	}
+	return aggexec.MakeAggFunctionExpression(functionID, isDistinct, args[:len(args)-1], cfg)
+}
+
 // resetTimeWindowTsColRef points every column reference in a time-window
 // helper expression at slot 0, the single timestamp column the operator feeds
 // it. The expression is derived from the window's timestamp, so it can hold no
@@ -1557,27 +1600,7 @@ func constructWindow(_ context.Context, node *plan.Node, proc *process.Process) 
 		isDistinct := (uint64(f.F.Func.Obj) & function.Distinct) != 0
 		functionID := int64(uint64(f.F.Func.Obj) & function.DistinctMask)
 
-		var cfg []byte = nil
-		var args = f.F.Args
-		if len(f.F.Args) > 0 {
-
-			//for group_concat, the last arg is separator string
-			//for cluster_centers, the last arg is kmeans_args string
-			if (f.F.Func.ObjName == plan2.NameGroupConcat ||
-				f.F.Func.ObjName == plan2.NameClusterCenters) && len(f.F.Args) > 1 {
-				argExpr := f.F.Args[len(f.F.Args)-1]
-				vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(proc, argExpr)
-				if err != nil {
-					panic(err)
-				}
-				cfg = []byte(vec.GetStringAt(0))
-				free()
-
-				args = f.F.Args[:len(f.F.Args)-1]
-			}
-		}
-		aggregationExpressions[i] = aggexec.MakeAggFunctionExpression(
-			functionID, isDistinct, args, cfg)
+		aggregationExpressions[i] = constructAggFunctionExpression(functionID, isDistinct, f.F, proc)
 	}
 	arg := window.NewArgument()
 	arg.Aggs = aggregationExpressions
@@ -1612,27 +1635,7 @@ func constructGroup(_ context.Context, node, childNode *plan.Node, needEval bool
 			isDistinct := (uint64(f.F.Func.Obj) & function.Distinct) != 0
 			functionID := int64(uint64(f.F.Func.Obj) & function.DistinctMask)
 
-			var cfg []byte = nil
-			var args = f.F.Args
-			if len(f.F.Args) > 0 {
-				//for group_concat, the last arg is separator string
-				//for cluster_centers, the last arg is kmeans_args string
-				if (f.F.Func.ObjName == plan2.NameGroupConcat ||
-					f.F.Func.ObjName == plan2.NameClusterCenters) && len(f.F.Args) > 1 {
-					argExpr := f.F.Args[len(f.F.Args)-1]
-					vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(proc, argExpr)
-					if err != nil {
-						panic(err)
-					}
-					cfg = []byte(vec.GetStringAt(0))
-					free()
-
-					args = f.F.Args[:len(f.F.Args)-1]
-				}
-			}
-
-			aggregationExpressions[i] = aggexec.MakeAggFunctionExpression(
-				functionID, isDistinct, args, cfg)
+			aggregationExpressions[i] = constructAggFunctionExpression(functionID, isDistinct, f.F, proc)
 		}
 	}
 
@@ -2388,4 +2391,64 @@ func constructTableClone(
 	metaCopy.Ctx.SrcAutoIncrOffsets = colOffset
 
 	return metaCopy, nil
+}
+
+func validateApproxPercentileExpr(expr *plan.Expr) error {
+	if expr == nil || !rule.IsConstant(expr, false) {
+		return moerr.NewInvalidInputNoCtx(
+			"percentile argument of approx_percentile must be a constant")
+	}
+	return nil
+}
+
+// getPercentileConfig extracts the percentile value from a vector for approx_percentile.
+func getPercentileConfig(vec *vector.Vector) ([]byte, error) {
+	if vec == nil || !vec.IsConst() {
+		return nil, moerr.NewInvalidInputNoCtx(
+			"percentile argument of approx_percentile must be a constant")
+	}
+	if vec.Length() == 0 || vec.IsConstNull() {
+		return nil, moerr.NewInvalidInputNoCtx(
+			"percentile argument of approx_percentile cannot be NULL")
+	}
+
+	var p float64
+	var config string
+	switch vec.GetType().Oid {
+	case types.T_float64:
+		p = vector.MustFixedColWithTypeCheck[float64](vec)[0]
+		config = strconv.FormatFloat(p, 'f', -1, 64)
+	case types.T_float32:
+		p = float64(vector.MustFixedColWithTypeCheck[float32](vec)[0])
+		config = strconv.FormatFloat(p, 'f', -1, 32)
+	case types.T_int64:
+		v := vector.MustFixedColWithTypeCheck[int64](vec)[0]
+		p = float64(v)
+		config = strconv.FormatInt(v, 10)
+	case types.T_int32:
+		v := vector.MustFixedColWithTypeCheck[int32](vec)[0]
+		p = float64(v)
+		config = strconv.FormatInt(int64(v), 10)
+	case types.T_decimal64:
+		d := vector.MustFixedColWithTypeCheck[types.Decimal64](vec)[0]
+		p = types.Decimal64ToFloat64(d, vec.GetType().Scale)
+		config = d.Format(vec.GetType().Scale)
+	case types.T_decimal128:
+		d := vector.MustFixedColWithTypeCheck[types.Decimal128](vec)[0]
+		p = types.Decimal128ToFloat64(d, vec.GetType().Scale)
+		config = d.Format(vec.GetType().Scale)
+	default:
+		return nil, moerr.NewInvalidInputNoCtxf(
+			"unsupported percentile type %s for approx_percentile", vec.GetType().String())
+	}
+	if math.IsNaN(p) || math.IsInf(p, 0) || p < 0 || p > 1 {
+		return nil, moerr.NewInvalidInputNoCtxf(
+			"percentile argument of approx_percentile must be finite and in [0,1], got %v", p)
+	}
+	exact, ok := new(big.Rat).SetString(config)
+	if !ok || exact.Sign() < 0 || exact.Cmp(big.NewRat(1, 1)) > 0 {
+		return nil, moerr.NewInvalidInputNoCtxf(
+			"percentile argument of approx_percentile must be in [0,1], got %s", config)
+	}
+	return []byte(config), nil
 }

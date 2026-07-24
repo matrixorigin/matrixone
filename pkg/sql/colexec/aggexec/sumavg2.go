@@ -28,9 +28,6 @@ import (
 //
 // This returned type thing definitely belongs to plan, function.
 // However, exec cannot import plan, function due to circular dependency.
-// Also this is the reason for all those RegisterAgg crap.   This is the
-// weirdest thing I've ever seen.  We need to untangle all this mess.
-//
 // See list_agg.go, we need to remove dependency of plan on exec.
 //
 

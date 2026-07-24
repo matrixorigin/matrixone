@@ -16,9 +16,12 @@ package compile
 
 import (
 	"context"
+	"math"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dedupjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
@@ -34,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -222,6 +226,126 @@ func TestConstructTimeWindowUsesRegularSumForPartialSum(t *testing.T) {
 	require.Equal(t, types.T_decimal128, timeWin.Types[0].Oid)
 }
 
+func TestConstructTimeWindowApproxPercentileConfig(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	fn, err := function.GetFunctionByName(context.Background(), plan2.NameApproxPercentile, []types.Type{
+		types.T_int32.ToType(), types.T_float64.ToType(),
+	})
+	require.NoError(t, err)
+
+	for _, tc := range []struct {
+		name       string
+		percentile *plan.Expr
+		want       string
+	}{
+		{name: "lower endpoint", percentile: plan2.MakePlan2Float64ConstExprWithType(0), want: "0"},
+		{name: "upper endpoint", percentile: plan2.MakePlan2Float64ConstExprWithType(1), want: "1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			node := makeTimeWindowAggNode(fn.GetEncodedOverloadID(), plan2.NameApproxPercentile, tc.percentile)
+			arg := constructTimeWindow(context.Background(), node, proc)
+			require.Len(t, arg.Aggs, 1)
+			require.Len(t, arg.Aggs[0].GetArgExpressions(), 1)
+			require.Equal(t, tc.want, string(arg.Aggs[0].GetExtraConfig()))
+		})
+	}
+}
+
+func TestConstructTimeWindowApproxPercentileRejectsInvalidConfig(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	fn, err := function.GetFunctionByName(context.Background(), plan2.NameApproxPercentile, []types.Type{
+		types.T_int32.ToType(), types.T_float64.ToType(),
+	})
+	require.NoError(t, err)
+	nonConstant := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_float64)},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 2}},
+	}
+
+	for _, tc := range []struct {
+		name       string
+		percentile *plan.Expr
+		want       string
+	}{
+		{
+			name:       "below range",
+			percentile: plan2.MakePlan2Float64ConstExprWithType(-0.01),
+			want:       "invalid input: percentile argument of approx_percentile must be finite and in [0,1], got -0.01",
+		},
+		{
+			name:       "above range",
+			percentile: plan2.MakePlan2Float64ConstExprWithType(1.01),
+			want:       "invalid input: percentile argument of approx_percentile must be finite and in [0,1], got 1.01",
+		},
+		{
+			name:       "non constant",
+			percentile: nonConstant,
+			want:       "invalid input: percentile argument of approx_percentile must be a constant",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			node := makeTimeWindowAggNode(fn.GetEncodedOverloadID(), plan2.NameApproxPercentile, tc.percentile)
+			require.PanicsWithError(t, tc.want, func() {
+				constructTimeWindow(context.Background(), node, proc)
+			})
+		})
+	}
+}
+
+func TestConstructAggFunctionExpressionPreservesOtherSpecialConfigs(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	value := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_int32)},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 1}},
+	}
+
+	for _, tc := range []struct {
+		name   string
+		config string
+	}{
+		{name: plan2.NameGroupConcat, config: "|"},
+		{name: plan2.NameClusterCenters, config: "k=3,init=random"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := &plan.Function{
+				Func: &plan.ObjectRef{ObjName: tc.name},
+				Args: []*plan.Expr{value, plan2.MakePlan2StringConstExprWithType(tc.config)},
+			}
+			expr := constructAggFunctionExpression(1, false, f, proc)
+			require.Len(t, expr.GetArgExpressions(), 1)
+			require.Equal(t, tc.config, string(expr.GetExtraConfig()))
+		})
+	}
+}
+
+func makeTimeWindowAggNode(functionID int64, name string, config *plan.Expr) *plan.Node {
+	value := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_int32)},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 1}},
+	}
+	ts := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_datetime)},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
+	}
+	return &plan.Node{
+		AggList: []*plan.Expr{{
+			Typ: plan.Type{Id: int32(types.T_float64)},
+			Expr: &plan.Expr_F{F: &plan.Function{
+				Func: &plan.ObjectRef{Obj: functionID, ObjName: name},
+				Args: []*plan.Expr{value, config},
+			}},
+		}},
+		GroupBy:   []*plan.Expr{ts},
+		Timestamp: ts,
+		Interval:  makeTimeWindowIntervalExpr(1, "second"),
+	}
+}
+
 func TestDupOperatorLoopJoinMarkPos(t *testing.T) {
 	op := loopjoin.NewArgument()
 	op.MarkPos = 3
@@ -305,6 +429,143 @@ func TestConstructShuffleOperatorForJoinSupportsColumnsAndExpressions(t *testing
 	require.Equal(t, right.Typ.Id, rightShuffle.ShuffleExpr.Typ.Id)
 	require.Equal(t, "serial_full", rightShuffle.ShuffleExpr.GetF().Func.ObjName)
 	require.Nil(t, rightShuffle.RuntimeFilterSpec)
+}
+
+func TestGetPercentileConfig(t *testing.T) {
+	mp, err := mpool.NewMPool("test_pct_config", 0, mpool.NoFixed)
+	require.NoError(t, err)
+	defer mpool.DeleteMPool(mp)
+
+	t.Run("float64", func(t *testing.T) {
+		vec, err := vector.NewConstFixed(types.T_float64.ToType(), float64(0.95), 1, mp)
+		require.NoError(t, err)
+		defer vec.Free(mp)
+		cfg, err := getPercentileConfig(vec)
+		require.NoError(t, err)
+		require.Equal(t, "0.95", string(cfg))
+	})
+
+	t.Run("float32", func(t *testing.T) {
+		vec, err := vector.NewConstFixed(types.T_float32.ToType(), float32(0.5), 1, mp)
+		require.NoError(t, err)
+		defer vec.Free(mp)
+		cfg, err := getPercentileConfig(vec)
+		require.NoError(t, err)
+		require.Equal(t, "0.5", string(cfg))
+	})
+
+	t.Run("int64", func(t *testing.T) {
+		vec, err := vector.NewConstFixed(types.T_int64.ToType(), int64(0), 1, mp)
+		require.NoError(t, err)
+		defer vec.Free(mp)
+		cfg, err := getPercentileConfig(vec)
+		require.NoError(t, err)
+		require.Equal(t, "0", string(cfg))
+	})
+
+	t.Run("int32", func(t *testing.T) {
+		vec, err := vector.NewConstFixed(types.T_int32.ToType(), int32(1), 1, mp)
+		require.NoError(t, err)
+		defer vec.Free(mp)
+		cfg, err := getPercentileConfig(vec)
+		require.NoError(t, err)
+		require.Equal(t, "1", string(cfg))
+	})
+
+	t.Run("decimal64 preserves exact text", func(t *testing.T) {
+		typ := types.New(types.T_decimal64, 10, 6)
+		value, err := types.ParseDecimal64("0.123456", typ.Width, typ.Scale)
+		require.NoError(t, err)
+		vec, err := vector.NewConstFixed(typ, value, 1, mp)
+		require.NoError(t, err)
+		defer vec.Free(mp)
+		cfg, err := getPercentileConfig(vec)
+		require.NoError(t, err)
+		require.Equal(t, "0.123456", string(cfg))
+	})
+
+	t.Run("decimal128 preserves exact text", func(t *testing.T) {
+		typ := types.New(types.T_decimal128, 38, 30)
+		value, err := types.ParseDecimal128("0.123456789012345678901234567890", typ.Width, typ.Scale)
+		require.NoError(t, err)
+		vec, err := vector.NewConstFixed(typ, value, 1, mp)
+		require.NoError(t, err)
+		defer vec.Free(mp)
+		cfg, err := getPercentileConfig(vec)
+		require.NoError(t, err)
+		require.Equal(t, "0.123456789012345678901234567890", string(cfg))
+	})
+}
+
+func TestGetPercentileConfigRejectsInvalidVectors(t *testing.T) {
+	mp, err := mpool.NewMPool("test_pct_config_invalid", 0, mpool.NoFixed)
+	require.NoError(t, err)
+	defer mpool.DeleteMPool(mp)
+
+	flat := vector.NewVec(types.T_float64.ToType())
+	require.NoError(t, vector.AppendFixed(flat, 0.5, false, mp))
+	nullVec := vector.NewConstNull(types.T_float64.ToType(), 1, mp)
+	unsupported, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte("0.5"), 1, mp)
+	require.NoError(t, err)
+	below, err := vector.NewConstFixed(types.T_float64.ToType(), -0.1, 1, mp)
+	require.NoError(t, err)
+	above, err := vector.NewConstFixed(types.T_float64.ToType(), 1.1, 1, mp)
+	require.NoError(t, err)
+	nan, err := vector.NewConstFixed(types.T_float64.ToType(), math.NaN(), 1, mp)
+	require.NoError(t, err)
+	inf, err := vector.NewConstFixed(types.T_float64.ToType(), math.Inf(1), 1, mp)
+	require.NoError(t, err)
+	decimalType := types.New(types.T_decimal128, 38, 37)
+	decimalAboveValue, err := types.ParseDecimal128(
+		"1.0000000000000000000000000000000000001", decimalType.Width, decimalType.Scale)
+	require.NoError(t, err)
+	decimalAbove, err := vector.NewConstFixed(decimalType, decimalAboveValue, 1, mp)
+	require.NoError(t, err)
+
+	tests := []struct {
+		name string
+		vec  *vector.Vector
+	}{
+		{name: "non-constant", vec: flat},
+		{name: "null", vec: nullVec},
+		{name: "unsupported", vec: unsupported},
+		{name: "below range", vec: below},
+		{name: "above range", vec: above},
+		{name: "nan", vec: nan},
+		{name: "infinity", vec: inf},
+		{name: "decimal above range beyond float64 precision", vec: decimalAbove},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			defer tc.vec.Free(mp)
+			require.NotPanics(t, func() {
+				_, err := getPercentileConfig(tc.vec)
+				require.Error(t, err)
+			})
+		})
+	}
+}
+
+func TestValidateApproxPercentileExpr(t *testing.T) {
+	column := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_float64)},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 1}},
+	}
+	parameter := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_float64)},
+		Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}},
+	}
+
+	require.Error(t, validateApproxPercentileExpr(nil))
+	require.Error(t, validateApproxPercentileExpr(column))
+	literal := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_int64)},
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+			Value: &plan.Literal_I64Val{I64Val: 1},
+		}},
+	}
+	require.NoError(t, validateApproxPercentileExpr(literal))
+	require.Error(t, validateApproxPercentileExpr(parameter))
 }
 
 func makeTimeWindowIntervalExpr(value int64, unit string) *plan.Expr {

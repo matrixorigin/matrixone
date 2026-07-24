@@ -1,0 +1,77 @@
+select approx_percentile(null, 0.5);
+➤ approx_percentile(null, 0.5)[8,54,0]  𝄀
+null
+drop table if exists t1;
+create table t1 (a int, b int);
+insert into t1 values (1, 1), (2, 3), (3, 5), (4, 7), (5, 9);
+select approx_percentile(b, 0.5) from t1;
+➤ approx_percentile(b, 0.5)[8,54,0]  𝄀
+5.0
+select approx_percentile(b, 0.0) from t1;
+➤ approx_percentile(b, 0.0)[8,54,0]  𝄀
+1.0
+select approx_percentile(b, 1.0) from t1;
+➤ approx_percentile(b, 1.0)[8,54,0]  𝄀
+9.0
+insert into t1 values (1, 2), (1, 4), (2, 6), (2, 8);
+select a, approx_percentile(b, 0.5) from t1 group by a order by a;
+➤ a[4,32,0]  ¦  approx_percentile(b, 0.5)[8,54,0]  𝄀
+1  ¦  2.0  𝄀
+2  ¦  6.0  𝄀
+3  ¦  5.0  𝄀
+4  ¦  7.0  𝄀
+5  ¦  9.0
+drop table if exists t1;
+create table t1 (a int, b float);
+insert into t1 values (1, 1.1), (2, 2.2), (3, 3.3);
+select approx_percentile(b, 0.5) from t1;
+➤ approx_percentile(b, 0.5)[8,54,0]  𝄀
+2.2
+select approx_percentile(b, 0.95) from t1;
+➤ approx_percentile(b, 0.95)[8,54,0]  𝄀
+3.19
+drop table t1;
+drop table if exists t_time_window;
+create table t_time_window (ts timestamp primary key, v int);
+insert into t_time_window values ('2026-01-01 00:00:00', 1), ('2026-01-01 00:00:30', 3), ('2026-01-01 00:01:00', 5), ('2026-01-01 00:01:30', 7);
+select _wstart, _wend, approx_percentile(v, 0), approx_percentile(v, 1) from t_time_window interval(ts, 1, minute);
+➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  approx_percentile(v, 0)[8,54,0]  ¦  approx_percentile(v, 1)[8,54,0]  𝄀
+2026-01-01 00:00:00  ¦  2026-01-01 00:01:00  ¦  1.0  ¦  3.0  𝄀
+2026-01-01 00:01:00  ¦  2026-01-01 00:02:00  ¦  5.0  ¦  7.0
+drop table t_time_window;
+drop table if exists t_approx_decimal38_0;
+create table t_approx_decimal38_0 (v decimal(38, 0));
+insert into t_approx_decimal38_0 values (-99999999999999999999999999999999999999), (99999999999999999999999999999999999999);
+select approx_percentile(v, 0), approx_percentile(v, 1) from t_approx_decimal38_0;
+➤ approx_percentile(v, 0)[3,38,0]  ¦  approx_percentile(v, 1)[3,38,0]  𝄀
+-99999999999999999999999999999999999999  ¦  99999999999999999999999999999999999999
+truncate table t_approx_decimal38_0;
+insert into t_approx_decimal38_0 values (0), (1);
+select approx_percentile(v, 0.5) from t_approx_decimal38_0;
+➤ approx_percentile(v, 0.5)[3,38,0]  𝄀
+1
+drop table t_approx_decimal38_0;
+drop table if exists t_approx_decimal38_38;
+create table t_approx_decimal38_38 (v decimal(38, 38));
+insert into t_approx_decimal38_38 values (0.1), (0.2);
+select approx_percentile(v, 0), approx_percentile(v, 1) from t_approx_decimal38_38;
+➤ approx_percentile(v, 0)[3,38,38]  ¦  approx_percentile(v, 1)[3,38,38]  𝄀
+0.10000000000000000000000000000000000000  ¦  0.20000000000000000000000000000000000000
+drop table t_approx_decimal38_38;
+drop table if exists t_approx_float_infinity;
+create table t_approx_float_infinity (v double);
+insert into t_approx_float_infinity values (cast('Inf' as double));
+select approx_percentile(v, 0) as p0, approx_percentile(v, 0.5) as p50, approx_percentile(v, 1) as p100 from t_approx_float_infinity;
+➤ p0[8,54,0]  ¦  p50[8,54,0]  ¦  p100[8,54,0]  𝄀
++Infinity  ¦  +Infinity  ¦  +Infinity
+truncate table t_approx_float_infinity;
+insert into t_approx_float_infinity values (cast('-Inf' as double));
+select approx_percentile(v, 0) as p0, approx_percentile(v, 0.5) as p50, approx_percentile(v, 1) as p100 from t_approx_float_infinity;
+➤ p0[8,54,0]  ¦  p50[8,54,0]  ¦  p100[8,54,0]  𝄀
+-Infinity  ¦  -Infinity  ¦  -Infinity
+truncate table t_approx_float_infinity;
+insert into t_approx_float_infinity values (cast('-Inf' as double)), (cast('Inf' as double));
+select approx_percentile(v, 0) as p0, approx_percentile(v, 1) as p100 from t_approx_float_infinity;
+➤ p0[8,54,0]  ¦  p100[8,54,0]  𝄀
+-Infinity  ¦  +Infinity
+drop table t_approx_float_infinity;

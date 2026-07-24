@@ -20,10 +20,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 )
 
-func registerGroupConcatWithDefaultSeparator(id int64) {
-	aggexec.RegisterGroupConcatAgg(id, ",")
-}
-
 var supportedAggInNewFramework = []FuncNew{
 	{
 		functionId: COUNT,
@@ -60,10 +56,7 @@ var supportedAggInNewFramework = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_int64.ToType()
 				},
-				aggFramework: aggregationLogicOfOverload{
-					str:         "count",
-					aggRegister: aggexec.RegisterCountColumnAgg,
-				},
+				aggName: "count",
 			},
 		},
 	},
@@ -89,10 +82,7 @@ var supportedAggInNewFramework = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_int64.ToType()
 				},
-				aggFramework: aggregationLogicOfOverload{
-					str:         "count(*)",
-					aggRegister: aggexec.RegisterCountStarAgg,
-				},
+				aggName: "count(*)",
 			},
 		},
 	},
@@ -110,10 +100,7 @@ var supportedAggInNewFramework = []FuncNew{
 				overloadId: 0,
 				isAgg:      true,
 				retType:    ReturnFirstArgType,
-				aggFramework: aggregationLogicOfOverload{
-					str:         "min",
-					aggRegister: aggexec.RegisterMin,
-				},
+				aggName:    "min",
 			},
 		},
 	},
@@ -131,10 +118,7 @@ var supportedAggInNewFramework = []FuncNew{
 				overloadId: 0,
 				isAgg:      true,
 				retType:    ReturnFirstArgType,
-				aggFramework: aggregationLogicOfOverload{
-					str:         "max",
-					aggRegister: aggexec.RegisterMax,
-				},
+				aggName:    "max",
 			},
 		},
 	},
@@ -152,10 +136,7 @@ var supportedAggInNewFramework = []FuncNew{
 				overloadId: 0,
 				isAgg:      true,
 				retType:    aggexec.SumReturnType,
-				aggFramework: aggregationLogicOfOverload{
-					str:         "sum",
-					aggRegister: aggexec.RegisterSum,
-				},
+				aggName:    "sum",
 			},
 		},
 	},
@@ -173,10 +154,7 @@ var supportedAggInNewFramework = []FuncNew{
 				overloadId: 0,
 				isAgg:      true,
 				retType:    aggexec.AvgReturnType,
-				aggFramework: aggregationLogicOfOverload{
-					str:         "avg",
-					aggRegister: aggexec.RegisterAvg,
-				},
+				aggName:    "avg",
 			},
 		},
 	},
@@ -194,10 +172,7 @@ var supportedAggInNewFramework = []FuncNew{
 				overloadId: 0,
 				isAgg:      true,
 				retType:    aggexec.AvgTwCacheReturnType,
-				aggFramework: aggregationLogicOfOverload{
-					str:         "avg_tw_cache",
-					aggRegister: aggexec.RegisterAvgTwCache,
-				},
+				aggName:    "avg_tw_cache",
 			},
 		},
 	},
@@ -215,10 +190,7 @@ var supportedAggInNewFramework = []FuncNew{
 				overloadId: 0,
 				isAgg:      true,
 				retType:    aggexec.AvgTwResultReturnType,
-				aggFramework: aggregationLogicOfOverload{
-					str:         "avg_tw_result",
-					aggRegister: aggexec.RegisterAvgTwResult,
-				},
+				aggName:    "avg_tw_result",
 			},
 		},
 	},
@@ -256,10 +228,7 @@ var supportedAggInNewFramework = []FuncNew{
 				overloadId: 0,
 				isAgg:      true,
 				retType:    aggexec.GroupConcatReturnType,
-				aggFramework: aggregationLogicOfOverload{
-					str:         "group_concat",
-					aggRegister: registerGroupConcatWithDefaultSeparator,
-				},
+				aggName:    "group_concat",
 			},
 		},
 	},
@@ -288,10 +257,7 @@ var supportedAggInNewFramework = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_json.ToType()
 				},
-				aggFramework: aggregationLogicOfOverload{
-					str:         "json_arrayagg",
-					aggRegister: aggexec.RegisterJsonArrayAgg,
-				},
+				aggName: "json_arrayagg",
 			},
 		},
 	},
@@ -325,10 +291,7 @@ var supportedAggInNewFramework = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_json.ToType()
 				},
-				aggFramework: aggregationLogicOfOverload{
-					str:         "json_objectagg",
-					aggRegister: aggexec.RegisterJsonObjectAgg,
-				},
+				aggName: "json_objectagg",
 			},
 		},
 	},
@@ -354,10 +317,7 @@ var supportedAggInNewFramework = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_uint64.ToType()
 				},
-				aggFramework: aggregationLogicOfOverload{
-					str:         "approx_count",
-					aggRegister: aggexec.RegisterApproxCountAgg,
-				},
+				aggName: "approx_count",
 			},
 		},
 	},
@@ -384,10 +344,7 @@ var supportedAggInNewFramework = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_uint64.ToType()
 				},
-				aggFramework: aggregationLogicOfOverload{
-					str:         "approx_count_distinct",
-					aggRegister: aggexec.RegisterApproxCountAgg,
-				},
+				aggName: "approx_count_distinct",
 			},
 		},
 	},
@@ -405,10 +362,7 @@ var supportedAggInNewFramework = []FuncNew{
 				overloadId: 0,
 				isAgg:      true,
 				retType:    ReturnFirstArgType,
-				aggFramework: aggregationLogicOfOverload{
-					str:         "any_value",
-					aggRegister: aggexec.RegisterAny,
-				},
+				aggName:    "any_value",
 			},
 		},
 	},
@@ -426,10 +380,7 @@ var supportedAggInNewFramework = []FuncNew{
 				overloadId: 0,
 				isAgg:      true,
 				retType:    BitOpsReturnType,
-				aggFramework: aggregationLogicOfOverload{
-					str:         "bit_and",
-					aggRegister: aggexec.RegisterBitAndAgg,
-				},
+				aggName:    "bit_and",
 			},
 		},
 	},
@@ -447,10 +398,7 @@ var supportedAggInNewFramework = []FuncNew{
 				overloadId: 0,
 				isAgg:      true,
 				retType:    BitOpsReturnType,
-				aggFramework: aggregationLogicOfOverload{
-					str:         "bit_or",
-					aggRegister: aggexec.RegisterBitOrAgg,
-				},
+				aggName:    "bit_or",
 			},
 		},
 	},
@@ -468,10 +416,7 @@ var supportedAggInNewFramework = []FuncNew{
 				overloadId: 0,
 				isAgg:      true,
 				retType:    BitOpsReturnType,
-				aggFramework: aggregationLogicOfOverload{
-					str:         "bit_xor",
-					aggRegister: aggexec.RegisterBitXorAgg,
-				},
+				aggName:    "bit_xor",
 			},
 		},
 	},
@@ -489,10 +434,7 @@ var supportedAggInNewFramework = []FuncNew{
 				overloadId: 0,
 				isAgg:      true,
 				retType:    aggexec.VarStdDevReturnType,
-				aggFramework: aggregationLogicOfOverload{
-					str:         "var_pop",
-					aggRegister: aggexec.RegisterVarPop,
-				},
+				aggName:    "var_pop",
 			},
 		},
 	},
@@ -510,10 +452,7 @@ var supportedAggInNewFramework = []FuncNew{
 				overloadId: 0,
 				isAgg:      true,
 				retType:    aggexec.VarStdDevReturnType,
-				aggFramework: aggregationLogicOfOverload{
-					str:         "stddev_pop",
-					aggRegister: aggexec.RegisterStdDevPop,
-				},
+				aggName:    "stddev_pop",
 			},
 		},
 	},
@@ -531,10 +470,7 @@ var supportedAggInNewFramework = []FuncNew{
 				overloadId: 0,
 				isAgg:      true,
 				retType:    aggexec.VarStdDevReturnType,
-				aggFramework: aggregationLogicOfOverload{
-					str:         "var_sample",
-					aggRegister: aggexec.RegisterVarSample,
-				},
+				aggName:    "var_sample",
 			},
 		},
 	},
@@ -552,10 +488,7 @@ var supportedAggInNewFramework = []FuncNew{
 				overloadId: 0,
 				isAgg:      true,
 				retType:    aggexec.VarStdDevReturnType,
-				aggFramework: aggregationLogicOfOverload{
-					str:         "stddev_sample",
-					aggRegister: aggexec.RegisterStdDevSample,
-				},
+				aggName:    "stddev_sample",
 			},
 		},
 	},
@@ -573,10 +506,58 @@ var supportedAggInNewFramework = []FuncNew{
 				overloadId: 0,
 				isAgg:      true,
 				retType:    aggexec.MedianReturnType,
-				aggFramework: aggregationLogicOfOverload{
-					str:         "median",
-					aggRegister: aggexec.RegisterMedian,
-				},
+				aggName:    "median",
+			},
+		},
+	},
+	{
+		functionId: APPROX_PERCENTILE,
+		class:      plan.Function_AGG,
+		layout:     STANDARD_FUNCTION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			if len(inputs) != 2 {
+				return newCheckResultWithFailure(failedAggParametersWrong)
+			}
+
+			// check Arg[0]: must be numeric (same as median)
+			t0 := inputs[0]
+			if t0.Oid == types.T_any {
+				// cast to first supported type
+				return newCheckResultWithCast(0, []types.Type{aggexec.MedianSupportedType[0].ToType(), types.T_float64.ToType()})
+			}
+
+			supported := false
+			for _, st := range aggexec.MedianSupportedType {
+				if t0.Oid == st {
+					supported = true
+					break
+				}
+			}
+			if !supported {
+				return newCheckResultWithFailure(failedAggParametersWrong)
+			}
+
+			// check Arg[1]: must be a supported integer, float, or decimal type
+			t1 := inputs[1]
+			if t1.Oid == types.T_any {
+				return newCheckResultWithCast(0, []types.Type{inputs[0], types.T_float64.ToType()})
+			}
+
+			switch t1.Oid {
+			case types.T_int32, types.T_int64, types.T_float32, types.T_float64, types.T_decimal64, types.T_decimal128:
+			default:
+				return newCheckResultWithFailure(failedAggParametersWrong)
+			}
+
+			return newCheckResultWithSuccess(0)
+		},
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				isAgg:      true,
+				retType:    aggexec.ApproxPercentileReturnType,
+				aggName:    "approx_percentile",
 			},
 		},
 	},
@@ -598,11 +579,8 @@ var supportedAggInNewFramework = []FuncNew{
 					return types.T_varbinary.ToType()
 				},
 
-				isAgg: true,
-				aggFramework: aggregationLogicOfOverload{
-					str:         "bitmap_construct_agg",
-					aggRegister: aggexec.RegisterBitmapConstruct,
-				},
+				isAgg:   true,
+				aggName: "bitmap_construct_agg",
 			},
 		},
 	},
@@ -624,11 +602,8 @@ var supportedAggInNewFramework = []FuncNew{
 					return types.T_varbinary.ToType()
 				},
 
-				isAgg: true,
-				aggFramework: aggregationLogicOfOverload{
-					str:         "bitmap_or_agg",
-					aggRegister: aggexec.RegisterBitmapOr,
-				},
+				isAgg:   true,
+				aggName: "bitmap_or_agg",
 			},
 		},
 	},
@@ -655,10 +630,7 @@ var supportedAggInNewFramework = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_varbinary.ToType()
 				},
-				aggFramework: aggregationLogicOfOverload{
-					str:         "hll_add_agg",
-					aggRegister: aggexec.RegisterHllAddAgg,
-				},
+				aggName: "hll_add_agg",
 			},
 		},
 	},
@@ -688,10 +660,7 @@ var supportedAggInNewFramework = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_varbinary.ToType()
 				},
-				aggFramework: aggregationLogicOfOverload{
-					str:         "hll_merge_agg",
-					aggRegister: aggexec.RegisterHllMergeAgg,
-				},
+				aggName: "hll_merge_agg",
 			},
 		},
 	},

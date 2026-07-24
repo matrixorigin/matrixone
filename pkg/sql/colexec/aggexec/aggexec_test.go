@@ -30,11 +30,9 @@ func TestMakeAggSpecialAgg(t *testing.T) {
 		require.Equal(t, int64(0), mp.CurrNB())
 	}()
 
-	const testAggID = -9901
 	param := types.T_int64.ToType()
-	RegisterAvgTwCache(testAggID)
 
-	exec, err := MakeAgg(mp, testAggID, false, param)
+	exec, err := MakeAgg(mp, AggIdOfAvgTwCache, false, param)
 	require.NoError(t, err)
 
 	require.NoError(t, exec.GroupGrow(2))
@@ -71,6 +69,59 @@ func TestVectorsUnmarshalFromReader(t *testing.T) {
 
 	exec.Free()
 	exec2.Free()
+}
+
+func TestAggExecUnmarshalReplacesExistingState(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() {
+		require.Equal(t, int64(0), mp.CurrNB())
+	}()
+	newExec := func() *countColumnExec {
+		return newCountColumnExec(
+			mp,
+			AggIdOfCountColumn,
+			false,
+			[]types.Type{types.T_int64.ToType()},
+		).(*countColumnExec)
+	}
+
+	t.Run("empty", func(t *testing.T) {
+		target := newExec()
+		defer target.Free()
+		require.NoError(t, target.GroupGrow(1))
+
+		empty := newExec()
+		var buf bytes.Buffer
+		require.NoError(t, empty.SaveIntermediateResult(0, nil, &buf))
+		empty.Free()
+		require.NoError(t, target.UnmarshalFromReader(bytes.NewReader(buf.Bytes()), mp))
+		require.Zero(t, target.GetNumGroups())
+	})
+
+	t.Run("multiple_chunks", func(t *testing.T) {
+		target := newExec()
+		defer target.Free()
+		require.NoError(t, target.GroupGrow(2))
+
+		source := newExec()
+		defer source.Free()
+		require.NoError(t, source.GroupGrow(AggBatchSize+1))
+		flags := [][]uint8{make([]uint8, AggBatchSize), {1}}
+		for i := range flags[0] {
+			flags[0][i] = 1
+		}
+		var buf bytes.Buffer
+		require.NoError(t, source.SaveIntermediateResult(AggBatchSize+1, flags, &buf))
+		require.NoError(t, target.UnmarshalFromReader(bytes.NewReader(buf.Bytes()), mp))
+		require.Equal(t, AggBatchSize+1, target.GetNumGroups())
+
+		results, err := target.Flush()
+		require.NoError(t, err)
+		require.Len(t, results, 2)
+		for _, result := range results {
+			result.Free(mp)
+		}
+	})
 }
 
 func TestAggStateInitSaveArgCleanup(t *testing.T) {

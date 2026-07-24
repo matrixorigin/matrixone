@@ -785,10 +785,11 @@ const (
 	VECF16_FROM_BASE64   = 551
 	VECINT8_FROM_BASE64  = 552
 	VECUINT8_FROM_BASE64 = 553
+	APPROX_PERCENTILE    = 554
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 554
+	FUNCTION_END_NUMBER = 555
 )
 
 // functionIdRegister is what function we have registered already.
@@ -883,6 +884,7 @@ var functionIdRegister = map[string]int32{
 	"hll_merge_agg":         HLL_MERGE_AGG,
 	"any_value":             ANY_VALUE,
 	"median":                MEDIAN,
+	"approx_percentile":     APPROX_PERCENTILE,
 	// count window
 	"rank":         RANK,
 	"row_number":   ROW_NUMBER,

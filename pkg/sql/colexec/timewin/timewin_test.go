@@ -161,6 +161,66 @@ func TestTimeWin(t *testing.T) {
 	}
 }
 
+func TestTimeWinApproxPercentileEndpointConfigs(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		config string
+		want   float64
+	}{
+		{name: "lower endpoint", config: "0", want: 1},
+		{name: "upper endpoint", config: "1", want: 1000},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			input := testutil.MakeInt32Vector([]int32{1, 4, 5, 1000}, nil, proc.Mp())
+			arg := &TimeWin{
+				Types: []types.Type{types.T_int32.ToType()},
+				Aggs: []aggexec.AggFuncExecExpression{
+					aggexec.MakeAggFunctionExpression(
+						aggexec.AggIdOfApproxPercentile,
+						false,
+						[]*plan.Expr{newExpression(1)},
+						[]byte(tc.config)),
+				},
+			}
+
+			aggs, err := makeAggExecutors(arg, proc, false)
+			require.NoError(t, err)
+			require.Len(t, aggs, 1)
+			require.NoError(t, aggs[0].GroupGrow(1))
+			require.NoError(t, aggs[0].BatchFill(0, []uint64{1, 1, 1, 1}, []*vector.Vector{input}))
+			results, err := aggs[0].Flush()
+			require.NoError(t, err)
+			require.Equal(t, []float64{tc.want}, vector.MustFixedColWithTypeCheck[float64](results[0]))
+
+			results[0].Free(proc.Mp())
+			aggs[0].Free()
+			input.Free(proc.Mp())
+			proc.Free()
+			require.Equal(t, int64(0), proc.Mp().CurrNB())
+		})
+	}
+}
+
+func TestTimeWinApproxPercentileRejectsInvalidExecutorConfig(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	arg := &TimeWin{
+		Types: []types.Type{types.T_int32.ToType()},
+		Aggs: []aggexec.AggFuncExecExpression{
+			aggexec.MakeAggFunctionExpression(
+				aggexec.AggIdOfApproxPercentile,
+				false,
+				[]*plan.Expr{newExpression(1)},
+				[]byte("1.01")),
+		},
+	}
+
+	_, err := makeAggExecutors(arg, proc, false)
+	require.ErrorContains(t, err, "percentile must be in [0,1]")
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
 // TestTimeWinSplitDistinctResultAndReplace verifies the complete non-final
 // flush transition: split physical results are materialized as one logical
 // batch, and the flushed DISTINCT executor is freed before its replacement is
