@@ -1,0 +1,117 @@
+drop database if exists narrowgen;
+create database narrowgen;
+use narrowgen;
+create table nv(
+a int primary key,
+bf vecbf16(3),
+f16 vecf16(3),
+i8 vecint8(3),
+u8 vecuint8(3)
+);
+insert into nv values
+(1, '[1,2,3]',  '[1,2,3]',  '[1,2,3]',  '[1,2,3]'),
+(2, '[4,5,6]',  '[4,5,6]',  '[4,5,6]',  '[4,5,6]'),
+(3, '[-1,0,7]', '[-1,0,7]', '[-1,0,7]', '[10,128,255]');
+select mo_ctl('dn', 'flush', 'narrowgen.nv');
+➤ mo_ctl(dn, flush, narrowgen.nv)[12,-1,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select mo_table_col_max('narrowgen', 'nv', 'a');
+➤ mo_table_col_max(narrowgen, nv, a)[12,-1,0]  𝄀
+3
+select mo_table_col_max('narrowgen', 'nv', 'bf');
+➤ mo_table_col_max(narrowgen, nv, bf)[12,-1,0]  𝄀
+
+select mo_table_col_max('narrowgen', 'nv', 'i8');
+➤ mo_table_col_max(narrowgen, nv, i8)[12,-1,0]  𝄀
+
+select mo_table_col_max('narrowgen', 'nv', 'u8');
+➤ mo_table_col_max(narrowgen, nv, u8)[12,-1,0]  𝄀
+
+select hex(group_concat(i8 order by a)) from nv;
+➤ hex(group_concat(i8, ,order by a))[12,-1,0]  𝄀
+0102032C0405062CFF0007
+select hex(group_concat(u8 order by a)) from nv;
+➤ hex(group_concat(u8, ,order by a))[12,-1,0]  𝄀
+0102032C0405062C0A80FF
+select hex(group_concat(bf order by a)) from nv where a = 1;
+➤ hex(group_concat(bf, ,order by a))[12,-1,0]  𝄀
+803F00404040
+select hex(group_concat(f16 order by a)) from nv where a = 1;
+➤ hex(group_concat(f16, ,order by a))[12,-1,0]  𝄀
+003C00400042
+select json_arrayagg(i8) from nv where a = 3;
+➤ json_arrayagg(i8)[-1,2147483647,0]  𝄀
+[[-1, 0, 7]]
+select json_arrayagg(u8) from nv where a = 3;
+➤ json_arrayagg(u8)[-1,2147483647,0]  𝄀
+[[10, 128, 255]]
+select json_arrayagg(bf) from nv where a = 1;
+➤ json_arrayagg(bf)[-1,2147483647,0]  𝄀
+[[1, 2, 3]]
+select json_arrayagg(f16) from nv where a = 1;
+➤ json_arrayagg(f16)[-1,2147483647,0]  𝄀
+[[1, 2, 3]]
+select count(*) from (select sample(i8, 2 rows) from nv) t;
+➤ count(*)[-5,64,0]  𝄀
+2
+select count(*) from (select sample(u8, 2 rows) from nv) t;
+➤ count(*)[-5,64,0]  𝄀
+2
+select count(*) from (select sample(bf, 2 rows) from nv) t;
+➤ count(*)[-5,64,0]  𝄀
+2
+select coalesce(i8, '[0,0,0]') from nv where a = 1;
+➤ coalesce(i8, [0,0,0])[12,65535,0]  𝄀
+[1, 2, 3]
+select coalesce(bf, '[0,0,0]') from nv where a = 1;
+➤ coalesce(bf, [0,0,0])[12,65535,0]  𝄀
+[1, 2, 3]
+select least(i8, i8) from nv where a = 1;
+➤ least(i8, i8)[12,3,0]  𝄀
+[1, 2, 3]
+select greatest(u8, u8) from nv where a = 3;
+➤ greatest(u8, u8)[12,3,0]  𝄀
+[10, 128, 255]
+select least(f16, f16) from nv where a = 1;
+➤ least(f16, f16)[12,3,0]  𝄀
+[1, 2, 3]
+select hex(serial(i8, a)) from nv where a = 1;
+➤ hex(serial(i8, a))[12,-1,0]  𝄀
+4601010203003A1501
+select serial_extract(serial(i8, a), 0 as vecint8(3)) from nv where a = 1;
+➤ serial_extract(serial(i8, a), 0 as vecint8(3))[12,3,0]  𝄀
+[1, 2, 3]
+select serial_extract(serial(bf, a), 0 as vecbf16(3)) from nv where a = 1;
+➤ serial_extract(serial(bf, a), 0 as vecbf16(3))[12,3,0]  𝄀
+[1, 2, 3]
+select json_row(i8) from nv where a = 1;
+➤ json_row(i8)[12,-1,0]  𝄀
+[[1,2,3]]
+select json_array(i8) from nv where a = 3;
+➤ json_array(i8)[-1,2147483647,0]  𝄀
+[[-1, 0, 7]]
+select json_array(u8) from nv where a = 3;
+➤ json_array(u8)[-1,2147483647,0]  𝄀
+[[10, 128, 255]]
+select json_object('k', bf) from nv where a = 1;
+➤ json_object(k, bf)[-1,2147483647,0]  𝄀
+{"k": [1, 2, 3]}
+create table alt(a int);
+insert into alt values (1);
+alter table alt add column v vecint8(3) not null;
+select v from alt;
+➤ v[12,3,0]  𝄀
+[0, 0, 0]
+alter table alt add column w vecbf16(3) not null;
+select w from alt;
+➤ w[12,3,0]  𝄀
+[0, 0, 0]
+drop database narrowgen;

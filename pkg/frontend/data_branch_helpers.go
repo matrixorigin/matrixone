@@ -598,6 +598,22 @@ func formatValIntoString(ses *Session, val any, t types.Type, buf *bytes.Buffer)
 		buf.WriteString("'")
 		buf.WriteString(types.ArrayToString[float64](val.([]float64)))
 		buf.WriteString("'")
+	case types.T_array_bf16:
+		buf.WriteString("'")
+		buf.WriteString(types.ArrayToString[types.BF16](val.([]types.BF16)))
+		buf.WriteString("'")
+	case types.T_array_float16:
+		buf.WriteString("'")
+		buf.WriteString(types.ArrayToString[types.Float16](val.([]types.Float16)))
+		buf.WriteString("'")
+	case types.T_array_int8:
+		buf.WriteString("'")
+		buf.WriteString(types.ArrayToString[int8](val.([]int8)))
+		buf.WriteString("'")
+	case types.T_array_uint8:
+		buf.WriteString("'")
+		buf.WriteString(types.ArrayToString[uint8](val.([]uint8)))
+		buf.WriteString("'")
 	default:
 		return moerr.NewNotSupportedNoCtxf("formatValIntoString: not support type %v", t.Oid)
 	}
@@ -796,6 +812,14 @@ func compareValueFromVector(vec *vector.Vector, rowIdx int) (any, error) {
 		return vector.GetArrayAt[float32](vec, rowIdx), nil
 	case types.T_array_float64:
 		return vector.GetArrayAt[float64](vec, rowIdx), nil
+	case types.T_array_bf16:
+		return vector.GetArrayAt[types.BF16](vec, rowIdx), nil
+	case types.T_array_float16:
+		return vector.GetArrayAt[types.Float16](vec, rowIdx), nil
+	case types.T_array_int8:
+		return vector.GetArrayAt[int8](vec, rowIdx), nil
+	case types.T_array_uint8:
+		return vector.GetArrayAt[uint8](vec, rowIdx), nil
 	case types.T_date:
 		return vector.GetFixedAtNoTypeCheck[types.Date](vec, rowIdx), nil
 	case types.T_datetime:
@@ -856,6 +880,34 @@ func normalizeCompareValue(typ types.Type, val any) (any, error) {
 			return v, nil
 		case []byte:
 			return types.BytesToArray[float64](v), nil
+		}
+	case types.T_array_bf16:
+		switch v := val.(type) {
+		case []types.BF16:
+			return v, nil
+		case []byte:
+			return types.BytesToArray[types.BF16](v), nil
+		}
+	case types.T_array_float16:
+		switch v := val.(type) {
+		case []types.Float16:
+			return v, nil
+		case []byte:
+			return types.BytesToArray[types.Float16](v), nil
+		}
+	case types.T_array_int8:
+		switch v := val.(type) {
+		case []int8:
+			return v, nil
+		case []byte:
+			return types.BytesToArray[int8](v), nil
+		}
+	case types.T_array_uint8:
+		// []uint8 IS []byte in Go, and for a uint8 vector the raw payload is
+		// already the element slice — so one case covers both spellings and
+		// BytesToArray would be a no-op reinterpretation.
+		if v, ok := val.([]byte); ok {
+			return v, nil
 		}
 	case types.T_decimal256:
 		return normalizeFixedCompareValue[types.Decimal256](typ, val)
@@ -924,6 +976,10 @@ func compareSingleValueByType(typ types.T, left any, right any) (int, error) {
 		types.Uuid, types.TS, types.Blockid, types.Rowid,
 		[]byte, bytejson.ByteJson,
 		[]float32, []float64,
+		// narrow vector element slices — types.CompareValue handles these too.
+		// []uint8 is omitted deliberately: it is identical to []byte in Go and
+		// is already accepted above.
+		[]types.BF16, []types.Float16, []int8,
 		types.Enum, string:
 	default:
 		return 0, moerr.NewInternalErrorNoCtxf(

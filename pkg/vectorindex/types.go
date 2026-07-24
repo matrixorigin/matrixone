@@ -23,6 +23,9 @@ import (
 	usearch "github.com/unum-cloud/usearch/golang"
 )
 
+// QUANTIZATION lives in pkg/vectorindex/quantizer: ToVectorType, Int8Params,
+// SQLTypeName, TrainInt8, ApplyInt8, and the SQL entry-projection builders.
+
 /*
   HNSW vector index using usearch
 
@@ -150,16 +153,17 @@ type IvfParam struct {
 
 // IVF-PQ specified parameters
 type IvfpqParam struct {
-	Lists              string `json:"lists"`
-	M                  string `json:"m"`
-	BitsPerCode        string `json:"bits_per_code"`
-	OpType             string `json:"op_type"`
-	Quantization       string `json:"quantization"`
-	Distribution       string `json:"distribution_mode"`
-	IncludedColumns    string `json:"included_columns"`
-	KmeansTrainPercent string `json:"kmeans_train_percent"`
-	KmeansMaxIteration string `json:"kmeans_max_iteration"`
-	MaxIndexCapacity   string `json:"max_index_capacity"`
+	Lists               string `json:"lists"`
+	M                   string `json:"m"`
+	BitsPerCode         string `json:"bits_per_code"`
+	OpType              string `json:"op_type"`
+	Quantization        string `json:"quantization"`
+	Distribution        string `json:"distribution_mode"`
+	IncludedColumns     string `json:"included_columns"`
+	KmeansTrainPercent  string `json:"kmeans_train_percent"`
+	KmeansMaxIteration  string `json:"kmeans_max_iteration"`
+	MaxIndexCapacity    string `json:"max_index_capacity"`
+	QuantizerTrainLimit string `json:"quantizer_train_limit"`
 }
 
 // CAGRA specified parameters
@@ -176,16 +180,23 @@ type CagraParam struct {
 	ITopkSize              string `json:"itopk_size"`
 	IncludedColumns        string `json:"included_columns"`
 	MaxIndexCapacity       string `json:"max_index_capacity"`
+	QuantizerTrainLimit    string `json:"quantizer_train_limit"`
 }
 
 type IvfflatIndexConfig struct {
-	Lists              uint
-	Metric             uint16
-	InitType           uint16
-	Dimensions         uint
-	Spherical          bool
-	Version            int64
-	VectorType         int32
+	Lists      uint
+	Metric     uint16
+	InitType   uint16
+	Dimensions uint
+	Spherical  bool
+	Version    int64
+	VectorType int32
+	// CentroidType is the element type the centroid hidden table is stored in.
+	// Entries always keep VectorType (the input/quantization type); centroids may
+	// be f32 (decoupled — best recall, fast f32 SIMD search, negligible RAM for
+	// few centroids) or follow VectorType (least RAM, narrow-native search). 0 ==
+	// unset is treated as T_array_float32. (cuVS allows the same choice.)
+	CentroidType       int32
 	KmeansTrainPercent float64
 	KmeansMaxIteration int64
 }
@@ -213,6 +224,7 @@ type CuvsCagraIndexConfig struct {
 	Quantization            uint16
 	DistributionMode        uint16
 	IncludedColumns         []string
+	QuantizerTrainLimit     uint64
 }
 
 type CuvsIvfpqIndexConfig struct {
@@ -226,6 +238,7 @@ type CuvsIvfpqIndexConfig struct {
 	Version                int64
 	KmeansTrainsetFraction float64
 	IncludedColumns        []string
+	QuantizerTrainLimit    uint64
 }
 
 // This is generalized index config and able to share between various algorithm types.  Simply add your new configuration such as usearch.IndexConfig

@@ -600,6 +600,54 @@ func SetInsertValueString(proc *process.Process, numVal *tree.NumVal, typ *types
 				}
 
 				v = types.ArrayToBytes[float64](_v)
+
+			case types.T_array_bf16:
+				_v, err := types.StringToArray[types.BF16](s)
+				if err != nil {
+					return nil, err
+				}
+
+				if len(_v) != destLen {
+					return nil, moerr.NewArrayDefMismatchNoCtx(int(typ.Width), len(_v))
+				}
+
+				v = types.ArrayToBytes[types.BF16](_v)
+
+			case types.T_array_float16:
+				_v, err := types.StringToArray[types.Float16](s)
+				if err != nil {
+					return nil, err
+				}
+
+				if len(_v) != destLen {
+					return nil, moerr.NewArrayDefMismatchNoCtx(int(typ.Width), len(_v))
+				}
+
+				v = types.ArrayToBytes[types.Float16](_v)
+
+			case types.T_array_int8:
+				_v, err := types.StringToArray[int8](s)
+				if err != nil {
+					return nil, err
+				}
+
+				if len(_v) != destLen {
+					return nil, moerr.NewArrayDefMismatchNoCtx(int(typ.Width), len(_v))
+				}
+
+				v = types.ArrayToBytes[int8](_v)
+
+			case types.T_array_uint8:
+				_v, err := types.StringToArray[uint8](s)
+				if err != nil {
+					return nil, err
+				}
+
+				if len(_v) != destLen {
+					return nil, moerr.NewArrayDefMismatchNoCtx(int(typ.Width), len(_v))
+				}
+
+				v = types.ArrayToBytes[uint8](_v)
 			default:
 				return nil, moerr.NewInternalErrorNoCtxf("%s is not supported array type", typ.String())
 
