@@ -841,11 +841,11 @@ func ensureWorkloadPolicyFeatureReady(
 	return ensureWorkloadPolicyRPCReady(ctx, ses)
 }
 
-// ensureWorkloadPolicyRPCReady verifies the capability of every CN in the
-// current cluster snapshot. The local protocol version is not a cluster-wide
-// compatibility barrier during a rolling upgrade: a new CN can default to the
-// latest protocol while an already-running old CN still reports an older one.
-// This check is intentionally confined to the ALTER control plane.
+// ensureWorkloadPolicyRPCReady verifies the actual handler capability of every
+// CN in the current cluster snapshot. A reported protocol version is mutable
+// runtime state and therefore is not proof that an old binary registered the
+// workload-policy handler. This check is intentionally confined to the ALTER
+// control plane.
 func ensureWorkloadPolicyRPCReady(
 	ctx context.Context,
 	ses *Session,
@@ -907,32 +907,22 @@ func ensureWorkloadPolicyRPCReady(
 
 	var responseErr error
 	genRequest := func() *query.Request {
-		request := qc.NewRequest(query.CmdMethod_GetProtocolVersion)
-		request.GetProtocolVersion = &query.GetProtocolVersionRequest{}
+		request := qc.NewRequest(query.CmdMethod_WorkloadPolicyUpdate)
+		request.WorkloadPolicyUpdateRequest = &query.WorkloadPolicyUpdateRequest{
+			Probe: true,
+		}
 		return request
 	}
 	handleValidResponse := func(node string, response *query.Response) {
-		if response == nil || response.GetProtocolVersion == nil {
+		if response == nil ||
+			response.WorkloadPolicyUpdateResponse == nil ||
+			!response.WorkloadPolicyUpdateResponse.Supported {
 			responseErr = errors.Join(
 				responseErr,
 				moerr.NewInternalErrorf(
 					ctx,
-					"CN %s returned an empty protocol version response",
+					"CN %s did not confirm workload policy capability",
 					nodeIDs[node],
-				),
-			)
-			return
-		}
-		version := response.GetProtocolVersion.Version
-		if version < defines.MORPCVersion5 {
-			responseErr = errors.Join(
-				responseErr,
-				moerr.NewInternalErrorf(
-					ctx,
-					"workload policy requires protocol version %d or later on every CN; CN %s reports version %d",
-					defines.MORPCVersion5,
-					nodeIDs[node],
-					version,
 				),
 			)
 		}
@@ -942,7 +932,7 @@ func ensureWorkloadPolicyRPCReady(
 			responseErr,
 			moerr.NewInternalErrorf(
 				ctx,
-				"failed to verify workload policy protocol on CN %s",
+				"failed to verify workload policy capability on CN %s",
 				nodeIDs[node],
 			),
 		)
