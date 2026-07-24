@@ -120,9 +120,80 @@ type lastActiveCountingBackend struct {
 	loads atomic.Int32
 }
 
+type drainOnFirstSendBackend struct {
+	*testBackend
+	admissible atomic.Bool
+	closeCalls atomic.Int32
+}
+
+func (b *drainOnFirstSendBackend) admissionAvailable() bool {
+	return b.admissible.Load()
+}
+
+func (b *drainOnFirstSendBackend) Send(context.Context, Message) (*Future, error) {
+	b.admissible.Store(false)
+	return nil, backendDraining
+}
+
+func (b *drainOnFirstSendBackend) Close() {
+	b.closeCalls.Add(1)
+	b.testBackend.Close()
+}
+
+type drainRaceFactory struct {
+	mu    sync.Mutex
+	first *drainOnFirstSendBackend
+	count int
+}
+
+func (f *drainRaceFactory) Create(string, ...BackendOption) (Backend, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.count++
+	if f.count == 1 {
+		f.first = &drainOnFirstSendBackend{
+			testBackend: &testBackend{activeTime: time.Now()},
+		}
+		f.first.admissible.Store(true)
+		return f.first, nil
+	}
+	return &testBackend{id: f.count, activeTime: time.Now()}, nil
+}
+
+func (f *drainRaceFactory) snapshot() (int, *drainOnFirstSendBackend) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.count, f.first
+}
+
 func (b *lastActiveCountingBackend) LastActiveTime() time.Time {
 	b.loads.Add(1)
 	return b.testBackend.LastActiveTime()
+}
+
+func TestClientRetriesDrainAdmissionRaceWithoutClosingOldBackend(t *testing.T) {
+	factory := &drainRaceFactory{}
+	rpcClient, err := NewClient(
+		t.Name(),
+		factory,
+		WithClientMaxBackendPerHost(1),
+		WithClientDisableCircuitBreaker(),
+	)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, rpcClient.Close()) }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	f, err := rpcClient.Send(ctx, "remote", newTestMessage(1))
+	require.NoError(t, err)
+	defer f.Close()
+	_, err = f.Get()
+	require.NoError(t, err)
+	count, first := factory.snapshot()
+	require.GreaterOrEqual(t, count, 2)
+	require.NotNil(t, first)
+	require.Zero(t, first.closeCalls.Load(),
+		"an admission race must preserve the old draining generation")
 }
 
 func (f *failingCreateFactory) Create(string, ...BackendOption) (Backend, error) {

@@ -301,6 +301,49 @@ func TestStartWriteLoopCompletesBatchOnWriteFailure(t *testing.T) {
 	require.Equal(t, int32(2), released.Load())
 }
 
+func TestStartWriteLoopUsesEarliestBatchDeadline(t *testing.T) {
+	s := &server{
+		name:     "test",
+		metrics:  newServerMetrics("test"),
+		logger:   logutil.GetPanicLoggerWithLevel(zap.FatalLevel),
+		stopper:  stopper.NewStopper("test"),
+		sessions: &sync.Map{},
+	}
+	s.adjust()
+	s.options.batchSendSize = 2
+	defer s.stopper.Stop()
+
+	conn := newTestIOSession(nil, nil)
+	cs := newClientSession(
+		s.metrics,
+		conn,
+		newTestCodec(),
+		func() *Future { return newFuture(nil) },
+		nil,
+	)
+
+	newResponse := func(id uint64, timeout time.Duration) *Future {
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		t.Cleanup(cancel)
+		f := newFuture(nil)
+		f.init(RPCMessage{Ctx: ctx, Message: newTestMessage(id)})
+		f.ref()
+		t.Cleanup(f.Close)
+		return f
+	}
+	cs.c <- newResponse(1, 3*time.Second)
+	cs.c <- newResponse(2, time.Second)
+
+	require.NoError(t, s.startWriteLoop(cs))
+	select {
+	case timeout := <-conn.flushC:
+		require.Positive(t, timeout)
+		require.LessOrEqual(t, timeout, time.Second)
+	case <-time.After(time.Second):
+		t.Fatal("server writer did not flush the queued batch")
+	}
+}
+
 func TestStreamServer(t *testing.T) {
 	testRPCServer(t, func(rs *server) {
 		ctx, cancel := context.WithTimeout(context.TODO(), time.Second*10)
@@ -349,6 +392,7 @@ type testIOSession struct {
 	writeErrAt int32
 	writeCount atomic.Int32
 	flushErr   error
+	flushC     chan time.Duration
 }
 
 func newTestIOSession(writeErr, flushErr error) *testIOSession {
@@ -365,6 +409,7 @@ func newTestIOSessionWithWriteErrorAt(writeErrAt int32, writeErr, flushErr error
 		writeErr:   writeErr,
 		writeErrAt: writeErrAt,
 		flushErr:   flushErr,
+		flushC:     make(chan time.Duration, 1),
 	}
 }
 
@@ -381,11 +426,17 @@ func (s *testIOSession) Write(any, goetty.WriteOptions) error {
 	}
 	return nil
 }
-func (s *testIOSession) Flush(time.Duration) error { return s.flushErr }
-func (s *testIOSession) RemoteAddress() string     { return "" }
-func (s *testIOSession) RawConn() net.Conn         { return nil }
-func (s *testIOSession) UseConn(net.Conn)          {}
-func (s *testIOSession) OutBuf() *buf.ByteBuf      { return s.out }
+func (s *testIOSession) Flush(timeout time.Duration) error {
+	select {
+	case s.flushC <- timeout:
+	default:
+	}
+	return s.flushErr
+}
+func (s *testIOSession) RemoteAddress() string { return "" }
+func (s *testIOSession) RawConn() net.Conn     { return nil }
+func (s *testIOSession) UseConn(net.Conn)      {}
+func (s *testIOSession) OutBuf() *buf.ByteBuf  { return s.out }
 
 func TestStreamServerWithCache(t *testing.T) {
 	testRPCServer(t, func(rs *server) {
