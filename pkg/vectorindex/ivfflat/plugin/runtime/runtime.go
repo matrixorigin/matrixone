@@ -24,20 +24,18 @@ import (
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"strconv"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	catalogplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/catalog"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/quantizer"
 )
 
-// actionIvfflatReindex mirrors idxcron.Action_Ivfflat_Reindex. Inlined
-// here so this package doesn't import pkg/vectorindex/idxcron — which
-// would create an import cycle in tests via testengine → pkg/sql/plan →
-// this plugin.
-//
-// Stays in lock-step with pkg/vectorindex/idxcron/executor.go:56.
+// Kept local so the plugin package stays independent of the cron executor,
+// whose tests import the IVF-FLAT idxcron hook directly.
 const actionIvfflatReindex = "ivfflat_reindex"
 
 // Compile-time interface check.
@@ -127,14 +125,67 @@ func (CatalogHooks) ExperimentalFlag() string { return "" }
 
 // SupportedOpTypes returns IVF-FLAT's metric registry. IVF uses a
 // distinct metric table from HNSW/USearch (OpTypeToIvfMetric).
-// SupportedVectorTypes: IVF-FLAT indexes f32 or f64 vectors.
+// SupportedVectorTypes: IVF-FLAT indexes all vector element types. Entries are
+// stored in their own (narrow) type; centroids are f32 (decoupled). kmeans runs
+// in f32, narrow distances go through the float32 bridge / narrow kernels.
 func (CatalogHooks) SupportedVectorTypes() []types.T {
-	return []types.T{types.T_array_float32, types.T_array_float64}
+	return []types.T{
+		types.T_array_float32, types.T_array_float64,
+		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8,
+	}
 }
 
 // SupportedPrimaryKeyTypes: IVF-FLAT imposes no PK-type constraint — the
 // primary key may be any type. nil = "no constraint".
 func (CatalogHooks) SupportedPrimaryKeyTypes() []types.T { return nil }
+
+// ValidQuantization gates the quantization value for IVF-FLAT: it must name a
+// narrow vector type IVF-FLAT supports (float32/float16/bf16/int8/uint8, via
+// quantizer.ToVectorType). IVF-FLAT re-ranks in the QUANTIZED domain from the
+// stored narrow entries (it has no source vectors to re-rank from), so the
+// stored geometry must be preserved by the quantizer. The affine int8/uint8
+// scalar quantizer q(x)=a*x+b preserves L2 ordering (up to the a^2 scale that
+// search.go rescales away) but NOT inner-product or cosine geometry — the
+// a*b*(sum x + sum y) cross term makes <q(x),q(y)> depend on each vector's sum.
+// So int8/uint8 are gated to L2 op_type only, matching CAGRA/IVF-PQ; f32/f16/bf16
+// (lossless-ordering casts) keep all op_types. One home for CREATE (plan/schema)
+// and REINDEX (compile/ValidateReindexParams).
+func (CatalogHooks) ValidQuantization(quant, op string) error {
+	if quant == "" {
+		return nil
+	}
+	vt, ok := quantizer.ToVectorType(quant)
+	if !ok {
+		return moerr.NewNotSupportedNoCtxf(
+			"ivfflat quantization %q (supported: float32, float16, bf16, int8, uint8)", quant)
+	}
+	if vt == types.T_array_int8 || vt == types.T_array_uint8 {
+		// ALLOWLIST, not a denylist. Rejecting only IP/cosine let L1 through,
+		// and search then divides every quantized score by QuantMul^2 — correct
+		// for squared L2 (||q(a)-q(b)||^2 = mul^2*||a-b||^2) but wrong for L1,
+		// which scales linearly (|q(a)-q(b)| = mul*|a-b|, so the inverse is
+		// 1/mul). With [min,max]=[0,1] a true L1 distance near 0.5 was reported
+		// near 0.5/255: ordering stayed monotonic, so it looked fine, while
+		// returned distances and any range predicate in source units were
+		// silently wrong. Fail at DDL instead — and any op_type added later is
+		// rejected until someone works out its inverse scale, rather than
+		// inheriting the L2 one by default.
+		switch strings.ToLower(strings.TrimSpace(op)) {
+		case "":
+			// op_type not specified. On CREATE the caller defaults it to L2; on
+			// ALTER ... REINDEX the params carry only what is being changed, so
+			// an empty op means "unchanged" and the existing one was already
+			// validated when the index was created. Rejecting it here broke
+			// `alter ... reindex` that only changes quantization
+			// (TestIvfflatValidateReindexParams_Quantization).
+		case metric.OpType_L2Distance, metric.OpType_L2sqDistance:
+		default:
+			return moerr.NewNotSupportedNoCtxf(
+				"ivfflat quantization %q is only supported with L2 (op_type 'vector_l2_ops' or 'vector_l2sq_ops'); the int8/uint8 affine quantizer preserves L2 geometry only, and the quantized-score rescale assumes it", quant)
+		}
+	}
+	return nil
+}
 
 // SupportedIncludeColumnTypes: this index has no INCLUDE-column support.
 func (CatalogHooks) SupportedIncludeColumnTypes() []types.T { return nil }
@@ -221,6 +272,18 @@ func (CatalogHooks) ParamsFromTree(idx *tree.Index) (map[string]string, error) {
 	}
 	if idx.IndexOption.KmeansMaxIteration > 0 {
 		res[catalog.IndexAlgoParamKmeansMaxIteration] = strconv.FormatInt(idx.IndexOption.KmeansMaxIteration, 10)
+	}
+
+	// QUANTIZATION stores the ivfflat ENTRIES in a narrow type (float16/int8);
+	// the base column and f32 centroids are unchanged. Persist it in algo_params
+	// so the entries build (compile) and the search can read it back. Only the
+	// predefined names that map to a MO narrow vector type are accepted.
+	if q := idx.IndexOption.Quantization; q != "" {
+		if _, ok := quantizer.ToVectorType(q); !ok {
+			return nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf(
+				"ivfflat: unsupported quantization '%s' (supported: 'float32', 'float16', 'bf16', 'int8', 'uint8')", q))
+		}
+		res[catalog.Quantization] = catalog.ToLower(q)
 	}
 	return res, nil
 }

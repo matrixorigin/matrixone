@@ -33,6 +33,8 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 )
 
 func ReadPacketForTest(c *Conn) ([]byte, error) {
@@ -142,6 +144,102 @@ func generateRandomBytes(n int) []byte {
 	randomIndex := rand.Intn(len(data))
 	data[randomIndex] = 1
 	return data
+}
+
+func TestConnCountsCompletedOutputPackets(t *testing.T) {
+	_, conn := newTestConn(t, NewLeakCheckAllocator())
+	defer conn.Close()
+	ses := &Session{}
+	conn.SetSession(ses)
+
+	for range 2 {
+		assert.NoError(t, conn.BeginPacket())
+		assert.NoError(t, conn.Append([]byte("x")...))
+		assert.NoError(t, conn.FinishedPacket())
+	}
+	assert.NoError(t, conn.Flush())
+	assert.Equal(t, int64(2), ses.GetFlushPacketCnt())
+
+	assert.NoError(t, conn.Write([]byte{defines.OKHeader}))
+	assert.Equal(t, int64(3), ses.GetFlushPacketCnt())
+}
+
+func TestLegacyPacketCounterAliases(t *testing.T) {
+	ses := &Session{}
+	ses.CountFlushPackage(2)
+	ses.CountFlushPackage(3)
+	assert.Equal(t, int64(5), ses.GetFlushPacketCnt())
+	assert.Equal(t, int64(5), ses.GetFlushPacketCnt())
+}
+
+type partialWriteConn struct {
+	testConn
+	limit int
+}
+
+func (c *partialWriteConn) Write(buf []byte) (int, error) {
+	n := min(c.limit, len(buf))
+	c.data = append(c.data, buf[:n]...)
+	return n, io.ErrUnexpectedEOF
+}
+
+func TestConnCountsPartialWriteFacts(t *testing.T) {
+	underlying := &partialWriteConn{limit: 5}
+	sv, err := getSystemVariables("test/system_vars_config.toml")
+	assert.NoError(t, err)
+	setSessionAlloc("", NewLeakCheckAllocator())
+	conn, err := NewIOSession(underlying, config.NewParameterUnit(sv, nil, nil, nil), "")
+	assert.NoError(t, err)
+	defer conn.Close()
+	ses := &Session{}
+	conn.SetSession(ses)
+
+	data := append(makePacket([]byte("a"), 0), makePacket([]byte("b"), 1)...)
+	assert.ErrorIs(t, conn.WriteToConn(data), io.ErrUnexpectedEOF)
+	assert.Equal(t, 5, ses.GetOutputBytes())
+	assert.Equal(t, int64(1), ses.GetFlushPacketCnt())
+}
+
+func TestConnMeasuresOnlyPhysicalOutputWrite(t *testing.T) {
+	underlying := &partialWriteConn{limit: 5}
+	sv, err := getSystemVariables("test/system_vars_config.toml")
+	assert.NoError(t, err)
+	setSessionAlloc("", NewLeakCheckAllocator())
+	conn, err := NewIOSession(underlying, config.NewParameterUnit(sv, nil, nil, nil), "")
+	assert.NoError(t, err)
+	defer conn.Close()
+
+	tracker := new(responseOutputWaitTracker)
+	conn.setResponseOutputWaitTracker(tracker)
+	counter := new(perfcounter.CounterSet)
+	err = conn.withOutputCounter(counter, func() error {
+		return conn.WriteToConn([]byte("physical-write"))
+	})
+	assert.ErrorIs(t, err, io.ErrUnexpectedEOF)
+	assert.Positive(t, counter.ProtocolOutputWaitNS.Load())
+	assert.Equal(t, counter.ProtocolOutputWaitNS.Load(), tracker.totalNS.Load())
+	assert.Equal(t, tracker.totalNS.Load(), tracker.operatorNS.Load())
+	assert.Nil(t, conn.outputCounter.Load())
+	assert.Same(t, tracker, conn.responseOutputWait.Load())
+	conn.setResponseOutputWaitTracker(nil)
+}
+
+func TestConnMeasuresDelayedBufferedFlush(t *testing.T) {
+	underlying, conn := newTestConn(t, NewLeakCheckAllocator())
+	defer conn.Close()
+
+	tracker := new(responseOutputWaitTracker)
+	conn.setResponseOutputWaitTracker(tracker)
+	assert.NoError(t, conn.BeginPacket())
+	assert.NoError(t, conn.Append([]byte("buffered")...))
+	assert.NoError(t, conn.FinishedPacket())
+	assert.Empty(t, underlying.data)
+	assert.Zero(t, tracker.totalNS.Load())
+
+	assert.NoError(t, conn.Flush())
+	assert.NotEmpty(t, underlying.data)
+	assert.Positive(t, tracker.totalNS.Load())
+	assert.Zero(t, tracker.operatorNS.Load())
 }
 
 func TestMySQLProtocolRead(t *testing.T) {

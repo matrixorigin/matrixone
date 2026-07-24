@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -43,6 +44,14 @@ type mockCompile struct {
 	runFunc     func(uint64) (*util2.RunResult, error)
 	getPlanFunc func() *plan.Plan
 	releaseFunc func()
+}
+
+func TestResourceAttemptOwnerEligible(t *testing.T) {
+	require.True(t, resourceAttemptOwnerEligible(&Session{}))
+	require.False(t, resourceAttemptOwnerEligible(&backSession{}))
+	derived := &Session{}
+	derived.ReplaceDerivedStmt(true)
+	require.False(t, resourceAttemptOwnerEligible(derived))
 }
 
 func (m *mockCompile) Run(ts uint64) (*util2.RunResult, error) { return m.runFunc(ts) }
@@ -113,6 +122,7 @@ func newPreparedExecuteEnv(t *testing.T, stmtID uint32) (*Session, *PrepareStmt,
 
 func newPreparedExecuteEnvForSQL(t *testing.T, stmtID uint32, sql string) (*Session, *PrepareStmt, *TxnComputationWrapper, *ExecCtx) {
 	ctx := statistic.ContextWithStatsInfo(context.Background(), statistic.NewStatsInfo())
+	ctx = defines.AttachAccount(ctx, sysAccountID, rootID, moAdminRoleID)
 	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
 
 	ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
@@ -142,12 +152,13 @@ func newPreparedExecuteEnvForSQL(t *testing.T, stmtID uint32, sql string) (*Sess
 		reqCtx: ctx,
 		ses:    ses,
 		proc:   proc,
+		resper: ses.GetResponser(),
 		input: &UserInput{
 			stmtName:            stmtName,
 			isBinaryProtExecute: true,
 		},
 	}
-	ses.txnCompileCtx.execCtx = execCtx
+	ses.GetTxnCompileCtx().SetExecCtx(execCtx)
 	proc.SetResolveVariableFunc(ses.txnCompileCtx.ResolveVariable)
 	proc.SetResolveVariableIsBinFunc(ses.txnCompileCtx.ResolveVariableIsBin)
 	return ses, prepareStmt, cw, execCtx
@@ -335,6 +346,56 @@ func TestInitExecuteStmtParamReusesCachedCompileWhenNoSchemaChange(t *testing.T)
 	require.NotNil(t, retStmt)
 }
 
+func TestInitExecuteStmtParamRebuildsWhenTempTableMappingChanges(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnv(t, 102)
+	defer prepareStmt.Close()
+
+	oldColDefData := [][]byte{[]byte("old-int-column")}
+	newColDefData := [][]byte{[]byte("new-varchar-column")}
+	prepareStmt.ColDefData = oldColDefData
+	execCtx.prepareColDef = oldColDefData
+	w := execCtx.resper.MysqlRrWr().(*testMysqlWriter)
+	w.makeColumnDefDataFunc = func(context.Context, []*plan.ColDef) ([][]byte, error) {
+		return newColDefData, nil
+	}
+
+	oldPlan := prepareStmt.PreparePlan
+	ses.AddTempTable("db1", "unrelated", "temp-unrelated")
+
+	retComp, retPlan, retStmt, _, err := initExecuteStmtParam(
+		execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.Nil(t, retComp)
+	require.NotSame(t, oldPlan, prepareStmt.PreparePlan)
+	require.Same(t, prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan, retPlan)
+	require.NotNil(t, retStmt)
+	require.Equal(t, ses.GetTempTableVersion(), prepareStmt.tempTableVersion)
+	require.Equal(t, newColDefData, prepareStmt.ColDefData)
+	require.Equal(t, newColDefData, execCtx.prepareColDef)
+}
+
+func TestInitExecuteStmtParamKeepsOldStateWhenColumnMetadataRefreshFails(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnv(t, 103)
+	defer prepareStmt.Close()
+
+	oldPlan := prepareStmt.PreparePlan
+	oldColDefData := [][]byte{[]byte("old-int-column")}
+	prepareStmt.ColDefData = oldColDefData
+	execCtx.prepareColDef = oldColDefData
+	w := execCtx.resper.MysqlRrWr().(*testMysqlWriter)
+	w.makeColumnDefDataFunc = func(context.Context, []*plan.ColDef) ([][]byte, error) {
+		return nil, errors.New("column metadata refresh failed")
+	}
+
+	ses.AddTempTable("db1", "unrelated", "temp-unrelated")
+	_, _, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	require.EqualError(t, err, "column metadata refresh failed")
+	require.Same(t, oldPlan, prepareStmt.PreparePlan)
+	require.Equal(t, oldColDefData, prepareStmt.ColDefData)
+	require.Equal(t, oldColDefData, execCtx.prepareColDef)
+	require.NotEqual(t, ses.GetTempTableVersion(), prepareStmt.tempTableVersion)
+}
+
 func TestInitExecuteStmtParamRebuildsPreparedPlanWhenSQLModePresenceChanges(t *testing.T) {
 	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnv(t, 106)
 	defer prepareStmt.Close()
@@ -371,6 +432,56 @@ func TestInitExecuteStmtParamBypassesButRetainsCachedTopologyForExplicitScheduli
 	require.Same(t, sentinel, prepareStmt.compile)
 	require.NotNil(t, retPlan)
 	require.NotNil(t, retStmt)
+}
+
+func TestRebuildPreparePlanUsesPreparedRootSQL(t *testing.T) {
+	const preparedSQL = "create view v as select 1"
+	const executeSQL = "execute prepared_view"
+	ses, prepareStmt, _, execCtx := newPreparedExecuteEnvForSQL(t, 106, preparedSQL)
+	defer prepareStmt.Close()
+	prepareStmt.Name = "prepared_view"
+	ses.SetSql(executeSQL)
+
+	rebuilt, err := rebuildPreparePlan(
+		execCtx,
+		ses,
+		prepareStmt,
+		func(_ context.Context, _ FeSession, compilerCtx plan2.CompilerContext, stmt tree.Statement) (*plan2.Plan, error) {
+			return plan2.BuildPlan(&preparedViewCompilerContext{CompilerContext: compilerCtx}, stmt, false)
+		},
+	)
+	require.NoError(t, err)
+	prepareStmt.PreparePlan = rebuilt
+	requirePreparedViewRootSQL(t, prepareStmt, preparedSQL)
+	require.Equal(t, executeSQL, ses.GetSql())
+	require.Equal(t, executeSQL, ses.GetTxnCompileCtx().GetRootSql())
+}
+
+func TestModeMismatchRebuildsPreparedViewWithPreparedRootSQL(t *testing.T) {
+	const preparedSQL = "create view v as select 1"
+	const executeSQL = "execute prepared_view"
+	ses, prepareStmt, _, execCtx := newPreparedExecuteEnvForSQL(t, 107, preparedSQL)
+	defer prepareStmt.Close()
+	ses.SetSql(executeSQL)
+	execCtx.reqCtx = defines.AttachAccountId(execCtx.reqCtx, catalog.System_Account)
+	require.NoError(t, ses.SetSessionSysVar(execCtx.reqCtx, "sql_mode", "MATRIXONE_NATIVE"))
+	modeMismatch := prepareStmt.NativeMode != ses.sqlModeHasMatrixOneNative()
+	require.True(t, modeMismatch)
+	require.True(t, preparePlanNeedsRebuild(false, modeMismatch))
+
+	rebuilt, err := rebuildPreparePlan(
+		execCtx,
+		ses,
+		prepareStmt,
+		func(_ context.Context, _ FeSession, compilerCtx plan2.CompilerContext, stmt tree.Statement) (*plan2.Plan, error) {
+			return plan2.BuildPlan(&preparedViewCompilerContext{CompilerContext: compilerCtx}, stmt, false)
+		},
+	)
+	require.NoError(t, err)
+	prepareStmt.PreparePlan = rebuilt
+	requirePreparedViewRootSQL(t, prepareStmt, preparedSQL)
+	require.Equal(t, executeSQL, ses.GetSql())
+	require.Equal(t, executeSQL, ses.GetTxnCompileCtx().GetRootSql())
 }
 
 func TestTxnComputationWrapperRunPanicStillReleases(t *testing.T) {

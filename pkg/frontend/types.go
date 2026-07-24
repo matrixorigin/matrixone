@@ -296,22 +296,26 @@ func (ec *engineColumnInfo) GetType() types.T {
 }
 
 type PrepareStmt struct {
-	Name           string
-	Sql            string
-	PreparePlan    *plan.Plan
-	PrepareStmt    tree.Statement
-	NativeMode     bool
-	ParamTypes     []byte
-	ColDefData     [][]byte
-	IsCloudNonuser bool
-	proc           *process.Process
-	remapDb        map[string]string
+	Name            string
+	Sql             string
+	PreparePlan     *plan.Plan
+	PrepareStmt     tree.Statement
+	NativeMode      bool
+	ParamTypes      []byte
+	ColDefData      [][]byte
+	IsCloudNonuser  bool
+	proc            *process.Process
+	remapDb         map[string]string
+	defaultDatabase string
 
 	params              *vector.Vector
 	getFromSendLongData map[int]struct{}
 
 	compile *compile.Compile
 	Ts      timestamp.Timestamp
+	// tempTableVersion is the session temporary-table mapping version used to
+	// build PreparePlan and compile.
+	tempTableVersion uint64
 
 	// schedulingSQLMode freezes the lexical mode used when Sql was prepared.
 	// EXECUTE must not reinterpret optimizer comments after session sql_mode
@@ -882,6 +886,10 @@ type ExecCtx struct {
 	reqCtx      context.Context
 	prepareStmt *PrepareStmt
 	runResult   *util.RunResult
+	// rootSQLOverride is the authoritative SQL for a statement planned
+	// recursively inside this request, such as the statement owned by PREPARE.
+	// A nil value falls back to the session SQL.
+	rootSQLOverride *string
 	//stmt will be replaced by the Execute
 	stmt tree.Statement
 	//isLastStmt : true denotes the last statement in the query
@@ -920,10 +928,20 @@ type ExecCtx struct {
 	rewriteEnabled bool
 }
 
+func (execCtx *ExecCtx) withRootSQL(rootSQL string, fn func() error) error {
+	previous := execCtx.rootSQLOverride
+	execCtx.rootSQLOverride = &rootSQL
+	defer func() {
+		execCtx.rootSQLOverride = previous
+	}()
+	return fn()
+}
+
 func (execCtx *ExecCtx) Close() {
 	execCtx.reqCtx = nil
 	execCtx.prepareStmt = nil
 	execCtx.runResult = nil
+	execCtx.rootSQLOverride = nil
 	execCtx.stmt = nil
 	execCtx.tenant = ""
 	execCtx.userName = ""
