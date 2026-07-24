@@ -15,41 +15,22 @@
 package mem
 
 import (
-	"bytes"
 	"context"
 	"math"
 	"sync/atomic"
 	"testing"
-	"time"
 
-	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
-	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
-	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 type closeTrackingLogClient struct {
 	logservice.Client
 	closed atomic.Int32
-}
-
-type cancelBlockingLogClient struct {
-	logservice.Client
-	started chan struct{}
-}
-
-func (c *cancelBlockingLogClient) Read(
-	ctx context.Context,
-	firstLsn logservice.Lsn,
-	_ uint64,
-) ([]logpb.LogRecord, logservice.Lsn, error) {
-	close(c.started)
-	<-ctx.Done()
-	return nil, firstLsn, ctx.Err()
 }
 
 func (c *closeTrackingLogClient) Close() error {
@@ -61,538 +42,100 @@ func TestCloseClosesLogClientOnce(t *testing.T) {
 	client := &closeTrackingLogClient{Client: NewMemLog()}
 	storage := NewKVTxnStorage(0, client, newTestClock(1))
 
-	assert.NoError(t, storage.Close(context.Background()))
-	assert.NoError(t, storage.Destroy(context.Background()))
-	assert.Equal(t, int32(1), client.closed.Load())
+	require.NoError(t, storage.Close(context.Background()))
+	require.NoError(t, storage.Destroy(context.Background()))
+	require.Equal(t, int32(1), client.closed.Load())
 }
 
-func TestWrite(t *testing.T) {
-	l := NewMemLog()
-	s := NewKVTxnStorage(0, l, newTestClock(1))
+func TestWriteConflict(t *testing.T) {
+	storage := NewKVTxnStorage(0, NewMemLog(), newTestClock(1))
+	first := newTxnMeta(1, 1)
+	second := newTxnMeta(2, 1)
 
-	wTxn := writeTestData(t, s, 1, moerr.Ok, 1, 2)
-	checkUncommitted(t, s, wTxn, 1, 2)
-	checkLogCount(t, l, 0)
+	require.NoError(t, writeValue(storage, first, "key", "first"))
+	err := writeValue(storage, second, "key", "second")
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWriteConflict), err)
 }
 
-func TestWriteWithConflict(t *testing.T) {
-	l := NewMemLog()
-	s := NewKVTxnStorage(0, l, newTestClock(1))
+func TestSingleTNCommitAndRecovery(t *testing.T) {
+	logClient := NewMemLog()
+	storage := NewKVTxnStorage(0, logClient, newTestClock(1))
+	meta := newTxnMeta(1, 1)
+	require.NoError(t, writeValue(storage, meta, "key", "value"))
 
-	wTxn1 := writeTestData(t, s, 1, moerr.Ok, 1)
-	checkUncommitted(t, s, wTxn1, 1)
+	commitTS, err := storage.Commit(context.Background(), meta, nil, nil)
+	require.NoError(t, err)
+	require.False(t, commitTS.IsEmpty())
+	require.Equal(t, "value", readValue(t, storage, "key", commitTS.Next()))
 
-	writeTestData(t, s, 1, moerr.ErrTxnWriteConflict, 1)
-
-	wTxn3 := writeTestData(t, s, 1, moerr.Ok, 2)
-	checkUncommitted(t, s, wTxn3, 2)
+	recovered := NewKVTxnStorage(1, logClient, newTestClock(100))
+	require.NoError(t, recovered.Start())
+	require.Equal(t, "value", readValue(t, recovered, "key", commitTS.Next()))
 }
 
-func TestPrepare(t *testing.T) {
-	l := NewMemLog()
-	s := NewKVTxnStorage(0, l, newTestClock(1))
+func TestRollbackRemovesUncommittedValue(t *testing.T) {
+	storage := NewKVTxnStorage(0, NewMemLog(), newTestClock(1))
+	meta := newTxnMeta(1, 1)
+	require.NoError(t, writeValue(storage, meta, "key", "value"))
+	require.NoError(t, storage.Rollback(context.Background(), meta))
 
-	wTxn := writeTestData(t, s, 1, moerr.Ok, 1)
-
-	prepareTestTxn(t, s, &wTxn, 2, moerr.Ok)
-
-	checkUncommitted(t, s, wTxn, 1)
-	checkLogCount(t, l, 1)
-	checkLog(t, l, 1, wTxn, 1)
+	require.Nil(t, storage.GetUncommittedTxn(meta.ID))
+	_, ok := storage.GetUncommittedKV().Get([]byte("key"))
+	require.False(t, ok)
 }
 
-func TestPrepareWithConflict(t *testing.T) {
-	l := NewMemLog()
-	s := NewKVTxnStorage(0, l, newTestClock(1))
+func TestCommitAndRollbackEvents(t *testing.T) {
+	storage := NewKVTxnStorage(0, NewMemLog(), newTestClock(1))
+	committed := newTxnMeta(1, 1)
+	require.NoError(t, writeValue(storage, committed, "commit", "value"))
+	_, err := storage.Commit(context.Background(), committed, nil, nil)
+	require.NoError(t, err)
+	require.Equal(t, CommitType, (<-storage.GetEventC()).Type)
 
-	writeCommittedData(t, s, 1, 100, 1) // commit at 100
-
-	wTxn := writeTestData(t, s, 1, moerr.Ok, 1)
-	prepareTestTxn(t, s, &wTxn, 5, moerr.ErrTxnWriteConflict) // prepare at 5
+	rolledBack := newTxnMeta(2, 2)
+	require.NoError(t, writeValue(storage, rolledBack, "rollback", "value"))
+	require.NoError(t, storage.Rollback(context.Background(), rolledBack))
+	require.Equal(t, RollbackType, (<-storage.GetEventC()).Type)
 }
 
-func TestCommit(t *testing.T) {
-	l := NewMemLog()
-	s := NewKVTxnStorage(0, l, newTestClock(1))
-
-	wTxn := writeTestData(t, s, 1, moerr.Ok, 1)
-	commitTestTxn(t, s, &wTxn, 2, moerr.Ok)
-
-	checkCommitted(t, s, wTxn, 1)
-	checkLogCount(t, l, 1)
-	checkLog(t, l, 1, wTxn, 1)
-}
-
-func TestCommitWithTxnNotExist(t *testing.T) {
-	l := NewMemLog()
-	s := NewKVTxnStorage(0, l, newTestClock(1))
-
-	commitTestTxn(t, s, &txn.TxnMeta{}, 2, moerr.Ok)
-}
-
-func TestCommitWithConflict(t *testing.T) {
-	l := NewMemLog()
-	s := NewKVTxnStorage(0, l, newTestClock(1))
-
-	writeCommittedData(t, s, 1, 2, 1)
-
-	wTxn := writeTestData(t, s, 1, moerr.Ok, 1)
-	commitTestTxn(t, s, &wTxn, 5, moerr.ErrTxnWriteConflict)
-}
-
-func TestCommitAfterPrepared(t *testing.T) {
-	l := NewMemLog()
-	s := NewKVTxnStorage(0, l, newTestClock(1))
-
-	wTxn := writeTestData(t, s, 1, moerr.Ok, 1)
-	prepareTestTxn(t, s, &wTxn, 2, moerr.Ok)
-	commitTestTxn(t, s, &wTxn, 3, moerr.Ok)
-
-	checkCommitted(t, s, wTxn, 1)
-	checkLogCount(t, l, 2)
-	checkLog(t, l, 2, wTxn)
-}
-
-func TestRollback(t *testing.T) {
-	l := NewMemLog()
-	s := NewKVTxnStorage(0, l, newTestClock(1))
-
-	wTxn := writeTestData(t, s, 1, moerr.Ok, 1)
-	checkUncommitted(t, s, wTxn, 1)
-
-	assert.NoError(t, s.Rollback(context.TODO(), wTxn))
-	checkRollback(t, s, wTxn, 1)
-}
-
-func TestRollbackWithTxnNotExist(t *testing.T) {
-	l := NewMemLog()
-	s := NewKVTxnStorage(0, l, newTestClock(1))
-
-	assert.NoError(t, s.Rollback(context.TODO(), txn.TxnMeta{}))
-	checkRollback(t, s, txn.TxnMeta{})
-}
-
-func TestReadCommittedWithLessVersion(t *testing.T) {
-	l := NewMemLog()
-	s := NewKVTxnStorage(0, l, newTestClock(1))
-
-	writeCommittedData(t, s, 0, 1, 1)
-
-	_, rs := readTestData(t, s, 2, nil, 1)
-	checkReadResult(t, 0, rs, 1)
-}
-
-func TestReadSelfUncommitted(t *testing.T) {
-	l := NewMemLog()
-	s := NewKVTxnStorage(0, l, newTestClock(1))
-
-	wTxn := writeTestData(t, s, 1, moerr.Ok, 1)
-	rs := readTestDataWithTxn(t, s, &wTxn, nil, 1)
-	checkReadResult(t, 1, rs, 1)
-}
-
-func TestReadCommittedWithGTVersion(t *testing.T) {
-	l := NewMemLog()
-	s := NewKVTxnStorage(0, l, newTestClock(1))
-
-	writeCommittedData(t, s, 0, 1, 1)
-
-	_, rs := readTestData(t, s, 1, nil, 1)
-	checkReadResult(t, 0, rs, 0)
-}
-
-func TestWaitReadByPreparedTxn(t *testing.T) {
-	l := NewMemLog()
-	s := NewKVTxnStorage(0, l, newTestClock(1))
-
-	writeCommittedData(t, s, 0, 1, 1)
-
-	wTxn := writeTestData(t, s, 2, moerr.Ok, 1)
-	prepareTestTxn(t, s, &wTxn, 5, moerr.Ok)
-
-	readTestData(t, s, 6, [][]byte{wTxn.ID}, 1)
-}
-
-func TestReadByGTPreparedTxnCanNotWait(t *testing.T) {
-	l := NewMemLog()
-	s := NewKVTxnStorage(0, l, newTestClock(1))
-
-	writeCommittedData(t, s, 0, 1, 1)
-
-	wTxn := writeTestData(t, s, 2, moerr.Ok, 1)
-	prepareTestTxn(t, s, &wTxn, 5, moerr.Ok)
-
-	readTestData(t, s, 2, nil, 1)
-}
-
-func TestWaitReadByCommittingTxn(t *testing.T) {
-	l := NewMemLog()
-	s := NewKVTxnStorage(0, l, newTestClock(1))
-
-	writeCommittedData(t, s, 0, 1, 1)
-
-	wTxn := writeTestData(t, s, 2, moerr.Ok, 1)
-	prepareTestTxn(t, s, &wTxn, 5, moerr.Ok)
-	committingTestTxn(t, s, &wTxn, 6)
-
-	readTestData(t, s, 7, [][]byte{wTxn.ID}, 1)
-}
-
-func TestReadByGTCommittingTxnCanNotWait(t *testing.T) {
-	l := NewMemLog()
-	s := NewKVTxnStorage(0, l, newTestClock(1))
-
-	writeCommittedData(t, s, 0, 1, 1)
-
-	wTxn := writeTestData(t, s, 2, moerr.Ok, 1)
-	prepareTestTxn(t, s, &wTxn, 3, moerr.Ok)
-	committingTestTxn(t, s, &wTxn, 4)
-
-	readTestData(t, s, 3, nil, 1)
-}
-
-func TestReadAfterWaitTxnResloved(t *testing.T) {
-	l := NewMemLog()
-	s := NewKVTxnStorage(0, l, newTestClock(1))
-
-	wTxn1 := writeTestData(t, s, 1, moerr.Ok, 1)
-	prepareTestTxn(t, s, &wTxn1, 2, moerr.Ok)
-
-	wTxn2 := writeTestData(t, s, 1, moerr.Ok, 2)
-	prepareTestTxn(t, s, &wTxn2, 2, moerr.Ok)
-
-	_, rs := readTestData(t, s, 5, [][]byte{wTxn1.ID, wTxn2.ID}, 1, 2)
-	_, err := rs.Read()
-	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrMissingTxn))
-
-	commitTestTxn(t, s, &wTxn2, 6, moerr.Ok)
-	_, err = rs.Read()
-	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrMissingTxn))
-
-	commitTestTxn(t, s, &wTxn1, 4, moerr.Ok)
-
-	checkReadResult(t, 1, rs, 1, 0)
-}
-
-func TestRecovery(t *testing.T) {
-	l := NewMemLog()
-	s := NewKVTxnStorage(0, l, newTestClock(1))
-
-	prepareTxn := writeTestData(t, s, 1, moerr.Ok, 1)
-	prepareTestTxn(t, s, &prepareTxn, 2, moerr.Ok)
-	checkLog(t, l, 1, prepareTxn, 1)
-
-	committedTxn := writeTestData(t, s, 1, moerr.Ok, 2)
-	commitTestTxn(t, s, &committedTxn, 3, moerr.Ok)
-	checkLog(t, l, 2, committedTxn, 2)
-
-	committedAndPreparedTxn := writeTestData(t, s, 1, moerr.Ok, 3)
-	prepareTestTxn(t, s, &committedAndPreparedTxn, 2, moerr.Ok)
-	checkLog(t, l, 3, committedAndPreparedTxn, 3)
-	commitTestTxn(t, s, &committedAndPreparedTxn, 3, moerr.Ok)
-	checkLog(t, l, 4, committedAndPreparedTxn)
-
-	committingTxn := writeTestData(t, s, 1, moerr.Ok, 4)
-	prepareTestTxn(t, s, &committingTxn, 2, moerr.Ok)
-	checkLog(t, l, 5, committingTxn, 4)
-	committingTestTxn(t, s, &committingTxn, 3)
-	checkLog(t, l, 6, committingTxn)
-
-	checkLogCount(t, l, 6)
-
-	c := make(chan txn.TxnMeta, 10)
-	s2 := NewKVTxnStorage(1, l, newTestClock(1))
-	s2.StartRecovery(context.TODO(), c)
-
-	checkUncommitted(t, s2, prepareTxn, 1)
-	checkCommitted(t, s2, committedTxn, 2)
-	checkCommitted(t, s2, committedAndPreparedTxn, 3)
-	checkUncommitted(t, s2, committingTxn, 4)
-
-	txns := make([]txn.TxnMeta, 0, 6)
-	for v := range c {
-		txns = append(txns, v)
+func writeValue(storage *KVTxnStorage, meta txn.TxnMeta, key, value string) error {
+	request := &message{
+		Keys:   [][]byte{[]byte(key)},
+		Values: [][]byte{[]byte(value)},
 	}
-	assert.Equal(t, 6, len(txns))
+	_, err := storage.Write(context.Background(), meta, setOpCode, request.mustMarshal())
+	return err
 }
 
-func TestRecoveryCancellationUnblocksFullTxnChannel(t *testing.T) {
-	l := NewMemLog()
-	s := NewKVTxnStorage(0, l, newTestClock(1))
-	recoveryC := make(chan txn.TxnMeta, 16)
-	for i := 0; i <= cap(recoveryC); i++ {
-		meta := txn.TxnMeta{
-			ID:     []byte{byte(i + 1)},
-			Status: txn.TxnStatus_Committed,
-		}
-		_, err := s.saveLog(&KVLog{Txn: meta})
-		assert.NoError(t, err)
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	recovered := make(chan struct{})
-	go func() {
-		NewKVTxnStorage(1, l, newTestClock(1)).StartRecovery(ctx, recoveryC)
-		close(recovered)
-	}()
-
-	assert.Eventually(t, func() bool {
-		return len(recoveryC) == cap(recoveryC)
-	}, time.Second, time.Millisecond)
-	cancel()
-
-	select {
-	case <-recovered:
-	case <-time.After(time.Second):
-		t.Fatal("recovery remained blocked on a full transaction channel after cancellation")
-	}
+func readValue(
+	t *testing.T,
+	storage *KVTxnStorage,
+	key string,
+	snapshot timestamp.Timestamp,
+) string {
+	t.Helper()
+	request := &message{Keys: [][]byte{[]byte(key)}}
+	result, err := storage.Read(
+		context.Background(),
+		txn.TxnMeta{ID: []byte("reader"), SnapshotTS: snapshot},
+		getOpCode,
+		request.mustMarshal(),
+	)
+	require.NoError(t, err)
+	defer result.Release()
+	data, err := result.Read()
+	require.NoError(t, err)
+	response := new(message)
+	response.mustUnmarshal(data)
+	require.Len(t, response.Values, 1)
+	return string(response.Values[0])
 }
 
-func TestRecoveryCancellationStopsLogRead(t *testing.T) {
-	client := &cancelBlockingLogClient{
-		Client:  NewMemLog(),
-		started: make(chan struct{}),
-	}
-	storage := NewKVTxnStorage(1, client, newTestClock(1))
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-	go func() {
-		storage.StartRecovery(ctx, make(chan txn.TxnMeta))
-		close(done)
-	}()
-
-	select {
-	case <-client.started:
-	case <-time.After(time.Second):
-		t.Fatal("recovery did not start the log read")
-	}
-	cancel()
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("recovery log read did not stop after cancellation")
-	}
-}
-
-func TestEvent(t *testing.T) {
-	l := NewMemLog()
-	s := NewKVTxnStorage(0, l, newTestClock(1))
-
-	wTxn := writeTestData(t, s, 1, moerr.Ok, 1)
-	prepareTestTxn(t, s, &wTxn, 2, moerr.Ok)
-	e := <-s.GetEventC()
-	assert.Equal(t, e, Event{Type: PrepareType, Txn: wTxn})
-
-	committingTestTxn(t, s, &wTxn, 3)
-	e = <-s.GetEventC()
-	assert.Equal(t, e, Event{Type: CommittingType, Txn: wTxn})
-
-	commitTestTxn(t, s, &wTxn, 3, moerr.Ok)
-	e = <-s.GetEventC()
-	assert.Equal(t, e, Event{Type: CommitType, Txn: wTxn})
-
-	wTxn = writeTestData(t, s, 1, moerr.Ok, 2)
-	assert.NoError(t, s.Rollback(context.TODO(), wTxn))
-	checkRollback(t, s, wTxn, 2)
-	e = <-s.GetEventC()
-	assert.Equal(t, e, Event{Type: RollbackType, Txn: wTxn})
-}
-
-func prepareTestTxn(t *testing.T, s *KVTxnStorage, wTxn *txn.TxnMeta, ts int64, errCode uint16) {
-	wTxn.PreparedTS = newTimestamp(ts)
-	pts, perr := s.Prepare(context.TODO(), *wTxn)
-	assert.True(t, moerr.IsMoErrCode(perr, errCode))
-	wTxn.Status = txn.TxnStatus_Prepared
-	wTxn.PreparedTS = pts
-}
-
-func committingTestTxn(t *testing.T, s *KVTxnStorage, wTxn *txn.TxnMeta, ts int64) {
-	wTxn.CommitTS = newTimestamp(ts)
-	assert.NoError(t, s.Committing(context.TODO(), *wTxn))
-	wTxn.Status = txn.TxnStatus_Committing
-}
-
-func commitTestTxn(t *testing.T, s *KVTxnStorage, wTxn *txn.TxnMeta, ts int64, errCode uint16) {
-	wTxn.CommitTS = newTimestamp(ts)
-	_, e := s.Commit(context.TODO(), *wTxn, nil, nil)
-	assert.True(t, moerr.IsMoErrCode(e, errCode))
-	wTxn.Status = txn.TxnStatus_Committed
-}
-
-func checkLogCount(t *testing.T, ll logservice.Client, expect int) {
-	l := ll.(*memLogClient)
-
-	l.RLock()
-	defer l.RUnlock()
-
-	assert.Equal(t, expect, len(l.logs))
-}
-
-func checkLog(t *testing.T, ll logservice.Client, offset int, wTxn txn.TxnMeta, keys ...byte) {
-	l := ll.(*memLogClient)
-
-	l.RLock()
-	defer l.RUnlock()
-
-	klog := &KVLog{}
-	klog.Txn = wTxn
-	for _, k := range keys {
-		key := []byte{k}
-		value := []byte{k, byte(wTxn.SnapshotTS.PhysicalTime)}
-
-		klog.Keys = append(klog.Keys, key)
-		klog.Values = append(klog.Values, value)
-	}
-
-	assert.Equal(t, klog.MustMarshal(), l.logs[offset-1].Data)
-}
-
-func checkUncommitted(t *testing.T, s *KVTxnStorage, wTxn txn.TxnMeta, keys ...byte) {
-	for _, k := range keys {
-		key := []byte{k}
-		value := []byte{k, byte(wTxn.SnapshotTS.PhysicalTime)}
-		uTxn, ok := s.uncommittedKeyTxnMap[string(key)]
-		assert.True(t, ok)
-		assert.Equal(t, wTxn, *uTxn)
-
-		v, ok := s.uncommitted.Get(key)
-		assert.True(t, ok)
-		assert.Equal(t, value, v)
-
-		n := 0
-		s.committed.AscendRange(key,
-			newTimestamp(0),
-			newTimestamp(math.MaxInt64),
-			func(b []byte, _ timestamp.Timestamp) {
-				if bytes.Equal(b, value) {
-					n++
-				}
-			})
-		assert.Equal(t, 0, n)
-	}
-}
-
-func checkRollback(t *testing.T, s *KVTxnStorage, wTxn txn.TxnMeta, keys ...byte) {
-	for _, k := range keys {
-		key := []byte{k}
-		value := []byte{k, byte(wTxn.SnapshotTS.PhysicalTime)}
-		uTxn, ok := s.uncommittedKeyTxnMap[string(key)]
-		assert.False(t, ok)
-		assert.Nil(t, uTxn)
-
-		v, ok := s.uncommitted.Get(key)
-		assert.False(t, ok)
-		assert.Empty(t, v)
-
-		n := 0
-		s.committed.AscendRange(key,
-			newTimestamp(0),
-			newTimestamp(math.MaxInt64),
-			func(b []byte, _ timestamp.Timestamp) {
-				if bytes.Equal(b, value) {
-					n++
-				}
-			})
-		assert.Equal(t, 0, n)
-	}
-
-	uTxn, ok := s.uncommittedTxn[string(wTxn.ID)]
-	assert.False(t, ok)
-	assert.Nil(t, uTxn)
-}
-
-func writeTestData(t *testing.T, s *KVTxnStorage, ts int64, expectError uint16, keys ...byte) txn.TxnMeta {
-	req := &message{}
-	for _, v := range keys {
-		req.Keys = append(req.Keys, []byte{v})
-		req.Values = append(req.Values, []byte{v, byte(ts)})
-	}
-	wTxn := newTxnMeta(ts)
-	_, err := s.Write(context.TODO(), wTxn, setOpCode, req.mustMarshal())
-	assert.True(t, moerr.IsMoErrCode(err, expectError))
-	return wTxn
-}
-
-func checkCommitted(t *testing.T, s *KVTxnStorage, wTxn txn.TxnMeta, keys ...byte) {
-	for _, k := range keys {
-		key := []byte{k}
-		value := []byte{k, byte(wTxn.SnapshotTS.PhysicalTime)}
-
-		v, ok := s.uncommittedKeyTxnMap[string(key)]
-		assert.False(t, ok)
-		assert.Nil(t, v)
-
-		hasCommitted := false
-		s.committed.AscendRange(key,
-			newTimestamp(0),
-			newTimestamp(math.MaxInt64),
-			func(b []byte, _ timestamp.Timestamp) {
-				if bytes.Equal(value, b) {
-					hasCommitted = true
-				}
-			})
-		assert.True(t, hasCommitted)
-	}
-
-	v, ok := s.uncommittedTxn[string(wTxn.ID)]
-	assert.False(t, ok)
-	assert.Nil(t, v)
-}
-
-func writeCommittedData(t *testing.T, s *KVTxnStorage, sts, cts int64, keys ...byte) {
-	for _, k := range keys {
-		key := []byte{k}
-		value := []byte{k, byte(sts)}
-		s.committed.Set(key, newTimestamp(cts), value)
-	}
-}
-
-func readTestData(t *testing.T, s *KVTxnStorage, ts int64, waitTxns [][]byte, keys ...byte) (txn.TxnMeta, *readResult) {
-	rTxn := newTxnMeta(ts)
-	return rTxn, readTestDataWithTxn(t, s, &rTxn, waitTxns, keys...)
-}
-
-func readTestDataWithTxn(t *testing.T, s *KVTxnStorage, rTxn *txn.TxnMeta, waitTxns [][]byte, keys ...byte) *readResult {
-	req := &message{}
-	for _, k := range keys {
-		key := []byte{k}
-		req.Keys = append(req.Keys, key)
-	}
-
-	rs, err := s.Read(context.TODO(), *rTxn, getOpCode, req.mustMarshal())
-	assert.NoError(t, err)
-	assert.Equal(t, waitTxns, rs.WaitTxns())
-	return rs.(*readResult)
-}
-
-func checkReadResult(t *testing.T, sts byte, rs *readResult, keys ...byte) {
-	data, err := rs.Read()
-	assert.NoError(t, err)
-	resp := &message{}
-	resp.mustUnmarshal(data)
-
-	var values [][]byte
-	for _, k := range keys {
-		if k == 0 {
-			values = append(values, nil)
-		} else {
-			values = append(values, []byte{k, sts})
-		}
-	}
-
-	assert.Equal(t, values, resp.Values)
-}
-
-func newTimestamp(v int64) timestamp.Timestamp {
-	return timestamp.Timestamp{PhysicalTime: v}
-}
-
-func newTxnMeta(snapshotTS int64) txn.TxnMeta {
-	id := uuid.New()
+func newTxnMeta(id byte, snapshot int64) txn.TxnMeta {
 	return txn.TxnMeta{
-		ID:         id[:],
+		ID:         []byte{id},
 		Status:     txn.TxnStatus_Active,
-		SnapshotTS: newTimestamp(snapshotTS),
+		SnapshotTS: timestamp.Timestamp{PhysicalTime: snapshot},
 	}
 }
 

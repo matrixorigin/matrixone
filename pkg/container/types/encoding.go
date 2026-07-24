@@ -381,7 +381,7 @@ func DecodeValue(val []byte, t T) any {
 		return DecodeFixed[TS](val)
 	case T_Rowid:
 		return DecodeFixed[Rowid](val)
-	case T_char, T_varchar, T_blob, T_json, T_text, T_binary, T_varbinary, T_array_float32, T_array_float64, T_datalink, T_geometry, T_geometry32:
+	case T_char, T_varchar, T_blob, T_json, T_text, T_binary, T_varbinary, T_array_float32, T_array_float64, T_array_bf16, T_array_float16, T_array_int8, T_array_uint8, T_datalink, T_geometry, T_geometry32:
 		return val
 	case T_enum:
 		return DecodeFixed[Enum](val)
@@ -467,6 +467,18 @@ func CompareValue(left, right any) int {
 		return compareFloatSlice(lVal, right.([]float32))
 	case []float64:
 		return compareFloatSlice(lVal, right.([]float64))
+	// Narrow vector element slices. ArrayElementCompare covers every element
+	// type; compareFloatSlice is float-only.
+	case []BF16:
+		return ArrayElementCompare(lVal, right.([]BF16))
+	case []Float16:
+		return ArrayElementCompare(lVal, right.([]Float16))
+	case []int8:
+		return ArrayElementCompare(lVal, right.([]int8))
+	// NOTE: no []uint8 arm — []uint8 IS []byte in Go, so a vecuint8 value is
+	// already caught by the []byte case above. That is correct: for equal-length
+	// arrays bytes.Compare is exactly element-wise unsigned comparison, which is
+	// what ArrayElementCompare[uint8] would do.
 	case Enum:
 		return cmp.Compare(lVal, right.(Enum))
 	case string:
@@ -548,7 +560,7 @@ func EncodeValue(val any, t T) []byte {
 	case T_Rowid:
 		return EncodeFixed(val.(Rowid))
 	case T_char, T_varchar, T_blob, T_json, T_text, T_binary, T_varbinary,
-		T_array_float32, T_array_float64, T_datalink, T_geometry, T_geometry32:
+		T_array_float32, T_array_float64, T_array_bf16, T_array_float16, T_array_int8, T_array_uint8, T_datalink, T_geometry, T_geometry32:
 		// Mainly used by Zonemap, which receives val input from DN batch/vector.
 		// This val is mostly []bytes and not []float32 or []float64
 		return val.([]byte)

@@ -271,7 +271,7 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 				EntryList: createDbEntries},
 		},
 	}
-	txnMeta := mock2PCTxn(handle.db)
+	txnMeta := mock1PCTxn(handle.db)
 	err = handle.handleCmds(ctx, txnMeta, txnCmds)
 	assert.Nil(t, err)
 	var dbTestId uint64
@@ -292,7 +292,7 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 	wg.Wait()
 	assert.Equal(t, 1, len(dbNames))
 
-	err = handle.HandlePrepare(ctx, txnMeta)
+	err = nil
 	assert.Nil(t, err)
 	//start reader after preparing success.
 	startTime := time.Now()
@@ -319,7 +319,7 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 	time.Sleep(1 * time.Second)
 	//CommitTS = PreparedTS + 1
 	err = handle.handleCmds(ctx, txnMeta, []txnCommand{
-		{typ: CmdCommitting}, {typ: CmdCommit},
+		{typ: CmdCommit},
 	})
 	assert.Nil(t, err)
 	wg.Wait()
@@ -376,9 +376,9 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 				//RoleId:    ac.roleId,
 				EntryList: createTbEntries},
 		},
-		{typ: CmdPrepare},
+		{typ: CmdCommit},
 	}
-	txnMeta = mock2PCTxn(handle.db)
+	txnMeta = mock1PCTxn(handle.db)
 	ctx = context.TODO()
 	err = handle.handleCmds(ctx, txnMeta, txnCmds)
 	assert.Nil(t, err)
@@ -414,7 +414,7 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 	}()
 	time.Sleep(1 * time.Second)
 	err = handle.handleCmds(ctx, txnMeta, []txnCommand{
-		{typ: CmdCommitting}, {typ: CmdCommit},
+		{typ: CmdCommit},
 	})
 	assert.Nil(t, err)
 	wg.Wait()
@@ -433,9 +433,9 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 				//RoleId:    ac.roleId,
 				EntryList: []*api.Entry{insertEntry}},
 		},
-		{typ: CmdPrepare},
+		{typ: CmdCommit},
 	}
-	insertTxn := mock2PCTxn(handle.db)
+	insertTxn := mock1PCTxn(handle.db)
 	ctx = context.TODO()
 	err = handle.handleCmds(ctx, insertTxn, txnCmds)
 	assert.Nil(t, err)
@@ -470,7 +470,7 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 	time.Sleep(1 * time.Second)
 	//insertTxn 's CommitTS = PreparedTS + 1.
 	err = handle.handleCmds(ctx, insertTxn, []txnCommand{
-		{typ: CmdCommitting}, {typ: CmdCommit},
+		{typ: CmdCommit},
 	})
 	assert.Nil(t, err)
 	wg.Wait()
@@ -502,8 +502,8 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 	}
 
 	hideBats := containers.SplitBatch(delBat, 5)
-	//delete 20 rows by 2PC txn
-	deleteTxn := mock2PCTxn(handle.db)
+	// delete 20 rows in a transaction
+	deleteTxn := mock1PCTxn(handle.db)
 	//batch.SetLength(delBat, 20)
 	deleteEntry, err := makePBEntry(
 		DELETE,
@@ -521,7 +521,7 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 			cmd: api.PrecommitWriteCmd{
 				EntryList: []*api.Entry{deleteEntry}},
 		},
-		{typ: CmdPrepare},
+		{typ: CmdCommit},
 	}
 	ctx = context.TODO()
 	err = handle.handleCmds(ctx, deleteTxn, txnCmds)
@@ -560,7 +560,7 @@ func TestHandle_MVCCVisibility(t *testing.T) {
 	time.Sleep(1 * time.Second)
 	//deleteTxn 's CommitTS = PreparedTS + 1
 	err = handle.handleCmds(ctx, deleteTxn, []txnCommand{
-		{typ: CmdCommitting}, {typ: CmdCommit},
+		{typ: CmdCommit},
 	})
 	assert.Nil(t, err)
 	wg.Wait()

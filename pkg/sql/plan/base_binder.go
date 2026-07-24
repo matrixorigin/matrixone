@@ -358,7 +358,7 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 	col := astExpr.ColName()
 	table := astExpr.TblName()
 	db := astExpr.DbName()
-	name := tree.String(astExpr, dialect.MYSQL)
+	name := semanticAstKey(astExpr)
 
 	if b.ctx.timeTag > 0 && (col == TimeWindowStart || col == TimeWindowEnd) {
 		colPos := int32(len(b.ctx.times))

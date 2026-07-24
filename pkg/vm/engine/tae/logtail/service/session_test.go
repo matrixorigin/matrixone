@@ -63,7 +63,7 @@ func TestSessionManger(t *testing.T) {
 	streamA := mockMorpcStream(csA, 10, chunkSize)
 	sessionA := sm.GetSession(
 		ctx, logger, pooler, notifier, streamA,
-		sendTimeout, poisonTime, heartbeatInterval,
+		sendTimeout, poisonTime, heartbeatInterval, heartbeatInterval,
 	)
 	require.NotNil(t, sessionA)
 	require.Equal(t, 1, len(sm.ListSession()))
@@ -73,7 +73,7 @@ func TestSessionManger(t *testing.T) {
 	streamB := mockMorpcStream(csB, 11, chunkSize)
 	sessionB := sm.GetSession(
 		ctx, logger, pooler, notifier, streamB,
-		sendTimeout, poisonTime, heartbeatInterval,
+		sendTimeout, poisonTime, heartbeatInterval, heartbeatInterval,
 	)
 	require.NotNil(t, sessionB)
 	require.Equal(t, 2, len(sm.ListSession()))
@@ -83,6 +83,43 @@ func TestSessionManger(t *testing.T) {
 	require.Equal(t, 1, len(sm.ListSession()))
 	sm.DeleteSession(streamB)
 	require.Equal(t, 0, len(sm.ListSession()))
+}
+
+func TestDeletedSessionHistoryIsBoundedAndLightweight(t *testing.T) {
+	sm := NewSessionManager()
+	stream := morpcStream{streamID: 1, remote: "client"}
+	live := &Session{
+		stream:   stream,
+		sendChan: make(chan message, responseBufferSize),
+	}
+	sm.clients[stream] = live
+	sm.DeleteSession(stream)
+
+	require.Len(t, sm.deletedClients, 1)
+	history := sm.DeletedSessions()
+	require.Len(t, history, 1)
+	require.Equal(t, "client", history[0].RemoteAddress())
+	require.Nil(t, history[0].sendChan,
+		"diagnostic history must not retain the live session response buffer")
+
+	for i := 0; i < maxDeletedSessionHistory*2; i++ {
+		sm.AddDeletedSession(uint64(i))
+	}
+	require.LessOrEqual(t, len(sm.DeletedSessions()), maxDeletedSessionHistory)
+}
+
+func TestDeletedSessionHistoryExpiresByTime(t *testing.T) {
+	sm := NewSessionManager()
+	now := time.Now()
+	sm.deletedClients = []deletedSessionRecord{
+		{remote: "expired", deletedAt: now.Add(-2 * time.Hour)},
+		{remote: "retained", deletedAt: now},
+	}
+	sm.pruneDeletedSessionsBefore(now.Add(-time.Hour))
+
+	history := sm.DeletedSessions()
+	require.Len(t, history, 1)
+	require.Equal(t, "retained", history[0].RemoteAddress())
 }
 
 func TestSessionError(t *testing.T) {
@@ -102,7 +139,7 @@ func TestSessionError(t *testing.T) {
 	tableA := mockTable(1, 2, 3)
 	ss := NewSession(
 		ctx, logger, pooler, notifier, stream,
-		sendTimeout, poisionTime, heartbeatInterval,
+		sendTimeout, poisionTime, heartbeatInterval, heartbeatInterval,
 	)
 
 	/* ---- 1. send subscription response ---- */
@@ -146,7 +183,7 @@ func TestPoisionSession(t *testing.T) {
 	tableA := mockTable(1, 2, 3)
 	ss := NewSession(
 		ctx, logger, pooler, notifier, stream,
-		sendTimeout, poisionTime, heartbeatInterval,
+		sendTimeout, poisionTime, heartbeatInterval, heartbeatInterval,
 	)
 
 	/* ---- 1. send response repeatedly ---- */
@@ -189,7 +226,7 @@ func TestSession(t *testing.T) {
 
 	ss := NewSession(
 		ctx, logger, pooler, notifier, stream,
-		sendTimeout, poisionTime, heartbeatInterval,
+		sendTimeout, poisionTime, heartbeatInterval, heartbeatInterval,
 	)
 	defer ss.PostClean()
 
