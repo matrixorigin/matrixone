@@ -229,6 +229,15 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 
 			if ctr.end {
+				if ctr.zeroWindow {
+					ctr.last = true
+					if !ctr.withoutFill {
+						ctr.wStart = append(ctr.wStart, types.ZeroDatetime)
+						ctr.wEnd = append(ctr.wEnd, types.ZeroDatetime)
+					}
+					ctr.status = flush
+					break
+				}
 				if ctr.preVecIdx == ctr.i-1 &&
 					ctr.preRowIdx == ctr.tsVec[ctr.preVecIdx].Length()-1 {
 					ctr.last = true
@@ -427,11 +436,23 @@ func (ctr *container) nextWindow(t *TimeWin) error {
 
 func (ctr *container) firstWindow(t *TimeWin) error {
 	val := vector.MustFixedColWithTypeCheck[types.Datetime](ctr.tsVec[ctr.curVecIdx])[ctr.curRowIdx]
-	ctr.left = val - val%t.Interval
-	ctr.right = ctr.left + t.Interval
+	if val == types.ZeroDatetime {
+		// A zero temporal has no chronological position, but it is a storable
+		// non-NULL key. Keep it in its own sentinel window instead of letting
+		// -1 % interval turn it into the valid epoch (0).
+		ctr.left = types.ZeroDatetime
+		ctr.right = types.ZeroDatetime
+		ctr.nextLeft = types.ZeroDatetime
+		ctr.nextRight = types.ZeroDatetime
+		ctr.zeroWindow = true
+	} else {
+		ctr.left = val - val%t.Interval
+		ctr.right = ctr.left + t.Interval
 
-	ctr.nextLeft = ctr.left + t.Sliding
-	ctr.nextRight = ctr.nextLeft + t.Interval
+		ctr.nextLeft = ctr.left + t.Sliding
+		ctr.nextRight = ctr.nextLeft + t.Interval
+		ctr.zeroWindow = false
+	}
 
 	// This row opens the partition every window until the next boundary
 	// belongs to; fillRows compares against it to spot the change.
@@ -459,6 +480,41 @@ func (ctr *container) fillRows() error {
 	outRange := false
 	partBreak := false
 	for ; ctr.curRowIdx < cnt; ctr.curRowIdx++ {
+		if ctr.zeroWindow {
+			if len(ctr.partExe) > 0 && !ctr.samePartition(ctr.curVecIdx, ctr.curRowIdx, ctr.partIdx, ctr.partRow) {
+				if !ctr.withoutFill {
+					ctr.wStart = append(ctr.wStart, types.ZeroDatetime)
+					ctr.wEnd = append(ctr.wEnd, types.ZeroDatetime)
+				}
+				ctr.breakVecIdx = ctr.curVecIdx
+				ctr.breakRowIdx = ctr.curRowIdx
+				ctr.partitionBreak = true
+				ctr.zeroWindow = false
+				ctr.status = flush
+				return nil
+			}
+			if vals[ctr.curRowIdx] == types.ZeroDatetime {
+				for j, agg := range ctr.aggs {
+					if err := agg.Fill(ctr.group, ctr.curRowIdx, []*vector.Vector{ctr.aggVec[ctr.curVecIdx][j]}); err != nil {
+						return err
+					}
+				}
+				ctr.withoutFill = false
+				ctr.partLastVal = vals[ctr.curRowIdx]
+				ctr.partLastVecIdx = ctr.curVecIdx
+				ctr.partLastRowIdx = ctr.curRowIdx
+				continue
+			}
+
+			if !ctr.withoutFill {
+				ctr.wStart = append(ctr.wStart, types.ZeroDatetime)
+				ctr.wEnd = append(ctr.wEnd, types.ZeroDatetime)
+			}
+			ctr.zeroWindow = false
+			ctr.status = firstWindow
+			return nil
+		}
+
 		// Input arrives ordered by partition key, so the first row that
 		// disagrees with the key this window opened on ends the partition's
 		// data. Its remaining windows still have to be produced, so record

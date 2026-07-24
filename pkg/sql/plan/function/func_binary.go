@@ -1718,6 +1718,15 @@ func Truncate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 		if null {
 			return moerr.NewNotSupported(proc.Ctx, "now args of MO_WIN_TRUNCATE can not be NULL")
 		}
+		// ZeroDatetime is a distinct MySQL zero-date sentinel, not the
+		// 0001-01-01 epoch. It is a valid time-window grouping key but cannot
+		// participate in modulo arithmetic without being aliased to that epoch.
+		if v == types.ZeroDatetime {
+			if err = rs.Append(types.ZeroDatetime, false); err != nil {
+				return err
+			}
+			continue
+		}
 		if err = rs.Append(v-v%t, false); err != nil {
 			return err
 		}
@@ -12474,7 +12483,7 @@ func DateTrunc(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 	for i := uint64(0); i < uint64(length); i++ {
 		unit, null1 := p1.GetStrValue(i)
 		dt, null2 := p2.GetValue(i)
-		if null1 || null2 {
+		if null1 || null2 || dt == types.ZeroDatetime {
 			if err := rs.Append(types.Datetime(0), true); err != nil {
 				return err
 			}
@@ -12540,7 +12549,7 @@ func DateTruncDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 	for i := uint64(0); i < uint64(length); i++ {
 		unit, null1 := p1.GetStrValue(i)
 		d, null2 := p2.GetValue(i)
-		if null1 || null2 {
+		if null1 || null2 || d == types.ZeroDate {
 			if err := rs.Append(types.Date(0), true); err != nil {
 				return err
 			}
@@ -12572,7 +12581,7 @@ func DateTruncTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrap
 	for i := uint64(0); i < uint64(length); i++ {
 		unit, null1 := p1.GetStrValue(i)
 		ts, null2 := p2.GetValue(i)
-		if null1 || null2 {
+		if null1 || null2 || ts == types.ZeroTimestamp {
 			if err := rs.Append(types.Timestamp(0), true); err != nil {
 				return err
 			}

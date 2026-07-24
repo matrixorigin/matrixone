@@ -44,6 +44,12 @@ select timestampdiff(day,
                      cast('2024-01-01 00:00:00' as timestamp)) as zero_timestampdiff_date_timestamp;
 
 -- Functions that require a complete calendar date return NULL for zero temporals.
+select date_trunc('month', cast('0000-00-00' as date)) is null as zero_date_trunc_date,
+       date_trunc('month', cast('0000-00-00 00:00:00' as datetime)) is null as zero_date_trunc_datetime,
+       date_trunc('month', cast('0000-00-00 00:00:00' as timestamp)) is null as zero_date_trunc_timestamp;
+select date_trunc('month', cast('0001-01-01' as date)) as minimum_date_trunc,
+       date_trunc('month', cast('0001-01-01 00:00:00' as datetime)) as minimum_datetime_trunc,
+       date_trunc('month', cast('0001-01-01 00:00:00' as timestamp)) as minimum_timestamp_trunc;
 select dayofyear(cast('0000-00-00' as date)) as zero_dayofyear,
        week(cast('0000-00-00' as date)) as zero_week_date,
        week(cast('0000-00-00 00:00:00' as datetime)) as zero_week_datetime;

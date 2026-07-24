@@ -12919,6 +12919,95 @@ func TestDateTruncTimestampVectorPreservesDSTFold(t *testing.T) {
 	require.NotEqual(t, got[0], got[1])
 }
 
+func TestDateTruncZeroTemporalsReturnNull(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	unitVec, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte("month"), 2, proc.Mp())
+	require.NoError(t, err)
+
+	tests := []struct {
+		name string
+		run  func(vector.FunctionResultWrapper) error
+		typ  types.Type
+	}{
+		{
+			name: "date",
+			typ:  types.T_date.ToType(),
+			run: func(result vector.FunctionResultWrapper) error {
+				values := vector.NewVec(types.T_date.ToType())
+				defer values.Free(proc.Mp())
+				if err := vector.AppendFixedList(values, []types.Date{types.ZeroDate, types.Date(0)}, nil, proc.Mp()); err != nil {
+					return err
+				}
+				values.SetLength(2)
+				return DateTruncDate([]*vector.Vector{unitVec, values}, result, proc, 2, nil)
+			},
+		},
+		{
+			name: "datetime",
+			typ:  types.T_datetime.ToType(),
+			run: func(result vector.FunctionResultWrapper) error {
+				values := vector.NewVec(types.T_datetime.ToType())
+				defer values.Free(proc.Mp())
+				if err := vector.AppendFixedList(values, []types.Datetime{types.ZeroDatetime, types.DatetimeEpoch}, nil, proc.Mp()); err != nil {
+					return err
+				}
+				values.SetLength(2)
+				return DateTrunc([]*vector.Vector{unitVec, values}, result, proc, 2, nil)
+			},
+		},
+		{
+			name: "timestamp",
+			typ:  types.T_timestamp.ToType(),
+			run: func(result vector.FunctionResultWrapper) error {
+				values := vector.NewVec(types.T_timestamp.ToType())
+				defer values.Free(proc.Mp())
+				if err := vector.AppendFixedList(values, []types.Timestamp{types.ZeroTimestamp, types.Timestamp(0)}, nil, proc.Mp()); err != nil {
+					return err
+				}
+				values.SetLength(2)
+				return DateTruncTimestamp([]*vector.Vector{unitVec, values}, result, proc, 2, nil)
+			},
+		},
+	}
+
+	defer unitVec.Free(proc.Mp())
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			result := vector.NewFunctionResultWrapper(tc.typ, proc.Mp())
+			defer result.Free()
+			require.NoError(t, result.PreExtendAndReset(2))
+			require.NoError(t, tc.run(result))
+			got := result.GetResultVector()
+			require.True(t, got.GetNulls().Contains(0))
+			require.False(t, got.GetNulls().Contains(1))
+		})
+	}
+}
+
+func TestMoWinTruncateKeepsZeroDatetimeDistinctFromEpoch(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	values := vector.NewVec(types.T_datetime.ToType())
+	require.NoError(t, vector.AppendFixedList(values, []types.Datetime{types.ZeroDatetime, types.DatetimeEpoch}, nil, proc.Mp()))
+	values.SetLength(2)
+	defer values.Free(proc.Mp())
+
+	diff, err := vector.NewConstFixed(types.T_int64.ToType(), int64(1), 2, proc.Mp())
+	require.NoError(t, err)
+	defer diff.Free(proc.Mp())
+	unit, err := vector.NewConstFixed(types.T_int64.ToType(), int64(types.Second), 2, proc.Mp())
+	require.NoError(t, err)
+	defer unit.Free(proc.Mp())
+
+	result := vector.NewFunctionResultWrapper(types.T_datetime.ToType(), proc.Mp())
+	defer result.Free()
+	require.NoError(t, result.PreExtendAndReset(2))
+	require.NoError(t, Truncate([]*vector.Vector{values, diff, unit}, result, proc, 2, nil))
+
+	got := vector.MustFixedColNoTypeCheck[types.Datetime](result.GetResultVector())
+	require.Equal(t, types.ZeroDatetime, got[0])
+	require.Equal(t, types.DatetimeEpoch, got[1])
+}
+
 func TestDateTruncCheckRejectsInvalidArguments(t *testing.T) {
 	overloads := allSupportedFunctions[DATE_TRUNC].Overloads
 
