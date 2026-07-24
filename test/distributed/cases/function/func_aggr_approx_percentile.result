@@ -58,3 +58,20 @@ select approx_percentile(v, 0), approx_percentile(v, 1) from t_approx_decimal38_
 ➤ approx_percentile(v, 0)[3,38,38]  ¦  approx_percentile(v, 1)[3,38,38]  𝄀
 0.10000000000000000000000000000000000000  ¦  0.20000000000000000000000000000000000000
 drop table t_approx_decimal38_38;
+drop table if exists t_approx_float_infinity;
+create table t_approx_float_infinity (v double);
+insert into t_approx_float_infinity values (cast('Inf' as double));
+select approx_percentile(v, 0) as p0, approx_percentile(v, 0.5) as p50, approx_percentile(v, 1) as p100 from t_approx_float_infinity;
+➤ p0[8,54,0]  ¦  p50[8,54,0]  ¦  p100[8,54,0]  𝄀
++Infinity  ¦  +Infinity  ¦  +Infinity
+truncate table t_approx_float_infinity;
+insert into t_approx_float_infinity values (cast('-Inf' as double));
+select approx_percentile(v, 0) as p0, approx_percentile(v, 0.5) as p50, approx_percentile(v, 1) as p100 from t_approx_float_infinity;
+➤ p0[8,54,0]  ¦  p50[8,54,0]  ¦  p100[8,54,0]  𝄀
+-Infinity  ¦  -Infinity  ¦  -Infinity
+truncate table t_approx_float_infinity;
+insert into t_approx_float_infinity values (cast('-Inf' as double)), (cast('Inf' as double));
+select approx_percentile(v, 0) as p0, approx_percentile(v, 1) as p100 from t_approx_float_infinity;
+➤ p0[8,54,0]  ¦  p100[8,54,0]  𝄀
+-Infinity  ¦  +Infinity
+drop table t_approx_float_infinity;

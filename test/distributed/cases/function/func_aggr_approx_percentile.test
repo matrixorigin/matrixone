@@ -37,3 +37,15 @@ create table t_approx_decimal38_38 (v decimal(38, 38));
 insert into t_approx_decimal38_38 values (0.1), (0.2);
 select approx_percentile(v, 0), approx_percentile(v, 1) from t_approx_decimal38_38;
 drop table t_approx_decimal38_38;
+
+drop table if exists t_approx_float_infinity;
+create table t_approx_float_infinity (v double);
+insert into t_approx_float_infinity values (cast('Inf' as double));
+select approx_percentile(v, 0) as p0, approx_percentile(v, 0.5) as p50, approx_percentile(v, 1) as p100 from t_approx_float_infinity;
+truncate table t_approx_float_infinity;
+insert into t_approx_float_infinity values (cast('-Inf' as double));
+select approx_percentile(v, 0) as p0, approx_percentile(v, 0.5) as p50, approx_percentile(v, 1) as p100 from t_approx_float_infinity;
+truncate table t_approx_float_infinity;
+insert into t_approx_float_infinity values (cast('-Inf' as double)), (cast('Inf' as double));
+select approx_percentile(v, 0) as p0, approx_percentile(v, 1) as p100 from t_approx_float_infinity;
+drop table t_approx_float_infinity;

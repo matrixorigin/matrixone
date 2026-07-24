@@ -922,15 +922,19 @@ func PercentileNumeric[T numeric](vs *Vectors[T], p float64) (float64, error) {
 }
 
 func interpolateFloat64(lo, hi, fraction float64) float64 {
-	// Preserve the existing IEEE-754 propagation for non-finite input values.
-	if math.IsNaN(lo) || math.IsNaN(hi) || math.IsInf(lo, 0) || math.IsInf(hi, 0) {
-		return lo + (hi-lo)*fraction
-	}
 	if fraction == 0 {
 		return lo
 	}
 	if fraction == 1 {
 		return hi
+	}
+	if lo == hi {
+		return lo
+	}
+	// Preserve IEEE-754 propagation when distinct non-finite values actually
+	// need interpolation.
+	if math.IsNaN(lo) || math.IsNaN(hi) || math.IsInf(lo, 0) || math.IsInf(hi, 0) {
+		return lo + (hi-lo)*fraction
 	}
 	// For opposite signs, hi-lo can overflow even though the interpolated value
 	// is finite. Both weighted terms are bounded by their finite endpoints, and

@@ -153,10 +153,30 @@ func TestInterpolateFloat64(t *testing.T) {
 		})
 	}
 
-	// Keep the prior IEEE-754 behavior for non-finite data values.
+	// Keep IEEE-754 propagation for non-finite interpolations, but exact ranks
+	// must still return their selected endpoint.
 	require.True(t, math.IsNaN(interpolateFloat64(math.NaN(), 1, 0.5)))
 	require.True(t, math.IsNaN(interpolateFloat64(math.Inf(-1), math.Inf(1), 0.5)))
-	require.True(t, math.IsNaN(interpolateFloat64(math.Inf(1), math.Inf(1), 0)))
+	for _, test := range []struct {
+		name         string
+		lo, hi, frac float64
+		positive     bool
+	}{
+		{name: "positive infinity left endpoint", lo: math.Inf(1), hi: math.Inf(1), frac: 0, positive: true},
+		{name: "positive infinity equal endpoints", lo: math.Inf(1), hi: math.Inf(1), frac: 0.5, positive: true},
+		{name: "positive infinity right endpoint", lo: math.Inf(1), hi: math.Inf(1), frac: 1, positive: true},
+		{name: "negative infinity left endpoint", lo: math.Inf(-1), hi: math.Inf(-1), frac: 0},
+		{name: "negative infinity equal endpoints", lo: math.Inf(-1), hi: math.Inf(-1), frac: 0.5},
+		{name: "negative infinity right endpoint", lo: math.Inf(-1), hi: math.Inf(-1), frac: 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			wantInf := -1
+			if test.positive {
+				wantInf = 1
+			}
+			require.True(t, math.IsInf(interpolateFloat64(test.lo, test.hi, test.frac), wantInf))
+		})
+	}
 }
 
 func TestPercentileDecimal64Vals(t *testing.T) {
@@ -554,6 +574,88 @@ func TestApproxPercentileExec_Float64ExtremeInterpolation(t *testing.T) {
 	require.Equal(t, int64(0), mp.CurrNB())
 }
 
+func TestApproxPercentileExec_Float64InfiniteEndpoints(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		values     []float64
+		percentile string
+		wantInf    int
+		wantNaN    bool
+	}{
+		{name: "positive singleton p0", values: []float64{math.Inf(1)}, percentile: "0", wantInf: 1},
+		{name: "positive singleton p50", values: []float64{math.Inf(1)}, percentile: "0.5", wantInf: 1},
+		{name: "positive singleton p100", values: []float64{math.Inf(1)}, percentile: "1", wantInf: 1},
+		{name: "negative singleton p0", values: []float64{math.Inf(-1)}, percentile: "0", wantInf: -1},
+		{name: "negative singleton p50", values: []float64{math.Inf(-1)}, percentile: "0.5", wantInf: -1},
+		{name: "negative singleton p100", values: []float64{math.Inf(-1)}, percentile: "1", wantInf: -1},
+		{name: "opposite endpoints p0", values: []float64{math.Inf(-1), math.Inf(1)}, percentile: "0", wantInf: -1},
+		{name: "opposite endpoints p50", values: []float64{math.Inf(-1), math.Inf(1)}, percentile: "0.5", wantNaN: true},
+		{name: "opposite endpoints p100", values: []float64{math.Inf(-1), math.Inf(1)}, percentile: "1", wantInf: 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
+			exec, err := makeApproxPercentile(mp, 1, false, types.T_float64.ToType())
+			require.NoError(t, err)
+			defer exec.Free()
+			require.NoError(t, exec.GroupGrow(1))
+			vec := buildFixedVec(t, mp, types.T_float64.ToType(), test.values)
+			defer vec.Free(mp)
+			require.NoError(t, exec.BulkFill(0, []*vector.Vector{vec}))
+			require.NoError(t, exec.SetExtraInformation([]byte(test.percentile), 0))
+
+			ret, err := exec.Flush()
+			require.NoError(t, err)
+			defer ret[0].Free(mp)
+			got := vector.GetFixedAtNoTypeCheck[float64](ret[0], 0)
+			if test.wantNaN {
+				require.True(t, math.IsNaN(got))
+			} else {
+				require.True(t, math.IsInf(got, test.wantInf))
+			}
+		})
+	}
+}
+
+func TestApproxPercentileExec_Fill(t *testing.T) {
+	t.Run("const row uses physical index zero", func(t *testing.T) {
+		mp := mpool.MustNewZero()
+		defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
+		exec, err := makeApproxPercentile(mp, AggIdOfApproxPercentile, false, types.T_float64.ToType())
+		require.NoError(t, err)
+		defer exec.Free()
+		require.NoError(t, exec.GroupGrow(1))
+		require.NoError(t, exec.SetExtraInformation([]byte("0.5"), 0))
+		vec, err := vector.NewConstFixed(types.T_float64.ToType(), math.Inf(1), 3, mp)
+		require.NoError(t, err)
+		defer vec.Free(mp)
+
+		require.NoError(t, exec.Fill(0, 2, []*vector.Vector{vec}))
+		ret, err := exec.Flush()
+		require.NoError(t, err)
+		defer ret[0].Free(mp)
+		require.True(t, math.IsInf(vector.GetFixedAtNoTypeCheck[float64](ret[0], 0), 1))
+	})
+
+	t.Run("null row does not create a value", func(t *testing.T) {
+		mp := mpool.MustNewZero()
+		defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
+		exec, err := makeApproxPercentile(mp, AggIdOfApproxPercentile, false, types.T_float64.ToType())
+		require.NoError(t, err)
+		defer exec.Free()
+		require.NoError(t, exec.GroupGrow(1))
+		require.NoError(t, exec.SetExtraInformation([]byte("0.5"), 0))
+		vec := vector.NewConstNull(types.T_float64.ToType(), 3, mp)
+		defer vec.Free(mp)
+
+		require.NoError(t, exec.Fill(0, 2, []*vector.Vector{vec}))
+		ret, err := exec.Flush()
+		require.NoError(t, err)
+		defer ret[0].Free(mp)
+		require.True(t, ret[0].IsNull(0))
+	})
+}
+
 func TestApproxPercentileExec_DistinctNotSupported(t *testing.T) {
 	mp := mpool.MustNewZero()
 
@@ -818,6 +920,61 @@ func TestApproxPercentileExec_IntermediateRoundTrip(t *testing.T) {
 	ret[0].Free(mp)
 	exec.Free()
 	restored.Free()
+}
+
+func TestApproxPercentileExec_Float64InfiniteMergeRoundTrip(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		left       float64
+		right      float64
+		percentile string
+		wantInf    int
+		wantNaN    bool
+	}{
+		{name: "equal positive infinity", left: math.Inf(1), right: math.Inf(1), percentile: "0.5", wantInf: 1},
+		{name: "equal negative infinity", left: math.Inf(-1), right: math.Inf(-1), percentile: "0.5", wantInf: -1},
+		{name: "opposite left endpoint", left: math.Inf(-1), right: math.Inf(1), percentile: "0", wantInf: -1},
+		{name: "opposite interpolation", left: math.Inf(-1), right: math.Inf(1), percentile: "0.5", wantNaN: true},
+		{name: "opposite right endpoint", left: math.Inf(-1), right: math.Inf(1), percentile: "1", wantInf: 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
+			left, err := makeApproxPercentile(mp, AggIdOfApproxPercentile, false, types.T_float64.ToType())
+			require.NoError(t, err)
+			defer left.Free()
+			right, err := makeApproxPercentile(mp, AggIdOfApproxPercentile, false, types.T_float64.ToType())
+			require.NoError(t, err)
+			defer right.Free()
+			require.NoError(t, left.GroupGrow(1))
+			require.NoError(t, right.GroupGrow(1))
+			leftVec := buildFixedVec(t, mp, types.T_float64.ToType(), []float64{test.left})
+			defer leftVec.Free(mp)
+			rightVec := buildFixedVec(t, mp, types.T_float64.ToType(), []float64{test.right})
+			defer rightVec.Free(mp)
+			require.NoError(t, left.BulkFill(0, []*vector.Vector{leftVec}))
+			require.NoError(t, right.BulkFill(0, []*vector.Vector{rightVec}))
+			require.NoError(t, left.Merge(right, 0, 0))
+
+			var buf bytes.Buffer
+			require.NoError(t, left.SaveIntermediateResult(1, [][]uint8{{1}}, &buf))
+			restored, err := makeApproxPercentile(mp, AggIdOfApproxPercentile, false, types.T_float64.ToType())
+			require.NoError(t, err)
+			defer restored.Free()
+			require.NoError(t, restored.UnmarshalFromReader(bytes.NewReader(buf.Bytes()), mp))
+			require.NoError(t, restored.SetExtraInformation([]byte(test.percentile), 0))
+
+			ret, err := restored.Flush()
+			require.NoError(t, err)
+			defer ret[0].Free(mp)
+			got := vector.GetFixedAtNoTypeCheck[float64](ret[0], 0)
+			if test.wantNaN {
+				require.True(t, math.IsNaN(got))
+			} else {
+				require.True(t, math.IsInf(got, test.wantInf))
+			}
+		})
+	}
 }
 
 func TestApproxPercentileExec_DecimalMerge(t *testing.T) {
