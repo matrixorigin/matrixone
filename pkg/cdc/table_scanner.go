@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"runtime/debug"
 	"slices"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -37,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 const (
@@ -744,6 +744,7 @@ func (s *TableDetector) scanTable() error {
 	}
 	defer result.Close()
 
+	var scanErr error
 	result.ReadRows(func(rows int, cols []*vector.Vector) bool {
 		for i := 0; i < rows; i++ {
 			tblId := vector.MustFixedColWithTypeCheck[uint64](cols[0])[i]
@@ -752,9 +753,21 @@ func (s *TableDetector) scanTable() error {
 			dbName := cols[3].GetStringAt(i)
 			createSql := cols[4].GetStringAt(i)
 			accountId := vector.MustFixedColWithTypeCheck[uint32](cols[5])[i]
+			hasForeignKey, decodeErr := tableHasForeignKeyConstraint(cols[6].GetBytesAt(i))
+			if decodeErr != nil {
+				scanErr = decodeErr
+				logutil.Warn(
+					"cdc.table_detector.scan_constraint_failed",
+					zap.Uint32("account-id", accountId),
+					zap.String("db", dbName),
+					zap.String("table", tblName),
+					zap.Error(decodeErr),
+				)
+				return false
+			}
 
 			// skip table with foreign key
-			if strings.Contains(strings.ToLower("createSql"), "foreign key") {
+			if hasForeignKey {
 				continue
 			}
 
@@ -776,21 +789,48 @@ func (s *TableDetector) scanTable() error {
 				mp[accountId][key] = newInfo
 			} else {
 				idChanged := oldInfo.OnlyDiffinTblId(newInfo)
-				oldInfo.SourceDbId = dbId
-				oldInfo.SourceDbName = dbName
-				oldInfo.SourceTblId = tblId
-				oldInfo.SourceTblName = tblName
-				oldInfo.SourceCreateSql = createSql
-				oldInfo.IdChanged = oldInfo.IdChanged || idChanged
-				mp[accountId][key] = oldInfo
+				updatedInfo := oldInfo.Clone()
+				updatedInfo.SourceDbId = dbId
+				updatedInfo.SourceDbName = dbName
+				updatedInfo.SourceTblId = tblId
+				updatedInfo.SourceTblName = tblName
+				updatedInfo.SourceCreateSql = createSql
+				updatedInfo.IdChanged = updatedInfo.IdChanged || idChanged
+				mp[accountId][key] = updatedInfo
 			}
 		}
 		return true
 	})
+	if scanErr != nil {
+		return scanErr
+	}
 
 	// replace the old table map
 	s.mu.Lock()
 	s.Mp = mp
 	s.mu.Unlock()
 	return nil
+}
+
+func tableHasForeignKeyConstraint(data []byte) (hasForeignKey bool, err error) {
+	if len(data) == 0 {
+		return false, nil
+	}
+
+	defer func() {
+		if r := recover(); r != nil {
+			err = moerr.NewInternalErrorNoCtxf("unmarshal table constraint failed: %v", r)
+		}
+	}()
+
+	constraintDef := &engine.ConstraintDef{}
+	if err := constraintDef.UnmarshalBinary(data); err != nil {
+		return false, err
+	}
+	for _, constraint := range constraintDef.Cts {
+		if foreignKeyDef, ok := constraint.(*engine.ForeignKeyDef); ok && len(foreignKeyDef.Fkeys) > 0 {
+			return true, nil
+		}
+	}
+	return false, nil
 }
