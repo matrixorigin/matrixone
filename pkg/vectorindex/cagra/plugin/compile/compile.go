@@ -59,7 +59,7 @@ type Hooks struct{}
 // (pkg/sql/compile/ddl_index_algo.go:732).
 //
 // The sync-vs-async branch is driven by the index's `async`
-// IndexAlgoParam (catalog.IsIndexAsync). Default (key missing or
+// IndexAlgoParam (catalog.IndexParamAsync). Default (key missing or
 // "false"): forceSync=true — cagra_create runs inline in the user's
 // CREATE INDEX txn before the CDC task is registered. Explicit
 // async="true": forceSync=false — the build SQL is stashed as
@@ -69,7 +69,7 @@ func (h Hooks) HandleCreateIndex(ctx compileplugin.CompileContext, indexDefs map
 	if !ok || metaDef == nil {
 		return h.handleCreate(ctx, indexDefs, true)
 	}
-	async, err := catalog.IsIndexAsync(metaDef.IndexAlgoParams)
+	async, err := catalog.IndexParamAsync(metaDef.IndexAlgoParams)
 	if err != nil {
 		return err
 	}
@@ -80,7 +80,7 @@ func (h Hooks) HandleCreateIndex(ctx compileplugin.CompileContext, indexDefs map
 // forceSync. The idxcron background reindex executor passes
 // forceSync=true so the build happens synchronously inside the txn
 // before the CDC task picks up forward changes. Mirrors IVF-FLAT.
-func (h Hooks) HandleReindex(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef, forceSync bool) error {
+func (h Hooks) HandleReindex(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef, forceSync bool, _ bool) error {
 	return h.handleCreate(ctx, indexDefs, forceSync)
 }
 

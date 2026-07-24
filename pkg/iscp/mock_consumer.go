@@ -331,7 +331,7 @@ func (s *interalSqlConsumer) sinkSnapshot(ctx context.Context, bat *AtomicBatch)
 				s.preRowType = UpsertRow
 			}
 			// step1: get row from the batch
-			if err = extractRowFromEveryVector(ctx, bat, i, s.insertRow); err != nil {
+			if err = extractRowFromEveryVector(ctx, bat, i, s.insertRow, ReprSQLString); err != nil {
 				panic(err)
 			}
 
@@ -412,7 +412,7 @@ func (s *interalSqlConsumer) sinkInsert(ctx context.Context, insertIter *atomicB
 	}
 
 	// step1: get row from the batch
-	if err = insertIter.Row(ctx, s.insertRow); err != nil {
+	if err = insertIter.Row(ctx, s.insertRow, ReprSQLString); err != nil {
 		return
 	}
 
@@ -436,7 +436,7 @@ func (s *interalSqlConsumer) sinkDelete(ctx context.Context, deleteIter *atomicB
 	}
 
 	// step1: get row from the batch
-	if err = deleteIter.Row(ctx, s.deleteRow); err != nil {
+	if err = deleteIter.Row(ctx, s.deleteRow, ReprSQLString); err != nil {
 		return
 	}
 

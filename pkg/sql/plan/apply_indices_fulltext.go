@@ -280,24 +280,50 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 		}
 		mode := modeLit.GetI64Val()
 
-		sql := ""
-		if patternLit := fn.Args[0].GetLit(); patternLit != nil {
-			fullTextSQL, err := builder.getFullTextIndexScanSql(params, idxtblname, patternLit.GetSval(), mode)
+		// Dispatch the per-match TVF by the resolved index's algo: fulltext2 ->
+		// fulltext2_search, classic fulltext -> fulltext_index_scan. Both emit the same
+		// (doc_id, score) shape and take the search pattern as an EXPRESSION (fn.Args[0]),
+		// so a prepared-statement '?' pattern flows through either path unchanged. This
+		// 2-member dispatch stays inline (not an index-plugin hook) because building the
+		// node needs QueryBuilder internals a plugin sub-package must not import.
+		var curr_ftnode_id int32
+		var err error
+		if catalog.IsFullText2IndexAlgo(idxdef.IndexAlgo) {
+			cfg, cfgErr := builder.buildFulltext2SearchCfg(scanNode, idxdef, mode)
+			if cfgErr != nil {
+				return -1, nil, nil, cfgErr
+			}
+			exprs := []*plan.Expr{
+				makePlan2StringConstExprWithType(cfg),
+				DeepCopyExpr(fn.Args[0]), // pattern (may be a bound '?' parameter)
+				DeepCopyExpr(fn.Args[1]), // mode (a constant)
+			}
+			curr_ftnode_id, err = builder.buildFulltext2SearchNode(ctx, exprs, nil)
 			if err != nil {
 				return -1, nil, nil, err
 			}
-			sql = fullTextSQL
-		}
+		} else {
+			// A literal pattern is pre-compiled to the index-scan SQL now; a runtime
+			// pattern expression (prepared '?') leaves sql empty and compiles at exec.
+			sql := ""
+			if patternLit := fn.Args[0].GetLit(); patternLit != nil {
+				fullTextSQL, sqlErr := builder.getFullTextIndexScanSql(params, idxtblname, patternLit.GetSval(), mode)
+				if sqlErr != nil {
+					return -1, nil, nil, sqlErr
+				}
+				sql = fullTextSQL
+			}
 
-		exprs := []*plan.Expr{
-			makePlan2StringConstExprWithType(srctblname),
-			makePlan2StringConstExprWithType(idxtblname),
-			DeepCopyExpr(fn.Args[0]),
-			DeepCopyExpr(fn.Args[1]),
-		}
-		curr_ftnode_id, err := builder.buildFullTextIndexScanNode(ctx, exprs, nil, params, sql)
-		if err != nil {
-			return -1, nil, nil, err
+			exprs := []*plan.Expr{
+				makePlan2StringConstExprWithType(srctblname),
+				makePlan2StringConstExprWithType(idxtblname),
+				DeepCopyExpr(fn.Args[0]),
+				DeepCopyExpr(fn.Args[1]),
+			}
+			curr_ftnode_id, err = builder.buildFullTextIndexScanNode(ctx, exprs, nil, params, sql)
+			if err != nil {
+				return -1, nil, nil, err
+			}
 		}
 		// save the created fulltext node to either filter or projection
 		// check equal fulltext_match() and return node id to correct project position
@@ -771,7 +797,17 @@ func (builder *QueryBuilder) findMatchFullTextIndex(fn *plan.Function, scanNode 
 
 	nargs := len(fn.Args) - 2
 	for _, idx := range scanNode.TableDef.Indexes {
-		if idx == nil || !idx.TableExist || !catalog.IsFullTextIndexAlgo(idx.IndexAlgo) {
+		if idx == nil || !idx.TableExist {
+			continue
+		}
+		// A fulltext2 index has two hidden-table defs (storage + metadata) sharing the
+		// IndexName; resolve against the STORAGE def so IndexTableName/Parts are the ones
+		// the fulltext2_search TVF expects. Classic fulltext has a single def.
+		if catalog.IsFullText2IndexAlgo(idx.IndexAlgo) {
+			if idx.IndexAlgoTableType != catalog.FullText2Index_TblType_Storage {
+				continue
+			}
+		} else if !catalog.IsFullTextIndexAlgo(idx.IndexAlgo) {
 			continue
 		}
 		if len(idx.Parts) != nargs {

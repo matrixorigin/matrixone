@@ -1,0 +1,90 @@
+drop database if exists test_fulltext2;
+create database test_fulltext2;
+use test_fulltext2;
+set experimental_fulltext2_index = 1;
+select @@ft2_relevancy_algorithm;
+@@ft2_relevancy_algorithm
+BM25
+drop table if exists docs;
+create table docs(id bigint primary key, body text);
+insert into docs values
+(0,'the quick brown fox jumps'),
+(1,'a quick brown dog'),
+(2,'the lazy fox sleeps'),
+(3,'brown bear and lazy cat'),
+(4,'quick quick quick fox fox');
+create fulltext2 index ft on docs(body);
+show create table docs;
+Table    Create Table
+docs    CREATE TABLE `docs` (\n  `id` bigint NOT NULL,\n  `body` text DEFAULT NULL,\n  PRIMARY KEY (`id`),\n FULLTEXT2 `ft`(`body`) WITH PARSER ngram\n)
+select id from docs where match(body) against('quick brown fox') order by id;
+id
+0
+select id from docs where match(body) against('brown fox') order by id;
+id
+0
+select id from docs where match(body) against('lazy') order by id;
+id
+2
+3
+select id from docs where match(body) against('unicorn') order by id;
+id
+select id from docs where match(body) against('+quick +fox' in boolean mode) order by id;
+id
+0
+4
+select id from docs where match(body) against('+quick -fox' in boolean mode) order by id;
+id
+1
+select id from docs where match(body) against('quic*' in boolean mode) order by id;
+id
+0
+1
+4
+select id from docs where match(body) against('"quick brown"' in boolean mode) order by id;
+id
+0
+1
+select id from docs where match(body) against('+brown +(fox dog)' in boolean mode) order by id;
+id
+0
+1
+select id from docs where match(body) against('lazy fox' in boolean mode) order by id;
+id
+0
+2
+3
+4
+select id from docs where match(body) against('+lazy ~fox' in boolean mode);
+id
+3
+2
+select count(*) from docs where match(body) against('+quick +fox' in boolean mode);
+count(*)
+2
+drop table if exists mc;
+create table mc(id bigint primary key, body text, title text);
+insert into mc values (0,'quick brown fox','red car'),(1,'lazy dog','quick red');
+create fulltext2 index ft on mc(body,title);
+select id from mc where match(body,title) against('+quick +red' in boolean mode) order by id;
+id
+0
+1
+select id from mc where match(body,title) against('red') order by id;
+id
+0
+1
+drop table if exists cp;
+create table cp(id1 varchar, id2 bigint, body text, primary key(id1,id2));
+insert into cp values ('a',1,'quick brown fox'),('b',2,'lazy fox sleeps');
+create fulltext2 index ft on cp(body);
+select id1,id2 from cp where match(body) against('+fox -brown' in boolean mode) order by id1;
+id1    id2
+b    2
+set ft2_relevancy_algorithm='TF-IDF';
+select id from docs where match(body) against('+lazy ~fox' in boolean mode);
+id
+3
+2
+set ft2_relevancy_algorithm='BM25';
+drop database test_fulltext2;

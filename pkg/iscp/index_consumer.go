@@ -561,12 +561,26 @@ func (c *IndexConsumer) Consume(ctx context.Context, r DataRetriever) error {
 	return nil
 }
 
+// valueRepr picks the value representation the paired writer needs: the fulltext2
+// writer binary-encodes the pk (encodePk), so it needs native Go values (a datetime/
+// time/timestamp/decimal/uuid pk delivered as its SQL-display string would make
+// encodePk's native type assertion panic and crash the consumer goroutine, permanently
+// stalling index maintenance); every other writer builds SQL text and needs the
+// SQL-display string (the historical default).
+func (c *IndexConsumer) valueRepr() ValueRepr {
+	switch c.sqlWriter.(type) {
+	case *Fulltext2SqlWriter:
+		return ReprNative
+	}
+	return ReprSQLString
+}
+
 func (c *IndexConsumer) sinkSnapshot(ctx context.Context, errch chan error, upsertBatch *AtomicBatch) error {
 	var err error
 
 	for _, bat := range upsertBatch.Batches {
 		for i := 0; i < batchRowCount(bat); i++ {
-			if err = extractRowFromEveryVector(ctx, bat, i, c.rowdata); err != nil {
+			if err = extractRowFromEveryVector(ctx, bat, i, c.rowdata, c.valueRepr()); err != nil {
 				return err
 			}
 
@@ -642,7 +656,7 @@ func (c *IndexConsumer) sinkTail(ctx context.Context, errch chan error, upsertBa
 func (c *IndexConsumer) sinkInsert(ctx context.Context, errch chan error, upsertIter *atomicBatchRowIter) (err error) {
 
 	// get row from the batch
-	if err = upsertIter.Row(ctx, c.rowdata); err != nil {
+	if err = upsertIter.Row(ctx, c.rowdata, c.valueRepr()); err != nil {
 		return err
 	}
 
@@ -675,7 +689,7 @@ func (c *IndexConsumer) sinkInsert(ctx context.Context, errch chan error, upsert
 func (c *IndexConsumer) sinkDelete(ctx context.Context, errch chan error, deleteIter *atomicBatchRowIter) (err error) {
 
 	// get row from the batch
-	if err = deleteIter.Row(ctx, c.rowdelete); err != nil {
+	if err = deleteIter.Row(ctx, c.rowdelete, c.valueRepr()); err != nil {
 		return err
 	}
 

@@ -29,15 +29,16 @@ import (
 
 // Index Algorithm names
 const (
-	MoIndexDefaultAlgo  = tree.INDEX_TYPE_INVALID  // used by UniqueIndex or default SecondaryIndex
-	MoIndexBTreeAlgo    = tree.INDEX_TYPE_BTREE    // used for Mocking MySQL behaviour.
-	MoIndexRTreeAlgo    = tree.INDEX_TYPE_RTREE    // used for Spatial Index on GEOMETRY columns
-	MoIndexIvfFlatAlgo  = tree.INDEX_TYPE_IVFFLAT  // used for IVF flat index on Vector/Array columns
-	MOIndexMasterAlgo   = tree.INDEX_TYPE_MASTER   // used for Master Index on VARCHAR columns
-	MOIndexFullTextAlgo = tree.INDEX_TYPE_FULLTEXT // used for Fulltext Index on VARCHAR columns
-	MoIndexHnswAlgo     = tree.INDEX_TYPE_HNSW     // used for HNSW Index on Vector/Array columns
-	MoIndexCagraAlgo    = tree.INDEX_TYPE_CAGRA    // used for CAGRA Index on Vector/Array columns
-	MoIndexIvfpqAlgo    = tree.INDEX_TYPE_IVFPQ    // used for IVFPQ Index on Vector/Array columns
+	MoIndexDefaultAlgo   = tree.INDEX_TYPE_INVALID   // used by UniqueIndex or default SecondaryIndex
+	MoIndexBTreeAlgo     = tree.INDEX_TYPE_BTREE     // used for Mocking MySQL behaviour.
+	MoIndexRTreeAlgo     = tree.INDEX_TYPE_RTREE     // used for Spatial Index on GEOMETRY columns
+	MoIndexIvfFlatAlgo   = tree.INDEX_TYPE_IVFFLAT   // used for IVF flat index on Vector/Array columns
+	MOIndexMasterAlgo    = tree.INDEX_TYPE_MASTER    // used for Master Index on VARCHAR columns
+	MOIndexFullTextAlgo  = tree.INDEX_TYPE_FULLTEXT  // used for Fulltext Index on VARCHAR columns
+	MoIndexHnswAlgo      = tree.INDEX_TYPE_HNSW      // used for HNSW Index on Vector/Array columns
+	MoIndexCagraAlgo     = tree.INDEX_TYPE_CAGRA     // used for CAGRA Index on Vector/Array columns
+	MoIndexIvfpqAlgo     = tree.INDEX_TYPE_IVFPQ     // used for IVFPQ Index on Vector/Array columns
+	MoIndexFullText2Algo = tree.INDEX_TYPE_FULLTEXT2 // CREATE FULLTEXT2 INDEX: WAND positional engine on TEXT/VARCHAR columns
 )
 
 // ToLower is used for before comparing AlgoType and IndexAlgoParamOpType. Reason why they are strings
@@ -81,6 +82,14 @@ func IsFullTextIndexAlgo(algo string) bool {
 	return _algo == MOIndexFullTextAlgo.ToString()
 }
 
+// IsFullText2IndexAlgo reports the distinct WAND positional fulltext engine
+// (CREATE FULLTEXT2 INDEX). It is a separate algo from classic fulltext so its
+// plugin hooks stay static; query routing / MATCH detection treat both.
+func IsFullText2IndexAlgo(algo string) bool {
+	_algo := ToLower(algo)
+	return _algo == MoIndexFullText2Algo.ToString()
+}
+
 func IsHnswIndexAlgo(algo string) bool {
 	_algo := ToLower(algo)
 	return _algo == MoIndexHnswAlgo.ToString()
@@ -107,6 +116,7 @@ const (
 	AutoUpdate              = "auto_update"
 	Day                     = "day"
 	Hour                    = "hour"
+	Second                  = "second"
 	DistributionMode        = "distribution_mode"
 	Quantization            = "quantization"
 	BitsPerCode             = "bits_per_code"
@@ -124,7 +134,24 @@ const (
 	IndexAlgoParamMaxIndexCapacity    = "max_index_capacity"
 	IndexAlgoParamQuantizerTrainLimit = "quantizer_train_limit"
 
+	// IndexAlgoParamMaxPostingsCapacity (fulltext2): max postings (term occurrences)
+	// per built segment. Bounds per-segment build memory regardless of doc size —
+	// max_index_capacity (docs) is a poor memory proxy since a doc can hold one token
+	// or tens of thousands. A segment seals on whichever cap (docs OR postings) is hit
+	// first. Recorded only when explicitly specified; absence ⇒ DefaultPostingCapacity.
+	IndexAlgoParamMaxPostingsCapacity = "max_postings_capacity"
+
+	// IndexAlgoParamPositionFree (fulltext2): "true" ⇒ build a position-free index
+	// (bag-of-words retrieval only, ~half the footprint; the FST term dict is kept).
+	// Recorded only when POSITION_FREE=TRUE; absence ⇒ positional (phrase-capable).
+	IndexAlgoParamPositionFree = "position_free"
+
 	IndexAlgoParamPrefixLengths = "prefix_lengths"
+
+	// IndexAlgoParamVersion selects the index engine version. Currently fulltext
+	// only: unset/1 = classic SQL engine, 2 = WAND-based fulltext v2. The fulltext
+	// plugin routes each hook to the matching engine by this value.
+	IndexAlgoParamVersion = "version"
 )
 
 /* 1. ToString Functions */
@@ -220,8 +247,16 @@ func IndexParamsToStringList(indexParams string) (string, error) {
 		res += fmt.Sprintf(" %s = %s ", IndexAlgoParamMaxIndexCapacity, val)
 	}
 
+	if val, ok := result[IndexAlgoParamMaxPostingsCapacity]; ok {
+		res += fmt.Sprintf(" %s = %s ", IndexAlgoParamMaxPostingsCapacity, val)
+	}
+
 	if val, ok := result[IndexAlgoParamQuantizerTrainLimit]; ok {
 		res += fmt.Sprintf(" %s = %s ", IndexAlgoParamQuantizerTrainLimit, val)
+	}
+
+	if val, ok := result[IndexAlgoParamVersion]; ok {
+		res += fmt.Sprintf(" %s = %s ", IndexAlgoParamVersion, val)
 	}
 
 	if val, ok := result[IncludedColumns]; ok && len(val) > 0 {
@@ -445,7 +480,41 @@ func DefaultIvfIndexAlgoOptions() map[string]string {
 	return res
 }
 
-func IsIndexAsync(indexAlgoParams string) (bool, error) {
+// IndexAlgoParamVersionOf returns the engine version recorded in an index's
+// algo_params (currently only fulltext uses it: v2 = WAND engine). Absent or
+// unparseable ⇒ 1 (the classic engine), so pre-version indexes read as v1.
+func IndexAlgoParamVersionOf(indexAlgoParams string) int64 {
+	if len(indexAlgoParams) == 0 {
+		return 1
+	}
+	val, err := sonic.Get([]byte(indexAlgoParams), IndexAlgoParamVersion)
+	if err != nil {
+		// key not present ⇒ classic engine
+		return 1
+	}
+	s, err := val.StrictString()
+	if err != nil {
+		return 1
+	}
+	n, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		return 1
+	}
+	return n
+}
+
+// IndexParamAsync reports whether the user opted into async maintenance via the
+// index's `async` algo_param. (Formerly IsIndexAsync.)
+//
+// This is a pure-param PRIMITIVE — one of the two independent sources of an
+// index's async-ness (the other being the algorithm's intrinsic always-async).
+// It is NOT the full "is this index async" answer: that also depends on the
+// algorithm identity (hnsw/bm25/cagra/ivfpq are always async) and the engine
+// version (fulltext VERSION=2), neither of which is visible from catalog, which
+// sits below the plugin registry. Use indexplugin.IsAsync(algo, params) for the
+// complete resolution; reach for this primitive only when you specifically mean
+// "did the user set the async param".
+func IndexParamAsync(indexAlgoParams string) (bool, error) {
 	if len(indexAlgoParams) > 0 {
 		val, err := sonic.Get([]byte(indexAlgoParams), Async)
 		if err != nil {

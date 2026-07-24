@@ -10506,6 +10506,7 @@ type AlterTableAlterReIndex struct {
 	IndexName            string   `protobuf:"bytes,3,opt,name=index_name,json=indexName,proto3" json:"index_name,omitempty"`
 	IndexAlgoParamList   int64    `protobuf:"varint,4,opt,name=index_algo_param_list,json=indexAlgoParamList,proto3" json:"index_algo_param_list,omitempty"`
 	ForceSync            bool     `protobuf:"varint,5,opt,name=force_sync,json=forceSync,proto3" json:"force_sync,omitempty"`
+	Merge                bool     `protobuf:"varint,6,opt,name=merge,proto3" json:"merge,omitempty"`
 	XXX_NoUnkeyedLiteral struct{} `json:"-"`
 	XXX_unrecognized     []byte   `json:"-"`
 	XXX_sizecache        int32    `json:"-"`
@@ -10575,6 +10576,13 @@ func (m *AlterTableAlterReIndex) GetIndexAlgoParamList() int64 {
 func (m *AlterTableAlterReIndex) GetForceSync() bool {
 	if m != nil {
 		return m.ForceSync
+	}
+	return false
+}
+
+func (m *AlterTableAlterReIndex) GetMerge() bool {
+	if m != nil {
+		return m.Merge
 	}
 	return false
 }
@@ -23704,6 +23712,16 @@ func (m *AlterTableAlterReIndex) MarshalToSizedBuffer(dAtA []byte) (int, error) 
 		i -= len(m.XXX_unrecognized)
 		copy(dAtA[i:], m.XXX_unrecognized)
 	}
+	if m.Merge {
+		i--
+		if m.Merge {
+			dAtA[i] = 1
+		} else {
+			dAtA[i] = 0
+		}
+		i--
+		dAtA[i] = 0x30
+	}
 	if m.ForceSync {
 		i--
 		if m.ForceSync {
@@ -30675,6 +30693,9 @@ func (m *AlterTableAlterReIndex) ProtoSize() (n int) {
 		n += 1 + sovPlan(uint64(m.IndexAlgoParamList))
 	}
 	if m.ForceSync {
+		n += 2
+	}
+	if m.Merge {
 		n += 2
 	}
 	if m.XXX_unrecognized != nil {
@@ -54510,6 +54531,26 @@ func (m *AlterTableAlterReIndex) Unmarshal(dAtA []byte) error {
 				}
 			}
 			m.ForceSync = bool(v != 0)
+		case 6:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Merge", wireType)
+			}
+			var v int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPlan
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				v |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			m.Merge = bool(v != 0)
 		default:
 			iNdEx = preIndex
 			skippy, err := skipPlan(dAtA[iNdEx:])

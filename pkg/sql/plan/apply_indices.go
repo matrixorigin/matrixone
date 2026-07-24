@@ -610,23 +610,23 @@ func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan
 		}
 
 		if aggNode != nil {
-			// agg node and scan node present
-			// get the list of filter that is fulltext_match func
+			// agg node and scan node present.
+			// get the list of filter that is a match func (fulltext_match / bm25_match)
 			filterids, filter_ftidxs := builder.getFullTextMatchFiltersFromScanNode(scanNode)
 
-			// apply fulltext indices when fulltext_match exists
+			// apply the match indices (one unified pass handles a mix of MATCH + BM25)
 			if len(filterids) > 0 {
 				return builder.applyIndicesForAggUsingFullTextIndex(nodeID, projNode, aggNode, scanNode,
 					filterids, filter_ftidxs, colRefCnt, idxColMap)
 			}
 		} else {
-			// get the list of project that is fulltext_match func
+			// get the list of project that is a match func (fulltext_match / bm25_match)
 			projids, proj_ftidxs := builder.getFullTextMatchFromProject(projNode, scanNode)
 
-			// get the list of filter that is fulltext_match func
+			// get the list of filter that is a match func (fulltext_match / bm25_match)
 			filterids, filter_ftidxs := builder.getFullTextMatchFiltersFromScanNode(scanNode)
 
-			// apply fulltext indices when fulltext_match exists
+			// apply the match indices (one unified pass handles a mix of MATCH + BM25)
 			if len(filterids) > 0 || len(projids) > 0 {
 				return builder.applyIndicesForProjectionUsingFullTextIndex(nodeID, projNode, sortNode, scanNode,
 					filterids, filter_ftidxs, projids, proj_ftidxs, colRefCnt, idxColMap)

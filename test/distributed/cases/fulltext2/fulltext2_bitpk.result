@@ -1,0 +1,46 @@
+drop database if exists test_fulltext2_bitpk;
+create database test_fulltext2_bitpk;
+use test_fulltext2_bitpk;
+set experimental_fulltext2_index = 1;
+drop table if exists docs;
+create table docs(id bit(16) primary key, body text);
+insert into docs values
+(10,'the quick brown fox jumps'),
+(20,'a quick brown dog'),
+(30,'the lazy fox sleeps'),
+(40,'brown bear and lazy cat'),
+(50,'quick quick quick fox fox');
+create fulltext2 index ft on docs(body);
+show create table docs;
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+docs  ¦  CREATE TABLE `docs` (
+  `id` bit(16) NOT NULL,
+  `body` text DEFAULT NULL,
+  PRIMARY KEY (`id`),
+ FULLTEXT2 `ft`(`body`) WITH PARSER ngram
+)
+select cast(id as unsigned) as id from docs where match(body) against('quick brown fox') order by id;
+➤ id[-5,64,0]  𝄀
+10
+select cast(id as unsigned) as id from docs where match(body) against('brown fox') order by id;
+➤ id[-5,64,0]  𝄀
+10
+select cast(id as unsigned) as id from docs where match(body) against('lazy') order by id;
+➤ id[-5,64,0]  𝄀
+30  𝄀
+40
+select cast(id as unsigned) as id from docs where match(body) against('unicorn') order by id;
+➤ id[-5,64,0]
+select cast(id as unsigned) as id from docs where match(body) against('+quick +fox' in boolean mode) order by id;
+➤ id[-5,64,0]  𝄀
+10  𝄀
+50
+select cast(id as unsigned) as id from docs where match(body) against('+quick -fox' in boolean mode) order by id;
+➤ id[-5,64,0]  𝄀
+20
+select cast(id as unsigned) as id from docs where match(body) against('quic*' in boolean mode) order by id;
+➤ id[-5,64,0]  𝄀
+10  𝄀
+20  𝄀
+50
+drop database test_fulltext2_bitpk;

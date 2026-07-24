@@ -17,6 +17,8 @@ package idxcron
 import (
 	"context"
 	"fmt"
+	"os"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -394,10 +396,39 @@ func runReindex(ctx context.Context,
 						return err2
 					}
 				}
+
+				// SECOND is a sub-day cadence override: when set (> 0), the interval
+				// is that many seconds and the hour-of-day gate is bypassed (matched to
+				// currentHour) since it is meaningless at second granularity. Lets an
+				// index set a short interval in DDL (auto_update=true second=5) without
+				// the MO_IDXCRON_INTERVAL_SEC env override.
+				secondAst, err2 := sonic.Get([]byte(idx.IndexAlgoParams), catalog.Second)
+				if err2 == nil {
+					second, err2 := secondAst.Int64()
+					if err2 != nil {
+						return err2
+					}
+					if second > 0 {
+						interval = time.Duration(second) * time.Second
+						hour = int64(currentHour)
+					}
+				}
 				break
 			}
 
+			// dev/test fast mode: a short interval + bypass the hour-of-day gate so a
+			// freshly-created index can be observed rebuilding within seconds.
+			if idxcronFastIntervalSec > 0 {
+				interval = time.Duration(idxcronFastIntervalSec) * time.Second
+				hour = int64(currentHour)
+			}
+
+			logutil.Infof("[idxcron] eval action=%s db=%s table=%s index=%s: auto_update=%v interval=%v hour=%d currentHour=%d",
+				task.Action, task.DbName, task.TableName, task.IndexName, auto_update, interval, hour, currentHour)
+
 			if !auto_update || interval == 0 || currentHour != int(hour) {
+				logutil.Infof("[idxcron] skip index=%s: gate (auto_update=%v interval=%v hour=%d vs currentHour=%d)",
+					task.IndexName, auto_update, interval, hour, currentHour)
 				reason = Reason_Skipped
 				return
 			}
@@ -414,7 +445,7 @@ func runReindex(ctx context.Context,
 				return
 			}
 
-			ok, reason2, err2 := p.Idxcron().Updatable(idxcronplugin.UpdatableInput{
+			upIn := idxcronplugin.UpdatableInput{
 				Sqlproc:      sqlproc,
 				TableDef:     tableDef,
 				IndexName:    task.IndexName,
@@ -422,23 +453,39 @@ func runReindex(ctx context.Context,
 				CreatedAt:    task.CreatedAt,
 				LastUpdateAt: task.LastUpdateAt,
 				Interval:     interval,
-			})
+			}
+			ok, reason2, err2 := p.Idxcron().Updatable(upIn)
 			if err2 != nil {
 				return
 			}
 			reason = reason2
 			if !ok {
+				logutil.Infof("[idxcron] skip index=%s: Updatable=false reason=%q", task.IndexName, reason2)
 				return
 			}
 
-			// run alter table alter reindex in force synchronous mode to make sure to build index in single transaction
-			sql := fmt.Sprintf("ALTER TABLE `%s`.`%s` ALTER REINDEX `%s` %s FORCE_SYNC",
-				task.DbName, task.TableName, task.IndexName, d.IdxcronAlgoToken)
+			// The reindex option is the descriptor's fixed value unless the plugin implements
+			// ReindexOptioner and picks one per fire (fulltext: MERGE vs REBUILD by dead fraction).
+			reindexOption := d.IdxcronReindexOption
+			if optioner, ok := p.Idxcron().(idxcronplugin.ReindexOptioner); ok {
+				opt, oerr := optioner.ReindexOption(upIn)
+				if oerr != nil {
+					err2 = oerr // closure's named return — NOT the outer err (clobbered by runTxn)
+					return
+				}
+				reindexOption = opt
+			}
+
+			// run alter table alter reindex in force synchronous mode to make sure to build index in single transaction.
+			sql := buildReindexSql(task.DbName, task.TableName, task.IndexName, d.IdxcronAlgoToken, reindexOption)
+			logutil.Infof("[idxcron] reindex FIRING index=%s: %s", task.IndexName, sql)
 			res, err2 := runReindexSql(sqlproc, sql)
 			if err2 != nil {
+				logutil.Errorf("[idxcron] reindex FAILED index=%s: %v", task.IndexName, err2)
 				return
 			}
 			res.Close()
+			logutil.Infof("[idxcron] reindex DONE index=%s", task.IndexName)
 
 			// mark reindex is performed
 			updated = true
@@ -450,17 +497,23 @@ func runReindex(ctx context.Context,
 
 func (e *IndexUpdateTaskExecutor) run(ctx context.Context) (err error) {
 
-	logutil.Infof("IndexUpdateTaskExecutor START")
 	currentHour := time.Now().Hour()
+	// tick-level trace: one line per cron fire, echoing the schedule + fast-mode overrides
+	// so a short-interval test deploy can confirm the executor is actually ticking (and how
+	// often) before the per-index eval/skip/FIRING lines below.
+	logutil.Infof("[idxcron] tick START currentHour=%d cronExpr=%q fastIntervalSec=%d",
+		currentHour, IndexUpdateTaskCronExpr, idxcronFastIntervalSec)
 
+	var fired, skipped int
 	defer func() {
-		logutil.Infof("IndexUpdateTaskExecutor END")
+		logutil.Infof("[idxcron] tick END fired=%d skipped=%d err=%v", fired, skipped, err)
 	}()
 
 	tasks, err := getTasks(ctx, e.txnEngine, e.cnTxnClient, e.cnUUID)
 	if err != nil {
 		return err
 	}
+	logutil.Infof("[idxcron] tick: %d index-update task(s) to evaluate", len(tasks))
 
 	// do the maintenance such as ivfflat re-index, fulltext batch_delete
 	for _, t := range tasks {
@@ -483,8 +536,12 @@ func (e *IndexUpdateTaskExecutor) run(ctx context.Context) (err error) {
 			updated, reason, err2 = runReindex(ctx, e.txnEngine, e.cnTxnClient, e.cnUUID, t, currentHour, p)
 		}
 
+		if updated {
+			fired++
+		}
 		if !updated && reason == Reason_Skipped {
 			// skip save Status when update was skipped
+			skipped++
 			continue
 		}
 
@@ -499,11 +556,59 @@ func (e *IndexUpdateTaskExecutor) run(ctx context.Context) (err error) {
 	return nil
 }
 
-var IndexUpdateTaskCronExpr = "0 0 * * * *" // run once an hour, beginning of hour
-// var IndexUpdateTaskCronExpr = "0 55 23 * * *" // 23:55:00 everyday
+// IndexUpdateTaskCronExpr — how often the executor ticks. Default hourly; a dev/test
+// deploy can lower it via env MO_IDXCRON_CRON (e.g. "*/20 * * * * *" every 20s) to
+// observe scheduled rebuilds without waiting for the top of the hour. Read once at
+// init; the cron task is registered from this value at bootstrap (predefine.go).
+var IndexUpdateTaskCronExpr = func() string {
+	// MO_IDXCRON_TICK_SEC is an ergonomic seconds-interval knob for the bootstrap
+	// tick, translated to a cron descriptor (the parser enables cron.Descriptor).
+	// e.g. MO_IDXCRON_TICK_SEC=10 -> "@every 10s". Takes precedence over
+	// MO_IDXCRON_CRON so a deploy can change how often the executor checks index
+	// tasks without hand-writing a cron expression. Like MO_IDXCRON_CRON it is read
+	// once and baked into the cron task at first bootstrap (predefine.go), so it
+	// only takes effect on a fresh cluster — an existing cluster keeps its
+	// registered expr. The default stays conservative (hourly): every tick lists
+	// the registered index tasks (a small SQL), so a very short interval adds
+	// background load and should be an explicit opt-in.
+	if v := os.Getenv("MO_IDXCRON_TICK_SEC"); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 {
+			return fmt.Sprintf("@every %ds", n)
+		}
+	}
+	if v := os.Getenv("MO_IDXCRON_CRON"); v != "" {
+		return v
+	}
+	return "0 0 * * * *" // run once an hour, beginning of hour
+}()
 
-// var IndexUpdateTaskCronExpr = "0 */5 * * * *" // every 5 minutes
-// var IndexUpdateTaskCronExpr = "*/15 * * * * *" // every 15 seconds
+// buildReindexSql assembles the cron-triggered reindex statement. algoToken is the
+// per-plugin keyword (SyncDescriptor.IdxcronAlgoToken, e.g. "IVFFLAT"/"FULLTEXT");
+// reindexOption is an optional extra keyword inserted before FORCE_SYNC
+// (SyncDescriptor.IdxcronReindexOption, e.g. "MERGE" so fulltext retrieval runs
+// incremental fold+tiered compaction), omitted when empty. FORCE_SYNC always runs the
+// rebuild synchronously inside the txn.
+func buildReindexSql(dbName, tableName, indexName, algoToken, reindexOption string) string {
+	reindexOpt := ""
+	if reindexOption != "" {
+		reindexOpt = " " + reindexOption
+	}
+	return fmt.Sprintf("ALTER TABLE `%s`.`%s` ALTER REINDEX `%s` %s%s FORCE_SYNC",
+		dbName, tableName, indexName, algoToken, reindexOpt)
+}
+
+// idxcronFastIntervalSec — dev/test override (env MO_IDXCRON_INTERVAL_SEC, in seconds).
+// When > 0, runReindex uses it as the cadence interval AND bypasses the hour-of-day
+// gate, so a freshly-created index can be observed rebuilding within seconds instead of
+// waiting a day (the DAY param's minimum) at a specific HOUR. Unset (0) in production.
+var idxcronFastIntervalSec = func() int64 {
+	if v := os.Getenv("MO_IDXCRON_INTERVAL_SEC"); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 {
+			return n
+		}
+	}
+	return 0
+}()
 
 const ParamSeparator = " "
 

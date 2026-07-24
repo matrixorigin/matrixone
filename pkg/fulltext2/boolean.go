@@ -1,0 +1,571 @@
+// Copyright 2026 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package fulltext2
+
+import (
+	"math/bits"
+
+	"github.com/matrixorigin/matrixone/pkg/monlp/tokenizer"
+)
+
+// docBitset is a dense per-doc-ord bitset (doc ords are dense in [0, N) per segment),
+// used by the boolean evaluator instead of map[int64]struct{} — no rehash, ~1/64 the
+// memory, and forEach yields ords ascending.
+type docBitset []uint64
+
+func newDocBitset(n int) docBitset { return make(docBitset, (n+63)/64) }
+func (b docBitset) set(i int)      { b[i>>6] |= uint64(1) << (uint(i) & 63) }
+func (b docBitset) get(i int) bool { return b[i>>6]&(uint64(1)<<(uint(i)&63)) != 0 }
+
+// forEach calls f with each set bit index, ascending.
+func (b docBitset) forEach(f func(int)) {
+	for w, word := range b {
+		base := w << 6
+		for word != 0 {
+			f(base + bits.TrailingZeros64(word))
+			word &= word - 1
+		}
+	}
+}
+
+// Boolean-mode search (MATCH … AGAINST('…' IN BOOLEAN MODE)).
+//
+// MatrixOne/MySQL boolean semantics, mapped onto the positional segment:
+//   - +clause  → MUST   (AND): the doc must contain it.
+//   - -clause  → MUST NOT (the doc must not contain it).
+//   - >clause  → SHOULD, impact ×1.1 (boost).
+//   - <clause  → SHOULD, impact ×0.9 (demote).
+//   - ~clause  → ADJUST, impact ×−1.0: present ⇒ LOWERS the score but does NOT
+//     by itself include the doc (a noise-word penalty).
+//   - clause   → SHOULD (OR): contributes to the score; at least one SHOULD (or
+//     MUST) must match.
+//
+// A clause is a single TERM, a contiguous "PHRASE", a word* PREFIX, or a ( )
+// GROUP whose score is the MAX of its child sub-scorers (§6) and whose presence
+// is the union of its children (OR). Groups nest and may carry any prefix.
+//
+// This engine owns EXECUTION; the query front-end (fulltext.ParsePattern →
+// operator tree) is reused at plugin-integration time and translated into these
+// clauses. ParseBoolean here is the self-contained parser used to exercise the
+// evaluator directly, tokenizing with the index's tokenizer for consistency with
+// the build.
+
+type clauseKind int
+
+const (
+	clauseTerm   clauseKind = iota // a single term
+	clausePhrase                   // a contiguous phrase of terms
+	clausePrefix                   // a word* prefix (terms[0] is the prefix)
+	clauseGroup                    // ( ) — OR of children, score = max child
+)
+
+// Impact multipliers for the > < ~ weight operators (§6).
+const (
+	weightGreater = 1.1
+	weightLess    = 0.9
+	weightTilde   = -1.0
+)
+
+type clause struct {
+	kind     clauseKind
+	terms    []string     // leaf (term / prefix)
+	phrase   []phraseSlot // clausePhrase: positional (byte-offset) slots
+	children []clause     // group
+	weight   float32      // impact multiplier (1.0 default; > < ~ change it)
+}
+
+// BoolQuery is a parsed boolean-mode query. adjust holds the ~ clauses, which
+// adjust score without driving inclusion.
+type BoolQuery struct {
+	must    []clause // +
+	mustNot []clause // -
+	should  []clause // bare / > / <
+	adjust  []clause // ~
+}
+
+// SearchBoolean evaluates a boolean query and returns up to k hits, score desc
+// (ties by ascending doc ord). A doc matches when every MUST clause is present,
+// no MUST-NOT clause is present, and — with no MUST — at least one SHOULD clause
+// is present. Score sums the MUST + SHOULD contributions, then applies ~ ADJUST
+// penalties to the matched docs.
+//
+// A pure disjunction of single terms (bare/>/< SHOULD terms, no MUST/MUST-NOT/~,
+// no phrase/prefix/group) is routed to the WAND top-k (searchWAND), which
+// early-terminates via term max-impact bounds and returns the identical ranking
+// as the full scan. Everything else uses the full evaluator.
+func (s *Segment) SearchBoolean(q BoolQuery, algo ScoreAlgo, k int, allow Membership, gs *globalStats) ([]Result, error) {
+	// A query with no clauses at all returns nothing. A ~-only query (adjust, no MUST/
+	// SHOULD) still returns its matching rows ranked low — classic/MySQL "~ rates lower
+	// but does not exclude" — so it must NOT early-out here (searchBooleanFull's no-MUST
+	// candidate set unions the adjust terms).
+	if k <= 0 || s.N == 0 || (len(q.must) == 0 && len(q.should) == 0 && len(q.adjust) == 0) {
+		return nil, nil
+	}
+	if terms, ok := disjunctiveTerms(q); ok {
+		return s.searchWAND(terms, algo, k, allow, gs), nil
+	}
+	return s.searchBooleanFull(q, algo, k, allow, gs)
+}
+
+// disjunctiveTerms reports whether q is a pure OR of single-term SHOULD clauses
+// (the WAND-eligible shape) and returns those clauses.
+func disjunctiveTerms(q BoolQuery) ([]clause, bool) {
+	if len(q.must) != 0 || len(q.mustNot) != 0 || len(q.adjust) != 0 || len(q.should) == 0 {
+		return nil, false
+	}
+	for _, c := range q.should {
+		if c.kind != clauseTerm {
+			return nil, false
+		}
+	}
+	return q.should, true
+}
+
+// searchBooleanFull evaluates a boolean query against a DENSE per-doc-ord accumulator
+// (score []float64 + doc bitsets) rather than a map[int64]float64 per clause plus a
+// candidate map. Doc ords are dense in [0, N) per segment, so the arrays are O(N) with no
+// rehash — a low-selectivity 2-char CJK term matches most of the corpus, and the old maps
+// then rehashed themselves to death and held ~30 bytes/doc × (#clauses+1). This is O(N)
+// memory total, flat, and the dominant remaining boolean-layer allocator is gone.
+func (s *Segment) searchBooleanFull(q BoolQuery, algo ScoreAlgo, k int, allow Membership, gs *globalStats) ([]Result, error) {
+	n := int(s.N)
+	if n == 0 || k <= 0 {
+		return nil, nil
+	}
+	avgDocLen := gs.avgdl(s)
+	score := make([]float32, n)
+
+	// MUST-NOT: presence only, into an exclusion bitset.
+	mustNot := newDocBitset(n)
+	for _, c := range q.mustNot {
+		if err := s.evalClauseInto(c, algo, avgDocLen, gs, false, func(ord int64, _ float32) {
+			mustNot.set(int(ord))
+		}); err != nil {
+			return nil, err
+		}
+	}
+
+	h := newTopKHeap(k, s.N)
+	admit := func(ord int) {
+		if mustNot.get(ord) || !allowed(allow, int64(ord)) { // WHERE prefilter (nil = allow all)
+			return
+		}
+		h.Push(int64(ord), -score[ord])
+	}
+
+	if len(q.must) > 0 {
+		// A candidate must satisfy EVERY MUST clause: count hits per doc (intersection).
+		mustHit := make([]int32, n)
+		touched := newDocBitset(n)
+		for _, c := range q.must {
+			if err := s.evalClauseInto(c, algo, avgDocLen, gs, true, func(ord int64, sc float32) {
+				score[ord] += sc
+				mustHit[ord]++
+				touched.set(int(ord))
+			}); err != nil {
+				return nil, err
+			}
+		}
+		// SHOULD/ADJUST add to the score of whatever docs they touch; only MUST-satisfying
+		// docs are collected, so contributions to non-candidates are simply never read.
+		for _, cs := range [][]clause{q.should, q.adjust} {
+			for _, c := range cs {
+				if err := s.evalClauseInto(c, algo, avgDocLen, gs, true, func(ord int64, sc float32) {
+					score[ord] += sc
+				}); err != nil {
+					return nil, err
+				}
+			}
+		}
+		need := int32(len(q.must))
+		touched.forEach(func(ord int) {
+			if mustHit[ord] == need {
+				admit(ord)
+			}
+		})
+		return heapToResults(s, h), nil
+	}
+
+	// No MUST: the candidate set is the union of SHOULD *and* ADJUST. A ~ (ADJUST) term
+	// lowers a row's score but does NOT exclude it (MySQL: "rated lower ... but not
+	// excluded, as with -"), so a row matching only a ~term is still a candidate, ranked
+	// low by its negative contribution — matching classic fulltext.
+	cand := newDocBitset(n)
+	for _, cs := range [][]clause{q.should, q.adjust} {
+		for _, c := range cs {
+			if err := s.evalClauseInto(c, algo, avgDocLen, gs, true, func(ord int64, sc float32) {
+				score[ord] += sc
+				cand.set(int(ord))
+			}); err != nil {
+				return nil, err
+			}
+		}
+	}
+	cand.forEach(admit)
+	return heapToResults(s, h), nil
+}
+
+// evalClauseInto streams one clause's weighted (doc, score) contributions to emit, WITHOUT
+// building a per-clause map. Term and phrase clauses touch each doc once, so they emit
+// directly (weight folded in); prefix and group clauses need a per-doc MAX over their
+// expansion/children, so they fall back to evalClause's map (rare, and bounded by the
+// prefix's terms). scored=false emits presence only (score 0), for MUST-NOT.
+func (s *Segment) evalClauseInto(c clause, algo ScoreAlgo, avgDocLen float64, gs *globalStats, scored bool, emit func(int64, float32)) error {
+	w := c.weight
+	switch c.kind {
+	case clauseTerm:
+		pl, ok := s.lookup(c.terms[0])
+		if !ok {
+			return nil
+		}
+		docs := pl.materializeDocIDs()
+		if !scored {
+			for _, ord := range docs {
+				emit(ord, 0)
+			}
+			return nil
+		}
+		idf2 := gs.idfFor(s, c.terms[0], pl)
+		tfs := pl.materializeTfs()
+		for i, ord := range docs {
+			emit(ord, w*s.scoreTerm(algo, float64(tfs[i]), idf2, ord, avgDocLen))
+		}
+	case clausePhrase:
+		var hits []docTf
+		if gs != nil {
+			hits = gs.phraseHits(s, c.phrase) // memoized; shared with gs.phraseDf
+		} else {
+			hits = s.matchPhrase(c.phrase)
+		}
+		if !scored {
+			for _, hh := range hits {
+				emit(hh.ord, 0)
+			}
+			return nil
+		}
+		idf2 := gs.phraseIdfFor(s, c.phrase, len(hits))
+		for _, hh := range hits {
+			emit(hh.ord, w*s.scoreTerm(algo, float64(hh.tf), idf2, hh.ord, avgDocLen))
+		}
+	default: // clausePrefix, clauseGroup: per-doc MAX needs a temp (evalClause applies weight)
+		m, err := s.evalClause(c, algo, avgDocLen, gs, scored)
+		if err != nil {
+			return err
+		}
+		for ord, sc := range m {
+			emit(ord, sc)
+		}
+	}
+	return nil
+}
+
+// evalClause returns the weighted (doc ord → score) contribution of one clause.
+// A present doc is always a key (even at score 0, so MUST/presence is exact); an
+// absent term yields an empty map. The clause weight (> < ~) scales the result.
+// Term / prefix / phrase clauses all score with the global corpus idf (gs) — a phrase
+// clause via the cross-segment phrase df (gs.phraseDf), so ranking is consistent
+// across a base + CDC tail.
+//
+// scored=false skips the per-doc score computation (idf + scoreTerm) and returns a
+// presence-only map (all 0 values). MUST-NOT clauses use this: only the ord set is read
+// there, so scoring every doc of a common negated term (e.g. `-the`) was wasted work.
+func (s *Segment) evalClause(c clause, algo ScoreAlgo, avgDocLen float64, gs *globalStats, scored bool) (map[int64]float32, error) {
+	raw := make(map[int64]float32)
+	switch c.kind {
+	case clauseTerm:
+		if pl, ok := s.lookup(c.terms[0]); ok {
+			docs := pl.materializeDocIDs()
+			if !scored {
+				for _, ord := range docs {
+					raw[ord] = 0
+				}
+				break
+			}
+			idf2 := gs.idfFor(s, c.terms[0], pl)
+			tfs := pl.materializeTfs()
+			for i, ord := range docs {
+				// tf-aware BM25 (real within-doc occurrence count). Classic fulltext scores
+				// boolean matches with tf≡1, but ONLY because its SQL retrieval collapses
+				// GROUP BY doc_id to avoid a JOIN row blow-up (sql.go:493-496) — a
+				// restriction fulltext2's in-memory scorer does not have. Keeping tf gives
+				// better ranking among matched docs (BM25 saturation, k1, tames repetition)
+				// and tighter WAND max-impact bounds. This is an intentional divergence.
+				raw[ord] = s.scoreTerm(algo, float64(tfs[i]), idf2, ord, avgDocLen)
+			}
+		}
+	case clausePhrase:
+		var hits []docTf
+		if gs != nil {
+			hits = gs.phraseHits(s, c.phrase) // memoized; shared with gs.phraseDf
+		} else {
+			hits = s.matchPhrase(c.phrase)
+		}
+		if !scored {
+			for _, h := range hits {
+				raw[h.ord] = 0
+			}
+			break
+		}
+		idf2 := gs.phraseIdfFor(s, c.phrase, len(hits))
+		for _, h := range hits {
+			// tf-aware: real phrase-occurrence count (see clauseTerm for why fulltext2 keeps
+			// tf where classic's SQL forced tf≡1).
+			raw[h.ord] = s.scoreTerm(algo, float64(h.tf), idf2, h.ord, avgDocLen)
+		}
+	case clausePrefix:
+		terms, err := s.prefixTerms(c.terms[0])
+		if err != nil {
+			return nil, err
+		}
+		for _, t := range terms { // combined impact = MAX over expanded terms (§6)
+			pl, ok := s.lookup(t)
+			if !ok {
+				continue
+			}
+			docs := pl.materializeDocIDs()
+			if !scored {
+				for _, ord := range docs {
+					raw[ord] = 0
+				}
+				continue
+			}
+			idf2 := gs.idfFor(s, t, pl)
+			tfs := pl.materializeTfs()
+			for i, ord := range docs {
+				sc := s.scoreTerm(algo, float64(tfs[i]), idf2, ord, avgDocLen) // tf-aware (see clauseTerm)
+				if cur, seen := raw[ord]; !seen || sc > cur {
+					raw[ord] = sc
+				}
+			}
+		}
+	case clauseGroup:
+		for _, ch := range c.children { // OR of children, score = MAX (§6)
+			m, err := s.evalClause(ch, algo, avgDocLen, gs, scored)
+			if err != nil {
+				return nil, err
+			}
+			for ord, sc := range m {
+				if cur, seen := raw[ord]; !seen || sc > cur {
+					raw[ord] = sc
+				}
+			}
+		}
+	}
+	if c.weight != 1.0 {
+		for ord := range raw {
+			raw[ord] *= c.weight
+		}
+	}
+	return raw, nil
+}
+
+// prefixTerms expands a word* prefix to its matching terms, over the loaded FST
+// or the build-side sorted key list.
+func (s *Segment) prefixTerms(prefix string) ([]string, error) {
+	if s.dict != nil {
+		return s.dict.prefixTerms(prefix)
+	}
+	return s.PrefixRange(prefix), nil
+}
+
+// SearchBooleanText parses query in boolean mode (tokenizing with tok, the index's
+// tokenizer) and evaluates it — the convenience entry mirroring
+// MATCH(col) AGAINST('query' IN BOOLEAN MODE).
+func (s *Segment) SearchBooleanText(query []byte, tok tokenizer.Tokenizer, algo ScoreAlgo, k int) ([]Result, error) {
+	q, err := ParseBoolean(query, tok)
+	if err != nil {
+		return nil, err
+	}
+	return s.SearchBoolean(q, algo, k, nil, nil) // convenience entry: no prefilter, local stats
+}
+
+// ---- parser ----
+
+// bucket classifies a clause by its prefix operator.
+type bucket int
+
+const (
+	bShould bucket = iota
+	bMust
+	bMustNot
+	bAdjust
+)
+
+func bucketOf(prefix byte) bucket {
+	switch prefix {
+	case '+':
+		return bMust
+	case '-':
+		return bMustNot
+	case '~':
+		return bAdjust
+	default: // '>' '<' 0
+		return bShould
+	}
+}
+
+func weightOf(prefix byte) float32 {
+	switch prefix {
+	case '>':
+		return weightGreater
+	case '<':
+		return weightLess
+	case '~':
+		return weightTilde
+	default:
+		return 1.0
+	}
+}
+
+// ParseBoolean parses a boolean-mode query string into clauses, tokenizing each
+// leaf's text with tok. Surface: leading +/-/>/</~ operators, "quoted phrases",
+// trailing * (prefix), and ( ) groups (nestable). A bareword that tokenizes to
+// several terms (e.g. a CJK compound) becomes a contiguous phrase.
+func ParseBoolean(query []byte, tok tokenizer.Tokenizer) (BoolQuery, error) {
+	var q BoolQuery
+	for _, rc := range scanBoolean(string(query)) {
+		c, ok, err := rawToClause(rc, tok)
+		if err != nil {
+			return q, err
+		}
+		if !ok {
+			continue
+		}
+		switch bucketOf(rc.prefix) {
+		case bMust:
+			q.must = append(q.must, c)
+		case bMustNot:
+			q.mustNot = append(q.mustNot, c)
+		case bAdjust:
+			q.adjust = append(q.adjust, c)
+		default:
+			q.should = append(q.should, c)
+		}
+	}
+	return q, nil
+}
+
+// rawToClause builds a clause (with its impact weight) from a raw scanned clause,
+// recursing into groups. ok=false when it tokenizes to nothing.
+func rawToClause(rc rawClause, tok tokenizer.Tokenizer) (clause, bool, error) {
+	w := weightOf(rc.prefix)
+	if rc.group {
+		var children []clause
+		for _, ch := range rc.children { // group members are OR'd; their prefix only sets their own weight
+			cc, ok, err := rawToClause(ch, tok)
+			if err != nil {
+				return clause{}, false, err
+			}
+			if ok {
+				children = append(children, cc)
+			}
+		}
+		if len(children) == 0 {
+			return clause{}, false, nil
+		}
+		return clause{kind: clauseGroup, children: children, weight: w}, true, nil
+	}
+	terms, err := tokenizeToTerms([]byte(rc.text), tok)
+	if err != nil {
+		return clause{}, false, err
+	}
+	if len(terms) == 0 {
+		return clause{}, false, nil
+	}
+	switch {
+	case rc.quoted:
+		return clause{kind: clausePhrase, phrase: tokenizePhraseSlots(tok, []byte(rc.text)), weight: w}, true, nil
+	case rc.star:
+		return clause{kind: clausePrefix, terms: terms[:1], weight: w}, true, nil
+	case len(terms) == 1:
+		return clause{kind: clauseTerm, terms: terms, weight: w}, true, nil
+	default:
+		return clause{kind: clausePhrase, phrase: tokenizePhraseSlots(tok, []byte(rc.text)), weight: w}, true, nil
+	}
+}
+
+type rawClause struct {
+	prefix   byte // + - > < ~ or 0
+	quoted   bool
+	star     bool
+	group    bool
+	text     string
+	children []rawClause
+}
+
+func isPrefixChar(c byte) bool {
+	return c == '+' || c == '-' || c == '>' || c == '<' || c == '~'
+}
+
+// scanBoolean splits a boolean query into raw clauses at the top level.
+func scanBoolean(q string) []rawClause {
+	cs, _ := scanRange(q, 0)
+	return cs
+}
+
+// scanRange scans clauses from index i until end-of-string or an unmatched ')'
+// (a group close), returning the clauses and the index just past the stop point.
+func scanRange(q string, i int) ([]rawClause, int) {
+	var out []rawClause
+	n := len(q)
+	for i < n {
+		for i < n && q[i] == ' ' {
+			i++
+		}
+		if i >= n {
+			break
+		}
+		if q[i] == ')' {
+			return out, i + 1 // end of this group
+		}
+		var rc rawClause
+		if isPrefixChar(q[i]) {
+			rc.prefix = q[i]
+			i++
+		}
+		switch {
+		case i < n && q[i] == '(':
+			rc.group = true
+			i++
+			rc.children, i = scanRange(q, i)
+		case i < n && q[i] == '"':
+			rc.quoted = true
+			i++
+			start := i
+			for i < n && q[i] != '"' {
+				i++
+			}
+			rc.text = q[start:i]
+			if i < n {
+				i++ // closing quote
+			}
+		default:
+			start := i
+			for i < n && q[i] != ' ' && q[i] != ')' {
+				i++
+			}
+			word := q[start:i]
+			if len(word) > 0 && word[len(word)-1] == '*' {
+				rc.star = true
+				word = word[:len(word)-1]
+			}
+			rc.text = word
+		}
+		if rc.group || rc.text != "" {
+			out = append(out, rc)
+		}
+	}
+	return out, i
+}

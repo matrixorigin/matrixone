@@ -420,7 +420,7 @@ func TestIvfpqHandleCreateIndex_AsyncFalseExplicit(t *testing.T) {
 func TestIvfpqHandleCreateIndex_BackgroundReentry(t *testing.T) {
 	ctx := newHandleCtx(true)
 	ctx.stubCompileContext.isFrontend = false
-	err := Hooks{}.HandleReindex(ctx, ivfpqIndexDefs(), true)
+	err := Hooks{}.HandleReindex(ctx, ivfpqIndexDefs(), true, false)
 	require.NoError(t, err)
 	require.True(t, ctx.stubCompileContext.lastCdcTask.called, "background re-entry still drives the CDC task")
 	require.False(t, ctx.stubCompileContext.lastIdxcronUpdate.called, "background re-entry must NOT rewrite mo_index_update")
@@ -429,7 +429,7 @@ func TestIvfpqHandleCreateIndex_BackgroundReentry(t *testing.T) {
 func TestIvfpqHandleReindex_DelegatesToCreate(t *testing.T) {
 	// HandleReindex is a thin pass-through to handleCreate; honors
 	// the forceSync arg directly (unlike HandleCreateIndex, which
-	// now reads catalog.IsIndexAsync).
-	err := Hooks{}.HandleReindex(newHandleCtx(true), ivfpqIndexDefs(), false)
+	// now reads catalog.IndexParamAsync).
+	err := Hooks{}.HandleReindex(newHandleCtx(true), ivfpqIndexDefs(), false, false)
 	require.NoError(t, err)
 }

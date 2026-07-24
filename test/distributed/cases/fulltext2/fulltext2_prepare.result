@@ -1,0 +1,84 @@
+drop database if exists test_fulltext2_prepare;
+create database test_fulltext2_prepare;
+use test_fulltext2_prepare;
+set experimental_fulltext2_index = 1;
+drop table if exists docs;
+create table docs(id bigint primary key, body text);
+insert into docs values
+(0,'the quick brown fox jumps'),
+(1,'a quick brown dog'),
+(2,'the lazy fox sleeps'),
+(3,'brown bear and lazy cat'),
+(4,'quick quick quick fox fox');
+create fulltext2 index ft on docs(body);
+prepare ft_bool from 'select id from docs where match(body) against(? in boolean mode) order by id';
+set @q = '+quick +fox';
+execute ft_bool using @q;
+id
+0
+4
+set @q = '';
+execute ft_bool using @q;
+id
+set @q = '+lazy';
+execute ft_bool using @q;
+id
+2
+3
+set @q = null;
+execute ft_bool using @q;
+id
+set @q = '+quick +fox';
+execute ft_bool using @q;
+id
+0
+4
+deallocate prepare ft_bool;
+prepare ft_nl from 'select id from docs where match(body) against(? in natural language mode) order by id';
+set @q = 'quick brown fox';
+execute ft_nl using @q;
+id
+0
+set @q = 'brown fox';
+execute ft_nl using @q;
+id
+0
+set @q = '';
+execute ft_nl using @q;
+id
+set @q = 'quick brown fox';
+execute ft_nl using @q;
+id
+0
+deallocate prepare ft_nl;
+drop table if exists bw;
+create table bw(id bigint primary key, body text);
+insert into bw values
+(0,'the quick brown fox jumps'),
+(1,'a quick brown dog'),
+(2,'the lazy fox sleeps'),
+(3,'brown bear and lazy cat'),
+(4,'quick quick quick fox fox');
+create fulltext2 index ft on bw(body) with parser gojieba position_free = true;
+prepare ft_bm25 from 'select id from bw where match(body) against(? in bm25 mode) order by id';
+set @q = 'quick fox';
+execute ft_bm25 using @q;
+id
+0
+1
+2
+4
+set @q = 'lazy';
+execute ft_bm25 using @q;
+id
+2
+3
+set @q = 'quick fox';
+execute ft_bm25 using @q;
+id
+0
+1
+2
+4
+deallocate prepare ft_bm25;
+drop database test_fulltext2_prepare;

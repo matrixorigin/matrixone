@@ -1,0 +1,590 @@
+// Copyright 2026 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package fulltext2
+
+import (
+	"fmt"
+	"iter"
+	"sort"
+	"strconv"
+
+	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/monlp/tokenizer"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+)
+
+// Index is a queryable fulltext v2 index made of several loaded segments — a
+// tag=0 base plus tag=1 CDC tail deltas (§4) — with per-pk liveness and a delete
+// set. It resolves the two things a lone Segment cannot:
+//
+//   - GLOBAL stats: N and avgDocLen span all segments (a term's idf and BM25's
+//     length norm must be global, not per-segment), computed once at construction.
+//   - Liveness: the same pk may land in several segments (UPDATE / reinsert / a
+//     stale base copy); only the highest-Recency copy is live, and a delete at
+//     recency d kills copies with recency < d. Dead copies never appear in
+//     results and never contribute to a phrase's document frequency.
+type Index struct {
+	segments []*Segment
+	deletes  map[any]int64 // normalizeKey(pk) -> recency at/after which older copies are dead
+
+	globalN         int64
+	globalAvgDocLen float64
+	// liveOrd[si] is a per-segment ord-indexed liveness bitmap (built once in resolve),
+	// so every liveness check — isLive (phrase), livenessMembership (boolean/stream), and
+	// ReconstructLiveDocs (compact) — is an O(1) bitmap index, allocation-free, with no
+	// per-candidate keyOf + map lookup. A fully-live segment keeps liveOrd[si]==nil ("all
+	// live" fast path), so an append-only index costs ZERO resident liveness heap. It is
+	// the SOLE resident liveness structure: the pk->loc map that resolve() builds to
+	// derive it is local and discarded (it was O(live docs) of Go heap — the dominant
+	// load-time floor). Mirrors bm25's ComputeLiveness []Membership.
+	liveOrd [][]bool
+}
+
+type docLoc struct {
+	si  int
+	ord int64
+}
+
+// NewIndex builds an index over the given loaded segments (each carrying its
+// Recency) and delete set, computing global stats and the liveness map. deletes
+// may be nil.
+func NewIndex(segments []*Segment, deletes map[any]int64) *Index {
+	idx := &Index{segments: segments, deletes: deletes}
+	idx.resolve()
+	return idx
+}
+
+// resolve computes the live copy of each pk (highest Recency, not delete-shadowed),
+// then the global doc count + average document length; each segment's AvgDocLen is
+// set to the global value (§4) so BM25 length-normalizes consistently.
+func (idx *Index) resolve() {
+	type best struct {
+		rec int64
+		loc docLoc
+	}
+	top := make(map[any]best)
+	for si, seg := range idx.segments {
+		nd := seg.numDocs()
+		for ord := 0; ord < nd; ord++ {
+			key := normalizeKey(seg.pk(int64(ord)))
+			cand := best{seg.Recency, docLoc{si, int64(ord)}}
+			if cur, ok := top[key]; !ok || cand.rec > cur.rec {
+				top[key] = cand
+			}
+		}
+	}
+
+	// liveLoc (pk key -> live loc) is LOCAL: it drives the liveOrd bitmap + global stats
+	// below and is then discarded, so it never becomes part of the resident cache
+	// footprint (it was O(live docs) of Go-heap map — the biggest load-time allocation).
+	liveLoc := make(map[any]docLoc, len(top))
+	var sumDocLen int64
+	for key, b := range top {
+		if d, ok := idx.deletes[key]; ok && b.rec < d {
+			continue // shadowed by a later delete
+		}
+		liveLoc[key] = b.loc
+		sumDocLen += int64(idx.segments[b.loc.si].docLen[b.loc.ord])
+	}
+	idx.globalN = int64(len(liveLoc))
+	if idx.globalN > 0 {
+		idx.globalAvgDocLen = float64(sumDocLen) / float64(idx.globalN)
+	}
+	for _, seg := range idx.segments {
+		seg.AvgDocLen = idx.globalAvgDocLen
+	}
+
+	// Per-segment liveness bitmap (mirrors bm25's ComputeLiveness): a fully-live
+	// segment keeps liveOrd[si]==nil (the common single-base / append-only case) so it
+	// costs no O(doc-count) allocation; otherwise mark each live ord true. Every query
+	// and compact liveness check then indexes this O(1) instead of keyOf+map per candidate.
+	idx.liveOrd = make([][]bool, len(idx.segments))
+	liveCount := make([]int, len(idx.segments))
+	for _, loc := range liveLoc {
+		liveCount[loc.si]++
+	}
+	for si, seg := range idx.segments {
+		if liveCount[si] < seg.numDocs() { // some dead ord in this segment → need the bitmap
+			idx.liveOrd[si] = make([]bool, seg.numDocs())
+		}
+	}
+	for _, loc := range liveLoc {
+		if b := idx.liveOrd[loc.si]; b != nil {
+			b[loc.ord] = true
+		}
+	}
+}
+
+// isLive reports whether (si, ord) is the live copy of its pk, via the per-segment
+// liveness bitmap (nil => the segment is fully live). Same semantics as
+// livenessMembership; no pk key or map lookup needed.
+func (idx *Index) isLive(si int, ord int64) bool {
+	b := idx.liveOrd[si]
+	return b == nil || b[ord]
+}
+
+// SearchPhrase runs an NL exact-phrase query across all segments and returns the
+// global top-k (score desc; equal scores are order-unspecified). A single term is the
+// degenerate one-term phrase. Scoring uses global N + global avgDocLen, and the
+// phrase's document frequency is the number of LIVE documents that match (dead
+// and delete-shadowed copies are excluded), so idf is exact.
+func (idx *Index) SearchPhrase(slots []phraseSlot, algo ScoreAlgo, k int, filter docfilter.MembershipFilter) []Result {
+	if k <= 0 || idx.globalN == 0 || len(slots) == 0 {
+		return nil
+	}
+	// A phrase can match at most globalN live docs, so cap k to it: a huge pushed LIMIT
+	// (clamped to MaxInt32 upstream) must never size the top-k beyond the live corpus.
+	if int64(k) > idx.globalN {
+		k = int(idx.globalN)
+	}
+	// Single pass, O(min(k, #matches)) memory (was O(matches): a matched map + a full results slice,
+	// which OOMs on a low-selectivity phrase that hits most of the corpus). A lone
+	// phrase has ONE idf² (idfSquared over its live df), and scoreTerm multiplies the
+	// per-doc factor by that constant, so idf² does not change the top-k order — rank on
+	// the idf²-free partial score in a bounded top-k, count the (filter-independent) live
+	// df alongside, and scale the k winners by idf² at the end. isLive is true for exactly
+	// one (si,ord) per pk, so counting live hits IS the distinct-live df (no dedup set).
+	tk := newBoundedTopK(k)
+	df := 0
+	for si, seg := range idx.segments {
+		allow := mkAllow(seg, filter) // WHERE prefilter over this segment's ords (nil = none)
+		for _, h := range seg.matchPhrase(slots) {
+			if !idx.isLive(si, h.ord) {
+				continue
+			}
+			df++ // distinct live phrase match (filter-independent, matches the old dfSet)
+			if allowed(allow, h.ord) {
+				partial := seg.scoreTerm(algo, float64(h.tf), 1.0, h.ord, idx.globalAvgDocLen)
+				tk.push(seg.pk(h.ord), partial)
+			}
+		}
+	}
+	if tk.len() == 0 {
+		return nil
+	}
+	idf2 := idfSquared(idx.globalN, df) // df = live phrase-matched docs, filter-independent
+	return tk.resultsDescScaled(float32(idf2))
+}
+
+// boundedTopK keeps only the highest-scoring k (pk, score) pairs seen via push in O(k)
+// memory — a binary min-heap by score, so the current k-th best sits at the root and is
+// evicted in O(log k) when a better candidate arrives. It replaces "materialize every
+// match, then top-k", which was O(matches). Ties at the k-th place are unspecified (as
+// before — no arbitrary pk tie-break; see topKResults).
+//
+// It is deliberately keyed by the resolved `pk any` (NOT the segment `ord`), unlike the
+// ord-keyed FastMaxHeap in wand.go: SearchPhrase accumulates across ALL segments into
+// ONE heap, and each segment has its own ord space (ord 5 in seg0 != ord 5 in seg1), so
+// only the globally-unique pk is a safe key here. It also defers the single idf² scale to
+// resultsDescScaled. Those two properties are why it is not the FastMaxHeap used by the
+// per-segment WAND paths — do not "unify" them; keying this by ord reintroduces cross-
+// segment ord collisions.
+type topKItem struct {
+	pk    any
+	score float32
+}
+
+type boundedTopK struct {
+	k int
+	h []topKItem
+}
+
+// newBoundedTopK does NOT pre-allocate a cap-k backing array: push grows h lazily and
+// never past k items, so the heap is bounded by min(k, #matches) — an absurd pushed
+// LIMIT (e.g. 5e8) on a query matching a handful of docs costs a handful of slots, not
+// a k-sized (multi-GB) allocation.
+func newBoundedTopK(k int) *boundedTopK { return &boundedTopK{k: k} }
+
+func (b *boundedTopK) len() int { return len(b.h) }
+
+func (b *boundedTopK) push(pk any, score float32) {
+	if b.k <= 0 {
+		return
+	}
+	if len(b.h) < b.k {
+		b.h = append(b.h, topKItem{pk, score})
+		for i := len(b.h) - 1; i > 0; {
+			p := (i - 1) / 2
+			if b.h[p].score <= b.h[i].score {
+				break
+			}
+			b.h[p], b.h[i] = b.h[i], b.h[p]
+			i = p
+		}
+		return
+	}
+	if score <= b.h[0].score {
+		return // not better than the current k-th best
+	}
+	b.h[0] = topKItem{pk, score}
+	n := len(b.h)
+	for i := 0; ; {
+		l, r, s := 2*i+1, 2*i+2, i
+		if l < n && b.h[l].score < b.h[s].score {
+			s = l
+		}
+		if r < n && b.h[r].score < b.h[s].score {
+			s = r
+		}
+		if s == i {
+			break
+		}
+		b.h[s], b.h[i] = b.h[i], b.h[s]
+		i = s
+	}
+}
+
+// resultsDescScaled returns the retained items as Results in score-descending order,
+// each partial score multiplied by scale (the idf² deferred out of the ranking).
+func (b *boundedTopK) resultsDescScaled(scale float32) []Result {
+	out := make([]Result, len(b.h))
+	for i := range b.h {
+		out[i] = Result{Pk: b.h[i].pk, Score: b.h[i].score * scale}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Score > out[j].Score })
+	return out
+}
+
+// topKResults returns the top-k results ordered by score descending. Equal scores are
+// equally relevant, so their relative order is unspecified (SQL LIMIT over a tied ORDER
+// BY key is itself unspecified) — we do NOT impose an arbitrary pk tie-break, which would
+// force a sortKey string alloc for every matched doc (the alloc storm that dominated the
+// CPU/GC profile of a query matching far more than k docs, e.g. a common single-term NL
+// phrase or a boolean union).
+//
+// Selection is a bounded SoA FastMaxHeap keyed by result index with distance = -score:
+// keeping the k smallest distances yields the k highest scores in O(n) with ZERO
+// per-candidate allocation. Pop returns largest-distance (lowest-score) first, so
+// filling the output back-to-front lands it in score-descending order.
+func topKResults(results []Result, k int) []Result {
+	if k <= 0 || len(results) == 0 {
+		return nil
+	}
+	if k > len(results) {
+		k = len(results)
+	}
+	keysBuf := make([]int64, k)
+	distsBuf := make([]float32, k)
+	h := vectorindex.NewFastMaxHeap[float32, int64](k, keysBuf, distsBuf)
+	for i := range results {
+		h.Push(int64(i), -results[i].Score)
+	}
+	out := make([]Result, k)
+	for i := k - 1; i >= 0; i-- {
+		idx, _, ok := h.Pop()
+		if !ok { // fewer than k live entries (e.g. duplicate pushes were bounded out)
+			return out[i+1:]
+		}
+		out[i] = results[idx]
+	}
+	return out
+}
+
+// SearchText tokenizes query with tok and runs an NL exact-phrase search across
+// the index.
+func (idx *Index) SearchText(query []byte, tok tokenizer.Tokenizer, algo ScoreAlgo, k int, filter docfilter.MembershipFilter) ([]Result, error) {
+	return idx.SearchPhrase(tokenizePhraseSlots(tok, query), algo, k, filter), nil
+}
+
+// globalStats carries the corpus-global scoring inputs (N, average doc length, and
+// per-term document frequency) so a boolean query scores every segment on the SAME
+// scale. Without it each segment used its LOCAL N/df, so appending a CDC tail shifted
+// a doc's score and could drop a globally-top-k doc at the merge. df is summed across
+// segments (like bm25's gdf) and memoized per query; it is built fresh per query and
+// used sequentially across segments, so the cache needs no lock.
+type globalStats struct {
+	n             int64
+	avgDocLen     float64
+	idx           *Index
+	dfCache       map[string]int
+	phraseDfCache map[string]int
+	// phraseHitsCache memoizes matchPhrase per (phrase, segment) so a boolean phrase
+	// clause's own scoring scan and phraseDf's cross-segment df scan share ONE
+	// matchPhrase per segment instead of running it twice.
+	phraseHitsCache map[string]map[*Segment][]docTf
+}
+
+func (idx *Index) newGlobalStats() *globalStats {
+	return &globalStats{n: idx.globalN, avgDocLen: idx.globalAvgDocLen, idx: idx,
+		dfCache: make(map[string]int), phraseDfCache: make(map[string]int),
+		phraseHitsCache: make(map[string]map[*Segment][]docTf)}
+}
+
+// phraseHits returns seg's matchPhrase hits, memoized per (phrase, segment) so the
+// scoring pass and the phraseDf pass share one scan.
+func (gs *globalStats) phraseHits(seg *Segment, slots []phraseSlot) []docTf {
+	key := slotsKey(slots)
+	m := gs.phraseHitsCache[key]
+	if m == nil {
+		m = make(map[*Segment][]docTf)
+		gs.phraseHitsCache[key] = m
+	}
+	if h, ok := m[seg]; ok {
+		return h
+	}
+	h := seg.matchPhrase(slots)
+	m[seg] = h
+	return h
+}
+
+// df returns term's corpus-global document frequency (summed over segments). Dead
+// copies are counted — df is an idf input where a small over-count is immaterial and
+// this matches bm25's gdf.
+func (gs *globalStats) df(term string) int {
+	if d, ok := gs.dfCache[term]; ok {
+		return d
+	}
+	d := 0
+	for _, seg := range gs.idx.segments {
+		if pl, ok := seg.lookup(term); ok {
+			d += pl.df()
+		}
+	}
+	gs.dfCache[term] = d
+	return d
+}
+
+// idfFor is the term's idf² under the global corpus stats, or the segment-local stats
+// when gs is nil (a direct Segment query / single-segment test, where local == global).
+func (gs *globalStats) idfFor(seg *Segment, term string, pl *termPostings) float64 {
+	if gs == nil {
+		return idfSquared(seg.N, pl.df())
+	}
+	return idfSquared(gs.n, gs.df(term))
+}
+
+// phraseDf returns the corpus-global document frequency of a phrase (the number of
+// docs matching the contiguous phrase, summed over segments), memoized per query.
+// Dead copies are counted, matching the term df above.
+func (gs *globalStats) phraseDf(slots []phraseSlot) int {
+	key := slotsKey(slots)
+	if d, ok := gs.phraseDfCache[key]; ok {
+		return d
+	}
+	d := 0
+	for _, seg := range gs.idx.segments {
+		d += len(gs.phraseHits(seg, slots)) // shares the memoized scan with scoring
+	}
+	gs.phraseDfCache[key] = d
+	return d
+}
+
+// phraseIdfFor is a phrase clause's idf² under the global corpus stats (global N +
+// cross-segment phrase df), or the segment-local stats when gs is nil — so a phrase
+// clause ranks consistently across a base + CDC tail, like the term/prefix clauses.
+func (gs *globalStats) phraseIdfFor(seg *Segment, slots []phraseSlot, localHits int) float64 {
+	if gs == nil {
+		return idfSquared(seg.N, localHits)
+	}
+	return idfSquared(gs.n, gs.phraseDf(slots))
+}
+
+// avgdl is the global average doc length, or the segment's own when gs is nil.
+func (gs *globalStats) avgdl(seg *Segment) float64 {
+	if gs == nil {
+		return seg.avgDocLenOrMean()
+	}
+	return gs.avgDocLen
+}
+
+// SearchBoolean runs a parsed boolean-mode query across the index and returns the
+// global top-k (score desc; equal scores are order-unspecified). Each segment is scored on the
+// GLOBAL corpus stats (globalStats), and its walk admits only the LIVE copy of a pk
+// (liveness ANDed into the WHERE prefilter), so a segment's top-k is k live docs on
+// the global scale — the merge below is then the exact global top-k even across a
+// base + CDC tail. All clause types (term, prefix, phrase, and the disjunctive WAND
+// path) score on global stats — a phrase clause uses the cross-segment phrase df.
+func (idx *Index) SearchBoolean(q BoolQuery, algo ScoreAlgo, k int, filter docfilter.MembershipFilter) ([]Result, error) {
+	if k <= 0 || idx.globalN == 0 {
+		return nil, nil
+	}
+	gs := idx.newGlobalStats()
+	matched := make(map[any]Result)
+	for si, seg := range idx.segments {
+		allow := andAllow(mkAllow(seg, filter), &livenessMembership{idx: idx, si: si})
+		res, err := seg.SearchBoolean(q, algo, k, allow, gs)
+		if err != nil {
+			return nil, err
+		}
+		for _, r := range res {
+			matched[normalizeKey(r.Pk)] = r // liveness inside the walk → one live copy per pk
+		}
+	}
+	if len(matched) == 0 {
+		return nil, nil
+	}
+	results := make([]Result, 0, len(matched))
+	for _, r := range matched {
+		results = append(results, r)
+	}
+	return topKResults(results, k), nil
+}
+
+// SearchBooleanText tokenizes+parses query in boolean mode with tok, then
+// evaluates it across the index — the convenience entry mirroring
+// MATCH(col) AGAINST('query' IN BOOLEAN MODE) with a fixed tokenizer.
+func (idx *Index) SearchBooleanText(query []byte, tok tokenizer.Tokenizer, algo ScoreAlgo, k int) ([]Result, error) {
+	q, err := ParseBoolean(query, tok)
+	if err != nil {
+		return nil, err
+	}
+	return idx.SearchBoolean(q, algo, k, nil) // convenience entry: no WHERE prefilter
+}
+
+// ReconstructLiveDocs yields each LIVE document as (pk, ordered terms) from the
+// positional postings across all loaded segments — the input to a MERGE compaction
+// that folds base + tail into a fresh dead-doc-free base WITHOUT re-tokenizing the
+// source. Per-doc term order is recovered from token positions.
+//
+// Reconstruction is done ONE SEGMENT AT A TIME: a live doc's postings live entirely
+// within its own (live) segment, so `buckets` only ever holds the CURRENT segment's
+// live docs and is freed before the next — peak Go heap is O(one segment's postings)
+// (≤ max_index_capacity), NOT O(the whole live corpus). This matters because MERGE
+// (CompactSegments) is deliberately exempt from checkBaseLoadBudget, so an all-at-once
+// reconstruction would OOM-kill the CN on exactly the operation meant to reclaim it.
+// Docs are yielded in load-order across segments, pk-sorted WITHIN each segment (so the
+// output is still deterministic; the fresh base's per-segment doc grouping differs but
+// its contents and the resulting query answers do not). On a posting-decode error the
+// iterator yields once with a non-nil error and stops.
+func (idx *Index) ReconstructLiveDocs(positionFree bool) iter.Seq2[TokenizedDoc, error] {
+	return func(yield func(TokenizedDoc, error) bool) {
+		type posTerm struct {
+			pos  int32
+			term string
+		}
+		for si, seg := range idx.segments {
+			live := idx.liveOrd[si]
+			nd := seg.numDocs()
+			// Bucket ONLY this segment's live ords (keyed by ord, unique within the segment).
+			buckets := make(map[int64][]posTerm)
+			for ord := 0; ord < nd; ord++ {
+				if live == nil || live[ord] {
+					buckets[int64(ord)] = nil
+				}
+			}
+			if len(buckets) == 0 {
+				continue
+			}
+			err := seg.forEachPosting(func(term string, tp *termPostings) {
+				docs := tp.materializeDocIDs() // docIDs (block-compressed on load)
+				if positionFree {
+					// A position-free segment has no positions: reconstruct each doc's terms
+					// from tf — emit the term tf times with a synthetic ascending position.
+					// Order is irrelevant (the position-free rebuild drops positions again),
+					// but tf is preserved so BM25 ranking is unchanged.
+					tfs := tp.materializeTfs()
+					for i, ord := range docs {
+						if _, ok := buckets[ord]; !ok {
+							continue
+						}
+						for t := int32(0); t < int32(tfs[i]); t++ {
+							buckets[ord] = append(buckets[ord], posTerm{t, term})
+						}
+					}
+					return
+				}
+				mat := tp.materializePositions() // decode this term's positions once
+				for i, ord := range docs {
+					if _, ok := buckets[ord]; !ok {
+						continue
+					}
+					for _, pos := range mat[i] {
+						buckets[ord] = append(buckets[ord], posTerm{pos, term})
+					}
+				}
+			})
+			if err != nil {
+				yield(TokenizedDoc{}, err)
+				return
+			}
+
+			// Yield this segment's live docs pk-sorted (sortKey computed once each).
+			type keyed struct {
+				sk  string
+				ord int64
+			}
+			keys := make([]keyed, 0, len(buckets))
+			for ord := range buckets {
+				keys = append(keys, keyed{sortKey(normalizeKey(seg.pk(ord))), ord})
+			}
+			sort.Slice(keys, func(i, j int) bool { return keys[i].sk < keys[j].sk })
+			for _, kd := range keys {
+				pl := buckets[kd.ord]
+				sort.SliceStable(pl, func(i, j int) bool { return pl[i].pos < pl[j].pos })
+				terms := make([]string, len(pl))
+				positions := make([]int32, len(pl))
+				for i, pt := range pl {
+					terms[i] = pt.term
+					positions[i] = pt.pos // byte position, carried through MERGE
+				}
+				buckets[kd.ord] = nil // copied out — let GC reclaim it
+				if !yield(TokenizedDoc{Pk: seg.pk(kd.ord), Terms: terms, Positions: positions}, nil) {
+					return
+				}
+			}
+			// buckets goes out of scope → freed before the next segment.
+		}
+	}
+}
+
+// NumDocs returns the number of live documents in the index.
+func (idx *Index) NumDocs() int64 { return idx.globalN }
+
+// Free releases the off-heap posting buffers of every segment the index owns.
+// Called on cache eviction (Fulltext2Search.Destroy) and by single-shot loaders
+// (compact) once done. Build-side segments free nothing (no-op).
+func (idx *Index) Free() {
+	if idx != nil {
+		freeSegs(idx.segments)
+	}
+}
+
+// normalizeKey converts a pk to a comparable map key ([]byte -> string) and is the
+// key for every pk-keyed map (liveness, deletes, dedup). Keying by the pk VALUE (not
+// its String()) makes it INJECTIVE for every comparable pk type via Go == : a
+// microsecond-precision DATETIME/TIME/TIMESTAMP (whose String() truncates to whole
+// seconds), a raw uuid ([16]byte), a decimal128 struct — all key by their exact value
+// and can never collide, so no distinct live document is dropped. Mirrors bm25's
+// normalizeKey exactly (the complete port; a %v/String() key was lossy).
+func normalizeKey(pk any) any {
+	if b, ok := pk.([]byte); ok {
+		return string(b)
+	}
+	return pk
+}
+
+// sortKey is a deterministic INJECTIVE string projection of a pk, used to order
+// equal-score results (and MERGE output) reproducibly — never as a map key. The
+// temporal types are keyed by their underlying int64 because %v/String() truncates
+// them to whole seconds, which would make two equal-score DATETIME(6) rows sharing a
+// second sort nondeterministically at a LIMIT boundary; every other scalar pk has an
+// injective %v (int/decimal exact, uuid canonical, date a distinct day).
+func sortKey(pk any) string {
+	switch v := pk.(type) {
+	case []byte:
+		return string(v)
+	case string:
+		return v
+	case types.Datetime:
+		return strconv.FormatInt(int64(v), 10)
+	case types.Time:
+		return strconv.FormatInt(int64(v), 10)
+	case types.Timestamp:
+		return strconv.FormatInt(int64(v), 10)
+	default:
+		return fmt.Sprintf("%v", v)
+	}
+}

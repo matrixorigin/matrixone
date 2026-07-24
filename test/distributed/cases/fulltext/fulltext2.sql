@@ -254,7 +254,7 @@ col4 varchar(225) primary key
 );
 create fulltext index f05 on jsonline_t2(col3);
 load data infile{'filepath'='$resources/load_data/char_varchar_2.jl','format'='jsonline','jsondata'='object'}into table jsonline_t2;
-select * from jsonline_t2;
+select * from jsonline_t2 order by col4;
 drop table jsonline_t2;
 
 

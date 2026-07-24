@@ -517,7 +517,13 @@ func reindexSpecifiedParams(stmt tree.Statement, indexName string) map[string]st
 	addInt(catalog.IndexAlgoParamKmeansTrainPercent, opt.KmeansTrainPercent)
 	addInt(catalog.IndexAlgoParamKmeansMaxIteration, opt.KmeansMaxIteration)
 	addInt(catalog.IndexAlgoParamMaxIndexCapacity, opt.MaxIndexCapacity)
+	addInt(catalog.IndexAlgoParamMaxPostingsCapacity, opt.MaxPostingsCapacity)
 	addInt(catalog.IndexAlgoParamQuantizerTrainLimit, opt.QuantizerTrainLimit)
+	// position_free is emitted as an explicit true/false when specified (tri-state:
+	// absence ⇒ "keep current"), so a fulltext2 REINDEX can turn it on OR off.
+	if opt.PositionFreeSet {
+		m[catalog.IndexAlgoParamPositionFree] = strconv.FormatBool(opt.PositionFree)
+	}
 	// quantization is normalized to lowercase here (matching the CREATE INDEX
 	// path) so case-sensitive consumers (GPU build switch / quantizer) behave
 	// identically; the per-backend VALUE check (which names a given algorithm
@@ -1037,7 +1043,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 					alterIndex = indexDef
 
 					indexAlgo := catalog.ToLower(alterIndex.IndexAlgo)
-					if !indexplugin.IsVectorIndexAlgo(indexAlgo) {
+					if !indexplugin.IsVectorIndexAlgo(indexAlgo) && !catalog.IsFullText2IndexAlgo(indexAlgo) {
 						return moerr.NewInternalError(c.proc.Ctx, "invalid index algo type for alter reindex")
 					}
 					// Each algorithm's plugin owns parameter-update
@@ -1110,7 +1116,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 					if cctx == nil {
 						cctx = newPluginCompileCtx(s, c, tblId, extra, dbSource, qry.Database, oTableDef, nil)
 					}
-					err = p.Compile().HandleReindex(cctx, multiTableIndex.IndexDefs, tableAlterIndex.ForceSync)
+					err = p.Compile().HandleReindex(cctx, multiTableIndex.IndexDefs, tableAlterIndex.ForceSync, tableAlterIndex.Merge)
 				}
 
 				if err != nil {

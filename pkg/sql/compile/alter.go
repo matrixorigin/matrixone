@@ -1154,7 +1154,11 @@ func cloneUnaffectedIndexes(
 			continue
 		}
 
-		async, err := catalog.IsIndexAsync(oriIdxTblNames.IndexAlgoParams)
+		// IsAsync is the canonical resolution: identity-always-async
+		// (HNSW/CAGRA/IVF-PQ), fulltext VERSION=2, or the per-index async param.
+		// Used for both the whole-index skip below and the per-hidden-table
+		// SkipWhenAsync skip further down.
+		async, err := indexplugin.IsAsync(oriIdxTblNames.IndexAlgo, oriIdxTblNames.IndexAlgoParams)
 		if err != nil {
 			return err
 		}
@@ -1164,8 +1168,7 @@ func cloneUnaffectedIndexes(
 		// policies:
 		//   - SkipWholeIndex: skip the entire index when async. Algorithms that
 		//     leave every hidden table empty at CREATE and rebuild all of them
-		//     via CDC from ts=0 (HNSW / CAGRA / IVF-PQ / fulltext). HNSW is
-		//     AlwaysAsync; the others gate on the per-index async param.
+		//     via CDC from ts=0 (HNSW / CAGRA / IVF-PQ / fulltext).
 		//   - DeleteBeforeClone + SkipWhenAsync (per hidden table): IVF-FLAT is
 		//     the only case today. All three hidden tables get DELETE'd (the
 		//     CREATE on the temp table already seeded them), entries are
@@ -1175,15 +1178,12 @@ func cloneUnaffectedIndexes(
 		var cloneBehavior catalogplugin.AlterTableCloneBehavior
 		if !oriIdxTblNames.Unique {
 			if p, ok := indexplugin.Get(oriIdxTblNames.IndexAlgo); ok {
-				d := p.Catalog().SyncDescriptor()
 				cloneBehavior = p.Catalog().AlterTableCloneBehavior()
 				// Whole-index skip is an EXPLICIT policy (SkipWholeIndex), not
 				// inferred from UsesCDC — a CDC algorithm can still need its model
 				// tables cloned (IVF-FLAT clones metadata + centroids and only
 				// CDC-rebuilds entries via the per-hidden-table policy below).
-				// HNSW is AlwaysAsync; CAGRA / IVF-PQ / fulltext gate on the
-				// per-index async param.
-				if (d.AlwaysAsync || async) && cloneBehavior.SkipWholeIndex {
+				if async && cloneBehavior.SkipWholeIndex {
 					logutil.Infof("cloneUnaffectedIndex: skip whole async index %v\n", oriIdxTblNames)
 					continue
 				}

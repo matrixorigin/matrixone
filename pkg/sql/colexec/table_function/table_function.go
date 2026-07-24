@@ -172,6 +172,10 @@ func (tableFunction *TableFunction) Prepare(proc *process.Process) error {
 		tblArg.ctr.state, err = fulltextIndexScanPrepare(proc, tblArg)
 	case "fulltext_index_tokenize":
 		tblArg.ctr.state, err = fulltextIndexTokenizePrepare(proc, tblArg)
+	case "fulltext2_create":
+		tblArg.ctr.state, err = fulltext2CreatePrepare(proc, tblArg)
+	case "fulltext2_compact":
+		tblArg.ctr.state, err = fulltext2CompactPrepare(proc, tblArg)
 	case "stage_list":
 		tblArg.ctr.state, err = stageListPrepare(proc, tblArg)
 	case "moplugin_table":
@@ -184,6 +188,8 @@ func (tableFunction *TableFunction) Prepare(proc *process.Process) error {
 		tblArg.ctr.state, err = ivfCreatePrepare(proc, tblArg)
 	case "ivf_search":
 		tblArg.ctr.state, err = ivfSearchPrepare(proc, tblArg)
+	case "fulltext2_search":
+		tblArg.ctr.state, err = fulltext2SearchPrepare(proc, tblArg)
 	case "parse_jsonl_data":
 		tblArg.ctr.state, err = parseJsonlDataPrepare(proc, tblArg)
 	case "parse_jsonl_file":

@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -137,6 +138,12 @@ type ISCPTaskExecutor struct {
 	cnUUID      string
 	txnEngine   engine.Engine
 	cnTxnClient client.TxnClient
+	// rootFS is the CN's root FileService (the one that resolves the LOCAL SSD
+	// sub-service). Set by ISCPTaskExecutorFactory before Start(). Index CDC
+	// consumers that spill to disk (e.g. fulltext2's tail) read it via
+	// GetExecutorRuntime(cnUUID) to route scratch onto the fast LOCAL mount
+	// instead of the OS temp dir. May be nil (tests / no LOCAL attached).
+	rootFS fileservice.FileService
 
 	iscpLogWm       types.TS
 	prevISCPTableID uint64
@@ -289,7 +296,7 @@ const (
 
 type RowIterator interface {
 	Next() bool
-	Row(ctx context.Context, row []any) error
+	Row(ctx context.Context, row []any, repr ValueRepr) error
 	Close()
 }
 
@@ -411,13 +418,14 @@ func (iter *atomicBatchRowIter) Next() bool {
 	return iter.iter.Next()
 }
 
-func (iter *atomicBatchRowIter) Row(ctx context.Context, row []any) error {
+func (iter *atomicBatchRowIter) Row(ctx context.Context, row []any, repr ValueRepr) error {
 	batchRow := iter.iter.Item()
 	return extractRowFromEveryVector(
 		ctx,
 		batchRow.Src,
 		batchRow.Offset,
 		row,
+		repr,
 	)
 }
 
