@@ -41,3 +41,25 @@ panic，不同窄向量混用还会按参数顺序选择有损结果类型。
 - 运行 function/planner 定向及全量 CGo UT、真实 rollup BVT、build、覆盖率、
   静态检查和 `git diff --check`。
 - 完成全差异 self-review 后提交并正常推送，不 force push，不修改 GitHub thread。
+
+## PR #25335 第十一轮 review 修复
+
+### 有效问题
+
+新增的 `nextval()` grouping-set BVT 会在并行执行分支中触发 sequence 的既有共享
+状态竞态，结果不确定，并可能因 `concurrent map writes` 终止整个服务。即使竞态
+不是本 PR 引入，该不稳定用例本身仍会阻塞 PROXY/PESSIMISTIC BVT。
+
+### 修复方案
+
+1. 从 rollup BVT 及 golden 中完整移除 ROLLUP、CUBE、GROUPING SETS 三组
+   sequence 创建、`nextval()`、`currval()` 和清理语句。
+2. 保留 planner UT，通过静态计划断言验证每个 grouping-set 分支只包含一个
+   `nextval()` 表达式节点，不执行 sequence，也不接触共享运行时状态。
+
+### 验证
+
+- 确认 rollup SQL/result 不再包含新增 sequence 名称。
+- 串行运行完整 rollup BVT、planner 定向及全量 CGo UT、静态检查和
+  `git diff --check`。
+- 完成全差异 self-review 后提交并正常推送，不 force push，不修改 GitHub thread。
