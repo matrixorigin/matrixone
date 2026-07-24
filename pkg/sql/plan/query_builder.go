@@ -5738,7 +5738,7 @@ func (builder *QueryBuilder) bindGroupBy(
 			return
 		}
 
-		colPos := groupBinder.ctx.groupByAst[tree.String(helpFunc.truncate, dialect.MYSQL)]
+		colPos := groupBinder.ctx.groupByAst[semanticAstKey(helpFunc.truncate)]
 		boundTimeWindowGroupBy = &plan.Expr{
 			Typ: groupBinder.ctx.groups[colPos].Typ,
 			Expr: &plan.Expr_Col{
@@ -6191,11 +6191,11 @@ func (builder *QueryBuilder) appendSampleNode(
 	}
 
 	for name, id := range ctx.groupByAst {
-		builder.nameByColRef[[2]int32{ctx.groupTag, id}] = name
+		builder.nameByColRef[[2]int32{ctx.groupTag, id}] = semanticAstDisplayName(name)
 	}
 
 	for name, id := range ctx.sampleByAst {
-		builder.nameByColRef[[2]int32{ctx.sampleTag, id}] = name
+		builder.nameByColRef[[2]int32{ctx.sampleTag, id}] = semanticAstDisplayName(name)
 	}
 
 	newNodeID = nodeID
@@ -6252,11 +6252,11 @@ func (builder *QueryBuilder) appendAggNode(
 	}
 
 	for name, id := range ctx.groupByAst {
-		builder.nameByColRef[[2]int32{ctx.groupTag, id}] = name
+		builder.nameByColRef[[2]int32{ctx.groupTag, id}] = semanticAstDisplayName(name)
 	}
 
 	for name, id := range ctx.aggregateByAst {
-		builder.nameByColRef[[2]int32{ctx.aggregateTag, id}] = name
+		builder.nameByColRef[[2]int32{ctx.aggregateTag, id}] = semanticAstDisplayName(name)
 	}
 
 	newNodeID = nodeID
@@ -6324,7 +6324,7 @@ func (builder *QueryBuilder) appendTimeWindowNode(
 	}, ctx)
 
 	for name, id := range ctx.timeByAst {
-		builder.nameByColRef[[2]int32{ctx.timeTag, id}] = name
+		builder.nameByColRef[[2]int32{ctx.timeTag, id}] = semanticAstDisplayName(name)
 	}
 
 	if astTimeWindow.Fill != nil {
@@ -6379,7 +6379,7 @@ func (builder *QueryBuilder) appendWindowNode(
 	}
 
 	for name, id := range ctx.windowByAst {
-		builder.nameByColRef[[2]int32{ctx.windowTag, id}] = name
+		builder.nameByColRef[[2]int32{ctx.windowTag, id}] = semanticAstDisplayName(name)
 	}
 
 	_, postWindowHavingList := splitWindowDependentHavingFilters(boundHavingList, ctx.windowTag)

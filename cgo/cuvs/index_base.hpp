@@ -212,6 +212,17 @@ using ::distribution_mode_t;
 //     build time via train_quantizer_if_needed() — trains the quantizer on ALL
 //     buffered rows at once, then quantizes them into storage. (No "first chunk"
 //     or 500-sample heuristic; the full buffered set is used.)
+//
+//     DECISION — prefix training is intentional, WON'T FIX (owner: cpegeric).
+//     The buffered set is the first `quantizer_train_limit` source rows (an
+//     ORDER-independent scan prefix, plumbed from the SQL WITH option). A review
+//     raised that a small limit trains [min,max] on a non-representative prefix
+//     and degrades search on out-of-range vectors. This is by design and accepted:
+//     the limit is fully user-controlled — set quantizer_train_limit high enough
+//     (up to a full-table scan) to train on a representative sample. Nothing caps
+//     it, so there is no correctness loss the engine can or should force. Do not
+//     re-raise; do not add an automatic full-scan fallback (it would defeat the
+//     bounded-memory / bounded-time purpose of the limit).
 //   - The quantizer is NEVER trained from flattened_host_dataset: for a 1-byte T
 //     that buffer holds only storage bytes, so training on it would learn the
 //     COMPRESSED range, not the original float range.
