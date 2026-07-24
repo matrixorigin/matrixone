@@ -317,12 +317,17 @@ func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process
 	ctr.probeLeftAnti = hashJoin.IsLeftAnti()
 	ctr.probeMark = hashJoin.IsMark()
 	ctr.buildHasNullKey = false
-	ctr.globalBuildRowCnt = 0
+	ctr.globalBuildNonEmpty = false
 
 	if ctr.mp != nil {
 		ctr.maxAllocSize = max(ctr.maxAllocSize, ctr.mp.Size())
-		ctr.buildHasNullKey = ctr.mp.HasNullKey()
-		ctr.globalBuildRowCnt = ctr.mp.GetRowCount()
+		ctr.buildHasNullKey = ctr.mp.GlobalBuildHasNull()
+		ctr.globalBuildNonEmpty = ctr.mp.GlobalBuildNonEmpty()
+		if ctr.mp.GetRowCount() == 0 && !ctr.mp.IsSpilled() {
+			ctr.mp.Free()
+			ctr.mp = nil
+			return nil
+		}
 
 		// Handle spilled build side
 		if ctr.mp.IsSpilled() {
@@ -743,7 +748,7 @@ func (ctr *container) emptyProbe(hashJoin *HashJoin, proc *process.Process, resu
 // empty build side: global build emptiness and global build NULLs still decide
 // the SQL three-valued result.
 func (ctr *container) appendMarkForEmptyBuildBucket(marker *vector.Vector, proc *process.Process, rowCnt int) error {
-	if ctr.globalBuildRowCnt == 0 {
+	if !ctr.globalBuildNonEmpty {
 		return vector.SetConstFixed(marker, false, rowCnt, proc.Mp())
 	}
 	if ctr.buildHasNullKey {

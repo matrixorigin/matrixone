@@ -59,6 +59,15 @@ func TestShufflePoolStopsOnlyAfterEveryWriter(t *testing.T) {
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
+func TestShufflePoolAggregatesBuildSummary(t *testing.T) {
+	sp := NewShufflePool(2, 2, false)
+	sp.recordBuildSummary(true, false)
+	sp.recordBuildSummary(false, true)
+	nonEmpty, hasNull := sp.buildSummary()
+	require.True(t, nonEmpty)
+	require.True(t, hasNull)
+}
+
 func TestShufflePoolDrainAllBucketsIsFair(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()

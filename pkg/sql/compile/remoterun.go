@@ -561,6 +561,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		in.Shuffle.RuntimeFilterSpec = t.RuntimeFilterSpec
 		in.Shuffle.ShuffleExpr = t.ShuffleExpr
 		in.Shuffle.DrainAllBuckets = t.DrainAllBuckets
+		in.Shuffle.EmitBuildSummary = t.EmitBuildSummary
 	case *dispatch.Dispatch:
 		in.Dispatch = &pipeline.Dispatch{IsSink: t.IsSink, ShuffleType: t.ShuffleType, RecSink: t.RecSink, RecCte: t.RecCTE, FuncId: int32(t.FuncId)}
 		in.Dispatch.ShuffleRegIdxLocal = make([]int32, len(t.ShuffleRegIdxLocal))
@@ -773,6 +774,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			NeedBatches:               t.NeedBatches,
 			NeedAllocateSels:          t.NeedAllocateSels,
 			TrackNullKeys:             t.TrackNullKeys,
+			ExpectedBuildSummaryCount: t.ExpectedBuildSummaryCount,
 			IsShuffle:                 t.IsShuffle,
 			Conditions:                t.Conditions,
 			JoinMapTag:                t.JoinMapTag,
@@ -1032,6 +1034,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.RuntimeFilterSpec = t.RuntimeFilterSpec
 		arg.ShuffleExpr = t.ShuffleExpr
 		arg.DrainAllBuckets = t.DrainAllBuckets
+		arg.EmitBuildSummary = t.EmitBuildSummary
 		op = arg
 	case vm.Dispatch:
 		t := opr.GetDispatch()
@@ -1275,6 +1278,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.NeedBatches = t.NeedBatches
 		arg.NeedAllocateSels = t.NeedAllocateSels
 		arg.TrackNullKeys = t.TrackNullKeys
+		arg.ExpectedBuildSummaryCount = t.ExpectedBuildSummaryCount
 		arg.IsShuffle = t.IsShuffle
 		arg.Conditions = t.Conditions
 		arg.JoinMapTag = t.JoinMapTag

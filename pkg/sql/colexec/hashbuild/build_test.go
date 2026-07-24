@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -528,6 +529,7 @@ func TestHashBuildIsShuffle(t *testing.T) {
 	tc.arg.ShuffleIdx = 0
 	tc.arg.SpillThreshold = 1
 	tc.arg.TrackNullKeys = true
+	tc.arg.ExpectedBuildSummaryCount = 1
 	tc.arg.RuntimeFilterSpec = &plan.RuntimeFilterSpec{Tag: 2}
 	tc.arg.SetChildren([]vm.Operator{tc.marg})
 	for cycle := 0; cycle < 2; cycle++ {
@@ -546,6 +548,7 @@ func TestHashBuildIsShuffle(t *testing.T) {
 		build.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 0, 2}, buildNulls, tc.proc.Mp())
 		build.SetRowCount(3)
 		tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(build, nil, tc.proc.Mp())
+		tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(colexec.NewBuildSummaryBatch(true, cycle == 0), nil, tc.proc.Mp())
 		tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(batch.EmptyBatch, nil, tc.proc.Mp())
 		tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(nil, nil, tc.proc.Mp())
 		ok, err := vm.Exec(tc.arg, tc.proc)
@@ -557,8 +560,54 @@ func TestHashBuildIsShuffle(t *testing.T) {
 		require.True(t, jm.IsSpilled(), "cycle %d must publish a spilled join map", cycle)
 		require.Equal(t, int64(3), jm.GetRowCount())
 		require.Equal(t, cycle == 0, jm.HasNullKey(), "cycle %d must not inherit NULL state from another execution", cycle)
+		require.True(t, jm.GlobalBuildNonEmpty())
+		require.Equal(t, cycle == 0, jm.GlobalBuildHasNull())
 		jm.Free()
 	}
 	tc.arg.Free(tc.proc, false, nil)
 	tc.proc.Free()
+}
+
+func TestShuffleMarkBuildPublishesGlobalStatsWithoutLocalRows(t *testing.T) {
+	tc := newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()}, []*plan.Expr{newExpr(0, types.T_int32.ToType())})
+	tc.arg.IsShuffle = true
+	tc.arg.ShuffleIdx = 0
+	tc.arg.TrackNullKeys = true
+	tc.arg.ExpectedBuildSummaryCount = 1
+	tc.arg.RuntimeFilterSpec = &plan.RuntimeFilterSpec{Tag: 2}
+	tc.arg.SetChildren([]vm.Operator{tc.marg})
+	defer func() {
+		tc.arg.Reset(tc.proc, false, nil)
+		tc.arg.Free(tc.proc, false, nil)
+		tc.proc.Free()
+	}()
+
+	require.NoError(t, tc.marg.Prepare(tc.proc))
+	require.NoError(t, tc.arg.Prepare(tc.proc))
+	tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(colexec.NewBuildSummaryBatch(true, true), nil, tc.proc.Mp())
+	tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(nil, nil, tc.proc.Mp())
+	result, err := vm.Exec(tc.arg, tc.proc)
+	require.NoError(t, err)
+	require.Equal(t, vm.ExecStop, result.Status)
+
+	jm, err := message.ReceiveJoinMap(tc.arg.JoinMapTag, true, 0, tc.proc.GetMessageBoard(), tc.proc.Ctx)
+	require.NoError(t, err)
+	require.NotNil(t, jm)
+	require.Zero(t, jm.GetRowCount())
+	require.True(t, jm.GlobalBuildNonEmpty())
+	require.True(t, jm.GlobalBuildHasNull())
+	jm.Free()
+}
+
+func TestShuffleMarkBuildRejectsMissingSummary(t *testing.T) {
+	tc := newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()}, []*plan.Expr{newExpr(0, types.T_int32.ToType())})
+	tc.arg.ExpectedBuildSummaryCount = 1
+	tc.arg.SetChildren([]vm.Operator{tc.marg})
+	defer tc.proc.Free()
+	require.NoError(t, tc.marg.Prepare(tc.proc))
+	require.NoError(t, tc.arg.Prepare(tc.proc))
+	tc.proc.Reg.MergeReceivers[0].Ch2 <- process.NewPipelineSignalToDirectly(nil, nil, tc.proc.Mp())
+	_, err := vm.Exec(tc.arg, tc.proc)
+	require.ErrorContains(t, err, "summary count mismatch")
+	tc.arg.Free(tc.proc, true, err)
 }

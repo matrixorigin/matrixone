@@ -715,7 +715,7 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 	})
 
 	t.Run("HashBuild_TrackNullKeys", func(t *testing.T) {
-		op := &hashbuild.HashBuild{TrackNullKeys: true}
+		op := &hashbuild.HashBuild{TrackNullKeys: true, ExpectedBuildSummaryCount: 3}
 		_, pipeInstr, err := convertToPipelineInstruction(op, proc, ctx, 1)
 		require.NoError(t, err)
 		require.True(t, pipeInstr.HashBuild.TrackNullKeys)
@@ -723,6 +723,7 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		restored, err := convertToVmOperator(pipeInstr, ctx, nil)
 		require.NoError(t, err)
 		require.True(t, restored.(*hashbuild.HashBuild).TrackNullKeys)
+		require.Equal(t, int32(3), restored.(*hashbuild.HashBuild).ExpectedBuildSummaryCount)
 	})
 
 	t.Run("JoinSpillThreshold_ReceiverResolvesLocally", func(t *testing.T) {
@@ -865,10 +866,12 @@ func TestShuffleSerializationRoundtrip(t *testing.T) {
 	op.RuntimeFilterSpec = &planpb.RuntimeFilterSpec{Tag: 42}
 	op.ShuffleExpr = plan.MakePlan2Int64ConstExprWithType(7)
 	op.DrainAllBuckets = true
+	op.EmitBuildSummary = true
 
 	_, instruction, err := convertToPipelineInstruction(op, proc, ctx, 1)
 	require.NoError(t, err)
 	require.True(t, instruction.Shuffle.DrainAllBuckets)
+	require.True(t, instruction.Shuffle.EmitBuildSummary)
 
 	restored, err := convertToVmOperator(instruction, ctx, nil)
 	require.NoError(t, err)
@@ -883,6 +886,7 @@ func TestShuffleSerializationRoundtrip(t *testing.T) {
 	require.Equal(t, op.RuntimeFilterSpec, restoredShuffle.RuntimeFilterSpec)
 	require.Equal(t, op.ShuffleExpr, restoredShuffle.ShuffleExpr)
 	require.True(t, restoredShuffle.DrainAllBuckets)
+	require.True(t, restoredShuffle.EmitBuildSummary)
 }
 func Test_convertToProcessLimitation(t *testing.T) {
 	lim := pipeline.ProcessLimitation{

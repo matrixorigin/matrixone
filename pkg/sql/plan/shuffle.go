@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
@@ -513,7 +514,11 @@ func determineShuffleForJoin(node *plan.Node, builder *QueryBuilder) {
 			return
 		}
 
-	case plan.Node_INNER, plan.Node_ANTI, plan.Node_SEMI, plan.Node_LEFT, plan.Node_RIGHT, plan.Node_OUTER:
+	case plan.Node_MARK:
+		if !CanUseHashMarkJoin(node) {
+			return
+		}
+	case plan.Node_INNER, plan.Node_ANTI, plan.Node_SEMI, plan.Node_LEFT, plan.Node_RIGHT, plan.Node_OUTER, plan.Node_SINGLE:
 
 	default:
 		return
@@ -535,6 +540,17 @@ func determineShuffleForJoin(node *plan.Node, builder *QueryBuilder) {
 	rightTags := make(map[int32]bool)
 	for _, tag := range builder.enumerateTags(node.Children[1]) {
 		rightTags[tag] = true
+	}
+	if node.JoinType == plan.Node_MARK {
+		// Hash MARK has no residual-predicate path: every conjunct must be a
+		// key whose operands come from opposite children. CanUseHashMarkJoin
+		// also serves the post-remap compiler, where relation positions are
+		// 0/1, so validate the optimizer's binding tags here.
+		for _, condition := range colexec.SplitAndExprs(node.OnList) {
+			if !isEquiCond(condition, leftTags, rightTags) {
+				return
+			}
+		}
 	}
 	// for now ,only support the first join condition
 	for i := range node.OnList {
@@ -598,6 +614,9 @@ func determineShuffleForJoin(node *plan.Node, builder *QueryBuilder) {
 
 	//recheck shuffle plan
 	if node.Stats.HashmapStats.Shuffle {
+		if node.JoinType == plan.Node_MARK {
+			node.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Hash
+		}
 		if node.Stats.HashmapStats.ShuffleType == plan.ShuffleType_Hash && node.Stats.HashmapStats.HashmapSize < threshHoldForHashShuffle {
 			node.Stats.HashmapStats.Shuffle = false
 		}
@@ -625,6 +644,65 @@ func determineShuffleForJoin(node *plan.Node, builder *QueryBuilder) {
 			rightChild.Stats.HashmapStats.Ranges = node.Stats.HashmapStats.Ranges
 		}
 	}
+}
+
+// CanUseHashMarkJoin reports whether equality hashing preserves MARK's
+// three-valued result. A nullable single key needs only exact membership and a
+// global NULL bit. Composite keys are safe only when every component is
+// statically NOT NULL; otherwise partially-NULL rows require row-wise
+// evaluation.
+func CanUseHashMarkJoin(node *plan.Node) bool {
+	if node == nil || node.JoinType != plan.Node_MARK {
+		return false
+	}
+	conditions := colexec.SplitAndExprs(node.OnList)
+	if len(conditions) == 0 {
+		return false
+	}
+
+	allNotNull := true
+	for _, condition := range conditions {
+		fn := condition.GetF()
+		if fn == nil || !IsEqualFunc(fn.Func.GetObj()) || len(fn.Args) != 2 {
+			return false
+		}
+		leftRel, leftSingleRel := hashMarkOperandRel(fn.Args[0])
+		rightRel, rightSingleRel := hashMarkOperandRel(fn.Args[1])
+		if !leftSingleRel || !rightSingleRel || leftRel == rightRel {
+			return false
+		}
+		allNotNull = allNotNull && fn.Args[0].Typ.NotNullable && fn.Args[1].Typ.NotNullable
+	}
+	return len(conditions) == 1 || allNotNull
+}
+
+func hashMarkOperandRel(expr *plan.Expr) (int32, bool) {
+	relPos := int32(-1)
+	singleRel := true
+	var visit func(*plan.Expr)
+	visit = func(current *plan.Expr) {
+		if current == nil || !singleRel {
+			return
+		}
+		switch impl := current.Expr.(type) {
+		case *plan.Expr_Col:
+			if relPos == -1 {
+				relPos = impl.Col.RelPos
+			} else if relPos != impl.Col.RelPos {
+				singleRel = false
+			}
+		case *plan.Expr_F:
+			for _, arg := range impl.F.Args {
+				visit(arg)
+			}
+		case *plan.Expr_List:
+			for _, item := range impl.List.List {
+				visit(item)
+			}
+		}
+	}
+	visit(expr)
+	return relPos, singleRel && relPos >= 0
 }
 
 func dedupJoinUsesUnsupportedFloatShuffle(node *plan.Node) bool {

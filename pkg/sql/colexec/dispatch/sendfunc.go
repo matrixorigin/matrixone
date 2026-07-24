@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
 )
@@ -232,6 +233,16 @@ func sendBatToMultiMatchedReg(ap *Dispatch, proc *process.Process, bat *batch.Ba
 
 // shuffle to all receiver (include LocalReceiver and RemoteReceiver)
 func shuffleToAllFunc(bat *batch.Batch, ap *Dispatch, proc *process.Process) (bool, error) {
+	if colexec.IsBuildSummaryBatch(bat) {
+		switch {
+		case ap.ctr.remoteRegsCnt == 0:
+			return sendToAllLocalFunc(bat, ap, proc)
+		case ap.ctr.localRegsCnt == 0:
+			return sendToAllRemoteFunc(bat, ap, proc)
+		default:
+			return sendToAllFunc(bat, ap, proc)
+		}
+	}
 	if !ap.ctr.prepared {
 		end, err := ap.waitRemoteRegsReady(proc)
 		if err != nil {

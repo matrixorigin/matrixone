@@ -157,26 +157,26 @@ func TestHashMarkJoinSpillThreeValuedSemantics(t *testing.T) {
 
 func TestHashMarkJoinEmptySpillBucketTruthTable(t *testing.T) {
 	tests := []struct {
-		name              string
-		globalBuildRowCnt int64
-		buildHasNullKey   bool
-		expected          []markResult
+		name                string
+		globalBuildNonEmpty bool
+		buildHasNullKey     bool
+		expected            []markResult
 	}{
 		{
-			name:              "globally empty build",
-			globalBuildRowCnt: 0,
-			expected:          []markResult{{value: false}, {value: false}},
+			name:                "globally empty build",
+			globalBuildNonEmpty: false,
+			expected:            []markResult{{value: false}, {value: false}},
 		},
 		{
-			name:              "nonempty build without null",
-			globalBuildRowCnt: 1,
-			expected:          []markResult{{value: false}, {isNull: true}},
+			name:                "nonempty build without null",
+			globalBuildNonEmpty: true,
+			expected:            []markResult{{value: false}, {isNull: true}},
 		},
 		{
-			name:              "nonempty build with null",
-			globalBuildRowCnt: 1,
-			buildHasNullKey:   true,
-			expected:          []markResult{{isNull: true}, {isNull: true}},
+			name:                "nonempty build with null",
+			globalBuildNonEmpty: true,
+			buildHasNullKey:     true,
+			expected:            []markResult{{isNull: true}, {isNull: true}},
 		},
 	}
 
@@ -189,7 +189,7 @@ func TestHashMarkJoinEmptySpillBucketTruthTable(t *testing.T) {
 			probe.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 0}, []uint64{1}, tc.proc.Mp())
 			probe.SetRowCount(2)
 			tc.arg.ctr.leftBat = probe
-			tc.arg.ctr.globalBuildRowCnt = tt.globalBuildRowCnt
+			tc.arg.ctr.globalBuildNonEmpty = tt.globalBuildNonEmpty
 			tc.arg.ctr.buildHasNullKey = tt.buildHasNullKey
 			tc.arg.resetResultBat()
 

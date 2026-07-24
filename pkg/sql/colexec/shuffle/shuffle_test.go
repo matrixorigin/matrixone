@@ -539,6 +539,54 @@ func TestShuffleMetadata(t *testing.T) {
 	require.Equal(t, opName, buf.String())
 }
 
+func TestSynchronousShuffleEmitsCompactBuildSummaryAfterData(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	input := batch.NewWithSize(1)
+	input.Vecs[0] = testutil.MakeInt64Vector([]int64{1, 0, 2}, []uint64{1}, proc.Mp())
+	input.SetRowCount(3)
+	source := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+	arg := NewArgument()
+	arg.BucketNum = 2
+	arg.ShuffleColIdx = 0
+	arg.ShuffleType = int32(plan.ShuffleType_Hash)
+	arg.DrainAllBuckets = true
+	arg.EmitBuildSummary = true
+	arg.ShuffleExpr = &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}
+	arg.AppendChild(source)
+	defer func() {
+		arg.Reset(proc, false, nil)
+		arg.Free(proc, false, nil)
+		arg.Release()
+		source.Free(proc, false, nil)
+		proc.Free()
+	}()
+
+	require.NoError(t, vm.Prepare(arg, proc))
+	rows := 0
+	summaries := 0
+	for {
+		result, err := vm.Exec(arg, proc)
+		require.NoError(t, err)
+		if result.Batch == nil {
+			break
+		}
+		if colexec.IsBuildSummaryBatch(result.Batch) {
+			summaries++
+			nonEmpty, hasNull, err := colexec.DecodeBuildSummaryBatch(result.Batch)
+			require.NoError(t, err)
+			require.True(t, nonEmpty)
+			require.True(t, hasNull)
+			continue
+		}
+		if !result.Batch.IsEmpty() {
+			require.Zero(t, summaries, "summary must follow every data batch")
+			rows += result.Batch.RowCount()
+		}
+	}
+	require.Equal(t, 3, rows)
+	require.Equal(t, 1, summaries)
+}
+
 // TestEvalAndShuffle covers expression-based hash and range shuffles.
 func TestEvalAndShuffle(t *testing.T) {
 	for _, tc := range makeTestCases(t) {

@@ -1253,6 +1253,31 @@ func TestShuffleScenario_TargetReceiverFailed(t *testing.T) {
 	require.Contains(t, err.Error(), "data loss may occur", "error should mention data loss")
 }
 
+func TestShuffleBuildSummaryBroadcastsWithoutBucketIndexing(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() { mpool.DeleteMPool(mp) })
+	sp := pSpool.InitMyPipelineSpool(mp, 1)
+	reg := process.NewPipelineEdge(1, 0)
+	d := &Dispatch{
+		ctr:       &container{sp: sp, localRegsCnt: 1, aliveRegCnt: 1, prepared: true},
+		LocalRegs: []*process.WaitRegister{reg},
+	}
+	bat := colexec.NewBuildSummaryBatch(true, true)
+
+	end, err := shuffleToAllFunc(bat, d, testutil.NewProcess(t))
+	require.NoError(t, err)
+	require.False(t, end)
+	signal := <-reg.Ch2
+	received, err := signal.Action()
+	require.NoError(t, err)
+	nonEmpty, hasNull, err := colexec.DecodeBuildSummaryBatch(received)
+	require.NoError(t, err)
+	require.True(t, nonEmpty)
+	require.True(t, hasNull)
+	sp.ReleaseCurrent(0)
+	sp.Abort(nil)
+}
+
 // TestDataLossPrevention_ComparisonTable documents the fix behavior
 func TestDataLossPrevention_ComparisonTable(t *testing.T) {
 	t.Run("SendToAll_Before_Fix", func(t *testing.T) {

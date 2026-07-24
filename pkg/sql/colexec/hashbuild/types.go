@@ -48,29 +48,33 @@ type container struct {
 	spillThreshold  int64
 
 	// reusable buffers for spill operations
-	spillHashValues   []uint64
-	spillBucketRowIds [][]int32
-	spillWriteBuf     bytes.Buffer
-	spillKeyVecs      []*vector.Vector
+	spillHashValues     []uint64
+	spillBucketRowIds   [][]int32
+	spillWriteBuf       bytes.Buffer
+	spillKeyVecs        []*vector.Vector
+	buildSummaryCount   int32
+	globalBuildNonEmpty bool
+	globalBuildHasNull  bool
 
 	// cached expression executors for spill (reused across batches)
 	spillExprExecs []colexec.ExpressionExecutor
 }
 
 type HashBuild struct {
-	ctr               container
-	NeedHashMap       bool
-	HashOnPK          bool
-	NeedBatches       bool
-	NeedAllocateSels  bool
-	TrackNullKeys     bool
-	IsShuffle         bool
-	Conditions        []*plan.Expr
-	JoinMapTag        int32
-	JoinMapRefCnt     int32
-	ShuffleIdx        int32
-	RuntimeFilterSpec *plan.RuntimeFilterSpec
-	SpillThreshold    int64
+	ctr                       container
+	NeedHashMap               bool
+	HashOnPK                  bool
+	NeedBatches               bool
+	NeedAllocateSels          bool
+	TrackNullKeys             bool
+	IsShuffle                 bool
+	Conditions                []*plan.Expr
+	JoinMapTag                int32
+	JoinMapRefCnt             int32
+	ShuffleIdx                int32
+	RuntimeFilterSpec         *plan.RuntimeFilterSpec
+	SpillThreshold            int64
+	ExpectedBuildSummaryCount int32
 
 	IsDedup                   bool
 	DedupBuildKeepLast        bool
@@ -133,6 +137,9 @@ func (hashBuild *HashBuild) Reset(proc *process.Process, pipelineFailed bool, er
 	hashBuild.ctr.spilledFds = nil
 	hashBuild.ctr.state = BuildHashMap
 	hashBuild.ctr.runtimeFilterIn = false
+	hashBuild.ctr.buildSummaryCount = 0
+	hashBuild.ctr.globalBuildNonEmpty = false
+	hashBuild.ctr.globalBuildHasNull = false
 	message.FinalizeRuntimeFilter(hashBuild.RuntimeFilterSpec, runtimeSucceed, proc.GetMessageBoard())
 	message.FinalizeJoinMapMessage(proc.GetMessageBoard(), hashBuild.JoinMapTag, hashBuild.IsShuffle, hashBuild.ShuffleIdx, mapSucceed)
 }

@@ -148,17 +148,20 @@ func (sels *GroupSels) Get(k int32) []int32 {
 
 // JoinMap is used for join
 type JoinMap struct {
-	runtimeFilter_In bool
-	valid            bool
-	hasNullKey       bool
-	rowCnt           int64 // for debug purpose
-	refCnt           int64
-	mpool            *mpool.MPool
-	shm              *hashmap.StrHashMap
-	ihm              *hashmap.IntHashMap
-	sels             GroupSels
-	delRows          *bitmap.Bitmap
-	batches          []*batch.Batch
+	runtimeFilter_In    bool
+	valid               bool
+	hasNullKey          bool
+	globalBuildNonEmpty bool
+	globalBuildHasNull  bool
+	globalBuildStatsSet bool
+	rowCnt              int64 // for debug purpose
+	refCnt              int64
+	mpool               *mpool.MPool
+	shm                 *hashmap.StrHashMap
+	ihm                 *hashmap.IntHashMap
+	sels                GroupSels
+	delRows             *bitmap.Bitmap
+	batches             []*batch.Batch
 
 	// spill support
 	Spilled       bool
@@ -215,6 +218,22 @@ func (jm *JoinMap) SetHasNullKey(hasNull bool) {
 
 func (jm *JoinMap) HasNullKey() bool {
 	return jm != nil && jm.hasNullKey
+}
+
+func (jm *JoinMap) SetGlobalBuildStats(nonEmpty, hasNull bool) {
+	if jm != nil {
+		jm.globalBuildNonEmpty = nonEmpty
+		jm.globalBuildHasNull = hasNull
+		jm.globalBuildStatsSet = true
+	}
+}
+
+func (jm *JoinMap) GlobalBuildNonEmpty() bool {
+	return jm != nil && ((jm.globalBuildStatsSet && jm.globalBuildNonEmpty) || (!jm.globalBuildStatsSet && jm.rowCnt > 0))
+}
+
+func (jm *JoinMap) GlobalBuildHasNull() bool {
+	return jm != nil && ((jm.globalBuildStatsSet && jm.globalBuildHasNull) || (!jm.globalBuildStatsSet && jm.hasNullKey))
 }
 
 func (jm *JoinMap) GetGroupCount() uint64 {

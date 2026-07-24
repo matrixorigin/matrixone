@@ -84,6 +84,7 @@ message Shuffle {
   plan.RuntimeFilterSpec runtimeFilterSpec = 8;
   plan.Expr ShuffleExpr = 9;
   bool drain_all_buckets = 10;
+  bool emit_build_summary = 11;
 }
 
 message Dispatch {
@@ -508,6 +509,7 @@ message HashBuild {
   int32 dedup_delete_marker_col_idx = 17;
   repeated int32 dedup_delete_keep_col_idx_list = 18;
   bool track_null_keys = 19;
+  int32 expected_build_summary_count = 20;
 }
 
 message Indexbuild {

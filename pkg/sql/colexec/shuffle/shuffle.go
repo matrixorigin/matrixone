@@ -110,8 +110,13 @@ func (shuffle *Shuffle) callSynchronous(proc *process.Process) (vm.CallResult, e
 
 	// Put old buf back to pool after cleaning data
 	if shuffle.ctr.buf != nil {
-		shuffle.ctr.buf.CleanOnlyData()
-		shuffle.ctr.shufflePool.putBatchToPool(shuffle.ctr.buf, proc.Mp())
+		if shuffle.ctr.bufIsSummary {
+			shuffle.ctr.buf.Clean(proc.Mp())
+			shuffle.ctr.bufIsSummary = false
+		} else {
+			shuffle.ctr.buf.CleanOnlyData()
+			shuffle.ctr.shufflePool.putBatchToPool(shuffle.ctr.buf, proc.Mp())
+		}
 		shuffle.ctr.buf = nil
 	}
 
@@ -168,6 +173,14 @@ func (shuffle *Shuffle) callSynchronous(proc *process.Process) (vm.CallResult, e
 				result.Batch = tmpBat
 				return result, nil
 			}
+			if shuffle.EmitBuildSummary && !shuffle.ctr.summaryEmitted {
+				shuffle.ctr.summaryEmitted = true
+				tmpBat = colexec.NewBuildSummaryBatch(shuffle.ctr.buildNonEmpty, shuffle.ctr.buildHasNull)
+				shuffle.ctr.buf = tmpBat
+				shuffle.ctr.bufIsSummary = true
+				result.Batch = tmpBat
+				return result, nil
+			}
 			return vm.CancelResult, nil
 		}
 
@@ -194,6 +207,9 @@ func (shuffle *Shuffle) callSynchronous(proc *process.Process) (vm.CallResult, e
 		} else if bat.Last() {
 			return result, nil
 		} else if !bat.IsEmpty() {
+			if shuffle.ctr.exprExec == nil {
+				shuffle.observeBuildBatch(bat, nil)
+			}
 			if shuffle.ctr.exprExec != nil {
 				bat, err = shuffle.evalAndShuffle(bat, proc)
 			} else if shuffle.ShuffleType == int32(plan.ShuffleType_Hash) {
@@ -234,6 +250,11 @@ func (shuffle *Shuffle) callLocal(proc *process.Process) (vm.CallResult, error) 
 			if bat := shuffle.ctr.shufflePool.getLastBatch(shuffle.CurrentShuffleIdx); bat != nil {
 				return shuffle.returnLocalBatch(proc, bat, true)
 			}
+			if shuffle.EmitBuildSummary && !shuffle.ctr.summaryEmitted {
+				shuffle.ctr.summaryEmitted = true
+				nonEmpty, hasNull := shuffle.ctr.shufflePool.buildSummary()
+				return shuffle.returnSummaryBatch(proc, colexec.NewBuildSummaryBatch(nonEmpty, hasNull))
+			}
 			return vm.CancelResult, nil
 		}
 
@@ -271,12 +292,24 @@ func (shuffle *Shuffle) releasePreviousLocalBatch(proc *process.Process) {
 	if shuffle.ctr.buf == nil {
 		return
 	}
-	if shuffle.ctr.bufFromPool {
+	if shuffle.ctr.bufIsSummary {
+		shuffle.ctr.buf.Clean(proc.Mp())
+		shuffle.ctr.bufIsSummary = false
+	} else if shuffle.ctr.bufFromPool {
 		shuffle.ctr.buf.CleanOnlyData()
 		shuffle.ctr.shufflePool.putBatchToPool(shuffle.ctr.buf, proc.Mp())
 	}
 	shuffle.ctr.buf = nil
 	shuffle.ctr.bufFromPool = false
+}
+
+func (shuffle *Shuffle) returnSummaryBatch(proc *process.Process, bat *batch.Batch) (vm.CallResult, error) {
+	shuffle.ctr.buf = bat
+	shuffle.ctr.bufFromPool = false
+	shuffle.ctr.bufIsSummary = true
+	result := vm.NewCallResult()
+	result.Batch = bat
+	return result, nil
 }
 
 func (shuffle *Shuffle) ackDirectBatch() {
@@ -296,10 +329,14 @@ func (shuffle *Shuffle) startLocalProducer(proc *process.Process) {
 }
 
 func (shuffle *Shuffle) runLocalProducer(proc *process.Process) {
+	completed := false
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			err := moerr.ConvertPanicError(proc.Ctx, recovered)
 			shuffle.ctr.shufflePool.abortWithError(proc.Mp(), err)
+		}
+		if completed && shuffle.EmitBuildSummary {
+			shuffle.ctr.shufflePool.recordBuildSummary(shuffle.ctr.buildNonEmpty, shuffle.ctr.buildHasNull)
 		}
 		shuffle.stopWritingOnce()
 		close(shuffle.ctr.producerDone)
@@ -333,6 +370,7 @@ func (shuffle *Shuffle) runLocalProducer(proc *process.Process) {
 		}
 		bat := result.Batch
 		if bat == nil {
+			completed = true
 			return
 		}
 		shuffle.ctr.producerRows += int64(bat.RowCount())
@@ -345,6 +383,9 @@ func (shuffle *Shuffle) runLocalProducer(proc *process.Process) {
 		}
 		if bat.IsEmpty() {
 			continue
+		}
+		if shuffle.ctr.exprExec == nil {
+			shuffle.observeBuildBatch(bat, nil)
 		}
 
 		if shuffle.ctr.exprExec != nil {
@@ -435,6 +476,7 @@ func (shuffle *Shuffle) evalAndShuffle(bat *batch.Batch, proc *process.Process) 
 	if err != nil {
 		return nil, err
 	}
+	shuffle.observeBuildBatch(bat, vec)
 
 	if vec.IsConstNull() {
 		return shuffle.routeSingleBucket(bat, 0, proc)
@@ -710,6 +752,22 @@ func hashShuffle(ap *Shuffle, bat *batch.Batch, proc *process.Process) (*batch.B
 
 	err := ap.enqueueBySels(bat, proc)
 	return nil, err
+}
+
+func (shuffle *Shuffle) observeBuildBatch(bat *batch.Batch, keyVec *vector.Vector) {
+	if !shuffle.EmitBuildSummary || bat == nil || bat.IsEmpty() {
+		return
+	}
+	shuffle.ctr.buildNonEmpty = true
+	if shuffle.ctr.buildHasNull {
+		return
+	}
+	if keyVec == nil && shuffle.ShuffleExpr == nil {
+		keyVec = bat.Vecs[shuffle.ShuffleColIdx]
+	}
+	if keyVec != nil && keyVec.HasNull() {
+		shuffle.ctr.buildHasNull = true
+	}
 }
 
 func allBatchInOneRange(ap *Shuffle, bat *batch.Batch) (bool, uint64) {

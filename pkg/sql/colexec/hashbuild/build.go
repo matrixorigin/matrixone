@@ -115,6 +115,16 @@ func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 				}
 				jm.SetRowCount(int64(ctr.hashmapBuilder.InputBatchRowCount))
 				jm.SetHasNullKey(ctr.hashmapBuilder.HasNullKey)
+			}
+			if jm == nil && hashBuild.ExpectedBuildSummaryCount > 0 {
+				jm = message.NewJoinMap(message.GroupSels{}, nil, nil, nil, nil, proc.Mp())
+			}
+			if jm != nil {
+				if hashBuild.ExpectedBuildSummaryCount > 0 {
+					jm.SetGlobalBuildStats(ctr.globalBuildNonEmpty, ctr.globalBuildHasNull)
+				} else {
+					jm.SetGlobalBuildStats(ctr.hashmapBuilder.InputBatchRowCount > 0, ctr.hashmapBuilder.HasNullKey)
+				}
 				jm.IncRef(hashBuild.JoinMapRefCnt)
 			}
 
@@ -163,6 +173,16 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 		}
 		if result.Batch == nil {
 			break
+		}
+		if colexec.IsBuildSummaryBatch(result.Batch) {
+			nonEmpty, hasNull, err := colexec.DecodeBuildSummaryBatch(result.Batch)
+			if err != nil {
+				return err
+			}
+			ctr.buildSummaryCount++
+			ctr.globalBuildNonEmpty = ctr.globalBuildNonEmpty || nonEmpty
+			ctr.globalBuildHasNull = ctr.globalBuildHasNull || hasNull
+			continue
 		}
 		if result.Batch.IsEmpty() {
 			continue
@@ -216,6 +236,9 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 			// Clear batches to save memory
 			ctr.hashmapBuilder.Batches.Clean(proc.Mp())
 		}
+	}
+	if ctr.buildSummaryCount != hashBuild.ExpectedBuildSummaryCount {
+		return moerr.NewInternalErrorf(proc.Ctx, "shuffle build summary count mismatch: got %d, expected %d", ctr.buildSummaryCount, hashBuild.ExpectedBuildSummaryCount)
 	}
 
 	// Flush remaining buffered data

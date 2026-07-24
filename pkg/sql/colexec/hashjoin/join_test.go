@@ -569,7 +569,7 @@ func TestHashMarkJoinResetClearsBuildNullState(t *testing.T) {
 	tc.arg.Reset(tc.proc, false, nil)
 	tc.barg.Reset(tc.proc, false, nil)
 	require.False(t, tc.arg.ctr.buildHasNullKey)
-	require.Zero(t, tc.arg.ctr.globalBuildRowCnt)
+	require.False(t, tc.arg.ctr.globalBuildNonEmpty)
 	tc.proc.GetMessageBoard().Reset()
 
 	value, isNull := run(1, 2, false)

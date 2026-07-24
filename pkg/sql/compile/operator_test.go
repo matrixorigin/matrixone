@@ -239,6 +239,7 @@ func TestDupOperatorShuffleSharesPoolAcrossWorkers(t *testing.T) {
 	op := shuffle.NewArgument()
 	op.BucketNum = 4
 	op.DrainAllBuckets = true
+	op.EmitBuildSummary = true
 
 	dupCtx := newOperatorDupContext()
 	dup1 := dupOperatorWithContext(op, 0, 2, dupCtx).(*shuffle.Shuffle)
@@ -252,6 +253,8 @@ func TestDupOperatorShuffleSharesPoolAcrossWorkers(t *testing.T) {
 	require.Equal(t, int32(1), dup2.CurrentShuffleIdx)
 	require.True(t, dup1.DrainAllBuckets)
 	require.True(t, dup2.DrainAllBuckets)
+	require.True(t, dup1.EmitBuildSummary)
+	require.True(t, dup2.EmitBuildSummary)
 }
 
 func TestDupOperatorAssignsSharedShuffleConsumerIndex(t *testing.T) {
@@ -288,7 +291,8 @@ func TestConstructShuffleOperatorForJoinSupportsColumnsAndExpressions(t *testing
 		}},
 	}
 	node := &plan.Node{
-		OnList: []*plan.Expr{{Expr: &plan.Expr_F{F: &plan.Function{Args: []*plan.Expr{left, right}}}}},
+		JoinType: plan.Node_MARK,
+		OnList:   []*plan.Expr{{Expr: &plan.Expr_F{F: &plan.Function{Args: []*plan.Expr{left, right}}}}},
 		Stats: &plan.Stats{HashmapStats: &plan.HashMapStats{
 			ShuffleColIdx: 0,
 			ShuffleType:   plan.ShuffleType_Range,
@@ -300,11 +304,13 @@ func TestConstructShuffleOperatorForJoinSupportsColumnsAndExpressions(t *testing
 	require.Equal(t, int32(3), leftShuffle.ShuffleColIdx)
 	require.Nil(t, leftShuffle.ShuffleExpr)
 	require.Equal(t, int32(42), leftShuffle.RuntimeFilterSpec.Tag)
+	require.False(t, leftShuffle.EmitBuildSummary)
 
 	rightShuffle := constructShuffleOperatorForJoin(4, node, false)
 	require.Equal(t, right.Typ.Id, rightShuffle.ShuffleExpr.Typ.Id)
 	require.Equal(t, "serial_full", rightShuffle.ShuffleExpr.GetF().Func.ObjName)
 	require.Nil(t, rightShuffle.RuntimeFilterSpec)
+	require.True(t, rightShuffle.EmitBuildSummary)
 }
 
 func makeTimeWindowIntervalExpr(value int64, unit string) *plan.Expr {

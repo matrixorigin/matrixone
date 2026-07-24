@@ -21,7 +21,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashjoin"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/stretchr/testify/require"
 )
 
@@ -87,7 +89,7 @@ func TestCanUseHashMarkJoin(t *testing.T) {
 				JoinType: plan.Node_MARK,
 				OnList:   tt.conditions,
 			}
-			require.Equal(t, tt.want, canUseHashMarkJoin(node))
+			require.Equal(t, tt.want, plan2.CanUseHashMarkJoin(node))
 		})
 	}
 }
@@ -171,6 +173,25 @@ func TestConstructShuffleHashBuildForMarkPreservesSemanticFlags(t *testing.T) {
 
 	require.True(t, build.TrackNullKeys)
 	require.False(t, build.NeedAllocateSels)
+}
+
+func TestConstructShuffleJoinSupportsMarkAndSingle(t *testing.T) {
+	for _, joinType := range []plan.Node_JoinType{plan.Node_MARK, plan.Node_SINGLE} {
+		node := &plan.Node{
+			JoinType:    joinType,
+			Stats:       &plan.Stats{HashmapStats: &plan.HashMapStats{Shuffle: true}},
+			SendMsgList: []plan.MsgHeader{{MsgType: int32(message.MsgJoinMap), MsgTag: 1}},
+		}
+		left := &plan.Node{}
+		right := &plan.Node{}
+		scopes := []*Scope{{}}
+		c := &Compile{anal: &AnalyzeModule{}}
+		constructShuffleJoinOP(c, scopes, node, left, right, false)
+		op, ok := scopes[0].RootOp.(*hashjoin.HashJoin)
+		require.True(t, ok)
+		require.Equal(t, joinType, op.JoinType)
+		op.Release()
+	}
 }
 
 func makeMarkJoinTestCondition(t *testing.T, name string, colPos int32, notNullable bool) *plan.Expr {

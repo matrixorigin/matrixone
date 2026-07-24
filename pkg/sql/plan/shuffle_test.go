@@ -16,6 +16,7 @@ package plan
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"fmt"
 	"math/rand"
@@ -25,6 +26,7 @@ import (
 	"github.com/cespare/xxhash/v2"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -471,6 +473,57 @@ func TestDetermineShuffleForDedupJoin(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestDetermineShuffleForMarkAndSingle(t *testing.T) {
+	for _, joinType := range []plan.Node_JoinType{plan.Node_MARK, plan.Node_SINGLE} {
+		t.Run(joinType.String(), func(t *testing.T) {
+			builder, node := makeShuffleJoinTestPlan(t, joinType, 10, 20)
+			determineShuffleForJoin(node, builder)
+
+			require.True(t, node.Stats.HashmapStats.Shuffle)
+			require.Equal(t, plan.ShuffleType_Hash, node.Stats.HashmapStats.ShuffleType)
+		})
+	}
+}
+
+func TestDetermineShuffleForMarkRejectsSameChildEquality(t *testing.T) {
+	builder, node := makeShuffleJoinTestPlan(t, plan.Node_MARK, 10, 11)
+	builder.qry.Nodes[0].BindingTags = []int32{10, 11}
+	determineShuffleForJoin(node, builder)
+	require.False(t, node.Stats.HashmapStats.Shuffle)
+}
+
+func makeShuffleJoinTestPlan(t *testing.T, joinType plan.Node_JoinType, leftTag, rightTag int32) (*QueryBuilder, *plan.Node) {
+	t.Helper()
+	typ := types.T_int64.ToType()
+	equal, err := function.GetFunctionByName(context.Background(), "=", []types.Type{typ, typ})
+	require.NoError(t, err)
+	condition := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_bool), NotNullable: true},
+		Ndv: 100_000,
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{Obj: equal.GetEncodedOverloadID(), ObjName: "="},
+			Args: []*plan.Expr{
+				{Typ: plan.Type{Id: int32(types.T_int64), NotNullable: true}, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: leftTag}}},
+				{Typ: plan.Type{Id: int32(types.T_int64), NotNullable: true}, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: rightTag}}},
+			},
+		}},
+	}
+	left := &plan.Node{NodeType: plan.Node_TABLE_SCAN, BindingTags: []int32{10}, Stats: DefaultStats()}
+	left.Stats.Outcnt = 4_000_000
+	right := &plan.Node{NodeType: plan.Node_TABLE_SCAN, BindingTags: []int32{20}, Stats: DefaultStats()}
+	right.Stats.Outcnt = 1_000_000
+	node := &plan.Node{
+		NodeType: plan.Node_JOIN,
+		JoinType: joinType,
+		Children: []int32{0, 1},
+		OnList:   []*plan.Expr{condition},
+		Stats: &plan.Stats{HashmapStats: &plan.HashMapStats{
+			HashmapSize: 5_000_000,
+		}},
+	}
+	return &QueryBuilder{qry: &plan.Query{Nodes: []*plan.Node{left, right}}}, node
 }
 
 func TestGetRangeShuffleIndexForZM(t *testing.T) {

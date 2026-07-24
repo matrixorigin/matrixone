@@ -31,15 +31,17 @@ type ShufflePool struct {
 	maxHolders int32
 	drainAll   bool
 
-	holders    int32
-	finished   int32
-	stoppers   int32
-	consumers  int32
-	holderLock sync.Mutex
-	aborted    bool
-	abortErr   error
-	cleaned    bool
-	producers  map[int32]context.CancelCauseFunc
+	holders       int32
+	finished      int32
+	stoppers      int32
+	consumers     int32
+	holderLock    sync.Mutex
+	aborted       bool
+	abortErr      error
+	cleaned       bool
+	producers     map[int32]context.CancelCauseFunc
+	buildNonEmpty bool
+	buildHasNull  bool
 
 	batchSets  []*batch.BatchSet
 	batchLocks []sync.Mutex
@@ -131,6 +133,19 @@ func (sp *ShufflePool) stopWriting() {
 		}
 		sp.signalEndLocked()
 	}
+}
+
+func (sp *ShufflePool) recordBuildSummary(nonEmpty, hasNull bool) {
+	sp.holderLock.Lock()
+	sp.buildNonEmpty = sp.buildNonEmpty || nonEmpty
+	sp.buildHasNull = sp.buildHasNull || hasNull
+	sp.holderLock.Unlock()
+}
+
+func (sp *ShufflePool) buildSummary() (bool, bool) {
+	sp.holderLock.Lock()
+	defer sp.holderLock.Unlock()
+	return sp.buildNonEmpty, sp.buildHasNull
 }
 
 func (sp *ShufflePool) terminalError() error {

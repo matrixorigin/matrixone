@@ -41,6 +41,7 @@ type Shuffle struct {
 	RuntimeFilterSpec  *plan.RuntimeFilterSpec
 	ShuffleExpr        *plan.Expr
 	DrainAllBuckets    bool
+	EmitBuildSummary   bool
 	vm.OperatorBase
 }
 
@@ -94,6 +95,10 @@ type container struct {
 	exprExec             colexec.ExpressionExecutor
 	held                 bool
 	writingStopped       bool
+	buildNonEmpty        bool
+	buildHasNull         bool
+	summaryEmitted       bool
+	bufIsSummary         bool
 
 	producerOnce    sync.Once
 	producerStarted bool
@@ -133,8 +138,13 @@ func (shuffle *Shuffle) Reset(proc *process.Process, pipelineFailed bool, err er
 		}
 		if shuffle.ctr.held {
 			shuffle.ackDirectBatch()
-			if shuffle.ctr.buf != nil && shuffle.ctr.bufFromPool && shuffle.ctr.shufflePool != nil {
-				shuffle.ctr.shufflePool.discardBatch(shuffle.ctr.buf, proc.Mp())
+			if shuffle.ctr.buf != nil {
+				if shuffle.ctr.bufIsSummary {
+					shuffle.ctr.buf.Clean(proc.Mp())
+					shuffle.ctr.bufIsSummary = false
+				} else if shuffle.ctr.bufFromPool && shuffle.ctr.shufflePool != nil {
+					shuffle.ctr.shufflePool.discardBatch(shuffle.ctr.buf, proc.Mp())
+				}
 			}
 			shuffle.ctr.buf = nil
 			shuffle.ctr.bufFromPool = false
@@ -152,7 +162,10 @@ func (shuffle *Shuffle) Reset(proc *process.Process, pipelineFailed bool, err er
 
 	shuffle.ackDirectBatch()
 	if shuffle.ctr.buf != nil {
-		if shuffle.DrainAllBuckets || shuffle.ctr.bufFromPool {
+		if shuffle.ctr.bufIsSummary {
+			shuffle.ctr.buf.Clean(proc.Mp())
+			shuffle.ctr.bufIsSummary = false
+		} else if shuffle.DrainAllBuckets || shuffle.ctr.bufFromPool {
 			shuffle.ctr.shufflePool.discardBatch(shuffle.ctr.buf, proc.Mp())
 		}
 		shuffle.ctr.buf = nil
@@ -182,6 +195,10 @@ func (shuffle *Shuffle) Reset(proc *process.Process, pipelineFailed bool, err er
 	shuffle.ctr.runtimeFilterHandled = false
 	shuffle.ctr.held = false
 	shuffle.ctr.writingStopped = false
+	shuffle.ctr.buildNonEmpty = false
+	shuffle.ctr.buildHasNull = false
+	shuffle.ctr.summaryEmitted = false
+	shuffle.ctr.bufIsSummary = false
 	shuffle.ctr.producerOnce = sync.Once{}
 	shuffle.ctr.producerStarted = false
 	shuffle.ctr.producerProc = nil
