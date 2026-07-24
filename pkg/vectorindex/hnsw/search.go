@@ -20,6 +20,7 @@ import (
 	"math"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/concurrent"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -43,6 +44,16 @@ type HnswSearch[T types.RealNumbers] struct {
 	Mutex         sync.Mutex
 	Cond          *sync.Cond
 	ThreadsSearch int64
+
+	// Generation captured at Load for the cross-CN cache freshness check (IsStale). hnsw
+	// rebuilds its model on CDC (new metadata timestamp), so loadedTs alone moves; loadedTail
+	// is the shared (CdcTailId,tag=1) read (constant for hnsw). cnUUID/accountID re-query in
+	// the background. genValid=false (capture failed / unit tests) ⇒ IsStale is a no-op.
+	cnUUID     string
+	accountID  uint32
+	loadedTs   int64
+	loadedTail int64
+	genValid   bool
 }
 
 func NewHnswSearch[T types.RealNumbers](idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig) *HnswSearch[T] {
@@ -288,7 +299,34 @@ func (s *HnswSearch[T]) Load(sqlproc *sqlexec.SqlProcess) error {
 
 	s.Indexes = indexes
 
+	// Capture the generation + durable handles for IsStale (best-effort; on failure genValid
+	// stays false and IsStale is a no-op). Same txn as the load, so the captured generation
+	// matches the loaded snapshot.
+	s.cnUUID = sqlproc.GetService()
+	if acc, e := sqlproc.GetAccountID(); e == nil {
+		if ts, tail, e2 := vectorindex.LoadCdcGeneration(sqlproc, s.Tblcfg); e2 == nil {
+			s.accountID, s.loadedTs, s.loadedTail, s.genValid = acc, ts, tail, true
+		}
+	}
 	return nil
+}
+
+// IsStale reports whether the loaded model has fallen behind the persisted index (a REBUILD on
+// another CN bumps the metadata timestamp), for the VectorIndexCache cross-CN freshness check.
+// Runs on the housekeeping goroutine via a background auto-commit txn (cnUUID/accountID captured
+// at load). A query error ⇒ (true, err): the index was likely dropped/rebuilt, so reclaim the
+// dead entry. No captured generation ⇒ (false, nil).
+func (s *HnswSearch[T]) IsStale() (bool, error) {
+	if !s.genValid || s.cnUUID == "" {
+		return false, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	ts, tail, err := vectorindex.QueryCdcGeneration(ctx, s.cnUUID, s.accountID, s.Tblcfg)
+	if err != nil {
+		return true, err
+	}
+	return ts != s.loadedTs || tail != s.loadedTail, nil
 }
 
 // check config and update some parameters such as ef_search
