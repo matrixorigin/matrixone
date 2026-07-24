@@ -360,6 +360,9 @@ type FrontendParameters struct {
 	//process.Limitation.Size. default: 10 << 32 = 42949672960
 	ProcessLimitationSize int64 `toml:"processLimitationSize"`
 
+	// process.Limitation.SpillSize. Zero selects the bounded query default.
+	ProcessLimitationSpillSize int64 `toml:"processLimitationSpillSize"`
+
 	//process.Limitation.BatchRows. default: 10 << 32 = 42949672960
 	ProcessLimitationBatchRows int64 `toml:"processLimitationBatchRows"`
 

@@ -57,7 +57,11 @@ func (m *IntHashMap) Free() {
 }
 
 func (m *IntHashMap) PreAlloc(n uint64) error {
-	return m.hashMap.ResizeOnDemand(int(n))
+	return m.hashMap.ResizeWithPlan(m.hashMap.PlanResize(n))
+}
+
+func (m *IntHashMap) SetResizeAdmission(admit hashtable.ResizeAdmission) {
+	m.hashMap.SetResizeAdmission(admit)
 }
 
 func (m *IntHashMap) GroupCount() uint64 {

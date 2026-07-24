@@ -254,8 +254,26 @@ func (dedupJoin *DedupJoin) build(analyzer process.Analyzer, proc *process.Proce
 	if ctr.mp != nil {
 		ctr.maxAllocSize = max(ctr.maxAllocSize, ctr.mp.Size())
 		if ctr.mp.IsSpilled() {
+			files := ctr.mp.TakeSpillBuildFiles()
+			var budget *process.HashBuildBudgetGeneration
+			if files != nil {
+				var ok bool
+				budget, ok = ctr.mp.TakeSpillBudget().(*process.HashBuildBudgetGeneration)
+				if !ok || budget == nil {
+					for _, file := range files {
+						_ = file.Close()
+					}
+					return moerr.NewInternalError(proc.Ctx, "spilled dedup join map is missing its producer budget generation")
+				}
+			} else {
+				budget, err = proc.GetHashBuildBudget()
+				if err != nil {
+					return err
+				}
+			}
 			engine := spillutil.NewSpillEngine(spillutil.SpillEngineConfig{
 				BuildKeyExprs:             dedupJoin.Conditions[1],
+				ProbeKeyExprs:             dedupJoin.Conditions[0],
 				SpillThreshold:            ctr.spillThreshold,
 				NeedsBuildForEmptyProbe:   true,
 				NeedAllocateSels:          dedupJoin.OnDuplicateAction == plan.Node_UPDATE,
@@ -268,8 +286,13 @@ func (dedupJoin *DedupJoin) build(analyzer process.Analyzer, proc *process.Proce
 				DelColIdx:                 dedupJoin.DelColIdx,
 				DedupDeleteMarkerColIdx:   dedupJoin.DedupDeleteMarkerColIdx,
 				DedupDeleteKeepColIdxList: dedupJoin.DedupDeleteKeepColIdxList,
+				Budget:                    budget,
 			})
-			engine.InitFromSpilledMap(ctr.mp.TakeSpillBuildFds())
+			if files != nil {
+				engine.InitFromSpilledFiles(files)
+			} else {
+				engine.InitFromSpilledMap(ctr.mp.TakeSpillBuildFds())
+			}
 			if err := engine.ScatterProbeTable(proc,
 				func() (*batch.Batch, error) {
 					input, err := vm.ChildrenCall(dedupJoin.GetChildren(0), proc, analyzer)

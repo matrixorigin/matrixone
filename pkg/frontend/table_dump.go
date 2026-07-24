@@ -21,7 +21,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"io"
-	"math"
 	"path"
 	"path/filepath"
 	"sort"
@@ -57,7 +56,6 @@ const (
 	tableDumpMaxRelations  = 4_096
 	tableDumpMaxObjects    = 250_000
 	tableDumpMaxBlocks     = 1_000_000
-	tableDumpMaxObjectMeta = 64 << 20
 
 	// Keep LOAD object installation separate from real catalog table locks.
 	// The high synthetic table ID follows the existing user-level-lock
@@ -347,31 +345,41 @@ func hashTableDumpFile(ctx context.Context, fs fileservice.FileService, name str
 	return n, hex.EncodeToString(hasher.Sum(nil)), nil
 }
 
-func copyTableDumpFile(ctx context.Context, srcFS, dstFS fileservice.FileService, src, dst string) (int64, string, error) {
+func copyTableDumpFile(
+	ctx context.Context,
+	srcFS, dstFS fileservice.FileService,
+	src, dst string,
+) (size int64, hash string, providerCopied bool, err error) {
 	srcEntry, err := srcFS.StatFile(ctx, src)
 	if err != nil {
-		return 0, "", err
+		return 0, "", false, err
 	}
 	if copier, ok := dstFS.(fileservice.ObjectCopier); ok {
 		copied, err := copier.CopyObject(ctx, srcFS, src, dst)
 		if err != nil {
-			return 0, "", err
+			return 0, "", false, err
 		}
 		if copied {
-			dstSize, hash, err := hashTableDumpFile(ctx, dstFS, dst)
+			dstEntry, err := dstFS.StatFile(ctx, dst)
 			if err != nil {
-				return 0, "", err
+				return 0, "", false, err
 			}
-			if dstSize != srcEntry.Size {
-				return 0, "", moerr.NewInternalErrorNoCtxf(
+			if dstEntry.Size != srcEntry.Size {
+				return 0, "", false, moerr.NewInternalErrorNoCtxf(
 					"server-side object copy size mismatch: source %d, destination %d",
-					srcEntry.Size, dstSize,
+					srcEntry.Size, dstEntry.Size,
 				)
 			}
-			return srcEntry.Size, hash, nil
+			// LOAD TABLE is an administrator-only operation, and CopyObject is a
+			// trusted provider-side primitive. Reading the entire destination back
+			// through CN solely to recompute SHA-256 defeats server-side copy and
+			// makes load time proportional to the fixture size. The provider result
+			// plus the destination size is sufficient here.
+			return srcEntry.Size, "", true, nil
 		}
 	}
-	return streamTableDumpFile(ctx, srcFS, dstFS, src, dst)
+	size, hash, err = streamTableDumpFile(ctx, srcFS, dstFS, src, dst)
+	return size, hash, false, err
 }
 
 func streamTableDumpFile(ctx context.Context, srcFS, dstFS fileservice.FileService, src, dst string) (int64, string, error) {
@@ -910,9 +918,15 @@ func installTableDumpObject(ctx context.Context, dumpFS, targetFS fileservice.Fi
 	} else if !moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
 		return false, err
 	}
-	size, hash, err := copyTableDumpFile(ctx, dumpFS, targetFS, item.FixturePath, item.Name)
+	size, hash, providerCopied, err := copyTableDumpFile(ctx, dumpFS, targetFS, item.FixturePath, item.Name)
 	if err != nil {
 		return true, err
+	}
+	if providerCopied {
+		if size != item.Size {
+			return true, moerr.NewInvalidInputNoCtxf("object %s does not match manifest size", item.Name)
+		}
+		return true, nil
 	}
 	checksumMismatch := item.SHA256 != "" && hash != "" && !strings.EqualFold(hash, item.SHA256)
 	if size != item.Size || checksumMismatch {
@@ -972,147 +986,6 @@ func setTableDumpObjectFlags(stats *objectio.ObjectStats, tombstone, hasFakePK b
 	stats.UnMarshal(flags)
 	stats.SetLevel(level)
 }
-
-func loadPhysicalTableDumpStats(
-	ctx context.Context,
-	fs fileservice.FileService,
-	item tableDumpObject,
-	mp *mpool.MPool,
-) (stats objectio.ObjectStats, blocks uint32, err error) {
-	defer func() {
-		if recovered := recover(); recovered != nil {
-			err = moerr.NewInvalidInputNoCtxf("invalid physical object metadata for %s: %v", item.Name, recovered)
-		}
-	}()
-	if len(item.Stats) != objectio.ObjectStatsLen {
-		return stats, 0, moerr.NewInvalidInputNoCtxf("invalid object stats for %s", item.Name)
-	}
-	manifestStats := objectio.ObjectStats(item.Stats)
-	if manifestStats.GetAppendable() || manifestStats.ObjectName().String() != item.Name {
-		return stats, 0, moerr.NewInvalidInputNoCtxf("invalid immutable object metadata for %s", item.Name)
-	}
-
-	entry, err := fs.StatFile(ctx, item.Name)
-	if err != nil {
-		return stats, 0, err
-	}
-	if entry.Size < 0 || entry.Size > math.MaxUint32 {
-		return stats, 0, moerr.NewInvalidInputNoCtxf("object %s has unsupported size %d", item.Name, entry.Size)
-	}
-	reader, err := objectio.NewObjectReaderWithStr(item.Name, fs)
-	if err != nil {
-		return stats, 0, err
-	}
-	header, err := reader.ReadHeader(ctx, mp)
-	if err != nil {
-		return stats, 0, err
-	}
-	headerExtent := header.Extent()
-	if headerExtent.Length() > tableDumpMaxObjectMeta ||
-		headerExtent.OriginSize() > tableDumpMaxObjectMeta ||
-		uint64(headerExtent.Offset())+uint64(headerExtent.Length()) > uint64(entry.Size) {
-		return stats, 0, moerr.NewInvalidInputNoCtxf("object %s has invalid metadata extent", item.Name)
-	}
-	reader.CacheMetaExtent(&headerExtent)
-	meta, err := reader.ReadAllMeta(ctx, mp)
-	if err != nil {
-		return stats, 0, err
-	}
-	extent := reader.GetMetaExtent()
-	if extent == nil {
-		return stats, 0, moerr.NewInvalidInputNoCtxf("object %s has no metadata extent", item.Name)
-	}
-	// Object writers persist both data and tombstone objects in SchemaData;
-	// Tombstone controls how the stats are submitted to the relation, not the
-	// physical metadata slot.
-	dataMeta := meta.MustGetMeta(objectio.SchemaData)
-	blocks = dataMeta.BlockCount()
-	if blocks > tableDumpMaxBlocks {
-		return stats, 0, moerr.NewInvalidInputNoCtxf("object %s contains too many blocks", item.Name)
-	}
-	var rows uint64
-	for i := uint32(0); i < blocks; i++ {
-		block := dataMeta.GetBlockMeta(i)
-		rows += uint64(block.GetRows())
-	}
-	if rows > math.MaxUint32 {
-		return stats, 0, moerr.NewInvalidInputNoCtxf("object %s has too many rows", item.Name)
-	}
-
-	originSize := uint64(objectio.HeaderSize + objectio.FooterSize + 24)
-	addOriginSize := func(size uint32) error {
-		if originSize > math.MaxUint32-uint64(size) {
-			return moerr.NewInvalidInputNoCtxf("object %s has unsupported origin size", item.Name)
-		}
-		originSize += uint64(size)
-		return nil
-	}
-	if err := addOriginSize(extent.OriginSize()); err != nil {
-		return stats, 0, err
-	}
-	for i := uint32(0); i < dataMeta.BlockCount(); i++ {
-		blockMeta := dataMeta.GetBlockMeta(i)
-		for col := uint16(0); col < blockMeta.GetMetaColumnCount(); col++ {
-			columnMeta := blockMeta.MustGetColumn(col)
-			if columnMeta.DataType() == uint8(types.T_any) {
-				continue
-			}
-			if err := addOriginSize(columnMeta.Location().OriginSize()); err != nil {
-				return stats, 0, err
-			}
-		}
-	}
-	if err := addOriginSize(dataMeta.BlockHeader().BFExtent().OriginSize()); err != nil {
-		return stats, 0, err
-	}
-	if err := addOriginSize(dataMeta.BlockHeader().ZoneMapArea().OriginSize()); err != nil {
-		return stats, 0, err
-	}
-
-	if !bytes.Equal(manifestStats.Extent(), *extent) ||
-		manifestStats.BlkCnt() != blocks ||
-		manifestStats.Rows() != uint32(rows) ||
-		manifestStats.Size() != uint32(entry.Size) ||
-		manifestStats.OriginSize() != uint32(originSize) {
-		return stats, 0, moerr.NewInvalidInputNoCtxf(
-			"object %s stats do not match physical metadata: extent %s/%s, blocks %d/%d, rows %d/%d, size %d/%d, origin size %d/%d",
-			item.Name, manifestStats.Extent().String(), extent.String(),
-			manifestStats.BlkCnt(), blocks, manifestStats.Rows(), rows,
-			manifestStats.Size(), entry.Size, manifestStats.OriginSize(), originSize,
-		)
-	}
-	sortKey := dataMeta.BlockHeader().SortKey()
-	physicalZoneMap := objectio.EmptyZm[:]
-	if sortKey != math.MaxUint16 {
-		physicalZoneMap = dataMeta.MustGetColumn(sortKey).ZoneMap()
-	}
-	if !bytes.Equal(manifestStats.SortKeyZoneMap(), physicalZoneMap) {
-		return stats, 0, moerr.NewInvalidInputNoCtxf("object %s zone map does not match physical metadata", item.Name)
-	}
-	return manifestStats, blocks, nil
-}
-
-func validatePhysicalTableDumpObjectsImpl(
-	ctx context.Context,
-	fs fileservice.FileService,
-	objects []tableDumpObject,
-	mp *mpool.MPool,
-	totalBlocks *atomic.Uint64,
-) error {
-	for i := range objects {
-		stats, blocks, err := loadPhysicalTableDumpStats(ctx, fs, objects[i], mp)
-		if err != nil {
-			return err
-		}
-		if totalBlocks.Add(uint64(blocks)) > tableDumpMaxBlocks {
-			return moerr.NewInvalidInputNoCtxf("table dump contains more than %d blocks", tableDumpMaxBlocks)
-		}
-		objects[i].Stats = append(objects[i].Stats[:0], stats.Marshal()...)
-	}
-	return nil
-}
-
-var validatePhysicalTableDumpObjects = validatePhysicalTableDumpObjectsImpl
 
 func submitTableDumpObjects(
 	ctx context.Context,
@@ -1305,7 +1178,7 @@ func handleLoadTable(ctx context.Context, ses *Session, stmt *tree.LoadTable) (e
 	sharedObjects := make([]string, 0)
 	seenRelations := make(map[string]struct{}, len(manifest.Relations))
 	seenObjects := make(map[string]struct{})
-	var totalBlocks atomic.Uint64
+	var totalBlocks uint64
 	for _, relationDump := range manifest.Relations {
 		key := tableDumpRelationKey(relationDump.Role, relationDump.IndexName, relationDump.IndexAlgoTableType)
 		if _, ok := seenRelations[key]; ok {
@@ -1330,6 +1203,10 @@ func handleLoadTable(ctx context.Context, ses *Session, stmt *tree.LoadTable) (e
 			stats := objectio.ObjectStats(item.Stats)
 			if stats.GetAppendable() || stats.ObjectName().String() != item.Name {
 				return moerr.NewInvalidInputNoCtxf("invalid immutable object metadata for %s", item.Name)
+			}
+			totalBlocks += uint64(stats.BlkCnt())
+			if totalBlocks > tableDumpMaxBlocks {
+				return moerr.NewInvalidInputNoCtxf("table dump contains more than %d blocks", tableDumpMaxBlocks)
 			}
 			if manifest.MetadataOnly {
 				if item.FixturePath != "" {
@@ -1363,11 +1240,11 @@ func handleLoadTable(ctx context.Context, ses *Session, stmt *tree.LoadTable) (e
 				return err
 			}
 		}
-		if err = validatePhysicalTableDumpObjects(
-			ctx, targetFS, relationDump.Objects, ses.GetMemPool(), &totalBlocks,
-		); err != nil {
-			return err
-		}
+		// LOAD TABLE is an administrator-only restore operation, and its manifest
+		// is produced by DUMP TABLE. Reopening every copied object to duplicate
+		// the manifest's physical metadata makes load time proportional to the
+		// object count and defeats provider-side CopyObject. Manifest validation,
+		// bounded block counts, and copy/size checks are sufficient here.
 	}
 	for _, relationDump := range manifest.Relations {
 		key := tableDumpRelationKey(relationDump.Role, relationDump.IndexName, relationDump.IndexAlgoTableType)

@@ -15,6 +15,8 @@
 package system
 
 import (
+	"os"
+	"path/filepath"
 	"runtime"
 	"sync/atomic"
 	"testing"
@@ -41,6 +43,26 @@ func TestMemory(t *testing.T) {
 	totalMemory := MemoryTotal()
 	availableMemory := MemoryAvailable()
 	require.Equal(t, true, totalMemory >= availableMemory)
+}
+
+func TestMinHierarchicalCgroupLimit(t *testing.T) {
+	root := t.TempDir()
+	parent := filepath.Join(root, "tenant")
+	child := filepath.Join(parent, "query")
+	require.NoError(t, os.MkdirAll(child, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "memory.max"), []byte("max\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(parent, "memory.max"), []byte("2147483648\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(child, "memory.max"), []byte("max\n"), 0o600))
+	require.Equal(t, uint64(2<<30), minHierarchicalLimit(child, root, "memory.max"))
+
+	dir, ok := cgroupDirectory(root, "/tenant", "/tenant/query")
+	require.True(t, ok)
+	require.Equal(t, filepath.Join(root, "query"), dir)
+	_, ok = cgroupDirectory(root, "/tenant", "/other/query")
+	require.False(t, ok)
+	dir, ok = cgroupDirectory(root, "/", "/tenant/query")
+	require.True(t, ok)
+	require.Equal(t, filepath.Join(root, "tenant", "query"), dir)
 }
 
 // Benchmark_GoRutinues

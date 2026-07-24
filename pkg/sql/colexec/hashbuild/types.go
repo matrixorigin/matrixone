@@ -17,19 +17,27 @@ package hashbuild
 import (
 	"bytes"
 	"os"
+	"sync"
+	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
 )
 
 var _ vm.Operator = new(HashBuild)
+
+var hashBuildSpillSequence atomic.Uint64
 
 const (
 	BuildHashMap = iota
@@ -41,20 +49,195 @@ const (
 type container struct {
 	state           int
 	runtimeFilterIn bool
-	hashmapBuilder  HashmapBuilder
-	spilledFds      []*os.File // anonymous build-side spill fds (ownership transferred to JoinMap)
-	spillFS         fileservice.MutableFileService
-	spillUUID       string // unique prefix for anonymous file paths
-	spillThreshold  int64
+	// terminalPublished is the per-execution generation gate for the JoinMap
+	// dependency.  A successful JoinMap or a BuildError wins this gate exactly
+	// once; Reset/Free/cancel paths cannot replace or duplicate it.
+	terminalPublished uint32
+	terminalMu        sync.Mutex
+	runtimeFilterDone bool
+	diagnosticsLogged bool
+	hashmapBuilder    HashmapBuilder
+	spilledFds        []*os.File // anonymous build-side spill fds (ownership transferred to JoinMap)
+	// spillBundle keeps the resource reservations associated with spilledFds.
+	// Build owns the bundle until the JoinMap publication wins; after that the
+	// JoinMap/SpillEngine handoff owns it and invokes release exactly once.
+	spillBundle    *spillFileBundle
+	spillFS        fileservice.MutableFileService
+	spillUUID      string // unique prefix for anonymous file paths
+	spillThreshold int64
 
 	// reusable buffers for spill operations
-	spillHashValues   []uint64
-	spillBucketRowIds [][]int32
-	spillWriteBuf     bytes.Buffer
-	spillKeyVecs      []*vector.Vector
+	spillHashValues []uint64
+	// spillBucketRowIds stores one contiguous row-id array for the current
+	// input batch.  spillBucketOffsets identifies each bucket's sub-slice;
+	// keeping one array avoids the 32 independent append/growth paths used by
+	// the old scatter implementation.
+	spillBucketRowIds  []int32
+	spillBucketCounts  [spillNumBuckets]int32
+	spillBucketOffsets [spillNumBuckets + 1]int32
+	spillSelection     []int32
+	spillWriteBuf      bytes.Buffer
+	// spillBucketWriteBufs coalesce serialized records across source batches.
+	// Each buffer is bounded by spillWriteCoalesceSize (plus bytes.Buffer's
+	// bounded growth slack), so fanout does not imply fanout-sized vectors.
+	spillBucketWriteBufs [spillNumBuckets]bytes.Buffer
+	spillBucketWriteRows [spillNumBuckets]int64
+	spillKeyVecs         []*vector.Vector
+	// spillScratchReservation is a query/CN-charged emergency lease retained
+	// while Shuffle build batches accumulate. It prevents retained copies from
+	// consuming the scratch required to recover from hard-budget rejection.
+	spillScratchReservation *process.HashBuildReservation
+	// spillScratchEmergency marks a lease pre-admitted by
+	// ensureSpillScratchReservation. An uncharged upstream batch may not grow
+	// beyond this lease. A retained batch may grow it because its source memory
+	// remains charged separately while the batch is drained.
+	spillScratchEmergency bool
+	// spillScratchBase is the transient emergency floor. Coalesce-buffer
+	// growth is charged on top and must never be mistaken for this floor.
+	spillScratchBase uint64
 
 	// cached expression executors for spill (reused across batches)
 	spillExprExecs []colexec.ExpressionExecutor
+}
+
+// spillFileBundle is deliberately owned by hashbuild.  Build converts each
+// entry to message.SpillFile only after every file has been rewound; the
+// resulting file object carries its token release closure through JoinMap and
+// the SpillEngine. Keeping all tokens together prevents a file from becoming
+// an unaccounted orphan on partial failures.
+type spillFileBundle struct {
+	mu       sync.Mutex
+	entries  map[*os.File]*spillFileEntry
+	released bool
+}
+
+type spillFileEntry struct {
+	fdToken   *process.HashBuildSpillFDReservation
+	diskToken *process.HashBuildSpillDiskReservation
+	rows      int64
+	bytes     uint64
+	bucket    int
+}
+
+func (b *spillFileBundle) release() {
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	if b.released {
+		b.mu.Unlock()
+		return
+	}
+	b.released = true
+	entries := b.entries
+	b.entries = nil
+	b.mu.Unlock()
+	for _, entry := range entries {
+		if entry.fdToken != nil {
+			entry.fdToken.Release()
+		}
+		if entry.diskToken != nil {
+			entry.diskToken.Release()
+		}
+	}
+}
+
+func (b *spillFileBundle) addFD(file *os.File, bucket int, token *process.HashBuildSpillFDReservation) {
+	if b == nil || file == nil {
+		return
+	}
+	b.mu.Lock()
+	if b.released {
+		b.mu.Unlock()
+		if token != nil {
+			token.Release()
+		}
+		return
+	}
+	if b.entries == nil {
+		b.entries = make(map[*os.File]*spillFileEntry)
+	}
+	entry := b.entries[file]
+	if entry == nil {
+		entry = &spillFileEntry{bucket: bucket}
+		b.entries[file] = entry
+	}
+	entry.fdToken = token
+	b.mu.Unlock()
+}
+
+func (b *spillFileBundle) growDisk(file *os.File, budget *process.HashBuildBudgetGeneration, bytes uint64) (uint64, bool, error) {
+	if b == nil || file == nil || budget == nil {
+		return 0, false, process.ErrHashBuildBudgetInvalid
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.released {
+		return 0, false, process.ErrHashBuildReservationInactive
+	}
+	if b.entries == nil {
+		b.entries = make(map[*os.File]*spillFileEntry)
+	}
+	entry := b.entries[file]
+	if entry == nil {
+		entry = &spillFileEntry{bucket: -1}
+		b.entries[file] = entry
+	}
+	if entry.diskToken == nil {
+		token, err := budget.ReserveSpillDisk(bytes)
+		if err != nil {
+			return 0, false, err
+		}
+		entry.diskToken = token
+		return 0, true, nil
+	}
+	old := entry.diskToken.Size()
+	if err := entry.diskToken.Grow(bytes); err != nil {
+		return 0, false, err
+	}
+	return old, false, nil
+}
+
+func (b *spillFileBundle) recordDiskWrite(file *os.File, rows int64, bytes uint64) {
+	if b == nil || file == nil {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	entry := b.entries[file]
+	if entry == nil {
+		return
+	}
+	entry.rows += rows
+	if ^uint64(0)-entry.bytes >= bytes {
+		entry.bytes += bytes
+	} else {
+		entry.bytes = ^uint64(0)
+	}
+}
+
+func (b *spillFileBundle) accountedFiles() []*message.SpillFile {
+	if b == nil {
+		return nil
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	files := make([]*message.SpillFile, spillNumBuckets)
+	for file, entry := range b.entries {
+		f, e := file, entry
+		accounted := message.NewSpillFile(f, e.rows, e.bytes, func() {
+			if e.fdToken != nil {
+				e.fdToken.Release()
+			}
+			if e.diskToken != nil {
+				e.diskToken.Release()
+			}
+		})
+		if e.bucket >= 0 && e.bucket < len(files) {
+			files[e.bucket] = accounted
+		}
+	}
+	return files
 }
 
 type HashBuild struct {
@@ -106,7 +289,7 @@ func init() {
 	)
 }
 
-func (hashBuild HashBuild) TypeName() string {
+func (hashBuild *HashBuild) TypeName() string {
 	return opName
 }
 
@@ -121,10 +304,31 @@ func (hashBuild *HashBuild) Release() {
 }
 
 func (hashBuild *HashBuild) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	hashBuild.ctr.terminalMu.Lock()
+	defer hashBuild.ctr.terminalMu.Unlock()
+	hashBuild.logDiagnostics(proc, pipelineFailed, err)
 	runtimeSucceed := hashBuild.ctr.state > HandleRuntimeFilter
 	mapSucceed := hashBuild.ctr.state == SendSucceed
 
+	// Call does not publish pipeline terminal signals.  Reset owns dependency
+	// finalization and is intentionally non-blocking: publication only appends
+	// one immutable value to the current-CN MessageBoard.
+	if !mapSucceed {
+		if pipelineFailed || err != nil {
+			if err == nil {
+				err = moerr.NewQueryInterrupted(proc.Ctx)
+			}
+			hashBuild.publishBuildError(proc, err)
+		} else {
+			// Preserve the established nil JoinMap convention for a true empty
+			// build and for legacy cleanup paths that completed without a map.
+			hashBuild.publishJoinMap(proc, nil)
+		}
+	}
+
 	hashBuild.ctr.hashmapBuilder.Reset(proc, !mapSucceed)
+	hashBuild.ctr.dropSpillScratchBuffers()
+	hashBuild.ctr.releaseSpillScratchReservation()
 	// Only clean up build files when the join map was NOT successfully sent.
 	// When mapSucceed=true, hashjoin owns the files and deletes them after reading.
 	if !mapSucceed {
@@ -133,16 +337,92 @@ func (hashBuild *HashBuild) Reset(proc *process.Process, pipelineFailed bool, er
 	hashBuild.ctr.spilledFds = nil
 	hashBuild.ctr.state = BuildHashMap
 	hashBuild.ctr.runtimeFilterIn = false
-	message.FinalizeRuntimeFilter(hashBuild.RuntimeFilterSpec, runtimeSucceed, proc.GetMessageBoard())
-	message.FinalizeJoinMapMessage(proc.GetMessageBoard(), hashBuild.JoinMapTag, hashBuild.IsShuffle, hashBuild.ShuffleIdx, mapSucceed)
+	if !hashBuild.ctr.runtimeFilterDone {
+		if pipelineFailed || err != nil {
+			// A failed build must complete the runtime-filter dependency with
+			// PASS.  DROP would incorrectly filter all probe rows because no
+			// unique keys were published.
+			message.FinalizeRuntimeFilterOnBuildError(hashBuild.RuntimeFilterSpec, proc.GetMessageBoard())
+		} else {
+			message.FinalizeRuntimeFilter(hashBuild.RuntimeFilterSpec, runtimeSucceed, proc.GetMessageBoard())
+		}
+	}
+	hashBuild.ctr.runtimeFilterDone = false
 }
 func (hashBuild *HashBuild) Free(proc *process.Process, pipelineFailed bool, err error) {
+	hashBuild.ctr.terminalMu.Lock()
+	defer hashBuild.ctr.terminalMu.Unlock()
+	hashBuild.logDiagnostics(proc, pipelineFailed, err)
+	// Normally Reset runs before Free.  Keep Free as a safe fallback for
+	// cancellation/error cleanup paths that bypass Reset, while preserving the
+	// exactly-once generation gate.
+	if atomic.LoadUint32(&hashBuild.ctr.terminalPublished) == 0 && (pipelineFailed || err != nil) {
+		if err == nil {
+			err = moerr.NewQueryInterrupted(proc.Ctx)
+		}
+		hashBuild.publishBuildError(proc, err)
+	}
 	hashBuild.cleanupSpillFiles(proc)
 	hashBuild.ctr.hashmapBuilder.Free(proc)
 	hashBuild.ctr.freeSpillExprExecs()
-	hashBuild.ctr.spillKeyVecs = nil
-	hashBuild.ctr.spillHashValues = nil
-	hashBuild.ctr.spillBucketRowIds = nil
+	hashBuild.ctr.dropSpillScratchBuffers()
+	hashBuild.ctr.releaseSpillScratchReservation()
+}
+
+func (hashBuild *HashBuild) logDiagnostics(proc *process.Process, pipelineFailed bool, err error) {
+	if hashBuild.ctr.diagnosticsLogged {
+		return
+	}
+	hashBuild.ctr.diagnosticsLogged = true
+	if proc == nil || hashBuild.OpAnalyzer == nil {
+		return
+	}
+	extra := hashBuild.OpAnalyzer.GetOpStats().ExtraStats
+	if extra["HashBuildSpillStarts"] == 0 &&
+		extra["QueryHashBudgetRejects"] == 0 &&
+		extra["HashBuildEmergencyScratchGrowRejects"] == 0 &&
+		extra["HashBuildSpillScratchGrowRejects"] == 0 &&
+		extra["HashBuildRetainedEmergencyGrowCount"] == 0 &&
+		extra["HashBuildRetainedEmergencyGrowRejects"] == 0 {
+		return
+	}
+	logutil.Info("operator diagnostic summary",
+		trace.ContextField(proc.Ctx),
+		zap.String("query_id", proc.QueryId()),
+		zap.String("operator", opName),
+		zap.Int("node_idx", hashBuild.GetIdx()),
+		zap.Int32("shuffle_idx", hashBuild.ShuffleIdx),
+		zap.Bool("pipeline_failed", pipelineFailed),
+		zap.Error(err),
+		zap.Any("extra_stats", extra))
+}
+
+func (hashBuild *HashBuild) publishJoinMap(proc *process.Process, jm *message.JoinMap) bool {
+	if !atomic.CompareAndSwapUint32(&hashBuild.ctr.terminalPublished, 0, 1) {
+		return false
+	}
+	message.SendJoinMapResult(
+		message.NewJoinMapResult(jm),
+		hashBuild.JoinMapTag,
+		hashBuild.IsShuffle,
+		hashBuild.ShuffleIdx,
+		proc.GetMessageBoard(),
+	)
+	return true
+}
+
+func (hashBuild *HashBuild) publishBuildError(proc *process.Process, err error) bool {
+	if !atomic.CompareAndSwapUint32(&hashBuild.ctr.terminalPublished, 0, 1) {
+		return false
+	}
+	message.FinalizeJoinMapBuildError(
+		proc.GetMessageBoard(),
+		hashBuild.JoinMapTag,
+		hashBuild.IsShuffle,
+		hashBuild.ShuffleIdx,
+		err,
+	)
+	return true
 }
 
 func (hashBuild *HashBuild) cleanupSpillFiles(proc *process.Process) {
@@ -153,6 +433,40 @@ func (hashBuild *HashBuild) cleanupSpillFiles(proc *process.Process) {
 		}
 	}
 	hashBuild.ctr.spilledFds = nil
+	// Release FD and disk charges only after the physical descriptors have
+	// closed. This preserves the ledger invariant even during cancellation.
+	if hashBuild.ctr.spillBundle != nil {
+		hashBuild.ctr.spillBundle.release()
+		hashBuild.ctr.spillBundle = nil
+	}
+}
+
+// CleanCopiedBatchAt is the lifecycle hook used by bounded initial spill.
+// HashBuild keeps this wrapper on the operator side so batch reservation
+// ownership remains private to the hashbuild package.
+func (hb *HashmapBuilder) CleanCopiedBatchAt(idx int, proc *process.Process) error {
+	if idx < 0 || idx >= len(hb.Batches.Buf) {
+		return process.ErrHashBuildBudgetInvalid
+	}
+	if bat := hb.Batches.Buf[idx]; bat != nil {
+		bat.Clean(proc.Mp())
+	}
+	copy(hb.Batches.Buf[idx:], hb.Batches.Buf[idx+1:])
+	hb.Batches.Buf = hb.Batches.Buf[:len(hb.Batches.Buf)-1]
+	hb.Batches.MemSize = 0
+	for _, bat := range hb.Batches.Buf {
+		if bat != nil {
+			hb.Batches.MemSize += int64(bat.Size())
+		}
+	}
+	// CopyIntoBatches can coalesce several ingress batches into one physical
+	// batch (and can reorder a full batch around a partial tail), so an ingress
+	// reservation cannot be matched safely to Batches.Buf[idx]. Keep the
+	// conservative charges until the last physical batch has been dropped.
+	if len(hb.Batches.Buf) == 0 {
+		hb.releaseBatchReservations()
+	}
+	return nil
 }
 
 func (hashBuild *HashBuild) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {

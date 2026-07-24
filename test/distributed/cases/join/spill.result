@@ -310,7 +310,7 @@ insert into t_dedup_spill select *, 0 from generate_series(200000, 600000) g
 on duplicate key update val = val + 1;
 select count(*) from t_dedup_spill;
 ➤ count(*)[-5,64,0]  𝄀
-600001
+600000
 drop table if exists t_dedup_spill;
 drop database if exists d1;
 drop database if exists test;

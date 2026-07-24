@@ -847,6 +847,22 @@ func TestOperatorAnalyzerAggregatesCountersAndStats(t *testing.T) {
 	require.Zero(t, stats.GetMetricByKey(OpScanTime))
 }
 
+func TestOperatorStatsExtraStats(t *testing.T) {
+	stats := NewOperatorStats("group")
+	stats.AddExtraStat("GroupSpillBuckets", 2)
+	stats.AddExtraStat("GroupSpillBuckets", 3)
+	stats.SetMaxExtraStat("GroupSpillMaxBucketRows", 7)
+	stats.SetMaxExtraStat("GroupSpillMaxBucketRows", 5)
+	stats.AddExtraStat("", 1)
+
+	require.Equal(t, int64(5), stats.ExtraStats["GroupSpillBuckets"])
+	require.Equal(t, int64(7), stats.ExtraStats["GroupSpillMaxBucketRows"])
+	require.Contains(t, stats.String(), "GroupSpillBuckets:5 GroupSpillMaxBucketRows:7 ")
+
+	stats.Reset()
+	require.Empty(t, stats.ExtraStats)
+}
+
 func TestOperatorStatsMetricHelpers(t *testing.T) {
 	stats := NewOperatorStats("metrics")
 	require.Equal(t, "metrics", stats.OperatorName)

@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -221,6 +222,81 @@ func TestGroupNoGroupBy(t *testing.T) {
 	g.Free(proc, false, nil)
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestGroupSpillReloadKeepsPreallocationBounded(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	const rows = 65536
+	values := make([]int32, rows)
+	for i := range values {
+		values[i] = int32(i)
+	}
+	input := batch.NewWithSize(1)
+	input.Vecs[0] = testutil.MakeInt32Vector(values, nil, proc.Mp())
+	input.SetRowCount(rows)
+
+	g := newGroupOp(proc, []*plan.Expr{colExpr(0, types.T_int32)}, []aggexec.AggFuncExecExpression{countStarAgg()})
+	// Values below 10K are interpreted as a group-count spill threshold.
+	// One large input batch therefore establishes a 65,536-group high-water
+	// mark, while each of the 32 reload buckets is only about 2K groups.
+	g.SpillMem = 4096
+	g.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{input}))
+	require.NoError(t, g.Prepare(proc))
+
+	var outputRows int
+	for {
+		result, err := vm.Exec(g, proc)
+		require.NoError(t, err)
+		if result.Status == vm.ExecStop || result.Batch == nil {
+			break
+		}
+		outputRows += result.Batch.RowCount()
+	}
+
+	require.Equal(t, rows, outputRows)
+	require.Equal(t, uint64(rows), g.ctr.spillHashPreAllocSize)
+	extra := g.OpAnalyzer.GetOpStats().ExtraStats
+	require.Positive(t, extra["GroupSpillWriteCalls"])
+	require.Positive(t, extra["GroupSpillWriteNanos"])
+	require.Positive(t, extra["GroupSpillSerializedBytes"])
+	require.Positive(t, extra["GroupSpillAggChunkHeadersOmitted"])
+	require.Positive(t, extra["GroupSpillReloadBuckets"])
+	require.Positive(t, extra["GroupSpillReloadRecords"])
+	require.Positive(t, extra["GroupSpillAggExecReuseRecords"])
+	require.Equal(t, int64(rows), extra["GroupSpillReloadRows"])
+	require.Equal(t, int64(rows), extra["GroupSpillMaxGroups"])
+	require.Greater(t, extra["GroupSpillPreallocRows"], int64(aggHtPreAllocSize))
+	require.Positive(t, extra["GroupSpillReloadNanos"])
+	require.Equal(t, int64(1), extra["GroupHashBuildGrowthBatches"])
+	require.Positive(t, extra["GroupHashBuildGrowthBytes"])
+	g.Free(proc, false, nil)
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestSpillReloadPreallocationRespectsByteLimit(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	const requested = uint64(1 << 20)
+	ctr := container{
+		mp:                    proc.Mp(),
+		mtyp:                  H8,
+		spillMem:              1 << 20,
+		spillHashPreAllocSize: requested,
+	}
+	got := ctr.boundedSpillReloadPreAlloc(int64(requested))
+	require.Less(t, got, requested)
+	require.LessOrEqual(t,
+		hashtable.Int64HashMapInitialAllocationBytes()+hashtable.EstimateInt64HashMapSize(got),
+		uint64(ctr.spillMem))
+
+	// The sub-10K test mode is a group-count threshold rather than a byte
+	// budget, but the proven high-water cap still applies.
+	ctr.spillMem = 4096
+	ctr.spillHashPreAllocSize = 2048
+	require.Equal(t, uint64(2048), ctr.boundedSpillReloadPreAlloc(8192))
 }
 
 // TestGroupResetAndReuse: verify Reset allows the operator to be reused correctly.

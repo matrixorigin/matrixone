@@ -674,7 +674,7 @@ func (mp *MPool) Alloc(sz int, offHeap bool) ([]byte, error) {
 
 func (mp *MPool) allocWithDetailK(detailk string, sz int64, offHeap bool) ([]byte, error) {
 	// reject unexpected alloc size.
-	if sz < 0 || sz+kMemHdrSz > int64(CapLimit) {
+	if sz < 0 || sz > int64(CapLimit)-kMemHdrSz {
 		logutil.Errorf("mpool memory allocation exceed limit with requested size %d: %s", sz, string(debug.Stack()))
 		return nil, moerr.NewInternalErrorNoCtxf("mpool memory allocation exceed limit with requested size %d", sz)
 	}
@@ -807,7 +807,11 @@ func (mp *MPool) reAllocWithDetailK(detailk string, old []byte, sz int64, offHea
 
 	newSz := sz
 	if bufferMore {
-		newSz = calculateNewCap(int64(cap(old)), sz)
+		var ok bool
+		newSz, ok = GrowCapacity(int64(cap(old)), sz)
+		if !ok {
+			return nil, moerr.NewInternalErrorNoCtxf("invalid mpool grow capacity, old %d, required %d", cap(old), sz)
+		}
 	}
 
 	ret, err := mp.allocWithDetailK(detailk, int64(newSz), offHeap)
@@ -922,12 +926,27 @@ func (mp *MPool) ReallocZero(old []byte, sz int, offHeap bool) ([]byte, error) {
 		)
 	}
 
+	// C realloc may allocate the replacement before releasing the old block.
+	// Admit the complete temporary peak before entering the allocator, then
+	// retain the new-size charge and release only the old-size charge on success.
+	if globalStats.RecordAlloc("global", int64(sz)) > GlobalCap() {
+		globalStats.RecordFree("global", int64(sz))
+		return nil, moerr.NewOOMNoCtx()
+	}
+	if mp.stats.RecordAlloc(mp.tag, int64(sz)) > mp.Cap() {
+		mp.stats.RecordFree(mp.tag, int64(sz))
+		globalStats.RecordFree("global", int64(sz))
+		return nil, moerr.NewInternalErrorNoCtxf("mpool out of space, realloc %d bytes, cap %d", sz, mp.cap)
+	}
+
 	newbs, err := simpleCAllocator().ReallocZero(
 		fullAllocation[:oldLength],
 		uint64(oldSize),
 		uint64(sz),
 	)
 	if err != nil {
+		mp.stats.RecordFree(mp.tag, int64(sz))
+		globalStats.RecordFree("global", int64(sz))
 		return nil, err
 	}
 	newptr := unsafe.Pointer(&newbs[0])
@@ -949,8 +968,6 @@ func (mp *MPool) ReallocZero(old []byte, sz int, offHeap bool) ([]byte, error) {
 	profileRecordRealloc(3, uintptr(oldptr), uintptr(newptr), int64(oldSize), int64(sz))
 	globalStats.RecordFree("global", int64(oldSize))
 	mp.stats.RecordFree(mp.tag, int64(oldSize))
-	globalStats.RecordAlloc("global", int64(sz))
-	mp.stats.RecordAlloc(mp.tag, int64(sz))
 	mp.resource.recordFree(int64(oldSize))
 	mp.recordResourcePeak(mp.resource.recordAlloc(int64(sz)))
 	return newbs, nil
@@ -1113,9 +1130,21 @@ func roundupsize(size int64) int64 {
 }
 
 // copy-paste from go slice grow strategy.
-func calculateNewCap(oldCap int64, requiredSize int64) int64 {
+// GrowCapacity returns the capacity that Grow and Grow2 will allocate for a
+// request. Callers which must reserve memory before growing a slice use this
+// helper so admission and allocation share the same growth calculation.
+func GrowCapacity(oldCap int64, requiredSize int64) (int64, bool) {
+	if oldCap < 0 || requiredSize < 0 {
+		return 0, false
+	}
+	if requiredSize <= oldCap {
+		return oldCap, true
+	}
 	newcap := oldCap
 	doublecap := newcap + newcap
+	if doublecap < newcap {
+		doublecap = requiredSize
+	}
 	if requiredSize > doublecap {
 		newcap = requiredSize
 	} else {
@@ -1133,8 +1162,11 @@ func calculateNewCap(oldCap int64, requiredSize int64) int64 {
 		}
 	}
 	newcap = roundupsize(newcap)
+	if newcap < requiredSize {
+		return 0, false
+	}
 	if newcap > int64(CapLimit) && requiredSize <= int64(CapLimit) {
 		newcap = int64(CapLimit)
 	}
-	return newcap
+	return newcap, true
 }
