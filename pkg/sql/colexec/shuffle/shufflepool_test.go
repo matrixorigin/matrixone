@@ -121,12 +121,12 @@ func TestShufflePoolGracefulCleanupWaitsForAllExpectedHolders(t *testing.T) {
 	require.Zero(t, peak)
 	require.False(t, ownsStats)
 	require.False(t, sp.cleaned)
-	require.Len(t, sp.batchPool, 1)
+	require.Equal(t, 1, sp.batchPoolLength())
 	peak, ownsStats = sp.release(proc.Mp(), false)
 	require.Positive(t, peak)
 	require.True(t, ownsStats)
 	require.True(t, sp.cleaned)
-	require.Empty(t, sp.batchPool)
+	require.Zero(t, sp.batchPoolLength())
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
@@ -308,7 +308,7 @@ func TestShufflePoolRecycleCacheUsesWorkerBound(t *testing.T) {
 		require.NoError(t, bat.Vecs[0].PreExtend(1, proc.Mp()))
 		sp.putBatchToPool(bat, proc.Mp())
 	}
-	require.Len(t, sp.batchPool, sp.readyLimit)
+	require.Equal(t, sp.readyLimit, sp.batchPoolLength())
 	sp.abort(proc.Mp())
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
@@ -387,7 +387,7 @@ func TestShufflePoolRetainsOwnershipWhenBatchSetWriteFails(t *testing.T) {
 				return err
 			},
 			check: func(t *testing.T, sp *ShufflePool) {
-				require.Len(t, sp.batchPool, 1)
+				require.Equal(t, 1, sp.batchPoolLength())
 				require.Zero(t, sp.batchSets[0].Length())
 			},
 		},
@@ -402,7 +402,7 @@ func TestShufflePoolRetainsOwnershipWhenBatchSetWriteFails(t *testing.T) {
 				return err
 			},
 			check: func(t *testing.T, sp *ShufflePool) {
-				require.Empty(t, sp.batchPool)
+				require.Zero(t, sp.batchPoolLength())
 				require.Equal(t, 1, sp.batchSets[0].Length())
 			},
 		},
