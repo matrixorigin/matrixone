@@ -268,6 +268,12 @@ func (back *backExec) ExecRestore(ctx context.Context, sql string, opAccount uin
 	if err != nil {
 		return err
 	}
+	ctx = workloadPolicyContextForRestore(
+		ctx,
+		accountID,
+		opAccount,
+		toAccount,
+	)
 	if err = back.backSes.bindWorkloadPolicy(ctx, accountID); err != nil {
 		return err
 	}
@@ -1016,6 +1022,7 @@ type backSession struct {
 	effectiveMatrixOneNativeMode    bool
 	hasEffectiveMatrixOneNativeMode bool
 	forcePessimisticRC              bool
+	isInternal                      bool
 	// workloadPolicyManaged distinguishes sessions whose creator established
 	// account-policy ownership from bootstrap/direct partially initialized
 	// sessions. A background session acquires its own execution-account
@@ -1060,6 +1067,7 @@ func (backSes *backSession) initFeSes(
 	backSes.timeZone = ses.GetTimeZone()
 	backSes.respr = defResper
 	backSes.service = ses.GetService()
+	backSes.isInternal = ses.GetIsInternal()
 	backSes.workloadPolicyManaged = workloadPolicyState(ses) != nil
 	if parent, ok := ses.(*backSession); ok {
 		backSes.parentBackSession = parent
@@ -1068,6 +1076,25 @@ func (backSes *backSession) initFeSes(
 		backSes.workloadPolicyManaged = parent.workloadPolicyManaged
 	}
 	return backSes
+}
+
+// workloadPolicyContextForRestore keeps historical source reads independent
+// from the source account's current control-plane state. Cluster restore can
+// legitimately read an account at MO_TS after that account has been dropped;
+// current catalog policy and account-name lookup must not gate that read.
+//
+// Target-account writes and same-account restores remain policy-managed.
+func workloadPolicyContextForRestore(
+	ctx context.Context,
+	contextAccountID uint32,
+	sourceAccountID uint32,
+	targetAccountID uint32,
+) context.Context {
+	if sourceAccountID != targetAccountID &&
+		contextAccountID == sourceAccountID {
+		return withWorkloadPolicyBypass(ctx)
+	}
+	return ctx
 }
 
 // bindWorkloadPolicy pins the background session to the account that will
@@ -1302,7 +1329,7 @@ func (backSes *backSession) SetData(i [][]interface{}) {
 }
 
 func (backSes *backSession) GetIsInternal() bool {
-	return false
+	return backSes.isInternal
 }
 
 func (backSes *backSession) SetPlan(plan *plan.Plan) {

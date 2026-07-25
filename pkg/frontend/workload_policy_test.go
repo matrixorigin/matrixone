@@ -844,6 +844,94 @@ func TestBackSessionBindsWorkloadPolicyToExecutionAccount(t *testing.T) {
 	manager.release(targetState)
 }
 
+func TestBackSessionHistoricalRestoreBypassesDeletedSourcePolicy(t *testing.T) {
+	const (
+		sourceAccountID = ^uint32(0) - 104
+		targetAccountID = ^uint32(0) - 105
+	)
+
+	sourceCtx := defines.AttachAccountId(
+		context.Background(),
+		sourceAccountID,
+	)
+	sourceCtx = workloadPolicyContextForRestore(
+		sourceCtx,
+		sourceAccountID,
+		sourceAccountID,
+		targetAccountID,
+	)
+	require.True(t, workloadPolicyBypassed(sourceCtx))
+
+	backSes := &backSession{
+		workloadPolicyManaged: true,
+	}
+	// No service runtime or current mo_account row exists for the historical
+	// source. Binding must therefore avoid current catalog reconciliation.
+	require.NoError(t, backSes.bindWorkloadPolicy(sourceCtx, sourceAccountID))
+	require.Equal(t, sourceAccountID, backSes.GetAccountId())
+	require.Nil(t, backSes.GetTenantInfo())
+	state := workloadPolicyState(backSes)
+	require.NotNil(t, state)
+	require.Equal(t, sourceAccountID, state.accountID)
+	require.Empty(t, queryWorkloadPolicySnapshotAt(sourceCtx, backSes).Generation)
+	backSes.releaseWorkloadPolicy()
+
+	targetCtx := workloadPolicyContextForRestore(
+		defines.AttachAccountId(context.Background(), targetAccountID),
+		targetAccountID,
+		sourceAccountID,
+		targetAccountID,
+	)
+	require.False(t, workloadPolicyBypassed(targetCtx))
+	sameAccountCtx := workloadPolicyContextForRestore(
+		defines.AttachAccountId(context.Background(), targetAccountID),
+		targetAccountID,
+		targetAccountID,
+		targetAccountID,
+	)
+	require.False(t, workloadPolicyBypassed(sameAccountCtx))
+}
+
+func TestBackSessionPreservesInternalWorkloadRouting(t *testing.T) {
+	const (
+		accountID = ^uint32(0) - 106
+		account   = "background-internal"
+		policy    = `{"version":1,"policies":{"internal":{"pool":"internal-pool","labels":{"role":"internal"}}}}`
+	)
+
+	manager := GWorkloadPolicyManager
+	state := manager.acquire(accountID)
+	state.rememberAccountName(account)
+	_, _, err := manager.Apply(accountID, policy, 1)
+	require.NoError(t, err)
+
+	creator := &Session{isInternal: true}
+	creator.workloadPolicy.Store(state)
+	backSes := (&backSession{}).initFeSes(creator, nil, "", nil)
+	require.True(t, backSes.GetIsInternal())
+
+	ctx := defines.AttachAccountId(context.Background(), accountID)
+	require.NoError(t, backSes.bindWorkloadPolicy(ctx, accountID))
+	class := schedule.WorkloadTP
+	if backSes.GetIsInternal() {
+		class = schedule.WorkloadInternal
+	}
+	resolved := schedule.ResolveWorkloadPolicy(
+		schedule.WorkloadDescriptor{
+			Class:  class,
+			Tenant: backSes.GetTenantInfo().GetTenant(),
+		},
+		queryWorkloadPolicySnapshot(backSes),
+	)
+	require.True(t, resolved.Applied)
+	require.Equal(t, "internal-pool", resolved.Pool.Identity)
+	require.Equal(t, account, resolved.Pool.Labels["account"])
+
+	backSes.Close()
+	creator.workloadPolicy.Store(nil)
+	manager.release(state)
+}
+
 func TestBackSessionTriggersStalePolicyReconciliation(t *testing.T) {
 	const (
 		service   = "background-workload-policy-reconciliation"
@@ -1013,6 +1101,17 @@ func TestLoadWorkloadPolicyCatalogWithExecRejectsInvalidResults(t *testing.T) {
 		{
 			name:    "table not installed",
 			execErr: moerr.NewNoSuchTableNoCtx("mo_catalog", "mo_query_workload_policy"),
+		},
+		{
+			name: "table not installed planner error",
+			execErr: moerr.NewParseErrorNoCtx(
+				`table "mo_query_workload_policy" does not exist`,
+			),
+		},
+		{
+			name:    "unrelated planner error",
+			execErr: moerr.NewParseErrorNoCtx(`table "other_table" does not exist`),
+			wantErr: "other_table",
 		},
 		{
 			name:    "catalog unavailable",
@@ -1274,6 +1373,17 @@ func TestLoadWorkloadPolicyCatalogByServiceFailureBoundaries(t *testing.T) {
 		{
 			name:    "table not installed",
 			execErr: moerr.NewNoSuchTableNoCtx("mo_catalog", "mo_query_workload_policy"),
+		},
+		{
+			name: "table not installed planner error",
+			execErr: moerr.NewParseErrorNoCtx(
+				`table "mo_query_workload_policy" does not exist`,
+			),
+		},
+		{
+			name:    "unrelated planner error",
+			execErr: moerr.NewParseErrorNoCtx(`table "other_table" does not exist`),
+			wantErr: "other_table",
 		},
 		{
 			name:    "database not installed",

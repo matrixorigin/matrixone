@@ -573,8 +573,7 @@ func loadWorkloadPolicyFromCatalogByService(
 			),
 	)
 	if err != nil {
-		if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) ||
-			moerr.IsMoErrCode(err, moerr.ErrBadDB) {
+		if isWorkloadPolicyCatalogNotInstalled(err) {
 			return "", 0, nil
 		}
 		return "", 0, err
@@ -725,8 +724,7 @@ func loadWorkloadPolicyFromCatalogWithExec(
 	if err := bh.Exec(ctx, sql); err != nil {
 		// The table is installed only after the cluster-version upgrade. Its
 		// absence therefore means the feature is not active yet.
-		if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) ||
-			moerr.IsMoErrCode(err, moerr.ErrBadDB) {
+		if isWorkloadPolicyCatalogNotInstalled(err) {
 			return "", 0, nil
 		}
 		return "", 0, err
@@ -762,6 +760,22 @@ func loadWorkloadPolicyFromCatalogWithExec(
 		)
 	}
 	return raw, revision, nil
+}
+
+func isWorkloadPolicyCatalogNotInstalled(err error) bool {
+	if err == nil {
+		return false
+	}
+	if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) ||
+		moerr.IsMoErrCode(err, moerr.ErrBadDB) {
+		return true
+	}
+	// A missing relation discovered by the planner is currently surfaced as a
+	// parse error instead of ErrNoSuchTable. Keep this match deliberately
+	// narrow: only the fixed catalog query and the exact missing-table
+	// condition are compatible with an in-progress tenant upgrade.
+	return moerr.IsMoErrCode(err, moerr.ErrParseError) &&
+		strings.Contains(err.Error(), `table "`+catalog.MO_QUERY_WORKLOAD_POLICY+`" does not exist`)
 }
 
 func workloadPolicyState(ses FeSession) *accountWorkloadPolicy {
