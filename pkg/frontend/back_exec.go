@@ -395,6 +395,7 @@ func doComQueryInBack(
 		getPu(backSes.GetService()).GetTaskService())
 	proc.Base.Id = backSes.getNextProcessId()
 	proc.Base.Lim.Size = pu.SV.ProcessLimitationSize
+	proc.Base.Lim.SpillSize = pu.SV.ProcessLimitationSpillSize
 	proc.Base.Lim.BatchRows = pu.SV.ProcessLimitationBatchRows
 	proc.Base.Lim.MaxMsgSize = pu.SV.MaxMessageSize
 	proc.Base.Lim.PartitionRows = pu.SV.ProcessLimitationPartitionRows

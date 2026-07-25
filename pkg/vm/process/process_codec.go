@@ -261,6 +261,7 @@ func convertToPipelineLimitation(lim Limitation) pipeline.ProcessLimitation {
 		BatchSize:     lim.BatchSize,
 		PartitionRows: lim.PartitionRows,
 		ReaderSize:    lim.ReaderSize,
+		SpillSize:     lim.SpillSize,
 	}
 }
 
@@ -307,6 +308,7 @@ func ConvertToProcessLimitation(
 		BatchSize:     lim.BatchSize,
 		PartitionRows: lim.PartitionRows,
 		ReaderSize:    lim.ReaderSize,
+		SpillSize:     lim.SpillSize,
 	}
 }
 

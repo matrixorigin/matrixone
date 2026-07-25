@@ -39,7 +39,28 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+func TestResolveRemoteCompileMPoolCap(t *testing.T) {
+	const gib = uint64(1 << 30)
+
+	cap, err := resolveRemoteCompileMPoolCapFrom(process.Limitation{Size: int64(2 * gib)}, 0, 10*gib, 0, 0)
+	require.NoError(t, err)
+	require.Equal(t, int64(2*gib), cap)
+
+	cap, err = resolveRemoteCompileMPoolCapFrom(process.Limitation{}, 0, 10*gib, 0, 0)
+	require.NoError(t, err)
+	require.Equal(t, int64(9*gib), cap)
+
+	cap, err = resolveRemoteCompileMPoolCapFrom(process.Limitation{}, 0, 4*gib, 0, 0)
+	require.NoError(t, err)
+	require.Equal(t, int64(4*gib-(4*gib)/10), cap)
+
+	cap, err = resolveRemoteCompileMPoolCapFrom(process.Limitation{}, 0, 10*gib, 0, 2*gib)
+	require.NoError(t, err)
+	require.Equal(t, int64(8*gib), cap)
+}
 
 // TestWorkspaceCreationInRemoteRun tests that workspace is created early in remote run scenario.
 // This is a critical test for the fix that prevents nil pointer panics.
