@@ -620,7 +620,7 @@ func runJSONToStrWidth(t *testing.T, mp *mpool.MPool, jsonText string, toType ty
 
 // TestJSONToStrWidthEnforcement mirrors TestStrToStrWidthEnforcement for the
 // JSON->CHAR/VARCHAR path: the trailing-space exemption, sql_mode gating, and
-// the DML(1406)/DDL(1067) split must apply to JSON sources too.
+// the DML 1406 and stable cast_strict contracts must apply to JSON sources too.
 func TestJSONToStrWidthEnforcement(t *testing.T) {
 	mp := mpool.MustNewZero()
 	vc3 := types.New(types.T_varchar, 3, 0)
@@ -637,9 +637,9 @@ func TestJSONToStrWidthEnforcement(t *testing.T) {
 		{"fits", `"abc"`, true, true, "abc", false, 0},
 		{"trailing_space_exempt_strict_dml", `"abc   "`, true, true, "abc", false, 0},
 		{"real_overlen_dml_reject", `"abcd"`, true, true, "", true, moerr.ErrCastWidthExceeded},
-		{"real_overlen_ddl_reject", `"abcd"`, true, false, "", true, moerr.ErrInvalidDefault},
+		{"real_overlen_cast_strict_reject", `"abcd"`, true, false, "", true, moerr.ErrInternal},
 		{"nonstrict_truncate", `"abcd"`, false, true, "abc", false, 0},
-		{"trailing_space_not_exempt_ddl", `"abc   "`, true, false, "", true, moerr.ErrInvalidDefault},
+		{"trailing_space_not_exempt_cast_strict", `"abc   "`, true, false, "", true, moerr.ErrInternal},
 		{"multibyte_trailing_space_exempt", `"你好世   "`, true, true, "你好世", false, 0},
 		{"multibyte_fits_strict", `"你好"`, true, true, "你好", false, 0},
 		{"multibyte_fits_nonstrict", `"你好"`, false, true, "你好", false, 0},

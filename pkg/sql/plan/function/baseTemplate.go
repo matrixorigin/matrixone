@@ -3069,6 +3069,69 @@ func opUnaryFixedToStr[
 	return nil
 }
 
+func opUnaryFixedToStrWithNullOnError[
+	T types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
+	resultFn func(v T) (string, error), selectList *FunctionSelectList) error {
+	result.UseOptFunctionParamFrame(1)
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	p1 := vector.OptGetParamFromWrapper[T](rs, 0, parameters[0])
+
+	var constValue []byte
+	constNull := false
+	if parameters[0].IsConst() {
+		v, null := p1.GetValue(0)
+		if null {
+			constNull = true
+		} else {
+			r, err := resultFn(v)
+			if err != nil {
+				constNull = true
+			} else {
+				constValue = functionUtil.QuickStrToBytes(r)
+			}
+		}
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && (selectList.IgnoreAllRow() || selectList.Contains(i)) {
+			if err := rs.AppendMustNullForBytesResult(); err != nil {
+				return err
+			}
+			continue
+		}
+
+		if parameters[0].IsConst() {
+			if constNull {
+				if err := rs.AppendMustNullForBytesResult(); err != nil {
+					return err
+				}
+			} else if err := rs.AppendMustBytesValue(constValue); err != nil {
+				return err
+			}
+			continue
+		}
+
+		v, null := p1.GetValue(i)
+		if null {
+			if err := rs.AppendMustNullForBytesResult(); err != nil {
+				return err
+			}
+			continue
+		}
+		r, err := resultFn(v)
+		if err != nil {
+			if err = rs.AppendMustNullForBytesResult(); err != nil {
+				return err
+			}
+			continue
+		}
+		if err = rs.AppendMustBytesValue(functionUtil.QuickStrToBytes(r)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func opUnaryFixedToStrWithErrorCheck[
 	T types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
 	resultFn func(v T) (string, error), selectList *FunctionSelectList) error {

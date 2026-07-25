@@ -381,7 +381,7 @@ func buildDefaultExpr(col *tree.ColumnTableDef, typ plan.Type, proc *process.Pro
 	// try to calculate default value, return err if fails
 	newExpr, err := ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(defaultExpr), proc, false, true)
 	if err != nil {
-		return nil, err
+		return nil, mapDDLAssignmentCastError(proc.Ctx, typ, colNameOrigin, err)
 	}
 
 	fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithSingleQuoteString())
@@ -426,7 +426,7 @@ func buildOnUpdate(col *tree.ColumnTableDef, typ plan.Type, proc *process.Proces
 	defer executor.Free()
 	_, err = executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
 	if err != nil {
-		return nil, err
+		return nil, mapDDLAssignmentCastError(proc.Ctx, typ, col.Name.ColNameOrigin(), err)
 	}
 
 	ret := &plan.OnUpdate{
@@ -505,15 +505,10 @@ func buildGeneratedExpr(col *tree.ColumnTableDef, typ plan.Type, existingCols []
 		return nil, err
 	}
 
-	// A stored generated CHAR/VARCHAR value is a real column write that is
-	// evaluated at DML time, so it follows DML assignment semantics: use the
-	// sql_mode-gated cast_assign instead of cast_strict. Non-strict mode
-	// truncates, strict mode rejects with 1406, matching how ordinary columns
-	// are written (forceAssignmentCastExpr). INSERT IGNORE truncation is applied
-	// where the generated expression is reused (see bind_insert). Non-CHAR/VARCHAR
-	// targets keep the generic cast, unchanged.
-	funcName := assignmentCastFunctionName(typ, false, proc)
-	genExpr, err := makePlan2CastExprWithName(proc.Ctx, planExpr, typ, funcName)
+	// Persist only stable function IDs in generated-column catalog metadata.
+	// DML plan construction rewrites this wrapper to cast_assign/cast_ignore
+	// when the active protocol supports those functions.
+	genExpr, err := makePlan2AssignmentCastExpr(proc.Ctx, planExpr, typ)
 	if err != nil {
 		return nil, err
 	}
@@ -525,6 +520,14 @@ func buildGeneratedExpr(col *tree.ColumnTableDef, typ plan.Type, existingCols []
 		OriginString: fmtCtx.String(),
 		IsStored:     genAttr.Stored,
 	}, nil
+}
+
+func mapDDLAssignmentCastError(ctx context.Context, typ plan.Type, colName string, err error) error {
+	if (typ.Id == int32(types.T_char) || typ.Id == int32(types.T_varchar)) &&
+		moerr.IsMoErrCode(err, moerr.ErrInternal) {
+		return moerr.NewErrInvalidDefault(ctx, colName)
+	}
+	return err
 }
 
 // checkGeneratedExprReferences rejects variable references and auto-increment

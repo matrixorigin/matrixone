@@ -1012,6 +1012,15 @@ var ForceCastExpr = forceCastExpr
 
 var ForceAssignmentCastExpr = forceAssignmentCastExpr
 
+func useAssignmentStrictCast(targetType Type) bool {
+	switch targetType.Id {
+	case int32(types.T_char), int32(types.T_varchar), int32(types.T_date), int32(types.T_datetime), int32(types.T_timestamp):
+		return true
+	default:
+		return false
+	}
+}
+
 func forceCastExpr2(ctx context.Context, expr *Expr, t2 types.Type, targetType *plan.Expr) (*Expr, error) {
 	return forceCastExpr2WithIgnore(ctx, expr, t2, targetType, false)
 }
@@ -1044,14 +1053,10 @@ func forceCastExpr2WithProcess(
 	}
 
 	targetType.Typ.NotNullable = expr.Typ.NotNullable
-	// Assigning a value to a real CHAR/VARCHAR(N) column routes through
-	// cast_assign, which honors sql_mode at runtime (strict rejects over-length,
-	// non-strict truncates). INSERT IGNORE and generic casts stay lenient
-	// (MySQL-compatible truncation).
-	funcName := "cast"
-	if proc != nil || !isIgnore {
-		funcName = assignmentCastFunctionName(targetType.Typ, isIgnore, proc)
-	}
+	// CHAR/VARCHAR assignments use the protocol-gated runtime assignment cast.
+	// Temporal assignments retain main's cast_strict behavior, while other
+	// conversions continue to use the generic cast.
+	funcName := assignmentCastFunctionName(targetType.Typ, isIgnore, proc)
 	fGet, err := function.GetFunctionByName(ctx, funcName, []types.Type{t1, t2})
 	if err != nil {
 		return nil, err
@@ -1093,6 +1098,9 @@ func forceAssignmentCastExpr(ctx context.Context, expr *Expr, targetType Type) (
 
 func assignmentCastFunctionName(targetType Type, isIgnore bool, proc *process.Process) string {
 	if targetType.Id != int32(types.T_char) && targetType.Id != int32(types.T_varchar) {
+		if useAssignmentStrictCast(targetType) {
+			return "cast_strict"
+		}
 		return "cast"
 	}
 	if proc != nil {

@@ -649,14 +649,12 @@ func makePlan2CastExpr(ctx context.Context, expr *Expr, targetType Type) (*Expr,
 
 // makePlan2AssignmentCastExpr builds a cast used when validating/storing a value
 // against a real column type at the DDL layer (e.g. column DEFAULT / ON UPDATE).
-// For CHAR/VARCHAR targets it uses cast_strict so an over-length value is always
-// rejected regardless of sql_mode — the DDL-layer default width check is not
-// relaxed by sql_mode in MySQL. (DML assignment paths use cast_assign, which is
-// sql_mode-gated; see forceAssignmentCastExpr.) Explicit SQL CAST keeps the
-// lenient generic cast (MySQL-compatible truncation).
+// It uses cast_strict for CHAR/VARCHAR width checks and temporal zero-date
+// preservation. DDL-specific error mapping is applied by the DDL validation
+// layer rather than changing cast_strict's execution contract.
 func makePlan2AssignmentCastExpr(ctx context.Context, expr *Expr, targetType Type) (*Expr, error) {
 	funcName := "cast"
-	if targetType.Id == int32(types.T_char) || targetType.Id == int32(types.T_varchar) {
+	if useAssignmentStrictCast(targetType) {
 		funcName = "cast_strict"
 	}
 	return makePlan2CastExprWithName(ctx, expr, targetType, funcName)

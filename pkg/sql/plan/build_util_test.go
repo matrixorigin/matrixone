@@ -18,6 +18,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -488,6 +489,7 @@ func TestBuildDefaultAndOnUpdateRejectOversizedCharVarchar(t *testing.T) {
 		)
 		_, err := buildDefaultExpr(defaultCol, typ, proc)
 		require.Error(t, err, "oversized DEFAULT for %v(3) must be rejected", oid)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidDefault))
 
 		onUpdateCol := tree.NewColumnTableDef(
 			tree.NewUnresolvedColName("a"),
@@ -498,6 +500,7 @@ func TestBuildDefaultAndOnUpdateRejectOversizedCharVarchar(t *testing.T) {
 		)
 		_, err = buildOnUpdate(onUpdateCol, typ, proc)
 		require.Error(t, err, "oversized ON UPDATE for %v(3) must be rejected", oid)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidDefault))
 	}
 }
 
@@ -517,13 +520,32 @@ func TestBuildDefaultExprFitsVarchar(t *testing.T) {
 	require.Equal(t, "abc", defaultValue.Expr.GetLit().GetSval())
 }
 
-// makePlan2AssignmentCastExpr routes CHAR/VARCHAR targets through cast_strict,
+func TestMapDDLAssignmentCastErrorOnlyMapsStringWidthFailures(t *testing.T) {
+	ctx := t.Context()
+	invalidInput := moerr.NewInvalidInput(ctx, "bad default")
+	require.Same(t, invalidInput, mapDDLAssignmentCastError(
+		ctx,
+		plan.Type{Id: int32(types.T_varchar), Width: 3},
+		"a",
+		invalidInput,
+	))
+
+	internal := moerr.NewInternalError(ctx, "cast failed")
+	require.Same(t, internal, mapDDLAssignmentCastError(
+		ctx,
+		plan.Type{Id: int32(types.T_int64)},
+		"a",
+		internal,
+	))
+}
+
+// makePlan2AssignmentCastExpr routes assignment-only targets through cast_strict,
 // while explicit casts via makePlan2CastExpr keep the lenient generic cast.
-func TestMakePlan2AssignmentCastExprUsesStrictForCharVarchar(t *testing.T) {
+func TestMakePlan2AssignmentCastExprUsesStrictForAssignmentTargets(t *testing.T) {
 	ctx := context.Background()
 	srcText := &Expr{Typ: plan.Type{Id: int32(types.T_text)}}
 
-	for _, oid := range []types.T{types.T_varchar, types.T_char} {
+	for _, oid := range []types.T{types.T_varchar, types.T_char, types.T_date, types.T_datetime, types.T_timestamp} {
 		target := plan.Type{Id: int32(oid), Width: 3}
 
 		strictExpr, err := makePlan2AssignmentCastExpr(ctx, DeepCopyExpr(srcText), target)
@@ -541,11 +563,45 @@ func TestMakePlan2AssignmentCastExprUsesStrictForCharVarchar(t *testing.T) {
 	require.Equal(t, "cast", intExpr.GetF().GetFunc().GetObjName())
 }
 
-// A stored generated CHAR/VARCHAR value is a real column write evaluated at DML
-// time, so buildGeneratedExpr wraps it with the sql_mode-gated cast_assign
-// (non-strict truncates, strict rejects with 1406) — the same as ordinary
-// column writes, not the DDL-fixed cast_strict.
-func TestBuildGeneratedExprUsesAssignForCharVarchar(t *testing.T) {
+func TestForceAssignmentCastExprUsesAssignmentSemantics(t *testing.T) {
+	ctx := context.Background()
+	srcText := &Expr{Typ: plan.Type{Id: int32(types.T_text)}}
+
+	for _, oid := range []types.T{types.T_varchar, types.T_char, types.T_date, types.T_datetime, types.T_timestamp} {
+		target := plan.Type{Id: int32(oid), Width: 3}
+		strictExpr, err := forceAssignmentCastExpr(ctx, DeepCopyExpr(srcText), target)
+		require.NoError(t, err)
+		want := "cast_strict"
+		if oid == types.T_varchar || oid == types.T_char {
+			want = "cast_assign"
+		}
+		require.Equal(t, want, strictExpr.GetF().GetFunc().GetObjName())
+
+		genericExpr, err := forceCastExpr(ctx, DeepCopyExpr(srcText), target)
+		require.NoError(t, err)
+		require.Equal(t, "cast", genericExpr.GetF().GetFunc().GetObjName())
+	}
+}
+
+func TestAssignmentCastPreservesNestedExplicitTemporalCast(t *testing.T) {
+	ctx := context.Background()
+	target := plan.Type{Id: int32(types.T_date)}
+	srcText := &Expr{Typ: plan.Type{Id: int32(types.T_text)}}
+
+	explicit, err := forceCastExpr(ctx, srcText, target)
+	require.NoError(t, err)
+	require.Equal(t, "cast", explicit.GetF().GetFunc().GetObjName())
+
+	assignment, err := forceAssignmentCastExpr(ctx, explicit, target)
+	require.NoError(t, err)
+	require.Same(t, explicit, assignment)
+	require.Equal(t, "cast", assignment.GetF().GetFunc().GetObjName())
+}
+
+// A generated CHAR/VARCHAR column is materialized as a real column write, so
+// buildGeneratedExpr must wrap its expression with the strict assignment cast
+// (cast_strict): an over-length value is rejected, not silently truncated.
+func TestBuildGeneratedExprUsesStrictForCharVarchar(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	moruntime.ServiceRuntime(proc.GetService()).SetGlobalVariables(
 		moruntime.MOProtocolVersion,
@@ -569,7 +625,9 @@ func TestBuildGeneratedExprUsesAssignForCharVarchar(t *testing.T) {
 	gen, err := buildGeneratedExpr(genCol, plan.Type{Id: int32(types.T_varchar), Width: 1}, existingCols, proc)
 	require.NoError(t, err)
 	require.NotNil(t, gen)
-	require.Equal(t, "cast_assign", gen.Expr.GetF().GetFunc().GetObjName())
+	require.Equal(t, "cast_strict", gen.Expr.GetF().GetFunc().GetObjName())
+	fid, _ := function.DecodeOverloadID(gen.Expr.GetF().GetFunc().GetObj())
+	require.Equal(t, int32(function.CAST_STRICT), fid)
 	require.Equal(t, int32(types.T_varchar), gen.Expr.Typ.Id) // type still resolves to the column type
 
 	// A non-CHAR/VARCHAR generated target keeps the generic cast.

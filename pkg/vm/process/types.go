@@ -108,19 +108,25 @@ type Limitation struct {
 
 // SessionInfo session information
 type SessionInfo struct {
-	Account              string
-	User                 string
-	Host                 string
-	Role                 string
-	ConnectionID         uint64
-	LastInsertID         uint64
-	Database             string
-	Version              string
-	TimeZone             *time.Location
-	LockWaitTimeout      int64
-	LockWaitTimeoutSet   bool // distinguishes an explicit zero from an unset value
-	MatrixOneNativeMode  bool
-	SqlMode              string // captured from session at encode time; used as fallback when resolveVariableFunc is nil
+	Account             string
+	User                string
+	Host                string
+	Role                string
+	ConnectionID        uint64
+	LastInsertID        uint64
+	Database            string
+	Version             string
+	TimeZone            *time.Location
+	LockWaitTimeout     int64
+	LockWaitTimeoutSet  bool // distinguishes an explicit zero from an unset value
+	MatrixOneNativeMode bool
+	// ExplicitZeroTemporalCastReturnsNull is resolved on the initiating CN and
+	// carried in the remote process snapshot because remote CNs have no session
+	// variable resolver.
+	ExplicitZeroTemporalCastReturnsNull bool
+	// SqlMode is captured on the initiating CN and used when a remote process has
+	// no session variable resolver.
+	SqlMode              string
 	StorageEngine        engine.Engine
 	QueryId              []string
 	ResultColTypes       []types.Type
@@ -170,10 +176,11 @@ type StmtProfile struct {
 	//sqlOfStmt is the text part of one statement in the sql
 	sqlOfStmt string
 
-	//for div by zero, avoid contaminating session main stmt profiles like PREPARE,EXECUTE
-	divByZeroStmtType  string
-	divByZeroQueryType string
-	divByZeroIgnore    bool //ignore for insert
+	// statement runtime metadata avoids contaminating the session's main
+	// statement profile when PREPARE / EXECUTE runs an inner INSERT / UPDATE.
+	statementRuntimeStmtType  string
+	statementRuntimeQueryType string
+	statementRuntimeIgnore    bool
 }
 
 func NewStmtProfile(txnId, stmtId uuid.UUID) *StmtProfile {
@@ -192,6 +199,7 @@ func (sp *StmtProfile) Clear() {
 	sp.stmtType = ""
 	sp.queryType = ""
 	sp.sqlOfStmt = ""
+	sp.clearStatementRuntimeProfileLocked()
 }
 
 func (sp *StmtProfile) SetSqlOfStmt(sot string) {
@@ -252,32 +260,48 @@ func (sp *StmtProfile) GetStmtType() string {
 	return sp.stmtType
 }
 
-func (sp *StmtProfile) GetDivByZeroIgnore() bool {
+func (sp *StmtProfile) GetStatementIgnore() bool {
 	sp.mu.Lock()
 	defer sp.mu.Unlock()
-	return sp.divByZeroIgnore
+	return sp.statementRuntimeIgnore
+}
+
+func (sp *StmtProfile) SetStatementRuntimeProfile(stmtType, queryType string, ignore bool) {
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+	sp.statementRuntimeStmtType = stmtType
+	sp.statementRuntimeQueryType = queryType
+	sp.statementRuntimeIgnore = ignore
+}
+
+func (sp *StmtProfile) GetStatementRuntimeProfile() (stmtType, queryType string, ignore bool) {
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+	return sp.statementRuntimeStmtType, sp.statementRuntimeQueryType, sp.statementRuntimeIgnore
+}
+
+func (sp *StmtProfile) clearStatementRuntimeProfileLocked() {
+	sp.statementRuntimeStmtType = ""
+	sp.statementRuntimeQueryType = ""
+	sp.statementRuntimeIgnore = false
+}
+
+func (sp *StmtProfile) clearStatementRuntimeProfile() {
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+	sp.clearStatementRuntimeProfileLocked()
+}
+
+func (sp *StmtProfile) GetDivByZeroIgnore() bool {
+	return sp.GetStatementIgnore()
 }
 
 func (sp *StmtProfile) SetDivByZeroRuntimeProfile(stmtType, queryType string, ignore bool) {
-	sp.mu.Lock()
-	defer sp.mu.Unlock()
-	sp.divByZeroStmtType = stmtType
-	sp.divByZeroQueryType = queryType
-	sp.divByZeroIgnore = ignore
+	sp.SetStatementRuntimeProfile(stmtType, queryType, ignore)
 }
 
 func (sp *StmtProfile) GetDivByZeroRuntimeProfile() (stmtType, queryType string, ignore bool) {
-	sp.mu.Lock()
-	defer sp.mu.Unlock()
-	return sp.divByZeroStmtType, sp.divByZeroQueryType, sp.divByZeroIgnore
-}
-
-func (sp *StmtProfile) clearDivByZeroRuntimeProfile() {
-	sp.mu.Lock()
-	defer sp.mu.Unlock()
-	sp.divByZeroStmtType = ""
-	sp.divByZeroQueryType = ""
-	sp.divByZeroIgnore = false
+	return sp.GetStatementRuntimeProfile()
 }
 
 func (sp *StmtProfile) SetTxnId(id []byte) {
@@ -441,7 +465,9 @@ func (proc *Process) SetStmtProfile(sp *StmtProfile) {
 	// Reset division by zero cache for new statement
 	// Each statement must recompute based on its own type and sql_mode
 	atomic.StoreInt32(&proc.Base.DivByZeroErrorMode, -1)
-	sp.clearDivByZeroRuntimeProfile()
+	if sp != nil {
+		sp.clearStatementRuntimeProfile()
+	}
 }
 
 func (proc *Process) GetStmtProfile() *StmtProfile {
