@@ -939,6 +939,65 @@ func TestSpillEmergencyBudgetDoesNotDoubleScaleShuffledConstVector(t *testing.T)
 	require.GreaterOrEqual(t, need, fullNeed)
 }
 
+func TestSpillEmergencyBudgetDoesNotScaleRetainedVectorCapacity(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	const sourceRows = 32 * 1024
+	bat := batch.NewWithSize(2)
+	values := make([]int32, sourceRows)
+	strings := make([]string, sourceRows)
+	for i := range values {
+		values[i] = int32(i)
+		strings[i] = "test create big fulltext index"
+	}
+	bat.Vecs[0] = testutil.MakeInt32Vector(values, nil, proc.Mp())
+	bat.Vecs[1] = testutil.MakeVarcharVector(strings, nil, proc.Mp())
+	bat.SetRowCount(sourceRows)
+	defer bat.Clean(proc.Mp())
+
+	// Reused shuffle and table-function batches keep their allocation while
+	// publishing a tiny final batch. Only the first row is live, but Allocated
+	// still describes the original 32K-row capacity.
+	bat.Vecs[0].SetLength(1)
+	bat.Vecs[1].SetLength(1)
+	bat.SetRowCount(1)
+	require.Greater(t, bat.Allocated(), 1<<20)
+
+	need, err := spillEmergencyBudgetBytes(bat)
+	require.NoError(t, err)
+	require.Less(t, need, uint64(16<<20),
+		"retained source capacity must be charged once, not extrapolated per live row")
+
+	budget := process.MustNewHashBuildBudget(10<<30, 10<<30)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	defer generation.Close()
+	ctr := &container{}
+	ctr.hashmapBuilder.setBudget(generation)
+	defer ctr.releaseSpillScratchReservation()
+	analyzer := process.NewAnalyzer(0, false, false, "test")
+	require.NoError(t, ctr.ensureSpillScratchReservation(bat, analyzer))
+	require.Equal(t, need, ctr.spillScratchBase)
+	require.Zero(t, generation.Snapshot().RejectCount)
+
+	full := batch.NewWithSize(2)
+	fullValues := make([]int32, colexec.DefaultBatchSize)
+	fullStrings := make([]string, colexec.DefaultBatchSize)
+	for i := range fullValues {
+		fullValues[i] = int32(i)
+		fullStrings[i] = strings[0]
+	}
+	full.Vecs[0] = testutil.MakeInt32Vector(fullValues, nil, proc.Mp())
+	full.Vecs[1] = testutil.MakeVarcharVector(fullStrings, nil, proc.Mp())
+	full.SetRowCount(colexec.DefaultBatchSize)
+	defer full.Clean(proc.Mp())
+
+	fullNeed, err := spillBudgetBytes(full)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, need, fullNeed)
+}
+
 func TestEnsureSpillFile(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()

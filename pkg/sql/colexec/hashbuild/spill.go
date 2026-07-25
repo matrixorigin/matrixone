@@ -63,8 +63,8 @@ func spillBudgetBytes(bat *batch.Batch) (uint64, error) {
 // its original Length when Batch.Shuffle reduces the batch RowCount. Using
 // Size and then scaling by RowCount therefore counts the original cardinality
 // twice. Allocated covers the physical vector/area capacity; const vectors add
-// one non-const descriptor per output row because UnionInt32 materializes those
-// descriptors in the selected spill batch.
+// one non-const descriptor and any out-of-line payload per output row because
+// UnionInt32 materializes both in the selected spill batch.
 func spillSourceBytes(bat *batch.Batch) (uint64, error) {
 	if bat == nil || bat.RowCount() <= 0 {
 		return 0, nil
@@ -91,6 +91,20 @@ func spillSourceBytes(bat *batch.Batch) (uint64, error) {
 			return 0, process.ErrHashBuildBudgetInvalid
 		}
 		source += materialized
+		if vec.GetType().IsVarlen() && !vec.IsConstNull() {
+			value := vec.GetBytesAt(0)
+			if len(value) > types.VarlenaInlineSize {
+				payloadWidth := uint64(len(value))
+				if rows > math.MaxUint64/payloadWidth {
+					return 0, process.ErrHashBuildBudgetInvalid
+				}
+				materializedPayload := rows * payloadWidth
+				if source > math.MaxUint64-materializedPayload {
+					return 0, process.ErrHashBuildBudgetInvalid
+				}
+				source += materializedPayload
+			}
+		}
 	}
 	return source, nil
 }
@@ -142,6 +156,80 @@ func spillBudgetFor(rows, source uint64) (uint64, error) {
 	return total, nil
 }
 
+// spillProjectedSourceBytes estimates a compact targetRows-row materialization
+// from the live values in bat. It deliberately does not use vector capacity:
+// producers commonly reuse a full-size allocation for a tiny tail batch, and
+// treating that retained capacity as a per-row cost amplifies it by
+// DefaultBatchSize / RowCount.
+func spillProjectedSourceBytes(bat *batch.Batch, targetRows uint64) (uint64, error) {
+	if bat == nil || bat.RowCount() <= 0 || targetRows == 0 {
+		return 0, nil
+	}
+	rows := uint64(bat.RowCount())
+	var source uint64
+	for _, vec := range bat.Vecs {
+		if vec == nil {
+			return 0, process.ErrHashBuildBudgetInvalid
+		}
+		typeSize := vec.GetType().TypeSize()
+		if typeSize < 0 {
+			return 0, process.ErrHashBuildBudgetInvalid
+		}
+		width := uint64(typeSize)
+		if width > 0 && targetRows > math.MaxUint64/width {
+			return 0, process.ErrHashBuildBudgetInvalid
+		}
+		materialized := targetRows * width
+		if source > math.MaxUint64-materialized {
+			return 0, process.ErrHashBuildBudgetInvalid
+		}
+		source += materialized
+
+		if !vec.GetType().IsVarlen() {
+			continue
+		}
+		if vec.IsConstNull() {
+			continue
+		}
+		values, _ := vector.MustVarlenaRawData(vec)
+		valueRows := rows
+		if vec.IsConst() {
+			valueRows = 1
+		}
+		if valueRows == 0 || valueRows > uint64(len(values)) {
+			return 0, process.ErrHashBuildBudgetInvalid
+		}
+		var externalPayload uint64
+		for i := uint64(0); i < valueRows; i++ {
+			if values[i].IsSmall() {
+				continue
+			}
+			_, length := values[i].OffsetLen()
+			if externalPayload > math.MaxUint64-uint64(length) {
+				return 0, process.ErrHashBuildBudgetInvalid
+			}
+			externalPayload += uint64(length)
+		}
+		if externalPayload > math.MaxUint64/targetRows {
+			return 0, process.ErrHashBuildBudgetInvalid
+		}
+		projectedPayload := externalPayload * targetRows
+		if projectedPayload > math.MaxUint64-(valueRows-1) {
+			return 0, process.ErrHashBuildBudgetInvalid
+		}
+		projectedPayload = (projectedPayload + valueRows - 1) / valueRows
+		if source > math.MaxUint64-projectedPayload {
+			return 0, process.ErrHashBuildBudgetInvalid
+		}
+		source += projectedPayload
+	}
+	// spillBudgetFor separately covers the selected materialization and marshal
+	// growth. Return only the compact source here; multiplying it again would
+	// reserve those copies twice and starve expression scratch under small
+	// query budgets.
+	return source, nil
+}
+
 // spillEmergencyBudgetBytes covers both the upstream ingress batch and the
 // largest physical batch CopyIntoBatches can form by coalescing small inputs.
 func spillEmergencyBudgetBytes(bat *batch.Batch) (uint64, error) {
@@ -150,24 +238,20 @@ func spillEmergencyBudgetBytes(bat *batch.Batch) (uint64, error) {
 		return need, err
 	}
 	rows := uint64(bat.RowCount())
-	source, err := spillSourceBytes(bat)
+	source, err := spillProjectedSourceBytes(bat, uint64(colexec.DefaultBatchSize))
 	if err != nil {
 		return 0, err
 	}
-	if source > math.MaxUint64/uint64(colexec.DefaultBatchSize) {
-		return 0, process.ErrHashBuildBudgetInvalid
-	}
-	scaled := (source*uint64(colexec.DefaultBatchSize) + rows - 1) / rows
 	metadata, ok := retainedMetadataAllowance(bat)
 	if !ok || metadata > math.MaxUint64/uint64(colexec.DefaultBatchSize) {
 		return 0, process.ErrHashBuildBudgetInvalid
 	}
 	scaledMetadata := (metadata*uint64(colexec.DefaultBatchSize) + rows - 1) / rows
-	if scaled > math.MaxUint64-scaledMetadata {
+	if source > math.MaxUint64-scaledMetadata {
 		return 0, process.ErrHashBuildBudgetInvalid
 	}
-	scaled += scaledMetadata
-	physicalNeed, err := spillBudgetFor(uint64(colexec.DefaultBatchSize), scaled)
+	source += scaledMetadata
+	physicalNeed, err := spillBudgetFor(uint64(colexec.DefaultBatchSize), source)
 	if err != nil {
 		return 0, err
 	}
