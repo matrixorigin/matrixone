@@ -89,3 +89,32 @@ func TestDecodeTermEntryCorrupt(t *testing.T) {
 	_, ok = (&Segment{ranking: []byte{1, 1, 1, 1}}).decodeTermEntry(0)
 	require.False(t, ok)
 }
+
+// TestFrameSegmentRoundTrip covers the insert-frame codec: FrameSegment → UnframeSegment recovers
+// the same doc count, UnframeTail dispatches the insert frame to the segment (not deletes) arm, and
+// a corrupt frame is rejected.
+func TestFrameSegmentRoundTrip(t *testing.T) {
+	b := NewBuilder("f", int32(types.T_int64))
+	feed(t, b, int64(0), "quick", "brown")
+	feed(t, b, int64(1), "quick", "fox")
+	seg, err := b.Finish()
+	require.NoError(t, err)
+
+	framed, err := FrameSegment(seg)
+	require.NoError(t, err)
+	require.NotEmpty(t, framed)
+
+	seg2, err := UnframeSegment("f", framed)
+	require.NoError(t, err)
+	require.Equal(t, seg.numDocs(), seg2.numDocs())
+
+	// UnframeTail on the same insert frame → segment set, no deletes.
+	s3, dels, err := UnframeTail("f", framed)
+	require.NoError(t, err)
+	require.NotNil(t, s3)
+	require.Nil(t, dels)
+
+	// corrupt frame → error (UnframeCdcChunk rejects it).
+	_, err = UnframeSegment("f", []byte{0x00, 0x01, 0x02})
+	require.Error(t, err)
+}
