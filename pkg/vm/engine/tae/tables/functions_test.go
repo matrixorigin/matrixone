@@ -15,12 +15,173 @@
 package tables
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
+	"github.com/stretchr/testify/require"
 )
+
+func TestCommitTSLoaderRetriesAfterError(t *testing.T) {
+	loadErr := errors.New("load commit timestamps")
+	loads := 0
+	loader := &commitTSLoader{
+		load: func() (containers.Vector, error) {
+			loads++
+			return nil, loadErr
+		},
+	}
+
+	for range 2 {
+		vec, err := loader.get()
+		require.ErrorIs(t, err, loadErr)
+		require.Nil(t, vec)
+	}
+	require.Equal(t, 2, loads)
+	loader.close()
+}
+
+func TestCommitTSLoaderLoadsOncePerBlock(t *testing.T) {
+	data := containers.MakeVector(types.T_int64.ToType(), common.DefaultAllocator)
+	defer data.Close()
+	data.Append(int64(1), false)
+	data.Append(int64(2), false)
+
+	keys := containers.MakeVector(types.T_int64.ToType(), common.DefaultAllocator)
+	defer keys.Close()
+	keys.Append(int64(1), false)
+	keys.Append(int64(2), false)
+
+	rowIDs := containers.MakeVector(types.T_Rowid.ToType(), common.DefaultAllocator)
+	defer rowIDs.Close()
+	rowIDs.Append(nil, true)
+	rowIDs.Append(nil, true)
+
+	commitTS := containers.MakeVector(types.T_TS.ToType(), common.DefaultAllocator)
+	commitTS.Append(types.BuildTS(5, 0), false)
+	commitTS.Append(types.BuildTS(5, 0), false)
+	loads := 0
+	loader := &commitTSLoader{
+		load: func() (containers.Vector, error) {
+			loads++
+			return commitTS, nil
+		},
+	}
+	defer loader.close()
+
+	txn := txnbase.MockTxnReaderWithStartTS(types.BuildTS(10, 0))
+	op := containers.MakeForeachVectorOp(
+		keys.GetType().Oid,
+		getRowIDAlkFunctions,
+		data,
+		rowIDs,
+		types.Blockid{},
+		loader,
+		txn,
+		types.BuildTS(1, 0),
+		types.BuildTS(9, 0),
+	)
+	require.NoError(t, containers.ForeachVector(keys, op, nil))
+	require.Equal(t, 1, loads)
+	require.False(t, rowIDs.IsNull(0))
+	require.False(t, rowIDs.IsNull(1))
+}
+
+func TestMissingCommitTSFallsBackToConservativeDuplicate(t *testing.T) {
+	for _, typ := range []types.Type{
+		types.T_int64.ToType(),
+		types.T_varchar.ToType(),
+	} {
+		t.Run(typ.String(), func(t *testing.T) {
+			data := containers.MakeVector(typ, common.DefaultAllocator)
+			defer data.Close()
+			keys := containers.MakeVector(typ, common.DefaultAllocator)
+			defer keys.Close()
+			if typ.Oid == types.T_int64 {
+				data.Append(int64(1), false)
+				keys.Append(int64(1), false)
+			} else {
+				data.Append([]byte("pk"), false)
+				keys.Append([]byte("pk"), false)
+			}
+
+			rowIDs := containers.MakeVector(types.T_Rowid.ToType(), common.DefaultAllocator)
+			defer rowIDs.Close()
+			rowIDs.Append(nil, true)
+
+			commitTS := containers.NewConstNullVector(
+				types.T_TS.ToType(), 1, common.DefaultAllocator,
+			)
+			loader := &commitTSLoader{
+				load: func() (containers.Vector, error) {
+					return commitTS, nil
+				},
+			}
+			defer loader.close()
+
+			txn := txnbase.MockTxnReaderWithStartTS(types.BuildTS(10, 0))
+			op := containers.MakeForeachVectorOp(
+				keys.GetType().Oid,
+				getRowIDAlkFunctions,
+				data,
+				rowIDs,
+				types.Blockid{},
+				loader,
+				txn,
+				types.BuildTS(1, 0),
+				types.BuildTS(9, 0),
+			)
+			require.NoError(t, containers.ForeachVector(keys, op, nil))
+			require.False(t, rowIDs.IsNull(0))
+		})
+	}
+}
+
+func TestNullableCommitTSConservativelyChecksOnlyLegacyRows(t *testing.T) {
+	data := containers.MakeVector(types.T_int64.ToType(), common.DefaultAllocator)
+	defer data.Close()
+	data.Append(int64(1), false)
+	data.Append(int64(2), false)
+
+	keys := containers.MakeVector(types.T_int64.ToType(), common.DefaultAllocator)
+	defer keys.Close()
+	keys.Append(int64(1), false)
+	keys.Append(int64(2), false)
+
+	rowIDs := containers.MakeVector(types.T_Rowid.ToType(), common.DefaultAllocator)
+	defer rowIDs.Close()
+	rowIDs.Append(nil, true)
+	rowIDs.Append(nil, true)
+
+	commitTS := containers.MakeVector(types.T_TS.ToType(), common.DefaultAllocator)
+	commitTS.Append(nil, true)
+	commitTS.Append(types.BuildTS(1, 0), false)
+	loader := &commitTSLoader{
+		load: func() (containers.Vector, error) {
+			return commitTS, nil
+		},
+	}
+	defer loader.close()
+
+	txn := txnbase.MockTxnReaderWithStartTS(types.BuildTS(10, 0))
+	op := containers.MakeForeachVectorOp(
+		keys.GetType().Oid,
+		getRowIDAlkFunctions,
+		data,
+		rowIDs,
+		types.Blockid{},
+		loader,
+		txn,
+		types.BuildTS(1, 0),
+		types.BuildTS(9, 0),
+	)
+	require.NoError(t, containers.ForeachVector(keys, op, nil))
+	require.False(t, rowIDs.IsNull(0))
+	require.True(t, rowIDs.IsNull(1))
+}
 
 func BenchmarkFunctions(b *testing.B) {
 	vec := containers.MockVector2(types.T_int64.ToType(), 10000, 0)

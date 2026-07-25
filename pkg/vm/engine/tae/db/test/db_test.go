@@ -3816,6 +3816,323 @@ func TestDelete3(t *testing.T) {
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 }
 
+func TestIncrementalDedupSkipsTNRewrittenObject(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll(3, 2)
+	schema.Extra.BlockMaxRows = 10
+	schema.Extra.ObjectMaxBlocks = 2
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, int(schema.Extra.BlockMaxRows*3)+1)
+	defer bat.Close()
+
+	tae.CreateRelAndAppend(bat, true)
+
+	insertTxn, insertRel := tae.GetRelation()
+	insertTxn.SetDedupType(txnif.DedupPolicy_CheckIncremental)
+	require.NoError(t, insertRel.Append(ctx, bat))
+
+	flushTxn, flushRel := tae.GetRelation()
+	var metas []*catalog.ObjectEntry
+	it := flushRel.MakeObjectIt(false)
+	for it.Next() {
+		metas = append(metas, it.GetObject().GetMeta().(*catalog.ObjectEntry))
+	}
+	it.Close()
+	task, err := jobs.NewFlushTableTailTask(nil, flushTxn, metas, nil, tae.Runtime)
+	require.NoError(t, err)
+	require.NoError(t, task.OnExec(ctx))
+	rewritten := task.GetCreatedObjects().GetMeta().(*catalog.ObjectEntry)
+	require.Greater(t, rewritten.BlkCnt(), uint32(1))
+	require.False(t, rewritten.GetObjectStats().GetCNCreated())
+	require.NoError(t, flushTxn.Commit(ctx))
+
+	require.NoError(t, insertTxn.GetStore().Freeze(ctx))
+	require.NoError(t, insertTxn.Rollback(ctx))
+}
+
+func TestIncrementalDedupChecksCNCreatedObject(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll(3, 2)
+	schema.Extra.BlockMaxRows = 10
+	schema.Extra.ObjectMaxBlocks = 2
+	tae.BindSchema(schema)
+	testutil.CreateRelation(t, tae.DB, "db", schema, true)
+
+	bat := catalog.MockBatch(schema, 31)
+	defer bat.Close()
+
+	objectID := objectio.NewObjectid()
+	name := objectio.BuildObjectNameWithObjectID(&objectID)
+	writer, err := ioutil.NewBlockWriterNew(tae.Runtime.Fs, name, 0, nil, false)
+	require.NoError(t, err)
+	writer.SetPrimaryKey(uint16(schema.GetSingleSortKeyIdx()))
+	_, err = writer.WriteBatch(containers.ToCNBatch(bat))
+	require.NoError(t, err)
+	_, _, err = writer.Sync(ctx)
+	require.NoError(t, err)
+	stats := writer.GetObjectStats(objectio.WithCNCreated())
+	require.True(t, stats.GetCNCreated())
+	statsVec := containers.MakeVector(types.T_varchar.ToType(), common.DefaultAllocator)
+	defer statsVec.Close()
+	statsVec.Append(stats[:], false)
+
+	insertTxn, insertRel := tae.GetRelation()
+	insertTxn.SetDedupType(txnif.DedupPolicy_CheckIncremental)
+	require.NoError(t, insertRel.Append(ctx, bat))
+
+	cnTxn, cnRel := tae.GetRelation()
+	require.NoError(t, cnRel.AddDataFiles(ctx, statsVec))
+	require.NoError(t, cnTxn.Commit(ctx))
+
+	err = insertTxn.GetStore().Freeze(ctx)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry), err)
+	require.NoError(t, insertTxn.Rollback(ctx))
+}
+
+func TestIncrementalDedupChecksCNRowsAfterMixedTNMerge(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll(3, 2)
+	schema.Extra.BlockMaxRows = 10
+	schema.Extra.ObjectMaxBlocks = 2
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 64)
+	defer bat.Close()
+	oldRows := bat.CloneWindow(0, 31)
+	defer oldRows.Close()
+	oldRow := bat.CloneWindow(0, 1)
+	defer oldRow.Close()
+	cnRow := bat.CloneWindow(63, 1)
+	defer cnRow.Close()
+
+	tae.CreateRelAndAppend(oldRows, true)
+
+	flushTxn, flushRel := tae.GetRelation()
+	var appendableMetas []*catalog.ObjectEntry
+	it := flushRel.MakeObjectIt(false)
+	for it.Next() {
+		appendableMetas = append(
+			appendableMetas,
+			it.GetObject().GetMeta().(*catalog.ObjectEntry),
+		)
+	}
+	it.Close()
+	flushTask, err := jobs.NewFlushTableTailTask(
+		nil, flushTxn, appendableMetas, nil, tae.Runtime,
+	)
+	require.NoError(t, err)
+	require.NoError(t, flushTask.OnExec(ctx))
+	require.NoError(t, flushTxn.Commit(ctx))
+
+	oldTxn, oldRel := tae.GetRelation()
+	oldTxn.SetDedupType(txnif.DedupPolicy_CheckIncremental)
+	require.NoError(t, oldRel.Append(ctx, oldRow))
+
+	concurrentTxn, concurrentRel := tae.GetRelation()
+	concurrentTxn.SetDedupType(txnif.DedupPolicy_CheckIncremental)
+	require.NoError(t, concurrentRel.Append(ctx, cnRow))
+
+	objectID := objectio.NewObjectid()
+	name := objectio.BuildObjectNameWithObjectID(&objectID)
+	writer, err := ioutil.NewBlockWriterNew(tae.Runtime.Fs, name, 0, nil, false)
+	require.NoError(t, err)
+	writer.SetPrimaryKey(uint16(schema.GetSingleSortKeyIdx()))
+	_, err = writer.WriteBatch(containers.ToCNBatch(cnRow))
+	require.NoError(t, err)
+	_, _, err = writer.Sync(ctx)
+	require.NoError(t, err)
+	stats := writer.GetObjectStats(objectio.WithCNCreated())
+	statsVec := containers.MakeVector(types.T_varchar.ToType(), common.DefaultAllocator)
+	defer statsVec.Close()
+	statsVec.Append(stats[:], false)
+
+	cnTxn, cnRel := tae.GetRelation()
+	require.NoError(t, cnRel.AddDataFiles(ctx, statsVec))
+	require.NoError(t, cnTxn.Commit(ctx))
+
+	mergeTxn, mergeRel := tae.GetRelation()
+	var mergeMetas []*catalog.ObjectEntry
+	var sawTNCreated, sawCNCreated bool
+	it = mergeRel.MakeObjectIt(false)
+	for it.Next() {
+		meta := it.GetObject().GetMeta().(*catalog.ObjectEntry)
+		require.False(t, meta.IsAppendable())
+		if meta.GetObjectStats().GetCNCreated() {
+			sawCNCreated = true
+		} else {
+			sawTNCreated = true
+		}
+		mergeMetas = append(mergeMetas, meta)
+	}
+	it.Close()
+	require.True(t, sawTNCreated)
+	require.True(t, sawCNCreated)
+
+	mergeTask, err := jobs.NewMergeObjectsTask(
+		nil, mergeTxn, mergeMetas, tae.Runtime, 0, false,
+	)
+	require.NoError(t, err)
+	require.NoError(t, mergeTask.OnExec(ctx))
+	require.NotEmpty(t, mergeTask.GetCreatedObjects())
+	for _, created := range mergeTask.GetCreatedObjects() {
+		require.False(t, created.GetObjectStats().GetCNCreated())
+		require.True(t, created.GetObjectStats().GetCNOrigin())
+	}
+	require.NoError(t, mergeTxn.Commit(ctx))
+
+	// The old TN row is outside the incremental window even though the mixed
+	// replacement object is new.
+	require.NoError(t, oldTxn.GetStore().Freeze(ctx))
+
+	// The CN row was committed after concurrentTxn started. Rewriting it in a
+	// TN merge must not erase that logical origin from incremental dedup.
+	err = concurrentTxn.GetStore().Freeze(ctx)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict), err)
+
+	require.NoError(t, oldTxn.Rollback(ctx))
+	require.NoError(t, concurrentTxn.Rollback(ctx))
+
+	// The lineage marker must survive WAL replay and a later merge. The CN row
+	// is now old relative to this transaction and must not become a false
+	// duplicate merely because the second replacement object is new.
+	tae.Restart(ctx)
+
+	propagationTxn, propagationRel := tae.GetRelation()
+	propagationTxn.SetDedupType(txnif.DedupPolicy_CheckIncremental)
+	require.NoError(t, propagationRel.Append(ctx, cnRow))
+
+	secondMergeTxn, secondMergeRel := tae.GetRelation()
+	mergeMetas = mergeMetas[:0]
+	it = secondMergeRel.MakeObjectIt(false)
+	for it.Next() {
+		meta := it.GetObject().GetMeta().(*catalog.ObjectEntry)
+		require.True(t, meta.GetObjectStats().GetCNOrigin())
+		mergeMetas = append(mergeMetas, meta)
+	}
+	it.Close()
+	require.NotEmpty(t, mergeMetas)
+	secondMergeTask, err := jobs.NewMergeObjectsTask(
+		nil, secondMergeTxn, mergeMetas, tae.Runtime, 0, false,
+	)
+	require.NoError(t, err)
+	require.NoError(t, secondMergeTask.OnExec(ctx))
+	require.NotEmpty(t, secondMergeTask.GetCreatedObjects())
+	for _, created := range secondMergeTask.GetCreatedObjects() {
+		require.False(t, created.GetObjectStats().GetCNCreated())
+		require.True(t, created.GetObjectStats().GetCNOrigin())
+	}
+	require.NoError(t, secondMergeTxn.Commit(ctx))
+	require.NoError(t, propagationTxn.GetStore().Freeze(ctx))
+	require.NoError(t, propagationTxn.Rollback(ctx))
+}
+
+func TestStrictDedupIgnoresOldRowsInTNRewrite(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll(3, 2)
+	schema.Extra.BlockMaxRows = 10
+	schema.Extra.ObjectMaxBlocks = 2
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, int(schema.Extra.BlockMaxRows*3)+1)
+	defer bat.Close()
+
+	tae.CreateRelAndAppend(bat, true)
+
+	insertTxn, insertRel := tae.GetRelation()
+	// Stage the batch without the snapshot check so this test can exercise the
+	// strict pre-prepare check in isolation.
+	insertTxn.SetDedupType(txnif.DedupPolicy_CheckIncremental)
+	require.NoError(t, insertRel.Append(ctx, bat))
+	insertTxn.SetDedupType(txnif.DedupPolicy_CheckAll)
+
+	flushTxn, flushRel := tae.GetRelation()
+	var metas []*catalog.ObjectEntry
+	it := flushRel.MakeObjectIt(false)
+	for it.Next() {
+		metas = append(metas, it.GetObject().GetMeta().(*catalog.ObjectEntry))
+	}
+	it.Close()
+	task, err := jobs.NewFlushTableTailTask(nil, flushTxn, metas, nil, tae.Runtime)
+	require.NoError(t, err)
+	require.NoError(t, task.OnExec(ctx))
+	rewritten := task.GetCreatedObjects().GetMeta().(*catalog.ObjectEntry)
+	require.Greater(t, rewritten.BlkCnt(), uint32(1))
+	require.False(t, rewritten.GetObjectStats().GetCNCreated())
+	require.NoError(t, flushTxn.Commit(ctx))
+
+	require.NoError(t, insertTxn.PrePrepare(ctx))
+	require.NoError(t, insertTxn.Rollback(ctx))
+}
+
+func TestStrictDedupDetectsConcurrentRowAfterTNRewrite(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll(3, 2)
+	schema.Extra.BlockMaxRows = 10
+	schema.Extra.ObjectMaxBlocks = 2
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 64)
+	defer bat.Close()
+	oldRows := bat.CloneWindow(0, 31)
+	defer oldRows.Close()
+	concurrentRow := bat.CloneWindow(63, 1)
+	defer concurrentRow.Close()
+
+	tae.CreateRelAndAppend(oldRows, true)
+
+	insertTxn, insertRel := tae.GetRelation()
+	insertTxn.SetDedupType(txnif.DedupPolicy_CheckAll)
+	require.NoError(t, insertRel.Append(ctx, concurrentRow))
+
+	tae.DoAppend(concurrentRow)
+
+	flushTxn, flushRel := tae.GetRelation()
+	var metas []*catalog.ObjectEntry
+	it := flushRel.MakeObjectIt(false)
+	for it.Next() {
+		metas = append(metas, it.GetObject().GetMeta().(*catalog.ObjectEntry))
+	}
+	it.Close()
+	task, err := jobs.NewFlushTableTailTask(nil, flushTxn, metas, nil, tae.Runtime)
+	require.NoError(t, err)
+	require.NoError(t, task.OnExec(ctx))
+	rewritten := task.GetCreatedObjects().GetMeta().(*catalog.ObjectEntry)
+	require.Greater(t, rewritten.BlkCnt(), uint32(1))
+	require.False(t, rewritten.GetObjectStats().GetCNCreated())
+	require.NoError(t, flushTxn.Commit(ctx))
+
+	err = insertTxn.PrePrepare(ctx)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict), err)
+	require.NoError(t, insertTxn.Rollback(ctx))
+}
+
 func TestDropCreated1(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	ctx := context.Background()

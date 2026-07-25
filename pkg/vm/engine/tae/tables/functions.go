@@ -137,7 +137,7 @@ func parseNAContainsArgs(args ...any) (vec *vector.Vector, rowIDs containers.Vec
 
 func parseAGetDuplicateRowIDsArgs(args ...any) (
 	vec containers.Vector, rowIDs containers.Vector, blkID types.Blockid,
-	scanFn func(uint16) (vec containers.Vector, err error), txn txnif.TxnReader, from, to types.TS,
+	loader *commitTSLoader, txn txnif.TxnReader, from, to types.TS,
 ) {
 	vec = args[0].(containers.Vector)
 	if args[1] != nil {
@@ -147,7 +147,7 @@ func parseAGetDuplicateRowIDsArgs(args ...any) (
 		blkID = args[2].(types.Blockid)
 	}
 	if args[3] != nil {
-		scanFn = args[3].(func(bid uint16) (vec containers.Vector, err error))
+		loader = args[3].(*commitTSLoader)
 	}
 	if args[4] != nil {
 		txn = args[4].(txnif.TxnReader)
@@ -159,6 +159,34 @@ func parseAGetDuplicateRowIDsArgs(args ...any) (
 		to = args[6].(types.TS)
 	}
 	return
+}
+
+type commitTSLoader struct {
+	load func() (containers.Vector, error)
+	vec  containers.Vector
+}
+
+func (loader *commitTSLoader) get() (containers.Vector, error) {
+	if loader.vec != nil {
+		return loader.vec, nil
+	}
+	vec, err := loader.load()
+	if err != nil {
+		return nil, err
+	}
+	loader.vec = vec
+	return vec, nil
+}
+
+func (loader *commitTSLoader) close() {
+	if loader.vec != nil {
+		loader.vec.Close()
+		loader.vec = nil
+	}
+}
+
+func missingCommitTS(vec containers.Vector, row int) bool {
+	return vec == nil || row >= vec.Length() || vec.IsNull(row)
 }
 
 func parseAContainsArgs(args ...any) (
@@ -266,18 +294,11 @@ func getDuplicatedRowIDNABlkOrderedFunc[T types.OrderedT](args ...any) func(T, b
 }
 
 func getDuplicatedRowIDABlkBytesFunc(args ...any) func([]byte, bool, int) error {
-	vec, rowIDs, blkID, scanFn, txn, from, to := parseAGetDuplicateRowIDsArgs(args...)
+	vec, rowIDs, blkID, loader, txn, from, to := parseAGetDuplicateRowIDsArgs(args...)
 	return func(v1 []byte, _ bool, rowOffset int) error {
 		if !rowIDs.IsNull(rowOffset) {
 			return nil
 		}
-		var tsVec containers.Vector
-		defer func() {
-			if tsVec != nil {
-				tsVec.Close()
-				tsVec = nil
-			}
-		}()
 		return containers.ForeachWindowVarlen(
 			vec.GetDownstreamVector(),
 			0,
@@ -291,11 +312,14 @@ func getDuplicatedRowIDABlkBytesFunc(args ...any) func([]byte, bool, int) error 
 				if compute.CompareBytes(v1, v2) != 0 {
 					return
 				}
-				if tsVec == nil {
-					tsVec, err = scanFn(0)
-					if err != nil {
-						return err
-					}
+				tsVec, err := loader.get()
+				if err != nil {
+					return err
+				}
+				if missingCommitTS(tsVec, row) {
+					rowID := objectio.NewRowid(&blkID, uint32(row))
+					rowIDs.Update(rowOffset, rowID, false)
+					return nil
 				}
 				commitTS := vector.GetFixedAtNoTypeCheck[types.TS](tsVec.GetDownstreamVector(), row)
 				startTS := txn.GetStartTS()
@@ -322,18 +346,11 @@ func getDuplicatedRowIDABlkBytesFunc(args ...any) func([]byte, bool, int) error 
 
 func getDuplicatedRowIDABlkFuncFactory[T types.FixedSizeT](comp func(T, T) int) func(args ...any) func(T, bool, int) error {
 	return func(args ...any) func(T, bool, int) error {
-		vec, rowIDs, blkID, scanFn, txn, from, to := parseAGetDuplicateRowIDsArgs(args...)
+		vec, rowIDs, blkID, loader, txn, from, to := parseAGetDuplicateRowIDsArgs(args...)
 		return func(v1 T, _ bool, rowOffset int) error {
 			if !rowIDs.IsNull(rowOffset) {
 				return nil
 			}
-			var tsVec containers.Vector
-			defer func() {
-				if tsVec != nil {
-					tsVec.Close()
-					tsVec = nil
-				}
-			}()
 			return containers.ForeachWindowFixed(
 				vec.GetDownstreamVector(),
 				0,
@@ -346,11 +363,14 @@ func getDuplicatedRowIDABlkFuncFactory[T types.FixedSizeT](comp func(T, T) int) 
 					if comp(v1, v2) != 0 {
 						return
 					}
-					if tsVec == nil {
-						tsVec, err = scanFn(0)
-						if err != nil {
-							return err
-						}
+					tsVec, err := loader.get()
+					if err != nil {
+						return err
+					}
+					if missingCommitTS(tsVec, row) {
+						rowID := objectio.NewRowid(&blkID, uint32(row))
+						rowIDs.Update(rowOffset, rowID, false)
+						return nil
 					}
 					commitTS := tsVec.Get(row).(types.TS)
 					if commitTS.LE(&from) {

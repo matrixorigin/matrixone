@@ -162,7 +162,7 @@ func ReadOneBlockWithMeta(
 			filledEntries = make([]fileservice.IOEntry, len(seqnums))
 		}
 		filledEntries[i] = fileservice.IOEntry{
-			Size: int64(seqnum), // a marker, it can not be zero
+			Size: int64(seqnum) + 1, // a marker, it must not be zero
 		}
 	}
 
@@ -184,7 +184,8 @@ func ReadOneBlockWithMeta(
 			//  1. created by cn
 			//  2. old version tn nonappendable block
 			col := blkmeta.ColumnMeta(seqnum)
-			if col.DataType() != uint8(types.T_TS) {
+			hasHiddenColumn := metaColCnt > maxSeqnum+1
+			if !hasHiddenColumn || col.DataType() != uint8(types.T_TS) {
 				putFillHolder(i, seqnum)
 			} else {
 				ext := col.Location()

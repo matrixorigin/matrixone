@@ -15,20 +15,126 @@
 package tables
 
 import (
+	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	api "github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/indexwrapper"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestLoadPersistedCommitTSLegacyObject(t *testing.T) {
+	ctx := context.Background()
+	fs, err := fileservice.NewMemoryFS(
+		"legacy-commit-ts", fileservice.DisabledCacheConfig, nil,
+	)
+	require.NoError(t, err)
+	defer fs.Close(ctx)
+	mp := mpool.MustNewZero()
+
+	bat := batch.NewWithSize(1)
+	bat.Attrs = []string{"pk"}
+	bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
+	require.NoError(t, vector.AppendFixed(bat.Vecs[0], int32(1), false, mp))
+	bat.SetRowCount(1)
+
+	name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
+	writer, err := ioutil.NewBlockWriterNew(fs, name, 0, []uint16{0}, false)
+	require.NoError(t, err)
+	_, err = writer.WriteBatch(bat)
+	require.NoError(t, err)
+	_, _, err = writer.Sync(ctx)
+	require.NoError(t, err)
+	stats := writer.GetObjectStats()
+	bat.Clean(mp)
+
+	schema := catalog.MockSchema(1, 0)
+	c := catalog.MockCatalog(nil)
+	defer c.Close()
+	db, err := c.CreateDBEntry("db", "", "", nil)
+	require.NoError(t, err)
+	table, err := db.CreateTableEntry(schema, nil, nil)
+	require.NoError(t, err)
+	meta, err := table.CreateCommittedObject(
+		types.BuildTS(1, 0),
+		&objectio.CreateObjOpt{Stats: &stats},
+		nil,
+	)
+	require.NoError(t, err)
+
+	rt := &dbutils.Runtime{Fs: fs}
+	rt.VectorPool.Transient = containers.NewVectorPool(
+		"legacy-commit-ts", 0, containers.WithMPool(mp),
+	)
+	obj := &baseObject{rt: rt}
+	obj.meta.Store(meta)
+
+	commitTS, err := obj.LoadPersistedCommitTS(0)
+	require.NoError(t, err)
+	require.True(t, commitTS.IsConstNull())
+	require.Equal(t, 1, commitTS.Length())
+	commitTS.Close()
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestValidatePersistedCommitTSVectors(t *testing.T) {
+	mp := mpool.MustNewZero()
+
+	valid := containers.MakeVector(types.T_TS.ToType(), mp)
+	valid.Append(types.BuildTS(1, 0), false)
+	got, err := validatePersistedCommitTSVectors("valid", []containers.Vector{valid})
+	require.NoError(t, err)
+	require.Same(t, valid, got)
+	got.Close()
+	require.Zero(t, mp.CurrNB())
+
+	for _, test := range []struct {
+		name    string
+		vectors func() []containers.Vector
+	}{
+		{
+			name: "empty",
+			vectors: func() []containers.Vector {
+				return nil
+			},
+		},
+		{
+			name: "nil vector",
+			vectors: func() []containers.Vector {
+				return []containers.Vector{nil}
+			},
+		},
+		{
+			name: "wrong type is released",
+			vectors: func() []containers.Vector {
+				vec := containers.MakeVector(types.T_int64.ToType(), mp)
+				vec.Append(int64(1), false)
+				return []containers.Vector{vec}
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := validatePersistedCommitTSVectors("bad", test.vectors())
+			require.ErrorContains(t, err, "bad commits layout")
+			require.Nil(t, got)
+			require.Zero(t, mp.CurrNB())
+		})
+	}
+}
 
 func TestGetActiveRow(t *testing.T) {
 	defer testutils.AfterTest(t)()

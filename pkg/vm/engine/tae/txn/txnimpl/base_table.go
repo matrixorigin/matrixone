@@ -248,8 +248,24 @@ func (tbl *baseTable) incrementalGetRowsByPK(ctx context.Context, pks containers
 			if !obj.HasDropIntent() && obj.CreatedAt.LT(&from) {
 				earlybreak = true
 			}
-		} else if obj.CreatedAt.LT(&from) {
-			continue
+		} else {
+			if obj.CreatedAt.LT(&from) {
+				continue
+			}
+			// In the normal pessimistic CN->TN path, same-PK writes are
+			// serialized and versions advanced while waiting for the lock are
+			// checked by CN. A TN-created non-appendable object is only a
+			// physical flush or merge rewrite, so CheckIncremental can skip it.
+			// A rewrite carrying CN-origin rows is the exception: those rows can
+			// come from paths that require the TN fallback. Strict and optimistic
+			// policies also inspect every rewrite. Both cases use each row's
+			// preserved commit timestamp.
+			stats := obj.GetObjectStats()
+			if !stats.GetCNCreated() &&
+				!stats.GetCNOrigin() &&
+				tbl.txnTable.store.txn.GetDedupType().SkipTargetOldCommitted() {
+				continue
+			}
 		}
 
 		// only keep the category-a + category-c for candidates.

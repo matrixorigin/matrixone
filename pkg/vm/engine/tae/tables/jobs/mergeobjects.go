@@ -491,6 +491,7 @@ func (task *mergeObjectsTask) Execute(ctx context.Context) (err error) {
 	if err = mergesort.DoMergeAndWrite(ctx, task.txn.String(), sortkeyPos, task); err != nil {
 		return err
 	}
+	task.markCreatedObjectsCNOrigin()
 
 	phaseDesc = "2-HandleMergeEntryInTxn"
 	if task.createdBObjs, err = HandleMergeEntryInTxn(
@@ -514,6 +515,24 @@ func (task *mergeObjectsTask) Execute(ctx context.Context) (err error) {
 	return nil
 }
 
+func (task *mergeObjectsTask) markCreatedObjectsCNOrigin() {
+	hasCNOrigin := false
+	for _, obj := range task.mergedObjs {
+		stats := obj.GetObjectStats()
+		hasCNOrigin = hasCNOrigin ||
+			stats.GetCNCreated() ||
+			stats.GetCNOrigin()
+	}
+	if !hasCNOrigin {
+		return
+	}
+	for i := range task.commitEntry.CreatedObjs {
+		stats := objectio.ObjectStats(task.commitEntry.CreatedObjs[i])
+		objectio.WithCNOrigin()(&stats)
+		task.commitEntry.CreatedObjs[i] = stats.Clone().Marshal()
+	}
+}
+
 func HandleMergeEntryInTxn(
 	ctx context.Context,
 	txn txnif.AsyncTxn,
@@ -535,6 +554,7 @@ func HandleMergeEntryInTxn(
 	mergedObjs := make([]*catalog.ObjectEntry, 0, len(entry.MergedObjs))
 	createdObjs := make([]*catalog.ObjectEntry, 0, len(entry.CreatedObjs))
 	ids := make([]*common.ID, 0, len(entry.MergedObjs)*2)
+	hasCNOrigin := false
 
 	// drop merged blocks and objects
 	for _, item := range entry.MergedObjs {
@@ -547,7 +567,10 @@ func HandleMergeEntryInTxn(
 			}
 			return nil, err
 		}
-		mergedObjs = append(mergedObjs, obj.GetMeta().(*catalog.ObjectEntry))
+		meta := obj.GetMeta().(*catalog.ObjectEntry)
+		stats := meta.GetObjectStats()
+		hasCNOrigin = hasCNOrigin || stats.GetCNCreated() || stats.GetCNOrigin()
+		mergedObjs = append(mergedObjs, meta)
 		if err = rel.SoftDeleteObject(objID, isTombstone); err != nil {
 			return nil, err
 		}
@@ -560,10 +583,19 @@ func HandleMergeEntryInTxn(
 	// construct new object,
 	for _, stats := range entry.CreatedObjs {
 		stats := objectio.ObjectStats(stats)
+		if hasCNOrigin && !stats.GetCNOrigin() {
+			return nil, moerr.NewInternalErrorNoCtxf(
+				"merge producer omitted row commit timestamps for CN-origin output %s",
+				stats.ObjectName().String(),
+			)
+		}
 		objID := stats.ObjectName().ObjectId()
 		// set stats and sorted property
 		objstats := objectio.NewObjectStatsWithObjectID(objID, false, sorted, false)
 		err := objectio.SetObjectStats(objstats, &stats)
+		if hasCNOrigin {
+			objectio.WithCNOrigin()(objstats)
+		}
 		// another site to SetLevel is in commiting append in table space
 		if entry.Level > 0 || objstats.OriginSize() > common.DefaultMinOsizeQualifiedBytes {
 			// for layzer > 0, bump up level

@@ -103,16 +103,24 @@ func TestObjectStatsOptions(t *testing.T) {
 	require.True(t, stats.IsZero())
 	require.False(t, stats.GetAppendable())
 	require.False(t, stats.GetCNCreated())
+	require.False(t, stats.GetCNOrigin())
 	require.False(t, stats.GetSorted())
 
 	WithCNCreated()(stats)
 	require.True(t, stats.GetCNCreated())
+
+	WithCNOrigin()(stats)
+	require.True(t, stats.GetCNOrigin())
 
 	WithSorted()(stats)
 	require.True(t, stats.GetSorted())
 
 	WithAppendable()(stats)
 	require.True(t, stats.GetAppendable())
+
+	restored := NewObjectStats()
+	restored.UnMarshal(stats.Marshal())
+	require.True(t, restored.GetCNOrigin())
 }
 
 func TestObjectStats_SetLevel(t *testing.T) {
@@ -153,7 +161,7 @@ func TestObjectStats_SetLevel(t *testing.T) {
 			stats := NewObjectStats()
 
 			// Set some flags to ensure they're preserved
-			stats[reservedOffset] = ObjectFlag_Appendable | ObjectFlag_Sorted
+			stats[reservedOffset] = ObjectFlag_Appendable | ObjectFlag_Sorted | ObjectFlag_CNOrigin
 
 			stats.SetLevel(tt.level)
 
@@ -169,6 +177,9 @@ func TestObjectStats_SetLevel(t *testing.T) {
 			}
 			if !stats.GetSorted() {
 				t.Error("Sorted flag was not preserved")
+			}
+			if !stats.GetCNOrigin() {
+				t.Error("CN origin flag was not preserved")
 			}
 		})
 	}
