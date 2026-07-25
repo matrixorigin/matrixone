@@ -194,6 +194,22 @@ func (t *cnMergeTask) IsSourceCNOrigin(objIdx uint32) bool {
 	return stats.GetCNCreated() || stats.GetCNOrigin()
 }
 
+func (t *cnMergeTask) IsRowCNOrigin(
+	objIdx uint32,
+	bat *batch.Batch,
+	rowIdx uint32,
+) bool {
+	stats := &t.targets[objIdx]
+	if stats.GetCNCreated() {
+		return true
+	}
+	if !stats.GetCNOrigin() {
+		return false
+	}
+	commitTSPos := len(t.seqnums) - 1
+	return !bat.Vecs[commitTSPos].IsNull(uint64(rowIdx))
+}
+
 func (t *cnMergeTask) GetBlkCnts() []int {
 	return t.blkCnts
 }

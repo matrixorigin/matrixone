@@ -275,7 +275,11 @@ type MergeTaskHost interface {
 	PrepareNewWriter() *ioutil.BlockWriter
 	DoTransfer() bool
 	GetObjectCnt() int
+	// IsSourceCNOrigin is the cheap object-level fast path. IsRowCNOrigin is
+	// called only when it returns true and must use the already-loaded batch;
+	// it must not perform additional I/O.
 	IsSourceCNOrigin(objIdx uint32) bool
+	IsRowCNOrigin(objIdx uint32, bat *batch.Batch, rowIdx uint32) bool
 	GetBlkCnts() []int
 	GetAccBlkCnts() []int
 	GetSortKeyType() types.Type

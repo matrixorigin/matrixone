@@ -96,8 +96,11 @@ func reshape(ctx context.Context, host MergeTaskHost) error {
 						return err
 					}
 				}
-				currentObjectCNOrigin = currentObjectCNOrigin ||
-					sourceCNOrigin
+				if !currentObjectCNOrigin && sourceCNOrigin {
+					currentObjectCNOrigin = host.IsRowCNOrigin(
+						uint32(i), nextBatch, uint32(j),
+					)
+				}
 
 				if host.DoTransfer() {
 					if stats.objCnt >= int(api.NoTransfer) {

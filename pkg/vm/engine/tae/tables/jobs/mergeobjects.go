@@ -186,6 +186,21 @@ func (task *mergeObjectsTask) IsSourceCNOrigin(objIdx uint32) bool {
 	return stats.GetCNCreated() || stats.GetCNOrigin()
 }
 
+func (task *mergeObjectsTask) IsRowCNOrigin(
+	objIdx uint32,
+	bat *batch.Batch,
+	rowIdx uint32,
+) bool {
+	stats := task.mergedObjs[objIdx].GetObjectStats()
+	if stats.GetCNCreated() {
+		return true
+	}
+	if !stats.GetCNOrigin() {
+		return false
+	}
+	return !bat.Vecs[len(bat.Vecs)-1].IsNull(uint64(rowIdx))
+}
+
 func (task *mergeObjectsTask) GetBlkCnts() []int {
 	return task.blkCnt
 }
@@ -540,8 +555,6 @@ func HandleMergeEntryInTxn(
 	mergedObjs := make([]*catalog.ObjectEntry, 0, len(entry.MergedObjs))
 	createdObjs := make([]*catalog.ObjectEntry, 0, len(entry.CreatedObjs))
 	ids := make([]*common.ID, 0, len(entry.MergedObjs)*2)
-	sourceCNOrigins := make([]bool, 0, len(entry.MergedObjs))
-	sourceBlkCnts := make([]uint32, 0, len(entry.MergedObjs))
 
 	// drop merged blocks and objects
 	for _, item := range entry.MergedObjs {
@@ -555,22 +568,10 @@ func HandleMergeEntryInTxn(
 			return nil, err
 		}
 		meta := obj.GetMeta().(*catalog.ObjectEntry)
-		stats := meta.GetObjectStats()
-		sourceCNOrigins = append(
-			sourceCNOrigins,
-			stats.GetCNCreated() || stats.GetCNOrigin(),
-		)
-		sourceBlkCnts = append(sourceBlkCnts, stats.BlkCnt())
 		mergedObjs = append(mergedObjs, meta)
 		if err = rel.SoftDeleteObject(objID, isTombstone); err != nil {
 			return nil, err
 		}
-	}
-
-	if err := validateCNOriginOutputs(
-		entry, transferTable, sourceCNOrigins, sourceBlkCnts,
-	); err != nil {
-		return nil, err
 	}
 
 	sorted := false
@@ -639,81 +640,6 @@ func HandleMergeEntryInTxn(
 	}
 
 	return createdObjs, nil
-}
-
-// validateCNOriginOutputs checks the producer's per-output lineage flags
-// against the row transfer table when one is available. Merge policies that
-// disable row transfer do not provide this table; those paths still get exact
-// flags from the common merge writer, which tracks the source of every live
-// row while constructing each output object.
-func validateCNOriginOutputs(
-	entry *api.MergeCommitEntry,
-	transferTable *mergesort.TransferTable,
-	sourceCNOrigins []bool,
-	sourceBlkCnts []uint32,
-) error {
-	// The CN RPC handler wraps a nil booking in an empty legacy table when
-	// transfer is disabled by table policy.
-	if transferTable == nil || transferTable.Len() == 0 {
-		return nil
-	}
-	if len(sourceCNOrigins) != len(sourceBlkCnts) {
-		return moerr.NewInternalErrorNoCtxf(
-			"merge source lineage metadata mismatch: %d flags, %d block counts",
-			len(sourceCNOrigins), len(sourceBlkCnts),
-		)
-	}
-
-	totalBlkCnt := 0
-	for _, blkCnt := range sourceBlkCnts {
-		totalBlkCnt += int(blkCnt)
-	}
-	if transferTable.Len() != totalBlkCnt {
-		return moerr.NewInternalErrorNoCtxf(
-			"merge transfer metadata mismatch: %d blocks, expected %d",
-			transferTable.Len(), totalBlkCnt,
-		)
-	}
-
-	expected := make([]bool, len(entry.CreatedObjs))
-	blkOffset := 0
-	for objIdx, blkCnt := range sourceBlkCnts {
-		if sourceCNOrigins[objIdx] {
-			for blkIdx := range int(blkCnt) {
-				for _, pos := range transferTable.GetBlockMap(blkOffset + blkIdx) {
-					if pos.ObjIdx == api.NoTransfer {
-						continue
-					}
-					if int(pos.ObjIdx) >= len(expected) {
-						return moerr.NewInternalErrorNoCtxf(
-							"merge transfer destination object %d out of range %d",
-							pos.ObjIdx, len(expected),
-						)
-					}
-					expected[pos.ObjIdx] = true
-				}
-			}
-		}
-		blkOffset += int(blkCnt)
-	}
-
-	for i, rawStats := range entry.CreatedObjs {
-		stats := objectio.ObjectStats(rawStats)
-		if stats.GetCNOrigin() == expected[i] {
-			continue
-		}
-		if expected[i] {
-			return moerr.NewInternalErrorNoCtxf(
-				"merge producer omitted CN-origin lineage for output %s",
-				stats.ObjectName().String(),
-			)
-		}
-		return moerr.NewInternalErrorNoCtxf(
-			"merge producer incorrectly marked pure-TN output %s as CN-origin",
-			stats.ObjectName().String(),
-		)
-	}
-	return nil
 }
 
 func (task *mergeObjectsTask) GetTotalSize() uint64 {

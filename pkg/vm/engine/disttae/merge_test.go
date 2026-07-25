@@ -252,6 +252,78 @@ func TestCNMergeMarksOnlyOutputsContainingCNOriginRows(t *testing.T) {
 	require.Equal(t, uint32(1), cnOrigin.Rows())
 }
 
+func TestCNMergeSecondGenerationKeepsPureLegacyOutputUnmarked(t *testing.T) {
+	ctx := context.Background()
+	fs, err := fileservice.NewMemoryFS(
+		"cn-merge-second-generation-lineage",
+		fileservice.DisabledCacheConfig,
+		nil,
+	)
+	require.NoError(t, err)
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() {
+		fs.Close(ctx)
+		require.Zero(t, mp.CurrNB())
+	})
+
+	legacyValues := make([]int32, objectio.BlockMaxRows)
+	for i := range legacyValues {
+		legacyValues[i] = int32(i)
+	}
+	legacy := writeMergeSourceObject(t, ctx, fs, mp, legacyValues)
+	cnCreated := writeCNMergeSourceObject(
+		t, ctx, fs, mp, []int32{int32(objectio.BlockMaxRows)},
+	)
+
+	first := newCNMergeTaskForTest(
+		t,
+		ctx,
+		fs,
+		mp,
+		[]objectio.ObjectStats{legacy, cnCreated},
+		[]types.TS{{}, types.BuildTS(30, 3)},
+	)
+	defer first.Release()
+	require.NoError(t, mergesort.DoMergeAndWrite(
+		ctx, "cn-merge-first-generation", -1, first,
+	))
+	require.Len(t, first.GetCommitEntry().CreatedObjs, 1)
+
+	mixed := objectio.ObjectStats(first.GetCommitEntry().CreatedObjs[0])
+	require.True(t, mixed.GetCNOrigin())
+	require.Equal(t, uint32(objectio.BlockMaxRows+1), mixed.Rows())
+
+	second := newCNMergeTaskForTest(
+		t,
+		ctx,
+		fs,
+		mp,
+		[]objectio.ObjectStats{mixed},
+		[]types.TS{{}},
+	)
+	second.targetObjSize = 1
+	defer second.Release()
+	require.NoError(t, mergesort.DoMergeAndWrite(
+		ctx, "cn-merge-second-generation", -1, second,
+	))
+	require.Len(t, second.GetCommitEntry().CreatedObjs, 2)
+
+	pureLegacy := objectio.ObjectStats(second.GetCommitEntry().CreatedObjs[0])
+	cnOrigin := objectio.ObjectStats(second.GetCommitEntry().CreatedObjs[1])
+	require.Equal(t, uint32(objectio.BlockMaxRows), pureLegacy.Rows())
+	require.Equal(t, uint32(1), cnOrigin.Rows())
+	require.False(t, pureLegacy.GetCNOrigin())
+	require.True(t, cnOrigin.GetCNOrigin())
+
+	legacyBatch, release := readCNMergeBatch(
+		t, ctx, fs, mp, pureLegacy,
+	)
+	defer release()
+	for i := range legacyBatch.RowCount() {
+		require.True(t, legacyBatch.Vecs[1].IsNull(uint64(i)))
+	}
+}
+
 func readCNMergeCommitTS(
 	t *testing.T,
 	ctx context.Context,

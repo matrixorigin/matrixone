@@ -109,10 +109,10 @@ type merger[T comparable] struct {
 	transferSlab []api.TransferDestPos
 	blockActive  []bool
 
-	// currentObjectCNOrigin tracks whether the current output object actually
-	// received a live row from a CN-created object (or one of its rewrites).
-	// Tracking this while routing rows avoids blanket-marking unrelated output
-	// objects in a mixed-source, multi-output merge.
+	// currentObjectCNOrigin tracks whether the current output object received
+	// a live row that still carries usable CN lineage. A rewritten source may
+	// also contain legacy TN rows with no commit timestamp, so source-object
+	// lineage alone is not precise enough after the first merge generation.
 	currentObjectCNOrigin bool
 }
 
@@ -212,8 +212,11 @@ func (m *merger[T]) merge(ctx context.Context) error {
 				return err
 			}
 		}
-		m.currentObjectCNOrigin = m.currentObjectCNOrigin ||
-			m.sourceCNOrigins[objIdx]
+		if !m.currentObjectCNOrigin && m.sourceCNOrigins[objIdx] {
+			m.currentObjectCNOrigin = m.host.IsRowCNOrigin(
+				objIdx, m.bats[objIdx].bat, rowIdx,
+			)
+		}
 
 		if m.host.DoTransfer() {
 			if m.stats.objCnt >= int(api.NoTransfer) {
