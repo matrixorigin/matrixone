@@ -1162,7 +1162,6 @@ func (backSes *backSession) bindWorkloadPolicy(
 		); err != nil {
 			return err
 		}
-		accountName = state.cachedRoutingAccountName()
 	}
 
 	// TenantInfo is authorization identity, not workload-routing identity.
