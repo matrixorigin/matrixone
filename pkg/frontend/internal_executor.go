@@ -27,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -259,11 +258,12 @@ func (ie *internalExecutor) newCmdSession(ctx context.Context, opts ie.SessionOv
 		sess.GetTenantInfo().GetTenant() == "" {
 		sess.GetTenantInfo().SetTenant(tenantName)
 	}
-	if sess.GetIsInternal() &&
-		!workloadPolicyBypassed(ctx) &&
+	if !workloadPolicyBypassed(ctx) &&
 		state.snapshot.Load() == nil {
 		// RefreshAsync waits for the first snapshot and becomes asynchronous
-		// only after a usable snapshot exists.
+		// only after a usable snapshot exists. Account-bound SQL tasks use this
+		// executor without marking the statement as internal, so every managed
+		// session must establish the cold account snapshot before compilation.
 		_ = GWorkloadPolicyManager.RefreshAsync(
 			ctx,
 			ie.service,
@@ -272,8 +272,8 @@ func (ie *internalExecutor) newCmdSession(ctx context.Context, opts ie.SessionOv
 		)
 	}
 	policy := GWorkloadPolicyManager.cached(state)
-	if _, configured := policy.Rules[schedule.WorkloadInternal]; sess.GetIsInternal() &&
-		configured &&
+	if policy.Configured() &&
+		!workloadPolicyBypassed(ctx) &&
 		sess.GetTenantInfo().GetTenant() == "" {
 		if tenantName, err := loadWorkloadPolicyAccountNameByService(
 			ctx,

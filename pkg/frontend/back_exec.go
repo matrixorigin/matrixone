@@ -1140,7 +1140,16 @@ func (backSes *backSession) bindWorkloadPolicy(
 		accountName = sysAccountName
 		state.rememberAccountName(accountName)
 	}
-	if accountName == "" && !workloadPolicyBypassed(ctx) {
+	// The authenticated account name is a protected routing label, but it is
+	// needed only when an account policy can actually be applied. In
+	// particular, CREATE ACCOUNT executes tenant bootstrap SQL with the new
+	// account ID before its mo_account row commits. An empty policy is the only
+	// possible authoritative state for that account and must not trigger an
+	// independent catalog lookup that cannot observe the creating transaction.
+	policy := GWorkloadPolicyManager.cached(state)
+	if accountName == "" &&
+		policy.Configured() &&
+		!workloadPolicyBypassed(ctx) {
 		var err error
 		accountName, err = loadWorkloadPolicyAccountNameByService(
 			ctx,

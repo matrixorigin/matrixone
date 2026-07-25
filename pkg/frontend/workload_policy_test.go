@@ -1030,25 +1030,12 @@ func TestBackSessionAllowsTenantBootstrapBeforePolicyTableUpgrade(t *testing.T) 
 	manager := GWorkloadPolicyManager
 	state := manager.acquire(accountID)
 	defer manager.release(state)
-	// Account creation has selected its tenant identity, but the tenant's
-	// catalog-table bootstrap has not reached the policy table yet.
-	mp := mpool.MustNewZero()
-	accountResult := executor.NewMemResult(
-		[]types.Type{types.T_varchar.ToType()},
-		mp,
-	)
-	accountResult.NewBatchWithRowCount(1)
-	require.NoError(t, executor.AppendStringRows(
-		accountResult,
-		0,
-		[]string{"bootstrap-tenant"},
-	))
-	t.Cleanup(func() {
-		require.Zero(t, mp.CurrNB())
-	})
+	// Account creation has selected its tenant ID, but neither its transaction
+	// nor the tenant's catalog-table bootstrap has committed yet.
 
 	rt := moruntime.NewRuntime(metadata.ServiceType_CN, service, nil)
 	moruntime.SetupServiceBasedRuntime(service, rt)
+	policyReads := 0
 	rt.SetGlobalVariables(
 		moruntime.InternalSQLExecutor,
 		&workloadPolicySQLExecutor{
@@ -1059,6 +1046,7 @@ func TestBackSessionAllowsTenantBootstrapBeforePolicyTableUpgrade(t *testing.T) 
 			) (executor.Result, error) {
 				require.True(t, workloadPolicyBypassed(ctx))
 				if strings.Contains(sql, catalog.MO_QUERY_WORKLOAD_POLICY) {
+					policyReads++
 					require.Equal(t, accountID, opts.AccountID())
 					// sqlExecutor returns errors.Join(original, rollbackErr),
 					// even when Rollback succeeds and rollbackErr is nil.
@@ -1069,14 +1057,10 @@ func TestBackSessionAllowsTenantBootstrapBeforePolicyTableUpgrade(t *testing.T) 
 						nil,
 					)
 				}
-				require.Equal(
-					t,
-					"select account_name from mo_catalog.mo_account where account_id = "+
-						fmt.Sprint(accountID),
+				return executor.Result{}, moerr.NewInternalErrorNoCtxf(
+					"bootstrap must not read an uncommitted account: %s",
 					sql,
 				)
-				require.Equal(t, uint32(sysAccountID), opts.AccountID())
-				return accountResult.GetResult(), nil
 			},
 		},
 	)
@@ -1094,7 +1078,126 @@ func TestBackSessionAllowsTenantBootstrapBeforePolicyTableUpgrade(t *testing.T) 
 	require.Empty(t, snapshot.raw)
 	require.Zero(t, snapshot.revision)
 	require.Empty(t, snapshot.set.Rules)
-	require.Equal(t, "bootstrap-tenant", state.cachedAccountName())
+	require.Empty(t, state.cachedAccountName())
+	require.Equal(t, 1, policyReads)
+	require.Nil(t, backSes.GetTenantInfo())
+}
+
+func TestBackSessionLoadsIdentityOnlyForConfiguredPolicy(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		accountID  uint32
+		accountErr error
+		wantErr    string
+	}{
+		{
+			name:      "configured policy loads identity",
+			accountID: ^uint32(0) - 107,
+		},
+		{
+			name:       "configured policy fails closed without identity",
+			accountID:  ^uint32(0) - 108,
+			accountErr: moerr.NewInternalErrorNoCtx("account identity unavailable"),
+			wantErr:    "account identity unavailable",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			service := t.Name()
+			mp := mpool.MustNewZero()
+			policyResult := executor.NewMemResult(
+				[]types.Type{
+					types.T_text.ToType(),
+					types.T_uint64.ToType(),
+				},
+				mp,
+			)
+			policyResult.NewBatchWithRowCount(1)
+			require.NoError(t, executor.AppendStringRows(
+				policyResult,
+				0,
+				[]string{testWorkloadPolicyNew},
+			))
+			require.NoError(t, executor.AppendFixedRows(
+				policyResult,
+				1,
+				[]uint64{2},
+			))
+			accountResult := executor.NewMemResult(
+				[]types.Type{types.T_varchar.ToType()},
+				mp,
+			)
+			accountResult.NewBatchWithRowCount(1)
+			require.NoError(t, executor.AppendStringRows(
+				accountResult,
+				0,
+				[]string{"configured-account"},
+			))
+
+			rt := moruntime.NewRuntime(metadata.ServiceType_CN, service, nil)
+			moruntime.SetupServiceBasedRuntime(service, rt)
+			var policyReads, accountReads int
+			rt.SetGlobalVariables(
+				moruntime.InternalSQLExecutor,
+				&workloadPolicySQLExecutor{
+					exec: func(
+						ctx context.Context,
+						sql string,
+						opts executor.Options,
+					) (executor.Result, error) {
+						require.True(t, workloadPolicyBypassed(ctx))
+						if strings.Contains(sql, catalog.MO_QUERY_WORKLOAD_POLICY) {
+							policyReads++
+							require.Equal(t, test.accountID, opts.AccountID())
+							return policyResult.GetResult(), nil
+						}
+						accountReads++
+						require.Contains(t, sql, "from mo_catalog.mo_account")
+						require.Equal(t, uint32(sysAccountID), opts.AccountID())
+						if test.accountErr != nil {
+							return executor.Result{}, test.accountErr
+						}
+						return accountResult.GetResult(), nil
+					},
+				},
+			)
+
+			backSes := &backSession{
+				feSessionImpl:         feSessionImpl{service: service},
+				workloadPolicyManaged: true,
+			}
+			defer backSes.releaseWorkloadPolicy()
+			ctx := defines.AttachAccountId(context.Background(), test.accountID)
+			err := backSes.bindWorkloadPolicy(ctx, test.accountID)
+			if test.wantErr != "" {
+				require.ErrorContains(t, err, test.wantErr)
+				require.Nil(t, backSes.GetTenantInfo())
+			} else {
+				require.NoError(t, err)
+				require.Equal(
+					t,
+					"configured-account",
+					backSes.GetTenantInfo().GetTenant(),
+				)
+				resolved := schedule.ResolveWorkloadPolicy(
+					schedule.WorkloadDescriptor{
+						Class:  schedule.WorkloadAP,
+						Tenant: backSes.GetTenantInfo().GetTenant(),
+					},
+					queryWorkloadPolicySnapshot(backSes),
+				)
+				require.True(t, resolved.Applied)
+				require.Equal(t, "new", resolved.Pool.Identity)
+				require.Equal(
+					t,
+					"configured-account",
+					resolved.Pool.Labels["account"],
+				)
+			}
+			require.Equal(t, 1, policyReads)
+			require.Equal(t, 1, accountReads)
+			require.Zero(t, mp.CurrNB())
+		})
+	}
 }
 
 func TestWorkloadPolicyCatalogNotInstalledTraversesErrorChain(t *testing.T) {

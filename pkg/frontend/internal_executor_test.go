@@ -163,6 +163,100 @@ func TestInternalExecutorLoadsAccountWorkloadPolicy(t *testing.T) {
 	require.Zero(t, mp.CurrNB())
 }
 
+func TestInternalExecutorLoadsColdAccountPolicyForNonInternalSession(t *testing.T) {
+	const (
+		service   = "non-internal-executor-workload-policy-test"
+		accountID = uint32(92)
+	)
+	mp := mpool.MustNewZero()
+	policyResult := executor.NewMemResult(
+		[]types.Type{
+			types.T_text.ToType(),
+			types.T_uint64.ToType(),
+		},
+		mp,
+	)
+	policyResult.NewBatchWithRowCount(1)
+	require.NoError(t, executor.AppendStringRows(
+		policyResult,
+		0,
+		[]string{`{"version":1,"policies":{"ap":{"pool":"task-ap","labels":{"role":"ap"}}}}`},
+	))
+	require.NoError(t, executor.AppendFixedRows(
+		policyResult,
+		1,
+		[]uint64{1},
+	))
+	accountResult := executor.NewMemResult(
+		[]types.Type{types.T_varchar.ToType()},
+		mp,
+	)
+	accountResult.NewBatchWithRowCount(1)
+	require.NoError(t, executor.AppendStringRows(
+		accountResult,
+		0,
+		[]string{"tenant-92"},
+	))
+
+	runtime.RunTest(
+		service,
+		func(rt runtime.Runtime) {
+			InitServerLevelVars(service)
+			setPu(service, config.NewParameterUnit(
+				&config.FrontendParameters{},
+				nil,
+				nil,
+				nil,
+			))
+			var policyReads, accountReads int
+			rt.SetGlobalVariables(
+				runtime.InternalSQLExecutor,
+				&workloadPolicySQLExecutor{
+					exec: func(
+						ctx context.Context,
+						sql string,
+						opts executor.Options,
+					) (executor.Result, error) {
+						require.True(t, workloadPolicyBypassed(ctx))
+						if strings.Contains(sql, "from mo_catalog.mo_account") {
+							accountReads++
+							require.Equal(t, uint32(sysAccountID), opts.AccountID())
+							return accountResult.GetResult(), nil
+						}
+						policyReads++
+						require.Equal(t, accountID, opts.AccountID())
+						return policyResult.GetResult(), nil
+					},
+				},
+			)
+
+			ctx := defines.AttachAccountId(context.Background(), accountID)
+			first := newIe(service).newCmdSession(
+				ctx,
+				ie.NewOptsBuilder().Finish(),
+			)
+			require.False(t, first.GetIsInternal())
+			policy := queryWorkloadPolicySnapshotAt(ctx, first)
+			require.Empty(t, policy.InvalidReason)
+			resolved := schedule.ResolveWorkloadPolicy(
+				schedule.WorkloadDescriptor{
+					Class:    schedule.WorkloadAP,
+					ExecKind: schedule.QueryExecAPMultiCN,
+					Tenant:   first.GetTenantInfo().GetTenant(),
+				},
+				policy,
+			)
+			require.True(t, resolved.Applied)
+			require.Equal(t, "task-ap", resolved.Pool.Identity)
+			require.Equal(t, "tenant-92", resolved.Pool.Labels["account"])
+			first.Close()
+			require.Equal(t, 1, policyReads)
+			require.Equal(t, 1, accountReads)
+		},
+	)
+	require.Zero(t, mp.CurrNB())
+}
+
 func TestIeProto(t *testing.T) {
 	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
 	// Mock autoIncrCaches
