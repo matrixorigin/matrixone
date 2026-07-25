@@ -189,6 +189,11 @@ func (t *cnMergeTask) GetObjectCnt() int {
 	return len(t.targets)
 }
 
+func (t *cnMergeTask) IsSourceCNOrigin(objIdx uint32) bool {
+	stats := &t.targets[objIdx]
+	return stats.GetCNCreated() || stats.GetCNOrigin()
+}
+
 func (t *cnMergeTask) GetBlkCnts() []int {
 	return t.blkCnts
 }
@@ -305,23 +310,6 @@ func (t *cnMergeTask) prepareCommitEntry() *api.MergeCommitEntry {
 	t.commitEntry = commitEntry
 	// leave mapping to ReadMergeAndWrite
 	return commitEntry
-}
-
-func (t *cnMergeTask) markCreatedObjectsCNOrigin() {
-	hasCNOrigin := false
-	for i := range t.targets {
-		hasCNOrigin = hasCNOrigin ||
-			t.targets[i].GetCNCreated() ||
-			t.targets[i].GetCNOrigin()
-	}
-	if !hasCNOrigin {
-		return
-	}
-	for i := range t.commitEntry.CreatedObjs {
-		stats := objectio.ObjectStats(t.commitEntry.CreatedObjs[i])
-		objectio.WithCNOrigin()(&stats)
-		t.commitEntry.CreatedObjs[i] = stats.Clone().Marshal()
-	}
 }
 
 func (t *cnMergeTask) PrepareNewWriter() *ioutil.BlockWriter {

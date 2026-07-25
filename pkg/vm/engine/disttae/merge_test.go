@@ -26,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
-	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
@@ -72,28 +71,6 @@ func TestCNMergeRejectsMismatchedTargetMetadata(t *testing.T) {
 	require.ErrorContains(t, err, "1 objects, 0 create timestamps")
 }
 
-func TestCNMergeDoesNotMarkPureTNOutput(t *testing.T) {
-	id := objectio.NewObjectid()
-	target := objectio.NewObjectStatsWithObjectID(
-		&id, false, true, false,
-	)
-	createdID := objectio.NewObjectid()
-	created := objectio.NewObjectStatsWithObjectID(
-		&createdID, false, true, false,
-	)
-	task := &cnMergeTask{
-		targets: []objectio.ObjectStats{*target},
-		commitEntry: &api.MergeCommitEntry{
-			CreatedObjs: [][]byte{created.Clone().Marshal()},
-		},
-	}
-
-	task.markCreatedObjectsCNOrigin()
-
-	got := objectio.ObjectStats(task.commitEntry.CreatedObjs[0])
-	require.False(t, got.GetCNOrigin())
-}
-
 func TestCNMergeMaterializesAndPreservesRowCommitTS(t *testing.T) {
 	ctx := context.Background()
 	fs, err := fileservice.NewMemoryFS(
@@ -126,7 +103,6 @@ func TestCNMergeMaterializesAndPreservesRowCommitTS(t *testing.T) {
 	require.NoError(t, mergesort.DoMergeAndWrite(
 		ctx, "cn-merge-commit-ts", -1, task,
 	))
-	task.markCreatedObjectsCNOrigin()
 	require.Len(t, task.GetCommitEntry().CreatedObjs, 1)
 
 	created := objectio.ObjectStats(task.GetCommitEntry().CreatedObjs[0])
@@ -150,7 +126,6 @@ func TestCNMergeMaterializesAndPreservesRowCommitTS(t *testing.T) {
 	require.NoError(t, mergesort.DoMergeAndWrite(
 		ctx, "cn-merge-preserve-commit-ts", -1, secondTask,
 	))
-	secondTask.markCreatedObjectsCNOrigin()
 	require.Len(t, secondTask.GetCommitEntry().CreatedObjs, 1)
 
 	recreated := objectio.ObjectStats(secondTask.GetCommitEntry().CreatedObjs[0])
@@ -183,7 +158,6 @@ func TestCNMergeLegacyTNCommitTSCompatibility(t *testing.T) {
 	require.NoError(t, mergesort.DoMergeAndWrite(
 		ctx, "cn-merge-legacy-tn", -1, pureTNTask,
 	))
-	pureTNTask.markCreatedObjectsCNOrigin()
 	require.Len(t, pureTNTask.GetCommitEntry().CreatedObjs, 1)
 
 	pureTNCreated := objectio.ObjectStats(
@@ -210,7 +184,6 @@ func TestCNMergeLegacyTNCommitTSCompatibility(t *testing.T) {
 	require.NoError(t, mergesort.DoMergeAndWrite(
 		ctx, "cn-merge-legacy-mixed", -1, mixedTask,
 	))
-	mixedTask.markCreatedObjectsCNOrigin()
 	require.Len(t, mixedTask.GetCommitEntry().CreatedObjs, 1)
 
 	mixedCreated := objectio.ObjectStats(
@@ -229,6 +202,54 @@ func TestCNMergeLegacyTNCommitTSCompatibility(t *testing.T) {
 		cnCreateTS,
 		vector.GetFixedAtNoTypeCheck[types.TS](mixedBatch.Vecs[1], 1),
 	)
+}
+
+func TestCNMergeMarksOnlyOutputsContainingCNOriginRows(t *testing.T) {
+	ctx := context.Background()
+	fs, err := fileservice.NewMemoryFS(
+		"cn-merge-output-lineage", fileservice.DisabledCacheConfig, nil,
+	)
+	require.NoError(t, err)
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() {
+		fs.Close(ctx)
+		require.Zero(t, mp.CurrNB())
+	})
+
+	// reshape writes the TN rows first and the CN row last. A tiny target size
+	// forces an object boundary after the first full block, so the first output
+	// is pure TN and the second output contains the CN-origin row.
+	tnValues := make([]int32, objectio.BlockMaxRows)
+	for i := range tnValues {
+		tnValues[i] = int32(i)
+	}
+	legacyTN := writeMergeSourceObject(t, ctx, fs, mp, tnValues)
+	cnCreated := writeCNMergeSourceObject(
+		t, ctx, fs, mp, []int32{int32(objectio.BlockMaxRows)},
+	)
+	task := newCNMergeTaskForTest(
+		t,
+		ctx,
+		fs,
+		mp,
+		[]objectio.ObjectStats{legacyTN, cnCreated},
+		[]types.TS{{}, types.BuildTS(30, 3)},
+	)
+	task.targetObjSize = 1
+	defer task.Release()
+
+	require.False(t, task.DoTransfer())
+	require.NoError(t, mergesort.DoMergeAndWrite(
+		ctx, "cn-merge-output-lineage", -1, task,
+	))
+	require.Len(t, task.GetCommitEntry().CreatedObjs, 2)
+
+	pureTN := objectio.ObjectStats(task.GetCommitEntry().CreatedObjs[0])
+	cnOrigin := objectio.ObjectStats(task.GetCommitEntry().CreatedObjs[1])
+	require.False(t, pureTN.GetCNOrigin())
+	require.True(t, cnOrigin.GetCNOrigin())
+	require.Equal(t, uint32(objectio.BlockMaxRows), pureTN.Rows())
+	require.Equal(t, uint32(1), cnOrigin.Rows())
 }
 
 func readCNMergeCommitTS(

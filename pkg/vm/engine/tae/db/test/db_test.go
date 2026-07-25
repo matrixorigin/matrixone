@@ -3991,10 +3991,17 @@ func TestIncrementalDedupChecksCNRowsAfterMixedTNMerge(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, mergeTask.OnExec(ctx))
 	require.NotEmpty(t, mergeTask.GetCreatedObjects())
+	var pureTNOutputs, cnOriginOutputs int
 	for _, created := range mergeTask.GetCreatedObjects() {
 		require.False(t, created.GetObjectStats().GetCNCreated())
-		require.True(t, created.GetObjectStats().GetCNOrigin())
+		if created.GetObjectStats().GetCNOrigin() {
+			cnOriginOutputs++
+		} else {
+			pureTNOutputs++
+		}
 	}
+	require.Equal(t, 1, pureTNOutputs)
+	require.Equal(t, 1, cnOriginOutputs)
 	require.NoError(t, mergeTxn.Commit(ctx))
 
 	// The old TN row is outside the incremental window even though the mixed
@@ -4020,24 +4027,37 @@ func TestIncrementalDedupChecksCNRowsAfterMixedTNMerge(t *testing.T) {
 
 	secondMergeTxn, secondMergeRel := tae.GetRelation()
 	mergeMetas = mergeMetas[:0]
+	sawTNCreated, sawCNCreated = false, false
 	it = secondMergeRel.MakeObjectIt(false)
 	for it.Next() {
 		meta := it.GetObject().GetMeta().(*catalog.ObjectEntry)
-		require.True(t, meta.GetObjectStats().GetCNOrigin())
+		if meta.GetObjectStats().GetCNOrigin() {
+			sawCNCreated = true
+		} else {
+			sawTNCreated = true
+		}
 		mergeMetas = append(mergeMetas, meta)
 	}
 	it.Close()
-	require.NotEmpty(t, mergeMetas)
+	require.True(t, sawTNCreated)
+	require.True(t, sawCNCreated)
 	secondMergeTask, err := jobs.NewMergeObjectsTask(
 		nil, secondMergeTxn, mergeMetas, tae.Runtime, 0, false,
 	)
 	require.NoError(t, err)
 	require.NoError(t, secondMergeTask.OnExec(ctx))
 	require.NotEmpty(t, secondMergeTask.GetCreatedObjects())
+	pureTNOutputs, cnOriginOutputs = 0, 0
 	for _, created := range secondMergeTask.GetCreatedObjects() {
 		require.False(t, created.GetObjectStats().GetCNCreated())
-		require.True(t, created.GetObjectStats().GetCNOrigin())
+		if created.GetObjectStats().GetCNOrigin() {
+			cnOriginOutputs++
+		} else {
+			pureTNOutputs++
+		}
 	}
+	require.Equal(t, 1, pureTNOutputs)
+	require.Equal(t, 1, cnOriginOutputs)
 	require.NoError(t, secondMergeTxn.Commit(ctx))
 	require.NoError(t, propagationTxn.GetStore().Freeze(ctx))
 	require.NoError(t, propagationTxn.Rollback(ctx))

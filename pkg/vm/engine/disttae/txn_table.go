@@ -3208,7 +3208,6 @@ func (tbl *txnTable) MergeObjects(
 		taskHost.commitEntry.Err = err.Error()
 		return taskHost.commitEntry, err
 	}
-	taskHost.markCreatedObjectsCNOrigin()
 
 	if !taskHost.DoTransfer() {
 		return taskHost.commitEntry, nil

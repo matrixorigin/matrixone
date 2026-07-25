@@ -275,6 +275,7 @@ type MergeTaskHost interface {
 	PrepareNewWriter() *ioutil.BlockWriter
 	DoTransfer() bool
 	GetObjectCnt() int
+	IsSourceCNOrigin(objIdx uint32) bool
 	GetBlkCnts() []int
 	GetAccBlkCnts() []int
 	GetSortKeyType() types.Type
