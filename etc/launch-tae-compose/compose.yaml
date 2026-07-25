@@ -10,11 +10,13 @@ x-mo-common: &mo-common
         # Typecheck: enable type checking for ToSliceNoTypeCheck and ToSliceNoTypeCheck2
         # Default: 0 (disabled), set to 1 to enable
         TYPECHECK: ${TYPECHECK:-0}
+        GOBUILD_OPT: ${GOBUILD_OPT:-}
     image: matrixorigin/matrixone:latest
     volumes:
       - ../../etc/launch-tae-compose/config:/config
       - ../../test:/test
       - ../../docker-compose-log:/log
+      - ../../coverage:/coverage
     restart: on-failure
     tty: true
 
@@ -37,6 +39,7 @@ services:
       - AWS_ACCESS_KEY_ID=minio
       - AWS_SECRET_ACCESS_KEY=minio123
       - mo_reuse_enable_checker=true
+      - GOCOVERDIR=${GOCOVERDIR:-}
     networks:
       monet:
         aliases:
@@ -59,6 +62,7 @@ services:
       - AWS_ACCESS_KEY_ID=minio
       - AWS_SECRET_ACCESS_KEY=minio123
       - mo_reuse_enable_checker=true
+      - GOCOVERDIR=${GOCOVERDIR:-}
     networks:
       monet:
         aliases:
@@ -80,6 +84,7 @@ services:
       - AWS_ACCESS_KEY_ID=minio
       - AWS_SECRET_ACCESS_KEY=minio123
       - mo_reuse_enable_checker=true
+      - GOCOVERDIR=${GOCOVERDIR:-}
     networks:
       monet:
         aliases:
@@ -103,6 +108,7 @@ services:
       - AWS_ACCESS_KEY_ID=minio
       - AWS_SECRET_ACCESS_KEY=minio123
       - mo_reuse_enable_checker=true
+      - GOCOVERDIR=${GOCOVERDIR:-}
     networks:
       monet:
         aliases:
