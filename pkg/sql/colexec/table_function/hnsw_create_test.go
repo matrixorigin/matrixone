@@ -17,6 +17,7 @@ package table_function
 import (
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -551,4 +552,68 @@ func makeBatchHnswCreateFail(proc *process.Process) []failBatch {
 		failBatches = append(failBatches, failBatch{ret, bat})
 	}
 	return failBatches
+}
+
+// TestHnswCreatePrepareParsesConfig covers the zero-doc enabler: Prepare const-folds the
+// IndexTableConfig (arg 0) so end() has the table names even when start() never runs (empty source).
+func TestHnswCreatePrepareParsesConfig(t *testing.T) {
+	hnsw_runSql = mock_hnsw_runSql
+	ut := newHnswCreateTestCase(t, mpool.MustNewZero(), hnswcreatedefaultAttrs, "{\"op_type\": \"vector_l2_ops\"}")
+	ut.arg.Args = makeConstInputExprsHnswCreate()
+
+	require.Nil(t, ut.arg.Prepare(ut.proc))
+
+	st := ut.arg.ctr.state.(*hnswCreateState)
+	require.Equal(t, "db", st.tblcfg.DbName)
+	require.Equal(t, "__metadata", st.tblcfg.MetadataTable)
+	require.Equal(t, "__index", st.tblcfg.IndexTable)
+}
+
+// TestHnswCreateEndZeroDocClears covers the zero-doc rebuild: with no builder created (start()/call()
+// never ran, as on an empty source) end() must STILL clear both hidden tables — via DELETE ... WHERE
+// TRUE (an in-place delete, not a TRUNCATE that would swap the physical table id).
+func TestHnswCreateEndZeroDocClears(t *testing.T) {
+	var captured []string
+	old := hnsw_runSql
+	defer func() { hnsw_runSql = old }()
+	hnsw_runSql = func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+		captured = append(captured, sql)
+		return executor.Result{Mp: sqlproc.Proc.Mp(), Batches: []*batch.Batch{}}, nil
+	}
+
+	ut := newHnswCreateTestCase(t, mpool.MustNewZero(), hnswcreatedefaultAttrs, "{\"op_type\": \"vector_l2_ops\"}")
+	ut.arg.Args = makeConstInputExprsHnswCreate()
+	require.Nil(t, ut.arg.Prepare(ut.proc))
+
+	// end() WITHOUT start()/call() → buildf32/buildf64 stay nil (zero-doc).
+	st := ut.arg.ctr.state.(*hnswCreateState)
+	require.Nil(t, st.end(ut.arg, ut.proc))
+
+	var deletes []string
+	for _, s := range captured {
+		if strings.Contains(s, "DELETE FROM") {
+			deletes = append(deletes, s)
+		}
+	}
+	require.Len(t, deletes, 2, "zero-doc rebuild must still clear metadata + storage")
+	for _, d := range deletes {
+		require.Contains(t, d, "WHERE TRUE", "clear must be an in-place delete, not a TRUNCATE")
+	}
+}
+
+// TestHnswCreateEndNoConfigSkips covers the guard: an uninitialized state (no table names — e.g. the
+// const-fold parse failed) must skip the clear rather than emit an invalid "DELETE FROM " with an
+// empty identifier.
+func TestHnswCreateEndNoConfigSkips(t *testing.T) {
+	var called bool
+	old := hnsw_runSql
+	defer func() { hnsw_runSql = old }()
+	hnsw_runSql = func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
+		called = true
+		return executor.Result{}, nil
+	}
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	st := &hnswCreateState{} // empty tblcfg
+	require.Nil(t, st.end(&TableFunction{}, proc))
+	require.False(t, called, "no SQL must run without a valid table config")
 }
