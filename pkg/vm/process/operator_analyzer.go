@@ -17,6 +17,7 @@ package process
 import (
 	"fmt"
 	"math"
+	"sort"
 	"strings"
 	"time"
 
@@ -727,6 +728,11 @@ type OperatorStats struct {
 	ParquetPeakBatchBytes             int64 `json:"ParquetPeakBatchBytes,omitempty"`
 
 	OperatorMetrics map[MetricType]int64 `json:"OperatorMetrics,omitempty"`
+	// ExtraStats carries sparse operator-specific counters. Keys include their
+	// unit suffix (for example, Bytes or Nanos) so statement-info physical plans
+	// remain self-describing without extending the plan protobuf for every
+	// diagnostic counter.
+	ExtraStats map[string]int64 `json:"ExtraStats,omitempty"`
 
 	BackgroundQueries []*plan.Query `json:"BackgroundQueries,omitempty"`
 }
@@ -788,6 +794,28 @@ func (ps *OperatorStats) GetMetricByKey(metricType MetricType) int64 {
 		return 0
 	}
 	return ps.OperatorMetrics[metricType]
+}
+
+func (ps *OperatorStats) AddExtraStat(key string, value int64) {
+	if ps == nil || key == "" || value == 0 {
+		return
+	}
+	if ps.ExtraStats == nil {
+		ps.ExtraStats = make(map[string]int64)
+	}
+	ps.ExtraStats[key] += value
+}
+
+func (ps *OperatorStats) SetMaxExtraStat(key string, value int64) {
+	if ps == nil || key == "" || value <= 0 {
+		return
+	}
+	if ps.ExtraStats == nil {
+		ps.ExtraStats = make(map[string]int64)
+	}
+	if value > ps.ExtraStats[key] {
+		ps.ExtraStats[key] = value
+	}
 }
 
 func (ps *OperatorStats) Reset() {
@@ -1002,5 +1030,15 @@ func (ps *OperatorStats) String() string {
 	}
 
 	sb.WriteString(metricsStr)
+	if len(ps.ExtraStats) > 0 {
+		keys := make([]string, 0, len(ps.ExtraStats))
+		for key := range ps.ExtraStats {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			sb.WriteString(fmt.Sprintf("%s:%d ", key, ps.ExtraStats[key]))
+		}
+	}
 	return sb.String()
 }

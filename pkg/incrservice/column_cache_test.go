@@ -625,3 +625,32 @@ func TestLastAllocateAtEmptyInitial(t *testing.T) {
 		},
 	)
 }
+
+func TestTerminalValueRetainsAllocateTimestamp(t *testing.T) {
+	ts := timestamp.Timestamp{PhysicalTime: 1000, LogicalTime: 1}
+	cc := &columnCache{
+		col:         AutoColumn{Step: 1},
+		ranges:      &ranges{step: 1},
+		allocatingC: make(chan error, 1),
+	}
+
+	cc.applyAllocateLocked(math.MaxUint64, 0, ts, nil)
+
+	require.True(t, cc.terminal)
+	require.Equal(t, uint64(math.MaxUint64), cc.terminalValue)
+	require.Equal(t, ts, cc.oldestAllocateAtLocked())
+}
+
+func TestWrappedAllocationPreservesAllTerminalValues(t *testing.T) {
+	cc := &columnCache{
+		col:         AutoColumn{Step: 1},
+		ranges:      &ranges{step: 1},
+		allocatingC: make(chan error, 1),
+	}
+
+	cc.applyAllocateLocked(math.MaxUint64-1, 0, timestamp.Timestamp{}, nil)
+
+	require.Equal(t, uint64(math.MaxUint64-1), cc.ranges.next())
+	require.True(t, cc.terminal)
+	require.Equal(t, uint64(math.MaxUint64), cc.terminalValue)
+}
