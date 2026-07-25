@@ -408,6 +408,26 @@ func TestHnswSyncNextTimestampMonotonic(t *testing.T) {
 	require.LessOrEqual(t, ts, time.Now().UnixMicro()+1)
 }
 
+// TestHnswBuildTimestampMonotonic covers the full-rebuild generation allocation: when the builder's
+// wall clock is at (or behind) the prior generation's max — the ABA case where a rebuild with
+// different contents but the same model count could otherwise re-mint an identical (timestamp,count)
+// a warm remote cache already holds — BuildTimestamp still allocates strictly above the prior max, so
+// the rebuilt generation is always distinct and HnswSearch.IsStale cannot miss the rebuild.
+func TestHnswBuildTimestampMonotonic(t *testing.T) {
+	// prior max is 1h in the FUTURE relative to wall-clock (skew / backward step): floor above it.
+	future := time.Now().UnixMicro() + int64(time.Hour/time.Microsecond)
+	require.Equal(t, future+1, BuildTimestamp(future), "must allocate above the prior max, not reuse wall-clock")
+
+	// the exact-equality ABA case (wall-clock == prior max) also advances strictly.
+	now := time.Now().UnixMicro()
+	require.Greater(t, BuildTimestamp(now), now)
+
+	// fresh CREATE (floor 0) → plain wall-clock now (bounded, positive).
+	ts := BuildTimestamp(0)
+	require.Positive(t, ts)
+	require.LessOrEqual(t, ts, time.Now().UnixMicro())
+}
+
 // TestHnswSearchIsStaleQueryError covers the IsStale query path: with a captured generation but
 // an unresolvable CN service, queryHnswGeneration errors, and IsStale treats a query error as
 // stale (so a dropped/rebuilt index's dead cache entry is reclaimed) while surfacing the error.
@@ -501,5 +521,34 @@ func TestLoadHnswGenerationHappy(t *testing.T) {
 		return genInt64Result(t, mp, 150), nil
 	}
 	_, _, err = loadHnswGeneration(nil, cfg)
+	require.Error(t, err)
+}
+
+// TestHnswGenerationReadFirstReadErrorAndScalar covers the remaining generation-reader branches:
+// the FIRST-read (timestamp) error is propagated by both the live and background readers, and
+// genScalarInt64 falls through to 0 on an empty / nil-batch result.
+func TestHnswGenerationReadFirstReadErrorAndScalar(t *testing.T) {
+	cfg := vectorindex.IndexTableConfig{DbName: "db", MetadataTable: "m", IndexTable: "s"}
+
+	// genScalarInt64 fall-through: empty result and nil batch → 0 (no panic on Vecs[0]).
+	require.Equal(t, int64(0), genScalarInt64(executor.Result{}))
+	require.Equal(t, int64(0), genScalarInt64(executor.Result{Batches: []*batch.Batch{nil}}))
+
+	// live reader: first (timestamp) read errors → propagated before the count read.
+	oldRun := runSql
+	defer func() { runSql = oldRun }()
+	runSql = func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
+		return executor.Result{}, moerr.NewInternalErrorNoCtx("ts read failed")
+	}
+	_, _, err := loadHnswGeneration(nil, cfg)
+	require.Error(t, err)
+
+	// background reader: first (timestamp) read errors → propagated.
+	oldAuto := runSqlAutoCommit
+	defer func() { runSqlAutoCommit = oldAuto }()
+	runSqlAutoCommit = func(_ context.Context, _ string, _ uint32, _, _ string) (executor.Result, error) {
+		return executor.Result{}, moerr.NewInternalErrorNoCtx("ts read failed")
+	}
+	_, _, err = queryHnswGeneration(context.Background(), "cn", 0, cfg)
 	require.Error(t, err)
 }

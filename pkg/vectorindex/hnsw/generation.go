@@ -17,6 +17,7 @@ package hnsw
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -47,6 +48,49 @@ var runSqlAutoCommit = sqlexec.RunSqlAutoCommit
 // hnsw does NOT use the shared cachegen (CdcTailId, tag=1) chunk-id read: it has no CDC event tail
 // (it rewrites model files in place), so that read is a constant -1 for hnsw and cannot observe an
 // emptied model. COUNT(*) replaces it as the second, deletion-sensitive half of the generation.
+// MaxMetadataTimestamp reads the current MAX(timestamp) of the metadata table using the caller's
+// live txn (0 if the table is empty or the read fails). The full-build TVF calls this BEFORE it
+// clears the hidden tables, so BuildTimestamp can floor the rebuilt generation strictly above the
+// prior one (monotonic across a rebuild — see BuildTimestamp / HnswSearch.IsStale).
+func MaxMetadataTimestamp(sqlproc *sqlexec.SqlProcess, tblcfg vectorindex.IndexTableConfig) int64 {
+	ts, _, err := loadHnswGeneration(sqlproc, tblcfg)
+	if err != nil {
+		return 0
+	}
+	return ts
+}
+
+// ClearIndexSqls returns the statements that empty the hnsw hidden tables (metadata + storage).
+// The full-build TVF issues these AFTER reading the generation floor, so it owns clear+rebuild
+// atomically (the delete used to live in the compile layer, before the builder could read the
+// pre-clear generation).
+//
+// WHERE TRUE is deliberate: a bare "DELETE FROM t" is rewritten to a TRUNCATE, which swaps the
+// table's physical id (a new index table under the same name). This in-place rebuild keeps the
+// table stable and relies on the (timestamp, count) generation for freshness, so we force a plain
+// row delete instead.
+func ClearIndexSqls(tblcfg vectorindex.IndexTableConfig) []string {
+	return []string{
+		"DELETE FROM " + sqlquote.QualifiedIdent(tblcfg.DbName, tblcfg.MetadataTable) + " WHERE TRUE",
+		"DELETE FROM " + sqlquote.QualifiedIdent(tblcfg.DbName, tblcfg.IndexTable) + " WHERE TRUE",
+	}
+}
+
+// BuildTimestamp allocates the metadata timestamp for a FULL (re)build, strictly greater than
+// floor — the pre-rebuild MAX(metadata.timestamp), captured before the rebuild wiped the metadata
+// table. It is the full-build counterpart to HnswSync.nextTimestamp (which keeps CDC saves
+// monotonic from the in-memory model set): a full rebuild deletes every metadata row first, so the
+// prior generation is gone by the time the builder runs and time.Now() alone could re-mint the same
+// (timestamp, count) a warm remote cache already holds — under a skewed or backward-stepped builder
+// clock IsStale would then miss the rebuild and serve pre-rebuild data indefinitely. Flooring above
+// the captured prior max makes the new generation strictly distinct regardless of the clock.
+func BuildTimestamp(floor int64) int64 {
+	if now := time.Now().UnixMicro(); now > floor {
+		return now
+	}
+	return floor + 1
+}
+
 func hnswGenerationSqls(tblcfg vectorindex.IndexTableConfig) (tsSQL, countSQL string) {
 	meta := sqlquote.QualifiedIdent(tblcfg.DbName, tblcfg.MetadataTable)
 	tsSQL = fmt.Sprintf("SELECT COALESCE(MAX(%s), 0) FROM %s", catalog.Hnsw_TblCol_Metadata_Timestamp, meta)
