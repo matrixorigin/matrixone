@@ -47,6 +47,9 @@ enum OpCode {
     OpSnapshotRead = 2015;
     OpGetChangedTableList = 2016;
     OpFaultInject = 2017;
+    // OpCommitMergeV2 requires the receiver to preserve row lineage.
+    // A pre-V2 TN rejects this unknown opcode before applying the merge.
+    OpCommitMergeV2 = 2018;
 }
 
 // TNPingRequest ping request

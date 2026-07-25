@@ -19,64 +19,43 @@ import (
 	"errors"
 	"math"
 	"testing"
-	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/clusterservice"
-	"github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
-	"github.com/matrixorigin/matrixone/pkg/pb/query"
-	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/stretchr/testify/require"
 )
 
-type mergeCapabilityClient struct {
-	version   int64
-	err       error
-	nilResp   bool
-	noVersion bool
-	released  bool
+type recordingMergeTxnOperator struct {
+	client.TxnOperator
+	requests []txn.TxnRequest
 }
 
-var _ qclient.QueryClient = new(mergeCapabilityClient)
-
-func (c *mergeCapabilityClient) ServiceID() string {
-	return "cn"
+type recordingDeleteFileService struct {
+	fileservice.FileService
+	deleted []string
 }
 
-func (c *mergeCapabilityClient) SendMessage(
+func (fs *recordingDeleteFileService) Delete(
 	_ context.Context,
-	_ string,
-	_ *query.Request,
-) (*query.Response, error) {
-	if c.err != nil {
-		return nil, c.err
-	}
-	if c.nilResp {
-		return nil, nil
-	}
-	if c.noVersion {
-		return &query.Response{}, nil
-	}
-	return &query.Response{
-		GetProtocolVersion: &query.GetProtocolVersionResponse{
-			Version: c.version,
-		},
-	}, nil
-}
-
-func (c *mergeCapabilityClient) NewRequest(method query.CmdMethod) *query.Request {
-	return &query.Request{CmdMethod: method}
-}
-
-func (c *mergeCapabilityClient) Release(_ *query.Response) {
-	c.released = true
-}
-
-func (c *mergeCapabilityClient) Close() error {
+	paths ...string,
+) error {
+	fs.deleted = append(fs.deleted, paths...)
 	return nil
+}
+
+func (op *recordingMergeTxnOperator) Write(
+	_ context.Context,
+	requests []txn.TxnRequest,
+) (*rpc.SendResult, error) {
+	op.requests = requests
+	return &rpc.SendResult{}, nil
 }
 
 func TestParseArgs(t *testing.T) {
@@ -223,128 +202,65 @@ func TestParseArgs(t *testing.T) {
 	}
 }
 
-func TestCheckTNMergeLineageCapability(t *testing.T) {
+func TestTxnWriteUsesLineageAwareOpcode(t *testing.T) {
+	op := new(recordingMergeTxnOperator)
+	target := metadata.TNShard{
+		TNShardRecord: metadata.TNShardRecord{ShardID: 7},
+		ReplicaID:     8,
+		Address:       "tn",
+	}
+	payload := []byte("merge")
+
+	result, err := txnWrite(context.Background(), target, op, payload)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Len(t, op.requests, 1)
+	require.Equal(t, uint32(api.OpCode_OpCommitMergeV2), op.requests[0].CNRequest.OpCode)
+	require.Equal(t, target, op.requests[0].CNRequest.Target)
+	require.Equal(t, payload, op.requests[0].CNRequest.Payload)
+}
+
+func TestCleanupMergeFilesAfterDefinitiveWriteRejection(t *testing.T) {
+	id := objectio.NewObjectid()
+	created := objectio.NewObjectStatsWithObjectID(&id, false, true, false)
+	entry := &api.MergeCommitEntry{
+		BookingLoc:  []string{"booking"},
+		CreatedObjs: [][]byte{created.Marshal()},
+	}
+
 	for _, test := range []struct {
-		name        string
-		client      *mergeCapabilityClient
-		wantErr     string
-		wantRelease bool
+		name       string
+		err        error
+		wantDelete bool
 	}{
 		{
-			name:        "current TN",
-			client:      &mergeCapabilityClient{version: defines.MORPCVersion5},
-			wantRelease: true,
+			name:       "old TN rejects V2",
+			err:        moerr.NewNotSupportedNoCtx("unknown write op"),
+			wantDelete: true,
 		},
 		{
-			name:        "future TN",
-			client:      &mergeCapabilityClient{version: defines.MORPCVersion5 + 1},
-			wantRelease: true,
+			name: "ambiguous RPC failure",
+			err:  moerr.NewRpcErrorNoCtx("connection closed"),
 		},
 		{
-			name:        "old TN",
-			client:      &mergeCapabilityClient{version: defines.MORPCVersion4},
-			wantErr:     "requires TN protocol version 5",
-			wantRelease: true,
+			name: "untyped failure",
+			err:  errors.New("write failed"),
 		},
 		{
-			name:    "query failure",
-			client:  &mergeCapabilityClient{err: errors.New("query failed")},
-			wantErr: "query failed",
-		},
-		{
-			name:    "empty response",
-			client:  &mergeCapabilityClient{nilResp: true},
-			wantErr: "TN returned no protocol version",
-		},
-		{
-			name:        "missing version",
-			client:      &mergeCapabilityClient{noVersion: true},
-			wantErr:     "requires TN protocol version 5",
-			wantRelease: true,
+			name: "success",
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			err := checkTNMergeLineageCapability(
-				context.Background(),
-				test.client,
-				"tn-query",
-			)
-			if test.wantErr == "" {
-				require.NoError(t, err)
+			fs := new(recordingDeleteFileService)
+			cleanupMergeFilesAfterWrite(entry, fs, test.err)
+			if test.wantDelete {
+				require.Equal(t, []string{
+					"booking",
+					created.ObjectName().String(),
+				}, fs.deleted)
 			} else {
-				require.ErrorContains(t, err, test.wantErr)
+				require.Empty(t, fs.deleted)
 			}
-			require.Equal(t, test.wantRelease, test.client.released)
 		})
 	}
-
-	require.ErrorContains(
-		t,
-		checkTNMergeLineageCapability(context.Background(), nil, "tn-query"),
-		"query client is not configured",
-	)
-}
-
-func TestGetTNMergeTargetKeepsShardAndQueryAddressTogether(t *testing.T) {
-	const service = "merge-target-test"
-	rt := runtime.DefaultRuntime()
-	runtime.SetupServiceBasedRuntime(service, rt)
-	cluster := clusterservice.NewMOCluster(
-		service,
-		nil,
-		time.Second,
-		clusterservice.WithDisableRefresh(),
-		clusterservice.WithServices(
-			nil,
-			[]metadata.TNService{
-				{QueryAddress: "no-shard"},
-				{
-					TxnServiceAddress: "tn-1",
-					QueryAddress:      "query-1",
-					Shards: []metadata.TNShard{
-						{
-							TNShardRecord: metadata.TNShardRecord{ShardID: 1},
-							ReplicaID:     11,
-						},
-					},
-				},
-				{
-					TxnServiceAddress: "tn-2",
-					QueryAddress:      "query-2",
-					Shards: []metadata.TNShard{
-						{
-							TNShardRecord: metadata.TNShardRecord{ShardID: 2},
-							ReplicaID:     22,
-						},
-					},
-				},
-			},
-		),
-	)
-	defer cluster.Close()
-	rt.SetGlobalVariables(runtime.ClusterService, cluster)
-
-	target, queryAddress := getTNMergeTarget(service)
-	require.Equal(t, uint64(1), target.ShardID)
-	require.Equal(t, uint64(11), target.ReplicaID)
-	require.Equal(t, "tn-1", target.Address)
-	require.Equal(t, "query-1", queryAddress)
-}
-
-func TestValidateTNMergeTargetFailsClosed(t *testing.T) {
-	validTarget := metadata.TNShard{
-		TNShardRecord: metadata.TNShardRecord{ShardID: 1},
-	}
-	client := &mergeCapabilityClient{version: defines.MORPCVersion5}
-
-	require.NoError(t, validateTNMergeTarget(
-		context.Background(), client, validTarget, "tn-query",
-	))
-	require.True(t, client.released)
-	require.ErrorContains(t, validateTNMergeTarget(
-		context.Background(), client, metadata.TNShard{}, "tn-query",
-	), "requires a TN with row-lineage capability")
-	require.ErrorContains(t, validateTNMergeTarget(
-		context.Background(), client, validTarget, "",
-	), "requires a TN with row-lineage capability")
 }

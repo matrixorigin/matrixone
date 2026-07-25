@@ -2495,6 +2495,11 @@ func TestMalformedTNResponsesReturnErrors(t *testing.T) {
 	tc := &txnOperator{}
 
 	require.Error(t, tc.checkTxnError(&txn.TxnError{TxnErrCode: ^uint32(0)}, nil))
+	err := tc.checkTxnError(
+		txn.WrapError(moerr.NewNotSupportedNoCtx("unsupported write"), 0),
+		writeTxnErrors,
+	)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
 	require.Error(t, tc.checkResponseTxnStatusForReadWrite(txn.TxnResponse{
 		Txn: &txn.TxnMeta{Status: txn.TxnStatus(99)},
 	}))

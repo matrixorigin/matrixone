@@ -36,6 +36,7 @@ var (
 		OpCode_OpGlobalCheckpoint: "GlobalCheckpoint",
 		OpCode_OpInterceptCommit:  "InterceptCommit",
 		OpCode_OpCommitMerge:      "CommitMerge",
+		OpCode_OpCommitMergeV2:    "CommitMergeV2",
 		OpCode_OpDiskDiskCleaner:  "DiskCleaner",
 	}
 )
