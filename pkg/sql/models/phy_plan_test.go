@@ -19,7 +19,10 @@ import (
 	"strings"
 	"testing"
 
+	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -29,6 +32,145 @@ const (
 	isFirstFalse = 0 << 0 // 0000 : isFirst = false
 	isLastFalse  = 0 << 1 // 0000 : isLast = false
 )
+
+var benchmarkExportPhyPlan *PhyPlan
+
+func BenchmarkPhyPlanCloneForExport(b *testing.B) {
+	for _, operatorCount := range []int{10, 100, 1000} {
+		for _, withBackgroundQuery := range []bool{false, true} {
+			name := fmt.Sprintf("operators=%d/background=%t", operatorCount, withBackgroundQuery)
+			b.Run(name, func(b *testing.B) {
+				plan := newBenchmarkPhyPlan(operatorCount, withBackgroundQuery)
+				b.ReportAllocs()
+				for b.Loop() {
+					benchmarkExportPhyPlan = plan.CloneForExport()
+				}
+			})
+		}
+	}
+}
+
+func newBenchmarkPhyPlan(operatorCount int, withBackgroundQuery bool) *PhyPlan {
+	var root *PhyOperator
+	for i := 0; i < operatorCount; i++ {
+		stats := &process.OperatorStats{
+			CallNum:         i + 1,
+			OperatorMetrics: map[process.MetricType]int64{process.OpScanTime: int64(i)},
+			ExtraStats:      map[string]int64{"SpillBytes": int64(i)},
+		}
+		if withBackgroundQuery && i == 0 {
+			stats.BackgroundQueries = []*planpb.Query{{
+				Steps:      []int32{0},
+				Headings:   []string{"background"},
+				DetectSqls: []string{"select 1"},
+			}}
+		}
+		operator := &PhyOperator{
+			OpName:  "benchmark",
+			NodeIdx: i,
+			OpStats: stats,
+		}
+		if root != nil {
+			operator.Children = []*PhyOperator{root}
+		}
+		root = operator
+	}
+	return &PhyPlan{LocalScope: []PhyScope{{RootOperator: root}}}
+}
+
+func TestPhyPlanCloneForExportDetachesExecutionGraph(t *testing.T) {
+	stats := &process.OperatorStats{
+		OperatorName:    "shared",
+		CallNum:         7,
+		OperatorMetrics: map[process.MetricType]int64{process.OpScanTime: 11},
+		ExtraStats:      map[string]int64{"SpillBytes": 13},
+	}
+	sharedChild := &PhyOperator{
+		OpName:  "child",
+		NodeIdx: 1,
+		OpStats: stats,
+	}
+	root := &PhyOperator{
+		OpName:       "root",
+		NodeIdx:      0,
+		DestReceiver: []PhyReceiver{{Idx: 1, RemoteUuid: "receiver"}},
+		OpStats:      stats,
+		Children:     []*PhyOperator{sharedChild, sharedChild},
+	}
+	source := &PhyPlan{
+		Version:   "1.0",
+		RetryTime: 3,
+		Resource:  &resource.StatementResourceSummary{StatementWallNS: 17},
+		LocalScope: []PhyScope{{
+			Magic:      "Normal",
+			Receiver:   []PhyReceiver{{Idx: 2, RemoteUuid: "local"}},
+			DataSource: &PhySource{SchemaName: "db", RelationName: "tbl", Attributes: []string{"a", "b"}},
+			PreScopes: []PhyScope{{
+				Magic:        "Merge",
+				RootOperator: sharedChild,
+			}},
+			RootOperator: root,
+		}},
+		RemoteScope: []PhyScope{{
+			Magic:        "Remote",
+			RootOperator: sharedChild,
+		}},
+	}
+
+	got := source.CloneForExport()
+
+	require.Equal(t, source, got)
+	require.NotSame(t, source, got)
+	require.NotSame(t, source.Resource, got.Resource)
+	require.NotSame(t, source.LocalScope[0].DataSource, got.LocalScope[0].DataSource)
+	require.NotSame(t, source.LocalScope[0].RootOperator, got.LocalScope[0].RootOperator)
+	require.NotSame(t, source.LocalScope[0].RootOperator.OpStats, got.LocalScope[0].RootOperator.OpStats)
+	require.Same(t, got.LocalScope[0].RootOperator.Children[0], got.LocalScope[0].RootOperator.Children[1])
+	require.Same(t, got.LocalScope[0].RootOperator.Children[0], got.LocalScope[0].PreScopes[0].RootOperator)
+	require.Same(t, got.LocalScope[0].RootOperator.Children[0], got.RemoteScope[0].RootOperator)
+
+	source.Resource.StatementWallNS = 19
+	source.LocalScope[0].Receiver[0].Idx = 20
+	source.LocalScope[0].DataSource.Attributes[0] = "mutated"
+	source.LocalScope[0].RootOperator.DestReceiver[0].Idx = 21
+	source.LocalScope[0].RootOperator.Children = nil
+	stats.OperatorMetrics[process.OpScanTime] = 22
+	stats.ExtraStats["SpillBytes"] = 23
+	stats.Reset()
+
+	require.Equal(t, uint64(17), got.Resource.StatementWallNS)
+	require.Equal(t, 2, got.LocalScope[0].Receiver[0].Idx)
+	require.Equal(t, "a", got.LocalScope[0].DataSource.Attributes[0])
+	require.Equal(t, 1, got.LocalScope[0].RootOperator.DestReceiver[0].Idx)
+	require.Len(t, got.LocalScope[0].RootOperator.Children, 2)
+	require.Equal(t, 7, got.LocalScope[0].RootOperator.OpStats.CallNum)
+	require.Equal(t, int64(11), got.LocalScope[0].RootOperator.OpStats.OperatorMetrics[process.OpScanTime])
+	require.Equal(t, int64(13), got.LocalScope[0].RootOperator.OpStats.ExtraStats["SpillBytes"])
+
+	var nilPlan *PhyPlan
+	require.Nil(t, nilPlan.CloneForExport())
+}
+
+func TestPhyPlanCloneForExportPreservesNilAndEmptyReferences(t *testing.T) {
+	source := &PhyPlan{
+		LocalScope:  []PhyScope{{RootOperator: &PhyOperator{}}},
+		RemoteScope: []PhyScope{},
+	}
+
+	got := source.CloneForExport()
+
+	require.Nil(t, got.Resource)
+	require.Len(t, got.LocalScope, 1)
+	require.Nil(t, got.LocalScope[0].Receiver)
+	require.Nil(t, got.LocalScope[0].DataSource)
+	require.Nil(t, got.LocalScope[0].PreScopes)
+	require.NotNil(t, got.LocalScope[0].RootOperator)
+	require.Nil(t, got.LocalScope[0].RootOperator.DestReceiver)
+	require.Nil(t, got.LocalScope[0].RootOperator.OpStats)
+	require.Nil(t, got.LocalScope[0].RootOperator.Children)
+	require.NotNil(t, got.RemoteScope)
+	require.Empty(t, got.RemoteScope)
+}
 
 func TestPhyPlanJSON(t *testing.T) {
 	operatorStats := &process.OperatorStats{
