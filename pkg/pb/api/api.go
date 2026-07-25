@@ -19,6 +19,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
+// MergeCommitEntryLineageVersion is the current monotonic row-lineage
+// contract implemented by merge producers. Older producers decode as version
+// zero. Future versions must retain the guarantees of earlier versions.
+const MergeCommitEntryLineageVersion uint32 = 1
+
 var (
 	OpMethodName = map[OpCode]string{
 		OpCode_OpPing:             "Ping",

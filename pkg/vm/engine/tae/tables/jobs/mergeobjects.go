@@ -556,7 +556,9 @@ func HandleMergeEntryInTxn(
 	createdObjs := make([]*catalog.ObjectEntry, 0, len(entry.CreatedObjs))
 	ids := make([]*common.ID, 0, len(entry.MergedObjs)*2)
 
-	// drop merged blocks and objects
+	// Resolve and validate every source before changing catalog state. During
+	// a rolling upgrade, an old CN can return a structurally valid result that
+	// silently loses CN row lineage. Pure-TN legacy results remain compatible.
 	for _, item := range entry.MergedObjs {
 		drop := objectio.ObjectStats(item)
 		objID := drop.ObjectName().ObjectId()
@@ -568,7 +570,15 @@ func HandleMergeEntryInTxn(
 			return nil, err
 		}
 		meta := obj.GetMeta().(*catalog.ObjectEntry)
+		if err = validateMergeEntrySource(entry, meta.GetObjectStats()); err != nil {
+			return nil, err
+		}
 		mergedObjs = append(mergedObjs, meta)
+	}
+
+	// drop merged blocks and objects
+	for _, meta := range mergedObjs {
+		objID := meta.ID()
 		if err = rel.SoftDeleteObject(objID, isTombstone); err != nil {
 			return nil, err
 		}
@@ -640,6 +650,21 @@ func HandleMergeEntryInTxn(
 	}
 
 	return createdObjs, nil
+}
+
+func validateMergeEntrySource(
+	entry *api.MergeCommitEntry,
+	stats *objectio.ObjectStats,
+) error {
+	if entry.LineageVersion >= api.MergeCommitEntryLineageVersion ||
+		(!stats.GetCNCreated() && !stats.GetCNOrigin()) {
+		return nil
+	}
+	return moerr.NewNotSupportedNoCtxf(
+		"merge result lineage version %d cannot rewrite CN-origin object %s; retry on a compatible CN",
+		entry.LineageVersion,
+		stats.ObjectName().String(),
+	)
 }
 
 func (task *mergeObjectsTask) GetTotalSize() uint64 {

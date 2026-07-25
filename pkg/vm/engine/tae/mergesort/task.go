@@ -320,6 +320,10 @@ func DoMergeAndWrite(
 	start := time.Now()
 	/*out args, keep the transfer information*/
 	commitEntry := mergehost.GetCommitEntry()
+	// Advertise the lineage contract at the common producer boundary so CN
+	// and TN merge implementations cannot drift. A new TN uses this proof to
+	// reject results from rolling-upgrade CNs that cannot preserve lineage.
+	commitEntry.LineageVersion = api.MergeCommitEntryLineageVersion
 	logMergeStart(
 		mergehost.TaskSourceNote(),
 		mergehost.Name(),

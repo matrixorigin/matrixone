@@ -3901,6 +3901,77 @@ func TestIncrementalDedupChecksCNCreatedObject(t *testing.T) {
 	require.NoError(t, insertTxn.Rollback(ctx))
 }
 
+func TestRejectLegacyCNMergeOfLineageSource(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll(3, 2)
+	tae.BindSchema(schema)
+	testutil.CreateRelation(t, tae.DB, "db", schema, true)
+
+	bat := catalog.MockBatch(schema, 1)
+	defer bat.Close()
+	sourceID := objectio.NewObjectid()
+	sourceName := objectio.BuildObjectNameWithObjectID(&sourceID)
+	writer, err := ioutil.NewBlockWriterNew(
+		tae.Runtime.Fs, sourceName, 0, nil, false,
+	)
+	require.NoError(t, err)
+	writer.SetPrimaryKey(uint16(schema.GetSingleSortKeyIdx()))
+	_, err = writer.WriteBatch(containers.ToCNBatch(bat))
+	require.NoError(t, err)
+	_, _, err = writer.Sync(ctx)
+	require.NoError(t, err)
+	sourceStats := writer.GetObjectStats(objectio.WithCNCreated())
+	statsVec := containers.MakeVector(
+		types.T_varchar.ToType(), common.DefaultAllocator,
+	)
+	defer statsVec.Close()
+	statsVec.Append(sourceStats[:], false)
+
+	addTxn, addRel := tae.GetRelation()
+	require.NoError(t, addRel.AddDataFiles(ctx, statsVec))
+	require.NoError(t, addTxn.Commit(ctx))
+
+	mergeTxn, mergeRel := tae.GetRelation()
+	source, err := mergeRel.GetObject(&sourceID, false)
+	require.NoError(t, err)
+	sourceMeta := source.GetMeta().(*catalog.ObjectEntry)
+	require.True(t, sourceMeta.GetObjectStats().GetCNCreated())
+	require.False(t, sourceMeta.HasDropIntent())
+
+	outputID := objectio.NewObjectid()
+	outputStats := objectio.NewObjectStatsWithObjectID(
+		&outputID, false, true, false,
+	)
+	legacySourceStats := objectio.NewObjectStatsWithObjectID(
+		&sourceID, false, true, false,
+	)
+	require.False(t, legacySourceStats.GetCNCreated())
+	entry := &api.MergeCommitEntry{
+		DbId:        sourceMeta.GetTable().GetDB().ID,
+		TblId:       sourceMeta.GetTable().ID,
+		TableName:   schema.Name,
+		MergedObjs:  [][]byte{legacySourceStats.Clone().Marshal()},
+		CreatedObjs: [][]byte{outputStats.Clone().Marshal()},
+		// LineageVersion deliberately remains zero, and the producer-supplied
+		// source stats omit CNCreated, to emulate an old explicit o: CN merge.
+	}
+
+	_, err = jobs.HandleMergeEntryInTxn(
+		ctx, mergeTxn, "legacy-cn-merge", entry, nil, tae.Runtime, false,
+	)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), err)
+	require.ErrorContains(t, err, "retry on a compatible CN")
+	require.False(t, sourceMeta.HasDropIntent())
+	require.NoError(t, mergeTxn.Rollback(ctx))
+}
+
 func TestIncrementalDedupChecksCNRowsAfterMixedTNMerge(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	ctx := context.Background()
@@ -3991,6 +4062,11 @@ func TestIncrementalDedupChecksCNRowsAfterMixedTNMerge(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, mergeTask.OnExec(ctx))
 	require.NotEmpty(t, mergeTask.GetCreatedObjects())
+	require.Equal(
+		t,
+		api.MergeCommitEntryLineageVersion,
+		mergeTask.GetCommitEntry().GetLineageVersion(),
+	)
 	var pureTNOutputs, cnOriginOutputs int
 	for _, created := range mergeTask.GetCreatedObjects() {
 		require.False(t, created.GetObjectStats().GetCNCreated())

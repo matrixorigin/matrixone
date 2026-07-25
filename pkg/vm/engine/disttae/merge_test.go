@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
@@ -103,9 +104,21 @@ func TestCNMergeMaterializesAndPreservesRowCommitTS(t *testing.T) {
 	require.NoError(t, mergesort.DoMergeAndWrite(
 		ctx, "cn-merge-commit-ts", -1, task,
 	))
-	require.Len(t, task.GetCommitEntry().CreatedObjs, 1)
+	entry := task.GetCommitEntry()
+	require.Len(t, entry.CreatedObjs, 1)
+	require.Equal(t, api.MergeCommitEntryLineageVersion, entry.LineageVersion)
 
-	created := objectio.ObjectStats(task.GetCommitEntry().CreatedObjs[0])
+	encoded, err := entry.MarshalBinary()
+	require.NoError(t, err)
+	var decoded api.MergeCommitEntry
+	require.NoError(t, decoded.UnmarshalBinary(encoded))
+	require.Equal(
+		t,
+		api.MergeCommitEntryLineageVersion,
+		decoded.GetLineageVersion(),
+	)
+
+	created := objectio.ObjectStats(entry.CreatedObjs[0])
 	require.True(t, created.GetCNOrigin())
 	require.Equal(t, []types.TS{
 		createTSs[0], createTSs[0],
