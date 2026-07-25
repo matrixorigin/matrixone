@@ -45,15 +45,16 @@ type HnswSearch[T types.RealNumbers] struct {
 	Cond          *sync.Cond
 	ThreadsSearch int64
 
-	// Generation captured at Load for the cross-CN cache freshness check (IsStale), read from the
-	// metadata table as (MAX(timestamp), COUNT(*) model rows) — see hnswGenerationSqls. loadedTs
-	// moves on any surviving-row change (CDC append / in-place rewrite / REBUILD / MERGE); loadedCount
-	// moves when a model is emptied and its row is deleted with no compensating insert (which would
-	// otherwise leave MAX(timestamp) unchanged). cnUUID/accountID re-query in the background.
-	// genValid=false (capture failed) ⇒ IsStale reports stale so the entry is evicted and reloaded.
+	// Generation captured at Load for the cross-CN cache freshness check (IsStale): a CONTENT
+	// fingerprint over the per-model file checksums (MD5s) plus the model-row count — see
+	// hnswGenerationSql. loadedFp moves on ANY content change (CDC append/delete rewrites a model
+	// file, REBUILD/MERGE, or a model emptied) and is clock-independent, so it survives an
+	// intermediate empty state that a timestamp-based generation could not. cnUUID/accountID re-query
+	// in the background. genValid=false (capture failed) ⇒ IsStale reports stale so the entry is
+	// evicted and reloaded.
 	cnUUID      string
 	accountID   uint32
-	loadedTs    int64
+	loadedFp    uint64
 	loadedCount int64
 	genValid    bool
 }
@@ -307,16 +308,16 @@ func (s *HnswSearch[T]) Load(sqlproc *sqlexec.SqlProcess) error {
 	// rather than pinning it forever — see IsStale.
 	s.cnUUID = sqlproc.GetService()
 	if acc, e := sqlproc.GetAccountID(); e == nil {
-		if ts, count, e2 := loadHnswGeneration(sqlproc, s.Tblcfg); e2 == nil {
-			s.accountID, s.loadedTs, s.loadedCount, s.genValid = acc, ts, count, true
+		if fp, count, e2 := loadHnswGeneration(sqlproc, s.Tblcfg); e2 == nil {
+			s.accountID, s.loadedFp, s.loadedCount, s.genValid = acc, fp, count, true
 		}
 	}
 	return nil
 }
 
-// IsStale reports whether the loaded model has fallen behind the persisted index — a REBUILD/MERGE
-// or in-place rewrite bumps MAX(metadata.timestamp), and an emptied model drops COUNT(*) of model
-// rows — for the VectorIndexCache cross-CN freshness check.
+// IsStale reports whether the loaded model has fallen behind the persisted index — any content
+// change (CDC append/delete rewriting a model file, REBUILD/MERGE, or an emptied model) changes the
+// checksum fingerprint / model count — for the VectorIndexCache cross-CN freshness check.
 // Runs on the housekeeping goroutine via a background auto-commit txn (cnUUID/accountID captured
 // at load). A query error ⇒ (true, err): the index was likely dropped/rebuilt, so reclaim the
 // dead entry. No captured generation (capture failed at load, or no service to re-query) ⇒
@@ -330,11 +331,11 @@ func (s *HnswSearch[T]) IsStale() (bool, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	ts, count, err := queryHnswGeneration(ctx, s.cnUUID, s.accountID, s.Tblcfg)
+	fp, count, err := queryHnswGeneration(ctx, s.cnUUID, s.accountID, s.Tblcfg)
 	if err != nil {
 		return true, err
 	}
-	return ts != s.loadedTs || count != s.loadedCount, nil
+	return fp != s.loadedFp || count != s.loadedCount, nil
 }
 
 // check config and update some parameters such as ef_search

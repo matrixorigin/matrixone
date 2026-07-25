@@ -17,6 +17,7 @@ package table_function
 import (
 	"fmt"
 	"strconv"
+	"time"
 
 	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -58,24 +59,21 @@ type hnswCreateState struct {
 func (u *hnswCreateState) end(tf *TableFunction, proc *process.Process) error {
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
-	// The TVF owns clear+rebuild (the compile layer no longer pre-deletes on the sync path) so it
-	// can read the pre-rebuild MAX(timestamp) BEFORE clearing and floor the new metadata timestamp
-	// strictly above it — keeping the cross-CN cache-freshness generation monotonic across a full
-	// rebuild even under a skewed/backward builder clock (see hnsw.BuildTimestamp / IsStale).
+	// The TVF owns clear+rebuild (the compile layer no longer pre-deletes on the sync path).
 	// tblcfg is populated in prepare (const-fold) so it is available even on a zero-row rebuild.
-	// Guard anyway: without table names we cannot clear or read the floor (would emit an invalid
-	// "DELETE FROM " with an empty identifier), so skip rather than run malformed SQL.
+	// Guard anyway: without table names we cannot clear (a bare "DELETE FROM " with an empty
+	// identifier is invalid), so skip rather than run malformed SQL.
 	if u.tblcfg.MetadataTable == "" || u.tblcfg.IndexTable == "" {
 		return nil
 	}
 
-	floor := hnsw.MaxMetadataTimestamp(sqlproc, u.tblcfg)
-
 	// Clear the old index unconditionally — even when nothing was built (REBUILD to zero docs must
-	// still empty the index), so the DELETEs run before the early-out on a nil builder.
+	// still empty the index), so the DELETEs run before the early-out on a nil builder. Cross-CN
+	// cache freshness is a per-model checksum multiset (see hnsw generation.go), so the metadata
+	// timestamp plays no role in freshness — plain wall-clock is fine here.
 	sqls := hnsw.ClearIndexSqls(u.tblcfg)
 
-	ts := hnsw.BuildTimestamp(floor)
+	ts := time.Now().UnixMicro()
 	switch u.idxcfg.Usearch.Quantization {
 	case usearch.F32:
 		if u.buildf32 != nil {

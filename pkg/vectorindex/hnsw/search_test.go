@@ -408,26 +408,6 @@ func TestHnswSyncNextTimestampMonotonic(t *testing.T) {
 	require.LessOrEqual(t, ts, time.Now().UnixMicro()+1)
 }
 
-// TestHnswBuildTimestampMonotonic covers the full-rebuild generation allocation: when the builder's
-// wall clock is at (or behind) the prior generation's max — the ABA case where a rebuild with
-// different contents but the same model count could otherwise re-mint an identical (timestamp,count)
-// a warm remote cache already holds — BuildTimestamp still allocates strictly above the prior max, so
-// the rebuilt generation is always distinct and HnswSearch.IsStale cannot miss the rebuild.
-func TestHnswBuildTimestampMonotonic(t *testing.T) {
-	// prior max is 1h in the FUTURE relative to wall-clock (skew / backward step): floor above it.
-	future := time.Now().UnixMicro() + int64(time.Hour/time.Microsecond)
-	require.Equal(t, future+1, BuildTimestamp(future), "must allocate above the prior max, not reuse wall-clock")
-
-	// the exact-equality ABA case (wall-clock == prior max) also advances strictly.
-	now := time.Now().UnixMicro()
-	require.Greater(t, BuildTimestamp(now), now)
-
-	// fresh CREATE (floor 0) → plain wall-clock now (bounded, positive).
-	ts := BuildTimestamp(0)
-	require.Positive(t, ts)
-	require.LessOrEqual(t, ts, time.Now().UnixMicro())
-}
-
 // TestHnswSearchIsStaleQueryError covers the IsStale query path: with a captured generation but
 // an unresolvable CN service, queryHnswGeneration errors, and IsStale treats a query error as
 // stale (so a dropped/rebuilt index's dead cache entry is reclaimed) while surfacing the error.
@@ -442,113 +422,106 @@ func TestHnswSearchIsStaleQueryError(t *testing.T) {
 	require.True(t, stale)
 }
 
-// TestHnswGenerationSqls pins the two-part generation: MAX(timestamp) AND COUNT(*) over the
-// metadata table. COUNT(*) is the deletion-sensitive half — without it, emptying a model (which
-// deletes its metadata row with no compensating insert) would not move the generation.
-func TestHnswGenerationSqls(t *testing.T) {
-	tsSQL, countSQL := hnswGenerationSqls(vectorindex.IndexTableConfig{DbName: "db", MetadataTable: "__meta"})
-	require.Contains(t, tsSQL, "MAX(timestamp)")
-	require.Contains(t, tsSQL, "`db`.`__meta`")
-	require.Contains(t, countSQL, "COUNT(*)")
-	require.Contains(t, countSQL, "`db`.`__meta`")
+// TestHnswGenerationSql pins the freshness-generation query: the per-model checksum column over the
+// metadata table (the multiset of MD5 model-file checksums is the content fingerprint).
+func TestHnswGenerationSql(t *testing.T) {
+	sql := hnswGenerationSql(vectorindex.IndexTableConfig{DbName: "db", MetadataTable: "__meta"})
+	require.Contains(t, sql, "checksum")
+	require.Contains(t, sql, "`db`.`__meta`")
 }
 
-func genInt64Result(t *testing.T, mp *mpool.MPool, v int64) executor.Result {
+func genChecksumResult(t *testing.T, mp *mpool.MPool, sums ...string) executor.Result {
 	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-	require.NoError(t, vector.AppendFixed[int64](bat.Vecs[0], v, false, mp))
-	bat.SetRowCount(1)
+	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	for _, s := range sums {
+		require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte(s), false, mp))
+	}
+	bat.SetRowCount(len(sums))
 	return executor.Result{Mp: mp, Batches: []*batch.Batch{bat}}
 }
 
-// TestHnswSearchIsStaleEmptyModelDropsCount is the regression for the empty-model generation gap:
-// CDC empties the lower-timestamp model in a two-model index, so its metadata row is DELETED with
-// no insert. MAX(timestamp) stays pinned at the surviving model's 200 — unchanged from load — so
-// a timestamp-only generation would report fresh and the remote cache would keep serving the
-// deleted vectors forever. COUNT(*) drops 2→1, so the (ts, count) generation still changes and
-// IsStale correctly reports stale.
-func TestHnswSearchIsStaleEmptyModelDropsCount(t *testing.T) {
+// TestGenChecksumsFingerprint pins the multiset digest: it is order-independent, sensitive to any
+// checksum change, and the empty result has a well-defined (constant) fingerprint with count 0.
+func TestGenChecksumsFingerprint(t *testing.T) {
+	mp := mpool.MustNewZero()
+	fpAB, n := genChecksums(genChecksumResult(t, mp, "A", "B"))
+	require.Equal(t, int64(2), n)
+	fpBA, _ := genChecksums(genChecksumResult(t, mp, "B", "A"))
+	require.Equal(t, fpAB, fpBA, "fingerprint is a multiset digest (order-independent)")
+	fpAC, _ := genChecksums(genChecksumResult(t, mp, "A", "C"))
+	require.NotEqual(t, fpAB, fpAC, "a changed checksum changes the fingerprint")
+
+	fpEmpty, c := genChecksums(executor.Result{})
+	require.Zero(t, c)
+	fpNil, cNil := genChecksums(executor.Result{Batches: []*batch.Batch{nil}})
+	require.Zero(t, cNil)
+	require.Equal(t, fpEmpty, fpNil) // both empty → same constant fingerprint
+	require.NotEqual(t, fpAB, fpEmpty)
+}
+
+// TestHnswSearchIsStaleContentChange is the regression for the empty-state ABA the checksum
+// generation closes: a rebuild with DIFFERENT model content but the SAME model count — which a
+// timestamp-or-count generation could re-mint after an intermediate (0,0) empty state — produces a
+// different checksum fingerprint, so IsStale still reports stale. Identical content is not stale.
+func TestHnswSearchIsStaleContentChange(t *testing.T) {
 	mp := mpool.MustNewZero()
 	old := runSqlAutoCommit
 	defer func() { runSqlAutoCommit = old }()
-
-	// current on-disk generation: MAX(timestamp)=200 (unchanged), COUNT(*)=1 (emptied model's row gone).
-	runSqlAutoCommit = func(_ context.Context, _ string, _ uint32, _, sql string) (executor.Result, error) {
-		if strings.Contains(sql, "COUNT(*)") {
-			return genInt64Result(t, mp, 1), nil
-		}
-		return genInt64Result(t, mp, 200), nil
-	}
 	cfg := vectorindex.IndexTableConfig{DbName: "db", MetadataTable: "m", IndexTable: "s"}
 
-	// loaded at (ts=200, count=2): two models, the lower-ts one about to be emptied.
-	s := &HnswSearch[float32]{genValid: true, cnUUID: "cn", Tblcfg: cfg, loadedTs: 200, loadedCount: 2}
+	// current on-disk content: two models {A, C2}. The second model's content changed C1→C2.
+	runSqlAutoCommit = func(_ context.Context, _ string, _ uint32, _, _ string) (executor.Result, error) {
+		return genChecksumResult(t, mp, "A", "C2"), nil
+	}
+
+	// loaded from {A, C1}, count 2 — same count as current, different content.
+	loadedFp, loadedN := genChecksums(genChecksumResult(t, mp, "A", "C1"))
+	s := &HnswSearch[float32]{genValid: true, cnUUID: "cn", Tblcfg: cfg, loadedFp: loadedFp, loadedCount: loadedN}
 	stale, err := s.IsStale()
 	require.NoError(t, err)
-	require.True(t, stale, "emptied model drops COUNT(*) even though MAX(timestamp) is unchanged")
+	require.True(t, stale, "different content → different checksum fingerprint, even at the same count")
 
-	// control: loaded at the current generation (ts=200, count=1) → not stale.
-	s2 := &HnswSearch[float32]{genValid: true, cnUUID: "cn", Tblcfg: cfg, loadedTs: 200, loadedCount: 1}
+	// control: loaded at the current content {A, C2} → not stale (identical bytes are not stale).
+	curFp, curN := genChecksums(genChecksumResult(t, mp, "A", "C2"))
+	s2 := &HnswSearch[float32]{genValid: true, cnUUID: "cn", Tblcfg: cfg, loadedFp: curFp, loadedCount: curN}
 	stale, err = s2.IsStale()
 	require.NoError(t, err)
 	require.False(t, stale)
 }
 
-// TestLoadHnswGenerationHappy stubs the live-txn reader to cover the two-read (timestamp, count)
-// load path plus the second-read error branch.
+// TestLoadHnswGenerationHappy stubs the live-txn reader to cover the checksum-fingerprint load path
+// (order-independent digest + count) plus the read-error branch.
 func TestLoadHnswGenerationHappy(t *testing.T) {
 	mp := mpool.MustNewZero()
 	cfg := vectorindex.IndexTableConfig{DbName: "db", MetadataTable: "m", IndexTable: "s"}
 	old := runSql
 	defer func() { runSql = old }()
 
-	runSql = func(_ *sqlexec.SqlProcess, sql string) (executor.Result, error) {
-		if strings.Contains(sql, "COUNT(*)") {
-			return genInt64Result(t, mp, 3), nil // model count
-		}
-		return genInt64Result(t, mp, 150), nil // MAX(timestamp)
+	runSql = func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
+		return genChecksumResult(t, mp, "cksA", "cksB", "cksC"), nil
 	}
-	ts, count, err := loadHnswGeneration(nil, cfg)
+	fp, count, err := loadHnswGeneration(nil, cfg)
 	require.NoError(t, err)
-	require.Equal(t, int64(150), ts)
 	require.Equal(t, int64(3), count)
+	want, _ := genChecksums(genChecksumResult(t, mp, "cksC", "cksA", "cksB")) // same multiset, different order
+	require.Equal(t, want, fp)
 
-	// count read errors → propagated.
-	runSql = func(_ *sqlexec.SqlProcess, sql string) (executor.Result, error) {
-		if strings.Contains(sql, "COUNT(*)") {
-			return executor.Result{}, moerr.NewInternalErrorNoCtx("count read failed")
-		}
-		return genInt64Result(t, mp, 150), nil
+	// read error → propagated.
+	runSql = func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
+		return executor.Result{}, moerr.NewInternalErrorNoCtx("read failed")
 	}
 	_, _, err = loadHnswGeneration(nil, cfg)
 	require.Error(t, err)
 }
 
-// TestHnswGenerationReadFirstReadErrorAndScalar covers the remaining generation-reader branches:
-// the FIRST-read (timestamp) error is propagated by both the live and background readers, and
-// genScalarInt64 falls through to 0 on an empty / nil-batch result.
-func TestHnswGenerationReadFirstReadErrorAndScalar(t *testing.T) {
+// TestQueryHnswGenerationReadError covers the background reader's read-error branch.
+func TestQueryHnswGenerationReadError(t *testing.T) {
 	cfg := vectorindex.IndexTableConfig{DbName: "db", MetadataTable: "m", IndexTable: "s"}
-
-	// genScalarInt64 fall-through: empty result and nil batch → 0 (no panic on Vecs[0]).
-	require.Equal(t, int64(0), genScalarInt64(executor.Result{}))
-	require.Equal(t, int64(0), genScalarInt64(executor.Result{Batches: []*batch.Batch{nil}}))
-
-	// live reader: first (timestamp) read errors → propagated before the count read.
-	oldRun := runSql
-	defer func() { runSql = oldRun }()
-	runSql = func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
-		return executor.Result{}, moerr.NewInternalErrorNoCtx("ts read failed")
-	}
-	_, _, err := loadHnswGeneration(nil, cfg)
-	require.Error(t, err)
-
-	// background reader: first (timestamp) read errors → propagated.
 	oldAuto := runSqlAutoCommit
 	defer func() { runSqlAutoCommit = oldAuto }()
 	runSqlAutoCommit = func(_ context.Context, _ string, _ uint32, _, _ string) (executor.Result, error) {
-		return executor.Result{}, moerr.NewInternalErrorNoCtx("ts read failed")
+		return executor.Result{}, moerr.NewInternalErrorNoCtx("read failed")
 	}
-	_, _, err = queryHnswGeneration(context.Background(), "cn", 0, cfg)
+	_, _, err := queryHnswGeneration(context.Background(), "cn", 0, cfg)
 	require.Error(t, err)
 }
