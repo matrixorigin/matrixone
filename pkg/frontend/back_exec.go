@@ -1162,20 +1162,12 @@ func (backSes *backSession) bindWorkloadPolicy(
 		state.rememberAccountName(accountName)
 	}
 
-	// Keep background execution's historical internal-user semantics while
-	// binding the tenant/account identity used by compilation and scheduling.
-	// User and role IDs still come from the execution context.
-	if accountName == "" {
-		backSes.SetTenantInfo(nil)
-		return nil
-	}
-	backSes.SetTenantInfo(&TenantInfo{
-		Tenant:        accountName,
-		User:          rootName,
-		TenantID:      accountID,
-		UserID:        defines.GetUserId(ctx),
-		DefaultRoleID: defines.GetRoleId(ctx),
-	})
+	// TenantInfo is authorization identity, not workload-routing identity.
+	// Background execution historically has no authenticated tenant of its own,
+	// and restore/clone can deliberately execute under another account. Creating
+	// a partial TenantInfo here changes authorization decisions (notably admin
+	// checks for subscription restore) even though no authentication occurred.
+	// The account name cached in state is consumed separately by compilation.
 	return nil
 }
 

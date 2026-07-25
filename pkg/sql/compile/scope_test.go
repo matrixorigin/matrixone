@@ -1069,37 +1069,77 @@ func TestCompileExternScanParallelWriteKeepsConfiguredTargetStagesColocated(t *t
 	require.Empty(t, dispatchOp.RemoteRegs)
 }
 
-func TestSingleRemoteWorkloadGroupsSiblingLocalDispatchScopes(t *testing.T) {
+func TestColocatedRemoteWorkloadGroupsSiblingLocalDispatchScopes(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		policy schedule.EffectiveWorkloadPolicy
+	}{
+		{
+			name: "single-worker policy",
+			policy: schedule.EffectiveWorkloadPolicy{
+				Applied: true,
+				Routing: schedule.WorkloadRoutingSingle,
+			},
+		},
+		{
+			name: "multi-worker policy collapsed to one worker",
+			policy: schedule.EffectiveWorkloadPolicy{
+				Applied: true,
+				Routing: schedule.WorkloadRoutingMulti,
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			testCompile := NewMockCompile(t)
+			testCompile.addr = "ingress:6001"
+			testCompile.anal = &AnalyzeModule{qry: &plan.Query{}}
+			testCompile.proc.Base.TxnOperator = fakeTxnOperator{}
+			testCompile.cnList = engine.Nodes{{
+				Id: "etl-remote", Addr: "etl-remote:6001", Mcpu: 2,
+			}}
+			testCompile.queryPlacement = schedule.QueryDecision{WorkloadPolicy: test.policy}
+
+			targets := []*Scope{
+				testCompile.constructLoadMergeScope(),
+				testCompile.constructLoadMergeScope(),
+			}
+			source := testCompile.constructWorkloadScopeForExternal(testCompile.addr, false)
+			dispatchOp, err := constructLocalDispatchFromScopes(0, targets, source)
+			require.NoError(t, err)
+			source.setRootOperator(dispatchOp)
+			targets[0].PreScopes = append(targets[0].PreScopes, source)
+			require.False(t, checkPipelineStandaloneExecutableAtRemote(targets[0]))
+
+			grouped := testCompile.groupShuffleBucketsByCNIfNeeded(targets)
+			require.Len(t, grouped, 1)
+			require.Equal(t, Remote, grouped[0].Magic)
+			require.Len(t, grouped[0].PreScopes, 2)
+			require.True(t, checkPipelineStandaloneExecutableAtRemote(grouped[0]))
+		})
+	}
+}
+
+func TestColocatedRemoteWorkloadWithoutSiblingDependencyStaysParallel(t *testing.T) {
 	testCompile := NewMockCompile(t)
 	testCompile.addr = "ingress:6001"
 	testCompile.anal = &AnalyzeModule{qry: &plan.Query{}}
-	testCompile.proc.Base.TxnOperator = fakeTxnOperator{}
 	testCompile.cnList = engine.Nodes{{
 		Id: "etl-remote", Addr: "etl-remote:6001", Mcpu: 2,
 	}}
 	testCompile.queryPlacement = schedule.QueryDecision{
 		WorkloadPolicy: schedule.EffectiveWorkloadPolicy{
 			Applied: true,
-			Routing: schedule.WorkloadRoutingSingle,
+			Routing: schedule.WorkloadRoutingMulti,
 		},
 	}
-
 	targets := []*Scope{
 		testCompile.constructLoadMergeScope(),
 		testCompile.constructLoadMergeScope(),
 	}
-	source := testCompile.constructWorkloadScopeForExternal(testCompile.addr, false)
-	dispatchOp, err := constructLocalDispatchFromScopes(0, targets, source)
-	require.NoError(t, err)
-	source.setRootOperator(dispatchOp)
-	targets[0].PreScopes = append(targets[0].PreScopes, source)
-	require.False(t, checkPipelineStandaloneExecutableAtRemote(targets[0]))
 
 	grouped := testCompile.groupShuffleBucketsByCNIfNeeded(targets)
-	require.Len(t, grouped, 1)
-	require.Equal(t, Remote, grouped[0].Magic)
-	require.Len(t, grouped[0].PreScopes, 2)
-	require.True(t, checkPipelineStandaloneExecutableAtRemote(grouped[0]))
+	require.Len(t, grouped, 2,
+		"colocation alone must not collapse independent parallel pipelines")
 }
 
 func TestConstructLocalDispatchFromScopesRejectsRemoteTarget(t *testing.T) {

@@ -760,6 +760,27 @@ func TestWorkloadPolicyControlPlaneBypassesConfiguredPolicy(t *testing.T) {
 	)
 }
 
+func TestQueryWorkloadPolicyTenantNameSeparatesRoutingAndAuthorization(t *testing.T) {
+	require.Empty(t, queryWorkloadPolicyTenantName(nil))
+
+	ses := &Session{}
+	ses.SetTenantInfo(&TenantInfo{Tenant: "authenticated-account"})
+	require.Equal(t, "authenticated-account", queryWorkloadPolicyTenantName(ses),
+		"ordinary sessions without managed policy state retain their authenticated tenant")
+
+	state := &accountWorkloadPolicy{}
+	state.rememberAccountName("execution-account")
+	ses.workloadPolicy.Store(state)
+	require.Equal(t, "execution-account", queryWorkloadPolicyTenantName(ses),
+		"the execution-account routing label must not depend on authorization identity")
+
+	backSes := &backSession{}
+	backSes.workloadPolicy.Store(state)
+	require.Nil(t, backSes.GetTenantInfo())
+	require.Equal(t, "execution-account", queryWorkloadPolicyTenantName(backSes),
+		"background routing must work without fabricating an authenticated tenant")
+}
+
 func TestBackSessionBindsWorkloadPolicyToExecutionAccount(t *testing.T) {
 	const (
 		sourceAccountID = ^uint32(0) - 101
@@ -781,6 +802,11 @@ func TestBackSessionBindsWorkloadPolicyToExecutionAccount(t *testing.T) {
 	require.NoError(t, err)
 
 	creator := &Session{}
+	creator.SetTenantInfo(&TenantInfo{
+		Tenant:      sysAccountName,
+		User:        "dump",
+		DefaultRole: moAdminRoleName,
+	})
 	creator.workloadPolicy.Store(sourceState)
 	backSes := (&backSession{}).initFeSes(creator, nil, "", nil)
 	require.True(t, backSes.workloadPolicyManaged)
@@ -796,9 +822,9 @@ func TestBackSessionBindsWorkloadPolicyToExecutionAccount(t *testing.T) {
 	require.NoError(t, backSes.bindWorkloadPolicy(sourceCtx, sourceAccountID))
 	require.Same(t, sourceState, workloadPolicyState(backSes))
 	require.Equal(t, sourceAccountID, backSes.GetAccountId())
-	require.Equal(t, sourceAccount, backSes.GetTenantInfo().GetTenant())
-	require.Equal(t, uint32(11), backSes.GetTenantInfo().GetUserID())
-	require.Equal(t, uint32(12), backSes.GetTenantInfo().GetDefaultRoleID())
+	require.Nil(t, backSes.GetTenantInfo(),
+		"routing an internal background statement must not fabricate an authorization identity")
+	require.Equal(t, sourceAccount, queryWorkloadPolicyTenantName(backSes))
 
 	targetCtx := defines.AttachAccount(
 		context.Background(),
@@ -809,14 +835,14 @@ func TestBackSessionBindsWorkloadPolicyToExecutionAccount(t *testing.T) {
 	require.NoError(t, backSes.bindWorkloadPolicy(targetCtx, targetAccountID))
 	require.Same(t, targetState, workloadPolicyState(backSes))
 	require.Equal(t, targetAccountID, backSes.GetAccountId())
-	require.Equal(t, targetAccount, backSes.GetTenantInfo().GetTenant())
-	require.Equal(t, uint32(21), backSes.GetTenantInfo().GetUserID())
-	require.Equal(t, uint32(22), backSes.GetTenantInfo().GetDefaultRoleID())
+	require.Nil(t, backSes.GetTenantInfo(),
+		"cross-account restore must keep background authorization semantics")
+	require.Equal(t, targetAccount, queryWorkloadPolicyTenantName(backSes))
 
 	resolved := schedule.ResolveWorkloadPolicy(
 		schedule.WorkloadDescriptor{
 			Class:  schedule.WorkloadAP,
-			Tenant: backSes.GetTenantInfo().GetTenant(),
+			Tenant: queryWorkloadPolicyTenantName(backSes),
 		},
 		queryWorkloadPolicySnapshot(backSes),
 	)
@@ -920,7 +946,7 @@ func TestBackSessionPreservesInternalWorkloadRouting(t *testing.T) {
 	resolved := schedule.ResolveWorkloadPolicy(
 		schedule.WorkloadDescriptor{
 			Class:  class,
-			Tenant: backSes.GetTenantInfo().GetTenant(),
+			Tenant: queryWorkloadPolicyTenantName(backSes),
 		},
 		queryWorkloadPolicySnapshot(backSes),
 	)
@@ -996,7 +1022,8 @@ func TestBackSessionTriggersStalePolicyReconciliation(t *testing.T) {
 	ctx := defines.AttachAccountId(context.Background(), accountID)
 	require.NoError(t, backSes.bindWorkloadPolicy(ctx, accountID))
 	require.Same(t, state, workloadPolicyState(backSes))
-	require.Equal(t, account, backSes.GetTenantInfo().GetTenant())
+	require.Nil(t, backSes.GetTenantInfo())
+	require.Equal(t, account, queryWorkloadPolicyTenantName(backSes))
 
 	select {
 	case loaded := <-loadedAccount:
@@ -1083,7 +1110,7 @@ func TestBackSessionAllowsTenantBootstrapBeforePolicyTableUpgrade(t *testing.T) 
 	require.Nil(t, backSes.GetTenantInfo())
 }
 
-func TestBackSessionLoadsIdentityOnlyForConfiguredPolicy(t *testing.T) {
+func TestBackSessionLoadsRoutingIdentityOnlyForConfiguredPolicy(t *testing.T) {
 	for _, test := range []struct {
 		name       string
 		accountID  uint32
@@ -1173,15 +1200,12 @@ func TestBackSessionLoadsIdentityOnlyForConfiguredPolicy(t *testing.T) {
 				require.Nil(t, backSes.GetTenantInfo())
 			} else {
 				require.NoError(t, err)
-				require.Equal(
-					t,
-					"configured-account",
-					backSes.GetTenantInfo().GetTenant(),
-				)
+				require.Nil(t, backSes.GetTenantInfo())
+				require.Equal(t, "configured-account", queryWorkloadPolicyTenantName(backSes))
 				resolved := schedule.ResolveWorkloadPolicy(
 					schedule.WorkloadDescriptor{
 						Class:  schedule.WorkloadAP,
-						Tenant: backSes.GetTenantInfo().GetTenant(),
+						Tenant: queryWorkloadPolicyTenantName(backSes),
 					},
 					queryWorkloadPolicySnapshot(backSes),
 				)

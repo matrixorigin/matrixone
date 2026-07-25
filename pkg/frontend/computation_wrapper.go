@@ -1134,11 +1134,7 @@ func createCompile(
 	proc.ReplaceTopCtx(execCtx.reqCtx)
 	proc.Base.FileService = pu.FileService
 
-	var tenant string
-	tInfo := ses.GetTenantInfo()
-	if tInfo != nil {
-		tenant = tInfo.GetTenant()
-	}
+	tenant := queryWorkloadPolicyTenantName(ses)
 
 	stats := statistic.StatsInfoFromContext(execCtx.reqCtx)
 	stats.CompileStart()
@@ -1296,6 +1292,24 @@ func querySchedulingIntent(ses FeSession) schedule.SchedulingIntent {
 
 func queryWorkloadPolicySnapshot(ses FeSession) schedule.WorkloadPolicySet {
 	return GWorkloadPolicyManager.cached(workloadPolicyState(ses))
+}
+
+// queryWorkloadPolicyTenantName returns the protected account label used by
+// workload routing. It is intentionally separate from TenantInfo: the latter
+// represents an authenticated authorization identity, while reusable
+// background executors can switch execution accounts without authenticating as
+// a user of those accounts.
+func queryWorkloadPolicyTenantName(ses FeSession) string {
+	if ses == nil {
+		return ""
+	}
+	if accountName := workloadPolicyState(ses).cachedAccountName(); accountName != "" {
+		return accountName
+	}
+	if tenant := ses.GetTenantInfo(); tenant != nil {
+		return tenant.GetTenant()
+	}
+	return ""
 }
 
 func queryWorkloadPolicySnapshotAt(

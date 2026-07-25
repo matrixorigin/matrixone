@@ -5945,10 +5945,54 @@ func scopeTreeHasCrossCNDispatch(s *Scope) bool {
 	return false
 }
 
+// scopeTreeHasOutOfTreeLocalDispatch reports whether a non-root scope in the
+// tree dispatches to a WaitRegister owned by a sibling tree. Such a tree cannot
+// be serialized and executed independently at a remote CN; all colocated
+// siblings participating in that local dispatch must travel as one send unit.
+//
+// The root operator is intentionally excluded because it is the one operator a
+// standalone remote pipeline may use to send data outside its tree.
+func scopeTreeHasOutOfTreeLocalDispatch(s *Scope) bool {
+	if s == nil {
+		return false
+	}
+	regs := make(map[*process.WaitRegister]struct{})
+	toScan := []*Scope{s}
+	for len(toScan) > 0 {
+		node := toScan[len(toScan)-1]
+		toScan = toScan[:len(toScan)-1]
+		if node == nil {
+			continue
+		}
+		for _, reg := range node.Proc.Reg.MergeReceivers {
+			regs[reg] = struct{}{}
+		}
+		toScan = append(toScan, node.PreScopes...)
+	}
+
+	toScan = append(toScan[:0], s.PreScopes...)
+	for len(toScan) > 0 {
+		node := toScan[len(toScan)-1]
+		toScan = toScan[:len(toScan)-1]
+		if node == nil {
+			continue
+		}
+		if d, ok := node.RootOp.(*dispatch.Dispatch); ok {
+			for _, reg := range d.LocalRegs {
+				if _, owned := regs[reg]; !owned {
+					return true
+				}
+			}
+		}
+		toScan = append(toScan, node.PreScopes...)
+	}
+	return false
+}
+
 // groupShuffleBucketsByCNIfNeeded groups scopes that must travel as one
 // independently executable per-CN send unit. This includes the same-CN shuffle
-// buckets that carry a cross-CN dispatch and a policy-routed single remote
-// worker whose local dispatch connects multiple sibling scopes.
+// buckets that carry a cross-CN dispatch and any remote stage whose local
+// dispatch connects multiple sibling scopes.
 //
 // Background (issue #24919): newShuffleJoinScopeList leaves a CN's dop join buckets in
 // separate RemoteRun trees while the shuffle dispatch only attaches to the first bucket.
@@ -5969,7 +6013,7 @@ func scopeTreeHasCrossCNDispatch(s *Scope) bool {
 // semantics, so the caller's operator is preserved as the connector's child, not replaced.
 func (c *Compile) groupShuffleBucketsByCNIfNeeded(ss []*Scope) []*Scope {
 	stageNodes := shuffleBucketStageNodes(ss)
-	if c.shouldGroupSingleRemoteWorkloadScopes(ss, stageNodes) {
+	if c.shouldGroupColocatedRemoteWorkloadScopes(ss, stageNodes) {
 		return c.mergeScopesByStageNodes(ss, stageNodes)
 	}
 	if len(stageNodes) <= 1 || len(ss) <= len(stageNodes) {
@@ -6008,13 +6052,11 @@ func shuffleBucketStageNodes(ss []*Scope) engine.Nodes {
 	return stageNodes
 }
 
-func (c *Compile) shouldGroupSingleRemoteWorkloadScopes(
+func (c *Compile) shouldGroupColocatedRemoteWorkloadScopes(
 	scopes []*Scope,
 	stageNodes engine.Nodes,
 ) bool {
-	if !c.queryPlacement.WorkloadPolicy.Applied ||
-		c.queryPlacement.WorkloadPolicy.Routing != schedule.WorkloadRoutingSingle ||
-		len(stageNodes) != 1 ||
+	if len(stageNodes) != 1 ||
 		len(scopes) <= 1 ||
 		sameExecutionNode(stageNodes[0], getIngressEngineNode(c)) {
 		return false
@@ -6024,7 +6066,12 @@ func (c *Compile) shouldGroupSingleRemoteWorkloadScopes(
 			return false
 		}
 	}
-	return true
+	for _, scope := range scopes {
+		if scopeTreeHasOutOfTreeLocalDispatch(scope) {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *Compile) mergeScopesByStageNodes(ss []*Scope, stageNodes engine.Nodes) []*Scope {
