@@ -1308,8 +1308,9 @@ func queryWorkloadPolicySnapshotAt(
 	if ses == nil {
 		return schedule.WorkloadPolicySet{}
 	}
-	// Background and mock sessions share their upstream/account snapshot but
-	// must not recursively issue a policy refresh while compiling that refresh.
+	// Background sessions bind and refresh their execution-account snapshot at
+	// their Exec entry points. Mock/direct sessions do not implicitly create
+	// control-plane state here.
 	if _, ok := ses.(*Session); ok {
 		state := workloadPolicyState(ses)
 		if state == nil {

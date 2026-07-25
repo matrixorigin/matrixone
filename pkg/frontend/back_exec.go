@@ -142,8 +142,11 @@ func (back *backExec) exec(ctx context.Context, sql string, sqlMode string, useS
 	}
 	ctx = perfcounter.AttachBackgroundExecutorKey(ctx)
 
-	_, err := defines.GetAccountId(ctx)
+	accountID, err := defines.GetAccountId(ctx)
 	if err != nil {
+		return err
+	}
+	if err = back.backSes.bindWorkloadPolicy(ctx, accountID); err != nil {
 		return err
 	}
 
@@ -261,8 +264,11 @@ func (back *backExec) ExecRestore(ctx context.Context, sql string, opAccount uin
 
 	ctx = perfcounter.AttachBackgroundExecutorKey(ctx)
 
-	_, err := defines.GetAccountId(ctx)
+	accountID, err := defines.GetAccountId(ctx)
 	if err != nil {
+		return err
+	}
+	if err = back.backSes.bindWorkloadPolicy(ctx, accountID); err != nil {
 		return err
 	}
 
@@ -1010,6 +1016,11 @@ type backSession struct {
 	effectiveMatrixOneNativeMode    bool
 	hasEffectiveMatrixOneNativeMode bool
 	forcePessimisticRC              bool
+	// workloadPolicyManaged distinguishes sessions whose creator established
+	// account-policy ownership from bootstrap/direct partially initialized
+	// sessions. A background session acquires its own execution-account
+	// reference lazily; it must never borrow the creator's uncounted pointer.
+	workloadPolicyManaged bool
 	// lastAffectedRows carries the previous statement's ROW_COUNT() value into
 	// the next process created by this background executor.
 	lastAffectedRows int64
@@ -1049,11 +1060,95 @@ func (backSes *backSession) initFeSes(
 	backSes.timeZone = ses.GetTimeZone()
 	backSes.respr = defResper
 	backSes.service = ses.GetService()
-	backSes.workloadPolicy.Store(workloadPolicyState(ses))
+	backSes.workloadPolicyManaged = workloadPolicyState(ses) != nil
 	if parent, ok := ses.(*backSession); ok {
 		backSes.parentBackSession = parent
+		// A nested executor can be created before its parent has executed its
+		// first statement and acquired a concrete account state.
+		backSes.workloadPolicyManaged = parent.workloadPolicyManaged
 	}
 	return backSes
+}
+
+// bindWorkloadPolicy pins the background session to the account that will
+// actually execute this statement. Background executors are reusable and
+// RESTORE/CLONE deliberately switch accounts through the execution context, so
+// creator-session identity is not authoritative here.
+func (backSes *backSession) bindWorkloadPolicy(
+	ctx context.Context,
+	accountID uint32,
+) error {
+	backSes.SetAccountId(accountID)
+	if !backSes.workloadPolicyManaged {
+		return nil
+	}
+
+	state := workloadPolicyState(backSes)
+	if state == nil || state.accountID != accountID {
+		next := GWorkloadPolicyManager.acquire(accountID)
+		old := backSes.workloadPolicy.Swap(next)
+		GWorkloadPolicyManager.release(old)
+		state = next
+	}
+
+	// Workload-policy control SQL must not recursively depend on the policy it
+	// is loading or repairing. It still owns the correct account state, but it
+	// deliberately skips refresh and routing below.
+	if !workloadPolicyBypassed(ctx) {
+		// A cold account waits for its first safe snapshot. Once established,
+		// RefreshAsync keeps statement latency off the catalog path and provides
+		// bounded repair after a missed best-effort publish.
+		if err := GWorkloadPolicyManager.RefreshAsync(
+			ctx,
+			backSes.GetService(),
+			accountID,
+			state,
+		); err != nil {
+			return err
+		}
+	}
+
+	accountName := state.cachedAccountName()
+	if accountName == "" && accountID == sysAccountID {
+		accountName = sysAccountName
+		state.rememberAccountName(accountName)
+	}
+	if accountName == "" && !workloadPolicyBypassed(ctx) {
+		var err error
+		accountName, err = loadWorkloadPolicyAccountNameByService(
+			ctx,
+			backSes.GetService(),
+			accountID,
+		)
+		if err != nil {
+			return err
+		}
+		state.rememberAccountName(accountName)
+	}
+
+	// Keep background execution's historical internal-user semantics while
+	// binding the tenant/account identity used by compilation and scheduling.
+	// User and role IDs still come from the execution context.
+	if accountName == "" {
+		backSes.SetTenantInfo(nil)
+		return nil
+	}
+	backSes.SetTenantInfo(&TenantInfo{
+		Tenant:        accountName,
+		User:          rootName,
+		TenantID:      accountID,
+		UserID:        defines.GetUserId(ctx),
+		DefaultRoleID: defines.GetRoleId(ctx),
+	})
+	return nil
+}
+
+func (backSes *backSession) releaseWorkloadPolicy() {
+	if backSes == nil {
+		return
+	}
+	state := backSes.workloadPolicy.Swap(nil)
+	GWorkloadPolicyManager.release(state)
 }
 
 func (backSes *backSession) currentMatrixOneNativeMode() bool {
@@ -1120,6 +1215,12 @@ func (backSes *backSession) Close() {
 				zap.Error(err))
 		}
 	}
+
+	// Rollback is the final operation allowed to observe session state.
+	// feSessionImpl.Reset clears the policy pointer without knowing its
+	// ownership, so release the counted reference after rollback and before
+	// that generic cleanup runs.
+	backSes.releaseWorkloadPolicy()
 
 	//if the txn is not shared outside, we clean feSessionImpl.
 	//reset else

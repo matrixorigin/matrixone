@@ -759,6 +759,179 @@ func TestWorkloadPolicyControlPlaneBypassesConfiguredPolicy(t *testing.T) {
 	)
 }
 
+func TestBackSessionBindsWorkloadPolicyToExecutionAccount(t *testing.T) {
+	const (
+		sourceAccountID = ^uint32(0) - 101
+		targetAccountID = ^uint32(0) - 102
+		sourceAccount   = "background-source"
+		targetAccount   = "background-target"
+		sourcePolicy    = `{"version":1,"policies":{"ap":{"pool":"source-pool","labels":{"role":"ap"}}}}`
+		targetPolicy    = `{"version":1,"policies":{"ap":{"pool":"target-pool","labels":{"role":"ap"}}}}`
+	)
+
+	manager := GWorkloadPolicyManager
+	sourceState := manager.acquire(sourceAccountID)
+	targetState := manager.acquire(targetAccountID)
+	sourceState.rememberAccountName(sourceAccount)
+	targetState.rememberAccountName(targetAccount)
+	_, _, err := manager.Apply(sourceAccountID, sourcePolicy, 1)
+	require.NoError(t, err)
+	_, _, err = manager.Apply(targetAccountID, targetPolicy, 1)
+	require.NoError(t, err)
+
+	creator := &Session{}
+	creator.workloadPolicy.Store(sourceState)
+	backSes := (&backSession{}).initFeSes(creator, nil, "", nil)
+	require.True(t, backSes.workloadPolicyManaged)
+	require.Nil(t, workloadPolicyState(backSes),
+		"background sessions must not borrow an uncounted creator reference")
+
+	sourceCtx := defines.AttachAccount(
+		context.Background(),
+		sourceAccountID,
+		11,
+		12,
+	)
+	require.NoError(t, backSes.bindWorkloadPolicy(sourceCtx, sourceAccountID))
+	require.Same(t, sourceState, workloadPolicyState(backSes))
+	require.Equal(t, sourceAccountID, backSes.GetAccountId())
+	require.Equal(t, sourceAccount, backSes.GetTenantInfo().GetTenant())
+	require.Equal(t, uint32(11), backSes.GetTenantInfo().GetUserID())
+	require.Equal(t, uint32(12), backSes.GetTenantInfo().GetDefaultRoleID())
+
+	targetCtx := defines.AttachAccount(
+		context.Background(),
+		targetAccountID,
+		21,
+		22,
+	)
+	require.NoError(t, backSes.bindWorkloadPolicy(targetCtx, targetAccountID))
+	require.Same(t, targetState, workloadPolicyState(backSes))
+	require.Equal(t, targetAccountID, backSes.GetAccountId())
+	require.Equal(t, targetAccount, backSes.GetTenantInfo().GetTenant())
+	require.Equal(t, uint32(21), backSes.GetTenantInfo().GetUserID())
+	require.Equal(t, uint32(22), backSes.GetTenantInfo().GetDefaultRoleID())
+
+	resolved := schedule.ResolveWorkloadPolicy(
+		schedule.WorkloadDescriptor{
+			Class:  schedule.WorkloadAP,
+			Tenant: backSes.GetTenantInfo().GetTenant(),
+		},
+		queryWorkloadPolicySnapshot(backSes),
+	)
+	require.True(t, resolved.Applied)
+	require.Equal(t, "target-pool", resolved.Pool.Identity)
+	require.Equal(t, targetAccount, resolved.Pool.Labels["account"])
+
+	sourceState.mu.Lock()
+	require.Equal(t, uint64(1), sourceState.references,
+		"cross-account rebind must release the previous execution account")
+	sourceState.mu.Unlock()
+	targetState.mu.Lock()
+	require.Equal(t, uint64(2), targetState.references,
+		"background session must own a counted target-account reference")
+	targetState.mu.Unlock()
+
+	backSes.Close()
+	backSes.Close()
+	require.Nil(t, workloadPolicyState(backSes))
+	targetState.mu.Lock()
+	require.Equal(t, uint64(1), targetState.references,
+		"Close must release exactly one target-account reference")
+	targetState.mu.Unlock()
+	creator.workloadPolicy.Store(nil)
+	manager.release(sourceState)
+	manager.release(targetState)
+}
+
+func TestBackSessionTriggersStalePolicyReconciliation(t *testing.T) {
+	const (
+		service   = "background-workload-policy-reconciliation"
+		accountID = ^uint32(0) - 103
+		account   = "background-reconcile"
+	)
+
+	manager := GWorkloadPolicyManager
+	state := manager.acquire(accountID)
+	state.rememberAccountName(account)
+	_, _, err := manager.Apply(accountID, testWorkloadPolicyOld, 1)
+	require.NoError(t, err)
+	state.refreshAfter.Store(0)
+
+	mp := mpool.MustNewZero()
+	memResult := executor.NewMemResult(
+		[]types.Type{
+			types.T_text.ToType(),
+			types.T_uint64.ToType(),
+		},
+		mp,
+	)
+	memResult.NewBatchWithRowCount(1)
+	require.NoError(t, executor.AppendStringRows(
+		memResult,
+		0,
+		[]string{testWorkloadPolicyNew},
+	))
+	require.NoError(t, executor.AppendFixedRows(
+		memResult,
+		1,
+		[]uint64{2},
+	))
+
+	loadedAccount := make(chan uint32, 1)
+	rt := moruntime.NewRuntime(metadata.ServiceType_CN, service, nil)
+	moruntime.SetupServiceBasedRuntime(service, rt)
+	rt.SetGlobalVariables(
+		moruntime.InternalSQLExecutor,
+		&workloadPolicySQLExecutor{
+			exec: func(
+				_ context.Context,
+				_ string,
+				opts executor.Options,
+			) (executor.Result, error) {
+				loadedAccount <- opts.AccountID()
+				if opts.AccountID() != accountID {
+					return executor.Result{}, moerr.NewInternalErrorNoCtx(
+						"reconciled the wrong account",
+					)
+				}
+				return memResult.GetResult(), nil
+			},
+		},
+	)
+
+	backSes := &backSession{
+		feSessionImpl:         feSessionImpl{service: service},
+		workloadPolicyManaged: true,
+	}
+	ctx := defines.AttachAccountId(context.Background(), accountID)
+	require.NoError(t, backSes.bindWorkloadPolicy(ctx, accountID))
+	require.Same(t, state, workloadPolicyState(backSes))
+	require.Equal(t, account, backSes.GetTenantInfo().GetTenant())
+
+	select {
+	case loaded := <-loadedAccount:
+		require.Equal(t, accountID, loaded)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for background policy reconciliation")
+	}
+	require.Eventually(t, func() bool {
+		current := state.snapshot.Load()
+		return current != nil && current.revision == 2
+	}, time.Second, time.Millisecond)
+	require.Equal(
+		t,
+		"new",
+		queryWorkloadPolicySnapshot(backSes).
+			Rules[schedule.WorkloadAP].
+			PoolIdentity,
+	)
+
+	backSes.releaseWorkloadPolicy()
+	manager.release(state)
+	require.Zero(t, mp.CurrNB())
+}
+
 func TestLoadWorkloadPolicyCatalogMarksControlPlaneContext(t *testing.T) {
 	const accountID = uint32(55)
 	selectSQL := "select policy, revision from mo_catalog.mo_query_workload_policy where account_id = 55"
