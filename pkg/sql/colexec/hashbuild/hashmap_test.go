@@ -15,6 +15,7 @@
 package hashbuild
 
 import (
+	"errors"
 	"reflect"
 	"strconv"
 	"strings"
@@ -24,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -52,6 +54,469 @@ func TestBuildHashMap(t *testing.T) {
 	hb.Reset(proc, true)
 	hb.Free(proc)
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestBuildHashMapBudgetRejectsResizeAndReleasesOnReset(t *testing.T) {
+	const budgetCap = uint64(1 << 20)
+	budget, err := process.NewHashBuildBudget(budgetCap, budgetCap)
+	require.NoError(t, err)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+
+	var hb HashmapBuilder
+	hb.setBudget(generation)
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	require.NoError(t, hb.Prepare([]*plan.Expr{newExpr(0, types.T_int32.ToType())}, -1, -1, nil, proc))
+
+	input := testutil.NewBatch([]types.Type{types.T_int32.ToType()}, true, 10_000, proc.Mp())
+	require.NoError(t, hb.copyBuildBatch(input, proc))
+	hb.InputBatchRowCount = input.RowCount()
+	input.Clean(proc.Mp())
+
+	err = hb.BuildHashmap(false, false, false, proc)
+	require.Error(t, err)
+	require.True(t, errors.Is(err, process.ErrHashBuildBudgetAdmission))
+	require.Greater(t, generation.Used(), uint64(0))
+
+	hb.Reset(proc, true)
+	require.Zero(t, generation.Used())
+}
+
+func TestPublishedJoinMapResizeKeepsReservationWithConsumer(t *testing.T) {
+	const budgetCap = uint64(16 << 20)
+	budget, err := process.NewHashBuildBudget(budgetCap, budgetCap)
+	require.NoError(t, err)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+
+	var hb HashmapBuilder
+	hb.setBudget(generation)
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	require.NoError(t, hb.Prepare([]*plan.Expr{newExpr(0, types.T_int32.ToType())}, -1, -1, nil, proc))
+	input := testutil.NewBatch([]types.Type{types.T_int32.ToType()}, true, 100, proc.Mp())
+	require.NoError(t, hb.copyBuildBatch(input, proc))
+	hb.InputBatchRowCount = input.RowCount()
+	input.Clean(proc.Mp())
+	require.NoError(t, hb.BuildHashmap(false, false, false, proc))
+
+	jm := hb.GetJoinMap(proc.Mp())
+	require.NotNil(t, jm)
+	jm.IncRef(1)
+	usedBeforeResize := generation.Used()
+	secondGeneration, err := budget.OpenGeneration(2)
+	require.NoError(t, err)
+	hb.setBudget(secondGeneration)
+	require.NoError(t, jm.PreAlloc(100_000))
+	require.Greater(t, generation.Used(), usedBeforeResize)
+	require.Zero(t, secondGeneration.Used(), "published map must retain its original generation")
+	jm.Free()
+	require.Zero(t, generation.Used())
+
+	hb.Reset(proc, false)
+}
+
+func TestHashMapReservationOwnerRetainsSegmentedGrowthTokens(t *testing.T) {
+	budget, err := process.NewHashBuildBudget(1<<20, 1<<20)
+	require.NoError(t, err)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+
+	initial, err := generation.Reserve(100)
+	require.NoError(t, err)
+	owner := &hashMapReservationOwner{tokens: []*process.HashBuildReservation{initial}}
+
+	incremental, err := generation.Reserve(50)
+	require.NoError(t, err)
+	(&hashMapResizeReservation{owner: owner, token: incremental}).Commit(
+		hashtable.ResizePlan{ReuseCurrentBlocks: true},
+	)
+	require.Equal(t, uint64(150), generation.Used())
+
+	replacement, err := generation.Reserve(200)
+	require.NoError(t, err)
+	(&hashMapResizeReservation{owner: owner, token: replacement}).Commit(hashtable.ResizePlan{})
+	require.Equal(t, uint64(200), generation.Used())
+
+	owner.release()
+	require.Zero(t, generation.Used())
+}
+
+func TestCopyBuildBatchBudgetsFixedSizeTailPreallocation(t *testing.T) {
+	const budgetCap = uint64(32 << 20)
+	budget, err := process.NewHashBuildBudget(budgetCap, budgetCap)
+	require.NoError(t, err)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+
+	var hb HashmapBuilder
+	hb.setBudget(generation)
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	for _, rows := range []int{colexec.DefaultBatchSize, colexec.DefaultBatchSize, 100} {
+		input := testutil.NewBatch([]types.Type{types.T_int32.ToType()}, true, rows, proc.Mp())
+		require.NoError(t, hb.copyBuildBatch(input, proc))
+		input.Clean(proc.Mp())
+	}
+	require.Len(t, hb.Batches.Buf, 3)
+	require.Equal(t, 100, hb.Batches.Buf[2].RowCount())
+	hb.FreeHashMapAndBatches(proc)
+	require.Zero(t, generation.Used())
+}
+
+func TestCopyBuildBatchBudgetsPartialTailGrowth(t *testing.T) {
+	const budgetCap = uint64(32 << 20)
+	budget, err := process.NewHashBuildBudget(budgetCap, budgetCap)
+	require.NoError(t, err)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+
+	var hb HashmapBuilder
+	hb.setBudget(generation)
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	for range 1000 {
+		// Deep spill partitions contain many tiny records. They coalesce into
+		// one physical batch whose vector capacity grows geometrically.
+		input := testutil.NewBatch([]types.Type{types.T_int32.ToType()}, true, 7, proc.Mp())
+		require.NoError(t, hb.copyBuildBatch(input, proc))
+		input.Clean(proc.Mp())
+	}
+	require.Len(t, hb.Batches.Buf, 1)
+	require.Equal(t, 7000, hb.Batches.Buf[0].RowCount())
+	hb.FreeHashMapAndBatches(proc)
+	require.Zero(t, generation.Used())
+}
+
+func TestCleanCopiedBatchReleasesCoalescedIngressReservations(t *testing.T) {
+	const budgetCap = uint64(4 << 20)
+	budget, err := process.NewHashBuildBudget(budgetCap, budgetCap)
+	require.NoError(t, err)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+
+	var hb HashmapBuilder
+	hb.setBudget(generation)
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	var emergencyNeed uint64
+	for range 2 {
+		input := testutil.NewBatch([]types.Type{types.T_int32.ToType()}, true, colexec.DefaultBatchSize/2, proc.Mp())
+		if emergencyNeed == 0 {
+			emergencyNeed, err = spillEmergencyBudgetBytes(input)
+			require.NoError(t, err)
+		}
+		require.NoError(t, hb.copyBuildBatch(input, proc))
+		input.Clean(proc.Mp())
+	}
+	require.Len(t, hb.Batches.Buf, 1, "small ingress batches should coalesce")
+	require.Len(t, hb.batchReservations, 2, "reservations follow ingress, not physical batches")
+	require.Greater(t, generation.Used(), uint64(0))
+	physicalNeed, err := spillBudgetBytes(hb.Batches.Buf[0])
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, emergencyNeed, physicalNeed)
+
+	require.NoError(t, hb.CleanCopiedBatchAt(0, proc))
+	require.Empty(t, hb.Batches.Buf)
+	require.Empty(t, hb.batchReservations)
+	require.Zero(t, generation.Used())
+}
+
+func TestDrainCopiedBatchesReleasesBeforeSubsequentAdmission(t *testing.T) {
+	const budgetCap = uint64(4 << 20)
+	budget, err := process.NewHashBuildBudget(budgetCap, budgetCap)
+	require.NoError(t, err)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+
+	var hb HashmapBuilder
+	hb.setBudget(generation)
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	for range 2 {
+		input := testutil.NewBatch(
+			[]types.Type{types.T_int32.ToType()},
+			true,
+			colexec.DefaultBatchSize/2,
+			proc.Mp(),
+		)
+		require.NoError(t, hb.copyBuildBatch(input, proc))
+		input.Clean(proc.Mp())
+	}
+	require.Len(t, hb.Batches.Buf, 1, "small ingress batches should coalesce")
+	require.Len(t, hb.batchReservations, 2, "reservations follow ingress, not physical batches")
+
+	visits := 0
+	require.NoError(t, hb.DrainCopiedBatches(proc, func(bat *batch.Batch) error {
+		visits++
+		require.NotNil(t, bat)
+		require.Positive(t, generation.Used(), "physical batch must remain charged while visited")
+		return nil
+	}))
+	require.Equal(t, 1, visits)
+	require.Empty(t, hb.Batches.Buf)
+	require.Empty(t, hb.batchReservations)
+	require.Zero(t, generation.Used(), "the final physical batch must release every coalesced ingress charge")
+
+	// Model the expression/scatter/read reservation that follows a re-spill
+	// drain. It can consume the complete cap only after stale batch ownership
+	// has been removed from the ledger.
+	next, err := generation.Reserve(budgetCap)
+	require.NoError(t, err)
+	require.True(t, next.Release())
+	require.Zero(t, generation.Used())
+}
+
+func TestDrainCopiedBatchesVisitFailureRetainsOwnership(t *testing.T) {
+	const budgetCap = uint64(4 << 20)
+	budget, err := process.NewHashBuildBudget(budgetCap, budgetCap)
+	require.NoError(t, err)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+
+	var hb HashmapBuilder
+	hb.setBudget(generation)
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	for _, rows := range []int{
+		colexec.DefaultBatchSize / 2,
+		colexec.DefaultBatchSize / 2,
+		1024,
+	} {
+		input := testutil.NewBatch([]types.Type{types.T_int32.ToType()}, true, rows, proc.Mp())
+		require.NoError(t, hb.copyBuildBatch(input, proc))
+		input.Clean(proc.Mp())
+	}
+	require.Len(t, hb.Batches.Buf, 2)
+	require.Len(t, hb.batchReservations, 3)
+
+	wantErr := errors.New("visit failed")
+	visits := 0
+	require.ErrorIs(t, hb.DrainCopiedBatches(proc, func(*batch.Batch) error {
+		visits++
+		if visits == 1 {
+			return nil
+		}
+		return wantErr
+	}), wantErr)
+	require.Equal(t, 2, visits)
+	require.Len(t, hb.Batches.Buf, 1, "the failed current batch remains owned after prior batches drain")
+	require.Len(t, hb.batchReservations, 3,
+		"coalesced ingress reservations stay conservative until terminal cleanup")
+	require.Positive(t, generation.Used())
+
+	hb.FreeHashMapAndBatches(proc)
+	require.Zero(t, generation.Used())
+}
+
+func TestSpillExpressionHashKeyUsesBoundedAdmission(t *testing.T) {
+	var ctr container
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	budget, err := process.NewHashBuildBudget(1<<20, 1<<20)
+	require.NoError(t, err)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	ctr.hashmapBuilder.setBudget(generation)
+	expr := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_int32)},
+		Expr: &plan.Expr_F{F: &plan.Function{Args: []*plan.Expr{
+			newExpr(0, types.T_int32.ToType()),
+			{Typ: plan.Type{Id: int32(types.T_int32)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I32Val{I32Val: 2}}}},
+		}}},
+	}
+	ctr.hashmapBuilder.keyExprs = []*plan.Expr{expr}
+	token, err := ctr.reserveSpillExpressionPeak(proc, 8192)
+	require.NoError(t, err)
+	require.NotNil(t, token)
+	require.Positive(t, token.Size())
+	require.Equal(t, token.Size(), generation.Used())
+	token.Release()
+	require.Zero(t, generation.Used())
+}
+
+func TestExpressionHashKeyReservesDeclaredPeakBeforeEval(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	budget, err := process.NewHashBuildBudget(96<<10, 96<<10)
+	require.NoError(t, err)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+
+	var hb HashmapBuilder
+	hb.setBudget(generation)
+	require.NoError(t, hb.Prepare([]*plan.Expr{{
+		Typ:  plan.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen},
+		Expr: &plan.Expr_F{F: &plan.Function{}},
+	}}, -1, -1, nil, proc))
+	input := testutil.NewBatch([]types.Type{types.T_int32.ToType()}, true, 1, proc.Mp())
+	require.NoError(t, hb.copyBuildBatch(input, proc))
+	hb.InputBatchRowCount = input.RowCount()
+	input.Clean(proc.Mp())
+	err = hb.BuildHashmap(false, true, false, proc)
+	require.ErrorIs(t, err, process.ErrHashBuildBudgetAdmission)
+	hb.Free(proc)
+	require.Zero(t, generation.Used())
+}
+
+func TestExpressionHashKeyAcceptsCastTargetType(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	expr := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_int32)},
+		Expr: &plan.Expr_F{F: &plan.Function{Args: []*plan.Expr{
+			newExpr(0, types.T_int64.ToType()),
+			{
+				Typ:  plan.Type{Id: int32(types.T_int32)},
+				Expr: &plan.Expr_T{T: &plan.TargetType{}},
+			},
+		}}},
+	}
+
+	peak, err := expressionVectorPeak(proc, expr, 1024, false)
+	require.NoError(t, err)
+	require.Equal(t, uint64(204800), peak, "charge the target-type and cast result vectors")
+}
+
+func TestPreparedParamExpressionPeakUsesConstCardinality(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	params := vector.NewVec(types.T_text.ToType())
+	defer params.Free(proc.Mp())
+	proc.SetPrepareParams(params)
+	require.NoError(t, vector.AppendBytes(params, []byte("prepared"), false, proc.Mp()))
+	require.NoError(t, vector.AppendBytes(params, nil, true, proc.Mp()))
+
+	paramExpr := func(pos int32) *plan.Expr {
+		return &plan.Expr{
+			Typ:  plan.Type{Id: int32(types.T_text), Width: types.MaxVarcharLen},
+			Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: pos}},
+		}
+	}
+
+	peakOne, err := expressionVectorPeak(proc, paramExpr(0), 1, false)
+	require.NoError(t, err)
+	peakBatch, err := expressionVectorPeak(proc, paramExpr(0), colexec.DefaultBatchSize, false)
+	require.NoError(t, err)
+	require.Equal(t, peakOne, peakBatch, "const parameter admission must not scale with input rows")
+	peakNull, err := expressionVectorPeak(proc, paramExpr(1), colexec.DefaultBatchSize, false)
+	require.NoError(t, err)
+	require.Equal(t, peakOne, peakNull, "null parameter keeps the declared one-row type bound")
+}
+
+func TestPreparedParamExpressionExecutorRemainsConst(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		value []byte
+		null  bool
+	}{
+		{name: "non-null", value: []byte("prepared")},
+		{name: "null", null: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+			params := vector.NewVec(types.T_text.ToType())
+			defer params.Free(proc.Mp())
+			require.NoError(t, vector.AppendBytes(params, tc.value, tc.null, proc.Mp()))
+			proc.SetPrepareParams(params)
+
+			expr := &plan.Expr{
+				Typ:  plan.Type{Id: int32(types.T_text)},
+				Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}},
+			}
+			executor, err := colexec.NewExpressionExecutor(proc, expr)
+			require.NoError(t, err)
+			defer executor.Free()
+			input := testutil.NewBatch([]types.Type{types.T_int32.ToType()}, true, colexec.DefaultBatchSize, proc.Mp())
+			defer input.Clean(proc.Mp())
+
+			result, err := executor.Eval(proc, []*batch.Batch{input}, nil)
+			require.NoError(t, err)
+			require.True(t, result.IsConst())
+			require.Equal(t, 1, result.Length())
+		})
+	}
+}
+
+func TestPreparedParamExpressionPeakNestedFunctionCardinality(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	params := vector.NewVec(types.T_text.ToType())
+	defer params.Free(proc.Mp())
+	require.NoError(t, vector.AppendBytes(params, []byte("prepared"), false, proc.Mp()))
+	proc.SetPrepareParams(params)
+
+	param := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_text), Width: types.MaxVarcharLen},
+		Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}},
+	}
+	cast := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_int64)},
+		Expr: &plan.Expr_F{F: &plan.Function{Args: []*plan.Expr{
+			param,
+			{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_T{T: &plan.TargetType{}}},
+		}}},
+	}
+	modulo := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_int64)},
+		Expr: &plan.Expr_F{F: &plan.Function{Args: []*plan.Expr{
+			{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0}}},
+			cast,
+		}}},
+	}
+
+	paramTotal, paramOutput, err := expressionTreePeak(proc, param, colexec.DefaultBatchSize)
+	require.NoError(t, err)
+	paramOne, _, err := expressionTreePeak(proc, param, 1)
+	require.NoError(t, err)
+	require.Equal(t, paramOne, paramTotal)
+	_, rootOutput, err := expressionTreePeak(proc, modulo, colexec.DefaultBatchSize)
+	require.NoError(t, err)
+	rootTypePeak, err := expressionTypePeak(modulo.Typ, colexec.DefaultBatchSize)
+	require.NoError(t, err)
+	require.Equal(t, rootTypePeak, rootOutput, "function output remains sized for input rows")
+	require.Greater(t, paramOutput, uint64(0))
+}
+
+func TestPreparedParamExpressionPeakRejectsInvalidPosition(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	params := vector.NewVec(types.T_text.ToType())
+	defer params.Free(proc.Mp())
+	proc.SetPrepareParams(params)
+	require.NoError(t, vector.AppendBytes(params, []byte("prepared"), false, proc.Mp()))
+
+	expr := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_text)},
+		Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: -1}},
+	}
+	_, err := expressionVectorPeak(proc, expr, colexec.DefaultBatchSize, false)
+	require.Error(t, err)
+}
+
+func TestPreparedParamExpressionPeakAccountsLargePayload(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	params := vector.NewVec(types.T_text.ToType())
+	defer params.Free(proc.Mp())
+	payload := make([]byte, types.MaxBlobLen+1)
+	require.NoError(t, vector.AppendBytes(params, payload, false, proc.Mp()))
+	proc.SetPrepareParams(params)
+
+	expr := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen},
+		Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}},
+	}
+	peak, err := expressionVectorPeak(proc, expr, colexec.DefaultBatchSize, false)
+	require.NoError(t, err)
+	header, ok := mpool.GrowCapacity(0, int64(types.VarlenaSize))
+	require.True(t, ok)
+	area, ok := mpool.GrowCapacity(0, int64(len(payload)))
+	require.True(t, ok)
+	require.GreaterOrEqual(t, peak, uint64(header)+uint64(area))
+	require.Greater(t, peak, uint64(types.MaxBlobLen))
 }
 
 func TestGetJoinMapTransfersGroupSels(t *testing.T) {

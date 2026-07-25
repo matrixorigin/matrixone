@@ -38,12 +38,17 @@ type Int64HashMap struct {
 	cellCnt uint64
 	elemCnt uint64
 	cells   [][]Int64HashMapCell
+
+	version uint64
+	admit   ResizeAdmission
 }
 
 var (
 	intCellSize           uint64
 	maxIntCellCntPerBlock uint64
 )
+
+func Int64HashMapInitialAllocationBytes() uint64 { return kInitialCellCnt * intCellSize }
 
 func init() {
 	intCellSize = uint64(unsafe.Sizeof(Int64HashMapCell{}))
@@ -72,10 +77,7 @@ func (ht *Int64HashMap) freeCells(cells [][]Int64HashMapCell) {
 	}
 }
 
-func (ht *Int64HashMap) allocateCells(
-	blockCount int,
-	blockCellCnt uint64,
-) ([][]Int64HashMapCell, error) {
+func (ht *Int64HashMap) allocateCells(blockCount int, blockCellCnt uint64) ([][]Int64HashMapCell, error) {
 	cells := make([][]Int64HashMapCell, blockCount)
 	for i := range cells {
 		block, err := mpool.MakeSlice[Int64HashMapCell](int(blockCellCnt), ht.mp, true)
@@ -107,6 +109,7 @@ func (ht *Int64HashMap) Init(mp *mpool.MPool) (err error) {
 	ht.cellCntMask = kInitialCellCnt - 1
 	ht.elemCnt = 0
 	ht.cellCnt = kInitialCellCnt
+	ht.version = 0
 
 	ht.cells = make([][]Int64HashMapCell, 1)
 
@@ -118,6 +121,9 @@ func (ht *Int64HashMap) Init(mp *mpool.MPool) (err error) {
 }
 
 func (ht *Int64HashMap) InsertBatch(n int, hashes []uint64, keysPtr unsafe.Pointer, values []uint64) error {
+	if n <= 0 {
+		return nil
+	}
 	if err := ht.ResizeOnDemand(n); err != nil {
 		return err
 	}
@@ -139,6 +145,9 @@ func (ht *Int64HashMap) InsertBatch(n int, hashes []uint64, keysPtr unsafe.Point
 }
 
 func (ht *Int64HashMap) InsertBatchWithRing(n int, zValues []int64, hashes []uint64, keysPtr unsafe.Pointer, values []uint64) error {
+	if n <= 0 {
+		return nil
+	}
 	if err := ht.ResizeOnDemand(n); err != nil {
 		return err
 	}
@@ -221,71 +230,103 @@ func (ht *Int64HashMap) rehashInPlace(oldCellCnt uint64) {
 	}
 }
 
+// SetResizeAdmission installs an optional memory admission callback. The
+// callback is called once for each growth, before any allocation or mutation.
+func (ht *Int64HashMap) SetResizeAdmission(admit ResizeAdmission) { ht.admit = admit }
+
+// PlanResize computes growth accounting without allocating or changing the map.
+func (ht *Int64HashMap) PlanResize(cnt uint64) ResizePlan {
+	return newResizePlan(ht.elemCnt, cnt, ht.cellCnt, ht.blockCellCnt(),
+		uint64(len(ht.cells)), intCellSize,
+		maxIntCellCntPerBlock, ht.version)
+}
+
 func (ht *Int64HashMap) ResizeOnDemand(cnt int) error {
-	targetCnt := ht.elemCnt + uint64(cnt)
-	if targetCnt <= maxElemCnt(ht.cellCnt, intCellSize) {
+	if cnt <= 0 {
 		return nil
 	}
+	return ht.ResizeWithPlan(ht.PlanResize(uint64(cnt)))
+}
 
-	newCellCnt := ht.cellCnt << 1
-	newMaxElemCnt := maxElemCnt(newCellCnt, intCellSize)
-	for newMaxElemCnt < targetCnt {
-		newCellCnt <<= 1
-		newMaxElemCnt = maxElemCnt(newCellCnt, intCellSize)
+// ResizeWithPlan applies a previously computed plan transactionally.
+func (ht *Int64HashMap) ResizeWithPlan(plan ResizePlan) error {
+	if plan.Invalid {
+		return ErrInvalidResizePlan
 	}
+	if plan.Noop {
+		return nil
+	}
+	if !plan.matches(ht.version, ht.cellCnt, ht.blockCellCnt(), uint64(len(ht.cells))) {
+		return ErrStaleResizePlan
+	}
+	var reservation ResizeReservation
+	if ht.admit != nil {
+		var err error
+		if reservation, err = ht.admit(plan); err != nil {
+			return err
+		}
+	}
+	committed := false
+	defer func() {
+		if reservation != nil && !committed {
+			reservation.Rollback()
+		}
+	}()
 
-	blockCellCnt := ht.blockCellCnt()
-	if blockCellCnt == maxIntCellCntPerBlock {
-		oldBlockNum := len(ht.cells)
-		newBlockNum := int(newCellCnt / blockCellCnt)
+	if plan.ReuseCurrentBlocks {
 		newBlocks, err := ht.allocateCells(
-			newBlockNum-oldBlockNum,
-			blockCellCnt,
+			int(plan.TargetBlockCount-plan.CurrentBlockCount),
+			plan.TargetBlockCellCount,
 		)
 		if err != nil {
 			return err
 		}
-
 		oldCellCnt := ht.cellCnt
-		// Publish only after every required block is available. Allocation errors
-		// leave all routing state and existing cells unchanged.
 		ht.cells = append(ht.cells, newBlocks...)
-		ht.cellCnt = blockCellCnt * uint64(newBlockNum)
+		ht.cellCnt = plan.TargetCellCount
 		ht.cellCntMask = ht.cellCnt - 1
+		ht.version++
 		ht.rehashInPlace(oldCellCnt)
-	} else {
-		newBlockCellCnt := newCellCnt
-		newBlockNum := 1
-		if newBlockCellCnt > maxIntCellCntPerBlock {
-			newBlockCellCnt = maxIntCellCntPerBlock
-			newBlockNum = int(newCellCnt / newBlockCellCnt)
+		if reservation != nil {
+			reservation.Commit(plan)
 		}
-		newCells, err := ht.allocateCells(newBlockNum, newBlockCellCnt)
-		if err != nil {
-			return err
-		}
+		committed = true
+		return nil
+	}
 
-		// Keep the old table live until the replacement is complete, then publish
-		// all routing fields together before rehashing.
-		oldCells := ht.cells
-		ht.cells = newCells
-		ht.blockCellCntBits = powerOfTwoBits(newBlockCellCnt)
-		ht.cellCnt = newCellCnt
-		ht.cellCntMask = newCellCnt - 1
-
-		// rearrange the cells
-		for i := range oldCells {
-			for j := range oldCells[i] {
-				cell := &oldCells[i][j]
-				if cell.Mapped != 0 {
-					newCell := ht.findEmptyCell(cell.Key)
-					*newCell = *cell
+	newCells, err := ht.allocateCells(int(plan.TargetBlockCount), plan.TargetBlockCellCount)
+	if err != nil {
+		return err
+	}
+	newMask := plan.TargetCellCount - 1
+	newBlockBits := powerOfTwoBits(plan.TargetBlockCellCount)
+	for i := range ht.cells {
+		for j := range ht.cells[i] {
+			old := ht.cells[i][j]
+			if old.Mapped == 0 {
+				continue
+			}
+			for idx := old.Key & newMask; ; idx = (idx + 1) & newMask {
+				cell := &newCells[idx>>newBlockBits][idx&(plan.TargetBlockCellCount-1)]
+				if cell.Mapped == 0 {
+					*cell = old
+					break
 				}
 			}
 		}
-		ht.freeCells(oldCells)
 	}
 
+	oldCells := ht.cells
+	ht.cells = newCells
+	ht.cellCnt = plan.TargetCellCount
+	ht.cellCntMask = newMask
+	ht.blockCellCntBits = newBlockBits
+	ht.version++
+	ht.freeCells(oldCells)
+	if reservation != nil {
+		reservation.Commit(plan)
+	}
+	committed = true
 	return nil
 }
 

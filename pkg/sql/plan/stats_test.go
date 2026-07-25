@@ -1686,6 +1686,17 @@ func TestGetExprNdv(t *testing.T) {
 		require.Equal(t, -1.0, ndv)
 	})
 
+	t.Run("zero-argument function", func(t *testing.T) {
+		expr := &planpb.Expr{
+			Expr: &planpb.Expr_F{
+				F: &planpb.Function{
+					Func: &planpb.ObjectRef{ObjName: "rand"},
+				},
+			},
+		}
+		require.Equal(t, -1.0, getExprNdv(expr, builder))
+	})
+
 	t.Run("column reference", func(t *testing.T) {
 		expr := &planpb.Expr{
 			Expr: &planpb.Expr_Col{Col: colRef},

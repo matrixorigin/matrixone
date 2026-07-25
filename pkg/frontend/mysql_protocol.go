@@ -3861,7 +3861,7 @@ func (mp *MysqlProtocolImpl) receiveExtraInfo(rs *Conn) {
 	if err := i.Decode(reader); err != nil {
 		// If the error is timeout, we treat it as normal case and do not update extra info.
 		if err, ok := err.(net.Error); ok && err.Timeout() {
-			mp.ses.Error(mp.ctx, "cannot get salt, maybe not use proxy",
+			mp.ses.Debug(mp.ctx, "cannot get salt, maybe not use proxy",
 				zap.Error(err))
 		} else {
 			mp.ses.Error(mp.ctx, "failed to get extra info",
