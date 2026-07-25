@@ -81,6 +81,17 @@ type VectorIndexSearchIf interface {
 // txn (the check fires on the housekeeping goroutine, not the search path) and MUST return an
 // error rather than "stale" on a transient failure, so a meta-read blip can't trigger a
 // reload storm. An impl that cannot determine freshness returns (false, nil).
+//
+// DESIGN DECISION — EVENTUAL consistency, not immediate (won't-fix, by design): Search serves a
+// warmed entry directly and does NOT validate freshness on the query path (that would put a meta
+// read on every search — the perf floor this cache exists to avoid). Coherence is the periodic
+// PULL sweep only: it runs every stalenessCheckEveryNTicks ticks of the TTL/2 ticker and evicts a
+// stale entry on the NEXT housekeeping pass, so after a writer commits on another CN a warm remote
+// entry can keep answering the pre-CDC/MERGE/REBUILD snapshot for up to ~10–12.5 minutes before it
+// is reloaded. This is intentional: the contract is that a stale entry is EVENTUALLY removed, not
+// that reads are correct the instant the writer commits. Do NOT "fix" it by validating on the
+// search path or by broadcasting invalidations; if a caller ever needs read-your-writes across CNs,
+// that is a separate, opt-in requirement (or disable this cache for that index in multi-CN).
 type StaleChecker interface {
 	IsStale() (bool, error)
 }

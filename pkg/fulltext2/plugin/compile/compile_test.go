@@ -73,3 +73,43 @@ func TestValidateReindexParams(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, old, got)
 }
+
+// TestValidateReindexParamsMergePositionFree covers the data-loss guard: a MERGE compacts the tail
+// into the EXISTING base in place and cannot change the positional format (turning POSITION_FREE
+// OFF has no positions to re-derive; CompactSegments would commit an empty base). So a
+// `MERGE POSITION_FREE=…` that flips the format is rejected BEFORE the params are persisted, while
+// a REBUILD (Merge=false) with the same change is allowed and a format-preserving MERGE passes.
+func TestValidateReindexParamsMergePositionFree(t *testing.T) {
+	upM := func(m map[string]string, merge bool) compileplugin.ReindexParamUpdate {
+		return compileplugin.ReindexParamUpdate{Params: m, Merge: merge}
+	}
+	posFree := map[string]string{"parser": "gojieba", catalog.IndexAlgoParamPositionFree: "true"}
+	positional := map[string]string{"parser": "gojieba"} // position_free absent ⇒ positional
+
+	// MERGE turning position_free OFF (the reported data-loss case) → rejected.
+	_, err := Hooks{}.ValidateReindexParams(posFree, upM(map[string]string{
+		catalog.IndexAlgoParamPositionFree: "false"}, true))
+	require.ErrorContains(t, err, "REBUILD")
+
+	// MERGE turning position_free ON (also a format change) → rejected.
+	_, err = Hooks{}.ValidateReindexParams(positional, upM(map[string]string{
+		catalog.IndexAlgoParamPositionFree: "true"}, true))
+	require.ErrorContains(t, err, "REBUILD")
+
+	// REBUILD (Merge=false) with the same OFF change → allowed (re-derives from source).
+	got, err := Hooks{}.ValidateReindexParams(posFree, upM(map[string]string{
+		catalog.IndexAlgoParamPositionFree: "false"}, false))
+	require.NoError(t, err)
+	require.NotContains(t, got, catalog.IndexAlgoParamPositionFree) // false ⇒ positional (absent)
+
+	// MERGE that does NOT change the format (re-asserts the current true) → allowed.
+	got, err = Hooks{}.ValidateReindexParams(posFree, upM(map[string]string{
+		catalog.IndexAlgoParamPositionFree: "true"}, true))
+	require.NoError(t, err)
+	require.Equal(t, "true", got[catalog.IndexAlgoParamPositionFree])
+
+	// bare MERGE (no position_free param) → allowed.
+	got, err = Hooks{}.ValidateReindexParams(posFree, upM(nil, true))
+	require.NoError(t, err)
+	require.Equal(t, posFree, got)
+}

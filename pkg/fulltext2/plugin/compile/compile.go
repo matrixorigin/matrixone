@@ -330,6 +330,20 @@ func (Hooks) ValidateReindexParams(old map[string]string, alter compileplugin.Re
 		merged[k] = v
 	}
 	if hasPF {
+		// A MERGE folds the tag=1 tail into the existing base IN PLACE — it re-serializes the
+		// current segments and cannot change their positional format: turning POSITION_FREE OFF has
+		// no positions to re-derive (the base dropped them), and CompactSegments deletes the old
+		// rows before rebuilding, so a `MERGE POSITION_FREE=FALSE` would commit an EMPTY base even
+		// though the source rows are unchanged — data loss. Changing POSITION_FREE requires a full
+		// REBUILD (re-derives from the source table). Reject the combination BEFORE the params are
+		// persisted, so a MERGE can never mint a format-mismatched base.
+		curPF := old[catalog.IndexAlgoParamPositionFree] == "true"
+		newPF := pf == "true"
+		if alter.Merge && newPF != curPF {
+			return nil, moerr.NewInvalidInputNoCtx(
+				"fulltext2: changing POSITION_FREE requires a REBUILD (ALTER … REINDEX without MERGE); " +
+					"a MERGE compacts the tail into the existing base and cannot re-derive positions")
+		}
 		if pf == "true" {
 			// Only gojieba is meaningful position-free (ngram/json trigrams are noise as
 			// bag-of-words). Mirrors the CREATE-time check.

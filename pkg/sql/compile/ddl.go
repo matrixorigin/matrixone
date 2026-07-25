@@ -1065,6 +1065,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 					newParamsMap, err := p.Compile().ValidateReindexParams(oldParams,
 						compileplugin.ReindexParamUpdate{
 							Params: reindexSpecifiedParams(c.stmt, constraintName),
+							Merge:  tableAlterIndex.Merge,
 						})
 					if err != nil {
 						return err

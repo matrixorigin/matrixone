@@ -211,6 +211,13 @@ type ReindexParamUpdate struct {
 	// Sourced from the parse tree (c.stmt) at the compile site, so no plan
 	// proto field is needed to carry them. nil/empty means none specified.
 	Params map[string]string
+
+	// Merge is true when the reindex is a MERGE (compact the CDC tail into the
+	// base in place) rather than a full REBUILD (re-derive the base from the
+	// source table). A plugin uses it to reject params that a MERGE cannot honor
+	// — e.g. fulltext2 forbids changing POSITION_FREE on a MERGE, since a
+	// tail-into-base compaction cannot re-derive positions the base does not hold.
+	Merge bool
 }
 
 // MergeReindexParams is the shared body for a plugin's
