@@ -515,13 +515,13 @@ func TestBuildDefaultExprFitsVarchar(t *testing.T) {
 	require.Equal(t, "abc", defaultValue.Expr.GetLit().GetSval())
 }
 
-// makePlan2AssignmentCastExpr routes CHAR/VARCHAR targets through cast_strict,
+// makePlan2AssignmentCastExpr routes assignment-only targets through cast_strict,
 // while explicit casts via makePlan2CastExpr keep the lenient generic cast.
-func TestMakePlan2AssignmentCastExprUsesStrictForCharVarchar(t *testing.T) {
+func TestMakePlan2AssignmentCastExprUsesStrictForAssignmentTargets(t *testing.T) {
 	ctx := context.Background()
 	srcText := &Expr{Typ: plan.Type{Id: int32(types.T_text)}}
 
-	for _, oid := range []types.T{types.T_varchar, types.T_char} {
+	for _, oid := range []types.T{types.T_varchar, types.T_char, types.T_date, types.T_datetime, types.T_timestamp} {
 		target := plan.Type{Id: int32(oid), Width: 3}
 
 		strictExpr, err := makePlan2AssignmentCastExpr(ctx, DeepCopyExpr(srcText), target)
@@ -537,6 +537,37 @@ func TestMakePlan2AssignmentCastExprUsesStrictForCharVarchar(t *testing.T) {
 	intExpr, err := makePlan2AssignmentCastExpr(ctx, DeepCopyExpr(srcText), plan.Type{Id: int32(types.T_int64)})
 	require.NoError(t, err)
 	require.Equal(t, "cast", intExpr.GetF().GetFunc().GetObjName())
+}
+
+func TestForceAssignmentCastExprUsesStrictForAssignmentTargets(t *testing.T) {
+	ctx := context.Background()
+	srcText := &Expr{Typ: plan.Type{Id: int32(types.T_text)}}
+
+	for _, oid := range []types.T{types.T_varchar, types.T_char, types.T_date, types.T_datetime, types.T_timestamp} {
+		target := plan.Type{Id: int32(oid), Width: 3}
+		strictExpr, err := forceAssignmentCastExpr(ctx, DeepCopyExpr(srcText), target)
+		require.NoError(t, err)
+		require.Equal(t, "cast_strict", strictExpr.GetF().GetFunc().GetObjName())
+
+		genericExpr, err := forceCastExpr(ctx, DeepCopyExpr(srcText), target)
+		require.NoError(t, err)
+		require.Equal(t, "cast", genericExpr.GetF().GetFunc().GetObjName())
+	}
+}
+
+func TestAssignmentCastPreservesNestedExplicitTemporalCast(t *testing.T) {
+	ctx := context.Background()
+	target := plan.Type{Id: int32(types.T_date)}
+	srcText := &Expr{Typ: plan.Type{Id: int32(types.T_text)}}
+
+	explicit, err := forceCastExpr(ctx, srcText, target)
+	require.NoError(t, err)
+	require.Equal(t, "cast", explicit.GetF().GetFunc().GetObjName())
+
+	assignment, err := forceAssignmentCastExpr(ctx, explicit, target)
+	require.NoError(t, err)
+	require.Same(t, explicit, assignment)
+	require.Equal(t, "cast", assignment.GetF().GetFunc().GetObjName())
 }
 
 // A generated CHAR/VARCHAR column is materialized as a real column write, so
