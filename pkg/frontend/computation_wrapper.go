@@ -1303,7 +1303,7 @@ func queryWorkloadPolicyTenantName(ses FeSession) string {
 	if ses == nil {
 		return ""
 	}
-	if accountName := workloadPolicyState(ses).cachedAccountName(); accountName != "" {
+	if accountName := workloadPolicyState(ses).cachedRoutingAccountName(); accountName != "" {
 		return accountName
 	}
 	if tenant := ses.GetTenantInfo(); tenant != nil {

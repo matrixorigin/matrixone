@@ -254,10 +254,6 @@ func (ie *internalExecutor) newCmdSession(ctx context.Context, opts ie.SessionOv
 			GWorkloadPolicyManager.release(state)
 		}
 	}()
-	if tenantName := state.cachedAccountName(); tenantName != "" &&
-		sess.GetTenantInfo().GetTenant() == "" {
-		sess.GetTenantInfo().SetTenant(tenantName)
-	}
 	if !workloadPolicyBypassed(ctx) &&
 		state.snapshot.Load() == nil {
 		// RefreshAsync waits for the first snapshot and becomes asynchronous
@@ -274,14 +270,13 @@ func (ie *internalExecutor) newCmdSession(ctx context.Context, opts ie.SessionOv
 	policy := GWorkloadPolicyManager.cached(state)
 	if policy.Configured() &&
 		!workloadPolicyBypassed(ctx) &&
-		sess.GetTenantInfo().GetTenant() == "" {
+		state.cachedRoutingAccountName() == "" {
 		if tenantName, err := loadWorkloadPolicyAccountNameByService(
 			ctx,
 			ie.service,
 			state.accountID,
 		); err == nil {
-			state.rememberAccountName(tenantName)
-			sess.GetTenantInfo().SetTenant(tenantName)
+			state.rememberRoutingAccountName(tenantName)
 		}
 	}
 	releaseState = false

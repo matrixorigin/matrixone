@@ -17,6 +17,7 @@ package frontend
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -4261,6 +4262,16 @@ type successfulSchedulingPreviewEngine struct {
 	engine.Engine
 }
 
+func parseExplainStmtForTest(t *testing.T, sql string) *tree.ExplainStmt {
+	t.Helper()
+	parsed, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
+	require.NoError(t, err)
+	stmt, ok := parsed.(*tree.ExplainStmt)
+	require.True(t, ok)
+	t.Cleanup(stmt.Free)
+	return stmt
+}
+
 func (*successfulSchedulingPreviewEngine) DiscoverQueryCandidates(context.Context) (engine.QueryCandidates, error) {
 	return engine.QueryCandidates{{
 		Service: metadata.CNService{
@@ -4281,6 +4292,29 @@ func (*successfulSchedulingPreviewEngine) ResolveQueryCandidatePool(
 		RequestedIdentity: "preview",
 		Identity:          "preview",
 		Resolution:        engine.QueryPoolResolutionAllCompatible,
+	}, nil
+}
+
+type selectionSchedulingPreviewEngine struct {
+	engine.Engine
+	candidates engine.QueryCandidates
+	nodes      engine.Nodes
+}
+
+func (e *selectionSchedulingPreviewEngine) DiscoverQueryCandidates(
+	context.Context,
+) (engine.QueryCandidates, error) {
+	return e.candidates, nil
+}
+
+func (e *selectionSchedulingPreviewEngine) ResolveQueryCandidatePool(
+	context.Context,
+	engine.QueryCandidates,
+	engine.QueryCandidatePoolRequest,
+) (engine.ResolvedQueryPool, error) {
+	return engine.ResolvedQueryPool{
+		Nodes:      e.nodes,
+		Resolution: engine.QueryPoolResolutionAllCompatible,
 	}, nil
 }
 
@@ -4369,7 +4403,7 @@ func TestDoExplainStmtIncludesSchedulingPreviewWithoutFailingDiscovery(t *testin
 	}
 
 	require.NoError(t, ses.SetSessionSysVar(context.Background(), enableExplainScheduling, int64(1)))
-	stmt := tree.NewExplainStmt(&tree.Select{}, "text")
+	stmt := parseExplainStmtForTest(t, "explain select 1")
 	err := doExplainStmt(
 		context.Background(),
 		ses,
@@ -4389,6 +4423,110 @@ func TestDoExplainStmtIncludesSchedulingPreviewWithoutFailingDiscovery(t *testin
 	require.Contains(t, output.String(), "Scheduling (preview):")
 	require.Contains(t, output.String(), "Intent: explicit=true")
 	require.Contains(t, output.String(), "worker-set=max-workers max-workers=1")
+}
+
+func TestDoExplainStmtUsesInnerStatementSelectionIdentity(t *testing.T) {
+	workers := schedule.Workers{
+		{ID: "cn-a", Addr: "a:6001", Mcpu: 4},
+		{ID: "cn-b", Addr: "b:6001", Mcpu: 4},
+		{ID: "cn-c", Addr: "c:6001", Mcpu: 4},
+	}
+	selectWithSQL := func(sql string) string {
+		sum := sha256.Sum256([]byte(sql))
+		decision := schedule.DecideQueryPlacement(schedule.QueryRequest{
+			ExecKind: schedule.QueryExecAPMultiCN,
+			Intent: schedule.SchedulingIntent{WorkerSet: schedule.WorkerSetPolicy{
+				Mode:         schedule.WorkerSetMax,
+				MaxWorkers:   1,
+				SelectionKey: fmt.Sprintf("sql-sha256:%x", sum[:16]),
+			}},
+			ResolvedPool: schedule.ResolvedPool{Workers: workers},
+		})
+		require.True(t, decision.Satisfied)
+		require.Len(t, decision.Workers, 1)
+		return decision.Workers[0].ID
+	}
+
+	ctx := context.Background()
+	var (
+		stmt           *tree.ExplainStmt
+		outerSQL       string
+		targetSelected string
+		outerSelected  string
+	)
+	for i := 0; i < 100; i++ {
+		candidateOuterSQL := fmt.Sprintf("explain verbose select * from target_%d", i)
+		parsed, err := parsers.ParseOne(ctx, dialect.MYSQL, candidateOuterSQL, 1)
+		require.NoError(t, err)
+		candidateStmt := parsed.(*tree.ExplainStmt)
+		candidateTargetSQL := tree.String(candidateStmt.Statement, dialect.MYSQL)
+		candidateTargetSelected := selectWithSQL(candidateTargetSQL)
+		candidateOuterSelected := selectWithSQL(candidateOuterSQL)
+		if candidateTargetSelected == candidateOuterSelected {
+			candidateStmt.Free()
+			continue
+		}
+		stmt = candidateStmt
+		outerSQL = candidateOuterSQL
+		targetSelected = candidateTargetSelected
+		outerSelected = candidateOuterSelected
+		break
+	}
+	require.NotNil(t, stmt, "test candidates must distinguish inner from outer SQL identity")
+	defer stmt.Free()
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	ses.txnHandler.storage = &selectionSchedulingPreviewEngine{
+		candidates: engine.QueryCandidates{
+			{Service: metadata.CNService{ServiceID: "cn-a", PipelineServiceAddress: "a:6001"}, Mcpu: 4},
+			{Service: metadata.CNService{ServiceID: "cn-b", PipelineServiceAddress: "b:6001"}, Mcpu: 4},
+			{Service: metadata.CNService{ServiceID: "cn-c", PipelineServiceAddress: "c:6001"}, Mcpu: 4},
+		},
+		nodes: engine.Nodes{
+			{Id: "cn-a", Addr: "a:6001", Mcpu: 4},
+			{Id: "cn-b", Addr: "b:6001", Mcpu: 4},
+			{Id: "cn-c", Addr: "c:6001", Mcpu: 4},
+		},
+	}
+	oldBuildPlanWithAuthorization := buildPlanWithAuthorization
+	defer func() {
+		buildPlanWithAuthorization = oldBuildPlanWithAuthorization
+	}()
+	buildPlanWithAuthorization = func(
+		context.Context,
+		FeSession,
+		plan.CompilerContext,
+		tree.Statement,
+	) (*plan.Plan, error) {
+		return &plan.Plan{
+			Plan: &plan0.Plan_Query{
+				Query: &plan0.Query{
+					Nodes: []*plan0.Node{{
+						NodeId:   0,
+						NodeType: plan0.Node_TABLE_SCAN,
+						Stats:    &plan0.Stats{BlockNum: 100000, Cost: 200000},
+					}},
+					Steps: []int32{0},
+				},
+			},
+		}, nil
+	}
+
+	require.NoError(t, ses.SetSessionSysVar(ctx, enableExplainScheduling, int64(1)))
+	require.NoError(t, ses.SetSessionSysVar(ctx, queryMaxWorkers, int64(1)))
+	require.NoError(t, doExplainStmt(ctx, ses, stmt, outerSQL))
+
+	var output strings.Builder
+	for i := uint64(0); i < ses.GetMysqlResultSet().GetRowCount(); i++ {
+		row, err := ses.GetMysqlResultSet().GetRow(ctx, i)
+		require.NoError(t, err)
+		output.WriteString(row[0].(string))
+		output.WriteByte('\n')
+	}
+	require.Contains(t, output.String(), "Selected workers (representative): [{id="+targetSelected)
+	require.NotContains(t, output.String(), "Selected workers (representative): [{id="+outerSelected)
 }
 
 func TestDoExplainExecuteUsesPreparedSchedulingSQL(t *testing.T) {
@@ -4469,7 +4607,7 @@ func TestDoExplainStmtKeepsSchedulingPreviewOptIn(t *testing.T) {
 	err := doExplainStmt(
 		context.Background(),
 		ses,
-		tree.NewExplainStmt(&tree.Select{}, "text"),
+		parseExplainStmtForTest(t, "explain select 1"),
 	)
 	require.NoError(t, err)
 
@@ -4510,7 +4648,7 @@ func TestDoExplainStmtDoesNotSwallowRequestCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	err := doExplainStmt(ctx, ses, tree.NewExplainStmt(&tree.Select{}, "text"))
+	err := doExplainStmt(ctx, ses, parseExplainStmtForTest(t, "explain select 1"))
 	require.ErrorIs(t, err, context.Canceled)
 }
 

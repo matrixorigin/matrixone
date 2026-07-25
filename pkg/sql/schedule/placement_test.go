@@ -38,6 +38,51 @@ func TestDecideQueryPlacementKeepsLocalExecTypesLocal(t *testing.T) {
 	}
 }
 
+func TestSelectWorkerSubsetIgnoresInvalidPinnedWorker(t *testing.T) {
+	workers := Workers{
+		{ID: "cn-a", Addr: "a:6001", Mcpu: 4},
+		{ID: "cn-b", Addr: "b:6001", Mcpu: 4},
+		{ID: "cn-c", Addr: "c:6001", Mcpu: 4},
+	}
+	policy := WorkerSetPolicy{
+		Mode:         WorkerSetMax,
+		MaxWorkers:   2,
+		SelectionKey: "query-1",
+	}
+	want, reason, ok := selectWorkerSubset(policy, workers, nil)
+	require.True(t, ok)
+	require.Empty(t, reason)
+
+	for _, pinned := range []Worker{
+		{},
+		{ID: "missing", Addr: "missing:6001", Mcpu: 4},
+	} {
+		got, gotReason, gotOK := selectWorkerSubset(policy, workers, &pinned)
+		require.True(t, gotOK)
+		require.Empty(t, gotReason)
+		require.Equal(t, want, got)
+		require.NotContains(t, got, Worker{})
+	}
+}
+
+func TestSelectWorkerSubsetPinsResolvedCandidate(t *testing.T) {
+	workers := Workers{
+		{ID: "cn-a", Addr: "a:6001", Mcpu: 4},
+		{ID: "cn-b", Addr: "b:6001", Mcpu: 4},
+		{ID: "cn-c", Addr: "c:6001", Mcpu: 4},
+	}
+	pinned := Worker{ID: "cn-b", Addr: "stale-address:6001"}
+	selected, reason, ok := selectWorkerSubset(WorkerSetPolicy{
+		Mode:         WorkerSetMax,
+		MaxWorkers:   1,
+		SelectionKey: "query-1",
+	}, workers, &pinned)
+
+	require.True(t, ok)
+	require.Empty(t, reason)
+	require.Equal(t, Workers{workers[1]}, selected)
+}
+
 func TestDecideQueryPlacementRejectsInvalidCurrentCNPolicy(t *testing.T) {
 	local := Worker{ID: "local", Addr: "local:6001", Mcpu: 8}
 

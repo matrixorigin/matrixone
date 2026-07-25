@@ -29,9 +29,11 @@ import (
 // query-level placement that compilation would choose. Preview does not build
 // scopes, mutate the plan, record scheduler metrics, or emit scheduler logs.
 type SchedulingPreviewRequest struct {
-	Context      context.Context
-	Query        *plan.Query
-	StatementSQL string
+	Context context.Context
+	Query   *plan.Query
+	// SelectionSQL identifies the statement being previewed. Wrappers such as
+	// EXPLAIN/EXECUTE must pass the inner target SQL, never their own SQL.
+	SelectionSQL string
 	Engine       engine.Engine
 	Process      *process.Process
 	Address      string
@@ -67,7 +69,7 @@ func PreviewQueryScheduling(req SchedulingPreviewRequest) schedule.Trace {
 		uid:                   req.Username,
 		cnLabel:               req.CNLabel,
 		querySchedulingIntent: req.Intent,
-		querySelectionKey:     querySchedulingSelectionKeyForSQL(req.StatementSQL, ""),
+		querySelectionKey:     querySchedulingSelectionKeyForSQL(req.SelectionSQL, ""),
 		workloadPolicySet:     req.Policy.Clone(),
 		workloadClassHint:     req.Workload,
 		ncpu:                  system.GoMaxProcs(),

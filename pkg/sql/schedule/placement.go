@@ -382,11 +382,11 @@ func selectWorkerSubset(policy WorkerSetPolicy, workers Workers, pinned *Worker)
 		if policy.MaxWorkers >= len(workers) {
 			return workers, "", true
 		}
-		var pinnedWorker Worker
+		pinnedIndex := -1
 		if pinned != nil {
-			for _, worker := range workers {
+			for i, worker := range workers {
 				if sameWorker(worker, *pinned) {
-					pinnedWorker = worker
+					pinnedIndex = i
 					break
 				}
 			}
@@ -397,7 +397,7 @@ func selectWorkerSubset(policy WorkerSetPolicy, workers Workers, pinned *Worker)
 		}
 		ranked := make([]rankedWorker, 0, len(workers))
 		for i := range workers {
-			if pinned != nil && sameWorker(workers[i], *pinned) {
+			if i == pinnedIndex {
 				continue
 			}
 			ranked = append(ranked, rankedWorker{
@@ -412,8 +412,8 @@ func selectWorkerSubset(policy WorkerSetPolicy, workers Workers, pinned *Worker)
 			return compareWorkerIdentity(workers[a.index], workers[b.index])
 		})
 		selected := make(Workers, 0, policy.MaxWorkers)
-		if pinned != nil {
-			selected = append(selected, pinnedWorker)
+		if pinnedIndex >= 0 {
+			selected = append(selected, workers[pinnedIndex])
 		}
 		for i := 0; len(selected) < policy.MaxWorkers; i++ {
 			selected = append(selected, workers[ranked[i].index])

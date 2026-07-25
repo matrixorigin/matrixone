@@ -70,6 +70,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 )
 
+// TenantInfo is the authenticated authorization identity. Workload routing
+// must never inject an execution-account label here; background and internal
+// executors carry that label in their account workload-policy state.
 type TenantInfo struct {
 	mu          sync.Mutex
 	Tenant      string
@@ -121,12 +124,6 @@ func (ti *TenantInfo) GetTenant() string {
 	ti.mu.Lock()
 	defer ti.mu.Unlock()
 	return ti.getTenantUnsafe()
-}
-
-func (ti *TenantInfo) SetTenant(tenant string) {
-	ti.mu.Lock()
-	defer ti.mu.Unlock()
-	ti.Tenant = tenant
 }
 
 func (ti *TenantInfo) getTenantUnsafe() string {

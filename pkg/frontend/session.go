@@ -315,7 +315,7 @@ func (ses *Session) InitSystemVariables(ctx context.Context, bh BackgroundExec) 
 		return
 	}
 	state := GWorkloadPolicyManager.acquire(tenantID)
-	state.rememberAccountName(ses.GetTenantInfo().GetTenant())
+	state.rememberRoutingAccountName(ses.GetTenantInfo().GetTenant())
 	ses.mu.Lock()
 	oldState := ses.workloadPolicy.Swap(state)
 	ses.gSysVars = sv

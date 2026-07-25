@@ -151,13 +151,16 @@ func TestInternalExecutorLoadsAccountWorkloadPolicy(t *testing.T) {
 			resolved := schedule.ResolveWorkloadPolicy(
 				schedule.WorkloadDescriptor{
 					Internal: true,
-					Tenant:   sess.GetTenantInfo().GetTenant(),
+					Tenant:   queryWorkloadPolicyTenantName(sess),
 				},
 				policy,
 			)
 			require.Equal(t, schedule.WorkloadInternal, resolved.WorkloadClass)
 			require.Equal(t, "internal-pool", resolved.Pool.Identity)
 			require.Equal(t, "tenant-91", resolved.Pool.Labels["account"])
+			require.Empty(t, sess.GetTenantInfo().GetTenant(),
+				"routing identity must not become authenticated identity")
+			require.Equal(t, "tenant-91", queryWorkloadPolicyTenantName(sess))
 		},
 	)
 	require.Zero(t, mp.CurrNB())
@@ -242,13 +245,16 @@ func TestInternalExecutorLoadsColdAccountPolicyForNonInternalSession(t *testing.
 				schedule.WorkloadDescriptor{
 					Class:    schedule.WorkloadAP,
 					ExecKind: schedule.QueryExecAPMultiCN,
-					Tenant:   first.GetTenantInfo().GetTenant(),
+					Tenant:   queryWorkloadPolicyTenantName(first),
 				},
 				policy,
 			)
 			require.True(t, resolved.Applied)
 			require.Equal(t, "task-ap", resolved.Pool.Identity)
 			require.Equal(t, "tenant-92", resolved.Pool.Labels["account"])
+			require.Empty(t, first.GetTenantInfo().GetTenant(),
+				"account-bound internal execution must not fabricate authentication")
+			require.Equal(t, "tenant-92", queryWorkloadPolicyTenantName(first))
 			first.Close()
 			require.Equal(t, 1, policyReads)
 			require.Equal(t, 1, accountReads)

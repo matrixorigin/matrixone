@@ -1135,10 +1135,10 @@ func (backSes *backSession) bindWorkloadPolicy(
 		}
 	}
 
-	accountName := state.cachedAccountName()
+	accountName := state.cachedRoutingAccountName()
 	if accountName == "" && accountID == sysAccountID {
 		accountName = sysAccountName
-		state.rememberAccountName(accountName)
+		state.rememberRoutingAccountName(accountName)
 	}
 	// The authenticated account name is a protected routing label, but it is
 	// needed only when an account policy can actually be applied. In
@@ -1159,7 +1159,7 @@ func (backSes *backSession) bindWorkloadPolicy(
 		if err != nil {
 			return err
 		}
-		state.rememberAccountName(accountName)
+		state.rememberRoutingAccountName(accountName)
 	}
 
 	// TenantInfo is authorization identity, not workload-routing identity.

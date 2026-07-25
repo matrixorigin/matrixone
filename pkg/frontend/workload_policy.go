@@ -86,30 +86,32 @@ type workloadPolicyRefresh struct {
 // accountWorkloadPolicy is the per-CN cache for one account. Statement reads
 // are lock-free. mu only serializes refreshes and revision changes.
 type accountWorkloadPolicy struct {
-	mu           sync.Mutex
-	snapshot     atomic.Pointer[workloadPolicySnapshot]
-	accountName  atomic.Pointer[string]
-	refreshAfter atomic.Int64
-	refreshing   *workloadPolicyRefresh
-	accountID    uint32
-	references   uint64
-	failures     uint8
-	removed      bool
+	mu                 sync.Mutex
+	snapshot           atomic.Pointer[workloadPolicySnapshot]
+	routingAccountName atomic.Pointer[string]
+	refreshAfter       atomic.Int64
+	refreshing         *workloadPolicyRefresh
+	accountID          uint32
+	references         uint64
+	failures           uint8
+	removed            bool
 }
 
-func (state *accountWorkloadPolicy) rememberAccountName(name string) {
+// rememberRoutingAccountName stores the protected account label used only for
+// workload-pool resolution. It is deliberately not an authenticated TenantInfo.
+func (state *accountWorkloadPolicy) rememberRoutingAccountName(name string) {
 	name = strings.TrimSpace(name)
 	if state == nil || name == "" {
 		return
 	}
-	state.accountName.Store(&name)
+	state.routingAccountName.Store(&name)
 }
 
-func (state *accountWorkloadPolicy) cachedAccountName() string {
+func (state *accountWorkloadPolicy) cachedRoutingAccountName() string {
 	if state == nil {
 		return ""
 	}
-	if name := state.accountName.Load(); name != nil {
+	if name := state.routingAccountName.Load(); name != nil {
 		return *name
 	}
 	return ""

@@ -769,7 +769,7 @@ func TestQueryWorkloadPolicyTenantNameSeparatesRoutingAndAuthorization(t *testin
 		"ordinary sessions without managed policy state retain their authenticated tenant")
 
 	state := &accountWorkloadPolicy{}
-	state.rememberAccountName("execution-account")
+	state.rememberRoutingAccountName("execution-account")
 	ses.workloadPolicy.Store(state)
 	require.Equal(t, "execution-account", queryWorkloadPolicyTenantName(ses),
 		"the execution-account routing label must not depend on authorization identity")
@@ -794,8 +794,8 @@ func TestBackSessionBindsWorkloadPolicyToExecutionAccount(t *testing.T) {
 	manager := GWorkloadPolicyManager
 	sourceState := manager.acquire(sourceAccountID)
 	targetState := manager.acquire(targetAccountID)
-	sourceState.rememberAccountName(sourceAccount)
-	targetState.rememberAccountName(targetAccount)
+	sourceState.rememberRoutingAccountName(sourceAccount)
+	targetState.rememberRoutingAccountName(targetAccount)
 	_, _, err := manager.Apply(sourceAccountID, sourcePolicy, 1)
 	require.NoError(t, err)
 	_, _, err = manager.Apply(targetAccountID, targetPolicy, 1)
@@ -928,7 +928,7 @@ func TestBackSessionPreservesInternalWorkloadRouting(t *testing.T) {
 
 	manager := GWorkloadPolicyManager
 	state := manager.acquire(accountID)
-	state.rememberAccountName(account)
+	state.rememberRoutingAccountName(account)
 	_, _, err := manager.Apply(accountID, policy, 1)
 	require.NoError(t, err)
 
@@ -968,7 +968,7 @@ func TestBackSessionTriggersStalePolicyReconciliation(t *testing.T) {
 
 	manager := GWorkloadPolicyManager
 	state := manager.acquire(accountID)
-	state.rememberAccountName(account)
+	state.rememberRoutingAccountName(account)
 	_, _, err := manager.Apply(accountID, testWorkloadPolicyOld, 1)
 	require.NoError(t, err)
 	state.refreshAfter.Store(0)
@@ -1105,7 +1105,7 @@ func TestBackSessionAllowsTenantBootstrapBeforePolicyTableUpgrade(t *testing.T) 
 	require.Empty(t, snapshot.raw)
 	require.Zero(t, snapshot.revision)
 	require.Empty(t, snapshot.set.Rules)
-	require.Empty(t, state.cachedAccountName())
+	require.Empty(t, state.cachedRoutingAccountName())
 	require.Equal(t, 1, policyReads)
 	require.Nil(t, backSes.GetTenantInfo())
 }

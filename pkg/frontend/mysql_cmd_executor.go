@@ -1571,6 +1571,11 @@ func writeExplainResult(
 		if rawSQL == "" {
 			rawSQL = ses.GetSql()
 		}
+		// Preserve the raw wrapper SQL for statement-scoped optimizer comments,
+		// but derive capped-worker selection from the actual explained
+		// statement. AST formatting makes that identity independent of EXPLAIN
+		// options such as ANALYZE, VERBOSE, and FORMAT.
+		selectionSQL := tree.String(stmt.Statement, dialect.MYSQL)
 		// EXPLAIN EXECUTE replaces the outer EXECUTE plan with the prepared
 		// query above. Its scheduling intent belongs to that same inner SQL,
 		// not to the outer EXPLAIN fragment.
@@ -1578,6 +1583,7 @@ func writeExplainResult(
 		if execute, ok := stmt.Statement.(*tree.Execute); ok {
 			if prepared, getErr := ses.GetPrepareStmt(reqCtx, string(execute.Name)); getErr == nil {
 				rawSQL = prepared.Sql
+				selectionSQL = prepared.Sql
 				sqlMode = &prepared.schedulingSQLMode
 				workloadClass = queryWorkloadClassHint(prepared.PrepareStmt)
 			}
@@ -1588,6 +1594,7 @@ func writeExplainResult(
 			exPlan.GetQuery(),
 			txnHaveDDL,
 			rawSQL,
+			selectionSQL,
 			sqlMode,
 			workloadClass,
 		)
@@ -1633,6 +1640,7 @@ func previewQueryScheduling(
 		query,
 		txnHaveDDL,
 		rawSQL,
+		rawSQL,
 		nil,
 		"",
 	)
@@ -1643,7 +1651,8 @@ func previewQuerySchedulingWithSQLMode(
 	ses *Session,
 	query *plan.Query,
 	txnHaveDDL bool,
-	rawSQL string,
+	intentSQL string,
+	selectionSQL string,
 	sqlMode *string,
 	workloadClass schedule.WorkloadClass,
 ) schedule.Trace {
@@ -1658,23 +1667,20 @@ func previewQuerySchedulingWithSQLMode(
 			Query:   query,
 		})
 	}
-	tenant := ""
-	if info := ses.GetTenantInfo(); info != nil {
-		tenant = info.GetTenant()
-	}
+	tenant := queryWorkloadPolicyTenantName(ses)
 	policySet := queryWorkloadPolicySnapshotAt(previewCtx, ses)
-	intent := querySchedulingIntentForStatement(ses, rawSQL)
+	intent := querySchedulingIntentForStatement(ses, intentSQL)
 	if sqlMode != nil {
 		intent = querySchedulingIntentForStatementWithSQLMode(
 			ses,
-			rawSQL,
+			intentSQL,
 			*sqlMode,
 		)
 	}
 	return compile.PreviewQueryScheduling(compile.SchedulingPreviewRequest{
 		Context:      previewCtx,
 		Query:        query,
-		StatementSQL: rawSQL,
+		SelectionSQL: selectionSQL,
 		Engine:       ses.GetTxnHandler().GetStorage(),
 		Process:      ses.GetProc(),
 		Address:      currentCNPipelineAddress(ses),
