@@ -40,6 +40,7 @@ BUILD_WKSP=$(dirname "$PWD") && cd $BUILD_WKSP
 LOG="$G_TS-$TEST_TYPE.log"
 UT_TIMEOUT=${UT_TIMEOUT:-"15"}
 UT_PARALLEL=${UT_PARALLEL:-"1"}
+HEAVY_RACE_PARALLEL=${HEAVY_RACE_PARALLEL:-"3"}
 PLAN_RACE_SHARDS=${PLAN_RACE_SHARDS:-"8"}
 SCA_REPORT="$G_WKSP/$G_TS-SCA-Report.out"
 UT_REPORT="$G_WKSP/$G_TS-UT-Report.out"
@@ -186,6 +187,7 @@ function run_tests(){
     echo "#  COVERAGE REPORT: $CODE_COVERAGE"
     echo "#  UT TIMEOUT:      $UT_TIMEOUT"
     echo "#  UT PARALLEL:     $UT_PARALLEL"
+    echo "#  HEAVY RACE UT:   $HEAVY_RACE_PARALLEL"
     horiz_rule
 
     logger "INF" "Clean go test cache"
@@ -219,28 +221,59 @@ function run_tests(){
     else
         logger "INF" "Run UT with race check"
         local plan_package
-        local regular_test_scope
-        local regular_status=0
+        local heavy_test_scope
+        local light_test_scope
+        local package
+        local light_status=0
+        local heavy_status=0
         local plan_status=0
+
+        if ! [[ "${HEAVY_RACE_PARALLEL}" =~ ^[1-9][0-9]*$ ]] ||
+            (( HEAVY_RACE_PARALLEL > 64 )); then
+            logger "ERR" "HEAVY_RACE_PARALLEL must be an integer from 1 through 64, got '${HEAVY_RACE_PARALLEL}'"
+            UT_TEST_STATUS=1
+            return 0
+        fi
 
         if ! plan_package=$(go list ${GO_MODULE_MODE} ./pkg/sql/plan); then
             logger "ERR" "Failed to resolve ./pkg/sql/plan"
             UT_TEST_STATUS=1
             return 0
         fi
-        regular_test_scope=$(printf '%s\n' "${test_scope}" | grep -Fvx "${plan_package}")
 
-        if [[ -n "${regular_test_scope}" ]]; then
-            LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} -short -v -json -tags "${TAGS}" -p ${UT_PARALLEL} -timeout "${UT_TIMEOUT}m" -race $regular_test_scope > $UT_REPORT
-            regular_status=$?
+        if ! heavy_test_scope=$(go list ${GO_MODULE_MODE} \
+            ./pkg/sql/plan/function \
+            ./pkg/tests/issues \
+            ./pkg/tests/dml \
+            ./pkg/tests/shard \
+            ./pkg/tests/partition \
+            ./pkg/tests/txnexecutor); then
+            logger "ERR" "Failed to resolve heavy race-test packages"
+            UT_TEST_STATUS=1
+            return 0
+        fi
+
+        light_test_scope="${test_scope}"
+        for package in "${plan_package}" ${heavy_test_scope}; do
+            light_test_scope=$(printf '%s\n' "${light_test_scope}" | grep -Fvx "${package}")
+        done
+
+        if [[ -n "${light_test_scope}" ]]; then
+            logger "INF" "Run light race-test packages with parallelism ${UT_PARALLEL}"
+            LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} -short -v -json -tags "${TAGS}" -p ${UT_PARALLEL} -timeout "${UT_TIMEOUT}m" -race $light_test_scope > $UT_REPORT
+            light_status=$?
         else
             : > "${UT_REPORT}"
         fi
 
+        logger "INF" "Run heavy race-test packages with parallelism ${HEAVY_RACE_PARALLEL}"
+        LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} -short -v -json -tags "${TAGS}" -p ${HEAVY_RACE_PARALLEL} -timeout "${UT_TIMEOUT}m" -race $heavy_test_scope >> $UT_REPORT
+        heavy_status=$?
+
         run_plan_race_shards "${plan_package}"
         plan_status=$?
 
-        if (( regular_status != 0 || plan_status != 0 )); then
+        if (( light_status != 0 || heavy_status != 0 || plan_status != 0 )); then
             UT_TEST_STATUS=1
         fi
     fi
