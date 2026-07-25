@@ -72,6 +72,10 @@ func NewPhyPlan() *PhyPlan {
 // CloneForExport detaches the physical plan from the completed execution
 // generation before it is retained for asynchronous export. Callers must
 // invoke it before the source plan is reset or reused.
+//
+// TestPhyPlanCloneForExportReferenceSchemaIsExplicit is the schema tripwire
+// for this semantic clone. Any new reference-bearing field must be classified
+// there and detached here before the test fixture can be updated.
 func (p *PhyPlan) CloneForExport() *PhyPlan {
 	if p == nil {
 		return nil
@@ -84,17 +88,14 @@ func (p *PhyPlan) CloneForExport() *PhyPlan {
 		nodes:     make([]PhyOperator, nodeCount),
 		children:  make([]*PhyOperator, childCount),
 	}
-	clone := &PhyPlan{
-		Version:     p.Version,
-		RetryTime:   p.RetryTime,
-		LocalScope:  cloner.cloneScopes(p.LocalScope),
-		RemoteScope: cloner.cloneScopes(p.RemoteScope),
-	}
+	clone := *p
+	clone.LocalScope = cloner.cloneScopes(p.LocalScope)
+	clone.RemoteScope = cloner.cloneScopes(p.RemoteScope)
 	if p.Resource != nil {
 		resource := *p.Resource
 		clone.Resource = &resource
 	}
-	return clone
+	return &clone
 }
 
 type phyPlanExportCloner struct {

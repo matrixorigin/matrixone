@@ -16,6 +16,8 @@ package models
 
 import (
 	"fmt"
+	"reflect"
+	"sort"
 	"strings"
 	"testing"
 
@@ -78,12 +80,21 @@ func newBenchmarkPhyPlan(operatorCount int, withBackgroundQuery bool) *PhyPlan {
 	return &PhyPlan{LocalScope: []PhyScope{{RootOperator: root}}}
 }
 
-func TestPhyPlanCloneForExportDetachesExecutionGraph(t *testing.T) {
+func newPhyPlanExportCloneFixture() (*PhyPlan, *process.OperatorStats) {
 	stats := &process.OperatorStats{
 		OperatorName:    "shared",
 		CallNum:         7,
 		OperatorMetrics: map[process.MetricType]int64{process.OpScanTime: 11},
 		ExtraStats:      map[string]int64{"SpillBytes": 13},
+		BackgroundQueries: []*planpb.Query{{
+			Steps:      []int32{0},
+			Headings:   []string{"background"},
+			DetectSqls: []string{"select 1"},
+			BackgroundQueries: []*planpb.Query{{
+				Steps:    []int32{1},
+				Headings: []string{"nested"},
+			}},
+		}},
 	}
 	sharedChild := &PhyOperator{
 		OpName:  "child",
@@ -97,7 +108,7 @@ func TestPhyPlanCloneForExportDetachesExecutionGraph(t *testing.T) {
 		OpStats:      stats,
 		Children:     []*PhyOperator{sharedChild, sharedChild},
 	}
-	source := &PhyPlan{
+	return &PhyPlan{
 		Version:   "1.0",
 		RetryTime: 3,
 		Resource:  &resource.StatementResourceSummary{StatementWallNS: 17},
@@ -115,11 +126,70 @@ func TestPhyPlanCloneForExportDetachesExecutionGraph(t *testing.T) {
 			Magic:        "Remote",
 			RootOperator: sharedChild,
 		}},
+	}, stats
+}
+
+func TestPhyPlanCloneForExportReferenceSchemaIsExplicit(t *testing.T) {
+	source, stats := newPhyPlanExportCloneFixture()
+	testCases := []struct {
+		name                  string
+		value                 any
+		referenceBearingField []string
+	}{
+		{
+			name:                  "PhyPlan",
+			value:                 source,
+			referenceBearingField: []string{"LocalScope", "RemoteScope", "Resource"},
+		},
+		{
+			name:                  "PhyScope",
+			value:                 source.LocalScope[0],
+			referenceBearingField: []string{"Receiver", "DataSource", "PreScopes", "RootOperator"},
+		},
+		{
+			name:                  "PhyReceiver",
+			value:                 source.LocalScope[0].Receiver[0],
+			referenceBearingField: nil,
+		},
+		{
+			name:                  "PhySource",
+			value:                 source.LocalScope[0].DataSource,
+			referenceBearingField: []string{"Attributes"},
+		},
+		{
+			name:                  "PhyOperator",
+			value:                 source.LocalScope[0].RootOperator,
+			referenceBearingField: []string{"DestReceiver", "OpStats", "Children"},
+		},
+		{
+			name:                  "OperatorStats",
+			value:                 stats,
+			referenceBearingField: []string{"OperatorMetrics", "ExtraStats", "BackgroundQueries"},
+		},
+		{
+			name:                  "StatementResourceSummary",
+			value:                 source.Resource,
+			referenceBearingField: nil,
+		},
 	}
 
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			requireReferenceSchema(t, testCase.value, testCase.referenceBearingField)
+		})
+	}
+}
+
+func TestPhyPlanCloneForExportDetachesExecutionGraph(t *testing.T) {
+	source, stats := newPhyPlanExportCloneFixture()
+
 	got := source.CloneForExport()
+	shallow := *source
 
 	require.Equal(t, source, got)
+	require.NotEmpty(t, findMutableAliases(source, &shallow),
+		"positive control: a shallow plan copy must retain mutable aliases")
+	require.Empty(t, findMutableAliases(source, got))
 	require.NotSame(t, source, got)
 	require.NotSame(t, source.Resource, got.Resource)
 	require.NotSame(t, source.LocalScope[0].DataSource, got.LocalScope[0].DataSource)
@@ -149,6 +219,177 @@ func TestPhyPlanCloneForExportDetachesExecutionGraph(t *testing.T) {
 
 	var nilPlan *PhyPlan
 	require.Nil(t, nilPlan.CloneForExport())
+}
+
+func requireReferenceSchema(t *testing.T, fixture any, expected []string) {
+	t.Helper()
+	value := reflect.ValueOf(fixture)
+	require.True(t, value.IsValid())
+	if value.Kind() == reflect.Pointer {
+		require.False(t, value.IsNil())
+		value = value.Elem()
+	}
+	require.Equal(t, reflect.Struct, value.Kind())
+
+	typ := value.Type()
+	actual := make([]string, 0)
+	for i := 0; i < typ.NumField(); i++ {
+		field := typ.Field(i)
+		if containsMutableReference(field.Type) {
+			actual = append(actual, field.Name)
+		}
+	}
+	require.ElementsMatchf(t, expected, actual,
+		"%s reference schema changed; classify every new field, update CloneForExport, and populate this fixture",
+		typ)
+
+	for _, fieldName := range expected {
+		field := value.FieldByName(fieldName)
+		require.Truef(t, field.IsValid(), "%s.%s is not present", typ, fieldName)
+		require.Truef(t, hasPopulatedMutableReference(field),
+			"%s.%s must be populated so the alias-detachment test exercises it", typ, fieldName)
+	}
+}
+
+func containsMutableReference(typ reflect.Type) bool {
+	switch typ.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map,
+		reflect.Pointer, reflect.Slice, reflect.UnsafePointer:
+		return true
+	case reflect.Array:
+		return containsMutableReference(typ.Elem())
+	case reflect.Struct:
+		for i := 0; i < typ.NumField(); i++ {
+			if containsMutableReference(typ.Field(i).Type) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func hasPopulatedMutableReference(value reflect.Value) bool {
+	switch value.Kind() {
+	case reflect.Map, reflect.Slice:
+		return !value.IsNil() && value.Len() > 0
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Pointer:
+		return !value.IsNil()
+	case reflect.UnsafePointer:
+		return !value.IsNil()
+	case reflect.Array:
+		for i := 0; i < value.Len(); i++ {
+			if hasPopulatedMutableReference(value.Index(i)) {
+				return true
+			}
+		}
+	case reflect.Struct:
+		for i := 0; i < value.NumField(); i++ {
+			if hasPopulatedMutableReference(value.Field(i)) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+type mutableReferenceIdentity struct {
+	kind    reflect.Kind
+	typ     reflect.Type
+	pointer uintptr
+}
+
+func findMutableAliases(source, clone any) []string {
+	sourceIdentities := make(map[mutableReferenceIdentity]string)
+	cloneIdentities := make(map[mutableReferenceIdentity]string)
+	collectMutableReferenceIdentities(
+		reflect.ValueOf(source), "source", sourceIdentities, make(map[mutableReferenceIdentity]struct{}))
+	collectMutableReferenceIdentities(
+		reflect.ValueOf(clone), "clone", cloneIdentities, make(map[mutableReferenceIdentity]struct{}))
+
+	aliases := make([]string, 0)
+	for identity, clonePath := range cloneIdentities {
+		if sourcePath, ok := sourceIdentities[identity]; ok {
+			aliases = append(aliases, fmt.Sprintf(
+				"%s and %s share %s at %#x",
+				sourcePath, clonePath, identity.typ, identity.pointer))
+		}
+	}
+	sort.Strings(aliases)
+	return aliases
+}
+
+func collectMutableReferenceIdentities(
+	value reflect.Value,
+	path string,
+	identities map[mutableReferenceIdentity]string,
+	visited map[mutableReferenceIdentity]struct{},
+) {
+	if !value.IsValid() {
+		return
+	}
+
+	switch value.Kind() {
+	case reflect.Interface:
+		if !value.IsNil() {
+			collectMutableReferenceIdentities(value.Elem(), path, identities, visited)
+		}
+	case reflect.Pointer:
+		if value.IsNil() {
+			return
+		}
+		identity := mutableReferenceIdentity{kind: value.Kind(), typ: value.Type(), pointer: value.Pointer()}
+		identities[identity] = path
+		if _, ok := visited[identity]; ok {
+			return
+		}
+		visited[identity] = struct{}{}
+		collectMutableReferenceIdentities(value.Elem(), path+"*", identities, visited)
+	case reflect.Map:
+		if value.IsNil() {
+			return
+		}
+		identity := mutableReferenceIdentity{
+			kind: value.Kind(), typ: value.Type(), pointer: uintptr(value.UnsafePointer()),
+		}
+		identities[identity] = path
+		if _, ok := visited[identity]; ok {
+			return
+		}
+		visited[identity] = struct{}{}
+		iter := value.MapRange()
+		for iter.Next() {
+			collectMutableReferenceIdentities(iter.Key(), path+"[key]", identities, visited)
+			collectMutableReferenceIdentities(iter.Value(), path+"[value]", identities, visited)
+		}
+	case reflect.Slice:
+		if value.IsNil() {
+			return
+		}
+		identity := mutableReferenceIdentity{kind: value.Kind(), typ: value.Type(), pointer: value.Pointer()}
+		identities[identity] = path
+		if _, ok := visited[identity]; ok {
+			return
+		}
+		visited[identity] = struct{}{}
+		for i := 0; i < value.Len(); i++ {
+			collectMutableReferenceIdentities(value.Index(i), fmt.Sprintf("%s[%d]", path, i), identities, visited)
+		}
+	case reflect.Array:
+		for i := 0; i < value.Len(); i++ {
+			collectMutableReferenceIdentities(value.Index(i), fmt.Sprintf("%s[%d]", path, i), identities, visited)
+		}
+	case reflect.Struct:
+		typ := value.Type()
+		for i := 0; i < value.NumField(); i++ {
+			collectMutableReferenceIdentities(
+				value.Field(i), path+"."+typ.Field(i).Name, identities, visited)
+		}
+	case reflect.Chan, reflect.Func, reflect.UnsafePointer:
+		if !value.IsNil() {
+			identity := mutableReferenceIdentity{kind: value.Kind(), typ: value.Type(), pointer: value.Pointer()}
+			identities[identity] = path
+		}
+	}
 }
 
 func TestPhyPlanCloneForExportPreservesNilAndEmptyReferences(t *testing.T) {
