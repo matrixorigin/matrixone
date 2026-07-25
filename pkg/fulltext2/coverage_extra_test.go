@@ -118,3 +118,12 @@ func TestFrameSegmentRoundTrip(t *testing.T) {
 	_, err = UnframeSegment("f", []byte{0x00, 0x01, 0x02})
 	require.Error(t, err)
 }
+
+// TestAsBytes covers the pk raw-bytes coercion: []byte and string pass through, everything else
+// (a boxed fixed-width pk) returns nil so callers fall back to typed encoding.
+func TestAsBytes(t *testing.T) {
+	require.Equal(t, []byte("raw"), asBytes([]byte("raw")))
+	require.Equal(t, []byte("str"), asBytes("str"))
+	require.Nil(t, asBytes(int64(5)))
+	require.Nil(t, asBytes(nil))
+}
