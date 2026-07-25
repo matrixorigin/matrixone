@@ -271,13 +271,16 @@ func (ie *internalExecutor) newCmdSession(ctx context.Context, opts ie.SessionOv
 	if policy.Configured() &&
 		!workloadPolicyBypassed(ctx) &&
 		state.cachedRoutingAccountName() == "" {
-		if tenantName, err := loadWorkloadPolicyAccountNameByService(
+		_ = state.ensureRoutingAccountName(
 			ctx,
-			ie.service,
-			state.accountID,
-		); err == nil {
-			state.rememberRoutingAccountName(tenantName)
-		}
+			func(loadCtx context.Context) (string, error) {
+				return loadWorkloadPolicyAccountNameByService(
+					loadCtx,
+					ie.service,
+					state.accountID,
+				)
+			},
+		)
 	}
 	releaseState = false
 	return sess

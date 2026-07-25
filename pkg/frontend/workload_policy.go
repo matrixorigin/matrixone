@@ -48,6 +48,10 @@ const (
 	maxWorkloadPolicyRefreshBackoff    = 30 * time.Second
 	workloadPolicyPublishTimeout       = 3 * time.Second
 	workloadPolicyRefreshTimeout       = 5 * time.Second
+	// Idle states are retained only while their snapshot remains fresh. The
+	// fixed LRU bound prevents tenant churn from turning the per-CN cache into
+	// unbounded process state without adding a cleanup goroutine or timer.
+	defaultWorkloadPolicyIdleCapacity = 1024
 )
 
 type workloadPolicyBypassContextKey struct{}
@@ -84,17 +88,26 @@ type workloadPolicyRefresh struct {
 }
 
 // accountWorkloadPolicy is the per-CN cache for one account. Statement reads
-// are lock-free. mu only serializes refreshes and revision changes.
+// are lock-free. mu serializes refreshes, routing-name loads, and revision
+// changes.
 type accountWorkloadPolicy struct {
-	mu                 sync.Mutex
-	snapshot           atomic.Pointer[workloadPolicySnapshot]
-	routingAccountName atomic.Pointer[string]
-	refreshAfter       atomic.Int64
-	refreshing         *workloadPolicyRefresh
-	accountID          uint32
-	references         uint64
-	failures           uint8
-	removed            bool
+	mu                  sync.Mutex
+	snapshot            atomic.Pointer[workloadPolicySnapshot]
+	routingAccountName  atomic.Pointer[string]
+	refreshAfter        atomic.Int64
+	refreshing          *workloadPolicyRefresh
+	routingNameLoading  *workloadPolicyRefresh
+	routingNameErr      error
+	routingNameRetryAt  int64
+	routingNameFailures uint8
+	accountID           uint32
+	// references and idle linkage are owned by WorkloadPolicyManager.mu.
+	references uint64
+	idlePrev   *accountWorkloadPolicy
+	idleNext   *accountWorkloadPolicy
+	idle       bool
+	failures   uint8
+	removed    atomic.Bool
 }
 
 // rememberRoutingAccountName stores the protected account label used only for
@@ -117,17 +130,109 @@ func (state *accountWorkloadPolicy) cachedRoutingAccountName() string {
 	return ""
 }
 
+func (state *accountWorkloadPolicy) ensureRoutingAccountName(
+	ctx context.Context,
+	load func(context.Context) (string, error),
+) error {
+	if state.cachedRoutingAccountName() != "" {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return context.Cause(ctx)
+	}
+
+	state.mu.Lock()
+	if state.cachedRoutingAccountName() != "" {
+		state.mu.Unlock()
+		return nil
+	}
+	if state.removed.Load() {
+		state.mu.Unlock()
+		return moerr.NewInternalErrorf(
+			ctx,
+			"workload policy state for account %d was retired",
+			state.accountID,
+		)
+	}
+	if state.routingNameErr != nil &&
+		time.Now().UnixNano() < state.routingNameRetryAt {
+		err := state.routingNameErr
+		state.mu.Unlock()
+		return err
+	}
+	if loading := state.routingNameLoading; loading != nil {
+		done := loading.done
+		state.mu.Unlock()
+		select {
+		case <-done:
+			return loading.err
+		case <-ctx.Done():
+			return context.Cause(ctx)
+		}
+	}
+	loading := &workloadPolicyRefresh{done: make(chan struct{})}
+	state.routingNameLoading = loading
+	state.mu.Unlock()
+
+	name, loadErr := load(ctx)
+	name = strings.TrimSpace(name)
+	if loadErr == nil && name == "" {
+		loadErr = moerr.NewInternalErrorf(
+			ctx,
+			"account %d has an empty routing name",
+			state.accountID,
+		)
+	}
+
+	state.mu.Lock()
+	if state.removed.Load() && loadErr == nil {
+		loadErr = moerr.NewInternalErrorf(
+			ctx,
+			"workload policy state for account %d was retired",
+			state.accountID,
+		)
+	}
+	if loadErr == nil {
+		state.rememberRoutingAccountName(name)
+		state.routingNameErr = nil
+		state.routingNameRetryAt = 0
+		state.routingNameFailures = 0
+	} else if !state.removed.Load() && ctx.Err() == nil {
+		if state.routingNameFailures < ^uint8(0) {
+			state.routingNameFailures++
+		}
+		state.routingNameErr = loadErr
+		state.routingNameRetryAt = time.Now().
+			Add(workloadPolicyRefreshBackoff(state.routingNameFailures)).
+			UnixNano()
+	}
+	loading.err = loadErr
+	state.routingNameLoading = nil
+	close(loading.done)
+	state.mu.Unlock()
+	return loadErr
+}
+
 type workloadPolicyLoader func(
 	context.Context,
 	FeSession,
 	uint32,
 ) (string, uint64, error)
 
-// WorkloadPolicyManager owns only account-level cache state. The catalog table
-// is authoritative; RPC messages are an acceleration path and are ordered by
-// the table's monotonically increasing revision.
+// WorkloadPolicyManager owns active account state plus a bounded LRU of fresh
+// idle snapshots. The catalog table is authoritative; RPC messages are an
+// acceleration path and are ordered by the table's monotonically increasing
+// revision.
 type WorkloadPolicyManager struct {
-	accounts      sync.Map
+	mu            sync.Mutex
+	accounts      map[uint32]*accountWorkloadPolicy
+	idleHead      *accountWorkloadPolicy
+	idleTail      *accountWorkloadPolicy
+	idleCount     int
+	idleCapacity  int
 	refreshPeriod time.Duration
 	load          workloadPolicyLoader
 }
@@ -143,10 +248,27 @@ func newWorkloadPolicyManager(
 	refreshPeriod time.Duration,
 	load workloadPolicyLoader,
 ) *WorkloadPolicyManager {
+	return newWorkloadPolicyManagerWithIdleCapacity(
+		refreshPeriod,
+		defaultWorkloadPolicyIdleCapacity,
+		load,
+	)
+}
+
+func newWorkloadPolicyManagerWithIdleCapacity(
+	refreshPeriod time.Duration,
+	idleCapacity int,
+	load workloadPolicyLoader,
+) *WorkloadPolicyManager {
 	if refreshPeriod <= 0 {
 		refreshPeriod = defaultWorkloadPolicyRefreshPeriod
 	}
+	if idleCapacity < 0 {
+		idleCapacity = 0
+	}
 	return &WorkloadPolicyManager{
+		accounts:      make(map[uint32]*accountWorkloadPolicy),
+		idleCapacity:  idleCapacity,
 		refreshPeriod: refreshPeriod,
 		load:          load,
 	}
@@ -155,42 +277,96 @@ func newWorkloadPolicyManager(
 var GWorkloadPolicyManager = NewWorkloadPolicyManager()
 
 func (m *WorkloadPolicyManager) acquire(accountID uint32) *accountWorkloadPolicy {
-	for {
-		value, _ := m.accounts.LoadOrStore(
-			accountID,
-			&accountWorkloadPolicy{accountID: accountID},
-		)
-		state := value.(*accountWorkloadPolicy)
-		state.mu.Lock()
-		if state.removed {
-			state.mu.Unlock()
-			m.accounts.CompareAndDelete(accountID, state)
-			continue
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if state := m.accounts[accountID]; state != nil {
+		if state.references == 0 {
+			m.removeIdleLocked(state)
+			snapshot := state.snapshot.Load()
+			if snapshot == nil ||
+				time.Now().UnixNano() >= state.refreshAfter.Load() {
+				delete(m.accounts, accountID)
+				state.removed.Store(true)
+			} else {
+				state.references = 1
+				return state
+			}
+		} else {
+			state.references++
+			return state
 		}
-		state.references++
-		state.mu.Unlock()
-		return state
 	}
+
+	state := &accountWorkloadPolicy{
+		accountID:  accountID,
+		references: 1,
+	}
+	m.accounts[accountID] = state
+	return state
 }
 
 func (m *WorkloadPolicyManager) release(state *accountWorkloadPolicy) {
 	if state == nil {
 		return
 	}
-	state.mu.Lock()
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if state.references == 0 {
-		state.mu.Unlock()
 		return
 	}
 	state.references--
-	remove := state.references == 0
-	if remove {
-		state.removed = true
+	if state.references != 0 || state.removed.Load() {
+		return
 	}
-	state.mu.Unlock()
-	if remove {
-		m.accounts.CompareAndDelete(state.accountID, state)
+	if state.snapshot.Load() == nil {
+		delete(m.accounts, state.accountID)
+		state.removed.Store(true)
+		return
 	}
+	m.addIdleLocked(state)
+	for m.idleCount > m.idleCapacity {
+		m.evictIdleLocked(m.idleTail)
+	}
+}
+
+func (m *WorkloadPolicyManager) addIdleLocked(state *accountWorkloadPolicy) {
+	state.idle = true
+	state.idlePrev = nil
+	state.idleNext = m.idleHead
+	if m.idleHead != nil {
+		m.idleHead.idlePrev = state
+	} else {
+		m.idleTail = state
+	}
+	m.idleHead = state
+	m.idleCount++
+}
+
+func (m *WorkloadPolicyManager) removeIdleLocked(state *accountWorkloadPolicy) {
+	if !state.idle {
+		return
+	}
+	if state.idlePrev != nil {
+		state.idlePrev.idleNext = state.idleNext
+	} else {
+		m.idleHead = state.idleNext
+	}
+	if state.idleNext != nil {
+		state.idleNext.idlePrev = state.idlePrev
+	} else {
+		m.idleTail = state.idlePrev
+	}
+	state.idlePrev = nil
+	state.idleNext = nil
+	state.idle = false
+	m.idleCount--
+}
+
+func (m *WorkloadPolicyManager) evictIdleLocked(state *accountWorkloadPolicy) {
+	m.removeIdleLocked(state)
+	delete(m.accounts, state.accountID)
+	state.removed.Store(true)
 }
 
 func (m *WorkloadPolicyManager) cached(
@@ -205,8 +381,10 @@ func (m *WorkloadPolicyManager) cached(
 	return schedule.WorkloadPolicySet{}
 }
 
-// Apply accepts a notification only for an account already active on this CN.
-// Ignoring inactive accounts keeps the cache bounded by locally served tenants.
+// Apply accepts a notification for an active or bounded-idle account already
+// known on this CN. Updating retained idle state closes the zero-reference
+// revision gap; accounts outside the local cache reconcile from the catalog on
+// their next cold acquire.
 func (m *WorkloadPolicyManager) Apply(
 	accountID uint32,
 	raw string,
@@ -221,17 +399,15 @@ func (m *WorkloadPolicyManager) Apply(
 	if err != nil {
 		return false, 0, err
 	}
-	value, ok := m.accounts.Load(accountID)
-	if !ok {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	state := m.accounts[accountID]
+	if state == nil {
 		return false, 0, nil
 	}
-	state := value.(*accountWorkloadPolicy)
 
 	state.mu.Lock()
 	defer state.mu.Unlock()
-	if state.removed || state.references == 0 {
-		return false, 0, nil
-	}
 	current := state.snapshot.Load()
 	if current != nil {
 		switch {
@@ -258,14 +434,15 @@ func (m *WorkloadPolicyManager) Apply(
 }
 
 func (m *WorkloadPolicyManager) Remove(accountID uint32) {
-	value, ok := m.accounts.LoadAndDelete(accountID)
-	if !ok {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	state := m.accounts[accountID]
+	if state == nil {
 		return
 	}
-	state := value.(*accountWorkloadPolicy)
-	state.mu.Lock()
-	state.removed = true
-	state.mu.Unlock()
+	m.removeIdleLocked(state)
+	delete(m.accounts, accountID)
+	state.removed.Store(true)
 }
 
 // Refresh reconciles one account with the authoritative catalog. When a valid
@@ -368,7 +545,7 @@ func (m *WorkloadPolicyManager) refreshWithMode(
 	}
 
 	state.mu.Lock()
-	if state.removed || state.references == 0 {
+	if state.removed.Load() {
 		state.mu.Unlock()
 		return nil
 	}
@@ -430,9 +607,9 @@ func (m *WorkloadPolicyManager) refreshWithMode(
 		hadSnapshot := current != nil
 		resultErr := loadErr
 		superseded := current != nil && current != refreshBase
-		if state.removed || state.references == 0 {
-			// The final foreground session disappeared while the catalog read was
-			// running. Wake initial-load waiters, but do not resurrect this cache.
+		if state.removed.Load() {
+			// Remove or bounded eviction retired this generation while the
+			// catalog read was running. Wake waiters without resurrecting it.
 		} else if loadErr == nil {
 			state.failures = 0
 			if current == nil || revision >= current.revision {

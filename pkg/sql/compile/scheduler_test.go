@@ -1672,6 +1672,68 @@ func TestQuerySchedulingSelectionKeyHasDeterministicSQLFallback(t *testing.T) {
 	require.LessOrEqual(t, len(first), 64)
 }
 
+func TestCompileSetWorkloadPolicyDoesNotCloneImmutableSnapshot(t *testing.T) {
+	first, err := schedule.ParseWorkloadPolicyConfig(`{
+		"version": 1,
+		"policies": {
+			"ap": {"pool": "ap-a", "labels": {"role": "ap", "region": "a"}}
+		}
+	}`)
+	require.NoError(t, err)
+	second, err := schedule.ParseWorkloadPolicyConfig(`{
+		"version": 1,
+		"policies": {
+			"ap": {"pool": "ap-b", "labels": {"role": "ap", "region": "b"}}
+		}
+	}`)
+	require.NoError(t, err)
+	compile := &Compile{}
+	policies := [...]schedule.WorkloadPolicySet{first, second}
+	index := 0
+
+	allocations := testing.AllocsPerRun(1000, func() {
+		compile.SetWorkloadPolicy(
+			policies[index&1],
+			schedule.WorkloadAP,
+		)
+		index++
+	})
+	require.Zero(t, allocations)
+	compile.SetWorkloadPolicy(second, schedule.WorkloadAP)
+	require.Equal(
+		t,
+		"ap-b",
+		compile.workloadPolicySet.Rules[schedule.WorkloadAP].PoolIdentity,
+	)
+	compile.SetWorkloadPolicy(second, schedule.WorkloadTP)
+	require.Equal(t, schedule.WorkloadTP, compile.workloadClassHint)
+}
+
+func BenchmarkCompileSetWorkloadPolicy(b *testing.B) {
+	first, err := schedule.ParseWorkloadPolicyConfig(`{
+		"version": 1,
+		"policies": {
+			"ap": {"pool": "ap-a", "labels": {"role": "ap", "region": "a"}}
+		}
+	}`)
+	require.NoError(b, err)
+	second, err := schedule.ParseWorkloadPolicyConfig(`{
+		"version": 1,
+		"policies": {
+			"ap": {"pool": "ap-b", "labels": {"role": "ap", "region": "b"}}
+		}
+	}`)
+	require.NoError(b, err)
+	compile := &Compile{}
+	policies := [...]schedule.WorkloadPolicySet{first, second}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for index := range b.N {
+		compile.SetWorkloadPolicy(policies[index&1], schedule.WorkloadAP)
+	}
+}
+
 type fakeQueryClient struct{}
 
 var _ qclient.QueryClient = fakeQueryClient{}

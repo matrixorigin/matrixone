@@ -261,6 +261,28 @@ func newWorkloadPolicyVersionResult(
 	return result
 }
 
+func lookupWorkloadPolicyStateForTest(
+	manager *WorkloadPolicyManager,
+	accountID uint32,
+) (*accountWorkloadPolicy, bool) {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	state, ok := manager.accounts[accountID]
+	return state, ok
+}
+
+func cleanupGlobalWorkloadPolicyAccountsForTest(
+	t *testing.T,
+	accountIDs ...uint32,
+) {
+	t.Helper()
+	t.Cleanup(func() {
+		for _, accountID := range accountIDs {
+			GWorkloadPolicyManager.Remove(accountID)
+		}
+	})
+}
+
 func TestWorkloadPolicyApplyIsRevisionOrderedAndAccountScoped(t *testing.T) {
 	const accountID = uint32(42)
 	manager := newWorkloadPolicyManager(time.Minute, nil)
@@ -294,27 +316,47 @@ func TestWorkloadPolicyApplyIsRevisionOrderedAndAccountScoped(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, applied)
 	require.Zero(t, revision)
-	_, loaded := manager.accounts.Load(accountID + 1)
+	_, loaded := lookupWorkloadPolicyStateForTest(manager, accountID+1)
 	require.False(t, loaded)
 }
 
-func TestWorkloadPolicyCacheIsReleasedWithLastSessionReference(t *testing.T) {
+func TestWorkloadPolicyManagerBoundaryInputs(t *testing.T) {
+	manager := newWorkloadPolicyManagerWithIdleCapacity(0, -1, nil)
+	require.Equal(t, defaultWorkloadPolicyRefreshPeriod, manager.refreshPeriod)
+	require.Zero(t, manager.idleCapacity)
+	require.Empty(t, manager.cached(nil))
+	manager.release(nil)
+	manager.Remove(999)
+
+	state := manager.acquire(999)
+	manager.release(state)
+	manager.release(state)
+	_, retained := lookupWorkloadPolicyStateForTest(manager, 999)
+	require.False(t, retained)
+	require.True(t, state.removed.Load())
+}
+
+func TestWorkloadPolicyCacheRetainsFreshIdleState(t *testing.T) {
 	const accountID = uint32(51)
 	manager := newWorkloadPolicyManager(time.Minute, nil)
 	first := manager.acquire(accountID)
+	applied, _, err := manager.Apply(accountID, testWorkloadPolicyNew, 1)
+	require.NoError(t, err)
+	require.True(t, applied)
 	second := manager.acquire(accountID)
 	require.Same(t, first, second)
 
 	manager.release(first)
-	_, loaded := manager.accounts.Load(accountID)
+	_, loaded := lookupWorkloadPolicyStateForTest(manager, accountID)
 	require.True(t, loaded)
 
 	manager.release(second)
-	_, loaded = manager.accounts.Load(accountID)
-	require.False(t, loaded)
+	_, loaded = lookupWorkloadPolicyStateForTest(manager, accountID)
+	require.True(t, loaded)
 
 	reopened := manager.acquire(accountID)
-	require.NotSame(t, first, reopened)
+	require.Same(t, first, reopened)
+	require.Equal(t, uint64(1), reopened.snapshot.Load().revision)
 	manager.release(reopened)
 }
 
@@ -322,8 +364,9 @@ func TestWorkloadPolicyRefreshDoesNotResurrectReleasedAccount(t *testing.T) {
 	const accountID = uint32(53)
 	started := make(chan struct{})
 	releaseLoad := make(chan struct{})
-	manager := newWorkloadPolicyManager(
+	manager := newWorkloadPolicyManagerWithIdleCapacity(
 		time.Minute,
+		0,
 		func(context.Context, FeSession, uint32) (string, uint64, error) {
 			close(started)
 			<-releaseLoad
@@ -343,7 +386,7 @@ func TestWorkloadPolicyRefreshDoesNotResurrectReleasedAccount(t *testing.T) {
 	<-started
 
 	manager.release(state)
-	_, loaded := manager.accounts.Load(accountID)
+	_, loaded := lookupWorkloadPolicyStateForTest(manager, accountID)
 	require.False(t, loaded)
 	close(releaseLoad)
 	require.NoError(t, <-refreshDone)
@@ -351,6 +394,508 @@ func TestWorkloadPolicyRefreshDoesNotResurrectReleasedAccount(t *testing.T) {
 
 	reopened := manager.acquire(accountID)
 	require.NotSame(t, state, reopened)
+	manager.release(reopened)
+}
+
+func TestWorkloadPolicySequentialSessionLifecycleReusesFreshSnapshot(t *testing.T) {
+	tests := []struct {
+		name     string
+		raw      string
+		revision uint64
+	}{
+		{name: "empty policy"},
+		{name: "configured policy", raw: testWorkloadPolicyNew, revision: 1},
+	}
+	for index, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			accountID := uint32(540 + index)
+			var loads atomic.Int32
+			manager := newWorkloadPolicyManagerWithIdleCapacity(
+				time.Minute,
+				2,
+				func(context.Context, FeSession, uint32) (string, uint64, error) {
+					loads.Add(1)
+					return test.raw, test.revision, nil
+				},
+			)
+
+			var first *accountWorkloadPolicy
+			for range 10 {
+				state := manager.acquire(accountID)
+				if first == nil {
+					first = state
+				} else {
+					require.Same(t, first, state)
+				}
+				require.NoError(t, manager.Refresh(
+					context.Background(),
+					&Session{},
+					accountID,
+					state,
+				))
+				state.rememberRoutingAccountName("tenant-540")
+				manager.release(state)
+			}
+
+			require.Equal(t, int32(1), loads.Load())
+			require.Equal(t, "tenant-540", first.cachedRoutingAccountName())
+			allocations := testing.AllocsPerRun(1000, func() {
+				state := manager.acquire(accountID)
+				if state.snapshot.Load() == nil {
+					panic("fresh idle snapshot disappeared")
+				}
+				manager.release(state)
+			})
+			require.Zero(t, allocations)
+		})
+	}
+}
+
+func TestWorkloadPolicyExpiredIdleSnapshotStartsNewGeneration(t *testing.T) {
+	const accountID = uint32(542)
+	var loads atomic.Int32
+	manager := newWorkloadPolicyManagerWithIdleCapacity(
+		time.Minute,
+		2,
+		func(context.Context, FeSession, uint32) (string, uint64, error) {
+			call := loads.Add(1)
+			if call == 1 {
+				return testWorkloadPolicyOld, 1, nil
+			}
+			return testWorkloadPolicyNew, 2, nil
+		},
+	)
+
+	first := manager.acquire(accountID)
+	require.NoError(t, manager.Refresh(
+		context.Background(),
+		&Session{},
+		accountID,
+		first,
+	))
+	first.refreshAfter.Store(0)
+	manager.release(first)
+
+	reopened := manager.acquire(accountID)
+	require.NotSame(t, first, reopened)
+	require.True(t, first.removed.Load())
+	require.Nil(t, reopened.snapshot.Load())
+	require.NoError(t, manager.Refresh(
+		context.Background(),
+		&Session{},
+		accountID,
+		reopened,
+	))
+	require.Equal(t, uint64(2), reopened.snapshot.Load().revision)
+	require.Equal(t, int32(2), loads.Load())
+	manager.release(reopened)
+}
+
+func TestWorkloadPolicyIdleSnapshotAcceptsRevisionNotification(t *testing.T) {
+	const accountID = uint32(543)
+	var loads atomic.Int32
+	manager := newWorkloadPolicyManagerWithIdleCapacity(
+		time.Minute,
+		2,
+		func(context.Context, FeSession, uint32) (string, uint64, error) {
+			loads.Add(1)
+			return testWorkloadPolicyOld, 1, nil
+		},
+	)
+
+	state := manager.acquire(accountID)
+	require.NoError(t, manager.Refresh(
+		context.Background(),
+		&Session{},
+		accountID,
+		state,
+	))
+	manager.release(state)
+
+	applied, revision, err := manager.Apply(
+		accountID,
+		testWorkloadPolicyNew,
+		2,
+	)
+	require.NoError(t, err)
+	require.True(t, applied)
+	require.Equal(t, uint64(2), revision)
+
+	reopened := manager.acquire(accountID)
+	require.Same(t, state, reopened)
+	require.Equal(t, uint64(2), reopened.snapshot.Load().revision)
+	require.Equal(t, testWorkloadPolicyNew, reopened.snapshot.Load().raw)
+	require.Equal(t, int32(1), loads.Load())
+	manager.release(reopened)
+}
+
+func TestWorkloadPolicyConcurrentSessionLifecycleAndRevisionUpdate(t *testing.T) {
+	const accountID = uint32(544)
+	manager := newWorkloadPolicyManagerWithIdleCapacity(time.Minute, 2, nil)
+	state := manager.acquire(accountID)
+	applied, _, err := manager.Apply(
+		accountID,
+		testWorkloadPolicyOld,
+		1,
+	)
+	require.NoError(t, err)
+	require.True(t, applied)
+	manager.release(state)
+
+	start := make(chan struct{})
+	var workers sync.WaitGroup
+	workerErrors := make(chan error, 16)
+	for range 16 {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			<-start
+			for range 100 {
+				current := manager.acquire(accountID)
+				snapshot := current.snapshot.Load()
+				if snapshot == nil || snapshot.revision < 1 || snapshot.revision > 2 {
+					workerErrors <- fmt.Errorf(
+						"invalid workload policy snapshot: %+v",
+						snapshot,
+					)
+					manager.release(current)
+					return
+				}
+				manager.release(current)
+			}
+		}()
+	}
+	updateResult := make(chan error, 1)
+	go func() {
+		<-start
+		applied, revision, err := manager.Apply(
+			accountID,
+			testWorkloadPolicyNew,
+			2,
+		)
+		if err != nil || !applied || revision != 2 {
+			updateResult <- fmt.Errorf(
+				"apply revision: applied=%v revision=%d err=%v",
+				applied,
+				revision,
+				err,
+			)
+			return
+		}
+		updateResult <- nil
+	}()
+	close(start)
+	workers.Wait()
+	close(workerErrors)
+	for err := range workerErrors {
+		require.NoError(t, err)
+	}
+	require.NoError(t, <-updateResult)
+
+	reopened := manager.acquire(accountID)
+	require.Same(t, state, reopened)
+	require.Equal(t, uint64(2), reopened.snapshot.Load().revision)
+	manager.release(reopened)
+	manager.mu.Lock()
+	require.Equal(t, 1, manager.idleCount)
+	require.Equal(t, uint64(0), state.references)
+	manager.mu.Unlock()
+}
+
+func TestWorkloadPolicyRemoveSeparatesActiveGenerations(t *testing.T) {
+	const accountID = uint32(545)
+	manager := newWorkloadPolicyManagerWithIdleCapacity(time.Minute, 2, nil)
+	oldGeneration := manager.acquire(accountID)
+	applied, _, err := manager.Apply(
+		accountID,
+		testWorkloadPolicyOld,
+		1,
+	)
+	require.NoError(t, err)
+	require.True(t, applied)
+
+	manager.Remove(accountID)
+	require.True(t, oldGeneration.removed.Load())
+	newGeneration := manager.acquire(accountID)
+	require.NotSame(t, oldGeneration, newGeneration)
+	applied, _, err = manager.Apply(
+		accountID,
+		testWorkloadPolicyNew,
+		2,
+	)
+	require.NoError(t, err)
+	require.True(t, applied)
+	require.Equal(t, uint64(1), oldGeneration.snapshot.Load().revision)
+	require.Equal(t, uint64(2), newGeneration.snapshot.Load().revision)
+
+	manager.release(oldGeneration)
+	manager.release(newGeneration)
+	retained, ok := lookupWorkloadPolicyStateForTest(manager, accountID)
+	require.True(t, ok)
+	require.Same(t, newGeneration, retained)
+}
+
+func TestWorkloadPolicyRoutingAccountNameLoadIsSingleflight(t *testing.T) {
+	const accountID = uint32(546)
+	manager := newWorkloadPolicyManagerWithIdleCapacity(time.Minute, 2, nil)
+	state := manager.acquire(accountID)
+	defer manager.release(state)
+	var loads atomic.Int32
+	started := make(chan struct{})
+	releaseLoad := make(chan struct{})
+
+	const goroutines = 16
+	results := make(chan error, goroutines)
+	var workers sync.WaitGroup
+	for range goroutines {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			results <- state.ensureRoutingAccountName(
+				context.Background(),
+				func(context.Context) (string, error) {
+					if loads.Add(1) == 1 {
+						close(started)
+					}
+					<-releaseLoad
+					return "tenant-546", nil
+				},
+			)
+		}()
+	}
+	<-started
+	cancelledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	require.ErrorIs(
+		t,
+		state.ensureRoutingAccountName(
+			cancelledCtx,
+			func(context.Context) (string, error) {
+				return "must-not-run", nil
+			},
+		),
+		context.Canceled,
+	)
+	close(releaseLoad)
+	workers.Wait()
+	close(results)
+	for err := range results {
+		require.NoError(t, err)
+	}
+	require.Equal(t, int32(1), loads.Load())
+	require.Equal(t, "tenant-546", state.cachedRoutingAccountName())
+	require.Zero(t, state.routingNameFailures)
+	require.Zero(t, state.routingNameRetryAt)
+}
+
+func TestWorkloadPolicyRoutingAccountNameFailureUsesBoundedBackoff(t *testing.T) {
+	const accountID = uint32(547)
+	manager := newWorkloadPolicyManagerWithIdleCapacity(time.Minute, 2, nil)
+	state := manager.acquire(accountID)
+	defer manager.release(state)
+	var loads atomic.Int32
+	fail := true
+	load := func(context.Context) (string, error) {
+		loads.Add(1)
+		if fail {
+			return "", moerr.NewInternalErrorNoCtx("account lookup failed")
+		}
+		return "tenant-547", nil
+	}
+
+	require.ErrorContains(
+		t,
+		state.ensureRoutingAccountName(context.Background(), load),
+		"account lookup failed",
+	)
+	require.ErrorContains(
+		t,
+		state.ensureRoutingAccountName(context.Background(), load),
+		"account lookup failed",
+	)
+	require.Equal(t, int32(1), loads.Load())
+	require.Equal(t, uint8(1), state.routingNameFailures)
+	require.Greater(t, state.routingNameRetryAt, time.Now().UnixNano())
+
+	state.mu.Lock()
+	state.routingNameRetryAt = 0
+	state.mu.Unlock()
+	fail = false
+	require.NoError(t, state.ensureRoutingAccountName(context.Background(), load))
+	require.Equal(t, int32(2), loads.Load())
+	require.Equal(t, "tenant-547", state.cachedRoutingAccountName())
+	require.Zero(t, state.routingNameFailures)
+	require.Zero(t, state.routingNameRetryAt)
+
+	cancelledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var cancelledLoads atomic.Int32
+	cancelledState := manager.acquire(accountID + 1)
+	defer manager.release(cancelledState)
+	require.ErrorIs(t, cancelledState.ensureRoutingAccountName(
+		cancelledCtx,
+		func(context.Context) (string, error) {
+			cancelledLoads.Add(1)
+			return "must-not-load", nil
+		},
+	), context.Canceled)
+	require.Zero(t, cancelledLoads.Load())
+
+	emptyState := manager.acquire(accountID + 2)
+	defer manager.release(emptyState)
+	require.ErrorContains(t, emptyState.ensureRoutingAccountName(
+		context.Background(),
+		func(context.Context) (string, error) {
+			return "  ", nil
+		},
+	), "empty routing name")
+	require.Equal(t, uint8(1), emptyState.routingNameFailures)
+}
+
+func TestWorkloadPolicyRoutingAccountNameLoadCannotCrossRemove(t *testing.T) {
+	const accountID = uint32(548)
+	manager := newWorkloadPolicyManagerWithIdleCapacity(time.Minute, 2, nil)
+	oldGeneration := manager.acquire(accountID)
+	started := make(chan struct{})
+	releaseLoad := make(chan struct{})
+	result := make(chan error, 1)
+	go func() {
+		result <- oldGeneration.ensureRoutingAccountName(
+			context.Background(),
+			func(context.Context) (string, error) {
+				close(started)
+				<-releaseLoad
+				return "stale-account-name", nil
+			},
+		)
+	}()
+	<-started
+	manager.Remove(accountID)
+	close(releaseLoad)
+	require.ErrorContains(t, <-result, "was retired")
+	require.Empty(t, oldGeneration.cachedRoutingAccountName())
+	var retiredLoads atomic.Int32
+	require.ErrorContains(t, oldGeneration.ensureRoutingAccountName(
+		context.Background(),
+		func(context.Context) (string, error) {
+			retiredLoads.Add(1)
+			return "must-not-load", nil
+		},
+	), "was retired")
+	require.Zero(t, retiredLoads.Load())
+	manager.release(oldGeneration)
+
+	newGeneration := manager.acquire(accountID)
+	require.NotSame(t, oldGeneration, newGeneration)
+	require.NoError(t, newGeneration.ensureRoutingAccountName(
+		context.Background(),
+		func(context.Context) (string, error) {
+			return "current-account-name", nil
+		},
+	))
+	require.Equal(t, "current-account-name", newGeneration.cachedRoutingAccountName())
+	manager.release(newGeneration)
+}
+
+func TestWorkloadPolicyIdleCacheIsCapacityBoundedAndRemoveInvalidates(t *testing.T) {
+	manager := newWorkloadPolicyManagerWithIdleCapacity(time.Minute, 2, nil)
+	active := manager.acquire(550)
+	applied, _, err := manager.Apply(550, testWorkloadPolicyNew, 1)
+	require.NoError(t, err)
+	require.True(t, applied)
+	states := make(map[uint32]*accountWorkloadPolicy)
+	for accountID := uint32(551); accountID <= 553; accountID++ {
+		state := manager.acquire(accountID)
+		states[accountID] = state
+		applied, _, err = manager.Apply(
+			accountID,
+			testWorkloadPolicyNew,
+			1,
+		)
+		require.NoError(t, err)
+		require.True(t, applied)
+		manager.release(state)
+	}
+
+	_, retained := lookupWorkloadPolicyStateForTest(manager, 551)
+	require.False(t, retained)
+	require.True(t, states[551].removed.Load())
+	_, retained = lookupWorkloadPolicyStateForTest(manager, 552)
+	require.True(t, retained)
+	_, retained = lookupWorkloadPolicyStateForTest(manager, 553)
+	require.True(t, retained)
+	_, retained = lookupWorkloadPolicyStateForTest(manager, 550)
+	require.True(t, retained)
+	require.False(t, active.removed.Load(),
+		"capacity pressure must not evict an active account")
+	manager.mu.Lock()
+	require.Equal(t, 2, manager.idleCount)
+	require.Len(t, manager.accounts, 3)
+	require.Same(t, states[553], manager.idleHead)
+	require.Same(t, states[552], manager.idleTail)
+	manager.mu.Unlock()
+
+	manager.Remove(552)
+	_, retained = lookupWorkloadPolicyStateForTest(manager, 552)
+	require.False(t, retained)
+	require.True(t, states[552].removed.Load())
+	reopened := manager.acquire(552)
+	require.NotSame(t, states[552], reopened)
+	applied, _, err = manager.Apply(552, testWorkloadPolicyNew, 2)
+	require.NoError(t, err)
+	require.True(t, applied)
+	manager.release(reopened)
+	manager.release(active)
+	_, retained = lookupWorkloadPolicyStateForTest(manager, 553)
+	require.False(t, retained)
+	require.True(t, states[553].removed.Load())
+	_, retained = lookupWorkloadPolicyStateForTest(manager, 550)
+	require.True(t, retained)
+	manager.mu.Lock()
+	require.Equal(t, 2, manager.idleCount)
+	require.Len(t, manager.accounts, 2)
+	require.Same(t, active, manager.idleHead)
+	require.Same(t, reopened, manager.idleTail)
+	manager.mu.Unlock()
+}
+
+func TestWorkloadPolicyDetachedRefreshCanCompleteIntoRetainedIdleState(t *testing.T) {
+	const accountID = uint32(554)
+	started := make(chan struct{})
+	releaseLoad := make(chan struct{})
+	manager := newWorkloadPolicyManagerWithIdleCapacity(time.Minute, 2, nil)
+	state := manager.acquire(accountID)
+	applied, _, err := manager.Apply(
+		accountID,
+		testWorkloadPolicyOld,
+		1,
+	)
+	require.NoError(t, err)
+	require.True(t, applied)
+	state.refreshAfter.Store(0)
+
+	require.NoError(t, manager.refreshWithMode(
+		context.Background(),
+		accountID,
+		state,
+		func(context.Context) (string, uint64, error) {
+			close(started)
+			<-releaseLoad
+			return testWorkloadPolicyNew, 2, nil
+		},
+		true,
+	))
+	<-started
+	manager.release(state)
+	close(releaseLoad)
+
+	require.Eventually(t, func() bool {
+		snapshot := state.snapshot.Load()
+		return snapshot != nil && snapshot.revision == 2
+	}, time.Second, time.Millisecond)
+	reopened := manager.acquire(accountID)
+	require.Same(t, state, reopened)
+	require.Equal(t, testWorkloadPolicyNew, reopened.snapshot.Load().raw)
 	manager.release(reopened)
 }
 
@@ -790,6 +1335,11 @@ func TestBackSessionBindsWorkloadPolicyToExecutionAccount(t *testing.T) {
 		sourcePolicy    = `{"version":1,"policies":{"ap":{"pool":"source-pool","labels":{"role":"ap"}}}}`
 		targetPolicy    = `{"version":1,"policies":{"ap":{"pool":"target-pool","labels":{"role":"ap"}}}}`
 	)
+	cleanupGlobalWorkloadPolicyAccountsForTest(
+		t,
+		sourceAccountID,
+		targetAccountID,
+	)
 
 	manager := GWorkloadPolicyManager
 	sourceState := manager.acquire(sourceAccountID)
@@ -850,22 +1400,20 @@ func TestBackSessionBindsWorkloadPolicyToExecutionAccount(t *testing.T) {
 	require.Equal(t, "target-pool", resolved.Pool.Identity)
 	require.Equal(t, targetAccount, resolved.Pool.Labels["account"])
 
-	sourceState.mu.Lock()
+	manager.mu.Lock()
 	require.Equal(t, uint64(1), sourceState.references,
 		"cross-account rebind must release the previous execution account")
-	sourceState.mu.Unlock()
-	targetState.mu.Lock()
 	require.Equal(t, uint64(2), targetState.references,
 		"background session must own a counted target-account reference")
-	targetState.mu.Unlock()
+	manager.mu.Unlock()
 
 	backSes.Close()
 	backSes.Close()
 	require.Nil(t, workloadPolicyState(backSes))
-	targetState.mu.Lock()
+	manager.mu.Lock()
 	require.Equal(t, uint64(1), targetState.references,
 		"Close must release exactly one target-account reference")
-	targetState.mu.Unlock()
+	manager.mu.Unlock()
 	creator.workloadPolicy.Store(nil)
 	manager.release(sourceState)
 	manager.release(targetState)
@@ -875,6 +1423,11 @@ func TestBackSessionHistoricalRestoreBypassesDeletedSourcePolicy(t *testing.T) {
 	const (
 		sourceAccountID = ^uint32(0) - 104
 		targetAccountID = ^uint32(0) - 105
+	)
+	cleanupGlobalWorkloadPolicyAccountsForTest(
+		t,
+		sourceAccountID,
+		targetAccountID,
 	)
 
 	sourceCtx := defines.AttachAccountId(
@@ -925,6 +1478,7 @@ func TestBackSessionPreservesInternalWorkloadRouting(t *testing.T) {
 		account   = "background-internal"
 		policy    = `{"version":1,"policies":{"internal":{"pool":"internal-pool","labels":{"role":"internal"}}}}`
 	)
+	cleanupGlobalWorkloadPolicyAccountsForTest(t, accountID)
 
 	manager := GWorkloadPolicyManager
 	state := manager.acquire(accountID)
@@ -965,6 +1519,7 @@ func TestBackSessionTriggersStalePolicyReconciliation(t *testing.T) {
 		accountID = ^uint32(0) - 103
 		account   = "background-reconcile"
 	)
+	cleanupGlobalWorkloadPolicyAccountsForTest(t, accountID)
 
 	manager := GWorkloadPolicyManager
 	state := manager.acquire(accountID)
@@ -1053,6 +1608,7 @@ func TestBackSessionAllowsTenantBootstrapBeforePolicyTableUpgrade(t *testing.T) 
 		service   = "background-workload-policy-bootstrap"
 		accountID = ^uint32(0) - 102
 	)
+	cleanupGlobalWorkloadPolicyAccountsForTest(t, accountID)
 
 	manager := GWorkloadPolicyManager
 	state := manager.acquire(accountID)
@@ -1129,6 +1685,7 @@ func TestBackSessionLoadsRoutingIdentityOnlyForConfiguredPolicy(t *testing.T) {
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
+			cleanupGlobalWorkloadPolicyAccountsForTest(t, test.accountID)
 			service := t.Name()
 			mp := mpool.MustNewZero()
 			policyResult := executor.NewMemResult(
@@ -1217,8 +1774,15 @@ func TestBackSessionLoadsRoutingIdentityOnlyForConfiguredPolicy(t *testing.T) {
 					resolved.Pool.Labels["account"],
 				)
 			}
+			err = backSes.bindWorkloadPolicy(ctx, test.accountID)
+			if test.wantErr != "" {
+				require.ErrorContains(t, err, test.wantErr)
+			} else {
+				require.NoError(t, err)
+			}
 			require.Equal(t, 1, policyReads)
-			require.Equal(t, 1, accountReads)
+			require.Equal(t, 1, accountReads,
+				"success and failure must both avoid per-statement identity reads")
 			require.Zero(t, mp.CurrNB())
 		})
 	}
@@ -1500,6 +2064,7 @@ func TestQueryWorkloadPolicyRefreshUsesOwnedAccountIdentity(t *testing.T) {
 		service        = "workload-policy-owned-account-test"
 		ownedAccountID = uint32(58)
 	)
+	cleanupGlobalWorkloadPolicyAccountsForTest(t, ownedAccountID)
 	mp := mpool.MustNewZero()
 	memResult := executor.NewMemResult(
 		[]types.Type{
@@ -2327,6 +2892,7 @@ func TestAlterQueryWorkloadPolicyCommitsAppliesAndPublishes(t *testing.T) {
 		accountID = uint32(65)
 		userID    = uint32(66)
 	)
+	cleanupGlobalWorkloadPolicyAccountsForTest(t, accountID)
 	service := t.Name()
 	client := newWorkloadPolicyQueryClient(service)
 	client.responses["cn-1"] = &query.Response{
@@ -2980,4 +3546,44 @@ func BenchmarkWorkloadPolicyStatementFastPath(b *testing.B) {
 		}
 		benchmarkWorkloadPolicySnapshot = manager.cached(state)
 	}
+}
+
+func BenchmarkWorkloadPolicySequentialSessionFastPath(b *testing.B) {
+	manager := newWorkloadPolicyManagerWithIdleCapacity(time.Minute, 1, nil)
+	state := manager.acquire(55)
+	applied, _, err := manager.Apply(55, testWorkloadPolicyNew, 1)
+	if err != nil || !applied {
+		b.Fatalf("failed to seed policy: applied=%v err=%v", applied, err)
+	}
+	manager.release(state)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		state = manager.acquire(55)
+		benchmarkWorkloadPolicySnapshot = manager.cached(state)
+		manager.release(state)
+	}
+}
+
+func BenchmarkWorkloadPolicyParallelSessionFastPath(b *testing.B) {
+	manager := newWorkloadPolicyManagerWithIdleCapacity(time.Minute, 1, nil)
+	state := manager.acquire(56)
+	applied, _, err := manager.Apply(56, testWorkloadPolicyNew, 1)
+	if err != nil || !applied {
+		b.Fatalf("failed to seed policy: applied=%v err=%v", applied, err)
+	}
+	manager.release(state)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	b.RunParallel(func(worker *testing.PB) {
+		for worker.Next() {
+			state := manager.acquire(56)
+			if manager.cached(state).Generation == "" {
+				panic("cached workload policy disappeared")
+			}
+			manager.release(state)
+		}
+	})
 }

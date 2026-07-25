@@ -548,7 +548,10 @@ func (c *Compile) SetWorkloadPolicy(
 		c.workloadClassHint = classHint
 		return
 	}
-	c.workloadPolicySet = set.Clone()
+	// WorkloadPolicySet is an immutable snapshot by contract. Sharing it keeps
+	// per-statement compilation from cloning every rule/label map; Apply
+	// publishes a new snapshot instead of mutating an existing one.
+	c.workloadPolicySet = set
 	c.workloadClassHint = classHint
 }
 

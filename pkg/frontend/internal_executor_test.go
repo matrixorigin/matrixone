@@ -108,6 +108,7 @@ func TestInternalExecutorLoadsAccountWorkloadPolicy(t *testing.T) {
 	runtime.RunTest(
 		service,
 		func(rt runtime.Runtime) {
+			defer GWorkloadPolicyManager.Remove(accountID)
 			InitServerLevelVars(service)
 			setPu(service, config.NewParameterUnit(
 				&config.FrontendParameters{},
@@ -204,6 +205,7 @@ func TestInternalExecutorLoadsColdAccountPolicyForNonInternalSession(t *testing.
 	runtime.RunTest(
 		service,
 		func(rt runtime.Runtime) {
+			defer GWorkloadPolicyManager.Remove(accountID)
 			InitServerLevelVars(service)
 			setPu(service, config.NewParameterUnit(
 				&config.FrontendParameters{},
@@ -258,6 +260,86 @@ func TestInternalExecutorLoadsColdAccountPolicyForNonInternalSession(t *testing.
 			first.Close()
 			require.Equal(t, 1, policyReads)
 			require.Equal(t, 1, accountReads)
+
+			for range 10 {
+				next := newIe(service).newCmdSession(
+					ctx,
+					ie.NewOptsBuilder().Finish(),
+				)
+				require.Equal(
+					t,
+					"task-ap",
+					queryWorkloadPolicySnapshotAt(ctx, next).
+						Rules[schedule.WorkloadAP].
+						PoolIdentity,
+				)
+				require.Equal(t, "tenant-92", queryWorkloadPolicyTenantName(next))
+				next.Close()
+			}
+			require.Equal(t, 1, policyReads,
+				"fresh idle account state must eliminate per-statement catalog reads")
+			require.Equal(t, 1, accountReads,
+				"routing identity must survive sequential internal sessions")
+		},
+	)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestInternalExecutorReusesEmptyAccountWorkloadPolicy(t *testing.T) {
+	const (
+		service   = "empty-internal-executor-workload-policy-test"
+		accountID = uint32(93)
+	)
+	mp := mpool.MustNewZero()
+	emptyPolicyResult := executor.NewMemResult(
+		[]types.Type{
+			types.T_text.ToType(),
+			types.T_uint64.ToType(),
+		},
+		mp,
+	)
+
+	runtime.RunTest(
+		service,
+		func(rt runtime.Runtime) {
+			defer GWorkloadPolicyManager.Remove(accountID)
+			InitServerLevelVars(service)
+			setPu(service, config.NewParameterUnit(
+				&config.FrontendParameters{},
+				nil,
+				nil,
+				nil,
+			))
+			var policyReads int
+			rt.SetGlobalVariables(
+				runtime.InternalSQLExecutor,
+				&workloadPolicySQLExecutor{
+					exec: func(
+						ctx context.Context,
+						sql string,
+						opts executor.Options,
+					) (executor.Result, error) {
+						require.True(t, workloadPolicyBypassed(ctx))
+						require.Contains(t, sql, "mo_query_workload_policy")
+						require.NotContains(t, sql, "mo_account")
+						require.Equal(t, accountID, opts.AccountID())
+						policyReads++
+						return emptyPolicyResult.GetResult(), nil
+					},
+				},
+			)
+
+			ctx := defines.AttachAccountId(context.Background(), accountID)
+			for range 10 {
+				sess := newIe(service).newCmdSession(
+					ctx,
+					ie.NewOptsBuilder().Finish(),
+				)
+				require.False(t, queryWorkloadPolicySnapshotAt(ctx, sess).Configured())
+				sess.Close()
+			}
+			require.Equal(t, 1, policyReads,
+				"an authoritative empty snapshot must be reusable too")
 		},
 	)
 	require.Zero(t, mp.CurrNB())
