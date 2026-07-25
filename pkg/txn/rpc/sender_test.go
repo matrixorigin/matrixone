@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
@@ -39,6 +40,7 @@ var (
 	testTN3Addr = "unix:///tmp/test-dn3.sock"
 	testTN4Addr = "unix:///tmp/test-dn4.sock"
 	testTN5Addr = "unix:///tmp/test-dn5.sock"
+	testTN6Addr = "unix:///tmp/test-dn6.sock"
 )
 
 type backendRetryErrorClient struct {
@@ -68,6 +70,43 @@ func (s *postFlushCommitStream) Close(bool) error { return nil }
 
 type postFlushCommitClient struct {
 	backendRetryErrorClient
+}
+
+type backendReplacementClient struct {
+	morpc.RPCClient
+	expectedBackend string
+	firstErr        error
+	installBackend  func()
+	sendCalls       atomic.Int32
+	firstOp         atomic.Uint32
+	secondOp        atomic.Uint32
+	invalidRequest  atomic.Bool
+}
+
+func (c *backendReplacementClient) Send(
+	ctx context.Context,
+	backend string,
+	message morpc.Message,
+) (*morpc.Future, error) {
+	call := c.sendCalls.Add(1)
+	request, ok := message.(*txn.TxnRequest)
+	if !ok || request.CNRequest == nil || backend != c.expectedBackend {
+		c.invalidRequest.Store(true)
+	} else {
+		switch call {
+		case 1:
+			c.firstOp.Store(request.CNRequest.OpCode)
+		case 2:
+			c.secondOp.Store(request.CNRequest.OpCode)
+		default:
+			c.invalidRequest.Store(true)
+		}
+	}
+	if call == 1 {
+		c.installBackend()
+		return nil, c.firstErr
+	}
+	return c.RPCClient.Send(ctx, backend, message)
 }
 
 func (c *postFlushCommitClient) NewStream(
@@ -575,6 +614,85 @@ func TestSendWithRequestRetry(t *testing.T) {
 	defer result.Release()
 	assert.Equal(t, 1, len(result.Responses))
 	assert.Equal(t, txn.TxnMethod_Write, result.Responses[0].Method)
+}
+
+func TestSendPreservesSelfFencingOpcodeAcrossBackendReplacement(t *testing.T) {
+	oldWait := defaultWaitTimeOnRetryBackendSend
+	defaultWaitTimeOnRetryBackendSend = time.Millisecond
+	defer func() {
+		defaultWaitTimeOnRetryBackendSend = oldWait
+	}()
+
+	var applyCalls atomic.Int32
+	var rejectedCalls atomic.Int32
+	var legacyTN morpc.RPCServer
+	defer func() {
+		require.NotNil(t, legacyTN)
+		require.NoError(t, legacyTN.Close())
+	}()
+
+	sd, err := NewSender(Config{}, newTestRuntime(newTestClock(), nil))
+	require.NoError(t, err)
+	s := sd.(*sender)
+	replacement := &backendReplacementClient{
+		RPCClient:       s.client,
+		expectedBackend: testTN6Addr,
+		firstErr:        moerr.NewBackendClosedNoCtx(),
+		installBackend: func() {
+			legacyTN = newTestTxnServer(t, testTN6Addr, func(
+				ctx context.Context,
+				message morpc.RPCMessage,
+				_ uint64,
+				session morpc.ClientSession,
+			) error {
+				request := message.Message.(*txn.TxnRequest)
+				response := &txn.TxnResponse{
+					RequestID: request.GetID(),
+					Method:    request.Method,
+				}
+				// Model the dispatch table of an old TN: it recognizes the legacy
+				// merge opcode only. V2 must fail before the apply handler runs.
+				if request.CNRequest.OpCode != uint32(api.OpCode_OpCommitMerge) {
+					rejectedCalls.Add(1)
+					response.TxnError = txn.WrapError(
+						moerr.NewNotSupportedNoCtx("unknown write op"),
+						0,
+					)
+					return session.Write(ctx, response)
+				}
+				applyCalls.Add(1)
+				return session.Write(ctx, response)
+			})
+		},
+	}
+	s.client = replacement
+	defer func() {
+		require.NoError(t, sd.Close())
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	result, err := sd.Send(ctx, []txn.TxnRequest{{
+		Method: txn.TxnMethod_Write,
+		CNRequest: &txn.CNOpRequest{
+			Target: metadata.TNShard{Address: testTN6Addr},
+			OpCode: uint32(api.OpCode_OpCommitMergeV2),
+		},
+	}})
+	require.NoError(t, err)
+	defer result.Release()
+
+	require.Equal(t, int32(2), replacement.sendCalls.Load())
+	require.False(t, replacement.invalidRequest.Load())
+	require.Equal(t, uint32(api.OpCode_OpCommitMergeV2), replacement.firstOp.Load())
+	require.Equal(t, uint32(api.OpCode_OpCommitMergeV2), replacement.secondOp.Load())
+	require.Equal(t, int32(1), rejectedCalls.Load())
+	require.Zero(t, applyCalls.Load())
+	require.Len(t, result.Responses, 1)
+	require.True(t, moerr.IsMoErrCode(
+		result.Responses[0].TxnError.UnwrapError(),
+		moerr.ErrNotSupported,
+	))
 }
 
 func TestSendStopsWhenBackendRetryBudgetExceeded(t *testing.T) {
