@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1020,6 +1021,119 @@ func TestBackSessionTriggersStalePolicyReconciliation(t *testing.T) {
 	require.Zero(t, mp.CurrNB())
 }
 
+func TestBackSessionAllowsTenantBootstrapBeforePolicyTableUpgrade(t *testing.T) {
+	const (
+		service   = "background-workload-policy-bootstrap"
+		accountID = ^uint32(0) - 102
+	)
+
+	manager := GWorkloadPolicyManager
+	state := manager.acquire(accountID)
+	defer manager.release(state)
+	// Account creation has selected its tenant identity, but the tenant's
+	// catalog-table bootstrap has not reached the policy table yet.
+	mp := mpool.MustNewZero()
+	accountResult := executor.NewMemResult(
+		[]types.Type{types.T_varchar.ToType()},
+		mp,
+	)
+	accountResult.NewBatchWithRowCount(1)
+	require.NoError(t, executor.AppendStringRows(
+		accountResult,
+		0,
+		[]string{"bootstrap-tenant"},
+	))
+	t.Cleanup(func() {
+		require.Zero(t, mp.CurrNB())
+	})
+
+	rt := moruntime.NewRuntime(metadata.ServiceType_CN, service, nil)
+	moruntime.SetupServiceBasedRuntime(service, rt)
+	rt.SetGlobalVariables(
+		moruntime.InternalSQLExecutor,
+		&workloadPolicySQLExecutor{
+			exec: func(
+				ctx context.Context,
+				sql string,
+				opts executor.Options,
+			) (executor.Result, error) {
+				require.True(t, workloadPolicyBypassed(ctx))
+				if strings.Contains(sql, catalog.MO_QUERY_WORKLOAD_POLICY) {
+					require.Equal(t, accountID, opts.AccountID())
+					// sqlExecutor returns errors.Join(original, rollbackErr),
+					// even when Rollback succeeds and rollbackErr is nil.
+					return executor.Result{}, errors.Join(
+						moerr.NewParseErrorNoCtx(
+							`table "mo_query_workload_policy" does not exist`,
+						),
+						nil,
+					)
+				}
+				require.Equal(
+					t,
+					"select account_name from mo_catalog.mo_account where account_id = "+
+						fmt.Sprint(accountID),
+					sql,
+				)
+				require.Equal(t, uint32(sysAccountID), opts.AccountID())
+				return accountResult.GetResult(), nil
+			},
+		},
+	)
+
+	backSes := &backSession{
+		feSessionImpl:         feSessionImpl{service: service},
+		workloadPolicyManaged: true,
+	}
+	defer backSes.releaseWorkloadPolicy()
+	ctx := defines.AttachAccountId(context.Background(), accountID)
+	require.NoError(t, backSes.bindWorkloadPolicy(ctx, accountID))
+	require.Same(t, state, workloadPolicyState(backSes))
+	snapshot := state.snapshot.Load()
+	require.NotNil(t, snapshot)
+	require.Empty(t, snapshot.raw)
+	require.Zero(t, snapshot.revision)
+	require.Empty(t, snapshot.set.Rules)
+	require.Equal(t, "bootstrap-tenant", state.cachedAccountName())
+}
+
+func TestWorkloadPolicyCatalogNotInstalledTraversesErrorChain(t *testing.T) {
+	require.False(t, isWorkloadPolicyCatalogNotInstalled(nil))
+	require.False(t, workloadPolicyErrorChainHasCode(nil, moerr.ErrParseError))
+
+	missingTable := moerr.NewParseErrorNoCtx(
+		`table "mo_query_workload_policy" does not exist`,
+	)
+	require.True(t, isWorkloadPolicyCatalogNotInstalled(missingTable))
+	require.True(t, isWorkloadPolicyCatalogNotInstalled(
+		fmt.Errorf("internal executor: %w", missingTable),
+	))
+	require.True(t, isWorkloadPolicyCatalogNotInstalled(
+		errors.Join(missingTable, nil),
+	))
+	require.True(t, isWorkloadPolicyCatalogNotInstalled(
+		errors.Join(
+			moerr.NewNoSuchTableNoCtx(
+				"mo_catalog",
+				catalog.MO_QUERY_WORKLOAD_POLICY,
+			),
+			nil,
+		),
+	))
+	require.False(t, isWorkloadPolicyCatalogNotInstalled(
+		errors.Join(
+			moerr.NewParseErrorNoCtx(`table "other_table" does not exist`),
+			nil,
+		),
+	))
+	require.False(t, isWorkloadPolicyCatalogNotInstalled(
+		fmt.Errorf(
+			"internal executor: %w",
+			moerr.NewInternalErrorNoCtx("catalog connection lost"),
+		),
+	))
+}
+
 func TestLoadWorkloadPolicyCatalogMarksControlPlaneContext(t *testing.T) {
 	const accountID = uint32(55)
 	selectSQL := "select policy, revision from mo_catalog.mo_query_workload_policy where account_id = 55"
@@ -1106,6 +1220,15 @@ func TestLoadWorkloadPolicyCatalogWithExecRejectsInvalidResults(t *testing.T) {
 			name: "table not installed planner error",
 			execErr: moerr.NewParseErrorNoCtx(
 				`table "mo_query_workload_policy" does not exist`,
+			),
+		},
+		{
+			name: "table not installed planner error joined with rollback",
+			execErr: errors.Join(
+				moerr.NewParseErrorNoCtx(
+					`table "mo_query_workload_policy" does not exist`,
+				),
+				nil,
 			),
 		},
 		{
@@ -1378,6 +1501,15 @@ func TestLoadWorkloadPolicyCatalogByServiceFailureBoundaries(t *testing.T) {
 			name: "table not installed planner error",
 			execErr: moerr.NewParseErrorNoCtx(
 				`table "mo_query_workload_policy" does not exist`,
+			),
+		},
+		{
+			name: "table not installed planner error joined with rollback",
+			execErr: errors.Join(
+				moerr.NewParseErrorNoCtx(
+					`table "mo_query_workload_policy" does not exist`,
+				),
+				nil,
 			),
 		},
 		{

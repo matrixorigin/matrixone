@@ -766,16 +766,39 @@ func isWorkloadPolicyCatalogNotInstalled(err error) bool {
 	if err == nil {
 		return false
 	}
-	if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) ||
-		moerr.IsMoErrCode(err, moerr.ErrBadDB) {
+	if workloadPolicyErrorChainHasCode(err, moerr.ErrNoSuchTable) ||
+		workloadPolicyErrorChainHasCode(err, moerr.ErrBadDB) {
 		return true
 	}
 	// A missing relation discovered by the planner is currently surfaced as a
-	// parse error instead of ErrNoSuchTable. Keep this match deliberately
-	// narrow: only the fixed catalog query and the exact missing-table
-	// condition are compatible with an in-progress tenant upgrade.
-	return moerr.IsMoErrCode(err, moerr.ErrParseError) &&
+	// parse error instead of ErrNoSuchTable. The internal SQL executor joins
+	// that error with its rollback result, so inspect the complete error tree
+	// instead of only its outer error. Keep this match deliberately narrow:
+	// only the fixed catalog query and the exact missing-table condition are
+	// compatible with an in-progress tenant upgrade.
+	return workloadPolicyErrorChainHasCode(err, moerr.ErrParseError) &&
 		strings.Contains(err.Error(), `table "`+catalog.MO_QUERY_WORKLOAD_POLICY+`" does not exist`)
+}
+
+func workloadPolicyErrorChainHasCode(err error, code uint16) bool {
+	if err == nil {
+		return false
+	}
+	if moerr.IsMoErrCode(err, code) {
+		return true
+	}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		for _, nested := range joined.Unwrap() {
+			if workloadPolicyErrorChainHasCode(nested, code) {
+				return true
+			}
+		}
+		return false
+	}
+	if nested, ok := err.(interface{ Unwrap() error }); ok {
+		return workloadPolicyErrorChainHasCode(nested.Unwrap(), code)
+	}
+	return false
 }
 
 func workloadPolicyState(ses FeSession) *accountWorkloadPolicy {
