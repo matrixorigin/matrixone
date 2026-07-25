@@ -3850,11 +3850,11 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 							selectClause.Having.RollupHaving = true
 						}
 						selectStmts[i] = &tree.SelectClause{
-							// Duplicate elimination belongs above the complete
-							// UNION ALL. Branch-local DISTINCT is redundant and
-							// can force invalid type harmonization for a rolled-up
-							// UUID column whose empty grouping set starts as ANY.
-							Distinct: false,
+							// Keep branch-local duplicate elimination after
+							// grouping NULL normalization to reduce rows before
+							// UNION ALL. A separate global DISTINCT still removes
+							// duplicates that occur across grouping-set branches.
+							Distinct: selectClause.Distinct,
 							Exprs:    branchExprs,
 							From:     selectClause.From,
 							Where:    selectClause.Where,

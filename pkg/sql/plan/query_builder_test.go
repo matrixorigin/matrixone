@@ -4677,6 +4677,66 @@ func TestGroupingSetDistinctGlobalDedup(t *testing.T) {
 		"non-distinct grouping-set has no whole-result de-dup above the union")
 }
 
+func groupingSetUnionLeaves(nodes []*plan.Node, nodeID int32) []int32 {
+	node := nodes[nodeID]
+	if node.NodeType != plan.Node_UNION_ALL {
+		return []int32{nodeID}
+	}
+	leaves := groupingSetUnionLeaves(nodes, node.Children[0])
+	return append(leaves, groupingSetUnionLeaves(nodes, node.Children[1])...)
+}
+
+func countAggInSingleChildBranch(nodes []*plan.Node, nodeID int32) int {
+	count := 0
+	for {
+		node := nodes[nodeID]
+		if node.NodeType == plan.Node_AGG {
+			count++
+		}
+		if len(node.Children) != 1 {
+			return count
+		}
+		nodeID = node.Children[0]
+	}
+}
+
+func TestGroupingSetDistinctKeepsBranchDedup(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	for _, test := range []struct {
+		name       string
+		groupBy    string
+		wantLeaves int
+	}{
+		{name: "rollup", groupBy: "a, b, c with rollup", wantLeaves: 4},
+		{name: "cube", groupBy: "cube(a, b, c)", wantLeaves: 8},
+		{name: "grouping sets", groupBy: "grouping sets ((a, b), (a), ())", wantLeaves: 3},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			p, err := runOneStmt(mock, t,
+				"select distinct 1 from select_test.bind_select group by "+test.groupBy)
+			require.NoError(t, err)
+			require.True(t, hasAggAboveUnionAll(p),
+				"global DISTINCT must remain above the grouping-set union")
+
+			nodes := p.GetQuery().Nodes
+			lastUnion := int32(-1)
+			for i, node := range nodes {
+				if node.NodeType == plan.Node_UNION_ALL {
+					lastUnion = int32(i)
+				}
+			}
+			require.NotEqual(t, int32(-1), lastUnion)
+
+			leaves := groupingSetUnionLeaves(nodes, lastUnion)
+			require.Len(t, leaves, test.wantLeaves)
+			for _, leaf := range leaves {
+				require.GreaterOrEqual(t, countAggInSingleChildBranch(nodes, leaf), 2,
+					"each branch must keep grouping aggregation and local DISTINCT")
+			}
+		})
+	}
+}
+
 func TestGroupingSetDistinctMaterializesVolatileProjectionOnce(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	tests := []struct {
