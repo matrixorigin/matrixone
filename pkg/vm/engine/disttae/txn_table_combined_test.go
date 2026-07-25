@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -31,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func newMockCombinedTxnTable() *combinedTxnTable {
@@ -80,39 +82,94 @@ func TestCombinedTxnTable_CollectChanges(t *testing.T) {
 	assert.NoError(t, handle.Close())
 }
 
-func TestCombinedTxnTable_CollectChangesIteratesPartitions(t *testing.T) {
-	first := batch.NewWithSize(0)
-	second := batch.NewWithSize(0)
+func TestCombinedTxnTable_CollectChangesOrdersPartitionsByCommitTS(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	later := newChangesTestBatch(t, mp, []int64{20}, []types.TS{types.BuildTS(20, 0)})
+	earliest := newChangesTestBatch(t, mp, []int64{10}, []types.TS{types.BuildTS(10, 0)})
 	table := newMockCombinedTxnTable()
 	table.tablesFunc = func() ([]engine.Relation, error) {
 		return []engine.Relation{
 			&mockRelation{collectChangesFunc: func(context.Context, types.TS, types.TS, bool, *mpool.MPool) (engine.ChangesHandle, error) {
-				return &mockChangesHandle{data: []*batch.Batch{first}}, nil
+				return &mockChangesHandle{data: []*batch.Batch{later}}, nil
 			}},
 			&mockRelation{collectChangesFunc: func(context.Context, types.TS, types.TS, bool, *mpool.MPool) (engine.ChangesHandle, error) {
-				return &mockChangesHandle{data: []*batch.Batch{second}}, nil
+				return &mockChangesHandle{data: []*batch.Batch{earliest}}, nil
 			}},
 		}, nil
 	}
 
-	handle, err := table.CollectChanges(context.Background(), types.TS{}, types.TS{}, false, &mpool.MPool{})
+	handle, err := table.CollectChanges(context.Background(), types.TS{}, types.TS{}, false, mp)
 	assert.NoError(t, err)
+	defer func() { assert.NoError(t, handle.Close()) }()
 
-	data, tombstone, _, err := handle.Next(context.Background(), &mpool.MPool{})
+	data, tombstone, hint, err := handle.Next(context.Background(), mp)
 	assert.NoError(t, err)
-	assert.Same(t, first, data)
+	assert.Equal(t, int64(10), vector.GetFixedAtNoTypeCheck[int64](data.Vecs[0], 0))
+	assert.Equal(t, types.BuildTS(10, 0), vector.GetFixedAtNoTypeCheck[types.TS](data.Vecs[1], 0))
 	assert.Nil(t, tombstone)
+	assert.Equal(t, engine.ChangesHandle_Tail_done, hint)
+	data.Clean(mp)
 
-	data, tombstone, _, err = handle.Next(context.Background(), &mpool.MPool{})
+	data, tombstone, hint, err = handle.Next(context.Background(), mp)
 	assert.NoError(t, err)
-	assert.Same(t, second, data)
+	assert.Equal(t, int64(20), vector.GetFixedAtNoTypeCheck[int64](data.Vecs[0], 0))
+	assert.Equal(t, types.BuildTS(20, 0), vector.GetFixedAtNoTypeCheck[types.TS](data.Vecs[1], 0))
 	assert.Nil(t, tombstone)
+	assert.Equal(t, engine.ChangesHandle_Tail_done, hint)
+	data.Clean(mp)
 
-	data, tombstone, hint, err := handle.Next(context.Background(), &mpool.MPool{})
+	data, tombstone, hint, err = handle.Next(context.Background(), mp)
 	assert.NoError(t, err)
 	assert.Nil(t, data)
 	assert.Nil(t, tombstone)
 	assert.Equal(t, engine.ChangesHandle_Tail_done, hint)
+}
+
+func TestCombinedTxnTable_CollectChangesKeepsPartitionMoveAtomic(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	insert := newChangesTestBatch(t, mp, []int64{1}, []types.TS{types.BuildTS(10, 0)})
+	delete := newChangesTestBatch(t, mp, []int64{1}, []types.TS{types.BuildTS(10, 0)})
+	later := newChangesTestBatch(t, mp, []int64{2}, []types.TS{types.BuildTS(20, 0)})
+	table := newMockCombinedTxnTable()
+	table.tablesFunc = func() ([]engine.Relation, error) {
+		return []engine.Relation{
+			&mockRelation{collectChangesFunc: func(context.Context, types.TS, types.TS, bool, *mpool.MPool) (engine.ChangesHandle, error) {
+				return &mockChangesHandle{changes: []mockChange{
+					{data: insert, hint: engine.ChangesHandle_Tail_done},
+					{data: later, hint: engine.ChangesHandle_Tail_done},
+				}}, nil
+			}},
+			&mockRelation{collectChangesFunc: func(context.Context, types.TS, types.TS, bool, *mpool.MPool) (engine.ChangesHandle, error) {
+				return &mockChangesHandle{changes: []mockChange{{tombstone: delete, hint: engine.ChangesHandle_Tail_done}}}, nil
+			}},
+		}, nil
+	}
+
+	handle, err := table.CollectChanges(context.Background(), types.TS{}, types.TS{}, false, mp)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, handle.Close()) }()
+
+	data, tombstone, hint, err := handle.Next(context.Background(), mp)
+	require.NoError(t, err)
+	require.NotNil(t, data)
+	require.NotNil(t, tombstone)
+	assert.Equal(t, types.BuildTS(10, 0), vector.GetFixedAtNoTypeCheck[types.TS](data.Vecs[1], 0))
+	assert.Equal(t, types.BuildTS(10, 0), vector.GetFixedAtNoTypeCheck[types.TS](tombstone.Vecs[1], 0))
+	assert.Equal(t, engine.ChangesHandle_Tail_done, hint)
+	data.Clean(mp)
+	tombstone.Clean(mp)
+
+	data, tombstone, hint, err = handle.Next(context.Background(), mp)
+	require.NoError(t, err)
+	require.NotNil(t, data)
+	assert.Nil(t, tombstone)
+	assert.Equal(t, types.BuildTS(20, 0), vector.GetFixedAtNoTypeCheck[types.TS](data.Vecs[1], 0))
+	assert.Equal(t, engine.ChangesHandle_Tail_done, hint)
+	data.Clean(mp)
 }
 
 func TestCombinedChangesHandle_CloseClosesAllHandlesOnError(t *testing.T) {
@@ -1285,6 +1342,7 @@ type mockTombstoner struct {
 }
 
 type mockChangesHandle struct {
+	changes    []mockChange
 	data       []*batch.Batch
 	idx        int
 	closed     bool
@@ -1293,12 +1351,41 @@ type mockChangesHandle struct {
 }
 
 func (m *mockChangesHandle) Next(context.Context, *mpool.MPool) (*batch.Batch, *batch.Batch, engine.ChangesHandle_Hint, error) {
+	if m.changes != nil {
+		if m.idx >= len(m.changes) {
+			return nil, nil, engine.ChangesHandle_Tail_done, nil
+		}
+		change := m.changes[m.idx]
+		m.idx++
+		return change.data, change.tombstone, change.hint, nil
+	}
 	if m.idx >= len(m.data) {
 		return nil, nil, engine.ChangesHandle_Tail_done, nil
 	}
 	bat := m.data[m.idx]
 	m.idx++
 	return bat, nil, engine.ChangesHandle_Tail_wip, nil
+}
+
+type mockChange struct {
+	data      *batch.Batch
+	tombstone *batch.Batch
+	hint      engine.ChangesHandle_Hint
+}
+
+func newChangesTestBatch(t *testing.T, mp *mpool.MPool, values []int64, timestamps []types.TS) *batch.Batch {
+	t.Helper()
+	require.Len(t, values, len(timestamps))
+	bat := batch.NewWithSize(2)
+	bat.Attrs = []string{"value", "commit_ts"}
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_TS.ToType())
+	for i, value := range values {
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], value, false, mp))
+		require.NoError(t, vector.AppendFixed(bat.Vecs[1], timestamps[i], false, mp))
+	}
+	bat.SetRowCount(len(values))
+	return bat
 }
 
 func (m *mockChangesHandle) Close() error {

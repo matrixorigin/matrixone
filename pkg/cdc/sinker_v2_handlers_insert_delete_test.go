@@ -252,9 +252,9 @@ func TestHandleInsertDeleteBatch_Comprehensive(t *testing.T) {
 		toTs := types.BuildTS(200, 0)
 		cmd := NewInsertDeleteBatchCommand(insertBatch, deleteBatch, fromTs, toTs)
 
-		// Expect INSERT SQL first, then DELETE SQL
-		mock.ExpectExec("fakeSql").WillReturnResult(sqlmock.NewResult(2, 2))
+		// Deletes must precede inserts so an update or partition move retains its replacement row.
 		mock.ExpectExec("fakeSql").WillReturnResult(sqlmock.NewResult(0, 2))
+		mock.ExpectExec("fakeSql").WillReturnResult(sqlmock.NewResult(2, 2))
 
 		err = sinker.handleInsertDeleteBatch(ctx, cmd)
 
@@ -460,8 +460,8 @@ func TestHandleInsertDeleteBatch_Comprehensive(t *testing.T) {
 		cmd := NewInsertDeleteBatchCommand(insertBatch, deleteBatch, fromTs, toTs)
 
 		// Expect SQL executions
-		mock.ExpectExec("fakeSql").WillReturnResult(sqlmock.NewResult(2, 2))
 		mock.ExpectExec("fakeSql").WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectExec("fakeSql").WillReturnResult(sqlmock.NewResult(2, 2))
 
 		err = sinker.handleInsertDeleteBatch(ctx, cmd)
 
@@ -565,7 +565,7 @@ func TestHandleInsertDeleteBatch_Comprehensive(t *testing.T) {
 	// The builder is robust and handles most edge cases internally.
 	// We focus on ExecSQL failures which are more common in real scenarios.
 
-	t.Run("Success_InsertThenDeleteOrder", func(t *testing.T) {
+	t.Run("Success_DeleteThenInsertOrder", func(t *testing.T) {
 		tableDef := createStandardTableDef()
 		sinker, db, mock := createSinkerWithTableDef(t, tableDef, 1024*1024)
 		defer db.Close()
@@ -575,16 +575,18 @@ func TestHandleInsertDeleteBatch_Comprehensive(t *testing.T) {
 		fromTs := types.BuildTS(100, 0)
 		toTs := types.BuildTS(200, 0)
 		cmd := NewInsertDeleteBatchCommand(insertBatch, deleteBatch, fromTs, toTs)
+		sinker.executor.debugTxnRecorder.doRecord = true
 
-		// Verify order: INSERT first, then DELETE
-		mock.ExpectExec("fakeSql").WillReturnResult(sqlmock.NewResult(1, 1))
 		mock.ExpectExec("fakeSql").WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectExec("fakeSql").WillReturnResult(sqlmock.NewResult(1, 1))
 
 		err = sinker.handleInsertDeleteBatch(ctx, cmd)
 
 		assert.NoError(t, err)
-		// Verify expectations were met in order (INSERT before DELETE)
 		assert.NoError(t, mock.ExpectationsWereMet())
+		require.Len(t, sinker.executor.debugTxnRecorder.txnSQL, 2)
+		assert.Contains(t, sinker.executor.debugTxnRecorder.txnSQL[0], "DELETE FROM")
+		assert.Contains(t, sinker.executor.debugTxnRecorder.txnSQL[1], "REPLACE INTO")
 	})
 }
 

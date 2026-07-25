@@ -659,7 +659,56 @@ func (s *mysqlSinker2) handleInsertDeleteBatch(ctx context.Context, cmd *Command
 		logutil.Debug("cdc.mysql_sinker2.insert_delete_batch_start", startFields...)
 	}
 
-	// Build and execute INSERT SQL
+	// A logical change can delete and insert the same primary key (for example,
+	// a partition-key update). Apply deletes first so the replacement remains
+	// visible at the sink after the transaction is replayed.
+	if cmd.DeleteAtmBatch != nil && cmd.DeleteAtmBatch.RowCount() > 0 {
+		// Record metrics for delete operation
+		deleteRows := cmd.DeleteAtmBatch.RowCount()
+		deleteBytes := uint64(deleteRows * 100) // Rough estimate: 100 bytes per row
+		if s.progressTracker != nil {
+			tableLabel := s.progressTracker.TableKey()
+			v2.CdcRowsProcessedCounter.WithLabelValues("delete", tableLabel).Add(float64(deleteRows))
+			v2.CdcBytesProcessedCounter.WithLabelValues("delete", tableLabel).Add(float64(deleteBytes))
+		}
+
+		sqls, err := s.builder.BuildDeleteSQL(ctx, cmd.DeleteAtmBatch, cmd.Meta.FromTs, cmd.Meta.ToTs)
+		if err != nil {
+			logutil.Error("cdc.mysql_sinker2.build_delete_sql_failed",
+				zap.String("table", s.dbTblInfo.String()),
+				zap.Int("rows", deleteRows),
+				zap.Error(err))
+			return err
+		}
+
+		for i, sql := range sqls {
+			sqlStart := time.Now()
+			err := s.executor.ExecSQL(ctx, s.ar, sql, true)
+			duration := time.Since(sqlStart)
+			if err != nil {
+				s.recordSQLFailure("delete", duration)
+				logutil.Error("cdc.mysql_sinker2.exec_delete_sql_failed",
+					zap.String("table", s.dbTblInfo.String()),
+					zap.Int("sql-index", i),
+					zap.Int("total-sqls", len(sqls)),
+					zap.Duration("duration", duration),
+					zap.Error(err))
+				return err
+			}
+
+			s.recordSQLSuccess("delete", duration)
+
+			if duration > time.Second {
+				logutil.Warn("cdc.mysql_sinker2.exec_delete_sql_slow",
+					zap.String("table", s.dbTblInfo.String()),
+					zap.Int("sql-index", i),
+					zap.Duration("duration", duration))
+			}
+		}
+	}
+
+	// Build and execute INSERT SQL after deletes. A successful insert is the
+	// final state for updates and partition moves that share a commit timestamp.
 	if cmd.InsertAtmBatch != nil && cmd.InsertAtmBatch.RowCount() > 0 {
 		// Record metrics for insert operation
 		insertRows := cmd.InsertAtmBatch.RowCount()
@@ -708,52 +757,6 @@ func (s *mysqlSinker2) handleInsertDeleteBatch(ctx context.Context, cmd *Command
 						zap.Int("sql-index", i),
 						zap.Duration("duration", duration))
 				}
-			}
-		}
-	}
-
-	// Build and execute DELETE SQL
-	if cmd.DeleteAtmBatch != nil && cmd.DeleteAtmBatch.RowCount() > 0 {
-		// Record metrics for delete operation
-		deleteRows := cmd.DeleteAtmBatch.RowCount()
-		deleteBytes := uint64(deleteRows * 100) // Rough estimate: 100 bytes per row
-		if s.progressTracker != nil {
-			tableLabel := s.progressTracker.TableKey()
-			v2.CdcRowsProcessedCounter.WithLabelValues("delete", tableLabel).Add(float64(deleteRows))
-			v2.CdcBytesProcessedCounter.WithLabelValues("delete", tableLabel).Add(float64(deleteBytes))
-		}
-
-		sqls, err := s.builder.BuildDeleteSQL(ctx, cmd.DeleteAtmBatch, cmd.Meta.FromTs, cmd.Meta.ToTs)
-		if err != nil {
-			logutil.Error("cdc.mysql_sinker2.build_delete_sql_failed",
-				zap.String("table", s.dbTblInfo.String()),
-				zap.Int("rows", deleteRows),
-				zap.Error(err))
-			return err
-		}
-
-		for i, sql := range sqls {
-			sqlStart := time.Now()
-			err := s.executor.ExecSQL(ctx, s.ar, sql, true)
-			duration := time.Since(sqlStart)
-			if err != nil {
-				s.recordSQLFailure("delete", duration)
-				logutil.Error("cdc.mysql_sinker2.exec_delete_sql_failed",
-					zap.String("table", s.dbTblInfo.String()),
-					zap.Int("sql-index", i),
-					zap.Int("total-sqls", len(sqls)),
-					zap.Duration("duration", duration),
-					zap.Error(err))
-				return err
-			}
-
-			s.recordSQLSuccess("delete", duration)
-
-			if duration > time.Second {
-				logutil.Warn("cdc.mysql_sinker2.exec_delete_sql_slow",
-					zap.String("table", s.dbTblInfo.String()),
-					zap.Int("sql-index", i),
-					zap.Duration("duration", duration))
 			}
 		}
 	}
