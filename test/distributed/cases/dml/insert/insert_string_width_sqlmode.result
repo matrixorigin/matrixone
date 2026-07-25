@@ -88,10 +88,10 @@ abc  ¦  3
 drop table pkv;
 set session sql_mode = '';
 create table d (c varchar(3) default 'abcd');
-Invalid default value for 'abcd'
+Invalid default value for 'c'
 set session sql_mode = 'STRICT_TRANS_TABLES';
 create table d (c varchar(3) default 'abcd');
-Invalid default value for 'abcd'
+Invalid default value for 'c'
 create table g (id int primary key, t text, v varchar(1) generated always as (coalesce(t, '')) stored);
 set session sql_mode = '';
 insert into g values (1, 'ab');
