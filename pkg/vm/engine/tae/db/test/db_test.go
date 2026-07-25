@@ -3988,7 +3988,11 @@ func TestIncrementalDedupChecksCNRowsAfterMixedTNMerge(t *testing.T) {
 	defer bat.Close()
 	oldRows := bat.CloneWindow(0, 31)
 	defer oldRows.Close()
-	oldRow := bat.CloneWindow(0, 1)
+	// The merge writes the first 20 TN rows to a pure-TN object and the
+	// remaining TN rows together with cnRow to a CN-origin object. Pick a TN
+	// row from that mixed output so incremental dedup exercises the row-level
+	// null commit-ts compatibility path.
+	oldRow := bat.CloneWindow(30, 1)
 	defer oldRow.Close()
 	cnRow := bat.CloneWindow(63, 1)
 	defer cnRow.Close()

@@ -374,9 +374,9 @@ func (t *cnMergeTask) materializeCommitTS(
 	stats := &t.targets[objIdx]
 	if !stats.GetCNCreated() {
 		// Legacy TN objects predate the hidden row commit-TS column. Preserve
-		// the synthesized nulls through the rewrite. If this object is later
-		// mixed with CN-origin rows, exact-PK dedup treats a null timestamp as
-		// a conservative duplicate instead of risking a false negative.
+		// the synthesized nulls through the rewrite. Exact-PK dedup recognizes
+		// these rows as old under incremental policy, while strict policy keeps
+		// the conservative duplicate behavior.
 		return release, nil
 	}
 

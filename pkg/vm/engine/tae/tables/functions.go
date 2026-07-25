@@ -189,6 +189,20 @@ func missingCommitTS(vec containers.Vector, row int) bool {
 	return vec == nil || row >= vec.Length() || vec.IsNull(row)
 }
 
+// Old TN objects materialize a correctly sized null commit-TS vector. Only
+// that representation is safe to skip; a missing or short vector remains a
+// conservative duplicate.
+func skipLegacyTNRow(
+	txn txnif.TxnReader,
+	vec containers.Vector,
+	row int,
+) bool {
+	return txn.GetDedupType().SkipTargetOldCommitted() &&
+		vec != nil &&
+		row < vec.Length() &&
+		vec.IsNull(row)
+}
+
 func parseAContainsArgs(args ...any) (
 	vec containers.Vector, rowIDs containers.Vector,
 	scanFn func(uint16) (vec containers.Vector, err error), txn txnif.TxnReader, delsFn func(rowID any, ts types.TS) (types.TS, error),
@@ -317,6 +331,9 @@ func getDuplicatedRowIDABlkBytesFunc(args ...any) func([]byte, bool, int) error 
 					return err
 				}
 				if missingCommitTS(tsVec, row) {
+					if skipLegacyTNRow(txn, tsVec, row) {
+						return nil
+					}
 					rowID := objectio.NewRowid(&blkID, uint32(row))
 					rowIDs.Update(rowOffset, rowID, false)
 					return nil
@@ -368,6 +385,9 @@ func getDuplicatedRowIDABlkFuncFactory[T types.FixedSizeT](comp func(T, T) int) 
 						return err
 					}
 					if missingCommitTS(tsVec, row) {
+						if skipLegacyTNRow(txn, tsVec, row) {
+							return nil
+						}
 						rowID := objectio.NewRowid(&blkID, uint32(row))
 						rowIDs.Update(rowOffset, rowID, false)
 						return nil

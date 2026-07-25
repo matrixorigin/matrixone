@@ -33,7 +33,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	querypb "github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -200,16 +202,38 @@ func handleCNMerge(
 		ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(a.accountId))
 	}
 
-	target := getTNShard(proc.GetService())
+	target, tnQueryAddress := getTNMergeTarget(proc.GetService())
 	fs := proc.GetFileService()
 	mergeAndWrite := func(rel engine.Relation, stats []objectio.ObjectStats) (*rpc.SendResult, error) {
+		// Check before creating files and again before TN apply. A large merge
+		// can run for minutes while the target service is being replaced.
+		if err := validateTNMergeTarget(
+			ctx,
+			proc.GetQueryClient(),
+			target,
+			tnQueryAddress,
+		); err != nil {
+			return nil, err
+		}
 		entry, err := rel.MergeObjects(ctx, stats, uint32(a.targetObjSize))
+		mergeFailed := err != nil
 		if err != nil {
 			merge.CleanUpUselessFiles(entry, fs)
 			if entry == nil {
 				entry = &api.MergeCommitEntry{
 					Err: err.Error(),
 				}
+			}
+		}
+		if !mergeFailed {
+			if err := validateTNMergeTarget(
+				ctx,
+				proc.GetQueryClient(),
+				target,
+				tnQueryAddress,
+			); err != nil {
+				merge.CleanUpUselessFiles(entry, fs)
+				return nil, err
 			}
 		}
 
@@ -333,8 +357,9 @@ func handleCNMerge(
 	return Result{}, nil
 }
 
-func getTNShard(service string) metadata.TNShard {
+func getTNMergeTarget(service string) (metadata.TNShard, string) {
 	var target metadata.TNShard
+	var queryAddress string
 	cluster := clusterservice.GetMOCluster(service)
 	cluster.GetTNService(clusterservice.NewSelector(),
 		func(store metadata.TNService) bool {
@@ -346,11 +371,60 @@ func getTNShard(service string) metadata.TNShard {
 					ReplicaID: shard.ReplicaID,
 					Address:   store.TxnServiceAddress,
 				}
-				return true
+				queryAddress = store.QueryAddress
+				return false
 			}
 			return true
 		})
-	return target
+	return target, queryAddress
+}
+
+func validateTNMergeTarget(
+	ctx context.Context,
+	client qclient.QueryClient,
+	target metadata.TNShard,
+	queryAddress string,
+) error {
+	if target.IsEmpty() || queryAddress == "" {
+		return moerr.NewNotSupported(
+			ctx,
+			"CN merge requires a TN with row-lineage capability",
+		)
+	}
+	return checkTNMergeLineageCapability(ctx, client, queryAddress)
+}
+
+func checkTNMergeLineageCapability(
+	ctx context.Context,
+	client qclient.QueryClient,
+	address string,
+) error {
+	if client == nil {
+		return moerr.NewInternalError(ctx, "query client is not configured")
+	}
+	checkCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	req := client.NewRequest(querypb.CmdMethod_GetProtocolVersion)
+	req.GetProtocolVersion = &querypb.GetProtocolVersionRequest{}
+	resp, err := client.SendMessage(checkCtx, address, req)
+	if err != nil {
+		return err
+	}
+	if resp == nil {
+		return moerr.NewInternalError(ctx, "TN returned no protocol version")
+	}
+	defer client.Release(resp)
+
+	if resp.GetProtocolVersion == nil ||
+		resp.GetProtocolVersion.Version < defines.MORPCVersion5 {
+		return moerr.NewNotSupportedf(
+			ctx,
+			"CN merge requires TN protocol version %d; retry after TN upgrade",
+			defines.MORPCVersion5,
+		)
+	}
+	return nil
 }
 
 // Each merge process merges at most ~10^7 rows.

@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/stretchr/testify/require"
 )
@@ -181,6 +182,83 @@ func TestNullableCommitTSConservativelyChecksOnlyLegacyRows(t *testing.T) {
 	require.NoError(t, containers.ForeachVector(keys, op, nil))
 	require.False(t, rowIDs.IsNull(0))
 	require.True(t, rowIDs.IsNull(1))
+}
+
+func TestIncrementalDedupSkipsOnlyLegacyTNRows(t *testing.T) {
+	for _, typ := range []types.Type{
+		types.T_int64.ToType(),
+		types.T_varchar.ToType(),
+	} {
+		t.Run(typ.String(), func(t *testing.T) {
+			data := containers.MakeVector(typ, common.DefaultAllocator)
+			defer data.Close()
+			keys := containers.MakeVector(typ, common.DefaultAllocator)
+			defer keys.Close()
+			if typ.Oid == types.T_int64 {
+				data.Append(int64(1), false)
+				data.Append(int64(2), false)
+				keys.Append(int64(1), false)
+				keys.Append(int64(2), false)
+			} else {
+				data.Append([]byte("legacy"), false)
+				data.Append([]byte("cn"), false)
+				keys.Append([]byte("legacy"), false)
+				keys.Append([]byte("cn"), false)
+			}
+
+			rowIDs := containers.MakeVector(types.T_Rowid.ToType(), common.DefaultAllocator)
+			defer rowIDs.Close()
+			rowIDs.Append(nil, true)
+			rowIDs.Append(nil, true)
+
+			commitTS := containers.MakeVector(types.T_TS.ToType(), common.DefaultAllocator)
+			commitTS.Append(nil, true)
+			commitTS.Append(types.BuildTS(5, 0), false)
+			loader := &commitTSLoader{
+				load: func() (containers.Vector, error) {
+					return commitTS, nil
+				},
+			}
+			defer loader.close()
+
+			txn := txnbase.MockTxnReaderWithStartTS(types.BuildTS(10, 0))
+			txn.SetDedupType(txnif.DedupPolicy_CheckIncremental)
+			op := containers.MakeForeachVectorOp(
+				keys.GetType().Oid,
+				getRowIDAlkFunctions,
+				data,
+				rowIDs,
+				types.Blockid{},
+				loader,
+				txn,
+				types.BuildTS(1, 0),
+				types.BuildTS(9, 0),
+			)
+			require.NoError(t, containers.ForeachVector(keys, op, nil))
+			require.True(t, rowIDs.IsNull(0))
+			require.False(t, rowIDs.IsNull(1))
+		})
+	}
+}
+
+func TestSkipLegacyTNRowRequiresValidNullCommitTS(t *testing.T) {
+	incrementalTxn := txnbase.MockTxnReaderWithStartTS(types.BuildTS(10, 0))
+	incrementalTxn.SetDedupType(txnif.DedupPolicy_CheckIncremental)
+	strictTxn := txnbase.MockTxnReaderWithStartTS(types.BuildTS(10, 0))
+
+	nullCommitTS := containers.NewConstNullVector(
+		types.T_TS.ToType(), 1, common.DefaultAllocator,
+	)
+	defer nullCommitTS.Close()
+	emptyCommitTS := containers.MakeVector(
+		types.T_TS.ToType(), common.DefaultAllocator,
+	)
+	defer emptyCommitTS.Close()
+
+	require.True(t, skipLegacyTNRow(incrementalTxn, nullCommitTS, 0))
+	require.False(t, skipLegacyTNRow(strictTxn, nullCommitTS, 0))
+	require.False(t, skipLegacyTNRow(incrementalTxn, nil, 0))
+	require.False(t, skipLegacyTNRow(incrementalTxn, emptyCommitTS, 0))
 }
 
 func BenchmarkFunctions(b *testing.B) {
