@@ -37,7 +37,11 @@ import (
 	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"go.uber.org/zap/zaptest/observer"
 
+	molog "github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/config"
@@ -48,6 +52,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	planPb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -61,6 +66,59 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+func newObservedProtocolSession() (*Session, *observer.ObservedLogs) {
+	core, logs := observer.New(zapcore.DebugLevel)
+	ses := &Session{
+		logger:   molog.GetServiceLogger(zap.New(core), metadata.ServiceType_CN, "test"),
+		logLevel: zapcore.DebugLevel,
+	}
+	ses.loggerOnce.Do(func() {})
+	return ses, logs
+}
+
+func TestMysqlProtocolReceiveExtraInfoLogLevel(t *testing.T) {
+	t.Run("timeout is debug", func(t *testing.T) {
+		clientConn, serverConn := net.Pipe()
+		defer clientConn.Close()
+		defer serverConn.Close()
+
+		ses, logs := newObservedProtocolSession()
+		proto := &MysqlProtocolImpl{
+			ctx: context.Background(),
+			ses: ses,
+		}
+		proto.receiveExtraInfo(&Conn{conn: serverConn})
+
+		entries := logs.FilterMessage("cannot get salt, maybe not use proxy").All()
+		require.Len(t, entries, 1)
+		require.Equal(t, zap.DebugLevel, entries[0].Level)
+	})
+
+	t.Run("malformed extra info is error", func(t *testing.T) {
+		clientConn, serverConn := net.Pipe()
+		defer clientConn.Close()
+		defer serverConn.Close()
+
+		writeErr := make(chan error, 1)
+		go func() {
+			_, err := clientConn.Write([]byte{1, 0, 0xff})
+			writeErr <- err
+		}()
+
+		ses, logs := newObservedProtocolSession()
+		proto := &MysqlProtocolImpl{
+			ctx: context.Background(),
+			ses: ses,
+		}
+		proto.receiveExtraInfo(&Conn{conn: serverConn})
+		require.NoError(t, <-writeErr)
+
+		entries := logs.FilterMessage("failed to get extra info").All()
+		require.Len(t, entries, 1)
+		require.Equal(t, zap.ErrorLevel, entries[0].Level)
+	})
+}
 
 func registerConn(clientConn net.Conn) {
 	mysqlDriver.RegisterDialContext("custom", func(ctx context.Context, addr string) (net.Conn, error) {
