@@ -221,10 +221,12 @@ function run_tests(){
     else
         logger "INF" "Run UT with race check"
         local plan_package
+        local fixed_port_test_scope
         local heavy_test_scope
         local light_test_scope
         local package
         local light_status=0
+        local fixed_port_status=0
         local heavy_status=0
         local plan_status=0
 
@@ -237,6 +239,17 @@ function run_tests(){
 
         if ! plan_package=$(go list ${GO_MODULE_MODE} ./pkg/sql/plan); then
             logger "ERR" "Failed to resolve ./pkg/sql/plan"
+            UT_TEST_STATUS=1
+            return 0
+        fi
+
+        # NewTestService binds fixed ports. Its callers live in separate test
+        # binaries, so a parallel package run can make them collide.
+        if ! fixed_port_test_scope=$(go list ${GO_MODULE_MODE} \
+            ./pkg/logservice \
+            ./pkg/vm/engine/tae/logstore \
+            ./pkg/vm/engine/tae/logstore/driver/logservicedriver); then
+            logger "ERR" "Failed to resolve fixed-port race-test packages"
             UT_TEST_STATUS=1
             return 0
         fi
@@ -254,7 +267,7 @@ function run_tests(){
         fi
 
         light_test_scope="${test_scope}"
-        for package in "${plan_package}" ${heavy_test_scope}; do
+        for package in "${plan_package}" ${fixed_port_test_scope} ${heavy_test_scope}; do
             light_test_scope=$(printf '%s\n' "${light_test_scope}" | grep -Fvx "${package}")
         done
 
@@ -266,6 +279,10 @@ function run_tests(){
             : > "${UT_REPORT}"
         fi
 
+        logger "INF" "Run fixed-port race-test packages serially"
+        LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} -short -v -json -tags "${TAGS}" -p 1 -timeout "${UT_TIMEOUT}m" -race $fixed_port_test_scope >> $UT_REPORT
+        fixed_port_status=$?
+
         logger "INF" "Run heavy race-test packages with parallelism ${HEAVY_RACE_PARALLEL}"
         LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} -short -v -json -tags "${TAGS}" -p ${HEAVY_RACE_PARALLEL} -timeout "${UT_TIMEOUT}m" -race $heavy_test_scope >> $UT_REPORT
         heavy_status=$?
@@ -273,7 +290,7 @@ function run_tests(){
         run_plan_race_shards "${plan_package}"
         plan_status=$?
 
-        if (( light_status != 0 || heavy_status != 0 || plan_status != 0 )); then
+        if (( light_status != 0 || fixed_port_status != 0 || heavy_status != 0 || plan_status != 0 )); then
             UT_TEST_STATUS=1
         fi
     fi
