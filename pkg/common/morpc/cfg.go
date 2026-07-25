@@ -21,6 +21,7 @@ import (
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"go.uber.org/zap"
 )
@@ -156,6 +157,38 @@ func (c Config) NewClient(
 		bf,
 		c.getClientOptions(getLogger(sid).RawLogger().Named(name))...,
 	)
+}
+
+// NewControlClient creates a physically independent, ping-only client. Each
+// remote uses at most one small-queue backend, which gives ping/pong its own
+// TCP, writer, Flush, read loop, breaker, and reconnect generation.
+func (c Config) NewControlClient(
+	sid string,
+	name string,
+	responseFactory func() Message,
+) (ControlClient, error) {
+	c.MaxConnections = 1
+	c.SendQueueSize = 1
+	c.BusyQueueSize = 1
+	c.ClientOptions = append(
+		append([]ClientOption(nil), c.ClientOptions...),
+		WithClientMaxBackendPerHost(1),
+	)
+	c.BackendOptions = append(
+		append([]BackendOption(nil), c.BackendOptions...),
+		WithBackendBufferSize(1),
+		WithBackendBusyBufferSize(1),
+	)
+	rpcClient, err := c.NewClient(sid, name, responseFactory)
+	if err != nil {
+		return nil, err
+	}
+	control, ok := rpcClient.(ControlClient)
+	if !ok {
+		_ = rpcClient.Close()
+		return nil, moerr.NewInternalErrorNoCtx("morpc client does not support control transport")
+	}
+	return control, nil
 }
 
 // NewServer new rpc server

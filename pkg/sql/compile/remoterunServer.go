@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"sync"
 	"time"
 
@@ -26,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -45,6 +47,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/matrixorigin/matrixone/pkg/util/debug/goroutine"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
@@ -248,15 +251,38 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 		if errBuildCompile != nil {
 			return errBuildCompile
 		}
+		var runErr error
 		defer func() {
+			// Capture operator and descendant facts before cleanup. The MPool
+			// snapshot intentionally follows Compile.clear so temporary execution
+			// allocations are released before LiveBytesAtSeal is measured. The
+			// descendant snapshot is already reduced under AnalyzeModule's mutex;
+			// sender quiescence remains the lifecycle contract for this boundary.
+			localDelta := collectScopeResourceDelta(runCompile.scopes, receiver.cnInformation.cnAddr)
+			descendant := runCompile.anal.remoteResourceSummary()
+			expectedDirect := countExpectedRemoteScopes(runCompile.scopes, receiver.cnInformation.cnAddr)
+			memoryPool := runCompile.proc.Mp()
 			runCompile.clear()
+			localMemory, localMemoryQuality := memoryPool.ResourceSnapshot()
+			aggregate := composeRemoteResourceAggregate(
+				localDelta,
+				localMemory,
+				localMemoryQuality,
+				descendant,
+				expectedDirect,
+			)
+			receiver.resourceDelta = aggregate.Delta
+			receiver.resourceMemory = aggregate.Memory
+			receiver.resourceMissingFragments = aggregate.MissingFragmentCount
+			receiver.resourceMissingMemoryDomains = aggregate.MissingMemoryDomainCount
+
 			runCompile.Release()
 		}()
 
 		// decode and running the pipeline.
-		s, err := decodeScope(receiver.scopeData, runCompile.proc, true, runCompile.e)
-		if err != nil {
-			return err
+		s, runErr := decodeScope(receiver.scopeData, runCompile.proc, true, runCompile.e)
+		if runErr != nil {
+			return runErr
 		}
 		if !receiver.needNotReply {
 			s = appendWriteBackOperator(runCompile, s)
@@ -276,28 +302,29 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 
 		runCompile.scopes = []*Scope{s}
 		runCompile.InitPipelineContextToExecuteQuery()
+		normalizeRemoteDispatchReceiverAddresses(s, runCompile.addr)
 
-		registrations, err := registerRemoteDispatchReceivers(s)
-		if err != nil {
-			return err
+		registrations, runErr := registerRemoteDispatchReceivers(s)
+		if runErr != nil {
+			return runErr
 		}
 		defer registrations.cleanup()
 		receiver.colexecServer.RecordBuiltPipeline(receiver.clientSession, receiver.messageId, runCompile.proc)
 
 		// running pipeline.
-		if err = TryMarkQueryRunning(runCompile, runCompile.proc.GetTxnOperator()); err != nil {
-			return err
+		if runErr = TryMarkQueryRunning(runCompile, runCompile.proc.GetTxnOperator()); runErr != nil {
+			return runErr
 		}
 		defer func() {
 			MarkQueryDone(runCompile, runCompile.proc.GetTxnOperator())
 		}()
 
-		err = s.MergeRun(runCompile)
-		if err == nil {
+		runErr = s.MergeRun(runCompile)
+		if runErr == nil {
 			runCompile.GenPhyPlan(runCompile)
 			receiver.phyPlan = runCompile.anal.GetPhyPlan()
 		}
-		return err
+		return runErr
 
 	case pipeline.Method_StopSending:
 		receiver.colexecServer.CancelPipelineSending(receiver.clientSession, receiver.messageId)
@@ -499,7 +526,7 @@ type processHelper struct {
 	sessionInfo process.SessionInfo
 	//analysisNodeList []int32
 	StmtId        uuid.UUID
-	prepareParams *vector.Vector
+	prepareParams pipeline.PrepareParamInfo
 	affectedRows  int64
 }
 
@@ -529,7 +556,11 @@ type messageReceiverOnServer struct {
 	colexecServer *colexec.Server
 
 	// result.
-	phyPlan *models.PhyPlan
+	phyPlan                      *models.PhyPlan
+	resourceDelta                resource.Delta
+	resourceMemory               resource.MemoryTotals
+	resourceMissingFragments     uint64
+	resourceMissingMemoryDomains uint64
 }
 
 func newMessageReceiverOnServer(
@@ -619,8 +650,15 @@ func (receiver *messageReceiverOnServer) acquireMessage() (*pipeline.Message, er
 
 // newCompile make and return a new compile to run a pipeline.
 func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
-	// compile is almost surely wanting a small or middle pool.  Later.
-	mp, err := mpool.NewMPool("compile", 0, mpool.NoFixed)
+	// A remote compile used to have an unlimited local pool. HashBuild could
+	// therefore grow until the CN was killed even though the process limitation
+	// was already present on the wire. Keep a finite physical backstop while the
+	// finer-grained HashBuild admission layer decides whether to spill or fail.
+	poolCap, err := resolveRemoteCompileMPoolCap(receiver.procBuildHelper.lim)
+	if err != nil {
+		return nil, err
+	}
+	mp, err := mpool.NewMPool("compile", poolCap, mpool.NoFixed)
 	if err != nil {
 		return nil, err
 	}
@@ -645,7 +683,26 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 	proc.Base.Lim = pHelper.lim
 	proc.Base.SessionInfo = pHelper.sessionInfo
 	proc.Base.SessionInfo.StorageEngine = cnInfo.storeEngine
-	proc.SetPrepareParams(pHelper.prepareParams)
+	if pHelper.prepareParams.Length > 0 {
+		prepareParams, err := vector.NewVecWithDataCopy(
+			types.T_text.ToType(),
+			int(pHelper.prepareParams.Length),
+			pHelper.prepareParams.Data,
+			pHelper.prepareParams.Area,
+			proc.Mp(),
+		)
+		if err != nil {
+			proc.Free()
+			mpool.DeleteMPool(mp)
+			return nil, err
+		}
+		for i := range pHelper.prepareParams.Nulls {
+			if pHelper.prepareParams.Nulls[i] {
+				prepareParams.GetNulls().Add(uint64(i))
+			}
+		}
+		proc.SetOwnedPrepareParamsWithIsBin(prepareParams, append([]bool(nil), pHelper.prepareParams.IsBin...))
+	}
 	// Carry ROW_COUNT() state so row_count() pushed down to this remote CN reads
 	// the previous statement's affected rows instead of the default 0.
 	proc.SetAffectedRows(pHelper.affectedRows)
@@ -672,6 +729,51 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 	return c, nil
 }
 
+func resolveRemoteCompileMPoolCap(lim process.Limitation) (int64, error) {
+	globalCap := uint64(0)
+	if cap := mpool.GlobalCap(); cap > 0 && cap < mpool.PB {
+		globalCap = uint64(cap)
+	}
+	fileCacheHint := uint64(0)
+	if hint := fileservice.GlobalMemoryCacheSizeHint.Load(); hint > 0 {
+		fileCacheHint = uint64(hint)
+	}
+	return resolveRemoteCompileMPoolCapFrom(lim, system.CgroupMemoryLimit(), system.MemoryTotal(), globalCap, fileCacheHint)
+}
+
+func resolveRemoteCompileMPoolCapFrom(lim process.Limitation, cgroupLimit, memoryTotal, globalCap, fileCacheHint uint64) (int64, error) {
+	effective := uint64(0)
+	for _, candidate := range []uint64{cgroupLimit, memoryTotal, globalCap} {
+		if candidate == 0 || candidate == math.MaxUint64 {
+			continue
+		}
+		if effective == 0 || candidate < effective {
+			effective = candidate
+		}
+	}
+	if effective == 0 {
+		return 0, process.ErrHashBuildCeilingMissing
+	}
+	reserve := effective / 10
+	if reserve < 256*mpool.MB {
+		reserve = 256 * mpool.MB
+	}
+	if fileCacheHint > reserve {
+		reserve = fileCacheHint
+	}
+	if reserve >= effective {
+		return 0, moerr.NewInternalErrorNoCtx("remote compile memory ceiling is too small")
+	}
+	cap := effective - reserve
+	if lim.Size > 0 && uint64(lim.Size) < cap {
+		cap = uint64(lim.Size)
+	}
+	if cap > uint64(math.MaxInt64) {
+		return 0, moerr.NewInternalErrorNoCtx("remote compile memory cap exceeds int64")
+	}
+	return int64(cap), nil
+}
+
 func (receiver *messageReceiverOnServer) sendError(
 	errInfo error) error {
 	message, err := receiver.acquireMessage()
@@ -684,6 +786,9 @@ func (receiver *messageReceiverOnServer) sendError(
 	message.AcceptedTeardownMode = receiver.acceptedTeardownMode
 	if errInfo != nil {
 		message.SetMoError(receiver.messageCtx, errInfo)
+	}
+	if err = receiver.setTerminalAnalysis(message); err != nil {
+		return err
 	}
 	return receiver.clientSession.Write(receiver.messageCtx, message)
 }
@@ -744,13 +849,30 @@ func (receiver *messageReceiverOnServer) sendEndMessage() error {
 	message.SetMessageType(receiver.messageTyp)
 	message.AcceptedTeardownMode = receiver.acceptedTeardownMode
 
-	jsonData, err := json.MarshalIndent(receiver.phyPlan, "", "  ")
+	if err = receiver.setTerminalAnalysis(message); err != nil {
+		return err
+	}
+
+	return receiver.clientSession.Write(receiver.messageCtx, message)
+}
+
+func (receiver *messageReceiverOnServer) setTerminalAnalysis(message *pipeline.Message) error {
+	envelope := remoteTerminalEnvelope{
+		TerminalResourceVersion:  remoteTerminalResourceVersion,
+		Delta:                    receiver.resourceDelta,
+		Memory:                   receiver.resourceMemory,
+		MissingFragmentCount:     receiver.resourceMissingFragments,
+		MissingMemoryDomainCount: receiver.resourceMissingMemoryDomains,
+	}
+	if receiver.phyPlan != nil {
+		envelope.PhyPlan = *receiver.phyPlan
+	}
+	data, err := json.Marshal(envelope)
 	if err != nil {
 		return err
 	}
-	message.SetAnalysis(jsonData)
-
-	return receiver.clientSession.Write(receiver.messageCtx, message)
+	message.SetAnalysis(data)
+	return nil
 }
 
 func generateProcessHelper(ctx context.Context, data []byte, cli client.TxnClient) (processHelper, error) {
@@ -768,19 +890,6 @@ func generateProcessHelper(ctx context.Context, data []byte, cli client.TxnClien
 		txnClient:    cli,
 		affectedRows: procInfo.AffectedRows,
 	}
-	if procInfo.PrepareParams.Length > 0 {
-		result.prepareParams = vector.NewVecWithData(
-			types.T_text.ToType(),
-			int(procInfo.PrepareParams.Length),
-			procInfo.PrepareParams.Data,
-			procInfo.PrepareParams.Area,
-		)
-		for i := range procInfo.PrepareParams.Nulls {
-			if procInfo.PrepareParams.Nulls[i] {
-				result.prepareParams.GetNulls().Add(uint64(i))
-			}
-		}
-	}
 	result.txnOperator, err = cli.NewWithSnapshot(ctx, procInfo.Snapshot)
 	if err != nil {
 		return processHelper{}, err
@@ -789,6 +898,7 @@ func generateProcessHelper(ctx context.Context, data []byte, cli client.TxnClien
 	if err != nil {
 		return processHelper{}, err
 	}
+	result.prepareParams = procInfo.PrepareParams
 	if sessLogger := procInfo.SessionLogger; len(sessLogger.SessId) > 0 {
 		copy(result.sessionInfo.SessionId[:], sessLogger.SessId)
 		copy(result.StmtId[:], sessLogger.StmtId)

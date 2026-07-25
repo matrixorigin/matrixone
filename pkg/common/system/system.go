@@ -16,9 +16,13 @@ package system
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"os"
+	"path/filepath"
 	"runtime"
+	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -73,6 +77,112 @@ func CPUAvailable() float64 {
 // MemoryTotal returns the total size of memory of this node.
 func MemoryTotal() uint64 {
 	return memoryTotal.Load()
+}
+
+// CgroupMemoryLimit returns the memory limit for the current process cgroup,
+// including when the process is not PID 1 (for example a systemd scope or a
+// nested container cgroup). Zero means unavailable.
+func CgroupMemoryLimit() uint64 {
+	if limit := hierarchicalCgroupMemoryLimit(pid); limit > 0 {
+		return limit
+	}
+	limit, err := cgroup.GetMemLimit(pid)
+	if err != nil || limit <= 0 {
+		return 0
+	}
+	return uint64(limit)
+}
+
+func hierarchicalCgroupMemoryLimit(pid int) uint64 {
+	cgroupData, err := os.ReadFile(fmt.Sprintf("/proc/%d/cgroup", pid))
+	if err != nil {
+		return 0
+	}
+	mountData, err := os.ReadFile(fmt.Sprintf("/proc/%d/mountinfo", pid))
+	if err != nil {
+		return 0
+	}
+
+	v2Path := ""
+	v1MemoryPath := ""
+	for _, line := range strings.Split(string(cgroupData), "\n") {
+		parts := strings.SplitN(line, ":", 3)
+		if len(parts) != 3 {
+			continue
+		}
+		if parts[0] == "0" && parts[1] == "" {
+			v2Path = parts[2]
+		}
+		for _, controller := range strings.Split(parts[1], ",") {
+			if controller == "memory" {
+				v1MemoryPath = parts[2]
+			}
+		}
+	}
+
+	for _, line := range strings.Split(string(mountData), "\n") {
+		leftRight := strings.SplitN(line, " - ", 2)
+		if len(leftRight) != 2 {
+			continue
+		}
+		left := strings.Fields(leftRight[0])
+		right := strings.Fields(leftRight[1])
+		if len(left) < 5 || len(right) < 3 {
+			continue
+		}
+		mountRoot, mountPoint, fsType := left[3], left[4], right[0]
+		switch fsType {
+		case "cgroup2":
+			if v2Path != "" {
+				if dir, ok := cgroupDirectory(mountPoint, mountRoot, v2Path); ok {
+					return minHierarchicalLimit(dir, mountPoint, "memory.max")
+				}
+			}
+		case "cgroup":
+			if v1MemoryPath != "" && strings.Contains(","+right[2]+",", ",memory,") {
+				if dir, ok := cgroupDirectory(mountPoint, mountRoot, v1MemoryPath); ok {
+					return minHierarchicalLimit(dir, mountPoint, "memory.limit_in_bytes")
+				}
+			}
+		}
+	}
+	return 0
+}
+
+func cgroupDirectory(mountPoint, mountRoot, processPath string) (string, bool) {
+	mountRoot = filepath.Clean(mountRoot)
+	processPath = filepath.Clean(processPath)
+	rel, err := filepath.Rel(mountRoot, processPath)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		return "", false
+	}
+	return filepath.Join(mountPoint, rel), true
+}
+
+func minHierarchicalLimit(dir, mountPoint, filename string) uint64 {
+	dir = filepath.Clean(dir)
+	mountPoint = filepath.Clean(mountPoint)
+	var minimum uint64
+	for {
+		data, err := os.ReadFile(filepath.Join(dir, filename))
+		if err == nil {
+			value := strings.TrimSpace(string(data))
+			if value != "" && value != "max" {
+				if limit, parseErr := strconv.ParseUint(value, 10, 64); parseErr == nil && limit > 0 && (minimum == 0 || limit < minimum) {
+					minimum = limit
+				}
+			}
+		}
+		if dir == mountPoint {
+			break
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir || (parent != mountPoint && !strings.HasPrefix(parent, mountPoint+string(os.PathSeparator))) {
+			break
+		}
+		dir = parent
+	}
+	return minimum
 }
 
 // MemoryAvailable returns the available size of memory of this node.

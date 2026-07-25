@@ -239,6 +239,27 @@ func (catalog *Catalog) onReplayUpdateObject(
 	}
 	if cmd.mvccNode.DeletedAt.Equal(&txnif.UncommitTS) {
 		cobj, err := rel.GetObjectByID(cmd.ID.ObjectID(), cmd.node.IsTombstone)
+		if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) && cmd.mvccNode.BaseNode.ObjectStats.GetAppendable() {
+			rel.Lock()
+			cobj, err = rel.GetObjectByID(cmd.ID.ObjectID(), cmd.node.IsTombstone)
+			if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+				var factory ObjectDataFactory
+				if catalog.DataFactory != nil {
+					factory = catalog.DataFactory.MakeObjectFactory()
+				}
+				cobj = NewCommittedObjectEntry(
+					rel,
+					cmd.mvccNode.CreatedAt,
+					cmd.mvccNode.BaseNode.ObjectStats,
+					factory,
+					cmd.node.IsTombstone,
+				)
+				cobj.ObjectNode = *cmd.node
+				rel.AddEntryLocked(cobj)
+				err = nil
+			}
+			rel.Unlock()
+		}
 		if err != nil {
 			panic(fmt.Sprintf("obj %v not existed, table:\n%v", cmd.ID.String(), rel.StringWithLevel(3)))
 		}

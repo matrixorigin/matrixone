@@ -60,13 +60,22 @@ func handleDelsOnLCA(
 	var (
 		sqlRet executor.Result
 
-		lcaTblDef  = tblStuff.lcaRel.GetTableDef(ctx)
-		baseTblDef = tblStuff.baseRel.GetTableDef(ctx)
+		lcaTblDef    = tblStuff.lcaRel.GetTableDef(ctx)
+		baseTblDef   = tblStuff.baseRel.GetTableDef(ctx)
+		targetTblDef = tblStuff.tarRel.GetTableDef(ctx)
 
 		colTypes           = tblStuff.def.colTypes
 		expandedPKColIdxes = tblStuff.def.pkColIdxes
 		snapshotTS         = types.TimestampToTS(snapshot)
 	)
+	lcaColDefs, err := dataBranchColumnsByIdentity(targetTblDef, lcaTblDef, tblStuff.def.colNames)
+	if err != nil {
+		return nil, err
+	}
+	lcaColNames := make([]string, len(lcaColDefs))
+	for i, colDef := range lcaColDefs {
+		lcaColNames[i] = colDef.Name
+	}
 
 	forceReaderProbe := tblStuff.lcaReaderProbeMode != nil && tblStuff.lcaReaderProbeMode.Load()
 	if forceReaderProbe {
@@ -146,7 +155,7 @@ func handleDelsOnLCA(
 
 		selectCols := make([]string, len(tblStuff.def.colNames)+1)
 		selectCols[0] = "pks.__idx_"
-		for i, colName := range tblStuff.def.colNames {
+		for i, colName := range lcaColNames {
 			selectCols[i+1] = fmt.Sprintf("lca.%s", quoteIdentifierForSQL(colName))
 		}
 
@@ -277,7 +286,10 @@ func handleDelsOnLCA(
 
 			lcaHitRows++
 			for j := 1; j < len(cols); j++ {
-				if err = dBat.Vecs[j-1].UnionOne(cols[j], int64(i), ses.proc.Mp()); err != nil {
+				if err = appendLCAProbeValue(
+					dBat.Vecs[j-1], cols[j], i,
+					lcaColDefs[j-1].Typ.GetEnumvalues(), ses.proc.Mp(),
+				); err != nil {
 					return false
 				}
 			}
@@ -320,6 +332,43 @@ func handleDelsOnLCA(
 	)
 
 	return
+}
+
+// appendLCAProbeValue appends a column returned by the LCA SQL probe to the
+// corresponding physical table vector. A RIGHT JOIN exposes ENUM columns as
+// VARCHAR labels, so they need to be restored to their physical enum codes
+// before the batch enters the diff pipeline. Other columns must retain their
+// physical type; copying mismatched vector storage would silently corrupt data.
+func appendLCAProbeValue(
+	dst, src *vector.Vector,
+	row int,
+	enumValues string,
+	mp *mpool.MPool,
+) error {
+	if dst.GetType().Oid == src.GetType().Oid {
+		return dst.UnionOne(src, int64(row), mp)
+	}
+
+	if dst.GetType().Oid != types.T_enum ||
+		(src.GetType().Oid != types.T_varchar && src.GetType().Oid != types.T_char && src.GetType().Oid != types.T_text) {
+		return moerr.NewInternalErrorNoCtxf(
+			"unexpected LCA probe type conversion: source=%s target=%s",
+			src.GetType().String(), dst.GetType().String(),
+		)
+	}
+
+	if src.IsConstNull() || src.GetNulls().Contains(uint64(row)) {
+		return vector.AppendNull(dst, mp)
+	}
+	if src.IsConst() {
+		row = 0
+	}
+
+	val, err := types.ParseEnum(enumValues, src.UnsafeGetStringAt(row))
+	if err != nil {
+		return err
+	}
+	return vector.AppendFixed(dst, val, false, mp)
 }
 
 func lcaProbeJoinCastType(typ types.Type) (string, bool) {
@@ -394,6 +443,15 @@ func runLCAProbeWithReaderFallback(
 		inputKeys[string(pkVec.GetRawBytesAt(i))] = struct{}{}
 	}
 	lcaTblDef := tblStuff.lcaRel.GetTableDef(ctx)
+	targetTblDef := tblStuff.tarRel.GetTableDef(ctx)
+	lcaColDefs, err := dataBranchColumnsByIdentity(targetTblDef, lcaTblDef, tblStuff.def.colNames)
+	if err != nil {
+		return executor.Result{}, err
+	}
+	lcaColNames := make([]string, len(lcaColDefs))
+	for i, colDef := range lcaColDefs {
+		lcaColNames[i] = colDef.Name
+	}
 	// Build a sorted IN vector for reader-side PK filtering.
 	// The sorted-search path uses binary search over the IN value array and
 	// assumes the array is ordered; an unsorted IN vector can drop valid hits.
@@ -462,7 +520,7 @@ func runLCAProbeWithReaderFallback(
 		ses,
 		tblStuff.lcaRel.GetTableID(ctx),
 		snapshotTS,
-		tblStuff.def.colNames,
+		lcaColNames,
 		tblStuff.def.colTypes,
 		pkFilterExpr,
 		0,

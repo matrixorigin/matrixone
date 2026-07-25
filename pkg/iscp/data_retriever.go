@@ -81,6 +81,20 @@ func (d *ISCPData) Done() {
 	}
 }
 
+func (d *ISCPData) Close() {
+	if d == nil {
+		return
+	}
+	if d.insertBatch != nil {
+		d.insertBatch.Close()
+		d.insertBatch = nil
+	}
+	if d.deleteBatch != nil {
+		d.deleteBatch.Close()
+		d.deleteBatch = nil
+	}
+}
+
 const (
 	ISCPDataType_Snapshot int8 = iota
 	ISCPDataType_Tail
@@ -145,6 +159,9 @@ func (r *DataRetrieverImpl) UpdateWatermark(ctx context.Context,
 	cnUUID string,
 	txn client.TxnOperator) error {
 
+	if r.IsCanceled() {
+		return r.terminalError()
+	}
 	ctxWithSysAccount := context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
 	ctxWithSysAccount, cancel := context.WithTimeout(ctxWithSysAccount, time.Minute*5)
 	defer cancel()
@@ -187,17 +204,24 @@ func (r *DataRetrieverImpl) GetTableID() uint64 {
 	return r.tableID
 }
 
-func (r *DataRetrieverImpl) SetNextBatch(data *ISCPData) {
+func (r *DataRetrieverImpl) SetNextBatch(data *ISCPData) bool {
 	if r.hasError() {
-		data.Done()
-		return
+		return false
 	}
 	select {
 	case r.insertDataCh <- data:
-		return
+		if r.IsCanceled() {
+			select {
+			case queued := <-r.insertDataCh:
+				if queued == data {
+					return false
+				}
+			default:
+			}
+		}
+		return true
 	case <-r.ctx.Done():
-		data.Done()
-		return
+		return false
 	}
 }
 
@@ -218,6 +242,10 @@ func (r *DataRetrieverImpl) terminalError() error {
 
 // after error occurs, the data retriever won't consume any more data
 func (r *DataRetrieverImpl) SetError(err error) {
+	r.Cancel(err)
+}
+
+func (r *DataRetrieverImpl) Cancel(err error) {
 	if r.hasError() {
 		return
 	}
@@ -228,6 +256,26 @@ func (r *DataRetrieverImpl) SetError(err error) {
 	}
 	r.cancel()
 	r.err = err
+	for {
+		select {
+		case data := <-r.insertDataCh:
+			data.Done()
+		default:
+			return
+		}
+	}
+}
+
+func (r *DataRetrieverImpl) IsCanceled() bool {
+	if r.hasError() {
+		return true
+	}
+	select {
+	case <-r.ctx.Done():
+		return true
+	default:
+		return false
+	}
 }
 
 func (r *DataRetrieverImpl) Close() {

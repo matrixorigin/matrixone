@@ -23,6 +23,7 @@ import (
 	"io"
 	"iter"
 	"math"
+	"net/url"
 	gotrace "runtime/trace"
 	"slices"
 	"strings"
@@ -50,12 +51,35 @@ import (
 )
 
 type AwsSDKv2 struct {
-	name               string
-	bucket             string
-	client             *s3.Client
-	perfCounterSets    []*perfcounter.CounterSet
-	listMaxKeys        int32
-	disableMultiDelete atomic.Bool
+	name                 string
+	endpoint             string
+	bucket               string
+	client               *s3.Client
+	copyCredentialDomain objectStorageCopyCredentialDomain
+	perfCounterSets      []*perfcounter.CounterSet
+	listMaxKeys          int32
+	disableMultiDelete   atomic.Bool
+}
+
+var _ objectStorageCopier = new(AwsSDKv2)
+
+func (a *AwsSDKv2) CopyObject(
+	ctx context.Context,
+	src ObjectStorage,
+	srcKey string,
+	dstKey string,
+) (bool, error) {
+	s, ok := src.(*AwsSDKv2)
+	if !ok || !strings.EqualFold(a.endpoint, s.endpoint) ||
+		!a.copyCredentialDomain.matches(s.copyCredentialDomain) {
+		return false, nil
+	}
+	_, err := a.client.CopyObject(ctx, &s3.CopyObjectInput{
+		Bucket:     aws.String(a.bucket),
+		CopySource: aws.String(url.PathEscape(s.bucket + "/" + srcKey)),
+		Key:        aws.String(dstKey),
+	})
+	return true, err
 }
 
 func NewAwsSDKv2(
@@ -99,11 +123,16 @@ func NewAwsSDKv2(
 	}
 
 	// validate
+	var copyCredentialDomain objectStorageCopyCredentialDomain
 	if credentialProvider != nil {
-		_, err := credentialProvider.Retrieve(ctx)
+		credential, retrieveErr := credentialProvider.Retrieve(ctx)
+		err = retrieveErr
 		if err != nil {
 			return nil, moerr.AttachCause(ctx, err)
 		}
+		copyCredentialDomain = newObjectStorageCopyCredentialDomain(
+			credential.AccessKeyID, credential.SecretAccessKey, credential.SessionToken,
+		)
 	}
 
 	// load configs
@@ -188,10 +217,12 @@ func NewAwsSDKv2(
 	}
 
 	return &AwsSDKv2{
-		name:            args.Name,
-		bucket:          args.Bucket,
-		client:          client,
-		perfCounterSets: perfCounterSets,
+		name:                 args.Name,
+		endpoint:             args.Endpoint,
+		bucket:               args.Bucket,
+		client:               client,
+		copyCredentialDomain: copyCredentialDomain,
+		perfCounterSets:      perfCounterSets,
 	}, nil
 
 }
@@ -370,6 +401,7 @@ func (a *AwsSDKv2) Write(
 				break
 			}
 			uploadOutput, err := DoWithRetry("upload part", func() (*s3.UploadPartOutput, error) {
+				recordS3PutRequest(ctx, a.perfCounterSets...)
 				return a.client.UploadPart(ctx, &s3.UploadPartInput{
 					Bucket:     ptrTo(a.bucket),
 					Key:        ptrTo(key),
@@ -381,6 +413,7 @@ func (a *AwsSDKv2) Write(
 			if err != nil {
 				return err
 			}
+			recordS3AcceptedBytes(ctx, int64(len(content)), a.perfCounterSets...)
 			completed.Parts = append(completed.Parts, types.CompletedPart{
 				ETag:       uploadOutput.ETag,
 				PartNumber: ptrTo(num),
@@ -495,44 +528,53 @@ func (a *AwsSDKv2) WriteMultipartParallel(
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	bufPool := sync.Pool{
-		New: func() any {
-			buf := make([]byte, options.PartSize)
-			return &buf
-		},
+	type partBuffer struct {
+		buf    []byte
+		n      int
+		tokens int64
 	}
 
-	readChunk := func() (bufPtr *[]byte, buf []byte, n int, err error) {
-		bufPtr = bufPool.Get().(*[]byte)
-		raw := *bufPtr
-		n, err = io.ReadFull(r, raw)
+	releasePartBuffer := func(part *partBuffer) {
+		if part == nil {
+			return
+		}
+		releaseParallelUploadBufferBudget(part.tokens)
+	}
+
+	readChunk := func() (*partBuffer, error) {
+		tokens, err := acquireParallelUploadBufferBudget(ctx, int64(options.PartSize))
+		if err != nil {
+			return nil, err
+		}
+		raw := make([]byte, options.PartSize)
+		n, err := io.ReadFull(r, raw)
 		switch {
 		case errors.Is(err, io.EOF):
-			bufPool.Put(bufPtr)
-			return nil, nil, 0, io.EOF
+			releaseParallelUploadBufferBudget(tokens)
+			return nil, io.EOF
 		case errors.Is(err, io.ErrUnexpectedEOF):
-			err = io.EOF
-			return bufPtr, raw, n, err
+			return &partBuffer{buf: raw, n: n, tokens: tokens}, io.EOF
 		case err != nil:
-			bufPool.Put(bufPtr)
-			return nil, nil, 0, err
+			releaseParallelUploadBufferBudget(tokens)
+			return nil, err
 		default:
-			return bufPtr, raw, n, nil
+			return &partBuffer{buf: raw, n: n, tokens: tokens}, nil
 		}
 	}
 
-	firstBufPtr, firstBuf, firstN, err := readChunk()
+	firstPart, err := readChunk()
 	if err != nil && !errors.Is(err, io.EOF) {
 		return err
 	}
-	if firstN == 0 && errors.Is(err, io.EOF) {
-		return nil
+	if firstPart == nil && errors.Is(err, io.EOF) {
+		size := int64(0)
+		return a.Write(ctx, key, bytes.NewReader(nil), &size, options.Expire)
 	}
-	if errors.Is(err, io.EOF) && int64(firstN) < minMultipartPartSize {
-		data := make([]byte, firstN)
-		copy(data, firstBuf[:firstN])
-		bufPool.Put(firstBufPtr)
-		size := int64(firstN)
+	if errors.Is(err, io.EOF) && int64(firstPart.n) < minMultipartPartSize {
+		data := make([]byte, firstPart.n)
+		copy(data, firstPart.buf[:firstPart.n])
+		size := int64(firstPart.n)
+		releasePartBuffer(firstPart)
 		return a.Write(ctx, key, bytes.NewReader(data), &size, options.Expire)
 	}
 
@@ -544,7 +586,7 @@ func (a *AwsSDKv2) WriteMultipartParallel(
 		})
 	}, maxRetryAttemps, IsRetryableError)
 	if createErr != nil {
-		bufPool.Put(firstBufPtr)
+		releasePartBuffer(firstPart)
 		return createErr
 	}
 
@@ -560,10 +602,8 @@ func (a *AwsSDKv2) WriteMultipartParallel(
 	}()
 
 	type partJob struct {
-		num    int32
-		buf    []byte
-		bufPtr *[]byte
-		n      int
+		num  int32
+		part *partBuffer
 	}
 
 	var (
@@ -585,120 +625,99 @@ func (a *AwsSDKv2) WriteMultipartParallel(
 		})
 	}
 
-	jobCh := make(chan partJob, options.Concurrency*2)
-
-	startWorker := func() {
-		wg.Add(1)
-		// Use plain goroutines instead of the global parallelUploadPool to avoid
-		// pool-starvation deadlock: when many concurrent WriteMultipartParallel calls
-		// (e.g. LOAD DATA with 15+ parallel scopes) all compete for a tiny global pool
-		// (capacity = NumCPU), every caller blocks on pool.Submit() waiting for workers
-		// that are themselves held by other callers — classic circular wait.
-		go func() {
-			defer wg.Done()
-			for job := range jobCh {
-				if ctx.Err() != nil {
-					if job.bufPtr != nil {
-						bufPool.Put(job.bufPtr)
-					}
-					continue
-				}
-				uploadOutput, uploadErr := DoWithRetry("upload part", func() (*s3.UploadPartOutput, error) {
-					return a.client.UploadPart(ctx, &s3.UploadPartInput{
-						Bucket:     ptrTo(a.bucket),
-						Key:        ptrTo(key),
-						PartNumber: &job.num,
-						UploadId:   output.UploadId,
-						Body:       bytes.NewReader(job.buf[:job.n]),
-					})
-				}, maxRetryAttemps, IsRetryableError)
-				if uploadErr != nil {
-					setErr(uploadErr)
-					if job.bufPtr != nil {
-						bufPool.Put(job.bufPtr)
-					}
-					continue
-				}
-				if job.bufPtr != nil {
-					bufPool.Put(job.bufPtr)
-				}
-				partsLock.Lock()
-				parts = append(parts, types.CompletedPart{
-					ETag:       uploadOutput.ETag,
-					PartNumber: ptrTo(job.num),
-				})
-				partsLock.Unlock()
-			}
-		}()
-	}
-
-	for i := 0; i < options.Concurrency; i++ {
-		startWorker()
-	}
-
-	sendJob := func(bufPtr *[]byte, buf []byte, n int) bool {
-		partNum++
-		if partNum > maxMultipartParts {
-			setErr(moerr.NewInternalErrorNoCtxf("too many parts for multipart upload: %d", partNum))
-			if bufPtr != nil {
-				bufPool.Put(bufPtr)
-			}
-			return false
-		}
-		job := partJob{
-			num:    partNum,
-			buf:    buf,
-			bufPtr: bufPtr,
-			n:      n,
-		}
+	uploadSlots := make(chan struct{}, options.Concurrency)
+	startPartUpload := func(job partJob) bool {
 		select {
-		case jobCh <- job:
-			return true
+		case uploadSlots <- struct{}{}:
 		case <-ctx.Done():
-			if bufPtr != nil {
-				bufPool.Put(bufPtr)
-			}
+			releasePartBuffer(job.part)
 			setErr(ctx.Err())
 			return false
 		}
-	}
-
-	if !sendJob(firstBufPtr, firstBuf, firstN) {
-		close(jobCh)
-		wg.Wait()
-		if firstErr != nil {
-			return firstErr
+		select {
+		case getParallelUploadSemaphore() <- struct{}{}:
+		case <-ctx.Done():
+			<-uploadSlots
+			releasePartBuffer(job.part)
+			setErr(ctx.Err())
+			return false
 		}
-		return ctx.Err()
-	}
-
-	for {
-		nextBufPtr, nextBuf, nextN, readErr := readChunk()
-		if errors.Is(readErr, io.EOF) && nextN == 0 {
-			break
-		}
-		if readErr != nil && !errors.Is(readErr, io.EOF) {
-			setErr(readErr)
-			if nextBufPtr != nil {
-				bufPool.Put(nextBufPtr)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer func() {
+				<-getParallelUploadSemaphore()
+				<-uploadSlots
+			}()
+			if ctx.Err() != nil {
+				releasePartBuffer(job.part)
+				return
 			}
-			break
-		}
-		if nextN == 0 {
-			if nextBufPtr != nil {
-				bufPool.Put(nextBufPtr)
+			uploadOutput, uploadErr := DoWithRetry("upload part", func() (*s3.UploadPartOutput, error) {
+				recordS3PutRequest(ctx, a.perfCounterSets...)
+				return a.client.UploadPart(ctx, &s3.UploadPartInput{
+					Bucket:     ptrTo(a.bucket),
+					Key:        ptrTo(key),
+					PartNumber: &job.num,
+					UploadId:   output.UploadId,
+					Body:       bytes.NewReader(job.part.buf[:job.part.n]),
+				})
+			}, maxRetryAttemps, IsRetryableError)
+			if uploadErr != nil {
+				setErr(uploadErr)
+				releasePartBuffer(job.part)
+				return
 			}
-			break
+			recordS3AcceptedBytes(ctx, int64(job.part.n), a.perfCounterSets...)
+			releasePartBuffer(job.part)
+			partsLock.Lock()
+			parts = append(parts, types.CompletedPart{
+				ETag:       uploadOutput.ETag,
+				PartNumber: ptrTo(job.num),
+			})
+			partsLock.Unlock()
+		}()
+		return true
+	}
+
+	sendJob := func(part *partBuffer) bool {
+		partNum++
+		if partNum > maxMultipartParts {
+			setErr(moerr.NewInternalErrorNoCtxf("too many parts for multipart upload: %d", partNum))
+			releasePartBuffer(part)
+			return false
 		}
-		if !sendJob(nextBufPtr, nextBuf, nextN) {
-			break
+		job := partJob{
+			num:  partNum,
+			part: part,
 		}
-		if readErr != nil && errors.Is(readErr, io.EOF) {
-			break
+		return startPartUpload(job)
+	}
+
+	if sendJob(firstPart) {
+		for {
+			part, readErr := readChunk()
+			if errors.Is(readErr, io.EOF) && part == nil {
+				break
+			}
+			if readErr != nil && !errors.Is(readErr, io.EOF) {
+				setErr(readErr)
+				releasePartBuffer(part)
+				break
+			}
+			if part == nil || part.n == 0 {
+				releasePartBuffer(part)
+				break
+			}
+			if !sendJob(part) {
+				break
+			}
+			if errors.Is(readErr, io.EOF) {
+				break
+			}
 		}
 	}
 
-	close(jobCh)
 	wg.Wait()
 
 	if firstErr != nil {
@@ -916,7 +935,8 @@ func (a *AwsSDKv2) listObjects(ctx context.Context, params *s3.ListObjectsInput,
 func (a *AwsSDKv2) headObject(ctx context.Context, params *s3.HeadObjectInput, optFns ...func(*s3.Options)) (*s3.HeadObjectOutput, error) {
 	ctx, task := gotrace.NewTask(ctx, "AwsSDKv2.headObject")
 	defer task.End()
-	return DoWithRetry(
+	return DoWithRetryContext(
+		ctx,
 		"s3 head object",
 		func() (*s3.HeadObjectOutput, error) {
 			perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
@@ -932,11 +952,13 @@ func (a *AwsSDKv2) headObject(ctx context.Context, params *s3.HeadObjectInput, o
 func (a *AwsSDKv2) putObject(ctx context.Context, params *s3.PutObjectInput, optFns ...func(*s3.Options)) (*s3.PutObjectOutput, error) {
 	ctx, task := gotrace.NewTask(ctx, "AwsSDKv2.putObject")
 	defer task.End()
-	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
-		counter.FileService.S3.Put.Add(1)
-	}, a.perfCounterSets...)
+	recordS3PutRequest(ctx, a.perfCounterSets...)
 	// not retryable because Reader may be half consumed
-	return a.client.PutObject(ctx, params, optFns...)
+	output, err := a.client.PutObject(ctx, params, optFns...)
+	if err == nil && params.ContentLength != nil {
+		recordS3AcceptedBytes(ctx, *params.ContentLength, a.perfCounterSets...)
+	}
+	return output, err
 }
 
 func (a *AwsSDKv2) getObject(ctx context.Context, min *int64, max *int64, params *s3.GetObjectInput, optFns ...func(*s3.Options)) (io.ReadCloser, error) {

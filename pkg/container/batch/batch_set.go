@@ -42,6 +42,33 @@ func (bs *BatchSet) Length() int {
 	return len(bs.batches)
 }
 
+// ReadyCount returns the number of full batches that can be consumed. The last
+// batch remains a writable tail only while it is partial.
+func (bs *BatchSet) ReadyCount() int {
+	if len(bs.batches) == 0 {
+		return 0
+	}
+	ready := len(bs.batches) - 1
+	if bs.batches[len(bs.batches)-1].RowCount() == bs.batchMaxRow {
+		ready++
+	}
+	return ready
+}
+
+// ReadyDelta returns how many additional batches become ready after appending
+// rowCount rows. Callers must serialize this with writes to the BatchSet.
+func (bs *BatchSet) ReadyDelta(rowCount int) int {
+	if rowCount <= 0 {
+		return 0
+	}
+
+	lastRows := 0
+	if len(bs.batches) > 0 {
+		lastRows = bs.batches[len(bs.batches)-1].RowCount()
+	}
+	return (lastRows+rowCount)/bs.batchMaxRow - lastRows/bs.batchMaxRow
+}
+
 func (bs *BatchSet) Get(idx int) *Batch {
 	if idx >= len(bs.batches) {
 		return nil
@@ -197,6 +224,8 @@ func (bs *BatchSet) Union(mpool *mpool.MPool, inBatch *Batch, sels []int32, reus
 				consumed = true
 				reuseBuf = nil
 			}
+			// Take ownership before writing so an allocation error cannot orphan tmpBat.
+			bs.batches = append(bs.batches, tmpBat)
 			for i := range tmpBat.Vecs {
 				err := tmpBat.Vecs[i].UnionInt32(inBatch.Vecs[i], tmpSels, mpool)
 				if err != nil {
@@ -204,7 +233,6 @@ func (bs *BatchSet) Union(mpool *mpool.MPool, inBatch *Batch, sels []int32, reus
 				}
 			}
 			tmpBat.rowCount = tmpBat.Vecs[0].Length()
-			bs.batches = append(bs.batches, tmpBat)
 			remainingSels = remainingSels[tmpSize:]
 		}
 		return consumed, nil
@@ -240,6 +268,8 @@ func (bs *BatchSet) Union(mpool *mpool.MPool, inBatch *Batch, sels []int32, reus
 			consumed = true
 			reuseBuf = nil
 		}
+		// Take ownership before writing so an allocation error cannot orphan tmpBat.
+		bs.batches = append(bs.batches, tmpBat)
 		for i := range tmpBat.Vecs {
 			err := tmpBat.Vecs[i].UnionInt32(inBatch.Vecs[i], tmpSels, mpool)
 			if err != nil {
@@ -247,7 +277,6 @@ func (bs *BatchSet) Union(mpool *mpool.MPool, inBatch *Batch, sels []int32, reus
 			}
 		}
 		tmpBat.rowCount = tmpBat.Vecs[0].Length()
-		bs.batches = append(bs.batches, tmpBat)
 		newSels = newSels[tmpSize:]
 	}
 	return consumed, nil
@@ -261,10 +290,6 @@ func (bs *BatchSet) getOrCreateBatch(inBatch *Batch, reuseBuf *Batch, mpool *mpo
 	tmpBat := NewOffHeapWithSize(len(inBatch.Vecs))
 	for i := range tmpBat.Vecs {
 		tmpBat.Vecs[i] = vector.NewOffHeapVecWithType(*inBatch.Vecs[i].GetType())
-		if err := tmpBat.Vecs[i].PreExtend(bs.batchMaxRow, mpool); err != nil {
-			tmpBat.Clean(mpool)
-			return nil, err
-		}
 	}
 	return tmpBat, nil
 }

@@ -96,34 +96,42 @@ type Limitation struct {
 	PartitionRows int64
 	// ReaderSize, memory threshold for storage's reader
 	ReaderSize int64
+	// SpillSize, query spill-disk byte cap. Zero selects the bounded default.
+	SpillSize int64
 	// MaxMessageSize max size for read messages from dn
 	MaxMsgSize uint64
 }
 
 // SessionInfo session information
 type SessionInfo struct {
-	Account              string
-	User                 string
-	Host                 string
-	Role                 string
-	ConnectionID         uint64
-	LastInsertID         uint64
-	Database             string
-	Version              string
-	TimeZone             *time.Location
-	LockWaitTimeout      int64
-	StorageEngine        engine.Engine
-	QueryId              []string
-	ResultColTypes       []types.Type
-	SeqCurValues         map[uint64]string
-	SeqDeleteKeys        []uint64
-	SeqAddValues         map[uint64]string
-	SeqLastValue         []string
-	SqlHelper            sqlHelper
-	Buf                  *buffer.Buffer
-	SourceInMemScanBatch []*kafka.Message
-	LogLevel             zapcore.Level
-	SessionId            uuid.UUID
+	Account             string
+	User                string
+	Host                string
+	Role                string
+	ConnectionID        uint64
+	LastInsertID        uint64
+	Database            string
+	Version             string
+	TimeZone            *time.Location
+	LockWaitTimeout     int64
+	LockWaitTimeoutSet  bool // distinguishes an explicit zero from an unset value
+	MatrixOneNativeMode bool
+	// ExplicitZeroTemporalCastReturnsNull is resolved on the initiating CN and
+	// carried in the remote process snapshot because remote CNs have no session
+	// variable resolver.
+	ExplicitZeroTemporalCastReturnsNull bool
+	StorageEngine                       engine.Engine
+	QueryId                             []string
+	ResultColTypes                      []types.Type
+	SeqCurValues                        map[uint64]string
+	SeqDeleteKeys                       []uint64
+	SeqAddValues                        map[uint64]string
+	SeqLastValue                        []string
+	SqlHelper                           sqlHelper
+	Buf                                 *buffer.Buffer
+	SourceInMemScanBatch                []*kafka.Message
+	LogLevel                            zapcore.Level
+	SessionId                           uuid.UUID
 }
 
 type Session interface {
@@ -161,10 +169,11 @@ type StmtProfile struct {
 	//sqlOfStmt is the text part of one statement in the sql
 	sqlOfStmt string
 
-	//for div by zero, avoid contaminating session main stmt profiles like PREPARE,EXECUTE
-	divByZeroStmtType  string
-	divByZeroQueryType string
-	divByZeroIgnore    bool //ignore for insert
+	// statement runtime metadata avoids contaminating the session's main
+	// statement profile when PREPARE / EXECUTE runs an inner INSERT / UPDATE.
+	statementRuntimeStmtType  string
+	statementRuntimeQueryType string
+	statementRuntimeIgnore    bool
 }
 
 func NewStmtProfile(txnId, stmtId uuid.UUID) *StmtProfile {
@@ -183,6 +192,7 @@ func (sp *StmtProfile) Clear() {
 	sp.stmtType = ""
 	sp.queryType = ""
 	sp.sqlOfStmt = ""
+	sp.clearStatementRuntimeProfileLocked()
 }
 
 func (sp *StmtProfile) SetSqlOfStmt(sot string) {
@@ -243,32 +253,48 @@ func (sp *StmtProfile) GetStmtType() string {
 	return sp.stmtType
 }
 
-func (sp *StmtProfile) GetDivByZeroIgnore() bool {
+func (sp *StmtProfile) GetStatementIgnore() bool {
 	sp.mu.Lock()
 	defer sp.mu.Unlock()
-	return sp.divByZeroIgnore
+	return sp.statementRuntimeIgnore
+}
+
+func (sp *StmtProfile) SetStatementRuntimeProfile(stmtType, queryType string, ignore bool) {
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+	sp.statementRuntimeStmtType = stmtType
+	sp.statementRuntimeQueryType = queryType
+	sp.statementRuntimeIgnore = ignore
+}
+
+func (sp *StmtProfile) GetStatementRuntimeProfile() (stmtType, queryType string, ignore bool) {
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+	return sp.statementRuntimeStmtType, sp.statementRuntimeQueryType, sp.statementRuntimeIgnore
+}
+
+func (sp *StmtProfile) clearStatementRuntimeProfileLocked() {
+	sp.statementRuntimeStmtType = ""
+	sp.statementRuntimeQueryType = ""
+	sp.statementRuntimeIgnore = false
+}
+
+func (sp *StmtProfile) clearStatementRuntimeProfile() {
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+	sp.clearStatementRuntimeProfileLocked()
+}
+
+func (sp *StmtProfile) GetDivByZeroIgnore() bool {
+	return sp.GetStatementIgnore()
 }
 
 func (sp *StmtProfile) SetDivByZeroRuntimeProfile(stmtType, queryType string, ignore bool) {
-	sp.mu.Lock()
-	defer sp.mu.Unlock()
-	sp.divByZeroStmtType = stmtType
-	sp.divByZeroQueryType = queryType
-	sp.divByZeroIgnore = ignore
+	sp.SetStatementRuntimeProfile(stmtType, queryType, ignore)
 }
 
 func (sp *StmtProfile) GetDivByZeroRuntimeProfile() (stmtType, queryType string, ignore bool) {
-	sp.mu.Lock()
-	defer sp.mu.Unlock()
-	return sp.divByZeroStmtType, sp.divByZeroQueryType, sp.divByZeroIgnore
-}
-
-func (sp *StmtProfile) clearDivByZeroRuntimeProfile() {
-	sp.mu.Lock()
-	defer sp.mu.Unlock()
-	sp.divByZeroStmtType = ""
-	sp.divByZeroQueryType = ""
-	sp.divByZeroIgnore = false
+	return sp.GetStatementRuntimeProfile()
 }
 
 func (sp *StmtProfile) SetTxnId(id []byte) {
@@ -328,19 +354,24 @@ type BaseProcess struct {
 	// statement in the same session, used by the ROW_COUNT() builtin.
 	// It follows MySQL semantics: -1 after a result-set statement (e.g. SELECT),
 	// 0 after DDL, and the affected row count after DML.
-	AffectedRows        *int64
-	LoadLocalReader     *io.PipeReader
-	Aicm                *defines.AutoIncrCacheManager
-	resolveVariableFunc func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)
-	prepareParams       *vector.Vector
-	QueryClient         qclient.QueryClient
-	Hakeeper            logservice.CNHAKeeperClient
-	UdfService          udf.Service
-	WaitPolicy          lock.WaitPolicy
-	messageBoard        *message.MessageBoard
-	logger              *log.MOLogger
-	TxnOperator         client.TxnOperator
-	CloneTxnOperator    client.TxnOperator
+	AffectedRows             *int64
+	LoadLocalReader          *io.PipeReader
+	Aicm                     *defines.AutoIncrCacheManager
+	resolveVariableFunc      func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)
+	resolveVariableIsBinFunc func(varName string, isSystemVar, isGlobalVar bool) (bool, error)
+	prepareParams            *vector.Vector
+	prepareParamsIsBin       []bool
+	prepareParamsOwned       bool
+	QueryClient              qclient.QueryClient
+	Hakeeper                 logservice.CNHAKeeperClient
+	UdfService               udf.Service
+	WaitPolicy               lock.WaitPolicy
+	messageBoard             *message.MessageBoard
+	hashBuildBudgetMu        sync.Mutex
+	hashBuildBudget          *HashBuildBudgetGeneration
+	logger                   *log.MOLogger
+	TxnOperator              client.TxnOperator
+	CloneTxnOperator         client.TxnOperator
 	// incrStatementDisabled marks a process that executes internal SQL on a
 	// caller-owned transaction without opening a statement of its own
 	// (executor.Options.WithDisableIncrStatement). Compiles on such a process
@@ -425,11 +456,19 @@ func (proc *Process) SetMessageBoard(mb *message.MessageBoard) {
 }
 
 func (proc *Process) SetStmtProfile(sp *StmtProfile) {
+	proc.Base.hashBuildBudgetMu.Lock()
+	if proc.Base.hashBuildBudget != nil {
+		proc.Base.hashBuildBudget.Close()
+		proc.Base.hashBuildBudget = nil
+	}
+	proc.Base.hashBuildBudgetMu.Unlock()
 	proc.Base.StmtProfile = sp
 	// Reset division by zero cache for new statement
 	// Each statement must recompute based on its own type and sql_mode
 	atomic.StoreInt32(&proc.Base.DivByZeroErrorMode, -1)
-	sp.clearDivByZeroRuntimeProfile()
+	if sp != nil {
+		sp.clearStatementRuntimeProfile()
+	}
 }
 
 func (proc *Process) GetStmtProfile() *StmtProfile {
@@ -467,6 +506,10 @@ func (proc *Process) GetPrepareParamsAt(i int) ([]byte, error) {
 	}
 }
 
+func (proc *Process) GetPrepareParamIsBin(i int) bool {
+	return i >= 0 && i < len(proc.Base.prepareParamsIsBin) && proc.Base.prepareParamsIsBin[i]
+}
+
 // SetIncrStatementDisabled marks this process (and every child process
 // sharing its BaseProcess) as running internal SQL that must not advance the
 // workspace snapshot write offset. See BaseProcess.incrStatementDisabled.
@@ -486,6 +529,14 @@ func (proc *Process) SetResolveVariableFunc(f func(varName string, isSystemVar, 
 
 func (proc *Process) GetResolveVariableFunc() func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
 	return proc.Base.resolveVariableFunc
+}
+
+func (proc *Process) SetResolveVariableIsBinFunc(f func(varName string, isSystemVar, isGlobalVar bool) (bool, error)) {
+	proc.Base.resolveVariableIsBinFunc = f
+}
+
+func (proc *Process) GetResolveVariableIsBinFunc() func(varName string, isSystemVar, isGlobalVar bool) (bool, error) {
+	return proc.Base.resolveVariableIsBinFunc
 }
 
 func (proc *Process) SetLastInsertID(num uint64) {

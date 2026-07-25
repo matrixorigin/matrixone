@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"runtime/debug"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -31,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 var (
@@ -42,8 +42,9 @@ var (
 )
 
 type backendRetryErrorClient struct {
-	sendErr   error
-	sendCalls atomic.Int32
+	sendErr       error
+	newStreamWait <-chan struct{}
+	sendCalls     atomic.Int32
 }
 
 type postFlushCommitStream struct{}
@@ -83,6 +84,13 @@ func (c *backendRetryErrorClient) Send(ctx context.Context, backend string, requ
 }
 
 func (c *backendRetryErrorClient) NewStream(ctx context.Context, backend string, lock bool) (morpc.Stream, error) {
+	if c.newStreamWait != nil {
+		select {
+		case <-c.newStreamWait:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
 	return nil, c.sendErr
 }
 
@@ -320,13 +328,111 @@ func TestSendWithMultiTNAndLocal(t *testing.T) {
 	}
 }
 
-func TestLocalStreamDestroy(t *testing.T) {
-	ls := newLocalStream(func(ls *localStream) {}, func() *txn.TxnResponse { return &txn.TxnResponse{} })
-	c := ls.in
-	ls = nil
-	debug.FreeOSMemory()
-	_, ok := <-c
-	assert.False(t, ok)
+func TestSenderDoesNotReturnStaleLocalResponseAfterMixedStreamFailure(t *testing.T) {
+	localFinished := make(chan struct{})
+	var localDispatchCalls atomic.Int32
+	sd, err := NewSender(
+		Config{},
+		newTestRuntime(newTestClock(), nil),
+		WithSenderLocalDispatch(func(target metadata.TNShard) TxnRequestHandleFunc {
+			if target.Address != "local" {
+				return nil
+			}
+			localDispatchCalls.Add(1)
+			return func(_ context.Context, req *txn.TxnRequest, resp *txn.TxnResponse) error {
+				payload := append([]byte(nil), req.CNRequest.Payload...)
+				resp.CNOpResponse = &txn.CNOpResponse{Payload: payload}
+				if string(payload) == "old" {
+					close(localFinished)
+				}
+				return nil
+			}
+		}),
+	)
+	require.NoError(t, err)
+	sender := sd.(*sender)
+	originalClient := sender.client
+	sender.client = &backendRetryErrorClient{
+		sendErr:       moerr.NewInternalErrorNoCtx("injected remote stream failure"),
+		newStreamWait: localFinished,
+	}
+	defer func() {
+		require.NoError(t, originalClient.Close())
+		require.NoError(t, sd.Close())
+	}()
+
+	request := func(shardID uint64, address, payload string) txn.TxnRequest {
+		return txn.TxnRequest{
+			Method: txn.TxnMethod_Read,
+			CNRequest: &txn.CNOpRequest{
+				Target: metadata.TNShard{
+					TNShardRecord: metadata.TNShardRecord{ShardID: shardID},
+					Address:       address,
+				},
+				Payload: []byte(payload),
+			},
+		}
+	}
+
+	result, err := sd.Send(context.Background(), []txn.TxnRequest{
+		request(1, "local", "old"),
+		request(2, "remote", "force-error"),
+	})
+	require.Error(t, err)
+	require.Nil(t, result)
+
+	result, err = sd.Send(context.Background(), []txn.TxnRequest{
+		request(1, "local", "new-1"),
+		request(1, "local", "new-2"),
+	})
+	require.NoError(t, err)
+	defer result.Release()
+	require.Len(t, result.Responses, 2)
+	require.Equal(t, []byte("new-1"), result.Responses[0].CNOpResponse.Payload)
+	require.Equal(t, []byte("new-2"), result.Responses[1].CNOpResponse.Payload)
+	require.Equal(t, int32(2), localDispatchCalls.Load())
+}
+
+func TestSendWithMultiLocalRequestWrapsHandlerError(t *testing.T) {
+	sd, err := NewSender(
+		Config{},
+		newTestRuntime(newTestClock(), nil),
+		WithSenderLocalDispatch(func(metadata.TNShard) TxnRequestHandleFunc {
+			return func(_ context.Context, req *txn.TxnRequest, resp *txn.TxnResponse) error {
+				if string(req.CNRequest.Payload) == "fail" {
+					return moerr.NewInternalErrorNoCtx("injected local handler failure")
+				}
+				resp.CNOpResponse = &txn.CNOpResponse{Payload: append([]byte(nil), req.CNRequest.Payload...)}
+				return nil
+			}
+		}),
+	)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, sd.Close()) }()
+
+	request := func(payload string) txn.TxnRequest {
+		return txn.TxnRequest{
+			Method: txn.TxnMethod_Read,
+			CNRequest: &txn.CNOpRequest{
+				Target: metadata.TNShard{
+					TNShardRecord: metadata.TNShardRecord{ShardID: 1},
+					Address:       "local",
+				},
+				Payload: []byte(payload),
+			},
+		}
+	}
+
+	result, err := sd.Send(context.Background(), []txn.TxnRequest{
+		request("ok"),
+		request("fail"),
+	})
+	require.NoError(t, err)
+	defer result.Release()
+	require.Equal(t, []byte("ok"), result.Responses[0].CNOpResponse.Payload)
+	require.Nil(t, result.Responses[0].TxnError)
+	require.NotNil(t, result.Responses[1].TxnError)
+	require.ErrorContains(t, result.Responses[1].TxnError.UnwrapError(), "injected local handler failure")
 }
 
 func BenchmarkLocalSend(b *testing.B) {

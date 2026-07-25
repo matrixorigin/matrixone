@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/quantizer"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
 
@@ -668,7 +669,36 @@ func (w *IvfflatSqlWriter) toIvfflatUpsert(upsert bool) ([]byte, error) {
 	}
 
 	cols := strings.Join(coldefs, ", ")
-	cnames_str := strings.Join(cnames, ", ")
+
+	// Entry projection. The last src column is the vector that becomes the entry.
+	// For int8 QUANTIZATION the entry must be scaled by the trained quantizer
+	// (q(x)=x*mul+add, mul=255/(max-min), add=-min*mul-128) just like the
+	// synchronous build (compile.go) and search; otherwise the implicit
+	// vecf32->vecint8 cast on REPLACE does identity round+clamp and every
+	// CDC-maintained row gets wrong int8 codes. min/max come from the metadata
+	// table; COALESCE falls back to identity (mul=1,add=0) when they are absent
+	// (pure-async indexes that never trained bounds — search also uses identity
+	// there, so the two stay consistent). float16/bf16 narrow losslessly via the
+	// implicit cast, so only int8 needs this.
+	entryProj := cnames[len(cnames)-1]
+	if qt, ok := quantizer.ToVectorType(w.ivfparam.Quantization); ok && (qt == types.T_array_int8 || qt == types.T_array_uint8) {
+		metaTbl := sqlquote.QualifiedIdent(w.info.DBName, w.meta_tbl)
+		sub := func(k string) string {
+			return fmt.Sprintf("(SELECT CAST(`%s` AS DOUBLE) FROM %s WHERE `%s` = '%s')",
+				catalog.SystemSI_IVFFLAT_TblCol_Metadata_val, metaTbl,
+				catalog.SystemSI_IVFFLAT_TblCol_Metadata_key, k)
+		}
+		minS := sub(catalog.SystemSI_IVFFLAT_Metadata_QuantizeMin)
+		maxS := sub(catalog.SystemSI_IVFFLAT_Metadata_QuantizeMax)
+		if qt == types.T_array_uint8 {
+			entryProj = quantizer.Uint8EntrySQLFromBounds(cnames[len(cnames)-1], minS, maxS, w.partsType[0].Width)
+		} else {
+			entryProj = quantizer.Int8EntrySQLFromBounds(cnames[len(cnames)-1], minS, maxS, w.partsType[0].Width)
+		}
+	}
+	projCols := append([]string(nil), cnames...)
+	projCols[len(projCols)-1] = entryProj
+	cnames_str := strings.Join(projCols, ", ")
 
 	if upsert {
 		sql += fmt.Sprintf("REPLACE INTO %s ", sqlquote.QualifiedIdent(w.info.DBName, w.entries_tbl))

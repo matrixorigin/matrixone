@@ -54,6 +54,27 @@ func (r *pluginRouter) ConnectRouteSelected(
 	return r.Router.Connect(cn, handshakeResp, t)
 }
 
+func (r *pluginRouter) ConnectContext(
+	ctx context.Context, cn *CNServer, handshakeResp *frontend.Packet, t *tunnel,
+) (ServerConn, []byte, error) {
+	if rr, ok := r.Router.(contextConnector); ok {
+		return rr.ConnectContext(ctx, cn, handshakeResp, t)
+	}
+	return r.Router.Connect(cn, handshakeResp, t)
+}
+
+func (r *pluginRouter) ConnectRouteSelectedContext(
+	ctx context.Context, cn *CNServer, handshakeResp *frontend.Packet, t *tunnel,
+) (ServerConn, []byte, error) {
+	if rr, ok := r.Router.(contextRouteSelectedConnector); ok {
+		return rr.ConnectRouteSelectedContext(ctx, cn, handshakeResp, t)
+	}
+	if rr, ok := r.Router.(routeSelectedConnector); ok {
+		return rr.ConnectRouteSelected(cn, handshakeResp, t)
+	}
+	return r.ConnectContext(ctx, cn, handshakeResp, t)
+}
+
 // RouteForTransfer preserves plugin routing semantics for session transfer /
 // migration, but intentionally bypasses the breaker/probe gate: transfer
 // traffic must not consume a recovery probe that belongs to new-session
@@ -102,9 +123,9 @@ func (r *pluginRouter) RouteForTransfer(
 	}
 }
 
-func (r *pluginRouter) CanReuseCachedCN(cn *CNServer) bool {
+func (r *pluginRouter) CanReuseCachedCN(cn *CNServer, client clientInfo) bool {
 	if rr, ok := r.Router.(cacheReuseChecker); ok {
-		return rr.CanReuseCachedCN(cn)
+		return rr.CanReuseCachedCN(cn, client)
 	}
 	return true
 }

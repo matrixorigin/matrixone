@@ -147,11 +147,11 @@ func (rightDedupJoin *RightDedupJoin) Free(proc *process.Process, pipelineFailed
 	ctr.cleanBitmap()
 	ctr.cleanHashMap()
 	ctr.cleanResultBatch(proc)
+	ctr.cleanExprExecutor()
 	if ctr.spillEngine != nil {
 		ctr.spillEngine.Cleanup(proc)
 		ctr.spillEngine = nil
 	}
-	ctr.cleanExprExecutor()
 	ctr.cleanEvalVectors()
 }
 

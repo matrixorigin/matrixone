@@ -361,4 +361,60 @@ show tables;  -- 应该只显示 permanent_table
 
 drop table temp_invisible;
 drop table permanent_table;
+
+-- ============================================================================
+-- 测试分类 10: 预处理语句重新解析同名临时表
+-- ============================================================================
+
+create table prepared_shadow (id int primary key, value varchar(20));
+insert into prepared_shadow values (1, 'permanent');
+
+prepare prepared_shadow_stmt from
+    'select id, value from prepared_shadow order by id';
+execute prepared_shadow_stmt;
+
+create temporary table prepared_shadow (
+    id int primary key,
+    value varchar(20)
+);
+insert into prepared_shadow values (2, 'temporary');
+execute prepared_shadow_stmt;
+
+drop table prepared_shadow;
+execute prepared_shadow_stmt;
+
+deallocate prepare prepared_shadow_stmt;
+drop table prepared_shadow;
 drop database temp_db;
+
+-- ============================================================================
+-- 测试分类 11: 重建时保留 PREPARE 阶段的默认数据库
+-- ============================================================================
+
+drop database if exists prepared_db1;
+drop database if exists prepared_db2;
+create database prepared_db1;
+create database prepared_db2;
+
+use prepared_db1;
+create table t(v int);
+insert into t values (1);
+prepare prepared_db_stmt from 'select v from t';
+
+use prepared_db2;
+create table t(v int);
+insert into t values (2);
+create temporary table unrelated_temp(v int);
+execute prepared_db_stmt;
+drop table unrelated_temp;
+
+create temporary table prepared_db1.t(v int);
+insert into prepared_db1.t values (3);
+execute prepared_db_stmt;
+
+drop table prepared_db1.t;
+execute prepared_db_stmt;
+
+deallocate prepare prepared_db_stmt;
+drop database prepared_db1;
+drop database prepared_db2;

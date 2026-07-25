@@ -16,6 +16,7 @@ package cnservice
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -266,13 +267,11 @@ func (s *service) stopTask() error {
 		return nil
 	}
 
-	if err := s.task.holder.Close(); err != nil {
-		return err
-	}
+	err := s.task.holder.Close()
 	if s.task.runner != nil {
-		return s.task.runner.Stop()
+		err = errors.Join(err, s.task.runner.Stop())
 	}
-	return nil
+	return err
 }
 
 func (s *service) registerExecutorsLocked() {

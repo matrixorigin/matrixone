@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 )
@@ -144,6 +145,7 @@ func runIterationConsumersWithStatusesForTest(
 		defer packer.Close()
 		runISCPTaskIterationConsumers(
 			ctx,
+			nil,
 			iterCtx,
 			changes,
 			consumers,
@@ -158,6 +160,102 @@ func runIterationConsumersWithStatusesForTest(
 		)
 	}()
 	return done, statuses
+}
+
+func TestRunInitSQLWithRuntimeCancelInFlightInitSQL(t *testing.T) {
+	exec := newRuntimeTestExecutor()
+	iterCtx := testIterationContext("index_idx01")
+	key := NewJobRuntimeKey(iterCtx.accountID, iterCtx.tableID, iterCtx.jobNames[0], iterCtx.jobIDs[0])
+	entered := make(chan struct{})
+	done := make(chan error, 1)
+
+	go func() {
+		done <- runInitSQLWithRuntime(context.Background(), exec, iterCtx, func(ctx context.Context) error {
+			close(entered)
+			<-ctx.Done()
+			return ctx.Err()
+		})
+	}()
+
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("init sql did not start")
+	}
+	require.NoError(t, exec.CancelAndDrainJobConsumer(context.Background(), key.AccountID, key.TableID, key.JobName, key.JobID))
+	require.True(t, exec.IsJobFenced(key))
+
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("init sql was not drained")
+	}
+}
+
+func TestRunInitSQLWithRuntimeSkipsFencedInitSQL(t *testing.T) {
+	exec := newRuntimeTestExecutor()
+	iterCtx := testIterationContext("index_idx01")
+	key := NewJobRuntimeKey(iterCtx.accountID, iterCtx.tableID, iterCtx.jobNames[0], iterCtx.jobIDs[0])
+	exec.fencedJobs[key] = JobFence{ExpireAt: time.Now().Add(time.Minute)}
+
+	called := false
+	err := runInitSQLWithRuntime(context.Background(), exec, iterCtx, func(context.Context) error {
+		called = true
+		return nil
+	})
+
+	require.ErrorIs(t, err, errInitSQLJobFenced)
+	require.False(t, called)
+}
+
+type initSQLTxnForTest struct {
+	client.TxnOperator
+	commitErr         error
+	rollbackErr       error
+	committed         bool
+	rolledBack        bool
+	commitCtx         context.Context
+	rollbackCtx       context.Context
+	rollbackErrAtCall error
+}
+
+func (t *initSQLTxnForTest) Commit(ctx context.Context) error {
+	t.committed = true
+	t.commitCtx = ctx
+	return t.commitErr
+}
+
+func (t *initSQLTxnForTest) Rollback(ctx context.Context) error {
+	t.rolledBack = true
+	t.rollbackCtx = ctx
+	t.rollbackErrAtCall = ctx.Err()
+	return t.rollbackErr
+}
+
+func TestFinishInitSQLTxnReturnsCommitError(t *testing.T) {
+	commitErr := errors.New("commit failed")
+	txn := &initSQLTxnForTest{commitErr: commitErr}
+
+	err := finishInitSQLTxn(context.Background(), txn, nil)
+
+	require.ErrorIs(t, err, commitErr)
+	require.True(t, txn.committed)
+	require.False(t, txn.rolledBack)
+}
+
+func TestFinishInitSQLTxnRollsBackWithIndependentContext(t *testing.T) {
+	parent, cancel := context.WithCancel(context.Background())
+	cancel()
+	txn := &initSQLTxnForTest{}
+
+	err := finishInitSQLTxn(parent, txn, context.Canceled)
+
+	require.ErrorIs(t, err, context.Canceled)
+	require.True(t, txn.rolledBack)
+	require.False(t, txn.committed)
+	require.NotNil(t, txn.rollbackCtx)
+	require.NoError(t, txn.rollbackErrAtCall)
 }
 
 func TestRunISCPTaskIterationConsumersCancelSnapshotInFlightConsumer(t *testing.T) {

@@ -5,7 +5,7 @@ create table t(a int primary key, b varchar(64));
 insert into t values (1, 'ONLY_FULL_GROUP_BY'), (2, 'STRICT_TRANS_TABLES'), (3, 'x');
 select @@global.lock_wait_timeout as global_timeout, @@session.lock_wait_timeout as session_timeout;
 global_timeout    session_timeout
-60    60
+120    120
 set @@sql_mode = 'ONLY_FULL_GROUP_BY';
 begin;
 set session lock_wait_timeout = 1;
@@ -19,5 +19,21 @@ select a, b from t where b = @@sql_mode for update;
 Lock wait timeout exceeded; try restarting transaction
 rollback;
 rollback;
+create table timeout_rollback(a int primary key, b varchar(64));
+insert into timeout_rollback values (1, 'original-1'), (2, 'original-2');
+set session lock_wait_timeout = 1;
+begin;
+update timeout_rollback set b = 'must-be-rolled-back' where a = 1;
+begin;
+update timeout_rollback set b = 'holder' where a = 2;
+update timeout_rollback set b = 'waiter' where a = 2;
+Lock wait timeout exceeded; try restarting transaction
+begin;
+commit;
+rollback;
+select * from timeout_rollback order by a;
+a    b
+1    original-1
+2    original-2
 set @@sql_mode = default;
 drop database lock_wait_timeout_remote_db;

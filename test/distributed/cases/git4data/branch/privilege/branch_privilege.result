@@ -100,6 +100,7 @@ select count(*) from br_sub_ok.t1;
 ➤ count(*)[-5,64,0]  𝄀
 2
 create database br_diff;
+create database br_diff_dest;
 create table br_diff.base(a int primary key, b int);
 create table br_diff.target(a int primary key, b int);
 insert into br_diff.base values (1, 1), (2, 2);
@@ -111,16 +112,28 @@ create role r_diff_both;
 grant select on table br_diff.base to r_diff_both;
 grant select on table br_diff.target to r_diff_both;
 create user u_diff_both identified by '111' default role r_diff_both;
+create role r_diff_output;
+grant select on table br_diff.base to r_diff_output;
+grant select on table br_diff.target to r_diff_output;
+grant create table on database br_diff to r_diff_output;
+create user u_diff_output identified by '111' default role r_diff_output;
 data branch diff br_diff.target against br_diff.base output count;
 internal error: do not have privilege to execute the statement
 data branch diff br_diff.target against br_diff.base output count;
 ➤ COUNT(*)[-5,0,0]  𝄀
 4
 data branch diff br_diff.target against br_diff.base output as br_diff.diff_out;
-not supported: DATA BRANCH DIFF OUTPUT AS
+-- @regex("do not have privilege", true)
+internal error: do not have privilege to execute the statement
+data branch diff br_diff.target against br_diff.base output as br_diff_dest.diff_out;
+-- @regex("do not have privilege", true)
+internal error: do not have privilege to execute the statement
+data branch diff br_diff.target against br_diff.base output as br_diff.diff_out;
+➤ TABLE CREATED[12,0,0]  𝄀
+`br_diff`.`diff_out`
 select count(*) from mo_catalog.mo_tables where reldatabase = 'br_diff' and relname = 'diff_out';
 ➤ count(*)[-5,64,0]  𝄀
-0
+1
 create database br_merge;
 create table br_merge.src(a int primary key, b int);
 create table br_merge.dst(a int primary key, b int);

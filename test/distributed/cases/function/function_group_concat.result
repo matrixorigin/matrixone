@@ -217,6 +217,12 @@ a    c
 3    3
 SELECT group_concat(c order by (SELECT mid(group_concat(c order by a),1,5) FROM group_concat_12 where group_concat_12.a=group_concat_11.a) desc) as grp FROM group_concat_11;
 not supported: subquery in group_concat ORDER BY
+SELECT group_concat((SELECT c FROM group_concat_12 where group_concat_12.a=group_concat_11.a) order by 1) as grp FROM group_concat_11;
+not supported: subquery in group_concat ORDER BY
+SELECT group_concat(coalesce((SELECT c FROM group_concat_12 where group_concat_12.a=group_concat_11.a), '') order by 1) as grp FROM group_concat_11;
+not supported: subquery in group_concat ORDER BY
+SELECT group_concat(group_concat_11.c order by coalesce((SELECT c FROM group_concat_12 where group_concat_12.a=group_concat_11.a), '')) as grp FROM group_concat_11;
+not supported: subquery in group_concat ORDER BY
 DROP TABLE IF EXISTS group_concat_13;
 DROP TABLE IF EXISTS group_concat_14;
 CREATE TABLE group_concat_13 ( a int );

@@ -28,7 +28,7 @@ import (
 // columns.
 type PendingRecord struct {
 	Pkid    int64
-	Vec     []float32
+	Vec     []byte // raw native base-type bytes (vecBytesPerRow)
 	Include []byte
 }
 
@@ -55,7 +55,7 @@ type PendingRecord struct {
 func SaveSmallTailAsCdc(
 	tblcfg vectorindex.IndexTableConfig,
 	rows []PendingRecord,
-	dim int,
+	vecBytesPerRow int,
 	includeBytesPerRow int,
 	colMetaJSON string,
 ) ([]string, error) {
@@ -63,16 +63,16 @@ func SaveSmallTailAsCdc(
 		return nil, nil
 	}
 
-	// Pre-size the buffer: 9 (op + pkid) + 4*dim + ibpr bytes per
+	// Pre-size the buffer: 9 (op + pkid) + vecBytesPerRow + ibpr bytes per
 	// INSERT record. Avoids ~len(rows) reallocs in EncodeEventRecord.
-	perRow := 9 + 4*dim + includeBytesPerRow
+	perRow := 9 + vecBytesPerRow + includeBytesPerRow
 	records := make([]byte, 0, perRow*len(rows))
 	sizes := make([]int, 0, len(rows))
 
 	for _, r := range rows {
 		before := len(records)
 		out, err := EncodeEventRecord(records, CdcOpInsert,
-			r.Pkid, r.Vec, r.Include, dim, includeBytesPerRow)
+			r.Pkid, r.Vec, r.Include, vecBytesPerRow, includeBytesPerRow)
 		if err != nil {
 			return nil, err
 		}

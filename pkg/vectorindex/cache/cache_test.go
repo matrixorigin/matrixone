@@ -158,6 +158,48 @@ func TestCacheServe(t *testing.T) {
 	Cache.Destroy()
 }
 
+// IVF-FLAT keys its cache entries "<indexTable>:<version>" (plus a
+// "/cnIdx/cnCnt" suffix when the read is split across CNs), so DROP INDEX /
+// DROP TABLE cannot name the live key — it evicts by prefix. Every generation
+// of the dropped index must go, and no other index table may be touched.
+func TestCacheRemovePrefix(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	sqlproc := sqlexec.NewSqlProcess(proc)
+	Cache = NewVectorIndexCache()
+	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(8)}
+	idxcfg.Usearch.Metric = usearch.L2sq
+	tblcfg := vectorindex.IndexTableConfig{DbName: "db", SrcTable: "src", MetadataTable: "__secondary_meta", IndexTable: "__secondary_index"}
+	fp32a := []float32{1, 2, 3, 4, 5, 6, 7, 8}
+
+	// two generations of the dropped index + one split-read entry, and one
+	// entry of a different index table that shares no prefix.
+	keys := []string{
+		"__secondary_index:0",
+		"__secondary_index:7",
+		"__secondary_index:7/1/2",
+		"__other_index:0",
+	}
+	for _, k := range keys {
+		m := &MockSearch{Idxcfg: idxcfg, Tblcfg: tblcfg}
+		_, _, err := Cache.Search(sqlproc, k, m, fp32a, vectorindex.RuntimeConfig{Limit: 4})
+		require.Nil(t, err)
+	}
+
+	Cache.RemovePrefix("__secondary_index:")
+
+	for _, k := range keys[:3] {
+		_, ok := Cache.IndexMap.Load(k)
+		require.False(t, ok, "key %s should have been evicted", k)
+	}
+	_, ok := Cache.IndexMap.Load("__other_index:0")
+	require.True(t, ok, "unrelated index table must not be evicted")
+
+	// removing a prefix with no match is a no-op, not a panic
+	Cache.RemovePrefix("__no_such_index:")
+
+	Cache.Destroy()
+}
+
 func TestCacheAny(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	sqlproc := sqlexec.NewSqlProcess(proc)

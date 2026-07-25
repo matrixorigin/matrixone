@@ -38,7 +38,7 @@ var (
 type detector struct {
 	logger            *log.MOLogger
 	c                 chan deadlockTxn
-	waitTxnsFetchFunc func(pb.WaitTxn, *waiters) (bool, error)
+	waitTxnsFetchFunc func(context.Context, pb.WaitTxn, *waiters) (bool, error)
 	waitTxnAbortFunc  func(pb.WaitTxn, error)
 	ignoreTxns        sync.Map // txnID -> any
 	stopper           *stopper.Stopper
@@ -56,7 +56,7 @@ type detector struct {
 // txn.
 func newDeadlockDetector(
 	logger *log.MOLogger,
-	waitTxnsFetchFunc func(pb.WaitTxn, *waiters) (bool, error),
+	waitTxnsFetchFunc func(context.Context, pb.WaitTxn, *waiters) (bool, error),
 	waitTxnAbortFunc func(pb.WaitTxn, error),
 ) *detector {
 	d := &detector{
@@ -82,6 +82,9 @@ func (d *detector) close() {
 	d.mu.closed = true
 	d.mu.Unlock()
 	d.stopper.Stop()
+	d.mu.Lock()
+	clear(d.mu.activeCheckTxn)
+	d.mu.Unlock()
 	close(d.c)
 }
 
@@ -141,13 +144,16 @@ func (d *detector) doCheck(ctx context.Context) {
 
 	w := &waiters{ignoreTxns: &d.ignoreTxns}
 	for {
+		if ctx.Err() != nil {
+			return
+		}
 		select {
 		case <-ctx.Done():
 			return
 		case txn := <-d.c:
 			v2.TxnDeadlockDetectorQueueDepthGauge.Set(float64(len(d.c)))
 			w.reset(txn)
-			hasDeadlock, deadlockTxn, err := d.checkDeadlock(w)
+			hasDeadlock, deadlockTxn, err := d.checkDeadlock(ctx, w)
 			if hasDeadlock {
 				if err == nil {
 					err = ErrDeadLockDetected
@@ -162,11 +168,14 @@ func (d *detector) doCheck(ctx context.Context) {
 	}
 }
 
-func (d *detector) checkDeadlock(w *waiters) (bool, pb.WaitTxn, error) {
+func (d *detector) checkDeadlock(ctx context.Context, w *waiters) (bool, pb.WaitTxn, error) {
 	for {
+		if err := ctx.Err(); err != nil {
+			return false, pb.WaitTxn{}, err
+		}
 		// find deadlock
 		txn := w.getCheckTargetTxn()
-		added, err := d.waitTxnsFetchFunc(txn, w)
+		added, err := d.waitTxnsFetchFunc(ctx, txn, w)
 		if err != nil {
 			logCheckDeadLockFailed(d.logger, txn, w.root.startTxn(), err)
 			return false, pb.WaitTxn{}, err

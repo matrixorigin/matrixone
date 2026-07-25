@@ -76,6 +76,32 @@ func (b *OndupUpdateBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool
 	return b.baseBindExpr(astExpr, depth, isRoot)
 }
 
+func (b *OndupUpdateBinder) BindAssignmentExpr(astExpr tree.Expr, target Type) (*plan.Expr, error) {
+	if !isNumericAssignmentTarget(target) {
+		return b.BindExpr(astExpr, 0, true)
+	}
+	if subquery, ok := scalarSubqueryExpr(astExpr); ok && !subquery.Exists {
+		previousSubqueryTarget := b.numericSubqueryTarget
+		b.numericSubqueryTarget = &target
+		defer func() { b.numericSubqueryTarget = previousSubqueryTarget }()
+		return b.baseBindExpr(astExpr, 0, true)
+	}
+	return b.bindNumericExprWithContext(astExpr, 0, &target)
+}
+
+func scalarSubqueryExpr(astExpr tree.Expr) (*tree.Subquery, bool) {
+	for {
+		switch expr := astExpr.(type) {
+		case *tree.ParenExpr:
+			astExpr = expr.Expr
+		case *tree.Subquery:
+			return expr, true
+		default:
+			return nil, false
+		}
+	}
+}
+
 func (b *OndupUpdateBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isRoot bool) (*plan.Expr, error) {
 	colName := astExpr.ColName()
 	idx, ok := b.tableDef.Name2ColIndex[colName]
@@ -104,7 +130,7 @@ func (b *OndupUpdateBinder) BindWinFunc(funcName string, astExpr *tree.FuncExpr,
 }
 
 func (b *OndupUpdateBinder) BindSubquery(astExpr *tree.Subquery, isRoot bool) (*plan.Expr, error) {
-	return nil, moerr.NewNYI(b.GetContext(), "subquery in JOIN condition")
+	return b.baseBindSubquery(astExpr, isRoot)
 }
 
 func (b *OndupUpdateBinder) BindTimeWindowFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {

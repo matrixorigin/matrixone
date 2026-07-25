@@ -1679,8 +1679,13 @@ func (node *VarExpr) Format(ctx *FmtCtx) {
 		ctx.WriteByte('@')
 		if node.System {
 			ctx.WriteByte('@')
+			if node.Global {
+				ctx.WriteString("global.")
+			}
+			ctx.WriteString(node.Name)
+		} else {
+			ctx.WriteIdentifier(Identifier(node.Name))
 		}
-		ctx.WriteString(node.Name)
 	}
 }
 
@@ -1706,6 +1711,9 @@ type ParamExpr struct {
 
 func (node *ParamExpr) Format(ctx *FmtCtx) {
 	ctx.WriteByte('?')
+	if ctx.paramExprOffset {
+		ctx.WriteString(strconv.Itoa(node.Offset))
+	}
 }
 
 // Accept implements NodeChecker Accept interface.
@@ -1870,7 +1878,7 @@ type FullTextMatchExpr struct {
 	KeyParts []*KeyPart
 
 	// pattern
-	Pattern string
+	Pattern Expr
 
 	Mode FullTextSearchType
 }
@@ -1902,13 +1910,16 @@ func (node *FullTextMatchExpr) Valid() error {
 	if len(node.KeyParts) == 0 {
 		return moerr.NewSyntaxErrorNoCtx("MATCH(expr list) expression list is empty.")
 	}
-	if len(node.Pattern) == 0 {
+	if node.Pattern == nil {
+		return moerr.NewSyntaxErrorNoCtx("AGAINST('pattern') pattern is empty.")
+	}
+	if val, ok := node.Pattern.(*NumVal); ok && val.ValType == P_char && len(val.String()) == 0 {
 		return moerr.NewSyntaxErrorNoCtx("AGAINST('pattern') pattern is empty.")
 	}
 	return nil
 }
 
-func NewFullTextMatchFuncExpression(columns []*KeyPart, pattern string, mode FullTextSearchType) (*FullTextMatchExpr, error) {
+func NewFullTextMatchFuncExpression(columns []*KeyPart, pattern Expr, mode FullTextSearchType) (*FullTextMatchExpr, error) {
 
 	e := &FullTextMatchExpr{KeyParts: columns, Pattern: pattern, Mode: mode}
 	if err := e.Valid(); err != nil {
@@ -1927,7 +1938,7 @@ func (node *FullTextMatchExpr) Format(ctx *FmtCtx) {
 	}
 	ctx.WriteString(") ")
 	ctx.WriteString("AGAINST (")
-	ctx.WriteString(node.Pattern)
+	node.Pattern.Format(ctx)
 
 	if node.Mode != FULLTEXT_DEFAULT {
 		ctx.WriteString(" ")

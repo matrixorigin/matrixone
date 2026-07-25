@@ -94,19 +94,48 @@ func (s *Scope) release() {
 }
 
 func (s *Scope) Reset(c *Compile) error {
+	rejectZeroTemporal, err := util.RejectZeroTemporalWritePolicy(c.proc)
+	if err != nil {
+		return err
+	}
+	return s.reset(c, rejectZeroTemporal)
+}
+
+func (s *Scope) reset(c *Compile, rejectZeroTemporal bool) error {
+	if err := refreshZeroTemporalWritePolicy(s.RootOp, rejectZeroTemporal); err != nil {
+		return err
+	}
 	err := s.resetForReuse(c)
 	if err != nil {
 		return err
 	}
 	for _, scope := range s.PreScopes {
-		if err = scope.Reset(c); err != nil {
+		if err = scope.reset(c, rejectZeroTemporal); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
+type zeroTemporalWritePolicySetter interface {
+	SetRejectZeroTemporal(bool)
+}
+
+func refreshZeroTemporalWritePolicy(root vm.Operator, reject bool) error {
+	if root == nil {
+		return nil
+	}
+	return vm.HandleAllOp(root, func(_ vm.Operator, op vm.Operator) error {
+		if setter, ok := op.(zeroTemporalWritePolicySetter); ok {
+			setter.SetRejectZeroTemporal(reject)
+		}
+		return nil
+	})
+}
+
 func (s *Scope) resetForReuse(c *Compile) (err error) {
+	s.resourceExecutedLocally = false
+
 	if err = vm.HandleAllOp(s.RootOp, func(parentOp vm.Operator, op vm.Operator) error {
 		if op.OpType() == vm.Output {
 			op.(*output.Output).Func = c.fill
@@ -419,6 +448,8 @@ func cleanPipelineWitchStartFail(sp *Scope, fail error, isPrepare bool) {
 
 // RemoteRun send the scope to a remote node for execution.
 func (s *Scope) RemoteRun(c *Compile) error {
+	s.resourceExecutedLocally = false
+
 	if s.ScopeAnalyzer == nil {
 		s.ScopeAnalyzer = NewScopeAnalyzer()
 	}
@@ -435,18 +466,9 @@ func (s *Scope) RemoteRun(c *Compile) error {
 		return s.failRemoteRunBeforeStart(c, err)
 	}
 
-	// In fact, it's not a safe way to convert this pipeline to run at local.
-	//
-	// Just image this case,
-	// pipelineA holds an operator `dispatch d1`, d1 want to send data to pipelineB at node1.
-	// for this operator `d1`, it takes a remote-receiver (the pipelineB), and it will call a rpc for sending.
-	// but now, the pipelineB is not a remote-receiver but in local, the rpc will fail and the B cannot receive anything.
-	// This will cause a hung.
-	//
-	// we should avoid to generate this format pipeline, or do a suitable conversion for the dispatch operator,
-	// or refactor the dispatch operator for no need to know a receiver is local or remote.
 	if !checkPipelineStandaloneExecutableAtRemote(s) {
-		return s.MergeRun(c)
+		return s.failRemoteRunBeforeStart(c, moerr.NewInternalErrorNoCtxf(
+			"remote pipeline for CN %q is not standalone executable", s.NodeInfo.Addr))
 	}
 	runtime.ServiceRuntime(s.Proc.GetService()).Logger().
 		Debug("remote run pipeline",
@@ -480,6 +502,9 @@ func (s *Scope) RemoteRun(c *Compile) error {
 }
 
 func (s *Scope) failRemoteRunBeforeStart(c *Compile, err error) error {
+	if c != nil && c.proc != nil && c.proc.Cancel != nil {
+		c.proc.Cancel(err)
+	}
 	cleanPipelineWitchStartFail(s, err, c.isPrepare)
 	return err
 }
@@ -841,13 +866,14 @@ func newParallelScope(s *Scope) (*Scope, []*Scope) {
 	rs.Proc = s.Proc.NewContextChildProc(0)
 
 	parallelScopes := make([]*Scope, s.NodeInfo.Mcpu)
+	dupCtx := newOperatorDupContext()
 	for i := 0; i < s.NodeInfo.Mcpu; i++ {
 		parallelScopes[i] = newScope(Normal)
 		parallelScopes[i].NodeInfo = s.NodeInfo
 		parallelScopes[i].NodeInfo.Mcpu = 1
 		parallelScopes[i].Proc = rs.Proc.NewContextChildProc(0)
 		parallelScopes[i].TxnOffset = s.TxnOffset
-		parallelScopes[i].setRootOperator(dupOperatorRecursively(s.RootOp, i, s.NodeInfo.Mcpu))
+		parallelScopes[i].setRootOperator(dupOperatorRecursivelyWithContext(s.RootOp, i, s.NodeInfo.Mcpu, dupCtx))
 	}
 
 	rs.PreScopes = parallelScopes

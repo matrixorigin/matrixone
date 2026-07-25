@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	icebergio "github.com/matrixorigin/matrixone/pkg/iceberg/io"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -88,6 +89,83 @@ func TestParquetDecimalMappingRegression(t *testing.T) {
 		types.Decimal64(int64(12345)),
 		types.Decimal64(neg),
 	}, got)
+}
+
+func TestParquetOpenFileUsesIcebergObjectIORef(t *testing.T) {
+	ctx := context.Background()
+	var buf bytes.Buffer
+	schema := parquet.NewSchema("orders", parquet.Group{
+		"id": parquet.FieldID(parquet.Leaf(parquet.Int32Type), 1),
+	})
+	w := parquet.NewWriter(&buf, schema)
+	_, err := w.WriteRows([]parquet.Row{{
+		parquet.Int32Value(7).Level(0, 0, 0),
+	}})
+	require.NoError(t, err)
+	require.NoError(t, w.Close())
+
+	fs, err := fileservice.NewMemoryFS("iceberg-data-file-reader", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	readPath := "data/orders.parquet"
+	require.NoError(t, fs.Write(ctx, fileservice.IOVector{
+		FilePath: readPath,
+		Entries: []fileservice.IOEntry{{
+			Offset: 0,
+			Size:   int64(buf.Len()),
+			Data:   append([]byte(nil), buf.Bytes()...),
+		}},
+	}))
+
+	ref, err := icebergio.RegisterObjectIOProvider(ctx, icebergio.ScopedProvider{FileService: fs}, func(location string) icebergio.ObjectScope {
+		return icebergio.ObjectScope{
+			AccountID:       42,
+			CatalogID:       7,
+			StorageLocation: readPath,
+			Endpoint:        "s3.me-central-1.amazonaws.com",
+			Region:          "me-central-1",
+			Bucket:          "warehouse",
+			Principal:       "ksa-analytics",
+		}
+	}, time.Minute)
+	require.NoError(t, err)
+	defer icebergio.ReleaseObjectIORef(ref)
+
+	param := &ExternalParam{
+		ExParamConst: ExParamConst{
+			Ctx:                ctx,
+			FileSize:           []int64{int64(buf.Len())},
+			IcebergObjectIORef: ref,
+			Attrs: []plan.ExternAttr{
+				{ColName: "id", ColIndex: 0},
+			},
+			Cols: []*plan.ColDef{
+				{Name: "id", Typ: plan.Type{Id: int32(types.T_int32)}},
+			},
+			IcebergColumns: []*pipeline.IcebergColumnMapping{
+				{
+					MoColIndex:        0,
+					IcebergFieldId:    1,
+					SnapshotFieldName: "id",
+					CurrentFieldName:  "id",
+				},
+			},
+			IcebergSnapshot: &pipeline.IcebergSnapshotRuntime{SnapshotId: 123},
+			Extern: &tree.ExternParam{
+				ExParamConst: tree.ExParamConst{ScanType: tree.S3, Format: tree.PARQUET},
+				ExParam:      tree.ExParam{ExternType: int32(plan.ExternType_ICEBERG_TB)},
+			},
+		},
+		ExParam: ExParam{Fileparam: &ExFileparam{
+			FileIndex: 1,
+			FileCnt:   1,
+			Filepath:  "s3://warehouse/orders.parquet",
+		}},
+	}
+
+	h, err := newParquetHandler(param)
+	require.NoError(t, err)
+	require.NotNil(t, h)
+	require.Equal(t, int64(1), h.file.NumRows())
 }
 
 func TestParquetStringToDecimalMapping(t *testing.T) {
@@ -541,6 +619,149 @@ func TestParquetListToVectorMapping(t *testing.T) {
 
 		vec := vector.NewVec(types.New(types.T_array_float32, 3, 0))
 		require.ErrorContains(t, mp.mapping(page, proc, vec), "parquet list NULL elements are not supported")
+	})
+
+	// Narrow vector targets: bf16/f16 decode from FLOAT leaves, int8/uint8 from
+	// INT32 leaves. Values are chosen exactly representable so the round-trip is
+	// loss-free and can be asserted by exact equality.
+	t.Run("float list to vecbf16", func(t *testing.T) {
+		f, page := writeListAndGetPage(t, parquet.Leaf(parquet.FloatType), []parquet.Row{
+			{
+				parquet.FloatValue(1).Level(0, 1, 0),
+				parquet.FloatValue(2).Level(1, 1, 0),
+				parquet.FloatValue(-0.5).Level(1, 1, 0),
+			},
+		})
+
+		var h ParquetHandler
+		leaf, mp := h.getNestedListMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_array_bf16), Width: 3})
+		require.NotNil(t, leaf)
+		require.NotNil(t, mp)
+
+		vec := vector.NewVec(types.New(types.T_array_bf16, 3, 0))
+		require.NoError(t, mp.mapping(page, proc, vec))
+		require.Equal(t, 1, vec.Length())
+		require.Equal(t, []types.BF16{
+			types.BF16FromFloat32(1), types.BF16FromFloat32(2), types.BF16FromFloat32(-0.5),
+		}, vector.GetArrayAt[types.BF16](vec, 0))
+	})
+
+	t.Run("float list to vecf16", func(t *testing.T) {
+		f, page := writeListAndGetPage(t, parquet.Leaf(parquet.FloatType), []parquet.Row{
+			{
+				parquet.FloatValue(0.5).Level(0, 1, 0),
+				parquet.FloatValue(0.25).Level(1, 1, 0),
+				parquet.FloatValue(4).Level(1, 1, 0),
+			},
+		})
+
+		var h ParquetHandler
+		leaf, mp := h.getNestedListMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_array_float16), Width: 3})
+		require.NotNil(t, leaf)
+		require.NotNil(t, mp)
+
+		vec := vector.NewVec(types.New(types.T_array_float16, 3, 0))
+		require.NoError(t, mp.mapping(page, proc, vec))
+		require.Equal(t, 1, vec.Length())
+		require.Equal(t, []types.Float16{
+			types.Float16FromFloat32(0.5), types.Float16FromFloat32(0.25), types.Float16FromFloat32(4),
+		}, vector.GetArrayAt[types.Float16](vec, 0))
+	})
+
+	t.Run("int32 list to vecint8", func(t *testing.T) {
+		f, page := writeListAndGetPage(t, parquet.Leaf(parquet.Int32Type), []parquet.Row{
+			{
+				parquet.Int32Value(-128).Level(0, 1, 0),
+				parquet.Int32Value(0).Level(1, 1, 0),
+				parquet.Int32Value(127).Level(1, 1, 0),
+			},
+		})
+
+		var h ParquetHandler
+		leaf, mp := h.getNestedListMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_array_int8), Width: 3})
+		require.NotNil(t, leaf)
+		require.NotNil(t, mp)
+
+		vec := vector.NewVec(types.New(types.T_array_int8, 3, 0))
+		require.NoError(t, mp.mapping(page, proc, vec))
+		require.Equal(t, 1, vec.Length())
+		require.Equal(t, []int8{-128, 0, 127}, vector.GetArrayAt[int8](vec, 0))
+	})
+
+	t.Run("int32 list to vecuint8", func(t *testing.T) {
+		f, page := writeListAndGetPage(t, parquet.Leaf(parquet.Int32Type), []parquet.Row{
+			{
+				parquet.Int32Value(0).Level(0, 1, 0),
+				parquet.Int32Value(128).Level(1, 1, 0),
+				parquet.Int32Value(255).Level(1, 1, 0),
+			},
+		})
+
+		var h ParquetHandler
+		leaf, mp := h.getNestedListMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_array_uint8), Width: 3})
+		require.NotNil(t, leaf)
+		require.NotNil(t, mp)
+
+		vec := vector.NewVec(types.New(types.T_array_uint8, 3, 0))
+		require.NoError(t, mp.mapping(page, proc, vec))
+		require.Equal(t, 1, vec.Length())
+		require.Equal(t, []uint8{0, 128, 255}, vector.GetArrayAt[uint8](vec, 0))
+	})
+
+	t.Run("vecint8 out of range rejected", func(t *testing.T) {
+		f, page := writeListAndGetPage(t, parquet.Leaf(parquet.Int32Type), []parquet.Row{
+			{
+				parquet.Int32Value(200).Level(0, 1, 0),
+				parquet.Int32Value(0).Level(1, 1, 0),
+				parquet.Int32Value(0).Level(1, 1, 0),
+			},
+		})
+
+		var h ParquetHandler
+		_, mp := h.getNestedListMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_array_int8), Width: 3})
+		require.NotNil(t, mp)
+
+		vec := vector.NewVec(types.New(types.T_array_int8, 3, 0))
+		require.ErrorContains(t, mp.mapping(page, proc, vec), "out of range")
+	})
+
+	t.Run("vecuint8 out of range rejected", func(t *testing.T) {
+		f, page := writeListAndGetPage(t, parquet.Leaf(parquet.Int32Type), []parquet.Row{
+			{
+				parquet.Int32Value(-1).Level(0, 1, 0),
+				parquet.Int32Value(0).Level(1, 1, 0),
+				parquet.Int32Value(0).Level(1, 1, 0),
+			},
+		})
+
+		var h ParquetHandler
+		_, mp := h.getNestedListMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_array_uint8), Width: 3})
+		require.NotNil(t, mp)
+
+		vec := vector.NewVec(types.New(types.T_array_uint8, 3, 0))
+		require.ErrorContains(t, mp.mapping(page, proc, vec), "out of range")
+	})
+
+	t.Run("vecbf16 rejects int32 leaf", func(t *testing.T) {
+		f, _ := writeListAndGetPage(t, parquet.Leaf(parquet.Int32Type), []parquet.Row{
+			{parquet.Int32Value(1).Level(0, 1, 0)},
+		})
+
+		var h ParquetHandler
+		leaf, mp := h.getNestedListMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_array_bf16), Width: 1})
+		require.Nil(t, leaf)
+		require.Nil(t, mp)
+	})
+
+	t.Run("vecint8 rejects float leaf", func(t *testing.T) {
+		f, _ := writeListAndGetPage(t, parquet.Leaf(parquet.FloatType), []parquet.Row{
+			{parquet.FloatValue(1).Level(0, 1, 0)},
+		})
+
+		var h ParquetHandler
+		leaf, mp := h.getNestedListMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_array_int8), Width: 1})
+		require.Nil(t, leaf)
+		require.Nil(t, mp)
 	})
 }
 
@@ -3668,6 +3889,45 @@ func TestParquet_EmptyFile_ColumnCountMismatch(t *testing.T) {
 	require.Error(t, err)
 	require.Nil(t, h)
 	require.Contains(t, err.Error(), "column count mismatch")
+}
+
+func TestParquet_IcebergEmptyFile_SkipsColumnCountMismatch(t *testing.T) {
+	var buf bytes.Buffer
+	schema := parquet.NewSchema("x", parquet.Group{
+		"id": parquet.FieldID(parquet.Leaf(parquet.Int64Type), 1),
+	})
+	w := parquet.NewWriter(&buf, schema)
+	require.NoError(t, w.Close())
+
+	param := &ExternalParam{
+		ExParamConst: ExParamConst{
+			Ctx: context.Background(),
+			Attrs: []plan.ExternAttr{
+				{ColName: "id", ColIndex: 0},
+				{ColName: "new_optional", ColIndex: 1},
+			},
+			Cols: []*plan.ColDef{
+				{Typ: plan.Type{Id: int32(types.T_int64)}},
+				{Typ: plan.Type{Id: int32(types.T_int32)}},
+			},
+			IcebergColumns: []*pipeline.IcebergColumnMapping{
+				{MoColIndex: 0, IcebergFieldId: 1, CurrentFieldName: "id"},
+				{MoColIndex: 1, IcebergFieldId: 2, CurrentFieldName: "new_optional", DefaultNullFill: true},
+			},
+			IcebergSnapshot: &pipeline.IcebergSnapshotRuntime{SnapshotId: 123},
+			Extern: &tree.ExternParam{
+				ExParamConst: tree.ExParamConst{ScanType: tree.INLINE, Format: tree.PARQUET},
+				ExParam:      tree.ExParam{ExternType: int32(plan.ExternType_ICEBERG_TB)},
+			},
+			FileSize: []int64{int64(buf.Len())},
+		},
+		ExParam: ExParam{Fileparam: &ExFileparam{FileIndex: 1, FileCnt: 1}},
+	}
+	param.Extern.Data = string(buf.Bytes())
+
+	h, err := newParquetHandler(param)
+	require.NoError(t, err)
+	require.Nil(t, h, "empty iceberg parquet file should be skipped")
 }
 
 // TestParquet_EmptyFile_ExtraParquetColumns tests that empty parquet files

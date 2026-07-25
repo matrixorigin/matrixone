@@ -67,6 +67,19 @@ const (
 	FJ_ISCPIndexCuvsAppendErr = "fj/iscp/index/cuvs/append/error"
 	FJ_ISCPIndexCuvsSaveErr   = "fj/iscp/index/cuvs/save/error"
 
+	FJ_ISCPCancelAfterSubmit           = "fj/iscp/cancel/after-submit"
+	FJ_ISCPCancelAfterRegisterConsumer = "fj/iscp/cancel/after-register-consumer"
+	FJ_ISCPCancelFanoutBeforeSend      = "fj/iscp/cancel/fanout-before-send"
+	FJ_ISCPCancelHnswBeforeSave        = "fj/iscp/cancel/hnsw-before-save"
+	FJ_ISCPCancelBeforeUpdateWatermark = "fj/iscp/cancel/before-update-watermark"
+	FJ_ISCPCancelLongBeforeSend        = "fj/iscp/cancel/long/before-send"
+	FJ_ISCPCancelLongBeforeExec        = "fj/iscp/cancel/long/before-exec"
+	FJ_ISCPCancelLongHnswBeforeUpdate  = "fj/iscp/cancel/long/hnsw-before-update"
+	FJ_ISCPCancelLongHnswBeforeSave    = "fj/iscp/cancel/long/hnsw-before-save"
+	FJ_ISCPCancelLongBeforeWatermark   = "fj/iscp/cancel/long/before-watermark"
+	FJ_ISCPCancelRemoveFenceError      = "fj/iscp/cancel/remove-fence-error"
+	FJ_ISCPCancelRollbackFenceTTL      = "fj/iscp/cancel/rollback-fence-ttl"
+
 	FJ_PublicationSnapshotFinished = "fj/publication/snapshot/finished"
 
 	FJ_UpstreamSQLHelper = "fj/publication/upstream/sqlhelper"
@@ -436,8 +449,14 @@ func GCDumpTableInjected() (string, bool) {
 	return sarg, injected
 }
 
-func WaitInjected(key string) {
-	fault.TriggerFault(key)
+func WaitInjected(key string) bool {
+	_, _, injected := fault.TriggerFault(key)
+	return injected
+}
+
+func WaitInjectedCtx(ctx context.Context, key string) bool {
+	_, _, injected := fault.TriggerFaultWithContext(ctx, key)
+	return injected
 }
 
 func NotifyInjected(key string) {

@@ -17,7 +17,6 @@ import (
 	"bytes"
 	"context"
 	"strings"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
@@ -29,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/spillutil"
+	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -245,17 +245,35 @@ func (dedupJoin *DedupJoin) Call(proc *process.Process) (vm.CallResult, error) {
 
 func (dedupJoin *DedupJoin) build(analyzer process.Analyzer, proc *process.Process) (err error) {
 	ctr := &dedupJoin.ctr
-	start := time.Now()
-	defer analyzer.WaitStop(start)
-	ctr.mp, err = message.ReceiveJoinMap(dedupJoin.JoinMapTag, dedupJoin.IsShuffle, dedupJoin.ShuffleIdx, proc.GetMessageBoard(), proc.Ctx)
+	ctr.mp, err = process.MeasureWait(analyzer, resource.WaitOther, func() (*message.JoinMap, error) {
+		return message.ReceiveJoinMap(dedupJoin.JoinMapTag, dedupJoin.IsShuffle, dedupJoin.ShuffleIdx, proc.GetMessageBoard(), proc.Ctx)
+	})
 	if err != nil {
 		return
 	}
 	if ctr.mp != nil {
 		ctr.maxAllocSize = max(ctr.maxAllocSize, ctr.mp.Size())
 		if ctr.mp.IsSpilled() {
+			files := ctr.mp.TakeSpillBuildFiles()
+			var budget *process.HashBuildBudgetGeneration
+			if files != nil {
+				var ok bool
+				budget, ok = ctr.mp.TakeSpillBudget().(*process.HashBuildBudgetGeneration)
+				if !ok || budget == nil {
+					for _, file := range files {
+						_ = file.Close()
+					}
+					return moerr.NewInternalError(proc.Ctx, "spilled dedup join map is missing its producer budget generation")
+				}
+			} else {
+				budget, err = proc.GetHashBuildBudget()
+				if err != nil {
+					return err
+				}
+			}
 			engine := spillutil.NewSpillEngine(spillutil.SpillEngineConfig{
 				BuildKeyExprs:             dedupJoin.Conditions[1],
+				ProbeKeyExprs:             dedupJoin.Conditions[0],
 				SpillThreshold:            ctr.spillThreshold,
 				NeedsBuildForEmptyProbe:   true,
 				NeedAllocateSels:          dedupJoin.OnDuplicateAction == plan.Node_UPDATE,
@@ -268,8 +286,13 @@ func (dedupJoin *DedupJoin) build(analyzer process.Analyzer, proc *process.Proce
 				DelColIdx:                 dedupJoin.DelColIdx,
 				DedupDeleteMarkerColIdx:   dedupJoin.DedupDeleteMarkerColIdx,
 				DedupDeleteKeepColIdxList: dedupJoin.DedupDeleteKeepColIdxList,
+				Budget:                    budget,
 			})
-			engine.InitFromSpilledMap(ctr.mp.TakeSpillBuildFds())
+			if files != nil {
+				engine.InitFromSpilledFiles(files)
+			} else {
+				engine.InitFromSpilledMap(ctr.mp.TakeSpillBuildFds())
+			}
 			if err := engine.ScatterProbeTable(proc,
 				func() (*batch.Batch, error) {
 					input, err := vm.ChildrenCall(dedupJoin.GetChildren(0), proc, analyzer)
@@ -363,7 +386,7 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 	if ctr.matched == nil {
 		return nil
 	}
-	if ap.NumCPU > 1 {
+	if ap.needsFinalizeMerge() {
 		if !ap.IsMerger {
 			msg := &WorkerJoinMsg{matched: ctr.matched}
 			if len(ap.OldColCapturePlaceholderIdxList) > 0 {

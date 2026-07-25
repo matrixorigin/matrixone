@@ -71,9 +71,18 @@ type cloneReceipt struct {
 	srcAccountName string
 }
 
+func cloneSnapshotTxnOperator(ses *Session, bh BackgroundExec) TxnOperator {
+	back := bh.(*backExec)
+	if back.backSes.forcePessimisticRC {
+		return back.backSes.GetTxnHandler().GetTxn()
+	}
+	return ses.proc.GetTxnOperator()
+}
+
 func getBackExecutor(
 	ctx context.Context,
 	ses *Session,
+	opts ...*BackgroundExecOption,
 ) (BackgroundExec, func(error) error, error) {
 
 	var (
@@ -87,17 +96,15 @@ func getBackExecutor(
 		bh.ClearExecResultSet()
 		return bh, func(err error) error {
 			bh.Close()
-			return nil
+			return err
 		}, nil
 	}
 
-	bh = ses.GetBackgroundExec(ctx)
+	bh = ses.GetBackgroundExec(ctx, opts...)
 	bh.ClearExecResultSet()
 	if err = bh.Exec(ctx, "begin"); err != nil {
-		return nil, func(err error) error {
-			bh.Close()
-			return nil
-		}, err
+		bh.Close()
+		return nil, nil, err
 	}
 
 	deferred = func(err2 error) error {
@@ -326,7 +333,7 @@ func handleCloneTable(
 
 	if snapshot == nil {
 		if snapshotTS, err = tryToIncreaseTxnPhysicalTS(
-			reqCtx, ses.proc.GetTxnOperator(),
+			reqCtx, cloneSnapshotTxnOperator(ses, bh),
 		); err != nil {
 			return
 		}
@@ -464,7 +471,7 @@ func handleCloneDatabaseWithSource(
 		// so we try to increase the txn physical ts here to make sure the snapshot TS
 		// the clone will get is greater than P2.
 		if snapshotTS, err = tryToIncreaseTxnPhysicalTS(
-			reqCtx, ses.proc.GetTxnOperator(),
+			reqCtx, cloneSnapshotTxnOperator(ses, bh),
 		); err != nil {
 			return
 		}

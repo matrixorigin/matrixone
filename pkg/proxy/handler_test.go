@@ -35,6 +35,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/fagongzi/goetty/v2"
 	"github.com/go-sql-driver/mysql"
 	"github.com/lni/goutils/leaktest"
 	"github.com/prometheus/client_golang/prometheus/testutil"
@@ -301,6 +302,38 @@ func TestHandlerCurrentConnections(t *testing.T) {
 	})
 }
 
+func TestHandlerGlobalAdmissionRejectionIsHandled(t *testing.T) {
+	limiter := newConnectionLimiter(1, 1)
+	lease, ok := limiter.acquire()
+	require.True(t, ok)
+	defer lease.release()
+
+	serverConn, clientConn := net.Pipe()
+	defer clientConn.Close()
+	session := goetty.NewIOSession(goetty.WithSessionConn(1, serverConn))
+	defer session.Close()
+	h := &handler{
+		logger:            runtime.DefaultRuntime().Logger(),
+		counterSet:        newCounterSet(),
+		connectionLimiter: limiter,
+	}
+
+	readDone := make(chan struct{})
+	go func() {
+		defer close(readDone)
+		header := make([]byte, 4)
+		if _, err := io.ReadFull(clientConn, header); err != nil {
+			return
+		}
+		payloadLength := int(header[0]) | int(header[1])<<8 | int(header[2])<<16
+		payload := make([]byte, payloadLength)
+		_, _ = io.ReadFull(clientConn, payload)
+	}()
+
+	require.NoError(t, h.handle(session))
+	<-readDone
+}
+
 func TestHandler_HandleErr(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	currentBefore := testutil.ToFloat64(metricv2.ProxyConnectionsCurrentGauge)
@@ -490,6 +523,41 @@ func TestHandler_handleTunnelErrKillsBackendForInFlightEOFClientDisconnect(t *te
 	closeCalled := 0
 	tun := &tunnel{}
 	markTunnelInFlight(tun)
+	tun.mu.sc = &killCurrentServerConn{
+		cn: &CNServer{connID: 11, uuid: "cn-new"},
+		closeFn: func() error {
+			closeCalled++
+			return nil
+		},
+	}
+	cc := &mockClientConn{
+		killFn: func(sc ServerConn) error {
+			killCalled++
+			return nil
+		},
+	}
+
+	ret := h.handleTunnelErr(withCode(io.EOF, codeClientDisconnect), cc, tun, 733923, 100)
+	require.NoError(t, ret)
+	require.Equal(t, 1, killCalled)
+	require.Equal(t, 1, closeCalled)
+	require.Equal(t, int64(0), h.counterSet.clientDisconnect.Load())
+}
+
+func TestHandler_handleTunnelErrKillsBackendForTrackedInFlightClientRequest(t *testing.T) {
+	rt := runtime.DefaultRuntime()
+	runtime.SetupServiceBasedRuntime("", rt)
+	h := &handler{
+		logger:     rt.Logger(),
+		counterSet: newCounterSet(),
+	}
+
+	killCalled := 0
+	closeCalled := 0
+	tun := &tunnel{}
+	// Exercise the explicit request-in-flight marker without relying on the
+	// c2s/s2c lastCmdTime heuristic.
+	tun.trackClientRequest(makeSimplePacket("select 1"))
 	tun.mu.sc = &killCurrentServerConn{
 		cn: &CNServer{connID: 11, uuid: "cn-new"},
 		closeFn: func() error {
@@ -835,6 +903,7 @@ func markTunnelInFlight(tun *tunnel) {
 	tun.mu.scp = &pipe{}
 	tun.mu.csp.mu.lastCmdTime = now
 	tun.mu.scp.mu.lastCmdTime = now.Add(-time.Second)
+	tun.trackClientRequest(makeSimplePacket("select 1"))
 }
 
 func TestHandler_HandleWithSSL(t *testing.T) {

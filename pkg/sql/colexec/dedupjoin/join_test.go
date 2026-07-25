@@ -151,6 +151,97 @@ func TestDedupResetClearsBucketState(t *testing.T) {
 	proc.Free()
 }
 
+func TestDedupShuffleWorkersFinalizeTheirOwnPartitions(t *testing.T) {
+	tests := []struct {
+		name        string
+		isShuffle   bool
+		wantOutput  bool
+		wantMessage bool
+	}{
+		{
+			name:        "broadcast worker defers to merger",
+			wantMessage: true,
+		},
+		{
+			name:       "shuffle worker emits local partition",
+			isShuffle:  true,
+			wantOutput: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			baseline := proc.Mp().CurrNB()
+			typ := types.T_int32.ToType()
+			bat := batch.NewOffHeapWithSize(1)
+			bat.Vecs[0] = vector.NewOffHeapVecWithType(typ)
+			require.NoError(t, vector.AppendFixed(bat.Vecs[0], int32(42), false, proc.Mp()))
+			bat.SetRowCount(1)
+
+			jm := message.NewJoinMap(message.GroupSels{}, nil, nil, nil, []*batch.Batch{bat}, proc.Mp())
+			jm.SetRowCount(1)
+			jm.IncRef(1)
+			matched := &bitmap.Bitmap{}
+			matched.InitWithSize(1)
+			ch := make(chan *WorkerJoinMsg, 1)
+			arg := &DedupJoin{
+				RightTypes:        []types.Type{typ},
+				Result:            []colexec.ResultPos{{Rel: 1, Pos: 0}},
+				OnDuplicateAction: plan.Node_FAIL,
+				NumCPU:            2,
+				IsMerger:          false,
+				IsShuffle:         test.isShuffle,
+				Channel:           ch,
+			}
+			arg.ctr.mp = jm
+			arg.ctr.batches = jm.GetBatches()
+			arg.ctr.batchRowCount = jm.GetRowCount()
+			arg.ctr.matched = matched
+
+			require.NoError(t, arg.ctr.finalize(arg, proc))
+			if test.wantOutput {
+				require.Len(t, arg.ctr.buf, 1)
+				require.Equal(t, []int32{42}, vector.MustFixedColNoTypeCheck[int32](arg.ctr.buf[0].Vecs[0]))
+			} else {
+				require.Nil(t, arg.ctr.buf)
+			}
+			require.Equal(t, test.wantMessage, len(ch) == 1)
+
+			arg.Free(proc, false, nil)
+			require.Equal(t, baseline, proc.Mp().CurrNB())
+			proc.Free()
+		})
+	}
+}
+
+func TestDedupResetNotifiesOnlySharedBuildMerger(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		isShuffle   bool
+		wantMessage bool
+	}{
+		{name: "broadcast worker notifies merger", wantMessage: true},
+		{name: "shuffle worker owns its partition", isShuffle: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			ch := make(chan *WorkerJoinMsg, 1)
+			arg := &DedupJoin{
+				NumCPU:    2,
+				IsMerger:  false,
+				IsShuffle: test.isShuffle,
+				Channel:   ch,
+			}
+
+			arg.Reset(proc, false, nil)
+
+			require.Equal(t, test.wantMessage, len(ch) == 1)
+			proc.Free()
+		})
+	}
+}
+
 func TestDedupPrepareFailureCanRetry(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	typ := types.T_int32.ToType()

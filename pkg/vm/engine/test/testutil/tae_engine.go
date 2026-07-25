@@ -117,18 +117,6 @@ func (ts *TestTxnStorage) Commit(ctx context.Context, request *txn.TxnRequest, r
 func (ts *TestTxnStorage) Rollback(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
 	return nil
 }
-func (ts *TestTxnStorage) Prepare(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
-	return nil
-}
-func (ts *TestTxnStorage) GetStatus(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
-	return nil
-}
-func (ts *TestTxnStorage) CommitTNShard(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
-	return nil
-}
-func (ts *TestTxnStorage) RollbackTNShard(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
-	return nil
-}
 func (ts *TestTxnStorage) Debug(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
 	return nil
 }

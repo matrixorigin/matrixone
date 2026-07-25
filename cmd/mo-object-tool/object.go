@@ -15,12 +15,16 @@
 package object
 
 import (
+	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/tools/objecttool/interactive"
+	"github.com/matrixorigin/matrixone/pkg/tools/toolfs"
 	"github.com/spf13/cobra"
 )
 
 func PrepareCommand() *cobra.Command {
+	var storage toolfs.StorageOptions
 	cmd := &cobra.Command{
 		Use:   "object [file]",
 		Short: "Object file tools",
@@ -33,38 +37,57 @@ func PrepareCommand() *cobra.Command {
 				if err != nil {
 					return err
 				}
-				return interactive.RunWithKind(args[0], kind)
+				return runObjectView(context.Background(), args[0], storage, kind)
 			}
 			// Otherwise show help
 			return cmd.Help()
 		},
 	}
+	addStorageFlags(cmd, &storage)
 
-	// Persistent so the view/info subcommands inherit them. Exactly one of
-	// --local (DISK/CRC), --local2 (DISK-V2 raw), or --s3 (raw) must be set;
-	// there is no default — kindFromFlags errors if none (or more than one) is given.
 	addOfflineKindFlags(cmd)
-
-	cmd.AddCommand(viewCommand())
-	cmd.AddCommand(infoCommand())
+	cmd.AddCommand(viewCommand(&storage))
+	cmd.AddCommand(infoCommand(&storage))
 
 	return cmd
 }
 
-// addOfflineKindFlags registers the --local / --s3 / --local2 format flags as
-// persistent flags so subcommands inherit them. Exactly one must be set.
+func addStorageFlags(cmd *cobra.Command, storage *toolfs.StorageOptions) {
+	cmd.PersistentFlags().StringVar(&storage.FSConfig, "fs-config", "", "MO config TOML containing fileservice settings")
+	cmd.PersistentFlags().StringVar(&storage.FSName, "fs-name", "SHARED", "fileservice name to use from --fs-config")
+	cmd.PersistentFlags().StringVar(&storage.S3, "remote-s3", "", "remote S3 arguments, for example bucket=...,endpoint=...,region=...,key-prefix=...,key-id=...,key-secret=...")
+	cmd.PersistentFlags().StringVar(&storage.Backend, "backend", "", "remote backend for --remote-s3: S3 or MINIO")
+}
+
+func runObjectView(ctx context.Context, path string, storage toolfs.StorageOptions, kind string) error {
+	if !storage.IsRemote() {
+		return interactive.RunWithKind(path, kind)
+	}
+	fs, _, err := toolfs.Open(ctx, storage)
+	if err != nil {
+		return err
+	}
+	defer fs.Close(ctx)
+	return interactive.RunWithFS(ctx, fs, path)
+}
+
+// addOfflineKindFlags registers the local on-disk format selectors as
+// persistent flags so subcommands inherit them.
 func addOfflineKindFlags(cmd *cobra.Command) {
 	fs := cmd.PersistentFlags()
 	fs.Bool("local", false, "local DISK (CRC) format")
-	fs.Bool("s3", false, "S3 (raw) format")
+	fs.Bool("s3", false, "local S3FS-on-disk (raw) format")
 	fs.Bool("local2", false, "local DISK-V2 (raw) format")
 }
 
-// kindFromFlags resolves the offline fs kind; exactly one of --local/--s3/
-// --local2 must be set, else it returns an error.
+// kindFromFlags resolves the offline fs kind. Legacy local DISK is the default;
+// explicit format selectors remain mutually exclusive.
 func kindFromFlags(cmd *cobra.Command) (string, error) {
 	local, _ := cmd.Flags().GetBool("local")
 	s3, _ := cmd.Flags().GetBool("s3")
 	local2, _ := cmd.Flags().GetBool("local2")
+	if !local && !s3 && !local2 {
+		return objectio.OfflineKindLocal, nil
+	}
 	return objectio.OfflineKindStrict(local, s3, local2)
 }

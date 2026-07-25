@@ -423,338 +423,6 @@ func TestOnDuplicateUpdateVarcharFromTextUsesStrictAssignmentCast(t *testing.T) 
 	assert.True(t, planHasTextToVarcharStrictCastWithWidth(logicPlan, 255))
 }
 
-//Test Query Node Tree
-// func TestNodeTree(t *testing.T) {
-// 	type queryCheck struct {
-// 		steps    []int32                    //steps
-// 		nodeType map[int]plan.Node_NodeType //node_type in each node
-// 		children map[int][]int32            //children in each node
-// 	}
-
-// 	// map[sql string]checkData
-// 	nodeTreeCheckList := map[string]queryCheck{
-// 		"SELECT -1": {
-// 			steps: []int32{0},
-// 			nodeType: map[int]plan.Node_NodeType{
-// 				0: plan.Node_VALUE_SCAN,
-// 			},
-// 			children: nil,
-// 		},
-// 		"SELECT -1 from dual": {
-// 			steps: []int32{0},
-// 			nodeType: map[int]plan.Node_NodeType{
-// 				0: plan.Node_VALUE_SCAN,
-// 			},
-// 			children: nil,
-// 		},
-// 		// one node
-// 		"SELECT N_NAME FROM NATION WHERE N_REGIONKEY = 3": {
-// 			steps: []int32{0},
-// 			nodeType: map[int]plan.Node_NodeType{
-// 				0: plan.Node_TABLE_SCAN,
-// 			},
-// 			children: nil,
-// 		},
-// 		// two nodes- SCAN + SORT
-// 		"SELECT N_NAME FROM NATION WHERE N_REGIONKEY = 3 Order By N_REGIONKEY": {
-// 			steps: []int32{1},
-// 			nodeType: map[int]plan.Node_NodeType{
-// 				0: plan.Node_TABLE_SCAN,
-// 				1: plan.Node_SORT,
-// 			},
-// 			children: map[int][]int32{
-// 				1: {0},
-// 			},
-// 		},
-// 		// two nodes- SCAN + AGG(group by)
-// 		"SELECT N_NAME FROM NATION WHERE N_REGIONKEY = 3 Group By N_NAME": {
-// 			steps: []int32{1},
-// 			nodeType: map[int]plan.Node_NodeType{
-// 				0: plan.Node_TABLE_SCAN,
-// 				1: plan.Node_AGG,
-// 			},
-// 			children: map[int][]int32{
-// 				1: {0},
-// 			},
-// 		},
-// 		"select sum(n_nationkey) from nation": {
-// 			steps: []int32{1},
-// 			nodeType: map[int]plan.Node_NodeType{
-// 				0: plan.Node_TABLE_SCAN,
-// 				1: plan.Node_AGG,
-// 			},
-// 			children: map[int][]int32{
-// 				1: {0},
-// 			},
-// 		},
-// 		"select sum(n_nationkey) from nation order by sum(n_nationkey)": {
-// 			steps: []int32{2},
-// 			nodeType: map[int]plan.Node_NodeType{
-// 				0: plan.Node_TABLE_SCAN,
-// 				1: plan.Node_AGG,
-// 				2: plan.Node_SORT,
-// 			},
-// 			children: map[int][]int32{
-// 				1: {0},
-// 				2: {1},
-// 			},
-// 		},
-// 		// two nodes- SCAN + AGG(distinct)
-// 		"SELECT distinct N_NAME FROM NATION": {
-// 			steps: []int32{1},
-// 			nodeType: map[int]plan.Node_NodeType{
-// 				0: plan.Node_TABLE_SCAN,
-// 				1: plan.Node_AGG,
-// 			},
-// 			children: map[int][]int32{
-// 				1: {0},
-// 			},
-// 		},
-// 		// three nodes- SCAN + AGG(group by) + SORT
-// 		"SELECT N_NAME, count(*) as ttl FROM NATION Group By N_NAME Order By ttl": {
-// 			steps: []int32{2},
-// 			nodeType: map[int]plan.Node_NodeType{
-// 				0: plan.Node_TABLE_SCAN,
-// 				1: plan.Node_AGG,
-// 				2: plan.Node_SORT,
-// 			},
-// 			children: map[int][]int32{
-// 				1: {0},
-// 				2: {1},
-// 			},
-// 		},
-// 		// three nodes - SCAN, SCAN, JOIN
-// 		"SELECT N_NAME, N_REGIONKEY FROM NATION join REGION on NATION.N_REGIONKEY = REGION.R_REGIONKEY": {
-// 			steps: []int32{3},
-// 			nodeType: map[int]plan.Node_NodeType{
-// 				0: plan.Node_TABLE_SCAN,
-// 				1: plan.Node_TABLE_SCAN,
-// 				2: plan.Node_JOIN,
-// 				3: plan.Node_PROJECT,
-// 			},
-// 			children: map[int][]int32{
-// 				2: {0, 1},
-// 			},
-// 		},
-// 		// three nodes - SCAN, SCAN, JOIN  //use where for join condition
-// 		"SELECT N_NAME, N_REGIONKEY FROM NATION, REGION WHERE NATION.N_REGIONKEY = REGION.R_REGIONKEY": {
-// 			steps: []int32{3},
-// 			nodeType: map[int]plan.Node_NodeType{
-// 				0: plan.Node_TABLE_SCAN,
-// 				1: plan.Node_TABLE_SCAN,
-// 				2: plan.Node_JOIN,
-// 				3: plan.Node_PROJECT,
-// 			},
-// 			children: map[int][]int32{
-// 				2: {0, 1},
-// 				3: {2},
-// 			},
-// 		},
-// 		// 5 nodes - SCAN, SCAN, JOIN, SCAN, JOIN  //join three table
-// 		"SELECT l.L_ORDERKEY FROM CUSTOMER c, ORDERS o, LINEITEM l WHERE c.C_CUSTKEY = o.O_CUSTKEY and l.L_ORDERKEY = o.O_ORDERKEY and o.O_ORDERKEY < 10": {
-// 			steps: []int32{6},
-// 			nodeType: map[int]plan.Node_NodeType{
-// 				0: plan.Node_TABLE_SCAN,
-// 				1: plan.Node_TABLE_SCAN,
-// 				2: plan.Node_JOIN,
-// 				3: plan.Node_PROJECT,
-// 				4: plan.Node_TABLE_SCAN,
-// 				5: plan.Node_JOIN,
-// 				6: plan.Node_PROJECT,
-// 			},
-// 			children: map[int][]int32{
-// 				2: {0, 1},
-// 				3: {2},
-// 				5: {3, 4},
-// 				6: {5},
-// 			},
-// 		},
-// 		// 6 nodes - SCAN, SCAN, JOIN, SCAN, JOIN, SORT  //join three table
-// 		"SELECT l.L_ORDERKEY FROM CUSTOMER c, ORDERS o, LINEITEM l WHERE c.C_CUSTKEY = o.O_CUSTKEY and l.L_ORDERKEY = o.O_ORDERKEY and o.O_ORDERKEY < 10 order by c.C_CUSTKEY": {
-// 			steps: []int32{7},
-// 			nodeType: map[int]plan.Node_NodeType{
-// 				0: plan.Node_TABLE_SCAN,
-// 				1: plan.Node_TABLE_SCAN,
-// 				2: plan.Node_JOIN,
-// 				3: plan.Node_PROJECT,
-// 				4: plan.Node_TABLE_SCAN,
-// 				5: plan.Node_JOIN,
-// 				6: plan.Node_PROJECT,
-// 				7: plan.Node_SORT,
-// 			},
-// 			children: map[int][]int32{
-// 				2: {0, 1},
-// 				3: {2},
-// 				5: {3, 4},
-// 				6: {5},
-// 				7: {6},
-// 			},
-// 		},
-// 		// 3 nodes  //Derived table
-// 		"select c_custkey from (select c_custkey, count(C_NATIONKEY) ff from CUSTOMER group by c_custkey) a where ff > 0": {
-// 			steps: []int32{2},
-// 			nodeType: map[int]plan.Node_NodeType{
-// 				0: plan.Node_TABLE_SCAN,
-// 				1: plan.Node_AGG,
-// 				2: plan.Node_PROJECT,
-// 			},
-// 			children: map[int][]int32{
-// 				1: {0},
-// 				2: {1},
-// 			},
-// 		},
-// 		// 4 nodes  //Derived table
-// 		"select c_custkey from (select c_custkey, count(C_NATIONKEY) ff from CUSTOMER group by c_custkey ) a where ff > 0 order by c_custkey": {
-// 			steps: []int32{3},
-// 			nodeType: map[int]plan.Node_NodeType{
-// 				0: plan.Node_TABLE_SCAN,
-// 				1: plan.Node_AGG,
-// 				2: plan.Node_PROJECT,
-// 				3: plan.Node_SORT,
-// 			},
-// 			children: map[int][]int32{
-// 				1: {0},
-// 				2: {1},
-// 				3: {2},
-// 			},
-// 		},
-// 		// Derived table join normal table
-// 		"select c_custkey from (select c_custkey, count(C_NATIONKEY) ff from CUSTOMER group by c_custkey ) a join NATION b on a.c_custkey = b.N_REGIONKEY where b.N_NATIONKEY > 10 order By b.N_REGIONKEY": {
-// 			steps: []int32{6},
-// 			nodeType: map[int]plan.Node_NodeType{
-// 				0: plan.Node_TABLE_SCAN,
-// 				1: plan.Node_AGG,
-// 				2: plan.Node_PROJECT,
-// 				3: plan.Node_TABLE_SCAN,
-// 				4: plan.Node_JOIN,
-// 				5: plan.Node_PROJECT,
-// 				6: plan.Node_SORT,
-// 			},
-// 			children: map[int][]int32{
-// 				1: {0},
-// 				2: {1},
-// 				4: {2, 3},
-// 				5: {4},
-// 				6: {5},
-// 			},
-// 		},
-// 		// insert from values
-// 		"INSERT NATION (N_NATIONKEY, N_REGIONKEY, N_NAME) VALUES (1, 21, 'NAME1'), (2, 22, 'NAME2')": {
-// 			steps: []int32{1},
-// 			nodeType: map[int]plan.Node_NodeType{
-// 				0: plan.Node_VALUE_SCAN,
-// 				1: plan.Node_INSERT,
-// 			},
-// 			children: map[int][]int32{
-// 				1: {0},
-// 			},
-// 		},
-// 		// insert from select
-// 		"INSERT NATION SELECT * FROM NATION2": {
-// 			steps: []int32{1},
-// 			nodeType: map[int]plan.Node_NodeType{
-// 				0: plan.Node_TABLE_SCAN,
-// 				1: plan.Node_INSERT,
-// 			},
-// 			children: map[int][]int32{
-// 				1: {0},
-// 			},
-// 		},
-// 		// update
-// 		"UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=N_REGIONKEY+2 WHERE N_NATIONKEY > 10 LIMIT 20": {
-// 			steps: []int32{1},
-// 			nodeType: map[int]plan.Node_NodeType{
-// 				0: plan.Node_TABLE_SCAN,
-// 				1: plan.Node_UPDATE,
-// 			},
-// 			children: map[int][]int32{
-// 				1: {0},
-// 			},
-// 		},
-// 		// delete
-// 		"DELETE FROM NATION WHERE N_NATIONKEY > 10 LIMIT 20": {
-// 			steps: []int32{1},
-// 			nodeType: map[int]plan.Node_NodeType{
-// 				0: plan.Node_TABLE_SCAN,
-// 				1: plan.Node_DELETE,
-// 			},
-// 		},
-// 		// uncorrelated subquery
-// 		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION)": {
-// 			steps: []int32{0},
-// 			nodeType: map[int]plan.Node_NodeType{
-// 				0: plan.Node_TABLE_SCAN, //nodeid = 1  here is the subquery
-// 				1: plan.Node_TABLE_SCAN, //nodeid = 0, here is SELECT * FROM NATION where N_REGIONKEY > [subquery]
-// 			},
-// 			children: map[int][]int32{},
-// 		},
-// 		// correlated subquery
-// 		`SELECT * FROM NATION where N_REGIONKEY >
-// 			(select avg(R_REGIONKEY) from REGION where R_REGIONKEY < N_REGIONKEY group by R_NAME)
-// 		order by N_NATIONKEY`: {
-// 			steps: []int32{3},
-// 			nodeType: map[int]plan.Node_NodeType{
-// 				0: plan.Node_TABLE_SCAN, //nodeid = 1  subquery node，so,wo pop it to top
-// 				1: plan.Node_TABLE_SCAN, //nodeid = 0
-// 				2: plan.Node_AGG,        //nodeid = 2  subquery node，so,wo pop it to top
-// 				3: plan.Node_SORT,       //nodeid = 3
-// 			},
-// 			children: map[int][]int32{
-// 				2: {1}, //nodeid = 2, have children(NodeId=1, position=0)
-// 				3: {0}, //nodeid = 3, have children(NodeId=0, position=2)
-// 			},
-// 		},
-// 		// cte
-// 		`with tbl(col1, col2) as (select n_nationkey, n_name from nation) select * from tbl order by col2`: {
-// 			steps: []int32{1, 3},
-// 			nodeType: map[int]plan.Node_NodeType{
-// 				0: plan.Node_TABLE_SCAN,
-// 				1: plan.Node_MATERIAL,
-// 				2: plan.Node_MATERIAL_SCAN,
-// 				3: plan.Node_SORT,
-// 			},
-// 			children: map[int][]int32{
-// 				1: {0},
-// 				3: {2},
-// 			},
-// 		},
-// 	}
-
-// 	// run test and check node tree
-// 	for sql, check := range nodeTreeCheckList {
-// 		mock := NewMockOptimizer(false)
-// 		logicPlan, err := runOneStmt(mock, t, sql)
-// 		query := logicPlan.GetQuery()
-// 		if err != nil {
-// 			t.Fatalf("%+v, sql=%v", err, sql)
-// 		}
-// 		if len(query.Steps) != len(check.steps) {
-// 			t.Fatalf("run sql[%+v] error, root should be [%+v] but now is [%+v]", sql, check.steps, query.Steps)
-// 		}
-// 		for idx, step := range query.Steps {
-// 			if step != check.steps[idx] {
-// 				t.Fatalf("run sql[%+v] error, root should be [%+v] but now is [%+v]", sql, check.steps, query.Steps)
-// 			}
-// 		}
-// 		for idx, typ := range check.nodeType {
-// 			if idx >= len(query.Nodes) {
-// 				t.Fatalf("run sql[%+v] error, query.Nodes[%+v].NodeType not exist", sql, idx)
-// 			}
-// 			if query.Nodes[idx].NodeType != typ {
-// 				t.Fatalf("run sql[%+v] error, query.Nodes[%+v].NodeType should be [%+v] but now is [%+v]", sql, idx, typ, query.Nodes[idx].NodeType)
-// 			}
-// 		}
-// 		for idx, children := range check.children {
-// 			if idx >= len(query.Nodes) {
-// 				t.Fatalf("run sql[%+v] error, query.Nodes[%+v].NodeType not exist", sql, idx)
-// 			}
-// 			if !reflect.DeepEqual(query.Nodes[idx].Children, children) {
-// 				t.Fatalf("run sql[%+v] error, query.Nodes[%+v].Children should be [%+v] but now is [%+v]", sql, idx, children, query.Nodes[idx].Children)
-// 			}
-// 		}
-// 	}
-// }
-
 // test single table plan building
 func TestSingleTableSQLBuilder(t *testing.T) {
 	mock := NewMockOptimizer(false)
@@ -3777,6 +3445,119 @@ func TestSubQuery(t *testing.T) {
 	assert.Error(t, err)
 	if err != nil {
 		assert.Contains(t, err.Error(), "deep correlated predicate containing inner columns cannot be pulled above mark join")
+	}
+}
+
+func TestAggregateArgumentScalarSubqueryFlattened(t *testing.T) {
+	tests := []string{
+		`SELECT AVG((SELECT COUNT(*) FROM REGION r WHERE r.R_REGIONKEY = n.N_NATIONKEY))
+		 FROM NATION n`,
+		`SELECT n.N_REGIONKEY,
+		        COUNT(*),
+		        AVG((SELECT COUNT(*) FROM REGION r WHERE r.R_REGIONKEY = n.N_NATIONKEY))
+		 FROM NATION n
+		 GROUP BY n.N_REGIONKEY`,
+		`WITH stats AS (
+		     SELECT n.N_REGIONKEY,
+		            SUM((SELECT COUNT(*) FROM REGION r WHERE r.R_REGIONKEY = n.N_NATIONKEY)) AS total_regions
+		     FROM NATION n
+		     GROUP BY n.N_REGIONKEY
+		 )
+		 SELECT * FROM stats`,
+	}
+
+	for _, sql := range tests {
+		logicPlan, err := runOneStmt(NewMockOptimizer(false), t, sql)
+		require.NoError(t, err, sql)
+
+		foundAgg := false
+		for _, node := range logicPlan.GetQuery().Nodes {
+			if node.NodeType != plan.Node_AGG {
+				continue
+			}
+			foundAgg = true
+			for _, agg := range node.AggList {
+				require.False(t, hasSubquery(agg), "AGG contains an executable Expr_Sub: %s", sql)
+			}
+		}
+		require.True(t, foundAgg, sql)
+	}
+}
+
+func TestAggregateArgumentScalarSubqueryFlattenedBeforeGroupConcatSort(t *testing.T) {
+	sql := `SELECT n.N_REGIONKEY,
+	               GROUP_CONCAT(n.N_NAME ORDER BY n.N_NAME),
+	               AVG((SELECT COUNT(*) FROM REGION r WHERE r.R_REGIONKEY = n.N_NATIONKEY))
+	        FROM NATION n
+	        GROUP BY n.N_REGIONKEY`
+	logicPlan, err := runOneStmt(NewMockOptimizer(false), t, sql)
+	require.NoError(t, err)
+
+	foundGroupConcatAgg := false
+	query := logicPlan.GetQuery()
+	for _, node := range query.Nodes {
+		if node.NodeType != plan.Node_AGG {
+			continue
+		}
+
+		hasGroupConcat := false
+		for _, agg := range node.AggList {
+			if f := agg.GetF(); f != nil && f.Func.ObjName == NameGroupConcat {
+				hasGroupConcat = true
+				break
+			}
+		}
+		if !hasGroupConcat {
+			continue
+		}
+
+		foundGroupConcatAgg = true
+		require.Len(t, node.Children, 1)
+		sortNode := query.Nodes[node.Children[0]]
+		require.Equal(t, plan.Node_SORT, sortNode.NodeType, "GROUP_CONCAT input must be sorted after subquery joins")
+		for _, orderBy := range sortNode.OrderBy {
+			require.False(t, hasSubquery(orderBy.Expr), "SORT contains an executable Expr_Sub")
+		}
+		require.Len(t, sortNode.Children, 1)
+		require.Equal(t, plan.Node_JOIN, query.Nodes[sortNode.Children[0]].NodeType)
+	}
+	require.True(t, foundGroupConcatAgg)
+}
+
+func TestGroupConcatRejectsOrderBySubquery(t *testing.T) {
+	tests := map[string]string{
+		"positional": `SELECT n.N_REGIONKEY,
+		                     GROUP_CONCAT(
+		                         (SELECT r.R_NAME
+		                            FROM REGION r
+		                           WHERE r.R_REGIONKEY = n.N_NATIONKEY)
+		                         ORDER BY 1)
+		              FROM NATION n
+		              GROUP BY n.N_REGIONKEY`,
+		"wrapped positional": `SELECT n.N_REGIONKEY,
+		                             GROUP_CONCAT(
+		                                 COALESCE((SELECT r.R_NAME
+		                                             FROM REGION r
+		                                            WHERE r.R_REGIONKEY = n.N_NATIONKEY), '')
+		                                 ORDER BY 1)
+		                      FROM NATION n
+		                      GROUP BY n.N_REGIONKEY`,
+		"wrapped explicit": `SELECT n.N_REGIONKEY,
+		                           GROUP_CONCAT(
+		                               n.N_NAME
+		                               ORDER BY COALESCE((SELECT r.R_NAME
+		                                                    FROM REGION r
+		                                                   WHERE r.R_REGIONKEY = n.N_NATIONKEY), ''))
+		                    FROM NATION n
+		                    GROUP BY n.N_REGIONKEY`,
+	}
+
+	for name, sql := range tests {
+		t.Run(name, func(t *testing.T) {
+			_, err := runOneStmt(NewMockOptimizer(false), t, sql)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "subquery in group_concat ORDER BY")
+		})
 	}
 }
 

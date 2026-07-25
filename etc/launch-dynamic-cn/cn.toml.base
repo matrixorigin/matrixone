@@ -46,3 +46,10 @@ type = "distributed-tae"
 [cn.frontend]
 port = %d
 unix-socket = "/tmp/mysql%d.sock"
+
+[cn.frontend.iceberg]
+enable = true
+enable-write = true
+enable-delete = true
+enable-dml = true
+enable-maintenance = true

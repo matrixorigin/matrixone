@@ -392,18 +392,31 @@ func TestDetermineShuffleForDedupJoin(t *testing.T) {
 		name              string
 		dedupCtx          *plan.DedupJoinCtx
 		onDuplicateAction plan.Node_OnDuplicateAction
+		keyType           types.T
 		wantShuffle       bool
 	}{
 		{
 			name:        "plain_dedup_join_large_build_side_can_shuffle",
 			dedupCtx:    &plan.DedupJoinCtx{},
+			keyType:     types.T_int64,
 			wantShuffle: true,
+		},
+		{
+			name:     "float32_key_stays_unshuffled",
+			dedupCtx: &plan.DedupJoinCtx{},
+			keyType:  types.T_float32,
+		},
+		{
+			name:     "float64_key_stays_unshuffled",
+			dedupCtx: &plan.DedupJoinCtx{},
+			keyType:  types.T_float64,
 		},
 		{
 			name: "old_col_list_disables_shuffle",
 			dedupCtx: &plan.DedupJoinCtx{
 				OldColList: []plan.ColRef{{RelPos: 1, ColPos: 0}},
 			},
+			keyType: types.T_int64,
 		},
 		{
 			name: "ignore_old_col_list_disables_shuffle",
@@ -411,6 +424,7 @@ func TestDetermineShuffleForDedupJoin(t *testing.T) {
 				OldColList: []plan.ColRef{{RelPos: 1, ColPos: 0}},
 			},
 			onDuplicateAction: plan.Node_IGNORE,
+			keyType:           types.T_int64,
 		},
 		{
 			name: "old_col_capture_list_disables_shuffle",
@@ -422,6 +436,7 @@ func TestDetermineShuffleForDedupJoin(t *testing.T) {
 					},
 				},
 			},
+			keyType: types.T_int64,
 		},
 	}
 
@@ -439,6 +454,7 @@ func TestDetermineShuffleForDedupJoin(t *testing.T) {
 				NodeType:          plan.Node_JOIN,
 				JoinType:          plan.Node_DEDUP,
 				Children:          []int32{0, 1},
+				OnList:            []*plan.Expr{makeRightDedupEquality(c.keyType)},
 				OnDuplicateAction: c.onDuplicateAction,
 				DedupJoinCtx:      c.dedupCtx,
 				Stats:             DefaultStats(),
@@ -459,11 +475,9 @@ func TestDetermineShuffleForDedupJoin(t *testing.T) {
 
 func TestGetRangeShuffleIndexForZM(t *testing.T) {
 	zm := index2.NewZM(types.T_datetime, 0)
-	defer func() {
-		r := recover()
-		fmt.Println("panic recover", r)
-	}()
-	GetRangeShuffleIndexForZM(0, 1000, zm, 4)
+	require.PanicsWithValue(t, "unsupported shuffle type!", func() {
+		GetRangeShuffleIndexForZM(0, 1000, zm, 4)
+	})
 }
 
 func TestShuffleByZonemap(t *testing.T) {

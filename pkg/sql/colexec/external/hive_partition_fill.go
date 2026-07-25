@@ -362,7 +362,9 @@ func fillConstantVector(
 		}
 		return vector.SetConstFixed(vec, v, rowCount, mp)
 
-	case types.T_array_float32, types.T_array_float64:
+	case types.T_array_float32, types.T_array_float64,
+		types.T_array_bf16, types.T_array_float16,
+		types.T_array_int8, types.T_array_uint8:
 		return moerr.NewNotSupportedf(proc.Ctx,
 			"unsupported partition column type VECTOR for col=%s, path=%s", col.Name, filePath)
 

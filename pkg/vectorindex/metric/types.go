@@ -65,6 +65,7 @@ const (
 const (
 	Quantization_F32_Str   = "float32"
 	Quantization_F16_Str   = "float16"
+	Quantization_BF16_Str  = "bf16"
 	Quantization_INT8_Str  = "int8"
 	Quantization_UINT8_Str = "uint8"
 	Quantization_F64_Str   = "float64"

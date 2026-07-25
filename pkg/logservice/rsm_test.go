@@ -16,6 +16,7 @@ package logservice
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 
 	sm "github.com/lni/dragonboat/v4/statemachine"
@@ -139,6 +140,85 @@ func TestTNLeaseHolderCanBeUpdated(t *testing.T) {
 	assert.Nil(t, err)
 	// first lease history record won't be truncated
 	assert.Equal(t, 2, len(tsm.state.LeaseHistory))
+}
+
+func TestWALRecoveryLeaseFence(t *testing.T) {
+	tsm := newStateMachine(1, 2).(*stateMachine)
+	digest := strings.Repeat("a", walRecoveryDigestSize)
+	otherDigest := strings.Repeat("b", walRecoveryDigestSize)
+
+	result, err := tsm.Update(sm.Entry{Index: 1, Cmd: getSetLeaseHolderCmd(42)})
+	assert.NoError(t, err)
+	assert.Empty(t, result.Data)
+	result, err = tsm.Update(sm.Entry{Index: 2, Cmd: getEndWALRecoveryCmd(digest, 1)})
+	assert.NoError(t, err)
+	assert.Equal(t, uint64(42), binaryEnc.Uint64(result.Data))
+	assert.Equal(t, uint64(42), tsm.state.LeaseHolderID)
+
+	normalUserCmd := buildUserEntryCmd(42, []byte("normal"))
+	result, err = tsm.Update(sm.Entry{Index: 3, Cmd: normalUserCmd})
+	assert.NoError(t, err)
+	assert.Equal(t, uint64(3), result.Value)
+
+	result, err = tsm.Update(sm.Entry{Index: 4, Cmd: getBeginWALRecoveryCmd(digest, 1)})
+	assert.NoError(t, err)
+	assert.Equal(t, uint64(4), result.Value)
+	assert.Equal(t, walRecoveryLeaseHolderID, tsm.state.LeaseHolderID)
+	assert.Equal(t, digest, tsm.state.WALRecoveryDigest)
+	assert.Equal(t, uint64(1), tsm.state.WALRecoveryEntryCount)
+	assert.Equal(t, uint64(4), tsm.state.WALRecoveryBaseLsn)
+	assert.Equal(t, uint64(42), tsm.state.WALRecoveryOriginalLeaseHolderID)
+
+	result, err = tsm.Update(sm.Entry{Index: 5, Cmd: getSetLeaseHolderCmd(99)})
+	assert.NoError(t, err)
+	assert.Equal(t, walRecoveryLeaseHolderID, binaryEnc.Uint64(result.Data))
+	assert.Equal(t, walRecoveryLeaseHolderID, tsm.state.LeaseHolderID)
+
+	result, err = tsm.Update(sm.Entry{Index: 6, Cmd: normalUserCmd})
+	assert.NoError(t, err)
+	assert.Equal(t, walRecoveryLeaseHolderID, binaryEnc.Uint64(result.Data))
+
+	recoveryUserCmd := buildUserEntryCmd(walRecoveryLeaseHolderID, []byte("recovery"))
+	result, err = tsm.Update(sm.Entry{Index: 7, Cmd: recoveryUserCmd})
+	assert.NoError(t, err)
+	assert.Equal(t, uint64(7), result.Value)
+	assert.Equal(t, uint64(1), tsm.state.WALRecoveryCompletedEntries)
+	assert.Equal(t, uint64(7), tsm.state.WALRecoveryLastLsn)
+
+	result, err = tsm.Update(sm.Entry{Index: 8, Cmd: recoveryUserCmd})
+	assert.NoError(t, err)
+	assert.Equal(t, walRecoveryLeaseHolderID, binaryEnc.Uint64(result.Data))
+
+	result, err = tsm.Update(sm.Entry{Index: 9, Cmd: getBeginWALRecoveryCmd(otherDigest, 1)})
+	assert.NoError(t, err)
+	assert.Equal(t, walRecoveryLeaseHolderID, binaryEnc.Uint64(result.Data))
+
+	result, err = tsm.Update(sm.Entry{Index: 10, Cmd: getBeginWALRecoveryCmd(digest, 1)})
+	assert.NoError(t, err)
+	assert.Equal(t, uint64(10), result.Value)
+	assert.Equal(t, walRecoveryLeaseHolderID, tsm.state.LeaseHolderID)
+
+	result, err = tsm.Update(sm.Entry{Index: 11, Cmd: getEndWALRecoveryCmd(digest, 1)})
+	assert.NoError(t, err)
+	assert.Equal(t, uint64(11), result.Value)
+	assert.Equal(t, uint64(42), tsm.state.LeaseHolderID)
+	assert.True(t, tsm.state.WALRecoveryComplete)
+
+	result, err = tsm.Update(sm.Entry{Index: 12, Cmd: normalUserCmd})
+	assert.NoError(t, err)
+	assert.Equal(t, uint64(12), result.Value)
+
+	value, err := tsm.Lookup(walRecoveryStateQuery{})
+	assert.NoError(t, err)
+	assert.Equal(t, walRecoveryMarkerState{
+		Digest:                digest,
+		EntryCount:            1,
+		CompletedEntries:      1,
+		BaseLSN:               4,
+		LastLSN:               7,
+		OriginalLeaseHolderID: 42,
+		Complete:              true,
+	}, value)
 }
 
 func TestTruncatedIndexCanBeUpdated(t *testing.T) {

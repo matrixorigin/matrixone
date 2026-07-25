@@ -1,20 +1,20 @@
 create function sql_sum (a int, b int) returns int language sql as '$1 + $2';
 select sql_sum(1, 1) as ret;
-ret
+➤ ret[-5,64,0]  𝄀
 2
 drop function sql_sum(int, int);
 drop database if exists udf_db1;
 create database udf_db1;
 use udf_db1;
 select name, db from mo_catalog.mo_user_defined_function where db = 'udf_db1';
-name    db
+➤ name[12,-1,0]  ¦  db[12,-1,0]
 create function helloworld () returns int language sql as 'select id from tbl1 limit 1';
 select name, db from mo_catalog.mo_user_defined_function where db = 'udf_db1';
-name    db
-helloworld    udf_db1
+➤ name[12,-1,0]  ¦  db[12,-1,0]  𝄀
+helloworld  ¦  udf_db1
 drop database if exists udf_db1;
 select name, db from mo_catalog.mo_user_defined_function where db = 'udf_db1';
-name    db
+➤ name[12,-1,0]  ¦  db[12,-1,0]
 create function udf_db1.helloworld5 () returns int language sql as 'select id from tbl1 limit 1';
 Unknown database udf_db1
 create database udf_db1;
@@ -25,7 +25,7 @@ drop function db2.helloworld5();
 Unknown database db2
 create function sql_nl() returns varchar language sql as $$select '\n'$$;
 select hex(body) as body_hex from mo_catalog.mo_user_defined_function where name = 'sql_nl' and db = 'udf_db1';
-body_hex
+➤ body_hex[12,-1,0]  𝄀
 73656C65637420275C6E27
 drop table if exists udf_sql_mode_t;
 create table udf_sql_mode_t(v varchar(10));
@@ -34,13 +34,13 @@ set sql_mode = 'PIPES_AS_CONCAT';
 create function sql_mode_pipe() returns varchar language sql as $$select 'a'||'b'$$;
 set sql_mode = '';
 select sql_mode_pipe();
-sql_mode_pipe()
+➤ sql_mode_pipe()[12,-1,0]  𝄀
 ab
 set sql_mode = 'ANSI_QUOTES';
 create function sql_mode_ansi() returns varchar language sql as $$select "v" from "udf_sql_mode_t" limit 1$$;
 set sql_mode = '';
 select sql_mode_ansi();
-sql_mode_ansi()
+➤ sql_mode_ansi()[12,-1,0]  𝄀
 ok
 drop function sql_mode_pipe();
 drop function sql_mode_ansi();

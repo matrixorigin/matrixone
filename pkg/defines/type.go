@@ -255,9 +255,6 @@ type LogicalIdKey struct{}
 // CarryOnCtxKeys defines keys needed to be serialized when pass context through net
 var CarryOnCtxKeys = []any{TenantIDKey{}, UserIDKey{}, RoleIDKey{}}
 
-// TemporaryTN use TemporaryTN to get temporary storage from Context
-type TemporaryTN struct{}
-
 type IsMoLogger struct{}
 
 type SourceScanResKey struct{}

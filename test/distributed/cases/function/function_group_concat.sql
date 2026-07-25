@@ -165,6 +165,9 @@ INSERT INTO group_concat_12 values (3, 3);
 SELECT group_concat(c) FROM group_concat_11;
 SELECT group_concat_12.a,group_concat_12.c FROM group_concat_12,group_concat_11 where group_concat_12.a=group_concat_11.a;
 SELECT group_concat(c order by (SELECT mid(group_concat(c order by a),1,5) FROM group_concat_12 where group_concat_12.a=group_concat_11.a) desc) as grp FROM group_concat_11;
+SELECT group_concat((SELECT c FROM group_concat_12 where group_concat_12.a=group_concat_11.a) order by 1) as grp FROM group_concat_11;
+SELECT group_concat(coalesce((SELECT c FROM group_concat_12 where group_concat_12.a=group_concat_11.a), '') order by 1) as grp FROM group_concat_11;
+SELECT group_concat(group_concat_11.c order by coalesce((SELECT c FROM group_concat_12 where group_concat_12.a=group_concat_11.a), '')) as grp FROM group_concat_11;
 
 
 -- @suite

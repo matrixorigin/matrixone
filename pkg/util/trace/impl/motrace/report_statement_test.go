@@ -27,6 +27,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
+	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 
 	"github.com/google/uuid"
@@ -329,7 +330,7 @@ func TestMergeStats(t *testing.T) {
 		t.Fatalf("mergeStats failed: %v", err)
 	}
 
-	wantBytes := []byte("[5,228295,3600.000,1,0,0,1,3,0,0,0]")
+	wantBytes := []byte("[6,228295,1800.000,1,0,0,1,3,0,0,0,128,0,0,0,0,0]")
 	require.Equal(t, wantBytes, e.statsArray.ToJsonString())
 
 	n = &StatementInfo{}
@@ -342,9 +343,78 @@ func TestMergeStats(t *testing.T) {
 		t.Fatalf("mergeStats failed: %v", err)
 	}
 
-	wantBytes = []byte("[5,228296,3601.000,1,0,0,1,13,1.1234,1,1]")
+	wantBytes = []byte("[6,228296,1800.000,1,0,0,1,13,1.1234,1,1,128,0,0,0,0,0]")
 	require.Equal(t, wantBytes, e.statsArray.ToJsonString())
 
+}
+
+func TestMergeStatsUsesTypedResourceSummary(t *testing.T) {
+	e := &StatementInfo{Duration: 5, RowsRead: 1, BytesScan: 2}
+	eSummary := resource.StatementResourceSummary{
+		Usage:           resource.Usage{ExclusiveActiveNS: 10},
+		Memory:          resource.MemoryTotals{MaxDomainPeakLiveBytes: 100},
+		StatementWallNS: 5,
+	}
+	e.SetResourceSummary(eSummary)
+	e.statsArray = statistic.FromResourceSummary(eSummary, 3)
+	n := &StatementInfo{Duration: 7, RowsRead: 3, BytesScan: 4}
+	nSummary := resource.StatementResourceSummary{
+		Usage:           resource.Usage{ExclusiveActiveNS: 20},
+		Memory:          resource.MemoryTotals{MaxDomainPeakLiveBytes: 80},
+		StatementWallNS: 7,
+	}
+	n.SetResourceSummary(nSummary)
+	n.statsArray = statistic.FromResourceSummary(nSummary, 4)
+	e.Duration += n.Duration
+	require.NoError(t, mergeStats(e, n))
+	require.Equal(t, uint64(30), e.resourceSummary.Usage.ExclusiveActiveNS)
+	require.Equal(t, uint64(100), e.resourceSummary.Memory.MaxDomainPeakLiveBytes)
+	require.Equal(t, uint64(12), e.resourceSummary.StatementWallNS)
+	require.NotZero(t, e.resourceSummary.Quality&resource.QualityAggregated)
+	require.Equal(t, float64(30), e.statsArray.GetTimeConsumed())
+	require.Equal(t, float64(100), e.statsArray.GetMemorySize())
+	require.Equal(t, float64(7), e.statsArray.GetCU())
+	require.Equal(t, int64(4), e.RowsRead)
+	require.Equal(t, int64(6), e.BytesScan)
+}
+
+func TestMergeStatsMixedProducerKeepsAllContributions(t *testing.T) {
+	firstSummary := resource.StatementResourceSummary{
+		Usage: resource.Usage{
+			ExclusiveActiveNS: 10,
+			S3ReadBytes:       11,
+		},
+		OutputPacketCount: 1,
+	}
+	e := &StatementInfo{}
+	e.SetResourceSummary(firstSummary)
+	e.statsArray = statistic.FromResourceSummary(firstSummary, 1)
+
+	untyped := &StatementInfo{}
+	untyped.statsArray.Init().
+		WithTimeConsumed(20).
+		WithS3ReadBytes(22).
+		WithOutPacketCount(2).
+		WithCU(2)
+	require.NoError(t, mergeStats(e, untyped))
+	require.False(t, e.resourceStated)
+
+	lastSummary := resource.StatementResourceSummary{
+		Usage: resource.Usage{
+			ExclusiveActiveNS: 30,
+			S3ReadBytes:       33,
+		},
+		OutputPacketCount: 3,
+	}
+	last := &StatementInfo{}
+	last.SetResourceSummary(lastSummary)
+	last.statsArray = statistic.FromResourceSummary(lastSummary, 3)
+	require.NoError(t, mergeStats(e, last))
+
+	require.Equal(t, float64(60), e.statsArray.GetTimeConsumed())
+	require.Equal(t, float64(66), e.statsArray.GetS3ReadBytes())
+	require.Equal(t, float64(6), e.statsArray.GetOutPacketCount())
+	require.Equal(t, float64(6), e.statsArray.GetCU())
 }
 
 func TestCalculateAggrMemoryBytes(t *testing.T) {

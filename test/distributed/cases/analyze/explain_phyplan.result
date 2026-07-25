@@ -60,11 +60,11 @@ Scope 1 (Magic: Remote, mcpu: 1, Receiver: [])  𝄀
                 └── projection  𝄀
                     └── tablescan
 explain phyplan verbose select a.ename,b.dname from emp a left join dept b on a.deptno = b.deptno;
--- @regex("(?s)MemoryUsage.*CPU", true)
+-- @regex("(?s)ActiveTime.*WaitTime.*PeakMemory.*CPU", true)
 -- @regex("(?s)hash join\(idx:(\d+).*hash build\(idx:\1", true)
 tp query phyplan  𝄀
 Overview:  𝄀
-	MemoryUsage:34674B,  SpillSize:0B,  DiskI/O:0B,  NewWorkI/O:0B, AffectedRows: 0  𝄀
+	SpillSize:0B, DiskI/O:0B, NetworkI/O:0B, AffectedRows:0  𝄀
 	S3List:0, S3Head:0, S3Put:0, S3Get:0, S3Delete:0, S3DeleteMul:0, S3InputEstByRows((0+0)/8192):0.0000   𝄀
 	CPU Usage:   𝄀
 		- Total CPU Time: 281696ns   𝄀

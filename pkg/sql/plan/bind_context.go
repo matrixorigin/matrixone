@@ -26,12 +26,13 @@ import (
 
 func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {
 	bc := &BindContext{
-		groupByAst:     make(map[string]int32),
-		aggregateByAst: make(map[string]int32),
-		sampleByAst:    make(map[string]int32),
-		projectByExpr:  make(map[string]int32),
-		windowByAst:    make(map[string]int32),
-		timeByAst:      make(map[string]int32),
+		groupByAst:      make(map[string]int32),
+		groupByParamAst: make(map[string]int32),
+		aggregateByAst:  make(map[string]int32),
+		sampleByAst:     make(map[string]int32),
+		projectByExpr:   make(map[string]int32),
+		windowByAst:     make(map[string]int32),
+		timeByAst:       make(map[string]int32),
 
 		projectColByAst: make(map[string]int32),
 
@@ -59,6 +60,7 @@ func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {
 		}
 		bc.snapshot = parent.snapshot
 		bc.remapOption = parent.remapOption
+		bc.numericCteByName = parent.numericCteByName
 		if len(parent.viewChain) > 0 {
 			bc.viewChain = append([]string{}, parent.viewChain...)
 		}
@@ -66,6 +68,22 @@ func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {
 	}
 
 	return bc
+}
+
+// newCTEDeclarationContext records the name-resolution scope at a WITH
+// declaration without retaining bindings that the declaring query block adds
+// later while binding its FROM clause. The normal child-context constructor
+// carries default-database, snapshot, CTE-state, rewrite, and view metadata;
+// detaching the new context from ctx then leaves only the already-existing
+// outer query blocks available for correlation.
+func newCTEDeclarationContext(builder *QueryBuilder, ctx *BindContext) *BindContext {
+	declarationCtx := NewBindContext(builder, ctx)
+	declarationCtx.parent = ctx.parent
+	declarationCtx.cteByName = ctx.cteByName
+	for name, cteRef := range ctx.boundCtes {
+		declarationCtx.boundCtes[name] = cteRef
+	}
+	return declarationCtx
 }
 
 func (bc *BindContext) rootTag() int32 {
@@ -211,6 +229,41 @@ func (bc *BindContext) mergeContexts(ctx context.Context, left, right *BindConte
 	}
 
 	return nil
+}
+
+// replaceBinding replaces one outward table binding without leaving its old
+// table or column names visible. The caller must finish validating the new
+// binding before calling this helper.
+func (bc *BindContext) replaceBinding(oldBinding, newBinding *Binding) {
+	for i, binding := range bc.bindings {
+		if binding == oldBinding {
+			bc.bindings[i] = newBinding
+			break
+		}
+	}
+
+	if bc.bindingByTag[oldBinding.tag] == oldBinding {
+		bc.bindingByTag[oldBinding.tag] = newBinding
+	}
+	if bc.bindingByTable[oldBinding.table] == oldBinding {
+		delete(bc.bindingByTable, oldBinding.table)
+	}
+	bc.bindingByTable[newBinding.table] = newBinding
+
+	for col, binding := range bc.bindingByCol {
+		if binding == oldBinding {
+			delete(bc.bindingByCol, col)
+		}
+	}
+	for _, col := range newBinding.cols {
+		if _, ok := bc.bindingByCol[col]; ok {
+			bc.bindingByCol[col] = nil
+		} else {
+			bc.bindingByCol[col] = newBinding
+		}
+	}
+
+	bc.bindingTree = &BindingTreeNode{binding: newBinding}
 }
 
 func (bc *BindContext) addUsingCol(col string, typ plan.Node_JoinType, left, right *BindContext) (*plan.Expr, error) {
