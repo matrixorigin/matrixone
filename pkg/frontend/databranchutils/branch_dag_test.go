@@ -14,7 +14,12 @@
 
 package databranchutils
 
-import "testing"
+import (
+	"os"
+	"os/exec"
+	"runtime/debug"
+	"testing"
+)
 
 func TestDAGFunctionality(t *testing.T) {
 
@@ -194,4 +199,53 @@ func TestDAGFunctionality(t *testing.T) {
 			})
 		}
 	})
+}
+
+func TestNewDAGCycle(t *testing.T) {
+	const childEnv = "MO_TEST_NEW_DAG_CYCLE_CHILD"
+	if os.Getenv(childEnv) == "" {
+		cmd := exec.Command(os.Args[0], "-test.run=^TestNewDAGCycle$")
+		cmd.Env = append(os.Environ(), childEnv+"=1")
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("cyclic DAG construction failed: %v\n%s", err, output)
+		}
+	} else {
+		// Keep a regression from exhausting the machine's full process stack.
+		debug.SetMaxStack(256 << 10)
+	}
+
+	dag := NewDAG([]DataBranchMetadata{
+		{TableID: 1, PTableID: 2},
+		{TableID: 2, PTableID: 1},
+		{TableID: 3, PTableID: 1},
+	})
+	if dag.HasParent(1) || dag.HasParent(2) {
+		t.Fatal("nodes in a parent cycle must be detached from the cycle")
+	}
+	if !dag.HasParent(3) {
+		t.Fatal("a non-cyclic descendant must retain its parent")
+	}
+	if lca, _, _, ok := dag.FindLCA(3, 1); !ok || lca != 1 {
+		t.Fatalf("FindLCA(3, 1): got lca=%d ok=%v, want lca=1 ok=true", lca, ok)
+	}
+	if _, _, _, ok := dag.FindLCA(1, 2); ok {
+		t.Fatal("detached cycle nodes must not report a common ancestor")
+	}
+
+	selfCycle := NewDAG([]DataBranchMetadata{{TableID: 4, PTableID: 4}})
+	if selfCycle.HasParent(4) {
+		t.Fatal("a self-parent node must be detached from itself")
+	}
+
+	const chainLength = 4096
+	chain := make([]DataBranchMetadata, chainLength)
+	chain[0] = DataBranchMetadata{TableID: 1}
+	for i := 1; i < chainLength; i++ {
+		chain[i] = DataBranchMetadata{TableID: uint64(i + 1), PTableID: uint64(i)}
+	}
+	deepDAG := NewDAG(chain)
+	if lca, child, _, ok := deepDAG.FindLCA(1, chainLength); !ok || lca != 1 || child != 1 {
+		t.Fatalf("deep-chain LCA: got lca=%d child=%d ok=%v", lca, child, ok)
+	}
 }

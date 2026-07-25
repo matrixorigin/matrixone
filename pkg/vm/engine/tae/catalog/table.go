@@ -268,6 +268,17 @@ func (entry *TableEntry) getTombstoneObjectByID(id *types.Objectid) (obj *Object
 	return entry.tombstoneObjects.GetObjectByID(id)
 }
 
+func (entry *TableEntry) UpdateObjectCreateTS(id *types.Objectid, isTombstone bool, ts types.TS) error {
+	obj, err := entry.getObjectList(isTombstone).UpdateCreateTS(id, ts)
+	if err != nil {
+		return err
+	}
+	if obj.GetObjectData() != nil {
+		obj.GetObjectData().UpdateMeta(obj)
+	}
+	return nil
+}
+
 func (entry *TableEntry) MakeTombstoneObjectIt() btree.IterG[*ObjectEntry] {
 	return entry.tombstoneObjects.tree.Load().Iter()
 }
@@ -346,8 +357,27 @@ func (entry *TableEntry) CreateObject(
 	entry.Lock()
 	defer entry.Unlock()
 	created = NewObjectEntry(entry, txn, *opts.Stats, dataFactory, opts.IsTombstone)
-	if entry.GetCatalog().mergeNotifier != nil && !opts.Stats.GetAppendable() {
-		entry.GetCatalog().mergeNotifier.OnCreateNonAppendObject(ToMergeTable(entry))
+	if !opts.Stats.GetAppendable() {
+		if notifier := entry.GetCatalog().getMergeNotifier(); notifier != nil {
+			notifier.OnCreateNonAppendObject(ToMergeTable(entry))
+		}
+	}
+	entry.AddEntryLocked(created)
+	return
+}
+
+func (entry *TableEntry) CreateCommittedObject(
+	ts types.TS,
+	opts *objectio.CreateObjOpt,
+	dataFactory ObjectDataFactory,
+) (created *ObjectEntry, err error) {
+	entry.Lock()
+	defer entry.Unlock()
+	created = NewCommittedObjectEntry(entry, ts, *opts.Stats, dataFactory, opts.IsTombstone)
+	if !opts.Stats.GetAppendable() {
+		if notifier := entry.GetCatalog().getMergeNotifier(); notifier != nil {
+			notifier.OnCreateNonAppendObject(ToMergeTable(entry))
+		}
 	}
 	entry.AddEntryLocked(created)
 	return
@@ -815,8 +845,10 @@ func (entry *TableEntry) ApplyCommit(id string) (err error) {
 	entry.TableNode.schema.Store(schema)
 
 	// create table commit
-	if lastestNode.DeletedAt.IsEmpty() && entry.GetCatalog().mergeNotifier != nil {
-		entry.GetCatalog().mergeNotifier.OnCreateTableCommit(ToMergeTable(entry))
+	if lastestNode.DeletedAt.IsEmpty() {
+		if notifier := entry.GetCatalog().getMergeNotifier(); notifier != nil {
+			notifier.OnCreateTableCommit(ToMergeTable(entry))
+		}
 	}
 
 	return

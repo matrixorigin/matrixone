@@ -386,6 +386,7 @@ func TestExternalScanParquetRowGroupShardsRoundtrip(t *testing.T) {
 				FileSize:              []int64{8192},
 				FileOffsetTotal:       []*pipeline.FileOffset{{Offset: []int64{0, -1}}},
 				ParquetRowGroupShards: shards,
+				StrictSqlMode:         true,
 			},
 			ExParam: external.ExParam{
 				Fileparam: &external.ExFileparam{},
@@ -397,11 +398,13 @@ func TestExternalScanParquetRowGroupShardsRoundtrip(t *testing.T) {
 	_, pipeInstr, err := convertToPipelineInstruction(op, proc, ctx, 1)
 	require.NoError(t, err)
 	require.Equal(t, shards, pipeInstr.ExternalScan.ParquetRowGroupShards)
+	require.True(t, pipeInstr.ExternalScan.StrictSqlMode)
 
 	restored, err := convertToVmOperator(pipeInstr, ctx, nil)
 	require.NoError(t, err)
 	restoredExternal := restored.(*external.External)
 	require.Equal(t, shards, restoredExternal.Es.ParquetRowGroupShards)
+	require.True(t, restoredExternal.Es.StrictSqlMode)
 }
 
 func TestExternalScanIcebergRuntimeRoundtrip(t *testing.T) {
@@ -667,6 +670,49 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		restoredOp := restored.(*multi_update.MultiUpdate)
 		require.True(t, restoredOp.CountDeleteAffectRows,
 			"CountDeleteAffectRows must survive the remote pipeline round-trip")
+	})
+
+	t.Run("MultiUpdate_RejectZeroTemporal", func(t *testing.T) {
+		op := &multi_update.MultiUpdate{
+			MultiUpdateCtx: []*multi_update.MultiUpdateCtx{
+				{
+					ObjRef:   &planpb.ObjectRef{ObjName: "t1"},
+					TableDef: &planpb.TableDef{Name: "t1"},
+				},
+			},
+			Action:             multi_update.UpdateWriteTable,
+			RejectZeroTemporal: true,
+		}
+		_, pipeInstr, err := convertToPipelineInstruction(op, proc, ctx, 1)
+		require.NoError(t, err)
+		require.True(t, pipeInstr.MultiUpdate.RejectZeroTemporal)
+
+		wireBytes, err := pipeInstr.Marshal()
+		require.NoError(t, err)
+		wireInstr := new(pipeline.Instruction)
+		require.NoError(t, wireInstr.Unmarshal(wireBytes))
+		require.True(t, wireInstr.MultiUpdate.RejectZeroTemporal)
+
+		restored, err := convertToVmOperator(wireInstr, ctx, nil)
+		require.NoError(t, err)
+		require.True(t, restored.(*multi_update.MultiUpdate).RejectZeroTemporal)
+	})
+
+	t.Run("PreInsert_RejectZeroTemporal", func(t *testing.T) {
+		op := &preinsert.PreInsert{RejectZeroTemporal: true}
+		_, pipeInstr, err := convertToPipelineInstruction(op, proc, ctx, 1)
+		require.NoError(t, err)
+		require.True(t, pipeInstr.PreInsert.RejectZeroTemporal)
+
+		wireBytes, err := pipeInstr.Marshal()
+		require.NoError(t, err)
+		wireInstr := new(pipeline.Instruction)
+		require.NoError(t, wireInstr.Unmarshal(wireBytes))
+		require.True(t, wireInstr.PreInsert.RejectZeroTemporal)
+
+		restored, err := convertToVmOperator(wireInstr, ctx, nil)
+		require.NoError(t, err)
+		require.True(t, restored.(*preinsert.PreInsert).RejectZeroTemporal)
 	})
 
 	t.Run("DedupJoin_DedupBuildKeepLast", func(t *testing.T) {
