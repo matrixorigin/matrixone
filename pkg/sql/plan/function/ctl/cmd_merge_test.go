@@ -15,48 +15,12 @@
 package ctl
 
 import (
-	"context"
-	"errors"
-	"math"
-	"testing"
-
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/pb/api"
-	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
-	"github.com/matrixorigin/matrixone/pkg/pb/txn"
-	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/stretchr/testify/require"
+	"math"
+	"testing"
 )
-
-type recordingMergeTxnOperator struct {
-	client.TxnOperator
-	requests []txn.TxnRequest
-}
-
-type recordingDeleteFileService struct {
-	fileservice.FileService
-	deleted []string
-}
-
-func (fs *recordingDeleteFileService) Delete(
-	_ context.Context,
-	paths ...string,
-) error {
-	fs.deleted = append(fs.deleted, paths...)
-	return nil
-}
-
-func (op *recordingMergeTxnOperator) Write(
-	_ context.Context,
-	requests []txn.TxnRequest,
-) (*rpc.SendResult, error) {
-	op.requests = requests
-	return &rpc.SendResult{}, nil
-}
 
 func TestParseArgs(t *testing.T) {
 	cases := []struct {
@@ -199,68 +163,5 @@ func TestParseArgs(t *testing.T) {
 		} else {
 			require.Equal(t, c.r, a)
 		}
-	}
-}
-
-func TestTxnWriteUsesLineageAwareOpcode(t *testing.T) {
-	op := new(recordingMergeTxnOperator)
-	target := metadata.TNShard{
-		TNShardRecord: metadata.TNShardRecord{ShardID: 7},
-		ReplicaID:     8,
-		Address:       "tn",
-	}
-	payload := []byte("merge")
-
-	result, err := txnWrite(context.Background(), target, op, payload)
-	require.NoError(t, err)
-	require.NotNil(t, result)
-	require.Len(t, op.requests, 1)
-	require.Equal(t, uint32(api.OpCode_OpCommitMergeV2), op.requests[0].CNRequest.OpCode)
-	require.Equal(t, target, op.requests[0].CNRequest.Target)
-	require.Equal(t, payload, op.requests[0].CNRequest.Payload)
-}
-
-func TestCleanupMergeFilesAfterDefinitiveWriteRejection(t *testing.T) {
-	id := objectio.NewObjectid()
-	created := objectio.NewObjectStatsWithObjectID(&id, false, true, false)
-	entry := &api.MergeCommitEntry{
-		BookingLoc:  []string{"booking"},
-		CreatedObjs: [][]byte{created.Marshal()},
-	}
-
-	for _, test := range []struct {
-		name       string
-		err        error
-		wantDelete bool
-	}{
-		{
-			name:       "old TN rejects V2",
-			err:        moerr.NewNotSupportedNoCtx("unknown write op"),
-			wantDelete: true,
-		},
-		{
-			name: "ambiguous RPC failure",
-			err:  moerr.NewRpcErrorNoCtx("connection closed"),
-		},
-		{
-			name: "untyped failure",
-			err:  errors.New("write failed"),
-		},
-		{
-			name: "success",
-		},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			fs := new(recordingDeleteFileService)
-			cleanupMergeFilesAfterWrite(entry, fs, test.err)
-			if test.wantDelete {
-				require.Equal(t, []string{
-					"booking",
-					created.ObjectName().String(),
-				}, fs.deleted)
-			} else {
-				require.Empty(t, fs.deleted)
-			}
-		})
 	}
 }

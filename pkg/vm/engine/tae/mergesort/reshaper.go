@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 )
@@ -55,7 +54,6 @@ func reshape(ctx context.Context, host MergeTaskHost) error {
 	var writer *ioutil.BlockWriter
 	var buffer *batch.Batch
 	var releaseF func()
-	currentObjectCNOrigin := false
 	defer func() {
 		if releaseF != nil {
 			releaseF()
@@ -75,7 +73,6 @@ func reshape(ctx context.Context, host MergeTaskHost) error {
 		}
 	}()
 	for i := 0; i < originalObjCnt; i++ {
-		sourceCNOrigin := host.IsSourceCNOrigin(uint32(i))
 		loadedBlkCnt := 0
 		var del *nulls.Nulls
 		var err error
@@ -95,11 +92,6 @@ func reshape(ctx context.Context, host MergeTaskHost) error {
 					if err != nil {
 						return err
 					}
-				}
-				if !currentObjectCNOrigin && sourceCNOrigin {
-					currentObjectCNOrigin = host.IsRowCNOrigin(
-						uint32(i), nextBatch, uint32(j),
-					)
 				}
 
 				if host.DoTransfer() {
@@ -136,13 +128,10 @@ func reshape(ctx context.Context, host MergeTaskHost) error {
 					buffer.CleanOnlyData()
 
 					if stats.needNewObject() {
-						if err := syncObject(
-							ctx, writer, host, currentObjectCNOrigin,
-						); err != nil {
+						if err := syncObject(ctx, writer, host); err != nil {
 							return err
 						}
 						writer = nil
-						currentObjectCNOrigin = false
 
 						stats.objRowCnt = 0
 						stats.objBlkCnt = 0
@@ -171,9 +160,7 @@ func reshape(ctx context.Context, host MergeTaskHost) error {
 		buffer.CleanOnlyData()
 	}
 	if stats.objBlkCnt > 0 {
-		if err := syncObject(
-			ctx, writer, host, currentObjectCNOrigin,
-		); err != nil {
+		if err := syncObject(ctx, writer, host); err != nil {
 			return err
 		}
 		writer = nil
@@ -187,12 +174,7 @@ func reshape(ctx context.Context, host MergeTaskHost) error {
 	return nil
 }
 
-func syncObject(
-	ctx context.Context,
-	writer *ioutil.BlockWriter,
-	host MergeTaskHost,
-	hasCNOrigin bool,
-) error {
+func syncObject(ctx context.Context, writer *ioutil.BlockWriter, host MergeTaskHost) error {
 	if host.HasBigDelEvent() {
 		return moerr.NewInternalErrorNoCtxf("LockMerge give up in syncObject %v", host.Name())
 	}
@@ -201,9 +183,6 @@ func syncObject(
 		return err
 	}
 	cobjstats := writer.GetObjectStats()
-	if hasCNOrigin {
-		objectio.WithCNOrigin()(&cobjstats)
-	}
 	commitEntry.CreatedObjs = append(commitEntry.CreatedObjs, cobjstats.Clone().Marshal())
 	return nil
 }

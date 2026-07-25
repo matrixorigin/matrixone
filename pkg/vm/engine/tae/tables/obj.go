@@ -94,14 +94,15 @@ func (obj *object) GetDuplicatedRows(
 				err)
 		}
 	}()
-	// TN rewrites preserve each row's original commit timestamp. Strict dedup
-	// must use that timestamp instead of the physical object's create time.
-	// CheckIncremental normally skips TN rewrites, but uses the same row-level
-	// filter when a rewrite carries CN-origin rows.
-	stats := obj.meta.Load().GetObjectStats()
+	// Strict policies inspect TN rewrites by logical row commit time when that
+	// hidden column is already present (for example, a table-tail flush).
+	// Missing commit timestamps stay conservative in the row filter. Default
+	// CheckIncremental skips TN rewrites before reaching this method. CN-created
+	// objects keep the existing conservative object-level behavior; this fix
+	// intentionally does not add row provenance for CN merge outputs.
 	filterByCommitTS := !from.IsEmpty() &&
-		!stats.GetCNCreated() &&
-		(!txn.GetDedupType().SkipTargetOldCommitted() || stats.GetCNOrigin())
+		!txn.GetDedupType().SkipTargetOldCommitted() &&
+		!obj.meta.Load().GetObjectStats().GetCNCreated()
 	return obj.persistedGetDuplicatedRows(
 		ctx,
 		txn,

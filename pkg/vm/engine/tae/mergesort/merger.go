@@ -23,7 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/sort"
@@ -93,7 +92,6 @@ type merger[T comparable] struct {
 	objCnt           int
 	accObjBlkCnts    []int
 	loadedObjBlkCnts []int
-	sourceCNOrigins  []bool
 
 	host MergeTaskHost
 
@@ -108,12 +106,6 @@ type merger[T comparable] struct {
 	// transfer maps for this merge. Pooled to avoid repeated large allocs.
 	transferSlab []api.TransferDestPos
 	blockActive  []bool
-
-	// currentObjectCNOrigin tracks whether the current output object received
-	// a live row that still carries usable CN lineage. A rewritten source may
-	// also contain legacy TN rows with no commit timestamp, so source-object
-	// lineage alone is not precise enough after the first merge generation.
-	currentObjectCNOrigin bool
 }
 
 func newMerger[T comparable](host MergeTaskHost, lessFunc sort.LessFunc[T], sortKeyPos int, df dataFetcher[T]) Merger {
@@ -138,10 +130,6 @@ func newMerger[T comparable](host MergeTaskHost, lessFunc sort.LessFunc[T], sort
 			totalSize:     host.GetTotalSize(),
 		},
 		loadedObjBlkCnts: make([]int, size),
-		sourceCNOrigins:  make([]bool, size),
-	}
-	for i := range size {
-		m.sourceCNOrigins[i] = host.IsSourceCNOrigin(uint32(i))
 	}
 	totalBlkCnt := 0
 	for _, cnt := range host.GetBlkCnts() {
@@ -211,11 +199,6 @@ func (m *merger[T]) merge(ctx context.Context) error {
 			if err != nil {
 				return err
 			}
-		}
-		if !m.currentObjectCNOrigin && m.sourceCNOrigins[objIdx] {
-			m.currentObjectCNOrigin = m.host.IsRowCNOrigin(
-				objIdx, m.bats[objIdx].bat, rowIdx,
-			)
 		}
 
 		if m.host.DoTransfer() {
@@ -367,13 +350,9 @@ func (m *merger[T]) syncObject(ctx context.Context) error {
 		return err
 	}
 	cobjstats := m.writer.GetObjectStats()
-	if m.currentObjectCNOrigin {
-		objectio.WithCNOrigin()(&cobjstats)
-	}
 	commitEntry := m.host.GetCommitEntry()
 	commitEntry.CreatedObjs = append(commitEntry.CreatedObjs, cobjstats.Clone().Marshal())
 	m.writer = nil
-	m.currentObjectCNOrigin = false
 	return nil
 }
 

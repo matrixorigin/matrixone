@@ -47,9 +47,6 @@ enum OpCode {
     OpSnapshotRead = 2015;
     OpGetChangedTableList = 2016;
     OpFaultInject = 2017;
-    // OpCommitMergeV2 requires the receiver to preserve row lineage.
-    // A pre-V2 TN rejects this unknown opcode before applying the merge.
-    OpCommitMergeV2 = 2018;
 }
 
 // TNPingRequest ping request
@@ -436,11 +433,6 @@ message MergeCommitEntry {
     repeated string booking_loc = 8;
     string err = 9;
     int32 level = 10;
-    // Monotonic version of the producer's row-lineage contract. Version 0 is
-    // emitted by legacy producers and carries no lineage guarantee. Version 1
-    // guarantees that CN-origin rows retain both their object marker and row
-    // commit timestamp across rewrites.
-    uint32 lineage_version = 11;
 }
 
 message MergeTaskEntry {

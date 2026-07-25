@@ -21,7 +21,6 @@ import (
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -51,14 +50,11 @@ type cnMergeTask struct {
 
 	// schema
 	colattrs    []string // no rowid column
-	seqnums     []uint16
-	typs        []types.Type
-	sortkeyPos  int // (composite) primary key, cluster by etc. -1 meas no sort key
+	sortkeyPos  int      // (composite) primary key, cluster by etc. -1 meas no sort key
 	sortkeyIsPK bool
 
 	// targets
-	targets         []objectio.ObjectStats
-	targetCreateTSs []types.TS
+	targets []objectio.ObjectStats
 
 	// commit things
 	commitEntry   *api.MergeCommitEntry
@@ -85,15 +81,8 @@ func newCNMergeTask(
 	sortkeyPos int,
 	sortkeyIsPK bool,
 	targets []objectio.ObjectStats,
-	targetCreateTSs []types.TS,
 	targetObjSize uint32,
 ) (*cnMergeTask, error) {
-	if len(targets) != len(targetCreateTSs) {
-		return nil, moerr.NewInternalErrorNoCtxf(
-			"cn merge target metadata mismatch: %d objects, %d create timestamps",
-			len(targets), len(targetCreateTSs),
-		)
-	}
 
 	part, err := tbl.getPartitionState(ctx)
 	if err != nil {
@@ -113,16 +102,10 @@ func newCNMergeTask(
 		return nil, err
 	}
 
-	attrs := make([]string, 0, len(tbl.seqnums)+1)
+	attrs := make([]string, 0, len(tbl.seqnums))
 	for i := range len(tbl.tableDef.Cols) - 1 {
 		attrs = append(attrs, tbl.tableDef.Cols[i].Name)
 	}
-	attrs = append(attrs, objectio.DefaultCommitTS_Attr)
-
-	seqnums := append([]uint16(nil), tbl.seqnums...)
-	seqnums = append(seqnums, objectio.SEQNUM_COMMITTS)
-	typs := append([]types.Type(nil), tbl.typs...)
-	typs = append(typs, types.T_TS.ToType())
 
 	proc := tbl.proc.Load()
 	fs := proc.Base.FileService
@@ -149,24 +132,21 @@ func newCNMergeTask(
 	}
 
 	return &cnMergeTask{
-		taskId:          gTaskID.Add(1),
-		host:            tbl,
-		snapshot:        snapshot,
-		ds:              source,
-		mp:              proc.GetMPool(),
-		colattrs:        attrs,
-		seqnums:         seqnums,
-		typs:            typs,
-		sortkeyPos:      sortkeyPos,
-		sortkeyIsPK:     sortkeyIsPK,
-		targets:         targets,
-		targetCreateTSs: targetCreateTSs,
-		fs:              fs,
-		blkCnts:         blkCnts,
-		blkIters:        blkIters,
-		targetObjSize:   targetObjSize,
-		segmentID:       objectio.NewSegmentid(),
-		arena:           arena,
+		taskId:        gTaskID.Add(1),
+		host:          tbl,
+		snapshot:      snapshot,
+		ds:            source,
+		mp:            proc.GetMPool(),
+		colattrs:      attrs,
+		sortkeyPos:    sortkeyPos,
+		sortkeyIsPK:   sortkeyIsPK,
+		targets:       targets,
+		fs:            fs,
+		blkCnts:       blkCnts,
+		blkIters:      blkIters,
+		targetObjSize: targetObjSize,
+		segmentID:     objectio.NewSegmentid(),
+		arena:         arena,
 	}, nil
 }
 
@@ -187,27 +167,6 @@ func (t *cnMergeTask) DoTransfer() bool {
 }
 func (t *cnMergeTask) GetObjectCnt() int {
 	return len(t.targets)
-}
-
-func (t *cnMergeTask) IsSourceCNOrigin(objIdx uint32) bool {
-	stats := &t.targets[objIdx]
-	return stats.GetCNCreated() || stats.GetCNOrigin()
-}
-
-func (t *cnMergeTask) IsRowCNOrigin(
-	objIdx uint32,
-	bat *batch.Batch,
-	rowIdx uint32,
-) bool {
-	stats := &t.targets[objIdx]
-	if stats.GetCNCreated() {
-		return true
-	}
-	if !stats.GetCNOrigin() {
-		return false
-	}
-	commitTSPos := len(t.seqnums) - 1
-	return !bat.Vecs[commitTSPos].IsNull(uint64(rowIdx))
 }
 
 func (t *cnMergeTask) GetBlkCnts() []int {
@@ -250,15 +209,7 @@ func (t *cnMergeTask) LoadNextBatch(ctx context.Context, objIdx uint32, _ *batch
 		// update delta location
 		obj := t.targets[objIdx]
 		blk.SetFlagByObjStats(&obj)
-		bat, dels, release, err := t.readblock(ctx, &blk)
-		if err != nil {
-			return nil, nil, nil, err
-		}
-		release, err = t.materializeCommitTS(objIdx, bat, release)
-		if err != nil {
-			return nil, nil, nil, err
-		}
-		return bat, dels, release, nil
+		return t.readblock(ctx, &blk)
 	}
 	return nil, nil, nil, mergesort.ErrNoMoreBlocks
 }
@@ -336,7 +287,7 @@ func (t *cnMergeTask) PrepareNewWriter() *ioutil.BlockWriter {
 		t.segmentID,
 		t.num,
 		t.host.version,
-		t.seqnums,
+		t.host.seqnums,
 		t.sortkeyPos,
 		t.sortkeyIsPK,
 		false,
@@ -351,7 +302,7 @@ func (t *cnMergeTask) PrepareNewWriter() *ioutil.BlockWriter {
 func (t *cnMergeTask) readblock(ctx context.Context, info *objectio.BlockInfo) (bat *batch.Batch, dels *nulls.Nulls, release func(), err error) {
 	// read data
 	bat, dels, release, err = blockio.BlockDataReadNoCopy(
-		ctx, info, t.ds, t.seqnums, t.typs,
+		ctx, info, t.ds, t.host.seqnums, t.host.typs,
 		t.snapshot, fileservice.SkipAllCache, t.mp, t.fs)
 	if err != nil {
 		logutil.Infof("read block data failed: %v", err.Error())
@@ -359,46 +310,4 @@ func (t *cnMergeTask) readblock(ctx context.Context, info *objectio.BlockInfo) (
 	}
 	bat.SetAttributes(t.colattrs)
 	return
-}
-
-func (t *cnMergeTask) materializeCommitTS(
-	objIdx uint32,
-	bat *batch.Batch,
-	release func(),
-) (func(), error) {
-	commitTSPos := len(t.seqnums) - 1
-	if !bat.Vecs[commitTSPos].IsConstNull() {
-		return release, nil
-	}
-
-	stats := &t.targets[objIdx]
-	if !stats.GetCNCreated() {
-		// Legacy TN objects predate the hidden row commit-TS column. Preserve
-		// the synthesized nulls through the rewrite. Exact-PK dedup recognizes
-		// these rows as old under incremental policy, while strict policy keeps
-		// the conservative duplicate behavior.
-		return release, nil
-	}
-
-	createTS := t.targetCreateTSs[objIdx]
-	if createTS.IsEmpty() {
-		release()
-		return nil, moerr.NewInternalErrorNoCtxf(
-			"cn-created object %s has no create timestamp",
-			stats.ObjectName().String(),
-		)
-	}
-	commitTS, err := vector.NewConstFixed(
-		types.T_TS.ToType(), createTS, bat.RowCount(), t.mp,
-	)
-	if err != nil {
-		commitTS.Free(t.mp)
-		release()
-		return nil, err
-	}
-	bat.Vecs[commitTSPos] = commitTS
-	return func() {
-		commitTS.Free(t.mp)
-		release()
-	}, nil
 }

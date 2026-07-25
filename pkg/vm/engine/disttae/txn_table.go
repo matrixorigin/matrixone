@@ -3177,17 +3177,15 @@ func (tbl *txnTable) MergeObjects(
 
 	sortKeyPos, sortKeyIsPK := tbl.getSortKeyPosAndSortKeyIsPK()
 
-	targetCreateTSs := make([]types.TS, len(objStats))
-	// Check object visibility and hydrate the complete authoritative metadata.
-	// Explicit `o:` merge requests contain only object names, and SetObjectStats
-	// intentionally excludes the reserved flag byte.
+	// check object visibility and set object stats.
 	for i, objstat := range objStats {
 		info, exist := state.GetObject(*objstat.ObjectShortName())
 		if !exist || (!info.DeleteTime.IsEmpty() && info.DeleteTime.LE(&snapshot)) {
 			logutil.Errorf("object not visible: %s", info.String())
 			return nil, moerr.NewInternalErrorNoCtxf("object %s not exist", objstat.ObjectName().String())
 		}
-		objStats[i], targetCreateTSs[i] = hydrateCNMergeTarget(info)
+		objectio.SetObjectStats(&objstat, &info.ObjectStats)
+		objStats[i] = objstat
 	}
 
 	tbl.ensureSeqnumsAndTypesExpectRowid()
@@ -3196,7 +3194,6 @@ func (tbl *txnTable) MergeObjects(
 		ctx, tbl, snapshot, // context
 		sortKeyPos, sortKeyIsPK, // schema
 		objStats, // targets
-		targetCreateTSs,
 		targetObjSize)
 	if err != nil {
 		return nil, err
@@ -3214,10 +3211,6 @@ func (tbl *txnTable) MergeObjects(
 	}
 
 	return dumpTransferInfo(ctx, taskHost)
-}
-
-func hydrateCNMergeTarget(info objectio.ObjectEntry) (objectio.ObjectStats, types.TS) {
-	return *info.ObjectStats.Clone(), info.CreateTime
 }
 
 func (tbl *txnTable) GetNonAppendableObjectStats(ctx context.Context) ([]objectio.ObjectStats, error) {

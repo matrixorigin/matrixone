@@ -275,11 +275,6 @@ type MergeTaskHost interface {
 	PrepareNewWriter() *ioutil.BlockWriter
 	DoTransfer() bool
 	GetObjectCnt() int
-	// IsSourceCNOrigin is the cheap object-level fast path. IsRowCNOrigin is
-	// called only when it returns true and must use the already-loaded batch;
-	// it must not perform additional I/O.
-	IsSourceCNOrigin(objIdx uint32) bool
-	IsRowCNOrigin(objIdx uint32, bat *batch.Batch, rowIdx uint32) bool
 	GetBlkCnts() []int
 	GetAccBlkCnts() []int
 	GetSortKeyType() types.Type
@@ -320,10 +315,6 @@ func DoMergeAndWrite(
 	start := time.Now()
 	/*out args, keep the transfer information*/
 	commitEntry := mergehost.GetCommitEntry()
-	// Advertise the lineage contract at the common producer boundary so CN
-	// and TN merge implementations cannot drift. A new TN uses this proof to
-	// reject results from rolling-upgrade CNs that cannot preserve lineage.
-	commitEntry.LineageVersion = api.MergeCommitEntryLineageVersion
 	logMergeStart(
 		mergehost.TaskSourceNote(),
 		mergehost.Name(),

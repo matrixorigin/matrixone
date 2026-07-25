@@ -48,10 +48,6 @@ const (
 	ObjectFlag_Appendable = 1 << iota
 	ObjectFlag_Sorted
 	ObjectFlag_CNCreated
-	// ObjectFlag_CNOrigin marks a TN rewrite that contains rows originating
-	// from a CN-created object. Unlike CNCreated, it does not mean every row in
-	// the current object was committed together.
-	ObjectFlag_CNOrigin
 )
 
 var ZeroObjectStats ObjectStats
@@ -67,12 +63,6 @@ type ObjectStatsOptions func(*ObjectStats)
 func WithCNCreated() ObjectStatsOptions {
 	return func(o *ObjectStats) {
 		o[reservedOffset] |= ObjectFlag_CNCreated
-	}
-}
-
-func WithCNOrigin() ObjectStatsOptions {
-	return func(o *ObjectStats) {
-		o[reservedOffset] |= ObjectFlag_CNOrigin
 	}
 }
 
@@ -178,11 +168,6 @@ func (des *ObjectStats) GetSorted() bool {
 func (des *ObjectStats) GetCNCreated() bool {
 	return des[reservedOffset]&ObjectFlag_CNCreated != 0
 }
-
-func (des *ObjectStats) GetCNOrigin() bool {
-	return des[reservedOffset]&ObjectFlag_CNOrigin != 0
-}
-
 func (des *ObjectStats) IsZero() bool {
 	return bytes.Equal(des[:], ZeroObjectStats[:])
 }
@@ -281,11 +266,6 @@ func (des *ObjectStats) FlagString() string {
 		flags += "0"
 	}
 	if des.GetCNCreated() {
-		flags += "1"
-	} else {
-		flags += "0"
-	}
-	if des.GetCNOrigin() {
 		flags += "1"
 	} else {
 		flags += "0"

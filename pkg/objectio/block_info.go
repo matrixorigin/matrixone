@@ -82,10 +82,6 @@ func (b *BlockInfo) IsCNCreated() bool {
 	return b.ObjectFlags&ObjectFlag_CNCreated != 0
 }
 
-func (b *BlockInfo) IsCNOrigin() bool {
-	return b.ObjectFlags&ObjectFlag_CNOrigin != 0
-}
-
 func (b *BlockInfo) String() string {
 	flag := ""
 	if b.IsAppendable() {
@@ -96,9 +92,6 @@ func (b *BlockInfo) String() string {
 	}
 	if b.IsCNCreated() {
 		flag = flag + "C"
-	}
-	if b.IsCNOrigin() {
-		flag = flag + "O"
 	}
 
 	return fmt.Sprintf(

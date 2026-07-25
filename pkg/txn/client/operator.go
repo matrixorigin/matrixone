@@ -55,7 +55,6 @@ var (
 		moerr.ErrRpcError:     {},
 		moerr.ErrTxnNotFound:  {},
 		moerr.ErrTxnNotActive: {},
-		moerr.ErrNotSupported: {},
 	}
 	commitTxnErrors = map[uint16]struct{}{
 		moerr.ErrTAECommit:               {},

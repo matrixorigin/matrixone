@@ -152,6 +152,33 @@ func TestReadOneBlockDoesNotConfuseUserTSWithCommitTS(t *testing.T) {
 	ioVec.ReleaseReadResultOnError()
 }
 
+func TestReadOneBlockSynthesizesCommitTSForEmptyMetadata(t *testing.T) {
+	readErr := moerr.NewInternalErrorNoCtx("must not issue a storage read")
+	fs := &partialReadErrorFS{err: readErr}
+
+	meta := BuildMetaData(1, 1)
+	block := meta.GetBlockMeta(0)
+	block.BlockHeader().SetRows(1)
+	block.BlockHeader().SetMetaColumnCount(0)
+
+	ioVec, err := ReadOneBlockWithMeta(
+		context.Background(),
+		&meta,
+		"empty-metadata",
+		0,
+		[]uint16{SEQNUM_COMMITTS},
+		[]types.Type{types.T_TS.ToType()},
+		mpool.MustNewZero(),
+		fs,
+		constructorFactory,
+		fileservice.Policy(0),
+	)
+	require.NoError(t, err)
+	require.Len(t, ioVec.Entries, 1)
+	require.NotNil(t, ioVec.Entries[0].CachedData)
+	ioVec.ReleaseReadResultOnError()
+}
+
 func TestReadAllBlocksWithMetaReleasesPartialReadOnError(t *testing.T) {
 	var releases atomic.Int32
 	readErr := moerr.NewInternalErrorNoCtx("read canceled after partial all-blocks fill")

@@ -161,21 +161,23 @@ func parseAGetDuplicateRowIDsArgs(args ...any) (
 	return
 }
 
+// commitTSLoader keeps commit timestamps block-scoped. The primary-key
+// zonemap and exact-key comparison run first, so the extra column is never
+// loaded for blocks without an actual candidate. Both success and failure are
+// cached to keep the storage read bounded to once per candidate block.
 type commitTSLoader struct {
-	load func() (containers.Vector, error)
-	vec  containers.Vector
+	load   func() (containers.Vector, error)
+	vec    containers.Vector
+	err    error
+	loaded bool
 }
 
 func (loader *commitTSLoader) get() (containers.Vector, error) {
-	if loader.vec != nil {
-		return loader.vec, nil
+	if !loader.loaded {
+		loader.vec, loader.err = loader.load()
+		loader.loaded = true
 	}
-	vec, err := loader.load()
-	if err != nil {
-		return nil, err
-	}
-	loader.vec = vec
-	return vec, nil
+	return loader.vec, loader.err
 }
 
 func (loader *commitTSLoader) close() {
@@ -187,20 +189,6 @@ func (loader *commitTSLoader) close() {
 
 func missingCommitTS(vec containers.Vector, row int) bool {
 	return vec == nil || row >= vec.Length() || vec.IsNull(row)
-}
-
-// Old TN objects materialize a correctly sized null commit-TS vector. Only
-// that representation is safe to skip; a missing or short vector remains a
-// conservative duplicate.
-func skipLegacyTNRow(
-	txn txnif.TxnReader,
-	vec containers.Vector,
-	row int,
-) bool {
-	return txn.GetDedupType().SkipTargetOldCommitted() &&
-		vec != nil &&
-		row < vec.Length() &&
-		vec.IsNull(row)
 }
 
 func parseAContainsArgs(args ...any) (
@@ -330,10 +318,10 @@ func getDuplicatedRowIDABlkBytesFunc(args ...any) func([]byte, bool, int) error 
 				if err != nil {
 					return err
 				}
+				// Legacy and later-generation merge outputs may not carry row
+				// commit timestamps. Strict dedup stays conservative for those
+				// rare objects instead of adding lineage to every merge.
 				if missingCommitTS(tsVec, row) {
-					if skipLegacyTNRow(txn, tsVec, row) {
-						return nil
-					}
 					rowID := objectio.NewRowid(&blkID, uint32(row))
 					rowIDs.Update(rowOffset, rowID, false)
 					return nil
@@ -384,10 +372,9 @@ func getDuplicatedRowIDABlkFuncFactory[T types.FixedSizeT](comp func(T, T) int) 
 					if err != nil {
 						return err
 					}
+					// See the varlen path above: missing metadata is a
+					// conservative duplicate, never a silent skip.
 					if missingCommitTS(tsVec, row) {
-						if skipLegacyTNRow(txn, tsVec, row) {
-							return nil
-						}
 						rowID := objectio.NewRowid(&blkID, uint32(row))
 						rowIDs.Update(rowOffset, rowID, false)
 						return nil

@@ -161,6 +161,13 @@ func (obj *baseObject) buildMetalocation(bid uint16) (objectio.Location, error) 
 }
 
 func (obj *baseObject) LoadPersistedCommitTS(bid uint16) (vec containers.Vector, err error) {
+	return obj.loadPersistedCommitTS(context.Background(), bid)
+}
+
+func (obj *baseObject) loadPersistedCommitTS(
+	ctx context.Context,
+	bid uint16,
+) (vec containers.Vector, err error) {
 	location, err := obj.buildMetalocation(bid)
 	if err != nil {
 		return
@@ -171,7 +178,7 @@ func (obj *baseObject) LoadPersistedCommitTS(bid uint16) (vec containers.Vector,
 	//Extend lifetime of vectors is without the function.
 	//need to copy. closeFunc will be nil.
 	vectors, _, err := ioutil.LoadColumns2(
-		context.Background(),
+		ctx,
 		[]uint16{objectio.SEQNUM_COMMITTS},
 		[]types.Type{types.T_TS.ToType()},
 		obj.rt.Fs,
@@ -286,7 +293,7 @@ func (obj *baseObject) getDuplicateRowsWithLoad(
 	if filterByCommitTS {
 		loader := &commitTSLoader{
 			load: func() (containers.Vector, error) {
-				return obj.LoadPersistedCommitTS(blkOffset)
+				return obj.loadPersistedCommitTS(ctx, blkOffset)
 			},
 		}
 		defer loader.close()

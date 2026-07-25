@@ -16,7 +16,6 @@ package taestorage
 
 import (
 	"context"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -30,8 +29,7 @@ func (s *taeStorage) Write(
 	payload []byte) (result []byte, err error) {
 
 	switch op {
-	case uint32(apipb.OpCode_OpCommitMerge),
-		uint32(apipb.OpCode_OpCommitMergeV2):
+	case uint32(apipb.OpCode_OpCommitMerge):
 		return HandleWrite(ctx, txnMeta, payload, s.taeHandler.HandleCommitMerge)
 	default:
 		return nil, moerr.NewNotSupportedf(ctx, "unknown write op: %v", op)

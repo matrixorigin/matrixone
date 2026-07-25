@@ -29,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -216,13 +215,10 @@ func handleCNMerge(
 
 		payload, err := entry.MarshalBinary()
 		if err != nil {
-			merge.CleanUpUselessFiles(entry, fs)
 			return nil, err
 		}
 
-		result, err := txnWrite(ctx, target, txnOp, payload)
-		cleanupMergeFilesAfterWrite(entry, fs, err)
-		return result, err
+		return txnWrite(ctx, target, txnOp, payload)
 	}
 
 	switch a.mergeType {
@@ -357,20 +353,6 @@ func getTNShard(service string) metadata.TNShard {
 	return target
 }
 
-func cleanupMergeFilesAfterWrite(
-	entry *api.MergeCommitEntry,
-	fs fileservice.FileService,
-	err error,
-) {
-	if !moerr.IsMoErrCode(err, moerr.ErrNotSupported) {
-		return
-	}
-	// The V2 opcode is rejected by an old TN before apply. The new TN also
-	// validates lineage before mutation, so NotSupported always means
-	// ownership of the generated files remains on this CN.
-	merge.CleanUpUselessFiles(entry, fs)
-}
-
 // Each merge process merges at most ~10^7 rows.
 // For transfer table, 10^7 rows is 12 * 10^7 ~= 120MB size.
 const slicedRowCnt = 10_000_000
@@ -403,7 +385,7 @@ func sliceStats(stats []objectio.ObjectStats) [][]objectio.ObjectStats {
 func txnWrite(ctx context.Context, target metadata.TNShard, txnOp client.TxnOperator, payload []byte) (*rpc.SendResult, error) {
 	return txnOp.Write(ctx, []txn.TxnRequest{{
 		CNRequest: &txn.CNOpRequest{
-			OpCode:  uint32(api.OpCode_OpCommitMergeV2),
+			OpCode:  uint32(api.OpCode_OpCommitMerge),
 			Payload: payload,
 			Target:  target,
 		},

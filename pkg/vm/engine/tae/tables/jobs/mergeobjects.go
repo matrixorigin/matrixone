@@ -181,26 +181,6 @@ func (task *mergeObjectsTask) GetObjectCnt() int {
 	return len(task.mergedObjs)
 }
 
-func (task *mergeObjectsTask) IsSourceCNOrigin(objIdx uint32) bool {
-	stats := task.mergedObjs[objIdx].GetObjectStats()
-	return stats.GetCNCreated() || stats.GetCNOrigin()
-}
-
-func (task *mergeObjectsTask) IsRowCNOrigin(
-	objIdx uint32,
-	bat *batch.Batch,
-	rowIdx uint32,
-) bool {
-	stats := task.mergedObjs[objIdx].GetObjectStats()
-	if stats.GetCNCreated() {
-		return true
-	}
-	if !stats.GetCNOrigin() {
-		return false
-	}
-	return !bat.Vecs[len(bat.Vecs)-1].IsNull(uint64(rowIdx))
-}
-
 func (task *mergeObjectsTask) GetBlkCnts() []int {
 	return task.blkCnt
 }
@@ -556,9 +536,7 @@ func HandleMergeEntryInTxn(
 	createdObjs := make([]*catalog.ObjectEntry, 0, len(entry.CreatedObjs))
 	ids := make([]*common.ID, 0, len(entry.MergedObjs)*2)
 
-	// Resolve and validate every source before changing catalog state. During
-	// a rolling upgrade, an old CN can return a structurally valid result that
-	// silently loses CN row lineage. Pure-TN legacy results remain compatible.
+	// drop merged blocks and objects
 	for _, item := range entry.MergedObjs {
 		drop := objectio.ObjectStats(item)
 		objID := drop.ObjectName().ObjectId()
@@ -569,16 +547,7 @@ func HandleMergeEntryInTxn(
 			}
 			return nil, err
 		}
-		meta := obj.GetMeta().(*catalog.ObjectEntry)
-		if err = validateMergeEntrySource(entry, meta.GetObjectStats()); err != nil {
-			return nil, err
-		}
-		mergedObjs = append(mergedObjs, meta)
-	}
-
-	// drop merged blocks and objects
-	for _, meta := range mergedObjs {
-		objID := meta.ID()
+		mergedObjs = append(mergedObjs, obj.GetMeta().(*catalog.ObjectEntry))
 		if err = rel.SoftDeleteObject(objID, isTombstone); err != nil {
 			return nil, err
 		}
@@ -595,9 +564,6 @@ func HandleMergeEntryInTxn(
 		// set stats and sorted property
 		objstats := objectio.NewObjectStatsWithObjectID(objID, false, sorted, false)
 		err := objectio.SetObjectStats(objstats, &stats)
-		if stats.GetCNOrigin() {
-			objectio.WithCNOrigin()(objstats)
-		}
 		// another site to SetLevel is in commiting append in table space
 		if entry.Level > 0 || objstats.OriginSize() > common.DefaultMinOsizeQualifiedBytes {
 			// for layzer > 0, bump up level
@@ -650,21 +616,6 @@ func HandleMergeEntryInTxn(
 	}
 
 	return createdObjs, nil
-}
-
-func validateMergeEntrySource(
-	entry *api.MergeCommitEntry,
-	stats *objectio.ObjectStats,
-) error {
-	if entry.LineageVersion >= api.MergeCommitEntryLineageVersion ||
-		(!stats.GetCNCreated() && !stats.GetCNOrigin()) {
-		return nil
-	}
-	return moerr.NewNotSupportedNoCtxf(
-		"merge result lineage version %d cannot rewrite CN-origin object %s; retry on a compatible CN",
-		entry.LineageVersion,
-		stats.ObjectName().String(),
-	)
 }
 
 func (task *mergeObjectsTask) GetTotalSize() uint64 {

@@ -40,17 +40,6 @@ func FuzzEncodeInfoHeader(f *testing.F) {
 	})
 }
 
-func TestBlockInfoCNOriginFlag(t *testing.T) {
-	id := NewObjectid()
-	stats := NewObjectStatsWithObjectID(&id, false, true, false)
-	WithCNOrigin()(stats)
-
-	block := &BlockInfo{}
-	block.SetFlagByObjStats(stats)
-	require.True(t, block.IsCNOrigin())
-	require.Contains(t, block.String(), "[SO]")
-}
-
 func TestBlockInfoSlice_Append(t *testing.T) {
 	var s BlockInfoSlice
 	s.AppendBlockInfo(&BlockInfo{BlockID: types.Blockid{1}})
