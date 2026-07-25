@@ -1630,7 +1630,11 @@ func (e *SpillEngine) RebuildHashmap(proc *process.Process, analyzer process.Ana
 		return nil, BucketSkip, err
 	}
 	if !e.cfg.NeedBatches {
-		builder.Batches.Clean(proc.Mp())
+		if err := builder.DrainCopiedBatches(proc, nil); err != nil {
+			builder.FreeHashMapAndBatches(proc)
+			builder.Free(proc)
+			return nil, BucketSkip, err
+		}
 	}
 
 	jm := builder.GetJoinMap(proc.Mp())
@@ -1754,28 +1758,17 @@ func (e *SpillEngine) reSpillBucket(proc *process.Process, analyzer process.Anal
 		return e.scatterBatch(proc, bat, keyVecs, writers, nil, partitionLevel, analyzer)
 	}
 
-	// Detach accumulated batches so each can be released immediately after it
-	// has been copied into the sub-bucket buffers.
-	buildBatches := builder.Batches.Buf
-	builder.Batches.Buf = nil
-	builder.Batches.MemSize = 0
-	defer func() {
-		for _, b := range buildBatches {
-			if b != nil {
-				b.Clean(proc.Mp())
-			}
-		}
-	}()
 	var buildRows int64
-	for i, b := range buildBatches {
+	if err := builder.DrainCopiedBatches(proc, func(b *batch.Batch) error {
 		if b != nil {
 			buildRows += int64(b.RowCount())
 		}
 		if err := evalAndScatter(b, buildWriters, nil, e.keyExecs); err != nil {
-			return nil, err
+			return err
 		}
-		b.Clean(proc.Mp())
-		buildBatches[i] = nil
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 	if pending != nil && pending.RowCount() > 0 {
 		if err := evalAndScatter(pending, buildWriters, nil, e.keyExecs); err != nil {

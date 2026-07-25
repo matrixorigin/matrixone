@@ -1863,6 +1863,60 @@ func TestRebuildHashmapRespectsNeedFlags(t *testing.T) {
 	}
 }
 
+func TestRebuildHashmapWithoutBatchesDropsBatchBudgetBeforeProbe(t *testing.T) {
+	run := func(t *testing.T, needBatches bool) uint64 {
+		t.Helper()
+		const budgetCap = uint64(64 << 20)
+		budget, err := process.NewHashBuildBudget(budgetCap, budgetCap)
+		require.NoError(t, err)
+		generation, err := budget.OpenGeneration(1)
+		require.NoError(t, err)
+
+		proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+		defer proc.Free()
+		values := make([]int32, colexec.DefaultBatchSize/2)
+		for i := range values {
+			values[i] = int32(i)
+		}
+		buildBat := makeInt32Batch(proc, values)
+		buildFd := writeBuildFile(proc, "test_rebuild_batch_budget", buildBat)
+		buildBat.Clean(proc.Mp())
+		probeBat := makeInt32Batch(proc, []int32{1})
+		probeFd := writeBuildFile(proc, "test_rebuild_batch_budget_probe", probeBat)
+		probeBat.Clean(proc.Mp())
+
+		engine := NewSpillEngine(SpillEngineConfig{
+			BuildKeyExprs: makeTestKeyExpr(),
+			NeedBatches:   needBatches,
+			Budget:        generation,
+		})
+		engine.InitFromSpilledMap([]*os.File{buildFd})
+		engine.buckets[0].ProbeFd = message.NewSpillFile(probeFd, 1, 0, nil)
+
+		jm, res, err := engine.RebuildHashmap(proc, process.NewAnalyzer(0, false, false, "test"))
+		require.NoError(t, err)
+		require.Equal(t, BucketReady, res)
+		require.NotNil(t, jm)
+		if needBatches {
+			require.NotEmpty(t, jm.GetBatches())
+		} else {
+			require.Empty(t, jm.GetBatches())
+		}
+		used := generation.Used()
+		require.Positive(t, used, "hash map and reader ownership remain live during probe")
+
+		jm.Free()
+		engine.Cleanup(proc)
+		require.Zero(t, generation.Used())
+		return used
+	}
+
+	withoutBatches := run(t, false)
+	withBatches := run(t, true)
+	require.Greater(t, withBatches, withoutBatches,
+		"NeedBatches=false must not transfer destroyed batch reservations into the JoinMap")
+}
+
 func TestRebuildHashmapEmptyBuild(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
@@ -2205,6 +2259,67 @@ func TestReSpillBucket(t *testing.T) {
 	}
 
 	engine.Cleanup(proc)
+}
+
+func TestReSpillBucketReleasesDrainedBatchBudget(t *testing.T) {
+	const budgetCap = uint64(64 << 20)
+	budget, err := process.NewHashBuildBudget(budgetCap, budgetCap)
+	require.NoError(t, err)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	builder := &hashbuild.HashmapBuilder{}
+	builder.SetBudget(generation)
+	require.NoError(t, builder.Prepare(makeTestKeyExpr(), -1, -1, nil, proc))
+	defer builder.Free(proc)
+
+	values := make([]int32, colexec.DefaultBatchSize/2)
+	for i := range values {
+		values[i] = int32(i)
+	}
+	input := makeInt32Batch(proc, values)
+	require.NoError(t, builder.CopyBuildBatch(input, proc))
+	builder.InputBatchRowCount = input.RowCount()
+	input.Clean(proc.Mp())
+	batchCharge := generation.Used()
+	require.Positive(t, batchCharge)
+
+	engine := NewSpillEngine(SpillEngineConfig{
+		BuildKeyExprs: makeTestKeyExpr(),
+		Budget:        generation,
+	})
+	subBuckets, err := engine.reSpillBucket(
+		proc,
+		process.NewAnalyzer(0, false, false, "test"),
+		SpillBucket{Depth: 1, BuildRows: int64(len(values))},
+		builder,
+		&BucketReader{},
+		nil,
+	)
+	require.NoError(t, err)
+	for i := range subBuckets {
+		if subBuckets[i].BuildFd != nil {
+			require.NoError(t, subBuckets[i].BuildFd.Close())
+		}
+		if subBuckets[i].ProbeFd != nil {
+			require.NoError(t, subBuckets[i].ProbeFd.Close())
+		}
+	}
+	engine.Cleanup(proc)
+
+	require.Empty(t, builder.Batches.Buf)
+	require.Less(t, generation.Used(), batchCharge,
+		"re-spill must not retain the destroyed build-batch reservation")
+	require.Zero(t, generation.Used())
+
+	// Model the scratch/read admission that follows the drain. The full cap is
+	// available only when re-spill released the stale batch ownership itself,
+	// instead of relying on its caller to free the builder later.
+	next, err := generation.Reserve(budgetCap)
+	require.NoError(t, err)
+	require.True(t, next.Release())
 }
 
 func TestReSpillConservesBuildAndProbeRows(t *testing.T) {

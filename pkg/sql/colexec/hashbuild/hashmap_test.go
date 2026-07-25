@@ -223,6 +223,93 @@ func TestCleanCopiedBatchReleasesCoalescedIngressReservations(t *testing.T) {
 	require.Zero(t, generation.Used())
 }
 
+func TestDrainCopiedBatchesReleasesBeforeSubsequentAdmission(t *testing.T) {
+	const budgetCap = uint64(4 << 20)
+	budget, err := process.NewHashBuildBudget(budgetCap, budgetCap)
+	require.NoError(t, err)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+
+	var hb HashmapBuilder
+	hb.setBudget(generation)
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	for range 2 {
+		input := testutil.NewBatch(
+			[]types.Type{types.T_int32.ToType()},
+			true,
+			colexec.DefaultBatchSize/2,
+			proc.Mp(),
+		)
+		require.NoError(t, hb.copyBuildBatch(input, proc))
+		input.Clean(proc.Mp())
+	}
+	require.Len(t, hb.Batches.Buf, 1, "small ingress batches should coalesce")
+	require.Len(t, hb.batchReservations, 2, "reservations follow ingress, not physical batches")
+
+	visits := 0
+	require.NoError(t, hb.DrainCopiedBatches(proc, func(bat *batch.Batch) error {
+		visits++
+		require.NotNil(t, bat)
+		require.Positive(t, generation.Used(), "physical batch must remain charged while visited")
+		return nil
+	}))
+	require.Equal(t, 1, visits)
+	require.Empty(t, hb.Batches.Buf)
+	require.Empty(t, hb.batchReservations)
+	require.Zero(t, generation.Used(), "the final physical batch must release every coalesced ingress charge")
+
+	// Model the expression/scatter/read reservation that follows a re-spill
+	// drain. It can consume the complete cap only after stale batch ownership
+	// has been removed from the ledger.
+	next, err := generation.Reserve(budgetCap)
+	require.NoError(t, err)
+	require.True(t, next.Release())
+	require.Zero(t, generation.Used())
+}
+
+func TestDrainCopiedBatchesVisitFailureRetainsOwnership(t *testing.T) {
+	const budgetCap = uint64(4 << 20)
+	budget, err := process.NewHashBuildBudget(budgetCap, budgetCap)
+	require.NoError(t, err)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+
+	var hb HashmapBuilder
+	hb.setBudget(generation)
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	for _, rows := range []int{
+		colexec.DefaultBatchSize / 2,
+		colexec.DefaultBatchSize / 2,
+		1024,
+	} {
+		input := testutil.NewBatch([]types.Type{types.T_int32.ToType()}, true, rows, proc.Mp())
+		require.NoError(t, hb.copyBuildBatch(input, proc))
+		input.Clean(proc.Mp())
+	}
+	require.Len(t, hb.Batches.Buf, 2)
+	require.Len(t, hb.batchReservations, 3)
+
+	wantErr := errors.New("visit failed")
+	visits := 0
+	require.ErrorIs(t, hb.DrainCopiedBatches(proc, func(*batch.Batch) error {
+		visits++
+		if visits == 1 {
+			return nil
+		}
+		return wantErr
+	}), wantErr)
+	require.Equal(t, 2, visits)
+	require.Len(t, hb.Batches.Buf, 1, "the failed current batch remains owned after prior batches drain")
+	require.Len(t, hb.batchReservations, 3,
+		"coalesced ingress reservations stay conservative until terminal cleanup")
+	require.Positive(t, generation.Used())
+
+	hb.FreeHashMapAndBatches(proc)
+	require.Zero(t, generation.Used())
+}
+
 func TestSpillExpressionHashKeyUsesBoundedAdmission(t *testing.T) {
 	var ctr container
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())

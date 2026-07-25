@@ -470,6 +470,43 @@ func (hb *HashmapBuilder) CleanCopiedBatchAt(idx int, proc *process.Process) err
 	return nil
 }
 
+// DrainCopiedBatches visits and then releases every retained physical build
+// batch. A failed visit leaves the current and remaining batches owned by the
+// builder so its normal cleanup path can release them. CopyIntoBatches can
+// coalesce several ingress batches into one physical batch, so the associated
+// reservations are released together only after the final physical batch is
+// destroyed.
+func (hb *HashmapBuilder) DrainCopiedBatches(
+	proc *process.Process,
+	visit func(*batch.Batch) error,
+) error {
+	for idx, bat := range hb.Batches.Buf {
+		if visit != nil {
+			if err := visit(bat); err != nil {
+				remaining := hb.Batches.Buf[idx:]
+				copy(hb.Batches.Buf, remaining)
+				clear(hb.Batches.Buf[len(remaining):])
+				hb.Batches.Buf = hb.Batches.Buf[:len(remaining)]
+				hb.Batches.MemSize = 0
+				for _, retained := range hb.Batches.Buf {
+					if retained != nil {
+						hb.Batches.MemSize += int64(retained.Size())
+					}
+				}
+				return err
+			}
+		}
+		if bat != nil {
+			bat.Clean(proc.Mp())
+			hb.Batches.Buf[idx] = nil
+		}
+	}
+	hb.Batches.Buf = nil
+	hb.Batches.MemSize = 0
+	hb.releaseBatchReservations()
+	return nil
+}
+
 func (hashBuild *HashBuild) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
 	return input, nil
 }
