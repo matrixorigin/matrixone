@@ -643,6 +643,9 @@ func (c *Compile) queryWorkloadClass() schedule.WorkloadClass {
 }
 
 func (c *Compile) querySchedulingSelectionKey() string {
+	if c.querySelectionKey != "" {
+		return c.querySelectionKey
+	}
 	if c.proc != nil {
 		if profile := c.proc.GetStmtProfile(); profile != nil {
 			id := profile.GetStmtId().String()
@@ -658,9 +661,13 @@ func (c *Compile) querySchedulingSelectionKey() string {
 	// ID. Hash stable statement-owned text once instead of making HRW hash an
 	// arbitrarily large SQL string for every candidate. Equal SQL can share a
 	// subset, which is preferable to either randomness or rejecting the query.
-	sqlText := c.originSQL
+	return querySchedulingSelectionKeyForSQL(c.originSQL, c.sql)
+}
+
+func querySchedulingSelectionKeyForSQL(originSQL, sql string) string {
+	sqlText := originSQL
 	if sqlText == "" {
-		sqlText = c.sql
+		sqlText = sql
 	}
 	sum := sha256.Sum256([]byte(sqlText))
 	return "sql-sha256:" + hex.EncodeToString(sum[:16])

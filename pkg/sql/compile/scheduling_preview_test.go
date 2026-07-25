@@ -16,11 +16,13 @@ package compile
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
+	ivfflatplan "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 )
@@ -112,6 +114,116 @@ func TestPreviewQuerySchedulingUsesSameWorkloadPolicyBoundaryAsExecution(t *test
 		"account": "tenant-a",
 		"role":    "tp",
 	}, provider.poolRequest.CNLabel)
+}
+
+func TestPreviewQuerySchedulingUsesExplainedStatementSelectionKey(t *testing.T) {
+	workers := schedule.Workers{
+		{ID: "cn-a", Addr: "a:6001", Mcpu: 4, Route: schedule.WorkerRouteRemote},
+		{ID: "cn-b", Addr: "b:6001", Mcpu: 4, Route: schedule.WorkerRouteRemote},
+		{ID: "cn-c", Addr: "c:6001", Mcpu: 4, Route: schedule.WorkerRouteRemote},
+	}
+	selectWithKey := func(key string) string {
+		decision := schedule.DecideQueryPlacement(schedule.QueryRequest{
+			ExecKind: schedule.QueryExecAPMultiCN,
+			Intent: schedule.SchedulingIntent{WorkerSet: schedule.WorkerSetPolicy{
+				Mode: schedule.WorkerSetMax, MaxWorkers: 1, SelectionKey: key,
+			}},
+			ResolvedPool: schedule.ResolvedPool{Workers: workers},
+		})
+		require.True(t, decision.Satisfied)
+		return decision.Workers[0].ID
+	}
+
+	const outerExplainKey = "outer-explain-query-id"
+	outerSelected := selectWithKey(outerExplainKey)
+	statementSQL := ""
+	targetSelected := ""
+	for i := 0; i < 100; i++ {
+		candidate := fmt.Sprintf("select * from target_%d", i)
+		selected := selectWithKey(querySchedulingSelectionKeyForSQL(candidate, ""))
+		if selected != outerSelected {
+			statementSQL, targetSelected = candidate, selected
+			break
+		}
+	}
+	require.NotEmpty(t, statementSQL, "test candidates must distinguish target SQL from outer EXPLAIN identity")
+
+	mockCompile := NewMockCompile(t)
+	mockCompile.proc.SetQueryId(outerExplainKey)
+	provider := &schedulerProviderTestEngine{
+		schedulerTestEngine: &schedulerTestEngine{},
+		candidates: engine.QueryCandidates{
+			{Service: metadata.CNService{ServiceID: "cn-a", PipelineServiceAddress: "a:6001"}, Mcpu: 4},
+			{Service: metadata.CNService{ServiceID: "cn-b", PipelineServiceAddress: "b:6001"}, Mcpu: 4},
+			{Service: metadata.CNService{ServiceID: "cn-c", PipelineServiceAddress: "c:6001"}, Mcpu: 4},
+		},
+		resolvedNodes: engine.Nodes{
+			{Id: "cn-a", Addr: "a:6001", Mcpu: 4},
+			{Id: "cn-b", Addr: "b:6001", Mcpu: 4},
+			{Id: "cn-c", Addr: "c:6001", Mcpu: 4},
+		},
+	}
+	trace := PreviewQueryScheduling(SchedulingPreviewRequest{
+		Query: &plan.Query{Nodes: []*plan.Node{{
+			NodeType: plan.Node_TABLE_SCAN,
+			Stats:    &plan.Stats{BlockNum: 100000, Cost: 200000},
+		}}},
+		StatementSQL: statementSQL,
+		Engine:       provider,
+		Process:      mockCompile.proc,
+		Address:      "ingress:6001",
+		Intent: schedule.SchedulingIntent{WorkerSet: schedule.WorkerSetPolicy{
+			Mode: schedule.WorkerSetMax, MaxWorkers: 1,
+		}},
+	})
+
+	query := trace.Attempts[0].Query
+	require.NotNil(t, query)
+	require.True(t, query.Satisfied)
+	require.Equal(t, schedule.QueryExecAPMultiCN.String(), query.ExecKind)
+	require.Len(t, query.Selected, 1)
+	require.Equal(t, targetSelected, query.Selected[0].ID)
+	require.NotEqual(t, outerSelected, query.Selected[0].ID)
+}
+
+func TestPreviewQuerySchedulingAppliesIvfCurrentCNOverride(t *testing.T) {
+	mockCompile := NewMockCompile(t)
+	localID := mockCompile.proc.GetService()
+	provider := &schedulerProviderTestEngine{
+		schedulerTestEngine: &schedulerTestEngine{},
+		candidates: engine.QueryCandidates{
+			{Service: metadata.CNService{ServiceID: "remote", PipelineServiceAddress: "a-remote:6001"}, Mcpu: 4},
+			{Service: metadata.CNService{ServiceID: localID, PipelineServiceAddress: "z-local:6001"}, Mcpu: 6},
+		},
+		resolvedNodes: engine.Nodes{
+			{Id: "remote", Addr: "a-remote:6001", Mcpu: 4},
+			{Id: localID, Addr: "z-local:6001", Mcpu: 6},
+		},
+	}
+	trace := PreviewQueryScheduling(SchedulingPreviewRequest{
+		Query: &plan.Query{Nodes: []*plan.Node{{
+			NodeType: plan.Node_FUNCTION_SCAN,
+			Stats:    &plan.Stats{},
+			TableDef: &plan.TableDef{
+				TblFunc: &plan.TableFunction{Name: ivfflatplan.IVFFLATSearchFuncName},
+			},
+			IndexReaderParam: &plan.IndexReaderParam{OrigFuncName: "l2_distance"},
+		}}},
+		StatementSQL: "select * from ivf_search(...)",
+		Engine:       provider,
+		Process:      mockCompile.proc,
+		Address:      "z-local:6001",
+		Intent: schedule.SchedulingIntent{
+			WorkerSet: schedule.WorkerSetPolicy{Mode: schedule.WorkerSetAll},
+		},
+	})
+
+	query := trace.Attempts[0].Query
+	require.NotNil(t, query)
+	require.True(t, query.Satisfied)
+	require.Equal(t, schedule.CurrentCNRequired.String(), query.CurrentCNPolicy)
+	require.Equal(t, localID, query.CurrentCN.ID)
+	require.Equal(t, localID, query.Selected[0].ID)
 }
 
 func TestPreviewQuerySchedulingRejectsInvalidPolicyBeforeDiscovery(t *testing.T) {

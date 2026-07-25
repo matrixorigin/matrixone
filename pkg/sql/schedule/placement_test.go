@@ -682,6 +682,53 @@ func TestDecideQueryPlacementKeepsPreferredCurrentCNFirstAndSortsTail(t *testing
 	require.True(t, decision.Satisfied)
 }
 
+func TestDecideQueryPlacementPinsEligiblePreferredCurrentCNInCappedSubset(t *testing.T) {
+	local := Worker{ID: "local", Addr: "local:6001", Mcpu: 8}
+	candidates := Workers{
+		local,
+		{ID: "remote-a", Addr: "a:6001", Mcpu: 16},
+		{ID: "remote-b", Addr: "b:6001", Mcpu: 16},
+	}
+
+	decision := DecideQueryPlacement(QueryRequest{
+		ExecKind:        QueryExecAPMultiCN,
+		CurrentCN:       local,
+		Candidates:      candidates,
+		CurrentCNPolicy: CurrentCNPreferred,
+		Intent: SchedulingIntent{WorkerSet: WorkerSetPolicy{
+			Mode: WorkerSetMax, MaxWorkers: 1, SelectionKey: "query-1",
+		}},
+	})
+
+	require.True(t, decision.Satisfied)
+	require.Equal(t, ReasonPreferredCurrentCN, decision.Reason)
+	require.Equal(t, Workers{local}, decision.Workers)
+	require.Equal(t, 3, decision.EligibleCount)
+}
+
+func TestDecideQueryPlacementDoesNotPinAbsentPreferredCurrentCNInCappedSubset(t *testing.T) {
+	local := Worker{ID: "local", Addr: "local:6001", Mcpu: 8}
+	candidates := Workers{
+		{ID: "remote-a", Addr: "a:6001", Mcpu: 16},
+		{ID: "remote-b", Addr: "b:6001", Mcpu: 16},
+	}
+
+	decision := DecideQueryPlacement(QueryRequest{
+		ExecKind:        QueryExecAPMultiCN,
+		CurrentCN:       local,
+		Candidates:      candidates,
+		CurrentCNPolicy: CurrentCNPreferred,
+		Intent: SchedulingIntent{WorkerSet: WorkerSetPolicy{
+			Mode: WorkerSetMax, MaxWorkers: 1, SelectionKey: "query-1",
+		}},
+	})
+
+	require.True(t, decision.Satisfied)
+	require.Equal(t, ReasonMultiCN, decision.Reason)
+	require.Len(t, decision.Workers, 1)
+	require.NotEqual(t, local.ID, decision.Workers[0].ID)
+}
+
 func TestDecideQueryPlacementDoesNotForcePreferredCurrentCN(t *testing.T) {
 	local := Worker{ID: "local", Addr: "local:6001", Mcpu: 8}
 	candidates := Workers{{ID: "remote", Addr: "remote:6001", Mcpu: 16}}

@@ -303,6 +303,7 @@ func DecideQueryPlacement(req QueryRequest) QueryDecision {
 	}
 
 	reason := ReasonMultiCN
+	pinCurrent := false
 	if len(workers) == 0 {
 		if currentRejected {
 			return makeDecision(workers, currentRejectReason, false)
@@ -321,6 +322,7 @@ func DecideQueryPlacement(req QueryRequest) QueryDecision {
 			return makeDecision(nil, ReasonRequiredCurrentOutsidePool, false)
 		}
 		reason = ReasonRequiredCurrentCN
+		pinCurrent = true
 	case CurrentCNPreferred:
 		if !currentRejected {
 			preferredWorkers, ok := preferCurrentWorker(workers, req.CurrentCN)
@@ -329,10 +331,14 @@ func DecideQueryPlacement(req QueryRequest) QueryDecision {
 			}
 			workers = preferredWorkers
 			reason = ReasonPreferredCurrentCN
+			// Preferred means keep the current CN when it is eligible, not
+			// merely place it first before a capped HRW selection re-ranks the
+			// candidates. Unlike Required, absence remains non-fatal.
+			pinCurrent = true
 		}
 	}
 	var pinned *Worker
-	if req.CurrentCNPolicy == CurrentCNRequired {
+	if pinCurrent {
 		pinned = &req.CurrentCN
 	}
 	selected, selectionReason, ok := selectWorkerSubset(req.Intent.WorkerSet, workers, pinned)

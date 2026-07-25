@@ -308,6 +308,7 @@ func (c *Compile) clear() {
 	c.cnList = c.cnList[:0]
 	c.queryPlacement = schedule.QueryDecision{}
 	c.querySchedulingIntent = schedule.SchedulingIntent{}
+	c.querySelectionKey = ""
 	c.workloadPolicySet = schedule.WorkloadPolicySet{}
 	c.workloadClassHint = ""
 	c.schedulingTrace = nil

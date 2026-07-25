@@ -29,19 +29,20 @@ import (
 // query-level placement that compilation would choose. Preview does not build
 // scopes, mutate the plan, record scheduler metrics, or emit scheduler logs.
 type SchedulingPreviewRequest struct {
-	Context    context.Context
-	Query      *plan.Query
-	Engine     engine.Engine
-	Process    *process.Process
-	Address    string
-	IsInternal bool
-	Tenant     string
-	Username   string
-	CNLabel    map[string]string
-	Intent     schedule.SchedulingIntent
-	Policy     schedule.WorkloadPolicySet
-	Workload   schedule.WorkloadClass
-	TxnHasDDL  bool
+	Context      context.Context
+	Query        *plan.Query
+	StatementSQL string
+	Engine       engine.Engine
+	Process      *process.Process
+	Address      string
+	IsInternal   bool
+	Tenant       string
+	Username     string
+	CNLabel      map[string]string
+	Intent       schedule.SchedulingIntent
+	Policy       schedule.WorkloadPolicySet
+	Workload     schedule.WorkloadClass
+	TxnHasDDL    bool
 }
 
 // PreviewQueryScheduling returns a best-effort scheduling trace for EXPLAIN.
@@ -57,6 +58,7 @@ func PreviewQueryScheduling(req SchedulingPreviewRequest) schedule.Trace {
 	}
 
 	c := &Compile{
+		pn:                    &plan.Plan{Plan: &plan.Plan_Query{Query: req.Query}},
 		e:                     req.Engine,
 		proc:                  req.Process,
 		addr:                  req.Address,
@@ -65,6 +67,7 @@ func PreviewQueryScheduling(req SchedulingPreviewRequest) schedule.Trace {
 		uid:                   req.Username,
 		cnLabel:               req.CNLabel,
 		querySchedulingIntent: req.Intent,
+		querySelectionKey:     querySchedulingSelectionKeyForSQL(req.StatementSQL, ""),
 		workloadPolicySet:     req.Policy.Clone(),
 		workloadClassHint:     req.Workload,
 		ncpu:                  system.GoMaxProcs(),

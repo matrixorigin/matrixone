@@ -1672,19 +1672,20 @@ func previewQuerySchedulingWithSQLMode(
 		)
 	}
 	return compile.PreviewQueryScheduling(compile.SchedulingPreviewRequest{
-		Context:    previewCtx,
-		Query:      query,
-		Engine:     ses.GetTxnHandler().GetStorage(),
-		Process:    ses.GetProc(),
-		Address:    currentCNPipelineAddress(ses),
-		IsInternal: ses.GetIsInternal(),
-		Tenant:     tenant,
-		Username:   ses.GetUserName(),
-		CNLabel:    ses.getCNLabels(),
-		Intent:     intent,
-		Policy:     policySet,
-		Workload:   workloadClass,
-		TxnHasDDL:  txnHaveDDL,
+		Context:      previewCtx,
+		Query:        query,
+		StatementSQL: rawSQL,
+		Engine:       ses.GetTxnHandler().GetStorage(),
+		Process:      ses.GetProc(),
+		Address:      currentCNPipelineAddress(ses),
+		IsInternal:   ses.GetIsInternal(),
+		Tenant:       tenant,
+		Username:     ses.GetUserName(),
+		CNLabel:      ses.getCNLabels(),
+		Intent:       intent,
+		Policy:       policySet,
+		Workload:     workloadClass,
+		TxnHasDDL:    txnHaveDDL,
 	})
 }
 
