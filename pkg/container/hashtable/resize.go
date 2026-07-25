@@ -23,11 +23,10 @@ import (
 // ResizePlan is a side-effect-free description of a hash table growth.
 //
 // The byte fields describe the cell storage only (the Go slice headers are not
-// part of the mpool allocation). AdditionalBytes is the complete replacement
-// allocation, including every 256 MiB block when a table is block-backed.
-// ProjectedPeakBytes is the old allocation plus AdditionalBytes; this is the
-// amount an admission policy must be able to accommodate while the old table
-// is retained for rehashing.
+// part of the mpool allocation). AdditionalBytes is the allocation that must be
+// admitted before growth starts. For a segmented table it is only the appended
+// blocks; otherwise it is the complete replacement table. ProjectedPeakBytes is
+// the old allocation plus AdditionalBytes.
 type ResizePlan struct {
 	CurrentBytes       uint64
 	AdditionalBytes    uint64
@@ -40,6 +39,7 @@ type ResizePlan struct {
 	CurrentBlockCellCount uint64
 	TargetBlockCellCount  uint64
 	TargetMaxElemCount    uint64
+	ReuseCurrentBlocks    bool
 
 	// TableVersion and ShapeID reject a plan made against an older table
 	// shape. ShapeID is deliberately redundant with the shape fields so a
@@ -60,10 +60,10 @@ type ResizePlan struct {
 }
 
 // ResizeReservation owns the temporary-peak admission for one resize.
-// Commit is called after the replacement is published and the old cells are
-// freed. Rollback is called on every failure before publication. Implementors
-// must make both operations idempotent because they commonly wrap an
-// exactly-once memory reservation token.
+// Commit is called after the replacement or appended segments are published.
+// Rollback is called on every failure before publication. Implementors must
+// make both operations idempotent because they commonly wrap an exactly-once
+// memory reservation token.
 type ResizeReservation interface {
 	Commit(ResizePlan)
 	Rollback()
@@ -89,7 +89,7 @@ func resizeShapeID(version, cells, blockCells, blocks uint64) uint64 {
 	return x
 }
 
-func newResizePlan(elemCnt, additional, cellCnt, blockCellCnt, blockMaxElemCnt, blockCount, cellSize, maxCellsPerBlock, version uint64) ResizePlan {
+func newResizePlan(elemCnt, additional, cellCnt, blockCellCnt, blockCount, cellSize, maxCellsPerBlock, version uint64) ResizePlan {
 	plan := ResizePlan{
 		CurrentCellCount:      cellCnt,
 		CurrentBlockCount:     blockCount,
@@ -111,7 +111,7 @@ func newResizePlan(elemCnt, additional, cellCnt, blockCellCnt, blockMaxElemCnt, 
 	plan.TargetCellCount = cellCnt
 	plan.TargetBlockCount = blockCount
 	plan.TargetBlockCellCount = blockCellCnt
-	plan.TargetMaxElemCount = blockMaxElemCnt
+	plan.TargetMaxElemCount = maxElemCnt(cellCnt, cellSize)
 	plan.ShapeID = resizeShapeID(version, cellCnt, blockCellCnt, blockCount)
 	plan.CurrentShapeID = plan.ShapeID
 	plan.TargetShapeID = plan.ShapeID
@@ -122,11 +122,7 @@ func newResizePlan(elemCnt, additional, cellCnt, blockCellCnt, blockMaxElemCnt, 
 		return plan
 	}
 	target := elemCnt + additional
-	currentMaxElemCnt, ok := checkedMultiply(blockCount, blockMaxElemCnt)
-	if !ok {
-		plan.Invalid = true
-		return plan
-	}
+	currentMaxElemCnt := maxElemCnt(cellCnt, cellSize)
 	if additional == 0 || target <= currentMaxElemCnt {
 		plan.OldCellCount, plan.NewCellCount = cellCnt, cellCnt
 		plan.OldBlockCount, plan.NewBlockCount = blockCount, blockCount
@@ -165,7 +161,6 @@ func newResizePlan(elemCnt, additional, cellCnt, blockCellCnt, blockMaxElemCnt, 
 			plan.Invalid = true
 			return plan
 		}
-		newMaxElemCnt = maxElemCnt(newBlockCellCnt, cellSize)
 	}
 	if newBlockCount > uint64(math.MaxInt) || newBlockCellCnt > uint64(math.MaxInt) {
 		plan.Invalid = true
@@ -176,8 +171,22 @@ func newResizePlan(elemCnt, additional, cellCnt, blockCellCnt, blockMaxElemCnt, 
 	plan.TargetBlockCount = newBlockCount
 	plan.TargetBlockCellCount = newBlockCellCnt
 	plan.TargetMaxElemCount = newMaxElemCnt
-	plan.AdditionalBytes = newCellCnt * cellSize
-	plan.NewBytes = plan.AdditionalBytes
+	targetBytes, ok := checkedMultiply(newCellCnt, cellSize)
+	if !ok {
+		plan.Invalid = true
+		return plan
+	}
+	plan.ReuseCurrentBlocks = blockCellCnt == maxCellsPerBlock &&
+		newBlockCellCnt == blockCellCnt
+	plan.AdditionalBytes = targetBytes
+	if plan.ReuseCurrentBlocks {
+		if targetBytes < plan.CurrentBytes {
+			plan.Invalid = true
+			return plan
+		}
+		plan.AdditionalBytes = targetBytes - plan.CurrentBytes
+	}
+	plan.NewBytes = targetBytes
 	if plan.AdditionalBytes > math.MaxUint64-plan.CurrentBytes {
 		plan.Invalid = true
 		return plan

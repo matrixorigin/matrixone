@@ -87,6 +87,27 @@ func TestResizePlanRejectsOverflow(t *testing.T) {
 	require.ErrorIs(t, ht.ResizeWithPlan(plan), ErrInvalidResizePlan)
 }
 
+func TestResizePlanChargesOnlyAppendedSegments(t *testing.T) {
+	currentCells := maxIntCellCntPerBlock
+	targetRows := maxElemCnt(currentCells*2, intCellSize)
+	plan := newResizePlan(
+		0,
+		targetRows,
+		currentCells,
+		currentCells,
+		1,
+		intCellSize,
+		maxIntCellCntPerBlock,
+		7,
+	)
+	require.False(t, plan.Invalid)
+	require.False(t, plan.Noop)
+	require.True(t, plan.ReuseCurrentBlocks)
+	require.Equal(t, currentCells*intCellSize, plan.CurrentBytes)
+	require.Equal(t, currentCells*intCellSize, plan.AdditionalBytes)
+	require.Equal(t, currentCells*2*intCellSize, plan.ProjectedPeakBytes)
+}
+
 type assertResizeAdmissionError struct{}
 
 func (assertResizeAdmissionError) Error() string { return "resize admission rejected" }

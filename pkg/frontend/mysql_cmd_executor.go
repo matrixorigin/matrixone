@@ -223,7 +223,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 		// process view so statement-dependent cached decisions are recomputed.
 		proc.SetStmtProfile(&ses.stmtProfile)
 	}
-	ses.stmtProfile.SetDivByZeroRuntimeProfile(stmtTyp, queryTyp, isIgnoreStatement(statement))
+	ses.stmtProfile.SetStatementRuntimeProfile(stmtTyp, queryTyp, isIgnoreStatement(statement))
 
 	//note: txn id here may be empty
 	// add by #9907, set the result of last_query_id(), this will pass those isCmdFieldListSql() from client.
@@ -337,20 +337,33 @@ func redactStatementTextForLogging(statement tree.Statement, text string) string
 }
 
 func isIgnoreStatement(statement tree.Statement) bool {
-	insertStmt, ok := statement.(*tree.Insert)
-	if !ok {
+	switch stmt := statement.(type) {
+	case *tree.Insert:
+		return len(stmt.OnDuplicateUpdate) == 1 && stmt.OnDuplicateUpdate[0] == nil
+	case *tree.Update:
+		return stmt.Ignore
+	case *tree.Load:
+		return isLoadDataIgnore(stmt)
+	default:
 		return false
 	}
-	return len(insertStmt.OnDuplicateUpdate) == 1 && insertStmt.OnDuplicateUpdate[0] == nil
 }
 
-func refreshProcessDivByZeroProfileForPreparedStmt(proc *process.Process, statement tree.Statement) {
+func isLoadDataIgnore(stmt *tree.Load) bool {
+	if stmt == nil {
+		return false
+	}
+	_, ok := stmt.DuplicateHandling.(*tree.DuplicateKeyIgnore)
+	return ok
+}
+
+func refreshProcessStmtProfileForPreparedStmt(proc *process.Process, statement tree.Statement) {
 	if proc == nil || statement == nil {
 		return
 	}
 
 	stmtProfile := proc.GetStmtProfile()
-	stmtProfile.SetDivByZeroRuntimeProfile(
+	stmtProfile.SetStatementRuntimeProfile(
 		getStatementType(statement).GetStatementType(),
 		getStatementType(statement).GetQueryType(),
 		isIgnoreStatement(statement),

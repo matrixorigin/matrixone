@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -114,6 +115,32 @@ func TestPublishedJoinMapResizeKeepsReservationWithConsumer(t *testing.T) {
 	require.Zero(t, generation.Used())
 
 	hb.Reset(proc, false)
+}
+
+func TestHashMapReservationOwnerRetainsSegmentedGrowthTokens(t *testing.T) {
+	budget, err := process.NewHashBuildBudget(1<<20, 1<<20)
+	require.NoError(t, err)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+
+	initial, err := generation.Reserve(100)
+	require.NoError(t, err)
+	owner := &hashMapReservationOwner{tokens: []*process.HashBuildReservation{initial}}
+
+	incremental, err := generation.Reserve(50)
+	require.NoError(t, err)
+	(&hashMapResizeReservation{owner: owner, token: incremental}).Commit(
+		hashtable.ResizePlan{ReuseCurrentBlocks: true},
+	)
+	require.Equal(t, uint64(150), generation.Used())
+
+	replacement, err := generation.Reserve(200)
+	require.NoError(t, err)
+	(&hashMapResizeReservation{owner: owner, token: replacement}).Commit(hashtable.ResizePlan{})
+	require.Equal(t, uint64(200), generation.Used())
+
+	owner.release()
+	require.Zero(t, generation.Used())
 }
 
 func TestCopyBuildBatchBudgetsFixedSizeTailPreallocation(t *testing.T) {

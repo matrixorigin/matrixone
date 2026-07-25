@@ -31,8 +31,8 @@ type hashMapResizeReservation struct {
 	token *process.HashBuildReservation
 }
 
-func (r *hashMapResizeReservation) Commit(hashtable.ResizePlan) {
-	r.owner.replace(r.token)
+func (r *hashMapResizeReservation) Commit(plan hashtable.ResizePlan) {
+	r.owner.commit(r.token, plan.ReuseCurrentBlocks)
 	r.token = nil
 }
 
@@ -44,21 +44,27 @@ func (r *hashMapResizeReservation) Rollback() {
 }
 
 // hashMapReservationOwner follows the physical hash table across producer to
-// JoinMap ownership transfer. Resize callbacks retain this owner, so a resize
-// performed by a consumer replaces the token released by JoinMap.FreeMemory,
-// never a token stored back into a reused producer.
+// JoinMap ownership transfer. Full-table replacement swaps the retained token;
+// segmented growth keeps the existing tokens and adds one for the appended
+// blocks. Resize callbacks retain this owner so consumer growth never stores
+// reservations back into a reused producer.
 type hashMapReservationOwner struct {
-	mu    sync.Mutex
-	token *process.HashBuildReservation
+	mu     sync.Mutex
+	tokens []*process.HashBuildReservation
 }
 
-func (o *hashMapReservationOwner) replace(token *process.HashBuildReservation) {
+func (o *hashMapReservationOwner) commit(token *process.HashBuildReservation, reuseCurrent bool) {
 	o.mu.Lock()
-	old := o.token
-	o.token = token
+	if reuseCurrent {
+		o.tokens = append(o.tokens, token)
+		o.mu.Unlock()
+		return
+	}
+	old := o.tokens
+	o.tokens = []*process.HashBuildReservation{token}
 	o.mu.Unlock()
-	if old != nil {
-		old.Release()
+	for _, reservation := range old {
+		reservation.Release()
 	}
 }
 
@@ -66,7 +72,13 @@ func (o *hashMapReservationOwner) release() {
 	if o == nil {
 		return
 	}
-	o.replace(nil)
+	o.mu.Lock()
+	tokens := o.tokens
+	o.tokens = nil
+	o.mu.Unlock()
+	for _, token := range tokens {
+		token.Release()
+	}
 }
 
 func (hb *HashmapBuilder) setBudget(budget *process.HashBuildBudgetGeneration) {
@@ -84,7 +96,7 @@ func (hb *HashmapBuilder) reserveInitialMap(size int64) error {
 	if err != nil {
 		return err
 	}
-	hb.mapReservation = &hashMapReservationOwner{token: reservation}
+	hb.mapReservation = &hashMapReservationOwner{tokens: []*process.HashBuildReservation{reservation}}
 	return nil
 }
 
