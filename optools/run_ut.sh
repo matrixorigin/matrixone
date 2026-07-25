@@ -40,6 +40,7 @@ BUILD_WKSP=$(dirname "$PWD") && cd $BUILD_WKSP
 LOG="$G_TS-$TEST_TYPE.log"
 UT_TIMEOUT=${UT_TIMEOUT:-"15"}
 UT_PARALLEL=${UT_PARALLEL:-"1"}
+PLAN_RACE_SHARDS=${PLAN_RACE_SHARDS:-"8"}
 SCA_REPORT="$G_WKSP/$G_TS-SCA-Report.out"
 UT_REPORT="$G_WKSP/$G_TS-UT-Report.out"
 UT_FILTER="$G_WKSP/$G_TS-UT-Filter.out"
@@ -100,6 +101,82 @@ function run_vet(){
 
 }
 
+function run_plan_race_shards(){
+    local plan_package=$1
+    local test_list="${G_WKSP}/${G_TS}-plan-race-tests.out"
+    local list_status=0
+    local shard_status=0
+    local test_name=""
+    local shard=0
+    local test_count=0
+    local -a shard_patterns
+    local -a shard_counts
+
+    if ! [[ "${PLAN_RACE_SHARDS}" =~ ^[1-9][0-9]*$ ]] ||
+        (( PLAN_RACE_SHARDS > 64 )); then
+        logger "ERR" "PLAN_RACE_SHARDS must be an integer from 1 through 64, got '${PLAN_RACE_SHARDS}'"
+        return 2
+    fi
+
+    # Listing does not run tests, so the process exits before race-detector
+    # state can accumulate. Use -race here so race-tagged tests are included.
+    LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" \
+        CGO_CFLAGS="${CGO_CFLAGS}" \
+        CGO_LDFLAGS="${CGO_LDFLAGS}" \
+        go test ${GO_MODULE_MODE} -short -race -tags "${TAGS}" \
+        -list '^(Test|Fuzz|Example)' "${plan_package}" > "${test_list}"
+    list_status=$?
+    if (( list_status != 0 )); then
+        logger "ERR" "Failed to list tests for ${plan_package}"
+        tail -n 200 "${test_list}"
+        return "${list_status}"
+    fi
+
+    for (( shard = 0; shard < PLAN_RACE_SHARDS; shard++ )); do
+        shard_patterns[shard]='^('
+        shard_counts[shard]=0
+    done
+
+    while IFS= read -r test_name; do
+        case "${test_name}" in
+            Test*|Fuzz*|Example*) ;;
+            *) continue ;;
+        esac
+        shard=$(( test_count % PLAN_RACE_SHARDS ))
+        if (( shard_counts[shard] > 0 )); then
+            shard_patterns[shard]+='|'
+        fi
+        shard_patterns[shard]+="${test_name}"
+        shard_counts[shard]=$(( shard_counts[shard] + 1 ))
+        test_count=$(( test_count + 1 ))
+    done < "${test_list}"
+
+    if (( test_count == 0 )); then
+        logger "ERR" "No tests discovered for ${plan_package}"
+        return 2
+    fi
+
+    logger "INF" "Run ${test_count} tests in ${plan_package} across ${PLAN_RACE_SHARDS} fresh race-detector processes"
+    for (( shard = 0; shard < PLAN_RACE_SHARDS; shard++ )); do
+        if (( shard_counts[shard] == 0 )); then
+            continue
+        fi
+        shard_patterns[shard]+=')$'
+        logger "INF" "Run ${plan_package} race shard $(( shard + 1 ))/${PLAN_RACE_SHARDS} (${shard_counts[shard]} tests)"
+        LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" \
+            CGO_CFLAGS="${CGO_CFLAGS}" \
+            CGO_LDFLAGS="${CGO_LDFLAGS}" \
+            go test ${GO_MODULE_MODE} -short -v -json -tags "${TAGS}" \
+            -p 1 -count=1 -timeout "${UT_TIMEOUT}m" -race \
+            -run "${shard_patterns[shard]}" "${plan_package}" >> "${UT_REPORT}"
+        if (( $? != 0 )); then
+            shard_status=1
+        fi
+    done
+
+    return "${shard_status}"
+}
+
 function run_tests(){
     cd $BUILD_WKSP
     horiz_rule
@@ -138,15 +215,39 @@ function run_tests(){
     if [[ $SKIP_TESTS == 'race' ]]; then
         logger "INF" "Run UT without race check"
         LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} -short -v -json -tags "${TAGS}" -p ${UT_PARALLEL} -timeout "${UT_TIMEOUT}m"  $test_scope > $UT_REPORT
+        UT_TEST_STATUS=$?
     else
         logger "INF" "Run UT with race check"
-        LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} -short -v -json -tags "${TAGS}" -p ${UT_PARALLEL} -timeout "${UT_TIMEOUT}m" -race $test_scope > $UT_REPORT
+        local plan_package
+        local regular_test_scope
+        local regular_status=0
+        local plan_status=0
+
+        if ! plan_package=$(go list ${GO_MODULE_MODE} ./pkg/sql/plan); then
+            logger "ERR" "Failed to resolve ./pkg/sql/plan"
+            UT_TEST_STATUS=1
+            return 0
+        fi
+        regular_test_scope=$(printf '%s\n' "${test_scope}" | grep -Fvx "${plan_package}")
+
+        if [[ -n "${regular_test_scope}" ]]; then
+            LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} -short -v -json -tags "${TAGS}" -p ${UT_PARALLEL} -timeout "${UT_TIMEOUT}m" -race $regular_test_scope > $UT_REPORT
+            regular_status=$?
+        else
+            : > "${UT_REPORT}"
+        fi
+
+        run_plan_race_shards "${plan_package}"
+        plan_status=$?
+
+        if (( regular_status != 0 || plan_status != 0 )); then
+            UT_TEST_STATUS=1
+        fi
     fi
 
     # run_ut.sh intentionally does not use errexit because post-processing must
     # still run after a failed package. Preserve go test's status explicitly so
     # a report-parser failure can never replace the authoritative test result.
-    UT_TEST_STATUS=$?
     if (( UT_TEST_STATUS != 0 )); then
         logger "ERR" "go test failed with status ${UT_TEST_STATUS}; raw report: ${UT_REPORT}"
     fi
