@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
+	queryserviceclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -1040,7 +1041,8 @@ func doAlterQueryWorkloadPolicy(
 		return err
 	}
 
-	if _, _, applyErr := GWorkloadPolicyManager.Apply(targetID, raw, revision); applyErr != nil {
+	_, _, applyErr := GWorkloadPolicyManager.Apply(targetID, raw, revision)
+	if applyErr != nil {
 		logutil.Warn(
 			"failed to apply committed workload policy to the local cache",
 			zap.Uint32("account-id", targetID),
@@ -1054,14 +1056,32 @@ func doAlterQueryWorkloadPolicy(
 		workloadPolicyPublishTimeout,
 	)
 	defer cancel()
-	if err := publishWorkloadPolicy(publishCtx, ses, targetID, raw, revision); err != nil {
-		// The transaction has committed. Notification is best-effort and the
-		// periodic catalog reconciliation provides the durable repair path.
+	publishErr := publishWorkloadPolicy(
+		publishCtx,
+		ses,
+		targetID,
+		raw,
+		revision,
+	)
+	if publishErr != nil {
 		logutil.Warn(
 			"failed to publish committed workload policy",
 			zap.Uint32("account-id", targetID),
 			zap.Uint64("revision", revision),
-			zap.Error(err),
+			zap.Error(publishErr),
+		)
+	}
+	if convergenceErr := errors.Join(applyErr, publishErr); convergenceErr != nil {
+		// The catalog transaction is already durable. Do not report ALTER
+		// success until every known CN has acknowledged this revision; otherwise
+		// an established cache can keep enforcing the previous policy until its
+		// periodic catalog refresh.
+		return moerr.NewInternalErrorf(
+			ctx,
+			"workload policy revision %d committed for account %d but cluster-wide enforcement was not confirmed: %v",
+			revision,
+			targetID,
+			convergenceErr,
 		)
 	}
 	return nil
@@ -1176,42 +1196,9 @@ func ensureWorkloadPolicyRPCReady(
 
 	checkCtx, cancel := context.WithTimeout(ctx, workloadPolicyPublishTimeout)
 	defer cancel()
-	cluster, err := clusterservice.GetMOClusterWithContext(
-		checkCtx,
-		qc.ServiceID(),
-	)
+	nodes, nodeIDs, err := workloadPolicyCNTargets(checkCtx, qc)
 	if err != nil {
 		return err
-	}
-
-	var nodes []string
-	nodeIDs := make(map[string]string)
-	if err := clusterservice.GetCNServiceWithoutWorkingStateWithContext(
-		checkCtx,
-		cluster,
-		clusterservice.NewSelectAll(),
-		func(service metadata.CNService) bool {
-			nodes = append(nodes, service.QueryAddress)
-			nodeIDs[service.QueryAddress] = service.ServiceID
-			return true
-		},
-	); err != nil {
-		return err
-	}
-	if len(nodes) == 0 {
-		return moerr.NewInternalError(
-			ctx,
-			"workload policy requires at least one active CN",
-		)
-	}
-	for _, node := range nodes {
-		if node == "" {
-			return moerr.NewInternalErrorf(
-				ctx,
-				"workload policy CN %s has no query address",
-				nodeIDs[node],
-			)
-		}
 	}
 
 	var responseErr error
@@ -1255,6 +1242,50 @@ func ensureWorkloadPolicyRPCReady(
 		handleInvalidResponse,
 	)
 	return errors.Join(requestErr, responseErr)
+}
+
+// workloadPolicyCNTargets returns every known CN, including draining and
+// temporarily non-working services. Such a CN may hold a warm policy cache and
+// later become working again, so omitting it from an acknowledged publication
+// would leave a stale enforcement generation behind.
+func workloadPolicyCNTargets(
+	ctx context.Context,
+	qc queryserviceclient.QueryClient,
+) ([]string, map[string]string, error) {
+	cluster, err := clusterservice.GetMOClusterWithContext(ctx, qc.ServiceID())
+	if err != nil {
+		return nil, nil, err
+	}
+	var nodes []string
+	nodeIDs := make(map[string]string)
+	if err := clusterservice.GetCNServiceWithoutWorkingStateWithContext(
+		ctx,
+		cluster,
+		clusterservice.NewSelectAll(),
+		func(service metadata.CNService) bool {
+			nodes = append(nodes, service.QueryAddress)
+			nodeIDs[service.QueryAddress] = service.ServiceID
+			return true
+		},
+	); err != nil {
+		return nil, nil, err
+	}
+	if len(nodes) == 0 {
+		return nil, nil, moerr.NewInternalError(
+			ctx,
+			"workload policy requires at least one active CN",
+		)
+	}
+	for _, node := range nodes {
+		if node == "" {
+			return nil, nil, moerr.NewInternalErrorf(
+				ctx,
+				"workload policy CN %s has no query address",
+				nodeIDs[node],
+			)
+		}
+	}
+	return nodes, nodeIDs, nil
 }
 
 func resolveWorkloadPolicyAccount(
@@ -1404,14 +1435,10 @@ func publishWorkloadPolicy(
 	if qc == nil {
 		return moerr.NewInternalError(ctx, "query client is not initialized")
 	}
-	var nodes []string
-	clusterservice.GetMOCluster(qc.ServiceID()).GetCNService(
-		clusterservice.NewSelectAll(),
-		func(service metadata.CNService) bool {
-			nodes = append(nodes, service.QueryAddress)
-			return true
-		},
-	)
+	nodes, _, err := workloadPolicyCNTargets(ctx, qc)
+	if err != nil {
+		return err
+	}
 	var responseErr error
 	genRequest := func() *query.Request {
 		request := qc.NewRequest(query.CmdMethod_WorkloadPolicyUpdate)
@@ -1470,6 +1497,13 @@ func validateWorkloadPolicyUpdateResponse(
 		)
 	}
 	update := response.WorkloadPolicyUpdateResponse
+	if !update.Supported {
+		return moerr.NewInternalErrorf(
+			ctx,
+			"CN %s did not confirm workload policy support",
+			node,
+		)
+	}
 	if update.Applied && update.Revision != requestedRevision {
 		return moerr.NewInternalErrorf(
 			ctx,

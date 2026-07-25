@@ -95,6 +95,9 @@ func (c *workloadPolicyMOCluster) GetCNService(
 	apply func(metadata.CNService) bool,
 ) {
 	for _, service := range c.services {
+		if service.WorkState != metadata.WorkState_Working {
+			continue
+		}
 		if !apply(service) {
 			return
 		}
@@ -102,10 +105,14 @@ func (c *workloadPolicyMOCluster) GetCNService(
 }
 
 func (c *workloadPolicyMOCluster) GetCNServiceWithoutWorkingState(
-	selector clusterservice.Selector,
+	_ clusterservice.Selector,
 	apply func(metadata.CNService) bool,
 ) {
-	c.GetCNService(selector, apply)
+	for _, service := range c.services {
+		if !apply(service) {
+			return
+		}
+	}
 }
 
 func newWorkloadPolicyQueryClient(serviceID string) *workloadPolicyQueryClient {
@@ -2887,7 +2894,9 @@ func TestResolveWorkloadPolicyAccountEnforcesScopeAndValidatesCatalog(t *testing
 	}
 }
 
-func TestAlterQueryWorkloadPolicyCommitsAppliesAndPublishes(t *testing.T) {
+func TestAlterQueryWorkloadPolicyCommitsAppliesAndRequiresPublishAcknowledgement(
+	t *testing.T,
+) {
 	const (
 		accountID = uint32(65)
 		userID    = uint32(66)
@@ -2897,8 +2906,9 @@ func TestAlterQueryWorkloadPolicyCommitsAppliesAndPublishes(t *testing.T) {
 	client := newWorkloadPolicyQueryClient(service)
 	client.responses["cn-1"] = &query.Response{
 		WorkloadPolicyUpdateResponse: &query.WorkloadPolicyUpdateResponse{
-			Applied:  true,
-			Revision: 12,
+			Applied:   true,
+			Revision:  12,
+			Supported: true,
 		},
 	}
 	InitServerLevelVars(service)
@@ -2996,9 +3006,8 @@ func TestAlterQueryWorkloadPolicyCommitsAppliesAndPublishes(t *testing.T) {
 	require.Empty(t, request.WorkloadPolicyUpdateRequest.Policy)
 	require.Equal(t, uint64(12), request.WorkloadPolicyUpdateRequest.Revision)
 
-	// A notification failure happens after commit and must not turn a durable
-	// successful ALTER into a client-visible failure. Catalog reconciliation
-	// is the repair path for the missed CN.
+	// The catalog transaction is durable, but ALTER must not report success
+	// while a known CN may keep enforcing its previous cached revision.
 	client.mu.Lock()
 	client.publishSendErrs["cn-1"] = errors.New("injected publish failure")
 	client.mu.Unlock()
@@ -3010,11 +3019,14 @@ func TestAlterQueryWorkloadPolicyCommitsAppliesAndPublishes(t *testing.T) {
 		false,
 	)
 	defer set.Free()
-	require.NoError(t, doAlterQueryWorkloadPolicy(
+	err = doAlterQueryWorkloadPolicy(
 		context.Background(),
 		session,
 		set,
-	))
+	)
+	require.ErrorContains(t, err, "committed for account 65")
+	require.ErrorContains(t, err, "cluster-wide enforcement was not confirmed")
+	require.ErrorContains(t, err, "injected publish failure")
 	require.Equal(t, uint64(13), state.snapshot.Load().revision)
 	require.Equal(t, testWorkloadPolicyNew, state.snapshot.Load().raw)
 	require.Equal(t, "commit;", exec.executedSQLs[len(exec.executedSQLs)-1])
@@ -3217,13 +3229,15 @@ func TestPublishWorkloadPolicyFanoutAndErrorAggregation(t *testing.T) {
 		client := newWorkloadPolicyQueryClient(service)
 		client.responses["cn-1"] = &query.Response{
 			WorkloadPolicyUpdateResponse: &query.WorkloadPolicyUpdateResponse{
-				Applied:  true,
-				Revision: 8,
+				Applied:   true,
+				Revision:  8,
+				Supported: true,
 			},
 		}
 		client.responses["cn-2"] = &query.Response{
 			WorkloadPolicyUpdateResponse: &query.WorkloadPolicyUpdateResponse{
-				Revision: 9,
+				Revision:  9,
+				Supported: true,
 			},
 		}
 		session := newSession(service, client, "cn-1", "cn-2")
@@ -3249,13 +3263,62 @@ func TestPublishWorkloadPolicyFanoutAndErrorAggregation(t *testing.T) {
 		}
 	})
 
+	t.Run("non-working CNs must also acknowledge", func(t *testing.T) {
+		service := t.Name()
+		client := setupWorkloadPolicyQueryCluster(
+			t,
+			service,
+			[]metadata.CNService{{
+				ServiceID:    "cn-draining",
+				QueryAddress: "cn-draining",
+				WorkState:    metadata.WorkState_Draining,
+			}},
+		)
+		client.responses["cn-draining"] = &query.Response{
+			WorkloadPolicyUpdateResponse: &query.WorkloadPolicyUpdateResponse{
+				Applied:   true,
+				Revision:  8,
+				Supported: true,
+			},
+		}
+		session := &Session{feSessionImpl: feSessionImpl{service: service}}
+
+		require.NoError(t, publishWorkloadPolicy(
+			context.Background(),
+			session,
+			64,
+			testWorkloadPolicyNew,
+			8,
+		))
+
+		client.mu.Lock()
+		defer client.mu.Unlock()
+		require.Contains(t, client.requests, "cn-draining")
+		require.Equal(t, 1, client.releases)
+	})
+
+	t.Run("empty cluster cannot acknowledge publication", func(t *testing.T) {
+		service := t.Name()
+		setupWorkloadPolicyQueryCluster(t, service, nil)
+
+		err := publishWorkloadPolicy(
+			context.Background(),
+			&Session{feSessionImpl: feSessionImpl{service: service}},
+			64,
+			testWorkloadPolicyNew,
+			8,
+		)
+		require.ErrorContains(t, err, "requires at least one active CN")
+	})
+
 	t.Run("transport and response errors are joined", func(t *testing.T) {
 		service := t.Name()
 		client := newWorkloadPolicyQueryClient(service)
 		client.responses["cn-stale"] = &query.Response{
 			WorkloadPolicyUpdateResponse: &query.WorkloadPolicyUpdateResponse{
-				Applied:  true,
-				Revision: 7,
+				Applied:   true,
+				Revision:  7,
+				Supported: true,
 			},
 		}
 		client.sendErrs["cn-down"] = errors.New("injected network failure")
@@ -3290,8 +3353,9 @@ func TestValidateWorkloadPolicyUpdateResponse(t *testing.T) {
 		"cn-1",
 		8,
 		&query.Response{WorkloadPolicyUpdateResponse: &query.WorkloadPolicyUpdateResponse{
-			Applied:  true,
-			Revision: 8,
+			Applied:   true,
+			Revision:  8,
+			Supported: true,
 		}},
 	))
 	require.NoError(t, validateWorkloadPolicyUpdateResponse(
@@ -3299,10 +3363,11 @@ func TestValidateWorkloadPolicyUpdateResponse(t *testing.T) {
 		"cn-1",
 		8,
 		&query.Response{WorkloadPolicyUpdateResponse: &query.WorkloadPolicyUpdateResponse{
-			Revision: 9,
+			Revision:  9,
+			Supported: true,
 		}},
 	))
-	require.NoError(t, validateWorkloadPolicyUpdateResponse(
+	require.Error(t, validateWorkloadPolicyUpdateResponse(
 		ctx,
 		"cn-1",
 		8,
@@ -3319,8 +3384,9 @@ func TestValidateWorkloadPolicyUpdateResponse(t *testing.T) {
 		"cn-1",
 		8,
 		&query.Response{WorkloadPolicyUpdateResponse: &query.WorkloadPolicyUpdateResponse{
-			Applied:  true,
-			Revision: 7,
+			Applied:   true,
+			Revision:  7,
+			Supported: true,
 		}},
 	))
 	require.Error(t, validateWorkloadPolicyUpdateResponse(
@@ -3328,7 +3394,8 @@ func TestValidateWorkloadPolicyUpdateResponse(t *testing.T) {
 		"cn-1",
 		8,
 		&query.Response{WorkloadPolicyUpdateResponse: &query.WorkloadPolicyUpdateResponse{
-			Revision: 7,
+			Revision:  7,
+			Supported: true,
 		}},
 	))
 }
