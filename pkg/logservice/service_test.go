@@ -238,6 +238,9 @@ func TestNewServiceClosesStoreOnReplicaStartFailure(t *testing.T) {
 	require.NoError(t, createMetadataFile(cfg.DataDir, logMetadataFilename, &md, cfg.FS))
 
 	service, err = NewService(cfg, newFS(), nil)
+	if service != nil {
+		require.NoError(t, service.Close())
+	}
 	require.Nil(t, service)
 	require.ErrorIs(t, err, dragonboat.ErrShardAlreadyExist)
 

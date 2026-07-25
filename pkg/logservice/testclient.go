@@ -45,6 +45,7 @@ func NewTestService(fs vfs.FS) (*Service, ClientConfig, error) {
 		next.DeploymentID = 1
 		next.FS = fs
 		next.LogServicePort = ports[2]
+		setTestHAKeeperClientConfig(&next)
 		next.DisableWorkers = true
 		cfg = next
 		return cfg, nil

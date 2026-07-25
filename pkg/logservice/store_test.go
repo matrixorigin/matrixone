@@ -80,6 +80,7 @@ func getStoreTestConfig() Config {
 	dummyGossipSeedAddress := getDummyGossipSeedAddress()
 	cfg.GossipSeedAddresses = []string{testGossipAddress, dummyGossipSeedAddress}
 	cfg.LogServicePort = getTestServicePort()
+	setTestHAKeeperClientConfig(&cfg)
 	cfg.DeploymentID = 1
 	cfg.FS = vfs.NewStrictMem()
 	cfg.UseTeeLogDB = false
@@ -91,6 +92,17 @@ func getStoreTestConfig() Config {
 		},
 	)
 	return cfg
+}
+
+func TestStoreTestConfigUsesSelfHAKeeperAddress(t *testing.T) {
+	cfg := getStoreTestConfig()
+
+	require.Equal(
+		t,
+		[]string{cfg.LogServiceServiceAddr()},
+		cfg.HAKeeperClientConfig.ServiceAddresses,
+	)
+	require.Empty(t, (&store{cfg: cfg}).zombieCheckAddresses())
 }
 
 func TestStoreCanBeCreatedAndClosed(t *testing.T) {

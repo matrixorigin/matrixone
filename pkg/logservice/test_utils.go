@@ -135,6 +135,7 @@ func getServiceTestConfig() Config {
 	c.DeploymentID = 1
 	c.FS = vfs.NewStrictMem()
 	c.LogServicePort = getTestServicePort()
+	setTestHAKeeperClientConfig(&c)
 	c.DisableWorkers = true
 	c.UseTeeLogDB = false
 	c.RPC.MaxMessageSize = toml.ByteSize(getTestServerMaxMsgSize())
@@ -143,6 +144,13 @@ func getServiceTestConfig() Config {
 	runtime.SetupServiceBasedRuntime(c.UUID, rt)
 	runtime.SetupServiceBasedRuntime("", rt)
 	return c
+}
+
+func setTestHAKeeperClientConfig(cfg *Config) {
+	cfg.HAKeeperClientConfig.DiscoveryAddress = ""
+	cfg.HAKeeperClientConfig.ServiceAddresses = []string{
+		cfg.LogServiceServiceAddr(),
+	}
 }
 
 func RunClientTest(

@@ -80,6 +80,12 @@ func TestNewTestServicesUseIndependentPorts(t *testing.T) {
 	t.Cleanup(func() {
 		require.NoError(t, service1.Close())
 	})
+	require.Equal(
+		t,
+		[]string{service1.store.cfg.LogServiceServiceAddr()},
+		service1.store.cfg.HAKeeperClientConfig.ServiceAddresses,
+	)
+	require.Empty(t, service1.store.zombieCheckAddresses())
 
 	service2, ccfg2, err := NewTestService(vfs.NewStrictMem())
 	require.NoError(t, err)

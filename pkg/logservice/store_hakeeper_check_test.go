@@ -250,7 +250,7 @@ func runHakeeperTaskServiceTest(t *testing.T, fn func(*testing.T, *store, taskse
 	}()
 	peers := make(map[uint64]dragonboat.Target)
 	peers[1] = store.id()
-	assert.NoError(t, store.startHAKeeperReplica(1, peers, false))
+	require.NoError(t, store.startHAKeeperReplica(1, peers, false))
 	fn(t, store, taskService)
 }
 

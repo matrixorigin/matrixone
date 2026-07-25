@@ -21,6 +21,18 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestServiceTestConfigUsesSelfHAKeeperAddress(t *testing.T) {
+	cfg := getServiceTestConfig()
+
+	require.Empty(t, cfg.HAKeeperClientConfig.DiscoveryAddress)
+	require.Equal(
+		t,
+		[]string{cfg.LogServiceServiceAddr()},
+		cfg.HAKeeperClientConfig.ServiceAddresses,
+	)
+	require.Empty(t, (&store{cfg: cfg}).zombieCheckAddresses())
+}
+
 func TestAllocatedPortsRejectsInvalidRequest(t *testing.T) {
 	testCases := []struct {
 		name  string
