@@ -873,6 +873,72 @@ func TestRetainedSpillGrowsEmergencyLeaseWithoutDoubleChargingSource(t *testing.
 	require.NoError(t, ctr.flushSpillBuffers(files, analyzer))
 }
 
+func TestSpillEmergencyBudgetDoesNotDoubleScaleShuffledConstVector(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	const sourceRows = 32 * 1024
+	bat := batch.NewWithSize(2)
+	values := make([]int32, sourceRows)
+	for i := range values {
+		values[i] = int32(i)
+	}
+	bat.Vecs[0] = testutil.MakeInt32Vector(values, nil, proc.Mp())
+	var err error
+	bat.Vecs[1], err = vector.NewConstBytes(
+		types.T_varchar.ToType(),
+		[]byte("test create big fulltext index"),
+		sourceRows,
+		proc.Mp(),
+	)
+	require.NoError(t, err)
+	bat.SetRowCount(sourceRows)
+	defer bat.Clean(proc.Mp())
+
+	// Batch.Shuffle intentionally leaves a const vector untouched while it
+	// changes the batch cardinality. This is the shape produced by the failed
+	// generate_series + const-varchar BVT query.
+	require.NoError(t, bat.Shuffle([]int64{0}, proc.Mp()))
+	require.Equal(t, 1, bat.RowCount())
+	require.Equal(t, sourceRows, bat.Vecs[1].Length())
+
+	legacySource := uint64(bat.Allocated())
+	if size := uint64(bat.Size()); size > legacySource {
+		legacySource = size
+	}
+	legacyScaled := legacySource * uint64(colexec.DefaultBatchSize)
+	legacyMetadata, ok := retainedMetadataAllowance(bat)
+	require.True(t, ok)
+	legacyScaled += legacyMetadata * uint64(colexec.DefaultBatchSize)
+	legacyNeed, err := spillBudgetFor(uint64(colexec.DefaultBatchSize), legacyScaled)
+	require.NoError(t, err)
+	require.Greater(t, legacyNeed, uint64(10<<30),
+		"the old logical-size extrapolation must reproduce the false 10 GiB rejection")
+
+	need, err := spillEmergencyBudgetBytes(bat)
+	require.NoError(t, err)
+	require.Less(t, need, uint64(16<<20),
+		"physical admission must not scale a const vector's stale logical length")
+
+	// The corrected estimate must still cover the physical 8192-row batch that
+	// CopyIntoBatches can form from repeated one-row ingress batches.
+	full := batch.NewWithSize(2)
+	fullValues := make([]int32, colexec.DefaultBatchSize)
+	fullStrings := make([]string, colexec.DefaultBatchSize)
+	for i := range fullValues {
+		fullValues[i] = int32(i)
+		fullStrings[i] = "test create big fulltext index"
+	}
+	full.Vecs[0] = testutil.MakeInt32Vector(fullValues, nil, proc.Mp())
+	full.Vecs[1] = testutil.MakeVarcharVector(fullStrings, nil, proc.Mp())
+	full.SetRowCount(colexec.DefaultBatchSize)
+	defer full.Clean(proc.Mp())
+
+	fullNeed, err := spillBudgetBytes(full)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, need, fullNeed)
+}
+
 func TestEnsureSpillFile(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()

@@ -51,11 +51,48 @@ func spillBudgetBytes(bat *batch.Batch) (uint64, error) {
 		return 0, nil
 	}
 	rows := uint64(bat.RowCount())
-	source := uint64(bat.Allocated())
-	if size := uint64(bat.Size()); size > source {
-		source = size
+	source, err := spillSourceBytes(bat)
+	if err != nil {
+		return 0, err
 	}
 	return spillBudgetFor(rows, source)
+}
+
+// spillSourceBytes returns a physical upper bound for materializing bat during
+// spill. Batch.Size is a logical estimate: in particular, a const vector keeps
+// its original Length when Batch.Shuffle reduces the batch RowCount. Using
+// Size and then scaling by RowCount therefore counts the original cardinality
+// twice. Allocated covers the physical vector/area capacity; const vectors add
+// one non-const descriptor per output row because UnionInt32 materializes those
+// descriptors in the selected spill batch.
+func spillSourceBytes(bat *batch.Batch) (uint64, error) {
+	if bat == nil || bat.RowCount() <= 0 {
+		return 0, nil
+	}
+	source := uint64(bat.Allocated())
+	rows := uint64(bat.RowCount())
+	for _, vec := range bat.Vecs {
+		if vec == nil {
+			return 0, process.ErrHashBuildBudgetInvalid
+		}
+		if !vec.IsConst() {
+			continue
+		}
+		typeSize := vec.GetType().TypeSize()
+		if typeSize < 0 {
+			return 0, process.ErrHashBuildBudgetInvalid
+		}
+		width := uint64(typeSize)
+		if width > 0 && rows > math.MaxUint64/width {
+			return 0, process.ErrHashBuildBudgetInvalid
+		}
+		materialized := rows * width
+		if source > math.MaxUint64-materialized {
+			return 0, process.ErrHashBuildBudgetInvalid
+		}
+		source += materialized
+	}
+	return source, nil
 }
 
 // spillScratchBudgetBytes returns the incremental spill charge. A copied
@@ -113,9 +150,9 @@ func spillEmergencyBudgetBytes(bat *batch.Batch) (uint64, error) {
 		return need, err
 	}
 	rows := uint64(bat.RowCount())
-	source := uint64(bat.Allocated())
-	if size := uint64(bat.Size()); size > source {
-		source = size
+	source, err := spillSourceBytes(bat)
+	if err != nil {
+		return 0, err
 	}
 	if source > math.MaxUint64/uint64(colexec.DefaultBatchSize) {
 		return 0, process.ErrHashBuildBudgetInvalid
