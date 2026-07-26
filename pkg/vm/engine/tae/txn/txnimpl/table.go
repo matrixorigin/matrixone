@@ -1430,7 +1430,7 @@ func (tbl *txnTable) DoPrecommitDedupByNode(ctx context.Context, stats objectio.
 		if tbl.dedupTS.IsEmpty() {
 			tbl.dedupTS = tbl.store.txn.GetStartTS()
 		}
-		rowIDs, err = tbl.getBaseTable(isTombstone).incrementalGetRowsByPK(ctx, pks, tbl.dedupTS, now, true)
+		rowIDs, err = tbl.getBaseTable(isTombstone).incrementalGetRowsByPK(ctx, pks, tbl.dedupTS.Next(), now, true)
 		if err != nil {
 			return
 		}

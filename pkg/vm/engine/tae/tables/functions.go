@@ -328,7 +328,10 @@ func getDuplicatedRowIDABlkBytesFunc(args ...any) func([]byte, bool, int) error 
 				}
 				commitTS := vector.GetFixedAtNoTypeCheck[types.TS](tsVec.GetDownstreamVector(), row)
 				startTS := txn.GetStartTS()
-				if commitTS.LE(&from) {
+				// `from` is the first timestamp in the dedup window. Callers
+				// advance their exclusive watermark with Next(), so equality
+				// must remain visible here.
+				if commitTS.LT(&from) {
 					return nil
 				}
 				if commitTS.GT(&to) {
@@ -380,7 +383,8 @@ func getDuplicatedRowIDABlkFuncFactory[T types.FixedSizeT](comp func(T, T) int) 
 						return nil
 					}
 					commitTS := tsVec.Get(row).(types.TS)
-					if commitTS.LE(&from) {
+					// Keep the lower bound inclusive; see the varlen path.
+					if commitTS.LT(&from) {
 						return nil
 					}
 					if commitTS.GT(&to) {

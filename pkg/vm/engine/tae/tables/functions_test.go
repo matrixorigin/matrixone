@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/stretchr/testify/require"
 )
@@ -147,6 +148,67 @@ func TestMissingCommitTSIsConservativeDuplicate(t *testing.T) {
 				require.False(t, rowIDs.IsNull(0))
 			})
 		}
+	}
+}
+
+func TestCommitTSAtDedupLowerBoundIsIncluded(t *testing.T) {
+	from := types.BuildTS(5, 1)
+	to := types.BuildTS(9, 0)
+	txn := txnbase.MockTxnReaderWithStartTS(from.Prev())
+
+	for _, typ := range []types.Type{
+		types.T_int64.ToType(),
+		types.T_varchar.ToType(),
+	} {
+		t.Run(typ.String(), func(t *testing.T) {
+			data := containers.MakeVector(typ, common.DefaultAllocator)
+			defer data.Close()
+			keys := containers.MakeVector(typ, common.DefaultAllocator)
+			defer keys.Close()
+			if typ.Oid == types.T_int64 {
+				data.Append(int64(1), false)
+				keys.Append(int64(1), false)
+			} else {
+				data.Append([]byte("pk"), false)
+				keys.Append([]byte("pk"), false)
+			}
+
+			rowIDs := containers.MakeVector(
+				types.T_Rowid.ToType(),
+				common.DefaultAllocator,
+			)
+			defer rowIDs.Close()
+			rowIDs.Append(nil, true)
+
+			commitTS := containers.MakeVector(
+				types.T_TS.ToType(),
+				common.DefaultAllocator,
+			)
+			commitTS.Append(from, false)
+			loader := &commitTSLoader{
+				load: func() (containers.Vector, error) {
+					return commitTS, nil
+				},
+			}
+			defer loader.close()
+
+			op := containers.MakeForeachVectorOp(
+				keys.GetType().Oid,
+				getRowIDAlkFunctions,
+				data,
+				rowIDs,
+				types.Blockid{},
+				loader,
+				txn,
+				from,
+				to,
+			)
+			require.ErrorIs(
+				t,
+				containers.ForeachVector(keys, op, nil),
+				txnif.ErrTxnWWConflict,
+			)
+		})
 	}
 }
 
