@@ -1204,6 +1204,75 @@ func TestSpillRetainedEstimateCoversCopyIntoBatchesConstMaterialization(t *testi
 	require.GreaterOrEqual(t, estimated, uint64(selected.Allocated()))
 }
 
+func TestSpillRetainedEstimateFollowsFullBatchCloneToSemantics(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	makeConstBatch := func(payloadBytes int) *batch.Batch {
+		payload := make([]byte, payloadBytes)
+		for i := range payload {
+			payload[i] = 'x'
+		}
+		source := batch.NewWithSize(1)
+		var err error
+		source.Vecs[0], err = vector.NewConstBytes(
+			types.T_varchar.ToType(),
+			payload,
+			colexec.DefaultBatchSize,
+			proc.Mp(),
+		)
+		require.NoError(t, err)
+		source.SetRowCount(colexec.DefaultBatchSize)
+		return source
+	}
+
+	large := makeConstBatch(1 << 20)
+	defer large.Clean(proc.Mp())
+	directNeed, err := spillBudgetBytes(large)
+	require.NoError(t, err)
+	require.Less(t, directNeed, uint64(16<<20))
+	retainedNeed, err := spillRetainedBudgetBytes(large)
+	require.NoError(t, err)
+	require.Greater(t, retainedNeed, uint64(10<<30),
+		"a future non-const selection can materialize the MiB value once per row")
+
+	var retainedLarge colexec.Batches
+	defer retainedLarge.Clean(proc.Mp())
+	require.NoError(t, retainedLarge.CopyIntoBatches(large, proc))
+	require.Len(t, retainedLarge.Buf, 1)
+	require.False(t, retainedLarge.Buf[0].Vecs[0].IsConst(),
+		"Batch.Dup delegates to Batch.CloneTo/UnionBatch and does not call Vector.Dup")
+	require.Equal(t, 1<<20, len(retainedLarge.Buf[0].Vecs[0].GetArea()))
+
+	// Materialize a smaller exact-full-batch payload end-to-end to prove the
+	// future spill closure without allocating the MiB case's 8 GiB area.
+	small := makeConstBatch(4 << 10)
+	defer small.Clean(proc.Mp())
+	var retainedSmall colexec.Batches
+	defer retainedSmall.Clean(proc.Mp())
+	require.NoError(t, retainedSmall.CopyIntoBatches(small, proc))
+	require.False(t, retainedSmall.Buf[0].Vecs[0].IsConst())
+
+	estimated, err := spillMaterializedBytes(
+		small,
+		colexec.DefaultBatchSize,
+		spillRetainedMaterialization,
+	)
+	require.NoError(t, err)
+	selected := batch.NewWithSize(1)
+	selected.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	defer selected.Clean(proc.Mp())
+	sels := make([]int32, colexec.DefaultBatchSize)
+	for i := range sels {
+		sels[i] = int32(i)
+	}
+	require.NoError(t, selected.Vecs[0].PreExtend(colexec.DefaultBatchSize, proc.Mp()))
+	require.NoError(t, selected.Vecs[0].UnionInt32(retainedSmall.Buf[0].Vecs[0], sels, proc.Mp()))
+	selected.SetRowCount(colexec.DefaultBatchSize)
+	require.Equal(t, colexec.DefaultBatchSize*(4<<10), len(selected.Vecs[0].GetArea()))
+	require.GreaterOrEqual(t, estimated, uint64(selected.Allocated()))
+}
+
 func TestEnsureDirectSpillReservationFailsClosed(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
