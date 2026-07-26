@@ -66,10 +66,11 @@ type TxnComputationWrapper struct {
 	runResult *util2.RunResult
 
 	ifIsExeccute bool
-	// executeStmtOwned is true when EXECUTE uses a freshly parsed statement
-	// rather than the AST retained by PrepareStmt.
-	executeStmtOwned bool
-	uuid             uuid.UUID
+	// stmtBorrowed is true only when stmt is retained by PrepareStmt and this
+	// wrapper must not return it to the AST pool. The zero value intentionally
+	// means owned so ordinary wrappers preserve their existing lifecycle.
+	stmtBorrowed bool
+	uuid         uuid.UUID
 	//holds values of params in the PREPARE
 	paramVals []any
 
@@ -156,6 +157,7 @@ func (cwft *TxnComputationWrapper) ResetPlanAndStmt(stmt tree.Statement) {
 	cwft.plan = nil
 	cwft.freeStmt()
 	cwft.stmt = stmt
+	cwft.stmtBorrowed = false
 }
 
 func (cwft *TxnComputationWrapper) GetAst() tree.Statement {
@@ -168,13 +170,11 @@ func (cwft *TxnComputationWrapper) Free() {
 }
 
 func (cwft *TxnComputationWrapper) freeStmt() {
-	if cwft.stmt != nil {
-		if !cwft.ifIsExeccute || cwft.executeStmtOwned {
-			cwft.stmt.Free()
-			cwft.stmt = nil
-		}
+	if cwft.stmt != nil && !cwft.stmtBorrowed {
+		cwft.stmt.Free()
 	}
-	cwft.executeStmtOwned = false
+	cwft.stmt = nil
+	cwft.stmtBorrowed = false
 }
 
 func (cwft *TxnComputationWrapper) Clear() {
@@ -337,7 +337,7 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 			if stmtOwned {
 				cwft.stmt.Free()
 				cwft.stmt = stmt
-				cwft.executeStmtOwned = true
+				cwft.stmtBorrowed = false
 			}
 			authStats, err := authenticatePreparedDDLOwnerStatement(execCtx.reqCtx, cwft.ses.(*Session), stmt, plan)
 			if err != nil {
@@ -354,7 +354,7 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 			if !stmtOwned {
 				cwft.stmt.Free()
 				cwft.stmt = stmt
-				cwft.executeStmtOwned = false
+				cwft.stmtBorrowed = true
 			}
 		} else {
 			// binary protocol execute
@@ -368,7 +368,7 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 			}
 			if stmt != nil && stmtOwned {
 				cwft.stmt = stmt
-				cwft.executeStmtOwned = true
+				cwft.stmtBorrowed = false
 			}
 			authStats, err := authenticatePreparedDDLOwnerStatement(
 				execCtx.reqCtx, cwft.ses.(*Session), stmt, cwft.plan)
@@ -378,7 +378,7 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 			stats.PermissionAuth.Add(&authStats)
 			if stmt != nil && !stmtOwned {
 				cwft.stmt = stmt
-				cwft.executeStmtOwned = false
+				cwft.stmtBorrowed = true
 			}
 		}
 		refreshProcessStmtProfileForPreparedStmt(cwft.proc, stmt)

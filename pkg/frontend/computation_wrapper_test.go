@@ -151,6 +151,8 @@ func newPreparedExecuteEnvForSQL(t testing.TB, stmtID uint32, sql string) (*Sess
 
 	cw := InitTxnComputationWrapper(ses, stmts[0], proc)
 	cw.plan = preparePlan.GetDcl().GetPrepare().Plan
+	cw.binaryPrepare = true
+	cw.stmtBorrowed = true
 	execCtx := &ExecCtx{
 		reqCtx: ctx,
 		ses:    ses,
@@ -514,8 +516,7 @@ func TestInitExecuteStmtParamTransfersFreshCloneOwnership(t *testing.T) {
 	executionClone := executionStmt.(*tree.CloneTable)
 	require.Equal(t, tree.Identifier("prepare_db"), executionClone.SrcTable.SchemaName)
 	cw.stmt = executionStmt
-	cw.ifIsExeccute = true
-	cw.executeStmtOwned = owned
+	cw.stmtBorrowed = !owned
 	cw.Free()
 
 	require.Empty(t, executionClone.SrcTable.SchemaName)
@@ -527,13 +528,46 @@ func TestInitExecuteStmtParamTransfersFreshCloneOwnership(t *testing.T) {
 func TestTxnComputationWrapperKeepsSharedPreparedStatement(t *testing.T) {
 	stmt := &trackedStatement{}
 	cw := &TxnComputationWrapper{
-		stmt:             stmt,
-		ifIsExeccute:     true,
-		executeStmtOwned: false,
+		stmt:         stmt,
+		stmtBorrowed: true,
 	}
 
 	cw.Free()
 	require.Zero(t, stmt.freed)
+}
+
+func TestGetComputationWrapperMarksBinaryPreparedStatementBorrowed(t *testing.T) {
+	ses, prepareStmt, _, execCtx := newPreparedExecuteEnv(t, 101)
+	defer prepareStmt.Close()
+
+	stmt := &trackedStatement{}
+	execCtx.input.stmt = stmt
+	execCtx.input.preparePlan = prepareStmt.PreparePlan
+
+	wrappers, err := GetComputationWrapper(execCtx, "", "root", nil, execCtx.proc, ses)
+	require.NoError(t, err)
+	require.Len(t, wrappers, 1)
+
+	wrapper := wrappers[0].(*TxnComputationWrapper)
+	require.True(t, wrapper.stmtBorrowed)
+	wrapper.Free()
+	require.Zero(t, stmt.freed, "an early binary EXECUTE error must not free the shared prepared AST")
+}
+
+func TestTxnComputationWrapperResetTransfersStatementOwnership(t *testing.T) {
+	borrowed := &trackedStatement{}
+	replanned := &trackedStatement{}
+	wrapper := &TxnComputationWrapper{
+		stmt:         borrowed,
+		stmtBorrowed: true,
+	}
+
+	wrapper.ResetPlanAndStmt(replanned)
+	require.Zero(t, borrowed.freed)
+	require.False(t, wrapper.stmtBorrowed)
+
+	wrapper.Free()
+	require.Equal(t, 1, replanned.freed)
 }
 
 func TestCompilerContextReleasesFreshCloneForExplainExecute(t *testing.T) {

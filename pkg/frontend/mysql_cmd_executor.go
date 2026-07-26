@@ -3055,6 +3055,11 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 		tcw.plan = preparePlan.GetDcl().GetPrepare().Plan
 		tcw.binaryPrepare = execCtx.input.isBinaryProtExecute
 		tcw.prepareName = execCtx.input.stmtName
+		if tcw.binaryPrepare {
+			// COM_STMT_EXECUTE borrows the AST retained by PrepareStmt. Mark it
+			// before Compile so every early error path keeps the shared AST alive.
+			tcw.stmtBorrowed = true
+		}
 		tcw.SetRemapDb(execCtx.input.remapDb)
 		cws = append(cws, tcw)
 		return cws, nil
