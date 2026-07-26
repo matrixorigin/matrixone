@@ -103,6 +103,9 @@ func (itr *strHashmapIterator) Insert(start, count int, vecs []*vector.Vector) (
 	}
 
 	vs, zvs := itr.values[:count], itr.zValues[:count]
+	if err != nil {
+		return nil, nil, err
+	}
 	updateHashTableRows(itr.mp, vs, zvs)
 	return vs, zvs, err
 }
@@ -151,6 +154,9 @@ func (itr *intHashMapIterator) Insert(start, count int, vecs []*vector.Vector) (
 		err = itr.mp.hashMap.InsertBatchWithRing(count, itr.zValues, itr.hashes[:count], unsafe.Pointer(&itr.keys[0]), itr.values)
 	}
 	vs, zvs := itr.values[:count], itr.zValues[:count]
+	if err != nil {
+		return nil, nil, err
+	}
 	updateHashTableRows(itr.mp, vs, zvs)
 	return vs, zvs, err
 }

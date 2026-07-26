@@ -211,6 +211,8 @@ func (tbl *baseTable) getRowsByPK(ctx context.Context, pks containers.Vector) (r
 /*
 similar to findDeletes
 */
+// incrementalGetRowsByPK checks the inclusive logical interval [from, to].
+// Callers that hold an exclusive dedup watermark must pass watermark.Next().
 func (tbl *baseTable) incrementalGetRowsByPK(ctx context.Context, pks containers.Vector, from, to types.TS, inQueue bool) (rowIDs containers.Vector, err error) {
 	var objIt btree.IterG[*catalog.ObjectEntry]
 	if tbl.isTombstone {
@@ -222,6 +224,14 @@ func (tbl *baseTable) incrementalGetRowsByPK(ctx context.Context, pks containers
 	}
 	defer objIt.Release()
 	rowIDs = tbl.txnTable.store.rt.VectorPool.Small.GetVector(&objectio.RowidType)
+	defer func() {
+		// Ownership transfers to the caller only on success. In particular,
+		// lazy commit-TS reads add cancellable I/O errors after allocation.
+		if err != nil {
+			rowIDs.Close()
+			rowIDs = nil
+		}
+	}()
 	vector.AppendMultiFixed[types.Rowid](
 		rowIDs.GetDownstreamVector(),
 		types.EmptyRowid,
@@ -248,8 +258,10 @@ func (tbl *baseTable) incrementalGetRowsByPK(ctx context.Context, pks containers
 			if !obj.HasDropIntent() && obj.CreatedAt.LT(&from) {
 				earlybreak = true
 			}
-		} else if obj.CreatedAt.LT(&from) {
-			continue
+		} else {
+			if obj.CreatedAt.LT(&from) {
+				continue
+			}
 		}
 
 		// only keep the category-a + category-c for candidates.

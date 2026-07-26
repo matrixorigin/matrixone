@@ -4223,6 +4223,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	pu := getPu(ses.GetService())
 	proc.Base.Id = ses.getNextProcessId()
 	proc.Base.Lim.Size = pu.SV.ProcessLimitationSize
+	proc.Base.Lim.SpillSize = pu.SV.ProcessLimitationSpillSize
 	proc.Base.Lim.BatchRows = pu.SV.ProcessLimitationBatchRows
 	proc.Base.Lim.MaxMsgSize = pu.SV.MaxMessageSize
 	proc.Base.Lim.PartitionRows = pu.SV.ProcessLimitationPartitionRows
@@ -5243,7 +5244,7 @@ func NewMarshalPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, pla
 		h.marshalPlan = explain.BuildJsonPlan(ctx, h.uuid, &explain.MarshalPlanOptions, h.query)
 		h.marshalPlan.NewPlanStats.SetWaitActiveCost(h.waitActiveCost)
 		if phyPlan != nil {
-			h.marshalPlan.PhyPlan = *phyPlan
+			h.marshalPlan.PhyPlan = *phyPlan.CloneForExport()
 		}
 		if h.schedulingTrace != nil {
 			h.marshalPlan.Scheduling = h.schedulingTrace

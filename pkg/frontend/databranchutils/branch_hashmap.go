@@ -420,6 +420,17 @@ func (bh *branchHashmap) flushPreparedEntries(shardEntries [][]int, chunk []prep
 		shardIdx := int(hash % uint64(bh.shardCount))
 		shardEntries[shardIdx] = append(shardEntries[shardIdx], i)
 	}
+
+	bh.metaMu.RLock()
+	if bh.closed {
+		bh.metaMu.RUnlock()
+		for range entries {
+			block.release()
+		}
+		return moerr.NewInternalErrorNoCtx("branchHashmap is closed")
+	}
+	defer bh.metaMu.RUnlock()
+
 	for idx, entryIdxs := range shardEntries {
 		if len(entryIdxs) == 0 {
 			continue
@@ -1514,7 +1525,14 @@ func (bh *branchHashmap) allocateBuffer(size uint64) ([]byte, malloc.Deallocator
 		return nil, nil, err
 	}
 	if buf == nil {
-		if err := bh.spill(size); err != nil {
+		bh.metaMu.RLock()
+		if bh.closed {
+			bh.metaMu.RUnlock()
+			return nil, nil, moerr.NewInternalErrorNoCtx("branchHashmap is closed")
+		}
+		err = bh.spill(size)
+		bh.metaMu.RUnlock()
+		if err != nil {
 			return nil, nil, err
 		}
 		buf, deallocator, err = bh.allocator.Allocate(size, malloc.NoClear)

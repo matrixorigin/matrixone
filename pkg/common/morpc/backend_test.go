@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"runtime"
 	"runtime/debug"
 	"sync"
@@ -582,9 +583,14 @@ func TestRequestDoneReleasesRejectedResponse(t *testing.T) {
 }
 
 func TestIndependentControlBackendPreservesSlowDataRequest(t *testing.T) {
+	const (
+		dataReadTimeout = 5 * time.Second
+		testTimeout     = 5 * time.Second
+	)
+
 	requestReceived := make(chan struct{})
+	replacementReceived := make(chan struct{})
 	releaseResponse := make(chan struct{})
-	probed := make(chan struct{}, 4)
 	var sessionMu sync.Mutex
 	var firstDataSession, replacementDataSession, controlSession goetty.IOSession
 	var dataRequests atomic.Int32
@@ -592,7 +598,9 @@ func TestIndependentControlBackendPreservesSlowDataRequest(t *testing.T) {
 	release := func() { releaseOnce.Do(func() { close(releaseResponse) }) }
 	t.Cleanup(release)
 
-	app := newTestApp(t, func(conn goetty.IOSession, msg interface{}, _ uint64) error {
+	unixFile := filepath.Join(t.TempDir(), "morpc.sock")
+	addr := "unix://" + unixFile
+	app := newTestAppWithAddr(t, addr, unixFile, func(conn goetty.IOSession, msg interface{}, _ uint64) error {
 		request := msg.(RPCMessage)
 		if request.internal {
 			sessionMu.Lock()
@@ -621,9 +629,11 @@ func TestIndependentControlBackendPreservesSlowDataRequest(t *testing.T) {
 			close(requestReceived)
 			select {
 			case <-releaseResponse:
-			case <-time.After(time.Second):
+			case <-time.After(testTimeout):
 				return context.DeadlineExceeded
 			}
+		} else {
+			close(replacementReceived)
 		}
 		return conn.Write(RPCMessage{
 			Ctx:     request.Ctx,
@@ -637,17 +647,19 @@ func TestIndependentControlBackendPreservesSlowDataRequest(t *testing.T) {
 		options = append(options,
 			WithBackendMetrics(newMetrics("")),
 			WithBackendLogger(logutil.GetPanicLoggerWithLevel(zap.FatalLevel)))
-		value, err := NewRemoteBackend(testAddr, newTestCodec(), options...)
+		value, err := NewRemoteBackend(addr, newTestCodec(), options...)
 		require.NoError(t, err)
 		return value.(*remoteBackend)
 	}
 
-	control := newBackend(WithBackendReadTimeout(100 * time.Millisecond))
+	control := newBackend(WithBackendReadTimeout(testTimeout))
 	defer control.Close()
 
 	dataFactory := NewGoettyBasedBackendFactory(
 		newTestCodec(),
-		WithBackendReadTimeout(20*time.Millisecond),
+		// keepDataConnectionAfterProbe gives the probe one fifth of this timeout.
+		// The probe gets a full second without making the test wait for a timeout.
+		WithBackendReadTimeout(dataReadTimeout),
 		WithBackendLivenessProbe(func(ctx context.Context, _ string) error {
 			f, err := control.SendInternal(ctx, &flagOnlyMessage{flag: flagPing})
 			if err != nil {
@@ -655,9 +667,6 @@ func TestIndependentControlBackendPreservesSlowDataRequest(t *testing.T) {
 			}
 			defer f.Close()
 			_, err = f.Get()
-			if err == nil {
-				probed <- struct{}{}
-			}
 			return err
 		}),
 	)
@@ -670,9 +679,9 @@ func TestIndependentControlBackendPreservesSlowDataRequest(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { require.NoError(t, dataClient.Close()) }()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
 	defer cancel()
-	f, err := dataClient.Send(ctx, testAddr, newTestMessage(1))
+	f, err := dataClient.Send(ctx, addr, newTestMessage(1))
 	require.NoError(t, err)
 	defer f.Close()
 	select {
@@ -680,19 +689,33 @@ func TestIndependentControlBackendPreservesSlowDataRequest(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal("data request did not reach server")
 	}
-	for range 2 {
-		select {
-		case <-probed:
-		case <-ctx.Done():
-			t.Fatal("control ping did not complete independently")
-		}
-	}
-	require.Zero(t, dataClient.(*client).closeIdleBackends(),
+
+	client := dataClient.(*client)
+	client.mu.Lock()
+	backends := client.mu.backends[addr]
+	client.mu.Unlock()
+	require.Len(t, backends, 1)
+	dataBackend, ok := backends[0].(*remoteBackend)
+	require.True(t, ok)
+	dataBackend.livenessMu.Lock()
+	dataBackend.livenessMu.pendingSince = dataBackend.livenessTick() - dataReadTimeout.Nanoseconds()
+	dataBackend.livenessMu.Unlock()
+	// Drive the read-timeout branch directly. Waiting for a real socket deadline
+	// only tests the clock and was the source of this test's CI flakiness.
+	require.True(t, dataBackend.keepDataConnectionAfterProbe(ctx, context.DeadlineExceeded))
+	require.False(t, dataBackend.admissionAvailable(),
+		"a successful control probe must drain the stalled data backend")
+	require.Zero(t, client.closeIdleBackends(),
 		"idle GC must not close a draining backend with an outstanding request")
 
-	replacement, err := dataClient.Send(ctx, testAddr, newTestMessage(2))
+	replacement, err := dataClient.Send(ctx, addr, newTestMessage(2))
 	require.NoError(t, err)
 	defer replacement.Close()
+	select {
+	case <-replacementReceived:
+	case <-ctx.Done():
+		t.Fatal("replacement data request did not reach server")
+	}
 	_, err = replacement.Get()
 	require.NoError(t, err,
 		"new traffic must recover on a replacement data generation")
@@ -1982,10 +2005,18 @@ func testBackendSendWithoutServer(t *testing.T, addr string,
 func newTestApp(t *testing.T,
 	handleFunc func(goetty.IOSession, interface{}, uint64) error,
 	opts ...goetty.AppOption) goetty.NetApplication {
-	assert.NoError(t, os.RemoveAll(testUnixFile))
+	return newTestAppWithAddr(t, testAddr, testUnixFile, handleFunc, opts...)
+}
+
+func newTestAppWithAddr(t *testing.T,
+	addr string,
+	unixFile string,
+	handleFunc func(goetty.IOSession, interface{}, uint64) error,
+	opts ...goetty.AppOption) goetty.NetApplication {
+	assert.NoError(t, os.RemoveAll(unixFile))
 	codec := newTestCodec().(*messageCodec)
 	opts = append(opts, goetty.WithAppSessionOptions(goetty.WithSessionCodec(codec)))
-	app, err := goetty.NewApplication(testAddr, handleFunc, opts...)
+	app, err := goetty.NewApplication(addr, handleFunc, opts...)
 	assert.NoError(t, err)
 
 	return app

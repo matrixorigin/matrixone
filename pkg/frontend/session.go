@@ -782,6 +782,7 @@ func NewSession(
 		getPu(ses.GetService()).GetTaskService())
 
 	ses.proc.Base.Lim.Size = pu.SV.ProcessLimitationSize
+	ses.proc.Base.Lim.SpillSize = pu.SV.ProcessLimitationSpillSize
 	ses.proc.Base.Lim.BatchRows = pu.SV.ProcessLimitationBatchRows
 	ses.proc.Base.Lim.MaxMsgSize = pu.SV.MaxMessageSize
 	ses.proc.Base.Lim.PartitionRows = pu.SV.ProcessLimitationPartitionRows

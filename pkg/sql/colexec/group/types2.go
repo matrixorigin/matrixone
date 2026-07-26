@@ -28,13 +28,16 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/util/list"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
 )
 
 const (
@@ -64,6 +67,8 @@ type Group struct {
 	GroupingFlag []bool
 
 	Aggs []aggexec.AggFuncExecExpression
+
+	diagnosticsLogged bool
 }
 
 type spillBucket struct {
@@ -138,6 +143,11 @@ type container struct {
 	spillBuf             *bytes.Buffer // reused write buffer across spillDataToDisk calls
 	spillNonEmptyBuckets []int         // reused list of non-empty bucket indices
 	spillBucketRowIds    [][]int32     // per-bucket row index lists, reused across batches
+
+	// Largest number of groups already held by this operator before a spill.
+	// A spill reload may preallocate up to this proven in-memory high-water mark,
+	// but never up to an unbounded bucket row count.
+	spillHashPreAllocSize uint64
 }
 
 func (ctr *container) isSpilling() bool {
@@ -245,6 +255,7 @@ func (ctr *container) free() {
 	ctr.spillFlagFlat = nil
 	ctr.spillNonEmptyBuckets = nil
 	ctr.spillBucketRowIds = nil
+	ctr.spillHashPreAllocSize = 0
 
 	mpool.DeleteMPool(ctr.mp)
 	ctr.mp = nil
@@ -321,15 +332,39 @@ func (group *Group) ExecProjection(proc *process.Process, input *batch.Batch) (*
 	return group.EvalProjection(input, proc)
 }
 
-func (group *Group) Free(proc *process.Process, _ bool, _ error) {
+func (group *Group) Free(proc *process.Process, pipelineFailed bool, err error) {
+	group.logDiagnostics(proc, pipelineFailed, err)
 	group.ctr.free()
 	// free projection stuff,
 	group.FreeProjection(proc)
 }
 
 func (group *Group) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	group.logDiagnostics(proc, pipelineFailed, err)
 	group.ctr.reset()
 	group.ResetProjection(proc)
+}
+
+func (group *Group) logDiagnostics(proc *process.Process, pipelineFailed bool, err error) {
+	if group.diagnosticsLogged {
+		return
+	}
+	group.diagnosticsLogged = true
+	if proc == nil || group.OpAnalyzer == nil {
+		return
+	}
+	extra := group.OpAnalyzer.GetOpStats().ExtraStats
+	if extra["GroupSpillWriteCalls"] == 0 && extra["GroupSpillReloadBuckets"] == 0 {
+		return
+	}
+	logutil.Info("operator diagnostic summary",
+		trace.ContextField(proc.Ctx),
+		zap.String("query_id", proc.QueryId()),
+		zap.String("operator", thisOperatorName),
+		zap.Int("node_idx", group.GetIdx()),
+		zap.Bool("pipeline_failed", pipelineFailed),
+		zap.Error(err),
+		zap.Any("extra_stats", extra))
 }
 
 func (group *Group) OpType() vm.OpType {

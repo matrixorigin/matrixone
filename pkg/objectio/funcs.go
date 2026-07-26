@@ -162,7 +162,7 @@ func ReadOneBlockWithMeta(
 			filledEntries = make([]fileservice.IOEntry, len(seqnums))
 		}
 		filledEntries[i] = fileservice.IOEntry{
-			Size: int64(seqnum), // a marker, it can not be zero
+			Size: int64(seqnum) + 1, // a marker, it must not be zero
 		}
 	}
 
@@ -174,17 +174,24 @@ func ReadOneBlockWithMeta(
 			metaColCnt := blkmeta.GetMetaColumnCount()
 			switch seqnum {
 			case SEQNUM_COMMITTS:
+				if metaColCnt == 0 {
+					putFillHolder(i, 0)
+					continue
+				}
 				seqnum = metaColCnt - 1
 			case SEQNUM_ABORT:
 				panic("not support")
 			default:
 				panic(fmt.Sprintf("bad path to read special column %d", seqnum))
 			}
-			// if the last column is not commits, do not read it
+			// Type alone is insufficient: the last user column may itself be
+			// T_TS. A hidden commit-TS column must sit beyond MaxSeqnum.
+			// If the last column is not commits, do not read it:
 			//  1. created by cn
 			//  2. old version tn nonappendable block
 			col := blkmeta.ColumnMeta(seqnum)
-			if col.DataType() != uint8(types.T_TS) {
+			hasHiddenColumn := metaColCnt > maxSeqnum+1
+			if !hasHiddenColumn || col.DataType() != uint8(types.T_TS) {
 				putFillHolder(i, seqnum)
 			} else {
 				ext := col.Location()
