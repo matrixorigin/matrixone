@@ -1,0 +1,77 @@
+name: MatrixOne Coverage Integration
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    branches: [main]
+
+concurrency:
+  group: ${{ github.event.pull_request.head.repo.full_name }}/${{ github.event.pull_request.head.ref }}/${{ github.workflow }}
+  cancel-in-progress: true
+
+# pull_request_target intentionally loads the workflow from the base branch.
+# This short-lived, same-repository harness validates both PR branches together
+# and is removed after the integration run.
+jobs:
+  bvt-group-plan:
+    if: ${{ github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'xp/ci-race-coverage-artifacts' }}
+    runs-on: ubuntu-latest
+    outputs:
+      compose_group: ${{ steps.plan.outputs.compose_group }}
+      launch_group: ${{ steps.plan.outputs.launch_group }}
+      generation: ${{ steps.plan.outputs.generation }}
+    steps:
+      - id: plan
+        run: |
+          set -euo pipefail
+          compose_group=$(( (${{ github.run_id }} + ${{ github.run_attempt }}) % 2 ))
+          {
+            echo "compose_group=${compose_group}"
+            echo "launch_group=$((1 - compose_group))"
+            echo "generation=${{ github.run_id }}-${{ github.run_attempt }}"
+          } >> "$GITHUB_OUTPUT"
+
+  matrixone-ut-coverage:
+    name: Matrixone UT Coverage
+    needs: bvt-group-plan
+    uses: matrixorigin/CI/.github/workflows/coverage-ut.yaml@xp/ci-two-bvt-coverage
+    with:
+      bvt_generation: ${{ needs.bvt-group-plan.outputs.generation }}
+    secrets: inherit
+
+  matrixone-compose-ci:
+    name: Matrixone Compose CI
+    needs: bvt-group-plan
+    uses: matrixorigin/CI/.github/workflows/e2e-compose.yaml@xp/ci-two-bvt-coverage
+    with:
+      bvt_group: ${{ needs.bvt-group-plan.outputs.compose_group }}
+      bvt_generation: ${{ needs.bvt-group-plan.outputs.generation }}
+    secrets: inherit
+
+  matrixone-standalone-ci:
+    name: Matrixone Standlone CI
+    needs: bvt-group-plan
+    uses: matrixorigin/CI/.github/workflows/e2e-standalone.yaml@xp/ci-two-bvt-coverage
+    with:
+      bvt_group: ${{ needs.bvt-group-plan.outputs.launch_group }}
+      bvt_generation: ${{ needs.bvt-group-plan.outputs.generation }}
+    secrets: inherit
+
+  matrixone-utils-ci:
+    name: Matrixone Utils CI
+    needs: bvt-group-plan
+    uses: matrixorigin/CI/.github/workflows/utils.yaml@xp/ci-two-bvt-coverage
+    with:
+      enable_legacy_coverage: false
+    secrets: inherit
+
+  matrixone-coverage-merge:
+    name: Matrixone Utils CI
+    needs: [bvt-group-plan, matrixone-ut-coverage, matrixone-compose-ci, matrixone-standalone-ci]
+    if: ${{ always() }}
+    uses: matrixorigin/CI/.github/workflows/coverage-merge.yaml@xp/ci-two-bvt-coverage
+    with:
+      prerequisites_ready: ${{ needs.bvt-group-plan.result == 'success' && needs.matrixone-ut-coverage.result == 'success' && needs.matrixone-ut-coverage.outputs.coverage_ready == 'true' && needs.matrixone-compose-ci.result == 'success' && needs.matrixone-standalone-ci.result == 'success' }}
+      expected_bvt_generation: ${{ needs.bvt-group-plan.outputs.generation }}
+      ci_ref: xp/ci-two-bvt-coverage
+    secrets: inherit
