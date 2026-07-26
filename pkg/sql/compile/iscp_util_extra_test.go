@@ -479,20 +479,35 @@ func TestDrainIndexCdcTaskConsumerRetriesNotReadyWithFreshRunner(t *testing.T) {
 	}()
 
 	var runnerCalls int
+	ctrl := gomock.NewController(t)
+	ddlTxn := mock_frontend.NewMockTxnOperator(ctrl)
+	var commitStart client.TxnEventCallback
+	ddlTxn.EXPECT().AppendEventCallback(client.RollbackEvent, gomock.Any()).Times(1)
+	ddlTxn.EXPECT().AppendEventCallback(client.CommitEvent, gomock.Any()).DoAndReturn(
+		func(_ client.EventType, cb client.TxnEventCallback) {
+			commitStart = cb
+		},
+	).Times(1)
 	iscpGetExecutorFunc = func(string) (*iscp.ISCPTaskExecutor, bool) {
 		return nil, false
 	}
-	iscpGetTaskRunnerFunc = func(context.Context, string, client.TxnOperator) (string, error) {
+	iscpGetTaskRunnerFunc = func(ctx context.Context, _ string, txn client.TxnOperator) (string, error) {
+		require.Nil(t, txn, "runner discovery must use a fresh internal transaction")
+		_, hasDeadline := ctx.Deadline()
+		require.True(t, hasDeadline, "runner discovery must use the readiness context")
 		runnerCalls++
 		if runnerCalls == 1 {
 			return "runner-a", nil
 		}
 		return "runner-b", nil
 	}
-	iscpLookupJobLogFunc = func(context.Context, string, client.TxnOperator, *iscp.JobID) (uint32, uint64, uint64, bool, bool, error) {
+	iscpLookupJobLogFunc = func(_ context.Context, _ string, txn client.TxnOperator, _ *iscp.JobID) (uint32, uint64, uint64, bool, bool, error) {
+		require.Same(t, ddlTxn, txn, "job-log lookup must remain in the DDL transaction")
 		return 0, 42, 7, true, true, nil
 	}
-	iscpGetCNQueryAddress = func(_ context.Context, _ string, runnerCN string) (string, error) {
+	iscpGetCNQueryAddress = func(ctx context.Context, _ string, runnerCN string) (string, error) {
+		_, hasDeadline := ctx.Deadline()
+		require.True(t, hasDeadline, "address discovery must use the readiness context")
 		return runnerCN + ":18101", nil
 	}
 	defer func() {
@@ -504,6 +519,7 @@ func TestDrainIndexCdcTaskConsumerRetriesNotReadyWithFreshRunner(t *testing.T) {
 
 	c := &Compile{}
 	c.proc = testutil.NewProcess(t)
+	c.proc.Base.TxnOperator = ddlTxn
 	qc := &iscpDrainTestQueryClient{
 		serviceID:   "ddl-cn",
 		errSequence: []error{moerr.NewRetryForCNRollingRestart(), nil},
@@ -523,6 +539,110 @@ func TestDrainIndexCdcTaskConsumerRetriesNotReadyWithFreshRunner(t *testing.T) {
 	require.Equal(t, 2, runnerCalls)
 	require.Equal(t, []string{"runner-a:18101", "runner-b:18101"}, qc.addresses)
 	require.Len(t, qc.requests, 2)
+	require.NotNil(t, commitStart.Func)
+	require.NoError(t, commitStart.Func(context.Background(), ddlTxn, client.TxnEvent{}, nil))
+}
+
+func TestDrainIndexCdcTaskConsumerBoundsRunnerDiscovery(t *testing.T) {
+	oldTimeout := iscpDrainReadyTimeout
+	iscpDrainReadyTimeout = 20 * time.Millisecond
+	defer func() {
+		iscpDrainReadyTimeout = oldTimeout
+	}()
+
+	iscpLookupJobLogFunc = func(context.Context, string, client.TxnOperator, *iscp.JobID) (uint32, uint64, uint64, bool, bool, error) {
+		return 0, 42, 7, true, true, nil
+	}
+	iscpGetTaskRunnerFunc = func(ctx context.Context, _ string, txn client.TxnOperator) (string, error) {
+		require.Nil(t, txn)
+		<-ctx.Done()
+		return "", ctx.Err()
+	}
+	defer func() {
+		iscpLookupJobLogFunc = iscp.LookupJobLog
+		iscpGetTaskRunnerFunc = iscp.GetTaskRunner
+	}()
+
+	c := &Compile{}
+	c.proc = testutil.NewProcess(t)
+	outerCtx, cancel := context.WithTimeout(c.proc.Ctx, 2*time.Second)
+	defer cancel()
+	c.proc.Ctx = outerCtx
+	tbldef := &plan.TableDef{
+		TblId: 42,
+		Indexes: []*plan.IndexDef{{
+			TableExist:      true,
+			IndexName:       "idx1",
+			IndexAlgo:       "hnsw",
+			IndexAlgoParams: `{"async":"true"}`,
+		}},
+	}
+
+	err := DrainIndexCdcTaskConsumer(c, tbldef, "db", "tbl", "idx1")
+	require.ErrorContains(t, err, "ISCP executor on task runner <unknown> did not become ready")
+	require.NoError(t, outerCtx.Err(), "readiness deadline must fire before the statement deadline")
+}
+
+func TestDrainIndexCdcTaskConsumerBoundsPersistentNotReady(t *testing.T) {
+	oldTimeout, oldInterval := iscpDrainReadyTimeout, iscpDrainRetryInterval
+	iscpDrainReadyTimeout, iscpDrainRetryInterval = 30*time.Millisecond, time.Millisecond
+	defer func() {
+		iscpDrainReadyTimeout, iscpDrainRetryInterval = oldTimeout, oldInterval
+	}()
+
+	var runnerCalls int
+	iscpGetExecutorFunc = func(string) (*iscp.ISCPTaskExecutor, bool) {
+		return nil, false
+	}
+	iscpGetTaskRunnerFunc = func(ctx context.Context, _ string, txn client.TxnOperator) (string, error) {
+		require.Nil(t, txn)
+		_, hasDeadline := ctx.Deadline()
+		require.True(t, hasDeadline)
+		runnerCalls++
+		return "runner-cn", nil
+	}
+	iscpLookupJobLogFunc = func(context.Context, string, client.TxnOperator, *iscp.JobID) (uint32, uint64, uint64, bool, bool, error) {
+		return 0, 42, 7, true, true, nil
+	}
+	iscpGetCNQueryAddress = func(ctx context.Context, _ string, _ string) (string, error) {
+		_, hasDeadline := ctx.Deadline()
+		require.True(t, hasDeadline)
+		return "runner-cn:18101", nil
+	}
+	defer func() {
+		iscpGetExecutorFunc = iscp.GetExecutorRuntime
+		iscpGetTaskRunnerFunc = iscp.GetTaskRunner
+		iscpLookupJobLogFunc = iscp.LookupJobLog
+		iscpGetCNQueryAddress = getCNQueryAddress
+	}()
+
+	c := &Compile{}
+	c.proc = testutil.NewProcess(t)
+	outerCtx, cancel := context.WithTimeout(c.proc.Ctx, 2*time.Second)
+	defer cancel()
+	c.proc.Ctx = outerCtx
+	qc := &iscpDrainTestQueryClient{
+		serviceID: "ddl-cn",
+		err:       moerr.NewRetryForCNRollingRestart(),
+	}
+	c.proc.Base.QueryClient = qc
+	tbldef := &plan.TableDef{
+		TblId: 42,
+		Indexes: []*plan.IndexDef{{
+			TableExist:      true,
+			IndexName:       "idx1",
+			IndexAlgo:       "hnsw",
+			IndexAlgoParams: `{"async":"true"}`,
+		}},
+	}
+
+	err := DrainIndexCdcTaskConsumer(c, tbldef, "db", "tbl", "idx1")
+	require.ErrorContains(t, err, "ISCP executor on task runner runner-cn did not become ready")
+	require.NoError(t, outerCtx.Err(), "readiness deadline must fire before the statement deadline")
+	require.Positive(t, runnerCalls)
+	require.NotEmpty(t, qc.requests)
+	require.GreaterOrEqual(t, runnerCalls, len(qc.requests))
+	require.Len(t, qc.addresses, len(qc.requests))
 }
 
 func TestDrainIndexCdcTaskConsumerRoutesToRemoteRunnerQueryService(t *testing.T) {

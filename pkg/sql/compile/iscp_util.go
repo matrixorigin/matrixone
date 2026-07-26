@@ -259,10 +259,14 @@ func drainIndexCdcTaskConsumer(
 		if c.proc.Ctx.Err() != nil {
 			return c.proc.Ctx.Err()
 		}
+		target := runnerCN
+		if target == "" {
+			target = "<unknown>"
+		}
 		return moerr.NewInternalErrorf(
 			c.proc.Ctx,
 			"ISCP executor on task runner %s did not become ready within %s for tableID=%d jobName=%s jobID=%d",
-			runnerCN,
+			target,
 			iscpDrainReadyTimeout,
 			tableID,
 			jobName,
@@ -270,9 +274,21 @@ func drainIndexCdcTaskConsumer(
 		)
 	}
 	for {
-		runnerCN, err = iscpGetTaskRunnerFunc(c.proc.Ctx, c.proc.GetService(), c.proc.GetTxnOperator())
+		if readyCtx.Err() != nil {
+			return notReadyErr()
+		}
+		// The daemon-task assignment is independent of the DDL transaction.
+		// Use a fresh internal transaction on every attempt so a runner handoff
+		// after the DDL snapshot can be observed.
+		runnerCN, err = iscpGetTaskRunnerFunc(readyCtx, c.proc.GetService(), nil)
 		if err != nil {
+			if readyCtx.Err() != nil {
+				return notReadyErr()
+			}
 			return err
+		}
+		if readyCtx.Err() != nil {
+			return notReadyErr()
 		}
 		if runnerCN == "" {
 			runnerCN = c.proc.GetService()
@@ -301,9 +317,20 @@ func drainIndexCdcTaskConsumer(
 				jobID,
 			)
 		}
-		if queryAddress, err = iscpGetCNQueryAddress(c.proc.Ctx, c.proc.GetService(), runnerCN); err == nil {
-			err = sendISCPDrainConsumerRequest(c.proc.Ctx, qc, queryAddress, accountID, tableID, jobName, jobID, false, false)
+		queryAddress, err = iscpGetCNQueryAddress(readyCtx, c.proc.GetService(), runnerCN)
+		if err != nil {
+			if readyCtx.Err() != nil {
+				return notReadyErr()
+			}
+			return err
 		}
+		if readyCtx.Err() != nil {
+			return notReadyErr()
+		}
+		// Do not apply the readiness deadline to the actual drain. Once the
+		// executor is ready, draining an active consumer is bounded by the
+		// statement context and may legitimately take longer.
+		err = sendISCPDrainConsumerRequest(c.proc.Ctx, qc, queryAddress, accountID, tableID, jobName, jobID, false, false)
 		if err == nil {
 			break
 		}
