@@ -10,37 +10,40 @@ concurrency:
   cancel-in-progress: true
 
 # pull_request_target executes the base branch workflow by design, so it cannot
-# validate reusable-workflow changes made in this PR. This short-lived harness
-# runs only for this trusted same-repository integration branch and disappears
-# from normal PR execution after the branch is merged or deleted.
+# validate reusable-workflow changes made in this PR. This validation-only
+# harness runs only for this trusted same-repository branch and pins the exact
+# reviewed CI commit. Remove it when the production entrypoint is switched to
+# the merged reusable workflows.
 jobs:
   matrixone-ci:
     if: ${{ github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'xp/ci-race-coverage-artifacts' }}
-    uses: matrixorigin/CI/.github/workflows/ci.yaml@xp/ci-two-bvt-coverage
+    uses: matrixorigin/CI/.github/workflows/ci.yaml@6beb8d8bb8a93d62f6ff02591c3eafe287d536ce
     secrets: inherit
 
   matrixone-ut-coverage:
     if: ${{ github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'xp/ci-race-coverage-artifacts' }}
-    uses: matrixorigin/CI/.github/workflows/coverage-ut.yaml@xp/ci-two-bvt-coverage
+    uses: matrixorigin/CI/.github/workflows/coverage-ut.yaml@6beb8d8bb8a93d62f6ff02591c3eafe287d536ce
     secrets: inherit
 
   matrixone-compose-ci:
     if: ${{ github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'xp/ci-race-coverage-artifacts' }}
-    uses: matrixorigin/CI/.github/workflows/e2e-compose.yaml@xp/ci-two-bvt-coverage
+    uses: matrixorigin/CI/.github/workflows/e2e-compose.yaml@6beb8d8bb8a93d62f6ff02591c3eafe287d536ce
     secrets: inherit
 
   matrixone-standalone-ci:
     if: ${{ github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'xp/ci-race-coverage-artifacts' }}
-    uses: matrixorigin/CI/.github/workflows/e2e-standalone.yaml@xp/ci-two-bvt-coverage
+    uses: matrixorigin/CI/.github/workflows/e2e-standalone.yaml@6beb8d8bb8a93d62f6ff02591c3eafe287d536ce
     secrets: inherit
 
   matrixone-utils-ci:
     if: ${{ github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'xp/ci-race-coverage-artifacts' }}
-    uses: matrixorigin/CI/.github/workflows/utils.yaml@xp/ci-two-bvt-coverage
+    uses: matrixorigin/CI/.github/workflows/utils.yaml@6beb8d8bb8a93d62f6ff02591c3eafe287d536ce
+    with:
+      enable_legacy_coverage: false
     secrets: inherit
 
   matrixone-coverage-merge:
     needs: [matrixone-ut-coverage, matrixone-compose-ci, matrixone-standalone-ci]
     if: ${{ always() && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'xp/ci-race-coverage-artifacts' && !github.event.pull_request.draft && needs.matrixone-ut-coverage.result == 'success' && needs.matrixone-ut-coverage.outputs.coverage_ready == 'true' && needs.matrixone-compose-ci.result == 'success' && needs.matrixone-standalone-ci.result == 'success' }}
-    uses: matrixorigin/CI/.github/workflows/coverage-merge.yaml@xp/ci-two-bvt-coverage
+    uses: matrixorigin/CI/.github/workflows/coverage-merge.yaml@6beb8d8bb8a93d62f6ff02591c3eafe287d536ce
     secrets: inherit

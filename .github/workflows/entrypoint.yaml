@@ -31,6 +31,13 @@ jobs:
     uses: matrixorigin/CI/.github/workflows/ci.yaml@main
     secrets: inherit
 
+  matrixone-ut-coverage:
+    name: Matrixone UT Coverage
+    needs: check-pr-valid
+    if: ${{ needs.check-pr-valid.outputs.pr_valid == 'true' && github.base_ref != '3.0-dev' && !github.event.pull_request.draft }}
+    uses: matrixorigin/CI/.github/workflows/coverage-ut.yaml@main
+    secrets: inherit
+
   matrixone-upgrade-ci:
     name: Matrixone Upgrade CI
     needs: check-pr-valid
@@ -57,6 +64,15 @@ jobs:
     needs: check-pr-valid
     if: ${{ needs.check-pr-valid.outputs.pr_valid == 'true' && github.base_ref != '3.0-dev' }}
     uses: matrixorigin/CI/.github/workflows/utils.yaml@main
+    with:
+      enable_legacy_coverage: false
+    secrets: inherit
+
+  matrixone-coverage-merge:
+    name: Matrixone Coverage Merge
+    needs: [check-pr-valid, matrixone-ut-coverage, matrixone-compose-ci, matrixone-standalone-ci]
+    if: ${{ always() && needs.check-pr-valid.outputs.pr_valid == 'true' && github.base_ref != '3.0-dev' && !github.event.pull_request.draft && needs.matrixone-ut-coverage.result == 'success' && needs.matrixone-ut-coverage.outputs.coverage_ready == 'true' && needs.matrixone-compose-ci.result == 'success' && needs.matrixone-standalone-ci.result == 'success' }}
+    uses: matrixorigin/CI/.github/workflows/coverage-merge.yaml@main
     secrets: inherit
 
   # ============ 3.0-dev 分支使用 @release/3.0-dev ============
