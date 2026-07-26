@@ -858,6 +858,7 @@ func shouldCachePrepareCompile(p *plan.Plan) bool {
 	if query == nil {
 		return true
 	}
+	projectedParams := projectedRuntimeTypedParams(query)
 	for _, node := range query.GetNodes() {
 		if node != nil && node.GetExternScan() != nil && node.GetExternScan().GetIcebergScan() != nil {
 			// Iceberg tasks are resolved from an external snapshot while the
@@ -869,7 +870,7 @@ func shouldCachePrepareCompile(p *plan.Plan) bool {
 			return false
 		}
 		for _, expr := range preparedRuntimeTypedExprs(node) {
-			if hasRuntimeTypedComparison(expr) {
+			if hasRuntimeTypedComparison(expr, node, projectedParams) {
 				return false
 			}
 		}
@@ -881,9 +882,11 @@ func planNeedsRuntimeTypedComparison(p *plan.Plan, paramVals []any) bool {
 	if p == nil || p.GetQuery() == nil {
 		return false
 	}
-	for _, node := range p.GetQuery().GetNodes() {
+	query := p.GetQuery()
+	projectedParams := projectedRuntimeTypedParams(query)
+	for _, node := range query.GetNodes() {
 		for _, expr := range preparedRuntimeTypedExprs(node) {
-			if hasRuntimeNumericComparison(expr, paramVals) {
+			if hasRuntimeNumericComparison(expr, node, paramVals, projectedParams) {
 				return true
 			}
 		}
@@ -891,26 +894,36 @@ func planNeedsRuntimeTypedComparison(p *plan.Plan, paramVals []any) bool {
 	return false
 }
 
-func hasRuntimeNumericComparison(expr *plan.Expr, paramVals []any) bool {
+func hasRuntimeNumericComparison(
+	expr *plan.Expr,
+	node *plan.Node,
+	paramVals []any,
+	projectedParams *projectedParamDependencies,
+) bool {
 	fn := expr.GetF()
 	if fn == nil || fn.Func == nil {
 		return false
 	}
 	switch fn.Func.ObjName {
 	case "=", "<=>", "<", "<=", ">", ">=", "<>", "between", "in_range":
-		if containsRuntimeNumericParam(expr, paramVals) {
+		if containsRuntimeNumericParam(expr, node, paramVals, projectedParams) {
 			return true
 		}
 	}
 	for _, arg := range fn.Args {
-		if hasRuntimeNumericComparison(arg, paramVals) {
+		if hasRuntimeNumericComparison(arg, node, paramVals, projectedParams) {
 			return true
 		}
 	}
 	return false
 }
 
-func containsRuntimeNumericParam(expr *plan.Expr, paramVals []any) bool {
+func containsRuntimeNumericParam(
+	expr *plan.Expr,
+	node *plan.Node,
+	paramVals []any,
+	projectedParams *projectedParamDependencies,
+) bool {
 	if expr == nil {
 		return false
 	}
@@ -918,9 +931,17 @@ func containsRuntimeNumericParam(expr *plan.Expr, paramVals []any) bool {
 		pos := int(param.Pos)
 		return pos >= 0 && pos < len(paramVals) && isRuntimeNumericParam(paramVals[pos])
 	}
+	if col := expr.GetCol(); col != nil {
+		for pos := range projectedParams.columnPositions(node, col) {
+			idx := int(pos)
+			if idx >= 0 && idx < len(paramVals) && isRuntimeNumericParam(paramVals[idx]) {
+				return true
+			}
+		}
+	}
 	if fn := expr.GetF(); fn != nil {
 		for _, arg := range fn.Args {
-			if containsRuntimeNumericParam(arg, paramVals) {
+			if containsRuntimeNumericParam(arg, node, paramVals, projectedParams) {
 				return true
 			}
 		}
@@ -944,6 +965,92 @@ func isRuntimeNumericParam(value any) bool {
 	return false
 }
 
+type projectedParamDependencies struct {
+	outputs map[[2]int32]map[int32]struct{}
+}
+
+func projectedRuntimeTypedParams(query *plan.Query) *projectedParamDependencies {
+	result := &projectedParamDependencies{
+		outputs: make(map[[2]int32]map[int32]struct{}),
+	}
+	if query == nil {
+		return result
+	}
+
+	// Optimized plans address a JOIN input column by child ordinal, not by the
+	// binder's original binding tag. Propagate dependencies through the node
+	// DAG so derived tables, CTEs, and projection chains retain parameter types.
+	for changed := true; changed; {
+		changed = false
+		for _, node := range query.GetNodes() {
+			if node == nil {
+				continue
+			}
+			for colPos, expr := range node.GetProjectList() {
+				positions := make(map[int32]struct{})
+				result.collectExprPositions(expr, node, positions)
+				if len(positions) == 0 {
+					continue
+				}
+				key := [2]int32{node.GetNodeId(), int32(colPos)}
+				if result.outputs[key] == nil {
+					result.outputs[key] = make(map[int32]struct{})
+				}
+				for pos := range positions {
+					if _, ok := result.outputs[key][pos]; !ok {
+						result.outputs[key][pos] = struct{}{}
+						changed = true
+					}
+				}
+			}
+		}
+	}
+	return result
+}
+
+func (d *projectedParamDependencies) collectExprPositions(
+	expr *plan.Expr,
+	node *plan.Node,
+	positions map[int32]struct{},
+) {
+	if expr == nil {
+		return
+	}
+	if param := expr.GetP(); param != nil {
+		positions[param.Pos] = struct{}{}
+		return
+	}
+	if col := expr.GetCol(); col != nil {
+		for pos := range d.columnPositions(node, col) {
+			positions[pos] = struct{}{}
+		}
+		return
+	}
+	if fn := expr.GetF(); fn != nil {
+		for _, arg := range fn.Args {
+			d.collectExprPositions(arg, node, positions)
+		}
+	}
+}
+
+func (d *projectedParamDependencies) columnPositions(
+	node *plan.Node,
+	col *plan.ColRef,
+) map[int32]struct{} {
+	if node == nil || col == nil || len(node.GetChildren()) == 0 {
+		return nil
+	}
+	childIndex := int(col.RelPos)
+	if childIndex < 0 || childIndex >= len(node.GetChildren()) {
+		if len(node.GetChildren()) != 1 {
+			return nil
+		}
+		childIndex = 0
+	}
+	childID := node.GetChildren()[childIndex]
+	return d.outputs[[2]int32{childID, col.ColPos}]
+}
+
 func preparedRuntimeTypedExprs(node *plan.Node) []*plan.Expr {
 	if node == nil {
 		return nil
@@ -963,35 +1070,46 @@ func preparedRuntimeTypedExprs(node *plan.Node) []*plan.Expr {
 	return exprs
 }
 
-func hasRuntimeTypedComparison(expr *plan.Expr) bool {
+func hasRuntimeTypedComparison(
+	expr *plan.Expr,
+	node *plan.Node,
+	projectedParams *projectedParamDependencies,
+) bool {
 	fn := expr.GetF()
 	if fn == nil || fn.Func == nil {
 		return false
 	}
 	switch fn.Func.ObjName {
 	case "=", "<=>", "<", "<=", ">", ">=", "<>", "between", "in_range":
-		if containsPreparedParam(expr) {
+		if containsPreparedParam(expr, node, projectedParams) {
 			return true
 		}
 	}
 	for _, arg := range fn.Args {
-		if hasRuntimeTypedComparison(arg) {
+		if hasRuntimeTypedComparison(arg, node, projectedParams) {
 			return true
 		}
 	}
 	return false
 }
 
-func containsPreparedParam(expr *plan.Expr) bool {
+func containsPreparedParam(
+	expr *plan.Expr,
+	node *plan.Node,
+	projectedParams *projectedParamDependencies,
+) bool {
 	if expr == nil {
 		return false
 	}
 	if expr.GetP() != nil {
 		return true
 	}
+	if col := expr.GetCol(); col != nil {
+		return len(projectedParams.columnPositions(node, col)) > 0
+	}
 	if fn := expr.GetF(); fn != nil {
 		for _, arg := range fn.Args {
-			if containsPreparedParam(arg) {
+			if containsPreparedParam(arg, node, projectedParams) {
 				return true
 			}
 		}

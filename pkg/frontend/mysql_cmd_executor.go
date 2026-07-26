@@ -965,7 +965,7 @@ func doSetVar(ses *Session, execCtx *ExecCtx, sv *tree.SetVar, sql string) error
 		userVarIsBin = false
 		userVarNumericString = false
 
-		value, err = getExprValue(assign.Value, ses, execCtx, &userVarIsBin)
+		value, err = getExprValue(assign.Value, ses, execCtx, &userVarIsBin, &userVarNumericString)
 		if err != nil {
 			return err
 		}
@@ -976,11 +976,11 @@ func doSetVar(ses *Session, execCtx *ExecCtx, sv *tree.SetVar, sql string) error
 					text := value.(string)
 					if parsed, parseErr := strconv.ParseInt(text, 10, 64); parseErr == nil {
 						value = parsed
+						userVarNumericString = false
 					} else if parsed, parseErr := strconv.ParseUint(text, 10, 64); parseErr == nil {
 						value = parsed
+						userVarNumericString = false
 					}
-				case tree.Float:
-					userVarNumericString = true
 				}
 			}
 		}

@@ -339,6 +339,31 @@ func (b *baseBinder) baseBindParam(astExpr *tree.ParamExpr, depth int32, isRoot 
 
 func (b *baseBinder) baseBindVar(astExpr *tree.VarExpr, depth int32, isRoot bool) (expr *plan.Expr, err error) {
 	typ := types.T_text.ToType()
+	if !b.builder.isPrepareStatement && !astExpr.System {
+		if resolver, ok := b.builder.compCtx.(interface {
+			ResolveVariableWithNumericString(string, bool, bool) (any, bool, error)
+		}); ok {
+			value, numericString, resolveErr := resolver.ResolveVariableWithNumericString(
+				astExpr.Name, astExpr.System, astExpr.Global,
+			)
+			if resolveErr == nil {
+				if numericString {
+					numericExpr, numericErr := makePlan2DecimalExprWithType(b.GetContext(), fmt.Sprint(value))
+					if numericErr != nil {
+						return nil, numericErr
+					}
+					typ = makeTypeByPlan2Expr(numericExpr)
+				} else {
+					switch value.(type) {
+					case int, int8, int16, int32, int64,
+						uint, uint8, uint16, uint32, uint64,
+						float32, float64:
+						typ = makeTypeByPlan2Expr(makePreparedParamConstExpr(value, false))
+					}
+				}
+			}
+		}
+	}
 	return &Expr{
 		Typ: makePlan2Type(&typ),
 		Expr: &plan.Expr_V{
@@ -3273,7 +3298,20 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 				return combinePlanExprsBalanced(ctx, "or", expanded)
 			} else {
 				for _, expr := range orExprList {
-					tmpExpr, err := BindFuncExprImplByPlanExpr(ctx, "!=", []*Expr{DeepCopyExpr(args[0]), expr})
+					left := DeepCopyExpr(args[0])
+					right := expr
+					if shouldUseApproximateStringNumericComparison(left, right) {
+						floatType := types.T_float64.ToType()
+						left, err = appendCastBeforeExpr(ctx, left, makePlan2Type(&floatType))
+						if err != nil {
+							return nil, err
+						}
+						right, err = appendCastBeforeExpr(ctx, right, makePlan2Type(&floatType))
+						if err != nil {
+							return nil, err
+						}
+					}
+					tmpExpr, err := BindFuncExprImplByPlanExpr(ctx, "<>", []*Expr{left, right})
 					if err != nil {
 						return nil, err
 					}
@@ -3313,6 +3351,18 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		lookupTypes = exactColumnCastTypes
 		forcedCastTypes = exactColumnCastTypes
 	} else if castTypes, ok := approximateStringNumericCastTypes(name, args, argsType); ok {
+		if len(castTypes) > 0 && castTypes[0].Oid == types.T_float64 {
+			for i := range args {
+				if !argsType[i].IsTemporal() {
+					continue
+				}
+				decimalType := temporalNumericTargetType([]types.Type{argsType[i]})
+				args[i], err = appendCastBeforeExpr(ctx, args[i], makePlan2Type(&decimalType))
+				if err != nil {
+					return nil, err
+				}
+			}
+		}
 		lookupTypes = castTypes
 		forcedCastTypes = castTypes
 	}
@@ -3658,7 +3708,7 @@ func approximateStringNumericCastTypes(
 	numericOperator := false
 	integerDiv := false
 	switch name {
-	case "=", "<=>", "<", "<=", ">", ">=", "<>":
+	case "=", "<=>", "!=", "<", "<=", ">", ">=", "<>":
 		valueArgs = 2
 	case "between":
 		valueArgs = 3
@@ -3679,7 +3729,6 @@ func approximateStringNumericCastTypes(
 	}
 
 	hasString, hasNumeric, hasTemporal := false, false, false
-	var temporalScale int32
 	for i := 0; i < valueArgs; i++ {
 		if isEnumDisplayValueExpr(args[i]) {
 			return nil, false
@@ -3696,9 +3745,6 @@ func approximateStringNumericCastTypes(
 		case numericOperator && argsType[i].IsTemporal():
 			hasString = true
 			hasTemporal = true
-			if argsType[i].Scale > temporalScale {
-				temporalScale = argsType[i].Scale
-			}
 		case argsType[i].IsNumeric():
 			hasNumeric = true
 		default:
@@ -3712,21 +3758,15 @@ func approximateStringNumericCastTypes(
 	castTypes := append([]types.Type(nil), argsType...)
 	targetType := types.T_float64.ToType()
 	if hasTemporal {
-		targetOid := temporalNumericTargetOid(argsType[:valueArgs])
+		if hasApproximateNumericType(argsType[:valueArgs]) {
+			for i := 0; i < valueArgs; i++ {
+				castTypes[i] = targetType
+			}
+			return castTypes, true
+		}
+		targetType = temporalNumericTargetType(argsType[:valueArgs])
 		for i := 0; i < valueArgs; i++ {
-			scale := int32(0)
-			if argsType[i].Oid.IsDecimal() {
-				scale = argsType[i].Scale
-			} else if argsType[i].IsTemporal() {
-				scale = temporalScale
-			}
-			width := int32(18)
-			if targetOid == types.T_decimal128 {
-				width = 38
-			} else if targetOid == types.T_decimal256 {
-				width = 65
-			}
-			castTypes[i] = types.New(targetOid, width, scale)
+			castTypes[i] = targetType
 		}
 		return castTypes, true
 	} else if integerDiv {
@@ -3738,19 +3778,72 @@ func approximateStringNumericCastTypes(
 	return castTypes, true
 }
 
-func temporalNumericTargetOid(argsType []types.Type) types.T {
-	targetOid := types.T_decimal64
+func hasApproximateNumericType(argsType []types.Type) bool {
 	for _, argType := range argsType {
-		switch {
-		case argType.Oid == types.T_decimal256:
-			targetOid = types.T_decimal256
-		case targetOid != types.T_decimal256 &&
-			(argType.Oid == types.T_decimal128 ||
-				(argType.IsTemporal() && argType.Scale > 4)):
-			targetOid = types.T_decimal128
+		if argType.Oid == types.T_float32 || argType.Oid == types.T_float64 {
+			return true
 		}
 	}
-	return targetOid
+	return false
+}
+
+func temporalNumericTargetType(argsType []types.Type) types.Type {
+	var integerDigits, scale int32
+	for _, argType := range argsType {
+		switch {
+		case argType.IsTemporal():
+			if digits := temporalNumericIntegerDigits(argType.Oid); digits > integerDigits {
+				integerDigits = digits
+			}
+			if argType.Scale > scale {
+				scale = argType.Scale
+			}
+		case argType.Oid.IsDecimal():
+			if digits := argType.Width - argType.Scale; digits > integerDigits {
+				integerDigits = digits
+			}
+			if argType.Scale > scale {
+				scale = argType.Scale
+			}
+		default:
+			if digits := integralDecimalDigits(argType.Oid); digits > integerDigits {
+				integerDigits = digits
+			}
+		}
+	}
+	width := integerDigits + scale
+	switch {
+	case width <= 18:
+		return types.New(types.T_decimal64, 18, scale)
+	case width <= 38:
+		return types.New(types.T_decimal128, 38, scale)
+	default:
+		return types.New(types.T_decimal256, 65, scale)
+	}
+}
+
+func temporalNumericIntegerDigits(oid types.T) int32 {
+	switch oid {
+	case types.T_date:
+		return 8
+	case types.T_time:
+		return 7
+	default:
+		return 14
+	}
+}
+
+func integralDecimalDigits(oid types.T) int32 {
+	switch oid {
+	case types.T_int8, types.T_uint8:
+		return 3
+	case types.T_int16, types.T_uint16:
+		return 5
+	case types.T_int32, types.T_uint32:
+		return 10
+	default:
+		return 20
+	}
 }
 
 func rewriteExactNumericColumnStringLiterals(

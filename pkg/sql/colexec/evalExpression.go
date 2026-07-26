@@ -421,6 +421,8 @@ func (expr *VarExpressionExecutor) Eval(proc *process.Process, batches []*batch.
 
 	if expr.vec == nil {
 		expr.vec, err = util.GenVectorByVarValue(proc, expr.typ, val)
+	} else if !expr.typ.IsVarlen() {
+		err = util.SetBytesToAnyVector(proc.Ctx, fmt.Sprintf("%v", val), 0, false, expr.vec, proc)
 	} else {
 		switch v := val.(type) {
 		case []byte:

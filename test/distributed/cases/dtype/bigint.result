@@ -653,3 +653,108 @@ b
 10
 2
 drop table t_numeric_string_composite_cb;
+drop table if exists t_numeric_runtime_type;
+create table t_numeric_runtime_type(s varchar(80));
+insert into t_numeric_runtime_type values
+('1'), ('1abc'), ('1.50'), ('1.50abc'), ('2'), ('2xyz'), ('3');
+select t.s from t_numeric_runtime_type t
+join (select 1 v) x on t.s = x.v order by t.s;
+➤ s[12,-1,0]  𝄀
+1  𝄀
+1abc
+prepare numeric_derived_stmt from
+'select t.s from t_numeric_runtime_type t join (select ? v) x on t.s = x.v order by t.s';
+set @numeric_derived_param = 1;
+execute numeric_derived_stmt using @numeric_derived_param;
+➤ s[12,-1,0]  𝄀
+1  𝄀
+1abc
+deallocate prepare numeric_derived_stmt;
+prepare numeric_cte_stmt from
+'with x as (select ? v) select t.s from t_numeric_runtime_type t join x on t.s = x.v order by t.s';
+execute numeric_cte_stmt using @numeric_derived_param;
+➤ s[12,-1,0]  𝄀
+1  𝄀
+1abc
+deallocate prepare numeric_cte_stmt;
+set @numeric_decimal = cast(1.5 as decimal(10,2));
+select s from t_numeric_runtime_type where s = @numeric_decimal order by s;
+➤ s[12,-1,0]  𝄀
+1.50  𝄀
+1.50abc
+prepare numeric_decimal_stmt from
+'select s from t_numeric_runtime_type where s = ? order by s';
+execute numeric_decimal_stmt using @numeric_decimal;
+➤ s[12,-1,0]  𝄀
+1.50  𝄀
+1.50abc
+deallocate prepare numeric_decimal_stmt;
+set @numeric_decimal_expr = 1.0 + 0.5;
+select s from t_numeric_runtime_type where s = @numeric_decimal_expr order by s;
+➤ s[12,-1,0]  𝄀
+1.50  𝄀
+1.50abc
+select s from t_numeric_runtime_type where s not in (1, 2) order by s;
+➤ s[12,-1,0]  𝄀
+1.50  𝄀
+1.50abc  𝄀
+3
+select s from t_numeric_runtime_type where s not in (1, null) order by s;
+➤ s[12,-1,0]
+prepare numeric_not_in_stmt from
+'select s from t_numeric_runtime_type where s not in (?, ?) order by s';
+set @numeric_not_in_one = 1;
+set @numeric_not_in_two = 2;
+execute numeric_not_in_stmt using @numeric_not_in_one, @numeric_not_in_two;
+➤ s[12,-1,0]  𝄀
+1.50  𝄀
+1.50abc  𝄀
+3
+deallocate prepare numeric_not_in_stmt;
+drop table t_numeric_runtime_type;
+select cast('2000-12-12 12:58:58.123' as datetime(3)) + 100.291024;
+➤ cast(2000-12-12 12:58:58.123 as datetime(3, 3)) + 100.291024[3,38,6]  𝄀
+20001212125958.414024
+select cast('2000-12-12' as date) + cast(0.5 as double);
+➤ cast(2000-12-12 as date) + cast(0.5 as double)[8,54,0]  𝄀
+2.00012125E7
+select cast('12:58:58.123' as time(3)) + cast(0.5 as double);
+➤ cast(12:58:58.123 as time(3, 3)) + cast(0.5 as double)[8,54,0]  𝄀
+125858.623
+select cast('2000-12-12' as date) * cast(1.5 as double);
+➤ cast(2000-12-12 as date) * cast(1.5 as double)[8,54,0]  𝄀
+3.0001818E7
+drop table if exists t_signed_zero_left;
+drop table if exists t_signed_zero_right;
+create table t_signed_zero_left(a int, f double);
+create table t_signed_zero_right(a int, f double);
+insert into t_signed_zero_left values (1, -0.0), (1, 0.0);
+insert into t_signed_zero_right values (1, 0.0);
+select count(*) from t_signed_zero_left l join t_signed_zero_right r
+on l.a = r.a and l.f = r.f;
+➤ count(*)[-5,64,0]  𝄀
+2
+select count(*) from (
+select a, f from t_signed_zero_left group by a, f
+) g;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from (
+select distinct a, f from t_signed_zero_left
+) d;
+➤ count(*)[-5,64,0]  𝄀
+1
+drop table t_signed_zero_left;
+drop table t_signed_zero_right;
+drop table if exists t_signed_zero_string;
+drop table if exists t_signed_zero_number;
+create table t_signed_zero_string(a int, s varchar(20));
+create table t_signed_zero_number(a int, i bigint);
+insert into t_signed_zero_string values (1, '-0');
+insert into t_signed_zero_number values (1, 0);
+select count(*) from t_signed_zero_string l join t_signed_zero_number r
+on l.a = r.a and l.s = r.i;
+➤ count(*)[-5,64,0]  𝄀
+1
+drop table t_signed_zero_string;
+drop table t_signed_zero_number;

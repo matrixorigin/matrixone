@@ -573,7 +573,7 @@ func TestMixedStringNumericCastTypes(t *testing.T) {
 		expr, err := BindFuncExprImplByPlanExpr(ctx, "+", []*plan.Expr{datetime, decimal})
 		require.NoError(t, err)
 		requireArgTypes(t, expr, types.T_decimal128, types.T_decimal128)
-		require.Equal(t, int32(6), expr.GetF().Args[0].Typ.Scale)
+		require.Equal(t, int32(8), expr.GetF().Args[0].Typ.Scale)
 		require.Equal(t, int32(8), expr.GetF().Args[1].Typ.Scale)
 	})
 

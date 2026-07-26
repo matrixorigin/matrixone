@@ -114,10 +114,23 @@ func GenVectorByVarValue(proc *process.Process, typ types.Type, val any) (*vecto
 	if val == nil {
 		vec := vector.NewConstNull(typ, 1, proc.Mp())
 		return vec, nil
-	} else {
-		strVal := getVal(val)
+	}
+	strVal := getVal(val)
+	if typ.IsVarlen() {
 		return vector.NewConstBytes(typ, []byte(strVal), 1, proc.Mp())
 	}
+	vec := vector.NewVec(typ)
+	if err := vec.PreExtend(1, proc.Mp()); err != nil {
+		vec.Free(proc.Mp())
+		return nil, err
+	}
+	vec.SetLength(1)
+	if err := SetBytesToAnyVector(proc.Ctx, strVal, 0, false, vec, proc); err != nil {
+		vec.Free(proc.Mp())
+		return nil, err
+	}
+	vec.ToConst()
+	return vec, nil
 }
 
 func AppendAnyToStringVector(proc *process.Process, val any, vec *vector.Vector) error {

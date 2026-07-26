@@ -16,6 +16,7 @@ package hashmap
 
 import (
 	"io"
+	"math"
 	"math/rand"
 	"strconv"
 	"testing"
@@ -30,6 +31,56 @@ import (
 const (
 	Rows = 10
 )
+
+func TestStrHashMapCanonicalizesSignedFloatingZero(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		vec  func(*mpool.MPool) *vector.Vector
+	}{
+		{
+			name: "float32",
+			vec: func(mp *mpool.MPool) *vector.Vector {
+				vec := vector.NewVec(types.T_float32.ToType())
+				require.NoError(t, vector.AppendFixedList(vec, []float32{
+					float32(math.Copysign(0, -1)), 0,
+				}, nil, mp))
+				return vec
+			},
+		},
+		{
+			name: "float64",
+			vec: func(mp *mpool.MPool) *vector.Vector {
+				vec := vector.NewVec(types.T_float64.ToType())
+				require.NoError(t, vector.AppendFixedList(vec, []float64{
+					math.Copysign(0, -1), 0,
+				}, nil, mp))
+				return vec
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			hashMap, err := NewStrHashMap(false, mp)
+			require.NoError(t, err)
+			defer func() {
+				hashMap.Free()
+				require.Equal(t, int64(0), mp.Stats().NumCurrBytes.Load())
+			}()
+
+			prefix := vector.NewVec(types.T_int64.ToType())
+			require.NoError(t, vector.AppendFixedList(prefix, []int64{1, 1}, nil, mp))
+			defer prefix.Free(mp)
+			floatVec := test.vec(mp)
+			defer floatVec.Free(mp)
+
+			groups, _, err := hashMap.NewIterator().Insert(
+				0, 2, []*vector.Vector{prefix, floatVec},
+			)
+			require.NoError(t, err)
+			require.Equal(t, []uint64{1, 1}, groups)
+		})
+	}
+}
 
 func TestInsert(t *testing.T) {
 	m := mpool.MustNewZero()

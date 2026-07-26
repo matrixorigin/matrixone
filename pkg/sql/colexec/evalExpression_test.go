@@ -504,6 +504,31 @@ func TestVarExpressionExecutorPreservesBinaryFlagOnReuse(t *testing.T) {
 	require.Equal(t, "CD\x00\x00", vec.GetStringAt(0))
 }
 
+func TestVarExpressionExecutorPreservesNumericTypeOnReuse(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	value := "1.50"
+	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+		return value, nil
+	})
+	expr := &plan.Expr{
+		Expr: &plan.Expr_V{V: &plan.VarRef{Name: "numeric_var"}},
+		Typ:  plan.Type{Id: int32(types.T_decimal64), Width: 3, Scale: 2},
+	}
+	executor, err := NewExpressionExecutor(proc, expr)
+	require.NoError(t, err)
+	t.Cleanup(executor.Free)
+
+	vec, err := executor.Eval(proc, nil, nil)
+	require.NoError(t, err)
+	require.Equal(t, types.T_decimal64, vec.GetType().Oid)
+	require.Equal(t, "1.50", vector.GetFixedAtNoTypeCheck[types.Decimal64](vec, 0).Format(2))
+
+	value = "2.75"
+	vec, err = executor.Eval(proc, nil, nil)
+	require.NoError(t, err)
+	require.Equal(t, "2.75", vector.GetFixedAtNoTypeCheck[types.Decimal64](vec, 0).Format(2))
+}
+
 func TestVarExpressionExecutorWithoutResolveVariableFunc(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	varExpr := &plan.Expr{

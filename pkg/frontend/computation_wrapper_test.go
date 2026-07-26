@@ -624,4 +624,52 @@ func TestPlanNeedsRuntimeTypedComparison(t *testing.T) {
 		plan2.ParamValue{Value: "1"},
 		plan2.ParamValue{Value: int64(1)},
 	}))
+
+	projectedColumn := func(child int32) *plan.Expr {
+		return &plan.Expr{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: child, ColPos: 0}}}
+	}
+	derivedPlan := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
+		Nodes: []*plan.Node{
+			{
+				NodeType:    plan.Node_PROJECT,
+				NodeId:      0,
+				ProjectList: []*plan.Expr{param(0)},
+			},
+			{
+				NodeType:    plan.Node_PROJECT,
+				NodeId:      1,
+				Children:    []int32{0},
+				ProjectList: []*plan.Expr{projectedColumn(0)},
+			},
+			{
+				NodeType:    plan.Node_PROJECT,
+				NodeId:      2,
+				ProjectList: []*plan.Expr{{Expr: &plan.Expr_Lit{Lit: &plan.Literal{}}}},
+			},
+			{
+				NodeType: plan.Node_JOIN,
+				NodeId:   3,
+				Children: []int32{2, 1},
+				OnList: []*plan.Expr{comparison(
+					projectedColumn(0),
+					projectedColumn(1),
+				)},
+			},
+		},
+	}}}
+	require.True(t, planNeedsRuntimeTypedComparison(derivedPlan, []any{
+		plan2.ParamValue{Value: int64(1)},
+	}))
+	require.False(t, shouldCachePrepareCompile(derivedPlan))
+}
+
+func TestDerivedPreparedParamTriggersRuntimeTypedComparison(t *testing.T) {
+	_, _, cw, _ := newPreparedExecuteEnvForSQL(t, 91, `
+		select y.s
+		from (select ? v) x
+		join (select '1' s) y on y.s = x.v`)
+
+	values := []any{plan2.ParamValue{Value: int64(1)}}
+	require.True(t, planNeedsRuntimeTypedComparison(cw.plan, values))
+	require.False(t, shouldCachePrepareCompile(cw.plan))
 }

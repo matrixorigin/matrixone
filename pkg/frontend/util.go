@@ -183,8 +183,9 @@ func WildcardMatch(pattern, target string) bool {
 	return p >= plen
 }
 
-// getExprValue executes the expression and returns the value.
-func getExprValue(e tree.Expr, ses *Session, execCtx *ExecCtx, isBin ...*bool) (interface{}, error) {
+// getExprValue executes the expression and returns the value. Optional outputs
+// report whether the result is binary and whether it has a numeric SQL type.
+func getExprValue(e tree.Expr, ses *Session, execCtx *ExecCtx, resultFlags ...*bool) (interface{}, error) {
 	/*
 		CORNER CASE:
 			SET character_set_results = utf8; // e = tree.UnresolvedName{'utf8'}.
@@ -194,8 +195,11 @@ func getExprValue(e tree.Expr, ses *Session, execCtx *ExecCtx, isBin ...*bool) (
 	switch v := e.(type) {
 	case *tree.UnresolvedName:
 		// set @a = on, type of a is bool.
-		if len(isBin) > 0 {
-			*isBin[0] = false
+		if len(resultFlags) > 0 {
+			*resultFlags[0] = false
+		}
+		if len(resultFlags) > 1 {
+			*resultFlags[1] = false
 		}
 		return v.ColName(), nil
 	}
@@ -284,8 +288,11 @@ func getExprValue(e tree.Expr, ses *Session, execCtx *ExecCtx, isBin ...*bool) (
 		}
 	}
 
-	if len(isBin) > 0 {
-		*isBin[0] = resultVec.GetIsBin()
+	if len(resultFlags) > 0 {
+		*resultFlags[0] = resultVec.GetIsBin()
+	}
+	if len(resultFlags) > 1 {
+		*resultFlags[1] = resultVec.GetType().IsNumeric()
 	}
 	return getValueFromVector(execCtx.reqCtx, resultVec, ses, planExpr)
 }

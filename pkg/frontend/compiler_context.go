@@ -800,6 +800,22 @@ func (tcc *TxnCompilerContext) ResolveVariable(varName string, isSystemVar, isGl
 	return
 }
 
+func (tcc *TxnCompilerContext) ResolveVariableWithNumericString(
+	varName string,
+	isSystemVar bool,
+	isGlobalVar bool,
+) (any, bool, error) {
+	value, err := tcc.ResolveVariable(varName, isSystemVar, isGlobalVar)
+	if err != nil || isSystemVar {
+		return value, false, err
+	}
+	userVar, err := tcc.GetSession().GetUserDefinedVar(varName)
+	if err != nil {
+		return nil, false, err
+	}
+	return value, userVar.NumericString, nil
+}
+
 func (tcc *TxnCompilerContext) ResolveVariableIsBin(varName string, isSystemVar, _ bool) (bool, error) {
 	if _, ok := resolveStoredProcedureVariable(tcc.execCtx.reqCtx, varName); ok {
 		return false, nil

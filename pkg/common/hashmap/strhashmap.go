@@ -333,7 +333,7 @@ func fillGroupStr(itr *strHashmapIterator, vec *vector.Vector, n int, sz int, st
 		return
 	}
 	if vec.IsConst() {
-		data := vec.GetData()[:sz]
+		data := canonicalStrHashFixedKey(vec.GetType().Oid, vec.GetData()[:sz])
 		if itr.mp.hasNull {
 			for i := 0; i < n; i++ {
 				keys[i] = append(keys[i], 0)
@@ -350,13 +350,13 @@ func fillGroupStr(itr *strHashmapIterator, vec *vector.Vector, n int, sz int, st
 	if !vec.GetNulls().Any() {
 		if itr.mp.hasNull {
 			for i := 0; i < n; i++ {
-				bytes := data[(i+start)*sz : (i+start+1)*sz]
+				bytes := canonicalStrHashFixedKey(vec.GetType().Oid, data[(i+start)*sz:(i+start+1)*sz])
 				keys[i] = append(keys[i], 0)
 				keys[i] = append(keys[i], bytes...)
 			}
 		} else {
 			for i := 0; i < n; i++ {
-				bytes := data[(i+start)*sz : (i+start+1)*sz]
+				bytes := canonicalStrHashFixedKey(vec.GetType().Oid, data[(i+start)*sz:(i+start+1)*sz])
 				keys[i] = append(keys[i], bytes...)
 			}
 		}
@@ -372,7 +372,7 @@ func fillGroupStr(itr *strHashmapIterator, vec *vector.Vector, n int, sz int, st
 				} else if isNull {
 					keys[i] = append(keys[i], 1)
 				} else {
-					bytes := data[(i+start)*sz : (i+start+1)*sz]
+					bytes := canonicalStrHashFixedKey(vec.GetType().Oid, data[(i+start)*sz:(i+start+1)*sz])
 					keys[i] = append(keys[i], 0)
 					keys[i] = append(keys[i], bytes...)
 				}
@@ -381,11 +381,30 @@ func fillGroupStr(itr *strHashmapIterator, vec *vector.Vector, n int, sz int, st
 					itr.zValues[i] = 0
 					continue
 				}
-				bytes := data[(i+start)*sz : (i+start+1)*sz]
+				bytes := canonicalStrHashFixedKey(vec.GetType().Oid, data[(i+start)*sz:(i+start+1)*sz])
 				keys[i] = append(keys[i], bytes...)
 			}
 		}
 	}
+}
+
+var (
+	canonicalFloat32ZeroBytes = types.EncodeFloat32(new(float32))
+	canonicalFloat64ZeroBytes = types.EncodeFloat64(new(float64))
+)
+
+func canonicalStrHashFixedKey(oid types.T, data []byte) []byte {
+	switch oid {
+	case types.T_float32:
+		if types.DecodeFloat32(data) == 0 {
+			return canonicalFloat32ZeroBytes
+		}
+	case types.T_float64:
+		if types.DecodeFloat64(data) == 0 {
+			return canonicalFloat64ZeroBytes
+		}
+	}
+	return data
 }
 
 func (m *StrHashMap) MarshalBinary() ([]byte, error) {
