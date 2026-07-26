@@ -175,8 +175,10 @@ func (obj *baseObject) loadPersistedCommitTS(
 	if location.IsEmpty() {
 		return
 	}
-	//Extend lifetime of vectors is without the function.
-	//need to copy. closeFunc will be nil.
+	// needCopy=true is the ownership boundary here: LoadColumns2 clones the
+	// column into the transient pool and releases the source IOVector (including
+	// its CachedData) before returning. The release callback is therefore nil;
+	// the caller owns and must close the returned vector.
 	vectors, _, err := ioutil.LoadColumns2(
 		ctx,
 		[]uint16{objectio.SEQNUM_COMMITTS},
