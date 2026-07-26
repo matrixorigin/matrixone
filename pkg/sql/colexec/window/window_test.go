@@ -297,6 +297,27 @@ func requirePreparedRowsBoundUnchanged(t *testing.T, expr *plan.Expr, pos int32)
 	require.Equal(t, pos, expr.GetF().Args[0].GetP().Pos)
 }
 
+func TestDirectPreparedRowsFrameParam(t *testing.T) {
+	param := &plan.ParamRef{Pos: 3}
+	paramExpr := &plan.Expr{Expr: &plan.Expr_P{P: param}}
+
+	require.Nil(t, directPreparedRowsFrameParam(nil))
+	require.Same(t, param, directPreparedRowsFrameParam(paramExpr))
+	require.Nil(t, directPreparedRowsFrameParam(&plan.Expr{}))
+	require.Nil(t, directPreparedRowsFrameParam(&plan.Expr{
+		Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{ObjName: "abs"}}},
+	}))
+	require.Nil(t, directPreparedRowsFrameParam(&plan.Expr{
+		Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{ObjName: "cast"}}},
+	}))
+	require.Same(t, param, directPreparedRowsFrameParam(&plan.Expr{
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{ObjName: "cast"},
+			Args: []*plan.Expr{paramExpr},
+		}},
+	}))
+}
+
 func TestWindowPrepareMaterializesRowsFrameBounds(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	planned := makePreparedRowsFrame(t, 0, 1)

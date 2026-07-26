@@ -17,6 +17,7 @@ package window
 import (
 	"bytes"
 	"math"
+	"strconv"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -148,6 +149,20 @@ func materializeRowsBound(proc *process.Process, planned *plan.FrameBound) (*pla
 	if proc == nil || proc.GetPrepareParams() == nil {
 		return nil, moerr.NewInvalidInputNoCtx("window frame bound parameter is missing")
 	}
+	if param := directPreparedRowsFrameParam(planned.Val); param != nil {
+		raw, err := proc.GetPrepareParamsAt(int(param.Pos))
+		if err != nil {
+			return nil, err
+		}
+		if raw != nil {
+			if _, err = strconv.ParseUint(string(raw), 10, 64); err != nil {
+				return nil, moerr.NewInvalidInput(
+					proc.Ctx,
+					"window frame bound must be a non-negative integer",
+				)
+			}
+		}
+	}
 
 	executor, err := colexec.NewExpressionExecutor(proc, planned.Val)
 	if err != nil {
@@ -182,6 +197,20 @@ func materializeRowsBound(proc *process.Process, planned *plan.FrameBound) (*pla
 		}},
 	}
 	return runtimeBound, nil
+}
+
+func directPreparedRowsFrameParam(expr *plan.Expr) *plan.ParamRef {
+	if expr == nil {
+		return nil
+	}
+	if param := expr.GetP(); param != nil {
+		return param
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || fn.Func.ObjName != "cast" || len(fn.Args) == 0 {
+		return nil
+	}
+	return fn.Args[0].GetP()
 }
 
 func (ctr *container) frameAt(idx int, planned *plan.FrameClause) *plan.FrameClause {
