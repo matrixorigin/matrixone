@@ -217,19 +217,23 @@ func (s *service) handleISCPDrainConsumer(ctx context.Context, req *query.Reques
 			return moerr.NewInternalErrorNoCtxf("injected ISCP remove fence error: %s", msg)
 		}
 		iscp.RemoveCNJobFence(s.cfg.UUID, key)
-		if exec, ok := iscpGetExecutorRuntimeFn(s.cfg.UUID); ok && exec != nil {
-			exec.RemoveJobFence(key)
-		}
 		resp.ISCPDrainConsumerResponse = &query.ISCPDrainConsumerResponse{Success: true}
 		return nil
 	}
 	if r.RenewFenceOnly {
-		// Renewal is an idempotent upsert. A CN process may have restarted since
-		// the initial drain; reinstalling the CN-scoped fence keeps the active
-		// DDL fail-closed for the replacement process generation.
-		iscp.InstallCNJobFence(s.cfg.UUID, key, iscp.RollbackFenceTTL())
-		if exec, ok := iscpGetExecutorRuntimeFn(s.cfg.UUID); ok && exec != nil {
-			exec.InstallJobFence(key, iscp.RollbackFenceTTL())
+		ttl := iscp.RollbackFenceTTL()
+		// Renewal must never create a fence. A delayed renew can be processed
+		// after rollback cleanup; requiring the CN fence to exist makes remove
+		// terminal even when RPC handling is reordered.
+		if !iscp.RenewCNJobFence(s.cfg.UUID, key, ttl) {
+			return moerr.NewInternalErrorf(
+				ctx,
+				"cannot renew ISCP consumer quiescence fence on CN %s for tableID=%d jobName=%s jobID=%d",
+				s.cfg.UUID,
+				r.TableID,
+				r.JobName,
+				r.JobID,
+			)
 		}
 		resp.ISCPDrainConsumerResponse = &query.ISCPDrainConsumerResponse{Success: true}
 		return nil

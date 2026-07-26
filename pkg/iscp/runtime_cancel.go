@@ -53,6 +53,7 @@ func RegisterExecutorRuntime(cnUUID string, exec *ISCPTaskExecutor) {
 	// installs the executor-local copy through the request handler.
 	exec.runtimeMu.Lock()
 	exec.ensureRuntimeMapsLocked()
+	clear(exec.fencedJobs)
 	for fenceKey, fence := range cnJobFences.fences {
 		if fenceKey.CNUUID == cnUUID {
 			exec.fencedJobs[fenceKey.JobRuntimeKey] = fence
@@ -112,7 +113,22 @@ func RenewCNJobFence(cnUUID string, key JobRuntimeKey, ttl time.Duration) bool {
 	if _, ok := cnJobFences.fences[fenceKey]; !ok {
 		return false
 	}
-	cnJobFences.fences[fenceKey] = JobFence{ExpireAt: now.Add(ttl)}
+	fence := JobFence{ExpireAt: now.Add(ttl)}
+	if value, ok := iscpExecutors.Load(cnUUID); ok {
+		exec, ok := value.(*ISCPTaskExecutor)
+		if !ok || exec == nil {
+			return false
+		}
+		exec.runtimeMu.Lock()
+		defer exec.runtimeMu.Unlock()
+		exec.ensureRuntimeMapsLocked()
+		if !exec.isJobFencedLocked(key, now) {
+			delete(cnJobFences.fences, fenceKey)
+			return false
+		}
+		exec.fencedJobs[key] = fence
+	}
+	cnJobFences.fences[fenceKey] = fence
 	return true
 }
 
@@ -122,6 +138,13 @@ func RemoveCNJobFence(cnUUID string, key JobRuntimeKey) {
 	}
 	cnJobFences.Lock()
 	delete(cnJobFences.fences, cnJobFenceKey{CNUUID: cnUUID, JobRuntimeKey: key})
+	if value, ok := iscpExecutors.Load(cnUUID); ok {
+		if exec, ok := value.(*ISCPTaskExecutor); ok && exec != nil {
+			exec.runtimeMu.Lock()
+			delete(exec.fencedJobs, key)
+			exec.runtimeMu.Unlock()
+		}
+	}
 	cnJobFences.Unlock()
 }
 
@@ -135,6 +158,17 @@ func removeCNTableJobFences(cnUUID string, accountID uint32, tableID uint64) {
 			key.AccountID == accountID &&
 			key.TableID == tableID {
 			delete(cnJobFences.fences, key)
+		}
+	}
+	if value, ok := iscpExecutors.Load(cnUUID); ok {
+		if exec, ok := value.(*ISCPTaskExecutor); ok && exec != nil {
+			exec.runtimeMu.Lock()
+			for key := range exec.fencedJobs {
+				if key.AccountID == accountID && key.TableID == tableID {
+					delete(exec.fencedJobs, key)
+				}
+			}
+			exec.runtimeMu.Unlock()
 		}
 	}
 	cnJobFences.Unlock()
@@ -196,10 +230,17 @@ func (exec *ISCPTaskExecutor) InstallJobFence(key JobRuntimeKey, ttl time.Durati
 	if exec == nil || ttl <= 0 {
 		return
 	}
-	InstallCNJobFence(exec.cnUUID, key, ttl)
+	now := time.Now()
+	fence := JobFence{ExpireAt: now.Add(ttl)}
+	if exec.cnUUID != "" {
+		cnJobFences.Lock()
+		defer cnJobFences.Unlock()
+		cleanupExpiredCNJobFencesLocked(now)
+		cnJobFences.fences[cnJobFenceKey{CNUUID: exec.cnUUID, JobRuntimeKey: key}] = fence
+	}
 	exec.runtimeMu.Lock()
 	exec.ensureRuntimeMapsLocked()
-	exec.fencedJobs[key] = JobFence{ExpireAt: time.Now().Add(ttl)}
+	exec.fencedJobs[key] = fence
 	exec.runtimeMu.Unlock()
 }
 
@@ -252,25 +293,28 @@ func (exec *ISCPTaskExecutor) RemoveJobFence(key JobRuntimeKey) {
 	if exec == nil {
 		return
 	}
+	RemoveCNJobFence(exec.cnUUID, key)
 	exec.runtimeMu.Lock()
 	delete(exec.fencedJobs, key)
 	exec.runtimeMu.Unlock()
-	RemoveCNJobFence(exec.cnUUID, key)
 }
 
 func (exec *ISCPTaskExecutor) RenewJobFence(key JobRuntimeKey, ttl time.Duration) bool {
 	if exec == nil || ttl <= 0 {
 		return false
 	}
+	now := time.Now()
+	if exec.cnUUID != "" {
+		return RenewCNJobFence(exec.cnUUID, key, ttl)
+	}
+
 	exec.runtimeMu.Lock()
+	defer exec.runtimeMu.Unlock()
 	exec.ensureRuntimeMapsLocked()
-	if !exec.isJobFencedLocked(key, time.Now()) {
-		exec.runtimeMu.Unlock()
+	if !exec.isJobFencedLocked(key, now) {
 		return false
 	}
-	exec.fencedJobs[key] = JobFence{ExpireAt: time.Now().Add(ttl)}
-	exec.runtimeMu.Unlock()
-	InstallCNJobFence(exec.cnUUID, key, ttl)
+	exec.fencedJobs[key] = JobFence{ExpireAt: now.Add(ttl)}
 	return true
 }
 
@@ -278,6 +322,7 @@ func (exec *ISCPTaskExecutor) RemoveTableJobFences(accountID uint32, tableID uin
 	if exec == nil {
 		return
 	}
+	removeCNTableJobFences(exec.cnUUID, accountID, tableID)
 	exec.runtimeMu.Lock()
 	for key := range exec.fencedJobs {
 		if key.AccountID == accountID && key.TableID == tableID {
@@ -285,7 +330,6 @@ func (exec *ISCPTaskExecutor) RemoveTableJobFences(accountID uint32, tableID uin
 		}
 	}
 	exec.runtimeMu.Unlock()
-	removeCNTableJobFences(exec.cnUUID, accountID, tableID)
 }
 
 func (exec *ISCPTaskExecutor) RegisterRunningConsumer(
