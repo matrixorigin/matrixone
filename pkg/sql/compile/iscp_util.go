@@ -471,7 +471,10 @@ func renewISCPDrainTargetFences(
 			)
 		}
 		if err != nil {
-			result = errors.Join(result, fmt.Errorf("renew ISCP fence on runner %s: %w", target.runnerCN, err))
+			result = errors.Join(
+				result,
+				moerr.NewInternalErrorf(ctx, "renew ISCP fence on runner %s: %v", target.runnerCN, err),
+			)
 		}
 	}
 	return result
@@ -505,7 +508,10 @@ func removeISCPDrainTargetFences(
 			)
 		}
 		if err != nil {
-			result = errors.Join(result, fmt.Errorf("remove ISCP fence on runner %s: %w", target.runnerCN, err))
+			result = errors.Join(
+				result,
+				moerr.NewInternalErrorf(ctx, "remove ISCP fence on runner %s: %v", target.runnerCN, err),
+			)
 		}
 	}
 	return result
