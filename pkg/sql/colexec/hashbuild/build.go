@@ -263,18 +263,34 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 		// same upstream batch a second time when it is spilled directly.
 		ctr.hashmapBuilder.InputBatchRowCount += result.Batch.RowCount()
 		if hashBuild.IsShuffle {
-			if err := ctr.ensureSpillScratchReservation(result.Batch, analyzer); err != nil {
-				// A larger ingress batch may require growing the emergency lease.
-				// If retained copies are consuming the missing headroom, drain them
-				// under the already-admitted lease, then retry for the current batch.
+			// First prove that the current upstream batch can always be spilled
+			// directly. This uses its actual materialization semantics and never
+			// projects a hypothetical retained batch.
+			if err := ctr.ensureDirectSpillScratchReservation(result.Batch, analyzer); err != nil {
+				// Existing retained batches were admitted with a future-drain
+				// proof. Drain them under that lease, then retry the direct proof
+				// after their source reservations have been released.
 				if spillMode || !errors.Is(err, process.ErrHashBuildBudgetAdmission) || len(ctr.hashmapBuilder.Batches.Buf) == 0 {
 					return err
 				}
 				if err := startSpill(); err != nil {
 					return err
 				}
-				if err := ctr.ensureSpillScratchReservation(result.Batch, analyzer); err != nil {
+				if err := ctr.ensureDirectSpillScratchReservation(result.Batch, analyzer); err != nil {
 					return err
+				}
+			}
+			if !spillMode {
+				// A batch may become retained only after its future spill scratch
+				// is admitted. If that proof does not fit, do not copy it: switch
+				// to the already-proven direct-spill path.
+				if err := ctr.ensureRetainedSpillScratchReservation(result.Batch, analyzer); err != nil {
+					if !errors.Is(err, process.ErrHashBuildBudgetAdmission) {
+						return err
+					}
+					if err := startSpill(); err != nil {
+						return err
+					}
 				}
 			}
 		}
