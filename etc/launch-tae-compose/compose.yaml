@@ -25,7 +25,9 @@ services:
   cn-0:
     container_name: cn-0
     <<: *mo-common
-    entrypoint: ["/bin/bash","-c","set -euo pipefail; /mo-service -debug-http :12345 -cfg /config/cn-0.toml | tee -a /log/cn-0.log"]
+    # exec makes mo-service PID 1, so docker compose down delivers SIGTERM to
+    # the instrumented process and lets it flush GOCOVERDIR before shutdown.
+    entrypoint: ["/bin/bash","-c","set -euo pipefail; exec /mo-service -debug-http :12345 -cfg /config/cn-0.toml >> /log/cn-0.log 2>&1"]
     profiles:
       - launch
       - launch-multi-cn
@@ -47,7 +49,7 @@ services:
   cn-1:
     container_name: cn-1
     <<: *mo-common
-    entrypoint: ["/bin/bash","-c","set -euo pipefail; /mo-service -debug-http :12345 -cfg /config/cn-1.toml | tee -a /log/cn-1.log"]
+    entrypoint: ["/bin/bash","-c","set -euo pipefail; exec /mo-service -debug-http :12345 -cfg /config/cn-1.toml >> /log/cn-1.log 2>&1"]
     depends_on:
       - tn
     ports:
@@ -69,7 +71,7 @@ services:
   proxy:
     container_name: proxy
     <<: *mo-common
-    entrypoint: ["/bin/bash","-c","set -euo pipefail; /mo-service -debug-http :12345 -cfg /config/proxy.toml | tee -a /log/proxy.log"]
+    entrypoint: ["/bin/bash","-c","set -euo pipefail; exec /mo-service -debug-http :12345 -cfg /config/proxy.toml >> /log/proxy.log 2>&1"]
     profiles:
       - launch
       - launch-multi-cn
@@ -93,7 +95,7 @@ services:
   tn:
     container_name: tn
     <<: *mo-common
-    entrypoint: ["/bin/bash","-c","set -euo pipefail; /mo-service -debug-http :12345 -cfg /config/tn.toml | tee -a /log/tn.log"]
+    entrypoint: ["/bin/bash","-c","set -euo pipefail; exec /mo-service -debug-http :12345 -cfg /config/tn.toml >> /log/tn.log 2>&1"]
     profiles:
       - launch
       - launch-multi-cn
@@ -118,7 +120,7 @@ services:
     profiles:
       - launch
       - launch-multi-cn
-    entrypoint: ["/bin/bash","-c","set -euo pipefail; /mo-service -debug-http :12345 -cfg /config/log.toml | tee -a /log/logservice.log"]
+    entrypoint: ["/bin/bash","-c","set -euo pipefail; exec /mo-service -debug-http :12345 -cfg /config/log.toml >> /log/logservice.log 2>&1"]
     depends_on:
       - createbuckets
     ports:
