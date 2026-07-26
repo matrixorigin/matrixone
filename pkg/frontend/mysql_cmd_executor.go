@@ -5244,7 +5244,7 @@ func NewMarshalPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, pla
 		h.marshalPlan = explain.BuildJsonPlan(ctx, h.uuid, &explain.MarshalPlanOptions, h.query)
 		h.marshalPlan.NewPlanStats.SetWaitActiveCost(h.waitActiveCost)
 		if phyPlan != nil {
-			h.marshalPlan.PhyPlan = *phyPlan
+			h.marshalPlan.PhyPlan = *phyPlan.CloneForExport()
 		}
 		if h.schedulingTrace != nil {
 			h.marshalPlan.Scheduling = h.schedulingTrace
