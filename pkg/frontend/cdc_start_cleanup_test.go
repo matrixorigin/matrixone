@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"errors"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -387,4 +388,218 @@ func TestRestartReleasesCallbackFenceBeforeWaitingForReplacement(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("restart did not finish after replacement callback progress")
 	}
+}
+
+func TestRestartTimeoutDoesNotReuseActiveStartAttempt(t *testing.T) {
+	catalog := &captureExecContextIE{}
+	exec := &CDCTaskExecutor{
+		activeRoutine: cdc.NewCdcActiveRoutine(),
+		spec: &task.CreateCdcDetails{
+			TaskId:   "restart-timeout-ownership",
+			TaskName: "restart-timeout-ownership",
+			Accounts: []*task.Account{{Id: 1}},
+		},
+		ie:                    catalog,
+		stateMachine:          NewExecutorStateMachine(),
+		holdCh:                make(chan int, 1),
+		restartStartupTimeout: 25 * time.Millisecond,
+	}
+	require.NoError(t, exec.stateMachine.Transition(TransitionStart))
+	require.NoError(t, exec.stateMachine.Transition(TransitionStartSuccess))
+
+	oldCtx, oldAttempt := newCDCStartAttempt(context.Background(), exec.callbackGeneration.Load())
+	require.True(t, exec.installStartAttempt(oldAttempt))
+	oldCancelled := make(chan struct{})
+	releaseOld := make(chan struct{})
+	go func() {
+		<-oldCtx.Done()
+		close(oldCancelled)
+		<-releaseOld
+		exec.finishStartAttempt(oldAttempt)
+	}()
+
+	var replacementStarts atomic.Int32
+	exec.startFunc = func(context.Context) error {
+		replacementStarts.Add(1)
+		return nil
+	}
+
+	err := exec.Restart()
+	require.ErrorContains(t, err, "CDC restart startup timed out")
+	select {
+	case <-oldCancelled:
+	case <-time.After(time.Second):
+		t.Fatal("restart did not cancel the old start attempt")
+	}
+	require.Zero(t, replacementStarts.Load(), "replacement must not reuse resources before old Start exits")
+	require.Equal(t, StateFailed, exec.stateMachine.State())
+	require.Contains(t, catalog.execSQL, "SET state = 'failed'")
+	require.Contains(t, catalog.execSQL, "AND state = 'restarting'")
+
+	close(releaseOld)
+	require.Eventually(t, func() bool { return exec.activeStart() == nil }, time.Second, time.Millisecond)
+
+	// The next taskservice retry is now allowed to reopen the failed catalog
+	// admission and launch exactly one replacement.
+	require.NoError(t, exec.Restart())
+	require.Eventually(t, func() bool { return replacementStarts.Load() == 1 }, time.Second, time.Millisecond)
+	require.True(t, catalog.containsExecutedSQL("SET state = 'restarting'"))
+	require.True(t, catalog.containsExecutedSQL("AND state = 'failed'"))
+}
+
+func TestRestartTimeoutRecordsLateStartupCauseBeforeRetry(t *testing.T) {
+	catalog := &captureExecContextIE{}
+	releaseStart := make(chan struct{})
+	exec := &CDCTaskExecutor{
+		activeRoutine: cdc.NewCdcActiveRoutine(),
+		spec: &task.CreateCdcDetails{
+			TaskId:   "restart-timeout-cause",
+			TaskName: "restart-timeout-cause",
+			Accounts: []*task.Account{{Id: 1}},
+		},
+		ie:                    catalog,
+		stateMachine:          NewExecutorStateMachine(),
+		holdCh:                make(chan int, 1),
+		restartStartupTimeout: 25 * time.Millisecond,
+		startFunc: func(context.Context) error {
+			<-releaseStart
+			return errors.New("downstream authentication rejected")
+		},
+	}
+	require.NoError(t, exec.stateMachine.Transition(TransitionStart))
+	require.NoError(t, exec.stateMachine.Transition(TransitionStartSuccess))
+
+	require.ErrorContains(t, exec.Restart(), "CDC restart startup timed out")
+	close(releaseStart)
+	require.Eventually(t, func() bool { return exec.activeStart() == nil }, time.Second, time.Millisecond)
+	require.True(t, catalog.containsExecutedSQL("err_msg = 'downstream authentication rejected'"))
+	require.True(t, catalog.containsExecutedSQL("AND state = 'failed'"))
+}
+
+func TestStartSupersededBeforeSchedulingDoesNotPublishOrCleanNewGeneration(t *testing.T) {
+	exec := &CDCTaskExecutor{
+		stateMachine: NewExecutorStateMachine(),
+	}
+	startCtx, attempt := newCDCStartAttempt(context.Background(), exec.callbackGeneration.Load())
+	require.True(t, exec.installStartAttempt(attempt))
+
+	// This models a replacement goroutine that has been scheduled but has not
+	// entered Start before its caller times out and fences its generation.
+	exec.callbackGeneration.Add(1)
+	err := exec.Start(startCtx)
+	require.ErrorContains(t, err, "superseded by a newer lifecycle generation")
+	require.Equal(t, StateIdle, exec.stateMachine.State())
+	require.Nil(t, exec.activeStart())
+}
+
+func TestResumeWaitsForPreviousStartAttemptBeforeReplacingRoutine(t *testing.T) {
+	started := make(chan struct{}, 1)
+	exec := &CDCTaskExecutor{
+		activeRoutine: cdc.NewCdcActiveRoutine(),
+		spec: &task.CreateCdcDetails{
+			TaskId:   "resume-ownership",
+			TaskName: "resume-ownership",
+			Accounts: []*task.Account{{Id: 1}},
+		},
+		ie:           &captureExecContextIE{},
+		stateMachine: NewExecutorStateMachine(),
+		holdCh:       make(chan int, 1),
+		startFunc: func(context.Context) error {
+			started <- struct{}{}
+			return nil
+		},
+	}
+	require.NoError(t, exec.stateMachine.Transition(TransitionStart))
+	require.NoError(t, exec.stateMachine.Transition(TransitionStartSuccess))
+	require.NoError(t, exec.stateMachine.Transition(TransitionPause))
+	require.NoError(t, exec.stateMachine.Transition(TransitionPauseComplete))
+
+	_, previous := newCDCStartAttempt(context.Background(), exec.callbackGeneration.Load())
+	require.True(t, exec.installStartAttempt(previous))
+	require.NoError(t, exec.Resume())
+
+	select {
+	case <-started:
+		t.Fatal("resume replaced resources before the previous Start exited")
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	exec.finishStartAttempt(previous)
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("resume did not start after the previous Start exited")
+	}
+}
+
+func TestCancelFencesResumeWaitingForPreviousStartAttempt(t *testing.T) {
+	started := make(chan struct{}, 1)
+	exec := &CDCTaskExecutor{
+		activeRoutine: cdc.NewCdcActiveRoutine(),
+		spec: &task.CreateCdcDetails{
+			TaskId:   "resume-cancel-fence",
+			TaskName: "resume-cancel-fence",
+			Accounts: []*task.Account{{Id: 1}},
+		},
+		ie:           &captureExecContextIE{},
+		stateMachine: NewExecutorStateMachine(),
+		holdCh:       make(chan int, 1),
+		startFunc: func(context.Context) error {
+			started <- struct{}{}
+			return nil
+		},
+	}
+	require.NoError(t, exec.stateMachine.Transition(TransitionStart))
+	require.NoError(t, exec.stateMachine.Transition(TransitionStartSuccess))
+	require.NoError(t, exec.stateMachine.Transition(TransitionPause))
+	require.NoError(t, exec.stateMachine.Transition(TransitionPauseComplete))
+
+	_, previous := newCDCStartAttempt(context.Background(), exec.callbackGeneration.Load())
+	require.True(t, exec.installStartAttempt(previous))
+	require.NoError(t, exec.Resume())
+	require.NoError(t, exec.Cancel())
+	exec.finishStartAttempt(previous)
+
+	select {
+	case <-started:
+		t.Fatal("cancelled resume installed a new Start attempt")
+	case <-time.After(25 * time.Millisecond):
+	}
+	require.Equal(t, StateCancelled, exec.stateMachine.State())
+}
+
+func TestPauseFencesResumeWaitingForPreviousStartAttempt(t *testing.T) {
+	started := make(chan struct{}, 1)
+	exec := &CDCTaskExecutor{
+		activeRoutine: cdc.NewCdcActiveRoutine(),
+		spec: &task.CreateCdcDetails{
+			TaskId:   "resume-pause-fence",
+			TaskName: "resume-pause-fence",
+			Accounts: []*task.Account{{Id: 1}},
+		},
+		ie:           &captureExecContextIE{},
+		stateMachine: NewExecutorStateMachine(),
+		holdCh:       make(chan int, 1),
+		startFunc: func(context.Context) error {
+			started <- struct{}{}
+			return nil
+		},
+	}
+	require.NoError(t, exec.stateMachine.Transition(TransitionStart))
+	require.NoError(t, exec.stateMachine.Transition(TransitionStartSuccess))
+	require.NoError(t, exec.stateMachine.Transition(TransitionPause))
+	require.NoError(t, exec.stateMachine.Transition(TransitionPauseComplete))
+
+	_, previous := newCDCStartAttempt(context.Background(), exec.callbackGeneration.Load())
+	require.True(t, exec.installStartAttempt(previous))
+	require.NoError(t, exec.Resume())
+	require.NoError(t, exec.Pause())
+	exec.finishStartAttempt(previous)
+
+	select {
+	case <-started:
+		t.Fatal("paused resume installed a new Start attempt")
+	case <-time.After(25 * time.Millisecond):
+	}
+	require.Equal(t, StatePaused, exec.stateMachine.State())
 }

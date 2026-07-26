@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -869,6 +870,7 @@ type captureExecContextIE struct {
 	execCtxErr       error
 	execErr          error
 	execSQL          string
+	execSQLs         []string
 	querySQL         string
 	affectedRows     uint64
 	hasAffectedRows  bool
@@ -880,6 +882,7 @@ type captureExecContextIE struct {
 func (e *captureExecContextIE) Exec(ctx context.Context, sql string, options ie.SessionOverrideOptions) error {
 	e.execCtxErr = ctx.Err()
 	e.execSQL = sql
+	e.execSQLs = append(e.execSQLs, sql)
 	return e.execErr
 }
 
@@ -890,6 +893,7 @@ func (e *captureExecContextIE) ExecWithStatus(ctx context.Context, sql string, o
 	}
 	e.execCtxErr = ctx.Err()
 	e.execSQL = sql
+	e.execSQLs = append(e.execSQLs, sql)
 	return ie.InternalExecStatus{AffectedRows: affectedRows}, e.execErr
 }
 
@@ -903,6 +907,15 @@ func (e *captureExecContextIE) Query(ctx context.Context, sql string, options ie
 }
 
 func (e *captureExecContextIE) ApplySessionOverride(options ie.SessionOverrideOptions) {
+}
+
+func (e *captureExecContextIE) containsExecutedSQL(part string) bool {
+	for _, sql := range e.execSQLs {
+		if strings.Contains(sql, part) {
+			return true
+		}
+	}
+	return false
 }
 
 type captureExecOnlyIE struct {
@@ -4154,10 +4167,15 @@ func TestCdcTask_RestartClearsPermanentTableErrorAndRecovers(t *testing.T) {
 	require.True(t, executor.tableErrorsAreCleared())
 
 	sqls := executor.capturedExecSQLs()
-	require.Len(t, sqls, 2)
+	require.Len(t, sqls, 3)
 	require.Contains(t, sqls[0], "SET state = 'failed'")
-	require.Contains(t, sqls[1], "UPDATE `mo_catalog`.`mo_cdc_watermark` SET err_msg = ''")
-	require.Contains(t, sqls[1], "task-1")
+	// The retry explicitly reopens the failure state before it clears table
+	// errors, so a prior timed-out/retried restart cannot remain admitted as
+	// restarting with its original failure cause lost.
+	require.Contains(t, sqls[1], "SET state = 'restarting'")
+	require.Contains(t, sqls[1], "AND state = 'failed'")
+	require.Contains(t, sqls[2], "UPDATE `mo_catalog`.`mo_cdc_watermark` SET err_msg = ''")
+	require.Contains(t, sqls[2], "task-1")
 
 	cdcTask.activeRoutine.CloseCancel()
 	if val, ok := cdcTask.runningReaders.Load("db1.tb1"); ok {
