@@ -1,9 +1,14 @@
 #!/usr/bin/env bash
 
-# Run one of the two time-balanced BVT groups. Group 0 carries the especially
-# expensive pessimistic_transaction suite and is otherwise balanced by case
-# count; Group 1 contains the complement. New top-level directories are
-# assigned deterministically so every case is exercised immediately.
+# Run one of the two time-balanced BVT groups. The assignment is based on the
+# latest successful full Compose BVT timing: group 0 is 1285s and group 1 is
+# 1268s in that baseline. Keep the statement-info producers and verifiers in
+# one group: mo-tester runs directories in lexical order, so log,
+# result_count, sql_source_type, and statement_query_type run before
+# zz_statement_query_type.
+#
+# New top-level directories are assigned deterministically so every case is
+# exercised immediately; rebalance the explicit list from collected timing.
 set -euo pipefail
 
 if [[ $# -ne 3 ]]; then
@@ -27,10 +32,10 @@ while IFS= read -r script_path; do
     top_level=${relative_path%%/*}
 
     case "${top_level}" in
-        array|auto_increment|benchmark|dataXtest|ddl|disttae|fake_pk|git4data|hint|join|keyword|load_data|log|mo_cloud|optimizer|pessimistic_transaction|pg_cast|plugin|prepare|procedure|query_result|sample|save_query_result|sequence|sql_inject|stage|system|system_variable|temporary|tenant|tenxcloud_xx|time_window|union|util|vector|view)
+        array|auto_increment|benchmark|dataXtest|ddl|disttae|fake_pk|fulltext|function|git4data|hint|join|keyword|load_data|mo_cloud|optimizer|pg_cast|plugin|prepare|procedure|query_result|sample|save_query_result|sequence|snapshot|sql_inject|stage|system|system_variable|temporary|tenant|tenxcloud_xx|time_window|union|util|vector|view)
             assigned_group=0
             ;;
-        analyze|charset_collation|comment|cte|database|distinct|dml|dtype|expression|feature_limit|foreign_key|fulltext|function|geo|iceberg|metadata|operator|pitr|plan_cache|publication_subscription|qexec|recursive_cte|replace_statement|result_count|security|set|snapshot|sql_source_type|statement_query_type|subquery|table|task|udf|window|zz_accesscontrol|zz_statement_query_type)
+        analyze|charset_collation|comment|cte|database|distinct|dml|dtype|expression|feature_limit|foreign_key|geo|iceberg|log|metadata|operator|pessimistic_transaction|pitr|plan_cache|publication_subscription|qexec|recursive_cte|replace_statement|result_count|security|set|sql_source_type|statement_query_type|subquery|table|task|udf|window|zz_accesscontrol|zz_statement_query_type)
             assigned_group=1
             ;;
         *)
