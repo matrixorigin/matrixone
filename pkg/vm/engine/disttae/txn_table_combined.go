@@ -290,7 +290,10 @@ func (t *combinedTxnTable) CollectChanges(
 		return nil, err
 	}
 
-	handle := &combinedChangesHandle{mp: mp}
+	handle := &combinedChangesHandle{
+		mp:       mp,
+		snapshot: from.IsEmpty(),
+	}
 	for _, rel := range tables {
 		partitionHandle, err := rel.CollectChanges(ctx, from, to, skipDeletes, mp)
 		if err != nil {
@@ -305,10 +308,12 @@ func (t *combinedTxnTable) CollectChanges(
 }
 
 type combinedChangesHandle struct {
-	handles []engine.ChangesHandle
-	pending []pendingPartitionChanges
-	mp      *mpool.MPool
-	closed  bool
+	handles  []engine.ChangesHandle
+	pending  []pendingPartitionChanges
+	mp       *mpool.MPool
+	idx      int
+	snapshot bool
+	closed   bool
 }
 
 type pendingPartitionChanges struct {
@@ -329,6 +334,60 @@ func (h *combinedChangesHandle) Next(
 	if h.mp == nil {
 		h.mp = mp
 	}
+	if h.snapshot {
+		return h.nextSnapshot(ctx, mp)
+	}
+	return h.nextTail(ctx, mp)
+}
+
+func (h *combinedChangesHandle) nextSnapshot(
+	ctx context.Context,
+	mp *mpool.MPool,
+) (data *batch.Batch, tombstone *batch.Batch, hint engine.ChangesHandle_Hint, err error) {
+	// Checkpoint chunks share a synthetic commit timestamp. They do not form a
+	// transaction boundary, so return each child chunk directly instead of
+	// accumulating an entire partitioned snapshot by that timestamp.
+	h.ensurePending()
+	for h.idx < len(h.handles) {
+		for {
+			data, tombstone, hint, err = h.handles[h.idx].Next(ctx, mp)
+			if err != nil {
+				return h.fail(mp, data, tombstone, err)
+			}
+			hadEmptyBatch := false
+			if data != nil && data.RowCount() == 0 {
+				data.Clean(mp)
+				data = nil
+				hadEmptyBatch = true
+			}
+			if tombstone != nil && tombstone.RowCount() == 0 {
+				tombstone.Clean(mp)
+				tombstone = nil
+				hadEmptyBatch = true
+			}
+			if data != nil || tombstone != nil {
+				if hint != engine.ChangesHandle_Snapshot {
+					return h.fail(mp, data, tombstone, moerr.NewInternalErrorNoCtx("checkpoint changes handle returned tail data"))
+				}
+				return data, tombstone, hint, nil
+			}
+			if hadEmptyBatch {
+				continue
+			}
+			if err = h.closePartition(h.idx, mp); err != nil {
+				return h.fail(mp, nil, nil, err)
+			}
+			h.idx++
+			break
+		}
+	}
+	return nil, nil, engine.ChangesHandle_Tail_done, nil
+}
+
+func (h *combinedChangesHandle) nextTail(
+	ctx context.Context,
+	mp *mpool.MPool,
+) (data *batch.Batch, tombstone *batch.Batch, hint engine.ChangesHandle_Hint, err error) {
 	h.ensurePending()
 
 	if err = h.loadPending(ctx, mp); err != nil {
@@ -369,6 +428,9 @@ func (h *combinedChangesHandle) Next(
 		if !hasGroupHint {
 			return h.fail(mp, data, tombstone, moerr.NewInternalErrorNoCtx("combined changes handle lost commit timestamp"))
 		}
+		if groupHint == engine.ChangesHandle_Snapshot {
+			return h.fail(mp, data, tombstone, moerr.NewInternalErrorNoCtx("tail changes handle returned snapshot data"))
+		}
 		if err = h.loadPending(ctx, mp); err != nil {
 			return h.fail(mp, data, tombstone, err)
 		}
@@ -382,9 +444,6 @@ func (h *combinedChangesHandle) Next(
 		}
 	}
 
-	if groupHint == engine.ChangesHandle_Snapshot {
-		return data, tombstone, groupHint, nil
-	}
 	// A tail-done boundary is emitted for each commit timestamp, after every
 	// partition has contributed its rows for that timestamp. This keeps the
 	// CDC consumer's atomic batch aligned with the logical transaction instead

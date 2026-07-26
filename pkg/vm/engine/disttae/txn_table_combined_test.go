@@ -100,7 +100,7 @@ func TestCombinedTxnTable_CollectChangesOrdersPartitionsByCommitTS(t *testing.T)
 		}, nil
 	}
 
-	handle, err := table.CollectChanges(context.Background(), types.TS{}, types.TS{}, false, mp)
+	handle, err := table.CollectChanges(context.Background(), types.BuildTS(1, 0), types.TS{}, false, mp)
 	assert.NoError(t, err)
 	defer func() { assert.NoError(t, handle.Close()) }()
 
@@ -149,7 +149,7 @@ func TestCombinedTxnTable_CollectChangesKeepsPartitionMoveAtomic(t *testing.T) {
 		}, nil
 	}
 
-	handle, err := table.CollectChanges(context.Background(), types.TS{}, types.TS{}, false, mp)
+	handle, err := table.CollectChanges(context.Background(), types.BuildTS(1, 0), types.TS{}, false, mp)
 	require.NoError(t, err)
 	defer func() { require.NoError(t, handle.Close()) }()
 
@@ -169,6 +169,76 @@ func TestCombinedTxnTable_CollectChangesKeepsPartitionMoveAtomic(t *testing.T) {
 	assert.Nil(t, tombstone)
 	assert.Equal(t, types.BuildTS(20, 0), vector.GetFixedAtNoTypeCheck[types.TS](data.Vecs[1], 0))
 	assert.Equal(t, engine.ChangesHandle_Tail_done, hint)
+	data.Clean(mp)
+}
+
+func TestCombinedTxnTable_CollectChangesKeepsSnapshotBatchesBounded(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	const snapshotTS = 100
+	first := &mockChangesHandle{changes: []mockChange{
+		{data: newChangesTestBatch(t, mp, []int64{1}, []types.TS{types.BuildTS(snapshotTS, 0)}), hint: engine.ChangesHandle_Snapshot},
+		{data: newChangesTestBatch(t, mp, []int64{3}, []types.TS{types.BuildTS(snapshotTS, 0)}), hint: engine.ChangesHandle_Snapshot},
+	}}
+	second := &mockChangesHandle{changes: []mockChange{
+		{data: newChangesTestBatch(t, mp, []int64{2}, []types.TS{types.BuildTS(snapshotTS, 0)}), hint: engine.ChangesHandle_Snapshot},
+		{data: newChangesTestBatch(t, mp, []int64{4}, []types.TS{types.BuildTS(snapshotTS, 0)}), hint: engine.ChangesHandle_Snapshot},
+	}}
+	table := newMockCombinedTxnTable()
+	table.tablesFunc = func() ([]engine.Relation, error) {
+		return []engine.Relation{
+			&mockRelation{collectChangesFunc: func(context.Context, types.TS, types.TS, bool, *mpool.MPool) (engine.ChangesHandle, error) {
+				return first, nil
+			}},
+			&mockRelation{collectChangesFunc: func(context.Context, types.TS, types.TS, bool, *mpool.MPool) (engine.ChangesHandle, error) {
+				return second, nil
+			}},
+		}, nil
+	}
+
+	handle, err := table.CollectChanges(context.Background(), types.TS{}, types.TS{}, false, mp)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, handle.Close()) }()
+
+	data, tombstone, hint, err := handle.Next(context.Background(), mp)
+	require.NoError(t, err)
+	require.NotNil(t, data)
+	assert.Nil(t, tombstone)
+	assert.Equal(t, engine.ChangesHandle_Snapshot, hint)
+	assert.Equal(t, []int64{1}, vector.MustFixedColWithTypeCheck[int64](data.Vecs[0]))
+	assert.Equal(t, 1, first.idx)
+	assert.Zero(t, second.idx)
+	data.Clean(mp)
+
+	data, tombstone, hint, err = handle.Next(context.Background(), mp)
+	require.NoError(t, err)
+	require.NotNil(t, data)
+	assert.Nil(t, tombstone)
+	assert.Equal(t, engine.ChangesHandle_Snapshot, hint)
+	assert.Equal(t, []int64{3}, vector.MustFixedColWithTypeCheck[int64](data.Vecs[0]))
+	assert.Equal(t, 2, first.idx)
+	assert.Zero(t, second.idx)
+	data.Clean(mp)
+
+	data, tombstone, hint, err = handle.Next(context.Background(), mp)
+	require.NoError(t, err)
+	require.NotNil(t, data)
+	assert.Nil(t, tombstone)
+	assert.Equal(t, engine.ChangesHandle_Snapshot, hint)
+	assert.Equal(t, []int64{2}, vector.MustFixedColWithTypeCheck[int64](data.Vecs[0]))
+	assert.Equal(t, 2, first.idx)
+	assert.Equal(t, 1, second.idx)
+	data.Clean(mp)
+
+	data, tombstone, hint, err = handle.Next(context.Background(), mp)
+	require.NoError(t, err)
+	require.NotNil(t, data)
+	assert.Nil(t, tombstone)
+	assert.Equal(t, engine.ChangesHandle_Snapshot, hint)
+	assert.Equal(t, []int64{4}, vector.MustFixedColWithTypeCheck[int64](data.Vecs[0]))
+	assert.Equal(t, 2, first.idx)
+	assert.Equal(t, 2, second.idx)
 	data.Clean(mp)
 }
 

@@ -197,7 +197,7 @@ func TestFormatValIntoString_GeometryText(t *testing.T) {
 	ses := &Session{}
 
 	require.NoError(t, formatValIntoString(ses, []byte("POINT(2 2)"), types.New(types.T_geometry, 0, 0), &buf))
-	require.Equal(t, "'POINT(2 2)'", buf.String())
+	require.Equal(t, "st_geomfromtext('POINT(2 2)')", buf.String())
 
 	buf.Reset()
 	require.NoError(t, formatValIntoString(ses, []byte("POINT(2 2)"), types.New(types.T_geometry32, 0, 0), &buf))
@@ -205,7 +205,7 @@ func TestFormatValIntoString_GeometryText(t *testing.T) {
 
 	buf.Reset()
 	require.NoError(t, formatValIntoString(ses, []byte("POINT(2 2)"), types.New(types.T_geometry32, 4326+1, 0), &buf))
-	require.Equal(t, "st_geomfromtext('POINT(2 2)',4326)", buf.String())
+	require.Equal(t, "st_geomfromtext('POINT(2 2)', 4326)", buf.String())
 }
 
 func TestFormatValIntoString_JSONEscaping(t *testing.T) {

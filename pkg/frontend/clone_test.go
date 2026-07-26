@@ -126,7 +126,7 @@ func Test_rewriteCloneViewInfos(t *testing.T) {
 	info, ok := rewrittenViewMap[genKey("clone_db", "v1")]
 	require.True(t, ok)
 	require.Equal(t, "clone_db", info.dbName)
-	require.Equal(t, "create view `clone_db`.`v1` as select 'pub_db' as marker, `a` from `clone_db`.`t1`;", info.createSql)
+	require.Equal(t, "create view `clone_db`.`v1` as select 'pub_db' as `marker`, `a` from `clone_db`.`t1`;", info.createSql)
 
 	fallbackInfo, ok := rewrittenViewMap["clone_db#"]
 	require.True(t, ok)
@@ -175,7 +175,7 @@ func Test_rewriteCloneCreateSQL_RewritesOnlyTableNames(t *testing.T) {
 	require.NotContains(t, got, "`pub_db`.`where_t`")
 	require.NotContains(t, got, "`pub_db`.`having_t`")
 	require.NotContains(t, got, "select `clone_db` as")
-	require.Contains(t, got, "as pub_db")
+	require.Contains(t, got, "as `pub_db`")
 }
 
 func Test_rewriteCloneCreateSQL_RewritesQualifiedColumnsAndOrderingSubqueries(t *testing.T) {
