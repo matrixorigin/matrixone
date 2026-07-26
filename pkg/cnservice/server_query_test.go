@@ -19,6 +19,7 @@ import (
 	"math"
 	goruntime "runtime"
 	"runtime/debug"
+	"sync"
 	"testing"
 	"time"
 	"unsafe"
@@ -118,6 +119,65 @@ func Test_service_handleISCPDrainConsumerRenewFenceOnly(t *testing.T) {
 			RenewFenceOnly: true,
 		},
 	}, resp, nil), "cannot renew ISCP consumer quiescence fence")
+}
+
+func Test_service_handleISCPDrainConsumerWaitsForExecutorRuntime(t *testing.T) {
+	oldTimeout := iscpExecutorReadyTimeout
+	iscpExecutorReadyTimeout = time.Second
+	oldLookup := iscpGetExecutorRuntimeFn
+	defer func() {
+		iscpExecutorReadyTimeout = oldTimeout
+		iscpGetExecutorRuntimeFn = oldLookup
+	}()
+
+	const runnerCN = "late-runner-cn"
+	exec := &iscp.ISCPTaskExecutor{}
+	defer iscp.UnregisterExecutorRuntime(runnerCN, exec)
+	firstLookup := make(chan struct{})
+	var once sync.Once
+	iscpGetExecutorRuntimeFn = func(cnUUID string) (*iscp.ISCPTaskExecutor, bool) {
+		missing := false
+		once.Do(func() {
+			missing = true
+			close(firstLookup)
+		})
+		if missing {
+			return nil, false
+		}
+		return iscp.GetExecutorRuntime(cnUUID)
+	}
+	go func() {
+		<-firstLookup
+		iscp.RegisterExecutorRuntime(runnerCN, exec)
+	}()
+
+	s := &service{cfg: &Config{UUID: runnerCN}}
+	resp := &query.Response{}
+	require.NoError(t, s.handleISCPDrainConsumer(context.Background(), &query.Request{
+		ISCPDrainConsumerRequest: &query.ISCPDrainConsumerRequest{
+			AccountID: 1,
+			TableID:   42,
+			JobName:   "index_idx1",
+			JobID:     7,
+		},
+	}, resp, nil))
+	require.True(t, resp.ISCPDrainConsumerResponse.Success)
+}
+
+func Test_service_handleISCPDrainConsumerReturnsRetryableNotReady(t *testing.T) {
+	oldTimeout := iscpExecutorReadyTimeout
+	iscpExecutorReadyTimeout = time.Millisecond
+	defer func() { iscpExecutorReadyTimeout = oldTimeout }()
+
+	s := &service{cfg: &Config{UUID: "not-ready-runner-cn"}}
+	err := s.handleISCPDrainConsumer(context.Background(), &query.Request{
+		ISCPDrainConsumerRequest: &query.ISCPDrainConsumerRequest{
+			TableID: 42,
+			JobName: "index_idx1",
+			JobID:   7,
+		},
+	}, &query.Response{}, nil)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrRetryForCNRollingRestart))
 }
 
 func Test_service_handleGoMaxProcs(t *testing.T) {

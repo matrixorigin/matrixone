@@ -34,17 +34,27 @@ import (
 )
 
 type iscpDrainTestQueryClient struct {
-	serviceID string
-	requests  []*query.Request
-	err       error
+	serviceID   string
+	requests    []*query.Request
+	addresses   []string
+	err         error
+	errSequence []error
 }
 
 func (q *iscpDrainTestQueryClient) ServiceID() string {
 	return q.serviceID
 }
 
-func (q *iscpDrainTestQueryClient) SendMessage(_ context.Context, _ string, req *query.Request) (*query.Response, error) {
+func (q *iscpDrainTestQueryClient) SendMessage(_ context.Context, address string, req *query.Request) (*query.Response, error) {
 	q.requests = append(q.requests, req)
+	q.addresses = append(q.addresses, address)
+	if len(q.errSequence) > 0 {
+		err := q.errSequence[0]
+		q.errSequence = q.errSequence[1:]
+		if err != nil {
+			return nil, err
+		}
+	}
 	if q.err != nil {
 		return nil, q.err
 	}
@@ -459,6 +469,60 @@ func TestDrainIndexCdcTaskConsumerNoRunnerExecutorFailsClosed(t *testing.T) {
 	}
 
 	require.ErrorContains(t, DrainIndexCdcTaskConsumer(c, tbldef, "db", "tbl", "idx1"), "cannot confirm ISCP consumer quiescence on CN runner-cn")
+}
+
+func TestDrainIndexCdcTaskConsumerRetriesNotReadyWithFreshRunner(t *testing.T) {
+	oldTimeout, oldInterval := iscpDrainReadyTimeout, iscpDrainRetryInterval
+	iscpDrainReadyTimeout, iscpDrainRetryInterval = time.Second, time.Millisecond
+	defer func() {
+		iscpDrainReadyTimeout, iscpDrainRetryInterval = oldTimeout, oldInterval
+	}()
+
+	var runnerCalls int
+	iscpGetExecutorFunc = func(string) (*iscp.ISCPTaskExecutor, bool) {
+		return nil, false
+	}
+	iscpGetTaskRunnerFunc = func(context.Context, string, client.TxnOperator) (string, error) {
+		runnerCalls++
+		if runnerCalls == 1 {
+			return "runner-a", nil
+		}
+		return "runner-b", nil
+	}
+	iscpLookupJobLogFunc = func(context.Context, string, client.TxnOperator, *iscp.JobID) (uint32, uint64, uint64, bool, bool, error) {
+		return 0, 42, 7, true, true, nil
+	}
+	iscpGetCNQueryAddress = func(_ context.Context, _ string, runnerCN string) (string, error) {
+		return runnerCN + ":18101", nil
+	}
+	defer func() {
+		iscpGetExecutorFunc = iscp.GetExecutorRuntime
+		iscpGetTaskRunnerFunc = iscp.GetTaskRunner
+		iscpLookupJobLogFunc = iscp.LookupJobLog
+		iscpGetCNQueryAddress = getCNQueryAddress
+	}()
+
+	c := &Compile{}
+	c.proc = testutil.NewProcess(t)
+	qc := &iscpDrainTestQueryClient{
+		serviceID:   "ddl-cn",
+		errSequence: []error{moerr.NewRetryForCNRollingRestart(), nil},
+	}
+	c.proc.Base.QueryClient = qc
+	tbldef := &plan.TableDef{
+		TblId: 42,
+		Indexes: []*plan.IndexDef{{
+			TableExist:      true,
+			IndexName:       "idx1",
+			IndexAlgo:       "hnsw",
+			IndexAlgoParams: `{"async":"true"}`,
+		}},
+	}
+
+	require.NoError(t, DrainIndexCdcTaskConsumer(c, tbldef, "db", "tbl", "idx1"))
+	require.Equal(t, 2, runnerCalls)
+	require.Equal(t, []string{"runner-a:18101", "runner-b:18101"}, qc.addresses)
+	require.Len(t, qc.requests, 2)
 }
 
 func TestDrainIndexCdcTaskConsumerRoutesToRemoteRunnerQueryService(t *testing.T) {

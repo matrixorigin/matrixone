@@ -18,6 +18,7 @@ import (
 	"context"
 	"runtime/debug"
 	"strings"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -45,6 +46,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"go.uber.org/zap"
+)
+
+var (
+	iscpExecutorReadyTimeout = 2 * time.Second
+	iscpGetExecutorRuntimeFn = iscp.GetExecutorRuntime
 )
 
 func (s *service) initQueryService() error {
@@ -202,16 +208,34 @@ func (s *service) handleISCPDrainConsumer(ctx context.Context, req *query.Reques
 		return moerr.NewInternalError(ctx, "bad request")
 	}
 	r := req.ISCPDrainConsumerRequest
-	exec, ok := iscp.GetExecutorRuntime(s.cfg.UUID)
+	exec, ok := iscpGetExecutorRuntimeFn(s.cfg.UUID)
 	if !ok || exec == nil {
-		return moerr.NewInternalErrorf(
-			ctx,
-			"cannot confirm ISCP consumer quiescence on CN %s for tableID=%d jobName=%s jobID=%d",
-			s.cfg.UUID,
-			r.TableID,
-			r.JobName,
-			r.JobID,
-		)
+		// A daemon task publishes task_runner before its executor has completed
+		// recovery and registered its runtime. Only an initial drain can wait for
+		// that startup window: fence maintenance is handled by the original owner
+		// and must not turn a missing runtime into a new fence operation.
+		if !r.RemoveFenceOnly && !r.RenewFenceOnly {
+			readyCtx, cancel := context.WithTimeout(ctx, iscpExecutorReadyTimeout)
+			defer cancel()
+			exec, ok = waitISCPExecutorRuntime(readyCtx, s.cfg.UUID)
+			if !ok || exec == nil {
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				// This code is preserved by queryservice's response error envelope and
+				// is retried by the compile-side drain path only.
+				return moerr.NewRetryForCNRollingRestart()
+			}
+		} else {
+			return moerr.NewInternalErrorf(
+				ctx,
+				"cannot confirm ISCP consumer quiescence on CN %s for tableID=%d jobName=%s jobID=%d",
+				s.cfg.UUID,
+				r.TableID,
+				r.JobName,
+				r.JobID,
+			)
+		}
 	}
 	key := iscp.NewJobRuntimeKey(r.AccountID, r.TableID, r.JobName, r.JobID)
 	if r.RemoveFenceOnly {
@@ -245,6 +269,24 @@ func (s *service) handleISCPDrainConsumer(ctx context.Context, req *query.Reques
 	}
 	resp.ISCPDrainConsumerResponse = &query.ISCPDrainConsumerResponse{Success: true}
 	return nil
+}
+
+func waitISCPExecutorRuntime(ctx context.Context, cnUUID string) (*iscp.ISCPTaskExecutor, bool) {
+	if exec, ok := iscpGetExecutorRuntimeFn(cnUUID); ok && exec != nil {
+		return exec, true
+	}
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, false
+		case <-ticker.C:
+			if exec, ok := iscpGetExecutorRuntimeFn(cnUUID); ok && exec != nil {
+				return exec, true
+			}
+		}
+	}
 }
 
 // handleGetLockInfo sends the lock info on current cn to another cn that needs.

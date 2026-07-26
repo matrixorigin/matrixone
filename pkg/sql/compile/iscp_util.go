@@ -37,13 +37,15 @@ import (
 )
 
 var (
-	iscpRegisterJobFunc   = iscp.RegisterJob
-	iscpUnregisterJobFunc = iscp.UnregisterJob
-	iscpLookupJobLogFunc  = iscp.LookupJobLog
-	iscpGetExecutorFunc   = iscp.GetExecutorRuntime
-	iscpGetTaskRunnerFunc = iscp.GetTaskRunner
-	iscpGetCNQueryAddress = getCNQueryAddress
-	isTableInCCPRFunc     = isTableInCCPRImpl
+	iscpRegisterJobFunc    = iscp.RegisterJob
+	iscpUnregisterJobFunc  = iscp.UnregisterJob
+	iscpLookupJobLogFunc   = iscp.LookupJobLog
+	iscpGetExecutorFunc    = iscp.GetExecutorRuntime
+	iscpGetTaskRunnerFunc  = iscp.GetTaskRunner
+	iscpGetCNQueryAddress  = getCNQueryAddress
+	iscpDrainReadyTimeout  = 10 * time.Second
+	iscpDrainRetryInterval = 100 * time.Millisecond
+	isTableInCCPRFunc      = isTableInCCPRImpl
 )
 
 /* CDC APIs */
@@ -243,20 +245,83 @@ func drainIndexCdcTaskConsumer(
 	if tableID == 0 {
 		tableID = tableDef.TblId
 	}
-	runnerCN, err := iscpGetTaskRunnerFunc(c.proc.Ctx, c.proc.GetService(), c.proc.GetTxnOperator())
-	if err != nil {
-		return err
-	}
-	if runnerCN == "" {
-		runnerCN = c.proc.GetService()
-	}
 	key := iscp.NewJobRuntimeKey(accountID, tableID, jobName, jobID)
 	logutil.Infof("drain index cdc task consumer: accountID=%d tableID=%d jobName=%s jobID=%d", accountID, tableID, jobName, jobID)
-	if exec, ok := iscpGetExecutorFunc(runnerCN); ok && exec != nil {
-		if err := exec.CancelAndDrainJobConsumer(c.proc.Ctx, accountID, tableID, jobName, jobID); err != nil {
-			exec.RemoveJobFence(key)
+	readyCtx, cancel := context.WithTimeout(c.proc.Ctx, iscpDrainReadyTimeout)
+	defer cancel()
+	var (
+		exec         *iscp.ISCPTaskExecutor
+		qc           qclient.QueryClient
+		queryAddress string
+		runnerCN     string
+	)
+	notReadyErr := func() error {
+		if c.proc.Ctx.Err() != nil {
+			return c.proc.Ctx.Err()
+		}
+		return moerr.NewInternalErrorf(
+			c.proc.Ctx,
+			"ISCP executor on task runner %s did not become ready within %s for tableID=%d jobName=%s jobID=%d",
+			runnerCN,
+			iscpDrainReadyTimeout,
+			tableID,
+			jobName,
+			jobID,
+		)
+	}
+	for {
+		runnerCN, err = iscpGetTaskRunnerFunc(c.proc.Ctx, c.proc.GetService(), c.proc.GetTxnOperator())
+		if err != nil {
 			return err
 		}
+		if runnerCN == "" {
+			runnerCN = c.proc.GetService()
+		}
+		exec = nil
+		qc = nil
+		queryAddress = ""
+		if localExec, ok := iscpGetExecutorFunc(runnerCN); ok && localExec != nil {
+			exec = localExec
+			err = exec.CancelAndDrainJobConsumer(c.proc.Ctx, accountID, tableID, jobName, jobID)
+			if err != nil {
+				exec.RemoveJobFence(key)
+				return err
+			}
+			break
+		}
+
+		qc = c.proc.GetQueryClient()
+		if qc == nil {
+			return moerr.NewInternalErrorf(
+				c.proc.Ctx,
+				"cannot confirm ISCP consumer quiescence on CN %s for tableID=%d jobName=%s jobID=%d",
+				runnerCN,
+				tableID,
+				jobName,
+				jobID,
+			)
+		}
+		if queryAddress, err = iscpGetCNQueryAddress(c.proc.Ctx, c.proc.GetService(), runnerCN); err == nil {
+			err = sendISCPDrainConsumerRequest(c.proc.Ctx, qc, queryAddress, accountID, tableID, jobName, jobID, false, false)
+		}
+		if err == nil {
+			break
+		}
+		if !moerr.IsMoErrCode(err, moerr.ErrRetryForCNRollingRestart) {
+			return err
+		}
+		if readyCtx.Err() != nil {
+			return notReadyErr()
+		}
+		timer := time.NewTimer(iscpDrainRetryInterval)
+		select {
+		case <-readyCtx.Done():
+			timer.Stop()
+			return notReadyErr()
+		case <-timer.C:
+		}
+	}
+	if exec != nil {
 		if txnOp := c.proc.GetTxnOperator(); txnOp != nil {
 			lease := startISCPJobFenceLease(func() error {
 				if !exec.RenewJobFence(key, iscp.RollbackFenceTTL()) {
@@ -287,24 +352,6 @@ func drainIndexCdcTaskConsumer(
 			}))
 		}
 		return nil
-	}
-	qc := c.proc.GetQueryClient()
-	if qc == nil {
-		return moerr.NewInternalErrorf(
-			c.proc.Ctx,
-			"cannot confirm ISCP consumer quiescence on CN %s for tableID=%d jobName=%s jobID=%d",
-			runnerCN,
-			tableID,
-			jobName,
-			jobID,
-		)
-	}
-	queryAddress, err := iscpGetCNQueryAddress(c.proc.Ctx, c.proc.GetService(), runnerCN)
-	if err != nil {
-		return err
-	}
-	if err := sendISCPDrainConsumerRequest(c.proc.Ctx, qc, queryAddress, accountID, tableID, jobName, jobID, false, false); err != nil {
-		return err
 	}
 	if txnOp := c.proc.GetTxnOperator(); txnOp != nil {
 		lease := startISCPJobFenceLease(func() error {
