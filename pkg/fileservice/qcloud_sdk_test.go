@@ -26,6 +26,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/stretchr/testify/require"
@@ -396,6 +397,25 @@ func TestQCloudSDKBasicObjectOperations(t *testing.T) {
 	if err := sdk.Delete(ctx, "dir/file1"); !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected canceled delete, got %v", err)
 	}
+}
+
+func TestQCloudSDKListStopsRetryingAtContextDeadline(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	defer server.Close()
+
+	sdk := newTestCOSClient(t, server)
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	for _, err := range sdk.List(ctx, "") {
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("expected context deadline exceeded, got %v", err)
+		}
+		return
+	}
+	t.Fatal("expected list to return a deadline error")
 }
 
 type timeoutError struct{}

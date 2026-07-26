@@ -886,7 +886,11 @@ func testFileService(
 	})
 
 	t.Run("streaming write", func(t *testing.T) {
-		ctx := context.Background()
+		// An object-storage request must not be able to consume the package's
+		// entire Go test timeout. This still leaves enough time for the SDK's
+		// bounded retry policy to recover from a transient remote failure.
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+		defer cancel()
 		fs := newFS(fsName)
 		defer fs.Close(ctx)
 
@@ -981,11 +985,11 @@ func testFileService(
 			},
 			Policy: policy,
 		}
-		ctx, cancel := context.WithCancel(context.Background())
+		cancelCtx, cancel := context.WithCancel(context.Background())
 		cancel()
 		errCh := make(chan error)
 		go func() {
-			err := fs.Write(ctx, vec)
+			err := fs.Write(cancelCtx, vec)
 			errCh <- err
 		}()
 		select {

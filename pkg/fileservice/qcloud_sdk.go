@@ -122,7 +122,7 @@ func NewQCloudSDK(
 
 	if !args.NoBucketValidation {
 		// validate bucket
-		_, err := DoWithRetry("cos bucket head", func() (*cos.Response, error) {
+		_, err := DoWithRetryContext(ctx, "cos bucket head", func() (*cos.Response, error) {
 			return client.Bucket.Head(ctx, &cos.BucketHeadOptions{})
 		}, maxRetryAttemps, IsRetryableError)
 		if err != nil {
@@ -285,7 +285,7 @@ func (a *QCloudSDK) Write(
 		if err != nil {
 			return err
 		}
-		_, err = DoWithRetry("write", func() (int, error) {
+		_, err = DoWithRetryContext(ctx, "write", func() (int, error) {
 			return 0, a.putObject(
 				ctx,
 				key,
@@ -315,7 +315,7 @@ func (a *QCloudSDK) Write(
 		if err != nil {
 			return err
 		}
-		_, err = DoWithRetry("write", func() (int, error) {
+		_, err = DoWithRetryContext(ctx, "write", func() (int, error) {
 			if _, err := seeker.Seek(offset, io.SeekStart); err != nil {
 				return 0, err
 			}
@@ -428,7 +428,7 @@ func (a *QCloudSDK) WriteMultipartParallel(
 			Expires: expiresHeader,
 		},
 	}
-	output, createErr := DoWithRetry("cos initiate multipart upload", func() (*cos.InitiateMultipartUploadResult, error) {
+	output, createErr := DoWithRetryContext(ctx, "cos initiate multipart upload", func() (*cos.InitiateMultipartUploadResult, error) {
 		res, _, e := a.client.Object.InitiateMultipartUpload(ctx, key, initOpt)
 		return res, e
 	}, maxRetryAttemps, IsRetryableError)
@@ -439,7 +439,7 @@ func (a *QCloudSDK) WriteMultipartParallel(
 
 	defer func() {
 		if err != nil {
-			_, _ = DoWithRetry("cos abort multipart upload", func() (*cos.Response, error) {
+			_, _ = DoWithRetryContext(context.WithoutCancel(parentCtx), "cos abort multipart upload", func() (*cos.Response, error) {
 				return a.client.Object.AbortMultipartUpload(
 					context.WithoutCancel(parentCtx), key, output.UploadID)
 			}, maxRetryAttemps, IsRetryableError)
@@ -501,7 +501,7 @@ func (a *QCloudSDK) WriteMultipartParallel(
 			uploadOpt := &cos.ObjectUploadPartOptions{
 				ContentLength: int64(job.part.n),
 			}
-			resp, uploadErr := DoWithRetry("cos upload part", func() (*cos.Response, error) {
+			resp, uploadErr := DoWithRetryContext(ctx, "cos upload part", func() (*cos.Response, error) {
 				recordS3PutRequest(ctx, a.perfCounterSets...)
 				return a.client.Object.UploadPart(ctx, key, output.UploadID, int(job.num), bytes.NewReader(job.part.buf[:job.part.n]), uploadOpt)
 			}, maxRetryAttemps, IsRetryableError)
@@ -584,7 +584,7 @@ func (a *QCloudSDK) WriteMultipartParallel(
 	completeOpt := &cos.CompleteMultipartUploadOptions{
 		Parts: parts,
 	}
-	_, err = DoWithRetry("cos complete multipart upload", func() (*cos.CompleteMultipartUploadResult, error) {
+	_, err = DoWithRetryContext(ctx, "cos complete multipart upload", func() (*cos.CompleteMultipartUploadResult, error) {
 		res, _, e := a.client.Object.CompleteMultipartUpload(ctx, key, output.UploadID, completeOpt)
 		return res, e
 	}, maxRetryAttemps, IsRetryableError)
@@ -703,7 +703,8 @@ func (a *QCloudSDK) listObjects(ctx context.Context, prefix string, marker strin
 		opts.MaxKeys = a.listMaxKeys
 	}
 
-	return DoWithRetry(
+	return DoWithRetryContext(
+		ctx,
 		"s3 list objects",
 		func() (*cos.BucketGetResult, error) {
 			perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
@@ -791,7 +792,8 @@ func (a *QCloudSDK) getObject(ctx context.Context, key string, min *int64, max *
 				Range: rang,
 			}
 
-			return DoWithRetry(
+			return DoWithRetryContext(
+				ctx,
 				"s3 get object",
 				func() (io.ReadCloser, error) {
 					perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
@@ -823,7 +825,8 @@ func (a *QCloudSDK) getObject(ctx context.Context, key string, min *int64, max *
 func (a *QCloudSDK) deleteObject(ctx context.Context, key string) (bool, error) {
 	ctx, task := gotrace.NewTask(ctx, "QCloudSDK.deleteObject")
 	defer task.End()
-	return DoWithRetry(
+	return DoWithRetryContext(
+		ctx,
 		"s3 delete object",
 		func() (bool, error) {
 			perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
@@ -842,7 +845,8 @@ func (a *QCloudSDK) deleteObject(ctx context.Context, key string) (bool, error) 
 func (a *QCloudSDK) deleteObjects(ctx context.Context, keys ...string) (bool, error) {
 	ctx, task := gotrace.NewTask(ctx, "QCloudSDK.deleteObjects")
 	defer task.End()
-	return DoWithRetry(
+	return DoWithRetryContext(
+		ctx,
 		"s3 delete objects",
 		func() (bool, error) {
 			objects := make([]cos.Object, 0, len(keys))
