@@ -318,10 +318,16 @@ func getDuplicatedRowIDABlkBytesFunc(args ...any) func([]byte, bool, int) error 
 				if err != nil {
 					return err
 				}
-				// Legacy and later-generation merge outputs may not carry row
-				// commit timestamps. Strict dedup stays conservative for those
-				// rare objects instead of adding lineage to every merge.
+				// Legacy objects and TN rewrites containing CN-created rows may
+				// not carry row commit timestamps. Incremental dedup is only a
+				// fallback for lock/recheck paths, so it skips that unverifiable
+				// row rather than reintroducing rewrite false positives during
+				// upgrades. Strict policies stay conservative. This avoids
+				// adding lineage or an upgrade protocol to every merge.
 				if missingCommitTS(tsVec, row) {
+					if txn.GetDedupType().SkipTargetOldCommitted() {
+						return nil
+					}
 					rowID := objectio.NewRowid(&blkID, uint32(row))
 					rowIDs.Update(rowOffset, rowID, false)
 					return nil
@@ -376,8 +382,11 @@ func getDuplicatedRowIDABlkFuncFactory[T types.FixedSizeT](comp func(T, T) int) 
 						return err
 					}
 					// See the varlen path above: missing metadata is a
-					// conservative duplicate, never a silent skip.
+					// policy-aware compatibility fallback.
 					if missingCommitTS(tsVec, row) {
+						if txn.GetDedupType().SkipTargetOldCommitted() {
+							return nil
+						}
 						rowID := objectio.NewRowid(&blkID, uint32(row))
 						rowIDs.Update(rowOffset, rowID, false)
 						return nil

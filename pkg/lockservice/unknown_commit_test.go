@@ -331,14 +331,17 @@ func TestUnknownCommitFenceOverflowReleasesSourceTxn(t *testing.T) {
 		defer cancel()
 
 		service := services[0]
-		now := time.Now()
+		// The setup performs one allocator RPC per fence. Keep every seed far
+		// enough in the future to create the overflow deadline after setup while
+		// retaining a shorter expiry than every seed.
+		seedDeadline := time.Now().Add(time.Hour)
 		for i := 0; i < maxPersistentFenceFrontierEntries; i++ {
 			// Increasing sequence and decreasing expiry intentionally build the
 			// largest exact non-dominated frontier.
 			_, _, ok := service.canUnlockUnknownCommits(
 				ctx,
 				[][]byte{[]byte(fmt.Sprintf("seed-%d", i))},
-				now.Add(time.Duration(maxPersistentFenceFrontierEntries-i+3)*time.Second),
+				seedDeadline.Add(time.Duration(maxPersistentFenceFrontierEntries-i+3)*time.Second),
 				uint64(i+1),
 			)
 			require.True(t, ok)
@@ -353,9 +356,12 @@ func TestUnknownCommitFenceOverflowReleasesSourceTxn(t *testing.T) {
 			newTestRowExclusiveOptions(),
 		)
 		require.NoError(t, err)
+		// Derive this after the RPC-heavy setup so its fence is still live when
+		// the resolver submits it.
+		overflowDeadline := time.Now().Add(time.Minute)
 		require.NoError(t, service.ResolveCommitUnknown(
 			overflowTxn,
-			now.Add(time.Second),
+			overflowDeadline,
 			maxPersistentFenceFrontierEntries+1,
 			nil,
 		))

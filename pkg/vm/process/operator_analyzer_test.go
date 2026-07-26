@@ -19,11 +19,59 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestOperatorStatsCloneForExportDetachesMutableReferences(t *testing.T) {
+	query := &planpb.Query{
+		Steps:      []int32{1},
+		Headings:   []string{"source"},
+		DetectSqls: []string{"select 1"},
+		BackgroundQueries: []*planpb.Query{
+			{Steps: []int32{2}, Headings: []string{"nested"}},
+		},
+	}
+	source := &OperatorStats{
+		OperatorName:    "source",
+		CallNum:         7,
+		OperatorMetrics: map[MetricType]int64{OpScanTime: 11},
+		ExtraStats:      map[string]int64{"SpillBytes": 13},
+		BackgroundQueries: []*planpb.Query{
+			query,
+			nil,
+		},
+	}
+
+	got := source.CloneForExport()
+
+	require.Equal(t, source, got)
+	require.NotSame(t, source, got)
+	require.NotSame(t, source.BackgroundQueries[0], got.BackgroundQueries[0])
+	require.NotSame(t, source.BackgroundQueries[0].BackgroundQueries[0], got.BackgroundQueries[0].BackgroundQueries[0])
+	require.Nil(t, got.BackgroundQueries[1])
+
+	source.OperatorMetrics[OpScanTime] = 101
+	source.ExtraStats["SpillBytes"] = 103
+	source.BackgroundQueries[0].Steps[0] = 5
+	source.BackgroundQueries[0].Headings[0] = "mutated"
+	source.BackgroundQueries[0].BackgroundQueries[0].Headings[0] = "nested-mutated"
+	source.Reset()
+
+	require.Equal(t, "source", got.OperatorName)
+	require.Equal(t, 7, got.CallNum)
+	require.Equal(t, int64(11), got.OperatorMetrics[OpScanTime])
+	require.Equal(t, int64(13), got.ExtraStats["SpillBytes"])
+	require.Equal(t, int32(1), got.BackgroundQueries[0].Steps[0])
+	require.Equal(t, "source", got.BackgroundQueries[0].Headings[0])
+	require.Equal(t, "nested", got.BackgroundQueries[0].BackgroundQueries[0].Headings[0])
+
+	var nilStats *OperatorStats
+	require.Nil(t, nilStats.CloneForExport())
+}
 
 func TestOperatorStatsResourceDelta(t *testing.T) {
 	stats := OperatorStats{

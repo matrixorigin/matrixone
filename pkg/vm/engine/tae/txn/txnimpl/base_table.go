@@ -224,6 +224,14 @@ func (tbl *baseTable) incrementalGetRowsByPK(ctx context.Context, pks containers
 	}
 	defer objIt.Release()
 	rowIDs = tbl.txnTable.store.rt.VectorPool.Small.GetVector(&objectio.RowidType)
+	defer func() {
+		// Ownership transfers to the caller only on success. In particular,
+		// lazy commit-TS reads add cancellable I/O errors after allocation.
+		if err != nil {
+			rowIDs.Close()
+			rowIDs = nil
+		}
+	}()
 	vector.AppendMultiFixed[types.Rowid](
 		rowIDs.GetDownstreamVector(),
 		types.EmptyRowid,
@@ -233,7 +241,6 @@ func (tbl *baseTable) incrementalGetRowsByPK(ctx context.Context, pks containers
 	)
 
 	var earlybreak bool
-	skipTNRewrites := tbl.txnTable.store.txn.GetDedupType().SkipTargetOldCommitted()
 	for ok := objIt.Last(); ok; ok = objIt.Prev() {
 		if earlybreak {
 			break
@@ -253,29 +260,6 @@ func (tbl *baseTable) incrementalGetRowsByPK(ctx context.Context, pks containers
 			}
 		} else {
 			if obj.CreatedAt.LT(&from) {
-				continue
-			}
-
-			// CheckIncremental's time window describes logical row commits, but
-			// CreatedAt on a TN-created object describes a physical flush/merge.
-			// Scanning such an object would therefore report old rows as new
-			// duplicates merely because TN rewrote them after `from`.
-			//
-			// This skip is deliberately limited to TN-created objects under a
-			// policy that skips old committed targets (normally
-			// CheckIncremental). In the normal pessimistic-RC SQL path, CN
-			// primary/unique-key locks serialize same-key writers and LockOp
-			// rechecks PrimaryKeysMayBeModified when the lock timestamp advances;
-			// LOAD DATA holds a table lock. TN incremental dedup is a fallback
-			// for those paths. Direct CN-created objects must still be checked,
-			// and stricter policies retain their scan below.
-			//
-			// Do not add row-level commit timestamps or CN-origin lineage to
-			// every merge just to make this fallback exact across rewrites. That
-			// would tax all merge I/O and introduce an upgrade protocol for a
-			// non-authoritative path.
-			if skipTNRewrites &&
-				!obj.GetObjectStats().GetCNCreated() {
 				continue
 			}
 		}

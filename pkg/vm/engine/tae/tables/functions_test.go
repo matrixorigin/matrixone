@@ -69,84 +69,102 @@ func TestCommitTSLoaderCachesError(t *testing.T) {
 	loader.close()
 }
 
-func TestMissingCommitTSIsConservativeDuplicate(t *testing.T) {
+func TestMissingCommitTSFollowsDedupPolicy(t *testing.T) {
 	for _, typ := range []types.Type{
 		types.T_int64.ToType(),
 		types.T_varchar.ToType(),
 	} {
-		for _, commitTSCase := range []struct {
-			name string
-			make func() containers.Vector
+		for _, policyCase := range []struct {
+			name      string
+			policy    txnif.DedupPolicy
+			duplicate bool
 		}{
 			{
-				name: "missing vector",
-				make: func() containers.Vector {
-					return nil
-				},
+				name:      "strict",
+				policy:    txnif.DedupPolicy_CheckAll,
+				duplicate: true,
 			},
 			{
-				name: "short vector",
-				make: func() containers.Vector {
-					return containers.MakeVector(
-						types.T_TS.ToType(),
-						common.DefaultAllocator,
-					)
-				},
-			},
-			{
-				name: "null row",
-				make: func() containers.Vector {
-					return containers.NewConstNullVector(
-						types.T_TS.ToType(),
-						1,
-						common.DefaultAllocator,
-					)
-				},
+				name:      "incremental",
+				policy:    txnif.DedupPolicy_CheckIncremental,
+				duplicate: false,
 			},
 		} {
-			t.Run(typ.String()+"/"+commitTSCase.name, func(t *testing.T) {
-				data := containers.MakeVector(typ, common.DefaultAllocator)
-				defer data.Close()
-				keys := containers.MakeVector(typ, common.DefaultAllocator)
-				defer keys.Close()
-				if typ.Oid == types.T_int64 {
-					data.Append(int64(1), false)
-					keys.Append(int64(1), false)
-				} else {
-					data.Append([]byte("pk"), false)
-					keys.Append([]byte("pk"), false)
-				}
-
-				rowIDs := containers.MakeVector(
-					types.T_Rowid.ToType(),
-					common.DefaultAllocator,
-				)
-				defer rowIDs.Close()
-				rowIDs.Append(nil, true)
-
-				commitTS := commitTSCase.make()
-				loader := &commitTSLoader{
-					load: func() (containers.Vector, error) {
-						return commitTS, nil
+			for _, commitTSCase := range []struct {
+				name string
+				make func() containers.Vector
+			}{
+				{
+					name: "missing vector",
+					make: func() containers.Vector {
+						return nil
 					},
-				}
-				defer loader.close()
+				},
+				{
+					name: "short vector",
+					make: func() containers.Vector {
+						return containers.MakeVector(
+							types.T_TS.ToType(),
+							common.DefaultAllocator,
+						)
+					},
+				},
+				{
+					name: "null row",
+					make: func() containers.Vector {
+						return containers.NewConstNullVector(
+							types.T_TS.ToType(),
+							1,
+							common.DefaultAllocator,
+						)
+					},
+				},
+			} {
+				t.Run(typ.String()+"/"+policyCase.name+"/"+commitTSCase.name, func(t *testing.T) {
+					data := containers.MakeVector(typ, common.DefaultAllocator)
+					defer data.Close()
+					keys := containers.MakeVector(typ, common.DefaultAllocator)
+					defer keys.Close()
+					if typ.Oid == types.T_int64 {
+						data.Append(int64(1), false)
+						keys.Append(int64(1), false)
+					} else {
+						data.Append([]byte("pk"), false)
+						keys.Append([]byte("pk"), false)
+					}
 
-				txn := txnbase.MockTxnReaderWithStartTS(types.BuildTS(10, 0))
-				op := containers.MakeForeachVectorOp(
-					keys.GetType().Oid,
-					getRowIDAlkFunctions,
-					data,
-					rowIDs,
-					types.Blockid{},
-					loader,
-					txn,
-					types.BuildTS(1, 0),
-					types.BuildTS(9, 0),
-				)
-				require.NoError(t, containers.ForeachVector(keys, op, nil))
-				require.False(t, rowIDs.IsNull(0))
-			})
+					rowIDs := containers.MakeVector(
+						types.T_Rowid.ToType(),
+						common.DefaultAllocator,
+					)
+					defer rowIDs.Close()
+					rowIDs.Append(nil, true)
+
+					commitTS := commitTSCase.make()
+					loader := &commitTSLoader{
+						load: func() (containers.Vector, error) {
+							return commitTS, nil
+						},
+					}
+					defer loader.close()
+
+					txn := txnbase.MockTxnReaderWithStartTS(types.BuildTS(10, 0))
+					txn.SetDedupType(policyCase.policy)
+					op := containers.MakeForeachVectorOp(
+						keys.GetType().Oid,
+						getRowIDAlkFunctions,
+						data,
+						rowIDs,
+						types.Blockid{},
+						loader,
+						txn,
+						types.BuildTS(1, 0),
+						types.BuildTS(9, 0),
+					)
+					require.NoError(t, containers.ForeachVector(keys, op, nil))
+					require.Equal(t, policyCase.duplicate, !rowIDs.IsNull(0))
+				})
+			}
 		}
 	}
 }
@@ -208,6 +226,59 @@ func TestCommitTSAtDedupLowerBoundIsIncluded(t *testing.T) {
 				containers.ForeachVector(keys, op, nil),
 				txnif.ErrTxnWWConflict,
 			)
+		})
+	}
+}
+
+func TestCommitTSIsNotLoadedWithoutExactPKMatch(t *testing.T) {
+	for _, typ := range []types.Type{
+		types.T_int64.ToType(),
+		types.T_varchar.ToType(),
+	} {
+		t.Run(typ.String(), func(t *testing.T) {
+			data := containers.MakeVector(typ, common.DefaultAllocator)
+			defer data.Close()
+			keys := containers.MakeVector(typ, common.DefaultAllocator)
+			defer keys.Close()
+			if typ.Oid == types.T_int64 {
+				data.Append(int64(1), false)
+				keys.Append(int64(2), false)
+			} else {
+				data.Append([]byte("stored"), false)
+				keys.Append([]byte("incoming"), false)
+			}
+
+			rowIDs := containers.MakeVector(
+				types.T_Rowid.ToType(),
+				common.DefaultAllocator,
+			)
+			defer rowIDs.Close()
+			rowIDs.Append(nil, true)
+
+			loads := 0
+			loader := &commitTSLoader{
+				load: func() (containers.Vector, error) {
+					loads++
+					return nil, errors.New("unexpected commit-TS read")
+				},
+			}
+			defer loader.close()
+
+			txn := txnbase.MockTxnReaderWithStartTS(types.BuildTS(10, 0))
+			op := containers.MakeForeachVectorOp(
+				keys.GetType().Oid,
+				getRowIDAlkFunctions,
+				data,
+				rowIDs,
+				types.Blockid{},
+				loader,
+				txn,
+				types.BuildTS(1, 0),
+				types.BuildTS(9, 0),
+			)
+			require.NoError(t, containers.ForeachVector(keys, op, nil))
+			require.Zero(t, loads)
+			require.True(t, rowIDs.IsNull(0))
 		})
 	}
 }
