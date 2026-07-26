@@ -208,25 +208,31 @@ func (s *service) handleISCPDrainConsumer(ctx context.Context, req *query.Reques
 		return moerr.NewInternalError(ctx, "bad request")
 	}
 	r := req.ISCPDrainConsumerRequest
-	exec, ok := iscpGetExecutorRuntimeFn(s.cfg.UUID)
-	if !ok || exec == nil {
+	initialDrain := !r.RemoveFenceOnly && !r.RenewFenceOnly
+	var exec *iscp.ISCPTaskExecutor
+	var ok bool
+	if initialDrain {
 		// A daemon task publishes task_runner before its executor has completed
 		// recovery and registered its runtime. Only an initial drain can wait for
 		// that startup window: fence maintenance is handled by the original owner
 		// and must not turn a missing runtime into a new fence operation.
-		if !r.RemoveFenceOnly && !r.RenewFenceOnly {
-			readyCtx, cancel := context.WithTimeout(ctx, iscpExecutorReadyTimeout)
-			defer cancel()
+		readyCtx, cancel := context.WithTimeout(ctx, iscpExecutorReadyTimeout)
+		defer cancel()
+		exec, ok = getISCPExecutorRuntime(readyCtx, s.cfg.UUID)
+		if !ok || exec == nil {
 			exec, ok = waitISCPExecutorRuntime(readyCtx, s.cfg.UUID)
-			if !ok || exec == nil {
-				if ctx.Err() != nil {
-					return ctx.Err()
-				}
-				// This code is preserved by queryservice's response error envelope and
-				// is retried by the compile-side drain path only.
-				return moerr.NewRetryForCNRollingRestart()
+		}
+		if !ok || exec == nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
 			}
-		} else {
+			// This code is preserved by queryservice's response error envelope and
+			// is retried by the compile-side drain path only.
+			return moerr.NewRetryForCNRollingRestart()
+		}
+	} else {
+		exec, ok = iscpGetExecutorRuntimeFn(s.cfg.UUID)
+		if !ok || exec == nil {
 			return moerr.NewInternalErrorf(
 				ctx,
 				"cannot confirm ISCP consumer quiescence on CN %s for tableID=%d jobName=%s jobID=%d",
@@ -271,8 +277,18 @@ func (s *service) handleISCPDrainConsumer(ctx context.Context, req *query.Reques
 	return nil
 }
 
+func getISCPExecutorRuntime(ctx context.Context, cnUUID string) (*iscp.ISCPTaskExecutor, bool) {
+	if _, _, injected := fault.TriggerFaultWithContext(ctx, objectio.FJ_ISCPCancelExecutorNotReady); injected {
+		return nil, false
+	}
+	return iscpGetExecutorRuntimeFn(cnUUID)
+}
+
 func waitISCPExecutorRuntime(ctx context.Context, cnUUID string) (*iscp.ISCPTaskExecutor, bool) {
-	if exec, ok := iscpGetExecutorRuntimeFn(cnUUID); ok && exec != nil {
+	if ctx.Err() != nil {
+		return nil, false
+	}
+	if exec, ok := getISCPExecutorRuntime(ctx, cnUUID); ok && exec != nil {
 		return exec, true
 	}
 	ticker := time.NewTicker(10 * time.Millisecond)
@@ -282,7 +298,7 @@ func waitISCPExecutorRuntime(ctx context.Context, cnUUID string) (*iscp.ISCPTask
 		case <-ctx.Done():
 			return nil, false
 		case <-ticker.C:
-			if exec, ok := iscpGetExecutorRuntimeFn(cnUUID); ok && exec != nil {
+			if exec, ok := getISCPExecutorRuntime(ctx, cnUUID); ok && exec != nil {
 				return exec, true
 			}
 		}

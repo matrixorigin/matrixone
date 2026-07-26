@@ -180,6 +180,48 @@ func Test_service_handleISCPDrainConsumerReturnsRetryableNotReady(t *testing.T) 
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrRetryForCNRollingRestart))
 }
 
+func Test_service_handleISCPDrainConsumerRetriesInjectedStartupGap(t *testing.T) {
+	oldTimeout := iscpExecutorReadyTimeout
+	iscpExecutorReadyTimeout = 20 * time.Millisecond
+	defer func() { iscpExecutorReadyTimeout = oldTimeout }()
+
+	require.True(t, fault.Enable())
+	defer fault.Disable()
+	require.NoError(t, fault.AddFaultPoint(
+		context.Background(),
+		objectio.FJ_ISCPCancelExecutorNotReady,
+		"1:1::",
+		"sleep",
+		1,
+		"",
+		false,
+	))
+	defer func() {
+		_, _ = fault.RemoveFaultPoint(context.Background(), objectio.FJ_ISCPCancelExecutorNotReady)
+	}()
+
+	const runnerCN = "injected-late-runner-cn"
+	exec := &iscp.ISCPTaskExecutor{}
+	iscp.RegisterExecutorRuntime(runnerCN, exec)
+	defer iscp.UnregisterExecutorRuntime(runnerCN, exec)
+
+	req := &query.Request{
+		ISCPDrainConsumerRequest: &query.ISCPDrainConsumerRequest{
+			AccountID: 1,
+			TableID:   42,
+			JobName:   "index_idx1",
+			JobID:     7,
+		},
+	}
+	s := &service{cfg: &Config{UUID: runnerCN}}
+	err := s.handleISCPDrainConsumer(context.Background(), req, &query.Response{}, nil)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrRetryForCNRollingRestart))
+
+	resp := &query.Response{}
+	require.NoError(t, s.handleISCPDrainConsumer(context.Background(), req, resp, nil))
+	require.True(t, resp.ISCPDrainConsumerResponse.Success)
+}
+
 func Test_service_handleGoMaxProcs(t *testing.T) {
 	ctx := context.Background()
 	type fields struct{}

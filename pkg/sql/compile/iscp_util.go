@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -28,11 +29,13 @@ import (
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	"github.com/matrixorigin/matrixone/pkg/iscp"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/idxcron"
 )
 
@@ -249,12 +252,9 @@ func drainIndexCdcTaskConsumer(
 	logutil.Infof("drain index cdc task consumer: accountID=%d tableID=%d jobName=%s jobID=%d", accountID, tableID, jobName, jobID)
 	readyCtx, cancel := context.WithTimeout(c.proc.Ctx, iscpDrainReadyTimeout)
 	defer cancel()
-	var (
-		exec         *iscp.ISCPTaskExecutor
-		qc           qclient.QueryClient
-		queryAddress string
-		runnerCN     string
-	)
+	var runnerCN string
+	fencedRunners := make(map[string]struct{})
+	fencedTargets := make([]iscpDrainTarget, 0, 1)
 	notReadyErr := func() error {
 		if c.proc.Ctx.Err() != nil {
 			return c.proc.Ctx.Err()
@@ -273,9 +273,28 @@ func drainIndexCdcTaskConsumer(
 			jobID,
 		)
 	}
+	cleanupAfterFailure := func(cause error, uncertainTarget *iscpDrainTarget) error {
+		targets := fencedTargets
+		if uncertainTarget != nil {
+			targets = append(append([]iscpDrainTarget(nil), fencedTargets...), *uncertainTarget)
+		}
+		if len(targets) == 0 {
+			return cause
+		}
+		cleanupCtx, cleanupCancel := context.WithTimeoutCause(
+			context.Background(),
+			iscpDrainReadyTimeout,
+			moerr.NewInternalErrorNoCtx("iscp failed-drain fence cleanup timeout"),
+		)
+		defer cleanupCancel()
+		return errors.Join(
+			cause,
+			removeISCPDrainTargetFences(cleanupCtx, targets, accountID, tableID, jobName, jobID),
+		)
+	}
 	for {
 		if readyCtx.Err() != nil {
-			return notReadyErr()
+			return cleanupAfterFailure(notReadyErr(), nil)
 		}
 		// The daemon-task assignment is independent of the DDL transaction.
 		// Use a fresh internal transaction on every attempt so a runner handoff
@@ -283,102 +302,95 @@ func drainIndexCdcTaskConsumer(
 		runnerCN, err = iscpGetTaskRunnerFunc(readyCtx, c.proc.GetService(), nil)
 		if err != nil {
 			if readyCtx.Err() != nil {
-				return notReadyErr()
+				return cleanupAfterFailure(notReadyErr(), nil)
 			}
-			return err
+			return cleanupAfterFailure(err, nil)
 		}
 		if readyCtx.Err() != nil {
-			return notReadyErr()
+			return cleanupAfterFailure(notReadyErr(), nil)
 		}
 		if runnerCN == "" {
 			runnerCN = c.proc.GetService()
 		}
-		exec = nil
-		qc = nil
-		queryAddress = ""
-		if localExec, ok := iscpGetExecutorFunc(runnerCN); ok && localExec != nil {
-			exec = localExec
-			err = exec.CancelAndDrainJobConsumer(c.proc.Ctx, accountID, tableID, jobName, jobID)
-			if err != nil {
-				exec.RemoveJobFence(key)
-				return err
-			}
+		// A successful drain is not the ownership linearization point: the daemon
+		// task can move while the request is in flight. Converge only after a
+		// fresh runner read observes an owner this DDL already fenced.
+		if _, ok := fencedRunners[runnerCN]; ok {
 			break
 		}
 
-		qc = c.proc.GetQueryClient()
-		if qc == nil {
-			return moerr.NewInternalErrorf(
-				c.proc.Ctx,
-				"cannot confirm ISCP consumer quiescence on CN %s for tableID=%d jobName=%s jobID=%d",
-				runnerCN,
-				tableID,
-				jobName,
-				jobID,
-			)
-		}
-		queryAddress, err = iscpGetCNQueryAddress(readyCtx, c.proc.GetService(), runnerCN)
-		if err != nil {
-			if readyCtx.Err() != nil {
-				return notReadyErr()
+		var target iscpDrainTarget
+		_, _, forceRemote := fault.TriggerFault(objectio.FJ_ISCPCancelForceRemote)
+		if localExec, ok := iscpGetExecutorFunc(runnerCN); !forceRemote && ok && localExec != nil {
+			target = iscpDrainTarget{runnerCN: runnerCN, exec: localExec}
+			err = localExec.CancelAndDrainJobConsumer(c.proc.Ctx, accountID, tableID, jobName, jobID)
+			if err != nil {
+				localExec.RemoveJobFence(key)
+				return cleanupAfterFailure(err, nil)
 			}
-			return err
-		}
-		if readyCtx.Err() != nil {
-			return notReadyErr()
-		}
-		// Do not apply the readiness deadline to the actual drain. Once the
-		// executor is ready, draining an active consumer is bounded by the
-		// statement context and may legitimately take longer.
-		err = sendISCPDrainConsumerRequest(c.proc.Ctx, qc, queryAddress, accountID, tableID, jobName, jobID, false, false)
-		if err == nil {
-			break
-		}
-		if !moerr.IsMoErrCode(err, moerr.ErrRetryForCNRollingRestart) {
-			return err
-		}
-		if readyCtx.Err() != nil {
-			return notReadyErr()
-		}
-		timer := time.NewTimer(iscpDrainRetryInterval)
-		select {
-		case <-readyCtx.Done():
-			timer.Stop()
-			return notReadyErr()
-		case <-timer.C:
-		}
-	}
-	if exec != nil {
-		if txnOp := c.proc.GetTxnOperator(); txnOp != nil {
-			lease := startISCPJobFenceLease(func() error {
-				if !exec.RenewJobFence(key, iscp.RollbackFenceTTL()) {
-					return moerr.NewInternalErrorf(
+		} else {
+			qc := c.proc.GetQueryClient()
+			if qc == nil {
+				return cleanupAfterFailure(
+					moerr.NewInternalErrorf(
 						c.proc.Ctx,
-						"cannot renew ISCP consumer quiescence fence for tableID=%d jobName=%s jobID=%d",
+						"cannot confirm ISCP consumer quiescence on CN %s for tableID=%d jobName=%s jobID=%d",
+						runnerCN,
 						tableID,
 						jobName,
 						jobID,
-					)
+					),
+					nil,
+				)
+			}
+			queryAddress, addressErr := iscpGetCNQueryAddress(readyCtx, c.proc.GetService(), runnerCN)
+			if addressErr != nil {
+				if readyCtx.Err() != nil {
+					return cleanupAfterFailure(notReadyErr(), nil)
 				}
-				return nil
-			})
-			cleanup := client.NewTxnEventCallback(func(_ context.Context, _ client.TxnOperator, event client.TxnEvent, _ any) error {
-				lease.Stop()
-				if !event.CostEvent {
-					return nil
+				return cleanupAfterFailure(addressErr, nil)
+			}
+			if readyCtx.Err() != nil {
+				return cleanupAfterFailure(notReadyErr(), nil)
+			}
+			target = iscpDrainTarget{
+				runnerCN:     runnerCN,
+				qc:           qc,
+				queryAddress: queryAddress,
+			}
+			// Do not apply the readiness deadline to the actual drain. Once the
+			// executor is ready, draining an active consumer is bounded by the
+			// statement context and may legitimately take longer.
+			err = sendISCPDrainConsumerRequest(c.proc.Ctx, qc, queryAddress, accountID, tableID, jobName, jobID, false, false)
+			if err != nil {
+				if !moerr.IsMoErrCode(err, moerr.ErrRetryForCNRollingRestart) {
+					// The handler may have fenced the consumer before its response
+					// was lost. Treat this target as uncertain and remove its fence
+					// while unwinding all earlier successful targets.
+					return cleanupAfterFailure(err, &target)
 				}
-				exec.RemoveJobFence(key)
-				return nil
-			})
-			txnOp.AppendEventCallback(client.RollbackEvent, cleanup)
-			txnOp.AppendEventCallback(client.CommitEvent, client.NewTxnEventCallback(func(_ context.Context, _ client.TxnOperator, event client.TxnEvent, _ any) error {
-				if !event.CostEvent {
-					lease.Stop()
+				if readyCtx.Err() != nil {
+					return cleanupAfterFailure(notReadyErr(), nil)
 				}
-				return nil
-			}))
+				timer := time.NewTimer(iscpDrainRetryInterval)
+				select {
+				case <-readyCtx.Done():
+					timer.Stop()
+					return cleanupAfterFailure(notReadyErr(), nil)
+				case <-timer.C:
+				}
+				continue
+			}
 		}
-		return nil
+
+		fencedRunners[runnerCN] = struct{}{}
+		fencedTargets = append(fencedTargets, target)
+
+		// Start a new bounded readiness generation after every successful drain.
+		// The drain itself may legitimately outlive the previous readiness window.
+		cancel()
+		readyCtx, cancel = context.WithTimeout(c.proc.Ctx, iscpDrainReadyTimeout)
+		defer cancel()
 	}
 	if txnOp := c.proc.GetTxnOperator(); txnOp != nil {
 		lease := startISCPJobFenceLease(func() error {
@@ -389,9 +401,9 @@ func drainIndexCdcTaskConsumer(
 				moerr.NewInternalErrorNoCtx("iscp fence lease renew timeout"),
 			)
 			defer cancel()
-			return sendISCPDrainConsumerRequest(renewCtx, qc, queryAddress, accountID, tableID, jobName, jobID, false, true)
+			return renewISCPDrainTargetFences(renewCtx, fencedTargets, accountID, tableID, jobName, jobID)
 		})
-		cleanup := client.NewTxnEventCallback(func(ctx context.Context, _ client.TxnOperator, event client.TxnEvent, _ any) error {
+		cleanup := client.NewTxnEventCallback(func(_ context.Context, _ client.TxnOperator, event client.TxnEvent, _ any) error {
 			lease.Stop()
 			if !event.CostEvent {
 				return nil
@@ -402,7 +414,7 @@ func drainIndexCdcTaskConsumer(
 				moerr.NewInternalErrorNoCtx("iscp rollback fence cleanup timeout"),
 			)
 			defer cancel()
-			return sendISCPDrainConsumerRequest(cleanupCtx, qc, queryAddress, accountID, tableID, jobName, jobID, true, false)
+			return removeISCPDrainTargetFences(cleanupCtx, fencedTargets, accountID, tableID, jobName, jobID)
 		})
 		txnOp.AppendEventCallback(client.RollbackEvent, cleanup)
 		txnOp.AppendEventCallback(client.CommitEvent, client.NewTxnEventCallback(func(_ context.Context, _ client.TxnOperator, event client.TxnEvent, _ any) error {
@@ -413,6 +425,90 @@ func drainIndexCdcTaskConsumer(
 		}))
 	}
 	return nil
+}
+
+type iscpDrainTarget struct {
+	runnerCN     string
+	exec         *iscp.ISCPTaskExecutor
+	qc           qclient.QueryClient
+	queryAddress string
+}
+
+func renewISCPDrainTargetFences(
+	ctx context.Context,
+	targets []iscpDrainTarget,
+	accountID uint32,
+	tableID uint64,
+	jobName string,
+	jobID uint64,
+) error {
+	key := iscp.NewJobRuntimeKey(accountID, tableID, jobName, jobID)
+	var result error
+	for _, target := range targets {
+		var err error
+		if target.exec != nil {
+			if !target.exec.RenewJobFence(key, iscp.RollbackFenceTTL()) {
+				err = moerr.NewInternalErrorf(
+					ctx,
+					"cannot renew ISCP consumer quiescence fence on CN %s for tableID=%d jobName=%s jobID=%d",
+					target.runnerCN,
+					tableID,
+					jobName,
+					jobID,
+				)
+			}
+		} else {
+			err = sendISCPDrainConsumerRequest(
+				ctx,
+				target.qc,
+				target.queryAddress,
+				accountID,
+				tableID,
+				jobName,
+				jobID,
+				false,
+				true,
+			)
+		}
+		if err != nil {
+			result = errors.Join(result, fmt.Errorf("renew ISCP fence on runner %s: %w", target.runnerCN, err))
+		}
+	}
+	return result
+}
+
+func removeISCPDrainTargetFences(
+	ctx context.Context,
+	targets []iscpDrainTarget,
+	accountID uint32,
+	tableID uint64,
+	jobName string,
+	jobID uint64,
+) error {
+	key := iscp.NewJobRuntimeKey(accountID, tableID, jobName, jobID)
+	var result error
+	for _, target := range targets {
+		var err error
+		if target.exec != nil {
+			target.exec.RemoveJobFence(key)
+		} else {
+			err = sendISCPDrainConsumerRequest(
+				ctx,
+				target.qc,
+				target.queryAddress,
+				accountID,
+				tableID,
+				jobName,
+				jobID,
+				true,
+				false,
+			)
+		}
+		if err != nil {
+			result = errors.Join(result, fmt.Errorf("remove ISCP fence on runner %s: %w", target.runnerCN, err))
+		}
+	}
+	return result
 }
 
 type iscpJobFenceLease struct {
