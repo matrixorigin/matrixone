@@ -82,6 +82,7 @@ jobs:
     if: ${{ needs.check-pr-valid.outputs.pr_valid == 'true' && github.base_ref != '3.0-dev' }}
     uses: matrixorigin/CI/.github/workflows/e2e-compose.yaml@main
     with:
+      enable_parallel_bvt: true
       bvt_group: ${{ needs.bvt-group-plan.outputs.compose_group }}
       bvt_generation: ${{ needs.bvt-group-plan.outputs.generation }}
     secrets: inherit
@@ -92,6 +93,7 @@ jobs:
     if: ${{ needs.check-pr-valid.outputs.pr_valid == 'true' && github.base_ref != '3.0-dev' }}
     uses: matrixorigin/CI/.github/workflows/e2e-standalone.yaml@main
     with:
+      enable_parallel_bvt: true
       bvt_group: ${{ needs.bvt-group-plan.outputs.launch_group }}
       bvt_generation: ${{ needs.bvt-group-plan.outputs.generation }}
     secrets: inherit

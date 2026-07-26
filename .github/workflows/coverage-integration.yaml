@@ -44,6 +44,7 @@ jobs:
     needs: bvt-group-plan
     uses: matrixorigin/CI/.github/workflows/e2e-compose.yaml@xp/ci-two-bvt-coverage
     with:
+      enable_parallel_bvt: true
       bvt_group: ${{ needs.bvt-group-plan.outputs.compose_group }}
       bvt_generation: ${{ needs.bvt-group-plan.outputs.generation }}
     secrets: inherit
@@ -53,6 +54,7 @@ jobs:
     needs: bvt-group-plan
     uses: matrixorigin/CI/.github/workflows/e2e-standalone.yaml@xp/ci-two-bvt-coverage
     with:
+      enable_parallel_bvt: true
       bvt_group: ${{ needs.bvt-group-plan.outputs.launch_group }}
       bvt_generation: ${{ needs.bvt-group-plan.outputs.generation }}
     secrets: inherit
