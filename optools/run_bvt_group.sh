@@ -10,14 +10,15 @@
 # exercised immediately; rebalance the explicit list from collected timing.
 set -euo pipefail
 
-if [[ $# -ne 3 ]]; then
-    echo "Usage: $0 <mo-tester-dir> <case-root> <group-id>" >&2
+if [[ $# -lt 3 || $# -gt 4 ]]; then
+    echo "Usage: $0 <mo-tester-dir> <case-root> <group-id> [resource-dir]" >&2
     exit 2
 fi
 
 tester_dir=$(cd "$1" && pwd)
 case_root=$(cd "$2" && pwd)
 group_id=$3
+resource_dir=${4:-}
 
 if ! [[ "${group_id}" =~ ^[01]$ ]]; then
     echo "BVT group must be 0 or 1; got '${group_id}'" >&2
@@ -25,6 +26,12 @@ if ! [[ "${group_id}" =~ ^[01]$ ]]; then
 fi
 
 declare -a included_scripts=()
+declare -a resource_args=()
+if [[ -n "${resource_dir}" ]]; then
+    resource_dir=$(cd "${resource_dir}" && pwd)
+    resource_args=(-s "${resource_dir}")
+fi
+
 while IFS= read -r script_path; do
     relative_path=${script_path#"${case_root}/"}
     [[ "${relative_path}" == *optimistic* ]] && continue
@@ -56,7 +63,10 @@ fi
 
 include_list=$(IFS=,; echo "${included_scripts[*]}")
 echo "Run BVT group ${group_id}: ${#included_scripts[@]} scripts"
+if [[ -n "${resource_dir}" ]]; then
+    echo "BVT resource directory: ${resource_dir}"
+fi
 printf '%s\n' "${included_scripts[@]}"
 
 cd "${tester_dir}"
-./run.sh -n -g -o -p "${case_root}" -i "${include_list}"
+./run.sh -n -g -o -p "${case_root}" -i "${include_list}" "${resource_args[@]}"

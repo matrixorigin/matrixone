@@ -23,19 +23,12 @@ jobs:
           title_for_find_issue: "Which issue(s) this PR fixes:"
           title_for_find_content: "What this PR does / why we need it:"
 
-  # ============ 非 3.0-dev 分支使用 coverage integration ref ============
+  # ============ 非 3.0-dev 分支使用 @main ============
   matrixone-ci:
     name: Matrixone CI
     needs: check-pr-valid
     if: ${{ needs.check-pr-valid.outputs.pr_valid == 'true' && github.base_ref != '3.0-dev' }}
-    uses: matrixorigin/CI/.github/workflows/ci.yaml@xp/ci-two-bvt-coverage
-    secrets: inherit
-
-  matrixone-ut-coverage:
-    name: Matrixone UT Coverage
-    needs: check-pr-valid
-    if: ${{ needs.check-pr-valid.outputs.pr_valid == 'true' && github.base_ref != '3.0-dev' }}
-    uses: matrixorigin/CI/.github/workflows/coverage-ut.yaml@xp/ci-two-bvt-coverage
+    uses: matrixorigin/CI/.github/workflows/ci.yaml@main
     secrets: inherit
 
   matrixone-upgrade-ci:
@@ -49,30 +42,21 @@ jobs:
     name: Matrixone Compose CI
     needs: check-pr-valid
     if: ${{ needs.check-pr-valid.outputs.pr_valid == 'true' && github.base_ref != '3.0-dev' }}
-    uses: matrixorigin/CI/.github/workflows/e2e-compose.yaml@xp/ci-two-bvt-coverage
+    uses: matrixorigin/CI/.github/workflows/e2e-compose.yaml@main
     secrets: inherit
 
   matrixone-standalone-ci:
     name: Matrixone Standlone CI
     needs: check-pr-valid
     if: ${{ needs.check-pr-valid.outputs.pr_valid == 'true' && github.base_ref != '3.0-dev' }}
-    uses: matrixorigin/CI/.github/workflows/e2e-standalone.yaml@xp/ci-two-bvt-coverage
+    uses: matrixorigin/CI/.github/workflows/e2e-standalone.yaml@main
     secrets: inherit
 
   matrixone-utils-ci:
     name: Matrixone Utils CI
     needs: check-pr-valid
     if: ${{ needs.check-pr-valid.outputs.pr_valid == 'true' && github.base_ref != '3.0-dev' }}
-    uses: matrixorigin/CI/.github/workflows/utils.yaml@xp/ci-two-bvt-coverage
-    secrets: inherit
-
-  matrixone-coverage-merge:
-    name: Matrixone Coverage Merge
-    # Race UT intentionally is not a dependency: it produces no coverage
-    # profile, and must not delay the profile merge.
-    needs: [check-pr-valid, matrixone-ut-coverage, matrixone-compose-ci, matrixone-standalone-ci]
-    if: ${{ always() && needs.check-pr-valid.outputs.pr_valid == 'true' && github.base_ref != '3.0-dev' && !github.event.pull_request.draft && needs.matrixone-ut-coverage.result == 'success' && needs.matrixone-ut-coverage.outputs.coverage_ready == 'true' && needs.matrixone-compose-ci.result == 'success' && needs.matrixone-standalone-ci.result == 'success' }}
-    uses: matrixorigin/CI/.github/workflows/coverage-merge.yaml@xp/ci-two-bvt-coverage
+    uses: matrixorigin/CI/.github/workflows/utils.yaml@main
     secrets: inherit
 
   # ============ 3.0-dev 分支使用 @release/3.0-dev ============
