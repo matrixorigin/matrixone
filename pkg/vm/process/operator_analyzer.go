@@ -21,6 +21,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -735,6 +736,38 @@ type OperatorStats struct {
 	ExtraStats map[string]int64 `json:"ExtraStats,omitempty"`
 
 	BackgroundQueries []*plan.Query `json:"BackgroundQueries,omitempty"`
+}
+
+// CloneForExport detaches the mutable references retained by an execution-plan
+// export. Callers must invoke it after the execution generation has completed
+// and before that generation is reset for reuse.
+func (ps *OperatorStats) CloneForExport() *OperatorStats {
+	if ps == nil {
+		return nil
+	}
+
+	clone := *ps
+	if ps.OperatorMetrics != nil {
+		clone.OperatorMetrics = make(map[MetricType]int64, len(ps.OperatorMetrics))
+		for key, value := range ps.OperatorMetrics {
+			clone.OperatorMetrics[key] = value
+		}
+	}
+	if ps.ExtraStats != nil {
+		clone.ExtraStats = make(map[string]int64, len(ps.ExtraStats))
+		for key, value := range ps.ExtraStats {
+			clone.ExtraStats[key] = value
+		}
+	}
+	if ps.BackgroundQueries != nil {
+		clone.BackgroundQueries = make([]*plan.Query, len(ps.BackgroundQueries))
+		for i, query := range ps.BackgroundQueries {
+			if query != nil {
+				clone.BackgroundQueries[i] = proto.Clone(query).(*plan.Query)
+			}
+		}
+	}
+	return &clone
 }
 
 // ResourceDelta returns the producer facts owned by this analyzer. Operator
