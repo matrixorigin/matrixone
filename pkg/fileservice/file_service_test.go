@@ -47,9 +47,14 @@ func testFileService(
 ) {
 
 	fsName := time.Now().Format("fs-2006-01-02-15-04-05")
+	// Real object-storage specs are part of this shared test suite. Bound the
+	// whole suite, rather than only one subtest, so a remote outage cannot use
+	// the package-level Go test timeout.
+	testCtx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
 
 	t.Run("basic", func(t *testing.T) {
-		ctx := context.Background()
+		ctx := testCtx
 		fs := newFS(fsName)
 		defer fs.Close(ctx)
 
@@ -182,7 +187,7 @@ func testFileService(
 
 	t.Run("WriterForRead", func(t *testing.T) {
 		fs := newFS(fsName)
-		ctx := context.Background()
+		ctx := testCtx
 		defer fs.Close(ctx)
 
 		err := fs.Write(ctx, IOVector{
@@ -233,7 +238,7 @@ func testFileService(
 	})
 
 	t.Run("ReadCloserForRead", func(t *testing.T) {
-		ctx := context.Background()
+		ctx := testCtx
 		fs := newFS(fsName)
 		defer fs.Close(ctx)
 
@@ -313,7 +318,7 @@ func testFileService(
 
 	t.Run("random", func(t *testing.T) {
 		fs := newFS(fsName)
-		ctx := context.Background()
+		ctx := testCtx
 		defer fs.Close(ctx)
 
 		for i := 0; i < 8; i++ {
@@ -443,7 +448,7 @@ func testFileService(
 
 	t.Run("tree", func(t *testing.T) {
 		fs := newFS(fsName)
-		ctx := context.Background()
+		ctx := testCtx
 		defer fs.Close(ctx)
 
 		for _, dir := range []string{
@@ -574,7 +579,7 @@ func testFileService(
 
 	t.Run("errors", func(t *testing.T) {
 		fs := newFS(fsName)
-		ctx := context.Background()
+		ctx := testCtx
 		defer fs.Close(ctx)
 
 		err := fs.Read(ctx, &IOVector{
@@ -678,7 +683,7 @@ func testFileService(
 	})
 
 	t.Run("cache data", func(t *testing.T) {
-		ctx := context.Background()
+		ctx := testCtx
 		fs := newFS(fsName)
 		defer fs.Close(ctx)
 		var counterSet perfcounter.CounterSet
@@ -755,7 +760,7 @@ func testFileService(
 	})
 
 	t.Run("ignore", func(t *testing.T) {
-		ctx := context.Background()
+		ctx := testCtx
 		fs := newFS(fsName)
 		defer fs.Close(ctx)
 
@@ -793,7 +798,7 @@ func testFileService(
 	})
 
 	t.Run("named path", func(t *testing.T) {
-		ctx := context.Background()
+		ctx := testCtx
 		fs := newFS(fsName)
 		defer fs.Close(ctx)
 
@@ -863,7 +868,7 @@ func testFileService(
 	})
 
 	t.Run("issue6110", func(t *testing.T) {
-		ctx := context.Background()
+		ctx := testCtx
 		fs := newFS(fsName)
 		defer fs.Close(ctx)
 
@@ -886,11 +891,7 @@ func testFileService(
 	})
 
 	t.Run("streaming write", func(t *testing.T) {
-		// An object-storage request must not be able to consume the package's
-		// entire Go test timeout. This still leaves enough time for the SDK's
-		// bounded retry policy to recover from a transient remote failure.
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
-		defer cancel()
+		ctx := testCtx
 		fs := newFS(fsName)
 		defer fs.Close(ctx)
 
