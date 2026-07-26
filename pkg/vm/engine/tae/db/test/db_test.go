@@ -13688,6 +13688,7 @@ func TestDumpTableFileNameDecode(t *testing.T) {
 }
 func Test_TmpFileService1(t *testing.T) {
 	ctx := context.Background()
+	var gcEnabled atomic.Bool
 
 	dir := testutils.InitTestEnv(ModuleName, t)
 	tmpFS, err := fileservice.NewTestTmpFileService("TMP", path.Join(dir, "tmp"), time.Millisecond*100)
@@ -13706,6 +13707,12 @@ func Test_TmpFileService1(t *testing.T) {
 	testFS, err := tmpFS.GetOrCreateApp(&fileservice.AppConfig{
 		Name: "test",
 		GCFn: func(filePath string, fs fileservice.FileService) (neesGC bool, err error) {
+			// Keep creation verification independent of scheduler timing. The
+			// periodic GC remains active throughout the test, but it cannot delete
+			// the file until the test has confirmed the write is visible.
+			if !gcEnabled.Load() {
+				return false, nil
+			}
 			createTime, err := decodeNameFn(filePath)
 			if err != nil {
 				return
@@ -13760,6 +13767,7 @@ func Test_TmpFileService1(t *testing.T) {
 
 	files := listFn()
 	assert.Equal(t, 1, len(files), "files are %v", files)
+	gcEnabled.Store(true)
 	testutils.WaitExpect(
 		4000,
 		func() bool {
