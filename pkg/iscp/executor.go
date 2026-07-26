@@ -971,6 +971,12 @@ func (exec *ISCPTaskExecutor) addOrUpdateJob(
 	dropAt types.Timestamp,
 	notPrint bool,
 ) error {
+	// SQL NULL is represented by Timestamp(0) for active jobs. A non-NULL zero
+	// timestamp still means dropped, so normalize it to a GC-safe timestamp.
+	if dropAt == types.ZeroTimestamp {
+		dropAt = types.TimestampMinValue
+	}
+
 	var newCreate bool
 	fenceKey := NewJobRuntimeKey(accountID, tableID, jobName, jobID)
 
