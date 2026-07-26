@@ -49,6 +49,8 @@ type QCloudSDK struct {
 	listMaxKeys          int
 }
 
+const qcloudMultipartAbortTimeout = 30 * time.Second
+
 func NewQCloudSDK(
 	ctx context.Context,
 	args ObjectStorageArguments,
@@ -439,10 +441,20 @@ func (a *QCloudSDK) WriteMultipartParallel(
 
 	defer func() {
 		if err != nil {
-			_, _ = DoWithRetryContext(context.WithoutCancel(parentCtx), "cos abort multipart upload", func() (*cos.Response, error) {
-				return a.client.Object.AbortMultipartUpload(
-					context.WithoutCancel(parentCtx), key, output.UploadID)
-			}, maxRetryAttemps, IsRetryableError)
+			// The upload context is normally canceled on the first part
+			// failure, but abort still needs a live context to remove the
+			// server-side multipart upload. Bound that detached cleanup so a
+			// broken COS endpoint cannot delay the original Write forever.
+			abortCtx, abortCancel := context.WithTimeoutCause(
+				context.WithoutCancel(parentCtx),
+				qcloudMultipartAbortTimeout,
+				context.DeadlineExceeded,
+			)
+			defer abortCancel()
+			if abortErr := a.abortMultipartUpload(abortCtx, key, output.UploadID); abortErr != nil {
+				logutil.Warn("failed to abort cos multipart upload",
+					zap.Error(abortErr))
+			}
 		}
 	}()
 
@@ -593,6 +605,17 @@ func (a *QCloudSDK) WriteMultipartParallel(
 	}
 
 	return nil
+}
+
+func (a *QCloudSDK) abortMultipartUpload(
+	ctx context.Context,
+	key string,
+	uploadID string,
+) error {
+	_, err := DoWithRetryContext(ctx, "cos abort multipart upload", func() (*cos.Response, error) {
+		return a.client.Object.AbortMultipartUpload(ctx, key, uploadID)
+	}, maxRetryAttemps, IsRetryableError)
+	return err
 }
 
 func (a *QCloudSDK) Read(
