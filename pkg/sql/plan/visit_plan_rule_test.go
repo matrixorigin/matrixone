@@ -787,6 +787,34 @@ func TestResetPreparePlanPreservesSubscriptionIdentity(t *testing.T) {
 	require.Equal(t, int32(11), schemas[0].GetPubInfo().GetTenantId())
 }
 
+func TestDecrementParamOrdinalRuleTraversesFunctionsAndLists(t *testing.T) {
+	param := func(pos int32) *planpb.Expr {
+		return &planpb.Expr{Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: pos}}}
+	}
+	first := param(1)
+	second := param(3)
+	expr := &planpb.Expr{Expr: &planpb.Expr_F{F: &planpb.Function{
+		Args: []*planpb.Expr{{
+			Expr: &planpb.Expr_List{List: &planpb.ExprList{
+				List: []*planpb.Expr{first, second},
+			}},
+		}},
+	}}}
+	rule := &decrementParamOrdinalRule{seen: make(map[*planpb.ParamRef]struct{})}
+
+	_, err := rule.ApplyExpr(expr)
+	require.NoError(t, err)
+	require.Equal(t, int32(0), first.GetP().Pos)
+	require.Equal(t, int32(2), second.GetP().Pos)
+
+	_, err = rule.ApplyExpr(first)
+	require.NoError(t, err)
+	require.Equal(t, int32(0), first.GetP().Pos)
+
+	_, err = rule.ApplyExpr(param(0))
+	require.ErrorContains(t, err, "prepared parameter ordinal is not one-based")
+}
+
 func TestResetPreparePlanCollectsHiddenIndexSchemas(t *testing.T) {
 	const hiddenTable = "__mo_index_hidden"
 	mock := NewMockCompilerContext(false)
