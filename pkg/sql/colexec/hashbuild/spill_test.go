@@ -18,6 +18,7 @@ import (
 	"bufio"
 	"context"
 	"io"
+	"math"
 	"os"
 	"testing"
 
@@ -910,15 +911,19 @@ func TestSpillEmergencyBudgetDoesNotDoubleScaleShuffledConstVector(t *testing.T)
 	legacyMetadata, ok := retainedMetadataAllowance(bat)
 	require.True(t, ok)
 	legacyScaled += legacyMetadata * uint64(colexec.DefaultBatchSize)
-	legacyNeed, err := spillBudgetFor(uint64(colexec.DefaultBatchSize), legacyScaled)
+	legacyNeed, err := spillPeakBudgetFor(uint64(colexec.DefaultBatchSize), 0, legacyScaled)
 	require.NoError(t, err)
 	require.Greater(t, legacyNeed, uint64(10<<30),
 		"the old logical-size extrapolation must reproduce the false 10 GiB rejection")
 
-	need, err := spillEmergencyBudgetBytes(bat)
+	directNeed, err := spillBudgetBytes(bat)
 	require.NoError(t, err)
-	require.Less(t, need, uint64(16<<20),
-		"physical admission must not scale a const vector's stale logical length")
+	require.Less(t, directNeed, uint64(16<<20),
+		"direct admission must use the live const materialization")
+	retainedNeed, err := spillRetainedBudgetBytes(bat)
+	require.NoError(t, err)
+	require.Less(t, retainedNeed, uint64(16<<20),
+		"retained admission must not scale a const vector's stale logical length")
 
 	// The corrected estimate must still cover the physical 8192-row batch that
 	// CopyIntoBatches can form from repeated one-row ingress batches.
@@ -934,9 +939,9 @@ func TestSpillEmergencyBudgetDoesNotDoubleScaleShuffledConstVector(t *testing.T)
 	full.SetRowCount(colexec.DefaultBatchSize)
 	defer full.Clean(proc.Mp())
 
-	fullNeed, err := spillBudgetBytes(full)
+	fullNeed, err := spillScratchBudgetBytes(full, true)
 	require.NoError(t, err)
-	require.GreaterOrEqual(t, need, fullNeed)
+	require.GreaterOrEqual(t, retainedNeed, fullNeed)
 }
 
 func TestSpillEmergencyBudgetDoesNotScaleRetainedVectorCapacity(t *testing.T) {
@@ -964,10 +969,13 @@ func TestSpillEmergencyBudgetDoesNotScaleRetainedVectorCapacity(t *testing.T) {
 	bat.SetRowCount(1)
 	require.Greater(t, bat.Allocated(), 1<<20)
 
-	need, err := spillEmergencyBudgetBytes(bat)
+	directNeed, err := spillBudgetBytes(bat)
 	require.NoError(t, err)
-	require.Less(t, need, uint64(16<<20),
+	require.Less(t, directNeed, uint64(16<<20),
 		"retained source capacity must be charged once, not extrapolated per live row")
+	retainedNeed, err := spillRetainedBudgetBytes(bat)
+	require.NoError(t, err)
+	require.Less(t, retainedNeed, uint64(16<<20))
 
 	budget := process.MustNewHashBuildBudget(10<<30, 10<<30)
 	generation, err := budget.OpenGeneration(1)
@@ -977,8 +985,9 @@ func TestSpillEmergencyBudgetDoesNotScaleRetainedVectorCapacity(t *testing.T) {
 	ctr.hashmapBuilder.setBudget(generation)
 	defer ctr.releaseSpillScratchReservation()
 	analyzer := process.NewAnalyzer(0, false, false, "test")
-	require.NoError(t, ctr.ensureSpillScratchReservation(bat, analyzer))
-	require.Equal(t, need, ctr.spillScratchBase)
+	require.NoError(t, ctr.ensureDirectSpillScratchReservation(bat, analyzer))
+	require.NoError(t, ctr.ensureRetainedSpillScratchReservation(bat, analyzer))
+	require.Equal(t, max(directNeed, retainedNeed), ctr.spillScratchBase)
 	require.Zero(t, generation.Snapshot().RejectCount)
 
 	full := batch.NewWithSize(2)
@@ -993,9 +1002,9 @@ func TestSpillEmergencyBudgetDoesNotScaleRetainedVectorCapacity(t *testing.T) {
 	full.SetRowCount(colexec.DefaultBatchSize)
 	defer full.Clean(proc.Mp())
 
-	fullNeed, err := spillBudgetBytes(full)
+	fullNeed, err := spillScratchBudgetBytes(full, true)
 	require.NoError(t, err)
-	require.GreaterOrEqual(t, need, fullNeed)
+	require.GreaterOrEqual(t, retainedNeed, fullNeed)
 }
 
 func TestSpillProjectedSourceSkipsStaleNullVarlenaPayload(t *testing.T) {
@@ -1016,41 +1025,211 @@ func TestSpillProjectedSourceSkipsStaleNullVarlenaPayload(t *testing.T) {
 
 	targetRows := uint64(colexec.DefaultBatchSize)
 	legacySource := targetRows * (uint64(bat.Vecs[0].GetType().TypeSize()) + uint64(staleLen))
-	legacyNeed, err := spillBudgetFor(targetRows, legacySource)
+	legacyNeed, err := spillPeakBudgetFor(targetRows, 0, legacySource)
 	require.NoError(t, err)
 	require.Greater(t, legacyNeed, uint64(10<<30),
 		"stale null payload would falsely exceed the query budget")
 
-	source, err := spillProjectedSourceBytes(bat, targetRows)
+	source, err := spillMaterializedBytes(bat, targetRows, spillRetainedMaterialization)
 	require.NoError(t, err)
 	require.Equal(t, targetRows*uint64(bat.Vecs[0].GetType().TypeSize()), source)
 
-	need, err := spillEmergencyBudgetBytes(bat)
+	need, err := spillRetainedBudgetBytes(bat)
 	require.NoError(t, err)
 	require.Less(t, need, uint64(16<<20))
 }
 
-func TestSpillProjectedSourceBoundaryInputs(t *testing.T) {
-	source, err := spillProjectedSourceBytes(nil, colexec.DefaultBatchSize)
+func TestSpillMaterializedBytesBoundaryInputs(t *testing.T) {
+	source, err := spillMaterializedBytes(nil, colexec.DefaultBatchSize, spillRetainedMaterialization)
 	require.NoError(t, err)
 	require.Zero(t, source)
 
 	invalid := batch.NewWithSize(1)
 	invalid.SetRowCount(1)
-	_, err = spillProjectedSourceBytes(invalid, colexec.DefaultBatchSize)
+	_, err = spillMaterializedBytes(invalid, colexec.DefaultBatchSize, spillRetainedMaterialization)
+	require.ErrorIs(t, err, process.ErrHashBuildBudgetInvalid)
+	_, err = spillBudgetBytes(invalid)
+	require.ErrorIs(t, err, process.ErrHashBuildBudgetInvalid)
+	_, err = spillRetainedBudgetBytes(invalid)
 	require.ErrorIs(t, err, process.ErrHashBuildBudgetInvalid)
 
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
+	short := batch.NewWithSize(1)
+	short.Vecs[0] = testutil.MakeVarcharVector([]string{"x"}, nil, proc.Mp())
+	short.SetRowCount(2)
+	defer short.Clean(proc.Mp())
+	_, err = spillMaterializedBytes(short, 2, spillDirectMaterialization)
+	require.ErrorIs(t, err, process.ErrHashBuildBudgetInvalid)
+
 	constNull := batch.NewWithSize(1)
 	constNull.Vecs[0] = vector.NewConstNull(types.T_varchar.ToType(), 1, proc.Mp())
 	constNull.SetRowCount(1)
 	defer constNull.Clean(proc.Mp())
 
 	targetRows := uint64(colexec.DefaultBatchSize)
-	source, err = spillProjectedSourceBytes(constNull, targetRows)
+	source, err = spillMaterializedBytes(constNull, targetRows, spillRetainedMaterialization)
 	require.NoError(t, err)
 	require.Equal(t, targetRows*uint64(types.T_varchar.ToType().TypeSize()), source)
+}
+
+func TestSpillBudgetArithmeticFailsClosed(t *testing.T) {
+	value, err := spillCheckedAdd(math.MaxUint64-1, 1)
+	require.NoError(t, err)
+	require.Equal(t, uint64(math.MaxUint64), value)
+	_, err = spillCheckedAdd(math.MaxUint64, 1)
+	require.ErrorIs(t, err, process.ErrHashBuildBudgetInvalid)
+
+	value, err = spillCheckedMul(math.MaxUint64, 1)
+	require.NoError(t, err)
+	require.Equal(t, uint64(math.MaxUint64), value)
+	_, err = spillCheckedMul(math.MaxUint64, 2)
+	require.ErrorIs(t, err, process.ErrHashBuildBudgetInvalid)
+
+	_, err = spillPeakBudgetFor(math.MaxUint64, 0, 0)
+	require.ErrorIs(t, err, process.ErrHashBuildBudgetInvalid)
+	_, err = spillPeakBudgetFor(0, math.MaxUint64, 1)
+	require.ErrorIs(t, err, process.ErrHashBuildBudgetInvalid)
+	_, err = spillPeakBudgetFor(0, 0, math.MaxUint64)
+	require.ErrorIs(t, err, process.ErrHashBuildBudgetInvalid)
+}
+
+func TestSpillReservationBoundaryInputs(t *testing.T) {
+	analyzer := process.NewAnalyzer(0, false, false, "spill reservation boundary")
+	ctr := &container{}
+	require.NoError(t, ctr.ensureSpillScratchReservationBytes(1, analyzer),
+		"an operator without a query budget does not need a token")
+
+	budget := process.MustNewHashBuildBudget(1, 1)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	defer generation.Close()
+	ctr.hashmapBuilder.setBudget(generation)
+	require.NoError(t, ctr.ensureSpillScratchReservationBytes(0, analyzer))
+	require.Nil(t, ctr.spillScratchReservation)
+
+	invalid := batch.NewWithSize(1)
+	invalid.SetRowCount(1)
+	err = ctr.ensureDirectSpillScratchReservation(invalid, analyzer)
+	require.ErrorIs(t, err, process.ErrHashBuildBudgetInvalid)
+	err = ctr.ensureRetainedSpillScratchReservation(invalid, analyzer)
+	require.ErrorIs(t, err, process.ErrHashBuildBudgetInvalid)
+	require.Zero(t, generation.Used())
+}
+
+func TestSpillMaterializedBytesFollowsConstUnionSemantics(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	payload := make([]byte, 1<<20)
+	for i := range payload {
+		payload[i] = 'x'
+	}
+	const rows = 64
+	source := batch.NewWithSize(1)
+	var err error
+	source.Vecs[0], err = vector.NewConstBytes(types.T_varchar.ToType(), payload, rows, proc.Mp())
+	require.NoError(t, err)
+	source.SetRowCount(rows)
+	defer source.Clean(proc.Mp())
+
+	directBytes, err := spillMaterializedBytes(source, rows, spillDirectMaterialization)
+	require.NoError(t, err)
+	require.Equal(t,
+		uint64(rows*types.T_varchar.ToType().TypeSize()+len(payload)),
+		directBytes,
+		"direct UnionInt32 copies one payload and broadcasts its descriptor")
+
+	selected := batch.NewWithSize(1)
+	selected.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	defer selected.Clean(proc.Mp())
+	sels := make([]int32, rows)
+	for i := range sels {
+		sels[i] = int32(i)
+	}
+	require.NoError(t, selected.Vecs[0].PreExtend(rows, proc.Mp()))
+	require.NoError(t, selected.Vecs[0].UnionInt32(source.Vecs[0], sels, proc.Mp()))
+	selected.SetRowCount(rows)
+	require.GreaterOrEqual(t, directBytes, uint64(selected.Allocated()))
+
+	retainedBytes, err := spillMaterializedBytes(source, rows, spillRetainedMaterialization)
+	require.NoError(t, err)
+	require.Equal(t,
+		uint64(rows)*(uint64(types.T_varchar.ToType().TypeSize())+uint64(len(payload))),
+		retainedBytes,
+		"CopyIntoBatches removes constness, so future selection copies each retained value")
+	require.Greater(t, retainedBytes, directBytes*32)
+}
+
+func TestSpillRetainedEstimateCoversCopyIntoBatchesConstMaterialization(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	payload := make([]byte, 1<<10)
+	for i := range payload {
+		payload[i] = 'x'
+	}
+	const (
+		inputRows = 4
+		totalRows = inputRows * 2
+	)
+	source := batch.NewWithSize(1)
+	var err error
+	source.Vecs[0], err = vector.NewConstBytes(types.T_varchar.ToType(), payload, inputRows, proc.Mp())
+	require.NoError(t, err)
+	source.SetRowCount(inputRows)
+	defer source.Clean(proc.Mp())
+
+	var retained colexec.Batches
+	defer retained.Clean(proc.Mp())
+	require.NoError(t, retained.CopyIntoBatches(source, proc))
+	require.NoError(t, retained.CopyIntoBatches(source, proc))
+	require.Len(t, retained.Buf, 1)
+	require.Equal(t, totalRows, retained.Buf[0].RowCount())
+	require.False(t, retained.Buf[0].Vecs[0].IsConst(),
+		"CopyIntoBatches materializes const ingress as retained row values")
+
+	estimated, err := spillMaterializedBytes(source, totalRows, spillRetainedMaterialization)
+	require.NoError(t, err)
+	selected := batch.NewWithSize(1)
+	selected.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	defer selected.Clean(proc.Mp())
+	sels := make([]int32, totalRows)
+	for i := range sels {
+		sels[i] = int32(i)
+	}
+	require.NoError(t, selected.Vecs[0].PreExtend(totalRows, proc.Mp()))
+	require.NoError(t, selected.Vecs[0].UnionInt32(retained.Buf[0].Vecs[0], sels, proc.Mp()))
+	selected.SetRowCount(totalRows)
+	require.GreaterOrEqual(t, estimated, uint64(selected.Allocated()))
+}
+
+func TestEnsureDirectSpillReservationFailsClosed(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 2, 3, 4}, nil, proc.Mp())
+	bat.SetRowCount(4)
+	defer bat.Clean(proc.Mp())
+
+	need, err := spillBudgetBytes(bat)
+	require.NoError(t, err)
+	require.Positive(t, need)
+	budget := process.MustNewHashBuildBudget(need-1, need-1)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	defer generation.Close()
+
+	ctr := &container{}
+	ctr.hashmapBuilder.setBudget(generation)
+	err = ctr.ensureDirectSpillScratchReservation(
+		bat,
+		process.NewAnalyzer(0, false, false, "direct spill reject"),
+	)
+	require.ErrorIs(t, err, process.ErrHashBuildBudgetAdmission)
+	require.Nil(t, ctr.spillScratchReservation)
+	require.Zero(t, generation.Used())
 }
 
 func TestEnsureSpillFile(t *testing.T) {
