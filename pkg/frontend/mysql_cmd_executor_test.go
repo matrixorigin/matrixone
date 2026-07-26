@@ -6441,3 +6441,31 @@ func TestFreshPreparedCloneStatement(t *testing.T) {
 
 	require.Empty(t, preparedCloneSQL(&tree.Select{}, "prepare_db"))
 }
+
+func TestPreparedCloneSQLUsesRemappedDefaultDatabase(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	execCtx := newTestExecCtx(ctx, ctrl)
+	execCtx.ses = ses
+	execCtx.remapDb = map[string]string{"source_db": "remapped_db"}
+	ses.GetTxnCompileCtx().SetExecCtx(execCtx)
+	ses.GetTxnCompileCtx().SetDatabase("source_db")
+
+	clone := &tree.CloneTable{}
+	clone.SrcTable.ObjectName = "src"
+	clone.CreateTable.Table.ObjectName = "dst"
+	cloneSQL := preparedCloneSQL(clone, ses.GetTxnCompileCtx().DefaultDatabase())
+
+	stmts, err := mysql.Parse(ctx, cloneSQL, 1)
+	require.NoError(t, err)
+	require.Len(t, stmts, 1)
+	defer stmts[0].Free()
+
+	parsed := stmts[0].(*tree.CloneTable)
+	require.Equal(t, tree.Identifier("remapped_db"), parsed.SrcTable.SchemaName)
+	require.Equal(t, tree.Identifier("remapped_db"), parsed.CreateTable.Table.SchemaName)
+	require.True(t, parsed.SrcTable.ExplicitSchema)
+	require.True(t, parsed.CreateTable.Table.ExplicitSchema)
+	require.Equal(t, "source_db", ses.GetTxnCompileCtx().GetDatabase())
+}

@@ -1887,7 +1887,7 @@ func createPrepareStmt(
 		ses.GetTxnCompileCtx().SetExecCtx(execCtx)
 	}
 
-	cloneSQL := preparedCloneSQL(saveStmt, ses.GetTxnCompileCtx().GetDatabase())
+	cloneSQL := preparedCloneSQL(saveStmt, ses.GetTxnCompileCtx().DefaultDatabase())
 	var preparePlan *plan.Plan
 	err := execCtx.withRootSQL(originSQL, func() (err error) {
 		preparePlan, err = buildPlanWithAuthorization(execCtx.reqCtx, ses, ses.GetTxnCompileCtx(), stmt)
