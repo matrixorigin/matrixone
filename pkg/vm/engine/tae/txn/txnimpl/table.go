@@ -815,6 +815,7 @@ func (tbl *txnTable) createCommittedAppendableObject(opts *objectio.CreateObjOpt
 	if !opts.Stats.GetAppendable() {
 		return nil, moerr.NewInternalErrorNoCtx("CreateObject outside txn only supports appendable object")
 	}
+	txn := tbl.store.txn
 	baseTxn, ok := tbl.store.txn.GetBase().(*txnbase.Txn)
 	if !ok || baseTxn.Mgr == nil {
 		return nil, moerr.NewInternalErrorNoCtx("missing txn manager for appendable object create")
@@ -824,6 +825,22 @@ func (tbl *txnTable) createCommittedAppendableObject(opts *objectio.CreateObjOpt
 		factory = tbl.store.catalog.DataFactory.MakeObjectFactory()
 	}
 	var meta *catalog.ObjectEntry
+	if txn.GetTxnState(false) == txnif.TxnStatePreparing {
+		// Flush and merge may transfer deletes after the parent transaction has
+		// entered PrepareCommit.  The append rows are still owned by that
+		// transaction, but allocating a fresh create timestamp for each
+		// appendable object would make the rewritten data visible before all of
+		// its tombstones.  Keep the catalog entry outside the transaction while
+		// aligning its visibility with the parent transaction. The append MVCC
+		// node still makes readers crossing this timestamp wait for the parent,
+		// and WAL replay reconstructs the object from that append at the same TS.
+		meta, err = tbl.entry.CreateCommittedObject(txn.GetPrepareTS(), opts, factory)
+		if err != nil {
+			return
+		}
+		obj = newObject(tbl, meta)
+		return
+	}
 	_, err = baseTxn.Mgr.AllocateAndPublishCommitTS(func(createTS types.TS) error {
 		meta, err = tbl.entry.CreateCommittedObject(createTS, opts, factory)
 		return err
