@@ -15,6 +15,7 @@
 package logutil
 
 import (
+	"strings"
 	"sync"
 	"time"
 
@@ -24,6 +25,9 @@ import (
 
 const (
 	overflowEvent = "event-budget-overflow"
+	// maxEventNameBytes keeps the retained limiter key space bounded even when
+	// a caller mistakenly derives an Event name from untrusted input.
+	maxEventNameBytes = 128
 
 	FieldEvent             = "event"
 	FieldOccurrence        = "occurrence"
@@ -31,9 +35,9 @@ const (
 	FieldRateLimitOverflow = "event-budget-overflow"
 )
 
-// RateLimitConfig governs a single stable event population. SampleInterval is
-// retained for source compatibility only; a count-only sample is not an output
-// budget and must not be used to bypass Interval.
+// RateLimitConfig governs a single stable event population. Event APIs use a
+// strict time budget; SampleInterval is honored only by the legacy
+// RateLimitedLogger adapter for compatibility with its existing callers.
 type RateLimitConfig struct {
 	Interval       time.Duration
 	BurstCount     int
@@ -68,8 +72,9 @@ type EventRateLimiter struct {
 		states   map[string]*rateLimitState
 		overflow rateLimitState
 	}
-	maxKeys int
-	now     func() time.Time
+	maxKeys     int
+	maxKeyBytes int
+	now         func() time.Time
 }
 
 type RateLimitDecision struct {
@@ -83,12 +88,24 @@ func NewEventRateLimiter(config RateLimitedLoggerConfig) *EventRateLimiter {
 	if config.MaxKeys <= 0 {
 		config.MaxKeys = DefaultRateLimitedLoggerConfig.MaxKeys
 	}
-	limiter := &EventRateLimiter{maxKeys: config.MaxKeys, now: time.Now}
+	limiter := &EventRateLimiter{
+		maxKeys:     config.MaxKeys,
+		maxKeyBytes: maxEventNameBytes,
+		now:         time.Now,
+	}
 	limiter.mu.states = make(map[string]*rateLimitState)
 	return limiter
 }
 
 func (l *EventRateLimiter) Allow(key string, config RateLimitConfig) (RateLimitDecision, bool) {
+	return l.allow(key, config, false)
+}
+
+func (l *EventRateLimiter) allowLegacy(key string, config RateLimitConfig) (RateLimitDecision, bool) {
+	return l.allow(key, config, true)
+}
+
+func (l *EventRateLimiter) allow(key string, config RateLimitConfig, allowSampleInterval bool) (RateLimitDecision, bool) {
 	config = config.normalized()
 	if key == "" {
 		key = "unknown"
@@ -98,7 +115,11 @@ func (l *EventRateLimiter) Allow(key string, config RateLimitConfig) (RateLimitD
 	state, overflow := l.stateLocked(key)
 	state.count++
 	now := l.now()
-	if state.count > int64(config.BurstCount) && now.Sub(state.lastLog) < config.Interval {
+	shouldLog := state.count <= int64(config.BurstCount) || now.Sub(state.lastLog) >= config.Interval
+	if allowSampleInterval && config.SampleInterval > 0 && state.count%int64(config.SampleInterval) == 0 {
+		shouldLog = true
+	}
+	if !shouldLog {
 		state.suppressed++
 		return RateLimitDecision{}, false
 	}
@@ -117,6 +138,9 @@ func (l *EventRateLimiter) Allow(key string, config RateLimitConfig) (RateLimitD
 }
 
 func (l *EventRateLimiter) stateLocked(key string) (*rateLimitState, bool) {
+	if len(key) > l.maxKeyBytes {
+		return &l.mu.overflow, true
+	}
 	if state := l.mu.states[key]; state != nil {
 		return state, false
 	}
@@ -124,7 +148,9 @@ func (l *EventRateLimiter) stateLocked(key string) (*rateLimitState, bool) {
 		return &l.mu.overflow, true
 	}
 	state := &rateLimitState{}
-	l.mu.states[key] = state
+	// Copy before retaining. A short substring can otherwise keep a much
+	// larger caller-owned backing buffer alive for the lifetime of this state.
+	l.mu.states[strings.Clone(key)] = state
 	return state, false
 }
 
@@ -203,7 +229,7 @@ func (l *RateLimitedLogger) log(key string, level zapcore.Level, msg string, con
 	if !l.callerSkipLogger.Core().Enabled(level) {
 		return
 	}
-	decision, ok := l.limiter.Allow(key, config)
+	decision, ok := l.limiter.allowLegacy(key, config)
 	if !ok {
 		return
 	}

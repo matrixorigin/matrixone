@@ -58,7 +58,7 @@ func (e Event) logLazy(level zapcore.Level, build EventFieldBuilder) bool {
 	if !logger.Core().Enabled(level) {
 		return false
 	}
-	decision, ok := globalEventBudget.Allow(e.Name, DefaultRateLimitConfig)
+	decision, ok := AllowEvent(e.Name, DefaultRateLimitConfig)
 	if !ok {
 		return false
 	}
@@ -74,7 +74,7 @@ func (e Event) log(level zapcore.Level, fields []zap.Field) bool {
 	if !logger.Core().Enabled(level) {
 		return false
 	}
-	decision, ok := globalEventBudget.Allow(e.Name, DefaultRateLimitConfig)
+	decision, ok := AllowEvent(e.Name, DefaultRateLimitConfig)
 	if !ok {
 		return false
 	}
@@ -88,6 +88,13 @@ func (e Event) write(logger *zap.Logger, level zapcore.Level, decision RateLimit
 		return true
 	}
 	return false
+}
+
+// AllowEvent acquires the process-wide budget used by all Event APIs,
+// including MOLogger Event methods. It intentionally ignores SampleInterval:
+// an Event budget must not be bypassed by a count-only sample.
+func AllowEvent(name string, config RateLimitConfig) (RateLimitDecision, bool) {
+	return globalEventBudget.Allow(name, config)
 }
 
 // globalEventBudget has bounded state so a programming error that uses a

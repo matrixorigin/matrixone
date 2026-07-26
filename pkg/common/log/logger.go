@@ -77,14 +77,9 @@ func (l *MOLogger) WithContext(ctx context.Context) *MOLogger {
 }
 
 func newMOLogger(logger *zap.Logger, ctx context.Context) *MOLogger {
-	return newMOLoggerWithLimiter(logger, ctx, logutil.NewEventRateLimiter(logutil.DefaultRateLimitedLoggerConfig))
-}
-
-func newMOLoggerWithLimiter(logger *zap.Logger, ctx context.Context, limiter *logutil.EventRateLimiter) *MOLogger {
 	return &MOLogger{
-		logger:  logger,
-		ctx:     ctx,
-		limiter: limiter,
+		logger: logger,
+		ctx:    ctx,
 		m: map[int]*zap.Logger{
 			1: logger.WithOptions(zap.AddCallerSkip(1)),
 			2: logger.WithOptions(zap.AddCallerSkip(2)),
@@ -94,7 +89,7 @@ func newMOLoggerWithLimiter(logger *zap.Logger, ctx context.Context, limiter *lo
 }
 
 func (l *MOLogger) derive(logger *zap.Logger, ctx context.Context) *MOLogger {
-	return newMOLoggerWithLimiter(logger, ctx, l.limiter)
+	return newMOLogger(logger, ctx)
 }
 
 // WithProcess if the current log belongs to a certain process, the process name and process ID
@@ -185,7 +180,7 @@ func (l *MOLogger) logEventLazy(event logutil.Event, opts LogOptions, build logu
 	if !l.Enabled(opts.level) {
 		return false
 	}
-	decision, ok := l.limiter.Allow(event.Name, logutil.DefaultRateLimitConfig)
+	decision, ok := logutil.AllowEvent(event.Name, logutil.DefaultRateLimitConfig)
 	if !ok {
 		return false
 	}
@@ -200,7 +195,7 @@ func (l *MOLogger) logEvent(event logutil.Event, opts LogOptions, config logutil
 	if !l.Enabled(opts.level) {
 		return false
 	}
-	decision, ok := l.limiter.Allow(event.Name, config)
+	decision, ok := logutil.AllowEvent(event.Name, config)
 	if !ok {
 		return false
 	}
@@ -237,13 +232,16 @@ func (l *MOLogger) logRaw(msg string, opts LogOptions, fields ...zap.Field) bool
 		logger = l.logger
 	}
 	if ce := logger.Check(opts.level, msg); ce != nil {
-		// Start from a copy so adding contextual fields never mutates the
-		// caller's backing array. Avoid a combined capacity calculation here:
-		// both slices are externally supplied and their lengths can be large.
-		out := append([]zap.Field(nil), fields...)
-		out = append(out, opts.fields...)
-		if opts.ctx != nil {
-			out = append(out, trace.ContextField(opts.ctx))
+		out := fields
+		if len(opts.fields) > 0 || opts.ctx != nil {
+			// Copy only when adding contextual fields. This keeps the legacy
+			// hot path allocation-free while ensuring appends never mutate a
+			// caller-owned backing array.
+			out = append([]zap.Field(nil), fields...)
+			out = append(out, opts.fields...)
+			if opts.ctx != nil {
+				out = append(out, trace.ContextField(opts.ctx))
+			}
 		}
 
 		ce.Write(out...)

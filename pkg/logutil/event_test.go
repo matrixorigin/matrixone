@@ -100,6 +100,20 @@ func TestEventBudgetUsesOneBoundedOverflowPopulation(t *testing.T) {
 	require.Equal(t, true, fields["event-budget-overflow"])
 }
 
+func TestEventBudgetRejectsOversizedNameBeforeStateRetention(t *testing.T) {
+	limiter := NewEventRateLimiter(RateLimitedLoggerConfig{MaxKeys: 1})
+	oversizedName := strings.Repeat("x", 1<<20)
+
+	decision, ok := limiter.Allow(oversizedName, RateLimitConfig{
+		Interval:   time.Hour,
+		BurstCount: 1,
+	})
+	require.True(t, ok)
+	require.True(t, decision.Overflow)
+	require.Equal(t, overflowEvent, decision.Event)
+	require.Zero(t, limiter.StateCount())
+}
+
 func TestEventBudgetIsBoundedUnderConcurrentCalls(t *testing.T) {
 	core, observed := observer.New(zap.InfoLevel)
 	withEventTestState(t, zap.New(core))
@@ -159,4 +173,29 @@ func TestFingerprintFieldsDoNotWriteRawValues(t *testing.T) {
 	require.Contains(t, output.String(), "error-sha256")
 	require.NotContains(t, output.String(), "do-not-retain")
 	require.True(t, strings.Contains(output.String(), FieldEvent))
+}
+
+func TestConnectionCloseEventsKeepOperationsAndOutcomesIndependent(t *testing.T) {
+	core, observed := observer.New(zap.DebugLevel)
+	withEventTestState(t, zap.New(core))
+	readEvents := ConnectionCloseEvents{
+		Expected: Event{Name: "test.connection.read.expected", Message: "session read closed during normal lifecycle"},
+		Failed:   Event{Name: "test.connection.read.failed", Message: "session read failed"},
+	}
+	handleEvents := ConnectionCloseEvents{
+		Expected: Event{Name: "test.connection.handle.expected", Message: "session handle closed during normal lifecycle"},
+		Failed:   Event{Name: "test.connection.handle.failed", Message: "session handle failed"},
+	}
+
+	for range 3 {
+		LogConnectionCloseEvent(readEvents, errors.New("read failed"))
+	}
+	LogConnectionCloseEvent(handleEvents, errors.New("handle failed"))
+	LogConnectionCloseEvent(readEvents, errors.New("use of closed network connection"))
+
+	entries := observed.All()
+	require.Len(t, entries, 5)
+	require.Equal(t, handleEvents.Failed.Name, entries[3].ContextMap()[FieldEvent])
+	require.Equal(t, readEvents.Expected.Name, entries[4].ContextMap()[FieldEvent])
+	require.NotContains(t, entries[3].ContextMap(), "operation-sha256")
 }
