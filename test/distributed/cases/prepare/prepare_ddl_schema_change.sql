@@ -256,6 +256,16 @@ execute local_ddl_stmt;
 deallocate prepare local_ddl_stmt;
 rollback;
 
+create table rollback_prepared_schema (a int);
+insert into rollback_prepared_schema values (1);
+prepare rollback_schema_stmt from 'select * from rollback_prepared_schema';
+begin;
+alter table rollback_prepared_schema add column b int;
+execute rollback_schema_stmt;
+rollback;
+execute rollback_schema_stmt;
+deallocate prepare rollback_schema_stmt;
+
 create table clone_generation_src (id int);
 begin;
 prepare clone_generation_stmt from

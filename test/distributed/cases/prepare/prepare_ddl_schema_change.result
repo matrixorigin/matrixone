@@ -299,6 +299,19 @@ execute local_ddl_stmt;
 Duplicate column name 'note'
 deallocate prepare local_ddl_stmt;
 rollback;
+create table rollback_prepared_schema (a int);
+insert into rollback_prepared_schema values (1);
+prepare rollback_schema_stmt from 'select * from rollback_prepared_schema';
+begin;
+alter table rollback_prepared_schema add column b int;
+execute rollback_schema_stmt;
+➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  null
+rollback;
+execute rollback_schema_stmt;
+➤ a[4,32,0]  𝄀
+1
+deallocate prepare rollback_schema_stmt;
 create table clone_generation_src (id int);
 begin;
 prepare clone_generation_stmt from

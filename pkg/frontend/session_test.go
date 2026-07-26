@@ -257,6 +257,7 @@ func TestTxnHandler_RollbackTxn(t *testing.T) {
 		txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
 		wp := mock_frontend.NewMockWorkspace(ctrl)
 		wp.EXPECT().RollbackLastStatement(gomock.Any()).Return(moerr.NewInternalError(ctx, "rollback last stmt")).AnyTimes()
+		wp.EXPECT().GetHaveDDL().Return(false).AnyTimes()
 		txnOperator.EXPECT().GetWorkspace().Return(wp).AnyTimes()
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 		eng := mock_frontend.NewMockEngine(ctrl)

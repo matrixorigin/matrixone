@@ -581,6 +581,7 @@ func (th *TxnHandler) commitUnsafe(execCtx *ExecCtx) error {
 		execCtx.ses.EnterFPrint(FPCommitUnsafeBeforeCommitWithTxn)
 		defer execCtx.ses.ExitFPrint(FPCommitUnsafeBeforeCommitWithTxn)
 		commitTs := th.txnOp.Txn().CommitTS
+		haveDDL := th.txnOp.GetWorkspace().GetHaveDDL()
 		execCtx.ses.SetTxnId(th.txnOp.Txn().ID)
 		commitResultUnknown := false
 		err, hasRecovered = ExecuteFuncWithRecover(func() error {
@@ -600,6 +601,7 @@ func (th *TxnHandler) commitUnsafe(execCtx *ExecCtx) error {
 					err = errors.Join(err, moerr.AttachCause(ctx2, err2))
 				}
 			}
+			advanceDDLVersionAfterDiscardedTxnDDL(execCtx.ses, haveDDL)
 			if !commitResultUnknown {
 				th.invalidateTxnUnsafe()
 			}
@@ -755,17 +757,32 @@ func (th *TxnHandler) rollbackUnsafe(
 		execCtx.ses.EnterFPrint(FPRollbackUnsafeBeforeRollbackWithTxn)
 		defer execCtx.ses.ExitFPrint(FPRollbackUnsafeBeforeRollbackWithTxn)
 		execCtx.ses.SetTxnId(th.txnOp.Txn().ID)
+		haveDDL := th.txnOp.GetWorkspace().GetHaveDDL()
 		err, hasRecovered = ExecuteFuncWithRecover(func() error {
 			return th.txnOp.Rollback(ctx2)
 		})
 		if err != nil || hasRecovered {
 			err = moerr.AttachCause(ctx2, err)
 			th.invalidateTxnUnsafe()
+		} else {
+			advanceDDLVersionAfterDiscardedTxnDDL(execCtx.ses, haveDDL)
 		}
 	}
 	th.invalidateTxnUnsafe()
 	execCtx.ses.SetTxnId(dumpUUID[:])
 	return err
+}
+
+func advanceDDLVersionAfterDiscardedTxnDDL(ses FeSession, haveDDL bool) {
+	if !haveDDL {
+		return
+	}
+	if session, ok := ses.(*Session); ok {
+		// Plans rebuilt against transaction-local DDL must not survive the
+		// rollback or failed terminal outcome of the workspace that supplied
+		// their schema.
+		session.advanceDDLVersion()
+	}
 }
 
 /*
