@@ -339,8 +339,17 @@ func (b *baseBinder) baseBindParam(astExpr *tree.ParamExpr, depth int32, isRoot 
 
 func (b *baseBinder) baseBindVar(astExpr *tree.VarExpr, depth int32, isRoot bool) (expr *plan.Expr, err error) {
 	typ := types.T_text.ToType()
-	if !b.builder.isPrepareStatement && !astExpr.System {
+	if b.builder != nil && !b.builder.isPrepareStatement && !astExpr.System {
 		if resolver, ok := b.builder.compCtx.(interface {
+			ResolveVariableWithType(string, bool, bool) (any, types.Type, error)
+		}); ok {
+			_, resolvedType, resolveErr := resolver.ResolveVariableWithType(
+				astExpr.Name, astExpr.System, astExpr.Global,
+			)
+			if resolveErr == nil && resolvedType.Oid != types.T_any {
+				typ = resolvedType
+			}
+		} else if resolver, ok := b.builder.compCtx.(interface {
 			ResolveVariableWithNumericString(string, bool, bool) (any, bool, error)
 		}); ok {
 			value, numericString, resolveErr := resolver.ResolveVariableWithNumericString(
@@ -2295,6 +2304,30 @@ func combinePlanExprsBalanced(ctx context.Context, op string, exprs []*plan.Expr
 	return level[0], nil
 }
 
+func normalizeExpandedBoolNumericComparison(
+	ctx context.Context,
+	left *plan.Expr,
+	right *plan.Expr,
+) (*plan.Expr, *plan.Expr, error) {
+	leftType := makeTypeByPlan2Expr(left)
+	rightType := makeTypeByPlan2Expr(right)
+	if !((leftType.Oid == types.T_bool && rightType.IsNumeric()) ||
+		(rightType.Oid == types.T_bool && leftType.IsNumeric())) {
+		return left, right, nil
+	}
+
+	var err error
+	if leftType.Oid == types.T_bool {
+		left, err = appendCastBeforeExpr(ctx, left, makePlan2Type(&rightType))
+	} else {
+		right, err = appendCastBeforeExpr(ctx, right, makePlan2Type(&leftType))
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	return left, right, nil
+}
+
 func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32, isRoot bool) (*Expr, error) {
 	funcRef, ok := astExpr.Func.FunctionReference.(*tree.UnresolvedName)
 	if !ok {
@@ -3278,6 +3311,10 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 				for _, expr := range orExprList {
 					left := DeepCopyExpr(args[0])
 					right := expr
+					left, right, err = normalizeExpandedBoolNumericComparison(ctx, left, right)
+					if err != nil {
+						return nil, err
+					}
 					if shouldUseApproximateStringNumericComparison(left, right) {
 						floatType := types.T_float64.ToType()
 						left, err = appendCastBeforeExpr(ctx, left, makePlan2Type(&floatType))
@@ -3300,6 +3337,10 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 				for _, expr := range orExprList {
 					left := DeepCopyExpr(args[0])
 					right := expr
+					left, right, err = normalizeExpandedBoolNumericComparison(ctx, left, right)
+					if err != nil {
+						return nil, err
+					}
 					if shouldUseApproximateStringNumericComparison(left, right) {
 						floatType := types.T_float64.ToType()
 						left, err = appendCastBeforeExpr(ctx, left, makePlan2Type(&floatType))
@@ -3351,7 +3392,8 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		lookupTypes = exactColumnCastTypes
 		forcedCastTypes = exactColumnCastTypes
 	} else if castTypes, ok := approximateStringNumericCastTypes(name, args, argsType); ok {
-		if len(castTypes) > 0 && castTypes[0].Oid == types.T_float64 {
+		if len(castTypes) > 0 &&
+			(castTypes[0].Oid == types.T_float64 || castTypes[0].Oid == types.T_decimal256) {
 			for i := range args {
 				if !argsType[i].IsTemporal() {
 					continue

@@ -377,7 +377,7 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 		}
 
 		if retComp == nil {
-			if planNeedsRuntimeTypedComparison(cwft.plan, cwft.paramVals) {
+			if planNeedsRuntimeTypedComparison(cwft.plan, cwft.paramVals, cwft.ses.(*Session)) {
 				compilerContext := cwft.ses.GetTxnCompileCtx()
 				originalContext := compilerContext.GetContext()
 				parameterContext := plan2.AttachPrepareParamValues(originalContext, cwft.paramVals)
@@ -709,7 +709,11 @@ func initExecuteStmtParam(execCtx *ExecCtx, ses *Session, cwft *TxnComputationWr
 		if prepareStmt.params.Length() != numParams {
 			return nil, nil, nil, originSQL, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
 		}
-		cwft.proc.SetPrepareParams(prepareStmt.params)
+		runtimeTypes := make([]types.T, numParams)
+		for i := range runtimeTypes {
+			runtimeTypes[i] = preparedMysqlParamType(prepareStmt.ParamTypes, i).Oid
+		}
+		cwft.proc.SetPrepareParamsWithTypes(prepareStmt.params, nil, runtimeTypes)
 		cwft.paramVals, err = preparedParamValues(cwft.proc, prepareStmt.ParamTypes)
 		if err != nil {
 			return nil, nil, nil, originSQL, err
@@ -722,7 +726,13 @@ func initExecuteStmtParam(execCtx *ExecCtx, ses *Session, cwft *TxnComputationWr
 		if err != nil {
 			return nil, nil, nil, originSQL, err
 		}
-		cwft.proc.SetOwnedPrepareParamsWithIsBin(params, paramIsBin)
+		runtimeTypes := make([]types.T, len(paramVals))
+		for i, value := range paramVals {
+			if param, ok := value.(plan2.ParamValue); ok {
+				runtimeTypes[i] = param.Typ.Oid
+			}
+		}
+		cwft.proc.SetOwnedPrepareParamsWithTypes(params, paramIsBin, runtimeTypes)
 		cwft.paramVals = paramVals
 	} else {
 		if numParams > 0 {
@@ -768,9 +778,36 @@ func preparedParamValues(proc *process.Process, paramTypes []byte) ([]any, error
 			Value:         value,
 			IsBin:         proc.GetPrepareParamIsBin(i),
 			NumericString: numericString,
+			Typ:           preparedMysqlParamType(paramTypes, i),
 		}
 	}
 	return values, nil
+}
+
+func preparedMysqlParamType(paramTypes []byte, index int) types.Type {
+	if index*2+1 >= len(paramTypes) {
+		return types.T_text.ToType()
+	}
+	mysqlType := defines.MysqlType(paramTypes[index*2])
+	unsigned := paramTypes[index*2+1]&0x80 != 0
+	switch mysqlType {
+	case defines.MYSQL_TYPE_BIT:
+		return types.T_bit.ToType()
+	case defines.MYSQL_TYPE_TINY, defines.MYSQL_TYPE_SHORT, defines.MYSQL_TYPE_YEAR,
+		defines.MYSQL_TYPE_INT24, defines.MYSQL_TYPE_LONG, defines.MYSQL_TYPE_LONGLONG:
+		if unsigned {
+			return types.T_uint64.ToType()
+		}
+		return types.T_int64.ToType()
+	case defines.MYSQL_TYPE_FLOAT:
+		return types.T_float32.ToType()
+	case defines.MYSQL_TYPE_DOUBLE:
+		return types.T_float64.ToType()
+	case defines.MYSQL_TYPE_DECIMAL, defines.MYSQL_TYPE_NEWDECIMAL:
+		return types.T_decimal128.ToType()
+	default:
+		return types.T_text.ToType()
+	}
 }
 
 func decodePreparedParamValue(raw []byte, paramTypes []byte, index int) (any, bool, error) {
@@ -835,9 +872,16 @@ func buildExecuteUserParams(
 			}
 		}
 		numericString := false
+		paramType := inferUserDefinedVarType(param, false)
 		if !exprImpl.V.System {
-			variable, getErr := ses.GetUserDefinedVar(exprImpl.V.Name)
+			_, resolvedType, getErr := ses.txnCompileCtx.ResolveVariableWithType(
+				exprImpl.V.Name, false, exprImpl.V.Global,
+			)
 			if getErr == nil {
+				paramType = resolvedType
+			}
+			variable, getErr := ses.GetUserDefinedVar(exprImpl.V.Name)
+			if getErr == nil && resolvedType == variable.Typ {
 				numericString = variable.NumericString
 			}
 		}
@@ -845,6 +889,7 @@ func buildExecuteUserParams(
 			Value:         param,
 			IsBin:         paramIsBin[i],
 			NumericString: numericString,
+			Typ:           paramType,
 		}
 	}
 	return
@@ -878,7 +923,7 @@ func shouldCachePrepareCompile(p *plan.Plan) bool {
 	return !query.GetHasForeignKeyAction()
 }
 
-func planNeedsRuntimeTypedComparison(p *plan.Plan, paramVals []any) bool {
+func planNeedsRuntimeTypedComparison(p *plan.Plan, paramVals []any, sessions ...*Session) bool {
 	if p == nil || p.GetQuery() == nil {
 		return false
 	}
@@ -886,7 +931,7 @@ func planNeedsRuntimeTypedComparison(p *plan.Plan, paramVals []any) bool {
 	projectedParams := projectedRuntimeTypedParams(query)
 	for _, node := range query.GetNodes() {
 		for _, expr := range preparedRuntimeTypedExprs(node) {
-			if hasRuntimeNumericComparison(expr, node, paramVals, projectedParams) {
+			if hasRuntimeNumericComparison(expr, node, paramVals, projectedParams, sessions...) {
 				return true
 			}
 		}
@@ -899,19 +944,21 @@ func hasRuntimeNumericComparison(
 	node *plan.Node,
 	paramVals []any,
 	projectedParams *projectedParamDependencies,
+	sessions ...*Session,
 ) bool {
 	fn := expr.GetF()
 	if fn == nil || fn.Func == nil {
 		return false
 	}
 	switch fn.Func.ObjName {
-	case "=", "<=>", "<", "<=", ">", ">=", "<>", "between", "in_range":
-		if containsRuntimeNumericParam(expr, node, paramVals, projectedParams) {
+	case "=", "<=>", "<", "<=", ">", ">=", "<>", "between", "in_range",
+		"+", "-", "*", "/", "%", "mod", "div":
+		if containsRuntimeNumericParam(expr, node, paramVals, projectedParams, sessions...) {
 			return true
 		}
 	}
 	for _, arg := range fn.Args {
-		if hasRuntimeNumericComparison(arg, node, paramVals, projectedParams) {
+		if hasRuntimeNumericComparison(arg, node, paramVals, projectedParams, sessions...) {
 			return true
 		}
 	}
@@ -923,6 +970,7 @@ func containsRuntimeNumericParam(
 	node *plan.Node,
 	paramVals []any,
 	projectedParams *projectedParamDependencies,
+	sessions ...*Session,
 ) bool {
 	if expr == nil {
 		return false
@@ -930,6 +978,10 @@ func containsRuntimeNumericParam(
 	if param := expr.GetP(); param != nil {
 		pos := int(param.Pos)
 		return pos >= 0 && pos < len(paramVals) && isRuntimeNumericParam(paramVals[pos])
+	}
+	if variable := expr.GetV(); variable != nil && !variable.System && len(sessions) > 0 && sessions[0] != nil {
+		userVar, err := sessions[0].GetUserDefinedVar(variable.Name)
+		return err == nil && userVar.Typ.IsNumeric()
 	}
 	if col := expr.GetCol(); col != nil {
 		for pos := range projectedParams.columnPositions(node, col) {
@@ -941,7 +993,7 @@ func containsRuntimeNumericParam(
 	}
 	if fn := expr.GetF(); fn != nil {
 		for _, arg := range fn.Args {
-			if containsRuntimeNumericParam(arg, node, paramVals, projectedParams) {
+			if containsRuntimeNumericParam(arg, node, paramVals, projectedParams, sessions...) {
 				return true
 			}
 		}
@@ -951,7 +1003,7 @@ func containsRuntimeNumericParam(
 
 func isRuntimeNumericParam(value any) bool {
 	if param, ok := value.(plan2.ParamValue); ok {
-		if param.NumericString {
+		if param.Typ.IsNumeric() || param.NumericString {
 			return true
 		}
 		value = param.Value
@@ -986,13 +1038,28 @@ func projectedRuntimeTypedParams(query *plan.Query) *projectedParamDependencies 
 			if node == nil {
 				continue
 			}
+			outputExprs := make(map[int32]*plan.Expr, len(node.GetProjectList())+
+				len(node.GetAggList())+len(node.GetWinSpecList()))
 			for colPos, expr := range node.GetProjectList() {
+				outputExprs[int32(colPos)] = expr
+			}
+			if node.GetNodeType() == plan.Node_AGG {
+				for i, expr := range node.GetAggList() {
+					outputExprs[int32(len(node.GetGroupBy())+i)] = expr
+				}
+			}
+			if node.GetNodeType() == plan.Node_WINDOW {
+				for i, expr := range node.GetWinSpecList() {
+					outputExprs[int32(len(node.GetProjectList())+i)] = expr
+				}
+			}
+			for colPos, expr := range outputExprs {
 				positions := make(map[int32]struct{})
 				result.collectExprPositions(expr, node, positions)
 				if len(positions) == 0 {
 					continue
 				}
-				key := [2]int32{node.GetNodeId(), int32(colPos)}
+				key := [2]int32{node.GetNodeId(), colPos}
 				if result.outputs[key] == nil {
 					result.outputs[key] = make(map[int32]struct{})
 				}
@@ -1080,7 +1147,8 @@ func hasRuntimeTypedComparison(
 		return false
 	}
 	switch fn.Func.ObjName {
-	case "=", "<=>", "<", "<=", ">", ">=", "<>", "between", "in_range":
+	case "=", "<=>", "<", "<=", ">", ">=", "<>", "between", "in_range",
+		"+", "-", "*", "/", "%", "mod", "div":
 		if containsPreparedParam(expr, node, projectedParams) {
 			return true
 		}
@@ -1102,6 +1170,9 @@ func containsPreparedParam(
 		return false
 	}
 	if expr.GetP() != nil {
+		return true
+	}
+	if variable := expr.GetV(); variable != nil && !variable.System {
 		return true
 	}
 	if col := expr.GetCol(); col != nil {

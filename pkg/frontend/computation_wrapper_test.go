@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math"
 	"testing"
 	"time"
 
@@ -228,8 +229,12 @@ func TestInitExecuteStmtParamPreservesBinaryFlagPerUserVariable(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, cw.proc.GetPrepareParamIsBin(0))
 	require.False(t, cw.proc.GetPrepareParamIsBin(1))
-	require.Equal(t, plan2.ParamValue{Value: "AB\x00\x00", IsBin: true}, cw.paramVals[0])
-	require.Equal(t, plan2.ParamValue{Value: "text", IsBin: false}, cw.paramVals[1])
+	require.Equal(t, plan2.ParamValue{
+		Value: "AB\x00\x00", IsBin: true, Typ: types.T_text.ToType(),
+	}, cw.paramVals[0])
+	require.Equal(t, plan2.ParamValue{
+		Value: "text", IsBin: false, Typ: types.T_text.ToType(),
+	}, cw.paramVals[1])
 
 	params := cw.proc.GetPrepareParams()
 	require.NoError(t, ses.SetUserDefinedVar("binary_param", "now-text", ""))
@@ -326,9 +331,9 @@ func TestBuildExecuteUserParamsHonorsStoredProcedureScope(t *testing.T) {
 
 	require.Equal(t, []bool{false, false, true}, paramIsBin)
 	require.Equal(t, []any{
-		plan2.ParamValue{Value: int64(10), IsBin: false},
-		plan2.ParamValue{Value: int64(20), IsBin: false},
-		plan2.ParamValue{Value: "session-binary", IsBin: true},
+		plan2.ParamValue{Value: int64(10), IsBin: false, Typ: types.T_int64.ToType()},
+		plan2.ParamValue{Value: int64(20), IsBin: false, Typ: types.T_int64.ToType()},
+		plan2.ParamValue{Value: "session-binary", IsBin: true, Typ: types.T_text.ToType()},
 	}, paramVals)
 	require.Equal(t, "10", params.GetStringAt(0))
 	require.Equal(t, "20", params.GetStringAt(1))
@@ -661,6 +666,53 @@ func TestPlanNeedsRuntimeTypedComparison(t *testing.T) {
 		plan2.ParamValue{Value: int64(1)},
 	}))
 	require.False(t, shouldCachePrepareCompile(derivedPlan))
+
+	arithmetic := &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{
+		Func: &plan.ObjectRef{ObjName: "+"},
+		Args: []*plan.Expr{param(0), {Expr: &plan.Expr_Lit{Lit: &plan.Literal{}}}},
+	}}}
+	require.True(t, planNeedsRuntimeTypedComparison(queryPlan(arithmetic), []any{
+		plan2.ParamValue{Value: "1.5", NumericString: true},
+	}))
+	require.False(t, shouldCachePrepareCompile(queryPlan(arithmetic)))
+
+	aggregatePlan := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
+		Nodes: []*plan.Node{
+			{
+				NodeType: plan.Node_AGG,
+				NodeId:   0,
+				AggList:  []*plan.Expr{param(0)},
+			},
+			{
+				NodeType: plan.Node_JOIN,
+				NodeId:   1,
+				Children: []int32{0},
+				OnList:   []*plan.Expr{comparison(projectedColumn(0))},
+			},
+		},
+	}}}
+	require.True(t, planNeedsRuntimeTypedComparison(aggregatePlan, []any{
+		plan2.ParamValue{Value: int64(1)},
+	}))
+
+	windowPlan := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
+		Nodes: []*plan.Node{
+			{
+				NodeType:    plan.Node_WINDOW,
+				NodeId:      0,
+				WinSpecList: []*plan.Expr{param(0)},
+			},
+			{
+				NodeType: plan.Node_JOIN,
+				NodeId:   1,
+				Children: []int32{0},
+				OnList:   []*plan.Expr{comparison(projectedColumn(0))},
+			},
+		},
+	}}}
+	require.True(t, planNeedsRuntimeTypedComparison(windowPlan, []any{
+		plan2.ParamValue{Value: int64(1)},
+	}))
 }
 
 func TestDerivedPreparedParamTriggersRuntimeTypedComparison(t *testing.T) {
@@ -672,4 +724,29 @@ func TestDerivedPreparedParamTriggersRuntimeTypedComparison(t *testing.T) {
 	values := []any{plan2.ParamValue{Value: int64(1)}}
 	require.True(t, planNeedsRuntimeTypedComparison(cw.plan, values))
 	require.False(t, shouldCachePrepareCompile(cw.plan))
+}
+
+func TestPreparedUserVariableArithmeticTriggersRuntimeRebind(t *testing.T) {
+	ses, prepareStmt, _, _ := newPreparedExecuteEnvForSQL(t, 92, "select @a + 1")
+	defer prepareStmt.Close()
+	require.NoError(t, ses.setUserDefinedVarWithType(
+		"a", "1.5", "", false, true, types.New(types.T_decimal64, 3, 1),
+	))
+
+	variable := &plan.Expr{Expr: &plan.Expr_V{V: &plan.VarRef{Name: "a"}}}
+	arithmetic := &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{
+		Func: &plan.ObjectRef{ObjName: "+"},
+		Args: []*plan.Expr{variable, {Expr: &plan.Expr_Lit{Lit: &plan.Literal{}}}},
+	}}}
+	queryPlan := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
+		Nodes: []*plan.Node{{ProjectList: []*plan.Expr{arithmetic}}},
+	}}}
+	require.True(t, planNeedsRuntimeTypedComparison(queryPlan, nil, ses))
+	require.False(t, shouldCachePrepareCompile(queryPlan))
+}
+
+func TestUserVariableNumericFamiliesKeepTheirSQLTypes(t *testing.T) {
+	require.Equal(t, types.T_uint64, inferUserDefinedVarType(uint64(math.MaxUint64), false).Oid)
+	require.Equal(t, types.T_float64, inferUserDefinedVarType(float64(1.5), false).Oid)
+	require.Equal(t, types.T_decimal128, inferUserDefinedVarType("1.5", true).Oid)
 }

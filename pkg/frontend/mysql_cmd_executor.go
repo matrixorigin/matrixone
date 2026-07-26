@@ -915,6 +915,7 @@ func doSetVar(ses *Session, execCtx *ExecCtx, sv *tree.SetVar, sql string) error
 	var ok bool
 	var userVarIsBin bool
 	var userVarNumericString bool
+	var userVarType types.Type
 	setVarFunc := func(system, global bool, name string, value interface{}, sql string) error {
 		var oldValueRaw interface{}
 		if system {
@@ -951,7 +952,9 @@ func doSetVar(ses *Session, execCtx *ExecCtx, sv *tree.SetVar, sql string) error
 				}
 			}
 		} else {
-			err = ses.setUserDefinedVarWithNumericString(name, value, sql, userVarIsBin, userVarNumericString)
+			err = ses.setUserDefinedVarWithType(
+				name, value, sql, userVarIsBin, userVarNumericString, userVarType,
+			)
 			if err != nil {
 				return err
 			}
@@ -964,11 +967,15 @@ func doSetVar(ses *Session, execCtx *ExecCtx, sv *tree.SetVar, sql string) error
 		var value interface{}
 		userVarIsBin = false
 		userVarNumericString = false
+		userVarType = types.T_text.ToType()
 
-		value, err = getExprValue(assign.Value, ses, execCtx, &userVarIsBin, &userVarNumericString)
+		value, err = getExprValueWithType(
+			assign.Value, ses, execCtx, &userVarType, &userVarIsBin,
+		)
 		if err != nil {
 			return err
 		}
+		userVarNumericString = userVarType.Oid.IsDecimal()
 		if _, ok := value.(string); ok {
 			if literal, ok := assign.Value.(*tree.NumVal); ok {
 				switch literal.Kind() {
@@ -977,9 +984,11 @@ func doSetVar(ses *Session, execCtx *ExecCtx, sv *tree.SetVar, sql string) error
 					if parsed, parseErr := strconv.ParseInt(text, 10, 64); parseErr == nil {
 						value = parsed
 						userVarNumericString = false
+						userVarType = types.T_int64.ToType()
 					} else if parsed, parseErr := strconv.ParseUint(text, 10, 64); parseErr == nil {
 						value = parsed
 						userVarNumericString = false
+						userVarType = types.T_uint64.ToType()
 					}
 				}
 			}

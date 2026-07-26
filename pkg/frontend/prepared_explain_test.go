@@ -42,7 +42,9 @@ func TestPreparedExplainUsesBinaryParameterValues(t *testing.T) {
 	_, queryPlan, savedStmt, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
 	require.NoError(t, err)
 	require.IsType(t, &tree.ExplainStmt{}, savedStmt)
-	require.Equal(t, []any{plan2.ParamValue{Value: "42", IsBin: false}}, cw.ParamVals())
+	require.Equal(t, []any{plan2.ParamValue{
+		Value: "42", IsBin: false, Typ: types.T_text.ToType(),
+	}}, cw.ParamVals())
 
 	cw.plan = queryPlan
 	cw.ifIsExeccute = true

@@ -3034,6 +3034,7 @@ type ParamValue struct {
 	Value         any
 	IsBin         bool
 	NumericString bool
+	Typ           types.Type
 }
 
 type prepareParamValuesKey struct{}
@@ -3050,10 +3051,12 @@ func preparedParamValueFromContext(ctx context.Context, pos int32) (*plan.Expr, 
 	value := values[pos]
 	isBin := false
 	numericString := false
+	var paramType types.Type
 	if param, ok := value.(ParamValue); ok {
 		value = param.Value
 		isBin = param.IsBin
 		numericString = param.NumericString
+		paramType = param.Typ
 	}
 	if value == nil {
 		expr := makePlan2NullConstExprWithType()
@@ -3063,6 +3066,10 @@ func preparedParamValueFromContext(ctx context.Context, pos int32) (*plan.Expr, 
 	}
 	if numericString {
 		expr, err := makePlan2DecimalExprWithType(ctx, fmt.Sprint(value))
+		if err != nil || paramType.Oid == types.T_any {
+			return expr, true, err
+		}
+		expr, err = appendCastBeforeExpr(ctx, expr, makePlan2Type(&paramType))
 		return expr, true, err
 	}
 	return makePreparedParamConstExpr(value, isBin), true, nil
@@ -3074,10 +3081,12 @@ func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) error {
 	for i, val := range paramVals {
 		isBin := false
 		numericString := false
+		var paramType types.Type
 		if param, ok := val.(ParamValue); ok {
 			val = param.Value
 			isBin = param.IsBin
 			numericString = param.NumericString
+			paramType = param.Typ
 		}
 		if val == nil {
 			params[i] = makePlan2NullConstExprWithType()
@@ -3085,6 +3094,12 @@ func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) error {
 			params[i], err = makePlan2DecimalExprWithType(ctx, fmt.Sprint(val))
 			if err != nil {
 				return err
+			}
+			if paramType.Oid != types.T_any {
+				params[i], err = appendCastBeforeExpr(ctx, params[i], makePlan2Type(&paramType))
+				if err != nil {
+					return err
+				}
 			}
 		} else {
 			params[i] = makePreparedParamConstExpr(val, isBin)

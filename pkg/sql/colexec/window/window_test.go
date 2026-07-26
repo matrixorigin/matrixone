@@ -410,6 +410,25 @@ func TestWindowPrepareValidatesRowsFrameBounds(t *testing.T) {
 	}
 }
 
+func TestWindowPrepareRejectsNonIntegerParameterTypes(t *testing.T) {
+	for _, typ := range []types.T{types.T_text, types.T_float32, types.T_float64} {
+		t.Run(typ.String(), func(t *testing.T) {
+			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			params := vector.NewVec(types.T_text.ToType())
+			require.NoError(t, vector.AppendBytes(params, []byte("1"), false, proc.Mp()))
+			proc.SetPrepareParamsWithTypes(params, nil, []types.T{typ})
+
+			arg := makeWindowWithFrame(makePreparedRowsFrame(t, 0, 0))
+			require.ErrorContains(t, arg.Prepare(proc), "must have an integer type")
+
+			arg.Free(proc, false, nil)
+			proc.SetPrepareParams(nil)
+			params.Free(proc.Mp())
+			proc.Free()
+		})
+	}
+}
+
 func TestWindowPrepareClearsPartialRowsFrameBoundsOnError(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	valid := makePreparedRowsFrame(t, 0, 0)

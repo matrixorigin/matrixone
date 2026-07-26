@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -357,6 +358,18 @@ func (ses *Session) setUserDefinedVarWithNumericString(
 	isBin bool,
 	numericString bool,
 ) error {
+	typ := inferUserDefinedVarType(value, numericString)
+	return ses.setUserDefinedVarWithType(name, value, sql, isBin, numericString, typ)
+}
+
+func (ses *Session) setUserDefinedVarWithType(
+	name string,
+	value interface{},
+	sql string,
+	isBin bool,
+	numericString bool,
+	typ types.Type,
+) error {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	ses.userDefinedVars[strings.ToLower(name)] = &UserDefinedVar{
@@ -364,8 +377,41 @@ func (ses *Session) setUserDefinedVarWithNumericString(
 		Sql:           sql,
 		IsBin:         isBin,
 		NumericString: numericString,
+		Typ:           typ,
 	}
 	return nil
+}
+
+func inferUserDefinedVarType(value any, numericString bool) types.Type {
+	if numericString {
+		return types.T_decimal128.ToType()
+	}
+	switch value.(type) {
+	case int8:
+		return types.T_int8.ToType()
+	case int16:
+		return types.T_int16.ToType()
+	case int32:
+		return types.T_int32.ToType()
+	case int, int64:
+		return types.T_int64.ToType()
+	case uint8:
+		return types.T_uint8.ToType()
+	case uint16:
+		return types.T_uint16.ToType()
+	case uint32:
+		return types.T_uint32.ToType()
+	case uint, uint64:
+		return types.T_uint64.ToType()
+	case float32:
+		return types.T_float32.ToType()
+	case float64:
+		return types.T_float64.ToType()
+	case bool:
+		return types.T_bool.ToType()
+	default:
+		return types.T_text.ToType()
+	}
 }
 
 // GetUserDefinedVar gets value of the user defined variable

@@ -15,16 +15,33 @@
 package util
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
+
+func TestSetBytesToDecimal256Vector(t *testing.T) {
+	proc := testutil.NewProc(t)
+	typ := types.New(types.T_decimal256, 65, 0)
+	vec := vector.NewVec(typ)
+	require.NoError(t, vec.PreExtend(1, proc.Mp()))
+	vec.SetLength(1)
+
+	const value = "1234567890123456789012345678901234567890"
+	require.NoError(t, SetBytesToAnyVector(context.Background(), value, 0, false, vec, proc))
+	expected, err := types.ParseDecimal256(value, typ.Width, typ.Scale)
+	require.NoError(t, err)
+	require.Equal(t, expected, vector.MustFixedColWithTypeCheck[types.Decimal256](vec)[0])
+	vec.Free(proc.Mp())
+}
 
 func TestHexToInt(t *testing.T) {
 	var val uint64

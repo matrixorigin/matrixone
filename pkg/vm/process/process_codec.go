@@ -81,6 +81,9 @@ func (proc *Process) BuildProcessInfo(
 				procInfo.PrepareParams.Nulls[i] = vec.GetNulls().Contains(uint64(i))
 			}
 			procInfo.PrepareParams.IsBin = append(procInfo.PrepareParams.IsBin, proc.Base.prepareParamsIsBin...)
+			for _, typ := range proc.Base.prepareParamsTypes {
+				procInfo.PrepareParams.Types = append(procInfo.PrepareParams.Types, int32(typ))
+			}
 		}
 	}
 	{ // session info
@@ -247,7 +250,15 @@ func (c *codecService) Decode(
 				prepareParams.GetNulls().Add(uint64(i))
 			}
 		}
-		proc.SetOwnedPrepareParamsWithIsBin(prepareParams, append([]bool(nil), value.PrepareParams.IsBin...))
+		paramTypes := make([]types.T, len(value.PrepareParams.Types))
+		for i, typ := range value.PrepareParams.Types {
+			paramTypes[i] = types.T(typ)
+		}
+		proc.SetOwnedPrepareParamsWithTypes(
+			prepareParams,
+			append([]bool(nil), value.PrepareParams.IsBin...),
+			paramTypes,
+		)
 	}
 	return proc, nil
 }

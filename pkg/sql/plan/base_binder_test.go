@@ -721,6 +721,60 @@ func TestGeneratedColBinderAcceptsNameConstUnaryPlusLiteral(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestGeneratedColBinderRejectsSystemVariableWithoutPanic(t *testing.T) {
+	stmts, err := parsers.Parse(context.Background(), dialect.MYSQL, "select @@sql_mode", 1)
+	require.NoError(t, err)
+	selectStmt := stmts[0].(*tree.Select)
+	selectClause := selectStmt.Select.(*tree.SelectClause)
+	varExpr := selectClause.Exprs[0].Expr
+
+	binder := NewGeneratedColBinder(context.Background(), nil, nil)
+	var bound *plan.Expr
+	require.NotPanics(t, func() {
+		bound, err = binder.BindExpr(varExpr, 0, false)
+	})
+	require.NoError(t, err)
+	err = checkGeneratedExprReferences(context.Background(), bound, "b", nil, nil)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "generated column")
+}
+
+func TestTemporalDecimal256ArithmeticPrecastsTemporalToSupportedDecimal(t *testing.T) {
+	temporalType := types.New(types.T_datetime, 0, 3)
+	wideDecimal := types.New(types.T_decimal128, 38, 0)
+	castTypes, ok := approximateStringNumericCastTypes(
+		"+",
+		[]*plan.Expr{
+			{Typ: plan.Type{Id: int32(temporalType.Oid), Scale: temporalType.Scale}},
+			{Typ: plan.Type{Id: int32(wideDecimal.Oid), Width: wideDecimal.Width}},
+		},
+		[]types.Type{temporalType, wideDecimal},
+	)
+	require.True(t, ok)
+	require.Equal(t, types.T_decimal256, castTypes[0].Oid)
+	require.Equal(t, types.T_decimal64, temporalNumericTargetType([]types.Type{temporalType}).Oid)
+}
+
+func TestExpandedNotInNormalizesBoolNumericComparison(t *testing.T) {
+	boolExpr := &plan.Expr{Typ: plan.Type{Id: int32(types.T_bool)}}
+	intExpr := makePlan2Int64ConstExprWithType(2)
+	left, right, err := normalizeExpandedBoolNumericComparison(context.Background(), boolExpr, intExpr)
+	require.NoError(t, err)
+	require.Equal(t, "cast", left.GetF().GetFunc().GetObjName())
+	require.Nil(t, right.GetF())
+	require.Equal(t, int32(types.T_int64), left.Typ.Id)
+	require.Equal(t, int32(types.T_int64), right.Typ.Id)
+
+	unsignedType := types.T_uint64.ToType()
+	unsignedExpr := &plan.Expr{Typ: makePlan2Type(&unsignedType)}
+	left, right, err = normalizeExpandedBoolNumericComparison(
+		context.Background(), boolExpr, unsignedExpr,
+	)
+	require.NoError(t, err)
+	require.Equal(t, int32(types.T_uint64), left.Typ.Id)
+	require.Equal(t, int32(types.T_uint64), right.Typ.Id)
+}
+
 func bindNameConstSelect(sql string) error {
 	stmts, err := parsers.Parse(context.Background(), dialect.MYSQL, sql, 1)
 	if err != nil {

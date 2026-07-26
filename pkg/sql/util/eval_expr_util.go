@@ -246,6 +246,12 @@ func SetBytesToAnyVector(ctx context.Context, val string, row int,
 			return err
 		}
 		return vector.SetFixedAtNoTypeCheck(vec, row, v)
+	case types.T_decimal256:
+		v, err := types.ParseDecimal256(val, vec.GetType().Width, vec.GetType().Scale)
+		if err != nil {
+			return err
+		}
+		return vector.SetFixedAtNoTypeCheck(vec, row, v)
 	case types.T_char, types.T_varchar, types.T_blob, types.T_binary, types.T_varbinary, types.T_text, types.T_datalink, types.T_geometry:
 		return vector.SetBytesAt(vec, row, []byte(val), proc.Mp())
 	case types.T_array_float32:

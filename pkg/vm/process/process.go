@@ -153,20 +153,41 @@ func (proc *Process) GetPrepareParams() *vector.Vector {
 
 // SetPrepareParams borrows prepareParams. The caller remains responsible for releasing it.
 func (proc *Process) SetPrepareParams(prepareParams *vector.Vector) {
-	proc.setPrepareParams(prepareParams, nil, false)
+	proc.setPrepareParams(prepareParams, nil, nil, false)
 }
 
 // SetPrepareParamsWithIsBin borrows prepareParams. The caller remains responsible for releasing it.
 func (proc *Process) SetPrepareParamsWithIsBin(prepareParams *vector.Vector, isBin []bool) {
-	proc.setPrepareParams(prepareParams, isBin, false)
+	proc.setPrepareParams(prepareParams, isBin, nil, false)
+}
+
+func (proc *Process) SetPrepareParamsWithTypes(
+	prepareParams *vector.Vector,
+	isBin []bool,
+	paramTypes []types.T,
+) {
+	proc.setPrepareParams(prepareParams, isBin, paramTypes, false)
 }
 
 // SetOwnedPrepareParamsWithIsBin transfers prepareParams to proc. Replacing or freeing proc releases it.
 func (proc *Process) SetOwnedPrepareParamsWithIsBin(prepareParams *vector.Vector, isBin []bool) {
-	proc.setPrepareParams(prepareParams, isBin, true)
+	proc.setPrepareParams(prepareParams, isBin, nil, true)
 }
 
-func (proc *Process) setPrepareParams(prepareParams *vector.Vector, isBin []bool, owned bool) {
+func (proc *Process) SetOwnedPrepareParamsWithTypes(
+	prepareParams *vector.Vector,
+	isBin []bool,
+	paramTypes []types.T,
+) {
+	proc.setPrepareParams(prepareParams, isBin, paramTypes, true)
+}
+
+func (proc *Process) setPrepareParams(
+	prepareParams *vector.Vector,
+	isBin []bool,
+	paramTypes []types.T,
+	owned bool,
+) {
 	if proc.Base.prepareParams == prepareParams && proc.Base.prepareParamsOwned {
 		owned = true
 	}
@@ -175,6 +196,7 @@ func (proc *Process) setPrepareParams(prepareParams *vector.Vector, isBin []bool
 	}
 	proc.Base.prepareParams = prepareParams
 	proc.Base.prepareParamsIsBin = isBin
+	proc.Base.prepareParamsTypes = paramTypes
 	proc.Base.prepareParamsOwned = owned && prepareParams != nil
 }
 
@@ -183,6 +205,7 @@ func (proc *Process) setPrepareParams(prepareParams *vector.Vector, isBin []bool
 type PrepareParamsState struct {
 	prepareParams *vector.Vector
 	isBin         []bool
+	paramTypes    []types.T
 	owned         bool
 }
 
@@ -193,10 +216,12 @@ func (proc *Process) DetachPrepareParams() PrepareParamsState {
 	state := PrepareParamsState{
 		prepareParams: proc.Base.prepareParams,
 		isBin:         proc.Base.prepareParamsIsBin,
+		paramTypes:    proc.Base.prepareParamsTypes,
 		owned:         proc.Base.prepareParamsOwned,
 	}
 	proc.Base.prepareParams = nil
 	proc.Base.prepareParamsIsBin = nil
+	proc.Base.prepareParamsTypes = nil
 	proc.Base.prepareParamsOwned = false
 	return state
 }
@@ -204,7 +229,7 @@ func (proc *Process) DetachPrepareParams() PrepareParamsState {
 // RestorePrepareParams restores state previously returned by
 // DetachPrepareParams.
 func (proc *Process) RestorePrepareParams(state PrepareParamsState) {
-	proc.setPrepareParams(state.prepareParams, state.isBin, state.owned)
+	proc.setPrepareParams(state.prepareParams, state.isBin, state.paramTypes, state.owned)
 }
 
 func (proc *Process) OperatorOutofMemory(size int64) bool {

@@ -4222,6 +4222,7 @@ type UserDefinedVar struct {
 	Sql           string
 	IsBin         bool
 	NumericString bool
+	Typ           types.Type
 }
 
 func autocommitValue(ses FeSession) (bool, error) {

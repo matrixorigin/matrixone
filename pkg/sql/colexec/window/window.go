@@ -150,6 +150,13 @@ func materializeRowsBound(proc *process.Process, planned *plan.FrameBound) (*pla
 		return nil, moerr.NewInvalidInputNoCtx("window frame bound parameter is missing")
 	}
 	if param := directPreparedRowsFrameParam(planned.Val); param != nil {
+		paramType := proc.GetPrepareParamType(int(param.Pos))
+		if paramType != types.T_any && !isRowsFrameIntegerParamType(paramType) {
+			return nil, moerr.NewInvalidInput(
+				proc.Ctx,
+				"window frame bound parameter must have an integer type",
+			)
+		}
 		raw, err := proc.GetPrepareParamsAt(int(param.Pos))
 		if err != nil {
 			return nil, err
@@ -197,6 +204,16 @@ func materializeRowsBound(proc *process.Process, planned *plan.FrameBound) (*pla
 		}},
 	}
 	return runtimeBound, nil
+}
+
+func isRowsFrameIntegerParamType(typ types.T) bool {
+	switch typ {
+	case types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
+		return true
+	default:
+		return false
+	}
 }
 
 func directPreparedRowsFrameParam(expr *plan.Expr) *plan.ParamRef {

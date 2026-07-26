@@ -361,6 +361,7 @@ type BaseProcess struct {
 	resolveVariableIsBinFunc func(varName string, isSystemVar, isGlobalVar bool) (bool, error)
 	prepareParams            *vector.Vector
 	prepareParamsIsBin       []bool
+	prepareParamsTypes       []types.T
 	prepareParamsOwned       bool
 	QueryClient              qclient.QueryClient
 	Hakeeper                 logservice.CNHAKeeperClient
@@ -508,6 +509,13 @@ func (proc *Process) GetPrepareParamsAt(i int) ([]byte, error) {
 
 func (proc *Process) GetPrepareParamIsBin(i int) bool {
 	return i >= 0 && i < len(proc.Base.prepareParamsIsBin) && proc.Base.prepareParamsIsBin[i]
+}
+
+func (proc *Process) GetPrepareParamType(i int) types.T {
+	if i < 0 || i >= len(proc.Base.prepareParamsTypes) {
+		return types.T_any
+	}
+	return proc.Base.prepareParamsTypes[i]
 }
 
 // SetIncrStatementDisabled marks this process (and every child process
