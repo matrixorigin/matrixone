@@ -77,6 +77,8 @@ const (
 	FJ_ISCPCancelLongHnswBeforeUpdate  = "fj/iscp/cancel/long/hnsw-before-update"
 	FJ_ISCPCancelLongHnswBeforeSave    = "fj/iscp/cancel/long/hnsw-before-save"
 	FJ_ISCPCancelLongBeforeWatermark   = "fj/iscp/cancel/long/before-watermark"
+	FJ_ISCPCancelExecutorNotReady      = "fj/iscp/cancel/executor-not-ready"
+	FJ_ISCPCancelForceRemote           = "fj/iscp/cancel/force-remote"
 	FJ_ISCPCancelRemoveFenceError      = "fj/iscp/cancel/remove-fence-error"
 	FJ_ISCPCancelRollbackFenceTTL      = "fj/iscp/cancel/rollback-fence-ttl"
 
