@@ -472,6 +472,20 @@ func TestDecidePolicyLocalPlacementEnforcesResolvedPoolMembership(t *testing.T) 
 			wantSatisfied: true,
 		},
 		{
+			name:    "current CN uses canonical ingress identity",
+			current: local,
+			candidates: Workers{{
+				ID:    local.ID,
+				Addr:  "advertised-local:6001",
+				Mcpu:  16,
+				State: WorkerStateWorking,
+			}},
+			wantWorkers:   Workers{local},
+			wantReason:    ReasonRequiredCurrentCN,
+			wantEligible:  1,
+			wantSatisfied: true,
+		},
+		{
 			name:         "current CN outside resolved pool is rejected",
 			current:      local,
 			candidates:   Workers{remote},

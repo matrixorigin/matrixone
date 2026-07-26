@@ -554,7 +554,12 @@ func decidePolicyLocalPlacement(req QueryRequest) QueryDecision {
 		if sameWorker(worker, req.CurrentCN) {
 			decision := queryDecision(
 				req,
-				Workers{worker},
+				// The pool worker proves membership, but the ingress worker
+				// is the canonical execution identity for local routing.
+				// A cluster-advertised address may differ from the address
+				// used by this Compile; retaining it would make compile
+				// materialize this current-CN decision as remote.
+				Workers{req.CurrentCN},
 				dropped,
 				ReasonRequiredCurrentCN,
 				true,

@@ -2617,6 +2617,40 @@ func TestWorkloadPolicyActivationRequiresEveryCNCapability(t *testing.T) {
 		require.Zero(t, client.releases)
 	})
 
+	t.Run("draining CN does not block activation", func(t *testing.T) {
+		service := t.Name()
+		client := setupWorkloadPolicyQueryCluster(
+			t,
+			service,
+			[]metadata.CNService{
+				{
+					ServiceID:    "cn-working",
+					QueryAddress: "working-address",
+					WorkState:    metadata.WorkState_Working,
+				},
+				{
+					ServiceID:    "cn-draining",
+					QueryAddress: "draining-address",
+					WorkState:    metadata.WorkState_Draining,
+				},
+			},
+		)
+		client.sendErrs["draining-address"] = errors.New(
+			"draining CN must not be probed",
+		)
+
+		require.NoError(t, ensureWorkloadPolicyFeatureReady(
+			context.Background(),
+			&Session{feSessionImpl: feSessionImpl{service: service}},
+		))
+
+		client.mu.Lock()
+		defer client.mu.Unlock()
+		require.Contains(t, client.requests, "working-address")
+		require.NotContains(t, client.requests, "draining-address")
+		require.Equal(t, 1, client.releases)
+	})
+
 	t.Run("empty cluster snapshot blocks activation", func(t *testing.T) {
 		service := t.Name()
 		setupWorkloadPolicyQueryCluster(t, service, nil)
@@ -3007,7 +3041,7 @@ func TestAlterQueryWorkloadPolicyCommitsAppliesAndRequiresPublishAcknowledgement
 	require.Equal(t, uint64(12), request.WorkloadPolicyUpdateRequest.Revision)
 
 	// The catalog transaction is durable, but ALTER must not report success
-	// while a known CN may keep enforcing its previous cached revision.
+	// while a currently routable CN may keep enforcing its previous revision.
 	client.mu.Lock()
 	client.publishSendErrs["cn-1"] = errors.New("injected publish failure")
 	client.mu.Unlock()
@@ -3263,24 +3297,34 @@ func TestPublishWorkloadPolicyFanoutAndErrorAggregation(t *testing.T) {
 		}
 	})
 
-	t.Run("non-working CNs must also acknowledge", func(t *testing.T) {
+	t.Run("non-working CNs do not participate in acknowledgement", func(t *testing.T) {
 		service := t.Name()
 		client := setupWorkloadPolicyQueryCluster(
 			t,
 			service,
-			[]metadata.CNService{{
-				ServiceID:    "cn-draining",
-				QueryAddress: "cn-draining",
-				WorkState:    metadata.WorkState_Draining,
-			}},
+			[]metadata.CNService{
+				{
+					ServiceID:    "cn-working",
+					QueryAddress: "cn-working",
+					WorkState:    metadata.WorkState_Working,
+				},
+				{
+					ServiceID:    "cn-draining",
+					QueryAddress: "cn-draining",
+					WorkState:    metadata.WorkState_Draining,
+				},
+			},
 		)
-		client.responses["cn-draining"] = &query.Response{
+		client.responses["cn-working"] = &query.Response{
 			WorkloadPolicyUpdateResponse: &query.WorkloadPolicyUpdateResponse{
 				Applied:   true,
 				Revision:  8,
 				Supported: true,
 			},
 		}
+		client.publishSendErrs["cn-draining"] = errors.New(
+			"draining CN must not receive publication",
+		)
 		session := &Session{feSessionImpl: feSessionImpl{service: service}}
 
 		require.NoError(t, publishWorkloadPolicy(
@@ -3293,7 +3337,8 @@ func TestPublishWorkloadPolicyFanoutAndErrorAggregation(t *testing.T) {
 
 		client.mu.Lock()
 		defer client.mu.Unlock()
-		require.Contains(t, client.requests, "cn-draining")
+		require.Contains(t, client.requests, "cn-working")
+		require.NotContains(t, client.requests, "cn-draining")
 		require.Equal(t, 1, client.releases)
 	})
 

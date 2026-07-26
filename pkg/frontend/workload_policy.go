@@ -1073,9 +1073,9 @@ func doAlterQueryWorkloadPolicy(
 	}
 	if convergenceErr := errors.Join(applyErr, publishErr); convergenceErr != nil {
 		// The catalog transaction is already durable. Do not report ALTER
-		// success until every known CN has acknowledged this revision; otherwise
-		// an established cache can keep enforcing the previous policy until its
-		// periodic catalog refresh.
+		// success until every currently routable CN has acknowledged this
+		// revision; otherwise an established cache can keep enforcing the
+		// previous policy until its periodic catalog refresh.
 		return moerr.NewInternalErrorf(
 			ctx,
 			"workload policy revision %d committed for account %d but cluster-wide enforcement was not confirmed: %v",
@@ -1171,10 +1171,10 @@ func ensureWorkloadPolicyFeatureReady(
 }
 
 // ensureWorkloadPolicyRPCReady verifies the actual handler capability of every
-// CN in the current cluster snapshot. A reported protocol version is mutable
-// runtime state and therefore is not proof that an old binary registered the
-// workload-policy handler. This check is intentionally confined to the ALTER
-// control plane.
+// currently routable CN in the cluster snapshot. A reported protocol version
+// is mutable runtime state and therefore is not proof that an old binary
+// registered the workload-policy handler. This check is intentionally confined
+// to the ALTER control plane.
 func ensureWorkloadPolicyRPCReady(
 	ctx context.Context,
 	ses *Session,
@@ -1244,10 +1244,11 @@ func ensureWorkloadPolicyRPCReady(
 	return errors.Join(requestErr, responseErr)
 }
 
-// workloadPolicyCNTargets returns every known CN, including draining and
-// temporarily non-working services. Such a CN may hold a warm policy cache and
-// later become working again, so omitting it from an acknowledged publication
-// would leave a stale enforcement generation behind.
+// workloadPolicyCNTargets returns CNs that can currently serve queries.
+// Draining/drained CNs are deliberately excluded from the synchronous ALTER
+// barrier: they cannot serve new work, and requiring their RPC acknowledgement
+// would make normal maintenance block policy changes. If they return to service,
+// their retained cache converges through the bounded catalog refresh path.
 func workloadPolicyCNTargets(
 	ctx context.Context,
 	qc queryserviceclient.QueryClient,
@@ -1263,6 +1264,10 @@ func workloadPolicyCNTargets(
 		cluster,
 		clusterservice.NewSelectAll(),
 		func(service metadata.CNService) bool {
+			if service.WorkState != metadata.WorkState_Working &&
+				service.WorkState != metadata.WorkState_Unknown {
+				return true
+			}
 			nodes = append(nodes, service.QueryAddress)
 			nodeIDs[service.QueryAddress] = service.ServiceID
 			return true

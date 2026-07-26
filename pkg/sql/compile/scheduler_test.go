@@ -573,6 +573,61 @@ func TestScheduleQueryWorkersTPPolicyVerifiesCurrentPoolWithoutRelocation(t *tes
 	require.Equal(t, schedule.ReasonRequiredCurrentCN, c.queryPlacement.Reason)
 }
 
+func TestScheduleQueryWorkersTPPolicyCanonicalizesCurrentCNAddress(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	lockSvc := mock_lock.NewMockLockService(ctrl)
+	lockSvc.EXPECT().GetConfig().Return(lockservice.Config{ServiceID: "tp-local"}).AnyTimes()
+
+	policySet, err := schedule.ParseWorkloadPolicyConfig(`{
+		"version": 1,
+		"policies": {
+			"tp": {
+				"pool": "tenant-tp",
+				"labels": {"role": "tp"},
+				"current_cn": "required"
+			}
+		}
+	}`)
+	require.NoError(t, err)
+
+	c := NewMockCompile(t)
+	c.proc.Base.LockService = lockSvc
+	c.addr = "ingress-local:6001"
+	c.execType = plan2.ExecTypeTP
+	c.tenant = "tenant-a"
+	c.cnLabel = map[string]string{"account": "tenant-a", "role": "tp"}
+	c.e = &schedulerProviderTestEngine{
+		schedulerTestEngine: &schedulerTestEngine{},
+		candidates: engine.QueryCandidates{{
+			Service: metadata.CNService{
+				ServiceID:              "tp-local",
+				PipelineServiceAddress: "advertised-local:6001",
+				WorkState:              metadata.WorkState_Working,
+			},
+			Mcpu: 4,
+		}},
+		resolvedNodes: engine.Nodes{{
+			Id:        "tp-local",
+			Addr:      "advertised-local:6001",
+			Mcpu:      4,
+			WorkState: metadata.WorkState_Working,
+		}},
+	}
+	c.SetWorkloadPolicy(policySet, "")
+
+	nodes, err := c.scheduleQueryWorkers()
+	require.NoError(t, err)
+	require.Equal(t, engine.Nodes{{
+		Id:        "tp-local",
+		Addr:      "ingress-local:6001",
+		Mcpu:      1,
+		WorkState: metadata.WorkState_Working,
+	}}, nodes)
+
+	require.True(t, sameExecutionNode(nodes[0], getIngressEngineNode(c)))
+}
+
 func TestScheduleQueryWorkersTPPolicyDiscoversOnlyCurrentCN(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
