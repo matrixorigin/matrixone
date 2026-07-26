@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -34,6 +35,7 @@ import (
 )
 
 type iscpDrainTestQueryClient struct {
+	mu          sync.Mutex
 	serviceID   string
 	requests    []*query.Request
 	addresses   []string
@@ -47,22 +49,28 @@ func (q *iscpDrainTestQueryClient) ServiceID() string {
 }
 
 func (q *iscpDrainTestQueryClient) SendMessage(ctx context.Context, address string, req *query.Request) (*query.Response, error) {
+	q.mu.Lock()
 	q.requests = append(q.requests, req)
 	q.addresses = append(q.addresses, address)
-	if q.sendFunc != nil {
-		if err := q.sendFunc(ctx, address, req); err != nil {
-			return nil, err
-		}
-	}
+	sendFunc := q.sendFunc
+	var sequenceErr error
 	if len(q.errSequence) > 0 {
-		err := q.errSequence[0]
+		sequenceErr = q.errSequence[0]
 		q.errSequence = q.errSequence[1:]
-		if err != nil {
+	}
+	err := q.err
+	q.mu.Unlock()
+
+	if sendFunc != nil {
+		if err := sendFunc(ctx, address, req); err != nil {
 			return nil, err
 		}
 	}
-	if q.err != nil {
-		return nil, q.err
+	if sequenceErr != nil {
+		return nil, sequenceErr
+	}
+	if err != nil {
+		return nil, err
 	}
 	return &query.Response{CmdMethod: req.CmdMethod}, nil
 }
@@ -620,11 +628,9 @@ func TestDrainIndexCdcTaskConsumerFencesRunnerChangeAfterSuccessfulDrain(t *test
 		client.TxnEvent{CostEvent: true},
 		nil,
 	))
-	require.Equal(
-		t,
-		[]string{"runner-a:18101", "runner-b:18101", "runner-a:18101", "runner-b:18101"},
-		qc.addresses,
-	)
+	require.Len(t, qc.addresses, 4)
+	require.Equal(t, []string{"runner-a:18101", "runner-b:18101"}, qc.addresses[:2])
+	require.ElementsMatch(t, []string{"runner-a:18101", "runner-b:18101"}, qc.addresses[2:])
 	require.Len(t, qc.requests, 4)
 	require.False(t, qc.requests[0].ISCPDrainConsumerRequest.RemoveFenceOnly)
 	require.False(t, qc.requests[1].ISCPDrainConsumerRequest.RemoveFenceOnly)
@@ -683,16 +689,98 @@ func TestDrainIndexCdcTaskConsumerCleansFencesWhenNewRunnerDrainFails(t *testing
 	err := DrainIndexCdcTaskConsumer(c, tbldef, "db", "tbl", "idx1")
 	require.ErrorContains(t, err, drainErr.Error())
 	require.Equal(t, len(runners), runnerCalls)
-	require.Equal(
-		t,
-		[]string{"runner-a:18101", "runner-b:18101", "runner-a:18101", "runner-b:18101"},
-		qc.addresses,
-	)
+	require.Len(t, qc.addresses, 4)
+	require.Equal(t, []string{"runner-a:18101", "runner-b:18101"}, qc.addresses[:2])
+	require.ElementsMatch(t, []string{"runner-a:18101", "runner-b:18101"}, qc.addresses[2:])
 	require.Len(t, qc.requests, 4)
 	require.False(t, qc.requests[0].ISCPDrainConsumerRequest.RemoveFenceOnly)
 	require.False(t, qc.requests[1].ISCPDrainConsumerRequest.RemoveFenceOnly)
 	require.True(t, qc.requests[2].ISCPDrainConsumerRequest.RemoveFenceOnly)
 	require.True(t, qc.requests[3].ISCPDrainConsumerRequest.RemoveFenceOnly)
+}
+
+func TestISCPDrainTargetFenceOperationsDoNotSerializeTargets(t *testing.T) {
+	tests := []struct {
+		name          string
+		removeOnly    bool
+		renewOnly     bool
+		errorContains string
+		operation     func(context.Context, []iscpDrainTarget) error
+	}{
+		{
+			name:          "remove",
+			removeOnly:    true,
+			errorContains: "remove ISCP fence on runner runner-a",
+			operation: func(ctx context.Context, targets []iscpDrainTarget) error {
+				return removeISCPDrainTargetFences(ctx, targets, 0, 42, "index_idx1", 7)
+			},
+		},
+		{
+			name:          "renew",
+			renewOnly:     true,
+			errorContains: "renew ISCP fence on runner runner-a",
+			operation: func(ctx context.Context, targets []iscpDrainTarget) error {
+				return renewISCPDrainTargetFences(ctx, targets, 0, 42, "index_idx1", 7)
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			firstStarted := make(chan struct{})
+			secondCompleted := make(chan struct{})
+			qc := &iscpDrainTestQueryClient{
+				serviceID: "ddl-cn",
+				sendFunc: func(ctx context.Context, address string, req *query.Request) error {
+					r := req.ISCPDrainConsumerRequest
+					if r == nil || r.RemoveFenceOnly != test.removeOnly || r.RenewFenceOnly != test.renewOnly {
+						return moerr.NewInternalErrorNoCtx("unexpected fence request")
+					}
+					switch address {
+					case "runner-a:18101":
+						close(firstStarted)
+						<-ctx.Done()
+						return ctx.Err()
+					case "runner-b:18101":
+						select {
+						case <-firstStarted:
+						case <-ctx.Done():
+							return ctx.Err()
+						}
+						if err := ctx.Err(); err != nil {
+							return err
+						}
+						close(secondCompleted)
+						return nil
+					default:
+						return moerr.NewInternalErrorf(ctx, "unexpected query address %s", address)
+					}
+				},
+			}
+			targets := []iscpDrainTarget{
+				{runnerCN: "runner-a", qc: qc, queryAddress: "runner-a:18101"},
+				{runnerCN: "runner-b", qc: qc, queryAddress: "runner-b:18101"},
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+
+			resultC := make(chan error, 1)
+			go func() {
+				resultC <- test.operation(ctx, targets)
+			}()
+			select {
+			case <-secondCompleted:
+				cancel()
+			case <-ctx.Done():
+				<-resultC
+				require.FailNow(t, "reachable second runner was serialized behind the blocked first runner")
+			}
+
+			err := <-resultC
+			require.ErrorContains(t, err, test.errorContains)
+			require.Len(t, qc.requests, 2)
+			require.ElementsMatch(t, []string{"runner-a:18101", "runner-b:18101"}, qc.addresses)
+		})
+	}
 }
 
 func TestDrainIndexCdcTaskConsumerRevalidatesAfterLongDrain(t *testing.T) {

@@ -443,8 +443,7 @@ func renewISCPDrainTargetFences(
 	jobID uint64,
 ) error {
 	key := iscp.NewJobRuntimeKey(accountID, tableID, jobName, jobID)
-	var result error
-	for _, target := range targets {
+	return runISCPDrainTargetOperations(targets, func(target iscpDrainTarget) error {
 		var err error
 		if target.exec != nil {
 			if !target.exec.RenewJobFence(key, iscp.RollbackFenceTTL()) {
@@ -471,13 +470,10 @@ func renewISCPDrainTargetFences(
 			)
 		}
 		if err != nil {
-			result = errors.Join(
-				result,
-				moerr.NewInternalErrorf(ctx, "renew ISCP fence on runner %s: %v", target.runnerCN, err),
-			)
+			return moerr.NewInternalErrorf(ctx, "renew ISCP fence on runner %s: %v", target.runnerCN, err)
 		}
-	}
-	return result
+		return nil
+	})
 }
 
 func removeISCPDrainTargetFences(
@@ -489,8 +485,7 @@ func removeISCPDrainTargetFences(
 	jobID uint64,
 ) error {
 	key := iscp.NewJobRuntimeKey(accountID, tableID, jobName, jobID)
-	var result error
-	for _, target := range targets {
+	return runISCPDrainTargetOperations(targets, func(target iscpDrainTarget) error {
 		var err error
 		if target.exec != nil {
 			target.exec.RemoveJobFence(key)
@@ -508,13 +503,31 @@ func removeISCPDrainTargetFences(
 			)
 		}
 		if err != nil {
-			result = errors.Join(
-				result,
-				moerr.NewInternalErrorf(ctx, "remove ISCP fence on runner %s: %v", target.runnerCN, err),
-			)
+			return moerr.NewInternalErrorf(ctx, "remove ISCP fence on runner %s: %v", target.runnerCN, err)
 		}
+		return nil
+	})
+}
+
+func runISCPDrainTargetOperations(
+	targets []iscpDrainTarget,
+	operation func(iscpDrainTarget) error,
+) error {
+	// Every caller supplies one overall deadline. Start all targets before
+	// waiting so an unreachable runner cannot consume another runner's entire
+	// opportunity to renew or remove its fence.
+	results := make([]error, len(targets))
+	var wg sync.WaitGroup
+	wg.Add(len(targets))
+	for i := range targets {
+		i := i
+		go func() {
+			defer wg.Done()
+			results[i] = operation(targets[i])
+		}()
 	}
-	return result
+	wg.Wait()
+	return errors.Join(results...)
 }
 
 type iscpJobFenceLease struct {
