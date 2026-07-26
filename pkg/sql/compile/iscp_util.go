@@ -40,15 +40,16 @@ import (
 )
 
 var (
-	iscpRegisterJobFunc    = iscp.RegisterJob
-	iscpUnregisterJobFunc  = iscp.UnregisterJob
-	iscpLookupJobLogFunc   = iscp.LookupJobLog
-	iscpGetExecutorFunc    = iscp.GetExecutorRuntime
-	iscpGetTaskRunnerFunc  = iscp.GetTaskRunner
-	iscpGetCNQueryAddress  = getCNQueryAddress
-	iscpDrainReadyTimeout  = 10 * time.Second
-	iscpDrainRetryInterval = 100 * time.Millisecond
-	isTableInCCPRFunc      = isTableInCCPRImpl
+	iscpRegisterJobFunc     = iscp.RegisterJob
+	iscpUnregisterJobFunc   = iscp.UnregisterJob
+	iscpLookupJobLogFunc    = iscp.LookupJobLog
+	iscpGetExecutorFunc     = iscp.GetExecutorRuntime
+	iscpGetTaskRunnerFunc   = iscp.GetTaskRunner
+	iscpGetCNQueryAddress   = getCNQueryAddress
+	iscpDrainReadyTimeout   = 10 * time.Second
+	iscpDrainRetryInterval  = 100 * time.Millisecond
+	iscpFenceCleanupTimeout = 5 * time.Second
+	isTableInCCPRFunc       = isTableInCCPRImpl
 )
 
 /* CDC APIs */
@@ -254,7 +255,39 @@ func drainIndexCdcTaskConsumer(
 	defer cancel()
 	var runnerCN string
 	fencedRunners := make(map[string]struct{})
-	fencedTargets := make([]iscpDrainTarget, 0, 1)
+	fencedTargets := newISCPDrainTargetSet()
+	txnOp := c.proc.GetTxnOperator()
+	var lease iscpJobFenceLease
+	leaseStarted := false
+	startLease := func() {
+		if leaseStarted || txnOp == nil {
+			return
+		}
+		leaseStarted = true
+		lease = startISCPJobFenceLease(func(leaseCtx context.Context) error {
+			ttl := iscp.RollbackFenceTTL()
+			renewCtx, renewCancel := context.WithTimeoutCause(
+				leaseCtx,
+				iscpFenceRenewTimeout(ttl),
+				moerr.NewInternalErrorNoCtx("iscp fence lease renew timeout"),
+			)
+			defer renewCancel()
+			return renewISCPDrainTargetFences(
+				renewCtx,
+				fencedTargets.Snapshot(),
+				accountID,
+				tableID,
+				jobName,
+				jobID,
+			)
+		})
+	}
+	addFencedTarget := func(target iscpDrainTarget) {
+		fencedTargets.Add(target)
+		// Start renewal as soon as the first CN has installed a fence. Later
+		// targets are incorporated through the synchronized snapshot.
+		startLease()
+	}
 	notReadyErr := func() error {
 		if c.proc.Ctx.Err() != nil {
 			return c.proc.Ctx.Err()
@@ -274,23 +307,34 @@ func drainIndexCdcTaskConsumer(
 		)
 	}
 	cleanupAfterFailure := func(cause error, uncertainTarget *iscpDrainTarget) error {
-		targets := fencedTargets
+		lease.Stop()
 		if uncertainTarget != nil {
-			targets = append(append([]iscpDrainTarget(nil), fencedTargets...), *uncertainTarget)
+			fencedTargets.Add(*uncertainTarget)
 		}
+		targets := fencedTargets.Snapshot()
 		if len(targets) == 0 {
 			return cause
 		}
 		cleanupCtx, cleanupCancel := context.WithTimeoutCause(
 			context.Background(),
-			iscpDrainReadyTimeout,
+			iscpFenceCleanupTimeout,
 			moerr.NewInternalErrorNoCtx("iscp failed-drain fence cleanup timeout"),
 		)
 		defer cleanupCancel()
-		return errors.Join(
-			cause,
-			removeISCPDrainTargetFences(cleanupCtx, targets, accountID, tableID, jobName, jobID),
-		)
+		if cleanupErr := removeISCPDrainTargetFences(
+			cleanupCtx,
+			targets,
+			accountID,
+			tableID,
+			jobName,
+			jobID,
+		); cleanupErr != nil {
+			// The operation error is authoritative for frontend transaction
+			// classification. Fence cleanup is best effort and the TTL remains
+			// the fail-closed fallback.
+			logutil.Warnf("failed to clean ISCP fences after drain failure: %v", cleanupErr)
+		}
+		return cause
 	}
 	for {
 		if readyCtx.Err() != nil {
@@ -369,6 +413,10 @@ func drainIndexCdcTaskConsumer(
 					// while unwinding all earlier successful targets.
 					return cleanupAfterFailure(err, &target)
 				}
+				// The handler installs the CN-scoped fence before returning the
+				// retryable not-ready error. Track and renew that pending fence
+				// while waiting for the executor generation to publish.
+				addFencedTarget(target)
 				if readyCtx.Err() != nil {
 					return cleanupAfterFailure(notReadyErr(), nil)
 				}
@@ -384,7 +432,7 @@ func drainIndexCdcTaskConsumer(
 		}
 
 		fencedRunners[runnerCN] = struct{}{}
-		fencedTargets = append(fencedTargets, target)
+		addFencedTarget(target)
 
 		// Start a new bounded readiness generation after every successful drain.
 		// The drain itself may legitimately outlive the previous readiness window.
@@ -392,17 +440,7 @@ func drainIndexCdcTaskConsumer(
 		readyCtx, cancel = context.WithTimeout(c.proc.Ctx, iscpDrainReadyTimeout)
 		defer cancel()
 	}
-	if txnOp := c.proc.GetTxnOperator(); txnOp != nil {
-		lease := startISCPJobFenceLease(func() error {
-			ttl := iscp.RollbackFenceTTL()
-			renewCtx, cancel := context.WithTimeoutCause(
-				context.Background(),
-				iscpFenceRenewTimeout(ttl),
-				moerr.NewInternalErrorNoCtx("iscp fence lease renew timeout"),
-			)
-			defer cancel()
-			return renewISCPDrainTargetFences(renewCtx, fencedTargets, accountID, tableID, jobName, jobID)
-		})
+	if txnOp != nil {
 		cleanup := client.NewTxnEventCallback(func(_ context.Context, _ client.TxnOperator, event client.TxnEvent, _ any) error {
 			lease.Stop()
 			if !event.CostEvent {
@@ -410,11 +448,21 @@ func drainIndexCdcTaskConsumer(
 			}
 			cleanupCtx, cancel := context.WithTimeoutCause(
 				context.Background(),
-				iscp.DefaultRollbackFenceTTL,
+				iscpFenceCleanupTimeout,
 				moerr.NewInternalErrorNoCtx("iscp rollback fence cleanup timeout"),
 			)
 			defer cancel()
-			return removeISCPDrainTargetFences(cleanupCtx, fencedTargets, accountID, tableID, jobName, jobID)
+			if cleanupErr := removeISCPDrainTargetFences(
+				cleanupCtx,
+				fencedTargets.Snapshot(),
+				accountID,
+				tableID,
+				jobName,
+				jobID,
+			); cleanupErr != nil {
+				logutil.Warnf("failed to clean ISCP fences after rollback: %v", cleanupErr)
+			}
+			return nil
 		})
 		txnOp.AppendEventCallback(client.RollbackEvent, cleanup)
 		txnOp.AppendEventCallback(client.CommitEvent, client.NewTxnEventCallback(func(_ context.Context, _ client.TxnOperator, event client.TxnEvent, _ any) error {
@@ -432,6 +480,37 @@ type iscpDrainTarget struct {
 	exec         *iscp.ISCPTaskExecutor
 	qc           qclient.QueryClient
 	queryAddress string
+}
+
+type iscpDrainTargetSet struct {
+	mu      sync.RWMutex
+	order   []string
+	targets map[string]iscpDrainTarget
+}
+
+func newISCPDrainTargetSet() *iscpDrainTargetSet {
+	return &iscpDrainTargetSet{
+		targets: make(map[string]iscpDrainTarget),
+	}
+}
+
+func (s *iscpDrainTargetSet) Add(target iscpDrainTarget) {
+	s.mu.Lock()
+	if _, ok := s.targets[target.runnerCN]; !ok {
+		s.order = append(s.order, target.runnerCN)
+	}
+	s.targets[target.runnerCN] = target
+	s.mu.Unlock()
+}
+
+func (s *iscpDrainTargetSet) Snapshot() []iscpDrainTarget {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	targets := make([]iscpDrainTarget, 0, len(s.order))
+	for _, runnerCN := range s.order {
+		targets = append(targets, s.targets[runnerCN])
+	}
+	return targets
 }
 
 func renewISCPDrainTargetFences(
@@ -533,7 +612,7 @@ type iscpJobFenceLease struct {
 	stop func()
 }
 
-func startISCPJobFenceLease(renew func() error) iscpJobFenceLease {
+func startISCPJobFenceLease(renew func(context.Context) error) iscpJobFenceLease {
 	ttl := iscp.RollbackFenceTTL()
 	if ttl <= 0 || renew == nil {
 		return iscpJobFenceLease{stop: func() {}}
@@ -542,26 +621,29 @@ func startISCPJobFenceLease(renew func() error) iscpJobFenceLease {
 	if interval < 10*time.Millisecond {
 		interval = 10 * time.Millisecond
 	}
-	stopCh := make(chan struct{})
+	leaseCtx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
 	var once sync.Once
 	go func() {
+		defer close(done)
 		timer := time.NewTimer(interval)
 		defer timer.Stop()
 		for {
 			select {
 			case <-timer.C:
-				if err := renew(); err != nil {
+				if err := renew(leaseCtx); err != nil && leaseCtx.Err() == nil {
 					logutil.Warnf("failed to renew ISCP job fence lease: %v", err)
 				}
 				timer.Reset(interval)
-			case <-stopCh:
+			case <-leaseCtx.Done():
 				return
 			}
 		}
 	}()
 	return iscpJobFenceLease{stop: func() {
 		once.Do(func() {
-			close(stopCh)
+			cancel()
+			<-done
 		})
 	}}
 }

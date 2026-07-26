@@ -208,41 +208,6 @@ func (s *service) handleISCPDrainConsumer(ctx context.Context, req *query.Reques
 		return moerr.NewInternalError(ctx, "bad request")
 	}
 	r := req.ISCPDrainConsumerRequest
-	initialDrain := !r.RemoveFenceOnly && !r.RenewFenceOnly
-	var exec *iscp.ISCPTaskExecutor
-	var ok bool
-	if initialDrain {
-		// A daemon task publishes task_runner before its executor has completed
-		// recovery and registered its runtime. Only an initial drain can wait for
-		// that startup window: fence maintenance is handled by the original owner
-		// and must not turn a missing runtime into a new fence operation.
-		readyCtx, cancel := context.WithTimeout(ctx, iscpExecutorReadyTimeout)
-		defer cancel()
-		exec, ok = getISCPExecutorRuntime(readyCtx, s.cfg.UUID)
-		if !ok || exec == nil {
-			exec, ok = waitISCPExecutorRuntime(readyCtx, s.cfg.UUID)
-		}
-		if !ok || exec == nil {
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			// This code is preserved by queryservice's response error envelope and
-			// is retried by the compile-side drain path only.
-			return moerr.NewRetryForCNRollingRestart()
-		}
-	} else {
-		exec, ok = iscpGetExecutorRuntimeFn(s.cfg.UUID)
-		if !ok || exec == nil {
-			return moerr.NewInternalErrorf(
-				ctx,
-				"cannot confirm ISCP consumer quiescence on CN %s for tableID=%d jobName=%s jobID=%d",
-				s.cfg.UUID,
-				r.TableID,
-				r.JobName,
-				r.JobID,
-			)
-		}
-	}
 	key := iscp.NewJobRuntimeKey(r.AccountID, r.TableID, r.JobName, r.JobID)
 	if r.RemoveFenceOnly {
 		if _, msg, injected := fault.TriggerFault(objectio.FJ_ISCPCancelRemoveFenceError); injected {
@@ -251,23 +216,44 @@ func (s *service) handleISCPDrainConsumer(ctx context.Context, req *query.Reques
 			}
 			return moerr.NewInternalErrorNoCtxf("injected ISCP remove fence error: %s", msg)
 		}
-		exec.RemoveJobFence(key)
+		iscp.RemoveCNJobFence(s.cfg.UUID, key)
+		if exec, ok := iscpGetExecutorRuntimeFn(s.cfg.UUID); ok && exec != nil {
+			exec.RemoveJobFence(key)
+		}
 		resp.ISCPDrainConsumerResponse = &query.ISCPDrainConsumerResponse{Success: true}
 		return nil
 	}
 	if r.RenewFenceOnly {
-		if !exec.RenewJobFence(key, iscp.RollbackFenceTTL()) {
-			return moerr.NewInternalErrorf(
-				ctx,
-				"cannot renew ISCP consumer quiescence fence on CN %s for tableID=%d jobName=%s jobID=%d",
-				s.cfg.UUID,
-				r.TableID,
-				r.JobName,
-				r.JobID,
-			)
+		// Renewal is an idempotent upsert. A CN process may have restarted since
+		// the initial drain; reinstalling the CN-scoped fence keeps the active
+		// DDL fail-closed for the replacement process generation.
+		iscp.InstallCNJobFence(s.cfg.UUID, key, iscp.RollbackFenceTTL())
+		if exec, ok := iscpGetExecutorRuntimeFn(s.cfg.UUID); ok && exec != nil {
+			exec.InstallJobFence(key, iscp.RollbackFenceTTL())
 		}
 		resp.ISCPDrainConsumerResponse = &query.ISCPDrainConsumerResponse{Success: true}
 		return nil
+	}
+
+	// Install the CN-scoped fence before looking up the executor. This closes
+	// the task-assignment/readiness gap: a replacement executor generation on
+	// this CN observes the fence even if it is published after this request.
+	iscp.InstallCNJobFence(s.cfg.UUID, key, iscp.RollbackFenceTTL())
+	// A daemon task publishes task_runner before its executor has completed
+	// recovery and registered its runtime.
+	readyCtx, cancel := context.WithTimeout(ctx, iscpExecutorReadyTimeout)
+	defer cancel()
+	exec, ok := getISCPExecutorRuntime(readyCtx, s.cfg.UUID)
+	if !ok || exec == nil {
+		exec, ok = waitISCPExecutorRuntime(readyCtx, s.cfg.UUID)
+	}
+	if !ok || exec == nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		// This code is preserved by queryservice's response error envelope and
+		// is retried by the compile-side drain path only.
+		return moerr.NewRetryForCNRollingRestart()
 	}
 	if err := exec.CancelAndDrainJobConsumer(ctx, r.AccountID, r.TableID, r.JobName, r.JobID); err != nil {
 		exec.RemoveJobFence(key)

@@ -77,9 +77,10 @@ func Test_service_handleISCPDrainConsumerRenewFenceOnly(t *testing.T) {
 
 	s := &service{cfg: &Config{UUID: "runner-cn"}}
 	key := iscp.NewJobRuntimeKey(1, 42, "index_idx1", 7)
+	defer iscp.RemoveCNJobFence("runner-cn", key)
 
 	resp := &query.Response{}
-	require.ErrorContains(t, s.handleISCPDrainConsumer(context.Background(), &query.Request{
+	require.NoError(t, s.handleISCPDrainConsumer(context.Background(), &query.Request{
 		ISCPDrainConsumerRequest: &query.ISCPDrainConsumerRequest{
 			AccountID:      key.AccountID,
 			TableID:        key.TableID,
@@ -87,13 +88,13 @@ func Test_service_handleISCPDrainConsumerRenewFenceOnly(t *testing.T) {
 			JobID:          key.JobID,
 			RenewFenceOnly: true,
 		},
-	}, resp, nil), "cannot renew ISCP consumer quiescence fence")
-	require.Nil(t, resp.ISCPDrainConsumerResponse)
+	}, resp, nil))
+	require.True(t, resp.ISCPDrainConsumerResponse.Success)
+	require.True(t, iscp.RenewCNJobFence("runner-cn", key, time.Second))
+	require.True(t, exec.IsJobFenced(key))
+
+	time.Sleep(1100 * time.Millisecond)
 	require.False(t, exec.IsJobFenced(key))
-
-	require.NoError(t, exec.CancelAndDrainJobConsumer(context.Background(), key.AccountID, key.TableID, key.JobName, key.JobID))
-	time.Sleep(700 * time.Millisecond)
-
 	resp = &query.Response{}
 	require.NoError(t, s.handleISCPDrainConsumer(context.Background(), &query.Request{
 		ISCPDrainConsumerRequest: &query.ISCPDrainConsumerRequest{
@@ -104,21 +105,9 @@ func Test_service_handleISCPDrainConsumerRenewFenceOnly(t *testing.T) {
 			RenewFenceOnly: true,
 		},
 	}, resp, nil))
-	time.Sleep(700 * time.Millisecond)
+	require.True(t, resp.ISCPDrainConsumerResponse.Success)
+	require.True(t, iscp.RenewCNJobFence("runner-cn", key, time.Second))
 	require.True(t, exec.IsJobFenced(key))
-
-	time.Sleep(1100 * time.Millisecond)
-	require.False(t, exec.IsJobFenced(key))
-	resp = &query.Response{}
-	require.ErrorContains(t, s.handleISCPDrainConsumer(context.Background(), &query.Request{
-		ISCPDrainConsumerRequest: &query.ISCPDrainConsumerRequest{
-			AccountID:      key.AccountID,
-			TableID:        key.TableID,
-			JobName:        key.JobName,
-			JobID:          key.JobID,
-			RenewFenceOnly: true,
-		},
-	}, resp, nil), "cannot renew ISCP consumer quiescence fence")
 }
 
 func Test_service_handleISCPDrainConsumerWaitsForExecutorRuntime(t *testing.T) {
@@ -131,6 +120,8 @@ func Test_service_handleISCPDrainConsumerWaitsForExecutorRuntime(t *testing.T) {
 	}()
 
 	const runnerCN = "late-runner-cn"
+	key := iscp.NewJobRuntimeKey(1, 42, "index_idx1", 7)
+	defer iscp.RemoveCNJobFence(runnerCN, key)
 	exec := &iscp.ISCPTaskExecutor{}
 	defer iscp.UnregisterExecutorRuntime(runnerCN, exec)
 	firstLookup := make(chan struct{})
@@ -169,7 +160,10 @@ func Test_service_handleISCPDrainConsumerReturnsRetryableNotReady(t *testing.T) 
 	iscpExecutorReadyTimeout = time.Millisecond
 	defer func() { iscpExecutorReadyTimeout = oldTimeout }()
 
-	s := &service{cfg: &Config{UUID: "not-ready-runner-cn"}}
+	const runnerCN = "not-ready-runner-cn"
+	key := iscp.NewJobRuntimeKey(0, 42, "index_idx1", 7)
+	defer iscp.RemoveCNJobFence(runnerCN, key)
+	s := &service{cfg: &Config{UUID: runnerCN}}
 	err := s.handleISCPDrainConsumer(context.Background(), &query.Request{
 		ISCPDrainConsumerRequest: &query.ISCPDrainConsumerRequest{
 			TableID: 42,
@@ -178,6 +172,19 @@ func Test_service_handleISCPDrainConsumerReturnsRetryableNotReady(t *testing.T) 
 		},
 	}, &query.Response{}, nil)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrRetryForCNRollingRestart))
+	require.True(t, iscp.RenewCNJobFence(runnerCN, key, time.Second),
+		"not-ready response must leave a fence for the pending executor generation")
+
+	resp := &query.Response{}
+	require.NoError(t, s.handleISCPDrainConsumer(context.Background(), &query.Request{
+		ISCPDrainConsumerRequest: &query.ISCPDrainConsumerRequest{
+			TableID:         key.TableID,
+			JobName:         key.JobName,
+			JobID:           key.JobID,
+			RemoveFenceOnly: true,
+		},
+	}, resp, nil))
+	require.False(t, iscp.RenewCNJobFence(runnerCN, key, time.Second))
 }
 
 func Test_service_handleISCPDrainConsumerRetriesInjectedStartupGap(t *testing.T) {
@@ -201,6 +208,8 @@ func Test_service_handleISCPDrainConsumerRetriesInjectedStartupGap(t *testing.T)
 	}()
 
 	const runnerCN = "injected-late-runner-cn"
+	key := iscp.NewJobRuntimeKey(1, 42, "index_idx1", 7)
+	defer iscp.RemoveCNJobFence(runnerCN, key)
 	exec := &iscp.ISCPTaskExecutor{}
 	iscp.RegisterExecutorRuntime(runnerCN, exec)
 	defer iscp.UnregisterExecutorRuntime(runnerCN, exec)

@@ -89,6 +89,63 @@ func TestRegisterRunningConsumerRejectsFencedJob(t *testing.T) {
 	require.False(t, ok)
 }
 
+func TestCNJobFenceSurvivesExecutorGenerationReplacement(t *testing.T) {
+	const runnerCN = "generation-runner-cn"
+	key := NewJobRuntimeKey(1, 2, "index_idx01", 1)
+	first := newRuntimeTestExecutor()
+	first.cnUUID = runnerCN
+	second := newRuntimeTestExecutor()
+	second.cnUUID = runnerCN
+	RegisterExecutorRuntime(runnerCN, first)
+
+	require.NoError(t, first.CancelAndDrainJobConsumer(
+		context.Background(),
+		key.AccountID,
+		key.TableID,
+		key.JobName,
+		key.JobID,
+	))
+	UnregisterExecutorRuntime(runnerCN, first)
+	RegisterExecutorRuntime(runnerCN, second)
+	defer func() {
+		second.RemoveJobFence(key)
+		UnregisterExecutorRuntime(runnerCN, second)
+	}()
+	_, ok := second.RegisterRunningConsumer(key, key.JobID, 1, func() {}, nil)
+	require.False(t, ok, "replacement generation must inherit the CN fence")
+
+	second.RemoveJobFence(key)
+	handle, ok := second.RegisterRunningConsumer(key, key.JobID, 2, func() {}, nil)
+	require.True(t, ok)
+	second.UnregisterRunningConsumer(handle)
+}
+
+func TestCNJobFenceDoesNotCrossRunnerBoundary(t *testing.T) {
+	key := NewJobRuntimeKey(1, 2, "index_idx01", 1)
+	first := newRuntimeTestExecutor()
+	first.cnUUID = "runner-a"
+	second := newRuntimeTestExecutor()
+	second.cnUUID = "runner-b"
+	RegisterExecutorRuntime(first.cnUUID, first)
+	RegisterExecutorRuntime(second.cnUUID, second)
+	defer func() {
+		first.RemoveJobFence(key)
+		UnregisterExecutorRuntime(first.cnUUID, first)
+		UnregisterExecutorRuntime(second.cnUUID, second)
+	}()
+
+	require.NoError(t, first.CancelAndDrainJobConsumer(
+		context.Background(),
+		key.AccountID,
+		key.TableID,
+		key.JobName,
+		key.JobID,
+	))
+	handle, ok := second.RegisterRunningConsumer(key, key.JobID, 1, func() {}, nil)
+	require.True(t, ok)
+	second.UnregisterRunningConsumer(handle)
+}
+
 func TestExpiredJobFenceIsClearedWhenChecked(t *testing.T) {
 	exec := newRuntimeTestExecutor()
 	key := NewJobRuntimeKey(1, 2, "index_idx01", 1)
