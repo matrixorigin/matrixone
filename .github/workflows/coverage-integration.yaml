@@ -9,9 +9,12 @@ concurrency:
   group: ${{ github.event.pull_request.head.repo.full_name }}/${{ github.event.pull_request.head.ref }}/${{ github.workflow }}
   cancel-in-progress: true
 
-# pull_request_target intentionally loads the workflow from the base branch.
-# This short-lived, same-repository harness validates both PR branches together
-# and is removed after the integration run.
+permissions:
+  contents: read
+
+# The production pull_request_target workflow loads its definition from the
+# base branch. This short-lived, same-repository pull_request harness validates
+# both PR branches together and is removed after the integration run.
 jobs:
   bvt-group-plan:
     if: ${{ github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'xp/ci-race-coverage-artifacts' }}
