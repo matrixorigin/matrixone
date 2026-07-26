@@ -826,14 +826,18 @@ func (tbl *txnTable) createCommittedAppendableObject(opts *objectio.CreateObjOpt
 	}
 	var meta *catalog.ObjectEntry
 	if txn.GetTxnState(false) == txnif.TxnStatePreparing {
-		// Flush and merge may transfer deletes after the parent transaction has
-		// entered PrepareCommit.  The append rows are still owned by that
-		// transaction, but allocating a fresh create timestamp for each
-		// appendable object would make the rewritten data visible before all of
-		// its tombstones.  Keep the catalog entry outside the transaction while
-		// aligning its visibility with the parent transaction. The append MVCC
-		// node still makes readers crossing this timestamp wait for the parent,
-		// and WAL replay reconstructs the object from that append at the same TS.
+		// This is a deliberate exception to the normal atomic timestamp
+		// allocation and catalog publication below. Flush and merge may transfer
+		// deletes after the parent has entered PrepareCommit, and each new
+		// appendable object is only a carrier for rows still owned by that parent
+		// transaction. A fresh object timestamp would split rewritten data from
+		// its tombstones. Use the parent's visibility boundary instead.
+		// Correctness scan paths that cross it wait on the parent's rewritten
+		// data/append MVCC before snapshotting the transfer tombstones, and WAL
+		// replay reconstructs the carrier from its append at the same timestamp.
+		//
+		// Do not use this branch for independently committed object state: such
+		// state must retain AllocateAndPublishCommitTS ordering.
 		meta, err = tbl.entry.CreateCommittedObject(txn.GetPrepareTS(), opts, factory)
 		if err != nil {
 			return

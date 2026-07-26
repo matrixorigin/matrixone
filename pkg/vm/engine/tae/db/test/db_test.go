@@ -3978,21 +3978,42 @@ func TestFlushTransferTombstonesVisibleToSnapshotStartedWhilePreparing(t *testin
 
 	commitDone := make(chan error, 1)
 	go func() {
+		defer close(commitDone)
 		commitDone <- flushTxn.Commit(ctx)
 	}()
+	releaseParent := sync.OnceFunc(func() {
+		close(barrier.release)
+	})
+	t.Cleanup(func() {
+		releaseParent()
+		select {
+		case <-commitDone:
+		case <-time.After(5 * time.Second):
+			t.Error("flush transaction did not exit after releasing PrepareCommit")
+		}
+	})
 	select {
 	case <-barrier.reached:
 	case <-time.After(5 * time.Second):
 		t.Fatal("flush transaction did not reach PrepareCommit")
 	}
 
-	// Fix the reader snapshot after the parent timestamp has been assigned but
-	// before the late transfer creates any new appendable objects.
-	snapshotTxn, err := tae.StartTxn(nil)
+	parentPrepareTS := flushTxn.GetPrepareTS()
+	readerSnapshotTS := tae.TxnMgr.Now()
+	require.Truef(
+		t,
+		parentPrepareTS.LT(&readerSnapshotTS),
+		"reader snapshot %s must cross parent prepare timestamp %s",
+		readerSnapshotTS.ToString(),
+		parentPrepareTS.ToString(),
+	)
+	// Fix a reader snapshot beyond the parent visibility boundary while the
+	// barrier still guarantees that no late transfer object has been created.
+	snapshotTxn, err := tae.StartTxnWithStartTSAndSnapshotTS(nil, readerSnapshotTS)
 	require.NoError(t, err)
 	snapshotTxn.BindAccessInfo(0, 0, 0)
 	snapshotRel := tae.GetRelationWithTxn(snapshotTxn)
-	close(barrier.release)
+	releaseParent()
 	require.NoError(t, <-commitDone)
 	testutil.CheckAllColRowsByScan(t, snapshotRel, 0, true)
 	require.NoError(t, snapshotTxn.Commit(ctx))
