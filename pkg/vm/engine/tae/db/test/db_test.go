@@ -4042,6 +4042,194 @@ func TestFlushTransferTombstonesRollback(t *testing.T) {
 	tae.CheckRowsByScan(0, true)
 }
 
+func TestIncrementalDedupIgnoresOldRowsInTNRewrite(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll(3, 2)
+	schema.Extra.BlockMaxRows = 10
+	schema.Extra.ObjectMaxBlocks = 2
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, int(schema.Extra.BlockMaxRows*3)+1)
+	defer bat.Close()
+
+	tae.CreateRelAndAppend(bat, true)
+
+	// The rows predate insertTxn, but a later TN flush gives their physical
+	// object a new CreatedAt timestamp. Row commit timestamps, rather than the
+	// rewrite timestamp, must keep them outside the incremental window.
+	insertTxn, insertRel := tae.GetRelation()
+	insertTxn.SetDedupType(txnif.DedupPolicy_CheckIncremental)
+	require.NoError(t, insertRel.Append(ctx, bat))
+
+	flushTxn, flushRel := tae.GetRelation()
+	var metas []*catalog.ObjectEntry
+	it := flushRel.MakeObjectIt(false)
+	for it.Next() {
+		metas = append(metas, it.GetObject().GetMeta().(*catalog.ObjectEntry))
+	}
+	it.Close()
+	task, err := jobs.NewFlushTableTailTask(nil, flushTxn, metas, nil, tae.Runtime)
+	require.NoError(t, err)
+	require.NoError(t, task.OnExec(ctx))
+	rewritten := task.GetCreatedObjects().GetMeta().(*catalog.ObjectEntry)
+	require.Greater(t, rewritten.BlkCnt(), uint32(1))
+	require.False(t, rewritten.GetObjectStats().GetCNCreated())
+	require.NoError(t, flushTxn.Commit(ctx))
+
+	require.NoError(t, insertTxn.GetStore().Freeze(ctx))
+	require.NoError(t, insertTxn.Rollback(ctx))
+}
+
+func TestIncrementalDedupChecksCNCreatedObject(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll(3, 2)
+	schema.Extra.BlockMaxRows = 10
+	schema.Extra.ObjectMaxBlocks = 2
+	tae.BindSchema(schema)
+	testutil.CreateRelation(t, tae.DB, "db", schema, true)
+
+	bat := catalog.MockBatch(schema, 31)
+	defer bat.Close()
+
+	objectID := objectio.NewObjectid()
+	name := objectio.BuildObjectNameWithObjectID(&objectID)
+	writer, err := ioutil.NewBlockWriterNew(tae.Runtime.Fs, name, 0, nil, false)
+	require.NoError(t, err)
+	writer.SetPrimaryKey(uint16(schema.GetSingleSortKeyIdx()))
+	_, err = writer.WriteBatch(containers.ToCNBatch(bat))
+	require.NoError(t, err)
+	_, _, err = writer.Sync(ctx)
+	require.NoError(t, err)
+	stats := writer.GetObjectStats(objectio.WithCNCreated())
+	require.True(t, stats.GetCNCreated())
+	statsVec := containers.MakeVector(types.T_varchar.ToType(), common.DefaultAllocator)
+	defer statsVec.Close()
+	statsVec.Append(stats[:], false)
+
+	insertTxn, insertRel := tae.GetRelation()
+	insertTxn.SetDedupType(txnif.DedupPolicy_CheckIncremental)
+	require.NoError(t, insertRel.Append(ctx, bat))
+
+	cnTxn, cnRel := tae.GetRelation()
+	require.NoError(t, cnRel.AddDataFiles(ctx, statsVec))
+	require.NoError(t, cnTxn.Commit(ctx))
+
+	err = insertTxn.GetStore().Freeze(ctx)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry), err)
+	require.NoError(t, insertTxn.Rollback(ctx))
+}
+
+func TestStrictDedupIgnoresOldRowsInTNRewrite(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll(3, 2)
+	schema.Extra.BlockMaxRows = 10
+	schema.Extra.ObjectMaxBlocks = 2
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, int(schema.Extra.BlockMaxRows*3)+1)
+	defer bat.Close()
+
+	tae.CreateRelAndAppend(bat, true)
+
+	insertTxn, insertRel := tae.GetRelation()
+	// Stage without the snapshot check so this test isolates the strict
+	// pre-prepare window check.
+	insertTxn.SetDedupType(txnif.DedupPolicy_CheckIncremental)
+	require.NoError(t, insertRel.Append(ctx, bat))
+	insertTxn.SetDedupType(txnif.DedupPolicy_CheckAll)
+
+	flushTxn, flushRel := tae.GetRelation()
+	var metas []*catalog.ObjectEntry
+	it := flushRel.MakeObjectIt(false)
+	for it.Next() {
+		metas = append(metas, it.GetObject().GetMeta().(*catalog.ObjectEntry))
+	}
+	it.Close()
+	task, err := jobs.NewFlushTableTailTask(nil, flushTxn, metas, nil, tae.Runtime)
+	require.NoError(t, err)
+	require.NoError(t, task.OnExec(ctx))
+	rewritten := task.GetCreatedObjects().GetMeta().(*catalog.ObjectEntry)
+	require.Greater(t, rewritten.BlkCnt(), uint32(1))
+	require.False(t, rewritten.GetObjectStats().GetCNCreated())
+	require.NoError(t, flushTxn.Commit(ctx))
+
+	require.NoError(t, insertTxn.PrePrepare(ctx))
+	require.NoError(t, insertTxn.Rollback(ctx))
+}
+
+func TestDedupDetectsConcurrentRowAfterTNRewrite(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		policy txnif.DedupPolicy
+	}{
+		{name: "strict", policy: txnif.DedupPolicy_CheckAll},
+		{name: "incremental", policy: txnif.DedupPolicy_CheckIncremental},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			defer testutils.AfterTest(t)()
+			ctx := context.Background()
+
+			opts := config.WithLongScanAndCKPOpts(nil)
+			tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+			defer tae.Close()
+
+			schema := catalog.MockSchemaAll(3, 2)
+			schema.Extra.BlockMaxRows = 10
+			schema.Extra.ObjectMaxBlocks = 2
+			tae.BindSchema(schema)
+			bat := catalog.MockBatch(schema, 64)
+			defer bat.Close()
+			oldRows := bat.CloneWindow(0, 31)
+			defer oldRows.Close()
+			concurrentRow := bat.CloneWindow(63, 1)
+			defer concurrentRow.Close()
+
+			tae.CreateRelAndAppend(oldRows, true)
+
+			insertTxn, insertRel := tae.GetRelation()
+			insertTxn.SetDedupType(test.policy)
+			require.NoError(t, insertRel.Append(ctx, concurrentRow))
+
+			tae.DoAppend(concurrentRow)
+
+			flushTxn, flushRel := tae.GetRelation()
+			var metas []*catalog.ObjectEntry
+			it := flushRel.MakeObjectIt(false)
+			for it.Next() {
+				metas = append(metas, it.GetObject().GetMeta().(*catalog.ObjectEntry))
+			}
+			it.Close()
+			task, err := jobs.NewFlushTableTailTask(nil, flushTxn, metas, nil, tae.Runtime)
+			require.NoError(t, err)
+			require.NoError(t, task.OnExec(ctx))
+			rewritten := task.GetCreatedObjects().GetMeta().(*catalog.ObjectEntry)
+			require.Greater(t, rewritten.BlkCnt(), uint32(1))
+			require.False(t, rewritten.GetObjectStats().GetCNCreated())
+			require.NoError(t, flushTxn.Commit(ctx))
+
+			err = insertTxn.PrePrepare(ctx)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict), err)
+			require.NoError(t, insertTxn.Rollback(ctx))
+		})
+	}
+}
+
 func TestDropCreated1(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	ctx := context.Background()
