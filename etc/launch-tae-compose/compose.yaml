@@ -32,14 +32,13 @@ services:
     depends_on:
       - tn
     ports:
-      - "6001:6001"
       - "6002"
       - "12345:12345"
     environment:
       - AWS_ACCESS_KEY_ID=minio
       - AWS_SECRET_ACCESS_KEY=minio123
       - mo_reuse_enable_checker=true
-      - GOCOVERDIR=${GOCOVERDIR:-}
+      - GOCOVERDIR=/coverage
     networks:
       monet:
         aliases:
@@ -52,7 +51,6 @@ services:
     depends_on:
       - tn
     ports:
-      - "7001:6001"
       - "6002"
       - "22345:12345"
     profiles:
@@ -62,11 +60,35 @@ services:
       - AWS_ACCESS_KEY_ID=minio
       - AWS_SECRET_ACCESS_KEY=minio123
       - mo_reuse_enable_checker=true
-      - GOCOVERDIR=${GOCOVERDIR:-}
+      - GOCOVERDIR=/coverage
     networks:
       monet:
         aliases:
           - "cn1"
+
+  proxy:
+    container_name: proxy
+    <<: *mo-common
+    entrypoint: ["/bin/bash","-c","set -euo pipefail; /mo-service -debug-http :12345 -cfg /config/proxy.toml | tee -a /log/proxy.log"]
+    profiles:
+      - launch
+      - launch-multi-cn
+    depends_on:
+      - logservice
+      - cn-0
+      - cn-1
+    ports:
+      - "6001:6009"
+      - "32346:12345"
+    environment:
+      - AWS_ACCESS_KEY_ID=minio
+      - AWS_SECRET_ACCESS_KEY=minio123
+      - mo_reuse_enable_checker=true
+      - GOCOVERDIR=/coverage
+    networks:
+      monet:
+        aliases:
+          - "proxy"
 
   tn:
     container_name: tn
@@ -84,7 +106,7 @@ services:
       - AWS_ACCESS_KEY_ID=minio
       - AWS_SECRET_ACCESS_KEY=minio123
       - mo_reuse_enable_checker=true
-      - GOCOVERDIR=${GOCOVERDIR:-}
+      - GOCOVERDIR=/coverage
     networks:
       monet:
         aliases:
@@ -108,7 +130,7 @@ services:
       - AWS_ACCESS_KEY_ID=minio
       - AWS_SECRET_ACCESS_KEY=minio123
       - mo_reuse_enable_checker=true
-      - GOCOVERDIR=${GOCOVERDIR:-}
+      - GOCOVERDIR=/coverage
     networks:
       monet:
         aliases:
