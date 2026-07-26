@@ -998,6 +998,61 @@ func TestSpillEmergencyBudgetDoesNotScaleRetainedVectorCapacity(t *testing.T) {
 	require.GreaterOrEqual(t, need, fullNeed)
 }
 
+func TestSpillProjectedSourceSkipsStaleNullVarlenaPayload(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = testutil.MakeVarcharVector([]string{"x"}, []uint64{0}, proc.Mp())
+	bat.SetRowCount(1)
+	defer bat.Clean(proc.Mp())
+
+	// A null append does not overwrite a reused varlen slot. Plant the stale
+	// non-inline header that such a slot can retain; UnionInt32 skips the null
+	// value, so this dead payload must not be projected into the spill batch.
+	values, _ := vector.MustVarlenaRawData(bat.Vecs[0])
+	const staleLen = uint32(1 << 20)
+	values[0].SetOffsetLen(0, staleLen)
+
+	targetRows := uint64(colexec.DefaultBatchSize)
+	legacySource := targetRows * (uint64(bat.Vecs[0].GetType().TypeSize()) + uint64(staleLen))
+	legacyNeed, err := spillBudgetFor(targetRows, legacySource)
+	require.NoError(t, err)
+	require.Greater(t, legacyNeed, uint64(10<<30),
+		"stale null payload would falsely exceed the query budget")
+
+	source, err := spillProjectedSourceBytes(bat, targetRows)
+	require.NoError(t, err)
+	require.Equal(t, targetRows*uint64(bat.Vecs[0].GetType().TypeSize()), source)
+
+	need, err := spillEmergencyBudgetBytes(bat)
+	require.NoError(t, err)
+	require.Less(t, need, uint64(16<<20))
+}
+
+func TestSpillProjectedSourceBoundaryInputs(t *testing.T) {
+	source, err := spillProjectedSourceBytes(nil, colexec.DefaultBatchSize)
+	require.NoError(t, err)
+	require.Zero(t, source)
+
+	invalid := batch.NewWithSize(1)
+	invalid.SetRowCount(1)
+	_, err = spillProjectedSourceBytes(invalid, colexec.DefaultBatchSize)
+	require.ErrorIs(t, err, process.ErrHashBuildBudgetInvalid)
+
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	constNull := batch.NewWithSize(1)
+	constNull.Vecs[0] = vector.NewConstNull(types.T_varchar.ToType(), 1, proc.Mp())
+	constNull.SetRowCount(1)
+	defer constNull.Clean(proc.Mp())
+
+	targetRows := uint64(colexec.DefaultBatchSize)
+	source, err = spillProjectedSourceBytes(constNull, targetRows)
+	require.NoError(t, err)
+	require.Equal(t, targetRows*uint64(types.T_varchar.ToType().TypeSize()), source)
+}
+
 func TestEnsureSpillFile(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()

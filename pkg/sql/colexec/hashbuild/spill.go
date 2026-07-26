@@ -200,7 +200,15 @@ func spillProjectedSourceBytes(bat *batch.Batch, targetRows uint64) (uint64, err
 			return 0, process.ErrHashBuildBudgetInvalid
 		}
 		var externalPayload uint64
+		hasNull := !vec.GetNulls().EmptyByFlag()
 		for i := uint64(0); i < valueRows; i++ {
+			// UnionInt32 does not copy null values. Reused varlen vectors can
+			// retain a stale non-inline header in a null slot, so charging that
+			// dead payload would recreate the same false extrapolation this
+			// compact estimate is intended to avoid.
+			if hasNull && vec.GetNulls().Contains(i) {
+				continue
+			}
 			if values[i].IsSmall() {
 				continue
 			}
