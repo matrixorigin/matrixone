@@ -43,7 +43,8 @@ var (
 	eventCDCRestartUpdateCompleted        = logutil.Event{Name: "frontend.cdc.restart.request-updated", Message: "CDC restart request was persisted"}
 	eventCDCRestartLookupFailed           = logutil.Event{Name: "frontend.cdc.restart.task-lookup-failed", Message: "CDC restart task lookup failed"}
 	eventCDCRestartLookupCompleted        = logutil.Event{Name: "frontend.cdc.restart.task-lookup-completed", Message: "CDC restart task lookup completed"}
-	eventCDCRestartCatalogStateDeferred   = logutil.Event{Name: "frontend.cdc.restart.catalog-state-deferred", Message: "CDC restart leaves catalog state unchanged until replacement readiness"}
+	eventCDCRestartCatalogStateMarked     = logutil.Event{Name: "frontend.cdc.restart.catalog-state-marked", Message: "CDC restart marked catalog admission as restarting"}
+	eventCDCRestartCatalogMarkFailed      = logutil.Event{Name: "frontend.cdc.restart.catalog-mark-failed", Message: "CDC restart could not mark catalog admission"}
 )
 
 func isCDCRestart(status task.TaskStatus) bool {
@@ -419,13 +420,26 @@ func onPreUpdateCDCTasks(
 
 	affectedCdcRow = int(cnt)
 	// RestartRequested is an admission request, not proof that a replacement
-	// executor is running. Keep the catalog state unchanged here; Start updates
-	// it only after the replacement reaches its ready point.
+	// executor is running. Persist a distinct marker rather than running: it
+	// both reports the admitted state honestly and fences a later pause from a
+	// delayed replacement startup.
 	if isCDCRestart(targetTaskStatus) {
-		eventCDCRestartCatalogStateDeferred.InfoLazy(func() []zap.Field {
+		if cnt, err = dao.PrepareUpdateTask(
+			ctx,
+			accountId,
+			taskName,
+			cdc.CDCState_Restarting,
+		); err != nil {
+			eventCDCRestartCatalogMarkFailed.ErrorLazy(func() []zap.Field {
+				return cdcRestartFields(taskName, append(cdcRestartAccountFields(accountId), logutil.ErrorFingerprintFields("error", err)...)...)
+			})
+			return
+		}
+		affectedCdcRow += int(cnt)
+		eventCDCRestartCatalogStateMarked.InfoLazy(func() []zap.Field {
 			return cdcRestartFields(taskName, append([]zap.Field{
 				zap.Int64("task-count", cnt),
-				zap.String("reason", "replacement-not-ready"),
+				zap.String("catalog-state", cdc.CDCState_Restarting),
 			}, cdcRestartAccountFields(accountId)...)...)
 		})
 		return affectedCdcRow, nil

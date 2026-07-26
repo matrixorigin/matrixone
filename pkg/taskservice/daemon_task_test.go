@@ -927,6 +927,29 @@ func TestRestartDaemonTaskTakesOverStaleForeignRunner(t *testing.T) {
 		WithRunnerFetchInterval(time.Millisecond))
 }
 
+func TestRestartDaemonTaskPassesRestartAdmissionToExecutor(t *testing.T) {
+	runTaskRunnerTest(t, func(r *taskRunner, s TaskService, store TaskStorage) {
+		dt := newDaemonTaskForTest(1, task.TaskStatus_RestartRequested, "foreign-runner")
+		dt.LastHeartbeat = time.Now().Add(-r.options.heartbeatTimeout - time.Second)
+		mustAddTestDaemonTask(t, store, 1, dt)
+
+		admission := make(chan bool, 1)
+		r.RegisterExecutor(task.TaskCode_ConnectorKafkaSink, func(ctx context.Context, _ task.Task) error {
+			admission <- IsRestartAdmission(ctx)
+			return nil
+		})
+
+		expectTaskStatus(t, store, dt, task.TaskStatus_RestartRequested, task.TaskStatus_Running)
+		select {
+		case got := <-admission:
+			require.True(t, got)
+		case <-time.After(time.Second * 5):
+			require.Fail(t, "restart executor was not invoked")
+		}
+	}, WithRunnerParallelism(1),
+		WithRunnerFetchInterval(time.Millisecond))
+}
+
 func TestRestartStartClaimDoesNotOverwriteSupersedingControlRequest(t *testing.T) {
 	runTaskRunnerTest(t, func(r *taskRunner, s TaskService, store TaskStorage) {
 		dt := newDaemonTaskForTest(1, task.TaskStatus_RestartRequested, "foreign-runner")

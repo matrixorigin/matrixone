@@ -69,6 +69,22 @@ type startTask struct {
 	restartClaim bool
 }
 
+type restartAdmissionContextKey struct{}
+
+// WithRestartAdmission marks a fresh executor invocation that atomically
+// claimed a RestartRequested daemon task. It carries the claim across the
+// taskservice/frontend boundary without changing persisted task details.
+func WithRestartAdmission(ctx context.Context) context.Context {
+	return context.WithValue(ctx, restartAdmissionContextKey{}, true)
+}
+
+// IsRestartAdmission reports whether this executor invocation owns a fresh
+// restart admission claim.
+func IsRestartAdmission(ctx context.Context) bool {
+	admitted, _ := ctx.Value(restartAdmissionContextKey{}).(bool)
+	return admitted
+}
+
 func newStartTask(r *taskRunner, t *daemonTask) *startTask {
 	return &startTask{
 		runner: r,
@@ -115,7 +131,11 @@ func (t *startTask) Handle(_ context.Context) error {
 
 		// Start the go-routine to execute the task. It hangs here until
 		// the task encounters some error or be canceled.
-		if err = t.task.executor(ctx, &t.task.task); err != nil {
+		executorCtx := ctx
+		if t.restartClaim {
+			executorCtx = WithRestartAdmission(ctx)
+		}
+		if err = t.task.executor(executorCtx, &t.task.task); err != nil {
 			// set the record of this task error message.
 			t.runner.setDaemonTaskError(ctx, t.task, err)
 		}

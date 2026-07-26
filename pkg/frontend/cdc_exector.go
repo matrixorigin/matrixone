@@ -200,17 +200,6 @@ func (exec *CDCTaskExecutor) restartCatalogStateForGeneration(generation uint64)
 	return "", false
 }
 
-func catalogStateForRestart(state ExecutorState) string {
-	switch state {
-	case StateFailed:
-		return cdc.CDCState_Failed
-	case StatePaused:
-		return cdc.CDCState_Paused
-	default:
-		return cdc.CDCState_Running
-	}
-}
-
 func (exec *CDCTaskExecutor) restartFields(fields ...zap.Field) []zap.Field {
 	out := logutil.StringFingerprintFields("task-id", exec.spec.TaskId)
 	out = append(out, logutil.StringFingerprintFields("task-name", exec.spec.TaskName)...)
@@ -261,6 +250,7 @@ func (exec *CDCTaskExecutor) Start(rootCtx context.Context) (err error) {
 	cnUUID := exec.cnUUID
 	accountId := uint32(exec.spec.Accounts[0].GetId())
 	restartGeneration := exec.callbackGeneration.Load()
+	restartAdmission := taskservice.IsRestartAdmission(rootCtx)
 	detector := cdc.GetTableDetector(cnUUID)
 	var (
 		registered      bool
@@ -309,7 +299,7 @@ func (exec *CDCTaskExecutor) Start(rootCtx context.Context) (err error) {
 
 			catalogState, hasRestartCatalogState := exec.restartCatalogStateForGeneration(restartGeneration)
 			restartFailed := exec.finishRestartWaiter(restartGeneration, err)
-			updateErrMsgErr := exec.updateErrMsgForStartup(rootCtx, err.Error(), catalogState, hasRestartCatalogState)
+			updateErrMsgErr := exec.updateErrMsgForStartup(rootCtx, err.Error(), catalogState, hasRestartCatalogState, restartAdmission)
 			if restartFailed {
 				eventCDCExecutorRestartFailed.ErrorLazy(func() []zap.Field {
 					return exec.restartFields(append([]zap.Field{
@@ -426,7 +416,7 @@ func (exec *CDCTaskExecutor) Start(rootCtx context.Context) (err error) {
 	// healthy replacement look like a failed restart.
 	catalogState, hasRestartCatalogState := exec.restartCatalogStateForGeneration(restartGeneration)
 	restartReady := exec.finishRestartWaiter(restartGeneration, nil)
-	clearErrMsgErr := exec.updateErrMsgForStartup(ctx, "", catalogState, hasRestartCatalogState)
+	clearErrMsgErr := exec.updateErrMsgForStartup(ctx, "", catalogState, hasRestartCatalogState, restartAdmission)
 
 	if restartReady {
 		eventCDCExecutorRestartReady.InfoLazy(func() []zap.Field {
@@ -544,7 +534,10 @@ func (exec *CDCTaskExecutor) Restart() error {
 		exec.callbackMu.Unlock()
 		return moerr.NewInternalErrorf(context.Background(), "cannot begin restart: %v", err)
 	}
-	ready := exec.beginRestartWaiter(generation, catalogStateForRestart(stateBeforeRestart))
+	// The catalog restart request has already installed this durable admission
+	// marker. Requiring it at ready/failure publication prevents a concurrent
+	// PAUSE that reaches paused from being changed back to running.
+	ready := exec.beginRestartWaiter(generation, cdc.CDCState_Restarting)
 	exec.callbackMu.Unlock()
 	defer exec.removeRestartWaiter(generation)
 
@@ -1103,34 +1096,15 @@ func (exec *CDCTaskExecutor) updateErrMsgForStartup(
 	errMsg string,
 	catalogState string,
 	hasRestartCatalogState bool,
+	restartAdmission bool,
 ) error {
 	if hasRestartCatalogState {
 		return exec.updateErrMsgWithCurrentState(ctx, errMsg, catalogState)
 	}
-
-	accId := exec.spec.Accounts[0].GetId()
-	state := cdc.CDCState_Running
-	if errMsg != "" {
-		state = cdc.CDCState_Failed
+	if restartAdmission {
+		return exec.updateErrMsgWithCurrentState(ctx, errMsg, cdc.CDCState_Restarting)
 	}
-	if len(errMsg) > cdc.CDCWatermarkErrMsgMaxLen {
-		errMsg = errMsg[:cdc.CDCWatermarkErrMsgMaxLen]
-	}
-	sql := cdc.CDCSQLBuilder.UpdateTaskStateAndErrMsgByActiveStateSQL(
-		uint64(accId),
-		exec.spec.TaskId,
-		state,
-		errMsg,
-	)
-	return execCDCSQLWithAffectedRows(
-		ctx,
-		exec.ie,
-		sql,
-		uint64(accId),
-		exec.spec.TaskId,
-		state,
-		"running|failed|paused",
-	)
+	return exec.updateErrMsgWithCurrentState(ctx, errMsg, cdc.CDCState_Running)
 }
 
 func execCDCSQLWithAffectedRows(

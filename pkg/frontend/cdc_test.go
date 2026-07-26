@@ -1402,6 +1402,9 @@ func Test_updateCdcTask_restart(t *testing.T) {
 	sql15 := "SELECT task_id FROM `mo_catalog`.`mo_cdc_task` WHERE 1=1 AND account_id = 0 AND task_name = 'task1'"
 	mock.ExpectQuery(sql15).WillReturnRows(
 		sqlmock.NewRows([]string{"task_id"}).AddRow("taskID-1"))
+	sql16 := "UPDATE `mo_catalog`.`mo_cdc_task` SET state = .* WHERE 1=1 AND account_id = 0 AND task_name = 'task1'"
+	mock.ExpectPrepare(sql16)
+	mock.ExpectExec(sql16).WithArgs(cdc.CDCState_Restarting).WillReturnResult(sqlmock.NewResult(1, 1))
 
 	genSqlIdx := func(sql string) int {
 		mSql15, err := regexp.MatchString(sql15, sql)
@@ -2671,18 +2674,53 @@ func TestCDCTaskUpdateErrMsgUsesRestartCatalogState(t *testing.T) {
 	}
 }
 
-func TestCDCTaskStartupUpdateAllowsActiveCatalogStates(t *testing.T) {
-	capture := &captureExecContextIE{}
-	executor := &CDCTaskExecutor{
-		spec: &task.CreateCdcDetails{
-			TaskId:   "task1",
-			Accounts: []*task.Account{{Id: 1}},
-		},
-		ie: capture,
-	}
+func TestCDCTaskStartupUpdateRequiresExactAdmissionState(t *testing.T) {
+	for _, tt := range []struct {
+		name             string
+		restartAdmission bool
+		expectedState    string
+	}{
+		{name: "ordinary start", expectedState: cdc.CDCState_Running},
+		{name: "restart admission", restartAdmission: true, expectedState: cdc.CDCState_Restarting},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			capture := &captureExecContextIE{}
+			executor := &CDCTaskExecutor{
+				spec: &task.CreateCdcDetails{
+					TaskId:   "task1",
+					Accounts: []*task.Account{{Id: 1}},
+				},
+				ie: capture,
+			}
 
-	require.NoError(t, executor.updateErrMsgForStartup(context.Background(), "", "", false))
-	require.Contains(t, capture.execSQL, "state IN ('running', 'failed', 'paused')")
+			require.NoError(t, executor.updateErrMsgForStartup(context.Background(), "", "", false, tt.restartAdmission))
+			require.Contains(t, capture.execSQL, "AND state = '"+tt.expectedState+"'")
+			require.NotContains(t, capture.execSQL, "state IN")
+		})
+	}
+}
+
+func TestCDCTaskRestartStartupDoesNotOverwriteCompletedPause(t *testing.T) {
+	ctx := context.Background()
+	spec := &task.CreateCdcDetails{
+		TaskId:   "task1",
+		TaskName: "task1",
+		Accounts: []*task.Account{{Id: 1}},
+	}
+	exec := &cdcCatalogStateExecutor{
+		state:        cdc.CDCState_Restarting,
+		currentState: cdc.CDCState_Restarting,
+		targetState:  cdc.CDCState_Running,
+	}
+	cdcTask := &CDCTaskExecutor{spec: spec, ie: exec}
+
+	// This models a PAUSE that completes after restart admission but before the
+	// replacement publishes readiness. The startup CAS must leave paused alone.
+	exec.setState(cdc.CDCState_Paused)
+	err := cdcTask.updateErrMsgForStartup(ctx, "", "", false, true)
+	require.ErrorContains(t, err, "conflicting catalog state paused")
+	require.Equal(t, cdc.CDCState_Paused, exec.getState())
+	require.Contains(t, exec.execSQL, "AND state = 'restarting'")
 }
 
 func TestCDCTaskUpdateErrMsgRejectsConflictingCatalogState(t *testing.T) {
