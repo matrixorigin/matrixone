@@ -1403,26 +1403,12 @@ func Test_updateCdcTask_restart(t *testing.T) {
 	mock.ExpectQuery(sql15).WillReturnRows(
 		sqlmock.NewRows([]string{"task_id"}).AddRow("taskID-1"))
 
-	sql16 := "UPDATE `mo_catalog`.`mo_cdc_task` SET state = .* WHERE 1=1 AND account_id = 0 AND task_name = 'task1'"
-	mock.ExpectPrepare(sql16)
-
-	sql17 := "UPDATE `mo_catalog`.`mo_cdc_task` SET state = .* WHERE 1=1 AND account_id = 0 AND task_name = 'task1'"
-	mock.ExpectExec(sql17).WillReturnResult(sqlmock.NewResult(1, 1))
-
 	genSqlIdx := func(sql string) int {
 		mSql15, err := regexp.MatchString(sql15, sql)
-		assert.NoError(t, err)
-		mSql16, err := regexp.MatchString(sql16, sql)
-		assert.NoError(t, err)
-		mSql17, err := regexp.MatchString(sql17, sql)
 		assert.NoError(t, err)
 
 		if mSql15 {
 			return mSqlIdx15
-		} else if mSql16 {
-			return mSqlIdx16
-		} else if mSql17 {
-			return mSqlIdx17
 		}
 
 		return -1
@@ -2664,6 +2650,39 @@ func TestCDCTaskUpdateErrMsgRequiresRunningState(t *testing.T) {
 	require.Contains(t, capture.execSQL, "SET state = 'failed'")
 	require.Contains(t, capture.execSQL, "err_msg = 'permanent error'")
 	require.Contains(t, capture.execSQL, "AND state = 'running'")
+}
+
+func TestCDCTaskUpdateErrMsgUsesRestartCatalogState(t *testing.T) {
+	for _, currentState := range []string{cdc.CDCState_Failed, cdc.CDCState_Paused} {
+		t.Run(currentState, func(t *testing.T) {
+			capture := &captureExecContextIE{}
+			executor := &CDCTaskExecutor{
+				spec: &task.CreateCdcDetails{
+					TaskId:   "task1",
+					Accounts: []*task.Account{{Id: 1}},
+				},
+				ie: capture,
+			}
+
+			require.NoError(t, executor.updateErrMsgWithCurrentState(context.Background(), "", currentState))
+			require.Contains(t, capture.execSQL, "SET state = 'running'")
+			require.Contains(t, capture.execSQL, "AND state = '"+currentState+"'")
+		})
+	}
+}
+
+func TestCDCTaskStartupUpdateAllowsActiveCatalogStates(t *testing.T) {
+	capture := &captureExecContextIE{}
+	executor := &CDCTaskExecutor{
+		spec: &task.CreateCdcDetails{
+			TaskId:   "task1",
+			Accounts: []*task.Account{{Id: 1}},
+		},
+		ie: capture,
+	}
+
+	require.NoError(t, executor.updateErrMsgForStartup(context.Background(), "", "", false))
+	require.Contains(t, capture.execSQL, "state IN ('running', 'failed', 'paused')")
 }
 
 func TestCDCTaskUpdateErrMsgRejectsConflictingCatalogState(t *testing.T) {

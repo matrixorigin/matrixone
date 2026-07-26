@@ -695,6 +695,28 @@ func (b cdcSQLBuilder) UpdateTaskStateAndErrMsgByStateSQL(
 	)
 }
 
+// UpdateTaskStateAndErrMsgByActiveStateSQL updates a task only while it is in
+// one of the catalog states from which startup may safely take ownership. A
+// concurrent pause/delete transition has a different state (or no row), so it
+// cannot be overwritten by a stale startup completion.
+func (b cdcSQLBuilder) UpdateTaskStateAndErrMsgByActiveStateSQL(
+	accountId uint64,
+	taskId string,
+	state string,
+	errMsg string,
+) string {
+	return fmt.Sprintf(
+		"UPDATE `mo_catalog`.`mo_cdc_task` SET state = '%s', err_msg = '%s' WHERE 1=1 AND account_id = %d AND task_id = '%s' AND state IN ('%s', '%s', '%s')",
+		escapeSQLString(state),
+		escapeSQLString(errMsg),
+		accountId,
+		escapeSQLString(taskId),
+		escapeSQLString(CDCState_Running),
+		escapeSQLString(CDCState_Failed),
+		escapeSQLString(CDCState_Paused),
+	)
+}
+
 func (b cdcSQLBuilder) UpdateTaskStateByTaskIdSQL(
 	accountId uint64,
 	taskId string,

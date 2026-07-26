@@ -316,8 +316,9 @@ func TestRestartFailureDrainsHoldChAndMovesToFailed(t *testing.T) {
 		}
 	}
 
-	// First restart should not block even though holdCh already contains a signal.
-	require.NoError(t, exec.Restart())
+	// First restart should synchronously report that the replacement failed,
+	// even though holdCh already contains a signal.
+	require.Error(t, exec.Restart())
 	select {
 	case <-firstCallDone:
 	case <-time.After(time.Second):
@@ -344,4 +345,46 @@ func TestRestartFailureDrainsHoldChAndMovesToFailed(t *testing.T) {
 
 	assert.Equal(t, int32(2), callCount.Load())
 	assert.Equal(t, StateRunning, exec.stateMachine.State())
+}
+
+func TestRestartReleasesCallbackFenceBeforeWaitingForReplacement(t *testing.T) {
+	exec := &CDCTaskExecutor{
+		activeRoutine: cdc.NewCdcActiveRoutine(),
+		spec: &task.CreateCdcDetails{
+			TaskId:   "restart-callback-fence",
+			TaskName: "restart-callback-fence",
+			Accounts: []*task.Account{{Id: 1}},
+		},
+		stateMachine: NewExecutorStateMachine(),
+		holdCh:       make(chan int, 1),
+	}
+	require.NoError(t, exec.stateMachine.Transition(TransitionStart))
+	require.NoError(t, exec.stateMachine.Transition(TransitionStartSuccess))
+
+	callbackAcquired := make(chan struct{})
+	exec.startFunc = func(context.Context) error {
+		// handleNewTablesForGeneration takes this same read lock before it
+		// validates the generation and starts table work.
+		exec.callbackMu.RLock()
+		close(callbackAcquired)
+		exec.callbackMu.RUnlock()
+		return exec.stateMachine.Transition(TransitionStartSuccess)
+	}
+
+	restartDone := make(chan error, 1)
+	go func() { restartDone <- exec.Restart() }()
+
+	select {
+	case <-callbackAcquired:
+	case <-time.After(time.Second):
+		t.Error("replacement callback could not acquire callbackMu")
+	}
+	// Drain the restart even on assertion failure, so a regression cannot leak a
+	// goroutine into later CDC tests.
+	select {
+	case err := <-restartDone:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("restart did not finish after replacement callback progress")
+	}
 }

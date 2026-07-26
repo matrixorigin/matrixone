@@ -92,6 +92,17 @@ func (r *mockErrActiveRoutine) Resume() error  { return r.resumeErr }
 func (r *mockErrActiveRoutine) Cancel() error  { return r.cancelErr }
 func (r *mockErrActiveRoutine) Restart() error { return r.restartErr }
 
+type mockFuncActiveRoutine struct {
+	restart func() error
+}
+
+func (r *mockFuncActiveRoutine) Pause() error  { return nil }
+func (r *mockFuncActiveRoutine) Resume() error { return nil }
+func (r *mockFuncActiveRoutine) Cancel() error { return nil }
+func (r *mockFuncActiveRoutine) Restart() error {
+	return r.restart()
+}
+
 type serviceWithDaemonHook struct {
 	TaskService
 	mu         sync.RWMutex
@@ -370,7 +381,34 @@ func TestRestartTaskHandleBranchesDirect(t *testing.T) {
 	taskRef.activeRoutine.Store(&ar)
 	dt.TaskStatus = task.TaskStatus_RestartRequested
 	mustUpdateTestDaemonTask(t, store, 1, []task.DaemonTask{dt})
-	require.ErrorContains(t, h.Handle(context.Background()), "restart failed")
+	require.ErrorContains(t, h.Handle(context.Background()), "CDC restart failed")
+	got, err := r.service.QueryDaemonTask(context.Background(), WithTaskIDCond(EQ, dt.ID))
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, task.TaskStatus_RestartRequested, got[0].TaskStatus,
+		"a failed replacement must remain retryable instead of being advertised as running")
+}
+
+func TestRestartTaskDoesNotOverwriteSupersedingControlRequest(t *testing.T) {
+	r, store := newDaemonHandleTestRunner(t)
+	dt := newDaemonTaskForTest(1, task.TaskStatus_RestartRequested, r.runnerID)
+	dt.Metadata.ID = "restart-cas"
+	mustAddTestDaemonTask(t, store, 1, dt)
+
+	taskRef := &daemonTask{task: dt}
+	ar := ActiveRoutine(&mockFuncActiveRoutine{restart: func() error {
+		current := mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, dt.ID))
+		require.Len(t, current, 1)
+		current[0].TaskStatus = task.TaskStatus_CancelRequested
+		mustUpdateTestDaemonTask(t, store, 1, current)
+		return nil
+	}})
+	taskRef.activeRoutine.Store(&ar)
+
+	require.NoError(t, newRestartTask(r, taskRef).Handle(context.Background()))
+	got := mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, dt.ID))
+	require.Len(t, got, 1)
+	assert.Equal(t, task.TaskStatus_CancelRequested, got[0].TaskStatus)
 }
 
 func TestPauseAndCancelTaskHandleBranchesDirect(t *testing.T) {
@@ -868,6 +906,45 @@ func TestRestartDaemonTaskWithEmptyRunner(t *testing.T) {
 		updatedTasks := mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, 1))
 		assert.Len(t, updatedTasks, 1, "Should have exactly one task")
 		assert.Equal(t, r.runnerID, updatedTasks[0].TaskRunner, "TaskRunner should be assigned to current runner")
+	}, WithRunnerParallelism(1),
+		WithRunnerFetchInterval(time.Millisecond))
+}
+
+func TestRestartDaemonTaskTakesOverStaleForeignRunner(t *testing.T) {
+	runTaskRunnerTest(t, func(r *taskRunner, s TaskService, store TaskStorage) {
+		dt := newDaemonTaskForTest(1, task.TaskStatus_RestartRequested, "foreign-runner")
+		dt.LastHeartbeat = time.Now().Add(-r.options.heartbeatTimeout - time.Second)
+		mustAddTestDaemonTask(t, store, 1, dt)
+
+		var started atomic.Bool
+		r.testRegisterExecutor(t, task.TaskCode_ConnectorKafkaSink, &started)
+		expectTaskStatus(t, store, dt, task.TaskStatus_RestartRequested, task.TaskStatus_Running)
+
+		updatedTasks := mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, dt.ID))
+		require.Len(t, updatedTasks, 1)
+		assert.Equal(t, r.runnerID, updatedTasks[0].TaskRunner)
+	}, WithRunnerParallelism(1),
+		WithRunnerFetchInterval(time.Millisecond))
+}
+
+func TestRestartStartClaimDoesNotOverwriteSupersedingControlRequest(t *testing.T) {
+	runTaskRunnerTest(t, func(r *taskRunner, s TaskService, store TaskStorage) {
+		dt := newDaemonTaskForTest(1, task.TaskStatus_RestartRequested, "foreign-runner")
+		dt.LastHeartbeat = time.Now().Add(-r.options.heartbeatTimeout - time.Second)
+		mustAddTestDaemonTask(t, store, 1, dt)
+
+		current := mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, dt.ID))
+		require.Len(t, current, 1)
+		current[0].TaskStatus = task.TaskStatus_CancelRequested
+		mustUpdateTestDaemonTask(t, store, 1, current)
+
+		claimed, err := r.startDaemonTask(context.Background(), &daemonTask{task: dt}, true)
+		require.NoError(t, err)
+		assert.False(t, claimed)
+
+		got := mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, dt.ID))
+		require.Len(t, got, 1)
+		assert.Equal(t, task.TaskStatus_CancelRequested, got[0].TaskStatus)
 	}, WithRunnerParallelism(1),
 		WithRunnerFetchInterval(time.Millisecond))
 }

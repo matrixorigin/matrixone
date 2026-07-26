@@ -16,11 +16,14 @@ package log
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 // mockEnabledTracer is a tracer that reports IsEnable() = true
@@ -167,4 +170,53 @@ func TestLogOptions_WithContext(t *testing.T) {
 			opts.WithContext(ctx)
 		})
 	})
+}
+
+func TestMOLoggerEventBudgetIsSharedAndLazy(t *testing.T) {
+	core, observed := observer.New(zap.InfoLevel)
+	logger := wrap(zap.New(core))
+	child := logger.Named("child")
+	event := logutil.Event{Name: "test.shared-event", Message: "test event"}
+	var builds atomic.Int64
+	build := func() []zap.Field {
+		builds.Add(1)
+		return []zap.Field{zap.String("derived", "value")}
+	}
+
+	for range 2 {
+		assert.True(t, logger.InfoEventLazy(event, build))
+	}
+	assert.True(t, child.InfoEventLazy(event, build))
+	assert.False(t, logger.InfoEventLazy(event, build))
+	assert.Len(t, observed.All(), 3)
+	assert.Equal(t, int64(3), builds.Load())
+	assert.Same(t, logger.limiter, child.limiter)
+}
+
+func TestMOLoggerEventDoesNotAllocateStateWhenDisabled(t *testing.T) {
+	logger := wrap(zap.NewNop())
+	var builds atomic.Int64
+	allocs := testing.AllocsPerRun(1_000, func() {
+		logger.DebugEventLazy(logutil.Event{Name: "test.disabled", Message: "disabled"}, func() []zap.Field {
+			builds.Add(1)
+			return []zap.Field{zap.String("expensive", "field")}
+		})
+	})
+	assert.Zero(t, allocs)
+	assert.Zero(t, builds.Load())
+	for range 64 {
+		assert.False(t, logger.DebugEvent(logutil.Event{Name: "test.disabled", Message: "disabled"}))
+	}
+	assert.Zero(t, logger.limiter.StateCount())
+}
+
+func TestMOLoggerLegacyDebugDoesNotUseEventBudget(t *testing.T) {
+	core, observed := observer.New(zap.DebugLevel)
+	logger := wrap(zap.New(core))
+
+	for range 4 {
+		assert.True(t, logger.Debug("legacy debug"))
+	}
+	assert.Len(t, observed.All(), 4)
+	assert.Zero(t, logger.limiter.StateCount())
 }

@@ -18,6 +18,7 @@ import (
 	"context"
 	"math"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
@@ -77,9 +78,10 @@ const (
 // rather MOLogger. MOLogger is compatible with the zap.logger log printing method
 // signature
 type MOLogger struct {
-	logger *zap.Logger
-	ctx    context.Context
-	m      map[int]*zap.Logger
+	logger  *zap.Logger
+	ctx     context.Context
+	m       map[int]*zap.Logger
+	limiter *logutil.EventRateLimiter
 }
 
 // LogOptions log options

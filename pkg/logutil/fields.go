@@ -23,6 +23,11 @@ import (
 	"go.uber.org/zap"
 )
 
+var (
+	eventConnectionCloseExpected = Event{Name: "connection.close.expected", Message: "connection closed during normal lifecycle"}
+	eventConnectionCloseFailed   = Event{Name: "connection.close.failed", Message: "connection close or I/O failed"}
+)
+
 func ConnectionIdField(val uint32) zap.Field { return zap.Uint32("connection_id", val) }
 func QueryField(val string) zap.Field        { return zap.String("query", val) }
 func StatementField(val string) zap.Field    { return zap.String("statement", val) }
@@ -70,11 +75,14 @@ func IsExpectedConnectionCloseError(err error) bool {
 // Expected errors (like "use of closed network connection") are logged at DEBUG level,
 // while unexpected errors are logged at ERROR level.
 func LogConnectionCloseError(msg string, err error, fields ...zap.Field) {
+	build := func() []zap.Field {
+		out := append([]zap.Field(nil), fields...)
+		out = append(out, StringFingerprintFields("operation", msg)...)
+		return append(out, ErrorFingerprintFields("error", err)...)
+	}
 	if IsExpectedConnectionCloseError(err) {
-		allFields := append([]zap.Field{zap.Error(err)}, fields...)
-		Debug(msg+" (connection closed)", allFields...)
+		eventConnectionCloseExpected.DebugLazy(build)
 	} else {
-		allFields := append([]zap.Field{zap.Error(err)}, fields...)
-		Error(msg, allFields...)
+		eventConnectionCloseFailed.ErrorLazy(build)
 	}
 }

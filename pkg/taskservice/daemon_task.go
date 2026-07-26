@@ -16,6 +16,7 @@ package taskservice
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -23,6 +24,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 )
@@ -31,15 +33,54 @@ type TaskHandler interface {
 	Handle(ctx context.Context) error
 }
 
+var (
+	eventCDCRestartEnqueued              = logutil.Event{Name: "taskservice.cdc.restart.enqueued", Message: "CDC restart task was enqueued"}
+	eventCDCRestartNoCandidate           = logutil.Event{Name: "taskservice.cdc.restart.no-candidate", Message: "CDC restart scan found no candidate"}
+	eventCDCRestartQueryFailed           = logutil.Event{Name: "taskservice.cdc.restart.query-failed", Message: "CDC restart task query failed"}
+	eventCDCRestartQueryWrongCount       = logutil.Event{Name: "taskservice.cdc.restart.query-wrong-count", Message: "CDC restart task query returned an unexpected count"}
+	eventCDCRestartStarted               = logutil.Event{Name: "taskservice.cdc.restart.started", Message: "CDC restart execution started"}
+	eventCDCRestartSkippedAlreadyRunning = logutil.Event{Name: "taskservice.cdc.restart.skipped-already-running", Message: "CDC restart was skipped because task is already running"}
+	eventCDCRestartSkippedInvalidStatus  = logutil.Event{Name: "taskservice.cdc.restart.skipped-invalid-status", Message: "CDC restart was skipped because task status is invalid"}
+	eventCDCRestartWrongRunner           = logutil.Event{Name: "taskservice.cdc.restart.wrong-runner", Message: "CDC restart task belongs to another runner"}
+	eventCDCRestartRunnerAssigned        = logutil.Event{Name: "taskservice.cdc.restart.runner-assigned", Message: "CDC restart task was assigned to the local runner"}
+	eventCDCRestartStatusUpdateFailed    = logutil.Event{Name: "taskservice.cdc.restart.status-update-failed", Message: "CDC restart status update failed"}
+	eventCDCRestartStatusUpdated         = logutil.Event{Name: "taskservice.cdc.restart.status-updated", Message: "CDC restart status was updated"}
+	eventCDCRestartActiveRoutineMissing  = logutil.Event{Name: "taskservice.cdc.restart.active-routine-missing", Message: "CDC restart has no active routine"}
+	eventCDCRestartActiveRoutineCalling  = logutil.Event{Name: "taskservice.cdc.restart.active-routine-calling", Message: "CDC restart is calling the active routine"}
+	eventCDCRestartFailed                = logutil.Event{Name: "taskservice.cdc.restart.failed", Message: "CDC active routine restart failed"}
+	eventCDCRestartCompleted             = logutil.Event{Name: "taskservice.cdc.restart.completed", Message: "CDC active routine restart completed"}
+	eventCDCRestartRequestStateUpdated   = logutil.Event{Name: "taskservice.cdc.restart.request-state-updated", Message: "CDC restart request state was updated"}
+)
+
+func cdcRestartEventFields(t task.DaemonTask, fields ...zap.Field) []zap.Field {
+	out := logutil.StringFingerprintFields("task-name", taskNameFromDetails(t))
+	out = append(out, logutil.StringFingerprintFields("task-id", strconv.FormatUint(t.ID, 10))...)
+	out = append(out, logutil.StringFingerprintFields("account-id", strconv.FormatUint(uint64(t.AccountID), 10))...)
+	return append(out, fields...)
+}
+
+func cdcRestartHandleError(message string) error {
+	return moerr.NewInternalErrorNoCtx(message)
+}
+
 type startTask struct {
-	runner *taskRunner
-	task   *daemonTask
+	runner       *taskRunner
+	task         *daemonTask
+	restartClaim bool
 }
 
 func newStartTask(r *taskRunner, t *daemonTask) *startTask {
 	return &startTask{
 		runner: r,
 		task:   t,
+	}
+}
+
+func newRestartStartTask(r *taskRunner, t *daemonTask) *startTask {
+	return &startTask{
+		runner:       r,
+		task:         t,
+		restartClaim: true,
 	}
 }
 
@@ -60,7 +101,7 @@ func (t *startTask) Handle(_ context.Context) error {
 			}
 		}()
 
-		ok, err = t.runner.startDaemonTask(ctx, t.task)
+		ok, err = t.runner.startDaemonTask(ctx, t.task, t.restartClaim)
 		if err != nil {
 			t.runner.setDaemonTaskError(ctx, t.task, err)
 			return
@@ -188,120 +229,120 @@ func (t *restartTask) Handle(ctx context.Context) error {
 	defer cancel()
 	tasks, err := t.runner.service.QueryDaemonTask(handleCtx, WithTaskIDCond(EQ, t.task.task.ID))
 	if err != nil {
-		t.runner.logger.Error("cdc.task.restart.query_failed",
-			zap.Uint64("task-id", t.task.task.ID),
-			zap.Error(err),
-		)
-		return moerr.AttachCause(handleCtx, err)
+		eventCDCRestartQueryFailed.ErrorLazy(func() []zap.Field {
+			return cdcRestartEventFields(t.task.task, logutil.ErrorFingerprintFields("error", err)...)
+		})
+		return cdcRestartHandleError("CDC restart task query failed")
 	}
 	if len(tasks) != 1 {
-		t.runner.logger.Error("cdc.task.restart.query_wrong_count",
-			zap.Uint64("task-id", t.task.task.ID),
-			zap.Int("task-count", len(tasks)),
-		)
-		return moerr.NewInternalErrorf(handleCtx, "count of tasks is wrong %d", len(tasks))
+		eventCDCRestartQueryWrongCount.ErrorLazy(func() []zap.Field {
+			return cdcRestartEventFields(t.task.task, zap.Int("task-count", len(tasks)))
+		})
+		return cdcRestartHandleError("CDC restart task query returned an unexpected count")
 	}
 
 	tk := tasks[0]
+	requestRunner := tk.TaskRunner
 	t.runner.clearPauseTaskCompleted(tk.ID)
 	start := time.Now()
-	t.runner.logger.Info("cdc.task.restart.start",
-		zap.Uint64("task-id", tk.ID),
-		zap.String("task-name", taskNameFromDetails(tk)),
-		zap.String("task-runner", tk.TaskRunner),
-		zap.String("target-runner", t.runner.runnerID),
-		zap.String("current-status", tk.TaskStatus.String()),
-	)
 	// Restart should only be executed from RestartRequested.
 	// Any duplicated request is treated as a no-op.
 	if tk.TaskStatus != task.TaskStatus_RestartRequested {
 		if tk.TaskStatus == task.TaskStatus_Running {
-			t.runner.logger.Debug("cdc.task.restart.skip.already-running",
-				zap.Uint64("task-id", tk.ID),
-				zap.String("task-name", taskNameFromDetails(tk)))
+			eventCDCRestartSkippedAlreadyRunning.DebugLazy(func() []zap.Field {
+				return cdcRestartEventFields(tk, zap.String("current-status", tk.TaskStatus.String()))
+			})
 			return nil
 		}
-		t.runner.logger.Warn("cdc.task.restart.skip.invalid-status",
-			zap.Uint64("task-id", tk.ID),
-			zap.String("task-name", taskNameFromDetails(tk)),
-			zap.String("current-status", tk.TaskStatus.String()))
+		eventCDCRestartSkippedInvalidStatus.WarnLazy(func() []zap.Field {
+			return cdcRestartEventFields(tk, zap.String("current-status", tk.TaskStatus.String()))
+		})
 		return nil
 	}
 
 	// We cannot restart a task which is not on local runner.
 	// However, if TaskRunner is empty, we allow the local runner to take over.
 	if tk.TaskRunner != "" && !strings.EqualFold(tk.TaskRunner, t.runner.runnerID) {
-		t.runner.logger.Warn("cdc.task.restart.wrong_runner",
-			zap.Uint64("task-id", tk.ID),
-			zap.String("task-runner", tk.TaskRunner),
-			zap.String("local-runner", t.runner.runnerID),
-		)
-		return moerr.NewInternalErrorf(handleCtx, "the task is not on local runner, prev runner %s, "+
-			"local runner %s", tk.TaskRunner, t.runner.runnerID)
+		eventCDCRestartWrongRunner.WarnLazy(func() []zap.Field {
+			return cdcRestartEventFields(tk, append(logutil.StringFingerprintFields("task-runner", tk.TaskRunner), logutil.StringFingerprintFields("local-runner", t.runner.runnerID)...)...)
+		})
+		return cdcRestartHandleError("CDC restart task belongs to another runner")
 	}
 
 	// If TaskRunner is empty, assign it to the current runner
 	if tk.TaskRunner == "" {
 		tk.TaskRunner = t.runner.runnerID
-		t.runner.logger.Info("cdc.task.restart.assign_runner",
-			zap.Uint64("task-id", tk.ID),
-			zap.String("task-name", taskNameFromDetails(tk)),
-			zap.String("assigned-runner", tk.TaskRunner),
-		)
+		eventCDCRestartRunnerAssigned.InfoLazy(func() []zap.Field {
+			return cdcRestartEventFields(tk, logutil.StringFingerprintFields("assigned-runner", tk.TaskRunner)...)
+		})
 	}
 
+	eventCDCRestartStarted.InfoLazy(func() []zap.Field {
+		return cdcRestartEventFields(tk, append([]zap.Field{
+			zap.String("current-status", tk.TaskStatus.String()),
+		}, append(logutil.StringFingerprintFields("task-runner", tk.TaskRunner), logutil.StringFingerprintFields("target-runner", t.runner.runnerID)...)...)...)
+	})
+
+	ar := t.task.activeRoutine.Load()
+	if ar == nil || *ar == nil {
+		eventCDCRestartActiveRoutineMissing.ErrorLazy(func() []zap.Field {
+			return cdcRestartEventFields(tk)
+		})
+		return cdcRestartHandleError("CDC restart active routine is unavailable")
+	}
+
+	eventCDCRestartActiveRoutineCalling.DebugLazy(func() []zap.Field {
+		return cdcRestartEventFields(tk)
+	})
+
+	err = (*ar).Restart()
+	if err != nil {
+		eventCDCRestartFailed.ErrorLazy(func() []zap.Field {
+			return cdcRestartEventFields(tk, append([]zap.Field{
+				zap.Duration("elapsed", time.Since(start)),
+			}, logutil.ErrorFingerprintFields("error", err)...)...)
+		})
+		return cdcRestartHandleError("CDC restart failed")
+	}
+
+	// A successful Restart means the replacement generation has reached its
+	// startup-ready point. Do not advertise Running before that acknowledgement.
 	tk.TaskStatus = task.TaskStatus_Running
 	nowTime := time.Now()
 	tk.LastRun = nowTime
 	tk.LastHeartbeat = nowTime
-	_, err = t.runner.service.UpdateDaemonTask(handleCtx, []task.DaemonTask{tk})
+	updated, err := t.runner.service.UpdateDaemonTask(
+		handleCtx,
+		[]task.DaemonTask{tk},
+		WithTaskStatusCond(task.TaskStatus_RestartRequested),
+		WithTaskRunnerCond(EQ, requestRunner),
+	)
 	if err != nil {
-		t.runner.logger.Error("cdc.task.restart.update_status_failed",
-			zap.Uint64("task-id", tk.ID),
-			zap.Error(err),
-		)
-		return moerr.AttachCause(handleCtx, err)
+		eventCDCRestartStatusUpdateFailed.ErrorLazy(func() []zap.Field {
+			return cdcRestartEventFields(tk, logutil.ErrorFingerprintFields("error", err)...)
+		})
+		return cdcRestartHandleError("CDC restart status update failed")
+	}
+	if updated != 1 {
+		eventCDCRestartSkippedInvalidStatus.InfoLazy(func() []zap.Field {
+			return cdcRestartEventFields(tk, zap.String("reason", "restart-request-superseded"))
+		})
+		return nil
 	}
 
-	t.runner.logger.Info("cdc.task.restart.status_updated",
-		zap.Uint64("task-id", tk.ID),
-		zap.String("task-name", taskNameFromDetails(tk)),
-		zap.String("new-status", tk.TaskStatus.String()),
-		zap.Time("last-run", tk.LastRun),
-	)
-
-	ar := t.task.activeRoutine.Load()
-	if ar == nil || *ar == nil {
-		t.runner.logger.Error("cdc.task.restart.active_routine_nil",
-			zap.Uint64("task-id", tk.ID),
-			zap.String("task-name", taskNameFromDetails(tk)),
+	eventCDCRestartStatusUpdated.InfoLazy(func() []zap.Field {
+		return cdcRestartEventFields(tk,
+			zap.String("new-status", tk.TaskStatus.String()),
+			zap.Time("last-run", tk.LastRun),
 		)
-		return moerr.NewInternalErrorf(handleCtx, "cannot handle restart operation, "+
-			"active routine not set for task %d", t.task.task.ID)
-	}
+	})
 
-	t.runner.logger.Info("cdc.task.restart.calling_active_routine",
-		zap.Uint64("task-id", tk.ID),
-		zap.String("task-name", taskNameFromDetails(tk)),
-	)
-
-	err = (*ar).Restart()
-	if err != nil {
-		t.runner.logger.Error("cdc.task.restart.failed",
-			zap.Uint64("task-id", tk.ID),
-			zap.String("task-name", taskNameFromDetails(tk)),
-			zap.Error(err),
+	eventCDCRestartCompleted.InfoLazy(func() []zap.Field {
+		return cdcRestartEventFields(tk,
+			zap.String("new-status", tk.TaskStatus.String()),
 			zap.Duration("elapsed", time.Since(start)),
 		)
-		return err
-	}
-
-	t.runner.logger.Info("cdc.task.restart.finish",
-		zap.Uint64("task-id", tk.ID),
-		zap.String("task-name", taskNameFromDetails(tk)),
-		zap.String("new-status", tk.TaskStatus.String()),
-		zap.Duration("elapsed", time.Since(start)),
-	)
+	})
 
 	return nil
 }
@@ -614,6 +655,20 @@ func (r *taskRunner) dispatchTaskHandle(ctx context.Context) {
 		}
 	}
 	for _, t := range r.restartTasks(ctx) {
+		// A restart of an executor already owned by this runner is an
+		// in-process lifecycle transition. An unassigned or stale foreign task
+		// has no local active routine to restart, so claim it through the normal
+		// start path, which fences ownership with the heartbeat condition.
+		if !strings.EqualFold(t.TaskRunner, r.runnerID) {
+			dt, err := r.newDaemonTask(t)
+			if err != nil {
+				r.logger.Error("failed to dispatch daemon task",
+					zap.Uint64("task ID", t.ID), zap.Error(err))
+				continue
+			}
+			handlers = append(handlers, newRestartStartTask(r, dt))
+			continue
+		}
 		dt, ok := r.getDaemonTask(t.ID)
 		if ok {
 			handlers = append(handlers, newRestartTask(r, dt))
@@ -624,7 +679,7 @@ func (r *taskRunner) dispatchTaskHandle(ctx context.Context) {
 					zap.Uint64("task ID", t.ID), zap.Error(err))
 				continue
 			}
-			handlers = append(handlers, newStartTask(r, dt))
+			handlers = append(handlers, newRestartStartTask(r, dt))
 		}
 	}
 	for _, t := range r.pauseTasks(ctx) {
@@ -763,37 +818,40 @@ func (r *taskRunner) resumeTasks(ctx context.Context) []task.DaemonTask {
 	return tasks
 }
 
-// restartTasks gets the tasks that need to restart.
-// - status equals to task.TaskStatus_RestartRequested and runner equals to local
+// restartTasks returns local restart requests plus restart requests that can
+// be atomically claimed through startDaemonTask after their owner heartbeat is
+// stale. The dispatcher chooses Restart only for local ownership; stale and
+// unassigned tasks take the fenced start path instead.
 func (r *taskRunner) restartTasks(ctx context.Context) []task.DaemonTask {
-	// Handle the tasks which is in RestartRequested status:
-	//   1. the task is on current runner
-	//   2. the task is on other runners, but heartbeat timeout or null. In the handler,
-	//      do NOT restart the active routine in this case.
 	localRestart := r.queryDaemonTasks(ctx,
 		WithTaskStatusCond(task.TaskStatus_RestartRequested),
 		WithTaskRunnerCond(EQ, r.runnerID),
+	)
+	unassignedRestart := r.queryDaemonTasks(ctx,
+		WithTaskStatusCond(task.TaskStatus_RestartRequested),
+		WithTaskRunnerCond(EQ, ""),
 	)
 	laggedRestart := r.queryDaemonTasks(ctx,
 		WithTaskStatusCond(task.TaskStatus_RestartRequested),
 		WithLastHeartbeat(LE, time.Now().UnixNano()-r.options.heartbeatTimeout.Nanoseconds()),
 	)
-	tasks := r.mergeTasks(localRestart, laggedRestart)
+	tasks := r.mergeTasks(localRestart, unassignedRestart, laggedRestart)
 	if len(tasks) > 0 {
 		for _, t := range tasks {
-			r.logger.Info("cdc.task.restart.enqueue",
-				zap.Uint64("task-id", t.ID),
-				zap.String("task-name", taskNameFromDetails(t)),
-				zap.String("current-status", t.TaskStatus.String()),
-				zap.String("task-runner", t.TaskRunner),
-				zap.String("local-runner", r.runnerID),
-			)
+			eventCDCRestartEnqueued.InfoLazy(func() []zap.Field {
+				return cdcRestartEventFields(t, append([]zap.Field{
+					zap.String("current-status", t.TaskStatus.String()),
+				}, append(logutil.StringFingerprintFields("task-runner", t.TaskRunner), logutil.StringFingerprintFields("local-runner", r.runnerID)...)...)...)
+			})
 		}
 	} else {
-		r.logger.Debug("cdc.task.restart.enqueue.none",
-			zap.Int("local-candidates", len(localRestart)),
-			zap.Int("lagged-candidates", len(laggedRestart)),
-		)
+		eventCDCRestartNoCandidate.DebugLazy(func() []zap.Field {
+			return []zap.Field{
+				zap.Int("local-candidates", len(localRestart)),
+				zap.Int("unassigned-candidates", len(unassignedRestart)),
+				zap.Int("lagged-candidates", len(laggedRestart)),
+			}
+		})
 	}
 	return tasks
 }
@@ -916,7 +974,7 @@ func (r *taskRunner) doSendHeartbeat(ctx context.Context) {
 	}
 }
 
-func (r *taskRunner) startDaemonTask(ctx context.Context, dt *daemonTask) (bool, error) {
+func (r *taskRunner) startDaemonTask(ctx context.Context, dt *daemonTask, restartClaim bool) (bool, error) {
 	t := dt.task
 	t.TaskRunner = r.runnerID
 	t.TaskStatus = task.TaskStatus_Running
@@ -937,8 +995,13 @@ func (r *taskRunner) startDaemonTask(ctx context.Context, dt *daemonTask) (bool,
 	// When update the daemon task, add the condition that last heartbeat of
 	// the task must be timeout or be null, which means that other runners does
 	// NOT try to start this task.
-	c, err := r.service.UpdateDaemonTask(ctx, []task.DaemonTask{t},
-		WithLastHeartbeat(LE, nowTime.UnixNano()-r.options.heartbeatTimeout.Nanoseconds()))
+	conditions := []Condition{
+		WithLastHeartbeat(LE, nowTime.UnixNano()-r.options.heartbeatTimeout.Nanoseconds()),
+	}
+	if restartClaim {
+		conditions = append(conditions, WithTaskStatusCond(task.TaskStatus_RestartRequested))
+	}
+	c, err := r.service.UpdateDaemonTask(ctx, []task.DaemonTask{t}, conditions...)
 	if err != nil {
 		return false, err
 	}
