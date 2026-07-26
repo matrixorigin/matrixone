@@ -527,3 +527,65 @@ func TestHandleOrderByLimitOnLiveRowsForOrderedLimit(t *testing.T) {
 	require.Nil(t, dists)
 	require.Equal(t, []int64{1, 2, 3, 5}, rows)
 }
+
+// TestHandleOrderByLimitOnSelectRows_Narrow exercises the narrow (bf16/f16/int8)
+// branch of the optimized vector top-k scan (the merged distOf path). Same data
+// in each type: rows [10,10],[1,2],[5,5] vs query [0,0] -> dists 200,5,50, so the
+// top-2 are row 1 then row 2.
+func TestHandleOrderByLimitOnSelectRows_Narrow(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	ctx := context.Background()
+
+	cases := []struct {
+		name string
+		oid  types.T
+		rows [][]byte
+		num  []byte
+	}{
+		{"int8", types.T_array_int8, [][]byte{
+			types.ArrayToBytes([]int8{10, 10}),
+			types.ArrayToBytes([]int8{1, 2}),
+			types.ArrayToBytes([]int8{5, 5}),
+		}, types.ArrayToBytes([]int8{0, 0})},
+		{"bf16", types.T_array_bf16, [][]byte{
+			types.ArrayToBytes(types.Float32ToBF16Slice([]float32{10, 10})),
+			types.ArrayToBytes(types.Float32ToBF16Slice([]float32{1, 2})),
+			types.ArrayToBytes(types.Float32ToBF16Slice([]float32{5, 5})),
+		}, types.ArrayToBytes(types.Float32ToBF16Slice([]float32{0, 0}))},
+		{"f16", types.T_array_float16, [][]byte{
+			types.ArrayToBytes(types.Float32ToFloat16Slice([]float32{10, 10})),
+			types.ArrayToBytes(types.Float32ToFloat16Slice([]float32{1, 2})),
+			types.ArrayToBytes(types.Float32ToFloat16Slice([]float32{5, 5})),
+		}, types.ArrayToBytes(types.Float32ToFloat16Slice([]float32{0, 0}))},
+	}
+
+	for _, c := range cases {
+		vec0 := vector.NewVec(types.T_int32.ToType())
+		vec1 := vector.NewVec(c.oid.ToType())
+		for i := 0; i < 3; i++ {
+			vector.AppendFixed(vec0, int32(i), false, mp)
+		}
+		for _, b := range c.rows {
+			vector.AppendBytes(vec1, b, false, mp)
+		}
+		cacheVectors := make(containers.Vectors, 2)
+		cacheVectors[0] = *vec0
+		cacheVectors[1] = *vec1
+
+		orderByLimit := &objectio.IndexReaderTopOp{
+			ColPos:     1,
+			Limit:      2,
+			Typ:        c.oid,
+			NumVec:     c.num,
+			MetricType: metric.Metric_L2Distance,
+			DistHeap:   make(objectio.Float64Heap, 0, 2),
+		}
+		resSels, resDists, err := handleOrderByLimitOnSelectRows(ctx, []int64{0, 1, 2}, orderByLimit, nil, -1, cacheVectors)
+		require.NoErrorf(t, err, c.name)
+		require.Lenf(t, resSels, 2, c.name)
+		require.Lenf(t, resDists, 2, c.name)
+		require.Equalf(t, int64(1), resSels[0], "%s closest", c.name)
+		require.Equalf(t, int64(2), resSels[1], "%s next", c.name)
+	}
+}

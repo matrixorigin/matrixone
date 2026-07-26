@@ -1711,6 +1711,9 @@ type ParamExpr struct {
 
 func (node *ParamExpr) Format(ctx *FmtCtx) {
 	ctx.WriteByte('?')
+	if ctx.paramExprOffset {
+		ctx.WriteString(strconv.Itoa(node.Offset))
+	}
 }
 
 // Accept implements NodeChecker Accept interface.

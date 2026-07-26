@@ -125,6 +125,20 @@ func (vq *VisitPlan) exploreNode(ctx context.Context, rule VisitPlanRule, node *
 		}
 	}
 
+	for i := range node.AggList {
+		node.AggList[i], err = rule.ApplyExpr(node.AggList[i])
+		if err != nil {
+			return err
+		}
+	}
+
+	for i := range node.GroupBy {
+		node.GroupBy[i], err = rule.ApplyExpr(node.GroupBy[i])
+		if err != nil {
+			return err
+		}
+	}
+
 	for i := range node.OrderBy {
 		node.OrderBy[i].Expr, err = rule.ApplyExpr(node.OrderBy[i].Expr)
 		if err != nil {
@@ -155,6 +169,13 @@ func (vq *VisitPlan) exploreNode(ctx context.Context, rule VisitPlanRule, node *
 
 	for i := range node.TblFuncExprList {
 		node.TblFuncExprList[i], err = rule.ApplyExpr(node.TblFuncExprList[i])
+		if err != nil {
+			return err
+		}
+	}
+
+	for i := range node.WinSpecList {
+		node.WinSpecList[i], err = rule.ApplyExpr(node.WinSpecList[i])
 		if err != nil {
 			return err
 		}

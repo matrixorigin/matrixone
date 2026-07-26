@@ -797,6 +797,7 @@ func NewSession(
 		getPu(ses.GetService()).GetTaskService())
 
 	ses.proc.Base.Lim.Size = pu.SV.ProcessLimitationSize
+	ses.proc.Base.Lim.SpillSize = pu.SV.ProcessLimitationSpillSize
 	ses.proc.Base.Lim.BatchRows = pu.SV.ProcessLimitationBatchRows
 	ses.proc.Base.Lim.MaxMsgSize = pu.SV.MaxMessageSize
 	ses.proc.Base.Lim.PartitionRows = pu.SV.ProcessLimitationPartitionRows
@@ -1103,6 +1104,7 @@ func (ses *Session) InitBackExec(txnOp TxnOperator, db string, callBack outputCa
 	be.backSes.upstream = ses
 	if len(opts) > 0 && opts[0] != nil {
 		be.backSes.fromRealUser = opts[0].fromRealUser
+		be.backSes.forcePessimisticRC = opts[0].forcePessimisticRC
 	}
 	return be
 }
@@ -2029,7 +2031,11 @@ func (ses *Session) reset(ctx context.Context, prev *Session) error {
 	for k, v := range prev.label {
 		ses.label[k] = v
 	}
-	*ses.timeZone = *prev.timeZone
+	// Callers treat time.Location values as immutable and share them by pointer.
+	// New sessions default to time.Local, so copying into the pointed value
+	// would mutate the process-wide location while loggers and other sessions
+	// read it.
+	ses.timeZone = prev.timeZone
 	ses.uuid = prev.uuid
 	ses.fromRealUser = prev.fromRealUser
 	ses.rm = prev.rm

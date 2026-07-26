@@ -119,9 +119,10 @@ const (
 	// each plugin's ParamsFromTree). Written into flat algo_params only when
 	// explicitly specified, read back by the build path (table functions /
 	// sync), and rendered by IndexParamsToStringList for SHOW CREATE.
-	IndexAlgoParamKmeansTrainPercent = "kmeans_train_percent"
-	IndexAlgoParamKmeansMaxIteration = "kmeans_max_iteration"
-	IndexAlgoParamMaxIndexCapacity   = "max_index_capacity"
+	IndexAlgoParamKmeansTrainPercent  = "kmeans_train_percent"
+	IndexAlgoParamKmeansMaxIteration  = "kmeans_max_iteration"
+	IndexAlgoParamMaxIndexCapacity    = "max_index_capacity"
+	IndexAlgoParamQuantizerTrainLimit = "quantizer_train_limit"
 
 	IndexAlgoParamPrefixLengths = "prefix_lengths"
 )
@@ -217,6 +218,10 @@ func IndexParamsToStringList(indexParams string) (string, error) {
 
 	if val, ok := result[IndexAlgoParamMaxIndexCapacity]; ok {
 		res += fmt.Sprintf(" %s = %s ", IndexAlgoParamMaxIndexCapacity, val)
+	}
+
+	if val, ok := result[IndexAlgoParamQuantizerTrainLimit]; ok {
+		res += fmt.Sprintf(" %s = %s ", IndexAlgoParamQuantizerTrainLimit, val)
 	}
 
 	if val, ok := result[IncludedColumns]; ok && len(val) > 0 {

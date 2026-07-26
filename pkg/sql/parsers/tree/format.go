@@ -29,6 +29,7 @@ type FmtCtx struct {
 	quoteString       bool
 	singleQuoteString bool
 	quoteIdentifier   bool
+	paramExprOffset   bool
 }
 
 func NewFmtCtx(dialectType dialect.DialectType, opts ...FmtCtxOption) *FmtCtx {
@@ -63,6 +64,15 @@ func WithSingleQuoteString() FmtCtxOption {
 func WithQuoteIdentifier() FmtCtxOption {
 	return FmtCtxOption(func(ctx *FmtCtx) {
 		ctx.quoteIdentifier = true
+	})
+}
+
+// WithParamExprOffset includes a parameter's parser-assigned offset in its
+// formatted form. It is intended for internal semantic keys; SQL restored for
+// users must keep the default placeholder-only representation.
+func WithParamExprOffset() FmtCtxOption {
+	return FmtCtxOption(func(ctx *FmtCtx) {
+		ctx.paramExprOffset = true
 	})
 }
 

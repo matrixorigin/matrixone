@@ -44,6 +44,189 @@ type objectStorageReadRange struct {
 	max *int64
 }
 
+type testObjectCopyStorage struct {
+	dummyObjectStorage
+	src     ObjectStorage
+	srcKey  string
+	dstKey  string
+	exists  bool
+	err     error
+	copyErr error
+	copies  int
+}
+
+func (s *testObjectCopyStorage) Exists(context.Context, string) (bool, error) {
+	return s.exists, s.err
+}
+
+func (s *testObjectCopyStorage) CopyObject(
+	_ context.Context,
+	src ObjectStorage,
+	srcKey string,
+	dstKey string,
+) (bool, error) {
+	s.copies++
+	s.src = src
+	s.srcKey = srcKey
+	s.dstKey = dstKey
+	return true, s.copyErr
+}
+
+func TestS3FSCopyObject(t *testing.T) {
+	ctx := context.Background()
+	srcStorage := &testObjectCopyStorage{}
+	dstStorage := &testObjectCopyStorage{}
+	src := &S3FS{name: "src", keyPrefix: "cluster", storage: srcStorage, rawStorage: srcStorage}
+	dst := &S3FS{name: "dst", keyPrefix: "fixture", storage: dstStorage, rawStorage: dstStorage}
+
+	copied, err := dst.CopyObject(ctx, src, "objects/a", "backup/objects/a")
+	require.NoError(t, err)
+	require.True(t, copied)
+	require.Same(t, srcStorage, dstStorage.src)
+	require.Equal(t, "cluster/objects/a", dstStorage.srcKey)
+	require.Equal(t, "fixture/backup/objects/a", dstStorage.dstKey)
+
+	sub := SubPath(dst, "table")
+	copied, err = sub.(ObjectCopier).CopyObject(ctx, src, "objects/a", "objects/a")
+	require.NoError(t, err)
+	require.True(t, copied)
+	require.Equal(t, "fixture/table/objects/a", dstStorage.dstKey)
+
+	srcServices, err := NewFileServices("src", src)
+	require.NoError(t, err)
+	dstServices, err := NewFileServices("dst", dst)
+	require.NoError(t, err)
+	copied, err = dstServices.CopyObject(ctx, srcServices, "objects/a", "objects/b")
+	require.NoError(t, err)
+	require.True(t, copied)
+	require.Equal(t, "cluster/objects/a", dstStorage.srcKey)
+	require.Equal(t, "fixture/objects/b", dstStorage.dstKey)
+
+	noCopier := &S3FS{name: "dst", storage: dummyObjectStorage{}}
+	copied, err = noCopier.CopyObject(ctx, src, "objects/a", "objects/b")
+	require.NoError(t, err)
+	require.False(t, copied)
+
+	dstStorage.exists = true
+	_, err = dst.CopyObject(ctx, src, "objects/a", "objects/b")
+	require.Error(t, err)
+	dstStorage.exists = false
+	dstStorage.err = errors.New("exists failed")
+	_, err = dst.CopyObject(ctx, src, "objects/a", "objects/b")
+	require.ErrorContains(t, err, "exists failed")
+	dstStorage.err = nil
+	dstStorage.copyErr = errors.New("copy failed")
+	_, err = dst.CopyObject(ctx, src, "objects/a", "objects/b")
+	require.ErrorContains(t, err, "copy failed")
+	dstStorage.copyErr = context.DeadlineExceeded
+	canceledCtx, cancel := context.WithCancel(ctx)
+	cancel()
+	copies := dstStorage.copies
+	_, err = dst.CopyObject(canceledCtx, src, "objects/a", "objects/b")
+	require.ErrorIs(t, err, context.Canceled)
+	require.Equal(t, copies, dstStorage.copies)
+
+	_, err = dst.CopyObject(ctx, src, "~~", "objects/b")
+	require.Error(t, err)
+	_, err = dst.CopyObject(ctx, src, "objects/a", "~~")
+	require.Error(t, err)
+}
+
+func TestObjectCopyCapabilityFallbacks(t *testing.T) {
+	ctx := context.Background()
+	plain := dummyFileService{name: "plain"}
+	services, err := NewFileServices("plain", plain)
+	require.NoError(t, err)
+
+	// A FileServices destination without the optional copy capability must let
+	// callers fall back to streaming instead of treating it as an error.
+	copied, err := services.CopyObject(ctx, plain, "source", "destination")
+	require.NoError(t, err)
+	require.False(t, copied)
+
+	_, err = services.CopyObject(ctx, plain, "source", "~~")
+	require.Error(t, err)
+	_, err = services.CopyObject(ctx, plain, "source", "missing:destination")
+	require.Error(t, err)
+
+	sub := SubPath(plain, "prefix").(ObjectCopier)
+	copied, err = sub.CopyObject(ctx, plain, "source", "destination")
+	require.NoError(t, err)
+	require.False(t, copied)
+	_, err = sub.CopyObject(ctx, plain, "source", "~~")
+	require.Error(t, err)
+
+	source, _, err := resolveS3CopySource(plain, "source")
+	require.NoError(t, err)
+	require.Nil(t, source)
+	_, _, err = resolveS3CopySource(SubPath(plain, "prefix"), "~~")
+	require.Error(t, err)
+	_, _, err = resolveS3CopySource(services, "missing:source")
+	require.Error(t, err)
+}
+
+func TestObjectCopyRejectsIncompatibleEndpoints(t *testing.T) {
+	copied, err := (&AwsSDKv2{endpoint: "https://s3-b.example.com"}).CopyObject(
+		context.Background(), &AwsSDKv2{endpoint: "https://s3-a.example.com"}, "src", "dst",
+	)
+	require.NoError(t, err)
+	require.False(t, copied)
+
+	copied, err = (&MinioSDK{endpoint: "minio-b:9000"}).CopyObject(
+		context.Background(), &MinioSDK{endpoint: "minio-a:9000"}, "src", "dst",
+	)
+	require.NoError(t, err)
+	require.False(t, copied)
+
+	copied, err = (&AliyunSDK{endpoint: "oss-b.example.com"}).CopyObject(
+		context.Background(), &AliyunSDK{endpoint: "oss-a.example.com"}, "src", "dst",
+	)
+	require.NoError(t, err)
+	require.False(t, copied)
+}
+
+func TestObjectCopyRejectsDifferentCredentialDomains(t *testing.T) {
+	left := newObjectStorageCopyCredentialDomain("left-id", "left-secret")
+	right := newObjectStorageCopyCredentialDomain("right-id", "right-secret")
+
+	copied, err := (&AwsSDKv2{
+		endpoint: "https://s3.example.com", copyCredentialDomain: left,
+	}).CopyObject(context.Background(), &AwsSDKv2{
+		endpoint: "https://s3.example.com", copyCredentialDomain: right,
+	}, "src", "dst")
+	require.NoError(t, err)
+	require.False(t, copied)
+
+	copied, err = (&MinioSDK{
+		endpoint: "minio.example.com", copyCredentialDomain: left,
+	}).CopyObject(context.Background(), &MinioSDK{
+		endpoint: "minio.example.com", copyCredentialDomain: right,
+	}, "src", "dst")
+	require.NoError(t, err)
+	require.False(t, copied)
+
+	copied, err = (&AliyunSDK{
+		endpoint: "oss.example.com", copyCredentialDomain: left,
+	}).CopyObject(context.Background(), &AliyunSDK{
+		endpoint: "oss.example.com", copyCredentialDomain: right,
+	}, "src", "dst")
+	require.NoError(t, err)
+	require.False(t, copied)
+
+	copied, err = (&QCloudSDK{copyCredentialDomain: left}).CopyObject(
+		context.Background(), &QCloudSDK{copyCredentialDomain: right}, "src", "dst",
+	)
+	require.NoError(t, err)
+	require.False(t, copied)
+}
+
+func TestObjectStorageCopyCredentialDomain(t *testing.T) {
+	first := newObjectStorageCopyCredentialDomain("id", "secret", "token")
+	require.True(t, first.matches(newObjectStorageCopyCredentialDomain("id", "secret", "token")))
+	require.False(t, first.matches(newObjectStorageCopyCredentialDomain("id", "other", "token")))
+	require.False(t, first.matches(newObjectStorageCopyCredentialDomain("", "", "")))
+}
+
 type readRangeRecordingObjectStorage struct {
 	ObjectStorage
 	mu    sync.Mutex

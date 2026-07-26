@@ -24,6 +24,7 @@ import (
 	"net/http"
 	gotrace "runtime/trace"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -40,10 +41,34 @@ import (
 )
 
 type AliyunSDK struct {
-	name            string
-	bucket          *oss.Bucket
-	perfCounterSets []*perfcounter.CounterSet
-	listMaxKeys     int
+	name                 string
+	endpoint             string
+	bucket               *oss.Bucket
+	copyCredentialDomain objectStorageCopyCredentialDomain
+	perfCounterSets      []*perfcounter.CounterSet
+	listMaxKeys          int
+}
+
+var _ objectStorageCopier = new(AliyunSDK)
+
+func (a *AliyunSDK) CopyObject(
+	ctx context.Context,
+	src ObjectStorage,
+	srcKey string,
+	dstKey string,
+) (bool, error) {
+	s, ok := src.(*AliyunSDK)
+	if !ok || !strings.EqualFold(a.endpoint, s.endpoint) ||
+		!a.copyCredentialDomain.matches(s.copyCredentialDomain) {
+		return false, nil
+	}
+	_, err := a.bucket.CopyObjectFrom(
+		s.bucket.BucketName,
+		srcKey,
+		dstKey,
+		oss.WithContext(ctx),
+	)
+	return true, err
 }
 
 var (
@@ -115,8 +140,12 @@ func NewAliyunSDK(
 	}
 
 	return &AliyunSDK{
-		name:            args.Name,
-		bucket:          bucket,
+		name:     args.Name,
+		endpoint: args.Endpoint,
+		bucket:   bucket,
+		copyCredentialDomain: newObjectStorageCopyCredentialDomain(
+			args.KeyID, args.KeySecret, args.SecurityToken, args.RoleARN, args.ExternalID,
+		),
 		perfCounterSets: perfCounterSets,
 	}, nil
 }
@@ -400,7 +429,8 @@ func (a *AliyunSDK) listObjects(ctx context.Context, prefix string, cont string)
 func (a *AliyunSDK) statObject(ctx context.Context, key string) (http.Header, error) {
 	ctx, task := gotrace.NewTask(ctx, "AliyunSDK.statObject")
 	defer task.End()
-	return DoWithRetry(
+	return DoWithRetryContext(
+		ctx,
 		"s3 head object",
 		func() (http.Header, error) {
 			perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {

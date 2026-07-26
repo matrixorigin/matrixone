@@ -68,6 +68,16 @@ type LogtailPhase struct {
 	sub     subscription
 }
 
+// releaseLogtailPhase releases the batches owned by a phase that will not be
+// merged into a response. Ownership is consumed so callers may safely use this
+// helper on converging cancellation/error paths.
+func releaseLogtailPhase(phase *LogtailPhase) {
+	if phase != nil && phase.closeCB != nil {
+		phase.closeCB()
+		phase.closeCB = nil
+	}
+}
+
 // LogtailResponse wraps logtail.LogtailResponse.
 type LogtailResponse struct {
 	logtail.LogtailResponse

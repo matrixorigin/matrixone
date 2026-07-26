@@ -173,7 +173,7 @@ func (a *MockRPCAgent) listenLogtailRequest() {
 			rpcMsg := morpc.RPCMessage{Message: request}
 
 			if session, ok = a.sessions[request.GetID()]; !ok {
-				session = newTestClientSession(a.client.responseReceiver)
+				session = newTestClientSession(a.ctx, a.client.responseReceiver)
 				a.sessions[request.GetID()] = session
 			}
 

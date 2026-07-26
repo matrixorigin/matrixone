@@ -34,6 +34,8 @@ type safeQueue struct {
 	ctx       context.Context
 	cancel    context.CancelFunc
 	wg        sync.WaitGroup
+	mu        sync.Mutex
+	stopOnce  sync.Once
 	state     atomic.Int32
 	pending   atomic.Int64
 	batchSize int
@@ -62,8 +64,14 @@ func NewNonBlockingQueue(queueSize int, batchSize int, onItem OnItemsCB) *safeQu
 }
 
 func (q *safeQueue) Start() {
+	q.mu.Lock()
+	if q.state.Load() != Created {
+		q.mu.Unlock()
+		return
+	}
 	q.state.Store(Running)
 	q.wg.Add(1)
+	q.mu.Unlock()
 	items := make([]any, 0, q.batchSize)
 	go func() {
 		defer q.wg.Done()
@@ -73,6 +81,7 @@ func (q *safeQueue) Start() {
 				return
 			case item := <-q.queue:
 				if q.onItemsCB == nil {
+					q.pending.Add(-1)
 					continue
 				}
 				items = append(items, item)
@@ -95,17 +104,24 @@ func (q *safeQueue) Start() {
 }
 
 func (q *safeQueue) Stop() {
-	q.stopReceiver()
-	q.waitStop()
-	close(q.queue)
+	q.stopOnce.Do(func() {
+		q.stopReceiver()
+		q.waitStop()
+		// waitStop observes pending == 0 only after every producer that passed
+		// the second state check has sent and been handled. Producers that race
+		// with Stop after this point withdraw before sending, so close releases
+		// the queue buffer without racing a sender.
+		close(q.queue)
+		q.state.Store(Stopped)
+	})
 }
 
 func (q *safeQueue) stopReceiver() {
-	state := q.state.Load()
-	if state >= ReceiverStopped {
-		return
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.state.Load() < ReceiverStopped {
+		q.state.Store(ReceiverStopped)
 	}
-	q.state.CompareAndSwap(state, ReceiverStopped)
 }
 
 func (q *safeQueue) waitStop() {
@@ -131,14 +147,30 @@ func (q *safeQueue) Enqueue(item any) (any, error) {
 
 	if q.blocking {
 		q.pending.Add(1)
+		// Stop may begin after the first state check. Register before the
+		// second check so Stop keeps the receiver alive until this producer
+		// either sends or withdraws its pending item.
+		if q.state.Load() != Running {
+			q.pending.Add(-1)
+			return item, ErrClose
+		}
+		// A blocking send intentionally has no cancellation branch: Stop waits for
+		// pending to reach zero before canceling q.ctx, and this producer contributes
+		// to pending until its item has been handled. Adding q.ctx.Done() here would
+		// therefore not unblock a sender and would obscure that shutdown contract.
 		q.queue <- item
 		return item, nil
 	} else {
+		q.pending.Add(1)
+		if q.state.Load() != Running {
+			q.pending.Add(-1)
+			return item, ErrClose
+		}
 		select {
 		case q.queue <- item:
-			q.pending.Add(1)
 			return item, nil
 		default:
+			q.pending.Add(-1)
 			return item, ErrFull
 		}
 	}

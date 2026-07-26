@@ -62,17 +62,21 @@ type AutoIncrementService interface {
 	// records to be deleted are recorded. When the delete table transaction is committed, the
 	// delete operation is triggered.
 	Delete(ctx context.Context, tableID uint64, txn client.TxnOperator) error
-	// InsertValues insert auto columns values into bat.
-	InsertValues(ctx context.Context, tableID uint64, vecs []*vector.Vector, rows int, estimate int64) (uint64, error)
+	// InsertValues inserts auto-column values, using a reset cache owned by txn when present.
+	InsertValues(ctx context.Context, tableID uint64, autoIncrEpoch uint32, txn client.TxnOperator, vecs []*vector.Vector, rows int, estimate int64) (uint64, error)
 	// CurrentValue return current incr column value.
 	CurrentValue(ctx context.Context, tableID uint64, col string) (uint64, error)
 	// Reload reload auto increment cache.
 	Reload(ctx context.Context, tableID uint64) error
+	// SetOffset sets the offset of an auto-increment column and refreshes local cache.
+	SetOffset(ctx context.Context, tableID uint64, colName string, offset uint64, txn client.TxnOperator) error
+	// DiscardOffsetReset synchronously retires a transaction-private reset cache.
+	DiscardOffsetReset(ctx context.Context, tableID uint64, txn client.TxnOperator) error
 	// Close close the auto increment service
 	Close()
 	// GetLastAllocateTS gets the oldest allocation timestamp that can still
-	// issue a value from the column cache.
-	GetLastAllocateTS(ctx context.Context, tableID uint64, colName string) (timestamp.Timestamp, error)
+	// issue a value from the transaction-private or committed column cache.
+	GetLastAllocateTS(ctx context.Context, tableID uint64, autoIncrEpoch uint32, txn client.TxnOperator, colName string) (timestamp.Timestamp, error)
 }
 
 // incrTableCache a cache containing auto-incremented columns of a table, an incrCache may
@@ -108,11 +112,15 @@ type AutoIncrementService interface {
 // allocations for one write.
 type incrTableCache interface {
 	table() uint64
+	epoch() uint32
+	acquire()
+	release()
+	retire()
 	commit()
 	columns() []AutoColumn
 	insertAutoValues(ctx context.Context, tableID uint64, vecs []*vector.Vector, rows int, estimate int64) (uint64, error)
 	currentValue(ctx context.Context, tableID uint64, col string) (uint64, error)
-	getLastAllocateTS(colName string) (timestamp.Timestamp, error)
+	getLastAllocateTS(ctx context.Context, colName string) (timestamp.Timestamp, error)
 	adjust(ctx context.Context, cols []AutoColumn) error
 	close() error
 }
@@ -121,6 +129,7 @@ type valueAllocator interface {
 	allocate(ctx context.Context, tableID uint64, col string, count int, txnOp client.TxnOperator) (uint64, uint64, timestamp.Timestamp, error)
 	asyncAllocate(ctx context.Context, tableID uint64, col string, count int, txnOp client.TxnOperator, cb func(uint64, uint64, timestamp.Timestamp, error)) error
 	updateMinValue(ctx context.Context, tableID uint64, col string, minValue uint64, txnOp client.TxnOperator) error
+	forceSetOffset(ctx context.Context, tableID uint64, col string, offset uint64, txnOp client.TxnOperator) error
 	close()
 }
 
@@ -134,6 +143,13 @@ type IncrValueStore interface {
 	Allocate(ctx context.Context, tableID uint64, col string, count int, txnOp client.TxnOperator) (uint64, uint64, timestamp.Timestamp, error)
 	// UpdateMinValue update auto column min value to specified value.
 	UpdateMinValue(ctx context.Context, tableID uint64, col string, minValue uint64, txnOp client.TxnOperator) error
+	// SetOffset updates the offset of an auto-increment column, only raising it when the new
+	// value exceeds the current. If the current offset is already >= the new offset, this is a no-op.
+	SetOffset(ctx context.Context, tableID uint64, colName string, offset uint64, txnOp client.TxnOperator) error
+	// ForceSetOffset sets the offset of an auto-increment column to any value, bypassing
+	// the monotonic guard. Only called during ALTER TABLE AUTO_INCREMENT which holds an
+	// exclusive DDL lock, ensuring no concurrent inserts.
+	ForceSetOffset(ctx context.Context, tableID uint64, colName string, offset uint64, txnOp client.TxnOperator) error
 	// Delete remove metadata records from catalog.AutoIncrTableName.
 	Delete(ctx context.Context, tableID uint64) error
 	// Close the store

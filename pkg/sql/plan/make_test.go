@@ -55,6 +55,29 @@ func Test_MakePlan2Vecf64ConstExprWithType(t *testing.T) {
 	require.Equal(t, "[1,2,3]", actual)
 }
 
+func Test_MakePlan2VecNarrowConstExprWithType(t *testing.T) {
+	cases := []struct {
+		name string
+		fn   func(string, int32) *plan.Expr
+		oid  types.T
+	}{
+		{"bf16", MakePlan2VecBf16ConstExprWithType, types.T_array_bf16},
+		{"f16", MakePlan2VecF16ConstExprWithType, types.T_array_float16},
+		{"int8", MakePlan2VecInt8ConstExprWithType, types.T_array_int8},
+		{"uint8", MakePlan2VecUint8ConstExprWithType, types.T_array_uint8},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			e := c.fn("[1,2,3]", 3)
+			actual := e.Expr.(*plan.Expr_Lit).Lit.GetValue().(*plan.Literal_Sval).Sval
+			require.Equal(t, "[1,2,3]", actual)
+			require.Equal(t, int32(c.oid), e.Typ.Id)
+			require.Equal(t, int32(3), e.Typ.Width)
+			require.True(t, e.Typ.NotNullable)
+		})
+	}
+}
+
 func Test_isSameColumnType(t *testing.T) {
 	require.True(t, isSameColumnType(
 		plan.Type{Id: int32(types.T_varchar), Width: 32},

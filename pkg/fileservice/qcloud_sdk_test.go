@@ -28,6 +28,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/stretchr/testify/require"
 	"github.com/tencentyun/cos-go-sdk-v5"
 )
 
@@ -125,6 +126,32 @@ func TestNewQCloudSDKNoBucketValidation(t *testing.T) {
 	if sdk.client == nil {
 		t.Fatalf("expected client")
 	}
+}
+
+func TestQCloudSDKCopyObject(t *testing.T) {
+	var copySource string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		copySource = r.Header.Get("x-cos-copy-source")
+		w.Header().Set("Content-Type", "application/xml")
+		_, _ = io.WriteString(w, `<CopyObjectResult><ETag>"etag"</ETag><LastModified>2026-01-01T00:00:00Z</LastModified></CopyObjectResult>`)
+	}))
+	defer server.Close()
+
+	domain := newObjectStorageCopyCredentialDomain("id", "secret")
+	src := newTestCOSClient(t, server)
+	src.copySourceHost = "source.example.com"
+	src.copyCredentialDomain = domain
+	dst := newTestCOSClient(t, server)
+	dst.copyCredentialDomain = domain
+
+	copied, err := dst.CopyObject(context.Background(), src, "source/key", "destination/key")
+	require.NoError(t, err)
+	require.True(t, copied)
+	require.Equal(t, "source.example.com/source/key", copySource)
+
+	copied, err = dst.CopyObject(context.Background(), dummyObjectStorage{}, "source", "destination")
+	require.NoError(t, err)
+	require.False(t, copied)
 }
 
 func TestQCloudSDKWriteRetriesSeekablePut(t *testing.T) {

@@ -3005,6 +3005,48 @@ func TestWriteSQLLoadCSVFieldFromVec_BinaryEscapesControlBytes(t *testing.T) {
 	assert.Equal(t, `"a\n\0\r\t\Z""\\"`, buf.String())
 }
 
+func TestWriteSQLLoadCSVFieldFromVec_NarrowVectorsQuoted(t *testing.T) {
+	mp := mpool.MustNewZero()
+
+	// Every narrow vector type renders via RowToString as "[1, 2]" — the comma
+	// would split into a spurious CSV column if emitted unquoted. All four must
+	// go through the quoted path and round-trip back as a single field.
+	int8Vec := vector.NewVec(types.New(types.T_array_int8, 2, 0))
+	require.NoError(t, vector.AppendArray[int8](int8Vec, []int8{1, 2}, false, mp))
+	uint8Vec := vector.NewVec(types.New(types.T_array_uint8, 2, 0))
+	require.NoError(t, vector.AppendArray[uint8](uint8Vec, []uint8{3, 4}, false, mp))
+	bf16Vec := vector.NewVec(types.New(types.T_array_bf16, 2, 0))
+	require.NoError(t, vector.AppendArray[types.BF16](bf16Vec, []types.BF16{types.BF16FromFloat32(1), types.BF16FromFloat32(2)}, false, mp))
+	f16Vec := vector.NewVec(types.New(types.T_array_float16, 2, 0))
+	require.NoError(t, vector.AppendArray[types.Float16](f16Vec, []types.Float16{types.Float16FromFloat32(1), types.Float16FromFloat32(2)}, false, mp))
+
+	for _, vec := range []*vector.Vector{int8Vec, uint8Vec, bf16Vec, f16Vec} {
+		require.True(t, shouldQuoteSQLLoadType(*vec.GetType()),
+			"narrow vector %s must be quoted", vec.GetType().Oid)
+
+		var buf bytes.Buffer
+		require.NoError(t, writeSQLLoadCSVFieldFromVec(&buf, *vec.GetType(), []*vector.Vector{vec}, 0, 0))
+		out := buf.String()
+		require.True(t, strings.HasPrefix(out, `"`) && strings.HasSuffix(out, `"`),
+			"%s field must be enclosed in quotes, got %q", vec.GetType().Oid, out)
+
+		// The quoted value must parse back as exactly one field (no comma split).
+		parser, err := csvparser.NewCSVParser(&csvparser.CSVConfig{
+			FieldsTerminatedBy: ",",
+			FieldsEnclosedBy:   `"`,
+			FieldsEscapedBy:    `\`,
+			LinesTerminatedBy:  "\n",
+			Null:               []string{`\N`},
+			UnescapedQuote:     true,
+		}, strings.NewReader(out+"\n"), csvparser.ReadBlockSize, false)
+		require.NoError(t, err)
+		row, err := parser.Read(nil)
+		require.NoError(t, err)
+		require.Len(t, row, 1, "%s must round-trip as a single CSV field, got %v", vec.GetType().Oid, row)
+		require.True(t, row[0].HasStringQuote)
+	}
+}
+
 func TestParseCSVRowOrder(t *testing.T) {
 	order, err := ParseCSVRowOrder("storage")
 	require.NoError(t, err)

@@ -36,7 +36,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/exp/constraints"
 )
@@ -440,6 +439,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_time, types.T_timestamp,
 		types.T_year,
 		types.T_array_float32, types.T_array_float64,
+		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8,
 		types.T_datalink, types.T_geometry, types.T_geometry32,
 	},
 
@@ -686,6 +686,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
 		types.T_array_float32, types.T_array_float64,
+		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8,
 		types.T_datalink, types.T_geometry, types.T_geometry32,
 		types.T_TS,
 	},
@@ -734,6 +735,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
 		types.T_array_float32, types.T_array_float64,
+		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8,
 		types.T_datalink, types.T_geometry, types.T_geometry32,
 	},
 
@@ -752,6 +754,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
 		types.T_array_float32, types.T_array_float64,
+		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8,
 		types.T_datalink, types.T_geometry, types.T_geometry32,
 	},
 	types.T_geometry: {
@@ -815,9 +818,27 @@ var supportedTypeCast = map[types.T][]types.T{
 
 	types.T_array_float32: {
 		types.T_array_float32, types.T_array_float64,
+		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8,
 	},
 	types.T_array_float64: {
 		types.T_array_float32, types.T_array_float64,
+		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8,
+	},
+	types.T_array_bf16: {
+		types.T_array_float32, types.T_array_float64,
+		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8,
+	},
+	types.T_array_float16: {
+		types.T_array_float32, types.T_array_float64,
+		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8,
+	},
+	types.T_array_int8: {
+		types.T_array_float32, types.T_array_float64,
+		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8,
+	},
+	types.T_array_uint8: {
+		types.T_array_float32, types.T_array_float64,
+		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8,
 	},
 }
 
@@ -988,7 +1009,7 @@ func newCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink, types.T_geometry, types.T_geometry32:
 		s := vector.GenerateFunctionStrParameter(from)
 		err = strTypeToOthers(proc, s, *toType, result, length, selectList, mode)
-	case types.T_array_float32, types.T_array_float64:
+	case types.T_array_float32, types.T_array_float64, types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8:
 		//NOTE: Don't mix T_array and T_varchar.
 		// T_varchar will have "[1,2,3]" string
 		// T_array will have "@@@#@!#@!@#!" binary.
@@ -1107,7 +1128,7 @@ func scalarNullToOthers(ctx context.Context,
 		return appendNulls[uint64](result, length, selectList)
 	case types.T_char, types.T_varchar, types.T_blob,
 		types.T_binary, types.T_varbinary, types.T_text, types.T_json,
-		types.T_array_float32, types.T_array_float64, types.T_datalink, types.T_geometry:
+		types.T_array_float32, types.T_array_float64, types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8, types.T_datalink, types.T_geometry:
 		return appendNulls[types.Varlena](result, length, selectList)
 	case types.T_float32:
 		return appendNulls[float32](result, length, selectList)
@@ -2349,6 +2370,7 @@ func strTypeToOthers(proc *process.Process,
 	ctx := proc.Ctx
 	strictStringWidth := mode.strictStringWidth()
 	explicit := mode == castModeExplicit
+	assignmentCast := mode == castModeStrictStringWidth
 
 	fromType := source.GetType()
 	// Geometry is stored as bare WKB. Casting to a textual type must render
@@ -2372,6 +2394,18 @@ func strTypeToOthers(proc *process.Process,
 		case types.T_array_float64:
 			rs := vector.MustFunctionResult[types.Varlena](result)
 			return blobToArray[float64](ctx, source, rs, length, toType)
+		case types.T_array_bf16:
+			rs := vector.MustFunctionResult[types.Varlena](result)
+			return blobToArray[types.BF16](ctx, source, rs, length, toType)
+		case types.T_array_float16:
+			rs := vector.MustFunctionResult[types.Varlena](result)
+			return blobToArray[types.Float16](ctx, source, rs, length, toType)
+		case types.T_array_int8:
+			rs := vector.MustFunctionResult[types.Varlena](result)
+			return blobToArray[int8](ctx, source, rs, length, toType)
+		case types.T_array_uint8:
+			rs := vector.MustFunctionResult[types.Varlena](result)
+			return blobToArray[uint8](ctx, source, rs, length, toType)
 			// NOTE 1: don't add `switch default` and panic here. If `T_blob` to `ARRAY` is not required,
 			// then continue to the `str` to `Other` code.
 			// NOTE 2: don't create a switch T_blob case in NewCast() as
@@ -2430,10 +2464,10 @@ func strTypeToOthers(proc *process.Process,
 		return strToUuid(source, rs, length, selectList)
 	case types.T_date:
 		rs := vector.MustFunctionResult[types.Date](result)
-		return strToDate(source, rs, length, selectList)
+		return strToDate(proc, source, rs, length, selectList, assignmentCast)
 	case types.T_datetime:
 		rs := vector.MustFunctionResult[types.Datetime](result)
-		return strToDatetime(source, rs, length, selectList)
+		return strToDatetime(proc, source, rs, length, selectList, assignmentCast)
 	case types.T_time:
 		rs := vector.MustFunctionResult[types.Time](result)
 		return strToTime(source, rs, length, selectList)
@@ -2443,7 +2477,7 @@ func strTypeToOthers(proc *process.Process,
 		if proc != nil {
 			zone = proc.GetSessionInfo().TimeZone
 		}
-		return strToTimestamp(source, rs, zone, length, selectList)
+		return strToTimestamp(proc, source, rs, zone, length, selectList, assignmentCast)
 	case types.T_char, types.T_varchar, types.T_text,
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_datalink, types.T_geometry, types.T_geometry32:
 		rs := vector.MustFunctionResult[types.Varlena](result)
@@ -2454,6 +2488,18 @@ func strTypeToOthers(proc *process.Process,
 	case types.T_array_float64:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return strToArray[float64](ctx, source, rs, length, toType)
+	case types.T_array_bf16:
+		rs := vector.MustFunctionResult[types.Varlena](result)
+		return strToArray[types.BF16](ctx, source, rs, length, toType)
+	case types.T_array_float16:
+		rs := vector.MustFunctionResult[types.Varlena](result)
+		return strToArray[types.Float16](ctx, source, rs, length, toType)
+	case types.T_array_int8:
+		rs := vector.MustFunctionResult[types.Varlena](result)
+		return strToArray[int8](ctx, source, rs, length, toType)
+	case types.T_array_uint8:
+		rs := vector.MustFunctionResult[types.Varlena](result)
+		return strToArray[uint8](ctx, source, rs, length, toType)
 	case types.T_year:
 		rs := vector.MustFunctionResult[types.MoYear](result)
 		return strToYear(ctx, source, rs, length, selectList)
@@ -2470,22 +2516,43 @@ func arrayTypeToOthers(proc *process.Process,
 
 	switch fromType.Oid {
 	case types.T_array_float32:
-		switch toType.Oid {
-		case types.T_array_float32:
-			return arrayToArray[float32, float32](proc.Ctx, source, rs, length, toType)
-		case types.T_array_float64:
-			return arrayToArray[float32, float64](proc.Ctx, source, rs, length, toType)
-		}
+		return arrayToArrayDispatch[float32](proc, source, rs, length, toType)
 	case types.T_array_float64:
-		switch toType.Oid {
-		case types.T_array_float32:
-			return arrayToArray[float64, float32](proc.Ctx, source, rs, length, toType)
-		case types.T_array_float64:
-			return arrayToArray[float64, float64](proc.Ctx, source, rs, length, toType)
-		}
+		return arrayToArrayDispatch[float64](proc, source, rs, length, toType)
+	case types.T_array_bf16:
+		return arrayToArrayDispatch[types.BF16](proc, source, rs, length, toType)
+	case types.T_array_float16:
+		return arrayToArrayDispatch[types.Float16](proc, source, rs, length, toType)
+	case types.T_array_int8:
+		return arrayToArrayDispatch[int8](proc, source, rs, length, toType)
+	case types.T_array_uint8:
+		return arrayToArrayDispatch[uint8](proc, source, rs, length, toType)
 	}
 
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from %s to %s", fromType, toType))
+}
+
+// arrayToArrayDispatch resolves the target element type for a vector->vector
+// cast whose source element type I is already known, then runs the float32
+// bridge in arrayToArray. Covers all 25 (5x5) vector-pair casts.
+func arrayToArrayDispatch[I types.ArrayElement](proc *process.Process,
+	source vector.FunctionParameterWrapper[types.Varlena],
+	rs *vector.FunctionResult[types.Varlena], length int, toType types.Type) error {
+	switch toType.Oid {
+	case types.T_array_float32:
+		return arrayToArray[I, float32](proc.Ctx, source, rs, length, toType)
+	case types.T_array_float64:
+		return arrayToArray[I, float64](proc.Ctx, source, rs, length, toType)
+	case types.T_array_bf16:
+		return arrayToArray[I, types.BF16](proc.Ctx, source, rs, length, toType)
+	case types.T_array_float16:
+		return arrayToArray[I, types.Float16](proc.Ctx, source, rs, length, toType)
+	case types.T_array_int8:
+		return arrayToArray[I, int8](proc.Ctx, source, rs, length, toType)
+	case types.T_array_uint8:
+		return arrayToArray[I, uint8](proc.Ctx, source, rs, length, toType)
+	}
+	return moerr.NewInternalError(proc.Ctx, fmt.Sprintf("unsupported cast to %s", toType))
 }
 
 func uuidToOthers(ctx context.Context,
@@ -3672,10 +3739,16 @@ func dateToDecimal128(
 }
 
 func packedDateInt64(v types.Date) int64 {
+	if v == types.ZeroDate {
+		return 0
+	}
 	return int64(v.Year())*10000 + int64(v.Month())*100 + int64(v.Day())
 }
 
 func packedDatetimeInt64(v types.Datetime) int64 {
+	if v == types.ZeroDatetime {
+		return 0
+	}
 	return int64(v.Year())*10000000000 +
 		int64(v.Month())*100000000 +
 		int64(v.Day())*1000000 +
@@ -5035,6 +5108,34 @@ func decimal64ToDecimal128Array(
 
 	if !from.WithAnyNullValue() {
 		v := vector.MustFixedColWithTypeCheck[types.Decimal64](from.GetSourceVector())
+		if from.GetSourceVector().IsConst() {
+			fromdec := types.Decimal128{B0_63: uint64(v[0])}
+			if v[0].Sign() {
+				fromdec.B64_127 = ^fromdec.B64_127
+			}
+
+			result := fromdec
+			var err error
+			if totype.Width < fromtype.Width {
+				result, err = types.ParseDecimal128(
+					fromdec.Format(fromtype.Scale),
+					totype.Width,
+					totype.Scale,
+				)
+			} else if totype.Scale != fromtype.Scale {
+				result, err = fromdec.Scale(totype.Scale - fromtype.Scale)
+			}
+			if err != nil {
+				return err
+			}
+
+			dst := vector.MustFixedColNoTypeCheck[types.Decimal128](to.GetResultVector())
+			for i := 0; i < length; i++ {
+				dst[i] = result
+			}
+			return nil
+		}
+
 		if totype.Width < fromtype.Width {
 			for i := 0; i < length; i++ {
 				fromdec := types.Decimal128{B0_63: uint64(v[i]), B64_127: 0}
@@ -6765,13 +6866,21 @@ func strToJson(
 	return nil
 }
 
-func strToDate(
+func strToDate(proc *process.Process,
 	from vector.FunctionParameterWrapper[types.Varlena],
-	to *vector.FunctionResult[types.Date], length int, selectList *FunctionSelectList) error {
+	to *vector.FunctionResult[types.Date], length int, selectList *FunctionSelectList, assignmentCast bool) error {
 	var i uint64
 	var l = uint64(length)
 	var dft types.Date
+	modeChecked := false
+	nullifyZero := false
 	for i = 0; i < l; i++ {
+		if functionRowSkipped(selectList, i) {
+			if err := to.Append(dft, true); err != nil {
+				return err
+			}
+			continue
+		}
 		v, null := from.GetStrValue(i)
 		if null || len(v) == 0 {
 			if err := to.Append(dft, true); err != nil {
@@ -6786,6 +6895,21 @@ func strToDate(
 					return err
 				}
 			} else {
+				if val == types.ZeroDate && !assignmentCast {
+					if !modeChecked {
+						nullifyZero, err = explicitZeroTemporalCastReturnsNull(proc)
+						if err != nil {
+							return err
+						}
+						modeChecked = true
+					}
+					if nullifyZero {
+						if err = to.Append(dft, true); err != nil {
+							return err
+						}
+						continue
+					}
+				}
 				if err = to.Append(val, false); err != nil {
 					return err
 				}
@@ -6822,14 +6946,22 @@ func strToTime(
 	return nil
 }
 
-func strToDatetime(
+func strToDatetime(proc *process.Process,
 	from vector.FunctionParameterWrapper[types.Varlena],
-	to *vector.FunctionResult[types.Datetime], length int, selectList *FunctionSelectList) error {
+	to *vector.FunctionResult[types.Datetime], length int, selectList *FunctionSelectList, assignmentCast bool) error {
 	var i uint64
 	var l = uint64(length)
 	var dft types.Datetime
 	totype := to.GetType()
+	modeChecked := false
+	nullifyZero := false
 	for i = 0; i < l; i++ {
+		if functionRowSkipped(selectList, i) {
+			if err := to.Append(dft, true); err != nil {
+				return err
+			}
+			continue
+		}
 		v, null := from.GetStrValue(i)
 		if null || len(v) == 0 {
 			if err := to.Append(dft, true); err != nil {
@@ -6841,6 +6973,21 @@ func strToDatetime(
 			if err != nil {
 				return err
 			}
+			if val == types.ZeroDatetime && !assignmentCast {
+				if !modeChecked {
+					nullifyZero, err = explicitZeroTemporalCastReturnsNull(proc)
+					if err != nil {
+						return err
+					}
+					modeChecked = true
+				}
+				if nullifyZero {
+					if err = to.Append(dft, true); err != nil {
+						return err
+					}
+					continue
+				}
+			}
 			if err = to.Append(val, false); err != nil {
 				return err
 			}
@@ -6849,15 +6996,23 @@ func strToDatetime(
 	return nil
 }
 
-func strToTimestamp(
+func strToTimestamp(proc *process.Process,
 	from vector.FunctionParameterWrapper[types.Varlena],
 	to *vector.FunctionResult[types.Timestamp],
-	zone *time.Location, length int, selectList *FunctionSelectList) error {
+	zone *time.Location, length int, selectList *FunctionSelectList, assignmentCast bool) error {
 	var i uint64
 	var l = uint64(length)
 	var dft types.Timestamp
 	totype := to.GetType()
+	modeChecked := false
+	nullifyZero := false
 	for i = 0; i < l; i++ {
+		if functionRowSkipped(selectList, i) {
+			if err := to.Append(dft, true); err != nil {
+				return err
+			}
+			continue
+		}
 		v, null := from.GetStrValue(i)
 		if null || len(v) == 0 {
 			if err := to.Append(dft, true); err != nil {
@@ -6869,12 +7024,36 @@ func strToTimestamp(
 			if err != nil {
 				return err
 			}
+			if val == types.ZeroTimestamp && !assignmentCast {
+				if !modeChecked {
+					nullifyZero, err = explicitZeroTemporalCastReturnsNull(proc)
+					if err != nil {
+						return err
+					}
+					modeChecked = true
+				}
+				if nullifyZero {
+					if err = to.Append(dft, true); err != nil {
+						return err
+					}
+					continue
+				}
+			}
 			if err = to.Append(val, false); err != nil {
 				return err
 			}
 		}
 	}
 	return nil
+}
+
+func functionRowSkipped(selectList *FunctionSelectList, i uint64) bool {
+	return selectList != nil && (selectList.IgnoreAllRow() ||
+		(!selectList.ShouldEvalAllRow() && selectList.Contains(i)))
+}
+
+func explicitZeroTemporalCastReturnsNull(proc *process.Process) (bool, error) {
+	return process.ResolveExplicitZeroTemporalCastReturnsNull(proc)
 }
 
 func strToStr(
@@ -7011,7 +7190,7 @@ func strToBit(
 	return nil
 }
 
-func strToArray[T types.RealNumbers](
+func strToArray[T types.ArrayElement](
 	_ context.Context,
 	from vector.FunctionParameterWrapper[types.Varlena],
 	to *vector.FunctionResult[types.Varlena], length int, _ types.Type) error {
@@ -7047,7 +7226,7 @@ func strToArray[T types.RealNumbers](
 	return nil
 }
 
-func blobToArray[T types.RealNumbers](
+func blobToArray[T types.ArrayElement](
 	_ context.Context,
 	from vector.FunctionParameterWrapper[types.Varlena],
 	to *vector.FunctionResult[types.Varlena], length int, _ types.Type) error {
@@ -7077,7 +7256,7 @@ func blobToArray[T types.RealNumbers](
 	return nil
 }
 
-func arrayToArray[I types.RealNumbers, O types.RealNumbers](
+func arrayToArray[I types.ArrayElement, O types.ArrayElement](
 	_ context.Context,
 	from vector.FunctionParameterWrapper[types.Varlena],
 	to *vector.FunctionResult[types.Varlena], length int, _ types.Type) error {
@@ -7098,18 +7277,20 @@ func arrayToArray[I types.RealNumbers, O types.RealNumbers](
 		// cases b/b and b+sqrt(b) fails.
 
 		if from.GetType().Oid == to.GetType().Oid {
-			// Eg:- VECF32(3) --> VECF32(3)
+			// Eg:- VECF32(3) --> VECF32(3): identical byte layout, copy as-is.
 			if err := to.AppendBytes(v, false); err != nil {
 				return err
 			}
 		} else {
-			// Eg:- VECF32(3) --> VECF64(3)
+			// Eg:- VECF32(3) --> VECF64(3), VECF32 --> VECINT8, etc.
+			// All 25 vector-pair casts route through the float32 bridge:
+			// upcast the source element type to []float32, then narrow to the
+			// target element type (int8 rounds+clamps; bf16/f16 round-to-even).
+			// This replaces moarray.Cast[I,O], which only handled float pairs.
 			_v := types.BytesToArray[I](v)
-			cast, err := moarray.Cast[I, O](_v)
-			if err != nil {
-				return err
-			}
-			bytes := types.ArrayToBytes[O](cast)
+			f32 := types.ToFloat32Array[I](_v)
+			out := types.FromFloat32Array[O](f32)
+			bytes := types.ArrayToBytes[O](out)
 			if err := to.AppendBytes(bytes, false); err != nil {
 				return err
 			}

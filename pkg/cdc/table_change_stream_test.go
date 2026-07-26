@@ -378,6 +378,90 @@ func TestTableChangeStream_Run_DuplicateReader(t *testing.T) {
 	}
 }
 
+func TestTableChangeStreamCleanupDoesNotDeleteReplacedReader(t *testing.T) {
+	runningReaders := &sync.Map{}
+
+	key := "db1.t1"
+	oldStream := &TableChangeStream{
+		accountId:               1,
+		taskId:                  "task1",
+		tableInfo:               &DbTableInfo{SourceDbName: "db1", SourceTblName: "t1", SourceTblId: 1},
+		sinker:                  newTableStreamRecordingSinker(),
+		watermarkUpdater:        newWatermarkUpdaterStub(),
+		watermarkKey:            &WatermarkKey{AccountId: 1, TaskId: "task1", DBName: "db1", TableName: "t1"},
+		runningReaders:          runningReaders,
+		runningReaderKey:        key,
+		progressTracker:         nil,
+		watermarkStallThreshold: defaultWatermarkStallThreshold,
+	}
+	newStream := &TableChangeStream{
+		accountId:        1,
+		taskId:           "task1",
+		tableInfo:        &DbTableInfo{SourceDbName: "db1", SourceTblName: "t1", SourceTblId: 1},
+		sinker:           newTableStreamRecordingSinker(),
+		watermarkUpdater: newWatermarkUpdaterStub(),
+		watermarkKey:     &WatermarkKey{AccountId: 1, TaskId: "task1", DBName: "db1", TableName: "t1"},
+		runningReaders:   runningReaders,
+		runningReaderKey: key,
+	}
+	runningReaders.Store(key, oldStream)
+	runningReaders.Store(key, newStream)
+
+	oldStream.wg.Add(1)
+	oldStream.cleanup(context.Background())
+
+	stored, ok := runningReaders.Load(key)
+	require.True(t, ok, "replaced reader ownership should remain")
+	require.Same(t, newStream, stored, "old cleanup must not delete a newer reader")
+}
+
+func TestTableChangeStreamCleanupKeepsOwnershipUntilCloseFinishes(t *testing.T) {
+	runningReaders := &sync.Map{}
+
+	key := "db1.t1"
+	sinker := newBlockingCloseSinker()
+	stream := &TableChangeStream{
+		accountId:               1,
+		taskId:                  "task1",
+		tableInfo:               &DbTableInfo{SourceDbName: "db1", SourceTblName: "t1", SourceTblId: 1},
+		sinker:                  sinker,
+		watermarkUpdater:        newWatermarkUpdaterStub(),
+		watermarkKey:            &WatermarkKey{AccountId: 1, TaskId: "task1", DBName: "db1", TableName: "t1"},
+		runningReaders:          runningReaders,
+		runningReaderKey:        key,
+		progressTracker:         nil,
+		watermarkStallThreshold: defaultWatermarkStallThreshold,
+	}
+	runningReaders.Store(key, stream)
+
+	stream.wg.Add(1)
+	cleanupDone := make(chan struct{})
+	go func() {
+		stream.cleanup(context.Background())
+		close(cleanupDone)
+	}()
+
+	select {
+	case <-sinker.closeStarted:
+	case <-time.After(time.Second):
+		t.Fatal("expected cleanup to reach sinker close")
+	}
+
+	stored, ok := runningReaders.Load(key)
+	require.True(t, ok, "reader ownership should remain while cleanup is still closing")
+	require.Same(t, stream, stored, "old stream should keep ownership until cleanup finishes")
+
+	close(sinker.unblockClose)
+	select {
+	case <-cleanupDone:
+	case <-time.After(time.Second):
+		t.Fatal("cleanup did not finish after unblocking close")
+	}
+
+	_, ok = runningReaders.Load(key)
+	require.False(t, ok, "reader ownership should be removed after cleanup finishes")
+}
+
 // Integration: commit failure triggers EnsureCleanup rollback, then recovery succeeds
 func TestTableChangeStream_CommitFailure_EnsureCleanup_ThenRecover(t *testing.T) {
 	updaterStub := newWatermarkUpdaterStub()
@@ -2451,6 +2535,28 @@ type tableStreamRecordingSinker struct {
 
 func newTableStreamRecordingSinker() *tableStreamRecordingSinker {
 	return &tableStreamRecordingSinker{recordingSinker: newRecordingSinker()}
+}
+
+type blockingCloseSinker struct {
+	*tableStreamRecordingSinker
+	closeStarted chan struct{}
+	unblockClose chan struct{}
+	closeOnce    sync.Once
+}
+
+func newBlockingCloseSinker() *blockingCloseSinker {
+	return &blockingCloseSinker{
+		tableStreamRecordingSinker: newTableStreamRecordingSinker(),
+		closeStarted:               make(chan struct{}),
+		unblockClose:               make(chan struct{}),
+	}
+}
+
+func (s *blockingCloseSinker) Close() {
+	s.closeOnce.Do(func() {
+		close(s.closeStarted)
+	})
+	<-s.unblockClose
 }
 
 func (s *tableStreamRecordingSinker) Sink(ctx context.Context, data *DecoderOutput) {

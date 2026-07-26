@@ -261,7 +261,7 @@ func indexFrom(str, substr string, start int) int {
 }
 
 // stringToT convert str to T
-func stringToT[T RealNumbers](str string) (t T, err error) {
+func stringToT[T ArrayElement](str string) (t T, err error) {
 	switch any(t).(type) {
 	case float32:
 		num, err := strconv.ParseFloat(str, 32)
@@ -277,6 +277,42 @@ func stringToT[T RealNumbers](str string) (t T, err error) {
 			return t, moerr.NewInternalErrorNoCtxf("error while casting %s to %s", str, T_float64.String())
 		}
 		return *(*T)(unsafe.Pointer(&num)), nil
+	case BF16:
+		num, err := strconv.ParseFloat(str, 32)
+		if err != nil {
+			return t, moerr.NewInternalErrorNoCtxf("error while casting %s to %s", str, T_array_bf16.String())
+		}
+		bf := BF16FromFloat32(float32(num))
+		return *(*T)(unsafe.Pointer(&bf)), nil
+	case Float16:
+		num, err := strconv.ParseFloat(str, 32)
+		if err != nil {
+			return t, moerr.NewInternalErrorNoCtxf("error while casting %s to %s", str, T_array_float16.String())
+		}
+		h := Float16FromFloat32(float32(num))
+		return *(*T)(unsafe.Pointer(&h)), nil
+	case int8:
+		// Strict: a vecint8 string literal must be an integer in [-128,127].
+		// Non-integer ("1.4") or out-of-range ("200") values error rather than
+		// silently rounding/clamping. (The vecf32 -> vecint8 CAST path does
+		// round+clamp; only direct string parsing is strict.)
+		num, err := strconv.ParseInt(str, 10, 8)
+		if err != nil {
+			return t, moerr.NewInternalErrorNoCtxf("error while casting %s to %s", str, T_array_int8.String())
+		}
+		i8 := int8(num)
+		return *(*T)(unsafe.Pointer(&i8)), nil
+	case uint8:
+		// Strict: a vecuint8 string literal must be an integer in [0,255].
+		// Non-integer ("1.4") or out-of-range ("300") values error rather than
+		// silently rounding/clamping. (The vecf32 -> vecuint8 CAST path does
+		// round+clamp; only direct string parsing is strict.)
+		num, err := strconv.ParseUint(str, 10, 8)
+		if err != nil {
+			return t, moerr.NewInternalErrorNoCtxf("error while casting %s to %s", str, T_array_uint8.String())
+		}
+		u8 := uint8(num)
+		return *(*T)(unsafe.Pointer(&u8)), nil
 	default:
 		panic(moerr.NewInternalErrorNoCtx("not implemented"))
 	}
