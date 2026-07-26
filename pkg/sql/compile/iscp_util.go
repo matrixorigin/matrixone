@@ -520,7 +520,6 @@ func runISCPDrainTargetOperations(
 	var wg sync.WaitGroup
 	wg.Add(len(targets))
 	for i := range targets {
-		i := i
 		go func() {
 			defer wg.Done()
 			results[i] = operation(targets[i])
