@@ -258,6 +258,21 @@ func TestCombinedChangesHandle_CloseClosesAllHandlesOnError(t *testing.T) {
 	assert.True(t, first.closed)
 	assert.True(t, second.closed)
 	assert.True(t, third.closed)
+	assert.NoError(t, handle.Close())
+	assert.NoError(t, handle.closeRemaining())
+}
+
+func TestCombinedChangesHandleNextAfterCloseReturnsDone(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	handle := &combinedChangesHandle{closed: true}
+
+	data, tombstone, hint, err := handle.Next(context.Background(), mp)
+	require.NoError(t, err)
+	assert.Nil(t, data)
+	assert.Nil(t, tombstone)
+	assert.Equal(t, engine.ChangesHandle_Tail_done, hint)
 }
 
 func TestCombinedChangesHandle_NextCloseErrorClosesRemainingHandles(t *testing.T) {
@@ -274,6 +289,291 @@ func TestCombinedChangesHandle_NextCloseErrorClosesRemainingHandles(t *testing.T
 	assert.Equal(t, 1, second.closeCount)
 	assert.True(t, first.closed)
 	assert.True(t, second.closed)
+}
+
+func TestCombinedTxnTable_CollectChangesClosesAcquiredHandlesOnError(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	acquired := &mockChangesHandle{}
+	expectedErr := errors.New("collect changes failed")
+	table := newMockCombinedTxnTable()
+	table.tablesFunc = func() ([]engine.Relation, error) {
+		return []engine.Relation{
+			&mockRelation{collectChangesFunc: func(context.Context, types.TS, types.TS, bool, *mpool.MPool) (engine.ChangesHandle, error) {
+				return acquired, nil
+			}},
+			&mockRelation{collectChangesFunc: func(context.Context, types.TS, types.TS, bool, *mpool.MPool) (engine.ChangesHandle, error) {
+				return nil, expectedErr
+			}},
+		}, nil
+	}
+
+	handle, err := table.CollectChanges(context.Background(), types.BuildTS(1, 0), types.TS{}, false, mp)
+	require.ErrorIs(t, err, expectedErr)
+	assert.Nil(t, handle)
+	assert.True(t, acquired.closed)
+	assert.Equal(t, 1, acquired.closeCount)
+}
+
+func TestCombinedTxnTable_CollectChangesReturnsTablesError(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	expectedErr := errors.New("list partitions failed")
+	table := newMockCombinedTxnTable()
+	table.tablesFunc = func() ([]engine.Relation, error) {
+		return nil, expectedErr
+	}
+
+	handle, err := table.CollectChanges(context.Background(), types.BuildTS(1, 0), types.TS{}, false, mp)
+	require.ErrorIs(t, err, expectedErr)
+	assert.Nil(t, handle)
+}
+
+func TestCombinedChangesHandleRejectsInvalidStreams(t *testing.T) {
+	newHandle := func(mp *mpool.MPool, changes []mockChange, snapshot bool) *combinedChangesHandle {
+		return &combinedChangesHandle{
+			handles:  []engine.ChangesHandle{&mockChangesHandle{changes: changes}},
+			mp:       mp,
+			snapshot: snapshot,
+		}
+	}
+
+	t.Run("snapshot data must use snapshot hint", func(t *testing.T) {
+		mp := mpool.MustNewZero()
+		defer mpool.DeleteMPool(mp)
+		handle := newHandle(mp, []mockChange{{
+			data: newChangesTestBatch(t, mp, []int64{1}, []types.TS{types.BuildTS(10, 0)}),
+			hint: engine.ChangesHandle_Tail_done,
+		}}, true)
+
+		data, tombstone, _, err := handle.Next(context.Background(), mp)
+		require.ErrorContains(t, err, "checkpoint changes handle returned tail data")
+		assert.Nil(t, data)
+		assert.Nil(t, tombstone)
+	})
+
+	t.Run("child next error closes every partition", func(t *testing.T) {
+		mp := mpool.MustNewZero()
+		defer mpool.DeleteMPool(mp)
+		expectedErr := errors.New("read checkpoint failed")
+		child := &mockChangesHandle{nextErr: expectedErr}
+		handle := &combinedChangesHandle{
+			handles:  []engine.ChangesHandle{child},
+			mp:       mp,
+			snapshot: true,
+		}
+
+		data, tombstone, _, err := handle.Next(context.Background(), mp)
+		require.ErrorIs(t, err, expectedErr)
+		assert.Nil(t, data)
+		assert.Nil(t, tombstone)
+		assert.True(t, child.closed)
+	})
+
+	t.Run("child close error is returned", func(t *testing.T) {
+		mp := mpool.MustNewZero()
+		defer mpool.DeleteMPool(mp)
+		expectedErr := errors.New("close checkpoint failed")
+		child := &mockChangesHandle{closeErr: expectedErr}
+		handle := &combinedChangesHandle{
+			handles:  []engine.ChangesHandle{child},
+			mp:       mp,
+			snapshot: true,
+		}
+
+		data, tombstone, _, err := handle.Next(context.Background(), mp)
+		require.ErrorIs(t, err, expectedErr)
+		assert.Nil(t, data)
+		assert.Nil(t, tombstone)
+		assert.True(t, child.closed)
+	})
+
+	t.Run("tail data must not use snapshot hint", func(t *testing.T) {
+		mp := mpool.MustNewZero()
+		defer mpool.DeleteMPool(mp)
+		handle := newHandle(mp, []mockChange{{
+			data: newChangesTestBatch(t, mp, []int64{1}, []types.TS{types.BuildTS(10, 0)}),
+			hint: engine.ChangesHandle_Snapshot,
+		}}, false)
+
+		data, tombstone, _, err := handle.Next(context.Background(), mp)
+		require.ErrorContains(t, err, "tail changes handle returned snapshot data")
+		assert.Nil(t, data)
+		assert.Nil(t, tombstone)
+	})
+
+	t.Run("tail data must be ordered by commit timestamp", func(t *testing.T) {
+		mp := mpool.MustNewZero()
+		defer mpool.DeleteMPool(mp)
+		handle := newHandle(mp, []mockChange{
+			{data: newChangesTestBatch(t, mp, []int64{2}, []types.TS{types.BuildTS(20, 0)}), hint: engine.ChangesHandle_Tail_done},
+			{data: newChangesTestBatch(t, mp, []int64{1}, []types.TS{types.BuildTS(10, 0)}), hint: engine.ChangesHandle_Tail_done},
+		}, false)
+
+		data, tombstone, _, err := handle.Next(context.Background(), mp)
+		require.ErrorContains(t, err, "partition change stream is not ordered by commit timestamp")
+		assert.Nil(t, data)
+		assert.Nil(t, tombstone)
+	})
+}
+
+func TestCombinedChangesHandleSnapshotSkipsEmptyBatches(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	child := &mockChangesHandle{changes: []mockChange{
+		{
+			data:      newChangesTestBatch(t, mp, nil, nil),
+			tombstone: newChangesTestBatch(t, mp, nil, nil),
+			hint:      engine.ChangesHandle_Snapshot,
+		},
+		{data: newChangesTestBatch(t, mp, []int64{1}, []types.TS{types.BuildTS(10, 0)}), hint: engine.ChangesHandle_Snapshot},
+	}}
+	handle := &combinedChangesHandle{
+		handles:  []engine.ChangesHandle{child},
+		mp:       mp,
+		snapshot: true,
+	}
+
+	data, tombstone, hint, err := handle.Next(context.Background(), mp)
+	require.NoError(t, err)
+	require.NotNil(t, data)
+	assert.Nil(t, tombstone)
+	assert.Equal(t, engine.ChangesHandle_Snapshot, hint)
+	assert.Equal(t, []int64{1}, vector.MustFixedColWithTypeCheck[int64](data.Vecs[0]))
+	data.Clean(mp)
+
+	data, tombstone, hint, err = handle.Next(context.Background(), mp)
+	require.NoError(t, err)
+	assert.Nil(t, data)
+	assert.Nil(t, tombstone)
+	assert.Equal(t, engine.ChangesHandle_Tail_done, hint)
+	assert.True(t, child.closed)
+}
+
+func TestCombinedChangesHandleTailSkipsEmptyBatches(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	child := &mockChangesHandle{changes: []mockChange{{
+		data:      newChangesTestBatch(t, mp, nil, nil),
+		tombstone: newChangesTestBatch(t, mp, nil, nil),
+		hint:      engine.ChangesHandle_Tail_done,
+	}}}
+	handle := &combinedChangesHandle{
+		handles: []engine.ChangesHandle{child},
+		mp:      mp,
+	}
+
+	data, tombstone, hint, err := handle.Next(context.Background(), mp)
+	require.NoError(t, err)
+	assert.Nil(t, data)
+	assert.Nil(t, tombstone)
+	assert.Equal(t, engine.ChangesHandle_Tail_done, hint)
+	assert.True(t, child.closed)
+}
+
+func TestCombinedChangesHandleTailNextErrorClosesEveryPartition(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	expectedErr := errors.New("read tail failed")
+	child := &mockChangesHandle{nextErr: expectedErr}
+	handle := &combinedChangesHandle{
+		handles: []engine.ChangesHandle{child},
+		mp:      mp,
+	}
+
+	data, tombstone, _, err := handle.Next(context.Background(), mp)
+	require.ErrorIs(t, err, expectedErr)
+	assert.Nil(t, data)
+	assert.Nil(t, tombstone)
+	assert.True(t, child.closed)
+}
+
+func TestCombinedChangesHelpers(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	t.Run("append one commit timestamp and retain the following rows", func(t *testing.T) {
+		src := newChangesTestBatch(t, mp, []int64{1, 2}, []types.TS{types.BuildTS(10, 0), types.BuildTS(20, 0)})
+		var dst *batch.Batch
+
+		appended, err := appendChangesAtCommitTS(&dst, &src, types.BuildTS(10, 0), mp)
+		require.NoError(t, err)
+		require.True(t, appended)
+		require.NotNil(t, dst)
+		assert.Equal(t, []int64{1}, vector.MustFixedColWithTypeCheck[int64](dst.Vecs[0]))
+		assert.Equal(t, []int64{2}, vector.MustFixedColWithTypeCheck[int64](src.Vecs[0]))
+
+		dst.Clean(mp)
+		src.Clean(mp)
+	})
+
+	t.Run("merge hints rejects mixed streams", func(t *testing.T) {
+		hint, hasHint, err := mergeChangesHint(engine.ChangesHandle_Tail_done, false, engine.ChangesHandle_Snapshot)
+		require.NoError(t, err)
+		assert.True(t, hasHint)
+		assert.Equal(t, engine.ChangesHandle_Snapshot, hint)
+
+		_, hasHint, err = mergeChangesHint(engine.ChangesHandle_Snapshot, true, engine.ChangesHandle_Tail_done)
+		require.ErrorContains(t, err, "mixed snapshot and tail data")
+		assert.False(t, hasHint)
+
+		hint, hasHint, err = mergeChangesHint(engine.ChangesHandle_Snapshot, true, engine.ChangesHandle_Snapshot)
+		require.NoError(t, err)
+		assert.True(t, hasHint)
+		assert.Equal(t, engine.ChangesHandle_Snapshot, hint)
+
+		hint, hasHint, err = mergeChangesHint(engine.ChangesHandle_Tail_done, true, engine.ChangesHandle_Tail_wip)
+		require.NoError(t, err)
+		assert.True(t, hasHint)
+		assert.Equal(t, engine.ChangesHandle_Tail_wip, hint)
+	})
+
+	t.Run("clean pending batches", func(t *testing.T) {
+		pending := &pendingPartitionChanges{
+			data:      newChangesTestBatch(t, mp, []int64{1}, []types.TS{types.BuildTS(10, 0)}),
+			tombstone: newChangesTestBatch(t, mp, []int64{1}, []types.TS{types.BuildTS(10, 0)}),
+		}
+		cleanPendingChanges(pending, mp)
+		assert.Nil(t, pending.data)
+		assert.Nil(t, pending.tombstone)
+	})
+
+	t.Run("tombstones participate in commit ordering", func(t *testing.T) {
+		handle := &combinedChangesHandle{pending: []pendingPartitionChanges{
+			{data: newChangesTestBatch(t, mp, []int64{2}, []types.TS{types.BuildTS(20, 0)})},
+			{tombstone: newChangesTestBatch(t, mp, []int64{1}, []types.TS{types.BuildTS(10, 0)})},
+		}}
+		commitTS, ok := handle.nextCommitTS()
+		require.True(t, ok)
+		assert.Equal(t, types.BuildTS(10, 0), commitTS)
+		cleanPendingChanges(&handle.pending[0], mp)
+		cleanPendingChanges(&handle.pending[1], mp)
+	})
+
+	t.Run("fail cleans a returned tombstone", func(t *testing.T) {
+		tombstone := newChangesTestBatch(t, mp, []int64{1}, []types.TS{types.BuildTS(10, 0)})
+		expectedErr := errors.New("stream failed")
+		handle := &combinedChangesHandle{}
+
+		data, returnedTombstone, _, err := handle.fail(mp, nil, tombstone, expectedErr)
+		require.ErrorIs(t, err, expectedErr)
+		assert.Nil(t, data)
+		assert.Nil(t, returnedTombstone)
+	})
+
+	t.Run("closing a partition is idempotent", func(t *testing.T) {
+		child := &mockChangesHandle{}
+		handle := &combinedChangesHandle{handles: []engine.ChangesHandle{child}}
+		handle.ensurePending()
+		require.NoError(t, handle.closePartition(0, mp))
+		require.NoError(t, handle.closePartition(0, mp))
+		assert.Equal(t, 1, child.closeCount)
+	})
 }
 
 func TestCombinedTxnTable_MergeObjects(t *testing.T) {
@@ -1415,12 +1715,16 @@ type mockChangesHandle struct {
 	changes    []mockChange
 	data       []*batch.Batch
 	idx        int
+	nextErr    error
 	closed     bool
 	closeErr   error
 	closeCount int
 }
 
 func (m *mockChangesHandle) Next(context.Context, *mpool.MPool) (*batch.Batch, *batch.Batch, engine.ChangesHandle_Hint, error) {
+	if m.nextErr != nil {
+		return nil, nil, engine.ChangesHandle_Tail_done, m.nextErr
+	}
 	if m.changes != nil {
 		if m.idx >= len(m.changes) {
 			return nil, nil, engine.ChangesHandle_Tail_done, nil
