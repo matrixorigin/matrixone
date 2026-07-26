@@ -42,9 +42,8 @@ jobs:
   matrixone-compose-ci:
     name: Matrixone Compose CI
     needs: bvt-group-plan
-    uses: matrixorigin/CI/.github/workflows/e2e-compose.yaml@xp/ci-two-bvt-coverage
+    uses: matrixorigin/CI/.github/workflows/e2e-compose-parallel.yaml@xp/ci-two-bvt-coverage
     with:
-      enable_parallel_bvt: true
       bvt_group: ${{ needs.bvt-group-plan.outputs.compose_group }}
       bvt_generation: ${{ needs.bvt-group-plan.outputs.generation }}
     secrets: inherit
@@ -52,9 +51,8 @@ jobs:
   matrixone-standalone-ci:
     name: Matrixone Standlone CI
     needs: bvt-group-plan
-    uses: matrixorigin/CI/.github/workflows/e2e-standalone.yaml@xp/ci-two-bvt-coverage
+    uses: matrixorigin/CI/.github/workflows/e2e-standalone-parallel.yaml@xp/ci-two-bvt-coverage
     with:
-      enable_parallel_bvt: true
       bvt_group: ${{ needs.bvt-group-plan.outputs.launch_group }}
       bvt_generation: ${{ needs.bvt-group-plan.outputs.generation }}
     secrets: inherit
@@ -62,9 +60,7 @@ jobs:
   matrixone-utils-ci:
     name: Matrixone Utils CI
     needs: bvt-group-plan
-    uses: matrixorigin/CI/.github/workflows/utils.yaml@xp/ci-two-bvt-coverage
-    with:
-      enable_legacy_coverage: false
+    uses: matrixorigin/CI/.github/workflows/utils-parallel.yaml@xp/ci-two-bvt-coverage
     secrets: inherit
 
   matrixone-coverage-merge:

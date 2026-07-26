@@ -80,9 +80,8 @@ jobs:
     name: Matrixone Compose CI
     needs: [check-pr-valid, bvt-group-plan]
     if: ${{ needs.check-pr-valid.outputs.pr_valid == 'true' && github.base_ref != '3.0-dev' }}
-    uses: matrixorigin/CI/.github/workflows/e2e-compose.yaml@main
+    uses: matrixorigin/CI/.github/workflows/e2e-compose-parallel.yaml@main
     with:
-      enable_parallel_bvt: true
       bvt_group: ${{ needs.bvt-group-plan.outputs.compose_group }}
       bvt_generation: ${{ needs.bvt-group-plan.outputs.generation }}
     secrets: inherit
@@ -91,9 +90,8 @@ jobs:
     name: Matrixone Standlone CI
     needs: [check-pr-valid, bvt-group-plan]
     if: ${{ needs.check-pr-valid.outputs.pr_valid == 'true' && github.base_ref != '3.0-dev' }}
-    uses: matrixorigin/CI/.github/workflows/e2e-standalone.yaml@main
+    uses: matrixorigin/CI/.github/workflows/e2e-standalone-parallel.yaml@main
     with:
-      enable_parallel_bvt: true
       bvt_group: ${{ needs.bvt-group-plan.outputs.launch_group }}
       bvt_generation: ${{ needs.bvt-group-plan.outputs.generation }}
     secrets: inherit
@@ -102,9 +100,7 @@ jobs:
     name: Matrixone Utils CI
     needs: check-pr-valid
     if: ${{ needs.check-pr-valid.outputs.pr_valid == 'true' && github.base_ref != '3.0-dev' }}
-    uses: matrixorigin/CI/.github/workflows/utils.yaml@main
-    with:
-      enable_legacy_coverage: false
+    uses: matrixorigin/CI/.github/workflows/utils-parallel.yaml@main
     secrets: inherit
 
   matrixone-coverage-merge:
