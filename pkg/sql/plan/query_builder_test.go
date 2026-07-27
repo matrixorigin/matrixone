@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -2216,6 +2217,47 @@ func TestQueryBuilder_buildSetOperationOrderByNull(t *testing.T) {
 			require.Equal(t, plan.OrderBySpec_DESC, sortNodes[0].OrderBy[0].Flag)
 			require.NotNil(t, sortNodes[0].OrderBy[0].Expr.GetCol())
 		})
+	}
+}
+
+func TestGroupConcatOrderByIsBoundPerAggregate(t *testing.T) {
+	logicPlan, err := runOneStmt(
+		NewMockOptimizer(true),
+		t,
+		"select group_concat(n_name order by n_nationkey desc nulls first separator '|'), "+
+			"group_concat(n_name order by n_regionkey asc nulls last) from nation",
+	)
+	require.NoError(t, err)
+
+	var aggNode *plan.Node
+	for _, node := range logicPlan.GetQuery().Nodes {
+		if node.NodeType == plan.Node_AGG {
+			aggNode = node
+			break
+		}
+	}
+	require.NotNil(t, aggNode)
+	require.Len(t, aggNode.AggList, 2)
+	require.Empty(t, collectReachableSortNodes(logicPlan.GetQuery()))
+
+	expectedFlags := []byte{
+		byte(plan.OrderBySpec_DESC | plan.OrderBySpec_NULLS_FIRST),
+		byte(plan.OrderBySpec_ASC | plan.OrderBySpec_NULLS_LAST),
+	}
+	for i, agg := range aggNode.AggList {
+		args := agg.GetF().Args
+		require.Len(t, args, 3)
+		require.NotNil(t, args[0].GetCol())
+		require.NotNil(t, args[1].GetCol())
+
+		config := []byte(args[2].GetLit().GetSval())
+		require.True(t, strings.HasPrefix(string(config), groupConcatOrderConfigMagic))
+		pos := len(groupConcatOrderConfigMagic)
+		require.Equal(t, uint32(1), binary.BigEndian.Uint32(config[pos:pos+4]))
+		pos += 4
+		require.Equal(t, uint32(1), binary.BigEndian.Uint32(config[pos:pos+4]))
+		pos += 4
+		require.Equal(t, expectedFlags[i], config[pos])
 	}
 }
 

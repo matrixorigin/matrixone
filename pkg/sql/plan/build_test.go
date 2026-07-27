@@ -3484,7 +3484,7 @@ func TestAggregateArgumentScalarSubqueryFlattened(t *testing.T) {
 	}
 }
 
-func TestAggregateArgumentScalarSubqueryFlattenedBeforeGroupConcatSort(t *testing.T) {
+func TestAggregateArgumentScalarSubqueryFlattenedBeforeOrderedGroupConcat(t *testing.T) {
 	sql := `SELECT n.N_REGIONKEY,
 	               GROUP_CONCAT(n.N_NAME ORDER BY n.N_NAME),
 	               AVG((SELECT COUNT(*) FROM REGION r WHERE r.R_REGIONKEY = n.N_NATIONKEY))
@@ -3500,28 +3500,32 @@ func TestAggregateArgumentScalarSubqueryFlattenedBeforeGroupConcatSort(t *testin
 			continue
 		}
 
-		hasGroupConcat := false
+		var groupConcat *plan.Function
 		for _, agg := range node.AggList {
 			if f := agg.GetF(); f != nil && f.Func.ObjName == NameGroupConcat {
-				hasGroupConcat = true
+				groupConcat = f
 				break
 			}
 		}
-		if !hasGroupConcat {
+		if groupConcat == nil {
 			continue
 		}
 
 		foundGroupConcatAgg = true
+		require.False(t, hasSubquery(&plan.Expr{
+			Expr: &plan.Expr_F{F: groupConcat},
+		}), "GROUP_CONCAT contains an executable Expr_Sub")
+		require.Len(t, groupConcat.Args, 3)
+		require.True(t, strings.HasPrefix(
+			groupConcat.Args[2].GetLit().GetSval(),
+			groupConcatOrderConfigMagic,
+		))
+
 		require.Len(t, node.Children, 1)
-		sortNode := query.Nodes[node.Children[0]]
-		require.Equal(t, plan.Node_SORT, sortNode.NodeType, "GROUP_CONCAT input must be sorted after subquery joins")
-		for _, orderBy := range sortNode.OrderBy {
-			require.False(t, hasSubquery(orderBy.Expr), "SORT contains an executable Expr_Sub")
-		}
-		require.Len(t, sortNode.Children, 1)
-		require.Equal(t, plan.Node_JOIN, query.Nodes[sortNode.Children[0]].NodeType)
+		require.Equal(t, plan.Node_JOIN, query.Nodes[node.Children[0]].NodeType)
 	}
 	require.True(t, foundGroupConcatAgg)
+	require.Empty(t, collectReachableSortNodes(query))
 }
 
 func TestGroupConcatRejectsOrderBySubquery(t *testing.T) {

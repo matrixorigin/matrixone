@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	mopartition "github.com/matrixorigin/matrixone/pkg/partition"
 )
 
 const (
@@ -348,6 +349,56 @@ func Sort(desc, nullsLast, hasNull bool, os []int64, vec *vector.Vector) {
 		} else {
 			genericSort(col, os, jsonGreater)
 		}
+	}
+}
+
+// SortByVectors sorts row selectors by multiple vectors. Each later vector is
+// applied only within rows that are equal on every preceding vector.
+func SortByVectors(
+	os []int64,
+	vectors []*vector.Vector,
+	desc []bool,
+	nullsLast []bool,
+) {
+	if len(os) < 2 || len(vectors) == 0 {
+		return
+	}
+	if len(vectors) != len(desc) || len(vectors) != len(nullsLast) {
+		panic("sort: mismatched multi-column sort metadata")
+	}
+
+	sortSelectorsByVector(os, vectors[0], desc[0], nullsLast[0])
+	if len(vectors) == 1 {
+		return
+	}
+
+	partitions := make([]int64, 0, 16)
+	diffs := make([]bool, len(os))
+	previous := vectors[0]
+	for i := 1; i < len(vectors); i++ {
+		partitions = mopartition.Partition(os, diffs, partitions, previous)
+		vec := vectors[i]
+		if !vec.IsConst() {
+			for j := range partitions {
+				end := len(os)
+				if j+1 < len(partitions) {
+					end = int(partitions[j+1])
+				}
+				start := int(partitions[j])
+				sortSelectorsByVector(os[start:end], vec, desc[i], nullsLast[i])
+			}
+		}
+		previous = vec
+	}
+}
+
+func sortSelectorsByVector(os []int64, vec *vector.Vector, desc, nullsLast bool) {
+	if vec.IsConst() {
+		return
+	}
+	nullCount := vec.GetNulls().Count()
+	if nullCount < vec.Length() {
+		Sort(desc, nullsLast, nullCount > 0, os, vec)
 	}
 }
 
