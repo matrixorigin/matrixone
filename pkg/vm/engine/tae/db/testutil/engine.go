@@ -160,7 +160,9 @@ func (e *TestEngine) CheckRowsByScan(exp int, applyDelete bool) {
 	assert.NoError(e.T, txn.Commit(context.Background()))
 }
 func (e *TestEngine) ForceCheckpoint() {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+	// Match the checkpoint runner's safety net while also bounding ForceFlush,
+	// which otherwise relies on the caller context for cancellation.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	err := e.DB.ForceCheckpoint(ctx, e.TxnMgr.Now())
 	assert.NoError(e.T, err)
