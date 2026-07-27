@@ -53,6 +53,28 @@ const (
 	Rows = 10 // default rows
 )
 
+func TestJudgeContainColnameAllowsNestedZeroArgumentFunction(t *testing.T) {
+	filter := &plan.Expr{
+		Expr: &plan.Expr_F{
+			F: &plan.Function{
+				Func: &plan.ObjectRef{ObjName: ">"},
+				Args: []*plan.Expr{
+					{
+						Expr: &plan.Expr_F{
+							F: &plan.Function{Func: &plan.ObjectRef{ObjName: "rand"}},
+						},
+					},
+					{
+						Expr: &plan.Expr_Lit{Lit: &plan.Literal{}},
+					},
+				},
+			},
+		},
+	}
+
+	require.False(t, judgeContainColname(filter))
+}
+
 func TestCsvReaderRejectsZeroVectorBatch(t *testing.T) {
 	proc := testutil.NewProc(t)
 	_, err := (&CsvReader{}).makeBatchRows(proc, batch.NewWithSize(0))
@@ -2092,4 +2114,31 @@ func Test_getColData_VecDimensionCheck(t *testing.T) {
 			bat.Vecs[0].Free(mp)
 		})
 	}
+}
+
+func TestGetColDataParallelLoadVectorIsDecodedDirectly(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	vecTyp := types.New(types.T_array_float32, 3, 0)
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vector.NewVec(vecTyp)
+	defer bat.Clean(proc.Mp())
+
+	param := &ExternalParam{ExParamConst: ExParamConst{
+		ParallelLoad: true,
+		Cols:         []*plan.ColDef{{Typ: plan.Type{Id: int32(types.T_array_float32), Width: 3}}},
+		Ctx:          context.Background(),
+		Extern:       &tree.ExternParam{},
+	}}
+	attr := plan.ExternAttr{ColIndex: 0, ColName: "v", ColFieldIndex: 0}
+	require.NoError(t, getColData(bat, []csvparser.Field{{Val: "[1,2,3]"}}, 0, param, proc.Mp(), attr, proc))
+	require.Equal(t, []float32{1, 2, 3}, types.BytesToArray[float32](bat.Vecs[0].GetBytesAt(0)))
+}
+
+func TestMakeTypeParallelLoadKeepsVectorType(t *testing.T) {
+	vectorType := makeType(&plan.Type{Id: int32(types.T_array_float32), Width: 3}, true)
+	require.Equal(t, types.T_array_float32, vectorType.Oid)
+	require.Equal(t, int32(3), vectorType.Width)
+	require.Equal(t, types.T_varchar, makeType(&plan.Type{Id: int32(types.T_int64)}, true).Oid)
 }
