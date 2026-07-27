@@ -7286,6 +7286,8 @@ func TestSleep(t *testing.T) {
 func resetUserLevelLocksForTest(t *testing.T) {
 	t.Helper()
 	userLevelLocks.Lock()
+	retainedCleanupDone := userLevelLocks.retainedCleanupDone
+	userLevelLocks.retainedCleanupGen++
 	userLevelLocks.counts = make(map[userLevelLockKey]uint64)
 	userLevelLocks.byOwner = make(map[string]map[string]struct{})
 	userLevelLocks.txnIDs = make(map[userLevelLockKey][][]byte)
@@ -7294,7 +7296,20 @@ func resetUserLevelLocksForTest(t *testing.T) {
 	userLevelLocks.retainedCloseCleanups = make(map[string]retainedUserLevelLockCloseCleanup)
 	userLevelLocks.cleanupReservations = make(map[detachedUserLevelLockCleanupKey]uint64)
 	userLevelLocks.retainedCleanupStarted = false
+	userLevelLocks.retainedCleanupDone = nil
 	userLevelLocks.Unlock()
+
+	// A retained worker can already hold a snapshot of the maps cleared above.
+	// Advancing the generation makes it stop after its current bounded handoff;
+	// join it before replacing the detached queues so stale work cannot enter the
+	// next test's generation.
+	if retainedCleanupDone != nil {
+		select {
+		case <-retainedCleanupDone:
+		case <-time.After(5 * time.Second):
+			t.Fatal("retained user-level lock cleanup worker did not stop")
+		}
+	}
 	resetDetachedUserLevelLockCleanupsForTest()
 }
 

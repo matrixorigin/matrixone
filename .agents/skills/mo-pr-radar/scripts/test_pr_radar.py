@@ -201,6 +201,11 @@ class OpinionatedReviewTests(unittest.TestCase):
             "latestReviews: latestOpinionatedReviews", pr_radar.OPEN_PRS_QUERY
         )
 
+    def test_open_pr_query_preserves_reviewer_type_and_resolves_team_members(self) -> None:
+        self.assertIn("__typename", pr_radar.OPEN_PRS_QUERY)
+        self.assertIn("membership: ALL", pr_radar.OPEN_PRS_QUERY)
+        self.assertIn("query: $reviewer", pr_radar.OPEN_PRS_QUERY)
+
 
 class FilteringTests(unittest.TestCase):
     def test_normalize_open_pr_flattens_graphql_connections(self) -> None:
@@ -219,7 +224,14 @@ class FilteringTests(unittest.TestCase):
                 "reviewRequests": {
                     "nodes": [
                         {"requestedReviewer": {"login": "person"}},
-                        {"requestedReviewer": {"slug": "team"}},
+                        {
+                            "requestedReviewer": {
+                                "__typename": "Team",
+                                "slug": "team",
+                                "organization": {"login": "org"},
+                                "members": {"nodes": [{"login": "me"}]},
+                            },
+                        },
                     ],
                 },
                 "latestReviews": {
@@ -246,7 +258,18 @@ class FilteringTests(unittest.TestCase):
                 },
             },
         )
-        self.assertEqual([{"login": "person"}, {"login": "team"}], pr["reviewRequests"])
+        self.assertEqual(
+            [
+                {"type": "USER", "login": "person"},
+                {
+                    "type": "TEAM",
+                    "slug": "team",
+                    "organization": "org",
+                    "members": ["me"],
+                },
+            ],
+            pr["reviewRequests"],
+        )
         self.assertEqual("APPROVED", pr["latestReviews"][0]["state"])
         self.assertEqual("CHANGES_REQUESTED", pr["reviews"][0]["state"])
         self.assertEqual("head", pr["commits"][0]["oid"])
@@ -266,6 +289,33 @@ class FilteringTests(unittest.TestCase):
         }
         self.assertTrue(pr_radar.matches(pr, "unapproved-by-me", "me"))
         self.assertTrue(pr_radar.matches(pr, "changes-requested-resolved-or-none", "me"))
+
+    def test_personal_review_presets_exclude_authored_prs(self) -> None:
+        pr = {
+            "author": {"login": "me"},
+            "statusCheckRollup": [{"conclusion": "SUCCESS"}],
+        }
+        for preset in ("reviewable-by-me", "green-unapproved"):
+            tokens, combine_any = pr_radar.PRESETS[preset]
+            self.assertFalse(combine_any)
+            self.assertFalse(all(pr_radar.matches(pr, token, "me") for token in tokens))
+            pr["author"]["login"] = "another-user"
+            self.assertTrue(all(pr_radar.matches(pr, token, "me") for token in tokens))
+            pr["author"]["login"] = "me"
+
+    def test_team_request_matches_exact_member_login(self) -> None:
+        pr = {
+            "reviewRequests": [
+                {
+                    "type": "TEAM",
+                    "slug": "storage-group",
+                    "organization": "matrixorigin",
+                    "members": ["XuPeng-SH"],
+                },
+            ],
+        }
+        self.assertTrue(pr_radar.matches(pr, "needs-my-review", "xupeng-sh"))
+        self.assertFalse(pr_radar.matches(pr, "needs-my-review", "another-user"))
 
     def test_conflicting_merge_state_is_conflict(self) -> None:
         self.assertTrue(pr_radar.is_conflict({"mergeable": "CONFLICTING"}))
@@ -295,14 +345,15 @@ class SnapshotTests(unittest.TestCase):
             ),
             json_payload([self.node(3)], has_next=False, cursor=None),
         ]
-        prs = pr_radar.fetch_open_prs("owner/repo", 3)
+        prs = pr_radar.fetch_open_prs("owner/repo", "reviewer", 3)
         self.assertEqual([1, 2, 3], [pr["number"] for pr in prs])
         self.assertEqual(2, run.call_count)
         self.assertIn("cursor=next", run.call_args_list[1].args)
+        self.assertIn("reviewer=reviewer", run.call_args_list[0].args)
 
     def test_fetch_open_prs_rejects_invalid_repo(self) -> None:
         with self.assertRaisesRegex(SystemExit, "expected owner/repo"):
-            pr_radar.fetch_open_prs("invalid", 1)
+            pr_radar.fetch_open_prs("invalid", "reviewer", 1)
 
 
 class CommandTests(unittest.TestCase):

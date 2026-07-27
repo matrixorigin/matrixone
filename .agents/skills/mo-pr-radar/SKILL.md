@@ -60,6 +60,10 @@ reviews, mergeability, merge state, and check rollup.
   `COMMENTED` review does not erase that opinion. Repository settings can still
   dismiss or require approvals differently, so use `mo-pr-explain` before
   diagnosing Mergify.
+- Personal review presets exclude PRs authored by the selected account, because
+  GitHub does not allow authors to approve or request changes on their own PRs.
+  A team review request counts when the selected account is an immediate or
+  child-team member; the GraphQL snapshot preserves user/team reviewer types.
 - `changes-requested-no-new-commit` first requires GitHub's current review
   decision to be `CHANGES_REQUESTED`, then compares every reviewer's current
   outstanding change request with the head SHA. A later approval therefore

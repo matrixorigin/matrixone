@@ -78,7 +78,7 @@ OPINIONATED_REVIEW_STATES = {"APPROVED", "CHANGES_REQUESTED"}
 
 OPEN_PRS_PAGE_SIZE = 20
 OPEN_PRS_QUERY = """
-query($owner: String!, $repo: String!, $pageSize: Int!, $cursor: String) {
+query($owner: String!, $repo: String!, $reviewer: String!, $pageSize: Int!, $cursor: String) {
   repository(owner: $owner, name: $repo) {
     pullRequests(
       first: $pageSize
@@ -100,8 +100,15 @@ query($owner: String!, $repo: String!, $pageSize: Int!, $cursor: String) {
         reviewRequests(first: 100) {
           nodes {
             requestedReviewer {
+              __typename
               ... on User { login }
-              ... on Team { slug }
+              ... on Team {
+                slug
+                organization { login }
+                members(first: 1, query: $reviewer, membership: ALL) {
+                  nodes { login }
+                }
+              }
             }
           }
         }
@@ -153,9 +160,24 @@ def normalize_open_pr(node: dict[str, Any]) -> dict[str, Any]:
     requests = []
     for item in (node.get("reviewRequests") or {}).get("nodes", []):
         reviewer = item.get("requestedReviewer") or {}
-        login = reviewer.get("login") or reviewer.get("slug")
-        if login:
-            requests.append({"login": login})
+        reviewer_type = (reviewer.get("__typename") or "").upper()
+        if reviewer_type == "USER" or reviewer.get("login"):
+            login = reviewer.get("login")
+            if login:
+                requests.append({"type": "USER", "login": login})
+            continue
+        slug = reviewer.get("slug")
+        if slug:
+            requests.append({
+                "type": "TEAM",
+                "slug": slug,
+                "organization": ((reviewer.get("organization") or {}).get("login")),
+                "members": [
+                    member.get("login")
+                    for member in (reviewer.get("members") or {}).get("nodes", [])
+                    if member.get("login")
+                ],
+            })
     rollup = node.get("statusCheckRollup") or {}
     latest_reviews = (node.get("latestReviews") or {}).get("nodes", [])
     return {
@@ -184,7 +206,7 @@ def normalize_open_pr(node: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def fetch_open_prs(repo: str, limit: int) -> list[dict[str, Any]]:
+def fetch_open_prs(repo: str, reviewer: str, limit: int) -> list[dict[str, Any]]:
     try:
         owner, name = repo.split("/", 1)
     except ValueError:
@@ -197,7 +219,7 @@ def fetch_open_prs(repo: str, limit: int) -> list[dict[str, Any]]:
         command = [
             "gh", "api", "graphql", "-f", f"query={OPEN_PRS_QUERY}",
             "-F", f"owner={owner}", "-F", f"repo={name}",
-            "-F", f"pageSize={page_size}",
+            "-F", f"reviewer={reviewer}", "-F", f"pageSize={page_size}",
         ]
         if cursor:
             command.extend(["-F", f"cursor={cursor}"])
@@ -210,7 +232,28 @@ def fetch_open_prs(repo: str, limit: int) -> list[dict[str, Any]]:
 
 
 def review_logins(pr: dict[str, Any]) -> set[str]:
-    return {r.get("login") for r in pr.get("reviewRequests", []) if r.get("login")}
+    result: set[str] = set()
+    for request in pr.get("reviewRequests", []):
+        if request.get("login"):
+            result.add(request["login"])
+        elif request.get("slug"):
+            organization = request.get("organization")
+            result.add(f"{organization}/{request['slug']}" if organization else request["slug"])
+    return result
+
+
+def requested_from_me(pr: dict[str, Any], me: str) -> bool:
+    me = me.lower()
+    for request in pr.get("reviewRequests", []):
+        if (request.get("login") or "").lower() == me:
+            return True
+        if any((member or "").lower() == me for member in request.get("members", [])):
+            return True
+    return False
+
+
+def authored_by_me(pr: dict[str, Any], me: str) -> bool:
+    return ((pr.get("author") or {}).get("login") or "").lower() == me.lower()
 
 
 def latest_opinionated_reviews(reviews: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -313,13 +356,13 @@ def changes_requested_without_new_commit(pr: dict[str, Any]) -> bool:
 
 
 def matches(pr: dict[str, Any], token: str, me: str) -> bool:
-    requested = {login.lower() for login in review_logins(pr)}
     my_review = my_latest_review(pr, me)
     token = token.replace("_", "-").lower()
     predicates = {
         "all": True,
-        "requested-by-me": me.lower() in requested,
-        "needs-my-review": me.lower() in requested and my_review != "APPROVED",
+        "requested-by-me": requested_from_me(pr, me),
+        "needs-my-review": requested_from_me(pr, me) and my_review != "APPROVED",
+        "not-authored-by-me": not authored_by_me(pr, me),
         "unapproved-by-me": my_review != "APPROVED",
         "approved-by-me": my_review == "APPROVED",
         "requested-changes-by-me": my_review == "CHANGES_REQUESTED",
@@ -351,8 +394,8 @@ PRESETS: dict[str, tuple[list[str], bool]] = {
     "conflicts": (["conflict"], False),
     "changes-requested": (["changes-requested"], False),
     "changes-stale": (["changes-requested-no-new-commit"], False),
-    "reviewable-by-me": (["unapproved-by-me", "changes-requested-resolved-or-none"], False),
-    "green-unapproved": (["ci-green", "unapproved-by-me"], False),
+    "reviewable-by-me": (["not-authored-by-me", "unapproved-by-me", "changes-requested-resolved-or-none"], False),
+    "green-unapproved": (["not-authored-by-me", "ci-green", "unapproved-by-me"], False),
     "ready": (["ready"], False),
     "attention": (["conflict", "behind", "changes-requested", "ci-failed"], True),
 }
@@ -368,7 +411,7 @@ def labels(pr: dict[str, Any], me: str) -> list[str]:
         result.append("behind")
     if pr.get("reviewDecision") == "CHANGES_REQUESTED":
         result.append("changes")
-    if me.lower() in {login.lower() for login in review_logins(pr)} and my_latest_review(pr, me) != "APPROVED":
+    if requested_from_me(pr, me) and my_latest_review(pr, me) != "APPROVED":
         result.append("review")
     if ci_state(pr) == "failed":
         result.append("ci-failed")
@@ -413,7 +456,7 @@ def print_table(prs: list[dict[str, Any]], me: str) -> None:
     print(f"{'#':>5}  {'signals':<25} {'ci':<7} {'review':<17} {'author':<18} {'age':>4}  title")
     for pr in prs:
         signal = ",".join(labels(pr, me))
-        review = my_latest_review(pr, me) or ("REQUESTED" if me.lower() in {x.lower() for x in review_logins(pr)} else "—")
+        review = my_latest_review(pr, me) or ("REQUESTED" if requested_from_me(pr, me) else "—")
         print(
             f"{pr['number']:>5}  {short(signal, 25):<25} {ci_state(pr):<7} "
             f"{short(review, 17):<17} {short((pr.get('author') or {}).get('login', 'ghost'), 18):<18} "
@@ -425,7 +468,7 @@ def print_markdown(prs: list[dict[str, Any]], me: str) -> None:
     print("| PR | Signals | CI | My latest review | Author | Updated | Title |")
     print("|---:|---|---|---|---|---:|---|")
     for pr in prs:
-        review = my_latest_review(pr, me) or ("REQUESTED" if me.lower() in {x.lower() for x in review_logins(pr)} else "—")
+        review = my_latest_review(pr, me) or ("REQUESTED" if requested_from_me(pr, me) else "—")
         title = pr["title"].replace("|", "\\|")
         author = (pr.get("author") or {}).get("login", "ghost")
         print(f"| [#{pr['number']}]({pr['url']}) | {', '.join(labels(pr, me))} | {ci_state(pr)} | {review} | {author} | {age(pr.get('updatedAt', ''))} | {title} |")
@@ -469,7 +512,7 @@ def radar(argv: list[str]) -> int:
     else:
         tokens, combine_any = PRESETS[args.preset]
     repo, me = resolve_repo(args.repo), resolve_me(args.me)
-    all_prs = fetch_open_prs(repo, args.limit)
+    all_prs = fetch_open_prs(repo, me, args.limit)
     show_drafts = args.include_drafts or (args.preset == "all" and not args.match)
     try:
         selected = [
@@ -546,7 +589,7 @@ def explain(argv: list[str]) -> int:
         actions.append("wait for the pending CI checks")
     if pr.get("reviewDecision") == "CHANGES_REQUESTED":
         actions.append("address the outstanding change request and obtain a new approving review")
-    if me.lower() in {login.lower() for login in requested} and my_review != "APPROVED":
+    if requested_from_me(pr, me) and my_review != "APPROVED":
         actions.append(f"{me} still has an active review request")
     if is_ready_candidate(pr):
         actions.append("candidate is ready by visible GitHub facts; inspect Mergify/branch-protection queue state if it does not merge")
