@@ -199,6 +199,10 @@ func collectPrepareDdlSchemas(ctx CompilerContext, stmt tree.Statement, prepareP
 	case *tree.AlterTable:
 		tableNames = append(tableNames, ddl.Table)
 		for _, option := range ddl.Options {
+			if rename, ok := option.(*tree.AlterOptionTableName); ok {
+				target := rename.Name.ToTableName()
+				tableNames = append(tableNames, &target)
+			}
 			if add, ok := option.(*tree.AlterOptionAdd); ok {
 				if fk, ok := add.Def.(*tree.ForeignKey); ok {
 					addForeignKey(fk)
@@ -208,6 +212,12 @@ func collectPrepareDdlSchemas(ctx CompilerContext, stmt tree.Statement, prepareP
 	case *tree.RenameTable:
 		for _, alterTable := range ddl.AlterTables {
 			tableNames = append(tableNames, alterTable.Table)
+			for _, option := range alterTable.Options {
+				if rename, ok := option.(*tree.AlterOptionTableName); ok {
+					target := rename.Name.ToTableName()
+					tableNames = append(tableNames, &target)
+				}
+			}
 		}
 	case *tree.CreateIndex:
 		tableNames = append(tableNames, ddl.Table)

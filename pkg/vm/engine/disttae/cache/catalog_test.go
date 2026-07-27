@@ -208,14 +208,14 @@ func TestAccountTableChangeHighWatermarkConcurrent(t *testing.T) {
 	}))
 }
 
-func TestSubscriptionMetadataHighWatermark(t *testing.T) {
+func TestPreparedMetadataHighWatermark(t *testing.T) {
 	mp := mpool.MustNewZero()
 	bat := newTestTableBatch(mp)
 	defer bat.Clean(mp)
 	timestamps := vector.MustFixedColWithTypeCheck[types.TS](bat.GetVector(MO_TIMESTAMP_IDX))
 
 	cc := NewCatalog()
-	cc.UpdateSubscriptionMetadata(bat)
+	cc.UpdatePreparedMetadata(bat)
 
 	var expected timestamp.Timestamp
 	for _, ts := range timestamps {
@@ -224,7 +224,7 @@ func TestSubscriptionMetadataHighWatermark(t *testing.T) {
 			expected = value
 		}
 	}
-	require.Equal(t, expected, cc.GetSubscriptionMetadataTS())
+	require.Equal(t, expected, cc.GetPreparedMetadataTS())
 }
 
 func TestAccountTableChangeHighWatermarkCollisionIsConservative(t *testing.T) {

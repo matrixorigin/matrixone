@@ -663,12 +663,17 @@ func initExecuteStmtParamWithResolver(
 	currentDDLVersion := ses.getDDLVersion()
 	change := prepareStmt.tempTableVersion != currentTempTableVersion ||
 		prepareStmt.ddlVersion != currentDDLVersion
-	var subscriptionMetadataTS timestamp.Timestamp
+	var preparedMetadataTS timestamp.Timestamp
 	if catalogCache != nil {
-		subscriptionMetadataTS = catalogCache.GetSubscriptionMetadataTS()
+		preparedMetadataTS = catalogCache.GetPreparedMetadataTS()
 	}
 	validateSubscriptions := preparedSubscriptionsNeedValidation(
-		subscriptionMetadataTS, prepareStmt.Ts, prepareStmt.subscriptionCheckTS)
+		preparedMetadataTS, prepareStmt.Ts, prepareStmt.preparedMetadataCheckTS)
+	validateNamedSnapshots := preparedNamedSnapshotsNeedValidation(
+		preparePlan.GetSchemas(), preparedMetadataTS, prepareStmt.Ts, prepareStmt.preparedMetadataCheckTS)
+	if validateNamedSnapshots {
+		change = true
+	}
 	for _, obj := range preparePlan.GetSchemas() {
 		if obj.GetSubscriptionName() != "" && validateSubscriptions {
 			subscriptionChanged, err := preparedSubscriptionSchemaChanged(resolve, obj)
@@ -702,7 +707,7 @@ func initExecuteStmtParamWithResolver(
 		}
 	}
 	if !change && validateSubscriptions {
-		prepareStmt.subscriptionCheckTS = subscriptionMetadataTS
+		prepareStmt.preparedMetadataCheckTS = preparedMetadataTS
 	}
 
 	// These DDL plans cache catalog state that is not represented by a table
@@ -742,7 +747,9 @@ func initExecuteStmtParamWithResolver(
 		prepareStmt.Ts = prepareTs
 		prepareStmt.tempTableVersion = currentTempTableVersion
 		prepareStmt.ddlVersion = currentDDLVersion
-		prepareStmt.subscriptionCheckTS = timestamp.Timestamp{}
+		// The rebuilt plan has incorporated the metadata visible through this
+		// high-watermark. A later logtail event will advance it again.
+		prepareStmt.preparedMetadataCheckTS = preparedMetadataTS
 	}
 
 	// Recreate the cached compile only when a plan dependency changed.
@@ -855,6 +862,23 @@ func preparedSubscriptionsNeedValidation(
 	checkedTS timestamp.Timestamp,
 ) bool {
 	return metadataTS.Greater(checkedTS) && metadataTS.Greater(prepareTS)
+}
+
+func preparedNamedSnapshotsNeedValidation(
+	schemas []*plan.ObjectRef,
+	metadataTS timestamp.Timestamp,
+	prepareTS timestamp.Timestamp,
+	checkedTS timestamp.Timestamp,
+) bool {
+	if !preparedSubscriptionsNeedValidation(metadataTS, prepareTS, checkedTS) {
+		return false
+	}
+	for _, schema := range schemas {
+		if schema.GetSnapshot().GetExtraInfo().GetName() != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func preparedSubscriptionSchemaChanged(resolve preparedSchemaResolver, expected *plan.ObjectRef) (bool, error) {

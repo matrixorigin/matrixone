@@ -56,9 +56,9 @@ func consumeEntry(
 		v2.LogtailUpdatePartitonConsumeLogtailOneEntryLogtailReplayDurationHistogram.Observe(time.Since(t0).Seconds())
 	}
 
-	// Maintain catalog identities and subscription metadata generations.
+	// Maintain catalog identities and prepared-plan metadata generations.
 	if (!catalog.IsSystemTable(e.TableId) &&
-		!isSubscriptionMetadataTable(e.DatabaseName, e.TableName)) ||
+		!isPreparedMetadataTable(e.DatabaseName, e.TableName)) ||
 		logtailreplay.IsMetaEntry(e.TableName) ||
 		e.EntryType == api.Entry_DataObject ||
 		e.EntryType == api.Entry_TombstoneObject {
@@ -75,10 +75,10 @@ func consumeEntry(
 
 func applyToCatalogCache(cache *cache.CatalogCache, e *api.Entry) {
 	t0 := time.Now()
-	if isSubscriptionMetadataTable(e.DatabaseName, e.TableName) {
+	if isPreparedMetadataTable(e.DatabaseName, e.TableName) {
 		if cache != nil {
 			bat, _ := batch.ProtoBatchToBatch(e.Bat)
-			cache.UpdateSubscriptionMetadata(bat)
+			cache.UpdatePreparedMetadata(bat)
 		}
 		v2.LogtailUpdatePartitonConsumeLogtailOneEntryUpdateCatalogCacheDurationHistogram.Observe(time.Since(t0).Seconds())
 		return
@@ -120,7 +120,10 @@ func applyToCatalogCache(cache *cache.CatalogCache, e *api.Entry) {
 	v2.LogtailUpdatePartitonConsumeLogtailOneEntryUpdateCatalogCacheDurationHistogram.Observe(time.Since(t0).Seconds())
 }
 
-func isSubscriptionMetadataTable(databaseName, tableName string) bool {
+func isPreparedMetadataTable(databaseName, tableName string) bool {
 	return databaseName == catalog.MO_CATALOG &&
-		(tableName == catalog.MO_PUBS || tableName == catalog.MO_SUBS)
+		(tableName == catalog.MO_PUBS ||
+			tableName == catalog.MO_SUBS ||
+			tableName == catalog.MOAccountTable ||
+			tableName == catalog.MO_SNAPSHOTS)
 }

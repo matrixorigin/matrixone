@@ -385,25 +385,25 @@ func (cc *CatalogCache) GetStartTS() types.TS {
 	return cc.mu.start
 }
 
-func (cc *CatalogCache) UpdateSubscriptionMetadata(bat *batch.Batch) {
+func (cc *CatalogCache) UpdatePreparedMetadata(bat *batch.Batch) {
 	if bat == nil || len(bat.Vecs) <= MO_TIMESTAMP_IDX {
 		return
 	}
 	timestamps := vector.MustFixedColWithTypeCheck[types.TS](bat.GetVector(MO_TIMESTAMP_IDX))
-	cc.subscriptionMetadata.Lock()
-	defer cc.subscriptionMetadata.Unlock()
+	cc.preparedMetadata.Lock()
+	defer cc.preparedMetadata.Unlock()
 	for _, ts := range timestamps {
 		value := ts.ToTimestamp()
-		if value.Greater(cc.subscriptionMetadata.ts) {
-			cc.subscriptionMetadata.ts = value
+		if value.Greater(cc.preparedMetadata.ts) {
+			cc.preparedMetadata.ts = value
 		}
 	}
 }
 
-func (cc *CatalogCache) GetSubscriptionMetadataTS() timestamp.Timestamp {
-	cc.subscriptionMetadata.RLock()
-	defer cc.subscriptionMetadata.RUnlock()
-	return cc.subscriptionMetadata.ts
+func (cc *CatalogCache) GetPreparedMetadataTS() timestamp.Timestamp {
+	cc.preparedMetadata.RLock()
+	defer cc.preparedMetadata.RUnlock()
+	return cc.preparedMetadata.ts
 }
 
 func (cc *CatalogCache) HasNewerVersion(qry *TableChangeQuery) bool {

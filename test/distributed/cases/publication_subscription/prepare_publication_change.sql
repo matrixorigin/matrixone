@@ -95,6 +95,40 @@ drop table prepared_like;
 drop database prepared_work;
 -- @session
 
+drop account if exists prepared_publisher;
+create account prepared_publisher admin_name = 'admin' identified by '111';
+
+-- @session:id=2&user=prepared_publisher:admin&password=111
+create database prepared_suspended_pub_db;
+create table prepared_suspended_pub_db.src (a int);
+insert into prepared_suspended_pub_db.src values (1);
+create publication prepared_suspended_pub
+    database prepared_suspended_pub_db account prepared_subscriber;
+-- @session
+
+-- @session:id=1&user=prepared_subscriber:admin&password=111
+create database prepared_suspended_sub
+    from prepared_publisher publication prepared_suspended_pub;
+prepare suspended_publisher_stmt from
+    'select * from prepared_suspended_sub.src order by a';
+execute suspended_publisher_stmt;
+-- @session
+
+alter account prepared_publisher suspend;
+
+-- @session:id=1&user=prepared_subscriber:admin&password=111
+execute suspended_publisher_stmt;
+select * from prepared_suspended_sub.src order by a;
+deallocate prepare suspended_publisher_stmt;
+-- @session
+
+alter account prepared_publisher open;
+
+-- @session:id=1&user=prepared_subscriber:admin&password=111
+drop database prepared_suspended_sub;
+-- @session
+
+drop account prepared_publisher;
 drop publication prepared_pub1;
 drop publication prepared_pub2;
 drop database prepared_pub_db1;

@@ -69,7 +69,7 @@ type CatalogCache struct {
 		// cannot hide a change, and memory use is independent of tenant churn.
 		byAccount [tableChangeBucketCount]timestamp.Timestamp
 	}
-	subscriptionMetadata struct {
+	preparedMetadata struct {
 		sync.RWMutex
 		ts timestamp.Timestamp
 	}

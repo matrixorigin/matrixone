@@ -481,6 +481,39 @@ func TestPreparedSubscriptionsNeedValidation(t *testing.T) {
 	))
 }
 
+func TestPreparedNamedSnapshotsNeedValidation(t *testing.T) {
+	namedSnapshot := &plan.Snapshot{
+		TS: &timestamp.Timestamp{PhysicalTime: 42},
+		ExtraInfo: &plan.SnapshotExtraInfo{
+			Name: "snap",
+		},
+	}
+	unnamedSnapshot := &plan.Snapshot{
+		TS: &timestamp.Timestamp{PhysicalTime: 42},
+	}
+	metadataTS := timestamp.Timestamp{PhysicalTime: 200}
+	prepareTS := timestamp.Timestamp{PhysicalTime: 100}
+
+	require.True(t, preparedNamedSnapshotsNeedValidation(
+		[]*plan.ObjectRef{{Snapshot: namedSnapshot}},
+		metadataTS,
+		prepareTS,
+		timestamp.Timestamp{},
+	))
+	require.False(t, preparedNamedSnapshotsNeedValidation(
+		[]*plan.ObjectRef{{Snapshot: unnamedSnapshot}},
+		metadataTS,
+		prepareTS,
+		timestamp.Timestamp{},
+	))
+	require.False(t, preparedNamedSnapshotsNeedValidation(
+		[]*plan.ObjectRef{{Snapshot: namedSnapshot}},
+		metadataTS,
+		prepareTS,
+		metadataTS,
+	))
+}
+
 func TestCurrentTxnSnapshotTS(t *testing.T) {
 	ses, prepareStmt, _, _ := newPreparedExecuteEnv(t, 100)
 	defer prepareStmt.Close()

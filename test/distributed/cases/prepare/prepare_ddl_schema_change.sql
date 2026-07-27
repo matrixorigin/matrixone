@@ -386,4 +386,56 @@ deallocate prepare clone_default_db_stmt;
 drop database clone_prepare_db1;
 drop database clone_prepare_db2;
 
+create table prepared_snapshot_lifecycle (a int);
+insert into prepared_snapshot_lifecycle values (1);
+create snapshot prepared_snapshot_lifecycle_snap for account;
+prepare prepared_snapshot_lifecycle_stmt from
+    'select * from prepared_snapshot_lifecycle
+     {snapshot = ''prepared_snapshot_lifecycle_snap''} order by a';
+execute prepared_snapshot_lifecycle_stmt;
+drop snapshot prepared_snapshot_lifecycle_snap;
+execute prepared_snapshot_lifecycle_stmt;
+create snapshot prepared_snapshot_lifecycle_snap for account;
+insert into prepared_snapshot_lifecycle values (2);
+drop snapshot prepared_snapshot_lifecycle_snap;
+create snapshot prepared_snapshot_lifecycle_snap for account;
+execute prepared_snapshot_lifecycle_stmt;
+deallocate prepare prepared_snapshot_lifecycle_stmt;
+drop snapshot prepared_snapshot_lifecycle_snap;
+
+create table prepared_rename_source (a int);
+prepare prepared_rename_stmt from
+    'rename table prepared_rename_source to prepared_rename_target';
+-- @session:id=1
+create table prepare_ddl_schema_change.prepared_rename_target (a int);
+-- @session
+execute prepared_rename_stmt;
+deallocate prepare prepared_rename_stmt;
+drop table prepared_rename_source;
+drop table prepared_rename_target;
+
+create table prepared_alter_rename_source (a int);
+prepare prepared_alter_rename_stmt from
+    'alter table prepared_alter_rename_source rename to prepared_alter_rename_target';
+-- @session:id=1
+create table prepare_ddl_schema_change.prepared_alter_rename_target (a int);
+-- @session
+execute prepared_alter_rename_stmt;
+deallocate prepare prepared_alter_rename_stmt;
+drop table prepared_alter_rename_source;
+drop table prepared_alter_rename_target;
+
+prepare prepared_nested_proc_drop from
+    'drop table if exists prepared_nested_proc_table';
+create procedure prepared_inner_ddl()
+    'begin create table prepared_nested_proc_table (a int); end';
+create procedure prepared_outer_ddl()
+    'begin call prepared_inner_ddl(); end';
+call prepared_outer_ddl();
+execute prepared_nested_proc_drop;
+show tables like 'prepared_nested_proc_table';
+deallocate prepare prepared_nested_proc_drop;
+drop procedure prepared_outer_ddl;
+drop procedure prepared_inner_ddl;
+
 drop database prepare_ddl_schema_change;

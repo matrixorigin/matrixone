@@ -318,9 +318,9 @@ type PrepareStmt struct {
 	tempTableVersion uint64
 	// ddlVersion is the session DDL generation used to build the cached plan.
 	ddlVersion uint64
-	// subscriptionCheckTS stores the publication/subscription metadata
-	// high-watermark observed by the last successful validation.
-	subscriptionCheckTS timestamp.Timestamp
+	// preparedMetadataCheckTS stores the catalog metadata high-watermark
+	// observed by the last successful dependency validation.
+	preparedMetadataCheckTS timestamp.Timestamp
 	// cloneSQL is an immutable, fully qualified SQL representation captured
 	// before clone planning can mutate the parsed AST.
 	cloneSQL string

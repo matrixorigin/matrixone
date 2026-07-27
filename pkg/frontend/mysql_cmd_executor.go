@@ -3849,6 +3849,7 @@ func executeStmtWithTxn(ses FeSession,
 		execCtx.proc.Base.TxnOperator = txnOp
 
 		err = dispatchStmt(ses, statsArr, execCtx)
+		recordSessionDDL(ses, execCtx, err)
 	}
 	return
 }

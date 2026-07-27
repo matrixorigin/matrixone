@@ -29,7 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 )
 
-func TestApplySubscriptionMetadataToCatalogCache(t *testing.T) {
+func TestApplyPreparedMetadataToCatalogCache(t *testing.T) {
 	mp := mpool.MustNewZero()
 	bat := batch.NewWithSize(2)
 	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
@@ -53,8 +53,11 @@ func TestApplySubscriptionMetadataToCatalogCache(t *testing.T) {
 
 	require.Equal(t,
 		timestamp.Timestamp{PhysicalTime: 42, LogicalTime: 7},
-		catalogCache.GetSubscriptionMetadataTS())
-	require.True(t, isSubscriptionMetadataTable(catalog.MO_CATALOG, catalog.MO_SUBS))
-	require.False(t, isSubscriptionMetadataTable("user_db", catalog.MO_SUBS))
-	require.False(t, isSubscriptionMetadataTable(catalog.MO_CATALOG, catalog.MO_TABLES))
+		catalogCache.GetPreparedMetadataTS())
+	require.True(t, isPreparedMetadataTable(catalog.MO_CATALOG, catalog.MO_SUBS))
+	require.True(t, isPreparedMetadataTable(catalog.MO_CATALOG, catalog.MO_PUBS))
+	require.True(t, isPreparedMetadataTable(catalog.MO_CATALOG, catalog.MOAccountTable))
+	require.True(t, isPreparedMetadataTable(catalog.MO_CATALOG, catalog.MO_SNAPSHOTS))
+	require.False(t, isPreparedMetadataTable("user_db", catalog.MO_SUBS))
+	require.False(t, isPreparedMetadataTable(catalog.MO_CATALOG, catalog.MO_TABLES))
 }

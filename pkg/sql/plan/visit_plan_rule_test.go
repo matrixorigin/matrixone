@@ -76,7 +76,16 @@ func TestCollectPrepareDdlSchemas(t *testing.T) {
 		{name: "drop index", sql: "drop index idx on t1", expected: []string{"t1"}},
 		{name: "truncate table", sql: "truncate table t1", expected: []string{"t1"}},
 		{name: "drop tables", sql: "drop table t1, t2", expected: []string{"t1", "t2"}},
-		{name: "rename tables", sql: "rename table t1 to n1, t2 to n2", expected: []string{"t1", "t2"}},
+		{
+			name:     "rename tables",
+			sql:      "rename table t1 to n1, t2 to n2",
+			expected: []string{"t1", "n1", "t2", "n2"},
+		},
+		{
+			name:     "alter table rename",
+			sql:      "alter table t1 rename to n1",
+			expected: []string{"t1", "n1"},
+		},
 		{name: "create table like", sql: "create table n1 like t1", expected: []string{"n1", "t1"}},
 		{
 			name:     "alter table foreign key",
