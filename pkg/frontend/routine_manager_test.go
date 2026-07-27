@@ -111,6 +111,21 @@ type testConn struct {
 	rbuf   []byte
 }
 
+type blockingCloseConn struct {
+	testConn
+	closeStarted chan struct{}
+	closeRelease chan struct{}
+	startOnce    sync.Once
+}
+
+func (tc *blockingCloseConn) Close() error {
+	tc.startOnce.Do(func() {
+		close(tc.closeStarted)
+	})
+	<-tc.closeRelease
+	return nil
+}
+
 func (tc *testConn) Read(b []byte) (n int, err error) {
 	if tc.mod == testConnModReadReturnErr {
 		return 0, moerr.NewInternalErrorNoCtx("test conn read returns error")
@@ -525,6 +540,65 @@ func TestRoutineManagerConfigSnapshotAndCancel(t *testing.T) {
 	case <-done:
 	case <-time.After(5 * time.Second):
 		t.Fatal("RoutineManager worker did not stop after cancellation")
+	}
+}
+
+func TestRoutineManagerCancelWaitsForActiveWorker(t *testing.T) {
+	rt, proto := newUnitTestRoutine(t, 1007)
+	blockingConn := &blockingCloseConn{
+		closeStarted: make(chan struct{}),
+		closeRelease: make(chan struct{}),
+	}
+	proto.tcpConn.conn = blockingConn
+
+	const accountID = int64(21)
+	ctx, cancel := context.WithCancel(context.Background())
+	rm := &RoutineManager{
+		ctx:                    ctx,
+		cancel:                 cancel,
+		cleanKillQueueInterval: time.Hour,
+		accountRoutine: &AccountRoutineManager{
+			killIdQueue: map[int64]KillRecord{
+				accountID: NewKillRecord(time.Now(), 1),
+			},
+			accountId2Routine: map[int64]map[*Routine]uint64{
+				accountID: {rt: 1},
+			},
+		},
+	}
+	releaseWorker := sync.OnceFunc(func() {
+		close(blockingConn.closeRelease)
+	})
+	t.Cleanup(func() {
+		releaseWorker()
+		rm.cancelCtx()
+	})
+
+	rm.startKillRoutineWorker(time.Hour)
+	select {
+	case <-blockingConn.closeStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("RoutineManager worker did not enter connection close")
+	}
+
+	cancelReturned := make(chan struct{})
+	go func() {
+		rm.cancelCtx()
+		close(cancelReturned)
+	}()
+	<-ctx.Done()
+
+	select {
+	case <-cancelReturned:
+		t.Fatal("RoutineManager cancellation returned before active worker exited")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	releaseWorker()
+	select {
+	case <-cancelReturned:
+	case <-time.After(5 * time.Second):
+		t.Fatal("RoutineManager cancellation did not return after active worker exited")
 	}
 }
 

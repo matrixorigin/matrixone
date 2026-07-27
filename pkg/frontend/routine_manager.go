@@ -561,6 +561,34 @@ func (rm *RoutineManager) killNetConns() {
 	}
 }
 
+func (rm *RoutineManager) startKillRoutineWorker(interval time.Duration) {
+	if interval <= 0 {
+		return
+	}
+	rm.workerWG.Add(1)
+	go func() {
+		defer rm.workerWG.Done()
+		select {
+		case <-rm.ctx.Done():
+			return
+		default:
+		}
+		rm.KillRoutineConnections()
+
+		timer := time.NewTimer(interval)
+		defer timer.Stop()
+		for {
+			select {
+			case <-rm.ctx.Done():
+				return
+			case <-timer.C:
+			}
+			rm.KillRoutineConnections()
+			timer.Reset(interval)
+		}
+	}()
+}
+
 func NewRoutineManager(ctx context.Context, service string) (*RoutineManager, error) {
 	var cancel context.CancelFunc
 	ctx, cancel = context.WithCancel(ctx)
@@ -595,30 +623,7 @@ func NewRoutineManager(ctx context.Context, service string) (*RoutineManager, er
 
 	// add kill connect routine
 	interval := time.Duration(sv.KillRountinesInterval) * time.Second
-	if interval > 0 {
-		rm.workerWG.Add(1)
-		go func() {
-			defer rm.workerWG.Done()
-			select {
-			case <-rm.ctx.Done():
-				return
-			default:
-			}
-			rm.KillRoutineConnections()
-
-			timer := time.NewTimer(interval)
-			defer timer.Stop()
-			for {
-				select {
-				case <-rm.ctx.Done():
-					return
-				case <-timer.C:
-				}
-				rm.KillRoutineConnections()
-				timer.Reset(interval)
-			}
-		}()
-	}
+	rm.startKillRoutineWorker(interval)
 
 	return rm, nil
 }
