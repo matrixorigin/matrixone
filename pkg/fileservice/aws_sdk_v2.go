@@ -365,7 +365,7 @@ func (a *AwsSDKv2) Write(
 
 	if sizeHint == nil {
 		// multipart
-		output, err := DoWithRetry("create multipart upload", func() (*s3.CreateMultipartUploadOutput, error) {
+		output, err := DoWithRetryContext(ctx, "create multipart upload", func() (*s3.CreateMultipartUploadOutput, error) {
 			return a.client.CreateMultipartUpload(ctx, &s3.CreateMultipartUploadInput{
 				Bucket:  ptrTo(a.bucket),
 				Key:     ptrTo(key),
@@ -400,7 +400,7 @@ func (a *AwsSDKv2) Write(
 			if len(content) == 0 {
 				break
 			}
-			uploadOutput, err := DoWithRetry("upload part", func() (*s3.UploadPartOutput, error) {
+			uploadOutput, err := DoWithRetryContext(ctx, "upload part", func() (*s3.UploadPartOutput, error) {
 				recordS3PutRequest(ctx, a.perfCounterSets...)
 				return a.client.UploadPart(ctx, &s3.UploadPartInput{
 					Bucket:     ptrTo(a.bucket),
@@ -426,7 +426,7 @@ func (a *AwsSDKv2) Write(
 		}
 
 		// complete
-		_, err = DoWithRetry("complete multipart upload", func() (*s3.CompleteMultipartUploadOutput, error) {
+		_, err = DoWithRetryContext(ctx, "complete multipart upload", func() (*s3.CompleteMultipartUploadOutput, error) {
 			return a.client.CompleteMultipartUpload(ctx, &s3.CompleteMultipartUploadInput{
 				Bucket:          ptrTo(a.bucket),
 				Key:             ptrTo(key),
@@ -443,7 +443,7 @@ func (a *AwsSDKv2) Write(
 		if err != nil {
 			return err
 		}
-		_, err = DoWithRetry("write", func() (*s3.PutObjectOutput, error) {
+		_, err = DoWithRetryContext(ctx, "write", func() (*s3.PutObjectOutput, error) {
 			return a.putObject(
 				ctx,
 				&s3.PutObjectInput{
@@ -578,7 +578,7 @@ func (a *AwsSDKv2) WriteMultipartParallel(
 		return a.Write(ctx, key, bytes.NewReader(data), &size, options.Expire)
 	}
 
-	output, createErr := DoWithRetry("create multipart upload", func() (*s3.CreateMultipartUploadOutput, error) {
+	output, createErr := DoWithRetryContext(ctx, "create multipart upload", func() (*s3.CreateMultipartUploadOutput, error) {
 		return a.client.CreateMultipartUpload(ctx, &s3.CreateMultipartUploadInput{
 			Bucket:  ptrTo(a.bucket),
 			Key:     ptrTo(key),
@@ -653,7 +653,7 @@ func (a *AwsSDKv2) WriteMultipartParallel(
 				releasePartBuffer(job.part)
 				return
 			}
-			uploadOutput, uploadErr := DoWithRetry("upload part", func() (*s3.UploadPartOutput, error) {
+			uploadOutput, uploadErr := DoWithRetryContext(ctx, "upload part", func() (*s3.UploadPartOutput, error) {
 				recordS3PutRequest(ctx, a.perfCounterSets...)
 				return a.client.UploadPart(ctx, &s3.UploadPartInput{
 					Bucket:     ptrTo(a.bucket),
@@ -735,7 +735,7 @@ func (a *AwsSDKv2) WriteMultipartParallel(
 		return cmp.Compare(*a.PartNumber, *b.PartNumber)
 	})
 
-	_, err = DoWithRetry("complete multipart upload", func() (*s3.CompleteMultipartUploadOutput, error) {
+	_, err = DoWithRetryContext(ctx, "complete multipart upload", func() (*s3.CompleteMultipartUploadOutput, error) {
 		return a.client.CompleteMultipartUpload(ctx, &s3.CompleteMultipartUploadInput{
 			Bucket:          ptrTo(a.bucket),
 			Key:             ptrTo(key),
@@ -919,7 +919,8 @@ func (a *AwsSDKv2) deleteMultiObjOneByOne(ctx context.Context, objs []types.Obje
 func (a *AwsSDKv2) listObjects(ctx context.Context, params *s3.ListObjectsInput, optFns ...func(*s3.Options)) (*s3.ListObjectsOutput, error) {
 	ctx, task := gotrace.NewTask(ctx, "AwsSDKv2.listObjects")
 	defer task.End()
-	return DoWithRetry(
+	return DoWithRetryContext(
+		ctx,
 		"s3 list objects",
 		func() (*s3.ListObjectsOutput, error) {
 			perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
@@ -978,7 +979,8 @@ func (a *AwsSDKv2) getObject(ctx context.Context, min *int64, max *int64, params
 				rang = fmt.Sprintf("bytes=%d-", offset)
 			}
 			params.Range = &rang
-			output, err := DoWithRetry(
+			output, err := DoWithRetryContext(
+				ctx,
 				"s3 get object",
 				func() (*s3.GetObjectOutput, error) {
 					LogEvent(ctx, str_awssdkv2_get_object_begin)
@@ -1015,7 +1017,8 @@ func (a *AwsSDKv2) getObject(ctx context.Context, min *int64, max *int64, params
 func (a *AwsSDKv2) deleteObject(ctx context.Context, params *s3.DeleteObjectInput, optFns ...func(*s3.Options)) (*s3.DeleteObjectOutput, error) {
 	ctx, task := gotrace.NewTask(ctx, "AwsSDKv2.deleteObject")
 	defer task.End()
-	return DoWithRetry(
+	return DoWithRetryContext(
+		ctx,
 		"s3 delete object",
 		func() (*s3.DeleteObjectOutput, error) {
 			perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
@@ -1031,7 +1034,8 @@ func (a *AwsSDKv2) deleteObject(ctx context.Context, params *s3.DeleteObjectInpu
 func (a *AwsSDKv2) deleteObjects(ctx context.Context, params *s3.DeleteObjectsInput, optFns ...func(*s3.Options)) (*s3.DeleteObjectsOutput, error) {
 	ctx, task := gotrace.NewTask(ctx, "AwsSDKv2.deleteObjects")
 	defer task.End()
-	return DoWithRetry(
+	return DoWithRetryContext(
+		ctx,
 		"s3 delete objects",
 		func() (*s3.DeleteObjectsOutput, error) {
 			perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {

@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -47,6 +48,7 @@ const (
 )
 
 func (group *Group) Prepare(proc *process.Process) (err error) {
+	group.diagnosticsLogged = false
 	group.ctr.state = vm.Build
 	if group.ctr.mp != nil {
 		group.ctr.free()
@@ -255,7 +257,7 @@ func (group *Group) Call(proc *process.Process) (vm.CallResult, error) {
 			if needSpill {
 				// we need to spill the data to disk.
 				if group.NeedEval {
-					if bytes, rows, err := group.ctr.spillDataToDisk(proc, nil); err != nil {
+					if bytes, rows, err := group.ctr.spillDataToDisk(proc, group.OpAnalyzer, nil); err != nil {
 						return vm.CancelResult, err
 					} else {
 						group.OpAnalyzer.Spill(bytes)
@@ -274,7 +276,7 @@ func (group *Group) Call(proc *process.Process) (vm.CallResult, error) {
 
 		// spilling -- spill whatever left in memory, and load first spilled bucket.
 		if group.ctr.isSpilling() {
-			if bytes, rows, err := group.ctr.spillDataToDisk(proc, nil); err != nil {
+			if bytes, rows, err := group.ctr.spillDataToDisk(proc, group.OpAnalyzer, nil); err != nil {
 				return vm.CancelResult, err
 			} else {
 				group.OpAnalyzer.Spill(bytes)
@@ -320,10 +322,11 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 		return false, nil
 	} else {
 		if group.ctr.hr.IsEmpty() {
-			if err = group.ctr.buildHashTable(proc.Ctx); err != nil {
+			if err = group.ctr.buildHashTable(proc.Ctx, 0); err != nil {
 				return false, err
 			}
 		}
+		hashBytesBefore := group.ctr.hr.Hash.Size()
 
 		// here is a strange loop.   our hash table exposed something called
 		// hashmap.UnitLimit -- which limits per iteration insert mini batch size.
@@ -366,19 +369,32 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 			}
 		} // end of mini batch for loop
 
+		observeHashGrowth(group.OpAnalyzer.GetOpStats(), "GroupHashBuild", hashBytesBefore, group.ctr.hr.Hash.Size())
 		// check size
 		return group.ctr.needSpill(group.OpAnalyzer), nil
 	}
 }
 
-func (ctr *container) buildHashTable(ctx context.Context) error {
+func observeHashGrowth(stats *process.OperatorStats, prefix string, before, after int64) {
+	if stats == nil || after <= before {
+		return
+	}
+	stats.AddExtraStat(prefix+"GrowthBatches", 1)
+	stats.AddExtraStat(prefix+"GrowthBytes", after-before)
+	stats.SetMaxExtraStat(prefix+"MaxBytes", after)
+}
+
+func (ctr *container) buildHashTable(ctx context.Context, preAllocated uint64) error {
+	if preAllocated < aggHtPreAllocSize {
+		preAllocated = aggHtPreAllocSize
+	}
 	// build hash table
 	if err := ctr.hr.BuildHashTable(
 		ctx, ctr.mp,
 		false,
 		ctr.mtyp == HStr,
 		ctr.keyNullable,
-		aggHtPreAllocSize); err != nil {
+		preAllocated); err != nil {
 		return err
 	}
 
@@ -389,6 +405,55 @@ func (ctr *container) buildHashTable(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+func (ctr *container) boundedSpillReloadPreAlloc(bucketRows int64) uint64 {
+	if bucketRows <= 0 || ctr.spillHashPreAllocSize == 0 {
+		return 0
+	}
+	requested := min(uint64(bucketRows), ctr.spillHashPreAllocSize)
+	// Values below 10K are the test-only group-count spill mode, not bytes.
+	if ctr.spillMem < 10000 {
+		return requested
+	}
+
+	used := ctr.memUsed()
+	if used >= ctr.spillMem {
+		return 0
+	}
+	available := uint64(ctr.spillMem - used)
+	estimate := hashtable.EstimateInt64HashMapSize
+	initial := hashtable.Int64HashMapInitialAllocationBytes()
+	if ctr.mtyp == HStr {
+		estimate = hashtable.EstimateStringHashMapSize
+		initial = hashtable.StringHashMapInitialAllocationBytes()
+	}
+	required := func(cardinality uint64) uint64 {
+		target := estimate(cardinality)
+		if target > ^uint64(0)-initial {
+			return ^uint64(0)
+		}
+		// PreAlloc builds the target cells before releasing the map's initial
+		// cells, so the transient peak contains both allocations.
+		return initial + target
+	}
+	if required(requested) <= available {
+		return requested
+	}
+
+	// Find the largest cardinality whose hash-cell allocation fits below the
+	// current spill threshold. buildHashTable still applies the historical 1024
+	// minimum, so returning zero never makes the baseline allocation smaller.
+	low, high := uint64(0), requested
+	for low < high {
+		mid := low + (high-low+1)/2
+		if required(mid) <= available {
+			low = mid
+		} else {
+			high = mid - 1
+		}
+	}
+	return low
 }
 
 func (ctr *container) initGroupKeyTypesFromBatch(vs []*vector.Vector) {

@@ -3816,6 +3816,84 @@ func TestDecimal64ToDecimal128FastPaths(t *testing.T) {
 	}
 }
 
+func TestDecimal64ToDecimal128ConstVector(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	const batchSize = 3
+
+	testCases := []struct {
+		name     string
+		fromType types.Type
+		toType   types.Type
+		input    string
+		expected string
+	}{
+		{
+			name:     "same scale positive",
+			fromType: types.New(types.T_decimal64, 18, 2),
+			toType:   types.New(types.T_decimal128, 38, 2),
+			input:    "8.00",
+			expected: "8.00",
+		},
+		{
+			name:     "same scale negative",
+			fromType: types.New(types.T_decimal64, 18, 2),
+			toType:   types.New(types.T_decimal128, 38, 2),
+			input:    "-8.00",
+			expected: "-8.00",
+		},
+		{
+			name:     "different scale",
+			fromType: types.New(types.T_decimal64, 18, 2),
+			toType:   types.New(types.T_decimal128, 38, 4),
+			input:    "8.00",
+			expected: "8.0000",
+		},
+		{
+			name:     "narrower width",
+			fromType: types.New(types.T_decimal64, 18, 2),
+			toType:   types.New(types.T_decimal128, 10, 2),
+			input:    "8.00",
+			expected: "8.00",
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			input, err := types.ParseDecimal64(
+				testCase.input,
+				testCase.fromType.Width,
+				testCase.fromType.Scale,
+			)
+			require.NoError(t, err)
+			expected, err := types.ParseDecimal128(
+				testCase.expected,
+				testCase.toType.Width,
+				testCase.toType.Scale,
+			)
+			require.NoError(t, err)
+
+			inputVector, err := vector.NewConstFixed(testCase.fromType, input, batchSize, proc.Mp())
+			require.NoError(t, err)
+			defer inputVector.Free(proc.Mp())
+			require.True(t, inputVector.IsConst())
+			require.Len(t, vector.MustFixedColWithTypeCheck[types.Decimal64](inputVector), 1)
+
+			result := vector.NewFunctionResultWrapper(
+				testCase.toType,
+				proc.Mp(),
+			).(*vector.FunctionResult[types.Decimal128])
+			defer result.Free()
+			require.NoError(t, result.PreExtendAndReset(batchSize))
+
+			source := vector.GenerateFunctionFixedTypeParameter[types.Decimal64](inputVector)
+			require.NoError(t, decimal64ToDecimal128Array(source, result, batchSize, nil))
+
+			values := vector.MustFixedColWithTypeCheck[types.Decimal128](result.GetResultVector())
+			require.Equal(t, []types.Decimal128{expected, expected, expected}, values)
+		})
+	}
+}
+
 func TestCastNumericTokenInvalidInputErrors(t *testing.T) {
 	_, err := parseDecimal128CastString("", 38, 0)
 	require.ErrorContains(t, err, "invalid input:")

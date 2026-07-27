@@ -21,9 +21,11 @@ import (
 	"fmt"
 	"math/rand"
 	"slices"
+	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -40,6 +42,8 @@ const (
 	objectOpsTriggerThreshold = 5
 )
 
+var ErrMergeSchedulerStopped = moerr.NewInternalErrorNoCtx("merge scheduler stopped")
+
 type mergeTask struct {
 	objs        []*objectio.ObjectStats
 	kind        taskHostKind
@@ -49,6 +53,18 @@ type mergeTask struct {
 	oSize       int
 	eSize       int
 	doneCB      *taskObserver
+}
+
+type mergeSchedulerGeneration struct {
+	stopCh chan struct{}
+	ioChan chan *MMsg
+}
+
+func newMergeSchedulerGeneration() *mergeSchedulerGeneration {
+	return &mergeSchedulerGeneration{
+		stopCh: make(chan struct{}),
+		ioChan: make(chan *MMsg, 256),
+	}
 }
 
 func (r *mergeTask) String() string {
@@ -65,13 +81,13 @@ type MergeScheduler struct {
 	supps map[uint64]*todoSupporter
 
 	// control flow
-	allPaused bool
-	stopCh    atomic.Pointer[chan struct{}]
-	stopRecv  chan struct{}
-	stopped   atomic.Bool
+	allPaused  bool
+	generation atomic.Pointer[mergeSchedulerGeneration]
+	stopRecv   chan struct{}
+	stopped    atomic.Bool
 
-	msgChan chan *MMsg
-	ioChan  chan *MMsg
+	msgChan      chan *MMsg
+	bootstrapMsg *MMsg
 
 	pad            *launchPad
 	defaultTrigger *MMsgTaskTrigger
@@ -97,7 +113,6 @@ func NewMergeScheduler(
 
 		stopRecv: make(chan struct{}, 1),
 		msgChan:  make(chan *MMsg, 4096),
-		ioChan:   make(chan *MMsg, 256),
 
 		pad:            newLaunchPad(clock),
 		defaultTrigger: DefaultTrigger.Clone(),
@@ -118,14 +133,13 @@ func NewMergeScheduler(
 		sched.handleAddTable(table)
 	}
 	if fn := cata.GetMergeSettingsBatchFn(); fn != nil {
-		sched.ioChan <- &MMsg{
+		sched.bootstrapMsg = &MMsg{
 			Kind: MMsgKindConfigBootstrap,
 			Value: MMsgConfigBootstrap{
 				ReadSettingsBatch: fn,
 			},
 		}
 	}
-	cata.SetMergeNotifier(sched)
 
 	return sched
 
@@ -137,9 +151,9 @@ func (a *MergeScheduler) PatchTestRscController(rc rscthrottler.RSCThrottler) {
 
 func (a *MergeScheduler) Stop() {
 	if a.stopped.CompareAndSwap(false, true) {
-		ch := a.stopCh.Load()
-		if ch != nil {
-			close(*ch)
+		generation := a.generation.Load()
+		if generation != nil {
+			close(generation.stopCh)
 		}
 		<-a.stopRecv
 	}
@@ -147,10 +161,17 @@ func (a *MergeScheduler) Stop() {
 
 func (a *MergeScheduler) Start() {
 	if a.stopped.CompareAndSwap(true, false) {
-		ch := make(chan struct{})
-		a.stopCh.Store(&ch)
-		go a.handleMainLoop()
-		go a.handleIOLoop()
+		generation := newMergeSchedulerGeneration()
+		a.generation.Store(generation)
+		if a.bootstrapMsg != nil {
+			generation.ioChan <- &MMsg{
+				Kind:       a.bootstrapMsg.Kind,
+				Value:      a.bootstrapMsg.Value,
+				generation: generation,
+			}
+		}
+		go a.handleMainLoop(generation)
+		go a.handleIOLoop(generation)
 	}
 }
 
@@ -188,18 +209,49 @@ func (a *MergeScheduler) OnMergeDone(table catalog.MergeTable, esize int) {
 }
 
 func (a *MergeScheduler) taskObserverFactory(
-	t catalog.MergeTable,
+	supp *todoSupporter,
 	size int,
+	rc rscthrottler.RSCThrottler,
 ) *taskObserver {
-	return &taskObserver{f: func() { a.OnMergeDone(t, size) }}
+	return &taskObserver{f: func() {
+		supp.DoneTask()
+		rc.Release(int64(size))
+	}}
 }
 
 type taskObserver struct {
-	f func()
+	mu        sync.Mutex
+	admitted  bool
+	completed bool
+	f         func()
 }
 
 func (o *taskObserver) OnExecDone(_ any) {
-	o.f()
+	o.mu.Lock()
+	if o.completed {
+		o.mu.Unlock()
+		return
+	}
+	o.completed = true
+	run := o.admitted
+	o.mu.Unlock()
+	if run {
+		o.f()
+	}
+}
+
+func (o *taskObserver) Admit() {
+	o.mu.Lock()
+	if o.admitted {
+		o.mu.Unlock()
+		return
+	}
+	o.admitted = true
+	run := o.completed
+	o.mu.Unlock()
+	if run {
+		o.f()
+	}
 }
 
 func (a *MergeScheduler) CNActiveObjectsString() string { return "" }
@@ -460,8 +512,9 @@ func (b *MMsgTaskTrigger) Merge(o *MMsgTaskTrigger) *MMsgTaskTrigger {
 }
 
 type MMsg struct {
-	Kind  MMsgKind
-	Value any
+	Kind       MMsgKind
+	Value      any
+	generation *mergeSchedulerGeneration
 }
 
 type todoItem struct {
@@ -470,13 +523,77 @@ type todoItem struct {
 	table   catalog.MergeTable
 }
 
-func (a *MergeScheduler) Query(table catalog.MergeTable) *QueryAnswer {
-	answer := make(chan *QueryAnswer)
-	a.msgChan <- &MMsg{
-		Kind:  MMsgKindQuery,
-		Value: MMsgQuery{Table: table, Answer: answer},
+func (a *MergeScheduler) Query(
+	ctx context.Context,
+	table catalog.MergeTable,
+) (*QueryAnswer, error) {
+	generation := a.generation.Load()
+	if a.stopped.Load() || generation == nil {
+		return nil, ErrMergeSchedulerStopped
 	}
-	return <-answer
+	answer := make(chan *QueryAnswer, 1)
+	msg := &MMsg{
+		Kind:       MMsgKindQuery,
+		Value:      MMsgQuery{Table: table, Answer: answer},
+		generation: generation,
+	}
+	select {
+	case a.msgChan <- msg:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-generation.stopCh:
+		return nil, ErrMergeSchedulerStopped
+	}
+	select {
+	case answer := <-answer:
+		return answer, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-generation.stopCh:
+		return nil, ErrMergeSchedulerStopped
+	}
+}
+
+func (a *MergeScheduler) sendIOForGeneration(
+	generation *mergeSchedulerGeneration,
+	msg *MMsg,
+) bool {
+	if generation == nil {
+		return false
+	}
+	msg.generation = generation
+	select {
+	case <-generation.stopCh:
+		return false
+	default:
+	}
+	select {
+	case generation.ioChan <- msg:
+		return true
+	case <-generation.stopCh:
+		return false
+	}
+}
+
+func (a *MergeScheduler) sendMsgForGeneration(
+	generation *mergeSchedulerGeneration,
+	msg *MMsg,
+) bool {
+	if generation == nil {
+		return false
+	}
+	msg.generation = generation
+	select {
+	case <-generation.stopCh:
+		return false
+	default:
+	}
+	select {
+	case a.msgChan <- msg:
+		return true
+	case <-generation.stopCh:
+		return false
+	}
 }
 
 func (a *MergeScheduler) PauseAll() {
@@ -583,7 +700,7 @@ func (pq *todoPQ) Update(item *todoItem, ready time.Time) {
 }
 
 type todoSupporter struct {
-	mergingTaskCnt         int
+	mergingTaskCnt         atomic.Int64
 	vaccumTrigCount        int
 	objectOperations       int
 	totalDataMergeCnt      int
@@ -601,17 +718,29 @@ type todoSupporter struct {
 }
 
 func (m *todoSupporter) DoneTask() {
-	m.mergingTaskCnt--
-	if m.mergingTaskCnt < 0 {
-		logutil.Error("MergeExecutorEvent",
-			zap.String("event", "mergingTaskCnt < 0"),
-			zap.String("table", m.todo.table.GetNameDesc()),
-		)
-		m.mergingTaskCnt = 0
+	for {
+		count := m.mergingTaskCnt.Load()
+		if count <= 0 {
+			logutil.Error("MergeExecutorEvent",
+				zap.String("event", "mergingTaskCnt <= 0"),
+				zap.String("table", m.todo.table.GetNameDesc()),
+			)
+			return
+		}
+		if m.mergingTaskCnt.CompareAndSwap(count, count-1) {
+			return
+		}
 	}
 }
 
-func (a *MergeScheduler) ioVacuumCheck(msg MMsgVacuumCheck) {
+func (m *todoSupporter) AddTask() {
+	m.mergingTaskCnt.Add(1)
+}
+
+func (a *MergeScheduler) ioVacuumCheck(
+	generation *mergeSchedulerGeneration,
+	msg MMsgVacuumCheck,
+) {
 	stats, err := CalculateVacuumStats(context.Background(),
 		msg.Table,
 		msg.opts,
@@ -628,19 +757,24 @@ func (a *MergeScheduler) ioVacuumCheck(msg MMsgVacuumCheck) {
 
 	compactTasks := GatherCompactTasks(context.Background(), stats)
 	if len(compactTasks) > 0 {
-		a.SendTrigger(
-			NewMMsgTaskTrigger(msg.Table).
+		if !a.sendMsgForGeneration(generation, &MMsg{
+			Kind: MMsgKindTrigger,
+			Value: NewMMsgTaskTrigger(msg.Table).
 				WithAssignedTasks(compactTasks),
-		)
+		}) {
+			return
+		}
 
 		// if the compact tasks is equal to the hollow top k,
 		// it means the table is full of hollow objects,
 		// so we need to trigger the vacuum check
 		if len(compactTasks) == msg.opts.HollowTopK {
 			f := func() {
-				a.SendTrigger(
-					NewMMsgTaskTrigger(msg.Table).WithVacuumCheck(msg.opts),
-				)
+				a.sendMsgForGeneration(generation, &MMsg{
+					Kind: MMsgKindTrigger,
+					Value: NewMMsgTaskTrigger(msg.Table).
+						WithVacuumCheck(msg.opts),
+				})
 			}
 			a.clock.AfterFunc(time.Second*10, f)
 		}
@@ -648,10 +782,13 @@ func (a *MergeScheduler) ioVacuumCheck(msg MMsgVacuumCheck) {
 
 	if stats.DelVacuumPercent > 0.5 {
 		oneshotOpts := DefaultTombstoneOpts.Clone().WithOneShot(true)
-		a.SendTrigger(
-			NewMMsgTaskTrigger(msg.Table).
+		if !a.sendMsgForGeneration(generation, &MMsg{
+			Kind: MMsgKindTrigger,
+			Value: NewMMsgTaskTrigger(msg.Table).
 				WithTombstone(oneshotOpts),
-		)
+		}) {
+			return
+		}
 	}
 
 	logutil.Info(
@@ -665,7 +802,10 @@ func (a *MergeScheduler) ioVacuumCheck(msg MMsgVacuumCheck) {
 	)
 }
 
-func (a *MergeScheduler) ioConfigBootstrap(msg MMsgConfigBootstrap) {
+func (a *MergeScheduler) ioConfigBootstrap(
+	generation *mergeSchedulerGeneration,
+	msg MMsgConfigBootstrap,
+) {
 	bat, release := msg.ReadSettingsBatch()
 	if bat == nil {
 		logutil.Error(
@@ -676,7 +816,20 @@ func (a *MergeScheduler) ioConfigBootstrap(msg MMsgConfigBootstrap) {
 	defer release()
 	count := 0
 	DecodeMergeSettingsBatchAnd(bat, func(tid uint64, setting *MergeSettings) {
-		a.SendConfig(tid, setting)
+		var trigger *MMsgTaskTrigger
+		var err error
+		if setting != nil {
+			trigger, err = setting.ToMMsgTaskTrigger()
+			if err != nil {
+				return
+			}
+		}
+		if !a.sendMsgForGeneration(generation, &MMsg{
+			Kind:  MMsgKindConfig,
+			Value: MMsgConfig{ID: tid, Trigger: trigger},
+		}) {
+			return
+		}
 		count++
 	})
 
@@ -687,24 +840,38 @@ func (a *MergeScheduler) ioConfigBootstrap(msg MMsgConfigBootstrap) {
 	)
 }
 
-func (a *MergeScheduler) handleIOLoop() {
-	stopCh := *a.stopCh.Load()
+func (a *MergeScheduler) handleIOLoop(generation *mergeSchedulerGeneration) {
 	for {
 		select {
-		case <-stopCh:
+		case <-generation.stopCh:
 			return
-		case msg := <-a.ioChan:
+		default:
+		}
+		select {
+		case <-generation.stopCh:
+			return
+		case msg := <-generation.ioChan:
+			select {
+			case <-generation.stopCh:
+				return
+			default:
+			}
+			if msg.generation != generation {
+				continue
+			}
 			switch msg.Kind {
 			case MMsgKindVacuumCheck:
-				a.ioVacuumCheck(msg.Value.(MMsgVacuumCheck))
+				a.ioVacuumCheck(generation, msg.Value.(MMsgVacuumCheck))
 			case MMsgKindConfigBootstrap:
-				a.ioConfigBootstrap(msg.Value.(MMsgConfigBootstrap))
+				a.ioConfigBootstrap(generation, msg.Value.(MMsgConfigBootstrap))
 			}
 		}
 	}
 }
 
-func (a *MergeScheduler) fallbackSchedVacuumCheck() {
+func (a *MergeScheduler) fallbackSchedVacuumCheck(
+	generation *mergeSchedulerGeneration,
+) {
 	for _, supp := range a.supps {
 		size := 0
 		for stat := range supp.todo.table.IterTombstoneItem() {
@@ -712,19 +879,21 @@ func (a *MergeScheduler) fallbackSchedVacuumCheck() {
 		}
 		if size > 2*common.DefaultMaxOsizeObjBytes {
 			a.clock.AfterFunc(time.Duration(rand.Intn(10))*time.Minute, func() {
-				a.ioChan <- &MMsg{
+				a.sendIOForGeneration(generation, &MMsg{
 					Kind: MMsgKindVacuumCheck,
 					Value: MMsgVacuumCheck{
 						Table: supp.todo.table,
 						opts:  DefaultVacuumOpts,
 					},
-				}
+				})
 			})
 		}
 	}
 }
 
-func (a *MergeScheduler) handleMainLoop() {
+func (a *MergeScheduler) handleMainLoop(
+	generation *mergeSchedulerGeneration,
+) {
 	var nextReadyAtTimer = a.clock.NewTimer(time.Hour * 24)
 	never := make(<-chan time.Time)
 
@@ -733,9 +902,7 @@ func (a *MergeScheduler) handleMainLoop() {
 
 	vacuumCheckTicker := a.clock.NewTicker(time.Hour * 1)
 
-	stopCh := *a.stopCh.Load()
-
-	a.fallbackSchedVacuumCheck()
+	a.fallbackSchedVacuumCheck(generation)
 
 	for {
 
@@ -770,7 +937,7 @@ func (a *MergeScheduler) handleMainLoop() {
 				}
 				// DO NOT pop the task from the priority queue,
 				// because the task may be updated
-				a.doSched(todo)
+				a.doSched(generation, todo)
 			}
 
 			// set the timer for the next task
@@ -787,7 +954,7 @@ func (a *MergeScheduler) handleMainLoop() {
 		}
 
 		select {
-		case <-stopCh:
+		case <-generation.stopCh:
 			// stop the loop
 			heartbeat.Stop()
 			a.stopRecv <- struct{}{}
@@ -798,14 +965,14 @@ func (a *MergeScheduler) handleMainLoop() {
 			a.rc.Refresh()
 		// continue the loop
 		case <-vacuumCheckTicker.Chan():
-			a.fallbackSchedVacuumCheck()
+			a.fallbackSchedVacuumCheck(generation)
 		case msg := <-a.msgChan:
-			a.dispatchMsg(msg)
+			a.dispatchMsg(generation, msg)
 			drained := false
 			for !drained {
 				select {
 				case msg := <-a.msgChan:
-					a.dispatchMsg(msg)
+					a.dispatchMsg(generation, msg)
 				default:
 					drained = true
 				}
@@ -816,14 +983,20 @@ func (a *MergeScheduler) handleMainLoop() {
 
 // region: handle msg
 
-func (a *MergeScheduler) dispatchMsg(msg *MMsg) {
+func (a *MergeScheduler) dispatchMsg(
+	generation *mergeSchedulerGeneration,
+	msg *MMsg,
+) {
+	if msg.generation != nil && msg.generation != generation {
+		return
+	}
 	switch msg.Kind {
 	case MMsgKindSwitch:
 		a.handleSwitch(msg.Value.(MMsgSwitch))
 	case MMsgKindQuery:
 		a.handleQuery(msg.Value.(MMsgQuery))
 	case MMsgKindTrigger:
-		a.handleTaskTrigger(msg.Value.(*MMsgTaskTrigger))
+		a.handleTaskTrigger(generation, msg.Value.(*MMsgTaskTrigger))
 	case MMsgKindConfig:
 		a.handleConfig(msg.Value.(MMsgConfig))
 	case MMsgKindTableChange:
@@ -838,7 +1011,10 @@ func (a *MergeScheduler) dispatchMsg(msg *MMsg) {
 	}
 }
 
-func (a *MergeScheduler) handleTaskTrigger(msg *MMsgTaskTrigger) {
+func (a *MergeScheduler) handleTaskTrigger(
+	generation *mergeSchedulerGeneration,
+	msg *MMsgTaskTrigger,
+) {
 	supp := a.supps[msg.table.ID()]
 	if supp == nil {
 		// this table has been dropped and removed from the priority queue
@@ -846,12 +1022,14 @@ func (a *MergeScheduler) handleTaskTrigger(msg *MMsgTaskTrigger) {
 	}
 
 	if msg.vacuum != nil {
-		a.ioChan <- &MMsg{
+		if !a.sendIOForGeneration(generation, &MMsg{
 			Kind: MMsgKindVacuumCheck,
 			Value: MMsgVacuumCheck{
 				Table: msg.table,
 				opts:  msg.vacuum,
 			},
+		}) {
+			return
 		}
 		supp.lastVacuumCheckTime = a.clock.Now()
 	}
@@ -939,7 +1117,7 @@ func (a *MergeScheduler) handleQuery(msg MMsgQuery) {
 			answer.NextCheckDue = a.clock.Until(supp.todo.readyAt)
 			answer.DataMergeCnt = supp.totalDataMergeCnt
 			answer.TombstoneMergeCnt = supp.totalTombstoneMergeCnt
-			answer.PendingMergeCnt = supp.mergingTaskCnt
+			answer.PendingMergeCnt = int(supp.mergingTaskCnt.Load())
 			answer.VaccumTrigCount = supp.vaccumTrigCount
 			answer.LastVaccumCheck = a.clock.Since(supp.lastVacuumCheckTime)
 			if len(supp.triggers) > 0 {
@@ -1013,7 +1191,10 @@ func (a *MergeScheduler) handleMergeDone(table catalog.MergeTable, esz int) {
 
 // region: schedule
 
-func (a *MergeScheduler) doSched(todo *todoItem) {
+func (a *MergeScheduler) doSched(
+	generation *mergeSchedulerGeneration,
+	todo *todoItem,
+) {
 	// this table is dropped
 	if todo.table.HasDropCommitted() {
 		delete(a.supps, todo.table.ID())
@@ -1036,7 +1217,7 @@ func (a *MergeScheduler) doSched(todo *todoItem) {
 	now := a.clock.Now()
 
 	// this table is merging, postpone the task
-	if supp.mergingTaskCnt > 0 {
+	if supp.mergingTaskCnt.Load() > 0 {
 		a.pq.Update(todo, now.Add(a.baseInterval/2))
 		return
 	}
@@ -1073,25 +1254,27 @@ func (a *MergeScheduler) doSched(todo *todoItem) {
 
 	// Gather tasks
 
+	rc := a.rc
 	tasks := a.pad.gatherByTrigger(
 		context.Background(),
 		trigger,
 		supp.lastMergeTime,
-		a.rc,
+		rc,
 	)
 
 	afterGather := a.clock.Now()
 	// Schedule tasks
 	for _, task := range tasks {
-		task.doneCB = a.taskObserverFactory(todo.table, task.eSize)
+		task.doneCB = a.taskObserverFactory(supp, task.eSize, rc)
 		if a.executor.ExecuteFor(todo.table, task) {
-			a.rc.Acquire(int64(task.eSize))
+			rc.Acquire(int64(task.eSize))
+			supp.AddTask()
+			task.doneCB.Admit()
 			if task.isTombstone {
 				supp.totalTombstoneMergeCnt++
 			} else {
 				supp.totalDataMergeCnt++
 			}
-			supp.mergingTaskCnt++
 			if !task.isTombstone && task.oSize > common.DefaultMaxOsizeObjBytes {
 				supp.vaccumTrigCount++
 			}
@@ -1108,12 +1291,14 @@ func (a *MergeScheduler) doSched(todo *todoItem) {
 			if trigger.vacuum != nil {
 				vacuumOpts = trigger.vacuum
 			}
-			a.ioChan <- &MMsg{
+			if !a.sendIOForGeneration(generation, &MMsg{
 				Kind: MMsgKindVacuumCheck,
 				Value: MMsgVacuumCheck{
 					Table: todo.table,
 					opts:  vacuumOpts,
 				},
+			}) {
+				return
 			}
 			supp.lastVacuumCheckTime = afterGather
 			supp.totalVacuumCheckCnt++

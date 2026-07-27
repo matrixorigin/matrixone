@@ -217,3 +217,16 @@ select _wstart, _wend, max(temperature) from sensor_data interval(ts, 3, day);
 ➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  max(temperature)[7,24,0]  𝄀
 2023-07-29 00:00:00  ¦  2023-08-01 00:00:00  ¦  22.0  𝄀
 2023-08-01 00:00:00  ¦  2023-08-04 00:00:00  ¦  38.0
+set @old_sql_mode_time_window = @@sql_mode;
+set sql_mode = '';
+drop table if exists zero_temporal_window;
+create table zero_temporal_window(ts datetime primary key, v int);
+insert into zero_temporal_window values
+('0000-00-00 00:00:00', 10),
+('0001-01-01 00:00:00', 20);
+select _wstart, _wend, max(v) from zero_temporal_window interval(ts, 1, second) sliding(1, second);
+➤ _wstart[93,64,0]  ¦  _wend[93,64,0]  ¦  max(v)[4,32,0]  𝄀
+0000-00-00 00:00:00  ¦  0000-00-00 00:00:00  ¦  10  𝄀
+0001-01-01 00:00:00  ¦  0001-01-01 00:00:01  ¦  20
+drop table zero_temporal_window;
+set sql_mode = @old_sql_mode_time_window;

@@ -1,0 +1,43 @@
+service-type = "PROXY"
+data-dir = "/var/lib/matrixone/data"
+
+[log]
+level = "info"
+format = "console"
+max-size = 512
+
+[hakeeper-client]
+service-addresses = ["logservice:32001"]
+
+[[fileservice]]
+backend = "DISK-V2"
+data-dir = "/var/lib/matrixone/data"
+name = "LOCAL"
+
+[[fileservice]]
+backend = "MINIO"
+name = "SHARED"
+
+[fileservice.s3]
+bucket = "mo-test"
+endpoint = "http://minio:9000"
+key-prefix = "server/data"
+cert-files = ["/etc/ssl/cert.pem"]
+
+[fileservice.cache]
+memory-capacity = "512MB"
+disk-capacity = "1GB"
+disk-path = "mo-data/file-service-cache"
+
+[[fileservice]]
+backend = "MINIO"
+name = "ETL"
+
+[fileservice.s3]
+bucket = "mo-test"
+endpoint = "http://minio:9000"
+key-prefix = "server/etl"
+
+[proxy]
+uuid = "rd1dccb4-4d3c-41f8-b482-5251dc7a41bf"
+listen-address = "0.0.0.0:6009"

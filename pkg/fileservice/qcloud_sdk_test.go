@@ -25,7 +25,9 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/stretchr/testify/require"
@@ -42,10 +44,10 @@ func TestQCloudSDK(t *testing.T) {
 
 			t.Run(fmt.Sprintf("%s %s", args.Name, args.Bucket), func(t *testing.T) {
 
-				testObjectStorage(t, "qcloud", func(t *testing.T) *QCloudSDK {
+				testObjectStorageWithContext(t, "qcloud", func(t *testing.T, ctx context.Context) *QCloudSDK {
 					args.KeyPrefix = fmt.Sprintf("%v", rand.Int64())
 					ret, err := NewQCloudSDK(
-						context.Background(),
+						ctx,
 						args,
 						nil,
 					)
@@ -68,11 +70,11 @@ func TestQCloudSDK(t *testing.T) {
 			t.Run(fmt.Sprintf("%s %s", args.Name, args.Bucket), func(t *testing.T) {
 
 				t.Run("file service", func(t *testing.T) {
-					testFileService(t, 0, func(name string) FileService {
+					testFileServiceWithContext(t, 0, func(ctx context.Context, name string) FileService {
 						args.Name = name
 						args.KeyPrefix = fmt.Sprintf("%v", rand.Int64())
 						ret, err := NewS3FS(
-							context.Background(),
+							ctx,
 							args,
 							DisabledCacheConfig,
 							nil,
@@ -396,6 +398,44 @@ func TestQCloudSDKBasicObjectOperations(t *testing.T) {
 	if err := sdk.Delete(ctx, "dir/file1"); !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected canceled delete, got %v", err)
 	}
+}
+
+func TestQCloudSDKListStopsRetryingAtContextDeadline(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	defer server.Close()
+
+	sdk := newTestCOSClient(t, server)
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	for _, err := range sdk.List(ctx, "") {
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("expected context deadline exceeded, got %v", err)
+		}
+		return
+	}
+	t.Fatal("expected list to return a deadline error")
+}
+
+func TestQCloudSDKAbortMultipartStopsAtContextDeadline(t *testing.T) {
+	var requests atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	defer server.Close()
+
+	sdk := newTestCOSClient(t, server)
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	err := sdk.abortMultipartUpload(ctx, "object", "upload-id")
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Less(t, time.Since(start), time.Second)
+	require.Positive(t, requests.Load())
 }
 
 type timeoutError struct{}

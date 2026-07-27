@@ -3326,6 +3326,30 @@ func TestDateStringToDate(t *testing.T) {
 	}
 }
 
+func TestLastDayZeroTemporalReturnsNull(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	testCase := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(
+				types.T_varchar.ToType(),
+				[]string{"0000-00-00", "0000-00-00 00:00:00", "2024-02-10"},
+				[]bool{false, false, false},
+			),
+		},
+		NewFunctionTestResult(
+			types.T_varchar.ToType(),
+			false,
+			[]string{"", "", "2024-02-29"},
+			[]bool{true, true, false},
+		),
+		LastDay,
+	)
+
+	succeed, info := testCase.Run()
+	require.True(t, succeed, info)
+}
+
 func initDateToDayTestCase() []tcTemp {
 	return []tcTemp{
 		{
