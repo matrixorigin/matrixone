@@ -947,6 +947,13 @@ func TestReserveConnAndClose(t *testing.T) {
 	defer ctrl.Finish()
 	ses := newTestSession(t, ctrl)
 	defer ses.Close()
+	quota := newPreparedStmtQuotaForTest(1)
+	ses.gSysVars = quota
+	require.NoError(t, ses.SetPrepareStmt(
+		context.Background(),
+		"close_releases_quota",
+		&PrepareStmt{Name: "close_releases_quota"}))
+	require.Equal(t, uint64(1), quota.getPrepareStmtCount())
 	rm, _ := NewRoutineManager(context.Background(), "")
 	ses.rm = rm
 	rm = ses.getRoutineManager()
@@ -954,6 +961,7 @@ func TestReserveConnAndClose(t *testing.T) {
 
 	ses.ReserveConnAndClose()
 	assert.Equal(t, 0, len(rm.sessionManager.GetAllSessions()))
+	require.Equal(t, uint64(0), quota.getPrepareStmtCount())
 }
 
 func TestSessionTempTableMap(t *testing.T) {

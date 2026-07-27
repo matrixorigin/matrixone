@@ -144,8 +144,10 @@ type Session struct {
 	tempTableVersion uint64
 	hasLockedTables  atomic.Bool
 
-	prepareStmts map[string]*PrepareStmt
-	lastStmtId   uint32
+	prepareStmts                map[string]*PrepareStmt
+	prepareStmtQuota            *SystemVariables
+	prepareStmtQuotaInitialized bool
+	lastStmtId                  uint32
 
 	priv *privilege
 
@@ -877,10 +879,12 @@ func (ses *Session) Close() {
 	ses.sql = ""
 	ses.userDefinedVars = nil
 	ses.gSysVars = nil
+	ses.releasePrepareStmtQuotaLocked(len(ses.prepareStmts))
 	for _, stmt := range ses.prepareStmts {
 		stmt.Close()
 	}
 	ses.prepareStmts = nil
+	ses.prepareStmtQuota = nil
 	ses.allResultSet = nil
 	ses.tenant = nil
 	ses.priv = nil
@@ -1242,8 +1246,13 @@ func (ses *Session) SetPrepareStmt(ctx context.Context, name string, prepareStmt
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	if stmt, ok := ses.prepareStmts[name]; !ok {
-		if len(ses.prepareStmts) >= int(MaxPrepareNumberInOneSession.Load()) {
-			return moerr.NewInvalidStatef(ctx, "too many prepared statement, max %d", MaxPrepareNumberInOneSession.Load())
+		quota := ses.getPrepareStmtQuotaLocked()
+		if quota != nil {
+			if limit, ok := quota.reservePrepareStmt(); !ok {
+				return moerr.NewMaxPreparedStmtCountReached(ctx, limit)
+			}
+		} else if len(ses.prepareStmts) >= int(MaxPrepareNumberInOneSession.Load()) {
+			return moerr.NewMaxPreparedStmtCountReached(ctx, uint64(MaxPrepareNumberInOneSession.Load()))
 		}
 	} else {
 		stmt.Close()
@@ -1255,6 +1264,27 @@ func (ses *Session) SetPrepareStmt(ctx context.Context, name string, prepareStmt
 	ses.prepareStmts[name] = prepareStmt
 
 	return nil
+}
+
+func (ses *Session) getPrepareStmtQuotaLocked() *SystemVariables {
+	if ses.prepareStmtQuotaInitialized {
+		return ses.prepareStmtQuota
+	}
+	ses.prepareStmtQuotaInitialized = true
+	ses.prepareStmtQuota = ses.gSysVars
+	if ses.prepareStmtQuota == nil && ses.tenant != nil {
+		ses.prepareStmtQuota = GSysVarsMgr.getCached(ses.tenant.GetTenantID())
+	}
+	return ses.prepareStmtQuota
+}
+
+func (ses *Session) releasePrepareStmtQuotaLocked(count int) {
+	if count == 0 || ses.prepareStmtQuota == nil {
+		return
+	}
+	if !ses.prepareStmtQuota.releasePrepareStmts(uint64(count)) {
+		logutil.Errorf("prepared statement quota underflow: release %d", count)
+	}
 }
 
 func (ses *Session) GetPrepareStmt(ctx context.Context, name string) (*PrepareStmt, error) {
@@ -1286,8 +1316,9 @@ func (ses *Session) RemovePrepareStmt(name string) {
 	defer ses.mu.Unlock()
 	if stmt, ok := ses.prepareStmts[name]; ok {
 		stmt.Close()
+		delete(ses.prepareStmts, name)
+		ses.releasePrepareStmtQuotaLocked(1)
 	}
-	delete(ses.prepareStmts, name)
 }
 
 // RemoveAllPrepareStmts closes and drops every cached prepared statement. It is
@@ -1298,10 +1329,12 @@ func (ses *Session) RemovePrepareStmt(name string) {
 func (ses *Session) RemoveAllPrepareStmts() {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
+	count := len(ses.prepareStmts)
 	for _, stmt := range ses.prepareStmts {
 		stmt.Close()
 	}
 	ses.prepareStmts = make(map[string]*PrepareStmt)
+	ses.releasePrepareStmtQuotaLocked(count)
 }
 
 // GetUserDefinedVar gets value of the config

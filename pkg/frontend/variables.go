@@ -1017,13 +1017,20 @@ func (m *GlobalSysVarsMgr) Put(accountId uint32, vars *SystemVariables) {
 	m.accountsGlobalSysVarsMap[accountId] = vars
 }
 
+func (m *GlobalSysVarsMgr) getCached(accountId uint32) *SystemVariables {
+	m.Lock()
+	defer m.Unlock()
+	return m.accountsGlobalSysVarsMap[accountId]
+}
+
 var GSysVarsMgr = &GlobalSysVarsMgr{
 	accountsGlobalSysVarsMap: make(map[uint32]*SystemVariables),
 }
 
 // SystemVariables is account level
 type SystemVariables struct {
-	mu sync.Mutex
+	mu                sync.Mutex
+	preparedStmtCount uint64
 	// name -> value/default
 	mp map[string]interface{}
 }
@@ -1053,9 +1060,41 @@ func (sv *SystemVariables) Set(name string, value interface{}) {
 	sv.mp[name] = value
 }
 
+func (sv *SystemVariables) reservePrepareStmt() (uint64, bool) {
+	sv.mu.Lock()
+	defer sv.mu.Unlock()
+
+	limit := gSysVarsDefs[maxPreparedStmtCount].Default.(int64)
+	if value, ok := sv.mp[maxPreparedStmtCount]; ok {
+		limit = value.(int64)
+	}
+	if limit <= 0 || sv.preparedStmtCount >= uint64(limit) {
+		return uint64(limit), false
+	}
+	sv.preparedStmtCount++
+	return uint64(limit), true
+}
+
+func (sv *SystemVariables) releasePrepareStmts(count uint64) bool {
+	sv.mu.Lock()
+	defer sv.mu.Unlock()
+	if count > sv.preparedStmtCount {
+		return false
+	}
+	sv.preparedStmtCount -= count
+	return true
+}
+
+func (sv *SystemVariables) getPrepareStmtCount() uint64 {
+	sv.mu.Lock()
+	defer sv.mu.Unlock()
+	return sv.preparedStmtCount
+}
+
 // definitions of system variables
 const (
 	enableExplainScheduling = "enable_explain_scheduling"
+	maxPreparedStmtCount    = "max_prepared_stmt_count"
 	queryMaxWorkers         = "query_max_workers"
 	queryPoolStrict         = "query_pool_strict"
 )
@@ -2428,12 +2467,12 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableIntType("max_points_in_geometry", 3, 1048576, false),
 		Default:           int64(65536),
 	},
-	"max_prepared_stmt_count": {
-		Name:              "max_prepared_stmt_count",
+	maxPreparedStmtCount: {
+		Name:              maxPreparedStmtCount,
 		Scope:             ScopeGlobal,
 		Dynamic:           true,
 		SetVarHintApplies: false,
-		Type:              InitSystemVariableIntType("max_prepared_stmt_count", 0, 4194304, false),
+		Type:              InitSystemVariableIntType(maxPreparedStmtCount, 0, 4194304, false),
 		Default:           int64(16382),
 	},
 	"max_seeks_for_key": {

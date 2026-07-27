@@ -103,6 +103,16 @@ func TestLockWaitTimeoutMySQLError(t *testing.T) {
 	require.Equal(t, ER_LOCK_WAIT_TIMEOUT, noCtxErr.MySQLCode())
 }
 
+func TestMaxPreparedStmtCountReachedMySQLError(t *testing.T) {
+	err := NewMaxPreparedStmtCountReached(context.Background(), 2)
+	require.Equal(t, ErrMaxPreparedStmtCountReached, err.ErrorCode())
+	require.Equal(t, ER_MAX_PREPARED_STMT_COUNT_REACHED, err.MySQLCode())
+	require.Equal(t, "42000", err.SqlState())
+	require.Equal(t,
+		"Can't create more than max_prepared_stmt_count statements (current value: 2)",
+		err.Error())
+}
+
 func TestIsMoErrCode(t *testing.T) {
 	err := NewDivByZero(context.TODO())
 	require.True(t, IsMoErrCode(err, ErrDivByZero))
