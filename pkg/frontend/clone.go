@@ -722,7 +722,7 @@ func updateBranchMetaTable(
 		dstTblDef.TblId,
 		receipt.snapshotTS,
 		srcTblDef.TblId,
-		receipt.opAccount,
+		receipt.toAccount,
 		level,
 	)
 

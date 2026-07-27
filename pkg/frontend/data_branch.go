@@ -345,14 +345,26 @@ func dataBranchCreateTable(
 		}
 	}()
 
-	if err = checkBranchQuota(execCtx.reqCtx, ses, bh, 1); err != nil {
-		return err
-	}
-
 	cloneStmt = &tree.CloneTable{
 		SrcTable:     stmt.SrcTable,
 		CreateTable:  stmt.CreateTable,
 		ToAccountOpt: stmt.ToAccountOpt,
+	}
+	targetAccountName := ses.GetTenantInfo().Tenant
+	targetAccountID := ses.GetTenantInfo().TenantID
+	if stmt.ToAccountOpt != nil {
+		targetAccountName = stmt.ToAccountOpt.AccountName.String()
+		if targetAccountID, err = getAccountId(execCtx.reqCtx, bh, targetAccountName); err != nil {
+			return err
+		}
+	}
+	if ses.GetTenantInfo().TenantID != sysAccountID && ses.GetTenantInfo().TenantID != targetAccountID {
+		return moerr.NewInternalErrorNoCtx("only sys can clone table to another account")
+	}
+	if err = checkBranchQuotaForAccount(
+		execCtx.reqCtx, ses, bh, targetAccountName, targetAccountID, 1,
+	); err != nil {
+		return err
 	}
 
 	oldDefault := ses.GetTxnCompileCtx().DefaultDatabase()
@@ -425,7 +437,13 @@ func dataBranchCreateDatabase(
 	}
 	stats.Add(&authStats)
 
-	if err = checkBranchQuota(execCtx.reqCtx, ses, bh, source.branchTableCount()); err != nil {
+	targetAccountName := ses.GetTenantInfo().Tenant
+	if stmt.ToAccountOpt != nil {
+		targetAccountName = stmt.ToAccountOpt.AccountName.String()
+	}
+	if err = checkBranchQuotaForAccount(
+		execCtx.reqCtx, ses, bh, targetAccountName, source.toAccountId, source.branchTableCount(),
+	); err != nil {
 		return
 	}
 
