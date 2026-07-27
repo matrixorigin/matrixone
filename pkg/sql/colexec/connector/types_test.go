@@ -179,6 +179,48 @@ func TestConnectorResetFallsBackToAbortWhenEndSignalCannotBeDelivered(t *testing
 	require.Same(t, process.ErrPipelineEndSignalDeliveryFailed, info)
 }
 
+func TestConnectorResetUndeliveredFallbackAbortWakesReceiver(t *testing.T) {
+	oldSignalSendTimeout := process.PipelineSignalSendTimeout
+	process.PipelineSignalSendTimeout = 10 * time.Millisecond
+	t.Cleanup(func() {
+		process.PipelineSignalSendTimeout = oldSignalSendTimeout
+	})
+
+	reg := process.NewPipelineEdge(1, 0)
+	reg.Ch2 <- process.NewPipelineSignalToDirectly(batch.EmptyBatch, nil, nil)
+
+	conn := &Connector{Reg: reg}
+	conn.Reset(nil, false, nil)
+
+	receiverCtx, cancelReceiver := context.WithCancel(context.Background())
+	defer cancelReceiver()
+	receiver := process.InitPipelineSignalReceiver(receiverCtx, []*process.WaitRegister{reg})
+
+	got, err := receiver.GetNextBatch(nil)
+	require.NoError(t, err)
+	require.Same(t, batch.EmptyBatch, got)
+
+	type result struct {
+		bat *batch.Batch
+		err error
+	}
+	resultCh := make(chan result, 1)
+	go func() {
+		got, err := receiver.GetNextBatch(nil)
+		resultCh <- result{bat: got, err: err}
+	}()
+
+	select {
+	case result := <-resultCh:
+		require.Nil(t, result.bat)
+		require.ErrorIs(t, result.err, process.ErrPipelineEndSignalDeliveryFailed)
+	case <-time.After(time.Second):
+		cancelReceiver()
+		<-resultCh
+		t.Fatal("receiver remained blocked after the fallback Abort failed to enter the full channel")
+	}
+}
+
 func TestConnectorResetUsesSharedTerminalSendBudget(t *testing.T) {
 	oldSignalSendTimeout := process.PipelineSignalSendTimeout
 	process.PipelineSignalSendTimeout = 200 * time.Millisecond

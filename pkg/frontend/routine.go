@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
@@ -568,9 +569,17 @@ func (rt *Routine) migrateConnectionFromWithContext(
 	defer rt.mc.endOperation()
 
 	ses := rt.getSession()
+	if resp == nil {
+		ses.userLevelLocksMigrated = true
+		return nil
+	}
 	if cause := context.Cause(operationCtx); cause != nil {
 		return cause
 	}
+	if states := function.UserLevelLocksForMigration(ses.proc); len(states) > 0 {
+		return moerr.NewInternalErrorNoCtx("cannot migrate connection while user-level locks are held")
+	}
+	resp.UserLevelLockReleaseSupported = true
 	resp.DB = ses.GetDatabaseName()
 	resp.LastAffectedRows = ses.GetLastAffectedRows()
 	for _, st := range ses.GetPrepareStmts() {
