@@ -93,3 +93,103 @@ func TestGroupConcatDistinctMergeError(t *testing.T) {
 	left.Free()
 	right.Free()
 }
+
+func TestGroupConcatMaxLen(t *testing.T) {
+	mp := mpool.MustNewZero()
+	info := multiAggInfo{
+		aggID:     90,
+		argTypes:  []types.Type{types.T_varchar.ToType()},
+		retType:   GroupConcatReturnType([]types.Type{types.T_varchar.ToType()}),
+		emptyNull: true,
+	}
+	exec := newGroupConcatExec(mp, info, ",").(*groupConcatExec)
+	require.NoError(t, exec.GroupGrow(1))
+	require.NoError(t, exec.SetExtraInformation(EncodeGroupConcatConfig("", 5), 0))
+
+	values := buildVarlenVec(t, mp, types.T_varchar.ToType(), []string{"aa", "bb", "cc"})
+	require.NoError(t, exec.BulkFill(0, []*vector.Vector{values}))
+
+	results, err := exec.Flush()
+	require.NoError(t, err)
+	require.Equal(t, "aabbc", string(results[0].GetBytesAt(0)))
+
+	values.Free(mp)
+	results[0].Free(mp)
+	exec.Free()
+	require.Equal(t, int64(0), mp.CurrNB())
+}
+
+func TestGroupConcatMaxLenCanTruncateSeparator(t *testing.T) {
+	mp := mpool.MustNewZero()
+	info := multiAggInfo{
+		aggID:     91,
+		argTypes:  []types.Type{types.T_varchar.ToType()},
+		retType:   GroupConcatReturnType([]types.Type{types.T_varchar.ToType()}),
+		emptyNull: true,
+	}
+	exec := newGroupConcatExec(mp, info, ",").(*groupConcatExec)
+	require.NoError(t, exec.GroupGrow(1))
+	require.NoError(t, exec.SetExtraInformation(EncodeGroupConcatConfig("--", 3), 0))
+
+	values := buildVarlenVec(t, mp, types.T_varchar.ToType(), []string{"aa", "bb"})
+	require.NoError(t, exec.BulkFill(0, []*vector.Vector{values}))
+
+	results, err := exec.Flush()
+	require.NoError(t, err)
+	require.Equal(t, "aa-", string(results[0].GetBytesAt(0)))
+
+	values.Free(mp)
+	results[0].Free(mp)
+	exec.Free()
+	require.Equal(t, int64(0), mp.CurrNB())
+}
+
+func TestGroupConcatMaxLenKeepsTextWellFormed(t *testing.T) {
+	mp := mpool.MustNewZero()
+	info := multiAggInfo{
+		aggID:     92,
+		argTypes:  []types.Type{types.T_varchar.ToType()},
+		retType:   GroupConcatReturnType([]types.Type{types.T_varchar.ToType()}),
+		emptyNull: true,
+	}
+	exec := newGroupConcatExec(mp, info, ",").(*groupConcatExec)
+	require.NoError(t, exec.GroupGrow(1))
+	require.NoError(t, exec.SetExtraInformation(EncodeGroupConcatConfig("", 4), 0))
+
+	values := buildVarlenVec(t, mp, types.T_varchar.ToType(), []string{"你好"})
+	require.NoError(t, exec.BulkFill(0, []*vector.Vector{values}))
+
+	results, err := exec.Flush()
+	require.NoError(t, err)
+	require.Equal(t, "你", string(results[0].GetBytesAt(0)))
+
+	values.Free(mp)
+	results[0].Free(mp)
+	exec.Free()
+	require.Equal(t, int64(0), mp.CurrNB())
+}
+
+func TestGroupConcatMaxLenStopsAfterTruncatedSeparator(t *testing.T) {
+	mp := mpool.MustNewZero()
+	info := multiAggInfo{
+		aggID:     93,
+		argTypes:  []types.Type{types.T_varchar.ToType()},
+		retType:   GroupConcatReturnType([]types.Type{types.T_varchar.ToType()}),
+		emptyNull: true,
+	}
+	exec := newGroupConcatExec(mp, info, ",").(*groupConcatExec)
+	require.NoError(t, exec.GroupGrow(1))
+	require.NoError(t, exec.SetExtraInformation(EncodeGroupConcatConfig("你好", 2), 0))
+
+	values := buildVarlenVec(t, mp, types.T_varchar.ToType(), []string{"a", "b"})
+	require.NoError(t, exec.BulkFill(0, []*vector.Vector{values}))
+
+	results, err := exec.Flush()
+	require.NoError(t, err)
+	require.Equal(t, "a", string(results[0].GetBytesAt(0)))
+
+	values.Free(mp)
+	results[0].Free(mp)
+	exec.Free()
+	require.Equal(t, int64(0), mp.CurrNB())
+}
