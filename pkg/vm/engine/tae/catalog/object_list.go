@@ -15,6 +15,7 @@
 package catalog
 
 import (
+	"bytes"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -40,71 +41,56 @@ const (
 )
 
 /*
+ObjectList keeps entries in six contiguous groups:
 
-Denote entries with prevVersion != nil as D entries, which means DeletedAt is not empty, and other entries as C entries.
-   a. prevVersion == nil && nextVersion == nil: serving C entries (4, 10, 11, 15)
-   b. prevVersion == nil && nextVersion != nil: C entries having dropping intent (1, 2, 3, 8, 9)
-   c. prevVersion != nil && nextVersion == nil: D entries, the couterpart set of category b. (4, 5, 6, 13, 14)
-   d. prevVersion != nil && nextVersion != nil: impossible
+ 1. appendable serving C entries
+ 2. appendable C entries with a D counterpart
+ 3. appendable D entries
+ 4. non-appendable serving C entries
+ 5. non-appendable C entries with a D counterpart
+ 6. non-appendable D entries
 
-ac - appendable C entry
-ad - appendable D entry
-nc - non-appendable C entry
-nd - non-appendable D entry
+Within each group entries are ordered by their entry commit timestamp
+(CreatedAt for C entries and DeletedAt for D entries), then by object name.
+Uncommitted entries therefore sit at the end of their own group instead of in
+one global transaction-active zone.
 
-              +------------+
-            +--+--------+  |
-         +--+--+-----+  |  |
-         |  |  |     |  |  |
-         1  2  3  4  5  6  7  8  9 10 11    12 13 14 15
-        ac ac ac ac ad ad ad nc nc ac ac  [ ac nd nd nc:TxnActiveZone]
-                              |  |              |  |
-                              +--+--------------+  |
-                                 +-----------------+
-
-ObjectList properties:
-0. Entries are sorted by max(CreatedAt, DeletedAt). For txn active entries, sorted by objectName further.
-1. Elements are splitted into two groups by `IsCommitted`: [committed entries...] [txn active entries]
-2. Category-a + Category-c produce the same result as the ObjectList under the previous implementation(modified inplace & sorted by called time of CreateObject), that's what we want in RecurLoop.
-
-
-Other examples of object states:
-Txn Active Object ( LastestNode.Txn != nil ) (12, 13, 14, 15)
-- Creating Object ( CreatedAt = MaxU64, DeletedAt = 0 ) (12, 15)
-    - Active: CreateNode.Prepare = MaxU64
-    - InQueue: CreateNode.Prepare != MaxU64 (parepare ts is allocated in the queue)
-- Deleting Object ( 0 < CreatedAt < MaxU64, DeletedAt = MaxU64 ) (13, 14)
-    - Active: DeleteNode.Prepare = MaxU64
-    - InQueue: DeleteNode.Prepare != MaxU64
-
-Committed Object ( LastestNode.Txn == nil ) && ( 0 < CreatedAt < MaxU64, 0 <= DeletedAt < MaxU64 ) (1 - 11)
-
+The C and D entries for a dropped object remain separate tree items. Callers
+that need only the latest version must skip C entries having a D counterpart.
 */
 
 type ObjectList struct {
 	isTombstone bool
 	sync.RWMutex
-	maxTs_objectID map[objectio.ObjectId]types.TS
+	objectID_index map[objectio.ObjectId]objectListIndex
 	tree           atomic.Pointer[btree.BTreeG[*ObjectEntry]]
 }
 
-func NewObjectList(isTombstone bool) *ObjectList {
+type objectListIndex struct {
+	ts    types.TS
+	group ObjectListGroup
+}
+
+func newObjectEntryTree() *btree.BTreeG[*ObjectEntry] {
 	opts := btree.Options{
 		Degree:  64,
 		NoLocks: true,
 	}
-	tree := btree.NewBTreeGOptions((*ObjectEntry).Less, opts)
+	return btree.NewBTreeGOptions((*ObjectEntry).Less, opts)
+}
+
+func NewObjectList(isTombstone bool) *ObjectList {
 	list := &ObjectList{
-		maxTs_objectID: make(map[types.Objectid]types.TS),
+		objectID_index: make(map[types.Objectid]objectListIndex),
 		isTombstone:    isTombstone,
 	}
-	list.tree.Store(tree)
+	list.tree.Store(newObjectEntryTree())
 	return list
 }
 
 //// read part
 
-func getObjectEntry(it btree.IterG[*ObjectEntry], pivot *ObjectEntry) *ObjectEntry {
+func getObjectEntry(it *btree.IterG[*ObjectEntry], pivot *ObjectEntry) *ObjectEntry {
 	ok := it.Seek(pivot)
 	if !ok {
 		logutil.Errorf("object not found seek: %s", pivot.ID().ShortStringEx())
@@ -120,31 +106,28 @@ func getObjectEntry(it btree.IterG[*ObjectEntry], pivot *ObjectEntry) *ObjectEnt
 
 func (l *ObjectList) getNodes(id *objectio.ObjectId, latestOnly bool) []*ObjectEntry {
 	l.RLock()
-	ts, ok := l.maxTs_objectID[*id]
+	index, ok := l.objectID_index[*id]
 	tree := l.tree.Load()
 	l.RUnlock()
 	if !ok {
 		return nil
 	}
-	return l.getNodesSnap(tree, ts, id, latestOnly)
+	return l.getNodesSnap(tree, index, id, latestOnly)
 }
 
 // getNodes returns the create and delete (if exists) entries of the object with the given objectID
 func (l *ObjectList) getNodesSnap(
 	tree *btree.BTreeG[*ObjectEntry],
-	ts types.TS,
+	index objectListIndex,
 	id *objectio.ObjectId,
 	latestOnly bool,
 ) []*ObjectEntry {
 	it := tree.Iter()
 	defer it.Release()
 
-	key := &ObjectEntry{
-		EntryMVCCNode:  EntryMVCCNode{DeletedAt: ts},
-		ObjectMVCCNode: ObjectMVCCNode{*objectio.NewObjectStatsWithObjectID(id, true, false, false)},
-	}
+	key := makeObjectListKey(index.group, index.ts, id)
 
-	obj := getObjectEntry(it, key)
+	obj := getObjectEntry(&it, key)
 	if obj == nil {
 		return nil
 	}
@@ -184,10 +167,42 @@ func (l *ObjectList) GetObjectByID(objectID *objectio.ObjectId) (obj *ObjectEntr
 
 /// write part
 
-func (l *ObjectList) UpdateReplayTs(id *objectio.ObjectId, ts types.TS) {
+func (l *ObjectList) UpdateReplayTs(entry *ObjectEntry, ts types.TS) *ObjectEntry {
 	l.Lock()
 	defer l.Unlock()
-	l.maxTs_objectID[*id] = ts
+	oldIndex, ok := l.objectID_index[*entry.ID()]
+	if !ok {
+		panic("replay object index not found")
+	}
+	oldTree := l.tree.Load()
+	newTree := oldTree.Copy()
+	oldKey := makeObjectListKey(oldIndex.group, oldIndex.ts, entry.ID())
+	if _, deleted := newTree.Delete(oldKey); !deleted {
+		panic("replay object not found")
+	}
+
+	updated := entry
+	if err := updated.EntryMVCCNode.ApplyCommit(ts); err != nil {
+		panic(err)
+	}
+	if entry.IsDEntry() {
+		if _, deleted := newTree.Delete(entry.prevVersion); !deleted {
+			panic("replay object create entry not found")
+		}
+		newTree.Set(entry.prevVersion)
+	}
+	newTree.Set(updated)
+	if updated.objData != nil {
+		updated.objData.UpdateMeta(updated)
+	}
+	l.objectID_index[*entry.ID()] = objectListIndex{
+		ts:    updated.ObjectListCommitTS(),
+		group: updated.ObjectListGroup(),
+	}
+	if !l.tree.CompareAndSwap(oldTree, newTree) {
+		panic("concurrent mutation")
+	}
+	return updated
 }
 
 // 1. del\ins\updated should all belong to the same object
@@ -195,13 +210,13 @@ func (l *ObjectList) UpdateReplayTs(id *objectio.ObjectId, ts types.TS) {
 // 3. updated will be inserted into the tree, and the index map WON'T be updated. The Caller make sure the updated entry has the same sort key as the target entry.
 // 4. all operations are atomic from the view of the caller of modify
 func (l *ObjectList) modify(del, ins, updated *ObjectEntry) (deleted, replaced1, replaced2 bool) {
-	maxTs := ins.CreatedAt
-	if maxTs.LT(&ins.DeletedAt) {
-		maxTs = ins.DeletedAt
-	}
 	l.Lock()
 	defer l.Unlock()
-	l.maxTs_objectID[*ins.ID()] = maxTs
+	oldIndex, existed := l.objectID_index[*ins.ID()]
+	l.objectID_index[*ins.ID()] = objectListIndex{
+		ts:    ins.ObjectListCommitTS(),
+		group: ins.ObjectListGroup(),
+	}
 
 	oldTree := l.tree.Load()
 	newTree := oldTree.Copy()
@@ -211,6 +226,25 @@ func (l *ObjectList) modify(del, ins, updated *ObjectEntry) (deleted, replaced1,
 			panic("logic error")
 		}
 		_, deleted = newTree.Delete(del)
+	}
+	// The first D entry moves its C counterpart from the create-only group to
+	// the create-with-drop group. The old implementation shared one timestamp
+	// ordering for both forms; the grouped ordering requires an explicit move.
+	if existed &&
+		(oldIndex.group == ObjectListGroupAppendableCreate ||
+			oldIndex.group == ObjectListGroupNonAppendableCreate) &&
+		ins.IsDEntry() && ins.prevVersion != nil {
+		oldC := makeObjectListKey(oldIndex.group, oldIndex.ts, ins.ID())
+		newTree.Delete(oldC)
+		newTree.Set(ins.prevVersion)
+	}
+	// Rolling back a drop performs the inverse transition. Remove the
+	// create-with-drop counterpart before restoring the serving C entry.
+	if existed &&
+		(oldIndex.group == ObjectListGroupAppendableDrop ||
+			oldIndex.group == ObjectListGroupNonAppendableDrop) &&
+		!ins.HasDropIntent() && del != nil && del.prevVersion != nil {
+		newTree.Delete(del.prevVersion)
 	}
 	if updated != nil {
 		_, replaced2 = newTree.Set(updated)
@@ -297,16 +331,16 @@ func (l *ObjectList) UpdateObjectInfo(
 func (l *ObjectList) DeleteAllEntries(id *objectio.ObjectId) error {
 	l.Lock()
 	defer l.Unlock()
-	ts, ok := l.maxTs_objectID[*id]
+	index, ok := l.objectID_index[*id]
 	if !ok {
 		return nil
 	}
 	oldTree := l.tree.Load()
 	newTree := oldTree.Copy()
-	objs := l.getNodesSnap(newTree, ts, id, false)
+	objs := l.getNodesSnap(newTree, index, id, false)
 	for _, obj := range objs {
 		newTree.Delete(obj)
-		delete(l.maxTs_objectID, *obj.ID())
+		delete(l.objectID_index, *obj.ID())
 	}
 	ok = l.tree.CompareAndSwap(oldTree, newTree)
 	if !ok {
@@ -318,13 +352,13 @@ func (l *ObjectList) DeleteAllEntries(id *objectio.ObjectId) error {
 func (l *ObjectList) UpdateCreateTS(id *objectio.ObjectId, ts types.TS) (*ObjectEntry, error) {
 	l.Lock()
 	defer l.Unlock()
-	oldTS, ok := l.maxTs_objectID[*id]
+	oldIndex, ok := l.objectID_index[*id]
 	if !ok {
 		return nil, moerr.GetOkExpectedEOB()
 	}
 	oldTree := l.tree.Load()
 	newTree := oldTree.Copy()
-	nodes := l.getNodesSnap(newTree, oldTS, id, true)
+	nodes := l.getNodesSnap(newTree, oldIndex, id, true)
 	if len(nodes) == 0 {
 		return nil, moerr.GetOkExpectedEOB()
 	}
@@ -348,31 +382,36 @@ func (l *ObjectList) UpdateCreateTS(id *objectio.ObjectId, ts types.TS) (*Object
 		newTree.Delete(oldNode)
 		newTree.Set(newNode)
 	}
-	maxTS := newNode.CreatedAt
-	if maxTS.LT(&newNode.DeletedAt) {
-		maxTS = newNode.DeletedAt
+	l.objectID_index[*id] = objectListIndex{
+		ts:    newNode.ObjectListCommitTS(),
+		group: newNode.ObjectListGroup(),
 	}
-	l.maxTs_objectID[*id] = maxTS
 	if !l.tree.CompareAndSwap(oldTree, newTree) {
 		panic("concurrent mutation")
 	}
 	return newNode, nil
 }
 
-// WaitUntilCommitted waits for entries in txn active zone with prepareTS > ts to move to committed zone.
-// As CreateObject will be called in txn queue, when WaitUntilCommitted returns, all creating objects in txn active zone are invisible to ts, because they are created after ts.
+// WaitUntilCommitted checks the uncommitted tail of every group. When it
+// returns, all creating objects that can be visible to ts have committed.
 func (l *ObjectList) WaitUntilCommitted(ts types.TS) {
 	it := l.tree.Load().Iter()
-	for ok := it.Last(); ok; ok = it.Prev() {
-		obj := it.Item()
-		if obj.IsCommitted() {
-			break
-		}
-		if needWait, txn := obj.CreateNode.NeedWaitCommitting(ts); needWait {
-			txn.GetTxnState(true)
-		}
-		if needWait, txn := obj.DeleteNode.NeedWaitCommitting(ts); needWait {
-			txn.GetTxnState(true)
+	defer it.Release()
+	for group := ObjectListGroupAppendableCreate; group <= ObjectListGroupNonAppendableDrop; group++ {
+		for ok := SeekObjectListGroup(&it, group, txnif.UncommitTS); ok; ok = it.Next() {
+			obj := it.Item()
+			if obj.ObjectListGroup() != group {
+				break
+			}
+			if obj.IsCommitted() {
+				continue
+			}
+			if needWait, txn := obj.CreateNode.NeedWaitCommitting(ts); needWait {
+				txn.GetTxnState(true)
+			}
+			if needWait, txn := obj.DeleteNode.NeedWaitCommitting(ts); needWait {
+				txn.GetTxnState(true)
+			}
 		}
 	}
 }
@@ -384,11 +423,19 @@ var _iterPool = sync.Pool{New: func() any {
 }}
 
 type VisibleCommittedObjectIt struct {
-	iter        btree.IterG[*ObjectEntry]
+	iters       [4]btree.IterG[*ObjectEntry]
+	items       [4]*ObjectEntry
 	curr        *ObjectEntry
 	txn         txnif.TxnReader
 	isMockTxn   bool
-	firstCalled bool
+	initialized bool
+}
+
+var visibleObjectGroups = [...]ObjectListGroup{
+	ObjectListGroupAppendableCreate,
+	ObjectListGroupAppendableCreateWithDrop,
+	ObjectListGroupNonAppendableCreate,
+	ObjectListGroupNonAppendableCreateWithDrop,
 }
 
 // MakeVisibleCommittedObjectIt returns an iterator that iterates over committed objects visible to the given txn
@@ -399,48 +446,73 @@ type VisibleCommittedObjectIt struct {
 func (l *ObjectList) MakeVisibleCommittedObjectIt(txn txnif.TxnReader) *VisibleCommittedObjectIt {
 	it := _iterPool.Get().(*VisibleCommittedObjectIt)
 	tree := l.tree.Load()
-	it.iter = tree.Iter()
+	for i := range it.iters {
+		it.iters[i] = tree.Iter()
+	}
 	it.txn = txn
 	it.isMockTxn = len(txn.GetCtx()) == 0
 	return it
 }
 
-func (it *VisibleCommittedObjectIt) Next() bool {
+func (it *VisibleCommittedObjectIt) advance(groupIndex int, first bool) {
+	group := visibleObjectGroups[groupIndex]
+	iter := &it.iters[groupIndex]
 	var ok bool
+	if first {
+		ok = SeekObjectListGroupReverse(iter, group, txnif.UncommitTS)
+	} else {
+		ok = iter.Prev()
+	}
 	for {
-		if !it.firstCalled {
-			ok = it.iter.Last()
-			it.firstCalled = true
-		} else {
-			ok = it.iter.Prev()
-		}
 		if !ok {
-			return false
+			it.items[groupIndex] = nil
+			return
 		}
-		entry := it.iter.Item()
-
+		entry := iter.Item()
+		if entry.ObjectListGroup() != group {
+			it.items[groupIndex] = nil
+			return
+		}
 		if it.isMockTxn {
-			// mockTxn can see all objects
-			if entry.IsDEntry() || entry.IsCreating() { // exclude D entries & creating C entries
-				continue
+			if !entry.IsCreating() && !entry.HasDCounterpart() {
+				it.items[groupIndex] = entry
+				return
 			}
-			if !entry.HasDCounterpart() { // pick only serving committed C entries
-				it.curr = entry
-				return true
-			}
-			// ignore being dropped C entries
 		} else if entry.IsVisible(it.txn) {
-			if entry.IsDEntry() { // exclude D entries
-				continue
-			}
 			if !entry.HasDCounterpart() || !entry.GetNextVersion().IsVisible(it.txn) {
-				// 1. serving committed C entries or creating C entry created by this txn
-				// 2. C entried being dropped by other invisible txn
-				it.curr = entry
-				return true
+				it.items[groupIndex] = entry
+				return
 			}
+		}
+		ok = iter.Prev()
+	}
+}
+
+func (it *VisibleCommittedObjectIt) Next() bool {
+	if !it.initialized {
+		for i := range it.iters {
+			it.advance(i, true)
+		}
+		it.initialized = true
+	}
+	selected := -1
+	for i, item := range it.items {
+		if item == nil {
+			continue
+		}
+		if selected == -1 ||
+			it.items[selected].CreatedAt.LT(&item.CreatedAt) ||
+			(it.items[selected].CreatedAt.EQ(&item.CreatedAt) &&
+				bytes.Compare(it.items[selected].ObjectShortName()[:], item.ObjectShortName()[:]) < 0) {
+			selected = i
 		}
 	}
+	if selected == -1 {
+		return false
+	}
+	it.curr = it.items[selected]
+	it.advance(selected, false)
+	return true
 }
 
 func (it *VisibleCommittedObjectIt) Item() *ObjectEntry {
@@ -452,10 +524,13 @@ func (it *VisibleCommittedObjectIt) Release() {
 		logutil.Errorf("attempt to put iter %p into pool twice", it)
 		return
 	}
-	it.iter.Release()
+	for i := range it.iters {
+		it.iters[i].Release()
+		it.items[i] = nil
+	}
 	it.curr = nil
 	it.txn = nil
-	it.firstCalled = false
+	it.initialized = false
 	it.isMockTxn = false
 	_iterPool.Put(it)
 }
@@ -473,9 +548,82 @@ func (l *ObjectList) Show() string {
 	for it.Next() {
 		ret += " " + it.Item().StringWithLevel(common.PPL2) + "\n"
 	}
-	ret += "maxTs_objectID:\n"
-	for id, ts := range l.maxTs_objectID {
-		ret += fmt.Sprintf(" %s: %s\n", id.ShortStringEx(), ts.ToString())
+	ret += "objectID_index:\n"
+	for id, index := range l.objectID_index {
+		ret += fmt.Sprintf(" %s: %s-%d\n", id.ShortStringEx(), index.ts.ToString(), index.group)
 	}
 	return ret
+}
+
+func makeObjectListKey(group ObjectListGroup, ts types.TS, id *objectio.ObjectId) *ObjectEntry {
+	appendable := group < ObjectListGroupNonAppendableCreate
+	key := &ObjectEntry{
+		EntryMVCCNode: EntryMVCCNode{CreatedAt: ts},
+		ObjectMVCCNode: ObjectMVCCNode{
+			ObjectStats: *objectio.NewObjectStatsWithObjectID(id, appendable, false, false),
+		},
+	}
+	switch group {
+	case ObjectListGroupAppendableCreateWithDrop, ObjectListGroupNonAppendableCreateWithDrop:
+		key.nextVersion = &ObjectEntry{}
+	case ObjectListGroupAppendableDrop, ObjectListGroupNonAppendableDrop:
+		key.CreatedAt = types.TS{}
+		key.DeletedAt = ts
+		key.prevVersion = &ObjectEntry{}
+	}
+	return key
+}
+
+func SeekObjectListGroup(
+	it *btree.IterG[*ObjectEntry],
+	group ObjectListGroup,
+	ts types.TS,
+) bool {
+	var minID objectio.ObjectId
+	if !it.Seek(makeObjectListKey(group, ts, &minID)) {
+		return false
+	}
+	return it.Item().ObjectListGroup() == group
+}
+
+func SeekObjectListGroupBefore(
+	it *btree.IterG[*ObjectEntry],
+	group ObjectListGroup,
+	ts types.TS,
+) bool {
+	var minID objectio.ObjectId
+	if it.Seek(makeObjectListKey(group, ts, &minID)) {
+		if !it.Prev() {
+			return false
+		}
+	} else if !it.Last() {
+		return false
+	}
+	return it.Item().ObjectListGroup() == group
+}
+
+func SeekObjectListGroupReverse(
+	it *btree.IterG[*ObjectEntry],
+	group ObjectListGroup,
+	ts types.TS,
+) bool {
+	var maxID objectio.ObjectId
+	for i := range maxID {
+		maxID[i] = 0xff
+	}
+	if it.Seek(makeObjectListKey(group, ts, &maxID)) {
+		item := it.Item()
+		if item.ObjectListGroup() == group {
+			commitTS := item.ObjectListCommitTS()
+			if commitTS.LE(&ts) {
+				return true
+			}
+		}
+		if !it.Prev() {
+			return false
+		}
+	} else if !it.Last() {
+		return false
+	}
+	return it.Item().ObjectListGroup() == group
 }
