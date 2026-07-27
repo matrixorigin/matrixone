@@ -20,19 +20,6 @@ import (
 )
 
 func comparisonTypeCastRule(left, right types.Type) (bool, types.Type, types.Type) {
-	// MySQL compares a string and a numeric value as REAL, rather than first
-	// truncating the string to the integer type of its counterpart. Keep this
-	// rule local to comparisons: fixedTypeCastRule1 is also used by arithmetic
-	// operators, whose coercion rules are different.
-	leftIsString := left.Oid.IsMySQLString()
-	rightIsString := right.Oid.IsMySQLString()
-	leftIsNumeric := left.IsNumeric() || left.Oid == types.T_bool
-	rightIsNumeric := right.IsNumeric() || right.Oid == types.T_bool
-	if (leftIsString && rightIsNumeric) || (rightIsString && leftIsNumeric) {
-		target := types.T_float64.ToType()
-		return true, target, target
-	}
-
 	return fixedTypeCastRule1(left, right)
 }
 

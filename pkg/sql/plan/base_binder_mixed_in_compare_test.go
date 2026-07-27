@@ -85,3 +85,46 @@ func TestMixedStringNumericInConstantFoldsToTrue(t *testing.T) {
 	require.True(t, ok)
 	require.True(t, result.Bval)
 }
+
+func TestNumericInStringLiteralKeepsExactNumericComparison(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		column   types.T
+		value    string
+		expected types.T
+	}{
+		{
+			name:     "int64",
+			column:   types.T_int64,
+			value:    "9223372036854775806",
+			expected: types.T_int64,
+		},
+		{
+			name:     "decimal256",
+			column:   types.T_decimal256,
+			value:    "9999999999999999999999999999999999999998",
+			expected: types.T_decimal256,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			left := &planpb.Expr{
+				Typ:  planpb.Type{Id: int32(tc.column)},
+				Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: 0}},
+			}
+			rightList := &planpb.Expr{
+				Expr: &planpb.Expr_List{List: &planpb.ExprList{List: []*planpb.Expr{
+					makePlan2StringConstExprWithType(tc.value),
+				}}},
+			}
+
+			expr, err := BindFuncExprImplByPlanExpr(context.Background(), "in", []*planpb.Expr{left, rightList})
+			require.NoError(t, err)
+			comparison := expr.GetF()
+			require.NotNil(t, comparison)
+			require.Equal(t, "=", comparison.Func.GetObjName())
+			require.Len(t, comparison.Args, 2)
+			require.Equal(t, int32(tc.expected), comparison.Args[0].Typ.Id)
+			require.Equal(t, int32(tc.expected), comparison.Args[1].Typ.Id)
+		})
+	}
+}
