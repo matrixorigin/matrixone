@@ -6170,6 +6170,9 @@ func checkCCPRTableBeforeDrop(c *Compile, tableID uint64) (bool, error) {
 
 	res, err := c.runSqlWithResult(querySql, int32(catalog.System_Account))
 	if err != nil {
+		if isMissingCCPRMetadataTable(err, catalog.MO_CCPR_TABLES) {
+			return true, nil
+		}
 		return false, err
 	}
 	defer res.Close()
@@ -6259,6 +6262,9 @@ func checkCCPRDbBeforeDrop(c *Compile, dbID uint64) (bool, error) {
 
 	res, err := c.runSqlWithResult(querySql, int32(catalog.System_Account))
 	if err != nil {
+		if isMissingCCPRMetadataTable(err, catalog.MO_CCPR_DBS) {
+			return true, nil
+		}
 		return false, err
 	}
 	defer res.Close()
@@ -6330,4 +6336,15 @@ func checkCCPRDbBeforeDrop(c *Compile, dbID uint64) (bool, error) {
 
 	// Task exists and is not dropped, deny deletion
 	return false, nil
+}
+
+func isMissingCCPRMetadataTable(err error, tableName string) bool {
+	if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
+		return true
+	}
+	if !moerr.IsMoErrCode(err, moerr.ErrParseError) {
+		return false
+	}
+	// Query planning currently reports a missing resolved table as ErrParseError.
+	return strings.Contains(err.Error(), fmt.Sprintf("table %q does not exist", tableName))
 }
