@@ -112,6 +112,7 @@ func TestBuildTableInfoListWhereClauseUsesRelationKindForInternalObjects(t *test
 	systemCatalog := buildTableInfoListWhereClause(catalog.MO_CATALOG, "", 0)
 	require.Contains(t, systemCatalog, "relname != '"+catalog.MOAutoIncrTable+"'")
 	require.Contains(t, systemCatalog, "relname != '"+catalog.MO_ACCOUNT_LOCK+"'")
+	require.Contains(t, systemCatalog, `relname not like '\\_\\_mo\\_index\\_%' escape '\\'`)
 }
 
 func TestQuoteIdentifierForSQLEscapesBackticks(t *testing.T) {

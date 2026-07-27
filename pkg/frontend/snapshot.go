@@ -1968,10 +1968,13 @@ func buildTableInfoListWhereClause(dbName string, tblName string, accountId uint
 		accountClause,
 	)
 	if dbName == moCatalog {
+		indexTablePattern := quoteSQLLikePattern(catalog.IndexTableNamePrefix)
 		whereClause += fmt.Sprintf(
-			" and relname != %s and relname != %s",
+			" and relname != %s and relname != %s and relname not like %s escape %s",
 			quoteSQLStringLiteral(catalog.MOAutoIncrTable),
 			quoteSQLStringLiteral(catalog.MO_ACCOUNT_LOCK),
+			indexTablePattern,
+			quoteSQLStringLiteral(`\`),
 		)
 	}
 	if len(tblName) > 0 {
@@ -1979,6 +1982,15 @@ func buildTableInfoListWhereClause(dbName string, tblName string, accountId uint
 	}
 	whereClause += fmt.Sprintf(" and relkind != %s", quoteSQLStringLiteral(catalog.SystemSequenceRel))
 	return whereClause
+}
+
+func quoteSQLLikePattern(literalPrefix string) string {
+	replacer := strings.NewReplacer(
+		`\`, `\\`,
+		`%`, `\%`,
+		`_`, `\_`,
+	)
+	return quoteSQLStringLiteral(replacer.Replace(literalPrefix) + "%")
 }
 
 func getTableInfos(

@@ -40,9 +40,11 @@ func TestIssue26121DatabaseOperationsKeepOrdinaryInternalLookingTables(t *testin
 		execSQLRequire(t, ctx, db, "set role moadmin")
 
 		const (
-			sourceDB = "issue_26121_source"
-			branchDB = "issue_26121_branch"
-			cloneDB  = "issue_26121_clone"
+			sourceDB     = "issue_26121_source"
+			branchDB     = "issue_26121_branch"
+			cloneDB      = "issue_26121_clone"
+			restoreDB    = "issue_26121_after_snapshot"
+			snapshotName = "issue_26121_account_snapshot"
 		)
 		deleteCases := []struct {
 			dbName    string
@@ -52,7 +54,7 @@ func TestIssue26121DatabaseOperationsKeepOrdinaryInternalLookingTables(t *testin
 			{dbName: "issue_26121_delete_lock", tableName: "__mo_account_lock"},
 			{dbName: "issue_26121_delete_auto", tableName: "mo_increment_columns"},
 		}
-		cleanupDBs := []string{branchDB, cloneDB, sourceDB}
+		cleanupDBs := []string{branchDB, cloneDB, sourceDB, restoreDB}
 		for _, tc := range deleteCases {
 			cleanupDBs = append(cleanupDBs, tc.dbName)
 		}
@@ -66,6 +68,18 @@ func TestIssue26121DatabaseOperationsKeepOrdinaryInternalLookingTables(t *testin
 				execSQLMaybe(t, cleanupCtx, db, fmt.Sprintf("drop database if exists `%s`", name))
 			}
 		}()
+
+		t.Run("account restore skips bootstrap index tables", func(t *testing.T) {
+			execSQLRequire(t, ctx, db, "create snapshot `"+snapshotName+"` for account sys")
+			execSQLRequire(t, ctx, db, "create database `"+restoreDB+"`")
+			execSQLRequire(t, ctx, db, "restore account sys {snapshot=\""+snapshotName+"\"}")
+
+			var count int
+			require.NoError(t, db.QueryRowContext(ctx,
+				"select count(*) from mo_catalog.mo_database where datname = ?", restoreDB).Scan(&count))
+			require.Zero(t, count)
+			execSQLRequire(t, ctx, db, "drop snapshot `"+snapshotName+"`")
+		})
 
 		t.Run("database copies preserve ordinary tables", func(t *testing.T) {
 			execSQLRequire(t, ctx, db, "create database `"+sourceDB+"`")
