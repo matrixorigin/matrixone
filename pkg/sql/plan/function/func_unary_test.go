@@ -4163,8 +4163,8 @@ func TestStringTimeExtract(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	inputs := []FunctionTestInput{
 		NewFunctionTestInput(types.T_varchar.ToType(),
-			[]string{"12:30:45", "272:59:59", "2024-12-20 15:30:45", "invalid", ""},
-			[]bool{false, false, false, false, false}),
+			[]string{"12:30:45", "272:59:59", "2024-12-20 15:30:45", "2024-12-20", "invalid", ""},
+			[]bool{false, false, false, false, false, false}),
 	}
 
 	testCases := []struct {
@@ -4175,19 +4175,19 @@ func TestStringTimeExtract(t *testing.T) {
 		{
 			name: "hour",
 			expect: NewFunctionTestResult(types.T_uint32.ToType(), false,
-				[]uint32{12, 272, 15, 0, 0}, []bool{false, false, false, true, true}),
+				[]uint32{12, 272, 15, 0, 0, 0}, []bool{false, false, false, false, true, true}),
 			fn: StringToHour,
 		},
 		{
 			name: "minute",
 			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
-				[]uint8{30, 59, 30, 0, 0}, []bool{false, false, false, true, true}),
+				[]uint8{30, 59, 30, 0, 0, 0}, []bool{false, false, false, false, true, true}),
 			fn: StringToMinute,
 		},
 		{
 			name: "second",
 			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
-				[]uint8{45, 59, 45, 0, 0}, []bool{false, false, false, true, true}),
+				[]uint8{45, 59, 45, 0, 0, 0}, []bool{false, false, false, false, true, true}),
 			fn: StringToSecond,
 		},
 	}
@@ -4200,19 +4200,114 @@ func TestStringTimeExtract(t *testing.T) {
 		})
 	}
 
-	for _, tc := range []struct {
+}
+
+func TestStringTimeExtractTomorrowDatetime(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	tomorrow := types.Today(time.UTC) + 1
+	input := tomorrow.String() + " 01:02:03"
+
+	testCases := []struct {
+		name   string
+		expect FunctionTestResult
+		fn     fEvalFn
+	}{
+		{
+			name:   "hour",
+			expect: NewFunctionTestResult(types.T_uint32.ToType(), false, []uint32{1}, []bool{false}),
+			fn:     StringToHour,
+		},
+		{
+			name:   "minute",
+			expect: NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{2}, []bool{false}),
+			fn:     StringToMinute,
+		},
+		{
+			name:   "second",
+			expect: NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{3}, []bool{false}),
+			fn:     StringToSecond,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			inputs := []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{input}, []bool{false}),
+			}
+			tcc := NewFunctionTestCase(proc, inputs, tc.expect, tc.fn)
+			succeed, info := tcc.Run()
+			require.True(t, succeed, info)
+		})
+	}
+}
+
+func TestStringTimeExtractRegisteredOverloads(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	inputValues := []string{"12:30:45", "272:59:59", "2024-12-20 15:30:45", "2024-12-20", "invalid", ""}
+	wantNulls := []bool{false, false, false, false, true, true}
+
+	typeCases := []types.T{types.T_varchar, types.T_char, types.T_text}
+	functionCases := []struct {
 		name       string
 		returnType types.T
+		hours      []uint32
+		parts      []uint8
 	}{
-		{name: "hour", returnType: types.T_uint32},
-		{name: "minute", returnType: types.T_uint8},
-		{name: "second", returnType: types.T_uint8},
-	} {
-		t.Run("registered_"+tc.name, func(t *testing.T) {
-			fn, err := GetFunctionByName(proc.Ctx, tc.name, []types.Type{types.T_varchar.ToType()})
-			require.NoError(t, err)
-			require.Equal(t, tc.returnType, fn.GetReturnType().Oid)
-		})
+		{name: "hour", returnType: types.T_uint32, hours: []uint32{12, 272, 15, 0, 0, 0}},
+		{name: "minute", returnType: types.T_uint8, parts: []uint8{30, 59, 30, 0, 0, 0}},
+		{name: "second", returnType: types.T_uint8, parts: []uint8{45, 59, 45, 0, 0, 0}},
+	}
+
+	for _, inputType := range typeCases {
+		for _, functionCase := range functionCases {
+			t.Run(functionCase.name+"/"+inputType.String(), func(t *testing.T) {
+				input := newVectorByType(proc.Mp(), inputType.ToType(), inputValues, nil)
+				defer input.Free(proc.Mp())
+
+				fn, err := GetFunctionByName(proc.Ctx, functionCase.name, []types.Type{inputType.ToType()})
+				require.NoError(t, err)
+				require.Equal(t, functionCase.returnType, fn.GetReturnType().Oid)
+
+				out, err := RunFunctionDirectly(proc, fn.GetEncodedOverloadID(), []*vector.Vector{input}, len(inputValues))
+				require.NoError(t, err)
+				defer out.Free(proc.Mp())
+
+				for i, wantNull := range wantNulls {
+					require.Equal(t, wantNull, out.IsNull(uint64(i)))
+				}
+				switch functionCase.returnType {
+				case types.T_uint32:
+					require.Equal(t, functionCase.hours, vector.MustFixedColWithTypeCheck[uint32](out))
+				case types.T_uint8:
+					require.Equal(t, functionCase.parts, vector.MustFixedColWithTypeCheck[uint8](out))
+				}
+			})
+		}
+	}
+}
+
+func TestStringTimeExtractSelectList(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	fcTC := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"12:30:45", "invalid"}, []bool{false, false}),
+		},
+		NewFunctionTestResult(types.T_uint32.ToType(), false, nil, nil),
+		StringToHour)
+
+	require.NoError(t, fcTC.result.PreExtendAndReset(fcTC.fnLength))
+	require.NoError(t, fcTC.fn(fcTC.parameters, fcTC.result, fcTC.proc, fcTC.fnLength,
+		&FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}}))
+	resultVec := fcTC.result.GetResultVector()
+	require.Equal(t, uint32(12), vector.GetFixedAtNoTypeCheck[uint32](resultVec, 0))
+	require.True(t, resultVec.IsNull(1))
+
+	require.NoError(t, fcTC.result.PreExtendAndReset(fcTC.fnLength))
+	require.NoError(t, fcTC.fn(fcTC.parameters, fcTC.result, fcTC.proc, fcTC.fnLength,
+		&FunctionSelectList{AllNull: true}))
+	resultVec = fcTC.result.GetResultVector()
+	for i := 0; i < fcTC.fnLength; i++ {
+		require.True(t, resultVec.IsNull(uint64(i)))
 	}
 }
 

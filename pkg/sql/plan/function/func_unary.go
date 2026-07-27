@@ -4640,7 +4640,7 @@ func timeStringToFixedWithNullOnError[T types.FixedSizeTExceptStrType](
 	result vector.FunctionResultWrapper,
 	length int,
 	selectList *FunctionSelectList,
-	fn func(types.Time) T,
+	fn func(hour uint32, minute, second uint8) T,
 ) error {
 	strParam := vector.GenerateFunctionStrParameter(ivecs[0])
 	rs := vector.MustFunctionResult[T](result)
@@ -4663,7 +4663,16 @@ func timeStringToFixedWithNullOnError[T types.FixedSizeTExceptStrType](
 			continue
 		}
 
-		timeVal, err := types.ParseTime(functionUtil.QuickBytesToStr(strVal), 6)
+		str := functionUtil.QuickBytesToStr(strVal)
+		if dt, err := types.ParseDatetime(str, 6); err == nil {
+			hour, minute, second := dt.Clock()
+			if err := rs.Append(fn(uint32(hour), uint8(minute), uint8(second)), false); err != nil {
+				return err
+			}
+			continue
+		}
+
+		timeVal, err := types.ParseTime(str, 6)
 		if err != nil {
 			if err := rs.Append(zero, true); err != nil {
 				return err
@@ -4671,7 +4680,8 @@ func timeStringToFixedWithNullOnError[T types.FixedSizeTExceptStrType](
 			continue
 		}
 
-		if err := rs.Append(fn(timeVal), false); err != nil {
+		hour, minute, second, _, _ := timeVal.ClockFormat()
+		if err := rs.Append(fn(uint32(hour), minute, second), false); err != nil {
 			return err
 		}
 	}
@@ -4679,23 +4689,20 @@ func timeStringToFixedWithNullOnError[T types.FixedSizeTExceptStrType](
 }
 
 func StringToHour(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
-	return timeStringToFixedWithNullOnError(ivecs, result, length, selectList, func(v types.Time) uint32 {
-		hour, _, _, _, _ := v.ClockFormat()
-		return uint32(hour)
+	return timeStringToFixedWithNullOnError(ivecs, result, length, selectList, func(hour uint32, _ uint8, _ uint8) uint32 {
+		return hour
 	})
 }
 
 func StringToMinute(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
-	return timeStringToFixedWithNullOnError(ivecs, result, length, selectList, func(v types.Time) uint8 {
-		_, minute, _, _, _ := v.ClockFormat()
-		return uint8(minute)
+	return timeStringToFixedWithNullOnError(ivecs, result, length, selectList, func(_ uint32, minute uint8, _ uint8) uint8 {
+		return minute
 	})
 }
 
 func StringToSecond(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
-	return timeStringToFixedWithNullOnError(ivecs, result, length, selectList, func(v types.Time) uint8 {
-		_, _, second, _, _ := v.ClockFormat()
-		return uint8(second)
+	return timeStringToFixedWithNullOnError(ivecs, result, length, selectList, func(_ uint32, _ uint8, second uint8) uint8 {
+		return second
 	})
 }
 

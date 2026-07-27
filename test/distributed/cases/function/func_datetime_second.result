@@ -62,3 +62,7 @@ SECOND(CAST('2024-12-20 15:30:45' AS VARCHAR)) AS varchar_datetime_second,
 SECOND(CAST(NULL AS VARCHAR)) AS varchar_null_second;
 ➤ varchar_second[-6,8,0]  ¦  varchar_extended_second[-6,8,0]  ¦  varchar_datetime_second[-6,8,0]  ¦  varchar_null_second[-6,8,0]  𝄀
 45  ¦  59  ¦  45  ¦  null
+SELECT SECOND('2024-12-20') AS date_string_second,
+SECOND(CONCAT(DATE_ADD(CURRENT_DATE, INTERVAL 1 DAY), ' 01:02:03')) AS tomorrow_datetime_second;
+➤ date_string_second[-6,8,0]  ¦  tomorrow_datetime_second[-6,8,0]  𝄀
+0  ¦  3

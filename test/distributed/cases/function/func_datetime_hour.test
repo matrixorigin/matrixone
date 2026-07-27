@@ -49,3 +49,7 @@ SELECT HOUR(CAST('12:30:00' AS VARCHAR)) AS varchar_hour,
        HOUR(CAST('272:59:59' AS VARCHAR)) AS varchar_extended_hour,
        HOUR(CAST('2024-12-20 15:30:45' AS VARCHAR)) AS varchar_datetime_hour,
        HOUR(CAST(NULL AS VARCHAR)) AS varchar_null_hour;
+
+-- DATE and tomorrow DATETIME strings must not be converted through DATETIME.ToTime.
+SELECT HOUR('2024-12-20') AS date_string_hour,
+       HOUR(CONCAT(DATE_ADD(CURRENT_DATE, INTERVAL 1 DAY), ' 01:02:03')) AS tomorrow_datetime_hour;
