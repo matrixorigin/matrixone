@@ -3515,11 +3515,13 @@ func TestAggregateArgumentScalarSubqueryFlattenedBeforeOrderedGroupConcat(t *tes
 		require.False(t, hasSubquery(&plan.Expr{
 			Expr: &plan.Expr_F{F: groupConcat},
 		}), "GROUP_CONCAT contains an executable Expr_Sub")
-		require.Len(t, groupConcat.Args, 3)
-		require.True(t, strings.HasPrefix(
-			groupConcat.Args[2].GetLit().GetSval(),
-			groupConcatOrderConfigMagic,
-		))
+		require.Len(t, groupConcat.Args, 2)
+		require.Equal(
+			t,
+			plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER,
+			groupConcat.AggConfigType,
+		)
+		require.Equal(t, groupConcatOrderConfigVersion, groupConcat.AggConfig[0])
 
 		require.Len(t, node.Children, 1)
 		require.Equal(t, plan.Node_JOIN, query.Nodes[node.Children[0]].NodeType)
@@ -3563,6 +3565,17 @@ func TestGroupConcatRejectsOrderBySubquery(t *testing.T) {
 			require.Contains(t, err.Error(), "subquery in group_concat ORDER BY")
 		})
 	}
+}
+
+func TestGroupConcatRejectsUnsupportedOrderKeyType(t *testing.T) {
+	_, err := runOneStmt(
+		NewMockOptimizer(false),
+		t,
+		"SELECT GROUP_CONCAT(N_NAME ORDER BY (N_REGIONKEY, N_NAME)) FROM NATION",
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "group_concat ORDER BY type TUPLE")
+	require.NotContains(t, err.Error(), "internal error")
 }
 
 func TestMysqlCompatibilityMode(t *testing.T) {

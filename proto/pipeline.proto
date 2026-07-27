@@ -118,6 +118,7 @@ message Aggregate {
   bool dist = 2;
   repeated plan.Expr expr = 3;
   bytes config = 4;
+  plan.AggregateConfigType config_type = 5;
 }
 
 message Group {

@@ -1572,7 +1572,10 @@ func constructWindow(_ context.Context, node *plan.Node, proc *process.Process) 
 
 		var cfg []byte = nil
 		var args = f.F.Args
-		if len(f.F.Args) > 0 {
+		configType := f.F.AggConfigType
+		if configType != plan.AggregateConfigType_AGG_CONFIG_NONE {
+			cfg = f.F.AggConfig
+		} else if len(f.F.Args) > 0 {
 
 			//for group_concat, the last arg is separator string
 			//for cluster_centers, the last arg is kmeans_args string
@@ -1590,7 +1593,7 @@ func constructWindow(_ context.Context, node *plan.Node, proc *process.Process) 
 			}
 		}
 		aggregationExpressions[i] = aggexec.MakeAggFunctionExpression(
-			functionID, isDistinct, args, cfg)
+			functionID, isDistinct, args, cfg, configType)
 	}
 	arg := window.NewArgument()
 	arg.Aggs = aggregationExpressions
@@ -1627,7 +1630,10 @@ func constructGroup(_ context.Context, node, childNode *plan.Node, needEval bool
 
 			var cfg []byte = nil
 			var args = f.F.Args
-			if len(f.F.Args) > 0 {
+			configType := f.F.AggConfigType
+			if configType != plan.AggregateConfigType_AGG_CONFIG_NONE {
+				cfg = f.F.AggConfig
+			} else if len(f.F.Args) > 0 {
 				//for group_concat, the last arg is separator string
 				//for cluster_centers, the last arg is kmeans_args string
 				if (f.F.Func.ObjName == plan2.NameGroupConcat ||
@@ -1645,7 +1651,7 @@ func constructGroup(_ context.Context, node, childNode *plan.Node, needEval bool
 			}
 
 			aggregationExpressions[i] = aggexec.MakeAggFunctionExpression(
-				functionID, isDistinct, args, cfg)
+				functionID, isDistinct, args, cfg, configType)
 		}
 	}
 

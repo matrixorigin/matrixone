@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	mosort "github.com/matrixorigin/matrixone/pkg/sort"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -338,7 +339,7 @@ func isCountFuncExpr(astExpr tree.Expr) bool {
 	return ok && strings.EqualFold(funcRef.ColName(), "count")
 }
 
-const groupConcatOrderConfigMagic = "\x00GCORDER2"
+const groupConcatOrderConfigVersion = byte(1)
 
 func (b *HavingBinder) bindGroupConcatOrderBy(
 	astExpr *tree.FuncExpr,
@@ -404,6 +405,13 @@ func (b *HavingBinder) bindGroupConcatOrderBy(
 		if hasSubquery(boundExpr) {
 			return moerr.NewNotSupported(b.GetContext(), "subquery in group_concat ORDER BY")
 		}
+		if !mosort.IsSupportedType(types.T(boundExpr.Typ.Id)) {
+			return moerr.NewNotSupportedf(
+				b.GetContext(),
+				"group_concat ORDER BY type %s",
+				types.T(boundExpr.Typ.Id).String(),
+			)
+		}
 
 		orderBy := plan.OrderBySpec{
 			Flag: plan.OrderBySpec_INTERNAL,
@@ -431,18 +439,19 @@ func (b *HavingBinder) bindGroupConcatOrderBy(
 		orderFlags,
 		separatorLiteral.GetSval(),
 	)
-	args := make([]*plan.Expr, 0, concatArgCount+len(orderExprs)+1)
+	args := make([]*plan.Expr, 0, concatArgCount+len(orderExprs))
 	args = append(args, fn.Args[:concatArgCount]...)
 	args = append(args, orderExprs...)
-	args = append(args, makePlan2StringConstExprWithType(string(config)))
 	fn.Args = args
+	fn.AggConfig = config
+	fn.AggConfigType = plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER
 	return nil
 }
 
 func encodeGroupConcatOrderConfig(concatArgCount int, orderFlags []byte, separator string) []byte {
 	separatorBytes := []byte(separator)
-	config := make([]byte, 0, len(groupConcatOrderConfigMagic)+12+len(orderFlags)+len(separatorBytes))
-	config = append(config, groupConcatOrderConfigMagic...)
+	config := make([]byte, 0, 13+len(orderFlags)+len(separatorBytes))
+	config = append(config, groupConcatOrderConfigVersion)
 
 	var encodedUint32 [4]byte
 	binary.BigEndian.PutUint32(encodedUint32[:], uint32(concatArgCount))
@@ -474,6 +483,12 @@ func (b *HavingBinder) makeFrameConstValue(expr tree.Expr, typ *plan.Type) (*pla
 func (b *HavingBinder) BindTimeWindowFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
 	if astExpr.Type == tree.FUNC_TYPE_DISTINCT {
 		return nil, moerr.NewNotSupported(b.GetContext(), "DISTINCT in time window")
+	}
+	if strings.EqualFold(funcName, NameGroupConcat) && len(astExpr.OrderBy) > 0 && b.ctx.sliding {
+		return nil, moerr.NewNotSupported(
+			b.GetContext(),
+			"ordered group_concat in sliding time window",
+		)
 	}
 	var err error
 

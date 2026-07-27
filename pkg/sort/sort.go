@@ -50,6 +50,26 @@ type sortedHint int // hint for pdqsort when choosing the pivot
 
 type LessFunc[T any] func(a, b T) bool
 
+func IsSupportedType(typ types.T) bool {
+	switch typ {
+	case types.T_bool, types.T_bit,
+		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_float32, types.T_float64,
+		types.T_uuid, types.T_date, types.T_datetime, types.T_time,
+		types.T_timestamp, types.T_enum, types.T_year,
+		types.T_decimal64, types.T_decimal128, types.T_decimal256,
+		types.T_TS, types.T_Rowid, types.T_Blockid,
+		types.T_char, types.T_varchar, types.T_json, types.T_text,
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_datalink,
+		types.T_array_float32, types.T_array_float64, types.T_array_bf16,
+		types.T_array_float16, types.T_array_int8, types.T_array_uint8:
+		return true
+	default:
+		return false
+	}
+}
+
 func GenericLess[T types.OrderedT](a, b T) bool {
 	return a < b
 }

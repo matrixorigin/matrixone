@@ -752,7 +752,7 @@ func (ctr *container) makeAggList(aggExprs []aggexec.AggFuncExecExpression) ([]a
 			freeAggListPartial(aggList, i)
 			return nil, err
 		}
-		if config := agExpr.GetExtraConfig(); config != nil {
+		if config := agExpr.GetExtraInformation(); config != nil {
 			if err := aggList[i].SetExtraInformation(config, 0); err != nil {
 				freeAggListPartial(aggList, i+1)
 				return nil, err

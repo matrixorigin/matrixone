@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/stretchr/testify/require"
 )
 
@@ -220,6 +221,8 @@ func TestGroupConcatOrderedDistinctSortsBeforeDedup(t *testing.T) {
 		[]uint64{1, 1, 1, 1},
 		[]*vector.Vector{values, suffixes, orderKey},
 	))
+	require.Len(t, exec.orderedDistinct[0], 3)
+	require.Zero(t, exec.state[0].argCnt[0])
 	result, err := exec.Flush()
 	require.NoError(t, err)
 	require.Equal(t, "a1,a2,b2", string(result[0].GetBytesAt(0)))
@@ -229,6 +232,52 @@ func TestGroupConcatOrderedDistinctSortsBeforeDedup(t *testing.T) {
 	orderKey.Free(mp)
 	result[0].Free(mp)
 	exec.Free()
+}
+
+func TestGroupConcatOrderedDistinctKeepsOneCandidatePerTuple(t *testing.T) {
+	mp := mpool.MustNewZero()
+	info := multiAggInfo{
+		aggID:     96,
+		distinct:  true,
+		argTypes:  []types.Type{types.T_varchar.ToType(), types.T_int64.ToType()},
+		retType:   types.T_text.ToType(),
+		emptyNull: true,
+	}
+	exec := newGroupConcatExec(mp, info, ",").(*groupConcatExec)
+	require.NoError(t, exec.SetExtraInformation(
+		testGroupConcatOrderConfig(1, []byte{groupConcatOrderAsc}, ","),
+		0,
+	))
+	require.NoError(t, exec.GroupGrow(1))
+
+	const rows = 1024
+	values, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte("same"), rows, mp)
+	require.NoError(t, err)
+	orderKeys := vector.NewVec(types.T_int64.ToType())
+	keys := make([]int64, rows)
+	groups := make([]uint64, rows)
+	for i := range rows {
+		keys[i] = int64(rows - i)
+		groups[i] = 1
+	}
+	require.NoError(t, vector.AppendFixedList(orderKeys, keys, nil, mp))
+	require.NoError(t, exec.BatchFill(
+		0,
+		groups,
+		[]*vector.Vector{values, orderKeys},
+	))
+
+	require.Len(t, exec.orderedDistinct[0], 1)
+	require.Zero(t, exec.state[0].argCnt[0])
+	result, err := exec.Flush()
+	require.NoError(t, err)
+	require.Equal(t, "same", string(result[0].GetBytesAt(0)))
+
+	values.Free(mp)
+	orderKeys.Free(mp)
+	result[0].Free(mp)
+	exec.Free()
+	require.Zero(t, mp.CurrNB())
 }
 
 func TestGroupConcatOrderedDistinctCanMerge(t *testing.T) {
@@ -294,9 +343,11 @@ func TestGroupConcatOrderConfigValidationAndReturnType(t *testing.T) {
 	})
 
 	t.Run("invalid configs", func(t *testing.T) {
-		cases := [][]byte{
-			[]byte(groupConcatOrderConfigMagic),
-			[]byte(groupConcatOrderConfigPrefix + "9"),
+		cases := []any{
+			AggregateConfig{
+				Type: plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER,
+				Data: []byte{groupConcatOrderConfigVersion + 1},
+			},
 			testGroupConcatOrderConfig(2, nil, ","),
 			testGroupConcatOrderConfig(2, []byte{groupConcatOrderAsc}, ","),
 			testGroupConcatOrderConfig(1, []byte{groupConcatOrderAsc | groupConcatOrderDesc}, ","),
@@ -311,6 +362,15 @@ func TestGroupConcatOrderConfigValidationAndReturnType(t *testing.T) {
 			require.Error(t, exec.SetExtraInformation(config, 0))
 			exec.Free()
 		}
+	})
+
+	t.Run("legacy separator can use old magic prefix", func(t *testing.T) {
+		exec := newGroupConcatExec(mp, info, ",").(*groupConcatExec)
+		separator := []byte("\x00GCORDER2")
+		require.NoError(t, exec.SetExtraInformation(separator, 0))
+		require.Equal(t, separator, exec.separator)
+		require.Zero(t, exec.orderArgCnt)
+		exec.Free()
 	})
 
 	t.Run("legacy config clears ordered metadata", func(t *testing.T) {
@@ -369,10 +429,14 @@ func TestGroupConcatOrderedPayloadValidation(t *testing.T) {
 	})
 }
 
-func testGroupConcatOrderConfig(concatArgCount int, orderFlags []byte, separator string) []byte {
+func testGroupConcatOrderConfig(
+	concatArgCount int,
+	orderFlags []byte,
+	separator string,
+) AggregateConfig {
 	separatorBytes := []byte(separator)
-	config := make([]byte, 0, len(groupConcatOrderConfigMagic)+12+len(orderFlags)+len(separatorBytes))
-	config = append(config, groupConcatOrderConfigMagic...)
+	config := make([]byte, 0, 13+len(orderFlags)+len(separatorBytes))
+	config = append(config, groupConcatOrderConfigVersion)
 
 	var encodedUint32 [4]byte
 	binary.BigEndian.PutUint32(encodedUint32[:], uint32(concatArgCount))
@@ -383,5 +447,8 @@ func testGroupConcatOrderConfig(concatArgCount int, orderFlags []byte, separator
 	binary.BigEndian.PutUint32(encodedUint32[:], uint32(len(separatorBytes)))
 	config = append(config, encodedUint32[:]...)
 	config = append(config, separatorBytes...)
-	return config
+	return AggregateConfig{
+		Type: plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER,
+		Data: config,
+	}
 }

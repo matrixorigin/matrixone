@@ -2245,14 +2245,20 @@ func TestGroupConcatOrderByIsBoundPerAggregate(t *testing.T) {
 		byte(plan.OrderBySpec_ASC | plan.OrderBySpec_NULLS_LAST),
 	}
 	for i, agg := range aggNode.AggList {
-		args := agg.GetF().Args
-		require.Len(t, args, 3)
+		fn := agg.GetF()
+		args := fn.Args
+		require.Len(t, args, 2)
 		require.NotNil(t, args[0].GetCol())
 		require.NotNil(t, args[1].GetCol())
 
-		config := []byte(args[2].GetLit().GetSval())
-		require.True(t, strings.HasPrefix(string(config), groupConcatOrderConfigMagic))
-		pos := len(groupConcatOrderConfigMagic)
+		require.Equal(
+			t,
+			plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER,
+			fn.AggConfigType,
+		)
+		config := fn.AggConfig
+		require.Equal(t, groupConcatOrderConfigVersion, config[0])
+		pos := 1
 		require.Equal(t, uint32(1), binary.BigEndian.Uint32(config[pos:pos+4]))
 		pos += 4
 		require.Equal(t, uint32(1), binary.BigEndian.Uint32(config[pos:pos+4]))

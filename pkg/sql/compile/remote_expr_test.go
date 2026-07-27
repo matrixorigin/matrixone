@@ -44,6 +44,29 @@ func TestScopeContainsVarExpr(t *testing.T) {
 	require.True(t, scopeContainsVarExpr(scope))
 }
 
+func TestAggregateConfigTypeRemoteRoundTrip(t *testing.T) {
+	expected := aggexec.MakeAggFunctionExpression(
+		aggexec.AggIdOfGroupConcat,
+		true,
+		[]*plan.Expr{makeTestVarExpr("value")},
+		[]byte{1, 2, 3},
+		plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER,
+	)
+
+	wire := convertToPipelineAggregates([]aggexec.AggFuncExecExpression{expected})
+	require.Len(t, wire, 1)
+	require.Equal(
+		t,
+		plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER,
+		wire[0].ConfigType,
+	)
+
+	actual := convertToAggregates(wire)
+	require.Len(t, actual, 1)
+	require.Equal(t, expected.GetExtraConfig(), actual[0].GetExtraConfig())
+	require.Equal(t, expected.GetConfigType(), actual[0].GetConfigType())
+}
+
 func TestScopeContainsVarExprInAggArguments(t *testing.T) {
 	scope := newScope(Normal)
 	op := group.NewArgument()

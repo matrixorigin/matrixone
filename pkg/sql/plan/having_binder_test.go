@@ -119,3 +119,22 @@ func TestBindTimeWindowFuncCastsCountProjectionAfterDecimalCache(t *testing.T) {
 	require.Equal(t, int32(ctx.timeTag), got.GetF().Args[0].GetCol().RelPos)
 	require.Equal(t, int32(0), got.GetF().Args[0].GetCol().ColPos)
 }
+
+func TestBindTimeWindowFuncRejectsOrderedGroupConcatInSlidingWindow(t *testing.T) {
+	ctx := NewBindContext(nil, nil)
+	ctx.sliding = true
+	binder := &HavingBinder{
+		baseBinder: baseBinder{sysCtx: context.Background(), ctx: ctx},
+	}
+	ast := &tree.FuncExpr{
+		Func:  tree.FuncName2ResolvableFunctionReference(tree.NewUnresolvedColName(NameGroupConcat)),
+		Exprs: tree.Exprs{tree.NewUnresolvedColName("v")},
+		OrderBy: tree.OrderBy{&tree.Order{
+			Expr: tree.NewUnresolvedColName("x"),
+		}},
+	}
+
+	_, err := binder.BindTimeWindowFunc(NameGroupConcat, ast, 0, true)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "ordered group_concat in sliding time window")
+}

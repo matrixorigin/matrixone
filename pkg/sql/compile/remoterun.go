@@ -1462,10 +1462,11 @@ func convertToPipelineAggregates(ags []aggexec.AggFuncExecExpression) []*pipelin
 	result := make([]*pipeline.Aggregate, len(ags))
 	for i, a := range ags {
 		result[i] = &pipeline.Aggregate{
-			Op:     a.GetAggID(),
-			Dist:   a.IsDistinct(),
-			Expr:   a.GetArgExpressions(),
-			Config: a.GetExtraConfig(),
+			Op:         a.GetAggID(),
+			Dist:       a.IsDistinct(),
+			Expr:       a.GetArgExpressions(),
+			Config:     a.GetExtraConfig(),
+			ConfigType: a.GetConfigType(),
 		}
 	}
 	return result
@@ -1475,7 +1476,7 @@ func convertToPipelineAggregates(ags []aggexec.AggFuncExecExpression) []*pipelin
 func convertToAggregates(ags []*pipeline.Aggregate) []aggexec.AggFuncExecExpression {
 	result := make([]aggexec.AggFuncExecExpression, len(ags))
 	for i, a := range ags {
-		result[i] = aggexec.MakeAggFunctionExpression(a.Op, a.Dist, a.Expr, a.Config)
+		result[i] = aggexec.MakeAggFunctionExpression(a.Op, a.Dist, a.Expr, a.Config, a.ConfigType)
 	}
 	return result
 }

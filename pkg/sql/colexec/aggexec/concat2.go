@@ -17,6 +17,7 @@ package aggexec
 import (
 	"bytes"
 	"encoding/binary"
+	"io"
 	"math"
 	"slices"
 
@@ -24,24 +25,25 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	mosort "github.com/matrixorigin/matrixone/pkg/sort"
 )
 
 // group_concat is a special string aggregation function.
 type groupConcatExec struct {
 	aggExec
-	distinct       bool
-	distinctHash   distinctHash
-	separator      []byte
-	concatArgCnt   int
-	orderArgCnt    int
-	orderDesc      []bool
-	orderNullsLast []bool
+	distinct        bool
+	distinctHash    distinctHash
+	separator       []byte
+	concatArgCnt    int
+	orderArgCnt     int
+	orderDesc       []bool
+	orderNullsLast  []bool
+	orderedDistinct []map[string][]byte
 }
 
 const (
-	groupConcatOrderConfigMagic  = "\x00GCORDER2"
-	groupConcatOrderConfigPrefix = "\x00GCORDER"
+	groupConcatOrderConfigVersion = byte(1)
 
 	groupConcatOrderAsc        = byte(1)
 	groupConcatOrderDesc       = byte(2)
@@ -92,7 +94,15 @@ func (exec *groupConcatExec) GroupGrow(more int) error {
 			return err
 		}
 	}
-	return exec.aggExec.GroupGrow(more)
+	if err := exec.aggExec.GroupGrow(more); err != nil {
+		return err
+	}
+	if exec.distinct && exec.orderArgCnt > 0 {
+		for len(exec.orderedDistinct) < exec.GetNumGroups() {
+			exec.orderedDistinct = append(exec.orderedDistinct, nil)
+		}
+	}
+	return nil
 }
 
 func (exec *groupConcatExec) PreAllocateGroups(more int) error {
@@ -155,6 +165,9 @@ func (exec *groupConcatExec) BatchFill(offset int, groups []uint64, vectors []*v
 		}
 		return nil
 	}
+	if exec.distinct && exec.orderArgCnt > 0 {
+		return exec.fillOrderedDistinct(offset, groups, vectors)
+	}
 
 	payloads := make([][]byte, len(groups))
 	for i, grp := range groups {
@@ -167,9 +180,100 @@ func (exec *groupConcatExec) BatchFill(offset int, groups []uint64, vectors []*v
 		}
 		payloads[i] = payload
 	}
-	// Ordered DISTINCT must retain every ordering candidate. It is deduplicated
-	// by the concatenation tuple only after the group has been sorted.
 	return exec.batchFillOpaqueArgs(offset, groups, payloads, false)
+}
+
+type groupConcatDistinctCandidate struct {
+	group   int
+	key     string
+	payload []byte
+}
+
+func (exec *groupConcatExec) fillOrderedDistinct(
+	offset int,
+	groups []uint64,
+	vectors []*vector.Vector,
+) error {
+	candidates := make([]groupConcatDistinctCandidate, 0, len(groups)*2)
+	touched := make(map[string]struct{}, len(groups))
+	for i, grp := range groups {
+		if grp == GroupNotMatched {
+			continue
+		}
+		payload, err := exec.encodePayload(vectors, offset+i)
+		if err != nil {
+			return err
+		}
+		if payload == nil {
+			continue
+		}
+		concatPayload, _, err := splitGroupConcatOrderedPayload(payload)
+		if err != nil {
+			return err
+		}
+		group := int(grp - 1)
+		key := string(concatPayload)
+		touchKey := string(binary.BigEndian.AppendUint64(nil, uint64(group))) + key
+		if _, ok := touched[touchKey]; !ok {
+			touched[touchKey] = struct{}{}
+			if existing := exec.orderedDistinct[group][key]; existing != nil {
+				candidates = append(candidates, groupConcatDistinctCandidate{
+					group: group, key: key, payload: existing,
+				})
+			}
+		}
+		candidates = append(candidates, groupConcatDistinctCandidate{
+			group: group, key: key, payload: payload,
+		})
+	}
+	return exec.selectOrderedDistinctCandidates(candidates)
+}
+
+func (exec *groupConcatExec) selectOrderedDistinctCandidates(
+	candidates []groupConcatDistinctCandidate,
+) error {
+	if len(candidates) == 0 {
+		return nil
+	}
+	entries := make([]groupConcatOrderedEntry, len(candidates))
+	for i := range candidates {
+		concatPayload, orderPayload, err := splitGroupConcatOrderedPayload(candidates[i].payload)
+		if err != nil {
+			return err
+		}
+		entries[i] = groupConcatOrderedEntry{
+			concatPayload: concatPayload,
+			orderPayload:  orderPayload,
+		}
+	}
+	orderVectors, err := exec.restoreOrderVectors(entries)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		for _, vec := range orderVectors {
+			vec.Free(exec.mp)
+		}
+	}()
+	selectors := make([]int64, len(candidates))
+	for i := range selectors {
+		selectors[i] = int64(i)
+	}
+	mosort.SortByVectors(selectors, orderVectors, exec.orderDesc, exec.orderNullsLast)
+	selected := make(map[string]struct{}, len(candidates))
+	for _, selector := range selectors {
+		candidate := candidates[selector]
+		selectionKey := string(binary.BigEndian.AppendUint64(nil, uint64(candidate.group))) + candidate.key
+		if _, ok := selected[selectionKey]; ok {
+			continue
+		}
+		selected[selectionKey] = struct{}{}
+		if exec.orderedDistinct[candidate.group] == nil {
+			exec.orderedDistinct[candidate.group] = make(map[string][]byte)
+		}
+		exec.orderedDistinct[candidate.group][candidate.key] = candidate.payload
+	}
+	return nil
 }
 
 func (exec *groupConcatExec) Merge(next AggFuncExec, groupIdx1, groupIdx2 int) error {
@@ -183,18 +287,32 @@ func (exec *groupConcatExec) BatchMerge(next AggFuncExec, offset int, groups []u
 			return err
 		}
 	}
+	if exec.distinct && exec.orderArgCnt > 0 {
+		candidates := make([]groupConcatDistinctCandidate, 0)
+		for i, grp := range groups {
+			if grp == GroupNotMatched {
+				continue
+			}
+			sourceGroup := offset + i
+			targetGroup := int(grp - 1)
+			for key, payload := range other.orderedDistinct[sourceGroup] {
+				if existing := exec.orderedDistinct[targetGroup][key]; existing != nil {
+					candidates = append(candidates, groupConcatDistinctCandidate{
+						group: targetGroup, key: key, payload: existing,
+					})
+				}
+				candidates = append(candidates, groupConcatDistinctCandidate{
+					group: targetGroup, key: key, payload: payload,
+				})
+			}
+		}
+		return exec.selectOrderedDistinctCandidates(candidates)
+	}
 	return exec.batchMergeArgs(&other.aggExec, offset, groups, false)
 }
 
 func (exec *groupConcatExec) SetExtraInformation(partialResult any, _ int) error {
-	config, ok := partialResult.([]byte)
-	if !ok {
-		return moerr.NewInternalErrorNoCtx("invalid group_concat config type")
-	}
-	if !bytes.HasPrefix(config, []byte(groupConcatOrderConfigMagic)) {
-		if bytes.HasPrefix(config, []byte(groupConcatOrderConfigPrefix)) {
-			return moerr.NewInternalErrorNoCtx("unsupported group_concat order config version")
-		}
+	if config, ok := partialResult.([]byte); ok {
 		exec.concatArgCnt = len(exec.argTypes)
 		exec.orderArgCnt = 0
 		exec.orderDesc = nil
@@ -203,8 +321,12 @@ func (exec *groupConcatExec) SetExtraInformation(partialResult any, _ int) error
 		exec.retType = GroupConcatReturnType(exec.argTypes)
 		return nil
 	}
+	typedConfig, ok := partialResult.(AggregateConfig)
+	if !ok || typedConfig.Type != plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER {
+		return moerr.NewInternalErrorNoCtx("invalid group_concat config type")
+	}
 
-	concatArgCnt, orderDesc, orderNullsLast, separator, err := decodeGroupConcatOrderConfig(config)
+	concatArgCnt, orderDesc, orderNullsLast, separator, err := decodeGroupConcatOrderConfig(typedConfig.Data)
 	if err != nil {
 		return err
 	}
@@ -218,6 +340,11 @@ func (exec *groupConcatExec) SetExtraInformation(partialResult any, _ int) error
 	exec.orderNullsLast = orderNullsLast
 	exec.separator = separator
 	exec.retType = GroupConcatReturnType(exec.concatTypes())
+	if exec.distinct {
+		for len(exec.orderedDistinct) < exec.GetNumGroups() {
+			exec.orderedDistinct = append(exec.orderedDistinct, nil)
+		}
+	}
 	return nil
 }
 
@@ -238,13 +365,24 @@ func (exec *groupConcatExec) Flush() (_ []*vector.Vector, retErr error) {
 			return nil, err
 		}
 		for j := 0; j < int(st.length); j++ {
-			if st.argCnt[j] == 0 {
+			globalGroup := i*AggBatchSize + j
+			empty := st.argCnt[j] == 0
+			if exec.distinct && exec.orderArgCnt > 0 {
+				empty = len(exec.orderedDistinct[globalGroup]) == 0
+			}
+			if empty {
 				if err := vector.AppendNull(vecs[i], exec.mp); err != nil {
 					return nil, err
 				}
 				continue
 			}
-			buf, err := exec.flushGroup(st, uint16(j))
+			var buf []byte
+			var err error
+			if exec.distinct && exec.orderArgCnt > 0 {
+				buf, err = exec.flushOrderedDistinctGroup(exec.orderedDistinct[globalGroup])
+			} else {
+				buf, err = exec.flushGroup(st, uint16(j))
+			}
 			if err != nil {
 				return nil, err
 			}
@@ -254,6 +392,23 @@ func (exec *groupConcatExec) Flush() (_ []*vector.Vector, retErr error) {
 		}
 	}
 	return vecs, nil
+}
+
+func (exec *groupConcatExec) flushOrderedDistinctGroup(
+	values map[string][]byte,
+) ([]byte, error) {
+	entries := make([]groupConcatOrderedEntry, 0, len(values))
+	for _, payload := range values {
+		concatPayload, orderPayload, err := splitGroupConcatOrderedPayload(payload)
+		if err != nil {
+			return nil, err
+		}
+		entries = append(entries, groupConcatOrderedEntry{
+			concatPayload: concatPayload,
+			orderPayload:  orderPayload,
+		})
+	}
+	return exec.flushOrderedEntries(entries, false)
 }
 
 func (exec *groupConcatExec) concatTypes() []types.Type {
@@ -330,6 +485,13 @@ func (exec *groupConcatExec) flushGroup(st aggState, group uint16) ([]byte, erro
 		return nil, err
 	}
 
+	return exec.flushOrderedEntries(entries, exec.distinct)
+}
+
+func (exec *groupConcatExec) flushOrderedEntries(
+	entries []groupConcatOrderedEntry,
+	deduplicate bool,
+) ([]byte, error) {
 	orderVectors, err := exec.restoreOrderVectors(entries)
 	if err != nil {
 		return nil, err
@@ -349,12 +511,12 @@ func (exec *groupConcatExec) flushGroup(st aggState, group uint16) ([]byte, erro
 	buf := make([]byte, 0, 64)
 	first := true
 	var seen map[string]struct{}
-	if exec.distinct {
+	if deduplicate {
 		seen = make(map[string]struct{}, len(entries))
 	}
 	for _, selector := range selectors {
 		entry := entries[selector]
-		if exec.distinct {
+		if deduplicate {
 			key := string(entry.concatPayload)
 			if _, ok := seen[key]; ok {
 				continue
@@ -458,13 +620,13 @@ func decodeGroupConcatOrderConfig(
 	config []byte,
 ) (concatArgCnt int, orderDesc, orderNullsLast []bool, separator []byte, err error) {
 	const uint32Size = 4
-	minimumSize := len(groupConcatOrderConfigMagic) + 3*uint32Size
-	if len(config) < minimumSize {
+	const minimumSize = 1 + 3*uint32Size
+	if len(config) < minimumSize || config[0] != groupConcatOrderConfigVersion {
 		err = moerr.NewInternalErrorNoCtx("invalid group_concat order config")
 		return
 	}
 
-	pos := len(groupConcatOrderConfigMagic)
+	pos := 1
 	concatArgCnt = int(binary.BigEndian.Uint32(config[pos : pos+uint32Size]))
 	pos += uint32Size
 	orderArgCnt := int(binary.BigEndian.Uint32(config[pos : pos+uint32Size]))
@@ -514,12 +676,110 @@ func (exec *groupConcatExec) Size() int64 {
 	size += int64(cap(exec.separator))
 	size += int64(cap(exec.orderDesc))
 	size += int64(cap(exec.orderNullsLast))
+	for _, group := range exec.orderedDistinct {
+		for key, payload := range group {
+			size += int64(len(key) + len(payload))
+		}
+	}
 	return size + exec.distinctHash.Size()
 }
 
 func (exec *groupConcatExec) Free() {
+	exec.orderedDistinct = nil
 	exec.distinctHash.free()
 	exec.aggExec.Free()
+}
+
+func (exec *groupConcatExec) orderedDistinctState() (*aggExec, error) {
+	state := &aggExec{
+		mp:        exec.mp,
+		aggInfo:   exec.aggInfo,
+		chunkSize: exec.chunkSize,
+	}
+	if err := state.GroupGrow(exec.GetNumGroups()); err != nil {
+		state.Free()
+		return nil, err
+	}
+	for group, values := range exec.orderedDistinct {
+		x, y := state.getXY(uint64(group))
+		for _, payload := range values {
+			if err := state.state[x].fillArg(state.mp, y, payload, false); err != nil {
+				state.Free()
+				return nil, err
+			}
+		}
+	}
+	return state, nil
+}
+
+func (exec *groupConcatExec) SaveIntermediateResult(
+	cnt int64,
+	flags [][]uint8,
+	buf *bytes.Buffer,
+) error {
+	if !exec.distinct || exec.orderArgCnt == 0 {
+		return exec.aggExec.SaveIntermediateResult(cnt, flags, buf)
+	}
+	state, err := exec.orderedDistinctState()
+	if err != nil {
+		return err
+	}
+	defer state.Free()
+	return state.SaveIntermediateResult(cnt, flags, buf)
+}
+
+func (exec *groupConcatExec) SaveIntermediateResultOfChunk(
+	chunk int,
+	buf *bytes.Buffer,
+) error {
+	if !exec.distinct || exec.orderArgCnt == 0 {
+		return exec.aggExec.SaveIntermediateResultOfChunk(chunk, buf)
+	}
+	state, err := exec.orderedDistinctState()
+	if err != nil {
+		return err
+	}
+	defer state.Free()
+	return state.SaveIntermediateResultOfChunk(chunk, buf)
+}
+
+func (exec *groupConcatExec) UnmarshalFromReader(reader io.Reader, mp *mpool.MPool) error {
+	if err := exec.aggExec.UnmarshalFromReader(reader, mp); err != nil {
+		return err
+	}
+	if !exec.distinct || exec.orderArgCnt == 0 {
+		return nil
+	}
+	groupCount := exec.GetNumGroups()
+	candidates := make([]groupConcatDistinctCandidate, 0)
+	for chunk, st := range exec.state {
+		for group := 0; group < int(st.length); group++ {
+			globalGroup := chunk*AggBatchSize + group
+			err := st.iter(uint16(group), func(key []byte) error {
+				payload := bytes.Clone(aggPayloadFromKey(&exec.aggInfo, key))
+				concatPayload, _, err := splitGroupConcatOrderedPayload(payload)
+				if err != nil {
+					return err
+				}
+				candidates = append(candidates, groupConcatDistinctCandidate{
+					group:   globalGroup,
+					key:     string(concatPayload),
+					payload: payload,
+				})
+				return nil
+			})
+			if err != nil {
+				return err
+			}
+		}
+	}
+	exec.aggExec.Free()
+	exec.state = nil
+	exec.orderedDistinct = make([]map[string][]byte, groupCount)
+	if err := exec.aggExec.GroupGrow(groupCount); err != nil {
+		return err
+	}
+	return exec.selectOrderedDistinctCandidates(candidates)
 }
 
 var GroupConcatUnsupportedTypes = []types.T{
