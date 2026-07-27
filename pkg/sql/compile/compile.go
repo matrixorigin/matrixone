@@ -217,6 +217,9 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 	if c.lockMeta != nil {
 		c.lockMeta.reset(c.proc)
 	}
+	if err := refreshGroupConcatMaxLen(c.scopes, proc); err != nil {
+		return err
+	}
 	rejectZeroTemporal, err := util.RejectZeroTemporalWritePolicy(proc)
 	if err != nil {
 		return err

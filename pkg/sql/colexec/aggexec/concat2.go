@@ -50,6 +50,17 @@ func EncodeGroupConcatConfig(separator string, maxLen uint64) []byte {
 	return config
 }
 
+// RefreshGroupConcatConfigMaxLen preserves the statement's separator while
+// replacing the session-scoped limit for a reused prepared execution.
+func RefreshGroupConcatConfigMaxLen(config []byte, maxLen uint64) []byte {
+	separator := config
+	if len(config) >= groupConcatConfigHeaderSize &&
+		bytes.Equal(config[:len(groupConcatConfigMagic)], groupConcatConfigMagic) {
+		separator = config[groupConcatConfigHeaderSize:]
+	}
+	return EncodeGroupConcatConfig(string(separator), maxLen)
+}
+
 func GroupConcatReturnType(args []types.Type) types.Type {
 	for _, p := range args {
 		if p.Oid == types.T_binary || p.Oid == types.T_varbinary || p.Oid == types.T_blob {

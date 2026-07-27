@@ -41,10 +41,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/filter"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
@@ -54,6 +56,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/window"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -64,6 +67,51 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
+
+func TestRefreshGroupConcatMaxLenForPreparedCompileReuse(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	sessionMaxLen := int64(5)
+	proc.SetResolveVariableFunc(func(name string, system, global bool) (interface{}, error) {
+		require.Equal(t, "group_concat_max_len", name)
+		require.True(t, system)
+		require.False(t, global)
+		return sessionMaxLen, nil
+	})
+
+	newGroupConcatExpr := func(separator string) aggexec.AggFuncExecExpression {
+		return aggexec.MakeAggFunctionExpression(
+			aggexec.AggIdOfGroupConcat,
+			false,
+			nil,
+			aggexec.EncodeGroupConcatConfig(separator, 1024))
+	}
+	groupArg := group.NewArgument()
+	groupArg.Aggs = []aggexec.AggFuncExecExpression{newGroupConcatExpr("")}
+	mergeGroupArg := group.NewArgumentMergeGroup()
+	mergeGroupArg.Aggs = []aggexec.AggFuncExecExpression{newGroupConcatExpr("|")}
+	windowArg := window.NewArgument()
+	windowArg.Aggs = []aggexec.AggFuncExecExpression{newGroupConcatExpr(",")}
+	scopes := []*Scope{
+		{RootOp: groupArg},
+		{RootOp: mergeGroupArg},
+		{RootOp: windowArg},
+	}
+
+	require.NoError(t, refreshGroupConcatMaxLen(scopes, proc))
+	require.Equal(t, aggexec.EncodeGroupConcatConfig("", 5), groupArg.Aggs[0].GetExtraConfig())
+	require.Equal(t, aggexec.EncodeGroupConcatConfig("|", 5), mergeGroupArg.Aggs[0].GetExtraConfig())
+	require.Equal(t, aggexec.EncodeGroupConcatConfig(",", 5), windowArg.Aggs[0].GetExtraConfig())
+
+	sessionMaxLen = 1024
+	require.NoError(t, refreshGroupConcatMaxLen(scopes, proc))
+	require.Equal(t, aggexec.EncodeGroupConcatConfig("", 1024), groupArg.Aggs[0].GetExtraConfig())
+	require.Equal(t, aggexec.EncodeGroupConcatConfig("|", 1024), mergeGroupArg.Aggs[0].GetExtraConfig())
+	require.Equal(t, aggexec.EncodeGroupConcatConfig(",", 1024), windowArg.Aggs[0].GetExtraConfig())
+
+	groupArg.Release()
+	mergeGroupArg.Release()
+	windowArg.Release()
+}
 
 func GetFilePath() string {
 	dir, _ := os.Getwd()
