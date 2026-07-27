@@ -158,18 +158,20 @@ func isEquiCond(expr *plan.Expr, leftTags, rightTags map[int32]bool) bool {
 // Can only be used after optimizer!!!
 func IsEquiJoin2(exprs []*plan.Expr) bool {
 	for _, expr := range exprs {
-		if e, ok := expr.Expr.(*plan.Expr_F); ok {
-			if !IsEqualFunc(e.F.Func.GetObj()) {
-				continue
-			}
-			lpos, rpos := HasColExpr(e.F.Args[0], -1), HasColExpr(e.F.Args[1], -1)
-			if lpos == -1 || rpos == -1 || (lpos == rpos) {
-				continue
-			}
+		if isEquiCond2(expr) {
 			return true
 		}
 	}
 	return false
+}
+
+func isEquiCond2(expr *plan.Expr) bool {
+	e, ok := expr.Expr.(*plan.Expr_F)
+	if !ok || !IsEqualFunc(e.F.Func.GetObj()) {
+		return false
+	}
+	lpos, rpos := HasColExpr(e.F.Args[0], -1), HasColExpr(e.F.Args[1], -1)
+	return lpos != -1 && rpos != -1 && lpos != rpos
 }
 
 func IsEqualFunc(id int64) bool {
