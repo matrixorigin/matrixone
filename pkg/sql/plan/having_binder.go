@@ -372,22 +372,16 @@ func (b *HavingBinder) bindGroupConcatOrderBy(
 			switch numVal.Kind() {
 			case tree.Int:
 				if numVal.Negative() {
-					return moerr.NewSyntaxErrorf(
-						b.GetContext(),
-						"ORDER BY position %s is negative",
-						numVal.String(),
-					)
+					break
 				}
 				colPos, ok := numVal.Uint64()
 				if !ok {
-					return moerr.NewSyntaxError(b.GetContext(), "non-integer constant in ORDER BY")
+					break
 				}
 				if colPos < 1 || colPos > uint64(concatArgCount) {
 					return moerr.NewSyntaxErrorf(b.GetContext(), "ORDER BY position %v is not in group_concat arguments", colPos)
 				}
 				orderExpr = astExpr.Exprs[colPos-1]
-			default:
-				return moerr.NewSyntaxError(b.GetContext(), "non-integer constant in ORDER BY")
 			}
 		}
 
@@ -405,6 +399,14 @@ func (b *HavingBinder) bindGroupConcatOrderBy(
 		if hasSubquery(boundExpr) {
 			return moerr.NewNotSupported(b.GetContext(), "subquery in group_concat ORDER BY")
 		}
+		// A literal key is equal for every input row and has no effect on the
+		// ordering. Do not expose it as an executor key (NULL has type ANY).
+		if boundExpr.GetLit() != nil {
+			continue
+		}
+		// ENUM/SET values are exposed through display conversion functions, but
+		// ORDER BY must use their internal ordinal/bitmap representation.
+		boundExpr = groupConcatOrderKey(boundExpr)
 		if !mosort.IsSupportedType(types.T(boundExpr.Typ.Id)) {
 			return moerr.NewNotSupportedf(
 				b.GetContext(),
@@ -433,6 +435,9 @@ func (b *HavingBinder) bindGroupConcatOrderBy(
 		orderExprs = append(orderExprs, boundExpr)
 		orderFlags = append(orderFlags, byte(orderBy.Flag))
 	}
+	if len(orderExprs) == 0 {
+		return nil
+	}
 
 	config := encodeGroupConcatOrderConfig(
 		concatArgCount,
@@ -446,6 +451,14 @@ func (b *HavingBinder) bindGroupConcatOrderBy(
 	fn.AggConfig = config
 	fn.AggConfigType = plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER
 	return nil
+}
+
+func groupConcatOrderKey(expr *plan.Expr) *plan.Expr {
+	if fn := expr.GetF(); fn != nil && len(fn.Args) > 1 &&
+		(fn.Func.ObjName == moEnumCastIndexToValueFun || fn.Func.ObjName == moSetCastIndexToValueFun) {
+		return fn.Args[1]
+	}
+	return expr
 }
 
 func encodeGroupConcatOrderConfig(concatArgCount int, orderFlags []byte, separator string) []byte {

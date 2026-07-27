@@ -4462,6 +4462,17 @@ func (c *Compile) compileTPGroup(node *plan.Node, ss []*Scope, ns []*plan.Node) 
 }
 
 func (c *Compile) compileMergeGroup(node *plan.Node, ss []*Scope, ns []*plan.Node, hasDistinct bool) []*Scope {
+	if isH0OrderedGroupConcat(node) {
+		ss = c.mergeShuffleScopesIfNeeded(ss, false)
+		rs := c.newMergeScope(ss)
+		currentFirstFlag := c.anal.isFirst
+		op := constructGroup(c.proc.Ctx, node, ns[node.Children[0]], true, 0, c.proc)
+		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+		rs.setRootOperator(op)
+		c.anal.isFirst = false
+		return []*Scope{rs}
+	}
+
 	// for less memory usage while merge group,
 	// we do not run the group-operator in parallel once this has a distinct aggregation.
 	// because the parallel need to store all the source data in the memory for merging.
@@ -4515,6 +4526,20 @@ func (c *Compile) compileMergeGroup(node *plan.Node, ss []*Scope, ns []*plan.Nod
 
 		return []*Scope{rs}
 	}
+}
+
+func isH0OrderedGroupConcat(node *plan.Node) bool {
+	if len(node.GroupBy) != 0 {
+		return false
+	}
+	for _, agg := range node.AggList {
+		if fn := agg.GetF(); fn != nil &&
+			fn.Func.ObjName == plan2.NameGroupConcat &&
+			fn.AggConfigType == plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *Compile) compileLocalShuffleGroup(node *plan.Node, inputSS []*Scope, nodes []*plan.Node) []*Scope {

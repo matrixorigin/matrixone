@@ -3567,6 +3567,18 @@ func TestGroupConcatRejectsOrderBySubquery(t *testing.T) {
 	}
 }
 
+func TestGroupConcatAcceptsConstantOrderExpressions(t *testing.T) {
+	for _, sql := range []string{
+		"SELECT GROUP_CONCAT(N_NAME ORDER BY NULL) FROM NATION",
+		"SELECT GROUP_CONCAT(N_NAME ORDER BY 'constant') FROM NATION",
+		"SELECT GROUP_CONCAT(N_NAME ORDER BY 1.5) FROM NATION",
+		"SELECT GROUP_CONCAT(N_NAME ORDER BY -1) FROM NATION",
+	} {
+		_, err := runOneStmt(NewMockOptimizer(false), t, sql)
+		require.NoError(t, err, sql)
+	}
+}
+
 func TestGroupConcatRejectsUnsupportedOrderKeyType(t *testing.T) {
 	_, err := runOneStmt(
 		NewMockOptimizer(false),

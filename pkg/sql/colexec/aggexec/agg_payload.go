@@ -104,7 +104,7 @@ func encodeGroupConcatPayloadWithNulls(
 func groupConcatFieldBytes(vec *vector.Vector, row int, typ types.Type) []byte {
 	switch typ.Oid {
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_datalink,
-		types.T_varbinary, types.T_binary, types.T_json, types.T_enum,
+		types.T_varbinary, types.T_binary, types.T_json,
 		types.T_array_float32, types.T_array_float64:
 		return vec.GetBytesAt(row)
 	default:

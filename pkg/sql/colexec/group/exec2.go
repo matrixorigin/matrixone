@@ -165,6 +165,7 @@ func (group *Group) prepareGroupAndAggArg(proc *process.Process) (err error) {
 			}
 		}
 	}
+	group.configureH0OrderedAggSpill(proc)
 
 	return nil
 }

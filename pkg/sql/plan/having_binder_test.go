@@ -52,6 +52,26 @@ func TestRemapAggToTimeWindowResultAggUsesRegularSumForPartialSums(t *testing.T)
 	}
 }
 
+func TestGroupConcatOrderKeyUsesEnumAndSetStorageValue(t *testing.T) {
+	for _, name := range []string{moEnumCastIndexToValueFun, moSetCastIndexToValueFun} {
+		t.Run(name, func(t *testing.T) {
+			raw := &plan.Expr{
+				Typ:  plan.Type{Id: int32(types.T_uint16)},
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 1, ColPos: 2}},
+			}
+			display := &plan.Expr{
+				Typ: plan.Type{Id: int32(types.T_varchar)},
+				Expr: &plan.Expr_F{F: &plan.Function{
+					Func: &plan.ObjectRef{ObjName: name},
+					Args: []*plan.Expr{{}, raw},
+				}},
+			}
+
+			require.Same(t, raw, groupConcatOrderKey(display))
+		})
+	}
+}
+
 func TestRemapAggToTimeWindowResultAggUsesRegularSumForCountCache(t *testing.T) {
 	countFn, err := function.GetFunctionByName(context.Background(), "count", []types.Type{types.T_int64.ToType()})
 	require.NoError(t, err)

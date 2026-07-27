@@ -820,3 +820,37 @@ func TestPositionFunctionExplain(t *testing.T) {
 		})
 	}
 }
+
+func TestExplainOrderedGroupConcat(t *testing.T) {
+	fn := &plan2.Function{
+		Func: &plan2.ObjectRef{ObjName: "group_concat"},
+		Args: []*plan2.Expr{
+			{
+				Typ:  plan2.Type{Id: int32(types.T_varchar)},
+				Expr: &plan2.Expr_Col{Col: &plan2.ColRef{Name: "tw.v"}},
+			},
+			{
+				Typ:  plan2.Type{Id: int32(types.T_int64)},
+				Expr: &plan2.Expr_Col{Col: &plan2.ColRef{Name: "tw.k"}},
+			},
+		},
+		AggConfigType: plan2.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER,
+		AggConfig: []byte{
+			1,
+			0, 0, 0, 1,
+			0, 0, 0, 1,
+			byte(plan2.OrderBySpec_DESC | plan2.OrderBySpec_NULLS_FIRST),
+			0, 0, 0, 1,
+			'~',
+		},
+	}
+	buf := bytes.NewBuffer(nil)
+	err := explainOrderedGroupConcat(context.Background(), fn, &ExplainOptions{}, buf)
+	if err != nil {
+		t.Fatalf("explainOrderedGroupConcat() error = %v", err)
+	}
+	const want = "group_concat(tw.v ORDER BY tw.k DESC NULLS FIRST SEPARATOR '~')"
+	if got := buf.String(); got != want {
+		t.Fatalf("explainOrderedGroupConcat() = %q, want %q", got, want)
+	}
+}

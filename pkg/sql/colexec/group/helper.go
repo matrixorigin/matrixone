@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"time"
 
 	"github.com/google/uuid"
@@ -41,6 +42,34 @@ type ResHashRelated struct {
 	Hash     hashmap.HashMap
 	Itr      hashmap.Iterator
 	inserted []uint8
+}
+
+func (group *Group) configureH0OrderedAggSpill(proc *process.Process) {
+	if group.ctr.mtyp != H0 || !group.NeedEval {
+		return
+	}
+	for _, agg := range group.ctr.aggList {
+		aggexec.ConfigureGroupConcatH0Spill(
+			agg,
+			group.ctr.spillMem,
+			proc.Ctx,
+			func() (*os.File, error) {
+				spillFS, err := proc.GetSpillFileService()
+				if err != nil {
+					return nil, err
+				}
+				id, _ := uuid.NewV7()
+				return spillFS.CreateAndRemoveFile(
+					proc.Ctx,
+					fmt.Sprintf("group_concat_run_%s", id.String()),
+				)
+			},
+			func(bytes, rows int64) {
+				group.OpAnalyzer.Spill(bytes)
+				group.OpAnalyzer.SpillRows(rows)
+			},
+		)
+	}
 }
 
 func (hr *ResHashRelated) IsEmpty() bool {
@@ -674,7 +703,7 @@ func (ctr *container) getNextFinalResult(proc *process.Process) (vm.CallResult, 
 	if curr == 0 {
 		// flush aggs final result to vectors, all aggs follow groupby columns.
 		for _, ag := range ctr.aggList {
-			vecs, err := ag.Flush()
+			vecs, err := aggexec.FlushWithContext(proc.Ctx, ag)
 			if err != nil {
 				return vm.CancelResult, err
 			}

@@ -15,7 +15,9 @@
 package aggexec
 
 import (
+	"context"
 	"encoding/binary"
+	"os"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -24,6 +26,78 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/stretchr/testify/require"
 )
+
+func TestGroupConcatH0OrderedSpillAndCancellation(t *testing.T) {
+	mp := mpool.MustNewZero()
+	info := multiAggInfo{
+		aggID: 100,
+		argTypes: []types.Type{
+			types.T_varchar.ToType(),
+			types.T_int64.ToType(),
+		},
+		retType:   types.T_text.ToType(),
+		emptyNull: true,
+	}
+	newExec := func(ctx context.Context) *groupConcatExec {
+		exec := newGroupConcatExec(mp, info, ",").(*groupConcatExec)
+		require.NoError(t, exec.SetExtraInformation(
+			testGroupConcatOrderConfig(1, []byte{groupConcatOrderAsc}, "|"),
+			0,
+		))
+		SyncAggregatorsToChunkSize([]AggFuncExec{exec}, 1)
+		require.NoError(t, exec.GroupGrow(1))
+		ConfigureGroupConcatH0Spill(exec, 80, ctx, func() (*os.File, error) {
+			file, err := os.CreateTemp(t.TempDir(), "group-concat-run-")
+			if err == nil {
+				err = os.Remove(file.Name())
+			}
+			return file, err
+		}, nil)
+		return exec
+	}
+
+	values := buildVarlenVec(t, mp, types.T_varchar.ToType(), []string{"c", "a", "d", "b"})
+	orderKey := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixedList(orderKey, []int64{3, 1, 4, 2}, nil, mp))
+
+	exec := newExec(context.Background())
+	require.NoError(t, exec.BatchFill(
+		0,
+		[]uint64{1, 1, 1, 1},
+		[]*vector.Vector{values, orderKey},
+	))
+	require.NotEmpty(t, exec.h0SpillRuns)
+	result, err := exec.FlushWithContext(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, "a|b|c|d", string(result[0].GetBytesAt(0)))
+	result[0].Free(mp)
+	exec.Free()
+
+	exec = newExec(context.Background())
+	require.NoError(t, exec.BatchFill(
+		0,
+		[]uint64{1, 1, 1, 1},
+		[]*vector.Vector{values, orderKey},
+	))
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = exec.FlushWithContext(cancelled)
+	require.ErrorIs(t, err, context.Canceled)
+	exec.Free()
+
+	values.Free(mp)
+	orderKey.Free(mp)
+}
+
+func TestGroupConcatEnumOrderPayloadUsesFixedWidthStorage(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := vector.NewVec(types.T_enum.ToType())
+	require.NoError(t, vector.AppendFixed(vec, types.Enum(2), false, mp))
+	data := groupConcatFieldBytes(vec, 0, types.T_enum.ToType())
+	require.Len(t, data, types.T_enum.ToType().TypeSize())
+	require.Equal(t, types.Enum(2), types.DecodeEnum(data))
+	vec.Free(mp)
+}
 
 func TestGroupConcatDistinctAndHelpers(t *testing.T) {
 	mp := mpool.MustNewZero()
