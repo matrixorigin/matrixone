@@ -403,9 +403,11 @@ execute prepared_snapshot_lifecycle_stmt;
 deallocate prepare prepared_snapshot_lifecycle_stmt;
 drop snapshot prepared_snapshot_lifecycle_snap;
 
+create database prepared_rename_other_db;
 create table prepared_rename_source (a int);
 prepare prepared_rename_stmt from
-    'rename table prepared_rename_source to prepared_rename_target';
+    'rename table prepared_rename_source
+     to prepared_rename_other_db.prepared_rename_target';
 -- @session:id=1
 create table prepare_ddl_schema_change.prepared_rename_target (a int);
 -- @session
@@ -416,7 +418,8 @@ drop table prepared_rename_target;
 
 create table prepared_alter_rename_source (a int);
 prepare prepared_alter_rename_stmt from
-    'alter table prepared_alter_rename_source rename to prepared_alter_rename_target';
+    'alter table prepared_alter_rename_source
+     rename to prepared_rename_other_db.prepared_alter_rename_target';
 -- @session:id=1
 create table prepare_ddl_schema_change.prepared_alter_rename_target (a int);
 -- @session
@@ -424,6 +427,7 @@ execute prepared_alter_rename_stmt;
 deallocate prepare prepared_alter_rename_stmt;
 drop table prepared_alter_rename_source;
 drop table prepared_alter_rename_target;
+drop database prepared_rename_other_db;
 
 prepare prepared_nested_proc_drop from
     'drop table if exists prepared_nested_proc_table';

@@ -70,6 +70,8 @@ func TestCollectPrepareDdlSchemas(t *testing.T) {
 		name     string
 		sql      string
 		expected []string
+		// targetSchema, when set, is the expected schema of the last dependency.
+		targetSchema string
 	}{
 		{name: "alter table", sql: "alter table t1 add column c int", expected: []string{"t1"}},
 		{name: "create index", sql: "create index idx on t1(c)", expected: []string{"t1"}},
@@ -85,6 +87,18 @@ func TestCollectPrepareDdlSchemas(t *testing.T) {
 			name:     "alter table rename",
 			sql:      "alter table t1 rename to n1",
 			expected: []string{"t1", "n1"},
+		},
+		{
+			name:         "cross database rename table uses source database",
+			sql:          "rename table db1.t1 to db2.n1",
+			expected:     []string{"t1", "n1"},
+			targetSchema: "db1",
+		},
+		{
+			name:         "cross database alter rename uses source database",
+			sql:          "alter table db1.t1 rename to db2.n1",
+			expected:     []string{"t1", "n1"},
+			targetSchema: "db1",
 		},
 		{name: "create table like", sql: "create table n1 like t1", expected: []string{"n1", "t1"}},
 		{
@@ -119,6 +133,9 @@ func TestCollectPrepareDdlSchemas(t *testing.T) {
 				if schemas[i].Obj != 0 {
 					require.Equal(t, int64(30), schemas[i].Server)
 				}
+			}
+			if testCase.targetSchema != "" {
+				require.Equal(t, testCase.targetSchema, schemas[len(schemas)-1].SchemaName)
 			}
 		})
 	}

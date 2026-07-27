@@ -160,6 +160,17 @@ func collectPrepareDdlSchemas(ctx CompilerContext, stmt tree.Statement, prepareP
 			tableNames = append(tableNames, fk.Refer.TableName)
 		}
 	}
+	addRenameTarget := func(source *tree.TableName, rename *tree.AlterOptionTableName) {
+		if source == nil || rename == nil || rename.Name == nil {
+			return
+		}
+		target := rename.Name.ToTableName()
+		// The current rename planner and executor only consume the target object
+		// name. The operation remains in the source table's database even when
+		// the SQL spells an explicit target database.
+		target.SchemaName = source.SchemaName
+		tableNames = append(tableNames, &target)
+	}
 	addQuerySchemas := func(selectStmt *tree.Select) error {
 		if selectStmt == nil {
 			return nil
@@ -200,8 +211,7 @@ func collectPrepareDdlSchemas(ctx CompilerContext, stmt tree.Statement, prepareP
 		tableNames = append(tableNames, ddl.Table)
 		for _, option := range ddl.Options {
 			if rename, ok := option.(*tree.AlterOptionTableName); ok {
-				target := rename.Name.ToTableName()
-				tableNames = append(tableNames, &target)
+				addRenameTarget(ddl.Table, rename)
 			}
 			if add, ok := option.(*tree.AlterOptionAdd); ok {
 				if fk, ok := add.Def.(*tree.ForeignKey); ok {
@@ -214,8 +224,7 @@ func collectPrepareDdlSchemas(ctx CompilerContext, stmt tree.Statement, prepareP
 			tableNames = append(tableNames, alterTable.Table)
 			for _, option := range alterTable.Options {
 				if rename, ok := option.(*tree.AlterOptionTableName); ok {
-					target := rename.Name.ToTableName()
-					tableNames = append(tableNames, &target)
+					addRenameTarget(alterTable.Table, rename)
 				}
 			}
 		}
