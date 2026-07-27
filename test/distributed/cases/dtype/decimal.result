@@ -1737,3 +1737,25 @@ SELECT 301 - CAST(300.00 AS DECIMAL(12,2)) AS int_minus_decimal_positive_one;
 SELECT 200 - CAST(300.00 AS DECIMAL(12,2)) AS int_minus_decimal_negative_hundred;
 ➤ int_minus_decimal_negative_hundred[3,38,2]  𝄀
 -100.00
+DROP TABLE IF EXISTS decimal_join_left;
+DROP TABLE IF EXISTS decimal_join_right;
+CREATE TABLE decimal_join_left(id INT, v DECIMAL(10,2));
+CREATE TABLE decimal_join_right(id INT, v DECIMAL(10,2));
+INSERT INTO decimal_join_left VALUES (1,10.00),(2,20.00);
+INSERT INTO decimal_join_right VALUES (11,2.00),(12,15.00);
+SELECT l.id AS l_id, r.id AS r_id
+FROM decimal_join_left l RIGHT JOIN decimal_join_right r ON l.v <= r.v + 8
+ORDER BY r.id, l.id;
+➤ l_id[4,32,0]  ¦  r_id[4,32,0]  𝄀
+1  ¦  11  𝄀
+1  ¦  12  𝄀
+2  ¦  12
+SELECT l.id AS l_id, r.id AS r_id
+FROM decimal_join_left l JOIN decimal_join_right r
+ON l.v BETWEEN r.v AND r.v + 8
+ORDER BY r.id, l.id;
+➤ l_id[4,32,0]  ¦  r_id[4,32,0]  𝄀
+1  ¦  11  𝄀
+2  ¦  12
+DROP TABLE decimal_join_left;
+DROP TABLE decimal_join_right;

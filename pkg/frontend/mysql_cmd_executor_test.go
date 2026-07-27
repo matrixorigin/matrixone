@@ -54,6 +54,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
+	"github.com/matrixorigin/matrixone/pkg/sql/models"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -178,13 +179,67 @@ func TestRecordStatementSetsIgnoreForInsertIgnore(t *testing.T) {
 	cw := InitTxnComputationWrapper(ses, insertIgnore, proc)
 	_, err := RecordStatement(ctx, ses, proc, cw, time.Now(), "insert ignore into t values (1, 10 / 0)", constant.ExternSql, true)
 	require.NoError(t, err)
-	require.True(t, ses.GetStmtProfile().GetDivByZeroIgnore())
+	require.True(t, ses.GetStmtProfile().GetStatementIgnore())
 
 	insert := &tree.Insert{}
 	cw = InitTxnComputationWrapper(ses, insert, proc)
 	_, err = RecordStatement(ctx, ses, proc, cw, time.Now(), "insert into t values (1, 10 / 0)", constant.ExternSql, true)
 	require.NoError(t, err)
-	require.False(t, ses.GetStmtProfile().GetDivByZeroIgnore())
+	require.False(t, ses.GetStmtProfile().GetStatementIgnore())
+
+	loadIgnoreLines := &tree.Load{
+		DuplicateHandling: &tree.DuplicateKeyError{},
+		Param: &tree.ExternParam{ExParamConst: tree.ExParamConst{
+			Tail: &tree.TailParameter{IgnoredLines: 1},
+		}},
+	}
+	require.False(t, isIgnoreStatement(loadIgnoreLines))
+
+	parsed, err := mysql.Parse(ctx, "load data local infile 'data.csv' ignore into table t fields terminated by ','", 1)
+	require.NoError(t, err)
+	require.Len(t, parsed, 1)
+	require.True(t, isIgnoreStatement(parsed[0]))
+
+	parsed, err = mysql.Parse(ctx, "load data local infile 'data.csv' into table t fields terminated by ',' ignore 1 lines", 1)
+	require.NoError(t, err)
+	require.Len(t, parsed, 1)
+	require.False(t, isIgnoreStatement(parsed[0]))
+}
+
+func TestRecordStatementSetsIgnoreForUpdateIgnore(t *testing.T) {
+	ctx := context.Background()
+	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
+
+	ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
+	proc := ses.GetProc()
+	require.NotNil(t, proc)
+
+	updateIgnore := &tree.Update{Ignore: true}
+	cw := InitTxnComputationWrapper(ses, updateIgnore, proc)
+	_, err := RecordStatement(ctx, ses, proc, cw, time.Now(), "update ignore t set a = 0", constant.ExternSql, true)
+	require.NoError(t, err)
+	require.True(t, ses.GetStmtProfile().GetStatementIgnore())
+}
+
+func TestRecordStatementSetsIgnoreForLoadDataIgnore(t *testing.T) {
+	ctx := context.Background()
+	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
+
+	ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
+	proc := ses.GetProc()
+	require.NotNil(t, proc)
+
+	loadIgnore := &tree.Load{DuplicateHandling: &tree.DuplicateKeyIgnore{}}
+	cw := InitTxnComputationWrapper(ses, loadIgnore, proc)
+	_, err := RecordStatement(ctx, ses, proc, cw, time.Now(), "load data infile 'data.csv' ignore into table t", constant.ExternSql, true)
+	require.NoError(t, err)
+	require.True(t, ses.GetStmtProfile().GetStatementIgnore())
+
+	load := &tree.Load{DuplicateHandling: &tree.DuplicateKeyError{}}
+	cw = InitTxnComputationWrapper(ses, load, proc)
+	_, err = RecordStatement(ctx, ses, proc, cw, time.Now(), "load data infile 'data.csv' into table t", constant.ExternSql, true)
+	require.NoError(t, err)
+	require.False(t, ses.GetStmtProfile().GetStatementIgnore())
 }
 
 func TestRefreshProcessStmtProfileForPreparedStmtUsesInnerInsert(t *testing.T) {
@@ -203,20 +258,26 @@ func TestRefreshProcessStmtProfileForPreparedStmtUsesInnerInsert(t *testing.T) {
 
 	atomic.StoreInt32(&proc.Base.DivByZeroErrorMode, 0)
 	insertIgnore := &tree.Insert{OnDuplicateUpdate: tree.UpdateExprs{nil}}
-	refreshProcessDivByZeroProfileForPreparedStmt(proc, insertIgnore)
+	refreshProcessStmtProfileForPreparedStmt(proc, insertIgnore)
 
-	stmtType, queryType, ignore := proc.GetStmtProfile().GetDivByZeroRuntimeProfile()
+	stmtType, queryType, ignore := proc.GetStmtProfile().GetStatementRuntimeProfile()
 	require.Equal(t, "Insert", stmtType)
 	require.Equal(t, tree.QueryTypeDML, queryType)
 	require.True(t, ignore)
 
-	refreshProcessDivByZeroProfileForPreparedStmt(proc, &tree.Insert{})
-	_, _, ignore = proc.GetStmtProfile().GetDivByZeroRuntimeProfile()
+	refreshProcessStmtProfileForPreparedStmt(proc, &tree.Update{Ignore: true})
+	stmtType, queryType, ignore = proc.GetStmtProfile().GetStatementRuntimeProfile()
+	require.Equal(t, "Update", stmtType)
+	require.Equal(t, tree.QueryTypeDML, queryType)
+	require.True(t, ignore)
+
+	refreshProcessStmtProfileForPreparedStmt(proc, &tree.Insert{})
+	_, _, ignore = proc.GetStmtProfile().GetStatementRuntimeProfile()
 	require.False(t, ignore)
 
-	refreshProcessDivByZeroProfileForPreparedStmt(proc, nil)
+	refreshProcessStmtProfileForPreparedStmt(proc, nil)
 	// nil statement should be a no-op; previous runtime profile remains.
-	_, _, ignore = proc.GetStmtProfile().GetDivByZeroRuntimeProfile()
+	_, _, ignore = proc.GetStmtProfile().GetStatementRuntimeProfile()
 	require.False(t, ignore)
 }
 
@@ -262,7 +323,7 @@ func TestTxnComputationWrapperCompileRefreshesProfileForBinaryExecute(t *testing
 	ret, err := cw.Compile(execCtx, nil)
 	require.NoError(t, err)
 	require.NotNil(t, ret)
-	stmtType, queryType, ignore := proc.GetStmtProfile().GetDivByZeroRuntimeProfile()
+	stmtType, queryType, ignore := proc.GetStmtProfile().GetStatementRuntimeProfile()
 	require.Equal(t, "Select", stmtType)
 	require.Equal(t, tree.QueryTypeDQL, queryType)
 	require.False(t, ignore)
@@ -3398,6 +3459,154 @@ func TestMarshalPlanHandlerSanitizesNonFinitePlanStats(t *testing.T) {
 	require.NotContains(t, string(jsonBytes), "serialize plan to json error")
 }
 
+func TestJsonPlanHandlerSnapshotsPhyPlanBeforePreparedReset(t *testing.T) {
+	uid, err := uuid.NewV7()
+	require.NoError(t, err)
+	stmt := &motrace.StatementInfo{
+		StatementID: uid,
+		Statement:   []byte("select 1"),
+		RequestAt:   time.Now().Add(-motrace.GetLongQueryTime() - time.Second),
+	}
+	logicPlan := &plan0.Plan{Plan: &plan0.Plan_Query{Query: &plan0.Query{
+		Nodes: []*plan0.Node{{NodeId: 0, NodeType: plan0.Node_VALUE_SCAN}},
+		Steps: []int32{0},
+	}}}
+	stats := &process.OperatorStats{
+		CallNum:         7,
+		OperatorMetrics: map[process.MetricType]int64{process.OpScanTime: 11},
+	}
+	phyPlan := &models.PhyPlan{LocalScope: []models.PhyScope{{
+		RootOperator: &models.PhyOperator{OpName: "value scan", OpStats: stats},
+	}}}
+	handler := NewJsonPlanHandler(context.Background(), stmt, nil, logicPlan, phyPlan)
+	defer handler.Free()
+
+	stats.Reset()
+	stats.CallNum = 101
+	stats.OperatorMetrics = map[process.MetricType]int64{process.OpScanTime: 103}
+
+	var payload struct {
+		PhyPlan struct {
+			LocalScope []struct {
+				RootOperator struct {
+					OpStats struct {
+						CallNum         int              `json:"CallCount"`
+						OperatorMetrics map[string]int64 `json:"OperatorMetrics"`
+					} `json:"OpStats"`
+				} `json:"RootOperator"`
+			} `json:"scope"`
+		}
+	}
+	jsonBytes := handler.Marshal(context.Background())
+	require.NoError(t, json.Unmarshal(jsonBytes, &payload))
+	require.Len(t, payload.PhyPlan.LocalScope, 1)
+	require.Equal(t, 7, payload.PhyPlan.LocalScope[0].RootOperator.OpStats.CallNum)
+	require.Equal(t, int64(11), payload.PhyPlan.LocalScope[0].RootOperator.OpStats.OperatorMetrics["0"])
+}
+
+func TestMarshalPlanHandlerSanitizesSnapshotWithoutMutatingSource(t *testing.T) {
+	uid, err := uuid.NewV7()
+	require.NoError(t, err)
+	stmt := &motrace.StatementInfo{
+		StatementID: uid,
+		Statement:   []byte("select 1"),
+		RequestAt:   time.Now().Add(-motrace.GetLongQueryTime() - time.Second),
+	}
+	logicPlan := &plan0.Plan{Plan: &plan0.Plan_Query{Query: &plan0.Query{
+		Nodes: []*plan0.Node{{NodeId: 0, NodeType: plan0.Node_VALUE_SCAN}},
+		Steps: []int32{0},
+	}}}
+	backgroundQuery := &plan0.Query{Nodes: []*plan0.Node{{
+		NodeId:   0,
+		NodeType: plan0.Node_VALUE_SCAN,
+		Stats:    &plan0.Stats{Cost: math.Inf(1)},
+	}}, Steps: []int32{0}}
+	phyPlan := &models.PhyPlan{LocalScope: []models.PhyScope{{
+		RootOperator: &models.PhyOperator{OpName: "value scan", OpStats: &process.OperatorStats{
+			BackgroundQueries: []*plan0.Query{backgroundQuery},
+		}},
+	}}}
+	handler := NewJsonPlanHandler(context.Background(), stmt, nil, logicPlan, phyPlan)
+	defer handler.Free()
+
+	jsonBytes := handler.Marshal(context.Background())
+
+	require.NotContains(t, string(jsonBytes), "serialize plan to json error")
+	require.True(t, math.IsInf(backgroundQuery.Nodes[0].Stats.Cost, 1))
+}
+
+func TestJsonPlanHandlerSnapshotSurvivesSourceReuse(t *testing.T) {
+	uid, err := uuid.NewV7()
+	require.NoError(t, err)
+	stmt := &motrace.StatementInfo{
+		StatementID: uid,
+		Statement:   []byte("select 1"),
+		RequestAt:   time.Now().Add(-motrace.GetLongQueryTime() - time.Second),
+	}
+	logicPlan := &plan0.Plan{Plan: &plan0.Plan_Query{Query: &plan0.Query{
+		Nodes: []*plan0.Node{{NodeId: 0, NodeType: plan0.Node_VALUE_SCAN}},
+		Steps: []int32{0},
+	}}}
+	stats := &process.OperatorStats{
+		CallNum:         7,
+		OperatorMetrics: map[process.MetricType]int64{process.OpScanTime: 11},
+		ExtraStats:      map[string]int64{"SpillBytes": 13},
+	}
+	phyPlan := &models.PhyPlan{LocalScope: []models.PhyScope{{
+		RootOperator: &models.PhyOperator{OpName: "value scan", OpStats: stats},
+	}}}
+	handler := NewJsonPlanHandler(context.Background(), stmt, nil, logicPlan, phyPlan)
+	defer handler.Free()
+
+	startReuse := make(chan struct{})
+	stopReuse := make(chan struct{})
+	firstReuse := make(chan struct{})
+	reuseDone := make(chan struct{})
+	go func() {
+		defer close(reuseDone)
+		<-startReuse
+		stats.Reset()
+		stats.CallNum = 101
+		stats.OperatorMetrics = map[process.MetricType]int64{process.OpScanTime: 103}
+		stats.ExtraStats = map[string]int64{"SpillBytes": 107}
+		close(firstReuse)
+		for {
+			select {
+			case <-stopReuse:
+				return
+			default:
+				stats.Reset()
+				stats.CallNum = 101
+				stats.OperatorMetrics = map[process.MetricType]int64{process.OpScanTime: 103}
+				stats.ExtraStats = map[string]int64{"SpillBytes": 107}
+			}
+		}
+	}()
+	close(startReuse)
+	<-firstReuse
+	jsonBytes := handler.Marshal(context.Background())
+	close(stopReuse)
+	<-reuseDone
+
+	var payload struct {
+		PhyPlan struct {
+			LocalScope []struct {
+				RootOperator struct {
+					OpStats struct {
+						CallNum         int              `json:"CallCount"`
+						OperatorMetrics map[string]int64 `json:"OperatorMetrics"`
+						ExtraStats      map[string]int64 `json:"ExtraStats"`
+					} `json:"OpStats"`
+				} `json:"RootOperator"`
+			} `json:"scope"`
+		}
+	}
+	require.NoError(t, json.Unmarshal(jsonBytes, &payload))
+	require.Equal(t, 7, payload.PhyPlan.LocalScope[0].RootOperator.OpStats.CallNum)
+	require.Equal(t, int64(11), payload.PhyPlan.LocalScope[0].RootOperator.OpStats.OperatorMetrics["0"])
+	require.Equal(t, int64(13), payload.PhyPlan.LocalScope[0].RootOperator.OpStats.ExtraStats["SpillBytes"])
+}
+
 func TestJsonPlanHandlerRefreshesTerminalResourceSummary(t *testing.T) {
 	uid, err := uuid.NewV7()
 	require.NoError(t, err)
@@ -3447,6 +3656,7 @@ func TestJsonPlanHandlerRefreshesTerminalResourceSummary(t *testing.T) {
 	unmarshaled.Free()
 	require.Nil(t, unmarshaled.buffer)
 	require.Nil(t, unmarshaled.marshalHandler)
+	require.Nil(t, unmarshaled.Marshal(context.Background()))
 }
 
 func TestSchedulingTracePlanHandlerMarshalsLazilyOnce(t *testing.T) {
@@ -3481,6 +3691,7 @@ func TestJsonPlanHandlerKeepsStaticPlanPlaceholders(t *testing.T) {
 	shortHandler := NewJsonPlanHandler(
 		context.Background(), stmt, nil, shortPlan, nil, WithWaitActiveCost(time.Hour))
 	defer shortHandler.Free()
+	require.Nil(t, shortHandler.marshalHandler.marshalPlan)
 	require.Equal(t, sqlQueryIgnoreExecPlan, shortHandler.Marshal(context.Background()))
 	require.Nil(t, shortHandler.buffer)
 

@@ -383,14 +383,38 @@ func (ag *aggState) readState(mp *mpool.MPool, reader io.Reader, info *aggInfo) 
 		return 0, err
 	}
 	if cnt == 0 {
+		if !info.saveArg && info.makeMarshalerUnmarshaler == nil {
+			ag.length = 0
+			for _, vec := range ag.vecs {
+				if vec != nil {
+					vec.CleanOnlyData()
+				}
+			}
+		} else {
+			ag.free(mp)
+			ag.length = 0
+			ag.capacity = 0
+		}
 		return 0, nil
 	}
 
-	if cnt > AggBatchSize {
+	if cnt < 0 || cnt > AggBatchSize {
 		return 0, moerr.NewInternalErrorNoCtxf("invalid count: %d", cnt)
 	}
-	if err := ag.init(mp, cnt, cnt, info, false); err != nil {
-		return 0, err
+	reuseVectors := !info.saveArg && info.makeMarshalerUnmarshaler == nil &&
+		len(ag.vecs) == len(info.stateTypes) && ag.capacity >= cnt
+	if reuseVectors {
+		ag.length = cnt
+		for _, vec := range ag.vecs {
+			if vec != nil {
+				vec.CleanOnlyData()
+			}
+		}
+	} else {
+		ag.free(mp)
+		if err := ag.init(mp, cnt, cnt, info, false); err != nil {
+			return 0, err
+		}
 	}
 
 	if !info.saveArg {
@@ -748,9 +772,26 @@ func (ae *aggExec) SaveIntermediateResult(cnt int64, flags [][]uint8, buf *bytes
 		return err
 	}
 
-	// write the number of chunks
-	types.WriteInt32(buf, int32(len(flags)))
+	// Empty chunks carry no positional meaning in the intermediate format: the
+	// reader packs every selected state contiguously. Group spill commonly
+	// selects one 8K state chunk out of hundreds, so emitting all of the empty
+	// chunk headers bloats millions of small records and adds needless decode work.
+	// A nil/empty flag slice is the caller's compact representation of an empty
+	// chunk; non-empty all-zero flags remain encoded for compatibility.
+	var chunks int32
 	for i := range flags {
+		if len(flags[i]) > 0 {
+			chunks++
+		}
+	}
+	types.WriteInt32(buf, chunks)
+	for i := range flags {
+		if len(flags[i]) == 0 {
+			continue
+		}
+		if i >= len(ae.state) {
+			return moerr.NewInternalErrorNoCtxf("aggregate state chunk out of range: %d >= %d", i, len(ae.state))
+		}
 		if err := ae.state[i].writeStateToBuf(ae.mp, &ae.aggInfo, flags[i], buf); err != nil {
 			return err
 		}
@@ -801,10 +842,6 @@ func (ae *aggExec) UnmarshalFromReader(reader io.Reader, mp *mpool.MPool) (retEr
 		}
 	}()
 
-	// Always unmarshal from a clean state.
-	ae.Free()
-	ae.state = nil
-
 	// read number of chunks
 	cnt, err := types.ReadInt32(reader)
 	if err != nil {
@@ -813,10 +850,17 @@ func (ae *aggExec) UnmarshalFromReader(reader io.Reader, mp *mpool.MPool) (retEr
 
 	// nothing to read
 	if cnt == 0 {
+		ae.Free()
+		ae.state = nil
 		return nil
 	} else if cnt == 1 {
-		// easy case, just one chunk and we read it directly.
-		ae.state = make([]aggState, 1)
+		// The compact spill format makes this the common path. Retain one simple
+		// fixed-state chunk across records so UnmarshalWithReader can reuse its
+		// off-heap vector capacity instead of mmap/munmap for every small record.
+		if len(ae.state) != 1 {
+			ae.Free()
+			ae.state = make([]aggState, 1)
+		}
 		if _, err := ae.state[0].readState(mp, reader, &ae.aggInfo); err != nil {
 			return err
 		}
@@ -828,8 +872,17 @@ func (ae *aggExec) UnmarshalFromReader(reader io.Reader, mp *mpool.MPool) (retEr
 				}
 			}
 		}
+		if !ae.aggInfo.saveArg && ae.aggInfo.makeMarshalerUnmarshaler == nil {
+			ae.state[0].capacity = AggBatchSize
+		}
 		return nil
 	}
+
+	// Multi-chunk inputs may need to repack several independently allocated
+	// states. Keep their historical cleanup path; only the one-chunk path above
+	// has a complete bounded reuse invariant.
+	ae.Free()
+	ae.state = nil
 
 	// multi chunks to read, in this case, we will read each chunk and merge them
 	// into fully packed chunks.

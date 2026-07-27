@@ -361,7 +361,7 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 			}
 			stats.PermissionAuth.Add(&authStats)
 		}
-		refreshProcessDivByZeroProfileForPreparedStmt(cwft.proc, stmt)
+		refreshProcessStmtProfileForPreparedStmt(cwft.proc, stmt)
 		originSQL = sql
 		cwft.ifIsExeccute = true
 
@@ -404,7 +404,9 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 			// the outer EXECUTE fragment, which cannot contain the inner hint.
 			retComp.SetQuerySchedulingIntent(cwft.querySchedulingIntentForPreparedStatement(originSQL))
 			retComp.SetSchedulingTraceRecorder(&cwft.schedulingTrace)
-			retComp.Reset(cwft.proc, getStatementStartAt(execCtx.reqCtx), fill, cwft.ses.GetSql())
+			if err = retComp.Reset(cwft.proc, getStatementStartAt(execCtx.reqCtx), fill, cwft.ses.GetSql()); err != nil {
+				return nil, err
+			}
 			cwft.compile = retComp
 		}
 

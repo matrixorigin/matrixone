@@ -61,17 +61,17 @@ drop table t_approx_decimal38_38;
 drop table if exists t_approx_float_infinity;
 create table t_approx_float_infinity (v double);
 insert into t_approx_float_infinity values (cast('Inf' as double));
-select approx_percentile(v, 0) as p0, approx_percentile(v, 0.5) as p50, approx_percentile(v, 1) as p100 from t_approx_float_infinity;
-➤ p0[8,54,0]  ¦  p50[8,54,0]  ¦  p100[8,54,0]  𝄀
-+Infinity  ¦  +Infinity  ¦  +Infinity
+select approx_percentile(v, 0) = cast('Inf' as double) as p0_is_pos_inf, approx_percentile(v, 0.5) = cast('Inf' as double) as p50_is_pos_inf, approx_percentile(v, 1) = cast('Inf' as double) as p100_is_pos_inf from t_approx_float_infinity;
+➤ p0_is_pos_inf[-7,1,0]  ¦  p50_is_pos_inf[-7,1,0]  ¦  p100_is_pos_inf[-7,1,0]  𝄀
+1  ¦  1  ¦  1
 truncate table t_approx_float_infinity;
 insert into t_approx_float_infinity values (cast('-Inf' as double));
-select approx_percentile(v, 0) as p0, approx_percentile(v, 0.5) as p50, approx_percentile(v, 1) as p100 from t_approx_float_infinity;
-➤ p0[8,54,0]  ¦  p50[8,54,0]  ¦  p100[8,54,0]  𝄀
--Infinity  ¦  -Infinity  ¦  -Infinity
+select approx_percentile(v, 0) = cast('-Inf' as double) as p0_is_neg_inf, approx_percentile(v, 0.5) = cast('-Inf' as double) as p50_is_neg_inf, approx_percentile(v, 1) = cast('-Inf' as double) as p100_is_neg_inf from t_approx_float_infinity;
+➤ p0_is_neg_inf[-7,1,0]  ¦  p50_is_neg_inf[-7,1,0]  ¦  p100_is_neg_inf[-7,1,0]  𝄀
+1  ¦  1  ¦  1
 truncate table t_approx_float_infinity;
 insert into t_approx_float_infinity values (cast('-Inf' as double)), (cast('Inf' as double));
-select approx_percentile(v, 0) as p0, approx_percentile(v, 1) as p100 from t_approx_float_infinity;
-➤ p0[8,54,0]  ¦  p100[8,54,0]  𝄀
--Infinity  ¦  +Infinity
+select approx_percentile(v, 0) = cast('-Inf' as double) as p0_is_neg_inf, approx_percentile(v, 1) = cast('Inf' as double) as p100_is_pos_inf from t_approx_float_infinity;
+➤ p0_is_neg_inf[-7,1,0]  ¦  p100_is_pos_inf[-7,1,0]  𝄀
+1  ¦  1
 drop table t_approx_float_infinity;

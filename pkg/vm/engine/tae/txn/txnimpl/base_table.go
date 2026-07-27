@@ -176,6 +176,9 @@ func (tbl *baseTable) getRowsByPK(ctx context.Context, pks containers.Vector) (r
 	}
 	for it.Next() {
 		obj := it.Item()
+		if isEmptyDroppedAppendableObject(obj) {
+			continue
+		}
 		objData := obj.GetObjectData()
 		if objData == nil {
 			continue
@@ -208,6 +211,8 @@ func (tbl *baseTable) getRowsByPK(ctx context.Context, pks containers.Vector) (r
 /*
 similar to findDeletes
 */
+// incrementalGetRowsByPK checks the inclusive logical interval [from, to].
+// Callers that hold an exclusive dedup watermark must pass watermark.Next().
 func (tbl *baseTable) incrementalGetRowsByPK(ctx context.Context, pks containers.Vector, from, to types.TS, inQueue bool) (rowIDs containers.Vector, err error) {
 	var objIt btree.IterG[*catalog.ObjectEntry]
 	if tbl.isTombstone {
@@ -219,6 +224,14 @@ func (tbl *baseTable) incrementalGetRowsByPK(ctx context.Context, pks containers
 	}
 	defer objIt.Release()
 	rowIDs = tbl.txnTable.store.rt.VectorPool.Small.GetVector(&objectio.RowidType)
+	defer func() {
+		// Ownership transfers to the caller only on success. In particular,
+		// lazy commit-TS reads add cancellable I/O errors after allocation.
+		if err != nil {
+			rowIDs.Close()
+			rowIDs = nil
+		}
+	}()
 	vector.AppendMultiFixed[types.Rowid](
 		rowIDs.GetDownstreamVector(),
 		types.EmptyRowid,
@@ -233,6 +246,9 @@ func (tbl *baseTable) incrementalGetRowsByPK(ctx context.Context, pks containers
 			break
 		}
 		obj := objIt.Item()
+		if isEmptyDroppedAppendableObject(obj) {
+			continue
+		}
 
 		if obj.CreatedAt.GT(&to) {
 			continue
@@ -242,8 +258,10 @@ func (tbl *baseTable) incrementalGetRowsByPK(ctx context.Context, pks containers
 			if !obj.HasDropIntent() && obj.CreatedAt.LT(&from) {
 				earlybreak = true
 			}
-		} else if obj.CreatedAt.LT(&from) {
-			continue
+		} else {
+			if obj.CreatedAt.LT(&from) {
+				continue
+			}
 		}
 
 		// only keep the category-a + category-c for candidates.
@@ -282,6 +300,29 @@ func (tbl *baseTable) incrementalGetRowsByPK(ctx context.Context, pks containers
 	// 	zap.String("candidates", s),
 	// )
 	return
+}
+
+func isEmptyDroppedAppendableObject(obj *catalog.ObjectEntry) bool {
+	stats := obj.GetObjectStats()
+	if !obj.IsAppendable() || stats.Rows() != 0 || stats.BlkCnt() != 0 {
+		return false
+	}
+	dropCommitted := obj.HasDropCommitted()
+	if !dropCommitted && obj.IsCEntry() && obj.HasDCounterpart() {
+		dropCommitted = obj.GetNextVersion().HasDropCommitted()
+	}
+	if !dropCommitted {
+		return false
+	}
+	objData := obj.GetObjectData()
+	if objData == nil {
+		return false
+	}
+	rows, err := objData.Rows()
+	if err != nil || rows != 0 {
+		return false
+	}
+	return true
 }
 
 func (tbl *baseTable) CleanUp() {
