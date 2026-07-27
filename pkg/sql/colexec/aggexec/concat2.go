@@ -15,8 +15,11 @@
 package aggexec
 
 import (
+	"bytes"
+	"encoding/binary"
 	"math"
 	"slices"
+	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -30,6 +33,32 @@ type groupConcatExec struct {
 	distinct     bool
 	distinctHash distinctHash
 	separator    []byte
+	maxLen       uint64
+}
+
+var groupConcatConfigMagic = []byte{0xff, 'G', 'C', 1}
+
+const groupConcatConfigHeaderSize = 12
+
+// EncodeGroupConcatConfig serializes the statement-specific GROUP_CONCAT
+// settings into the aggregate config that is also sent to remote CNs.
+func EncodeGroupConcatConfig(separator string, maxLen uint64) []byte {
+	config := make([]byte, groupConcatConfigHeaderSize+len(separator))
+	copy(config, groupConcatConfigMagic)
+	binary.LittleEndian.PutUint64(config[len(groupConcatConfigMagic):], maxLen)
+	copy(config[groupConcatConfigHeaderSize:], separator)
+	return config
+}
+
+// RefreshGroupConcatConfigMaxLen preserves the statement's separator while
+// replacing the session-scoped limit for a reused prepared execution.
+func RefreshGroupConcatConfigMaxLen(config []byte, maxLen uint64) []byte {
+	separator := config
+	if len(config) >= groupConcatConfigHeaderSize &&
+		bytes.Equal(config[:len(groupConcatConfigMagic)], groupConcatConfigMagic) {
+		separator = config[groupConcatConfigHeaderSize:]
+	}
+	return EncodeGroupConcatConfig(string(separator), maxLen)
 }
 
 func GroupConcatReturnType(args []types.Type) types.Type {
@@ -46,6 +75,7 @@ func newGroupConcatExec(mg *mpool.MPool, info multiAggInfo, separator string) Ag
 		distinct:     info.distinct,
 		distinctHash: newDistinctHash(mg),
 		separator:    []byte(separator),
+		maxLen:       math.MaxUint64,
 	}
 	exec.mp = mg
 	exec.aggInfo = aggInfo{
@@ -155,7 +185,20 @@ func (exec *groupConcatExec) BatchMerge(next AggFuncExec, offset int, groups []u
 }
 
 func (exec *groupConcatExec) SetExtraInformation(partialResult any, _ int) error {
-	exec.separator = partialResult.([]byte)
+	config, ok := partialResult.([]byte)
+	if !ok {
+		return moerr.NewInternalErrorNoCtx("group_concat: invalid config type")
+	}
+	if len(config) >= groupConcatConfigHeaderSize &&
+		bytes.Equal(config[:len(groupConcatConfigMagic)], groupConcatConfigMagic) {
+		exec.maxLen = binary.LittleEndian.Uint64(config[len(groupConcatConfigMagic):groupConcatConfigHeaderSize])
+		exec.separator = config[groupConcatConfigHeaderSize:]
+		return nil
+	}
+
+	// Keep accepting the legacy separator-only config for intermediate
+	// results and callers that construct aggregate executors directly.
+	exec.separator = config
 	return nil
 }
 
@@ -180,20 +223,36 @@ func (exec *groupConcatExec) Flush() (_ []*vector.Vector, retErr error) {
 				vector.AppendNull(vecs[i], exec.mp)
 				continue
 			}
-			buf := make([]byte, 0, 64)
+			initialCapacity := uint64(64)
+			if exec.maxLen < initialCapacity {
+				initialCapacity = exec.maxLen
+			}
+			buf := make([]byte, 0, int(initialCapacity))
 			first := true
+			binaryResult := exec.retType.Oid == types.T_blob
+			truncated := false
 			if err := st.iter(uint16(j), func(k []byte) error {
+				if truncated {
+					return nil
+				}
 				payload := aggPayloadFromKey(&exec.aggInfo, k)
 				if !first {
-					buf = append(buf, exec.separator...)
+					buf, truncated = appendGroupConcatBytes(buf, exec.separator, exec.maxLen, binaryResult)
+					if truncated {
+						return nil
+					}
 				}
 				first = false
 				return payloadFieldIterator(payload, len(exec.argTypes), func(i int, isNull bool, data []byte) error {
-					if isNull {
+					if isNull || truncated || uint64(len(buf)) >= exec.maxLen {
 						return nil
 					}
 					var err error
 					buf, err = appendGroupConcatData(buf, exec.argTypes[i], data)
+					if uint64(len(buf)) > exec.maxLen {
+						buf = truncateGroupConcatBytes(buf, exec.maxLen, binaryResult)
+						truncated = true
+					}
 					return err
 				})
 			}); err != nil {
@@ -205,6 +264,34 @@ func (exec *groupConcatExec) Flush() (_ []*vector.Vector, retErr error) {
 		}
 	}
 	return vecs, nil
+}
+
+func appendGroupConcatBytes(dst, src []byte, maxLen uint64, binaryResult bool) ([]byte, bool) {
+	if uint64(len(dst)) >= maxLen {
+		return dst, len(src) > 0
+	}
+	remaining := maxLen - uint64(len(dst))
+	truncated := uint64(len(src)) > remaining
+	if uint64(len(src)) > remaining {
+		src = src[:int(remaining)]
+	}
+	dst = append(dst, src...)
+	if truncated {
+		dst = truncateGroupConcatBytes(dst, maxLen, binaryResult)
+	}
+	return dst, truncated
+}
+
+func truncateGroupConcatBytes(value []byte, maxLen uint64, binaryResult bool) []byte {
+	if uint64(len(value)) > maxLen {
+		value = value[:int(maxLen)]
+	}
+	if !binaryResult {
+		for len(value) > 0 && !utf8.Valid(value) {
+			value = value[:len(value)-1]
+		}
+	}
+	return value
 }
 
 func (exec *groupConcatExec) Size() int64 {
