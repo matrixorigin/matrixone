@@ -198,6 +198,7 @@ func mock_mo_indexes(
 		"`ordinal_position` int unsigned NOT NULL," +
 		"`options` text DEFAULT NULL," +
 		"`index_table_name` varchar(5000) DEFAULT NULL," +
+		"`included_columns` text DEFAULT NULL," +
 		"PRIMARY KEY (`table_id`,`column_name`)" + // use table_id as primary key instead of id to avoid duplicate
 		")"
 
