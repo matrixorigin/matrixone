@@ -905,7 +905,7 @@ func TestRollbackDDLAdvancesSessionGeneration(t *testing.T) {
 			name:            "failed rollback with DDL",
 			haveDDL:         true,
 			rollbackError:   true,
-			expectedVersion: 0,
+			expectedVersion: 1,
 		},
 	}
 

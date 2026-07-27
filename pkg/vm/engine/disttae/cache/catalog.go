@@ -385,6 +385,27 @@ func (cc *CatalogCache) GetStartTS() types.TS {
 	return cc.mu.start
 }
 
+func (cc *CatalogCache) UpdateSubscriptionMetadata(bat *batch.Batch) {
+	if bat == nil || len(bat.Vecs) <= MO_TIMESTAMP_IDX {
+		return
+	}
+	timestamps := vector.MustFixedColWithTypeCheck[types.TS](bat.GetVector(MO_TIMESTAMP_IDX))
+	cc.subscriptionMetadata.Lock()
+	defer cc.subscriptionMetadata.Unlock()
+	for _, ts := range timestamps {
+		value := ts.ToTimestamp()
+		if value.Greater(cc.subscriptionMetadata.ts) {
+			cc.subscriptionMetadata.ts = value
+		}
+	}
+}
+
+func (cc *CatalogCache) GetSubscriptionMetadataTS() timestamp.Timestamp {
+	cc.subscriptionMetadata.RLock()
+	defer cc.subscriptionMetadata.RUnlock()
+	return cc.subscriptionMetadata.ts
+}
+
 func (cc *CatalogCache) HasNewerVersion(qry *TableChangeQuery) bool {
 	var find bool
 	if qry.DatabaseName != "" {

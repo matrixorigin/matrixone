@@ -69,6 +69,10 @@ type CatalogCache struct {
 		// cannot hide a change, and memory use is independent of tenant churn.
 		byAccount [tableChangeBucketCount]timestamp.Timestamp
 	}
+	subscriptionMetadata struct {
+		sync.RWMutex
+		ts timestamp.Timestamp
+	}
 	//tables and database is safe to be read concurrently.
 	tables    *tableCache
 	databases *databaseCache

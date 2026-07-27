@@ -3983,9 +3983,23 @@ func recordSessionDDL(ses FeSession, execCtx *ExecCtx, err error) {
 	if !changesSessionCatalog(execCtx.stmt, queryPlan) {
 		return
 	}
-	if session, ok := ses.(*Session); ok {
+	if session := upstreamUserSession(ses); session != nil {
 		session.advanceDDLVersion()
 	}
+}
+
+func upstreamUserSession(ses FeSession) *Session {
+	for ses != nil {
+		if session, ok := ses.(*Session); ok {
+			return session
+		}
+		next := ses.GetUpstream()
+		if next == ses {
+			return nil
+		}
+		ses = next
+	}
+	return nil
 }
 
 func executeStmtWithIncrStmt(ses FeSession,

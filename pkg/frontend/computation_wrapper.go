@@ -663,8 +663,14 @@ func initExecuteStmtParamWithResolver(
 	currentDDLVersion := ses.getDDLVersion()
 	change := prepareStmt.tempTableVersion != currentTempTableVersion ||
 		prepareStmt.ddlVersion != currentDDLVersion
+	var subscriptionMetadataTS timestamp.Timestamp
+	if catalogCache != nil {
+		subscriptionMetadataTS = catalogCache.GetSubscriptionMetadataTS()
+	}
+	validateSubscriptions := preparedSubscriptionsNeedValidation(
+		subscriptionMetadataTS, prepareStmt.Ts, prepareStmt.subscriptionCheckTS)
 	for _, obj := range preparePlan.GetSchemas() {
-		if obj.GetSubscriptionName() != "" {
+		if obj.GetSubscriptionName() != "" && validateSubscriptions {
 			subscriptionChanged, err := preparedSubscriptionSchemaChanged(resolve, obj)
 			if err != nil {
 				return nil, nil, nil, "", false, err
@@ -673,6 +679,11 @@ func initExecuteStmtParamWithResolver(
 				change = true
 				break
 			}
+		}
+		// A historical dependency is immutable at its captured snapshot. Newer
+		// versions of the current object must not invalidate that plan.
+		if plan2.IsSnapshotValid(obj.GetSnapshot()) {
+			continue
 		}
 		accountId := prepareSchemaAccountID(ses.GetAccountId(), obj)
 		tblKey := &cache.TableChangeQuery{
@@ -689,6 +700,9 @@ func initExecuteStmtParamWithResolver(
 			change = true
 			break
 		}
+	}
+	if !change && validateSubscriptions {
+		prepareStmt.subscriptionCheckTS = subscriptionMetadataTS
 	}
 
 	// These DDL plans cache catalog state that is not represented by a table
@@ -728,6 +742,7 @@ func initExecuteStmtParamWithResolver(
 		prepareStmt.Ts = prepareTs
 		prepareStmt.tempTableVersion = currentTempTableVersion
 		prepareStmt.ddlVersion = currentDDLVersion
+		prepareStmt.subscriptionCheckTS = timestamp.Timestamp{}
 	}
 
 	// Recreate the cached compile only when a plan dependency changed.
@@ -834,6 +849,14 @@ func currentTxnSnapshotTS(ses *Session) timestamp.Timestamp {
 	return txnOperator.SnapshotTS()
 }
 
+func preparedSubscriptionsNeedValidation(
+	metadataTS timestamp.Timestamp,
+	prepareTS timestamp.Timestamp,
+	checkedTS timestamp.Timestamp,
+) bool {
+	return metadataTS.Greater(checkedTS) && metadataTS.Greater(prepareTS)
+}
+
 func preparedSubscriptionSchemaChanged(resolve preparedSchemaResolver, expected *plan.ObjectRef) (bool, error) {
 	if expected.GetPubInfo() == nil {
 		return true, nil
@@ -850,6 +873,23 @@ func preparedSubscriptionSchemaChanged(resolve preparedSchemaResolver, expected 
 		return true, nil
 	}
 	expectedTenant := expected.GetPubInfo().GetTenantId()
+	if plan2.IsSnapshotValid(expected.GetSnapshot()) {
+		if currentRef.GetSubscriptionName() != expected.GetSubscriptionName() ||
+			currentRef.GetPubInfo().GetTenantId() != expectedTenant {
+			return true, nil
+		}
+		currentRef, currentDef, err = resolve(
+			expected.GetSubscriptionName(),
+			expected.GetObjName(),
+			expected.GetSnapshot(),
+		)
+		if err != nil {
+			return false, err
+		}
+		if currentRef == nil || currentDef == nil || currentRef.GetPubInfo() == nil {
+			return true, nil
+		}
+	}
 	return currentRef.GetSubscriptionName() != expected.GetSubscriptionName() ||
 		currentRef.GetPubInfo().GetTenantId() != expectedTenant ||
 		currentRef.GetSchemaName() != expected.GetSchemaName() ||

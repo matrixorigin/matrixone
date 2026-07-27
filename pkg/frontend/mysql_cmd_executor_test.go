@@ -6396,6 +6396,33 @@ func TestRecordSessionDDL(t *testing.T) {
 	require.Equal(t, uint64(5), ses.getDDLVersion())
 }
 
+func TestRecordSessionDDLPropagatesToUpstreamSession(t *testing.T) {
+	ses := &Session{}
+	backSes := &backSession{}
+	backSes.upstream = ses
+
+	recordSessionDDL(backSes, &ExecCtx{
+		stmt: &tree.CreateSource{},
+		cw: &TxnComputationWrapper{plan: &plan0.Plan{
+			Plan: &plan0.Plan_Ddl{Ddl: &plan0.DataDefinition{
+				DdlType: plan0.DataDefinition_CREATE_TABLE,
+			}},
+		}},
+	}, nil)
+
+	require.Equal(t, uint64(1), ses.getDDLVersion())
+}
+
+func TestDiscardedBackgroundTxnDDLPropagatesToUpstreamSession(t *testing.T) {
+	ses := &Session{}
+	backSes := &backSession{}
+	backSes.upstream = ses
+
+	advanceDDLVersionAfterDiscardedTxnDDL(backSes, true)
+
+	require.Equal(t, uint64(1), ses.getDDLVersion())
+}
+
 func TestPlanChangesCatalog(t *testing.T) {
 	require.True(t, planChangesCatalog(&plan0.Plan{
 		Plan: &plan0.Plan_Ddl{Ddl: &plan0.DataDefinition{DdlType: plan0.DataDefinition_CREATE_TABLE}},

@@ -433,6 +433,54 @@ func TestPreparedSubscriptionSchemaChangedUsesLogicalName(t *testing.T) {
 	require.False(t, changed)
 }
 
+func TestPreparedSubscriptionSchemaChangedUsesDependencySnapshot(t *testing.T) {
+	snapshot := &plan.Snapshot{
+		TS: &timestamp.Timestamp{PhysicalTime: 42, LogicalTime: 7},
+	}
+	expected := &plan.ObjectRef{
+		Server: 4, Db: 2, Obj: 3, SchemaName: "publisher_db", ObjName: "src",
+		SubscriptionName: "sub", PubInfo: &plan.PubInfo{TenantId: 11},
+		Snapshot: snapshot,
+	}
+	calls := 0
+	changed, err := preparedSubscriptionSchemaChanged(func(
+		databaseName, tableName string, gotSnapshot *plan.Snapshot,
+	) (*plan.ObjectRef, *plan.TableDef, error) {
+		calls++
+		if calls == 1 {
+			require.Nil(t, gotSnapshot)
+		} else {
+			require.Equal(t, snapshot, gotSnapshot)
+		}
+		return &plan.ObjectRef{
+				Obj: 3, SchemaName: "publisher_db", ObjName: "src",
+				SubscriptionName: "sub", PubInfo: &plan.PubInfo{TenantId: 11},
+			},
+			&plan.TableDef{DbId: 2, TblId: 3, Version: 4}, nil
+	}, expected)
+	require.NoError(t, err)
+	require.False(t, changed)
+	require.Equal(t, 2, calls)
+}
+
+func TestPreparedSubscriptionsNeedValidation(t *testing.T) {
+	require.False(t, preparedSubscriptionsNeedValidation(
+		timestamp.Timestamp{PhysicalTime: 100},
+		timestamp.Timestamp{PhysicalTime: 100},
+		timestamp.Timestamp{},
+	))
+	require.True(t, preparedSubscriptionsNeedValidation(
+		timestamp.Timestamp{PhysicalTime: 200},
+		timestamp.Timestamp{PhysicalTime: 100},
+		timestamp.Timestamp{},
+	))
+	require.False(t, preparedSubscriptionsNeedValidation(
+		timestamp.Timestamp{PhysicalTime: 200},
+		timestamp.Timestamp{PhysicalTime: 100},
+		timestamp.Timestamp{PhysicalTime: 200},
+	))
+}
+
 func TestCurrentTxnSnapshotTS(t *testing.T) {
 	ses, prepareStmt, _, _ := newPreparedExecuteEnv(t, 100)
 	defer prepareStmt.Close()

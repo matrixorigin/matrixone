@@ -761,11 +761,10 @@ func (th *TxnHandler) rollbackUnsafe(
 		err, hasRecovered = ExecuteFuncWithRecover(func() error {
 			return th.txnOp.Rollback(ctx2)
 		})
+		advanceDDLVersionAfterDiscardedTxnDDL(execCtx.ses, haveDDL)
 		if err != nil || hasRecovered {
 			err = moerr.AttachCause(ctx2, err)
 			th.invalidateTxnUnsafe()
-		} else {
-			advanceDDLVersionAfterDiscardedTxnDDL(execCtx.ses, haveDDL)
 		}
 	}
 	th.invalidateTxnUnsafe()
@@ -777,7 +776,7 @@ func advanceDDLVersionAfterDiscardedTxnDDL(ses FeSession, haveDDL bool) {
 	if !haveDDL {
 		return
 	}
-	if session, ok := ses.(*Session); ok {
+	if session := upstreamUserSession(ses); session != nil {
 		// Plans rebuilt against transaction-local DDL must not survive the
 		// rollback or failed terminal outcome of the workspace that supplied
 		// their schema.

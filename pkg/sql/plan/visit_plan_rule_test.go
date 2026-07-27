@@ -167,8 +167,10 @@ func TestCollectPrepareDdlSchemasUsesCloneSourceMetadata(t *testing.T) {
 				SubscriptionName: "sub",
 				PubInfo:          &planpb.PubInfo{TenantId: 12},
 			},
-			SrcTableDef:  &planpb.TableDef{Name: "src", DbName: "tpch", DbId: 10, TblId: 20, Version: 30},
-			ScanSnapshot: &planpb.Snapshot{},
+			SrcTableDef: &planpb.TableDef{Name: "src", DbName: "tpch", DbId: 10, TblId: 20, Version: 30},
+			ScanSnapshot: &planpb.Snapshot{
+				TS: &timestamp.Timestamp{PhysicalTime: 42},
+			},
 		}},
 	}}}
 
@@ -178,6 +180,9 @@ func TestCollectPrepareDdlSchemasUsesCloneSourceMetadata(t *testing.T) {
 		{
 			Server: 30, Db: 10, Schema: 10, Obj: 20, SchemaName: "tpch", ObjName: "src",
 			SubscriptionName: "sub", PubInfo: &planpb.PubInfo{TenantId: 12},
+			Snapshot: &planpb.Snapshot{
+				TS: &timestamp.Timestamp{PhysicalTime: 42},
+			},
 		},
 		{SchemaName: "tpch"},
 	}, schemas)
@@ -415,6 +420,42 @@ func TestResetPreparePlanSkipsScanWithoutCatalogIdentity(t *testing.T) {
 	require.Empty(t, schemas)
 }
 
+func TestResetPreparePlanPreservesScanSnapshot(t *testing.T) {
+	snapshot := &planpb.Snapshot{
+		TS: &timestamp.Timestamp{PhysicalTime: 42, LogicalTime: 7},
+	}
+	queryPlan := &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{
+		Steps: []int32{0},
+		Nodes: []*planpb.Node{{
+			NodeType:     planpb.Node_TABLE_SCAN,
+			ObjRef:       &planpb.ObjectRef{SchemaName: "db", ObjName: "t"},
+			TableDef:     &planpb.TableDef{Name: "t", DbId: 10, TblId: 20, Version: 30},
+			ScanSnapshot: snapshot,
+		}},
+	}}}
+
+	schemas, _, err := ResetPreparePlan(NewMockCompilerContext(false), queryPlan)
+	require.NoError(t, err)
+	require.Len(t, schemas, 1)
+	require.Equal(t, snapshot, schemas[0].GetSnapshot())
+	require.NotSame(t, snapshot, schemas[0].GetSnapshot())
+}
+
+func TestAppendPrepareSchemasKeepsDistinctSnapshots(t *testing.T) {
+	base := &planpb.ObjectRef{SchemaName: "db", ObjName: "t", Db: 10, Obj: 20}
+	first := DeepCopyObjectRef(base)
+	first.Snapshot = &planpb.Snapshot{
+		TS: &timestamp.Timestamp{PhysicalTime: 42},
+	}
+	second := DeepCopyObjectRef(base)
+	second.Snapshot = &planpb.Snapshot{
+		TS: &timestamp.Timestamp{PhysicalTime: 43},
+	}
+
+	schemas := appendPrepareSchemas(nil, first, second, DeepCopyObjectRef(first))
+	require.Len(t, schemas, 2)
+}
+
 func TestCollectPrepareViewSchemasPreservesIdentity(t *testing.T) {
 	mock := NewMockCompilerContext(false)
 	snapshot := &Snapshot{
@@ -449,6 +490,7 @@ func TestCollectPrepareViewSchemasPreservesIdentity(t *testing.T) {
 	require.Equal(t, "sub", schemas[0].SubscriptionName)
 	require.Equal(t, int32(11), schemas[0].GetPubInfo().GetTenantId())
 	require.Equal(t, int64(30), schemas[0].Server)
+	require.Equal(t, snapshot, schemas[0].GetSnapshot())
 }
 
 func TestCollectPrepareViewSchemasKeepsLogicalSubscriptions(t *testing.T) {

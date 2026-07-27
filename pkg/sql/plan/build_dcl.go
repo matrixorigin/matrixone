@@ -17,6 +17,7 @@ package plan
 import (
 	"math"
 
+	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -249,7 +250,8 @@ func collectPrepareDdlSchemas(ctx CompilerContext, stmt tree.Statement, prepareP
 		}
 	case *tree.CloneTable:
 		if clone := preparePlan.GetDdl().GetCloneTable(); clone != nil {
-			schemas = appendPrepareSchemas(schemas, prepareSchemaRef(clone.GetSrcObjDef(), clone.GetSrcTableDef()))
+			schemas = appendPrepareSchemas(schemas, prepareSchemaRefWithSnapshot(
+				clone.GetSrcObjDef(), clone.GetSrcTableDef(), clone.GetScanSnapshot()))
 		}
 	}
 
@@ -357,16 +359,30 @@ func collectPrepareViewSchemas(ctx CompilerContext) ([]*plan.ObjectRef, error) {
 		if objRef == nil || tableDef == nil {
 			return nil, moerr.NewNoSuchTable(ctx.GetContext(), databaseName, tableName)
 		}
-		schemas = appendPrepareSchemas(schemas, prepareSchemaRef(objRef, tableDef))
+		schemas = appendPrepareSchemas(schemas, prepareSchemaRefWithSnapshot(
+			objRef, tableDef, snapshot))
 	}
 	return schemas, nil
 }
 
 func prepareSchemaRef(objRef *plan.ObjectRef, tableDef *plan.TableDef) *plan.ObjectRef {
+	return prepareSchemaRefWithSnapshot(objRef, tableDef, nil)
+}
+
+func prepareSchemaRefWithSnapshot(
+	objRef *plan.ObjectRef,
+	tableDef *plan.TableDef,
+	snapshot *Snapshot,
+) *plan.ObjectRef {
 	if objRef == nil || tableDef == nil {
 		return nil
 	}
 	ref := DeepCopyObjectRef(objRef)
+	if IsSnapshotValid(snapshot) {
+		ref.Snapshot = DeepCopySnapshot(snapshot)
+	} else {
+		ref.Snapshot = nil
+	}
 	ref.Server = int64(tableDef.Version)
 	ref.Db = int64(tableDef.DbId)
 	ref.Schema = int64(tableDef.DbId)
@@ -391,9 +407,10 @@ func appendPrepareSchemas(schemas []*plan.ObjectRef, refs ...*plan.ObjectRef) []
 				(schema.PubInfo != nil && ref.PubInfo != nil &&
 					schema.PubInfo.GetTenantId() == ref.PubInfo.GetTenantId())
 			sameSubscription := schema.SubscriptionName == ref.SubscriptionName
-			sameID := sameTenant && sameSubscription &&
+			sameSnapshot := proto.Equal(schema.Snapshot, ref.Snapshot)
+			sameID := sameTenant && sameSubscription && sameSnapshot &&
 				schema.Obj != 0 && ref.Obj != 0 && schema.Db == ref.Db && schema.Obj == ref.Obj
-			sameName := sameTenant && sameSubscription &&
+			sameName := sameTenant && sameSubscription && sameSnapshot &&
 				schema.SchemaName == ref.SchemaName && schema.ObjName == ref.ObjName
 			if sameID || sameName {
 				duplicate = true

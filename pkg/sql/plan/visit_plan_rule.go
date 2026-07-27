@@ -57,7 +57,8 @@ func (rule *GetParamRule) MatchNode(node *Node) bool {
 		node.NodeType == plan.Node_SOURCE_SCAN ||
 		node.NodeType == plan.Node_INSERT {
 		if node.ObjRef != nil && node.TableDef != nil {
-			rule.schemas = append(rule.schemas, prepareSchemaRef(node.ObjRef, node.TableDef))
+			rule.schemas = append(rule.schemas, prepareSchemaRefWithSnapshot(
+				node.ObjRef, node.TableDef, node.ScanSnapshot))
 		}
 		if node.NodeType == plan.Node_TABLE_SCAN && node.ObjRef != nil && node.TableDef != nil {
 			for _, indexDef := range node.TableDef.Indexes {
