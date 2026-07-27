@@ -590,6 +590,7 @@ func logKeepRemoteLocksFailed(
 	logger *log.MOLogger,
 	bind pb.LockTable,
 	err error,
+	count int,
 ) {
 	if logger == nil {
 		return
@@ -598,7 +599,8 @@ func logKeepRemoteLocksFailed(
 	logger.Log(
 		"failed to keep remote locks",
 		getLogOptions(zap.ErrorLevel),
-		zap.String("bind", bind.DebugString()),
+		zap.Int("count", count),
+		zap.String("first-bind", bind.DebugString()),
 		zap.Error(err),
 	)
 }

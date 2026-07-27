@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	pbtxn "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	txnclient "github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -443,6 +444,16 @@ func (th *TxnHandler) createTxnOpUnsafe(execCtx *ExecCtx) error {
 			opts = append(opts,
 				txnclient.WithTxnLockWaitTimeout(time.Duration(seconds)*time.Second))
 		}
+	}
+
+	// A DATA BRANCH create can use an independent background transaction for its
+	// quota check and clone. Apply the required mode to that owning transaction;
+	// shared explicit transactions keep their configured semantics and are
+	// validated by the quota checker instead.
+	if backSes, ok := execCtx.ses.(*backSession); ok && backSes.forcePessimisticRC {
+		opts = append(opts,
+			txnclient.WithTxnMode(pbtxn.TxnMode_Pessimistic),
+			txnclient.WithTxnIsolation(pbtxn.TxnIsolation_RC))
 	}
 
 	tempCtx, tempCancel := context.WithTimeoutCause(th.txnCtx, pu.SV.CreateTxnOpTimeout.Duration, moerr.CauseCreateTxnOpUnsafe)

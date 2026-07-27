@@ -76,20 +76,21 @@ func newCodecTestProcess(t *testing.T) (*Process, client.TxnOperator) {
 	proc.SetQueryId("query-1")
 	proc.Base.UnixTime = 12345
 	proc.Base.SessionInfo = SessionInfo{
-		Account:             "acc",
-		User:                "user",
-		Host:                "host",
-		Role:                "role",
-		ConnectionID:        99,
-		Database:            "db1",
-		Version:             "v1",
-		TimeZone:            time.FixedZone("UTC+8", 8*3600),
-		LockWaitTimeout:     7,
-		LockWaitTimeoutSet:  true,
-		QueryId:             []string{"stmt-qid"},
-		MatrixOneNativeMode: true,
-		LogLevel:            zap.WarnLevel,
-		SessionId:           uuid.MustParse("11111111-2222-3333-4444-555555555555"),
+		Account:                             "acc",
+		User:                                "user",
+		Host:                                "host",
+		Role:                                "role",
+		ConnectionID:                        99,
+		Database:                            "db1",
+		Version:                             "v1",
+		TimeZone:                            time.FixedZone("UTC+8", 8*3600),
+		LockWaitTimeout:                     7,
+		LockWaitTimeoutSet:                  true,
+		QueryId:                             []string{"stmt-qid"},
+		MatrixOneNativeMode:                 true,
+		LogLevel:                            zap.WarnLevel,
+		SessionId:                           uuid.MustParse("11111111-2222-3333-4444-555555555555"),
+		ExplicitZeroTemporalCastReturnsNull: true,
 	}
 	sp := NewStmtProfile(uuid.MustParse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"), uuid.MustParse("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"))
 	sp.SetTxnId([]byte("txn-profile-123456"))
@@ -106,7 +107,7 @@ func newCodecTestProcess(t *testing.T) (*Process, client.TxnOperator) {
 
 func TestProcessCodecHelpers(t *testing.T) {
 	t.Run("limitation conversion", func(t *testing.T) {
-		lim := Limitation{Size: 1, BatchRows: 2, BatchSize: 3, PartitionRows: 4, ReaderSize: 5}
+		lim := Limitation{Size: 1, BatchRows: 2, BatchSize: 3, PartitionRows: 4, ReaderSize: 5, SpillSize: 6}
 		pb := convertToPipelineLimitation(lim)
 		require.Equal(t, lim.Size, pb.Size)
 		require.Equal(t, lim.BatchRows, pb.BatchRows)
@@ -127,24 +128,26 @@ func TestProcessCodecHelpers(t *testing.T) {
 		timeBytes, err := time.Now().In(time.UTC).MarshalBinary()
 		require.NoError(t, err)
 		info, err := ConvertToProcessSessionInfo(pipeline.SessionInfo{
-			User:                "u",
-			Host:                "h",
-			Role:                "r",
-			ConnectionId:        1,
-			Database:            "d",
-			Version:             "v",
-			Account:             "a",
-			QueryId:             []string{"q1"},
-			TimeZone:            timeBytes,
-			LockWaitTimeout:     9,
-			LockWaitTimeoutSet:  true,
-			MatrixoneNativeMode: true,
+			User:                                "u",
+			Host:                                "h",
+			Role:                                "r",
+			ConnectionId:                        1,
+			Database:                            "d",
+			Version:                             "v",
+			Account:                             "a",
+			QueryId:                             []string{"q1"},
+			TimeZone:                            timeBytes,
+			LockWaitTimeout:                     9,
+			LockWaitTimeoutSet:                  true,
+			MatrixoneNativeMode:                 true,
+			ExplicitZeroTemporalCastReturnsNull: true,
 		})
 		require.NoError(t, err)
 		require.Equal(t, "u", info.User)
 		require.Equal(t, int64(9), info.LockWaitTimeout)
 		require.True(t, info.MatrixOneNativeMode)
 		require.True(t, info.LockWaitTimeoutSet)
+		require.True(t, info.ExplicitZeroTemporalCastReturnsNull)
 		require.Equal(t, "UTC", info.TimeZone.String())
 
 		info, err = ConvertToProcessSessionInfo(pipeline.SessionInfo{TimeZone: []byte("bad")})
@@ -205,6 +208,7 @@ func TestBuildProcessInfoAndMockProcessInfoWithPro(t *testing.T) {
 	require.Equal(t, uint64(99), info.SessionInfo.ConnectionId)
 	require.Equal(t, int64(7), info.SessionInfo.LockWaitTimeout)
 	require.True(t, info.SessionInfo.MatrixoneNativeMode)
+	require.True(t, info.SessionInfo.ExplicitZeroTemporalCastReturnsNull)
 	require.True(t, info.SessionInfo.LockWaitTimeoutSet)
 	require.Equal(t, pipeline.SessionLoggerInfo_Warn, info.SessionLogger.LogLevel)
 
@@ -252,6 +256,7 @@ func TestCodecServiceEncodeDecodeAndLookup(t *testing.T) {
 	require.Equal(t, info.SessionInfo.User, decodedProc.Base.SessionInfo.User)
 	require.Equal(t, info.SessionInfo.LockWaitTimeout, decodedProc.Base.SessionInfo.LockWaitTimeout)
 	require.Equal(t, info.SessionInfo.MatrixoneNativeMode, decodedProc.Base.SessionInfo.MatrixOneNativeMode)
+	require.True(t, decodedProc.Base.SessionInfo.ExplicitZeroTemporalCastReturnsNull)
 	require.Equal(t, info.SessionInfo.LockWaitTimeoutSet, decodedProc.Base.SessionInfo.LockWaitTimeoutSet)
 	require.NotNil(t, decodedProc.GetPrepareParams())
 	require.Equal(t, 2, decodedProc.GetPrepareParams().Length())
@@ -269,6 +274,34 @@ func TestCodecServiceEncodeDecodeAndLookup(t *testing.T) {
 	rt.SetupServiceBasedRuntime(rtSvc, runtime)
 	runtime.SetGlobalVariables(rt.ProcessCodecService, svc)
 	require.Same(t, svc, GetCodecService(rtSvc))
+}
+
+func TestCodecServiceRoundTripsPreparedRowsFrameParams(t *testing.T) {
+	proc, _ := newCodecTestProcess(t)
+	frameParams := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(frameParams, []byte("1"), false, proc.Mp()))
+	require.NoError(t, vector.AppendBytes(frameParams, []byte("0"), false, proc.Mp()))
+	proc.SetPrepareParamsWithIsBin(frameParams, []bool{true, false})
+
+	svc := NewCodecService(fakeCodecTxnClient{op: fakeCodecTxnOperator{}}, nil, nil, nil, nil, nil, nil, nil)
+	payload, err := svc.Encode(proc, "select sum(n) over (order by id rows between ? preceding and ? following)")
+	require.NoError(t, err)
+
+	info := pipeline.ProcessInfo{}
+	require.NoError(t, info.Unmarshal(payload))
+	decodedProc, err := svc.Decode(context.Background(), info)
+	require.NoError(t, err)
+	defer decodedProc.Free()
+
+	decodedParams := decodedProc.GetPrepareParams()
+	require.NotNil(t, decodedParams)
+	require.Equal(t, 2, decodedParams.Length())
+	require.False(t, decodedParams.GetNulls().Contains(0))
+	require.False(t, decodedParams.GetNulls().Contains(1))
+	require.True(t, decodedProc.GetPrepareParamIsBin(0))
+	require.False(t, decodedProc.GetPrepareParamIsBin(1))
+	require.Equal(t, "1", decodedParams.GetStringAt(0))
+	require.Equal(t, "0", decodedParams.GetStringAt(1))
 }
 
 func TestCodecServiceDecodesLegacyPrepareParamsWithoutBinaryFlags(t *testing.T) {

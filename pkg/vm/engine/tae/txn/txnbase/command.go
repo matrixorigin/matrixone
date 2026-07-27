@@ -363,7 +363,9 @@ func (c *TxnCmd) SetTxn(txn txnif.AsyncTxn) {
 	c.ID = txn.GetID()
 	c.StartTS = txn.GetStartTS()
 	c.PrepareTS = txn.GetPrepareTS()
-	c.Participants = txn.GetParticipants()
+	// Participants is retained in the WAL layout for compatibility. New
+	// transactions are always single-TN and therefore encode an empty list.
+	c.Participants = nil
 	c.Memo = txn.GetMemo()
 }
 
@@ -564,13 +566,13 @@ func (c *TxnCmd) UnmarshalBinaryWithVersion(buf []byte, ver uint16) (err error) 
 }
 func (c *TxnCmd) GetType() uint16 { return IOET_WALTxnEntry }
 func (c *TxnCmd) Desc() string {
-	return fmt.Sprintf("Tid=%X,Is2PC=%v,%s", c.ID, c.Is2PC(), c.ComposedCmd.Desc())
+	return fmt.Sprintf("Tid=%X,LegacyParticipants=%d,%s", c.ID, len(c.Participants), c.ComposedCmd.Desc())
 }
 func (c *TxnCmd) String() string {
-	return fmt.Sprintf("Tid=%X,Is2PC=%v,%s", c.ID, c.Is2PC(), c.ComposedCmd.String())
+	return fmt.Sprintf("Tid=%X,LegacyParticipants=%d,%s", c.ID, len(c.Participants), c.ComposedCmd.String())
 }
 func (c *TxnCmd) VerboseString() string {
-	return fmt.Sprintf("Tid=%X,Is2PC=%v,%s", c.ID, c.Is2PC(), c.ComposedCmd.VerboseString())
+	return fmt.Sprintf("Tid=%X,LegacyParticipants=%d,%s", c.ID, len(c.Participants), c.ComposedCmd.VerboseString())
 }
 func (c *TxnCmd) Close() {
 	c.ComposedCmd.Close()

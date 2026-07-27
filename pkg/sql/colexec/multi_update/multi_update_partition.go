@@ -63,6 +63,7 @@ func NewPartitionMultiUpdateFrom(
 	op.Action = from.raw.Action
 	op.IsOnduplicateKeyUpdate = from.raw.IsOnduplicateKeyUpdate
 	op.CountDeleteAffectRows = from.raw.CountDeleteAffectRows
+	op.RejectZeroTemporal = from.raw.RejectZeroTemporal
 	op.Engine = from.raw.Engine
 	return NewPartitionMultiUpdate(op, from.tableID)
 }
@@ -352,6 +353,16 @@ func (op *PartitionMultiUpdate) Reset(
 
 func (op *PartitionMultiUpdate) GetOperatorBase() *vm.OperatorBase {
 	return &op.OperatorBase
+}
+
+func (op *PartitionMultiUpdate) SetRejectZeroTemporal(reject bool) {
+	op.raw.SetRejectZeroTemporal(reject)
+	for _, writer := range op.writers {
+		writer.rejectZeroTemporal = reject
+	}
+	for _, writer := range op.freeWriters {
+		writer.rejectZeroTemporal = reject
+	}
 }
 
 func (op *PartitionMultiUpdate) getPartitionIndex(
