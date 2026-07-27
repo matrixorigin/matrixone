@@ -53,6 +53,28 @@ const (
 	Rows = 10 // default rows
 )
 
+func TestJudgeContainColnameAllowsNestedZeroArgumentFunction(t *testing.T) {
+	filter := &plan.Expr{
+		Expr: &plan.Expr_F{
+			F: &plan.Function{
+				Func: &plan.ObjectRef{ObjName: ">"},
+				Args: []*plan.Expr{
+					{
+						Expr: &plan.Expr_F{
+							F: &plan.Function{Func: &plan.ObjectRef{ObjName: "rand"}},
+						},
+					},
+					{
+						Expr: &plan.Expr_Lit{Lit: &plan.Literal{}},
+					},
+				},
+			},
+		},
+	}
+
+	require.False(t, judgeContainColname(filter))
+}
+
 func TestCsvReaderRejectsZeroVectorBatch(t *testing.T) {
 	proc := testutil.NewProc(t)
 	_, err := (&CsvReader{}).makeBatchRows(proc, batch.NewWithSize(0))

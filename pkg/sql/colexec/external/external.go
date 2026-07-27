@@ -322,6 +322,9 @@ func judgeContainColname(expr *plan.Expr) bool {
 	if !ok {
 		return false
 	}
+	if len(expr_F.F.Args) == 0 {
+		return false
+	}
 	if expr_F.F.Func.ObjName == "or" {
 		flag := true
 		for i := 0; i < len(expr_F.F.Args); i++ {
