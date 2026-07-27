@@ -48,6 +48,7 @@ func TestTableCloneOperatorMetadata(t *testing.T) {
 type autoIncrementTestRelation struct {
 	engine.Relation
 	tableID uint64
+	name    string
 	def     *plan.TableDef
 }
 
@@ -57,6 +58,10 @@ func (r *autoIncrementTestRelation) GetTableID(context.Context) uint64 {
 
 func (r *autoIncrementTestRelation) GetTableDef(context.Context) *plan.TableDef {
 	return r.def
+}
+
+func (r *autoIncrementTestRelation) GetTableName() string {
+	return r.name
 }
 
 func TestUpdateDstAutoIncrColumnsReconcilesAllSafeBounds(t *testing.T) {
@@ -135,6 +140,53 @@ func TestUpdateDstAutoIncrColumnsKeepsHiddenAllocatorIndependent(t *testing.T) {
 		incrSvc.EXPECT().SetOffset(gomock.Any(), def.TblId, "id", uint64(999), gomock.Any()),
 		incrSvc.EXPECT().SetOffset(gomock.Any(), def.TblId, "__mo_fake_pk_col", uint64(40), gomock.Any()),
 	)
+	require.NoError(t, tc.updateDstAutoIncrColumns(proc.Ctx, proc))
+}
+
+func TestUpdateDstAutoIncrColumnsReconcilesClonedIndexAllocator(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	ctrl := gomock.NewController(t)
+	incrSvc := mock_frontend.NewMockAutoIncrementService(ctrl)
+	proc.Base.IncrService = incrSvc
+
+	const indexTableName = "__mo_index_fulltext_target"
+	def := &plan.TableDef{
+		TblId: 84,
+		Name:  indexTableName,
+		Cols: []*plan.ColDef{{
+			Name:   "__mo_fake_pk_col",
+			Hidden: true,
+			Typ:    plan.Type{Id: int32(types.T_uint64), AutoIncr: true},
+		}},
+		Pkey: &plan.PrimaryKeyDef{PkeyColName: "__mo_fake_pk_col"},
+	}
+	tc := &TableClone{
+		Ctx: &TableCloneCtx{
+			IndexAutoIncrStates: map[string]AutoIncrementState{
+				"ftidx.": {
+					MaxValues: map[string]uint64{"__mo_fake_pk_col": 120},
+					Offsets:   map[string]uint64{"__mo_fake_pk_col": 200},
+				},
+				"p0.ftidx.": {
+					MaxValues: map[string]uint64{"__mo_fake_pk_col": 300},
+					Offsets:   map[string]uint64{"__mo_fake_pk_col": 250},
+				},
+				"p1.ftidx.": {
+					MaxValues: map[string]uint64{"__mo_fake_pk_col": 350},
+					Offsets:   map[string]uint64{"__mo_fake_pk_col": 400},
+				},
+			},
+		},
+		dstIdxRel: map[string]engine.Relation{
+			"ftidx.":    &autoIncrementTestRelation{tableID: 84, name: def.Name, def: def},
+			"p0.ftidx.": &autoIncrementTestRelation{tableID: 85, name: def.Name, def: def},
+			"p1.ftidx.": &autoIncrementTestRelation{tableID: 86, name: def.Name, def: def},
+		},
+	}
+
+	incrSvc.EXPECT().SetOffset(gomock.Any(), uint64(84), "__mo_fake_pk_col", uint64(200), gomock.Any())
+	incrSvc.EXPECT().SetOffset(gomock.Any(), uint64(85), "__mo_fake_pk_col", uint64(300), gomock.Any())
+	incrSvc.EXPECT().SetOffset(gomock.Any(), uint64(86), "__mo_fake_pk_col", uint64(400), gomock.Any())
 	require.NoError(t, tc.updateDstAutoIncrColumns(proc.Ctx, proc))
 }
 

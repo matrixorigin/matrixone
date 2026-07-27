@@ -28,6 +28,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_clone"
+	"github.com/matrixorigin/matrixone/pkg/sql/features"
+	mysqlparser "github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
@@ -77,6 +80,35 @@ func newTableCloneOffsetResult(t *testing.T, mp *mpool.MPool, colIdx int32, offs
 	memRes.NewBatchWithRowCount(1)
 	require.NoError(t, executor.AppendFixedRows(memRes, 0, []int32{colIdx}))
 	require.NoError(t, executor.AppendFixedRows(memRes, 1, []uint64{offset}))
+	return memRes.GetResult()
+}
+
+func newTableCloneNamedOffsetResult(t *testing.T, mp *mpool.MPool, colName string, offset uint64) executor.Result {
+	t.Helper()
+	memRes := executor.NewMemResult([]types.Type{types.T_varchar.ToType(), types.T_uint64.ToType()}, mp)
+	memRes.NewBatchWithRowCount(1)
+	require.NoError(t, executor.AppendStringRows(memRes, 0, []string{colName}))
+	require.NoError(t, executor.AppendFixedRows(memRes, 1, []uint64{offset}))
+	return memRes.GetResult()
+}
+
+func newTableClonePartitionIndexResult(
+	t *testing.T,
+	mp *mpool.MPool,
+	partitionNames, indexNames, tableTypes, tableNames []string,
+) executor.Result {
+	t.Helper()
+	memRes := executor.NewMemResult([]types.Type{
+		types.T_varchar.ToType(),
+		types.T_varchar.ToType(),
+		types.T_varchar.ToType(),
+		types.T_varchar.ToType(),
+	}, mp)
+	memRes.NewBatchWithRowCount(len(partitionNames))
+	require.NoError(t, executor.AppendStringRows(memRes, 0, partitionNames))
+	require.NoError(t, executor.AppendStringRows(memRes, 1, indexNames))
+	require.NoError(t, executor.AppendStringRows(memRes, 2, tableTypes))
+	require.NoError(t, executor.AppendStringRows(memRes, 3, tableNames))
 	return memRes.GetResult()
 }
 
@@ -226,6 +258,151 @@ func TestConstructTableCloneDoesNotReadHiddenMaximum(t *testing.T) {
 	t.Cleanup(tc.Release)
 	require.Len(t, exec.sqls, 1)
 	require.Equal(t, map[string]uint64{"__mo_fake_pk_col": 40}, tc.Ctx.SrcAutoIncrOffsets)
+}
+
+func TestConstructTableCloneCapturesHiddenIndexAllocator(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	const (
+		srcIndexTable = "src'fulltext\\table"
+		dstIndexTable = "__mo_index_fulltext_target"
+		fakePK        = "__mo_fake_pk_col"
+	)
+	exec := &tableCloneRecordingExecutor{}
+	exec.run = func(sql string) (executor.Result, error) {
+		if strings.Contains(sql, "mo_catalog.mo_increment_columns") {
+			return newTableCloneNamedOffsetResult(t, proc.Mp(), fakePK, 200), nil
+		}
+		return newTableCloneResult(t, proc.Mp(), 120), nil
+	}
+	runtime.ServiceRuntime(proc.GetService()).SetGlobalVariables(runtime.InternalSQLExecutor, exec)
+
+	srcDef := &plan.TableDef{
+		TblId:  7,
+		DbName: "db'name\\path",
+		Name:   "src",
+		Indexes: []*plan.IndexDef{{
+			IndexName:      "ftidx",
+			IndexAlgo:      "fulltext",
+			IndexTableName: srcIndexTable,
+		}},
+	}
+	dstDef := &plan.TableDef{
+		Name: "dst",
+		Indexes: []*plan.IndexDef{{
+			IndexName:      "ftidx",
+			IndexAlgo:      "fulltext",
+			IndexTableName: dstIndexTable,
+		}},
+	}
+	dstIndexDef := &plan.TableDef{
+		Name: dstIndexTable,
+		Cols: []*plan.ColDef{{
+			Name:   fakePK,
+			Hidden: true,
+			Typ:    plan.Type{Id: int32(types.T_uint64), AutoIncr: true},
+		}},
+		Pkey: &plan.PrimaryKeyDef{PkeyColName: fakePK},
+	}
+	createPlan := cloneCreatePlan(dstDef)
+	createPlan.GetDdl().GetCreateTable().IndexTables = []*plan.TableDef{dstIndexDef}
+
+	tc, err := constructTableClone(&Compile{proc: proc, pn: &plan.Plan{}}, &plan.CloneTable{
+		SrcTableDef: srcDef,
+		SrcObjDef:   &plan.ObjectRef{},
+		CreateTable: createPlan,
+		ScanSnapshot: &plan.Snapshot{
+			TS: &timestamp.Timestamp{PhysicalTime: 123},
+		},
+	})
+	require.NoError(t, err)
+	t.Cleanup(tc.Release)
+	require.Equal(t, table_clone.AutoIncrementState{
+		MaxValues: map[string]uint64{fakePK: 120},
+		Offsets:   map[string]uint64{fakePK: 200},
+	}, tc.Ctx.IndexAutoIncrStates["ftidx."])
+	require.Len(t, exec.sqls, 2)
+	require.Contains(t, exec.sqls[0], "reldatabase = "+sqlquote.String(srcDef.DbName))
+	require.Contains(t, exec.sqls[0], "relname = "+sqlquote.String(srcIndexTable))
+	require.Contains(t, exec.sqls[1], "from "+sqlquote.QualifiedIdent(srcDef.DbName, srcIndexTable))
+	for _, sql := range exec.sqls {
+		_, err := mysqlparser.ParseOne(context.Background(), sql, 1)
+		require.NoError(t, err, sql)
+	}
+}
+
+func TestConstructTableCloneCapturesPartitionHiddenIndexAllocators(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	const fakePK = "__mo_fake_pk_col"
+	exec := &tableCloneRecordingExecutor{}
+	exec.run = func(sql string) (executor.Result, error) {
+		switch {
+		case strings.Contains(sql, "mo_partition_tables"):
+			return newTableClonePartitionIndexResult(
+				t,
+				proc.Mp(),
+				[]string{"p0", "p1"},
+				[]string{"ftidx", "ftidx"},
+				[]string{"", ""},
+				[]string{"__mo_index_fulltext_src_p0", "__mo_index_fulltext_src_p1"},
+			), nil
+		case strings.Contains(sql, "mo_increment_columns"):
+			return newTableCloneNamedOffsetResult(t, proc.Mp(), fakePK, 200), nil
+		default:
+			return newTableCloneResult(t, proc.Mp(), 120), nil
+		}
+	}
+	runtime.ServiceRuntime(proc.GetService()).SetGlobalVariables(runtime.InternalSQLExecutor, exec)
+
+	srcDef := &plan.TableDef{
+		TblId:       7,
+		DbName:      "db",
+		Name:        "src",
+		FeatureFlag: features.Partitioned,
+		Indexes: []*plan.IndexDef{{
+			IndexName:      "ftidx",
+			IndexAlgo:      "fulltext",
+			IndexTableName: "__mo_index_fulltext_src",
+		}},
+	}
+	dstDef := &plan.TableDef{
+		Name: "dst",
+		Indexes: []*plan.IndexDef{{
+			IndexName:      "ftidx",
+			IndexAlgo:      "fulltext",
+			IndexTableName: "__mo_index_fulltext_dst",
+		}},
+	}
+	dstIndexDef := &plan.TableDef{
+		Name: "__mo_index_fulltext_dst",
+		Cols: []*plan.ColDef{{
+			Name:   fakePK,
+			Hidden: true,
+			Typ:    plan.Type{Id: int32(types.T_uint64), AutoIncr: true},
+		}},
+		Pkey: &plan.PrimaryKeyDef{PkeyColName: fakePK},
+	}
+	createPlan := cloneCreatePlan(dstDef)
+	createPlan.GetDdl().GetCreateTable().IndexTables = []*plan.TableDef{dstIndexDef}
+
+	tc, err := constructTableClone(&Compile{proc: proc, pn: &plan.Plan{}}, &plan.CloneTable{
+		SrcTableDef: srcDef,
+		SrcObjDef:   &plan.ObjectRef{},
+		CreateTable: createPlan,
+	})
+	require.NoError(t, err)
+	t.Cleanup(tc.Release)
+	want := table_clone.AutoIncrementState{
+		MaxValues: map[string]uint64{fakePK: 120},
+		Offsets:   map[string]uint64{fakePK: 200},
+	}
+	require.Equal(t, want, tc.Ctx.IndexAutoIncrStates["p0.ftidx."])
+	require.Equal(t, want, tc.Ctx.IndexAutoIncrStates["p1.ftidx."])
+	require.Equal(t, want, tc.Ctx.IndexAutoIncrStates["ftidx."])
+	require.Len(t, exec.sqls, 7)
+	for _, sql := range exec.sqls {
+		_, err := mysqlparser.ParseOne(context.Background(), sql, 1)
+		require.NoError(t, err, sql)
+	}
 }
 
 func TestConstructTableCloneHonorsCancellationAndClosesErrorResult(t *testing.T) {

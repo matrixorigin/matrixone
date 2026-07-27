@@ -107,6 +107,9 @@ func (tc *TableClone) Reset(proc *process.Process, pipelineFailed bool, err erro
 	if tc.Ctx.SrcAutoIncrOffsets != nil {
 		clear(tc.Ctx.SrcAutoIncrOffsets)
 	}
+	if tc.Ctx.IndexAutoIncrStates != nil {
+		clear(tc.Ctx.IndexAutoIncrStates)
+	}
 }
 
 func (tc *TableClone) String(buf *bytes.Buffer) {
@@ -471,23 +474,59 @@ func (tc *TableClone) updateDstAutoIncrColumns(
 	proc *process.Process,
 ) error {
 
-	if tc.Ctx.SrcAutoIncrMaxValues == nil && tc.Ctx.SrcAutoIncrOffsets == nil {
+	if tc.Ctx.SrcAutoIncrMaxValues == nil &&
+		tc.Ctx.SrcAutoIncrOffsets == nil &&
+		len(tc.Ctx.IndexAutoIncrStates) == 0 {
 		return nil
 	}
 
-	dstTblDef := tc.dstMasterRel.GetTableDef(dstCtx)
-	var typs []types.Type
-	_, typs, _, _, _ = colexec.GetSequmsAttrsSortKeyIdxFromTableDef(dstTblDef)
-	userIncrCols := incrservice.GetUserAutoColumnFromDef(dstTblDef)
-	internalIncrCols := incrservice.GetInternalAutoColumnFromDef(dstTblDef)
+	if tc.Ctx.SrcAutoIncrMaxValues != nil || tc.Ctx.SrcAutoIncrOffsets != nil {
+		if err := updateRelationAutoIncrement(
+			dstCtx,
+			proc,
+			tc.dstMasterRel,
+			AutoIncrementState{
+				MaxValues: tc.Ctx.SrcAutoIncrMaxValues,
+				Offsets:   tc.Ctx.SrcAutoIncrOffsets,
+			},
+			tc.Ctx.RequestedAutoIncrOffset,
+			true,
+		); err != nil {
+			return err
+		}
+	}
 
-	tableID := tc.dstMasterRel.GetTableID(dstCtx)
+	for key, rel := range tc.dstIdxRel {
+		state, ok := tc.Ctx.IndexAutoIncrStates[strings.ToLower(key)]
+		if !ok {
+			continue
+		}
+		if err := updateRelationAutoIncrement(dstCtx, proc, rel, state, 0, false); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func updateRelationAutoIncrement(
+	ctx context.Context,
+	proc *process.Process,
+	rel engine.Relation,
+	state AutoIncrementState,
+	requestedOffset uint64,
+	separateUserColumns bool,
+) error {
+	def := rel.GetTableDef(ctx)
+	var typs []types.Type
+	_, typs, _, _, _ = colexec.GetSequmsAttrsSortKeyIdxFromTableDef(def)
+	tableID := rel.GetTableID(ctx)
 	setOffset := func(col incrservice.AutoColumn, offset uint64) error {
-		if err := incrservice.ValidateAutoColumnOffset(dstCtx, typs[col.ColIndex].Oid, offset); err != nil {
+		if err := incrservice.ValidateAutoColumnOffset(ctx, typs[col.ColIndex].Oid, offset); err != nil {
 			return err
 		}
 		return proc.GetIncrService().SetOffset(
-			dstCtx,
+			ctx,
 			tableID,
 			col.ColName,
 			offset,
@@ -495,19 +534,25 @@ func (tc *TableClone) updateDstAutoIncrColumns(
 		)
 	}
 
-	for _, col := range userIncrCols {
+	if !separateUserColumns {
+		for _, col := range incrservice.GetAutoColumnFromDef(def) {
+			name := strings.ToLower(col.ColName)
+			if err := setOffset(col, max(state.MaxValues[name], state.Offsets[name])); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	for _, col := range incrservice.GetUserAutoColumnFromDef(def) {
 		name := strings.ToLower(col.ColName)
-		offset := max(
-			tc.Ctx.RequestedAutoIncrOffset,
-			tc.Ctx.SrcAutoIncrMaxValues[name],
-			tc.Ctx.SrcAutoIncrOffsets[name],
-		)
-		if err := setOffset(col, offset); err != nil {
+		if err := setOffset(col, max(requestedOffset, state.MaxValues[name], state.Offsets[name])); err != nil {
 			return err
 		}
 	}
-	for _, col := range internalIncrCols {
-		offset, ok := tc.Ctx.SrcAutoIncrOffsets[strings.ToLower(col.ColName)]
+	for _, col := range incrservice.GetInternalAutoColumnFromDef(def) {
+		name := strings.ToLower(col.ColName)
+		offset, ok := state.Offsets[name]
 		if !ok {
 			continue
 		}
@@ -515,7 +560,6 @@ func (tc *TableClone) updateDstAutoIncrColumns(
 			return err
 		}
 	}
-
 	return nil
 }
 
