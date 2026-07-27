@@ -103,6 +103,10 @@ func CDCTaskExecutorFactory(
 			txnEngine,
 			CDCExeutorAllocator,
 		)
+		// Restart timeout persistence is a control-plane path. It must use a
+		// fresh executor so it cannot queue behind the serialized executor held
+		// by the Start attempt that just timed out.
+		exec.restartCatalogExecutorFactory = sqlExecutorFactory
 		exec.setActiveRoutine(cdc.NewCdcActiveRoutine())
 		if err = attachToTask(ctx, spec.GetID(), exec); err != nil {
 			return err
@@ -147,13 +151,17 @@ type CDCTaskExecutor struct {
 	stateMachine *ExecutorStateMachine
 	holdCh       chan int
 
-	callbackMu          sync.RWMutex
-	callbackGeneration  atomic.Uint64
-	restartWaitMu       sync.Mutex
-	restartWaiters      map[uint64]chan error
-	restartCatalogState map[uint64]string
-	startAttemptMu      sync.Mutex
-	activeStartAttempt  *cdcStartAttempt
+	callbackMu                    sync.RWMutex
+	callbackGeneration            atomic.Uint64
+	restartWaitMu                 sync.Mutex
+	restartWaiters                map[uint64]chan error
+	restartCatalogState           map[uint64]string
+	restartMu                     sync.Mutex
+	restartCatalogMu              sync.Mutex
+	restartCatalogPersistence     *cdcRestartCatalogPersistence
+	restartCatalogExecutorFactory func() ie.InternalExecutor
+	startAttemptMu                sync.Mutex
+	activeStartAttempt            *cdcStartAttempt
 	// restartStartupTimeout is test-only when non-zero. Production keeps the
 	// historical four-second admission bound.
 	restartStartupTimeout time.Duration
@@ -172,6 +180,16 @@ type cdcStartAttempt struct {
 	done         chan struct{}
 	doneOnce     sync.Once
 	timeoutFence atomic.Uint64
+}
+
+// cdcRestartCatalogPersistence owns the bounded best-effort catalog write for
+// one timed-out restart generation. Restart never waits for this write on its
+// timeout return path. A later retry does wait for completion before admitting
+// a new generation, preventing the old restarting -> failed CAS from racing the
+// new generation's restarting -> running publication.
+type cdcRestartCatalogPersistence struct {
+	done chan struct{}
+	err  error
 }
 
 type cdcStartAttemptContextKey struct{}
@@ -769,6 +787,22 @@ func (exec *CDCTaskExecutor) Resume() error {
 
 // Restart cdc task from init watermark
 func (exec *CDCTaskExecutor) Restart() error {
+	// A restart generation spans the in-memory transition, Start ownership,
+	// and timeout catalog publication. Serializing the full operation closes
+	// the entry-time TOCTOU window where a concurrent retry could pass the
+	// persistence check before the older generation installs its pending
+	// restarting -> failed write. Fail fast instead of waiting on the mutex:
+	// every Restart caller must retain a bounded response time.
+	if !exec.restartMu.TryLock() {
+		return moerr.NewInternalErrorNoCtx("CDC restart is already in progress")
+	}
+	defer exec.restartMu.Unlock()
+
+	timeout := exec.restartTimeout()
+	if _, timedOut := exec.waitForRestartCatalogPersistence(timeout); timedOut {
+		return moerr.NewInternalErrorNoCtx("CDC restart timed out waiting for the previous timeout record")
+	}
+
 	exec.callbackMu.Lock()
 
 	stateBeforeRestart := exec.stateMachine.State()
@@ -796,7 +830,6 @@ func (exec *CDCTaskExecutor) Restart() error {
 	ready := exec.beginRestartWaiter(generation, cdc.CDCState_Restarting)
 	exec.callbackMu.Unlock()
 	defer exec.removeRestartWaiter(generation)
-	timeout := exec.restartTimeout()
 	startupTimeoutErr := moerr.NewInternalErrorNoCtx("CDC restart startup timed out")
 
 	// A Start owns mutable executor resources until it exits. Do not publish a
@@ -824,7 +857,7 @@ func (exec *CDCTaskExecutor) Restart() error {
 			// publication and persist this terminal admission result.
 			exec.callbackGeneration.Add(1)
 			_ = exec.stateMachine.SetFailed(drainTimeoutErr.Error())
-			exec.recordRestartTimeout(drainTimeoutErr)
+			exec.recordRestartTimeoutAsync(drainTimeoutErr)
 			return drainTimeoutErr
 		}
 	} else if shouldStopOldExecution {
@@ -913,14 +946,14 @@ func (exec *CDCTaskExecutor) Restart() error {
 	// remains installed until its goroutine exits, so the next restart will
 	// drain it instead of reusing its resources.
 	// Publish the expected timeout fence before incrementing, so a start
-	// goroutine that races this path can only refine the catalog error after
+	// goroutine that races this path can emit late-error evidence only after
 	// the fence is visible and still current.
 	attempt.timeoutFence.Store(generation + 1)
 	if exec.callbackGeneration.Add(1) != generation+1 {
 		attempt.timeoutFence.Store(0)
 	}
 	_ = exec.stateMachine.SetFailed(startupTimeoutErr.Error())
-	exec.recordRestartTimeout(startupTimeoutErr)
+	exec.recordRestartTimeoutAsync(startupTimeoutErr)
 	return startupTimeoutErr
 }
 
@@ -1407,7 +1440,17 @@ func (exec *CDCTaskExecutor) updateCatalogStateAndErrMsg(
 	errMsg string,
 	currentState string,
 ) (err error) {
-	if exec.ie == nil || exec.spec == nil || len(exec.spec.Accounts) == 0 {
+	return exec.updateCatalogStateAndErrMsgWithExecutor(ctx, exec.ie, state, errMsg, currentState)
+}
+
+func (exec *CDCTaskExecutor) updateCatalogStateAndErrMsgWithExecutor(
+	ctx context.Context,
+	sqlExecutor ie.InternalExecutor,
+	state string,
+	errMsg string,
+	currentState string,
+) (err error) {
+	if sqlExecutor == nil || exec.spec == nil || len(exec.spec.Accounts) == 0 {
 		return nil
 	}
 	accId := exec.spec.Accounts[0].GetId()
@@ -1424,7 +1467,7 @@ func (exec *CDCTaskExecutor) updateCatalogStateAndErrMsg(
 	)
 	return execCDCSQLWithAffectedRows(
 		ctx,
-		exec.ie,
+		sqlExecutor,
 		sql,
 		uint64(accId),
 		exec.spec.TaskId,
@@ -1444,24 +1487,84 @@ func (exec *CDCTaskExecutor) admitRestartCatalogState(ctx context.Context) error
 	return exec.updateCatalogStateAndErrMsg(ctx, cdc.CDCState_Restarting, "", cdc.CDCState_Failed)
 }
 
-func (exec *CDCTaskExecutor) recordRestartTimeout(timeoutErr error) {
+func (exec *CDCTaskExecutor) recordRestartTimeoutAsync(timeoutErr error) {
 	if exec.spec == nil || len(exec.spec.Accounts) == 0 {
 		return
 	}
-	ctx := defines.AttachAccountId(context.Background(), uint32(exec.spec.Accounts[0].GetId()))
-	if err := exec.updateCatalogStateAndErrMsg(ctx, cdc.CDCState_Failed, timeoutErr.Error(), cdc.CDCState_Restarting); err != nil {
-		eventCDCExecutorRestartFailed.ErrorLazy(func() []zap.Field {
-			return exec.restartFields(append([]zap.Field{
-				zap.String("reason", "startup-timeout-catalog-update"),
-			}, logutil.ErrorFingerprintFields("error", err)...)...)
-		})
+	persistence := &cdcRestartCatalogPersistence{done: make(chan struct{})}
+	exec.restartCatalogMu.Lock()
+	if previous := exec.restartCatalogPersistence; previous != nil {
+		select {
+		case <-previous.done:
+		default:
+			exec.restartCatalogMu.Unlock()
+			eventCDCExecutorRestartFailed.ErrorLazy(func() []zap.Field {
+				return exec.restartFields(append([]zap.Field{
+					zap.String("reason", "startup-timeout-record-already-pending"),
+				}, logutil.ErrorFingerprintFields("error", timeoutErr)...)...)
+			})
+			return
+		}
 	}
+	exec.restartCatalogPersistence = persistence
+	exec.restartCatalogMu.Unlock()
+
+	go func() {
+		defer close(persistence.done)
+		factory := exec.restartCatalogExecutorFactory
+		if factory == nil {
+			persistence.err = moerr.NewInternalErrorNoCtx("CDC restart timeout catalog executor is unavailable")
+		} else {
+			ctx, cancel := context.WithTimeout(context.Background(), exec.restartTimeout())
+			defer cancel()
+			ctx = defines.AttachAccountId(ctx, uint32(exec.spec.Accounts[0].GetId()))
+			sqlExecutor := factory()
+			if sqlExecutor == nil {
+				persistence.err = moerr.NewInternalErrorNoCtx("CDC restart timeout catalog executor factory returned nil")
+			} else {
+				persistence.err = exec.updateCatalogStateAndErrMsgWithExecutor(
+					ctx,
+					sqlExecutor,
+					cdc.CDCState_Failed,
+					timeoutErr.Error(),
+					cdc.CDCState_Restarting,
+				)
+			}
+		}
+		if persistence.err != nil {
+			eventCDCExecutorRestartFailed.ErrorLazy(func() []zap.Field {
+				return exec.restartFields(append([]zap.Field{
+					zap.String("reason", "startup-timeout-catalog-update"),
+				}, logutil.ErrorFingerprintFields("error", persistence.err)...)...)
+			})
+		}
+	}()
 }
 
-// refineRestartTimeoutCause preserves a more useful late startup error only
-// while the timeout generation still owns the failed catalog row. A later
-// retry, pause, or cancel changes callbackGeneration (and, for a retry, the
-// catalog state), so an old goroutine can never overwrite their outcome.
+func (exec *CDCTaskExecutor) waitForRestartCatalogPersistence(timeout time.Duration) (error, bool) {
+	exec.restartCatalogMu.Lock()
+	persistence := exec.restartCatalogPersistence
+	exec.restartCatalogMu.Unlock()
+	if persistence == nil {
+		return nil, false
+	}
+
+	_, timedOut := waitForCDCCompletion(persistence.done, timeout)
+	if timedOut {
+		return nil, true
+	}
+	exec.restartCatalogMu.Lock()
+	if exec.restartCatalogPersistence == persistence {
+		exec.restartCatalogPersistence = nil
+	}
+	exec.restartCatalogMu.Unlock()
+	return persistence.err, false
+}
+
+// refineRestartTimeoutCause preserves late failure evidence without mutating
+// catalog state. Once Restart has returned a timeout, a later generation may
+// already be retrying; a delayed failed -> failed update has no durable
+// generation token and could overwrite that newer generation's error.
 func (exec *CDCTaskExecutor) refineRestartTimeoutCause(attempt *cdcStartAttempt, startErr error) {
 	if attempt == nil || errors.Is(startErr, context.Canceled) || errors.Is(startErr, context.DeadlineExceeded) {
 		return
@@ -1470,11 +1573,11 @@ func (exec *CDCTaskExecutor) refineRestartTimeoutCause(attempt *cdcStartAttempt,
 	if fence == 0 || exec.callbackGeneration.Load() != fence {
 		return
 	}
-	if exec.spec == nil || len(exec.spec.Accounts) == 0 {
-		return
-	}
-	ctx := defines.AttachAccountId(context.Background(), uint32(exec.spec.Accounts[0].GetId()))
-	_ = exec.updateCatalogStateAndErrMsg(ctx, cdc.CDCState_Failed, startErr.Error(), cdc.CDCState_Failed)
+	eventCDCExecutorRestartFailed.ErrorLazy(func() []zap.Field {
+		return exec.restartFields(append([]zap.Field{
+			zap.String("reason", "late-startup-error-after-timeout"),
+		}, logutil.ErrorFingerprintFields("error", startErr)...)...)
+	})
 }
 
 func (exec *CDCTaskExecutor) updateErrMsgForStartup(

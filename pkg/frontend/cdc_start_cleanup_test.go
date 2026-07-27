@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
+	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -522,6 +523,210 @@ func TestRestartReleasesCallbackFenceBeforeWaitingForReplacement(t *testing.T) {
 	}
 }
 
+type serializedBlockingCDCExecutor struct {
+	sync.Mutex
+	started     chan struct{}
+	release     chan struct{}
+	startedOnce sync.Once
+	releaseOnce sync.Once
+}
+
+func newSerializedBlockingCDCExecutor() *serializedBlockingCDCExecutor {
+	return &serializedBlockingCDCExecutor{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+}
+
+func (e *serializedBlockingCDCExecutor) block() {
+	e.Lock()
+	defer e.Unlock()
+	e.startedOnce.Do(func() { close(e.started) })
+	<-e.release
+}
+
+func (e *serializedBlockingCDCExecutor) unblock() {
+	e.releaseOnce.Do(func() { close(e.release) })
+}
+
+func (e *serializedBlockingCDCExecutor) Exec(
+	context.Context,
+	string,
+	ie.SessionOverrideOptions,
+) error {
+	e.block()
+	return nil
+}
+
+func (e *serializedBlockingCDCExecutor) ExecWithStatus(
+	context.Context,
+	string,
+	ie.SessionOverrideOptions,
+) (ie.InternalExecStatus, error) {
+	e.block()
+	return ie.InternalExecStatus{AffectedRows: 1}, nil
+}
+
+func (e *serializedBlockingCDCExecutor) Query(
+	context.Context,
+	string,
+	ie.SessionOverrideOptions,
+) ie.InternalExecResult {
+	e.block()
+	return &cdcStateQueryResult{state: cdc.CDCState_Restarting, rows: 1}
+}
+
+func (e *serializedBlockingCDCExecutor) ApplySessionOverride(ie.SessionOverrideOptions) {
+}
+
+func TestRestartTimeoutPersistenceDoesNotWaitForActiveCatalogExecutor(t *testing.T) {
+	tests := []struct {
+		name          string
+		blockOldStart bool
+	}{
+		{name: "previous start drain", blockOldStart: true},
+		{name: "replacement startup"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			primary := newSerializedBlockingCDCExecutor()
+			t.Cleanup(primary.unblock)
+			timeoutCatalog := &captureExecContextIE{}
+			exec := &CDCTaskExecutor{
+				activeRoutine: cdc.NewCdcActiveRoutine(),
+				spec: &task.CreateCdcDetails{
+					TaskId:   "restart-timeout-independent-catalog-" + test.name,
+					TaskName: "restart-timeout-independent-catalog",
+					Accounts: []*task.Account{{Id: 1}},
+				},
+				ie:                    primary,
+				stateMachine:          NewExecutorStateMachine(),
+				holdCh:                make(chan int, 1),
+				restartStartupTimeout: 25 * time.Millisecond,
+				restartCatalogExecutorFactory: func() ie.InternalExecutor {
+					return timeoutCatalog
+				},
+			}
+			require.NoError(t, exec.stateMachine.Transition(TransitionStart))
+			require.NoError(t, exec.stateMachine.Transition(TransitionStartSuccess))
+
+			if test.blockOldStart {
+				oldCtx, oldAttempt := newCDCStartAttempt(context.Background(), exec.callbackGeneration.Load())
+				require.True(t, exec.installStartAttempt(oldAttempt))
+				go func() {
+					primary.Query(oldCtx, "old-start-catalog-query", ie.SessionOverrideOptions{})
+					exec.finishStartAttempt(oldAttempt)
+				}()
+				select {
+				case <-primary.started:
+				case <-time.After(time.Second):
+					t.Fatal("old start did not acquire the serialized catalog executor")
+				}
+			} else {
+				exec.startFunc = func(ctx context.Context) error {
+					primary.Query(ctx, "replacement-catalog-query", ie.SessionOverrideOptions{})
+					return ctx.Err()
+				}
+			}
+
+			restartDone := make(chan error, 1)
+			go func() { restartDone <- exec.Restart() }()
+			if !test.blockOldStart {
+				select {
+				case <-primary.started:
+				case <-time.After(time.Second):
+					t.Fatal("replacement did not acquire the serialized catalog executor")
+				}
+			}
+
+			select {
+			case err := <-restartDone:
+				require.ErrorContains(t, err, "CDC restart startup timed out")
+			case <-time.After(150 * time.Millisecond):
+				t.Fatal("Restart waited behind the timed-out Start catalog executor")
+			}
+
+			persistErr, timedOut := exec.waitForRestartCatalogPersistence(time.Second)
+			require.False(t, timedOut)
+			require.NoError(t, persistErr)
+			require.True(t, timeoutCatalog.containsExecutedSQL("SET state = 'failed'"))
+			require.True(t, timeoutCatalog.containsExecutedSQL("AND state = 'restarting'"))
+
+			primary.unblock()
+			require.Eventually(t, func() bool { return exec.activeStart() == nil }, time.Second, time.Millisecond)
+		})
+	}
+}
+
+func TestRestartSerializesGenerationAndTimeoutPersistence(t *testing.T) {
+	catalog := &captureExecContextIE{}
+	timeoutCatalog := newSerializedBlockingCDCExecutor()
+	t.Cleanup(timeoutCatalog.unblock)
+	firstStartEntered := make(chan struct{})
+	var startCalls atomic.Int32
+	exec := &CDCTaskExecutor{
+		activeRoutine: cdc.NewCdcActiveRoutine(),
+		spec: &task.CreateCdcDetails{
+			TaskId:   "concurrent-restart-timeout-persistence",
+			TaskName: "concurrent-restart-timeout-persistence",
+			Accounts: []*task.Account{{Id: 1}},
+		},
+		ie:                    catalog,
+		stateMachine:          NewExecutorStateMachine(),
+		holdCh:                make(chan int, 1),
+		restartStartupTimeout: 50 * time.Millisecond,
+		restartCatalogExecutorFactory: func() ie.InternalExecutor {
+			return timeoutCatalog
+		},
+		startFunc: func(ctx context.Context) error {
+			if startCalls.Add(1) == 1 {
+				close(firstStartEntered)
+				<-ctx.Done()
+				return ctx.Err()
+			}
+			return nil
+		},
+	}
+	require.NoError(t, exec.stateMachine.Transition(TransitionStart))
+	require.NoError(t, exec.stateMachine.Transition(TransitionStartSuccess))
+
+	firstDone := make(chan error, 1)
+	go func() { firstDone <- exec.Restart() }()
+	select {
+	case <-firstStartEntered:
+	case <-time.After(time.Second):
+		t.Fatal("first restart did not enter Start")
+	}
+
+	require.ErrorContains(t, exec.Restart(), "CDC restart is already in progress")
+	require.ErrorContains(t, <-firstDone, "CDC restart startup timed out")
+	select {
+	case <-timeoutCatalog.started:
+	case <-time.After(time.Second):
+		t.Fatal("timeout persistence did not start")
+	}
+
+	secondDone := make(chan error, 1)
+	go func() { secondDone <- exec.Restart() }()
+	select {
+	case err := <-secondDone:
+		t.Fatalf("retry passed the previous timeout persistence fence: %v", err)
+	case <-time.After(10 * time.Millisecond):
+	}
+	require.Equal(t, int32(1), startCalls.Load())
+
+	timeoutCatalog.unblock()
+	select {
+	case err := <-secondDone:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("retry did not resume after timeout persistence completed")
+	}
+	require.Equal(t, int32(2), startCalls.Load())
+	require.True(t, catalog.containsExecutedSQL("SET state = 'restarting'"))
+}
+
 func TestRestartTimeoutDoesNotReuseActiveStartAttempt(t *testing.T) {
 	catalog := &captureExecContextIE{}
 	exec := &CDCTaskExecutor{
@@ -535,6 +740,9 @@ func TestRestartTimeoutDoesNotReuseActiveStartAttempt(t *testing.T) {
 		stateMachine:          NewExecutorStateMachine(),
 		holdCh:                make(chan int, 1),
 		restartStartupTimeout: 25 * time.Millisecond,
+		restartCatalogExecutorFactory: func() ie.InternalExecutor {
+			return catalog
+		},
 	}
 	require.NoError(t, exec.stateMachine.Transition(TransitionStart))
 	require.NoError(t, exec.stateMachine.Transition(TransitionStartSuccess))
@@ -558,6 +766,9 @@ func TestRestartTimeoutDoesNotReuseActiveStartAttempt(t *testing.T) {
 
 	err := exec.Restart()
 	require.ErrorContains(t, err, "CDC restart startup timed out")
+	persistErr, timedOut := exec.waitForRestartCatalogPersistence(time.Second)
+	require.False(t, timedOut)
+	require.NoError(t, persistErr)
 	select {
 	case <-oldCancelled:
 	case <-time.After(time.Second):
@@ -579,7 +790,7 @@ func TestRestartTimeoutDoesNotReuseActiveStartAttempt(t *testing.T) {
 	require.True(t, catalog.containsExecutedSQL("AND state = 'failed'"))
 }
 
-func TestRestartTimeoutRecordsLateStartupCauseBeforeRetry(t *testing.T) {
+func TestRestartTimeoutDoesNotPersistLateStartupCauseAcrossRetry(t *testing.T) {
 	catalog := &captureExecContextIE{}
 	releaseStart := make(chan struct{})
 	exec := &CDCTaskExecutor{
@@ -593,6 +804,9 @@ func TestRestartTimeoutRecordsLateStartupCauseBeforeRetry(t *testing.T) {
 		stateMachine:          NewExecutorStateMachine(),
 		holdCh:                make(chan int, 1),
 		restartStartupTimeout: 25 * time.Millisecond,
+		restartCatalogExecutorFactory: func() ie.InternalExecutor {
+			return catalog
+		},
 		startFunc: func(context.Context) error {
 			<-releaseStart
 			return errors.New("downstream authentication rejected")
@@ -602,10 +816,18 @@ func TestRestartTimeoutRecordsLateStartupCauseBeforeRetry(t *testing.T) {
 	require.NoError(t, exec.stateMachine.Transition(TransitionStartSuccess))
 
 	require.ErrorContains(t, exec.Restart(), "CDC restart startup timed out")
+	persistErr, timedOut := exec.waitForRestartCatalogPersistence(time.Second)
+	require.False(t, timedOut)
+	require.NoError(t, persistErr)
 	close(releaseStart)
 	require.Eventually(t, func() bool { return exec.activeStart() == nil }, time.Second, time.Millisecond)
-	require.True(t, catalog.containsExecutedSQL("err_msg = 'downstream authentication rejected'"))
-	require.True(t, catalog.containsExecutedSQL("AND state = 'failed'"))
+	require.False(t, catalog.containsExecutedSQL("err_msg = 'downstream authentication rejected'"))
+	require.True(t, catalog.containsExecutedSQL("CDC restart startup timed out"))
+	require.True(t, catalog.containsExecutedSQL("AND state = 'restarting'"))
+
+	exec.startFunc = func(context.Context) error { return nil }
+	require.NoError(t, exec.Restart())
+	require.False(t, catalog.containsExecutedSQL("err_msg = 'downstream authentication rejected'"))
 }
 
 func TestStartSupersededBeforeSchedulingDoesNotPublishOrCleanNewGeneration(t *testing.T) {
