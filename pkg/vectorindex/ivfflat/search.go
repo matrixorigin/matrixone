@@ -379,7 +379,70 @@ func buildActiveCentroidIDs(cursor *vectorindex.IvfSearchCursor, probe uint) []i
 	return cursor.RankedCentroidIDs[start:end]
 }
 
-func buildSearchRoundSQL[T types.RealNumbers](
+// entryQueryExpression encodes the centroid-search query as a constant vector
+// with the exact type stored in the entries table. Narrow and quantized indexes
+// search f32 centroids, but their SQL re-rank must still use the narrow entry
+// type. int8/uint8 entries also require the trained affine transform.
+func (idx *IvfflatSearchIndex[T]) entryQueryExpression(
+	idxcfg vectorindex.IndexConfig,
+	query []T,
+) (string, error) {
+	vectorType := types.T(idxcfg.Ivfflat.VectorType)
+	if vectorType == 0 {
+		switch any(query).(type) {
+		case []float32:
+			vectorType = types.T_array_float32
+		case []float64:
+			vectorType = types.T_array_float64
+		}
+	}
+
+	switch vectorType {
+	case types.T_array_float32:
+		q, ok := any(query).([]float32)
+		if !ok {
+			break
+		}
+		return fmt.Sprintf("vecf32_from_base64('%s')", types.ArrayToBase64(q)), nil
+	case types.T_array_float64:
+		q, ok := any(query).([]float64)
+		if !ok {
+			break
+		}
+		return fmt.Sprintf("vecf64_from_base64('%s')", types.ArrayToBase64(q)), nil
+	case types.T_array_bf16:
+		q, ok := any(query).([]float32)
+		if !ok {
+			break
+		}
+		return fmt.Sprintf("vecbf16_from_base64('%s')", types.ArrayToBase64(types.Float32ToBF16Slice(q))), nil
+	case types.T_array_float16:
+		q, ok := any(query).([]float32)
+		if !ok {
+			break
+		}
+		return fmt.Sprintf("vecf16_from_base64('%s')", types.ArrayToBase64(types.Float32ToFloat16Slice(q))), nil
+	case types.T_array_int8:
+		q, ok := any(query).([]float32)
+		if !ok {
+			break
+		}
+		encoded := quantizer.ApplyInt8(q, idx.QuantMul, idx.QuantAdd)
+		return fmt.Sprintf("vecint8_from_base64('%s')", types.ArrayToBase64(encoded)), nil
+	case types.T_array_uint8:
+		q, ok := any(query).([]float32)
+		if !ok {
+			break
+		}
+		encoded := quantizer.ApplyUint8(q, idx.QuantMul, idx.QuantAdd)
+		return fmt.Sprintf("vecuint8_from_base64('%s')", types.ArrayToBase64(encoded)), nil
+	}
+
+	return "", moerr.NewInternalErrorNoCtx(fmt.Sprintf(
+		"ivfflat: cannot encode %T query for entries vector type %s", query, vectorType.String()))
+}
+
+func (idx *IvfflatSearchIndex[T]) buildSearchRoundSQL(
 	idxcfg vectorindex.IndexConfig,
 	tblcfg vectorindex.IndexTableConfig,
 	query []T,
@@ -388,34 +451,21 @@ func buildSearchRoundSQL[T types.RealNumbers](
 	includeCols []string,
 	pushdownFilterSQL string,
 	roundLimit uint,
-) string {
+) (string, error) {
 	inValues := make([]string, 0, len(activeCentroidIDs))
 	for _, c := range activeCentroidIDs {
 		inValues = append(inValues, strconv.FormatInt(c, 10))
 	}
 
-	queryB64 := types.ArrayToBase64(query)
-	var distExpr string
-	switch any(query).(type) {
-	case []float32:
-		distExpr = fmt.Sprintf("%s(%s, vecf32_from_base64('%s')) as vec_dist",
-			metric.MetricTypeToDistFuncName[metric.MetricType(idxcfg.Ivfflat.Metric)],
-			sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Entries_entry),
-			queryB64,
-		)
-	case []float64:
-		distExpr = fmt.Sprintf("%s(%s, vecf64_from_base64('%s')) as vec_dist",
-			metric.MetricTypeToDistFuncName[metric.MetricType(idxcfg.Ivfflat.Metric)],
-			sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Entries_entry),
-			queryB64,
-		)
-	default:
-		distExpr = fmt.Sprintf("%s(%s, '%s') as vec_dist",
-			metric.MetricTypeToDistFuncName[metric.MetricType(idxcfg.Ivfflat.Metric)],
-			sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Entries_entry),
-			types.ArrayToString(query),
-		)
+	queryExpr, err := idx.entryQueryExpression(idxcfg, query)
+	if err != nil {
+		return "", err
 	}
+	distExpr := fmt.Sprintf("%s(%s, %s) as vec_dist",
+		metric.MetricTypeToDistFuncName[metric.MetricType(idxcfg.Ivfflat.Metric)],
+		sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Entries_entry),
+		queryExpr,
+	)
 
 	selectCols := []string{
 		sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Entries_pk),
@@ -442,10 +492,10 @@ func buildSearchRoundSQL[T types.RealNumbers](
 	}
 	sql += fmt.Sprintf(" ORDER BY vec_dist LIMIT %d", roundLimit)
 
-	return sql
+	return sql, nil
 }
 
-func buildExactSearchSQL[T types.RealNumbers](
+func (idx *IvfflatSearchIndex[T]) buildExactSearchSQL(
 	idxcfg vectorindex.IndexConfig,
 	tblcfg vectorindex.IndexTableConfig,
 	query []T,
@@ -453,29 +503,16 @@ func buildExactSearchSQL[T types.RealNumbers](
 	exactPkFilter string,
 	includeCols []string,
 	pushdownFilterSQL string,
-) string {
-	queryB64 := types.ArrayToBase64(query)
-	var distExpr string
-	switch any(query).(type) {
-	case []float32:
-		distExpr = fmt.Sprintf("%s(%s, vecf32_from_base64('%s')) as vec_dist",
-			metric.MetricTypeToDistFuncName[metric.MetricType(idxcfg.Ivfflat.Metric)],
-			sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Entries_entry),
-			queryB64,
-		)
-	case []float64:
-		distExpr = fmt.Sprintf("%s(%s, vecf64_from_base64('%s')) as vec_dist",
-			metric.MetricTypeToDistFuncName[metric.MetricType(idxcfg.Ivfflat.Metric)],
-			sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Entries_entry),
-			queryB64,
-		)
-	default:
-		distExpr = fmt.Sprintf("%s(%s, '%s') as vec_dist",
-			metric.MetricTypeToDistFuncName[metric.MetricType(idxcfg.Ivfflat.Metric)],
-			sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Entries_entry),
-			types.ArrayToString(query),
-		)
+) (string, error) {
+	queryExpr, err := idx.entryQueryExpression(idxcfg, query)
+	if err != nil {
+		return "", err
 	}
+	distExpr := fmt.Sprintf("%s(%s, %s) as vec_dist",
+		metric.MetricTypeToDistFuncName[metric.MetricType(idxcfg.Ivfflat.Metric)],
+		sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Entries_entry),
+		queryExpr,
+	)
 
 	selectCols := []string{
 		sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Entries_pk),
@@ -497,7 +534,7 @@ func buildExactSearchSQL[T types.RealNumbers](
 	if pushdownFilterSQL != "" {
 		sql += " AND " + pushdownFilterSQL
 	}
-	return sql
+	return sql, nil
 }
 
 func sortAndLimitExactResults(
@@ -658,9 +695,9 @@ func (idx *IvfflatSearchIndex[T]) Search(
 			return nil, nil, err
 		}
 
-		sql := buildSearchRoundSQL(idxcfg, tblcfg, query, activeCentroidIDs, idx.Version, includeCols, rt.PushdownFilterSQL, roundLimit)
+		var sql string
 		if sqlproc != nil && sqlproc.ExactPkFilter != "" {
-			sql = buildExactSearchSQL(
+			sql, err = idx.buildExactSearchSQL(
 				idxcfg,
 				tblcfg,
 				query,
@@ -669,8 +706,25 @@ func (idx *IvfflatSearchIndex[T]) Search(
 				includeCols,
 				rt.PushdownFilterSQL,
 			)
+			if err != nil {
+				return nil, nil, err
+			}
 			if cursor != nil {
 				cursor.Exhausted = true
+			}
+		} else {
+			sql, err = idx.buildSearchRoundSQL(
+				idxcfg,
+				tblcfg,
+				query,
+				activeCentroidIDs,
+				idx.Version,
+				includeCols,
+				rt.PushdownFilterSQL,
+				roundLimit,
+			)
+			if err != nil {
+				return nil, nil, err
 			}
 		}
 
@@ -715,7 +769,7 @@ func (idx *IvfflatSearchIndex[T]) Search(
 				resid = append(resid, pk)
 
 				dist := vector.GetFixedAtNoTypeCheck[float64](distVec, i)
-				dist = metric.DistanceTransformIvfflat(dist, metric.DistFuncNameToMetricType[rt.OrigFuncName], metric.MetricType(idxcfg.Ivfflat.Metric))
+				dist = idx.scoreFromQuantized(dist, rt.OrigFuncName, metric.MetricType(idxcfg.Ivfflat.Metric))
 				distances = append(distances, dist)
 
 				if rt.IncludeResult != nil {
@@ -771,16 +825,6 @@ func (idx *IvfflatSearchIndex[T]) Search(
 		return
 	}
 
-	var sql string
-	queryB64 := types.ArrayToBase64(query)
-	var vecFromB64Fn string
-	switch any(query).(type) {
-	case []float32:
-		vecFromB64Fn = "vecf32_from_base64"
-	case []float64:
-		vecFromB64Fn = "vecf64_from_base64"
-	}
-
 	// Re-rank distance. The ENTRY must stay a plain column so the ORDER BY
 	// index-param pushdown (readutil.SetIndexParam) can identify it — wrapping it
 	// in a CAST makes Args[0] a function and panics. The query must be a CONSTANT
@@ -790,27 +834,14 @@ func (idx *IvfflatSearchIndex[T]) Search(
 	// folded), so for narrow entries quantize the f32 query to the entry type here
 	// and pass it via vec{bf16,f16,int8}_from_base64 — a STRICT decode that folds
 	// to a narrow literal, the narrow sibling of vecf32_from_base64. f32/f64 use
-	// the plain f32 base64 decode.
+	// their matching base64 decoders.
 	entryCol := sqlquote.Ident(catalog.SystemSI_IVFFLAT_TblCol_Entries_entry)
-	queryExpr := fmt.Sprintf("%s('%s')", vecFromB64Fn, queryB64)
-	if qf32, ok := any(query).([]float32); ok {
-		switch types.T(idxcfg.Ivfflat.VectorType) {
-		case types.T_array_bf16:
-			queryExpr = fmt.Sprintf("vecbf16_from_base64('%s')", types.ArrayToBase64(types.Float32ToBF16Slice(qf32)))
-		case types.T_array_float16:
-			queryExpr = fmt.Sprintf("vecf16_from_base64('%s')", types.ArrayToBase64(types.Float32ToFloat16Slice(qf32)))
-		case types.T_array_int8:
-			// apply the same q(x)=x*mul+add transform as the entries, then round+clamp
-			// to int8. (mul,add)=(1,0) falls back to the raw cast (no quantizer).
-			sq := quantizer.ApplyInt8(qf32, idx.QuantMul, idx.QuantAdd)
-			queryExpr = fmt.Sprintf("vecint8_from_base64('%s')", types.ArrayToBase64(sq))
-		case types.T_array_uint8:
-			// same transform as int8, narrowed to the unsigned [0,255] range.
-			sq := quantizer.ApplyUint8(qf32, idx.QuantMul, idx.QuantAdd)
-			queryExpr = fmt.Sprintf("vecuint8_from_base64('%s')", types.ArrayToBase64(sq))
-		}
+	queryExpr, err := idx.entryQueryExpression(idxcfg, query)
+	if err != nil {
+		return nil, nil, err
 	}
 
+	var sql string
 	if sqlproc != nil && sqlproc.ExactPkFilter != "" {
 		// Exact PK path: WaitUniqueJoinKeys converted small key set into ExactPkFilter.
 		// Query entries directly by pk list, skip centroid-based filtering.

@@ -311,8 +311,10 @@ func TestBuildSearchRoundSQLQuotesIdentifiers(t *testing.T) {
 		DbName:       "db`name",
 		EntriesTable: "entries`table",
 	}
+	idx := &IvfflatSearchIndex[float32]{}
 
-	sql := buildSearchRoundSQL(idxcfg, tblcfg, []float32{1, 2, 3}, []int64{4}, 7, []string{"payload`col"}, "", 5)
+	sql, err := idx.buildSearchRoundSQL(idxcfg, tblcfg, []float32{1, 2, 3}, []int64{4}, 7, []string{"payload`col"}, "", 5)
+	require.NoError(t, err)
 
 	require.Contains(t, sql, sqlquote.QualifiedIdent("db`name", "entries`table"))
 	require.Contains(t, sql, sqlquote.Ident(catalog.SystemSI_IVFFLAT_IncludeColPrefix+"payload`col"))
@@ -320,7 +322,8 @@ func TestBuildSearchRoundSQLQuotesIdentifiers(t *testing.T) {
 	require.NotContains(t, sql, "`db`name`")
 	require.NotContains(t, sql, "`"+catalog.SystemSI_IVFFLAT_IncludeColPrefix+"payload`col`")
 
-	exactSQL := buildExactSearchSQL(idxcfg, tblcfg, []float32{1, 2, 3}, 7, "11", []string{"payload`col"}, "")
+	exactSQL, err := idx.buildExactSearchSQL(idxcfg, tblcfg, []float32{1, 2, 3}, 7, "11", []string{"payload`col"}, "")
+	require.NoError(t, err)
 	require.Contains(t, exactSQL, sqlquote.QualifiedIdent("db`name", "entries`table"))
 	require.Contains(t, exactSQL, sqlquote.Ident(catalog.SystemSI_IVFFLAT_IncludeColPrefix+"payload`col"))
 	require.NotContains(t, exactSQL, "`db`name`")
