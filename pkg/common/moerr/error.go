@@ -171,6 +171,7 @@ const (
 	ErrCantCompileForPrepare                    uint16 = 20473
 	ErrTableMustHaveAVisibleColumn              uint16 = 20474
 	ErrKeyDoesNotExist                          uint16 = 20475
+	ErrMaxPreparedStmtCountReached              uint16 = 20476
 
 	// Group 5: rpc errors
 	//
@@ -488,6 +489,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrFKNoReferencedRow2:                       {ER_NO_REFERENCED_ROW_2, []string{"23000"}, "Cannot add or update a child row: a foreign key constraint fails"},
 	ErrBlobCantHaveDefault:                      {ER_BLOB_CANT_HAVE_DEFAULT, []string{MySQLDefaultSqlState}, "BLOB, TEXT, GEOMETRY or JSON column '%-.192s' can't have a default value"},
 	ErrTableMustHaveAVisibleColumn:              {ER_TABLE_MUST_HAVE_A_VISIBLE_COLUMN, []string{MySQLDefaultSqlState}, "A table must have at least one visible column."},
+	ErrMaxPreparedStmtCountReached:              {ER_MAX_PREPARED_STMT_COUNT_REACHED, []string{"42000"}, "Can't create more than max_prepared_stmt_count statements (current value: %d)"},
 
 	// Group 5: rpc errors
 	ErrRPCTimeout:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "rpc timeout"},
@@ -1777,6 +1779,10 @@ func NewCantCompileForPrepare(ctx context.Context) *Error {
 
 func NewTableMustHaveVisibleColumn(ctx context.Context) *Error {
 	return newError(ctx, ErrTableMustHaveAVisibleColumn)
+}
+
+func NewMaxPreparedStmtCountReached(ctx context.Context, limit uint64) *Error {
+	return newError(ctx, ErrMaxPreparedStmtCountReached, limit)
 }
 
 func NewTxnUnknown(ctx context.Context, txnID string) *Error {
