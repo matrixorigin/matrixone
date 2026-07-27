@@ -18,6 +18,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -57,11 +58,12 @@ func TestIe(t *testing.T) {
 			setPu("", pu)
 			executor := newIe(sid)
 			executor.ApplySessionOverride(ie.NewOptsBuilder().Username("dump").Finish())
-			sess := executor.newCmdSession(ctx, ie.NewOptsBuilder().Database("mo_catalog").Internal(true).Finish())
+			sess, err := executor.newCmdSession(ctx, ie.NewOptsBuilder().Database("mo_catalog").Internal(true).Finish())
+			require.NoError(t, err)
 			defer sess.Close()
 			assert.Equal(t, "dump", sess.GetResponser().GetStr(USERNAME))
 
-			err := executor.Exec(ctx, "whatever", ie.NewOptsBuilder().Finish())
+			err = executor.Exec(ctx, "whatever", ie.NewOptsBuilder().Finish())
 			assert.Error(t, err)
 			res := executor.Query(ctx, "whatever", ie.NewOptsBuilder().Finish())
 			assert.Error(t, err)
@@ -110,8 +112,10 @@ func TestInternalExecutorLoadsAccountWorkloadPolicy(t *testing.T) {
 		func(rt runtime.Runtime) {
 			defer GWorkloadPolicyManager.Remove(accountID)
 			InitServerLevelVars(service)
+			parameters := &config.FrontendParameters{}
+			parameters.SessionTimeout.Duration = time.Minute
 			setPu(service, config.NewParameterUnit(
-				&config.FrontendParameters{},
+				parameters,
 				nil,
 				nil,
 				nil,
@@ -136,10 +140,11 @@ func TestInternalExecutorLoadsAccountWorkloadPolicy(t *testing.T) {
 			)
 
 			ctx := defines.AttachAccountId(context.Background(), accountID)
-			sess := newIe(service).newCmdSession(
+			sess, err := newIe(service).newCmdSession(
 				ctx,
 				ie.NewOptsBuilder().Internal(true).Finish(),
 			)
+			require.NoError(t, err)
 			defer sess.Close()
 
 			policy := queryWorkloadPolicySnapshotAt(ctx, sess)
@@ -162,6 +167,82 @@ func TestInternalExecutorLoadsAccountWorkloadPolicy(t *testing.T) {
 			require.Empty(t, sess.GetTenantInfo().GetTenant(),
 				"routing identity must not become authenticated identity")
 			require.Equal(t, "tenant-91", queryWorkloadPolicyTenantName(sess))
+		},
+	)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestInternalExecutorReturnsRoutingAccountLookupFailure(t *testing.T) {
+	const (
+		service   = "internal-executor-routing-account-error-test"
+		accountID = uint32(94)
+	)
+	mp := mpool.MustNewZero()
+	policyResult := executor.NewMemResult(
+		[]types.Type{
+			types.T_text.ToType(),
+			types.T_uint64.ToType(),
+		},
+		mp,
+	)
+	policyResult.NewBatchWithRowCount(1)
+	require.NoError(t, executor.AppendStringRows(
+		policyResult,
+		0,
+		[]string{`{"version":1,"policies":{"internal":{"pool":"internal-pool","labels":{"role":"internal"}}}}`},
+	))
+	require.NoError(t, executor.AppendFixedRows(
+		policyResult,
+		1,
+		[]uint64{1},
+	))
+	lookupErr := moerr.NewInternalErrorNoCtx(
+		"injected routing account lookup failure",
+	)
+
+	runtime.RunTest(
+		service,
+		func(rt runtime.Runtime) {
+			defer GWorkloadPolicyManager.Remove(accountID)
+			InitServerLevelVars(service)
+			parameters := &config.FrontendParameters{}
+			parameters.SessionTimeout.Duration = time.Minute
+			setPu(service, config.NewParameterUnit(
+				parameters,
+				nil,
+				nil,
+				nil,
+			))
+			rt.SetGlobalVariables(
+				runtime.InternalSQLExecutor,
+				&workloadPolicySQLExecutor{
+					exec: func(
+						ctx context.Context,
+						sql string,
+						opts executor.Options,
+					) (executor.Result, error) {
+						require.True(t, workloadPolicyBypassed(ctx))
+						if strings.Contains(sql, "from mo_catalog.mo_account") {
+							return executor.Result{}, lookupErr
+						}
+						require.Equal(t, accountID, opts.AccountID())
+						return policyResult.GetResult(), nil
+					},
+				},
+			)
+
+			ctx := defines.AttachAccountId(context.Background(), accountID)
+			result := newIe(service).Query(
+				ctx,
+				"select 1",
+				ie.NewOptsBuilder().Internal(true).Finish(),
+			)
+			require.ErrorIs(t, result.Error(), lookupErr)
+			require.ErrorContains(
+				t,
+				result.Error(),
+				"injected routing account lookup failure",
+			)
 		},
 	)
 	require.Zero(t, mp.CurrNB())
@@ -236,10 +317,11 @@ func TestInternalExecutorLoadsColdAccountPolicyForNonInternalSession(t *testing.
 			)
 
 			ctx := defines.AttachAccountId(context.Background(), accountID)
-			first := newIe(service).newCmdSession(
+			first, err := newIe(service).newCmdSession(
 				ctx,
 				ie.NewOptsBuilder().Finish(),
 			)
+			require.NoError(t, err)
 			require.False(t, first.GetIsInternal())
 			policy := queryWorkloadPolicySnapshotAt(ctx, first)
 			require.Empty(t, policy.InvalidReason)
@@ -262,10 +344,11 @@ func TestInternalExecutorLoadsColdAccountPolicyForNonInternalSession(t *testing.
 			require.Equal(t, 1, accountReads)
 
 			for range 10 {
-				next := newIe(service).newCmdSession(
+				next, err := newIe(service).newCmdSession(
 					ctx,
 					ie.NewOptsBuilder().Finish(),
 				)
+				require.NoError(t, err)
 				require.Equal(
 					t,
 					"task-ap",
@@ -331,10 +414,11 @@ func TestInternalExecutorReusesEmptyAccountWorkloadPolicy(t *testing.T) {
 
 			ctx := defines.AttachAccountId(context.Background(), accountID)
 			for range 10 {
-				sess := newIe(service).newCmdSession(
+				sess, err := newIe(service).newCmdSession(
 					ctx,
 					ie.NewOptsBuilder().Finish(),
 				)
+				require.NoError(t, err)
 				require.False(t, queryWorkloadPolicySnapshotAt(ctx, sess).Configured())
 				sess.Close()
 			}
@@ -439,7 +523,8 @@ func Test_internalProtocol_Write(t *testing.T) {
 	assert.Nil(t, ip.WriteOK(1, 1, 0, 0, ""))
 	assert.Nil(t, ip.WriteEOFOrOK(0, 1))
 
-	ses := executorVar.newCmdSession(ctx, ie.NewOptsBuilder().Finish())
+	ses, err := executorVar.newCmdSession(ctx, ie.NewOptsBuilder().Finish())
+	require.NoError(t, err)
 	defer ses.Close()
 	col1 := &MysqlColumn{}
 	col1.SetName("col1")
@@ -468,7 +553,7 @@ func Test_internalProtocol_Write(t *testing.T) {
 
 	// ======================= main ===================
 	ip.Reset(ses)
-	err := ip.Write(execCtx, nil, batch1)
+	err = ip.Write(execCtx, nil, batch1)
 	require.NoError(t, err)
 	require.Equal(t, 1, int(ip.result.affectedRows))
 	require.Equal(t, 1, len(ip.result.resultSet.Data))

@@ -1118,6 +1118,146 @@ func TestWorkloadPolicyStaleSnapshotDoesNotQueueBehindRefresh(t *testing.T) {
 	)
 }
 
+func TestWorkloadPolicyInvalidationRequiresSynchronousRefresh(t *testing.T) {
+	const accountID = uint32(95)
+	manager := newWorkloadPolicyManager(time.Minute, nil)
+	state := manager.acquire(accountID)
+	applied, _, err := manager.Apply(
+		accountID,
+		testWorkloadPolicyOld,
+		1,
+	)
+	require.NoError(t, err)
+	require.True(t, applied)
+
+	manager.InvalidateAll()
+	started := make(chan struct{})
+	release := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- manager.refreshWithMode(
+			context.Background(),
+			accountID,
+			state,
+			func(context.Context) (string, uint64, error) {
+				close(started)
+				<-release
+				return testWorkloadPolicyNew, 2, nil
+			},
+			true,
+		)
+	}()
+	<-started
+	select {
+	case err := <-done:
+		require.Failf(t, "refresh returned early", "error: %v", err)
+	default:
+	}
+
+	close(release)
+	require.NoError(t, <-done)
+	require.Equal(t, uint64(2), state.snapshot.Load().revision)
+	require.Equal(
+		t,
+		"new",
+		manager.cached(state).Rules[schedule.WorkloadAP].PoolIdentity,
+	)
+}
+
+func TestWorkloadPolicyInvalidationFencesPreTransitionRefresh(t *testing.T) {
+	const accountID = uint32(96)
+	manager := newWorkloadPolicyManager(time.Minute, nil)
+	state := manager.acquire(accountID)
+	applied, _, err := manager.Apply(
+		accountID,
+		testWorkloadPolicyOld,
+		1,
+	)
+	require.NoError(t, err)
+	require.True(t, applied)
+	state.refreshAfter.Store(0)
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	require.NoError(t, manager.refreshWithMode(
+		context.Background(),
+		accountID,
+		state,
+		func(context.Context) (string, uint64, error) {
+			close(started)
+			<-release
+			return testWorkloadPolicyOld, 1, nil
+		},
+		true,
+	))
+	<-started
+
+	state.mu.Lock()
+	preTransitionRefresh := state.refreshing
+	state.mu.Unlock()
+	require.NotNil(t, preTransitionRefresh)
+	manager.InvalidateAll()
+	close(release)
+	<-preTransitionRefresh.done
+	require.ErrorContains(
+		t,
+		preTransitionRefresh.err,
+		"invalidated during refresh",
+	)
+	require.Equal(t, uint64(1), state.snapshot.Load().revision)
+
+	require.NoError(t, manager.refreshWithMode(
+		context.Background(),
+		accountID,
+		state,
+		func(context.Context) (string, uint64, error) {
+			return testWorkloadPolicyNew, 2, nil
+		},
+		true,
+	))
+	require.Equal(t, uint64(2), state.snapshot.Load().revision)
+}
+
+func TestWorkloadPolicyInvalidationFailureDoesNotServeStaleSnapshot(t *testing.T) {
+	const accountID = uint32(97)
+	manager := newWorkloadPolicyManager(time.Minute, nil)
+	state := manager.acquire(accountID)
+	applied, _, err := manager.Apply(
+		accountID,
+		testWorkloadPolicyOld,
+		1,
+	)
+	require.NoError(t, err)
+	require.True(t, applied)
+	manager.InvalidateAll()
+
+	loadErr := moerr.NewInternalErrorNoCtx(
+		"injected post-reactivation catalog failure",
+	)
+	var calls atomic.Int32
+	refresh := func() error {
+		return manager.refreshWithMode(
+			context.Background(),
+			accountID,
+			state,
+			func(context.Context) (string, uint64, error) {
+				calls.Add(1)
+				return "", 0, loadErr
+			},
+			true,
+		)
+	}
+	require.ErrorIs(t, refresh(), loadErr)
+	require.Equal(t, int32(1), calls.Load())
+
+	require.ErrorIs(t, refresh(), loadErr)
+	require.Equal(t, int32(1), calls.Load(),
+		"required refresh failures must fail closed with bounded retry backoff")
+	require.Equal(t, uint64(1), state.snapshot.Load().revision,
+		"the old immutable snapshot may remain pinned but must not become fresh")
+	require.Less(t, state.refreshAfter.Load(), int64(-1))
+}
+
 func TestWorkloadPolicyEstablishedRefreshIsDetachedAndSingleflight(t *testing.T) {
 	const accountID = uint32(57)
 	var calls atomic.Int32

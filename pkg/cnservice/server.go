@@ -684,6 +684,9 @@ func (s *service) initClusterService() {
 		s.cfg.UUID,
 		s._hakeeperClient,
 		s.cfg.Cluster.RefreshInterval.Duration,
+		clusterservice.WithLocalCNStateChange(
+			frontend.GWorkloadPolicyManager.InvalidateAll,
+		),
 	)
 	runtime.ServiceRuntime(s.cfg.UUID).SetGlobalVariables(runtime.ClusterService, s.moCluster)
 }

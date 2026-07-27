@@ -148,7 +148,10 @@ func (ie *internalExecutor) ExecWithStatus(ctx context.Context, sql string, opts
 	var cancel context.CancelFunc
 	ctx, cancel = context.WithTimeoutCause(ctx, getPu(ie.service).SV.SessionTimeout.Duration, moerr.CauseInternalExecutorExec)
 	defer cancel()
-	sess := ie.newCmdSession(ctx, opts)
+	sess, err := ie.newCmdSession(ctx, opts)
+	if err != nil {
+		return status, err
+	}
 	defer func() {
 		sess.Close()
 	}()
@@ -178,7 +181,12 @@ func (ie *internalExecutor) Query(ctx context.Context, sql string, opts ie.Sessi
 	var cancel context.CancelFunc
 	ctx, cancel = context.WithTimeoutCause(ctx, getPu(ie.service).SV.SessionTimeout.Duration, moerr.CauseInternalExecutorQuery)
 	defer cancel()
-	sess := ie.newCmdSession(ctx, opts)
+	sess, err := ie.newCmdSession(ctx, opts)
+	if err != nil {
+		res := ie.proto.swapOutResult()
+		res.err = err
+		return res
+	}
 	defer sess.Close()
 	sess.EnterFPrint(FPInternalExecutorQuery)
 	defer sess.ExitFPrint(FPInternalExecutorQuery)
@@ -189,13 +197,16 @@ func (ie *internalExecutor) Query(ctx context.Context, sql string, opts ie.Sessi
 		ses:    sess,
 	}
 	defer tempExecCtx.Close()
-	err := doComQuery(sess, &tempExecCtx, &UserInput{sql: sql})
+	err = doComQuery(sess, &tempExecCtx, &UserInput{sql: sql})
 	res := ie.proto.swapOutResult()
 	res.err = moerr.AttachCause(ctx, err)
 	return res
 }
 
-func (ie *internalExecutor) newCmdSession(ctx context.Context, opts ie.SessionOverrideOptions) *Session {
+func (ie *internalExecutor) newCmdSession(
+	ctx context.Context,
+	opts ie.SessionOverrideOptions,
+) (*Session, error) {
 	// Use the Mid configuration for session. We can make Mid a configuration
 	// param, or, compute from GuestMmuLimitation.   Lazy.
 	//
@@ -212,6 +223,12 @@ func (ie *internalExecutor) newCmdSession(ctx context.Context, opts ie.SessionOv
 	}
 	sess := NewSession(ctx, ie.service, ie.proto, mp)
 	sess.disableTrace = true
+	initialized := false
+	defer func() {
+		if !initialized {
+			sess.Close()
+		}
+	}()
 
 	var t *TenantInfo
 	if accountId, err := defines.GetAccountId(ctx); err == nil {
@@ -243,35 +260,30 @@ func (ie *internalExecutor) newCmdSession(ctx context.Context, opts ie.SessionOv
 	// run the client authentication path that calls InitSystemVariables. They
 	// still need to share the account-level workload policy snapshot so an
 	// internal workload rule is not silently bypassed. Acquire only after the
-	// fallible session initialization above; the local guard owns the reference
-	// until it transfers to the caller and Session.Close.
+	// fallible session initialization above. Session.Close owns the reference
+	// on every later failure and after transfer to the caller.
 	state := GWorkloadPolicyManager.acquire(sess.GetTenantInfo().GetTenantID())
 	sess.workloadPolicy.Store(state)
-	releaseState := true
-	defer func() {
-		if releaseState {
-			sess.workloadPolicy.Store(nil)
-			GWorkloadPolicyManager.release(state)
-		}
-	}()
 	if !workloadPolicyBypassed(ctx) &&
 		state.snapshot.Load() == nil {
 		// RefreshAsync waits for the first snapshot and becomes asynchronous
 		// only after a usable snapshot exists. Account-bound SQL tasks use this
 		// executor without marking the statement as internal, so every managed
 		// session must establish the cold account snapshot before compilation.
-		_ = GWorkloadPolicyManager.RefreshAsync(
+		if err := GWorkloadPolicyManager.RefreshAsync(
 			ctx,
 			ie.service,
 			state.accountID,
 			state,
-		)
+		); err != nil {
+			return nil, err
+		}
 	}
 	policy := GWorkloadPolicyManager.cached(state)
 	if policy.Configured() &&
 		!workloadPolicyBypassed(ctx) &&
 		state.cachedRoutingAccountName() == "" {
-		_ = state.ensureRoutingAccountName(
+		if err := state.ensureRoutingAccountName(
 			ctx,
 			func(loadCtx context.Context) (string, error) {
 				return loadWorkloadPolicyAccountNameByService(
@@ -280,10 +292,12 @@ func (ie *internalExecutor) newCmdSession(ctx context.Context, opts ie.SessionOv
 					state.accountID,
 				)
 			},
-		)
+		); err != nil {
+			return nil, err
+		}
 	}
-	releaseState = false
-	return sess
+	initialized = true
+	return sess, nil
 }
 
 func (ie *internalExecutor) ApplySessionOverride(opts ie.SessionOverrideOptions) {

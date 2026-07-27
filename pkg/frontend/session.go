@@ -2131,6 +2131,16 @@ func (ses *Session) reset(ctx context.Context, prev *Session) error {
 	ses.clientAddr = prev.clientAddr
 	ses.proxyAddr = prev.proxyAddr
 
+	// A reset replacement is a distinct Session and therefore needs its own
+	// counted reference. Reacquiring also fences a retired manager generation;
+	// copying the raw pointer would let closing prev retire policy ownership
+	// while the proxy continues to reuse the replacement session.
+	if prevState := workloadPolicyState(prev); prevState != nil {
+		state := GWorkloadPolicyManager.acquire(prevState.accountID)
+		replaced := ses.workloadPolicy.Swap(state)
+		GWorkloadPolicyManager.release(replaced)
+	}
+
 	// rollback the transactions in the old session.
 	rollbackCtx := prev.getCleanupContext()
 	if ctx != nil {

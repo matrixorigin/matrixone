@@ -187,6 +187,16 @@ func WithDisableRefresh() Option {
 	}
 }
 
+// WithLocalCNStateChange registers a synchronous, non-blocking callback for
+// changes to this process's CN membership or work state. The callback runs
+// before the new cluster snapshot becomes visible, allowing local caches to be
+// invalidated before a Draining CN becomes schedulable again.
+func WithLocalCNStateChange(callback func()) Option {
+	return func(c *cluster) {
+		c.localCNStateChange = callback
+	}
+}
+
 type cluster struct {
 	logger          *log.MOLogger
 	stopper         *stopper.Stopper
@@ -207,10 +217,12 @@ type cluster struct {
 	// Correctness: readyOnce.Do guarantees that ready.Store(true) happens before
 	// close(readyC), so if readyC is closed (i.e., <-readyC returns), ready is
 	// guaranteed to be true. If ready.Load() returns false, we fall back to channel wait.
-	ready       atomic.Bool
-	services    atomic.Pointer[services]
-	regexpCache *regexpCache
-	options     struct {
+	ready              atomic.Bool
+	services           atomic.Pointer[services]
+	regexpCache        *regexpCache
+	serviceID          string
+	localCNStateChange func()
+	options            struct {
 		disableRefresh bool
 	}
 }
@@ -230,6 +242,7 @@ func NewMOCluster(
 		logger:          logger,
 		stopper:         stopper.NewStopper("mo-cluster", stopper.WithLogger(logger.RawLogger())),
 		client:          client,
+		serviceID:       service,
 		forceRefreshC:   make(chan struct{}, 1),
 		readyC:          make(chan struct{}),
 		refreshInterval: refreshInterval,
@@ -420,13 +433,13 @@ func (c *cluster) RemoveCN(id string) {
 		}
 	}
 	new.cn = values
-	c.services.Store(new)
+	c.storeServices(new)
 }
 
 func (c *cluster) AddCN(s metadata.CNService) {
 	new := c.copyServices()
 	new.cn = append(new.cn, s)
-	c.services.Store(new)
+	c.storeServices(new)
 }
 
 func (c *cluster) UpdateCN(s metadata.CNService) {
@@ -437,7 +450,7 @@ func (c *cluster) UpdateCN(s metadata.CNService) {
 			break
 		}
 	}
-	c.services.Store(new)
+	c.storeServices(new)
 }
 
 // waitReady blocks until the cluster has completed its first refresh from HAKeeper
@@ -548,12 +561,48 @@ func (c *cluster) refreshWithContext(ctx context.Context) error {
 	if len(new.tn) > 1 {
 		new.tn = new.tn[:1]
 	}
-	c.services.Store(new)
+	c.storeServices(new)
 	c.readyOnce.Do(func() {
 		c.ready.Store(true)
 		close(c.readyC)
 	})
 	return nil
+}
+
+func (c *cluster) storeServices(new *services) {
+	old := c.services.Load()
+	if c.ready.Load() &&
+		c.localCNStateChange != nil &&
+		localCNStateChanged(c.serviceID, old, new) {
+		c.localCNStateChange()
+	}
+	c.services.Store(new)
+}
+
+func localCNStateChanged(
+	serviceID string,
+	old *services,
+	new *services,
+) bool {
+	oldState, oldFound := findCNWorkState(serviceID, old)
+	newState, newFound := findCNWorkState(serviceID, new)
+	return oldFound != newFound ||
+		(oldFound && oldState != newState)
+}
+
+func findCNWorkState(
+	serviceID string,
+	snapshot *services,
+) (metadata.WorkState, bool) {
+	if serviceID == "" || snapshot == nil {
+		return metadata.WorkState_Unknown, false
+	}
+	for _, cn := range snapshot.cn {
+		if cn.ServiceID == serviceID {
+			return cn.WorkState, true
+		}
+	}
+	return metadata.WorkState_Unknown, false
 }
 
 func (c *cluster) acquireRefresh(ctx context.Context) error {

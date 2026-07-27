@@ -148,6 +148,49 @@ func TestClusterForceRefresh(t *testing.T) {
 		})
 }
 
+func TestLocalCNStateChangeRunsBeforeSnapshotPublication(t *testing.T) {
+	c := &cluster{
+		serviceID: "cn-local",
+		readyC:    make(chan struct{}),
+	}
+	c.services.Store(&services{cn: []metadata.CNService{{
+		ServiceID: "cn-local",
+		WorkState: metadata.WorkState_Working,
+	}}})
+	c.ready.Store(true)
+
+	var callbacks int
+	var observed metadata.WorkState
+	c.localCNStateChange = func() {
+		callbacks++
+		observed, _ = findCNWorkState("cn-local", c.services.Load())
+	}
+
+	c.UpdateCN(metadata.CNService{
+		ServiceID: "cn-local",
+		WorkState: metadata.WorkState_Draining,
+	})
+	require.Equal(t, 1, callbacks)
+	require.Equal(t, metadata.WorkState_Working, observed,
+		"cache invalidation must run before the CN becomes draining")
+
+	c.UpdateCN(metadata.CNService{
+		ServiceID: "cn-local",
+		WorkState: metadata.WorkState_Working,
+	})
+	require.Equal(t, 2, callbacks)
+	require.Equal(t, metadata.WorkState_Draining, observed,
+		"cache invalidation must run before the CN becomes schedulable again")
+
+	c.UpdateCN(metadata.CNService{
+		ServiceID:    "cn-local",
+		WorkState:    metadata.WorkState_Working,
+		QueryAddress: "new-address",
+	})
+	require.Equal(t, 2, callbacks,
+		"non-work-state metadata must not invalidate policy caches")
+}
+
 func TestClusterRefreshReportsFailureAndPreservesSnapshot(t *testing.T) {
 	runClusterTest(
 		time.Hour,

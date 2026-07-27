@@ -497,6 +497,74 @@ func TestRoutineResetSessionKeepsReplacementRegistered(t *testing.T) {
 	require.Same(t, newSession, registered[0])
 }
 
+func TestRoutineResetSessionPreservesWorkloadPolicyOwnership(t *testing.T) {
+	const accountID = uint32(4294967201)
+	ctrl := gomock.NewController(t)
+	oldSession := newTestSession(t, ctrl)
+	oldSession.SetTenantInfo(&TenantInfo{
+		Tenant:      "reset-policy-tenant",
+		TenantID:    accountID,
+		DefaultRole: accountAdminRoleName,
+	})
+	state := GWorkloadPolicyManager.acquire(accountID)
+	state.rememberRoutingAccountName("reset-policy-tenant")
+	previous := oldSession.workloadPolicy.Swap(state)
+	GWorkloadPolicyManager.release(previous)
+	applied, _, err := GWorkloadPolicyManager.Apply(
+		accountID,
+		testWorkloadPolicyNew,
+		1,
+	)
+	require.NoError(t, err)
+	require.True(t, applied)
+	t.Cleanup(func() {
+		GWorkloadPolicyManager.Remove(accountID)
+	})
+
+	rm, err := NewRoutineManager(context.Background(), "")
+	require.NoError(t, err)
+	rm.sessionManager = queryservice.NewSessionManager()
+	routine := NewRoutine(
+		context.Background(),
+		oldSession.GetResponser().MysqlRrWr(),
+		&config.FrontendParameters{},
+	)
+	oldSession.setRoutineManager(rm)
+	oldSession.setRoutine(routine)
+	routine.setSession(oldSession)
+	rm.sessionManager.AddSession(oldSession)
+
+	require.NoError(t, routine.resetSession("", &query.ResetSessionResponse{}))
+	newSession := routine.getSession()
+	t.Cleanup(func() {
+		rm.sessionManager.RemoveSession(newSession)
+		newSession.Close()
+		rm.cancelCtx()
+	})
+
+	newState := workloadPolicyState(newSession)
+	require.NotNil(t, newState)
+	require.Equal(t, accountID, newState.accountID)
+	require.Equal(
+		t,
+		"reset-policy-tenant",
+		queryWorkloadPolicyTenantName(newSession),
+	)
+	require.Equal(
+		t,
+		testWorkloadPolicyNew,
+		newState.snapshot.Load().raw,
+	)
+
+	GWorkloadPolicyManager.mu.Lock()
+	references := newState.references
+	managedState := GWorkloadPolicyManager.accounts[accountID]
+	GWorkloadPolicyManager.mu.Unlock()
+	require.Equal(t, uint64(1), references,
+		"closing the old session must leave one reference owned by its replacement")
+	require.Same(t, newState, managedState)
+}
+
 func TestRoutineResetSessionFailureRestoresProtocolState(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	oldSession := newTestSession(t, ctrl)

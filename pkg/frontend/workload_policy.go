@@ -102,6 +102,12 @@ type accountWorkloadPolicy struct {
 	routingNameRetryAt  int64
 	routingNameFailures uint8
 	accountID           uint32
+	// generation advances when an RPC apply or local-CN state transition
+	// supersedes an in-flight catalog read. It is protected by mu.
+	generation uint64
+	// requiredRefreshErr is protected by mu. A negative refreshAfter encodes
+	// the retry deadline for a required synchronous refresh.
+	requiredRefreshErr error
 	// references and idle linkage are owned by WorkloadPolicyManager.mu.
 	references uint64
 	idlePrev   *accountWorkloadPolicy
@@ -415,6 +421,12 @@ func (m *WorkloadPolicyManager) Apply(
 		case revision < current.revision:
 			return false, current.revision, nil
 		case revision == current.revision && raw == current.raw:
+			state.failures = 0
+			state.requiredRefreshErr = nil
+			state.generation++
+			state.refreshAfter.Store(
+				time.Now().Add(m.refreshPeriod).UnixNano(),
+			)
 			return false, current.revision, nil
 		case revision == current.revision:
 			return false, current.revision, moerr.NewInternalErrorNoCtxf(
@@ -430,6 +442,8 @@ func (m *WorkloadPolicyManager) Apply(
 		set:      set,
 	})
 	state.failures = 0
+	state.requiredRefreshErr = nil
+	state.generation++
 	state.refreshAfter.Store(time.Now().Add(m.refreshPeriod).UnixNano())
 	return true, revision, nil
 }
@@ -444,6 +458,22 @@ func (m *WorkloadPolicyManager) Remove(accountID uint32) {
 	m.removeIdleLocked(state)
 	delete(m.accounts, accountID)
 	state.removed.Store(true)
+}
+
+// InvalidateAll fences cached revisions across a local CN work-state change.
+// Idle states are retired on their next acquire; active states must complete a
+// synchronous catalog refresh before they can route another statement. This
+// is called only by the low-frequency cluster refresh path.
+func (m *WorkloadPolicyManager) InvalidateAll() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, state := range m.accounts {
+		state.mu.Lock()
+		state.generation++
+		state.requiredRefreshErr = nil
+		state.refreshAfter.Store(-1)
+		state.mu.Unlock()
+	}
 }
 
 // Refresh reconciles one account with the authoritative catalog. When a valid
@@ -551,12 +581,20 @@ func (m *WorkloadPolicyManager) refreshWithMode(
 		return nil
 	}
 	current = state.snapshot.Load()
-	if current != nil && now.UnixNano() < state.refreshAfter.Load() {
+	refreshAfter := state.refreshAfter.Load()
+	if current != nil && refreshAfter > 0 &&
+		now.UnixNano() < refreshAfter {
 		state.mu.Unlock()
 		return nil
 	}
+	if current != nil && refreshAfter < -1 &&
+		now.UnixNano() < -refreshAfter {
+		err := state.requiredRefreshErr
+		state.mu.Unlock()
+		return err
+	}
 	if refresh := state.refreshing; refresh != nil {
-		if current != nil {
+		if current != nil && refreshAfter >= 0 {
 			state.mu.Unlock()
 			return nil
 		}
@@ -572,6 +610,8 @@ func (m *WorkloadPolicyManager) refreshWithMode(
 	refresh := &workloadPolicyRefresh{done: make(chan struct{})}
 	state.refreshing = refresh
 	refreshBase := current
+	refreshGeneration := state.generation
+	forceSynchronous := current != nil && refreshAfter < 0
 	state.mu.Unlock()
 
 	run := func(loadCtx context.Context) error {
@@ -607,12 +647,25 @@ func (m *WorkloadPolicyManager) refreshWithMode(
 		current = state.snapshot.Load()
 		hadSnapshot := current != nil
 		resultErr := loadErr
-		superseded := current != nil && current != refreshBase
+		generationChanged := state.generation != refreshGeneration
 		if state.removed.Load() {
 			// Remove or bounded eviction retired this generation while the
 			// catalog read was running. Wake waiters without resurrecting it.
+		} else if generationChanged {
+			if current != nil && state.refreshAfter.Load() > 0 {
+				// Apply supplied authoritative policy data after this read
+				// started, so its snapshot also satisfies initial-load waiters.
+				resultErr = nil
+			} else {
+				resultErr = moerr.NewInternalErrorf(
+					loadCtx,
+					"workload policy cache for account %d was invalidated during refresh",
+					accountID,
+				)
+			}
 		} else if loadErr == nil {
 			state.failures = 0
+			state.requiredRefreshErr = nil
 			if current == nil || revision >= current.revision {
 				enteredInvalid = parsed.InvalidReason != "" &&
 					(current == nil ||
@@ -626,12 +679,6 @@ func (m *WorkloadPolicyManager) refreshWithMode(
 				})
 			}
 			state.refreshAfter.Store(time.Now().Add(m.refreshPeriod).UnixNano())
-		} else if superseded {
-			// Apply installed a committed, newer RPC snapshot while this catalog
-			// read was in flight. That snapshot satisfies this refresh generation;
-			// do not shorten its healthy deadline or wake initial-load waiters with
-			// the obsolete read error.
-			resultErr = nil
 		} else {
 			if state.failures < ^uint8(0) {
 				state.failures++
@@ -645,9 +692,15 @@ func (m *WorkloadPolicyManager) refreshWithMode(
 					},
 				})
 			}
-			state.refreshAfter.Store(
-				time.Now().Add(workloadPolicyRefreshBackoff(state.failures)).UnixNano(),
-			)
+			retryAt := time.Now().
+				Add(workloadPolicyRefreshBackoff(state.failures)).
+				UnixNano()
+			if forceSynchronous {
+				state.requiredRefreshErr = resultErr
+				state.refreshAfter.Store(-retryAt)
+			} else {
+				state.refreshAfter.Store(retryAt)
+			}
 		}
 		refresh.err = resultErr
 		state.refreshing = nil
@@ -677,13 +730,13 @@ func (m *WorkloadPolicyManager) refreshWithMode(
 
 		// A transient read failure does not invalidate a previously established
 		// snapshot. It remains usable while the bounded backoff drives a retry.
-		if resultErr != nil && hadSnapshot {
+		if resultErr != nil && hadSnapshot && !forceSynchronous {
 			return nil
 		}
 		return resultErr
 	}
 
-	if asyncEstablished && refreshBase != nil {
+	if asyncEstablished && refreshBase != nil && !forceSynchronous {
 		refreshCtx, cancel := context.WithTimeout(
 			context.WithoutCancel(ctx),
 			workloadPolicyRefreshTimeout,
