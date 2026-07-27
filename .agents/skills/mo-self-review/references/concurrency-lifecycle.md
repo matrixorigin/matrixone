@@ -112,8 +112,10 @@ when a remembered list of test names is present.
 - Assert fail-fast latency with a short outer deadline and verify it did not fire.
 - Count irreversible side effects and require exactly once, not merely non-zero.
 - Make test cleanup release blockers even after an assertion fails.
-- Run new concurrency tests with `-race`; stress the focused transition set with
-  `-count=N`, then run the entire owning package under `-race` once.
+- Run the minimal, explicitly named set of new, modified, or directly affected
+  concurrency tests with the adaptive `-race -count=N` budget defined by the
+  main skill; never apply repeated stress to the package. Then run the entire
+  owning package under `-race` once.
 
 ## 6. Validate The Closure
 
