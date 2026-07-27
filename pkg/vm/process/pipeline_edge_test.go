@@ -712,9 +712,12 @@ func TestPipelineEdgeTimeoutFatalSendDoneClosesAfterTimeout(t *testing.T) {
 	reg := NewPipelineEdge(1, 0)
 	reg.Ch2 <- NewEndSignal() // fill it
 
-	// With a very short timeout, this must fail.
-	if SendPipelineSignalWithTimeout(reg, NewErrorSignal(moerr.NewInternalErrorNoCtx("fatal")), 10*time.Millisecond) {
+	start := time.Now()
+	if SendPipelineSignalWithTimeout(reg, NewErrorSignal(moerr.NewInternalErrorNoCtx("fatal")), time.Second) {
 		t.Fatal("SendPipelineSignalWithTimeout should fail on a full channel")
+	}
+	if elapsed := time.Since(start); elapsed > 100*time.Millisecond {
+		t.Fatalf("fatal send waited behind the full data channel: %s", elapsed)
 	}
 
 	select {
