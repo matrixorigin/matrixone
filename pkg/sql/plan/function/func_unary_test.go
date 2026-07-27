@@ -9280,8 +9280,10 @@ func TestTimedOutFailedAttemptCleanupRetainsOwnershipAfterSaturatedHandoff(t *te
 		}
 	timeoutBacklogDrained:
 		detachedUserLevelLockCleanups.Unlock()
-		progress, _ := runRetainedUserLevelLockCleanupPass()
-		require.True(t, progress)
+		// retainDetachedUserLevelLockTxnCleanup starts a worker. Once unlocks
+		// resume, that worker may finish before this goroutine runs a pass.
+		// Drive a pass opportunistically, then assert only the terminal state.
+		_, _ = runRetainedUserLevelLockCleanupPass()
 
 		require.Eventually(t, func() bool {
 			userLevelLocks.Lock()
@@ -9345,8 +9347,10 @@ func TestSuccessfulProbeCleanupRetainsOwnershipAfterSaturatedHandoff(t *testing.
 		}
 	probeBacklogDrained:
 		detachedUserLevelLockCleanups.Unlock()
-		progress, _ := runRetainedUserLevelLockCleanupPass()
-		require.True(t, progress)
+		// The retained worker races this explicit pass after blockUnlock is
+		// cleared. Either goroutine may complete the cleanup, so progress from
+		// this particular call is not part of the behavior under test.
+		_, _ = runRetainedUserLevelLockCleanupPass()
 		require.Eventually(t, func() bool {
 			userLevelLocks.Lock()
 			_, retained := userLevelLocks.pendingCleanups[key]
