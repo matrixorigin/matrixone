@@ -230,8 +230,7 @@ func (catalog *Catalog) onReplayUpdateObject(
 		obj.CreateNode = cmd.mvccNode.TxnMVCCNode
 		cmd.mvccNode.CommitSideEffect = func(id string, ts types.TS) {
 			obj.CreateNode.ApplyCommit(id)
-			obj.EntryMVCCNode.ApplyCommit(ts)
-			rel.UpdateReplayEntryTs(obj, ts)
+			obj = rel.UpdateReplayEntryTs(obj, ts)
 		}
 		obj.ObjectMVCCNode = *cmd.mvccNode.BaseNode
 		obj.ObjectState = ObjectState_Create_PrepareCommit
@@ -264,15 +263,15 @@ func (catalog *Catalog) onReplayUpdateObject(
 			panic(fmt.Sprintf("obj %v not existed, table:\n%v", cmd.ID.String(), rel.StringWithLevel(3)))
 		}
 		obj = cobj.Clone()
-		obj.prevVersion = cobj
-		cobj.nextVersion = obj
+		updatedCreate := cobj.Clone()
+		updatedCreate.nextVersion = obj
+		obj.prevVersion = updatedCreate
 		obj.EntryMVCCNode = cmd.mvccNode.EntryMVCCNode
 		obj.DeleteNode = cmd.mvccNode.TxnMVCCNode
 		obj.ObjectMVCCNode = *cmd.mvccNode.BaseNode
 		cmd.mvccNode.CommitSideEffect = func(id string, ts types.TS) {
 			obj.DeleteNode.ApplyCommit(id)
-			obj.EntryMVCCNode.ApplyCommit(ts)
-			rel.UpdateReplayEntryTs(obj, ts)
+			obj = rel.UpdateReplayEntryTs(obj, ts)
 		}
 		obj.ObjectState = ObjectState_Delete_PrepareCommit
 		rel.AddEntryLocked(obj)
@@ -629,6 +628,7 @@ func (catalog *Catalog) OnReplayObjectBatch_V2(
 		}
 		rel.AddEntryLocked(obj)
 		if !delete.IsEmpty() {
+			updatedCreate := obj.Clone()
 			dropped := obj.Clone()
 			dropped.DeletedAt = delete
 			dropped.DeleteNode = txnbase.TxnMVCCNode{
@@ -636,13 +636,14 @@ func (catalog *Catalog) OnReplayObjectBatch_V2(
 				Prepare: delete,
 				End:     delete,
 			}
-			dropped.prevVersion = obj
-			obj.nextVersion = dropped
+			dropped.prevVersion = updatedCreate
+			updatedCreate.nextVersion = dropped
 			dropped.ObjectState = ObjectState_Delete_ApplyCommit
 			rel.AddEntryLocked(dropped)
 		}
 	} else {
 		if obj.DeletedAt.IsEmpty() && !delete.IsEmpty() {
+			updatedCreate := obj.Clone()
 			dropped := obj.Clone()
 			dropped.DeletedAt = delete
 			dropped.DeleteNode = txnbase.TxnMVCCNode{
@@ -650,8 +651,8 @@ func (catalog *Catalog) OnReplayObjectBatch_V2(
 				Prepare: delete,
 				End:     delete,
 			}
-			dropped.prevVersion = obj
-			obj.nextVersion = dropped
+			dropped.prevVersion = updatedCreate
+			updatedCreate.nextVersion = dropped
 			dropped.ObjectState = ObjectState_Delete_ApplyCommit
 			rel.AddEntryLocked(dropped)
 		}
@@ -767,9 +768,10 @@ func (catalog *Catalog) onReplayCheckpointObject(
 				createTS.ToString(), deleteTS.ToString(), isTombstone, objNode.String(),
 				start.ToString(), prepare.ToString(), end.ToString(), rel.StringWithLevel(3)))
 		}
+		updatedCreate := obj.Clone()
 		deleteNode := obj.Clone()
-		obj.nextVersion = deleteNode
-		deleteNode.prevVersion = obj
+		updatedCreate.nextVersion = deleteNode
+		deleteNode.prevVersion = updatedCreate
 		deleteNode.EntryMVCCNode = EntryMVCCNode{
 			CreatedAt: createTS,
 			DeletedAt: deleteTS,
