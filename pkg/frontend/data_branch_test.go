@@ -1401,6 +1401,54 @@ func TestValidateDataBranchColumnLineage(t *testing.T) {
 		require.NotContains(t, endpointColumns, "c")
 	})
 
+	t.Run("target-only addition does not reuse a preserved column identity", func(t *testing.T) {
+		tarDefs := []*plan.TableDef{
+			tableDef(col("a", 1, 0), col("b", 2, 1)),
+			tableDef(col("a", 10, 0), col("c", 2, 1), col("b", 11, 2)),
+		}
+		baseDefs := []*plan.TableDef{
+			tableDef(col("a", 1, 0), col("b", 2, 1)),
+			tableDef(col("a", 20, 0), col("b", 21, 1)),
+		}
+		endpointColumns, err := dataBranchLineageEndpointColumns(
+			tarDefs, []bool{false, true}, baseDefs, []bool{false, false},
+		)
+		require.NoError(t, err)
+		require.NotContains(t, endpointColumns, "c")
+	})
+
+	t.Run("endpoint-ambiguous rename shape is excluded by producer guard", func(t *testing.T) {
+		previousDef := tableDef(col("a", 1, 0), col("b", 2, 1))
+		currentDef := tableDef(col("a", 1, 0), col("c", 2, 1))
+		// Endpoint schemas alone are indistinguishable from a rename. The
+		// ALTER producer rejects this DROP+ADD shape before publishing the
+		// lineage edge; this assertion documents the remaining local signal.
+		require.Same(t, previousDef.Cols[1], dataBranchColumnDefByRenameIdentity(
+			previousDef, currentDef, currentDef.Cols[1],
+		))
+	})
+
+	t.Run("rename identity survives unrelated modify and reorder", func(t *testing.T) {
+		previousDef := tableDef(col("a", 1, 0), col("b", 2, 1))
+		renamed := col("bb", 2, 1)
+		renamed.Typ.Id = int32(types.T_varchar)
+		modified := col("a", 1, 0)
+		modified.NotNull = true
+		currentDef := tableDef(renamed, modified)
+		require.Same(t, previousDef.Cols[1], dataBranchColumnDefByRenameIdentity(
+			previousDef, currentDef, renamed,
+		))
+	})
+
+	t.Run("unchanged names cannot exchange physical identities", func(t *testing.T) {
+		previousDef := tableDef(col("a", 1, 0), col("b", 2, 1))
+		renamed := col("bb", 1, 0)
+		currentDef := tableDef(col("a", 2, 1), renamed)
+		require.Nil(t, dataBranchColumnDefByRenameIdentity(
+			previousDef, currentDef, renamed,
+		))
+	})
+
 	t.Run("column dropped by sibling remains target only after type change", func(t *testing.T) {
 		varcharCol := col("c", 12, 1)
 		varcharCol.Typ.Id = int32(types.T_varchar)

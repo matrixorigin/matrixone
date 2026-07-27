@@ -264,18 +264,21 @@ func withDataBranchCloneLockContext(
 func lockDataBranchCloneSource(
 	ctx context.Context,
 	ses *Session,
+	bh BackgroundExec,
 	fromAccountID uint32,
 	databaseName, tableName string,
 ) error {
 	if locked, _ := ctx.Value(dataBranchCloneLockCtxKey{}).(bool); !locked {
 		return nil
 	}
-	txnOp := ses.proc.GetTxnOperator()
+	lockProc := newDataBranchCloneLockProcess(ctx, ses, bh)
+	defer lockProc.Free()
+	txnOp := lockProc.GetTxnOperator()
 	if err := validateDataBranchCreateTxn(txnOp.Txn().IsPessimistic()); err != nil {
 		return err
 	}
 	sourceCtx := defines.AttachAccountId(ctx, fromAccountID)
-	eng := ses.proc.GetSessionInfo().StorageEngine
+	eng := lockProc.GetSessionInfo().StorageEngine
 	db, err := eng.Database(sourceCtx, catalog.MO_CATALOG, txnOp)
 	if err != nil {
 		return err
@@ -285,19 +288,19 @@ func lockDataBranchCloneSource(
 		return err
 	}
 	lockBat, err := dataBranchCloneCatalogLockBatch(
-		ses.proc, fromAccountID, databaseName, tableName,
+		lockProc, fromAccountID, databaseName, tableName,
 	)
 	if err != nil {
 		return err
 	}
-	defer lockBat.Vecs[0].Free(ses.proc.Mp())
+	defer lockBat.Vecs[0].Free(lockProc.Mp())
 	// ALTER locks this exact mo_tables composite key exclusively. A shared
 	// catalog-row lock serializes source-ID/snapshot selection with ALTER while
 	// allowing source-table DML and sibling branch clones to continue.
-	return withDataBranchCloneLockContext(ses.proc, sourceCtx, func() error {
+	return withDataBranchCloneLockContext(lockProc, sourceCtx, func() error {
 		return lockop.LockRows(
 			eng,
-			ses.proc,
+			lockProc,
 			rel,
 			rel.GetTableID(sourceCtx),
 			lockBat,
@@ -308,6 +311,29 @@ func lockDataBranchCloneSource(
 			fromAccountID,
 		)
 	})
+}
+
+func newDataBranchCloneLockProcess(
+	ctx context.Context,
+	ses *Session,
+	bh BackgroundExec,
+) *process.Process {
+	outer := ses.proc
+	lockProc := process.NewTopProcess(
+		ctx,
+		outer.Mp(),
+		outer.Base.TxnClient,
+		cloneSnapshotTxnOperator(ses, bh),
+		outer.Base.FileService,
+		outer.Base.LockService,
+		outer.Base.QueryClient,
+		outer.Base.Hakeeper,
+		outer.Base.UdfService,
+		outer.Base.Aicm,
+		outer.Base.TaskService,
+	)
+	lockProc.Base.SessionInfo = outer.Base.SessionInfo
+	return lockProc
 }
 
 func dataBranchCloneCatalogLockBatch(
@@ -347,6 +373,7 @@ func dataBranchCloneCatalogLockBatch(
 func lockDataBranchCloneDatabaseSources(
 	ctx context.Context,
 	ses *Session,
+	bh BackgroundExec,
 	source cloneDatabaseSource,
 ) error {
 	if locked, _ := ctx.Value(dataBranchCloneLockCtxKey{}).(bool); !locked {
@@ -371,7 +398,7 @@ func lockDataBranchCloneDatabaseSources(
 			continue
 		}
 		if err := lockDataBranchCloneSource(
-			ctx, ses, fromAccountID, table.dbName, table.tblName,
+			ctx, ses, bh, fromAccountID, table.dbName, table.tblName,
 		); err != nil {
 			return err
 		}
@@ -388,7 +415,7 @@ func revalidateTimestampDataBranchCloneDatabaseSource(
 	if !shouldRevalidateTimestampDataBranchCloneSource(ctx, source.snapshot) {
 		return nil
 	}
-	if _, err := tryToIncreaseTxnPhysicalTS(ctx, ses.proc.GetTxnOperator()); err != nil {
+	if _, err := tryToIncreaseTxnPhysicalTS(ctx, cloneSnapshotTxnOperator(ses, bh)); err != nil {
 		return err
 	}
 	fromAccountID := source.opAccountId
@@ -681,6 +708,7 @@ func handleCloneTable(
 		return lockDataBranchCloneSource(
 			reqCtx,
 			ses,
+			bh,
 			fromAccountId,
 			stmt.SrcTable.SchemaName.String(),
 			stmt.SrcTable.ObjectName.String(),
@@ -693,7 +721,7 @@ func handleCloneTable(
 		// Advance the RC snapshot while the lock is held, then ensure an ALTER
 		// that won the lock either preserved a path to the selected generation
 		// or causes this branch creation to fail before publishing metadata.
-		if _, err = tryToIncreaseTxnPhysicalTS(reqCtx, ses.proc.GetTxnOperator()); err != nil {
+		if _, err = tryToIncreaseTxnPhysicalTS(reqCtx, cloneSnapshotTxnOperator(ses, bh)); err != nil {
 			return
 		}
 		if err = revalidateTimestampDataBranchCloneSource(
@@ -841,7 +869,7 @@ func handleCloneDatabaseWithSource(
 	); err != nil {
 		return
 	}
-	if err = lockDataBranchCloneDatabaseSources(reqCtx, ses, source); err != nil {
+	if err = lockDataBranchCloneDatabaseSources(reqCtx, ses, bh, source); err != nil {
 		return
 	}
 	if err = revalidateTimestampDataBranchCloneDatabaseSource(reqCtx, ses, bh, source); err != nil {

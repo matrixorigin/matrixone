@@ -71,6 +71,8 @@ func TestAlterTableCopyPreservesFinalColumnReplacementIdentity(t *testing.T) {
 					[]uint64{oldCol.ColId, uint64(oldCol.Seqnum)},
 					[]uint64{newCol.ColId, uint64(newCol.Seqnum)},
 				)
+				_, mapped := alter.ChangeTblColIdMap[oldCol.ColId]
+				assert.False(t, mapped)
 			}
 		})
 	}
@@ -78,11 +80,13 @@ func TestAlterTableCopyPreservesFinalColumnReplacementIdentity(t *testing.T) {
 
 func TestAlterTableCopyPreservesExistingColumnIdentity(t *testing.T) {
 	for _, tc := range []struct {
-		sql       string
-		finalName string
+		sql              string
+		finalName        string
+		expectsChangeMap bool
 	}{
-		{`ALTER TABLE t1 ALGORITHM=COPY, MODIFY COLUMN b VARCHAR(20);`, "b"},
-		{`ALTER TABLE t1 RENAME COLUMN b TO bb;`, "bb"},
+		{`ALTER TABLE t1 ALGORITHM=COPY, MODIFY COLUMN b VARCHAR(20);`, "b", true},
+		{`ALTER TABLE t1 RENAME COLUMN b TO bb;`, "bb", false},
+		{`ALTER TABLE t1 ALGORITHM=COPY, RENAME COLUMN b TO bb, MODIFY COLUMN a BIGINT;`, "bb", true},
 	} {
 		t.Run(tc.sql, func(t *testing.T) {
 			logicPlan, err := buildSingleStmt(NewMockOptimizer(false), t, tc.sql)
@@ -94,6 +98,12 @@ func TestAlterTableCopyPreservesExistingColumnIdentity(t *testing.T) {
 			if assert.NotNil(t, oldCol) && assert.NotNil(t, newCol) {
 				assert.Equal(t, oldCol.ColId, newCol.ColId)
 				assert.Equal(t, oldCol.Seqnum, newCol.Seqnum)
+				if tc.expectsChangeMap {
+					mapped, ok := alter.ChangeTblColIdMap[oldCol.ColId]
+					if assert.True(t, ok, "change map: %#v", alter.ChangeTblColIdMap) {
+						assert.Equal(t, tc.finalName, mapped.Name)
+					}
+				}
 			}
 		})
 	}

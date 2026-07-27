@@ -662,6 +662,34 @@ func alterCopySameStatementColumnReplacement(qry *plan.AlterTable) (string, bool
 			return newCol.Name, true
 		}
 	}
+
+	removed := false
+	for _, oldCol := range qry.TableDef.Cols {
+		if oldCol == nil || oldCol.Hidden {
+			continue
+		}
+		if _, ok := qry.ChangeTblColIdMap[oldCol.ColId]; !ok {
+			removed = true
+		}
+	}
+	if !removed {
+		return "", false
+	}
+	for _, newCol := range qry.CopyTableDef.Cols {
+		if newCol == nil || newCol.Hidden {
+			continue
+		}
+		inherited := false
+		for _, mappedCol := range qry.ChangeTblColIdMap {
+			if mappedCol != nil && strings.EqualFold(mappedCol.Name, newCol.Name) {
+				inherited = true
+				break
+			}
+		}
+		if !inherited {
+			return newCol.Name, true
+		}
+	}
 	return "", false
 }
 

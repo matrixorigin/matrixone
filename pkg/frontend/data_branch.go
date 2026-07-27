@@ -331,12 +331,6 @@ func dataBranchCreateTable(
 	ses *Session,
 	stmt *tree.DataBranchCreateTable,
 ) (err error) {
-	if err = validateDataBranchCreateTxn(
-		ses.proc.GetTxnOperator().Txn().IsPessimistic(),
-	); err != nil {
-		return err
-	}
-
 	var (
 		bh        BackgroundExec
 		deferred  func(error) error
@@ -394,12 +388,6 @@ func dataBranchCreateDatabase(
 	ses *Session,
 	stmt *tree.DataBranchCreateDatabase,
 ) (stats statistic.StatsArray, err error) {
-	if err = validateDataBranchCreateTxn(
-		ses.proc.GetTxnOperator().Txn().IsPessimistic(),
-	); err != nil {
-		return stats, err
-	}
-
 	var (
 		bh        BackgroundExec
 		deferred  func(error) error
@@ -1898,9 +1886,12 @@ func dataBranchColumnReachesLCA(
 		}
 		if previous == nil {
 			// COPY ALTER may not retain OriginName, but a pure rename preserves
-			// the stable physical identity. Same-statement replacements are
-			// rejected before their lineage edge is published.
-			previous = dataBranchColumnDefByIdentity(pathDefs[i], current)
+			// the stable physical identity for the whole visible schema. COPY
+			// ALTER coordinates are table-local, so a partial identity match is
+			// not sufficient: ADD/reorder can reuse another column's old pair.
+			previous = dataBranchColumnDefByRenameIdentity(
+				pathDefs[i], pathDefs[i+1], current,
+			)
 		}
 		if previous == nil {
 			for j := i - 1; j >= 0; j-- {
@@ -1913,6 +1904,52 @@ func dataBranchColumnReachesLCA(
 		current = previous
 	}
 	return true, current, false
+}
+
+func dataBranchColumnDefByRenameIdentity(
+	previousDef *plan.TableDef,
+	currentDef *plan.TableDef,
+	currentCol *plan.ColDef,
+) *plan.ColDef {
+	previousCol := dataBranchColumnDefByIdentity(previousDef, currentCol)
+	if previousCol == nil || strings.EqualFold(previousCol.Name, currentCol.Name) ||
+		dataBranchColumnDefByName(currentDef, previousCol.Name) != nil {
+		return nil
+	}
+
+	previousVisible := 0
+	currentVisible := 0
+	matchedPrevious := make(map[*plan.ColDef]struct{})
+	for _, col := range previousDef.Cols {
+		if isDataBranchUserVisibleColumn(col) {
+			previousVisible++
+		}
+	}
+	for _, col := range currentDef.Cols {
+		if !isDataBranchUserVisibleColumn(col) {
+			continue
+		}
+		currentVisible++
+		matched := dataBranchColumnDefByIdentity(previousDef, col)
+		if matched == nil || !isDataBranchUserVisibleColumn(matched) {
+			return nil
+		}
+		if _, duplicate := matchedPrevious[matched]; duplicate {
+			return nil
+		}
+		matchedPrevious[matched] = struct{}{}
+		if sameName := dataBranchColumnDefByName(previousDef, col.Name); sameName != nil {
+			if sameName != matched {
+				return nil
+			}
+		} else if dataBranchColumnDefByName(currentDef, matched.Name) != nil {
+			return nil
+		}
+	}
+	if previousVisible != currentVisible {
+		return nil
+	}
+	return previousCol
 }
 
 func dataBranchLCASchemaContainsColumn(lcaDef *plan.TableDef, col *plan.ColDef) bool {

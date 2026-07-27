@@ -66,6 +66,9 @@ func TestAlterCopySameStatementColumnReplacement(t *testing.T) {
 	}}
 	replacement := &plan2.AlterTable{
 		TableDef: tableDef,
+		ChangeTblColIdMap: map[uint64]*plan2.ColDef{
+			1: {Name: "a"},
+		},
 		CopyTableDef: &plan2.TableDef{Cols: []*plan2.ColDef{
 			{Name: "a", ColId: 1, Seqnum: 0},
 			{Name: "B", ColId: ^uint64(0), Seqnum: 0},
@@ -78,6 +81,10 @@ func TestAlterCopySameStatementColumnReplacement(t *testing.T) {
 	t.Run("same identity survives rename and reorder", func(t *testing.T) {
 		unchanged := &plan2.AlterTable{
 			TableDef: tableDef,
+			ChangeTblColIdMap: map[uint64]*plan2.ColDef{
+				1: {Name: "a"},
+				2: {Name: "B"},
+			},
 			CopyTableDef: &plan2.TableDef{Cols: []*plan2.ColDef{
 				{Name: "B", ColId: 2, Seqnum: 1},
 				{Name: "a", ColId: 1, Seqnum: 0},
@@ -87,12 +94,47 @@ func TestAlterCopySameStatementColumnReplacement(t *testing.T) {
 		require.False(t, replaced)
 	})
 
-	t.Run("drop without same-name replacement", func(t *testing.T) {
+	t.Run("different-name drop and add is rejected", func(t *testing.T) {
 		dropped := &plan2.AlterTable{
 			TableDef: tableDef,
+			ChangeTblColIdMap: map[uint64]*plan2.ColDef{
+				1: {Name: "a"},
+			},
 			CopyTableDef: &plan2.TableDef{Cols: []*plan2.ColDef{
 				{Name: "a", ColId: 1, Seqnum: 0},
 				{Name: "c", ColId: ^uint64(0), Seqnum: 0},
+			}},
+		}
+		name, replaced := alterCopySameStatementColumnReplacement(dropped)
+		require.True(t, replaced)
+		require.Equal(t, "c", name)
+	})
+
+	t.Run("target-only add without a drop remains supported", func(t *testing.T) {
+		added := &plan2.AlterTable{
+			TableDef: tableDef,
+			ChangeTblColIdMap: map[uint64]*plan2.ColDef{
+				1: {Name: "a"},
+				2: {Name: "b"},
+			},
+			CopyTableDef: &plan2.TableDef{Cols: []*plan2.ColDef{
+				{Name: "a", ColId: 1, Seqnum: 0},
+				{Name: "b", ColId: 2, Seqnum: 1},
+				{Name: "c", ColId: ^uint64(0), Seqnum: 0},
+			}},
+		}
+		_, replaced := alterCopySameStatementColumnReplacement(added)
+		require.False(t, replaced)
+	})
+
+	t.Run("drop without an add remains supported", func(t *testing.T) {
+		dropped := &plan2.AlterTable{
+			TableDef: tableDef,
+			ChangeTblColIdMap: map[uint64]*plan2.ColDef{
+				1: {Name: "a"},
+			},
+			CopyTableDef: &plan2.TableDef{Cols: []*plan2.ColDef{
+				{Name: "a", ColId: 1, Seqnum: 0},
 			}},
 		}
 		_, replaced := alterCopySameStatementColumnReplacement(dropped)
