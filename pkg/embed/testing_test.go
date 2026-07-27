@@ -16,12 +16,21 @@ package embed
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 )
 
-func TestOnceClusterPreservesInitializationError(t *testing.T) {
+type panicTestReporter struct{}
+
+func (panicTestReporter) Helper() {}
+
+func (panicTestReporter) Fatalf(format string, args ...any) {
+	panic(fmt.Sprintf(format, args...))
+}
+
+func TestOnceClusterReportsInitializationError(t *testing.T) {
 	state := onceCluster{}
 	wantErr := errors.New("cluster startup failed")
 	initCalls := 0
@@ -34,8 +43,15 @@ func TestOnceClusterPreservesInitializationError(t *testing.T) {
 		testCalls++
 	}
 
-	require.ErrorIs(t, state.run(init, test), wantErr)
-	require.ErrorIs(t, state.run(init, test), wantErr)
+	reporter := panicTestReporter{}
+	for range 2 {
+		require.PanicsWithValue(t,
+			"failed to initialize base cluster: cluster startup failed",
+			func() {
+				state.run(reporter, init, test)
+			},
+		)
+	}
 	require.Equal(t, 1, initCalls)
 	require.Zero(t, testCalls)
 }

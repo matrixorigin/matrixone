@@ -55,7 +55,7 @@ const (
 )
 
 func TestIcebergSQLEngineEmbeddedReadPruningExplainAndTimeTravel(t *testing.T) {
-	RunBaseClusterTests(func(c Cluster) {
+	RunBaseClusterTests(t, func(c Cluster) {
 		rootDB := openIcebergRootTestDB(t, c)
 		defer rootDB.Close()
 		tenantSQL := openIcebergTenantTestSQL(t, c, rootDB)
@@ -118,7 +118,7 @@ func TestIcebergSQLEngineEmbeddedReadPruningExplainAndTimeTravel(t *testing.T) {
 }
 
 func TestIcebergSQLEngineEmbeddedSecurityErrors(t *testing.T) {
-	RunBaseClusterTests(func(c Cluster) {
+	RunBaseClusterTests(t, func(c Cluster) {
 		rootDB := openIcebergRootTestDB(t, c)
 		defer rootDB.Close()
 		tenantSQL := openIcebergTenantTestSQL(t, c, rootDB)
@@ -160,7 +160,7 @@ func TestIcebergSQLEngineEmbeddedSecurityErrors(t *testing.T) {
 }
 
 func TestIcebergSQLEngineEmbeddedCredentialSecurityAndRedaction(t *testing.T) {
-	RunBaseClusterTests(func(c Cluster) {
+	RunBaseClusterTests(t, func(c Cluster) {
 		rootDB := openIcebergRootTestDB(t, c)
 		defer rootDB.Close()
 		tenantSQL := openIcebergTenantTestSQL(t, c, rootDB)
@@ -194,7 +194,7 @@ func TestIcebergSQLEngineEmbeddedCredentialSecurityAndRedaction(t *testing.T) {
 }
 
 func TestIcebergSQLEngineEmbeddedDeleteApply(t *testing.T) {
-	RunBaseClusterTests(func(c Cluster) {
+	RunBaseClusterTests(t, func(c Cluster) {
 		rootDB := openIcebergRootTestDB(t, c)
 		defer rootDB.Close()
 		tenantSQL := openIcebergTenantTestSQL(t, c, rootDB)
@@ -220,7 +220,7 @@ func TestIcebergSQLEngineEmbeddedDeleteApply(t *testing.T) {
 }
 
 func TestIcebergSQLEngineEmbeddedImportNativePinsSnapshot(t *testing.T) {
-	RunBaseClusterTests(func(c Cluster) {
+	RunBaseClusterTests(t, func(c Cluster) {
 		rootDB := openIcebergRootTestDB(t, c)
 		defer rootDB.Close()
 		tenantSQL := openIcebergTenantTestSQL(t, c, rootDB)
@@ -257,7 +257,7 @@ func TestIcebergSQLEngineEmbeddedImportNativePinsSnapshot(t *testing.T) {
 }
 
 func TestIcebergSQLEngineEmbeddedBranchRefReadAndAppendWriteIntent(t *testing.T) {
-	RunBaseClusterTests(func(c Cluster) {
+	RunBaseClusterTests(t, func(c Cluster) {
 		rootDB := openIcebergRootTestDB(t, c)
 		defer rootDB.Close()
 		tenantSQL := openIcebergTenantTestSQL(t, c, rootDB)
@@ -292,7 +292,7 @@ func TestIcebergSQLEngineEmbeddedBranchRefReadAndAppendWriteIntent(t *testing.T)
 }
 
 func TestIcebergSQLEngineEmbeddedWriteDMLAndMaintenanceSQL(t *testing.T) {
-	RunBaseClusterTests(func(c Cluster) {
+	RunBaseClusterTests(t, func(c Cluster) {
 		rootDB := openIcebergRootTestDB(t, c)
 		defer rootDB.Close()
 		tenantSQL := openIcebergTenantTestSQL(t, c, rootDB)

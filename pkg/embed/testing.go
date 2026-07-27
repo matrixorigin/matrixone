@@ -39,18 +39,24 @@ type onceCluster struct {
 	err     error
 }
 
+type testReporter interface {
+	Helper()
+	Fatalf(format string, args ...any)
+}
+
 func (c *onceCluster) run(
+	t testReporter,
 	init func() (Cluster, error),
 	fn func(Cluster),
-) error {
+) {
 	c.once.Do(func() {
 		c.cluster, c.err = init()
 	})
 	if c.err != nil {
-		return c.err
+		t.Fatalf("failed to initialize base cluster: %v", c.err)
+		return
 	}
 	fn(c.cluster)
-	return nil
 }
 
 func init() {
@@ -124,13 +130,15 @@ func prepareBasicCluster(c Cluster) {
 // of test cases. So for some special cases that don't need to be restarted, a basicCluster can be
 // reused to run the test cases. in summary, the basic cluster will only be started once!
 func RunBaseClusterTests(
+	t testReporter,
 	fn func(Cluster),
-) error {
+) {
+	t.Helper()
 	// we must make all tests which use the basicCluster to be run in sequence
 	basicRunningMutex.Lock()
 	defer basicRunningMutex.Unlock()
 
-	return basicClusterState.run(startBasicCluster, func(c Cluster) {
+	basicClusterState.run(t, startBasicCluster, func(c Cluster) {
 		prepareBasicCluster(c)
 		fn(c)
 	})
