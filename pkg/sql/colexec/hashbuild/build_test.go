@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 
@@ -418,6 +419,167 @@ func TestHashBuildWithRuntimeFilter(t *testing.T) {
 
 	arg.Free(proc, false, nil)
 	proc.Free()
+}
+
+func TestRuntimeFilterMarshalBudgetAdmissionFallsBackToPass(t *testing.T) {
+	tests := []struct {
+		name       string
+		membership bool
+	}{
+		{name: "in"},
+		{name: "unique join keys", membership: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			tc := newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()},
+				[]*plan.Expr{newExpr(0, types.T_int32.ToType())})
+			spec := &plan.RuntimeFilterSpec{
+				Tag:                 101,
+				UpperLimit:          100,
+				Expr:                newExpr(0, types.T_int32.ToType()),
+				UseMembershipFilter: test.membership,
+			}
+			if test.membership {
+				spec.Expr = nil
+			}
+			tc.arg.RuntimeFilterSpec = spec
+			tc.arg.OpAnalyzer = process.NewAnalyzer(0, false, false, "hash build")
+			tc.arg.ctr.hashmapBuilder.InputBatchRowCount = 1
+			tc.arg.ctr.hashmapBuilder.UniqueJoinKeys = []*vector.Vector{
+				testutil.MakeInt32Vector([]int32{1}, nil, tc.proc.Mp()),
+			}
+
+			budget := process.MustNewHashBuildBudget(1, 1)
+			generation, err := budget.OpenGeneration(1)
+			require.NoError(t, err)
+			tc.arg.ctr.hashmapBuilder.setBudget(generation)
+
+			require.NoError(t, tc.arg.handleRuntimeFilter(tc.proc))
+			require.True(t, tc.arg.ctr.runtimeFilterDone)
+			require.False(t, tc.arg.ctr.runtimeFilterIn)
+			require.Nil(t, tc.arg.ctr.hashmapBuilder.UniqueJoinKeys)
+			require.Zero(t, generation.Used())
+			require.Equal(t, uint64(1), generation.RejectCount())
+
+			receiver := message.NewMessageReceiver(
+				[]int32{spec.Tag}, message.AddrBroadCastOnCurrentCN(), tc.proc.GetMessageBoard())
+			msgs, done, err := receiver.ReceiveMessage(false, tc.proc.Ctx)
+			require.NoError(t, err)
+			require.False(t, done)
+			require.Len(t, msgs, 1)
+			runtimeFilter, ok := msgs[0].(message.RuntimeFilterMessage)
+			require.True(t, ok)
+			require.Equal(t, int32(message.RuntimeFilter_PASS), runtimeFilter.Typ)
+			require.Zero(t, runtimeFilter.Card)
+			require.Empty(t, runtimeFilter.Data)
+
+			extra := tc.arg.OpAnalyzer.GetOpStats().ExtraStats
+			require.Equal(t, int64(1), extra["HashBuildRuntimeFilterBudgetFallbacks"])
+			require.Greater(t, extra["HashBuildRuntimeFilterBudgetFallbackRequestedBytes"], int64(1))
+			require.Zero(t, extra["HashBuildRuntimeFilterBudgetFallbackUsedBytes"])
+			require.Equal(t, int64(1), extra["HashBuildRuntimeFilterBudgetFallbackCapBytes"])
+
+			generation.Close()
+			tc.proc.Free()
+			require.Zero(t, tc.proc.Mp().CurrNB())
+		})
+	}
+}
+
+func TestRuntimeFilterMarshalUsesSinglePayloadBudget(t *testing.T) {
+	tc := newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()},
+		[]*plan.Expr{newExpr(0, types.T_int32.ToType())})
+	vec := testutil.MakeInt32Vector([]int32{1, 2, 3, 4}, nil, tc.proc.Mp())
+	payload := uint64(len(vec.GetData())+len(vec.GetArea())) + uint64(vec.Length())*16 + 4096
+	projected := payload + (uint64(vec.Length())+7)/8 + 24 + 64<<10
+
+	budget := process.MustNewHashBuildBudget(projected, projected)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	tc.arg.ctr.hashmapBuilder.setBudget(generation)
+
+	data, release, err := tc.arg.ctr.hashmapBuilder.marshalRuntimeFilterVector(vec)
+	require.NoError(t, err)
+	require.NotEmpty(t, data)
+	require.Equal(t, projected, generation.Peak())
+	require.LessOrEqual(t, generation.Used(), projected)
+	require.NotNil(t, release)
+	release()
+	require.Zero(t, generation.Used())
+
+	vec.Free(tc.proc.Mp())
+	generation.Close()
+	tc.proc.Free()
+	require.Zero(t, tc.proc.Mp().CurrNB())
+}
+
+func TestRuntimeFilterMarshalSinglePayloadCoversVarlenaAndNullPeak(t *testing.T) {
+	tc := newTestCase(t, []bool{true}, []types.Type{types.T_varchar.ToType()},
+		[]*plan.Expr{newExpr(0, types.T_varchar.ToType())})
+	values := make([]string, 128)
+	for i := range values {
+		values[i] = strings.Repeat("x", 1024+i)
+	}
+	vec := testutil.MakeVarcharVector(values, []uint64{127}, tc.proc.Mp())
+	payload := uint64(len(vec.GetData())+len(vec.GetArea())) + uint64(vec.Length())*16 + 4096
+	projected := payload + (uint64(vec.Length())+7)/8 + 24 + 64<<10
+
+	budget := process.MustNewHashBuildBudget(projected, projected)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	tc.arg.ctr.hashmapBuilder.setBudget(generation)
+
+	data, release, err := tc.arg.ctr.hashmapBuilder.marshalRuntimeFilterVector(vec)
+	require.NoError(t, err)
+	require.NotEmpty(t, data)
+	require.Equal(t, projected, generation.Peak())
+	require.LessOrEqual(t, generation.Used(), projected)
+	release()
+	require.Zero(t, generation.Used())
+
+	vec.Free(tc.proc.Mp())
+	generation.Close()
+	tc.proc.Free()
+	require.Zero(t, tc.proc.Mp().CurrNB())
+}
+
+func TestRuntimeFilterMarshalClosedBudgetRemainsFatal(t *testing.T) {
+	tc := newTestCase(t, []bool{false}, []types.Type{types.T_int32.ToType()},
+		[]*plan.Expr{newExpr(0, types.T_int32.ToType())})
+	spec := &plan.RuntimeFilterSpec{
+		Tag:        102,
+		UpperLimit: 100,
+		Expr:       newExpr(0, types.T_int32.ToType()),
+	}
+	tc.arg.RuntimeFilterSpec = spec
+	tc.arg.OpAnalyzer = process.NewAnalyzer(0, false, false, "hash build")
+	tc.arg.ctr.hashmapBuilder.InputBatchRowCount = 1
+	tc.arg.ctr.hashmapBuilder.UniqueJoinKeys = []*vector.Vector{
+		testutil.MakeInt32Vector([]int32{1}, nil, tc.proc.Mp()),
+	}
+
+	budget := process.MustNewHashBuildBudget(1<<20, 1<<20)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	generation.Close()
+	tc.arg.ctr.hashmapBuilder.setBudget(generation)
+
+	err = tc.arg.handleRuntimeFilter(tc.proc)
+	require.ErrorIs(t, err, process.ErrHashBuildBudgetClosed)
+	require.Nil(t, tc.arg.ctr.hashmapBuilder.UniqueJoinKeys)
+	require.False(t, tc.arg.ctr.runtimeFilterDone)
+	require.Zero(t, tc.arg.OpAnalyzer.GetOpStats().ExtraStats["HashBuildRuntimeFilterBudgetFallbacks"])
+
+	receiver := message.NewMessageReceiver(
+		[]int32{spec.Tag}, message.AddrBroadCastOnCurrentCN(), tc.proc.GetMessageBoard())
+	msgs, done, receiveErr := receiver.ReceiveMessage(false, tc.proc.Ctx)
+	require.NoError(t, receiveErr)
+	require.False(t, done)
+	require.Empty(t, msgs)
+
+	tc.proc.Free()
+	require.Zero(t, tc.proc.Mp().CurrNB())
 }
 
 func TestHashBuildMultipleTypes(t *testing.T) {
