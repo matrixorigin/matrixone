@@ -75,6 +75,9 @@ select convert(cast(x'00' as blob), json) <
        convert(cast(x'd0' as blob), json) as raw_binary_order;
 select convert(cast(b'00000000' as bit(8)), json) <
        convert(cast(b'11010000' as bit(8)), json) as raw_bit_order;
+-- BIT and BLOB retain distinct MySQL opaque subtypes.
+select convert(cast(b'00000001' as bit(8)), json) <
+       convert(cast(x'01' as blob), json) as bit_before_blob;
 
 -- Constant folding must retain BIT width and the JSON BIT subtype.
 select json_type(convert(cast(b'1' as bit(1)), json)),

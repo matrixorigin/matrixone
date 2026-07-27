@@ -222,4 +222,6 @@ func TestTypedArrayBinaryCompatibilityUsesRawPayloadLength(t *testing.T) {
 		spec, newTypedByteJson(bytejson.TpCodeOpaque, string([]byte{0x00}))))
 	require.True(t, typedArrayElementCompatible(
 		spec, newTypedByteJson(bytejson.TpCodeBit, string([]byte{0x01}))))
+	require.True(t, typedArrayElementCompatible(
+		spec, newTypedByteJson(bytejson.TpCodeBlob, "AA==")))
 }

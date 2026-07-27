@@ -673,6 +673,9 @@ func jsonContainsScalar(target, candidate bytejson.ByteJson) bool {
 	if isJsonNumericType(target.Type) && isJsonNumericType(candidate.Type) {
 		return jsonContainsNumericEqual(target, candidate)
 	}
+	if cmp, ok := bytejson.CompareBinaryJSON(target, candidate); ok {
+		return cmp == 0
+	}
 	if target.Type != candidate.Type {
 		return false
 	}

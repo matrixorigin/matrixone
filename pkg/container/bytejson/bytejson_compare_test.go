@@ -55,6 +55,7 @@ func TestCompareByteJsonOpaqueBinaryUsesRawBytes(t *testing.T) {
 	require.Less(t, CompareByteJson(zero, d0), 0)
 	require.Less(t, CompareByteJson(bitZero, bitD0), 0)
 	require.Zero(t, CompareByteJson(legacyZero, zero))
+	require.Less(t, CompareByteJson(bit, makeBinaryJson(TpCodeOpaque, []byte{0x01})), 0)
 	require.Equal(t, "BLOB", zero.TYPE())
 	require.Equal(t, "BIT", bit.TYPE())
 	require.Equal(t, `"AA=="`, zero.String())

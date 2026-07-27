@@ -346,6 +346,45 @@ func (bj ByteJson) opaquePayload() []byte {
 	return payload
 }
 
+type binaryJSONSubtype uint8
+
+const (
+	binaryJSONBit binaryJSONSubtype = iota
+	binaryJSONBlob
+)
+
+func binaryJSONValue(bj ByteJson) (binaryJSONSubtype, []byte, bool) {
+	switch bj.Type {
+	case TpCodeBlob, TpCodeOpaque:
+		return binaryJSONBlob, bj.opaquePayload(), true
+	case TpCodeBit:
+		return binaryJSONBit, bj.opaquePayload(), true
+	default:
+		return 0, nil, false
+	}
+}
+
+// CompareBinaryJSON compares opaque JSON values by their MySQL subtype and
+// original bytes. TpCodeBlob is the legacy BLOB encoding and aliases Opaque.
+func CompareBinaryJSON(left, right ByteJson) (int, bool) {
+	leftSubtype, leftPayload, leftOK := binaryJSONValue(left)
+	rightSubtype, rightPayload, rightOK := binaryJSONValue(right)
+	if !leftOK || !rightOK {
+		return 0, false
+	}
+	if leftSubtype != rightSubtype {
+		return int(leftSubtype) - int(rightSubtype), true
+	}
+	return bytes.Compare(leftPayload, rightPayload), true
+}
+
+// BinaryJSONPayloadLen returns the decoded byte length of an opaque JSON
+// value. It keeps legacy TpCodeBlob values compatible with new raw payloads.
+func BinaryJSONPayloadLen(bj ByteJson) (int, bool) {
+	_, payload, ok := binaryJSONValue(bj)
+	return len(payload), ok
+}
+
 func (bj ByteJson) queryValByKey(key []byte) ByteJson {
 	val, ok := bj.queryValByKeyExists(key)
 	if !ok {

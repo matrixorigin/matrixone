@@ -128,6 +128,10 @@ select convert(cast(b'00000000' as bit(8)), json) <
 convert(cast(b'11010000' as bit(8)), json) as raw_bit_order;
 ➤ raw_bit_order[-7,1,0]  𝄀
 1
+select convert(cast(b'00000001' as bit(8)), json) <
+convert(cast(x'01' as blob), json) as bit_before_blob;
+➤ bit_before_blob[-7,1,0]  𝄀
+1
 select json_type(convert(cast(b'1' as bit(1)), json)),
 json_unquote(convert(cast(b'1' as bit(1)), json));
 ➤ json_type(cast(cast(0b1 as bit(1)) as json))[12,-1,0]  ¦  json_unquote(cast(cast(0b1 as bit(1)) as json))[12,-1,0]  𝄀

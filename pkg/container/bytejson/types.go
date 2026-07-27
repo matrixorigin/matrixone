@@ -210,6 +210,10 @@ const (
 )
 
 func CompareByteJson(left, right ByteJson) int {
+	if cmp, ok := CompareBinaryJSON(left, right); ok {
+		return cmp
+	}
+
 	order1 := jsonTpOrder[left.TYPE()]
 	order2 := jsonTpOrder[right.TYPE()]
 
@@ -245,8 +249,6 @@ func CompareByteJson(left, right ByteJson) int {
 			cmp = compareByteJsonNumericExact(left, right)
 		case TpCodeString, TpCodeDate, TpCodeTime, TpCodeDatetime:
 			cmp = bytes.Compare(left.GetString(), right.GetString())
-		case TpCodeBlob, TpCodeOpaque, TpCodeBit:
-			cmp = bytes.Compare(left.opaquePayload(), right.opaquePayload())
 		case TpCodeArray:
 			leftCnt := left.GetElemCnt()
 			rightCnt := right.GetElemCnt()

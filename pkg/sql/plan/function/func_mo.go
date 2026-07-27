@@ -1443,8 +1443,8 @@ func jsonBinaryStringFitsWidth(elem bytejson.ByteJson, width int) bool {
 	if width < 0 {
 		return true
 	}
-	if elem.Type == bytejson.TpCodeOpaque || elem.Type == bytejson.TpCodeBit {
-		return len(elem.GetString()) <= width
+	if length, ok := bytejson.BinaryJSONPayloadLen(elem); ok {
+		return length <= width
 	}
 	s, err := elem.Unquote()
 	if err != nil {

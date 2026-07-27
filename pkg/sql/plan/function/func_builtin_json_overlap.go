@@ -555,6 +555,9 @@ func compareJSONOverlapExact(left, right bytejson.ByteJson) int {
 	if jsonOverlapNumericType(left.Type) && jsonOverlapNumericType(right.Type) {
 		return compareJSONOverlapNumeric(left, right)
 	}
+	if cmp, ok := bytejson.CompareBinaryJSON(left, right); ok {
+		return cmp
+	}
 	leftRank := jsonOverlapTypeRank(left.Type)
 	rightRank := jsonOverlapTypeRank(right.Type)
 	if leftRank != rightRank {
