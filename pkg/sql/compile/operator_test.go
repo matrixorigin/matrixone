@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dedupjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
@@ -35,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -56,6 +58,26 @@ func TestDupOperator(t *testing.T) {
 		0,
 		0,
 	)
+}
+
+func TestConstructAggregateConfigIncludesGroupConcatMaxLen(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.SetResolveVariableFunc(func(name string, system, global bool) (interface{}, error) {
+		require.Equal(t, "group_concat_max_len", name)
+		require.True(t, system)
+		require.False(t, global)
+		return int64(5), nil
+	})
+
+	valueArg := &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar)}}
+	separatorArg := plan2.MakePlan2StringConstExprWithType("")
+	args, config := constructAggregateConfig(&plan.Function{
+		Func: &plan.ObjectRef{ObjName: plan2.NameGroupConcat},
+		Args: []*plan.Expr{valueArg, separatorArg},
+	}, proc)
+
+	require.Equal(t, []*plan.Expr{valueArg}, args)
+	require.Equal(t, aggexec.EncodeGroupConcatConfig("", 5), config)
 }
 
 func TestDupHashBuildPreservesNullTracking(t *testing.T) {
