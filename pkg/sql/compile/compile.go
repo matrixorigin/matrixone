@@ -73,6 +73,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/crt"
+	"github.com/matrixorigin/matrixone/pkg/sql/internal/materialized"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -338,6 +339,16 @@ func (c *Compile) clear() {
 	for k := range c.stepRegs {
 		delete(c.stepRegs, k)
 	}
+	for k := range c.materializedSinkScanNodes {
+		delete(c.materializedSinkScanNodes, k)
+	}
+	for k, source := range c.materializedSources {
+		source.Close()
+		delete(c.materializedSources, k)
+	}
+	for k := range c.materializedReaderIDs {
+		delete(c.materializedReaderIDs, k)
+	}
 	for k := range c.cnLabel {
 		delete(c.cnLabel, k)
 	}
@@ -523,6 +534,11 @@ func (c *Compile) prePipelineInitializer() (err error) {
 	// init data source.
 	for _, s := range c.scopes {
 		if err = s.InitAllDataSource(c); err != nil {
+			return err
+		}
+	}
+	for _, source := range c.materializedSources {
+		if err = source.Begin(c.proc.Mp()); err != nil {
 			return err
 		}
 	}
@@ -953,9 +969,34 @@ func (c *Compile) compileSinkScan(qry *plan.Query, nodeId int32) error {
 				edge = process.NewPipelineEdge(1, 0)
 			}
 			c.appendStepRegs(s, nodeId, edge)
+			if n.NodeType == plan.Node_SINK_SCAN && len(n.SourceStep) == 1 &&
+				c.isMaterializedCTEStep(qry, s) {
+				if c.materializedSinkScanNodes == nil {
+					c.materializedSinkScanNodes = make(map[int32][]int32)
+				}
+				if c.materializedReaderIDs == nil {
+					c.materializedReaderIDs = make(map[[2]int32]int)
+				}
+				readerID := len(c.materializedSinkScanNodes[s])
+				c.materializedSinkScanNodes[s] = append(c.materializedSinkScanNodes[s], nodeId)
+				c.materializedReaderIDs[[2]int32{s, nodeId}] = readerID
+			}
 		}
 	}
 	return nil
+}
+
+func (c *Compile) isMaterializedCTEStep(qry *plan.Query, step int32) bool {
+	if qry == nil || step < 0 || int(step) >= len(qry.Steps) {
+		return false
+	}
+	nodeID := qry.Steps[step]
+	if nodeID < 0 || int(nodeID) >= len(qry.Nodes) {
+		return false
+	}
+	sink := qry.Nodes[nodeID]
+	return sink.NodeType == plan.Node_SINK && !sink.RecursiveSink && !sink.RecursiveCte &&
+		sink.ExtraOptions == materialized.CTESinkOption
 }
 
 func (c *Compile) isAdaptiveVectorSearch(qry *plan.Query) bool {
@@ -1450,6 +1491,25 @@ func (c *Compile) getStepRegs(step int32) []*process.WaitRegister {
 		wrs[i] = c.nodeRegs[sn]
 	}
 	return wrs
+}
+
+func (c *Compile) getMaterializedSource(step int32) *materialized.Source {
+	if c.materializedSinkScanNodes == nil {
+		return nil
+	}
+	readers := c.materializedSinkScanNodes[step]
+	if len(readers) < 2 {
+		return nil
+	}
+	if source := c.materializedSources[step]; source != nil {
+		return source
+	}
+	source := materialized.NewSource(len(readers))
+	if c.materializedSources == nil {
+		c.materializedSources = make(map[int32]*materialized.Source)
+	}
+	c.materializedSources[step] = source
+	return source
 }
 
 func (c *Compile) constructScopeForExternal(addr string, parallel bool) *Scope {
@@ -5301,6 +5361,13 @@ func (c *Compile) compileSinkScanNode(node *plan.Node, curNodeIdx int32) ([]*Sco
 
 	currentFirstFlag := c.anal.isFirst
 	mergeArg := merge.NewArgument().WithSinkScan(true)
+	if len(node.SourceStep) == 1 {
+		step := node.SourceStep[0]
+		if source := c.getMaterializedSource(step); source != nil {
+			mergeArg.MaterializedSource = source
+			mergeArg.MaterializedReaderID = c.materializedReaderIDs[[2]int32{step, curNodeIdx}]
+		}
+	}
 	c.hasMergeOp = true
 	mergeArg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 	rs.setRootOperator(mergeArg)
@@ -5316,8 +5383,14 @@ func (c *Compile) compileSinkNode(node *plan.Node, ss []*Scope, step int32) ([]*
 		return nil, moerr.NewInternalError(c.proc.Ctx, "no data receiver for sink node")
 	}
 
+	materializedSource := c.getMaterializedSource(step)
 	var rs *Scope
-	if c.IsSingleScope(ss) {
+	if materializedSource != nil {
+		// The materialized source is process-local state. Always terminate the
+		// producer at a local merge scope so it is never serialized as part of a
+		// remote scope without its consumers.
+		rs = c.newMergeScope(ss)
+	} else if c.IsSingleScope(ss) {
 		rs = ss[0]
 	} else {
 		rs = c.newMergeScope(ss)
@@ -5325,6 +5398,7 @@ func (c *Compile) compileSinkNode(node *plan.Node, ss []*Scope, step int32) ([]*
 
 	currentFirstFlag := c.anal.isFirst
 	dispatchLocal := constructDispatchLocal(true, true, node.RecursiveSink, node.RecursiveCte, receivers)
+	dispatchLocal.MaterializedSource = materializedSource
 	dispatchLocal.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 	rs.setRootOperator(dispatchLocal)
 	c.anal.isFirst = false
