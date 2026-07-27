@@ -16,6 +16,7 @@ package function
 
 import (
 	"testing"
+	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -792,6 +793,30 @@ func Test_CaseCheck_MixedStringNumeric(t *testing.T) {
 	require.True(t, result.finalType[2].Oid.IsMySQLString())
 	require.Equal(t, int32(types.MaxVarBinaryLen), result.finalType[1].Width)
 	require.Equal(t, int32(types.MaxVarBinaryLen), result.finalType[2].Width)
+}
+
+func TestBinaryStringCommonTypeCapsUTF8MB4Width(t *testing.T) {
+	tests := []struct {
+		name         string
+		varcharWidth int32
+		wantWidth    int32
+	}{
+		{name: "one character", varcharWidth: 1, wantWidth: utf8.UTFMax},
+		{name: "maximum varchar", varcharWidth: types.MaxVarcharLen, wantWidth: types.MaxVarBinaryLen},
+		{name: "unknown varchar", varcharWidth: -1, wantWidth: types.MaxVarBinaryLen},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result, ok := binaryStringCommonType([]types.Type{
+				types.New(types.T_varbinary, 1, 0),
+				types.New(types.T_varchar, test.varcharWidth, 0),
+			})
+			require.True(t, ok)
+			require.Equal(t, types.T_varbinary, result.Oid)
+			require.Equal(t, test.wantWidth, result.Width)
+		})
+	}
 }
 
 func Test_CaseCheck_DifferentDecimalScale(t *testing.T) {
