@@ -47,6 +47,7 @@ class CIStateTests(unittest.TestCase):
 class ReviewHistoryTests(unittest.TestCase):
     def test_same_head_as_change_request_is_stale(self) -> None:
         pr = {
+            "reviewDecision": "CHANGES_REQUESTED",
             "headRefOid": "head",
             "reviews": [
                 {
@@ -60,6 +61,7 @@ class ReviewHistoryTests(unittest.TestCase):
 
     def test_new_head_after_change_request_is_reviewable(self) -> None:
         pr = {
+            "reviewDecision": "CHANGES_REQUESTED",
             "headRefOid": "new-head",
             "reviews": [
                 {
@@ -73,6 +75,7 @@ class ReviewHistoryTests(unittest.TestCase):
 
     def test_latest_change_request_controls_head_comparison(self) -> None:
         pr = {
+            "reviewDecision": "CHANGES_REQUESTED",
             "headRefOid": "second",
             "reviews": [
                 {
@@ -89,8 +92,28 @@ class ReviewHistoryTests(unittest.TestCase):
         }
         self.assertTrue(pr_radar.changes_requested_without_new_commit(pr))
 
+    def test_any_outstanding_request_on_current_head_is_stale(self) -> None:
+        pr = {
+            "reviewDecision": "CHANGES_REQUESTED",
+            "headRefOid": "current",
+            "reviews": [
+                {
+                    "state": "CHANGES_REQUESTED",
+                    "submittedAt": "2026-07-27T09:00:00Z",
+                    "commit": {"oid": "current"},
+                },
+                {
+                    "state": "CHANGES_REQUESTED",
+                    "submittedAt": "2026-07-27T11:00:00Z",
+                    "commit": {"oid": "old"},
+                },
+            ],
+        }
+        self.assertTrue(pr_radar.changes_requested_without_new_commit(pr))
+
     def test_timestamp_fallback_is_conservative(self) -> None:
         pr = {
+            "reviewDecision": "CHANGES_REQUESTED",
             "reviews": [
                 {
                     "state": "CHANGES_REQUESTED",
@@ -104,7 +127,68 @@ class ReviewHistoryTests(unittest.TestCase):
         self.assertFalse(pr_radar.changes_requested_without_new_commit(pr))
 
     def test_no_change_request_is_not_stale(self) -> None:
-        self.assertFalse(pr_radar.changes_requested_without_new_commit({"reviews": []}))
+        self.assertFalse(
+            pr_radar.changes_requested_without_new_commit(
+                {"reviewDecision": "CHANGES_REQUESTED", "reviews": []}
+            )
+        )
+
+    def test_current_approval_supersedes_historical_change_request(self) -> None:
+        pr = {
+            "reviewDecision": "APPROVED",
+            "headRefOid": "head",
+            "reviews": [
+                {
+                    "state": "CHANGES_REQUESTED",
+                    "submittedAt": "2026-07-27T10:00:00Z",
+                    "commit": {"oid": "head"},
+                },
+            ],
+        }
+        self.assertFalse(pr_radar.changes_requested_without_new_commit(pr))
+
+
+class OpinionatedReviewTests(unittest.TestCase):
+    def test_comment_does_not_erase_change_request(self) -> None:
+        pr = {
+            "latestReviews": [
+                {
+                    "author": {"login": "reviewer"},
+                    "state": "CHANGES_REQUESTED",
+                    "submittedAt": "2026-07-27T10:00:00Z",
+                },
+                {
+                    "author": {"login": "reviewer"},
+                    "state": "COMMENTED",
+                    "submittedAt": "2026-07-27T10:01:00Z",
+                },
+            ]
+        }
+        self.assertEqual(
+            "CHANGES_REQUESTED", pr_radar.my_latest_review(pr, "reviewer")
+        )
+
+    def test_later_approval_supersedes_change_request(self) -> None:
+        pr = {
+            "latestReviews": [
+                {
+                    "author": {"login": "reviewer"},
+                    "state": "CHANGES_REQUESTED",
+                    "submittedAt": "2026-07-27T10:00:00Z",
+                },
+                {
+                    "author": {"login": "reviewer"},
+                    "state": "APPROVED",
+                    "submittedAt": "2026-07-27T10:01:00Z",
+                },
+            ]
+        }
+        self.assertEqual("APPROVED", pr_radar.my_latest_review(pr, "reviewer"))
+
+    def test_open_pr_query_requests_latest_opinionated_reviews(self) -> None:
+        self.assertIn(
+            "latestReviews: latestOpinionatedReviews", pr_radar.OPEN_PRS_QUERY
+        )
 
 
 class FilteringTests(unittest.TestCase):
@@ -127,10 +211,16 @@ class FilteringTests(unittest.TestCase):
                         {"requestedReviewer": {"slug": "team"}},
                     ],
                 },
-                "latestReviews": {"nodes": [{"author": {"login": "me"}, "state": "APPROVED"}]},
-                "changeRequests": {
+                "latestReviews": {
                     "nodes": [
                         {
+                            "author": {"login": "me"},
+                            "state": "APPROVED",
+                            "submittedAt": "2026-07-27T11:00:00Z",
+                            "commit": {"oid": "head"},
+                        },
+                        {
+                            "author": {"login": "reviewer"},
                             "state": "CHANGES_REQUESTED",
                             "submittedAt": "2026-07-27T10:00:00Z",
                             "commit": {"oid": "head"},

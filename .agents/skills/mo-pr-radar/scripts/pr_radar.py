@@ -72,8 +72,9 @@ def resolve_me(value: str | None) -> str:
 
 FIELDS = (
     "number,title,url,author,isDraft,mergeable,mergeStateStatus,reviewDecision,"
-    "reviewRequests,latestReviews,statusCheckRollup,headRefOid,updatedAt"
+    "reviewRequests,reviews,statusCheckRollup,headRefOid,updatedAt"
 )
+OPINIONATED_REVIEW_STATES = {"APPROVED", "CHANGES_REQUESTED"}
 
 OPEN_PRS_PAGE_SIZE = 20
 OPEN_PRS_QUERY = """
@@ -104,15 +105,9 @@ query($owner: String!, $repo: String!, $pageSize: Int!, $cursor: String) {
             }
           }
         }
-        latestReviews(last: 100) {
+        latestReviews: latestOpinionatedReviews(last: 100) {
           nodes {
             author { login }
-            state
-            submittedAt
-          }
-        }
-        changeRequests: reviews(last: 1, states: CHANGES_REQUESTED) {
-          nodes {
             state
             submittedAt
             commit { oid }
@@ -162,6 +157,7 @@ def normalize_open_pr(node: dict[str, Any]) -> dict[str, Any]:
         if login:
             requests.append({"login": login})
     rollup = node.get("statusCheckRollup") or {}
+    latest_reviews = (node.get("latestReviews") or {}).get("nodes", [])
     return {
         "number": node["number"],
         "title": node["title"],
@@ -172,8 +168,12 @@ def normalize_open_pr(node: dict[str, Any]) -> dict[str, Any]:
         "mergeStateStatus": node.get("mergeStateStatus"),
         "reviewDecision": node.get("reviewDecision"),
         "reviewRequests": requests,
-        "latestReviews": (node.get("latestReviews") or {}).get("nodes", []),
-        "reviews": (node.get("changeRequests") or {}).get("nodes", []),
+        "latestReviews": latest_reviews,
+        "reviews": [
+            review
+            for review in latest_reviews
+            if review.get("state") == "CHANGES_REQUESTED"
+        ],
         "commits": [
             item["commit"]
             for item in (node.get("commits") or {}).get("nodes", [])
@@ -213,8 +213,24 @@ def review_logins(pr: dict[str, Any]) -> set[str]:
     return {r.get("login") for r in pr.get("reviewRequests", []) if r.get("login")}
 
 
+def latest_opinionated_reviews(reviews: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return each reviewer's latest approval or change request."""
+    latest: dict[str, tuple[tuple[str, int], dict[str, Any]]] = {}
+    for index, review in enumerate(reviews):
+        if review.get("state") not in OPINIONATED_REVIEW_STATES:
+            continue
+        login = ((review.get("author") or {}).get("login") or "").lower()
+        if not login:
+            continue
+        rank = (review.get("submittedAt") or "", index)
+        current = latest.get(login)
+        if current is None or rank > current[0]:
+            latest[login] = (rank, review)
+    return [entry[1] for entry in latest.values()]
+
+
 def my_latest_review(pr: dict[str, Any], me: str) -> str | None:
-    for review in pr.get("latestReviews", []):
+    for review in latest_opinionated_reviews(pr.get("latestReviews", [])):
         author = review.get("author") or {}
         if author.get("login", "").lower() == me.lower():
             return review.get("state")
@@ -260,43 +276,43 @@ def is_ready_candidate(pr: dict[str, Any]) -> bool:
     )
 
 
-def latest_changes_requested_at(pr: dict[str, Any]) -> str | None:
-    review = latest_changes_requested_review(pr)
-    return review.get("submittedAt") if review else None
-
-
-def latest_changes_requested_review(pr: dict[str, Any]) -> dict[str, Any] | None:
-    reviews = [
-        review for review in pr.get("reviews", [])
-        if review.get("state") == "CHANGES_REQUESTED" and review.get("submittedAt")
-    ]
-    return max(reviews, key=lambda review: review["submittedAt"]) if reviews else None
-
-
 def latest_commit_at(pr: dict[str, Any]) -> str | None:
     timestamps = [commit.get("committedDate") for commit in pr.get("commits", []) if commit.get("committedDate")]
     return max(timestamps) if timestamps else None
 
 
 def changes_requested_without_new_commit(pr: dict[str, Any]) -> bool:
-    review = latest_changes_requested_review(pr)
-    if review is None:
+    if pr.get("reviewDecision") != "CHANGES_REQUESTED":
         return False
 
-    reviewed_oid = ((review.get("commit") or {}).get("oid") or "").strip()
+    reviews = [
+        review
+        for review in pr.get("reviews", [])
+        if review.get("state") == "CHANGES_REQUESTED"
+    ]
+    if not reviews:
+        return False
+
     head_oid = (pr.get("headRefOid") or "").strip()
     if not head_oid:
         commits = pr.get("commits", [])
         if commits:
             head_oid = (commits[-1].get("oid") or "").strip()
-    if reviewed_oid and head_oid:
-        return reviewed_oid == head_oid
 
-    # Older GitHub payloads may omit the review's commit. Keep a conservative
-    # timestamp fallback rather than incorrectly treating missing data as a
-    # post-review commit.
-    change_at, commit_at = review.get("submittedAt"), latest_commit_at(pr)
-    return bool(change_at and (not commit_at or change_at >= commit_at))
+    commit_at = latest_commit_at(pr)
+    for review in reviews:
+        reviewed_oid = ((review.get("commit") or {}).get("oid") or "").strip()
+        if reviewed_oid and head_oid:
+            if reviewed_oid == head_oid:
+                return True
+            continue
+
+        # Older GitHub payloads may omit either SHA. Keep a conservative
+        # timestamp fallback for only the review that cannot be compared.
+        change_at = review.get("submittedAt")
+        if change_at and (not commit_at or change_at >= commit_at):
+            return True
+    return False
 
 
 def matches(pr: dict[str, Any], token: str, me: str) -> bool:
@@ -500,6 +516,7 @@ def explain(argv: list[str]) -> int:
     repo, me = resolve_repo(args.repo), resolve_me(args.me)
     raw = run("gh", "pr", "view", str(args.pr), "--repo", repo, "--json", FIELDS)
     pr = json.loads(raw)
+    pr["latestReviews"] = latest_opinionated_reviews(pr.get("reviews", []))
     if args.json:
         print(json.dumps(pr, indent=2))
         return 0

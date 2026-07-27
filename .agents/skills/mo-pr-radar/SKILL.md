@@ -45,8 +45,8 @@ automation. `--help` lists every filter.
 
 ## Status semantics
 
-The data comes from GitHub's current PR review requests, latest reviews,
-mergeability, merge state, and check rollup.
+The data comes from GitHub's current PR review requests, latest opinionated
+reviews, mergeability, merge state, and check rollup.
 
 - `ci-green` means every **observed** check has a successful, skipped, or neutral
   terminal result. It is deliberately not claimed to prove branch protection or
@@ -55,13 +55,17 @@ mergeability, merge state, and check rollup.
   and observed checks green. It may still be held by queue/order/protection rules.
 - `conflict` means GitHub reports `CONFLICTING` or `DIRTY`. `UNKNOWN` is not a
   conflict; inspect it after GitHub finishes calculating mergeability.
-- “未我 approve” means the latest review record for the selected account is not
-  `APPROVED`. Repository settings can still dismiss or require approvals
-  differently, so use `mo-pr-explain` before diagnosing Mergify.
-- `changes-requested-no-new-commit` compares the latest `CHANGES_REQUESTED`
-  review's commit SHA with the current head SHA. It therefore detects a new
-  commit without relying on author, committer, or push timestamps. A conservative
-  timestamp fallback is used only when GitHub omits the review commit.
+- “未我 approve” means the latest opinionated review (`APPROVED` or
+  `CHANGES_REQUESTED`) for the selected account is not `APPROVED`. A later
+  `COMMENTED` review does not erase that opinion. Repository settings can still
+  dismiss or require approvals differently, so use `mo-pr-explain` before
+  diagnosing Mergify.
+- `changes-requested-no-new-commit` first requires GitHub's current review
+  decision to be `CHANGES_REQUESTED`, then compares every reviewer's current
+  outstanding change request with the head SHA. A later approval therefore
+  clears that reviewer's historical request. New commits are detected without
+  relying on author, committer, or push timestamps; a conservative timestamp
+  fallback is used only when GitHub omits a review or head commit.
 - `changes-requested-resolved-or-none` is its complement: no request changes,
   or the current head differs from the reviewed commit. It is the right
   review-queue filter when paired with `unapproved-by-me`.

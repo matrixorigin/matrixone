@@ -189,9 +189,12 @@ Before this review gate passes:
    verify that the test output names every intended test. A successful command
    whose `-run` expression matched nothing is not evidence.
 3. Measure each exact test once under `-race`, excluding first-build time, and
-   choose an adaptive repetition count. With stress budget `B` and measured test
-   duration `T`, use `N = clamp(floor(B/T), 1, 100)`. Default `B` to 30 seconds;
-   adjust it for the change's risk and CI budget, and record `T`, `B`, and `N`.
+   choose an adaptive repetition count. Read duration `T` from the test's
+   terminal event emitted by `go test -json`, not the rounded package summary.
+   With stress budget `B` and measured test duration `T`, use
+   `N = clamp(floor(B/T), 1, 100)`. Default `B` to 30 seconds; if `T` is absent,
+   non-positive, or below timer resolution, use the upper cap `N = 100`.
+   Adjust `B` for the change's risk and CI budget, and record `T`, `B`, and `N`.
    If a pre-fix reproduction has a known occurrence window, override the formula
    so the post-fix run covers that window; record why.
 4. Run each focused test separately so a slow test does not reduce repetitions
