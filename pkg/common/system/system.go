@@ -41,6 +41,8 @@ var (
 	cpuNum atomic.Int32
 	// memoryTotal is the total memory of this node.
 	memoryTotal atomic.Uint64
+	// cgroupMemoryLimit is immutable after process initialization.
+	cgroupMemoryLimit uint64
 	// cpuUsage is the CPU statistics updated every second.
 	cpuUsage atomic.Uint64
 
@@ -79,10 +81,15 @@ func MemoryTotal() uint64 {
 	return memoryTotal.Load()
 }
 
-// CgroupMemoryLimit returns the memory limit for the current process cgroup,
-// including when the process is not PID 1 (for example a systemd scope or a
-// nested container cgroup). Zero means unavailable.
+// CgroupMemoryLimit returns the cached memory limit for the current process
+// cgroup. The limit is resolved once during process initialization, including
+// when the process is not PID 1 (for example a systemd scope or a nested
+// container cgroup). Zero means unavailable.
 func CgroupMemoryLimit() uint64 {
+	return cgroupMemoryLimit
+}
+
+func resolveCgroupMemoryLimit() uint64 {
 	if limit := hierarchicalCgroupMemoryLimit(pid); limit > 0 {
 		return limit
 	}
@@ -403,5 +410,6 @@ func refreshQuotaConfig() {
 func init() {
 	pid = os.Getpid()
 	refreshQuotaConfig()
+	cgroupMemoryLimit = resolveCgroupMemoryLimit()
 	SetGoMaxProcs(int(cpuNum.Load()))
 }
