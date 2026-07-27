@@ -7593,7 +7593,8 @@ func (s *userLevelLockTestService) Unlock(ctx context.Context, txnID []byte, com
 	s.unlockMu.Lock()
 	s.unlockedTxnIDs = append(s.unlockedTxnIDs, append([]byte(nil), txnID...))
 	s.unlockMu.Unlock()
-	if s.blockUnlock.Load() {
+waitForUnlock:
+	for s.blockUnlock.Load() {
 		if s.unlockStarted != nil {
 			select {
 			case s.unlockStarted <- struct{}{}:
@@ -7603,12 +7604,23 @@ func (s *userLevelLockTestService) Unlock(ctx context.Context, txnID []byte, com
 		if s.unlockResume != nil {
 			select {
 			case <-s.unlockResume:
+				break waitForUnlock
 			case <-ctx.Done():
 				return ctx.Err()
 			}
 		} else {
-			<-ctx.Done()
-			return ctx.Err()
+			timer := time.NewTimer(time.Millisecond)
+			select {
+			case <-timer.C:
+			case <-ctx.Done():
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+				return ctx.Err()
+			}
 		}
 	}
 	if s.unlockErr != nil {
@@ -7682,6 +7694,35 @@ func runUserLevelLockTest(t *testing.T, fn func([]lockservice.LockService)) {
 		&userLevelLockTestService{id: "user-level-lock-2", state: state},
 	})
 	resetUserLevelLocksForTest(t)
+}
+
+func TestUserLevelLockCleanupTestServiceUnblocksInFlightUnlock(t *testing.T) {
+	service := &userLevelLockTestService{
+		id:            "user-level-lock-unblock",
+		state:         &userLevelLockTestState{locks: make(map[string]string)},
+		unlockStarted: make(chan struct{}, 1),
+	}
+	service.blockUnlock.Store(true)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- service.Unlock(ctx, []byte("txn"), timestamp.Timestamp{})
+	}()
+
+	select {
+	case <-service.unlockStarted:
+	case <-time.After(time.Second):
+		t.Fatal("unlock did not reach the blocked state")
+	}
+	service.blockUnlock.Store(false)
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("in-flight unlock did not observe the test service recovery")
+	}
 }
 
 func requireUserLevelLockTxnUnlocked(t *testing.T, service *userLevelLockTestService, txnID []byte) {

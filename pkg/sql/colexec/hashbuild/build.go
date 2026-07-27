@@ -478,6 +478,9 @@ func (hashBuild *HashBuild) handleRuntimeFilter(proc *process.Process) error {
 
 		data, release, err := ctr.hashmapBuilder.marshalRuntimeFilterVector(keyVec)
 		if err != nil {
+			if hashBuild.fallbackRuntimeFilterOnBudgetAdmission(err, &runtimeFilter, spec, proc) {
+				return nil
+			}
 			return err
 		}
 		runtimeFilter.Card = int32(rowCount)
@@ -527,6 +530,9 @@ func (hashBuild *HashBuild) handleRuntimeFilter(proc *process.Process) error {
 		data, release, err := ctr.hashmapBuilder.marshalRuntimeFilterVector(ctr.hashmapBuilder.UniqueJoinKeys[0])
 
 		if err != nil {
+			if hashBuild.fallbackRuntimeFilterOnBudgetAdmission(err, &runtimeFilter, spec, proc) {
+				return nil
+			}
 			return err
 		}
 
@@ -538,6 +544,36 @@ func (hashBuild *HashBuild) handleRuntimeFilter(proc *process.Process) error {
 		ctr.runtimeFilterIn = true
 	}
 	return nil
+}
+
+// Runtime filters are optional probe-side optimizations. If serializing one
+// cannot be admitted under the query/CN hash-build budget, PASS preserves
+// correctness and avoids turning a successful hash build into a query error.
+// Lifecycle and accounting errors remain fatal.
+func (hashBuild *HashBuild) fallbackRuntimeFilterOnBudgetAdmission(
+	err error,
+	runtimeFilter *message.RuntimeFilterMessage,
+	spec *plan.RuntimeFilterSpec,
+	proc *process.Process,
+) bool {
+	var budgetErr *process.HashBuildBudgetError
+	if !errors.As(err, &budgetErr) || budgetErr.Kind != process.HashBuildBudgetErrorAdmission {
+		return false
+	}
+
+	if hashBuild.OpAnalyzer != nil {
+		stats := hashBuild.OpAnalyzer.GetOpStats()
+		stats.AddExtraStat("HashBuildRuntimeFilterBudgetFallbacks", 1)
+		stats.SetMaxExtraStat("HashBuildRuntimeFilterBudgetFallbackRequestedBytes", hashBuildStatInt64(budgetErr.Requested))
+		stats.SetMaxExtraStat("HashBuildRuntimeFilterBudgetFallbackUsedBytes", hashBuildStatInt64(budgetErr.Used))
+		stats.SetMaxExtraStat("HashBuildRuntimeFilterBudgetFallbackCapBytes", hashBuildStatInt64(budgetErr.Cap))
+	}
+	*runtimeFilter = message.RuntimeFilterMessage{
+		Tag: spec.Tag,
+		Typ: message.RuntimeFilter_PASS,
+	}
+	hashBuild.sendRuntimeFilter(*runtimeFilter, spec, proc)
+	return true
 }
 
 func (hashBuild *HashBuild) sendRuntimeFilter(rt message.RuntimeFilterMessage, spec *plan.RuntimeFilterSpec, proc *process.Process) {
