@@ -1,50 +1,50 @@
 select json_type('{"a": 1}');
-json_type({"a": 1})
+➤ json_type({"a": 1})[12,-1,0]  𝄀
 OBJECT
 select json_type('[1, 2, 3]');
-json_type([1, 2, 3])
+➤ json_type([1, 2, 3])[12,-1,0]  𝄀
 ARRAY
 select json_type('42');
-json_type(42)
+➤ json_type(42)[12,-1,0]  𝄀
 INTEGER
 select json_type('3.14');
-json_type(3.14)
+➤ json_type(3.14)[12,-1,0]  𝄀
 DOUBLE
 select json_type('"hello"');
-json_type("hello")
+➤ json_type("hello")[12,-1,0]  𝄀
 STRING
 select json_type('true');
-json_type(true)
+➤ json_type(true)[12,-1,0]  𝄀
 BOOLEAN
 select json_type('false');
-json_type(false)
+➤ json_type(false)[12,-1,0]  𝄀
 BOOLEAN
 select json_type('null');
-json_type(null)
+➤ json_type(null)[12,-1,0]  𝄀
 NULL
 select json_type(null);
-json_type(null)
+➤ json_type(null)[12,-1,0]  𝄀
 null
 select json_type(json_array(1, 2, 3));
-json_type(json_array(1, 2, 3))
+➤ json_type(json_array(1, 2, 3))[12,-1,0]  𝄀
 ARRAY
 select json_type(json_object('id', 1, 'name', 'carrot'));
-json_type(json_object(id, 1, name, carrot))
+➤ json_type(json_object(id, 1, name, carrot))[12,-1,0]  𝄀
 OBJECT
 select json_type(json_extract(json_array(cast(3.14 as decimal(10,2))), '$[0]'));
-json_type(json_extract(json_array(cast(3.14 as decimal(10, 2))), $[0]))
+➤ json_type(json_extract(json_array(cast(3.14 as decimal(10, 2))), $[0]))[12,-1,0]  𝄀
 DECIMAL
 select json_type(json_extract(json_array(cast('2021-02-01' as date)), '$[0]'));
-json_type(json_extract(json_array(cast(2021-02-01 as date)), $[0]))
+➤ json_type(json_extract(json_array(cast(2021-02-01 as date)), $[0]))[12,-1,0]  𝄀
 DATE
 select json_type(json_extract(json_array(cast('11:11:11' as time)), '$[0]'));
-json_type(json_extract(json_array(cast(11:11:11 as time)), $[0]))
+➤ json_type(json_extract(json_array(cast(11:11:11 as time)), $[0]))[12,-1,0]  𝄀
 TIME
 select json_type(json_extract(json_array(cast('2021-02-01 11:11:11' as datetime)), '$[0]'));
-json_type(json_extract(json_array(cast(2021-02-01 11:11:11 as datetime)), $[0]))
+➤ json_type(json_extract(json_array(cast(2021-02-01 11:11:11 as datetime)), $[0]))[12,-1,0]  𝄀
 DATETIME
 select json_type(json_extract(json_array(cast('hello' as binary(10))), '$[0]'));
-json_type(json_extract(json_array(cast(hello as binary(10))), $[0]))
+➤ json_type(json_extract(json_array(cast(hello as binary(10))), $[0]))[12,-1,0]  𝄀
 BLOB
 set time_zone = '+08:00';
 drop table if exists jtt;
@@ -79,82 +79,82 @@ null, null, null, null,
 null, null, null, null, null, null)
 ;
 select count(*) from jtt;
-count(*)
+➤ count(*)[-5,64,0]  𝄀
 2
 select id, json_type(js) from jtt;
-id    json_type(js)
-1    OBJECT
-2    null
+➤ id[4,32,0]  ¦  json_type(js)[12,-1,0]  𝄀
+1  ¦  OBJECT  𝄀
+2  ¦  null
 select id, json_type(null) from jtt;
-id    json_type(null)
-1    null
-2    null
+➤ id[4,32,0]  ¦  json_type(null)[12,-1,0]  𝄀
+1  ¦  null  𝄀
+2  ¦  null
 select json_type(json_extract(json_array(b), '$[0]')) from jtt where b is not null;
-json_type(json_extract(json_array(b), $[0]))
-BOOLEAN
+➤ json_type(json_extract(json_array(b), $[0]))[12,-1,0]  𝄀
+BOOLEAN  𝄀
 BOOLEAN
 select json_type(json_extract(json_array(bi), '$[0]')) from jtt where bi is not null;
-json_type(json_extract(json_array(bi), $[0]))
+➤ json_type(json_extract(json_array(bi), $[0]))[12,-1,0]  𝄀
 INTEGER
 select json_type(json_extract(json_array(f), '$[0]')) from jtt where f is not null;
-json_type(json_extract(json_array(f), $[0]))
+➤ json_type(json_extract(json_array(f), $[0]))[12,-1,0]  𝄀
 DOUBLE
 select json_type(json_extract(json_array(d), '$[0]')) from jtt where d is not null;
-json_type(json_extract(json_array(d), $[0]))
+➤ json_type(json_extract(json_array(d), $[0]))[12,-1,0]  𝄀
 DOUBLE
 select json_type(json_extract(json_array(d64), '$[0]')) from jtt where d64 is not null;
-json_type(json_extract(json_array(d64), $[0]))
+➤ json_type(json_extract(json_array(d64), $[0]))[12,-1,0]  𝄀
 DECIMAL
 select json_type(json_extract(json_array(d128), '$[0]')) from jtt where d128 is not null;
-json_type(json_extract(json_array(d128), $[0]))
+➤ json_type(json_extract(json_array(d128), $[0]))[12,-1,0]  𝄀
 DECIMAL
 select json_type(json_extract(json_array(c1), '$[0]')) from jtt where c1 is not null;
-json_type(json_extract(json_array(c1), $[0]))
+➤ json_type(json_extract(json_array(c1), $[0]))[12,-1,0]  𝄀
 STRING
 select json_type(json_extract(json_array(td), '$[0]')) from jtt where td is not null;
-json_type(json_extract(json_array(td), $[0]))
+➤ json_type(json_extract(json_array(td), $[0]))[12,-1,0]  𝄀
 DATE
 select json_type(json_extract(json_array(tt), '$[0]')) from jtt where tt is not null;
-json_type(json_extract(json_array(tt), $[0]))
+➤ json_type(json_extract(json_array(tt), $[0]))[12,-1,0]  𝄀
 TIME
 select json_type(json_extract(json_array(tdt), '$[0]')) from jtt where tdt is not null;
-json_type(json_extract(json_array(tdt), $[0]))
+➤ json_type(json_extract(json_array(tdt), $[0]))[12,-1,0]  𝄀
 DATETIME
 select json_type(json_extract(json_array(ts), '$[0]')) from jtt where ts is not null;
-json_type(json_extract(json_array(ts), $[0]))
+➤ json_type(json_extract(json_array(ts), $[0]))[12,-1,0]  𝄀
 DATETIME
 select json_type(json_extract(json_array(uid), '$[0]')) from jtt where uid is not null;
-json_type(json_extract(json_array(uid), $[0]))
+➤ json_type(json_extract(json_array(uid), $[0]))[12,-1,0]  𝄀
 STRING
 select json_type(json_extract(json_array(yr), '$[0]')) from jtt where yr is not null;
-json_type(json_extract(json_array(yr), $[0]))
+➤ json_type(json_extract(json_array(yr), $[0]))[12,-1,0]  𝄀
 STRING
 select json_type(json_extract(json_array(bin), '$[0]')) from jtt where bin is not null;
-json_type(json_extract(json_array(bin), $[0]))
+➤ json_type(json_extract(json_array(bin), $[0]))[12,-1,0]  𝄀
 BLOB
 select json_type(json_extract(json_array(vbin), '$[0]')) from jtt where vbin is not null;
-json_type(json_extract(json_array(vbin), $[0]))
+➤ json_type(json_extract(json_array(vbin), $[0]))[12,-1,0]  𝄀
 BLOB
 select json_type(json_extract(json_array(vf32), '$[0]')) from jtt where vf32 is not null;
-json_type(json_extract(json_array(vf32), $[0]))
+➤ json_type(json_extract(json_array(vf32), $[0]))[12,-1,0]  𝄀
 ARRAY
 select json_type(json_extract(json_array(e), '$[0]')) from jtt where e is not null;
-json_type(json_extract(json_array(e), $[0]))
+➤ json_type(json_extract(json_array(e), $[0]))[12,-1,0]  𝄀
 STRING
 select json_type(json_extract(json_array(bitcol), '$[0]')) from jtt where bitcol is not null;
-json_type(json_extract(json_array(bitcol), $[0]))
-BLOB
+➤ json_type(json_extract(json_array(bitcol), $[0]))[12,-1,0]  𝄀
+BIT
 select json_type(json_extract(json_object('id', id, 'name', vc), '$.id')) from jtt where vc is not null;
-json_type(json_extract(json_object(id, id, name, vc), $.id))
+➤ json_type(json_extract(json_object(id, id, name, vc), $.id))[12,-1,0]  𝄀
 INTEGER
 select json_type(json_extract(json_object('date', td, 'time', tt), '$.date')) from jtt where td is not null;
-json_type(json_extract(json_object(date, td, time, tt), $.date))
+➤ json_type(json_extract(json_object(date, td, time, tt), $.date))[12,-1,0]  𝄀
 DATE
 select json_type(json_extract(json_object('ts', ts), '$.ts')) from jtt where ts is not null;
-json_type(json_extract(json_object(ts, ts), $.ts))
+➤ json_type(json_extract(json_object(ts, ts), $.ts))[12,-1,0]  𝄀
 DATETIME
 select json_type(json_extract(json_object('uid', uid), '$.uid')) from jtt where uid is not null;
-json_type(json_extract(json_object(uid, uid), $.uid))
+➤ json_type(json_extract(json_object(uid, uid), $.uid))[12,-1,0]  𝄀
 STRING
 drop table jtt;
 set time_zone = 'SYSTEM';
