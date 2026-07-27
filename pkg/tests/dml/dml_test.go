@@ -113,7 +113,7 @@ func TestDeleteAndSelect(t *testing.T) {
 }
 
 func TestDataBranchDiffAsFile(t *testing.T) {
-	embed.RunBaseClusterTests(
+	require.NoError(t, embed.RunBaseClusterTests(
 		func(c embed.Cluster) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*240)
 			defer cancel()
@@ -180,7 +180,7 @@ func TestDataBranchDiffAsFile(t *testing.T) {
 
 			t.Log("diff output to stage and load via datalink")
 			runDiffOutputToStage(t, ctx, sqlDB)
-		})
+		}))
 }
 
 func dataBranchScaleRows(full, short int) int {
