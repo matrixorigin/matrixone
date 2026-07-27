@@ -39,7 +39,19 @@ const EnvLibPath = "MO_ONNXRUNTIME_LIB"
 var (
 	initOnce sync.Once
 	initErr  error
+
+	// arenaCfg is kept alive for the process lifetime; it configures the
+	// shared, memory-capped CPU allocator registered with the ORT environment.
+	arenaCfg *ort.ArenaCfg
 )
+
+// MaxRuntimeMemoryBytes caps the ORT CPU arena that serves allocations made
+// DURING model execution (outputs and intermediate tensors). onnx_run accepts
+// arbitrary model bytes, so without this a model using e.g. Expand or
+// ConstantOfShape could exhaust CN memory inside onnxruntime before any
+// Go-side check runs; with it, such a model fails its Run with an allocator
+// error instead. 1 GiB matches the datalink model-size cap.
+const MaxRuntimeMemoryBytes = 1 << 30
 
 // sharedLibName returns the platform-specific onnxruntime library file name,
 // matching what thirdparties/Makefile downloads.
@@ -143,6 +155,28 @@ func ensureInit() error {
 				"onnx: failed to initialize onnxruntime from %s: %v", path, err)
 			return
 		}
+		// Register a shared CPU allocator whose arena is capped at
+		// MaxRuntimeMemoryBytes; every session opts into it via
+		// "session.use_env_allocators" (see NewSession). Extend strategy 1
+		// (kSameAsRequested) avoids power-of-two overshoot near the cap.
+		memInfo, err := ort.GetMemoryInfo()
+		if err != nil {
+			initErr = moerr.NewInternalErrorNoCtxf(
+				"onnx: failed to get onnxruntime memory info: %v", err)
+			return
+		}
+		cfg, err := ort.NewArenaCfg(MaxRuntimeMemoryBytes, 1, -1, -1)
+		if err != nil {
+			initErr = moerr.NewInternalErrorNoCtxf(
+				"onnx: failed to create arena config: %v", err)
+			return
+		}
+		if err := ort.CreateAndRegisterAllocator(memInfo, cfg); err != nil {
+			initErr = moerr.NewInternalErrorNoCtxf(
+				"onnx: failed to register capped allocator: %v", err)
+			return
+		}
+		arenaCfg = cfg
 	})
 	return initErr
 }

@@ -70,6 +70,14 @@ func (d DType) width() int64 {
 // as a json value anyway.
 const MaxTensorBytes = 64 << 20
 
+// MaxTensorElements caps the element COUNT of any tensor this package
+// converts to json. The byte cap alone is not the peak cost: conversion boxes
+// every element into an `any` (16 bytes of interface header plus the boxed
+// value), so a 64 MB int8/bool tensor (67M elements) would balloon to >1 GiB
+// during conversion. 8M elements bounds that peak to roughly 128-256 MB —
+// and a larger result could not fit the 64 MB json blob limit anyway.
+const MaxTensorElements = 8 << 20
+
 // Shape describes a tensor: its dimensions and element dtype.
 //
 //	{"dim": [1, 1, 4], "dtype": "int16"}
@@ -95,12 +103,13 @@ func ParseShape(js []byte) (*Shape, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Bound the declared tensor size; the division form avoids any overflow
-	// in n*width.
-	if w := s.Dtype.width(); n > MaxTensorBytes/w {
+	// Bound the declared tensor size (the division form avoids any overflow
+	// in n*width) and the element count (which bounds the boxed []any peak
+	// during json conversion, not just the raw tensor bytes).
+	if w := s.Dtype.width(); n > MaxTensorBytes/w || n > MaxTensorElements {
 		return nil, moerr.NewInvalidInputNoCtxf(
-			"onnx: declared tensor size %d elements x %d bytes exceeds the %d MB limit",
-			n, w, MaxTensorBytes>>20)
+			"onnx: declared tensor of %d elements x %d bytes exceeds the supported limits",
+			n, s.Dtype.width())
 	}
 	return &s, nil
 }

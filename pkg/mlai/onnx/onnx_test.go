@@ -15,6 +15,7 @@
 package onnx
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"testing"
@@ -58,17 +59,37 @@ func TestParseShape(t *testing.T) {
 	_, err = ParseShape([]byte(`{"dim":[],"dtype":"int8"}`))
 	require.Error(t, err)
 
-	// The declared tensor byte size is bounded: shapes are allocated before
-	// onnxruntime validates them against the model, so an oversized shape must
-	// be rejected up front rather than OOM the process.
+	// The declared tensor size is bounded in bytes AND element count: shapes
+	// are allocated before onnxruntime validates them against the model, and
+	// json conversion boxes every element, so an oversized shape must be
+	// rejected up front rather than OOM the process.
 	_, err = ParseShape([]byte(`{"dim":[100000000,100],"dtype":"float64"}`))
 	require.ErrorContains(t, err, "exceeds")
 	_, err = ParseShape([]byte(`{"dim":[4611686018427387904],"dtype":"int8"}`))
 	require.ErrorContains(t, err, "exceeds")
-	// At the limit is still accepted (64 MB of int8).
-	s, err = ParseShape([]byte(`{"dim":[67108864],"dtype":"int8"}`))
+	// 64 MB of int8 is within the byte cap but far over the element cap.
+	_, err = ParseShape([]byte(`{"dim":[67108864],"dtype":"int8"}`))
+	require.ErrorContains(t, err, "exceeds")
+	// At the element limit is still accepted.
+	s, err = ParseShape([]byte(`{"dim":[8388608],"dtype":"int8"}`))
 	require.NoError(t, err)
 	require.NotNil(t, s)
+}
+
+// TestRunCancelled: a cancelled query context must surface as a cancellation
+// error even if the (fast) model run won the race.
+func TestRunCancelled(t *testing.T) {
+	skipIfNoRuntime(t)
+	sess, err := NewSession(mustModel(t, "sum_and_difference.onnx"))
+	require.NoError(t, err)
+	defer sess.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	in := ParseShapeMust(t, `{"dim":[1,1,4],"dtype":"float32"}`)
+	out := ParseShapeMust(t, `{"dim":[1,1,2],"dtype":"float32"}`)
+	_, err = sess.Run(ctx, []byte(`[0.2,0.3,0.6,0.9]`), in, out)
+	require.ErrorContains(t, err, "cancelled")
 }
 
 func TestSumAndDifference(t *testing.T) {
@@ -79,7 +100,7 @@ func TestSumAndDifference(t *testing.T) {
 
 	in := ParseShapeMust(t, `{"dim":[1,1,4],"dtype":"float32"}`)
 	out := ParseShapeMust(t, `{"dim":[1,1,2],"dtype":"float32"}`)
-	got, err := sess.Run([]byte(`[0.2,0.3,0.6,0.9]`), in, out)
+	got, err := sess.Run(context.Background(), []byte(`[0.2,0.3,0.6,0.9]`), in, out)
 	require.NoError(t, err)
 	js := mustJSON(t, got)
 	t.Logf("sum_and_difference output: %s", js)
@@ -97,7 +118,7 @@ func TestNonTensorOutputs(t *testing.T) {
 
 	in := ParseShapeMust(t, `{"dim":[6,4],"dtype":"float32"}`)
 	input := `[5.9,3.0,5.1,1.8, 6.8,2.8,4.8,1.4, 6.3,2.3,4.4,1.3, 6.5,3.0,5.5,1.8, 7.7,2.8,6.7,2.0, 5.5,2.5,4.0,1.3]`
-	got, err := sess.Run([]byte(input), in, nil) // NULL output_shape
+	got, err := sess.Run(context.Background(), []byte(input), in, nil) // NULL output_shape
 	require.NoError(t, err)
 	js := mustJSON(t, got)
 	t.Logf("non_tensor_outputs: %s", js)
@@ -123,7 +144,7 @@ func TestMnistFloat16(t *testing.T) {
 
 	in := ParseShapeMust(t, `{"dim":[1,1,28,28],"dtype":"float16"}`)
 	out := ParseShapeMust(t, `{"dim":[1,10],"dtype":"float16"}`)
-	got, err := sess.Run(buf, in, out)
+	got, err := sess.Run(context.Background(), buf, in, out)
 	require.NoError(t, err)
 	js := mustJSON(t, got)
 	t.Logf("mnist_float16 logits: %s", js)

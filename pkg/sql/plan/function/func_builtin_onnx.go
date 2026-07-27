@@ -218,7 +218,7 @@ func (op *opOnnxRun) onnxRun(params []*vector.Vector, result vector.FunctionResu
 		if err := op.ensureSession(proc, modelArg, isDatalink, modelIsConst); err != nil {
 			return err
 		}
-		out, err := op.sess.Run(inputJSON, inShape, outShape)
+		out, err := op.sess.Run(proc.Ctx, inputJSON, inShape, outShape)
 		if err != nil {
 			return err
 		}

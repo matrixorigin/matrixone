@@ -15,6 +15,8 @@
 package onnx
 
 import (
+	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	ort "github.com/yalue/onnxruntime_go"
 )
@@ -50,7 +52,18 @@ func NewSession(modelBytes []byte) (*Session, error) {
 	}
 	inNames := names(inInfo)
 	outNames := names(outInfo)
-	s, err := ort.NewDynamicAdvancedSessionWithONNXData(modelBytes, inNames, outNames, nil)
+	// Use the environment's shared, memory-capped allocator (registered in
+	// ensureInit) so allocations made during Run — outputs and intermediates —
+	// are bounded by MaxRuntimeMemoryBytes.
+	opts, err := ort.NewSessionOptions()
+	if err != nil {
+		return nil, moerr.NewInternalErrorNoCtxf("onnx: cannot create session options: %v", err)
+	}
+	defer opts.Destroy()
+	if err := opts.AddSessionConfigEntry("session.use_env_allocators", "1"); err != nil {
+		return nil, moerr.NewInternalErrorNoCtxf("onnx: cannot enable env allocators: %v", err)
+	}
+	s, err := ort.NewDynamicAdvancedSessionWithONNXData(modelBytes, inNames, outNames, opts)
 	if err != nil {
 		return nil, moerr.NewInvalidInputNoCtxf("onnx: cannot load model: %v", err)
 	}
@@ -75,6 +88,42 @@ func (s *Session) Close() error {
 	return err
 }
 
+// runWithCancel executes the inference with a RunOptions whose terminate flag
+// is raised if ctx is cancelled mid-run. The watcher goroutine touches only
+// the RunOptions, and it is joined before the RunOptions is destroyed and
+// before this function returns — so it can never race a later Close/Reset of
+// the session.
+func (s *Session) runWithCancel(ctx context.Context, inTensor ort.Value, outputs []ort.Value) error {
+	ro, err := ort.NewRunOptions()
+	if err != nil {
+		return moerr.NewInternalErrorNoCtxf("onnx: cannot create run options: %v", err)
+	}
+	runDone := make(chan struct{})
+	watcherDone := make(chan struct{})
+	go func() {
+		defer close(watcherDone)
+		select {
+		case <-ctx.Done():
+			_ = ro.Terminate()
+		case <-runDone:
+		}
+	}()
+	runErr := s.s.RunWithOptions([]ort.Value{inTensor}, outputs, ro)
+	close(runDone)
+	<-watcherDone
+	_ = ro.Destroy()
+
+	// A cancelled query reports cancellation regardless of whether the run
+	// happened to finish first.
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return moerr.NewInternalErrorNoCtxf("onnx: inference cancelled: %v", ctxErr)
+	}
+	if runErr != nil {
+		return moerr.NewInternalErrorNoCtxf("onnx: run failed: %v", runErr)
+	}
+	return nil
+}
+
 // Run evaluates the model on one input tensor and returns the result as a
 // json-encodable value tree (nil / bool / int64 / uint64 / float64 / string /
 // []any / map[string]any — exactly the scalar set bytejson.CreateByteJSON
@@ -82,7 +131,11 @@ func (s *Session) Close() error {
 // round-trip). When outShape is non-nil the (single) output is reshaped into a
 // nested array of that shape; when outShape is nil every output is rendered by
 // structure (tensor/sequence/map) into an object keyed by output name.
-func (s *Session) Run(inputJSON []byte, inShape, outShape *Shape) (any, error) {
+//
+// Cancelling ctx terminates an in-flight inference: KILL, statement timeout,
+// or client disconnect must not leave a long-running model (e.g. a large
+// Loop) occupying the executor and ORT worker threads.
+func (s *Session) Run(ctx context.Context, inputJSON []byte, inShape, outShape *Shape) (any, error) {
 	if len(s.inputNames) != 1 {
 		return nil, moerr.NewNotSupportedNoCtxf(
 			"onnx: model has %d inputs, only single-input models are supported",
@@ -121,8 +174,8 @@ func (s *Session) Run(inputJSON []byte, inShape, outShape *Shape) (any, error) {
 		}
 		outputs[0] = outTensor
 	}
-	if err := s.s.Run([]ort.Value{inTensor}, outputs); err != nil {
-		return nil, moerr.NewInternalErrorNoCtxf("onnx: run failed: %v", err)
+	if err := s.runWithCancel(ctx, inTensor, outputs); err != nil {
+		return nil, err
 	}
 
 	if outShape != nil {

@@ -128,14 +128,12 @@ func tensorData[T ort.TensorData](v ort.Value, dt DType) ([]T, error) {
 // declare a dtype.
 //
 // Model-produced (auto-allocated) outputs never pass through ParseShape, so
-// the raw-byte cap is applied here as well. The element count is checked
-// against MaxTensorBytes/8 — conservative for narrow element types, exact for
-// the widest — which keeps the guard to a single check for all branches.
+// the element cap — which also bounds the boxed []any conversion peak — is
+// applied here as a single check for all branches.
 func anyTensorFlat(v ort.Value) ([]any, error) {
-	if n := v.GetShape().FlattenedSize(); n < 0 || n > MaxTensorBytes/8 {
+	if n := v.GetShape().FlattenedSize(); n < 0 || n > MaxTensorElements {
 		return nil, moerr.NewInvalidInputNoCtxf(
-			"onnx: model output tensor of %d elements exceeds the %d MB limit",
-			n, MaxTensorBytes>>20)
+			"onnx: model output tensor of %d elements exceeds the supported limits", n)
 	}
 	switch t := v.(type) {
 	case *ort.Tensor[float32]:
