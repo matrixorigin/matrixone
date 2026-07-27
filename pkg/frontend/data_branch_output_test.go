@@ -23,6 +23,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/golang/mock/gomock"
@@ -37,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pbtimestamp "github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/require"
@@ -867,6 +869,126 @@ func TestDataBranchOutputShouldDiffAsCSV(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, ok)
 	})
+}
+
+func TestSubmitCSVBatchForConversionReturnsCopyErrorBeforeSubmit(t *testing.T) {
+	srcMP := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() {
+		mpool.DeleteMPool(srcMP)
+	})
+
+	dstMP, err := mpool.NewMPool("data-branch-csv-copy-failure", 1<<20, mpool.NoFixed)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		mpool.DeleteMPool(dstMP)
+	})
+
+	bat := batch.NewOffHeapWithSize(1)
+	bat.Vecs[0] = vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(bat.Vecs[0], make([]byte, 2<<20), false, srcMP))
+	bat.SetRowCount(1)
+	t.Cleanup(func() {
+		bat.Clean(srcMP)
+	})
+
+	ses := &Session{proc: testutil.NewProcessWithMPool(t, "", dstMP)}
+	ep := &ExportConfig{}
+	var workerWg sync.WaitGroup
+
+	_, wantErr := bat.Dup(dstMP)
+	require.Error(t, wantErr)
+	require.Zero(t, dstMP.CurrNB())
+
+	err = submitCSVBatchForConversion(
+		context.Background(), ses, tableStuff{}, bat, ep, &workerWg,
+	)
+	require.EqualError(t, err, wantErr.Error())
+	require.Zero(t, ep.Index.Load())
+	require.Zero(t, dstMP.CurrNB())
+	workerWg.Wait()
+}
+
+func TestSubmitCSVBatchForConversionCleansCopyOnSubmitError(t *testing.T) {
+	srcMP := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() {
+		mpool.DeleteMPool(srcMP)
+	})
+	dstMP := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() {
+		mpool.DeleteMPool(dstMP)
+	})
+
+	bat := batch.NewOffHeapWithSize(1)
+	bat.Vecs[0] = vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte("value"), false, srcMP))
+	bat.SetRowCount(1)
+	t.Cleanup(func() {
+		bat.Clean(srcMP)
+	})
+
+	worker, err := ants.NewPool(1)
+	require.NoError(t, err)
+	worker.Release()
+
+	ses := &Session{proc: testutil.NewProcessWithMPool(t, "", dstMP)}
+	ep := &ExportConfig{}
+	var workerWg sync.WaitGroup
+
+	err = submitCSVBatchForConversion(
+		context.Background(), ses, tableStuff{worker: worker}, bat, ep, &workerWg,
+	)
+	require.Error(t, err)
+	require.Zero(t, ep.Index.Load())
+	require.Zero(t, dstMP.CurrNB())
+	workerWg.Wait()
+}
+
+func TestFlushRemainingCSVBatchBytesSkipsCanceledIndexGap(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	ep := &ExportConfig{}
+	ep.Index.Store(1)
+	ep.ByteChan = make(chan *BatchByte)
+	close(ep.ByteChan)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- flushRemainingCSVBatchBytes(ctx, ep)
+	}()
+
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("canceled CSV writer waited for a batch index that cannot be produced")
+	}
+}
+
+func TestWaitForCSVConversionWorkersReturnsLateCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	var workerWg sync.WaitGroup
+	workerWg.Add(1)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- waitForCSVConversionWorkers(ctx, &workerWg)
+	}()
+
+	cancel()
+	workerWg.Done()
+
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("waiting for CSV conversion workers did not terminate")
+	}
+}
+
+func TestJoinCSVInputErrorDoesNotDuplicateObservedCancellation(t *testing.T) {
+	require.EqualError(t, joinCSVInputError(context.Canceled, context.Canceled), context.Canceled.Error())
+	require.ErrorIs(t, joinCSVInputError(nil, context.Canceled), context.Canceled)
 }
 
 func TestDataBranchOutputWriteRowValues(t *testing.T) {

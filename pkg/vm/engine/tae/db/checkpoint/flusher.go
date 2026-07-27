@@ -570,39 +570,24 @@ func foreachAobjBefore(_ context.Context,
 	// 2. the ts is lagged, lowering the possibility of missing aobj. In contrast, we have to wait when checkpoint pending checkpoint tasks
 	// table.WaitDataObjectCommitted(ts)
 	// table.WaitTombstoneObjectCommitted(ts)
-	var ok bool
-	// some entries shared the same timestamp with end, so we need to seek to the next one
-	key := &catalog.ObjectEntry{EntryMVCCNode: catalog.EntryMVCCNode{DeletedAt: ts.Next()}}
-
 	data := table.MakeDataObjectIt()
 	defer data.Release()
-	if ok = data.Seek(key); !ok {
-		ok = data.Last()
-	}
-	for ; ok; ok = data.Prev() {
+	for ok := catalog.SeekObjectListGroup(&data, catalog.ObjectListGroupAppendableCreate, lastCkp); ok; ok = data.Next() {
 		item := data.Item()
-		// Any C entry created before the last checkpoint end time, break
-		if item.IsCEntry() && item.CreatedAt.LT(&lastCkp) {
+		if item.ObjectListGroup() != catalog.ObjectListGroupAppendableCreate || item.CreatedAt.GT(&ts) {
 			break
 		}
-		if item.IsAppendable() && item.IsCEntry() && !item.HasDCounterpart() && item.CreatedAt.LE(&ts) {
-			df(item)
-		}
+		df(item)
 	}
 
 	tomb := table.MakeTombstoneObjectIt()
 	defer tomb.Release()
-	if ok = tomb.Seek(key); !ok {
-		ok = tomb.Last()
-	}
-	for ; ok; ok = tomb.Prev() {
+	for ok := catalog.SeekObjectListGroup(&tomb, catalog.ObjectListGroupAppendableCreate, lastCkp); ok; ok = tomb.Next() {
 		item := tomb.Item()
-		if item.IsCEntry() && item.CreatedAt.LT(&lastCkp) {
+		if item.ObjectListGroup() != catalog.ObjectListGroupAppendableCreate || item.CreatedAt.GT(&ts) {
 			break
 		}
-		if item.IsAppendable() && item.IsCEntry() && !item.HasDCounterpart() && item.CreatedAt.LE(&ts) {
-			tf(item)
-		}
+		tf(item)
 	}
 }
 
