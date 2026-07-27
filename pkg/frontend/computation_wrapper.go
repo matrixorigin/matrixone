@@ -917,6 +917,7 @@ func initExecuteStmtParamWithResolver(
 			retComp = nil
 		} else if retComp.NeedsPreparedWorkloadPolicyRefresh(
 			cwft.preparedWorkloadPolicy,
+			GWorkloadPolicyManager.PlacementGeneration(),
 		) {
 			if err := rebuildPreparedCompileCache(
 				execCtx,
@@ -1204,6 +1205,11 @@ func createCompile(
 		)
 	}
 	retCompile.SetWorkloadPolicy(policySet, "")
+	if isPrepare {
+		retCompile.SetWorkloadPlacementGeneration(
+			GWorkloadPolicyManager.PlacementGeneration(),
+		)
+	}
 	if resourceAttemptOwnerEligible(ses) {
 		retCompile.SetResourceAttemptOwnerEligible()
 	}

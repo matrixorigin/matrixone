@@ -969,6 +969,18 @@ func TestInitExecuteStmtParamRebuildsCachedTopologyAfterPolicyGenerationAppears(
 	require.NoError(t, err)
 	require.Same(t, retComp, reused)
 	require.Same(t, retComp, prepareStmt.compile)
+
+	// A CN work-state/label/membership publication advances the placement
+	// generation even when the policy JSON is unchanged. The materialized TP
+	// topology must be rebuilt before the next EXECUTE.
+	GWorkloadPolicyManager.AdvancePlacementGeneration()
+	GWorkloadPolicyManager.AdvancePlacementGeneration()
+	rebuilt, _, _, _, err := initExecuteStmtParam(
+		execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.NotNil(t, rebuilt)
+	require.NotSame(t, retComp, rebuilt)
+	require.Same(t, rebuilt, prepareStmt.compile)
 }
 
 func TestRebuildPreparePlanUsesPreparedRootSQL(t *testing.T) {

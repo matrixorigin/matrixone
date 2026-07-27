@@ -1258,6 +1258,61 @@ func TestWorkloadPolicyInvalidationFailureDoesNotServeStaleSnapshot(t *testing.T
 	require.Less(t, state.refreshAfter.Load(), int64(-1))
 }
 
+func TestWorkloadPolicyDrainingCNReconcilesEveryStatement(t *testing.T) {
+	const accountID = uint32(98)
+	manager := newWorkloadPolicyManager(time.Minute, nil)
+	state := manager.acquire(accountID)
+	applied, _, err := manager.Apply(
+		accountID,
+		testWorkloadPolicyOld,
+		1,
+	)
+	require.NoError(t, err)
+	require.True(t, applied)
+
+	var calls atomic.Int32
+	var revision atomic.Uint64
+	revision.Store(1)
+	refresh := func() error {
+		return manager.refreshWithMode(
+			context.Background(),
+			accountID,
+			state,
+			func(context.Context) (string, uint64, error) {
+				calls.Add(1)
+				current := revision.Load()
+				if current == 1 {
+					return testWorkloadPolicyOld, current, nil
+				}
+				return testWorkloadPolicyNew, current, nil
+			},
+			true,
+		)
+	}
+
+	manager.SetLocalCNWorkState(metadata.WorkState_Draining)
+	require.NoError(t, refresh())
+	require.Equal(t, int32(1), calls.Load())
+	require.Equal(t, int64(-1), state.refreshAfter.Load())
+
+	// An ALTER on another CN commits revision 2 while this draining CN is
+	// outside the publish barrier. Its next existing-session statement must
+	// observe that revision instead of reusing revision 1.
+	revision.Store(2)
+	require.NoError(t, refresh())
+	require.Equal(t, int32(2), calls.Load())
+	require.Equal(t, uint64(2), state.snapshot.Load().revision)
+	require.Equal(t, int64(-1), state.refreshAfter.Load())
+
+	manager.SetLocalCNWorkState(metadata.WorkState_Working)
+	require.NoError(t, refresh())
+	require.Equal(t, int32(3), calls.Load())
+	require.Greater(t, state.refreshAfter.Load(), time.Now().UnixNano())
+	require.NoError(t, refresh())
+	require.Equal(t, int32(3), calls.Load(),
+		"working CNs must retain the normal cached statement fast path")
+}
+
 func TestWorkloadPolicyEstablishedRefreshIsDetachedAndSingleflight(t *testing.T) {
 	const accountID = uint32(57)
 	var calls atomic.Int32
@@ -3068,7 +3123,7 @@ func TestResolveWorkloadPolicyAccountEnforcesScopeAndValidatesCatalog(t *testing
 	}
 }
 
-func TestAlterQueryWorkloadPolicyCommitsAppliesAndRequiresPublishAcknowledgement(
+func TestAlterQueryWorkloadPolicyCommitsAppliesAndWarnsOnPublishMiss(
 	t *testing.T,
 ) {
 	const (
@@ -3180,8 +3235,8 @@ func TestAlterQueryWorkloadPolicyCommitsAppliesAndRequiresPublishAcknowledgement
 	require.Empty(t, request.WorkloadPolicyUpdateRequest.Policy)
 	require.Equal(t, uint64(12), request.WorkloadPolicyUpdateRequest.Revision)
 
-	// The catalog transaction is durable, but ALTER must not report success
-	// while a currently routable CN may keep enforcing its previous revision.
+	// Once the catalog transaction is durable, a publication miss is a
+	// convergence warning rather than a false SQL mutation failure.
 	client.mu.Lock()
 	client.publishSendErrs["cn-1"] = errors.New("injected publish failure")
 	client.mu.Unlock()
@@ -3198,9 +3253,7 @@ func TestAlterQueryWorkloadPolicyCommitsAppliesAndRequiresPublishAcknowledgement
 		session,
 		set,
 	)
-	require.ErrorContains(t, err, "committed for account 65")
-	require.ErrorContains(t, err, "cluster-wide enforcement was not confirmed")
-	require.ErrorContains(t, err, "injected publish failure")
+	require.NoError(t, err)
 	require.Equal(t, uint64(13), state.snapshot.Load().revision)
 	require.Equal(t, testWorkloadPolicyNew, state.snapshot.Load().raw)
 	require.Equal(t, "commit;", exec.executedSQLs[len(exec.executedSQLs)-1])
@@ -3437,7 +3490,7 @@ func TestPublishWorkloadPolicyFanoutAndErrorAggregation(t *testing.T) {
 		}
 	})
 
-	t.Run("non-working CNs do not participate in acknowledgement", func(t *testing.T) {
+	t.Run("draining CN receives best-effort publication", func(t *testing.T) {
 		service := t.Name()
 		client := setupWorkloadPolicyQueryCluster(
 			t,
@@ -3462,9 +3515,13 @@ func TestPublishWorkloadPolicyFanoutAndErrorAggregation(t *testing.T) {
 				Supported: true,
 			},
 		}
-		client.publishSendErrs["cn-draining"] = errors.New(
-			"draining CN must not receive publication",
-		)
+		client.responses["cn-draining"] = &query.Response{
+			WorkloadPolicyUpdateResponse: &query.WorkloadPolicyUpdateResponse{
+				Applied:   true,
+				Revision:  8,
+				Supported: true,
+			},
+		}
 		session := &Session{feSessionImpl: feSessionImpl{service: service}}
 
 		require.NoError(t, publishWorkloadPolicy(
@@ -3478,8 +3535,8 @@ func TestPublishWorkloadPolicyFanoutAndErrorAggregation(t *testing.T) {
 		client.mu.Lock()
 		defer client.mu.Unlock()
 		require.Contains(t, client.requests, "cn-working")
-		require.NotContains(t, client.requests, "cn-draining")
-		require.Equal(t, 1, client.releases)
+		require.Contains(t, client.requests, "cn-draining")
+		require.Equal(t, 2, client.releases)
 	})
 
 	t.Run("empty cluster cannot acknowledge publication", func(t *testing.T) {
@@ -3493,7 +3550,7 @@ func TestPublishWorkloadPolicyFanoutAndErrorAggregation(t *testing.T) {
 			testWorkloadPolicyNew,
 			8,
 		)
-		require.ErrorContains(t, err, "requires at least one active CN")
+		require.ErrorContains(t, err, "requires at least one reachable CN")
 	})
 
 	t.Run("transport and response errors are joined", func(t *testing.T) {

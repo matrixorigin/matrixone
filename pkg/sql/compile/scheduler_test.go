@@ -681,6 +681,86 @@ func TestScheduleQueryWorkersTPPolicyDiscoversOnlyCurrentCN(t *testing.T) {
 	require.Equal(t, "tp-local:6001", nodes[0].Addr)
 }
 
+func TestScheduleQueryWorkersTPLegacyFallbackUsesFullPoolMembership(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	lockSvc := mock_lock.NewMockLockService(ctrl)
+	lockSvc.EXPECT().GetConfig().Return(
+		lockservice.Config{ServiceID: "tp-local"},
+	).AnyTimes()
+
+	policySet, err := schedule.ParseWorkloadPolicyConfig(`{
+		"version": 1,
+		"policies": {
+			"tp": {
+				"pool": "tenant-tp",
+				"labels": {"role": "tp"},
+				"fallback": "legacy-compatible",
+				"current_cn": "required"
+			}
+		}
+	}`)
+	require.NoError(t, err)
+
+	base := &schedulerProviderTestEngine{
+		schedulerTestEngine: &schedulerTestEngine{},
+		candidates: engine.QueryCandidates{
+			{
+				Service: metadata.CNService{
+					ServiceID:              "tp-local",
+					PipelineServiceAddress: "tp-local:6001",
+					WorkState:              metadata.WorkState_Working,
+				},
+				Mcpu: 4,
+			},
+			{
+				Service: metadata.CNService{
+					ServiceID:              "tp-pool",
+					PipelineServiceAddress: "tp-pool:6001",
+					WorkState:              metadata.WorkState_Working,
+				},
+				Mcpu: 4,
+			},
+		},
+		resolvedNodes: engine.Nodes{{
+			Id:        "tp-pool",
+			Addr:      "tp-pool:6001",
+			Mcpu:      4,
+			WorkState: metadata.WorkState_Working,
+		}},
+	}
+	provider := &schedulerCurrentProviderTestEngine{
+		schedulerProviderTestEngine: base,
+		currentCandidates: engine.QueryCandidates{{
+			Service: metadata.CNService{
+				ServiceID:              "tp-local",
+				PipelineServiceAddress: "tp-local:6001",
+				WorkState:              metadata.WorkState_Working,
+			},
+			Mcpu: 4,
+		}},
+	}
+	c := NewMockCompile(t)
+	c.proc.Base.LockService = lockSvc
+	c.addr = "tp-local:6001"
+	c.execType = plan2.ExecTypeTP
+	c.tenant = "tenant-a"
+	c.e = provider
+	c.SetWorkloadPolicy(policySet, "")
+
+	_, err = c.scheduleQueryWorkers()
+	require.ErrorContains(t, err, schedule.ReasonRequiredCurrentOutsidePool)
+	require.Zero(t, provider.currentCalls)
+	require.Equal(t, 1, provider.discoveryCalls)
+	require.Len(t, provider.resolvedSnapshot, 2)
+	require.Equal(
+		t,
+		engine.QueryPoolFallbackLegacyCompatible,
+		provider.poolRequest.FallbackPolicy,
+	)
+	require.Equal(t, schedule.ReasonRequiredCurrentOutsidePool, c.queryPlacement.Reason)
+}
+
 func TestPreparedWorkloadPolicyRefreshIsClassScoped(t *testing.T) {
 	apOnly := schedule.WorkloadPolicySet{
 		Rules: map[schedule.WorkloadClass]schedule.WorkloadPolicyRule{
@@ -697,11 +777,15 @@ func TestPreparedWorkloadPolicyRefreshIsClassScoped(t *testing.T) {
 	}
 	c := &Compile{execType: plan2.ExecTypeTP}
 
-	require.False(t, c.NeedsPreparedWorkloadPolicyRefresh(apOnly))
-	require.True(t, c.NeedsPreparedWorkloadPolicyRefresh(tpOnly))
+	require.False(t, c.NeedsPreparedWorkloadPolicyRefresh(apOnly, 0))
+	require.False(t, c.NeedsPreparedWorkloadPolicyRefresh(apOnly, 99),
+		"placement churn for an unrelated workload class must retain TPCC reuse")
+	require.True(t, c.NeedsPreparedWorkloadPolicyRefresh(tpOnly, 0))
 
 	c.workloadPolicySet = tpOnly.Clone()
-	require.False(t, c.NeedsPreparedWorkloadPolicyRefresh(tpOnly.Clone()))
+	c.workloadPlacementGen = 10
+	require.False(t, c.NeedsPreparedWorkloadPolicyRefresh(tpOnly.Clone(), 10))
+	require.True(t, c.NeedsPreparedWorkloadPolicyRefresh(tpOnly.Clone(), 12))
 	require.True(t, c.NeedsPreparedWorkloadPolicyRefresh(schedule.WorkloadPolicySet{
 		Rules: map[schedule.WorkloadClass]schedule.WorkloadPolicyRule{
 			schedule.WorkloadTP: {
@@ -709,11 +793,12 @@ func TestPreparedWorkloadPolicyRefreshIsClassScoped(t *testing.T) {
 				Labels:       map[string]string{"role": "tp"},
 			},
 		},
-	}))
-	require.True(t, c.NeedsPreparedWorkloadPolicyRefresh(schedule.WorkloadPolicySet{}))
+	}, 10))
+	require.True(t, c.NeedsPreparedWorkloadPolicyRefresh(schedule.WorkloadPolicySet{}, 10))
 	c.workloadPolicySet = schedule.WorkloadPolicySet{}
 	require.True(t, c.NeedsPreparedWorkloadPolicyRefresh(
 		schedule.WorkloadPolicySet{InvalidReason: "corrupt catalog value"},
+		10,
 	))
 }
 

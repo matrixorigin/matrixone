@@ -299,6 +299,7 @@ type Compile struct {
 	querySelectionKey     string
 	workloadPolicySet     schedule.WorkloadPolicySet
 	workloadClassHint     schedule.WorkloadClass
+	workloadPlacementGen  uint64
 	schedulingTrace       *schedule.TraceRecorder
 	schedulingAttempt     schedule.TraceAttemptID
 	// ast

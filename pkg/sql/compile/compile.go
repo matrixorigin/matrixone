@@ -311,6 +311,7 @@ func (c *Compile) clear() {
 	c.querySelectionKey = ""
 	c.workloadPolicySet = schedule.WorkloadPolicySet{}
 	c.workloadClassHint = ""
+	c.workloadPlacementGen = 0
 	c.schedulingTrace = nil
 	c.schedulingAttempt = 0
 	c.stmt = nil

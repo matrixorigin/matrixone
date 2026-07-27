@@ -491,7 +491,8 @@ func (c *Compile) evaluateQueryPlacement(
 		return schedule.QueryDecision{}, scheduleFailureCandidateProvider, err
 	}
 	if workloadPolicy.Applied &&
-		workloadPolicy.Routing == schedule.WorkloadRoutingLocal {
+		workloadPolicy.Routing == schedule.WorkloadRoutingLocal &&
+		intent.PoolFallback == schedule.PoolFallbackStrict {
 		if currentDiscoverer, ok := currentQueryCandidateDiscoverer(
 			c.e,
 			currentCN.ID,
@@ -555,11 +556,17 @@ func (c *Compile) SetWorkloadPolicy(
 	c.workloadClassHint = classHint
 }
 
+func (c *Compile) SetWorkloadPlacementGeneration(generation uint64) {
+	c.workloadPlacementGen = generation
+}
+
 // NeedsPreparedWorkloadPolicyRefresh reports whether reusing this prepared
 // Compile could bypass policy evaluation for its workload class. Policies for
-// unrelated classes do not invalidate a cached TP topology.
+// unrelated classes do not invalidate a cached TP topology. A matching rule
+// also binds the materialized topology to the CN placement generation.
 func (c *Compile) NeedsPreparedWorkloadPolicyRefresh(
 	current schedule.WorkloadPolicySet,
+	placementGeneration uint64,
 ) bool {
 	if c == nil {
 		return false
@@ -571,6 +578,10 @@ func (c *Compile) NeedsPreparedWorkloadPolicyRefresh(
 	previous, previouslyMatched := c.workloadPolicySet.Rules[class]
 	next, currentlyMatches := current.Rules[class]
 	if previouslyMatched != currentlyMatches {
+		return true
+	}
+	if previouslyMatched &&
+		c.workloadPlacementGen != placementGeneration {
 		return true
 	}
 	return previouslyMatched && !sameWorkloadPolicyRule(previous, next)

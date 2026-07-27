@@ -104,7 +104,8 @@ type accountWorkloadPolicy struct {
 	accountID           uint32
 	// generation advances when an RPC apply or local-CN state transition
 	// supersedes an in-flight catalog read. It is protected by mu.
-	generation uint64
+	generation        uint64
+	generationApplied bool
 	// requiredRefreshErr is protected by mu. A negative refreshAfter encodes
 	// the retry deadline for a required synchronous refresh.
 	requiredRefreshErr error
@@ -242,6 +243,13 @@ type WorkloadPolicyManager struct {
 	idleCapacity  int
 	refreshPeriod time.Duration
 	load          workloadPolicyLoader
+	// cacheAllowed is false while this CN is Draining/Drained. Existing
+	// sessions may still submit statements, so each one must reconcile from
+	// catalog instead of extending a stale local freshness window.
+	cacheAllowed atomic.Bool
+	// placementGeneration changes on both sides of every CN placement
+	// snapshot publication. Prepared compiles retain the observed value.
+	placementGeneration atomic.Uint64
 }
 
 func NewWorkloadPolicyManager() *WorkloadPolicyManager {
@@ -273,12 +281,14 @@ func newWorkloadPolicyManagerWithIdleCapacity(
 	if idleCapacity < 0 {
 		idleCapacity = 0
 	}
-	return &WorkloadPolicyManager{
+	manager := &WorkloadPolicyManager{
 		accounts:      make(map[uint32]*accountWorkloadPolicy),
 		idleCapacity:  idleCapacity,
 		refreshPeriod: refreshPeriod,
 		load:          load,
 	}
+	manager.cacheAllowed.Store(true)
+	return manager
 }
 
 var GWorkloadPolicyManager = NewWorkloadPolicyManager()
@@ -424,9 +434,8 @@ func (m *WorkloadPolicyManager) Apply(
 			state.failures = 0
 			state.requiredRefreshErr = nil
 			state.generation++
-			state.refreshAfter.Store(
-				time.Now().Add(m.refreshPeriod).UnixNano(),
-			)
+			state.generationApplied = true
+			state.refreshAfter.Store(m.nextRefreshAfter())
 			return false, current.revision, nil
 		case revision == current.revision:
 			return false, current.revision, moerr.NewInternalErrorNoCtxf(
@@ -444,7 +453,8 @@ func (m *WorkloadPolicyManager) Apply(
 	state.failures = 0
 	state.requiredRefreshErr = nil
 	state.generation++
-	state.refreshAfter.Store(time.Now().Add(m.refreshPeriod).UnixNano())
+	state.generationApplied = true
+	state.refreshAfter.Store(m.nextRefreshAfter())
 	return true, revision, nil
 }
 
@@ -470,10 +480,41 @@ func (m *WorkloadPolicyManager) InvalidateAll() {
 	for _, state := range m.accounts {
 		state.mu.Lock()
 		state.generation++
+		state.generationApplied = false
 		state.requiredRefreshErr = nil
 		state.refreshAfter.Store(-1)
 		state.mu.Unlock()
 	}
+}
+
+// SetLocalCNWorkState changes whether policy snapshots may retain a freshness
+// window on this CN. Draining/Drained CNs reconcile every statement because
+// ALTER deliberately excludes them from its synchronous RPC barrier.
+func (m *WorkloadPolicyManager) SetLocalCNWorkState(state metadata.WorkState) {
+	m.cacheAllowed.Store(
+		state == metadata.WorkState_Working ||
+			state == metadata.WorkState_Unknown,
+	)
+	m.InvalidateAll()
+}
+
+// AdvancePlacementGeneration brackets publication of CN metadata used by
+// scheduling. Calling it before and after publication makes the stable values
+// even and prevents prepared compiles from retaining a topology across a
+// work-state, label, membership, address, or capacity change.
+func (m *WorkloadPolicyManager) AdvancePlacementGeneration() {
+	m.placementGeneration.Add(1)
+}
+
+func (m *WorkloadPolicyManager) PlacementGeneration() uint64 {
+	return m.placementGeneration.Load()
+}
+
+func (m *WorkloadPolicyManager) nextRefreshAfter() int64 {
+	if !m.cacheAllowed.Load() {
+		return -1
+	}
+	return time.Now().Add(m.refreshPeriod).UnixNano()
 }
 
 // Refresh reconciles one account with the authoritative catalog. When a valid
@@ -652,7 +693,7 @@ func (m *WorkloadPolicyManager) refreshWithMode(
 			// Remove or bounded eviction retired this generation while the
 			// catalog read was running. Wake waiters without resurrecting it.
 		} else if generationChanged {
-			if current != nil && state.refreshAfter.Load() > 0 {
+			if current != nil && state.generationApplied {
 				// Apply supplied authoritative policy data after this read
 				// started, so its snapshot also satisfies initial-load waiters.
 				resultErr = nil
@@ -678,7 +719,7 @@ func (m *WorkloadPolicyManager) refreshWithMode(
 					set:      parsed,
 				})
 			}
-			state.refreshAfter.Store(time.Now().Add(m.refreshPeriod).UnixNano())
+			state.refreshAfter.Store(m.nextRefreshAfter())
 		} else {
 			if state.failures < ^uint8(0) {
 				state.failures++
@@ -1124,19 +1165,11 @@ func doAlterQueryWorkloadPolicy(
 			zap.Error(publishErr),
 		)
 	}
-	if convergenceErr := errors.Join(applyErr, publishErr); convergenceErr != nil {
-		// The catalog transaction is already durable. Do not report ALTER
-		// success until every currently routable CN has acknowledged this
-		// revision; otherwise an established cache can keep enforcing the
-		// previous policy until its periodic catalog refresh.
-		return moerr.NewInternalErrorf(
-			ctx,
-			"workload policy revision %d committed for account %d but cluster-wide enforcement was not confirmed: %v",
-			revision,
-			targetID,
-			convergenceErr,
-		)
-	}
+	// The catalog commit is the SQL mutation boundary. Returning an error after
+	// it is durable would tell retry/compensation callers that an already
+	// applied DDL failed. Publication remains a bounded convergence accelerator;
+	// the warnings above preserve the account, revision, and causal error while
+	// per-CN catalog refresh closes any missed acknowledgement.
 	return nil
 }
 
@@ -1249,7 +1282,7 @@ func ensureWorkloadPolicyRPCReady(
 
 	checkCtx, cancel := context.WithTimeout(ctx, workloadPolicyPublishTimeout)
 	defer cancel()
-	nodes, nodeIDs, err := workloadPolicyCNTargets(checkCtx, qc)
+	nodes, nodeIDs, err := workloadPolicyCNTargets(checkCtx, qc, false)
 	if err != nil {
 		return err
 	}
@@ -1297,14 +1330,13 @@ func ensureWorkloadPolicyRPCReady(
 	return errors.Join(requestErr, responseErr)
 }
 
-// workloadPolicyCNTargets returns CNs that can currently serve queries.
-// Draining/drained CNs are deliberately excluded from the synchronous ALTER
-// barrier: they cannot serve new work, and requiring their RPC acknowledgement
-// would make normal maintenance block policy changes. If they return to service,
-// their retained cache converges through the bounded catalog refresh path.
+// workloadPolicyCNTargets returns active CNs for pre-commit capability checks.
+// Post-commit publication may include maintenance CNs as a bounded best-effort
+// accelerator for existing sessions, but they never gate the SQL mutation.
 func workloadPolicyCNTargets(
 	ctx context.Context,
 	qc queryserviceclient.QueryClient,
+	includeMaintenance bool,
 ) ([]string, map[string]string, error) {
 	cluster, err := clusterservice.GetMOClusterWithContext(ctx, qc.ServiceID())
 	if err != nil {
@@ -1317,8 +1349,12 @@ func workloadPolicyCNTargets(
 		cluster,
 		clusterservice.NewSelectAll(),
 		func(service metadata.CNService) bool {
-			if service.WorkState != metadata.WorkState_Working &&
-				service.WorkState != metadata.WorkState_Unknown {
+			maintenance := service.WorkState != metadata.WorkState_Working &&
+				service.WorkState != metadata.WorkState_Unknown
+			if maintenance && !includeMaintenance {
+				return true
+			}
+			if service.QueryAddress == "" && maintenance {
 				return true
 			}
 			nodes = append(nodes, service.QueryAddress)
@@ -1329,9 +1365,13 @@ func workloadPolicyCNTargets(
 		return nil, nil, err
 	}
 	if len(nodes) == 0 {
+		target := "active"
+		if includeMaintenance {
+			target = "reachable"
+		}
 		return nil, nil, moerr.NewInternalError(
 			ctx,
-			"workload policy requires at least one active CN",
+			"workload policy requires at least one "+target+" CN",
 		)
 	}
 	for _, node := range nodes {
@@ -1493,7 +1533,7 @@ func publishWorkloadPolicy(
 	if qc == nil {
 		return moerr.NewInternalError(ctx, "query client is not initialized")
 	}
-	nodes, _, err := workloadPolicyCNTargets(ctx, qc)
+	nodes, _, err := workloadPolicyCNTargets(ctx, qc, true)
 	if err != nil {
 		return err
 	}
