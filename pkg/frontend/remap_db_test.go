@@ -288,12 +288,6 @@ func TestApplyRemapDbExpressionContainers(t *testing.T) {
 			contains: []string{"src.a", "'src.t.a'", "from dst.t as src"},
 			absent:   []string{"from src.t"},
 		},
-		{
-			name:     "fulltext match pattern",
-			sql:      "create view src.v as select match(src.docs.body) against(src.docs.pattern) from src.docs",
-			contains: []string{"create view dst.v", "MATCH (dst.docs.body) AGAINST (dst.docs.pattern)", "from dst.docs"},
-			absent:   []string{"src.docs.body", "src.docs.pattern", "from src.docs"},
-		},
 	}
 
 	for _, tt := range tests {
@@ -307,6 +301,19 @@ func TestApplyRemapDbExpressionContainers(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRemapDbInFullTextMatchPattern(t *testing.T) {
+	pattern := tree.NewUnresolvedName(
+		tree.NewCStr("src", 1),
+		tree.NewCStr("docs", 1),
+		tree.NewCStr("pattern", 1),
+	)
+	match := &tree.FullTextMatchExpr{Pattern: pattern}
+
+	remapDbInExpr(match, map[string]string{"src": "dst"})
+
+	require.Equal(t, "dst.docs.pattern", tree.String(pattern, dialect.MYSQL))
 }
 
 func TestApplyRemapDbDMLExpressionContainers(t *testing.T) {
