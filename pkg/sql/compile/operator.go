@@ -2554,7 +2554,7 @@ func mapCloneIndexAutoIncrementTables(
 		dstTableByName[strings.ToLower(tableDef.Name)] = tableDef
 	}
 
-	var result []cloneIndexAutoIncrementTable
+	result := make([]cloneIndexAutoIncrementTable, 0, len(srcDef.Indexes))
 	for _, srcIndex := range srcDef.Indexes {
 		if srcIndex == nil {
 			continue
