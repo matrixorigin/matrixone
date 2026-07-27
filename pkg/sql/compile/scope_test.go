@@ -2095,6 +2095,12 @@ func TestSuppressRemoteRunCancelError(t *testing.T) {
 		require.NoError(t, suppressRemoteRunCancelError(ctx, moerr.NewQueryInterrupted(ctx)))
 	})
 
+	t.Run("suppress raw context cancellation after proc cancel", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		require.NoError(t, suppressRemoteRunCancelError(ctx, fmt.Errorf("open remote stream: %w", context.Canceled)))
+	})
+
 	t.Run("keep rpc timeout after proc cancel", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
@@ -2108,6 +2114,12 @@ func TestSuppressRemoteRunCancelError(t *testing.T) {
 		err := suppressRemoteRunCancelError(ctx, moerr.NewQueryInterrupted(ctx))
 		require.Error(t, err)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted))
+	})
+
+	t.Run("keep raw context cancellation while proc still active", func(t *testing.T) {
+		ctx := context.Background()
+		err := suppressRemoteRunCancelError(ctx, context.Canceled)
+		require.ErrorIs(t, err, context.Canceled)
 	})
 }
 
