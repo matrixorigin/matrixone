@@ -727,6 +727,18 @@ func TestPipelineEdgeTimeoutFatalSendDoneClosesAfterTimeout(t *testing.T) {
 	}
 }
 
+func TestPipelineEdgeTerminalSignalSnapshotDefaultsToEnd(t *testing.T) {
+	var nilEdge *PipelineEdge
+	if signal := nilEdge.terminalSignalSnapshot(); signal.EventType != EventEnd {
+		t.Fatalf("nil edge snapshot returned %s, want End", signal.EventType)
+	}
+
+	edge := NewPipelineEdge(1, 1)
+	if signal := edge.terminalSignalSnapshot(); signal.EventType != EventEnd {
+		t.Fatalf("non-terminal edge snapshot returned %s, want End", signal.EventType)
+	}
+}
+
 func TestPipelineEdgeTerminalRetryAfterFullChannelUsesFirstTerminal(t *testing.T) {
 	edge := NewPipelineEdge(1, 0)
 	edge.Ch2 <- NewPipelineSignalToDirectly(nil, nil, nil)
