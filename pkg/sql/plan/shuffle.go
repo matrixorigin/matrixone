@@ -479,6 +479,15 @@ func determineShuffleType(col *plan.ColRef, node *plan.Node, builder *QueryBuild
 
 // to determine if join need to go shuffle
 func determineShuffleForJoin(node *plan.Node, builder *QueryBuilder) {
+	determineShuffleForJoinWithColRefMode(node, builder, false)
+}
+
+// determineShuffleForJoinWithColRefMode plans join shuffle either before or
+// after column remapping. Normal optimizer plans use binding tags to identify
+// the two join sides. Late DML/index-maintenance plans are appended after
+// createQuery has remapped column references to local RelPos 0/1, so they must
+// use the positional form instead.
+func determineShuffleForJoinWithColRefMode(node *plan.Node, builder *QueryBuilder, afterRemap bool) {
 	// do not shuffle by default
 	node.Stats.HashmapStats.ShuffleColIdx = -1
 	if node.NodeType != plan.Node_JOIN {
@@ -525,7 +534,13 @@ func determineShuffleForJoin(node *plan.Node, builder *QueryBuilder) {
 	}
 
 	idx := 0
-	if !builder.IsEquiJoin(node) {
+	isEquiJoin := false
+	if afterRemap {
+		isEquiJoin = IsEquiJoin2(node.OnList)
+	} else {
+		isEquiJoin = builder.IsEquiJoin(node)
+	}
+	if !isEquiJoin {
 		return
 	}
 	leftTags := make(map[int32]bool)
@@ -538,12 +553,15 @@ func determineShuffleForJoin(node *plan.Node, builder *QueryBuilder) {
 	}
 	// for now ,only support the first join condition
 	for i := range node.OnList {
-		if isEquiCond(node.OnList[i], leftTags, rightTags) {
+		isEqui := isEquiCond(node.OnList[i], leftTags, rightTags)
+		if afterRemap {
+			isEqui = isEquiCond2(node.OnList[i])
+		}
+		if isEqui {
 			idx = i
 			break
 		}
 	}
-
 	if node.IsRightJoin {
 		if node.Stats.HashmapStats.HashmapSize < threshHoldForRightJoinShuffle {
 			return
@@ -593,7 +611,6 @@ func determineShuffleForJoin(node *plan.Node, builder *QueryBuilder) {
 				node.OnList[idx].Ndv = node.Stats.HashmapStats.HashmapSize
 			}
 		}
-	default:
 	}
 
 	//recheck shuffle plan
@@ -607,7 +624,11 @@ func determineShuffleForJoin(node *plan.Node, builder *QueryBuilder) {
 		}
 		if node.Stats.HashmapStats.ShuffleMethod != plan.ShuffleMethod_Reuse {
 			highestNDV := node.OnList[idx].Ndv
-			if highestNDV < ShuffleThreshHoldOfNDV {
+			// A negative NDV means that statistics are unavailable.  Do not treat
+			// unknown cardinality as low cardinality: for a large build side that
+			// would turn a valid shuffle plan back into a broadcast hash build and
+			// can concentrate the entire hash table on one CN.
+			if highestNDV >= 0 && highestNDV < ShuffleThreshHoldOfNDV {
 				node.Stats.HashmapStats.Shuffle = false
 			}
 		}
@@ -770,13 +791,21 @@ func determineShuffleForScan(node *plan.Node, builder *QueryBuilder) {
 }
 
 func determineShuffleMethod(nodeID int32, builder *QueryBuilder) {
+	determineShuffleMethodWithColRefMode(nodeID, builder, false)
+}
+
+func determineShuffleMethodAfterRemap(nodeID int32, builder *QueryBuilder) {
+	determineShuffleMethodWithColRefMode(nodeID, builder, true)
+}
+
+func determineShuffleMethodWithColRefMode(nodeID int32, builder *QueryBuilder, afterRemap bool) {
 	if builder.optimizerHints != nil && builder.optimizerHints.determineShuffle == 1 {
 		return
 	}
 	node := builder.qry.Nodes[nodeID]
 	if len(node.Children) > 0 {
 		for _, child := range node.Children {
-			determineShuffleMethod(child, builder)
+			determineShuffleMethodWithColRefMode(child, builder, afterRemap)
 		}
 	}
 	switch node.NodeType {
@@ -785,7 +814,7 @@ func determineShuffleMethod(nodeID int32, builder *QueryBuilder) {
 	case plan.Node_TABLE_SCAN:
 		determineShuffleForScan(node, builder)
 	case plan.Node_JOIN:
-		determineShuffleForJoin(node, builder)
+		determineShuffleForJoinWithColRefMode(node, builder, afterRemap)
 	default:
 	}
 }
