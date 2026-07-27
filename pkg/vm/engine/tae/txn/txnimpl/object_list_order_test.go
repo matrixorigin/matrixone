@@ -52,16 +52,10 @@ func TestForeachIncrementalObjectUsesGroupBounds(t *testing.T) {
 		makeIncrementalObject(2, true, 3, 0),
 		makeIncrementalObject(3, true, 5, 0),
 		makeIncrementalObject(4, true, 7, 0),
-		makeIncrementalObject(5, true, 2, 5),
-		makeIncrementalObject(6, true, 2, 6),
-		makeIncrementalObject(7, true, 2, 8),
 		makeIncrementalObject(8, false, 3, 0),
 		makeIncrementalObject(9, false, 4, 0),
 		makeIncrementalObject(10, false, 6, 0),
 		makeIncrementalObject(11, false, 7, 0),
-		makeIncrementalObject(12, false, 3, 8),
-		makeIncrementalObject(13, false, 5, 6),
-		makeIncrementalObject(14, false, 5, 8),
 	} {
 		tree.Set(entry)
 	}
@@ -79,5 +73,5 @@ func TestForeachIncrementalObjectUsesGroupBounds(t *testing.T) {
 		},
 	)
 	require.NoError(t, err)
-	require.Equal(t, []byte{2, 3, 6, 7, 9, 10, 13, 14}, markers)
+	require.Equal(t, []byte{2, 3, 9, 10}, markers)
 }

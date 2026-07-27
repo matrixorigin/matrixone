@@ -475,7 +475,7 @@ func (entry *ObjectEntry) ObjectListGroup() ObjectListGroup {
 	if !entry.IsAppendable() {
 		group = ObjectListGroupNonAppendableCreate
 	}
-	if !entry.DeletedAt.IsEmpty() {
+	if entry.IsDEntry() {
 		return group + 2
 	}
 	if entry.HasDCounterpart() {
@@ -485,7 +485,7 @@ func (entry *ObjectEntry) ObjectListGroup() ObjectListGroup {
 }
 
 func (entry *ObjectEntry) ObjectListCommitTS() types.TS {
-	if !entry.DeletedAt.IsEmpty() {
+	if entry.IsDEntry() {
 		return entry.DeletedAt
 	}
 	return entry.CreatedAt

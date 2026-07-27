@@ -100,6 +100,8 @@ func TestObjectList(t *testing.T) {
 	entry2 := entry1.Clone()
 	entry2.DeletedAt = types.BuildTS(2, 0)
 	entry2.ObjectState = ObjectState_Delete_ApplyCommit
+	entry1.nextVersion = entry2
+	entry2.prevVersion = entry1
 	ll.Set(entry1)
 	ll.Set(entry2)
 
@@ -161,11 +163,19 @@ func TestGetSoftdeleteObjects(t *testing.T) {
 	// Add some objects
 	obj1 := MockObjEntryWithTbl(tbl, 10, false)
 	obj1.DeletedAt = types.BuildTS(2, 0)
-	tbl.dataObjects.Set(obj1)
+	obj1Create := obj1.Clone()
+	obj1Create.DeletedAt = types.TS{}
+	obj1Create.nextVersion = obj1
+	obj1.prevVersion = obj1Create
+	tbl.dataObjects.modify(nil, obj1, obj1Create)
 
 	obj2 := MockObjEntryWithTbl(tbl, 20, false)
 	obj2.DeletedAt = types.BuildTS(3, 0)
-	tbl.dataObjects.Set(obj2)
+	obj2Create := obj2.Clone()
+	obj2Create.DeletedAt = types.TS{}
+	obj2Create.nextVersion = obj2
+	obj2.prevVersion = obj2Create
+	tbl.dataObjects.modify(nil, obj2, obj2Create)
 
 	// Test getting objects between ts1 and ts2
 	objs = tbl.GetSoftdeleteObjects(types.BuildTS(1, 0), types.BuildTS(2, 0))
@@ -202,14 +212,17 @@ func TestGetSoftdeleteObjects2(t *testing.T) {
 	addSoftDeleteObject := func(create, delete int64) *ObjectEntry {
 		createEntry := addActiveObject(create)
 		dropEntry := createEntry.Clone()
+		updatedCreate := createEntry.Clone()
 		dropEntry.DeletedAt = types.BuildTS(delete, 0)
 		dropEntry.ObjectState = ObjectState_Delete_ApplyCommit
-		dropEntry.CreateNode = txnbase.TxnMVCCNode{
+		dropEntry.DeleteNode = txnbase.TxnMVCCNode{
 			Start:   types.BuildTS(delete-1, 0),
 			Prepare: types.BuildTS(delete, 0),
 			End:     types.BuildTS(delete, 0),
 		}
-		tbl.dataObjects.modify(nil, dropEntry, nil)
+		updatedCreate.nextVersion = dropEntry
+		dropEntry.prevVersion = updatedCreate
+		tbl.dataObjects.modify(nil, dropEntry, updatedCreate)
 		return dropEntry
 	}
 

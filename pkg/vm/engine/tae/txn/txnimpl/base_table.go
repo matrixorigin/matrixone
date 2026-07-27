@@ -222,10 +222,6 @@ func foreachIncrementalObject(
 		}
 		return fn(obj)
 	}
-
-	// Rows may be appended after an appendable object's catalog create time.
-	// Keep the newest create-only object before `from`, then scan the bounded
-	// part of the group.
 	if catalog.SeekObjectListGroupBefore(it, catalog.ObjectListGroupAppendableCreate, from) {
 		if err := visit(it.Item(), true); err != nil {
 			return err
@@ -240,10 +236,6 @@ func foreachIncrementalObject(
 			return err
 		}
 	}
-
-	// A D entry is the visible version while its delete timestamp is at or
-	// after `to`. The group is ordered by DeletedAt, so older D entries can be
-	// skipped directly.
 	visitDropGroup := func(group catalog.ObjectListGroup) error {
 		appendable := group == catalog.ObjectListGroupAppendableDrop
 		for ok := catalog.SeekObjectListGroup(it, group, to); ok; ok = it.Next() {

@@ -109,7 +109,42 @@ func TestObjectListGroupSeek(t *testing.T) {
 	require.True(t, SeekObjectListGroupReverse(&it, ObjectListGroupAppendableCreate, types.BuildTS(4, 0)))
 	require.Equal(t, types.BuildTS(3, 0), it.Item().CreatedAt)
 
+	require.True(t, SeekObjectListGroup(&it, ObjectListGroupAppendableDrop, types.TS{}))
+	require.Equal(t, types.BuildTS(2, 0), it.Item().DeletedAt)
+
 	require.False(t, SeekObjectListGroup(&it, ObjectListGroupNonAppendableDrop, types.TS{}))
+}
+
+func TestObjectListGroupUsesVersionLink(t *testing.T) {
+	entry := makeObjectListOrderTestEntry(1, ObjectListGroupAppendableCreate, 1)
+	entry.DeletedAt = types.BuildTS(2, 0)
+
+	require.Equal(t, ObjectListGroupAppendableCreate, entry.ObjectListGroup())
+	require.Equal(t, entry.CreatedAt, entry.ObjectListCommitTS())
+
+	entry.prevVersion = &ObjectEntry{}
+	require.Equal(t, ObjectListGroupAppendableDrop, entry.ObjectListGroup())
+	require.Equal(t, entry.DeletedAt, entry.ObjectListCommitTS())
+}
+
+func TestVisibleObjectIteratorMergesGroupsByCreateTS(t *testing.T) {
+	list := NewObjectList(false)
+	for _, entry := range []*ObjectEntry{
+		makeObjectListOrderTestEntry(1, ObjectListGroupAppendableCreate, 4),
+		makeObjectListOrderTestEntry(2, ObjectListGroupNonAppendableCreate, 2),
+		makeObjectListOrderTestEntry(3, ObjectListGroupAppendableCreate, 1),
+		makeObjectListOrderTestEntry(4, ObjectListGroupNonAppendableCreate, 3),
+	} {
+		list.Set(entry)
+	}
+
+	it := list.MakeVisibleCommittedObjectIt(txnbase.MockTxnReaderWithNow())
+	defer it.Release()
+	var markers []byte
+	for it.Next() {
+		markers = append(markers, it.Item().ID()[0])
+	}
+	require.Equal(t, []byte{1, 4, 2, 3}, markers)
 }
 
 func TestObjectListMovesCreateEntryWhenDropStarts(t *testing.T) {
@@ -173,7 +208,7 @@ func TestObjectListReplayTimestampReordersEntry(t *testing.T) {
 	require.True(t, it.Next())
 	require.Same(t, committed, it.Item())
 	require.Same(t, updated, list.GetLastestNode(replayed.ID()))
-	require.Equal(t, txnif.UncommitTS, replayed.CreatedAt)
+	require.Equal(t, types.BuildTS(5, 0), replayed.CreatedAt)
 }
 
 func TestObjectListReplayTimestampReordersDropEntry(t *testing.T) {
@@ -190,7 +225,7 @@ func TestObjectListReplayTimestampReordersDropEntry(t *testing.T) {
 	list.modify(nil, dropped, updatedCreate)
 
 	updatedDrop := list.UpdateReplayTs(dropped, types.BuildTS(3, 0))
-	require.Equal(t, txnif.UncommitTS, dropped.DeletedAt)
+	require.Equal(t, types.BuildTS(3, 0), dropped.DeletedAt)
 	require.Equal(t, types.BuildTS(3, 0), updatedDrop.DeletedAt)
 	require.Same(t, updatedDrop, updatedDrop.prevVersion.nextVersion)
 

@@ -15,6 +15,7 @@
 package catalog
 
 import (
+	"bytes"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -169,13 +170,18 @@ func (l *ObjectList) GetObjectByID(objectID *objectio.ObjectId) (obj *ObjectEntr
 func (l *ObjectList) UpdateReplayTs(entry *ObjectEntry, ts types.TS) *ObjectEntry {
 	l.Lock()
 	defer l.Unlock()
+	oldIndex, ok := l.objectID_index[*entry.ID()]
+	if !ok {
+		panic("replay object index not found")
+	}
 	oldTree := l.tree.Load()
 	newTree := oldTree.Copy()
-	if _, deleted := newTree.Delete(entry); !deleted {
+	oldKey := makeObjectListKey(oldIndex.group, oldIndex.ts, entry.ID())
+	if _, deleted := newTree.Delete(oldKey); !deleted {
 		panic("replay object not found")
 	}
 
-	updated := entry.Clone()
+	updated := entry
 	if err := updated.EntryMVCCNode.ApplyCommit(ts); err != nil {
 		panic(err)
 	}
@@ -183,12 +189,12 @@ func (l *ObjectList) UpdateReplayTs(entry *ObjectEntry, ts types.TS) *ObjectEntr
 		if _, deleted := newTree.Delete(entry.prevVersion); !deleted {
 			panic("replay object create entry not found")
 		}
-		updatedCreate := entry.prevVersion.Clone()
-		updatedCreate.nextVersion = updated
-		updated.prevVersion = updatedCreate
-		newTree.Set(updatedCreate)
+		newTree.Set(entry.prevVersion)
 	}
 	newTree.Set(updated)
+	if updated.objData != nil {
+		updated.objData.UpdateMeta(updated)
+	}
 	l.objectID_index[*entry.ID()] = objectListIndex{
 		ts:    updated.ObjectListCommitTS(),
 		group: updated.ObjectListGroup(),
@@ -417,11 +423,19 @@ var _iterPool = sync.Pool{New: func() any {
 }}
 
 type VisibleCommittedObjectIt struct {
-	iter        btree.IterG[*ObjectEntry]
+	iters       [4]btree.IterG[*ObjectEntry]
+	items       [4]*ObjectEntry
 	curr        *ObjectEntry
 	txn         txnif.TxnReader
 	isMockTxn   bool
-	firstCalled bool
+	initialized bool
+}
+
+var visibleObjectGroups = [...]ObjectListGroup{
+	ObjectListGroupAppendableCreate,
+	ObjectListGroupAppendableCreateWithDrop,
+	ObjectListGroupNonAppendableCreate,
+	ObjectListGroupNonAppendableCreateWithDrop,
 }
 
 // MakeVisibleCommittedObjectIt returns an iterator that iterates over committed objects visible to the given txn
@@ -432,48 +446,73 @@ type VisibleCommittedObjectIt struct {
 func (l *ObjectList) MakeVisibleCommittedObjectIt(txn txnif.TxnReader) *VisibleCommittedObjectIt {
 	it := _iterPool.Get().(*VisibleCommittedObjectIt)
 	tree := l.tree.Load()
-	it.iter = tree.Iter()
+	for i := range it.iters {
+		it.iters[i] = tree.Iter()
+	}
 	it.txn = txn
 	it.isMockTxn = len(txn.GetCtx()) == 0
 	return it
 }
 
-func (it *VisibleCommittedObjectIt) Next() bool {
+func (it *VisibleCommittedObjectIt) advance(groupIndex int, first bool) {
+	group := visibleObjectGroups[groupIndex]
+	iter := &it.iters[groupIndex]
 	var ok bool
+	if first {
+		ok = SeekObjectListGroupReverse(iter, group, txnif.UncommitTS)
+	} else {
+		ok = iter.Prev()
+	}
 	for {
-		if !it.firstCalled {
-			ok = it.iter.Last()
-			it.firstCalled = true
-		} else {
-			ok = it.iter.Prev()
-		}
 		if !ok {
-			return false
+			it.items[groupIndex] = nil
+			return
 		}
-		entry := it.iter.Item()
-
+		entry := iter.Item()
+		if entry.ObjectListGroup() != group {
+			it.items[groupIndex] = nil
+			return
+		}
 		if it.isMockTxn {
-			// mockTxn can see all objects
-			if entry.IsDEntry() || entry.IsCreating() { // exclude D entries & creating C entries
-				continue
+			if !entry.IsCreating() && !entry.HasDCounterpart() {
+				it.items[groupIndex] = entry
+				return
 			}
-			if !entry.HasDCounterpart() { // pick only serving committed C entries
-				it.curr = entry
-				return true
-			}
-			// ignore being dropped C entries
 		} else if entry.IsVisible(it.txn) {
-			if entry.IsDEntry() { // exclude D entries
-				continue
-			}
 			if !entry.HasDCounterpart() || !entry.GetNextVersion().IsVisible(it.txn) {
-				// 1. serving committed C entries or creating C entry created by this txn
-				// 2. C entried being dropped by other invisible txn
-				it.curr = entry
-				return true
+				it.items[groupIndex] = entry
+				return
 			}
+		}
+		ok = iter.Prev()
+	}
+}
+
+func (it *VisibleCommittedObjectIt) Next() bool {
+	if !it.initialized {
+		for i := range it.iters {
+			it.advance(i, true)
+		}
+		it.initialized = true
+	}
+	selected := -1
+	for i, item := range it.items {
+		if item == nil {
+			continue
+		}
+		if selected == -1 ||
+			it.items[selected].CreatedAt.LT(&item.CreatedAt) ||
+			(it.items[selected].CreatedAt.EQ(&item.CreatedAt) &&
+				bytes.Compare(it.items[selected].ObjectShortName()[:], item.ObjectShortName()[:]) < 0) {
+			selected = i
 		}
 	}
+	if selected == -1 {
+		return false
+	}
+	it.curr = it.items[selected]
+	it.advance(selected, false)
+	return true
 }
 
 func (it *VisibleCommittedObjectIt) Item() *ObjectEntry {
@@ -485,10 +524,13 @@ func (it *VisibleCommittedObjectIt) Release() {
 		logutil.Errorf("attempt to put iter %p into pool twice", it)
 		return
 	}
-	it.iter.Release()
+	for i := range it.iters {
+		it.iters[i].Release()
+		it.items[i] = nil
+	}
 	it.curr = nil
 	it.txn = nil
-	it.firstCalled = false
+	it.initialized = false
 	it.isMockTxn = false
 	_iterPool.Put(it)
 }

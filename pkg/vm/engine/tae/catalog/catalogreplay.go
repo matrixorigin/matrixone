@@ -230,7 +230,7 @@ func (catalog *Catalog) onReplayUpdateObject(
 		obj.CreateNode = cmd.mvccNode.TxnMVCCNode
 		cmd.mvccNode.CommitSideEffect = func(id string, ts types.TS) {
 			obj.CreateNode.ApplyCommit(id)
-			obj = rel.UpdateReplayEntryTs(obj, ts)
+			rel.UpdateReplayEntryTs(obj, ts)
 		}
 		obj.ObjectMVCCNode = *cmd.mvccNode.BaseNode
 		obj.ObjectState = ObjectState_Create_PrepareCommit
@@ -271,7 +271,7 @@ func (catalog *Catalog) onReplayUpdateObject(
 		obj.ObjectMVCCNode = *cmd.mvccNode.BaseNode
 		cmd.mvccNode.CommitSideEffect = func(id string, ts types.TS) {
 			obj.DeleteNode.ApplyCommit(id)
-			obj = rel.UpdateReplayEntryTs(obj, ts)
+			rel.UpdateReplayEntryTs(obj, ts)
 		}
 		obj.ObjectState = ObjectState_Delete_PrepareCommit
 		rel.AddEntryLocked(obj)
@@ -640,6 +640,7 @@ func (catalog *Catalog) OnReplayObjectBatch_V2(
 			updatedCreate.nextVersion = dropped
 			dropped.ObjectState = ObjectState_Delete_ApplyCommit
 			rel.AddEntryLocked(dropped)
+			obj = updatedCreate
 		}
 	} else {
 		if obj.DeletedAt.IsEmpty() && !delete.IsEmpty() {
@@ -655,11 +656,13 @@ func (catalog *Catalog) OnReplayObjectBatch_V2(
 			updatedCreate.nextVersion = dropped
 			dropped.ObjectState = ObjectState_Delete_ApplyCommit
 			rel.AddEntryLocked(dropped)
+			obj = updatedCreate
 		}
 	}
 	if obj.objData == nil {
 		obj.objData = catalog.MakeObjectFactory()(obj)
 	} else {
+		obj.objData.UpdateMeta(obj)
 		deleteAt := obj.GetDeleteAt()
 		if !obj.IsAppendable() || (obj.IsAppendable() && !deleteAt.IsEmpty()) {
 			obj.objData.TryUpgrade()
@@ -784,6 +787,7 @@ func (catalog *Catalog) onReplayCheckpointObject(
 		}
 		deleteNode.ObjectState = ObjectState_Delete_ApplyCommit
 		rel.AddEntryLocked(deleteNode)
+		obj = updatedCreate
 	}
 	if !createTS.Equal(&end) && !deleteTS.Equal(&end) {
 		// In back up, aobj is replaced with naobj and its DeleteAt is removed.
@@ -825,6 +829,7 @@ func (catalog *Catalog) onReplayCheckpointObject(
 	if obj.objData == nil {
 		obj.objData = catalog.MakeObjectFactory()(obj)
 	} else {
+		obj.objData.UpdateMeta(obj)
 		deleteAt := obj.GetDeleteAt()
 		if !obj.IsAppendable() || (obj.IsAppendable() && !deleteAt.IsEmpty()) {
 			obj.objData.TryUpgrade()
