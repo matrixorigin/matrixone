@@ -1,51 +1,63 @@
 SELECT MINUTE('15:30:45') AS result1;
-invalid argument parse timestamp, bad value 15:30:45
+➤ result1[-6,8,0]  𝄀
+30
 SELECT MINUTE('15:30:45') AS time_with_minutes;
-invalid argument parse timestamp, bad value 15:30:45
+➤ time_with_minutes[-6,8,0]  𝄀
+30
 SELECT MINUTE('00:00:00') AS zero_minutes;
-invalid argument parse timestamp, bad value 00:00:00
+➤ zero_minutes[-6,8,0]  𝄀
+0
 SELECT MINUTE('23:59:59') AS max_minutes;
-invalid argument parse timestamp, bad value 23:59:59
+➤ max_minutes[-6,8,0]  𝄀
+59
 SELECT MINUTE('12:34:56') AS various_minutes;
-invalid argument parse timestamp, bad value 12:34:56
+➤ various_minutes[-6,8,0]  𝄀
+34
 SELECT MINUTE('2024-12-20 15:30:45') AS datetime_with_minutes;
-datetime_with_minutes
+➤ datetime_with_minutes[-6,8,0]  𝄀
 30
 SELECT MINUTE('2024-12-20 00:00:00') AS datetime_zero;
-datetime_zero
+➤ datetime_zero[-6,8,0]  𝄀
 0
 SELECT MINUTE('2024-12-20 23:59:59') AS datetime_max;
-datetime_max
+➤ datetime_max[-6,8,0]  𝄀
 59
 SELECT MINUTE(TIMESTAMP('2024-12-20 15:30:45')) AS timestamp_with_minutes;
-timestamp_with_minutes
+➤ timestamp_with_minutes[-6,8,0]  𝄀
 30
 SELECT MINUTE(NULL) AS null_input;
-null_input
+➤ null_input[-6,8,0]  𝄀
 null
 CREATE TABLE t1(t TIME);
 INSERT INTO t1 VALUES ('15:30:45'), ('00:00:00'), ('23:59:59'), ('12:34:56');
 SELECT t, MINUTE(t) AS minute FROM t1;
-t    minute
-15:30:45    30
-00:00:00    0
-23:59:59    59
-12:34:56    34
+➤ t[92,64,0]  ¦  minute[-6,8,0]  𝄀
+15:30:45  ¦  30  𝄀
+00:00:00  ¦  0  𝄀
+23:59:59  ¦  59  𝄀
+12:34:56  ¦  34
 DROP TABLE t1;
 CREATE TABLE t1(dt DATETIME);
 INSERT INTO t1 VALUES ('2024-12-20 15:30:45'), ('2024-12-20 00:00:00'), ('2024-12-20 23:59:59');
 SELECT dt, MINUTE(dt) AS minute FROM t1;
-dt    minute
-2024-12-20 15:30:45    30
-2024-12-20 00:00:00    0
-2024-12-20 23:59:59    59
+➤ dt[93,64,0]  ¦  minute[-6,8,0]  𝄀
+2024-12-20 15:30:45  ¦  30  𝄀
+2024-12-20 00:00:00  ¦  0  𝄀
+2024-12-20 23:59:59  ¦  59
 DROP TABLE t1;
 CREATE TABLE t1(t TIME);
 INSERT INTO t1 VALUES ('15:30:45'), ('00:00:00'), ('23:59:59'), ('12:34:56');
 SELECT * FROM t1 WHERE MINUTE(t) > 30;
-t
-23:59:59
+➤ t[92,64,0]  𝄀
+23:59:59  𝄀
 12:34:56
 DROP TABLE t1;
 SELECT MINUTE('15:30:45') AS result1, MINUTE('15:00:45') AS result2, MINUTE('15:59:45') AS result3;
-invalid argument parse timestamp, bad value 15:30:45
+➤ result1[-6,8,0]  ¦  result2[-6,8,0]  ¦  result3[-6,8,0]  𝄀
+30  ¦  0  ¦  59
+SELECT MINUTE(CAST('12:30:00' AS VARCHAR)) AS varchar_minute,
+MINUTE(CAST('272:59:59' AS VARCHAR)) AS varchar_extended_minute,
+MINUTE(CAST('2024-12-20 15:30:45' AS VARCHAR)) AS varchar_datetime_minute,
+MINUTE(CAST(NULL AS VARCHAR)) AS varchar_null_minute;
+➤ varchar_minute[-6,8,0]  ¦  varchar_extended_minute[-6,8,0]  ¦  varchar_datetime_minute[-6,8,0]  ¦  varchar_null_minute[-6,8,0]  𝄀
+30  ¦  59  ¦  30  ¦  null

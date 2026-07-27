@@ -40,3 +40,8 @@ DROP TABLE t1;
 # Range check (should return 0-59)
 SELECT SECOND('15:30:45') AS result1, SECOND('15:30:00') AS result2, SECOND('15:30:59') AS result3;
 
+-- VARCHAR time-string input
+SELECT SECOND(CAST('12:30:45' AS VARCHAR)) AS varchar_second,
+       SECOND(CAST('272:59:59' AS VARCHAR)) AS varchar_extended_second,
+       SECOND(CAST('2024-12-20 15:30:45' AS VARCHAR)) AS varchar_datetime_second,
+       SECOND(CAST(NULL AS VARCHAR)) AS varchar_null_second;

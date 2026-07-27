@@ -4635,6 +4635,70 @@ func TimeToSecond(ivecs []*vector.Vector, result vector.FunctionResultWrapper, p
 	}, selectList)
 }
 
+func timeStringToFixedWithNullOnError[T types.FixedSizeTExceptStrType](
+	ivecs []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	length int,
+	selectList *FunctionSelectList,
+	fn func(types.Time) T,
+) error {
+	strParam := vector.GenerateFunctionStrParameter(ivecs[0])
+	rs := vector.MustFunctionResult[T](result)
+	var zero T
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && (selectList.IgnoreAllRow() ||
+			(!selectList.ShouldEvalAllRow() && selectList.Contains(i))) {
+			if err := rs.Append(zero, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		strVal, null := strParam.GetStrValue(i)
+		if null || len(strVal) == 0 {
+			if err := rs.Append(zero, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		timeVal, err := types.ParseTime(functionUtil.QuickBytesToStr(strVal), 6)
+		if err != nil {
+			if err := rs.Append(zero, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		if err := rs.Append(fn(timeVal), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func StringToHour(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	return timeStringToFixedWithNullOnError(ivecs, result, length, selectList, func(v types.Time) uint32 {
+		hour, _, _, _, _ := v.ClockFormat()
+		return uint32(hour)
+	})
+}
+
+func StringToMinute(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	return timeStringToFixedWithNullOnError(ivecs, result, length, selectList, func(v types.Time) uint8 {
+		_, minute, _, _, _ := v.ClockFormat()
+		return uint8(minute)
+	})
+}
+
+func StringToSecond(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	return timeStringToFixedWithNullOnError(ivecs, result, length, selectList, func(v types.Time) uint8 {
+		_, _, second, _, _ := v.ClockFormat()
+		return uint8(second)
+	})
+}
+
 // TimeToSec returns the time argument, converted to seconds (total seconds)
 func TimeToSec(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opUnaryFixedToFixed[types.Time, int64](ivecs, result, proc, length, func(v types.Time) int64 {

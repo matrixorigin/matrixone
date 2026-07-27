@@ -1,49 +1,50 @@
 SELECT HOUR('15:30:45') AS result1;
-invalid argument parse timestamp, bad value 15:30:45
+➤ result1[4,32,0]  𝄀
+15
 SELECT HOUR('2024-12-20 15:30:45') AS result2;
-result2
+➤ result2[4,32,0]  𝄀
 15
 SELECT HOUR(NOW()) AS result3;
-result3
-22
+➤ result3[-6,8,0]  𝄀
+19
 SELECT HOUR(CAST('15:30:45' AS TIME)) AS time_cast;
-time_cast
+➤ time_cast[4,32,0]  𝄀
 15
 SELECT HOUR(CAST('00:00:00' AS TIME)) AS midnight;
-midnight
+➤ midnight[4,32,0]  𝄀
 0
 SELECT HOUR(CAST('23:59:59' AS TIME)) AS end_of_day;
-end_of_day
+➤ end_of_day[4,32,0]  𝄀
 23
 SELECT HOUR(CAST('272:59:59' AS TIME)) AS extended_positive;
-extended_positive
+➤ extended_positive[4,32,0]  𝄀
 272
 SELECT HOUR(CAST('-272:59:59' AS TIME)) AS extended_negative;
-extended_negative
+➤ extended_negative[4,32,0]  𝄀
 272
 SELECT HOUR(CAST('2024-12-20 10:20:30' AS DATETIME)) AS datetime_hour;
-datetime_hour
+➤ datetime_hour[-6,8,0]  𝄀
 10
 SELECT HOUR(CAST('2024-12-20 00:00:00' AS DATETIME)) AS datetime_midnight;
-datetime_midnight
+➤ datetime_midnight[-6,8,0]  𝄀
 0
 SELECT HOUR(CAST('2024-12-20 23:59:59' AS DATETIME)) AS datetime_end;
-datetime_end
+➤ datetime_end[-6,8,0]  𝄀
 23
 SELECT HOUR(CAST('2024-12-20 12:30:45' AS TIMESTAMP)) AS timestamp_hour;
-timestamp_hour
+➤ timestamp_hour[-6,8,0]  𝄀
 12
 SELECT HOUR(CAST('00:00:00' AS TIME)) AS zero_hour;
-zero_hour
+➤ zero_hour[4,32,0]  𝄀
 0
 SELECT HOUR(CAST('12:00:00' AS TIME)) AS noon;
-noon
+➤ noon[4,32,0]  𝄀
 12
 SELECT HOUR(CAST('13:00:00' AS TIME)) AS one_pm;
-one_pm
+➤ one_pm[4,32,0]  𝄀
 13
 SELECT HOUR(NULL) AS null_result;
-null_result
+➤ null_result[-6,8,0]  𝄀
 null
 CREATE TABLE t1(t TIME, dt DATETIME, ts TIMESTAMP);
 INSERT INTO t1 VALUES
@@ -51,18 +52,24 @@ INSERT INTO t1 VALUES
 ('00:00:00', '2024-12-20 00:00:00', '2024-12-20 00:00:00'),
 ('23:59:59', '2024-12-20 23:59:59', '2024-12-20 23:59:59');
 SELECT t, HOUR(t) AS hour_from_time, dt, HOUR(dt) AS hour_from_datetime, ts, HOUR(ts) AS hour_from_timestamp FROM t1;
-t    hour_from_time    dt    hour_from_datetime    ts    hour_from_timestamp
-15:30:45    15    2024-12-20 15:30:45    15    2024-12-20 15:30:45    15
-00:00:00    0    2024-12-20 00:00:00    0    2024-12-20 00:00:00    0
-23:59:59    23    2024-12-20 23:59:59    23    2024-12-20 23:59:59    23
+➤ t[92,64,0]  ¦  hour_from_time[4,32,0]  ¦  dt[93,64,0]  ¦  hour_from_datetime[-6,8,0]  ¦  ts[93,64,0]  ¦  hour_from_timestamp[-6,8,0]  𝄀
+15:30:45  ¦  15  ¦  2024-12-20 15:30:45  ¦  15  ¦  2024-12-20 15:30:45  ¦  15  𝄀
+00:00:00  ¦  0  ¦  2024-12-20 00:00:00  ¦  0  ¦  2024-12-20 00:00:00  ¦  0  𝄀
+23:59:59  ¦  23  ¦  2024-12-20 23:59:59  ¦  23  ¦  2024-12-20 23:59:59  ¦  23
 DROP TABLE t1;
 CREATE TABLE t1(t TIME);
 INSERT INTO t1 VALUES ('15:30:45'), ('10:20:30'), ('23:59:59');
 SELECT * FROM t1 WHERE HOUR(t) = 15;
-t
+➤ t[92,64,0]  𝄀
 15:30:45
 SELECT * FROM t1 WHERE HOUR(t) > 12;
-t
-15:30:45
+➤ t[92,64,0]  𝄀
+15:30:45  𝄀
 23:59:59
 DROP TABLE t1;
+SELECT HOUR(CAST('12:30:00' AS VARCHAR)) AS varchar_hour,
+HOUR(CAST('272:59:59' AS VARCHAR)) AS varchar_extended_hour,
+HOUR(CAST('2024-12-20 15:30:45' AS VARCHAR)) AS varchar_datetime_hour,
+HOUR(CAST(NULL AS VARCHAR)) AS varchar_null_hour;
+➤ varchar_hour[4,32,0]  ¦  varchar_extended_hour[4,32,0]  ¦  varchar_datetime_hour[4,32,0]  ¦  varchar_null_hour[4,32,0]  𝄀
+12  ¦  272  ¦  15  ¦  null

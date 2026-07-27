@@ -44,3 +44,8 @@ SELECT * FROM t1 WHERE HOUR(t) = 15;
 SELECT * FROM t1 WHERE HOUR(t) > 12;
 DROP TABLE t1;
 
+-- VARCHAR time-string input
+SELECT HOUR(CAST('12:30:00' AS VARCHAR)) AS varchar_hour,
+       HOUR(CAST('272:59:59' AS VARCHAR)) AS varchar_extended_hour,
+       HOUR(CAST('2024-12-20 15:30:45' AS VARCHAR)) AS varchar_datetime_hour,
+       HOUR(CAST(NULL AS VARCHAR)) AS varchar_null_hour;

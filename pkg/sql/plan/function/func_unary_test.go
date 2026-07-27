@@ -4159,6 +4159,63 @@ func TestSecond(t *testing.T) {
 	}
 }
 
+func TestStringTimeExtract(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_varchar.ToType(),
+			[]string{"12:30:45", "272:59:59", "2024-12-20 15:30:45", "invalid", ""},
+			[]bool{false, false, false, false, false}),
+	}
+
+	testCases := []struct {
+		name   string
+		expect FunctionTestResult
+		fn     fEvalFn
+	}{
+		{
+			name: "hour",
+			expect: NewFunctionTestResult(types.T_uint32.ToType(), false,
+				[]uint32{12, 272, 15, 0, 0}, []bool{false, false, false, true, true}),
+			fn: StringToHour,
+		},
+		{
+			name: "minute",
+			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
+				[]uint8{30, 59, 30, 0, 0}, []bool{false, false, false, true, true}),
+			fn: StringToMinute,
+		},
+		{
+			name: "second",
+			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
+				[]uint8{45, 59, 45, 0, 0}, []bool{false, false, false, true, true}),
+			fn: StringToSecond,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			tcc := NewFunctionTestCase(proc, inputs, tc.expect, tc.fn)
+			succeed, info := tcc.Run()
+			require.True(t, succeed, info)
+		})
+	}
+
+	for _, tc := range []struct {
+		name       string
+		returnType types.T
+	}{
+		{name: "hour", returnType: types.T_uint32},
+		{name: "minute", returnType: types.T_uint8},
+		{name: "second", returnType: types.T_uint8},
+	} {
+		t.Run("registered_"+tc.name, func(t *testing.T) {
+			fn, err := GetFunctionByName(proc.Ctx, tc.name, []types.Type{types.T_varchar.ToType()})
+			require.NoError(t, err)
+			require.Equal(t, tc.returnType, fn.GetReturnType().Oid)
+		})
+	}
+}
+
 func initBinaryTestCase() []tcTemp {
 	return []tcTemp{
 		{

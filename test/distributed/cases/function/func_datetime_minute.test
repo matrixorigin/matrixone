@@ -40,3 +40,8 @@ DROP TABLE t1;
 # Range check (should return 0-59)
 SELECT MINUTE('15:30:45') AS result1, MINUTE('15:00:45') AS result2, MINUTE('15:59:45') AS result3;
 
+-- VARCHAR time-string input
+SELECT MINUTE(CAST('12:30:00' AS VARCHAR)) AS varchar_minute,
+       MINUTE(CAST('272:59:59' AS VARCHAR)) AS varchar_extended_minute,
+       MINUTE(CAST('2024-12-20 15:30:45' AS VARCHAR)) AS varchar_datetime_minute,
+       MINUTE(CAST(NULL AS VARCHAR)) AS varchar_null_minute;
