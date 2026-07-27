@@ -1017,20 +1017,13 @@ func (m *GlobalSysVarsMgr) Put(accountId uint32, vars *SystemVariables) {
 	m.accountsGlobalSysVarsMap[accountId] = vars
 }
 
-func (m *GlobalSysVarsMgr) getCached(accountId uint32) *SystemVariables {
-	m.Lock()
-	defer m.Unlock()
-	return m.accountsGlobalSysVarsMap[accountId]
-}
-
 var GSysVarsMgr = &GlobalSysVarsMgr{
 	accountsGlobalSysVarsMap: make(map[uint32]*SystemVariables),
 }
 
 // SystemVariables is account level
 type SystemVariables struct {
-	mu                sync.Mutex
-	preparedStmtCount uint64
+	mu sync.Mutex
 	// name -> value/default
 	mp map[string]interface{}
 }
@@ -1058,37 +1051,6 @@ func (sv *SystemVariables) Set(name string, value interface{}) {
 	defer sv.mu.Unlock()
 	name = strings.ToLower(name)
 	sv.mp[name] = value
-}
-
-func (sv *SystemVariables) reservePrepareStmt() (uint64, bool) {
-	sv.mu.Lock()
-	defer sv.mu.Unlock()
-
-	limit := gSysVarsDefs[maxPreparedStmtCount].Default.(int64)
-	if value, ok := sv.mp[maxPreparedStmtCount]; ok {
-		limit = value.(int64)
-	}
-	if limit <= 0 || sv.preparedStmtCount >= uint64(limit) {
-		return uint64(limit), false
-	}
-	sv.preparedStmtCount++
-	return uint64(limit), true
-}
-
-func (sv *SystemVariables) releasePrepareStmts(count uint64) bool {
-	sv.mu.Lock()
-	defer sv.mu.Unlock()
-	if count > sv.preparedStmtCount {
-		return false
-	}
-	sv.preparedStmtCount -= count
-	return true
-}
-
-func (sv *SystemVariables) getPrepareStmtCount() uint64 {
-	sv.mu.Lock()
-	defer sv.mu.Unlock()
-	return sv.preparedStmtCount
 }
 
 // definitions of system variables
