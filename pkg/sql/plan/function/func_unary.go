@@ -853,6 +853,82 @@ func TimestampToDay(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 	}, selectList)
 }
 
+func dateStringToFixedWithNullOnError[T types.FixedSizeTExceptStrType](ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList, fn func(types.Date) (T, bool)) error {
+	source := vector.GenerateFunctionStrParameter(ivecs[0])
+	rs := vector.MustFunctionResult[T](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && selectList.Contains(i) {
+			if err := rs.Append(*new(T), true); err != nil {
+				return err
+			}
+			continue
+		}
+		value, null := source.GetStrValue(i)
+		if null {
+			if err := rs.Append(*new(T), true); err != nil {
+				return err
+			}
+			continue
+		}
+		date, err := types.ParseDateCast(functionUtil.QuickBytesToStr(value))
+		if err != nil {
+			if err := rs.Append(*new(T), true); err != nil {
+				return err
+			}
+			continue
+		}
+		valueToAppend, valid := fn(date)
+		if err := rs.Append(valueToAppend, !valid); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func dateStringToStringWithNullOnError(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList, fn func(types.Date) (string, bool)) error {
+	source := vector.GenerateFunctionStrParameter(ivecs[0])
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && selectList.Contains(i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		value, null := source.GetStrValue(i)
+		if null {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		date, err := types.ParseDateCast(functionUtil.QuickBytesToStr(value))
+		if err != nil || date == types.ZeroDate {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		name, valid := fn(date)
+		if !valid {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := rs.AppendBytes(functionUtil.QuickStrToBytes(name), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func DateStringToDay(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return dateStringToFixedWithNullOnError(ivecs, result, proc, length, selectList, func(date types.Date) (uint8, bool) {
+		return date.Day(), true
+	})
+}
+
 func DayOfYear(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opUnaryFixedToFixedWithNullOnError[types.Date, uint16](ivecs, result, proc, length, func(v types.Date) (uint16, error) {
 		if v == types.ZeroDate {
@@ -6436,6 +6512,22 @@ func DatetimeToQuarter(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 	}, selectList)
 }
 
+func TimestampToQuarter(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixed[types.Timestamp, uint8](ivecs, result, proc, length, func(v types.Timestamp) uint8 {
+		loc := proc.GetSessionInfo().TimeZone
+		if loc == nil {
+			loc = time.Local
+		}
+		return uint8(v.ToDatetime(loc).ToDate().Quarter())
+	}, selectList)
+}
+
+func DateStringToQuarter(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return dateStringToFixedWithNullOnError(ivecs, result, proc, length, selectList, func(date types.Date) (uint8, bool) {
+		return uint8(date.Quarter()), true
+	})
+}
+
 // TODO: I will support template soon.
 func DateStringToMonth(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	//return opUnaryStrToFixedWithErrorCheck[uint8](ivecs, result, proc, length, func(v string) (uint8, error) {
@@ -6647,6 +6739,15 @@ func TimestampToWeekOfYear(ivecs []*vector.Vector, result vector.FunctionResultW
 	}, selectList)
 }
 
+func DateStringToWeekOfYear(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return dateStringToFixedWithNullOnError(ivecs, result, proc, length, selectList, func(date types.Date) (int64, bool) {
+		if date == types.ZeroDate {
+			return 0, false
+		}
+		return weekOfYearHelper(date), true
+	})
+}
+
 func DateToWeekday(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opUnaryFixedToFixedWithNullOnError[types.Date, int64](ivecs, result, proc, length, func(v types.Date) (int64, error) {
 		if v == types.ZeroDate {
@@ -6747,6 +6848,12 @@ func TimestampToDayName(ivecs []*vector.Vector, result vector.FunctionResultWrap
 	}, selectList)
 }
 
+func DateStringToDayName(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return dateStringToStringWithNullOnError(ivecs, result, proc, length, selectList, func(date types.Date) (string, bool) {
+		return date.DayOfWeek().String(), true
+	})
+}
+
 // DateToMonthName returns the month name for date (e.g., "January", "February", ...)
 func DateToMonthName(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opUnaryFixedToStrWithNullOnError[types.Date](ivecs, result, proc, length, func(v types.Date) (string, error) {
@@ -6795,6 +6902,16 @@ func TimestampToMonthName(ivecs []*vector.Vector, result vector.FunctionResultWr
 		}
 		return "", nil
 	}, selectList)
+}
+
+func DateStringToMonthName(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return dateStringToStringWithNullOnError(ivecs, result, proc, length, selectList, func(date types.Date) (string, bool) {
+		month := date.Month()
+		if month < 1 || month > 12 {
+			return "", false
+		}
+		return MonthNames[month-1], true
+	})
 }
 
 func FoundRows(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {

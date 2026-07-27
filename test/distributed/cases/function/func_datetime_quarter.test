@@ -50,3 +50,5 @@ DROP TABLE t1;
 # Range check (should return 1-4)
 SELECT QUARTER('2024-01-01') AS q1, QUARTER('2024-04-01') AS q2, QUARTER('2024-07-01') AS q3, QUARTER('2024-10-01') AS q4;
 
+# Regression: VARCHAR input must resolve without an implicit unsupported cast.
+SELECT QUARTER('2024-01-15') AS string_quarter;

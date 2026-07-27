@@ -40,3 +40,5 @@ SELECT DAYOFMONTH('2007-04-01') AS first_day_apr, DAYOFMONTH('2007-04-30') AS la
 # Different months
 SELECT DAYOFMONTH('2007-01-15') AS jan, DAYOFMONTH('2007-02-15') AS feb, DAYOFMONTH('2007-03-15') AS mar, DAYOFMONTH('2007-04-15') AS apr;
 
+# Regression: VARCHAR input must resolve without an implicit unsupported cast.
+SELECT DAYOFMONTH('2024-01-15') AS string_dayofmonth;

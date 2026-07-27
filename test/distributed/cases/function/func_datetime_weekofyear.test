@@ -49,3 +49,5 @@ SELECT WEEKOFYEAR('2008-12-15') AS dec_week;
 SELECT WEEKOFYEAR('2024-11-18') AS current_week;
 SELECT WEEKOFYEAR(DATE_ADD('2008-01-01', INTERVAL 7 DAY)) AS week_after;
 
+# Regression: VARCHAR input must resolve without an implicit unsupported cast.
+SELECT WEEKOFYEAR('2024-01-01') AS string_weekofyear;

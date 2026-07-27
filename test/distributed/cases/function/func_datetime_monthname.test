@@ -39,3 +39,5 @@ DROP TABLE t1;
 # Different years (should return same month name)
 SELECT MONTHNAME('2000-02-03') AS year2000, MONTHNAME('2024-02-03') AS year2024;
 
+# Regression: VARCHAR input must resolve without an implicit unsupported cast.
+SELECT MONTHNAME('2024-06-15') AS string_monthname;
