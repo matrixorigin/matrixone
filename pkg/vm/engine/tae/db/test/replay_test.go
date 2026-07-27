@@ -463,7 +463,7 @@ func TestReplay2(t *testing.T) {
 	assert.NotNil(t, err)
 	assert.Nil(t, txn.Commit(context.Background()))
 
-	ctx2, cancel := context.WithTimeout(context.Background(), time.Second*10)
+	ctx2, cancel := context.WithTimeout(context.Background(), testutil.TestCheckpointTimeout)
 	defer cancel()
 	err = tae2.ForceFlush(ctx2, tae2.TxnMgr.Now())
 	assert.NoError(t, err)

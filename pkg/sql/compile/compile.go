@@ -1631,7 +1631,7 @@ func (c *Compile) getExternalFileListAndSize(node *plan.Node, param *tree.Extern
 			return nil, nil, err
 		}
 		spanReadDir.End()
-		fileList, fileSize, err = external.FilterFileList(c.proc.Ctx, node, c.proc, fileList, fileSize)
+		fileList, fileSize, node.FilterList, err = external.FilterFileList(c.proc.Ctx, node, c.proc, fileList, fileSize)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -1643,7 +1643,7 @@ func (c *Compile) getExternalFileListAndSize(node *plan.Node, param *tree.Extern
 		for i := range fileList {
 			fileList[i] = strings.TrimSpace(fileList[i])
 		}
-		fileList, fileSize, err = external.FilterFileList(c.proc.Ctx, node, c.proc, fileList, fileSize)
+		fileList, fileSize, node.FilterList, err = external.FilterFileList(c.proc.Ctx, node, c.proc, fileList, fileSize)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -1689,7 +1689,7 @@ func (c *Compile) getHivePartitionFileList(node *plan.Node, param *tree.ExternPa
 
 	if len(fpFilters) > 0 {
 		var leftover []*plan.Expr
-		fileList, fileSize, leftover, err = runFilePathFilters(c.proc.Ctx, c.proc, node.TableDef, fpFilters, fileList, fileSize)
+		fileList, fileSize, leftover, err = runFilePathFilters(c.proc.Ctx, c.proc, node, fpFilters, fileList, fileSize)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -1827,20 +1827,18 @@ func updateHivePartitionScanStats(node *plan.Node, basePath string, result *exte
 func runFilePathFilters(
 	ctx context.Context,
 	proc *process.Process,
-	tableDef *plan.TableDef,
+	node *plan.Node,
 	fpFilters []*plan.Expr,
 	fileList []string,
 	fileSize []int64,
 ) ([]string, []int64, []*plan.Expr, error) {
-	tmpNode := &plan.Node{
-		TableDef:   tableDef,
-		FilterList: fpFilters,
-	}
-	outFileList, outFileSize, err := external.FilterFileList(ctx, tmpNode, proc, fileList, fileSize)
+	filterNode := plan2.DeepCopyNode(node)
+	filterNode.FilterList = fpFilters
+	outFileList, outFileSize, leftover, err := external.FilterFileList(ctx, filterNode, proc, fileList, fileSize)
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	return outFileList, outFileSize, tmpNode.FilterList, nil
+	return outFileList, outFileSize, leftover, nil
 }
 
 func toLowerSet(cols []string) map[string]bool {
@@ -3138,7 +3136,11 @@ func shouldDispatchIvfSearchMultiCN(
 	cnList engine.Nodes,
 	workspace client.Workspace,
 ) bool {
+	// Runtime-filter messages are broadcast on the current CN's message board.
+	// Keep their consumer local; its entries reader can still fan out after the
+	// table function turns the message into a serializable membership payload.
 	return plan2.IsIvfSearchEntriesInternalScan(node) &&
+		len(node.GetRuntimeFilterProbeList()) == 0 &&
 		execType == plan2.ExecTypeAP_MULTICN &&
 		len(cnList) > 1 &&
 		(workspace == nil || workspace.Readonly()) &&

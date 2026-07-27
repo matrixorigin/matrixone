@@ -41,9 +41,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const (
-	DefaultTestDB = "db"
-)
+const DefaultTestDB = "db"
+
+// TestCheckpointTimeout leaves room for storage syncs under parallel CI while
+// still bounding a genuinely stuck checkpoint or flush.
+const TestCheckpointTimeout = 2 * time.Minute
 
 type CtxOldVersion struct{}
 
@@ -160,16 +162,14 @@ func (e *TestEngine) CheckRowsByScan(exp int, applyDelete bool) {
 	assert.NoError(e.T, txn.Commit(context.Background()))
 }
 func (e *TestEngine) ForceCheckpoint() {
-	// Match the checkpoint runner's safety net while also bounding ForceFlush,
-	// which otherwise relies on the caller context for cancellation.
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), TestCheckpointTimeout)
 	defer cancel()
 	err := e.DB.ForceCheckpoint(ctx, e.TxnMgr.Now())
 	assert.NoError(e.T, err)
 }
 
 func (e *TestEngine) ForceLongCheckpoint() {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*20)
+	ctx, cancel := context.WithTimeout(context.Background(), TestCheckpointTimeout)
 	defer cancel()
 	err := e.DB.ForceCheckpoint(ctx, e.TxnMgr.Now())
 	assert.NoError(e.T, err)
