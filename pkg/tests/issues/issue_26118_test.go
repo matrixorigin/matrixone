@@ -40,17 +40,25 @@ func TestIssue26118DatabaseCopiesPreserveHashIdentifiers(t *testing.T) {
 		execSQLRequire(t, ctx, db, "set role moadmin")
 
 		const (
-			sourceDB = "issue#26118#source"
-			branchDB = "issue_26118_branch"
-			cloneDB  = "issue_26118_clone"
+			sourceDB    = "issue#26118#source"
+			branchDB    = "issue_26118_branch"
+			cloneDB     = "issue_26118_clone"
+			prefixDB    = "\x001"
+			prefixClone = "issue_26118_prefix_clone"
+			roleName    = "issue_26118_view_role"
+			userName    = "issue_26118_view_user"
 		)
-		for _, name := range []string{branchDB, cloneDB, sourceDB} {
+		for _, name := range []string{branchDB, cloneDB, prefixClone, prefixDB, sourceDB} {
 			execSQLMaybe(t, ctx, db, "drop database if exists `"+name+"`")
 		}
+		execSQLMaybe(t, ctx, db, "drop user if exists "+userName)
+		execSQLMaybe(t, ctx, db, "drop role if exists "+roleName)
 		defer func() {
 			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cleanupCancel()
-			for _, name := range []string{branchDB, cloneDB, sourceDB} {
+			execSQLMaybe(t, cleanupCtx, db, "drop user if exists "+userName)
+			execSQLMaybe(t, cleanupCtx, db, "drop role if exists "+roleName)
+			for _, name := range []string{branchDB, cloneDB, prefixClone, prefixDB, sourceDB} {
 				execSQLMaybe(t, cleanupCtx, db, "drop database if exists `"+name+"`")
 			}
 		}()
@@ -62,12 +70,25 @@ func TestIssue26118DatabaseCopiesPreserveHashIdentifiers(t *testing.T) {
 		execSQLRequire(t, ctx, db, "insert into `"+sourceDB+"`.`child#c` values (10, 1), (20, 2)")
 		execSQLRequire(t, ctx, db, "create view `"+sourceDB+"`.`view#1` as select id, note from `"+sourceDB+"`.`parent#p`")
 		execSQLRequire(t, ctx, db, "create view `"+sourceDB+"`.`view#2` as select id, note from `"+sourceDB+"`.`view#1`")
+		execSQLRequire(t, ctx, db, "create role "+roleName)
+		execSQLRequire(t, ctx, db, "create user "+userName+" identified by '111' default role "+roleName)
+		execSQLRequire(t, ctx, db, "grant "+roleName+" to "+userName)
+		execSQLRequire(t, ctx, db, "grant connect on account * to "+roleName)
+		execSQLRequire(t, ctx, db, "grant select on view `"+sourceDB+"`.`view#2` to "+roleName)
+
+		userDB, err := sql.Open("mysql", fmt.Sprintf(
+			userName+":111@tcp(127.0.0.1:%d)/", port))
+		require.NoError(t, err)
+		defer userDB.Close()
+		var count int
+		require.NoError(t, userDB.QueryRowContext(ctx,
+			"select count(*) from `"+sourceDB+"`.`view#2`").Scan(&count))
+		require.Equal(t, 2, count)
 
 		execSQLRequire(t, ctx, db, "data branch create database `"+branchDB+"` from `"+sourceDB+"`")
 		execSQLRequire(t, ctx, db, "create database `"+cloneDB+"` clone `"+sourceDB+"`")
 
 		for _, destination := range []string{branchDB, cloneDB} {
-			var count int
 			require.NoError(t, db.QueryRowContext(ctx,
 				"select count(*) from `"+destination+"`.`child#c` c join `"+destination+"`.`parent#p` p on c.parent_id = p.id").Scan(&count))
 			require.Equal(t, 2, count)
@@ -78,5 +99,14 @@ func TestIssue26118DatabaseCopiesPreserveHashIdentifiers(t *testing.T) {
 				"select count(*) from mo_catalog.mo_foreign_keys where db_name = '"+destination+"' and table_name = 'child#c' and refer_table_name = 'parent#p'").Scan(&count))
 			require.Equal(t, 1, count)
 		}
+
+		execSQLRequire(t, ctx, db, "create database `"+prefixDB+"`")
+		execSQLRequire(t, ctx, db, "create table `"+prefixDB+"`.`base` (id int primary key)")
+		execSQLRequire(t, ctx, db, "insert into `"+prefixDB+"`.`base` values (1)")
+		execSQLRequire(t, ctx, db, "create view `"+prefixDB+"`.`v` as select * from `"+prefixDB+"`.`base`")
+		execSQLRequire(t, ctx, db, "create database `"+prefixClone+"` clone `"+prefixDB+"`")
+		require.NoError(t, db.QueryRowContext(ctx,
+			"select count(*) from `"+prefixClone+"`.`v`").Scan(&count))
+		require.Equal(t, 1, count)
 	})
 }
