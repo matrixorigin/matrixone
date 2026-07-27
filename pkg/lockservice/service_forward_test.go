@@ -153,6 +153,40 @@ func TestForwardLockDeadlineCancelsLockTableAllocationWait(t *testing.T) {
 	)
 }
 
+func TestForwardLockRefreshesLegacyTimeoutAtSend(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(_ *lockTableAllocator, services []*service) {
+			s := services[0]
+			const tableID = uint64(24921)
+			_, err := s.getLockTableWithCreate(0, tableID, nil, pb.Sharding_None)
+			require.NoError(t, err)
+
+			client := &captureLockOptionsClient{}
+			originalClient := s.remote.client
+			s.remote.client = client
+			defer func() { s.remote.client = originalClient }()
+
+			deadline := time.Now().Add(1500 * time.Millisecond)
+			options := newTestRowExclusiveOptions()
+			options.LockWaitTimeout = 60
+			options.LockWaitDeadline = deadline.UnixNano()
+			_, err = s.forwardLock(
+				context.Background(),
+				tableID,
+				[][]byte{{1}},
+				[]byte("legacy-forward-timeout"),
+				options)
+			require.NoError(t, err)
+			require.Equal(t, deadline.UnixNano(), client.options.LockWaitDeadline)
+			require.Positive(t, client.options.LockWaitTimeout)
+			require.LessOrEqual(t, client.options.LockWaitTimeout, int64(2),
+				"the forwarded RPC must not carry the stale 60-second legacy timeout")
+		},
+	)
+}
+
 func TestNewLockRPCContextPreservesEarlierParentDeadline(t *testing.T) {
 	parent, cancelParent := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancelParent()

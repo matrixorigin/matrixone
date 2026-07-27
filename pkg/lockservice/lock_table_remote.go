@@ -63,31 +63,36 @@ func newLockRPCContext(ctx context.Context, opts pb.LockOptions) (context.Contex
 	return ctx, nil
 }
 
-// carryEarlierContextDeadline copies an earlier caller deadline into the lock
-// request itself. MORPC bounds the origin-side Future with ctx, but the owner
-// handler is not guaranteed to observe that exact context deadline on every
-// transport/lifecycle path. The absolute option is therefore the durable
-// cross-CN budget; the relative seconds field remains only a compatibility
-// fallback for peers that do not consume LockWaitDeadline.
-func carryEarlierContextDeadline(ctx context.Context, opts pb.LockOptions) pb.LockOptions {
+// prepareLockOptionsForRPC copies an earlier caller deadline into the lock
+// request and refreshes the relative seconds field immediately before a
+// cross-CN send. LockWaitDeadline is authoritative for current peers, while
+// LockWaitTimeout is the rolling-upgrade fallback for peers that do not yet
+// consume the absolute field.
+func prepareLockOptionsForRPC(ctx context.Context, opts pb.LockOptions) pb.LockOptions {
 	deadline, ok := ctx.Deadline()
-	if !ok {
+	if ok && (opts.LockWaitDeadline == 0 || deadline.Before(time.Unix(0, opts.LockWaitDeadline))) {
+		opts.LockWaitDeadline = deadline.UnixNano()
+	}
+	return refreshLegacyLockWaitTimeout(opts, time.Now())
+}
+
+// refreshLegacyLockWaitTimeout keeps old peers on the remaining absolute
+// budget instead of restarting the original relative timeout after local
+// readiness, bind allocation, or forwarding work. The wire field has whole-
+// second precision, so it is rounded up; an expired deadline uses one second
+// as the smallest bounded fallback that legacy peers understand.
+func refreshLegacyLockWaitTimeout(opts pb.LockOptions, now time.Time) pb.LockOptions {
+	if opts.LockWaitDeadline <= 0 {
 		return opts
 	}
-	if opts.LockWaitDeadline == 0 || deadline.Before(time.Unix(0, opts.LockWaitDeadline)) {
-		opts.LockWaitDeadline = deadline.UnixNano()
-		remaining := time.Until(deadline)
-		if remaining <= 0 {
-			// New peers reject the expired absolute deadline immediately. Keep a
-			// one-second relative fallback so an older peer that ignores the
-			// deadline cannot turn this race into an unbounded wait.
-			opts.LockWaitTimeout = 1
-		} else {
-			opts.LockWaitTimeout = int64(remaining / time.Second)
-			if remaining%time.Second != 0 {
-				opts.LockWaitTimeout++
-			}
-		}
+	remaining := time.Unix(0, opts.LockWaitDeadline).Sub(now)
+	if remaining <= 0 {
+		opts.LockWaitTimeout = 1
+		return opts
+	}
+	opts.LockWaitTimeout = int64(remaining / time.Second)
+	if remaining%time.Second != 0 {
+		opts.LockWaitTimeout++
 	}
 	return opts
 }
@@ -143,7 +148,7 @@ func (l *remoteLockTable) lock(
 	req := acquireRequest()
 	defer releaseRequest(req)
 
-	effectiveOptions := carryEarlierContextDeadline(ctx, opts.LockOptions)
+	effectiveOptions := prepareLockOptionsForRPC(ctx, opts.LockOptions)
 	lockBudgetCtx, cancelLockBudget := newLockWaitContext(ctx, effectiveOptions)
 	if cancelLockBudget != nil {
 		defer cancelLockBudget()
@@ -151,7 +156,6 @@ func (l *remoteLockTable) lock(
 
 	req.LockTable = l.bind
 	req.Method = pb.Method_Lock
-	req.Lock.Options = effectiveOptions
 	req.Lock.TxnID = txn.txnID
 	req.Lock.ServiceID = l.serviceID
 	req.Lock.Rows = rows
@@ -177,6 +181,11 @@ func (l *remoteLockTable) lock(
 	// Service entry points also use this field for the safety ceiling. A zero
 	// value is possible only for direct lock-table callers and tests, where the
 	// caller context remains the fallback.
+	// Local admission and bookkeeping above may have consumed part of the
+	// budget. Refresh the legacy relative field at the actual send boundary so
+	// an older owner cannot restart the original timeout.
+	effectiveOptions = prepareLockOptionsForRPC(ctx, effectiveOptions)
+	req.Lock.Options = effectiveOptions
 	rpcCtx, rpcCancel := newLockRPCContext(ctx, effectiveOptions)
 	defer func() {
 		if rpcCancel != nil {

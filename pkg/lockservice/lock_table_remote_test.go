@@ -38,6 +38,27 @@ type blockingUnlockClient struct {
 	unlockStarted chan struct{}
 }
 
+type captureLockOptionsClient struct {
+	options pb.LockOptions
+}
+
+func (c *captureLockOptionsClient) Send(
+	_ context.Context,
+	req *pb.Request,
+) (*pb.Response, error) {
+	c.options = req.Lock.Options
+	return acquireResponse(), nil
+}
+
+func (c *captureLockOptionsClient) AsyncSend(
+	context.Context,
+	*pb.Request,
+) (*morpc.Future, error) {
+	return nil, io.ErrClosedPipe
+}
+
+func (c *captureLockOptionsClient) Close() error { return nil }
+
 // newUnpooledActiveTxnForTest avoids contaminating the global reuse pool in
 // focused tests that may run immediately before RunReuseTests enables its
 // checker. Call txn.reset() when the test is done.
@@ -165,17 +186,78 @@ func (c *terminalLockTimeoutClient) AsyncSend(
 
 func (c *terminalLockTimeoutClient) Close() error { return nil }
 
-func TestCarryEarlierContextDeadlineKeepsBoundedLegacyFallback(t *testing.T) {
+func TestPrepareLockOptionsForRPCKeepsBoundedLegacyFallback(t *testing.T) {
 	deadline := time.Now().Add(-time.Millisecond)
 	ctx, cancel := context.WithDeadline(context.Background(), deadline)
 	defer cancel()
 
-	opts := carryEarlierContextDeadline(ctx, pb.LockOptions{
+	opts := prepareLockOptionsForRPC(ctx, pb.LockOptions{
 		LockWaitTimeout:  60,
 		LockWaitDeadline: time.Now().Add(time.Minute).UnixNano(),
 	})
 	require.Equal(t, deadline.UnixNano(), opts.LockWaitDeadline)
 	require.Equal(t, int64(1), opts.LockWaitTimeout)
+}
+
+func TestRefreshLegacyLockWaitTimeoutConsumesLocalDelay(t *testing.T) {
+	start := time.Unix(100, 0)
+	deadline := start.Add(1500 * time.Millisecond)
+	opts := pb.LockOptions{
+		LockWaitTimeout:  60,
+		LockWaitDeadline: deadline.UnixNano(),
+	}
+
+	// Simulate readiness/bind work consuming 1.1 seconds before the RPC send.
+	refreshed := refreshLegacyLockWaitTimeout(opts, start.Add(1100*time.Millisecond))
+	require.Equal(t, deadline.UnixNano(), refreshed.LockWaitDeadline)
+	require.Equal(t, int64(1), refreshed.LockWaitTimeout,
+		"an old peer must receive only the rounded-up remaining budget")
+
+	expired := refreshLegacyLockWaitTimeout(opts, deadline.Add(time.Nanosecond))
+	require.Equal(t, int64(1), expired.LockWaitTimeout,
+		"one second is the smallest bounded fallback supported by old peers")
+}
+
+func TestRemoteLockRefreshesLegacyTimeoutAtSend(t *testing.T) {
+	client := &captureLockOptionsClient{}
+	bind := pb.LockTable{
+		Group: 0, Table: 1, OriginTable: 1,
+		ServiceID: "s2", Version: 1, Valid: true,
+	}
+	remote := newRemoteLockTable(
+		"s1",
+		time.Second,
+		bind,
+		client,
+		func(pb.LockTable) {},
+		getLogger(""),
+	)
+	txn := newUnpooledActiveTxnForTest([]byte("legacy-remote-timeout"))
+	txn.Lock()
+	defer func() {
+		txn.Unlock()
+		txn.reset()
+	}()
+
+	deadline := time.Now().Add(1500 * time.Millisecond)
+	var lockErr error
+	remote.lock(
+		context.Background(),
+		txn,
+		[][]byte{{1}},
+		LockOptions{LockOptions: pb.LockOptions{
+			Granularity:      pb.Granularity_Row,
+			Mode:             pb.LockMode_Exclusive,
+			Policy:           pb.WaitPolicy_Wait,
+			LockWaitTimeout:  60,
+			LockWaitDeadline: deadline.UnixNano(),
+		}},
+		func(_ pb.Result, err error) { lockErr = err })
+	require.NoError(t, lockErr)
+	require.Equal(t, deadline.UnixNano(), client.options.LockWaitDeadline)
+	require.Positive(t, client.options.LockWaitTimeout)
+	require.LessOrEqual(t, client.options.LockWaitTimeout, int64(2),
+		"the RPC must not carry the stale 60-second legacy timeout")
 }
 
 func TestRemoteLockTimeoutSkipsBindRecovery(t *testing.T) {

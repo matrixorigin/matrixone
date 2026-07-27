@@ -52,15 +52,17 @@ func (s *service) forwardLock(
 
 	req.Method = pb.Method_ForwardLock
 	req.LockTable = l.getBind()
-	req.Lock.Options = carryEarlierContextDeadline(ctx, opts)
 	req.Lock.TxnID = txnID
 	req.Lock.ServiceID = s.serviceID
 	req.Lock.Rows = rows
 
 	// ForwardTo is an RPC just like a regular remote-table lock. In particular,
 	// morpc requires a deadline and a background caller may not have one, so use
-	// the effective lock deadline injected at service entry.
-	rpcCtx, cancel := newLockRPCContext(ctx, opts)
+	// the effective lock deadline injected at service entry. Refresh the legacy
+	// relative field only after local bind work, immediately before the send.
+	effectiveOptions := prepareLockOptionsForRPC(ctx, opts)
+	req.Lock.Options = effectiveOptions
+	rpcCtx, cancel := newLockRPCContext(ctx, effectiveOptions)
 	if cancel != nil {
 		defer cancel()
 	}

@@ -79,6 +79,15 @@ func forceLockRetryMemoryPressure(t *testing.T, level lockRetryMemoryPressureLev
 	})
 }
 
+func expectLockWaitCeiling(
+	lockSvc *mock_lock.MockLockService,
+	d time.Duration,
+) {
+	cfg := lockservice.Config{}
+	cfg.MaxLockWaitDuration.Duration = d
+	lockSvc.EXPECT().GetConfig().Return(cfg).AnyTimes()
+}
+
 func TestLockWaitTimeoutUsesCurrentSessionValue(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -181,8 +190,126 @@ func TestRefreshLockWaitOptionsReturnsTimeoutAfterDeadline(t *testing.T) {
 	require.ErrorIs(t, err, lockservice.ErrLockTimeout)
 }
 
+func TestMaterializeLockWaitDeadlineUsesEarlierBudget(t *testing.T) {
+	t.Run("service ceiling", func(t *testing.T) {
+		start := time.Now()
+		options := materializeLockWaitDeadline(lock.LockOptions{}, 1500*time.Millisecond)
+		require.WithinDuration(t, start.Add(1500*time.Millisecond),
+			time.Unix(0, options.LockWaitDeadline), 100*time.Millisecond)
+	})
+
+	t.Run("caller timeout", func(t *testing.T) {
+		start := time.Now()
+		options := materializeLockWaitDeadline(lock.LockOptions{LockWaitTimeout: 1}, time.Minute)
+		require.WithinDuration(t, start.Add(time.Second),
+			time.Unix(0, options.LockWaitDeadline), 100*time.Millisecond)
+	})
+
+	t.Run("existing deadline", func(t *testing.T) {
+		deadline := time.Now().Add(time.Second).UnixNano()
+		options := materializeLockWaitDeadline(lock.LockOptions{
+			LockWaitTimeout:  60,
+			LockWaitDeadline: deadline,
+		}, 10*time.Millisecond)
+		require.Equal(t, deadline, options.LockWaitDeadline)
+	})
+}
+
 func TestLockWaitTimeoutIsNotRetryable(t *testing.T) {
 	require.False(t, isRetryLockError(lockservice.ErrLockTimeout))
+}
+
+func TestLockWithRetryPreservesServiceCeilingAcrossTableNotFound(t *testing.T) {
+	forceLockRetryMemoryPressure(t, lockRetryMemoryPressureNormal)
+	oldWait := defaultWaitTimeOnRetryLock
+	defaultWaitTimeOnRetryLock = 5 * time.Millisecond
+	t.Cleanup(func() { defaultWaitTimeOnRetryLock = oldWait })
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	lockSvc := mock_lock.NewMockLockService(ctrl)
+	expectLockWaitCeiling(lockSvc, 20*time.Millisecond)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().HasLockTable(uint64(1)).Return(false).AnyTimes()
+
+	var (
+		calls    int
+		deadline int64
+	)
+	lockSvc.EXPECT().
+		Lock(gomock.Any(), uint64(1), gomock.Nil(), []byte("txn1"), gomock.Any()).
+		DoAndReturn(func(
+			_ context.Context,
+			_ uint64,
+			_ [][]byte,
+			_ []byte,
+			options lock.LockOptions,
+		) (lock.Result, error) {
+			calls++
+			require.Positive(t, options.LockWaitDeadline)
+			if deadline == 0 {
+				deadline = options.LockWaitDeadline
+			} else {
+				require.Equal(t, deadline, options.LockWaitDeadline,
+					"a retry must not receive a fresh lock-wait budget")
+			}
+			return lock.Result{}, lockservice.ErrLockTableNotFound
+		}).
+		AnyTimes()
+
+	start := time.Now()
+	_, err := lockWithRetry(
+		context.Background(),
+		lockSvc,
+		1,
+		nil,
+		[]byte("txn1"),
+		lock.LockOptions{},
+		txnOp,
+		nil,
+		nil,
+		LockOptions{},
+		types.Type{},
+	)
+	require.ErrorIs(t, err, lockservice.ErrLockTimeout)
+	require.Greater(t, calls, 1)
+	require.Less(t, time.Since(start), 500*time.Millisecond)
+}
+
+func TestLockRetryBackoffConsumesLockWaitDeadline(t *testing.T) {
+	forceLockRetryMemoryPressure(t, lockRetryMemoryPressureNormal)
+	oldWait := defaultWaitTimeOnRetryLock
+	defaultWaitTimeOnRetryLock = time.Second
+	t.Cleanup(func() { defaultWaitTimeOnRetryLock = oldWait })
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	lockSvc := mock_lock.NewMockLockService(ctrl)
+	expectLockWaitCeiling(lockSvc, 20*time.Millisecond)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().HasLockTable(uint64(1)).Return(false).Times(1)
+	lockSvc.EXPECT().
+		Lock(gomock.Any(), uint64(1), gomock.Nil(), []byte("txn1"), gomock.Any()).
+		Return(lock.Result{}, lockservice.ErrLockTableNotFound).
+		Times(1)
+
+	start := time.Now()
+	_, err := lockWithRetry(
+		context.Background(),
+		lockSvc,
+		1,
+		nil,
+		[]byte("txn1"),
+		lock.LockOptions{},
+		txnOp,
+		nil,
+		nil,
+		LockOptions{},
+		types.Type{},
+	)
+	require.ErrorIs(t, err, lockservice.ErrLockTimeout)
+	require.Less(t, time.Since(start), 500*time.Millisecond,
+		"the one-second retry backoff must stop at the lock-wait deadline")
 }
 
 func TestLockOpTargetHelpers(t *testing.T) {
@@ -311,6 +438,7 @@ func TestLockWithRetryReturnsBackendErrorWhenDeadlineExceededStopsBoundedRetry(t
 	defer ctrl.Finish()
 
 	lockSvc := mock_lock.NewMockLockService(ctrl)
+	expectLockWaitCeiling(lockSvc, 0)
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
 	txnOp.EXPECT().Txn().Return(txnpb.TxnMeta{ID: []byte("txn1")}).AnyTimes()
 
@@ -345,6 +473,7 @@ func TestLockWithRetryReturnsBackendErrorWhenCanceledContextStopsBoundedRetry(t 
 	defer ctrl.Finish()
 
 	lockSvc := mock_lock.NewMockLockService(ctrl)
+	expectLockWaitCeiling(lockSvc, 0)
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
 	txnOp.EXPECT().Txn().Return(txnpb.TxnMeta{ID: []byte("txn1")}).AnyTimes()
 
@@ -379,6 +508,7 @@ func TestLockWithRetryReturnsBackendErrorWhenContextCanceledDuringRetryWait(t *t
 	defer ctrl.Finish()
 
 	lockSvc := mock_lock.NewMockLockService(ctrl)
+	expectLockWaitCeiling(lockSvc, 0)
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
 	txnOp.EXPECT().Txn().Return(txnpb.TxnMeta{ID: []byte("txn1")}).AnyTimes()
 
@@ -419,6 +549,7 @@ func TestLockWithRetryStopsWhenBackendRetryBudgetExceeded(t *testing.T) {
 	defer ctrl.Finish()
 
 	lockSvc := mock_lock.NewMockLockService(ctrl)
+	expectLockWaitCeiling(lockSvc, 0)
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
 	txnOp.EXPECT().Txn().Return(txnpb.TxnMeta{ID: []byte("txn1")}).AnyTimes()
 
@@ -473,6 +604,7 @@ func TestLockWithRetryDoesNotResetBackendRetryBudgetAfterBindChange(t *testing.T
 	defer ctrl.Finish()
 
 	lockSvc := mock_lock.NewMockLockService(ctrl)
+	expectLockWaitCeiling(lockSvc, 0)
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
 	txnOp.EXPECT().Txn().Return(txnpb.TxnMeta{ID: []byte("txn1")}).AnyTimes()
 
@@ -522,6 +654,7 @@ func TestLockWithRetryStopsWhenRollingRestartRetryBudgetExceeded(t *testing.T) {
 	defer ctrl.Finish()
 
 	lockSvc := mock_lock.NewMockLockService(ctrl)
+	expectLockWaitCeiling(lockSvc, 0)
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
 	txnOp.EXPECT().Txn().Return(txnpb.TxnMeta{ID: []byte("txn1")}).AnyTimes()
 
@@ -569,6 +702,7 @@ func TestLockWithRetryDoesNotRetryBackendErrorWhenLockTableAlreadyHeld(t *testin
 	defer ctrl.Finish()
 
 	lockSvc := mock_lock.NewMockLockService(ctrl)
+	expectLockWaitCeiling(lockSvc, 0)
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
 
 	oldWait := defaultWaitTimeOnRetryLock
@@ -615,6 +749,7 @@ func TestLockWithRetryRetriesBindChangedInExplicitUserTxnBeforeLockHeld(t *testi
 	defer ctrl.Finish()
 
 	lockSvc := mock_lock.NewMockLockService(ctrl)
+	expectLockWaitCeiling(lockSvc, 0)
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
 
 	oldWait := defaultWaitTimeOnRetryLock
@@ -660,6 +795,7 @@ func TestLockWithRetryRetriesBindChangedInBeginTxnBeforeLockHeld(t *testing.T) {
 	defer ctrl.Finish()
 
 	lockSvc := mock_lock.NewMockLockService(ctrl)
+	expectLockWaitCeiling(lockSvc, 0)
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
 
 	oldWait := defaultWaitTimeOnRetryLock
@@ -705,6 +841,7 @@ func TestLockWithRetryRetriesBindChangedInAutocommitTxn(t *testing.T) {
 	defer ctrl.Finish()
 
 	lockSvc := mock_lock.NewMockLockService(ctrl)
+	expectLockWaitCeiling(lockSvc, 0)
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
 
 	oldWait := defaultWaitTimeOnRetryLock
@@ -748,6 +885,7 @@ func TestLockWithRetryDoesNotRetryBindChangedWhenLockTableAlreadyHeld(t *testing
 	defer ctrl.Finish()
 
 	lockSvc := mock_lock.NewMockLockService(ctrl)
+	expectLockWaitCeiling(lockSvc, 0)
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
 
 	oldWait := defaultWaitTimeOnRetryLock
@@ -791,6 +929,7 @@ func TestLockWithRetryStopsWhenBindChangedRetryBudgetExceeded(t *testing.T) {
 	defer ctrl.Finish()
 
 	lockSvc := mock_lock.NewMockLockService(ctrl)
+	expectLockWaitCeiling(lockSvc, 0)
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
 	txnOp.EXPECT().Txn().Return(txnpb.TxnMeta{ID: []byte("txn1")}).AnyTimes()
 
@@ -925,6 +1064,7 @@ func TestLockWithRetryFailsFastWhenBackendRetryBudgetDisabled(t *testing.T) {
 	defer ctrl.Finish()
 
 	lockSvc := mock_lock.NewMockLockService(ctrl)
+	expectLockWaitCeiling(lockSvc, 0)
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
 	txnOp.EXPECT().Txn().Return(txnpb.TxnMeta{ID: []byte("txn1")}).AnyTimes()
 
@@ -972,6 +1112,7 @@ func TestLockWithRetryRetriesInsideLoopAndReturnsSecondResult(t *testing.T) {
 	defer ctrl.Finish()
 
 	lockSvc := mock_lock.NewMockLockService(ctrl)
+	expectLockWaitCeiling(lockSvc, 0)
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
 
 	ctx := context.Background()
@@ -1011,6 +1152,7 @@ func TestLockWithRetryKeepsSuccessfulResultAfterContextCanceled(t *testing.T) {
 	defer ctrl.Finish()
 
 	lockSvc := mock_lock.NewMockLockService(ctrl)
+	expectLockWaitCeiling(lockSvc, 0)
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1045,6 +1187,7 @@ func TestLockWithRetryKeepsNonRetryableErrorAfterContextCanceled(t *testing.T) {
 	defer ctrl.Finish()
 
 	lockSvc := mock_lock.NewMockLockService(ctrl)
+	expectLockWaitCeiling(lockSvc, 0)
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
 
 	ctx, cancel := context.WithCancel(context.Background())
