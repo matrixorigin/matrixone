@@ -288,6 +288,12 @@ func TestApplyRemapDbExpressionContainers(t *testing.T) {
 			contains: []string{"src.a", "'src.t.a'", "from dst.t as src"},
 			absent:   []string{"from src.t"},
 		},
+		{
+			name:     "fulltext match pattern",
+			sql:      "create view src.v as select match(src.docs.body) against(src.docs.pattern) from src.docs",
+			contains: []string{"create view dst.v", "MATCH (dst.docs.body) AGAINST (dst.docs.pattern)", "from dst.docs"},
+			absent:   []string{"src.docs.body", "src.docs.pattern", "from src.docs"},
+		},
 	}
 
 	for _, tt := range tests {

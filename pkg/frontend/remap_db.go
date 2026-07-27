@@ -398,6 +398,7 @@ func remapDbInExpr(expr tree.Expr, remap map[string]string) {
 			remapColumnName(keyPart.ColName, remap)
 			remapDbInExpr(keyPart.Expr, remap)
 		}
+		remapDbInExpr(e.Pattern, remap)
 	}
 }
 
