@@ -415,6 +415,22 @@ func outputTypeAfterNullExtension(node *plan.Node, childIdx int, typ plan.Type) 
 	return typ
 }
 
+// setOperationOutputType derives the type contract of one materialized set
+// column. UNION can emit a value from either input, so it is NOT NULL only
+// when both inputs are. INTERSECT and MINUS emit rows from their left input;
+// retaining the left contract is safe and avoids changing their existing
+// optimization behavior based on facts from the filtering input.
+func setOperationOutputType(
+	nodeType plan.Node_NodeType,
+	leftType, rightType plan.Type,
+) plan.Type {
+	switch nodeType {
+	case plan.Node_UNION, plan.Node_UNION_ALL:
+		leftType.NotNullable = leftType.NotNullable && rightType.NotNullable
+	}
+	return leftType
+}
+
 type ColRefRemapping struct {
 	globalToLocal map[[2]int32][2]int32
 	localToGlobal [][2]int32
@@ -1048,6 +1064,19 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			return nil, err
 		}
 
+		expectedOutputCount := len(node.ProjectList)
+		if pruneOutput {
+			expectedOutputCount = len(neededProj)
+		}
+		if len(leftNode.ProjectList) != expectedOutputCount ||
+			len(rightNode.ProjectList) != expectedOutputCount {
+			return nil, moerr.NewInternalErrorf(
+				builder.GetContext(),
+				"set operation child projection width mismatch after remap: left %d, right %d, output %d",
+				len(leftNode.ProjectList), len(rightNode.ProjectList), expectedOutputCount,
+			)
+		}
+
 		remapInfo.tip = "ProjectList"
 		if pruneOutput {
 			newProjectList := node.ProjectList[:0]
@@ -1058,6 +1087,12 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 				if err := builder.remapColRefForExpr(expr, leftRemapping.globalToLocal, &remapInfo); err != nil {
 					return nil, err
 				}
+				outputIdx := len(newProjectList)
+				expr.Typ = setOperationOutputType(
+					node.NodeType,
+					leftNode.ProjectList[outputIdx].Typ,
+					rightNode.ProjectList[outputIdx].Typ,
+				)
 				newProjectList = append(newProjectList, expr)
 			}
 			clear(node.ProjectList[len(newProjectList):])
@@ -1069,6 +1104,11 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 				if err := builder.remapColRefForExpr(expr, leftRemapping.globalToLocal, &remapInfo); err != nil {
 					return nil, err
 				}
+				expr.Typ = setOperationOutputType(
+					node.NodeType,
+					leftNode.ProjectList[idx].Typ,
+					rightNode.ProjectList[idx].Typ,
+				)
 			}
 		}
 
@@ -3155,15 +3195,20 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 		}
 	}
 
-	firstSelectProjectNode := builder.qry.Nodes[nodes[0]]
 	// set ctx's headings  projects  results
 	ctx.headings = append(ctx.headings, subCtxList[0].headings...)
 
-	getProjectList := func(tag int32, thisTag int32) []*plan.Expr {
-		projectList := make([]*plan.Expr, len(firstSelectProjectNode.ProjectList))
-		for i, expr := range firstSelectProjectNode.ProjectList {
+	getProjectList := func(
+		nodeType plan.Node_NodeType,
+		leftNodeID, rightNodeID int32,
+		tag, thisTag int32,
+	) []*plan.Expr {
+		leftProjectList := builder.qry.Nodes[leftNodeID].ProjectList
+		rightProjectList := builder.qry.Nodes[rightNodeID].ProjectList
+		projectList := make([]*plan.Expr, len(leftProjectList))
+		for i, expr := range leftProjectList {
 			projectList[i] = &plan.Expr{
-				Typ: expr.Typ,
+				Typ: setOperationOutputType(nodeType, expr.Typ, rightProjectList[i].Typ),
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						RelPos: tag,
@@ -3186,12 +3231,19 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 		lastNewNodeIdx := len(newNodes) - 1
 		if unionTypes[utIdx] == plan.Node_INTERSECT || unionTypes[utIdx] == plan.Node_INTERSECT_ALL {
 			lastTag = builder.genNewBindTag()
-			leftNodeTag := builder.qry.Nodes[newNodes[lastNewNodeIdx]].BindingTags[0]
+			leftNodeID := newNodes[lastNewNodeIdx]
+			leftNodeTag := builder.qry.Nodes[leftNodeID].BindingTags[0]
 			newNodeID := builder.appendNode(&plan.Node{
 				NodeType:    unionTypes[utIdx],
-				Children:    []int32{newNodes[lastNewNodeIdx], nodes[i]},
+				Children:    []int32{leftNodeID, nodes[i]},
 				BindingTags: []int32{lastTag},
-				ProjectList: getProjectList(leftNodeTag, lastTag),
+				ProjectList: getProjectList(
+					unionTypes[utIdx],
+					leftNodeID,
+					nodes[i],
+					leftNodeTag,
+					lastTag,
+				),
 			}, ctx)
 			newNodes[lastNewNodeIdx] = newNodeID
 		} else {
@@ -3211,7 +3263,13 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 			NodeType:    newUnionType[utIdx],
 			Children:    []int32{lastNodeID, newNodes[i]},
 			BindingTags: []int32{lastTag},
-			ProjectList: getProjectList(leftNodeTag, lastTag),
+			ProjectList: getProjectList(
+				newUnionType[utIdx],
+				lastNodeID,
+				newNodes[i],
+				leftNodeTag,
+				lastTag,
+			),
 		}, ctx)
 	}
 
@@ -3226,7 +3284,8 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 		ctx.aliasFrequency[v]++
 		builder.nameByColRef[[2]int32{ctx.projectTag, int32(i)}] = v
 	}
-	for i, expr := range firstSelectProjectNode.ProjectList {
+	setOutputProjectList := builder.qry.Nodes[lastNodeID].ProjectList
+	for i, expr := range setOutputProjectList {
 		ctx.projects = append(ctx.projects, &plan.Expr{
 			Typ: expr.Typ,
 			Expr: &plan.Expr_Col{

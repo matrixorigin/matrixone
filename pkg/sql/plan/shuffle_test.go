@@ -26,6 +26,8 @@ import (
 	"github.com/cespare/xxhash/v2"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 
@@ -859,6 +861,119 @@ func TestOutputTypeAfterNullExtension(t *testing.T) {
 	}
 }
 
+func TestSetOperationOutputType(t *testing.T) {
+	notNullType := plan.Type{
+		Id:          int32(types.T_int64),
+		NotNullable: true,
+	}
+	nullableType := notNullType
+	nullableType.NotNullable = false
+
+	for _, tt := range []struct {
+		name      string
+		nodeType  plan.Node_NodeType
+		leftType  plan.Type
+		rightType plan.Type
+		want      bool
+	}{
+		{
+			name:      "union preserves non-null when both inputs are non-null",
+			nodeType:  plan.Node_UNION,
+			leftType:  notNullType,
+			rightType: notNullType,
+			want:      true,
+		},
+		{
+			name:      "union sees nullable left input",
+			nodeType:  plan.Node_UNION,
+			leftType:  nullableType,
+			rightType: notNullType,
+		},
+		{
+			name:      "union sees nullable right input",
+			nodeType:  plan.Node_UNION,
+			leftType:  notNullType,
+			rightType: nullableType,
+		},
+		{
+			name:      "union all sees nullable right input",
+			nodeType:  plan.Node_UNION_ALL,
+			leftType:  notNullType,
+			rightType: nullableType,
+		},
+		{
+			name:      "intersect keeps left output contract",
+			nodeType:  plan.Node_INTERSECT,
+			leftType:  notNullType,
+			rightType: nullableType,
+			want:      true,
+		},
+		{
+			name:      "intersect all stays conservative for nullable left",
+			nodeType:  plan.Node_INTERSECT_ALL,
+			leftType:  nullableType,
+			rightType: notNullType,
+		},
+		{
+			name:      "minus ignores right nullability",
+			nodeType:  plan.Node_MINUS,
+			leftType:  notNullType,
+			rightType: nullableType,
+			want:      true,
+		},
+		{
+			name:      "minus all keeps nullable left",
+			nodeType:  plan.Node_MINUS_ALL,
+			leftType:  nullableType,
+			rightType: notNullType,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got := setOperationOutputType(tt.nodeType, tt.leftType, tt.rightType)
+			require.Equal(t, tt.want, got.NotNullable)
+			require.Equal(t, notNullType.Id, got.Id)
+		})
+	}
+}
+
+func TestUnionAllOutputNullabilityBeforeOptimization(t *testing.T) {
+	optimizer := NewMockOptimizer(true)
+	statements, err := mysql.Parse(
+		optimizer.CurrentContext().GetContext(),
+		`select n.n_regionkey as regionkey from tpch.nation n
+		 union all
+		 select cast(null as int) as regionkey from tpch.region r
+		 union all
+		 select r.r_regionkey as regionkey from tpch.region r`,
+		1,
+	)
+	require.NoError(t, err)
+	require.Len(t, statements, 1)
+	stmt, ok := statements[0].(*tree.Select)
+	require.True(t, ok)
+
+	builder := NewQueryBuilder(plan.Query_SELECT, optimizer.CurrentContext(), false, true)
+	bindCtx := NewBindContext(builder, nil)
+	rootID, err := builder.bindSelect(stmt, bindCtx, true)
+	require.NoError(t, err)
+
+	var lastUnionAll *plan.Node
+	for _, node := range builder.qry.Nodes {
+		if node.NodeType == plan.Node_UNION_ALL {
+			lastUnionAll = node
+		}
+	}
+	require.NotNil(t, lastUnionAll)
+	require.Len(t, lastUnionAll.ProjectList, 1)
+	require.False(t, lastUnionAll.ProjectList[0].Typ.NotNullable,
+		"a later non-null branch must not erase a nullable middle branch")
+
+	root := builder.qry.Nodes[rootID]
+	require.Len(t, root.ProjectList, 1)
+	require.False(t, root.ProjectList[0].Typ.NotNullable,
+		"the set result projection must expose the combined contract before optimization")
+}
+
 func TestMarkShuffleRejectsOuterJoinNullExtension(t *testing.T) {
 	for _, tt := range []struct {
 		name          string
@@ -1012,6 +1127,140 @@ func TestMarkShuffleRejectsSingleJoinNullExtension(t *testing.T) {
 
 	require.False(t, mark.Stats.HashmapStats.Shuffle)
 	require.Equal(t, int32(-1), mark.Stats.HashmapStats.ShuffleColIdx)
+}
+
+func TestMarkShuffleUsesSetOperationOutputNullability(t *testing.T) {
+	for _, tt := range []struct {
+		name         string
+		setClause    string
+		firstExpr    string
+		secondExpr   string
+		trailingSet  string
+		wantNodeType plan.Node_NodeType
+		wantShuffle  bool
+	}{
+		{
+			name:         "union all nullable second branch stays broadcast",
+			setClause:    "union all",
+			firstExpr:    "n.n_regionkey",
+			secondExpr:   "cast(null as int)",
+			wantNodeType: plan.Node_UNION_ALL,
+		},
+		{
+			name:         "union nullable second branch stays broadcast",
+			setClause:    "union",
+			firstExpr:    "n.n_regionkey",
+			secondExpr:   "cast(null as int)",
+			wantNodeType: plan.Node_UNION,
+		},
+		{
+			name:         "union all nullable first branch stays broadcast",
+			setClause:    "union all",
+			firstExpr:    "cast(null as int)",
+			secondExpr:   "r.r_regionkey",
+			wantNodeType: plan.Node_UNION_ALL,
+		},
+		{
+			name:         "union all nullable middle branch stays broadcast",
+			setClause:    "union all",
+			firstExpr:    "n.n_regionkey",
+			secondExpr:   "cast(null as int)",
+			trailingSet:  "union all select r2.r_regionkey as regionkey from tpch.region r2",
+			wantNodeType: plan.Node_UNION_ALL,
+		},
+		{
+			name:         "union all non-null branches can shuffle",
+			setClause:    "union all",
+			firstExpr:    "n.n_regionkey",
+			secondExpr:   "r.r_regionkey",
+			wantNodeType: plan.Node_UNION_ALL,
+			wantShuffle:  true,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(NewMockOptimizer(true), t, fmt.Sprintf(`
+				select d.regionkey in (
+					select l.l_partkey from tpch.lineitem l
+				)
+				from (
+					select %s as regionkey from tpch.nation n
+					%s
+					select %s as regionkey from tpch.region r
+					%s
+				) d`, tt.firstExpr, tt.setClause, tt.secondExpr, tt.trailingSet))
+			require.NoError(t, err)
+
+			query := logicPlan.GetQuery()
+			require.NotNil(t, query)
+
+			var setNode, mark *plan.Node
+			for _, node := range query.Nodes {
+				if node.NodeType == tt.wantNodeType {
+					setNode = node
+				}
+				if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_MARK {
+					mark = node
+				}
+			}
+			require.NotNil(t, setNode)
+			require.Len(t, setNode.ProjectList, 1)
+			require.Equal(t, tt.wantShuffle, setNode.ProjectList[0].Typ.NotNullable)
+			require.NotNil(t, mark)
+			require.Len(t, mark.Children, 2)
+			require.NotEmpty(t, mark.OnList)
+
+			left := query.Nodes[mark.Children[0]]
+			right := query.Nodes[mark.Children[1]]
+			condition := mark.OnList[0].GetF()
+			require.NotNil(t, condition)
+			require.Len(t, condition.Args, 2)
+			require.Equal(t, tt.wantShuffle,
+				IsJoinExprEffectivelyNotNullable(condition.Args[0], left, right) &&
+					IsJoinExprEffectivelyNotNullable(condition.Args[1], left, right),
+				"compiler guard must observe the materialized set output contract")
+
+			left.Stats.Outcnt = 10_000_000
+			right.Stats.Outcnt = 3_000_000
+			mark.Stats.HashmapStats.HashmapSize = 3_000_000
+			mark.OnList[0].Ndv = 100_000
+			mark.Stats.HashmapStats.Shuffle = true
+
+			builder := &QueryBuilder{qry: query}
+			determineShuffleForJoinWithColRefMode(mark, builder, true)
+
+			require.Equal(t, tt.wantShuffle, mark.Stats.HashmapStats.Shuffle)
+			if tt.wantShuffle {
+				require.Equal(t, int32(0), mark.Stats.HashmapStats.ShuffleColIdx)
+			} else {
+				require.Equal(t, int32(-1), mark.Stats.HashmapStats.ShuffleColIdx)
+			}
+		})
+	}
+}
+
+func TestUnionAllNullabilitySurvivesColumnPruning(t *testing.T) {
+	logicPlan, err := runOneStmt(NewMockOptimizer(true), t, `
+		select d.regionkey
+		from (
+			select n.n_nationkey as unused_key, n.n_regionkey as regionkey
+			from tpch.nation n
+			union all
+			select r.r_regionkey as unused_key, cast(null as int) as regionkey
+			from tpch.region r
+		) d`)
+	require.NoError(t, err)
+
+	var unionAll *plan.Node
+	for _, node := range logicPlan.GetQuery().Nodes {
+		if node.NodeType == plan.Node_UNION_ALL {
+			unionAll = node
+		}
+	}
+	require.NotNil(t, unionAll)
+	require.Len(t, unionAll.ProjectList, 1,
+		"the unused leading set column should be pruned from both branches")
+	require.False(t, unionAll.ProjectList[0].Typ.NotNullable,
+		"the retained column must combine the corresponding post-prune child types")
 }
 
 func makeMarkShuffleEquality(t *testing.T, notNullable bool, leftRel, rightRel int32) *plan.Expr {
