@@ -39,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
@@ -729,6 +730,31 @@ func TestSession_Migrate(t *testing.T) {
 		assert.Nil(t, resp)
 		assert.Equal(t, int64(0), s.GetLastAffectedRows())
 		assert.Equal(t, int64(0), s.GetProc().GetAffectedRows())
+	})
+
+	t.Run("reject user-level locks", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		runtime.SetupServiceBasedRuntime(sid, runtime.DefaultRuntime())
+		InitServerLevelVars(sid)
+		SetSessionAlloc(sid, NewSessionAllocator(&config.ParameterUnit{SV: sv}))
+		s := genSession(ctrl, "d1", nil)
+		err := Migrate(context.Background(), s, &query.MigrateConnToRequest{
+			ConnID: 88,
+			DB:     "d1",
+			UserLevelLocks: []*query.UserLevelLock{
+				{Name: "restored_lock", Count: 2},
+			},
+		})
+		assert.ErrorContains(t, err, "cannot migrate connection while user-level locks are held")
+		assert.Empty(t, function.UserLevelLocksForMigration(s.proc))
 	})
 
 	t.Run("db dropped", func(t *testing.T) {
