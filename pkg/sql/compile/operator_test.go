@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dedupjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
@@ -60,6 +61,26 @@ func TestDupOperator(t *testing.T) {
 		0,
 		0,
 	)
+}
+
+func TestConstructAggregateConfigIncludesGroupConcatMaxLen(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.SetResolveVariableFunc(func(name string, system, global bool) (interface{}, error) {
+		require.Equal(t, "group_concat_max_len", name)
+		require.True(t, system)
+		require.False(t, global)
+		return int64(5), nil
+	})
+
+	valueArg := &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar)}}
+	separatorArg := plan2.MakePlan2StringConstExprWithType("")
+	args, config := constructAggregateConfig(&plan.Function{
+		Func: &plan.ObjectRef{ObjName: plan2.NameGroupConcat},
+		Args: []*plan.Expr{valueArg, separatorArg},
+	}, proc)
+
+	require.Equal(t, []*plan.Expr{valueArg}, args)
+	require.Equal(t, aggexec.EncodeGroupConcatConfig("", 5), config)
 }
 
 func TestDupHashBuildPreservesNullTracking(t *testing.T) {
@@ -325,29 +346,36 @@ func TestConstructTimeWindowApproxPercentileRejectsInvalidConfig(t *testing.T) {
 	}
 }
 
-func TestConstructAggFunctionExpressionPreservesOtherSpecialConfigs(t *testing.T) {
+func TestConstructAggregateConfigPreservesOtherSpecialConfigs(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
+	proc.SetResolveVariableFunc(func(name string, system, global bool) (interface{}, error) {
+		require.Equal(t, "group_concat_max_len", name)
+		require.True(t, system)
+		require.False(t, global)
+		return int64(1024), nil
+	})
 	value := &plan.Expr{
 		Typ:  plan.Type{Id: int32(types.T_int32)},
 		Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 1}},
 	}
 
 	for _, tc := range []struct {
-		name   string
-		config string
+		name       string
+		config     string
+		wantConfig []byte
 	}{
-		{name: plan2.NameGroupConcat, config: "|"},
-		{name: plan2.NameClusterCenters, config: "k=3,init=random"},
+		{name: plan2.NameGroupConcat, config: "|", wantConfig: aggexec.EncodeGroupConcatConfig("|", 1024)},
+		{name: plan2.NameClusterCenters, config: "k=3,init=random", wantConfig: []byte("k=3,init=random")},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := &plan.Function{
 				Func: &plan.ObjectRef{ObjName: tc.name},
 				Args: []*plan.Expr{value, plan2.MakePlan2StringConstExprWithType(tc.config)},
 			}
-			expr := constructAggFunctionExpression(1, false, f, proc)
-			require.Len(t, expr.GetArgExpressions(), 1)
-			require.Equal(t, tc.config, string(expr.GetExtraConfig()))
+			args, config := constructAggregateConfig(f, proc)
+			require.Len(t, args, 1)
+			require.Equal(t, tc.wantConfig, config)
 		})
 	}
 }

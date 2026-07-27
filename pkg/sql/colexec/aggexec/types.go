@@ -87,6 +87,10 @@ func (ag *AggFuncExecExpression) GetExtraConfig() []byte {
 	return ag.extraConfig
 }
 
+func (ag *AggFuncExecExpression) SetExtraConfig(config []byte) {
+	ag.extraConfig = config
+}
+
 // AggFuncExec is an interface to do execution for aggregation.
 type AggFuncExec interface {
 	GetOptResult() SplitResult
