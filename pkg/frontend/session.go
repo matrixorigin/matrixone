@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -45,6 +46,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -56,6 +58,21 @@ import (
 var (
 	MaxPrepareNumberInOneSession atomic.Uint32
 )
+
+func currentProtocolVersion(proc *process.Process) int64 {
+	if proc == nil {
+		return defines.MORPCLatestVersion
+	}
+	value, ok := moruntime.ServiceRuntime(proc.GetService()).GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return defines.MORPCVersion4
+	}
+	version, ok := value.(int64)
+	if !ok {
+		return defines.MORPCVersion4
+	}
+	return version
+}
 
 func init() {
 	MaxPrepareNumberInOneSession.Store(100000)
@@ -859,6 +876,14 @@ func (ses *Session) Close() {
 		}()
 	}
 
+	if ses.proc != nil {
+		if ses.userLevelLocksMigrated {
+			function.DiscardMigratedUserLevelLocks(ses.proc)
+		} else {
+			function.ReleaseUserLevelLocksOnSessionClose(ses.proc)
+		}
+	}
+
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	ses.feSessionImpl.Close()
@@ -943,7 +968,7 @@ func (ses *Session) IsBackgroundSession() bool {
 	return false
 }
 
-func (ses *Session) cachePlan(sql string, stmts []tree.Statement, plans []*plan.Plan) {
+func (ses *Session) cachePlan(sql string, stmts []tree.Statement, plans []*plan.Plan, versions ...int64) {
 	if len(sql) == 0 {
 		return
 	}
@@ -953,7 +978,11 @@ func (ses *Session) cachePlan(sql string, stmts []tree.Statement, plans []*plan.
 		freeStmts(stmts)
 		return
 	}
-	ses.planCache.cache(sql, stmts, plans)
+	protocolVersion := currentProtocolVersion(ses.proc)
+	if len(versions) > 0 {
+		protocolVersion = versions[0]
+	}
+	ses.planCache.cache(sql, stmts, plans, protocolVersion)
 }
 
 func (ses *Session) getCachedPlan(sql string) *cachedPlan {
@@ -965,7 +994,12 @@ func (ses *Session) getCachedPlan(sql string) *cachedPlan {
 	if ses.planCache == nil {
 		return nil
 	}
-	return ses.planCache.get(sql)
+	cached := ses.planCache.get(sql)
+	if cached != nil && cached.protocolVersion != currentProtocolVersion(ses.proc) {
+		ses.planCache.remove(sql)
+		return nil
+	}
+	return cached
 }
 
 func (ses *Session) isCached(sql string) bool {
@@ -2191,6 +2225,12 @@ func Migrate(ctx context.Context, ses *Session, req *query.MigrateConnToRequest)
 	defer cancelRequestFunc()
 	ses.UpdateDebugString()
 	tenant := ses.GetTenantInfo()
+	if ses.proc != nil {
+		ses.proc.Base.SessionInfo.ConnectionID = uint64(req.ConnID)
+		if tenant != nil {
+			ses.proc.Base.SessionInfo.Account = tenant.GetTenant()
+		}
+	}
 	nodeCtx := cancelRequestCtx
 	rm := ses.getRoutineManager()
 	if rm != nil && rm.baseService != nil {
@@ -2207,6 +2247,9 @@ func Migrate(ctx context.Context, ses *Session, req *query.MigrateConnToRequest)
 	userID := defines.GetUserId(migrationCtx)
 	ses.Infof(migrationCtx, "do migration on connection %d, db: %s, account id: %d, user id: %d",
 		req.ConnID, req.DB, accountID, userID)
+	if len(req.UserLevelLocks) > 0 {
+		return moerr.NewInternalError(ctx, "cannot migrate connection while user-level locks are held")
+	}
 
 	dbm := newDBMigration(req.DB)
 	if err := dbm.Migrate(migrationCtx, ses); err != nil {
