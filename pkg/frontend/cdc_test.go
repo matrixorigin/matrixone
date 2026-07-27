@@ -19,7 +19,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"reflect"
 	"regexp"
 	"sync"
 	"sync/atomic"
@@ -62,41 +61,41 @@ import (
 // Global stub for GetTableDetector - initialized in init() to prevent panics across all tests
 var _globalTableDetectorStub *gostub.Stubs
 
+const testPermanentDetectorTask = "__test_permanent_dummy__"
+
 // init sets up global mock for GetTableDetector once for all tests in this package
 // This stub is NEVER reset to ensure consistent behavior across all tests
 func init() {
 	_globalTableDetectorStub = gostub.Stub(&cdc.GetTableDetector, createMockTableDetectorForTest())
 }
 
-// createMockTableDetectorForTest creates a properly initialized mock TableDetector for testing
+// createMockTableDetectorForTest creates a mock TableDetector that never starts
+// the background scan loop. Frontend tests only need registration semantics; the
+// permanent callback makes every test registration non-initial.
 func createMockTableDetectorForTest() func(cnUUID string) *cdc.TableDetector {
 	return func(cnUUID string) *cdc.TableDetector {
-		detector := &cdc.TableDetector{
-			Mp:                   make(map[uint32]cdc.TblMap),
-			Callbacks:            make(map[string]cdc.TableCallback),
-			CallBackAccountId:    make(map[string]uint32),
-			SubscribedAccountIds: make(map[uint32][]string),
-			CallBackDbName:       make(map[string][]string),
-			SubscribedDbNames:    make(map[string][]string),
-			CallBackTableName:    make(map[string][]string),
+		return &cdc.TableDetector{
+			Mp: make(map[uint32]cdc.TblMap),
+			Callbacks: map[string]cdc.TableCallback{
+				testPermanentDetectorTask: func(map[uint32]cdc.TblMap) error {
+					return nil
+				},
+			},
+			CallBackAccountId: map[string]uint32{
+				testPermanentDetectorTask: 1,
+			},
+			SubscribedAccountIds: map[uint32][]string{
+				1: {testPermanentDetectorTask},
+			},
+			CallBackDbName: map[string][]string{
+				testPermanentDetectorTask: {},
+			},
+			SubscribedDbNames: make(map[string][]string),
+			CallBackTableName: map[string][]string{
+				testPermanentDetectorTask: {},
+			},
 			SubscribedTableNames: make(map[string][]string),
 		}
-
-		// Set scanTableFn to no-op to prevent panic in scanTableLoop
-		detectorValue := reflect.ValueOf(detector).Elem()
-		scanTableFnField := detectorValue.FieldByName("scanTableFn")
-		if scanTableFnField.IsValid() && scanTableFnField.CanSet() {
-			scanTableFnField.Set(reflect.ValueOf(func() error {
-				return nil
-			}))
-		}
-
-		// Call RegisterIfAbsent to properly initialize cancel field
-		detector.RegisterIfAbsent("__test_permanent_dummy__", 1, []string{}, []string{}, func(map[uint32]cdc.TblMap) error {
-			return nil
-		})
-
-		return detector
 	}
 }
 
