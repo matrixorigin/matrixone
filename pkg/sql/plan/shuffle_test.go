@@ -16,6 +16,7 @@ package plan
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"fmt"
 	"math/rand"
@@ -471,6 +472,120 @@ func TestDetermineShuffleForDedupJoin(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestDetermineShuffleForJoinNDVGuard(t *testing.T) {
+	left := &plan.Node{
+		NodeType:    plan.Node_TABLE_SCAN,
+		BindingTags: []int32{1},
+		Stats:       &plan.Stats{Outcnt: 1000, HashmapStats: &plan.HashMapStats{}},
+	}
+	right := &plan.Node{
+		NodeType:    plan.Node_SINK_SCAN,
+		BindingTags: []int32{2},
+		Stats:       &plan.Stats{Outcnt: 10_000_000, HashmapStats: &plan.HashMapStats{}},
+	}
+	leftKey := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_int64)},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 1, ColPos: 0}},
+	}
+	rightKey := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_int64)},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 2, ColPos: 0}},
+	}
+	cond, err := BindFuncExprImplByPlanExpr(context.Background(), "=", []*plan.Expr{leftKey, rightKey})
+	require.NoError(t, err)
+	builder := &QueryBuilder{qry: &plan.Query{Nodes: []*plan.Node{left, right}}}
+	newJoin := func(ndv float64) *plan.Node {
+		joinCond := DeepCopyExpr(cond)
+		joinCond.Ndv = ndv
+		return &plan.Node{
+			NodeType: plan.Node_JOIN,
+			JoinType: plan.Node_INNER,
+			Children: []int32{0, 1},
+			OnList:   []*plan.Expr{joinCond},
+			Stats: &plan.Stats{HashmapStats: &plan.HashMapStats{
+				HashmapSize: 10_000_000,
+			}},
+		}
+	}
+
+	unknownNDVJoin := newJoin(-1)
+	determineShuffleForJoin(unknownNDVJoin, builder)
+	require.True(t, unknownNDVJoin.Stats.HashmapStats.Shuffle)
+	require.Equal(t, int32(0), unknownNDVJoin.Stats.HashmapStats.ShuffleColIdx)
+	require.Equal(t, plan.ShuffleType_Hash, unknownNDVJoin.Stats.HashmapStats.ShuffleType)
+
+	lowNDVJoin := newJoin(10)
+	determineShuffleForJoin(lowNDVJoin, builder)
+	require.False(t, lowNDVJoin.Stats.HashmapStats.Shuffle)
+}
+
+func TestDetermineShuffleForLatePlanStep(t *testing.T) {
+	// IVF maintenance also contains internal scans without binding tags. The
+	// post-createQuery shuffle pass must recognize its local RelPos 0/1 join
+	// condition while tolerating unrelated untagged scans.
+	ivfScanWithoutBindingTag := &plan.Node{
+		NodeType: plan.Node_TABLE_SCAN,
+		TableDef: &plan.TableDef{Pkey: &plan.PrimaryKeyDef{
+			PkeyColName: "id",
+			Names:       []string{"id"},
+		}},
+		Stats: &plan.Stats{Outcnt: 1000, HashmapStats: &plan.HashMapStats{}},
+	}
+	left := &plan.Node{
+		NodeType: plan.Node_TABLE_SCAN,
+		TableDef: &plan.TableDef{},
+		Stats:    &plan.Stats{Outcnt: 1000, HashmapStats: &plan.HashMapStats{}},
+	}
+	right := &plan.Node{
+		NodeType: plan.Node_SINK_SCAN,
+		Stats:    &plan.Stats{Outcnt: 10_000_000, HashmapStats: &plan.HashMapStats{}},
+	}
+	cond, err := BindFuncExprImplByPlanExpr(context.Background(), "=", []*plan.Expr{
+		{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0}}},
+		{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 1, ColPos: 0}}},
+	})
+	require.NoError(t, err)
+	cond.Ndv = -1
+	join := &plan.Node{
+		NodeType: plan.Node_JOIN,
+		JoinType: plan.Node_INNER,
+		Children: []int32{0, 1},
+		OnList:   []*plan.Expr{cond},
+		Stats: &plan.Stats{HashmapStats: &plan.HashMapStats{
+			HashmapSize: 10_000_000,
+		}},
+	}
+	builder := NewQueryBuilder(plan.Query_INSERT, NewMockCompilerContext(true), false, true)
+	builder.qry = &plan.Query{
+		Nodes: []*plan.Node{left, right, join, ivfScanWithoutBindingTag},
+		Steps: []int32{3, 2},
+	}
+
+	builder.determineShuffleForDMLSteps()
+
+	require.True(t, join.Stats.HashmapStats.Shuffle)
+	require.Len(t, join.RuntimeFilterProbeList, 1)
+	require.Len(t, join.RuntimeFilterBuildList, 1)
+	require.Equal(t, join.RuntimeFilterProbeList[0].Tag, join.RuntimeFilterBuildList[0].Tag)
+	require.Nil(t, join.RuntimeFilterProbeList[0].Expr)
+	require.Nil(t, join.RuntimeFilterBuildList[0].Expr)
+
+	// A same-side equality remains non-equi for join planning after remapping.
+	sameSideCond, err := BindFuncExprImplByPlanExpr(context.Background(), "=", []*plan.Expr{
+		{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0}}},
+		{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 1}}},
+	})
+	require.NoError(t, err)
+	join.OnList = []*plan.Expr{sameSideCond}
+	join.Stats.HashmapStats.Shuffle = false
+	join.RuntimeFilterProbeList = nil
+	join.RuntimeFilterBuildList = nil
+	builder.determineShuffleForDMLSteps()
+	require.False(t, join.Stats.HashmapStats.Shuffle)
+	require.Empty(t, join.RuntimeFilterProbeList)
+	require.Empty(t, join.RuntimeFilterBuildList)
 }
 
 func TestGetRangeShuffleIndexForZM(t *testing.T) {
