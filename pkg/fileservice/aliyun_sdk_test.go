@@ -88,6 +88,40 @@ func TestAliyunSDKCopyObjectPropagatesCancellation(t *testing.T) {
 	}
 }
 
+func TestAliyunSDKListStopsRetryingAtContextDeadline(t *testing.T) {
+	client, err := oss.New(
+		"http://oss.test",
+		"id",
+		"secret",
+		oss.ForcePathStyle(true),
+		oss.HTTPClient(&http.Client{Transport: aliyunRetryTimeoutTransport{}}),
+	)
+	require.NoError(t, err)
+	bucket, err := client.Bucket("bucket")
+	require.NoError(t, err)
+	sdk := &AliyunSDK{bucket: bucket}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	for _, err := range sdk.List(ctx, "") {
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+		return
+	}
+	t.Fatal("expected list to return a deadline error")
+}
+
+type aliyunRetryTimeoutTransport struct{}
+
+func (aliyunRetryTimeoutTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	return nil, aliyunRetryTimeoutError{}
+}
+
+type aliyunRetryTimeoutError struct{}
+
+func (aliyunRetryTimeoutError) Error() string   { return "timeout" }
+func (aliyunRetryTimeoutError) Timeout() bool   { return true }
+func (aliyunRetryTimeoutError) Temporary() bool { return true }
+
 func TestAliyunPutObjectPhysicalAccounting(t *testing.T) {
 	var fail bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
