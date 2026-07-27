@@ -298,6 +298,8 @@ func TestProxyServiceOwnsPort(t *testing.T) {
 	defaultConfig := writeLaunchTestFile(t, "proxy-default.toml", "[proxy]\nuuid=\"proxy\"\n")
 	port6001 := writeLaunchTestFile(t, "proxy-6001.toml", "[proxy]\nlisten-address=\"0.0.0.0:6001\"\n")
 	port6009 := writeLaunchTestFile(t, "proxy-6009.toml", "[proxy]\nlisten-address=\"127.0.0.1:6009\"\n")
+	tcpURL := writeLaunchTestFile(t, "proxy-tcp-url.toml", "[proxy]\nlisten-address=\"tcp://0.0.0.0:6001\"\n")
+	unixURL := writeLaunchTestFile(t, "proxy-unix-url.toml", "[proxy]\nlisten-address=\"unix:///tmp/matrixone-proxy.sock\"\n")
 	missing := filepath.Join(t.TempDir(), "missing.toml")
 
 	owned, err := proxyServiceOwnsPort([]string{defaultConfig}, 6001)
@@ -309,8 +311,32 @@ func TestProxyServiceOwnsPort(t *testing.T) {
 	owned, err = proxyServiceOwnsPort([]string{port6009}, 6001)
 	require.NoError(t, err)
 	require.False(t, owned)
+	owned, err = proxyServiceOwnsPort([]string{tcpURL}, 6001)
+	require.NoError(t, err)
+	require.True(t, owned)
+	owned, err = proxyServiceOwnsPort([]string{unixURL}, 6001)
+	require.NoError(t, err)
+	require.False(t, owned, "Unix Proxy listener has no TCP port")
 	_, err = proxyServiceOwnsPort([]string{missing}, 6001)
 	require.Error(t, err)
+}
+
+func TestProxyListenPort(t *testing.T) {
+	tests := []struct {
+		address string
+		port    string
+	}{
+		{address: "127.0.0.1:6001", port: "6001"},
+		{address: "tcp://0.0.0.0:6001", port: "6001"},
+		{address: "unix:///tmp/proxy.sock", port: ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.address, func(t *testing.T) {
+			port, err := proxyListenPort(tc.address)
+			require.NoError(t, err)
+			require.Equal(t, tc.port, port)
+		})
+	}
 }
 
 func TestStartDynamicBuiltinProxyOwnership(t *testing.T) {

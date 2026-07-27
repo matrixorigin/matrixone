@@ -19,6 +19,8 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
@@ -195,7 +197,7 @@ func proxyServiceOwnsPort(files []string, port int) (bool, error) {
 		}
 		proxyCfg := cfg.getProxyConfig()
 		proxyCfg.FillDefault()
-		_, configuredPort, err := net.SplitHostPort(proxyCfg.ListenAddress)
+		configuredPort, err := proxyListenPort(proxyCfg.ListenAddress)
 		if err != nil {
 			return false, err
 		}
@@ -204,6 +206,25 @@ func proxyServiceOwnsPort(files []string, port int) (bool, error) {
 		}
 	}
 	return false, nil
+}
+
+// proxyListenPort follows pkg/proxy's listener address contract. Unix
+// listeners have no TCP port and therefore cannot own the built-in 6001
+// endpoint; in that case the legacy TCP proxy remains enabled.
+func proxyListenPort(address string) (string, error) {
+	if !strings.Contains(address, "//") {
+		_, port, err := net.SplitHostPort(address)
+		return port, err
+	}
+	u, err := url.Parse(address)
+	if err != nil {
+		return "", err
+	}
+	if strings.EqualFold(u.Scheme, "unix") {
+		return "", nil
+	}
+	_, port, err := net.SplitHostPort(u.Host)
+	return port, err
 }
 
 func startProxyServiceCluster(
