@@ -371,5 +371,5 @@ func TestExternalFileLevelFilterRejectsNestedZeroArgumentFunction(t *testing.T) 
 		},
 	}
 
-	require.False(t, isFileLevelFilter(filter))
+	require.False(t, isFileLevelFilter(nil, filter))
 }

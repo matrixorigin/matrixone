@@ -53,7 +53,7 @@ const (
 	Rows = 10 // default rows
 )
 
-func TestJudgeContainColnameAllowsNestedZeroArgumentFunction(t *testing.T) {
+func TestFileLevelFilterRejectsNestedZeroArgumentFunction(t *testing.T) {
 	filter := &plan.Expr{
 		Expr: &plan.Expr_F{
 			F: &plan.Function{
@@ -72,7 +72,7 @@ func TestJudgeContainColnameAllowsNestedZeroArgumentFunction(t *testing.T) {
 		},
 	}
 
-	require.False(t, judgeContainColname(filter))
+	require.False(t, isFileLevelFilter(nil, filter))
 }
 
 func TestCsvReaderRejectsZeroVectorBatch(t *testing.T) {
