@@ -131,6 +131,11 @@ func TestLockNamedDataBranchCloneSnapshot(t *testing.T) {
 		"select * from mo_catalog.mo_snapshots where sname = 'snap' for update",
 		lockSQL,
 	)
+	_, err = namedDataBranchCloneSnapshotLockSQL(ctx, "invalid'snapshot")
+	require.Error(t, err)
+	require.NoError(t, lockNamedDataBranchCloneSnapshot(
+		context.Background(), &backgroundExecTest{}, snapshot,
+	))
 
 	t.Run("matching snapshot is locked", func(t *testing.T) {
 		bh := &backgroundExecTest{}
@@ -156,6 +161,40 @@ func TestLockNamedDataBranchCloneSnapshot(t *testing.T) {
 			bh.init()
 			bh.sql2result[lockSQL] = tc.record
 			err := lockNamedDataBranchCloneSnapshot(ctx, bh, snapshot)
+			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged))
+		})
+	}
+}
+
+func TestValidateNamedDataBranchCloneSnapshotRecordRejectsIdentityDrift(t *testing.T) {
+	snapshot := &plan.Snapshot{
+		TS: &timestamp.Timestamp{PhysicalTime: 42},
+		ExtraInfo: &plan.SnapshotExtraInfo{
+			Name: "snap", Level: "table", ObjId: 7,
+		},
+	}
+	matching := &snapshotRecord{
+		snapshotName: "snap", ts: 42, level: "table", objId: 7,
+	}
+	require.NoError(t, validateNamedDataBranchCloneSnapshotRecord(snapshot, matching))
+
+	for _, tc := range []struct {
+		name     string
+		snapshot *plan.Snapshot
+		record   *snapshotRecord
+	}{
+		{name: "missing record", snapshot: snapshot},
+		{name: "missing snapshot", record: matching},
+		{name: "missing timestamp", snapshot: &plan.Snapshot{ExtraInfo: snapshot.ExtraInfo}, record: matching},
+		{name: "missing extra info", snapshot: &plan.Snapshot{TS: snapshot.TS}, record: matching},
+		{name: "name changed", snapshot: snapshot, record: &snapshotRecord{snapshotName: "other", ts: 42, level: "table", objId: 7}},
+		{name: "level changed", snapshot: snapshot, record: &snapshotRecord{snapshotName: "snap", ts: 42, level: "database", objId: 7}},
+		{name: "object changed", snapshot: snapshot, record: &snapshotRecord{snapshotName: "snap", ts: 42, level: "table", objId: 8}},
+		{name: "internal branch snapshot", snapshot: snapshot, record: &snapshotRecord{snapshotName: "snap", ts: 42, level: "table", objId: 7, kind: branchSnapshotKind}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateNamedDataBranchCloneSnapshotRecord(tc.snapshot, tc.record)
 			require.Error(t, err)
 			require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged))
 		})
@@ -262,6 +301,54 @@ func TestValidateTimestampDataBranchSourceAfterLock(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []*plan.Snapshot{timestampSource, nil}, resolved)
 	require.True(t, dagLoaded)
+}
+
+func TestValidateTimestampDataBranchSourceAfterLockFailures(t *testing.T) {
+	timestampSource := &plan.Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 42}}
+	wantErr := errors.New("lookup failed")
+
+	require.NoError(t, validateTimestampDataBranchSourceAfterLock(
+		&plan.Snapshot{ExtraInfo: &plan.SnapshotExtraInfo{Name: "named"}},
+		func(*plan.Snapshot) (uint64, error) { return 0, wantErr },
+		func() (*databranchutils.DataBranchDAG, error) { return nil, wantErr },
+	))
+	require.ErrorIs(t, validateTimestampDataBranchSourceAfterLock(
+		timestampSource,
+		func(*plan.Snapshot) (uint64, error) { return 0, wantErr },
+		func() (*databranchutils.DataBranchDAG, error) { return nil, nil },
+	), wantErr)
+
+	resolveCalls := 0
+	require.ErrorIs(t, validateTimestampDataBranchSourceAfterLock(
+		timestampSource,
+		func(*plan.Snapshot) (uint64, error) {
+			resolveCalls++
+			if resolveCalls == 2 {
+				return 0, wantErr
+			}
+			return 1, nil
+		},
+		func() (*databranchutils.DataBranchDAG, error) { return nil, nil },
+	), wantErr)
+
+	require.NoError(t, validateTimestampDataBranchSourceAfterLock(
+		timestampSource,
+		func(*plan.Snapshot) (uint64, error) { return 1, nil },
+		func() (*databranchutils.DataBranchDAG, error) {
+			t.Fatal("same-generation validation must not load lineage")
+			return nil, nil
+		},
+	))
+
+	resolveCalls = 0
+	require.ErrorIs(t, validateTimestampDataBranchSourceAfterLock(
+		timestampSource,
+		func(*plan.Snapshot) (uint64, error) {
+			resolveCalls++
+			return uint64(resolveCalls), nil
+		},
+		func() (*databranchutils.DataBranchDAG, error) { return nil, wantErr },
+	), wantErr)
 }
 
 func TestTimestampDataBranchDatabaseRevalidatesEveryTableAfterAllLocks(t *testing.T) {
