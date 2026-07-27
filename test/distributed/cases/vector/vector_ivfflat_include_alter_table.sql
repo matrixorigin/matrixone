@@ -27,6 +27,7 @@ show index from vector_ivfflat_include_phase7_include;
 alter table vector_ivfflat_include_phase7_include rename column title to headline;
 
 show create table vector_ivfflat_include_phase7_include;
+-- @sortkey:2
 show index from vector_ivfflat_include_phase7_include;
 
 select id, headline, category

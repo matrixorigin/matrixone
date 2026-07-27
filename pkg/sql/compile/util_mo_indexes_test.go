@@ -22,6 +22,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -36,6 +37,7 @@ func TestGenInsertMOIndexesSqlUsesRollingUpgradeSafeColumnList(t *testing.T) {
 	mockEngine.EXPECT().AllocateIDByKey(gomock.Any(), ALLOCID_INDEX_KEY).Return(uint64(272510), nil).Times(1)
 
 	proc := testutil.NewProc(t)
+	const algoParams = `{"included_columns":"[\"title\",\"category\"]","lists":"2","op_type":"vector_l2_ops"}`
 	tableDef := &plan.TableDef{
 		Name2ColIndex: map[string]int32{"embedding": 0},
 		Cols: []*plan.ColDef{
@@ -51,7 +53,7 @@ func TestGenInsertMOIndexesSqlUsesRollingUpgradeSafeColumnList(t *testing.T) {
 						Parts:              []string{"embedding"},
 						IndexAlgo:          catalog.MoIndexIvfFlatAlgo.ToString(),
 						IndexAlgoTableType: catalog.SystemSI_IVFFLAT_TblType_Entries,
-						IndexAlgoParams:    `{"included_columns":"title,category","lists":"2","op_type":"vector_l2_ops"}`,
+						IndexAlgoParams:    algoParams,
 						IndexTableName:     "__mo_index_entries_idx_vec",
 						TableExist:         true,
 						IncludedColumns:    []string{"title", "category"},
@@ -66,6 +68,6 @@ func TestGenInsertMOIndexesSqlUsesRollingUpgradeSafeColumnList(t *testing.T) {
 	header := strings.SplitN(sql, " values", 2)[0]
 	require.Equal(t, "insert into mo_catalog.mo_indexes "+moIndexesColumnList, header)
 	require.NotContains(t, header, catalog.IncludedColumns)
-	require.Contains(t, sql, `'{"included_columns":"title,category","lists":"2","op_type":"vector_l2_ops"}'`)
+	require.Contains(t, sql, sqlquote.String(algoParams))
 	require.Contains(t, sql, "'__mo_index_entries_idx_vec')")
 }

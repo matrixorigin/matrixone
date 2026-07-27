@@ -147,7 +147,7 @@ phase8_main  ¦  CREATE TABLE `phase8_main` (
 show index from phase8_main;
 ➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
 phase8_main  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  id  𝄀
-phase8_main  ¦  1  ¦  idx_ivf_include_phase8  ¦  1  ¦  embedding  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  ivfflat  ¦    ¦    ¦  {"lists":"3","op_type":"vector_l2_ops"}  ¦  YES  ¦  embedding
+phase8_main  ¦  1  ¦  idx_ivf_include_phase8  ¦  1  ¦  embedding  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  ivfflat  ¦    ¦    ¦  {"included_columns":"[\"title\",\"category\"]","lists":"3","op_type":"vector_l2_ops"}  ¦  YES  ¦  embedding
 set @entries = (
 select index_table_name
 from mo_catalog.mo_indexes
@@ -284,7 +284,7 @@ phase8_many_include  ¦  CREATE TABLE `phase8_many_include` (
 show index from phase8_many_include;
 ➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
 phase8_many_include  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  id  𝄀
-phase8_many_include  ¦  1  ¦  idx_ivf_include_phase8_many  ¦  1  ¦  embedding  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  ivfflat  ¦    ¦    ¦  {"lists":"2","op_type":"vector_l2_ops"}  ¦  YES  ¦  embedding
+phase8_many_include  ¦  1  ¦  idx_ivf_include_phase8_many  ¦  1  ¦  embedding  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  ivfflat  ¦    ¦    ¦  {"included_columns":"[\"c1\",\"c2\",\"c3\",\"c4\",\"c5\",\"c6\"]","lists":"2","op_type":"vector_l2_ops"}  ¦  YES  ¦  embedding
 select id, c1, c2, c3, c4, c5, c6
 from phase8_many_include
 order by l2_distance(embedding, "[1,0,0]")

@@ -24,6 +24,7 @@ import (
 	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -303,7 +304,7 @@ func genInsertMOIndexesSql(eg engine.Engine, proc *process.Process, databaseId s
 
 					//8. algorithm_params
 					var algorithm_params = indexDef.IndexAlgoParams
-					fmt.Fprintf(buffer, "'%s', ", algorithm_params)
+					fmt.Fprintf(buffer, "%s, ", sqlquote.String(algorithm_params))
 
 					// 9. index visible
 					fmt.Fprintf(buffer, "%d, ", INDEX_VISIBLE_YES)

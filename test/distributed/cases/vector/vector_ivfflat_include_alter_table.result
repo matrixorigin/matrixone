@@ -30,7 +30,7 @@ vector_ivfflat_include_phase7_include  ¦  CREATE TABLE `vector_ivfflat_include_
 show index from vector_ivfflat_include_phase7_include;
 ➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
 vector_ivfflat_include_phase7_include  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  id  𝄀
-vector_ivfflat_include_phase7_include  ¦  1  ¦  idx_ivf_include_phase7  ¦  1  ¦  embedding  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  ivfflat  ¦    ¦    ¦  {"lists":"2","op_type":"vector_l2_ops"}  ¦  YES  ¦  embedding
+vector_ivfflat_include_phase7_include  ¦  1  ¦  idx_ivf_include_phase7  ¦  1  ¦  embedding  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  ivfflat  ¦    ¦    ¦  {"included_columns":"[\"title\",\"category\"]","lists":"2","op_type":"vector_l2_ops"}  ¦  YES  ¦  embedding
 alter table vector_ivfflat_include_phase7_include rename column title to headline;
 show create table vector_ivfflat_include_phase7_include;
 ➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
@@ -46,7 +46,7 @@ vector_ivfflat_include_phase7_include  ¦  CREATE TABLE `vector_ivfflat_include_
 show index from vector_ivfflat_include_phase7_include;
 ➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
 vector_ivfflat_include_phase7_include  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  id  𝄀
-vector_ivfflat_include_phase7_include  ¦  1  ¦  idx_ivf_include_phase7  ¦  1  ¦  embedding  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  ivfflat  ¦    ¦    ¦  {"lists":"2","op_type":"vector_l2_ops"}  ¦  YES  ¦  embedding
+vector_ivfflat_include_phase7_include  ¦  1  ¦  idx_ivf_include_phase7  ¦  1  ¦  embedding  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  ivfflat  ¦    ¦    ¦  {"included_columns":"[\"headline\",\"category\"]","lists":"2","op_type":"vector_l2_ops"}  ¦  YES  ¦  embedding
 select id, headline, category
 from vector_ivfflat_include_phase7_include
 order by l2_distance(embedding, "[1,2,3]")
