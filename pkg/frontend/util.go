@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/objectkey"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	mo_config "github.com/matrixorigin/matrixone/pkg/config"
@@ -1885,10 +1886,10 @@ func attachValue(ctx context.Context, key, val any) context.Context {
 	return context.WithValue(ctx, key, val)
 }
 
-const KeySep = "#"
+const KeySep = objectkey.Separator
 
 func genKey(dbName, tblName string) string {
-	return fmt.Sprintf("%s%s%s", dbName, KeySep, tblName)
+	return objectkey.Encode(dbName, tblName)
 }
 
 func normalizeViewDependencyKey(key string) (string, error) {
@@ -1900,11 +1901,7 @@ func normalizeViewDependencyKey(key string) (string, error) {
 }
 
 func splitKey(key string) (string, string) {
-	parts := strings.Split(key, KeySep)
-	if len(parts) >= 2 {
-		return parts[0], parts[1]
-	}
-	return parts[0], ""
+	return objectkey.Decode(key)
 }
 
 type toposort struct {

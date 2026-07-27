@@ -59,30 +59,33 @@ func (c *BoundTableOperator) iterObject(from, to types.TS, isTombstone bool) err
 	} else {
 		it = c.tbl.MakeDataObjectIt()
 	}
-	key := &catalog.ObjectEntry{EntryMVCCNode: catalog.EntryMVCCNode{DeletedAt: to.Next()}}
-	var ok bool
-	if ok = it.Seek(key); !ok {
-		ok = it.Last()
+	defer it.Release()
+	visit := func(obj *catalog.ObjectEntry) error {
+		c.recordReport(isTombstone, obj.GetAppendable())
+		if next := obj.GetNextVersion(); obj.IsCEntry() && next != nil && next.DeletedAt.LE(&to) {
+			return nil
+		}
+		return c.visitor.VisitObj(obj)
 	}
 
-	// after seeking, the first object could be out of the range, but false positive is allowed.
-	earlybreak := false
-	for ; ok; ok = it.Prev() {
-		if earlybreak {
-			break
+	for group := catalog.ObjectListGroupAppendableCreate; group <= catalog.ObjectListGroupNonAppendableDrop; group++ {
+		if group == catalog.ObjectListGroupAppendableCreate ||
+			group == catalog.ObjectListGroupAppendableCreateWithDrop {
+			if catalog.SeekObjectListGroupBefore(&it, group, from) {
+				if err := visit(it.Item()); err != nil {
+					return err
+				}
+			}
 		}
-		obj := it.Item()
-		c.recordReport(isTombstone, obj.GetAppendable())
-		if obj.IsAppendable() && obj.IsCEntry() && obj.CreatedAt.LT(&from) {
-			earlybreak = true
-		}
-
-		if next := obj.GetNextVersion(); obj.IsCEntry() && next != nil && next.DeletedAt.LE(&to) {
-			continue
-		}
-
-		if err := c.visitor.VisitObj(obj); err != nil {
-			return err
+		for ok := catalog.SeekObjectListGroup(&it, group, from); ok; ok = it.Next() {
+			obj := it.Item()
+			commitTS := obj.ObjectListCommitTS()
+			if obj.ObjectListGroup() != group || commitTS.GT(&to) {
+				break
+			}
+			if err := visit(obj); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
