@@ -164,6 +164,7 @@ id    cast(json_row(null, js) as json)
 18    [null, {"foo": "bar", "zoo": [1, 2, 3]}]
 19    [null, {"foo": "bar", "zoo": [1, 2, 3]}]
 1000    [null, null]
+set session group_concat_max_len = 1048576;
 select 'agg';
 agg
 agg
@@ -189,6 +190,7 @@ b    js
 1    [tttttttttttttttttttttttttttttttttttttttt,tttt""tttttttt""tttttttt""tttttttt""tttttttt""tttt,tttt"""tttttttt"""tttttttt"""tttttttt"""tttttttt"""tttt,tttt""""tttttttt""""tttttttt""""tttttttt""""tttttttt""""tttt,tttt'tttttttt'tttttttt'tttttttt'tttttttt'tttt,tttt''tttttttt''tttttttt''tttttttt''tttttttt''tttt,tttt}tttttttt}tttttttt}tttttttt}tttttttt}tttt,ttt}tttttttt}tttttttt}tttttttt}tttttttt}ttttt,tttttttt[[[[tttttttt[[[[tttttttt[[[[tttttttt[[[[tttttttt[[[[,tttttttt]]]]tttttttt]]]]tttttttt]]]]tttttttt]]]]tttttttt]]]],tttttttttttttttttttttttttttttttttttttttt,tttttttttttttttttttttttttttttttttttttttt,tttttttttttttttttttttttttttttttttttttttt,tttttttttttttttttttttttttttttttttttttttt,tttttttttttttttttttttttttttttttttttttttt,tttttttttttttttttttttttttttttttttttttttt,tttttttttttttttttttttttttttttttttttttttt]
 0    [ttt"tttttttt"tttttttt"tttttttt"tttttttt"ttttt,tttttttttttttttttttttttttttttttttttttttt]
 null    null
+set session group_concat_max_len = 1024;
 select json_row(id, cast(vc as varbinary)) from jrt;
 invalid input: binary data not supported json_row: VARBINARY
 drop table jrt;

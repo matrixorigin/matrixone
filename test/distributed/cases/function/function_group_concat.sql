@@ -299,3 +299,19 @@ EXECUTE group_concat_ordered_stmt USING @group_concat_ordered_grp;
 DEALLOCATE PREPARE group_concat_ordered_stmt;
 
 DROP TABLE group_concat_ordered;
+
+-- group_concat_max_len
+drop table if exists group_concat_max_len_01;
+create table group_concat_max_len_01 (id int primary key, s varchar(16));
+insert into group_concat_max_len_01 values (1, 'aa'), (2, 'bb'), (3, 'cc');
+set session group_concat_max_len = 1024;
+prepare group_concat_max_len_stmt from 'select group_concat(s order by s separator "") from group_concat_max_len_01';
+set session group_concat_max_len = 5;
+execute group_concat_max_len_stmt;
+set session group_concat_max_len = 1024;
+execute group_concat_max_len_stmt;
+deallocate prepare group_concat_max_len_stmt;
+set session group_concat_max_len = 5;
+select group_concat(s order by s separator '') from group_concat_max_len_01;
+set session group_concat_max_len = 1024;
+drop table group_concat_max_len_01;

@@ -99,6 +99,10 @@ func (ag *AggFuncExecExpression) GetExtraConfig() []byte {
 	return ag.extraConfig
 }
 
+func (ag *AggFuncExecExpression) SetExtraConfig(config []byte) {
+	ag.extraConfig = config
+}
+
 type AggregateConfig struct {
 	Type plan.AggregateConfigType
 	Data []byte

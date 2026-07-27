@@ -104,11 +104,23 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+const loadMergeReceiverChannelBufferSize = 1
+
 var constBat *batch.Batch
 
 func init() {
 	constBat = batch.NewWithSize(0)
 	constBat.SetRowCount(1)
+}
+
+func mergeReceiverChannelBufferSize(s *Scope) int {
+	if s != nil && s.Proc != nil && s.Proc.Base.LoadTag {
+		return loadMergeReceiverChannelBufferSize
+	}
+	if s == nil || s.NodeInfo.Mcpu < 1 {
+		return 1
+	}
+	return s.NodeInfo.Mcpu
 }
 
 type operatorDupContext struct {
@@ -1570,28 +1582,8 @@ func constructWindow(_ context.Context, node *plan.Node, proc *process.Process) 
 		isDistinct := (uint64(f.F.Func.Obj) & function.Distinct) != 0
 		functionID := int64(uint64(f.F.Func.Obj) & function.DistinctMask)
 
-		var cfg []byte = nil
-		var args = f.F.Args
 		configType := f.F.AggConfigType
-		if configType != plan.AggregateConfigType_AGG_CONFIG_NONE {
-			cfg = f.F.AggConfig
-		} else if len(f.F.Args) > 0 {
-
-			//for group_concat, the last arg is separator string
-			//for cluster_centers, the last arg is kmeans_args string
-			if (f.F.Func.ObjName == plan2.NameGroupConcat ||
-				f.F.Func.ObjName == plan2.NameClusterCenters) && len(f.F.Args) > 1 {
-				argExpr := f.F.Args[len(f.F.Args)-1]
-				vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(proc, argExpr)
-				if err != nil {
-					panic(err)
-				}
-				cfg = []byte(vec.GetStringAt(0))
-				free()
-
-				args = f.F.Args[:len(f.F.Args)-1]
-			}
-		}
+		args, cfg := constructAggregateConfig(f.F, proc)
 		aggregationExpressions[i] = aggexec.MakeAggFunctionExpression(
 			functionID, isDistinct, args, cfg, configType)
 	}
@@ -1628,27 +1620,8 @@ func constructGroup(_ context.Context, node, childNode *plan.Node, needEval bool
 			isDistinct := (uint64(f.F.Func.Obj) & function.Distinct) != 0
 			functionID := int64(uint64(f.F.Func.Obj) & function.DistinctMask)
 
-			var cfg []byte = nil
-			var args = f.F.Args
 			configType := f.F.AggConfigType
-			if configType != plan.AggregateConfigType_AGG_CONFIG_NONE {
-				cfg = f.F.AggConfig
-			} else if len(f.F.Args) > 0 {
-				//for group_concat, the last arg is separator string
-				//for cluster_centers, the last arg is kmeans_args string
-				if (f.F.Func.ObjName == plan2.NameGroupConcat ||
-					f.F.Func.ObjName == plan2.NameClusterCenters) && len(f.F.Args) > 1 {
-					argExpr := f.F.Args[len(f.F.Args)-1]
-					vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(proc, argExpr)
-					if err != nil {
-						panic(err)
-					}
-					cfg = []byte(vec.GetStringAt(0))
-					free()
-
-					args = f.F.Args[:len(f.F.Args)-1]
-				}
-			}
+			args, cfg := constructAggregateConfig(f.F, proc)
 
 			aggregationExpressions[i] = aggexec.MakeAggFunctionExpression(
 				functionID, isDistinct, args, cfg, configType)
@@ -1667,6 +1640,47 @@ func constructGroup(_ context.Context, node, childNode *plan.Node, needEval bool
 	arg.GroupingFlag = node.GroupingFlag
 	arg.GroupBy = node.GroupBy
 	return arg
+}
+
+func constructAggregateConfig(f *plan.Function, proc *process.Process) ([]*plan.Expr, []byte) {
+	args := f.Args
+	switch f.Func.ObjName {
+	case plan2.NameGroupConcat:
+		value, err := resolveVariableOrDefault(proc, "group_concat_max_len", true, false)
+		if err != nil {
+			panic(err)
+		}
+		maxLen, ok := value.(int64)
+		if !ok || maxLen < 0 {
+			panic(moerr.NewInternalErrorNoCtxf(
+				"group_concat_max_len has invalid value %v", value))
+		}
+		if f.AggConfigType == plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER {
+			return args, aggexec.EncodeGroupConcatOrderedConfig(f.AggConfig, uint64(maxLen))
+		}
+		separator := ","
+		if len(args) > 1 {
+			separator = evaluateAggregateConfigString(proc, args[len(args)-1])
+			args = args[:len(args)-1]
+		}
+		return args, aggexec.EncodeGroupConcatConfig(separator, uint64(maxLen))
+
+	case plan2.NameClusterCenters:
+		if len(args) > 1 {
+			config := evaluateAggregateConfigString(proc, args[len(args)-1])
+			return args[:len(args)-1], []byte(config)
+		}
+	}
+	return args, nil
+}
+
+func evaluateAggregateConfigString(proc *process.Process, expr *plan.Expr) string {
+	vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(proc, expr)
+	if err != nil {
+		panic(err)
+	}
+	defer free()
+	return vec.GetStringAt(0)
 }
 
 func constructDispatchLocal(all bool, isSink, rec bool, recCTE bool, regs []*process.WaitRegister) *dispatch.Dispatch {

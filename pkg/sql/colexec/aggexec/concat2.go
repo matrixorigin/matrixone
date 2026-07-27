@@ -23,6 +23,7 @@ import (
 	"math"
 	"os"
 	"slices"
+	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -48,11 +49,19 @@ type groupConcatExec struct {
 	h0SpillFile     func() (*os.File, error)
 	h0SpillReport   func(int64, int64)
 	h0SpillRuns     []*os.File
+	maxLen          uint64
 }
 
+var (
+	groupConcatConfigMagic        = []byte{0xff, 'G', 'C', 1}
+	groupConcatOrderedConfigMagic = []byte{0xff, 'G', 'C', 'O', 1}
+)
+
 const (
-	groupConcatOrderConfigVersion = byte(1)
-	groupConcatMaxH0RunSize       = int64(8 << 20)
+	groupConcatConfigHeaderSize        = 12
+	groupConcatOrderedConfigHeaderSize = 13
+	groupConcatOrderConfigVersion      = byte(1)
+	groupConcatMaxH0RunSize            = int64(8 << 20)
 
 	groupConcatOrderAsc        = byte(1)
 	groupConcatOrderDesc       = byte(2)
@@ -63,6 +72,35 @@ const (
 		groupConcatOrderNullsFirst |
 		groupConcatOrderNullsLast
 )
+
+func EncodeGroupConcatConfig(separator string, maxLen uint64) []byte {
+	config := make([]byte, groupConcatConfigHeaderSize+len(separator))
+	copy(config, groupConcatConfigMagic)
+	binary.LittleEndian.PutUint64(config[len(groupConcatConfigMagic):], maxLen)
+	copy(config[groupConcatConfigHeaderSize:], separator)
+	return config
+}
+
+func EncodeGroupConcatOrderedConfig(config []byte, maxLen uint64) []byte {
+	runtimeConfig := make([]byte, groupConcatOrderedConfigHeaderSize+len(config))
+	copy(runtimeConfig, groupConcatOrderedConfigMagic)
+	binary.LittleEndian.PutUint64(runtimeConfig[len(groupConcatOrderedConfigMagic):], maxLen)
+	copy(runtimeConfig[groupConcatOrderedConfigHeaderSize:], config)
+	return runtimeConfig
+}
+
+func RefreshGroupConcatConfigMaxLen(config []byte, maxLen uint64) []byte {
+	if len(config) >= groupConcatOrderedConfigHeaderSize &&
+		bytes.Equal(config[:len(groupConcatOrderedConfigMagic)], groupConcatOrderedConfigMagic) {
+		return EncodeGroupConcatOrderedConfig(config[groupConcatOrderedConfigHeaderSize:], maxLen)
+	}
+	separator := config
+	if len(config) >= groupConcatConfigHeaderSize &&
+		bytes.Equal(config[:len(groupConcatConfigMagic)], groupConcatConfigMagic) {
+		separator = config[groupConcatConfigHeaderSize:]
+	}
+	return EncodeGroupConcatConfig(string(separator), maxLen)
+}
 
 func GroupConcatReturnType(args []types.Type) types.Type {
 	for _, p := range args {
@@ -79,6 +117,7 @@ func newGroupConcatExec(mg *mpool.MPool, info multiAggInfo, separator string) Ag
 		distinctHash: newDistinctHash(mg),
 		separator:    []byte(separator),
 		concatArgCnt: len(info.argTypes),
+		maxLen:       math.MaxUint64,
 	}
 	exec.mp = mg
 	exec.aggInfo = aggInfo{
@@ -349,7 +388,13 @@ func (exec *groupConcatExec) SetExtraInformation(partialResult any, _ int) error
 		exec.orderArgCnt = 0
 		exec.orderDesc = nil
 		exec.orderNullsLast = nil
-		exec.separator = config
+		if len(config) >= groupConcatConfigHeaderSize &&
+			bytes.Equal(config[:len(groupConcatConfigMagic)], groupConcatConfigMagic) {
+			exec.maxLen = binary.LittleEndian.Uint64(config[len(groupConcatConfigMagic):groupConcatConfigHeaderSize])
+			exec.separator = config[groupConcatConfigHeaderSize:]
+		} else {
+			exec.separator = config
+		}
 		exec.retType = GroupConcatReturnType(exec.argTypes)
 		return nil
 	}
@@ -358,7 +403,15 @@ func (exec *groupConcatExec) SetExtraInformation(partialResult any, _ int) error
 		return moerr.NewInternalErrorNoCtx("invalid group_concat config type")
 	}
 
-	concatArgCnt, orderDesc, orderNullsLast, separator, err := decodeGroupConcatOrderConfig(typedConfig.Data)
+	config := typedConfig.Data
+	if len(config) >= groupConcatOrderedConfigHeaderSize &&
+		bytes.Equal(config[:len(groupConcatOrderedConfigMagic)], groupConcatOrderedConfigMagic) {
+		exec.maxLen = binary.LittleEndian.Uint64(
+			config[len(groupConcatOrderedConfigMagic):groupConcatOrderedConfigHeaderSize],
+		)
+		config = config[groupConcatOrderedConfigHeaderSize:]
+	}
+	concatArgCnt, orderDesc, orderNullsLast, separator, err := decodeGroupConcatOrderConfig(config)
 	if err != nil {
 		return err
 	}
@@ -518,7 +571,13 @@ func (exec *groupConcatExec) flushH0Spilled(ctx context.Context) ([]*vector.Vect
 				break
 			}
 			if !first {
-				buf = append(buf, exec.separator...)
+				var truncated bool
+				buf, truncated = appendGroupConcatBytes(
+					buf, exec.separator, exec.maxLen, exec.retType.Oid == types.T_blob,
+				)
+				if truncated {
+					break
+				}
 			}
 			first = false
 			if buf, err = exec.appendConcatPayload(buf, entry.concatPayload); err != nil {
@@ -561,7 +620,13 @@ func (exec *groupConcatExec) flushH0Spilled(ctx context.Context) ([]*vector.Vect
 		freeVectors(vectors, exec.mp)
 		entry := active[selected]
 		if !first {
-			buf = append(buf, exec.separator...)
+			var truncated bool
+			buf, truncated = appendGroupConcatBytes(
+				buf, exec.separator, exec.maxLen, exec.retType.Oid == types.T_blob,
+			)
+			if truncated {
+				break
+			}
 		}
 		first = false
 		if buf, err = exec.appendConcatPayload(buf, entry.concatPayload); err != nil {
@@ -777,7 +842,13 @@ func (exec *groupConcatExec) flushOrderedEntries(
 			seen[key] = struct{}{}
 		}
 		if !first {
-			buf = append(buf, exec.separator...)
+			var truncated bool
+			buf, truncated = appendGroupConcatBytes(
+				buf, exec.separator, exec.maxLen, exec.retType.Oid == types.T_blob,
+			)
+			if truncated {
+				break
+			}
 		}
 		first = false
 		buf, err = exec.appendConcatPayload(buf, entry.concatPayload)
@@ -859,10 +930,19 @@ func (exec *groupConcatExec) restoreOrderVectors(
 func (exec *groupConcatExec) flushGroupInInputOrder(st aggState, group uint16) ([]byte, error) {
 	buf := make([]byte, 0, 64)
 	first := true
+	truncated := false
 	if err := st.iter(group, func(key []byte) error {
+		if truncated {
+			return nil
+		}
 		payload := aggPayloadFromKey(&exec.aggInfo, key)
 		if !first {
-			buf = append(buf, exec.separator...)
+			buf, truncated = appendGroupConcatBytes(
+				buf, exec.separator, exec.maxLen, exec.retType.Oid == types.T_blob,
+			)
+			if truncated {
+				return nil
+			}
 		}
 		first = false
 		var err error
@@ -879,15 +959,50 @@ func (exec *groupConcatExec) appendConcatPayload(buf, payload []byte) ([]byte, e
 		payload,
 		exec.concatArgCnt,
 		func(i int, isNull bool, data []byte) error {
-			if isNull {
+			if isNull || uint64(len(buf)) >= exec.maxLen {
 				return nil
 			}
 			var err error
 			buf, err = appendGroupConcatData(buf, exec.argTypes[i], data)
+			if uint64(len(buf)) > exec.maxLen {
+				buf = truncateGroupConcatBytes(
+					buf,
+					exec.maxLen,
+					exec.retType.Oid == types.T_blob,
+				)
+			}
 			return err
 		},
 	)
 	return buf, err
+}
+
+func appendGroupConcatBytes(dst, src []byte, maxLen uint64, binaryResult bool) ([]byte, bool) {
+	if uint64(len(dst)) >= maxLen {
+		return dst, len(src) > 0
+	}
+	remaining := maxLen - uint64(len(dst))
+	truncated := uint64(len(src)) > remaining
+	if truncated {
+		src = src[:int(remaining)]
+	}
+	dst = append(dst, src...)
+	if truncated {
+		dst = truncateGroupConcatBytes(dst, maxLen, binaryResult)
+	}
+	return dst, truncated
+}
+
+func truncateGroupConcatBytes(value []byte, maxLen uint64, binaryResult bool) []byte {
+	if uint64(len(value)) > maxLen {
+		value = value[:int(maxLen)]
+	}
+	if !binaryResult {
+		for len(value) > 0 && !utf8.Valid(value) {
+			value = value[:len(value)-1]
+		}
+	}
+	return value
 }
 
 func decodeGroupConcatOrderConfig(

@@ -7961,7 +7961,8 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 			}
 			if externType == plan.ExternType_EXTERNAL_TB {
 				col := &ColDef{
-					Name: catalog.ExternalFilePath,
+					ColId: catalog.ExternalFilePathColId,
+					Name:  catalog.ExternalFilePath,
 					Typ: plan.Type{
 						Id:    int32(types.T_varchar),
 						Width: types.MaxVarcharLen,
