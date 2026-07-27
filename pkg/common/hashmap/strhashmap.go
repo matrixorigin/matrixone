@@ -69,6 +69,10 @@ func (m *StrHashMap) PreAlloc(n uint64) error {
 	return m.hashMap.ResizeOnDemand(n)
 }
 
+func (m *StrHashMap) SetResizeAdmission(admit hashtable.ResizeAdmission) {
+	m.hashMap.SetResizeAdmission(admit)
+}
+
 func (m *StrHashMap) GroupCount() uint64 {
 	return m.rows
 }

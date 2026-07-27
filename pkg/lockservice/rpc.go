@@ -76,10 +76,18 @@ type client struct {
 	cfg     *morpc.Config
 	cluster clusterservice.MOCluster
 	client  morpc.RPCClient
+	// Control traffic is ping/pong only and uses a separate MORPC client. A
+	// data read timeout can therefore verify peer liveness without queueing
+	// behind the data TCP, writer, Flush, or reconnect lifecycle it diagnoses.
+	controlClient morpc.ControlClient
 	// Active-txn identity probes may deliberately reset their transport after
 	// detecting a stale CN incarnation. Keep them isolated so recovery cannot
 	// interrupt concurrent Lock/Unlock traffic on the normal client.
 	activeTxnClient morpc.RPCClient
+	// Periodic remote-lock keepalives use an independent MORPC client so their
+	// queue, writer, Flush, read timeout, and reconnect lifecycle cannot be
+	// blocked by Lock/Unlock traffic on the normal client.
+	keeperClient morpc.RPCClient
 
 	recoveryResetOnce sync.Once
 	recoveryResetC    chan struct{} // context-aware serialization of slow reset work
@@ -137,11 +145,27 @@ func NewClient(
 	c.cfg.ClientOptions = append(c.cfg.ClientOptions,
 		morpc.WithClientAutoCreateWaitTimeout(500*time.Millisecond))
 
+	controlClient, err := c.cfg.NewControlClient(
+		service,
+		"lock-control-client",
+		func() morpc.Message { return acquireResponse() })
+	if err != nil {
+		return nil, err
+	}
+	c.controlClient = controlClient
+	c.cfg.BackendOptions = append(
+		c.cfg.BackendOptions,
+		morpc.WithBackendLivenessProbe(func(ctx context.Context, remote string) error {
+			return controlClient.Ping(ctx, remote)
+		}),
+	)
+
 	client, err := c.cfg.NewClient(
 		service,
 		"lock-client",
 		func() morpc.Message { return acquireResponse() })
 	if err != nil {
+		_ = controlClient.Close()
 		return nil, err
 	}
 	c.client = client
@@ -151,17 +175,37 @@ func NewClient(
 		func() morpc.Message { return acquireResponse() })
 	if err != nil {
 		_ = client.Close()
+		_ = controlClient.Close()
 		return nil, err
 	}
 	c.activeTxnClient = activeTxnClient
+	keeperConfig := *c.cfg
+	keeperConfig.BackendOptions = append(
+		append([]morpc.BackendOption(nil), c.cfg.BackendOptions...),
+		morpc.WithBackendRequestRelease(func(message morpc.Message) {
+			releaseRequest(message.(*pb.Request))
+		}),
+	)
+	keeperClient, err := keeperConfig.NewClient(
+		service,
+		"lock-keeper-client",
+		func() morpc.Message { return acquireResponse() })
+	if err != nil {
+		_ = activeTxnClient.Close()
+		_ = client.Close()
+		_ = controlClient.Close()
+		return nil, err
+	}
+	c.keeperClient = keeperClient
 	return c, nil
 }
 
 func (c *client) Send(ctx context.Context, request *pb.Request) (*pb.Response, error) {
+	method := request.Method
 	if err := checkMethodVersion(ctx, c.service, request); err != nil {
 		return nil, err
 	}
-	f, err := c.AsyncSend(ctx, request)
+	f, err := c.asyncSend(ctx, request, false)
 	if err != nil {
 		return nil, err
 	}
@@ -169,12 +213,12 @@ func (c *client) Send(ctx context.Context, request *pb.Request) (*pb.Response, e
 
 	v, err := f.Get()
 	if err != nil {
-		observeLockserviceRemoteRPCError(request.Method, err)
+		observeLockserviceRemoteRPCError(method, err)
 		return nil, err
 	}
 	resp := v.(*pb.Response)
 	if err := resp.UnwrapError(); err != nil {
-		observeLockserviceRemoteRPCError(request.Method, err)
+		observeLockserviceRemoteRPCError(method, err)
 		releaseResponse(resp)
 		// uuid and ip changed, async refresh cluster
 		if moerr.IsMoErrCode(err, moerr.ErrNotSupported) {
@@ -194,17 +238,48 @@ func checkMethodVersion(
 }
 
 func (c *client) AsyncSend(ctx context.Context, request *pb.Request) (*morpc.Future, error) {
+	return c.asyncSend(ctx, request, true)
+}
+
+func (c *client) asyncSend(
+	ctx context.Context,
+	request *pb.Request,
+	useKeeperTransport bool,
+) (*morpc.Future, error) {
 	// FIXME(fagongzi): too many mem alloc in trace
 	ctx, span := trace.Debug(ctx, "lockservice.client.send")
 	defer span.End()
 
+	method := request.Method
+	keeperOwnsRequest := useKeeperTransport && method == pb.Method_KeepRemoteLock
+	returnError := func(err error) (*morpc.Future, error) {
+		err = moerr.AttachCause(ctx, err)
+		observeLockserviceRemoteRPCError(method, err)
+		if keeperOwnsRequest {
+			releaseRequest(request)
+		}
+		return nil, err
+	}
+	lookupCN := func(
+		selector clusterservice.Selector,
+		apply func(metadata.CNService) bool,
+	) error {
+		return clusterservice.GetCNServiceWithoutWorkingStateWithContext(
+			ctx,
+			c.cluster,
+			selector,
+			apply,
+		)
+	}
+
 	var sid = ""
 	var address string
 	for i := 0; i < 2; i++ {
+		var lookupErr error
 		switch request.Method {
 		case pb.Method_ForwardLock:
 			sid = getUUIDFromServiceIdentifier(request.Lock.Options.ForwardTo)
-			c.cluster.GetCNServiceWithoutWorkingState(
+			lookupErr = lookupCN(
 				clusterservice.NewServiceIDSelector(sid),
 				func(s metadata.CNService) bool {
 					address = s.LockServiceAddress
@@ -216,7 +291,7 @@ func (c *client) AsyncSend(ctx context.Context, request *pb.Request) (*morpc.Fut
 			pb.Method_GetLockHolder,
 			pb.Method_KeepRemoteLock:
 			sid = getUUIDFromServiceIdentifier(request.LockTable.ServiceID)
-			c.cluster.GetCNServiceWithoutWorkingState(
+			lookupErr = lookupCN(
 				clusterservice.NewServiceIDSelector(sid),
 				func(s metadata.CNService) bool {
 					address = s.LockServiceAddress
@@ -224,7 +299,7 @@ func (c *client) AsyncSend(ctx context.Context, request *pb.Request) (*morpc.Fut
 				})
 		case pb.Method_ValidateService:
 			sid = getUUIDFromServiceIdentifier(request.ValidateService.ServiceID)
-			c.cluster.GetCNServiceWithoutWorkingState(
+			lookupErr = lookupCN(
 				clusterservice.NewServiceIDSelector(sid),
 				func(s metadata.CNService) bool {
 					address = s.LockServiceAddress
@@ -232,7 +307,7 @@ func (c *client) AsyncSend(ctx context.Context, request *pb.Request) (*morpc.Fut
 				})
 		case pb.Method_GetWaitingList:
 			sid = getUUIDFromServiceIdentifier(request.GetWaitingList.Txn.CreatedOn)
-			c.cluster.GetCNServiceWithoutWorkingState(
+			lookupErr = lookupCN(
 				clusterservice.NewServiceIDSelector(sid),
 				func(s metadata.CNService) bool {
 					address = s.LockServiceAddress
@@ -240,7 +315,7 @@ func (c *client) AsyncSend(ctx context.Context, request *pb.Request) (*morpc.Fut
 				})
 		case pb.Method_GetActiveTxn:
 			sid = getUUIDFromServiceIdentifier(request.GetActiveTxn.ServiceID)
-			c.cluster.GetCNServiceWithoutWorkingState(
+			lookupErr = lookupCN(
 				clusterservice.NewServiceIDSelector(sid),
 				func(s metadata.CNService) bool {
 					address = s.LockServiceAddress
@@ -248,7 +323,7 @@ func (c *client) AsyncSend(ctx context.Context, request *pb.Request) (*morpc.Fut
 				})
 		case pb.Method_CheckActiveTxn:
 			sid = getUUIDFromServiceIdentifier(request.CheckActiveTxn.ServiceID)
-			c.cluster.GetCNServiceWithoutWorkingState(
+			lookupErr = lookupCN(
 				clusterservice.NewServiceIDSelector(sid),
 				func(s metadata.CNService) bool {
 					address = s.LockServiceAddress
@@ -256,7 +331,7 @@ func (c *client) AsyncSend(ctx context.Context, request *pb.Request) (*morpc.Fut
 				})
 		case pb.Method_AbortRemoteDeadlockTxn:
 			sid = getUUIDFromServiceIdentifier(request.AbortRemoteDeadlockTxn.Txn.WaiterAddress)
-			c.cluster.GetCNServiceWithoutWorkingState(
+			lookupErr = lookupCN(
 				clusterservice.NewServiceIDSelector(sid),
 				func(s metadata.CNService) bool {
 					address = s.LockServiceAddress
@@ -268,21 +343,37 @@ func (c *client) AsyncSend(ctx context.Context, request *pb.Request) (*morpc.Fut
 				address = values[0].LockServiceAddress
 			}
 		}
+		if lookupErr != nil {
+			return returnError(lookupErr)
+		}
 		if address != "" {
 			break
 		}
 		if i == 0 {
-			c.cluster.ForceRefresh(true)
+			if refresher, ok := c.cluster.(interface {
+				Refresh(context.Context) error
+			}); ok {
+				if err := refresher.Refresh(ctx); err != nil {
+					return returnError(err)
+				}
+			} else {
+				// External cluster implementations do not expose a cancellable
+				// refresh contract. Request an asynchronous refresh instead of
+				// blocking an RPC past its context.
+				c.cluster.ForceRefresh(false)
+			}
 		}
 	}
 	if address == "" {
 		var cns []string
-		c.cluster.GetCNServiceWithoutWorkingState(
+		if err := lookupCN(
 			clusterservice.NewSelectAll(),
 			func(s metadata.CNService) bool {
 				cns = append(cns, s.ServiceID)
 				return true
-			})
+			}); err != nil {
+			return returnError(err)
+		}
 		c.logger.Error("cannot find lockservice address",
 			zap.String("target", sid),
 			zap.Any("cns", cns),
@@ -290,13 +381,15 @@ func (c *client) AsyncSend(ctx context.Context, request *pb.Request) (*morpc.Fut
 
 	}
 	transport := c.client
-	if isActiveTxnMethod(request.Method) {
+	if keeperOwnsRequest {
+		transport = c.keeperTransport()
+	} else if isActiveTxnMethod(request.Method) {
 		address = c.activeTxnBackend(sid, address)
 		transport = c.activeTxnTransport()
 	}
 	f, err := transport.Send(ctx, address, request)
 	if err != nil {
-		observeLockserviceRemoteRPCError(request.Method, err)
+		return returnError(err)
 	}
 	return f, err
 }
@@ -351,14 +444,22 @@ func lockserviceRemoteRPCErrorType(err error) string {
 }
 
 func (c *client) Close() error {
-	var normalErr, activeTxnErr error
+	var normalErr, activeTxnErr, keeperErr, controlErr error
 	if c.client != nil {
 		normalErr = c.client.Close()
 	}
 	if c.activeTxnClient != nil && c.activeTxnClient != c.client {
 		activeTxnErr = c.activeTxnClient.Close()
 	}
-	return errors.Join(normalErr, activeTxnErr)
+	if c.keeperClient != nil &&
+		c.keeperClient != c.client &&
+		c.keeperClient != c.activeTxnClient {
+		keeperErr = c.keeperClient.Close()
+	}
+	if c.controlClient != nil {
+		controlErr = c.controlClient.Close()
+	}
+	return errors.Join(normalErr, activeTxnErr, keeperErr, controlErr)
 }
 
 func isActiveTxnMethod(method pb.Method) bool {
@@ -368,6 +469,15 @@ func isActiveTxnMethod(method pb.Method) bool {
 func (c *client) activeTxnTransport() morpc.RPCClient {
 	if c.activeTxnClient != nil {
 		return c.activeTxnClient
+	}
+	// Preserve compatibility for tests and embedders that construct client
+	// directly. Production NewClient always installs the isolated transport.
+	return c.client
+}
+
+func (c *client) keeperTransport() morpc.RPCClient {
+	if c.keeperClient != nil {
+		return c.keeperClient
 	}
 	// Preserve compatibility for tests and embedders that construct client
 	// directly. Production NewClient always installs the isolated transport.
@@ -492,11 +602,25 @@ func (c *client) ResetBackend(parent context.Context, serviceID string) (err err
 				"cluster service does not support authoritative refresh"),
 		)
 	}
-	if err := refresher.Refresh(ctx); err != nil {
-		return errors.Join(closeErr, err)
+	refreshErr := refresher.Refresh(ctx)
+	closePreRefreshCandidates := func() {
+		if hadOld {
+			closeCandidate(old.discovered)
+			closeCandidate(old.endpoint)
+		}
+		closeCandidate(staleAddress)
+	}
+	if refreshErr != nil {
+		// Error exits still need a second phase after the refresh attempt:
+		// known routes can be recreated while Refresh is blocked.
+		seen = make(map[string]struct{}, 3)
+		closePreRefreshCandidates()
+		return errors.Join(closeErr, refreshErr)
 	}
 	address, err = lookupAddress()
 	if err != nil {
+		seen = make(map[string]struct{}, 3)
+		closePreRefreshCandidates()
 		return errors.Join(closeErr, err)
 	}
 
@@ -509,9 +633,13 @@ func (c *client) ResetBackend(parent context.Context, serviceID string) (err err
 		}
 	}
 
-	// Detach both names accepted by MORPC before publishing the replacement
-	// override. The resolved endpoint can already have a pooled backend from an
-	// earlier recovery, even when it is not the currently cached hint.
+	// This is the successful path's true final barrier. Discovery lookup and
+	// DNS resolution can both block and permit a route closed in an earlier
+	// phase to be recreated, so start a fresh de-duplication set only after both
+	// have completed. Detach every old and new name accepted by MORPC before
+	// publishing the replacement override.
+	seen = make(map[string]struct{}, 5)
+	closePreRefreshCandidates()
 	closeCandidate(address)
 	closeCandidate(endpoint)
 	if address == "" {

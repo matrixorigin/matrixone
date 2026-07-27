@@ -1605,6 +1605,38 @@ func NewChangesHandlerWithCheckpointRange(
 	)
 }
 
+// NewChangesHandlerWithCheckpointRangeRecovery rebuilds CollectChanges(start,
+// end) from checkpoint metadata using range-aware object selection while
+// preserving CDC/checkpoint recovery merge semantics.
+func NewChangesHandlerWithCheckpointRangeRecovery(
+	ctx context.Context,
+	tid uint64,
+	sid string,
+	checkpoints []*checkpoint.CheckpointEntry,
+	start, end types.TS,
+	skipDeletes bool,
+	maxRow uint32,
+	primarySeqnum int,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
+) (changeHandle *ChangeHandler, err error) {
+	return newChangesHandlerWithCheckpointEntries(
+		ctx,
+		tid,
+		sid,
+		checkpoints,
+		start,
+		end,
+		skipDeletes,
+		maxRow,
+		primarySeqnum,
+		mp,
+		fs,
+		checkpointObjectSelectionRange,
+		true,
+	)
+}
+
 // NewChangesHandlerWithPartitionStateRange rebuilds CollectChanges(start, end)
 // from the partition state visible at the range end snapshot.
 //

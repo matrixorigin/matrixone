@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"sync"
 	"time"
 
@@ -26,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -648,8 +650,15 @@ func (receiver *messageReceiverOnServer) acquireMessage() (*pipeline.Message, er
 
 // newCompile make and return a new compile to run a pipeline.
 func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
-	// compile is almost surely wanting a small or middle pool.  Later.
-	mp, err := mpool.NewMPool("compile", 0, mpool.NoFixed)
+	// A remote compile used to have an unlimited local pool. HashBuild could
+	// therefore grow until the CN was killed even though the process limitation
+	// was already present on the wire. Keep a finite physical backstop while the
+	// finer-grained HashBuild admission layer decides whether to spill or fail.
+	poolCap, err := resolveRemoteCompileMPoolCap(receiver.procBuildHelper.lim)
+	if err != nil {
+		return nil, err
+	}
+	mp, err := mpool.NewMPool("compile", poolCap, mpool.NoFixed)
 	if err != nil {
 		return nil, err
 	}
@@ -718,6 +727,51 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 	}
 
 	return c, nil
+}
+
+func resolveRemoteCompileMPoolCap(lim process.Limitation) (int64, error) {
+	globalCap := uint64(0)
+	if cap := mpool.GlobalCap(); cap > 0 && cap < mpool.PB {
+		globalCap = uint64(cap)
+	}
+	fileCacheHint := uint64(0)
+	if hint := fileservice.GlobalMemoryCacheSizeHint.Load(); hint > 0 {
+		fileCacheHint = uint64(hint)
+	}
+	return resolveRemoteCompileMPoolCapFrom(lim, system.CgroupMemoryLimit(), system.MemoryTotal(), globalCap, fileCacheHint)
+}
+
+func resolveRemoteCompileMPoolCapFrom(lim process.Limitation, cgroupLimit, memoryTotal, globalCap, fileCacheHint uint64) (int64, error) {
+	effective := uint64(0)
+	for _, candidate := range []uint64{cgroupLimit, memoryTotal, globalCap} {
+		if candidate == 0 || candidate == math.MaxUint64 {
+			continue
+		}
+		if effective == 0 || candidate < effective {
+			effective = candidate
+		}
+	}
+	if effective == 0 {
+		return 0, process.ErrHashBuildCeilingMissing
+	}
+	reserve := effective / 10
+	if reserve < 256*mpool.MB {
+		reserve = 256 * mpool.MB
+	}
+	if fileCacheHint > reserve {
+		reserve = fileCacheHint
+	}
+	if reserve >= effective {
+		return 0, moerr.NewInternalErrorNoCtx("remote compile memory ceiling is too small")
+	}
+	cap := effective - reserve
+	if lim.Size > 0 && uint64(lim.Size) < cap {
+		cap = uint64(lim.Size)
+	}
+	if cap > uint64(math.MaxInt64) {
+		return 0, moerr.NewInternalErrorNoCtx("remote compile memory cap exceeds int64")
+	}
+	return int64(cap), nil
 }
 
 func (receiver *messageReceiverOnServer) sendError(

@@ -86,8 +86,9 @@ type s3WriterDelegate struct {
 	deleteBatches []*batch.BatchSet
 	segmentMap    map[string]int32
 
-	action   actionType
-	isRemote bool
+	action             actionType
+	isRemote           bool
+	rejectZeroTemporal bool
 
 	updateCtxs     []*MultiUpdateCtx
 	updateCtxInfos map[string]*updateCtxInfo
@@ -142,6 +143,7 @@ func newS3Writer(
 		deleteBlockMap:      make([]map[types.Blockid]*deleteBlockData, tableCount),
 		insertFreeLists:     make([]*containers.BatchFreeList, tableCount),
 		isRemote:            update.IsRemote,
+		rejectZeroTemporal:  update.RejectZeroTemporal,
 	}
 	for i := range writer.insertFreeLists {
 		writer.insertFreeLists[i] = containers.NewBatchFreeList(nil, nil, true)
@@ -329,6 +331,12 @@ func (writer *s3WriterDelegate) append(
 			nulls := filtered.Vecs[nullIdx].GetNulls().GetBitmap().Clone()
 			filtered.ShrinkByMask(nulls, true, 0)
 			if filtered.RowCount() > 0 {
+				if tableType == UpdateMainTable {
+					if err = checkZeroTemporalInStrictMode(writer.rejectZeroTemporal, proc, filtered); err != nil {
+						filtered.Clean(mp)
+						return
+					}
+				}
 				err = writer.insertSinkers[i].Write(proc.Ctx, filtered)
 			}
 			filtered.Clean(mp)
@@ -336,6 +344,12 @@ func (writer *s3WriterDelegate) append(
 				return
 			}
 			continue
+		}
+
+		if tableType == UpdateMainTable {
+			if err = checkZeroTemporalInStrictMode(writer.rejectZeroTemporal, proc, projBat); err != nil {
+				return
+			}
 		}
 
 		if err = writer.insertSinkers[i].Write(proc.Ctx, projBat); err != nil {

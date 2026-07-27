@@ -94,16 +94,43 @@ func (s *Scope) release() {
 }
 
 func (s *Scope) Reset(c *Compile) error {
+	rejectZeroTemporal, err := util.RejectZeroTemporalWritePolicy(c.proc)
+	if err != nil {
+		return err
+	}
+	return s.reset(c, rejectZeroTemporal)
+}
+
+func (s *Scope) reset(c *Compile, rejectZeroTemporal bool) error {
+	if err := refreshZeroTemporalWritePolicy(s.RootOp, rejectZeroTemporal); err != nil {
+		return err
+	}
 	err := s.resetForReuse(c)
 	if err != nil {
 		return err
 	}
 	for _, scope := range s.PreScopes {
-		if err = scope.Reset(c); err != nil {
+		if err = scope.reset(c, rejectZeroTemporal); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+type zeroTemporalWritePolicySetter interface {
+	SetRejectZeroTemporal(bool)
+}
+
+func refreshZeroTemporalWritePolicy(root vm.Operator, reject bool) error {
+	if root == nil {
+		return nil
+	}
+	return vm.HandleAllOp(root, func(_ vm.Operator, op vm.Operator) error {
+		if setter, ok := op.(zeroTemporalWritePolicySetter); ok {
+			setter.SetRejectZeroTemporal(reject)
+		}
+		return nil
+	})
 }
 
 func (s *Scope) resetForReuse(c *Compile) (err error) {

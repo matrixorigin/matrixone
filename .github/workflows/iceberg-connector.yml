@@ -2,7 +2,9 @@ name: Iceberg Connector E2E
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
+      - '.github/workflows/entrypoint.yaml'
       - '.github/workflows/iceberg-connector.yml'
       - 'Makefile'
       - 'optools/iceberg_ci.bash'

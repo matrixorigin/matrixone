@@ -435,6 +435,20 @@ string  𝄀
 123  𝄀
 mixed
 DROP TABLE t1;
+SELECT IF(FALSE,
+CAST('[0,0]' AS VECF32(2)),
+CAST('[1.0000000001,2]' AS VECF64(2))) AS vec64_from_false;
+➤ vec64_from_false[12,2,0]  𝄀
+[1.0000000001, 2]
+SELECT IF(TRUE,
+CAST('[1.0000000001,2]' AS VECF64(2)),
+CAST('[0,0]' AS VECF32(2))) AS vec64_from_true;
+➤ vec64_from_true[12,2,0]  𝄀
+[1.0000000001, 2]
+SELECT IF(FALSE,
+CAST('[1,2]' AS VECF32(2)),
+CAST('[3,4,5]' AS VECF32(3))) AS invalid_vector_dimensions;
+invalid argument function if, bad value [BOOL VECF32 VECF32]
 SET SESSION sql_mode = '';
 SELECT IF(0, CAST('bad' AS SIGNED), 7) AS if_skip_true_branch,
 CASE WHEN 0 THEN CAST('bad' AS SIGNED) ELSE 7 END AS case_skip_then,
