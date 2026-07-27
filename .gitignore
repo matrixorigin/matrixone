@@ -100,5 +100,3 @@ etc/docker-multi-cn-local-disk/*.toml
 !.agents/skills/*/SKILL.md
 !.agents/skills/*/references/
 !.agents/skills/*/references/*.md
-!.agents/skills/*/scripts/
-!.agents/skills/*/scripts/*.py
