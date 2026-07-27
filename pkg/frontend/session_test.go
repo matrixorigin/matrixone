@@ -1040,6 +1040,23 @@ func TestRemoveAllPrepareStmts(t *testing.T) {
 	assert.Equal(t, 0, len(ses.prepareStmts))
 }
 
+func TestRemovePrepareStmt(t *testing.T) {
+	ses := &Session{
+		prepareStmts: map[string]*PrepareStmt{
+			"s1": {Name: "s1"},
+			"s2": {Name: "s2"},
+		},
+	}
+
+	assert.True(t, ses.RemovePrepareStmt("s1"))
+	assert.NotContains(t, ses.prepareStmts, "s1")
+	assert.Contains(t, ses.prepareStmts, "s2")
+
+	assert.False(t, ses.RemovePrepareStmt("s1"))
+	assert.False(t, ses.RemovePrepareStmt("missing"))
+	assert.Contains(t, ses.prepareStmts, "s2")
+}
+
 func TestSession_Cleanup(t *testing.T) {
 	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
 	tz := time.Local

@@ -2285,6 +2285,7 @@ func assertMaterializedRemap(t *testing.T, ctx context.Context, sql string, want
 
 func Test_HandleDeallocate(t *testing.T) {
 	ctx := defines.AttachAccountId(context.TODO(), catalog.System_Account)
+	setSessionAlloc("", NewLeakCheckAllocator())
 	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "deallocate Prepare stmt1", 1)
 	if err != nil {
 		t.Errorf("parser sql error %v", err)
@@ -2295,7 +2296,21 @@ func Test_HandleDeallocate(t *testing.T) {
 
 	runTestHandle("handleDeallocate", t, func(ses *Session) error {
 		stmt := stmt.(*tree.Deallocate)
-		return handleDeallocate(ses, ec, stmt)
+		require.NoError(t, ses.SetPrepareStmt(ctx, "stmt1", &PrepareStmt{Name: "stmt1"}))
+		require.NoError(t, handleDeallocate(ses, ec, stmt))
+
+		err := handleDeallocate(ses, ec, stmt)
+		require.Error(t, err)
+		moErr, ok := err.(*moerr.Error)
+		require.True(t, ok)
+		require.Equal(t, moerr.ErrUnknownStmtHandler, moErr.ErrorCode())
+		require.Equal(t, moerr.ER_UNKNOWN_STMT_HANDLER, moErr.MySQLCode())
+		require.Equal(t, moerr.MySQLDefaultSqlState, moErr.SqlState())
+		require.Equal(t,
+			"Unknown prepared statement handler (stmt1) given to DEALLOCATE PREPARE",
+			moErr.Error(),
+		)
+		return nil
 	})
 }
 

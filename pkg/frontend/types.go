@@ -812,7 +812,7 @@ type FeSession interface {
 	IsBackgroundSession() bool
 	GetPrepareStmt(ctx context.Context, name string) (*PrepareStmt, error)
 	CountPayload(i int)
-	RemovePrepareStmt(name string)
+	RemovePrepareStmt(name string) bool
 	SetShowStmtType(statement ShowStatementType)
 	SetSql(sql string)
 	GetMemPool() *mpool.MPool

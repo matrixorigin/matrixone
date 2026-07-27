@@ -1954,7 +1954,10 @@ func doDeallocate(ses *Session, execCtx *ExecCtx, st *tree.Deallocate) error {
 	if err != nil {
 		return err
 	}
-	ses.RemovePrepareStmt(deallocatePlan.GetDcl().GetDeallocate().GetName())
+	name := deallocatePlan.GetDcl().GetDeallocate().GetName()
+	if !ses.RemovePrepareStmt(name) {
+		return moerr.NewUnknownStmtHandler(execCtx.reqCtx, name, "DEALLOCATE PREPARE")
+	}
 	return nil
 }
 

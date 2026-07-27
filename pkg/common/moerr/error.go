@@ -93,6 +93,7 @@ const (
 	ErrOperandColumns       uint16 = 20314
 	ErrSubqueryNo1Row       uint16 = 20315
 	ErrInvalidTypeForJSON   uint16 = 20316
+	ErrUnknownStmtHandler   uint16 = 20317
 
 	// Group 4: unexpected state and io errors
 	ErrInvalidState                             uint16 = 20400
@@ -402,6 +403,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrOperandColumns:       {ER_OPERAND_COLUMNS, []string{"21000"}, "Operand should contain %d column(s)"},
 	ErrSubqueryNo1Row:       {ER_SUBQUERY_NO_1_ROW, []string{"21000"}, "Subquery returns more than 1 row"},
 	ErrInvalidTypeForJSON:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "Invalid data type for JSON data in argument %d to function %s; a JSON string or JSON type is required."},
+	ErrUnknownStmtHandler:   {ER_UNKNOWN_STMT_HANDLER, []string{MySQLDefaultSqlState}, "Unknown prepared statement handler (%s) given to %s"},
 
 	// Group 4: unexpected state or file io error
 	ErrInvalidState:                             {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid state %s"},
@@ -979,6 +981,10 @@ func NewInvalidInput(ctx context.Context, msg string) *Error {
 
 func NewInvalidTypeForJSON(ctx context.Context, argument int, function string) *Error {
 	return newError(ctx, ErrInvalidTypeForJSON, argument, function)
+}
+
+func NewUnknownStmtHandler(ctx context.Context, name, operation string) *Error {
+	return newError(ctx, ErrUnknownStmtHandler, name, operation)
 }
 
 func NewSyntaxErrorf(ctx context.Context, format string, args ...any) *Error {
