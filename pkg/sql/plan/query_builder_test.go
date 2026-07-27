@@ -2389,6 +2389,53 @@ func TestQueryBuilderLegacyExternalTableNotDispatchedAsIceberg(t *testing.T) {
 	require.True(t, foundExternal, "expected a legacy external scan")
 }
 
+func TestQueryBuilderExternalFilepathIdentitySurvivesColumnPruning(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	ctx.objects["pruned_external"] = &plan.ObjectRef{
+		DbName:  "tpch",
+		ObjName: "pruned_external",
+		Obj:     4344,
+	}
+	ctx.tables["pruned_external"] = &plan.TableDef{
+		Name:      "pruned_external",
+		TableType: catalog.SystemExternalRel,
+		Createsql: mustMarshalLegacyExternParam(t, &tree.ExternParam{
+			ExParamConst: tree.ExParamConst{
+				ScanType: tree.INFILE,
+				Filepath: "/data/mixed/*",
+				Format:   tree.CSV,
+				Option:   []string{"format", "csv"},
+			},
+		}),
+		Cols: []*plan.ColDef{
+			{ColId: 1, Name: "a", Typ: plan.Type{Id: int32(types.T_varchar), Table: "pruned_external"}},
+			{ColId: 2, Name: "b", Typ: plan.Type{Id: int32(types.T_varchar), Table: "pruned_external"}},
+		},
+	}
+
+	p, err := buildIcebergTestPlan(t, ctx,
+		"select a from pruned_external where __mo_filepath like '%/csv/%'")
+	require.NoError(t, err)
+
+	var scan *plan.Node
+	for _, node := range p.GetQuery().GetNodes() {
+		if node.GetNodeType() == plan.Node_EXTERNAL_SCAN {
+			scan = node
+			break
+		}
+	}
+	require.NotNil(t, scan)
+	require.Len(t, scan.TableDef.Cols, 2)
+	require.Equal(t, "a", scan.TableDef.Cols[0].Name)
+	require.Equal(t, catalog.ExternalFilePath, scan.TableDef.Cols[1].Name)
+	require.Equal(t, catalog.ExternalFilePathColId, scan.TableDef.Cols[1].ColId)
+	require.Equal(t, int32(1), scan.ExternScan.TbColToDataCol["b"],
+		"file-field positions stay in their original coordinate space")
+	require.Len(t, scan.FilterList, 1)
+	require.True(t, isFileLevelFilter(scan, scan.FilterList[0]),
+		"the remapped filepath predicate must remain eligible for file pruning")
+}
+
 func TestQueryBuilderIcebergPersistentMappingCurrentSnapshot(t *testing.T) {
 	ctx := newIcebergTestCompilerContext(t, time.UTC)
 
@@ -3242,7 +3289,7 @@ func TestParseRankOption(t *testing.T) {
 		rankOption, err := parseRankOption(options, ctx)
 		require.Error(t, err)
 		require.Nil(t, rankOption)
-		require.Contains(t, err.Error(), "mode must be 'pre', 'post', 'force', or 'auto'")
+		require.Contains(t, err.Error(), "mode must be 'pre', 'post', 'force', 'auto', or 'include'")
 		require.Contains(t, err.Error(), "invalid")
 	})
 
@@ -3254,6 +3301,26 @@ func TestParseRankOption(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, rankOption)
 		require.Equal(t, "force", rankOption.Mode)
+	})
+
+	t.Run("valid mode include", func(t *testing.T) {
+		options := map[string]string{
+			"mode": "include",
+		}
+		rankOption, err := parseRankOption(options, ctx)
+		require.NoError(t, err)
+		require.NotNil(t, rankOption)
+		require.Equal(t, "include", rankOption.Mode)
+	})
+
+	t.Run("valid mode auto", func(t *testing.T) {
+		options := map[string]string{
+			"mode": "auto",
+		}
+		rankOption, err := parseRankOption(options, ctx)
+		require.NoError(t, err)
+		require.NotNil(t, rankOption)
+		require.Equal(t, "auto", rankOption.Mode)
 	})
 
 	t.Run("empty options map", func(t *testing.T) {
