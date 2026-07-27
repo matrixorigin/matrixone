@@ -8847,7 +8847,9 @@ func TestCkpLeak(t *testing.T) {
 		assert.Nil(t, err)
 	}
 	wg.Wait()
-	require.NoError(t, db.ForceCheckpoint(ctx, db.TxnMgr.Now()))
+	ckpCtx, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	require.NoError(t, db.ForceCheckpoint(ckpCtx, db.TxnMgr.Now()))
 	testutil.WaitAllCheckpointsFinished(t, db)
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 	checkLeak := func() bool {
