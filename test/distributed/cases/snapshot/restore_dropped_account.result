@@ -4,21 +4,17 @@ drop snapshot if exists spsp01;
 create snapshot spsp01 for account acc01;
 show snapshots;
 ➤ SNAPSHOT_NAME[12,-1,0]  ¦  TIMESTAMP[12,-1,0]  ¦  SNAPSHOT_LEVEL[12,-1,0]  ¦  ACCOUNT_NAME[12,-1,0]  ¦  DATABASE_NAME[12,-1,0]  ¦  TABLE_NAME[12,-1,0]  𝄀
-spsp01  ¦  2026-07-27 03:37:26.575902438  ¦  account  ¦  acc01  ¦    ¦  
+spsp01  ¦  2026-07-27 06:49:37.558279897  ¦  account  ¦  acc01  ¦    ¦  
 show accounts;
 ➤ account_name[12,-1,0]  ¦  admin_name[12,-1,0]  ¦  created_time[93,64,0]  ¦  status[12,-1,0]  ¦  suspended_time[93,64,0]  ¦  db_count[-5,64,0]  ¦  tbl_count[-5,64,0]  ¦  size[8,54,0]  ¦  snapshot_size[8,54,0]  ¦  comments[12,-1,0]  𝄀
-acc02  ¦  test_account  ¦  2026-07-27 03:35:50  ¦  open  ¦  null  ¦  5  ¦  75  ¦  0.100021  ¦  0.0  ¦    𝄀
-acc03  ¦  test_account  ¦  2026-07-27 03:35:51  ¦  open  ¦  null  ¦  5  ¦  75  ¦  0.102236  ¦  0.0  ¦    𝄀
-acc01  ¦  test_account  ¦  2026-07-27 03:37:26  ¦  open  ¦  null  ¦  5  ¦  75  ¦  0.0  ¦  0.0  ¦    𝄀
-sys  ¦  root  ¦  2026-07-23 09:21:25  ¦  open  ¦  null  ¦  8  ¦  131  ¦  11.663605  ¦  0.0  ¦  system account
+acc01  ¦  test_account  ¦  2026-07-27 06:49:37  ¦  open  ¦  null  ¦  5  ¦  75  ¦  0.0  ¦  0.0  ¦    𝄀
+sys  ¦  root  ¦  2026-07-23 09:21:25  ¦  open  ¦  null  ¦  8  ¦  131  ¦  63.313232  ¦  0.0  ¦  system account
 drop account acc01;
 restore account acc01{snapshot="spsp01"};
 show accounts;
 ➤ account_name[12,-1,0]  ¦  admin_name[12,-1,0]  ¦  created_time[93,64,0]  ¦  status[12,-1,0]  ¦  suspended_time[93,64,0]  ¦  db_count[-5,64,0]  ¦  tbl_count[-5,64,0]  ¦  size[8,54,0]  ¦  snapshot_size[8,54,0]  ¦  comments[12,-1,0]  𝄀
-acc02  ¦  test_account  ¦  2026-07-27 03:35:50  ¦  open  ¦  null  ¦  5  ¦  75  ¦  0.100021  ¦  0.0  ¦    𝄀
-acc03  ¦  test_account  ¦  2026-07-27 03:35:51  ¦  open  ¦  null  ¦  5  ¦  75  ¦  0.102236  ¦  0.0  ¦    𝄀
-acc01  ¦  test_account  ¦  2026-07-27 03:37:26  ¦  open  ¦  null  ¦  5  ¦  75  ¦  0.0  ¦  0.0  ¦    𝄀
-sys  ¦  root  ¦  2026-07-23 09:21:25  ¦  open  ¦  null  ¦  8  ¦  131  ¦  11.663605  ¦  0.0  ¦  system account
+acc01  ¦  test_account  ¦  2026-07-27 06:49:37  ¦  open  ¦  null  ¦  5  ¦  75  ¦  0.0  ¦  0.0  ¦    𝄀
+sys  ¦  root  ¦  2026-07-23 09:21:25  ¦  open  ¦  null  ¦  8  ¦  131  ¦  63.313232  ¦  0.0  ¦  system account
 drop account acc01;
 drop snapshot spsp01;
 drop account if exists acc02;
@@ -138,9 +134,8 @@ drop account acc02;
 restore account acc02{snapshot="spsp02"};
 show accounts;
 ➤ account_name[12,-1,0]  ¦  admin_name[12,-1,0]  ¦  created_time[93,64,0]  ¦  status[12,-1,0]  ¦  suspended_time[93,64,0]  ¦  db_count[-5,64,0]  ¦  tbl_count[-5,64,0]  ¦  size[8,54,0]  ¦  snapshot_size[8,54,0]  ¦  comments[12,-1,0]  𝄀
-acc03  ¦  test_account  ¦  2026-07-27 03:35:51  ¦  open  ¦  null  ¦  5  ¦  75  ¦  0.102236  ¦  0.0  ¦    𝄀
-acc02  ¦  test_account  ¦  2026-07-27 03:37:29  ¦  open  ¦  null  ¦  9  ¦  81  ¦  0.0  ¦  0.0  ¦    𝄀
-sys  ¦  root  ¦  2026-07-23 09:21:25  ¦  open  ¦  null  ¦  8  ¦  131  ¦  11.663605  ¦  0.0  ¦  system account
+acc02  ¦  test_account  ¦  2026-07-27 06:49:39  ¦  open  ¦  null  ¦  9  ¦  81  ¦  0.0  ¦  0.0  ¦    𝄀
+sys  ¦  root  ¦  2026-07-23 09:21:25  ¦  open  ¦  null  ¦  8  ¦  131  ¦  63.313232  ¦  0.0  ¦  system account
 show databases;
 ➤ Database[12,-1,0]  𝄀
 information_schema  𝄀
@@ -310,7 +305,7 @@ drop stage if exists stage01;
 create stage stage01 url = 'file:///$resources/into_outfile/stage';
 select * from mo_catalog.mo_stages;
 ➤ stage_id[4,32,0]  ¦  stage_name[12,-1,0]  ¦  url[12,0,0]  ¦  stage_credentials[12,0,0]  ¦  stage_status[12,-1,0]  ¦  created_time[93,64,0]  ¦  comment[12,0,0]  𝄀
-1  ¦  stage01  ¦  file:////mnt/fastdata/temp/matrixone/test/distributed/resources/into_outfile/stage  ¦    ¦  in_use  ¦  2026-07-27 03:37:33  ¦  
+1  ¦  stage01  ¦  file:////mnt/fastdata/temp/matrixone/test/distributed/resources/into_outfile/stage  ¦    ¦  in_use  ¦  2026-07-27 06:49:43  ¦  
 show stages;
 ➤ STAGE_NAME[12,-1,0]  ¦  URL[12,0,0]  ¦  STATUS[12,-1,0]  ¦  COMMENT[12,0,0]  𝄀
 stage01  ¦  file:////mnt/fastdata/temp/matrixone/test/distributed/resources/into_outfile/stage  ¦  in_use  ¦  
