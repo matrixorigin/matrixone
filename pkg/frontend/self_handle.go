@@ -80,6 +80,7 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 	case *tree.PrepareStmt:
 		ses.EnterFPrint(FPPrepareStmt)
 		defer ses.ExitFPrint(FPPrepareStmt)
+		ses.RemovePrepareStmt(string(st.Name))
 		execCtx.prepareStmt, err = handlePrepareStmt(ses, execCtx, st, execCtx.sqlOfStmt)
 		if err != nil {
 			return
@@ -94,8 +95,10 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 		defer ses.ExitFPrint(FPPrepareString)
 		switch st := st.(type) {
 		case *tree.PrepareString:
+			ses.RemovePrepareStmt(string(st.Name))
 			execCtx.prepareStmt, err = handlePrepareString(ses, execCtx, st)
 		case *tree.PrepareVar:
+			ses.RemovePrepareStmt(string(st.Name))
 			execCtx.prepareStmt, err = handlePrepareVar(ses, execCtx, st)
 		}
 		if err != nil {

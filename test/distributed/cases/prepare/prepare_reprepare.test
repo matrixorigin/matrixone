@@ -1,0 +1,20 @@
+-- @label:bvt
+
+prepare stale_stmt from 'select 77';
+set @bad_prepare_sql = 'select * from missing_prepare_table';
+prepare stale_stmt from @bad_prepare_sql;
+execute stale_stmt;
+
+prepare stale_stmt from 'select 88';
+execute stale_stmt;
+set @bad_prepare_sql = 'select from';
+prepare stale_stmt from @bad_prepare_sql;
+execute stale_stmt;
+
+prepare stale_stmt from 'select 99';
+prepare stale_stmt from @missing_prepare_sql;
+execute stale_stmt;
+
+prepare stale_stmt from 'select 100';
+execute stale_stmt;
+deallocate prepare stale_stmt;
