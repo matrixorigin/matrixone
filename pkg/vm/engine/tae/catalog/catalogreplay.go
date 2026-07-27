@@ -712,6 +712,37 @@ func (catalog *Catalog) OnReplayObjectBatch(
 	}
 }
 
+func replayCheckpointDeleteObject(
+	rel *TableEntry,
+	obj *ObjectEntry,
+	createTS, deleteTS types.TS,
+) *ObjectEntry {
+	if obj.IsDEntry() {
+		return obj.prevVersion
+	}
+	if obj.HasDCounterpart() {
+		return obj
+	}
+
+	updatedCreate := obj.Clone()
+	updatedCreate.DeletedAt = types.TS{}
+	updatedCreate.DeleteNode = txnbase.TxnMVCCNode{}
+	updatedCreate.CreateNode = txnbase.NewTxnMVCCNodeWithTS(createTS)
+	updatedCreate.ObjectState = ObjectState_Create_ApplyCommit
+	updatedCreate.prevVersion = nil
+	updatedCreate.nextVersion = nil
+
+	deleteEntry := updatedCreate.Clone()
+	deleteEntry.DeletedAt = deleteTS
+	deleteEntry.DeleteNode = txnbase.NewTxnMVCCNodeWithTS(deleteTS)
+	deleteEntry.ObjectState = ObjectState_Delete_ApplyCommit
+	updatedCreate.nextVersion = deleteEntry
+	deleteEntry.prevVersion = updatedCreate
+
+	rel.AddEntryLocked(deleteEntry)
+	return updatedCreate
+}
+
 func (catalog *Catalog) onReplayCheckpointObject(
 	dbid, tbid uint64,
 	objid *types.Objectid,
@@ -811,10 +842,12 @@ func (catalog *Catalog) onReplayCheckpointObject(
 				obj, _ = rel.GetObjectByID(objid, isTombstone)
 				if obj == nil {
 					obj = newObject()
+					obj.DeletedAt = types.TS{}
+					obj.DeleteNode = txnbase.TxnMVCCNode{}
+					obj.CreateNode = txnbase.NewTxnMVCCNodeWithTS(createTS)
 					rel.AddEntryLocked(obj)
 				}
-				obj.CreateNode = txnbase.NewTxnMVCCNodeWithTS(createTS)
-				obj.DeleteNode = txnbase.NewTxnMVCCNodeWithTS(deleteTS)
+				obj = replayCheckpointDeleteObject(rel, obj, createTS, deleteTS)
 			}
 		}
 	}
@@ -834,6 +867,9 @@ func (catalog *Catalog) onReplayCheckpointObject(
 		if !obj.IsAppendable() || (obj.IsAppendable() && !deleteAt.IsEmpty()) {
 			obj.objData.TryUpgrade()
 		}
+	}
+	if next := obj.GetNextVersion(); next != nil {
+		next.objData = obj.objData
 	}
 }
 

@@ -25,8 +25,19 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
+
+type nilReplayDataFactory struct{}
+
+func (*nilReplayDataFactory) MakeTableFactory() TableDataFactory {
+	return func(*TableEntry) data.Table { return nil }
+}
+
+func (*nilReplayDataFactory) MakeObjectFactory() ObjectDataFactory {
+	return func(*ObjectEntry) data.Object { return nil }
+}
 
 func TestTableObjectStats(t *testing.T) {
 	db := MockDBEntryWithAccInfo(0, 0)
@@ -238,4 +249,72 @@ func TestGetSoftdeleteObjects2(t *testing.T) {
 	addActiveObject(4)
 	objs = tbl.GetSoftdeleteObjects(types.BuildTS(2, 0), types.BuildTS(5, 0))
 	assert.Equal(t, 2, len(objs))
+}
+
+func TestReplayCheckpointDeleteObjectSoftDeleteCollection(t *testing.T) {
+	catalog := MockCatalog(&nilReplayDataFactory{})
+	db := NewReplayDBEntry()
+	db.ID = 100
+	db.catalog = catalog
+	db.DBNode = &DBNode{name: "backup"}
+	require.NoError(t, catalog.AddEntryLocked(db, nil, true))
+
+	tbl := MockTableEntryWithDB(db, 200)
+	require.NoError(t, db.AddEntryLocked(tbl, nil, true))
+
+	createTS := types.BuildTS(10, 0)
+	deleteTS := types.BuildTS(20, 0)
+	endTS := types.BuildTS(30, 0)
+	objID := objectio.NewObjectid()
+	stats := objectio.NewObjectStatsWithObjectID(&objID, true, false, false)
+
+	// Neither timestamp equals the checkpoint commit timestamp, reproducing the
+	// backup-only replay branch that used to publish one combined C/D entry.
+	catalog.onReplayCheckpointObject(
+		db.ID,
+		tbl.ID,
+		&objID,
+		createTS,
+		deleteTS,
+		createTS.Prev(),
+		endTS,
+		endTS,
+		&ObjectMVCCNode{ObjectStats: *stats},
+		false,
+	)
+
+	nodes := tbl.dataObjects.GetAllNodes(&objID)
+	require.Len(t, nodes, 2)
+	createEntry := nodes[1]
+	deleteEntry := createEntry.GetNextVersion()
+	require.NotNil(t, deleteEntry)
+	require.Same(t, createEntry, deleteEntry.GetPrevVersion())
+	require.True(t, createEntry.HasDCounterpart())
+	require.True(t, deleteEntry.IsDEntry())
+	require.Equal(t, createTS, createEntry.CreatedAt)
+	require.True(t, createEntry.DeletedAt.IsEmpty())
+	require.Equal(t, deleteTS, deleteEntry.DeletedAt)
+	require.Same(t, deleteEntry, nodes[0])
+	require.Same(t, createEntry, nodes[1])
+
+	softDeletes := tbl.GetSoftdeleteObjects(createTS, deleteTS)
+	require.Len(t, softDeletes, 1)
+	require.Same(t, deleteEntry, softDeletes[0])
+
+	// Replaying the same checkpoint record must reuse the linked versions
+	// instead of inserting another pair.
+	catalog.onReplayCheckpointObject(
+		db.ID,
+		tbl.ID,
+		&objID,
+		createTS,
+		deleteTS,
+		createTS.Prev(),
+		endTS,
+		endTS,
+		&ObjectMVCCNode{ObjectStats: *stats},
+		false,
+	)
+	require.Len(t, tbl.dataObjects.GetAllNodes(&objID), 2)
+	require.Len(t, tbl.GetSoftdeleteObjects(createTS, deleteTS), 1)
 }
