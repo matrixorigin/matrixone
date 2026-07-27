@@ -20761,20 +20761,18 @@ yydefault:
 		yyVAL.union = yyLOCAL
 	case 977:
 		yyDollar = yyS[yypt-2 : yypt+1]
-		var yyLOCAL tree.NullsPosition
 //line mysql_sql.y:6521
 		{
-			yyLOCAL = tree.NullsFirst
+			yylex.Error("NULLS FIRST is not supported in MySQL syntax")
+			return 1
 		}
-		yyVAL.union = yyLOCAL
 	case 978:
 		yyDollar = yyS[yypt-2 : yypt+1]
-		var yyLOCAL tree.NullsPosition
 //line mysql_sql.y:6525
 		{
-			yyLOCAL = tree.NullsLast
+			yylex.Error("NULLS LAST is not supported in MySQL syntax")
+			return 1
 		}
-		yyVAL.union = yyLOCAL
 	case 979:
 		yyDollar = yyS[yypt-0 : yypt+1]
 		var yyLOCAL *tree.SelectLockInfo
