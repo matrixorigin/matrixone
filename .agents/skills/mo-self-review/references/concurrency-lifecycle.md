@@ -113,8 +113,9 @@ when a remembered list of test names is present.
 - Count irreversible side effects and require exactly once, not merely non-zero.
 - Make test cleanup release blockers even after an assertion fails.
 - Run the minimal, explicitly named set of new, modified, or directly affected
-  concurrency tests with `-race -count=100`; never apply 100 repetitions to the
-  package. Then run the entire owning package under `-race` once.
+  concurrency tests with the adaptive `-race -count=N` budget defined by the
+  main skill; never apply repeated stress to the package. Then run the entire
+  owning package under `-race` once.
 
 ## 6. Validate The Closure
 
