@@ -350,15 +350,20 @@ func dataBranchCreateTable(
 		CreateTable:  stmt.CreateTable,
 		ToAccountOpt: stmt.ToAccountOpt,
 	}
+	if err = lockDataBranchTargetAccount(execCtx.reqCtx, bh, stmt.ToAccountOpt); err != nil {
+		return err
+	}
+	opAccountID, targetAccountID, snapshot, err := getOpAndToAccountId(
+		execCtx.reqCtx, ses, bh, stmt.ToAccountOpt, stmt.SrcTable.AtTsExpr,
+	)
+	if err != nil {
+		return err
+	}
 	targetAccountName := ses.GetTenantInfo().Tenant
-	targetAccountID := ses.GetTenantInfo().TenantID
 	if stmt.ToAccountOpt != nil {
 		targetAccountName = stmt.ToAccountOpt.AccountName.String()
-		if targetAccountID, err = getAccountId(execCtx.reqCtx, bh, targetAccountName); err != nil {
-			return err
-		}
 	}
-	if ses.GetTenantInfo().TenantID != sysAccountID && ses.GetTenantInfo().TenantID != targetAccountID {
+	if opAccountID != sysAccountID && opAccountID != targetAccountID {
 		return moerr.NewInternalErrorNoCtx("only sys can clone table to another account")
 	}
 	if err = checkBranchQuotaForAccount(
@@ -374,7 +379,11 @@ func dataBranchCreateTable(
 
 	execCtx.reqCtx = context.WithValue(execCtx.reqCtx, tree.CloneLevelCtxKey{}, tree.NormalCloneLevelTable)
 
-	if receipt, err = handleCloneTable(execCtx, ses, cloneStmt, bh); err != nil {
+	if receipt, err = handleCloneTable(execCtx, ses, cloneStmt, bh, &cloneAccountResolution{
+		opAccountId: opAccountID,
+		toAccountId: targetAccountID,
+		snapshot:    snapshot,
+	}); err != nil {
 		return
 	}
 
@@ -426,6 +435,9 @@ func dataBranchCreateDatabase(
 		}
 		stats.Add(&authStats)
 	}
+	if err = lockDataBranchTargetAccount(execCtx.reqCtx, bh, stmt.ToAccountOpt); err != nil {
+		return
+	}
 
 	if source, err = collectCloneDatabaseSource(execCtx.reqCtx, ses, bh, &stmt.CloneDatabase); err != nil {
 		return
@@ -461,6 +473,22 @@ func dataBranchCreateDatabase(
 	}
 
 	return
+}
+
+func lockDataBranchTargetAccount(
+	ctx context.Context,
+	bh BackgroundExec,
+	toAccountOpt *tree.ToAccountOpt,
+) error {
+	if toAccountOpt == nil {
+		return nil
+	}
+	sql, err := getSqlForLockMoAccountNameFormat(ctx, toAccountOpt.AccountName.String())
+	if err != nil {
+		return err
+	}
+	bh.ClearExecResultSet()
+	return bh.Exec(defines.AttachAccountId(ctx, sysAccountID), sql)
 }
 
 func markBranchTablesDeleted(

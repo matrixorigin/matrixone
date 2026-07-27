@@ -25,6 +25,7 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/stretchr/testify/require"
 )
 
@@ -144,5 +145,78 @@ func TestIssue26114CrossAccountBranchUsesTargetQuotaAndOwnership(t *testing.T) {
 			"select count(*) from mo_catalog.mo_branch_metadata b join mo_catalog.mo_tables t on b.table_id = t.rel_id "+
 				"where t.account_id = %d and b.creator = %d and b.table_deleted = false", accountID, accountID)).Scan(&count))
 		require.Equal(t, 4, count)
+	}))
+}
+
+func TestIssue26114LegacyCrossAccountMetadataCountsTowardTargetQuota(t *testing.T) {
+	require.NoError(t, runIssue26087AuthenticatedClusterTest(func(c embed.Cluster) {
+		ctx, cancel := context.WithTimeout(context.Background(), 240*time.Second)
+		defer cancel()
+
+		cn, err := c.GetCNService(0)
+		require.NoError(t, err)
+		port := cn.GetServiceConfig().CN.Frontend.Port
+		sysDB, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", port))
+		require.NoError(t, err)
+		defer sysDB.Close()
+		execSQLRequire(t, ctx, sysDB, "set role moadmin")
+
+		const (
+			accountName = "issue_26114_legacy_target"
+			targetDB    = "issue_26114_legacy_dst"
+			sourceDB    = "issue_26114_legacy_src"
+			snapshot    = "issue_26114_legacy_sp"
+		)
+		defer func() {
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cleanupCancel()
+			execSQLMaybe(t, cleanupCtx, sysDB, "drop snapshot if exists "+snapshot)
+			execSQLMaybe(t, cleanupCtx, sysDB, "drop database if exists `"+sourceDB+"`")
+			execSQLMaybe(t, cleanupCtx, sysDB, "drop account if exists "+accountName)
+		}()
+
+		execSQLMaybe(t, ctx, sysDB, "drop account if exists "+accountName)
+		accountID := testutils.CreateAccount(t, c, accountName, "111")
+		execSQLRequire(t, ctx, sysDB, "select mo_feature_registry_upsert('branch', 'Branch feature', '{\"allowed_scope\":[]}', true)")
+		execSQLRequire(t, ctx, sysDB, fmt.Sprintf(
+			"select mo_feature_limit_upsert(%d, 'branch', '', -1)", accountID))
+
+		tenantDB, err := sql.Open("mysql", fmt.Sprintf(
+			"%s#root#accountadmin:111@tcp(127.0.0.1:%d)/", accountName, port))
+		require.NoError(t, err)
+		defer tenantDB.Close()
+		execSQLRequire(t, ctx, tenantDB, "create database `"+targetDB+"`")
+
+		execSQLRequire(t, ctx, sysDB, "create database `"+sourceDB+"`")
+		execSQLRequire(t, ctx, sysDB, "create table `"+sourceDB+"`.`base` (id int primary key)")
+		execSQLRequire(t, ctx, sysDB, "insert into `"+sourceDB+"`.`base` values (1)")
+		execSQLRequire(t, ctx, sysDB, "create snapshot "+snapshot+" for table `"+sourceDB+"` `base`")
+
+		execSQLRequire(t, ctx, sysDB, "data branch create table `"+targetDB+"`.`legacy` from `"+
+			sourceDB+"`.`base`{snapshot='"+snapshot+"'} to account "+accountName)
+
+		var legacyTableID uint64
+		require.NoError(t, tenantDB.QueryRowContext(ctx,
+			"select rel_id from mo_catalog.mo_tables where reldatabase = '"+targetDB+"' and relname = 'legacy'").Scan(&legacyTableID))
+		// Model the representation persisted by released binaries while retaining
+		// the real target-owned table, branch metadata, and protect snapshot.
+		internalExec := testutils.GetSQLExecutor(cn)
+		result, err := internalExec.Exec(ctx, fmt.Sprintf(
+			"update mo_branch_metadata set creator = 0 where table_id = %d", legacyTableID),
+			executor.Options{}.WithDatabase("mo_catalog").WithAccountID(0))
+		require.NoError(t, err)
+		result.Close()
+		execSQLRequire(t, ctx, sysDB, fmt.Sprintf(
+			"select mo_feature_limit_upsert(%d, 'branch', '', 1)", accountID))
+
+		_, err = sysDB.ExecContext(ctx, "data branch create table `"+targetDB+"`.`should_reject` from `"+
+			sourceDB+"`.`base`{snapshot='"+snapshot+"'} to account "+accountName)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "has reached the limit of 1")
+
+		var activeTargetTables int
+		require.NoError(t, tenantDB.QueryRowContext(ctx,
+			"select count(*) from mo_catalog.mo_tables where reldatabase = '"+targetDB+"' and relname in ('legacy', 'should_reject')").Scan(&activeTargetTables))
+		require.Equal(t, 1, activeTargetTables)
 	}))
 }
