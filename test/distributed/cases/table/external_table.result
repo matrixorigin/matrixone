@@ -129,7 +129,8 @@ abc$%*()#$  ¦  ttttt  ¦  9999-12-31  ¦  2019-10-23 23:00:09
 set time_zone='SYSTEM';
 create external table ex_table_3_1(char_1 char(20),char_2 varchar(10),date_1 date,date_2 datetime,date_3 timestamp)infile{"filepath"='$resources/external_table_file/ex_table_3_1.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
 select * from ex_table_3_1;
-internal error: the input value '1970-01-01 00:00:01.000000' is not Timestamp type for column 4
+➤ char_1[1,20,0]  ¦  char_2[12,-1,0]  ¦  date_1[91,64,0]  ¦  date_2[93,64,0]  ¦  date_3[93,64,0]  𝄀
+cat  ¦  yellow 芝士  ¦  2020-10-09  ¦  0001-01-01 00:00:00  ¦  1970-01-02 00:00:01
 create external table ex_table_3_2(char_1 char(20),char_2 varchar(10),date_1 date,date_2 datetime,date_3 timestamp)infile{"filepath"='$resources/external_table_file/ex_table_3_2.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
 select * from ex_table_3_2;
 internal error: the input value '0001' is not Date type for column 2
