@@ -25,19 +25,24 @@ import (
 )
 
 func NewTestService(fs vfs.FS) (*Service, ClientConfig, error) {
-	addr := []string{"localhost:9000"}
-	cfg := DefaultConfig()
-	cfg.UUID = uuid.New().String()
-	cfg.RTTMillisecond = 10
-	cfg.GossipSeedAddresses = []string{DefaultGossipServiceAddress}
-	cfg.DeploymentID = 1
-	cfg.FS = fs
-	cfg.LogServicePort = 9000
-	cfg.DisableWorkers = true
+	var cfg Config
+	genCfg := func() Config {
+		cfg = DefaultConfig()
+		cfg.UUID = uuid.New().String()
+		cfg.RTTMillisecond = 10
+		cfg.RaftAddress = getTestRaftAddress()
+		cfg.GossipPort = getTestGossipPort()
+		cfg.GossipSeedAddresses = []string{getTestGossipAddress(cfg.GossipPort)}
+		cfg.DeploymentID = 1
+		cfg.FS = fs
+		cfg.LogServicePort = getTestServicePort()
+		cfg.DisableWorkers = true
 
-	runtime.SetupServiceBasedRuntime(cfg.UUID, runtime.ServiceRuntime(""))
+		runtime.SetupServiceBasedRuntime(cfg.UUID, runtime.ServiceRuntime(""))
+		return cfg
+	}
 
-	service, err := NewService(cfg,
+	service, err := NewServiceWithRetry(genCfg,
 		newFS(),
 		nil,
 		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
@@ -63,7 +68,7 @@ func NewTestService(fs vfs.FS) (*Service, ClientConfig, error) {
 	ccfg := ClientConfig{
 		LogShardID:       1,
 		TNReplicaID:      10,
-		ServiceAddresses: addr,
+		ServiceAddresses: []string{cfg.LogServiceServiceAddr()},
 	}
 	return service, ccfg, nil
 }

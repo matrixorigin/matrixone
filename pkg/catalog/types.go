@@ -40,6 +40,10 @@ const (
 	PartitionSubTableWildcard = "\\%!\\%%\\%!\\%%"
 
 	ExternalFilePath = "__mo_filepath"
+	// ExternalFilePathColId identifies the synthetic filepath column that the
+	// query builder appends to external scans. It survives column-position
+	// remapping, unlike TbColToDataCol's original file-field indexes.
+	ExternalFilePathColId = ^uint64(0)
 
 	// MOAutoIncrTable mo auto increment table name
 	MOAutoIncrTable = "mo_increment_columns"
@@ -402,6 +406,7 @@ const (
 	SystemSI_IVFFLAT_TblCol_Entries_id      = "__mo_index_centroid_fk_id"
 	SystemSI_IVFFLAT_TblCol_Entries_pk      = IndexTablePrimaryColName
 	SystemSI_IVFFLAT_TblCol_Entries_entry   = "__mo_index_centroid_fk_entry"
+	SystemSI_IVFFLAT_IncludeColPrefix       = "__mo_index_include_"
 
 	/************ 3. FULLTEXT Index **************/
 
