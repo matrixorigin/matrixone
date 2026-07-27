@@ -1,0 +1,4 @@
+interface:
+  display_name: "MatrixOne PR Radar"
+  short_description: "Query, prioritize, and explain MatrixOne PR queues"
+  default_prompt: "Use $mo-pr-radar to find MatrixOne PRs waiting for my review, with conflicts, or blocked after CI is green."
