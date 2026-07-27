@@ -3704,7 +3704,7 @@ func TestCastToJSONPreservesSourceCategories(t *testing.T) {
 	})
 	t.Run("binary remains opaque including its payload", func(t *testing.T) {
 		run(t, types.T_blob.ToType(), []string{`{"a":1}`}, nil,
-			[]string{encodeJSONCastValue(t, newTypedByteJson(bytejson.TpCodeBlob, "eyJhIjoxfQ=="))})
+			[]string{encodeJSONCastValue(t, newTypedByteJson(bytejson.TpCodeOpaque, `{"a":1}`))})
 	})
 	t.Run("signed and unsigned keep their numeric representation", func(t *testing.T) {
 		run(t, types.T_int64.ToType(), []int64{-1}, nil,
@@ -3836,7 +3836,7 @@ func TestCastToJSONAllNullPathsMaterializeVarlenaLength(t *testing.T) {
 func TestBitToJSONRestoresDeclaredWidth(t *testing.T) {
 	value, err := bitToJSON(0x10a, 9, context.Background())
 	require.NoError(t, err)
-	require.Equal(t, bytejson.TpCodeBlob, value.Type)
+	require.Equal(t, "BIT", value.TYPE())
 	require.Equal(t, `"AQo="`, value.String())
 
 	_, err = bitToJSON(1, 65, context.Background())

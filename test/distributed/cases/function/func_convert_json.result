@@ -43,7 +43,7 @@ select json_type(convert(tx, json)), json_unquote(convert(tx, json)) from conver
 OBJECT  ¦  {"a": 1}
 select json_type(convert(bits, json)), json_unquote(convert(bits, json)) from convert_json_source;
 ➤ json_type(cast(bits as json))[12,-1,0]  ¦  json_unquote(cast(bits as json))[12,-1,0]  𝄀
-BLOB  ¦  Cg==
+BIT  ¦  Cg==
 select json_type(convert(y, json)), convert(y, json) from convert_json_source;
 ➤ json_type(cast(y as json))[12,-1,0]  ¦  cast(y as json)[-1,2147483647,0]  𝄀
 INTEGER  ¦  2020
@@ -55,7 +55,7 @@ create table convert_json_bit_width(bits bit(9));
 insert into convert_json_bit_width values (b'100001010');
 select json_type(convert(bits, json)), json_unquote(convert(bits, json)) from convert_json_bit_width;
 ➤ json_type(cast(bits as json))[12,-1,0]  ¦  json_unquote(cast(bits as json))[12,-1,0]  𝄀
-BLOB  ¦  AQo=
+BIT  ¦  AQo=
 drop table convert_json_bit_width;
 select json_type(convert(cast(-9223372036854775808 as signed), json));
 ➤ json_type(cast(cast(-9223372036854775808 as signed) as json))[12,-1,0]  𝄀
@@ -121,13 +121,17 @@ convert(st_geomfromtext('LINESTRING(0 0,1 1)'), json);
 ➤ json_type(cast(st_geomfromtext(LINESTRING(0 0,1 1)) as json))[12,-1,0]  ¦  cast(st_geomfromtext(LINESTRING(0 0,1 1)) as json)[-1,2147483647,0]  𝄀
 OBJECT  ¦  {"coordinates": [[0, 0], [1, 1]], "type": "LineString"}
 select convert(cast(x'00' as blob), json) <
-convert(cast(x'd0' as blob), json) as mo_base64_order;
-➤ mo_base64_order[-7,1,0]  𝄀
-0
+convert(cast(x'd0' as blob), json) as raw_binary_order;
+➤ raw_binary_order[-7,1,0]  𝄀
+1
+select convert(cast(b'00000000' as bit(8)), json) <
+convert(cast(b'11010000' as bit(8)), json) as raw_bit_order;
+➤ raw_bit_order[-7,1,0]  𝄀
+1
 select json_type(convert(cast(b'1' as bit(1)), json)),
 json_unquote(convert(cast(b'1' as bit(1)), json));
 ➤ json_type(cast(cast(0b1 as bit(1)) as json))[12,-1,0]  ¦  json_unquote(cast(cast(0b1 as bit(1)) as json))[12,-1,0]  𝄀
-BLOB  ¦  AQ==
+BIT  ¦  AQ==
 create table convert_json_bit_blob(
 b1 bit(1), b8 bit(8), b9 bit(9),
 bl1 blob, bl8 blob, bl9 blob
@@ -139,19 +143,19 @@ json_type(convert(bl1, json)), json_unquote(convert(bl1, json)),
 convert(b1, json) = convert(bl1, json)
 from convert_json_bit_blob;
 ➤ json_type(cast(b1 as json))[12,-1,0]  ¦  json_unquote(cast(b1 as json))[12,-1,0]  ¦  json_type(cast(bl1 as json))[12,-1,0]  ¦  json_unquote(cast(bl1 as json))[12,-1,0]  ¦  cast(b1 as json) = cast(bl1 as json)[-7,1,0]  𝄀
-BLOB  ¦  AQ==  ¦  BLOB  ¦  AQ==  ¦  1
+BIT  ¦  AQ==  ¦  BLOB  ¦  AQ==  ¦  0
 select json_type(convert(b8, json)), json_unquote(convert(b8, json)),
 json_type(convert(bl8, json)), json_unquote(convert(bl8, json)),
 convert(b8, json) = convert(bl8, json)
 from convert_json_bit_blob;
 ➤ json_type(cast(b8 as json))[12,-1,0]  ¦  json_unquote(cast(b8 as json))[12,-1,0]  ¦  json_type(cast(bl8 as json))[12,-1,0]  ¦  json_unquote(cast(bl8 as json))[12,-1,0]  ¦  cast(b8 as json) = cast(bl8 as json)[-7,1,0]  𝄀
-BLOB  ¦  /w==  ¦  BLOB  ¦  /w==  ¦  1
+BIT  ¦  /w==  ¦  BLOB  ¦  /w==  ¦  0
 select json_type(convert(b9, json)), json_unquote(convert(b9, json)),
 json_type(convert(bl9, json)), json_unquote(convert(bl9, json)),
 convert(b9, json) = convert(bl9, json)
 from convert_json_bit_blob;
 ➤ json_type(cast(b9 as json))[12,-1,0]  ¦  json_unquote(cast(b9 as json))[12,-1,0]  ¦  json_type(cast(bl9 as json))[12,-1,0]  ¦  json_unquote(cast(bl9 as json))[12,-1,0]  ¦  cast(b9 as json) = cast(bl9 as json)[-7,1,0]  𝄀
-BLOB  ¦  AQo=  ¦  BLOB  ¦  AQo=  ¦  1
+BIT  ¦  AQo=  ¦  BLOB  ¦  AQo=  ¦  0
 drop table convert_json_bit_blob;
 create table convert_json_destination(id int, j json);
 insert into convert_json_destination select 1, bl from convert_json_source;
@@ -384,6 +388,36 @@ order by id;
 drop table convert_json_enum_update;
 drop table convert_json_enum_destination;
 drop table convert_json_enum;
+create table convert_json_set(id int primary key, s set('alpha', 'beta'), j json);
+insert into convert_json_set values (1, 'alpha', null), (2, 'alpha,beta', null);
+select id, json_type(convert(s, json)), json_unquote(convert(s, json)),
+json_type(cast(s as json)), json_unquote(cast(s as json))
+from convert_json_set order by id;
+➤ id[4,32,0]  ¦  json_type(cast(s as json))[12,-1,0]  ¦  json_unquote(cast(s as json))[12,-1,0]  ¦  json_type(cast(s as json))[12,-1,0]  ¦  json_unquote(cast(s as json))[12,-1,0]  𝄀
+1  ¦  STRING  ¦  alpha  ¦  STRING  ¦  alpha  𝄀
+2  ¦  STRING  ¦  alpha,beta  ¦  STRING  ¦  alpha,beta
+select json_type(convert(s, json)), json_unquote(convert(s, json))
+from (
+select s from convert_json_set where id = 1
+union all
+select s from convert_json_set where id = 2
+) src
+order by json_unquote(convert(s, json));
+➤ json_type(cast(s as json))[12,-1,0]  ¦  json_unquote(cast(s as json))[12,-1,0]  𝄀
+STRING  ¦  alpha  𝄀
+STRING  ¦  alpha,beta
+create table convert_json_set_destination(id int primary key, j json);
+insert into convert_json_set_destination select id, s from convert_json_set;
+update convert_json_set dst
+join (select id, s from convert_json_set where id = 1) src on dst.id = src.id
+set dst.j = src.s;
+select id, json_type(j), json_unquote(j)
+from convert_json_set_destination order by id;
+➤ id[4,32,0]  ¦  json_type(j)[12,-1,0]  ¦  json_unquote(j)[12,-1,0]  𝄀
+1  ¦  STRING  ¦  alpha  𝄀
+2  ¦  STRING  ¦  alpha,beta
+drop table convert_json_set_destination;
+drop table convert_json_set;
 prepare convert_json_parameter from 'select json_type(convert(?, json)), convert(?, json)';
 set @convert_json_param = 123;
 execute convert_json_parameter using @convert_json_param, @convert_json_param;

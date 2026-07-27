@@ -16,6 +16,7 @@ package bytejson
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -38,11 +39,16 @@ func (bj ByteJson) String() string {
 }
 
 func (bj ByteJson) Unquote() (string, error) {
+	if bj.Type == TpCodeBlob {
+		return string(bj.GetString()), nil
+	}
+	if bj.Type == TpCodeOpaque || bj.Type == TpCodeBit {
+		return base64.StdEncoding.EncodeToString(bj.GetString()), nil
+	}
 	if bj.Type != TpCodeString &&
 		bj.Type != TpCodeDate &&
 		bj.Type != TpCodeTime &&
-		bj.Type != TpCodeDatetime &&
-		bj.Type != TpCodeBlob {
+		bj.Type != TpCodeDatetime {
 		return bj.String(), nil
 	}
 	str := bj.GetString()
@@ -175,10 +181,21 @@ func (bj ByteJson) to(buf []byte) ([]byte, error) {
 	case TpCodeDecimal:
 		data := bj.GetString()
 		buf = append(buf, data...)
-	case TpCodeDate, TpCodeTime, TpCodeDatetime, TpCodeBlob:
+	case TpCodeDate, TpCodeTime, TpCodeDatetime:
 		buf = append(buf, '"')
 		data := bj.GetString()
 		buf = append(buf, data...)
+		buf = append(buf, '"')
+	case TpCodeBlob:
+		buf = append(buf, '"')
+		buf = append(buf, bj.GetString()...)
+		buf = append(buf, '"')
+	case TpCodeOpaque, TpCodeBit:
+		buf = append(buf, '"')
+		data := bj.GetString()
+		start := len(buf)
+		buf = append(buf, make([]byte, base64.StdEncoding.EncodedLen(len(data)))...)
+		base64.StdEncoding.Encode(buf[start:], data)
 		buf = append(buf, '"')
 	default:
 		err = moerr.NewInvalidInputNoCtxf("invalid json type '%v'", bj.Type)
@@ -309,13 +326,24 @@ func (bj ByteJson) getValEntry(off int) ByteJson {
 		return ByteJson{Type: TpCodeLiteral, Data: bj.Data[off+valTypeSize : off+valTypeSize+1]}
 	case TpCodeUint64, TpCodeInt64, TpCodeFloat64:
 		return ByteJson{Type: TpCode(tpCode), Data: bj.Data[valOff : valOff+numberSize]}
-	case TpCodeString, TpCodeDecimal, TpCodeDate, TpCodeTime, TpCodeDatetime, TpCodeBlob:
+	case TpCodeString, TpCodeDecimal, TpCodeDate, TpCodeTime, TpCodeDatetime, TpCodeBlob, TpCodeOpaque, TpCodeBit:
 		num, length := calStrLen(bj.Data[valOff:])
 		totalLen := uint32(num) + uint32(length)
 		return ByteJson{Type: TpCode(tpCode), Data: bj.Data[valOff : valOff+totalLen]}
 	}
 	dataBytes := endian.Uint32(bj.Data[valOff+docSizeOff:])
 	return ByteJson{Type: TpCode(tpCode), Data: bj.Data[valOff : valOff+dataBytes]}
+}
+
+func (bj ByteJson) opaquePayload() []byte {
+	if bj.Type != TpCodeBlob {
+		return bj.GetString()
+	}
+	payload, err := base64.StdEncoding.DecodeString(string(bj.GetString()))
+	if err != nil {
+		return bj.GetString()
+	}
+	return payload
 }
 
 func (bj ByteJson) queryValByKey(key []byte) ByteJson {

@@ -70,12 +70,13 @@ select json_type(convert(st_geomfromtext('POINT(1 1)'), json)),
 select json_type(convert(st_geomfromtext('LINESTRING(0 0,1 1)'), json)),
        convert(st_geomfromtext('LINESTRING(0 0,1 1)'), json);
 
--- MatrixOne currently compares TpCodeBlob payloads after base64 encoding and
--- does not preserve MySQL's opaque subtype metadata.
+-- Binary JSON values compare their raw payloads, not base64 output text.
 select convert(cast(x'00' as blob), json) <
-       convert(cast(x'd0' as blob), json) as mo_base64_order;
+       convert(cast(x'd0' as blob), json) as raw_binary_order;
+select convert(cast(b'00000000' as bit(8)), json) <
+       convert(cast(b'11010000' as bit(8)), json) as raw_bit_order;
 
--- Constant folding must retain BIT width so this follows the BIT -> JSON BLOB path.
+-- Constant folding must retain BIT width and the JSON BIT subtype.
 select json_type(convert(cast(b'1' as bit(1)), json)),
        json_unquote(convert(cast(b'1' as bit(1)), json));
 
@@ -295,6 +296,29 @@ order by id;
 drop table convert_json_enum_update;
 drop table convert_json_enum_destination;
 drop table convert_json_enum;
+
+-- SET display values follow the same JSON string rule as ENUM display values.
+create table convert_json_set(id int primary key, s set('alpha', 'beta'), j json);
+insert into convert_json_set values (1, 'alpha', null), (2, 'alpha,beta', null);
+select id, json_type(convert(s, json)), json_unquote(convert(s, json)),
+       json_type(cast(s as json)), json_unquote(cast(s as json))
+from convert_json_set order by id;
+select json_type(convert(s, json)), json_unquote(convert(s, json))
+from (
+    select s from convert_json_set where id = 1
+    union all
+    select s from convert_json_set where id = 2
+) src
+order by json_unquote(convert(s, json));
+create table convert_json_set_destination(id int primary key, j json);
+insert into convert_json_set_destination select id, s from convert_json_set;
+update convert_json_set dst
+join (select id, s from convert_json_set where id = 1) src on dst.id = src.id
+set dst.j = src.s;
+select id, json_type(j), json_unquote(j)
+from convert_json_set_destination order by id;
+drop table convert_json_set_destination;
+drop table convert_json_set;
 
 -- MySQL's json_prep_stmts.test covers CAST(? AS JSON); retain the same
 -- runtime-type boundary for CONVERT(? , JSON).

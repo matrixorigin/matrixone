@@ -463,7 +463,7 @@ func TestConvertBitConstantToJSONAfterConstantFold(t *testing.T) {
 			defer free()
 			require.Equal(t, types.T_json, vec.GetType().Oid)
 			value := types.DecodeJson(vec.GetBytesAt(0))
-			require.Equal(t, bytejson.TpCodeBlob, value.Type)
+			require.Equal(t, bytejson.TpCodeBit, value.Type)
 			require.Equal(t, tc.payload, value.String())
 		})
 	}
@@ -532,6 +532,29 @@ func TestEnumDisplayValueToJSONUsesJSONQuoteInPlannerCasts(t *testing.T) {
 	expr, err = forceCastExpr2(ctx, DeepCopyExpr(displayExpr), types.T_json.ToType(), &plan.Expr{Typ: jsonType})
 	require.NoError(t, err)
 	require.Equal(t, int32(types.T_json), expr.Typ.Id)
+	require.Equal(t, "json_quote", expr.GetF().Func.ObjName)
+}
+
+func TestSetDisplayValueToJSONUsesJSONQuoteInPlannerCasts(t *testing.T) {
+	ctx := NewMockCompilerContext(true).GetContext()
+	displayExpr := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_varchar)},
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{ObjName: moSetCastIndexToValueFun},
+		}},
+	}
+	jsonType := plan.Type{Id: int32(types.T_json)}
+
+	expr, err := makePlan2CastExpr(ctx, DeepCopyExpr(displayExpr), jsonType)
+	require.NoError(t, err)
+	require.Equal(t, "json_quote", expr.GetF().Func.ObjName)
+
+	expr, err = forceAssignmentCastExpr(ctx, DeepCopyExpr(displayExpr), jsonType)
+	require.NoError(t, err)
+	require.Equal(t, "json_quote", expr.GetF().Func.ObjName)
+
+	expr, err = forceCastExpr2(ctx, DeepCopyExpr(displayExpr), types.T_json.ToType(), &plan.Expr{Typ: jsonType})
+	require.NoError(t, err)
 	require.Equal(t, "json_quote", expr.GetF().Func.ObjName)
 }
 

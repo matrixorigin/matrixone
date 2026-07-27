@@ -158,7 +158,7 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		}
 		if b.builder != nil {
 			var rewritten bool
-			expr, rewritten, err = b.builder.rewriteProjectedEnumDisplayValueToJSONCast(expr, expr, typ)
+			expr, rewritten, err = b.builder.rewriteProjectedEnumOrSetDisplayValueToJSONCast(expr, expr, typ)
 			if err != nil {
 				return
 			}
@@ -3904,22 +3904,23 @@ func rewriteEnumDisplayValueToJSONCast(ctx context.Context, expr *Expr, toType T
 	if expr.Typ.Id == int32(types.T_enum) {
 		return nil, false, moerr.NewInvalidArg(ctx, "operator cast", "[ENUM JSON]")
 	}
-	if isEnumDisplayValueExpr(expr) {
-		quoted, err := quoteEnumDisplayValueAsJSON(ctx, expr)
+	if isEnumOrSetDisplayValueExpr(expr) {
+		quoted, err := quoteEnumOrSetDisplayValueAsJSON(ctx, expr)
 		return quoted, err == nil, err
 	}
 	return expr, false, nil
 }
 
-func isEnumDisplayValueExpr(expr *Expr) bool {
+func isEnumOrSetDisplayValueExpr(expr *Expr) bool {
 	if expr == nil {
 		return false
 	}
 	fn := expr.GetF()
-	return fn != nil && fn.Func != nil && fn.Func.ObjName == moEnumCastIndexToValueFun
+	return fn != nil && fn.Func != nil &&
+		(fn.Func.ObjName == moEnumCastIndexToValueFun || fn.Func.ObjName == moSetCastIndexToValueFun)
 }
 
-func quoteEnumDisplayValueAsJSON(ctx context.Context, expr *Expr) (*Expr, error) {
+func quoteEnumOrSetDisplayValueAsJSON(ctx context.Context, expr *Expr) (*Expr, error) {
 	quoted, err := BindFuncExprImplByPlanExpr(ctx, "json_quote", []*Expr{expr})
 	if err != nil {
 		return nil, err

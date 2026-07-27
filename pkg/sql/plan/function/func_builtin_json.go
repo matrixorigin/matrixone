@@ -17,7 +17,6 @@ package function
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -1246,7 +1245,7 @@ func (op *opBuiltInJsonExtract) jsonExtractString(parameters []*vector.Vector, r
 				}
 			} else {
 				switch out.Type {
-				case bytejson.TpCodeString, bytejson.TpCodeDate, bytejson.TpCodeTime, bytejson.TpCodeDatetime, bytejson.TpCodeBlob:
+				case bytejson.TpCodeString, bytejson.TpCodeDate, bytejson.TpCodeTime, bytejson.TpCodeDatetime, bytejson.TpCodeBlob, bytejson.TpCodeOpaque, bytejson.TpCodeBit:
 					outstr, err := out.Unquote()
 					if err != nil {
 						return err
@@ -2019,10 +2018,7 @@ func (op *opBuiltInJsonArray) convertToAny(proc *process.Process, v *vector.Vect
 		if v.IsNull(uint64(row)) {
 			return nil, nil
 		}
-		data := v.GetBytesAt(row)
-		dst := make([]byte, base64.StdEncoding.EncodedLen(len(data)))
-		base64.StdEncoding.Encode(dst, data)
-		return newTypedByteJson(bytejson.TpCodeBlob, string(dst)), nil
+		return newTypedByteJson(bytejson.TpCodeOpaque, string(v.GetBytesAt(row))), nil
 	case types.T_decimal256:
 		if v.IsNull(uint64(row)) {
 			return nil, nil
@@ -2039,7 +2035,11 @@ func (op *opBuiltInJsonArray) convertToAny(proc *process.Process, v *vector.Vect
 		if v.IsNull(uint64(row)) {
 			return nil, nil
 		}
-		return newTypedByteJson(bytejson.TpCodeBlob, strconv.FormatUint(vector.GetFixedAtNoTypeCheck[uint64](v, row), 10)), nil
+		ctx := context.Background()
+		if proc != nil && proc.Ctx != nil {
+			ctx = proc.Ctx
+		}
+		return bitToJSON(vector.GetFixedAtNoTypeCheck[uint64](v, row), fromType.Width, ctx)
 	case types.T_enum:
 		if v.IsNull(uint64(row)) {
 			return nil, nil
@@ -2187,7 +2187,7 @@ func (op *opBuiltInJsonObject) jsonObject(params []*vector.Vector, result vector
 					} else {
 						key = fmt.Sprint(v)
 					}
-				case bytejson.TpCodeDate, bytejson.TpCodeTime, bytejson.TpCodeDatetime, bytejson.TpCodeBlob:
+				case bytejson.TpCodeDate, bytejson.TpCodeTime, bytejson.TpCodeDatetime, bytejson.TpCodeBlob, bytejson.TpCodeOpaque, bytejson.TpCodeBit:
 					if bj, err := v.MarshalJSON(); err == nil && len(bj) >= 2 && bj[0] == '"' {
 						key = string(bj[1 : len(bj)-1])
 					} else {

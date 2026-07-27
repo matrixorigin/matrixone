@@ -37,6 +37,38 @@ func makeDecimalJson(s string) ByteJson {
 	return ByteJson{Type: TpCodeDecimal, Data: data[:n+l]}
 }
 
+func makeBinaryJson(tp TpCode, payload []byte) ByteJson {
+	data := make([]byte, binary.MaxVarintLen64+len(payload))
+	n := binary.PutUvarint(data, uint64(len(payload)))
+	copy(data[n:], payload)
+	return ByteJson{Type: tp, Data: data[:n+len(payload)]}
+}
+
+func TestCompareByteJsonOpaqueBinaryUsesRawBytes(t *testing.T) {
+	zero := makeBinaryJson(TpCodeOpaque, []byte{0x00})
+	d0 := makeBinaryJson(TpCodeOpaque, []byte{0xd0})
+	bitZero := makeBinaryJson(TpCodeBit, []byte{0x00})
+	bitD0 := makeBinaryJson(TpCodeBit, []byte{0xd0})
+	bit := makeBinaryJson(TpCodeBit, []byte{0x01})
+	legacyZero := makeBinaryJson(TpCodeBlob, []byte("AA=="))
+
+	require.Less(t, CompareByteJson(zero, d0), 0)
+	require.Less(t, CompareByteJson(bitZero, bitD0), 0)
+	require.Zero(t, CompareByteJson(legacyZero, zero))
+	require.Equal(t, "BLOB", zero.TYPE())
+	require.Equal(t, "BIT", bit.TYPE())
+	require.Equal(t, `"AA=="`, zero.String())
+	require.Equal(t, "AA==", mustUnquote(t, zero))
+	require.Equal(t, "AQ==", mustUnquote(t, bit))
+}
+
+func mustUnquote(t *testing.T, bj ByteJson) string {
+	t.Helper()
+	value, err := bj.Unquote()
+	require.NoError(t, err)
+	return value
+}
+
 // TestCompareByteJson_DecimalCrossType tests that DECIMAL vs numeric types
 // (Int64/Uint64/Float64/DECIMAL) are compared correctly instead of falling
 // through as equal (cmp == 0).

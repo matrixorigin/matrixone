@@ -560,6 +560,62 @@ func TestUpdateProjectedEnumToJSONQuotesDisplayValue(t *testing.T) {
 	}
 }
 
+func TestSetDisplayValueToJSONQuotesAcrossPlannerPaths(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	table := mock.ctxt.tables["nation"]
+	table.Cols[1].Typ = plan.Type{
+		Id:         int32(types.T_uint64),
+		Enumvalues: "alpha,beta",
+	}
+
+	const tableName = "set_json_destination"
+	idType := plan.Type{Id: int32(types.T_int32), NotNullable: true}
+	jsonType := plan.Type{Id: int32(types.T_json)}
+	rowIDType := plan.Type{Id: int32(types.T_Rowid), NotNullable: true, Width: 16}
+	cols := []*ColDef{
+		{ColId: 0, Name: "id", OriginName: "id", Typ: idType, Primary: true, Pkidx: 1, Default: &plan.Default{}},
+		{ColId: 1, Name: "j", OriginName: "j", Typ: jsonType, Default: &plan.Default{NullAbility: true}},
+		{ColId: 2, Name: catalog.Row_ID, OriginName: catalog.Row_ID, Typ: rowIDType, Hidden: true, Default: &plan.Default{}},
+	}
+	mock.ctxt.objects[tableName] = &ObjectRef{SchemaName: "tpch", ObjName: tableName, Obj: 23178}
+	mock.ctxt.tables[tableName] = &TableDef{
+		TableType: catalog.SystemOrdinaryRel,
+		TblId:     23178,
+		Name:      tableName,
+		Cols:      cols,
+		Pkey: &plan.PrimaryKeyDef{
+			PkeyColName: "id",
+			Cols:        []uint64{0},
+			Names:       []string{"id"},
+			CompPkeyCol: cols[0],
+		},
+	}
+	mock.ctxt.id2name[23178] = tableName
+	mock.ctxt.pks[tableName] = []int{0}
+
+	for _, sql := range []string{
+		"select convert(n_name, json) from nation",
+		"select cast(n_name as json) from nation",
+		"select convert(name, json) from (select n_name as name from nation) src",
+		"select cast(name as json) from (select n_name as name from nation union all select n_name from nation) src",
+		"insert into set_json_destination(id, j) select n_nationkey, n_name from nation",
+		"update set_json_destination dst join nation src on dst.id = src.n_nationkey set dst.j = src.n_name",
+	} {
+		logicPlan, err := runOneStmt(mock, t, sql)
+		require.NoError(t, err, sql)
+
+		foundJSONQuote := false
+		for _, node := range logicPlan.GetQuery().Nodes {
+			for _, expr := range node.ProjectList {
+				if exprContainsFuncName(expr, "json_quote") {
+					foundJSONQuote = true
+				}
+			}
+		}
+		require.True(t, foundJSONQuote, "SET display value must be quoted as JSON: %s", sql)
+	}
+}
+
 func TestOnDuplicateUpdateVarcharFromTextUsesStrictAssignmentCast(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	addTextCastTableForTest(mock)

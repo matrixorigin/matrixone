@@ -1071,27 +1071,27 @@ func forceAssignmentCastExpr(ctx context.Context, expr *Expr, targetType Type) (
 func (builder *QueryBuilder) forceProjectedAssignmentCastExpr(expr, sourceExpr *Expr, targetType Type) (*Expr, error) {
 	var err error
 	var rewritten bool
-	expr, rewritten, err = builder.rewriteProjectedEnumDisplayValueToJSONCast(expr, sourceExpr, targetType)
+	expr, rewritten, err = builder.rewriteProjectedEnumOrSetDisplayValueToJSONCast(expr, sourceExpr, targetType)
 	if err != nil || rewritten {
 		return expr, err
 	}
 	return forceAssignmentCastExpr(builder.GetContext(), expr, targetType)
 }
 
-func (builder *QueryBuilder) rewriteProjectedEnumDisplayValueToJSONCast(expr, sourceExpr *Expr, targetType Type) (*Expr, bool, error) {
+func (builder *QueryBuilder) rewriteProjectedEnumOrSetDisplayValueToJSONCast(expr, sourceExpr *Expr, targetType Type) (*Expr, bool, error) {
 	if builder == nil || expr == nil || sourceExpr == nil ||
 		targetType.Id != int32(types.T_json) || sourceExpr.Typ.Id == int32(types.T_enum) {
 		return expr, false, nil
 	}
-	if builder.isProjectedEnumDisplayValueExpr(sourceExpr, nil) {
-		quoted, err := quoteEnumDisplayValueAsJSON(builder.GetContext(), expr)
+	if builder.isProjectedEnumOrSetDisplayValueExpr(sourceExpr, nil) {
+		quoted, err := quoteEnumOrSetDisplayValueAsJSON(builder.GetContext(), expr)
 		return quoted, err == nil, err
 	}
 	return expr, false, nil
 }
 
-func (builder *QueryBuilder) isProjectedEnumDisplayValueExpr(expr *Expr, visited map[[2]int32]struct{}) bool {
-	if isEnumDisplayValueExpr(expr) {
+func (builder *QueryBuilder) isProjectedEnumOrSetDisplayValueExpr(expr *Expr, visited map[[2]int32]struct{}) bool {
+	if isEnumOrSetDisplayValueExpr(expr) {
 		return true
 	}
 	col := expr.GetCol()
@@ -1126,7 +1126,7 @@ func (builder *QueryBuilder) isProjectedEnumDisplayValueExpr(expr *Expr, visited
 			if col.ColPos < 0 || int(col.ColPos) >= len(childProjectList) {
 				return false
 			}
-			if !builder.isProjectedEnumDisplayValueExpr(childProjectList[col.ColPos], visited) {
+			if !builder.isProjectedEnumOrSetDisplayValueExpr(childProjectList[col.ColPos], visited) {
 				return false
 			}
 		}
@@ -1140,14 +1140,14 @@ func (builder *QueryBuilder) isProjectedEnumDisplayValueExpr(expr *Expr, visited
 		if col.ColPos < 0 || int(col.ColPos) >= len(leftProjectList) {
 			return false
 		}
-		return builder.isProjectedEnumDisplayValueExpr(leftProjectList[col.ColPos], visited)
+		return builder.isProjectedEnumOrSetDisplayValueExpr(leftProjectList[col.ColPos], visited)
 	}
 
 	projectList := node.ProjectList
 	if col.ColPos < 0 || int(col.ColPos) >= len(projectList) {
 		return false
 	}
-	return builder.isProjectedEnumDisplayValueExpr(projectList[col.ColPos], visited)
+	return builder.isProjectedEnumOrSetDisplayValueExpr(projectList[col.ColPos], visited)
 }
 
 func forceCastExprWithName(ctx context.Context, expr *Expr, targetType Type, funcName string) (*Expr, error) {

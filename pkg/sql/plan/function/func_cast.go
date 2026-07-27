@@ -16,7 +16,6 @@ package function
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
@@ -6737,7 +6736,7 @@ func castToJSON(from *vector.Vector, result vector.FunctionResultWrapper, proc *
 		case types.T_char, types.T_varchar, types.T_text:
 			value, err = types.ParseSliceToByteJson(from.GetBytesAt(row))
 		case types.T_binary, types.T_varbinary, types.T_blob:
-			value = newTypedByteJson(bytejson.TpCodeBlob, base64.StdEncoding.EncodeToString(from.GetBytesAt(row)))
+			value = newTypedByteJson(bytejson.TpCodeOpaque, string(from.GetBytesAt(row)))
 		case types.T_bool:
 			value, err = bytejson.CreateByteJSON(vector.GetFixedAtNoTypeCheck[bool](from, row))
 		case types.T_bit:
@@ -6825,7 +6824,7 @@ func bitToJSON(value uint64, width int32, ctx context.Context) (bytejson.ByteJso
 	byteLen := int((width + 7) / 8)
 	var raw [8]byte
 	binary.BigEndian.PutUint64(raw[:], value)
-	return newTypedByteJson(bytejson.TpCodeBlob, base64.StdEncoding.EncodeToString(raw[8-byteLen:])), nil
+	return newTypedByteJson(bytejson.TpCodeBit, string(raw[8-byteLen:])), nil
 }
 
 func strToJson(
