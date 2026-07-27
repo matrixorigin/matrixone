@@ -65,7 +65,9 @@ reviews, mergeability, merge state, and check rollup.
   outstanding change request with the head SHA. A later approval therefore
   clears that reviewer's historical request. New commits are detected without
   relying on author, committer, or push timestamps; a conservative timestamp
-  fallback is used only when GitHub omits a review or head commit.
+  fallback is used only when GitHub omits a review or head commit. If GitHub
+  reports `CHANGES_REQUESTED` but omits enough detail to prove a newer head, the
+  PR remains in the stale view.
 - `changes-requested-resolved-or-none` is its complement: no request changes,
   or the current head differs from the reviewed commit. It is the right
   review-queue filter when paired with `unapproved-by-me`.

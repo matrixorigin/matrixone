@@ -43,6 +43,10 @@ class CIStateTests(unittest.TestCase):
         pr = {"statusCheckRollup": [{"state": "PENDING"}]}
         self.assertEqual("pending", pr_radar.ci_state(pr))
 
+    def test_successful_status_context_is_green(self) -> None:
+        pr = {"statusCheckRollup": [{"state": "SUCCESS"}]}
+        self.assertEqual("green", pr_radar.ci_state(pr))
+
 
 class ReviewHistoryTests(unittest.TestCase):
     def test_same_head_as_change_request_is_stale(self) -> None:
@@ -126,12 +130,19 @@ class ReviewHistoryTests(unittest.TestCase):
         pr["commits"][0]["committedDate"] = "2026-07-27T11:00:00Z"
         self.assertFalse(pr_radar.changes_requested_without_new_commit(pr))
 
-    def test_no_change_request_is_not_stale(self) -> None:
-        self.assertFalse(
+    def test_missing_review_details_are_conservatively_stale(self) -> None:
+        self.assertTrue(
             pr_radar.changes_requested_without_new_commit(
                 {"reviewDecision": "CHANGES_REQUESTED", "reviews": []}
             )
         )
+
+    def test_missing_sha_and_timestamp_are_conservatively_stale(self) -> None:
+        pr = {
+            "reviewDecision": "CHANGES_REQUESTED",
+            "reviews": [{"state": "CHANGES_REQUESTED"}],
+        }
+        self.assertTrue(pr_radar.changes_requested_without_new_commit(pr))
 
     def test_current_approval_supersedes_historical_change_request(self) -> None:
         pr = {
@@ -271,7 +282,6 @@ class SnapshotTests(unittest.TestCase):
             "url": f"https://example.test/{number}",
             "reviewRequests": {"nodes": []},
             "latestReviews": {"nodes": []},
-            "changeRequests": {"nodes": []},
             "commits": {"nodes": []},
         }
 

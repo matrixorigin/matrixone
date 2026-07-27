@@ -252,14 +252,9 @@ def ci_state(pr: dict[str, Any]) -> str:
         status = (check.get("status") or "").upper()
         if conclusion in FAILING_CONCLUSIONS or state in FAILING_STATES:
             return "failed"
-        if conclusion in PASSING_CONCLUSIONS:
+        if conclusion in PASSING_CONCLUSIONS or state == "SUCCESS":
             continue
-        if status and status != "COMPLETED":
-            pending = True
-        elif state and state not in {"SUCCESS", "PENDING", "EXPECTED"}:
-            pending = True
-        else:
-            pending = True
+        pending = True
     return "pending" if pending else "green"
 
 
@@ -291,7 +286,9 @@ def changes_requested_without_new_commit(pr: dict[str, Any]) -> bool:
         if review.get("state") == "CHANGES_REQUESTED"
     ]
     if not reviews:
-        return False
+        # The aggregate decision proves that a request is outstanding, but the
+        # per-review payload is incomplete. Do not claim a newer commit exists.
+        return True
 
     head_oid = (pr.get("headRefOid") or "").strip()
     if not head_oid:
@@ -310,7 +307,7 @@ def changes_requested_without_new_commit(pr: dict[str, Any]) -> bool:
         # Older GitHub payloads may omit either SHA. Keep a conservative
         # timestamp fallback for only the review that cannot be compared.
         change_at = review.get("submittedAt")
-        if change_at and (not commit_at or change_at >= commit_at):
+        if not change_at or not commit_at or change_at >= commit_at:
             return True
     return False
 
