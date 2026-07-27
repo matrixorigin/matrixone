@@ -1205,6 +1205,52 @@ func shouldDiffAsCSV(sqlRet executor.Result) (bool, error) {
 	return vector.GetFixedAtWithTypeCheck[uint64](sqlRet.Batches[0].Vecs[0], 0) == 0, nil
 }
 
+func submitCSVBatchForConversion(
+	ctx context.Context,
+	ses *Session,
+	tblStuff tableStuff,
+	bat *batch.Batch,
+	ep *ExportConfig,
+	workerWg *sync.WaitGroup,
+) error {
+	copied, err := bat.Dup(ses.proc.Mp())
+	if err != nil {
+		return err
+	}
+
+	idx := ep.Index.Add(1)
+	workerWg.Add(1)
+	if err = tblStuff.worker.Submit(func() {
+		defer workerWg.Done()
+		constructByte(ctx, ses, copied, idx, ep.ByteChan, ep)
+	}); err != nil {
+		workerWg.Done()
+		copied.Clean(ses.proc.Mp())
+		ep.Index.Add(-1)
+		return err
+	}
+	return nil
+}
+
+func flushRemainingCSVBatchBytes(ctx context.Context, ep *ExportConfig) error {
+	if ctx.Err() != nil || ep.WriteIndex.Load() == ep.Index.Load() {
+		return nil
+	}
+	return exportAllDataFromBatches(ep)
+}
+
+func waitForCSVConversionWorkers(inputCtx context.Context, workerWg *sync.WaitGroup) error {
+	workerWg.Wait()
+	return inputCtx.Err()
+}
+
+func joinCSVInputError(err, inputErr error) error {
+	if inputErr == nil || errors.Is(err, inputErr) {
+		return err
+	}
+	return errors.Join(err, inputErr)
+}
+
 func writeCSV(
 	inputCtx context.Context,
 	ses *Session,
@@ -1325,12 +1371,10 @@ func writeCSV(
 				ep.BatchMap[ep.WriteIndex.Load()] = nil
 			}
 		}
-		if ep.WriteIndex.Load() != ep.Index.Load() {
-			if err2 := exportAllDataFromBatches(ep); err2 != nil {
-				select {
-				case writerErr <- err2:
-				default:
-				}
+		if err2 := flushRemainingCSVBatchBytes(ctx, ep); err2 != nil {
+			select {
+			case writerErr <- err2:
+			default:
 			}
 		}
 	}); err != nil {
@@ -1406,14 +1450,9 @@ func writeCSV(
 				continue
 			}
 			for _, bat := range sqlRet.Batches {
-				copied, _ := bat.Dup(ses.proc.Mp())
-				idx := ep.Index.Add(1)
-				workerWg.Add(1)
-				if submitErr := tblStuff.worker.Submit(func() {
-					defer workerWg.Done()
-					constructByte(ctx, ses, copied, idx, ep.ByteChan, ep)
-				}); submitErr != nil {
-					workerWg.Done()
+				if submitErr := submitCSVBatchForConversion(
+					ctx, ses, tblStuff, bat, ep, &workerWg,
+				); submitErr != nil {
 					err = errors.Join(err, submitErr)
 					stop = true
 					cancelCtx()
@@ -1425,11 +1464,15 @@ func writeCSV(
 	}
 
 	wg.Wait()
-	workerWg.Wait()
+	inputErr := waitForCSVConversionWorkers(inputCtx, &workerWg)
 	closeByte.Do(func() {
 		close(ep.ByteChan)
 	})
 	writerWg.Wait()
+	if inputErr == nil {
+		inputErr = inputCtx.Err()
+	}
+	err = joinCSVInputError(err, inputErr)
 
 	select {
 	case e := <-writerErr:
