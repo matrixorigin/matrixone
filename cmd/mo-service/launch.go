@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
@@ -72,7 +73,15 @@ func startCluster(
 	if err := startTNServiceCluster(ctx, cfg.TNServiceConfigsFiles, stopper, shutdownC); err != nil {
 		return err
 	}
-	if err := startCNServiceCluster(ctx, cfg.CNServiceConfigsFiles, stopper, shutdownC); err != nil {
+	proxyOwns6001 := false
+	if *withProxy {
+		var err error
+		proxyOwns6001, err = proxyServiceOwnsPort(cfg.ProxyServiceConfigsFiles, 6001)
+		if err != nil {
+			return err
+		}
+	}
+	if err := startCNServiceCluster(ctx, cfg.CNServiceConfigsFiles, stopper, shutdownC, proxyOwns6001); err != nil {
 		return err
 	}
 	if *withProxy {
@@ -139,6 +148,7 @@ func startCNServiceCluster(
 	files []string,
 	stopper *stopper.Stopper,
 	shutdownC chan struct{},
+	proxyOwns6001 ...bool,
 ) error {
 	if len(files) == 0 {
 		return moerr.NewBadConfig(context.Background(), "CN service config not set")
@@ -158,8 +168,9 @@ func startCNServiceCluster(
 		}
 	}
 
-	if shouldStartBuiltinCNProxy(len(upstreams), *withProxy) {
-		// TODO: make configurable for 6001
+	owns6001 := len(proxyOwns6001) > 0 && proxyOwns6001[0]
+	if shouldStartBuiltinCNProxy(len(upstreams), *withProxy, owns6001) {
+		// Keep the legacy 6001 entrypoint when the configured Proxy does not own it.
 		cnProxy = launchNewProxy("0.0.0.0:6001", logutil.GetGlobalLogger().Named("mysql-proxy"))
 		for _, address := range upstreams {
 			cnProxy.AddUpStream(address, time.Second*10)
@@ -171,8 +182,28 @@ func startCNServiceCluster(
 	return nil
 }
 
-func shouldStartBuiltinCNProxy(upstreamCount int, proxyServiceEnabled bool) bool {
-	return upstreamCount > 1 && !proxyServiceEnabled
+func shouldStartBuiltinCNProxy(upstreamCount int, proxyServiceEnabled bool, proxyOwns6001 ...bool) bool {
+	owns6001 := len(proxyOwns6001) > 0 && proxyOwns6001[0]
+	return upstreamCount > 1 && (!proxyServiceEnabled || !owns6001)
+}
+
+func proxyServiceOwnsPort(files []string, port int) (bool, error) {
+	for _, file := range files {
+		cfg := NewConfig()
+		if err := parseConfigFromFile(file, cfg); err != nil {
+			return false, err
+		}
+		proxyCfg := cfg.getProxyConfig()
+		proxyCfg.FillDefault()
+		_, configuredPort, err := net.SplitHostPort(proxyCfg.ListenAddress)
+		if err != nil {
+			return false, err
+		}
+		if configuredPort == fmt.Sprint(port) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func startProxyServiceCluster(

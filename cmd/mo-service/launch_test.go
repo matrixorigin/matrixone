@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
+	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -107,9 +108,10 @@ func setLaunchTestHooks(t *testing.T) {
 func TestStartClusterUsesConfiguredProxy(t *testing.T) {
 	setLaunchTestHooks(t)
 	config := writeLaunchTestFile(t, "service.toml", "")
+	proxyConfig := writeLaunchTestFile(t, "proxy.toml", "[proxy]\nlisten-address=\"0.0.0.0:6001\"\n")
 	launch := fmt.Sprintf(
 		"logservices=[%q]\ntnservices=[%q]\ncnservices=[%q,%q]\nproxy-services=[%q]\npython-udf-services=[%q]\n",
-		config, config, config, config, config, config,
+		config, config, config, config, proxyConfig, config,
 	)
 	*launchFile = writeLaunchTestFile(t, "launch.toml", launch)
 	*withProxy = true
@@ -274,20 +276,57 @@ func TestShouldStartBuiltinCNProxy(t *testing.T) {
 		name                string
 		upstreamCount       int
 		proxyServiceEnabled bool
+		proxyOwns6001       bool
 		want                bool
 	}{
-		{"multiple CNs without proxy service", 2, false, true},
-		{"real proxy service owns SQL entrypoint", 2, true, false},
-		{"single CN needs no builtin proxy", 1, false, false},
+		{"multiple CNs without proxy service", 2, false, false, true},
+		{"real proxy service owns SQL entrypoint", 2, true, true, false},
+		{"proxy service uses another port", 2, true, false, true},
+		{"single CN needs no builtin proxy", 1, false, false, false},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if got := shouldStartBuiltinCNProxy(test.upstreamCount, test.proxyServiceEnabled); got != test.want {
+			if got := shouldStartBuiltinCNProxy(test.upstreamCount, test.proxyServiceEnabled, test.proxyOwns6001); got != test.want {
 				t.Fatalf("shouldStartBuiltinCNProxy(%d, %t) = %t, want %t",
 					test.upstreamCount, test.proxyServiceEnabled, got, test.want)
 			}
 		})
 	}
+}
+
+func TestProxyServiceOwnsPort(t *testing.T) {
+	defaultConfig := writeLaunchTestFile(t, "proxy-default.toml", "[proxy]\nuuid=\"proxy\"\n")
+	port6001 := writeLaunchTestFile(t, "proxy-6001.toml", "[proxy]\nlisten-address=\"0.0.0.0:6001\"\n")
+	port6009 := writeLaunchTestFile(t, "proxy-6009.toml", "[proxy]\nlisten-address=\"127.0.0.1:6009\"\n")
+	missing := filepath.Join(t.TempDir(), "missing.toml")
+
+	owned, err := proxyServiceOwnsPort([]string{defaultConfig}, 6001)
+	require.NoError(t, err)
+	require.False(t, owned, "default Proxy endpoint is 6009")
+	owned, err = proxyServiceOwnsPort([]string{port6001}, 6001)
+	require.NoError(t, err)
+	require.True(t, owned)
+	owned, err = proxyServiceOwnsPort([]string{port6009}, 6001)
+	require.NoError(t, err)
+	require.False(t, owned)
+	_, err = proxyServiceOwnsPort([]string{missing}, 6001)
+	require.Error(t, err)
+}
+
+func TestStartDynamicBuiltinProxyOwnership(t *testing.T) {
+	setLaunchTestHooks(t)
+	*withProxy = true
+	proxy := &testProxy{}
+	launchNewProxy = func(address string, _ *zap.Logger) goetty.Proxy {
+		proxy.address = address
+		return proxy
+	}
+
+	require.NoError(t, startDynamicBuiltinProxy(2, true))
+	require.False(t, proxy.started, "dynamic Proxy on 6001 owns the endpoint")
+	require.NoError(t, startDynamicBuiltinProxy(2, false))
+	require.True(t, proxy.started)
+	require.Equal(t, []string{"127.0.0.1:16001", "127.0.0.1:16002"}, proxy.upstreams)
 }
 
 func TestWaitHAKeeperReadyRetries(t *testing.T) {
