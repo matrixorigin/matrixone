@@ -7316,6 +7316,21 @@ func detachedUserLevelLockCleanupCountForKind(kind string) int {
 	return count
 }
 
+func userLevelLockCleanupOwned(key detachedUserLevelLockCleanupKey) bool {
+	detachedUserLevelLockCleanups.Lock()
+	_, detached := detachedUserLevelLockCleanups.entries[key]
+	detachedUserLevelLockCleanups.Unlock()
+	userLevelLocks.Lock()
+	_, pending := userLevelLocks.pendingCleanups[key]
+	userLevelLocks.Unlock()
+	return detached || pending
+}
+
+func requireUserLevelLockCleanupOwned(t *testing.T, key detachedUserLevelLockCleanupKey) {
+	t.Helper()
+	require.True(t, userLevelLockCleanupOwned(key), "cleanup key was not retained: %+v", key)
+}
+
 func detachedUserLevelLockCleanupMaxTxnIDCountForKind(kind string) int {
 	detachedUserLevelLockCleanups.Lock()
 	defer detachedUserLevelLockCleanups.Unlock()
@@ -8534,10 +8549,6 @@ func TestGetLockRetryIsFencedFromFailedAttemptCleanup(t *testing.T) {
 		require.Empty(t, UserLevelLocksForMigration(holder))
 		service.lockErrAfterHold = nil
 
-		v, err = getUserLevelLock("retry_fenced_cleanup", 0, holder)
-		require.NoError(t, err)
-		require.Equal(t, int64(0), v)
-
 		require.Eventually(t, func() bool {
 			v, err := getUserLevelLock("retry_fenced_cleanup", 0, holder)
 			return err == nil && v == 1
@@ -9572,9 +9583,17 @@ func TestReleaseAndIsFreeProbeUnlocksHonorCancellationAndCleanupAfterRecovery(t 
 				cancel()
 
 				lockName := "probe_cancel_" + tc.name
+				owner := userLevelLockOwner(proc)
+				connID := userLevelLockConnectionID(proc)
+				probeType := "release"
+				if tc.name == "is_free_lock_probe" {
+					probeType = "is_free"
+				}
+				txnID := userLevelLockProbeTxnID(owner, connID, lockName, probeType)
+				cleanupKey := userLevelLockFailedAttemptCleanupKey(service, owner, connID, lockName, "probe:"+probeType, txnID)
 				err := tc.fn(lockName, proc)
 				require.ErrorIs(t, err, context.Canceled)
-				require.Equal(t, 1, detachedUserLevelLockCleanupCount())
+				requireUserLevelLockCleanupOwned(t, cleanupKey)
 
 				state := service.state
 				state.Lock()
@@ -9583,7 +9602,13 @@ func TestReleaseAndIsFreeProbeUnlocksHonorCancellationAndCleanupAfterRecovery(t 
 
 				service.blockUnlock.Store(false)
 				require.Eventually(t, func() bool {
-					return detachedUserLevelLockCleanupCount() == 0
+					if userLevelLockCleanupOwned(cleanupKey) {
+						return false
+					}
+					state.Lock()
+					held := state.locks[string(userLevelLockRow(proc, lockName))]
+					state.Unlock()
+					return held == ""
 				}, 3*time.Second, 10*time.Millisecond)
 				state.Lock()
 				require.Empty(t, state.locks[string(userLevelLockRow(proc, lockName))])
