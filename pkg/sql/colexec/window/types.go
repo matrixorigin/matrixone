@@ -52,6 +52,8 @@ type container struct {
 
 	vec  *vector.Vector
 	rBat *batch.Batch
+
+	runtimeFrames []*plan.FrameClause
 }
 
 type Window struct {
@@ -119,6 +121,7 @@ func (window *Window) Reset(proc *process.Process, pipelineFailed bool, err erro
 func (window *Window) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &window.ctr
 
+	ctr.runtimeFrames = nil
 	// Free aggregators before the batch so an error exit from Call (which skips
 	// the normal freeAggFun()) does not leak their mpool-held state.
 	ctr.freeAggFun()
@@ -138,6 +141,7 @@ func (ctr *container) resetParam() {
 	ctr.sels = nil
 	ctr.ps = nil
 	ctr.os = nil
+	ctr.runtimeFrames = nil
 }
 
 func (ctr *container) resetVectors() {

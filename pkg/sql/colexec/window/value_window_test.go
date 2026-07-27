@@ -15,6 +15,7 @@
 package window
 
 import (
+	"context"
 	"math"
 	"testing"
 
@@ -210,6 +211,43 @@ func TestProcessValueFunc_NthValue(t *testing.T) {
 	require.Equal(t, 4, result.Length())
 	for i := 0; i < 4; i++ {
 		require.Equal(t, int32(10), vector.MustFixedColNoTypeCheck[int32](result)[i])
+	}
+}
+
+func TestProcessValueFuncHonorsCancellation(t *testing.T) {
+	testCases := []struct {
+		name string
+		spec func() *plan.Expr
+	}{
+		{name: "lag", spec: makeLagWindowSpec},
+		{name: "lead", spec: makeLeadWindowSpec},
+		{name: "first_value", spec: makeFirstValueWindowSpec},
+		{name: "last_value", spec: makeLastValueWindowSpec},
+		{name: "nth_value", spec: makeNthValueWindowSpec},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			proc := testutil.NewProcessWithMPool(t, "", mp)
+			bat := makeInt32Batch(mp, []int32{10, 20})
+			ctr := &container{bat: bat}
+			ctr.aggVecs = make([]colexec.ExprEvalVector, 1)
+			ctr.aggVecs[0].Vec = []*vector.Vector{bat.Vecs[0]}
+			arg := &Window{WinSpecList: []*plan.Expr{tc.spec()}}
+
+			ctx, cancel := context.WithCancel(proc.Ctx)
+			proc.Ctx = ctx
+			cancel()
+
+			result, err := ctr.processValueFunc(0, arg, proc)
+			require.ErrorIs(t, err, context.Canceled)
+			require.Nil(t, result)
+
+			bat.Clean(mp)
+			proc.Free()
+			require.Equal(t, int64(0), mp.CurrNB())
+		})
 	}
 }
 
