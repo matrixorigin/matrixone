@@ -19,9 +19,9 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"reflect"
 	"regexp"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -61,41 +61,41 @@ import (
 // Global stub for GetTableDetector - initialized in init() to prevent panics across all tests
 var _globalTableDetectorStub *gostub.Stubs
 
+const testPermanentDetectorTask = "__test_permanent_dummy__"
+
 // init sets up global mock for GetTableDetector once for all tests in this package
 // This stub is NEVER reset to ensure consistent behavior across all tests
 func init() {
 	_globalTableDetectorStub = gostub.Stub(&cdc.GetTableDetector, createMockTableDetectorForTest())
 }
 
-// createMockTableDetectorForTest creates a properly initialized mock TableDetector for testing
+// createMockTableDetectorForTest creates a mock TableDetector that never starts
+// the background scan loop. Frontend tests only need registration semantics; the
+// permanent callback makes every test registration non-initial.
 func createMockTableDetectorForTest() func(cnUUID string) *cdc.TableDetector {
 	return func(cnUUID string) *cdc.TableDetector {
-		detector := &cdc.TableDetector{
-			Mp:                   make(map[uint32]cdc.TblMap),
-			Callbacks:            make(map[string]cdc.TableCallback),
-			CallBackAccountId:    make(map[string]uint32),
-			SubscribedAccountIds: make(map[uint32][]string),
-			CallBackDbName:       make(map[string][]string),
-			SubscribedDbNames:    make(map[string][]string),
-			CallBackTableName:    make(map[string][]string),
+		return &cdc.TableDetector{
+			Mp: make(map[uint32]cdc.TblMap),
+			Callbacks: map[string]cdc.TableCallback{
+				testPermanentDetectorTask: func(map[uint32]cdc.TblMap) error {
+					return nil
+				},
+			},
+			CallBackAccountId: map[string]uint32{
+				testPermanentDetectorTask: 1,
+			},
+			SubscribedAccountIds: map[uint32][]string{
+				1: {testPermanentDetectorTask},
+			},
+			CallBackDbName: map[string][]string{
+				testPermanentDetectorTask: {},
+			},
+			SubscribedDbNames: make(map[string][]string),
+			CallBackTableName: map[string][]string{
+				testPermanentDetectorTask: {},
+			},
 			SubscribedTableNames: make(map[string][]string),
 		}
-
-		// Set scanTableFn to no-op to prevent panic in scanTableLoop
-		detectorValue := reflect.ValueOf(detector).Elem()
-		scanTableFnField := detectorValue.FieldByName("scanTableFn")
-		if scanTableFnField.IsValid() && scanTableFnField.CanSet() {
-			scanTableFnField.Set(reflect.ValueOf(func() error {
-				return nil
-			}))
-		}
-
-		// Call RegisterIfAbsent to properly initialize cancel field
-		detector.RegisterIfAbsent("__test_permanent_dummy__", 1, []string{}, []string{}, func(map[uint32]cdc.TblMap) error {
-			return nil
-		})
-
-		return detector
 	}
 }
 
@@ -4270,6 +4270,413 @@ func TestCdcTask_handleNewTables_existingReaderWithDifferentTableID(t *testing.T
 	cdcTask.handleNewTables(mp)
 }
 
+func TestCdcTask_handleNewTablesStopsReaderRemovedFromScan(t *testing.T) {
+	stub1 := gostub.Stub(&cdc.GetTxnOp, func(context.Context, engine.Engine, client.TxnClient, string) (client.TxnOperator, error) {
+		return nil, nil
+	})
+	defer stub1.Reset()
+
+	stub2 := gostub.Stub(&cdc.FinishTxnOp, func(context.Context, error, client.TxnOperator, engine.Engine) {})
+	defer stub2.Reset()
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+
+	closeCh := make(chan struct{})
+	readerInfo := &cdc.DbTableInfo{
+		SourceDbName:  "db1",
+		SourceTblName: "child",
+		SourceTblId:   1001,
+		SinkDbName:    "live_sink_db",
+		SinkTblName:   "live_sink_table",
+	}
+	oldReader := &mockChangeReader{
+		info:    readerInfo,
+		closeCh: closeCh,
+	}
+
+	cdcTask := &CDCTaskExecutor{
+		spec: &task.CreateCdcDetails{
+			TaskId:   "task-removed-from-scan",
+			TaskName: "task-removed-from-scan",
+			Accounts: []*task.Account{
+				{Id: 0},
+			},
+		},
+		tables: cdc.PatternTuples{
+			Pts: []*cdc.PatternTuple{
+				{
+					Source: cdc.PatternTable{
+						Database: "db1",
+						Table:    cdc.CDCPitrGranularity_All,
+					},
+					Sink: cdc.PatternTable{
+						Database: cdc.CDCPitrGranularity_All,
+						Table:    cdc.CDCPitrGranularity_All,
+					},
+				},
+			},
+		},
+		cnEngine:       eng,
+		runningReaders: &sync.Map{},
+	}
+	cdcTask.runningReaders.Store("db1.child", oldReader)
+
+	err := cdcTask.handleNewTables(map[uint32]cdc.TblMap{0: {}})
+	require.NoError(t, err)
+
+	select {
+	case <-closeCh:
+	case <-time.After(time.Second):
+		t.Fatal("expected removed reader to be closed")
+	}
+	require.Eventually(t, func() bool {
+		_, ok := cdcTask.runningReaders.Load("db1.child")
+		return !ok
+	}, time.Second, time.Millisecond)
+	require.Equal(t, "live_sink_db", readerInfo.SinkDbName)
+	require.Equal(t, "live_sink_table", readerInfo.SinkTblName)
+}
+
+func TestCdcTask_handleNewTablesKeepsBlockedRemovedReaderOwnership(t *testing.T) {
+	stub1 := gostub.Stub(&cdc.GetTxnOp, func(context.Context, engine.Engine, client.TxnClient, string) (client.TxnOperator, error) {
+		return nil, nil
+	})
+	defer stub1.Reset()
+
+	stub2 := gostub.Stub(&cdc.FinishTxnOp, func(context.Context, error, client.TxnOperator, engine.Engine) {})
+	defer stub2.Reset()
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+
+	closeCh := make(chan struct{})
+	waitCh := make(chan struct{})
+	var closeCalls atomic.Int32
+	var waitCalls atomic.Int32
+	oldReader := &mockChangeReader{
+		info:       &cdc.DbTableInfo{SourceDbName: "db1", SourceTblName: "child", SourceTblId: 1001},
+		closeCh:    closeCh,
+		waitCh:     waitCh,
+		closeCalls: &closeCalls,
+		waitCalls:  &waitCalls,
+	}
+	t.Cleanup(func() {
+		close(waitCh)
+	})
+
+	cdcTask := &CDCTaskExecutor{
+		spec: &task.CreateCdcDetails{
+			TaskId:   "task-removed-from-scan-timeout",
+			TaskName: "task-removed-from-scan-timeout",
+			Accounts: []*task.Account{
+				{Id: 0},
+			},
+		},
+		tables: cdc.PatternTuples{
+			Pts: []*cdc.PatternTuple{
+				{
+					Source: cdc.PatternTable{
+						Database: "db1",
+						Table:    cdc.CDCPitrGranularity_All,
+					},
+					Sink: cdc.PatternTable{
+						Database: cdc.CDCPitrGranularity_All,
+						Table:    cdc.CDCPitrGranularity_All,
+					},
+				},
+			},
+		},
+		cnEngine:       eng,
+		runningReaders: &sync.Map{},
+	}
+	cdcTask.runningReaders.Store("db1.child", oldReader)
+
+	err := cdcTask.handleNewTables(map[uint32]cdc.TblMap{0: {}})
+	require.NoError(t, err)
+
+	select {
+	case <-closeCh:
+	case <-time.After(time.Second):
+		t.Fatal("expected removed reader to be closed")
+	}
+	val, ok := cdcTask.runningReaders.Load("db1.child")
+	require.True(t, ok)
+	require.Same(t, oldReader, val)
+	require.Equal(t, int32(1), closeCalls.Load())
+	require.Eventually(t, func() bool {
+		return waitCalls.Load() == 1
+	}, time.Second, time.Millisecond)
+
+	start := time.Now()
+	err = cdcTask.handleNewTables(map[uint32]cdc.TblMap{0: {}})
+	require.NoError(t, err)
+	require.Less(t, time.Since(start), 200*time.Millisecond)
+	require.Equal(t, int32(1), closeCalls.Load())
+	require.Equal(t, int32(1), waitCalls.Load())
+	val, ok = cdcTask.runningReaders.Load("db1.child")
+	require.True(t, ok)
+	require.Same(t, oldReader, val)
+
+	start = time.Now()
+	err = cdcTask.handleNewTables(map[uint32]cdc.TblMap{
+		0: {
+			"db1.child": &cdc.DbTableInfo{SourceDbName: "db1", SourceTblName: "child", SourceTblId: 2002},
+		},
+	})
+	require.NoError(t, err)
+	require.Less(t, time.Since(start), 200*time.Millisecond)
+	require.Equal(t, int32(1), closeCalls.Load())
+	require.Equal(t, int32(1), waitCalls.Load())
+	val, ok = cdcTask.runningReaders.Load("db1.child")
+	require.True(t, ok)
+	require.Same(t, oldReader, val)
+
+	err = cdcTask.handleNewTables(map[uint32]cdc.TblMap{
+		0: {
+			"db1.child": &cdc.DbTableInfo{SourceDbName: "db1", SourceTblName: "child", SourceTblId: 1001},
+		},
+	})
+	require.NoError(t, err)
+	val, ok = cdcTask.runningReaders.Load("db1.child")
+	require.True(t, ok)
+	require.Same(t, oldReader, val)
+}
+
+func TestCdcTask_handleNewTablesDoesNotWaitForBlockedRemovedReaderClose(t *testing.T) {
+	stub1 := gostub.Stub(&cdc.GetTxnOp, func(context.Context, engine.Engine, client.TxnClient, string) (client.TxnOperator, error) {
+		return nil, nil
+	})
+	defer stub1.Reset()
+
+	stub2 := gostub.Stub(&cdc.FinishTxnOp, func(context.Context, error, client.TxnOperator, engine.Engine) {})
+	defer stub2.Reset()
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+
+	closeCh := make(chan struct{})
+	closeBlockCh := make(chan struct{})
+	var closeCalls atomic.Int32
+	var waitCalls atomic.Int32
+	oldReader := &mockChangeReader{
+		info:         &cdc.DbTableInfo{SourceDbName: "db1", SourceTblName: "child", SourceTblId: 1001},
+		closeCh:      closeCh,
+		closeBlockCh: closeBlockCh,
+		closeCalls:   &closeCalls,
+		waitCalls:    &waitCalls,
+	}
+	t.Cleanup(func() {
+		close(closeBlockCh)
+	})
+
+	cdcTask := &CDCTaskExecutor{
+		spec: &task.CreateCdcDetails{
+			TaskId:   "task-removed-from-scan-close-timeout",
+			TaskName: "task-removed-from-scan-close-timeout",
+			Accounts: []*task.Account{
+				{Id: 0},
+			},
+		},
+		tables: cdc.PatternTuples{
+			Pts: []*cdc.PatternTuple{
+				{
+					Source: cdc.PatternTable{
+						Database: "db1",
+						Table:    cdc.CDCPitrGranularity_All,
+					},
+					Sink: cdc.PatternTable{
+						Database: cdc.CDCPitrGranularity_All,
+						Table:    cdc.CDCPitrGranularity_All,
+					},
+				},
+			},
+		},
+		cnEngine:       eng,
+		runningReaders: &sync.Map{},
+	}
+	cdcTask.runningReaders.Store("db1.child", oldReader)
+
+	start := time.Now()
+	err := cdcTask.handleNewTables(map[uint32]cdc.TblMap{0: {}})
+	require.NoError(t, err)
+	require.Less(t, time.Since(start), 200*time.Millisecond)
+
+	select {
+	case <-closeCh:
+	case <-time.After(time.Second):
+		t.Fatal("expected removed reader close to start")
+	}
+	require.Equal(t, int32(1), closeCalls.Load())
+	require.Equal(t, int32(0), waitCalls.Load())
+	val, ok := cdcTask.runningReaders.Load("db1.child")
+	require.True(t, ok)
+	require.Same(t, oldReader, val)
+}
+
+func TestCdcTask_handleNewTablesStartsRemovedReaderShutdownsWithoutWaiting(t *testing.T) {
+	stub1 := gostub.Stub(&cdc.GetTxnOp, func(context.Context, engine.Engine, client.TxnClient, string) (client.TxnOperator, error) {
+		return nil, nil
+	})
+	defer stub1.Reset()
+
+	stub2 := gostub.Stub(&cdc.FinishTxnOp, func(context.Context, error, client.TxnOperator, engine.Engine) {})
+	defer stub2.Reset()
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+
+	closeBlockCh := make(chan struct{})
+	var closeCalls atomic.Int32
+	var waitCalls atomic.Int32
+	t.Cleanup(func() {
+		close(closeBlockCh)
+	})
+
+	cdcTask := &CDCTaskExecutor{
+		spec: &task.CreateCdcDetails{
+			TaskId:   "task-removed-from-scan-batch-timeout",
+			TaskName: "task-removed-from-scan-batch-timeout",
+			Accounts: []*task.Account{
+				{Id: 0},
+			},
+		},
+		tables: cdc.PatternTuples{
+			Pts: []*cdc.PatternTuple{
+				{
+					Source: cdc.PatternTable{
+						Database: "db1",
+						Table:    cdc.CDCPitrGranularity_All,
+					},
+					Sink: cdc.PatternTable{
+						Database: cdc.CDCPitrGranularity_All,
+						Table:    cdc.CDCPitrGranularity_All,
+					},
+				},
+			},
+		},
+		cnEngine:       eng,
+		runningReaders: &sync.Map{},
+	}
+
+	const readerCount = 3
+	for i := 0; i < readerCount; i++ {
+		tableName := fmt.Sprintf("child_%d", i)
+		reader := &mockChangeReader{
+			info: &cdc.DbTableInfo{
+				SourceDbName:  "db1",
+				SourceTblName: tableName,
+				SourceTblId:   uint64(1000 + i),
+			},
+			closeBlockCh: closeBlockCh,
+			closeCalls:   &closeCalls,
+			waitCalls:    &waitCalls,
+		}
+		cdcTask.runningReaders.Store("db1."+tableName, reader)
+	}
+
+	start := time.Now()
+	err := cdcTask.handleNewTables(map[uint32]cdc.TblMap{0: {}})
+	elapsed := time.Since(start)
+	require.NoError(t, err)
+	require.Less(t, elapsed, 200*time.Millisecond)
+	require.Eventually(t, func() bool {
+		return closeCalls.Load() == readerCount
+	}, time.Second, time.Millisecond)
+	require.Equal(t, int32(0), waitCalls.Load())
+
+	for i := 0; i < readerCount; i++ {
+		val, ok := cdcTask.runningReaders.Load(fmt.Sprintf("db1.child_%d", i))
+		require.True(t, ok)
+		require.NotNil(t, val)
+	}
+}
+
+func TestCdcTask_handleNewTablesDoesNotWaitAcrossTaskCallbacks(t *testing.T) {
+	stub1 := gostub.Stub(&cdc.GetTxnOp, func(context.Context, engine.Engine, client.TxnClient, string) (client.TxnOperator, error) {
+		return nil, nil
+	})
+	defer stub1.Reset()
+
+	stub2 := gostub.Stub(&cdc.FinishTxnOp, func(context.Context, error, client.TxnOperator, engine.Engine) {})
+	defer stub2.Reset()
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+
+	closeBlockCh := make(chan struct{})
+	var closeCalls atomic.Int32
+	t.Cleanup(func() {
+		close(closeBlockCh)
+	})
+
+	const taskCount = 3
+	tasks := make([]*CDCTaskExecutor, 0, taskCount)
+	for i := 0; i < taskCount; i++ {
+		cdcTask := &CDCTaskExecutor{
+			spec: &task.CreateCdcDetails{
+				TaskId:   fmt.Sprintf("task-removed-from-scan-callback-%d", i),
+				TaskName: fmt.Sprintf("task-removed-from-scan-callback-%d", i),
+				Accounts: []*task.Account{
+					{Id: 0},
+				},
+			},
+			tables: cdc.PatternTuples{
+				Pts: []*cdc.PatternTuple{
+					{
+						Source: cdc.PatternTable{
+							Database: "db1",
+							Table:    cdc.CDCPitrGranularity_All,
+						},
+						Sink: cdc.PatternTable{
+							Database: cdc.CDCPitrGranularity_All,
+							Table:    cdc.CDCPitrGranularity_All,
+						},
+					},
+				},
+			},
+			cnEngine:       eng,
+			runningReaders: &sync.Map{},
+		}
+		reader := &mockChangeReader{
+			info: &cdc.DbTableInfo{
+				SourceDbName:  "db1",
+				SourceTblName: fmt.Sprintf("child_%d", i),
+				SourceTblId:   uint64(1000 + i),
+			},
+			closeBlockCh: closeBlockCh,
+			closeCalls:   &closeCalls,
+		}
+		cdcTask.runningReaders.Store(fmt.Sprintf("db1.child_%d", i), reader)
+		tasks = append(tasks, cdcTask)
+	}
+
+	start := time.Now()
+	for _, cdcTask := range tasks {
+		err := cdcTask.handleNewTables(map[uint32]cdc.TblMap{0: {}})
+		require.NoError(t, err)
+	}
+	require.Less(t, time.Since(start), 200*time.Millisecond)
+	require.Eventually(t, func() bool {
+		return closeCalls.Load() == taskCount
+	}, time.Second, time.Millisecond)
+}
+
 // setupCDCTestStubs sets up all necessary stubs for CDC tests that create TableChangeStream
 // This prevents nil pointer panics when TableChangeStream.Run() is called in goroutines
 func setupCDCTestStubs(t *testing.T) []*gostub.Stubs {
@@ -4312,21 +4719,46 @@ func setupCDCTestStubs(t *testing.T) []*gostub.Stubs {
 }
 
 type mockChangeReader struct {
-	info *cdc.DbTableInfo
-	wg   *sync.WaitGroup
+	info         *cdc.DbTableInfo
+	wg           *sync.WaitGroup
+	closeCh      chan struct{}
+	closeOnce    sync.Once
+	closeBlockCh chan struct{}
+	waitCh       chan struct{}
+	closeCalls   *atomic.Int32
+	waitCalls    *atomic.Int32
 }
 
-func (m mockChangeReader) Run(ctx context.Context, ar *cdc.ActiveRoutine) {}
+func (m *mockChangeReader) Run(ctx context.Context, ar *cdc.ActiveRoutine) {}
 
-func (m mockChangeReader) Close() {}
+func (m *mockChangeReader) Close() {
+	if m.closeCalls != nil {
+		m.closeCalls.Add(1)
+	}
+	if m.closeCh != nil {
+		m.closeOnce.Do(func() {
+			close(m.closeCh)
+		})
+	}
+	if m.closeBlockCh != nil {
+		<-m.closeBlockCh
+	}
+}
 
-func (m mockChangeReader) Wait() {
+func (m *mockChangeReader) Wait() {
+	if m.waitCalls != nil {
+		m.waitCalls.Add(1)
+	}
+	if m.waitCh != nil {
+		<-m.waitCh
+		return
+	}
 	if m.wg != nil {
 		m.wg.Wait()
 	}
 }
 
-func (m mockChangeReader) GetTableInfo() *cdc.DbTableInfo {
+func (m *mockChangeReader) GetTableInfo() *cdc.DbTableInfo {
 	return m.info
 }
 

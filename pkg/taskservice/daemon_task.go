@@ -547,18 +547,27 @@ func (r *taskRunner) startDaemonTaskWorker() error {
 func (r *taskRunner) poll(ctx context.Context) {
 	timer := time.NewTimer(r.options.fetchInterval)
 	defer timer.Stop()
+	r.pollWithTimer(ctx, timer.C, func() {
+		timer.Reset(r.options.fetchInterval)
+	})
+}
+
+func (r *taskRunner) pollWithTimer(
+	ctx context.Context,
+	timerC <-chan time.Time,
+	resetTimer func(),
+) {
 	for {
 		select {
 		case <-ctx.Done():
 			r.logger.Info("daemon task poll worker stopped")
 			return
 
-		case <-timer.C:
-			if taskFrameworkDisabled() {
-				continue
+		case <-timerC:
+			if !taskFrameworkDisabled() {
+				r.dispatchTaskHandle(ctx)
 			}
-			r.dispatchTaskHandle(ctx)
-			timer.Reset(r.options.fetchInterval)
+			resetTimer()
 		}
 	}
 }

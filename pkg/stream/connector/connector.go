@@ -105,7 +105,6 @@ type KafkaMoConnector struct {
 	options      map[string]string
 	ie           ie.InternalExecutor
 	decoder      Decoder
-	converter    Converter
 	resumeC      chan struct{}
 	cancelC      chan struct{}
 	pauseC       chan struct{}
@@ -145,8 +144,6 @@ func NewKafkaMoConnector(logger *zap.Logger, options map[string]string, ie ie.In
 	if err := kmc.validateParams(); err != nil {
 		return nil, err
 	}
-	kmc.converter = newSQLConverter(options[mokafka.DatabaseKey], options[mokafka.TableKey])
-
 	// Create a Kafka consumer using the provided options
 	kafkaAdapter, err := mokafka.NewKafkaAdapter(convertToKafkaConfig(options))
 	if err != nil {

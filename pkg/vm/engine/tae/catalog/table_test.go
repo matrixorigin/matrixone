@@ -15,6 +15,7 @@
 package catalog
 
 import (
+	"math"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -22,6 +23,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
@@ -39,6 +41,48 @@ func TestTableObjectStats(t *testing.T) {
 	tbl.tombstoneObjects.Set(MockObjEntryWithTbl(tbl, 20, true))
 	_, detail = tbl.ObjectStats(common.PPL4, 0, 1, true)
 	require.Equal(t, "TOMBSTONES\n\n000000000000_0 AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABQAAAAAAAAAAA==\n", detail.String())
+}
+
+func TestReplayedPreparedDMLFenceLifecycle(t *testing.T) {
+	table := MockTableEntryWithDB(nil, 1)
+	other := MockTableEntryWithDB(nil, 2)
+	oldStart := types.BuildTS(10, 0)
+
+	table.RegisterReplayedPreparedDML("txn-1")
+	table.RegisterReplayedPreparedDML("txn-1")
+	table.RegisterReplayedPreparedDML("txn-2")
+	require.False(t, other.ShouldRetryAutoIncrementAlter(oldStart))
+	other.RegisterReplayedPreparedDML("other")
+	require.True(t, table.ShouldRetryAutoIncrementAlter(oldStart))
+	require.True(t, other.ShouldRetryAutoIncrementAlter(oldStart))
+
+	table.ResolveReplayedPreparedDML("txn-1", nil)
+	table.ResolveReplayedPreparedDML("txn-1", nil)
+	require.True(t, table.ShouldRetryAutoIncrementAlter(oldStart))
+
+	replayedPrepare := types.BuildTS(12, 0)
+	replayedCommit := types.BuildTS(13, 0)
+	table.ResolveReplayedPreparedDML("txn-2", &replayedCommit)
+	require.True(t, table.ShouldRetryAutoIncrementAlter(oldStart))
+	require.True(t, table.ShouldRetryAutoIncrementAlter(replayedPrepare))
+	require.False(t, table.ShouldRetryAutoIncrementAlter(replayedCommit))
+	table.ResolveReplayedPreparedDML("missing", &replayedCommit)
+	require.False(t, table.ShouldRetryAutoIncrementAlter(types.BuildTS(22, 0)))
+}
+
+func TestAutoIncrementEpochTransition(t *testing.T) {
+	schema := MockSchemaAll(3, 1)
+	require.Error(t, schema.ApplyAlterTable(apipb.NewUpdateAutoIncrementReq(0, 1, 10, 2)))
+	require.Equal(t, uint32(0), schema.Extra.AutoIncrEpoch)
+
+	require.NoError(t, schema.ApplyAlterTable(apipb.NewUpdateAutoIncrementReq(0, 1, 10, 1)))
+	require.Equal(t, uint32(1), schema.Extra.AutoIncrEpoch)
+	require.NoError(t, schema.ApplyAlterTable(apipb.NewUpdateConstraintReq(0, 1, "constraint")))
+	require.Equal(t, uint32(1), schema.Extra.AutoIncrEpoch)
+
+	schema.Extra.AutoIncrEpoch = math.MaxUint32
+	require.Error(t, schema.ApplyAlterTable(apipb.NewUpdateAutoIncrementReq(0, 1, 20, 0)))
+	require.Equal(t, uint32(math.MaxUint32), schema.Extra.AutoIncrEpoch)
 }
 
 func TestObjectList(t *testing.T) {
@@ -63,6 +107,47 @@ func TestObjectList(t *testing.T) {
 
 	t.Log(ll.getNodes(entry1.ID(), true))
 	t.Log(ll.getNodes(entry1.ID(), false))
+}
+
+func TestObjectListUpdateCreateTSWithDeleteEntry(t *testing.T) {
+	ll := NewObjectList(false)
+	nobjid := objectio.NewObjectid()
+	createTS := types.BuildTS(10, 0)
+	deleteTS := types.BuildTS(20, 0)
+	updatedCreateTS := types.BuildTS(5, 0)
+	createEntry := &ObjectEntry{
+		ObjectNode: ObjectNode{SortHint: 1},
+		EntryMVCCNode: EntryMVCCNode{
+			CreatedAt: createTS,
+		},
+		ObjectMVCCNode: ObjectMVCCNode{ObjectStats: *objectio.NewObjectStatsWithObjectID(&nobjid, true, false, false)},
+		CreateNode:     txnbase.NewTxnMVCCNodeWithTS(createTS),
+		ObjectState:    ObjectState_Create_ApplyCommit,
+	}
+	deleteEntry := createEntry.Clone()
+	deleteEntry.DeletedAt = deleteTS
+	deleteEntry.DeleteNode = txnbase.NewTxnMVCCNodeWithTS(deleteTS)
+	deleteEntry.ObjectState = ObjectState_Delete_ApplyCommit
+	updatedCreateEntry := createEntry.Clone()
+	updatedCreateEntry.nextVersion = deleteEntry
+	deleteEntry.prevVersion = updatedCreateEntry
+
+	ll.modify(nil, deleteEntry, updatedCreateEntry)
+	updated, err := ll.UpdateCreateTS(createEntry.ID(), updatedCreateTS)
+	require.NoError(t, err)
+	require.True(t, updated.IsDEntry())
+
+	nodes := ll.GetAllNodes(createEntry.ID())
+	require.Len(t, nodes, 2)
+	require.Equal(t, updatedCreateTS, nodes[0].CreatedAt)
+	require.Equal(t, updatedCreateTS, nodes[0].CreateNode.GetPrepare())
+	require.Equal(t, updatedCreateTS, nodes[1].CreatedAt)
+	require.Equal(t, updatedCreateTS, nodes[1].CreateNode.GetPrepare())
+	require.Same(t, nodes[0].prevVersion, nodes[1])
+	require.Same(t, nodes[1].nextVersion, nodes[0])
+	require.Equal(t, 2, ll.tree.Load().Len())
+	require.NoError(t, ll.DeleteAllEntries(createEntry.ID()))
+	require.Zero(t, ll.tree.Load().Len())
 }
 
 func TestGetSoftdeleteObjects(t *testing.T) {

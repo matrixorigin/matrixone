@@ -6579,6 +6579,24 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		if st.Table != nil {
 			dbName = string(st.Table.SchemaName)
 		}
+	case *tree.DumpTable:
+		objType = objectTypeNone
+		kind = privilegeKindSpecial
+		special = specialTagAdmin
+		writeDatabaseAndTableDirectly = true
+		appendWriteTableNameDatabaseName(st.Table)
+		if st.Table != nil {
+			dbName = string(st.Table.Schema())
+		}
+	case *tree.LoadTable:
+		objType = objectTypeNone
+		kind = privilegeKindSpecial
+		special = specialTagAdmin
+		writeDatabaseAndTableDirectly = true
+		appendWriteTableNameDatabaseName(st.Table)
+		if st.Table != nil {
+			dbName = string(st.Table.Schema())
+		}
 	case *tree.Update:
 		objType = objectTypeTable
 		typs = append(typs, PrivilegeTypeUpdate, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
@@ -9915,6 +9933,8 @@ func authenticateUserCanExecuteStatementWithObjectTypeNone(ctx context.Context, 
 		case *tree.BackupStart:
 			yes, err := checkBackUpStartPrivilege()
 			return yes, stats, err
+		case *tree.DumpTable, *tree.LoadTable:
+			return tenant.IsAdminRole(), stats, nil
 		case *tree.CreateCDC, *tree.ShowCDC, *tree.PauseCDC, *tree.DropCDC, *tree.ResumeCDC, *tree.RestartCDC:
 			yes, err := checkCdcTaskPrivilege()
 			return yes, stats, err
@@ -11513,12 +11533,20 @@ func GetVersionCompatibility(ctx context.Context, ses *Session, dbName string) (
 	return resultConfig, err
 }
 
-func doInterpretCall(ctx context.Context, ses FeSession, call *tree.CallStmt, bg bool) ([]ExecResult, error) {
+func doInterpretCall(
+	ctx context.Context,
+	ses FeSession,
+	call *tree.CallStmt,
+	bg bool,
+	callerAffectedRows int64,
+	affectedRows *int64,
+) ([]ExecResult, error) {
 	if parsed, ok, err := parseIcebergBuiltinCall(ctx, call); ok || err != nil {
 		if err != nil {
 			return nil, err
 		}
-		return executeIcebergBuiltinCall(ctx, ses, parsed)
+		erArray, err := executeIcebergBuiltinCall(ctx, ses, parsed)
+		return erArray, err
 	}
 	// fetch related
 	var spLang string
@@ -11625,6 +11653,7 @@ func doInterpretCall(ctx context.Context, ses FeSession, call *tree.CallStmt, bg
 	interpreter.argsMap = argsMap
 	interpreter.argsAttr = argsAttr
 	interpreter.outParamMap = make(map[string]interface{})
+	interpreter.initialAffectedRows = callerAffectedRows
 
 	switch spLang {
 	case "sql":
@@ -11634,10 +11663,11 @@ func doInterpretCall(ctx context.Context, ses FeSession, call *tree.CallStmt, bg
 		}
 		defer freeStatements(stmt)
 
-		err = interpreter.ExecuteSp(stmt[0], dbName)
+		err = interpreter.ExecuteSp(stmt[0], dbName, bg)
 		if err != nil {
 			return nil, err
 		}
+		*affectedRows = interpreter.lastAffectedRows
 		return interpreter.GetResult(), nil
 
 	case "starlark":
@@ -11645,6 +11675,7 @@ func doInterpretCall(ctx context.Context, ses FeSession, call *tree.CallStmt, bg
 		if err != nil {
 			return nil, err
 		}
+		*affectedRows = interpreter.lastAffectedRows
 		return interpreter.GetResult(), nil
 
 	default:

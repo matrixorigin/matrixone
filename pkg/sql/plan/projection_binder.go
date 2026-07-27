@@ -89,6 +89,24 @@ func (b *ProjectionBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool)
 		}, nil
 	}
 
+	// A numeric assignment target only shapes an expression that is bound fresh
+	// here. Group-by / aggregate / window / time-window / sample projections
+	// resolve to an already-computed column above, so the numeric context must
+	// be checked after those lookups to avoid re-binding a grouped expression
+	// against the raw scan columns.
+	if b.numericTargetType != nil {
+		target := b.numericTargetType
+		b.numericTargetType = nil
+		defer func() { b.numericTargetType = target }()
+		if subquery, ok := scalarSubqueryExpr(astExpr); ok && !subquery.Exists {
+			previousSubqueryTarget := b.numericSubqueryTarget
+			b.numericSubqueryTarget = target
+			defer func() { b.numericSubqueryTarget = previousSubqueryTarget }()
+			return b.baseBindExpr(astExpr, depth, isRoot)
+		}
+		return b.bindNumericExprWithContext(astExpr, depth, target)
+	}
+
 	return b.baseBindExpr(astExpr, depth, isRoot)
 }
 

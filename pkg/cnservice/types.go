@@ -91,9 +91,7 @@ type Service interface {
 type EngineType string
 
 const (
-	EngineDistributedTAE       EngineType = "distributed-tae"
-	EngineMemory               EngineType = "memory"
-	EngineNonDistributedMemory EngineType = "non-distributed-memory"
+	EngineDistributedTAE EngineType = "distributed-tae"
 	// ReservedTasks equals how many task must run background.
 	// 1 for metric StorageUsage
 	// 1 for trace ETLMerge
@@ -357,6 +355,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Engine.Type == "" {
 		c.Engine.Type = EngineDistributedTAE
+	}
+	if c.Engine.Type != EngineDistributedTAE {
+		return moerr.NewBadConfigNoCtx("unsupported CN engine: " + string(c.Engine.Type))
 	}
 	if c.Cluster.RefreshInterval.Duration == 0 {
 		c.Cluster.RefreshInterval.Duration = time.Second * 10

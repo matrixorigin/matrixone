@@ -22,6 +22,16 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 )
 
+type PoolResolution string
+
+const (
+	PoolResolutionNoMatch          PoolResolution = "no-match"
+	PoolResolutionExactLabels      PoolResolution = "exact-labels"
+	PoolResolutionNonAccountLabels PoolResolution = "non-account-labels"
+	PoolResolutionSharedUnlabeled  PoolResolution = "shared-unlabeled"
+	PoolResolutionPrivilegedAny    PoolResolution = "privileged-any"
+)
+
 // RouteForSuperTenant is used to select CN servers for sys tenant.
 // For sys tenant, there are some special strategies to select CN servers.
 // First of all, the requested labels must be match with the ones on servers.
@@ -40,7 +50,7 @@ func RouteForSuperTenant(
 	appendFn func(service *metadata.CNService),
 ) {
 	mc := clusterservice.GetMOCluster(service)
-	_ = routeForSuperTenant(context.Background(), mc.GetCNService, selector, username, filter, appendFn)
+	_, _ = routeForSuperTenant(context.Background(), mc.GetCNService, selector, username, filter, appendFn)
 }
 
 // RouteForSuperTenantCandidates applies the super-tenant routing policy to an
@@ -53,6 +63,20 @@ func RouteForSuperTenantCandidates(
 	filter func(string) bool,
 	appendFn func(service *metadata.CNService),
 ) error {
+	_, err := ResolveForSuperTenantCandidates(ctx, candidates, selector, username, filter, appendFn)
+	return err
+}
+
+// ResolveForSuperTenantCandidates returns the branch that produced the pool,
+// allowing callers to distinguish exact resolution from compatibility fallback.
+func ResolveForSuperTenantCandidates(
+	ctx context.Context,
+	candidates []metadata.CNService,
+	selector clusterservice.Selector,
+	username string,
+	filter func(string) bool,
+	appendFn func(service *metadata.CNService),
+) (PoolResolution, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -68,9 +92,9 @@ func routeForSuperTenant(
 	username string,
 	filter func(string) bool,
 	appendFn func(service *metadata.CNService),
-) error {
+) (PoolResolution, error) {
 	if err := ctx.Err(); err != nil {
-		return err
+		return PoolResolutionNoMatch, err
 	}
 
 	// found is true indicates that we have find some available CN services.
@@ -95,10 +119,10 @@ func routeForSuperTenant(
 		return true
 	})
 	if err := ctx.Err(); err != nil {
-		return err
+		return PoolResolutionNoMatch, err
 	}
 	if found {
-		return nil
+		return PoolResolutionExactLabels, nil
 	}
 
 	// S2: If there are no servers that are configured as sys account.
@@ -130,21 +154,21 @@ func routeForSuperTenant(
 		return true
 	})
 	if err := ctx.Err(); err != nil {
-		return err
+		return PoolResolutionNoMatch, err
 	}
 	if found {
-		return nil
+		return PoolResolutionNonAccountLabels, nil
 	}
 
 	// S3: Select CN servers which has no labels.
 	if len(emptyCNs) > 0 {
 		for _, cn := range emptyCNs {
 			if err := ctx.Err(); err != nil {
-				return err
+				return PoolResolutionNoMatch, err
 			}
 			appendFn(cn)
 		}
-		return ctx.Err()
+		return PoolResolutionSharedUnlabeled, ctx.Err()
 	}
 
 	// S4.1: If the root is super, return all servers.
@@ -160,11 +184,11 @@ func routeForSuperTenant(
 			appendFn(&s)
 			return true
 		})
-		return ctx.Err()
+		return PoolResolutionPrivilegedAny, ctx.Err()
 	}
 
 	// S4.2: No servers are returned.
-	return ctx.Err()
+	return PoolResolutionNoMatch, ctx.Err()
 }
 
 // RouteForCommonTenant selects CN services for common tenant.
@@ -177,7 +201,7 @@ func RouteForCommonTenant(
 	appendFn func(service *metadata.CNService),
 ) {
 	mc := clusterservice.GetMOCluster(service)
-	_ = routeForCommonTenant(context.Background(), mc.GetCNService, selector, filter, appendFn)
+	_, _ = routeForCommonTenant(context.Background(), mc.GetCNService, selector, filter, appendFn)
 }
 
 // RouteForCommonTenantCandidates applies the common-tenant routing policy to
@@ -189,6 +213,19 @@ func RouteForCommonTenantCandidates(
 	filter func(string) bool,
 	appendFn func(service *metadata.CNService),
 ) error {
+	_, err := ResolveForCommonTenantCandidates(ctx, candidates, selector, filter, appendFn)
+	return err
+}
+
+// ResolveForCommonTenantCandidates reports whether the requested labels were
+// matched or the historical shared-unlabeled fallback was used.
+func ResolveForCommonTenantCandidates(
+	ctx context.Context,
+	candidates []metadata.CNService,
+	selector clusterservice.Selector,
+	filter func(string) bool,
+	appendFn func(service *metadata.CNService),
+) (PoolResolution, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -201,9 +238,9 @@ func routeForCommonTenant(
 	selector clusterservice.Selector,
 	filter func(string) bool,
 	appendFn func(service *metadata.CNService),
-) error {
+) (PoolResolution, error) {
 	if err := ctx.Err(); err != nil {
-		return err
+		return PoolResolutionNoMatch, err
 	}
 
 	// found is true indicates that there are CN services for the selector.
@@ -239,7 +276,7 @@ func routeForCommonTenant(
 		return true
 	})
 	if err := ctx.Err(); err != nil {
-		return err
+		return PoolResolutionNoMatch, err
 	}
 
 	// If there are no CN services with non-empty labels,
@@ -247,12 +284,16 @@ func routeForCommonTenant(
 	if !found && len(preEmptyCNs) > 0 {
 		for _, cn := range preEmptyCNs {
 			if err := ctx.Err(); err != nil {
-				return err
+				return PoolResolutionNoMatch, err
 			}
 			appendFn(cn)
 		}
+		return PoolResolutionSharedUnlabeled, ctx.Err()
 	}
-	return ctx.Err()
+	if found {
+		return PoolResolutionExactLabels, ctx.Err()
+	}
+	return PoolResolutionNoMatch, ctx.Err()
 }
 
 func candidateGetter(ctx context.Context, candidates []metadata.CNService) cnServiceGetter {

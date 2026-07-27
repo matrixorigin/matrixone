@@ -27,11 +27,13 @@ import (
 
 type testOperator struct {
 	OperatorBase
-	name      string
-	callCount int
-	callErr   error
-	result    CallResult
-	projected *batch.Batch
+	name       string
+	callCount  int
+	callErr    error
+	result     CallResult
+	projected  *batch.Batch
+	prepared   *process.Process
+	prepareLog *[]string
 }
 
 func (op *testOperator) Free(*process.Process, bool, error) {}
@@ -44,7 +46,13 @@ func (op *testOperator) String(buf *bytes.Buffer) {
 
 func (op *testOperator) OpType() OpType { return Mock }
 
-func (op *testOperator) Prepare(*process.Process) error { return nil }
+func (op *testOperator) Prepare(proc *process.Process) error {
+	op.prepared = proc
+	if op.prepareLog != nil {
+		*op.prepareLog = append(*op.prepareLog, op.name)
+	}
+	return nil
+}
 
 func (op *testOperator) Call(*process.Process) (CallResult, error) {
 	op.callCount++
@@ -63,6 +71,40 @@ func (op *testOperator) ExecProjection(_ *process.Process, input *batch.Batch) (
 		return op.projected, nil
 	}
 	return input, nil
+}
+
+type childrenProcessTestOperator struct {
+	testOperator
+	childrenProc *process.Process
+}
+
+func (op *childrenProcessTestOperator) PrepareChildrenProcess(*process.Process) *process.Process {
+	return op.childrenProc
+}
+
+func TestPrepareUsesOperatorChildProcessAndKeepsPostOrder(t *testing.T) {
+	parentProc := &process.Process{}
+	rootChildrenProc := &process.Process{}
+	nestedChildrenProc := &process.Process{}
+	var prepareLog []string
+
+	root := &childrenProcessTestOperator{
+		testOperator: testOperator{name: "root", prepareLog: &prepareLog},
+		childrenProc: rootChildrenProc,
+	}
+	nested := &childrenProcessTestOperator{
+		testOperator: testOperator{name: "nested", prepareLog: &prepareLog},
+		childrenProc: nestedChildrenProc,
+	}
+	leaf := &testOperator{name: "leaf", prepareLog: &prepareLog}
+	nested.AppendChild(leaf)
+	root.AppendChild(nested)
+
+	require.NoError(t, Prepare(root, parentProc))
+	require.Same(t, nestedChildrenProc, leaf.prepared)
+	require.Same(t, rootChildrenProc, nested.prepared)
+	require.Same(t, parentProc, root.prepared)
+	require.Equal(t, []string{"leaf", "nested", "root"}, prepareLog)
 }
 
 func TestOperatorTypeAndBaseAccessors(t *testing.T) {
@@ -108,6 +150,19 @@ func TestOperatorTypeAndBaseAccessors(t *testing.T) {
 	require.Equal(t, "cn-b", addr.CnAddr)
 	require.Equal(t, int32(19), addr.OperatorID)
 	require.Equal(t, int32(23), addr.ParallelID)
+}
+
+func TestOperatorToStrMapCompleteness(t *testing.T) {
+	const reservedShuffleV2 = Shuffle + 1
+
+	for op := Top; op < OpTypeEnd; op++ {
+		if op == reservedShuffleV2 {
+			continue
+		}
+		if op.String() == "Unknown" {
+			t.Errorf("missing operator name for %d", op)
+		}
+	}
 }
 
 func TestOperatorChildrenAndTraversal(t *testing.T) {

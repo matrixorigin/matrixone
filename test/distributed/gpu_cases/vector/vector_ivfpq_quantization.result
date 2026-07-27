@@ -35,7 +35,7 @@ where table_id = (select rel_id from mo_catalog.mo_tables
 where relname='t' and reldatabase='ivfpq_q_f16')
 and name='ix' and algo_table_type='ivfpq_index';
 ➤ algo[12,-1,0]  ¦  algo_table_type[12,-1,0]  ¦  algo_params[12,-1,0]  𝄀
-ivfpq  ¦  ivfpq_index  ¦  {"bits_per_code":"8","distribution_mode":"single","lists":"10","m":"8","op_type":"vector_l2_ops","quantization":"float16","session_vars":{"cfg":{"experimental_ivfpq_index":{"t":"I8","v":1},"ivfpq_max_index_capacity":{"t":"I","v":99999},"ivfpq_threads_build":{"t":"I","v":6},"kmeans_max_iteration":{"t":"I","v":12},"kmeans_train_percent":{"t":"F","v":100},"lower_case_table_names":{"t":"I","v":1}}}}
+ivfpq  ¦  ivfpq_index  ¦  {"bits_per_code":"8","distribution_mode":"single","lists":"10","m":"8","op_type":"vector_l2_ops","quantization":"float16","session_vars":{"cfg":{"ivfpq_threads_build":{"t":"I","v":6},"lower_case_table_names":{"t":"I","v":1}}}}
 select id from t order by l2_distance(v, '[1,1,1,1,1,1,1,1]') limit 1;
 ➤ id[-5,64,0]  𝄀
 1
@@ -80,7 +80,7 @@ where table_id = (select rel_id from mo_catalog.mo_tables
 where relname='t' and reldatabase='ivfpq_q_int8')
 and name='ix' and algo_table_type='ivfpq_index';
 ➤ algo[12,-1,0]  ¦  algo_table_type[12,-1,0]  ¦  algo_params[12,-1,0]  𝄀
-ivfpq  ¦  ivfpq_index  ¦  {"bits_per_code":"8","distribution_mode":"single","lists":"10","m":"8","op_type":"vector_l2_ops","quantization":"int8","session_vars":{"cfg":{"experimental_ivfpq_index":{"t":"I8","v":1},"ivfpq_max_index_capacity":{"t":"I","v":99999},"ivfpq_threads_build":{"t":"I","v":6},"kmeans_max_iteration":{"t":"I","v":12},"kmeans_train_percent":{"t":"F","v":100},"lower_case_table_names":{"t":"I","v":1}}}}
+ivfpq  ¦  ivfpq_index  ¦  {"bits_per_code":"8","distribution_mode":"single","lists":"10","m":"8","op_type":"vector_l2_ops","quantization":"int8","session_vars":{"cfg":{"ivfpq_threads_build":{"t":"I","v":6},"lower_case_table_names":{"t":"I","v":1}}}}
 select id from t order by l2_distance(v, '[1,1,1,1,1,1,1,1]') limit 1;
 ➤ id[-5,64,0]  𝄀
 1
@@ -125,7 +125,7 @@ where table_id = (select rel_id from mo_catalog.mo_tables
 where relname='t' and reldatabase='ivfpq_q_uint8')
 and name='ix' and algo_table_type='ivfpq_index';
 ➤ algo[12,-1,0]  ¦  algo_table_type[12,-1,0]  ¦  algo_params[12,-1,0]  𝄀
-ivfpq  ¦  ivfpq_index  ¦  {"bits_per_code":"8","distribution_mode":"single","lists":"10","m":"8","op_type":"vector_l2_ops","quantization":"uint8","session_vars":{"cfg":{"experimental_ivfpq_index":{"t":"I8","v":1},"ivfpq_max_index_capacity":{"t":"I","v":99999},"ivfpq_threads_build":{"t":"I","v":6},"kmeans_max_iteration":{"t":"I","v":12},"kmeans_train_percent":{"t":"F","v":100},"lower_case_table_names":{"t":"I","v":1}}}}
+ivfpq  ¦  ivfpq_index  ¦  {"bits_per_code":"8","distribution_mode":"single","lists":"10","m":"8","op_type":"vector_l2_ops","quantization":"uint8","session_vars":{"cfg":{"ivfpq_threads_build":{"t":"I","v":6},"lower_case_table_names":{"t":"I","v":1}}}}
 select id from t order by l2_distance(v, '[1,1,1,1,1,1,1,1]') limit 1;
 ➤ id[-5,64,0]  𝄀
 1

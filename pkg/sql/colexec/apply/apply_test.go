@@ -19,32 +19,29 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
-type applyTestCase struct {
-	arg  *Apply
-	proc *process.Process
-}
-
-func makeTestCases(t *testing.T) []applyTestCase {
-	return []applyTestCase{
-		newTestCase(t, CROSS),
-	}
-}
-
 func TestString(t *testing.T) {
-	buf := new(bytes.Buffer)
-	for _, tc := range makeTestCases(t) {
-		tc.arg.String(buf)
+	tests := []struct {
+		name      string
+		applyType int
+		want      string
+	}{
+		{name: "cross", applyType: CROSS, want: "apply: cross apply "},
+		{name: "outer", applyType: OUTER, want: "apply: outer apply "},
+		{name: "unknown", applyType: -1, want: "apply"},
 	}
-}
-
-func TestApply(t *testing.T) {
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			arg := NewArgument()
+			arg.ApplyType = test.applyType
+			buf := new(bytes.Buffer)
+			arg.String(buf)
+			require.Equal(t, test.want, buf.String())
+		})
+	}
 }
 
 func TestNilTableFunctionLifecycle(t *testing.T) {
@@ -69,23 +66,3 @@ func TestNilTableFunctionLifecycle(t *testing.T) {
 		arg.Free(proc, false, nil)
 	})
 }
-
-func newTestCase(t *testing.T, applyType int) applyTestCase {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
-	arg := NewArgument()
-	arg.ApplyType = applyType
-	arg.TableFunction = table_function.NewArgument()
-	return applyTestCase{
-		arg:  arg,
-		proc: proc,
-	}
-}
-
-/*
-func resetChildren(arg *Apply) {
-	bat := colexec.MakeMockBatchs()
-	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
-	arg.Children = nil
-	arg.AppendChild(op)
-}
-*/

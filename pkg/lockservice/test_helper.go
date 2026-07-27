@@ -15,6 +15,7 @@
 package lockservice
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"time"
@@ -110,7 +111,7 @@ func WaitWaiters(
 	key []byte,
 	waitersCount int) error {
 	s := ls.(*service)
-	v, err := s.getLockTable(group, table)
+	v, err := s.getLockTable(context.Background(), group, table)
 	if err != nil {
 		return err
 	}

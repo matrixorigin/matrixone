@@ -98,6 +98,7 @@ var causeArray = []error{
 
 	CauseDoAllocate,
 	CauseDoUpdate,
+	CauseDoForceSetOffset,
 	CauseDestroyTables,
 	CauseAllocate,
 
@@ -250,8 +251,6 @@ var causeArray = []error{
 	CauseShardingLocalReader,
 	CauseHakeeperIDGeneratorNew,
 	CauseHakeeperIDGeneratorNewIDByKey,
-
-	CauseDoTxnRequest,
 
 	CauseRetryWithIntervalAndTimeout,
 

@@ -244,15 +244,20 @@ select cast(col9 as double) from t8;
 1.2345678904345465  𝄀
 111.22233334444556
 delete from t8 where col9 is not NULL;
-insert into  t8(col9) values ('1000000000000000000000000000000000000000');
-insert into  t8(col9) values (1000000000000000000000000000000000000000);
+insert into t8(col9) values ('1000000000000000000000000000000000000000');
 select cast(col9 as float) from t8;
 ➤ cast(col9 as float)[7,24,0]  𝄀
-0.0  𝄀
-0.0
+3.4028235E38
 select cast(col9 as double) from t8;
 ➤ cast(col9 as double)[8,54,0]  𝄀
-1.0E39  𝄀
+1.0E39
+delete from t8 where col9 is not NULL;
+insert into t8(col9) values (1000000000000000000000000000000000000000);
+select cast(col9 as float) from t8;
+➤ cast(col9 as float)[7,24,0]  𝄀
+3.4028235E38
+select cast(col9 as double) from t8;
+➤ cast(col9 as double)[8,54,0]  𝄀
 1.0E39
 delete from t8 where col9 is not NULL;
 insert into t8(col10) values ('this is a char type');
@@ -266,12 +271,12 @@ select cast(col10 as varchar) from t8;
 this is a char type  𝄀
 this is a varchar type
 select cast(col10 as char(1)) from t8;
-cast(col10 as char(1))
-t
+➤ cast(col10 as char(1))[1,1,0]  𝄀
+t  𝄀
 t
 select cast(col10 as varchar(1)) from t8;
-cast(col10 as varchar(1))
-t
+➤ cast(col10 as varchar(1))[12,-1,0]  𝄀
+t  𝄀
 t
 delete from t8 where col10 is not NULL;
 insert into t8(col11) values ('2020-01-01');

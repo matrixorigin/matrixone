@@ -16,7 +16,6 @@ package iscp
 
 import (
 	"context"
-	"fmt"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -161,9 +160,9 @@ func TestNewFulltextSqlWriterUpsert(t *testing.T) {
 
 	bytes, err := writer.ToSql()
 	require.Nil(t, err)
-	fmt.Println(string(bytes))
-
+	require.Equal(t, "REPLACE INTO `mydb`.`fulltext_tbl` WITH src as (SELECT CAST(column_0 as BIGINT) as `id`, CAST(column_1 as VARCHAR(256)) as `body` FROM (VALUES ROW(1000,'hello world'),ROW(2000,CAST(NULL as VARCHAR(256))))) SELECT f.* FROM src CROSS APPLY fulltext_index_tokenize('', 23, id, body) as f", string(bytes))
 }
+
 func TestNewFulltextSqlWriterInsert(t *testing.T) {
 	var ctx context.Context
 
@@ -184,8 +183,7 @@ func TestNewFulltextSqlWriterInsert(t *testing.T) {
 
 	bytes, err := writer.ToSql()
 	require.Nil(t, err)
-	fmt.Println(string(bytes))
-
+	require.Equal(t, "REPLACE INTO `mydb`.`fulltext_tbl` WITH src as (SELECT CAST(column_0 as BIGINT) as `id`, CAST(column_1 as VARCHAR(256)) as `body` FROM (VALUES ROW(1000,'hello world'),ROW(2000,CAST(NULL as VARCHAR(256))))) SELECT f.* FROM src CROSS APPLY fulltext_index_tokenize('', 23, id, body) as f", string(bytes))
 }
 
 func TestNewFulltextSqlWriterDelete(t *testing.T) {
@@ -208,8 +206,7 @@ func TestNewFulltextSqlWriterDelete(t *testing.T) {
 
 	bytes, err := writer.ToSql()
 	require.Nil(t, err)
-	fmt.Println(string(bytes))
-
+	require.Equal(t, "DELETE FROM `test_db`.`fulltext_tbl` WHERE `doc_id` IN (1000,2000)", string(bytes))
 }
 
 func TestNewFulltextSqlWriterCPkey(t *testing.T) {
@@ -232,8 +229,7 @@ func TestNewFulltextSqlWriterCPkey(t *testing.T) {
 
 	bytes, err := writer.ToSql()
 	require.Nil(t, err)
-	fmt.Println(string(bytes))
-
+	require.Equal(t, "REPLACE INTO `mydb`.`fulltext_tbl` WITH src as (SELECT CAST(column_0 as VARBINARY(0)) as `__mo_cpkey`, CAST(column_1 as VARCHAR(256)) as `body`, CAST(column_2 as VARCHAR(256)) as `title` FROM (VALUES ROW(x'6162636465663132','hello world','one title'),ROW(x'616263','hello world','two title'))) SELECT f.* FROM src CROSS APPLY fulltext_index_tokenize('', 65, __mo_cpkey, body, title) as f", string(bytes))
 }
 
 func TestNewHnswSqlWriter(t *testing.T) {
@@ -259,7 +255,7 @@ func TestNewHnswSqlWriter(t *testing.T) {
 
 	bytes, err := writer.ToSql()
 	require.Nil(t, err)
-	fmt.Println(string(bytes))
+	require.JSONEq(t, `{"cdc":[{"t":"U","pk":1000,"v":[1,2,3]},{"t":"I","pk":2000,"v":[5,6,7]},{"t":"D","pk":3000}]}`, string(bytes))
 }
 
 func TestNewIvfflatSqlWriterInsert(t *testing.T) {
@@ -285,7 +281,7 @@ func TestNewIvfflatSqlWriterInsert(t *testing.T) {
 
 	bytes, err := writer.ToSql()
 	require.Nil(t, err)
-	fmt.Println(string(bytes))
+	require.Equal(t, "REPLACE INTO `test_db`.`entries_tbl` (`__mo_index_centroid_fk_version`, `__mo_index_centroid_fk_id`, `__mo_index_pri_col`, `__mo_index_centroid_fk_entry`) WITH centroid as (SELECT * FROM `test_db`.`centroids_tbl` WHERE `__mo_index_centroid_version` = (SELECT CAST(__mo_index_val as BIGINT) FROM `test_db`.`meta_tbl` WHERE `__mo_index_key` = 'version') ), src as (SELECT CAST(column_0 as BIGINT) as `src0`, CAST(column_1 as VECF64(3)) as `src1` FROM (VALUES ROW(1000,CAST('[1, 2, 3]' as VECF64(3))),ROW(2000,CAST('[5, 6, 7]' as VECF64(3))),ROW(3000,CAST('[5, 6, 7]' as VECF64(3))))) SELECT `__mo_index_centroid_version`, `__mo_index_centroid_id`, src0, src1 FROM src CENTROIDX('vector_l2_ops') JOIN centroid using (`__mo_index_centroid`, `src1`)", string(bytes))
 }
 
 func TestNewIvfflatSqlWriterUpsert(t *testing.T) {
@@ -311,7 +307,7 @@ func TestNewIvfflatSqlWriterUpsert(t *testing.T) {
 
 	bytes, err := writer.ToSql()
 	require.Nil(t, err)
-	fmt.Println(string(bytes))
+	require.Equal(t, "REPLACE INTO `test_db`.`entries_tbl` (`__mo_index_centroid_fk_version`, `__mo_index_centroid_fk_id`, `__mo_index_pri_col`, `__mo_index_centroid_fk_entry`) WITH centroid as (SELECT * FROM `test_db`.`centroids_tbl` WHERE `__mo_index_centroid_version` = (SELECT CAST(__mo_index_val as BIGINT) FROM `test_db`.`meta_tbl` WHERE `__mo_index_key` = 'version') ), src as (SELECT CAST(column_0 as BIGINT) as `src0`, CAST(column_1 as VECF64(3)) as `src1` FROM (VALUES ROW(1000,CAST('[1, 2, 3]' as VECF64(3))),ROW(2000,CAST('[5, 6, 7]' as VECF64(3))),ROW(3000,CAST('[5, 6, 7]' as VECF64(3))))) SELECT `__mo_index_centroid_version`, `__mo_index_centroid_id`, src0, src1 FROM src CENTROIDX('vector_l2_ops') JOIN centroid using (`__mo_index_centroid`, `src1`)", string(bytes))
 }
 
 func TestNewIvfflatSqlWriterDelete(t *testing.T) {
@@ -337,5 +333,5 @@ func TestNewIvfflatSqlWriterDelete(t *testing.T) {
 
 	bytes, err := writer.ToSql()
 	require.Nil(t, err)
-	fmt.Println(string(bytes))
+	require.Equal(t, "DELETE FROM `test_db`.`entries_tbl` WHERE `__mo_index_pri_col` IN (1000,2000,3000)", string(bytes))
 }

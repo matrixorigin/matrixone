@@ -506,6 +506,10 @@ func (task *flushTableTailTask) prepareAObjSortedData(
 	if err != nil {
 		return
 	}
+	if bat == nil {
+		empty = true
+		return
+	}
 	for i := range idxs {
 		if vec := bat.Vecs[i]; vec == nil || vec.Length() == 0 {
 			empty = true
@@ -648,6 +652,7 @@ func (task *flushTableTailTask) mergeAObjs(ctx context.Context, isTombstone bool
 		}
 		if !isTombstone && task.doTransfer {
 			mergesort.ReleaseTransferMaps(task.transMappings)
+			task.transMappings = nil
 		}
 		return nil
 	}

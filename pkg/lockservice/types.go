@@ -195,7 +195,7 @@ type lockTable interface {
 	// Unlock release a set of locks, if txn was committed, commitTS is not empty
 	unlock(txn *activeTxn, ls *cowSlice, commitTS timestamp.Timestamp, mutations ...pb.ExtraMutation)
 	// getLock get a lock
-	getLock(key []byte, txn pb.WaitTxn, fn func(Lock))
+	getLock(ctx context.Context, key []byte, txn pb.WaitTxn, fn func(Lock)) error
 	// getLockHolder returns the current holder if the lock is actively held.
 	getLockHolder(ctx context.Context, key []byte) (pb.WaitTxn, bool, error)
 	// getBind returns lock table binding

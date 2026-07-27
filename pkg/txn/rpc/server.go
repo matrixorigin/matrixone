@@ -41,11 +41,6 @@ var methodVersions = map[txn.TxnMethod]int64{
 	txn.TxnMethod_Commit:   defines.MORPCVersion1,
 	txn.TxnMethod_Rollback: defines.MORPCVersion1,
 
-	txn.TxnMethod_Prepare:         defines.MORPCVersion1,
-	txn.TxnMethod_CommitTNShard:   defines.MORPCVersion1,
-	txn.TxnMethod_RollbackTNShard: defines.MORPCVersion1,
-	txn.TxnMethod_GetStatus:       defines.MORPCVersion1,
-
 	txn.TxnMethod_DEBUG: defines.MORPCVersion1,
 }
 

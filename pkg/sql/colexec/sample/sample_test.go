@@ -15,8 +15,12 @@
 package sample
 
 import (
+	"bytes"
+	"runtime"
+	"runtime/debug"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -26,6 +30,134 @@ import (
 )
 
 const nullFlag = int64(-65535)
+
+const (
+	wideSampleRows  = 64
+	wideSampleBytes = 64 << 10
+)
+
+type sampleMemoryStats struct {
+	retainedBytes int64
+	peakBytes     int64
+}
+
+func makeSampleMemoryBatch(tb testing.TB, includeWide bool) (*batch.Batch, *mpool.MPool) {
+	tb.Helper()
+
+	mp := mpool.MustNewZeroNoFixed()
+	columnCount := 1
+	if includeWide {
+		columnCount++
+	}
+	bat := batch.NewWithSize(columnCount)
+	column := 0
+	if includeWide {
+		bat.Vecs[column] = vector.NewVec(types.T_text.ToType())
+		payload := bytes.Repeat([]byte{'x'}, wideSampleBytes)
+		for range wideSampleRows {
+			require.NoError(tb, vector.AppendBytes(bat.Vecs[column], payload, false, mp))
+		}
+		column++
+	}
+
+	bat.Vecs[column] = vector.NewVec(types.T_int8.ToType())
+	for i := range wideSampleRows {
+		require.NoError(tb, vector.AppendFixed(bat.Vecs[column], int8(i), false, mp))
+	}
+	bat.SetRowCount(wideSampleRows)
+	return bat, mp
+}
+
+func executeSampleMemoryCase(tb testing.TB, proc *process.Process, input *batch.Batch) sampleMemoryStats {
+	tb.Helper()
+
+	mp := proc.Mp()
+	pool := newSamplePoolByRows(proc, input.RowCount(), len(input.Vecs), false)
+	defer pool.Free()
+	if err := pool.Sample(1, input.Vecs, nil, input); err != nil {
+		tb.Fatal(err)
+	}
+	result, err := pool.Result(true)
+	if err != nil {
+		tb.Fatal(err)
+	}
+	if result.RowCount() != input.RowCount() {
+		tb.Fatalf("expected %d sampled rows, got %d", input.RowCount(), result.RowCount())
+	}
+
+	stats := sampleMemoryStats{
+		retainedBytes: int64(result.Allocated()),
+	}
+	result.Clean(mp)
+	if curr := mp.CurrNB(); curr != 0 {
+		tb.Fatalf("sample execution leaked %d mpool bytes", curr)
+	}
+	return stats
+}
+
+func measureSampleMemoryCase(tb testing.TB, includeWide bool) sampleMemoryStats {
+	tb.Helper()
+
+	input, inputMP := makeSampleMemoryBatch(tb, includeWide)
+	defer mpool.DeleteMPool(inputMP)
+	defer input.Clean(inputMP)
+
+	outputMP := mpool.MustNewZeroNoFixed()
+	defer mpool.DeleteMPool(outputMP)
+	proc := testutil.NewProcessWithMPool(tb, "", outputMP)
+	defer proc.Free()
+
+	runtime.GC()
+	previousGCPercent := debug.SetGCPercent(-1)
+	defer debug.SetGCPercent(previousGCPercent)
+	var before runtime.MemStats
+	runtime.ReadMemStats(&before)
+	stats := executeSampleMemoryCase(tb, proc, input)
+	var after runtime.MemStats
+	runtime.ReadMemStats(&after)
+	stats.peakBytes = int64(after.HeapAlloc - before.HeapAlloc)
+	return stats
+}
+
+func TestSamplePrunedWideVarlenMemory(t *testing.T) {
+	unpruned := measureSampleMemoryCase(t, true)
+	pruned := measureSampleMemoryCase(t, false)
+
+	require.Positive(t, pruned.retainedBytes)
+	require.Positive(t, pruned.peakBytes)
+	require.Greater(t, unpruned.retainedBytes, pruned.retainedBytes*100)
+	require.Greater(t, unpruned.peakBytes, pruned.peakBytes*100)
+}
+
+func BenchmarkSamplePrunedWideVarlenMemory(b *testing.B) {
+	for _, test := range []struct {
+		name        string
+		includeWide bool
+	}{
+		{name: "unpruned_wide", includeWide: true},
+		{name: "pruned_carrier", includeWide: false},
+	} {
+		b.Run(test.name, func(b *testing.B) {
+			input, inputMP := makeSampleMemoryBatch(b, test.includeWide)
+			defer mpool.DeleteMPool(inputMP)
+			defer input.Clean(inputMP)
+
+			outputMP := mpool.MustNewZeroNoFixed()
+			defer mpool.DeleteMPool(outputMP)
+			proc := testutil.NewProcessWithMPool(b, "", outputMP)
+			defer proc.Free()
+
+			var retainedBytes int64
+			b.ReportAllocs()
+			b.ResetTimer()
+			for range b.N {
+				stats := executeSampleMemoryCase(b, proc, input)
+				retainedBytes += stats.retainedBytes
+			}
+			b.ReportMetric(float64(retainedBytes)/float64(b.N), "vector-retained-B/op")
+		})
+	}
+}
 
 func TestSamplePool(t *testing.T) {
 	proc := testutil.NewProcess(t)

@@ -34,18 +34,6 @@ const (
 	SpillFileServiceName = "__spill"
 )
 
-// Temporary table legacy constants (used by tests / temp-engine paths)
-const (
-	// TEMPORARY_DBNAME used to store all temporary table created by session.
-	// when a user tries to create a database with this name, will be rejected at the plan stage.
-	TEMPORARY_DBNAME = "%!%mo_temp_db"
-
-	// TEMPORARY_TABLE_TN_ADDR marked as virtual tn address only for temporary table
-	// When a TargetDN.address in TxnRequest is TEMPORARY_TABLE_TN_ADDR, this TxnRequest is for temporary table
-	// and execution flow will go to the func in handleTemp
-	TEMPORARY_TABLE_TN_ADDR = "%!%mo_temp_db_dn_address"
-)
-
 const (
 	MORPCMinVersion    int64 = math.MinInt64
 	MORPCVersion1      int64 = 1
@@ -54,3 +42,11 @@ const (
 	MORPCVersion4      int64 = 4 // start from 2.0.1
 	MORPCLatestVersion       = MORPCVersion4
 )
+
+// DefaultLockWaitTimeoutSeconds is shared by the frontend default and by
+// distributed-pipeline compatibility code. Keeping one value is important for
+// rolling upgrades: an older receiver ignores LockWaitTimeoutSet, so a newer
+// sender represents an explicit clear with this positive fallback in the
+// legacy LockWaitTimeout field instead of sending zero and reviving a stale
+// transaction override on the receiver.
+const DefaultLockWaitTimeoutSeconds int64 = 120

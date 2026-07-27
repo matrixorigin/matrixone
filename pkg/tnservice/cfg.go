@@ -182,7 +182,7 @@ type Config struct {
 		Storage struct {
 			// dataDir data dir used to store the data
 			dataDir string `toml:"-"`
-			// Backend txn storage backend implementation. [TAE|Mem], default TAE.
+			// Backend txn storage backend implementation. [TAE|MEMKV], default TAE.
 			Backend StorageType `toml:"backend"`
 		}
 

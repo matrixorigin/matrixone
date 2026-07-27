@@ -17,7 +17,6 @@ package frontend
 import (
 	"bytes"
 	"context"
-	"encoding/hex"
 	"encoding/json"
 	"reflect"
 	"regexp"
@@ -181,18 +180,33 @@ func runSql(
 	ctx context.Context, ses *Session, bh BackgroundExec, sql string,
 	streamChan chan executor.Result, errChan chan error,
 ) (sqlRet executor.Result, err error) {
+	return runSqlWithMode(ctx, ses, bh, sql, streamChan, errChan, false)
+}
 
-	useBackExec := false
+func runSqlWithBackExec(
+	ctx context.Context, ses *Session, bh BackgroundExec, sql string,
+) (sqlRet executor.Result, err error) {
+	// Locking reads must use the statement execution path so an RC snapshot
+	// refresh after a lock wait can retry within the caller's transaction.
+	return runSqlWithMode(ctx, ses, bh, sql, nil, nil, true)
+}
+
+func runSqlWithMode(
+	ctx context.Context, ses *Session, bh BackgroundExec, sql string,
+	streamChan chan executor.Result, errChan chan error, forceBackExec bool,
+) (sqlRet executor.Result, err error) {
+
+	useBackExec := forceBackExec
 	trimmedLower := strings.ToLower(strings.TrimSpace(sql))
-	if strings.HasPrefix(trimmedLower, "drop database") {
+	if !useBackExec && strings.HasPrefix(trimmedLower, "drop database") {
 		// Internal executor does not support DROP DATABASE (IsPublishing panics).
 		useBackExec = true
-	} else if dataBranchTempSQLNeedsBackExec(trimmedLower) {
+	} else if !useBackExec && dataBranchTempSQLNeedsBackExec(trimmedLower) {
 		// Branch diff/merge/pick temp tables do repeated DDL/DML in one shared txn.
 		// The internal SQL fast path skips per-statement workspace increments and can
 		// hit ErrTxnNeedRetryWithDefChanged in RC mode while these temp definitions churn.
 		useBackExec = true
-	} else if strings.Contains(strings.ToLower(snapConditionRegex.FindString(sql)), "snapshot") {
+	} else if !useBackExec && strings.Contains(strings.ToLower(snapConditionRegex.FindString(sql)), "snapshot") {
 		// SQLExecutor cannot resolve snapshot by name.
 		useBackExec = true
 	}
@@ -213,19 +227,29 @@ func runSql(
 	}
 
 	if useBackExec {
+		_, realBackExec := bh.(*backExec)
+		if forceBackExec && realBackExec {
+			bh.ClearExecResultBatches()
+		}
 		// export as CSV need this
 		// bh.(*backExec).backSes.SetMysqlResultSet(&MysqlResultSet{})
 		//for range tblStuff.def.visibleIdxes {
 		//	bh.(*backExec).backSes.mrs.AddColumn(&MysqlColumn{})
 		//}
 		if err = bh.Exec(ctx, sql); err != nil {
+			if forceBackExec && realBackExec {
+				bh.ClearExecResultBatches()
+			}
 			return
 		}
-		if _, ok := bh.(*backExec); ok {
+		if realBackExec {
 			bh.ClearExecResultSet()
-			sqlRet.Mp = ses.proc.Mp()
-			sqlRet.Batches = bh.GetExecResultBatches()
-			return
+			if !forceBackExec {
+				sqlRet.Mp = ses.proc.Mp()
+				sqlRet.Batches = bh.GetExecResultBatches()
+				return
+			}
+			return copyAndClearBackExecResult(ses, bh)
 		}
 
 		rs := bh.GetExecResultSet()
@@ -280,6 +304,24 @@ func runSql(
 	return sqlRet, nil
 }
 
+func copyAndClearBackExecResult(
+	ses *Session,
+	bh BackgroundExec,
+) (sqlRet executor.Result, err error) {
+	sqlRet.Mp = ses.proc.Mp()
+	defer bh.ClearExecResultBatches()
+
+	for _, bat := range bh.GetExecResultBatches() {
+		var copied *batch.Batch
+		if copied, err = bat.Dup(sqlRet.Mp); err != nil {
+			sqlRet.Close()
+			return executor.Result{}, err
+		}
+		sqlRet.Batches = append(sqlRet.Batches, copied)
+	}
+	return sqlRet, nil
+}
+
 // shouldUseLCAReaderFallback returns true only for recoverable snapshot-read
 // failures where an engine reader based fallback can preserve LCA semantics.
 // After GC, time travelling by account/db/table name can fail if no snapshot or
@@ -302,17 +344,10 @@ func shouldUseLCAReaderFallback(err error) bool {
 		moerr.IsMoErrCode(err, moerr.ErrParseError)
 }
 
-// scanSnapshotRelationByID scans a relation with a split-view strategy:
-//   - current relation: resolved at the current transaction view to collect
-//     only currently valid physical objects (avoid stale/GC'ed object names).
-//   - snapshot reader: rebuilt directly from the requested snapshot timestamp
-//     and the current relation's stable table handle, without re-resolving the
-//     historical relation through catalog name lookup.
-//
-// After GC, time travelling by account/db/table name can fail if no snapshot or
-// PITR history was created for the corresponding account/db/table. This helper
-// keeps object selection and row visibility decoupled so data-branch fallback
-// paths can still probe old snapshots without requiring snapshotRelation lookup.
+// scanSnapshotRelationByID scans a relation at an explicit snapshot using its
+// stable table ID. Both the relation handle and its ranges must be resolved at
+// that snapshot: current catalog ranges no longer contain a table-definition
+// row after the table has been altered, dropped, or recreated.
 func scanSnapshotRelationByID(
 	ctx context.Context,
 	caller string,
@@ -338,7 +373,11 @@ func scanSnapshotRelationByID(
 
 	storage := ses.GetTxnHandler().GetStorage()
 	baseTxnOp := ses.GetTxnHandler().GetTxn()
-	rangeTS := types.TimestampToTS(baseTxnOp.SnapshotTS())
+	rangeTxnOp := baseTxnOp
+	if !snapshotTS.IsEmpty() {
+		rangeTxnOp = baseTxnOp.CloneSnapshotOp(snapshotTS.ToTimestamp())
+	}
+	rangeTS := types.TimestampToTS(rangeTxnOp.SnapshotTS())
 	logutil.Info(
 		"DataBranch-SnapshotScan-Start",
 		zap.String("caller", caller),
@@ -350,14 +389,14 @@ func scanSnapshotRelationByID(
 		zap.Int("scan-parallelism", scanParallelism),
 	)
 
-	_, _, rangeRel, err := storage.GetRelationById(ctx, baseTxnOp, tableID)
+	_, _, rangeRel, err := storage.GetRelationById(ctx, rangeTxnOp, tableID)
 	if err != nil {
 		return err
 	}
 	if rangeRel == nil {
 		return moerr.NewInternalErrorNoCtxf(
-			"scanSnapshotRelationByID: cannot resolve range relation by id %d at current txn view",
-			tableID,
+			"scanSnapshotRelationByID: cannot resolve range relation by id %d at snapshot %s",
+			tableID, rangeTS.ToString(),
 		)
 	}
 
@@ -501,6 +540,53 @@ func formatValIntoString(ses *Session, val any, t types.Type, buf *bytes.Buffer)
 		default:
 			return moerr.NewInternalErrorNoCtxf("formatValIntoString: unexpected string type %T", val)
 		}
+	case types.T_datalink:
+		buf.WriteString("cast(")
+		switch x := val.(type) {
+		case []byte:
+			writeEscapedSQLString(buf, x)
+		case string:
+			writeEscapedSQLString(buf, []byte(x))
+		default:
+			return moerr.NewInternalErrorNoCtxf("formatValIntoString: unexpected datalink type %T", val)
+		}
+		buf.WriteString(" as datalink)")
+	case types.T_geometry, types.T_geometry32:
+		// Geometry cells hold bare WKB; an explicitly declared SRID is carried
+		// by the expression type in Width as srid+1. Reconstruct it with the
+		// two-argument constructor. Casting to generic geometry/geometry32 would
+		// replace that type with an unspecified-SRID type before INSERT.
+		buf.WriteString("st_geomfromtext(")
+		switch x := val.(type) {
+		case []byte:
+			writeEscapedSQLString(buf, x)
+		case string:
+			writeEscapedSQLString(buf, []byte(x))
+		default:
+			return moerr.NewInternalErrorNoCtxf("formatValIntoString: unexpected geometry type %T", val)
+		}
+		if t.Width > 0 {
+			buf.WriteString(", ")
+			writeInt(int64(t.Width - 1))
+		}
+		buf.WriteByte(')')
+	case types.T_uuid:
+		var uuid string
+		switch x := val.(type) {
+		case types.Uuid:
+			uuid = x.String()
+		case string:
+			uuid = x
+		case []byte:
+			uuid = string(x)
+		default:
+			return moerr.NewInternalErrorNoCtxf("formatValIntoString: unexpected uuid type %T", val)
+		}
+		writeEscapedSQLString(buf, []byte(uuid))
+	case types.T_enum:
+		writeUint(uint64(val.(types.Enum)))
+	case types.T_bit:
+		writeUint(val.(uint64))
 	case types.T_timestamp:
 		buf.WriteString("'")
 		buf.WriteString(val.(types.Timestamp).String2(ses.timeZone, t.Scale))
@@ -555,6 +641,22 @@ func formatValIntoString(ses *Session, val any, t types.Type, buf *bytes.Buffer)
 		buf.WriteString("'")
 		buf.WriteString(types.ArrayToString[float64](val.([]float64)))
 		buf.WriteString("'")
+	case types.T_array_bf16:
+		buf.WriteString("'")
+		buf.WriteString(types.ArrayToString[types.BF16](val.([]types.BF16)))
+		buf.WriteString("'")
+	case types.T_array_float16:
+		buf.WriteString("'")
+		buf.WriteString(types.ArrayToString[types.Float16](val.([]types.Float16)))
+		buf.WriteString("'")
+	case types.T_array_int8:
+		buf.WriteString("'")
+		buf.WriteString(types.ArrayToString[int8](val.([]int8)))
+		buf.WriteString("'")
+	case types.T_array_uint8:
+		buf.WriteString("'")
+		buf.WriteString(types.ArrayToString[uint8](val.([]uint8)))
+		buf.WriteString("'")
 	default:
 		return moerr.NewNotSupportedNoCtxf("formatValIntoString: not support type %v", t.Oid)
 	}
@@ -598,7 +700,10 @@ func extractDataBranchSQLRowValue(
 	}
 }
 
-// writeEscapedSQLString escapes special and control characters for SQL literal output.
+// writeEscapedSQLString emits a SQL literal that MatrixOne's default MySQL
+// scanner reads byte-for-byte. It uses the scanner's named escapes where
+// available and leaves all other control bytes raw: the scanner has no \xNN
+// escape syntax.
 func writeEscapedSQLString(buf *bytes.Buffer, b []byte) {
 	buf.WriteByte('\'')
 	for _, c := range b {
@@ -622,12 +727,7 @@ func writeEscapedSQLString(buf *bytes.Buffer, b []byte) {
 		case 0x1A:
 			buf.WriteString("\\Z")
 		default:
-			if c < 0x20 || c == 0x7f {
-				buf.WriteString("\\x")
-				buf.WriteString(hex.EncodeToString([]byte{c}))
-			} else {
-				buf.WriteByte(c)
-			}
+			buf.WriteByte(c)
 		}
 	}
 	buf.WriteByte('\'')
@@ -749,12 +849,20 @@ func compareValueFromVector(vec *vector.Vector, rowIdx int) (any, error) {
 		return vector.GetFixedAtNoTypeCheck[float32](vec, rowIdx), nil
 	case types.T_float64:
 		return vector.GetFixedAtNoTypeCheck[float64](vec, rowIdx), nil
-	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink, types.T_geometry:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink, types.T_geometry, types.T_geometry32:
 		return vec.GetBytesAt(rowIdx), nil
 	case types.T_array_float32:
 		return vector.GetArrayAt[float32](vec, rowIdx), nil
 	case types.T_array_float64:
 		return vector.GetArrayAt[float64](vec, rowIdx), nil
+	case types.T_array_bf16:
+		return vector.GetArrayAt[types.BF16](vec, rowIdx), nil
+	case types.T_array_float16:
+		return vector.GetArrayAt[types.Float16](vec, rowIdx), nil
+	case types.T_array_int8:
+		return vector.GetArrayAt[int8](vec, rowIdx), nil
+	case types.T_array_uint8:
+		return vector.GetArrayAt[uint8](vec, rowIdx), nil
 	case types.T_date:
 		return vector.GetFixedAtNoTypeCheck[types.Date](vec, rowIdx), nil
 	case types.T_datetime:
@@ -795,7 +903,7 @@ func normalizeCompareValue(typ types.Type, val any) (any, error) {
 		case []byte:
 			return types.DecodeJson(v), nil
 		}
-	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink, types.T_geometry:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink, types.T_geometry, types.T_geometry32:
 		switch v := val.(type) {
 		case []byte:
 			return v, nil
@@ -815,6 +923,34 @@ func normalizeCompareValue(typ types.Type, val any) (any, error) {
 			return v, nil
 		case []byte:
 			return types.BytesToArray[float64](v), nil
+		}
+	case types.T_array_bf16:
+		switch v := val.(type) {
+		case []types.BF16:
+			return v, nil
+		case []byte:
+			return types.BytesToArray[types.BF16](v), nil
+		}
+	case types.T_array_float16:
+		switch v := val.(type) {
+		case []types.Float16:
+			return v, nil
+		case []byte:
+			return types.BytesToArray[types.Float16](v), nil
+		}
+	case types.T_array_int8:
+		switch v := val.(type) {
+		case []int8:
+			return v, nil
+		case []byte:
+			return types.BytesToArray[int8](v), nil
+		}
+	case types.T_array_uint8:
+		// []uint8 IS []byte in Go, and for a uint8 vector the raw payload is
+		// already the element slice — so one case covers both spellings and
+		// BytesToArray would be a no-op reinterpretation.
+		if v, ok := val.([]byte); ok {
+			return v, nil
 		}
 	case types.T_decimal256:
 		return normalizeFixedCompareValue[types.Decimal256](typ, val)
@@ -883,6 +1019,10 @@ func compareSingleValueByType(typ types.T, left any, right any) (int, error) {
 		types.Uuid, types.TS, types.Blockid, types.Rowid,
 		[]byte, bytejson.ByteJson,
 		[]float32, []float64,
+		// narrow vector element slices — types.CompareValue handles these too.
+		// []uint8 is omitted deliberately: it is identical to []byte in Go and
+		// is already accepted above.
+		[]types.BF16, []types.Float16, []int8,
 		types.Enum, string:
 	default:
 		return 0, moerr.NewInternalErrorNoCtxf(

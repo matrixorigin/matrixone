@@ -420,6 +420,17 @@ func (bh *branchHashmap) flushPreparedEntries(shardEntries [][]int, chunk []prep
 		shardIdx := int(hash % uint64(bh.shardCount))
 		shardEntries[shardIdx] = append(shardEntries[shardIdx], i)
 	}
+
+	bh.metaMu.RLock()
+	if bh.closed {
+		bh.metaMu.RUnlock()
+		for range entries {
+			block.release()
+		}
+		return moerr.NewInternalErrorNoCtx("branchHashmap is closed")
+	}
+	defer bh.metaMu.RUnlock()
+
 	for idx, entryIdxs := range shardEntries {
 		if len(entryIdxs) == 0 {
 			continue
@@ -1514,7 +1525,14 @@ func (bh *branchHashmap) allocateBuffer(size uint64) ([]byte, malloc.Deallocator
 		return nil, nil, err
 	}
 	if buf == nil {
-		if err := bh.spill(size); err != nil {
+		bh.metaMu.RLock()
+		if bh.closed {
+			bh.metaMu.RUnlock()
+			return nil, nil, moerr.NewInternalErrorNoCtx("branchHashmap is closed")
+		}
+		err = bh.spill(size)
+		bh.metaMu.RUnlock()
+		if err != nil {
 			return nil, nil, err
 		}
 		buf, deallocator, err = bh.allocator.Allocate(size, malloc.NoClear)
@@ -1817,9 +1835,9 @@ func encodeDecodedValue(p *types.Packer, typ types.Type, v any) error {
 	case types.T_enum:
 		switch val := v.(type) {
 		case types.Enum:
-			p.EncodeUint16(uint16(val))
+			p.EncodeEnum(val)
 		case uint16:
-			p.EncodeUint16(val)
+			p.EncodeEnum(types.Enum(val))
 		default:
 			return moerr.NewInvalidInputNoCtx("expected enum value")
 		}
@@ -1905,7 +1923,7 @@ func encodeValue(p *types.Packer, vec *vector.Vector, row int) error {
 		p.EncodeBit(v)
 	case types.T_enum:
 		v := vector.GetFixedAtNoTypeCheck[types.Enum](vec, row)
-		p.EncodeUint16(uint16(v))
+		p.EncodeEnum(v)
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_json,
 		types.T_binary, types.T_varbinary, types.T_datalink,
 		types.T_array_float32, types.T_array_float64:

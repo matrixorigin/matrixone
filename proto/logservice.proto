@@ -216,6 +216,13 @@ message RSMState {
   // RequiredLsn is the first lsn position of upstream for datasync shard.
   // The entries before it have been synced.
   uint64 RequiredLsn = 6;
+  string WALRecoveryDigest = 7;
+  uint64 WALRecoveryEntryCount = 8;
+  uint64 WALRecoveryCompletedEntries = 9;
+  uint64 WALRecoveryBaseLsn = 10;
+  uint64 WALRecoveryLastLsn = 11;
+  uint64 WALRecoveryOriginalLeaseHolderID = 12;
+  bool WALRecoveryComplete = 13;
 }
 
 enum MethodType {
@@ -388,6 +395,8 @@ enum HAKeeperUpdateType {
   UpdateNonVotingReplicaNum = 15;
   UpdateNonVotingLocality = 16;
   LogShardUpdate = 17;
+  RestoreIDWatermarkUpdate = 18;
+  CompleteLogServiceRecoveryUpdate = 19;
 }
 
 // HAKeeperState state transition diagram
@@ -637,6 +646,13 @@ message InitialClusterRequest {
   uint64 NextID           = 4;
   map<string, uint64> NextIDByKey = 5;
   map<string, string> NonVotingLocality = 6;
+  bool LogServiceRecovery = 7;
+}
+
+message RestoreIDWatermarkRequest {
+  uint64 NextID = 1;
+  map<string, uint64> NextIDByKey = 2;
+  bool LogServiceRecovery = 3;
 }
 
 // LogStoreInfo contains information of all replicas found on a Log store.
@@ -681,6 +697,10 @@ message CheckerState {
   Resource Resource = 12 [(gogoproto.nullable) = false];
   uint64 NonVotingReplicaNum = 13;
   Locality NonVotingLocality = 14 [(gogoproto.nullable) = false];
+  bool LogServiceRecoveryPending = 15;
+  uint64 IDWatermarkRestoreGeneration = 16;
+  bool LogServiceRecoveryPrepared = 17;
+  bool LogServiceRecoveryCompleted = 18;
 }
 
 message DeletedStore {
@@ -723,6 +743,10 @@ message HAKeeperRSMState {
   // If it is set, that is strongly recommended, the non-voting replicas will
   // be scheduled to the stores which has such localities.
   Locality NonVotingLocality = 18 [(gogoproto.nullable) = false];
+  bool LogServiceRecoveryPending = 19;
+  uint64 IDWatermarkRestoreGeneration = 20;
+  bool LogServiceRecoveryPrepared = 21;
+  bool LogServiceRecoveryCompleted = 22;
 }
 
 // ReplicaInfo contains details of a replica

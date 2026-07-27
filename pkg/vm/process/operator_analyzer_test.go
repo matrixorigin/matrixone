@@ -19,10 +19,123 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestOperatorStatsCloneForExportDetachesMutableReferences(t *testing.T) {
+	query := &planpb.Query{
+		Steps:      []int32{1},
+		Headings:   []string{"source"},
+		DetectSqls: []string{"select 1"},
+		BackgroundQueries: []*planpb.Query{
+			{Steps: []int32{2}, Headings: []string{"nested"}},
+		},
+	}
+	source := &OperatorStats{
+		OperatorName:    "source",
+		CallNum:         7,
+		OperatorMetrics: map[MetricType]int64{OpScanTime: 11},
+		ExtraStats:      map[string]int64{"SpillBytes": 13},
+		BackgroundQueries: []*planpb.Query{
+			query,
+			nil,
+		},
+	}
+
+	got := source.CloneForExport()
+
+	require.Equal(t, source, got)
+	require.NotSame(t, source, got)
+	require.NotSame(t, source.BackgroundQueries[0], got.BackgroundQueries[0])
+	require.NotSame(t, source.BackgroundQueries[0].BackgroundQueries[0], got.BackgroundQueries[0].BackgroundQueries[0])
+	require.Nil(t, got.BackgroundQueries[1])
+
+	source.OperatorMetrics[OpScanTime] = 101
+	source.ExtraStats["SpillBytes"] = 103
+	source.BackgroundQueries[0].Steps[0] = 5
+	source.BackgroundQueries[0].Headings[0] = "mutated"
+	source.BackgroundQueries[0].BackgroundQueries[0].Headings[0] = "nested-mutated"
+	source.Reset()
+
+	require.Equal(t, "source", got.OperatorName)
+	require.Equal(t, 7, got.CallNum)
+	require.Equal(t, int64(11), got.OperatorMetrics[OpScanTime])
+	require.Equal(t, int64(13), got.ExtraStats["SpillBytes"])
+	require.Equal(t, int32(1), got.BackgroundQueries[0].Steps[0])
+	require.Equal(t, "source", got.BackgroundQueries[0].Headings[0])
+	require.Equal(t, "nested", got.BackgroundQueries[0].BackgroundQueries[0].Headings[0])
+
+	var nilStats *OperatorStats
+	require.Nil(t, nilStats.CloneForExport())
+}
+
+func TestOperatorStatsResourceDelta(t *testing.T) {
+	stats := OperatorStats{
+		TimeConsumed:     10,
+		WaitTimeConsumed: 20,
+		SpillSize:        30,
+		S3ReadSize:       40,
+		S3WriteSize:      41,
+		S3Head:           1,
+		S3Get:            2,
+		S3Put:            3,
+		S3List:           4,
+		S3Delete:         5,
+		S3DeleteMul:      6,
+		ResourceWaitNS:   [resource.WaitKindCount]int64{resource.WaitLock: 7, resource.WaitOther: 13},
+		OperatorMetrics:  map[MetricType]int64{OpWaitLockTime: 7},
+	}
+	delta := stats.ResourceDelta()
+	assert.Zero(t, delta.Quality)
+	assert.Equal(t, uint64(10), delta.Usage.ExclusiveActiveNS)
+	assert.Equal(t, uint64(7), delta.Usage.WaitNS[resource.WaitLock])
+	assert.Equal(t, uint64(13), delta.Usage.WaitNS[resource.WaitOther])
+	assert.Equal(t, uint64(30), delta.Usage.SpillBytes)
+	assert.Equal(t, uint64(40), delta.Usage.S3ReadBytes)
+	assert.Equal(t, uint64(41), delta.Usage.S3WriteBytes)
+	assert.Equal(t, [resource.S3OpCount]uint64{1, 2, 3, 4, 5, 6}, delta.Usage.S3Requests)
+
+	stats.TimeConsumed = -1
+	delta = stats.ResourceDelta()
+	assert.NotZero(t, delta.Quality&resource.QualityInvariantFailure)
+	assert.Zero(t, delta.Usage.ExclusiveActiveNS)
+}
+
+func TestOperatorAnalyzerRejectsNegativeObservedIntervals(t *testing.T) {
+	opAlyzr := NewAnalyzer(0, false, false, "test").(*operatorAnalyzer)
+	opAlyzr.Start()
+	opAlyzr.wait = -time.Nanosecond
+	opAlyzr.Stop()
+
+	assert.NotZero(t, opAlyzr.opStats.ResourceQuality&resource.QualityInvariantFailure)
+}
+
+func TestOperatorAnalyzerRejectsObservedIntervalLargerThanCall(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		wait  time.Duration
+		child time.Duration
+	}{
+		{name: "wait", wait: time.Hour},
+		{name: "child call", child: time.Hour},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			opAlyzr := NewAnalyzer(0, false, false, "test").(*operatorAnalyzer)
+			opAlyzr.Start()
+			opAlyzr.start = time.Now().Add(-time.Second)
+			opAlyzr.wait = test.wait
+			opAlyzr.childrenCallDuration = test.child
+			opAlyzr.Stop()
+
+			assert.Zero(t, opAlyzr.opStats.TimeConsumed)
+			assert.NotZero(t, opAlyzr.opStats.ResourceQuality&resource.QualityInvariantFailure)
+		})
+	}
+}
 
 func Test_operatorAnalyzer_AddWaitLockTime(t *testing.T) {
 	type fields struct {
@@ -223,7 +336,7 @@ func TestOperatorStats_String(t *testing.T) {
 		want   string
 	}{
 		{
-			// CallNum:154 TimeCost:54449492ns WaitTime:0ns InRows:1248064 OutRows:0 InSize:19969024bytes InBlock:153 OutSize:0bytes MemSize:131072bytes SpillSize:131072bytes ScanBytes:19969024bytes NetworkIO:0bytes DiskIO:7888601bytes CacheRead:428 CacheMemoryRead:428
+			// CallNum:154 TimeCost:54449492ns WaitTime:0ns InRows:1248064 OutRows:0 InSize:19969024bytes InBlock:153 OutSize:0bytes SpillSize:131072bytes ScanBytes:19969024bytes NetworkIO:0bytes DiskIO:7888601bytes CacheRead:428 CacheMemoryRead:428
 			name: "test01",
 			fields: fields{
 				OperatorName:     "testOp",
@@ -349,156 +462,122 @@ func TestOperatorStats_String(t *testing.T) {
 	}
 }
 
-func Test_operatorAnalyzer_AddReadSizeInfo(t *testing.T) {
-	type fields struct {
-		nodeIdx              int
-		isFirst              bool
-		isLast               bool
-		start                time.Time
-		wait                 time.Duration
-		childrenCallDuration time.Duration
-		opStats              *OperatorStats
-	}
-	type args struct {
-		counter *perfcounter.CounterSet
-	}
-	tests := []struct {
-		name      string
-		fields    fields
-		args      args
-		wantPanic bool
-		want      struct {
-			ReadSize     int64
-			S3ReadSize   int64
-			DiskReadSize int64
-		}
-	}{
-		{
-			name: "panic when opStats is nil",
-			fields: fields{
-				opStats: nil,
-			},
-			args: args{
-				counter: &perfcounter.CounterSet{},
-			},
-			wantPanic: true,
-		},
-		{
-			name: "normal case - add read size info from CounterSet",
-			fields: fields{
-				opStats: NewOperatorStats("testOp"),
-			},
-			args: args{
-				counter: func() *perfcounter.CounterSet {
-					cs := &perfcounter.CounterSet{}
-					cs.FileService.ReadSize.Add(1024 * 1024)    // 1MB
-					cs.FileService.S3ReadSize.Add(512 * 1024)   // 0.5MB
-					cs.FileService.DiskReadSize.Add(256 * 1024) // 0.25MB
-					return cs
-				}(),
-			},
-			wantPanic: false,
-			want: struct {
-				ReadSize     int64
-				S3ReadSize   int64
-				DiskReadSize int64
-			}{
-				ReadSize:     1024 * 1024,
-				S3ReadSize:   512 * 1024,
-				DiskReadSize: 256 * 1024,
-			},
-		},
-		{
-			name: "accumulate read size info from CounterSet",
-			fields: fields{
-				opStats: NewOperatorStats("testOp"),
-			},
-			args: args{
-				counter: func() *perfcounter.CounterSet {
-					cs := &perfcounter.CounterSet{}
-					cs.FileService.ReadSize.Add(2048 * 1024)    // 2MB
-					cs.FileService.S3ReadSize.Add(1536 * 1024)  // 1.5MB
-					cs.FileService.DiskReadSize.Add(512 * 1024) // 0.5MB
-					return cs
-				}(),
-			},
-			wantPanic: false,
-			want: struct {
-				ReadSize     int64
-				S3ReadSize   int64
-				DiskReadSize int64
-			}{
-				ReadSize:     2048 * 1024,
-				S3ReadSize:   1536 * 1024,
-				DiskReadSize: 512 * 1024,
-			},
-		},
-		{
-			name: "accumulate multiple times",
-			fields: fields{
-				opStats: NewOperatorStats("testOp"),
-			},
-			args: args{
-				counter: func() *perfcounter.CounterSet {
-					cs := &perfcounter.CounterSet{}
-					cs.FileService.ReadSize.Add(1024 * 1024)    // 1MB
-					cs.FileService.S3ReadSize.Add(512 * 1024)   // 0.5MB
-					cs.FileService.DiskReadSize.Add(256 * 1024) // 0.25MB
-					return cs
-				}(),
-			},
-			wantPanic: false,
-			want: struct {
-				ReadSize     int64
-				S3ReadSize   int64
-				DiskReadSize int64
-			}{
-				ReadSize:     1024 * 1024,
-				S3ReadSize:   512 * 1024,
-				DiskReadSize: 256 * 1024,
-			},
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if tt.wantPanic {
-				defer func() {
-					if r := recover(); r != nil {
-						t.Logf("operatorAnalyzer.AddReadSizeInfo() panic: %v", r)
-					} else {
-						t.Errorf("should catch operatorAnalyzer.AddReadSizeInfo() panic")
-					}
-				}()
-			}
+func TestOperatorAnalyzerHarvestsTerminalCounterIntervals(t *testing.T) {
+	opAlyzr := NewAnalyzer(0, false, false, "test").(*operatorAnalyzer)
+	opAlyzr.Start()
 
-			opAlyzr := &operatorAnalyzer{
-				nodeIdx:              tt.fields.nodeIdx,
-				isFirst:              tt.fields.isFirst,
-				isLast:               tt.fields.isLast,
-				start:                tt.fields.start,
-				wait:                 tt.fields.wait,
-				childrenCallDuration: tt.fields.childrenCallDuration,
-				opStats:              tt.fields.opStats,
-			}
-			opAlyzr.AddReadSizeInfo(tt.args.counter)
-			if !tt.wantPanic && opAlyzr.opStats != nil {
-				assert.Equalf(t, tt.want.ReadSize, opAlyzr.opStats.ReadSize, "AddReadSizeInfo() ReadSize")
-				assert.Equalf(t, tt.want.S3ReadSize, opAlyzr.opStats.S3ReadSize, "AddReadSizeInfo() S3ReadSize")
-				assert.Equalf(t, tt.want.DiskReadSize, opAlyzr.opStats.DiskReadSize, "AddReadSizeInfo() DiskReadSize")
-				// Test accumulation
-				if tt.name == "normal case - add read size info from CounterSet" {
-					cs2 := &perfcounter.CounterSet{}
-					cs2.FileService.ReadSize.Add(2048 * 1024)    // 2MB
-					cs2.FileService.S3ReadSize.Add(1024 * 1024)  // 1MB
-					cs2.FileService.DiskReadSize.Add(512 * 1024) // 0.5MB
-					opAlyzr.AddReadSizeInfo(cs2)
-					assert.Equalf(t, int64(3072*1024), opAlyzr.opStats.ReadSize, "AddReadSizeInfo() should accumulate ReadSize")
-					assert.Equalf(t, int64(1536*1024), opAlyzr.opStats.S3ReadSize, "AddReadSizeInfo() should accumulate S3ReadSize")
-					assert.Equalf(t, int64(768*1024), opAlyzr.opStats.DiskReadSize, "AddReadSizeInfo() should accumulate DiskReadSize")
-				}
-			}
+	first := opAlyzr.GetOpCounterSet()
+	first.FileService.S3.Get.Add(1)
+	first.FileService.ReadSize.Add(1024)
+	first.FileService.S3ReadSize.Add(512)
+
+	// Starting the next producer interval harvests the previous one.
+	second := opAlyzr.GetOpCounterSet()
+	assert.Equal(t, int64(1), opAlyzr.opStats.S3Get)
+	assert.Equal(t, int64(1024), opAlyzr.opStats.ReadSize)
+	second.FileService.S3.Put.Add(2)
+	second.FileService.S3WriteSize.Add(256)
+	second.ProtocolOutputWaitNS.Add(11)
+
+	// Stop is the terminal owner, including error and panic return paths.
+	opAlyzr.Stop()
+	assert.Equal(t, int64(2), opAlyzr.opStats.S3Put)
+	assert.Equal(t, int64(256), opAlyzr.opStats.S3WriteSize)
+	assert.Equal(t, int64(11), opAlyzr.opStats.ResourceWaitNS[resource.WaitOutput])
+	assert.Equal(t, int64(11), opAlyzr.opStats.WaitTimeConsumed)
+}
+
+func TestOperatorAnalyzerRejectsInvalidProtocolOutputWait(t *testing.T) {
+	opAlyzr := NewAnalyzer(0, false, false, "test").(*operatorAnalyzer)
+	opAlyzr.Start()
+	counter := opAlyzr.GetOpCounterSet()
+	counter.ProtocolOutputWaitNS.Store(-1)
+	opAlyzr.Stop()
+
+	assert.NotZero(t, opAlyzr.opStats.ResourceQuality&resource.QualityInvariantFailure)
+	assert.Zero(t, opAlyzr.opStats.ResourceWaitNS[resource.WaitOutput])
+	assert.Zero(t, counter.ProtocolOutputWaitNS.Load())
+}
+
+func TestOperatorAnalyzerLegacyAndTerminalHarvestExactlyOnce(t *testing.T) {
+	opAlyzr := NewAnalyzer(0, false, false, "test").(*operatorAnalyzer)
+	opAlyzr.Start()
+	counter := opAlyzr.GetOpCounterSet()
+	counter.FileService.S3.Get.Add(2)
+	counter.FileService.Cache.Read.Add(3)
+	counter.FileService.ReadSize.Add(4)
+	counter.FileService.S3ReadSize.Add(5)
+	counter.FileService.DiskReadSize.Add(6)
+	counter.FileService.S3WriteSize.Add(7)
+
+	opAlyzr.AddS3RequestCount(counter)
+	opAlyzr.AddFileServiceCacheInfo(counter)
+	opAlyzr.AddReadSizeInfo(counter)
+	// Repeated legacy calls on the analyzer-owned interval are also idempotent.
+	opAlyzr.AddS3RequestCount(counter)
+	opAlyzr.Stop()
+
+	assert.Equal(t, int64(2), opAlyzr.opStats.S3Get)
+	assert.Equal(t, int64(3), opAlyzr.opStats.CacheRead)
+	assert.Equal(t, int64(4), opAlyzr.opStats.ReadSize)
+	assert.Equal(t, int64(5), opAlyzr.opStats.S3ReadSize)
+	assert.Equal(t, int64(6), opAlyzr.opStats.DiskReadSize)
+	assert.Equal(t, int64(7), opAlyzr.opStats.S3WriteSize)
+}
+
+func TestHarvestExternalCounterSetAndTerminalWait(t *testing.T) {
+	analyzer := NewAnalyzer(0, false, false, "external-writer")
+	counter := new(perfcounter.CounterSet)
+	counter.FileService.S3.Put.Add(2)
+	counter.FileService.S3WriteSize.Add(256)
+
+	HarvestExternalCounterSet(analyzer, counter)
+	MeasureTerminalFilesystemWait(analyzer, func() {})
+
+	delta := analyzer.GetOpStats().ResourceDelta()
+	assert.Equal(t, uint64(2), delta.Usage.S3Requests[resource.S3Put])
+	assert.Equal(t, uint64(256), delta.Usage.S3WriteBytes)
+	assert.Positive(t, delta.Usage.WaitNS[resource.WaitFilesystem])
+	assert.Zero(t, counter.FileService.S3.Put.Load())
+	assert.Zero(t, counter.FileService.S3WriteSize.Load())
+}
+
+func TestMeasureFilesystemWaitRecordsTerminalPaths(t *testing.T) {
+	opAlyzr := NewAnalyzer(0, false, false, "test").(*operatorAnalyzer)
+
+	err := MeasureFilesystemWaitErr(opAlyzr, func() error {
+		return assert.AnError
+	})
+	assert.ErrorIs(t, err, assert.AnError)
+	first := opAlyzr.opStats.ResourceWaitNS[resource.WaitFilesystem]
+	assert.Positive(t, first)
+
+	assert.Panics(t, func() {
+		_ = MeasureFilesystemWaitErr(opAlyzr, func() error {
+			panic("storage panic")
 		})
-	}
+	})
+	assert.Greater(t, opAlyzr.opStats.ResourceWaitNS[resource.WaitFilesystem], first)
+}
+
+func TestMeasureWaitStopsAtBlockingBoundary(t *testing.T) {
+	opAlyzr := NewAnalyzer(0, false, false, "test").(*operatorAnalyzer)
+	opAlyzr.Start()
+
+	_, err := MeasureWait(opAlyzr, resource.WaitOther, func() (struct{}, error) {
+		time.Sleep(time.Millisecond)
+		return struct{}{}, nil
+	})
+	assert.NoError(t, err)
+	recordedWait := opAlyzr.opStats.ResourceWaitNS[resource.WaitOther]
+	assert.Positive(t, recordedWait)
+
+	// Work after the blocking call must remain active, not extend the wait.
+	time.Sleep(5 * time.Millisecond)
+	opAlyzr.Stop()
+	assert.Equal(t, recordedWait, opAlyzr.opStats.ResourceWaitNS[resource.WaitOther])
+	assert.Positive(t, opAlyzr.opStats.TimeConsumed)
+	assert.Zero(t, opAlyzr.opStats.ResourceQuality)
 }
 
 func Test_operatorAnalyzer_AddParquetProfile(t *testing.T) {
@@ -814,6 +893,22 @@ func TestOperatorAnalyzerAggregatesCountersAndStats(t *testing.T) {
 	require.Zero(t, stats.MemorySize)
 	require.Zero(t, stats.S3List)
 	require.Zero(t, stats.GetMetricByKey(OpScanTime))
+}
+
+func TestOperatorStatsExtraStats(t *testing.T) {
+	stats := NewOperatorStats("group")
+	stats.AddExtraStat("GroupSpillBuckets", 2)
+	stats.AddExtraStat("GroupSpillBuckets", 3)
+	stats.SetMaxExtraStat("GroupSpillMaxBucketRows", 7)
+	stats.SetMaxExtraStat("GroupSpillMaxBucketRows", 5)
+	stats.AddExtraStat("", 1)
+
+	require.Equal(t, int64(5), stats.ExtraStats["GroupSpillBuckets"])
+	require.Equal(t, int64(7), stats.ExtraStats["GroupSpillMaxBucketRows"])
+	require.Contains(t, stats.String(), "GroupSpillBuckets:5 GroupSpillMaxBucketRows:7 ")
+
+	stats.Reset()
+	require.Empty(t, stats.ExtraStats)
 }
 
 func TestOperatorStatsMetricHelpers(t *testing.T) {

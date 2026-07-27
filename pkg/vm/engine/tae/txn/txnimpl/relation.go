@@ -115,6 +115,11 @@ type txnRelation struct {
 	table *txnTable
 }
 
+// SetAutoIncrEpoch records the CN schema dependency for this relation.
+func (h *txnRelation) SetAutoIncrEpoch(version uint32) error {
+	return h.table.setExpectedAutoIncrEpoch(version)
+}
+
 func newRelation(table *txnTable) *txnRelation {
 	rel := &txnRelation{
 		TxnRelation: &txnbase.TxnRelation{
@@ -182,6 +187,13 @@ func (h *txnRelation) GetObject(id *types.Objectid, isTombstone bool) (obj handl
 
 func (h *txnRelation) CreateObject(isTombstone bool) (obj handle.Object, err error) {
 	return h.Txn.GetStore().CreateObject(h.table.entry.GetDB().ID, h.table.entry.GetID(), isTombstone)
+}
+
+func (h *txnRelation) CreateObjectWithOpt(isTombstone bool, opt *objectio.CreateObjOpt) (obj handle.Object, err error) {
+	if err = validateCreateObjectOpt(opt); err != nil {
+		return
+	}
+	return h.Txn.GetStore().CreateObjectWithOpt(h.table.entry.GetDB().ID, h.table.entry.GetID(), isTombstone, opt)
 }
 
 func (h *txnRelation) CreateNonAppendableObject(isTombstone bool, opt *objectio.CreateObjOpt) (obj handle.Object, err error) {

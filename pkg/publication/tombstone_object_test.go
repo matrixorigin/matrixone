@@ -527,16 +527,6 @@ func TestCoverageBoost2_UpstreamExecutor_EndTxn_NilTx_Rollback(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// sql_executor.go — ensureConnection with nil conn
-// ---------------------------------------------------------------------------
-
-func TestCoverageBoost2_UpstreamExecutor_EnsureConnection_AlreadyHasConn(t *testing.T) {
-	// When conn is not nil, ensureConnection is a no-op
-	// We can't easily set e.conn to a real *sql.DB without a database,
-	// but we test the other paths via ExecSQL
-}
-
-// ---------------------------------------------------------------------------
 // sql_executor.go — ExecSQL useTxn=true error
 // ---------------------------------------------------------------------------
 

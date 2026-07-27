@@ -86,14 +86,14 @@ func TestScheduledQueryWorkersDoesNotMaterializeLocalRoute(t *testing.T) {
 		{Id: "cn-local", Mcpu: 4},
 	}
 
-	require.Equal(t, schedule.Workers{{ID: "cn-local", Mcpu: 4}}, c.scheduledQueryWorkers())
+	require.Equal(t, schedule.Workers{{ID: "cn-local", Mcpu: 4, Route: schedule.WorkerRouteLocal}}, c.scheduledQueryWorkers())
 }
 
 func TestMaterializeScheduledWorkerUsesLocalRouteAtExecutionBoundary(t *testing.T) {
 	c := NewMockCompile(t)
 	c.addr = "cn-local:6001"
 
-	node := c.materializeScheduledWorker(schedule.Worker{ID: "cn-local", Mcpu: 4})
+	node := c.materializeScheduledWorker(schedule.Worker{ID: "cn-local", Mcpu: 4, Route: schedule.WorkerRouteLocal})
 	require.Equal(t, engine.Node{Id: "cn-local", Addr: "cn-local:6001", Mcpu: 4}, node)
 
 	remote := c.materializeScheduledWorker(schedule.Worker{ID: "cn-remote", Addr: "cn-remote:6001", Mcpu: 8})

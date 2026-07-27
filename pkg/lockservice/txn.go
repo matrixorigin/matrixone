@@ -153,11 +153,39 @@ func (txn *activeTxn) lockAdded(
 	return nil
 }
 
-func (txn *activeTxn) lockTableBindTouched(bind pb.LockTable) {
+func (txn *activeTxn) lockTableBindTouched(bind pb.LockTable) bool {
 	h := txn.getHoldLocksLocked(bind.Group)
-	if _, ok := h.tableBindIntents[bind.Table]; !ok {
-		h.tableBindIntents[bind.Table] = bind
+	if _, ok := h.tableBindIntents[bind.Table]; ok {
+		return false
 	}
+	h.tableBindIntents[bind.Table] = bind
+	return true
+}
+
+// iterLockTableBindsLocked visits every table touched by the transaction once.
+// Acquired binds take precedence over intents because they are authoritative.
+// The caller must hold txn's mutex.
+func (txn *activeTxn) iterLockTableBindsLocked(
+	fn func(group uint32, table uint64, bind pb.LockTable),
+) {
+	for group, h := range txn.lockHolders {
+		for table, bind := range h.tableBinds {
+			fn(group, table, bind)
+		}
+		for table, bind := range h.tableBindIntents {
+			if _, ok := h.tableBinds[table]; !ok {
+				fn(group, table, bind)
+			}
+		}
+	}
+}
+
+func (txn *activeTxn) lockTableBindsLocked() []pb.LockTable {
+	binds := make([]pb.LockTable, 0, len(txn.lockHolders))
+	txn.iterLockTableBindsLocked(func(_ uint32, _ uint64, bind pb.LockTable) {
+		binds = append(binds, bind)
+	})
+	return binds
 }
 
 func (txn *activeTxn) close(
@@ -253,6 +281,9 @@ func (txn *activeTxn) closeWithContextInternal(
 		for table, cs := range h.tableKeys {
 			l, err := lockTableFunc(group, table)
 			if err != nil {
+				if ctxErr := ctx.Err(); ctxErr != nil {
+					return ctxErr
+				}
 				// if a remote transaction, then the corresponding locktable should be local
 				// and cannot return an error.
 				//
@@ -333,7 +364,9 @@ func (txn *activeTxn) removeClosedLockTable(
 	}
 	delete(h.tableKeys, table)
 	delete(h.tableBinds, table)
-	delete(h.tableBindIntents, table)
+	// Keep the intent until the whole transaction closes. It owns the service
+	// drain reference even after this table was successfully released during a
+	// retryable, multi-table cleanup.
 	cs.close()
 	if len(h.tableKeys) == 0 && len(h.tableBinds) == 0 &&
 		len(h.tableBindIntents) == 0 {
@@ -460,16 +493,14 @@ func (txn *activeTxn) isRemoteLocked() bool {
 func (txn *activeTxn) incLockTableRef(m map[uint32]map[uint64]uint64, serviceID string) {
 	txn.RLock()
 	defer txn.RUnlock()
-	for _, h := range txn.lockHolders {
-		for _, l := range h.tableBinds {
-			if serviceID == l.ServiceID {
-				if _, ok := m[l.Group]; !ok {
-					m[l.Group] = make(map[uint64]uint64, 1024)
-				}
-				m[l.Group][l.Table]++
+	txn.iterLockTableBindsLocked(func(_ uint32, _ uint64, l pb.LockTable) {
+		if serviceID == l.ServiceID {
+			if _, ok := m[l.Group]; !ok {
+				m[l.Group] = make(map[uint64]uint64, 1024)
 			}
+			m[l.Group][l.Table]++
 		}
-	}
+	})
 }
 
 // ============================================================================================================================
@@ -478,15 +509,19 @@ func (txn *activeTxn) incLockTableRef(m map[uint32]map[uint64]uint64, serviceID 
 // ============================================================================================================================
 
 func (txn *activeTxn) fetchWhoWaitingMe(
+	ctx context.Context,
 	serviceID string,
 	txnID []byte,
 	waiters func(pb.WaitTxn, string) bool,
-	lockTableFunc func(uint32, uint64) (lockTable, error)) bool {
+	lockTableFunc func(context.Context, uint32, uint64) (lockTable, error)) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
 	txn.RLock()
 	// txn already closed
 	if !bytes.Equal(txn.txnID, txnID) {
 		txn.RUnlock()
-		return true
+		return true, nil
 	}
 	// if this is a remote transaction, meaning that all the information is in the
 	// remote, we need to execute the logic.
@@ -516,14 +551,17 @@ func (txn *activeTxn) fetchWhoWaitingMe(
 	}()
 
 	for idx, table := range tables {
-		l, err := lockTableFunc(groups[idx], table)
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
+		l, err := lockTableFunc(ctx, groups[idx], table)
 		if err != nil {
 			// if a remote transaction, then the corresponding locktable should be local
 			// and cannot return an error.
 			//
 			// or a local transaction holds a lock on remote lock table, but can not get
 			// the remote LockTable, it is a bug.
-			panic(err)
+			return false, err
 		}
 		if l == nil {
 			continue
@@ -531,9 +569,15 @@ func (txn *activeTxn) fetchWhoWaitingMe(
 
 		locks := lockKeys[idx]
 		hasDeadLock := false
+		var fetchErr error
 		waiterAddress := l.getBind().ServiceID
 		locks.iter(func(lockKey []byte) bool {
-			l.getLock(
+			if err := ctx.Err(); err != nil {
+				fetchErr = err
+				return false
+			}
+			if err := l.getLock(
+				ctx,
 				lockKey,
 				wt,
 				func(lock Lock) {
@@ -548,15 +592,24 @@ func (txn *activeTxn) fetchWhoWaitingMe(
 						hasDeadLock = !waiters(w.txn, waiterAddress)
 						return !hasDeadLock
 					})
-				})
+				}); err != nil {
+				fetchErr = err
+				return false
+			}
 			return !hasDeadLock
 		})
+		if fetchErr != nil {
+			return false, fetchErr
+		}
 
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
 		if hasDeadLock {
-			return false
+			return false, nil
 		}
 	}
-	return true
+	return true, nil
 }
 
 func (txn *activeTxn) toWaitTxn(serviceID string, locked bool) pb.WaitTxn {

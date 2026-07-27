@@ -586,22 +586,6 @@ func (r *CombinedRelData) DataSlice(begin, end int) engine.RelData {
 	panic("not implemented")
 }
 
-func (r *CombinedRelData) GetShardIDList() []uint64 {
-	panic("not implemented")
-}
-
-func (r *CombinedRelData) GetShardID(i int) uint64 {
-	panic("not implemented")
-}
-
-func (r *CombinedRelData) SetShardID(i int, id uint64) {
-	panic("not implemented")
-}
-
-func (r *CombinedRelData) AppendShardID(id uint64) {
-	panic("not implemented")
-}
-
 func (r *CombinedRelData) SetBlockInfo(i int, blk *objectio.BlockInfo) {
 	panic("not implemented")
 }

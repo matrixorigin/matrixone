@@ -705,6 +705,7 @@ func TestRunLCAProbeWithReaderFallback_PrepareAndPropagateReaderError(t *testing
 
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
 	txnOp.EXPECT().SnapshotTS().Return(types.BuildTS(10, 0).ToTimestamp()).AnyTimes()
+	txnOp.EXPECT().CloneSnapshotOp(gomock.Any()).Return(txnOp).Times(1)
 
 	eng := mock_frontend.NewMockEngine(ctrl)
 	rangeRel := mock_frontend.NewMockRelation(ctrl)
@@ -722,14 +723,7 @@ func TestRunLCAProbeWithReaderFallback_PrepareAndPropagateReaderError(t *testing
 
 	tblStuff := newTestBranchTableStuff(ctrl)
 	tblStuff.lcaRel = mock_frontend.NewMockRelation(ctrl)
-	lcaDef := &plan.TableDef{
-		DbName: "db1",
-		Name:   "lca_tbl",
-		Pkey: &plan.PrimaryKeyDef{
-			Names:       []string{"id"},
-			PkeyColName: "id",
-		},
-	}
+	lcaDef := newTestBranchTableDef("lca_tbl", "name")
 	tblStuff.lcaRel.(*mock_frontend.MockRelation).EXPECT().GetTableDef(gomock.Any()).Return(lcaDef).AnyTimes()
 	tblStuff.lcaRel.(*mock_frontend.MockRelation).EXPECT().GetTableID(gomock.Any()).Return(uint64(77)).AnyTimes()
 
@@ -779,14 +773,7 @@ func TestHandleDelsOnLCA_EarlyPaths(t *testing.T) {
 		tblStuff.lcaReaderProbeMode = &atomic.Bool{}
 		tblStuff.lcaReaderProbeMode.Store(true)
 
-		lcaDef := &plan.TableDef{
-			DbName: "db1",
-			Name:   "lca_tbl",
-			Pkey: &plan.PrimaryKeyDef{
-				Names:       []string{"id"},
-				PkeyColName: "id",
-			},
-		}
+		lcaDef := newTestBranchTableDef("lca_tbl", "name")
 		tblStuff.lcaRel.(*mock_frontend.MockRelation).EXPECT().GetTableDef(gomock.Any()).Return(lcaDef).AnyTimes()
 		tblStuff.lcaRel.(*mock_frontend.MockRelation).EXPECT().GetTableID(gomock.Any()).Return(uint64(77)).AnyTimes()
 
@@ -815,22 +802,8 @@ func newTestBranchTableStuff(ctrl *gomock.Controller) tableStuff {
 	tarRel := mock_frontend.NewMockRelation(ctrl)
 	baseRel := mock_frontend.NewMockRelation(ctrl)
 
-	tarTableDef := &plan.TableDef{
-		DbName: "db1",
-		Name:   "target",
-		Pkey: &plan.PrimaryKeyDef{
-			Names:       []string{"id"},
-			PkeyColName: "id",
-		},
-	}
-	baseTableDef := &plan.TableDef{
-		DbName: "db1",
-		Name:   "base",
-		Pkey: &plan.PrimaryKeyDef{
-			Names:       []string{"id"},
-			PkeyColName: "id",
-		},
-	}
+	tarTableDef := newTestBranchTableDef("target", "name")
+	baseTableDef := newTestBranchTableDef("base", "name")
 
 	tarRel.EXPECT().GetTableName().Return("target").AnyTimes()
 	baseRel.EXPECT().GetTableName().Return("base").AnyTimes()
@@ -852,6 +825,22 @@ func newTestBranchTableStuff(ctrl *gomock.Controller) tableStuff {
 	tblStuff.def.pkColIdxes = []int{0}
 	tblStuff.retPool = &retBatchList{}
 	return tblStuff
+}
+
+func newTestBranchTableDef(tableName, dataColumnName string) *plan.TableDef {
+	return &plan.TableDef{
+		DbName: "db1",
+		Name:   tableName,
+		Cols: []*plan.ColDef{
+			{Name: "id", ColId: 1, Seqnum: 0, Typ: plan.Type{Id: int32(types.T_int64)}},
+			{Name: dataColumnName, ColId: 2, Seqnum: 1, Typ: plan.Type{Id: int32(types.T_varchar)}},
+			{Name: "hidden", ColId: 3, Seqnum: 2, Typ: plan.Type{Id: int32(types.T_varchar)}},
+		},
+		Pkey: &plan.PrimaryKeyDef{
+			Names:       []string{"id"},
+			PkeyColName: "id",
+		},
+	}
 }
 
 func makeTestBranchTableStuffFakePK(tblStuff *tableStuff) {
@@ -936,20 +925,20 @@ func TestHandleDelsOnLCA_SQLPaths(t *testing.T) {
 		defer ctrl.Finish()
 
 		tblStuff := newTestBranchTableStuff(ctrl)
+		targetTblDef := tblStuff.tarRel.GetTableDef(context.Background())
+		targetTblDef.Cols[1].Name = "bb"
+		tblStuff.def.colNames[1] = "bb"
 		tblStuff.lcaRel = mock_frontend.NewMockRelation(ctrl)
-		lcaDef := &plan.TableDef{
-			DbName: "db1",
-			Name:   "lca_tbl",
-			Pkey: &plan.PrimaryKeyDef{
-				Names:       []string{"id"},
-				PkeyColName: "id",
-			},
-		}
+		lcaDef := newTestBranchTableDef("lca_tbl", "b")
 		tblStuff.lcaRel.(*mock_frontend.MockRelation).EXPECT().GetTableDef(gomock.Any()).Return(lcaDef).AnyTimes()
 		tblStuff.lcaRel.(*mock_frontend.MockRelation).EXPECT().GetTableID(gomock.Any()).Return(uint64(77)).AnyTimes()
 
 		bh := mock_frontend.NewMockBackgroundExec(ctrl)
-		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).Times(1)
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
+			require.Contains(t, sql, "lca.`b`")
+			require.NotContains(t, sql, "lca.`bb`")
+			return nil
+		}).Times(1)
 		bh.EXPECT().GetExecResultSet().Return([]interface{}{buildLCAProbeResultSet()}).Times(1)
 		bh.EXPECT().ClearExecResultSet().Times(1)
 
@@ -984,14 +973,7 @@ func TestHandleDelsOnLCA_SQLPaths(t *testing.T) {
 		tblStuff := newTestBranchTableStuff(ctrl)
 		tblStuff.lcaRel = mock_frontend.NewMockRelation(ctrl)
 		tblStuff.lcaReaderProbeMode = &atomic.Bool{}
-		lcaDef := &plan.TableDef{
-			DbName: "db1",
-			Name:   "lca_tbl",
-			Pkey: &plan.PrimaryKeyDef{
-				Names:       []string{"id"},
-				PkeyColName: "id",
-			},
-		}
+		lcaDef := newTestBranchTableDef("lca_tbl", "name")
 		tblStuff.lcaRel.(*mock_frontend.MockRelation).EXPECT().GetTableDef(gomock.Any()).Return(lcaDef).AnyTimes()
 		tblStuff.lcaRel.(*mock_frontend.MockRelation).EXPECT().GetTableID(gomock.Any()).Return(uint64(78)).AnyTimes()
 
@@ -1025,6 +1007,7 @@ func TestHandleDelsOnLCA_SQLPaths(t *testing.T) {
 
 		txnOp := mock_frontend.NewMockTxnOperator(ctrl)
 		txnOp.EXPECT().SnapshotTS().Return(types.BuildTS(10, 0).ToTimestamp()).AnyTimes()
+		txnOp.EXPECT().CloneSnapshotOp(gomock.Any()).Return(txnOp).Times(1)
 
 		eng := mock_frontend.NewMockEngine(ctrl)
 		rangeRel := mock_frontend.NewMockRelation(ctrl)
@@ -1043,14 +1026,7 @@ func TestHandleDelsOnLCA_SQLPaths(t *testing.T) {
 		tblStuff := newTestBranchTableStuff(ctrl)
 		tblStuff.lcaRel = mock_frontend.NewMockRelation(ctrl)
 		tblStuff.lcaReaderProbeMode = &atomic.Bool{}
-		lcaDef := &plan.TableDef{
-			DbName: "db1",
-			Name:   "lca_tbl",
-			Pkey: &plan.PrimaryKeyDef{
-				Names:       []string{"id"},
-				PkeyColName: "id",
-			},
-		}
+		lcaDef := newTestBranchTableDef("lca_tbl", "name")
 		tblStuff.lcaRel.(*mock_frontend.MockRelation).EXPECT().GetTableDef(gomock.Any()).Return(lcaDef).AnyTimes()
 		tblStuff.lcaRel.(*mock_frontend.MockRelation).EXPECT().GetTableID(gomock.Any()).Return(uint64(781)).AnyTimes()
 
@@ -1082,13 +1058,10 @@ func TestHandleDelsOnLCA_SQLPaths(t *testing.T) {
 
 		tblStuff := newTestBranchTableStuff(ctrl)
 		tblStuff.lcaRel = mock_frontend.NewMockRelation(ctrl)
-		lcaDef := &plan.TableDef{
-			DbName: "db1",
-			Name:   "lca_tbl",
-			Pkey: &plan.PrimaryKeyDef{
-				Names:       []string{"__mo_fake_pk_col"},
-				PkeyColName: "__mo_fake_pk_col",
-			},
+		lcaDef := newTestBranchTableDef("lca_tbl", "name")
+		lcaDef.Pkey = &plan.PrimaryKeyDef{
+			Names:       []string{"__mo_fake_pk_col"},
+			PkeyColName: "__mo_fake_pk_col",
 		}
 		baseRel := mock_frontend.NewMockRelation(ctrl)
 		baseDef := &plan.TableDef{
@@ -1130,13 +1103,10 @@ func TestHandleDelsOnLCA_SQLPaths(t *testing.T) {
 
 		tblStuff := newTestBranchTableStuff(ctrl)
 		tblStuff.lcaRel = mock_frontend.NewMockRelation(ctrl)
-		lcaDef := &plan.TableDef{
-			DbName: "db1",
-			Name:   "lca_tbl",
-			Pkey: &plan.PrimaryKeyDef{
-				Names:       []string{"id", "name"},
-				PkeyColName: "__cpkey__",
-			},
+		lcaDef := newTestBranchTableDef("lca_tbl", "name")
+		lcaDef.Pkey = &plan.PrimaryKeyDef{
+			Names:       []string{"id", "name"},
+			PkeyColName: "__cpkey__",
 		}
 		baseRel := mock_frontend.NewMockRelation(ctrl)
 		baseDef := &plan.TableDef{
@@ -1293,14 +1263,7 @@ func TestHashDiff_HasLCANoopUpdateFiltering(t *testing.T) {
 			tblStuff.hashmapAllocator = newBranchHashmapAllocator(dataBranchHashmapLimitRate)
 
 			lcaRel := mock_frontend.NewMockRelation(ctrl)
-			lcaDef := &plan.TableDef{
-				DbName: "db1",
-				Name:   "lca_tbl",
-				Pkey: &plan.PrimaryKeyDef{
-					Names:       []string{"id"},
-					PkeyColName: "id",
-				},
-			}
+			lcaDef := newTestBranchTableDef("lca_tbl", "name")
 			lcaRel.EXPECT().GetTableDef(gomock.Any()).Return(lcaDef).AnyTimes()
 			lcaRel.EXPECT().GetTableID(gomock.Any()).Return(uint64(77)).AnyTimes()
 			tblStuff.lcaRel = lcaRel
@@ -1410,14 +1373,7 @@ func TestHashDiff_HasLCAFakePKUpdateIsNotNoop(t *testing.T) {
 	tblStuff.hashmapAllocator = newBranchHashmapAllocator(dataBranchHashmapLimitRate)
 
 	lcaRel := mock_frontend.NewMockRelation(ctrl)
-	lcaDef := &plan.TableDef{
-		DbName: "db1",
-		Name:   "lca_tbl",
-		Pkey: &plan.PrimaryKeyDef{
-			Names:       []string{"id"},
-			PkeyColName: "id",
-		},
-	}
+	lcaDef := newTestBranchTableDef("lca_tbl", "name")
 	lcaRel.EXPECT().GetTableDef(gomock.Any()).Return(lcaDef).AnyTimes()
 	lcaRel.EXPECT().GetTableID(gomock.Any()).Return(uint64(77)).AnyTimes()
 	tblStuff.lcaRel = lcaRel
@@ -1733,6 +1689,33 @@ func TestLCAProbeJoinCastType(t *testing.T) {
 			require.Equal(t, tt.want, got)
 		})
 	}
+}
+
+func TestAppendLCAProbeValue(t *testing.T) {
+	mp := mpool.MustNewZero()
+
+	t.Run("restores enum code from right join label", func(t *testing.T) {
+		src := vector.NewVec(types.T_varchar.ToType())
+		dst := vector.NewVec(types.T_enum.ToType())
+		defer src.Free(mp)
+		defer dst.Free(mp)
+
+		require.NoError(t, vector.AppendBytes(src, []byte("blue"), false, mp))
+		require.NoError(t, appendLCAProbeValue(dst, src, 0, "red,blue,green", mp))
+		require.Equal(t, []types.Enum{2}, vector.MustFixedColWithTypeCheck[types.Enum](dst))
+	})
+
+	t.Run("rejects unsupported storage conversion", func(t *testing.T) {
+		src := vector.NewVec(types.T_varchar.ToType())
+		dst := vector.NewVec(types.T_int64.ToType())
+		defer src.Free(mp)
+		defer dst.Free(mp)
+
+		require.NoError(t, vector.AppendBytes(src, []byte("2"), false, mp))
+		err := appendLCAProbeValue(dst, src, 0, "", mp)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "unexpected LCA probe type conversion")
+	})
 }
 
 func TestValidateLeadingRowID(t *testing.T) {

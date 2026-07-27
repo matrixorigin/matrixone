@@ -104,7 +104,7 @@ func TestCagraMetricSupport(t *testing.T) {
 			bp := DefaultCagraBuildParams()
 			bp.IntermediateGraphDegree = 16
 			bp.GraphDegree = 8
-			idx, err := NewGpuCagra[float32](ds, count, dim, mc.metric, bp, []int{0}, 1, SingleGpu, ids)
+			idx, err := NewGpuCagra[float32, float32](ds, count, dim, mc.metric, bp, []int{0}, 1, SingleGpu, ids)
 			if err != nil {
 				t.Fatalf("build CAGRA(%s): %v", mc.name, err)
 			}
@@ -140,7 +140,7 @@ func TestIvfPqMetricSupport(t *testing.T) {
 			bp.M = 8
 			bp.BitsPerCode = 8
 			bp.KmeansTrainsetFraction = 1.0
-			idx, err := NewGpuIvfPq[float32](ds, count, dim, mc.metric, bp, []int{0}, 1, SingleGpu, ids)
+			idx, err := NewGpuIvfPq[float32, float32](ds, count, dim, mc.metric, bp, []int{0}, 1, SingleGpu, ids)
 			if err != nil {
 				t.Fatalf("build IVF-PQ(%s): %v", mc.name, err)
 			}

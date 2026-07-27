@@ -17,7 +17,10 @@ package disttae
 import (
 	"context"
 	"fmt"
+	"slices"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -57,6 +60,10 @@ type TableMetaReader struct {
 	state     int
 	//tblDef   *plan.TableDef
 	pState *logtailreplay.PartitionState
+
+	immutableOnly bool
+	maxObjects    int
+	objectCount   int
 }
 
 func (r *TableMetaReader) GetTableDef() *plan.TableDef {
@@ -91,6 +98,30 @@ func (r *TableMetaReader) addCloneSharedFile(
 func NewTableMetaReader(
 	ctx context.Context,
 	rel engine.Relation,
+) (engine.Reader, error) {
+	return newTableMetaReader(ctx, rel, false)
+}
+
+// NewImmutableTableMetaReader returns table metadata only when every visible
+// row and tombstone is already represented by an immutable object. It never
+// materializes appendable or in-memory data into temporary objects.
+func NewImmutableTableMetaReader(
+	ctx context.Context,
+	rel engine.Relation,
+	maxObjects int,
+) (engine.Reader, error) {
+	reader, err := newTableMetaReader(ctx, rel, true)
+	if err != nil {
+		return nil, err
+	}
+	reader.(*TableMetaReader).maxObjects = maxObjects
+	return reader, nil
+}
+
+func newTableMetaReader(
+	ctx context.Context,
+	rel engine.Relation,
+	immutableOnly bool,
 ) (engine.Reader, error) {
 
 	var (
@@ -132,6 +163,8 @@ func NewTableMetaReader(
 		//tblDef:   tblDef,
 		table:  table,
 		pState: pState,
+
+		immutableOnly: immutableOnly,
 	}, nil
 }
 
@@ -225,6 +258,11 @@ func (r *TableMetaReader) collect(
 	attrs []string,
 	colTypes []types.Type,
 ) (logs []zap.Field, err error) {
+	if r.immutableOnly {
+		if err = r.rejectInMemoryRows(isTombstone); err != nil {
+			return nil, err
+		}
+	}
 
 	var (
 		iter       objectio.ObjectIter
@@ -248,21 +286,46 @@ func (r *TableMetaReader) collect(
 	}
 
 	appendObjectStats := func(stats *objectio.ObjectStats, source cloneObjectSource) error {
+		if r.immutableOnly && stats.GetAppendable() {
+			return moerr.NewInvalidInputNoCtxf(
+				"table %s contains appendable objects; flush it before DUMP TABLE",
+				r.table.tableName,
+			)
+		}
 		if stats.GetCNCreated() || !stats.GetAppendable() {
+			if r.immutableOnly && r.maxObjects > 0 && r.objectCount >= r.maxObjects {
+				return moerr.NewInvalidInputNoCtxf(
+					"table %s contains more than %d objects",
+					r.table.tableName, r.maxObjects,
+				)
+			}
 			objCnt++
+			r.objectCount++
 			blkCnt += int(stats.BlkCnt())
 			rowCnt += int(stats.Rows())
 
-			if err = colexec.ExpandObjectStatsToBatch(mp, isTombstone, outBatch, false, *stats); err != nil {
-				return err
+			if r.immutableOnly {
+				statsIndex := 1
+				if isTombstone {
+					statsIndex = 0
+				}
+				if err = vector.AppendBytes(outBatch.Vecs[statsIndex], stats.Marshal(), false, mp); err != nil {
+					return err
+				}
+			} else {
+				if err = colexec.ExpandObjectStatsToBatch(mp, isTombstone, outBatch, false, *stats); err != nil {
+					return err
+				}
 			}
 
-			// Committed pState objects are owned outside this transaction and
-			// must survive any clone rollback. Txn-local objects can be shared
-			// by later ALTER/clone writes in this transaction, so intermediate
-			// workspace GC must keep them, but full transaction rollback must
-			// still delete them.
-			r.addCloneSharedFile(stats, source)
+			if !r.immutableOnly {
+				// Committed pState objects are owned outside this transaction and
+				// must survive any clone rollback. Txn-local objects can be shared
+				// by later ALTER/clone writes in this transaction, so intermediate
+				// workspace GC must keep them, but full transaction rollback must
+				// still delete them.
+				r.addCloneSharedFile(stats, source)
+			}
 
 		} else {
 			// we can see an appendable object, if the snapshot falls into [createTS, deleteTS).
@@ -298,6 +361,14 @@ func (r *TableMetaReader) collect(
 		fmt.Sprintf("%d-%d-%d", objCnt, blkCnt, rowCnt),
 	)
 	logs = append(logs, log1)
+	if r.immutableOnly {
+		statsIndex := 1
+		if isTombstone {
+			statsIndex = 0
+		}
+		outBatch.SetRowCount(outBatch.Vecs[statsIndex].Length())
+		return logs, nil
+	}
 
 	if isTombstone {
 		if log2, err = r.collectTombstoneOfAObjsAndInMem(
@@ -320,6 +391,43 @@ func (r *TableMetaReader) collect(
 	outBatch.SetRowCount(outBatch.Vecs[0].Length())
 
 	return logs, nil
+}
+
+func (r *TableMetaReader) rejectInMemoryRows(isTombstone bool) error {
+	iter := r.pState.NewRowsIter(r.snapshot, nil, isTombstone)
+	defer iter.Close()
+	if iter.Next() {
+		return moerr.NewInvalidInputNoCtxf(
+			"table %s contains in-memory rows; flush it before DUMP TABLE",
+			r.table.tableName,
+		)
+	}
+
+	wantType := INSERT
+	if isTombstone {
+		wantType = DELETE
+	}
+	found := false
+	r.table.getTxn().ForEachTableWrites(
+		r.table.db.databaseId,
+		r.table.tableId,
+		r.txnOffset,
+		func(entry Entry) {
+			if found || entry.typ != wantType || entry.bat == nil || entry.bat.IsEmpty() {
+				return
+			}
+			if slices.Index(entry.bat.Attrs, catalog.ObjectMeta_ObjectStats) == -1 {
+				found = true
+			}
+		},
+	)
+	if found {
+		return moerr.NewInvalidInputNoCtxf(
+			"table %s contains uncommitted in-memory rows; flush it before DUMP TABLE",
+			r.table.tableName,
+		)
+	}
+	return nil
 }
 
 func (r *TableMetaReader) collectDataOfAObjsAndInMem(

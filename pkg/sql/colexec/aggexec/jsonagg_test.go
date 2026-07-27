@@ -204,6 +204,35 @@ func TestBuildValueByteJsonCoversTypes(t *testing.T) {
 			require.NoError(t, vector.AppendBytes(v, raw, false, mg))
 			return v
 		}(), 0, map[string]any{"a": float64(1)}, ""},
+		// Narrow vector element types. json_arrayagg on such a column fell to
+		// the default arm and failed with "unsupported type for json aggregate"
+		// while the vecf32 column beside it worked. All four widen to JSON
+		// numbers, exactly as the vecf32 arm does — the point of the fixtures
+		// below is that a WRONG element type is visible in the value, not just
+		// in the rounding: -128/127 for int8 and 0/255 for uint8 alias the same
+		// two bytes, so a shared arm would swap them.
+		{"array_bf16", func() *vector.Vector {
+			v := vector.NewVec(types.T_array_bf16.ToType())
+			require.NoError(t, vector.AppendArrayList[types.BF16](v, [][]types.BF16{
+				{types.BF16FromFloat32(1.5), types.BF16FromFloat32(-2.5)}}, nil, mg))
+			return v
+		}(), 0, []any{1.5, -2.5}, ""},
+		{"array_float16", func() *vector.Vector {
+			v := vector.NewVec(types.T_array_float16.ToType())
+			require.NoError(t, vector.AppendArrayList[types.Float16](v, [][]types.Float16{
+				{types.Float16FromFloat32(1.5), types.Float16FromFloat32(-2.5)}}, nil, mg))
+			return v
+		}(), 0, []any{1.5, -2.5}, ""},
+		{"array_int8", func() *vector.Vector {
+			v := vector.NewVec(types.T_array_int8.ToType())
+			require.NoError(t, vector.AppendArrayList[int8](v, [][]int8{{-128, 127}}, nil, mg))
+			return v
+		}(), 0, []any{float64(-128), float64(127)}, ""},
+		{"array_uint8", func() *vector.Vector {
+			v := vector.NewVec(types.T_array_uint8.ToType())
+			require.NoError(t, vector.AppendArrayList[uint8](v, [][]uint8{{0, 255}}, nil, mg))
+			return v
+		}(), 0, []any{float64(0), float64(255)}, ""},
 		{"binary-error", buildVarlenVec(t, mg, types.T_binary.ToType(), []string{"a"}), 0, "", "binary data not supported"},
 		{"unsupported", buildFixedVec(t, mg, types.T_decimal256.ToType(), []types.Decimal256{{}}), 0, "", "unsupported type"},
 	}

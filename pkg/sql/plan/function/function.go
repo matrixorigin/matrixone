@@ -167,7 +167,9 @@ func GetFunctionByName(ctx context.Context, name string, args []types.Type) (r F
 		r.cannotRunInParallel = f.Overloads[r.overloadId].cannotParallel
 
 	case failedFunctionParametersWrong:
-		if f.isFunction() {
+		if check.invalidJSONArgumentIndex != 0 {
+			err = moerr.NewInvalidTypeForJSON(ctx, check.invalidJSONArgumentIndex, name)
+		} else if f.isFunction() {
 			err = moerr.NewInvalidArg(ctx, fmt.Sprintf("function %s", name), args)
 		} else {
 			err = moerr.NewInvalidArg(ctx, fmt.Sprintf("operator %s", name), args)
@@ -503,8 +505,9 @@ type checkResult struct {
 	status overloadCheckSituation
 
 	// if matched
-	idx       int
-	finalType []types.Type
+	idx                      int
+	finalType                []types.Type
+	invalidJSONArgumentIndex int
 }
 
 func newCheckResultWithSuccess(overloadId int) checkResult {
@@ -513,6 +516,13 @@ func newCheckResultWithSuccess(overloadId int) checkResult {
 
 func newCheckResultWithFailure(status overloadCheckSituation) checkResult {
 	return checkResult{status: status}
+}
+
+func newCheckResultWithInvalidJSONArgument(argumentIndex int) checkResult {
+	return checkResult{
+		status:                   failedFunctionParametersWrong,
+		invalidJSONArgumentIndex: argumentIndex,
+	}
 }
 
 func newCheckResultWithCast(overloadId int, castType []types.Type) checkResult {

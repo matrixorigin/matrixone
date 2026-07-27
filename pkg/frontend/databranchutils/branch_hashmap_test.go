@@ -17,6 +17,7 @@ package databranchutils
 import (
 	"fmt"
 	"math/rand"
+	"os"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -679,6 +680,88 @@ func TestBranchHashmapProjectClosed(t *testing.T) {
 
 	_, err = bh.Project([]int{0}, 0)
 	require.Nil(t, err)
+}
+
+func TestBranchHashmapPutRejectsAllocationCompletedAfterClose(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	allocator := newBlockingAllocator()
+	bh, err := NewBranchHashmap(WithBranchHashmapAllocator(allocator))
+	require.NoError(t, err)
+
+	key := buildInt64Vector(t, mp, []int64{1})
+	defer key.Free(mp)
+
+	putDone := make(chan error, 1)
+	go func() {
+		putDone <- bh.PutByVectors([]*vector.Vector{key}, []int{0})
+	}()
+
+	select {
+	case <-allocator.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("PutByVectors did not reach allocator")
+	}
+
+	require.NoError(t, bh.Close())
+	close(allocator.release)
+
+	select {
+	case err := <-putDone:
+		require.ErrorContains(t, err, "branchHashmap is closed")
+	case <-time.After(5 * time.Second):
+		t.Fatal("PutByVectors did not return after allocator was released")
+	}
+
+	require.NoError(t, bh.Close())
+	require.Zero(t, allocator.retainedBytes())
+}
+
+func TestBranchHashmapPutDoesNotSpillAfterClose(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	allocator := newBlockingNilFirstAllocator()
+	spillRoot := t.TempDir()
+	bh, err := NewBranchHashmap(
+		WithBranchHashmapAllocator(allocator),
+		WithBranchHashmapSpillRoot(spillRoot),
+	)
+	require.NoError(t, err)
+
+	key := buildInt64Vector(t, mp, []int64{1})
+	defer key.Free(mp)
+
+	putDone := make(chan error, 1)
+	go func() {
+		putDone <- bh.PutByVectors([]*vector.Vector{key}, []int{0})
+	}()
+
+	select {
+	case <-allocator.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("PutByVectors did not reach allocator")
+	}
+
+	require.NoError(t, bh.Close())
+	close(allocator.release)
+
+	select {
+	case err := <-putDone:
+		require.ErrorContains(t, err, "branchHashmap is closed")
+	case <-time.After(5 * time.Second):
+		t.Fatal("PutByVectors did not return after allocator was released")
+	}
+
+	entries, err := os.ReadDir(spillRoot)
+	require.NoError(t, err)
+	require.Empty(t, entries)
+	for _, shard := range bh.(*branchHashmap).shards {
+		require.Nil(t, shard.spill)
+		require.Empty(t, shard.spillDir)
+	}
+	require.Zero(t, allocator.retainedBytes())
 }
 
 func TestBranchHashmapItemCountSpilled(t *testing.T) {
@@ -1660,7 +1743,7 @@ func TestEncodeRowCoversManyTypes(t *testing.T) {
 				require.NoError(t, vector.AppendFixed(vec, types.Enum(42), false, mp))
 			},
 			assert: func(v any) {
-				require.Equal(t, uint16(42), uint16(v.(uint16)))
+				require.Equal(t, types.Enum(42), v.(types.Enum))
 			},
 		},
 		{
@@ -1776,6 +1859,64 @@ type limitedAllocator struct {
 	mu    sync.Mutex
 	limit uint64
 	used  uint64
+}
+
+type blockingAllocator struct {
+	entered  chan struct{}
+	release  chan struct{}
+	once     sync.Once
+	mu       sync.Mutex
+	used     uint64
+	allocs   int
+	nilFirst bool
+}
+
+func newBlockingAllocator() *blockingAllocator {
+	return &blockingAllocator{
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+}
+
+func newBlockingNilFirstAllocator() *blockingAllocator {
+	allocator := newBlockingAllocator()
+	allocator.nilFirst = true
+	return allocator
+}
+
+func (a *blockingAllocator) Allocate(size uint64, _ malloc.Hints) ([]byte, malloc.Deallocator, error) {
+	a.once.Do(func() { close(a.entered) })
+	<-a.release
+	a.mu.Lock()
+	a.allocs++
+	if a.nilFirst && a.allocs == 1 {
+		a.mu.Unlock()
+		return nil, nil, nil
+	}
+	a.used += size
+	a.mu.Unlock()
+	return make([]byte, int(size)), &blockingDeallocator{allocator: a, size: size}, nil
+}
+
+func (a *blockingAllocator) retainedBytes() uint64 {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.used
+}
+
+type blockingDeallocator struct {
+	allocator *blockingAllocator
+	size      uint64
+}
+
+func (d *blockingDeallocator) Deallocate() {
+	d.allocator.mu.Lock()
+	d.allocator.used -= d.size
+	d.allocator.mu.Unlock()
+}
+
+func (d *blockingDeallocator) As(malloc.Trait) bool {
+	return false
 }
 
 func newLimitedAllocator(limit uint64) *limitedAllocator {
@@ -2130,8 +2271,8 @@ func TestEncodeDecodedValue_AllTypes(t *testing.T) {
 		{name: "decimal128", typ: types.T_decimal128.ToType(), value: types.Decimal128{B0_63: 1, B64_127: 2}, expect: types.Decimal128{B0_63: 1, B64_127: 2}},
 		{name: "uuid", typ: types.T_uuid.ToType(), value: types.Uuid{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}, expect: types.Uuid{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}},
 		{name: "bit", typ: types.T_bit.ToType(), value: uint64(10), expect: uint64(10)},
-		{name: "enum_value", typ: types.T_enum.ToType(), value: types.Enum(7), expect: uint16(7)},
-		{name: "enum_uint16", typ: types.T_enum.ToType(), value: uint16(9), expect: uint16(9)},
+		{name: "enum_value", typ: types.T_enum.ToType(), value: types.Enum(7), expect: types.Enum(7)},
+		{name: "enum_uint16", typ: types.T_enum.ToType(), value: uint16(9), expect: types.Enum(9)},
 		{name: "ts_bytes", typ: types.T_TS.ToType(), value: []byte{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11}, expect: []byte{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11}},
 		{name: "default_bytes", typ: types.T_any.ToType(), value: []byte("fallback"), expect: []byte("fallback")},
 	}

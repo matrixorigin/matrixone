@@ -8,6 +8,17 @@ select cast('1e-3   ' as decimal(8,4));
 select cast('+0012' as unsigned) as r;
 select CAST('10x' as unsigned integer);
 
+
+# String-to-FLOAT/DOUBLE
+select cast('a' as double);
+select cast('abc123' as float);
+select cast('' as double);
+select cast('2020-01-01' as double);
+select cast('2020-01-01 12:34:56' as float);
+select cast('1abc' as double);
+select cast(X'' as double);
+select cast(_binary 'this-is-a-very-long-string' as double);
+
 # Explicit numeric casts clamp or wrap values that exceed the target range.
 select cast('999999999999999999999999' as signed);
 select cast('999999999999999999999999' as unsigned);

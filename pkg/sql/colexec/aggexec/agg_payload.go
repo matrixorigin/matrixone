@@ -129,7 +129,8 @@ func appendGroupConcatData(dst []byte, typ types.Type, data []byte) ([]byte, err
 	case types.T_time:
 		return fmt.Appendf(dst, "%v", util.UnsafeFromBytes[types.Time](data).String()), nil
 	case types.T_blob, types.T_text, types.T_datalink, types.T_varbinary, types.T_binary,
-		types.T_char, types.T_varchar, types.T_enum, types.T_array_float32, types.T_array_float64:
+		types.T_char, types.T_varchar, types.T_enum, types.T_array_float32, types.T_array_float64,
+		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8:
 		if err := isValidGroupConcatUnit(data); err != nil {
 			return nil, err
 		}

@@ -203,7 +203,7 @@ func (c *Compile) GetPlan() *plan.Plan {
 	return c.pn
 }
 
-func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*batch.Batch, *perfcounter.CounterSet) error, sql string) {
+func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*batch.Batch, *perfcounter.CounterSet) error, sql string) error {
 	// clean up the process for a new query.
 	proc.ResetQueryContext()
 	proc.ResetCloneTxnOperator()
@@ -217,8 +217,14 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 	if c.lockMeta != nil {
 		c.lockMeta.reset(c.proc)
 	}
+	rejectZeroTemporal, err := util.RejectZeroTemporalWritePolicy(proc)
+	if err != nil {
+		return err
+	}
 	for _, s := range c.scopes {
-		s.Reset(c)
+		if err = s.reset(c, rejectZeroTemporal); err != nil {
+			return err
+		}
 	}
 
 	for _, e := range c.filterExprExes {
@@ -250,6 +256,7 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 	if c.queryPlacement.Reason != "" {
 		c.recordQuerySchedulingTrace(c.queryPlacement)
 	}
+	return nil
 }
 
 func UpdateScopeTxnOffset(scope *Scope, txnOffset int) {
@@ -295,12 +302,14 @@ func (c *Compile) clear() {
 
 	c.cnList = c.cnList[:0]
 	c.queryPlacement = schedule.QueryDecision{}
+	c.querySchedulingIntent = schedule.SchedulingIntent{}
 	c.schedulingTrace = nil
 	c.schedulingAttempt = 0
 	c.stmt = nil
 	c.startAt = time.Time{}
 	c.needLockMeta = false
 	c.isInternal = false
+	c.resourceAttemptOwnerEligible = false
 	c.isPrepare = false
 	c.hasMergeOp = false
 	c.needBlock = false
@@ -1516,12 +1525,14 @@ func StrictSqlMode(proc *process.Process) (error, bool) {
 	if err != nil {
 		return err, false
 	}
-	if modeStr, ok := mode.(string); ok {
-		if strings.Contains(modeStr, "STRICT_TRANS_TABLES") || strings.Contains(modeStr, "STRICT_ALL_TABLES") {
-			return nil, true
-		}
+	return nil, process.IsStrictMode(mode)
+}
+
+func effectiveExternalStrictMode(proc *process.Process, param *tree.ExternParam, strict bool) bool {
+	if !strict || proc == nil || param == nil || param.ExternType != int32(plan.ExternType_LOAD) {
+		return strict
 	}
-	return nil, false
+	return !proc.GetStmtProfile().GetStatementIgnore()
 }
 
 func (c *Compile) getExternParam(proc *process.Process, externScan *plan.ExternScan, createsql string) (*tree.ExternParam, error) {
@@ -1852,6 +1863,7 @@ func (c *Compile) compileExternScanWithPlanNodeID(node *plan.Node, planNodeID in
 		return nil, err
 	}
 
+	strictSqlMode = effectiveExternalStrictMode(c.proc, param, strictSqlMode)
 	if param.ScanType == tree.INLINE {
 		return c.compileExternValueScan(node, param, strictSqlMode)
 	}
@@ -3595,6 +3607,24 @@ func (c *Compile) compileShuffleJoin(node, left, right *plan.Node, leftscopes, r
 	return c.compileDistributedShuffleJoin(node, left, right, leftscopes, rightscopes)
 }
 
+// canReuseDistributedShuffleJoin reports whether probeScopes already use the
+// physical layout required by distributed shuffle: one Mcpu=1 scope per
+// global bucket, ordered by stage node and then by that node's bucket index.
+// A packed scope (one scope with Mcpu=dop) is reusable only by the local
+// shared-pool implementation and must be reshuffled before distributed use.
+func canReuseDistributedShuffleJoin(probeScopes []*Scope, stageNodes engine.Nodes, dop int) bool {
+	if dop <= 0 || len(stageNodes) == 0 || len(probeScopes) != len(stageNodes)*dop {
+		return false
+	}
+	for i, scope := range probeScopes {
+		if scope == nil || scope.NodeInfo.Mcpu != 1 ||
+			!sameExecutionNode(scope.NodeInfo, stageNodes[i/dop]) {
+			return false
+		}
+	}
+	return true
+}
+
 func (c *Compile) shuffleStageNodes(scopes []*Scope) engine.Nodes {
 	stageNodes := c.queryWorkerStageNodes()
 	if len(stageNodes) > 0 {
@@ -4683,8 +4713,9 @@ func (c *Compile) compileInsert(nodes []*plan.Node, node *plan.Node, ss []*Scope
 		// can produce few output rows (non-S3) yet still shuffle across CNs. So group the same-CN
 		// shuffle buckets (with their nested cross-CN dispatch) into one per-CN send unit *before*
 		// attaching Insert. This (a) keeps the dispatch in the same tree as all its local buckets
-		// so it is sent to its own CN instead of being converted to local on the coordinator and
-		// hanging (issue #24919), and (b) puts Insert on the per-CN container's RootOp chain
+		// so it remains standalone-executable on its own CN instead of failing before remote start
+		// (historically this was silently converted to local and hung; issue #24919), and (b) puts
+		// Insert on the per-CN container's RootOp chain
 		// (Insert -> Merge), so affectedRows() -- which walks the RootOp chain -- still counts it.
 		// Noop when ss carries no cross-CN shuffle dispatch.
 		ss = c.groupShuffleBucketsByCNIfNeeded(ss)
@@ -4710,7 +4741,8 @@ func (c *Compile) compileInsert(nodes []*plan.Node, node *plan.Node, ss []*Scope
 		c.anal.isFirst = false
 		// dataScope merges the buckets, but dataScope.MergeRun still sends each bucket as an
 		// individual RemoteRun unit, so a cross-CN shuffle dispatch here would hit the same
-		// convert-to-local hang. Group same-CN buckets into one per-CN send unit first (issue #24919).
+		// non-standalone remote-start failure. Group same-CN buckets into one per-CN send unit first
+		// (historically this was a convert-to-local hang; issue #24919).
 		ss = c.groupShuffleBucketsByCNIfNeeded(ss)
 		dataScope := c.newMergeScope(ss)
 		if c.anal.qry.LoadTag {
@@ -4789,8 +4821,8 @@ func (c *Compile) compileInsert(nodes []*plan.Node, node *plan.Node, ss []*Scope
 	currentFirstFlag = false
 	// Group a CN's dop shuffle buckets (and the shuffle dispatch nested under them) into one
 	// per-CN send unit before the coordinator merge, so the cross-CN shuffle dispatch is sent
-	// to and executed at its own CN instead of being converted to local on the coordinator
-	// (which mispairs the cross-CN receiver handshake and hangs -- issue #24919).
+	// to and executed at its own CN. Without grouping the tree is rejected before remote start;
+	// historically it was moved to the coordinator, mispaired the receiver, and hung (#24919).
 	ss = c.groupShuffleBucketsByCNIfNeeded(ss)
 	rs := c.newMergeScope(ss)
 	rs.Magic = MergeInsert
@@ -4856,8 +4888,8 @@ func (c *Compile) compileMultiUpdate(node *plan.Node, ss []*Scope) ([]*Scope, er
 
 		// Group a CN's dop shuffle buckets (and the shuffle dispatch nested under them) into one
 		// per-CN send unit before the coordinator merge, so the cross-CN shuffle dispatch is sent
-		// to and executed at its own CN instead of being converted to local on the coordinator
-		// (which mispairs the cross-CN receiver handshake and hangs -- issue #24919).
+		// to and executed at its own CN. Without grouping the tree is rejected before remote start;
+		// historically it was moved to the coordinator, mispaired the receiver, and hung (#24919).
 		ss = c.groupShuffleBucketsByCNIfNeeded(ss)
 		rs := ss[0]
 		if len(ss) > 1 || ss[0].NodeInfo.Mcpu > 1 {
@@ -5358,11 +5390,11 @@ func scopeTreeHasCrossCNDispatch(s *Scope) bool {
 // separate RemoteRun trees while the shuffle dispatch only attaches to the first bucket.
 // When the consumer (here compileInsert) sends each bucket individually, RemoteRun ->
 // checkPipelineStandaloneExecutableAtRemote sees the dispatch.LocalRegs pointing to the
-// sibling out-of-tree buckets, converts the pipeline to local on the coordinator, and the
-// dispatch then runs on the coordinator instead of its compile-time CN -- mispaired with
-// the cross-CN receiver's FromAddr -> the remote receiver's GetProcByUuid spins / merge
-// WaitingEnd waits forever -> hang. Regrouping by CN keeps all of a CN's buckets in one
-// tree, so the whole group is really executed at the remote CN and the pairing is correct.
+// sibling out-of-tree buckets, so the tree is not independently executable and must fail
+// before remote start. Historically RemoteRun silently moved that tree to the coordinator;
+// the dispatch then ran on the wrong CN, was mispaired with the cross-CN receiver's FromAddr,
+// and the remote receiver/merge could wait forever. Regrouping by CN keeps all of a CN's
+// buckets in one tree, so the whole group executes at the intended remote CN.
 //
 // It is a no-op unless we are multi-CN and ss actually carries a cross-CN shuffle dispatch,
 // so single-CN and non-shuffle inserts are completely unaffected.
@@ -5414,7 +5446,15 @@ func (c *Compile) newShuffleJoinScopeList(probeScopes, buildScopes []*Scope, nod
 		node.Stats.HashmapStats.ShuffleTypeForMultiCN = plan.ShuffleTypeForMultiCN_Simple
 	}
 
-	reuse := node.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reuse
+	dop := int(node.Stats.Dop)
+	bucketNum := len(cnlist) * dop
+	reuse := node.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reuse &&
+		canReuseDistributedShuffleJoin(probeScopes, cnlist, dop)
+	// Multi-CN DEDUP normalizes the probe scopes below by merging them, so the
+	// per-bucket layout cannot be reused by the distributed join.
+	if node.JoinType == plan.Node_DEDUP && len(cnlist) > 1 {
+		reuse = false
+	}
 	if !reuse {
 		probeScopes = c.mergeShuffleScopesIfNeeded(probeScopes, true)
 	}
@@ -5429,8 +5469,6 @@ func (c *Compile) newShuffleJoinScopeList(probeScopes, buildScopes []*Scope, nod
 		}
 	}
 
-	dop := int(node.Stats.Dop)
-	bucketNum := len(cnlist) * dop
 	shuffleProbes := make([]*Scope, 0, bucketNum)
 	shuffleBuilds := make([]*Scope, 0, bucketNum)
 
@@ -6261,6 +6299,13 @@ func (c *Compile) fatalLog(retry int, err error) {
 
 func (c *Compile) SetOriginSQL(sql string) {
 	c.originSQL = sql
+}
+
+// SetResourceAttemptOwnerEligible marks this Compile as the top-level
+// statement candidate allowed to publish retry generations. The statement
+// resource root enforces that at most one eligible Compile becomes the owner.
+func (c *Compile) SetResourceAttemptOwnerEligible() {
+	c.resourceAttemptOwnerEligible = true
 }
 
 func (c *Compile) SetBuildPlanFunc(buildPlanFunc func(ctx context.Context) (*plan2.Plan, error)) {

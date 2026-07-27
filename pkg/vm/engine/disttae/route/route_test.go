@@ -46,11 +46,12 @@ func TestRouteForCommonTenantCandidatesUsesWorkingSnapshot(t *testing.T) {
 		map[string]string{"account": "app"}, clusterservice.EQ_Globbing)
 
 	var selected []string
-	err := RouteForCommonTenantCandidates(context.Background(), candidates, selector, nil, func(service *metadata.CNService) {
+	resolution, err := ResolveForCommonTenantCandidates(context.Background(), candidates, selector, nil, func(service *metadata.CNService) {
 		selected = append(selected, service.ServiceID)
 	})
 
 	assert.NoError(t, err)
+	assert.Equal(t, PoolResolutionSharedUnlabeled, resolution)
 	assert.Equal(t, []string{"fallback"}, selected)
 }
 
@@ -66,11 +67,12 @@ func TestRouteForSuperTenantCandidatesDoesNotMutateLabels(t *testing.T) {
 	}}
 
 	var selected []string
-	err := RouteForSuperTenantCandidates(context.Background(), candidates, selector, "root", nil, func(service *metadata.CNService) {
+	resolution, err := ResolveForSuperTenantCandidates(context.Background(), candidates, selector, "root", nil, func(service *metadata.CNService) {
 		selected = append(selected, service.ServiceID)
 	})
 
 	assert.NoError(t, err)
+	assert.Equal(t, PoolResolutionNonAccountLabels, resolution)
 	assert.Equal(t, []string{"role-only"}, selected)
 	assert.Equal(t, map[string]string{"account": "sys", "role": "ap"}, labels)
 }

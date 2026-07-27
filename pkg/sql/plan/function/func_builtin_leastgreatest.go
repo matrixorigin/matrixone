@@ -297,6 +297,7 @@ func leastGreatestExecutorSupportsOid(oid types.T) bool {
 		types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_datalink,
 		types.T_binary, types.T_varbinary,
 		types.T_array_float32, types.T_array_float64,
+		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8,
 		types.T_date, types.T_datetime, types.T_time, types.T_timestamp, types.T_year,
 		types.T_decimal64, types.T_decimal128, types.T_decimal256,
 		types.T_Rowid:
@@ -1447,6 +1448,58 @@ func leastFn(parameters []*vector.Vector,
 				return types.ArrayCompare[float64](_v1, _v2) < 0
 			})
 
+	case types.T_array_bf16:
+		return leastGreatestFnVarlen(
+			parameters,
+			result,
+			proc,
+			length,
+			selectList,
+			func(v1, v2 []byte) bool {
+				// CompareArrayElementFromBytes covers every element type;
+				// types.ArrayCompare is constrained to RealNumbers.
+				return types.CompareArrayElementFromBytes[types.BF16](v1, v2, false) < 0
+			})
+
+	case types.T_array_float16:
+		return leastGreatestFnVarlen(
+			parameters,
+			result,
+			proc,
+			length,
+			selectList,
+			func(v1, v2 []byte) bool {
+				// CompareArrayElementFromBytes covers every element type;
+				// types.ArrayCompare is constrained to RealNumbers.
+				return types.CompareArrayElementFromBytes[types.Float16](v1, v2, false) < 0
+			})
+
+	case types.T_array_int8:
+		return leastGreatestFnVarlen(
+			parameters,
+			result,
+			proc,
+			length,
+			selectList,
+			func(v1, v2 []byte) bool {
+				// CompareArrayElementFromBytes covers every element type;
+				// types.ArrayCompare is constrained to RealNumbers.
+				return types.CompareArrayElementFromBytes[int8](v1, v2, false) < 0
+			})
+
+	case types.T_array_uint8:
+		return leastGreatestFnVarlen(
+			parameters,
+			result,
+			proc,
+			length,
+			selectList,
+			func(v1, v2 []byte) bool {
+				// CompareArrayElementFromBytes covers every element type;
+				// types.ArrayCompare is constrained to RealNumbers.
+				return types.CompareArrayElementFromBytes[uint8](v1, v2, false) < 0
+			})
+
 	case types.T_date:
 		return leastGreatestFnFixed(
 			parameters,
@@ -1769,6 +1822,58 @@ func greatestFn(parameters []*vector.Vector,
 				_v1 := types.BytesToArray[float64](v1)
 				_v2 := types.BytesToArray[float64](v2)
 				return types.ArrayCompare[float64](_v1, _v2) > 0
+			})
+
+	case types.T_array_bf16:
+		return leastGreatestFnVarlen(
+			parameters,
+			result,
+			proc,
+			length,
+			selectList,
+			func(v1, v2 []byte) bool {
+				// CompareArrayElementFromBytes covers every element type;
+				// types.ArrayCompare is constrained to RealNumbers.
+				return types.CompareArrayElementFromBytes[types.BF16](v1, v2, false) > 0
+			})
+
+	case types.T_array_float16:
+		return leastGreatestFnVarlen(
+			parameters,
+			result,
+			proc,
+			length,
+			selectList,
+			func(v1, v2 []byte) bool {
+				// CompareArrayElementFromBytes covers every element type;
+				// types.ArrayCompare is constrained to RealNumbers.
+				return types.CompareArrayElementFromBytes[types.Float16](v1, v2, false) > 0
+			})
+
+	case types.T_array_int8:
+		return leastGreatestFnVarlen(
+			parameters,
+			result,
+			proc,
+			length,
+			selectList,
+			func(v1, v2 []byte) bool {
+				// CompareArrayElementFromBytes covers every element type;
+				// types.ArrayCompare is constrained to RealNumbers.
+				return types.CompareArrayElementFromBytes[int8](v1, v2, false) > 0
+			})
+
+	case types.T_array_uint8:
+		return leastGreatestFnVarlen(
+			parameters,
+			result,
+			proc,
+			length,
+			selectList,
+			func(v1, v2 []byte) bool {
+				// CompareArrayElementFromBytes covers every element type;
+				// types.ArrayCompare is constrained to RealNumbers.
+				return types.CompareArrayElementFromBytes[uint8](v1, v2, false) > 0
 			})
 
 	case types.T_date:

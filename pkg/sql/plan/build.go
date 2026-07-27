@@ -387,6 +387,8 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*P
 		return bindAndOptimizeSelectQuery(plan.Query_SELECT, ctx, stmt, isPrepareStmt, false)
 	case *tree.ParenSelect:
 		return bindAndOptimizeSelectQuery(plan.Query_SELECT, ctx, stmt.Select, isPrepareStmt, false)
+	case *tree.ExplainStmt:
+		return buildExplainPlan(ctx, stmt.Statement, isPrepareStmt)
 	case *tree.ExplainAnalyze:
 		return buildExplainAnalyze(ctx, stmt, isPrepareStmt)
 	case *tree.ExplainPhyPlan:
@@ -412,7 +414,7 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*P
 	case *tree.DropDatabase:
 		return buildDropDatabase(stmt, ctx)
 	case *tree.CreateTable:
-		return buildCreateTable(ctx, stmt, nil)
+		return buildCreateTable(ctx, stmt, nil, isPrepareStmt)
 	case *tree.CreatePitr:
 		return buildCreatePitr(stmt, ctx)
 	case *tree.CreateCDC:
@@ -583,6 +585,8 @@ func GetResultColumnsFromPlan(p *Plan) []*ColDef {
 				{Typ: typ, Name: "Variable_name"},
 				{Typ: typ, Name: "Value"},
 			}
+		case plan.DataDefinition_CREATE_TABLE:
+			return nil
 		default:
 			// show statement(except show variables) will return a query
 			if logicPlan.Ddl.Query != nil {
