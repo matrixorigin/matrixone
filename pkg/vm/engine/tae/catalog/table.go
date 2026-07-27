@@ -665,13 +665,11 @@ func (entry *TableEntry) TryFindLastAppendableObject(isTombstone bool) (obj *Obj
 
 	// For Appendable objects:
 	// Deleting objects should be ignored, because they have been freezed, which is not valid for appending.
-	for ok := SeekObjectListGroupReverse(&it, ObjectListGroupAppendableCreate, txnif.UncommitTS); ok; ok = it.Prev() {
+	if SeekObjectListGroupReverse(&it, ObjectListGroupAppendableCreate, txnif.UncommitTS) {
 		itObj := it.Item()
-		if itObj.ObjectListGroup() != ObjectListGroupAppendableCreate {
-			break
+		if itObj.ObjectListGroup() == ObjectListGroupAppendableCreate {
+			obj = itObj
 		}
-		obj = itObj
-		break
 	}
 	if obj != nil && obj.CreatedAt.Physical() < ago {
 		obj = nil
