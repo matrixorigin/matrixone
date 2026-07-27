@@ -596,6 +596,10 @@ func NewRoutineManager(ctx context.Context, service string) (*RoutineManager, er
 	if !ok || pu == nil {
 		pu = getPu(service)
 	}
+	if pu == nil || pu.SV == nil {
+		cancel()
+		return nil, moerr.NewInternalError(ctx, "invalid parameter unit")
+	}
 	accountRoutine := &AccountRoutineManager{
 		killQueueMu:       sync.RWMutex{},
 		accountId2Routine: make(map[int64]map[*Routine]uint64),
@@ -613,7 +617,7 @@ func NewRoutineManager(ctx context.Context, service string) (*RoutineManager, er
 	}
 	sv := pu.SV
 	rm.cleanKillQueueInterval = time.Duration(sv.CleanKillQueueInterval) * time.Minute
-	if sv != nil && sv.EnableTls {
+	if sv.EnableTls {
 		err := initTlsConfig(rm, sv)
 		if err != nil {
 			cancel()

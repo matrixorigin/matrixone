@@ -543,6 +543,15 @@ func TestRoutineManagerConfigSnapshotAndCancel(t *testing.T) {
 	}
 }
 
+func TestRoutineManagerRejectsMissingFrontendParameters(t *testing.T) {
+	pu := config.NewParameterUnit(nil, nil, nil, nil)
+	ctx := context.WithValue(context.Background(), config.ParameterUnitKey, pu)
+
+	rm, err := NewRoutineManager(ctx, "")
+	require.Nil(t, rm)
+	require.ErrorContains(t, err, "invalid parameter unit")
+}
+
 func TestRoutineManagerCancelWaitsForActiveWorker(t *testing.T) {
 	rt, proto := newUnitTestRoutine(t, 1007)
 	blockingConn := &blockingCloseConn{
