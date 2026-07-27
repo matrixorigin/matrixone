@@ -1050,6 +1050,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, nodes []*plan.N
 		if err != nil {
 			return nil, err
 		}
+		ss = c.ensureUserLevelLockSideEffectsOnCoordinator(node, ss)
 		ss = c.compileSort(node, c.compileProjection(node, ss))
 		return ss, nil
 	case plan.Node_EXTERNAL_SCAN:
@@ -1063,6 +1064,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, nodes []*plan.N
 		if err != nil {
 			return nil, err
 		}
+		ss = c.ensureUserLevelLockSideEffectsOnCoordinator(nodeCopy, ss)
 		ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(nodeCopy, ss)))
 		return ss, nil
 	case plan.Node_TABLE_SCAN:
@@ -1073,18 +1075,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, nodes []*plan.N
 		if err != nil {
 			return nil, err
 		}
-
-		// Embed all static filters directly into TableScan.
-		// handleRuntimeFilters will set TableScan.RuntimeFilterExprs at execution time (before Prepare).
-		// This keeps TableScan as RootOp so compileProjection can push ProjectList into it.
-		if len(node.FilterList) > 0 {
-			for i := range ss {
-				if ts, ok := ss[i].RootOp.(*table_scan.TableScan); ok {
-					ts.FilterExprs = plan2.DeepCopyExprList(node.FilterList)
-				}
-			}
-		}
-		ss = c.compileProjection(node, ss)
+		ss = c.compileTableScanFiltersAndProjection(node, ss)
 
 		if node.Offset != nil {
 			ss = c.compileOffset(node, ss)
@@ -1099,6 +1090,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, nodes []*plan.N
 		if err != nil {
 			return nil, err
 		}
+		ss = c.ensureUserLevelLockSideEffectsOnCoordinator(node, ss)
 		ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, ss)))
 		return ss, nil
 	case plan.Node_FILTER, plan.Node_PROJECT:
@@ -1106,6 +1098,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, nodes []*plan.N
 		if err != nil {
 			return nil, err
 		}
+		ss = c.ensureUserLevelLockSideEffectsOnCoordinator(node, ss)
 
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
 		ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, ss)))
@@ -1120,6 +1113,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, nodes []*plan.N
 		anyDistinctAgg := groupInfo.AnyDistinctAgg()
 
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
+		ss = c.ensureUserLevelLockSideEffectsOnCoordinator(node, ss)
 		if node.Stats.HashmapStats != nil && node.Stats.HashmapStats.Shuffle {
 			ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, c.compileShuffleGroup(node, ss, nodes))))
 			return ss, nil
@@ -1137,6 +1131,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, nodes []*plan.N
 		}
 
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
+		ss = c.ensureUserLevelLockSideEffectsOnCoordinator(node, ss)
 		ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, c.compileSample(node, ss))))
 		return ss, nil
 	case plan.Node_WINDOW:
@@ -1146,6 +1141,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, nodes []*plan.N
 		}
 
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
+		ss = c.ensureUserLevelLockSideEffectsOnCoordinator(node, ss)
 		ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, c.compileWin(node, ss))))
 		return ss, nil
 	case plan.Node_TIME_WINDOW:
@@ -1155,6 +1151,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, nodes []*plan.N
 		}
 
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
+		ss = c.ensureUserLevelLockSideEffectsOnCoordinator(node, ss)
 		ss = c.compileProjection(node, c.compileRestrict(node, c.compileTimeWin(node, c.compileSort(node, ss))))
 		return ss, nil
 	case plan.Node_FILL:
@@ -1164,6 +1161,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, nodes []*plan.N
 		}
 
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
+		ss = c.ensureUserLevelLockSideEffectsOnCoordinator(node, ss)
 		ss = c.compileProjection(node, c.compileRestrict(node, c.compileFill(node, ss)))
 		return ss, nil
 	case plan.Node_JOIN:
@@ -1178,6 +1176,10 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, nodes []*plan.N
 
 		c.setAnalyzeCurrent(left, int(curNodeIdx))
 		c.setAnalyzeCurrent(right, int(curNodeIdx))
+		if nodeHasUserLevelLockFunction(node) {
+			left = c.ensureUserLevelLockSideEffectsOnCoordinator(node, left)
+			right = c.ensureUserLevelLockSideEffectsOnCoordinator(node, right)
+		}
 		ss = c.compileSort(node, c.compileJoin(node, nodes[node.Children[0]], nodes[node.Children[1]], left, right))
 		return ss, nil
 	case plan.Node_SORT:
@@ -1187,6 +1189,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, nodes []*plan.N
 		}
 
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
+		ss = c.ensureUserLevelLockSideEffectsOnCoordinator(node, ss)
 		ss = c.compileProjection(node, c.compileRestrict(node, c.compileSort(node, ss)))
 		return ss, nil
 	case plan.Node_PARTITION:
@@ -1196,6 +1199,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, nodes []*plan.N
 		}
 
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
+		ss = c.ensureUserLevelLockSideEffectsOnCoordinator(node, ss)
 		ss = c.compileProjection(node, c.compileRestrict(node, c.compilePartition(node, ss)))
 		return ss, nil
 	case plan.Node_UNION:
@@ -1210,7 +1214,9 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, nodes []*plan.N
 
 		c.setAnalyzeCurrent(left, int(curNodeIdx))
 		c.setAnalyzeCurrent(right, int(curNodeIdx))
-		ss = c.compileSort(node, c.compileUnion(node, left, right))
+		ss = c.compileUnion(node, left, right)
+		ss = c.ensureUserLevelLockSideEffectsOnCoordinator(node, ss)
+		ss = c.compileSort(node, ss)
 		return ss, nil
 	case plan.Node_MINUS, plan.Node_INTERSECT, plan.Node_INTERSECT_ALL:
 		left, err = c.compilePlanScope(step, node.Children[0], nodes)
@@ -1224,7 +1230,9 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, nodes []*plan.N
 
 		c.setAnalyzeCurrent(left, int(curNodeIdx))
 		c.setAnalyzeCurrent(right, int(curNodeIdx))
-		ss = c.compileSort(node, c.compileMinusAndIntersect(node, left, right, node.NodeType))
+		ss = c.compileMinusAndIntersect(node, left, right, node.NodeType)
+		ss = c.ensureUserLevelLockSideEffectsOnCoordinator(node, ss)
+		ss = c.compileSort(node, ss)
 		return ss, nil
 	case plan.Node_UNION_ALL:
 		left, err = c.compilePlanScope(step, node.Children[0], nodes)
@@ -1238,7 +1246,9 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, nodes []*plan.N
 
 		c.setAnalyzeCurrent(left, int(curNodeIdx))
 		c.setAnalyzeCurrent(right, int(curNodeIdx))
-		ss = c.compileSort(node, c.compileUnionAll(node, left, right))
+		ss = c.compileUnionAll(node, left, right)
+		ss = c.ensureUserLevelLockSideEffectsOnCoordinator(node, ss)
+		ss = c.compileSort(node, ss)
 		return ss, nil
 	case plan.Node_DELETE:
 		// Check if target table is a CCPR shared table (from publication)
@@ -1280,6 +1290,10 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, nodes []*plan.N
 		}
 
 		c.setAnalyzeCurrent(left, int(curNodeIdx))
+		if nodeHasUserLevelLockFunction(node) {
+			left = c.ensureUserLevelLockSideEffectsOnCoordinator(node, left)
+			right = c.ensureUserLevelLockSideEffectsOnCoordinator(node, right)
+		}
 		c.setAnalyzeCurrent(right, int(curNodeIdx))
 		return c.compileFuzzyFilter(node, nodes, left, right)
 	case plan.Node_PRE_INSERT_UK:
@@ -1344,6 +1358,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, nodes []*plan.N
 		}
 
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
+		ss = c.ensureUserLevelLockSideEffectsOnCoordinator(node, ss)
 		ss, err = c.compileLock(node, ss)
 		if err != nil {
 			return nil, err
@@ -1363,6 +1378,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, nodes []*plan.N
 		if err != nil {
 			return nil, err
 		}
+		ss = c.ensureUserLevelLockSideEffectsOnCoordinator(node, ss)
 		ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, ss)))
 		return ss, nil
 	case plan.Node_SINK_SCAN:
@@ -1371,6 +1387,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, nodes []*plan.N
 		if err != nil {
 			return nil, err
 		}
+		ss = c.ensureUserLevelLockSideEffectsOnCoordinator(node, ss)
 		ss = c.compileProjection(node, ss)
 		return ss, nil
 	case plan.Node_RECURSIVE_SCAN:
@@ -1399,6 +1416,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, nodes []*plan.N
 		}
 
 		c.setAnalyzeCurrent(left, int(curNodeIdx))
+		left = c.ensureUserLevelLockSideEffectsOnCoordinator(node, left)
 		ss = c.compileSort(node, c.compileApply(node, nodes[node.Children[1]], left))
 		return ss, nil
 	case plan.Node_POSTDML:
@@ -1408,6 +1426,7 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, nodes []*plan.N
 		}
 
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
+		ss = c.ensureUserLevelLockSideEffectsOnCoordinator(node, ss)
 		ss = c.compilePostDml(node, ss)
 		return ss, nil
 
@@ -1612,7 +1631,7 @@ func (c *Compile) getExternalFileListAndSize(node *plan.Node, param *tree.Extern
 			return nil, nil, err
 		}
 		spanReadDir.End()
-		fileList, fileSize, err = external.FilterFileList(c.proc.Ctx, node, c.proc, fileList, fileSize)
+		fileList, fileSize, node.FilterList, err = external.FilterFileList(c.proc.Ctx, node, c.proc, fileList, fileSize)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -1624,7 +1643,7 @@ func (c *Compile) getExternalFileListAndSize(node *plan.Node, param *tree.Extern
 		for i := range fileList {
 			fileList[i] = strings.TrimSpace(fileList[i])
 		}
-		fileList, fileSize, err = external.FilterFileList(c.proc.Ctx, node, c.proc, fileList, fileSize)
+		fileList, fileSize, node.FilterList, err = external.FilterFileList(c.proc.Ctx, node, c.proc, fileList, fileSize)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -1670,7 +1689,7 @@ func (c *Compile) getHivePartitionFileList(node *plan.Node, param *tree.ExternPa
 
 	if len(fpFilters) > 0 {
 		var leftover []*plan.Expr
-		fileList, fileSize, leftover, err = runFilePathFilters(c.proc.Ctx, c.proc, node.TableDef, fpFilters, fileList, fileSize)
+		fileList, fileSize, leftover, err = runFilePathFilters(c.proc.Ctx, c.proc, node, fpFilters, fileList, fileSize)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -1808,20 +1827,18 @@ func updateHivePartitionScanStats(node *plan.Node, basePath string, result *exte
 func runFilePathFilters(
 	ctx context.Context,
 	proc *process.Process,
-	tableDef *plan.TableDef,
+	node *plan.Node,
 	fpFilters []*plan.Expr,
 	fileList []string,
 	fileSize []int64,
 ) ([]string, []int64, []*plan.Expr, error) {
-	tmpNode := &plan.Node{
-		TableDef:   tableDef,
-		FilterList: fpFilters,
-	}
-	outFileList, outFileSize, err := external.FilterFileList(ctx, tmpNode, proc, fileList, fileSize)
+	filterNode := plan2.DeepCopyNode(node)
+	filterNode.FilterList = fpFilters
+	outFileList, outFileSize, leftover, err := external.FilterFileList(ctx, filterNode, proc, fileList, fileSize)
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	return outFileList, outFileSize, tmpNode.FilterList, nil
+	return outFileList, outFileSize, leftover, nil
 }
 
 func toLowerSet(cols []string) map[string]bool {
@@ -3119,7 +3136,11 @@ func shouldDispatchIvfSearchMultiCN(
 	cnList engine.Nodes,
 	workspace client.Workspace,
 ) bool {
+	// Runtime-filter messages are broadcast on the current CN's message board.
+	// Keep their consumer local; its entries reader can still fan out after the
+	// table function turns the message into a serializable membership payload.
 	return plan2.IsIvfSearchEntriesInternalScan(node) &&
+		len(node.GetRuntimeFilterProbeList()) == 0 &&
 		execType == plan2.ExecTypeAP_MULTICN &&
 		len(cnList) > 1 &&
 		(workspace == nil || workspace.Readonly()) &&
@@ -3399,9 +3420,43 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	return nil
 }
 
+func (c *Compile) compileTableScanFiltersAndProjection(node *plan.Node, ss []*Scope) []*Scope {
+	ss = c.ensureUserLevelLockSideEffectsOnCoordinator(node, ss)
+
+	hasUserLevelLockFilter := hasUserLevelLockFunction(node.FilterList)
+
+	// Embed ordinary static filters directly into TableScan.
+	// handleRuntimeFilters will set TableScan.RuntimeFilterExprs at execution time (before Prepare).
+	// This keeps TableScan as RootOp so compileProjection can push ProjectList into it.
+	embeddedStaticFilters := false
+	if len(node.FilterList) > 0 && !hasUserLevelLockFilter {
+		embeddedStaticFilters = true
+		for i := range ss {
+			if _, ok := ss[i].RootOp.(*table_scan.TableScan); !ok {
+				embeddedStaticFilters = false
+				break
+			}
+		}
+		if embeddedStaticFilters {
+			for i := range ss {
+				ss[i].RootOp.(*table_scan.TableScan).FilterExprs = plan2.DeepCopyExprList(node.FilterList)
+			}
+		}
+	}
+	if hasUserLevelLockFilter ||
+		runtimeFilterSpecsHaveUserLevelLockFunction(node.RuntimeFilterProbeList) ||
+		(len(node.FilterList) > 0 && !embeddedStaticFilters) {
+		ss = c.compileRestrict(node, ss)
+	}
+	return c.compileProjection(node, ss)
+}
+
 func (c *Compile) compileRestrict(node *plan.Node, ss []*Scope) []*Scope {
 	if len(node.FilterList) == 0 && len(node.RuntimeFilterProbeList) == 0 {
 		return ss
+	}
+	if hasUserLevelLockFunction(node.FilterList) || runtimeFilterSpecsHaveUserLevelLockFunction(node.RuntimeFilterProbeList) {
+		ss = c.ensureUserLevelLockSideEffectsOnCoordinator(node, ss)
 	}
 	currentFirstFlag := c.anal.isFirst
 	var op *filter.Filter
@@ -3417,6 +3472,10 @@ func (c *Compile) compileRestrict(node *plan.Node, ss []*Scope) []*Scope {
 func (c *Compile) compileProjection(node *plan.Node, ss []*Scope) []*Scope {
 	if len(node.ProjectList) == 0 {
 		return ss
+	}
+
+	if hasUserLevelLockFunction(node.ProjectList) {
+		ss = c.ensureUserLevelLockSideEffectsOnCoordinator(node, ss)
 	}
 
 	for i := range ss {
@@ -3476,6 +3535,125 @@ func (c *Compile) compileProjection(node *plan.Node, ss []*Scope) []*Scope {
 
 	c.anal.isFirst = false
 	return ss
+}
+
+func (c *Compile) ensureUserLevelLockSideEffectsOnCoordinator(node *plan.Node, ss []*Scope) []*Scope {
+	if !nodeHasUserLevelLockFunction(node) || c.userLevelLockSideEffectsRunOnCoordinator(ss) {
+		return ss
+	}
+	return []*Scope{c.newMergeScope(ss)}
+}
+
+func (c *Compile) userLevelLockSideEffectsRunOnCoordinator(ss []*Scope) bool {
+	if len(ss) != 1 {
+		return false
+	}
+	return ss[0].NodeInfo.Mcpu == 1 && sameExecutionAddr(ss[0].NodeInfo.Addr, c.addr)
+}
+
+func nodeHasUserLevelLockFunction(node *plan.Node) bool {
+	if node == nil {
+		return false
+	}
+	if hasUserLevelLockFunction(node.ProjectList) ||
+		hasUserLevelLockFunction(node.OnList) ||
+		hasUserLevelLockFunction(node.FilterList) ||
+		hasUserLevelLockFunction(node.GroupBy) ||
+		hasUserLevelLockFunction(node.AggList) ||
+		hasUserLevelLockFunction(node.WinSpecList) ||
+		orderBySpecsHaveUserLevelLockFunction(node.OrderBy) ||
+		exprHasUserLevelLockFunction(node.Limit) ||
+		exprHasUserLevelLockFunction(node.Offset) ||
+		hasUserLevelLockFunction(node.TblFuncExprList) ||
+		hasUserLevelLockFunction(node.BlockFilterList) ||
+		runtimeFilterSpecsHaveUserLevelLockFunction(node.RuntimeFilterProbeList) ||
+		runtimeFilterSpecsHaveUserLevelLockFunction(node.RuntimeFilterBuildList) ||
+		exprHasUserLevelLockFunction(node.Interval) ||
+		exprHasUserLevelLockFunction(node.Sliding) ||
+		exprHasUserLevelLockFunction(node.Timestamp) ||
+		exprHasUserLevelLockFunction(node.WEnd) ||
+		hasUserLevelLockFunction(node.FillVal) ||
+		hasUserLevelLockFunction(node.OnUpdateExprs) {
+		return true
+	}
+	if node.IndexReaderParam != nil {
+		return orderBySpecsHaveUserLevelLockFunction(node.IndexReaderParam.OrderBy) ||
+			exprHasUserLevelLockFunction(node.IndexReaderParam.Limit)
+	}
+	return false
+}
+
+func hasUserLevelLockFunction(exprs []*plan.Expr) bool {
+	for _, expr := range exprs {
+		if exprHasUserLevelLockFunction(expr) {
+			return true
+		}
+	}
+	return false
+}
+
+func exprHasUserLevelLockFunction(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_F:
+		if e.F == nil {
+			return false
+		}
+		if e.F.Func != nil {
+			fid, _ := function.DecodeOverloadID(e.F.Func.Obj)
+			if function.IsUserLevelLockFunctionID(fid) {
+				return true
+			}
+		}
+		return hasUserLevelLockFunction(e.F.Args)
+	case *plan.Expr_List:
+		if e.List == nil {
+			return false
+		}
+		return hasUserLevelLockFunction(e.List.List)
+	case *plan.Expr_W:
+		return windowSpecHasUserLevelLockFunction(e.W)
+	}
+	return false
+}
+
+func windowSpecHasUserLevelLockFunction(spec *plan.WindowSpec) bool {
+	if spec == nil {
+		return false
+	}
+	if exprHasUserLevelLockFunction(spec.WindowFunc) ||
+		hasUserLevelLockFunction(spec.PartitionBy) ||
+		orderBySpecsHaveUserLevelLockFunction(spec.OrderBy) {
+		return true
+	}
+	frame := spec.Frame
+	return frame != nil &&
+		(frameBoundHasUserLevelLockFunction(frame.Start) ||
+			frameBoundHasUserLevelLockFunction(frame.End))
+}
+
+func frameBoundHasUserLevelLockFunction(bound *plan.FrameBound) bool {
+	return bound != nil && exprHasUserLevelLockFunction(bound.Val)
+}
+
+func orderBySpecsHaveUserLevelLockFunction(specs []*plan.OrderBySpec) bool {
+	for _, spec := range specs {
+		if spec != nil && exprHasUserLevelLockFunction(spec.Expr) {
+			return true
+		}
+	}
+	return false
+}
+
+func runtimeFilterSpecsHaveUserLevelLockFunction(specs []*plan.RuntimeFilterSpec) bool {
+	for _, spec := range specs {
+		if spec != nil && exprHasUserLevelLockFunction(spec.Expr) {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *Compile) setProjection(node *plan.Node, s *Scope) {

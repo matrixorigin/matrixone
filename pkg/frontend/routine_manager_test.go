@@ -20,6 +20,8 @@ import (
 	"errors"
 	"io"
 	"net"
+	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -29,7 +31,14 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/lockservice"
+	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
+	"github.com/matrixorigin/matrixone/pkg/pb/query"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func Test_Closed(t *testing.T) {
@@ -372,4 +381,313 @@ func Test_rm(t *testing.T) {
 	setPu("", nil)
 	time.Sleep(2 * time.Second)
 	rm.cancelCtx()
+}
+
+func TestRoutineManagerRoutineMaps(t *testing.T) {
+	rm := &RoutineManager{
+		ctx:              context.Background(),
+		clients:          make(map[*Conn]*Routine),
+		routinesByConnID: make(map[uint32]*Routine),
+	}
+	rt, _ := newUnitTestRoutine(t, 1001)
+	conn := &Conn{conn: &testConn{}, remoteAddr: "remote"}
+
+	require.Nil(t, rm.getRoutine(conn))
+	require.Nil(t, rm.getRoutineByConnID(1001))
+
+	rm.setRoutine(conn, 1001, rt)
+	require.Same(t, rt, rm.getRoutine(conn))
+	require.Same(t, rt, rm.getRoutineByConnID(1001))
+	require.Equal(t, 1, rm.clientCount())
+
+	require.Same(t, rt, rm.deleteRoutine(conn))
+	require.Nil(t, rm.getRoutine(conn))
+	require.Nil(t, rm.getRoutineByConnID(1001))
+	require.Equal(t, 0, rm.clientCount())
+	require.Nil(t, rm.deleteRoutine(conn))
+}
+
+func TestAccountRoutineManagerRecordDeleteAndCopies(t *testing.T) {
+	ar := &AccountRoutineManager{
+		killIdQueue:       make(map[int64]KillRecord),
+		accountId2Routine: make(map[int64]map[*Routine]uint64),
+	}
+	rt, _ := newUnitTestRoutine(t, 1002)
+
+	ar.recordRoutine(sysAccountID, rt, 1)
+	require.Empty(t, ar.accountId2Routine)
+	ar.recordRoutine(10, nil, 1)
+	require.Empty(t, ar.accountId2Routine)
+
+	ar.recordRoutine(10, rt, 7)
+	require.Equal(t, uint64(7), ar.accountId2Routine[10][rt])
+
+	routineCopy := ar.deepCopyRoutineMap()
+	routineCopy[10][rt] = 8
+	require.Equal(t, uint64(7), ar.accountId2Routine[10][rt])
+
+	ar.EnKillQueue(sysAccountID, 1)
+	require.Empty(t, ar.killIdQueue)
+	ar.EnKillQueue(10, 3)
+	require.Equal(t, uint64(3), ar.killIdQueue[10].version)
+
+	killCopy := ar.deepCopyKillQueue()
+	killCopy[10] = NewKillRecord(time.Now(), 4)
+	require.Equal(t, uint64(3), ar.killIdQueue[10].version)
+
+	ar.AlterRoutineStatue(10, "restricted")
+	require.True(t, rt.isRestricted())
+	ar.AlterRoutineStatue(10, "normal")
+	require.False(t, rt.isRestricted())
+	ar.AlterRoutineStatue(sysAccountID, "restricted")
+	require.False(t, rt.isRestricted())
+
+	ar.deleteRoutine(sysAccountID, rt)
+	require.Contains(t, ar.accountId2Routine, int64(10))
+	ar.deleteRoutine(10, rt)
+	require.NotContains(t, ar.accountId2Routine, int64(10))
+}
+
+func TestRoutineManagerKillAndCleanKillQueue(t *testing.T) {
+	rt, _ := newUnitTestRoutine(t, 1003)
+	ses := &Session{}
+	rt.setSession(ses)
+	rm := &RoutineManager{
+		ctx:              context.Background(),
+		clients:          make(map[*Conn]*Routine),
+		routinesByConnID: map[uint32]*Routine{1003: rt},
+		accountRoutine: &AccountRoutineManager{
+			killIdQueue:       make(map[int64]KillRecord),
+			accountId2Routine: make(map[int64]map[*Routine]uint64),
+		},
+	}
+
+	require.ErrorContains(t, rm.kill(context.Background(), false, 1, 9999, ""), "Unknown connection id")
+
+	ses.SetQueryInExecute(true)
+	reqCtx, cancelReq := context.WithCancel(context.Background())
+	rt.setCancelRequestFunc(cancelReq)
+	require.NoError(t, rm.kill(context.Background(), false, 1, 1003, "stmt"))
+	require.ErrorIs(t, reqCtx.Err(), context.Canceled)
+	require.False(t, ses.GetQueryInExecute())
+
+	rt.setCancelled(false)
+	require.NoError(t, rm.kill(context.Background(), true, 1, 1003, ""))
+	require.True(t, rt.isCancelled())
+
+	pu := getPu("")
+	pu.SV.CleanKillQueueInterval = 1
+	rm.accountRoutine.killIdQueue[1] = NewKillRecord(time.Now().Add(-2*time.Minute), 1)
+	rm.accountRoutine.killIdQueue[2] = NewKillRecord(time.Now(), 1)
+	rm.cleanKillQueue()
+	require.NotContains(t, rm.accountRoutine.killIdQueue, int64(1))
+	require.Contains(t, rm.accountRoutine.killIdQueue, int64(2))
+}
+
+func TestRoutineManagerKillRoutineConnections(t *testing.T) {
+	rt, _ := newUnitTestRoutine(t, 1004)
+	ar := &AccountRoutineManager{
+		killIdQueue: map[int64]KillRecord{
+			20: NewKillRecord(time.Now(), 5),
+		},
+		accountId2Routine: map[int64]map[*Routine]uint64{
+			20: {rt: 5},
+		},
+	}
+	rm := &RoutineManager{
+		accountRoutine: ar,
+		service:        "",
+	}
+
+	rm.KillRoutineConnections()
+	require.True(t, rt.isCancelled())
+	require.NotContains(t, ar.accountId2Routine, int64(20))
+}
+
+func TestRoutineManagerMigrationAndResetErrorBranches(t *testing.T) {
+	rt, _ := newUnitTestRoutine(t, 1005)
+	ses := &Session{}
+	rt.setSession(ses)
+	rm := &RoutineManager{
+		ctx:              context.Background(),
+		routinesByConnID: map[uint32]*Routine{1005: rt},
+	}
+
+	require.ErrorContains(t,
+		rm.MigrateConnectionTo(context.Background(), &query.MigrateConnToRequest{ConnID: 404}),
+		"cannot get routine to migrate connection")
+	require.ErrorContains(t,
+		rm.MigrateConnectionFrom(&query.MigrateConnFromRequest{ConnID: 404}, &query.MigrateConnFromResponse{}),
+		"cannot get routine to migrate connection")
+	require.ErrorContains(t,
+		rm.ResetSession(&query.ResetSessionRequest{ConnID: 404}, &query.ResetSessionResponse{}),
+		"cannot get routine to clear session")
+
+	ses.userLevelLocksMigrated = false
+	require.NoError(t, rm.MigrateConnectionFrom(&query.MigrateConnFromRequest{
+		ConnID: 1005,
+		Action: query.MigrateConnFromAction_MigrateConnFromSkipUserLevelLockRelease,
+	}, &query.MigrateConnFromResponse{}))
+	require.True(t, ses.userLevelLocksMigrated)
+
+	ses.userLevelLocksMigrated = true
+	require.NoError(t, rm.MigrateConnectionFrom(&query.MigrateConnFromRequest{
+		ConnID: 1005,
+		Action: query.MigrateConnFromAction_MigrateConnFromEnableUserLevelLockRelease,
+	}, &query.MigrateConnFromResponse{}))
+	require.False(t, ses.userLevelLocksMigrated)
+
+	proc := testutil.NewProc(t)
+	proc.GetSessionInfo().Account = "acc"
+	proc.GetSessionInfo().ConnectionID = 1005
+	function.RestoreUserLevelLocksFromMigration(proc, []function.UserLevelLockState{
+		{Name: "held_lock", Count: 1},
+	})
+	defer function.DiscardMigratedUserLevelLocks(proc)
+	ses.proc = proc
+	require.ErrorContains(t, rm.MigrateConnectionFrom(&query.MigrateConnFromRequest{
+		ConnID: 1005,
+		Action: query.MigrateConnFromAction_MigrateConnFromSkipUserLevelLockRelease,
+	}, &query.MigrateConnFromResponse{}), "cannot migrate connection while user-level locks are held")
+}
+
+func TestRoutineMigrateConnectionFromRejectsUserLevelLocks(t *testing.T) {
+	rt, proto := newUnitTestRoutine(t, 1006)
+	proc := testutil.NewProc(t)
+	proc.GetSessionInfo().Account = "acc"
+	proc.GetSessionInfo().ConnectionID = 1006
+	function.RestoreUserLevelLocksFromMigration(proc, []function.UserLevelLockState{
+		{Name: "exported_lock", Count: 2},
+	})
+	defer function.DiscardMigratedUserLevelLocks(proc)
+
+	ses := &Session{
+		feSessionImpl: feSessionImpl{
+			respr: NewMysqlResp(proto),
+		},
+		proc: proc,
+		prepareStmts: map[string]*PrepareStmt{
+			"p1": {Name: "p1", Sql: "select ?"},
+		},
+	}
+	proto.SetStr(DBNAME, "db1")
+	rt.setSession(ses)
+
+	resp := &query.MigrateConnFromResponse{}
+	require.ErrorContains(t, rt.migrateConnectionFrom(resp), "cannot migrate connection while user-level locks are held")
+	require.Empty(t, resp.UserLevelLocks)
+	require.False(t, resp.UserLevelLockReleaseSupported)
+}
+
+func TestRoutineMigrateConnectionToClosedRoutine(t *testing.T) {
+	rt, _ := newUnitTestRoutine(t, 1008)
+	rt.mc.waitAndClose()
+
+	err := rt.migrateConnectionTo(context.Background(), &query.MigrateConnToRequest{})
+	require.ErrorContains(t, err, "cannot start migrate as routine has been closed")
+}
+
+func TestSessionCloseDiscardsMigratedUserLevelLocks(t *testing.T) {
+	proc := testutil.NewProc(t)
+	proc.GetSessionInfo().Account = "acc"
+	proc.GetSessionInfo().ConnectionID = 1007
+	function.RestoreUserLevelLocksFromMigration(proc, []function.UserLevelLockState{
+		{Name: "discarded_lock", Count: 1},
+	})
+
+	ses := &Session{
+		feSessionImpl: feSessionImpl{
+			userLevelLocksMigrated: true,
+		},
+		proc: proc,
+	}
+	ses.Close()
+	require.Empty(t, function.UserLevelLocksForMigration(proc))
+}
+
+func TestSessionCloseReleasesUserLevelLocksWhenNotMigrated(t *testing.T) {
+	proc := testutil.NewProc(t)
+	proc.GetSessionInfo().Account = "acc"
+	proc.GetSessionInfo().ConnectionID = 1009
+	lockService := &userLockCloseTestLockService{}
+	proc.Base.LockService = lockService
+	function.RestoreUserLevelLocksFromMigration(proc, []function.UserLevelLockState{
+		{Name: "disconnect_cleanup", Count: 1},
+	})
+
+	// Reproduce the next-statement SessionInfo refresh after the protocol's
+	// connection ID changed. The user-lock identity lives on BaseProcess and
+	// must survive this replacement until Session.Close releases the lock.
+	sessionID := proc.GetSessionInfo().SessionId
+	proc.Base.SessionInfo = process.SessionInfo{
+		Account:      "acc",
+		ConnectionID: 1010,
+		SessionId:    sessionID,
+	}
+
+	ses := &Session{
+		feSessionImpl: feSessionImpl{
+			userLevelLocksMigrated: false,
+		},
+		proc: proc,
+	}
+	ses.Close()
+	require.Empty(t, function.UserLevelLocksForMigration(proc))
+	require.Len(t, lockService.unlockedTxnIDs, 4)
+	var currentTxnIDs int
+	var legacyTxnIDs int
+	for _, txnID := range lockService.unlockedTxnIDs {
+		txnIDText := string(txnID)
+		require.NotContains(t, txnIDText, "1010")
+		parts := strings.Split(txnIDText, "\x00")
+		switch len(parts) {
+		case 4:
+			connID, err := strconv.ParseUint(parts[3], 10, 64)
+			require.NoError(t, err)
+			require.Equal(t, uint64(1009), connID)
+			currentTxnIDs++
+		case 3:
+			legacyTxnIDs++
+		default:
+			require.Failf(t, "unexpected user lock txnID format", "txnID=%q", txnIDText)
+		}
+	}
+	require.Equal(t, 2, currentTxnIDs)
+	require.Equal(t, 2, legacyTxnIDs)
+	owner, connID := proc.GetUserLevelLockIdentity()
+	require.NotEmpty(t, owner)
+	require.Equal(t, uint64(1009), connID)
+}
+
+type userLockCloseTestLockService struct {
+	lockservice.LockService
+	unlockedTxnIDs [][]byte
+}
+
+func (s *userLockCloseTestLockService) Unlock(
+	_ context.Context,
+	txnID []byte,
+	_ timestamp.Timestamp,
+	_ ...lockpb.ExtraMutation,
+) error {
+	s.unlockedTxnIDs = append(s.unlockedTxnIDs, append([]byte(nil), txnID...))
+	return nil
+}
+
+func TestRoutineManagerContextAndConnectionInfoHelpers(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	rm := &RoutineManager{ctx: ctx, cancel: cancel}
+	require.Same(t, ctx, rm.getCtx())
+	rm.cancelCtx()
+	require.ErrorIs(t, ctx.Err(), context.Canceled)
+
+	var nilRM *RoutineManager
+	nilRM.cancelCtx()
+
+	require.Equal(t, "connection from remote-only", getConnectionInfo(&Conn{remoteAddr: "remote-only"}))
+
+	conn := &testConn{}
+	ioSession := &Conn{conn: conn, remoteAddr: "remote"}
+	require.Contains(t, getConnectionInfo(ioSession), "connection from")
+	require.Contains(t, getConnectionInfo(ioSession), "to")
 }
