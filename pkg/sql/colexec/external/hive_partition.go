@@ -1121,12 +1121,9 @@ func matchUintRange(dirVal, lowVal, highVal string, bitSize int) MatchResult {
 // appended to every external table's TableDef.Cols (query_builder.go:4902)
 // and its value is known before we open any parquet file.
 //
-// STATEMENT_ACCOUNT ("account") is deliberately excluded. It is not a
-// virtual column on Hive/Parquet tables — it is synthesized per-batch by
-// makeFilepathBatch (external.go:322) only for CSV external tables' tenant
-// filter evaluation. Including it here would misclassify any physical
-// column literally named "account" as a filepath filter and evaluate it
-// against getAccountCol(path), producing wrong results.
+// A physical column named "account" is deliberately excluded. QueryBuilder
+// appends only __mo_filepath as an external-table virtual column; account is
+// ordinary row data even when its name resembles a tenant path component.
 var filePathColSet = map[string]bool{
 	catalog.ExternalFilePath: true,
 }
