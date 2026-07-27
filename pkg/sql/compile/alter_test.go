@@ -281,6 +281,21 @@ func TestAdvanceAlterDataBranchLineageSnapshotRejectsOverflow(t *testing.T) {
 	require.ErrorContains(t, err, "timestamp limit")
 }
 
+func TestIsAlterAffectedPluginIndexMatchesIndexNamePartsAndIncludedColumns(t *testing.T) {
+	indexDef := &plan2.IndexDef{
+		IndexName:       "idx_vec",
+		Parts:           []string{"embedding"},
+		IncludedColumns: []string{"doc_id", catalog.CreateAlias("category")},
+	}
+
+	require.True(t, isAlterAffectedPluginIndex(indexDef, []string{"idx_vec"}))
+	require.True(t, isAlterAffectedPluginIndex(indexDef, []string{"embedding"}))
+	require.True(t, isAlterAffectedPluginIndex(indexDef, []string{"category"}))
+	require.False(t, isAlterAffectedPluginIndex(indexDef, []string{"other"}))
+	require.False(t, isAlterAffectedPluginIndex(indexDef, nil))
+	require.False(t, isAlterAffectedPluginIndex(nil, []string{"idx_vec"}))
+}
+
 type alterCopyInsertSpyExecutor struct {
 	insertSQL    string
 	insertErr    error

@@ -21,6 +21,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/schemaregistry"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -207,6 +208,8 @@ func TestRetrieveDataWIthJson(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create producer: %s", err)
 	}
+	defer p.Close()
+
 	type MessagePayload struct {
 		Name string `json:"name"`
 		Age  int32  `json:"age"`
@@ -215,16 +218,37 @@ func TestRetrieveDataWIthJson(t *testing.T) {
 		Name: "test_name",
 		Age:  100,
 	}
-	value, _ := json.Marshal(payload)
+	value, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("Failed to marshal message payload: %s", err)
+	}
 
 	// produce 100 messages
-	for i := 0; i < 100; i++ {
+	const messageCount = 100
+	deliveryChan := make(chan kafka.Event, messageCount)
+	for i := 0; i < messageCount; i++ {
 		err := p.Produce(&kafka.Message{
 			TopicPartition: kafka.TopicPartition{Topic: &topic, Partition: kafka.PartitionAny},
 			Value:          value,
-		}, nil)
+		}, deliveryChan)
 		if err != nil {
-			return
+			t.Fatalf("Failed to produce message: %s", err)
+		}
+	}
+	deliveryTimer := time.NewTimer(10 * time.Second)
+	defer deliveryTimer.Stop()
+	for i := 0; i < messageCount; i++ {
+		select {
+		case event := <-deliveryChan:
+			message, ok := event.(*kafka.Message)
+			if !ok {
+				t.Fatalf("Expected delivery report, got %T", event)
+			}
+			if message.TopicPartition.Error != nil {
+				t.Fatalf("Failed to deliver message: %s", message.TopicPartition.Error)
+			}
+		case <-deliveryTimer.C:
+			t.Fatal("Timed out waiting for message delivery")
 		}
 	}
 
@@ -253,7 +277,7 @@ func TestRetrieveDataWIthJson(t *testing.T) {
 
 	// Assertions
 	assert.Equal(t, 2, batch.VectorCount(), "Expected 2 vectors in the batch")
-	assert.Equal(t, batch.Vecs[0].Length(), 50, "Expected 50 row in the batch")
+	assert.Equal(t, 50, batch.Vecs[0].Length(), "Expected 50 row in the batch")
 }
 func TestPopulateBatchFromMSGWithJSON(t *testing.T) {
 

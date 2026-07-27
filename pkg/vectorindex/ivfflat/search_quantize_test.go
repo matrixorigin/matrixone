@@ -118,3 +118,156 @@ func TestScoreFromQuantized(t *testing.T) {
 	gotSq := q.scoreFromQuantized(quantizedSq, metric.DistFn_L2sqDistance, metric.Metric_L2sqDistance)
 	require.InDelta(t, sourceSq, gotSq, 1e-6)
 }
+
+func TestIncludeSearchSQLUsesEntriesVectorType(t *testing.T) {
+	query := []float32{-2.25, 0.5, 3.75}
+	mul, add := 10.0, -3.0
+
+	tests := []struct {
+		name       string
+		vectorType types.T
+		quantMul   float64
+		quantAdd   float64
+		decoder    string
+		payload    string
+	}{
+		{
+			name:       "bf16",
+			vectorType: types.T_array_bf16,
+			decoder:    "vecbf16_from_base64",
+			payload:    types.ArrayToBase64(types.Float32ToBF16Slice(query)),
+		},
+		{
+			name:       "float16",
+			vectorType: types.T_array_float16,
+			decoder:    "vecf16_from_base64",
+			payload:    types.ArrayToBase64(types.Float32ToFloat16Slice(query)),
+		},
+		{
+			name:       "int8 narrow",
+			vectorType: types.T_array_int8,
+			quantMul:   1,
+			decoder:    "vecint8_from_base64",
+			payload:    types.ArrayToBase64(quantizer.ApplyInt8(query, 1, 0)),
+		},
+		{
+			name:       "uint8 narrow",
+			vectorType: types.T_array_uint8,
+			quantMul:   1,
+			decoder:    "vecuint8_from_base64",
+			payload:    types.ArrayToBase64(quantizer.ApplyUint8(query, 1, 0)),
+		},
+		{
+			name:       "int8 quantized f32 or f64 base",
+			vectorType: types.T_array_int8,
+			quantMul:   mul,
+			quantAdd:   add,
+			decoder:    "vecint8_from_base64",
+			payload:    types.ArrayToBase64(quantizer.ApplyInt8(query, mul, add)),
+		},
+		{
+			name:       "uint8 quantized f32 or f64 base",
+			vectorType: types.T_array_uint8,
+			quantMul:   mul,
+			quantAdd:   add,
+			decoder:    "vecuint8_from_base64",
+			payload:    types.ArrayToBase64(quantizer.ApplyUint8(query, mul, add)),
+		},
+	}
+
+	tblcfg := vectorindex.IndexTableConfig{DbName: "db", EntriesTable: "entries"}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			idxcfg := vectorindex.IndexConfig{}
+			idxcfg.Ivfflat.Metric = uint16(metric.Metric_L2sqDistance)
+			idxcfg.Ivfflat.VectorType = int32(tc.vectorType)
+			idx := &IvfflatSearchIndex[float32]{QuantMul: tc.quantMul, QuantAdd: tc.quantAdd}
+			wantExpr := tc.decoder + "('" + tc.payload + "')"
+
+			roundSQL, err := idx.buildSearchRoundSQL(idxcfg, tblcfg, query, []int64{1, 2}, 7, []string{"payload"}, "", 5)
+			require.NoError(t, err)
+			require.Contains(t, roundSQL, wantExpr)
+			require.NotContains(t, roundSQL, "vecf32_from_base64")
+
+			exactSQL, err := idx.buildExactSearchSQL(idxcfg, tblcfg, query, 7, "11,12", []string{"payload"}, "")
+			require.NoError(t, err)
+			require.Contains(t, exactSQL, wantExpr)
+			require.NotContains(t, exactSQL, "vecf32_from_base64")
+			require.Contains(t, exactSQL, "`__mo_index_pri_col` IN (11,12)")
+		})
+	}
+
+	idxcfg := vectorindex.IndexConfig{}
+	idxcfg.Ivfflat.Metric = uint16(metric.Metric_L2Distance)
+	idxcfg.Ivfflat.VectorType = int32(types.T_array_float64)
+	idx64 := &IvfflatSearchIndex[float64]{}
+	f64SQL, err := idx64.buildSearchRoundSQL(idxcfg, tblcfg, []float64{1, 2}, []int64{1}, 7, nil, "", 2)
+	require.NoError(t, err)
+	require.Contains(t, f64SQL, "vecf64_from_base64")
+
+	_, err = (&IvfflatSearchIndex[float32]{}).entryQueryExpression(idxcfg, query)
+	require.ErrorContains(t, err, "cannot encode []float32 query for entries vector type VECF64")
+}
+
+func TestIncludeExactPkSearchAppliesQueryQuantizerAndRestoresDistance(t *testing.T) {
+	oldRunSQL := runSql
+	defer func() { runSql = oldRunSQL }()
+
+	const (
+		mul = 10.0
+		add = -5.0
+	)
+	query := []float32{1, 2, 3}
+	var capturedSQL string
+
+	m := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", m)
+	runSql = func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+		capturedSQL = sql
+		bat := batch.NewWithSize(3)
+		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		bat.Vecs[1] = vector.NewVec(types.T_float64.ToType())
+		bat.Vecs[2] = vector.NewVec(types.T_varchar.ToType())
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(42), false, m))
+		require.NoError(t, vector.AppendFixed(bat.Vecs[1], float64(400), false, m))
+		require.NoError(t, vector.AppendBytes(bat.Vecs[2], []byte("covered"), false, m))
+		bat.SetRowCount(1)
+		return executor.Result{Mp: m, Batches: []*batch.Batch{bat}}, nil
+	}
+
+	idxcfg := vectorindex.IndexConfig{}
+	idxcfg.Ivfflat.Metric = uint16(metric.Metric_L2sqDistance)
+	idxcfg.Ivfflat.VectorType = int32(types.T_array_int8)
+	tblcfg := vectorindex.IndexTableConfig{
+		DbName:         "db",
+		EntriesTable:   "entries",
+		IncludeColumns: []string{"payload"},
+	}
+	idx := &IvfflatSearchIndex[float32]{Version: 7, QuantMul: mul, QuantAdd: add}
+	sqlproc := sqlexec.NewSqlProcess(proc)
+	sqlproc.ExactPkFilter = "42"
+	includeResult := &vectorindex.IvfIncludeResult{}
+	rt := vectorindex.RuntimeConfig{
+		Limit:                   3,
+		Probe:                   1,
+		OrigFuncName:            metric.DistFn_L2Distance,
+		RequestedIncludeColumns: []string{"payload"},
+		IncludeResult:           includeResult,
+		SearchCursor:            &vectorindex.IvfSearchCursor{},
+		SearchRoundLimit:        3,
+	}
+
+	keys, distances, err := idx.Search(sqlproc, idxcfg, tblcfg, query, rt, 1)
+	require.NoError(t, err)
+	require.Equal(t, []any{int64(42)}, keys)
+	require.Len(t, distances, 1)
+	require.InDelta(t, 2.0, distances[0], 1e-9)
+	require.Equal(t, []any{[]byte("covered")}, includeResult.Data["payload"])
+
+	wantPayload := types.ArrayToBase64(quantizer.ApplyInt8(query, mul, add))
+	require.Contains(t, capturedSQL, "vecint8_from_base64('"+wantPayload+"')")
+	require.NotContains(t, capturedSQL, "vecf32_from_base64")
+	require.Contains(t, capturedSQL, "`__mo_index_pri_col` IN (42)")
+	require.NotContains(t, capturedSQL, "ORDER BY vec_dist")
+	require.True(t, rt.SearchCursor.Exhausted)
+}
