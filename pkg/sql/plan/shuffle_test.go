@@ -777,9 +777,84 @@ func TestNodeNullExtendsChild(t *testing.T) {
 			childIdx: 1,
 			want:     true,
 		},
+		{
+			name: "cross apply right child",
+			node: &plan.Node{
+				NodeType:  plan.Node_APPLY,
+				ApplyType: plan.Node_CROSSAPPLY,
+			},
+			childIdx: 1,
+		},
+		{
+			name:     "full join invalid child",
+			node:     &plan.Node{NodeType: plan.Node_JOIN, JoinType: plan.Node_OUTER},
+			childIdx: 2,
+		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			require.Equal(t, tt.want, nodeNullExtendsChild(tt.node, tt.childIdx))
+		})
+	}
+}
+
+func TestOutputTypeAfterNullExtension(t *testing.T) {
+	notNullType := plan.Type{
+		Id:          int32(types.T_int64),
+		NotNullable: true,
+	}
+	for _, tt := range []struct {
+		name     string
+		node     *plan.Node
+		childIdx int
+		want     bool
+	}{
+		{
+			name:     "inner preserves not null",
+			node:     &plan.Node{NodeType: plan.Node_JOIN, JoinType: plan.Node_INNER},
+			childIdx: 1,
+			want:     true,
+		},
+		{
+			name:     "left join null extends right",
+			node:     &plan.Node{NodeType: plan.Node_JOIN, JoinType: plan.Node_LEFT},
+			childIdx: 1,
+		},
+		{
+			name:     "left single null extends build",
+			node:     &plan.Node{NodeType: plan.Node_JOIN, JoinType: plan.Node_SINGLE},
+			childIdx: 1,
+		},
+		{
+			name: "right single null extends swapped build",
+			node: &plan.Node{
+				NodeType:    plan.Node_JOIN,
+				JoinType:    plan.Node_SINGLE,
+				IsRightJoin: true,
+			},
+			childIdx: 0,
+		},
+		{
+			name: "outer apply null extends function output",
+			node: &plan.Node{
+				NodeType:  plan.Node_APPLY,
+				ApplyType: plan.Node_OUTERAPPLY,
+			},
+			childIdx: 1,
+		},
+		{
+			name: "cross apply preserves not null",
+			node: &plan.Node{
+				NodeType:  plan.Node_APPLY,
+				ApplyType: plan.Node_CROSSAPPLY,
+			},
+			childIdx: 1,
+			want:     true,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			outputType := outputTypeAfterNullExtension(tt.node, tt.childIdx, notNullType)
+			require.Equal(t, tt.want, outputType.NotNullable)
+			require.True(t, notNullType.NotNullable, "input type must not be mutated")
 		})
 	}
 }
@@ -866,6 +941,77 @@ func TestMarkShuffleRejectsOuterJoinNullExtension(t *testing.T) {
 			require.Equal(t, int32(-1), mark.Stats.HashmapStats.ShuffleColIdx)
 		})
 	}
+}
+
+func TestMarkShuffleRejectsSingleJoinNullExtension(t *testing.T) {
+	logicPlan, err := runOneStmt(NewMockOptimizer(true), t, `
+		select d.regionkey in (
+			select l.l_partkey from tpch.lineitem l
+		)
+		from (
+			select (
+				select r.r_regionkey
+				from tpch.region r
+				where r.r_regionkey = n.n_regionkey
+			) as regionkey
+			from tpch.nation n
+		) d`)
+	require.NoError(t, err)
+
+	query := logicPlan.GetQuery()
+	require.NotNil(t, query)
+
+	var single, mark *plan.Node
+	for _, node := range query.Nodes {
+		if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_SINGLE {
+			single = node
+		}
+		if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_MARK {
+			mark = node
+		}
+	}
+	require.NotNil(t, single)
+	require.False(t, single.IsRightJoin)
+	require.NotNil(t, mark)
+	require.Len(t, mark.Children, 2)
+	require.NotEmpty(t, mark.OnList)
+
+	for _, output := range query.Nodes[single.Children[1]].ProjectList {
+		require.True(t, output.Typ.NotNullable,
+			"SINGLE null extension must not mutate its build child")
+	}
+
+	buildOutputCount := 0
+	for _, output := range single.ProjectList {
+		if col := output.GetCol(); col != nil && col.RelPos == 1 {
+			buildOutputCount++
+			require.False(t, output.Typ.NotNullable,
+				"SINGLE's build output is NULL-extended when the scalar subquery returns no row")
+		}
+	}
+	require.Positive(t, buildOutputCount)
+
+	left := query.Nodes[mark.Children[0]]
+	right := query.Nodes[mark.Children[1]]
+	condition := mark.OnList[0].GetF()
+	require.NotNil(t, condition)
+	require.Len(t, condition.Args, 2)
+	require.ElementsMatch(t, []bool{false, true}, []bool{
+		IsJoinExprEffectivelyNotNullable(condition.Args[0], left, right),
+		IsJoinExprEffectivelyNotNullable(condition.Args[1], left, right),
+	})
+
+	left.Stats.Outcnt = 10_000_000
+	right.Stats.Outcnt = 3_000_000
+	mark.Stats.HashmapStats.HashmapSize = 3_000_000
+	mark.OnList[0].Ndv = 100_000
+	mark.Stats.HashmapStats.Shuffle = true
+
+	builder := &QueryBuilder{qry: query}
+	determineShuffleForJoinWithColRefMode(mark, builder, true)
+
+	require.False(t, mark.Stats.HashmapStats.Shuffle)
+	require.Equal(t, int32(-1), mark.Stats.HashmapStats.ShuffleColIdx)
 }
 
 func makeMarkShuffleEquality(t *testing.T, notNullable bool, leftRel, rightRel int32) *plan.Expr {

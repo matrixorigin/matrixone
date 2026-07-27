@@ -791,31 +791,6 @@ func (builder *QueryBuilder) nodeContainsBindingTag(nodeID, tag int32) bool {
 	return false
 }
 
-func nodeNullExtendsChild(node *plan.Node, childIdx int) bool {
-	if node == nil {
-		return false
-	}
-	switch node.NodeType {
-	case plan.Node_JOIN:
-		switch node.JoinType {
-		case plan.Node_LEFT:
-			return childIdx == 1
-		case plan.Node_RIGHT:
-			return childIdx == 0
-		case plan.Node_OUTER:
-			return true
-		case plan.Node_SINGLE:
-			if node.IsRightJoin {
-				return childIdx == 0
-			}
-			return childIdx == 1
-		}
-	case plan.Node_APPLY:
-		return node.ApplyType == plan.Node_OUTERAPPLY && childIdx == 1
-	}
-	return false
-}
-
 func dedupJoinUsesUnsupportedFloatShuffle(node *plan.Node) bool {
 	if len(node.OnList) == 0 {
 		return false

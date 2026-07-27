@@ -380,6 +380,41 @@ func IsJoinExprEffectivelyNotNullable(expr *plan.Expr, left, right *plan.Node) b
 	return exprEffectivelyNotNullable(expr, left.ProjectList, right.ProjectList)
 }
 
+// nodeNullExtendsChild reports whether rows emitted by node can contain NULLs
+// in place of a child row that did not exist. Keep this as the single source of
+// truth for both pre-remap eligibility checks and remapped output types.
+func nodeNullExtendsChild(node *plan.Node, childIdx int) bool {
+	if node == nil {
+		return false
+	}
+	switch node.NodeType {
+	case plan.Node_JOIN:
+		switch node.JoinType {
+		case plan.Node_LEFT:
+			return childIdx == 1
+		case plan.Node_RIGHT:
+			return childIdx == 0
+		case plan.Node_OUTER:
+			return childIdx == 0 || childIdx == 1
+		case plan.Node_SINGLE:
+			if node.IsRightJoin {
+				return childIdx == 0
+			}
+			return childIdx == 1
+		}
+	case plan.Node_APPLY:
+		return node.ApplyType == plan.Node_OUTERAPPLY && childIdx == 1
+	}
+	return false
+}
+
+func outputTypeAfterNullExtension(node *plan.Node, childIdx int, typ plan.Type) plan.Type {
+	if nodeNullExtendsChild(node, childIdx) {
+		typ.NotNullable = false
+	}
+	return typ
+}
+
 type ColRefRemapping struct {
 	globalToLocal map[[2]int32][2]int32
 	localToGlobal [][2]int32
@@ -1146,10 +1181,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			}
 
 			remapping.addColRef(globalRef)
-			outputType := childProjList[i].Typ
-			if node.JoinType == plan.Node_RIGHT || node.JoinType == plan.Node_OUTER {
-				outputType.NotNullable = false
-			}
+			outputType := outputTypeAfterNullExtension(node, 0, childProjList[i].Typ)
 			node.ProjectList = append(node.ProjectList, &plan.Expr{
 				Typ: outputType,
 				Expr: &plan.Expr_Col{
@@ -1188,10 +1220,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 
 				remapping.addColRef(globalRef)
 
-				outputType := childProjList[i].Typ
-				if node.JoinType == plan.Node_LEFT || node.JoinType == plan.Node_OUTER {
-					outputType.NotNullable = false
-				}
+				outputType := outputTypeAfterNullExtension(node, 1, childProjList[i].Typ)
 
 				node.ProjectList = append(node.ProjectList, &plan.Expr{
 					Typ: outputType,
@@ -2465,7 +2494,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 
 			remapping.addColRef(globalRef)
 			node.ProjectList = append(node.ProjectList, &plan.Expr{
-				Typ: col.Typ,
+				Typ: outputTypeAfterNullExtension(node, 1, col.Typ),
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						RelPos: 1,
