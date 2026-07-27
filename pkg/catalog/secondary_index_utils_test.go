@@ -288,11 +288,19 @@ func TestIndexParamsToStringList_DoesNotRenderIncludeColumns(t *testing.T) {
 }
 
 func TestParseIncludeColumnsValue_BackwardCompatible(t *testing.T) {
-	cols, err := ParseIncludeColumnsValue(`["title","category"]`)
+	encoded, err := MarshalIncludeColumnsValue([]string{"title, label", " rank "})
 	require.NoError(t, err)
-	require.Equal(t, []string{"title", "category"}, cols)
+	require.Equal(t, `["title, label"," rank "]`, encoded)
+
+	cols, err := ParseIncludeColumnsValue(encoded)
+	require.NoError(t, err)
+	require.Equal(t, []string{"title, label", " rank "}, cols)
 
 	cols, err = ParseIncludeColumnsValue("title,category")
 	require.NoError(t, err)
 	require.Equal(t, []string{"title", "category"}, cols)
+
+	cols, err = ParseIncludeColumnsValue("[legacy,other")
+	require.NoError(t, err)
+	require.Equal(t, []string{"[legacy", "other"}, cols)
 }

@@ -28,7 +28,7 @@ func makeIvfIncludeAlterIndexDef(indexName string, includedColumns []string) *pl
 	return &planpb.IndexDef{
 		IndexName:       indexName,
 		IndexAlgo:       catalog.MoIndexIvfFlatAlgo.ToString(),
-		IndexAlgoParams: `{"lists":"2","op_type":"vector_l2_ops"}`,
+		IndexAlgoParams: `{"included_columns":"[\"title\",\"category\"]","lists":"2","op_type":"vector_l2_ops"}`,
 		Parts:           []string{"embedding"},
 		IncludedColumns: append([]string(nil), includedColumns...),
 	}
@@ -87,14 +87,14 @@ func TestUpdateRenameColumnInTableDefRenamesIvfIncludeMetadata(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Len(t, sqls, 1)
-	require.Contains(t, sqls[0], `set algo_params = '{"included_columns":"headline,category","lists":"2","op_type":"vector_l2_ops"}'`)
+	require.Contains(t, sqls[0], `set algo_params = '{"included_columns":"[\\"headline\\",\\"category\\"]","lists":"2","op_type":"vector_l2_ops"}'`)
 	require.Contains(t, sqls[0], "name = 'idx_ivf'")
 
 	for _, indexDef := range tableDef.Indexes {
 		require.Equal(t, []string{"headline", "category"}, indexDef.IncludedColumns)
 		params, err := catalog.IndexParamsStringToMap(indexDef.IndexAlgoParams)
 		require.NoError(t, err)
-		require.Equal(t, "headline,category", params[catalog.IncludedColumns])
+		require.Equal(t, `["headline","category"]`, params[catalog.IncludedColumns])
 		require.NotContains(t, params, "include_columns")
 	}
 	require.Equal(t, "headline", tableDef.Cols[1].Name)
@@ -162,6 +162,28 @@ func TestRenameIncludedColumnsForAlgoFallsBackToLegacyAlgoParams(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, "headline,category", params[catalog.IncludedColumns])
 	}
+}
+
+func TestRenameIncludedColumnsForAlgoPreservesIdentifierBytes(t *testing.T) {
+	tableDef := &planpb.TableDef{
+		TblId: 42,
+		Indexes: []*planpb.IndexDef{{
+			IndexName:          "idx_ivf",
+			IndexAlgo:          catalog.MoIndexIvfFlatAlgo.ToString(),
+			IndexAlgoParams:    `{"included_columns":"[\"old, name\",\" keep \"]","op_type":"vector_l2_ops"}`,
+			IncludedColumns:    []string{"old, name", " keep "},
+			IndexAlgoTableType: catalog.SystemSI_IVFFLAT_TblType_Entries,
+		}},
+	}
+
+	sqls, err := renameIncludedColumnsForAlgo(
+		tableDef, catalog.MoIndexIvfFlatAlgo.ToString(), "old, name", " new, name ")
+	require.NoError(t, err)
+	require.Len(t, sqls, 1)
+	require.Equal(t, []string{" new, name ", " keep "}, tableDef.Indexes[0].IncludedColumns)
+	params, err := catalog.IndexParamsStringToMap(tableDef.Indexes[0].IndexAlgoParams)
+	require.NoError(t, err)
+	require.Equal(t, `[" new, name "," keep "]`, params[catalog.IncludedColumns])
 }
 
 func TestResolveAlterTableAlgorithmCopiesIvfIncludeRename(t *testing.T) {

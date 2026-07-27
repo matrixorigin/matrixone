@@ -369,6 +369,48 @@ func TestNewIvfflatSqlWriterUpsertWithIncludeColumns(t *testing.T) {
 	require.Contains(t, sql, "CAST(NULL as")
 }
 
+func TestNewIvfflatSqlWriterAsyncReloadPreservesIncludeColumns(t *testing.T) {
+	includeColumns := []string{"title, label", " rank "}
+	tabledef := newTestIvfflatTableDef(
+		"pk",
+		types.T_int64,
+		"vec",
+		types.T_array_float64,
+		3,
+		ivfflatIncludeColSpec{name: includeColumns[0], typ: types.T_varchar, width: 64},
+		ivfflatIncludeColSpec{name: includeColumns[1], typ: types.T_int32},
+	)
+	encoded, err := catalog.MarshalIncludeColumnsValue(includeColumns)
+	require.NoError(t, err)
+	algoParams, err := catalog.IndexParamsMapToJsonString(map[string]string{
+		catalog.IncludedColumns:      encoded,
+		catalog.IndexAlgoParamLists:  "16",
+		catalog.IndexAlgoParamOpType: "vector_l2_ops",
+	})
+	require.NoError(t, err)
+	for _, indexDef := range tabledef.Indexes {
+		// ISCP reconstructs its async DML writer from catalog metadata, where the
+		// runtime-only proto field is absent.
+		indexDef.IncludedColumns = nil
+		indexDef.IndexAlgoParams = algoParams
+	}
+
+	writer, err := NewIvfflatSqlWriter(
+		"ivfflat", newTestJobID(), newTestConsumerInfo(), tabledef, tabledef.Indexes)
+	require.NoError(t, err)
+	require.Equal(t, includeColumns, writer.(*IvfflatSqlWriter).includeCols)
+
+	err = writer.Upsert(context.Background(), []any{
+		int64(1000), []float64{1, 2, 3}, nil, []byte("news"), int32(7),
+	})
+	require.NoError(t, err)
+	bytes, err := writer.ToSql()
+	require.NoError(t, err)
+	sql := string(bytes)
+	require.Contains(t, sql, "`__mo_index_include_title, label`, `__mo_index_include_ rank `")
+	require.Contains(t, sql, "'news'")
+}
+
 func TestNewIvfflatSqlWriterDelete(t *testing.T) {
 	var ctx context.Context
 

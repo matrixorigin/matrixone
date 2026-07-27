@@ -158,6 +158,21 @@ func ParseIncludeColumnsValue(raw string) ([]string, error) {
 	return cols, nil
 }
 
+// MarshalIncludeColumnsValue encodes INCLUDE column names without losing
+// commas or leading/trailing whitespace that are valid inside quoted SQL
+// identifiers. ParseIncludeColumnsValue retains support for the historical
+// comma-separated representation when catalog metadata is reloaded.
+func MarshalIncludeColumnsValue(cols []string) (string, error) {
+	if len(cols) == 0 {
+		return "", nil
+	}
+	encoded, err := json.Marshal(cols)
+	if err != nil {
+		return "", err
+	}
+	return string(encoded), nil
+}
+
 /* 1. ToString Functions */
 
 // IndexParamsToStringList used by buildShowCreateTable and restoreDDL

@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -82,8 +83,16 @@ func renameIncludedColumnsForAlgo(tableDef *planpb.TableDef, algo, oldColName, n
 		if err != nil {
 			return nil, err
 		}
+		existingIncludeColumns := params[catalog.IncludedColumns]
+		if existingIncludeColumns == "" {
+			existingIncludeColumns = params["include_columns"]
+		}
 		delete(params, "include_columns")
-		params[catalog.IncludedColumns] = strings.Join(newIncludedColumns, ",")
+		encodedIncludeColumns, err := marshalRenamedIncludeColumns(existingIncludeColumns, newIncludedColumns)
+		if err != nil {
+			return nil, err
+		}
+		params[catalog.IncludedColumns] = encodedIncludeColumns
 		algoParams, err := catalog.IndexParamsMapToJsonString(params)
 		if err != nil {
 			return nil, err
@@ -111,6 +120,18 @@ func renameIncludedColumnsForAlgo(tableDef *planpb.TableDef, algo, oldColName, n
 			sqlquote.EscapeString(update.algoParams), tableDef.TblId, sqlquote.EscapeString(indexName)))
 	}
 	return sqls, nil
+}
+
+func marshalRenamedIncludeColumns(existing string, cols []string) (string, error) {
+	// Preserve legacy CAGRA/IVF-PQ metadata for mixed-version readers. New
+	// IVF-FLAT INCLUDE rows are created with JSON arrays, so their ALTER path
+	// remains lossless without changing an already-released durable format.
+	var existingJSONColumns []string
+	trimmed := strings.TrimSpace(existing)
+	if strings.HasPrefix(trimmed, "[") && json.Unmarshal([]byte(trimmed), &existingJSONColumns) == nil {
+		return catalog.MarshalIncludeColumnsValue(cols)
+	}
+	return strings.Join(cols, ","), nil
 }
 
 func rewriteIncludedColumnNames(includedColumns []string, oldColName, newColName string) ([]string, bool) {

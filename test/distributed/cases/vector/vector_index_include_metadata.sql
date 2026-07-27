@@ -12,7 +12,7 @@ create table t_ivf(
 create index idx_ivf_include_meta using ivfflat on t_ivf(embedding)
 lists=2 op_type "vector_l2_ops" include(title, category);
 
-select algo_table_type, included_columns, case when algo_params like '%include_columns%' then 1 else 0 end as include_in_params
+select algo_table_type, case when algo_params like '%included_columns%' then 1 else 0 end as include_in_params
 from mo_catalog.mo_indexes
 where name = 'idx_ivf_include_meta'
   and algo = 'ivfflat'
@@ -41,7 +41,7 @@ insert into t_hnsw values
 create index idx_hnsw_include_meta using hnsw on t_hnsw(embedding)
 op_type "vector_l2_ops" include(title, category);
 
-select algo_table_type, included_columns, case when algo_params like '%include_columns%' then 1 else 0 end as include_in_params
+select algo_table_type, case when algo_params like '%included_columns%' then 1 else 0 end as include_in_params
 from mo_catalog.mo_indexes
 where name = 'idx_hnsw_include_meta'
   and algo = 'hnsw'

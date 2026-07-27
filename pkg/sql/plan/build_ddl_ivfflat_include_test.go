@@ -84,7 +84,7 @@ func TestBuildIvfFlatSecondaryIndexDef_StoresIncludeColumnsInIndexDef(t *testing
 		require.Equal(t, []string{"title", "category"}, indexDef.IncludedColumns)
 		paramMap, err := catalog.IndexParamsStringToMap(indexDef.IndexAlgoParams)
 		require.NoError(t, err)
-		require.Equal(t, "title,category", paramMap[catalog.IncludedColumns])
+		require.Equal(t, `["title","category"]`, paramMap[catalog.IncludedColumns])
 		_, ok := paramMap["include_columns"]
 		require.False(t, ok)
 	}

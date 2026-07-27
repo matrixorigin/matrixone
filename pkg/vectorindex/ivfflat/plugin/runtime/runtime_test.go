@@ -154,13 +154,13 @@ func TestIvfflatParamsFromTree_AllOptions(t *testing.T) {
 func TestIvfflatParamsFromTree_IncludeColumns(t *testing.T) {
 	idx := &tree.Index{IndexOption: &tree.IndexOption{
 		IncludeColumns: []*tree.UnresolvedName{
-			tree.NewUnresolvedColName("price"),
-			tree.NewUnresolvedColName("name"),
+			tree.NewUnresolvedColName("price, usd"),
+			tree.NewUnresolvedColName(" name "),
 		},
 	}}
 	got, err := CatalogHooks{}.ParamsFromTree(idx)
 	require.NoError(t, err)
-	require.Equal(t, "price,name", got[catalog.IncludedColumns])
+	require.Equal(t, `["price, usd"," name "]`, got[catalog.IncludedColumns])
 }
 
 func TestIvfflatParamsFromTree_NegativeList(t *testing.T) {

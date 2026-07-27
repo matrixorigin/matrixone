@@ -306,7 +306,11 @@ func (CatalogHooks) ParamsFromTree(idx *tree.Index) (map[string]string, error) {
 		for i, col := range idx.IndexOption.IncludeColumns {
 			names[i] = col.ColName()
 		}
-		res[catalog.IncludedColumns] = strings.Join(names, ",")
+		encoded, err := catalog.MarshalIncludeColumnsValue(names)
+		if err != nil {
+			return nil, err
+		}
+		res[catalog.IncludedColumns] = encoded
 	}
 	return res, nil
 }
