@@ -39,6 +39,49 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestValidateBetweenSnapshotRange(t *testing.T) {
+	tests := []struct {
+		name    string
+		from    *types.TS
+		to      *types.TS
+		wantErr string
+	}{
+		{
+			name: "forward physical range",
+			from: types.BuildTSForTest(1, 0),
+			to:   types.BuildTSForTest(2, 0),
+		},
+		{
+			name: "equal range",
+			from: types.BuildTSForTest(1, 1),
+			to:   types.BuildTSForTest(1, 1),
+		},
+		{
+			name:    "reversed physical range",
+			from:    types.BuildTSForTest(2, 0),
+			to:      types.BuildTSForTest(1, 0),
+			wantErr: "start snapshot 'from' is later than end snapshot 'to'",
+		},
+		{
+			name:    "reversed logical range",
+			from:    types.BuildTSForTest(1, 2),
+			to:      types.BuildTSForTest(1, 1),
+			wantErr: "start snapshot 'from' is later than end snapshot 'to'",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateBetweenSnapshotRange("from", "to", tt.from, tt.to)
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorContains(t, err, tt.wantErr)
+		})
+	}
+}
+
 func TestSegmentBuilder_SingleValue(t *testing.T) {
 	pkType := types.T_int32.ToType()
 	sb := newSegmentBuilder(pkType)

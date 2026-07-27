@@ -72,7 +72,21 @@ func resolveBetweenSnapshots(ses *Session, fromName, toName string) (from, to *t
 
 	fromTS := types.TimestampToTS(*fromSnap.TS)
 	toTS := types.TimestampToTS(*toSnap.TS)
+	if err = validateBetweenSnapshotRange(fromName, toName, &fromTS, &toTS); err != nil {
+		return nil, nil, err
+	}
 	return &fromTS, &toTS, nil
+}
+
+func validateBetweenSnapshotRange(fromName, toName string, fromTS, toTS *types.TS) error {
+	if !fromTS.GT(toTS) {
+		return nil
+	}
+	return moerr.NewInvalidInputNoCtxf(
+		"invalid BETWEEN SNAPSHOT range: start snapshot '%s' is later than end snapshot '%s'",
+		fromName,
+		toName,
+	)
 }
 
 func handleBranchPick(
