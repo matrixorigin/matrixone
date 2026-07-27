@@ -74,4 +74,10 @@ func TestDateExtractFunctionsAcceptVarchar(t *testing.T) {
 			require.True(t, success, info)
 		})
 	}
+
+	boundaryInput := NewFunctionTestInput(types.T_varchar.ToType(), []string{"2005-01-01"}, nil)
+	boundaryExpect := NewFunctionTestResult(types.T_int64.ToType(), false, []int64{53}, nil)
+	boundary := NewFunctionTestCase(proc, []FunctionTestInput{boundaryInput}, boundaryExpect, DateStringToWeekOfYear)
+	success, info := boundary.Run()
+	require.True(t, success, info)
 }

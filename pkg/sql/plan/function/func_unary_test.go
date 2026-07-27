@@ -6554,7 +6554,7 @@ func initDateToWeekOfYearTestCase() []tcTemp {
 					[]bool{false, false, false, false}),
 			},
 			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
-				[]int64{8, 1, 53, 1},
+				[]int64{8, 1, 1, 1},
 				[]bool{false, false, false, false}),
 		},
 		{
@@ -6565,7 +6565,7 @@ func initDateToWeekOfYearTestCase() []tcTemp {
 					[]bool{false, false, false, false}),
 			},
 			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
-				[]int64{53, 1, 53, 1},
+				[]int64{1, 1, 53, 53},
 				[]bool{false, false, false, false}),
 		},
 		{
@@ -6610,7 +6610,7 @@ func initDatetimeToWeekOfYearTestCase() []tcTemp {
 					[]bool{false, false, false, false}),
 			},
 			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
-				[]int64{8, 1, 53, 1},
+				[]int64{8, 1, 1, 1},
 				[]bool{false, false, false, false}),
 		},
 		{
@@ -6621,7 +6621,7 @@ func initDatetimeToWeekOfYearTestCase() []tcTemp {
 					[]bool{false, false}),
 			},
 			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
-				[]int64{53, 1},
+				[]int64{1, 1},
 				[]bool{false, false}),
 		},
 		{

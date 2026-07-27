@@ -9,7 +9,7 @@ SELECT WEEKOFYEAR('2008-01-01') AS first_week;
 1
 SELECT WEEKOFYEAR('2008-12-31') AS last_week;
 ➤ last_week[-5,64,0]  𝄀
-53
+1
 SELECT WEEKOFYEAR('2008-02-20 10:30:45') AS week_from_datetime;
 ➤ week_from_datetime[-5,64,0]  𝄀
 8
@@ -18,36 +18,35 @@ SELECT WEEKOFYEAR('2008-01-01 00:00:00') AS first_week_datetime;
 1
 SELECT WEEKOFYEAR('2008-12-31 23:59:59') AS last_week_datetime;
 ➤ last_week_datetime[-5,64,0]  𝄀
-53
+1
 SELECT WEEKOFYEAR(TIMESTAMP('2008-02-20 10:30:45')) AS week_from_timestamp;
 ➤ week_from_timestamp[-5,64,0]  𝄀
 8
-SELECT WEEKOFYEAR('2003-12-30') AS week_53_2003;
-➤ week_53_2003[-5,64,0]  𝄀
-53
+SELECT WEEKOFYEAR('2003-12-30') AS week_1_2004;
+➤ week_1_2004[-5,64,0]  𝄀
+1
 SELECT WEEKOFYEAR('2004-01-02') AS week_1_2004;
 ➤ week_1_2004[-5,64,0]  𝄀
 1
 SELECT WEEKOFYEAR('2004-12-31') AS week_53_2004;
 ➤ week_53_2004[-5,64,0]  𝄀
 53
-SELECT WEEKOFYEAR('2005-01-01') AS week_53_2005;
-➤ week_53_2005[-5,64,0]  𝄀
-1
+SELECT WEEKOFYEAR('2005-01-01') AS week_53_2005, WEEK('2005-01-01', 3) AS week_mode3_2005;
+➤ week_53_2005[-5,64,0]  ¦  week_mode3_2005[-6,8,0]  𝄀
+53  ¦  53
 CREATE TABLE t1(d DATE);
 INSERT INTO t1 VALUES ('2008-02-20'), ('2008-01-01'), ('2008-12-31');
 SELECT d, WEEKOFYEAR(d) AS week FROM t1;
 ➤ d[91,64,0]  ¦  week[-5,64,0]  𝄀
 2008-02-20  ¦  8  𝄀
 2008-01-01  ¦  1  𝄀
-2008-12-31  ¦  53
+2008-12-31  ¦  1
 DROP TABLE t1;
 CREATE TABLE t1(d DATE);
 INSERT INTO t1 VALUES ('2008-01-01'), ('2008-06-15'), ('2008-12-31');
 SELECT * FROM t1 WHERE WEEKOFYEAR(d) > 20;
 ➤ d[91,64,0]  𝄀
-2008-06-15  𝄀
-2008-12-31
+2008-06-15
 DROP TABLE t1;
 SELECT WEEKOFYEAR(NULL) AS null_result;
 ➤ null_result[-5,64,0]  𝄀
