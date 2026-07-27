@@ -1763,8 +1763,11 @@ func doPrepareStmt(execCtx *ExecCtx, ses *Session, st *tree.PrepareStmt, sql str
 		prepareStmt.ParamTypes = paramTypes
 	}
 
-	err = ses.SetPrepareStmt(execCtx.reqCtx, prepareStmt.Name, prepareStmt)
-	return prepareStmt, err
+	if err = ses.SetPrepareStmt(execCtx.reqCtx, prepareStmt.Name, prepareStmt); err != nil {
+		prepareStmt.Close()
+		return nil, err
+	}
+	return prepareStmt, nil
 }
 
 // handlePrepareStmt
@@ -1813,8 +1816,11 @@ func doPrepareString(ses *Session, execCtx *ExecCtx, st *tree.PrepareString) (*P
 		return nil, err
 	}
 
-	err = ses.SetPrepareStmt(execCtx.reqCtx, prepareStmt.Name, prepareStmt)
-	return prepareStmt, err
+	if err = ses.SetPrepareStmt(execCtx.reqCtx, prepareStmt.Name, prepareStmt); err != nil {
+		prepareStmt.Close()
+		return nil, err
+	}
+	return prepareStmt, nil
 }
 
 func prepareStringStatement(execCtx *ExecCtx, ses *Session, sql string) (string, tree.Statement, map[string]string, error) {
