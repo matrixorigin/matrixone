@@ -1992,7 +1992,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: true,
 		Type:              InitSystemVariableIntType("group_concat_max_len", 4, math.MaxInt64, false),
-		Default:           int64(4),
+		Default:           int64(1024),
 	},
 	"have_ssl": {
 		Name:              "have_ssl",
