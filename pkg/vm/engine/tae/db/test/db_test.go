@@ -9223,12 +9223,6 @@ func TestDedupSnapshot1(t *testing.T) {
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 
-	fault.Enable()
-	defer fault.Disable()
-	rmFn, err := objectio.InjectPrintFlushEntry("")
-	assert.NoError(t, err)
-	defer rmFn()
-
 	schema := catalog.MockSchemaAll(13, 3)
 	schema.Extra.BlockMaxRows = 10
 	schema.Extra.ObjectMaxBlocks = 3
@@ -9236,18 +9230,30 @@ func TestDedupSnapshot1(t *testing.T) {
 	bat := catalog.MockBatch(schema, 10)
 	tae.CreateRelAndAppend(bat, true)
 
-	testutils.WaitExpect(10000, func() bool {
-		return tae.Wal.GetPenddingCnt() == 0
-	})
-	assert.Equal(t, uint64(0), tae.Wal.GetPenddingCnt())
+	targetLSN := tae.Wal.GetLSNWatermark()
+	require.NotZero(t, targetLSN)
+	require.Eventually(
+		t,
+		func() bool {
+			return tae.AllCheckpointsFinished() &&
+				tae.Wal.GetCheckpointed() >= targetLSN
+		},
+		30*time.Second,
+		25*time.Millisecond,
+		"background checkpoint did not cover LSN %d",
+		targetLSN,
+	)
 
 	txn, rel := tae.GetRelation()
 	startTS := txn.GetStartTS()
 	txn.SetSnapshotTS(startTS.Next())
 	txn.SetDedupType(txnif.DedupPolicy_CheckIncremental)
-	err = rel.Append(context.Background(), bat)
-	assert.NoError(t, err)
-	_ = txn.Commit(context.Background())
+	if !assert.NoError(t, rel.Append(context.Background(), bat)) {
+		require.NoError(t, txn.Rollback(context.Background()))
+		return
+	}
+	require.NoError(t, txn.Commit(context.Background()))
+	tae.CheckRowsByScan(20, true)
 }
 
 func TestDedupSnapshot2(t *testing.T) {
