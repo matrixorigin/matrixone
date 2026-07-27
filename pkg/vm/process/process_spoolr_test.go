@@ -151,7 +151,21 @@ func TestPipelineSignalReceiverWakesWhenFatalSignalCannotBeDelivered(t *testing.
 		regCount  int
 		targetIdx int
 	}{
-		{name: "optimized select", regCount: 1, targetIdx: 0},
+		{name: "one input", regCount: 1, targetIdx: 0},
+		{name: "two inputs first", regCount: 2, targetIdx: 0},
+		{name: "two inputs last", regCount: 2, targetIdx: 1},
+		{name: "three inputs first", regCount: 3, targetIdx: 0},
+		{name: "three inputs last", regCount: 3, targetIdx: 2},
+		{name: "four inputs first", regCount: 4, targetIdx: 0},
+		{name: "four inputs last", regCount: 4, targetIdx: 3},
+		{name: "five inputs first", regCount: 5, targetIdx: 0},
+		{name: "five inputs last", regCount: 5, targetIdx: 4},
+		{name: "six inputs first", regCount: 6, targetIdx: 0},
+		{name: "six inputs last", regCount: 6, targetIdx: 5},
+		{name: "seven inputs first", regCount: 7, targetIdx: 0},
+		{name: "seven inputs last", regCount: 7, targetIdx: 6},
+		{name: "eight inputs first", regCount: 8, targetIdx: 0},
+		{name: "eight inputs last", regCount: 8, targetIdx: 7},
 		{name: "reflect select first input", regCount: 9, targetIdx: 0},
 		{name: "reflect select middle input", regCount: 9, targetIdx: 4},
 		{name: "reflect select last input", regCount: 9, targetIdx: 8},
