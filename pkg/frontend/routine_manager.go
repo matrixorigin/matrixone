@@ -40,9 +40,11 @@ import (
 )
 
 type RoutineManager struct {
-	mu      sync.RWMutex
-	ctx     context.Context
-	clients map[*Conn]*Routine
+	mu                     sync.RWMutex
+	ctx                    context.Context
+	clients                map[*Conn]*Routine
+	workerWG               sync.WaitGroup
+	cleanKillQueueInterval time.Duration
 	// routinesByID keeps the routines by connection ID.
 	routinesByConnID map[uint32]*Routine
 	tlsConfig        *tls.Config
@@ -452,13 +454,12 @@ func (rm *RoutineManager) cleanKillQueue() {
 	ar := rm.accountRoutine
 	ar.killQueueMu.Lock()
 	defer ar.killQueueMu.Unlock()
-	pu := getPu(rm.service)
-	if pu != nil && pu.SV != nil {
-		tout := pu.SV.CleanKillQueueInterval
-		for toKillAccount, killRecord := range ar.killIdQueue {
-			if time.Since(killRecord.killTime) > time.Duration(tout)*time.Minute {
-				delete(ar.killIdQueue, toKillAccount)
-			}
+	if rm.cleanKillQueueInterval <= 0 {
+		return
+	}
+	for toKillAccount, killRecord := range ar.killIdQueue {
+		if time.Since(killRecord.killTime) > rm.cleanKillQueueInterval {
+			delete(ar.killIdQueue, toKillAccount)
 		}
 	}
 }
@@ -541,11 +542,10 @@ func (rm *RoutineManager) cancelCtx() {
 	if rm == nil {
 		return
 	}
-	rm.mu.Lock()
-	defer rm.mu.Unlock()
 	if rm.cancel != nil {
 		rm.cancel()
 	}
+	rm.workerWG.Wait()
 }
 
 func (rm *RoutineManager) killNetConns() {
@@ -564,6 +564,10 @@ func (rm *RoutineManager) killNetConns() {
 func NewRoutineManager(ctx context.Context, service string) (*RoutineManager, error) {
 	var cancel context.CancelFunc
 	ctx, cancel = context.WithCancel(ctx)
+	pu, ok := ctx.Value(config.ParameterUnitKey).(*config.ParameterUnit)
+	if !ok || pu == nil {
+		pu = getPu(service)
+	}
 	accountRoutine := &AccountRoutineManager{
 		killQueueMu:       sync.RWMutex{},
 		accountId2Routine: make(map[int64]map[*Routine]uint64),
@@ -579,31 +583,39 @@ func NewRoutineManager(ctx context.Context, service string) (*RoutineManager, er
 		cancel:           cancel,
 		service:          service,
 	}
-	pu := getPu(rm.service)
 	sv := pu.SV
+	rm.cleanKillQueueInterval = time.Duration(sv.CleanKillQueueInterval) * time.Minute
 	if sv != nil && sv.EnableTls {
 		err := initTlsConfig(rm, sv)
 		if err != nil {
+			cancel()
 			return nil, err
 		}
 	}
 
 	// add kill connect routine
-	tout := pu.SV.KillRountinesInterval
-	if tout != 0 {
+	interval := time.Duration(sv.KillRountinesInterval) * time.Second
+	if interval > 0 {
+		rm.workerWG.Add(1)
 		go func() {
+			defer rm.workerWG.Done()
+			select {
+			case <-rm.ctx.Done():
+				return
+			default:
+			}
+			rm.KillRoutineConnections()
+
+			timer := time.NewTimer(interval)
+			defer timer.Stop()
 			for {
 				select {
 				case <-rm.ctx.Done():
 					return
-				default:
+				case <-timer.C:
 				}
 				rm.KillRoutineConnections()
-				if tout != 0 {
-					time.Sleep(time.Duration(tout) * time.Second)
-				} else {
-					break
-				}
+				timer.Reset(interval)
 			}
 		}()
 	}

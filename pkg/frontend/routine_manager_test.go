@@ -374,12 +374,10 @@ func Test_rm(t *testing.T) {
 	pu := config.NewParameterUnit(sv, nil, nil, nil)
 	pu.SV.SkipCheckUser = true
 	pu.SV.KillRountinesInterval = 1
-	setPu("", pu)
-	rm, err := NewRoutineManager(context.Background(), "")
+	ctx := context.WithValue(context.Background(), config.ParameterUnitKey, pu)
+	rm, err := NewRoutineManager(ctx, "")
 	assert.NoError(t, err)
 	rm.cleanKillQueue()
-	setPu("", nil)
-	time.Sleep(2 * time.Second)
 	rm.cancelCtx()
 }
 
@@ -453,9 +451,10 @@ func TestRoutineManagerKillAndCleanKillQueue(t *testing.T) {
 	ses := &Session{}
 	rt.setSession(ses)
 	rm := &RoutineManager{
-		ctx:              context.Background(),
-		clients:          make(map[*Conn]*Routine),
-		routinesByConnID: map[uint32]*Routine{1003: rt},
+		ctx:                    context.Background(),
+		clients:                make(map[*Conn]*Routine),
+		routinesByConnID:       map[uint32]*Routine{1003: rt},
+		cleanKillQueueInterval: time.Minute,
 		accountRoutine: &AccountRoutineManager{
 			killIdQueue:       make(map[int64]KillRecord),
 			accountId2Routine: make(map[int64]map[*Routine]uint64),
@@ -475,8 +474,6 @@ func TestRoutineManagerKillAndCleanKillQueue(t *testing.T) {
 	require.NoError(t, rm.kill(context.Background(), true, 1, 1003, ""))
 	require.True(t, rt.isCancelled())
 
-	pu := getPu("")
-	pu.SV.CleanKillQueueInterval = 1
 	rm.accountRoutine.killIdQueue[1] = NewKillRecord(time.Now().Add(-2*time.Minute), 1)
 	rm.accountRoutine.killIdQueue[2] = NewKillRecord(time.Now(), 1)
 	rm.cleanKillQueue()
@@ -495,13 +492,40 @@ func TestRoutineManagerKillRoutineConnections(t *testing.T) {
 		},
 	}
 	rm := &RoutineManager{
-		accountRoutine: ar,
-		service:        "",
+		accountRoutine:         ar,
+		service:                "",
+		cleanKillQueueInterval: time.Minute,
 	}
 
 	rm.KillRoutineConnections()
 	require.True(t, rt.isCancelled())
 	require.NotContains(t, ar.accountId2Routine, int64(20))
+}
+
+func TestRoutineManagerConfigSnapshotAndCancel(t *testing.T) {
+	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+	pu.SV.SetDefaultValues()
+	pu.SV.KillRountinesInterval = 3600
+	pu.SV.CleanKillQueueInterval = 2
+	ctx := context.WithValue(context.Background(), config.ParameterUnitKey, pu)
+
+	rm, err := NewRoutineManager(ctx, "")
+	require.NoError(t, err)
+	require.Equal(t, 2*time.Minute, rm.cleanKillQueueInterval)
+
+	pu.SV.CleanKillQueueInterval = 3
+	require.Equal(t, 2*time.Minute, rm.cleanKillQueueInterval)
+
+	done := make(chan struct{})
+	go func() {
+		rm.cancelCtx()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("RoutineManager worker did not stop after cancellation")
+	}
 }
 
 func TestRoutineManagerMigrationAndResetErrorBranches(t *testing.T) {
