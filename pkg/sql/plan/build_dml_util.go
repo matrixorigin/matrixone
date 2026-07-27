@@ -3421,6 +3421,16 @@ func (fk FkReferDef) String() string {
 		fk.Db, fk.Tbl, fk.Name, fk.Col, fk.ReferCol)
 }
 
+// quoteSQLStringLiteral escapes a string for safe use in SQL string literals.
+// It replaces backslashes and single quotes, and wraps the result in quotes.
+func quoteSQLStringLiteral(s string) string {
+	replacer := strings.NewReplacer(
+		`\`, `\\`,
+		`'`, `''`,
+	)
+	return "'" + replacer.Replace(s) + "'"
+}
+
 // GetSqlForFkReferredTo returns the query that retrieves the fk relationships
 // that refer to the table
 func GetSqlForFkReferredTo(db, table string) string {
@@ -3436,11 +3446,12 @@ func GetSqlForFkReferredTo(db, table string) string {
 			"from "+
 			"`mo_catalog`.`mo_foreign_keys` "+
 			"where "+
-			"refer_db_name = '%s' and refer_table_name = '%s' "+
+			"refer_db_name = %s and refer_table_name = %s "+
 			" and "+
-			"(db_name != '%s' or db_name = '%s' and table_name != '%s') "+
+			"(db_name != %s or db_name = %s and table_name != %s) "+
 			"order by db_name, table_name, constraint_name;",
-		db, table, db, db, table)
+		quoteSQLStringLiteral(db), quoteSQLStringLiteral(table),
+		quoteSQLStringLiteral(db), quoteSQLStringLiteral(db), quoteSQLStringLiteral(table))
 }
 
 // GetFkReferredTo returns the foreign key relationships that refer to the table
