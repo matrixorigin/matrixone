@@ -811,7 +811,11 @@ func TestDecrementParamOrdinalRuleTraversesFunctionsAndLists(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int32(0), first.GetP().Pos)
 
-	_, err = rule.ApplyExpr(param(0))
+	expr.GetF().Args[0].GetList().List = append(
+		expr.GetF().Args[0].GetList().List,
+		param(0),
+	)
+	_, err = rule.ApplyExpr(expr)
 	require.ErrorContains(t, err, "prepared parameter ordinal is not one-based")
 }
 
