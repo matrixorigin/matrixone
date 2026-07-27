@@ -685,7 +685,7 @@ func extractDataBranchSQLRowValue(
 	row []any,
 	rowIdx int,
 ) error {
-	if vec.GetNulls().Contains(uint64(rowIdx)) {
+	if vec.IsConstNull() || vec.GetNulls().Contains(uint64(rowIdx)) {
 		row[colIdx] = nil
 		return nil
 	}

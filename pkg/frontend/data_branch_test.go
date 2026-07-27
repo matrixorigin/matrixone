@@ -348,6 +348,20 @@ func TestExtractDataBranchSQLRowValueUint8Array(t *testing.T) {
 
 	vec.Free(mp)
 	mpool.DeleteMPool(mp)
+
+	mp = mpool.MustNewZero()
+	vec = vector.NewConstNull(types.T_array_uint8.ToType(), 3, mp)
+
+	row = make([]any, 1)
+	require.NoError(t, extractDataBranchSQLRowValue(context.Background(), nil, vec, 0, row, 2))
+	require.Nil(t, row[0])
+
+	buf.Reset()
+	require.NoError(t, formatValIntoString(nil, row[0], types.T_array_uint8.ToType(), &buf))
+	require.Equal(t, "NULL", buf.String())
+
+	vec.Free(mp)
+	mpool.DeleteMPool(mp)
 }
 
 func TestAppendTupleValueToVector_VarlenaAndNull(t *testing.T) {
