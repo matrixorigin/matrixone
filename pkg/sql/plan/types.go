@@ -306,6 +306,11 @@ type QueryBuilder struct {
 	// so positions recorded pre-prune (e.g. the REPLACE old-PK key) must be remapped
 	// through this map before use.
 	sinkColRef map[[2]int32]int
+
+	// cteRefs contains only non-recursive CTEs that were actually bound. It is
+	// populated lazily so unused CTE bodies retain their existing lazy-binding
+	// semantics.
+	cteRefs []*CTERef
 }
 
 type OptimizerHints struct {
@@ -339,6 +344,18 @@ type CTERef struct {
 	maskedCTEs     map[string]bool
 	snapshot       *Snapshot
 	declarationCtx *BindContext
+	occurrences    []cteOccurrence
+	hasNestedRef   bool
+	hasNestedUse   bool
+}
+
+type cteOccurrence struct {
+	rootID       int32
+	rootTag      int32
+	ctx          *BindContext
+	headings     []string
+	types        []plan.Type
+	isCorrelated bool
 }
 
 type CteBindState struct {
