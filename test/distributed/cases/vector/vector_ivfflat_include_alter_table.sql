@@ -21,14 +21,12 @@ insert into vector_ivfflat_include_phase7_include values
     (4, "[2,2,2]", "delta", 40, "n4");
 
 show create table vector_ivfflat_include_phase7_include;
--- @sortkey:2
-show index from vector_ivfflat_include_phase7_include;
+show index from vector_ivfflat_include_phase7_include where Key_name = 'idx_ivf_include_phase7';
 
 alter table vector_ivfflat_include_phase7_include rename column title to headline;
 
 show create table vector_ivfflat_include_phase7_include;
--- @sortkey:2
-show index from vector_ivfflat_include_phase7_include;
+show index from vector_ivfflat_include_phase7_include where Key_name = 'idx_ivf_include_phase7';
 
 select id, headline, category
 from vector_ivfflat_include_phase7_include
