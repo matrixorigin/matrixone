@@ -43,23 +43,23 @@ func TestIssue26118DatabaseCopiesPreserveHashIdentifiers(t *testing.T) {
 			sourceDB    = "issue#26118#source"
 			branchDB    = "issue_26118_branch"
 			cloneDB     = "issue_26118_clone"
-			prefixDB    = "\x001"
+			prefixDB    = "##issue_26118_prefix"
 			prefixClone = "issue_26118_prefix_clone"
 			roleName    = "issue_26118_view_role"
 			userName    = "issue_26118_view_user"
 		)
 		for _, name := range []string{branchDB, cloneDB, prefixClone, prefixDB, sourceDB} {
-			execSQLMaybe(t, ctx, db, "drop database if exists `"+name+"`")
+			execSQLRequire(t, ctx, db, "drop database if exists `"+name+"`")
 		}
-		execSQLMaybe(t, ctx, db, "drop user if exists "+userName)
-		execSQLMaybe(t, ctx, db, "drop role if exists "+roleName)
+		execSQLRequire(t, ctx, db, "drop user if exists "+userName)
+		execSQLRequire(t, ctx, db, "drop role if exists "+roleName)
 		defer func() {
 			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cleanupCancel()
-			execSQLMaybe(t, cleanupCtx, db, "drop user if exists "+userName)
-			execSQLMaybe(t, cleanupCtx, db, "drop role if exists "+roleName)
+			execSQLRequire(t, cleanupCtx, db, "drop user if exists "+userName)
+			execSQLRequire(t, cleanupCtx, db, "drop role if exists "+roleName)
 			for _, name := range []string{branchDB, cloneDB, prefixClone, prefixDB, sourceDB} {
-				execSQLMaybe(t, cleanupCtx, db, "drop database if exists `"+name+"`")
+				execSQLRequire(t, cleanupCtx, db, "drop database if exists `"+name+"`")
 			}
 		}()
 
