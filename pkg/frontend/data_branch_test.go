@@ -1331,18 +1331,41 @@ func TestValidateDataBranchColumnLineage(t *testing.T) {
 		))
 	})
 
-	t.Run("rename without origin name preserves stable identity", func(t *testing.T) {
-		tarDefs := []*plan.TableDef{
-			tableDef(col("a", 1, 0), col("b", 2, 1)),
-			tableDef(col("a", 1, 0), col("bb", 2, 1)),
+	t.Run("rename preserves stable identity across edge kinds", func(t *testing.T) {
+		for _, tc := range []struct {
+			name        string
+			originName  string
+			lineageOnly bool
+		}{
+			{name: "ordinary with origin name", originName: "b"},
+			{name: "ordinary without origin name"},
+			{name: "alter with origin name", originName: "b", lineageOnly: true},
+			{name: "alter without origin name", lineageOnly: true},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				renamed := col("bb", 2, 1)
+				renamed.OriginName = tc.originName
+				tarDefs := []*plan.TableDef{
+					tableDef(col("a", 1, 0), col("b", 2, 1)),
+					tableDef(col("a", 1, 0), renamed),
+				}
+				baseDefs := []*plan.TableDef{
+					tableDef(col("a", 1, 0), col("b", 2, 1)),
+					tableDef(col("a", 1, 0), col("b", 2, 1)),
+				}
+
+				reachesLCA, lcaCol, redefined := dataBranchColumnReachesLCA(
+					tarDefs, []bool{false, tc.lineageOnly}, renamed,
+				)
+				require.True(t, reachesLCA)
+				require.False(t, redefined)
+				require.Same(t, tarDefs[0].Cols[1], lcaCol)
+				require.NoError(t, validateDataBranchColumnLineage(
+					tarDefs, []bool{false, tc.lineageOnly},
+					baseDefs, []bool{false, false},
+				))
+			})
 		}
-		baseDefs := []*plan.TableDef{
-			tableDef(col("a", 1, 0), col("b", 2, 1)),
-			tableDef(col("a", 1, 0), col("b", 2, 1)),
-		}
-		require.NoError(t, validateDataBranchColumnLineage(
-			tarDefs, []bool{false, false}, baseDefs, []bool{false, false},
-		))
 	})
 
 	t.Run("replacement with colliding endpoint identity remains discontinuous", func(t *testing.T) {
@@ -1414,7 +1437,7 @@ func TestCheckSchemaCompatibility_AllowsStableIdentityRename(t *testing.T) {
 	}
 
 	endpointColumns, err := dataBranchLineageEndpointColumns(
-		[]*plan.TableDef{baseDef, targetDef}, []bool{false, false},
+		[]*plan.TableDef{baseDef, targetDef}, []bool{false, true},
 		[]*plan.TableDef{baseDef, baseDef}, []bool{false, false},
 	)
 	require.NoError(t, err)

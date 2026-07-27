@@ -1892,13 +1892,15 @@ func dataBranchColumnReachesLCA(
 	for i := len(pathDefs) - 2; i >= 0; i-- {
 		previous := dataBranchColumnDefByName(pathDefs[i], current.Name)
 		if previous == nil && !lineageOnly[i+1] {
-			// An in-place rename on an ordinary clone edge keeps OriginName,
-			// or at least its stable physical identity, which links the
-			// descendant name back to its ancestor column.
+			// An in-place rename on an ordinary clone edge can keep OriginName,
+			// which links the descendant name back to its ancestor column.
 			previous = dataBranchColumnDefByLogicalName(pathDefs[i], current)
-			if previous == nil {
-				previous = dataBranchColumnDefByIdentity(pathDefs[i], current)
-			}
+		}
+		if previous == nil {
+			// COPY ALTER may not retain OriginName, but a pure rename preserves
+			// the stable physical identity. Same-statement replacements are
+			// rejected before their lineage edge is published.
+			previous = dataBranchColumnDefByIdentity(pathDefs[i], current)
 		}
 		if previous == nil {
 			for j := i - 1; j >= 0; j-- {
