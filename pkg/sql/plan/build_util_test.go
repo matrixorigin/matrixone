@@ -18,7 +18,10 @@ import (
 	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -486,6 +489,7 @@ func TestBuildDefaultAndOnUpdateRejectOversizedCharVarchar(t *testing.T) {
 		)
 		_, err := buildDefaultExpr(defaultCol, typ, proc)
 		require.Error(t, err, "oversized DEFAULT for %v(3) must be rejected", oid)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidDefault))
 
 		onUpdateCol := tree.NewColumnTableDef(
 			tree.NewUnresolvedColName("a"),
@@ -496,6 +500,7 @@ func TestBuildDefaultAndOnUpdateRejectOversizedCharVarchar(t *testing.T) {
 		)
 		_, err = buildOnUpdate(onUpdateCol, typ, proc)
 		require.Error(t, err, "oversized ON UPDATE for %v(3) must be rejected", oid)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidDefault))
 	}
 }
 
@@ -513,6 +518,25 @@ func TestBuildDefaultExprFitsVarchar(t *testing.T) {
 	defaultValue, err := buildDefaultExpr(defaultCol, plan.Type{Id: int32(types.T_varchar), Width: 3}, proc)
 	require.NoError(t, err)
 	require.Equal(t, "abc", defaultValue.Expr.GetLit().GetSval())
+}
+
+func TestMapDDLAssignmentCastErrorOnlyMapsStringWidthFailures(t *testing.T) {
+	ctx := t.Context()
+	invalidInput := moerr.NewInvalidInput(ctx, "bad default")
+	require.Same(t, invalidInput, mapDDLAssignmentCastError(
+		ctx,
+		plan.Type{Id: int32(types.T_varchar), Width: 3},
+		"a",
+		invalidInput,
+	))
+
+	internal := moerr.NewInternalError(ctx, "cast failed")
+	require.Same(t, internal, mapDDLAssignmentCastError(
+		ctx,
+		plan.Type{Id: int32(types.T_int64)},
+		"a",
+		internal,
+	))
 }
 
 // makePlan2AssignmentCastExpr routes assignment-only targets through cast_strict,
@@ -539,7 +563,7 @@ func TestMakePlan2AssignmentCastExprUsesStrictForAssignmentTargets(t *testing.T)
 	require.Equal(t, "cast", intExpr.GetF().GetFunc().GetObjName())
 }
 
-func TestForceAssignmentCastExprUsesStrictForAssignmentTargets(t *testing.T) {
+func TestForceAssignmentCastExprUsesAssignmentSemantics(t *testing.T) {
 	ctx := context.Background()
 	srcText := &Expr{Typ: plan.Type{Id: int32(types.T_text)}}
 
@@ -547,7 +571,11 @@ func TestForceAssignmentCastExprUsesStrictForAssignmentTargets(t *testing.T) {
 		target := plan.Type{Id: int32(oid), Width: 3}
 		strictExpr, err := forceAssignmentCastExpr(ctx, DeepCopyExpr(srcText), target)
 		require.NoError(t, err)
-		require.Equal(t, "cast_strict", strictExpr.GetF().GetFunc().GetObjName())
+		want := "cast_strict"
+		if oid == types.T_varchar || oid == types.T_char {
+			want = "cast_assign"
+		}
+		require.Equal(t, want, strictExpr.GetF().GetFunc().GetObjName())
 
 		genericExpr, err := forceCastExpr(ctx, DeepCopyExpr(srcText), target)
 		require.NoError(t, err)
@@ -575,6 +603,10 @@ func TestAssignmentCastPreservesNestedExplicitTemporalCast(t *testing.T) {
 // (cast_strict): an over-length value is rejected, not silently truncated.
 func TestBuildGeneratedExprUsesStrictForCharVarchar(t *testing.T) {
 	proc := testutil.NewProcess(t)
+	moruntime.ServiceRuntime(proc.GetService()).SetGlobalVariables(
+		moruntime.MOProtocolVersion,
+		defines.MORPCVersion5,
+	)
 	stmt, err := mysql.ParseOne(context.Background(),
 		"create table t (t text, g varchar(1) generated always as (coalesce(t, '')) stored)", 1)
 	require.NoError(t, err)
@@ -594,4 +626,83 @@ func TestBuildGeneratedExprUsesStrictForCharVarchar(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, gen)
 	require.Equal(t, "cast_strict", gen.Expr.GetF().GetFunc().GetObjName())
+	fid, _ := function.DecodeOverloadID(gen.Expr.GetF().GetFunc().GetObj())
+	require.Equal(t, int32(function.CAST_STRICT), fid)
+	require.Equal(t, int32(types.T_varchar), gen.Expr.Typ.Id) // type still resolves to the column type
+
+	// A non-CHAR/VARCHAR generated target keeps the generic cast.
+	genInt, err := buildGeneratedExpr(genCol, plan.Type{Id: int32(types.T_int64)}, existingCols, proc)
+	require.NoError(t, err)
+	require.Equal(t, "cast", genInt.Expr.GetF().GetFunc().GetObjName())
+}
+
+func TestApplyGeneratedColumnAssignmentCastCompatibility(t *testing.T) {
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	proc := builder.compCtx.GetProcess()
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion5)
+	defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+	source := &Expr{Typ: plan.Type{Id: int32(types.T_text)}}
+	target := plan.Type{Id: int32(types.T_varchar), Width: 3}
+
+	for _, storedName := range []string{"cast_strict", "cast_assign"} {
+		stored, err := forceCastExprWithName(context.Background(), DeepCopyExpr(source), target, storedName)
+		require.NoError(t, err)
+
+		normal := builder.applyGeneratedColumnAssignmentCast(DeepCopyExpr(stored), false)
+		require.Equal(t, "cast_assign", normal.GetF().GetFunc().GetObjName())
+
+		ignore := builder.applyGeneratedColumnAssignmentCast(DeepCopyExpr(stored), true)
+		require.Equal(t, "cast_ignore", ignore.GetF().GetFunc().GetObjName())
+	}
+
+	require.Nil(t, builder.applyGeneratedColumnAssignmentCast(nil, false))
+	require.Same(t, source, builder.applyGeneratedColumnAssignmentCast(source, false))
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion4)
+	stored, err := forceCastExprWithName(context.Background(), DeepCopyExpr(source), target, "cast_assign")
+	require.NoError(t, err)
+	normal := builder.applyGeneratedColumnAssignmentCast(DeepCopyExpr(stored), false)
+	require.Equal(t, "cast_strict", normal.GetF().GetFunc().GetObjName())
+	ignore := builder.applyGeneratedColumnAssignmentCast(DeepCopyExpr(stored), true)
+	require.Equal(t, "cast", ignore.GetF().GetFunc().GetObjName())
+}
+
+func TestAssignmentCastProtocolGate(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+	target := plan.Type{Id: int32(types.T_varchar), Width: 3}
+
+	tests := []struct {
+		version int64
+		ignore  bool
+		want    string
+	}{
+		{version: defines.MORPCVersion4, want: "cast_strict"},
+		{version: defines.MORPCVersion4, ignore: true, want: "cast"},
+		{version: defines.MORPCVersion5, want: "cast_assign"},
+		{version: defines.MORPCVersion5, ignore: true, want: "cast_ignore"},
+	}
+	for _, test := range tests {
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, test.version)
+		require.Equal(t, test.want, assignmentCastFunctionName(target, test.ignore, proc))
+
+		source := makePlan2Int64ConstExprWithType(1)
+		targetType := &plan.Expr{
+			Typ:  target,
+			Expr: &plan.Expr_T{T: &plan.TargetType{}},
+		}
+		casted, err := forceCastExpr2WithProcess(
+			t.Context(),
+			source,
+			makeTypeByPlan2Type(target),
+			targetType,
+			test.ignore,
+			proc,
+		)
+		require.NoError(t, err)
+		require.Equal(t, test.want, casted.GetF().GetFunc().GetObjName())
+	}
+	require.Equal(t, "cast", assignmentCastFunctionName(plan.Type{Id: int32(types.T_int64)}, false, proc))
 }

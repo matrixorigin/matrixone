@@ -30,9 +30,72 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
+
+type branchSnapshotSQLCapture struct {
+	*backgroundExecTest
+	accountIDs []uint32
+}
+
+func (capture *branchSnapshotSQLCapture) Exec(ctx context.Context, sql string) error {
+	accountID, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return err
+	}
+	capture.accountIDs = append(capture.accountIDs, accountID)
+	return capture.backgroundExecTest.Exec(ctx, sql)
+}
+
+func TestCreateBranchProtectSnapshotQuotesSingleValuesRow(t *testing.T) {
+	accountName := "account" + "'" + `\` + "name"
+	databaseName := "database" + "'),(" + "'name"
+	tableName := "table" + "'" + `\` + "name"
+	receipt := cloneReceipt{
+		snapshotTS:     123,
+		srcAccount:     42,
+		srcAccountName: accountName,
+		srcDb:          databaseName,
+		srcTbl:         tableName,
+		srcTableID:     7,
+		dstTableID:     8,
+	}
+	backgroundExec := &backgroundExecTest{}
+	backgroundExec.init()
+	capture := &branchSnapshotSQLCapture{backgroundExecTest: backgroundExec}
+
+	ctx := defines.AttachAccountId(context.Background(), receipt.srcAccount)
+	require.NoError(t, createBranchProtectSnapshot(ctx, nil, capture, &receipt))
+	require.Equal(t, []uint32{sysAccountID}, capture.accountIDs)
+	require.Len(t, capture.executedSQLs, 1)
+
+	statements, err := mysql.Parse(context.Background(), capture.executedSQLs[0], 1)
+	require.NoError(t, err)
+	require.Len(t, statements, 1)
+	insert, ok := statements[0].(*tree.Insert)
+	require.True(t, ok)
+	values, ok := insert.Rows.Select.(*tree.ValuesClause)
+	require.True(t, ok)
+	require.Len(t, values.Rows, 1)
+	require.Len(t, values.Rows[0], 9)
+
+	requireSQLStringValue(t, values.Rows[0][3], dataBranchLevel_Table)
+	requireSQLStringValue(t, values.Rows[0][4], accountName)
+	requireSQLStringValue(t, values.Rows[0][5], databaseName)
+	requireSQLStringValue(t, values.Rows[0][6], tableName)
+	requireSQLStringValue(t, values.Rows[0][8], branchSnapshotKind)
+}
+
+func requireSQLStringValue(t *testing.T, expr tree.Expr, expected string) {
+	t.Helper()
+	value, ok := expr.(*tree.NumVal)
+	require.True(t, ok)
+	require.Equal(t, expected, value.String())
+}
 
 // ---------------------------------------------------------------------------
 // UT-U1 — branchSnapshotName

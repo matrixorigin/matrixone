@@ -227,6 +227,21 @@ func (e *PipelineEdge) Err() error {
 	return e.terminalErr
 }
 
+// terminalSignalSnapshot returns the edge's terminal state after synchronizing
+// with any in-flight terminal sender. It is used by PipelineSignalReceiver when
+// Done has closed but the terminal signal itself could not enter a full Ch2.
+func (e *PipelineEdge) terminalSignalSnapshot() PipelineSignal {
+	if e == nil {
+		return NewEndSignal()
+	}
+	e.terminalMu.Lock()
+	defer e.terminalMu.Unlock()
+	if e.fatalTerminal {
+		return e.fatalSignal
+	}
+	return NewEndSignal()
+}
+
 // SendData sends a data batch via the edge. It returns true if the signal was
 // successfully sent, false if the context was cancelled.
 func (e *PipelineEdge) SendData(ctx context.Context, spool *pSpool.PipelineSpool, idx int) bool {
@@ -418,11 +433,15 @@ func (e *PipelineEdge) sendTerminalWithContext(ctx context.Context, signal Pipel
 	if e.fatalDelivered >= e.fatalRemaining {
 		return false
 	}
+	// Fatal state is durable and wakes PipelineSignalReceiver through Done.
+	// Never make this control path wait behind the data channel it terminates;
+	// enqueue as many fatal signals as fit and let the receiver synthesize any
+	// missing remainder from the recorded state.
 	for e.fatalDelivered < e.fatalRemaining {
 		select {
 		case e.Ch2 <- signal:
 			e.fatalDelivered++
-		case <-ctx.Done():
+		default:
 			return false
 		}
 	}
