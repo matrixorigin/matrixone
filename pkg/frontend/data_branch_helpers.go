@@ -685,7 +685,7 @@ func extractDataBranchSQLRowValue(
 	row []any,
 	rowIdx int,
 ) error {
-	if vec.GetNulls().Contains(uint64(rowIdx)) {
+	if vec.IsConstNull() || vec.GetNulls().Contains(uint64(rowIdx)) {
 		row[colIdx] = nil
 		return nil
 	}
@@ -694,6 +694,9 @@ func extractDataBranchSQLRowValue(
 	case types.T_datetime, types.T_timestamp, types.T_decimal64,
 		types.T_decimal128, types.T_decimal256, types.T_time:
 		row[colIdx] = types.DecodeValue(vec.GetRawBytesAt(rowIdx), vec.GetType().Oid)
+		return nil
+	case types.T_array_uint8:
+		row[colIdx] = vector.GetArrayAt[uint8](vec, rowIdx)
 		return nil
 	default:
 		return extractRowFromVector(ctx, ses, vec, colIdx, row, rowIdx, false)
