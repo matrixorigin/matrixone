@@ -40,11 +40,15 @@ func TestIssue26121DatabaseOperationsKeepOrdinaryInternalLookingTables(t *testin
 		execSQLRequire(t, ctx, db, "set role moadmin")
 
 		const (
-			sourceDB     = "issue_26121_source"
-			branchDB     = "issue_26121_branch"
-			cloneDB      = "issue_26121_clone"
-			restoreDB    = "issue_26121_after_snapshot"
-			snapshotName = "issue_26121_account_snapshot"
+			sourceDB             = "issue_26121_source"
+			branchDB             = "issue_26121_branch"
+			cloneDB              = "issue_26121_clone"
+			fullTextDB           = "issue_26121_fulltext"
+			fullTextCloneDB      = "issue_26121_fulltext_clone"
+			fullTextBranchDB     = "issue_26121_fulltext_branch"
+			restoreDB            = "issue_26121_after_snapshot"
+			snapshotName         = "issue_26121_account_snapshot"
+			fullTextSnapshotName = "issue_26121_fulltext_snapshot"
 		)
 		deleteCases := []struct {
 			dbName    string
@@ -54,7 +58,7 @@ func TestIssue26121DatabaseOperationsKeepOrdinaryInternalLookingTables(t *testin
 			{dbName: "issue_26121_delete_lock", tableName: "__mo_account_lock"},
 			{dbName: "issue_26121_delete_auto", tableName: "mo_increment_columns"},
 		}
-		cleanupDBs := []string{branchDB, cloneDB, sourceDB, restoreDB}
+		cleanupDBs := []string{branchDB, cloneDB, sourceDB, fullTextBranchDB, fullTextCloneDB, fullTextDB, restoreDB}
 		for _, tc := range deleteCases {
 			cleanupDBs = append(cleanupDBs, tc.dbName)
 		}
@@ -105,6 +109,42 @@ func TestIssue26121DatabaseOperationsKeepOrdinaryInternalLookingTables(t *testin
 					require.Equal(t, 1, count, "%s.%s must retain its row", copiedDB, tableName)
 				}
 			}
+		})
+
+		t.Run("database copy and restore do not copy fulltext storage independently", func(t *testing.T) {
+			execSQLRequire(t, ctx, db, "create database `"+fullTextDB+"`")
+			execSQLRequire(t, ctx, db, "create table `"+fullTextDB+"`.`docs` (id bigint primary key, body text)")
+			execSQLRequire(t, ctx, db, "create fulltext index `ft_body` on `"+fullTextDB+"`.`docs` (`body`)")
+			execSQLRequire(t, ctx, db, "insert into `"+fullTextDB+"`.`docs` values (1, 'one document')")
+
+			var sourceHidden int
+			require.NoError(t, db.QueryRowContext(ctx,
+				"select count(*) from mo_catalog.mo_tables where reldatabase = ? and relname like '__mo_index_%'",
+				fullTextDB).Scan(&sourceHidden))
+			require.Equal(t, 1, sourceHidden)
+
+			execSQLRequire(t, ctx, db, "create database `"+fullTextCloneDB+"` clone `"+fullTextDB+"`")
+			execSQLRequire(t, ctx, db, "data branch create database `"+fullTextBranchDB+"` from `"+fullTextDB+"`")
+
+			assertFullTextCopy := func(database string) {
+				var targetHidden int
+				require.NoError(t, db.QueryRowContext(ctx,
+					"select count(*) from mo_catalog.mo_tables where reldatabase = ? and relname like '__mo_index_%'",
+					database).Scan(&targetHidden))
+				require.Equal(t, sourceHidden, targetHidden)
+				var rows int
+				require.NoError(t, db.QueryRowContext(ctx,
+					"select count(*) from `"+database+"`.`docs`").Scan(&rows))
+				require.Equal(t, 1, rows)
+			}
+			assertFullTextCopy(fullTextCloneDB)
+			assertFullTextCopy(fullTextBranchDB)
+
+			execSQLRequire(t, ctx, db, "create snapshot `"+fullTextSnapshotName+"` for account sys")
+			execSQLRequire(t, ctx, db, "drop database `"+fullTextDB+"`")
+			execSQLRequire(t, ctx, db, "restore account sys {snapshot=\""+fullTextSnapshotName+"\"}")
+			assertFullTextCopy(fullTextDB)
+			execSQLRequire(t, ctx, db, "drop snapshot `"+fullTextSnapshotName+"`")
 		})
 
 		t.Run("delete validation sees ordinary tables", func(t *testing.T) {

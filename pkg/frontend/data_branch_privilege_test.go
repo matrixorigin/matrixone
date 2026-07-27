@@ -90,7 +90,11 @@ func TestBranchDeleteDatabaseTableIDsSQLReusesCloneObjectFilter(t *testing.T) {
 	got := branchDeleteDatabaseTableIDsSQL(accountID, dbName)
 
 	require.Equal(t, expected, got)
-	require.Contains(t, got, "relkind != 'i'")
+	require.Contains(t, got, "relkind not in (")
+	require.Contains(t, got, "'i'")
+	require.Contains(t, got, "'fulltext'")
+	require.Contains(t, got, "'metadata'")
+	require.Contains(t, got, "'hnsw_meta'")
 	require.Contains(t, got, "relkind != 'temporary_table'")
 	require.Contains(t, got, "relkind != 'partition'")
 	require.Contains(t, got, "relkind != 'S'")
@@ -103,7 +107,11 @@ func TestBranchDeleteDatabaseTableIDsSQLReusesCloneObjectFilter(t *testing.T) {
 func TestBuildTableInfoListWhereClauseUsesRelationKindForInternalObjects(t *testing.T) {
 	got := buildTableInfoListWhereClause("db1", "", 42)
 
-	require.Contains(t, got, "relkind != 'i'")
+	require.Contains(t, got, "relkind not in (")
+	require.Contains(t, got, "'i'")
+	require.Contains(t, got, "'fulltext'")
+	require.Contains(t, got, "'metadata'")
+	require.Contains(t, got, "'hnsw_meta'")
 	require.Contains(t, got, "relkind != 'temporary_table'")
 	require.NotContains(t, got, catalog.MOAutoIncrTable)
 	require.NotContains(t, got, catalog.MO_ACCOUNT_LOCK)

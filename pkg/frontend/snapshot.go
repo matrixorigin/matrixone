@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
@@ -1960,9 +1961,9 @@ func buildTableInfoListWhereClause(dbName string, tblName string, accountId uint
 	clusterTableClause := fmt.Sprintf(" or relkind = %s", quoteSQLStringLiteral(catalog.SystemClusterRel))
 	accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and (%s))", accountId, mustShowTable+clusterTableClause)
 	whereClause := fmt.Sprintf(
-		"reldatabase = %s and relkind != %s and relkind != %s and relkind != %s and (%s)",
+		"reldatabase = %s and relkind not in (%s) and relkind != %s and relkind != %s and (%s)",
 		quoteSQLStringLiteral(dbName),
-		quoteSQLStringLiteral(catalog.SystemIndexRel),
+		hiddenIndexTableTypesSQL(),
 		quoteSQLStringLiteral(catalog.SystemTemporaryTable),
 		quoteSQLStringLiteral(catalog.SystemPartitionRel),
 		accountClause,
@@ -1982,6 +1983,20 @@ func buildTableInfoListWhereClause(dbName string, tblName string, accountId uint
 	}
 	whereClause += fmt.Sprintf(" and relkind != %s", quoteSQLStringLiteral(catalog.SystemSequenceRel))
 	return whereClause
+}
+
+func hiddenIndexTableTypesSQL() string {
+	types := []string{catalog.SystemIndexRel}
+	for _, plugin := range indexplugin.All() {
+		types = append(types, plugin.Catalog().HiddenTableTypes()...)
+	}
+	slices.Sort(types)
+	types = slices.Compact(types)
+	quoted := make([]string, len(types))
+	for i, typ := range types {
+		quoted[i] = quoteSQLStringLiteral(typ)
+	}
+	return strings.Join(quoted, ", ")
 }
 
 func quoteSQLLikePattern(literalPrefix string) string {
