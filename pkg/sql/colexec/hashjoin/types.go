@@ -190,10 +190,10 @@ func (hashJoin *HashJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 	if !ctr.bitmapSynced && hashJoin.NumCPU > 1 && !hashJoin.IsMerger {
 		hashJoin.Channel <- nil
 	}
+	ctr.resetEqCondExecutors()
 	ctr.cleanBucketBatches(proc)
 	ctr.cleanHashMap()
 	ctr.resetNonEqCondExecutor()
-	ctr.resetEqCondExecutors()
 	ctr.rightRowsMatched = nil
 	ctr.rightMatchedIter = nil
 	ctr.skipProbe = false
@@ -215,10 +215,10 @@ func (hashJoin *HashJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 func (hashJoin *HashJoin) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &hashJoin.ctr
 	ctr.cleanBatch(proc)
+	ctr.cleanEqCondExecutors()
 	ctr.cleanBucketBatches(proc)
 	ctr.cleanHashMap()
 	ctr.cleanNonEqCondExecutor()
-	ctr.cleanEqCondExecutors()
 }
 
 func (ctr *container) resetNonEqCondExecutor() {

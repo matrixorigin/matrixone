@@ -1753,12 +1753,12 @@ func TestS3FSFromSpecs(t *testing.T) {
 
 		t.Run(args.Name, func(t *testing.T) {
 
-			testFileService(t, 0, func(name string) FileService {
+			testFileServiceWithContext(t, 0, func(ctx context.Context, name string) FileService {
 				args.Name = name
 				args.KeyPrefix = time.Now().Format("2006-01-02.15:04:05.000000")
 
 				fs, err := NewS3FS(
-					context.Background(),
+					ctx,
 					args,
 					DisabledCacheConfig,
 					nil,

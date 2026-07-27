@@ -58,7 +58,7 @@ func TestValidateDataBranchCreateTxn(t *testing.T) {
 
 func TestBranchQuotaUsageSQLExcludesRootAlterLineage(t *testing.T) {
 	require.Equal(t,
-		"select count(*) from mo_catalog.mo_branch_metadata where creator = 7 and table_deleted = false and level != 'alter'",
+		"select count(*) from mo_catalog.mo_branch_metadata where creator = 7 and table_deleted = false and level != 'alter' for update",
 		branchQuotaUsageSQL(7),
 	)
 }

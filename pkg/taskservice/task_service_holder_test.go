@@ -16,6 +16,7 @@ package taskservice
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -70,6 +71,78 @@ func TestTaskHolderNotCreatedCanClose(t *testing.T) {
 			return NewFixedTaskStorageFactory(store)
 		})
 	assert.NoError(t, h.Close())
+}
+
+func TestTaskHolderRejectsCreateAfterClose(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	store := NewMemTaskStorage()
+	h := NewTaskServiceHolderWithTaskStorageFactorySelector(
+		runtime.DefaultRuntime(),
+		func(context.Context, bool) (string, error) { return "", nil },
+		func(string, string, string) TaskStorageFactory {
+			return NewFixedTaskStorageFactory(store)
+		})
+
+	require.NoError(t, h.Close())
+	err := h.Create(logservicepb.CreateTaskService{
+		User:         logservicepb.TaskTableUser{Username: "u", Password: "p"},
+		TaskDatabase: "d",
+	})
+	service, ok := h.Get()
+	if ok {
+		defer func() {
+			require.NoError(t, service.Close())
+		}()
+	}
+	require.ErrorIs(t, err, ErrNotReady)
+	require.False(t, ok)
+	require.Nil(t, service)
+}
+
+func TestTaskHolderConcurrentCreateAndClose(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	command := logservicepb.CreateTaskService{
+		User:         logservicepb.TaskTableUser{Username: "u", Password: "p"},
+		TaskDatabase: "d",
+	}
+
+	for range 50 {
+		store := NewMemTaskStorage()
+		h := NewTaskServiceHolderWithTaskStorageFactorySelector(
+			runtime.DefaultRuntime(),
+			func(context.Context, bool) (string, error) { return "", nil },
+			func(string, string, string) TaskStorageFactory {
+				return NewFixedTaskStorageFactory(store)
+			})
+
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		var createErr, closeErr error
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			<-start
+			createErr = h.Create(command)
+		}()
+		go func() {
+			defer wg.Done()
+			<-start
+			closeErr = h.Close()
+		}()
+		close(start)
+		wg.Wait()
+
+		require.NoError(t, closeErr)
+		if createErr != nil {
+			require.ErrorIs(t, createErr, ErrNotReady)
+		}
+		service, ok := h.Get()
+		if ok {
+			require.NoError(t, service.Close())
+		}
+		require.False(t, ok)
+		require.Nil(t, service)
+	}
 }
 
 func TestTaskHolderCanClose(t *testing.T) {

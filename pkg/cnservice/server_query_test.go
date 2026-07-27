@@ -19,6 +19,7 @@ import (
 	"math"
 	goruntime "runtime"
 	"runtime/debug"
+	"sync"
 	"testing"
 	"time"
 	"unsafe"
@@ -63,61 +64,199 @@ var dummyBadRequestErr = moerr.NewInternalError(context.TODO(), "bad request")
 var dummyErr = moerr.NewInternalError(context.TODO(), "dummy error")
 
 func Test_service_handleISCPDrainConsumerRenewFenceOnly(t *testing.T) {
-	require.True(t, fault.Enable())
-	defer fault.Disable()
-	require.NoError(t, fault.AddFaultPoint(context.Background(), objectio.FJ_ISCPCancelRollbackFenceTTL, ":::", "echo", 1, "", false))
-	defer func() {
-		_, _ = fault.RemoveFaultPoint(context.Background(), objectio.FJ_ISCPCancelRollbackFenceTTL)
-	}()
-
 	exec := &iscp.ISCPTaskExecutor{}
 	iscp.RegisterExecutorRuntime("runner-cn", exec)
 	defer iscp.UnregisterExecutorRuntime("runner-cn", exec)
 
 	s := &service{cfg: &Config{UUID: "runner-cn"}}
 	key := iscp.NewJobRuntimeKey(1, 42, "index_idx1", 7)
+	defer iscp.RemoveCNJobFence("runner-cn", key)
 
+	renewReq := &query.Request{ISCPDrainConsumerRequest: &query.ISCPDrainConsumerRequest{
+		AccountID:      key.AccountID,
+		TableID:        key.TableID,
+		JobName:        key.JobName,
+		JobID:          key.JobID,
+		RenewFenceOnly: true,
+	}}
 	resp := &query.Response{}
-	require.ErrorContains(t, s.handleISCPDrainConsumer(context.Background(), &query.Request{
-		ISCPDrainConsumerRequest: &query.ISCPDrainConsumerRequest{
-			AccountID:      key.AccountID,
-			TableID:        key.TableID,
-			JobName:        key.JobName,
-			JobID:          key.JobID,
-			RenewFenceOnly: true,
-		},
-	}, resp, nil), "cannot renew ISCP consumer quiescence fence")
+	require.ErrorContains(t,
+		s.handleISCPDrainConsumer(context.Background(), renewReq, resp, nil),
+		"cannot renew ISCP consumer quiescence fence",
+	)
 	require.Nil(t, resp.ISCPDrainConsumerResponse)
+	require.False(t, iscp.RenewCNJobFence("runner-cn", key, time.Second))
 	require.False(t, exec.IsJobFenced(key))
-
-	require.NoError(t, exec.CancelAndDrainJobConsumer(context.Background(), key.AccountID, key.TableID, key.JobName, key.JobID))
-	time.Sleep(700 * time.Millisecond)
 
 	resp = &query.Response{}
 	require.NoError(t, s.handleISCPDrainConsumer(context.Background(), &query.Request{
 		ISCPDrainConsumerRequest: &query.ISCPDrainConsumerRequest{
-			AccountID:      key.AccountID,
+			AccountID: key.AccountID,
+			TableID:   key.TableID,
+			JobName:   key.JobName,
+			JobID:     key.JobID,
+		},
+	}, resp, nil))
+	require.True(t, resp.ISCPDrainConsumerResponse.Success)
+	require.True(t, iscp.RenewCNJobFence("runner-cn", key, time.Second))
+	require.True(t, exec.IsJobFenced(key))
+
+	resp = &query.Response{}
+	require.NoError(t, s.handleISCPDrainConsumer(context.Background(), renewReq, resp, nil))
+	require.True(t, resp.ISCPDrainConsumerResponse.Success)
+
+	resp = &query.Response{}
+	require.NoError(t, s.handleISCPDrainConsumer(context.Background(), &query.Request{
+		ISCPDrainConsumerRequest: &query.ISCPDrainConsumerRequest{
+			AccountID:       key.AccountID,
+			TableID:         key.TableID,
+			JobName:         key.JobName,
+			JobID:           key.JobID,
+			RemoveFenceOnly: true,
+		},
+	}, resp, nil))
+	require.True(t, resp.ISCPDrainConsumerResponse.Success)
+
+	resp = &query.Response{}
+	require.ErrorContains(t,
+		s.handleISCPDrainConsumer(context.Background(), renewReq, resp, nil),
+		"cannot renew ISCP consumer quiescence fence",
+		"late renewal must not recreate a fence after removal",
+	)
+	require.Nil(t, resp.ISCPDrainConsumerResponse)
+	require.False(t, iscp.RenewCNJobFence("runner-cn", key, time.Second))
+	require.False(t, exec.IsJobFenced(key))
+}
+
+func Test_service_handleISCPDrainConsumerWaitsForExecutorRuntime(t *testing.T) {
+	oldTimeout := iscpExecutorReadyTimeout
+	iscpExecutorReadyTimeout = time.Second
+	oldLookup := iscpGetExecutorRuntimeFn
+	defer func() {
+		iscpExecutorReadyTimeout = oldTimeout
+		iscpGetExecutorRuntimeFn = oldLookup
+	}()
+
+	const runnerCN = "late-runner-cn"
+	key := iscp.NewJobRuntimeKey(1, 42, "index_idx1", 7)
+	defer iscp.RemoveCNJobFence(runnerCN, key)
+	exec := &iscp.ISCPTaskExecutor{}
+	defer iscp.UnregisterExecutorRuntime(runnerCN, exec)
+	firstLookup := make(chan struct{})
+	var once sync.Once
+	iscpGetExecutorRuntimeFn = func(cnUUID string) (*iscp.ISCPTaskExecutor, bool) {
+		missing := false
+		once.Do(func() {
+			missing = true
+			close(firstLookup)
+		})
+		if missing {
+			return nil, false
+		}
+		return iscp.GetExecutorRuntime(cnUUID)
+	}
+	go func() {
+		<-firstLookup
+		iscp.RegisterExecutorRuntime(runnerCN, exec)
+	}()
+
+	s := &service{cfg: &Config{UUID: runnerCN}}
+	resp := &query.Response{}
+	require.NoError(t, s.handleISCPDrainConsumer(context.Background(), &query.Request{
+		ISCPDrainConsumerRequest: &query.ISCPDrainConsumerRequest{
+			AccountID: 1,
+			TableID:   42,
+			JobName:   "index_idx1",
+			JobID:     7,
+		},
+	}, resp, nil))
+	require.True(t, resp.ISCPDrainConsumerResponse.Success)
+}
+
+func Test_service_handleISCPDrainConsumerReturnsRetryableNotReady(t *testing.T) {
+	oldTimeout := iscpExecutorReadyTimeout
+	iscpExecutorReadyTimeout = time.Millisecond
+	defer func() { iscpExecutorReadyTimeout = oldTimeout }()
+
+	const runnerCN = "not-ready-runner-cn"
+	key := iscp.NewJobRuntimeKey(0, 42, "index_idx1", 7)
+	defer iscp.RemoveCNJobFence(runnerCN, key)
+	s := &service{cfg: &Config{UUID: runnerCN}}
+	err := s.handleISCPDrainConsumer(context.Background(), &query.Request{
+		ISCPDrainConsumerRequest: &query.ISCPDrainConsumerRequest{
+			TableID: 42,
+			JobName: "index_idx1",
+			JobID:   7,
+		},
+	}, &query.Response{}, nil)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrRetryForCNRollingRestart))
+	resp := &query.Response{}
+	require.NoError(t, s.handleISCPDrainConsumer(context.Background(), &query.Request{
+		ISCPDrainConsumerRequest: &query.ISCPDrainConsumerRequest{
 			TableID:        key.TableID,
 			JobName:        key.JobName,
 			JobID:          key.JobID,
 			RenewFenceOnly: true,
 		},
 	}, resp, nil))
-	time.Sleep(700 * time.Millisecond)
-	require.True(t, exec.IsJobFenced(key))
+	require.True(t, resp.ISCPDrainConsumerResponse.Success,
+		"the pending CN fence must remain renewable before executor publication")
+	require.True(t, iscp.RenewCNJobFence(runnerCN, key, time.Second))
 
-	time.Sleep(1100 * time.Millisecond)
-	require.False(t, exec.IsJobFenced(key))
 	resp = &query.Response{}
-	require.ErrorContains(t, s.handleISCPDrainConsumer(context.Background(), &query.Request{
+	require.NoError(t, s.handleISCPDrainConsumer(context.Background(), &query.Request{
 		ISCPDrainConsumerRequest: &query.ISCPDrainConsumerRequest{
-			AccountID:      key.AccountID,
-			TableID:        key.TableID,
-			JobName:        key.JobName,
-			JobID:          key.JobID,
-			RenewFenceOnly: true,
+			TableID:         key.TableID,
+			JobName:         key.JobName,
+			JobID:           key.JobID,
+			RemoveFenceOnly: true,
 		},
-	}, resp, nil), "cannot renew ISCP consumer quiescence fence")
+	}, resp, nil))
+	require.False(t, iscp.RenewCNJobFence(runnerCN, key, time.Second))
+}
+
+func Test_service_handleISCPDrainConsumerRetriesInjectedStartupGap(t *testing.T) {
+	oldTimeout := iscpExecutorReadyTimeout
+	iscpExecutorReadyTimeout = 20 * time.Millisecond
+	defer func() { iscpExecutorReadyTimeout = oldTimeout }()
+
+	require.True(t, fault.Enable())
+	defer fault.Disable()
+	require.NoError(t, fault.AddFaultPoint(
+		context.Background(),
+		objectio.FJ_ISCPCancelExecutorNotReady,
+		"1:1::",
+		"sleep",
+		1,
+		"",
+		false,
+	))
+	defer func() {
+		_, _ = fault.RemoveFaultPoint(context.Background(), objectio.FJ_ISCPCancelExecutorNotReady)
+	}()
+
+	const runnerCN = "injected-late-runner-cn"
+	key := iscp.NewJobRuntimeKey(1, 42, "index_idx1", 7)
+	defer iscp.RemoveCNJobFence(runnerCN, key)
+	exec := &iscp.ISCPTaskExecutor{}
+	iscp.RegisterExecutorRuntime(runnerCN, exec)
+	defer iscp.UnregisterExecutorRuntime(runnerCN, exec)
+
+	req := &query.Request{
+		ISCPDrainConsumerRequest: &query.ISCPDrainConsumerRequest{
+			AccountID: 1,
+			TableID:   42,
+			JobName:   "index_idx1",
+			JobID:     7,
+		},
+	}
+	s := &service{cfg: &Config{UUID: runnerCN}}
+	err := s.handleISCPDrainConsumer(context.Background(), req, &query.Response{}, nil)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrRetryForCNRollingRestart))
+
+	resp := &query.Response{}
+	require.NoError(t, s.handleISCPDrainConsumer(context.Background(), req, resp, nil))
+	require.True(t, resp.ISCPDrainConsumerResponse.Success)
 }
 
 func Test_service_handleGoMaxProcs(t *testing.T) {

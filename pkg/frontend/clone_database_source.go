@@ -34,6 +34,16 @@ type cloneDatabaseSource struct {
 	toAccountId        uint32
 }
 
+func (source *cloneDatabaseSource) branchTableCount() int64 {
+	var count int64
+	for _, table := range source.srcTblInfos {
+		if table.typ != view {
+			count++
+		}
+	}
+	return count
+}
+
 func collectCloneDatabaseSource(
 	ctx context.Context,
 	ses *Session,
