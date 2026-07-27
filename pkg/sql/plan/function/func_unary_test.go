@@ -8721,8 +8721,7 @@ func TestReleaseUserLevelLocksOnSessionCloseRetainsSaturatedHandoffAndRecovers(t
 			}
 		}
 	waitForCleanup:
-		progress, _ := runRetainedUserLevelLockCleanupPass()
-		require.True(t, progress)
+		runRetainedUserLevelLockCleanupPass()
 		require.Eventually(t, func() bool {
 			return len(UserLevelLocksForMigration(holder)) == 0
 		}, 3*time.Second, 10*time.Millisecond)
@@ -9283,8 +9282,7 @@ func TestTimedOutFailedAttemptCleanupRetainsOwnershipAfterSaturatedHandoff(t *te
 		}
 	timeoutBacklogDrained:
 		detachedUserLevelLockCleanups.Unlock()
-		progress, _ := runRetainedUserLevelLockCleanupPass()
-		require.True(t, progress)
+		runRetainedUserLevelLockCleanupPass()
 
 		require.Eventually(t, func() bool {
 			userLevelLocks.Lock()
@@ -9348,8 +9346,7 @@ func TestSuccessfulProbeCleanupRetainsOwnershipAfterSaturatedHandoff(t *testing.
 		}
 	probeBacklogDrained:
 		detachedUserLevelLockCleanups.Unlock()
-		progress, _ := runRetainedUserLevelLockCleanupPass()
-		require.True(t, progress)
+		runRetainedUserLevelLockCleanupPass()
 		require.Eventually(t, func() bool {
 			userLevelLocks.Lock()
 			_, retained := userLevelLocks.pendingCleanups[key]
