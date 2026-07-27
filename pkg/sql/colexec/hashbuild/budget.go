@@ -15,6 +15,7 @@
 package hashbuild
 
 import (
+	"bytes"
 	"math"
 	"sync"
 
@@ -295,10 +296,9 @@ func (hb *HashmapBuilder) marshalRuntimeFilterVector(vec *vector.Vector) ([]byte
 	if vec == nil || hb.budget == nil {
 		return nil, nil, process.ErrHashBuildBudgetInvalid
 	}
-	// MarshalBinary writes vector data, area, null metadata and headers into a
-	// bytes.Buffer. Budget three times the exact payload components plus a
-	// per-row null/serialization allowance, covering buffer capacity growth and
-	// the temporary null serialization while the source vector remains live.
+	// The source vector is already charged by the hash-build auxiliary
+	// reservation. Charge one serialized payload plus the temporary null bitmap
+	// and pre-grow the output buffer so serialization cannot double its peak.
 	payload := uint64(len(vec.GetData())) + uint64(len(vec.GetArea()))
 	rows := uint64(vec.Length())
 	if rows > math.MaxUint64/16 {
@@ -309,32 +309,37 @@ func (hb *HashmapBuilder) marshalRuntimeFilterVector(vec *vector.Vector) ([]byte
 		return nil, nil, process.ErrHashBuildBudgetInvalid
 	}
 	payload += metadata + 4096
-	if payload > math.MaxUint64/3 {
+	nullPeak := (rows+7)/8 + 24
+	const allocationSlack = uint64(64 << 10)
+	if payload > math.MaxUint64-nullPeak-allocationSlack {
 		return nil, nil, process.ErrHashBuildBudgetInvalid
 	}
-	projected := payload * 3
+	projected := payload + nullPeak + allocationSlack
 	token, err := hb.budget.Reserve(projected)
 	if err != nil {
 		return nil, nil, err
 	}
-	data, err := vec.MarshalBinary()
+	if payload > uint64(math.MaxInt) {
+		token.Release()
+		return nil, nil, process.ErrHashBuildBudgetInvalid
+	}
+	var buf bytes.Buffer
+	buf.Grow(int(payload))
+	if uint64(buf.Cap())+nullPeak > projected {
+		token.Release()
+		return nil, nil, process.ErrHashBuildBudgetInvalid
+	}
+	err = vec.MarshalBinaryWithBuffer(&buf)
 	if err != nil {
 		token.Release()
 		return nil, nil, err
 	}
+	data := buf.Bytes()
 	if uint64(len(data)) > payload {
 		token.Release()
 		return nil, nil, process.ErrHashBuildBudgetInvalid
 	}
-	// Keep the serialized slice's retained capacity and the source vector's
-	// still-live null/metadata footprint charged until the message handoff.
-	actual := uint64(cap(data))
-	if metadata > math.MaxUint64-4096 || actual > math.MaxUint64-(metadata+4096) {
-		token.Release()
-		return nil, nil, process.ErrHashBuildBudgetInvalid
-	}
-	actual += metadata + 4096
-	if _, err = token.ReconcileDown(actual); err != nil {
+	if _, err = token.ReconcileDown(uint64(cap(data))); err != nil {
 		token.Release()
 		return nil, nil, err
 	}
