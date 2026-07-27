@@ -81,3 +81,40 @@ func TestDateExtractFunctionsAcceptVarchar(t *testing.T) {
 	success, info := boundary.Run()
 	require.True(t, success, info)
 }
+
+func TestDateExtractStringFunctionsIgnoreAllRows(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	input := NewFunctionTestInput(types.T_varchar.ToType(),
+		[]string{"2024-01-15", "not-a-date"}, nil)
+
+	for _, tc := range []struct {
+		name       string
+		resultType types.Type
+		fn         fEvalFn
+	}{
+		{
+			name:       "dayofmonth",
+			resultType: types.T_uint8.ToType(),
+			fn:         DateStringToDay,
+		},
+		{
+			name:       "dayname",
+			resultType: types.T_varchar.ToType(),
+			fn:         DateStringToDayName,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ftc := NewFunctionTestCase(proc, []FunctionTestInput{input},
+				NewFunctionTestResult(tc.resultType, false, nil, nil), tc.fn)
+			require.NoError(t, ftc.result.PreExtendAndReset(ftc.fnLength))
+			require.NoError(t, tc.fn(ftc.parameters, ftc.result, ftc.proc, ftc.fnLength,
+				&FunctionSelectList{AllNull: true}))
+
+			result := ftc.result.GetResultVector()
+			require.Equal(t, ftc.fnLength, result.Length())
+			for i := uint64(0); i < uint64(ftc.fnLength); i++ {
+				require.Truef(t, result.GetNulls().Contains(i), "row %d should be NULL", i)
+			}
+		})
+	}
+}

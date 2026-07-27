@@ -857,7 +857,8 @@ func dateStringToFixedWithNullOnError[T types.FixedSizeTExceptStrType](ivecs []*
 	source := vector.GenerateFunctionStrParameter(ivecs[0])
 	rs := vector.MustFunctionResult[T](result)
 	for i := uint64(0); i < uint64(length); i++ {
-		if selectList != nil && selectList.Contains(i) {
+		if selectList != nil && (selectList.IgnoreAllRow() ||
+			(!selectList.ShouldEvalAllRow() && selectList.Contains(i))) {
 			if err := rs.Append(*new(T), true); err != nil {
 				return err
 			}
@@ -889,7 +890,8 @@ func dateStringToStringWithNullOnError(ivecs []*vector.Vector, result vector.Fun
 	source := vector.GenerateFunctionStrParameter(ivecs[0])
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	for i := uint64(0); i < uint64(length); i++ {
-		if selectList != nil && selectList.Contains(i) {
+		if selectList != nil && (selectList.IgnoreAllRow() ||
+			(!selectList.ShouldEvalAllRow() && selectList.Contains(i))) {
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
