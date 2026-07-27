@@ -10,11 +10,13 @@ x-mo-common: &mo-common
         # Typecheck: enable type checking for ToSliceNoTypeCheck and ToSliceNoTypeCheck2
         # Default: 0 (disabled), set to 1 to enable
         TYPECHECK: ${TYPECHECK:-0}
+        GOBUILD_OPT: ${GOBUILD_OPT:-}
     image: matrixorigin/matrixone:latest
     volumes:
       - ../../etc/launch-tae-compose/config:/config
       - ../../test:/test
       - ../../docker-compose-log:/log
+      - ../../coverage:/coverage
     restart: on-failure
     tty: true
 
@@ -23,20 +25,22 @@ services:
   cn-0:
     container_name: cn-0
     <<: *mo-common
-    entrypoint: ["/bin/bash","-c","set -euo pipefail; /mo-service -debug-http :12345 -cfg /config/cn-0.toml | tee -a /log/cn-0.log"]
+    # exec makes mo-service PID 1, so docker compose down delivers SIGTERM to
+    # the instrumented process and lets it flush GOCOVERDIR before shutdown.
+    entrypoint: ["/bin/bash","-c","set -euo pipefail; exec /mo-service -debug-http :12345 -cfg /config/cn-0.toml > >(tee -a /log/cn-0.log) 2>&1"]
     profiles:
       - launch
       - launch-multi-cn
     depends_on:
       - tn
     ports:
-      - "6001:6001"
       - "6002"
       - "12345:12345"
     environment:
       - AWS_ACCESS_KEY_ID=minio
       - AWS_SECRET_ACCESS_KEY=minio123
       - mo_reuse_enable_checker=true
+      - GOCOVERDIR=/coverage
     networks:
       monet:
         aliases:
@@ -45,11 +49,10 @@ services:
   cn-1:
     container_name: cn-1
     <<: *mo-common
-    entrypoint: ["/bin/bash","-c","set -euo pipefail; /mo-service -debug-http :12345 -cfg /config/cn-1.toml | tee -a /log/cn-1.log"]
+    entrypoint: ["/bin/bash","-c","set -euo pipefail; exec /mo-service -debug-http :12345 -cfg /config/cn-1.toml > >(tee -a /log/cn-1.log) 2>&1"]
     depends_on:
       - tn
     ports:
-      - "7001:6001"
       - "6002"
       - "22345:12345"
     profiles:
@@ -59,15 +62,40 @@ services:
       - AWS_ACCESS_KEY_ID=minio
       - AWS_SECRET_ACCESS_KEY=minio123
       - mo_reuse_enable_checker=true
+      - GOCOVERDIR=/coverage
     networks:
       monet:
         aliases:
           - "cn1"
 
+  proxy:
+    container_name: proxy
+    <<: *mo-common
+    entrypoint: ["/bin/bash","-c","set -euo pipefail; exec /mo-service -debug-http :12345 -cfg /config/proxy.toml > >(tee -a /log/proxy.log) 2>&1"]
+    profiles:
+      - launch
+      - launch-multi-cn
+    depends_on:
+      - logservice
+      - cn-0
+      - cn-1
+    ports:
+      - "6001:6009"
+      - "32346:12345"
+    environment:
+      - AWS_ACCESS_KEY_ID=minio
+      - AWS_SECRET_ACCESS_KEY=minio123
+      - mo_reuse_enable_checker=true
+      - GOCOVERDIR=/coverage
+    networks:
+      monet:
+        aliases:
+          - "proxy"
+
   tn:
     container_name: tn
     <<: *mo-common
-    entrypoint: ["/bin/bash","-c","set -euo pipefail; /mo-service -debug-http :12345 -cfg /config/tn.toml | tee -a /log/tn.log"]
+    entrypoint: ["/bin/bash","-c","set -euo pipefail; exec /mo-service -debug-http :12345 -cfg /config/tn.toml > >(tee -a /log/tn.log) 2>&1"]
     profiles:
       - launch
       - launch-multi-cn
@@ -80,6 +108,7 @@ services:
       - AWS_ACCESS_KEY_ID=minio
       - AWS_SECRET_ACCESS_KEY=minio123
       - mo_reuse_enable_checker=true
+      - GOCOVERDIR=/coverage
     networks:
       monet:
         aliases:
@@ -91,7 +120,7 @@ services:
     profiles:
       - launch
       - launch-multi-cn
-    entrypoint: ["/bin/bash","-c","set -euo pipefail; /mo-service -debug-http :12345 -cfg /config/log.toml | tee -a /log/logservice.log"]
+    entrypoint: ["/bin/bash","-c","set -euo pipefail; exec /mo-service -debug-http :12345 -cfg /config/log.toml > >(tee -a /log/logservice.log) 2>&1"]
     depends_on:
       - createbuckets
     ports:
@@ -103,6 +132,7 @@ services:
       - AWS_ACCESS_KEY_ID=minio
       - AWS_SECRET_ACCESS_KEY=minio123
       - mo_reuse_enable_checker=true
+      - GOCOVERDIR=/coverage
     networks:
       monet:
         aliases:
