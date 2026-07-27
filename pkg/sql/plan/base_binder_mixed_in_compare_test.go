@@ -86,6 +86,46 @@ func TestMixedStringNumericInConstantFoldsToTrue(t *testing.T) {
 	require.True(t, result.Bval)
 }
 
+func TestMixedStringNumericNotInBindsAndFoldsToFalse(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	expr, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "not_in", []*planpb.Expr{
+		makePlan2StringConstExprWithType("9.50"), mixedStringNumericInList(t, ctx.GetContext()),
+	})
+	require.NoError(t, err)
+
+	var notEqualExpressions []*planpb.Expr
+	var visit func(*planpb.Expr)
+	visit = func(current *planpb.Expr) {
+		if function := current.GetF(); function != nil {
+			if function.Func.GetObjName() == "!=" {
+				notEqualExpressions = append(notEqualExpressions, current)
+			}
+			for _, arg := range function.Args {
+				visit(arg)
+			}
+		}
+	}
+	visit(expr)
+	require.Len(t, notEqualExpressions, 3)
+
+	float64Comparisons := 0
+	for _, notEqualExpr := range notEqualExpressions {
+		args := notEqualExpr.GetF().Args
+		require.Len(t, args, 2)
+		if args[0].Typ.Id == int32(types.T_float64) {
+			require.Equal(t, int32(types.T_float64), args[1].Typ.Id)
+			float64Comparisons++
+		}
+	}
+	require.Equal(t, 2, float64Comparisons)
+
+	folded, err := ConstantFold(batch.EmptyForConstFoldBatch, expr, ctx.GetProcess(), false, true)
+	require.NoError(t, err)
+	result, ok := folded.GetLit().Value.(*planpb.Literal_Bval)
+	require.True(t, ok)
+	require.False(t, result.Bval)
+}
+
 func TestNumericInStringLiteralKeepsExactNumericComparison(t *testing.T) {
 	for _, tc := range []struct {
 		name     string

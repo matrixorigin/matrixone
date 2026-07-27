@@ -2856,15 +2856,15 @@ func bindMixedInListComparison(ctx context.Context, operator string, left, right
 	rightType := makeTypeByPlan2Expr(right)
 	if leftType.Oid.IsMySQLString() && (rightType.IsNumeric() || rightType.Oid == types.T_bool) {
 		targetType := types.T_float64.ToType()
-		var err error
-		left, err = appendCastBeforeExpr(ctx, left, makePlan2Type(&targetType))
-		if err != nil {
-			return nil, err
+		operands := []*Expr{left, right}
+		for i := range operands {
+			var err error
+			operands[i], err = appendCastBeforeExpr(ctx, operands[i], makePlan2Type(&targetType))
+			if err != nil {
+				return nil, err
+			}
 		}
-		right, err = appendCastBeforeExpr(ctx, right, makePlan2Type(&targetType))
-		if err != nil {
-			return nil, err
-		}
+		left, right = operands[0], operands[1]
 	}
 	return BindFuncExprImplByPlanExpr(ctx, operator, []*Expr{left, right})
 }
