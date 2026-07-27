@@ -30,6 +30,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -5295,10 +5297,13 @@ func isPrintableDDLExpression(expr string) bool {
 }
 
 func isPrintableSQLText(s string) bool {
+	if !utf8.ValidString(s) {
+		return false
+	}
 	for _, r := range s {
 		switch {
 		case r == '\n' || r == '\r' || r == '\t':
-		case r >= 0x20 && r <= 0x7e:
+		case unicode.IsPrint(r):
 		default:
 			return false
 		}
