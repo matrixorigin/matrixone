@@ -22,10 +22,12 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
+	pbtxn "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
@@ -72,11 +74,12 @@ func featureLimitChecker(
 	increment int64,
 ) (err error) {
 	var (
-		limitQuota int64
-		sql        string
-		sqlRet     executor.Result
-		accName    = ses.GetTenantInfo().Tenant
-		accId      = ses.GetTenantInfo().TenantID
+		limitQuota  int64
+		sql         string
+		sqlRet      executor.Result
+		lockingRead bool
+		accName     = ses.GetTenantInfo().Tenant
+		accId       = ses.GetTenantInfo().TenantID
 	)
 
 	defer func() {
@@ -85,6 +88,16 @@ func featureLimitChecker(
 
 	if limitQuota, err = queryQuota(ctx, ses, bh, accId, featureCode, featureScope); err != nil {
 		return err
+	}
+	// Serialize finite branch quota checks on the account's quota row. The lock
+	// is held by the caller's background transaction through metadata insertion.
+	if featureCode == featureCodeBranch && limitQuota > 0 {
+		if err = checkBranchQuotaTxn(bh); err != nil {
+			return err
+		}
+		if limitQuota, err = lockFeatureQuota(ctx, ses, bh, accId, featureCode, featureScope); err != nil {
+			return err
+		}
 	}
 
 	if limitQuota == 0 {
@@ -117,17 +130,21 @@ func featureLimitChecker(
 		)
 	} else if featureCode == featureCodeBranch {
 		ctx = defines.AttachAccountId(ctx, sysAccountID)
+		lockingRead = true
 		sql = fmt.Sprintf(
-			"select count(*) from %s.%s where creator = %d and table_deleted = false",
+			"select count(*) from %s.%s where creator = %d and table_deleted = false for update",
 			catalog.MO_CATALOG, catalog.MO_BRANCH_METADATA, accId,
 		)
 	} else {
 		return moerr.NewInternalErrorNoCtxf("no such feature %s with scope %s", featureCode, featureScope)
 	}
 
-	if sqlRet, err = runSql(
-		ctx, ses, bh, sql, nil, nil,
-	); err != nil {
+	if lockingRead {
+		sqlRet, err = runSqlWithBackExec(ctx, ses, bh, sql)
+	} else {
+		sqlRet, err = runSql(ctx, ses, bh, sql, nil, nil)
+	}
+	if err != nil {
 		return err
 	}
 
@@ -145,6 +162,91 @@ func featureLimitChecker(
 	}
 
 	return nil
+}
+
+func checkBranchQuotaTxn(bh BackgroundExec) error {
+	backExec, ok := bh.(*backExec)
+	if !ok {
+		return nil
+	}
+	txnOp := backExec.backSes.GetTxnHandler().GetTxn()
+	if txnOp == nil {
+		return moerr.NewInternalErrorNoCtx("missing transaction for finite branch quota")
+	}
+	txnMeta := txnOp.Txn()
+	if txnMeta.Mode != pbtxn.TxnMode_Pessimistic || txnMeta.Isolation != pbtxn.TxnIsolation_RC {
+		return moerr.NewInternalErrorNoCtx(
+			"finite branch quota requires a pessimistic read committed transaction; retry outside the active transaction")
+	}
+	return nil
+}
+
+func lockFeatureQuota(
+	ctx context.Context,
+	ses *Session,
+	bh BackgroundExec,
+	accId uint32,
+	code string,
+	scope string,
+) (quota int64, err error) {
+	var sqlRet executor.Result
+	defer func() {
+		sqlRet.Close()
+	}()
+
+	ctx = defines.AttachAccountId(ctx, sysAccountID)
+	code = strings.ToUpper(strings.TrimSpace(code))
+	scope = strings.ToLower(strings.TrimSpace(scope))
+	sql := fmt.Sprintf(
+		"select quota from %s.%s where account_id = %d and feature_code = '%s' and scope = '%s' for update",
+		catalog.MO_CATALOG, catalog.MO_FEATURE_LIMIT, accId, code, scope,
+	)
+
+	if sqlRet, err = runSqlWithBackExec(ctx, ses, bh, sql); err != nil {
+		return 0, err
+	}
+	sqlRet.Close()
+	sqlRet = executor.Result{}
+
+	// A locking read can wait without refreshing its transaction snapshot.
+	// Advance it while retaining the quota-row lock, then re-read the quota and
+	// active branch metadata from a snapshot that includes the prior creator.
+	if backExec, ok := bh.(*backExec); ok {
+		txnOp := backExec.backSes.GetTxnHandler().GetTxn()
+		if txnOp == nil {
+			return 0, moerr.NewInternalErrorNoCtx("missing transaction for branch quota snapshot refresh")
+		}
+		txnMeta := txnOp.Txn()
+		if txnMeta.Mode != pbtxn.TxnMode_Pessimistic || txnMeta.Isolation != pbtxn.TxnIsolation_RC {
+			return 0, moerr.NewInternalErrorNoCtx(
+				"finite branch quota requires a pessimistic read committed transaction; retry outside the active transaction")
+		}
+		rt := moruntime.ServiceRuntime(ses.service)
+		if rt == nil {
+			return 0, moerr.NewInternalErrorNoCtx("missing service runtime for branch quota snapshot refresh")
+		}
+		now, _ := rt.Clock().Now()
+		txnClient := getPu(ses.service).TxnClient
+		if txnClient == nil {
+			return 0, moerr.NewInternalErrorNoCtx("missing transaction client for branch quota snapshot refresh")
+		}
+		applied, waitErr := txnClient.WaitLogTailAppliedAt(ctx, now)
+		if waitErr != nil {
+			return 0, waitErr
+		}
+		if err = txnOp.GetWorkspace().AdvanceSnapshot(ctx, applied); err != nil {
+			return 0, err
+		}
+	}
+
+	if sqlRet, err = runSqlWithBackExec(ctx, ses, bh, sql); err != nil {
+		return 0, err
+	}
+	if len(sqlRet.Batches) != 1 || sqlRet.Batches[0].RowCount() != 1 {
+		return 0, moerr.NewInternalErrorNoCtxf("lock quota for %s(%s) failed", code, scope)
+	}
+
+	return vector.GetFixedAtNoTypeCheck[int64](sqlRet.Batches[0].Vecs[0], 0), nil
 }
 
 func queryQuota(
@@ -210,9 +312,12 @@ func queryQuota(
 			catalog.MO_CATALOG, catalog.MO_FEATURE_LIMIT, accId, code, scope, quota,
 		)
 
-		if _, err = runSql(
-			ctx, ses, bh, sql, nil, nil,
-		); err != nil {
+		if code == featureCodeBranch {
+			_, err = runSqlWithBackExec(ctx, ses, bh, sql)
+		} else {
+			_, err = runSql(ctx, ses, bh, sql, nil, nil)
+		}
+		if err != nil {
 			return 0, err
 		}
 

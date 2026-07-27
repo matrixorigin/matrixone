@@ -106,6 +106,11 @@ func (proc *Process) BuildProcessInfo(
 			LockWaitTimeoutSet:  proc.Base.SessionInfo.LockWaitTimeoutSet,
 			MatrixoneNativeMode: proc.Base.SessionInfo.MatrixOneNativeMode,
 		}
+		nullifyZeroTemporal, err := ResolveExplicitZeroTemporalCastReturnsNull(proc)
+		if err != nil {
+			return procInfo, err
+		}
+		procInfo.SessionInfo.ExplicitZeroTemporalCastReturnsNull = nullifyZeroTemporal
 	}
 	{ // log info
 		stmtId := proc.GetStmtProfile().GetStmtId()
@@ -255,6 +260,7 @@ func convertToPipelineLimitation(lim Limitation) pipeline.ProcessLimitation {
 		BatchSize:     lim.BatchSize,
 		PartitionRows: lim.PartitionRows,
 		ReaderSize:    lim.ReaderSize,
+		SpillSize:     lim.SpillSize,
 	}
 }
 
@@ -301,6 +307,7 @@ func ConvertToProcessLimitation(
 		BatchSize:     lim.BatchSize,
 		PartitionRows: lim.PartitionRows,
 		ReaderSize:    lim.ReaderSize,
+		SpillSize:     lim.SpillSize,
 	}
 }
 
@@ -309,17 +316,18 @@ func ConvertToProcessSessionInfo(
 	sei pipeline.SessionInfo,
 ) (SessionInfo, error) {
 	sessionInfo := SessionInfo{
-		User:                sei.User,
-		Host:                sei.Host,
-		Role:                sei.Role,
-		ConnectionID:        sei.ConnectionId,
-		Database:            sei.Database,
-		Version:             sei.Version,
-		Account:             sei.Account,
-		QueryId:             sei.QueryId,
-		LockWaitTimeout:     sei.LockWaitTimeout,
-		LockWaitTimeoutSet:  sei.LockWaitTimeoutSet,
-		MatrixOneNativeMode: sei.MatrixoneNativeMode,
+		User:                                sei.User,
+		Host:                                sei.Host,
+		Role:                                sei.Role,
+		ConnectionID:                        sei.ConnectionId,
+		Database:                            sei.Database,
+		Version:                             sei.Version,
+		Account:                             sei.Account,
+		QueryId:                             sei.QueryId,
+		LockWaitTimeout:                     sei.LockWaitTimeout,
+		LockWaitTimeoutSet:                  sei.LockWaitTimeoutSet,
+		MatrixOneNativeMode:                 sei.MatrixoneNativeMode,
+		ExplicitZeroTemporalCastReturnsNull: sei.ExplicitZeroTemporalCastReturnsNull,
 	}
 	t := time.Time{}
 	err := t.UnmarshalBinary(sei.TimeZone)

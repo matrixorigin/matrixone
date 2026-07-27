@@ -297,6 +297,17 @@ INSERT INTO t1 VALUES(1),(2),(3);
 SELECT CASE WHEN id = 1 THEN 'string' WHEN id = 2 THEN 123 ELSE 'mixed' END AS mixed_case FROM t1 ORDER BY id;
 DROP TABLE t1;
 
+-- Vector branches use a lossless common type and require equal dimensions.
+SELECT IF(FALSE,
+          CAST('[0,0]' AS VECF32(2)),
+          CAST('[1.0000000001,2]' AS VECF64(2))) AS vec64_from_false;
+SELECT IF(TRUE,
+          CAST('[1.0000000001,2]' AS VECF64(2)),
+          CAST('[0,0]' AS VECF32(2))) AS vec64_from_true;
+SELECT IF(FALSE,
+          CAST('[1,2]' AS VECF32(2)),
+          CAST('[3,4,5]' AS VECF32(3))) AS invalid_vector_dimensions;
+
 -- @bvt:issue#25314
 SET SESSION sql_mode = '';
 SELECT IF(0, CAST('bad' AS SIGNED), 7) AS if_skip_true_branch,
