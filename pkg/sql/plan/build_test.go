@@ -3578,6 +3578,37 @@ func TestGroupConcatRejectsUnsupportedOrderKeyType(t *testing.T) {
 	require.NotContains(t, err.Error(), "internal error")
 }
 
+func TestOrderedGroupConcatInNonEquiCorrelatedScalarSubqueryKeepsConfig(t *testing.T) {
+	logicPlan, err := runOneStmt(
+		NewMockOptimizer(false),
+		t,
+		`SELECT o.N_REGIONKEY, o.N_NAME,
+		        (SELECT GROUP_CONCAT(i.N_NAME ORDER BY i.N_NATIONKEY DESC SEPARATOR '~')
+		           FROM NATION i
+		          WHERE i.N_REGIONKEY < o.N_REGIONKEY)
+		   FROM NATION o`,
+	)
+	require.NoError(t, err)
+
+	found := false
+	for _, node := range logicPlan.GetQuery().Nodes {
+		for _, agg := range node.AggList {
+			fn := agg.GetF()
+			if fn == nil || fn.Func.ObjName != NameGroupConcat {
+				continue
+			}
+			found = true
+			require.Equal(
+				t,
+				plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER,
+				fn.AggConfigType,
+			)
+			require.NotEmpty(t, fn.AggConfig)
+		}
+	}
+	require.True(t, found)
+}
+
 func TestMysqlCompatibilityMode(t *testing.T) {
 	mock := NewMockOptimizer(false)
 

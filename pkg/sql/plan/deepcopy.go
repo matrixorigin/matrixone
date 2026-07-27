@@ -965,8 +965,10 @@ func DeepCopyExpr(expr *Expr) *Expr {
 		}
 		newExpr.Expr = &plan.Expr_F{
 			F: &plan.Function{
-				Func: DeepCopyObjectRef(item.F.Func),
-				Args: newArgs,
+				Func:          DeepCopyObjectRef(item.F.Func),
+				Args:          newArgs,
+				AggConfig:     bytes.Clone(item.F.AggConfig),
+				AggConfigType: item.F.AggConfigType,
 			},
 		}
 

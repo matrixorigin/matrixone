@@ -508,7 +508,8 @@ func (b *HavingBinder) BindTimeWindowFunc(funcName string, astExpr *tree.FuncExp
 	aggColPos := colPos - forgeColCnt
 
 	expr := DeepCopyExpr(b.ctx.aggregates[aggColPos])
-	expr.Expr.(*plan.Expr_F).F.Args = []*plan.Expr{
+	outerFn := expr.Expr.(*plan.Expr_F).F
+	outerFn.Args = []*plan.Expr{
 		{
 			Typ: b.ctx.aggregates[aggColPos].Typ,
 			Expr: &plan.Expr_Col{
@@ -519,6 +520,11 @@ func (b *HavingBinder) BindTimeWindowFunc(funcName string, astExpr *tree.FuncExp
 			},
 		},
 	}
+	// The outer time-window aggregate consumes the inner aggregate result, so
+	// argument-layout-dependent configuration from the inner aggregate cannot
+	// be reused.
+	outerFn.AggConfig = nil
+	outerFn.AggConfigType = plan.AggregateConfigType_AGG_CONFIG_NONE
 	if b.ctx.sliding {
 		expr, err = b.remapAggToTimeWindowResultAgg(expr)
 		if err != nil {

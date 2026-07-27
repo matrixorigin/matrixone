@@ -97,6 +97,8 @@ func TestBindTimeWindowFuncCastsCountProjectionAfterDecimalCache(t *testing.T) {
 				Args: []*plan.Expr{{
 					Typ: plan.Type{Id: int32(types.T_int64), Width: 64},
 				}},
+				AggConfig:     []byte{1, 2, 3},
+				AggConfigType: plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER,
 			},
 		},
 	}}
@@ -113,6 +115,12 @@ func TestBindTimeWindowFuncCastsCountProjectionAfterDecimalCache(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, ctx.times, 1)
 	require.Equal(t, int32(types.T_decimal128), ctx.times[0].Typ.Id)
+	require.Nil(t, ctx.times[0].GetF().AggConfig)
+	require.Equal(
+		t,
+		plan.AggregateConfigType_AGG_CONFIG_NONE,
+		ctx.times[0].GetF().AggConfigType,
+	)
 	require.Equal(t, int32(types.T_int64), got.Typ.Id)
 	require.Equal(t, "cast", got.GetF().Func.ObjName)
 	require.Equal(t, int32(types.T_decimal128), got.GetF().Args[0].Typ.Id)

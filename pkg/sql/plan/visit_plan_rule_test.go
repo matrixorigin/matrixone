@@ -149,6 +149,33 @@ func TestResetParamRefRuleReplacesWindowParameters(t *testing.T) {
 	require.Equal(t, int64(14), window.Frame.End.Val.GetLit().GetI64Val())
 }
 
+func TestResetParamRefRulePreservesAggregateConfig(t *testing.T) {
+	param := &planpb.Expr{
+		Typ:  planpb.Type{Id: int32(types.T_int64)},
+		Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}},
+	}
+	expr, err := BindFuncExprImplByPlanExpr(context.Background(), "abs", []*planpb.Expr{param})
+	require.NoError(t, err)
+	expr.GetF().AggConfig = []byte{1, 2, 3}
+	expr.GetF().AggConfigType = planpb.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER
+
+	rule := NewResetParamRefRule(context.Background(), []*planpb.Expr{
+		makePlan2Int64ConstExprWithType(7),
+	})
+	rewritten, err := rule.ApplyExpr(expr)
+	require.NoError(t, err)
+	require.Equal(t, int64(7), rewritten.GetF().Args[0].GetLit().GetI64Val())
+	require.Equal(t, []byte{1, 2, 3}, rewritten.GetF().AggConfig)
+	require.Equal(
+		t,
+		planpb.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER,
+		rewritten.GetF().AggConfigType,
+	)
+
+	rewritten.GetF().AggConfig[0] = 9
+	require.Equal(t, byte(1), expr.GetF().AggConfig[0])
+}
+
 func TestVisitPlanDeduplicatesAliasedWindowPartitionExpr(t *testing.T) {
 	newPlan := func(t *testing.T) (*planpb.Plan, *planpb.WindowSpec, *planpb.Node) {
 		t.Helper()
