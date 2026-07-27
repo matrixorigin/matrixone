@@ -90,15 +90,28 @@ func TestBranchDeleteDatabaseTableIDsSQLReusesCloneObjectFilter(t *testing.T) {
 	got := branchDeleteDatabaseTableIDsSQL(accountID, dbName)
 
 	require.Equal(t, expected, got)
-	require.Contains(t, got, "relname not like '\\\\_\\\\_mo\\\\_index\\\\_%' escape '\\\\'")
-	require.Contains(t, got, "relname not like '\\\\_\\\\_mo\\\\_tmp\\\\_%' escape '\\\\'")
+	require.Contains(t, got, "relkind != 'i'")
+	require.Contains(t, got, "relkind != 'temporary_table'")
 	require.Contains(t, got, "relkind != 'partition'")
 	require.Contains(t, got, "relkind != 'S'")
 	require.Contains(t, got, "relkind != 'v'")
+	require.NotContains(t, got, "relname != 'mo_increment_columns'")
+	require.NotContains(t, got, "relname != '__mo_account_lock'")
+	require.NotContains(t, got, "relname not like")
 }
 
-func TestQuoteSQLLikePatternEscapesWildcardCharacters(t *testing.T) {
-	require.Equal(t, "'a\\\\_b\\\\%c%'", quoteSQLLikePattern("a_b%c"))
+func TestBuildTableInfoListWhereClauseUsesRelationKindForInternalObjects(t *testing.T) {
+	got := buildTableInfoListWhereClause("db1", "", 42)
+
+	require.Contains(t, got, "relkind != 'i'")
+	require.Contains(t, got, "relkind != 'temporary_table'")
+	require.NotContains(t, got, catalog.MOAutoIncrTable)
+	require.NotContains(t, got, catalog.MO_ACCOUNT_LOCK)
+	require.NotContains(t, got, "__mo_tmp_")
+
+	systemCatalog := buildTableInfoListWhereClause(catalog.MO_CATALOG, "", 0)
+	require.Contains(t, systemCatalog, "relname != '"+catalog.MOAutoIncrTable+"'")
+	require.Contains(t, systemCatalog, "relname != '"+catalog.MO_ACCOUNT_LOCK+"'")
 }
 
 func TestQuoteIdentifierForSQLEscapesBackticks(t *testing.T) {

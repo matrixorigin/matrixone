@@ -1959,34 +1959,26 @@ func buildTableInfoListWhereClause(dbName string, tblName string, accountId uint
 	)
 	clusterTableClause := fmt.Sprintf(" or relkind = %s", quoteSQLStringLiteral(catalog.SystemClusterRel))
 	accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and (%s))", accountId, mustShowTable+clusterTableClause)
-	indexTablePattern := quoteSQLLikePattern(catalog.IndexTableNamePrefix)
-	tempTablePattern := quoteSQLLikePattern("__mo_tmp_")
 	whereClause := fmt.Sprintf(
-		"reldatabase = %s and relname != %s and relname not like %s escape %s and relname not like %s escape %s and relname != %s and relkind != %s and (%s)",
+		"reldatabase = %s and relkind != %s and relkind != %s and relkind != %s and (%s)",
 		quoteSQLStringLiteral(dbName),
-		quoteSQLStringLiteral(catalog.MOAutoIncrTable),
-		indexTablePattern,
-		quoteSQLStringLiteral(`\`),
-		tempTablePattern,
-		quoteSQLStringLiteral(`\`),
-		quoteSQLStringLiteral(catalog.MO_ACCOUNT_LOCK),
+		quoteSQLStringLiteral(catalog.SystemIndexRel),
+		quoteSQLStringLiteral(catalog.SystemTemporaryTable),
 		quoteSQLStringLiteral(catalog.SystemPartitionRel),
 		accountClause,
 	)
+	if dbName == moCatalog {
+		whereClause += fmt.Sprintf(
+			" and relname != %s and relname != %s",
+			quoteSQLStringLiteral(catalog.MOAutoIncrTable),
+			quoteSQLStringLiteral(catalog.MO_ACCOUNT_LOCK),
+		)
+	}
 	if len(tblName) > 0 {
 		whereClause += fmt.Sprintf(" and relname like %s", quoteSQLStringLiteral(tblName))
 	}
 	whereClause += fmt.Sprintf(" and relkind != %s", quoteSQLStringLiteral(catalog.SystemSequenceRel))
 	return whereClause
-}
-
-func quoteSQLLikePattern(literalPrefix string) string {
-	replacer := strings.NewReplacer(
-		`\`, `\\`,
-		`%`, `\%`,
-		`_`, `\_`,
-	)
-	return quoteSQLStringLiteral(replacer.Replace(literalPrefix) + "%")
 }
 
 func getTableInfos(
