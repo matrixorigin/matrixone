@@ -47,6 +47,18 @@ func TestLockWaitTimeoutDefaultIsBounded(t *testing.T) {
 	})
 }
 
+func TestGroupConcatMaxLenDefault(t *testing.T) {
+	convey.Convey("group_concat_max_len should use the MySQL default", t, func() {
+		sv, ok := gSysVarsDefs["group_concat_max_len"]
+		convey.So(ok, convey.ShouldBeTrue)
+		convey.So(sv.Default, convey.ShouldEqual, int64(1024))
+
+		got, err := sv.Type.Convert(sv.Default)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(got, convey.ShouldEqual, int64(1024))
+	})
+}
+
 func TestScope(t *testing.T) {
 	convey.Convey("test scope", t, func() {
 		wanted := make(map[Scope]string)
