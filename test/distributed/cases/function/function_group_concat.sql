@@ -240,3 +240,12 @@ drop table if exists g18;
 create table g18 (a int);
 select group_concat(a order by a) from g18;
 drop table if exists g18;
+
+-- group_concat_max_len
+drop table if exists group_concat_max_len_01;
+create table group_concat_max_len_01 (id int primary key, s varchar(16));
+insert into group_concat_max_len_01 values (1, 'aa'), (2, 'bb'), (3, 'cc');
+set session group_concat_max_len = 5;
+select group_concat(s order by s separator '') from group_concat_max_len_01;
+set session group_concat_max_len = 1024;
+drop table group_concat_max_len_01;
