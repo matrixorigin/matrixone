@@ -58,6 +58,61 @@ func mixedStringNumericToVarchar(source []types.Type) (types.Type, bool) {
 	return types.Type{}, false
 }
 
+func signedUnsignedIntegerCommonType(source []types.Type) (types.Type, bool) {
+	hasSigned := false
+	hasUnsigned := false
+	maxWidth := int32(0)
+	for _, typ := range source {
+		switch typ.Oid {
+		case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
+			hasSigned = true
+		case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
+			hasUnsigned = true
+		default:
+			return types.Type{}, false
+		}
+		if width := integerIntegralWidth(typ.Oid); width > maxWidth {
+			maxWidth = width
+		}
+	}
+	if !hasSigned || !hasUnsigned {
+		return types.Type{}, false
+	}
+
+	width := maxWidth + 1
+	oid, ok := decimalTypeForRequiredWidth(types.T_decimal64, width)
+	if !ok {
+		return types.Type{}, false
+	}
+	return types.New(oid, width, 0), true
+}
+
+func binaryStringCommonType(source []types.Type) (types.Type, bool) {
+	hasBinary := false
+	width := int32(0)
+	for _, typ := range source {
+		switch typ.Oid {
+		case types.T_binary, types.T_varbinary:
+			hasBinary = true
+			if typ.Width > width {
+				width = typ.Width
+			}
+		case types.T_char, types.T_varchar:
+			// MatrixOne's non-binary string types use the UTF-8 charset. A
+			// VARBINARY result must reserve the largest encoded byte length.
+			if typ.Width*3 > width {
+				width = typ.Width * 3
+			}
+		default:
+			return types.Type{}, false
+		}
+	}
+	if !hasBinary {
+		return types.Type{}, false
+	}
+	return types.New(types.T_varbinary, width, 0), true
+}
+
 func needDecimalMetadataCast(source []types.Type, target types.Type) bool {
 	if !target.Oid.IsDecimal() {
 		return false
@@ -168,6 +223,17 @@ func caseCheck(_ []overload, inputs []types.Type) checkResult {
 			source = append(source, inputs[l-1])
 		}
 
+		if retType, ok := binaryStringCommonType(source); ok {
+			finalTypes := make([]types.Type, len(inputs))
+			for i := range finalTypes {
+				if i%2 == 0 && !(len(inputs)%2 == 1 && i == len(inputs)-1) {
+					finalTypes[i] = types.T_bool.ToType()
+				} else {
+					finalTypes[i] = retType
+				}
+			}
+			return newCheckResultWithCast(0, finalTypes)
+		}
 		if retType, ok := mixedStringNumericToVarchar(source); ok {
 			finalTypes := make([]types.Type, len(inputs))
 			for i := range finalTypes {
@@ -179,6 +245,17 @@ func caseCheck(_ []overload, inputs []types.Type) checkResult {
 			}
 			if len(inputs)%2 == 1 {
 				finalTypes[len(finalTypes)-1] = retType
+			}
+			return newCheckResultWithCast(0, finalTypes)
+		}
+		if retType, ok := signedUnsignedIntegerCommonType(source); ok {
+			finalTypes := make([]types.Type, len(inputs))
+			for i := range finalTypes {
+				if i%2 == 0 && !(len(inputs)%2 == 1 && i == len(inputs)-1) {
+					finalTypes[i] = types.T_bool.ToType()
+				} else {
+					finalTypes[i] = retType
+				}
 			}
 			return newCheckResultWithCast(0, finalTypes)
 		}
@@ -299,6 +376,8 @@ func caseFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pr
 	case types.T_char:
 		return strCaseFn(parameters, result, proc, length, selectList)
 	case types.T_varchar:
+		return strCaseFn(parameters, result, proc, length, selectList)
+	case types.T_binary, types.T_varbinary:
 		return strCaseFn(parameters, result, proc, length, selectList)
 	case types.T_blob:
 		return strCaseFn(parameters, result, proc, length, selectList)
@@ -502,6 +581,9 @@ func iffCheck(_ []overload, inputs []types.Type) checkResult {
 			}
 		}
 		if retType, ok := mixedStringNumericToVarchar(source); ok {
+			return newCheckResultWithCast(0, []types.Type{conditionType, retType, retType})
+		}
+		if retType, ok := signedUnsignedIntegerCommonType(source); ok {
 			return newCheckResultWithCast(0, []types.Type{conditionType, retType, retType})
 		}
 		if retType, resultAligned, ok := textStringCommonType(source); ok {

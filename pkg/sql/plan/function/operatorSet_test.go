@@ -1235,6 +1235,23 @@ func Test_CaseFn_Decimal256Execution(t *testing.T) {
 	require.True(t, succeed, tc.info, info)
 }
 
+func Test_CaseFn_VarBinaryExecution(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	retType := types.New(types.T_varbinary, 6, 0)
+	tc := tcTemp{
+		info: "caseFn varbinary: CASE WHEN c THEN a ELSE bc",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_bool.ToType(), []bool{true, false}, nil),
+			NewFunctionTestInput(retType, []string{"a", "a"}, nil),
+			NewFunctionTestInput(retType, []string{"bc", "bc"}, nil),
+		},
+		expect: NewFunctionTestResult(retType, false, []string{"a", "bc"}, nil),
+	}
+	tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, caseFn)
+	succeed, info := tcc.Run()
+	require.True(t, succeed, tc.info, info)
+}
+
 func Test_IffFn_Decimal256Execution(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	d1, err := types.ParseDecimal256("123456789012345678901234567890123456789", 76, 0)

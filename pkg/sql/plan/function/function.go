@@ -277,6 +277,21 @@ func GetAggFunctionNameByID(overloadID int64) string {
 // we can deduce that c1+1, cast c3 and c1=c3 is notNullable, abs(c2) is nullable.
 func DeduceNotNullable(overloadID int64, args []*plan.Expr) bool {
 	fid, _ := DecodeOverloadID(overloadID)
+	switch fid {
+	case CASE:
+		if caseHasTemporalPromotion(args) {
+			return false
+		}
+	case COALESCE:
+		for _, arg := range args {
+			if arg.Typ.NotNullable {
+				return true
+			}
+		}
+		return false
+	case GREATEST, LEAST:
+		return false
+	}
 	if allSupportedFunctions[fid].testFlag(plan.Function_PRODUCE_NO_NULL) {
 		return true
 	}
@@ -287,6 +302,22 @@ func DeduceNotNullable(overloadID int64, args []*plan.Expr) bool {
 		}
 	}
 	return true
+}
+
+func caseHasTemporalPromotion(args []*plan.Expr) bool {
+	for i := 1; i < len(args); i += 2 {
+		arg := args[i]
+		fn := arg.GetF()
+		if fn == nil || fn.Func == nil || fn.Func.GetObjName() != "cast" || len(fn.Args) == 0 {
+			continue
+		}
+		source := types.T(fn.Args[0].Typ.Id)
+		target := types.T(arg.Typ.Id)
+		if source.IsDateRelate() && target.IsDateRelate() && source != target {
+			return true
+		}
+	}
+	return false
 }
 
 type FuncGetResult struct {

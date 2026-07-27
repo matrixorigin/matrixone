@@ -109,7 +109,8 @@ drop table if exists big;
 -- @label:bvt
 SELECT 'case+union+test'
 UNION
-SELECT CASE '1' WHEN '2' THEN 'BUG' ELSE 'nobug' END;
+SELECT CASE '1' WHEN '2' THEN 'BUG' ELSE 'nobug' END
+ORDER BY 1;
 
 -- @case
 -- @desc:test for case_when expression in where filter
@@ -292,3 +293,74 @@ drop view if exists v_coalesce_meta;
 create view v_coalesce_meta as select coalesce(cast(null as decimal(23,2)), 7.01970 * cast(-58140.00 as decimal(23,2))) as c;
 desc v_coalesce_meta;
 drop view v_coalesce_meta;
+
+-- @case
+-- @desc:test control-flow view metadata across mixed type and nullability rules
+-- @label:bvt
+drop view if exists v_flow_metadata_safe;
+create view v_flow_metadata_safe as
+select if(1, '2', 3) as if_str_num,
+       if(1, cast(1 as unsigned), cast(-1 as signed)) as if_unsigned_signed,
+       case when 1 then cast('2024-01-01' as date) else cast('2024-01-02 03:04:05' as datetime) end as case_date_dt,
+       case when 1 then _binary 'a' else 'bc' end as case_binary_char,
+       ifnull(null, 9.5) as ifnull_decimal,
+       nullif('01', 1) as nullif_mixed,
+       coalesce(null, '8', 9) as coalesce_str_num,
+       greatest(cast('2024-01-02' as date), cast('2023-12-31' as date)) as greatest_date;
+desc v_flow_metadata_safe;
+select column_name, column_type, is_nullable, character_maximum_length, numeric_precision, numeric_scale
+from information_schema.columns
+where table_schema = database() and table_name = 'v_flow_metadata_safe'
+order by ordinal_position;
+select * from v_flow_metadata_safe;
+drop view v_flow_metadata_safe;
+
+-- @case
+-- @desc:test control-flow metadata and values with nullable and not-null columns
+-- @label:bvt
+drop table if exists t_flow_metadata;
+create table t_flow_metadata (
+    id int primary key,
+    n_nullable int,
+    n_notnull int not null,
+    d_nullable date,
+    d_notnull date not null
+);
+insert into t_flow_metadata values
+    (1, null, 7, null, '2024-01-02'),
+    (2, 5, 8, '2024-01-03', '2024-01-04');
+
+drop view if exists v_flow_metadata_columns;
+create view v_flow_metadata_columns as
+select ifnull(null, 9.5) as ifnull_null_first,
+       ifnull(n_nullable, 9.5) as ifnull_nullable_col,
+       ifnull(n_notnull, 9.5) as ifnull_notnull_col,
+       coalesce(null, '8', 9) as coalesce_null_first,
+       coalesce(n_nullable, 9) as coalesce_nullable_col,
+       coalesce(n_notnull, 9) as coalesce_notnull_col,
+       greatest(cast('2024-01-02' as date), cast('2023-12-31' as date)) as greatest_const,
+       greatest(d_nullable, cast('2023-12-31' as date)) as greatest_nullable_col,
+       greatest(d_notnull, cast('2023-12-31' as date)) as greatest_notnull_col
+from t_flow_metadata;
+desc v_flow_metadata_columns;
+select column_name, column_type, is_nullable, character_maximum_length, numeric_precision, numeric_scale
+from information_schema.columns
+where table_schema = database() and table_name = 'v_flow_metadata_columns'
+order by ordinal_position;
+select * from v_flow_metadata_columns order by ifnull_notnull_col;
+drop view v_flow_metadata_columns;
+
+select if(1, cast(18446744073709551615 as unsigned), cast(-1 as signed)) as if_uint64_signed_max,
+       if(0, cast(18446744073709551615 as unsigned), cast(-1 as signed)) as if_uint64_signed_negative,
+       case when 1 then cast(18446744073709551615 as unsigned) else cast(-1 as signed) end as case_uint64_signed_max;
+select hex(case when 1 then _binary 'a' else 'bc' end) as case_binary_hex,
+       hex(case when 0 then _binary 'a' else 'bc' end) as case_char_hex;
+
+drop view if exists v_case_binary_utf8;
+create view v_case_binary_utf8 as
+select case when 1 then _binary 'a' else '中文' end as case_binary_utf8;
+desc v_case_binary_utf8;
+select hex(case when 0 then _binary 'a' else '中文' end) as case_utf8_hex;
+drop view v_case_binary_utf8;
+
+drop table t_flow_metadata;

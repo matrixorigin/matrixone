@@ -1,0 +1,121 @@
+// Copyright 2026 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package plan
+
+import (
+	"context"
+	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/stretchr/testify/require"
+)
+
+func TestBindControlFlowMetadata(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("if mixed string numeric keeps bounded varchar", func(t *testing.T) {
+		expr, err := BindFuncExprImplByPlanExpr(ctx, "if", []*planpb.Expr{
+			makePlan2BoolConstExprWithType(true),
+			makePlan2StringConstExprWithType("2"),
+			makePlan2Int64ConstExprWithType(3),
+		})
+		require.NoError(t, err)
+		require.Equal(t, int32(types.T_varchar), expr.Typ.Id)
+		require.Equal(t, int32(2), expr.Typ.Width)
+		require.True(t, expr.Typ.NotNullable)
+	})
+
+	t.Run("if signed unsigned promotes to decimal", func(t *testing.T) {
+		expr, err := BindFuncExprImplByPlanExpr(ctx, "if", []*planpb.Expr{
+			makePlan2BoolConstExprWithType(true),
+			makePlan2Uint64ConstExprWithType(1),
+			makePlan2Int64ConstExprWithType(-1),
+		})
+		require.NoError(t, err)
+		require.Equal(t, int32(types.T_decimal128), expr.Typ.Id)
+		require.Equal(t, int32(21), expr.Typ.Width)
+		require.Zero(t, expr.Typ.Scale)
+		require.True(t, expr.Typ.NotNullable)
+	})
+
+	t.Run("coalesce is non-null when an argument is non-null", func(t *testing.T) {
+		expr, err := BindFuncExprImplByPlanExpr(ctx, "coalesce", []*planpb.Expr{
+			MakePlan2NullTextConstExprWithType(""),
+			makePlan2StringConstExprWithType("8"),
+			makePlan2Int64ConstExprWithType(9),
+		})
+		require.NoError(t, err)
+		require.Equal(t, int32(types.T_varchar), expr.Typ.Id)
+		require.Equal(t, int32(2), expr.Typ.Width)
+		require.True(t, expr.Typ.NotNullable)
+	})
+
+	t.Run("greatest remains nullable in metadata", func(t *testing.T) {
+		expr, err := BindFuncExprImplByPlanExpr(ctx, "greatest", []*planpb.Expr{
+			makePlan2DateConstExprWithType(0),
+			makePlan2DateConstExprWithType(1),
+		})
+		require.NoError(t, err)
+		require.False(t, expr.Typ.NotNullable)
+	})
+
+	t.Run("case temporal promotion remains nullable in metadata", func(t *testing.T) {
+		expr, err := BindFuncExprImplByPlanExpr(ctx, "case", []*planpb.Expr{
+			makePlan2BoolConstExprWithType(true),
+			makePlan2DateConstExprWithType(0),
+			makePlan2DateTimeConstExprWithType(0),
+		})
+		require.NoError(t, err)
+		require.Equal(t, int32(types.T_datetime), expr.Typ.Id)
+		require.False(t, expr.Typ.NotNullable)
+	})
+
+	t.Run("case binary character keeps binary metadata", func(t *testing.T) {
+		expr, err := BindFuncExprImplByPlanExpr(ctx, "case", []*planpb.Expr{
+			makePlan2BoolConstExprWithType(true),
+			makePlan2VarBinaryConstExprWithType("a"),
+			makePlan2StringConstExprWithType("bc"),
+		})
+		require.NoError(t, err)
+		require.Equal(t, int32(types.T_varbinary), expr.Typ.Id)
+		require.Equal(t, int32(6), expr.Typ.Width)
+		require.True(t, expr.Typ.NotNullable)
+	})
+}
+
+func TestDecimalLiteralMetadataPrecision(t *testing.T) {
+	expr, err := makePlan2DecimalExprWithType(context.Background(), "9.5")
+	require.NoError(t, err)
+	require.Equal(t, int32(2), expr.Typ.Width)
+	require.Equal(t, int32(1), expr.Typ.Scale)
+}
+
+func TestBuildIfNullMetadata(t *testing.T) {
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, "select ifnull(null, 9.5)", 1)
+	require.NoError(t, err)
+
+	pl, err := BuildPlan(NewMockCompilerContext(true), stmt, false)
+	require.NoError(t, err)
+	query := pl.GetQuery()
+	projectList := query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList
+	require.Len(t, projectList, 1)
+	require.Equal(t, int32(types.T_decimal64), projectList[0].Typ.Id)
+	require.Equal(t, int32(2), projectList[0].Typ.Width)
+	require.Equal(t, int32(1), projectList[0].Typ.Scale)
+	require.True(t, projectList[0].Typ.NotNullable)
+}

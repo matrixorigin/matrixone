@@ -2320,6 +2320,8 @@ func (b *baseBinder) bindFullTextMatchExpr(astExpr *tree.FullTextMatchExpr, dept
 }
 
 func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr, depth int32) (*plan.Expr, error) {
+	isIfNull := name == "ifnull"
+
 	// rewrite some ast Exprs before binding
 	switch name {
 	case "nullif":
@@ -2514,6 +2516,9 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 	if b.builder != nil {
 		e, err := bindFuncExprAndConstFold(b.GetContext(), b.builder.compCtx.GetProcess(), name, args)
 		if err == nil {
+			if isIfNull {
+				e.Typ.NotNullable = args[1].Typ.NotNullable || args[2].Typ.NotNullable
+			}
 			return e, nil
 		}
 		if !strings.Contains(err.Error(), "not supported") {
@@ -2524,6 +2529,9 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		// first look for builtin func
 		builtinExpr, err := BindFuncExprImplByPlanExpr(b.GetContext(), name, args)
 		if err == nil {
+			if isIfNull {
+				builtinExpr.Typ.NotNullable = args[1].Typ.NotNullable || args[2].Typ.NotNullable
+			}
 			return builtinExpr, nil
 		}
 		if !strings.Contains(err.Error(), "not supported") {
@@ -3306,6 +3314,7 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 	funcID = fGet.GetEncodedOverloadID()
 	returnType = fGet.GetReturnType()
 	argsCastType, _ = fGet.ShouldDoImplicitTypeCast()
+	adjustControlFlowStringMetadata(name, args, argsType, &returnType)
 
 	// Optimization: avoid casting columns in comparisons to preserve index usage
 	switch name {
@@ -3605,6 +3614,115 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		},
 		Typ: Typ,
 	}, nil
+}
+
+func adjustControlFlowStringMetadata(name string, args []*Expr, argTypes []types.Type, returnType *types.Type) {
+	if returnType.Oid != types.T_varchar {
+		return
+	}
+
+	valueIndexes := make([]int, 0, len(args))
+	switch name {
+	case "if", "iff":
+		if len(args) == 3 {
+			valueIndexes = append(valueIndexes, 1, 2)
+		}
+	case "case":
+		for i := 1; i < len(args); i += 2 {
+			valueIndexes = append(valueIndexes, i)
+		}
+		if len(args)%2 == 1 {
+			valueIndexes = append(valueIndexes, len(args)-1)
+		}
+	case "coalesce":
+		for i := range args {
+			valueIndexes = append(valueIndexes, i)
+		}
+	default:
+		return
+	}
+
+	hasString := false
+	hasNumeric := false
+	width := int32(0)
+	for _, idx := range valueIndexes {
+		if idx >= len(argTypes) {
+			return
+		}
+		typ := argTypes[idx]
+		if typ.Oid.IsMySQLString() {
+			hasString = true
+		} else if typ.Oid.IsInteger() || typ.Oid.IsFloat() || typ.Oid.IsDecimal() {
+			hasNumeric = true
+		} else {
+			continue
+		}
+		if candidate := controlFlowStringWidth(args[idx], typ); candidate > width {
+			width = candidate
+		}
+	}
+	if hasString && hasNumeric && width > 0 {
+		returnType.Width = width
+	}
+}
+
+func controlFlowStringWidth(expr *Expr, typ types.Type) int32 {
+	if typ.Oid.IsMySQLString() {
+		return typ.Width
+	}
+	if lit := expr.GetLit(); lit != nil && !lit.Isnull {
+		switch value := lit.Value.(type) {
+		case *plan.Literal_I8Val:
+			return signedIntegerLiteralWidth(int64(value.I8Val))
+		case *plan.Literal_I16Val:
+			return signedIntegerLiteralWidth(int64(value.I16Val))
+		case *plan.Literal_I32Val:
+			return signedIntegerLiteralWidth(int64(value.I32Val))
+		case *plan.Literal_I64Val:
+			return signedIntegerLiteralWidth(value.I64Val)
+		case *plan.Literal_U8Val:
+			return int32(len(strconv.FormatUint(uint64(value.U8Val), 10)))
+		case *plan.Literal_U16Val:
+			return int32(len(strconv.FormatUint(uint64(value.U16Val), 10)))
+		case *plan.Literal_U32Val:
+			return int32(len(strconv.FormatUint(uint64(value.U32Val), 10)))
+		case *plan.Literal_U64Val:
+			return int32(len(strconv.FormatUint(value.U64Val, 10)))
+		}
+	}
+	if typ.Oid.IsInteger() {
+		width := integerMetadataWidth(typ.Oid)
+		if typ.Oid.IsSignedInt() {
+			width++
+		}
+		return width
+	}
+	return typ.Width
+}
+
+func signedIntegerLiteralWidth(value int64) int32 {
+	width := int32(len(strconv.FormatInt(value, 10)))
+	if value >= 0 {
+		width++
+	}
+	return width
+}
+
+func integerMetadataWidth(oid types.T) int32 {
+	switch oid {
+	case types.T_int8, types.T_uint8:
+		return 3
+	case types.T_int16, types.T_uint16:
+		return 5
+	case types.T_int32, types.T_uint32:
+		return 10
+	case types.T_int64:
+		return 19
+	case types.T_uint64:
+		return 20
+	default:
+		return 0
+	}
 }
 
 // MySQL compares scalar TIME expressions to strings as text, but converts a
