@@ -34,6 +34,14 @@ func TestLiteral(t *testing.T) {
 	}
 }
 
+func TestEmptyJSONInputUsesStableError(t *testing.T) {
+	_, err := ParseFromString("")
+	require.ErrorContains(t, err, "json text is empty")
+
+	_, err = ParseFromByteSlice(nil)
+	require.ErrorContains(t, err, "json text is empty")
+}
+
 func TestParserFreesCompletedRootWhenTokenizerRejectsSuffix(t *testing.T) {
 	p := parser{src: []byte(`{}x`)}
 	_, err := p.do()

@@ -171,7 +171,7 @@ select id, json_type(j), json_unquote(j) from convert_json_destination order by 
 drop table convert_json_destination;
 drop table convert_json_source;
 select convert('', json);
-invalid input: json text 
+invalid input: json text is empty
 select convert('NULL', json);
 invalid input: json text NULL
 select convert('not json', json);
@@ -412,14 +412,19 @@ STRING  ¦  alpha  𝄀
 STRING  ¦  alpha,beta
 create table convert_json_set_destination(id int primary key, j json);
 insert into convert_json_set_destination select id, s from convert_json_set;
-update convert_json_set dst
-join (select id, s from convert_json_set where id = 1) src on dst.id = src.id
-set dst.j = src.s;
 select id, json_type(j), json_unquote(j)
 from convert_json_set_destination order by id;
 ➤ id[4,32,0]  ¦  json_type(j)[12,-1,0]  ¦  json_unquote(j)[12,-1,0]  𝄀
 1  ¦  STRING  ¦  alpha  𝄀
 2  ¦  STRING  ¦  alpha,beta
+update convert_json_set dst
+join (select id, s from convert_json_set where id = 1) src on dst.id = src.id
+set dst.j = src.s;
+select id, json_type(j), json_unquote(j)
+from convert_json_set
+where id = 1;
+➤ id[4,32,0]  ¦  json_type(j)[12,-1,0]  ¦  json_unquote(j)[12,-1,0]  𝄀
+1  ¦  STRING  ¦  alpha
 drop table convert_json_set_destination;
 drop table convert_json_set;
 prepare convert_json_parameter from 'select json_type(convert(?, json)), convert(?, json)';

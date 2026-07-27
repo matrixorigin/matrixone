@@ -315,11 +315,14 @@ from (
 order by json_unquote(convert(s, json));
 create table convert_json_set_destination(id int primary key, j json);
 insert into convert_json_set_destination select id, s from convert_json_set;
+select id, json_type(j), json_unquote(j)
+from convert_json_set_destination order by id;
 update convert_json_set dst
 join (select id, s from convert_json_set where id = 1) src on dst.id = src.id
 set dst.j = src.s;
 select id, json_type(j), json_unquote(j)
-from convert_json_set_destination order by id;
+from convert_json_set
+where id = 1;
 drop table convert_json_set_destination;
 drop table convert_json_set;
 
