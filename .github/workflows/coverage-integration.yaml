@@ -37,7 +37,7 @@ jobs:
   matrixone-ut-coverage:
     name: Matrixone UT Coverage
     needs: bvt-group-plan
-    uses: matrixorigin/CI/.github/workflows/coverage-ut.yaml@xp/ci-two-bvt-coverage
+    uses: matrixorigin/CI/.github/workflows/coverage-ut.yaml@main
     with:
       bvt_generation: ${{ needs.bvt-group-plan.outputs.generation }}
     secrets: inherit
@@ -45,7 +45,7 @@ jobs:
   matrixone-compose-ci:
     name: Matrixone Compose CI
     needs: bvt-group-plan
-    uses: matrixorigin/CI/.github/workflows/e2e-compose-parallel.yaml@xp/ci-two-bvt-coverage
+    uses: matrixorigin/CI/.github/workflows/e2e-compose-parallel.yaml@main
     with:
       bvt_group: ${{ needs.bvt-group-plan.outputs.compose_group }}
       bvt_generation: ${{ needs.bvt-group-plan.outputs.generation }}
@@ -54,7 +54,7 @@ jobs:
   matrixone-standalone-ci:
     name: Matrixone Standlone CI
     needs: bvt-group-plan
-    uses: matrixorigin/CI/.github/workflows/e2e-standalone-parallel.yaml@xp/ci-two-bvt-coverage
+    uses: matrixorigin/CI/.github/workflows/e2e-standalone-parallel.yaml@main
     with:
       bvt_group: ${{ needs.bvt-group-plan.outputs.launch_group }}
       bvt_generation: ${{ needs.bvt-group-plan.outputs.generation }}
@@ -63,16 +63,15 @@ jobs:
   matrixone-utils-ci:
     name: Matrixone Utils CI
     needs: bvt-group-plan
-    uses: matrixorigin/CI/.github/workflows/utils-parallel.yaml@xp/ci-two-bvt-coverage
+    uses: matrixorigin/CI/.github/workflows/utils-parallel.yaml@main
     secrets: inherit
 
   matrixone-coverage-merge:
     name: Matrixone Utils CI
     needs: [bvt-group-plan, matrixone-ut-coverage, matrixone-compose-ci, matrixone-standalone-ci]
     if: ${{ always() }}
-    uses: matrixorigin/CI/.github/workflows/coverage-merge.yaml@xp/ci-two-bvt-coverage
+    uses: matrixorigin/CI/.github/workflows/coverage-merge.yaml@main
     with:
       prerequisites_ready: ${{ needs.bvt-group-plan.result == 'success' && needs.matrixone-ut-coverage.result == 'success' && needs.matrixone-ut-coverage.outputs.coverage_ready == 'true' && needs.matrixone-compose-ci.result == 'success' && needs.matrixone-standalone-ci.result == 'success' }}
       expected_bvt_generation: ${{ needs.bvt-group-plan.outputs.generation }}
-      ci_ref: xp/ci-two-bvt-coverage
     secrets: inherit
