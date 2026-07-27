@@ -30,21 +30,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type castWarningTestSession struct {
-	codes []uint16
-	msgs  []string
-}
-
-func (s *castWarningTestSession) GetTempTable(string, string) (string, bool) { return "", false }
-func (s *castWarningTestSession) AddTempTable(string, string, string)        {}
-func (s *castWarningTestSession) RemoveTempTable(string, string)             {}
-func (s *castWarningTestSession) RemoveTempTableByRealName(string)           {}
-func (s *castWarningTestSession) GetSqlModeNoAutoValueOnZero() (bool, bool)  { return false, false }
-func (s *castWarningTestSession) AddWarning(code uint16, msg string) {
-	s.codes = append(s.codes, code)
-	s.msgs = append(s.msgs, msg)
-}
-
 func runStrToStrWidth(t *testing.T, mp *mpool.MPool, proc *process.Process, input string, toType types.Type, strict, allowTrim bool) (string, bool, error) {
 	t.Helper()
 	src := vector.NewVec(types.T_varchar.ToType())
@@ -212,8 +197,7 @@ func TestTruncateCastBytesResultWidthBounds(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := truncateCastBytesResult(
-				context.Background(), []byte(c.input), c.target, c.strict)
+			got := truncateCastBytesResult([]byte(c.input), c.target, c.strict)
 			require.Equal(t, c.want, string(got))
 		})
 	}
@@ -328,7 +312,7 @@ func TestNewAssignCastHonorsSqlMode(t *testing.T) {
 	require.Error(t, NewStrictCast([]*vector.Vector{src, dst}, rs, proc, 1, nil))
 }
 
-func TestAssignmentCastTypedSourceAndWarnings(t *testing.T) {
+func TestAssignmentCastTypedSource(t *testing.T) {
 	ignoreFunction, err := GetFunctionByName(
 		context.Background(),
 		"cast_ignore",
@@ -338,15 +322,13 @@ func TestAssignmentCastTypedSourceAndWarnings(t *testing.T) {
 	functionID, _ := DecodeOverloadID(ignoreFunction.GetEncodedOverloadID())
 	require.Equal(t, int32(CAST_IGNORE), functionID)
 
-	newProc := func(sqlMode string) (*process.Process, *castWarningTestSession) {
+	newProc := func(sqlMode string) *process.Process {
 		proc := testutil.NewProcess(t)
-		session := &castWarningTestSession{}
-		proc.Session = session
 		proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
 			require.Equal(t, "sql_mode", name)
 			return sqlMode, nil
 		})
-		return proc, session
+		return proc
 	}
 	run := func(
 		proc *process.Process,
@@ -368,32 +350,28 @@ func TestAssignmentCastTypedSourceAndWarnings(t *testing.T) {
 		return string(got), nil
 	}
 
-	strictProc, strictWarnings := newProc("STRICT_TRANS_TABLES")
+	strictProc := newProc("STRICT_TRANS_TABLES")
 	_, err = run(strictProc, NewAssignCast)
 	require.Error(t, err)
 	moErr := err.(*moerr.Error)
 	require.Equal(t, moerr.ErrCastWidthExceeded, moErr.ErrorCode())
 	require.Equal(t, uint16(moerr.ER_DATA_TOO_LONG), moErr.MySQLCode())
 	require.Equal(t, "22001", moErr.SqlState())
-	require.Empty(t, strictWarnings.codes)
 
-	nonStrictProc, nonStrictWarnings := newProc("")
+	nonStrictProc := newProc("")
 	got, err := run(nonStrictProc, NewAssignCast)
 	require.NoError(t, err)
 	require.Equal(t, "123", got)
-	require.Equal(t, []uint16{moerr.WARN_DATA_TRUNCATED}, nonStrictWarnings.codes)
 
-	ignoreProc, ignoreWarnings := newProc("STRICT_TRANS_TABLES")
+	ignoreProc := newProc("STRICT_TRANS_TABLES")
 	got, err = run(ignoreProc, NewAssignIgnoreCast)
 	require.NoError(t, err)
 	require.Equal(t, "123", got)
-	require.Equal(t, []uint16{moerr.WARN_DATA_TRUNCATED}, ignoreWarnings.codes)
 
-	explicitProc, explicitWarnings := newProc("STRICT_TRANS_TABLES")
+	explicitProc := newProc("STRICT_TRANS_TABLES")
 	got, err = run(explicitProc, NewExplicitCast)
 	require.NoError(t, err)
 	require.Equal(t, "123", got)
-	require.Equal(t, []uint16{moerr.ER_TRUNCATED_WRONG_VALUE}, explicitWarnings.codes)
 }
 
 func TestMultibyteAssignmentErrorUsesCharacterLength(t *testing.T) {

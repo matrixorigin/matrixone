@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"math"
 	"net"
 	"runtime"
 	"strconv"
@@ -168,8 +167,7 @@ type Session struct {
 
 	ddlOwnerRoleID uint32
 
-	errInfo  *errInfo
-	warnings *errInfo
+	errInfo *errInfo
 
 	cache       *privilegeCache
 	ruleCache   map[string]string // rewrite rule cache, nil means not loaded
@@ -717,6 +715,10 @@ func (e *errInfo) push(code uint16, msg string) {
 	e.msgs = append(e.msgs, msg)
 }
 
+func (e *errInfo) length() int {
+	return len(e.codes)
+}
+
 func NewSession(
 	connCtx context.Context,
 	service string,
@@ -741,11 +743,6 @@ func NewSession(
 			service:        service,
 		},
 		errInfo: &errInfo{
-			codes:  make([]uint16, 0, MoDefaultErrorCount),
-			msgs:   make([]string, 0, MoDefaultErrorCount),
-			maxCnt: MoDefaultErrorCount,
-		},
-		warnings: &errInfo{
 			codes:  make([]uint16, 0, MoDefaultErrorCount),
 			msgs:   make([]string, 0, MoDefaultErrorCount),
 			maxCnt: MoDefaultErrorCount,
@@ -904,7 +901,6 @@ func (ses *Session) Close() {
 	ses.tenant = nil
 	ses.priv = nil
 	ses.errInfo = nil
-	ses.warnings = nil
 	ses.cache = nil
 	ses.debugStr = ""
 	ses.tStmt = nil
@@ -1921,71 +1917,13 @@ func (ses *Session) SetNewResponse(category int, affectedRows uint64, cmd int, d
 	// If the stmt has next stmt, should add SERVER_MORE_RESULTS_EXISTS to the server status.
 	var resp *Response
 	serverStatus := ses.GetTxnHandler().GetServerStatus()
-	warnings := ses.WarningCount()
 	if !isLastStmt {
-		resp = NewResponse(category, affectedRows, 0, warnings,
+		resp = NewResponse(category, affectedRows, 0, 0,
 			serverStatus|SERVER_MORE_RESULTS_EXISTS, cmd, d)
 	} else {
-		resp = NewResponse(category, affectedRows, 0, warnings, serverStatus, cmd, d)
+		resp = NewResponse(category, affectedRows, 0, 0, serverStatus, cmd, d)
 	}
 	return resp
-}
-
-func (ses *Session) AddWarning(code uint16, msg string) {
-	ses.mu.Lock()
-	defer ses.mu.Unlock()
-	if ses.warnings == nil {
-		ses.warnings = &errInfo{maxCnt: MoDefaultErrorCount}
-	}
-	ses.warnings.push(code, msg)
-}
-
-func (ses *Session) ClearWarnings() {
-	ses.mu.Lock()
-	defer ses.mu.Unlock()
-	if ses.warnings == nil {
-		return
-	}
-	ses.warnings.codes = ses.warnings.codes[:0]
-	ses.warnings.msgs = ses.warnings.msgs[:0]
-}
-
-func (ses *Session) WarningCount() uint16 {
-	ses.mu.Lock()
-	defer ses.mu.Unlock()
-	if ses.warnings == nil {
-		return 0
-	}
-	if len(ses.warnings.codes) > math.MaxUint16 {
-		return math.MaxUint16
-	}
-	return uint16(len(ses.warnings.codes))
-}
-
-func (ses *Session) warningSnapshot() ([]uint16, []string) {
-	ses.mu.Lock()
-	defer ses.mu.Unlock()
-	if ses.warnings == nil {
-		return nil, nil
-	}
-	return append([]uint16(nil), ses.warnings.codes...), append([]string(nil), ses.warnings.msgs...)
-}
-
-func (ses *Session) showConditionSnapshot(stmt tree.Statement) (string, []uint16, []string) {
-	if _, ok := stmt.(*tree.ShowWarnings); ok {
-		codes, msgs := ses.warningSnapshot()
-		return "Warning", codes, msgs
-	}
-	info := ses.GetErrInfo()
-	return "Error", info.codes, info.msgs
-}
-
-func (ses *Session) prepareWarningsForStatement(stmt tree.Statement) {
-	switch stmt.(type) {
-	case *tree.ShowWarnings, *tree.ShowErrors:
-	default:
-		ses.ClearWarnings()
-	}
 }
 
 // StatusSession implements the queryservice.Session interface.
