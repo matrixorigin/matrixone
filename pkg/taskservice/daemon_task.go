@@ -136,8 +136,12 @@ func (t *startTask) Handle(_ context.Context) error {
 			executorCtx = WithRestartAdmission(ctx)
 		}
 		if err = t.task.executor(executorCtx, &t.task.task); err != nil {
-			// set the record of this task error message.
-			t.runner.setDaemonTaskError(ctx, t.task, err)
+			if t.restartClaim {
+				t.runner.releaseRestartClaim(t.task, err)
+			} else {
+				// set the record of this task error message.
+				t.runner.setDaemonTaskError(ctx, t.task, err)
+			}
 		}
 	}); err != nil {
 		return err
@@ -325,14 +329,23 @@ func (t *restartTask) Handle(ctx context.Context) error {
 		return cdcRestartHandleError("CDC restart failed")
 	}
 
-	// A successful Restart means the replacement generation has reached its
-	// startup-ready point. Do not advertise Running before that acknowledgement.
+	// A successful Restart means the replacement generation is locally Running
+	// and has committed its restarting -> running catalog transition. Give the
+	// final daemon-task CAS an independent bounded context: the query context
+	// may legitimately expire while Restart drains the old generation and
+	// starts its replacement.
 	tk.TaskStatus = task.TaskStatus_Running
 	nowTime := time.Now()
 	tk.LastRun = nowTime
 	tk.LastHeartbeat = nowTime
+	updateCtx, updateCancel := context.WithTimeoutCause(
+		context.Background(),
+		time.Second*5,
+		moerr.CauseRestartTaskHandle,
+	)
+	defer updateCancel()
 	updated, err := t.runner.service.UpdateDaemonTask(
-		handleCtx,
+		updateCtx,
 		[]task.DaemonTask{tk},
 		WithTaskStatusCond(task.TaskStatus_RestartRequested),
 		WithTaskRunnerCond(EQ, requestRunner),
@@ -1052,6 +1065,54 @@ func (r *taskRunner) setDaemonTaskError(ctx context.Context, dt *daemonTask, err
 			zap.String("error message", errMsg.Error()),
 			zap.Error(err))
 	}
+}
+
+// releaseRestartClaim makes a failed fresh takeover immediately retryable.
+// The status/runner CAS preserves a newer PAUSE/CANCEL and prevents an older
+// failed executor from releasing a later claim.
+func (r *taskRunner) releaseRestartClaim(dt *daemonTask, startErr error) {
+	retry := dt.task
+	retry.TaskStatus = task.TaskStatus_RestartRequested
+	retry.TaskRunner = ""
+	retry.LastHeartbeat = time.Time{}
+	retry.UpdateAt = time.Now()
+	retry.Details = cloneDaemonTaskDetails(retry.Details)
+	retry.Details.Error = "CDC restart startup failed"
+
+	updateCtx, cancel := context.WithTimeoutCause(
+		context.Background(),
+		time.Second*5,
+		moerr.CauseRestartTaskHandle,
+	)
+	defer cancel()
+	updated, err := r.service.UpdateDaemonTask(
+		updateCtx,
+		[]task.DaemonTask{retry},
+		WithTaskStatusCond(task.TaskStatus_Running),
+		WithTaskRunnerCond(EQ, r.runnerID),
+	)
+	if err != nil {
+		eventCDCRestartStatusUpdateFailed.ErrorLazy(func() []zap.Field {
+			return cdcRestartEventFields(dt.task, append([]zap.Field{
+				zap.String("reason", "release-failed-restart-claim"),
+			}, logutil.ErrorFingerprintFields("error", err)...)...)
+		})
+		return
+	}
+	if updated != 1 {
+		eventCDCRestartSkippedInvalidStatus.InfoLazy(func() []zap.Field {
+			return cdcRestartEventFields(
+				dt.task,
+				zap.String("reason", "failed-restart-claim-superseded"),
+			)
+		})
+		return
+	}
+	eventCDCRestartFailed.ErrorLazy(func() []zap.Field {
+		return cdcRestartEventFields(dt.task, append([]zap.Field{
+			zap.String("reason", "fresh-startup-failed"),
+		}, logutil.ErrorFingerprintFields("error", startErr)...)...)
+	})
 }
 
 func cloneDaemonTaskDetails(d *task.Details) *task.Details {

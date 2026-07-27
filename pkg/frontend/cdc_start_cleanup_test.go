@@ -348,6 +348,138 @@ func TestRestartFailureDrainsHoldChAndMovesToFailed(t *testing.T) {
 	assert.Equal(t, StateRunning, exec.stateMachine.State())
 }
 
+func TestCDCCompletionWinsWhenTimeoutIsAlsoReady(t *testing.T) {
+	for range 100 {
+		completion := make(chan error, 1)
+		timeout := make(chan time.Time, 1)
+		expected := errors.New("completed")
+		completion <- expected
+		timeout <- time.Now()
+
+		result, timedOut := selectCDCCompletion(completion, timeout)
+		require.False(t, timedOut)
+		require.ErrorIs(t, result, expected)
+	}
+}
+
+func TestRestartReadinessRequiresCatalogTransition(t *testing.T) {
+	t.Run("local restart waiter", func(t *testing.T) {
+		catalogErr := errors.New("catalog unavailable")
+		catalog := &captureExecContextIE{execErr: catalogErr}
+		exec := &CDCTaskExecutor{
+			spec: &task.CreateCdcDetails{
+				TaskId:   "restart-catalog-ready",
+				Accounts: []*task.Account{{Id: 1}},
+			},
+			ie: catalog,
+		}
+		const generation = uint64(1)
+		ready := exec.beginRestartWaiter(generation, cdc.CDCState_Restarting)
+
+		restartReady, required, err := exec.completeStartupCatalogTransition(
+			context.Background(),
+			generation,
+			false,
+		)
+		require.True(t, required)
+		require.False(t, restartReady)
+		require.ErrorIs(t, err, catalogErr)
+		select {
+		case <-ready:
+			t.Fatal("restart readiness was published before the catalog transition")
+		default:
+		}
+
+		catalog.execErr = nil
+		restartReady, required, err = exec.completeStartupCatalogTransition(
+			context.Background(),
+			generation,
+			false,
+		)
+		require.NoError(t, err)
+		require.True(t, required)
+		require.True(t, restartReady)
+		require.NoError(t, <-ready)
+	})
+
+	t.Run("fresh takeover", func(t *testing.T) {
+		catalogErr := errors.New("catalog unavailable")
+		exec := &CDCTaskExecutor{
+			spec: &task.CreateCdcDetails{
+				TaskId:   "restart-takeover-catalog-ready",
+				Accounts: []*task.Account{{Id: 1}},
+			},
+			ie: &captureExecContextIE{execErr: catalogErr},
+		}
+
+		restartReady, required, err := exec.completeStartupCatalogTransition(
+			context.Background(),
+			0,
+			true,
+		)
+		require.True(t, required)
+		require.False(t, restartReady)
+		require.ErrorIs(t, err, catalogErr)
+	})
+}
+
+func TestFreshRestartRetryReopensFailedCatalogAdmission(t *testing.T) {
+	catalog := &cdcCatalogStateExecutor{
+		state:        cdc.CDCState_Failed,
+		currentState: cdc.CDCState_Failed,
+		targetState:  cdc.CDCState_Restarting,
+	}
+	exec := &CDCTaskExecutor{
+		spec: &task.CreateCdcDetails{
+			TaskId:   "fresh-restart-retry",
+			Accounts: []*task.Account{{Id: 1}},
+		},
+		ie: catalog,
+	}
+
+	require.NoError(t, exec.admitRestartCatalogState(context.Background()))
+	require.Equal(t, cdc.CDCState_Restarting, catalog.getState())
+
+	catalog.currentState = cdc.CDCState_Restarting
+	catalog.targetState = cdc.CDCState_Running
+	restartReady, required, err := exec.completeStartupCatalogTransition(
+		context.Background(),
+		0,
+		true,
+	)
+	require.NoError(t, err)
+	require.True(t, required)
+	require.False(t, restartReady, "fresh takeover has no local restart waiter")
+	require.Equal(t, cdc.CDCState_Running, catalog.getState())
+}
+
+func TestRestartEarlyStartFailureMovesGenerationToFailed(t *testing.T) {
+	retrieveErr := errors.New("catalog read unavailable")
+	catalog := &captureExecContextIE{queryErr: retrieveErr}
+	exec := &CDCTaskExecutor{
+		activeRoutine: cdc.NewCdcActiveRoutine(),
+		spec: &task.CreateCdcDetails{
+			TaskId:   "restart-early-start-failure",
+			TaskName: "restart-early-start-failure",
+			Accounts: []*task.Account{{Id: 1}},
+		},
+		ie:           catalog,
+		stateMachine: NewExecutorStateMachine(),
+		holdCh:       make(chan int, 1),
+	}
+	exec.startFunc = exec.Start
+	require.NoError(t, exec.stateMachine.Transition(TransitionStart))
+	require.NoError(t, exec.stateMachine.Transition(TransitionStartSuccess))
+
+	require.ErrorIs(t, exec.Restart(), retrieveErr)
+	require.Equal(t, StateFailed, exec.stateMachine.State())
+	require.Eventually(t, func() bool {
+		return exec.activeStart() == nil
+	}, time.Second, time.Millisecond)
+	require.True(t, catalog.containsExecutedSQL("SET state = 'failed'"))
+	require.True(t, catalog.containsExecutedSQL("AND state = 'restarting'"))
+}
+
 func TestRestartReleasesCallbackFenceBeforeWaitingForReplacement(t *testing.T) {
 	exec := &CDCTaskExecutor{
 		activeRoutine: cdc.NewCdcActiveRoutine(),

@@ -123,6 +123,9 @@ func (s *serviceWithDaemonHook) QueryDaemonTask(ctx context.Context, conds ...Co
 }
 
 func (s *serviceWithDaemonHook) UpdateDaemonTask(ctx context.Context, tasks []task.DaemonTask, conds ...Condition) (int, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
 	s.mu.RLock()
 	updateErr := s.updateErr
 	s.mu.RUnlock()
@@ -409,6 +412,79 @@ func TestRestartTaskDoesNotOverwriteSupersedingControlRequest(t *testing.T) {
 	got := mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, dt.ID))
 	require.Len(t, got, 1)
 	assert.Equal(t, task.TaskStatus_CancelRequested, got[0].TaskStatus)
+}
+
+func TestRestartTaskUsesFreshContextForStatusUpdate(t *testing.T) {
+	r, store := newDaemonHandleTestRunner(t)
+	hook := &serviceWithDaemonHook{TaskService: r.service}
+	r.service = hook
+
+	dt := newDaemonTaskForTest(1, task.TaskStatus_RestartRequested, r.runnerID)
+	dt.Metadata.ID = "restart-fresh-update-context"
+	mustAddTestDaemonTask(t, store, 1, dt)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	taskRef := &daemonTask{task: dt}
+	ar := ActiveRoutine(&mockFuncActiveRoutine{restart: func() error {
+		// Deterministically model the initial five-second handler budget
+		// expiring while a valid two-phase restart is still completing.
+		cancel()
+		return nil
+	}})
+	taskRef.activeRoutine.Store(&ar)
+
+	require.NoError(t, newRestartTask(r, taskRef).Handle(ctx))
+	got := mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, dt.ID))
+	require.Len(t, got, 1)
+	assert.Equal(t, task.TaskStatus_Running, got[0].TaskStatus)
+}
+
+func TestRestartStartFailureReleasesClaimForRetry(t *testing.T) {
+	r, store := newDaemonHandleTestRunner(t)
+	dt := newDaemonTaskForTest(1, task.TaskStatus_RestartRequested, "foreign-runner")
+	dt.Metadata.ID = "restart-release-failed-claim"
+	dt.LastHeartbeat = time.Now().Add(-r.options.heartbeatTimeout - time.Second)
+	mustAddTestDaemonTask(t, store, 1, dt)
+
+	startErr := errors.New("catalog transition unavailable")
+	var restartAdmission atomic.Bool
+	require.NoError(t, newRestartStartTask(r, &daemonTask{
+		task: dt,
+		executor: func(ctx context.Context, _ task.Task) error {
+			restartAdmission.Store(IsRestartAdmission(ctx))
+			return startErr
+		},
+	}).Handle(context.Background()))
+
+	require.Eventually(t, func() bool {
+		got := mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, dt.ID))
+		return len(got) == 1 &&
+			got[0].TaskStatus == task.TaskStatus_RestartRequested &&
+			got[0].TaskRunner == "" &&
+			got[0].LastHeartbeat.IsZero() &&
+			got[0].Details.Error == "CDC restart startup failed"
+	}, time.Second, time.Millisecond)
+	require.True(t, restartAdmission.Load())
+}
+
+func TestRestartStartFailureDoesNotReleaseSupersedingControlRequest(t *testing.T) {
+	r, store := newDaemonHandleTestRunner(t)
+	claimed := newDaemonTaskForTest(1, task.TaskStatus_Running, r.runnerID)
+	claimed.Metadata.ID = "restart-failed-claim-cas"
+	mustAddTestDaemonTask(t, store, 1, claimed)
+
+	superseding := claimed
+	superseding.TaskStatus = task.TaskStatus_CancelRequested
+	mustUpdateTestDaemonTask(t, store, 1, []task.DaemonTask{superseding})
+
+	r.releaseRestartClaim(
+		&daemonTask{task: claimed},
+		errors.New("catalog transition unavailable"),
+	)
+	got := mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, claimed.ID))
+	require.Len(t, got, 1)
+	require.Equal(t, task.TaskStatus_CancelRequested, got[0].TaskStatus)
+	require.Equal(t, r.runnerID, got[0].TaskRunner)
 }
 
 func TestPauseAndCancelTaskHandleBranchesDirect(t *testing.T) {
