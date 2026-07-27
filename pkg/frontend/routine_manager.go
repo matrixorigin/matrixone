@@ -590,11 +590,10 @@ func (rm *RoutineManager) startKillRoutineWorker(interval time.Duration) {
 }
 
 func NewRoutineManager(ctx context.Context, service string) (*RoutineManager, error) {
-	var cancel context.CancelFunc
-	ctx, cancel = context.WithCancel(ctx)
+	ctx, cancel := context.WithCancel(ctx)
 	pu, ok := ctx.Value(config.ParameterUnitKey).(*config.ParameterUnit)
 	if !ok || pu == nil {
-		pu = getPu(service)
+		pu = getPuIfPresent(service)
 	}
 	if pu == nil || pu.SV == nil {
 		cancel()

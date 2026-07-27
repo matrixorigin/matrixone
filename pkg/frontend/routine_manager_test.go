@@ -552,6 +552,27 @@ func TestRoutineManagerRejectsMissingFrontendParameters(t *testing.T) {
 	require.ErrorContains(t, err, "invalid parameter unit")
 }
 
+func TestRoutineManagerRejectsMissingParameterUnit(t *testing.T) {
+	for _, tc := range []struct {
+		name              string
+		initializeService bool
+	}{
+		{name: "uninitialized service"},
+		{name: "initialized service", initializeService: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			service := t.Name()
+			if tc.initializeService {
+				InitServerLevelVars(service)
+			}
+
+			rm, err := NewRoutineManager(context.Background(), service)
+			require.Nil(t, rm)
+			require.ErrorContains(t, err, "invalid parameter unit")
+		})
+	}
+}
+
 func TestRoutineManagerCancelWaitsForActiveWorker(t *testing.T) {
 	rt, proto := newUnitTestRoutine(t, 1007)
 	blockingConn := &blockingCloseConn{
