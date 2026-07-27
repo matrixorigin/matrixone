@@ -830,3 +830,22 @@ select last_insert_id();
 last_insert_id()
 10
 Drop table auto_increment02;
+drop table if exists issue_23143_copy_auto_increment;
+drop table if exists issue_23143_reserved_offset;
+create table issue_23143_copy_auto_increment(id bigint auto_increment primary key, payload int) auto_increment = 1000;
+insert into issue_23143_copy_auto_increment(payload) values (1);
+create table issue_23143_reserved_offset as select mi.offset from mo_catalog.mo_increment_columns mi join mo_catalog.mo_tables mt on mi.table_id = mt.rel_id where mt.reldatabase = database() and mt.relname = 'issue_23143_copy_auto_increment' and mi.col_name = 'id';
+select min(t.id) = 1000 as requested_start_used, max(r.offset) > max(t.id) as allocator_has_reserved_range from issue_23143_copy_auto_increment t cross join issue_23143_reserved_offset r;
+requested_start_used    allocator_has_reserved_range
+true    true
+alter table issue_23143_copy_auto_increment add column copied_payload varchar(20) default 'copied';
+insert into issue_23143_copy_auto_increment(payload, copied_payload) values (2, 'after-copy');
+select count(*) = 2 as copied_rows_preserved, max(t.id) = max(r.offset) + 1 as source_allocator_preserved from issue_23143_copy_auto_increment t cross join issue_23143_reserved_offset r;
+copied_rows_preserved    source_allocator_preserved
+true    true
+select payload, copied_payload from issue_23143_copy_auto_increment order by payload;
+payload    copied_payload
+1    copied
+2    after-copy
+drop table issue_23143_reserved_offset;
+drop table issue_23143_copy_auto_increment;
