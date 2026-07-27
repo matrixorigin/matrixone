@@ -17,6 +17,8 @@ package aggexec
 import (
 	"context"
 	"encoding/binary"
+	"errors"
+	"io"
 	"os"
 	"testing"
 
@@ -97,6 +99,98 @@ func TestGroupConcatEnumOrderPayloadUsesFixedWidthStorage(t *testing.T) {
 	require.Len(t, data, types.T_enum.ToType().TypeSize())
 	require.Equal(t, types.Enum(2), types.DecodeEnum(data))
 	vec.Free(mp)
+}
+
+func TestGroupConcatH0SpillBoundaries(t *testing.T) {
+	mp := mpool.MustNewZero()
+	info := multiAggInfo{
+		aggID: 101,
+		argTypes: []types.Type{
+			types.T_varchar.ToType(),
+			types.T_int64.ToType(),
+		},
+		retType:   types.T_text.ToType(),
+		emptyNull: true,
+	}
+	newExec := func() *groupConcatExec {
+		exec := newGroupConcatExec(mp, info, ",").(*groupConcatExec)
+		require.NoError(t, exec.SetExtraInformation(
+			testGroupConcatOrderConfig(1, []byte{groupConcatOrderAsc}, ","),
+			0,
+		))
+		SyncAggregatorsToChunkSize([]AggFuncExec{exec}, 1)
+		require.NoError(t, exec.GroupGrow(1))
+		return exec
+	}
+
+	empty := newExec()
+	ConfigureGroupConcatH0Spill(
+		empty,
+		groupConcatMaxH0RunSize+1,
+		nil,
+		func() (*os.File, error) {
+			return nil, errors.New("must not create a file for empty input")
+		},
+		nil,
+	)
+	require.Equal(t, groupConcatMaxH0RunSize, empty.h0SpillLimit)
+	result, err := empty.FlushWithContext(nil)
+	require.NoError(t, err)
+	require.True(t, result[0].IsNull(0))
+	result[0].Free(mp)
+	empty.Free()
+
+	createErr := errors.New("create spill run")
+	failing := newExec()
+	ConfigureGroupConcatH0Spill(
+		failing,
+		1,
+		context.Background(),
+		func() (*os.File, error) { return nil, createErr },
+		nil,
+	)
+	value := buildVarlenVec(t, mp, types.T_varchar.ToType(), []string{"x"})
+	key := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed(key, int64(1), false, mp))
+	err = failing.BatchFill(0, []uint64{1}, []*vector.Vector{value, key})
+	require.ErrorIs(t, err, createErr)
+	value.Free(mp)
+	key.Free(mp)
+	failing.Free()
+
+	count := makeCountStarExec(t, mp, types.T_int64.ToType())
+	require.NoError(t, count.GroupGrow(1))
+	result, err = FlushWithContext(nil, count)
+	require.NoError(t, err)
+	require.Equal(t, int64(0), vector.GetFixedAtNoTypeCheck[int64](result[0], 0))
+	result[0].Free(mp)
+	count.Free()
+}
+
+func TestReadGroupConcatRunEntryRejectsTruncatedData(t *testing.T) {
+	file, err := os.CreateTemp(t.TempDir(), "group-concat-corrupt-")
+	require.NoError(t, err)
+	defer file.Close()
+
+	_, err = readGroupConcatRunEntry(file)
+	require.NoError(t, err)
+
+	_, err = file.Write([]byte{0, 0})
+	require.NoError(t, err)
+	_, err = file.Seek(0, io.SeekStart)
+	require.NoError(t, err)
+	_, err = readGroupConcatRunEntry(file)
+	require.ErrorIs(t, err, io.ErrUnexpectedEOF)
+
+	require.NoError(t, file.Truncate(0))
+	_, err = file.Seek(0, io.SeekStart)
+	require.NoError(t, err)
+	_, err = file.Write([]byte{0, 0, 0, 3, 1, 2, 3})
+	require.NoError(t, err)
+	_, err = file.Seek(0, io.SeekStart)
+	require.NoError(t, err)
+	_, err = readGroupConcatRunEntry(file)
+	require.ErrorContains(t, err, "invalid group_concat ordered payload")
 }
 
 func TestGroupConcatDistinctAndHelpers(t *testing.T) {
