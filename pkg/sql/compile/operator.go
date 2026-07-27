@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -2338,6 +2339,12 @@ func constructTableClone(
 ) (*table_clone.TableClone, error) {
 
 	metaCopy := table_clone.NewTableClone()
+	success := false
+	defer func() {
+		if !success {
+			metaCopy.Release()
+		}
+	}()
 
 	metaCopy.Ctx = &table_clone.TableCloneCtx{
 		Eng:       c.e,
@@ -2348,15 +2355,27 @@ func constructTableClone(
 		DstTblName:      clonePlan.DstTableName,
 		DstDatabaseName: clonePlan.DstDatabaseName,
 	}
+	dstTblDef := clonePlan.SrcTableDef
+	sameColumnIDSpace := true
+	metaCopy.Ctx.RequestedAutoIncrOffset = clonePlan.SrcTableDef.AutoIncrOffset
+	if createPlan := clonePlan.GetCreateTable(); createPlan != nil {
+		if createTable := createPlan.GetDdl().GetCreateTable(); createTable != nil && createTable.TableDef != nil {
+			dstTblDef = createTable.TableDef
+			sameColumnIDSpace = false
+			metaCopy.Ctx.RequestedAutoIncrOffset = createTable.TableDef.AutoIncrOffset
+		}
+	}
+	dstAutoIncrNames := mapCloneAutoIncrColumns(clonePlan.SrcTableDef, dstTblDef, sameColumnIDSpace)
 
 	var (
 		err error
 		ret executor.Result
 		sql string
 
-		account     = uint32(math.MaxUint32)
-		colOffset   map[int32]uint64
-		hasAutoIncr bool
+		account         = uint32(math.MaxUint32)
+		colMaxValue     map[string]uint64
+		autoIncrOffsets map[string]uint64
+		hasAutoIncr     bool
 	)
 
 	for _, colDef := range clonePlan.SrcTableDef.Cols {
@@ -2367,24 +2386,15 @@ func constructTableClone(
 	}
 
 	if !hasAutoIncr {
+		success = true
 		return metaCopy, nil
 	}
 
-	sql = fmt.Sprintf(
-		"select col_index, offset from mo_catalog.mo_increment_columns where table_id = %d",
-		clonePlan.SrcTableDef.TblId,
-	)
-
-	if clonePlan.ScanSnapshot != nil {
+	if clonePlan.SrcObjDef != nil && clonePlan.SrcObjDef.PubInfo != nil {
+		account = uint32(clonePlan.SrcObjDef.PubInfo.TenantId)
+	} else if clonePlan.ScanSnapshot != nil {
 		if clonePlan.ScanSnapshot.Tenant != nil {
 			account = clonePlan.ScanSnapshot.Tenant.TenantID
-		}
-
-		if clonePlan.ScanSnapshot.TS != nil {
-			sql = fmt.Sprintf(
-				"select col_index, offset from mo_catalog.mo_increment_columns {MO_TS = %d} where table_id = %d",
-				clonePlan.ScanSnapshot.TS.PhysicalTime, clonePlan.SrcTableDef.TblId,
-			)
 		}
 	}
 
@@ -2394,32 +2404,133 @@ func constructTableClone(
 		}
 	}
 
+	if err := c.proc.Ctx.Err(); err != nil {
+		return nil, err
+	}
+	sql = fmt.Sprintf(
+		"select col_index, offset from mo_catalog.mo_increment_columns where table_id = %d",
+		clonePlan.SrcTableDef.TblId,
+	)
+	if clonePlan.ScanSnapshot != nil && clonePlan.ScanSnapshot.TS != nil {
+		sql = fmt.Sprintf(
+			"select col_index, offset from mo_catalog.mo_increment_columns {MO_TS = %d} where table_id = %d",
+			clonePlan.ScanSnapshot.TS.PhysicalTime,
+			clonePlan.SrcTableDef.TblId,
+		)
+	}
 	if ret, err = c.runSqlWithResultAndOptions(
 		sql,
 		int32(account),
 		executor.StatementOption{}.WithDisableLog(),
 	); err != nil {
+		ret.Close()
 		return nil, err
 	}
+	autoIncrOffsets = make(map[string]uint64)
+	func() {
+		defer ret.Close()
+		ret.ReadRows(func(rows int, cols []*vector.Vector) bool {
+			colIdxes := vector.MustFixedColWithTypeCheck[int32](cols[0])
+			offsets := vector.MustFixedColWithTypeCheck[uint64](cols[1])
+			for i := 0; i < rows; i++ {
+				if dstName, ok := dstAutoIncrNames[colIdxes[i]]; ok {
+					autoIncrOffsets[dstName] = offsets[i]
+				}
+			}
+			return true
+		})
+	}()
 
-	ret.ReadRows(func(rows int, cols []*vector.Vector) bool {
-		if colOffset == nil {
-			colOffset = make(map[int32]uint64)
+	colMaxValue = make(map[string]uint64)
+	for colIdx, colDef := range clonePlan.SrcTableDef.Cols {
+		if !colDef.Typ.AutoIncr || colDef.Hidden {
+			continue
+		}
+		if err := c.proc.Ctx.Err(); err != nil {
+			return nil, err
 		}
 
-		colIdxes := vector.MustFixedColWithTypeCheck[int32](cols[0])
-		offsets := vector.MustFixedColWithTypeCheck[uint64](cols[1])
-
-		for i := 0; i < rows; i++ {
-			colOffset[colIdxes[i]] = offsets[i]
+		colIdent := sqlquote.Ident(colDef.Name)
+		tableIdent := sqlquote.QualifiedIdent(clonePlan.SrcTableDef.DbName, clonePlan.SrcTableDef.Name)
+		if (clonePlan.SrcObjDef == nil || clonePlan.SrcObjDef.PubInfo == nil) &&
+			clonePlan.ScanSnapshot != nil && clonePlan.ScanSnapshot.TS != nil {
+			tableIdent += fmt.Sprintf(" {MO_TS = %d}", clonePlan.ScanSnapshot.TS.PhysicalTime)
 		}
+		sql = fmt.Sprintf(
+			"select cast(coalesce(max(case when %s > 0 then %s else 0 end), 0) as unsigned) from %s",
+			colIdent,
+			colIdent,
+			tableIdent,
+		)
 
-		return true
-	})
+		if ret, err = c.runSqlWithResultAndOptions(
+			sql,
+			int32(account),
+			executor.StatementOption{}.WithDisableLog(),
+		); err != nil {
+			ret.Close()
+			return nil, err
+		}
+		func() {
+			defer ret.Close()
+			ret.ReadRows(func(rows int, cols []*vector.Vector) bool {
+				if rows > 0 && len(cols) > 0 && !cols[0].IsNull(0) {
+					if dstName, ok := dstAutoIncrNames[int32(colIdx)]; ok {
+						colMaxValue[dstName] = executor.GetFixedRows[uint64](cols[0])[0]
+					}
+				}
+				return false
+			})
+		}()
+	}
 
-	ret.Close()
-
-	metaCopy.Ctx.SrcAutoIncrOffsets = colOffset
-
+	metaCopy.Ctx.SrcAutoIncrMaxValues = colMaxValue
+	metaCopy.Ctx.SrcAutoIncrOffsets = autoIncrOffsets
+	success = true
 	return metaCopy, nil
+}
+
+// mapCloneAutoIncrColumns translates source catalog indexes to destination
+// column names. ALTER COPY can reorder or rename columns while retaining their
+// planner column IDs, so source indexes must not be used as destination indexes.
+func mapCloneAutoIncrColumns(src, dst *plan.TableDef, sameColumnIDSpace bool) map[int32]string {
+	result := make(map[int32]string)
+	if src == nil || dst == nil {
+		return result
+	}
+
+	srcIDCounts := make(map[uint64]int, len(src.Cols))
+	dstByID := make(map[uint64][]*plan.ColDef, len(dst.Cols))
+	dstByName := make(map[string]*plan.ColDef, len(dst.Cols))
+	for _, col := range src.Cols {
+		srcIDCounts[col.ColId]++
+	}
+	for _, col := range dst.Cols {
+		dstByID[col.ColId] = append(dstByID[col.ColId], col)
+		dstByName[strings.ToLower(col.Name)] = col
+	}
+
+	for idx, srcCol := range src.Cols {
+		if !srcCol.Typ.AutoIncr {
+			continue
+		}
+		var dstCol *plan.ColDef
+		if sameColumnIDSpace && srcIDCounts[srcCol.ColId] == 1 {
+			if len(dstByID[srcCol.ColId]) == 1 {
+				dstCol = dstByID[srcCol.ColId][0]
+			} else {
+				// The source column was dropped. A new column reusing its name
+				// must not inherit the old allocator.
+				continue
+			}
+		} else {
+			// Fresh CREATE plans use a different column-ID coordinate system,
+			// so the cloned name is the stable identity.
+			dstCol = dstByName[strings.ToLower(srcCol.Name)]
+		}
+		if dstCol != nil && dstCol.Typ.AutoIncr {
+			result[int32(idx)] = strings.ToLower(dstCol.Name)
+		}
+	}
+	return result
 }

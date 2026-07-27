@@ -37,7 +37,11 @@ type TableCloneCtx struct {
 	SrcCtx       context.Context
 	ScanSnapshot *plan.Snapshot
 
-	SrcAutoIncrOffsets map[int32]uint64
+	RequestedAutoIncrOffset uint64
+	// Source allocator state is keyed by lower-cased destination column name.
+	// COPY can reorder destination columns, so source indexes are not stable here.
+	SrcAutoIncrMaxValues map[string]uint64
+	SrcAutoIncrOffsets   map[string]uint64
 }
 
 type TableClone struct {
