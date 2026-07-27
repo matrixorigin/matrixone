@@ -580,6 +580,9 @@ func iffCheck(_ []overload, inputs []types.Type) checkResult {
 				return newCheckResultWithCast(0, finalTypes)
 			}
 		}
+		if retType, ok := binaryStringCommonType(source); ok {
+			return newCheckResultWithCast(0, []types.Type{conditionType, retType, retType})
+		}
 		if retType, ok := mixedStringNumericToVarchar(source); ok {
 			return newCheckResultWithCast(0, []types.Type{conditionType, retType, retType})
 		}

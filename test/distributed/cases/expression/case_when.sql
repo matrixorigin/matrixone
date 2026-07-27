@@ -316,6 +316,26 @@ select * from v_flow_metadata_safe;
 drop view v_flow_metadata_safe;
 
 -- @case
+-- @desc:test DATE to DATETIME CASE promotion in the ELSE branch
+-- @label:bvt
+drop view if exists v_case_temporal_else;
+create view v_case_temporal_else as
+select case when 0 then cast('2024-01-02 03:04:05' as datetime) else cast('2024-01-01' as date) end as case_date_dt_else;
+desc v_case_temporal_else;
+select * from v_case_temporal_else;
+drop view v_case_temporal_else;
+
+-- @case
+-- @desc:test IF binary and character branch metadata
+-- @label:bvt
+drop view if exists v_if_binary_char;
+create view v_if_binary_char as
+select if(1, _binary 'a', 'bc') as if_binary_char;
+desc v_if_binary_char;
+select hex(if_binary_char) as if_binary_char_hex from v_if_binary_char;
+drop view v_if_binary_char;
+
+-- @case
 -- @desc:test control-flow metadata and values with nullable and not-null columns
 -- @label:bvt
 drop table if exists t_flow_metadata;

@@ -85,8 +85,31 @@ func TestBindControlFlowMetadata(t *testing.T) {
 		require.False(t, expr.Typ.NotNullable)
 	})
 
+	t.Run("case temporal promotion in else remains nullable in metadata", func(t *testing.T) {
+		expr, err := BindFuncExprImplByPlanExpr(ctx, "case", []*planpb.Expr{
+			makePlan2BoolConstExprWithType(false),
+			makePlan2DateTimeConstExprWithType(0),
+			makePlan2DateConstExprWithType(0),
+		})
+		require.NoError(t, err)
+		require.Equal(t, int32(types.T_datetime), expr.Typ.Id)
+		require.False(t, expr.Typ.NotNullable)
+	})
+
 	t.Run("case binary character keeps binary metadata", func(t *testing.T) {
 		expr, err := BindFuncExprImplByPlanExpr(ctx, "case", []*planpb.Expr{
+			makePlan2BoolConstExprWithType(true),
+			makePlan2VarBinaryConstExprWithType("a"),
+			makePlan2StringConstExprWithType("bc"),
+		})
+		require.NoError(t, err)
+		require.Equal(t, int32(types.T_varbinary), expr.Typ.Id)
+		require.Equal(t, int32(6), expr.Typ.Width)
+		require.True(t, expr.Typ.NotNullable)
+	})
+
+	t.Run("if binary character keeps binary metadata", func(t *testing.T) {
+		expr, err := BindFuncExprImplByPlanExpr(ctx, "if", []*planpb.Expr{
 			makePlan2BoolConstExprWithType(true),
 			makePlan2VarBinaryConstExprWithType("a"),
 			makePlan2StringConstExprWithType("bc"),
