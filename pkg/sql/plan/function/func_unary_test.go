@@ -9271,6 +9271,7 @@ func TestSuccessfulProbeCleanupRetainsOwnershipAfterSaturatedHandoff(t *testing.
 		service.blockUnlock.Store(true)
 		fillDetachedUserLevelLockCleanupAdmissionForTest(service, key, [][]byte{txnID})
 		detachedUserLevelLockCleanups.Lock()
+		detachedUserLevelLockCleanups.backlogStarted = true
 		for i := 0; i < userLevelLockDetachedCleanupBacklog; i++ {
 			detachedUserLevelLockCleanups.backlog <- detachedUserLevelLockCleanupRequest{
 				ls:     service,
@@ -9284,10 +9285,7 @@ func TestSuccessfulProbeCleanupRetainsOwnershipAfterSaturatedHandoff(t *testing.
 		cancel()
 		err := unlockUserLevelLockProbe(ctx, service, owner, connID, name, "release")
 		require.Error(t, err)
-		userLevelLocks.Lock()
-		_, retained := userLevelLocks.pendingCleanups[key]
-		userLevelLocks.Unlock()
-		require.True(t, retained)
+		requireUserLevelLockCleanupOwned(t, key)
 
 		service.blockUnlock.Store(false)
 		detachedUserLevelLockCleanups.Lock()
