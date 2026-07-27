@@ -1886,14 +1886,29 @@ func attachValue(ctx context.Context, key, val any) context.Context {
 }
 
 const KeySep = "#"
+const encodedKeyPrefix = "\x00"
 
 func genKey(dbName, tblName string) string {
-	return fmt.Sprintf("%s%s%s", dbName, KeySep, tblName)
+	if !strings.Contains(dbName, KeySep) && !strings.Contains(tblName, KeySep) {
+		return dbName + KeySep + tblName
+	}
+	return encodedKeyPrefix + strconv.Itoa(len(dbName)) + KeySep + dbName + tblName
 }
 
 func splitKey(key string) (string, string) {
-	parts := strings.Split(key, KeySep)
-	if len(parts) >= 2 {
+	if strings.HasPrefix(key, encodedKeyPrefix) {
+		lengthEnd := strings.Index(key[len(encodedKeyPrefix):], KeySep)
+		if lengthEnd >= 0 {
+			lengthEnd += len(encodedKeyPrefix)
+			dbNameLength, err := strconv.Atoi(key[len(encodedKeyPrefix):lengthEnd])
+			payload := key[lengthEnd+len(KeySep):]
+			if err == nil && dbNameLength >= 0 && dbNameLength <= len(payload) {
+				return payload[:dbNameLength], payload[dbNameLength:]
+			}
+		}
+	}
+	parts := strings.SplitN(key, KeySep, 2)
+	if len(parts) == 2 {
 		return parts[0], parts[1]
 	}
 	return parts[0], ""
