@@ -624,11 +624,13 @@ func TestDetermineShuffleForMarkJoin(t *testing.T) {
 				NodeType:    plan.Node_TABLE_SCAN,
 				BindingTags: []int32{10},
 				Stats:       &plan.Stats{Outcnt: 10_000_000, HashmapStats: &plan.HashMapStats{}},
+				ProjectList: []*plan.Expr{makeMarkShuffleColumn(tt.notNullable, 0, 0)},
 			}
 			right := &plan.Node{
 				NodeType:    plan.Node_TABLE_SCAN,
 				BindingTags: []int32{20},
 				Stats:       &plan.Stats{Outcnt: 3_000_000, HashmapStats: &plan.HashMapStats{}},
+				ProjectList: []*plan.Expr{makeMarkShuffleColumn(tt.notNullable, 0, 0)},
 			}
 			leftRel, rightRel := int32(10), int32(20)
 			if tt.afterRemap {
@@ -665,6 +667,207 @@ func TestDetermineShuffleForMarkJoin(t *testing.T) {
 	}
 }
 
+func TestDetermineShuffleForMarkJoinRejectsPreRemapOuterExtension(t *testing.T) {
+	nation := &plan.Node{
+		NodeId:      0,
+		NodeType:    plan.Node_TABLE_SCAN,
+		BindingTags: []int32{10},
+		ProjectList: []*plan.Expr{makeMarkShuffleColumn(true, 10, 0)},
+		Stats:       &plan.Stats{Outcnt: 10_000_000, HashmapStats: &plan.HashMapStats{}},
+	}
+	region := &plan.Node{
+		NodeId:      1,
+		NodeType:    plan.Node_TABLE_SCAN,
+		BindingTags: []int32{20},
+		ProjectList: []*plan.Expr{makeMarkShuffleColumn(true, 20, 0)},
+		Stats:       &plan.Stats{Outcnt: 5, HashmapStats: &plan.HashMapStats{}},
+	}
+	outerJoin := &plan.Node{
+		NodeId:   2,
+		NodeType: plan.Node_JOIN,
+		JoinType: plan.Node_LEFT,
+		Children: []int32{0, 1},
+		Stats:    &plan.Stats{Outcnt: 10_000_000, HashmapStats: &plan.HashMapStats{}},
+	}
+	lineitem := &plan.Node{
+		NodeId:      3,
+		NodeType:    plan.Node_TABLE_SCAN,
+		BindingTags: []int32{30},
+		ProjectList: []*plan.Expr{makeMarkShuffleColumn(true, 30, 0)},
+		Stats:       &plan.Stats{Outcnt: 3_000_000, HashmapStats: &plan.HashMapStats{}},
+	}
+	mark := &plan.Node{
+		NodeId:   4,
+		NodeType: plan.Node_JOIN,
+		JoinType: plan.Node_MARK,
+		Children: []int32{2, 3},
+		OnList:   []*plan.Expr{makeMarkShuffleEquality(t, true, 20, 30)},
+		Stats: &plan.Stats{HashmapStats: &plan.HashMapStats{
+			HashmapSize: 3_000_000,
+		}},
+	}
+	builder := &QueryBuilder{qry: &plan.Query{
+		Nodes: []*plan.Node{nation, region, outerJoin, lineitem, mark},
+	}}
+
+	determineShuffleForJoinWithColRefMode(mark, builder, false)
+
+	require.False(t, mark.Stats.HashmapStats.Shuffle)
+	require.Equal(t, int32(-1), mark.Stats.HashmapStats.ShuffleColIdx)
+}
+
+func TestNodeNullExtendsChild(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		node     *plan.Node
+		childIdx int
+		want     bool
+	}{
+		{
+			name:     "left join right child",
+			node:     &plan.Node{NodeType: plan.Node_JOIN, JoinType: plan.Node_LEFT},
+			childIdx: 1,
+			want:     true,
+		},
+		{
+			name:     "left join left child",
+			node:     &plan.Node{NodeType: plan.Node_JOIN, JoinType: plan.Node_LEFT},
+			childIdx: 0,
+		},
+		{
+			name:     "right join left child",
+			node:     &plan.Node{NodeType: plan.Node_JOIN, JoinType: plan.Node_RIGHT},
+			childIdx: 0,
+			want:     true,
+		},
+		{
+			name:     "full join left child",
+			node:     &plan.Node{NodeType: plan.Node_JOIN, JoinType: plan.Node_OUTER},
+			childIdx: 0,
+			want:     true,
+		},
+		{
+			name:     "full join right child",
+			node:     &plan.Node{NodeType: plan.Node_JOIN, JoinType: plan.Node_OUTER},
+			childIdx: 1,
+			want:     true,
+		},
+		{
+			name:     "left single build child",
+			node:     &plan.Node{NodeType: plan.Node_JOIN, JoinType: plan.Node_SINGLE},
+			childIdx: 1,
+			want:     true,
+		},
+		{
+			name: "right single swapped child",
+			node: &plan.Node{
+				NodeType:    plan.Node_JOIN,
+				JoinType:    plan.Node_SINGLE,
+				IsRightJoin: true,
+			},
+			childIdx: 0,
+			want:     true,
+		},
+		{
+			name: "outer apply right child",
+			node: &plan.Node{
+				NodeType:  plan.Node_APPLY,
+				ApplyType: plan.Node_OUTERAPPLY,
+			},
+			childIdx: 1,
+			want:     true,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, nodeNullExtendsChild(tt.node, tt.childIdx))
+		})
+	}
+}
+
+func TestMarkShuffleRejectsOuterJoinNullExtension(t *testing.T) {
+	for _, tt := range []struct {
+		name          string
+		sql           string
+		outerJoinType plan.Node_JoinType
+	}{
+		{
+			name:          "left join null extends right key",
+			outerJoinType: plan.Node_LEFT,
+			sql: `select r.r_regionkey in (
+				select l.l_partkey from tpch.lineitem l
+			)
+			from tpch.nation n
+			left join tpch.region r on n.n_regionkey = r.r_regionkey`,
+		},
+		{
+			name:          "full join null extends both keys",
+			outerJoinType: plan.Node_OUTER,
+			sql: `select n.n_regionkey in (
+				select l.l_partkey from tpch.lineitem l
+			)
+			from tpch.nation n
+			full outer join tpch.region r on n.n_regionkey = r.r_regionkey`,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(NewMockOptimizer(true), t, tt.sql)
+			require.NoError(t, err)
+
+			query := logicPlan.GetQuery()
+			require.NotNil(t, query)
+
+			var mark, outerJoin *plan.Node
+			for _, node := range query.Nodes {
+				if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_MARK {
+					mark = node
+				}
+				if node.NodeType == plan.Node_JOIN && node.JoinType == tt.outerJoinType {
+					outerJoin = node
+				}
+			}
+			require.NotNil(t, mark)
+			require.NotNil(t, outerJoin)
+			require.Len(t, mark.Children, 2)
+			require.NotEmpty(t, mark.OnList)
+
+			for _, childID := range outerJoin.Children {
+				for _, output := range query.Nodes[childID].ProjectList {
+					require.True(t, output.Typ.NotNullable,
+						"outer-join null extension must not mutate a child output")
+				}
+			}
+			outerHasNullableOutput := false
+			for _, output := range outerJoin.ProjectList {
+				outerHasNullableOutput = outerHasNullableOutput || !output.Typ.NotNullable
+			}
+			require.True(t, outerHasNullableOutput)
+
+			left := query.Nodes[mark.Children[0]]
+			right := query.Nodes[mark.Children[1]]
+			condition := mark.OnList[0].GetF()
+			require.NotNil(t, condition)
+			require.Len(t, condition.Args, 2)
+			effectiveNullability := []bool{
+				IsJoinExprEffectivelyNotNullable(condition.Args[0], left, right),
+				IsJoinExprEffectivelyNotNullable(condition.Args[1], left, right),
+			}
+			require.ElementsMatch(t, []bool{false, true}, effectiveNullability)
+
+			left.Stats.Outcnt = 10_000_000
+			right.Stats.Outcnt = 3_000_000
+			mark.Stats.HashmapStats.HashmapSize = 3_000_000
+			mark.OnList[0].Ndv = 100_000
+			mark.Stats.HashmapStats.Shuffle = true
+
+			builder := &QueryBuilder{qry: query}
+			determineShuffleForJoinWithColRefMode(mark, builder, true)
+
+			require.False(t, mark.Stats.HashmapStats.Shuffle)
+			require.Equal(t, int32(-1), mark.Stats.HashmapStats.ShuffleColIdx)
+		})
+	}
+}
+
 func makeMarkShuffleEquality(t *testing.T, notNullable bool, leftRel, rightRel int32) *plan.Expr {
 	t.Helper()
 
@@ -688,6 +891,16 @@ func makeMarkShuffleEquality(t *testing.T, notNullable bool, leftRel, rightRel i
 		Expr: &plan.Expr_F{F: &plan.Function{
 			Func: &plan.ObjectRef{Obj: equal.GetEncodedOverloadID(), ObjName: "="},
 			Args: args,
+		}},
+	}
+}
+
+func makeMarkShuffleColumn(notNullable bool, relPos, colPos int32) *plan.Expr {
+	return &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_int64), NotNullable: notNullable},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{
+			RelPos: relPos,
+			ColPos: colPos,
 		}},
 	}
 }

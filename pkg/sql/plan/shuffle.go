@@ -552,7 +552,7 @@ func determineShuffleForJoinWithColRefMode(node *plan.Node, builder *QueryBuilde
 	for _, tag := range builder.enumerateTags(node.Children[1]) {
 		rightTags[tag] = true
 	}
-	if node.JoinType == plan.Node_MARK && !markJoinSupportsShuffle(node, leftTags, rightTags, afterRemap) {
+	if node.JoinType == plan.Node_MARK && !markJoinSupportsShuffle(node, builder, leftTags, rightTags, afterRemap) {
 		return
 	}
 	// for now ,only support the first join condition
@@ -655,17 +655,32 @@ func determineShuffleForJoinWithColRefMode(node *plan.Node, builder *QueryBuilde
 // markJoinSupportsShuffle reports whether bucket-local hash state is enough to
 // preserve MARK's three-valued result. Unlike broadcast MARK joins, shuffle
 // buckets do not share the global build row count or the global build-NULL
-// fact. Requiring every equality operand to be statically NOT NULL removes
-// both global dependencies: exact matches are co-located and every non-match
-// is FALSE.
-func markJoinSupportsShuffle(node *plan.Node, leftTags, rightTags map[int32]bool, afterRemap bool) bool {
-	if node == nil || node.JoinType != plan.Node_MARK || len(node.OnList) == 0 {
+// fact. Requiring every equality operand to be effectively NOT NULL after
+// child materialization removes both global dependencies: exact matches are
+// co-located and every non-match is FALSE.
+func markJoinSupportsShuffle(
+	node *plan.Node,
+	builder *QueryBuilder,
+	leftTags, rightTags map[int32]bool,
+	afterRemap bool,
+) bool {
+	if node == nil || node.JoinType != plan.Node_MARK ||
+		len(node.Children) != 2 || len(node.OnList) == 0 {
 		return false
+	}
+	var left, right *plan.Node
+	if afterRemap {
+		if builder == nil || builder.qry == nil || len(node.Children) != 2 ||
+			node.Children[0] < 0 || int(node.Children[0]) >= len(builder.qry.Nodes) ||
+			node.Children[1] < 0 || int(node.Children[1]) >= len(builder.qry.Nodes) {
+			return false
+		}
+		left = builder.qry.Nodes[node.Children[0]]
+		right = builder.qry.Nodes[node.Children[1]]
 	}
 	for _, condition := range node.OnList {
 		fn := condition.GetF()
-		if fn == nil || len(fn.Args) != 2 ||
-			!fn.Args[0].Typ.NotNullable || !fn.Args[1].Typ.NotNullable {
+		if fn == nil || len(fn.Args) != 2 {
 			return false
 		}
 		isEqui := isEquiCond(condition, leftTags, rightTags)
@@ -675,8 +690,130 @@ func markJoinSupportsShuffle(node *plan.Node, leftTags, rightTags map[int32]bool
 		if !isEqui {
 			return false
 		}
+		if afterRemap {
+			if !IsJoinExprEffectivelyNotNullable(fn.Args[0], left, right) ||
+				!IsJoinExprEffectivelyNotNullable(fn.Args[1], left, right) {
+				return false
+			}
+		} else {
+			for _, arg := range fn.Args {
+				leftRef := exprRefsAnyTag(arg, leftTags)
+				rightRef := exprRefsAnyTag(arg, rightTags)
+				if leftRef == rightRef {
+					return false
+				}
+				childID := node.Children[1]
+				if leftRef {
+					childID = node.Children[0]
+				}
+				if !builder.exprEffectivelyNotNullableBeforeRemap(arg, childID) {
+					return false
+				}
+			}
+		}
 	}
 	return true
+}
+
+func (builder *QueryBuilder) exprEffectivelyNotNullableBeforeRemap(expr *plan.Expr, nodeID int32) bool {
+	return exprNotNullableWithColResolver(expr, func(colExpr *plan.Expr) bool {
+		if colExpr == nil || !colExpr.Typ.NotNullable {
+			return false
+		}
+		return builder.colRefEffectivelyNotNullableBeforeRemap(colExpr.GetCol(), nodeID)
+	})
+}
+
+func (builder *QueryBuilder) colRefEffectivelyNotNullableBeforeRemap(
+	col *plan.ColRef,
+	nodeID int32,
+) bool {
+	if builder == nil || builder.qry == nil || col == nil ||
+		nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) {
+		return false
+	}
+
+	node := builder.qry.Nodes[nodeID]
+	if node == nil {
+		return false
+	}
+
+	if (node.NodeType == plan.Node_PROJECT || node.NodeType == plan.Node_MATERIAL) &&
+		len(node.BindingTags) > 0 && node.BindingTags[0] == col.RelPos {
+		if col.ColPos < 0 || int(col.ColPos) >= len(node.ProjectList) ||
+			len(node.Children) != 1 {
+			return false
+		}
+		return builder.exprEffectivelyNotNullableBeforeRemap(
+			node.ProjectList[col.ColPos],
+			node.Children[0],
+		)
+	}
+
+	for _, bindingTag := range node.BindingTags {
+		if bindingTag == col.RelPos {
+			return true
+		}
+	}
+
+	for childIdx, childID := range node.Children {
+		if !builder.nodeContainsBindingTag(childID, col.RelPos) {
+			continue
+		}
+		if nodeNullExtendsChild(node, childIdx) {
+			return false
+		}
+		return builder.colRefEffectivelyNotNullableBeforeRemap(col, childID)
+	}
+
+	return false
+}
+
+func (builder *QueryBuilder) nodeContainsBindingTag(nodeID, tag int32) bool {
+	if builder == nil || builder.qry == nil ||
+		nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) {
+		return false
+	}
+	node := builder.qry.Nodes[nodeID]
+	if node == nil {
+		return false
+	}
+	for _, bindingTag := range node.BindingTags {
+		if bindingTag == tag {
+			return true
+		}
+	}
+	for _, childID := range node.Children {
+		if builder.nodeContainsBindingTag(childID, tag) {
+			return true
+		}
+	}
+	return false
+}
+
+func nodeNullExtendsChild(node *plan.Node, childIdx int) bool {
+	if node == nil {
+		return false
+	}
+	switch node.NodeType {
+	case plan.Node_JOIN:
+		switch node.JoinType {
+		case plan.Node_LEFT:
+			return childIdx == 1
+		case plan.Node_RIGHT:
+			return childIdx == 0
+		case plan.Node_OUTER:
+			return true
+		case plan.Node_SINGLE:
+			if node.IsRightJoin {
+				return childIdx == 0
+			}
+			return childIdx == 1
+		}
+	case plan.Node_APPLY:
+		return node.ApplyType == plan.Node_OUTERAPPLY && childIdx == 1
+	}
+	return false
 }
 
 func dedupJoinUsesUnsupportedFloatShuffle(node *plan.Node) bool {

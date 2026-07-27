@@ -134,16 +134,31 @@ func TestCanUseShuffleHashMarkJoin(t *testing.T) {
 	}
 }
 
-func TestCompileJoinRejectsUnsafeShuffleMark(t *testing.T) {
+func TestCompileJoinFallsBackForUnsafeShuffleMark(t *testing.T) {
 	node := newShuffleJoinTestNode(1)
 	node.JoinType = plan.Node_MARK
 	node.Stats.HashmapStats.Shuffle = true
-	node.OnList = []*plan.Expr{makeMarkJoinTestCondition(t, "=", 0, false)}
+	// Keep stale bind-time NOT NULL metadata on the condition while the
+	// materialized probe output is nullable, as happens after outer-join
+	// null extension.
+	node.OnList = []*plan.Expr{makeMarkJoinTestCondition(t, "=", 0, true)}
+	left := &plan.Node{ProjectList: []*plan.Expr{makeMarkJoinTestColumn(0, 0, false)}}
+	right := &plan.Node{ProjectList: []*plan.Expr{makeMarkJoinTestColumn(1, 0, true)}}
 	c := newCompileForShuffleJoinTest(t, engine.Nodes{{Addr: "cn1:6001", Mcpu: 1}})
+	probe := newShuffleJoinTestScope(t, c.cnList[0], 1)
+	build := newShuffleJoinTestScope(t, c.cnList[0], 1)
 
-	require.Panics(t, func() {
-		c.compileJoin(node, nil, nil, nil, nil)
+	var result []*Scope
+	require.NotPanics(t, func() {
+		result = c.compileJoin(node, left, right, []*Scope{probe}, []*Scope{build})
 	})
+
+	require.False(t, node.Stats.HashmapStats.Shuffle)
+	require.Equal(t, int32(-1), node.Stats.HashmapStats.ShuffleColIdx)
+	require.Len(t, result, 1)
+	op, ok := result[0].RootOp.(*hashjoin.HashJoin)
+	require.True(t, ok)
+	require.False(t, op.IsShuffle)
 }
 
 func TestConstructShuffleJoinOperatorForMark(t *testing.T) {

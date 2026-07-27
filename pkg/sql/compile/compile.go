@@ -3779,10 +3779,12 @@ func (c *Compile) compileUnionAll(node *plan.Node, ss []*Scope, children []*Scop
 
 func (c *Compile) compileJoin(node, left, right *plan.Node, probeScopes, buildScopes []*Scope) []*Scope {
 	if node.Stats.HashmapStats.Shuffle {
-		if node.JoinType == plan.Node_MARK && !canUseShuffleHashMarkJoin(node) {
-			panic(moerr.NewNYI(c.proc.Ctx, "shuffle MARK join requires pure equality predicates with statically non-null keys"))
+		if node.JoinType == plan.Node_MARK && !canUseShuffleHashMarkJoinWithInputs(node, left, right) {
+			node.Stats.HashmapStats.Shuffle = false
+			node.Stats.HashmapStats.ShuffleColIdx = -1
+		} else {
+			return c.compileShuffleJoin(node, left, right, probeScopes, buildScopes)
 		}
-		return c.compileShuffleJoin(node, left, right, probeScopes, buildScopes)
 	}
 
 	rs := c.compileProbeSideForBroadcastJoin(node, left, right, probeScopes)
@@ -3976,6 +3978,10 @@ func (c *Compile) newProbeScopeListForBroadcastJoin(probeScopes []*Scope, forceO
 // can be FALSE or UNKNOWN depending on the other components, so use hash MARK
 // only when every key is statically NOT NULL.
 func canUseHashMarkJoin(node *plan.Node) bool {
+	return canUseHashMarkJoinWithInputs(node, nil, nil)
+}
+
+func canUseHashMarkJoinWithInputs(node, left, right *plan.Node) bool {
 	if node == nil || node.JoinType != plan.Node_MARK {
 		return false
 	}
@@ -4001,7 +4007,13 @@ func canUseHashMarkJoin(node *plan.Node) bool {
 			!((leftRel == 0 && rightRel == 1) || (leftRel == 1 && rightRel == 0)) {
 			return false
 		}
-		allNotNull = allNotNull && fn.Args[0].Typ.NotNullable && fn.Args[1].Typ.NotNullable
+		if left != nil && right != nil {
+			allNotNull = allNotNull &&
+				plan2.IsJoinExprEffectivelyNotNullable(fn.Args[0], left, right) &&
+				plan2.IsJoinExprEffectivelyNotNullable(fn.Args[1], left, right)
+		} else {
+			allNotNull = allNotNull && fn.Args[0].Typ.NotNullable && fn.Args[1].Typ.NotNullable
+		}
 	}
 	return len(hashConditions) == 1 || allNotNull
 }
@@ -4012,16 +4024,28 @@ func canUseHashMarkJoin(node *plan.Node) bool {
 // NULL) to preserve SQL three-valued semantics. Those facts are available to
 // broadcast hash MARK joins, but are not replicated across shuffle buckets.
 //
-// With statically non-null keys on both sides, exact matches are co-located by
-// the shuffle and every non-match is FALSE, so bucket-local state is sufficient.
+// With effectively non-null keys on both materialized inputs, exact matches
+// are co-located by the shuffle and every non-match is FALSE, so bucket-local
+// state is sufficient.
 func canUseShuffleHashMarkJoin(node *plan.Node) bool {
-	if !canUseHashMarkJoin(node) {
+	return canUseShuffleHashMarkJoinWithInputs(node, nil, nil)
+}
+
+func canUseShuffleHashMarkJoinWithInputs(node, left, right *plan.Node) bool {
+	if !canUseHashMarkJoinWithInputs(node, left, right) {
 		return false
 	}
 	for _, condition := range colexec.SplitAndExprs(node.OnList) {
 		fn := condition.GetF()
-		if fn == nil || len(fn.Args) != 2 ||
-			!fn.Args[0].Typ.NotNullable || !fn.Args[1].Typ.NotNullable {
+		if fn == nil || len(fn.Args) != 2 {
+			return false
+		}
+		if left != nil && right != nil {
+			if !plan2.IsJoinExprEffectivelyNotNullable(fn.Args[0], left, right) ||
+				!plan2.IsJoinExprEffectivelyNotNullable(fn.Args[1], left, right) {
+				return false
+			}
+		} else if !fn.Args[0].Typ.NotNullable || !fn.Args[1].Typ.NotNullable {
 			return false
 		}
 	}
@@ -4189,7 +4213,7 @@ func (c *Compile) compileProbeSideForBroadcastJoin(node, left, right *plan.Node,
 		currentFirstFlag := c.anal.isFirst
 		for i := range rs {
 			var op vm.Operator
-			if canUseHashMarkJoin(node) {
+			if canUseHashMarkJoinWithInputs(node, left, right) {
 				op = constructHashJoin(node, left, leftTypes, rightTypes, c.proc)
 			} else {
 				op = constructLoopJoin(node, leftTypes, rightTypes, c.proc)
