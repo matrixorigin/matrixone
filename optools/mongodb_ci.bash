@@ -177,7 +177,7 @@ run_e2e() {
 
 run_unit() {
 	(cd "$ROOT_DIR" && make build >/dev/null)
-	(cd "$ROOT_DIR" && python3 -m unittest test/mongodb/test_changes.py test/mongodb/test_compare_results.py)
+	(cd "$ROOT_DIR" && python3 -m unittest discover -s test/mongodb -p 'test_*.py')
 	(cd "$ROOT_DIR" && .agents/skills/mo-dev/scripts/mo-cgo-test -count=1 -timeout=10m \
 		./pkg/sql/mongodb ./pkg/sql/colexec/mongoscan ./pkg/sql/colexec/aggexec ./pkg/sql/colexec/timewin \
 		./pkg/sql/parsers/dialect/mysql ./pkg/sql/plan ./pkg/sql/compile ./pkg/frontend)
