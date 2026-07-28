@@ -6,7 +6,7 @@ SELECT HOUR('2024-12-20 15:30:45') AS result2;
 15
 SELECT HOUR(NOW()) AS result3;
 ➤ result3[-6,8,0]  𝄀
-21
+11
 SELECT HOUR(CAST('15:30:45' AS TIME)) AS time_cast;
 ➤ time_cast[4,32,0]  𝄀
 15
@@ -77,3 +77,8 @@ SELECT HOUR('2024-12-20') AS date_string_hour,
 HOUR(CONCAT(DATE_ADD(CURRENT_DATE, INTERVAL 1 DAY), ' 01:02:03')) AS tomorrow_datetime_hour;
 ➤ date_string_hour[4,32,0]  ¦  tomorrow_datetime_hour[4,32,0]  𝄀
 0  ¦  1
+SELECT HOUR(CAST('   ' AS CHAR)) AS char_spaces_hour,
+HOUR(CAST('\t' AS VARCHAR)) AS varchar_tab_hour,
+HOUR(CAST('   ' AS TEXT)) AS text_spaces_hour;
+➤ char_spaces_hour[4,32,0]  ¦  varchar_tab_hour[4,32,0]  ¦  text_spaces_hour[4,32,0]  𝄀
+null  ¦  null  ¦  null

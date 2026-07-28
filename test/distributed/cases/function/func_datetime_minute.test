@@ -46,6 +46,11 @@ SELECT MINUTE(CAST('12:30:00' AS VARCHAR)) AS varchar_minute,
        MINUTE(CAST('2024-12-20 15:30:45' AS VARCHAR)) AS varchar_datetime_minute,
        MINUTE(CAST(NULL AS VARCHAR)) AS varchar_null_minute;
 
--- DATE and tomorrow DATETIME strings preserve calendar clock fields.
+-- Date-only strings use MySQL TIME coercion; complete DATETIME strings use clock fields.
 SELECT MINUTE('2024-12-20') AS date_string_minute,
        MINUTE(CONCAT(DATE_ADD(CURRENT_DATE, INTERVAL 1 DAY), ' 01:02:03')) AS tomorrow_datetime_minute;
+
+-- Whitespace-only string values are invalid TIME inputs.
+SELECT MINUTE(CAST('   ' AS CHAR)) AS char_spaces_minute,
+       MINUTE(CAST('\t' AS VARCHAR)) AS varchar_tab_minute,
+       MINUTE(CAST('   ' AS TEXT)) AS text_spaces_minute;

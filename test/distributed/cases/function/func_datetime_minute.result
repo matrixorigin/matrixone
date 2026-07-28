@@ -64,4 +64,9 @@ MINUTE(CAST(NULL AS VARCHAR)) AS varchar_null_minute;
 SELECT MINUTE('2024-12-20') AS date_string_minute,
 MINUTE(CONCAT(DATE_ADD(CURRENT_DATE, INTERVAL 1 DAY), ' 01:02:03')) AS tomorrow_datetime_minute;
 ➤ date_string_minute[-6,8,0]  ¦  tomorrow_datetime_minute[-6,8,0]  𝄀
-0  ¦  2
+20  ¦  2
+SELECT MINUTE(CAST('   ' AS CHAR)) AS char_spaces_minute,
+MINUTE(CAST('\t' AS VARCHAR)) AS varchar_tab_minute,
+MINUTE(CAST('   ' AS TEXT)) AS text_spaces_minute;
+➤ char_spaces_minute[-6,8,0]  ¦  varchar_tab_minute[-6,8,0]  ¦  text_spaces_minute[-6,8,0]  𝄀
+null  ¦  null  ¦  null

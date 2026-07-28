@@ -4163,8 +4163,11 @@ func TestStringTimeExtract(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	inputs := []FunctionTestInput{
 		NewFunctionTestInput(types.T_varchar.ToType(),
-			[]string{"12:30:45", "272:59:59", "2024-12-20 15:30:45", "2024-12-20", "invalid", ""},
-			[]bool{false, false, false, false, false, false}),
+			[]string{
+				"12:30:45", "272:59:59", "-272:59:59", "2 03:04:05", "123045",
+				"2024-12-20 15:30:45", "20241220153045", "2024-12-20", "invalid", "", "   ", "\t",
+			},
+			[]bool{false, false, false, false, false, false, false, false, false, false, false, false}),
 	}
 
 	testCases := []struct {
@@ -4175,19 +4178,22 @@ func TestStringTimeExtract(t *testing.T) {
 		{
 			name: "hour",
 			expect: NewFunctionTestResult(types.T_uint32.ToType(), false,
-				[]uint32{12, 272, 15, 0, 0, 0}, []bool{false, false, false, false, true, true}),
+				[]uint32{12, 272, 272, 51, 12, 15, 15, 0, 0, 0, 0, 0},
+				[]bool{false, false, false, false, false, false, false, false, true, true, true, true}),
 			fn: StringToHour,
 		},
 		{
 			name: "minute",
 			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
-				[]uint8{30, 59, 30, 0, 0, 0}, []bool{false, false, false, false, true, true}),
+				[]uint8{30, 59, 59, 4, 30, 30, 30, 20, 0, 0, 0, 0},
+				[]bool{false, false, false, false, false, false, false, false, true, true, true, true}),
 			fn: StringToMinute,
 		},
 		{
 			name: "second",
 			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
-				[]uint8{45, 59, 45, 0, 0, 0}, []bool{false, false, false, false, true, true}),
+				[]uint8{45, 59, 59, 5, 45, 45, 45, 24, 0, 0, 0, 0},
+				[]bool{false, false, false, false, false, false, false, false, true, true, true, true}),
 			fn: StringToSecond,
 		},
 	}
@@ -4200,6 +4206,33 @@ func TestStringTimeExtract(t *testing.T) {
 		})
 	}
 
+}
+
+func TestStringTimeExtractWhitespace(t *testing.T) {
+	for _, typ := range []types.T{types.T_char, types.T_varchar, types.T_text} {
+		t.Run(typ.String(), func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			inputs := []FunctionTestInput{
+				NewFunctionTestInput(typ.ToType(), []string{"   ", "\t"}, []bool{false, false}),
+			}
+
+			for _, tc := range []struct {
+				name   string
+				expect FunctionTestResult
+				fn     fEvalFn
+			}{
+				{"hour", NewFunctionTestResult(types.T_uint32.ToType(), false, []uint32{0, 0}, []bool{true, true}), StringToHour},
+				{"minute", NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{0, 0}, []bool{true, true}), StringToMinute},
+				{"second", NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{0, 0}, []bool{true, true}), StringToSecond},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					tcc := NewFunctionTestCase(proc, inputs, tc.expect, tc.fn)
+					succeed, info := tcc.Run()
+					require.True(t, succeed, info)
+				})
+			}
+		})
+	}
 }
 
 func TestStringTimeExtractTomorrowDatetime(t *testing.T) {
@@ -4254,8 +4287,8 @@ func TestStringTimeExtractRegisteredOverloads(t *testing.T) {
 		parts      []uint8
 	}{
 		{name: "hour", returnType: types.T_uint32, hours: []uint32{12, 272, 15, 0, 0, 0}},
-		{name: "minute", returnType: types.T_uint8, parts: []uint8{30, 59, 30, 0, 0, 0}},
-		{name: "second", returnType: types.T_uint8, parts: []uint8{45, 59, 45, 0, 0, 0}},
+		{name: "minute", returnType: types.T_uint8, parts: []uint8{30, 59, 30, 20, 0, 0}},
+		{name: "second", returnType: types.T_uint8, parts: []uint8{45, 59, 45, 24, 0, 0}},
 	}
 
 	for _, inputType := range typeCases {

@@ -65,4 +65,9 @@ SECOND(CAST(NULL AS VARCHAR)) AS varchar_null_second;
 SELECT SECOND('2024-12-20') AS date_string_second,
 SECOND(CONCAT(DATE_ADD(CURRENT_DATE, INTERVAL 1 DAY), ' 01:02:03')) AS tomorrow_datetime_second;
 ➤ date_string_second[-6,8,0]  ¦  tomorrow_datetime_second[-6,8,0]  𝄀
-0  ¦  3
+24  ¦  3
+SELECT SECOND(CAST('   ' AS CHAR)) AS char_spaces_second,
+SECOND(CAST('\t' AS VARCHAR)) AS varchar_tab_second,
+SECOND(CAST('   ' AS TEXT)) AS text_spaces_second;
+➤ char_spaces_second[-6,8,0]  ¦  varchar_tab_second[-6,8,0]  ¦  text_spaces_second[-6,8,0]  𝄀
+null  ¦  null  ¦  null

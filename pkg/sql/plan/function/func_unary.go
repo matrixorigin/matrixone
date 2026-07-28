@@ -4656,36 +4656,92 @@ func timeStringToFixedWithNullOnError[T types.FixedSizeTExceptStrType](
 		}
 
 		strVal, null := strParam.GetStrValue(i)
-		if null || len(strVal) == 0 {
+		str := strings.TrimSpace(functionUtil.QuickBytesToStr(strVal))
+		if null || len(str) == 0 {
 			if err := rs.Append(zero, true); err != nil {
 				return err
 			}
 			continue
 		}
 
-		str := functionUtil.QuickBytesToStr(strVal)
-		if dt, err := types.ParseDatetime(str, 6); err == nil {
-			hour, minute, second := dt.Clock()
-			if err := rs.Append(fn(uint32(hour), uint8(minute), uint8(second)), false); err != nil {
-				return err
-			}
-			continue
-		}
-
-		timeVal, err := types.ParseTime(str, 6)
-		if err != nil {
+		hour, minute, second, ok := timeStringToClockForExtract(str)
+		if !ok {
 			if err := rs.Append(zero, true); err != nil {
 				return err
 			}
 			continue
 		}
 
-		hour, minute, second, _, _ := timeVal.ClockFormat()
 		if err := rs.Append(fn(uint32(hour), minute, second), false); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// timeStringToClockForExtract follows MySQL Item::get_time_from_string:
+// complete DATETIME strings use their clock fields; other strings use TIME
+// coercion. In particular, a date-only string such as "2024-12-20" is parsed
+// as the compact TIME prefix "2024", not as midnight on that date.
+func timeStringToClockForExtract(str string) (uint64, uint8, uint8, bool) {
+	if isDatetimeStringForTimeExtract(str) {
+		dt, err := types.ParseDatetime(str, 6)
+		if err != nil {
+			return 0, 0, 0, false
+		}
+		hour, minute, second := dt.Clock()
+		return uint64(hour), uint8(minute), uint8(second), true
+	}
+
+	timeVal, err := types.ParseTime(str, 6)
+	if err != nil {
+		// MySQL's str_to_time consumes a leading numeric field before reporting
+		// trailing non-time characters. This covers date-only strings, where
+		// 2024-12-20 becomes the compact TIME 00:20:24.
+		start := 0
+		if str[0] == '-' {
+			start = 1
+		}
+		end := start
+		for end < len(str) && str[end] >= '0' && str[end] <= '9' {
+			end++
+		}
+		if end == start {
+			return 0, 0, 0, false
+		}
+		timeVal, err = types.ParseTime(str[start:end], 6)
+		if err != nil {
+			return 0, 0, 0, false
+		}
+	}
+
+	hour, minute, second, _, _ := timeVal.ClockFormat()
+	return hour, minute, second, true
+}
+
+func isDatetimeStringForTimeExtract(str string) bool {
+	if len(str) >= 14 {
+		compact := true
+		for i := 0; i < 14; i++ {
+			if str[i] < '0' || str[i] > '9' {
+				compact = false
+				break
+			}
+		}
+		if compact {
+			return true
+		}
+	}
+
+	if len(str) < 12 || (str[4] != '-' && str[4] != '/') {
+		return false
+	}
+	for i := 0; i < 4; i++ {
+		if str[i] < '0' || str[i] > '9' {
+			return false
+		}
+	}
+	return str[10] == ' ' || str[10] == 'T'
 }
 
 func StringToHour(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
