@@ -99,6 +99,38 @@ func TestBatch(t *testing.T) {
 	}
 }
 
+// TestBatchUnmarshalWithAnyMpRejectsTruncatedData verifies that every truncated
+// prefix of a valid batch encoding is rejected without panicking. Mutation
+// protected: deleting any boundary check makes a truncated valid MarshalBinary
+// encoding panic or return nil.
+func TestBatchUnmarshalWithAnyMpRejectsTruncatedData(t *testing.T) {
+	mp := mpool.MustNewZero()
+
+	source := NewWithSize(1)
+	source.Attrs = []string{"value"}
+	source.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed(source.Vecs[0], int64(42), false, mp))
+	source.SetRowCount(1)
+
+	data, err := source.MarshalBinary()
+	require.NoError(t, err)
+	source.Clean(mp)
+
+	for end := len(data) - 1; end >= 0; end-- {
+		target := new(Batch)
+		var unmarshalErr error
+		require.NotPanics(t, func() {
+			unmarshalErr = target.UnmarshalBinaryWithAnyMp(data[:end], mp)
+		}, "truncated at %d bytes", end)
+		require.Error(t, unmarshalErr, "truncated at %d bytes", end)
+
+		require.NoError(t, target.UnmarshalBinaryWithAnyMp(data, mp), "reuse after truncation at %d bytes", end)
+		target.Clean(mp)
+	}
+
+	require.Equal(t, int64(0), mp.CurrNB())
+}
+
 func TestBatchShrink(t *testing.T) {
 	bat := newBatch([]types.Type{types.T_int8.ToType()}, 4)
 	bat.Shrink([]int64{0}, true)
