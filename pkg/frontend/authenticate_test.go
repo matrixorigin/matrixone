@@ -60,6 +60,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+func TestDropTemporaryTableSkipsPersistentOwnershipRevoke(t *testing.T) {
+	err := doRevokePrivilegeImplicitly(context.Background(), nil, &tree.DropTable{Temporary: true})
+	require.NoError(t, err)
+}
+
 func TestGetTenantInfo(t *testing.T) {
 	convey.Convey("tenant", t, func() {
 		type input struct {

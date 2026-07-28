@@ -238,6 +238,11 @@ func handleDropConnector(ctx context.Context, ses *Session, st *tree.DropConnect
 }
 
 func handleDropDynamicTable(ctx context.Context, ses *Session, st *tree.DropTable) error {
+	if st.Temporary {
+		// Dropping a shadowing temporary table must not cancel the daemon task of
+		// a same-named persistent dynamic table.
+		return nil
+	}
 	pu := getPu(ses.GetService())
 	if pu == nil || pu.GetTaskService() == nil {
 		return moerr.NewInternalError(ctx, "task service not ready yet")

@@ -3304,6 +3304,15 @@ func (s *Scope) dropTableSingle(c *Compile, qry *plan.DropTable) error {
 		}
 	}
 
+	// A plan built for a temporary table must not delete a same-named
+	// permanent table if the session alias disappears before execution.
+	if qry.GetTableDef().GetIsTemporary() && !isTemp {
+		if qry.GetIfExists() {
+			return nil
+		}
+		return moerr.NewNoSuchTable(c.proc.Ctx, dbName, tblName)
+	}
+
 	if !isView && qry.TableDef == nil && !isTemp {
 		if qry.IfExists {
 			return nil

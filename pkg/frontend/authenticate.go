@@ -11757,6 +11757,11 @@ func doGrantPrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.Sta
 
 func doRevokePrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.Statement) error {
 	var err error
+	if dropTable, ok := stmt.(*tree.DropTable); ok && dropTable.Temporary {
+		// Temporary tables have no persistent ownership metadata. In particular,
+		// do not revoke ownership from a same-named permanent table they shadow.
+		return nil
+	}
 	tenantInfo := ses.GetTenantInfo()
 	if tenantInfo == nil || tenantInfo.IsAdminRole() {
 		return err
