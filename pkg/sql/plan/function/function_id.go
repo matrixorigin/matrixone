@@ -791,9 +791,13 @@ const (
 	// function `cast_ignore`
 	CAST_IGNORE = 555
 
+	// onnx_run: evaluate an ONNX model. Renumbered as main merges claim ids
+	// (549->554->556); referenced by name only, so renumbering is safe.
+	ONNX_RUN = 556
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 556
+	FUNCTION_END_NUMBER = 557
 )
 
 // functionIdRegister is what function we have registered already.
@@ -1084,6 +1088,7 @@ var functionIdRegister = map[string]int32{
 	"json_merge_patch":               JSON_MERGE_PATCH,
 	"json_merge_preserve":            JSON_MERGE_PRESERVE,
 	"json_overlaps":                  JSON_OVERLAPS,
+	"onnx_run":                       ONNX_RUN,
 	"json_keys":                      JSON_KEYS,
 	"json_pretty":                    JSON_PRETTY,
 	"json_schema_valid":              JSON_SCHEMA_VALID,
