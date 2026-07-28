@@ -45,13 +45,25 @@ type ResHashRelated struct {
 }
 
 func (group *Group) configureH0OrderedAggSpill(proc *process.Process) {
-	if !group.NeedEval {
+	if !group.NeedEval || group.ctr.mtyp != H0 {
 		return
 	}
-	for _, agg := range group.ctr.aggList {
+	group.configureOrderedAggSpill(proc, group.ctr.aggList)
+}
+
+func (group *Group) configureOrderedAggSpill(proc *process.Process, aggs []aggexec.AggFuncExec) {
+	group.ctr.configureOrderedAggSpill(proc, group.OpAnalyzer, aggs)
+}
+
+func (ctr *container) configureOrderedAggSpill(
+	proc *process.Process,
+	opAnalyzer process.Analyzer,
+	aggs []aggexec.AggFuncExec,
+) {
+	for _, agg := range aggs {
 		aggexec.ConfigureGroupConcatH0Spill(
 			agg,
-			group.ctr.spillMem,
+			ctr.spillMem,
 			proc.Ctx,
 			func() (*os.File, error) {
 				spillFS, err := proc.GetSpillFileService()
@@ -65,9 +77,9 @@ func (group *Group) configureH0OrderedAggSpill(proc *process.Process) {
 				)
 			},
 			func(bytes, rows, retainedMemory int64) {
-				group.OpAnalyzer.Spill(bytes)
-				group.OpAnalyzer.SpillRows(rows)
-				group.OpAnalyzer.SetMemUsed(max(group.ctr.memUsed(), retainedMemory))
+				opAnalyzer.Spill(bytes)
+				opAnalyzer.SpillRows(rows)
+				opAnalyzer.SetMemUsed(max(ctr.memUsed(), retainedMemory))
 			},
 		)
 	}
@@ -537,6 +549,9 @@ func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.
 			ctr.aggList, err = ctr.makeAggList(aggExprs)
 			if err != nil {
 				return false, err
+			}
+			if bkt.lv >= spillMaxPass {
+				ctr.configureOrderedAggSpill(proc, opAnalyzer, ctr.aggList)
 			}
 		}
 		if len(ctr.spillAggList) != len(aggExprs) {

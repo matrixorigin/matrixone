@@ -92,6 +92,48 @@ func TestGroupConcatH0OrderedSpillAndCancellation(t *testing.T) {
 	orderKey.Free(mp)
 }
 
+func TestGroupConcatGroupedOrderedSpillKeepsGroupAddressing(t *testing.T) {
+	mp := mpool.MustNewZero()
+	info := multiAggInfo{
+		aggID: 100,
+		argTypes: []types.Type{
+			types.T_varchar.ToType(),
+			types.T_int64.ToType(),
+		},
+		retType:   types.T_text.ToType(),
+		emptyNull: true,
+	}
+	exec := newGroupConcatExec(mp, info, ",").(*groupConcatExec)
+	require.NoError(t, exec.SetExtraInformation(
+		testGroupConcatOrderConfig(1, []byte{groupConcatOrderAsc}, ","),
+		0,
+	))
+	require.NoError(t, exec.GroupGrow(3))
+	ConfigureGroupConcatH0Spill(exec, groupConcatMinRunSize, context.Background(), nil, nil)
+
+	values := buildVarlenVec(t, mp, types.T_varchar.ToType(), []string{"c", "b", "a", "d"})
+	orderKey := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixedList(orderKey, []int64{3, 2, 1, 4}, nil, mp))
+	require.NoError(t, exec.BatchFill(
+		0,
+		[]uint64{1, 2, 1, 2},
+		[]*vector.Vector{values, orderKey},
+	))
+	require.False(t, exec.hasOrderedSpillRuns())
+
+	result, err := exec.FlushWithContext(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, "a,c", string(result[0].GetBytesAt(0)))
+	require.Equal(t, "b,d", string(result[0].GetBytesAt(1)))
+	require.True(t, result[0].GetNulls().Contains(2))
+
+	result[0].Free(mp)
+	values.Free(mp)
+	orderKey.Free(mp)
+	exec.Free()
+	require.Zero(t, mp.CurrNB())
+}
+
 func TestGroupConcatEnumOrderPayloadUsesFixedWidthStorage(t *testing.T) {
 	mp := mpool.MustNewZero()
 	vec := vector.NewVec(types.T_enum.ToType())

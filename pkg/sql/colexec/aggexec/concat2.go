@@ -238,7 +238,8 @@ func (exec *groupConcatExec) BatchFill(offset int, groups []uint64, vectors []*v
 			if payload == nil {
 				continue
 			}
-			if err = exec.state[0].fillArg(exec.mp, 0, payload, false); err != nil {
+			x, y := exec.getXY(grp - 1)
+			if err = exec.state[x].fillArg(exec.mp, y, payload, false); err != nil {
 				return err
 			}
 			if exec.Size() >= exec.h0SpillLimit {
@@ -414,9 +415,15 @@ func (exec *groupConcatExec) BatchMerge(next AggFuncExec, offset int, groups []u
 				})
 			}
 		}
-		return exec.selectOrderedDistinctCandidates(candidates)
+		if err := exec.selectOrderedDistinctCandidates(candidates); err != nil {
+			return err
+		}
+		return exec.maybeSpillOrdered()
 	}
-	return exec.batchMergeArgs(&other.aggExec, offset, groups, false)
+	if err := exec.batchMergeArgs(&other.aggExec, offset, groups, false); err != nil {
+		return err
+	}
+	return exec.maybeSpillOrdered()
 }
 
 func (exec *groupConcatExec) SetExtraInformation(partialResult any, _ int) error {
