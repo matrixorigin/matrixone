@@ -840,8 +840,31 @@ func (builder *QueryBuilder) finishIrregularIndexMaintenance(query *plan.Query, 
 	}
 	reduceSinkSinkScanNodes(query)
 	builder.tempOptimizeForDML()
+	builder.determineShuffleForDMLSteps()
 	reCheckifNeedLockWholeTable(builder)
 	return nil
+}
+
+func (builder *QueryBuilder) determineShuffleForDMLSteps() {
+	// Irregular-index maintenance is appended after createQuery, while the normal
+	// shuffle passes run inside createQuery. tempOptimizeForDML recalculates every
+	// final step with HashmapStats reset, so rerun the passes for the complete,
+	// reduced graph after statistics are final; otherwise both existing joins and
+	// late IVF/fulltext joins retain Shuffle=false and build a broadcast hash table.
+	for i := range builder.qry.Steps {
+		rootID := builder.qry.Steps[i]
+		determineShuffleMethodAfterRemap(rootID, builder)
+		determineShuffleMethod2(rootID, -1, builder)
+		builder.forceJoinOnOneCN(rootID, false)
+	}
+
+	// createQuery generates runtime filters after the final shuffle decision.
+	// Repeat that pass only after every late DML step has finalized shuffle:
+	// shuffle hashbuild requires a (PASS) runtime-filter spec even when the probe
+	// side is a SINK_SCAN and no data filtering can be pushed into it.
+	for i := range builder.qry.Steps {
+		builder.generateRuntimeFilters(builder.qry.Steps[i])
+	}
 }
 
 // buildOnDupTargetPkResolution builds the conflict-resolution subgraph for

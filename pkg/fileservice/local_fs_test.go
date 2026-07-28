@@ -327,6 +327,61 @@ func TestLocalFSEmptyRootPath(t *testing.T) {
 	assert.NotNil(t, fs)
 }
 
+func TestLocalFSEmptyRootPathAcrossFilesystems(t *testing.T) {
+	if _, err := os.Stat("/dev/shm"); err != nil {
+		t.Skipf("/dev/shm is unavailable: %v", err)
+	}
+
+	destDir, err := os.MkdirTemp("/dev/shm", "matrixone-local-fs-*")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, os.RemoveAll(destDir))
+	})
+
+	systemTempDir := t.TempDir()
+	destInfo, err := os.Stat(destDir)
+	require.NoError(t, err)
+	tempInfo, err := os.Stat(systemTempDir)
+	require.NoError(t, err)
+	if destInfo.Sys().(*syscall.Stat_t).Dev == tempInfo.Sys().(*syscall.Stat_t).Dev {
+		t.Skip("test requires the destination and system temp directory on different filesystems")
+	}
+
+	t.Setenv("TMPDIR", systemTempDir)
+	t.Chdir(destDir)
+
+	localFS, err := NewLocalFS(
+		context.Background(),
+		"test",
+		"",
+		DisabledCacheConfig,
+		nil,
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		localFS.Close(context.Background())
+	})
+
+	err = localFS.Write(context.Background(), IOVector{
+		FilePath: "transfer/page",
+		Entries: []IOEntry{{
+			Offset:         0,
+			Size:           4,
+			Data:           []byte("page"),
+			ReaderForWrite: nil,
+		}},
+	})
+	require.NoError(t, err)
+	require.FileExists(t, filepath.Join(destDir, "transfer", "page"))
+
+	writer, err := localFS.NewWriter(context.Background(), "stream/page")
+	require.NoError(t, err)
+	_, err = writer.Write([]byte("page"))
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+	require.FileExists(t, filepath.Join(destDir, "stream", "page"))
+}
+
 func TestLocalFSOpenFile(t *testing.T) {
 	ctx := context.Background()
 	var counter perfcounter.CounterSet
