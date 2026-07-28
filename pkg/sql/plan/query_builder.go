@@ -28,6 +28,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/objectkey"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -7718,10 +7719,14 @@ func (builder *QueryBuilder) bindView(
 		defaultDatabase = obj.SubscriptionName
 	}
 	viewCtx.defaultDatabase = defaultDatabase
-	viewKey := schema + "#" + table
+	viewKey := objectkey.Encode(schema, table)
 	viewKeyWithSnapshot := viewKey
 	if IsSnapshotValid(snapshot) {
 		viewKeyWithSnapshot = FormatViewKeyWithSnapshot(viewKey, snapshot)
+	}
+	viewDependencyKey, err := FormatViewDependencyKey(schema, table, snapshot)
+	if err != nil {
+		return 0, err
 	}
 	if ctx != nil && ctx.directView != "" {
 		viewCtx.directView = ctx.directView
@@ -7753,7 +7758,7 @@ func (builder *QueryBuilder) bindView(
 	if err != nil {
 		return
 	}
-	ctx.recordViews([]string{schema + "#" + table})
+	ctx.recordViews([]string{viewDependencyKey})
 	ctx.recordViews(viewCtx.views)
 	return
 }

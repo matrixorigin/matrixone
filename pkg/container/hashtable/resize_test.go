@@ -75,6 +75,36 @@ func TestStringResizeAdmissionRejectsBeforeMutation(t *testing.T) {
 	require.Equal(t, beforeCells, ht.cellCnt)
 }
 
+func TestResizeOnDemandSkipsPlanningWhenCapacityIsAvailable(t *testing.T) {
+	mp := mpool.MustNewNoLock("resize-noop-fast-path")
+	defer mpool.DeleteMPool(mp)
+
+	var intHT Int64HashMap
+	require.NoError(t, intHT.Init(mp))
+	defer intHT.Free()
+	intAdmissions := 0
+	intHT.SetResizeAdmission(func(ResizePlan) (ResizeReservation, error) {
+		intAdmissions++
+		return nil, nil
+	})
+	require.NoError(t, intHT.ResizeOnDemand(1))
+	require.Zero(t, intAdmissions)
+	require.Zero(t, intHT.version)
+	require.ErrorIs(t, intHT.ResizeOnDemand(-1), ErrInvalidResizePlan)
+
+	var strHT StringHashMap
+	require.NoError(t, strHT.Init(mp))
+	defer strHT.Free()
+	strAdmissions := 0
+	strHT.SetResizeAdmission(func(ResizePlan) (ResizeReservation, error) {
+		strAdmissions++
+		return nil, nil
+	})
+	require.NoError(t, strHT.ResizeOnDemand(1))
+	require.Zero(t, strAdmissions)
+	require.Zero(t, strHT.version)
+}
+
 func TestResizePlanRejectsOverflow(t *testing.T) {
 	mp := mpool.MustNewNoLock("resize-overflow")
 	defer mpool.DeleteMPool(mp)
