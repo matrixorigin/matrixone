@@ -802,7 +802,10 @@ func TestKeepRemoteLockPeerCursorIsFairAcrossSlowRounds(t *testing.T) {
 		logger:  logger,
 		holders: map[uint32]*lockTableHolder{},
 	}
-	const peerCount = keepRemoteLockBatchSize * 2
+	const (
+		peerCount        = keepRemoteLockBatchSize * 2
+		slowRoundTimeout = 500 * time.Millisecond
+	)
 	for i := range peerCount {
 		bind := pb.LockTable{
 			Table:       uint64(i + 1),
@@ -832,7 +835,9 @@ func TestKeepRemoteLockPeerCursorIsFairAcrossSlowRounds(t *testing.T) {
 	}
 
 	runRound := func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+		// bindCursorClient deliberately holds every RPC until this deadline.
+		// Leave enough time for a full batch to be scheduled on loaded CI workers.
+		ctx, cancel := context.WithTimeout(context.Background(), slowRoundTimeout)
 		keeper.doKeepRemoteLock(ctx, nil, nil)
 		cancel()
 	}
