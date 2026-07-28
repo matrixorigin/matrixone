@@ -227,6 +227,23 @@ func (e *PipelineEdge) Err() error {
 	return e.terminalErr
 }
 
+// ExistingTerminalError returns the durable fatal error already recorded on
+// reg. A nil result means that reg is either still live or ended normally.
+// Cleanup producers use it after an End signal cannot be delivered: an
+// existing fatal terminal must keep its original cause instead of being
+// replaced with a generic delivery error.
+func ExistingTerminalError(reg *WaitRegister) error {
+	if reg == nil {
+		return nil
+	}
+	select {
+	case <-reg.Done():
+		return reg.Err()
+	default:
+		return nil
+	}
+}
+
 // terminalSignalSnapshot returns the edge's terminal state after synchronizing
 // with any in-flight terminal sender. It is used by PipelineSignalReceiver when
 // Done has closed but the terminal signal itself could not enter a full Ch2.

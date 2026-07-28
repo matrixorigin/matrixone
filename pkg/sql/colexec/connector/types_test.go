@@ -179,6 +179,26 @@ func TestConnectorResetFallsBackToAbortWhenEndSignalCannotBeDelivered(t *testing
 	require.Same(t, process.ErrPipelineEndSignalDeliveryFailed, info)
 }
 
+func TestConnectorResetEndPreservesExistingTerminalFailure(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() {
+		mpool.DeleteMPool(mp)
+	})
+
+	sp := pSpool.InitMyPipelineSpool(mp, 1)
+	reg := process.NewPipelineEdge(1, 0)
+	sourceErr := moerr.NewCheckRecursiveLevel(context.Background())
+	require.True(t, reg.SendError(sourceErr))
+
+	conn := &Connector{Reg: reg}
+	conn.ctr.sp = sp
+	conn.Reset(nil, false, nil)
+
+	_, gotErr := sp.ReceiveBatch(0)
+	require.Same(t, sourceErr, gotErr)
+	require.Same(t, sourceErr, reg.Err())
+}
+
 func TestConnectorResetUndeliveredFallbackAbortWakesReceiver(t *testing.T) {
 	oldSignalSendTimeout := process.PipelineSignalSendTimeout
 	process.PipelineSignalSendTimeout = 10 * time.Millisecond
