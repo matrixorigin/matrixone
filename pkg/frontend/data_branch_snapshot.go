@@ -220,23 +220,23 @@ func createBranchProtectSnapshot(
 	// existing insertIntoMoSnapshots format does not carry the kind column
 	// (it relies on the 'user' default), so this path uses its own insert.
 	//
-	// Values are interpolated via fmt.Sprintf because every user-
-	// controllable string here (account name, db/table name) has already
-	// passed through the MO parser/catalog path, so it is a legal MySQL
-	// identifier and never carries a quote that could break the literal.
+	// String values are quoted via quoteSQLStringLiteral to escape any
+	// embedded quotes. Although these identifiers have passed through the
+	// MO parser, they may contain apostrophes when backtick-quoted (e.g.,
+	// `table'name` is a legal identifier that contains a literal apostrophe).
 	insertSQL := fmt.Sprintf(
 		`insert into %s.%s(snapshot_id, sname, ts, level, account_name, database_name, table_name, obj_id, kind) `+
-			`values ('%s', '%s', %d, '%s', '%s', '%s', '%s', %d, '%s')`,
+			`values ('%s', '%s', %d, %s, %s, %s, %s, %d, %s)`,
 		catalog.MO_CATALOG, catalog.MO_SNAPSHOTS,
 		newUUID.String(),
 		sname,
 		receipt.snapshotTS,
-		dataBranchLevel_Table,
-		parentAccountName,
-		receipt.srcDb,
-		receipt.srcTbl,
+		quoteSQLStringLiteral(dataBranchLevel_Table),
+		quoteSQLStringLiteral(parentAccountName),
+		quoteSQLStringLiteral(receipt.srcDb),
+		quoteSQLStringLiteral(receipt.srcTbl),
 		receipt.srcTableID,
-		branchSnapshotKind,
+		quoteSQLStringLiteral(branchSnapshotKind),
 	)
 
 	// Execute as sys so the row can be written into the parent's account
