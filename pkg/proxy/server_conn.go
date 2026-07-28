@@ -150,7 +150,37 @@ const (
 	// CN cannot turn the transient packet allowance into steady memory.
 	proxyBackendAuthResponseLimit     = 1024
 	proxyBackendRetainedResponseLimit = proxyBackendAuthResponseLimit + frontend.PacketHeaderLength
+	// CN waits 200ms for the ExtraInfo preface before falling back to a direct
+	// MySQL handshake. Surface writes that consume a meaningful part of that
+	// budget without logging every successful backend connection.
+	slowBackendExtraInfoWriteThreshold = 100 * time.Millisecond
 )
+
+type backendHandshakeStage uint32
+
+type backendHandshakeState struct {
+	stage     backendHandshakeStage
+	startedAt time.Time
+}
+
+const (
+	backendHandshakeStageReadInitial backendHandshakeStage = iota + 1
+	backendHandshakeStageWriteAuth
+	backendHandshakeStageReadAuthResponse
+)
+
+func (s backendHandshakeStage) String() string {
+	switch s {
+	case backendHandshakeStageReadInitial:
+		return "read-initial-handshake"
+	case backendHandshakeStageWriteAuth:
+		return "write-auth-request"
+	case backendHandshakeStageReadAuthResponse:
+		return "read-auth-response"
+	default:
+		return "unknown"
+	}
+}
 
 // newServerConn creates a connection to CN server.
 func newServerConn(
@@ -378,9 +408,40 @@ func (s *serverConn) HandleHandshakeContext(
 		resp *frontend.Packet
 		err  error
 	}
+	var stage atomic.Pointer[backendHandshakeState]
+	setStage := func(next backendHandshakeStage) {
+		stage.Store(&backendHandshakeState{
+			stage:     next,
+			startedAt: time.Now(),
+		})
+	}
+	stageFields := func() []zap.Field {
+		current := stage.Load()
+		stageName := "unknown"
+		if current != nil {
+			stageName = current.stage.String()
+		}
+		fields := []zap.Field{
+			zap.String("cn", s.cnServer.addr),
+			zap.Uint32("connection_id", s.connID),
+			zap.String("stage", stageName),
+		}
+		if current != nil {
+			fields = append(fields,
+				zap.Duration("stage_duration", time.Since(current.startedAt)))
+		}
+		if raw.LocalAddr() != nil {
+			fields = append(fields, zap.String("local", raw.LocalAddr().String()))
+		}
+		if raw.RemoteAddr() != nil {
+			fields = append(fields, zap.String("remote", raw.RemoteAddr().String()))
+		}
+		return fields
+	}
 	// Buffered so a worker that finishes after the caller has timed out can
 	// still publish its result and exit, rather than blocking forever on send.
 	resultC := make(chan result, 1)
+	setStage(backendHandshakeStageReadInitial)
 	go func() {
 		// Step 1, read initial handshake from CN server.
 		if err := s.readInitialHandshake(); err != nil {
@@ -389,7 +450,10 @@ func (s *serverConn) HandleHandshakeContext(
 		}
 		// Step 2, write the handshake response to CN server, which is
 		// received from client earlier.
-		resp, err := s.writeHandshakeResp(handshakeResp)
+		setStage(backendHandshakeStageWriteAuth)
+		resp, err := s.writeHandshakeResp(handshakeResp, func() {
+			setStage(backendHandshakeStageReadAuthResponse)
+		})
 		resultC <- result{resp: resp, err: err}
 	}()
 
@@ -402,6 +466,10 @@ func (s *serverConn) HandleHandshakeContext(
 			_ = raw.Close()
 			return nil, newTimeoutConnectErr(errors.Join(ret.err, cause))
 		}
+		if ret.err != nil {
+			logutil.Warn("backend handshake failed",
+				append(stageFields(), zap.Error(ret.err))...)
+		}
 		return ret.resp, ret.err
 	case <-ctx.Done():
 		// A caller may release or reuse handshakeResp as soon as this method
@@ -412,8 +480,10 @@ func (s *serverConn) HandleHandshakeContext(
 		_ = raw.Close()
 		<-resultC
 		joinInterrupt()
-		logutil.Errorf("handshake to cn %s timeout %v, conn ID: %d goId:%d",
-			s.cnServer.addr, timeout, s.connID, goid.Get())
+		logutil.Error("backend handshake timeout",
+			append(stageFields(),
+				zap.Duration("timeout", timeout),
+				zap.Int64("goroutine_id", goid.Get()))...)
 		// Return a retryable error with timeout flag set.
 		return nil, newTimeoutConnectErr(moerr.AttachCause(ctx, context.Cause(ctx)))
 	}
@@ -672,12 +742,28 @@ func (s *CNServer) ConnectContext(
 	}
 	// When build connection with backend server, proxy send its salt, request
 	// labels and other information to the backend server.
+	writeStartedAt := time.Now()
 	if err := writeAll(raw, data); err != nil {
+		logutil.Warn("failed to write proxy extra info",
+			zap.String("cn", s.addr),
+			zap.String("local", raw.LocalAddr().String()),
+			zap.String("remote", raw.RemoteAddr().String()),
+			zap.Int("bytes", len(data)),
+			zap.Duration("duration", time.Since(writeStartedAt)),
+			zap.Error(err))
 		joinInterrupt()
 		if cause := operationContextCause(ctx); cause != nil {
 			return nil, newTimeoutConnectErr(errors.Join(err, cause))
 		}
 		return nil, err
+	}
+	if duration := time.Since(writeStartedAt); duration >= slowBackendExtraInfoWriteThreshold {
+		logutil.Warn("slow proxy extra info write",
+			zap.String("cn", s.addr),
+			zap.String("local", raw.LocalAddr().String()),
+			zap.String("remote", raw.RemoteAddr().String()),
+			zap.Int("bytes", len(data)),
+			zap.Duration("duration", duration))
 	}
 	joinInterrupt()
 	if cause := operationContextCause(ctx); cause != nil {

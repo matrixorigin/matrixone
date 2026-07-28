@@ -93,6 +93,17 @@ func TestMysqlProtocolReceiveExtraInfoLogLevel(t *testing.T) {
 		entries := logs.FilterMessage("cannot get salt, maybe not use proxy").All()
 		require.Len(t, entries, 1)
 		require.Equal(t, zap.DebugLevel, entries[0].Level)
+
+		writeErr := make(chan error, 1)
+		go func() {
+			time.Sleep(10 * time.Millisecond)
+			_, err := clientConn.Write([]byte{1})
+			writeErr <- err
+		}()
+		var buf [1]byte
+		_, err := serverConn.Read(buf[:])
+		require.NoError(t, err, "ExtraInfo timeout must not leak into the MySQL handshake")
+		require.NoError(t, <-writeErr)
 	})
 
 	t.Run("malformed extra info is error", func(t *testing.T) {
