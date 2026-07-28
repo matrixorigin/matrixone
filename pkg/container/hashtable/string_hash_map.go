@@ -231,10 +231,14 @@ func (ht *StringHashMap) rehashInPlace(oldCellCnt uint64) {
 }
 
 func (ht *StringHashMap) ResizeOnDemand(n uint64) error {
-	if n == 0 {
+	if !resizeNeeded(ht.elemCnt, n, ht.cellCnt, strCellSize) {
 		return nil
 	}
-	return ht.ResizeWithPlan(ht.PlanResize(n))
+	return ht.resizeOnDemand(n)
+}
+
+func (ht *StringHashMap) resizeOnDemand(additional uint64) error {
+	return ht.ResizeWithPlan(ht.PlanResize(additional))
 }
 
 // SetResizeAdmission installs an optional memory admission callback. The
