@@ -16,6 +16,7 @@ package rpc
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -24,6 +25,41 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/stretchr/testify/require"
 )
+
+func TestDecodeLegacyDumpTableDirRejectsMalformedNames(t *testing.T) {
+	createTime := "2026-01-02.03.04.05.UTC"
+	testCases := []struct {
+		name string
+		dir  string
+	}{
+		{name: "wrong part count", dir: "42_invalid"},
+		{name: "invalid table id", dir: fmt.Sprintf("table_%s_1-0", createTime)},
+		{name: "invalid creation time", dir: "42_invalid_1-0"},
+		{name: "invalid snapshot", dir: fmt.Sprintf("42_%s_1", createTime)},
+		{name: "invalid snapshot physical time", dir: fmt.Sprintf("42_%s_physical-0", createTime)},
+		{name: "invalid snapshot logical time", dir: fmt.Sprintf("42_%s_1-logical", createTime)},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			_, err := decodeLegacyDumpTableDir(testCase.dir)
+			require.Error(t, err)
+		})
+	}
+}
+
+func TestLegacyDumpTableGCIgnoresInvalidAndRecentDirectories(t *testing.T) {
+	removed, err := gcLegacyDumpTableFiles("invalid", nil)
+	require.Error(t, err)
+	require.False(t, removed)
+
+	recentDir := "42_" +
+		time.Now().UTC().Format(legacyDumpTableTimeLayout) +
+		"_1-0"
+	removed, err = gcLegacyDumpTableFiles(recentDir, nil)
+	require.NoError(t, err)
+	require.False(t, removed)
+}
 
 func TestLegacyDumpTableGCOnUpgrade(t *testing.T) {
 	root := t.TempDir()
