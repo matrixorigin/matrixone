@@ -8901,6 +8901,32 @@ func TestGlobalCheckpoint2(t *testing.T) {
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 
+	requireCheckpointCovered := func(requestedTS types.TS, entry *checkpoint.CheckpointEntry) {
+		require.NotNil(t, entry)
+		require.True(t, entry.IsFinished())
+		end := entry.GetEnd()
+		require.Truef(
+			t,
+			end.GE(&requestedTS),
+			"checkpoint end %s does not cover requested timestamp %s",
+			end.ToString(),
+			requestedTS.ToString(),
+		)
+		targetLSN := entry.LSN()
+		// Wait only for the forced checkpoint's WAL intent. A later commit may
+		// legitimately leave a newer LSN pending outside requestedTS.
+		require.Eventuallyf(
+			t,
+			func() bool {
+				return tae.Wal.GetCheckpointed() >= targetLSN
+			},
+			10*time.Second,
+			10*time.Millisecond,
+			"WAL checkpoint did not cover checkpoint LSN %d",
+			targetLSN,
+		)
+	}
+
 	schema := catalog.MockSchemaAll(10, 2)
 	schema.Extra.BlockMaxRows = 10
 	schema.Extra.ObjectMaxBlocks = 2
@@ -8924,15 +8950,15 @@ func TestGlobalCheckpoint2(t *testing.T) {
 	assert.NoError(t, err)
 	tae.AllFlushExpected(tae.TxnMgr.Now(), 4000)
 
-	err = tae.DB.ForceCheckpoint(ctx, tae.TxnMgr.Now())
+	forceTS := tae.TxnMgr.Now()
+	err = tae.DB.ForceCheckpoint(ctx, forceTS)
 	require.NoError(t, err)
+	requireCheckpointCovered(forceTS, tae.DB.BGCheckpointRunner.MaxIncrementalCheckpoint())
 
-	// The force APIs synchronously wait for the checkpoint covering the requested
-	// timestamp. A concurrent transaction may commit beyond that timestamp and
-	// legitimately leave a newer WAL LSN pending, so the global pending count is
-	// not a completion condition for these calls.
-	err = tae.DB.ForceGlobalCheckpoint(ctx, txn.GetStartTS(), 0)
+	forceTS = txn.GetStartTS()
+	err = tae.DB.ForceGlobalCheckpoint(ctx, forceTS, 0)
 	require.NoError(t, err)
+	requireCheckpointCovered(forceTS, tae.DB.BGCheckpointRunner.MaxGlobalCheckpoint())
 
 	assert.NoError(t, txn.Commit(context.Background()))
 
@@ -8944,11 +8970,12 @@ func TestGlobalCheckpoint2(t *testing.T) {
 	// 	return tae.AllCheckpointsFinished()
 	// })
 	tae.AllFlushExpected(currTs, 4000)
-	err = tae.DB.ForceGlobalCheckpoint(ctx, tae.TxnMgr.Now(), time.Duration(1))
-	assert.NoError(t, err)
+	forceTS = tae.TxnMgr.Now()
+	err = tae.DB.ForceGlobalCheckpoint(ctx, forceTS, time.Duration(1))
+	require.NoError(t, err)
 
 	maxEntry := tae.DB.BGCheckpointRunner.MaxGlobalCheckpoint()
-	assert.NotNil(t, maxEntry)
+	requireCheckpointCovered(forceTS, maxEntry)
 	maxEnd := maxEntry.GetEnd()
 	t.Logf("maxEntry: %s, currTs: %s", maxEntry.String(), currTs.ToString())
 	assert.True(t, maxEnd.GT(&currTs))
