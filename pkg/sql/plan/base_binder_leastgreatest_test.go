@@ -118,3 +118,70 @@ func TestConstantFoldLeastGreatestTemporalScale(t *testing.T) {
 	require.Equal(t, int32(2), secondCast.Typ.Scale, "TIME(2) cast")
 	require.Equal(t, int32(2), foldedGreatest.Typ.Scale, "GREATEST result")
 }
+
+func TestConstantFoldLeastGreatestBitUsesNumericText(t *testing.T) {
+	tests := []struct {
+		name     string
+		function string
+		sql      string
+		want     string
+	}{
+		{
+			name:     "greatest time and bit",
+			function: "greatest",
+			sql:      "select greatest(cast('10:00:00' as time), cast(2 as bit(4)))",
+			want:     "2",
+		},
+		{
+			name:     "greatest date and bit",
+			function: "greatest",
+			sql:      "select greatest(cast('2020-01-01' as date), cast(20200102 as bit(25)))",
+			want:     "2020-01-02",
+		},
+		{
+			name:     "least time and bit",
+			function: "least",
+			sql:      "select least(cast('10:00:00' as time), cast(2 as bit(4)))",
+			want:     "10:00:00",
+		},
+		{
+			name:     "least date and bit",
+			function: "least",
+			sql:      "select least(cast('2020-01-01' as date), cast(20200102 as bit(25)))",
+			want:     "2020-01-01",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := NewMockCompilerContext(true)
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, test.sql, 1)
+			require.NoError(t, err)
+
+			pl, err := BuildPlan(ctx, stmt, false)
+			require.NoError(t, err)
+
+			var result *planpb.Expr
+			for _, node := range pl.GetQuery().Nodes {
+				for _, expr := range node.ProjectList {
+					if expr.GetF() != nil && expr.GetF().GetFunc().GetObjName() == test.function {
+						result = expr
+					}
+				}
+			}
+			require.NotNil(t, result)
+			require.Len(t, result.GetF().Args, 2)
+			bitTextCast := result.GetF().Args[1].GetF()
+			require.NotNil(t, bitTextCast)
+			require.Equal(t, "cast", bitTextCast.GetFunc().GetObjName())
+			require.Equal(t, int32(types.T_varchar), result.GetF().Args[1].Typ.Id)
+			require.Equal(t, int32(types.T_uint64), bitTextCast.Args[0].Typ.Id)
+
+			node := &planpb.Node{ProjectList: []*planpb.Expr{DeepCopyExpr(result)}}
+			rule.NewConstantFold(false).Apply(node, nil, ctx.GetProcess())
+			folded := node.ProjectList[0]
+			require.NotNil(t, folded.GetLit())
+			require.Equal(t, test.want, folded.GetLit().GetSval())
+		})
+	}
+}

@@ -51,7 +51,7 @@ import (
 )
 
 func TestIssue23861FulltextSnapshotRestore(t *testing.T) {
-	embed.RunBaseClusterTests(
+	embed.RunBaseClusterTests(t,
 		func(c embed.Cluster) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*240)
 			defer cancel()
@@ -191,7 +191,7 @@ func execSQLMaybe(t *testing.T, ctx context.Context, db *sql.DB, statement strin
 }
 
 func TestWWConflict(t *testing.T) {
-	embed.RunBaseClusterTests(
+	embed.RunBaseClusterTests(t,
 		func(c embed.Cluster) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 			defer cancel()
@@ -362,7 +362,7 @@ func cleanDatabase(
 
 // #18754
 func TestBinarySearchBlkDataOnUnSortedFakePKCol(t *testing.T) {
-	embed.RunBaseClusterTests(
+	embed.RunBaseClusterTests(t,
 		func(c embed.Cluster) {
 			cn, err := c.GetCNService(0)
 			require.NoError(t, err)
@@ -452,7 +452,7 @@ func TestBinarySearchBlkDataOnUnSortedFakePKCol(t *testing.T) {
 }
 
 func TestCNFlushS3Deletes(t *testing.T) {
-	embed.RunBaseClusterTests(
+	embed.RunBaseClusterTests(t,
 		func(c embed.Cluster) {
 			cn, err := c.GetCNService(0)
 			require.NoError(t, err)
@@ -545,7 +545,7 @@ func TestCNFlushS3Deletes(t *testing.T) {
 There is no lock competition, but there is data modification
 */
 func TestDedupForAutoPk(t *testing.T) {
-	embed.RunBaseClusterTests(
+	embed.RunBaseClusterTests(t,
 		func(c embed.Cluster) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
 			defer cancel()
@@ -636,7 +636,7 @@ func TestDedupForAutoPk(t *testing.T) {
 }
 
 func TestLockNeedUpgrade(t *testing.T) {
-	embed.RunBaseClusterTests(
+	embed.RunBaseClusterTests(t,
 		func(c embed.Cluster) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
 			defer cancel()
@@ -761,7 +761,7 @@ func TestLockNeedUpgrade(t *testing.T) {
 }
 
 func TestIssue19551(t *testing.T) {
-	embed.RunBaseClusterTests(
+	embed.RunBaseClusterTests(t,
 		func(c embed.Cluster) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*1000)
 			defer cancel()
@@ -1103,7 +1103,7 @@ func waitLogtailResume(ctx context.Context, cn cnservice.Service) error {
 
 // #15087
 func TestLikePatternPlus(t *testing.T) {
-	embed.RunBaseClusterTests(
+	embed.RunBaseClusterTests(t,
 		func(c embed.Cluster) {
 			cn, err := c.GetCNService(0)
 			require.NoError(t, err)
@@ -1145,7 +1145,7 @@ func TestLikePatternPlus(t *testing.T) {
 }
 
 func TestFaultInjection(t *testing.T) {
-	embed.RunBaseClusterTests(
+	embed.RunBaseClusterTests(t,
 		func(c embed.Cluster) {
 			cn, err := c.GetCNService(0)
 			require.NoError(t, err)
