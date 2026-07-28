@@ -25,7 +25,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const utcFunctionTestUnixNano = int64(1704164645123456789) // 2024-01-02 03:04:05.123456789 UTC
+const utcFunctionTestUnixNano = int64(1704150245123456789) // 2024-01-01 23:04:05.123456789 UTC
 
 func runUTCFunction(t *testing.T, proc *process.Process, name string, inputs []*vector.Vector) *vector.Vector {
 	t.Helper()
@@ -52,11 +52,11 @@ func TestUTCFunctionsUseStatementTimeAndUTC(t *testing.T) {
 	proc.Base.UnixTime = utcFunctionTestUnixNano
 	proc.GetSessionInfo().TimeZone = time.FixedZone("UTC+8", 8*60*60)
 
-	wantDate, err := types.ParseDateCast("2024-01-02")
+	wantDate, err := types.ParseDateCast("2024-01-01")
 	require.NoError(t, err)
-	wantTime, err := types.ParseTime("03:04:05.123456", 6)
+	wantTime, err := types.ParseTime("23:04:05.123456", 6)
 	require.NoError(t, err)
-	wantDatetime, err := types.ParseDatetime("2024-01-02 03:04:05.123456", 6)
+	wantDatetime, err := types.ParseDatetime("2024-01-01 23:04:05.123456", 6)
 	require.NoError(t, err)
 
 	date := runUTCFunction(t, proc, "utc_date", nil)
@@ -90,7 +90,7 @@ func TestUTCFunctionsHonorFractionalSecondPrecision(t *testing.T) {
 			out := runUTCFunction(t, proc, "utc_time", []*vector.Vector{input})
 			defer out.Free(proc.Mp())
 			require.Equal(t, types.New(types.T_time, 0, int32(scale)), *out.GetType())
-			want, err := types.ParseTime("03:04:05.123456", int32(scale))
+			want, err := types.ParseTime("23:04:05.123456", int32(scale))
 			require.NoError(t, err)
 			require.Equal(t, want, vector.MustFixedColWithTypeCheck[types.Time](out)[0])
 		})
@@ -101,7 +101,7 @@ func TestUTCFunctionsHonorFractionalSecondPrecision(t *testing.T) {
 			out := runUTCFunction(t, proc, "utc_timestamp", []*vector.Vector{input})
 			defer out.Free(proc.Mp())
 			require.Equal(t, types.New(types.T_datetime, 0, int32(scale)), *out.GetType())
-			want, err := types.ParseDatetime("2024-01-02 03:04:05.123456", int32(scale))
+			want, err := types.ParseDatetime("2024-01-01 23:04:05.123456", int32(scale))
 			require.NoError(t, err)
 			require.Equal(t, want, vector.MustFixedColWithTypeCheck[types.Datetime](out)[0])
 		})

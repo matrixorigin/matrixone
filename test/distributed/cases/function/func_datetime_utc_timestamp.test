@@ -20,6 +20,11 @@ select utc_timestamp()-utc_timestamp(),weekday(utc_timestamp())-weekday(utc_time
 -- @ignore:0
 select utc_timestamp(3) as utc_timestamp_milliseconds;
 select microsecond(utc_timestamp(3)) % 1000 as utc_timestamp_millisecond_precision;
+select length(cast(utc_timestamp(3) as char)) = 23 as utc_timestamp_fsp3_text_width;
+drop view if exists v_utc_timestamp_fsp;
+create view v_utc_timestamp_fsp as select utc_timestamp(3) as value;
+desc v_utc_timestamp_fsp;
+drop view v_utc_timestamp_fsp;
 
 #0.5 not supported
 #select utc_timestamp()-curdate()*1000000-curtime();

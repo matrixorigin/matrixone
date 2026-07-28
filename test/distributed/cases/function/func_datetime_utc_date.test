@@ -13,7 +13,7 @@ SELECT UTC_DATE AS current_utc_date_no_parens;
 CREATE TABLE t1(id INT);
 INSERT INTO t1 VALUES (1), (2), (3);
 -- @ignore:1
-SELECT id, UTC_DATE() AS utc_date FROM t1;
+SELECT id, UTC_DATE() AS utc_date_value FROM t1;
 DROP TABLE t1;
 
 # WHERE clause
@@ -27,6 +27,7 @@ SELECT UTC_DATE() IS NOT NULL AS not_null_check;
 
 -- UTC_DATE returns a DATE independently of the session timezone.
 SELECT DATE_FORMAT(UTC_DATE(), '%Y-%m-%d') = CAST(UTC_DATE() AS CHAR) AS utc_date_is_date;
+SELECT UTC_DATE() = CAST(UTC_TIMESTAMP() AS DATE) AS utc_date_matches_utc_timestamp_date;
 
 # Date arithmetic
 -- @ignore:0

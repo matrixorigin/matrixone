@@ -3522,6 +3522,18 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 			}
 		}
 
+	case "utc_time", "utc_timestamp":
+		// The overload receives only argument types, while the temporal result
+		// scale is determined by the literal FSP. Preserve it in the plan type so
+		// views and the MySQL protocol expose TIME/DATETIME(fsp) correctly.
+		if len(args) == 1 {
+			if literal := args[0].GetLit(); literal != nil && !literal.Isnull {
+				if fsp, ok := literal.GetValue().(*plan.Literal_I64Val); ok && fsp.I64Val >= 0 && fsp.I64Val <= 6 {
+					returnType.Scale = int32(fsp.I64Val)
+				}
+			}
+		}
+
 	case "timestampadd":
 		// For TIMESTAMPADD with DATE input, check if unit is constant and adjust return type
 		// MySQL behavior: DATE input + date unit → DATE output, DATE input + time unit → DATETIME output
