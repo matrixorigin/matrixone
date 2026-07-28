@@ -785,11 +785,16 @@ const (
 	VECF16_FROM_BASE64   = 551
 	VECINT8_FROM_BASE64  = 552
 	VECUINT8_FROM_BASE64 = 553
-	APPROX_PERCENTILE    = 554
+	// function `cast_assign`
+	CAST_ASSIGN = 554
+	// function `cast_ignore`
+	CAST_IGNORE = 555
+	// function `approx_percentile`
+	APPROX_PERCENTILE = 556
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 555
+	FUNCTION_END_NUMBER = 557
 )
 
 // functionIdRegister is what function we have registered already.
@@ -827,6 +832,8 @@ var functionIdRegister = map[string]int32{
 	"coalesce":     COALESCE,
 	"cast":         CAST,
 	"cast_strict":  CAST_STRICT,
+	"cast_assign":  CAST_ASSIGN,
+	"cast_ignore":  CAST_IGNORE,
 	"bit_cast":     BIT_CAST,
 	"is":           IS,
 	"is_not":       ISNOT,
