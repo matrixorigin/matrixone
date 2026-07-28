@@ -661,12 +661,11 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 		Tenant: &plan.SnapshotTenant{TenantID: restoreAccount},
 	}
 
-	sourceCtx := defines.AttachAccountId(ctx, restoreAccount)
 	sourceTableInfos, err := collectRestoreSourceTableInfos(
 		dbName,
 		tblName,
 		func() ([]string, error) {
-			return showDatabases(sourceCtx, ses.GetService(), bh, snapshotName)
+			return showDatabasesAtTS(ctx, ses.GetService(), bh, snapshot.ts, restoreAccount)
 		},
 		func(sourceDBName string, sourceTblName string) ([]*tableInfo, error) {
 			return getTableInfos(ctx, ses.GetService(), bh, tempSnap, sourceDBName, sourceTblName)
@@ -1881,6 +1880,27 @@ func showDatabases(ctx context.Context, sid string, bh BackgroundExec, snapshotN
 
 	// cols: dbname
 	colsList, err := getStringColsList(ctx, bh, sql, 0)
+	if err != nil {
+		return nil, err
+	}
+
+	dbNames := make([]string, len(colsList))
+	for i, cols := range colsList {
+		dbNames[i] = cols[0]
+	}
+	return dbNames, nil
+}
+
+func showDatabasesAtTS(
+	ctx context.Context,
+	sid string,
+	bh BackgroundExec,
+	ts int64,
+	accountID uint32,
+) ([]string, error) {
+	getLogger(sid).Debug(fmt.Sprintf("[%d:%d] start to get all database", accountID, ts))
+	sql := fmt.Sprintf("show databases {MO_TS = %d}", ts)
+	colsList, err := getStringColsList(defines.AttachAccountId(ctx, accountID), bh, sql, 0)
 	if err != nil {
 		return nil, err
 	}

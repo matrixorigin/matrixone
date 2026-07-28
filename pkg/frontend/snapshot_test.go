@@ -246,6 +246,26 @@ func TestCollectRestoreSourceTableInfos(t *testing.T) {
 	})
 }
 
+func TestShowDatabasesAtTSDoesNotResolveSnapshotMetadata(t *testing.T) {
+	const (
+		snapshotTS = int64(100)
+		accountID  = uint32(42)
+	)
+	sql := fmt.Sprintf("show databases {MO_TS = %d}", snapshotTS)
+	bh := &backgroundExecTest{}
+	bh.init()
+	bh.sql2result[sql] = newMrsForSqlForShowDatabases([][]interface{}{
+		{"db1"},
+		{"db2"},
+	})
+
+	dbNames, err := showDatabasesAtTS(context.Background(), "", bh, snapshotTS, accountID)
+
+	require.NoError(t, err)
+	require.Equal(t, []string{"db1", "db2"}, dbNames)
+	require.Equal(t, []string{sql}, bh.executedSQLs)
+}
+
 func TestRestoreExternalTableSnapshotAndFromTS(t *testing.T) {
 	convey.Convey("snapshot bulk restore skips external table", t, func() {
 		ctx := context.WithValue(context.TODO(), defines.TenantIDKey{}, uint32(sysAccountID))
