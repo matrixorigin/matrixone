@@ -365,7 +365,7 @@ drop view if exists v_coalesce_meta;
 create view v_coalesce_meta as select coalesce(cast(null as decimal(23,2)), 7.01970 * cast(-58140.00 as decimal(23,2))) as c;
 desc v_coalesce_meta;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-c  ¦  DECIMAL(38,7)  ¦  NO  ¦    ¦  null  ¦    ¦
+c  ¦  DECIMAL(38,7)  ¦  NO  ¦    ¦  null  ¦    ¦  
 drop view v_coalesce_meta;
 drop view if exists v_flow_metadata_safe;
 create view v_flow_metadata_safe as
@@ -383,10 +383,10 @@ if_str_num  ¦  VARCHAR(2)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 if_unsigned_signed  ¦  DECIMAL(21,0)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 case_date_dt  ¦  DATETIME(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 case_binary_char  ¦  VARBINARY(8)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-ifnull_decimal  ¦  DECIMAL(2,1)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+ifnull_decimal  ¦  DECIMAL(2,1)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 nullif_mixed  ¦  VARCHAR(2)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 coalesce_str_num  ¦  VARCHAR(2)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-greatest_date  ¦  DATE(0)  ¦  YES  ¦    ¦  null  ¦    ¦
+greatest_date  ¦  DATE(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
 select column_name, column_type, is_nullable, character_maximum_length, numeric_precision, numeric_scale
 from information_schema.columns
 where table_schema = database() and table_name = 'v_flow_metadata_safe'
@@ -396,7 +396,7 @@ if_str_num  ¦  VARCHAR(2)  ¦  NO  ¦  2  ¦  null  ¦  null  𝄀
 if_unsigned_signed  ¦  DECIMAL(21,0)  ¦  NO  ¦  null  ¦  21  ¦  0  𝄀
 case_date_dt  ¦  DATETIME(0)  ¦  YES  ¦  null  ¦  null  ¦  null  𝄀
 case_binary_char  ¦  VARBINARY(8)  ¦  NO  ¦  8  ¦  null  ¦  null  𝄀
-ifnull_decimal  ¦  DECIMAL(2,1)  ¦  NO  ¦  null  ¦  2  ¦  1  𝄀
+ifnull_decimal  ¦  DECIMAL(2,1)  ¦  YES  ¦  null  ¦  2  ¦  1  𝄀
 nullif_mixed  ¦  VARCHAR(2)  ¦  YES  ¦  2  ¦  null  ¦  null  𝄀
 coalesce_str_num  ¦  VARCHAR(2)  ¦  NO  ¦  2  ¦  null  ¦  null  𝄀
 greatest_date  ¦  DATE(0)  ¦  YES  ¦  null  ¦  null  ¦  null
@@ -409,7 +409,7 @@ create view v_case_temporal_else as
 select case when 0 then cast('2024-01-02 03:04:05' as datetime) else cast('2024-01-01' as date) end as case_date_dt_else;
 desc v_case_temporal_else;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-case_date_dt_else  ¦  DATETIME(0)  ¦  YES  ¦    ¦  null  ¦    ¦
+case_date_dt_else  ¦  DATETIME(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
 select * from v_case_temporal_else;
 ➤ case_date_dt_else[93,64,0]  𝄀
 2024-01-01 00:00:00
@@ -419,7 +419,7 @@ create view v_if_binary_char as
 select if(1, _binary 'a', 'bc') as if_binary_char;
 desc v_if_binary_char;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-if_binary_char  ¦  VARBINARY(8)  ¦  NO  ¦    ¦  null  ¦
+if_binary_char  ¦  VARBINARY(8)  ¦  NO  ¦    ¦  null  ¦    ¦  
 select hex(if_binary_char) as if_binary_char_hex from v_if_binary_char;
 ➤ if_binary_char_hex[12,-1,0]  𝄀
 61
@@ -449,22 +449,22 @@ greatest(d_notnull, cast('2023-12-31' as date)) as greatest_notnull_col
 from t_flow_metadata;
 desc v_flow_metadata_columns;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-ifnull_null_first  ¦  DECIMAL(2,1)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-ifnull_nullable_col  ¦  DECIMAL(11,1)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+ifnull_null_first  ¦  DECIMAL(2,1)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ifnull_nullable_col  ¦  DECIMAL(11,1)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 ifnull_notnull_col  ¦  DECIMAL(11,1)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 coalesce_null_first  ¦  VARCHAR(2)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 coalesce_nullable_col  ¦  BIGINT(0)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 coalesce_notnull_col  ¦  BIGINT(0)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 greatest_const  ¦  DATE(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 greatest_nullable_col  ¦  DATE(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-greatest_notnull_col  ¦  DATE(0)  ¦  YES  ¦    ¦  null  ¦    ¦
+greatest_notnull_col  ¦  DATE(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
 select column_name, column_type, is_nullable, character_maximum_length, numeric_precision, numeric_scale
 from information_schema.columns
 where table_schema = database() and table_name = 'v_flow_metadata_columns'
 order by ordinal_position;
 ➤ column_name[12,-1,0]  ¦  column_type[12,-1,0]  ¦  is_nullable[12,-1,0]  ¦  character_maximum_length[-5,64,0]  ¦  numeric_precision[-5,64,0]  ¦  numeric_scale[-5,64,0]  𝄀
-ifnull_null_first  ¦  DECIMAL(2,1)  ¦  NO  ¦  null  ¦  2  ¦  1  𝄀
-ifnull_nullable_col  ¦  DECIMAL(11,1)  ¦  NO  ¦  null  ¦  11  ¦  1  𝄀
+ifnull_null_first  ¦  DECIMAL(2,1)  ¦  YES  ¦  null  ¦  2  ¦  1  𝄀
+ifnull_nullable_col  ¦  DECIMAL(11,1)  ¦  YES  ¦  null  ¦  11  ¦  1  𝄀
 ifnull_notnull_col  ¦  DECIMAL(11,1)  ¦  NO  ¦  null  ¦  11  ¦  1  𝄀
 coalesce_null_first  ¦  VARCHAR(2)  ¦  NO  ¦  2  ¦  null  ¦  null  𝄀
 coalesce_nullable_col  ¦  BIGINT(0)  ¦  NO  ¦  null  ¦  null  ¦  null  𝄀
@@ -491,7 +491,7 @@ create view v_case_binary_utf8 as
 select case when 1 then _binary 'a' else '中文' end as case_binary_utf8;
 desc v_case_binary_utf8;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-case_binary_utf8  ¦  VARBINARY(8)  ¦  NO  ¦    ¦  null  ¦
+case_binary_utf8  ¦  VARBINARY(8)  ¦  NO  ¦    ¦  null  ¦    ¦  
 select hex(case when 0 then _binary 'a' else '中文' end) as case_utf8_hex;
 ➤ case_utf8_hex[12,-1,0]  𝄀
 E4B8ADE69687
