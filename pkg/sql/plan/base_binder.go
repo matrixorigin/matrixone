@@ -2847,12 +2847,37 @@ func bindSerialFuncOverExprList(ctx context.Context, name string, args []*Expr) 
 	return args[0], true, nil
 }
 
+// bindMixedInListComparison applies MySQL's REAL comparison semantics for a
+// string left operand and a numeric IN-list value. It is deliberately limited
+// to IN/NOT IN fallback comparisons: applying it to every comparison would
+// lose precision for numeric columns compared with string constants.
+func bindMixedInListComparison(ctx context.Context, operator string, left, right *Expr) (*plan.Expr, error) {
+	leftType := makeTypeByPlan2Expr(left)
+	rightType := makeTypeByPlan2Expr(right)
+	if leftType.Oid.IsMySQLString() && (rightType.IsNumeric() || rightType.Oid == types.T_bool) {
+		targetType := types.T_float64.ToType()
+		operands := []*Expr{left, right}
+		for i := range operands {
+			var err error
+			operands[i], err = appendCastBeforeExpr(ctx, operands[i], makePlan2Type(&targetType))
+			if err != nil {
+				return nil, err
+			}
+		}
+		left, right = operands[0], operands[1]
+	}
+	return BindFuncExprImplByPlanExpr(ctx, operator, []*Expr{left, right})
+}
+
 func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) (*plan.Expr, error) {
 	var err error
 
 	// deal with some special function
 	if listExpr, ok, err := bindSerialFuncOverExprList(ctx, name, args); ok || err != nil {
 		return listExpr, err
+	}
+	if err := normalizeTimeStringComparisonArgs(ctx, name, args); err != nil {
+		return nil, err
 	}
 
 	switch name {
@@ -3239,7 +3264,7 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 			}
 			if name == "in" {
 				for _, expr := range orExprList {
-					tmpExpr, err := BindFuncExprImplByPlanExpr(ctx, "=", []*Expr{DeepCopyExpr(args[0]), expr})
+					tmpExpr, err := bindMixedInListComparison(ctx, "=", DeepCopyExpr(args[0]), expr)
 					if err != nil {
 						return nil, err
 					}
@@ -3248,7 +3273,7 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 				return combinePlanExprsBalanced(ctx, "or", expanded)
 			} else {
 				for _, expr := range orExprList {
-					tmpExpr, err := BindFuncExprImplByPlanExpr(ctx, "!=", []*Expr{DeepCopyExpr(args[0]), expr})
+					tmpExpr, err := bindMixedInListComparison(ctx, "!=", DeepCopyExpr(args[0]), expr)
 					if err != nil {
 						return nil, err
 					}
@@ -3602,6 +3627,94 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		},
 		Typ: Typ,
 	}, nil
+}
+
+// MySQL compares scalar TIME expressions to strings as text, but converts a
+// constant string or direct prepared parameter to TIME(scale) when the TIME
+// side is a column.
+func normalizeTimeStringComparisonArgs(ctx context.Context, name string, args []*Expr) error {
+	switch name {
+	case "=", "<=>", "!=", "<>", "<", "<=", ">", ">=":
+		if len(args) != 2 || !isTimeStringComparisonPair(args[0], args[1]) {
+			return nil
+		}
+		if isTimeColumnStringLiteralOrDirectParamPair(args[0], args[1]) {
+			return nil
+		}
+	case "between":
+		if len(args) != 3 || !allTimeOrCharacterString(args) {
+			return nil
+		}
+		if args[0].Typ.Id == int32(types.T_time) && args[0].GetCol() != nil &&
+			isTimeValueOrCharacterStringLiteralOrDirectParam(args[1]) &&
+			isTimeValueOrCharacterStringLiteralOrDirectParam(args[2]) {
+			return nil
+		}
+	default:
+		return nil
+	}
+
+	varchar := types.T_varchar.ToType()
+	varcharType := makePlan2Type(&varchar)
+	for i, arg := range args {
+		if arg.Typ.Id != int32(types.T_time) {
+			continue
+		}
+		castExpr, err := appendCastBeforeExpr(ctx, arg, varcharType)
+		if err != nil {
+			return err
+		}
+		args[i] = castExpr
+	}
+	return nil
+}
+
+func isTimeStringComparisonPair(left, right *Expr) bool {
+	return (left.Typ.Id == int32(types.T_time) && isCharacterStringType(right.Typ.Id)) ||
+		(right.Typ.Id == int32(types.T_time) && isCharacterStringType(left.Typ.Id))
+}
+
+func isTimeColumnStringLiteralOrDirectParamPair(left, right *Expr) bool {
+	return (left.Typ.Id == int32(types.T_time) && left.GetCol() != nil && isCharacterStringLiteralOrDirectParam(right)) ||
+		(right.Typ.Id == int32(types.T_time) && right.GetCol() != nil && isCharacterStringLiteralOrDirectParam(left))
+}
+
+func allTimeOrCharacterString(args []*Expr) bool {
+	hasTime := false
+	hasString := false
+	for _, arg := range args {
+		switch {
+		case arg.Typ.Id == int32(types.T_time):
+			hasTime = true
+		case isCharacterStringType(arg.Typ.Id):
+			hasString = true
+		default:
+			return false
+		}
+	}
+	return hasTime && hasString
+}
+
+func isCharacterStringLiteral(expr *Expr) bool {
+	return isCharacterStringType(expr.Typ.Id) && expr.GetLit() != nil
+}
+
+func isCharacterStringLiteralOrDirectParam(expr *Expr) bool {
+	return isCharacterStringLiteral(expr) ||
+		(isCharacterStringType(expr.Typ.Id) && isDirectDynamicParam(expr))
+}
+
+func isTimeValueOrCharacterStringLiteralOrDirectParam(expr *Expr) bool {
+	return expr.Typ.Id == int32(types.T_time) || isCharacterStringLiteralOrDirectParam(expr)
+}
+
+func isCharacterStringType(typeID int32) bool {
+	switch types.T(typeID) {
+	case types.T_char, types.T_varchar, types.T_text:
+		return true
+	default:
+		return false
+	}
 }
 
 func adjustJsonOrderingDynamicParamType(ctx context.Context, name string, args []*Expr) error {

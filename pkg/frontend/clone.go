@@ -70,9 +70,18 @@ type cloneReceipt struct {
 	srcAccountName string
 }
 
+func cloneSnapshotTxnOperator(ses *Session, bh BackgroundExec) TxnOperator {
+	back := bh.(*backExec)
+	if back.backSes.forcePessimisticRC {
+		return back.backSes.GetTxnHandler().GetTxn()
+	}
+	return ses.proc.GetTxnOperator()
+}
+
 func getBackExecutor(
 	ctx context.Context,
 	ses *Session,
+	opts ...*BackgroundExecOption,
 ) (BackgroundExec, func(error) error, error) {
 
 	var (
@@ -90,7 +99,7 @@ func getBackExecutor(
 		}, nil
 	}
 
-	bh = ses.GetBackgroundExec(ctx)
+	bh = ses.GetBackgroundExec(ctx, opts...)
 	bh.ClearExecResultSet()
 	if err = bh.Exec(ctx, "begin"); err != nil {
 		bh.Close()
@@ -203,6 +212,12 @@ func getOpAndToAccountId(
 	return opAccountId, toAccountId, snapshot, nil
 }
 
+type cloneAccountResolution struct {
+	opAccountId uint32
+	toAccountId uint32
+	snapshot    *plan2.Snapshot
+}
+
 // create table x.y clone r.s {MO_TS, SNAPSHOT}
 // create table x.y clone r.s {MO_TS, SNAPSHOT} to account t
 func handleCloneTable(
@@ -210,6 +225,7 @@ func handleCloneTable(
 	ses *Session,
 	stmt *tree.CloneTable,
 	bh BackgroundExec,
+	resolvedAccounts *cloneAccountResolution,
 ) (receipt cloneReceipt, err error) {
 
 	var (
@@ -248,10 +264,16 @@ func handleCloneTable(
 		}()
 	}
 
-	if opAccountId, toAccountId, snapshot, err = getOpAndToAccountId(
-		reqCtx, ses, bh, stmt.ToAccountOpt, stmt.SrcTable.AtTsExpr,
-	); err != nil {
-		return
+	if resolvedAccounts != nil {
+		opAccountId = resolvedAccounts.opAccountId
+		toAccountId = resolvedAccounts.toAccountId
+		snapshot = resolvedAccounts.snapshot
+	} else {
+		if opAccountId, toAccountId, snapshot, err = getOpAndToAccountId(
+			reqCtx, ses, bh, stmt.ToAccountOpt, stmt.SrcTable.AtTsExpr,
+		); err != nil {
+			return
+		}
 	}
 
 	if stmt.CopyGrants && stmt.ToAccountOpt != nil {
@@ -323,7 +345,7 @@ func handleCloneTable(
 
 	if snapshot == nil {
 		if snapshotTS, err = tryToIncreaseTxnPhysicalTS(
-			reqCtx, ses.proc.GetTxnOperator(),
+			reqCtx, cloneSnapshotTxnOperator(ses, bh),
 		); err != nil {
 			return
 		}
@@ -461,7 +483,7 @@ func handleCloneDatabaseWithSource(
 		// so we try to increase the txn physical ts here to make sure the snapshot TS
 		// the clone will get is greater than P2.
 		if snapshotTS, err = tryToIncreaseTxnPhysicalTS(
-			reqCtx, ses.proc.GetTxnOperator(),
+			reqCtx, cloneSnapshotTxnOperator(ses, bh),
 		); err != nil {
 			return
 		}
@@ -489,9 +511,17 @@ func handleCloneDatabaseWithSource(
 				reqCtx: reqCtx,
 			}
 		)
+		tableSnapshot, resolveErr := resolveSnapshot(ses, cloneStmt.SrcTable.AtTsExpr)
+		if resolveErr != nil {
+			return resolveErr
+		}
 
 		if receipt, err = handleCloneTable(
-			tempExecCtx, ses, cloneStmt, bh,
+			tempExecCtx, ses, cloneStmt, bh, &cloneAccountResolution{
+				opAccountId: source.opAccountId,
+				toAccountId: source.toAccountId,
+				snapshot:    tableSnapshot,
+			},
 		); err != nil {
 			return err
 		}
@@ -713,7 +743,7 @@ func updateBranchMetaTable(
 		dstTblDef.TblId,
 		receipt.snapshotTS,
 		srcTblDef.TblId,
-		receipt.opAccount,
+		receipt.toAccount,
 		level,
 	)
 

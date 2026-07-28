@@ -125,6 +125,14 @@ type RPCClient interface {
 	CloseBackend() error
 }
 
+// ControlClient exposes only the operations allowed on an isolated control
+// transport. It deliberately cannot carry application messages.
+type ControlClient interface {
+	Ping(ctx context.Context, backend string) error
+	CloseBackendFor(backend string) error
+	Close() error
+}
+
 // ClientSession client session, which is used to send the response message.
 // Note that it is not thread-safe.
 type ClientSession interface {

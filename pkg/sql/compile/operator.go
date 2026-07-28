@@ -26,11 +26,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	icebergapi "github.com/matrixorigin/matrixone/pkg/iceberg/api"
+	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -94,6 +96,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/stage"
 	"github.com/matrixorigin/matrixone/pkg/stage/stageutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -103,11 +106,23 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+const loadMergeReceiverChannelBufferSize = 1
+
 var constBat *batch.Batch
 
 func init() {
 	constBat = batch.NewWithSize(0)
 	constBat.SetRowCount(1)
+}
+
+func mergeReceiverChannelBufferSize(s *Scope) int {
+	if s != nil && s.Proc != nil && s.Proc.Base.LoadTag {
+		return loadMergeReceiverChannelBufferSize
+	}
+	if s == nil || s.NodeInfo.Mcpu < 1 {
+		return 1
+	}
+	return s.NodeInfo.Mcpu
 }
 
 type operatorDupContext struct {
@@ -354,6 +369,9 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.Attrs = t.Attrs
 		op.Params = t.Params
 		op.IsSingle = t.IsSingle
+		op.Limit = t.Limit
+		op.RuntimeFilterSpecs = t.RuntimeFilterSpecs
+		op.IndexReaderParam = t.IndexReaderParam
 		op.SetInfo(&info)
 		if op.FuncName == "generate_series" {
 			op.GenerateSeriesCtrNumState(t.OffsetTotal[index][0], t.OffsetTotal[index][1], t.GetGenerateSeriesCtrNumStateStep(), t.OffsetTotal[index][0])
@@ -501,6 +519,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.CompPkeyExpr = t.CompPkeyExpr
 		op.ClusterByExpr = t.ClusterByExpr
 		op.ColOffset = t.ColOffset
+		op.RejectZeroTemporal = t.RejectZeroTemporal
 		op.SetInfo(&info)
 		return op
 	case vm.Deletion:
@@ -556,6 +575,9 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.TableFunction.Attrs = t.TableFunction.Attrs
 		op.TableFunction.Params = t.TableFunction.Params
 		op.TableFunction.IsSingle = t.TableFunction.IsSingle
+		op.TableFunction.Limit = t.TableFunction.Limit
+		op.TableFunction.RuntimeFilterSpecs = t.TableFunction.RuntimeFilterSpecs
+		op.TableFunction.IndexReaderParam = t.TableFunction.IndexReaderParam
 		op.TableFunction.SetInfo(&info)
 		op.SetInfo(&info)
 		return op
@@ -567,6 +589,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.IsRemote = t.IsRemote
 		op.IsOnduplicateKeyUpdate = t.IsOnduplicateKeyUpdate
 		op.CountDeleteAffectRows = t.CountDeleteAffectRows
+		op.RejectZeroTemporal = t.RejectZeroTemporal
 		op.Engine = t.Engine
 		op.SetInfo(&info)
 		return op
@@ -720,6 +743,7 @@ func constructFuzzyFilter(node, tableScan, sinkScan *plan.Node) *fuzzyfilter.Fuz
 func constructPreInsert(nodes []*plan.Node, node *plan.Node, eng engine.Engine, proc *process.Process) (*preinsert.PreInsert, error) {
 	preCtx := node.PreInsertCtx
 	schemaName := preCtx.Ref.SchemaName
+	var err error
 
 	//var attrs []string
 	attrs := make([]string, 0)
@@ -767,6 +791,10 @@ func constructPreInsert(nodes []*plan.Node, node *plan.Node, eng engine.Engine, 
 	op.CompPkeyExpr = preCtx.CompPkeyExpr
 	op.ClusterByExpr = preCtx.ClusterByExpr
 	op.ColOffset = preCtx.ColOffset
+	op.RejectZeroTemporal, err = util.RejectZeroTemporalWritePolicy(proc)
+	if err != nil {
+		return nil, err
+	}
 
 	return op, nil
 }
@@ -816,9 +844,14 @@ func constructMultiUpdate(
 	action multi_update.UpdateAction,
 	isRemote bool,
 ) (vm.Operator, error) {
+	var err error
 	arg := multi_update.NewArgument()
 	arg.Engine = eng
 	arg.IsRemote = isRemote
+	arg.RejectZeroTemporal, err = util.RejectZeroTemporalWritePolicy(proc)
+	if err != nil {
+		return nil, err
+	}
 
 	for _, updateCtx := range node.UpdateCtxList {
 		if updateCtx.CountDeleteAffectRows {
@@ -1329,6 +1362,31 @@ func constructHashJoin(node, left *plan.Node, left_types, right_types []types.Ty
 	return arg
 }
 
+// constructBroadcastHashMarkJoin normalizes the operator's private key
+// metadata after broadcast eligibility has been proved from the materialized
+// inputs. Planner condition types also carry the stronger shuffle-only proof,
+// so safe arithmetic and casts can be marked nullable there even though the
+// broadcast hash MARK contract accepts them. Clone before normalization to
+// avoid mutating a reusable plan.
+func constructBroadcastHashMarkJoin(
+	node, left *plan.Node,
+	leftTypes, rightTypes []types.Type,
+	proc *process.Process,
+) *hashjoin.HashJoin {
+	arg := constructHashJoin(node, left, leftTypes, rightTypes, proc)
+	if len(arg.EqConds[0]) <= 1 {
+		return arg
+	}
+	for side := range arg.EqConds {
+		for i, key := range arg.EqConds[side] {
+			key = plan2.DeepCopyExpr(key)
+			key.Typ.NotNullable = true
+			arg.EqConds[side][i] = key
+		}
+	}
+	return arg
+}
+
 func constructDedupJoin(node *plan.Node, leftTypes, rightTypes []types.Type, proc *process.Process) *dedupjoin.DedupJoin {
 	result := make([]colexec.ResultPos, len(node.ProjectList))
 	for i, expr := range node.ProjectList {
@@ -1557,25 +1615,7 @@ func constructWindow(_ context.Context, node *plan.Node, proc *process.Process) 
 		isDistinct := (uint64(f.F.Func.Obj) & function.Distinct) != 0
 		functionID := int64(uint64(f.F.Func.Obj) & function.DistinctMask)
 
-		var cfg []byte = nil
-		var args = f.F.Args
-		if len(f.F.Args) > 0 {
-
-			//for group_concat, the last arg is separator string
-			//for cluster_centers, the last arg is kmeans_args string
-			if (f.F.Func.ObjName == plan2.NameGroupConcat ||
-				f.F.Func.ObjName == plan2.NameClusterCenters) && len(f.F.Args) > 1 {
-				argExpr := f.F.Args[len(f.F.Args)-1]
-				vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(proc, argExpr)
-				if err != nil {
-					panic(err)
-				}
-				cfg = []byte(vec.GetStringAt(0))
-				free()
-
-				args = f.F.Args[:len(f.F.Args)-1]
-			}
-		}
+		args, cfg := constructAggregateConfig(f.F, proc)
 		aggregationExpressions[i] = aggexec.MakeAggFunctionExpression(
 			functionID, isDistinct, args, cfg)
 	}
@@ -1612,24 +1652,7 @@ func constructGroup(_ context.Context, node, childNode *plan.Node, needEval bool
 			isDistinct := (uint64(f.F.Func.Obj) & function.Distinct) != 0
 			functionID := int64(uint64(f.F.Func.Obj) & function.DistinctMask)
 
-			var cfg []byte = nil
-			var args = f.F.Args
-			if len(f.F.Args) > 0 {
-				//for group_concat, the last arg is separator string
-				//for cluster_centers, the last arg is kmeans_args string
-				if (f.F.Func.ObjName == plan2.NameGroupConcat ||
-					f.F.Func.ObjName == plan2.NameClusterCenters) && len(f.F.Args) > 1 {
-					argExpr := f.F.Args[len(f.F.Args)-1]
-					vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(proc, argExpr)
-					if err != nil {
-						panic(err)
-					}
-					cfg = []byte(vec.GetStringAt(0))
-					free()
-
-					args = f.F.Args[:len(f.F.Args)-1]
-				}
-			}
+			args, cfg := constructAggregateConfig(f.F, proc)
 
 			aggregationExpressions[i] = aggexec.MakeAggFunctionExpression(
 				functionID, isDistinct, args, cfg)
@@ -1648,6 +1671,44 @@ func constructGroup(_ context.Context, node, childNode *plan.Node, needEval bool
 	arg.GroupingFlag = node.GroupingFlag
 	arg.GroupBy = node.GroupBy
 	return arg
+}
+
+func constructAggregateConfig(f *plan.Function, proc *process.Process) ([]*plan.Expr, []byte) {
+	args := f.Args
+	switch f.Func.ObjName {
+	case plan2.NameGroupConcat:
+		separator := ","
+		if len(args) > 1 {
+			separator = evaluateAggregateConfigString(proc, args[len(args)-1])
+			args = args[:len(args)-1]
+		}
+		value, err := resolveVariableOrDefault(proc, "group_concat_max_len", true, false)
+		if err != nil {
+			panic(err)
+		}
+		maxLen, ok := value.(int64)
+		if !ok || maxLen < 0 {
+			panic(moerr.NewInternalErrorNoCtxf(
+				"group_concat_max_len has invalid value %v", value))
+		}
+		return args, aggexec.EncodeGroupConcatConfig(separator, uint64(maxLen))
+
+	case plan2.NameClusterCenters:
+		if len(args) > 1 {
+			config := evaluateAggregateConfigString(proc, args[len(args)-1])
+			return args[:len(args)-1], []byte(config)
+		}
+	}
+	return args, nil
+}
+
+func evaluateAggregateConfigString(proc *process.Process, expr *plan.Expr) string {
+	vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(proc, expr)
+	if err != nil {
+		panic(err)
+	}
+	defer free()
+	return vec.GetStringAt(0)
 }
 
 func constructDispatchLocal(all bool, isSink, rec bool, recCTE bool, regs []*process.WaitRegister) *dispatch.Dispatch {
@@ -2304,6 +2365,12 @@ func constructTableClone(
 ) (*table_clone.TableClone, error) {
 
 	metaCopy := table_clone.NewTableClone()
+	success := false
+	defer func() {
+		if !success {
+			metaCopy.Release()
+		}
+	}()
 
 	metaCopy.Ctx = &table_clone.TableCloneCtx{
 		Eng:       c.e,
@@ -2314,43 +2381,49 @@ func constructTableClone(
 		DstTblName:      clonePlan.DstTableName,
 		DstDatabaseName: clonePlan.DstDatabaseName,
 	}
+	dstTblDef := clonePlan.SrcTableDef
+	sameColumnIDSpace := true
+	var dstCreateTable *plan.CreateTable
+	metaCopy.Ctx.RequestedAutoIncrOffset = clonePlan.SrcTableDef.AutoIncrOffset
+	if createPlan := clonePlan.GetCreateTable(); createPlan != nil {
+		if createTable := createPlan.GetDdl().GetCreateTable(); createTable != nil && createTable.TableDef != nil {
+			dstCreateTable = createTable
+			dstTblDef = createTable.TableDef
+			sameColumnIDSpace = false
+			metaCopy.Ctx.RequestedAutoIncrOffset = createTable.TableDef.AutoIncrOffset
+		}
+	}
+	dstAutoIncrNames := mapCloneAutoIncrColumns(clonePlan.SrcTableDef, dstTblDef, sameColumnIDSpace)
+	mappedIndexAutoIncrTables := mapCloneIndexAutoIncrementTables(clonePlan.SrcTableDef, dstCreateTable)
 
 	var (
 		err error
 		ret executor.Result
 		sql string
 
-		account     = uint32(math.MaxUint32)
-		colOffset   map[int32]uint64
-		hasAutoIncr bool
+		account         = uint32(math.MaxUint32)
+		colMaxValue     map[string]uint64
+		autoIncrOffsets map[string]uint64
+		mainHasAutoIncr bool
 	)
 
 	for _, colDef := range clonePlan.SrcTableDef.Cols {
 		if colDef.Typ.AutoIncr {
-			hasAutoIncr = true
+			mainHasAutoIncr = true
 			break
 		}
 	}
 
-	if !hasAutoIncr {
+	if !mainHasAutoIncr && len(mappedIndexAutoIncrTables) == 0 {
+		success = true
 		return metaCopy, nil
 	}
 
-	sql = fmt.Sprintf(
-		"select col_index, offset from mo_catalog.mo_increment_columns where table_id = %d",
-		clonePlan.SrcTableDef.TblId,
-	)
-
-	if clonePlan.ScanSnapshot != nil {
+	if clonePlan.SrcObjDef != nil && clonePlan.SrcObjDef.PubInfo != nil {
+		account = uint32(clonePlan.SrcObjDef.PubInfo.TenantId)
+	} else if clonePlan.ScanSnapshot != nil {
 		if clonePlan.ScanSnapshot.Tenant != nil {
 			account = clonePlan.ScanSnapshot.Tenant.TenantID
-		}
-
-		if clonePlan.ScanSnapshot.TS != nil {
-			sql = fmt.Sprintf(
-				"select col_index, offset from mo_catalog.mo_increment_columns {MO_TS = %d} where table_id = %d",
-				clonePlan.ScanSnapshot.TS.PhysicalTime, clonePlan.SrcTableDef.TblId,
-			)
 		}
 	}
 
@@ -2360,32 +2433,365 @@ func constructTableClone(
 		}
 	}
 
-	if ret, err = c.runSqlWithResultAndOptions(
-		sql,
-		int32(account),
-		executor.StatementOption{}.WithDisableLog(),
-	); err != nil {
-		return nil, err
+	if mainHasAutoIncr {
+		if err := c.proc.Ctx.Err(); err != nil {
+			return nil, err
+		}
+		sql = fmt.Sprintf(
+			"select col_index, offset from mo_catalog.mo_increment_columns where table_id = %d",
+			clonePlan.SrcTableDef.TblId,
+		)
+		if clonePlan.ScanSnapshot != nil && clonePlan.ScanSnapshot.TS != nil {
+			sql = fmt.Sprintf(
+				"select col_index, offset from mo_catalog.mo_increment_columns {MO_TS = %d} where table_id = %d",
+				clonePlan.ScanSnapshot.TS.PhysicalTime,
+				clonePlan.SrcTableDef.TblId,
+			)
+		}
+		if ret, err = c.runSqlWithResultAndOptions(
+			sql,
+			int32(account),
+			executor.StatementOption{}.WithDisableLog(),
+		); err != nil {
+			ret.Close()
+			return nil, err
+		}
+		autoIncrOffsets = make(map[string]uint64)
+		func() {
+			defer ret.Close()
+			ret.ReadRows(func(rows int, cols []*vector.Vector) bool {
+				colIdxes := vector.MustFixedColWithTypeCheck[int32](cols[0])
+				offsets := vector.MustFixedColWithTypeCheck[uint64](cols[1])
+				for i := 0; i < rows; i++ {
+					if dstName, ok := dstAutoIncrNames[colIdxes[i]]; ok {
+						autoIncrOffsets[dstName] = offsets[i]
+					}
+				}
+				return true
+			})
+		}()
+
+		colMaxValue = make(map[string]uint64)
+		for colIdx, colDef := range clonePlan.SrcTableDef.Cols {
+			if !colDef.Typ.AutoIncr || colDef.Hidden {
+				continue
+			}
+			if err := c.proc.Ctx.Err(); err != nil {
+				return nil, err
+			}
+
+			colIdent := sqlquote.Ident(colDef.Name)
+			tableIdent := sqlquote.QualifiedIdent(clonePlan.SrcTableDef.DbName, clonePlan.SrcTableDef.Name)
+			if (clonePlan.SrcObjDef == nil || clonePlan.SrcObjDef.PubInfo == nil) &&
+				clonePlan.ScanSnapshot != nil && clonePlan.ScanSnapshot.TS != nil {
+				tableIdent += fmt.Sprintf(" {MO_TS = %d}", clonePlan.ScanSnapshot.TS.PhysicalTime)
+			}
+			sql = fmt.Sprintf(
+				"select cast(coalesce(max(case when %s > 0 then %s else 0 end), 0) as unsigned) from %s",
+				colIdent,
+				colIdent,
+				tableIdent,
+			)
+
+			if ret, err = c.runSqlWithResultAndOptions(
+				sql,
+				int32(account),
+				executor.StatementOption{}.WithDisableLog(),
+			); err != nil {
+				ret.Close()
+				return nil, err
+			}
+			func() {
+				defer ret.Close()
+				ret.ReadRows(func(rows int, cols []*vector.Vector) bool {
+					if rows > 0 && len(cols) > 0 && !cols[0].IsNull(0) {
+						if dstName, ok := dstAutoIncrNames[int32(colIdx)]; ok {
+							colMaxValue[dstName] = executor.GetFixedRows[uint64](cols[0])[0]
+						}
+					}
+					return false
+				})
+			}()
+		}
+
+		metaCopy.Ctx.SrcAutoIncrMaxValues = colMaxValue
+		metaCopy.Ctx.SrcAutoIncrOffsets = autoIncrOffsets
 	}
 
-	ret.ReadRows(func(rows int, cols []*vector.Vector) bool {
-		if colOffset == nil {
-			colOffset = make(map[int32]uint64)
+	indexAutoIncrTables := mappedIndexAutoIncrTables
+	if features.IsPartitioned(clonePlan.SrcTableDef.FeatureFlag) && len(mappedIndexAutoIncrTables) > 0 {
+		partitionTables, err := c.readClonePartitionIndexAutoIncrementTables(
+			clonePlan,
+			mappedIndexAutoIncrTables,
+			int32(account),
+		)
+		if err != nil {
+			return nil, err
 		}
-
-		colIdxes := vector.MustFixedColWithTypeCheck[int32](cols[0])
-		offsets := vector.MustFixedColWithTypeCheck[uint64](cols[1])
-
-		for i := 0; i < rows; i++ {
-			colOffset[colIdxes[i]] = offsets[i]
+		indexAutoIncrTables = append(indexAutoIncrTables, partitionTables...)
+	}
+	if len(indexAutoIncrTables) > 0 {
+		metaCopy.Ctx.IndexAutoIncrStates = make(map[string]table_clone.AutoIncrementState, len(indexAutoIncrTables))
+		for _, table := range indexAutoIncrTables {
+			state, err := c.readCloneIndexAutoIncrementState(
+				clonePlan,
+				table.srcTableName,
+				int32(account),
+			)
+			if err != nil {
+				return nil, err
+			}
+			if len(state.Offsets) > 0 {
+				metaCopy.Ctx.IndexAutoIncrStates[strings.ToLower(table.stateKey)] = state
+			}
 		}
-
-		return true
-	})
-
-	ret.Close()
-
-	metaCopy.Ctx.SrcAutoIncrOffsets = colOffset
-
+	}
+	success = true
 	return metaCopy, nil
+}
+
+type cloneIndexAutoIncrementTable struct {
+	srcTableName string
+	sourceKey    string
+	stateKey     string
+}
+
+func mapCloneIndexAutoIncrementTables(
+	srcDef *plan.TableDef,
+	dstCreate *plan.CreateTable,
+) []cloneIndexAutoIncrementTable {
+	if srcDef == nil || dstCreate == nil || dstCreate.TableDef == nil {
+		return nil
+	}
+
+	dstIndexByKey := make(map[string]*plan.IndexDef, len(dstCreate.TableDef.Indexes))
+	for _, index := range dstCreate.TableDef.Indexes {
+		if index == nil {
+			continue
+		}
+		dstIndexByKey[cloneIndexTableKey(index)] = index
+	}
+	dstTableByName := make(map[string]*plan.TableDef, len(dstCreate.IndexTables))
+	for _, tableDef := range dstCreate.IndexTables {
+		if tableDef == nil {
+			continue
+		}
+		dstTableByName[strings.ToLower(tableDef.Name)] = tableDef
+	}
+
+	result := make([]cloneIndexAutoIncrementTable, 0, len(srcDef.Indexes))
+	for _, srcIndex := range srcDef.Indexes {
+		if srcIndex == nil {
+			continue
+		}
+		dstIndex := dstIndexByKey[cloneIndexTableKey(srcIndex)]
+		if dstIndex == nil {
+			continue
+		}
+		dstTableDef := dstTableByName[strings.ToLower(dstIndex.IndexTableName)]
+		if dstTableDef == nil || len(incrservice.GetAutoColumnFromDef(dstTableDef)) == 0 {
+			continue
+		}
+		result = append(result, cloneIndexAutoIncrementTable{
+			srcTableName: srcIndex.IndexTableName,
+			sourceKey:    srcIndex.IndexName + "." + srcIndex.IndexAlgoTableType,
+			stateKey:     dstIndex.IndexName + "." + dstIndex.IndexAlgoTableType,
+		})
+	}
+	return result
+}
+
+func cloneIndexTableKey(index *plan.IndexDef) string {
+	if index == nil {
+		return ""
+	}
+	return strings.ToLower(index.IndexName) + "\x00" + strings.ToLower(index.IndexAlgoTableType)
+}
+
+func (c *Compile) readClonePartitionIndexAutoIncrementTables(
+	clonePlan *plan.CloneTable,
+	mapped []cloneIndexAutoIncrementTable,
+	account int32,
+) ([]cloneIndexAutoIncrementTable, error) {
+	if err := c.proc.Ctx.Err(); err != nil {
+		return nil, err
+	}
+	destinationKeyBySource := make(map[string]string, len(mapped))
+	for _, table := range mapped {
+		destinationKeyBySource[strings.ToLower(table.sourceKey)] = table.stateKey
+	}
+	hint := ""
+	if clonePlan.ScanSnapshot != nil && clonePlan.ScanSnapshot.TS != nil {
+		hint = fmt.Sprintf(" {MO_TS = %d}", clonePlan.ScanSnapshot.TS.PhysicalTime)
+	}
+	sql := fmt.Sprintf(
+		"select pt.partition_name, mi.name, mi.algo_table_type, mi.index_table_name "+
+			"from mo_catalog.%s%s pt join mo_catalog.%s%s mi on pt.partition_id = mi.table_id "+
+			"where pt.primary_table_id = %d",
+		catalog.MOPartitionTables,
+		hint,
+		catalog.MO_INDEXES,
+		hint,
+		clonePlan.SrcTableDef.TblId,
+	)
+	result, err := c.runSqlWithResultAndOptions(
+		sql,
+		account,
+		executor.StatementOption{}.WithDisableLog(),
+	)
+	if err != nil {
+		result.Close()
+		return nil, err
+	}
+	var tables []cloneIndexAutoIncrementTable
+	func() {
+		defer result.Close()
+		result.ReadRows(func(rows int, cols []*vector.Vector) bool {
+			partitionNames := executor.GetStringRows(cols[0])
+			indexNames := executor.GetStringRows(cols[1])
+			tableTypes := executor.GetStringRows(cols[2])
+			tableNames := executor.GetStringRows(cols[3])
+			for i := 0; i < rows; i++ {
+				sourceKey := indexNames[i] + "." + tableTypes[i]
+				destinationKey, ok := destinationKeyBySource[strings.ToLower(sourceKey)]
+				if !ok {
+					continue
+				}
+				tables = append(tables, cloneIndexAutoIncrementTable{
+					srcTableName: tableNames[i],
+					sourceKey:    sourceKey,
+					stateKey:     partitionNames[i] + "." + destinationKey,
+				})
+			}
+			return true
+		})
+	}()
+	return tables, nil
+}
+
+func (c *Compile) readCloneIndexAutoIncrementState(
+	clonePlan *plan.CloneTable,
+	srcTableName string,
+	account int32,
+) (table_clone.AutoIncrementState, error) {
+	state := table_clone.AutoIncrementState{
+		MaxValues: make(map[string]uint64),
+		Offsets:   make(map[string]uint64),
+	}
+	hint := ""
+	if clonePlan.ScanSnapshot != nil && clonePlan.ScanSnapshot.TS != nil {
+		hint = fmt.Sprintf(" {MO_TS = %d}", clonePlan.ScanSnapshot.TS.PhysicalTime)
+	}
+	offsetSQL := fmt.Sprintf(
+		"select col_name, offset from mo_catalog.mo_increment_columns%s where table_id = "+
+			"(select rel_id from mo_catalog.mo_tables%s where reldatabase = %s and relname = %s)",
+		hint,
+		hint,
+		sqlquote.String(clonePlan.SrcTableDef.DbName),
+		sqlquote.String(srcTableName),
+	)
+	result, err := c.runSqlWithResultAndOptions(
+		offsetSQL,
+		account,
+		executor.StatementOption{}.WithDisableLog(),
+	)
+	if err != nil {
+		result.Close()
+		return state, err
+	}
+	sourceColNames := make(map[string]string)
+	func() {
+		defer result.Close()
+		result.ReadRows(func(rows int, cols []*vector.Vector) bool {
+			names := executor.GetStringRows(cols[0])
+			offsets := executor.GetFixedRows[uint64](cols[1])
+			for i := 0; i < rows; i++ {
+				key := strings.ToLower(names[i])
+				sourceColNames[key] = names[i]
+				state.Offsets[key] = offsets[i]
+			}
+			return true
+		})
+	}()
+
+	for key, colName := range sourceColNames {
+		if err := c.proc.Ctx.Err(); err != nil {
+			return state, err
+		}
+		colIdent := sqlquote.Ident(colName)
+		tableIdent := sqlquote.QualifiedIdent(clonePlan.SrcTableDef.DbName, srcTableName)
+		if (clonePlan.SrcObjDef == nil || clonePlan.SrcObjDef.PubInfo == nil) && hint != "" {
+			tableIdent += hint
+		}
+		maxSQL := fmt.Sprintf(
+			"select cast(coalesce(max(case when %s > 0 then %s else 0 end), 0) as unsigned) from %s",
+			colIdent,
+			colIdent,
+			tableIdent,
+		)
+		result, err = c.runSqlWithResultAndOptions(
+			maxSQL,
+			account,
+			executor.StatementOption{}.WithDisableLog(),
+		)
+		if err != nil {
+			result.Close()
+			return state, err
+		}
+		func() {
+			defer result.Close()
+			result.ReadRows(func(rows int, cols []*vector.Vector) bool {
+				if rows > 0 && len(cols) > 0 && !cols[0].IsNull(0) {
+					state.MaxValues[key] = executor.GetFixedRows[uint64](cols[0])[0]
+				}
+				return false
+			})
+		}()
+	}
+	return state, nil
+}
+
+// mapCloneAutoIncrColumns translates source catalog indexes to destination
+// column names. ALTER COPY can reorder or rename columns while retaining their
+// planner column IDs, so source indexes must not be used as destination indexes.
+func mapCloneAutoIncrColumns(src, dst *plan.TableDef, sameColumnIDSpace bool) map[int32]string {
+	result := make(map[int32]string)
+	if src == nil || dst == nil {
+		return result
+	}
+
+	srcIDCounts := make(map[uint64]int, len(src.Cols))
+	dstByID := make(map[uint64][]*plan.ColDef, len(dst.Cols))
+	dstByName := make(map[string]*plan.ColDef, len(dst.Cols))
+	for _, col := range src.Cols {
+		srcIDCounts[col.ColId]++
+	}
+	for _, col := range dst.Cols {
+		dstByID[col.ColId] = append(dstByID[col.ColId], col)
+		dstByName[strings.ToLower(col.Name)] = col
+	}
+
+	for idx, srcCol := range src.Cols {
+		if !srcCol.Typ.AutoIncr {
+			continue
+		}
+		var dstCol *plan.ColDef
+		if sameColumnIDSpace && srcIDCounts[srcCol.ColId] == 1 {
+			if len(dstByID[srcCol.ColId]) == 1 {
+				dstCol = dstByID[srcCol.ColId][0]
+			} else {
+				// The source column was dropped. A new column reusing its name
+				// must not inherit the old allocator.
+				continue
+			}
+		} else {
+			// Fresh CREATE plans use a different column-ID coordinate system,
+			// so the cloned name is the stable identity.
+			dstCol = dstByName[strings.ToLower(srcCol.Name)]
+		}
+		if dstCol != nil && dstCol.Typ.AutoIncr {
+			result[int32(idx)] = strings.ToLower(dstCol.Name)
+		}
+	}
+	return result
 }

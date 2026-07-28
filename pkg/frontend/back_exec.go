@@ -395,6 +395,7 @@ func doComQueryInBack(
 		getPu(backSes.GetService()).GetTaskService())
 	proc.Base.Id = backSes.getNextProcessId()
 	proc.Base.Lim.Size = pu.SV.ProcessLimitationSize
+	proc.Base.Lim.SpillSize = pu.SV.ProcessLimitationSpillSize
 	proc.Base.Lim.BatchRows = pu.SV.ProcessLimitationBatchRows
 	proc.Base.Lim.MaxMsgSize = pu.SV.MaxMessageSize
 	proc.Base.Lim.PartitionRows = pu.SV.ProcessLimitationPartitionRows
@@ -997,6 +998,7 @@ type backSession struct {
 	parentBackSession               *backSession
 	effectiveMatrixOneNativeMode    bool
 	hasEffectiveMatrixOneNativeMode bool
+	forcePessimisticRC              bool
 	// lastAffectedRows carries the previous statement's ROW_COUNT() value into
 	// the next process created by this background executor.
 	lastAffectedRows int64
@@ -1225,8 +1227,8 @@ func (backSes *backSession) GetLastInsertID() uint64 {
 func (backSes *backSession) SetShowStmtType(statement ShowStatementType) {
 }
 
-func (backSes *backSession) RemovePrepareStmt(name string) {
-
+func (backSes *backSession) RemovePrepareStmt(name string) bool {
+	return false
 }
 
 func (backSes *backSession) CountPayload(i int) {

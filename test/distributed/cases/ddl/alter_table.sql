@@ -241,7 +241,7 @@ drop table if exists t6;
 create table t6(a int not null);
 insert into t6 values(1),(2);
 select * from t6;
-alter table t6 add column b timestamp not null;
+alter table t6 add column b timestamp not null default '2000-01-01 00:00:00';
 select * from t6;
 alter table t6 add column c time not null;
 select * from t6;

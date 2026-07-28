@@ -1047,6 +1047,8 @@ func (sb *segmentBuilder) observe(pkBytes []byte) {
 		sb.curMin = pk
 		sb.curMax = pk
 		sb.curCount = 1
+		sb.gapSum = 0
+		sb.gapCount = 0
 		return
 	}
 

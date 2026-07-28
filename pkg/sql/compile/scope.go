@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"errors"
 	"net"
 	"slices"
 	"strconv"
@@ -38,11 +39,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/filter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/window"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	metricv2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -94,12 +97,106 @@ func (s *Scope) release() {
 }
 
 func (s *Scope) Reset(c *Compile) error {
+	rejectZeroTemporal, err := util.RejectZeroTemporalWritePolicy(c.proc)
+	if err != nil {
+		return err
+	}
+	return s.reset(c, rejectZeroTemporal)
+}
+
+func (s *Scope) reset(c *Compile, rejectZeroTemporal bool) error {
+	if err := refreshZeroTemporalWritePolicy(s.RootOp, rejectZeroTemporal); err != nil {
+		return err
+	}
 	err := s.resetForReuse(c)
 	if err != nil {
 		return err
 	}
 	for _, scope := range s.PreScopes {
-		if err = scope.Reset(c); err != nil {
+		if err = scope.reset(c, rejectZeroTemporal); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+type zeroTemporalWritePolicySetter interface {
+	SetRejectZeroTemporal(bool)
+}
+
+func refreshZeroTemporalWritePolicy(root vm.Operator, reject bool) error {
+	if root == nil {
+		return nil
+	}
+	return vm.HandleAllOp(root, func(_ vm.Operator, op vm.Operator) error {
+		if setter, ok := op.(zeroTemporalWritePolicySetter); ok {
+			setter.SetRejectZeroTemporal(reject)
+		}
+		return nil
+	})
+}
+
+func refreshGroupConcatMaxLen(scopes []*Scope, proc *process.Process) error {
+	var maxLen uint64
+	resolved := false
+	visited := make(map[*Scope]struct{})
+
+	var refreshScope func(*Scope) error
+	refreshScope = func(scope *Scope) error {
+		if scope == nil {
+			return nil
+		}
+		if _, ok := visited[scope]; ok {
+			return nil
+		}
+		visited[scope] = struct{}{}
+
+		if err := vm.HandleAllOp(scope.RootOp, func(_ vm.Operator, op vm.Operator) error {
+			var aggs []aggexec.AggFuncExecExpression
+			switch arg := op.(type) {
+			case *group.Group:
+				aggs = arg.Aggs
+			case *group.MergeGroup:
+				aggs = arg.Aggs
+			case *window.Window:
+				aggs = arg.Aggs
+			}
+
+			for i := range aggs {
+				if aggs[i].GetAggID() != aggexec.AggIdOfGroupConcat {
+					continue
+				}
+				if !resolved {
+					value, err := resolveVariableOrDefault(proc, "group_concat_max_len", true, false)
+					if err != nil {
+						return err
+					}
+					sessionMaxLen, ok := value.(int64)
+					if !ok || sessionMaxLen < 0 {
+						return moerr.NewInternalErrorNoCtxf(
+							"group_concat_max_len has invalid value %v", value)
+					}
+					maxLen = uint64(sessionMaxLen)
+					resolved = true
+				}
+				aggs[i].SetExtraConfig(aggexec.RefreshGroupConcatConfigMaxLen(
+					aggs[i].GetExtraConfig(), maxLen))
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+
+		for _, preScope := range scope.PreScopes {
+			if err := refreshScope(preScope); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	for _, scope := range scopes {
+		if err := refreshScope(scope); err != nil {
 			return err
 		}
 	}
@@ -976,7 +1073,7 @@ func (s *Scope) sendNotifyMessageWithFactoryAndWait(
 ) {
 	// if context has done, it means the user or other part of the pipeline stops this query.
 	closeWithError := func(err error, reg *process.WaitRegister, sender *messageSenderOnClient) {
-		err = suppressRemoteRunCancelError(s.Proc.Ctx, err)
+		err = suppressRemoteNotifyCancelError(s.Proc.Ctx, err)
 		s.cancelMergeSiblingsOnError(err)
 		sendRemoteNotifyCleanupTerminal(s.Proc, reg, err)
 		resultChan <- notifyMessageResult{err: err, sender: sender}
@@ -1108,6 +1205,17 @@ func logRemoteNotifyCleanupSendFailure(
 }
 
 func suppressRemoteRunCancelError(procCtx context.Context, err error) error {
+	if err == nil {
+		return nil
+	}
+	if procCtx != nil && procCtx.Err() != nil &&
+		(moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted) || errors.Is(err, context.Canceled)) {
+		return nil
+	}
+	return err
+}
+
+func suppressRemoteNotifyCancelError(procCtx context.Context, err error) error {
 	if err == nil {
 		return nil
 	}

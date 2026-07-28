@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -23,7 +24,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	catalogplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/catalog"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -57,8 +61,93 @@ func convertDBEOBToNoSuchTable(ctx context.Context, e error, dbName, tblName str
 	return e
 }
 
+type alterCopyAutoIncrementCleanup struct {
+	c        *Compile
+	tableIDs []uint64
+	tracked  map[uint64]struct{}
+}
+
+func newAlterCopyAutoIncrementCleanup(c *Compile) *alterCopyAutoIncrementCleanup {
+	return &alterCopyAutoIncrementCleanup{
+		c:       c,
+		tracked: make(map[uint64]struct{}),
+	}
+}
+
+func (cleanup *alterCopyAutoIncrementCleanup) track(tableID uint64) {
+	if _, ok := cleanup.tracked[tableID]; ok {
+		return
+	}
+	cleanup.tracked[tableID] = struct{}{}
+	cleanup.tableIDs = append(cleanup.tableIDs, tableID)
+}
+
+func (cleanup *alterCopyAutoIncrementCleanup) finish(statementErr *error) {
+	if *statementErr == nil && cleanup.c.proc.Ctx != nil {
+		*statementErr = cleanup.c.proc.Ctx.Err()
+	}
+	if *statementErr == nil || len(cleanup.tableIDs) == 0 {
+		return
+	}
+
+	ctx := cleanup.c.proc.Ctx
+	if ctx == nil {
+		ctx = context.Background()
+	} else {
+		ctx = context.WithoutCancel(ctx)
+	}
+	svc := incrservice.GetAutoIncrementService(cleanup.c.proc.GetService())
+	var cleanupErr error
+	for _, tableID := range cleanup.tableIDs {
+		cleanupErr = errors.Join(
+			cleanupErr,
+			svc.DiscardOffsetReset(ctx, tableID, cleanup.c.proc.GetTxnOperator()),
+		)
+	}
+	if cleanupErr == nil {
+		return
+	}
+	if _, ok := (*statementErr).(*moerr.Error); ok {
+		cleanup.c.proc.Error(
+			ctx,
+			"alter.table.copy.discard.auto.increment.reset",
+			zap.Error(cleanupErr),
+		)
+		return
+	}
+	*statementErr = errors.Join(*statementErr, cleanupErr)
+}
+
 func shouldEnableAlterCopyPipelineFlush(opt *plan.AlterCopyOpt) bool {
 	return opt != nil && opt.SkipPkDedup
+}
+
+func isAlterAffectedPluginIndex(indexDef *plan.IndexDef, affected []string) bool {
+	if indexDef == nil || len(affected) == 0 {
+		return false
+	}
+	if slices.Contains(affected, indexDef.IndexName) {
+		return true
+	}
+	for _, part := range indexDef.Parts {
+		if isAlterAffectedColumnName(affected, part) {
+			return true
+		}
+	}
+	for _, col := range indexDef.IncludedColumns {
+		if isAlterAffectedColumnName(affected, col) {
+			return true
+		}
+	}
+	return false
+}
+
+func isAlterAffectedColumnName(affected []string, name string) bool {
+	if slices.Contains(affected, name) {
+		return true
+	}
+	resolved := catalog.ResolveAlias(name)
+	return resolved != name && slices.Contains(affected, resolved)
 }
 
 func alterCopyStatementOption(alterOpt *plan.AlterCopyOpt) executor.StatementOption {
@@ -273,7 +362,10 @@ func (c *Compile) precheckAlterCopyPkDedup(dbName, tblName string, qry *plan.Alt
 	return opt, nil
 }
 
-func (s *Scope) AlterTableCopy(c *Compile) error {
+func (s *Scope) AlterTableCopy(c *Compile) (err error) {
+	cleanup := newAlterCopyAutoIncrementCleanup(c)
+	defer cleanup.finish(&err)
+
 	qry := s.Plan.GetDdl().GetAlterTable()
 	dbName := qry.Database
 
@@ -447,6 +539,15 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 			zap.Error(err))
 		return err
 	}
+	if err = c.reconcileAlterCopyAutoIncrement(
+		dbName,
+		qry.TableDef,
+		qry.CopyTableDef,
+		newRel,
+		cleanup,
+	); err != nil {
+		return err
+	}
 
 	//6. copy on writing unaffected index table
 	if err = cloneUnaffectedIndexes(
@@ -505,17 +606,6 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 		extra := newRel.GetExtraInfo()
 		id := newRel.GetTableID(c.proc.Ctx)
 
-		isAffectedIndex := func(indexDef *plan.IndexDef, affectedCols []string) bool {
-			affected := false
-			for _, part := range indexDef.Parts {
-				if slices.Index(affectedCols, part) != -1 {
-					affected = true
-					break
-				}
-			}
-			return affected
-		}
-
 		// cctx for the idxcron re-registration arm below — lazy-init,
 		// reused across loop iterations.
 		var idxcronCctx *pluginCompileCtx
@@ -529,7 +619,7 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 			if !indexDef.Unique && indexplugin.IsPluginAlgo(indexDef.IndexAlgo) {
 				// vector (ivf/hnsw/cagra/ivfpq) or fulltext index
 
-				if !isAffectedIndex(indexDef, qry.AffectedCols) {
+				if !isAlterAffectedPluginIndex(indexDef, qry.AffectedCols) {
 					// column not affected means index already cloned in cloneUnaffectedIndexes()
 
 					if unaffectedIndexProcessed[indexDef.IndexName] {
@@ -699,6 +789,112 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 			zap.Uint64("copy table id", newId),
 			zap.Error(err))
 		return err
+	}
+	return nil
+}
+
+// reconcileAlterCopyAutoIncrement publishes allocator state for the temporary
+// table only after copied rows are visible in the ALTER transaction. Retained
+// source columns are matched by stable planner column ID, never by position or
+// a reused name.
+func (c *Compile) reconcileAlterCopyAutoIncrement(
+	dbName string,
+	srcDef *plan.TableDef,
+	copyDef *plan.TableDef,
+	newRel engine.Relation,
+	cleanup *alterCopyAutoIncrementCleanup,
+) error {
+	if err := c.proc.Ctx.Err(); err != nil {
+		return err
+	}
+	autoCols := incrservice.GetUserAutoColumnFromDef(copyDef)
+	if len(autoCols) == 0 {
+		return nil
+	}
+
+	sourceOffsets := make(map[string]uint64)
+	sourceNames := mapCloneAutoIncrColumns(srcDef, copyDef, true)
+	if len(sourceNames) > 0 {
+		sql := fmt.Sprintf(
+			"select col_index, offset from mo_catalog.mo_increment_columns where table_id = %d",
+			srcDef.TblId,
+		)
+		result, err := c.runSqlWithResultAndOptions(
+			sql,
+			NoAccountId,
+			executor.StatementOption{}.WithDisableLog(),
+		)
+		if err != nil {
+			result.Close()
+			return err
+		}
+		func() {
+			defer result.Close()
+			result.ReadRows(func(rows int, cols []*vector.Vector) bool {
+				colIndexes := vector.MustFixedColWithTypeCheck[int32](cols[0])
+				offsets := vector.MustFixedColWithTypeCheck[uint64](cols[1])
+				for i := 0; i < rows; i++ {
+					if name, ok := sourceNames[colIndexes[i]]; ok {
+						sourceOffsets[name] = offsets[i]
+					}
+				}
+				return true
+			})
+		}()
+	}
+
+	tableID := newRel.GetTableID(c.proc.Ctx)
+	svc := incrservice.GetAutoIncrementService(c.proc.GetService())
+	for _, col := range autoCols {
+		if err := c.proc.Ctx.Err(); err != nil {
+			return err
+		}
+		colIdent := quoteAlterCopyIdentifier(col.ColName)
+		maxSQL := fmt.Sprintf(
+			"select cast(coalesce(max(case when %s > 0 then %s else 0 end), 0) as unsigned) from %s",
+			colIdent,
+			colIdent,
+			quoteAlterCopyTableName(dbName, copyDef.Name),
+		)
+		result, err := c.runSqlWithResultAndOptions(
+			maxSQL,
+			NoAccountId,
+			executor.StatementOption{}.WithDisableLog(),
+		)
+		if err != nil {
+			result.Close()
+			return err
+		}
+		var copiedMax uint64
+		func() {
+			defer result.Close()
+			result.ReadRows(func(rows int, cols []*vector.Vector) bool {
+				if rows > 0 && len(cols) > 0 && !cols[0].IsNull(0) {
+					copiedMax = executor.GetFixedRows[uint64](cols[0])[0]
+				}
+				return false
+			})
+		}()
+
+		name := strings.ToLower(col.ColName)
+		effectiveOffset := max(copyDef.AutoIncrOffset, copiedMax, sourceOffsets[name])
+		if err := incrservice.ValidateAutoColumnOffset(
+			c.proc.Ctx,
+			types.T(copyDef.Cols[col.ColIndex].Typ.Id),
+			effectiveOffset,
+		); err != nil {
+			return err
+		}
+		if err := svc.SetOffset(
+			c.proc.Ctx,
+			tableID,
+			col.ColName,
+			effectiveOffset,
+			c.proc.GetTxnOperator(),
+		); err != nil {
+			return err
+		}
+		cleanup.track(tableID)
 	}
 	return nil
 }
@@ -1073,7 +1269,8 @@ func cloneUnaffectedIndexes(
 		// However, fulltext/hnsw/ivfflat index name is user-defined which is not related to column name so
 		// SkipIndexesCopy will always be true in these cases (UnAffectedIndex==true).
 		// Even SkipIndexesCopy is true, it does not mean it is really unaffected Index for fulltext/hnsw/ivfflat index.
-		// check the Parts to determine affected or not.  If unaffected index, try clone.  Otherwise, re-build the index
+		// check the plan-carried affected index name, Parts, and included columns to determine affected or not.
+		// If unaffected index, try clone.  Otherwise, re-build the index
 		if !skipIndexesCopy[idxTbl.IndexName] {
 			// This index is affected index, skip it
 			continue
@@ -1085,15 +1282,7 @@ func cloneUnaffectedIndexes(
 
 		affected := false
 		if !idxTbl.Unique && indexplugin.IsPluginAlgo(idxTbl.IndexAlgo) {
-			// only check parts for fulltext + vector (ivf/hnsw/cagra/ivfpq)
-
-			for _, part := range idxTbl.Parts {
-				if slices.Index(affectedCols, part) != -1 {
-					affected = true
-					break
-
-				}
-			}
+			affected = isAlterAffectedPluginIndex(idxTbl, affectedCols)
 		}
 
 		if affected {

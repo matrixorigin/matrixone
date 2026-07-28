@@ -89,6 +89,15 @@ func TestNew_MyErrorCode(t *testing.T) {
 
 	err = NewOutOfRange(context.TODO(), "int8", "1111")
 	require.Equal(t, ER_DATA_OUT_OF_RANGE, err.MySQLCode())
+
+	err = NewUnknownStmtHandler(context.TODO(), "stmt1", "DEALLOCATE PREPARE")
+	require.Equal(t, ErrUnknownStmtHandler, err.ErrorCode())
+	require.Equal(t, ER_UNKNOWN_STMT_HANDLER, err.MySQLCode())
+	require.Equal(t, MySQLDefaultSqlState, err.SqlState())
+	require.Equal(t,
+		"Unknown prepared statement handler (stmt1) given to DEALLOCATE PREPARE",
+		err.Error(),
+	)
 }
 
 func TestLockWaitTimeoutMySQLError(t *testing.T) {
@@ -101,6 +110,16 @@ func TestLockWaitTimeoutMySQLError(t *testing.T) {
 	noCtxErr := NewLockWaitTimeoutNoCtx()
 	require.Equal(t, ErrLockWaitTimeout, noCtxErr.ErrorCode())
 	require.Equal(t, ER_LOCK_WAIT_TIMEOUT, noCtxErr.MySQLCode())
+}
+
+func TestMaxPreparedStmtCountReachedMySQLError(t *testing.T) {
+	err := NewMaxPreparedStmtCountReached(context.Background(), 2)
+	require.Equal(t, ErrMaxPreparedStmtCountReached, err.ErrorCode())
+	require.Equal(t, ER_MAX_PREPARED_STMT_COUNT_REACHED, err.MySQLCode())
+	require.Equal(t, "42000", err.SqlState())
+	require.Equal(t,
+		"Can't create more than max_prepared_stmt_count statements (current value: 2)",
+		err.Error())
 }
 
 func TestIsMoErrCode(t *testing.T) {
@@ -278,4 +297,23 @@ func Test_ForCoverage(t *testing.T) {
 
 	err = NewTxnStaleNoCtxf("test")
 	require.True(t, IsMoErrCode(err, ErrTxnStale))
+}
+
+// TestNewErrCastWidthExceeded verifies the cast width-violation error carries the
+// ErrCastWidthExceeded code and maps to MySQL ER_DATA_TOO_LONG (1406) — the
+// correct protocol code for an over-length write. The message template is bare
+// "%s" (no "internal error:" prefix); the JDBC driver then wraps it as
+// java.sql.DataTruncation, which the BVT result files reflect.
+func TestNewErrCastWidthExceeded(t *testing.T) {
+	ctx := context.Background()
+	err := NewErrCastWidthExceeded(ctx, "Can't cast 'abcd' to VARCHAR type. Src length 4 is larger than Dest length 3")
+
+	require.Equal(t, ErrCastWidthExceeded, err.ErrorCode())
+	require.Equal(t, uint16(ER_DATA_TOO_LONG), err.MySQLCode())
+	require.Equal(t, "22001", err.SqlState())
+	require.True(t, IsMoErrCode(err, ErrCastWidthExceeded))
+	// Bare "%s" template: the diagnostic message is carried verbatim.
+	require.Equal(t,
+		"Can't cast 'abcd' to VARCHAR type. Src length 4 is larger than Dest length 3",
+		err.Error())
 }

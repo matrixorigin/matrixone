@@ -86,6 +86,10 @@ type container struct {
 
 	nextLeft  types.Datetime
 	nextRight types.Datetime
+	// zeroWindow marks the dedicated bucket for MySQL's 0000-00-00 temporal
+	// sentinel. It must not enter regular modulo/arithmetic window math, where
+	// its internal value (-1) would alias the valid 0001-01-01 epoch (0).
+	zeroWindow bool
 
 	withoutFill bool
 
@@ -295,6 +299,7 @@ func (ctr *container) resetParam(timeWin *TimeWin) {
 	ctr.right = 0
 	ctr.nextLeft = 0
 	ctr.nextRight = 0
+	ctr.zeroWindow = false
 	ctr.withoutFill = false
 	ctr.last = false
 	ctr.lastVal = 0

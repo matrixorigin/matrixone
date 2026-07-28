@@ -381,6 +381,13 @@ func TestCoverage_taskObserver(t *testing.T) {
 		f: func() { called = true },
 	}
 	obs.OnExecDone(nil)
+	assert.False(t, called)
+	obs.OnExecDone(nil)
+	assert.False(t, called)
+	obs.Admit()
+	assert.True(t, called)
+	obs.Admit()
+	obs.OnExecDone(nil)
 	assert.True(t, called)
 }
 

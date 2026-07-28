@@ -35,6 +35,7 @@ type GetParamRule struct {
 	paramTypes        []int32
 	schemas           []*plan.ObjectRef
 	indexDependencies []prepareIndexDependency
+	exprMemo          map[*plan.Expr]*plan.Expr
 }
 
 type prepareIndexDependency struct {
@@ -51,17 +52,14 @@ func NewGetParamRule() *GetParamRule {
 }
 
 func (rule *GetParamRule) MatchNode(node *Node) bool {
-	if node.NodeType == plan.Node_TABLE_SCAN || node.NodeType == plan.Node_INSERT {
-		rule.schemas = append(rule.schemas, &plan.ObjectRef{
-			Server:     int64(node.TableDef.Version), //we use this unused field to store table's version
-			Db:         int64(node.TableDef.DbId),
-			Schema:     int64(node.TableDef.DbId),
-			Obj:        node.ObjRef.Obj,
-			ServerName: node.ObjRef.ServerName,
-			DbName:     node.ObjRef.DbName,
-			SchemaName: node.ObjRef.SchemaName,
-			ObjName:    node.ObjRef.ObjName,
-		})
+	if node.NodeType == plan.Node_TABLE_SCAN ||
+		node.NodeType == plan.Node_EXTERNAL_SCAN ||
+		node.NodeType == plan.Node_SOURCE_SCAN ||
+		node.NodeType == plan.Node_INSERT {
+		if node.ObjRef != nil && node.TableDef != nil {
+			rule.schemas = append(rule.schemas, prepareSchemaRefWithSnapshot(
+				node.ObjRef, node.TableDef, node.ScanSnapshot))
+		}
 		if node.NodeType == plan.Node_TABLE_SCAN && node.ObjRef != nil && node.TableDef != nil {
 			for _, indexDef := range node.TableDef.Indexes {
 				if indexplugin.IsPluginAlgo(indexDef.IndexAlgo) && indexDef.IndexTableName != "" {
@@ -75,16 +73,7 @@ func (rule *GetParamRule) MatchNode(node *Node) bool {
 		}
 	} else if node.NodeType == plan.Node_MULTI_UPDATE {
 		for _, updateCtx := range node.UpdateCtxList {
-			rule.schemas = append(rule.schemas, &plan.ObjectRef{
-				Server:     int64(updateCtx.TableDef.Version), //we use this unused field to store table's version
-				Db:         int64(updateCtx.TableDef.DbId),
-				Schema:     int64(updateCtx.TableDef.DbId),
-				Obj:        updateCtx.ObjRef.Obj,
-				ServerName: updateCtx.ObjRef.ServerName,
-				DbName:     updateCtx.ObjRef.DbName,
-				SchemaName: updateCtx.ObjRef.SchemaName,
-				ObjName:    updateCtx.ObjRef.ObjName,
-			})
+			rule.schemas = append(rule.schemas, prepareSchemaRef(updateCtx.ObjRef, updateCtx.TableDef))
 		}
 	}
 	return false
@@ -99,12 +88,32 @@ func (rule *GetParamRule) ApplyNode(node *Node) error {
 }
 
 func (rule *GetParamRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
+	if e == nil {
+		return nil, nil
+	}
+	if rewritten, ok := rule.exprMemo[e]; ok {
+		return rewritten, nil
+	}
+	rewritten, err := rule.applyExpr(e)
+	if err != nil {
+		return nil, err
+	}
+	if rule.exprMemo == nil {
+		rule.exprMemo = make(map[*plan.Expr]*plan.Expr)
+	}
+	rule.exprMemo[e] = rewritten
+	return rewritten, nil
+}
+
+func (rule *GetParamRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 	switch exprImpl := e.Expr.(type) {
 	case *plan.Expr_F:
 		for i := range exprImpl.F.Args {
 			exprImpl.F.Args[i], _ = rule.ApplyExpr(exprImpl.F.Args[i])
 		}
 		return e, nil
+	case *plan.Expr_W:
+		return applyWindowExpr(e, rule.ApplyExpr)
 	case *plan.Expr_P:
 		pos := int(exprImpl.P.Pos)
 		rule.params[pos] = 0
@@ -144,7 +153,8 @@ func (rule *GetParamRule) SetParamOrder() {
 // ---------------------------
 
 type ResetParamOrderRule struct {
-	params map[int]int
+	params   map[int]int
+	exprMemo map[*plan.Expr]*plan.Expr
 }
 
 func NewResetParamOrderRule(params map[int]int) *ResetParamOrderRule {
@@ -166,12 +176,32 @@ func (rule *ResetParamOrderRule) ApplyNode(node *Node) error {
 }
 
 func (rule *ResetParamOrderRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
+	if e == nil {
+		return nil, nil
+	}
+	if rewritten, ok := rule.exprMemo[e]; ok {
+		return rewritten, nil
+	}
+	rewritten, err := rule.applyExpr(e)
+	if err != nil {
+		return nil, err
+	}
+	if rule.exprMemo == nil {
+		rule.exprMemo = make(map[*plan.Expr]*plan.Expr)
+	}
+	rule.exprMemo[e] = rewritten
+	return rewritten, nil
+}
+
+func (rule *ResetParamOrderRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 	switch exprImpl := e.Expr.(type) {
 	case *plan.Expr_F:
 		for i := range exprImpl.F.Args {
 			exprImpl.F.Args[i], _ = rule.ApplyExpr(exprImpl.F.Args[i])
 		}
 		return e, nil
+	case *plan.Expr_W:
+		return applyWindowExpr(e, rule.ApplyExpr)
 	case *plan.Expr_P:
 		exprImpl.P.Pos = int32(rule.params[int(exprImpl.P.Pos)])
 		return e, nil
@@ -188,8 +218,9 @@ func (rule *ResetParamOrderRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
 // ---------------------------
 
 type ResetParamRefRule struct {
-	ctx    context.Context
-	params []*Expr
+	ctx      context.Context
+	params   []*Expr
+	exprMemo map[*plan.Expr]*plan.Expr
 }
 
 func NewResetParamRefRule(ctx context.Context, params []*Expr) *ResetParamRefRule {
@@ -212,6 +243,24 @@ func (rule *ResetParamRefRule) ApplyNode(node *Node) error {
 }
 
 func (rule *ResetParamRefRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
+	if e == nil {
+		return nil, nil
+	}
+	if rewritten, ok := rule.exprMemo[e]; ok {
+		return rewritten, nil
+	}
+	rewritten, err := rule.applyExpr(e)
+	if err != nil {
+		return nil, err
+	}
+	if rule.exprMemo == nil {
+		rule.exprMemo = make(map[*plan.Expr]*plan.Expr)
+	}
+	rule.exprMemo[e] = rewritten
+	return rewritten, nil
+}
+
+func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 	var err error
 	switch exprImpl := e.Expr.(type) {
 	case *plan.Expr_F:
@@ -231,6 +280,8 @@ func (rule *ResetParamRefRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
 			return BindFuncExprImplByPlanExpr(rule.ctx, exprImpl.F.Func.GetObjName(), exprImpl.F.Args)
 		}
 		return e, nil
+	case *plan.Expr_W:
+		return applyWindowExpr(e, rule.ApplyExpr)
 	case *plan.Expr_P:
 		if int(exprImpl.P.Pos) >= len(rule.params) {
 			return nil, moerr.NewInternalErrorf(context.TODO(), "get prepare params error, index %d not exists", int(exprImpl.P.Pos))
@@ -250,4 +301,49 @@ func (rule *ResetParamRefRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
 	default:
 		return e, nil
 	}
+}
+
+func applyWindowExpr(e *plan.Expr, apply func(*plan.Expr) (*plan.Expr, error)) (*plan.Expr, error) {
+	w := e.GetW()
+	if w == nil {
+		return e, nil
+	}
+
+	var err error
+	if w.WindowFunc != nil {
+		w.WindowFunc, err = apply(w.WindowFunc)
+		if err != nil {
+			return nil, err
+		}
+	}
+	for i := range w.PartitionBy {
+		w.PartitionBy[i], err = apply(w.PartitionBy[i])
+		if err != nil {
+			return nil, err
+		}
+	}
+	for i := range w.OrderBy {
+		if w.OrderBy[i] == nil || w.OrderBy[i].Expr == nil {
+			continue
+		}
+		w.OrderBy[i].Expr, err = apply(w.OrderBy[i].Expr)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if w.Frame != nil {
+		if w.Frame.Start != nil && w.Frame.Start.Val != nil {
+			w.Frame.Start.Val, err = apply(w.Frame.Start.Val)
+			if err != nil {
+				return nil, err
+			}
+		}
+		if w.Frame.End != nil && w.Frame.End.Val != nil {
+			w.Frame.End.Val, err = apply(w.Frame.End.Val)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+	return e, nil
 }

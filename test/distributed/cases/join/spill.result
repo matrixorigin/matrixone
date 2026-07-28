@@ -203,6 +203,34 @@ select count(*) from t2 right join t1 on t1.c1=t2.c1;
 select count(*) from t1, t2 where t1.c1=t2.c1 and t1.c2=t2.c2;
 ➤ count(*)[-5,64,0]  𝄀
 4000000
+set @@max_dop = 1;
+explain (check '["Join Type: MARK", "shuffle"]')
+select sum(case when marker is true then 1 else 0 end) as true_count,
+sum(case when marker is false then 1 else 0 end) as false_count,
+sum(case when marker is null then 1 else 0 end) as null_count
+from (
+select t1.c1 in (select c1 from t2) as marker
+from t1
+) s;
+➤ AP QUERY PLAN ON MULTICN(32 core)[12,0,0]  𝄀
+Project  𝄀
+  ->  Aggregate  𝄀
+        Aggregate Functions: sum(CASE WHEN (#[0,0] IS TRUE) THEN 1 ELSE 0 END), sum(CASE WHEN (#[0,0] IS FALSE) THEN 1 ELSE 0 END), sum(CASE WHEN (#[0,0] IS NULL) THEN 1 ELSE 0 END)  𝄀
+        ->  Join  𝄀
+              Join Type: MARK  𝄀
+              Join Cond: (t1.c1 = t2.c1) shuffle: range(t1.c1)  𝄀
+              ->  Table Scan on d1.t1  𝄀
+              ->  Table Scan on d1.t2
+select sum(case when marker is true then 1 else 0 end) as true_count,
+sum(case when marker is false then 1 else 0 end) as false_count,
+sum(case when marker is null then 1 else 0 end) as null_count
+from (
+select t1.c1 in (select c1 from t2) as marker
+from t1
+) s;
+➤ true_count[3,38,0]  ¦  false_count[3,38,0]  ¦  null_count[3,38,0]  𝄀
+4000000  ¦  1000000  ¦  0
+set @@max_dop = 0;
 create table t3(c1 int not null, c2 int not null)cluster by c1;
 insert into t3 select *,* from generate_series(1,1000000)g;
 select mo_ctl('dn', 'flush', 'd1.t3');
@@ -310,7 +338,7 @@ insert into t_dedup_spill select *, 0 from generate_series(200000, 600000) g
 on duplicate key update val = val + 1;
 select count(*) from t_dedup_spill;
 ➤ count(*)[-5,64,0]  𝄀
-600001
+600000
 drop table if exists t_dedup_spill;
 drop database if exists d1;
 drop database if exists test;
