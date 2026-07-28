@@ -316,6 +316,9 @@ type PrepareStmt struct {
 	// tempTableVersion is the session temporary-table mapping version used to
 	// build PreparePlan and compile.
 	tempTableVersion uint64
+	// protocolVersion is the cluster protocol used to build PreparePlan.
+	// A version change can alter internal function IDs in generated DML plans.
+	protocolVersion int64
 
 	// schedulingSQLMode freezes the lexical mode used when Sql was prepared.
 	// EXECUTE must not reinterpret optimizer comments after session sql_mode
