@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -956,4 +957,139 @@ func TestPauseFencesResumeWaitingForPreviousStartAttempt(t *testing.T) {
 	case <-time.After(25 * time.Millisecond):
 	}
 	require.Equal(t, StatePaused, exec.stateMachine.State())
+}
+
+func newCDCExecutorForLifecycleTest(taskID string, startFunc func(context.Context) error) *CDCTaskExecutor {
+	return &CDCTaskExecutor{
+		activeRoutine: cdc.NewCdcActiveRoutine(),
+		spec: &task.CreateCdcDetails{
+			TaskId:   taskID,
+			TaskName: taskID,
+			Accounts: []*task.Account{{Id: 1}},
+		},
+		ie:           &captureExecContextIE{},
+		stateMachine: NewExecutorStateMachine(),
+		holdCh:       make(chan int, 1),
+		startFunc:    startFunc,
+	}
+}
+
+func TestResumeReplacementStopsWithExecutorLifecycle(t *testing.T) {
+	rootCtx, cancelRoot := context.WithCancel(context.Background())
+	t.Cleanup(cancelRoot)
+	started := make(chan struct{})
+	stopped := make(chan error, 1)
+	exec := newCDCExecutorForLifecycleTest(
+		"resume-runner-lifecycle",
+		func(ctx context.Context) error {
+			close(started)
+			<-ctx.Done()
+			stopped <- ctx.Err()
+			return ctx.Err()
+		},
+	)
+	exec.bindLifecycleContext(rootCtx)
+	require.NoError(t, exec.stateMachine.Transition(TransitionStart))
+	require.NoError(t, exec.stateMachine.Transition(TransitionStartSuccess))
+	require.NoError(t, exec.stateMachine.Transition(TransitionPause))
+	require.NoError(t, exec.stateMachine.Transition(TransitionPauseComplete))
+
+	require.NoError(t, exec.Resume())
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("resume replacement did not start")
+	}
+
+	cancelRoot()
+	select {
+	case err := <-stopped:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("resume replacement outlived executor lifecycle cancellation")
+	}
+	require.Eventually(t, func() bool { return exec.activeStart() == nil }, time.Second, time.Millisecond)
+}
+
+func TestExecutorLifecycleDoesNotInheritStartAttemptValues(t *testing.T) {
+	exec := &CDCTaskExecutor{}
+	rootCtx := taskservice.WithRestartAdmission(context.Background())
+
+	exec.bindLifecycleContext(rootCtx)
+	require.False(t, taskservice.IsRestartAdmission(exec.replacementStartContext()))
+}
+
+func TestResumeWaitForPreviousAttemptStopsWithExecutorLifecycle(t *testing.T) {
+	rootCtx, cancelRoot := context.WithCancel(context.Background())
+	t.Cleanup(cancelRoot)
+	started := make(chan struct{}, 1)
+	exec := newCDCExecutorForLifecycleTest(
+		"resume-wait-runner-lifecycle",
+		func(context.Context) error {
+			started <- struct{}{}
+			return nil
+		},
+	)
+	exec.bindLifecycleContext(rootCtx)
+	require.NoError(t, exec.stateMachine.Transition(TransitionStart))
+	require.NoError(t, exec.stateMachine.Transition(TransitionStartSuccess))
+	require.NoError(t, exec.stateMachine.Transition(TransitionPause))
+	require.NoError(t, exec.stateMachine.Transition(TransitionPauseComplete))
+
+	_, previous := newCDCStartAttempt(context.Background(), exec.callbackGeneration.Load())
+	require.True(t, exec.installStartAttempt(previous))
+	require.NoError(t, exec.Resume())
+	cancelRoot()
+
+	select {
+	case <-started:
+		t.Fatal("replacement start ran after executor lifecycle ended")
+	case <-time.After(25 * time.Millisecond):
+	}
+	require.Same(t, previous, exec.activeStart())
+
+	exec.finishStartAttempt(previous)
+	select {
+	case <-started:
+		t.Fatal("replacement start ran after the previous attempt exited")
+	case <-time.After(25 * time.Millisecond):
+	}
+	require.Nil(t, exec.activeStart())
+}
+
+func TestRestartReplacementStopsWithExecutorLifecycle(t *testing.T) {
+	rootCtx, cancelRoot := context.WithCancel(context.Background())
+	t.Cleanup(cancelRoot)
+	started := make(chan struct{})
+	exec := newCDCExecutorForLifecycleTest(
+		"restart-runner-lifecycle",
+		func(ctx context.Context) error {
+			close(started)
+			<-ctx.Done()
+			return ctx.Err()
+		},
+	)
+	exec.restartStartupTimeout = time.Second
+	exec.bindLifecycleContext(rootCtx)
+	require.NoError(t, exec.stateMachine.Transition(TransitionStart))
+	require.NoError(t, exec.stateMachine.Transition(TransitionStartSuccess))
+
+	restartDone := make(chan error, 1)
+	go func() {
+		restartDone <- exec.Restart()
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("restart replacement did not start")
+	}
+
+	cancelRoot()
+	select {
+	case err := <-restartDone:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("restart replacement waited for its timeout after executor lifecycle cancellation")
+	}
+	require.Eventually(t, func() bool { return exec.activeStart() == nil }, time.Second, time.Millisecond)
 }

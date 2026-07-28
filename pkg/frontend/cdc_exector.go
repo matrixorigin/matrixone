@@ -108,10 +108,19 @@ func CDCTaskExecutorFactory(
 		// by the Start attempt that just timed out.
 		exec.restartCatalogExecutorFactory = sqlExecutorFactory
 		exec.setActiveRoutine(cdc.NewCdcActiveRoutine())
+		// Bind replacement generations to the task-runner lifecycle before
+		// publishing the ActiveRoutine. Resume/Restart can then never detach a
+		// replacement Start from runner/CN shutdown.
+		exec.bindLifecycleContext(ctx)
 		if err = attachToTask(ctx, spec.GetID(), exec); err != nil {
+			exec.cancelLifecycleContext()
 			return err
 		}
-		return exec.Start(ctx)
+		if err = exec.Start(ctx); err != nil {
+			exec.cancelLifecycleContext()
+			return err
+		}
+		return nil
 	}
 }
 
@@ -162,6 +171,10 @@ type CDCTaskExecutor struct {
 	restartCatalogExecutorFactory func() ie.InternalExecutor
 	startAttemptMu                sync.Mutex
 	activeStartAttempt            *cdcStartAttempt
+	lifecycleMu                   sync.RWMutex
+	lifecycleCtx                  context.Context
+	lifecycleCancel               context.CancelFunc
+	lifecycleRootStop             func() bool
 	// restartStartupTimeout is test-only when non-zero. Production keeps the
 	// historical four-second admission bound.
 	restartStartupTimeout time.Duration
@@ -202,6 +215,48 @@ func newCDCStartAttempt(ctx context.Context, generation uint64) (context.Context
 		done:       make(chan struct{}),
 	}
 	return context.WithValue(ctx, cdcStartAttemptContextKey{}, attempt), attempt
+}
+
+// bindLifecycleContext captures only the cancellation lifetime of the
+// task-runner context. Replacement attempts must inherit runner/CN shutdown,
+// but must not inherit attempt-specific values such as a fresh-takeover
+// restart admission marker.
+func (exec *CDCTaskExecutor) bindLifecycleContext(rootCtx context.Context) {
+	exec.lifecycleMu.Lock()
+	defer exec.lifecycleMu.Unlock()
+	if exec.lifecycleCtx != nil {
+		return
+	}
+	if rootCtx == nil {
+		rootCtx = context.Background()
+	}
+	exec.lifecycleCtx, exec.lifecycleCancel = context.WithCancel(context.Background())
+	exec.lifecycleRootStop = context.AfterFunc(rootCtx, exec.lifecycleCancel)
+}
+
+func (exec *CDCTaskExecutor) replacementStartContext() context.Context {
+	exec.lifecycleMu.RLock()
+	defer exec.lifecycleMu.RUnlock()
+	if exec.lifecycleCtx == nil {
+		// Direct unit construction predates lifecycle binding. Production binds
+		// before ActiveRoutine publication, and Start binds as a safety net.
+		return context.Background()
+	}
+	return exec.lifecycleCtx
+}
+
+func (exec *CDCTaskExecutor) cancelLifecycleContext() {
+	exec.lifecycleMu.Lock()
+	cancel := exec.lifecycleCancel
+	stop := exec.lifecycleRootStop
+	exec.lifecycleRootStop = nil
+	exec.lifecycleMu.Unlock()
+	if stop != nil {
+		stop()
+	}
+	if cancel != nil {
+		cancel()
+	}
 }
 
 func cdcStartAttemptFromContext(ctx context.Context) *cdcStartAttempt {
@@ -441,6 +496,9 @@ func NewCDCTaskExecutor(
 }
 
 func (exec *CDCTaskExecutor) Start(rootCtx context.Context) (err error) {
+	// Factory binding closes the attach-before-start publication window.
+	// Retain this fallback for direct callers and tests.
+	exec.bindLifecycleContext(rootCtx)
 	attempt := cdcStartAttemptFromContext(rootCtx)
 	if attempt == nil {
 		rootCtx, attempt, err = exec.beginImplicitStartAttempt(rootCtx)
@@ -745,14 +803,19 @@ func (exec *CDCTaskExecutor) Resume() error {
 		// Pause releases Start through holdCh, but its goroutine can still be
 		// unwinding while Resume returns. Preserve the same resource-ownership
 		// rule as Restart: do not replace activeRoutine until that Start exits.
+		lifecycleCtx := exec.replacementStartContext()
 		if previous := exec.activeStart(); previous != nil {
-			<-previous.done
+			select {
+			case <-previous.done:
+			case <-lifecycleCtx.Done():
+				return
+			}
 		}
 		if !exec.isCurrentCallbackGeneration(generation) {
 			return
 		}
 
-		startCtx, attempt := newCDCStartAttempt(context.Background(), generation)
+		startCtx, attempt := newCDCStartAttempt(lifecycleCtx, generation)
 		if !exec.installStartAttempt(attempt) {
 			// A concurrent lifecycle operation owns the newer generation. Its
 			// own result is authoritative; this stale resume must stay silent.
@@ -907,7 +970,7 @@ func (exec *CDCTaskExecutor) Restart() error {
 		return exec.restartFields(zap.String("state", exec.stateMachine.State().String()))
 	})
 
-	startCtx, attempt := newCDCStartAttempt(context.Background(), generation)
+	startCtx, attempt := newCDCStartAttempt(exec.replacementStartContext(), generation)
 	if !exec.installStartAttempt(attempt) {
 		return moerr.NewInternalErrorNoCtx("CDC restart found an active startup after drain")
 	}
@@ -1089,6 +1152,7 @@ func (exec *CDCTaskExecutor) Cancel() error {
 	// before cancellation completes so it cannot install a new routine after we
 	// have reached Cancelled.
 	exec.callbackGeneration.Add(1)
+	exec.cancelLifecycleContext()
 	exec.recordLeavingFailedMetrics(stateBeforeCancel, StateCancelling)
 
 	// FIX: Unmark task as paused to prevent pausedTasks leakage
