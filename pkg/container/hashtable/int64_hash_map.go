@@ -242,10 +242,15 @@ func (ht *Int64HashMap) PlanResize(cnt uint64) ResizePlan {
 }
 
 func (ht *Int64HashMap) ResizeOnDemand(cnt int) error {
-	if cnt <= 0 {
+	additional := uint64(cnt)
+	if !resizeNeeded(ht.elemCnt, additional, ht.cellCnt, intCellSize) {
 		return nil
 	}
-	return ht.ResizeWithPlan(ht.PlanResize(uint64(cnt)))
+	return ht.resizeOnDemand(additional)
+}
+
+func (ht *Int64HashMap) resizeOnDemand(additional uint64) error {
+	return ht.ResizeWithPlan(ht.PlanResize(additional))
 }
 
 // ResizeWithPlan applies a previously computed plan transactionally.

@@ -39,6 +39,7 @@ execute s2 using @a;
 a    b
 deallocate prepare s2;
 deallocate prepare s2;
+Unknown prepared statement handler (s2) given to DEALLOCATE PREPARE
 show databases like 'mysql';
 Database
 mysql

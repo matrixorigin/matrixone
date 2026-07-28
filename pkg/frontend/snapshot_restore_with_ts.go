@@ -689,6 +689,10 @@ func restoreViewsFromTS(
 
 		g.addVertex(key)
 		for _, depView := range compCtx.GetViews() {
+			depView, err = normalizeViewDependencyKey(depView)
+			if err != nil {
+				return err
+			}
 			g.addEdge(depView, key)
 		}
 	}

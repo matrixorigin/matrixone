@@ -1488,6 +1488,10 @@ func sortedViewInfos(
 
 		g.addVertex(key)
 		for _, depView := range compCtx.GetViews() {
+			depView, err = normalizeViewDependencyKey(depView)
+			if err != nil {
+				return nil, err
+			}
 			g.addEdge(depView, key)
 		}
 	}
@@ -2132,7 +2136,8 @@ func getCreateTableSql(
 
 	newCtx := ctx
 
-	sql := fmt.Sprintf("show create table `%s`.`%s`", dbName, tblName)
+	sql := fmt.Sprintf("show create table %s.%s",
+		quoteIdentifierForSQL(dbName), quoteIdentifierForSQL(tblName))
 	if snapshot != nil {
 		if snapshot.TS != nil {
 			sql += fmt.Sprintf(" {MO_TS = %d}", snapshot.TS.PhysicalTime)

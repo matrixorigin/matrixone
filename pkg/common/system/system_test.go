@@ -55,6 +55,12 @@ func TestMinHierarchicalCgroupLimit(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(child, "memory.max"), []byte("max\n"), 0o600))
 	require.Equal(t, uint64(2<<30), minHierarchicalLimit(child, root, "memory.max"))
 
+	// A non-PID-1 process may remain in the same nested cgroup while its
+	// ancestor limit is lowered. Re-reading the hierarchy must observe the
+	// lower limit instead of retaining a process-start snapshot.
+	require.NoError(t, os.WriteFile(filepath.Join(parent, "memory.max"), []byte("1073741824\n"), 0o600))
+	require.Equal(t, uint64(1<<30), minHierarchicalLimit(child, root, "memory.max"))
+
 	dir, ok := cgroupDirectory(root, "/tenant", "/tenant/query")
 	require.True(t, ok)
 	require.Equal(t, filepath.Join(root, "query"), dir)
