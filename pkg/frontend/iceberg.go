@@ -478,11 +478,5 @@ func ensureIcebergFeatureEnabledForSession(ctx context.Context, ses interface {
 }
 
 func icebergParameterUnitForService(service string) *moconfig.ParameterUnit {
-	vars := getServerLevelVars(service)
-	if vars == nil {
-		return nil
-	}
-	value := vars.Pu.Load()
-	pu, _ := value.(*moconfig.ParameterUnit)
-	return pu
+	return getPuIfPresent(service)
 }
