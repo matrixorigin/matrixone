@@ -471,6 +471,32 @@ func TestDebugLogFor19288(t *testing.T) {
 	}
 }
 
+func TestPreferPrimaryScopeError(t *testing.T) {
+	cleanupErr := process.ErrPipelineEndSignalDeliveryFailed
+	executionErr := moerr.NewDuplicateEntryNoCtx("1000000", "")
+	queryInterrupted := moerr.NewQueryInterrupted(context.Background())
+
+	tests := []struct {
+		name      string
+		current   error
+		candidate error
+		want      error
+	}{
+		{name: "first error", candidate: cleanupErr, want: cleanupErr},
+		{name: "execution error replaces cleanup fallback", current: cleanupErr, candidate: executionErr, want: executionErr},
+		{name: "cleanup fallback does not replace execution error", current: executionErr, candidate: cleanupErr, want: executionErr},
+		{name: "canceled sibling is secondary", current: cleanupErr, candidate: context.Canceled, want: cleanupErr},
+		{name: "interrupted sibling is secondary", current: cleanupErr, candidate: queryInterrupted, want: cleanupErr},
+		{name: "first substantive error remains", current: executionErr, candidate: moerr.NewInternalErrorNoCtx("later"), want: executionErr},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Same(t, tt.want, preferPrimaryScopeError(tt.current, tt.candidate))
+		})
+	}
+}
+
 func TestLockMeta_doLock(t *testing.T) {
 	lm := &LockMeta{
 		database_table_id: 11230,

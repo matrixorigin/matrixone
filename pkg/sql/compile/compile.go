@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"slices"
@@ -464,6 +465,26 @@ func (c *Compile) isRetryErr(err error) bool {
 		c.proc.GetTxnOperator().Txn().IsRCIsolation()
 }
 
+// preferPrimaryScopeError keeps cleanup fallout from masking the execution
+// error that caused another scope to stop consuming its pipeline input.
+func preferPrimaryScopeError(current, candidate error) error {
+	if current == nil {
+		return candidate
+	}
+	if candidate == nil ||
+		!errors.Is(current, process.ErrPipelineEndSignalDeliveryFailed) ||
+		errors.Is(candidate, process.ErrPipelineEndSignalDeliveryFailed) {
+		return current
+	}
+	// A canceled sibling is an expected consequence after runOnce selects its
+	// first error; it does not prove that the cleanup fallback was secondary.
+	if errors.Is(candidate, context.Canceled) ||
+		moerr.IsMoErrCode(candidate, moerr.ErrQueryInterrupted) {
+		return current
+	}
+	return candidate
+}
+
 func (c *Compile) canRetry(err error) bool {
 	if c.disableRetry {
 		return false
@@ -600,7 +621,6 @@ func (c *Compile) runOnce() (err error) {
 
 			// cancel this query if the first error occurs.
 			if e != nil && errToThrowOut == nil {
-				errToThrowOut = e
 
 				// cancel all scope tree.
 				for j := range c.scopes {
@@ -609,6 +629,7 @@ func (c *Compile) runOnce() (err error) {
 					}
 				}
 			}
+			errToThrowOut = preferPrimaryScopeError(errToThrowOut, e)
 
 			// if any error already return is retryable, we should throw this one
 			// to make sure query will retry.
