@@ -823,7 +823,10 @@ func TestPositionFunctionExplain(t *testing.T) {
 
 func TestExplainOrderedGroupConcat(t *testing.T) {
 	fn := &plan2.Function{
-		Func: &plan2.ObjectRef{ObjName: "group_concat"},
+		Func: &plan2.ObjectRef{
+			ObjName: "group_concat",
+			Obj:     function.DistinctMask,
+		},
 		Args: []*plan2.Expr{
 			{
 				Typ:  plan2.Type{Id: int32(types.T_varchar)},
@@ -849,7 +852,7 @@ func TestExplainOrderedGroupConcat(t *testing.T) {
 	if err != nil {
 		t.Fatalf("explainOrderedGroupConcat() error = %v", err)
 	}
-	const want = "group_concat(tw.v ORDER BY tw.k DESC NULLS FIRST SEPARATOR '~')"
+	const want = "group_concat(DISTINCT tw.v ORDER BY tw.k DESC NULLS FIRST SEPARATOR '~')"
 	if got := buf.String(); got != want {
 		t.Fatalf("explainOrderedGroupConcat() = %q, want %q", got, want)
 	}

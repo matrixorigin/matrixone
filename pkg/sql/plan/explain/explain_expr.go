@@ -479,16 +479,25 @@ func explainOrderedGroupConcat(
 	options *ExplainOptions,
 	buf *bytes.Buffer,
 ) error {
-	concatArgCount, orderFlags, separator, err := decodeGroupConcatOrderConfig(funcExpr.AggConfig)
+	concatArgCount, orderArgIndexes, orderFlags, separator, err :=
+		decodeGroupConcatOrderConfig(funcExpr.AggConfig)
 	if err != nil {
 		return err
 	}
-	if concatArgCount < 1 || concatArgCount+len(orderFlags) != len(funcExpr.Args) {
+	if concatArgCount < 1 || len(orderArgIndexes) != len(orderFlags) {
 		return moerr.NewInvalidInput(ctx, "invalid group_concat order config")
+	}
+	for _, index := range orderArgIndexes {
+		if int(index) >= len(funcExpr.Args) {
+			return moerr.NewInvalidInput(ctx, "invalid group_concat order argument index")
+		}
 	}
 
 	buf.WriteString(funcExpr.Func.GetObjName())
 	buf.WriteString("(")
+	if funcExpr.Func.Obj&function.DistinctMask != 0 {
+		buf.WriteString("DISTINCT ")
+	}
 	for i := 0; i < concatArgCount; i++ {
 		if i > 0 {
 			buf.WriteString(", ")
@@ -502,7 +511,7 @@ func explainOrderedGroupConcat(
 		if i > 0 {
 			buf.WriteString(", ")
 		}
-		if err = describeExpr(ctx, funcExpr.Args[concatArgCount+i], options, buf); err != nil {
+		if err = describeExpr(ctx, funcExpr.Args[orderArgIndexes[i]], options, buf); err != nil {
 			return err
 		}
 		flag := plan.OrderBySpec_OrderByFlag(flagByte)
@@ -523,13 +532,12 @@ func explainOrderedGroupConcat(
 	return nil
 }
 
-func decodeGroupConcatOrderConfig(config []byte) (int, []byte, string, error) {
+func decodeGroupConcatOrderConfig(config []byte) (int, []uint32, []byte, string, error) {
 	const (
-		version        = byte(1)
 		fixedFieldSize = 4
 	)
-	if len(config) < 1+3*fixedFieldSize || config[0] != version {
-		return 0, nil, "", moerr.NewInvalidInputNoCtx("invalid group_concat order config")
+	if len(config) < 1+3*fixedFieldSize || (config[0] != 1 && config[0] != 2) {
+		return 0, nil, nil, "", moerr.NewInvalidInputNoCtx("invalid group_concat order config")
 	}
 	offset := 1
 	concatArgCount := int(binary.BigEndian.Uint32(config[offset : offset+fixedFieldSize]))
@@ -537,7 +545,7 @@ func decodeGroupConcatOrderConfig(config []byte) (int, []byte, string, error) {
 	orderArgCount := int(binary.BigEndian.Uint32(config[offset : offset+fixedFieldSize]))
 	offset += fixedFieldSize
 	if orderArgCount < 1 || orderArgCount > len(config)-offset-fixedFieldSize {
-		return 0, nil, "", moerr.NewInvalidInputNoCtx("invalid group_concat order config")
+		return 0, nil, nil, "", moerr.NewInvalidInputNoCtx("invalid group_concat order config")
 	}
 	orderFlags := config[offset : offset+orderArgCount]
 	const validFlags = byte(plan.OrderBySpec_ASC | plan.OrderBySpec_DESC |
@@ -546,14 +554,28 @@ func decodeGroupConcatOrderConfig(config []byte) (int, []byte, string, error) {
 		if flag&^validFlags != 0 ||
 			flag&byte(plan.OrderBySpec_ASC) != 0 && flag&byte(plan.OrderBySpec_DESC) != 0 ||
 			flag&byte(plan.OrderBySpec_NULLS_FIRST) != 0 && flag&byte(plan.OrderBySpec_NULLS_LAST) != 0 {
-			return 0, nil, "", moerr.NewInvalidInputNoCtx("invalid group_concat order flag")
+			return 0, nil, nil, "", moerr.NewInvalidInputNoCtx("invalid group_concat order flag")
 		}
 	}
 	offset += orderArgCount
+	orderArgIndexes := make([]uint32, orderArgCount)
+	if config[0] == 1 {
+		for i := range orderArgIndexes {
+			orderArgIndexes[i] = uint32(concatArgCount + i)
+		}
+	} else {
+		if orderArgCount > (len(config)-offset-fixedFieldSize)/fixedFieldSize {
+			return 0, nil, nil, "", moerr.NewInvalidInputNoCtx("invalid group_concat order config")
+		}
+		for i := range orderArgIndexes {
+			orderArgIndexes[i] = binary.BigEndian.Uint32(config[offset : offset+fixedFieldSize])
+			offset += fixedFieldSize
+		}
+	}
 	separatorLen := int(binary.BigEndian.Uint32(config[offset : offset+fixedFieldSize]))
 	offset += fixedFieldSize
 	if separatorLen != len(config)-offset {
-		return 0, nil, "", moerr.NewInvalidInputNoCtx("invalid group_concat order config")
+		return 0, nil, nil, "", moerr.NewInvalidInputNoCtx("invalid group_concat order config")
 	}
-	return concatArgCount, orderFlags, string(config[offset:]), nil
+	return concatArgCount, orderArgIndexes, orderFlags, string(config[offset:]), nil
 }

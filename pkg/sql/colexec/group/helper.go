@@ -45,7 +45,7 @@ type ResHashRelated struct {
 }
 
 func (group *Group) configureH0OrderedAggSpill(proc *process.Process) {
-	if group.ctr.mtyp != H0 || !group.NeedEval {
+	if !group.NeedEval {
 		return
 	}
 	for _, agg := range group.ctr.aggList {
@@ -64,9 +64,10 @@ func (group *Group) configureH0OrderedAggSpill(proc *process.Process) {
 					fmt.Sprintf("group_concat_run_%s", id.String()),
 				)
 			},
-			func(bytes, rows int64) {
+			func(bytes, rows, retainedMemory int64) {
 				group.OpAnalyzer.Spill(bytes)
 				group.OpAnalyzer.SpillRows(rows)
+				group.OpAnalyzer.SetMemUsed(max(group.ctr.memUsed(), retainedMemory))
 			},
 		)
 	}
@@ -747,6 +748,11 @@ func (ctr *container) outputOneBatchFinal(proc *process.Process, opAnalyzer proc
 
 func (ctr *container) memUsed() int64 {
 	sz := ctr.mp.CurrNB()
+	for _, agg := range ctr.aggList {
+		if heapSized, ok := agg.(interface{ AdditionalMemorySize() int64 }); ok {
+			sz += heapSized.AdditionalMemorySize()
+		}
+	}
 	return sz
 }
 

@@ -17,6 +17,7 @@ package plan
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"os"
 	"strings"
@@ -3702,6 +3703,31 @@ func TestGroupConcatRejectsOrderBySubquery(t *testing.T) {
 			require.Contains(t, err.Error(), "subquery in group_concat ORDER BY")
 		})
 	}
+}
+
+func TestGroupConcatOrdinalReusesArgument(t *testing.T) {
+	logicPlan, err := runOneStmt(
+		NewMockOptimizer(false),
+		t,
+		"SELECT GROUP_CONCAT(RAND() ORDER BY 1) FROM NATION",
+	)
+	require.NoError(t, err)
+
+	var fn *plan.Function
+	for _, node := range logicPlan.GetQuery().Nodes {
+		if node.NodeType == plan.Node_AGG && len(node.AggList) == 1 {
+			fn = node.AggList[0].GetF()
+			break
+		}
+	}
+	require.NotNil(t, fn)
+	require.Len(t, fn.Args, 1, "ORDER BY ordinal must not add a second RAND evaluator")
+	require.Equal(t, groupConcatOrderConfigVersion, fn.AggConfig[0])
+
+	pos := 1 + 4
+	require.Equal(t, uint32(1), binary.BigEndian.Uint32(fn.AggConfig[pos:pos+4]))
+	pos += 4 + 1
+	require.Equal(t, uint32(0), binary.BigEndian.Uint32(fn.AggConfig[pos:pos+4]))
 }
 
 func TestGroupConcatAcceptsConstantOrderExpressions(t *testing.T) {

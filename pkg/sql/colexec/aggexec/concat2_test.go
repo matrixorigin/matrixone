@@ -18,8 +18,10 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -68,7 +70,6 @@ func TestGroupConcatH0OrderedSpillAndCancellation(t *testing.T) {
 		[]uint64{1, 1, 1, 1},
 		[]*vector.Vector{values, orderKey},
 	))
-	require.NotEmpty(t, exec.h0SpillRuns)
 	result, err := exec.FlushWithContext(context.Background())
 	require.NoError(t, err)
 	require.Equal(t, "a|b|c|d", string(result[0].GetBytesAt(0)))
@@ -153,6 +154,8 @@ func TestGroupConcatH0SpillBoundaries(t *testing.T) {
 	key := vector.NewVec(types.T_int64.ToType())
 	require.NoError(t, vector.AppendFixed(key, int64(1), false, mp))
 	err = failing.BatchFill(0, []uint64{1}, []*vector.Vector{value, key})
+	require.NoError(t, err)
+	err = failing.spillOrderedState(context.Background())
 	require.ErrorIs(t, err, createErr)
 	value.Free(mp)
 	key.Free(mp)
@@ -167,19 +170,134 @@ func TestGroupConcatH0SpillBoundaries(t *testing.T) {
 	count.Free()
 }
 
+func TestGroupConcatGroupedDistinctSpillAndCancellation(t *testing.T) {
+	mp := mpool.MustNewZero()
+	info := multiAggInfo{
+		aggID:     97,
+		distinct:  true,
+		argTypes:  []types.Type{types.T_varchar.ToType(), types.T_varchar.ToType()},
+		retType:   types.T_text.ToType(),
+		emptyNull: true,
+	}
+	exec := newGroupConcatExec(mp, info, ",").(*groupConcatExec)
+	require.NoError(t, exec.SetExtraInformation(
+		testGroupConcatOrderConfig(1, []byte{groupConcatOrderAsc}, ","),
+		0,
+	))
+	require.NoError(t, exec.GroupGrow(2))
+	fileCreates := 0
+	ConfigureGroupConcatH0Spill(exec, 1, context.Background(), func() (*os.File, error) {
+		fileCreates++
+		file, err := os.CreateTemp(t.TempDir(), "group-concat-grouped-")
+		if err == nil {
+			err = os.Remove(file.Name())
+		}
+		return file, err
+	}, nil)
+
+	values := buildVarlenVec(t, mp, types.T_varchar.ToType(), []string{"a", "a", "b", "c"})
+	keys := buildVarlenVec(t, mp, types.T_varchar.ToType(), []string{
+		strings.Repeat("b", int(groupConcatMinRunSize)),
+		strings.Repeat("a", int(groupConcatMinRunSize)),
+		strings.Repeat("c", int(groupConcatMinRunSize)),
+		strings.Repeat("a", int(groupConcatMinRunSize)),
+	})
+	require.NoError(t, exec.BatchFill(
+		0,
+		[]uint64{1, 1, 1, 2},
+		[]*vector.Vector{values, keys},
+	))
+	require.Equal(t, 1, fileCreates)
+	require.NotEmpty(t, exec.orderedSpillRuns[0])
+	require.NotEmpty(t, exec.orderedSpillRuns[1])
+
+	result, err := exec.FlushWithContext(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, "a,b", string(result[0].GetBytesAt(0)))
+	require.Equal(t, "c", string(result[0].GetBytesAt(1)))
+	result[0].Free(mp)
+	values.Free(mp)
+	keys.Free(mp)
+	exec.Free()
+
+	cancelExec := newGroupConcatExec(mp, info, ",").(*groupConcatExec)
+	require.NoError(t, cancelExec.SetExtraInformation(
+		testGroupConcatOrderConfig(1, []byte{groupConcatOrderAsc}, ","),
+		0,
+	))
+	require.NoError(t, cancelExec.GroupGrow(1))
+	value := buildVarlenVec(t, mp, types.T_varchar.ToType(), []string{"x"})
+	key := buildVarlenVec(t, mp, types.T_varchar.ToType(), []string{"k"})
+	require.NoError(t, cancelExec.BatchFill(0, []uint64{1}, []*vector.Vector{value, key}))
+	ctx, cancel := context.WithCancelCause(context.Background())
+	cancel(errors.New("cancel grouped ordered flush"))
+	_, err = cancelExec.FlushWithContext(ctx)
+	require.ErrorContains(t, err, "cancel grouped ordered flush")
+	value.Free(mp)
+	key.Free(mp)
+	cancelExec.Free()
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestGroupConcatSpillCompactsFanIn(t *testing.T) {
+	mp := mpool.MustNewZero()
+	info := multiAggInfo{
+		aggID:     98,
+		argTypes:  []types.Type{types.T_varchar.ToType(), types.T_varchar.ToType()},
+		retType:   types.T_text.ToType(),
+		emptyNull: true,
+	}
+	exec := newGroupConcatExec(mp, info, ",").(*groupConcatExec)
+	require.NoError(t, exec.SetExtraInformation(
+		testGroupConcatOrderConfig(1, []byte{groupConcatOrderAsc}, ","),
+		0,
+	))
+	require.NoError(t, exec.GroupGrow(1))
+	fileCreates := 0
+	ConfigureGroupConcatH0Spill(exec, 1, context.Background(), func() (*os.File, error) {
+		fileCreates++
+		file, err := os.CreateTemp(t.TempDir(), "group-concat-fanin-")
+		if err == nil {
+			err = os.Remove(file.Name())
+		}
+		return file, err
+	}, nil)
+
+	want := make([]string, groupConcatMergeFanIn+1)
+	for i := range want {
+		want[i] = fmt.Sprintf("%02d", i)
+		entry := groupConcatOrderedEntry{
+			concatPayload: appendPayloadField(nil, []byte(want[i]), false),
+			orderPayload:  appendPayloadField(nil, []byte(want[i]), false),
+		}
+		require.NoError(t, exec.writeOrderedRun(context.Background(), 0, []groupConcatOrderedEntry{entry}))
+	}
+	require.Len(t, exec.orderedSpillRuns[0], groupConcatMergeFanIn+1)
+	result, err := exec.FlushWithContext(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, strings.Join(want, ","), string(result[0].GetBytesAt(0)))
+	require.LessOrEqual(t, len(exec.orderedSpillRuns[0]), groupConcatMergeFanIn)
+	require.Equal(t, 1, fileCreates)
+	result[0].Free(mp)
+	exec.Free()
+	require.Zero(t, mp.CurrNB())
+}
+
 func TestReadGroupConcatRunEntryRejectsTruncatedData(t *testing.T) {
 	file, err := os.CreateTemp(t.TempDir(), "group-concat-corrupt-")
 	require.NoError(t, err)
 	defer file.Close()
 
-	_, err = readGroupConcatRunEntry(file)
+	run := groupConcatSpillRun{}
+	_, err = readGroupConcatRunEntry(file, &run)
 	require.NoError(t, err)
 
 	_, err = file.Write([]byte{0, 0})
 	require.NoError(t, err)
 	_, err = file.Seek(0, io.SeekStart)
 	require.NoError(t, err)
-	_, err = readGroupConcatRunEntry(file)
+	run = groupConcatSpillRun{end: 2}
+	_, err = readGroupConcatRunEntry(file, &run)
 	require.ErrorIs(t, err, io.ErrUnexpectedEOF)
 
 	require.NoError(t, file.Truncate(0))
@@ -189,7 +307,8 @@ func TestReadGroupConcatRunEntryRejectsTruncatedData(t *testing.T) {
 	require.NoError(t, err)
 	_, err = file.Seek(0, io.SeekStart)
 	require.NoError(t, err)
-	_, err = readGroupConcatRunEntry(file)
+	run = groupConcatSpillRun{end: 7}
+	_, err = readGroupConcatRunEntry(file, &run)
 	require.ErrorContains(t, err, "invalid group_concat ordered payload")
 }
 
@@ -720,13 +839,13 @@ func TestGroupConcatOrderedPayloadValidation(t *testing.T) {
 		))
 
 		entries := []groupConcatOrderedEntry{{orderPayload: []byte{1, 0}}}
-		_, err := exec.restoreOrderVectors(entries)
+		_, err := exec.restoreOrderVectors(context.Background(), entries)
 		require.Error(t, err)
 		require.Zero(t, mp.CurrNB())
 
 		badFixedField := appendPayloadField(nil, []byte{1}, false)
 		entries[0].orderPayload = badFixedField
-		_, err = exec.restoreOrderVectors(entries)
+		_, err = exec.restoreOrderVectors(context.Background(), entries)
 		require.Error(t, err)
 		require.Zero(t, mp.CurrNB())
 		exec.Free()
@@ -739,7 +858,7 @@ func testGroupConcatOrderConfig(
 	separator string,
 ) AggregateConfig {
 	separatorBytes := []byte(separator)
-	config := make([]byte, 0, 13+len(orderFlags)+len(separatorBytes))
+	config := make([]byte, 0, 13+5*len(orderFlags)+len(separatorBytes))
 	config = append(config, groupConcatOrderConfigVersion)
 
 	var encodedUint32 [4]byte
@@ -748,6 +867,10 @@ func testGroupConcatOrderConfig(
 	binary.BigEndian.PutUint32(encodedUint32[:], uint32(len(orderFlags)))
 	config = append(config, encodedUint32[:]...)
 	config = append(config, orderFlags...)
+	for i := range orderFlags {
+		binary.BigEndian.PutUint32(encodedUint32[:], uint32(concatArgCount+i))
+		config = append(config, encodedUint32[:]...)
+	}
 	binary.BigEndian.PutUint32(encodedUint32[:], uint32(len(separatorBytes)))
 	config = append(config, encodedUint32[:]...)
 	config = append(config, separatorBytes...)

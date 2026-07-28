@@ -58,7 +58,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func TestIsH0OrderedGroupConcat(t *testing.T) {
+func TestHasOrderedGroupConcat(t *testing.T) {
 	ordered := &plan.Node{
 		AggList: []*plan.Expr{{
 			Expr: &plan.Expr_F{F: &plan.Function{
@@ -67,13 +67,13 @@ func TestIsH0OrderedGroupConcat(t *testing.T) {
 			}},
 		}},
 	}
-	require.True(t, isH0OrderedGroupConcat(ordered))
+	require.True(t, hasOrderedGroupConcat(ordered))
 
 	ordered.GroupBy = []*plan.Expr{{}}
-	require.False(t, isH0OrderedGroupConcat(ordered))
+	require.True(t, hasOrderedGroupConcat(ordered))
 	ordered.GroupBy = nil
 	ordered.AggList[0].GetF().AggConfigType = plan.AggregateConfigType_AGG_CONFIG_NONE
-	require.False(t, isH0OrderedGroupConcat(ordered))
+	require.False(t, hasOrderedGroupConcat(ordered))
 }
 
 func TestCompileRunPreservesBinaryPrepareParamAcrossRetries(t *testing.T) {

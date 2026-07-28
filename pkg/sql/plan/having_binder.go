@@ -339,7 +339,7 @@ func isCountFuncExpr(astExpr tree.Expr) bool {
 	return ok && strings.EqualFold(funcRef.ColName(), "count")
 }
 
-const groupConcatOrderConfigVersion = byte(1)
+const groupConcatOrderConfigVersion = byte(2)
 
 func (b *HavingBinder) bindGroupConcatOrderBy(
 	astExpr *tree.FuncExpr,
@@ -366,8 +366,10 @@ func (b *HavingBinder) bindGroupConcatOrderBy(
 
 	orderExprs := make([]*plan.Expr, 0, len(astExpr.OrderBy))
 	orderFlags := make([]byte, 0, len(astExpr.OrderBy))
+	orderArgIndexes := make([]uint32, 0, len(astExpr.OrderBy))
 	for _, order := range astExpr.OrderBy {
 		orderExpr := order.Expr
+		orderArgIndex := -1
 		if numVal, ok := order.Expr.(*tree.NumVal); ok {
 			switch numVal.Kind() {
 			case tree.Int:
@@ -382,6 +384,7 @@ func (b *HavingBinder) bindGroupConcatOrderBy(
 					return moerr.NewSyntaxErrorf(b.GetContext(), "ORDER BY position %v is not in group_concat arguments", colPos)
 				}
 				orderExpr = astExpr.Exprs[colPos-1]
+				orderArgIndex = int(colPos - 1)
 			}
 		}
 
@@ -389,12 +392,21 @@ func (b *HavingBinder) bindGroupConcatOrderBy(
 			return moerr.NewNotSupported(b.GetContext(), "subquery in group_concat ORDER BY")
 		}
 
-		oldInsideAgg := b.insideAgg
-		b.insideAgg = true
-		boundExpr, err := b.BindExpr(orderExpr, depth, isRoot)
-		b.insideAgg = oldInsideAgg
-		if err != nil {
-			return err
+		var boundExpr *plan.Expr
+		if orderArgIndex >= 0 {
+			// Reuse the already-bound aggregate argument. Rebinding an ordinal
+			// expression such as RAND() would evaluate it a second time and sort
+			// by values different from those being concatenated.
+			boundExpr = fn.Args[orderArgIndex]
+		} else {
+			oldInsideAgg := b.insideAgg
+			b.insideAgg = true
+			var err error
+			boundExpr, err = b.BindExpr(orderExpr, depth, isRoot)
+			b.insideAgg = oldInsideAgg
+			if err != nil {
+				return err
+			}
 		}
 		if hasSubquery(boundExpr) {
 			return moerr.NewNotSupported(b.GetContext(), "subquery in group_concat ORDER BY")
@@ -406,7 +418,13 @@ func (b *HavingBinder) bindGroupConcatOrderBy(
 		}
 		// ENUM/SET values are exposed through display conversion functions, but
 		// ORDER BY must use their internal ordinal/bitmap representation.
-		boundExpr = groupConcatOrderKey(boundExpr)
+		orderKey := groupConcatOrderKey(boundExpr)
+		if orderKey != boundExpr {
+			// ENUM/SET display arguments cannot be reused because their ORDER
+			// BY semantics use the internal index/bitmap value.
+			orderArgIndex = -1
+		}
+		boundExpr = orderKey
 		if !mosort.IsSupportedType(types.T(boundExpr.Typ.Id)) {
 			return moerr.NewNotSupportedf(
 				b.GetContext(),
@@ -432,16 +450,21 @@ func (b *HavingBinder) bindGroupConcatOrderBy(
 			orderBy.Flag |= plan.OrderBySpec_NULLS_LAST
 		}
 
-		orderExprs = append(orderExprs, boundExpr)
 		orderFlags = append(orderFlags, byte(orderBy.Flag))
+		if orderArgIndex < 0 {
+			orderExprs = append(orderExprs, boundExpr)
+			orderArgIndex = concatArgCount + len(orderExprs) - 1
+		}
+		orderArgIndexes = append(orderArgIndexes, uint32(orderArgIndex))
 	}
-	if len(orderExprs) == 0 {
+	if len(orderFlags) == 0 {
 		return nil
 	}
 
 	config := encodeGroupConcatOrderConfig(
 		concatArgCount,
 		orderFlags,
+		orderArgIndexes,
 		separatorLiteral.GetSval(),
 	)
 	args := make([]*plan.Expr, 0, concatArgCount+len(orderExprs))
@@ -461,9 +484,14 @@ func groupConcatOrderKey(expr *plan.Expr) *plan.Expr {
 	return expr
 }
 
-func encodeGroupConcatOrderConfig(concatArgCount int, orderFlags []byte, separator string) []byte {
+func encodeGroupConcatOrderConfig(
+	concatArgCount int,
+	orderFlags []byte,
+	orderArgIndexes []uint32,
+	separator string,
+) []byte {
 	separatorBytes := []byte(separator)
-	config := make([]byte, 0, 13+len(orderFlags)+len(separatorBytes))
+	config := make([]byte, 0, 13+len(orderFlags)+4*len(orderArgIndexes)+len(separatorBytes))
 	config = append(config, groupConcatOrderConfigVersion)
 
 	var encodedUint32 [4]byte
@@ -472,6 +500,10 @@ func encodeGroupConcatOrderConfig(concatArgCount int, orderFlags []byte, separat
 	binary.BigEndian.PutUint32(encodedUint32[:], uint32(len(orderFlags)))
 	config = append(config, encodedUint32[:]...)
 	config = append(config, orderFlags...)
+	for _, index := range orderArgIndexes {
+		binary.BigEndian.PutUint32(encodedUint32[:], index)
+		config = append(config, encodedUint32[:]...)
+	}
 	binary.BigEndian.PutUint32(encodedUint32[:], uint32(len(separatorBytes)))
 	config = append(config, encodedUint32[:]...)
 	config = append(config, separatorBytes...)
