@@ -1921,13 +1921,22 @@ func (m *mysqlTaskStorage) UpdateCDCTask(
 				return 0, err
 			}
 			if dTask.TaskStatus != targetStatus {
-				logutil.Info("cdc.task.state.transition",
-					zap.String("task-name", details.CreateCdc.TaskName),
-					zap.Uint64("task-id", dTask.ID),
-					zap.Uint64("account-id", uint64(dTask.AccountID)),
-					zap.String("from-status", dTask.TaskStatus.String()),
-					zap.String("to-status", targetStatus.String()),
-				)
+				if targetStatus == task.TaskStatus_RestartRequested {
+					eventCDCRestartRequestStateUpdated.InfoLazy(func() []zap.Field {
+						return cdcRestartEventFields(dTask,
+							zap.String("from-status", dTask.TaskStatus.String()),
+							zap.String("to-status", targetStatus.String()),
+						)
+					})
+				} else {
+					logutil.Info("cdc.task.state.transition",
+						zap.String("task-name", details.CreateCdc.TaskName),
+						zap.Uint64("task-id", dTask.ID),
+						zap.Uint64("account-id", uint64(dTask.AccountID)),
+						zap.String("from-status", dTask.TaskStatus.String()),
+						zap.String("to-status", targetStatus.String()),
+					)
+				}
 			}
 			dTask.TaskStatus = targetStatus
 			updateTasks = append(updateTasks, dTask)
