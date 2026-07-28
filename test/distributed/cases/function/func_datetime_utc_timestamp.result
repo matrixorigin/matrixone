@@ -36,7 +36,7 @@ desc v_utc_timestamp_fsp;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 value0  ¦  DATETIME(0)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 value3  ¦  DATETIME(0)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-value6  ¦  DATETIME(0)  ¦  NO  ¦    ¦  null  ¦    ¦  
+value6  ¦  DATETIME(0)  ¦  NO  ¦    ¦  null  ¦    ¦
 drop view v_utc_timestamp_fsp;
 drop table if exists utc_timestamp_fsp_arg;
 create table utc_timestamp_fsp_arg(fsp bigint);

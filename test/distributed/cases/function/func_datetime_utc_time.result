@@ -74,7 +74,7 @@ DESC v_utc_time_fsp;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 value0  ¦  TIME(0)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 value3  ¦  TIME(0)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-value6  ¦  TIME(0)  ¦  NO  ¦    ¦  null  ¦    ¦  
+value6  ¦  TIME(0)  ¦  NO  ¦    ¦  null  ¦    ¦
 DROP VIEW v_utc_time_fsp;
 DROP TABLE IF EXISTS utc_time_fsp_arg;
 CREATE TABLE utc_time_fsp_arg(fsp BIGINT);

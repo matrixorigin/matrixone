@@ -3536,10 +3536,12 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 
 	case "utc_time", "utc_timestamp":
 		// The overload receives only argument types, while the temporal result
-		// scale is determined by the literal FSP. Preserve it in the plan type so
-		// views and the MySQL protocol expose TIME/DATETIME(fsp) correctly.
+		// precision is determined by the literal FSP. Preserve it in the plan
+		// type's Width and Scale so views and the MySQL protocol expose
+		// TIME/DATETIME(fsp) correctly.
 		if len(args) == 1 {
 			fsp, _ := utcFunctionFSPFromPlanExpr(ctx, name, args[0])
+			returnType.Width = fsp
 			returnType.Scale = fsp
 		}
 

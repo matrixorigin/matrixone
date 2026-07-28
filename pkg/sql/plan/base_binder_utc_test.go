@@ -20,6 +20,8 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/stretchr/testify/require"
 )
 
@@ -45,6 +47,7 @@ func TestBindUTCFunctionReturnTypeScale(t *testing.T) {
 			expr, err := BindFuncExprImplByPlanExpr(ctx, test.function, []*Expr{makePlan2Int64ConstExprWithType(test.fsp)})
 			require.NoError(t, err)
 			require.Equal(t, int32(test.oid), expr.Typ.Id)
+			require.Equal(t, int32(test.fsp), expr.Typ.Width)
 			require.Equal(t, int32(test.fsp), expr.Typ.Scale)
 		})
 	}
@@ -61,6 +64,7 @@ func TestBindUTCFunctionReturnTypeScale(t *testing.T) {
 			expr, err := BindFuncExprImplByPlanExpr(ctx, test.function, nil)
 			require.NoError(t, err)
 			require.Equal(t, int32(test.oid), expr.Typ.Id)
+			require.Zero(t, expr.Typ.Width)
 			require.Zero(t, expr.Typ.Scale)
 		})
 	}
@@ -100,5 +104,41 @@ func TestBindUTCFunctionRejectsInvalidFractionalSecondPrecision(t *testing.T) {
 				require.ErrorContains(t, err, "integer literal between 0 and 6")
 			})
 		}
+	}
+}
+
+func TestBuildUTCFunctionReturnTypePrecision(t *testing.T) {
+	tests := []struct {
+		function string
+		oid      types.T
+	}{
+		{function: "utc_time", oid: types.T_time},
+		{function: "utc_timestamp", oid: types.T_datetime},
+	}
+
+	for _, test := range tests {
+		t.Run(test.function, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
+				"select "+test.function+"(0), "+test.function+"(3), "+test.function+"(6)", 1)
+			require.NoError(t, err)
+
+			pl, err := BuildPlan(NewMockCompilerContext(true), stmt, false)
+			require.NoError(t, err)
+
+			var results []*planpb.Expr
+			for _, node := range pl.GetQuery().Nodes {
+				for _, expr := range node.ProjectList {
+					if expr.GetF() != nil && expr.GetF().GetFunc().GetObjName() == test.function {
+						results = append(results, expr)
+					}
+				}
+			}
+			require.Len(t, results, 3)
+			for fsp, result := range results {
+				require.Equal(t, int32(test.oid), result.Typ.Id)
+				require.Equal(t, int32(fsp*3), result.Typ.Width)
+				require.Equal(t, int32(fsp*3), result.Typ.Scale)
+			}
+		})
 	}
 }
