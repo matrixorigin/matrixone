@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -42,6 +43,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/trace"
+	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -313,6 +315,19 @@ func LockTable(
 	tableID uint64,
 	pkType types.Type,
 	changeDef bool) error {
+	return LockTableWithContext(proc.Ctx, eng, proc, tableID, pkType, changeDef)
+}
+
+// LockTableWithContext locks a table using the caller-owned statement context.
+// Self-handled statements do not build a pipeline, so proc.Ctx may still refer
+// to an already-finished pipeline from the preceding statement.
+func LockTableWithContext(
+	ctx context.Context,
+	eng engine.Engine,
+	proc *process.Process,
+	tableID uint64,
+	pkType types.Type,
+	changeDef bool) error {
 	txnOp := proc.GetTxnOperator()
 	if !txnOp.Txn().IsPessimistic() {
 		return nil
@@ -320,7 +335,7 @@ func LockTable(
 	parker := types.NewPacker()
 	defer parker.Close()
 
-	stats := statistic.StatsInfoFromContext(proc.Ctx)
+	stats := statistic.StatsInfoFromContext(ctx)
 	analyzer := process.NewTempAnalyzer()
 	defer func() {
 		waitLockTime := analyzer.GetOpStats().GetMetricByKey(process.OpWaitLockTime)
@@ -339,7 +354,7 @@ func LockTable(
 		WithLockTable(true, changeDef).
 		WithFetchLockRowsFunc(GetFetchRowsFunc(pkType))
 	_, defChanged, refreshTS, err := doLock(
-		proc.Ctx,
+		ctx,
 		eng,
 		analyzer,
 		nil,
@@ -788,6 +803,24 @@ type lockRetryState struct {
 }
 
 func lockWaitTimeout(proc *process.Process, txnOp client.TxnOperator) time.Duration {
+	txnTimeout := client.LockWaitTimeoutFromTxn(txnOp)
+	var explicitProcessTimeout bool
+	// Background/internal execution may carry a per-execution value in the
+	// process or txn options while its resolver only exposes compiled global
+	// defaults. Prefer the caller-owned budget in that case. Frontend execution
+	// keeps resolver-first semantics so SET SESSION and statement overrides are
+	// observed even after a transaction has started.
+	if proc != nil && proc.Base != nil && !proc.Base.IsFrontend {
+		if proc.GetSessionInfo() != nil {
+			explicitProcessTimeout = proc.GetSessionInfo().LockWaitTimeoutSet
+			if seconds := proc.GetSessionInfo().LockWaitTimeout; seconds > 0 {
+				return time.Duration(seconds) * time.Second
+			}
+		}
+		if !explicitProcessTimeout && txnTimeout > 0 {
+			return txnTimeout
+		}
+	}
 	if proc != nil && proc.GetResolveVariableFunc() != nil {
 		if v, err := proc.GetResolveVariableFunc()("lock_wait_timeout", true, false); err == nil {
 			switch n := v.(type) {
@@ -811,7 +844,14 @@ func lockWaitTimeout(proc *process.Process, txnOp client.TxnOperator) time.Durat
 			return time.Duration(seconds) * time.Second
 		}
 	}
-	return client.LockWaitTimeoutFromTxn(txnOp)
+	if explicitProcessTimeout {
+		// Explicit zero means "clear this execution's override", not
+		// "wait forever". Use the shared product fallback when no resolver is
+		// installed. This also matches the positive legacy value serialized for
+		// old pipeline peers that do not understand LockWaitTimeoutSet.
+		return time.Duration(defines.DefaultLockWaitTimeoutSeconds) * time.Second
+	}
+	return txnTimeout
 }
 
 func refreshLockWaitOptions(options lock.LockOptions) (lock.LockOptions, error) {
@@ -1498,25 +1538,20 @@ func hasNewVersionInRange(
 
 	crs := analyzer.GetOpCounterSet()
 	newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
-	defer func() {
-		if analyzer != nil {
-			analyzer.AddS3RequestCount(crs)
-			analyzer.AddFileServiceCacheInfo(crs)
-			analyzer.AddDiskIO(crs)
-		}
-	}()
 
 	fromTS := types.BuildTS(from.PhysicalTime, from.LogicalTime)
 	toTS := types.BuildTS(to.PhysicalTime, to.LogicalTime)
 
-	changed, err := rel.PrimaryKeysMayBeModified(newCtx, fromTS, toTS, bat, idx, partitionIdx)
+	changed, err := process.MeasureFilesystemWait(analyzer, func() (bool, error) {
+		return rel.PrimaryKeysMayBeModified(newCtx, fromTS, toTS, bat, idx, partitionIdx)
+	})
 
 	return changed, err
 }
 
 func analyzeLockWaitTime(analyzer process.Analyzer, start time.Time) {
 	if analyzer != nil {
-		analyzer.WaitStop(start)
+		process.StopAnalyzerWait(analyzer, start, resource.WaitLock)
 		analyzer.AddWaitLockTime(start)
 	}
 }
@@ -1567,8 +1602,5 @@ func lockTargetWithRows(
 	bat.Vecs[target.primaryColumnIndexInBatch] = vec
 	bat.SetRowCount(vec.Length())
 
-	anal := lockOp.OpAnalyzer
-	anal.Start()
-	defer anal.Stop()
-	return performLock(bat, proc, lockOp, anal, idx)
+	return performLock(bat, proc, lockOp, lockOp.OpAnalyzer, idx)
 }

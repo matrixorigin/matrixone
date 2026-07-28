@@ -813,6 +813,7 @@ func (u *CDCWatermarkUpdater) execAddWM() (errMsg string, err error) {
 	err = u.ie.Exec(ctx, addSql, ie.SessionOverrideOptions{})
 	if err != nil {
 		errMsg = fmt.Sprintf("add sql \"%s\" failed", addSql)
+		return
 	}
 	u.Lock()
 	defer u.Unlock()

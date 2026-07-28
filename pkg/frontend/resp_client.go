@@ -62,6 +62,10 @@ func recordLastAffectedRows(ses *Session, execCtx *ExecCtx) {
 		if execCtx.runResult != nil {
 			n = int64(execCtx.runResult.AffectRows)
 		}
+	case tree.OUTPUT_UNDEFINED:
+		if _, ok := execCtx.stmt.(*tree.CallStmt); ok && execCtx.runResult != nil {
+			n = int64(execCtx.runResult.AffectRows)
+		}
 	}
 	if execCtx.proc != nil {
 		execCtx.proc.SetAffectedRows(n)

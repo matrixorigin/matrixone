@@ -194,6 +194,61 @@ func TestSplitSqlByStatementUsesSQLMode(t *testing.T) {
 	require.Equal(t, []string{`select 'a\'`, "select 1"}, got)
 }
 
+func TestSplitSqlByStatementExecutableCommentTerminator(t *testing.T) {
+	ctx := context.Background()
+	tests := []struct {
+		name    string
+		sql     string
+		sqlMode string
+		want    []string
+	}{
+		{
+			name: "single versioned statement",
+			sql:  "/*!40101 use mysql_ddl_test_db_3; */",
+			want: []string{"/*!40101 use mysql_ddl_test_db_3; */"},
+		},
+		{
+			name: "followed by ordinary statement",
+			sql:  "/*!40101 use mysql_ddl_test_db_3; */ select 1;",
+			want: []string{"/*!40101 use mysql_ddl_test_db_3; */", "select 1"},
+		},
+		{
+			name: "multiple executable comments",
+			sql:  "/*!40101 select 1; */ /*!40101 select 2; */",
+			want: []string{"/*!40101 select 1; */", "/*!40101 select 2; */"},
+		},
+		{
+			name: "outer statement delimiter",
+			sql:  "/*!40101 select 1 */; select 2;",
+			want: []string{"/*!40101 select 1 */", "select 2"},
+		},
+		{
+			name: "quoted terminator text",
+			sql:  "/*!40101 select 'x*/y'; */",
+			want: []string{"/*!40101 select 'x*/y'; */"},
+		},
+		{
+			name:    "ansi quoted terminator text",
+			sql:     `/*!40101 select "x*/y"; */`,
+			sqlMode: "ANSI_QUOTES",
+			want:    []string{`/*!40101 select "x*/y"; */`},
+		},
+		{
+			name: "outer delimiter preserves empty fragment contract",
+			sql:  "/*!40101 select 1; */;",
+			want: []string{"/*!40101 select 1; */", ""},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := SplitSqlByStatementWithSQLMode(ctx, test.sql, test.sqlMode)
+			require.NoError(t, err)
+			require.Equal(t, test.want, got)
+		})
+	}
+}
+
 func TestHandleSqlForRecord(t *testing.T) {
 	// Test remove /* cloud_user */ prefix
 	var ret []string

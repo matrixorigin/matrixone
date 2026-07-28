@@ -40,8 +40,16 @@ func TestExplainLinesRendersCandidateBoundaryAndDecision(t *testing.T) {
 			DiscoveredCount: 3,
 		},
 		ResolvedCandidateCount: 3,
-		CurrentCNPolicy:        CurrentCNAllowed,
-		Satisfied:              true,
+		EligibleCount:          2,
+		Intent: SchedulingIntent{
+			Explicit:          true,
+			RequestedPool:     "tenant-label:account=app",
+			EmptyWorkerPolicy: EmptyWorkerFail,
+			WorkerSet:         WorkerSetPolicy{Mode: WorkerSetMax, MaxWorkers: 2, AlgorithmVersion: WorkerSelectionAlgorithmV1},
+		},
+		ResolvedPool:    ResolvedPoolDecision{RequestedIdentity: "tenant-label:account=app", Identity: "shared-unlabeled", Resolution: PoolResolution("shared-unlabeled"), Fallback: true},
+		CurrentCNPolicy: CurrentCNAllowed,
+		Satisfied:       true,
 	})
 
 	lines := ExplainLines(recorder.Snapshot())
@@ -50,6 +58,10 @@ func TestExplainLinesRendersCandidateBoundaryAndDecision(t *testing.T) {
 	require.Contains(t, output, "source=engine-nodes")
 	require.Contains(t, output, "pool-resolution=legacy-engine-nodes")
 	require.Contains(t, output, "discovered=3 resolved=3 selected=2 dropped=1")
+	require.Contains(t, output, "requested-pool=tenant-label:account=app")
+	require.Contains(t, output, "resolved-pool=shared-unlabeled")
+	require.Contains(t, output, "resolved-pool-resolution=shared-unlabeled")
+	require.Contains(t, output, "worker-set=max-workers max-workers=2")
 	require.Contains(t, output, "id=cn-a")
 	require.NotContains(t, output, "a:6001")
 	require.Contains(t, output, "route=available")

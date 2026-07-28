@@ -220,6 +220,19 @@ func authenticateDataBranchDiff(
 	if err != nil {
 		return stats, err
 	}
+	if stmt.OutputOpt != nil && stmt.OutputOpt.As.ObjectName != "" {
+		outputDBName, err := branchDatabaseName(ctx, ses, stmt.OutputOpt.As.SchemaName.String())
+		if err != nil {
+			return stats, err
+		}
+		delta, err = requireAllBranchPrivileges(ctx, ses, []branchPrivilegeRequirement{
+			branchCreateTableRequirement(outputDBName),
+		})
+		stats.Add(&delta)
+		if err != nil {
+			return stats, err
+		}
+	}
 	return stats, nil
 }
 

@@ -630,8 +630,8 @@ func TestAnalyzeInfoDescribeImpl_GetDescription_ReadSize(t *testing.T) {
 				"OutputSize=",
 				" ReadSize=", // Format: ReadSize=total|s3|disk
 				"|",          // Check for pipe separator
-				"MemorySize=",
 				"inputBlocks=10",
+				" MemorySize=",
 			},
 			wantNotContains: []string{
 				" S3ReadSize=",

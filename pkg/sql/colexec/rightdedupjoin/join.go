@@ -17,7 +17,6 @@ package rightdedupjoin
 import (
 	"bytes"
 	"strings"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
@@ -29,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/spillutil"
+	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -191,9 +191,9 @@ func (rightDedupJoin *RightDedupJoin) Call(proc *process.Process) (vm.CallResult
 
 func (rightDedupJoin *RightDedupJoin) build(analyzer process.Analyzer, proc *process.Process) (err error) {
 	ctr := &rightDedupJoin.ctr
-	start := time.Now()
-	defer analyzer.WaitStop(start)
-	ctr.mp, err = message.ReceiveJoinMap(rightDedupJoin.JoinMapTag, rightDedupJoin.IsShuffle, rightDedupJoin.ShuffleIdx, proc.GetMessageBoard(), proc.Ctx)
+	ctr.mp, err = process.MeasureWait(analyzer, resource.WaitOther, func() (*message.JoinMap, error) {
+		return message.ReceiveJoinMap(rightDedupJoin.JoinMapTag, rightDedupJoin.IsShuffle, rightDedupJoin.ShuffleIdx, proc.GetMessageBoard(), proc.Ctx)
+	})
 	if err != nil {
 		return
 	}
@@ -207,12 +207,36 @@ func (rightDedupJoin *RightDedupJoin) build(analyzer process.Analyzer, proc *pro
 	} else {
 		// Handle spilled build side.
 		if ctr.mp.IsSpilled() {
+			files := ctr.mp.TakeSpillBuildFiles()
+			var budget *process.HashBuildBudgetGeneration
+			if files != nil {
+				var ok bool
+				budget, ok = ctr.mp.TakeSpillBudget().(*process.HashBuildBudgetGeneration)
+				if !ok || budget == nil {
+					for _, file := range files {
+						_ = file.Close()
+					}
+					return moerr.NewInternalError(proc.Ctx, "spilled right dedup join map is missing its producer budget generation")
+				}
+			} else {
+				budget, err = proc.GetHashBuildBudget()
+				if err != nil {
+					return err
+				}
+			}
 			engine := spillutil.NewSpillEngine(spillutil.SpillEngineConfig{
 				BuildKeyExprs:           rightDedupJoin.Conditions[1],
+				ProbeKeyExprs:           rightDedupJoin.Conditions[0],
 				SpillThreshold:          ctr.spillThreshold,
 				NeedsProbeForEmptyBuild: true,
+				MergeProbeBatches:       true,
+				Budget:                  budget,
 			})
-			engine.InitFromSpilledMap(ctr.mp.TakeSpillBuildFds())
+			if files != nil {
+				engine.InitFromSpilledFiles(files)
+			} else {
+				engine.InitFromSpilledMap(ctr.mp.TakeSpillBuildFds())
+			}
 			if err := engine.ScatterProbeTable(proc,
 				func() (*batch.Batch, error) {
 					input, err := vm.ChildrenCall(rightDedupJoin.GetChildren(0), proc, analyzer)

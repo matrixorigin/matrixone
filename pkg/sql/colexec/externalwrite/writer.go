@@ -76,7 +76,7 @@ type ExternalWriter interface {
 	// WriteBatch encodes every row of bat and appends it to the output file.
 	// The file is created lazily on the first non-empty batch, so a pipeline
 	// that never receives rows produces no file.
-	WriteBatch(ctx context.Context, bat *batch.Batch) error
+	WriteBatch(ctx context.Context, bat *batch.Batch, analyzer process.Analyzer) error
 	// Close flushes and finalizes the output file and returns the number of
 	// rows written. It is a no-op (rowsWritten == 0) if no file was opened.
 	Close(ctx context.Context) (rowsWritten uint64, err error)
@@ -143,7 +143,7 @@ func (cfg *WriterConfig) escapeChar() byte {
 }
 
 // open lazily resolves the destination file and starts the streaming write.
-func (w *externalWriter) open(ctx context.Context) error {
+func (w *externalWriter) open(ctx context.Context, analyzer process.Analyzer) error {
 	if w.opened {
 		return nil
 	}
@@ -159,7 +159,9 @@ func (w *externalWriter) open(ctx context.Context) error {
 		return err
 	}
 
-	fw, err := fileservice.NewFileServiceWriter(moPath, ctx)
+	fw, err := process.MeasureFilesystemWait(analyzer, func() (*fileservice.FileServiceWriter, error) {
+		return fileservice.NewFileServiceWriter(moPath, ctx)
+	})
 	if err != nil {
 		return err
 	}
@@ -167,18 +169,18 @@ func (w *externalWriter) open(ctx context.Context) error {
 	w.opened = true
 
 	if w.cfg.Format == FormatCSV && w.cfg.Header {
-		if err := w.writeCSVHeader(); err != nil {
+		if err := w.writeCSVHeader(analyzer); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (w *externalWriter) WriteBatch(ctx context.Context, bat *batch.Batch) error {
+func (w *externalWriter) WriteBatch(ctx context.Context, bat *batch.Batch, analyzer process.Analyzer) error {
 	if bat == nil || bat.RowCount() == 0 {
 		return nil
 	}
-	if err := w.open(ctx); err != nil {
+	if err := w.open(ctx, analyzer); err != nil {
 		return err
 	}
 
@@ -198,7 +200,9 @@ func (w *externalWriter) WriteBatch(ctx context.Context, bat *batch.Batch) error
 		return err
 	}
 
-	if _, err := w.fw.Write(data); err != nil {
+	if _, err := process.MeasureFilesystemWait(analyzer, func() (int, error) {
+		return w.fw.Write(data)
+	}); err != nil {
 		return err
 	}
 	w.rowsWritten += uint64(bat.RowCount())

@@ -248,6 +248,26 @@ func TestAppendFromEntryYear(t *testing.T) {
 	require.True(t, dst.GetNulls().Contains(1))
 }
 
+func TestAppendFromEntryGeometry(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	for _, typ := range []types.Type{types.T_geometry.ToType(), types.T_geometry32.ToType()} {
+		src := vector.NewVec(typ)
+		dst := vector.NewVec(typ)
+		require.NoError(t, vector.AppendBytes(src, []byte{1, 2, 3}, false, mp))
+		require.NoError(t, vector.AppendBytes(src, nil, true, mp))
+
+		appendFromEntry(src, dst, 0, mp)
+		appendFromEntry(src, dst, 1, mp)
+
+		require.Equal(t, []byte{1, 2, 3}, dst.GetBytesAt(0))
+		require.True(t, dst.GetNulls().Contains(1))
+		src.Free(mp)
+		dst.Free(mp)
+	}
+}
+
 func TestUpdateDataBatch_PreservesTrailingColumnsWithoutRowid(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)

@@ -50,7 +50,7 @@ func TestPairWiseDistance(t *testing.T) {
 			require.Equal(t, nX*nY, len(dist))
 
 			// Verify against direct calls
-			distFn, err := ResolveDistanceFn[float32](m)
+			distFn, err := ResolveDistanceFn[float32, float32](m)
 			require.NoError(t, err)
 
 			for i := 0; i < nX; i++ {

@@ -238,16 +238,17 @@ func (s *store) Start() error {
 }
 
 func (s *store) Close() error {
+	// Reject new replica calls and cancel active start contexts before waiting
+	// for store tasks. Storage remains open until the RPC server drains below.
+	s.replicas.Range(func(_, value any) bool {
+		r := value.(*replica)
+		r.cancelStart(false)
+		return true
+	})
 	s.stopper.Stop()
 	s.moCluster.Close()
 
 	var err error
-	// Reject new replica calls and cancel active call contexts before waiting
-	// for the RPC server to drain. Storage remains open until the drain ends.
-	s.replicas.Range(func(_, value any) bool {
-		value.(*replica).cancelStart(false)
-		return true
-	})
 	if s.queryService != nil {
 		err = errors.Join(err, s.queryService.Close())
 	}
@@ -333,9 +334,7 @@ func (s *store) createReplicaLocked(shard metadata.TNShard) error {
 	}
 
 	err := s.stopper.RunTask(func(stopperCtx context.Context) {
-		stopCancelPropagation := context.AfterFunc(stopperCtx, func() {
-			r.cancelStart(false)
-		})
+		stopCancelPropagation := propagateReplicaStopperCancellation(stopperCtx, r)
 		defer stopCancelPropagation()
 
 		for {
@@ -403,6 +402,15 @@ func (s *store) createReplicaLocked(shard metadata.TNShard) error {
 	return nil
 }
 
+func propagateReplicaStopperCancellation(
+	stopperCtx context.Context,
+	r *replica,
+) func() bool {
+	return context.AfterFunc(stopperCtx, func() {
+		r.cancelStart(false)
+	})
+}
+
 func waitCreateRetry(stopperCtx, createCtx context.Context) error {
 	timer := time.NewTimer(retryCreateStorageInterval)
 	defer timer.Stop()
@@ -418,8 +426,6 @@ func waitCreateRetry(stopperCtx, createCtx context.Context) error {
 
 func (s *store) removeReplicaLocked(tnShardID uint64) error {
 	if r := s.getReplica(tnShardID); r != nil {
-		r.cancelStart(true)
-		r.waitStartCompleted()
 		err := r.close(true)
 		s.replicas.CompareAndDelete(tnShardID, r)
 		s.removeTNShardLocked(tnShardID)

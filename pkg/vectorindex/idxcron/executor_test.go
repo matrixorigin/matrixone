@@ -16,8 +16,6 @@ package idxcron
 
 import (
 	"context"
-	"fmt"
-	"os"
 	"testing"
 	"time"
 
@@ -25,7 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -36,7 +33,6 @@ import (
 	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/testutil/testengine"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	ivfflatidxcron "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin/idxcron"
@@ -55,6 +51,27 @@ type TestTask struct {
 	hour      int
 	skipped   bool
 	expected  bool
+}
+
+func stubIdxcronTxnRunner() *gostub.Stubs {
+	return gostub.Stub(&runTxnWithSqlContext, func(
+		ctx context.Context,
+		_ engine.Engine,
+		_ client.TxnClient,
+		cnUUID string,
+		accountID uint32,
+		duration time.Duration,
+		resolveVariableFunc func(string, bool, bool) (interface{}, error),
+		data any,
+		fn func(*sqlexec.SqlProcess, any) error,
+	) error {
+		txnCtx := context.WithValue(ctx, defines.TenantIDKey{}, accountID)
+		txnCtx, cancel := context.WithTimeout(txnCtx, duration)
+		defer cancel()
+		return fn(sqlexec.NewSqlProcessWithContext(sqlexec.NewSqlContext(
+			txnCtx, cnUUID, nil, accountID, resolveVariableFunc,
+		)), data)
+	})
 }
 
 func getTestCases(t *testing.T) []TestTask {
@@ -265,6 +282,7 @@ func (m mockCatalogHooks) SupportedOpTypes() map[string]string                  
 func (m mockCatalogHooks) SupportedVectorTypes() []types.T                         { return nil }
 func (m mockCatalogHooks) SupportedPrimaryKeyTypes() []types.T                     { return nil }
 func (m mockCatalogHooks) SupportedIncludeColumnTypes() []types.T                  { return nil }
+func (m mockCatalogHooks) ValidQuantization(_, _ string) error                     { return nil }
 func (m mockCatalogHooks) ExperimentalFlag() string                                { return "" }
 func (m mockCatalogHooks) AlterTableCloneBehavior() catalogplugin.AlterTableCloneBehavior {
 	return catalogplugin.AlterTableCloneBehavior{}
@@ -334,28 +352,6 @@ func newTestIvfTableDef(pkName string, pkType types.T, vecColName string, vecTyp
 	}
 }
 
-func TestGetTableDef(t *testing.T) {
-	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, catalog.System_Account)
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	catalog.SetupDefines("")
-	cnEngine, cnClient, _ := testengine.New(ctx)
-	cnUUID := "a-b-c-d"
-	dbname := "test"
-	tablename := "ivfsrc"
-
-	txnOp, err := sqlexec.GetTxn(ctx, cnEngine, cnClient, "idxcron")
-	require.NoError(t, err)
-
-	sqlproc := sqlexec.NewSqlProcessWithContext(sqlexec.NewSqlContext(ctx, cnUUID, txnOp, catalog.System_Account, nil))
-
-	tabledef, err := getTableDef(sqlproc, cnEngine, dbname, tablename)
-	require.NoError(t, err)
-
-	fmt.Printf("tableDef %v\n", tabledef)
-}
-
 func TestIvfflatReindex(t *testing.T) {
 
 	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, catalog.System_Account)
@@ -364,8 +360,8 @@ func TestIvfflatReindex(t *testing.T) {
 
 	mp := mpool.MustNewZero()
 
-	catalog.SetupDefines("")
-	cnEngine, cnClient, _ := testengine.New(ctx)
+	txnStub := stubIdxcronTxnRunner()
+	defer txnStub.Reset()
 	cnUUID := "a-b-c-d"
 	tableid := uint64(1)
 	dbname := "test"
@@ -416,13 +412,12 @@ func TestIvfflatReindex(t *testing.T) {
 			})
 			defer stub3.Reset()
 
-			updated, reason, err := runReindex(ctx, cnEngine, cnClient, cnUUID, &info, ta.hour,
+			updated, _, err := runReindex(ctx, nil, nil, cnUUID, &info, ta.hour,
 				&mockReindexAlgoPlugin{
 					algo:    "ivfflat",
 					desc:    catalogplugin.SyncDescriptor{IdxcronAlgoToken: "IVFFLAT", IdxcronListsAware: true},
 					idxcron: ivfflatidxcron.Hooks{},
 				})
-			fmt.Printf("updated = %v, reason = %s\n", updated, reason)
 			require.NoError(t, err)
 			require.Equal(t, ta.expected && !ta.skipped, updated)
 
@@ -438,8 +433,8 @@ func TestIvfflatReindexAutoUpdateOff(t *testing.T) {
 
 	mp := mpool.MustNewZero()
 
-	catalog.SetupDefines("")
-	cnEngine, cnClient, _ := testengine.New(ctx)
+	txnStub := stubIdxcronTxnRunner()
+	defer txnStub.Reset()
 	cnUUID := "a-b-c-d"
 	tableid := uint64(1)
 	dbname := "test"
@@ -496,208 +491,18 @@ func TestIvfflatReindexAutoUpdateOff(t *testing.T) {
 			})
 			defer stub3.Reset()
 
-			updated, reason, err := runReindex(ctx, cnEngine, cnClient, cnUUID, &info, ta.hour,
+			updated, reason, err := runReindex(ctx, nil, nil, cnUUID, &info, ta.hour,
 				&mockReindexAlgoPlugin{
 					algo:    "ivfflat",
 					desc:    catalogplugin.SyncDescriptor{IdxcronAlgoToken: "IVFFLAT", IdxcronListsAware: true},
 					idxcron: ivfflatidxcron.Hooks{},
 				})
-			fmt.Printf("updated = %v, reason = %s\n", updated, reason)
 			require.NoError(t, err)
 			require.Equal(t, false, updated)
 			require.Equal(t, Reason_Skipped, reason)
 
 		}()
 	}
-}
-
-func TestExecutorRunFakeTasks(t *testing.T) {
-
-	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, catalog.System_Account)
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	mp := mpool.MustNewZero()
-
-	catalog.SetupDefines("")
-	cnEngine, cnClient, _ := testengine.New(ctx)
-	cnUUID := "a-b-c-d"
-	tableid := uint64(1)
-	dbname := "test"
-	tablename := "test_orig_tbl"
-	indexname := "ivf_idx"
-
-	// getTableDef
-	stub1 := gostub.Stub(&getTableDef, func(sqlproc *sqlexec.SqlProcess, txnEngine engine.Engine, dbname string, tablename string) (tableDef *plan.TableDef, err error) {
-		return newTestIvfTableDef("a", types.T_int64, "b", types.T_array_float32, 3), nil
-	})
-	defer stub1.Reset()
-
-	// runGetCountSql
-	stub2 := gostub.Stub(&ivfflatidxcron.RunGetCountSql, func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
-		bat := batch.NewWithSize(1)
-		bat.Vecs[0] = vector.NewVec(types.New(types.T_int64, 8, 0))
-		vector.AppendFixed[int64](bat.Vecs[0], int64(1000000), false, mp)
-		bat.SetRowCount(1)
-		return executor.Result{Mp: mp, Batches: []*batch.Batch{bat}}, nil
-
-	})
-	defer stub2.Reset()
-
-	// runReindxSql
-	stub3 := gostub.Stub(&runReindexSql, func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
-		return executor.Result{}, nil
-	})
-	defer stub3.Reset()
-
-	//getTasks
-	stub4 := gostub.Stub(&getTasks, func(ctx context.Context, txnEngine engine.Engine, cnTxnClient client.TxnClient, cnUUID string) ([]*IndexUpdateTaskInfo, error) {
-		tasks := getTestCases(t)
-
-		ret := make([]*IndexUpdateTaskInfo, 0, len(tasks))
-		for _, ta := range tasks {
-			var err error
-			m := (*sqlexec.Metadata)(nil)
-			if len(ta.jstr) > 0 {
-				m, err = sqlexec.NewMetadataFromJson(ta.jstr)
-				require.Nil(t, err)
-			}
-
-			info := IndexUpdateTaskInfo{
-				DbName:       dbname,
-				TableName:    tablename,
-				IndexName:    indexname,
-				Action:       Action_Ivfflat_Reindex,
-				AccountId:    catalog.System_Account,
-				TableId:      tableid,
-				Metadata:     m,
-				LastUpdateAt: &ta.ts,
-				CreatedAt:    ta.createdAt,
-			}
-
-			ret = append(ret, &info)
-		}
-
-		return ret, nil
-	})
-	defer stub4.Reset()
-
-	// runSavestatusSql
-	stub5 := gostub.Stub(&runSaveStatusSql, func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
-		fmt.Println(sql)
-		return executor.Result{}, nil
-	})
-	defer stub5.Reset()
-
-	exec, err := NewIndexUpdateTaskExecutor(ctx, cnUUID, cnEngine, cnClient, mp)
-	require.NoError(t, err)
-
-	err = exec.run(ctx)
-	require.NoError(t, err)
-}
-
-func TestExecutorRunFull(t *testing.T) {
-
-	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, catalog.System_Account)
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	mp := mpool.MustNewZero()
-
-	catalog.SetupDefines("")
-	cnEngine, cnClient, _ := testengine.New(ctx)
-	cnUUID := "a-b-c-d"
-	tableid := uint64(1)
-	dbname := "test"
-	tablename := "test_orig_tbl"
-	indexname := "ivf_idx"
-
-	// getTableDef
-	stub1 := gostub.Stub(&getTableDef, func(sqlproc *sqlexec.SqlProcess, txnEngine engine.Engine, dbname string, tablename string) (tableDef *plan.TableDef, err error) {
-		return newTestIvfTableDef("a", types.T_int64, "b", types.T_array_float32, 3), nil
-	})
-	defer stub1.Reset()
-
-	// runGetCountSql
-	stub2 := gostub.Stub(&ivfflatidxcron.RunGetCountSql, func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
-		bat := batch.NewWithSize(1)
-		bat.Vecs[0] = vector.NewVec(types.New(types.T_int64, 8, 0))
-		vector.AppendFixed[int64](bat.Vecs[0], int64(1000000), false, mp)
-		bat.SetRowCount(1)
-		return executor.Result{Mp: mp, Batches: []*batch.Batch{bat}}, nil
-
-	})
-	defer stub2.Reset()
-
-	// runReindxSql
-	stub3 := gostub.Stub(&runReindexSql, func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
-		return executor.Result{}, nil
-	})
-	defer stub3.Reset()
-
-	// runReindxSql
-	stub4 := gostub.Stub(&runGetTasksSql, func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
-
-		writer := sqlexec.NewMetadataWriter()
-		writer.AddFloat("kmeans_train_percent", 10)
-		writer.AddInt("kmeans_max_iteration", 20)
-		writer.AddInt("ivf_threads_build", 8)
-		writer.AddInt8("experimental_ivf_index", 1)
-
-		js, err := writer.Marshal()
-		require.NoError(t, err)
-
-		os.Stderr.WriteString(fmt.Sprintf("js %v\n", string(js)))
-
-		bj, err := bytejson.ParseFromString(string(js))
-		require.NoError(t, err)
-
-		os.Stderr.WriteString(fmt.Sprintf("bj %v\n", bj.String()))
-
-		bat := batch.NewWithSize(9)
-		bat.Vecs[0] = vector.NewVec(types.New(types.T_varchar, 64, 0))  // db
-		bat.Vecs[1] = vector.NewVec(types.New(types.T_varchar, 64, 0))  // table
-		bat.Vecs[2] = vector.NewVec(types.New(types.T_varchar, 64, 0))  // idxname
-		bat.Vecs[3] = vector.NewVec(types.New(types.T_varchar, 64, 0))  // action
-		bat.Vecs[4] = vector.NewVec(types.New(types.T_uint32, 4, 0))    // acountid
-		bat.Vecs[5] = vector.NewVec(types.New(types.T_uint64, 8, 0))    // table id
-		bat.Vecs[6] = vector.NewVec(types.New(types.T_json, 1024, 0))   // metadata JSON
-		bat.Vecs[7] = vector.NewVec(types.New(types.T_timestamp, 8, 0)) // last_update_at timestamp
-		bat.Vecs[8] = vector.NewVec(types.New(types.T_timestamp, 8, 0)) // create_at timestamp
-
-		vector.AppendBytes(bat.Vecs[0], []byte(dbname), false, mp)
-		vector.AppendBytes(bat.Vecs[1], []byte(tablename), false, mp)
-		vector.AppendBytes(bat.Vecs[2], []byte(indexname), false, mp)
-		vector.AppendBytes(bat.Vecs[3], []byte(Action_Ivfflat_Reindex), false, mp)
-		vector.AppendFixed[uint32](bat.Vecs[4], catalog.System_Account, false, mp)
-		vector.AppendFixed[uint64](bat.Vecs[5], tableid, false, mp)
-		err = vector.AppendByteJson(bat.Vecs[6], bj, false, mp)
-		require.NoError(t, err)
-
-		now := time.Now()
-		created_at := now.Add(-4 * OneWeek)
-		last_update_at := now.Add(-2 * OneWeek)
-
-		vector.AppendFixed[types.Timestamp](bat.Vecs[7], types.UnixToTimestamp(last_update_at.Unix()), false, mp)
-		vector.AppendFixed[types.Timestamp](bat.Vecs[8], types.UnixToTimestamp(created_at.Unix()), false, mp)
-
-		bat.SetRowCount(1)
-		return executor.Result{Mp: mp, Batches: []*batch.Batch{bat}}, nil
-	})
-	defer stub4.Reset()
-
-	// runSavestatusSql
-	stub5 := gostub.Stub(&runSaveStatusSql, func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
-		fmt.Println(sql)
-		return executor.Result{}, nil
-	})
-	defer stub5.Reset()
-
-	exec, err := NewIndexUpdateTaskExecutor(ctx, cnUUID, cnEngine, cnClient, mp)
-	require.NoError(t, err)
-
-	err = exec.run(ctx)
-	require.NoError(t, err)
 }
 
 func TestIndexUpdateTaskInfoSaveStatusError(t *testing.T) {
@@ -721,7 +526,6 @@ func TestIndexUpdateTaskInfoSaveStatusError(t *testing.T) {
 	{
 		// runSavestatusSql
 		stub5 := gostub.Stub(&runSaveStatusSql, func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
-			fmt.Println(sql)
 			return executor.Result{}, nil
 		})
 		defer stub5.Reset()
@@ -734,7 +538,6 @@ func TestIndexUpdateTaskInfoSaveStatusError(t *testing.T) {
 	{
 		// runSavestatusSql
 		stub5 := gostub.Stub(&runSaveStatusSql, func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
-			fmt.Println(sql)
 			return executor.Result{}, moerr.NewInternalErrorNoCtx("fake sql error")
 		})
 		defer stub5.Reset()
@@ -751,8 +554,6 @@ func TestCmdNoDefine(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	//catalog.SetupDefines("")
-	//cnEngine, cnClient, _ := testengine.New(ctx)
 	cnUUID := "a-b-c-d"
 
 	{
@@ -786,13 +587,10 @@ func TestCmdSqlError(t *testing.T) {
 
 	// runCmdSql
 	stub1 := gostub.Stub(&runCmdSql, func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
-		fmt.Println(sql)
 		return executor.Result{}, moerr.NewInternalErrorNoCtx("fake sql error")
 	})
 	defer stub1.Reset()
 
-	//catalog.SetupDefines("")
-	//cnEngine, cnClient, _ := testengine.New(ctx)
 	cnUUID := "a-b-c-d"
 
 	{

@@ -35,6 +35,7 @@ type FmtCtx struct {
 	// re-escape a stored (already-unescaped) literal — e.g. FullTextMatchExpr's pattern
 	// — must consult this to keep format->parse idempotent under NO_BACKSLASH_ESCAPES.
 	noBackslashEscape bool
+	paramExprOffset   bool
 }
 
 func NewFmtCtx(dialectType dialect.DialectType, opts ...FmtCtxOption) *FmtCtx {
@@ -85,6 +86,15 @@ func WithNoBackslashEscape() FmtCtxOption {
 // NoBackslashEscape reports whether string literals should be formatted for the
 // NO_BACKSLASH_ESCAPES sql_mode.
 func (ctx *FmtCtx) NoBackslashEscape() bool { return ctx.noBackslashEscape }
+
+// WithParamExprOffset includes a parameter's parser-assigned offset in its
+// formatted form. It is intended for internal semantic keys; SQL restored for
+// users must keep the default placeholder-only representation.
+func WithParamExprOffset() FmtCtxOption {
+	return FmtCtxOption(func(ctx *FmtCtx) {
+		ctx.paramExprOffset = true
+	})
+}
 
 // NodeFormatter for formatted output of the node.
 type NodeFormatter interface {

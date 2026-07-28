@@ -331,6 +331,26 @@ func firstSelectExpr(t *testing.T, stmt tree.Statement) tree.Expr {
 	return clause.Exprs[0].Expr
 }
 
+func extractFirstWindowSpec(t *testing.T, stmt tree.Statement) *tree.WindowSpec {
+	t.Helper()
+	window, ok := firstSelectExpr(t, stmt).(*tree.FuncExpr)
+	require.True(t, ok)
+	require.NotNil(t, window.WindowSpec)
+	return window.WindowSpec
+}
+
+func TestPreparedWindowFrameMarkers(t *testing.T) {
+	stmt, err := ParseOne(context.Background(),
+		"select sum(n_nationkey) over (order by n_nationkey rows between ? preceding and ? following) from nation",
+		1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	window := extractFirstWindowSpec(t, stmt)
+	require.IsType(t, &tree.ParamExpr{}, window.Frame.Start.Expr)
+	require.IsType(t, &tree.ParamExpr{}, window.Frame.End.Expr)
+}
+
 func firstColumnType(t *testing.T, stmt tree.Statement) tree.InternalType {
 	t.Helper()
 	createTable, ok := stmt.(*tree.CreateTable)
@@ -409,6 +429,42 @@ func TestOuterJoinRequiresCondition(t *testing.T) {
 			require.NoError(t, err)
 		})
 	}
+}
+
+func TestMySQLJoinSyntaxVariants(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			name: "ODBC outer join escape",
+			in:   "select * from { OJ a left outer join b on a.id = b.id }",
+			want: "select * from a left join b on a.id = b.id",
+		},
+		{
+			name: "ODBC escape is case insensitive",
+			in:   "select * from { oj a right join b using (id) }",
+			want: "select * from a right join b using (id)",
+		},
+		{
+			name: "straight join using",
+			in:   "select * from a straight_join b using(id)",
+			want: "select * from a straight_join b using (id)",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stmt, err := ParseOne(context.Background(), test.in, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			require.Equal(t, test.want, tree.String(stmt, dialect.MYSQL))
+		})
+	}
+
+	_, err := ParseOne(context.Background(), "select * from { not_oj a join b on a.id = b.id }", 1)
+	require.ErrorContains(t, err, "expected OJ in table reference escape")
 }
 
 func TestBinaryIntroducedHexLiteralHasDistinctType(t *testing.T) {
@@ -500,6 +556,62 @@ func TestCloneTableParseFormattedMoTimestamp(t *testing.T) {
 	require.Equal(t, tree.ATMOTIMESTAMP, cloneStmt.SrcTable.AtTsExpr.Type)
 }
 
+func TestTableDumpAndLoadParse(t *testing.T) {
+	tests := []struct {
+		sql   string
+		check func(*testing.T, tree.Statement)
+	}{
+		{
+			sql: "dump table db1.t1 to '/tmp/t1'",
+			check: func(t *testing.T, stmt tree.Statement) {
+				dump, ok := stmt.(*tree.DumpTable)
+				require.True(t, ok)
+				require.Equal(t, tree.Identifier("db1"), dump.Table.Schema())
+				require.Equal(t, tree.Identifier("t1"), dump.Table.Name())
+				require.Equal(t, "/tmp/t1", dump.Path)
+				require.False(t, dump.MetadataOnly)
+				require.Equal(t, "dump table db1.t1 to '/tmp/t1'", tree.String(dump, dialect.MYSQL))
+				require.Equal(t, "dump table", dump.GetStatementType())
+				require.Equal(t, tree.QueryTypeOth, dump.GetQueryType())
+				require.Equal(t, "tree.DumpTable", dump.TypeName())
+				require.Equal(t, "dump table", dump.String())
+				dump.Free()
+			},
+		},
+		{
+			sql: "dump table t1 to 'file:///tmp/t1' metadata only",
+			check: func(t *testing.T, stmt tree.Statement) {
+				dump, ok := stmt.(*tree.DumpTable)
+				require.True(t, ok)
+				require.True(t, dump.MetadataOnly)
+			},
+		},
+		{
+			sql: "load table db2.t1 from '/tmp/t1'",
+			check: func(t *testing.T, stmt tree.Statement) {
+				load, ok := stmt.(*tree.LoadTable)
+				require.True(t, ok)
+				require.Equal(t, tree.Identifier("db2"), load.Table.Schema())
+				require.Equal(t, tree.Identifier("t1"), load.Table.Name())
+				require.Equal(t, "/tmp/t1", load.Path)
+				require.Equal(t, "load table db2.t1 from '/tmp/t1'", tree.String(load, dialect.MYSQL))
+				require.Equal(t, "load table", load.GetStatementType())
+				require.Equal(t, tree.QueryTypeDML, load.GetQueryType())
+				require.Equal(t, "tree.LoadTable", load.TypeName())
+				require.Equal(t, "load table", load.String())
+				load.Free()
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.sql, func(t *testing.T) {
+			stmt, err := ParseOne(context.Background(), test.sql, 1)
+			require.NoError(t, err)
+			test.check(t, stmt)
+		})
+	}
+}
+
 func TestDataBranchCreateTableParsesWithLeadingComment(t *testing.T) {
 	stmt, err := ParseOne(
 		context.TODO(),
@@ -555,6 +667,16 @@ func TestDataBranchDiffColumns(t *testing.T) {
 	require.NotNil(t, diffStmt.OutputOpt.Limit)
 	require.Equal(t, int64(10), *diffStmt.OutputOpt.Limit)
 
+	// COLUMNS with OUTPUT AS preserves both the projection and qualified result table.
+	stmt, err = ParseOne(context.TODO(), "data branch diff t1 against t2 columns (name, id) output as out_db.diff_out", 1)
+	require.NoError(t, err)
+	diffStmt, ok = stmt.(*tree.DataBranchDiff)
+	require.True(t, ok)
+	require.Equal(t, tree.IdentifierList{tree.Identifier("name"), tree.Identifier("id")}, diffStmt.Columns)
+	require.NotNil(t, diffStmt.OutputOpt)
+	require.Equal(t, tree.Identifier("out_db"), diffStmt.OutputOpt.As.SchemaName)
+	require.Equal(t, tree.Identifier("diff_out"), diffStmt.OutputOpt.As.ObjectName)
+
 	// COLUMNS with snapshot and output file
 	stmt, err = ParseOne(context.TODO(), `data branch diff t1{snapshot="sp1"} against t2{snapshot="sp2"} columns (x) output file '/tmp/'`, 1)
 	require.NoError(t, err)
@@ -595,6 +717,57 @@ func TestQuoteIdentifer(t *testing.T) {
 	out := tree.StringWithOpts(ast, dialect.MYSQL, tree.WithQuoteIdentifier())
 	if partitionSQL.output != out {
 		t.Errorf("Parsing failed. \nExpected/Got:\n%s\n%s", partitionSQL.output, out)
+	}
+}
+
+func TestQuoteSelectAlias(t *testing.T) {
+	tests := []struct {
+		name string
+		sql  string
+		want string
+	}{
+		{
+			name: "reserved table alias",
+			sql:  "select `order`.col from tbl as `order`",
+			want: "select `order`.`col` from `tbl` as `order`",
+		},
+		{
+			name: "cte name and column aliases",
+			sql:  "with `select` (`from`, `中文 列`) as (select col1, col2 from tbl) select `from` from `select`",
+			want: "with `select`(`from`, `中文 列`) as (select `col1`, `col2` from `tbl`) select `from` from `select`",
+		},
+		{
+			name: "derived alias columns and join using",
+			sql:  "select `left`.`a b` from (select col as `a b` from tbl) as `left` (`a b`) join other as `right` using (`a b`)",
+			want: "select `left`.`a b` from (select `col` as `a b` from `tbl`) as `left`(`a b`) inner join `other` as `right` using (`a b`)",
+		},
+		{
+			name: "embedded backticks",
+			sql:  "select `s``x`.`a``b` as `x``y` from `src``table` as `s``x`",
+			want: "select `s``x`.`a``b` as `x``y` from `src``table` as `s``x`",
+		},
+		{
+			name: "quoted index hints",
+			sql:  "select * from tbl force index (`select`, `a b`, `x``y`)",
+			want: "select * from `tbl` force index(`select`, `a b`, `x``y`)",
+		},
+		{
+			name: "quoted user variables",
+			sql:  "select @`a b`, @`select`, @`x``y`, @@global.autocommit, @@session.autocommit, @@autocommit",
+			want: "select @`a b`, @`select`, @`x``y`, @@global.autocommit, @@autocommit, @@autocommit",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ast, err := ParseOne(context.TODO(), test.sql, 1)
+			require.NoError(t, err)
+			require.Equal(
+				t,
+				test.want,
+				tree.StringWithOpts(ast, dialect.MYSQL, tree.WithQuoteIdentifier()),
+			)
+		})
 	}
 }
 
@@ -1452,10 +1625,10 @@ var (
 			output: "select @@tx_isolation",
 		}, {
 			input:  "select @@global.tx_isolation",
-			output: "select @@tx_isolation",
+			output: "select @@global.tx_isolation",
 		}, {
 			input:  "select @@GLOBAL.tx_isolation",
-			output: "select @@tx_isolation",
+			output: "select @@global.tx_isolation",
 		}, {
 			input:  "/* mysql-connector-java-8.0.27 (Revision: e920b979015ae7117d60d72bcc8f077a839cd791) */SHOW VARIABLES;",
 			output: "show variables",
@@ -2232,11 +2405,20 @@ var (
 			input:  "create index idx using ivfflat on A (a) LISTS 10 op_type 'vector_l2_ops'",
 			output: "create index idx using ivfflat on a (a) LISTS 10 OP_TYPE vector_l2_ops ",
 		}, {
+			input:  "create index idx using ivfflat on A (a) LISTS 10 INCLUDE (b, c)",
+			output: "create index idx using ivfflat on a (a) LISTS 10 INCLUDE (b, c) ",
+		}, {
+			input:  "create index idx using ivfflat on A (a) LISTS 10 op_type 'vector_l2_ops' INCLUDE (b, c)",
+			output: "create index idx using ivfflat on a (a) LISTS 10 OP_TYPE vector_l2_ops INCLUDE (b, c) ",
+		}, {
 			input:  "create index idx using ivfflat on A (a) LISTS 10 op_type 'vector_l2_ops' async",
 			output: "create index idx using ivfflat on a (a) LISTS 10 OP_TYPE vector_l2_ops ASYNC ",
 		}, {
 			input:  "create index idx using ivfflat on A (a) LISTS 10 op_type 'vector_l2_ops' kmeans_train_percent 5 kmeans_max_iteration 30",
 			output: "create index idx using ivfflat on a (a) LISTS 10 OP_TYPE vector_l2_ops KMEANS_TRAIN_PERCENT 5 KMEANS_MAX_ITERATION 30 ",
+		}, {
+			input:  "create index idx using ivfpq on A (a) LISTS 10 op_type 'vector_l2_ops' quantization 'int8' quantizer_train_limit 5000",
+			output: "create index idx using ivfpq on a (a) LISTS 10 OP_TYPE vector_l2_ops QUANTIZATION int8 QUANTIZER_TRAIN_LIMIT 5000 ",
 		}, {
 			input:  "create index idx using hnsw on A (a) M 16 max_index_capacity = 500000",
 			output: "create index idx using hnsw on a (a) M 16 MAX_INDEX_CAPACITY 500000 ",
@@ -3770,6 +3952,50 @@ var (
 			output: "create table t1 (id bigint primary key, embedding vecf32(3), payload json, tags array(varchar(20)))",
 		},
 		{
+			input:  "create table t1(a vecbf16(3), b vecf16(3), c vecint8(3))",
+			output: "create table t1 (a vecbf16(3), b vecf16(3), c vecint8(3))",
+		},
+		{
+			input:  "create table t1(a vecbf16(128), b vecf16(65535), c vecint8(1))",
+			output: "create table t1 (a vecbf16(128), b vecf16(65535), c vecint8(1))",
+		},
+		{
+			input:  "create table t1(a vecuint8(3))",
+			output: "create table t1 (a vecuint8(3))",
+		},
+		{
+			input:  "create table t1(a vecuint8(128), b vecuint8(65535), c vecuint8(1))",
+			output: "create table t1 (a vecuint8(128), b vecuint8(65535), c vecuint8(1))",
+		},
+		{
+			input:  "select cast('[1,2,3]' as vecbf16(3))",
+			output: "select cast([1,2,3] as vecbf16(3))",
+		},
+		{
+			input:  "select cast('[1,2,3]' as vecf16(3))",
+			output: "select cast([1,2,3] as vecf16(3))",
+		},
+		{
+			input:  "select cast('[1,2,3]' as vecint8(3))",
+			output: "select cast([1,2,3] as vecint8(3))",
+		},
+		{
+			input:  "select cast(b as vecint8(3)) from t1",
+			output: "select cast(b as vecint8(3)) from t1",
+		},
+		{
+			input:  "select cast('[1,2,3]' as vecuint8(3))",
+			output: "select cast([1,2,3] as vecuint8(3))",
+		},
+		{
+			input:  "select cast(b as vecuint8(3)) from t1",
+			output: "select cast(b as vecuint8(3)) from t1",
+		},
+		{
+			input:  "select l2_distance(a, b) from t1",
+			output: "select l2_distance(a, b) from t1",
+		},
+		{
 			input:  "alter table tbl1 drop constraint fk_name",
 			output: "alter table tbl1 drop foreign key fk_name",
 		},
@@ -4183,6 +4409,21 @@ func TestFullTextMatchDeparseRoundTrip(t *testing.T) {
 		ast2, err := ParseOne(ctx, out, 1)
 		require.NoError(t, err, "deparsed SQL must re-parse: "+out)
 		require.Equal(t, out, tree.String(ast2, dialect.MYSQL), "deparse must be idempotent")
+	}
+}
+
+func TestQuotedUnicodeIdentifierAliases(t *testing.T) {
+	for _, sql := range []string{
+		"SELECT 1 AS `الكمية`",
+		"SELECT 1 AS `数量`",
+		"SELECT 1 AS `\xe9`",
+		"SELECT 1 AS `\xe9``name`",
+		"SELECT 1 AS `\xf0\x9f\x98\x80`",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			_, err := ParseOne(context.Background(), sql, 1)
+			require.NoError(t, err)
+		})
 	}
 }
 

@@ -93,11 +93,11 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext, isPrepareStmt bool
 	if err != nil {
 		return nil, err
 	}
-	err = rewriteUpdateQueryLastNode(builder, updatePlanCtxs, lastNodeId)
+	err = rewriteUpdateQueryLastNode(builder, updatePlanCtxs, lastNodeId, stmt.Ignore)
 	if err != nil {
 		return nil, err
 	}
-	err = rewriteGeneratedColumnsForUpdate(builder, updatePlanCtxs, lastNodeId)
+	err = rewriteGeneratedColumnsForUpdate(builder, updatePlanCtxs, lastNodeId, stmt.Ignore)
 	if err != nil {
 		return nil, err
 	}
@@ -184,7 +184,7 @@ func isDefaultValExpr(e *Expr) bool {
 	return false
 }
 
-func rewriteUpdateQueryLastNode(builder *QueryBuilder, planCtxs []*dmlPlanCtx, lastNodeId int32) error {
+func rewriteUpdateQueryLastNode(builder *QueryBuilder, planCtxs []*dmlPlanCtx, lastNodeId int32, isIgnore bool) error {
 	var err error
 
 	lastNode := builder.qry.Nodes[lastNodeId]
@@ -224,7 +224,8 @@ func rewriteUpdateQueryLastNode(builder *QueryBuilder, planCtxs []*dmlPlanCtx, l
 						return err
 					}
 				} else {
-					lastNode.ProjectList[pos], err = forceAssignmentCastExpr(builder.GetContext(), posExpr, col.Typ)
+					lastNode.ProjectList[pos], err = builder.forceAssignmentCastExpr(
+						posExpr, col.Typ, isIgnore)
 					if err != nil {
 						return err
 					}
@@ -257,7 +258,8 @@ func rewriteUpdateQueryLastNode(builder *QueryBuilder, planCtxs []*dmlPlanCtx, l
 						return err
 					}
 				} else {
-					lastNode.ProjectList[pos], err = forceAssignmentCastExpr(builder.GetContext(), lastNode.ProjectList[pos], col.Typ)
+					lastNode.ProjectList[pos], err = builder.forceAssignmentCastExpr(
+						lastNode.ProjectList[pos], col.Typ, isIgnore)
 					if err != nil {
 						return err
 					}
@@ -269,7 +271,12 @@ func rewriteUpdateQueryLastNode(builder *QueryBuilder, planCtxs []*dmlPlanCtx, l
 	return nil
 }
 
-func rewriteGeneratedColumnsForUpdate(builder *QueryBuilder, planCtxs []*dmlPlanCtx, lastNodeId int32) error {
+func rewriteGeneratedColumnsForUpdate(
+	builder *QueryBuilder,
+	planCtxs []*dmlPlanCtx,
+	lastNodeId int32,
+	isIgnore bool,
+) error {
 	selectNode := builder.qry.Nodes[lastNodeId]
 	tableBase := int32(0)
 	for _, upPlanCtx := range planCtxs {
@@ -299,7 +306,11 @@ func rewriteGeneratedColumnsForUpdate(builder *QueryBuilder, planCtxs []*dmlPlan
 					// (or dropped for SET = DEFAULT); should not happen here.
 					continue
 				}
-				genExpr := substituteColRefsInExpr(col.GeneratedCol.Expr, baseLookup, 0)
+				genExpr := builder.applyGeneratedColumnAssignmentCast(
+					DeepCopyExpr(col.GeneratedCol.Expr),
+					isIgnore,
+				)
+				genExpr = substituteColRefsInExpr(genExpr, baseLookup, 0)
 				insertPos := int(tableBase) + len(tableDef.Cols) + upPlanCtx.updateColLength
 				selectNode.ProjectList = append(selectNode.ProjectList, nil)
 				copy(selectNode.ProjectList[insertPos+1:], selectNode.ProjectList[insertPos:])
@@ -366,6 +377,7 @@ func selectUpdateTables(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.
 	}
 	var err error
 	var selectList []tree.SelectExpr
+	legacyNumericTargets := make(map[int]Type)
 
 	var aliasList = make([]string, len(tableInfo.alias))
 	for alias, i := range tableInfo.alias {
@@ -417,10 +429,15 @@ func selectUpdateTables(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.
 		for _, colName := range updateColNames {
 			updateKey := updateKeys[colName]
 			for _, coldef := range tableDef.Cols {
-				if coldef.Name == colName && isEnumOrSetPlanType(&coldef.Typ) {
-					updateKey, err = wrapAstExprForMySQLSpecialType(builder.GetContext(), coldef.Typ, updateKey)
-					if err != nil {
-						return 0, nil, err
+				if coldef.Name == colName {
+					if isNumericAssignmentTarget(coldef.Typ) {
+						legacyNumericTargets[len(selectList)] = coldef.Typ
+					}
+					if isEnumOrSetPlanType(&coldef.Typ) {
+						updateKey, err = wrapAstExprForMySQLSpecialType(builder.GetContext(), coldef.Typ, updateKey)
+						if err != nil {
+							return 0, nil, err
+						}
 					}
 				}
 			}
@@ -464,6 +481,10 @@ func selectUpdateTables(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.
 		OrderBy: stmt.OrderBy,
 		Limit:   stmt.Limit,
 		With:    stmt.With,
+	}
+	bindCtx.numericProjectionTypes = make([]Type, len(selectList))
+	for pos, typ := range legacyNumericTargets {
+		bindCtx.numericProjectionTypes[pos] = typ
 	}
 
 	lastNodeId, err := builder.bindSelect(selectAst, bindCtx, false)

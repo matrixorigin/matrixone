@@ -70,6 +70,19 @@ type FileService interface {
 	Close(ctx context.Context)
 }
 
+// ObjectCopier is an optional FileService capability for copying an object in
+// the backing store without streaming its contents through the caller.  The
+// boolean result is false when the source and destination backends cannot do a
+// server-side copy; callers may then fall back to Read plus Write.
+type ObjectCopier interface {
+	CopyObject(
+		ctx context.Context,
+		srcFS FileService,
+		srcPath string,
+		dstPath string,
+	) (copied bool, err error)
+}
+
 type IOVector struct {
 
 	// FilePath indicates where to find the file

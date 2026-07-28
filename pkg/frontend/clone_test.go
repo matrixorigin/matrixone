@@ -15,13 +15,56 @@
 package frontend
 
 import (
+	"context"
+	"errors"
 	"testing"
 
+	"github.com/golang/mock/gomock"
+	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/require"
 
+	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 )
+
+type failingBeginBackgroundExec struct {
+	BackgroundExec
+	err        error
+	closeCalls int
+}
+
+func (b *failingBeginBackgroundExec) ClearExecResultSet() {}
+
+func (b *failingBeginBackgroundExec) Exec(context.Context, string) error {
+	return b.err
+}
+
+func (b *failingBeginBackgroundExec) Close() {
+	b.closeCalls++
+}
+
+func TestGetBackExecutorClosesWhenBeginFails(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	t.Cleanup(ses.Close)
+
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().TxnOptions().Return(txn.TxnOptions{})
+	ses.proc.Base.TxnOperator = txnOp
+
+	beginErr := errors.New("begin failed")
+	backExec := &failingBeginBackgroundExec{err: beginErr}
+	stub := gostub.StubFunc(&NewBackgroundExec, backExec)
+	t.Cleanup(stub.Reset)
+
+	returned, cleanup, err := getBackExecutor(context.Background(), ses)
+	require.ErrorIs(t, err, beginErr)
+	require.Nil(t, returned)
+	require.Nil(t, cleanup)
+	require.Equal(t, 1, backExec.closeCalls)
+}
 
 func Test_prepareCloneViewSnapshot(t *testing.T) {
 	original := &plan.Snapshot{

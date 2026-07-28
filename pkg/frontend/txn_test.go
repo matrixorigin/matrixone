@@ -40,12 +40,22 @@ import (
 var _ client.Workspace = (*testWorkspace)(nil)
 
 type testWorkspace struct {
-	start      bool
-	incr       bool
-	mu         sync.Mutex
-	stack      []uint64
-	stmtId     uint64
-	reportErr1 bool
+	start               bool
+	incr                bool
+	mu                  sync.Mutex
+	stack               []uint64
+	stmtId              uint64
+	reportErr1          bool
+	protectedCloneFiles []string
+	trackedLoadFiles    []string
+}
+
+func (txn *testWorkspace) ProtectCloneFiles(names ...string) {
+	txn.protectedCloneFiles = append(txn.protectedCloneFiles, names...)
+}
+
+func (txn *testWorkspace) TrackLoadFiles(names ...string) {
+	txn.trackedLoadFiles = append(txn.trackedLoadFiles, names...)
 }
 
 func (txn *testWorkspace) SetCloneTxn(snapshot int64) {}

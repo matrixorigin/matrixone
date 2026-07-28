@@ -131,6 +131,7 @@ select count(*) from mo_catalog.mo_database where datname = 'br_sub_create_only'
 select count(*) from br_sub_ok.t1;
 
 create database br_diff;
+create database br_diff_dest;
 create table br_diff.base(a int primary key, b int);
 create table br_diff.target(a int primary key, b int);
 insert into br_diff.base values (1, 1), (2, 2);
@@ -144,6 +145,12 @@ create role r_diff_both;
 grant select on table br_diff.base to r_diff_both;
 grant select on table br_diff.target to r_diff_both;
 create user u_diff_both identified by '111' default role r_diff_both;
+
+create role r_diff_output;
+grant select on table br_diff.base to r_diff_output;
+grant select on table br_diff.target to r_diff_output;
+grant create table on database br_diff to r_diff_output;
+create user u_diff_output identified by '111' default role r_diff_output;
 -- @session
 
 -- DATA BRANCH DIFF requires read on both sides.
@@ -153,6 +160,14 @@ data branch diff br_diff.target against br_diff.base output count;
 
 -- @session:id=9&user=acc_branch_priv:u_diff_both:r_diff_both&password=111
 data branch diff br_diff.target against br_diff.base output count;
+-- @regex("do not have privilege",true)
+data branch diff br_diff.target against br_diff.base output as br_diff.diff_out;
+-- @session
+
+-- DATA BRANCH DIFF OUTPUT AS also requires CREATE TABLE on its destination DB.
+-- @session:id=25&user=acc_branch_priv:u_diff_output:r_diff_output&password=111
+-- @regex("do not have privilege",true)
+data branch diff br_diff.target against br_diff.base output as br_diff_dest.diff_out;
 data branch diff br_diff.target against br_diff.base output as br_diff.diff_out;
 -- @session
 

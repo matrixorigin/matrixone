@@ -611,15 +611,20 @@ func CopyGCDir(
 		filesList := make([]*taeFile, 0)
 		needCopy := true
 		for _, object := range objects {
-			checksum, err = CopyFileWithRetry(ctx, srcFs, dstFs, object.ObjectName().String(), "")
+			objectName := object.ObjectName().String()
+			checksum, err = CopyFileWithRetry(ctx, srcFs, dstFs, objectName, "")
 			if err != nil {
-				logutil.Warnf("[Backup] copy file %v failed", object.ObjectName().String())
+				logutil.Warnf("[Backup] copy file %v failed", objectName)
 				needCopy = false
 				break
 			}
+			entry, err := dstFs.StatFile(ctx, objectName)
+			if err != nil {
+				return nil, err
+			}
 			filesList = append(filesList, &taeFile{
-				path:     object.ObjectName().String(),
-				size:     files[metaFile.GetIdx()].Size,
+				path:     objectName,
+				size:     entry.Size,
 				checksum: checksum,
 				needCopy: true,
 				ts:       backup,
@@ -633,7 +638,7 @@ func CopyGCDir(
 
 	for i, metaFile := range copyFiles {
 		name := metaFile.GetName()
-		if i == len(metaFiles)-1 {
+		if i == len(copyFiles)-1 {
 			if !min.IsEmpty() && metaFile.GetEnd().LT(&min) {
 				// It means that the gc consumption is too slow, and the gc water level needs to be raised.
 				// Otherwise, the gc will not work after the cluster is restored because it cannot find the checkpoint.

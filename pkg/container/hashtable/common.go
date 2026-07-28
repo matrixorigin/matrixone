@@ -15,14 +15,19 @@
 package hashtable
 
 import (
+	"math/bits"
 	"unsafe"
 )
 
 const (
 	kInitialCellCntBits = 10
 	kInitialCellCnt     = 1 << kInitialCellCntBits
-	maxBlockSize        = 256 * (1 << 20)
-	MB                  = 1 << 20
+	// Keep mmap-backed hash tables segmented once they become large. Growing one
+	// contiguous table repeatedly faults almost twice the final table size before
+	// the old mappings can be released. Segments cap that transient work while
+	// preserving deterministic release when the table is freed.
+	maxBlockSize = 4 * (1 << 20)
+	MB           = 1 << 20
 )
 
 func maxElemCnt(cellCnt, cellSize uint64) uint64 {
@@ -35,6 +40,45 @@ func maxElemCnt(cellCnt, cellSize uint64) uint64 {
 		return cellCnt * 3 / 4
 	}
 	return cellCnt * 4 / 5
+}
+
+func powerOfTwoBits(value uint64) uint8 {
+	if value == 0 || value&(value-1) != 0 {
+		panic("value must be a power of two")
+	}
+	return uint8(bits.TrailingZeros64(value))
+}
+
+// EstimateInt64HashMapSize returns the cell allocation required by an
+// Int64HashMap for the given number of distinct keys.  Keep this calculation
+// in the hashtable package so planner memory guards follow the same growth and
+// load-factor rules as the runtime implementation.
+func EstimateInt64HashMapSize(cardinality uint64) uint64 {
+	return estimateHashMapSize(cardinality, intCellSize)
+}
+
+// EstimateStringHashMapSize returns the cell allocation required by a
+// StringHashMap for the given number of distinct keys.
+func EstimateStringHashMapSize(cardinality uint64) uint64 {
+	return estimateHashMapSize(cardinality, strCellSize)
+}
+
+func estimateHashMapSize(cardinality, cellSize uint64) uint64 {
+	const maxUint64 = ^uint64(0)
+
+	cellCnt := uint64(kInitialCellCnt)
+	for {
+		if cellCnt > maxUint64/cellSize {
+			return maxUint64
+		}
+		if maxElemCnt(cellCnt, cellSize) >= cardinality {
+			return cellCnt * cellSize
+		}
+		if cellCnt > maxUint64/2 {
+			return maxUint64
+		}
+		cellCnt <<= 1
+	}
 }
 
 func toUnsafePointer[T any](p *T) unsafe.Pointer {

@@ -110,6 +110,11 @@ func (t *NonRecordingTracer) Start(
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if len(opts) == 1 {
+		if kind, ok := opts[0].(KindOption); ok && isRetiredControlledSpanKind(SpanKind(kind)) {
+			return ctx, NoopSpan{}
+		}
+	}
 
 	var cfg SpanConfig
 	for _, opt := range opts {

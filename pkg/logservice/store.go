@@ -828,6 +828,9 @@ func (l *store) cnAllocateID(ctx context.Context,
 		l.runtime.Logger().Error("propose get id failed", zap.Error(err))
 		return 0, err
 	}
+	if result.Value == 0 {
+		return 0, moerr.NewInternalError(ctx, "HAKeeper is not ready for ID allocation")
+	}
 	return result.Value, nil
 }
 
@@ -869,8 +872,13 @@ func (l *store) addScheduleCommands(ctx context.Context,
 	term uint64, cmds []pb.ScheduleCommand) error {
 	cmd := hakeeper.GetUpdateCommandsCmd(term, cmds)
 	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
-	if _, err := l.propose(ctx, session, cmd); err != nil {
+	result, err := l.propose(ctx, session, cmd)
+	if err != nil {
 		return handleNotHAKeeperError(ctx, err)
+	}
+	if len(result.Data) != 0 {
+		return moerr.NewInternalError(ctx,
+			"HAKeeper rejected schedule commands while recovery ID watermarks are pending")
 	}
 	return nil
 }

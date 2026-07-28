@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -289,8 +290,8 @@ func planHasTextToVarcharCastWithWidth(p *Plan, width int32) bool {
 	return planHasTextToVarcharCastWithNameAndWidth(p, "", width)
 }
 
-func planHasTextToVarcharStrictCastWithWidth(p *Plan, width int32) bool {
-	return planHasTextToVarcharCastWithNameAndWidth(p, "cast_strict", width)
+func planHasTextToVarcharAssignCastWithWidth(p *Plan, width int32) bool {
+	return planHasTextToVarcharCastWithNameAndWidth(p, "cast_assign", width)
 }
 
 func planHasTextToVarcharCastWithNameAndWidth(p *Plan, funcName string, width int32) bool {
@@ -306,7 +307,8 @@ func planHasTextToVarcharCastWithNameAndWidth(p *Plan, funcName string, width in
 		if f := expr.GetF(); f != nil {
 			nameMatches := f.Func.GetObjName() == funcName
 			if funcName == "" {
-				nameMatches = f.Func.GetObjName() == "cast" || f.Func.GetObjName() == "cast_strict"
+				name := f.Func.GetObjName()
+				nameMatches = name == "cast" || name == "cast_strict" || name == "cast_assign"
 			}
 			if nameMatches && len(f.Args) > 0 &&
 				f.Args[0].Typ.Id == int32(types.T_text) &&
@@ -405,355 +407,27 @@ func TestUpdateVarcharFromTextKeepsVarcharWidthCast(t *testing.T) {
 	assert.True(t, planHasTextToVarcharCastWithWidth(logicPlan, 255))
 }
 
-func TestInsertSelectVarcharFromTextUsesStrictAssignmentCast(t *testing.T) {
+func TestInsertSelectVarcharFromTextUsesAssignmentCast(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	addTextCastTableForTest(mock)
 
+	// INSERT ... SELECT is an assignment path: it routes CHAR/VARCHAR targets
+	// through cast_assign, which enforces width at runtime per sql_mode.
 	logicPlan, err := runOneStmt(mock, t, "insert into text_cast_t(id, vc) select id, txt from text_cast_t")
 	assert.NoError(t, err)
-	assert.True(t, planHasTextToVarcharStrictCastWithWidth(logicPlan, 255))
+	assert.True(t, planHasTextToVarcharAssignCastWithWidth(logicPlan, 255))
 }
 
-func TestOnDuplicateUpdateVarcharFromTextUsesStrictAssignmentCast(t *testing.T) {
+func TestOnDuplicateUpdateVarcharFromTextUsesAssignmentCast(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	addTextCastTableForTest(mock)
 
+	// ON DUPLICATE KEY UPDATE is an assignment path (not INSERT IGNORE), so it
+	// routes the CHAR/VARCHAR target through the sql_mode-gated cast_assign.
 	logicPlan, err := runOneStmt(mock, t, "insert into text_cast_t(id, txt, vc) values (1, repeat('a', 260), '') on duplicate key update vc = txt")
 	assert.NoError(t, err)
-	assert.True(t, planHasTextToVarcharStrictCastWithWidth(logicPlan, 255))
+	assert.True(t, planHasTextToVarcharAssignCastWithWidth(logicPlan, 255))
 }
-
-//Test Query Node Tree
-// func TestNodeTree(t *testing.T) {
-// 	type queryCheck struct {
-// 		steps    []int32                    //steps
-// 		nodeType map[int]plan.Node_NodeType //node_type in each node
-// 		children map[int][]int32            //children in each node
-// 	}
-
-// 	// map[sql string]checkData
-// 	nodeTreeCheckList := map[string]queryCheck{
-// 		"SELECT -1": {
-// 			steps: []int32{0},
-// 			nodeType: map[int]plan.Node_NodeType{
-// 				0: plan.Node_VALUE_SCAN,
-// 			},
-// 			children: nil,
-// 		},
-// 		"SELECT -1 from dual": {
-// 			steps: []int32{0},
-// 			nodeType: map[int]plan.Node_NodeType{
-// 				0: plan.Node_VALUE_SCAN,
-// 			},
-// 			children: nil,
-// 		},
-// 		// one node
-// 		"SELECT N_NAME FROM NATION WHERE N_REGIONKEY = 3": {
-// 			steps: []int32{0},
-// 			nodeType: map[int]plan.Node_NodeType{
-// 				0: plan.Node_TABLE_SCAN,
-// 			},
-// 			children: nil,
-// 		},
-// 		// two nodes- SCAN + SORT
-// 		"SELECT N_NAME FROM NATION WHERE N_REGIONKEY = 3 Order By N_REGIONKEY": {
-// 			steps: []int32{1},
-// 			nodeType: map[int]plan.Node_NodeType{
-// 				0: plan.Node_TABLE_SCAN,
-// 				1: plan.Node_SORT,
-// 			},
-// 			children: map[int][]int32{
-// 				1: {0},
-// 			},
-// 		},
-// 		// two nodes- SCAN + AGG(group by)
-// 		"SELECT N_NAME FROM NATION WHERE N_REGIONKEY = 3 Group By N_NAME": {
-// 			steps: []int32{1},
-// 			nodeType: map[int]plan.Node_NodeType{
-// 				0: plan.Node_TABLE_SCAN,
-// 				1: plan.Node_AGG,
-// 			},
-// 			children: map[int][]int32{
-// 				1: {0},
-// 			},
-// 		},
-// 		"select sum(n_nationkey) from nation": {
-// 			steps: []int32{1},
-// 			nodeType: map[int]plan.Node_NodeType{
-// 				0: plan.Node_TABLE_SCAN,
-// 				1: plan.Node_AGG,
-// 			},
-// 			children: map[int][]int32{
-// 				1: {0},
-// 			},
-// 		},
-// 		"select sum(n_nationkey) from nation order by sum(n_nationkey)": {
-// 			steps: []int32{2},
-// 			nodeType: map[int]plan.Node_NodeType{
-// 				0: plan.Node_TABLE_SCAN,
-// 				1: plan.Node_AGG,
-// 				2: plan.Node_SORT,
-// 			},
-// 			children: map[int][]int32{
-// 				1: {0},
-// 				2: {1},
-// 			},
-// 		},
-// 		// two nodes- SCAN + AGG(distinct)
-// 		"SELECT distinct N_NAME FROM NATION": {
-// 			steps: []int32{1},
-// 			nodeType: map[int]plan.Node_NodeType{
-// 				0: plan.Node_TABLE_SCAN,
-// 				1: plan.Node_AGG,
-// 			},
-// 			children: map[int][]int32{
-// 				1: {0},
-// 			},
-// 		},
-// 		// three nodes- SCAN + AGG(group by) + SORT
-// 		"SELECT N_NAME, count(*) as ttl FROM NATION Group By N_NAME Order By ttl": {
-// 			steps: []int32{2},
-// 			nodeType: map[int]plan.Node_NodeType{
-// 				0: plan.Node_TABLE_SCAN,
-// 				1: plan.Node_AGG,
-// 				2: plan.Node_SORT,
-// 			},
-// 			children: map[int][]int32{
-// 				1: {0},
-// 				2: {1},
-// 			},
-// 		},
-// 		// three nodes - SCAN, SCAN, JOIN
-// 		"SELECT N_NAME, N_REGIONKEY FROM NATION join REGION on NATION.N_REGIONKEY = REGION.R_REGIONKEY": {
-// 			steps: []int32{3},
-// 			nodeType: map[int]plan.Node_NodeType{
-// 				0: plan.Node_TABLE_SCAN,
-// 				1: plan.Node_TABLE_SCAN,
-// 				2: plan.Node_JOIN,
-// 				3: plan.Node_PROJECT,
-// 			},
-// 			children: map[int][]int32{
-// 				2: {0, 1},
-// 			},
-// 		},
-// 		// three nodes - SCAN, SCAN, JOIN  //use where for join condition
-// 		"SELECT N_NAME, N_REGIONKEY FROM NATION, REGION WHERE NATION.N_REGIONKEY = REGION.R_REGIONKEY": {
-// 			steps: []int32{3},
-// 			nodeType: map[int]plan.Node_NodeType{
-// 				0: plan.Node_TABLE_SCAN,
-// 				1: plan.Node_TABLE_SCAN,
-// 				2: plan.Node_JOIN,
-// 				3: plan.Node_PROJECT,
-// 			},
-// 			children: map[int][]int32{
-// 				2: {0, 1},
-// 				3: {2},
-// 			},
-// 		},
-// 		// 5 nodes - SCAN, SCAN, JOIN, SCAN, JOIN  //join three table
-// 		"SELECT l.L_ORDERKEY FROM CUSTOMER c, ORDERS o, LINEITEM l WHERE c.C_CUSTKEY = o.O_CUSTKEY and l.L_ORDERKEY = o.O_ORDERKEY and o.O_ORDERKEY < 10": {
-// 			steps: []int32{6},
-// 			nodeType: map[int]plan.Node_NodeType{
-// 				0: plan.Node_TABLE_SCAN,
-// 				1: plan.Node_TABLE_SCAN,
-// 				2: plan.Node_JOIN,
-// 				3: plan.Node_PROJECT,
-// 				4: plan.Node_TABLE_SCAN,
-// 				5: plan.Node_JOIN,
-// 				6: plan.Node_PROJECT,
-// 			},
-// 			children: map[int][]int32{
-// 				2: {0, 1},
-// 				3: {2},
-// 				5: {3, 4},
-// 				6: {5},
-// 			},
-// 		},
-// 		// 6 nodes - SCAN, SCAN, JOIN, SCAN, JOIN, SORT  //join three table
-// 		"SELECT l.L_ORDERKEY FROM CUSTOMER c, ORDERS o, LINEITEM l WHERE c.C_CUSTKEY = o.O_CUSTKEY and l.L_ORDERKEY = o.O_ORDERKEY and o.O_ORDERKEY < 10 order by c.C_CUSTKEY": {
-// 			steps: []int32{7},
-// 			nodeType: map[int]plan.Node_NodeType{
-// 				0: plan.Node_TABLE_SCAN,
-// 				1: plan.Node_TABLE_SCAN,
-// 				2: plan.Node_JOIN,
-// 				3: plan.Node_PROJECT,
-// 				4: plan.Node_TABLE_SCAN,
-// 				5: plan.Node_JOIN,
-// 				6: plan.Node_PROJECT,
-// 				7: plan.Node_SORT,
-// 			},
-// 			children: map[int][]int32{
-// 				2: {0, 1},
-// 				3: {2},
-// 				5: {3, 4},
-// 				6: {5},
-// 				7: {6},
-// 			},
-// 		},
-// 		// 3 nodes  //Derived table
-// 		"select c_custkey from (select c_custkey, count(C_NATIONKEY) ff from CUSTOMER group by c_custkey) a where ff > 0": {
-// 			steps: []int32{2},
-// 			nodeType: map[int]plan.Node_NodeType{
-// 				0: plan.Node_TABLE_SCAN,
-// 				1: plan.Node_AGG,
-// 				2: plan.Node_PROJECT,
-// 			},
-// 			children: map[int][]int32{
-// 				1: {0},
-// 				2: {1},
-// 			},
-// 		},
-// 		// 4 nodes  //Derived table
-// 		"select c_custkey from (select c_custkey, count(C_NATIONKEY) ff from CUSTOMER group by c_custkey ) a where ff > 0 order by c_custkey": {
-// 			steps: []int32{3},
-// 			nodeType: map[int]plan.Node_NodeType{
-// 				0: plan.Node_TABLE_SCAN,
-// 				1: plan.Node_AGG,
-// 				2: plan.Node_PROJECT,
-// 				3: plan.Node_SORT,
-// 			},
-// 			children: map[int][]int32{
-// 				1: {0},
-// 				2: {1},
-// 				3: {2},
-// 			},
-// 		},
-// 		// Derived table join normal table
-// 		"select c_custkey from (select c_custkey, count(C_NATIONKEY) ff from CUSTOMER group by c_custkey ) a join NATION b on a.c_custkey = b.N_REGIONKEY where b.N_NATIONKEY > 10 order By b.N_REGIONKEY": {
-// 			steps: []int32{6},
-// 			nodeType: map[int]plan.Node_NodeType{
-// 				0: plan.Node_TABLE_SCAN,
-// 				1: plan.Node_AGG,
-// 				2: plan.Node_PROJECT,
-// 				3: plan.Node_TABLE_SCAN,
-// 				4: plan.Node_JOIN,
-// 				5: plan.Node_PROJECT,
-// 				6: plan.Node_SORT,
-// 			},
-// 			children: map[int][]int32{
-// 				1: {0},
-// 				2: {1},
-// 				4: {2, 3},
-// 				5: {4},
-// 				6: {5},
-// 			},
-// 		},
-// 		// insert from values
-// 		"INSERT NATION (N_NATIONKEY, N_REGIONKEY, N_NAME) VALUES (1, 21, 'NAME1'), (2, 22, 'NAME2')": {
-// 			steps: []int32{1},
-// 			nodeType: map[int]plan.Node_NodeType{
-// 				0: plan.Node_VALUE_SCAN,
-// 				1: plan.Node_INSERT,
-// 			},
-// 			children: map[int][]int32{
-// 				1: {0},
-// 			},
-// 		},
-// 		// insert from select
-// 		"INSERT NATION SELECT * FROM NATION2": {
-// 			steps: []int32{1},
-// 			nodeType: map[int]plan.Node_NodeType{
-// 				0: plan.Node_TABLE_SCAN,
-// 				1: plan.Node_INSERT,
-// 			},
-// 			children: map[int][]int32{
-// 				1: {0},
-// 			},
-// 		},
-// 		// update
-// 		"UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=N_REGIONKEY+2 WHERE N_NATIONKEY > 10 LIMIT 20": {
-// 			steps: []int32{1},
-// 			nodeType: map[int]plan.Node_NodeType{
-// 				0: plan.Node_TABLE_SCAN,
-// 				1: plan.Node_UPDATE,
-// 			},
-// 			children: map[int][]int32{
-// 				1: {0},
-// 			},
-// 		},
-// 		// delete
-// 		"DELETE FROM NATION WHERE N_NATIONKEY > 10 LIMIT 20": {
-// 			steps: []int32{1},
-// 			nodeType: map[int]plan.Node_NodeType{
-// 				0: plan.Node_TABLE_SCAN,
-// 				1: plan.Node_DELETE,
-// 			},
-// 		},
-// 		// uncorrelated subquery
-// 		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION)": {
-// 			steps: []int32{0},
-// 			nodeType: map[int]plan.Node_NodeType{
-// 				0: plan.Node_TABLE_SCAN, //nodeid = 1  here is the subquery
-// 				1: plan.Node_TABLE_SCAN, //nodeid = 0, here is SELECT * FROM NATION where N_REGIONKEY > [subquery]
-// 			},
-// 			children: map[int][]int32{},
-// 		},
-// 		// correlated subquery
-// 		`SELECT * FROM NATION where N_REGIONKEY >
-// 			(select avg(R_REGIONKEY) from REGION where R_REGIONKEY < N_REGIONKEY group by R_NAME)
-// 		order by N_NATIONKEY`: {
-// 			steps: []int32{3},
-// 			nodeType: map[int]plan.Node_NodeType{
-// 				0: plan.Node_TABLE_SCAN, //nodeid = 1  subquery node，so,wo pop it to top
-// 				1: plan.Node_TABLE_SCAN, //nodeid = 0
-// 				2: plan.Node_AGG,        //nodeid = 2  subquery node，so,wo pop it to top
-// 				3: plan.Node_SORT,       //nodeid = 3
-// 			},
-// 			children: map[int][]int32{
-// 				2: {1}, //nodeid = 2, have children(NodeId=1, position=0)
-// 				3: {0}, //nodeid = 3, have children(NodeId=0, position=2)
-// 			},
-// 		},
-// 		// cte
-// 		`with tbl(col1, col2) as (select n_nationkey, n_name from nation) select * from tbl order by col2`: {
-// 			steps: []int32{1, 3},
-// 			nodeType: map[int]plan.Node_NodeType{
-// 				0: plan.Node_TABLE_SCAN,
-// 				1: plan.Node_MATERIAL,
-// 				2: plan.Node_MATERIAL_SCAN,
-// 				3: plan.Node_SORT,
-// 			},
-// 			children: map[int][]int32{
-// 				1: {0},
-// 				3: {2},
-// 			},
-// 		},
-// 	}
-
-// 	// run test and check node tree
-// 	for sql, check := range nodeTreeCheckList {
-// 		mock := NewMockOptimizer(false)
-// 		logicPlan, err := runOneStmt(mock, t, sql)
-// 		query := logicPlan.GetQuery()
-// 		if err != nil {
-// 			t.Fatalf("%+v, sql=%v", err, sql)
-// 		}
-// 		if len(query.Steps) != len(check.steps) {
-// 			t.Fatalf("run sql[%+v] error, root should be [%+v] but now is [%+v]", sql, check.steps, query.Steps)
-// 		}
-// 		for idx, step := range query.Steps {
-// 			if step != check.steps[idx] {
-// 				t.Fatalf("run sql[%+v] error, root should be [%+v] but now is [%+v]", sql, check.steps, query.Steps)
-// 			}
-// 		}
-// 		for idx, typ := range check.nodeType {
-// 			if idx >= len(query.Nodes) {
-// 				t.Fatalf("run sql[%+v] error, query.Nodes[%+v].NodeType not exist", sql, idx)
-// 			}
-// 			if query.Nodes[idx].NodeType != typ {
-// 				t.Fatalf("run sql[%+v] error, query.Nodes[%+v].NodeType should be [%+v] but now is [%+v]", sql, idx, typ, query.Nodes[idx].NodeType)
-// 			}
-// 		}
-// 		for idx, children := range check.children {
-// 			if idx >= len(query.Nodes) {
-// 				t.Fatalf("run sql[%+v] error, query.Nodes[%+v].NodeType not exist", sql, idx)
-// 			}
-// 			if !reflect.DeepEqual(query.Nodes[idx].Children, children) {
-// 				t.Fatalf("run sql[%+v] error, query.Nodes[%+v].Children should be [%+v] but now is [%+v]", sql, idx, children, query.Nodes[idx].Children)
-// 			}
-// 		}
-// 	}
-// }
 
 // test single table plan building
 func TestSingleTableSQLBuilder(t *testing.T) {
@@ -1652,6 +1326,15 @@ func TestJoinTableSqlBuilder(t *testing.T) {
 	runTestShouldError(mock, t, sqls)
 }
 
+func TestMySQLJoinSyntaxVariantsPlan(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	sqls := []string{
+		"SELECT * FROM { OJ NATION left outer join NATION2 on NATION.N_NATIONKEY = NATION2.N_NATIONKEY }",
+		"SELECT * FROM NATION straight_join NATION2 using(N_NATIONKEY)",
+	}
+	runTestShouldPass(mock, t, sqls, false, false)
+}
+
 // test derived table plan building
 func TestDerivedTableSqlBuilder(t *testing.T) {
 	mock := NewMockOptimizer(false)
@@ -1850,6 +1533,55 @@ func TestUpdateIgnoreUsesIgnoreDedupAction(t *testing.T) {
 		}
 	}
 	require.True(t, found, "UPDATE IGNORE of a primary key should include a DEDUP join")
+}
+
+func TestUpdateIgnoreUsesAssignmentIgnoreCast(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	logicPlan, err := runOneStmt(mock, t,
+		"UPDATE IGNORE NATION SET N_NAME = CAST('abcdefghijklmnopqrstuvwxyz' AS TEXT)")
+	require.NoError(t, err)
+	require.True(t,
+		planHasTextToVarcharCastWithNameAndWidth(logicPlan, "cast_ignore", 25),
+		"UPDATE IGNORE assignment should use cast_ignore",
+	)
+
+	logicPlan, err = runOneStmt(mock, t,
+		"UPDATE NATION SET N_NAME = CAST('abcdefghijklmnopqrstuvwxyz' AS TEXT)")
+	require.NoError(t, err)
+	require.True(t,
+		planHasTextToVarcharCastWithNameAndWidth(logicPlan, "cast_assign", 25),
+		"ordinary UPDATE assignment should use cast_assign",
+	)
+}
+
+func TestLegacyUpdateIgnoreUsesAssignmentIgnoreCast(t *testing.T) {
+	newBuilder := func() (*QueryBuilder, []*dmlPlanCtx) {
+		builder := NewQueryBuilder(plan.Query_UPDATE, NewMockCompilerContext(true), false, true)
+		builder.qry.Nodes = append(builder.qry.Nodes, &plan.Node{
+			ProjectList: []*plan.Expr{{
+				Typ:  plan.Type{Id: int32(types.T_text)},
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{}},
+			}},
+		})
+		return builder, []*dmlPlanCtx{{
+			tableDef: &plan.TableDef{Cols: []*plan.ColDef{{
+				Name: "c",
+				Typ:  plan.Type{Id: int32(types.T_varchar), Width: 3},
+			}}},
+			updateColLength: 1,
+			updateColPosMap: map[string]int{
+				"c": 0,
+			},
+		}}
+	}
+
+	builder, planContexts := newBuilder()
+	require.NoError(t, rewriteUpdateQueryLastNode(builder, planContexts, 0, true))
+	require.Equal(t, "cast_ignore", builder.qry.Nodes[0].ProjectList[0].GetF().GetFunc().GetObjName())
+
+	builder, planContexts = newBuilder()
+	require.NoError(t, rewriteUpdateQueryLastNode(builder, planContexts, 0, false))
+	require.Equal(t, "cast_assign", builder.qry.Nodes[0].ProjectList[0].GetF().GetFunc().GetObjName())
 }
 
 func TestUpdateRecomputesCompositeClusterByKey(t *testing.T) {
@@ -2955,6 +2687,88 @@ func TestReplacePKTable(t *testing.T) {
 		"REPLACE INTO dept (deptno, badcol) VALUES (1, 2)", // column not exist
 	}
 	runTestShouldError(mock, t, sqls)
+}
+
+func TestReplaceRewritesLegacyGeneratedColumnCast(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	tableDef := mock.ctxt.tables["dept"]
+	require.NotNil(t, tableDef)
+
+	var source, generated *plan.ColDef
+	var sourcePos int32
+	for i, col := range tableDef.Cols {
+		switch strings.ToLower(col.Name) {
+		case "deptno":
+			source = col
+			sourcePos = int32(i)
+		case "dname":
+			generated = col
+		}
+	}
+	require.NotNil(t, source)
+	require.NotNil(t, generated)
+	sourceExpr := &plan.Expr{
+		Typ: source.Typ,
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				RelPos: 0,
+				ColPos: sourcePos,
+				Name:   source.Name,
+			},
+		},
+	}
+	legacyExpr, err := forceCastExprWithName(t.Context(), sourceExpr, generated.Typ, "cast_strict")
+	require.NoError(t, err)
+	generated.GeneratedCol = &plan.GeneratedCol{Expr: legacyExpr, IsStored: true}
+
+	stmt, err := mysql.ParseOne(t.Context(), "REPLACE INTO dept (deptno, loc) VALUES (1, 'NY')", 1)
+	require.NoError(t, err)
+	built, err := mock.Optimize(stmt)
+	require.NoError(t, err)
+	foundGeneratedAssignment := false
+	for _, node := range built.Nodes {
+		for _, expr := range node.ProjectList {
+			f := expr.GetF()
+			if f != nil &&
+				f.GetFunc().GetObjName() == "cast_assign" &&
+				expr.Typ.Width == generated.Typ.Width &&
+				len(f.Args) > 0 &&
+				f.Args[0].Typ.Id == source.Typ.Id {
+				foundGeneratedAssignment = true
+			}
+		}
+	}
+	require.True(t, foundGeneratedAssignment)
+}
+
+func TestAssignmentCastRollingUpgradePlanGate(t *testing.T) {
+	proc := testutil.NewProc(nil)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+
+	build := func(version int64) string {
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
+		mock := NewMockOptimizer(true)
+		stmt, err := mysql.ParseOne(
+			t.Context(),
+			"INSERT INTO dept (deptno, dname, loc) SELECT 1, 'Sales', 'NY'",
+			1,
+		)
+		require.NoError(t, err)
+		built, err := mock.Optimize(stmt)
+		require.NoError(t, err)
+		data, err := json.Marshal(built)
+		require.NoError(t, err)
+		return string(data)
+	}
+
+	mixedVersionPlan := build(defines.MORPCVersion4)
+	require.Contains(t, mixedVersionPlan, `"obj_name":"cast_strict"`)
+	require.NotContains(t, mixedVersionPlan, `"obj_name":"cast_assign"`)
+	require.NotContains(t, mixedVersionPlan, `"obj_name":"cast_ignore"`)
+
+	upgradedPlan := build(defines.MORPCVersion5)
+	require.Contains(t, upgradedPlan, `"obj_name":"cast_assign"`)
 }
 
 func TestReplaceSetColRefAsDefault(t *testing.T) {

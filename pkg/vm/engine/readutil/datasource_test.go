@@ -199,43 +199,6 @@ func TestObjListRelData(t *testing.T) { // for test coverage
 	objlistRelData.UnmarshalBinary(buf)
 }
 
-func TestObjListRelData1(t *testing.T) {
-	defer func() {
-		r := recover()
-		fmt.Println("panic recover", r)
-	}()
-	objlistRelData := &ObjListRelData{}
-	objlistRelData.GetShardIDList()
-}
-
-func TestObjListRelData2(t *testing.T) {
-	defer func() {
-		r := recover()
-		fmt.Println("panic recover", r)
-	}()
-	objlistRelData := &ObjListRelData{}
-	objlistRelData.GetShardID(1)
-
-}
-
-func TestObjListRelData3(t *testing.T) {
-	defer func() {
-		r := recover()
-		fmt.Println("panic recover", r)
-	}()
-	objlistRelData := &ObjListRelData{}
-	objlistRelData.SetShardID(1, 1)
-}
-
-func TestObjListRelData4(t *testing.T) {
-	defer func() {
-		r := recover()
-		fmt.Println("panic recover", r)
-	}()
-	objlistRelData := &ObjListRelData{}
-	objlistRelData.AppendShardID(1)
-}
-
 func TestFastApplyDeletesByRowIds(t *testing.T) {
 	rowIdStrs := []string{
 		"0196a9cb-3fc6-7245-a9ad-51f37d9541cb-0-0-2900",

@@ -255,8 +255,9 @@ func TestReplayCatalog3(t *testing.T) {
 	assert.Nil(t, err)
 	rel, err = e.GetRelationByName(schema.Name)
 	assert.Nil(t, err)
-	obj, err = rel.CreateObject(false)
+	obj, err = rel.CreateNonAppendableObject(false, nil)
 	assert.Nil(t, err)
+	testutil.MockObjectStats(t, obj)
 	assert.Nil(t, txn.Commit(context.Background()))
 
 	txn, _ = tae.StartTxn(nil)
@@ -462,7 +463,7 @@ func TestReplay2(t *testing.T) {
 	assert.NotNil(t, err)
 	assert.Nil(t, txn.Commit(context.Background()))
 
-	ctx2, cancel := context.WithTimeout(context.Background(), time.Second*10)
+	ctx2, cancel := context.WithTimeout(context.Background(), testutil.TestCheckpointTimeout)
 	defer cancel()
 	err = tae2.ForceFlush(ctx2, tae2.TxnMgr.Now())
 	assert.NoError(t, err)
@@ -896,9 +897,7 @@ func TestReplay5(t *testing.T) {
 	entry, err = tae.Wal.RangeCheckpoint(1, lsn)
 	assert.NoError(t, err)
 	assert.NoError(t, entry.WaitDone())
-	testutils.WaitExpect(1000, func() bool {
-		return testutil.AllCheckpointsFinished(tae)
-	})
+	testutil.WaitAllCheckpointsFinished(t, tae)
 	testutil.PrintCheckpointStats(t, tae)
 	assert.Equal(t, tae.Wal.GetLSNWatermark(), tae.Wal.GetCheckpointed())
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))

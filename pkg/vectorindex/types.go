@@ -23,6 +23,9 @@ import (
 	usearch "github.com/unum-cloud/usearch/golang"
 )
 
+// QUANTIZATION lives in pkg/vectorindex/quantizer: ToVectorType, Int8Params,
+// SQLTypeName, TrainInt8, ApplyInt8, and the SQL entry-projection builders.
+
 /*
   HNSW vector index using usearch
 
@@ -108,16 +111,20 @@ type IndexTableConfig struct {
 	ThreadsSearch int64  `json:"threads_search"`
 
 	// IVF related
-	EntriesTable   string  `json:"entries"`
-	DataSize       int64   `json:"datasize"`
-	Nprobe         uint    `json:"nprobe"`
-	PKeyType       int32   `json:"pktype"`
-	KeyPartType    int32   `json:"parttype"`
-	Limit          uint64  `json:"limit"`
-	LowerBoundType int8    `json:"lower_bound_type"`
-	LowerBound     float64 `json:"lower_bound"`
-	UpperBoundType int8    `json:"upper_bound_type"`
-	UpperBound     float64 `json:"upper_bound"`
+	EntriesTable       string   `json:"entries"`
+	DataSize           int64    `json:"datasize"`
+	Nprobe             uint     `json:"nprobe"`
+	PKeyType           int32    `json:"pktype"`
+	KeyPartType        int32    `json:"parttype"`
+	KmeansTrainPercent float64  `json:"kmeans_train_percent"`
+	KmeansMaxIteration int64    `json:"kmeans_max_iteration"`
+	Limit              uint64   `json:"limit"`
+	LowerBoundType     int8     `json:"lower_bound_type"`
+	LowerBound         float64  `json:"lower_bound"`
+	UpperBoundType     int8     `json:"upper_bound_type"`
+	UpperBound         float64  `json:"upper_bound"`
+	IncludeColumns     []string `json:"include_columns,omitempty"`
+	IncludeColumnTypes []int32  `json:"include_column_types,omitempty"`
 
 	// GPU related
 	BatchWindow int64 `json:"batch_window"`
@@ -150,16 +157,17 @@ type IvfParam struct {
 
 // IVF-PQ specified parameters
 type IvfpqParam struct {
-	Lists              string `json:"lists"`
-	M                  string `json:"m"`
-	BitsPerCode        string `json:"bits_per_code"`
-	OpType             string `json:"op_type"`
-	Quantization       string `json:"quantization"`
-	Distribution       string `json:"distribution_mode"`
-	IncludedColumns    string `json:"included_columns"`
-	KmeansTrainPercent string `json:"kmeans_train_percent"`
-	KmeansMaxIteration string `json:"kmeans_max_iteration"`
-	MaxIndexCapacity   string `json:"max_index_capacity"`
+	Lists               string `json:"lists"`
+	M                   string `json:"m"`
+	BitsPerCode         string `json:"bits_per_code"`
+	OpType              string `json:"op_type"`
+	Quantization        string `json:"quantization"`
+	Distribution        string `json:"distribution_mode"`
+	IncludedColumns     string `json:"included_columns"`
+	KmeansTrainPercent  string `json:"kmeans_train_percent"`
+	KmeansMaxIteration  string `json:"kmeans_max_iteration"`
+	MaxIndexCapacity    string `json:"max_index_capacity"`
+	QuantizerTrainLimit string `json:"quantizer_train_limit"`
 }
 
 // CAGRA specified parameters
@@ -176,16 +184,23 @@ type CagraParam struct {
 	ITopkSize              string `json:"itopk_size"`
 	IncludedColumns        string `json:"included_columns"`
 	MaxIndexCapacity       string `json:"max_index_capacity"`
+	QuantizerTrainLimit    string `json:"quantizer_train_limit"`
 }
 
 type IvfflatIndexConfig struct {
-	Lists              uint
-	Metric             uint16
-	InitType           uint16
-	Dimensions         uint
-	Spherical          bool
-	Version            int64
-	VectorType         int32
+	Lists      uint
+	Metric     uint16
+	InitType   uint16
+	Dimensions uint
+	Spherical  bool
+	Version    int64
+	VectorType int32
+	// CentroidType is the element type the centroid hidden table is stored in.
+	// Entries always keep VectorType (the input/quantization type); centroids may
+	// be f32 (decoupled — best recall, fast f32 SIMD search, negligible RAM for
+	// few centroids) or follow VectorType (least RAM, narrow-native search). 0 ==
+	// unset is treated as T_array_float32. (cuVS allows the same choice.)
+	CentroidType       int32
 	KmeansTrainPercent float64
 	KmeansMaxIteration int64
 }
@@ -213,6 +228,7 @@ type CuvsCagraIndexConfig struct {
 	Quantization            uint16
 	DistributionMode        uint16
 	IncludedColumns         []string
+	QuantizerTrainLimit     uint64
 }
 
 type CuvsIvfpqIndexConfig struct {
@@ -226,6 +242,7 @@ type CuvsIvfpqIndexConfig struct {
 	Version                int64
 	KmeansTrainsetFraction float64
 	IncludedColumns        []string
+	QuantizerTrainLimit    uint64
 }
 
 // This is generalized index config and able to share between various algorithm types.  Simply add your new configuration such as usearch.IndexConfig
@@ -245,18 +262,51 @@ type RuntimeConfig struct {
 	Probe             uint
 	OrigFuncName      string
 	BackgroundQueries []*plan.Query
-	NThreads          uint // Brute Force Index
 
 	// FilterJSON is a JSON predicate array forwarded verbatim to CGo
 	// (gpu_<idx>_search_with_filter). Empty → unfiltered search path.
 	// Go never parses this payload; it's produced by the SQL layer and
 	// consumed by the C++ eval_filter_bitmap_cpu.
 	FilterJSON string
+
+	// Optional raw runtime-filter payload from the build side. IVF search turns
+	// this into either an exact-pk filter or a membership filter for entries.
+	RuntimeFilterData []byte
+	NThreads          uint // Brute Force Index
+
+	// Query-scoped IVF search state. These fields must not be cached on the
+	// shared index object because every query can ask for different output
+	// columns, push down different predicates, and advance through different
+	// search rounds.
+	//
+	// RuntimeConfig is passed to Search by value. Pointer fields such as
+	// IncludeResult and SearchCursor can be mutated by Search and observed by
+	// the caller. Value fields such as SearchRoundLimit and BucketExpandStep are
+	// copied into Search and do not propagate caller-visible mutations back out.
+	RequestedIncludeColumns []string
+	PushdownFilterSQL       string
+	IncludeResult           *IvfIncludeResult
+	TargetRows              uint
+	SearchRoundLimit        uint
+	BucketExpandStep        uint
+	SearchCursor            *IvfSearchCursor
+}
+
+type IvfIncludeResult struct {
+	ColNames []string
+	Data     map[string][]any
+	Nulls    map[string][]bool
+}
+
+type IvfSearchCursor struct {
+	RankedCentroidIDs  []int64
+	NextBucketOffset   uint
+	CurrentBucketCount uint
+	Round              uint
+	Exhausted          bool
 }
 
 type VectorIndexCdc[T types.RealNumbers] struct {
-	// Start string                   `json:"start"`
-	// End   string                   `json:"end"`
 	Data []VectorIndexCdcEntry[T] `json:"cdc"`
 }
 
@@ -315,7 +365,6 @@ func (h *VectorIndexCdc[T]) Delete(key int64) {
 }
 
 func (h *VectorIndexCdc[T]) ToJson() (string, error) {
-
 	b, err := sonic.Marshal(h)
 	if err != nil {
 		return "", err

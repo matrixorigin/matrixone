@@ -1,3 +1,8 @@
+prepare fromx from select 1;
+execute fromx;
+1
+1
+deallocate prepare fromx;
 drop table if exists t1;
 create table t1 (a int, b int);
 prepare stmt1 from 'select * from t1 where a > ?';
@@ -772,3 +777,30 @@ id    meta
 4    null
 drop table t_ps_null_json;
 drop database db_ps_null_json;
+drop database if exists db_prepare_ctas;
+create database db_prepare_ctas;
+use db_prepare_ctas;
+create table src (g int, i int, v varchar(12));
+insert into src values (1,10,'aa'),(1,20,'bbb'),(2,null,null);
+prepare stmt_ctas_values from 'create table ctas_values as select ? as a, ? as b';
+set @a=7, @b='hello';
+execute stmt_ctas_values using @a, @b;
+select * from ctas_values;
+a    b
+7    hello
+drop table ctas_values;
+set @a=8, @b=null;
+execute stmt_ctas_values using @a, @b;
+select * from ctas_values;
+a    b
+8    null
+deallocate prepare stmt_ctas_values;
+prepare stmt_ctas_where from 'create table ctas_where as select g,i,v from src where g = ?';
+set @g=1;
+execute stmt_ctas_where using @g;
+select * from ctas_where order by i;
+g    i    v
+1    10    aa
+1    20    bbb
+deallocate prepare stmt_ctas_where;
+drop database db_prepare_ctas;

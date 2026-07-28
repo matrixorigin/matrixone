@@ -296,21 +296,34 @@ func (ec *engineColumnInfo) GetType() types.T {
 }
 
 type PrepareStmt struct {
-	Name           string
-	Sql            string
-	PreparePlan    *plan.Plan
-	PrepareStmt    tree.Statement
-	ParamTypes     []byte
-	ColDefData     [][]byte
-	IsCloudNonuser bool
-	proc           *process.Process
-	remapDb        map[string]string
+	Name            string
+	Sql             string
+	PreparePlan     *plan.Plan
+	PrepareStmt     tree.Statement
+	NativeMode      bool
+	ParamTypes      []byte
+	ColDefData      [][]byte
+	IsCloudNonuser  bool
+	proc            *process.Process
+	remapDb         map[string]string
+	defaultDatabase string
 
 	params              *vector.Vector
 	getFromSendLongData map[int]struct{}
 
 	compile *compile.Compile
 	Ts      timestamp.Timestamp
+	// tempTableVersion is the session temporary-table mapping version used to
+	// build PreparePlan and compile.
+	tempTableVersion uint64
+	// protocolVersion is the cluster protocol used to build PreparePlan.
+	// A version change can alter internal function IDs in generated DML plans.
+	protocolVersion int64
+
+	// schedulingSQLMode freezes the lexical mode used when Sql was prepared.
+	// EXECUTE must not reinterpret optimizer comments after session sql_mode
+	// changes.
+	schedulingSQLMode string
 }
 
 /*
@@ -605,7 +618,8 @@ func execResultArrayHasData(arr []ExecResult) bool {
 }
 
 type BackgroundExecOption struct {
-	fromRealUser bool
+	fromRealUser       bool
+	forcePessimisticRC bool
 }
 
 // BackgroundExec executes the sql in background session without network output.
@@ -876,6 +890,10 @@ type ExecCtx struct {
 	reqCtx      context.Context
 	prepareStmt *PrepareStmt
 	runResult   *util.RunResult
+	// rootSQLOverride is the authoritative SQL for a statement planned
+	// recursively inside this request, such as the statement owned by PREPARE.
+	// A nil value falls back to the session SQL.
+	rootSQLOverride *string
 	//stmt will be replaced by the Execute
 	stmt tree.Statement
 	//isLastStmt : true denotes the last statement in the query
@@ -914,10 +932,20 @@ type ExecCtx struct {
 	rewriteEnabled bool
 }
 
+func (execCtx *ExecCtx) withRootSQL(rootSQL string, fn func() error) error {
+	previous := execCtx.rootSQLOverride
+	execCtx.rootSQLOverride = &rootSQL
+	defer func() {
+		execCtx.rootSQLOverride = previous
+	}()
+	return fn()
+}
+
 func (execCtx *ExecCtx) Close() {
 	execCtx.reqCtx = nil
 	execCtx.prepareStmt = nil
 	execCtx.runResult = nil
+	execCtx.rootSQLOverride = nil
 	execCtx.stmt = nil
 	execCtx.tenant = ""
 	execCtx.userName = ""
@@ -1004,7 +1032,10 @@ type feSessionImpl struct {
 	// reserved because the connection is still in use in proxy's connection cache.
 	// Default is false, means that the network connection should be closed.
 	reserveConn bool
-	service     string
+	// userLevelLocksMigrated is set after proxy restores this connection on
+	// another CN. The old backend session must not release the migrated locks.
+	userLevelLocksMigrated bool
+	service                string
 
 	//fromRealUser distinguish the sql that the user inputs from the one
 	//that the internal or background program executes
@@ -1441,6 +1472,10 @@ func (ses *Session) GetSessionSysVar(name string) (interface{}, error) {
 
 func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val interface{}) (err error) {
 	name = strings.ToLower(name)
+	oldMatrixOneNative := false
+	if name == "sql_mode" {
+		oldMatrixOneNative = ses.sqlModeHasMatrixOneNative()
+	}
 
 	def, ok := gSysVarsDefs[name]
 	if !ok {
@@ -1490,7 +1525,7 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 		ses.sesSysVars.Set(name, val)
 	}
 	if err == nil && name == "sql_mode" {
-		ses.updateSqlModeNoAutoValueOnZero(val)
+		ses.updateSqlModeCaches(oldMatrixOneNative, val)
 	}
 
 	// Update rewriteEnabled cache when enable_remap_hint is changed

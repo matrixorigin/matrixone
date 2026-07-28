@@ -45,3 +45,10 @@ type = "distributed-tae"
 port = 16002
 unix-socket = "/tmp/mysql2.sock"
 proxy-enabled = true
+
+[cn.frontend.iceberg]
+enable = true
+enable-write = true
+enable-delete = true
+enable-dml = true
+enable-maintenance = true

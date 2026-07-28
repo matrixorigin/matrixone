@@ -1541,6 +1541,51 @@ func TestSerialExtractConstIndex(t *testing.T) {
 	}
 }
 
+func TestSerialExtractUUID(t *testing.T) {
+	uuids := []types.Uuid{
+		{13, 86, 135, 218, 42, 103, 17, 237, 153, 224, 0, 12, 41, 132, 121, 4},
+		{97, 25, 223, 253, 42, 107, 17, 237, 153, 224, 0, 12, 41, 132, 121, 4},
+	}
+	serialized := make([]string, len(uuids))
+	for i, uuid := range uuids {
+		ps := types.NewPacker()
+		ps.EncodeUuid(uuid)
+		serialized[i] = string(ps.Bytes())
+		ps.Close()
+	}
+
+	indexInputs := []struct {
+		name  string
+		input FunctionTestInput
+	}{
+		{
+			name:  "constant index",
+			input: NewFunctionTestConstInput(types.T_int64.ToType(), []int64{0, 0}, nil),
+		},
+		{
+			name:  "row index",
+			input: NewFunctionTestInput(types.T_int64.ToType(), []int64{0, 0}, nil),
+		},
+	}
+
+	for _, tt := range indexInputs {
+		t.Run(tt.name, func(t *testing.T) {
+			testCase := NewFunctionTestCase(
+				testutil.NewProcess(t),
+				[]FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), serialized, nil),
+					tt.input,
+					NewFunctionTestInput(types.T_uuid.ToType(), make([]types.Uuid, len(uuids)), nil),
+				},
+				NewFunctionTestResult(types.T_uuid.ToType(), false, uuids, nil),
+				builtInSerialExtract,
+			)
+			ok, info := testCase.Run()
+			require.True(t, ok, info)
+		})
+	}
+}
+
 func Test_BuiltIn_Math(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	{

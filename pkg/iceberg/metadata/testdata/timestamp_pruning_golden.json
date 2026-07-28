@@ -1,0 +1,42 @@
+{
+  "cases": [
+    {
+      "data_file_bounds": [
+        {
+          "name": "before",
+          "should_prune_for_gt": true,
+          "upper_micros": 1767222000000000
+        },
+        {
+          "lower_micros": 1767229200000000,
+          "name": "after",
+          "should_prune_for_gt": false
+        }
+      ],
+      "iceberg_type": "timestamp",
+      "id": "timestamp_no_zone_gt_2026_01_01_midnight",
+      "literal_sql": "TIMESTAMP '2026-01-01 00:00:00'",
+      "normalized_micros": 1767225600000000
+    },
+    {
+      "data_file_bounds": [
+        {
+          "name": "before",
+          "should_prune_for_gt": true,
+          "upper_micros": 1767211200000000
+        },
+        {
+          "lower_micros": 1767218400000000,
+          "name": "after",
+          "should_prune_for_gt": false
+        }
+      ],
+      "iceberg_type": "timestamptz",
+      "id": "timestamptz_utc_plus_3_gt_local_midnight",
+      "literal_sql": "TIMESTAMP '2026-01-01 00:00:00'",
+      "normalized_utc_micros": 1767214800000000,
+      "session_timezone": "+03:00"
+    }
+  ],
+  "source": "Iceberg timestamp bounds are microseconds; timestamptz bounds are UTC instant microseconds."
+}

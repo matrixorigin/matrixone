@@ -7,6 +7,12 @@ basic_format
 SELECT TIME_FORMAT('15:30:45', '%T') AS t_format;
 t_format
 15:30:45
+SELECT TIME_FORMAT('123:45:06', '%T') AS extended_t_format;
+extended_t_format
+123:45:06
+SELECT TIME_FORMAT('-123:45:06', 'elapsed=%H:%i:%s') AS negative_with_text;
+negative_with_text
+-elapsed=123:45:06
 SELECT TIME_FORMAT('00:00:00', '%H:%i:%s') AS zero_time;
 zero_time
 00:00:00
@@ -69,6 +75,12 @@ null_time
 null
 SELECT TIME_FORMAT('15:30:45', NULL) AS null_format;
 null_format
+null
+SELECT TIME_FORMAT('15:30:45', '') AS empty_positive_format;
+empty_positive_format
+null
+SELECT TIME_FORMAT('-15:30:45', '') AS empty_negative_format;
+empty_negative_format
 null
 CREATE TABLE t1(t TIME);
 INSERT INTO t1 VALUES ('15:30:45'), ('00:00:00'), ('23:59:59'), ('12:34:56');

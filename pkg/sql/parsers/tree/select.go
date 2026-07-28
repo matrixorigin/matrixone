@@ -494,7 +494,7 @@ func (node *SelectExpr) Format(ctx *FmtCtx) {
 	node.Expr.Format(ctx)
 	if node.As != nil && !node.As.Empty() {
 		ctx.WriteString(" as ")
-		ctx.WriteString(node.As.Origin())
+		ctx.WriteIdentifier(Identifier(node.As.Origin()))
 	}
 }
 
@@ -692,7 +692,7 @@ type AliasClause struct {
 
 func (node *AliasClause) Format(ctx *FmtCtx) {
 	if node.Alias != "" {
-		ctx.WriteString(string(node.Alias))
+		ctx.WriteIdentifier(node.Alias)
 	}
 	if node.Cols != nil {
 		ctx.WriteByte('(')
@@ -827,7 +827,7 @@ func (node *IndexHint) Format(ctx *FmtCtx) {
 			if i > 0 {
 				ctx.WriteString(", ")
 			}
-			ctx.WriteString(value)
+			ctx.WriteIdentifier(Identifier(value))
 		}
 	}
 	ctx.WriteString(")")

@@ -191,9 +191,13 @@ func TestTimeWinSplitDistinctResultAndReplace(t *testing.T) {
 	arg.ctr.status = flush
 	arg.ctr.colCnt = 1
 	arg.ctr.aggs = []aggexec.AggFuncExec{agg}
+	arg.ctr.wStart = make([]types.Datetime, rows)
+	arg.ctr.wEnd = make([]types.Datetime, rows)
 	result, err := arg.Call(proc)
 	require.NoError(t, err)
 	require.NotNil(t, result.Batch)
+	require.Empty(t, arg.ctr.wStart)
+	require.Empty(t, arg.ctr.wEnd)
 	resultValues := vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[0])
 	require.Len(t, resultValues, rows)
 	for _, idx := range []int{0, aggexec.AggBatchSize - 1, aggexec.AggBatchSize, rows - 1} {
@@ -209,10 +213,14 @@ func TestTimeWinSplitDistinctResultAndReplace(t *testing.T) {
 	// released when the second replacement is installed.
 	require.NoError(t, arg.ctr.aggs[0].Fill(0, 0, []*vector.Vector{input}))
 	arg.ctr.status = flush
+	arg.ctr.wStart = make([]types.Datetime, maxTimeWindowRows+1)
+	arg.ctr.wEnd = make([]types.Datetime, maxTimeWindowRows+1)
 	secondResult, err := arg.Call(proc)
 	require.NoError(t, err)
 	require.NotNil(t, secondResult.Batch)
 	require.Equal(t, []int64{1}, vector.MustFixedColWithTypeCheck[int64](secondResult.Batch.Vecs[0]))
+	require.Empty(t, arg.ctr.wStart)
+	require.Empty(t, arg.ctr.wEnd)
 
 	arg.Free(proc, false, nil)
 	input.Free(proc.Mp())
@@ -273,6 +281,23 @@ func newExpression(pos int32) *plan.Expr {
 func makeInterval() types.Datetime {
 	t, _ := calcDatetime(5, 2)
 	return t
+}
+
+func TestFirstWindowKeepsZeroDatetimeDistinctFromEpoch(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	ts := vector.NewVec(types.T_datetime.ToType())
+	require.NoError(t, vector.AppendFixedList(ts, []types.Datetime{types.ZeroDatetime}, nil, proc.Mp()))
+	ts.SetLength(1)
+	defer ts.Free(proc.Mp())
+
+	window := &TimeWin{Interval: types.Datetime(types.MicroSecsPerSec), Sliding: types.Datetime(types.MicroSecsPerSec)}
+	ctr := container{tsVec: []*vector.Vector{ts}}
+	require.NoError(t, ctr.firstWindow(window))
+
+	require.Equal(t, types.ZeroDatetime, ctr.left)
+	require.Equal(t, types.ZeroDatetime, ctr.right)
+	require.Equal(t, types.ZeroDatetime, ctr.nextLeft)
+	require.Equal(t, types.ZeroDatetime, ctr.nextRight)
 }
 
 // singleAggInfo is the basic information of single column agg.

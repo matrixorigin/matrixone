@@ -193,7 +193,10 @@ func runEventTest(t *testing.T,
 	err := st.RunNamedTask("test-event-handler", func(ctx context.Context) {
 		for {
 			select {
-			case e := <-tu2.reqC:
+			case e, ok := <-tu2.reqC:
+				if !ok {
+					return
+				}
 				err := cc2.HandleEvent(ctx, e, tu2.respC)
 				require.NoError(t, err)
 			case r := <-tu2.respC:
@@ -393,7 +396,10 @@ func TestQuitEvent(t *testing.T) {
 	err := st.RunNamedTask("test-event-handler", func(ctx context.Context) {
 		for {
 			select {
-			case e := <-tu2.reqC:
+			case e, ok := <-tu2.reqC:
+				if !ok {
+					return
+				}
 				_ = cc2.HandleEvent(ctx, e, tu2.respC)
 			case r := <-tu2.respC:
 				if len(r) > 0 {

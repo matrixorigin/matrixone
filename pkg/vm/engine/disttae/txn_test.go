@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	txnpb "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -42,6 +43,57 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
+
+func TestValidateAutoIncrEpochAdvance(t *testing.T) {
+	require.NoError(t, validateAutoIncrEpochAdvance(0, 0))
+	require.NoError(t, validateAutoIncrEpochAdvance(math.MaxUint32-1, 1))
+	require.Error(t, validateAutoIncrEpochAdvance(math.MaxUint32, 1))
+	require.Error(t, validateAutoIncrEpochAdvance(math.MaxUint32-1, 2))
+}
+
+func TestPrecommitEntryCarriesAutoIncrEpoch(t *testing.T) {
+	proc := testutil.NewProc(t)
+	bat := newDeleteBatchForTest(t, proc, []int64{1})
+	defer bat.Clean(proc.Mp())
+
+	for _, tc := range []struct {
+		name    string
+		version uint32
+		known   bool
+	}{
+		{name: "known", version: 7, known: true},
+		{name: "known zero", version: 0, known: true},
+		{name: "old cn compatibility", version: 0, known: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			encoded, err := toPBEntry(Entry{
+				typ:                DELETE,
+				tableId:            42,
+				databaseId:         7,
+				bat:                bat,
+				autoIncrEpoch:      tc.version,
+				autoIncrEpochKnown: tc.known,
+			})
+			require.NoError(t, err)
+
+			data, err := encoded.Marshal()
+			require.NoError(t, err)
+			decoded := new(api.Entry)
+			require.NoError(t, decoded.Unmarshal(data))
+			require.Equal(t, tc.version, decoded.AutoIncrEpoch)
+			require.Equal(t, tc.known, decoded.AutoIncrEpochKnown)
+		})
+	}
+}
+
+func TestWorkspaceFlushKeySeparatesAutoIncrEpochs(t *testing.T) {
+	base := tableKey{accountId: 1, databaseId: 7, dbName: "db", name: "tbl"}
+	batches := map[workspaceTableKey]int{
+		{tableKey: base, autoIncrEpoch: 0, autoIncrEpochKnown: false}: 1,
+		{tableKey: base, autoIncrEpoch: 0, autoIncrEpochKnown: true}:  1,
+	}
+	require.Len(t, batches, 2)
+}
 
 func Test_GetUncommittedS3Tombstone(t *testing.T) {
 	var statsList []objectio.ObjectStats
@@ -180,6 +232,7 @@ func TestWriteBatchRecordsPKCheckState(t *testing.T) {
 		require.Len(t, txn.writes, 1)
 		require.False(t, txn.writes[0].pkCheckReady)
 		require.Equal(t, -1, txn.writes[0].pkCheckPos)
+		require.False(t, txn.writes[0].autoIncrEpochKnown)
 
 		bat.Clean(proc.Mp())
 	})
@@ -206,6 +259,19 @@ func TestWriteBatchRecordsPKCheckState(t *testing.T) {
 		require.Len(t, txn.writes, 1)
 		require.True(t, txn.writes[0].pkCheckReady)
 		require.Equal(t, 1, txn.writes[0].pkCheckPos)
+
+		bat.Clean(txn.proc.Mp())
+	})
+
+	t.Run("user write records planned AUTO_INCREMENT epoch", func(t *testing.T) {
+		txn := newTransactionWithActivePKTableForTest(t, "pk")
+		bat := newInt64BatchForTest(t, txn.proc, []string{"pk"}, []int64{1})
+
+		_, err := txn.writeBatchWithAutoIncrEpoch(INSERT, "", 1, 7, 42, "db", "tbl", bat, DNStore{}, 7)
+		require.NoError(t, err)
+		require.Len(t, txn.writes, 1)
+		require.Equal(t, uint32(7), txn.writes[0].autoIncrEpoch)
+		require.True(t, txn.writes[0].autoIncrEpochKnown)
 
 		bat.Clean(txn.proc.Mp())
 	})
@@ -803,6 +869,56 @@ func TestCheckPKDupSkipsNulls(t *testing.T) {
 		m := make(map[any]bool)
 		dup, _ := checkPKDup(m, pk, 0, 3)
 		require.False(t, dup, "NULLs should be skipped for float64 arrays")
+		require.Len(t, m, 2)
+		pk.Free(mp)
+	})
+
+	// Narrow vector element types must be handled (not hit the default panic).
+	// These columns are rejected as primary keys at DDL admission, but checkPKDup
+	// still handles them defensively so it degrades to normal dedup, never panics.
+	t.Run("array_int8_dup_and_nulls", func(t *testing.T) {
+		pk := vector.NewVec(types.T_array_int8.ToType())
+		require.NoError(t, vector.AppendArray(pk, []int8{1, 2, 3}, false, mp))
+		require.NoError(t, vector.AppendArray(pk, []int8{0}, true, mp)) // NULL
+		require.NoError(t, vector.AppendArray(pk, []int8{1, 2, 3}, false, mp))
+
+		m := make(map[any]bool)
+		dup, _ := checkPKDup(m, pk, 0, 3)
+		require.True(t, dup, "duplicate int8 array must be caught, NULL skipped")
+		pk.Free(mp)
+	})
+
+	t.Run("array_uint8_distinct", func(t *testing.T) {
+		pk := vector.NewVec(types.T_array_uint8.ToType())
+		require.NoError(t, vector.AppendArray(pk, []uint8{0, 1, 2, 3}, false, mp))
+		require.NoError(t, vector.AppendArray(pk, []uint8{255, 254, 0, 128}, false, mp))
+
+		m := make(map[any]bool)
+		dup, _ := checkPKDup(m, pk, 0, 2)
+		require.False(t, dup, "distinct uint8 arrays must not report duplicate")
+		require.Len(t, m, 2)
+		pk.Free(mp)
+	})
+
+	t.Run("array_bf16_dup", func(t *testing.T) {
+		pk := vector.NewVec(types.T_array_bf16.ToType())
+		require.NoError(t, vector.AppendArray(pk, []types.BF16{types.BF16FromFloat32(1.5), types.BF16FromFloat32(2.5)}, false, mp))
+		require.NoError(t, vector.AppendArray(pk, []types.BF16{types.BF16FromFloat32(1.5), types.BF16FromFloat32(2.5)}, false, mp))
+
+		m := make(map[any]bool)
+		dup, _ := checkPKDup(m, pk, 0, 2)
+		require.True(t, dup, "duplicate bf16 array must be caught")
+		pk.Free(mp)
+	})
+
+	t.Run("array_float16_distinct", func(t *testing.T) {
+		pk := vector.NewVec(types.T_array_float16.ToType())
+		require.NoError(t, vector.AppendArray(pk, []types.Float16{types.Float16FromFloat32(1), types.Float16FromFloat32(2)}, false, mp))
+		require.NoError(t, vector.AppendArray(pk, []types.Float16{types.Float16FromFloat32(3), types.Float16FromFloat32(4)}, false, mp))
+
+		m := make(map[any]bool)
+		dup, _ := checkPKDup(m, pk, 0, 2)
+		require.False(t, dup, "distinct f16 arrays must not report duplicate")
 		require.Len(t, m, 2)
 		pk.Free(mp)
 	})

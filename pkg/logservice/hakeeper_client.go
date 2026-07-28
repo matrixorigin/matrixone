@@ -428,7 +428,8 @@ func (c *managedHAKeeperClient) AllocateID(ctx context.Context) (uint64, error) 
 
 	batchSize := c.cfg.AllocateIDBatch
 	for {
-		if c.mu.sharedAllocID.nextID != c.mu.sharedAllocID.lastID {
+		if c.mu.sharedAllocID.nextID != 0 &&
+			c.mu.sharedAllocID.nextID <= c.mu.sharedAllocID.lastID {
 			v := c.mu.sharedAllocID.nextID
 			c.mu.sharedAllocID.nextID++
 			if v == 0 {
@@ -497,6 +498,9 @@ func (c *managedHAKeeperClient) AllocateIDByKeyWithBatch(
 	if len(key) == 0 {
 		return 0, moerr.NewInternalError(ctx, "key should not be empty")
 	}
+	if batchSize == 0 {
+		return 0, moerr.NewInvalidInput(ctx, "batch size must be greater than zero")
+	}
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -508,7 +512,7 @@ func (c *managedHAKeeperClient) AllocateIDByKeyWithBatch(
 			c.mu.allocIDByKey[key] = allocIDs
 		}
 
-		if allocIDs.nextID != allocIDs.lastID {
+		if allocIDs.nextID != 0 && allocIDs.nextID <= allocIDs.lastID {
 			v := allocIDs.nextID
 			allocIDs.nextID++
 			return v, nil

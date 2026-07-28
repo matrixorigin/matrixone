@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	icebergapi "github.com/matrixorigin/matrixone/pkg/iceberg/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -48,6 +49,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashjoin"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/icebergwrite"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/indexbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/indexjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
@@ -87,10 +89,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/window"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
+	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/stage"
 	"github.com/matrixorigin/matrixone/pkg/stage/stageutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -100,11 +104,23 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+const loadMergeReceiverChannelBufferSize = 1
+
 var constBat *batch.Batch
 
 func init() {
 	constBat = batch.NewWithSize(0)
 	constBat.SetRowCount(1)
+}
+
+func mergeReceiverChannelBufferSize(s *Scope) int {
+	if s != nil && s.Proc != nil && s.Proc.Base.LoadTag {
+		return loadMergeReceiverChannelBufferSize
+	}
+	if s == nil || s.NodeInfo.Mcpu < 1 {
+		return 1
+	}
+	return s.NodeInfo.Mcpu
 }
 
 type operatorDupContext struct {
@@ -351,6 +367,9 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.Attrs = t.Attrs
 		op.Params = t.Params
 		op.IsSingle = t.IsSingle
+		op.Limit = t.Limit
+		op.RuntimeFilterSpecs = t.RuntimeFilterSpecs
+		op.IndexReaderParam = t.IndexReaderParam
 		op.SetInfo(&info)
 		if op.FuncName == "generate_series" {
 			op.GenerateSeriesCtrNumState(t.OffsetTotal[index][0], t.OffsetTotal[index][1], t.GetGenerateSeriesCtrNumStateStep(), t.OffsetTotal[index][0])
@@ -459,6 +478,17 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.ToExternal = t.ToExternal
 		op.SetInfo(&info)
 		return op
+	case vm.IcebergWrite:
+		t := sourceOp.(*icebergwrite.IcebergWrite)
+		op := icebergwrite.NewArgument(t.Request).WithCoordinatorFactory(t.Factory)
+		// Factory coordinators are execution state. A parallel clone must create
+		// its own scope from the factory instead of copying a possibly-open or
+		// terminal coordinator from the source operator.
+		if t.Factory == nil {
+			op.WithCoordinator(t.Coordinator)
+		}
+		op.SetInfo(&info)
+		return op
 	case vm.PartitionInsert:
 		t := sourceOp.(*insert.PartitionInsert)
 		op := insert.NewPartitionInsertFrom(t)
@@ -487,6 +517,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.CompPkeyExpr = t.CompPkeyExpr
 		op.ClusterByExpr = t.ClusterByExpr
 		op.ColOffset = t.ColOffset
+		op.RejectZeroTemporal = t.RejectZeroTemporal
 		op.SetInfo(&info)
 		return op
 	case vm.Deletion:
@@ -542,6 +573,9 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.TableFunction.Attrs = t.TableFunction.Attrs
 		op.TableFunction.Params = t.TableFunction.Params
 		op.TableFunction.IsSingle = t.TableFunction.IsSingle
+		op.TableFunction.Limit = t.TableFunction.Limit
+		op.TableFunction.RuntimeFilterSpecs = t.TableFunction.RuntimeFilterSpecs
+		op.TableFunction.IndexReaderParam = t.TableFunction.IndexReaderParam
 		op.TableFunction.SetInfo(&info)
 		op.SetInfo(&info)
 		return op
@@ -553,6 +587,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.IsRemote = t.IsRemote
 		op.IsOnduplicateKeyUpdate = t.IsOnduplicateKeyUpdate
 		op.CountDeleteAffectRows = t.CountDeleteAffectRows
+		op.RejectZeroTemporal = t.RejectZeroTemporal
 		op.Engine = t.Engine
 		op.SetInfo(&info)
 		return op
@@ -706,6 +741,7 @@ func constructFuzzyFilter(node, tableScan, sinkScan *plan.Node) *fuzzyfilter.Fuz
 func constructPreInsert(nodes []*plan.Node, node *plan.Node, eng engine.Engine, proc *process.Process) (*preinsert.PreInsert, error) {
 	preCtx := node.PreInsertCtx
 	schemaName := preCtx.Ref.SchemaName
+	var err error
 
 	//var attrs []string
 	attrs := make([]string, 0)
@@ -753,6 +789,10 @@ func constructPreInsert(nodes []*plan.Node, node *plan.Node, eng engine.Engine, 
 	op.CompPkeyExpr = preCtx.CompPkeyExpr
 	op.ClusterByExpr = preCtx.ClusterByExpr
 	op.ColOffset = preCtx.ColOffset
+	op.RejectZeroTemporal, err = util.RejectZeroTemporalWritePolicy(proc)
+	if err != nil {
+		return nil, err
+	}
 
 	return op, nil
 }
@@ -802,9 +842,14 @@ func constructMultiUpdate(
 	action multi_update.UpdateAction,
 	isRemote bool,
 ) (vm.Operator, error) {
+	var err error
 	arg := multi_update.NewArgument()
 	arg.Engine = eng
 	arg.IsRemote = isRemote
+	arg.RejectZeroTemporal, err = util.RejectZeroTemporalWritePolicy(proc)
+	if err != nil {
+		return nil, err
+	}
 
 	for _, updateCtx := range node.UpdateCtxList {
 		if updateCtx.CountDeleteAffectRows {
@@ -883,6 +928,121 @@ func constructInsert(
 	}
 
 	return insert.NewPartitionInsert(arg, oldCtx.TableDef.TblId), nil
+}
+
+func isIcebergAppendInsert(ctx context.Context, node *plan.Node) (bool, error) {
+	if node == nil || node.InsertCtx == nil || node.InsertCtx.TableDef == nil {
+		return false, nil
+	}
+	return plan2.IsIcebergTableDef(ctx, node.InsertCtx.TableDef)
+}
+
+func constructIcebergInsert(proc *process.Process, node *plan.Node) (vm.Operator, error) {
+	if node == nil || node.InsertCtx == nil || node.InsertCtx.TableDef == nil {
+		return nil, moerr.NewInvalidInput(proc.Ctx, "Iceberg append insert requires insert context")
+	}
+	oldCtx := node.InsertCtx
+	env, found, err := sqliceberg.ParseCreateSQLEnvelope(proc.Ctx, oldCtx.TableDef.Createsql)
+	if err != nil {
+		return nil, err
+	}
+	if !found {
+		return nil, moerr.NewInvalidInput(proc.Ctx, "Iceberg append insert requires Iceberg table mapping metadata")
+	}
+	attrs := make([]string, 0, len(oldCtx.TableDef.Cols))
+	dataFilePathColumnIndex := int32(-1)
+	rowOrdinalColumnIndex := int32(-1)
+	mergeActionColumnIndex := int32(-1)
+	for _, col := range oldCtx.TableDef.Cols {
+		isIcebergDMLMetadata := false
+		switch col.Name {
+		case icebergapi.DMLDataFilePathColumnName:
+			dataFilePathColumnIndex = int32(len(attrs))
+			isIcebergDMLMetadata = true
+		case icebergapi.DMLRowOrdinalColumnName:
+			rowOrdinalColumnIndex = int32(len(attrs))
+			isIcebergDMLMetadata = true
+		case icebergapi.DMLMergeActionColumnName:
+			mergeActionColumnIndex = int32(len(attrs))
+			isIcebergDMLMetadata = true
+		}
+		if isIcebergDMLMetadata {
+			attrs = append(attrs, col.GetOriginCaseName())
+			continue
+		}
+		if col.Name == catalog.Row_ID || col.Hidden || col.Name == catalog.ExternalFilePath {
+			continue
+		}
+		attrs = append(attrs, col.GetOriginCaseName())
+	}
+	planExtra, err := icebergapi.DecodeDMLPlanExtraOptions(node.ExtraOptions)
+	if err != nil {
+		return nil, moerr.NewInvalidInput(proc.Ctx, "invalid Iceberg DML plan options: "+err.Error())
+	}
+	operation := icebergwrite.OperationAppend
+	switch planExtra.Kind {
+	case icebergapi.DMLDeletePlanExtraOptions:
+		operation = icebergwrite.OperationDelete
+	case icebergapi.DMLUpdatePlanExtraOptions:
+		operation = icebergwrite.OperationUpdate
+	case icebergapi.DMLMergePlanExtraOptions:
+		operation = icebergwrite.OperationMerge
+	case icebergapi.DMLOverwritePlanExtraOptions:
+		operation = icebergwrite.OperationOverwrite
+	}
+	var accountID uint32
+	var roleID, userID uint64
+	if proc != nil {
+		if id, err := defines.GetAccountId(proc.Ctx); err == nil {
+			accountID = id
+		}
+		roleID = uint64(defines.GetRoleId(proc.Ctx))
+		userID = uint64(defines.GetUserId(proc.Ctx))
+	}
+	statementID := icebergWriteStatementID(proc)
+	arg := icebergwrite.NewArgument(icebergwrite.AppendRequest{
+		Ref:             oldCtx.Ref,
+		AddAffectedRows: oldCtx.AddAffectedRows,
+		Attrs:           attrs,
+		TableDef:        oldCtx.TableDef,
+		AccountID:       accountID,
+		RoleID:          roleID,
+		UserID:          userID,
+		StatementID:     statementID,
+		IdempotencyKey:  statementID,
+		CatalogName:     env.Catalog,
+		Namespace:       env.Namespace,
+		Table:           env.Table,
+		DefaultRef:      env.DefaultRef,
+		ReadMode:        env.ReadMode,
+		WriteMode:       env.WriteMode,
+		Operation:       operation,
+		DMLScan: icebergwrite.DMLScanMetadata{
+			OverwriteScope:     planExtra.OverwriteScope,
+			OverwritePartition: planExtra.OverwritePartition,
+		},
+
+		DataFilePathColumnIndex: dataFilePathColumnIndex,
+		RowOrdinalColumnIndex:   rowOrdinalColumnIndex,
+		MergeActionColumnIndex:  mergeActionColumnIndex,
+	})
+	factory, err := icebergAppendCoordinatorFactoryForCompile(proc.Ctx, proc)
+	if err != nil {
+		return nil, err
+	}
+	return arg.WithCoordinatorFactory(factory), nil
+}
+
+func icebergWriteStatementID(proc *process.Process) string {
+	if proc == nil {
+		return ""
+	}
+	if profile := proc.GetStmtProfile(); profile != nil {
+		if id := strings.TrimSpace(profile.GetStmtId().String()); id != "" && strings.Trim(id, "0-") != "" {
+			return id
+		}
+	}
+	return strings.TrimSpace(proc.QueryId())
 }
 
 // isExternalWriteInsert reports whether an INSERT node targets a writable
@@ -1344,48 +1504,36 @@ func constructUnionAll(_ *plan.Node) *unionall.UnionAll {
 }
 
 func constructFill(node *plan.Node) *fill.Fill {
-	aggIdx := make([]int32, len(node.AggList))
-	for i, expr := range node.AggList {
-		f := expr.Expr.(*plan.Expr_F)
-		obj := int64(uint64(f.F.Func.Obj) & function.DistinctMask)
-		aggIdx[i], _ = function.DecodeOverloadID(obj)
-	}
 	arg := fill.NewArgument()
+	// AggList is pruned in lockstep with the child TIME_WINDOW's aggregates,
+	// so this stays aligned with the prefix that child projects.
 	arg.ColLen = len(node.AggList)
 	arg.FillType = node.FillType
 	arg.FillVal = node.FillVal
-	arg.AggIds = aggIdx
+	arg.PartitionColIdx = node.TimeWindowPartitionColPos
 	return arg
 }
 
 func constructTimeWindow(_ context.Context, node *plan.Node, proc *process.Process) *timewin.TimeWin {
-	var aggregationExpressions []aggexec.AggFuncExecExpression = nil
-	var typs []types.Type
-	var wStart, wEnd bool
-	i := 0
-	for _, expr := range node.AggList {
-		if e, ok := expr.Expr.(*plan.Expr_Col); ok {
-			if e.Col.Name == plan2.TimeWindowStart {
-				wStart = true
-			}
-			if e.Col.Name == plan2.TimeWindowEnd {
-				wEnd = true
-			}
-			continue
-		}
-		f := expr.Expr.(*plan.Expr_F)
+	// The planner addresses this operator's output through the same layout,
+	// so derive both from BuildTimeWindowLayout rather than re-deriving here.
+	layout := plan2.BuildTimeWindowLayout(node)
+	aggregationExpressions := make([]aggexec.AggFuncExecExpression, 0, len(layout.AggIdx))
+	typs := make([]types.Type, 0, len(layout.AggIdx))
+	for _, aggIdx := range layout.AggIdx {
+		f := node.AggList[aggIdx].Expr.(*plan.Expr_F)
 		isDistinct := (uint64(f.F.Func.Obj) & function.Distinct) != 0
 		functionID := int64(uint64(f.F.Func.Obj) & function.DistinctMask)
+		// Every slot the layout hands out must get an aggregate, or the
+		// operator's columns stop matching the positions the planner projects.
 		e := f.F.Args[0]
-		if e != nil {
-			aggregationExpressions = append(
-				aggregationExpressions,
-				aggexec.MakeAggFunctionExpression(functionID, isDistinct, f.F.Args, nil))
-
-			typs = append(typs, types.New(types.T(e.Typ.Id), e.Typ.Width, e.Typ.Scale))
-		}
-		i++
+		aggregationExpressions = append(
+			aggregationExpressions,
+			aggexec.MakeAggFunctionExpression(functionID, isDistinct, f.F.Args, nil))
+		typs = append(typs, types.New(types.T(e.Typ.Id), e.Typ.Width, e.Typ.Scale))
 	}
+	wStart := layout.WStartSlot != plan2.TimeWindowSlotNone
+	wEnd := layout.WEndSlot != plan2.TimeWindowSlotNone
 
 	arg := timewin.NewArgument()
 	err := arg.MakeIntervalAndSliding(node.Interval, node.Sliding)
@@ -1395,11 +1543,41 @@ func constructTimeWindow(_ context.Context, node *plan.Node, proc *process.Proce
 	arg.Types = typs
 	arg.Aggs = aggregationExpressions
 	arg.Ts = node.GroupBy[0]
+	arg.PartitionBy = node.TimeWindowPartitionBy
 	arg.WStart = wStart
 	arg.WEnd = wEnd
-	arg.EndExpr = node.WEnd
+	// The operator evaluates the window-end expression against a batch holding
+	// only the timestamp, so its column reference has to name slot 0. The
+	// planner leaves it pointing at the timestamp's GROUP BY position, which is
+	// 0 only while the window key is the sole grouping key. Copy before
+	// rewriting: the plan may be reused.
+	if node.WEnd != nil {
+		endExpr := plan2.DeepCopyExpr(node.WEnd)
+		resetTimeWindowTsColRef(endExpr)
+		arg.EndExpr = endExpr
+	}
 	arg.TsType = node.Timestamp.Typ
 	return arg
+}
+
+// resetTimeWindowTsColRef points every column reference in a time-window
+// helper expression at slot 0, the single timestamp column the operator feeds
+// it. The expression is derived from the window's timestamp, so it can hold no
+// other column.
+func resetTimeWindowTsColRef(expr *plan.Expr) {
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		e.Col.RelPos = 0
+		e.Col.ColPos = 0
+	case *plan.Expr_F:
+		for _, arg := range e.F.Args {
+			resetTimeWindowTsColRef(arg)
+		}
+	case *plan.Expr_List:
+		for _, item := range e.List.List {
+			resetTimeWindowTsColRef(item)
+		}
+	}
 }
 
 func constructWindow(_ context.Context, node *plan.Node, proc *process.Process) *window.Window {
@@ -1410,25 +1588,7 @@ func constructWindow(_ context.Context, node *plan.Node, proc *process.Process) 
 		isDistinct := (uint64(f.F.Func.Obj) & function.Distinct) != 0
 		functionID := int64(uint64(f.F.Func.Obj) & function.DistinctMask)
 
-		var cfg []byte = nil
-		var args = f.F.Args
-		if len(f.F.Args) > 0 {
-
-			//for group_concat, the last arg is separator string
-			//for cluster_centers, the last arg is kmeans_args string
-			if (f.F.Func.ObjName == plan2.NameGroupConcat ||
-				f.F.Func.ObjName == plan2.NameClusterCenters) && len(f.F.Args) > 1 {
-				argExpr := f.F.Args[len(f.F.Args)-1]
-				vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(proc, argExpr)
-				if err != nil {
-					panic(err)
-				}
-				cfg = []byte(vec.GetStringAt(0))
-				free()
-
-				args = f.F.Args[:len(f.F.Args)-1]
-			}
-		}
+		args, cfg := constructAggregateConfig(f.F, proc)
 		aggregationExpressions[i] = aggexec.MakeAggFunctionExpression(
 			functionID, isDistinct, args, cfg)
 	}
@@ -1465,24 +1625,7 @@ func constructGroup(_ context.Context, node, childNode *plan.Node, needEval bool
 			isDistinct := (uint64(f.F.Func.Obj) & function.Distinct) != 0
 			functionID := int64(uint64(f.F.Func.Obj) & function.DistinctMask)
 
-			var cfg []byte = nil
-			var args = f.F.Args
-			if len(f.F.Args) > 0 {
-				//for group_concat, the last arg is separator string
-				//for cluster_centers, the last arg is kmeans_args string
-				if (f.F.Func.ObjName == plan2.NameGroupConcat ||
-					f.F.Func.ObjName == plan2.NameClusterCenters) && len(f.F.Args) > 1 {
-					argExpr := f.F.Args[len(f.F.Args)-1]
-					vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(proc, argExpr)
-					if err != nil {
-						panic(err)
-					}
-					cfg = []byte(vec.GetStringAt(0))
-					free()
-
-					args = f.F.Args[:len(f.F.Args)-1]
-				}
-			}
+			args, cfg := constructAggregateConfig(f.F, proc)
 
 			aggregationExpressions[i] = aggexec.MakeAggFunctionExpression(
 				functionID, isDistinct, args, cfg)
@@ -1501,6 +1644,44 @@ func constructGroup(_ context.Context, node, childNode *plan.Node, needEval bool
 	arg.GroupingFlag = node.GroupingFlag
 	arg.GroupBy = node.GroupBy
 	return arg
+}
+
+func constructAggregateConfig(f *plan.Function, proc *process.Process) ([]*plan.Expr, []byte) {
+	args := f.Args
+	switch f.Func.ObjName {
+	case plan2.NameGroupConcat:
+		separator := ","
+		if len(args) > 1 {
+			separator = evaluateAggregateConfigString(proc, args[len(args)-1])
+			args = args[:len(args)-1]
+		}
+		value, err := resolveVariableOrDefault(proc, "group_concat_max_len", true, false)
+		if err != nil {
+			panic(err)
+		}
+		maxLen, ok := value.(int64)
+		if !ok || maxLen < 0 {
+			panic(moerr.NewInternalErrorNoCtxf(
+				"group_concat_max_len has invalid value %v", value))
+		}
+		return args, aggexec.EncodeGroupConcatConfig(separator, uint64(maxLen))
+
+	case plan2.NameClusterCenters:
+		if len(args) > 1 {
+			config := evaluateAggregateConfigString(proc, args[len(args)-1])
+			return args[:len(args)-1], []byte(config)
+		}
+	}
+	return args, nil
+}
+
+func evaluateAggregateConfigString(proc *process.Process, expr *plan.Expr) string {
+	vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(proc, expr)
+	if err != nil {
+		panic(err)
+	}
+	defer free()
+	return vec.GetStringAt(0)
 }
 
 func constructDispatchLocal(all bool, isSink, rec bool, recCTE bool, regs []*process.WaitRegister) *dispatch.Dispatch {

@@ -345,6 +345,10 @@ func (node *Update) StmtKind() StmtKind {
 	return defaultStatusTyp
 }
 
+func (node *Merge) StmtKind() StmtKind {
+	return defaultStatusTyp
+}
+
 func (node *CreateDatabase) StmtKind() StmtKind {
 	return defaultStatusTyp
 }

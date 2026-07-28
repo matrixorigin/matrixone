@@ -2525,7 +2525,7 @@ func TestGCFiles(t *testing.T) {
 		for i := range files {
 			objectio.SetObjectStatsBlkCnt(&files[i], 1)
 			objectio.SetObjectStatsRowCnt(&files[i], 1)
-			bat := colexec.AllocCNS3ResultBat(false, false)
+			bat := colexec.AllocCNS3ResultBat(false)
 			colexec.ExpandObjectStatsToBatch(p.Mp, false, bat, true, files[i])
 			err = txn.WriteFile(
 				disttae.INSERT,

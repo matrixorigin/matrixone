@@ -40,6 +40,10 @@ const (
 	PartitionSubTableWildcard = "\\%!\\%%\\%!\\%%"
 
 	ExternalFilePath = "__mo_filepath"
+	// ExternalFilePathColId identifies the synthetic filepath column that the
+	// query builder appends to external scans. It survives column-position
+	// remapping, unlike TbColToDataCol's original file-field indexes.
+	ExternalFilePathColId = ^uint64(0)
 
 	// MOAutoIncrTable mo auto increment table name
 	MOAutoIncrTable = "mo_increment_columns"
@@ -385,6 +389,13 @@ const (
 	SystemSI_IVFFLAT_TblCol_Metadata_key = "__mo_index_key"
 	SystemSI_IVFFLAT_TblCol_Metadata_val = "__mo_index_val"
 
+	// IVF_FLAT MetadataTable - well-known keys (rows in the key/val metadata table)
+	// QuantizeMin/QuantizeMax store the trained int8 scalar-quantizer bounds
+	// (cuVS-style asymmetric): [min,max] is mapped to the full int8 range [-128,127]
+	// via q(x)=round(x*mul+add). Entries and the query use the same transform.
+	SystemSI_IVFFLAT_Metadata_QuantizeMin = "quantize_min"
+	SystemSI_IVFFLAT_Metadata_QuantizeMax = "quantize_max"
+
 	// IVF_FLAT Centroids - Column names
 	SystemSI_IVFFLAT_TblCol_Centroids_version  = "__mo_index_centroid_version"
 	SystemSI_IVFFLAT_TblCol_Centroids_id       = "__mo_index_centroid_id"
@@ -395,6 +406,7 @@ const (
 	SystemSI_IVFFLAT_TblCol_Entries_id      = "__mo_index_centroid_fk_id"
 	SystemSI_IVFFLAT_TblCol_Entries_pk      = IndexTablePrimaryColName
 	SystemSI_IVFFLAT_TblCol_Entries_entry   = "__mo_index_centroid_fk_entry"
+	SystemSI_IVFFLAT_IncludeColPrefix       = "__mo_index_include_"
 
 	/************ 3. FULLTEXT Index **************/
 

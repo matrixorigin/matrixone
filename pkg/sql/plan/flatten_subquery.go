@@ -78,6 +78,9 @@ func (builder *QueryBuilder) flattenSubquery(nodeID int32, subquery *plan.Subque
 
 	subID := subquery.NodeId
 	subCtx := builder.ctxByNode[subID]
+	var scalarMatch *plan.Expr
+	var scalarOuterResult *plan.Expr
+	var scalarExistential bool
 
 	// Strip unnecessary subqueries which have no FROM clause
 	subNode := builder.qry.Nodes[subID]
@@ -122,6 +125,11 @@ func (builder *QueryBuilder) flattenSubquery(nodeID int32, subquery *plan.Subque
 		}
 	}
 
+	if subquery.Typ == plan.SubqueryRef_SCALAR {
+		subID, scalarMatch, scalarOuterResult, scalarExistential =
+			builder.normalizeDirectCorrelatedScalarProjection(subID, subCtx)
+	}
+
 	subID, preds, err := builder.pullupCorrelatedPredicates(subID, subCtx)
 	if err != nil {
 		return 0, nil, err
@@ -149,9 +157,34 @@ func (builder *QueryBuilder) flattenSubquery(nodeID int32, subquery *plan.Subque
 	switch subquery.Typ {
 	case plan.SubqueryRef_SCALAR:
 		var rewrite bool
+
 		// Uncorrelated subquery
 		if len(joinPreds) > 0 && builder.findAggrCount(subCtx.aggregates) {
 			rewrite = true
+		}
+
+		if scalarExistential {
+			if len(joinPreds) == 0 {
+				joinPreds = append(joinPreds, constTrue)
+			}
+			var retExpr *plan.Expr
+			nodeID, retExpr, err = builder.insertMarkJoin(nodeID, subID, joinPreds, nil, false, ctx)
+			if err != nil {
+				return 0, nil, err
+			}
+			if len(filterPreds) > 0 {
+				nodeID = builder.appendNode(&plan.Node{
+					NodeType:   plan.Node_FILTER,
+					Children:   []int32{nodeID},
+					FilterList: filterPreds,
+				}, ctx)
+			}
+			retExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "case", []*plan.Expr{
+				retExpr,
+				scalarOuterResult,
+				makePlan2NullConstExprWithType(),
+			})
+			return nodeID, retExpr, err
 		}
 
 		joinType := plan.Node_SINGLE
@@ -175,14 +208,27 @@ func (builder *QueryBuilder) flattenSubquery(nodeID int32, subquery *plan.Subque
 			}, ctx)
 		}
 
-		retExpr := &plan.Expr{
-			Typ: subCtx.results[0].Typ,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: subCtx.topTag(),
-					ColPos: 0,
+		retExpr := scalarMatch
+		if retExpr == nil {
+			retExpr = &plan.Expr{
+				Typ: subCtx.results[0].Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: subCtx.topTag(),
+						ColPos: 0,
+					},
 				},
-			},
+			}
+		}
+		if scalarOuterResult != nil {
+			retExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "case", []*plan.Expr{
+				retExpr,
+				scalarOuterResult,
+				makePlan2NullConstExprWithType(),
+			})
+			if err != nil {
+				return 0, nil, err
+			}
 		}
 		if rewrite {
 			argsType := make([]types.Type, 1)
@@ -315,6 +361,85 @@ func (builder *QueryBuilder) flattenSubquery(nodeID int32, subquery *plan.Subque
 	default:
 		return 0, nil, moerr.NewNotSupportedf(builder.GetContext(), "%s subquery not supported", subquery.Typ.String())
 	}
+}
+
+// normalizeDirectCorrelatedScalarProjection handles a scalar subquery whose
+// only result is a direct reference to the outer row. Rim projections, sorting,
+// DISTINCT, and literal positive LIMITs do not change that value. Removing them
+// before pulling up predicates keeps join-key references on the real projection
+// instead of leaving correlated expressions in executable wrapper nodes.
+func (builder *QueryBuilder) normalizeDirectCorrelatedScalarProjection(
+	subID int32,
+	ctx *BindContext,
+) (int32, *plan.Expr, *plan.Expr, bool) {
+	if len(ctx.results) != 1 || len(ctx.projects) == 0 {
+		return subID, nil, nil, false
+	}
+
+	projectCorr := ctx.projects[0].GetCorr()
+	if projectCorr == nil || projectCorr.Depth != 1 {
+		return subID, nil, nil, false
+	}
+	if !builder.casePreservesType(ctx.projects[0]) {
+		return subID, nil, nil, false
+	}
+
+	nodeID := subID
+	existential := false
+	for {
+		node := builder.qry.Nodes[nodeID]
+		if node.Offset != nil || node.RankOption != nil {
+			return subID, nil, nil, false
+		}
+		if node.Limit != nil {
+			limit, ok := getLiteralUint64(node.Limit)
+			if !ok || limit == 0 {
+				return subID, nil, nil, false
+			}
+			if limit == 1 {
+				existential = true
+			}
+		}
+
+		if node.NodeType == plan.Node_PROJECT && len(node.BindingTags) > 0 && node.BindingTags[0] == ctx.projectTag {
+			if len(node.ProjectList) == 0 {
+				return subID, nil, nil, false
+			}
+			corr := node.ProjectList[0].GetCorr()
+			if corr == nil || corr.RelPos != projectCorr.RelPos || corr.ColPos != projectCorr.ColPos || corr.Depth != projectCorr.Depth {
+				return subID, nil, nil, false
+			}
+
+			outerResult, _ := decreaseDepth(DeepCopyExpr(ctx.projects[0]))
+			marker := DeepCopyExpr(constTrue)
+			node.ProjectList = []*plan.Expr{marker}
+			ctx.projects = []*plan.Expr{marker}
+			node.Limit = nil
+			return nodeID, GetColExpr(marker.Typ, ctx.projectTag, 0), outerResult, existential
+		}
+
+		if len(node.Children) != 1 {
+			return subID, nil, nil, false
+		}
+		switch node.NodeType {
+		case plan.Node_PROJECT, plan.Node_SORT:
+		case plan.Node_DISTINCT:
+			existential = true
+		default:
+			return subID, nil, nil, false
+		}
+		nodeID = node.Children[0]
+	}
+}
+
+func (builder *QueryBuilder) casePreservesType(expr *plan.Expr) bool {
+	sourceType := makeTypeByPlan2Expr(expr)
+	caseFn, err := function.GetFunctionByName(builder.GetContext(), "case", []types.Type{
+		types.T_bool.ToType(),
+		sourceType,
+		types.T_any.ToType(),
+	})
+	return err == nil && caseFn.GetReturnType().Eq(sourceType)
 }
 
 func (builder *QueryBuilder) insertMarkJoin(left, right int32, joinPreds []*plan.Expr, outerPred *plan.Expr, negate bool, ctx *BindContext) (nodeID int32, markExpr *plan.Expr, err error) {

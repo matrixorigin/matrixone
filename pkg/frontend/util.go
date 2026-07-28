@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/objectkey"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	mo_config "github.com/matrixorigin/matrixone/pkg/config"
@@ -53,6 +54,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/debug/goroutine"
+	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
@@ -183,7 +185,7 @@ func WildcardMatch(pattern, target string) bool {
 }
 
 // getExprValue executes the expression and returns the value.
-func getExprValue(e tree.Expr, ses *Session, execCtx *ExecCtx) (interface{}, error) {
+func getExprValue(e tree.Expr, ses *Session, execCtx *ExecCtx, isBin ...*bool) (interface{}, error) {
 	/*
 		CORNER CASE:
 			SET character_set_results = utf8; // e = tree.UnresolvedName{'utf8'}.
@@ -193,6 +195,9 @@ func getExprValue(e tree.Expr, ses *Session, execCtx *ExecCtx) (interface{}, err
 	switch v := e.(type) {
 	case *tree.UnresolvedName:
 		// set @a = on, type of a is bool.
+		if len(isBin) > 0 {
+			*isBin[0] = false
+		}
 		return v.ColName(), nil
 	}
 
@@ -280,6 +285,9 @@ func getExprValue(e tree.Expr, ses *Session, execCtx *ExecCtx) (interface{}, err
 		}
 	}
 
+	if len(isBin) > 0 {
+		*isBin[0] = resultVec.GetIsBin()
+	}
 	return getValueFromVector(execCtx.reqCtx, resultVec, ses, planExpr)
 }
 
@@ -352,6 +360,14 @@ func getValueFromVector(ctx context.Context, vec *vector.Vector, feSes FeSession
 		return vector.GetArrayAt[float32](vec, 0), nil
 	case types.T_array_float64:
 		return vector.GetArrayAt[float64](vec, 0), nil
+	case types.T_array_bf16:
+		return vector.GetArrayAt[types.BF16](vec, 0), nil
+	case types.T_array_float16:
+		return vector.GetArrayAt[types.Float16](vec, 0), nil
+	case types.T_array_int8:
+		return vector.GetArrayAt[int8](vec, 0), nil
+	case types.T_array_uint8:
+		return vector.GetArrayAt[uint8](vec, 0), nil
 	case types.T_decimal64:
 		val := vector.GetFixedAtNoTypeCheck[types.Decimal64](vec, 0)
 		return val.Format(expr.Typ.Scale), nil
@@ -429,7 +445,6 @@ func logStatementStringStatus(
 	status statementStatus,
 	err error,
 ) {
-	var outBytes, outPacket int64
 	var getFormatedSqlStr = func() string {
 		var str = stmtStr
 		if len(stmtStr) == 0 {
@@ -443,12 +458,6 @@ func logStatementStringStatus(
 		str = commonutil.Abbreviate(str, int(getPu(ses.GetService()).SV.LengthOfQueryPrinted))
 		return str
 	}
-	switch resper := ses.GetResponser().(type) {
-	case *MysqlResp:
-		outBytes, outPacket = resper.mysqlRrWr.CalculateOutTrafficBytes(true)
-	default:
-	}
-
 	if status == success {
 		if ses.LogDebug() {
 			str := getFormatedSqlStr()
@@ -466,7 +475,29 @@ func logStatementStringStatus(
 			logutil.TxnInfoField(ses.GetStaticTxnInfo()),
 		)
 	}
+	if status == fail {
+		if concrete, ok := ses.(*Session); ok && concrete.deferStatementCompletion(err) {
+			return
+		}
+	}
+	finishStatementAccounting(ctx, ses, err)
+}
 
+func finishStatementAccounting(ctx context.Context, ses FeSession, err error) {
+	// A same-session derived statement without its own StatementInfo belongs to
+	// the enclosing client statement. The outer request owns both its terminal
+	// accounting and protocol counters.
+	if ses.IsDerivedStmt() && ses.GetStmtInfo() == nil && resource.RootFromContext(ctx) != nil {
+		return
+	}
+	if concrete, ok := ses.(*Session); ok {
+		concrete.rotateResponseOutputWait(ctx)
+	}
+	var outBytes, outPacket int64
+	switch resper := ses.GetResponser().(type) {
+	case *MysqlResp:
+		outBytes, outPacket = resper.mysqlRrWr.CalculateOutTrafficBytes(true)
+	}
 	// pls make sure: NO ONE use the ses.tStmt after EndStatement
 	if !ses.IsBackgroundSession() {
 		if stmt := ses.GetStmtInfo(); stmt != nil {
@@ -475,6 +506,93 @@ func logStatementStringStatus(
 	}
 	// need just below EndStatement
 	ses.SetTStmt(nil)
+}
+
+func (ses *Session) beginResponseAccounting() {
+	// Requests are serialized per session, so reset at the request boundary.
+	// This prevents handshake and statement-less responses from leaking into the
+	// next SQL statement's protocol counters.
+	if resper, ok := ses.GetResponser().(*MysqlResp); ok {
+		resper.mysqlRrWr.CalculateOutTrafficBytes(true)
+	}
+	ses.responseAccounting = true
+	ses.pendingStatementFailed = false
+	ses.pendingStatementError = nil
+	ses.installResponseOutputWaitTracker(new(responseOutputWaitTracker))
+}
+
+type responseOutputWaitTrackerInstaller interface {
+	setResponseOutputWaitTracker(*responseOutputWaitTracker)
+}
+
+func (ses *Session) installResponseOutputWaitTracker(tracker *responseOutputWaitTracker) {
+	ses.responseOutputWait = tracker
+	if resper, ok := ses.GetResponser().(*MysqlResp); ok {
+		if installer, ok := resper.mysqlRrWr.(responseOutputWaitTrackerInstaller); ok {
+			installer.setResponseOutputWaitTracker(tracker)
+		}
+	}
+}
+
+func (ses *Session) rotateResponseOutputWait(ctx context.Context) {
+	tracker := ses.responseOutputWait
+	var next *responseOutputWaitTracker
+	if ses.responseAccounting {
+		next = new(responseOutputWaitTracker)
+	}
+	ses.installResponseOutputWaitTracker(next)
+	if tracker == nil {
+		return
+	}
+	totalNS := tracker.totalNS.Load()
+	operatorNS := tracker.operatorNS.Load()
+	root := resource.RootFromContext(ctx)
+	if totalNS < 0 || operatorNS < 0 || operatorNS > totalNS {
+		if root != nil {
+			root.AddLocal(resource.Delta{Quality: resource.QualityInvariantFailure})
+		}
+		return
+	}
+	// Immediate writes inside Output.Call are already classified by its
+	// analyzer and subtracted from active time. Add only writes that happened
+	// later (buffer flush, EOF/OK, or an error response) at the statement root.
+	unclassifiedNS := totalNS - operatorNS
+	if unclassifiedNS > 0 && root != nil {
+		var usage resource.Usage
+		usage.WaitNS[resource.WaitOutput] = uint64(unclassifiedNS)
+		root.MergeExecution(resource.ExecutionSummary{Usage: usage})
+	}
+}
+
+func (ses *Session) deferStatementCompletion(err error) bool {
+	if !ses.responseAccounting {
+		return false
+	}
+	ses.pendingStatementFailed = true
+	if ses.pendingStatementError == nil {
+		ses.pendingStatementError = err
+	}
+	return true
+}
+
+func (ses *Session) finishResponseAccounting(ctx context.Context, responseErr error, responseFailed bool) {
+	if !ses.responseAccounting {
+		return
+	}
+	ses.responseAccounting = false
+	err := ses.pendingStatementError
+	failed := ses.pendingStatementFailed
+	ses.pendingStatementFailed = false
+	ses.pendingStatementError = nil
+	if err == nil && (failed || responseFailed) {
+		err = responseErr
+	}
+	if err == nil && failed {
+		err = moerr.NewInternalError(ctx, "statement failed")
+	}
+	// Always consume the request counters, including requests that did not
+	// create a StatementInfo (PING, rewrite sidecars, and similar commands).
+	finishStatementAccounting(ctx, ses, err)
 }
 
 func getLogger(sid string) *log.MOLogger {
@@ -1486,6 +1604,7 @@ var errCodeRollbackWholeTxn = map[uint16]bool{
 	moerr.ErrDeadlockCheckBusy:        false,
 	moerr.ErrLockConflict:             false,
 	moerr.ErrRemoteLockWaitTimeout:    false,
+	moerr.ErrLockWaitTimeout:          false,
 	moerr.ErrTxnUnknown:               false,
 	moerr.ErrBackendClosed:            false,
 	moerr.ErrNoAvailableBackend:       false,
@@ -1508,13 +1627,19 @@ func isErrorRollbackWholeTxn(inputErr error) bool {
 }
 
 func getRandomErrorRollbackWholeTxn() error {
-	rand.NewSource(time.Now().UnixNano())
 	x := rand.Intn(len(errCodeRollbackWholeTxn))
 	arr := make([]uint16, 0, len(errCodeRollbackWholeTxn))
 	for k := range errCodeRollbackWholeTxn {
 		arr = append(arr, k)
 	}
-	switch arr[x] {
+	return newErrorRollbackWholeTxn(arr[x])
+}
+
+// newErrorRollbackWholeTxn keeps the test error factory in sync with
+// errCodeRollbackWholeTxn. Its deterministic input lets tests cover every map
+// entry instead of relying on getRandomErrorRollbackWholeTxn to select it.
+func newErrorRollbackWholeTxn(code uint16) error {
+	switch code {
 	case moerr.ErrRetryForCNRollingRestart:
 		return moerr.NewRetryForCNRollingRestart()
 	case moerr.ErrDeadLockDetected:
@@ -1529,6 +1654,8 @@ func getRandomErrorRollbackWholeTxn() error {
 		return moerr.NewLockConflictNoCtx()
 	case moerr.ErrRemoteLockWaitTimeout:
 		return moerr.NewRemoteLockWaitTimeoutNoCtx()
+	case moerr.ErrLockWaitTimeout:
+		return moerr.NewLockWaitTimeoutNoCtx()
 	case moerr.ErrTxnUnknown:
 		return moerr.NewTxnUnknown(context.Background(), "test")
 	case moerr.ErrBackendClosed:
@@ -1538,7 +1665,7 @@ func getRandomErrorRollbackWholeTxn() error {
 	case moerr.ErrBackendCannotConnect:
 		return moerr.NewBackendCannotConnectNoCtx("test")
 	default:
-		panic(fmt.Sprintf("usp error code %d", arr[x]))
+		panic(fmt.Sprintf("unsupported error code %d", code))
 	}
 }
 
@@ -1759,18 +1886,14 @@ func attachValue(ctx context.Context, key, val any) context.Context {
 	return context.WithValue(ctx, key, val)
 }
 
-const KeySep = "#"
+const KeySep = objectkey.Separator
 
 func genKey(dbName, tblName string) string {
-	return fmt.Sprintf("%s%s%s", dbName, KeySep, tblName)
+	return objectkey.Encode(dbName, tblName)
 }
 
 func splitKey(key string) (string, string) {
-	parts := strings.Split(key, KeySep)
-	if len(parts) >= 2 {
-		return parts[0], parts[1]
-	}
-	return parts[0], ""
+	return objectkey.Decode(key)
 }
 
 type toposort struct {

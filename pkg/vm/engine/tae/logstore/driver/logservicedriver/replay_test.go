@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func Test_MockBackend1(t *testing.T) {
@@ -515,6 +516,34 @@ func Test_Replayer1(t *testing.T) {
 	assert.NoError(t, err)
 	logutil.Info("DEBUG", r.exportFields(2)...)
 	assert.Equal(t, []uint64{39, 40, 41, 42, 43}, appliedDSNs)
+}
+
+func Test_ReplayerRecoveryBatchUsesPreviousSafeDSN(t *testing.T) {
+	ctx := context.Background()
+	mockDriver := newMockDriver(
+		0,
+		[][5]uint64{
+			{uint64(Cmd_Normal), 1, 10, 20, 9},
+		},
+		30,
+	)
+	var appliedDSNs []uint64
+	mockHandle := mockHandleFactory(10, func(e *entry.Entry) {
+		appliedDSNs = append(appliedDSNs, e.DSN)
+	})
+	r := newReplayer(
+		mockHandle,
+		mockDriver,
+		30,
+		WithReplayerAppendSkipCmd(noopAppendSkipCmd),
+		WithReplayerUnmarshalLogRecord(mockUnmarshalLogRecordFactor(mockDriver)),
+	)
+
+	require.NoError(t, r.Replay(ctx))
+	require.Equal(t,
+		[]uint64{10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20},
+		appliedDSNs,
+	)
 }
 
 func Test_Replayer2(t *testing.T) {

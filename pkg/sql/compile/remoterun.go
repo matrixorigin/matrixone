@@ -91,6 +91,44 @@ func encodeScope(s *Scope) ([]byte, error) {
 	return p.Marshal()
 }
 
+func icebergPlanningStatsToPipeline(stats process.ParquetProfileStats) *pipeline.IcebergPlanningStats {
+	if stats.Empty() {
+		return nil
+	}
+	return &pipeline.IcebergPlanningStats{
+		MetadataBytes:         stats.IcebergMetadataBytes,
+		ManifestListBytes:     stats.IcebergManifestListBytes,
+		ManifestBytes:         stats.IcebergManifestBytes,
+		ManifestsSelected:     stats.IcebergManifestsSelected,
+		ManifestsPruned:       stats.IcebergManifestsPruned,
+		DataFilesSelected:     stats.IcebergDataFilesSelected,
+		DataFilesPruned:       stats.IcebergDataFilesPruned,
+		DataFileBytesSelected: stats.IcebergDataFileBytesSelected,
+		DataFileBytesPruned:   stats.IcebergDataFileBytesPruned,
+		PlanningCacheHits:     stats.IcebergPlanningCacheHits,
+		PlanningCacheMiss:     stats.IcebergPlanningCacheMiss,
+	}
+}
+
+func icebergPlanningStatsFromPipeline(stats *pipeline.IcebergPlanningStats) process.ParquetProfileStats {
+	if stats == nil {
+		return process.ParquetProfileStats{}
+	}
+	return process.ParquetProfileStats{
+		IcebergMetadataBytes:         stats.GetMetadataBytes(),
+		IcebergManifestListBytes:     stats.GetManifestListBytes(),
+		IcebergManifestBytes:         stats.GetManifestBytes(),
+		IcebergManifestsSelected:     stats.GetManifestsSelected(),
+		IcebergManifestsPruned:       stats.GetManifestsPruned(),
+		IcebergDataFilesSelected:     stats.GetDataFilesSelected(),
+		IcebergDataFilesPruned:       stats.GetDataFilesPruned(),
+		IcebergDataFileBytesSelected: stats.GetDataFileBytesSelected(),
+		IcebergDataFileBytesPruned:   stats.GetDataFileBytesPruned(),
+		IcebergPlanningCacheHits:     stats.GetPlanningCacheHits(),
+		IcebergPlanningCacheMiss:     stats.GetPlanningCacheMiss(),
+	}
+}
+
 // decodeScope decode a pipeline.Pipeline from bytes, and generate a Scope from it.
 func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.Engine) (*Scope, error) {
 	if isRemote && proc != nil {
@@ -488,16 +526,17 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		}
 	case *preinsert.PreInsert:
 		in.PreInsert = &pipeline.PreInsert{
-			SchemaName:        t.SchemaName,
-			TableDef:          t.TableDef,
-			HasAutoCol:        t.HasAutoCol,
-			IsOldUpdate:       t.IsOldUpdate,
-			IsNewUpdate:       t.IsNewUpdate,
-			Attrs:             t.Attrs,
-			EstimatedRowCount: int64(t.EstimatedRowCount),
-			CompPkeyExpr:      t.CompPkeyExpr,
-			ClusterByExpr:     t.ClusterByExpr,
-			ColOffset:         t.ColOffset,
+			SchemaName:         t.SchemaName,
+			TableDef:           t.TableDef,
+			HasAutoCol:         t.HasAutoCol,
+			IsOldUpdate:        t.IsOldUpdate,
+			IsNewUpdate:        t.IsNewUpdate,
+			Attrs:              t.Attrs,
+			EstimatedRowCount:  int64(t.EstimatedRowCount),
+			CompPkeyExpr:       t.CompPkeyExpr,
+			ClusterByExpr:      t.ClusterByExpr,
+			ColOffset:          t.ColOffset,
+			RejectZeroTemporal: t.RejectZeroTemporal,
 		}
 	case *lockop.LockOp:
 		in.LockOp = &pipeline.LockOp{
@@ -673,21 +712,32 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			IndexReaderParam:       t.IndexReaderParam,
 			RuntimeFilterProbeList: t.RuntimeFilterSpecs,
 		}
+		in.Limit = t.Limit
 
 	case *external.External:
 		in.ExternalScan = &pipeline.ExternalScan{
-			Attrs:                  t.Es.Attrs,
-			ColumnListLen:          t.Es.ColumnListLen,
-			Cols:                   t.Es.Cols,
-			FileSize:               t.Es.FileSize,
-			FileOffsetTotal:        t.Es.FileOffsetTotal,
-			CreateSql:              t.Es.CreateSql,
-			FileList:               t.Es.FileList,
-			Filter:                 t.Es.Filter.FilterExpr,
-			StrictSqlMode:          t.Es.StrictSqlMode,
-			ParallelLoad:           t.Es.ParallelLoad,
-			LoadEmptyNumericAsZero: t.Es.LoadEmptyNumericAsZero,
-			ParquetRowGroupShards:  t.Es.ParquetRowGroupShards,
+			Attrs:                       t.Es.Attrs,
+			ColumnListLen:               t.Es.ColumnListLen,
+			Cols:                        t.Es.Cols,
+			FileSize:                    t.Es.FileSize,
+			FileOffsetTotal:             t.Es.FileOffsetTotal,
+			CreateSql:                   t.Es.CreateSql,
+			FileList:                    t.Es.FileList,
+			Filter:                      t.Es.Filter.FilterExpr,
+			StrictSqlMode:               t.Es.StrictSqlMode,
+			ParallelLoad:                t.Es.ParallelLoad,
+			LoadEmptyNumericAsZero:      t.Es.LoadEmptyNumericAsZero,
+			ParquetRowGroupShards:       t.Es.ParquetRowGroupShards,
+			IcebergDataTasks:            t.Es.IcebergDataTasks,
+			IcebergDeleteTasks:          t.Es.IcebergDeleteTasks,
+			IcebergColumns:              t.Es.IcebergColumns,
+			IcebergSnapshot:             t.Es.IcebergSnapshot,
+			IcebergObjectIoRef:          t.Es.IcebergObjectIORef,
+			IcebergHiddenReadColumns:    t.Es.IcebergHiddenReadCols,
+			NeedRowOrdinal:              t.Es.NeedRowOrdinal,
+			IcebergPlanningStats:        icebergPlanningStatsToPipeline(t.Es.IcebergPlanningStats),
+			IcebergDeleteMaxMemoryBytes: t.Es.IcebergDeleteMaxMemoryBytes,
+			IcebergDeleteSpillEnabled:   t.Es.IcebergDeleteSpillEnabled,
 		}
 		in.ProjectList = t.ProjectList
 	case *source.Source:
@@ -837,9 +887,10 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			}
 		}
 		in.MultiUpdate = &pipeline.MultiUpdate{
-			AffectedRows:  t.GetAffectedRows(),
-			Action:        uint32(t.Action),
-			UpdateCtxList: updateCtxList,
+			AffectedRows:       t.GetAffectedRows(),
+			Action:             uint32(t.Action),
+			UpdateCtxList:      updateCtxList,
+			RejectZeroTemporal: t.RejectZeroTemporal,
 		}
 	case *postdml.PostDml:
 		in.PostDml = &pipeline.PostDml{
@@ -938,6 +989,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.CompPkeyExpr = t.CompPkeyExpr
 		arg.ClusterByExpr = t.ClusterByExpr
 		arg.ColOffset = t.ColOffset
+		arg.RejectZeroTemporal = t.GetRejectZeroTemporal()
 		op = arg
 	case vm.LockOp:
 		t := opr.GetLockOp()
@@ -1157,23 +1209,34 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.IsSingle = opr.TableFunction.IsSingle
 		arg.IndexReaderParam = opr.TableFunction.IndexReaderParam
 		arg.RuntimeFilterSpecs = opr.TableFunction.RuntimeFilterProbeList
+		arg.Limit = opr.Limit
 		op = arg
 	case vm.External:
 		t := opr.GetExternalScan()
 		op = external.NewArgument().WithEs(
 			&external.ExternalParam{
 				ExParamConst: external.ExParamConst{
-					Attrs:                  t.Attrs,
-					ColumnListLen:          t.ColumnListLen,
-					FileSize:               t.FileSize,
-					FileOffsetTotal:        t.FileOffsetTotal,
-					Cols:                   t.Cols,
-					CreateSql:              t.CreateSql,
-					FileList:               t.FileList,
-					StrictSqlMode:          t.StrictSqlMode,
-					ParallelLoad:           t.ParallelLoad,
-					LoadEmptyNumericAsZero: t.LoadEmptyNumericAsZero,
-					ParquetRowGroupShards:  t.ParquetRowGroupShards,
+					Attrs:                       t.Attrs,
+					ColumnListLen:               t.ColumnListLen,
+					FileSize:                    t.FileSize,
+					FileOffsetTotal:             t.FileOffsetTotal,
+					Cols:                        t.Cols,
+					CreateSql:                   t.CreateSql,
+					FileList:                    t.FileList,
+					StrictSqlMode:               t.StrictSqlMode,
+					ParallelLoad:                t.ParallelLoad,
+					LoadEmptyNumericAsZero:      t.LoadEmptyNumericAsZero,
+					ParquetRowGroupShards:       t.ParquetRowGroupShards,
+					IcebergDataTasks:            t.IcebergDataTasks,
+					IcebergDeleteTasks:          t.IcebergDeleteTasks,
+					IcebergColumns:              t.IcebergColumns,
+					IcebergSnapshot:             t.IcebergSnapshot,
+					IcebergObjectIORef:          t.IcebergObjectIoRef,
+					IcebergHiddenReadCols:       t.IcebergHiddenReadColumns,
+					NeedRowOrdinal:              t.NeedRowOrdinal,
+					IcebergPlanningStats:        icebergPlanningStatsFromPipeline(t.IcebergPlanningStats),
+					IcebergDeleteMaxMemoryBytes: t.IcebergDeleteMaxMemoryBytes,
+					IcebergDeleteSpillEnabled:   t.IcebergDeleteSpillEnabled,
 				},
 				ExParam: external.ExParam{
 					Fileparam: new(external.ExFileparam),
@@ -1300,6 +1363,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.SetAffectedRows(t.AffectedRows)
 		arg.Action = multi_update.UpdateAction(t.Action)
 		arg.IsRemote = true //only remote CN use this function to rebuild MultiUpdate
+		arg.RejectZeroTemporal = t.RejectZeroTemporal
 		arg.Engine = eng
 
 		arg.MultiUpdateCtx = make([]*multi_update.MultiUpdateCtx, len(t.UpdateCtxList))

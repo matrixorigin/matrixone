@@ -34,6 +34,32 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const backupProtectionCheckpointTimeout = 30 * time.Second
+
+// forceBackupProtectionCheckpoint waits for the checkpoint that covers the
+// requested timestamp. ForceCheckpoint already waits for that semantic
+// postcondition; a second poll of runner/WAL idleness is both weaker and prone
+// to fixed-delay flakes under a contended CI runner.
+func forceBackupProtectionCheckpoint(t *testing.T, db *testutil.TestEngine) {
+	t.Helper()
+
+	target := db.TxnMgr.Now()
+	ctx, cancel := context.WithTimeout(t.Context(), backupProtectionCheckpointTimeout)
+	defer cancel()
+	require.NoError(t, db.DB.ForceCheckpoint(ctx, target))
+
+	checkpoint := db.BGCheckpointRunner.MaxIncrementalCheckpoint()
+	require.NotNil(t, checkpoint)
+	end := checkpoint.GetEnd()
+	require.Truef(
+		t,
+		end.GE(&target),
+		"latest checkpoint %s does not cover requested timestamp %s",
+		end.ToString(),
+		target.ToString(),
+	)
+}
+
 // TestBackupProtectionCheckpointProtection tests that protected checkpoints are not deleted by GC
 func TestBackupProtectionCheckpointProtection(t *testing.T) {
 	defer testutils.AfterTest(t)()
@@ -72,10 +98,7 @@ func TestBackupProtectionCheckpointProtection(t *testing.T) {
 	require.NoError(t, txn.Commit(context.Background()))
 
 	// Force checkpoint to create checkpoint files
-	db.ForceCheckpoint()
-	testutils.WaitExpect(5000, func() bool {
-		return db.AllCheckpointsFinished()
-	})
+	forceBackupProtectionCheckpoint(t, db)
 
 	// Get all checkpoints before backup
 	allCheckpointsBefore := db.BGCheckpointRunner.GetAllCheckpoints()
@@ -156,10 +179,7 @@ func TestBackupProtectionMetadataFileFiltering(t *testing.T) {
 	require.NoError(t, txn.Commit(context.Background()))
 
 	// Force checkpoint
-	db.ForceCheckpoint()
-	testutils.WaitExpect(5000, func() bool {
-		return db.AllCheckpointsFinished()
-	})
+	forceBackupProtectionCheckpoint(t, db)
 
 	// Get backup time point
 	allCheckpoints := db.BGCheckpointRunner.GetAllCheckpoints()
@@ -233,10 +253,7 @@ func TestBackupProtectionMetadataFileFiltering(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, txn.Commit(context.Background()))
 
-	db.ForceCheckpoint()
-	testutils.WaitExpect(5000, func() bool {
-		return db.AllCheckpointsFinished()
-	})
+	forceBackupProtectionCheckpoint(t, db)
 
 	// List checkpoint files after creating new checkpoint
 	entriesAfter, err := fileservice.SortedList(db.Opts.Fs.List(ctx, ckpDir))
@@ -384,10 +401,7 @@ func TestBackupProtectionCheckpointFiltering(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, txn.Commit(context.Background()))
 
-		db.ForceCheckpoint()
-		testutils.WaitExpect(5000, func() bool {
-			return db.AllCheckpointsFinished()
-		})
+		forceBackupProtectionCheckpoint(t, db)
 		time.Sleep(10 * time.Millisecond) // Ensure different timestamps
 	}
 

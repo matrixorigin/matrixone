@@ -148,6 +148,10 @@ const externalTableUnsupportedDMLMsg = "unsupported DML: " + externalTableUnsupp
 const noPkOnDupUpdateCause = "on duplicate key update without primary or unique key"
 const noPkOnDupUpdateMsg = "unsupported DML: " + noPkOnDupUpdateCause
 
+const icebergRowLevelDMLUnsupportedCause = "Iceberg row-level DML"
+
+const icebergRowLevelDMLUnsupportedMsg = "unsupported DML: " + icebergRowLevelDMLUnsupportedCause
+
 func (dmlCtx *DMLContext) ResolveTables(ctx CompilerContext, tableExprs tree.TableExprs, with *tree.With, aliasMap map[string][2]string, respectFKCheck bool) error {
 	cteMap := make(map[string]bool)
 	if with != nil {
@@ -233,6 +237,13 @@ func (dmlCtx *DMLContext) ResolveSingleTable(ctx CompilerContext, tbl tree.Table
 	// directly with the user-facing error, so statement kinds without a legacy
 	// fallback (REPLACE) don't leak the internal fallback sentinel.
 	if tableDef.TableType == catalog.SystemExternalRel {
+		isIceberg, err := IsIcebergTableDef(ctx.GetContext(), tableDef)
+		if err != nil {
+			return err
+		}
+		if isIceberg {
+			return moerr.NewUnsupportedDML(ctx.GetContext(), icebergRowLevelDMLUnsupportedCause)
+		}
 		if _, ok := GetWriteFilePattern(getExternParamFromTableDef(tableDef)); ok {
 			return moerr.NewUnsupportedDML(ctx.GetContext(), externalTableUnsupportedDMLCause)
 		}

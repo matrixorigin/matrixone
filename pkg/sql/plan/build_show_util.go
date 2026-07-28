@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
@@ -310,6 +311,13 @@ func ConstructCreateTableSQL(
 					indexStr += paramList
 					rewriteIndexStr += paramList
 				}
+				includedColumns, err := indexDefIncludedColumns(indexdef)
+				if err != nil {
+					return "", nil, err
+				}
+				includeList := indexIncludeColumnsToString(includedColumns, colNameToOriginName)
+				indexStr += includeList
+				rewriteIndexStr += includeList
 				if indexStr != rewriteIndexStr {
 					rewritePairs = append(rewritePairs, struct {
 						display string
@@ -577,6 +585,17 @@ func ConstructCreateTableSQL(
 	}
 
 	if tableDef.TableType == catalog.SystemExternalRel {
+		if env, found, parseErr := sqliceberg.ParseCreateSQLEnvelope(ctx.GetContext(), tableDef.Createsql); parseErr != nil {
+			return "", nil, parseErr
+		} else if found {
+			createStr += formatIcebergTableOptionsForShowCreate(env)
+			var stmt tree.Statement
+			if ctx != nil {
+				stmt, err = getRewriteSQLStmt(ctx, createStr)
+			}
+			return createStr, stmt, err
+		}
+
 		param := &tree.ExternParam{}
 		if err = json.Unmarshal([]byte(tableDef.Createsql), param); err != nil {
 			return "", nil, err
@@ -659,6 +678,22 @@ func ConstructCreateTableSQL(
 		stmt, err = getRewriteSQLStmt(ctx, rewriteStr)
 	}
 	return createStr, stmt, err
+}
+
+func indexIncludeColumnsToString(includedColumns []string, colNameToOriginName map[string]string) string {
+	if len(includedColumns) == 0 {
+		return ""
+	}
+
+	names := make([]string, 0, len(includedColumns))
+	for _, colName := range includedColumns {
+		resolvedName := catalog.ResolveAlias(colName)
+		if originName := colNameToOriginName[resolvedName]; originName != "" {
+			resolvedName = originName
+		}
+		names = append(names, fmt.Sprintf("`%s`", formatStr(resolvedName)))
+	}
+	return fmt.Sprintf(" INCLUDE (%s)", strings.Join(names, ", "))
 }
 
 func extractTopLevelCheckDefs(tableDef *plan.TableDef) []string {
@@ -938,7 +973,7 @@ func FormatColType(colType plan.Type) string {
 	case types.T_bit, types.T_char, types.T_varchar, types.T_binary, types.T_varbinary:
 		suffix = fmt.Sprintf("(%d)", colType.Width)
 
-	case types.T_array_float32, types.T_array_float64:
+	case types.T_array_float32, types.T_array_float64, types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8:
 		suffix = fmt.Sprintf("(%d)", colType.Width)
 
 	}
@@ -980,6 +1015,34 @@ func formatExternalTableOptionsForShowCreate(param *tree.ExternParam) string {
 		return formatS3ExternalOptionsForShowCreate(param)
 	}
 	return formatInfileExternalOptionsForShowCreate(param)
+}
+
+func formatIcebergTableOptionsForShowCreate(env sqliceberg.CreateSQLEnvelope) string {
+	options := []struct {
+		key   string
+		value string
+	}{
+		{key: "catalog", value: env.Catalog},
+		{key: "namespace", value: env.Namespace},
+		{key: "table", value: env.Table},
+		{key: "ref", value: env.DefaultRef},
+		{key: "read_mode", value: env.ReadMode},
+		{key: "write_mode", value: env.WriteMode},
+	}
+	var builder strings.Builder
+	builder.WriteString(" ENGINE = ICEBERG WITH (")
+	for i, option := range options {
+		if i > 0 {
+			builder.WriteString(", ")
+		}
+		builder.WriteString("\"")
+		builder.WriteString(option.key)
+		builder.WriteString("\" = '")
+		builder.WriteString(formatStrInSingleQuotes(option.value))
+		builder.WriteString("'")
+	}
+	builder.WriteString(")")
+	return builder.String()
 }
 
 func formatInfileExternalOptionsForShowCreate(param *tree.ExternParam) string {

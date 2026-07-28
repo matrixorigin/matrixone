@@ -15,11 +15,14 @@
 package logtail
 
 import (
+	"context"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
@@ -33,6 +36,39 @@ func goSubmit(fn func()) { go fn() }
 // syncSubmit runs fn synchronously; exercises the degenerate case where
 // collect effectively runs on the caller.
 func syncSubmit(fn func()) { fn() }
+
+func TestManagerTruncateTSConcurrentAccess(t *testing.T) {
+	mgr := &Manager{
+		table: NewTxnTable(1, func() types.TS { return types.TS{} }),
+	}
+
+	const iterations = 1000
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		<-start
+		for i := 1; i <= iterations; i++ {
+			mgr.GCByTS(context.Background(), types.BuildTS(int64(i), 0))
+			runtime.Gosched()
+		}
+	}()
+
+	go func() {
+		defer wg.Done()
+		<-start
+		for i := 0; i < iterations; i++ {
+			_ = mgr.GetTruncateTS()
+			runtime.Gosched()
+		}
+	}()
+
+	close(start)
+	wg.Wait()
+	require.Equal(t, types.BuildTS(iterations, 0), mgr.GetTruncateTS())
+}
 
 func TestOrderedCollectAndPublish_Empty(t *testing.T) {
 	called := false

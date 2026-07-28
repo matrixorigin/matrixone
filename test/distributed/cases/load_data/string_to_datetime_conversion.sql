@@ -4,6 +4,8 @@
 drop database if exists test_string_to_datetime;
 create database test_string_to_datetime;
 use test_string_to_datetime;
+set @old_time_zone = @@time_zone;
+set time_zone = '+00:00';
 
 -- Test 1: STRING → DATE
 create table test_string_to_date(
@@ -101,4 +103,5 @@ load data infile {'filepath'='$resources/load_data/string_to_datetime_invalid.pa
 into table test_datetime_invalid;
 
 -- Cleanup
+set time_zone = @old_time_zone;
 drop database test_string_to_datetime;

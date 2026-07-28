@@ -44,11 +44,10 @@ import (
 type Nodes []Node
 
 type Node struct {
-	Mcpu           int
-	Id             string             `json:"id"`
-	Addr           string             `json:"address"`
-	WorkState      metadata.WorkState `json:"-"`
-	HasMixedCommit bool               `json:"-"`
+	Mcpu      int
+	Id        string             `json:"id"`
+	Addr      string             `json:"address"`
+	WorkState metadata.WorkState `json:"-"`
 	//TODO::change RelData to Tombstoner, since only Tombstones ned to be serialized.
 	Data  RelData
 	CNCNT int32 // number of all cns
@@ -56,12 +55,11 @@ type Node struct {
 }
 
 // QueryCandidate is a CN discovered before tenant and label pool resolution.
-// Service keeps the control-plane metadata needed by pool policy; Mcpu keeps
-// the legacy execution-capacity value until a real resource model replaces it.
+// Service keeps the control-plane metadata needed by pool policy; Mcpu is the
+// CN-advertised CPU capacity normalized to at least one.
 type QueryCandidate struct {
-	Service        metadata.CNService
-	Mcpu           int
-	HasMixedCommit bool
+	Service metadata.CNService
+	Mcpu    int
 }
 
 type QueryCandidates []QueryCandidate
@@ -70,10 +68,44 @@ type QueryCandidates []QueryCandidate
 // resolve the allowed CN pool. It deliberately contains no worker-selection
 // policy such as subset size or ranking.
 type QueryCandidatePoolRequest struct {
-	IsInternal bool
-	Tenant     string
-	Username   string
-	CNLabel    map[string]string
+	IsInternal     bool
+	Tenant         string
+	Username       string
+	CNLabel        map[string]string
+	RequestedPool  string
+	FallbackPolicy QueryPoolFallbackPolicy
+}
+
+type QueryPoolFallbackPolicy uint8
+
+const (
+	QueryPoolFallbackLegacyCompatible QueryPoolFallbackPolicy = iota
+	QueryPoolFallbackStrict
+)
+
+func (p QueryPoolFallbackPolicy) Valid() bool {
+	return p == QueryPoolFallbackLegacyCompatible || p == QueryPoolFallbackStrict
+}
+
+type QueryPoolResolution string
+
+const (
+	QueryPoolResolutionUnspecified      QueryPoolResolution = "unspecified"
+	QueryPoolResolutionAllCompatible    QueryPoolResolution = "all-compatible"
+	QueryPoolResolutionExactLabels      QueryPoolResolution = "exact-labels"
+	QueryPoolResolutionNonAccountLabels QueryPoolResolution = "non-account-labels"
+	QueryPoolResolutionSharedUnlabeled  QueryPoolResolution = "shared-unlabeled"
+	QueryPoolResolutionPrivilegedAny    QueryPoolResolution = "privileged-any"
+	QueryPoolResolutionNoMatch          QueryPoolResolution = "no-match"
+)
+
+type ResolvedQueryPool struct {
+	Nodes             Nodes
+	RequestedIdentity string
+	Identity          string
+	Resolution        QueryPoolResolution
+	Fallback          bool
+	FallbackReason    string
 }
 
 // QueryCandidateDiscoverer is an optional engine capability. Implementations
@@ -86,7 +118,7 @@ type QueryCandidateDiscoverer interface {
 // tenant and label policy to an already-discovered candidate snapshot.
 // Implementations must treat candidates and request.CNLabel as read-only.
 type QueryCandidatePoolResolver interface {
-	ResolveQueryCandidatePool(context.Context, QueryCandidates, QueryCandidatePoolRequest) (Nodes, error)
+	ResolveQueryCandidatePool(context.Context, QueryCandidates, QueryCandidatePoolRequest) (ResolvedQueryPool, error)
 }
 
 func PlanDefToCstrDef(tableDef *plan.TableDef) *ConstraintDef {
@@ -152,7 +184,9 @@ var PlanDefsToExeDefs = func(tableDef *plan.TableDef) ([]TableDef, *api.SchemaEx
 		exeDefs = append(exeDefs, propDef)
 	}
 	extra := &api.SchemaExtra{
-		FeatureFlag: tableDef.FeatureFlag,
+		FeatureFlag:    tableDef.FeatureFlag,
+		AutoIncrOffset: tableDef.AutoIncrOffset,
+		AutoIncrEpoch:  tableDef.AutoIncrEpoch,
 	}
 	propDef.Properties = append(
 		propDef.Properties,
@@ -491,9 +525,8 @@ const (
 type EngineType int8
 
 const (
-	Disttae EngineType = iota
-	Memory
-	UNKNOWN
+	Disttae EngineType = 0
+	UNKNOWN EngineType = 2
 )
 
 func (def *ConstraintDef) MarshalBinary() (data []byte, err error) {
@@ -853,10 +886,9 @@ type Tombstoner interface {
 type RelDataType uint8
 
 const (
-	RelDataEmpty RelDataType = iota
-	RelDataShardIDList
-	RelDataBlockList
-	RelDataObjList
+	RelDataEmpty     RelDataType = 0
+	RelDataBlockList RelDataType = 2
+	RelDataObjList   RelDataType = 3
 )
 
 type RelData interface {
@@ -873,14 +905,6 @@ type RelData interface {
 	BuildEmptyRelData(preAllocSize int) RelData
 	DataCnt() int
 
-	// specified interface
-
-	// for memory engine shard id list
-	GetShardIDList() []uint64
-	GetShardID(i int) uint64
-	SetShardID(i int, id uint64)
-	AppendShardID(id uint64)
-
 	// for block info list
 	Split(i int) []RelData
 	GetBlockInfoSlice() objectio.BlockInfoSlice
@@ -888,22 +912,6 @@ type RelData interface {
 	SetBlockInfo(i int, blk *objectio.BlockInfo)
 	AppendBlockInfo(blk *objectio.BlockInfo)
 	AppendBlockInfoSlice(objectio.BlockInfoSlice)
-}
-
-// ForRangeShardID [begin, end)
-func ForRangeShardID(
-	begin, end int,
-	relData RelData,
-	onShardID func(shardID uint64) (bool, error)) error {
-	slice := relData.GetShardIDList()
-
-	for idx := begin; idx < end; idx++ {
-		if ok, err := onShardID(slice[idx]); !ok || err != nil {
-			return err
-		}
-	}
-
-	return nil
 }
 
 // ForRangeBlockInfo [begin, end)

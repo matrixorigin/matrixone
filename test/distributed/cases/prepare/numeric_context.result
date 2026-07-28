@@ -1,0 +1,52 @@
+DROP DATABASE IF EXISTS numeric_context_test;
+CREATE DATABASE numeric_context_test;
+USE numeric_context_test;
+SET @a = 9007199254740993;
+SET @b = 0;
+PREPARE p_cast FROM 'SELECT CAST((? + ?) + 1 AS DECIMAL(30, 0))';
+EXECUTE p_cast USING @a, @b;
+➤ cast((? + ?) + 1 as decimal(30))[3,30,0]  𝄀
+9007199254740994
+EXECUTE p_cast USING @b, @a;
+➤ cast((? + ?) + 1 as decimal(30))[3,30,0]  𝄀
+9007199254740994
+DEALLOCATE PREPARE p_cast;
+PREPARE p_reuse FROM 'SELECT CAST((? + ?) + 1 AS DECIMAL(30, 0))';
+SET @dynamic = 9007199254740993;
+EXECUTE p_reuse USING @dynamic, @b;
+➤ cast((? + ?) + 1 as decimal(30))[3,30,0]  𝄀
+9007199254740994
+SET @dynamic = '9007199254740993';
+EXECUTE p_reuse USING @dynamic, @b;
+➤ cast((? + ?) + 1 as decimal(30))[3,30,0]  𝄀
+9007199254740994
+SET @dynamic = CAST(9007199254740993 AS DECIMAL(30, 0));
+EXECUTE p_reuse USING @dynamic, @b;
+➤ cast((? + ?) + 1 as decimal(30))[3,30,0]  𝄀
+9007199254740994
+SET @dynamic = CAST(9007199254740993 AS UNSIGNED);
+EXECUTE p_reuse USING @dynamic, @b;
+➤ cast((? + ?) + 1 as decimal(30))[3,30,0]  𝄀
+9007199254740994
+SET @dynamic = -9007199254740993;
+EXECUTE p_reuse USING @dynamic, @b;
+➤ cast((? + ?) + 1 as decimal(30))[3,30,0]  𝄀
+-9007199254740992
+SET @dynamic = NULL;
+EXECUTE p_reuse USING @dynamic, @b;
+➤ cast((? + ?) + 1 as decimal(30))[3,30,0]  𝄀
+null
+SET @dynamic = 'not-a-number';
+EXECUTE p_reuse USING @dynamic, @b;
+invalid input: not-a-number beyond the range, can't be converted to Decimal128(30,0).
+SET @dynamic = 9007199254740993;
+EXECUTE p_reuse USING @dynamic, @b;
+➤ cast((? + ?) + 1 as decimal(30))[3,30,0]  𝄀
+9007199254740994
+DEALLOCATE PREPARE p_reuse;
+PREPARE p_mod FROM 'SELECT CAST(MOD(?, 2) AS SIGNED)';
+EXECUTE p_mod USING @a;
+➤ cast(MOD(?, 2) as signed)[-5,64,0]  𝄀
+1
+DEALLOCATE PREPARE p_mod;
+DROP DATABASE numeric_context_test;
