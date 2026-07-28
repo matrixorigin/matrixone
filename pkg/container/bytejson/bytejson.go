@@ -40,6 +40,9 @@ func (bj ByteJson) String() string {
 
 func (bj ByteJson) Unquote() (string, error) {
 	if bj.Type == TpCodeBlob {
+		if payload, ok := bj.persistedBitPayload(); ok {
+			return base64.StdEncoding.EncodeToString(payload), nil
+		}
 		return string(bj.GetString()), nil
 	}
 	if bj.Type == TpCodeOpaque || bj.Type == TpCodeBit {
@@ -94,10 +97,28 @@ func (bj ByteJson) MarshalJSON() ([]byte, error) {
 
 // Marshal transform bytejson to []byte,for storage
 func (bj ByteJson) Marshal() ([]byte, error) {
-	buf := make([]byte, len(bj.Data)+1)
-	buf[0] = byte(bj.Type)
-	copy(buf[1:], bj.Data)
+	stored, err := bj.StorageCompatible()
+	if err != nil {
+		return nil, err
+	}
+	buf := make([]byte, len(stored.Data)+1)
+	buf[0] = byte(stored.Type)
+	copy(buf[1:], stored.Data)
 	return buf, nil
+}
+
+// StorageCompatible returns a representation that only uses type codes known
+// before TpCodeOpaque and TpCodeBit were introduced. The receiver is returned
+// unchanged when it is already safe to persist.
+func (bj ByteJson) StorageCompatible() (ByteJson, error) {
+	if !bj.requiresLegacyBinaryEncoding() {
+		return bj, nil
+	}
+	tp, data, err := appendLegacyCompatibleJSON(nil, bj)
+	if err != nil {
+		return ByteJson{}, err
+	}
+	return ByteJson{Type: tp, Data: data}, nil
 }
 
 // Unmarshal transform storage []byte  to bytejson
@@ -188,7 +209,13 @@ func (bj ByteJson) to(buf []byte) ([]byte, error) {
 		buf = append(buf, '"')
 	case TpCodeBlob:
 		buf = append(buf, '"')
-		buf = append(buf, bj.GetString()...)
+		if payload, ok := bj.persistedBitPayload(); ok {
+			start := len(buf)
+			buf = append(buf, make([]byte, base64.StdEncoding.EncodedLen(len(payload)))...)
+			base64.StdEncoding.Encode(buf[start:], payload)
+		} else {
+			buf = append(buf, bj.GetString()...)
+		}
 		buf = append(buf, '"')
 	case TpCodeOpaque, TpCodeBit:
 		buf = append(buf, '"')
@@ -335,6 +362,126 @@ func (bj ByteJson) getValEntry(off int) ByteJson {
 	return ByteJson{Type: TpCode(tpCode), Data: bj.Data[valOff : valOff+dataBytes]}
 }
 
+const persistedBitPrefix = "~mo:json-bit:v1:"
+
+func (bj ByteJson) persistedBitPayload() ([]byte, bool) {
+	if bj.Type != TpCodeBlob {
+		return nil, false
+	}
+	payload := bj.GetString()
+	if !bytes.HasPrefix(payload, []byte(persistedBitPrefix)) {
+		return nil, false
+	}
+	raw, err := base64.StdEncoding.DecodeString(string(payload[len(persistedBitPrefix):]))
+	if err != nil {
+		return nil, false
+	}
+	return raw, true
+}
+
+func (bj ByteJson) requiresLegacyBinaryEncoding() bool {
+	switch bj.Type {
+	case TpCodeOpaque, TpCodeBit:
+		return true
+	case TpCodeArray:
+		for i := 0; i < bj.GetElemCnt(); i++ {
+			if bj.getArrayElem(i).requiresLegacyBinaryEncoding() {
+				return true
+			}
+		}
+	case TpCodeObject:
+		for i := 0; i < bj.GetElemCnt(); i++ {
+			if bj.getObjectVal(i).requiresLegacyBinaryEncoding() {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// appendLegacyCompatibleJSON writes only type codes understood by readers
+// predating TpCodeOpaque and TpCodeBit. Opaque values use the legacy BLOB
+// representation; BIT values use a tagged BLOB payload whose subtype new
+// readers recover through TYPE, display, and comparison operations.
+func appendLegacyCompatibleJSON(buf []byte, bj ByteJson) (TpCode, []byte, error) {
+	switch bj.Type {
+	case TpCodeOpaque:
+		encoded := base64.StdEncoding.EncodeToString(bj.GetString())
+		return TpCodeBlob, appendBinaryString(buf, encoded), nil
+	case TpCodeBit:
+		encoded := persistedBitPrefix + base64.StdEncoding.EncodeToString(bj.GetString())
+		return TpCodeBlob, appendBinaryString(buf, encoded), nil
+	case TpCodeArray:
+		data, err := appendLegacyCompatibleArray(buf, bj)
+		return TpCodeArray, data, err
+	case TpCodeObject:
+		data, err := appendLegacyCompatibleObject(buf, bj)
+		return TpCodeObject, data, err
+	default:
+		return bj.Type, append(buf, bj.Data...), nil
+	}
+}
+
+func appendLegacyCompatibleArray(buf []byte, bj ByteJson) ([]byte, error) {
+	docOff := len(buf)
+	count := bj.GetElemCnt()
+	buf = appendUint32(buf, uint32(count))
+	buf = appendZero(buf, docSizeOff)
+	valEntryBegin := len(buf)
+	buf = appendZero(buf, count*valEntrySize)
+	for i := 0; i < count; i++ {
+		var err error
+		buf, err = appendLegacyCompatibleValueEntry(buf, docOff, valEntryBegin+i*valEntrySize, bj.getArrayElem(i))
+		if err != nil {
+			return nil, err
+		}
+	}
+	endian.PutUint32(buf[docOff+docSizeOff:], uint32(len(buf)-docOff))
+	return buf, nil
+}
+
+func appendLegacyCompatibleObject(buf []byte, bj ByteJson) ([]byte, error) {
+	docOff := len(buf)
+	count := bj.GetElemCnt()
+	buf = appendUint32(buf, uint32(count))
+	buf = appendZero(buf, docSizeOff)
+	keyEntryBegin := len(buf)
+	buf = appendZero(buf, count*keyEntrySize)
+	valEntryBegin := len(buf)
+	buf = appendZero(buf, count*valEntrySize)
+	for i := 0; i < count; i++ {
+		key := bj.getObjectKey(i)
+		keyEntryOff := keyEntryBegin + i*keyEntrySize
+		endian.PutUint32(buf[keyEntryOff:], uint32(len(buf)-docOff))
+		endian.PutUint16(buf[keyEntryOff+keyOriginOff:], uint16(len(key)))
+		buf = append(buf, key...)
+	}
+	for i := 0; i < count; i++ {
+		var err error
+		buf, err = appendLegacyCompatibleValueEntry(buf, docOff, valEntryBegin+i*valEntrySize, bj.getObjectVal(i))
+		if err != nil {
+			return nil, err
+		}
+	}
+	endian.PutUint32(buf[docOff+docSizeOff:], uint32(len(buf)-docOff))
+	return buf, nil
+}
+
+func appendLegacyCompatibleValueEntry(buf []byte, docOff, valEntryOff int, bj ByteJson) ([]byte, error) {
+	elemOff := len(buf)
+	tp, buf, err := appendLegacyCompatibleJSON(buf, bj)
+	if err != nil {
+		return nil, err
+	}
+	buf[valEntryOff] = byte(tp)
+	if tp == TpCodeLiteral {
+		buf[valEntryOff+valTypeSize] = buf[elemOff]
+		return buf[:elemOff], nil
+	}
+	endian.PutUint32(buf[valEntryOff+valTypeSize:], uint32(elemOff-docOff))
+	return buf, nil
+}
+
 func (bj ByteJson) opaquePayload() []byte {
 	if bj.Type != TpCodeBlob {
 		return bj.GetString()
@@ -355,7 +502,12 @@ const (
 
 func binaryJSONValue(bj ByteJson) (binaryJSONSubtype, []byte, bool) {
 	switch bj.Type {
-	case TpCodeBlob, TpCodeOpaque:
+	case TpCodeBlob:
+		if payload, ok := bj.persistedBitPayload(); ok {
+			return binaryJSONBit, payload, true
+		}
+		return binaryJSONBlob, bj.opaquePayload(), true
+	case TpCodeOpaque:
 		return binaryJSONBlob, bj.opaquePayload(), true
 	case TpCodeBit:
 		return binaryJSONBit, bj.opaquePayload(), true

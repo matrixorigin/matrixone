@@ -15,6 +15,7 @@
 package bytejson
 
 import (
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"io"
@@ -24,6 +25,130 @@ import (
 
 	"github.com/stretchr/testify/require"
 )
+
+func TestMarshalBinarySubtypesRemainLegacyReadable(t *testing.T) {
+	opaque := ByteJson{Type: TpCodeOpaque, Data: appendBinaryString(nil, string([]byte{0x01, 0x02}))}
+	bit := ByteJson{Type: TpCodeBit, Data: appendBinaryString(nil, string([]byte{0x01}))}
+	array, err := CreateByteJSON([]any{opaque, bit})
+	require.NoError(t, err)
+	object, err := CreateByteJSON(map[string]any{"bit": bit, "opaque": opaque})
+	require.NoError(t, err)
+
+	tests := []struct {
+		name  string
+		value ByteJson
+		check func(*testing.T, ByteJson)
+	}{
+		{
+			name:  "root opaque",
+			value: opaque,
+			check: func(t *testing.T, got ByteJson) {
+				require.Equal(t, TpCodeBlob, got.Type)
+				require.Equal(t, `"AQI="`, got.String())
+				length, ok := BinaryJSONPayloadLen(got)
+				require.True(t, ok)
+				require.Equal(t, 2, length)
+			},
+		},
+		{
+			name:  "root bit",
+			value: bit,
+			check: func(t *testing.T, got ByteJson) {
+				require.Equal(t, TpCodeBlob, got.Type)
+				require.Equal(t, "BIT", got.TYPE())
+				require.Equal(t, `"AQ=="`, got.String())
+			},
+		},
+		{
+			name:  "array",
+			value: array,
+			check: func(t *testing.T, got ByteJson) {
+				require.Equal(t, TpCodeBlob, got.GetArrayElem(0).Type)
+				require.Equal(t, TpCodeBlob, got.GetArrayElem(1).Type)
+				require.Equal(t, "BIT", got.GetArrayElem(1).TYPE())
+				require.Equal(t, `["AQI=", "AQ=="]`, got.String())
+			},
+		},
+		{
+			name:  "object",
+			value: object,
+			check: func(t *testing.T, got ByteJson) {
+				require.Equal(t, TpCodeBlob, got.GetObjectVal(0).Type)
+				require.Equal(t, "BIT", got.GetObjectVal(0).TYPE())
+				require.Equal(t, TpCodeBlob, got.GetObjectVal(1).Type)
+				require.Equal(t, `{"bit": "AQ==", "opaque": "AQI="}`, got.String())
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			stored, err := tc.value.Marshal()
+			require.NoError(t, err)
+			requireLegacyJSONReadable(t, stored)
+
+			var got ByteJson
+			require.NoError(t, got.Unmarshal(stored))
+			tc.check(t, got)
+		})
+	}
+}
+
+// requireLegacyJSONReadable models the pre-TpCodeOpaque/TpCodeBit reader. It
+// intentionally rejects type codes newer than TpCodeBlob and recursively
+// validates every value entry and offset that the old reader would follow.
+func requireLegacyJSONReadable(t *testing.T, stored []byte) {
+	t.Helper()
+	require.NotEmpty(t, stored)
+	requireLegacyJSONValueReadable(t, TpCode(stored[0]), stored[1:])
+}
+
+func requireLegacyJSONValueReadable(t *testing.T, tp TpCode, data []byte) {
+	t.Helper()
+	switch tp {
+	case TpCodeLiteral:
+		require.NotEmpty(t, data)
+	case TpCodeInt64, TpCodeUint64, TpCodeFloat64:
+		require.GreaterOrEqual(t, len(data), numberSize)
+	case TpCodeString, TpCodeDecimal, TpCodeDate, TpCodeTime, TpCodeDatetime, TpCodeBlob:
+		length, prefixLen := binary.Uvarint(data)
+		require.Greater(t, prefixLen, 0)
+		require.LessOrEqual(t, uint64(prefixLen)+length, uint64(len(data)))
+	case TpCodeArray, TpCodeObject:
+		require.GreaterOrEqual(t, len(data), headerSize)
+		count := int(endian.Uint32(data))
+		docSize := int(endian.Uint32(data[docSizeOff:]))
+		require.LessOrEqual(t, headerSize, docSize)
+		require.LessOrEqual(t, docSize, len(data))
+		keyTableSize := 0
+		if tp == TpCodeObject {
+			keyTableSize = count * keyEntrySize
+			require.LessOrEqual(t, headerSize+keyTableSize+count*valEntrySize, docSize)
+			for i := 0; i < count; i++ {
+				off := headerSize + i*keyEntrySize
+				keyOff := int(endian.Uint32(data[off:]))
+				keyLen := int(endian.Uint16(data[off+keyOriginOff:]))
+				require.LessOrEqual(t, keyOff+keyLen, docSize)
+			}
+		} else {
+			require.LessOrEqual(t, headerSize+count*valEntrySize, docSize)
+		}
+		valTableOff := headerSize + keyTableSize
+		for i := 0; i < count; i++ {
+			off := valTableOff + i*valEntrySize
+			childType := TpCode(data[off])
+			if childType == TpCodeLiteral {
+				requireLegacyJSONValueReadable(t, childType, data[off+valTypeSize:off+valEntrySize])
+				continue
+			}
+			valueOff := int(endian.Uint32(data[off+valTypeSize:]))
+			require.Less(t, valueOff, docSize)
+			requireLegacyJSONValueReadable(t, childType, data[valueOff:docSize])
+		}
+	default:
+		t.Fatalf("legacy reader does not recognize JSON type code %#x", tp)
+	}
+}
 
 func TestLiteral(t *testing.T) {
 	j := []string{"true", "false", "null"}
