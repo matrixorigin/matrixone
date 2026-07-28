@@ -350,9 +350,40 @@ func TestStartDynamicBuiltinProxyOwnership(t *testing.T) {
 
 	require.NoError(t, startDynamicBuiltinProxy(2, true))
 	require.False(t, proxy.started, "dynamic Proxy on 6001 owns the endpoint")
+	require.NoError(t, startDynamicBuiltinProxy(1, false))
+	require.True(t, proxy.started, "single dynamic CN still needs the legacy 6001 endpoint")
+	proxy.started = false
+	proxy.upstreams = nil
 	require.NoError(t, startDynamicBuiltinProxy(2, false))
 	require.True(t, proxy.started)
 	require.Equal(t, []string{"127.0.0.1:16001", "127.0.0.1:16002"}, proxy.upstreams)
+}
+
+func TestV1LaunchWithProxyOwnsLegacyPort(t *testing.T) {
+	path, err := filepath.Abs("../../etc/v1/launch-with-proxy/proxy.toml")
+	require.NoError(t, err)
+	owned, err := proxyServiceOwnsPort([]string{path}, 6001)
+	require.NoError(t, err)
+	require.True(t, owned, "v1 launch topology must route 6001 through pkg/proxy")
+}
+
+func TestShouldStartDynamicBuiltinProxy(t *testing.T) {
+	tests := []struct {
+		name      string
+		count     int
+		owns6001  bool
+		wantStart bool
+	}{
+		{name: "single CN without real Proxy", count: 1, wantStart: true},
+		{name: "single CN with real Proxy on 6001", count: 1, owns6001: true},
+		{name: "multiple CN without real Proxy", count: 2, wantStart: true},
+		{name: "zero CN", count: 0},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.wantStart, shouldStartDynamicBuiltinProxy(tc.count, tc.owns6001))
+		})
+	}
 }
 
 func TestWaitHAKeeperReadyRetries(t *testing.T) {

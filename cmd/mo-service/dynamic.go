@@ -78,7 +78,7 @@ func startDynamicCluster(
 }
 
 func startDynamicBuiltinProxy(serviceCount int, proxyOwns6001 bool) error {
-	if !shouldStartBuiltinCNProxy(serviceCount, *withProxy, proxyOwns6001) {
+	if !shouldStartDynamicBuiltinProxy(serviceCount, proxyOwns6001) {
 		return nil
 	}
 	cnProxy = launchNewProxy("0.0.0.0:6001", logutil.GetGlobalLogger().Named("mysql-proxy"))
@@ -87,6 +87,10 @@ func startDynamicBuiltinProxy(serviceCount int, proxyOwns6001 bool) error {
 		cnProxy.AddUpStream(fmt.Sprintf("127.0.0.1:%d", port), time.Second*10)
 	}
 	return cnProxy.Start()
+}
+
+func shouldStartDynamicBuiltinProxy(serviceCount int, proxyOwns6001 bool) bool {
+	return serviceCount > 0 && !proxyOwns6001
 }
 
 func startDynamicCNServices(
