@@ -71,6 +71,7 @@ type bindCursorClient struct {
 	Client
 	mu        sync.Mutex
 	submitted map[uint64]int
+	started   chan struct{}
 }
 
 func (c *bindCursorClient) AsyncSend(
@@ -80,6 +81,9 @@ func (c *bindCursorClient) AsyncSend(
 	c.mu.Lock()
 	c.submitted[req.LockTable.Table]++
 	c.mu.Unlock()
+	if c.started != nil {
+		c.started <- struct{}{}
+	}
 	<-ctx.Done()
 	releaseRequest(req)
 	return nil, ctx.Err()
@@ -90,6 +94,36 @@ func (c *bindCursorClient) Send(
 	_ *pb.Request,
 ) (*pb.Response, error) {
 	return nil, ctx.Err()
+}
+
+func runBlockedKeepRemoteLockRound(t *testing.T, keeper *lockTableKeeper, client *bindCursorClient) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		keeper.doKeepRemoteLock(ctx, nil, nil)
+		close(done)
+	}()
+	waitForDone := func(message string) {
+		t.Helper()
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Fatal(message)
+		}
+	}
+
+	for range keepRemoteLockBatchSize {
+		select {
+		case <-client.started:
+		case <-time.After(time.Second):
+			cancel()
+			waitForDone("keeper did not stop after scheduling timed out")
+			t.Fatal("keeper did not schedule a complete keep-remote-lock batch")
+		}
+	}
+	cancel()
+	waitForDone("keeper did not finish after the slow round was cancelled")
 }
 
 func (c *refreshFairnessClient) AsyncSend(
@@ -745,7 +779,10 @@ func TestKeepRemoteLockRefreshWindowIsFairAcrossRounds(t *testing.T) {
 
 func TestKeepRemoteLockWorkCursorIsFairAcrossSlowRounds(t *testing.T) {
 	logger := getLogger("")
-	client := &bindCursorClient{submitted: make(map[uint64]int)}
+	client := &bindCursorClient{
+		submitted: make(map[uint64]int),
+		started:   make(chan struct{}, keepRemoteLockBatchSize),
+	}
 	tables := &lockTableHolders{
 		service: "local",
 		logger:  logger,
@@ -781,9 +818,7 @@ func TestKeepRemoteLockWorkCursorIsFairAcrossSlowRounds(t *testing.T) {
 	}
 
 	for range 2 {
-		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
-		keeper.doKeepRemoteLock(ctx, nil, nil)
-		cancel()
+		runBlockedKeepRemoteLockRound(t, keeper, client)
 	}
 
 	client.mu.Lock()
@@ -796,16 +831,16 @@ func TestKeepRemoteLockWorkCursorIsFairAcrossSlowRounds(t *testing.T) {
 
 func TestKeepRemoteLockPeerCursorIsFairAcrossSlowRounds(t *testing.T) {
 	logger := getLogger("")
-	client := &bindCursorClient{submitted: make(map[uint64]int)}
+	client := &bindCursorClient{
+		submitted: make(map[uint64]int),
+		started:   make(chan struct{}, keepRemoteLockBatchSize),
+	}
 	tables := &lockTableHolders{
 		service: "local",
 		logger:  logger,
 		holders: map[uint32]*lockTableHolder{},
 	}
-	const (
-		peerCount        = keepRemoteLockBatchSize * 2
-		slowRoundTimeout = 500 * time.Millisecond
-	)
+	const peerCount = keepRemoteLockBatchSize * 2
 	for i := range peerCount {
 		bind := pb.LockTable{
 			Table:       uint64(i + 1),
@@ -834,13 +869,7 @@ func TestKeepRemoteLockPeerCursorIsFairAcrossSlowRounds(t *testing.T) {
 		service:     &service{serviceID: "local", logger: logger},
 	}
 
-	runRound := func() {
-		// bindCursorClient deliberately holds every RPC until this deadline.
-		// Leave enough time for a full batch to be scheduled on loaded CI workers.
-		ctx, cancel := context.WithTimeout(context.Background(), slowRoundTimeout)
-		keeper.doKeepRemoteLock(ctx, nil, nil)
-		cancel()
-	}
+	runRound := func() { runBlockedKeepRemoteLockRound(t, keeper, client) }
 	runRound()
 	runRound()
 
