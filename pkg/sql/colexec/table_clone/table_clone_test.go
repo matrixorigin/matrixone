@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func TestTableCloneOperatorMetadata(t *testing.T) {
@@ -50,6 +51,26 @@ type autoIncrementTestRelation struct {
 	tableID uint64
 	name    string
 	def     *plan.TableDef
+}
+
+type tableCloneAutoIncrEpochWorkspace struct {
+	client.Workspace
+	supported bool
+}
+
+func (w tableCloneAutoIncrEpochWorkspace) SupportsAutoIncrEpochFence() bool {
+	return w.supported
+}
+
+func newTableCloneAutoIncrProcess(t *testing.T, supported bool) *process.Process {
+	proc := testutil.NewProcess(t)
+	ctrl := gomock.NewController(t)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().GetWorkspace().Return(
+		tableCloneAutoIncrEpochWorkspace{supported: supported},
+	).AnyTimes()
+	proc.Base.TxnOperator = txnOp
+	return proc
 }
 
 func (r *autoIncrementTestRelation) GetTableID(context.Context) uint64 {
@@ -80,7 +101,7 @@ func TestUpdateDstAutoIncrColumnsReconcilesAllSafeBounds(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			proc := testutil.NewProcess(t)
+			proc := newTableCloneAutoIncrProcess(t, true)
 			ctrl := gomock.NewController(t)
 			incrSvc := mock_frontend.NewMockAutoIncrementService(ctrl)
 			proc.Base.IncrService = incrSvc
@@ -110,8 +131,22 @@ func TestUpdateDstAutoIncrColumnsReconcilesAllSafeBounds(t *testing.T) {
 	}
 }
 
+func TestUpdateDstAutoIncrColumnsRejectsLegacyTN(t *testing.T) {
+	proc := newTableCloneAutoIncrProcess(t, false)
+	ctrl := gomock.NewController(t)
+	incrSvc := mock_frontend.NewMockAutoIncrementService(ctrl)
+	incrSvc.EXPECT().SetOffset(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Times(0)
+	proc.Base.IncrService = incrSvc
+	tc := &TableClone{
+		Ctx: &TableCloneCtx{SrcAutoIncrMaxValues: map[string]uint64{"id": 1}},
+	}
+
+	err := tc.updateDstAutoIncrColumns(proc.Ctx, proc)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), err)
+}
+
 func TestUpdateDstAutoIncrColumnsKeepsHiddenAllocatorIndependent(t *testing.T) {
-	proc := testutil.NewProcess(t)
+	proc := newTableCloneAutoIncrProcess(t, true)
 	ctrl := gomock.NewController(t)
 	incrSvc := mock_frontend.NewMockAutoIncrementService(ctrl)
 	proc.Base.IncrService = incrSvc
@@ -144,7 +179,7 @@ func TestUpdateDstAutoIncrColumnsKeepsHiddenAllocatorIndependent(t *testing.T) {
 }
 
 func TestUpdateDstAutoIncrColumnsReconcilesClonedIndexAllocator(t *testing.T) {
-	proc := testutil.NewProcess(t)
+	proc := newTableCloneAutoIncrProcess(t, true)
 	ctrl := gomock.NewController(t)
 	incrSvc := mock_frontend.NewMockAutoIncrementService(ctrl)
 	proc.Base.IncrService = incrSvc
@@ -208,7 +243,7 @@ func TestUpdateDstAutoIncrColumnsRejectsOutOfRangeOffset(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			proc := testutil.NewProcess(t)
+			proc := newTableCloneAutoIncrProcess(t, true)
 			ctrl := gomock.NewController(t)
 			incrSvc := mock_frontend.NewMockAutoIncrementService(ctrl)
 			proc.Base.IncrService = incrSvc

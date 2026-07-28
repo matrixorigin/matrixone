@@ -29,6 +29,7 @@ import (
 var _ logservice.TNHAKeeperClient = new(testHAClient)
 
 type testHAClient struct {
+	lastHeartbeat pb.TNStoreHeartbeat
 }
 
 func (client *testHAClient) Close() error {
@@ -67,6 +68,7 @@ func (client *testHAClient) CheckLogServiceHealth(ctx context.Context) error {
 }
 
 func (client *testHAClient) SendTNHeartbeat(ctx context.Context, hb pb.TNStoreHeartbeat) (pb.CommandBatch, error) {
+	client.lastHeartbeat = hb
 	return pb.CommandBatch{}, context.DeadlineExceeded
 }
 
@@ -79,12 +81,16 @@ func Test_heartbeat(t *testing.T) {
 
 	cfg := &Config{}
 
+	client := &testHAClient{}
 	lstore := &store{
 		cfg:            cfg,
 		replicas:       &sync.Map{},
 		config:         &util.ConfigData{},
-		hakeeperClient: &testHAClient{},
+		hakeeperClient: client,
 		rt:             rt,
 	}
 	lstore.heartbeat(ctx)
+	if !client.lastHeartbeat.AutoIncrEpochFenceSupported {
+		t.Fatal("TN heartbeat must advertise AUTO_INCREMENT epoch enforcement")
+	}
 }

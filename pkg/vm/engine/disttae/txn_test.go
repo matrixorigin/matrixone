@@ -51,6 +51,31 @@ func TestValidateAutoIncrEpochAdvance(t *testing.T) {
 	require.Error(t, validateAutoIncrEpochAdvance(math.MaxUint32-1, 2))
 }
 
+func TestTransactionAutoIncrEpochFenceCapabilityUsesTargetSnapshot(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		stores   []DNStore
+		expected bool
+	}{
+		{name: "no target", expected: false},
+		{name: "legacy target", stores: []DNStore{{ServiceID: "old"}}, expected: false},
+		{name: "new target", stores: []DNStore{{ServiceID: "new", AutoIncrEpochFenceSupported: true}}, expected: true},
+		{
+			name: "mixed targets fail closed",
+			stores: []DNStore{
+				{ServiceID: "new", AutoIncrEpochFenceSupported: true},
+				{ServiceID: "old"},
+			},
+			expected: false,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			txn := &Transaction{tnStores: tc.stores}
+			require.Equal(t, tc.expected, txn.SupportsAutoIncrEpochFence())
+		})
+	}
+}
+
 func TestPrecommitEntryCarriesAutoIncrEpoch(t *testing.T) {
 	proc := testutil.NewProc(t)
 	bat := newDeleteBatchForTest(t, proc, []int64{1})

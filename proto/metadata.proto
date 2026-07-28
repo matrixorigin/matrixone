@@ -156,6 +156,9 @@ message TNService {
   // QueryAddress it the address of query service on the tn
   string          QueryAddress       = 8;
   string  ShardServiceAddress   = 9;
+  // AutoIncrEpochFenceSupported reports that this TN enforces the
+  // auto_incr_epoch fields carried by CN writes.
+  bool AutoIncrEpochFenceSupported = 10;
 }
 
 // LabelList defines the labels on CN store.
@@ -170,4 +173,3 @@ enum WorkState {
   Draining = 2;
   Drained  = 3;
 }
-

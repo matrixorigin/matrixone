@@ -727,6 +727,20 @@ func NewTxnWorkSpace(eng *Engine, proc *process.Process) *Transaction {
 	return txn
 }
 
+// SupportsAutoIncrEpochFence reports the capability of the exact TN snapshot
+// captured by this transaction. Missing or legacy targets fail closed.
+func (txn *Transaction) SupportsAutoIncrEpochFence() bool {
+	if len(txn.tnStores) == 0 {
+		return false
+	}
+	for _, store := range txn.tnStores {
+		if !store.AutoIncrEpochFenceSupported {
+			return false
+		}
+	}
+	return true
+}
+
 func (txn *Transaction) StashFlushedTombstones(stats objectio.ObjectStats) {
 	txn.cn_flushed_s3_tombstone_object_stats_list.Store(stats, nil)
 }

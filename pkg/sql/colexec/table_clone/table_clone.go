@@ -479,6 +479,12 @@ func (tc *TableClone) updateDstAutoIncrColumns(
 		len(tc.Ctx.IndexAutoIncrStates) == 0 {
 		return nil
 	}
+	if !engine.TxnSupportsAutoIncrEpochFence(proc.GetTxnOperator()) {
+		return moerr.NewNotSupported(
+			dstCtx,
+			"AUTO_INCREMENT allocator reset requires epoch fencing on every TN service",
+		)
+	}
 
 	if tc.Ctx.SrcAutoIncrMaxValues != nil || tc.Ctx.SrcAutoIncrOffsets != nil {
 		if err := updateRelationAutoIncrement(
