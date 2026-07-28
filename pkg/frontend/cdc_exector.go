@@ -286,6 +286,15 @@ func (exec *CDCTaskExecutor) runLifecycleTask(
 	name string,
 	task func(),
 ) error {
+	return exec.runLifecycleContextTask(name, func(context.Context) {
+		task()
+	})
+}
+
+func (exec *CDCTaskExecutor) runLifecycleContextTask(
+	name string,
+	task func(context.Context),
+) error {
 	exec.lifecycleMu.RLock()
 	scheduler := exec.lifecycleTaskScheduler
 	exec.lifecycleMu.RUnlock()
@@ -293,12 +302,10 @@ func (exec *CDCTaskExecutor) runLifecycleTask(
 		// Direct construction is retained for unit tests and legacy embedding.
 		// Production TaskExecutors always capture the task-runner scheduler in
 		// bindLifecycleContext.
-		go task()
+		go task(exec.replacementStartContext())
 		return nil
 	}
-	return scheduler(name, func(context.Context) {
-		task()
-	})
+	return scheduler(name, task)
 }
 
 func cdcStartAttemptFromContext(ctx context.Context) *cdcStartAttempt {
@@ -352,6 +359,10 @@ func (exec *CDCTaskExecutor) finishStartAttempt(attempt *cdcStartAttempt) {
 	// Clear the active owner before waking a replacement waiter. Otherwise a
 	// waiter can observe done, race installStartAttempt, and falsely conclude
 	// that the completed attempt is still active.
+	// Cancel also detaches this child from the long-lived lifecycle context.
+	// Without it, every completed Resume/Restart generation remains retained
+	// by that parent until the whole executor shuts down.
+	attempt.cancel()
 	attempt.doneOnce.Do(func() { close(attempt.done) })
 }
 
@@ -545,8 +556,11 @@ func (exec *CDCTaskExecutor) Start(rootCtx context.Context) (err error) {
 		if err != nil {
 			return err
 		}
-	} else if !exec.isActiveStartAttempt(attempt) && !exec.installStartAttempt(attempt) {
-		return moerr.NewInternalErrorNoCtx("CDC start already has an active generation")
+	} else if !exec.isActiveStartAttempt(attempt) {
+		if !exec.installStartAttempt(attempt) {
+			attempt.cancel()
+			return moerr.NewInternalErrorNoCtx("CDC start already has an active generation")
+		}
 	}
 	// Keep the attempt installed until all cleanup below has completed. A
 	// replacement is admitted only after done is closed, which makes the
@@ -884,6 +898,7 @@ func (exec *CDCTaskExecutor) Resume() error {
 		if !exec.installStartAttempt(attempt) {
 			// A concurrent lifecycle operation owns the newer generation. Its
 			// own result is authoritative; this stale resume must stay silent.
+			attempt.cancel()
 			return
 		}
 		defer exec.finishStartAttempt(attempt)
@@ -1040,6 +1055,7 @@ func (exec *CDCTaskExecutor) Restart() error {
 
 	startCtx, attempt := newCDCStartAttempt(exec.replacementStartContext(), generation)
 	if !exec.installStartAttempt(attempt) {
+		attempt.cancel()
 		return moerr.NewInternalErrorNoCtx("CDC restart found an active startup after drain")
 	}
 	if !exec.isCurrentCallbackGeneration(generation) {
@@ -1655,13 +1671,18 @@ func (exec *CDCTaskExecutor) recordRestartTimeoutAsync(
 	exec.restartCatalogPersistence = persistence
 	exec.restartCatalogMu.Unlock()
 
-	go func() {
+	runPersistence := func(lifecycleCtx context.Context) {
 		defer close(persistence.done)
 		factory := exec.restartCatalogExecutorFactory
 		if factory == nil {
 			persistence.err = moerr.NewInternalErrorNoCtx("CDC restart timeout catalog executor is unavailable")
 		} else {
-			ctx, cancel := context.WithTimeout(context.Background(), exec.restartTimeout())
+			// This work is independent of the request that timed out, but it is
+			// still owned by task-runner/CN shutdown. The scheduler context
+			// preserves both properties: Restart returns immediately, while
+			// Stop cancels and joins the catalog repair before dependencies
+			// are torn down.
+			ctx, cancel := context.WithTimeout(lifecycleCtx, exec.restartTimeout())
 			defer cancel()
 			ctx = defines.AttachAccountId(ctx, uint32(exec.spec.Accounts[0].GetId()))
 			sqlExecutor := factory()
@@ -1699,7 +1720,26 @@ func (exec *CDCTaskExecutor) recordRestartTimeoutAsync(
 				}, logutil.ErrorFingerprintFields("error", persistence.err)...)...)
 			})
 		}
-	}()
+	}
+	if err := exec.runLifecycleContextTask(
+		"cdc-restart-timeout-persistence",
+		runPersistence,
+	); err != nil {
+		// RunNamedTask either admits exactly one task or returns an error. Close
+		// the generation fence on rejection so a later control request cannot
+		// wait forever for work that was never started.
+		persistence.err = moerr.NewInternalErrorf(
+			context.Background(),
+			"cannot schedule CDC restart timeout persistence: %v",
+			err,
+		)
+		close(persistence.done)
+		eventCDCExecutorRestartFailed.ErrorLazy(func() []zap.Field {
+			return exec.restartFields(append([]zap.Field{
+				zap.String("reason", "startup-timeout-persistence-schedule"),
+			}, logutil.ErrorFingerprintFields("error", persistence.err)...)...)
+		})
+	}
 }
 
 func (exec *CDCTaskExecutor) waitForRestartCatalogPersistence(timeout time.Duration) (error, bool) {

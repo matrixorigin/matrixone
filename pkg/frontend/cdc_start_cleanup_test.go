@@ -26,6 +26,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
@@ -586,6 +587,59 @@ func (e *serializedBlockingCDCExecutor) Query(
 func (e *serializedBlockingCDCExecutor) ApplySessionOverride(ie.SessionOverrideOptions) {
 }
 
+type lifecycleBlockingCDCExecutor struct {
+	started     chan struct{}
+	cancelled   chan struct{}
+	release     chan struct{}
+	startedOnce sync.Once
+	cancelOnce  sync.Once
+	releaseOnce sync.Once
+}
+
+func newLifecycleBlockingCDCExecutor() *lifecycleBlockingCDCExecutor {
+	return &lifecycleBlockingCDCExecutor{
+		started:   make(chan struct{}),
+		cancelled: make(chan struct{}),
+		release:   make(chan struct{}),
+	}
+}
+
+func (e *lifecycleBlockingCDCExecutor) unblock() {
+	e.releaseOnce.Do(func() { close(e.release) })
+}
+
+func (e *lifecycleBlockingCDCExecutor) Exec(
+	ctx context.Context,
+	sql string,
+	opts ie.SessionOverrideOptions,
+) error {
+	_, err := e.ExecWithStatus(ctx, sql, opts)
+	return err
+}
+
+func (e *lifecycleBlockingCDCExecutor) ExecWithStatus(
+	ctx context.Context,
+	_ string,
+	_ ie.SessionOverrideOptions,
+) (ie.InternalExecStatus, error) {
+	e.startedOnce.Do(func() { close(e.started) })
+	<-ctx.Done()
+	e.cancelOnce.Do(func() { close(e.cancelled) })
+	<-e.release
+	return ie.InternalExecStatus{}, ctx.Err()
+}
+
+func (e *lifecycleBlockingCDCExecutor) Query(
+	context.Context,
+	string,
+	ie.SessionOverrideOptions,
+) ie.InternalExecResult {
+	panic("unexpected query")
+}
+
+func (e *lifecycleBlockingCDCExecutor) ApplySessionOverride(ie.SessionOverrideOptions) {
+}
+
 type stringRowExecResult struct {
 	values []string
 }
@@ -858,6 +912,113 @@ func TestRestartTimeoutPersistenceDoesNotWaitForActiveCatalogExecutor(t *testing
 			require.Eventually(t, func() bool { return exec.activeStart() == nil }, time.Second, time.Millisecond)
 		})
 	}
+}
+
+func TestRestartTimeoutPersistenceIsJoinedByLifecycleScheduler(t *testing.T) {
+	lifecycle := stopper.NewStopper("cdc-restart-timeout-persistence-test")
+	t.Cleanup(lifecycle.Stop)
+	catalog := newLifecycleBlockingCDCExecutor()
+	t.Cleanup(catalog.unblock)
+	exec := &CDCTaskExecutor{
+		spec: &task.CreateCdcDetails{
+			TaskId:   "restart-timeout-lifecycle-owner",
+			TaskName: "restart-timeout-lifecycle-owner",
+			Accounts: []*task.Account{{Id: 1}},
+		},
+		restartStartupTimeout: time.Second,
+		restartCatalogExecutorFactory: func() ie.InternalExecutor {
+			return catalog
+		},
+		lifecycleTaskScheduler: lifecycle.RunNamedTask,
+	}
+
+	exec.recordRestartTimeoutAsync(
+		nil,
+		moerr.NewInternalErrorNoCtx("CDC restart startup timed out"),
+	)
+	select {
+	case <-catalog.started:
+	case <-time.After(time.Second):
+		t.Fatal("timeout persistence did not start")
+	}
+
+	stopDone := make(chan struct{})
+	go func() {
+		lifecycle.Stop()
+		close(stopDone)
+	}()
+	select {
+	case <-catalog.cancelled:
+	case <-time.After(time.Second):
+		t.Fatal("lifecycle shutdown did not cancel timeout persistence")
+	}
+	select {
+	case <-stopDone:
+		t.Fatal("lifecycle shutdown returned before timeout persistence cleanup")
+	default:
+	}
+
+	catalog.unblock()
+	select {
+	case <-stopDone:
+	case <-time.After(time.Second):
+		t.Fatal("lifecycle shutdown did not join timeout persistence cleanup")
+	}
+	persistErr, timedOut := exec.waitForRestartCatalogPersistence(time.Second)
+	require.False(t, timedOut)
+	require.ErrorIs(t, persistErr, context.Canceled)
+}
+
+func TestRestartTimeoutPersistenceCompletesWhenLifecycleSchedulerRejects(t *testing.T) {
+	exec := &CDCTaskExecutor{
+		spec: &task.CreateCdcDetails{
+			TaskId:   "restart-timeout-scheduler-rejected",
+			TaskName: "restart-timeout-scheduler-rejected",
+			Accounts: []*task.Account{{Id: 1}},
+		},
+		lifecycleTaskScheduler: func(string, func(context.Context)) error {
+			return errors.New("task runner is stopping")
+		},
+	}
+
+	exec.recordRestartTimeoutAsync(
+		nil,
+		moerr.NewInternalErrorNoCtx("CDC restart startup timed out"),
+	)
+	persistErr, timedOut := exec.waitForRestartCatalogPersistence(time.Second)
+	require.False(t, timedOut)
+	require.ErrorContains(t, persistErr, "cannot schedule CDC restart timeout persistence")
+}
+
+func TestFinishStartAttemptCancelsContext(t *testing.T) {
+	exec := &CDCTaskExecutor{}
+	attemptCtx, attempt := newCDCStartAttempt(context.Background(), 1)
+	require.True(t, exec.installStartAttempt(attempt))
+
+	exec.finishStartAttempt(attempt)
+
+	require.Nil(t, exec.activeStart())
+	select {
+	case <-attempt.done:
+	default:
+		t.Fatal("completed start attempt did not close done")
+	}
+	require.ErrorIs(t, attemptCtx.Err(), context.Canceled)
+}
+
+func TestStartRejectedAttemptCancelsContext(t *testing.T) {
+	exec := &CDCTaskExecutor{}
+	t.Cleanup(exec.cancelLifecycleContext)
+	_, active := newCDCStartAttempt(context.Background(), 1)
+	require.True(t, exec.installStartAttempt(active))
+	t.Cleanup(func() { exec.finishStartAttempt(active) })
+	rejectedCtx, rejected := newCDCStartAttempt(context.Background(), 2)
+
+	err := exec.Start(rejectedCtx)
+
+	require.ErrorContains(t, err, "CDC start already has an active generation")
+	require.ErrorIs(t, rejectedCtx.Err(), context.Canceled)
+	require.NotSame(t, rejected, exec.activeStart())
 }
 
 func TestRestartSerializesGenerationAndTimeoutPersistence(t *testing.T) {
