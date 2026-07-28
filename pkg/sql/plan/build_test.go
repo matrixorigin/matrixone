@@ -1327,6 +1327,15 @@ func TestJoinTableSqlBuilder(t *testing.T) {
 	runTestShouldError(mock, t, sqls)
 }
 
+func TestMySQLJoinSyntaxVariantsPlan(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	sqls := []string{
+		"SELECT * FROM { OJ NATION left outer join NATION2 on NATION.N_NATIONKEY = NATION2.N_NATIONKEY }",
+		"SELECT * FROM NATION straight_join NATION2 using(N_NATIONKEY)",
+	}
+	runTestShouldPass(mock, t, sqls, false, false)
+}
+
 // test derived table plan building
 func TestDerivedTableSqlBuilder(t *testing.T) {
 	mock := NewMockOptimizer(false)
