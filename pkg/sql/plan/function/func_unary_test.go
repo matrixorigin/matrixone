@@ -9649,7 +9649,9 @@ func TestSessionCloseRetainsCleanupWhenRetainedCapIsFull(t *testing.T) {
 	runUserLevelLockTest(t, func(services []lockservice.LockService) {
 		service := services[0].(*userLevelLockTestService)
 		service.blockUnlock.Store(true)
+		defer service.blockUnlock.Store(false)
 		holder := newUserLevelLockTestProcess(t, services[0], "acc")
+		contender := newUserLevelLockTestProcess(t, services[1], "acc")
 		name := "close_capacity_full"
 		v, err := getUserLevelLock(name, 0, holder)
 		require.NoError(t, err)
@@ -9679,6 +9681,10 @@ func TestSessionCloseRetainsCleanupWhenRetainedCapIsFull(t *testing.T) {
 		}
 		fillDetachedUserLevelLockCleanupAdmissionForTest(service, firstKey, chunks[0])
 		detachedUserLevelLockCleanups.Lock()
+		// Keep the synthetic backlog saturated. Starting its consumer here would
+		// make capacity availability depend on goroutine scheduling and allow the
+		// close cleanup to bypass the retained fallback this test exercises.
+		detachedUserLevelLockCleanups.backlogStarted = true
 		for i := 0; i < userLevelLockDetachedCleanupBacklog; i++ {
 			detachedUserLevelLockCleanups.backlog <- detachedUserLevelLockCleanupRequest{
 				ls:     service,
@@ -9694,6 +9700,43 @@ func TestSessionCloseRetainsCleanupWhenRetainedCapIsFull(t *testing.T) {
 		userLevelLocks.Unlock()
 		require.True(t, retained)
 		require.NotEmpty(t, UserLevelLocksForMigration(holder))
+
+		// Remove only the synthetic admission pressure, then verify the durable
+		// outcome. The retained worker may win the race with this explicit pass,
+		// so neither its transient map entry nor per-call progress is an oracle.
+		service.blockUnlock.Store(false)
+		detachedUserLevelLockCleanups.Lock()
+		detachedUserLevelLockCleanups.entries = make(map[detachedUserLevelLockCleanupKey]*detachedUserLevelLockCleanupEntry)
+		for {
+			select {
+			case <-detachedUserLevelLockCleanups.queue:
+			default:
+				goto closeCapacityQueueDrained
+			}
+		}
+	closeCapacityQueueDrained:
+		for {
+			select {
+			case <-detachedUserLevelLockCleanups.backlog:
+			default:
+				goto closeCapacityBacklogDrained
+			}
+		}
+	closeCapacityBacklogDrained:
+		detachedUserLevelLockCleanups.Unlock()
+		_, _ = runRetainedUserLevelLockCleanupPass()
+
+		row := string(userLevelLockRow(holder, name))
+		require.Eventually(t, func() bool {
+			service.state.Lock()
+			held := service.state.locks[row]
+			service.state.Unlock()
+			return held == "" && len(UserLevelLocksForMigration(holder)) == 0
+		}, 3*time.Second, 10*time.Millisecond)
+
+		v, err = getUserLevelLock(name, 0, contender)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
 	})
 }
 
