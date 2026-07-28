@@ -354,6 +354,9 @@ func TestRoutineCloseCancelsResetRollback(t *testing.T) {
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
 	txnOp.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
 	txnOp.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).AnyTimes()
+	workspace := mock_frontend.NewMockWorkspace(ctrl)
+	workspace.EXPECT().GetHaveDDL().Return(false)
+	txnOp.EXPECT().GetWorkspace().Return(workspace)
 	rollbackStarted := make(chan struct{})
 	txnOp.EXPECT().Rollback(gomock.Any()).DoAndReturn(func(ctx context.Context) error {
 		close(rollbackStarted)
@@ -420,6 +423,9 @@ func TestRoutineCleanupCancelsRequestBeforeRollback(t *testing.T) {
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
 	txnOp.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
 	txnOp.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).AnyTimes()
+	workspace := mock_frontend.NewMockWorkspace(ctrl)
+	workspace.EXPECT().GetHaveDDL().Return(false)
+	txnOp.EXPECT().GetWorkspace().Return(workspace)
 
 	routine := NewRoutine(context.Background(), ses.GetResponser().MysqlRrWr(), &config.FrontendParameters{})
 	routine.setSession(ses)
@@ -517,6 +523,9 @@ func TestRoutineResetSessionFailureRestoresProtocolState(t *testing.T) {
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
 	txnOp.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
 	txnOp.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).AnyTimes()
+	workspace := mock_frontend.NewMockWorkspace(ctrl)
+	workspace.EXPECT().GetHaveDDL().Return(false)
+	txnOp.EXPECT().GetWorkspace().Return(workspace)
 	txnOp.EXPECT().Rollback(gomock.Any()).Return(assert.AnError)
 	oldSession.txnHandler = InitTxnHandler("", eng, context.Background(), txnOp)
 	oldSession.txnHandler.shareTxn = false

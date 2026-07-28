@@ -36,17 +36,15 @@ var CheckLeaseWithRetry = func(
 	cnTxnClient client.TxnClient,
 ) (ok bool, err error) {
 	defer func() {
-		if err != nil || !ok {
-			logutil.Error(
-				"Publication-Task check lease failed",
-				zap.Error(err),
-				zap.Bool("ok", ok),
-				zap.String("cnUUID", cnUUID),
-			)
+		if err != nil {
+			eventPublicationLeaseCheckFailed.ErrorLazy(func() []zap.Field {
+				return append(logutil.StringFingerprintFields("cn", cnUUID), logutil.ErrorFingerprintFields("error", err)...)
+			})
 		}
 	}()
 	err = retryPublication(
 		ctx,
+		"check-lease",
 		func() error {
 			ok, err = checkLease(ctx, cnUUID, txnEngine, cnTxnClient)
 			return err
@@ -87,11 +85,9 @@ func checkLease(
 	if runner == cnUUID {
 		ok = true
 	} else {
-		logutil.Errorf(
-			"Publication-Task check lease failed, runner: %s, expected: %s",
-			runner,
-			cnUUID,
-		)
+		eventPublicationLeaseOwnerMismatch.WarnLazy(func() []zap.Field {
+			return append(logutil.StringFingerprintFields("lease-owner", runner), logutil.StringFingerprintFields("cn", cnUUID)...)
+		})
 	}
 	return
 }
