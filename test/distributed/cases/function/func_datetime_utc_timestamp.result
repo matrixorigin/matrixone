@@ -1,31 +1,37 @@
 create table t1 (ts timestamp);
 set time_zone='+00:00';
 select unix_timestamp(utc_timestamp())-unix_timestamp(utc_timestamp());
-unix_timestamp(utc_timestamp()) - unix_timestamp(utc_timestamp())
+➤ unix_timestamp(utc_timestamp()) - unix_timestamp(utc_timestamp())[-5,64,0]  𝄀
 0
 insert into t1 (ts) values ('2003-03-30 02:30:00');
 set time_zone='+10:30';
 select unix_timestamp(utc_timestamp())-unix_timestamp(utc_timestamp());
-unix_timestamp(utc_timestamp()) - unix_timestamp(utc_timestamp())
+➤ unix_timestamp(utc_timestamp()) - unix_timestamp(utc_timestamp())[-5,64,0]  𝄀
 0
 insert into t1 (ts) values ('2003-03-30 02:30:00');
 set time_zone='-10:00';
 insert into t1 (ts) values ('2003-03-30 02:30:00');
 select * from t1;
-ts
-2003-03-29 16:30:00
-2003-03-29 06:00:00
+➤ ts[93,64,0]  𝄀
+2003-03-29 16:30:00  𝄀
+2003-03-29 06:00:00  𝄀
 2003-03-30 02:30:00
 drop table t1;
 select utc_timestamp()-utc_timestamp(),weekday(utc_timestamp())-weekday(utc_timestamp()),unix_timestamp()-unix_timestamp(utc_timestamp());
-utc_timestamp() - utc_timestamp()    weekday(utc_timestamp()) - weekday(utc_timestamp())    unix_timestamp() - unix_timestamp(utc_timestamp())
-0    0    -36001
+➤ utc_timestamp() - utc_timestamp()[-5,64,0]  ¦  weekday(utc_timestamp()) - weekday(utc_timestamp())[-5,64,0]  ¦  unix_timestamp() - unix_timestamp(utc_timestamp())[-5,64,0]  𝄀
+0  ¦  0  ¦  -36001
+select utc_timestamp(3) as utc_timestamp_milliseconds;
+➤ utc_timestamp_milliseconds[93,64,0]  𝄀
+2026-07-28 04:35:08.924000000
+select microsecond(utc_timestamp(3)) % 1000 as utc_timestamp_millisecond_precision;
+➤ utc_timestamp_millisecond_precision[-5,64,0]  𝄀
+0
 CREATE TABLE t1 (a TIMESTAMP);
 INSERT INTO t1 select (utc_timestamp());
 INSERT INTO t1 select (utc_timestamp());
 SELECT 1 FROM t1 ORDER BY 1;
-1
-1
+➤ 1[-5,64,0]  𝄀
+1  𝄀
 1
 DROP TABLE t1;
 DROP TABLE if exists t1;
@@ -33,18 +39,18 @@ create table t1 (a int primary key, b int, c int, d timestamp);
 insert into t1 select 1,1,1,utc_timestamp();
 insert into t1 select 2,0,0,null;
 select a,b,c,year(d) from t1;
-a    b    c    year(d)
-1    1    1    2026
-2    0    0    null
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  ¦  year(d)[-5,64,0]  𝄀
+1  ¦  1  ¦  1  ¦  2026  𝄀
+2  ¦  0  ¦  0  ¦  null
 DROP TABLE t1;
 CREATE TABLE t1 (a TIMESTAMP);
 INSERT INTO t1 select (utc_timestamp());
 INSERT INTO t1 select (utc_timestamp());
 INSERT INTO t1 select (utc_timestamp());
 SELECT year(a) FROM t1 WHERE a > '2008-01-01';
-year(a)
-2026
-2026
+➤ year(a)[-5,64,0]  𝄀
+2026  𝄀
+2026  𝄀
 2026
 DROP TABLE t1;
 SET TIME_ZONE = "SYSTEM";
