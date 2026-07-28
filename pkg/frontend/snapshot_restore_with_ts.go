@@ -56,9 +56,9 @@ func getFkDepsWithTS(ctx context.Context, bh BackgroundExec, db string, tbl stri
 	}
 
 	if len(db) > 0 {
-		sql += fmt.Sprintf(" where db_name = '%s'", db)
+		sql += fmt.Sprintf(" where db_name = %s", quoteSQLStringLiteral(db))
 		if len(tbl) > 0 {
-			sql += fmt.Sprintf(" and table_name = '%s'", tbl)
+			sql += fmt.Sprintf(" and table_name = %s", quoteSQLStringLiteral(tbl))
 		}
 	}
 
@@ -689,6 +689,10 @@ func restoreViewsFromTS(
 
 		g.addVertex(key)
 		for _, depView := range compCtx.GetViews() {
+			depView, err = normalizeViewDependencyKey(depView)
+			if err != nil {
+				return err
+			}
 			g.addEdge(depView, key)
 		}
 	}

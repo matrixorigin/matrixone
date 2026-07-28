@@ -665,6 +665,14 @@ func makePlan2CastExprWithName(ctx context.Context, expr *Expr, targetType Type,
 	if expr == nil {
 		return nil, moerr.NewInvalidInput(ctx, "nil expression in cast")
 	}
+	var rewritten bool
+	expr, rewritten, err = rewriteEnumDisplayValueToJSONCast(ctx, expr, targetType)
+	if err != nil {
+		return nil, err
+	}
+	if rewritten {
+		return expr, nil
+	}
 	if isSameColumnType(expr.Typ, targetType) {
 		return expr, nil
 	}
