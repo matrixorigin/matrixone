@@ -1095,6 +1095,57 @@ func TestSpillBudgetArithmeticFailsClosed(t *testing.T) {
 	require.ErrorIs(t, err, process.ErrHashBuildBudgetInvalid)
 }
 
+func TestSpillCapacityReplacementOverlapChargesOldArrays(t *testing.T) {
+	got, err := spillCapacityReplacementOverlap(16, 4, 8, 8, 2)
+	require.NoError(t, err)
+	require.Equal(t, uint64(8*8+8*4+2*8), got)
+
+	got, err = spillCapacityReplacementOverlap(8, 2, 8, 8, 2)
+	require.NoError(t, err)
+	require.Zero(t, got)
+
+	_, err = spillCapacityReplacementOverlap(-1, 0, 0, 0, 0)
+	require.ErrorIs(t, err, process.ErrHashBuildBudgetInvalid)
+	_, err = spillCapacityReplacementOverlap(math.MaxInt, 0, math.MaxInt-1, 0, 0)
+	require.ErrorIs(t, err, process.ErrHashBuildBudgetInvalid)
+}
+
+func TestSpillReplacementPeakReusesHighWaterLease(t *testing.T) {
+	budget := process.MustNewHashBuildBudget(120, 120)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	token, err := generation.Reserve(100)
+	require.NoError(t, err)
+	ctr := container{
+		hashmapBuilder:          HashmapBuilder{budget: generation},
+		spillScratchReservation: token,
+		spillScratchBase:        100,
+	}
+
+	oldSize, grew, err := ctr.growSpillScratchTransient(90)
+	require.NoError(t, err)
+	require.False(t, grew)
+	require.Zero(t, oldSize)
+	require.Equal(t, uint64(100), generation.Used())
+
+	oldSize, grew, err = ctr.growSpillScratchTransient(110)
+	require.NoError(t, err)
+	require.True(t, grew)
+	require.Equal(t, uint64(100), oldSize)
+	require.Equal(t, uint64(110), generation.Used())
+	require.NoError(t, ctr.restoreSpillScratchTransient(oldSize, grew))
+	require.Equal(t, uint64(100), generation.Used())
+	require.NoError(t, ctr.restoreSpillScratchTransient(0, false))
+
+	_, grew, err = ctr.growSpillScratchTransient(121)
+	require.ErrorIs(t, err, process.ErrHashBuildBudgetAdmission)
+	require.False(t, grew)
+	require.Equal(t, uint64(100), generation.Used())
+
+	token.Release()
+	require.Zero(t, generation.Used())
+}
+
 func TestSpillPeakChargesSerializedPayloadOnce(t *testing.T) {
 	const (
 		rows          = uint64(8192)
@@ -1105,8 +1156,6 @@ func TestSpillPeakChargesSerializedPayloadOnce(t *testing.T) {
 	require.NoError(t, err)
 	want := rows*12 + inputBytes + selectedBytes + selectedBytes + 64*1024
 	require.Equal(t, want, got)
-	require.Less(t, got, want+selectedBytes,
-		"the selected footprint already bounds one serialized payload")
 }
 
 func TestMarshalSpillRecordPreallocatesSinglePayload(t *testing.T) {
@@ -1129,7 +1178,16 @@ func TestMarshalSpillRecordPreallocatesSinglePayload(t *testing.T) {
 		base = size
 	}
 	require.Equal(t, base+128+24, uint64(buf.Cap()))
-	require.Less(t, uint64(buf.Cap()), base*2)
+
+	small := batch.NewWithSize(1)
+	small.Vecs[0], err = vector.NewConstBytes(
+		types.T_varchar.ToType(), make([]byte, 1024), 1, proc.Mp(),
+	)
+	require.NoError(t, err)
+	small.SetRowCount(1)
+	defer small.Clean(proc.Mp())
+	_, err = marshalSpillRecord(small, buf)
+	require.NoError(t, err, "a retained large serialization buffer must be reusable for a smaller batch")
 }
 
 func TestSpillReservationBoundaryInputs(t *testing.T) {

@@ -199,8 +199,14 @@ func batchRetainedBytes(bat *batch.Batch) (uint64, bool) {
 		return 0, false
 	}
 	actual := uint64(bat.Allocated())
-	rows := uint64(bat.RowCount())
-	cols := uint64(len(bat.Vecs))
+	metadata, ok := batchRetainedMetadataBytes(uint64(bat.RowCount()), uint64(len(bat.Vecs)))
+	if !ok {
+		return 0, false
+	}
+	return addUint64(actual, metadata)
+}
+
+func batchRetainedMetadataBytes(rows, cols uint64) (uint64, bool) {
 	if cols > (math.MaxUint64-16)/8 {
 		return 0, false
 	}
@@ -208,7 +214,7 @@ func batchRetainedBytes(bat *batch.Batch) (uint64, bool) {
 	if rows > 0 && metadata > math.MaxUint64/rows {
 		return 0, false
 	}
-	return addUint64(actual, rows*metadata)
+	return rows * metadata, true
 }
 
 // reconcileReadReservation shrinks a conservative read reservation to the
@@ -381,15 +387,51 @@ func batchPayloadWithAllocationSlack(payload, columns uint64) (uint64, bool) {
 	return payload + allocationSlack, true
 }
 
-func decodedBatchProjectedBytes(payload uint64, columns int32) (uint64, bool) {
-	if columns < 0 {
+func decodedBatchProjectedBytes(payload uint64, rows int64, columns int32) (uint64, bool) {
+	if rows < 0 || columns < 0 {
 		return 0, false
 	}
-	return batchPayloadWithAllocationSlack(payload, uint64(columns))
+	projected, ok := batchPayloadWithAllocationSlack(payload, uint64(columns))
+	if !ok {
+		return 0, false
+	}
+	metadata, ok := batchRetainedMetadataBytes(uint64(rows), uint64(columns))
+	if !ok {
+		return 0, false
+	}
+	return addUint64(projected, metadata)
+}
+
+func decodedBatchReusePeakBytes(retained, projected, payload uint64) (uint64, bool) {
+	// For large buffers mpool.Grow follows Go's 1.25x growth policy. The old
+	// allocation remains live until the replacement is allocated and copied.
+	// Small-buffer doubling is bounded by the per-vector slack already included
+	// in projected.
+	growthSlack := payload / 4
+	if payload%4 != 0 {
+		growthSlack++
+	}
+	newAllocation, ok := addUint64(projected, growthSlack)
+	if !ok {
+		return 0, false
+	}
+	return addUint64(retained, newAllocation)
 }
 
 func maxIntValue() int {
 	return int(^uint(0) >> 1)
+}
+
+func marshalSpillRecordGrowBytes(bat *batch.Batch) (uint64, bool) {
+	base := uint64(bat.Allocated())
+	if size := uint64(bat.Size()); size > base {
+		base = size
+	}
+	columns := uint64(len(bat.Vecs))
+	if columns > (math.MaxUint64-24)/128 {
+		return 0, false
+	}
+	return addUint64(base, columns*128+24)
 }
 
 func (r *BucketReader) releaseReadBatch(proc *process.Process, bat *batch.Batch, token *process.HashBuildReservation) {
@@ -436,8 +478,12 @@ func (r *BucketReader) readBatchRecord(
 		if err != nil {
 			return nil, token, charge, err
 		}
+		rows := types.DecodeInt64(header[:8])
 		columns := types.DecodeInt32(header[8:12])
-		projected, ok := decodedBatchProjectedBytes(payload, columns)
+		if rows != cnt {
+			return nil, token, charge, moerr.NewInternalError(proc.Ctx, "row count mismatch")
+		}
+		projected, ok := decodedBatchProjectedBytes(payload, rows, columns)
 		if !ok {
 			return nil, token, charge, process.ErrHashBuildBudgetInvalid
 		}
@@ -447,17 +493,45 @@ func (r *BucketReader) readBatchRecord(
 		// Multiplying the complete payload rejects large spill records before
 		// UnmarshalFromReader can establish their actual retained footprint.
 		if token == nil {
+			// A caller-provided reuse batch has no budget ownership on the first
+			// read. Drop it before admitting the decoded payload.
+			reuseBat.Clean(proc.Mp())
 			var err error
 			token, err = r.budget.Reserve(projected)
 			if err != nil {
 				return nil, nil, 0, err
 			}
 			charge = projected
-		} else if projected > charge {
-			if err := token.Grow(projected - charge); err != nil {
-				return nil, token, charge, err
+		} else {
+			// Reusing vectors can briefly keep their old allocation alive while
+			// mpool.Grow allocates the replacement. Admit one complete decoded
+			// payload above the retained lease before unmarshal. If that transient
+			// peak does not fit, release the old batch and decode from a clean
+			// batch so a valid single payload is not rejected.
+			retained, retainedOK := batchRetainedBytes(reuseBat)
+			peak, peakOK := decodedBatchReusePeakBytes(retained, projected, payload)
+			var growErr error
+			if retainedOK && peakOK && peak > charge {
+				growErr = token.Grow(peak - charge)
 			}
-			charge = projected
+			if growErr != nil &&
+				!errors.Is(growErr, process.ErrHashBuildBudgetAdmission) &&
+				!errors.Is(growErr, process.ErrHashBuildBudgetRejected) {
+				return nil, token, charge, growErr
+			}
+			if !retainedOK || !peakOK || growErr != nil {
+				reuseBat.Clean(proc.Mp())
+				token.Release()
+				token = nil
+				var err error
+				token, err = r.budget.Reserve(projected)
+				if err != nil {
+					return nil, nil, 0, err
+				}
+				charge = projected
+			} else if peak > charge {
+				charge = peak
+			}
 		}
 	}
 
@@ -686,20 +760,8 @@ func marshalSpillRecord(bat *batch.Batch, buf *bytes.Buffer) error {
 	}
 	cnt := int64(bat.RowCount())
 	buf.Reset()
-	base := uint64(bat.Allocated())
-	if size := uint64(bat.Size()); size > base {
-		base = size
-	}
-	columns := uint64(len(bat.Vecs))
-	if columns > (math.MaxUint64-24)/128 {
-		return process.ErrHashBuildBudgetInvalid
-	}
-	grow, ok := addUint64(base, columns*128+24)
+	grow, ok := marshalSpillRecordGrowBytes(bat)
 	if !ok || grow > uint64(maxIntValue()) {
-		return process.ErrHashBuildBudgetInvalid
-	}
-	budgeted, ok := batchPayloadWithAllocationSlack(base, columns)
-	if !ok {
 		return process.ErrHashBuildBudgetInvalid
 	}
 	if uint64(buf.Cap()) < grow {
@@ -707,9 +769,6 @@ func marshalSpillRecord(bat *batch.Batch, buf *bytes.Buffer) error {
 		// smaller bytes.Buffer while it grows geometrically would invalidate the
 		// single-payload admission estimate.
 		*buf = *bytes.NewBuffer(make([]byte, 0, int(grow)))
-	}
-	if uint64(buf.Cap()) > budgeted {
-		return process.ErrHashBuildBudgetInvalid
 	}
 	buf.Write(types.EncodeInt64(&cnt))
 	batchSizePos := buf.Len()
@@ -1087,7 +1146,9 @@ func (e *SpillEngine) scatterCapacityGrowthBytes(rows, keys int) (uint64, bool) 
 			return true
 		}
 		var ok bool
-		growth, ok = addUint64(growth, required-current)
+		// make allocates the complete replacement before assignment drops the
+		// old slice. retained already includes current, so admit all of required.
+		growth, ok = addUint64(growth, required)
 		return ok
 	}
 	rowCount := uint64(rows)

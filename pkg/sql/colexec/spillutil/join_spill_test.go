@@ -1049,8 +1049,8 @@ func TestReaderBatchReuse(t *testing.T) {
 	reuseBat := batch.NewOffHeapWithSize(0)
 	before := generation.Snapshot()
 
-	// Read with the same reuseBat and one high-water reservation. The second,
-	// smaller record must not acquire or reconcile the shared budget mutex.
+	// Read with the same reuseBat. The second record admits the one-time
+	// old-plus-new transition and then keeps the bounded high-water lease.
 	got, err := reader.ReadBatch(proc, reuseBat)
 	require.NoError(t, err)
 	require.Equal(t, 5, got.RowCount())
@@ -1062,7 +1062,7 @@ func TestReaderBatchReuse(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 2, got.RowCount())
 	afterSecond := generation.Snapshot()
-	require.Equal(t, afterFirst.ReserveCount, afterSecond.ReserveCount)
+	require.Equal(t, afterFirst.ReserveCount+1, afterSecond.ReserveCount)
 	require.Equal(t, afterFirst.ReconcileCount, afterSecond.ReconcileCount)
 	require.Equal(t, afterFirst.ReleaseCount, afterSecond.ReleaseCount)
 
@@ -1116,6 +1116,92 @@ func TestReaderBatchLeaseGrowsForLargerRecord(t *testing.T) {
 	require.Zero(t, generation.Used())
 }
 
+func TestDecodedBatchReusePeakCoversMpoolGrowth(t *testing.T) {
+	const oldCapacity = int64(4 << 20)
+	required := oldCapacity + 1
+	newCapacity, ok := mpool.GrowCapacity(oldCapacity, required)
+	require.True(t, ok)
+	projected, ok := decodedBatchProjectedBytes(uint64(required), 1, 1)
+	require.True(t, ok)
+	peak, ok := decodedBatchReusePeakBytes(uint64(oldCapacity), projected, uint64(required))
+	require.True(t, ok)
+	require.GreaterOrEqual(t, peak, uint64(oldCapacity+newCapacity))
+}
+
+func TestReaderBatchReuseFallsBackBeforeTransientGrowth(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	spillfs, err := proc.GetSpillFileService()
+	require.NoError(t, err)
+	f, err := spillfs.CreateAndRemoveFile(context.Background(), "test_read_reuse_transient")
+	require.NoError(t, err)
+	var buf bytes.Buffer
+	w := BucketWriter{Name: "test_read_reuse_transient", Fd: f}
+	for _, width := range []int{1_024, 1_025} {
+		values := make([]string, 4_096)
+		for i := range values {
+			values[i] = strings.Repeat("x", width)
+		}
+		bat := batch.NewWithSize(1)
+		bat.Vecs[0] = testutil.MakeVarcharVector(values, nil, proc.Mp())
+		bat.SetRowCount(len(values))
+		require.NoError(t, FlushBucketBatch(proc, bat, &w, &buf, nil))
+		bat.Clean(proc.Mp())
+	}
+
+	fd := w.HandOffFd()
+	var projected [2]uint64
+	for i := range projected {
+		var header [16]byte
+		_, err = io.ReadFull(fd, header[:])
+		require.NoError(t, err)
+		rows := types.DecodeInt64(header[:8])
+		payload := types.DecodeInt64(header[8:])
+		require.Positive(t, rows)
+		require.Positive(t, payload)
+		var ok bool
+		projected[i], ok = decodedBatchProjectedBytes(uint64(payload), rows, 1)
+		require.True(t, ok)
+		_, err = fd.Seek(payload+8, io.SeekCurrent)
+		require.NoError(t, err)
+	}
+	require.Greater(t, projected[1], projected[0])
+	_, err = fd.Seek(0, io.SeekStart)
+	require.NoError(t, err)
+
+	// The cap fits the retained record plus one logical new payload, but not the
+	// allocator's 1.25x replacement capacity. The reader must release the old
+	// lease and decode the second record fresh.
+	cap := uint64(64<<10) + projected[0] + projected[1]
+	budget := process.MustNewHashBuildBudget(cap, cap)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	reader := BucketReader{}
+	require.NoError(t, reader.EnsureBuffer(generation))
+	reader.ResetForFd(fd)
+	reuseBat := batch.NewOffHeapWithSize(0)
+	baseline := uint64(proc.Mp().CurrNB())
+	epoch := proc.Mp().StartResourcePeakEpoch()
+	require.NotNil(t, epoch)
+
+	got, err := reader.ReadBatch(proc, reuseBat)
+	require.NoError(t, err)
+	require.Equal(t, 4_096, got.RowCount())
+	got, err = reader.ReadBatch(proc, reuseBat)
+	require.NoError(t, err)
+	require.Equal(t, 4_096, got.RowCount())
+
+	peak, ok := proc.Mp().EndResourcePeakEpoch(epoch)
+	require.True(t, ok)
+	require.LessOrEqual(t, peak, baseline+projected[1])
+	require.LessOrEqual(t, generation.Peak(), cap)
+
+	reuseBat.Clean(proc.Mp())
+	reader.Close()
+	require.Zero(t, generation.Used())
+}
+
 func TestReaderBatchLeaseUsesSinglePayloadEstimate(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
@@ -1158,9 +1244,8 @@ func TestReaderBatchLeaseUsesSinglePayloadEstimate(t *testing.T) {
 	after := generation.Snapshot()
 	require.Equal(t, before.ReconcileCount, after.ReconcileCount)
 	require.GreaterOrEqual(t, after.Used, before.Used+actual)
-	projected, ok := decodedBatchProjectedBytes(uint64(payload), int32(len(got.Vecs)))
+	projected, ok := decodedBatchProjectedBytes(uint64(payload), int64(got.RowCount()), int32(len(got.Vecs)))
 	require.True(t, ok)
-	require.Less(t, projected, uint64(payload)*2, "decoded admission must use one payload plus additive allocator slack")
 	require.Equal(t, before.Used+projected, after.Used)
 
 	reuseBat.Clean(proc.Mp())
@@ -1187,7 +1272,16 @@ func TestMarshalSpillRecordPreallocatesSinglePayload(t *testing.T) {
 		base = size
 	}
 	require.Equal(t, base+128+24, uint64(buf.Cap()))
-	require.Less(t, uint64(buf.Cap()), base*2)
+
+	small := batch.NewWithSize(1)
+	small.Vecs[0], err = vector.NewConstBytes(
+		types.T_varchar.ToType(), make([]byte, 1024), 1, proc.Mp(),
+	)
+	require.NoError(t, err)
+	small.SetRowCount(1)
+	defer small.Clean(proc.Mp())
+	require.NoError(t, marshalSpillRecord(small, buf),
+		"a retained large serialization buffer must be reusable for a smaller batch")
 }
 
 func TestReaderBatchLeaseGrowRejectionReleasesToken(t *testing.T) {
@@ -1219,9 +1313,9 @@ func TestReaderBatchLeaseGrowRejectionReleasesToken(t *testing.T) {
 	_, err = fd.Seek(0, io.SeekStart)
 	require.NoError(t, err)
 
-	firstProjected, ok := decodedBatchProjectedBytes(uint64(firstPayload), 1)
+	firstProjected, ok := decodedBatchProjectedBytes(uint64(firstPayload), 2, 1)
 	require.True(t, ok)
-	secondProjected, ok := decodedBatchProjectedBytes(uint64(secondPayload), 1)
+	secondProjected, ok := decodedBatchProjectedBytes(uint64(secondPayload), 1_000, 1)
 	require.True(t, ok)
 	cap := uint64(64<<10) + firstProjected + (secondProjected-firstProjected)/2
 	budget := process.MustNewHashBuildBudget(cap, cap)
@@ -1514,6 +1608,27 @@ func TestSpillSizeHelpersRejectInvalidAndOverflowInputs(t *testing.T) {
 	reader = BucketReader{reader: makeHeader(math.MaxInt64), budget: headerGeneration}
 	_, _, _, err = reader.readBatchRecord(proc, batch.NewOffHeapWithSize(0), nil, 0, false)
 	require.ErrorIs(t, err, process.ErrHashBuildBudgetInvalid)
+
+	var truncatedPayload bytes.Buffer
+	truncatedPayload.Write(types.EncodeInt64(&zero))
+	one := int64(1)
+	truncatedPayload.Write(types.EncodeInt64(&one))
+	truncatedPayload.Write(make([]byte, 4))
+	reader = BucketReader{reader: bufio.NewReader(&truncatedPayload), budget: headerGeneration}
+	_, _, _, err = reader.readBatchRecord(proc, batch.NewOffHeapWithSize(0), nil, 0, false)
+	require.Error(t, err)
+
+	var mismatchedRows bytes.Buffer
+	twelve := int64(12)
+	mismatchedRows.Write(types.EncodeInt64(&one))
+	mismatchedRows.Write(types.EncodeInt64(&twelve))
+	mismatchedRows.Write(types.EncodeInt64(&zero))
+	mismatchedRows.Write(make([]byte, 4))
+	reader = BucketReader{reader: bufio.NewReader(&mismatchedRows), budget: headerGeneration}
+	_, _, _, err = reader.readBatchRecord(proc, batch.NewOffHeapWithSize(0), nil, 0, false)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "row count mismatch")
+
 	reader = BucketReader{reader: makeHeader(1), budget: headerGeneration}
 	_, _, _, err = reader.readBatchRecord(proc, batch.NewOffHeapWithSize(0), nil, 0, false)
 	require.ErrorIs(t, err, process.ErrHashBuildBudgetAdmission)
@@ -1522,12 +1637,32 @@ func TestSpillSizeHelpersRejectInvalidAndOverflowInputs(t *testing.T) {
 	reader = BucketReader{reader: makeHeader(1), budget: headerGeneration}
 	_, returnedToken, _, err := reader.readBatchRecord(proc, batch.NewOffHeapWithSize(0), headerToken, 1, false)
 	require.ErrorIs(t, err, process.ErrHashBuildBudgetAdmission)
-	require.Same(t, headerToken, returnedToken)
-	headerToken.Release()
+	require.Nil(t, returnedToken)
+	require.True(t, headerToken.Released())
 
 	_, ok := addUint64(math.MaxUint64, 1)
 	require.False(t, ok)
 	_, ok = mulUint64(math.MaxUint64, 2)
+	require.False(t, ok)
+	_, ok = decodedBatchReusePeakBytes(math.MaxUint64, 1, 1)
+	require.False(t, ok)
+	_, ok = decodedBatchReusePeakBytes(0, math.MaxUint64, 1)
+	require.False(t, ok)
+	_, ok = decodedBatchProjectedBytes(0, -1, 0)
+	require.False(t, ok)
+	_, ok = decodedBatchProjectedBytes(0, 0, -1)
+	require.False(t, ok)
+	_, ok = decodedBatchProjectedBytes(math.MaxUint64, 0, 0)
+	require.False(t, ok)
+	_, ok = decodedBatchProjectedBytes(0, math.MaxInt64, math.MaxInt32)
+	require.False(t, ok)
+	_, ok = batchRetainedMetadataBytes(1, math.MaxUint64)
+	require.False(t, ok)
+	_, ok = batchRetainedMetadataBytes(math.MaxUint64, 1)
+	require.False(t, ok)
+	_, ok = batchPayloadWithAllocationSlack(0, math.MaxUint64)
+	require.False(t, ok)
+	_, ok = batchPayloadWithAllocationSlack(math.MaxUint64, 0)
 	require.False(t, ok)
 	_, ok = intToUint64(-1)
 	require.False(t, ok)
@@ -1541,6 +1676,12 @@ func TestSpillSizeHelpersRejectInvalidAndOverflowInputs(t *testing.T) {
 	invalidRows := batch.NewOffHeapWithSize(0)
 	invalidRows.SetRowCount(-1)
 	_, ok = batchRetainedBytes(invalidRows)
+	require.False(t, ok)
+	_, err = scatterTransientBudgetBytes(nil, false)
+	require.ErrorIs(t, err, process.ErrHashBuildBudgetInvalid)
+	_, ok = (&SpillEngine{}).scatterCapacityGrowthBytes(-1, 0)
+	require.False(t, ok)
+	_, ok = (&SpillEngine{}).scatterCapacityGrowthBytes(math.MaxInt, 0)
 	require.False(t, ok)
 
 	valid := batch.NewOffHeapWithSize(0)
@@ -2665,7 +2806,9 @@ func TestScatterPeakDoesNotDoubleChargeReservedSource(t *testing.T) {
 	require.True(t, ok)
 	growth, ok := emptyEngine.scatterCapacityGrowthBytes(bat.RowCount(), 1)
 	require.True(t, ok)
-	capacity := source + retained + growth + charged
+	marshalOverlap, ok := marshalSpillRecordGrowBytes(bat)
+	require.True(t, ok)
+	capacity := source + retained + growth + charged + marshalOverlap
 	budget, err := process.NewHashBuildBudget(capacity, capacity)
 	require.NoError(t, err)
 	generation, err := budget.OpenGeneration(capacity)
@@ -2687,6 +2830,16 @@ func TestScatterPeakDoesNotDoubleChargeReservedSource(t *testing.T) {
 	require.NoError(t, engine.scatterBatchBounded(
 		proc, bat, []*vector.Vector{bat.Vecs[0]}, writers, 0, true, analyzer,
 	))
+}
+
+func TestScatterCapacityGrowthChargesCompleteReplacement(t *testing.T) {
+	engine := NewSpillEngine(SpillEngineConfig{})
+	engine.scatterHashValues = make([]uint64, 8)
+	engine.scatterBucketRowIds = make([]int32, 8)
+	engine.keyVecs = make([]*vector.Vector, 1)
+	growth, ok := engine.scatterCapacityGrowthBytes(9, 2)
+	require.True(t, ok)
+	require.Equal(t, uint64(9*8+9*4+2*8), growth)
 }
 
 func TestScatterScratchLifecycle(t *testing.T) {

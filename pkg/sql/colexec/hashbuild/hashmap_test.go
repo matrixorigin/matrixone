@@ -16,6 +16,7 @@ package hashbuild
 
 import (
 	"errors"
+	"math"
 	"reflect"
 	"strconv"
 	"strings"
@@ -189,6 +190,140 @@ func TestCopyBuildBatchBudgetsPartialTailGrowth(t *testing.T) {
 	require.Zero(t, generation.Used())
 }
 
+func TestCopyBuildBatchBudgetsWideVarcharPartialTailReplacement(t *testing.T) {
+	const budgetCap = uint64(128 << 20)
+	budget, err := process.NewHashBuildBudget(budgetCap, budgetCap)
+	require.NoError(t, err)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	values := make([]string, colexec.DefaultBatchSize/2)
+	for i := range values {
+		values[i] = strings.Repeat("x", 1024)
+	}
+	input := batch.NewWithSize(1)
+	input.Vecs[0] = testutil.MakeVarcharVector(values, nil, proc.Mp())
+	input.SetRowCount(len(values))
+	defer input.Clean(proc.Mp())
+
+	var hb HashmapBuilder
+	hb.setBudget(generation)
+	defer hb.FreeHashMapAndBatches(proc)
+	require.NoError(t, hb.copyBuildBatch(input, proc))
+	require.NoError(t, hb.copyBuildBatch(input, proc))
+	require.Len(t, hb.Batches.Buf, 1)
+	require.Equal(t, colexec.DefaultBatchSize, hb.Batches.Buf[0].RowCount())
+}
+
+func TestProjectedPartialTailReplacementMatchesUnionBatch(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	tail := batch.NewWithSize(2)
+	tail.Vecs[0] = testutil.MakeInt32Vector([]int32{1}, nil, proc.Mp())
+	tail.Vecs[1] = testutil.MakeVarcharVector([]string{strings.Repeat("a", 1024)}, nil, proc.Mp())
+	tail.SetRowCount(1)
+	defer tail.Clean(proc.Mp())
+
+	src := batch.NewWithSize(2)
+	src.Vecs[0] = testutil.MakeInt32Vector([]int32{2, 3}, nil, proc.Mp())
+	constVec, err := vector.NewConstBytes(
+		types.T_varchar.ToType(),
+		[]byte(strings.Repeat("b", 1024)),
+		2,
+		proc.Mp(),
+	)
+	require.NoError(t, err)
+	src.Vecs[1] = constVec
+	src.SetRowCount(2)
+	defer src.Clean(proc.Mp())
+
+	peak, retained, err := projectedPartialTailReplacementBytes(tail, src, src.RowCount())
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, peak, retained)
+	before := tail.Allocated()
+	for i := range tail.Vecs {
+		require.NoError(t, tail.Vecs[i].UnionBatch(src.Vecs[i], 0, src.RowCount(), nil, proc.Mp()))
+	}
+	tail.AddRowCount(src.RowCount())
+	require.Equal(t, uint64(tail.Allocated()-before), retained)
+
+	inline := batch.NewWithSize(1)
+	inline.Vecs[0] = testutil.MakeVarcharVector([]string{"small"}, nil, proc.Mp())
+	inline.SetRowCount(1)
+	defer inline.Clean(proc.Mp())
+	preallocated, err := proc.NewBatchFromSrc(inline, colexec.DefaultBatchSize)
+	require.NoError(t, err)
+	defer preallocated.Clean(proc.Mp())
+	require.NoError(t, preallocated.Vecs[0].UnionBatch(inline.Vecs[0], 0, 1, nil, proc.Mp()))
+	preallocated.AddRowCount(1)
+	peak, retained, err = projectedPartialTailReplacementBytes(preallocated, inline, 1)
+	require.NoError(t, err)
+	require.Zero(t, peak)
+	require.Zero(t, retained)
+}
+
+func TestCopyBuildBatchBudgetsPartialTailWithRemainder(t *testing.T) {
+	const budgetCap = uint64(16 << 20)
+	budget := process.MustNewHashBuildBudget(budgetCap, budgetCap)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	var hb HashmapBuilder
+	hb.setBudget(generation)
+	defer hb.FreeHashMapAndBatches(proc)
+	for _, rows := range []int{
+		colexec.DefaultBatchSize,
+		colexec.DefaultBatchSize,
+		colexec.DefaultBatchSize - 1,
+		2,
+	} {
+		input := testutil.NewBatch([]types.Type{types.T_int32.ToType()}, true, rows, proc.Mp())
+		require.NoError(t, hb.copyBuildBatch(input, proc))
+		input.Clean(proc.Mp())
+	}
+	require.Len(t, hb.Batches.Buf, 4)
+	require.Equal(t, 1, hb.Batches.Buf[3].RowCount())
+}
+
+func TestProjectedPartialTailReplacementRejectsInvalidInputs(t *testing.T) {
+	_, _, err := projectedPartialTailReplacementBytes(nil, nil, -1)
+	require.ErrorIs(t, err, process.ErrHashBuildBudgetInvalid)
+	_, err = (&HashmapBuilder{}).projectedBatchCopyBytes(nil)
+	require.ErrorIs(t, err, process.ErrHashBuildBudgetInvalid)
+
+	tail := batch.NewOffHeapWithSize(1)
+	src := batch.NewOffHeapWithSize(1)
+	_, _, err = projectedPartialTailReplacementBytes(tail, src, 1)
+	require.ErrorIs(t, err, process.ErrHashBuildBudgetInvalid)
+
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	src.Vecs[0] = testutil.MakeVarcharVector([]string{strings.Repeat("x", 32)}, nil, proc.Mp())
+	src.SetRowCount(1)
+	defer src.Clean(proc.Mp())
+	tail.Vecs[0] = vector.NewOffHeapVecWithType(types.T_varchar.ToType())
+	defer tail.Clean(proc.Mp())
+	_, _, err = projectedPartialTailReplacementBytes(tail, src, 2)
+	require.ErrorIs(t, err, process.ErrHashBuildBudgetInvalid)
+
+	invalidTail := batch.NewOffHeapWithSize(1)
+	invalidTail.SetRowCount(-1)
+	hb := HashmapBuilder{}
+	hb.Batches.Buf = []*batch.Batch{invalidTail}
+	_, err = hb.projectedBatchCopyBytes(src)
+	require.ErrorIs(t, err, process.ErrHashBuildBudgetInvalid)
+
+	mismatchedTail := batch.NewOffHeapWithSize(0)
+	hb.Batches.Buf = []*batch.Batch{mismatchedTail}
+	_, err = hb.projectedBatchCopyBytes(src)
+	require.ErrorIs(t, err, process.ErrHashBuildBudgetInvalid)
+}
+
 func TestCopyBuildBatchUsesOnePayloadPlusBoundedSlack(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
@@ -213,7 +348,6 @@ func TestCopyBuildBatchUsesOnePayloadPlusBoundedSlack(t *testing.T) {
 	require.True(t, ok)
 	const wantSlack = uint64(16<<10 + 64<<10)
 	require.Equal(t, base+metadata+wantSlack, projected)
-	require.Less(t, projected, base*2, "one decoded payload plus additive slack must replace the old whole-payload multiplier")
 
 	budget := process.MustNewHashBuildBudget(projected, projected)
 	generation, err := budget.OpenGeneration(1)
@@ -236,20 +370,86 @@ func TestReserveBuildAuxChargesOneRetainedCopy(t *testing.T) {
 	hb.InputBatchRowCount = input.RowCount()
 	retained := batchesAllocated(hb.Batches.Buf)
 	const iteratorScratch = uint64(640 << 10)
-	want := retained + uint64(input.RowCount())*64 + iteratorScratch
-	oldMultipliedEstimate := retained*3 + uint64(input.RowCount())*64 + iteratorScratch
-	require.Greater(t, oldMultipliedEstimate, want)
+	want := retained + (retained+3)/4 + uint64(input.RowCount())*64 + iteratorScratch
 
 	budget := process.MustNewHashBuildBudget(want, want)
 	generation, err := budget.OpenGeneration(1)
 	require.NoError(t, err)
 	hb.setBudget(generation)
-	require.NoError(t, hb.reserveBuildAux())
+	require.NoError(t, hb.reserveBuildAux(true))
 	require.Equal(t, want, generation.Used())
 	hb.releaseReservations()
 	require.Zero(t, generation.Used())
 	// The batch belongs to the test rather than batchReservations.
 	hb.Batches.Buf = nil
+}
+
+func TestReserveUniqueAppendOverlapChargesReplacedCapacity(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	values := make([]string, 4_096)
+	for i := range values {
+		values[i] = strings.Repeat("x", 1_024)
+	}
+	dst := testutil.MakeVarcharVector(values, nil, proc.Mp())
+	defer dst.Free(proc.Mp())
+	extraArea := cap(dst.GetArea()) - len(dst.GetArea()) + 1
+	src := testutil.MakeVarcharVector([]string{strings.Repeat("y", extraArea)}, nil, proc.Mp())
+	defer src.Free(proc.Mp())
+
+	want := uint64(cap(dst.GetData()) + cap(dst.GetArea()))
+	budget := process.MustNewHashBuildBudget(want, want)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	hb := HashmapBuilder{budget: generation}
+	areaBytes, err := uniqueAppendAreaBytes(src, 0, 1, nil)
+	require.NoError(t, err)
+	token, err := hb.reserveUniqueAppendOverlap(dst, 1, areaBytes)
+	require.NoError(t, err)
+	require.NotNil(t, token)
+	require.Equal(t, want, token.Size())
+	token.Release()
+	require.Zero(t, generation.Used())
+
+	largeValue := strings.Repeat("z", 100)
+	selected := testutil.MakeVarcharVector([]string{"a", largeValue}, nil, proc.Mp())
+	defer selected.Free(proc.Mp())
+	selectedArea, err := uniqueAppendAreaBytes(selected, 0, 1, []int64{0})
+	require.NoError(t, err)
+	require.Zero(t, selectedArea)
+	selectedArea, err = uniqueAppendAreaBytes(selected, 0, 1, []int64{1})
+	require.NoError(t, err)
+	require.Equal(t, len(largeValue), selectedArea)
+	_, err = uniqueAppendAreaBytes(selected, -1, 1, nil)
+	require.ErrorIs(t, err, process.ErrHashBuildBudgetInvalid)
+	_, err = uniqueAppendAreaBytes(selected, 0, 1, []int64{int64(selected.Length())})
+	require.ErrorIs(t, err, process.ErrHashBuildBudgetInvalid)
+	_, err = uniqueAppendAreaBytes(selected, 0, 2, []int64{0})
+	require.ErrorIs(t, err, process.ErrHashBuildBudgetInvalid)
+
+	fixed := testutil.MakeInt32Vector([]int32{1}, nil, proc.Mp())
+	defer fixed.Free(proc.Mp())
+	selectedArea, err = uniqueAppendAreaBytes(fixed, math.MaxInt, math.MaxInt, nil)
+	require.NoError(t, err)
+	require.Zero(t, selectedArea)
+
+	constValue, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte(largeValue), 2, proc.Mp())
+	require.NoError(t, err)
+	defer constValue.Free(proc.Mp())
+	selectedArea, err = uniqueAppendAreaBytes(constValue, 0, 2, nil)
+	require.NoError(t, err)
+	require.Equal(t, 2*len(largeValue), selectedArea)
+
+	noBudget := HashmapBuilder{}
+	token, err = noBudget.reserveUniqueAppendOverlap(dst, 1, 1)
+	require.NoError(t, err)
+	require.Nil(t, token)
+	token, err = hb.reserveUniqueAppendOverlap(nil, 1, 1)
+	require.ErrorIs(t, err, process.ErrHashBuildBudgetInvalid)
+	token, err = hb.reserveUniqueAppendOverlap(dst, -1, 1)
+	require.ErrorIs(t, err, process.ErrHashBuildBudgetInvalid)
+	token, err = hb.reserveUniqueAppendOverlap(dst, 1, -1)
+	require.ErrorIs(t, err, process.ErrHashBuildBudgetInvalid)
 }
 
 func TestCleanCopiedBatchReleasesCoalescedIngressReservations(t *testing.T) {
