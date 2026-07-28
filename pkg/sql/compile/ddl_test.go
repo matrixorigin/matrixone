@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -59,6 +60,27 @@ func TestConvertDBEOBToNoSuchTablePassThrough(t *testing.T) {
 	want := moerr.NewBadDB(context.Background(), "db1")
 	got := convertDBEOBToNoSuchTable(context.Background(), want, "db1", "t2")
 	require.Same(t, want, got)
+}
+
+func TestIsMissingCCPRMetadataTable(t *testing.T) {
+	tableName := catalog.MO_CCPR_TABLES
+
+	require.True(t, isMissingCCPRMetadataTable(
+		moerr.NewNoSuchTableNoCtx(catalog.MO_CATALOG, tableName),
+		tableName,
+	))
+	require.True(t, isMissingCCPRMetadataTable(
+		moerr.NewParseErrorNoCtx(fmt.Sprintf("table %q does not exist", tableName)),
+		tableName,
+	))
+	require.False(t, isMissingCCPRMetadataTable(
+		moerr.NewParseErrorNoCtx(`table "another_table" does not exist`),
+		tableName,
+	))
+	require.False(t, isMissingCCPRMetadataTable(
+		moerr.NewInternalErrorNoCtx("ccpr metadata query failed"),
+		tableName,
+	))
 }
 
 func TestTableScopedDDLDatabaseEOBMapsToNoSuchTable(t *testing.T) {

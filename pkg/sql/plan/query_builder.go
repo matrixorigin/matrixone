@@ -29,6 +29,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/objectkey"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -7739,7 +7740,7 @@ func (builder *QueryBuilder) bindView(
 		defaultDatabase = obj.SubscriptionName
 	}
 	viewCtx.defaultDatabase = defaultDatabase
-	viewKey := schema + "#" + table
+	viewKey := objectkey.Encode(schema, table)
 	viewKeyWithSnapshot := viewKey
 	if IsSnapshotValid(snapshot) {
 		viewKeyWithSnapshot = FormatViewKeyWithSnapshot(viewKey, snapshot)
@@ -7774,7 +7775,7 @@ func (builder *QueryBuilder) bindView(
 	if err != nil {
 		return
 	}
-	ctx.recordViews([]string{schema + "#" + table})
+	ctx.recordViews([]string{viewKey})
 	ctx.recordViews(viewCtx.views)
 	return
 }
@@ -8012,7 +8013,8 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 			}
 			if externType == plan.ExternType_EXTERNAL_TB {
 				col := &ColDef{
-					Name: catalog.ExternalFilePath,
+					ColId: catalog.ExternalFilePathColId,
+					Name:  catalog.ExternalFilePath,
 					Typ: plan.Type{
 						Id:    int32(types.T_varchar),
 						Width: types.MaxVarcharLen,
@@ -8661,7 +8663,7 @@ func (builder *QueryBuilder) GetContext() context.Context {
 // parseRankOption parses rank options from a map of option key-value pairs.
 // It extracts the "mode" option case-insensitively and validates it.
 // Returns a RankOption with the parsed mode if valid, or nil if no mode is specified.
-// Returns an error if the mode value is invalid (must be "pre", "post", or "force").
+// Returns an error if the mode value is invalid (must be "pre", "post", "force", or "include").
 func parseRankOption(options map[string]string, ctx context.Context) (*plan.RankOption, error) {
 	if len(options) == 0 {
 		return nil, nil
@@ -8686,9 +8688,10 @@ func parseRankOption(options map[string]string, ctx context.Context) (*plan.Rank
 		// - "pre": Enable vector index with BloomFilter pushdown
 		// - "post": Enable vector index with standard behavior (post-filtering)
 		// - "force": Force disable vector index, use full table scan
+		// - "include": Enable explicit include-aware IVF optimization
 		// - "auto": Adaptive mode that automatically selects the best strategy
-		if modeLower != "pre" && modeLower != "post" && modeLower != "force" && modeLower != "auto" {
-			return nil, moerr.NewInvalidInputf(ctx, "mode must be 'pre', 'post', 'force', or 'auto', got '%s'", mode)
+		if modeLower != "pre" && modeLower != "post" && modeLower != "force" && modeLower != "include" && modeLower != "auto" {
+			return nil, moerr.NewInvalidInputf(ctx, "mode must be 'pre', 'post', 'force', 'auto', or 'include', got '%s'", mode)
 		}
 		rankOption.Mode = modeLower
 	}

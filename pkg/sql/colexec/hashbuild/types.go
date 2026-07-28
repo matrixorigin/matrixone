@@ -382,6 +382,7 @@ func (hashBuild *HashBuild) logDiagnostics(proc *process.Process, pipelineFailed
 	extra := hashBuild.OpAnalyzer.GetOpStats().ExtraStats
 	if extra["HashBuildSpillStarts"] == 0 &&
 		extra["QueryHashBudgetRejects"] == 0 &&
+		extra["HashBuildRuntimeFilterBudgetFallbacks"] == 0 &&
 		extra["HashBuildEmergencyScratchGrowRejects"] == 0 &&
 		extra["HashBuildSpillScratchGrowRejects"] == 0 &&
 		extra["HashBuildRetainedEmergencyGrowCount"] == 0 &&

@@ -531,14 +531,27 @@ message PrepareStmt {
   bytes ParamTypes = 3;
 }
 
+enum MigrateConnFromAction {
+  // Default: export session state for connection migration.
+  MigrateConnFromExport = 0;
+  // Legacy compatibility mode used only by old proxies.
+  MigrateConnFromSkipUserLevelLockRelease = 1;
+  // Legacy compatibility mode used only by old proxies.
+  MigrateConnFromEnableUserLevelLockRelease = 2;
+}
+
 message MigrateConnFromRequest {
   uint32 ConnID = 1;
+  MigrateConnFromAction Action = 2;
+  reserved 3;
 }
 
 message MigrateConnFromResponse {
   string DB = 1;
   repeated PrepareStmt PrepareStmts = 2;
   int64 LastAffectedRows = 3;
+  repeated UserLevelLock UserLevelLocks = 4;
+  bool UserLevelLockReleaseSupported = 5;
 }
 
 message MigrateConnToRequest {
@@ -547,6 +560,13 @@ message MigrateConnToRequest {
   repeated string SetVarStmts = 3;
   repeated PrepareStmt PrepareStmts = 4;
   int64 LastAffectedRows = 5;
+  repeated UserLevelLock UserLevelLocks = 6;
+}
+
+message UserLevelLock {
+  string Name = 1;
+  uint64 Count = 2;
+  repeated bytes TxnIDs = 3;
 }
 
 message MigrateConnToResponse {

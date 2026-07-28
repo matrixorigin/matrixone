@@ -23,7 +23,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -221,21 +220,23 @@ func createBranchProtectSnapshot(
 	// existing insertIntoMoSnapshots format does not carry the kind column
 	// (it relies on the 'user' default), so this path uses its own insert.
 	//
-	// Identifiers can contain apostrophes when quoted with backticks, so every
-	// value interpolated as a SQL string literal must be escaped explicitly.
+	// String values are quoted via quoteSQLStringLiteral to escape any
+	// embedded quotes. Although these identifiers have passed through the
+	// MO parser, they may contain apostrophes when backtick-quoted (e.g.,
+	// `table'name` is a legal identifier that contains a literal apostrophe).
 	insertSQL := fmt.Sprintf(
 		`insert into %s.%s(snapshot_id, sname, ts, level, account_name, database_name, table_name, obj_id, kind) `+
-			`values ('%s', '%s', %d, '%s', '%s', '%s', '%s', %d, '%s')`,
+			`values (%s, %s, %d, %s, %s, %s, %s, %d, %s)`,
 		catalog.MO_CATALOG, catalog.MO_SNAPSHOTS,
-		sqlquote.EscapeString(newUUID.String()),
-		sqlquote.EscapeString(sname),
+		quoteSQLStringLiteral(newUUID.String()),
+		quoteSQLStringLiteral(sname),
 		receipt.snapshotTS,
-		sqlquote.EscapeString(dataBranchLevel_Table),
-		sqlquote.EscapeString(parentAccountName),
-		sqlquote.EscapeString(receipt.srcDb),
-		sqlquote.EscapeString(receipt.srcTbl),
+		quoteSQLStringLiteral(dataBranchLevel_Table),
+		quoteSQLStringLiteral(parentAccountName),
+		quoteSQLStringLiteral(receipt.srcDb),
+		quoteSQLStringLiteral(receipt.srcTbl),
 		receipt.srcTableID,
-		sqlquote.EscapeString(branchSnapshotKind),
+		quoteSQLStringLiteral(branchSnapshotKind),
 	)
 
 	// Execute as sys so the row can be written into the parent's account

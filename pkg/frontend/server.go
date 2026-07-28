@@ -576,12 +576,38 @@ func setPu(service string, pu *config.ParameterUnit) {
 	getServerLevelVars(service).Pu.Store(pu)
 }
 
+func publishPuIfAbsent(service string, pu *config.ParameterUnit) *config.ParameterUnit {
+	InitServerLevelVars(service)
+	vars := getServerLevelVars(service)
+	if vars.Pu.CompareAndSwap(nil, pu) {
+		return pu
+	}
+	return vars.Pu.Load().(*config.ParameterUnit)
+}
+
 func SetPUForExternalUT(service string, pu *config.ParameterUnit) {
 	setPu(service, pu)
 }
 
+func getPuIfPresent(service string) *config.ParameterUnit {
+	vars := getServerLevelVars(service)
+	if vars == nil {
+		return nil
+	}
+	value := vars.Pu.Load()
+	if value == nil {
+		return nil
+	}
+	pu, _ := value.(*config.ParameterUnit)
+	return pu
+}
+
 func getPu(service string) *config.ParameterUnit {
-	return getServerLevelVars(service).Pu.Load().(*config.ParameterUnit)
+	pu := getPuIfPresent(service)
+	if pu == nil {
+		panic("parameter unit is not initialized")
+	}
+	return pu
 }
 
 func setAicm(service string, aicm *defines.AutoIncrCacheManager) {
