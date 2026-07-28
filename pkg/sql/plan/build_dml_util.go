@@ -1362,10 +1362,14 @@ func appendSinkScanNodeWithTag(builder *QueryBuilder, bindCtx *BindContext, sour
 	b := bindCtx.bindings[0]
 	sinkScanNode.TableDef.Cols = make([]*ColDef, len(b.cols))
 	for i, col := range b.cols {
+		typ := *b.types[i]
+		if i < len(sinkScanProject) {
+			typ = sinkScanProject[i].Typ
+		}
 		sinkScanNode.TableDef.Cols[i] = &ColDef{
 			Name:   col,
 			Hidden: b.colIsHidden[i],
-			Typ:    *b.types[i],
+			Typ:    typ,
 		}
 	}
 	lastNodeId = builder.appendNode(sinkScanNode, bindCtx)
@@ -1386,10 +1390,14 @@ func appendRecursiveScanNode(builder *QueryBuilder, bindCtx *BindContext, source
 	b := bindCtx.bindings[0]
 	recursiveScanNode.TableDef.Cols = make([]*ColDef, len(b.cols))
 	for i, col := range b.cols {
+		typ := *b.types[i]
+		if i < len(recursiveScanProject) {
+			typ = recursiveScanProject[i].Typ
+		}
 		recursiveScanNode.TableDef.Cols[i] = &ColDef{
 			Name:   col,
 			Hidden: b.colIsHidden[i],
-			Typ:    *b.types[i],
+			Typ:    typ,
 		}
 	}
 	lastNodeId = builder.appendNode(recursiveScanNode, bindCtx)

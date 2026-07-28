@@ -1281,7 +1281,7 @@ show cdc task <task_name>;
 | `task_name` | User-defined task name |
 | `source_uri` | Source database connection (password masked) |
 | `sink_uri` | Target database connection (password masked) |
-| `state` | Current state: `running`, `paused`, `cancelled`, `failed` |
+| `state` | Current state: `running`, `restarting`, `paused`, `cancelled`, `failed` |
 | `checkpoint` | Last synchronized timestamp |
 | `err_msg` | Error message if task is in error state |
 | `timestamp` | Last update timestamp |
