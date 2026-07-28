@@ -796,9 +796,12 @@ const (
 	// (549->554->556); referenced by name only, so renumbering is safe.
 	ONNX_RUN = 556
 
+	MAX_BY          = 558
+	MAX_BY_NON_NULL = 559
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 558
+	FUNCTION_END_NUMBER = 560
 )
 
 // functionIdRegister is what function we have registered already.
@@ -896,6 +899,8 @@ var functionIdRegister = map[string]int32{
 	"any_value":             ANY_VALUE,
 	"median":                MEDIAN,
 	"approx_percentile":     APPROX_PERCENTILE,
+	"max_by":                MAX_BY,
+	"max_by_non_null":       MAX_BY_NON_NULL,
 	// count window
 	"rank":         RANK,
 	"row_number":   ROW_NUMBER,

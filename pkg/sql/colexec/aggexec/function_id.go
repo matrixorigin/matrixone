@@ -56,4 +56,6 @@ const (
 	AggIdOfHllAdd              int64 = 453 << 32
 	AggIdOfHllMerge            int64 = 454 << 32
 	AggIdOfApproxPercentile    int64 = 557 << 32
+	AggIdOfMaxBy               int64 = 558 << 32
+	AggIdOfMaxByNonNull        int64 = 559 << 32
 )

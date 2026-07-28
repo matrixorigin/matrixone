@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
+	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -4181,9 +4182,15 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 	ctx.sampleTag = builder.genNewBindTag()
 	if astTimeWindow != nil {
 		ctx.timeTag = builder.genNewBindTag() // ctx.timeTag > 0
-		if astTimeWindow.Sliding != nil {
+		// GAPFILL uses the same second-stage aggregate state machine as an
+		// explicit sliding window even when its external SQL is a tumbling
+		// INTERVAL. Mark it before aggregate binding so SUM/COUNT/AVG are
+		// remapped to consume the child aggregate's partial-result type and the
+		// projected type matches the executor's actual vector.
+		if astTimeWindow.Sliding != nil || astTimeWindow.GapFill {
 			ctx.sliding = true
 		}
+		ctx.explicitSliding = astTimeWindow.Sliding != nil
 
 		if helpFunc, err = makeHelpFuncForTimeWindow(astTimeWindow); err != nil {
 			return
@@ -7405,6 +7412,12 @@ func (builder *QueryBuilder) appendTimeWindowNode(
 		TimeWindowPartitionBy: partitionBy,
 		Timestamp:             ts,
 		WEnd:                  wEnd,
+		GapFillMode: func() plan.Node_GapFillMode {
+			if astTimeWindow.GapFill {
+				return plan.Node_GAP_FILL_PARTITION
+			}
+			return plan.Node_GAP_FILL_NONE
+		}(),
 	}, ctx)
 
 	for name, id := range ctx.timeByAst {
@@ -8429,11 +8442,20 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 			nodeType = plan.Node_EXTERNAL_SCAN
 			externType := plan.ExternType_EXTERNAL_TB
 			var icebergEnv sqliceberg.CreateSQLEnvelope
+			var mongoEnv sqlmongodb.CreateSQLEnvelope
 			if env, found, err := sqliceberg.ParseCreateSQLEnvelope(builder.GetContext(), tableDef.Createsql); err != nil {
 				return 0, err
 			} else if found {
 				icebergEnv = env
 				externType = plan.ExternType_ICEBERG_TB
+			} else if env, found, err := sqlmongodb.ParseCreateSQLEnvelope(builder.GetContext(), tableDef.Createsql); err != nil {
+				return 0, err
+			} else if found {
+				mongoEnv = env
+				externType = plan.ExternType_MONGODB_TB
+				if builder.isPrepareStatement {
+					return 0, moerr.NewNotSupported(builder.GetContext(), "prepared MongoDB external scans")
+				}
 			}
 			externScan = &plan.ExternScan{
 				Type:           int32(externType),
@@ -8452,6 +8474,15 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 					return 0, err
 				}
 				externScan.IcebergScan = icebergScan
+			} else if externType == plan.ExternType_MONGODB_TB {
+				externScan.MongodbScan = &plan.MongoScan{
+					TableId:        uint64(obj.Obj),
+					Database:       mongoEnv.Database,
+					Collection:     mongoEnv.Collection,
+					Columns:        sqlmongodb.ColumnsToPlan(mongoEnv.Columns),
+					ProjectedPaths: projectedMongoPaths(mongoEnv.Columns),
+					MaxParallelism: 1,
+				}
 			} else if tbl.IcebergRef != nil {
 				return 0, moerr.NewInvalidInput(builder.GetContext(), "FOR ICEBERG requires an Iceberg external table")
 			}
@@ -8653,6 +8684,19 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 	}
 
 	return
+}
+
+func projectedMongoPaths(columns []sqlmongodb.ColumnMapping) []string {
+	result := make([]string, 0, len(columns))
+	seen := make(map[string]struct{}, len(columns))
+	for _, column := range columns {
+		if _, ok := seen[column.Path]; ok {
+			continue
+		}
+		seen[column.Path] = struct{}{}
+		result = append(result, column.Path)
+	}
+	return result
 }
 
 func (builder *QueryBuilder) genNewBindTag() int32 {

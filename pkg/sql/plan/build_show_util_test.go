@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/iceberg/model"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
+	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
@@ -518,6 +519,46 @@ func TestShowCreateIcebergExternalTable(t *testing.T) {
 	showSQL, _, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, nil, false, nil)
 	require.NoError(t, err)
 	require.Equal(t, "CREATE EXTERNAL TABLE `gold_orders` (\n  `id` int DEFAULT NULL\n) ENGINE = ICEBERG WITH (\"catalog\" = 'ksa_gold', \"namespace\" = 'sales', \"table\" = 'orders', \"ref\" = 'main', \"read_mode\" = 'append_only', \"write_mode\" = 'read_only')", showSQL)
+}
+
+func TestShowCreateMongoDBExternalTable(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	tableDef := &plan.TableDef{
+		Name:      "raw",
+		TableType: catalog.SystemExternalRel,
+		Createsql: sqlmongodb.BuildCreateSQLEnvelope(sqlmongodb.TableMapping{
+			Connection:     "nesr_source",
+			Database:       "nesr",
+			Collection:     "pump_readings",
+			SchemaMode:     sqlmongodb.SchemaExplicit,
+			Conversion:     sqlmongodb.ConversionStrict,
+			MaxParallelism: 1,
+			Columns: []sqlmongodb.ColumnMapping{
+				{Name: "pump", Path: "metadata.pump", TypeID: int32(types.T_varchar), Conversion: sqlmongodb.ConversionStrict},
+				{Name: "value", Path: "reading.value", TypeID: int32(types.T_float64), Conversion: sqlmongodb.ConversionTryNull},
+			},
+		}),
+		Cols: []*plan.ColDef{
+			{
+				Name:       "pump",
+				OriginName: "Pump",
+				Typ:        plan.Type{Id: int32(types.T_varchar), Width: 64},
+				Default:    &plan.Default{NullAbility: true},
+			},
+			{
+				Name:    "value",
+				Typ:     plan.Type{Id: int32(types.T_float64)},
+				Default: &plan.Default{NullAbility: true},
+			},
+		},
+	}
+
+	showSQL, stmt, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, nil, false, nil)
+	require.NoError(t, err)
+	require.NotNil(t, stmt)
+	require.Equal(t, "CREATE EXTERNAL TABLE `raw` (\n  `Pump` varchar(64) DEFAULT NULL MONGODB_PATH 'metadata.pump' MONGODB_CONVERT 'strict',\n  `value` double DEFAULT NULL MONGODB_PATH 'reading.value' MONGODB_CONVERT 'try_null'\n) ENGINE = MONGODB WITH (\"connection\" = 'nesr_source', \"database\" = 'nesr', \"collection\" = 'pump_readings', \"schema_mode\" = 'explicit', \"conversion_mode\" = 'strict', \"max_parallelism\" = '1')", showSQL)
+	require.NotContains(t, strings.ToLower(showSQL), "credential")
+	require.NotContains(t, strings.ToLower(showSQL), "password")
 }
 
 func TestShowCreateLegacyExternalTablesIgnoreIcebergEnvelope(t *testing.T) {

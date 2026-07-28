@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"slices"
 
+	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
@@ -242,6 +243,7 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		WEnd:            DeepCopyExpr(node.WEnd),
 		FillType:        node.FillType,
 		FillVal:         DeepCopyExprList(node.FillVal),
+		GapFillMode:     node.GapFillMode,
 
 		TimeWindowPartitionBy:     DeepCopyExprList(node.TimeWindowPartitionBy),
 		TimeWindowPartitionColPos: slices.Clone(node.TimeWindowPartitionColPos),
@@ -257,7 +259,7 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		LockTargets:      make([]*plan.LockTarget, len(node.LockTargets)),
 		AnalyzeInfo:      DeepCopyAnalyzeInfo(node.AnalyzeInfo),
 		IsEnd:            node.IsEnd,
-		ExternScan:       node.ExternScan,
+		ExternScan:       deepCopyExternScan(node.ExternScan),
 		SampleFunc:       DeepCopySampleFuncSpec(node.SampleFunc),
 		OnUpdateExprs:    DeepCopyExprList(node.OnUpdateExprs),
 		DedupColName:     node.DedupColName,
@@ -312,6 +314,13 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 	}
 
 	return newNode
+}
+
+func deepCopyExternScan(scan *plan.ExternScan) *plan.ExternScan {
+	if scan == nil {
+		return nil
+	}
+	return proto.Clone(scan).(*plan.ExternScan)
 }
 
 func DeepCopyIndexReaderParam(oldParam *plan.IndexReaderParam) *plan.IndexReaderParam {

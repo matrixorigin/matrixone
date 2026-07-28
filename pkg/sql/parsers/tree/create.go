@@ -943,6 +943,7 @@ type CreateTable struct {
 	ClusterByOption    *ClusterByOption
 	Param              *ExternParam
 	IcebergParam       *IcebergTableParam
+	MongoDBParam       *MongoDBTableParam
 	AsSource           *Select
 	IsDynamicTable     bool
 	DTOptions          []TableOption
@@ -964,7 +965,7 @@ func (node *CreateTable) Format(ctx *FmtCtx) {
 	if node.IsClusterTable {
 		ctx.WriteString(" cluster")
 	}
-	if node.Param != nil || node.IcebergParam != nil {
+	if node.Param != nil || node.IcebergParam != nil || node.MongoDBParam != nil {
 		ctx.WriteString(" external")
 	}
 	if node.IsDynamicTable {
@@ -1032,6 +1033,10 @@ func (node *CreateTable) Format(ctx *FmtCtx) {
 	if node.IcebergParam != nil {
 		ctx.WriteByte(' ')
 		node.IcebergParam.Format(ctx)
+	}
+	if node.MongoDBParam != nil {
+		ctx.WriteByte(' ')
+		node.MongoDBParam.Format(ctx)
 	}
 
 	if node.PartitionOption != nil {
@@ -1395,6 +1400,10 @@ func (node *ColumnTableDef) reset() {
 			case *AttributeSRID:
 				opt.Free()
 			case *AttributeVisable:
+				opt.Free()
+			case *AttributeMongoDBPath:
+				opt.Free()
+			case *AttributeMongoDBConvert:
 				opt.Free()
 			case *KeyPart:
 				opt.Free()

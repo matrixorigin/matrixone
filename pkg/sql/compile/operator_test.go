@@ -38,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightdedupjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
+	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -402,6 +403,43 @@ func makeTimeWindowAggNode(functionID int64, name string, config *plan.Expr) *pl
 		Timestamp: ts,
 		Interval:  makeTimeWindowIntervalExpr(1, "second"),
 	}
+}
+
+func TestConstructGapFillDisablesTumblingFastPath(t *testing.T) {
+	node := &plan.Node{
+		NodeType:    plan.Node_TIME_WINDOW,
+		Interval:    makeTimeWindowIntervalExpr(1, "minute"),
+		GroupBy:     []*plan.Expr{{Typ: plan.Type{Id: int32(types.T_datetime)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}},
+		Timestamp:   &plan.Expr{Typ: plan.Type{Id: int32(types.T_datetime)}},
+		WEnd:        &plan.Expr{Typ: plan.Type{Id: int32(types.T_datetime)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}},
+		GapFillMode: plan.Node_GAP_FILL_PARTITION,
+		ProjectList: []*plan.Expr{},
+		BindingTags: []int32{},
+		AggList:     []*plan.Expr{},
+	}
+	arg := constructTimeWindow(context.Background(), node, nil)
+	require.True(t, arg.GapFill)
+	require.Equal(t, arg.Interval, arg.Sliding)
+	require.Nil(t, arg.EndExpr, "GAPFILL must not use the existing-window-only interval fast path")
+	arg.Release()
+}
+
+func TestProjectedMongoColumnsUsesExternalScanLayout(t *testing.T) {
+	columns := []sqlmongodb.ColumnMapping{
+		{Name: "id", Path: "_id"},
+		{Name: "pump", Path: "pump"},
+		{Name: "value", Path: "value"},
+	}
+	projection := []*plan.Expr{
+		{Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0, Name: "raw.value"}}},
+		{Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 1, Name: "pump"}}},
+	}
+	projected, err := projectedMongoColumns(t.Context(), columns, projection)
+	require.NoError(t, err)
+	require.Equal(t, []sqlmongodb.ColumnMapping{columns[2], columns[1]}, projected)
+
+	_, err = projectedMongoColumns(t.Context(), columns, []*plan.Expr{{Expr: &plan.Expr_Lit{Lit: &plan.Literal{}}}})
+	require.Error(t, err)
 }
 
 func TestDupOperatorLoopJoinMarkPos(t *testing.T) {

@@ -1,0 +1,85 @@
+name: MongoDB Connector Gate
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  merge_group:
+    types: [checks_requested]
+  workflow_dispatch:
+  schedule:
+    - cron: '37 18 * * *'
+
+permissions:
+  contents: read
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      relevant: ${{ steps.detect.outputs.relevant }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Test change detector
+        run: python3 -m unittest test/mongodb/test_changes.py test/mongodb/test_compare_results.py
+      - id: detect
+        name: Detect connector changes
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          python3 - "$GITHUB_EVENT_PATH" "$EVENT_NAME" > "$RUNNER_TEMP/mongodb-event.json" <<'PY'
+          import json, sys
+          path, event_name = sys.argv[1:]
+          with open(path, encoding="utf-8") as source:
+              payload = json.load(source)
+          json.dump({"event_name": event_name, "payload": payload}, sys.stdout)
+          PY
+          python3 optools/mongodb_changed_files.py --event "$RUNNER_TEMP/mongodb-event.json" --github-output "$GITHUB_OUTPUT"
+
+  mongodb-e2e:
+    needs: changes
+    if: needs.changes.outputs.relevant == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      MO_MONGODB_REPORT_DIR: test/mongodb/reports/e2e-${{ github.run_id }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Run MongoDB connector E2E
+        run: |
+          if [[ "${{ github.event_name }}" == "schedule" || "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            optools/mongodb_ci.bash nightly
+          else
+            make test-mongodb-e2e-local
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mongodb-connector-${{ github.sha }}-${{ github.run_id }}
+          path: test/mongodb/reports/**
+
+  mongodb-connector-gate:
+    name: mongodb-connector-gate
+    if: always()
+    needs: [changes, mongodb-e2e]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Summarize gate
+        env:
+          RELEVANT: ${{ needs.changes.outputs.relevant }}
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          E2E_RESULT: ${{ needs.mongodb-e2e.result }}
+        run: |
+          {
+            echo "## MongoDB connector gate"
+            echo "Relevant: $RELEVANT"
+            echo "Change detection: $CHANGES_RESULT"
+            echo "E2E: $E2E_RESULT"
+          } >> "$GITHUB_STEP_SUMMARY"
+          test "$CHANGES_RESULT" = success
+          if test "$RELEVANT" = true; then test "$E2E_RESULT" = success; else test "$E2E_RESULT" = skipped; fi
