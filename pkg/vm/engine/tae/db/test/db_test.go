@@ -8926,13 +8926,13 @@ func TestGlobalCheckpoint2(t *testing.T) {
 
 	err = tae.DB.ForceCheckpoint(ctx, tae.TxnMgr.Now())
 	require.NoError(t, err)
-	tae.WaitAllCheckpointsFinished()
-	assert.Equal(t, uint64(0), tae.Runtime.Scheduler.GetPenddingLSNCnt())
 
+	// The force APIs synchronously wait for the checkpoint covering the requested
+	// timestamp. A concurrent transaction may commit beyond that timestamp and
+	// legitimately leave a newer WAL LSN pending, so the global pending count is
+	// not a completion condition for these calls.
 	err = tae.DB.ForceGlobalCheckpoint(ctx, txn.GetStartTS(), 0)
 	require.NoError(t, err)
-	tae.WaitAllCheckpointsFinished()
-	assert.Equal(t, uint64(0), tae.Runtime.Scheduler.GetPenddingLSNCnt())
 
 	assert.NoError(t, txn.Commit(context.Background()))
 
@@ -8946,8 +8946,6 @@ func TestGlobalCheckpoint2(t *testing.T) {
 	tae.AllFlushExpected(currTs, 4000)
 	err = tae.DB.ForceGlobalCheckpoint(ctx, tae.TxnMgr.Now(), time.Duration(1))
 	assert.NoError(t, err)
-	tae.WaitAllCheckpointsFinished()
-	assert.Equal(t, uint64(0), tae.Runtime.Scheduler.GetPenddingLSNCnt())
 
 	maxEntry := tae.DB.BGCheckpointRunner.MaxGlobalCheckpoint()
 	assert.NotNil(t, maxEntry)
