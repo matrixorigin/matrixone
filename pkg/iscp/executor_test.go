@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -69,27 +70,53 @@ func TestRetryReturnsCanceledContextDuringAttempt(t *testing.T) {
 }
 
 func TestRetryBackoffInterruptedByContextCancellation(t *testing.T) {
+	const firstInterval = 20 * time.Millisecond
+
 	for _, cancelAfterCalls := range []int{1, 2} {
 		t.Run(fmt.Sprintf("backoff-%d", cancelAfterCalls), func(t *testing.T) {
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
 
-			calls := 0
-			start := time.Now()
-			err := retry(ctx, func() error {
-				calls++
-				if calls == cancelAfterCalls {
-					go func() {
-						time.Sleep(10 * time.Millisecond)
-						cancel()
-					}()
+				type retryResult struct {
+					err   error
+					calls int
 				}
-				return errors.New("retryable")
-			}, 3, 20*time.Millisecond, time.Hour)
+				attemptC := make(chan int)
+				resultC := make(chan retryResult, 1)
+				start := time.Now()
+				go func() {
+					calls := 0
+					err := retry(ctx, func() error {
+						calls++
+						attemptC <- calls
+						return errors.New("retryable")
+					}, 3, firstInterval, time.Hour)
+					resultC <- retryResult{err: err, calls: calls}
+				}()
 
-			require.Equal(t, cancelAfterCalls, calls)
-			require.ErrorIs(t, err, context.Canceled)
-			require.Less(t, time.Since(start), time.Second)
+				for completedCalls := 1; completedCalls <= cancelAfterCalls; completedCalls++ {
+					require.Equal(t, completedCalls, <-attemptC)
+					if completedCalls < cancelAfterCalls {
+						time.Sleep(firstInterval << (completedCalls - 1))
+					}
+				}
+
+				// Freeze virtual time after the target attempt has entered its
+				// backoff, then cancel without allowing that timer to elapse.
+				synctest.Wait()
+				cancel()
+
+				result := <-resultC
+				require.Equal(t, cancelAfterCalls, result.calls)
+				require.ErrorIs(t, result.err, context.Canceled)
+
+				wantElapsed := time.Duration(0)
+				for completedCalls := 1; completedCalls < cancelAfterCalls; completedCalls++ {
+					wantElapsed += firstInterval << (completedCalls - 1)
+				}
+				require.Equal(t, wantElapsed, time.Since(start))
+			})
 		})
 	}
 }

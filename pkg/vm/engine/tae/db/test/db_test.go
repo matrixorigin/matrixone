@@ -14119,7 +14119,13 @@ func TestCheckpointTableIDBatch2(t *testing.T) {
 		testutil.CreateRelationAndAppend2(t, 0, tae.DB, "db", tableSchema, bats[0], i == 0)
 	}
 
-	tae.ForceCheckpoint()
+	// This checkpoint merges the 100k historical table-ID fixture above. Keep
+	// the timeout local to this stress case: the generic test helper uses 5s,
+	// which is shorter than this merge can take under race-enabled CI load.
+	checkpointCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	err = tae.DB.ForceCheckpoint(checkpointCtx, tae.TxnMgr.Now())
+	cancel()
+	require.NoError(t, err)
 
 	ickp = tae.BGCheckpointRunner.MaxIncrementalCheckpoint()
 
