@@ -492,7 +492,7 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*P
 	case *tree.ShowRolesStmt:
 		return buildShowRoles(stmt, ctx)
 	case *tree.SetVar:
-		return buildSetVariables(stmt, ctx)
+		return buildSetVariables(stmt, ctx, isPrepareStmt)
 	case *tree.Execute:
 		return buildExecute(stmt, ctx)
 	case *tree.Deallocate:

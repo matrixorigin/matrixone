@@ -81,6 +81,104 @@ func TestCheckWithDeadlock(t *testing.T) {
 	})
 }
 
+func TestCheckWithAcyclicBranchReconvergence(t *testing.T) {
+	reuse.RunReuseTests(func() {
+		root := []byte("root")
+		seed := []byte("seed")
+		victim := []byte("victim")
+		middle := []byte("middle")
+		depends := map[string][]pb.WaitTxn{
+			string(seed): {
+				{TxnID: victim},
+				{TxnID: middle},
+			},
+			string(middle): {
+				{TxnID: victim},
+			},
+		}
+		fetchCount := make(map[string]int)
+
+		d := newDeadlockDetector(
+			runtime.DefaultRuntime().Logger(),
+			func(_ context.Context, txn pb.WaitTxn, w *waiters) (bool, error) {
+				fetchCount[string(txn.TxnID)]++
+				for _, waiter := range depends[string(txn.TxnID)] {
+					if !w.add(waiter, "") {
+						return false, nil
+					}
+				}
+				return true, nil
+			},
+			func(pb.WaitTxn, error) {},
+		)
+		defer d.close()
+
+		w := &waiters{ignoreTxns: &d.ignoreTxns}
+		w.reset(deadlockTxn{
+			holdTxnID: root,
+			waitTxn:   pb.WaitTxn{TxnID: seed},
+		})
+
+		hasDeadlock, deadlockTxn, err := d.checkDeadlock(context.Background(), w)
+		require.NoError(t, err)
+		require.False(t, hasDeadlock)
+		require.Empty(t, deadlockTxn.TxnID)
+		require.Equal(t, 1, fetchCount[string(victim)])
+	})
+}
+
+func TestCheckWithCrossBranchDeadlock(t *testing.T) {
+	reuse.RunReuseTests(func() {
+		root := []byte("root")
+		seed := []byte("seed")
+		a := []byte("a")
+		b := []byte("b")
+		x := []byte("x")
+		y := []byte("y")
+		depends := map[string][]pb.WaitTxn{
+			string(seed): {{TxnID: a}, {TxnID: b}},
+			string(a):    {{TxnID: x}},
+			string(b):    {{TxnID: y}},
+			string(x):    {{TxnID: b}},
+			string(y):    {{TxnID: x, WaiterAddress: "closing-service"}},
+		}
+		fetchCount := make(map[string]int)
+
+		d := newDeadlockDetector(
+			runtime.DefaultRuntime().Logger(),
+			func(_ context.Context, txn pb.WaitTxn, w *waiters) (bool, error) {
+				fetchCount[string(txn.TxnID)]++
+				for _, waiter := range depends[string(txn.TxnID)] {
+					if !w.add(waiter, waiter.WaiterAddress) {
+						return false, nil
+					}
+				}
+				return true, nil
+			},
+			func(pb.WaitTxn, error) {},
+		)
+		defer d.close()
+
+		w := &waiters{ignoreTxns: &d.ignoreTxns}
+		w.reset(deadlockTxn{
+			holdTxnID: root,
+			waitTxn:   pb.WaitTxn{TxnID: seed},
+		})
+
+		hasDeadlock, deadlockTxn, err := d.checkDeadlock(context.Background(), w)
+		require.NoError(t, err)
+		require.True(t, hasDeadlock)
+		require.Equal(t, x, deadlockTxn.TxnID)
+		require.Equal(t, "closing-service", deadlockTxn.WaiterAddress)
+		require.Equal(t, "78 <= 62 <= 79 <= 78", printPathFromRoot(w.deadlockNode()))
+		require.Equal(t, 1, fetchCount[string(seed)])
+		require.Equal(t, 1, fetchCount[string(a)])
+		require.Equal(t, 1, fetchCount[string(b)])
+		require.Equal(t, 1, fetchCount[string(x)])
+		require.Equal(t, 1, fetchCount[string(y)])
+	})
+}
+
 func TestDeadlockDetectorCloseCancelsCheck(t *testing.T) {
 	started := make(chan struct{}, 1)
 	aborted := make(chan struct{}, 1)
