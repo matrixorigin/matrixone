@@ -71,3 +71,9 @@ SECOND(CAST('\t' AS VARCHAR)) AS varchar_tab_second,
 SECOND(CAST('   ' AS TEXT)) AS text_spaces_second;
 ➤ char_spaces_second[-6,8,0]  ¦  varchar_tab_second[-6,8,0]  ¦  text_spaces_second[-6,8,0]  𝄀
 null  ¦  null  ¦  null
+SELECT SECOND('241220153045') AS compact_datetime_second,
+SECOND('15:30:45abc') AS trailing_time_second,
+SECOND('2024-12-20 15:30:45abc') AS trailing_datetime_second,
+SECOND('2024-12-20foo') AS malformed_datetime_second;
+➤ compact_datetime_second[-6,8,0]  ¦  trailing_time_second[-6,8,0]  ¦  trailing_datetime_second[-6,8,0]  ¦  malformed_datetime_second[-6,8,0]  𝄀
+45  ¦  45  ¦  45  ¦  null

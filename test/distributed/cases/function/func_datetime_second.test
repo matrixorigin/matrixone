@@ -54,3 +54,9 @@ SELECT SECOND('2024-12-20') AS date_string_second,
 SELECT SECOND(CAST('   ' AS CHAR)) AS char_spaces_second,
        SECOND(CAST('\t' AS VARCHAR)) AS varchar_tab_second,
        SECOND(CAST('   ' AS TEXT)) AS text_spaces_second;
+
+-- MySQL str_to_time recognizes YYMMDDHHMMSS and keeps a valid TIME prefix.
+SELECT SECOND('241220153045') AS compact_datetime_second,
+       SECOND('15:30:45abc') AS trailing_time_second,
+       SECOND('2024-12-20 15:30:45abc') AS trailing_datetime_second,
+       SECOND('2024-12-20foo') AS malformed_datetime_second;

@@ -4165,9 +4165,10 @@ func TestStringTimeExtract(t *testing.T) {
 		NewFunctionTestInput(types.T_varchar.ToType(),
 			[]string{
 				"12:30:45", "272:59:59", "-272:59:59", "2 03:04:05", "123045",
-				"2024-12-20 15:30:45", "20241220153045", "2024-12-20", "invalid", "", "   ", "\t",
+				"2024-12-20 15:30:45", "20241220153045", "241220153045", "2024-12-20",
+				"15:30:45abc", "2024-12-20 15:30:45abc", "2024-12-20foo", "invalid", "", "   ", "\t",
 			},
-			[]bool{false, false, false, false, false, false, false, false, false, false, false, false}),
+			[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
 	}
 
 	testCases := []struct {
@@ -4178,22 +4179,22 @@ func TestStringTimeExtract(t *testing.T) {
 		{
 			name: "hour",
 			expect: NewFunctionTestResult(types.T_uint32.ToType(), false,
-				[]uint32{12, 272, 272, 51, 12, 15, 15, 0, 0, 0, 0, 0},
-				[]bool{false, false, false, false, false, false, false, false, true, true, true, true}),
+				[]uint32{12, 272, 272, 51, 12, 15, 15, 15, 0, 15, 15, 0, 0, 0, 0, 0},
+				[]bool{false, false, false, false, false, false, false, false, false, false, false, true, true, true, true, true}),
 			fn: StringToHour,
 		},
 		{
 			name: "minute",
 			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
-				[]uint8{30, 59, 59, 4, 30, 30, 30, 20, 0, 0, 0, 0},
-				[]bool{false, false, false, false, false, false, false, false, true, true, true, true}),
+				[]uint8{30, 59, 59, 4, 30, 30, 30, 30, 20, 30, 30, 0, 0, 0, 0, 0},
+				[]bool{false, false, false, false, false, false, false, false, false, false, false, true, true, true, true, true}),
 			fn: StringToMinute,
 		},
 		{
 			name: "second",
 			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
-				[]uint8{45, 59, 59, 5, 45, 45, 45, 24, 0, 0, 0, 0},
-				[]bool{false, false, false, false, false, false, false, false, true, true, true, true}),
+				[]uint8{45, 59, 59, 5, 45, 45, 45, 45, 24, 45, 45, 0, 0, 0, 0, 0},
+				[]bool{false, false, false, false, false, false, false, false, false, false, false, true, true, true, true, true}),
 			fn: StringToSecond,
 		},
 	}

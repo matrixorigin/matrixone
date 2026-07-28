@@ -58,3 +58,9 @@ SELECT HOUR('2024-12-20') AS date_string_hour,
 SELECT HOUR(CAST('   ' AS CHAR)) AS char_spaces_hour,
        HOUR(CAST('\t' AS VARCHAR)) AS varchar_tab_hour,
        HOUR(CAST('   ' AS TEXT)) AS text_spaces_hour;
+
+-- MySQL str_to_time recognizes YYMMDDHHMMSS and keeps a valid TIME prefix.
+SELECT HOUR('241220153045') AS compact_datetime_hour,
+       HOUR('15:30:45abc') AS trailing_time_hour,
+       HOUR('2024-12-20 15:30:45abc') AS trailing_datetime_hour,
+       HOUR('2024-12-20foo') AS malformed_datetime_hour;

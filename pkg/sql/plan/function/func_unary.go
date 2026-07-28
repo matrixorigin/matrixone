@@ -4680,38 +4680,43 @@ func timeStringToFixedWithNullOnError[T types.FixedSizeTExceptStrType](
 }
 
 // timeStringToClockForExtract follows MySQL Item::get_time_from_string:
-// complete DATETIME strings use their clock fields; other strings use TIME
-// coercion. In particular, a date-only string such as "2024-12-20" is parsed
-// as the compact TIME prefix "2024", not as midnight on that date.
+// strings long enough to be DATETIME values are parsed as DATETIME first;
+// shorter strings use TIME coercion. In particular, a date-only string such as
+// "2024-12-20" is parsed as the compact TIME prefix "2024", not as midnight
+// on that date.
 func timeStringToClockForExtract(str string) (uint64, uint8, uint8, bool) {
-	if isDatetimeStringForTimeExtract(str) {
-		dt, err := types.ParseDatetime(str, 6)
-		if err != nil {
-			return 0, 0, 0, false
-		}
-		hour, minute, second := dt.Clock()
-		return uint64(hour), uint8(minute), uint8(second), true
+	datetimeString := str
+	if datetimeString[0] == '-' {
+		datetimeString = datetimeString[1:]
+	}
+	if len(datetimeString) >= 12 {
+		return mysqlDatetimeStringToClockForExtract(datetimeString)
 	}
 
 	timeVal, err := types.ParseTime(str, 6)
 	if err != nil {
-		// MySQL's str_to_time consumes a leading numeric field before reporting
-		// trailing non-time characters. This covers date-only strings, where
-		// 2024-12-20 becomes the compact TIME 00:20:24.
-		start := 0
-		if str[0] == '-' {
-			start = 1
+		if prefix := mysqlTimePrefixForExtract(str); len(prefix) > 0 && len(prefix) != len(str) {
+			timeVal, err = types.ParseTime(prefix, 6)
 		}
-		end := start
-		for end < len(str) && str[end] >= '0' && str[end] <= '9' {
-			end++
-		}
-		if end == start {
-			return 0, 0, 0, false
-		}
-		timeVal, err = types.ParseTime(str[start:end], 6)
 		if err != nil {
-			return 0, 0, 0, false
+			// MySQL's str_to_time consumes a leading numeric field before reporting
+			// trailing non-time characters. This covers date-only strings, where
+			// 2024-12-20 becomes the compact TIME 00:20:24.
+			start := 0
+			if str[0] == '-' {
+				start = 1
+			}
+			end := start
+			for end < len(str) && str[end] >= '0' && str[end] <= '9' {
+				end++
+			}
+			if end == start {
+				return 0, 0, 0, false
+			}
+			timeVal, err = types.ParseTime(str[start:end], 6)
+			if err != nil {
+				return 0, 0, 0, false
+			}
 		}
 	}
 
@@ -4719,29 +4724,81 @@ func timeStringToClockForExtract(str string) (uint64, uint8, uint8, bool) {
 	return hour, minute, second, true
 }
 
-func isDatetimeStringForTimeExtract(str string) bool {
-	if len(str) >= 14 {
-		compact := true
-		for i := 0; i < 14; i++ {
-			if str[i] < '0' || str[i] > '9' {
-				compact = false
-				break
-			}
-		}
-		if compact {
-			return true
-		}
+func mysqlDatetimeStringToClockForExtract(str string) (uint64, uint8, uint8, bool) {
+	if dt, err := types.ParseDatetime(str, 6); err == nil {
+		hour, minute, second := dt.Clock()
+		return uint64(hour), uint8(minute), uint8(second), true
 	}
 
-	if len(str) < 12 || (str[4] != '-' && str[4] != '/') {
-		return false
+	// MySQL accepts both YYYYMMDDHHMMSS and YYMMDDHHMMSS. MatrixOne's
+	// ParseDatetime supports only the former, so retain the two-digit-year
+	// form locally for these TIME extract functions.
+	if hour, minute, second, ok := parseCompactDatetimeClockForExtract(str); ok {
+		return hour, minute, second, true
 	}
-	for i := 0; i < 4; i++ {
-		if str[i] < '0' || str[i] > '9' {
-			return false
+
+	// str_to_time keeps a complete DATETIME prefix and reports trailing text as
+	// a warning. The function result has no warning channel, but must retain the
+	// parsed clock fields.
+	if len(str) >= 19 && (str[4] == '-' || str[4] == '/') && (str[10] == ' ' || str[10] == 'T') {
+		if dt, err := types.ParseDatetime(str[:19], 6); err == nil {
+			hour, minute, second := dt.Clock()
+			return uint64(hour), uint8(minute), uint8(second), true
 		}
 	}
-	return str[10] == ' ' || str[10] == 'T'
+	return 0, 0, 0, false
+}
+
+func parseCompactDatetimeClockForExtract(str string) (uint64, uint8, uint8, bool) {
+	digitCount := 0
+	for digitCount < len(str) && str[digitCount] >= '0' && str[digitCount] <= '9' {
+		digitCount++
+	}
+
+	if digitCount >= 14 {
+		return compactDatetimeClockForExtract(str[:14], false)
+	}
+	if digitCount >= 12 {
+		return compactDatetimeClockForExtract(str[:12], true)
+	}
+	return 0, 0, 0, false
+}
+
+func compactDatetimeClockForExtract(str string, twoDigitYear bool) (uint64, uint8, uint8, bool) {
+	yearWidth := 4
+	if twoDigitYear {
+		yearWidth = 2
+	}
+
+	year := 0
+	for i := 0; i < yearWidth; i++ {
+		year = year*10 + int(str[i]-'0')
+	}
+	if twoDigitYear {
+		year = adjustYear(year)
+	}
+
+	month := (str[yearWidth]-'0')*10 + str[yearWidth+1] - '0'
+	day := (str[yearWidth+2]-'0')*10 + str[yearWidth+3] - '0'
+	hour := (str[yearWidth+4]-'0')*10 + str[yearWidth+5] - '0'
+	minute := (str[yearWidth+6]-'0')*10 + str[yearWidth+7] - '0'
+	second := (str[yearWidth+8]-'0')*10 + str[yearWidth+9] - '0'
+	if !types.ValidDate(int32(year), month, day) || !types.ValidTimeInDay(hour, minute, second) {
+		return 0, 0, 0, false
+	}
+	return uint64(hour), minute, second, true
+}
+
+func mysqlTimePrefixForExtract(str string) string {
+	end := 0
+	for end < len(str) {
+		c := str[end]
+		if (c < '0' || c > '9') && c != ':' && c != '.' && c != '-' && c != ' ' {
+			break
+		}
+		end++
+	}
+	return str[:end]
 }
 
 func StringToHour(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {

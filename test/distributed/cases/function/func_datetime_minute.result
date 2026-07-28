@@ -70,3 +70,9 @@ MINUTE(CAST('\t' AS VARCHAR)) AS varchar_tab_minute,
 MINUTE(CAST('   ' AS TEXT)) AS text_spaces_minute;
 ➤ char_spaces_minute[-6,8,0]  ¦  varchar_tab_minute[-6,8,0]  ¦  text_spaces_minute[-6,8,0]  𝄀
 null  ¦  null  ¦  null
+SELECT MINUTE('241220153045') AS compact_datetime_minute,
+MINUTE('15:30:45abc') AS trailing_time_minute,
+MINUTE('2024-12-20 15:30:45abc') AS trailing_datetime_minute,
+MINUTE('2024-12-20foo') AS malformed_datetime_minute;
+➤ compact_datetime_minute[-6,8,0]  ¦  trailing_time_minute[-6,8,0]  ¦  trailing_datetime_minute[-6,8,0]  ¦  malformed_datetime_minute[-6,8,0]  𝄀
+30  ¦  30  ¦  30  ¦  null

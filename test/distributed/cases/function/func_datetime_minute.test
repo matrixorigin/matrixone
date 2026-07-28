@@ -54,3 +54,9 @@ SELECT MINUTE('2024-12-20') AS date_string_minute,
 SELECT MINUTE(CAST('   ' AS CHAR)) AS char_spaces_minute,
        MINUTE(CAST('\t' AS VARCHAR)) AS varchar_tab_minute,
        MINUTE(CAST('   ' AS TEXT)) AS text_spaces_minute;
+
+-- MySQL str_to_time recognizes YYMMDDHHMMSS and keeps a valid TIME prefix.
+SELECT MINUTE('241220153045') AS compact_datetime_minute,
+       MINUTE('15:30:45abc') AS trailing_time_minute,
+       MINUTE('2024-12-20 15:30:45abc') AS trailing_datetime_minute,
+       MINUTE('2024-12-20foo') AS malformed_datetime_minute;
