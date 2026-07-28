@@ -110,6 +110,9 @@ func TestIssue26113CloneCreatedTableInSameTransaction(t *testing.T) {
 		exec("data branch create table " + dbName + ".b2 from " + dbName + ".b1")
 		require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from "+dbName+".b2").Scan(&count))
 		require.Equal(t, 1, count)
+		exec("data branch create table " + dbName + ".b3 from " + dbName + ".b2")
+		require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from "+dbName+".b3").Scan(&count))
+		require.Equal(t, 1, count)
 		exec("commit")
 
 		require.NoError(t, conn.QueryRowContext(ctx,
@@ -117,7 +120,23 @@ func TestIssue26113CloneCreatedTableInSameTransaction(t *testing.T) {
 				"join mo_catalog.mo_tables child on m.table_id = child.rel_id "+
 				"join mo_catalog.mo_tables parent on m.p_table_id = parent.rel_id "+
 				"where child.reldatabase = '"+dbName+"' and m.clone_ts > 0 and m.table_deleted = false "+
-				"and ((child.relname = 'b1' and parent.relname = 'src') or (child.relname = 'b2' and parent.relname = 'b1'))").Scan(&count))
-		require.Equal(t, 2, count)
+				"and ((child.relname = 'b1' and parent.relname = 'src') or (child.relname = 'b2' and parent.relname = 'b1') "+
+				"or (child.relname = 'b3' and parent.relname = 'b2'))").Scan(&count))
+		require.Equal(t, 3, count)
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"select count(*) from mo_catalog.mo_branch_metadata m "+
+				"join mo_catalog.mo_tables child on m.table_id = child.rel_id "+
+				"join mo_catalog.mo_snapshots s on s.sname = concat('__mo_branch_', cast(m.table_id as char)) "+
+				"and s.kind = 'branch' and s.ts = m.clone_ts "+
+				"where child.reldatabase = '"+dbName+"' and child.relname in ('b1', 'b2', 'b3')").Scan(&count))
+		require.Equal(t, 3, count)
+
+		exec("update " + dbName + ".b1 set v = 'changed' where id = 1")
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"data branch diff "+dbName+".b2 against "+dbName+".b1 output count").Scan(&count))
+		require.Equal(t, 1, count)
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"data branch diff "+dbName+".b3 against "+dbName+".src output count").Scan(&count))
+		require.Zero(t, count)
 	})
 }

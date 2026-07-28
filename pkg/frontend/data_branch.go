@@ -1279,6 +1279,28 @@ func diffOnBase(
 				return
 			}
 		}
+		tarSp, baseSp := tblStuff.resolvedSnapshots(ses)
+		lcaProbe := dagInfo.lcaProbeSnapshot(tarSp, baseSp)
+		lcaCTS, ctsErr := getTablesCreationCommitTS(
+			ctx, ses, tblStuff.lcaRel, tblStuff.lcaRel,
+			[]types.TS{lcaProbe, lcaProbe},
+		)
+		if ctsErr != nil {
+			return ctsErr
+		}
+		if len(lcaCTS) == 0 {
+			return moerr.NewInternalErrorNoCtxf(
+				"data branch: failed to resolve creation TS for LCA table %d",
+				dagInfo.lcaTableId,
+			)
+		}
+		tblStuff.lcaCTS = lcaCTS[0]
+		if tblStuff.lcaCTS.GT(&tarSp) || tblStuff.lcaCTS.GT(&baseSp) {
+			return moerr.NewInternalErrorNoCtxf(
+				"data branch: LCA table %d was created after an endpoint snapshot",
+				dagInfo.lcaTableId,
+			)
+		}
 	}
 
 	if tarHandle, baseHandle, err = constructChangeHandle(
@@ -2396,10 +2418,11 @@ func buildSideCollectRange(
 	endpointID := selfPath[len(selfPath)-1]
 	for i, nodeID := range selfPath {
 		var (
-			rel        engine.Relation
-			windowFrom types.TS
-			windowEnd  types.TS
-			nodeCTS    types.TS
+			rel             engine.Relation
+			windowFrom      types.TS
+			windowEnd       types.TS
+			nodeCTS         types.TS
+			nodeCTSResolved bool
 		)
 		// Resolve the segment boundary before opening the relation. ALTER
 		// generations are dropped after their replacement is materialized, so
@@ -2430,7 +2453,21 @@ func buildSideCollectRange(
 					TS:     &snapshot,
 				},
 			); err != nil {
-				return
+				historicalErr := err
+				if rel, err = getRelationById(ctx, ses, bh, nodeID, nil); err != nil {
+					err = historicalErr
+					return
+				}
+				ctsList, ctsErr := getTablesCreationCommitTS(
+					ctx, ses, rel, rel, []types.TS{endpointSP, endpointSP},
+				)
+				if ctsErr != nil || len(ctsList) == 0 ||
+					!ctsList[0].GT(&nodeSnapshot) || ctsList[0].GT(&endpointSP) {
+					err = historicalErr
+					return
+				}
+				nodeCTS = ctsList[0]
+				nodeCTSResolved = true
 			}
 		}
 
@@ -2439,7 +2476,7 @@ func buildSideCollectRange(
 		// endpoint to avoid a redundant lookup.
 		if nodeID == endpointID {
 			nodeCTS = endpointCTS
-		} else {
+		} else if !nodeCTSResolved {
 			ctsList, err2 := getTablesCreationCommitTS(
 				ctx, ses, rel, rel,
 				[]types.TS{relationSnapshot, relationSnapshot},
@@ -2564,6 +2601,31 @@ func getTablesCreationCommitTS(
 		readerStart := time.Now()
 		ts, readerErr := getTableCreationCommitTSByID(ctx, ses, tableID, snap)
 		if readerErr != nil {
+			// A branch whose parent was created earlier in the same explicit
+			// transaction records a pre-commit clone timestamp.  The parent has
+			// no catalog row at that timestamp, but it is visible at the endpoint
+			// snapshot after commit.  Resolve its real creation timestamp there;
+			// the resulting CTS > clone TS makes the inherited parent window
+			// empty, which is the correct history for a same-commit fork.
+			if snap.LT(&txnSnap) {
+				currentTS, currentErr := getTableCreationCommitTSByID(
+					ctx, ses, tableID, txnSnap,
+				)
+				if currentErr == nil && currentTS.GT(&snap) {
+					logutil.Info("DataBranch-TableCTS-Resolve-Done",
+						zap.Uint64("table-id", tableID),
+						zap.String("snapshot", snap.ToString()),
+						zap.String("fallback-snapshot", txnSnap.ToString()),
+						zap.String("path", "PostCreationSnapshotFallback"),
+						zap.String("commit-ts", currentTS.ToString()),
+						zap.Duration("collectchanges-cost", collectCost),
+						zap.Duration("reader-cost", time.Since(readerStart)),
+						zap.Duration("total-cost", time.Since(totalStart)),
+					)
+					tableCTS[key] = currentTS
+					return currentTS, nil
+				}
+			}
 			logutil.Warn("DataBranch-TableCTS-Resolve-Error",
 				zap.Uint64("table-id", tableID),
 				zap.String("snapshot", snap.ToString()),
