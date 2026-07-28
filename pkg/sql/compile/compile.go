@@ -5497,11 +5497,6 @@ func (c *Compile) mergeScopesByStageNodes(ss []*Scope, stageNodes engine.Nodes) 
 	return rs
 }
 
-func (c *Compile) newShuffleJoinScopeList(probeScopes, buildScopes []*Scope, node *plan.Node) []*Scope {
-	return c.newShuffleJoinScopeListAt(
-		probeScopes, buildScopes, node, c.queryWorkerStageNodes(), false)
-}
-
 func (c *Compile) newShuffleJoinScopeListAt(
 	probeScopes, buildScopes []*Scope,
 	node *plan.Node,
