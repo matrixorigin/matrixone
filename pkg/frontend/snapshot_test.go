@@ -1739,3 +1739,53 @@ func newDdlBatchForTest(mp *mpool.MPool, records [][]interface{}) *batch.Batch {
 
 	return bat
 }
+
+// TestDataBranchAuditFkDepsEscapesQuotedNames verifies that getFkDeps and its
+// related helpers properly escape apostrophes in dbName / tblName before
+// embedding them in SQL string literals.  Unescaped apostrophes were
+// previously interpolated verbatim, breaking the query for any legal
+// backtick-quoted identifier that contains a single-quote character
+// (issue #26144).
+func TestDataBranchAuditFkDepsEscapesQuotedNames(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+
+	bh := &backgroundExecTest{}
+	bh.init()
+
+	bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+	defer bhStub.Reset()
+
+	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+	pu.SV.SetDefaultValues()
+	setPu("", pu)
+	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+	rm, _ := NewRoutineManager(ctx, "")
+	ses.rm = rm
+
+	tenant := &TenantInfo{
+		Tenant:        sysAccountName,
+		User:          rootName,
+		DefaultRole:   moAdminRoleName,
+		TenantID:      sysAccountID,
+		UserID:        rootID,
+		DefaultRoleID: moAdminRoleID,
+	}
+	ses.SetTenantInfo(tenant)
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+
+	// Apostrophes must be doubled to form valid SQL string literals.
+	// The correctly-escaped query is the one that must appear in the
+	// BackgroundExec SQL registry; if getFkDeps generates the un-escaped
+	// form instead, sql2result will have no match and Exec will error.
+	escapedSQL := "select db_name, table_name, refer_db_name, refer_table_name " +
+		"from mo_catalog.mo_foreign_keys " +
+		"where db_name = 'db''name' and table_name = 'child''name'"
+	bh.sql2result[escapedSQL] = newMrsForPitrRecord([][]interface{}{})
+
+	_, err := getFkDeps(ctx, bh, nil, "db'name", "child'name")
+	require.NoError(t, err, "getFkDeps must escape apostrophes in db/table names")
+}
