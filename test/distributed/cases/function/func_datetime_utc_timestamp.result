@@ -22,7 +22,7 @@ select utc_timestamp()-utc_timestamp(),weekday(utc_timestamp())-weekday(utc_time
 0  ¦  0  ¦  -36001
 select utc_timestamp(3) as utc_timestamp_milliseconds;
 ➤ utc_timestamp_milliseconds[93,64,0]  𝄀
-2026-07-28 07:49:34.611000000
+2026-07-28 11:28:47.868000000
 select microsecond(utc_timestamp(3)) % 1000 as utc_timestamp_millisecond_precision;
 ➤ utc_timestamp_millisecond_precision[-5,64,0]  𝄀
 0
@@ -30,11 +30,28 @@ select length(cast(utc_timestamp(3) as char)) = 23 as utc_timestamp_fsp3_text_wi
 ➤ utc_timestamp_fsp3_text_width[-7,1,0]  𝄀
 1
 drop view if exists v_utc_timestamp_fsp;
-create view v_utc_timestamp_fsp as select utc_timestamp(3) as value;
+create view v_utc_timestamp_fsp as
+select utc_timestamp(0) as value0, utc_timestamp(3) as value3, utc_timestamp(6) as value6;
 desc v_utc_timestamp_fsp;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-value  ¦  DATETIME(0)  ¦  NO  ¦    ¦  null  ¦    ¦  
+value0  ¦  DATETIME(0)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+value3  ¦  DATETIME(0)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+value6  ¦  DATETIME(0)  ¦  NO  ¦    ¦  null  ¦    ¦  
 drop view v_utc_timestamp_fsp;
+drop table if exists utc_timestamp_fsp_arg;
+create table utc_timestamp_fsp_arg(fsp bigint);
+insert into utc_timestamp_fsp_arg values (0), (6);
+select utc_timestamp(fsp) from utc_timestamp_fsp_arg;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 24 near "fsp) from utc_timestamp_fsp_arg;";
+select utc_timestamp(1 + 2);
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 24 near " + 2);";
+select utc_timestamp(null);
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 25 near "null);";
+select utc_timestamp(-1);
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 22 near "-1);";
+select utc_timestamp(7);
+invalid input: UTC_TIMESTAMP fractional seconds precision must be an integer literal between 0 and 6
+drop table utc_timestamp_fsp_arg;
 CREATE TABLE t1 (a TIMESTAMP);
 INSERT INTO t1 select (utc_timestamp());
 INSERT INTO t1 select (utc_timestamp());

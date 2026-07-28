@@ -128,3 +128,47 @@ func TestUTCFunctionsRejectInvalidFractionalSecondPrecision(t *testing.T) {
 		}
 	}
 }
+
+func TestUTCFunctionsRejectNonConstantFractionalSecondPrecision(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	nonConstantInputs := [][]int64{
+		{0, 6},
+		{6, 0},
+	}
+	for _, name := range []string{"utc_time", "utc_timestamp"} {
+		for _, values := range nonConstantInputs {
+			t.Run(name, func(t *testing.T) {
+				input := vector.NewVec(types.T_int64.ToType())
+				defer input.Free(proc.Mp())
+				require.NoError(t, vector.AppendFixedList(input, values, nil, proc.Mp()))
+
+				fn, err := GetFunctionByName(proc.Ctx, name, []types.Type{types.T_int64.ToType()})
+				require.NoError(t, err)
+				out, err := RunFunctionDirectly(proc, fn.GetEncodedOverloadID(), []*vector.Vector{input}, len(values))
+				require.ErrorContains(t, err, "constant integer between 0 and 6")
+				if out != nil {
+					out.Free(proc.Mp())
+				}
+			})
+		}
+	}
+}
+
+func TestUTCFunctionsRejectNullFractionalSecondPrecision(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	for _, name := range []string{"utc_time", "utc_timestamp"} {
+		t.Run(name, func(t *testing.T) {
+			input := vector.NewConstNull(types.T_int64.ToType(), 1, proc.Mp())
+			defer input.Free(proc.Mp())
+			fn, err := GetFunctionByName(proc.Ctx, name, []types.Type{types.T_int64.ToType()})
+			require.NoError(t, err)
+			out, err := RunFunctionDirectly(proc, fn.GetEncodedOverloadID(), []*vector.Vector{input}, 1)
+			require.ErrorContains(t, err, "constant integer between 0 and 6")
+			if out != nil {
+				out.Free(proc.Mp())
+			}
+		})
+	}
+}

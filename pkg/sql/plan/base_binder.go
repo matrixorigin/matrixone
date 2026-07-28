@@ -2320,6 +2320,12 @@ func (b *baseBinder) bindFullTextMatchExpr(astExpr *tree.FullTextMatchExpr, dept
 }
 
 func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr, depth int32) (*plan.Expr, error) {
+	if (name == "utc_time" || name == "utc_timestamp") && len(astArgs) == 1 {
+		if _, ok := astArgs[0].(*tree.NumVal); !ok {
+			return nil, invalidUTCFunctionFSPError(b.GetContext(), name)
+		}
+	}
+
 	// rewrite some ast Exprs before binding
 	switch name {
 	case "nullif":
@@ -2849,6 +2855,12 @@ func bindSerialFuncOverExprList(ctx context.Context, name string, args []*Expr) 
 
 func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) (*plan.Expr, error) {
 	var err error
+
+	if (name == "utc_time" || name == "utc_timestamp") && len(args) == 1 {
+		if _, err := utcFunctionFSPFromPlanExpr(ctx, name, args[0]); err != nil {
+			return nil, err
+		}
+	}
 
 	// deal with some special function
 	if listExpr, ok, err := bindSerialFuncOverExprList(ctx, name, args); ok || err != nil {
@@ -3527,11 +3539,8 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		// scale is determined by the literal FSP. Preserve it in the plan type so
 		// views and the MySQL protocol expose TIME/DATETIME(fsp) correctly.
 		if len(args) == 1 {
-			if literal := args[0].GetLit(); literal != nil && !literal.Isnull {
-				if fsp, ok := literal.GetValue().(*plan.Literal_I64Val); ok && fsp.I64Val >= 0 && fsp.I64Val <= 6 {
-					returnType.Scale = int32(fsp.I64Val)
-				}
-			}
+			fsp, _ := utcFunctionFSPFromPlanExpr(ctx, name, args[0])
+			returnType.Scale = fsp
 		}
 
 	case "timestampadd":
@@ -3617,6 +3626,22 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 		},
 		Typ: Typ,
 	}, nil
+}
+
+func invalidUTCFunctionFSPError(ctx context.Context, name string) error {
+	return moerr.NewInvalidInputf(ctx, "%s fractional seconds precision must be an integer literal between 0 and 6", strings.ToUpper(name))
+}
+
+func utcFunctionFSPFromPlanExpr(ctx context.Context, name string, expr *Expr) (int32, error) {
+	literal := expr.GetLit()
+	if literal == nil || literal.Isnull {
+		return 0, invalidUTCFunctionFSPError(ctx, name)
+	}
+	fsp, ok := literal.GetValue().(*plan.Literal_I64Val)
+	if !ok || fsp.I64Val < 0 || fsp.I64Val > 6 {
+		return 0, invalidUTCFunctionFSPError(ctx, name)
+	}
+	return int32(fsp.I64Val), nil
 }
 
 // MySQL compares scalar TIME expressions to strings as text, but converts a
