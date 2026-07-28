@@ -2847,6 +2847,28 @@ func bindSerialFuncOverExprList(ctx context.Context, name string, args []*Expr) 
 	return args[0], true, nil
 }
 
+// bindMixedInListComparison applies MySQL's REAL comparison semantics for a
+// string left operand and a numeric IN-list value. It is deliberately limited
+// to IN/NOT IN fallback comparisons: applying it to every comparison would
+// lose precision for numeric columns compared with string constants.
+func bindMixedInListComparison(ctx context.Context, operator string, left, right *Expr) (*plan.Expr, error) {
+	leftType := makeTypeByPlan2Expr(left)
+	rightType := makeTypeByPlan2Expr(right)
+	if leftType.Oid.IsMySQLString() && (rightType.IsNumeric() || rightType.Oid == types.T_bool) {
+		targetType := types.T_float64.ToType()
+		operands := []*Expr{left, right}
+		for i := range operands {
+			var err error
+			operands[i], err = appendCastBeforeExpr(ctx, operands[i], makePlan2Type(&targetType))
+			if err != nil {
+				return nil, err
+			}
+		}
+		left, right = operands[0], operands[1]
+	}
+	return BindFuncExprImplByPlanExpr(ctx, operator, []*Expr{left, right})
+}
+
 func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) (*plan.Expr, error) {
 	var err error
 
@@ -3242,7 +3264,7 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 			}
 			if name == "in" {
 				for _, expr := range orExprList {
-					tmpExpr, err := BindFuncExprImplByPlanExpr(ctx, "=", []*Expr{DeepCopyExpr(args[0]), expr})
+					tmpExpr, err := bindMixedInListComparison(ctx, "=", DeepCopyExpr(args[0]), expr)
 					if err != nil {
 						return nil, err
 					}
@@ -3251,7 +3273,7 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 				return combinePlanExprsBalanced(ctx, "or", expanded)
 			} else {
 				for _, expr := range orExprList {
-					tmpExpr, err := BindFuncExprImplByPlanExpr(ctx, "!=", []*Expr{DeepCopyExpr(args[0]), expr})
+					tmpExpr, err := bindMixedInListComparison(ctx, "!=", DeepCopyExpr(args[0]), expr)
 					if err != nil {
 						return nil, err
 					}

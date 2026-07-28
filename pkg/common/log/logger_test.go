@@ -16,11 +16,16 @@ package log
 
 import (
 	"context"
+	"fmt"
+	"sync/atomic"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 // mockEnabledTracer is a tracer that reports IsEnable() = true
@@ -31,6 +36,22 @@ type mockEnabledTracer struct {
 func (m mockEnabledTracer) IsEnable(opts ...trace.SpanStartOption) bool {
 	return true
 }
+
+type noAllocCore struct{}
+
+var eventTestSequence atomic.Uint64
+
+func (noAllocCore) Enabled(zapcore.Level) bool { return true }
+
+func (noAllocCore) With([]zap.Field) zapcore.Core { return noAllocCore{} }
+
+func (noAllocCore) Check(entry zapcore.Entry, checked *zapcore.CheckedEntry) *zapcore.CheckedEntry {
+	return checked.AddCore(entry, noAllocCore{})
+}
+
+func (noAllocCore) Write(zapcore.Entry, []zap.Field) error { return nil }
+
+func (noAllocCore) Sync() error { return nil }
 
 func TestMOLogger_WithContext(t *testing.T) {
 	logger := wrap(zap.NewNop())
@@ -167,4 +188,68 @@ func TestLogOptions_WithContext(t *testing.T) {
 			opts.WithContext(ctx)
 		})
 	})
+}
+
+func TestMOLoggerEventBudgetIsSharedAndLazy(t *testing.T) {
+	core, observed := observer.New(zap.InfoLevel)
+	logger := wrap(zap.New(core))
+	child := logger.Named("child")
+	independentRoot := wrap(zap.New(core))
+	// Event budgets are process-wide. -count runs this test repeatedly in one
+	// process, so give each invocation an independent population.
+	event := logutil.Event{
+		Name:    fmt.Sprintf("test.shared-event.%d", eventTestSequence.Add(1)),
+		Message: "test event",
+	}
+	var builds atomic.Int64
+	build := func() []zap.Field {
+		builds.Add(1)
+		return []zap.Field{zap.String("derived", "value")}
+	}
+
+	for range 2 {
+		assert.True(t, logger.InfoEventLazy(event, build))
+	}
+	assert.True(t, child.InfoEventLazy(event, build))
+	assert.False(t, independentRoot.InfoEventLazy(event, build))
+	assert.Len(t, observed.All(), 3)
+	assert.Equal(t, int64(3), builds.Load())
+}
+
+func TestMOLoggerEventDoesNotAllocateStateWhenDisabled(t *testing.T) {
+	logger := wrap(zap.NewNop())
+	var builds atomic.Int64
+	allocs := testing.AllocsPerRun(1_000, func() {
+		logger.DebugEventLazy(logutil.Event{Name: "test.disabled", Message: "disabled"}, func() []zap.Field {
+			builds.Add(1)
+			return []zap.Field{zap.String("expensive", "field")}
+		})
+	})
+	assert.Zero(t, allocs)
+	assert.Zero(t, builds.Load())
+	for range 64 {
+		assert.False(t, logger.DebugEvent(logutil.Event{Name: "test.disabled", Message: "disabled"}))
+	}
+}
+
+func TestMOLoggerLegacyDebugDoesNotUseEventBudget(t *testing.T) {
+	core, observed := observer.New(zap.DebugLevel)
+	logger := wrap(zap.New(core))
+
+	for range 4 {
+		assert.True(t, logger.Debug("legacy debug"))
+	}
+	assert.Len(t, observed.All(), 4)
+}
+
+func TestMOLoggerLegacyLogDoesNotCopyFieldsWithoutContext(t *testing.T) {
+	logger := wrap(zap.New(noAllocCore{}))
+	fields := []zap.Field{zap.String("key", "value")}
+
+	allocs := testing.AllocsPerRun(1_000, func() {
+		if !logger.Info("legacy log", fields...) {
+			t.Fatal("expected log to be written")
+		}
+	})
+	assert.Zero(t, allocs)
 }
