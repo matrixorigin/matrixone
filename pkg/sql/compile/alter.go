@@ -767,6 +767,7 @@ func (s *Scope) AlterTableCopy(c *Compile) (err error) {
 				c,
 				fkey,
 				originRel.GetTableID(c.proc.Ctx),
+				newRel.GetTableID(c.proc.Ctx),
 			)
 			if err != nil {
 				c.proc.Error(c.proc.Ctx, "notify parent table foreign key TableId Change for alter table",
@@ -1185,8 +1186,65 @@ func restoreNewTableRefChildTbls(c *Compile, copyRel engine.Relation, refChildTb
 }
 
 // notifyParentTableFkTableIdChange Notify the parent table of changes in the tableid of the foreign key table
-func notifyParentTableFkTableIdChange(c *Compile, fkey *plan.ForeignKeyDef, oldTableId uint64) error {
+func replaceRefChildTableID(tableIDs []uint64, oldTableID, newTableID uint64) []uint64 {
+	reconciled := tableIDs[:0]
+	newTableIDAdded := false
+	for _, tableID := range tableIDs {
+		if tableID == oldTableID {
+			if !newTableIDAdded {
+				reconciled = append(reconciled, newTableID)
+				newTableIDAdded = true
+			}
+			continue
+		}
+		if tableID == newTableID {
+			if newTableIDAdded {
+				continue
+			}
+			newTableIDAdded = true
+		}
+		reconciled = append(reconciled, tableID)
+	}
+	if !newTableIDAdded {
+		reconciled = append(reconciled, newTableID)
+	}
+	return reconciled
+}
+
+func reconcileParentRefChildTableID(
+	constraintDef *engine.ConstraintDef,
+	oldTableID uint64,
+	newTableID uint64,
+) {
+	for _, constraint := range constraintDef.Cts {
+		if refChildDef, ok := constraint.(*engine.RefChildTableDef); ok {
+			refChildDef.Tables = replaceRefChildTableID(
+				refChildDef.Tables,
+				oldTableID,
+				newTableID,
+			)
+			return
+		}
+	}
+	constraintDef.Cts = append(
+		constraintDef.Cts,
+		&engine.RefChildTableDef{Tables: []uint64{newTableID}},
+	)
+}
+
+func notifyParentTableFkTableIdChange(
+	c *Compile,
+	fkey *plan.ForeignKeyDef,
+	oldTableID uint64,
+	newTableID uint64,
+) error {
 	foreignTblId := fkey.ForeignTbl
+	if foreignTblId == 0 {
+		// Self-referencing foreign keys use 0 as the parent-table sentinel.
+		// The ALTER copy is already carrying that constraint on newRel, and
+		// there is no separate parent relation to update.
+		return nil
+	}
 	_, _, fatherRelation, err := c.e.GetRelationById(c.proc.Ctx, c.proc.GetTxnOperator(), foreignTblId)
 	if err != nil {
 		return err
@@ -1195,13 +1253,7 @@ func notifyParentTableFkTableIdChange(c *Compile, fkey *plan.ForeignKeyDef, oldT
 	if err != nil {
 		return err
 	}
-	for _, ct := range oldCt.Cts {
-		if def, ok1 := ct.(*engine.RefChildTableDef); ok1 {
-			def.Tables = plan2.RemoveIf(def.Tables, func(id uint64) bool {
-				return id == oldTableId
-			})
-		}
-	}
+	reconcileParentRefChildTableID(oldCt, oldTableID, newTableID)
 	return fatherRelation.UpdateConstraint(c.proc.Ctx, oldCt)
 }
 

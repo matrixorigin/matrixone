@@ -72,6 +72,55 @@ func TestIsAlterAffectedPluginIndexMatchesIndexNamePartsAndIncludedColumns(t *te
 	require.False(t, isAlterAffectedPluginIndex(nil, []string{"idx_vec"}))
 }
 
+func TestReplaceRefChildTableID(t *testing.T) {
+	t.Run("replace altered child and preserve siblings", func(t *testing.T) {
+		tableIDs := []uint64{10, 20, 30}
+		require.Equal(t, []uint64{10, 21, 30}, replaceRefChildTableID(tableIDs, 20, 21))
+	})
+
+	t.Run("repair a missing child reference", func(t *testing.T) {
+		tableIDs := []uint64{10, 30}
+		require.Equal(t, []uint64{10, 30, 21}, replaceRefChildTableID(tableIDs, 20, 21))
+	})
+
+	t.Run("keep exactly one new child reference", func(t *testing.T) {
+		tableIDs := []uint64{10, 20, 21, 20, 30}
+		require.Equal(t, []uint64{10, 21, 30}, replaceRefChildTableID(tableIDs, 20, 21))
+	})
+
+	t.Run("add child to an empty reference list", func(t *testing.T) {
+		require.Equal(t, []uint64{21}, replaceRefChildTableID(nil, 20, 21))
+	})
+}
+
+func TestReconcileParentRefChildTableID(t *testing.T) {
+	t.Run("replace child in existing reverse reference", func(t *testing.T) {
+		constraintDef := &engine.ConstraintDef{Cts: []engine.Constraint{
+			&engine.RefChildTableDef{Tables: []uint64{10, 20, 30}},
+		}}
+		reconcileParentRefChildTableID(constraintDef, 20, 21)
+
+		require.Len(t, constraintDef.Cts, 1)
+		require.Equal(
+			t,
+			[]uint64{10, 21, 30},
+			constraintDef.Cts[0].(*engine.RefChildTableDef).Tables,
+		)
+	})
+
+	t.Run("restore reverse reference removed while dropping old child", func(t *testing.T) {
+		constraintDef := &engine.ConstraintDef{}
+		reconcileParentRefChildTableID(constraintDef, 20, 21)
+
+		require.Len(t, constraintDef.Cts, 1)
+		require.Equal(
+			t,
+			[]uint64{21},
+			constraintDef.Cts[0].(*engine.RefChildTableDef).Tables,
+		)
+	})
+}
+
 func TestAlterCopyAutoIncrementCleanupDiscardsTrackedReset(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	proc := testutil.NewProcess(t)
