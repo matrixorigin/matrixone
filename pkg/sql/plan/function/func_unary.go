@@ -7027,7 +7027,7 @@ func UTCTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, p
 	}
 	rs.TempSetType(types.New(types.T_datetime, 0, scale))
 
-	resultValue := types.UTC().TruncateToScale(scale)
+	resultValue := types.UnixNanoToTimestamp(proc.GetUnixTime()).ToDatetime(time.UTC).TruncateToScale(scale)
 	for i := uint64(0); i < uint64(length); i++ {
 		if err := rs.Append(resultValue, false); err != nil {
 			return err

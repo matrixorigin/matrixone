@@ -65,3 +65,5 @@ SELECT UTC_TIME(5) AS five_digits;
 -- @ignore:0
 SELECT UTC_TIME(6) AS six_digits;
 
+-- UTC_TIME(fsp) truncates fractional seconds to the requested precision.
+SELECT MICROSECOND(UTC_TIME(3)) % 1000 AS utc_time_millisecond_precision;

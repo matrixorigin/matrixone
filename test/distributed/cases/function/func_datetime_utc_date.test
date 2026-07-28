@@ -25,6 +25,9 @@ DROP TABLE t1;
 # NULL handling (UTC_DATE() should never return NULL)
 SELECT UTC_DATE() IS NOT NULL AS not_null_check;
 
+-- UTC_DATE returns a DATE independently of the session timezone.
+SELECT DATE_FORMAT(UTC_DATE(), '%Y-%m-%d') = CAST(UTC_DATE() AS CHAR) AS utc_date_is_date;
+
 # Date arithmetic
 -- @ignore:0
 SELECT UTC_DATE() + INTERVAL 1 DAY AS tomorrow;
@@ -36,4 +39,3 @@ SELECT DATEDIFF(UTC_DATE(), '2024-01-01') AS days_since_jan1;
 # Format verification (should return DATE type in YYYY-MM-DD format)
 -- @ignore:0
 SELECT UTC_DATE() AS date_format;
-

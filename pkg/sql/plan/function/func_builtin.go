@@ -159,13 +159,10 @@ func builtInUtcTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 
 	// Get scale from optional parameter (default 0 for TIME type)
 	scale := int32(0)
-	if len(ivecs) == 1 && !ivecs[0].IsConstNull() {
+	if len(ivecs) == 1 && !ivecs[0].IsConstNull() && ivecs[0].Length() > 0 {
 		scale = int32(vector.MustFixedColWithTypeCheck[int64](ivecs[0])[0])
-		// Clamp scale to valid range [0, 6]
-		if scale < 0 {
-			scale = 0
-		} else if scale > 6 {
-			scale = 6
+		if scale < 0 || scale > 6 {
+			return moerr.NewErrTooBigPrecision(proc.Ctx, scale, "utc_time", 6)
 		}
 	}
 	rs.TempSetType(types.New(types.T_time, 0, scale))
