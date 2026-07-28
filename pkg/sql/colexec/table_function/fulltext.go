@@ -69,8 +69,10 @@ type fulltextState struct {
 	// Built ONCE per scoring phase (aggregation is complete before the first
 	// evaluate call) and drained across evaluate batches; rebuilding it per 8K
 	// output batch would cost O(N) workspace per batch and O(N^2/8192)
-	// traversal work overall (#25638 review).
-	scoreBuckets [][]any
+	// traversal work overall (#25638 review). Consumed slots are nil'd so
+	// variable-width doc IDs can be reclaimed incrementally.
+	scoreKeys    []any
+	scorePos     int
 	scoreOrdered bool
 
 	// Serialized membership-filter (docfilter) bytes for reader-level doc_id filtering
@@ -111,7 +113,8 @@ func (u *fulltextState) resetRowState(proc *process.Process) {
 	u.docIDMap = make(map[any]any)
 	u.minheap = nil
 	u.resbuf = nil
-	u.scoreBuckets = nil
+	u.scoreKeys = nil
+	u.scorePos = 0
 	u.scoreOrdered = false
 }
 
@@ -413,37 +416,70 @@ func runWordStats(
 	return
 }
 
-// bucketedKeySize is the estimated workspace cost, per bucketed agghtab key, of the
-// partition-ordered traversal (one interface header per key in a bucket slice).
-const bucketedKeySize = 16
+// traversalKeySize is the workspace cost per key of the partition-ordered
+// traversal: one interface header in the flat key buffer.
+const traversalKeySize = 16
 
-// partitionOrderedBuckets groups agghtab's keys by ascending pool-partition id.
+// scoreTraversalEstimate is the EXACT workspace partitionOrderedKeys allocates
+// for nkeys keys over npart partitions: one flat interface buffer plus one
+// per-partition offset array (reused between the counting and placement passes)
+// and slice headers. Kept as a function so the admission estimate and the
+// regression that measures the real allocation share one definition.
+func scoreTraversalEstimate(nkeys, npart int) uint64 {
+	return uint64(nkeys)*traversalKeySize + uint64(npart)*8 + 64
+}
+
+// partitionOrderedKeys returns agghtab's keys ordered by ascending pool-partition id.
 // Go map iteration order is randomized and has no relation to the partition an
 // address lives in; when partitions have spilled, scoring in map order makes GetItem
 // evict and re-materialize WHOLE partitions per document (a diagnostic showed one
-// partition reload per item read). Grouping by partition first costs one O(n) pass
-// over the map and guarantees each spilled partition is unspilled at most once per
-// scoring pass (#25638).
+// partition reload per item read). Ordering by partition first guarantees each
+// spilled partition is unspilled at most once per scoring pass (#25638).
 //
-// The buckets retain ~bucketedKeySize bytes per remaining document until the keys are
-// consumed — workspace that lives outside the pool's accounting — so the allocation is
-// gated on the pool's heap budget, and construction honors cancellation. Callers must
-// build the buckets at most once per scoring phase and drain them incrementally, never
-// rebuild them per output batch.
-func partitionOrderedBuckets(
+// Workspace shape: ONE flat []any of exactly len(agghtab) plus one per-partition
+// offset array — no append growth, no per-bucket slack — so the heap-budget
+// admission estimate (scoreTraversalEstimate) matches the peak allocation.
+// Construction is two O(n) map passes (count, then place), both honoring
+// cancellation. Callers must build the traversal at most once per scoring phase
+// and drain it incrementally, never rebuild it per output batch.
+func partitionOrderedKeys(
 	proc *process.Process,
 	agghtab map[any]uint64,
 	pool *fulltext.FixedBytePool,
-) ([][]any, error) {
+) ([]any, error) {
 	npart := pool.NumPartitions()
 	if npart < 1 {
 		npart = 1
 	}
-	if err := pool.CheckBudget(uint64(len(agghtab)) * bucketedKeySize); err != nil {
+	if err := pool.CheckBudget(scoreTraversalEstimate(len(agghtab), npart)); err != nil {
 		return nil, err
 	}
-	buckets := make([][]any, npart)
+	pidOf := func(addr uint64) uint64 {
+		pid := fulltext.GetPartitionId(addr)
+		if pid >= uint64(npart) {
+			pid = uint64(npart - 1)
+		}
+		return pid
+	}
+	offsets := make([]int, npart)
 	n := 0
+	for _, addr := range agghtab {
+		if n%cancelCheckInterval == 0 {
+			if err := proc.Ctx.Err(); err != nil {
+				return nil, moerr.NewInternalError(proc.Ctx, "fulltext scoring cancelled")
+			}
+		}
+		n++
+		offsets[pidOf(addr)]++
+	}
+	// per-partition counts -> start offsets
+	sum := 0
+	for i, c := range offsets {
+		offsets[i] = sum
+		sum += c
+	}
+	keys := make([]any, len(agghtab))
+	n = 0
 	for k, addr := range agghtab {
 		if n%cancelCheckInterval == 0 {
 			if err := proc.Ctx.Err(); err != nil {
@@ -451,13 +487,11 @@ func partitionOrderedBuckets(
 			}
 		}
 		n++
-		pid := fulltext.GetPartitionId(addr)
-		if pid >= uint64(npart) {
-			pid = uint64(npart - 1)
-		}
-		buckets[pid] = append(buckets[pid], k)
+		pid := pidOf(addr)
+		keys[offsets[pid]] = k
+		offsets[pid]++
 	}
-	return buckets, nil
+	return keys, nil
 }
 
 // cancelCheckInterval: how many scored documents between context-cancellation checks in
@@ -474,73 +508,70 @@ func evaluate(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum) 
 	// 8K output batch, so the ordering must be drained across batches — not rebuilt
 	// per batch (#25638 review).
 	if !u.scoreOrdered {
-		if u.scoreBuckets, err = partitionOrderedBuckets(proc, u.agghtab, u.mpool); err != nil {
+		if u.scoreKeys, err = partitionOrderedKeys(proc, u.agghtab, u.mpool); err != nil {
 			return nil, err
 		}
+		u.scorePos = 0
 		u.scoreOrdered = true
 	}
 
 	scoremap = make(map[any]float32, 8192)
-	keys := make([]any, 0, 8192)
 
 	aggcnt := u.aggcnt
 
-	// Consume buckets in partition order so spilled partitions are materialized at
-	// most once across ALL batches, and honor cancellation between documents.
+	// Consume the traversal in partition order so spilled partitions are
+	// materialized at most once across ALL batches, honoring cancellation between
+	// documents. Every candidate is freed and deleted from the side maps the
+	// moment it is scored: a sparse result (e.g. a boolean query whose required
+	// words filter most candidates) must not accumulate per-candidate state, so
+	// per-call memory is bounded by the returned scoremap, not by the number of
+	// candidates processed (#25638 review).
 	n := 0
-	for len(u.scoreBuckets) > 0 && len(scoremap) < 8192 {
-		bucket := u.scoreBuckets[0]
-		for len(bucket) > 0 && len(scoremap) < 8192 {
-			if n%cancelCheckInterval == 0 {
-				if err := proc.Ctx.Err(); err != nil {
-					return nil, moerr.NewInternalError(proc.Ctx, "fulltext evaluate cancelled")
-				}
-			}
-			n++
-			doc_id := bucket[0]
-			bucket = bucket[1:]
-
-			addr, ok := u.agghtab[doc_id]
-			if !ok {
-				continue
-			}
-			docvec, err := u.mpool.GetItem(addr)
-			if err != nil {
-				return nil, err
-			}
-
-			docLen := int64(0)
-			if len, ok := u.docLenMap[doc_id]; ok {
-				docLen = int64(len)
-			}
-
-			score, err := s.Eval(docvec, docLen, aggcnt)
-			if err != nil {
-				return nil, err
-			}
-
-			keys = append(keys, doc_id)
-
-			if len(score) > 0 {
-				scoremap[doc_id] = score[0]
+	for u.scorePos < len(u.scoreKeys) && len(scoremap) < 8192 {
+		if n%cancelCheckInterval == 0 {
+			if err := proc.Ctx.Err(); err != nil {
+				return nil, moerr.NewInternalError(proc.Ctx, "fulltext evaluate cancelled")
 			}
 		}
-		if len(bucket) == 0 {
-			// drained: drop the bucket so its backing array can be reclaimed
-			u.scoreBuckets[0] = nil
-			u.scoreBuckets = u.scoreBuckets[1:]
+		n++
+		doc_id := u.scoreKeys[u.scorePos]
+		u.scoreKeys[u.scorePos] = nil // let the (possibly wide) ID be reclaimed
+		u.scorePos++
+
+		addr, ok := u.agghtab[doc_id]
+		if !ok {
+			continue
+		}
+		docvec, err := u.mpool.GetItem(addr)
+		if err != nil {
+			return nil, err
+		}
+
+		docLen := int64(0)
+		if l, ok := u.docLenMap[doc_id]; ok {
+			docLen = int64(l)
+		}
+
+		score, err := s.Eval(docvec, docLen, aggcnt)
+		if err != nil {
+			return nil, err
+		}
+
+		// consumed: release the pooled item and side-map entries immediately
+		if err := u.mpool.FreeItem(addr); err != nil {
+			return nil, err
+		}
+		delete(u.agghtab, doc_id)
+		delete(u.docLenMap, doc_id)
+
+		if len(score) > 0 {
+			scoremap[doc_id] = score[0]
 		} else {
-			u.scoreBuckets[0] = bucket
+			delete(u.docIDMap, doc_id)
 		}
 	}
-
-	for _, k := range keys {
-		u.mpool.FreeItem(u.agghtab[k])
-		delete(u.agghtab, k)
-		delete(u.docLenMap, k)
-		if _, ok := scoremap[k]; !ok {
-			delete(u.docIDMap, k)
-		}
+	if u.scorePos >= len(u.scoreKeys) {
+		u.scoreKeys = nil // fully drained; release the flat buffer
 	}
 
 	return scoremap, nil
@@ -561,14 +592,15 @@ func sort_topk(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum,
 	// score in partition order so spilled partitions are materialized at most once
 	// per pass (map order would thrash whole-partition I/O per document), and honor
 	// cancellation between documents so KILL/timeout can stop the I/O loop promptly.
-	// sort_topk runs as a single pass, so the buckets are local and released on return.
-	buckets, err := partitionOrderedBuckets(proc, u.agghtab, u.mpool)
+	// sort_topk runs as a single pass, so the traversal is local and released on return.
+	keys, err := partitionOrderedKeys(proc, u.agghtab, u.mpool)
 	if err != nil {
 		return err
 	}
 	n := 0
-	for _, bucket := range buckets {
-		for _, doc_id := range bucket {
+	{
+		for i, doc_id := range keys {
+			keys[i] = nil // let the (possibly wide) ID be reclaimed
 			if n%cancelCheckInterval == 0 {
 				if err := proc.Ctx.Err(); err != nil {
 					return moerr.NewInternalError(proc.Ctx, "fulltext sort_topk cancelled")

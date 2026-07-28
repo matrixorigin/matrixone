@@ -17,6 +17,7 @@ package table_function
 import (
 	"context"
 	"math/rand"
+	goruntime "runtime"
 	"strings"
 	"testing"
 	"time"
@@ -1508,4 +1509,132 @@ func TestEvaluateOrderingBudgetGated(t *testing.T) {
 	_, err = evaluate(st, proc, s)
 	require.Error(t, err, "ordering workspace must be budget-gated")
 	require.Contains(t, err.Error(), "budget")
+}
+
+// measureTotalAlloc returns the bytes allocated while f runs (monotonic
+// TotalAlloc delta, immune to intervening GC).
+func measureTotalAlloc(f func()) uint64 {
+	goruntime.GC()
+	var before, after goruntime.MemStats
+	goruntime.ReadMemStats(&before)
+	f()
+	goruntime.ReadMemStats(&after)
+	return after.TotalAlloc - before.TotalAlloc
+}
+
+// TestScoreTraversalWorkspaceExact is the #25692 review regression for the
+// traversal workspace: the heap-budget admission estimate must match the real
+// peak allocation. The previous append-grown buckets admitted 16 B/key but
+// allocated ~5.6x that (growth reallocation, slack capacity, uncounted
+// headers). The flat-buffer constructor allocates exactly what
+// scoreTraversalEstimate admits.
+func TestScoreTraversalWorkspaceExact(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	s, err := fulltext.NewSearchAccum("src", "index", "pattern", 0, "", fulltext.ALGO_TFIDF)
+	require.NoError(t, err)
+	s.Nrow = 1000000
+
+	const ndoc = 200000
+	dsize := uint64(s.Nkeywords)
+	st := &fulltextState{
+		agghtab:   make(map[any]uint64, ndoc),
+		aggcnt:    make([]int64, s.Nkeywords),
+		docLenMap: make(map[any]int32, ndoc),
+		docIDMap:  make(map[any]any),
+		// production-shaped pool: default partition capacity, no forced spilling
+		mpool: fulltext.NewFixedBytePool(proc, dsize, 0, 0),
+	}
+	defer st.mpool.Close()
+	st.aggcnt[0] = ndoc
+	for i := 0; i < ndoc; i++ {
+		addr, docvec, allocErr := st.mpool.NewItem()
+		require.NoError(t, allocErr)
+		docvec[0] = 1
+		st.agghtab[i] = addr
+		st.docLenMap[i] = 1
+	}
+
+	est := scoreTraversalEstimate(len(st.agghtab), st.mpool.NumPartitions())
+
+	// Byte bound: the real allocation must not exceed the admitted estimate
+	// (modulo a small fixed slack for allocator rounding and test noise).
+	var keys []any
+	measured := measureTotalAlloc(func() {
+		var buildErr error
+		keys, buildErr = partitionOrderedKeys(proc, st.agghtab, st.mpool)
+		require.NoError(t, buildErr)
+	})
+	require.Len(t, keys, ndoc)
+	const slack = 256 << 10
+	require.LessOrEqualf(t, measured, est+uint64(slack),
+		"traversal allocated %d bytes but the budget only admitted %d", measured, est)
+
+	// Structural bound: constant number of allocations — no append growth chains.
+	allocs := testing.AllocsPerRun(3, func() {
+		k, buildErr := partitionOrderedKeys(proc, st.agghtab, st.mpool)
+		require.NoError(t, buildErr)
+		_ = k
+	})
+	require.LessOrEqualf(t, allocs, 8.0,
+		"traversal must preallocate exactly, got %.0f allocations", allocs)
+}
+
+// TestEvaluateSparseScoreBounded is the #25692 review regression for sparse
+// results: a query whose candidates mostly produce NO score (e.g. boolean
+// +required words filtering the aggregated union) previously accumulated every
+// processed candidate in an ungated O(N) keys slice within a single evaluate
+// call. Candidates must be freed and deleted as they are consumed, so the
+// all-filtered call allocates only the (budget-admitted) traversal plus O(1).
+func TestEvaluateSparseScoreBounded(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	s, err := fulltext.NewSearchAccum("src", "index", "pattern", 0, "", fulltext.ALGO_TFIDF)
+	require.NoError(t, err)
+	s.Nrow = 1000000
+
+	const ndoc = 200000
+	dsize := uint64(s.Nkeywords)
+	st := &fulltextState{
+		agghtab:   make(map[any]uint64, ndoc),
+		aggcnt:    make([]int64, s.Nkeywords),
+		docLenMap: make(map[any]int32, ndoc),
+		docIDMap:  make(map[any]any),
+		mpool:     fulltext.NewFixedBytePool(proc, dsize, 0, 0),
+	}
+	defer st.mpool.Close()
+	st.aggcnt[0] = ndoc
+	for i := 0; i < ndoc; i++ {
+		addr, docvec, allocErr := st.mpool.NewItem()
+		require.NoError(t, allocErr)
+		docvec[0] = 0 // keyword count 0 -> Eval yields no score for ANY candidate
+		st.agghtab[i] = addr
+		st.docLenMap[i] = 1
+	}
+
+	est := scoreTraversalEstimate(len(st.agghtab), st.mpool.NumPartitions())
+
+	var scoremap map[any]float32
+	measured := measureTotalAlloc(func() {
+		var evalErr error
+		scoremap, evalErr = evaluate(st, proc, s)
+		require.NoError(t, evalErr)
+	})
+
+	// All candidates filtered: no results, and every candidate was consumed and
+	// released immediately rather than accumulated.
+	require.Empty(t, scoremap)
+	require.Empty(t, st.agghtab, "candidates must be deleted as they are consumed")
+	require.Empty(t, st.docLenMap)
+	require.Empty(t, st.docIDMap)
+
+	// Memory bound: the whole all-filtered pass allocates the traversal plus
+	// small constants — NOT a second O(N) interface buffer (the old keys slice
+	// added ~20 MB at this size).
+	const slack = 2 << 20
+	require.LessOrEqualf(t, measured, est+uint64(slack),
+		"sparse evaluate allocated %d bytes; traversal estimate is %d", measured, est)
+
+	// Traversal fully drained: the next call returns an empty batch.
+	scoremap, err = evaluate(st, proc, s)
+	require.NoError(t, err)
+	require.Empty(t, scoremap)
 }
