@@ -71,6 +71,29 @@ type startTask struct {
 
 type restartAdmissionContextKey struct{}
 
+type taskExecutorTaskSchedulerContextKey struct{}
+
+// TaskExecutorTaskScheduler admits a child task into the same task-runner
+// stopper that owns its TaskExecutor. The stopper supplies cancellation and,
+// importantly, joins the child before TaskRunner.Stop returns.
+type TaskExecutorTaskScheduler func(string, func(context.Context)) error
+
+func withTaskExecutorTaskScheduler(
+	ctx context.Context,
+	scheduler TaskExecutorTaskScheduler,
+) context.Context {
+	return context.WithValue(ctx, taskExecutorTaskSchedulerContextKey{}, scheduler)
+}
+
+// TaskExecutorTaskSchedulerFromContext returns the task-runner owner captured
+// by a TaskExecutor invocation. Executors that create replacement generations
+// after their initial invocation returns can retain this function without
+// retaining attempt-specific context values.
+func TaskExecutorTaskSchedulerFromContext(ctx context.Context) TaskExecutorTaskScheduler {
+	scheduler, _ := ctx.Value(taskExecutorTaskSchedulerContextKey{}).(TaskExecutorTaskScheduler)
+	return scheduler
+}
+
 // WithRestartAdmission marks a fresh executor invocation that atomically
 // claimed a RestartRequested daemon task. It carries the claim across the
 // taskservice/frontend boundary without changing persisted task details.
@@ -134,6 +157,12 @@ func (t *startTask) Handle(_ context.Context) error {
 		executorCtx := ctx
 		if t.restartClaim {
 			executorCtx = WithRestartAdmission(ctx)
+		}
+		if t.task.task.Metadata.Executor == task.TaskCode_InitCdc {
+			executorCtx = withTaskExecutorTaskScheduler(
+				executorCtx,
+				t.runner.stopper.RunNamedTask,
+			)
 		}
 		if err = t.task.executor(executorCtx, &t.task.task); err != nil {
 			if t.restartClaim {

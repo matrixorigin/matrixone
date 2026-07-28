@@ -299,6 +299,69 @@ func TestStartTaskHandleBranches(t *testing.T) {
 	}, time.Second, time.Millisecond*10)
 }
 
+func TestTaskRunnerStopJoinsExecutorReplacementTask(t *testing.T) {
+	r, store := newDaemonHandleTestRunner(t)
+	dt := newDaemonTaskForTest(1, task.TaskStatus_Created, "")
+	dt.Metadata.ID = "executor-replacement-owner"
+	dt.Metadata.Executor = task.TaskCode_InitCdc
+	mustAddTestDaemonTask(t, store, 1, dt)
+
+	executorCtx := make(chan context.Context, 1)
+	start := newStartTask(r, &daemonTask{
+		task: dt,
+		executor: func(ctx context.Context, _ task.Task) error {
+			executorCtx <- ctx
+			return nil
+		},
+	})
+	require.NoError(t, start.Handle(context.Background()))
+
+	var ctx context.Context
+	select {
+	case ctx = <-executorCtx:
+	case <-time.After(time.Second):
+		t.Fatal("task executor did not receive its runner-owned context")
+	}
+	scheduler := TaskExecutorTaskSchedulerFromContext(ctx)
+	require.NotNil(t, scheduler)
+
+	started := make(chan struct{})
+	cancelObserved := make(chan struct{})
+	releaseCleanup := make(chan struct{})
+	require.NoError(t, scheduler("replacement-cleanup", func(ctx context.Context) {
+		close(started)
+		<-ctx.Done()
+		close(cancelObserved)
+		<-releaseCleanup
+	}))
+	<-started
+
+	// Stop normally runs only after Start. Marking the runner started here keeps
+	// this focused test independent of its polling workers while exercising the
+	// exact production Stop path and stopper ownership.
+	r.started.Store(true)
+	stopDone := make(chan error, 1)
+	go func() { stopDone <- r.Stop() }()
+	select {
+	case <-cancelObserved:
+	case <-time.After(time.Second):
+		t.Fatal("task runner stop did not cancel the replacement")
+	}
+	select {
+	case err := <-stopDone:
+		t.Fatalf("task runner stop returned before replacement cleanup: %v", err)
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	close(releaseCleanup)
+	select {
+	case err := <-stopDone:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("task runner stop did not join replacement cleanup")
+	}
+}
+
 func TestResumeTaskHandleBranchesDirect(t *testing.T) {
 	r, store := newDaemonHandleTestRunner(t)
 	hook := &serviceWithDaemonHook{TaskService: r.service}

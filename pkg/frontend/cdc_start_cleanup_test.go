@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -28,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
+	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -377,14 +379,14 @@ func TestRestartReadinessRequiresCatalogTransition(t *testing.T) {
 		}
 		const generation = uint64(1)
 		ready := exec.beginRestartWaiter(generation, cdc.CDCState_Restarting)
+		_, attempt := newCDCStartAttempt(context.Background(), generation)
 
-		restartReady, required, err := exec.completeStartupCatalogTransition(
+		required, err := exec.publishStartupCatalogTransition(
 			context.Background(),
 			generation,
 			false,
 		)
 		require.True(t, required)
-		require.False(t, restartReady)
 		require.ErrorIs(t, err, catalogErr)
 		select {
 		case <-ready:
@@ -393,14 +395,20 @@ func TestRestartReadinessRequiresCatalogTransition(t *testing.T) {
 		}
 
 		catalog.execErr = nil
-		restartReady, required, err = exec.completeStartupCatalogTransition(
+		required, err = exec.publishStartupCatalogTransition(
 			context.Background(),
 			generation,
 			false,
 		)
 		require.NoError(t, err)
 		require.True(t, required)
-		require.True(t, restartReady)
+		select {
+		case <-ready:
+			t.Fatal("catalog publication bypassed the attempt completion token")
+		default:
+		}
+		require.True(t, attempt.completeRestart())
+		require.True(t, exec.finishRestartWaiter(generation, nil))
 		require.NoError(t, <-ready)
 	})
 
@@ -414,13 +422,12 @@ func TestRestartReadinessRequiresCatalogTransition(t *testing.T) {
 			ie: &captureExecContextIE{execErr: catalogErr},
 		}
 
-		restartReady, required, err := exec.completeStartupCatalogTransition(
+		required, err := exec.publishStartupCatalogTransition(
 			context.Background(),
 			0,
 			true,
 		)
 		require.True(t, required)
-		require.False(t, restartReady)
 		require.ErrorIs(t, err, catalogErr)
 	})
 }
@@ -444,14 +451,13 @@ func TestFreshRestartRetryReopensFailedCatalogAdmission(t *testing.T) {
 
 	catalog.currentState = cdc.CDCState_Restarting
 	catalog.targetState = cdc.CDCState_Running
-	restartReady, required, err := exec.completeStartupCatalogTransition(
+	required, err := exec.publishStartupCatalogTransition(
 		context.Background(),
 		0,
 		true,
 	)
 	require.NoError(t, err)
 	require.True(t, required)
-	require.False(t, restartReady, "fresh takeover has no local restart waiter")
 	require.Equal(t, cdc.CDCState_Running, catalog.getState())
 }
 
@@ -578,6 +584,200 @@ func (e *serializedBlockingCDCExecutor) Query(
 }
 
 func (e *serializedBlockingCDCExecutor) ApplySessionOverride(ie.SessionOverrideOptions) {
+}
+
+type stringRowExecResult struct {
+	values []string
+}
+
+func (r *stringRowExecResult) Error() error { return nil }
+func (r *stringRowExecResult) ColumnCount() uint64 {
+	return uint64(len(r.values))
+}
+func (r *stringRowExecResult) Column(context.Context, uint64) (string, uint8, bool, error) {
+	return "", 0, false, nil
+}
+func (r *stringRowExecResult) RowCount() uint64 { return 1 }
+func (r *stringRowExecResult) Row(context.Context, uint64) ([]interface{}, error) {
+	row := make([]interface{}, len(r.values))
+	for i := range r.values {
+		row[i] = r.values[i]
+	}
+	return row, nil
+}
+func (r *stringRowExecResult) Value(_ context.Context, _ uint64, col uint64) (interface{}, error) {
+	return r.values[col], nil
+}
+func (r *stringRowExecResult) GetUint64(context.Context, uint64, uint64) (uint64, error) {
+	panic("unexpected GetUint64")
+}
+func (r *stringRowExecResult) GetFloat64(context.Context, uint64, uint64) (float64, error) {
+	panic("unexpected GetFloat64")
+}
+func (r *stringRowExecResult) GetString(_ context.Context, _ uint64, col uint64) (string, error) {
+	return r.values[col], nil
+}
+
+type blockingRestartPublicationExecutor struct {
+	writeMu     sync.Mutex
+	stateMu     sync.Mutex
+	state       string
+	started     chan struct{}
+	release     chan struct{}
+	startedOnce sync.Once
+	releaseOnce sync.Once
+}
+
+func newBlockingRestartPublicationExecutor() *blockingRestartPublicationExecutor {
+	return &blockingRestartPublicationExecutor{
+		state:   cdc.CDCState_Restarting,
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+}
+
+func (e *blockingRestartPublicationExecutor) Exec(
+	ctx context.Context,
+	sql string,
+	options ie.SessionOverrideOptions,
+) error {
+	_, err := e.ExecWithStatus(ctx, sql, options)
+	return err
+}
+
+func (e *blockingRestartPublicationExecutor) ExecWithStatus(
+	_ context.Context,
+	sql string,
+	_ ie.SessionOverrideOptions,
+) (ie.InternalExecStatus, error) {
+	e.writeMu.Lock()
+	defer e.writeMu.Unlock()
+	if strings.Contains(sql, "SET state = 'running'") &&
+		strings.Contains(sql, "AND state = 'restarting'") {
+		e.startedOnce.Do(func() { close(e.started) })
+		<-e.release
+		return e.transition(cdc.CDCState_Restarting, cdc.CDCState_Running), nil
+	}
+	if strings.Contains(sql, "SET state = 'failed'") &&
+		strings.Contains(sql, "AND state = 'restarting'") {
+		return e.transition(cdc.CDCState_Restarting, cdc.CDCState_Failed), nil
+	}
+	if strings.Contains(sql, "SET state = 'failed'") &&
+		strings.Contains(sql, "AND state = 'running'") {
+		return e.transition(cdc.CDCState_Running, cdc.CDCState_Failed), nil
+	}
+	return ie.InternalExecStatus{AffectedRows: 1}, nil
+}
+
+func (e *blockingRestartPublicationExecutor) transition(
+	current string,
+	target string,
+) ie.InternalExecStatus {
+	e.stateMu.Lock()
+	defer e.stateMu.Unlock()
+	if e.state != current {
+		return ie.InternalExecStatus{AffectedRows: 0}
+	}
+	e.state = target
+	return ie.InternalExecStatus{AffectedRows: 1}
+}
+
+func (e *blockingRestartPublicationExecutor) Query(
+	_ context.Context,
+	sql string,
+	_ ie.SessionOverrideOptions,
+) ie.InternalExecResult {
+	if strings.Contains(sql, "SELECT sink_uri") {
+		tables, err := cdc.JsonEncode(cdc.PatternTuples{Pts: []*cdc.PatternTuple{}})
+		if err != nil {
+			panic(err)
+		}
+		return &stringRowExecResult{values: []string{
+			"",
+			cdc.CDCSinkType_Console,
+			"",
+			tables,
+			"",
+			"",
+			"",
+			"true",
+			`{}`,
+		}}
+	}
+	e.stateMu.Lock()
+	defer e.stateMu.Unlock()
+	return &cdcStateQueryResult{state: e.state, rows: 1}
+}
+
+func (e *blockingRestartPublicationExecutor) ApplySessionOverride(ie.SessionOverrideOptions) {
+}
+
+func (e *blockingRestartPublicationExecutor) unblock() {
+	e.releaseOnce.Do(func() { close(e.release) })
+}
+
+func (e *blockingRestartPublicationExecutor) getState() string {
+	e.stateMu.Lock()
+	defer e.stateMu.Unlock()
+	return e.state
+}
+
+func TestRestartTimeoutWinsInFlightCatalogPublication(t *testing.T) {
+	catalog := newBlockingRestartPublicationExecutor()
+	t.Cleanup(catalog.unblock)
+	detector := createMockTableDetector()
+	stubs := gostub.Stub(&cdc.GetTableDetector, func(string) *cdc.TableDetector {
+		return detector
+	})
+	t.Cleanup(stubs.Reset)
+
+	exec := &CDCTaskExecutor{
+		activeRoutine: cdc.NewCdcActiveRoutine(),
+		spec: &task.CreateCdcDetails{
+			TaskId:   "restart-publication-timeout",
+			TaskName: "restart-publication-timeout",
+			Accounts: []*task.Account{{Id: 1}},
+		},
+		ie:                    catalog,
+		cnUUID:                "restart-publication-timeout-cn",
+		stateMachine:          NewExecutorStateMachine(),
+		holdCh:                make(chan int, 1),
+		restartStartupTimeout: 25 * time.Millisecond,
+		restartCatalogExecutorFactory: func() ie.InternalExecutor {
+			return catalog
+		},
+	}
+	exec.startFunc = exec.Start
+	require.NoError(t, exec.stateMachine.Transition(TransitionStart))
+	require.NoError(t, exec.stateMachine.Transition(TransitionStartSuccess))
+
+	restartDone := make(chan error, 1)
+	go func() { restartDone <- exec.Restart() }()
+	select {
+	case <-catalog.started:
+	case <-time.After(time.Second):
+		t.Fatal("replacement did not enter restarting-to-running publication")
+	}
+	require.True(t, detector.IsTaskRegistered(exec.spec.TaskId))
+
+	select {
+	case err := <-restartDone:
+		require.ErrorContains(t, err, "CDC restart startup timed out")
+	case <-time.After(150 * time.Millisecond):
+		t.Fatal("Restart waited for the in-flight catalog publication")
+	}
+
+	catalog.unblock()
+	require.Eventually(t, func() bool {
+		return exec.activeStart() == nil
+	}, time.Second, time.Millisecond)
+	require.Equal(t, cdc.CDCState_Failed, catalog.getState())
+	require.False(t, detector.IsTaskRegistered(exec.spec.TaskId))
+	require.Equal(t, StateFailed, exec.stateMachine.State())
+
+	persistErr, timedOut := exec.waitForRestartCatalogPersistence(time.Second)
+	require.False(t, timedOut)
+	require.NoError(t, persistErr)
 }
 
 func TestRestartTimeoutPersistenceDoesNotWaitForActiveCatalogExecutor(t *testing.T) {
