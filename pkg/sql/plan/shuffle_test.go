@@ -1167,6 +1167,7 @@ func TestMarkShuffleRejectsNullExtensionAcrossGroupingMaterializers(t *testing.T
 		materializer             plan.Node_NodeType
 		wantShuffle              bool
 		skipMaterializerContract bool
+		simulateStaleKeyType     bool
 	}{
 		{
 			name:         "aggregate group key",
@@ -1224,6 +1225,19 @@ func TestMarkShuffleRejectsNullExtensionAcrossGroupingMaterializers(t *testing.T
 				) d`,
 		},
 		{
+			name:         "scalar aggregate output over empty input",
+			materializer: plan.Node_AGG,
+			sql: `
+				select d.regionkey in (
+					select l.l_partkey from tpch.lineitem l
+				)
+				from (
+					select max(n.n_regionkey) as regionkey
+					from tpch.nation n
+					where n.n_name = '__missing__'
+				) d`,
+		},
+		{
 			name:         "preserved-side aggregate group key remains eligible",
 			materializer: plan.Node_AGG,
 			wantShuffle:  true,
@@ -1256,6 +1270,19 @@ func TestMarkShuffleRejectsNullExtensionAcrossGroupingMaterializers(t *testing.T
 				) d`,
 		},
 		{
+			name:         "non-null sample output remains eligible",
+			materializer: plan.Node_SAMPLE,
+			wantShuffle:  true,
+			sql: `
+				select d.regionkey in (
+					select l.l_partkey from tpch.lineitem l
+				)
+				from (
+					select sample(n.n_regionkey, 1 rows) as regionkey
+					from tpch.nation n
+				) d`,
+		},
+		{
 			name:         "time window partition key",
 			materializer: plan.Node_TIME_WINDOW,
 			sql: `
@@ -1272,6 +1299,43 @@ func TestMarkShuffleRejectsNullExtensionAcrossGroupingMaterializers(t *testing.T
 					limit 10
 				) d`,
 		},
+		{
+			name:         "value-nullable time window aggregate",
+			materializer: plan.Node_TIME_WINDOW,
+			sql: `
+				select d.regionkey in (
+					select l2.l_partkey from tpch.lineitem l2
+				)
+				from (
+					select max(cast(json_extract(
+						concat('{"a":', l.l_partkey, '}'),
+						'$.missing'
+					) as int)) as regionkey
+					from tpch.lineitem l
+					interval(l.l_shipdate, 5, day)
+					limit 10
+				) d`,
+		},
+		{
+			name:                 "lag window output",
+			materializer:         plan.Node_WINDOW,
+			simulateStaleKeyType: true,
+			sql: `
+				select d.regionkey in (
+					select l.l_partkey from tpch.lineitem l
+				)
+				from (
+					select lag(n.n_regionkey) over (
+							partition by n.n_regionkey
+							order by n.n_nationkey
+						) as regionkey,
+						row_number() over (
+							partition by n.n_name
+							order by n.n_nationkey
+						) as unused_rank
+					from tpch.nation n
+				) d`,
+		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			preRemapBuilder, preRemapMark := buildMarkPlanBeforeOptimization(t, tt.sql)
@@ -1284,6 +1348,26 @@ func TestMarkShuffleRejectsNullExtensionAcrossGroupingMaterializers(t *testing.T
 			preRemapMark.OnList[0].Ndv = 100_000
 			preRemapMark.Stats.HashmapStats.Shuffle = true
 
+			if tt.simulateStaleKeyType {
+				foundNullableWindow := false
+				for _, node := range preRemapBuilder.qry.Nodes {
+					for _, expr := range node.WinSpecList {
+						windowFunc := expr.GetW().GetWindowFunc().GetF()
+						if windowFunc != nil && windowFunc.Func.ObjName == "lag" {
+							require.False(t, expr.Typ.NotNullable,
+								"LAG without a default must expose its partition-boundary NULL")
+							foundNullableWindow = true
+						}
+					}
+				}
+				require.True(t, foundNullableWindow)
+
+				condition := preRemapMark.OnList[0].GetF()
+				require.NotNil(t, condition)
+				for _, arg := range condition.Args {
+					arg.Typ.NotNullable = true
+				}
+			}
 			determineShuffleForJoinWithColRefMode(preRemapMark, preRemapBuilder, false)
 			require.Equal(t, tt.wantShuffle, preRemapMark.Stats.HashmapStats.Shuffle,
 				"pre-remap eligibility must follow the group expression to its materialized child")
@@ -1323,10 +1407,16 @@ func TestMarkShuffleRejectsNullExtensionAcrossGroupingMaterializers(t *testing.T
 			condition := mark.OnList[0].GetF()
 			require.NotNil(t, condition)
 			require.Len(t, condition.Args, 2)
+			if tt.simulateStaleKeyType {
+				for _, arg := range condition.Args {
+					arg.Typ.NotNullable = true
+				}
+			}
 			effectivelyNotNullable :=
 				IsJoinExprEffectivelyNotNullable(condition.Args[0], left, right) &&
 					IsJoinExprEffectivelyNotNullable(condition.Args[1], left, right)
-			require.Equal(t, tt.wantShuffle, effectivelyNotNullable)
+			require.Equal(t, tt.wantShuffle, effectivelyNotNullable,
+				"the compiler guard must observe the materialized output contract")
 
 			left.Stats.Outcnt = 10_000_000
 			right.Stats.Outcnt = 3_000_000

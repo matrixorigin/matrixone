@@ -358,6 +358,36 @@ func exprProvenNotNullableWithColResolver(
 	case *plan.Expr_Col:
 		return resolveCol(expr)
 
+	case *plan.Expr_Lit:
+		return impl.Lit != nil && !impl.Lit.Isnull
+
+	case *plan.Expr_W:
+		if impl.W == nil || impl.W.WindowFunc == nil {
+			return false
+		}
+		// A window is a materialization boundary. Prove the value produced by
+		// the window function itself; the wrapper's bind-time type can be stale
+		// or optimistic for partition boundaries and empty frames.
+		if fn := impl.W.WindowFunc.GetF(); fn != nil && fn.Func != nil {
+			if function.GetFunctionIsWinOrderFunById(fn.Func.Obj) {
+				return true
+			}
+			if function.GetFunctionIsWinValueFunByName(fn.Func.ObjName) {
+				effectiveArgs := make([]*plan.Expr, len(fn.Args))
+				for i, arg := range fn.Args {
+					if arg == nil {
+						return false
+					}
+					argCopy := *arg
+					argCopy.Typ.NotNullable =
+						exprProvenNotNullableWithColResolver(arg, resolveCol)
+					effectiveArgs[i] = &argCopy
+				}
+				return function.DeduceNotNullable(fn.Func.Obj, effectiveArgs)
+			}
+		}
+		return exprProvenNotNullableWithColResolver(impl.W.WindowFunc, resolveCol)
+
 	case *plan.Expr_F:
 		if impl.F.Func == nil {
 			return false
@@ -387,6 +417,9 @@ func exprProvenNotNullableWithColResolver(
 func exprEffectivelyNotNullable(expr *plan.Expr, inputs ...[]*plan.Expr) bool {
 	return exprNotNullableWithColResolver(expr, func(colExpr *plan.Expr) bool {
 		col := colExpr.GetCol()
+		if col == nil {
+			return false
+		}
 		relPos, colPos := int(col.RelPos), int(col.ColPos)
 		if relPos < 0 || relPos >= len(inputs) ||
 			colPos < 0 || colPos >= len(inputs[relPos]) ||
@@ -394,6 +427,23 @@ func exprEffectivelyNotNullable(expr *plan.Expr, inputs ...[]*plan.Expr) bool {
 			return false
 		}
 		return inputs[relPos][colPos].Typ.NotNullable
+	})
+}
+
+func exprProvenNotNullableFromInputs(expr *plan.Expr, inputs ...[]*plan.Expr) bool {
+	return exprProvenNotNullableWithColResolver(expr, func(colExpr *plan.Expr) bool {
+		if colExpr == nil || !colExpr.Typ.NotNullable {
+			return false
+		}
+		col := colExpr.GetCol()
+		if col == nil {
+			return false
+		}
+		relPos, colPos := int(col.RelPos), int(col.ColPos)
+		return relPos >= 0 && relPos < len(inputs) &&
+			colPos >= 0 && colPos < len(inputs[relPos]) &&
+			inputs[relPos][colPos] != nil &&
+			inputs[relPos][colPos].Typ.NotNullable
 	})
 }
 
@@ -416,18 +466,7 @@ func IsJoinExprEffectivelyNotNullable(expr *plan.Expr, left, right *plan.Node) b
 	if left == nil || right == nil {
 		return false
 	}
-	return exprProvenNotNullableWithColResolver(expr, func(colExpr *plan.Expr) bool {
-		if !colExpr.Typ.NotNullable {
-			return false
-		}
-		col := colExpr.GetCol()
-		relPos, colPos := int(col.RelPos), int(col.ColPos)
-		inputs := [][]*plan.Expr{left.ProjectList, right.ProjectList}
-		return relPos >= 0 && relPos < len(inputs) &&
-			colPos >= 0 && colPos < len(inputs[relPos]) &&
-			inputs[relPos][colPos] != nil &&
-			inputs[relPos][colPos].Typ.NotNullable
-	})
+	return exprProvenNotNullableFromInputs(expr, left.ProjectList, right.ProjectList)
 }
 
 // nodeNullExtendsChild reports whether rows emitted by node can contain NULLs
@@ -1528,8 +1567,11 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 
 			remapping.addColRef(globalRef)
 
+			outputType := expr.Typ
+			outputType.NotNullable =
+				exprProvenNotNullableFromInputs(expr, childProjList)
 			node.ProjectList = append(node.ProjectList, &Expr{
-				Typ: expr.Typ,
+				Typ: outputType,
 				Expr: &plan.Expr_Col{
 					Col: &ColRef{
 						RelPos: -2,
@@ -1718,8 +1760,11 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 
 			remapping.addColRef(globalRef)
 
+			outputType := expr.Typ
+			outputType.NotNullable =
+				exprProvenNotNullableFromInputs(expr, childProjList)
 			node.ProjectList = append(node.ProjectList, &Expr{
-				Typ: expr.Typ,
+				Typ: outputType,
 				Expr: &plan.Expr_Col{
 					Col: &ColRef{
 						RelPos: -2,
@@ -1887,6 +1932,12 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 				typ := expr.Typ
 				if isBoundary, _ := isTimeWindowBoundary(expr); isBoundary {
 					typ = node.Timestamp.Typ
+					// NULL timestamps do not form a window, so every emitted
+					// boundary is a concrete timestamp.
+					typ.NotNullable = true
+				} else {
+					typ.NotNullable =
+						exprProvenNotNullableFromInputs(expr, childProjList)
 				}
 				node.ProjectList = append(node.ProjectList, &plan.Expr{
 					Typ: typ,
@@ -1916,8 +1967,13 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			}
 			remapping.addColRef(globalRef)
 
+			outputType := node.TimeWindowPartitionBy[p].Typ
+			outputType.NotNullable = exprProvenNotNullableFromInputs(
+				node.TimeWindowPartitionBy[p],
+				childProjList,
+			)
 			node.ProjectList = append(node.ProjectList, &plan.Expr{
-				Typ: node.TimeWindowPartitionBy[p].Typ,
+				Typ: outputType,
 				Expr: &plan.Expr_Col{
 					Col: &ColRef{
 						RelPos: -1,
@@ -2074,8 +2130,11 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 
 			remapping.addColRef(globalRef)
 
+			outputType := expr.Typ
+			outputType.NotNullable =
+				exprProvenNotNullableFromInputs(expr, childProjList)
 			node.ProjectList = append(node.ProjectList, &plan.Expr{
-				Typ: expr.Typ,
+				Typ: outputType,
 				Expr: &plan.Expr_Col{
 					Col: &ColRef{
 						RelPos: -1,

@@ -765,9 +765,18 @@ func (builder *QueryBuilder) colRefEffectivelyNotNullableBeforeRemap(
 		)
 	}
 
-	for _, bindingTag := range node.BindingTags {
-		if bindingTag == col.RelPos {
-			return true
+	// WINDOW and its PARTITION helper reuse the window binding tag while
+	// stacking operators, and FILL passes the time-window binding through.
+	// None of those tags proves the referenced value non-NULL: trace the
+	// materialized slot into its producer instead of accepting this generic
+	// bind-time fast path.
+	if node.NodeType != plan.Node_WINDOW &&
+		node.NodeType != plan.Node_PARTITION &&
+		node.NodeType != plan.Node_FILL {
+		for _, bindingTag := range node.BindingTags {
+			if bindingTag == col.RelPos {
+				return true
+			}
 		}
 	}
 
@@ -833,27 +842,55 @@ func materializedOutputExprBeforeRemap(
 		return node.ProjectList[col.ColPos], childID, true
 
 	case plan.Node_AGG, plan.Node_SAMPLE:
-		if len(node.BindingTags) == 0 || node.BindingTags[0] != col.RelPos {
+		if len(node.BindingTags) < 2 {
 			return nil, -1, false
 		}
-		if col.ColPos < 0 || int(col.ColPos) >= len(node.GroupBy) {
-			return nil, -1, true
+		if node.BindingTags[0] == col.RelPos {
+			if col.ColPos < 0 || int(col.ColPos) >= len(node.GroupBy) {
+				return nil, -1, true
+			}
+			return node.GroupBy[col.ColPos], childID, true
 		}
-		return node.GroupBy[col.ColPos], childID, true
+		if node.BindingTags[1] == col.RelPos {
+			if col.ColPos < 0 || int(col.ColPos) >= len(node.AggList) {
+				return nil, -1, true
+			}
+			return node.AggList[col.ColPos], childID, true
+		}
+		return nil, -1, false
 
 	case plan.Node_TIME_WINDOW:
-		if len(node.BindingTags) < 2 || node.BindingTags[1] != col.RelPos {
+		if len(node.BindingTags) < 2 {
 			return nil, -1, false
 		}
-		for _, partitionExpr := range node.TimeWindowPartitionBy {
-			partitionCol := partitionExpr.GetCol()
-			if partitionCol != nil &&
-				partitionCol.RelPos == col.RelPos &&
-				partitionCol.ColPos == col.ColPos {
-				return partitionExpr, childID, true
+		if node.BindingTags[0] == col.RelPos {
+			if col.ColPos < 0 || int(col.ColPos) >= len(node.AggList) {
+				return nil, -1, true
 			}
+			return node.AggList[col.ColPos], childID, true
 		}
-		return nil, -1, true
+		if node.BindingTags[1] == col.RelPos {
+			for _, partitionExpr := range node.TimeWindowPartitionBy {
+				partitionCol := partitionExpr.GetCol()
+				if partitionCol != nil &&
+					partitionCol.RelPos == col.RelPos &&
+					partitionCol.ColPos == col.ColPos {
+					return partitionExpr, childID, true
+				}
+			}
+			return nil, -1, true
+		}
+		return nil, -1, false
+
+	case plan.Node_WINDOW:
+		if len(node.BindingTags) == 0 || node.BindingTags[0] != col.RelPos ||
+			col.ColPos != node.GetWindowIdx() {
+			return nil, -1, false
+		}
+		if len(node.WinSpecList) != 1 {
+			return nil, -1, true
+		}
+		return node.WinSpecList[0], childID, true
 	}
 
 	return nil, -1, false

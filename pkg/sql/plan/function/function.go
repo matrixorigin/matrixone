@@ -290,6 +290,19 @@ func GetAggFunctionNameByID(overloadID int64) string {
 // we can deduce that c1+1, cast c3 and c1=c3 is notNullable, abs(c2) is nullable.
 func DeduceNotNullable(overloadID int64, args []*plan.Expr) bool {
 	fid, _ := DecodeOverloadID(overloadID)
+	// Value window functions can synthesize NULLs even when every input is
+	// NOT NULL. LAG/LEAD do so outside the partition unless an explicit,
+	// non-NULL default is present. FIRST_VALUE/LAST_VALUE can observe an empty
+	// frame, and NTH_VALUE can also miss the requested row. The frame is not
+	// available here, so keep those contracts conservative.
+	switch fid {
+	case LAG, LEAD:
+		if len(args) != 3 {
+			return false
+		}
+	case FIRST_VALUE, LAST_VALUE, NTH_VALUE:
+		return false
+	}
 	if allSupportedFunctions[fid].testFlag(plan.Function_PRODUCE_NO_NULL) {
 		return true
 	}
