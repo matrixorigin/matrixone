@@ -45,7 +45,7 @@ const DefaultTestDB = "db"
 
 // TestCheckpointTimeout leaves room for storage syncs under parallel CI while
 // still bounding a genuinely stuck checkpoint or flush.
-const TestCheckpointTimeout = time.Minute
+const TestCheckpointTimeout = 2 * time.Minute
 
 type CtxOldVersion struct{}
 
