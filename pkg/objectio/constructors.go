@@ -17,17 +17,22 @@ package objectio
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
-
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"go.uber.org/zap"
 )
+
+var eventVectorDestinationNotEmpty = logutil.Event{
+	Name:    "objectio.vector.destination-not-empty",
+	Message: "ObjectIO destination vector must be readonly or empty",
+}
 
 type CacheConstructor = func(ctx context.Context, r io.Reader, buf []byte, allocator fileservice.CacheDataAllocator) (fscache.Data, error)
 type CacheConstructorFactory = func(size int64, algo uint8) CacheConstructor
@@ -77,7 +82,13 @@ func Decode(buf []byte) (any, error) {
 func MustVectorTo(toVec *vector.Vector, buf []byte) (err error) {
 	// check if vector cannot be freed
 	if !toVec.NeedDup() && toVec.Allocated() > 0 {
-		logutil.Warn("input vector should be readonly or empty")
+		eventVectorDestinationNotEmpty.WarnLazy(func() []zap.Field {
+			return []zap.Field{
+				zap.Bool("need-dup", toVec.NeedDup()),
+				zap.Int("allocated-bytes", toVec.Allocated()),
+				zap.Int("input-bytes", len(buf)),
+			}
+		})
 	}
 	header := DecodeIOEntryHeader(buf)
 	if header.Type != IOET_ColData {

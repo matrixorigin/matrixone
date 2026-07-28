@@ -2285,6 +2285,7 @@ func assertMaterializedRemap(t *testing.T, ctx context.Context, sql string, want
 
 func Test_HandleDeallocate(t *testing.T) {
 	ctx := defines.AttachAccountId(context.TODO(), catalog.System_Account)
+	setSessionAlloc("", NewLeakCheckAllocator())
 	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "deallocate Prepare stmt1", 1)
 	if err != nil {
 		t.Errorf("parser sql error %v", err)
@@ -2295,7 +2296,21 @@ func Test_HandleDeallocate(t *testing.T) {
 
 	runTestHandle("handleDeallocate", t, func(ses *Session) error {
 		stmt := stmt.(*tree.Deallocate)
-		return handleDeallocate(ses, ec, stmt)
+		require.NoError(t, ses.SetPrepareStmt(ctx, "stmt1", &PrepareStmt{Name: "stmt1"}))
+		require.NoError(t, handleDeallocate(ses, ec, stmt))
+
+		err := handleDeallocate(ses, ec, stmt)
+		require.Error(t, err)
+		moErr, ok := err.(*moerr.Error)
+		require.True(t, ok)
+		require.Equal(t, moerr.ErrUnknownStmtHandler, moErr.ErrorCode())
+		require.Equal(t, moerr.ER_UNKNOWN_STMT_HANDLER, moErr.MySQLCode())
+		require.Equal(t, moerr.MySQLDefaultSqlState, moErr.SqlState())
+		require.Equal(t,
+			"Unknown prepared statement handler (stmt1) given to DEALLOCATE PREPARE",
+			moErr.Error(),
+		)
+		return nil
 	})
 }
 
@@ -2690,6 +2705,15 @@ func TestHandleAnalyzeStmtRestoresOuterExecCtxOnError(t *testing.T) {
 	require.Same(t, outerExecCtx, ses.GetTxnCompileCtx().execCtx)
 }
 
+func TestSetExecCtxClearsPreviousStatementViews(t *testing.T) {
+	tcc := &TxnCompilerContext{}
+	tcc.SetViews([]string{"db#stale_view"})
+
+	tcc.SetExecCtx(&ExecCtx{reqCtx: context.Background()})
+
+	require.Empty(t, tcc.GetViews())
+}
+
 func TestCreatePrepareStmtRestoresCurrentExecCtx(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -2726,6 +2750,10 @@ type preparedViewCompilerContext struct {
 
 func (c *preparedViewCompilerContext) GetSubscriptionMeta(string, *plan.Snapshot) (*plan0.SubscriptionMeta, error) {
 	return nil, nil
+}
+
+func (c *preparedViewCompilerContext) DatabaseExists(string, *plan.Snapshot) bool {
+	return false
 }
 
 func requirePreparedViewRootSQL(t *testing.T, prepared *PrepareStmt, wantRootSQL string) {
@@ -6341,4 +6369,145 @@ func Test_parseStmtSendLongData(t *testing.T) {
 			convey.So(err, convey.ShouldBeNil)
 		})
 	})
+}
+
+func TestRecordSessionDDL(t *testing.T) {
+	ses := &Session{}
+	record := func(stmt tree.Statement, queryPlan *plan0.Plan, err error) {
+		recordSessionDDL(ses, &ExecCtx{
+			stmt: stmt,
+			cw:   &TxnComputationWrapper{plan: queryPlan},
+		}, err)
+	}
+
+	record(&tree.Select{}, nil, nil)
+	require.Equal(t, uint64(0), ses.getDDLVersion())
+
+	record(&tree.AlterTable{}, &plan0.Plan{
+		Plan: &plan0.Plan_Ddl{Ddl: &plan0.DataDefinition{DdlType: plan0.DataDefinition_ALTER_TABLE}},
+	}, assert.AnError)
+	require.Equal(t, uint64(0), ses.getDDLVersion())
+
+	record(&tree.CreateSource{}, &plan0.Plan{
+		Plan: &plan0.Plan_Ddl{Ddl: &plan0.DataDefinition{DdlType: plan0.DataDefinition_CREATE_TABLE}},
+	}, nil)
+	require.Equal(t, uint64(1), ses.getDDLVersion())
+
+	record(&tree.AlterSequence{}, &plan0.Plan{
+		Plan: &plan0.Plan_Ddl{Ddl: &plan0.DataDefinition{DdlType: plan0.DataDefinition_ALTER_SEQUENCE}},
+	}, nil)
+	require.Equal(t, uint64(2), ses.getDDLVersion())
+
+	record(&tree.RestoreSnapShot{}, nil, nil)
+	require.Equal(t, uint64(3), ses.getDDLVersion())
+
+	record(&tree.RestorePitr{}, nil, nil)
+	require.Equal(t, uint64(4), ses.getDDLVersion())
+
+	record(&tree.CloneTable{}, nil, nil)
+	require.Equal(t, uint64(5), ses.getDDLVersion())
+
+	record(&tree.DataBranchDiff{}, nil, nil)
+	require.Equal(t, uint64(5), ses.getDDLVersion())
+}
+
+func TestRecordSessionDDLPropagatesToUpstreamSession(t *testing.T) {
+	ses := &Session{}
+	backSes := &backSession{}
+	backSes.upstream = ses
+
+	recordSessionDDL(backSes, &ExecCtx{
+		stmt: &tree.CreateSource{},
+		cw: &TxnComputationWrapper{plan: &plan0.Plan{
+			Plan: &plan0.Plan_Ddl{Ddl: &plan0.DataDefinition{
+				DdlType: plan0.DataDefinition_CREATE_TABLE,
+			}},
+		}},
+	}, nil)
+
+	require.Equal(t, uint64(1), ses.getDDLVersion())
+}
+
+func TestDiscardedBackgroundTxnDDLPropagatesToUpstreamSession(t *testing.T) {
+	ses := &Session{}
+	backSes := &backSession{}
+	backSes.upstream = ses
+
+	advanceDDLVersionAfterDiscardedTxnDDL(backSes, true)
+
+	require.Equal(t, uint64(1), ses.getDDLVersion())
+}
+
+func TestPlanChangesCatalog(t *testing.T) {
+	require.True(t, planChangesCatalog(&plan0.Plan{
+		Plan: &plan0.Plan_Ddl{Ddl: &plan0.DataDefinition{DdlType: plan0.DataDefinition_CREATE_TABLE}},
+	}))
+	require.False(t, planChangesCatalog(&plan0.Plan{
+		Plan: &plan0.Plan_Ddl{Ddl: &plan0.DataDefinition{DdlType: plan0.DataDefinition_SHOW_TABLES}},
+	}))
+	require.False(t, planChangesCatalog(nil))
+}
+
+func TestFreshPreparedCloneStatement(t *testing.T) {
+	clone := &tree.CloneTable{}
+	clone.SrcTable.ObjectName = "src"
+	clone.CreateTable.Table.ObjectName = "dst"
+
+	cloneSQL := preparedCloneSQL(clone, "prepare_db")
+	require.NotEmpty(t, cloneSQL)
+	prepareStmt := &PrepareStmt{
+		PrepareStmt: clone,
+		cloneSQL:    cloneSQL,
+	}
+
+	first, owned, err := freshPreparedCloneStatement(context.Background(), prepareStmt)
+	require.NoError(t, err)
+	require.True(t, owned)
+	defer first.Free()
+	firstClone := first.(*tree.CloneTable)
+	require.Equal(t, tree.Identifier("prepare_db"), firstClone.SrcTable.SchemaName)
+	require.Equal(t, tree.Identifier("src"), firstClone.SrcTable.ObjectName)
+	require.Equal(t, tree.Identifier("prepare_db"), firstClone.CreateTable.Table.SchemaName)
+	require.Equal(t, tree.Identifier("dst"), firstClone.CreateTable.Table.ObjectName)
+
+	firstClone.SrcTable.SchemaName = "execute_db"
+	firstClone.CreateTable.Table.SchemaName = "execute_db"
+	second, owned, err := freshPreparedCloneStatement(context.Background(), prepareStmt)
+	require.NoError(t, err)
+	require.True(t, owned)
+	defer second.Free()
+	require.NotSame(t, first, second)
+	secondClone := second.(*tree.CloneTable)
+	require.Equal(t, tree.Identifier("prepare_db"), secondClone.SrcTable.SchemaName)
+	require.Equal(t, tree.Identifier("prepare_db"), secondClone.CreateTable.Table.SchemaName)
+
+	require.Empty(t, preparedCloneSQL(&tree.Select{}, "prepare_db"))
+}
+
+func TestPreparedCloneSQLUsesRemappedDefaultDatabase(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	execCtx := newTestExecCtx(ctx, ctrl)
+	execCtx.ses = ses
+	execCtx.remapDb = map[string]string{"source_db": "remapped_db"}
+	ses.GetTxnCompileCtx().SetExecCtx(execCtx)
+	ses.GetTxnCompileCtx().SetDatabase("source_db")
+
+	clone := &tree.CloneTable{}
+	clone.SrcTable.ObjectName = "src"
+	clone.CreateTable.Table.ObjectName = "dst"
+	cloneSQL := preparedCloneSQL(clone, ses.GetTxnCompileCtx().DefaultDatabase())
+
+	stmts, err := mysql.Parse(ctx, cloneSQL, 1)
+	require.NoError(t, err)
+	require.Len(t, stmts, 1)
+	defer stmts[0].Free()
+
+	parsed := stmts[0].(*tree.CloneTable)
+	require.Equal(t, tree.Identifier("remapped_db"), parsed.SrcTable.SchemaName)
+	require.Equal(t, tree.Identifier("remapped_db"), parsed.CreateTable.Table.SchemaName)
+	require.True(t, parsed.SrcTable.ExplicitSchema)
+	require.True(t, parsed.CreateTable.Table.ExplicitSchema)
+	require.Equal(t, "source_db", ses.GetTxnCompileCtx().GetDatabase())
 }

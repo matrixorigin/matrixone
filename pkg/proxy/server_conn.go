@@ -26,7 +26,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/petermattis/goid"
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -40,6 +39,11 @@ import (
 
 // serverBaseConnID is the base connection ID for server.
 var serverBaseConnID uint32 = 1000
+
+var eventProxyBackendDialFailed = logutil.Event{
+	Name:    "proxy.backend.dial-failed",
+	Message: "failed to connect to backend CN",
+}
 
 // ServerConn is the connection to the backend server.
 type ServerConn interface {
@@ -518,7 +522,6 @@ func (s *serverConn) awaitBackendHandshake(
 			tracker,
 			true,
 			zap.Duration("timeout", timeout),
-			zap.Int64("goroutine_id", goid.Get()),
 			zap.Error(err),
 		)
 		return nil, err
@@ -814,8 +817,11 @@ func (s *CNServer) connectContext(
 	}
 	raw, err := (&net.Dialer{}).DialContext(ctx, network, address)
 	if err != nil {
-		logutil.Errorf("failed to connect to cn server, timeout: %v, conn ID: %d, cn: %s, goId: %d, error: %v",
-			timeout, s.connID, s.addr, goid.Get(), err)
+		eventProxyBackendDialFailed.ErrorLazy(func() []zap.Field {
+			fields := logutil.StringFingerprintFields("backend-address", s.addr)
+			fields = append(fields, zap.Duration("timeout", timeout), zap.Uint32("connection-id", s.connID))
+			return append(fields, logutil.ErrorFingerprintFields("error", err)...)
+		})
 		if ne, ok := err.(net.Error); ok && ne.Timeout() {
 			return nil, newTimeoutConnectErr(err)
 		}

@@ -73,12 +73,21 @@ func createSubscription(ctx context.Context, c *Compile, dbName string, subOptio
 		UPDATE mo_catalog.mo_subs
 		SET sub_name='%s', sub_time=now()
 		WHERE pub_account_name = '%s' AND pub_name = '%s' AND sub_account_id = %d
-	`, dbName, subOption.From, subOption.Publication, accountId)
-	return c.runSqlWithAccountIdAndOptions(
+			AND status = %d AND sub_name IS NULL
+	`, dbName, subOption.From, subOption.Publication, accountId, pubsub.SubStatusNormal)
+	updateResult, err := c.runSqlWithResultAndOptions(
 		sql,
 		sysAccountId,
 		executor.StatementOption{}.WithDisableLog(),
 	)
+	if err != nil {
+		return err
+	}
+	defer updateResult.Close()
+	if updateResult.AffectedRows != 1 {
+		return moerr.NewInternalErrorf(ctx, "publication %s is not authorized or no longer exists", subOption.Publication)
+	}
+	return nil
 }
 
 func dropSubscription(ctx context.Context, c *Compile, dbName string) error {
