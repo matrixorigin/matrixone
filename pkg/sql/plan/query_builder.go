@@ -341,6 +341,45 @@ func exprNotNullableWithColResolver(
 	}
 }
 
+// exprProvenNotNullableWithColResolver is the stronger proof required by
+// bucket-local MARK execution. A STRICT function only guarantees NULL input
+// propagation; it may still return NULL for non-NULL values. Accept functions
+// only when their registry contract guarantees a non-NULL result, plus the two
+// serialized-key constructors supported directly by shuffle.
+func exprProvenNotNullableWithColResolver(
+	expr *plan.Expr,
+	resolveCol func(*plan.Expr) bool,
+) bool {
+	if expr == nil {
+		return false
+	}
+
+	switch impl := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		return resolveCol(expr)
+
+	case *plan.Expr_F:
+		if impl.F.Func == nil {
+			return false
+		}
+		if function.ProducesNoNull(impl.F.Func.Obj) {
+			return true
+		}
+		if impl.F.Func.ObjName != "serial" && impl.F.Func.ObjName != "serial_full" {
+			return false
+		}
+		for _, arg := range impl.F.Args {
+			if !exprProvenNotNullableWithColResolver(arg, resolveCol) {
+				return false
+			}
+		}
+		return true
+
+	default:
+		return expr.Typ.NotNullable
+	}
+}
+
 // exprEffectivelyNotNullable derives an expression's runtime nullability from
 // the materialized inputs it references. Expr.Typ describes the expression at
 // bind time, but an outer join can make a NOT NULL base column nullable before
@@ -377,7 +416,18 @@ func IsJoinExprEffectivelyNotNullable(expr *plan.Expr, left, right *plan.Node) b
 	if left == nil || right == nil {
 		return false
 	}
-	return exprEffectivelyNotNullable(expr, left.ProjectList, right.ProjectList)
+	return exprProvenNotNullableWithColResolver(expr, func(colExpr *plan.Expr) bool {
+		if !colExpr.Typ.NotNullable {
+			return false
+		}
+		col := colExpr.GetCol()
+		relPos, colPos := int(col.RelPos), int(col.ColPos)
+		inputs := [][]*plan.Expr{left.ProjectList, right.ProjectList}
+		return relPos >= 0 && relPos < len(inputs) &&
+			colPos >= 0 && colPos < len(inputs[relPos]) &&
+			inputs[relPos][colPos] != nil &&
+			inputs[relPos][colPos].Typ.NotNullable
+	})
 }
 
 // nodeNullExtendsChild reports whether rows emitted by node can contain NULLs
@@ -1115,6 +1165,39 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 	case plan.Node_JOIN:
 		node.SpillMem = builder.joinSpillMem
 
+		var markOperandNotNullable [][]bool
+		if node.JoinType == plan.Node_MARK && len(node.Children) == 2 {
+			leftTags := make(map[int32]bool)
+			for _, tag := range builder.enumerateTags(node.Children[0]) {
+				leftTags[tag] = true
+			}
+			rightTags := make(map[int32]bool)
+			for _, tag := range builder.enumerateTags(node.Children[1]) {
+				rightTags[tag] = true
+			}
+			markOperandNotNullable = make([][]bool, len(node.OnList))
+			for conditionIdx, condition := range node.OnList {
+				fn := condition.GetF()
+				if fn == nil {
+					continue
+				}
+				markOperandNotNullable[conditionIdx] = make([]bool, len(fn.Args))
+				for argIdx, arg := range fn.Args {
+					leftRef := exprRefsAnyTag(arg, leftTags)
+					rightRef := exprRefsAnyTag(arg, rightTags)
+					if leftRef == rightRef {
+						continue
+					}
+					childID := node.Children[1]
+					if leftRef {
+						childID = node.Children[0]
+					}
+					markOperandNotNullable[conditionIdx][argIdx] =
+						builder.exprEffectivelyNotNullableBeforeRemap(arg, childID)
+				}
+			}
+		}
+
 		for _, expr := range node.OnList {
 			increaseRefCnt(expr, 1, colRefCnt)
 		}
@@ -1169,6 +1252,16 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 				builder.qry.Nodes[leftID].ProjectList,
 				builder.qry.Nodes[rightID].ProjectList,
 			)
+			if idx < len(markOperandNotNullable) {
+				if fn := expr.GetF(); fn != nil {
+					for argIdx, provenNotNullable := range markOperandNotNullable[idx] {
+						if argIdx < len(fn.Args) {
+							fn.Args[argIdx].Typ.NotNullable =
+								fn.Args[argIdx].Typ.NotNullable && provenNotNullable
+						}
+					}
+				}
+			}
 		}
 		if node.JoinType == plan.Node_MARK &&
 			node.Stats != nil && node.Stats.HashmapStats != nil &&
@@ -1384,6 +1477,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		}
 
 		remapInfo.tip = "GroupBy"
+		childProjList := builder.qry.Nodes[node.Children[0]].ProjectList
 		for idx, expr := range node.GroupBy {
 			increaseRefCnt(expr, -1, colRefCnt)
 			remapInfo.srcExprIdx = idx
@@ -1391,6 +1485,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			if err != nil {
 				return nil, err
 			}
+			refreshExprNullabilityFromInputs(expr, childProjList)
 
 			globalRef := [2]int32{groupTag, int32(idx)}
 			if colRefCnt[globalRef] == 0 {
@@ -1571,6 +1666,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 
 		remapInfo.tip = "GroupBy"
 		// deal with group col and sample col.
+		childProjList := builder.qry.Nodes[node.Children[0]].ProjectList
 		for i, expr := range node.GroupBy {
 			increaseRefCnt(expr, -1, colRefCnt)
 			remapInfo.srcExprIdx = i
@@ -1578,6 +1674,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			if err != nil {
 				return nil, err
 			}
+			refreshExprNullabilityFromInputs(expr, childProjList)
 
 			globalRef := [2]int32{groupTag, int32(i)}
 			if colRefCnt[globalRef] == 0 {
@@ -1725,6 +1822,8 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		if err != nil {
 			return nil, err
 		}
+		childProjList := builder.qry.Nodes[node.Children[0]].ProjectList
+		refreshExprNullabilityFromInputs(node.GroupBy[0], childProjList)
 
 		remapInfo.tip = "OrderBy"
 		for idx, orderBy := range node.OrderBy {
@@ -1734,6 +1833,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			if err != nil {
 				return nil, err
 			}
+			refreshExprNullabilityFromInputs(orderBy.Expr, childProjList)
 		}
 
 		remapInfo.tip = "TimeWindowPartitionBy"
@@ -1744,6 +1844,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			if err != nil {
 				return nil, err
 			}
+			refreshExprNullabilityFromInputs(expr, childProjList)
 		}
 
 		remapInfo.tip = "AggList"
@@ -2236,8 +2337,13 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			if colRefCnt[globalRef] == 0 {
 				continue
 			}
+			outputType := expr.Typ
+			if node.NodeType == plan.Node_SINK_SCAN {
+				outputType.NotNullable =
+					builder.sinkScanOutputEffectivelyNotNullableBeforeRemap(node, i)
+			}
 			newProjList = append(newProjList, &plan.Expr{
-				Typ: expr.Typ,
+				Typ: outputType,
 				Expr: &plan.Expr_Col{
 					Col: &ColRef{
 						RelPos: 0,
@@ -2275,12 +2381,17 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 				continue
 			}
 			sinkColRef[[2]int32{step, int32(i)}] = len(newProjList)
+			childPos := childRemapping.globalToLocal[[2]int32{resultTag, int32(i)}][1]
+			outputType := expr.Typ
+			if childPos >= 0 && int(childPos) < len(childNode.ProjectList) {
+				outputType = childNode.ProjectList[childPos].Typ
+			}
 			newProjList = append(newProjList, &plan.Expr{
-				Typ: expr.Typ,
+				Typ: outputType,
 				Expr: &plan.Expr_Col{
 					Col: &ColRef{
 						RelPos: 0,
-						ColPos: childRemapping.globalToLocal[[2]int32{resultTag, int32(i)}][1],
+						ColPos: childPos,
 						// Name:   builder.nameByColRef[globalRef],
 					},
 				},
@@ -3608,6 +3719,99 @@ func (builder *QueryBuilder) bindNoRecursiveCte(
 	return nodeID, nil
 }
 
+func setMaterializedProjectionNullability(node *plan.Node, notNullable []bool) {
+	if node == nil {
+		return
+	}
+	for i := range node.ProjectList {
+		if i >= len(notNullable) {
+			break
+		}
+		node.ProjectList[i].Typ.NotNullable = notNullable[i]
+	}
+	if node.TableDef != nil {
+		for i := range node.TableDef.Cols {
+			if i >= len(notNullable) {
+				break
+			}
+			if node.TableDef.Cols[i] != nil {
+				node.TableDef.Cols[i].Typ.NotNullable = notNullable[i]
+			}
+		}
+	}
+}
+
+func (builder *QueryBuilder) outputSlotEffectivelyNotNullableBeforeRemap(
+	nodeID int32,
+	colPos int,
+) bool {
+	if nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) {
+		return false
+	}
+	node := builder.qry.Nodes[nodeID]
+	if node == nil || colPos < 0 || colPos >= len(node.ProjectList) {
+		return false
+	}
+	if len(node.Children) == 1 {
+		return builder.exprEffectivelyNotNullableBeforeRemap(
+			node.ProjectList[colPos],
+			node.Children[0],
+		)
+	}
+	return node.ProjectList[colPos].Typ.NotNullable
+}
+
+// deriveRecursiveCTENullability computes the greatest safe NOT NULL contract
+// shared by the seed and every recursive member. Recursive expressions can
+// depend on columns whose contract is weakened by another member, so one
+// left-to-right pass is insufficient; iterating from the seed contract reaches
+// a fixed point, and each column can only change from NOT NULL to nullable.
+func (builder *QueryBuilder) deriveRecursiveCTENullability(
+	seedProjects []*plan.Expr,
+	seedRootID int32,
+	recursiveSteps []int32,
+	recursiveScanNodeIDs []int32,
+) []bool {
+	seedNotNullable := make([]bool, len(seedProjects))
+	for i := range seedProjects {
+		seedNotNullable[i] =
+			builder.outputSlotEffectivelyNotNullableBeforeRemap(seedRootID, i)
+	}
+	notNullable := slices.Clone(seedNotNullable)
+
+	setRecursiveScanContracts := func() {
+		for _, nodeID := range recursiveScanNodeIDs {
+			if nodeID >= 0 && int(nodeID) < len(builder.qry.Nodes) {
+				setMaterializedProjectionNullability(builder.qry.Nodes[nodeID], notNullable)
+			}
+		}
+	}
+	setRecursiveScanContracts()
+
+	for {
+		next := slices.Clone(seedNotNullable)
+		for _, step := range recursiveSteps {
+			if step < 0 || int(step) >= len(builder.qry.Steps) {
+				clear(next)
+				break
+			}
+			memberRootID := builder.qry.Steps[step]
+			for colPos := range next {
+				if next[colPos] &&
+					!builder.outputSlotEffectivelyNotNullableBeforeRemap(memberRootID, colPos) {
+					next[colPos] = false
+				}
+			}
+		}
+
+		if slices.Equal(notNullable, next) {
+			return notNullable
+		}
+		notNullable = next
+		setRecursiveScanContracts()
+	}
+}
+
 func (builder *QueryBuilder) bindRecursiveCte(
 	ctx *BindContext,
 	s *tree.Select,
@@ -3725,7 +3929,14 @@ func (builder *QueryBuilder) bindRecursiveCte(
 
 	//4. add CTE Scan Node
 	_ = builder.appendStep(recursiveLastNodeID)
+	recursiveNotNullable := builder.deriveRecursiveCTENullability(
+		projects,
+		initLastNodeID,
+		recursiveSteps,
+		recursiveNodeIDs,
+	)
 	nodeID = appendCTEScanNode(builder, ctx, initSourceStep, initCtx.sinkTag)
+	setMaterializedProjectionNullability(builder.qry.Nodes[nodeID], recursiveNotNullable)
 	if limitExpr != nil || offsetExpr != nil {
 		node := builder.qry.Nodes[nodeID]
 		node.Limit = limitExpr

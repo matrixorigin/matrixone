@@ -161,6 +161,30 @@ func TestCompileJoinFallsBackForUnsafeShuffleMark(t *testing.T) {
 	require.False(t, op.IsShuffle)
 }
 
+func TestCompileJoinFallsBackForUnprovenMaterializedMarkKey(t *testing.T) {
+	node := newShuffleJoinTestNode(1)
+	node.JoinType = plan.Node_MARK
+	node.Stats.HashmapStats.Shuffle = true
+	// The materialized child still carries optimistic bind-time metadata, but
+	// planner remap records that the original key expression was not proven
+	// non-NULL (for example, json_extract on non-NULL arguments).
+	node.OnList = []*plan.Expr{makeMarkJoinTestCondition(t, "=", 0, false)}
+	left := &plan.Node{ProjectList: []*plan.Expr{makeMarkJoinTestColumn(0, 0, true)}}
+	right := &plan.Node{ProjectList: []*plan.Expr{makeMarkJoinTestColumn(1, 0, true)}}
+	c := newCompileForShuffleJoinTest(t, engine.Nodes{{Addr: "cn1:6001", Mcpu: 1}})
+	probe := newShuffleJoinTestScope(t, c.cnList[0], 1)
+	build := newShuffleJoinTestScope(t, c.cnList[0], 1)
+
+	result := c.compileJoin(node, left, right, []*Scope{probe}, []*Scope{build})
+
+	require.False(t, node.Stats.HashmapStats.Shuffle)
+	require.Equal(t, int32(-1), node.Stats.HashmapStats.ShuffleColIdx)
+	require.Len(t, result, 1)
+	op, ok := result[0].RootOp.(*hashjoin.HashJoin)
+	require.True(t, ok)
+	require.False(t, op.IsShuffle)
+}
+
 func TestConstructShuffleJoinOperatorForMark(t *testing.T) {
 	node := newShuffleJoinTestNode(1)
 	node.JoinType = plan.Node_MARK

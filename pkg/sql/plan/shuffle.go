@@ -716,7 +716,7 @@ func markJoinSupportsShuffle(
 }
 
 func (builder *QueryBuilder) exprEffectivelyNotNullableBeforeRemap(expr *plan.Expr, nodeID int32) bool {
-	return exprNotNullableWithColResolver(expr, func(colExpr *plan.Expr) bool {
+	return exprProvenNotNullableWithColResolver(expr, func(colExpr *plan.Expr) bool {
 		if colExpr == nil || !colExpr.Typ.NotNullable {
 			return false
 		}
@@ -738,15 +738,30 @@ func (builder *QueryBuilder) colRefEffectivelyNotNullableBeforeRemap(
 		return false
 	}
 
-	if (node.NodeType == plan.Node_PROJECT || node.NodeType == plan.Node_MATERIAL) &&
-		len(node.BindingTags) > 0 && node.BindingTags[0] == col.RelPos {
-		if col.ColPos < 0 || int(col.ColPos) >= len(node.ProjectList) ||
-			len(node.Children) != 1 {
+	switch node.NodeType {
+	case plan.Node_SINK_SCAN:
+		if len(node.BindingTags) > 0 && node.BindingTags[0] == col.RelPos {
+			return builder.sinkScanOutputEffectivelyNotNullableBeforeRemap(
+				node,
+				int(col.ColPos),
+			)
+		}
+	case plan.Node_RECURSIVE_SCAN, plan.Node_RECURSIVE_CTE:
+		if len(node.BindingTags) > 0 && node.BindingTags[0] == col.RelPos {
+			if col.ColPos < 0 || int(col.ColPos) >= len(node.ProjectList) {
+				return false
+			}
+			return node.ProjectList[col.ColPos].Typ.NotNullable
+		}
+	}
+
+	if expr, childID, materialized := materializedOutputExprBeforeRemap(node, col); materialized {
+		if expr == nil || childID < 0 {
 			return false
 		}
 		return builder.exprEffectivelyNotNullableBeforeRemap(
-			node.ProjectList[col.ColPos],
-			node.Children[0],
+			expr,
+			childID,
 		)
 	}
 
@@ -767,6 +782,81 @@ func (builder *QueryBuilder) colRefEffectivelyNotNullableBeforeRemap(
 	}
 
 	return false
+}
+
+func (builder *QueryBuilder) sinkScanOutputEffectivelyNotNullableBeforeRemap(
+	node *plan.Node,
+	colPos int,
+) bool {
+	if builder == nil || builder.qry == nil || node == nil ||
+		node.NodeType != plan.Node_SINK_SCAN || colPos < 0 ||
+		len(node.SourceStep) == 0 {
+		return false
+	}
+	for _, sourceStep := range node.SourceStep {
+		if sourceStep < 0 || int(sourceStep) >= len(builder.qry.Steps) ||
+			!builder.outputSlotEffectivelyNotNullableBeforeRemap(
+				builder.qry.Steps[sourceStep],
+				colPos,
+			) {
+			return false
+		}
+	}
+	return true
+}
+
+// materializedOutputExprBeforeRemap resolves output slots whose runtime value
+// is computed from a child expression. Bind-time column types are insufficient
+// at these boundaries because an outer join below the materializer can make a
+// NOT NULL base column nullable.
+//
+// The bool distinguishes "this node owns the binding but the slot is invalid"
+// from "this node does not own the binding". The former must fail closed rather
+// than fall through to the generic binding-tag check.
+func materializedOutputExprBeforeRemap(
+	node *plan.Node,
+	col *plan.ColRef,
+) (expr *plan.Expr, childID int32, materialized bool) {
+	if node == nil || col == nil || len(node.Children) != 1 {
+		return nil, -1, false
+	}
+
+	childID = node.Children[0]
+	switch node.NodeType {
+	case plan.Node_PROJECT, plan.Node_MATERIAL:
+		if len(node.BindingTags) == 0 || node.BindingTags[0] != col.RelPos {
+			return nil, -1, false
+		}
+		if col.ColPos < 0 || int(col.ColPos) >= len(node.ProjectList) {
+			return nil, -1, true
+		}
+		return node.ProjectList[col.ColPos], childID, true
+
+	case plan.Node_AGG, plan.Node_SAMPLE:
+		if len(node.BindingTags) == 0 || node.BindingTags[0] != col.RelPos {
+			return nil, -1, false
+		}
+		if col.ColPos < 0 || int(col.ColPos) >= len(node.GroupBy) {
+			return nil, -1, true
+		}
+		return node.GroupBy[col.ColPos], childID, true
+
+	case plan.Node_TIME_WINDOW:
+		if len(node.BindingTags) < 2 || node.BindingTags[1] != col.RelPos {
+			return nil, -1, false
+		}
+		for _, partitionExpr := range node.TimeWindowPartitionBy {
+			partitionCol := partitionExpr.GetCol()
+			if partitionCol != nil &&
+				partitionCol.RelPos == col.RelPos &&
+				partitionCol.ColPos == col.ColPos {
+				return partitionExpr, childID, true
+			}
+		}
+		return nil, -1, true
+	}
+
+	return nil, -1, false
 }
 
 func (builder *QueryBuilder) nodeContainsBindingTag(nodeID, tag int32) bool {

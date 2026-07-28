@@ -1129,6 +1129,351 @@ func TestMarkShuffleRejectsSingleJoinNullExtension(t *testing.T) {
 	require.Equal(t, int32(-1), mark.Stats.HashmapStats.ShuffleColIdx)
 }
 
+func buildMarkPlanBeforeOptimization(
+	t *testing.T,
+	sql string,
+) (*QueryBuilder, *plan.Node) {
+	t.Helper()
+
+	optimizer := NewMockOptimizer(true)
+	statements, err := mysql.Parse(
+		optimizer.CurrentContext().GetContext(),
+		sql,
+		1,
+	)
+	require.NoError(t, err)
+	require.Len(t, statements, 1)
+	stmt, ok := statements[0].(*tree.Select)
+	require.True(t, ok)
+
+	builder := NewQueryBuilder(plan.Query_SELECT, optimizer.CurrentContext(), false, true)
+	bindCtx := NewBindContext(builder, nil)
+	_, err = builder.bindSelect(stmt, bindCtx, true)
+	require.NoError(t, err)
+
+	for _, node := range builder.qry.Nodes {
+		if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_MARK {
+			return builder, node
+		}
+	}
+	require.FailNow(t, "MARK join not found")
+	return nil, nil
+}
+
+func TestMarkShuffleRejectsNullExtensionAcrossGroupingMaterializers(t *testing.T) {
+	for _, tt := range []struct {
+		name                     string
+		sql                      string
+		materializer             plan.Node_NodeType
+		wantShuffle              bool
+		skipMaterializerContract bool
+	}{
+		{
+			name:         "aggregate group key",
+			materializer: plan.Node_AGG,
+			sql: `
+				select d.regionkey in (
+					select l.l_partkey from tpch.lineitem l
+				)
+				from (
+					select r.r_regionkey as regionkey
+					from tpch.nation n
+					left join tpch.region r on n.n_regionkey = r.r_regionkey
+					group by r.r_regionkey
+					limit 10
+				) d`,
+		},
+		{
+			name:         "computed aggregate group key",
+			materializer: plan.Node_AGG,
+			sql: `
+				select d.regionkey in (
+					select l.l_partkey from tpch.lineitem l
+				)
+				from (
+					select r.r_regionkey + 0 as regionkey
+					from tpch.nation n
+					left join tpch.region r on n.n_regionkey = r.r_regionkey
+					group by r.r_regionkey + 0
+					limit 10
+				) d`,
+		},
+		{
+			name:                     "value-nullable aggregate function group key",
+			materializer:             plan.Node_AGG,
+			skipMaterializerContract: true,
+			sql: `
+				select d.regionkey in (
+					select r2.r_name from tpch.region r2
+				)
+				from (
+					select cast(
+						json_extract(
+							concat('{"a":', n.n_nationkey, '}'),
+							'$.missing'
+						) as varchar
+					) as regionkey
+					from tpch.nation n
+					group by cast(
+						json_extract(
+							concat('{"a":', n.n_nationkey, '}'),
+							'$.missing'
+						) as varchar
+					)
+					limit 10
+				) d`,
+		},
+		{
+			name:         "preserved-side aggregate group key remains eligible",
+			materializer: plan.Node_AGG,
+			wantShuffle:  true,
+			sql: `
+				select d.regionkey in (
+					select l.l_partkey from tpch.lineitem l
+				)
+				from (
+					select n.n_regionkey as regionkey
+					from tpch.nation n
+					left join tpch.region r on n.n_regionkey = r.r_regionkey
+					group by n.n_regionkey
+					limit 10
+				) d`,
+		},
+		{
+			name:         "sample group key",
+			materializer: plan.Node_SAMPLE,
+			sql: `
+				select d.regionkey in (
+					select l.l_partkey from tpch.lineitem l
+				)
+				from (
+					select r.r_regionkey as regionkey,
+						sample(n.n_nationkey, 1 rows) as sampled_key
+					from tpch.nation n
+					left join tpch.region r on n.n_regionkey = r.r_regionkey
+					group by r.r_regionkey
+					limit 10
+				) d`,
+		},
+		{
+			name:         "time window partition key",
+			materializer: plan.Node_TIME_WINDOW,
+			sql: `
+				select d.regionkey in (
+					select l2.l_partkey from tpch.lineitem l2
+				)
+				from (
+					select r.r_regionkey as regionkey, _wstart,
+						max(l.l_quantity) as max_quantity
+					from tpch.lineitem l
+					left join tpch.region r on l.l_partkey = r.r_regionkey
+					group by r.r_regionkey
+					interval(l.l_shipdate, 5, day)
+					limit 10
+				) d`,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			preRemapBuilder, preRemapMark := buildMarkPlanBeforeOptimization(t, tt.sql)
+			require.Len(t, preRemapMark.Children, 2)
+			preRemapLeft := preRemapBuilder.qry.Nodes[preRemapMark.Children[0]]
+			preRemapRight := preRemapBuilder.qry.Nodes[preRemapMark.Children[1]]
+			preRemapLeft.Stats.Outcnt = 10_000_000
+			preRemapRight.Stats.Outcnt = 3_000_000
+			preRemapMark.Stats.HashmapStats.HashmapSize = 3_000_000
+			preRemapMark.OnList[0].Ndv = 100_000
+			preRemapMark.Stats.HashmapStats.Shuffle = true
+
+			determineShuffleForJoinWithColRefMode(preRemapMark, preRemapBuilder, false)
+			require.Equal(t, tt.wantShuffle, preRemapMark.Stats.HashmapStats.Shuffle,
+				"pre-remap eligibility must follow the group expression to its materialized child")
+
+			logicPlan, err := runOneStmt(NewMockOptimizer(true), t, tt.sql)
+			require.NoError(t, err)
+
+			query := logicPlan.GetQuery()
+			require.NotNil(t, query)
+
+			var materializer, mark *plan.Node
+			for _, node := range query.Nodes {
+				if node.NodeType == tt.materializer {
+					materializer = node
+				}
+				if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_MARK {
+					mark = node
+				}
+			}
+			require.NotNil(t, materializer)
+			require.NotNil(t, mark)
+			require.Len(t, mark.Children, 2)
+			require.NotEmpty(t, mark.OnList)
+
+			materializerHasNullableOutput := false
+			for _, output := range materializer.ProjectList {
+				materializerHasNullableOutput =
+					materializerHasNullableOutput || !output.Typ.NotNullable
+			}
+			if !tt.skipMaterializerContract {
+				require.Equal(t, !tt.wantShuffle, materializerHasNullableOutput,
+					"the materializer must expose the group expression's runtime NULL contract")
+			}
+
+			left := query.Nodes[mark.Children[0]]
+			right := query.Nodes[mark.Children[1]]
+			condition := mark.OnList[0].GetF()
+			require.NotNil(t, condition)
+			require.Len(t, condition.Args, 2)
+			effectivelyNotNullable :=
+				IsJoinExprEffectivelyNotNullable(condition.Args[0], left, right) &&
+					IsJoinExprEffectivelyNotNullable(condition.Args[1], left, right)
+			require.Equal(t, tt.wantShuffle, effectivelyNotNullable)
+
+			left.Stats.Outcnt = 10_000_000
+			right.Stats.Outcnt = 3_000_000
+			mark.Stats.HashmapStats.HashmapSize = 3_000_000
+			mark.OnList[0].Ndv = 100_000
+			mark.Stats.HashmapStats.Shuffle = true
+
+			builder := &QueryBuilder{qry: query}
+			determineShuffleForJoinWithColRefMode(mark, builder, true)
+
+			require.Equal(t, tt.wantShuffle, mark.Stats.HashmapStats.Shuffle)
+			if tt.wantShuffle {
+				require.Equal(t, int32(0), mark.Stats.HashmapStats.ShuffleColIdx)
+			} else {
+				require.Equal(t, int32(-1), mark.Stats.HashmapStats.ShuffleColIdx)
+			}
+		})
+	}
+}
+
+func TestMarkShuffleUsesRecursiveCTEOutputNullability(t *testing.T) {
+	for _, tt := range []struct {
+		name        string
+		sql         string
+		wantShuffle bool
+	}{
+		{
+			name: "nullable recursive member stays broadcast",
+			sql: `
+				with recursive c(k) as (
+					select n.n_regionkey
+					from tpch.nation n
+					union all
+					select cast(null as int)
+					from c
+					where c.k is not null
+				)
+				select c.k in (
+					select l.l_partkey from tpch.lineitem l
+				)
+				from c`,
+		},
+		{
+			name: "null-extended recursive seed stays broadcast",
+			sql: `
+				with recursive c(k) as (
+					select n.n_regionkey
+					from tpch.region r
+					left join tpch.nation n
+						on r.r_regionkey = n.n_regionkey
+					union all
+					select c.k
+					from c
+					where c.k < 0
+				)
+				select c.k in (
+					select l.l_partkey from tpch.lineitem l
+				)
+				from c`,
+		},
+		{
+			name: "nullable recursive dependency reaches fixed point",
+			sql: `
+				with recursive c(a, b) as (
+					select n.n_regionkey, n.n_regionkey
+					from tpch.nation n
+					union all
+					select cast(null as int), c.a + 1
+					from c
+					where c.b < 2
+				)
+				select c.b in (
+					select l.l_partkey from tpch.lineitem l
+				)
+				from c`,
+		},
+		{
+			name:        "non-null recursive contract remains eligible",
+			wantShuffle: true,
+			sql: `
+				with recursive c(k) as (
+					select n.n_regionkey
+					from tpch.nation n
+					union all
+					select c.k
+					from c
+					where c.k < 0
+				)
+				select c.k in (
+					select l.l_partkey from tpch.lineitem l
+				)
+				from c`,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			preRemapBuilder, preRemapMark := buildMarkPlanBeforeOptimization(t, tt.sql)
+			require.Len(t, preRemapMark.Children, 2)
+			preRemapLeft := preRemapBuilder.qry.Nodes[preRemapMark.Children[0]]
+			preRemapRight := preRemapBuilder.qry.Nodes[preRemapMark.Children[1]]
+			preRemapLeft.Stats.Outcnt = 10_000_000
+			preRemapRight.Stats.Outcnt = 3_000_000
+			preRemapMark.Stats.HashmapStats.HashmapSize = 3_000_000
+			preRemapMark.OnList[0].Ndv = 100_000
+			preRemapMark.Stats.HashmapStats.Shuffle = true
+
+			determineShuffleForJoinWithColRefMode(preRemapMark, preRemapBuilder, false)
+			require.Equal(t, tt.wantShuffle, preRemapMark.Stats.HashmapStats.Shuffle)
+
+			logicPlan, err := runOneStmt(NewMockOptimizer(true), t, tt.sql)
+			require.NoError(t, err)
+			query := logicPlan.GetQuery()
+
+			var mark *plan.Node
+			for _, node := range query.Nodes {
+				if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_MARK {
+					mark = node
+				}
+			}
+			require.NotNil(t, mark)
+			require.Len(t, mark.Children, 2)
+			left := query.Nodes[mark.Children[0]]
+			right := query.Nodes[mark.Children[1]]
+			condition := mark.OnList[0].GetF()
+			require.NotNil(t, condition)
+			require.Len(t, condition.Args, 2)
+			effectivelyNotNullable :=
+				IsJoinExprEffectivelyNotNullable(condition.Args[0], left, right) &&
+					IsJoinExprEffectivelyNotNullable(condition.Args[1], left, right)
+			require.Equal(t, tt.wantShuffle, effectivelyNotNullable)
+
+			left.Stats.Outcnt = 10_000_000
+			right.Stats.Outcnt = 3_000_000
+			mark.Stats.HashmapStats.HashmapSize = 3_000_000
+			mark.OnList[0].Ndv = 100_000
+			mark.Stats.HashmapStats.Shuffle = true
+
+			determineShuffleForJoinWithColRefMode(mark, &QueryBuilder{qry: query}, true)
+			require.Equal(t, tt.wantShuffle, mark.Stats.HashmapStats.Shuffle)
+			if tt.wantShuffle {
+				require.Equal(t, int32(0), mark.Stats.HashmapStats.ShuffleColIdx)
+			} else {
+				require.Equal(t, int32(-1), mark.Stats.HashmapStats.ShuffleColIdx)
+			}
+		})
+	}
+}
+
 func TestMarkShuffleUsesSetOperationOutputNullability(t *testing.T) {
 	for _, tt := range []struct {
 		name         string

@@ -626,6 +626,13 @@ func TestGetFunctionIsVolatileOrRealTimeRelatedByName(t *testing.T) {
 	assert.False(t, GetFunctionIsVolatileOrRealTimeRelatedByName("unknown_function"))
 }
 
+func TestProducesNoNullUsesFunctionContract(t *testing.T) {
+	require.True(t, ProducesNoNull(EncodeOverloadID(ISNULL, 0)))
+	require.False(t, ProducesNoNull(EncodeOverloadID(JSON_EXTRACT, 0)),
+		"STRICT only describes NULL-input propagation; a missing JSON path still returns SQL NULL")
+	require.False(t, ProducesNoNull(-1))
+}
+
 func TestUserLevelLockBuiltinRegistration(t *testing.T) {
 	cases := []struct {
 		name string

@@ -302,6 +302,18 @@ func DeduceNotNullable(overloadID int64, args []*plan.Expr) bool {
 	return true
 }
 
+// ProducesNoNull reports whether a function's contract guarantees a non-NULL
+// result independently of its argument values. This is stronger than
+// DeduceNotNullable: STRICT functions such as json_extract can still return
+// SQL NULL for non-NULL inputs when a requested value is absent.
+func ProducesNoNull(overloadID int64) bool {
+	fid, _ := DecodeOverloadID(overloadID)
+	return fid >= 0 &&
+		int(fid) < len(allSupportedFunctions) &&
+		int(fid) == allSupportedFunctions[fid].functionId &&
+		allSupportedFunctions[fid].testFlag(plan.Function_PRODUCE_NO_NULL)
+}
+
 type FuncGetResult struct {
 	fid        int32
 	overloadId int32
