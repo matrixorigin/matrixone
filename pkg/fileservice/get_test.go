@@ -68,6 +68,18 @@ func TestGetForBackupS3Opts(t *testing.T) {
 	assert.Equal(t, "backup-prefix", s3fs.keyPrefix)
 }
 
+func TestBackupObjectStorageUsesDedicatedConnectionPool(t *testing.T) {
+	var args ObjectStorageArguments
+	setBackupConnectionPool(&args)
+
+	assert.Equal(t, maxConnsPerHost, args.MaxConnsPerHost)
+	assert.NotEqual(t, httpRoundTripper, newHTTPClient(args).Transport)
+
+	args.MaxConnsPerHost = 7
+	setBackupConnectionPool(&args)
+	assert.Equal(t, 7, args.MaxConnsPerHost)
+}
+
 type dummyFileService struct{ name string }
 
 func (d dummyFileService) Delete(ctx context.Context, filePaths ...string) error { return nil }

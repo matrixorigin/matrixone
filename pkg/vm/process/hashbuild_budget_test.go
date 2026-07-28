@@ -413,6 +413,99 @@ func TestHashBuildBudgetCapProviderCachesWithinTTLAndRefreshes(t *testing.T) {
 	second.Release()
 }
 
+func TestHashBuildBudgetCachedFastPathSkipsRefreshGate(t *testing.T) {
+	b := MustNewHashBuildBudget(10, 10)
+	b.capRefreshTTL = time.Hour
+	now := time.Unix(0, 0)
+	b.capNow = func() time.Time { return now }
+	b.SetAggregateCapProvider(func() (uint64, error) { return 10, nil })
+	if _, _, refreshed, err := b.refreshAggregateCap(false, 0); err != nil || !refreshed {
+		t.Fatalf("seed refresh: refreshed=%v err=%v", refreshed, err)
+	}
+
+	b.refreshMu.Lock()
+	resultC := make(chan error, 1)
+	go func() {
+		_, _, refreshed, err := b.refreshAggregateCap(false, 0)
+		if err == nil && refreshed {
+			err = errors.New("cached refresh unexpectedly sampled provider")
+		}
+		resultC <- err
+	}()
+
+	var err error
+	select {
+	case err = <-resultC:
+		b.refreshMu.Unlock()
+	case <-time.After(time.Second):
+		b.refreshMu.Unlock()
+		<-resultC
+		t.Fatal("cached refresh waited for refreshMu")
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestHashBuildBudgetUnchangedObservationSkipsRefreshGate(t *testing.T) {
+	inputs := HashBuildCeilingInputs{
+		CgroupMemoryMax: 8 << 30,
+		HostMemTotal:    16 << 30,
+		GlobalMpoolCap:  6 << 30,
+		FileCacheHint:   512 << 20,
+	}
+	ceiling, err := ResolveHashBuildCeiling(inputs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := MustNewHashBuildBudget(ceiling.CNHashCap, ceiling.CNHashCap)
+	b.installCNCapProvider(inputs)
+
+	b.refreshMu.Lock()
+	doneC := make(chan struct{})
+	go func() {
+		b.mergeObservedCNCap(inputs, ceiling.CNHashCap)
+		close(doneC)
+	}()
+	select {
+	case <-doneC:
+		b.refreshMu.Unlock()
+	case <-time.After(time.Second):
+		b.refreshMu.Unlock()
+		<-doneC
+		t.Fatal("unchanged CN cap observation waited for refreshMu")
+	}
+}
+
+func TestHashBuildBudgetCNProviderKeepsProcessMemorySnapshot(t *testing.T) {
+	previousInputs := hashBuildProcessMemoryInputs
+	previousCap := commonmpool.GlobalCap()
+	previousHint := fileservice.GlobalMemoryCacheSizeHint.Swap(0)
+	t.Cleanup(func() {
+		hashBuildProcessMemoryInputs = previousInputs
+		commonmpool.InitCap(previousCap)
+		fileservice.GlobalMemoryCacheSizeHint.Store(previousHint)
+	})
+
+	hashBuildProcessMemoryInputs = HashBuildCeilingInputs{
+		CgroupMemoryMax: 8 << 30,
+		HostMemTotal:    16 << 30,
+	}
+	commonmpool.InitCap(commonmpool.PB)
+
+	b := MustNewHashBuildBudget(4<<30, 4<<30)
+	b.installCNCapProvider(HashBuildCeilingInputs{
+		CgroupMemoryMax: 4 << 30,
+		HostMemTotal:    8 << 30,
+	})
+	if _, err := b.sampleCNCap(); err != nil {
+		t.Fatal(err)
+	}
+	if b.liveCapInputs.CgroupMemoryMax != 8<<30 || b.liveCapInputs.HostMemTotal != 16<<30 {
+		t.Fatalf("physical snapshot changed: %+v", b.liveCapInputs)
+	}
+}
+
 func TestHashBuildBudgetCapProviderGrowthOnAggregateReject(t *testing.T) {
 	b := MustNewHashBuildBudget(10, 10)
 	b.capRefreshTTL = hashBuildBudgetCapRefreshTTL
