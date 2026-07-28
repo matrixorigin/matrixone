@@ -1225,7 +1225,7 @@ func reconcileParentRefChildTableID(
 	oldTableID uint64,
 	newTableID uint64,
 ) {
-	replaceRefChildTableID(constraintDef, oldTableID, newTableID)
+	reconcileRefChildTableID(constraintDef, oldTableID, newTableID)
 }
 
 func notifyParentTableFkTableIdChange(

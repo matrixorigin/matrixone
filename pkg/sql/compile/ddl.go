@@ -2998,7 +2998,7 @@ func replaceRefChildTableID(
 	constraintDef *engine.ConstraintDef,
 	oldTableID uint64,
 	newTableID uint64,
-) {
+) bool {
 	tableIDs := canonicalRefChildTableIDs(constraintDef)
 	replaced := false
 	for i, tableID := range tableIDs {
@@ -3007,10 +3007,18 @@ func replaceRefChildTableID(
 			replaced = true
 		}
 	}
-	if !replaced {
-		tableIDs = append(tableIDs, newTableID)
-	}
 	setRefChildTableIDs(constraintDef, tableIDs)
+	return replaced
+}
+
+func reconcileRefChildTableID(
+	constraintDef *engine.ConstraintDef,
+	oldTableID uint64,
+	newTableID uint64,
+) {
+	if !replaceRefChildTableID(constraintDef, oldTableID, newTableID) {
+		addRefChildTableIDs(constraintDef, []uint64{newTableID})
+	}
 }
 
 func AddFkeyToRelation(ctx context.Context, fkRelation engine.Relation, fkey *plan.ForeignKeyDef) error {
@@ -3228,11 +3236,10 @@ func (s *Scope) TruncateTable(c *Compile) error {
 		if err != nil {
 			return err
 		}
-		if updateRefChildTableConstraintIDs(oldCt, oldID, newID) {
-			err = fkRelation.UpdateConstraint(c.proc.Ctx, oldCt)
-			if err != nil {
-				return err
-			}
+		replaceRefChildTableID(oldCt, oldID, newID)
+		err = fkRelation.UpdateConstraint(c.proc.Ctx, oldCt)
+		if err != nil {
+			return err
 		}
 	}
 
@@ -3261,23 +3268,6 @@ func cloneCreateIndexForPartition(
 		def.IndexTableName = fmt.Sprintf("%s_%s", def.IndexTableName, partitionName)
 	}
 	return cloned
-}
-
-func updateRefChildTableConstraintIDs(ct *engine.ConstraintDef, oldID, newID uint64) bool {
-	updated := false
-	for _, c := range ct.Cts {
-		def, ok := c.(*engine.RefChildTableDef)
-		if !ok {
-			continue
-		}
-		for idx, refTable := range def.Tables {
-			if refTable == oldID {
-				def.Tables[idx] = newID
-				updated = true
-			}
-		}
-	}
-	return updated
 }
 
 func (s *Scope) DropSequence(c *Compile) error {

@@ -81,12 +81,12 @@ func TestReplaceRefChildTableID(t *testing.T) {
 		require.Equal(t, []uint64{10, 21, 30}, canonicalRefChildTableIDs(constraintDef))
 	})
 
-	t.Run("repair a missing child reference", func(t *testing.T) {
+	t.Run("do not invent a missing child reference", func(t *testing.T) {
 		constraintDef := &engine.ConstraintDef{Cts: []engine.Constraint{
 			&engine.RefChildTableDef{Tables: []uint64{10, 30}},
 		}}
 		replaceRefChildTableID(constraintDef, 20, 21)
-		require.Equal(t, []uint64{10, 30, 21}, canonicalRefChildTableIDs(constraintDef))
+		require.Equal(t, []uint64{10, 30}, canonicalRefChildTableIDs(constraintDef))
 	})
 
 	t.Run("canonicalize duplicate definitions and table ids", func(t *testing.T) {
@@ -105,11 +105,29 @@ func TestReplaceRefChildTableID(t *testing.T) {
 		)
 	})
 
-	t.Run("add child to an empty reference list", func(t *testing.T) {
+	t.Run("keep an empty reference list empty", func(t *testing.T) {
 		constraintDef := &engine.ConstraintDef{}
 		replaceRefChildTableID(constraintDef, 20, 21)
-		require.Equal(t, []uint64{21}, canonicalRefChildTableIDs(constraintDef))
+		require.Len(t, constraintDef.Cts, 1)
+		require.Empty(t, canonicalRefChildTableIDs(constraintDef))
 	})
+}
+
+func TestTruncateRefChildTableIDReplacementCanonicalizesLegacyState(t *testing.T) {
+	constraintDef := &engine.ConstraintDef{Cts: []engine.Constraint{
+		&engine.RefChildTableDef{Tables: []uint64{0, 10, 20}},
+		&engine.RefChildTableDef{Tables: []uint64{10, 20, 30}},
+		&engine.RefChildTableDef{Tables: []uint64{0}},
+	}}
+
+	replaceRefChildTableID(constraintDef, 20, 21)
+
+	require.Len(t, constraintDef.Cts, 1)
+	require.Equal(
+		t,
+		[]uint64{0, 10, 21, 30},
+		constraintDef.Cts[0].(*engine.RefChildTableDef).Tables,
+	)
 }
 
 func TestCanonicalRefChildTableIDMutations(t *testing.T) {

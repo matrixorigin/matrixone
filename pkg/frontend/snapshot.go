@@ -661,8 +661,23 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 		Tenant: &plan.SnapshotTenant{TenantID: restoreAccount},
 	}
 
+	sourceCtx := defines.AttachAccountId(ctx, restoreAccount)
+	sourceTableInfos, err := collectRestoreSourceTableInfos(
+		dbName,
+		tblName,
+		func() ([]string, error) {
+			return showDatabases(sourceCtx, ses.GetService(), bh, snapshotName)
+		},
+		func(sourceDBName string, sourceTblName string) ([]*tableInfo, error) {
+			return getTableInfos(ctx, ses.GetService(), bh, tempSnap, sourceDBName, sourceTblName)
+		},
+	)
+	if err != nil {
+		return stats, err
+	}
+
 	// get topo sorted tables with foreign key
-	sortedFkTbls, err := fkTablesTopoSort(ctx, bh, tempSnap, dbName, tblName, nil)
+	sortedFkTbls, err := fkTablesTopoSort(ctx, bh, tempSnap, dbName, tblName, sourceTableInfos)
 	if err != nil {
 		return
 	}
@@ -2354,15 +2369,48 @@ func fkTablesTopoSort(
 	if err != nil {
 		return
 	}
-	if tableInfos != nil {
-		schemaFkDeps, err := getFkDepsFromTableInfos(ctx, tableInfos)
+	return topoSortRestoreFkDeps(ctx, fkDeps, tableInfos)
+}
+
+func topoSortRestoreFkDeps(
+	ctx context.Context,
+	catalogFkDeps map[string][]string,
+	tableInfos []*tableInfo,
+) ([]string, error) {
+	schemaFkDeps, err := getFkDepsFromTableInfos(ctx, tableInfos)
+	if err != nil {
+		return nil, err
+	}
+	mergeFkDeps(catalogFkDeps, schemaFkDeps)
+	return topoSortFkDeps(catalogFkDeps)
+}
+
+func collectRestoreSourceTableInfos(
+	dbName string,
+	tblName string,
+	listDatabases func() ([]string, error),
+	getTableInfosForDatabase func(string, string) ([]*tableInfo, error),
+) ([]*tableInfo, error) {
+	if dbName != "" {
+		return getTableInfosForDatabase(dbName, tblName)
+	}
+
+	dbNames, err := listDatabases()
+	if err != nil {
+		return nil, err
+	}
+	var tableInfos []*tableInfo
+	for _, sourceDBName := range dbNames {
+		if needSkipDb(sourceDBName) {
+			continue
+		}
+		dbTableInfos, err := getTableInfosForDatabase(sourceDBName, "")
 		if err != nil {
 			return nil, err
 		}
-		mergeFkDeps(fkDeps, schemaFkDeps)
+		tableInfos = append(tableInfos, dbTableInfos...)
 	}
-
-	return topoSortFkDeps(fkDeps)
+	return tableInfos, nil
 }
 
 func topoSortFkDeps(fkDeps map[string][]string) ([]string, error) {
@@ -2720,7 +2768,38 @@ func restoreAccountUsingClusterSnapshotToNew(ctx context.Context,
 	// get topo sorted tables with foreign key
 	var sortedFkTbls []string
 	var fkTableMap map[string]*tableInfo
-	sortedFkTbls, err = fkTablesTopoSortWithTS(ctx, bh, "", "", snapshotTs, uint32(fromAccount), uint32(toAccountId))
+	sourceTableInfos, err := collectRestoreSourceTableInfos(
+		"",
+		"",
+		func() ([]string, error) {
+			return showDatabasesFromTS(ctx, ses.GetService(), bh, snapshotTs, uint32(fromAccount), uint32(toAccountId))
+		},
+		func(sourceDBName string, sourceTblName string) ([]*tableInfo, error) {
+			return getTableInfosFromTS(
+				ctx,
+				ses.GetService(),
+				bh,
+				sourceDBName,
+				sourceTblName,
+				snapshotTs,
+				uint32(fromAccount),
+				uint32(toAccountId),
+			)
+		},
+	)
+	if err != nil {
+		return err
+	}
+	sortedFkTbls, err = fkTablesTopoSortWithTS(
+		ctx,
+		bh,
+		"",
+		"",
+		snapshotTs,
+		uint32(fromAccount),
+		uint32(toAccountId),
+		sourceTableInfos,
+	)
 	if err != nil {
 		return err
 	}
