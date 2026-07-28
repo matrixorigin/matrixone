@@ -42,7 +42,7 @@ func openRetestSQLDB(t *testing.T, c embed.Cluster) *sql.DB {
 }
 
 func TestDataBranchPickRetestCompositePKChunkProbe(t *testing.T) {
-	embed.RunBaseClusterTests(func(c embed.Cluster) {
+	embed.RunBaseClusterTests(t, func(c embed.Cluster) {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Hour)
 		defer cancel()
 
@@ -92,7 +92,7 @@ func TestDataBranchPickRetestCompositePKChunkProbe(t *testing.T) {
 }
 
 func TestDataBranchPickRetestNoPKSubqueryFakePK(t *testing.T) {
-	embed.RunBaseClusterTests(func(c embed.Cluster) {
+	embed.RunBaseClusterTests(t, func(c embed.Cluster) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 		defer cancel()
 
@@ -124,7 +124,7 @@ func TestDataBranchPickRetestNoPKSubqueryFakePK(t *testing.T) {
 }
 
 func TestDataBranchPickRetestDatePKLiteral(t *testing.T) {
-	embed.RunBaseClusterTests(func(c embed.Cluster) {
+	embed.RunBaseClusterTests(t, func(c embed.Cluster) {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
 
