@@ -38,3 +38,6 @@ SELECT DAYNAME('2007-01-01') AS monday, DAYNAME('2007-01-02') AS tuesday, DAYNAM
 
 # Regression: VARCHAR input must resolve without an implicit unsupported cast.
 SELECT DAYNAME('2024-01-15') AS string_dayname;
+
+# DAYNAME is undefined for an incomplete VARCHAR date.
+SELECT DAYNAME('2001-11-00') AS incomplete_dayname;

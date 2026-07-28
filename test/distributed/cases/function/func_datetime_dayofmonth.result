@@ -60,3 +60,6 @@ SELECT DAYOFMONTH('2007-01-15') AS jan, DAYOFMONTH('2007-02-15') AS feb, DAYOFMO
 SELECT DAYOFMONTH('2024-01-15') AS string_dayofmonth;
 ➤ string_dayofmonth[-6,8,0]  𝄀
 15
+SELECT DAYOFMONTH('2001-11-00') AS incomplete_dayofmonth;
+➤ incomplete_dayofmonth[-6,8,0]  𝄀
+0

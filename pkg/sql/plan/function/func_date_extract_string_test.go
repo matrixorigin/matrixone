@@ -90,6 +90,48 @@ func TestDateExtractFunctionsAcceptVarchar(t *testing.T) {
 	require.True(t, success, info)
 }
 
+func TestDateExtractFunctionsIncompleteDateVarchar(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	input := newVectorByType(proc.Mp(), types.T_varchar.ToType(), []string{"2001-11-00"}, nil)
+	defer input.Free(proc.Mp())
+
+	for _, tc := range []struct {
+		name       string
+		returnType types.T
+		want       any
+		wantNull   bool
+	}{
+		{name: "dayofmonth", returnType: types.T_uint8, want: uint8(0)},
+		{name: "quarter", returnType: types.T_uint8, want: uint8(4)},
+		{name: "monthname", returnType: types.T_varchar, want: "November"},
+		{name: "weekofyear", returnType: types.T_int64, wantNull: true},
+		{name: "dayname", returnType: types.T_varchar, wantNull: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fn, err := GetFunctionByName(proc.Ctx, tc.name, []types.Type{types.T_varchar.ToType()})
+			require.NoError(t, err)
+			require.Equal(t, tc.returnType, fn.GetReturnType().Oid)
+
+			out, err := RunFunctionDirectly(proc, fn.GetEncodedOverloadID(), []*vector.Vector{input}, 1)
+			require.NoError(t, err)
+			defer out.Free(proc.Mp())
+			require.Equal(t, tc.wantNull, out.IsNull(0))
+			if tc.wantNull {
+				return
+			}
+
+			switch want := tc.want.(type) {
+			case uint8:
+				require.Equal(t, want, vector.GetFixedAtNoTypeCheck[uint8](out, 0))
+			case string:
+				require.Equal(t, want, string(out.GetBytesAt(0)))
+			default:
+				t.Fatalf("unsupported expected type %T", want)
+			}
+		})
+	}
+}
+
 func TestQuarterTimestampRegisteredOverload(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	timestamp, err := types.ParseTimestamp(time.UTC, "2024-10-15 12:30:00", 6)
@@ -173,7 +215,7 @@ func TestDateStringToStringCallbackInvalid(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	input := NewFunctionTestInput(types.T_varchar.ToType(), []string{"2024-01-15"}, nil)
 	fn := func(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-		return dateStringToStringWithNullOnError(ivecs, result, proc, length, selectList, func(types.Date) (string, bool) {
+		return dateStringToStringWithNullOnError(ivecs, result, proc, length, selectList, func(dateExtractParts) (string, bool) {
 			return "", false
 		})
 	}

@@ -52,3 +52,6 @@ SELECT QUARTER('2024-01-01') AS q1, QUARTER('2024-04-01') AS q2, QUARTER('2024-0
 
 # Regression: VARCHAR input must resolve without an implicit unsupported cast.
 SELECT QUARTER('2024-01-15') AS string_quarter;
+
+# QUARTER uses the available month from an incomplete VARCHAR date.
+SELECT QUARTER('2001-11-00') AS incomplete_quarter;

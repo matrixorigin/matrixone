@@ -42,3 +42,6 @@ SELECT DAYOFMONTH('2007-01-15') AS jan, DAYOFMONTH('2007-02-15') AS feb, DAYOFMO
 
 # Regression: VARCHAR input must resolve without an implicit unsupported cast.
 SELECT DAYOFMONTH('2024-01-15') AS string_dayofmonth;
+
+# DAYOFMONTH extracts the zero day from an incomplete VARCHAR date.
+SELECT DAYOFMONTH('2001-11-00') AS incomplete_dayofmonth;

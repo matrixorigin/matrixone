@@ -852,7 +852,49 @@ func TimestampToDay(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 	}, selectList)
 }
 
-func dateStringToFixedWithNullOnError[T types.FixedSizeTExceptStrType](ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList, fn func(types.Date) (T, bool)) error {
+type dateExtractParts struct {
+	date       types.Date
+	year       int32
+	month, day uint8
+	incomplete bool
+}
+
+func parseDateExtractParts(value string) (dateExtractParts, bool) {
+	date, err := types.ParseDateCast(value)
+	if err == nil {
+		if date == types.ZeroDate {
+			return dateExtractParts{date: date}, true
+		}
+		year, month, day, _ := date.Calendar(true)
+		return dateExtractParts{date: date, year: year, month: month, day: day}, true
+	}
+
+	// MySQL permits date-part extraction from incomplete dates such as
+	// 2001-11-00. Keep zero components outside types.Date, which represents
+	// only complete calendar dates.
+	value = strings.TrimSpace(value)
+	if len(value) != 10 || value[4] != '-' || value[7] != '-' {
+		return dateExtractParts{}, false
+	}
+	for i := range value {
+		if i == 4 || i == 7 {
+			continue
+		}
+		if value[i] < '0' || value[i] > '9' {
+			return dateExtractParts{}, false
+		}
+	}
+
+	year := int32(value[0]-'0')*1000 + int32(value[1]-'0')*100 + int32(value[2]-'0')*10 + int32(value[3]-'0')
+	month := (value[5]-'0')*10 + value[6] - '0'
+	day := (value[8]-'0')*10 + value[9] - '0'
+	if month > types.MaxMonthInYear || day > 31 || (month != 0 && day != 0) {
+		return dateExtractParts{}, false
+	}
+	return dateExtractParts{year: year, month: month, day: day, incomplete: true}, true
+}
+
+func dateStringToFixedWithNullOnError[T types.FixedSizeTExceptStrType](ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList, fn func(dateExtractParts) (T, bool)) error {
 	source := vector.GenerateFunctionStrParameter(ivecs[0])
 	rs := vector.MustFunctionResult[T](result)
 	for i := uint64(0); i < uint64(length); i++ {
@@ -870,14 +912,14 @@ func dateStringToFixedWithNullOnError[T types.FixedSizeTExceptStrType](ivecs []*
 			}
 			continue
 		}
-		date, err := types.ParseDateCast(functionUtil.QuickBytesToStr(value))
-		if err != nil {
+		parts, ok := parseDateExtractParts(functionUtil.QuickBytesToStr(value))
+		if !ok {
 			if err := rs.Append(*new(T), true); err != nil {
 				return err
 			}
 			continue
 		}
-		valueToAppend, valid := fn(date)
+		valueToAppend, valid := fn(parts)
 		if err := rs.Append(valueToAppend, !valid); err != nil {
 			return err
 		}
@@ -885,7 +927,7 @@ func dateStringToFixedWithNullOnError[T types.FixedSizeTExceptStrType](ivecs []*
 	return nil
 }
 
-func dateStringToStringWithNullOnError(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList, fn func(types.Date) (string, bool)) error {
+func dateStringToStringWithNullOnError(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList, fn func(dateExtractParts) (string, bool)) error {
 	source := vector.GenerateFunctionStrParameter(ivecs[0])
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	for i := uint64(0); i < uint64(length); i++ {
@@ -903,14 +945,14 @@ func dateStringToStringWithNullOnError(ivecs []*vector.Vector, result vector.Fun
 			}
 			continue
 		}
-		date, err := types.ParseDateCast(functionUtil.QuickBytesToStr(value))
-		if err != nil || date == types.ZeroDate {
+		parts, ok := parseDateExtractParts(functionUtil.QuickBytesToStr(value))
+		if !ok {
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
 			continue
 		}
-		name, valid := fn(date)
+		name, valid := fn(parts)
 		if !valid {
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
@@ -925,8 +967,8 @@ func dateStringToStringWithNullOnError(ivecs []*vector.Vector, result vector.Fun
 }
 
 func DateStringToDay(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return dateStringToFixedWithNullOnError(ivecs, result, proc, length, selectList, func(date types.Date) (uint8, bool) {
-		return date.Day(), true
+	return dateStringToFixedWithNullOnError(ivecs, result, proc, length, selectList, func(parts dateExtractParts) (uint8, bool) {
+		return parts.day, true
 	})
 }
 
@@ -6524,8 +6566,8 @@ func TimestampToQuarter(ivecs []*vector.Vector, result vector.FunctionResultWrap
 }
 
 func DateStringToQuarter(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return dateStringToFixedWithNullOnError(ivecs, result, proc, length, selectList, func(date types.Date) (uint8, bool) {
-		return uint8(date.Quarter()), true
+	return dateStringToFixedWithNullOnError(ivecs, result, proc, length, selectList, func(parts dateExtractParts) (uint8, bool) {
+		return (parts.month + 2) / 3, true
 	})
 }
 
@@ -6694,11 +6736,11 @@ func TimestampToWeekOfYear(ivecs []*vector.Vector, result vector.FunctionResultW
 }
 
 func DateStringToWeekOfYear(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return dateStringToFixedWithNullOnError(ivecs, result, proc, length, selectList, func(date types.Date) (int64, bool) {
-		if date == types.ZeroDate {
+	return dateStringToFixedWithNullOnError(ivecs, result, proc, length, selectList, func(parts dateExtractParts) (int64, bool) {
+		if parts.incomplete || parts.date == types.ZeroDate {
 			return 0, false
 		}
-		return int64(date.Week(3)), true
+		return int64(parts.date.Week(3)), true
 	})
 }
 
@@ -6803,8 +6845,11 @@ func TimestampToDayName(ivecs []*vector.Vector, result vector.FunctionResultWrap
 }
 
 func DateStringToDayName(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return dateStringToStringWithNullOnError(ivecs, result, proc, length, selectList, func(date types.Date) (string, bool) {
-		return date.DayOfWeek().String(), true
+	return dateStringToStringWithNullOnError(ivecs, result, proc, length, selectList, func(parts dateExtractParts) (string, bool) {
+		if parts.incomplete || parts.date == types.ZeroDate {
+			return "", false
+		}
+		return parts.date.DayOfWeek().String(), true
 	})
 }
 
@@ -6859,8 +6904,8 @@ func TimestampToMonthName(ivecs []*vector.Vector, result vector.FunctionResultWr
 }
 
 func DateStringToMonthName(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return dateStringToStringWithNullOnError(ivecs, result, proc, length, selectList, func(date types.Date) (string, bool) {
-		month := date.Month()
+	return dateStringToStringWithNullOnError(ivecs, result, proc, length, selectList, func(parts dateExtractParts) (string, bool) {
+		month := parts.month
 		if month < 1 || month > 12 {
 			return "", false
 		}
