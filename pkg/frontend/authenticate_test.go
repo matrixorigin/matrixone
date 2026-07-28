@@ -60,9 +60,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func TestDropTemporaryTableSkipsPersistentOwnershipRevoke(t *testing.T) {
-	err := doRevokePrivilegeImplicitly(context.Background(), nil, &tree.DropTable{Temporary: true})
-	require.NoError(t, err)
+func TestTemporaryTableSkipsPersistentOwnershipChanges(t *testing.T) {
+	require.NoError(t, doGrantPrivilegeImplicitly(
+		context.Background(), nil, &tree.CreateTable{Temporary: true},
+	))
+	require.NoError(t, doRevokePrivilegeImplicitly(
+		context.Background(), nil, &tree.DropTable{}, nil,
+	))
 }
 
 func TestGetTenantInfo(t *testing.T) {

@@ -237,10 +237,8 @@ func handleDropConnector(ctx context.Context, ses *Session, st *tree.DropConnect
 	return nil
 }
 
-func handleDropDynamicTable(ctx context.Context, ses *Session, st *tree.DropTable) error {
-	if st.Temporary {
-		// Dropping a shadowing temporary table must not cancel the daemon task of
-		// a same-named persistent dynamic table.
+func handleDropDynamicTable(ctx context.Context, ses *Session, targets tree.TableNames) error {
+	if len(targets) == 0 {
 		return nil
 	}
 	pu := getPu(ses.GetService())
@@ -260,7 +258,7 @@ func handleDropDynamicTable(ctx context.Context, ses *Session, st *tree.DropTabl
 	}
 
 	// Filter the tasks within the loop
-	for _, tn := range st.Names {
+	for _, tn := range targets {
 		dbName := string(tn.Schema())
 		if dbName == "" {
 			dbName = ses.GetDatabaseName()

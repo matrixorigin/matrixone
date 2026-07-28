@@ -26,8 +26,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func TestHandleDropTemporaryTableSkipsDynamicTableTasks(t *testing.T) {
-	err := handleDropDynamicTable(context.Background(), nil, &tree.DropTable{Temporary: true})
+func TestHandleDropTableWithoutPersistentTargetsSkipsDynamicTableTasks(t *testing.T) {
+	err := handleDropDynamicTable(context.Background(), nil, nil)
 	require.NoError(t, err)
 }
 
