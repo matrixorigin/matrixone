@@ -92,6 +92,7 @@ func (tcc *TxnCompilerContext) SetExecCtx(execCtx *ExecCtx) {
 	tcc.mu.Lock()
 	defer tcc.mu.Unlock()
 	tcc.execCtx = execCtx
+	tcc.views = nil
 }
 
 func (tcc *TxnCompilerContext) GetViews() []string {
@@ -119,7 +120,17 @@ func (tcc *TxnCompilerContext) SetSnapshot(snapshot *plan2.Snapshot) {
 }
 
 func (tcc *TxnCompilerContext) InitExecuteStmtParam(execPlan *plan.Execute) (*plan.Plan, tree.Statement, error) {
-	_, p, st, _, err := initExecuteStmtParam(tcc.execCtx, tcc.execCtx.ses.(*Session), tcc.tcw.(*TxnComputationWrapper), execPlan, "")
+	_, p, st, _, owned, err := initExecuteStmtParam(
+		tcc.execCtx,
+		tcc.execCtx.ses.(*Session),
+		tcc.tcw.(*TxnComputationWrapper),
+		execPlan,
+		"",
+	)
+	if owned && st != nil {
+		st.Free()
+		st = nil
+	}
 	return p, st, err
 }
 

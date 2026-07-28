@@ -16,10 +16,12 @@ package plan
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"math"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -77,6 +79,7 @@ type SnapshotTenant = plan.SnapshotTenant
 type ExternAttr = plan.ExternAttr
 
 const ViewSnapshotKeySuffix = "@ts="
+const viewDependencyKeyPrefix = "\x00mo_view_dependency\x00"
 
 // FormatViewKeyWithSnapshot appends snapshot information to a view key for privilege checks.
 func FormatViewKeyWithSnapshot(viewKey string, snapshot *Snapshot) string {
@@ -84,6 +87,60 @@ func FormatViewKeyWithSnapshot(viewKey string, snapshot *Snapshot) string {
 		return viewKey
 	}
 	return fmt.Sprintf("%s%s%d", viewKey, ViewSnapshotKeySuffix, snapshot.TS.PhysicalTime)
+}
+
+// FormatViewDependencyKey preserves database and view identifiers separately,
+// plus the complete optional table-level snapshot used to resolve the view.
+func FormatViewDependencyKey(databaseName, viewName string, snapshot *Snapshot) (string, error) {
+	var snapshotData []byte
+	if IsSnapshotValid(snapshot) {
+		var err error
+		snapshotData, err = snapshot.Marshal()
+		if err != nil {
+			return "", err
+		}
+	}
+	return viewDependencyKeyPrefix +
+		base64.RawURLEncoding.EncodeToString([]byte(databaseName)) + "." +
+		base64.RawURLEncoding.EncodeToString([]byte(viewName)) + "." +
+		base64.RawURLEncoding.EncodeToString(snapshotData), nil
+}
+
+// ParseViewDependencyKey returns the database, view, and optional table-level
+// snapshot recorded while binding a view. Plain database#view keys remain
+// readable for callers that have not recorded the structured dependency form.
+func ParseViewDependencyKey(viewKey string) (string, string, *Snapshot, error) {
+	if !strings.HasPrefix(viewKey, viewDependencyKeyPrefix) {
+		databaseName, viewName, ok := strings.Cut(viewKey, "#")
+		if !ok || databaseName == "" || viewName == "" {
+			return "", "", nil, moerr.NewInternalErrorNoCtx("invalid view dependency")
+		}
+		return databaseName, viewName, nil, nil
+	}
+	parts := strings.Split(viewKey[len(viewDependencyKeyPrefix):], ".")
+	if len(parts) != 3 || parts[0] == "" || parts[1] == "" {
+		return "", "", nil, moerr.NewInternalErrorNoCtx("invalid encoded view dependency")
+	}
+	databaseName, err := base64.RawURLEncoding.DecodeString(parts[0])
+	if err != nil {
+		return "", "", nil, err
+	}
+	viewName, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return "", "", nil, err
+	}
+	if parts[2] == "" {
+		return string(databaseName), string(viewName), nil, nil
+	}
+	data, err := base64.RawURLEncoding.DecodeString(parts[2])
+	if err != nil {
+		return "", "", nil, err
+	}
+	snapshot := &Snapshot{}
+	if err = snapshot.Unmarshal(data); err != nil {
+		return "", "", nil, err
+	}
+	return string(databaseName), string(viewName), snapshot, nil
 }
 
 type CompilerContext interface {
@@ -200,6 +257,7 @@ type QueryBuilder struct {
 	isRestoreByTs         bool
 	isSkipResolveTableDef bool
 	skipStats             bool
+	isInsertIgnore        bool // INSERT IGNORE: over-length CHAR/VARCHAR writes are truncated instead of rejected
 
 	deleteNode map[uint64]int32 //delete node in this query. key is tableId, value is the nodeId of sinkScan node in the delete plan
 

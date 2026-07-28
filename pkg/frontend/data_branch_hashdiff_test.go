@@ -920,6 +920,51 @@ func decodeCapturedRows(t *testing.T, bat *batch.Batch, colTypes []types.Type) [
 func TestHandleDelsOnLCA_SQLPaths(t *testing.T) {
 	ses := newValidateSession(t)
 
+	t.Run("quotes primary key identifiers in generated join", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		tblStuff := newTestBranchTableStuff(ctrl)
+		tblStuff.lcaRel = mock_frontend.NewMockRelation(ctrl)
+		tblStuff.def.colNames[0] = "select"
+		targetDef := tblStuff.tarRel.GetTableDef(context.Background())
+		targetDef.Cols[0].Name = "select"
+		targetDef.Pkey.Names = []string{"select"}
+		targetDef.Pkey.PkeyColName = "select"
+		lcaDef := newTestBranchTableDef("lca_tbl", "name")
+		lcaDef.Cols[0].Name = "select"
+		lcaDef.Pkey.Names = []string{"select"}
+		lcaDef.Pkey.PkeyColName = "select"
+		tblStuff.lcaRel.(*mock_frontend.MockRelation).EXPECT().GetTableDef(gomock.Any()).Return(lcaDef).AnyTimes()
+		tblStuff.lcaRel.(*mock_frontend.MockRelation).EXPECT().GetTableID(gomock.Any()).Return(uint64(76)).AnyTimes()
+
+		wantErr := moerr.NewInternalErrorNoCtx("stop after sql capture")
+		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).
+			DoAndReturn(func(_ context.Context, sql string) error {
+				require.Contains(t, sql, "as pks(__idx_,`select`) on")
+				require.Contains(t, sql, "lca.`select` = cast(pks.`select` as BIGINT)")
+				return wantErr
+			}).
+			Times(1)
+
+		tBat := batch.NewWithSize(1)
+		tBat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		require.NoError(t, vector.AppendFixed(tBat.Vecs[0], int64(1), false, ses.proc.Mp()))
+		tBat.SetRowCount(1)
+		defer tBat.Clean(ses.proc.Mp())
+
+		_, err := handleDelsOnLCA(
+			context.Background(),
+			ses,
+			bh,
+			tBat,
+			tblStuff,
+			types.BuildTS(10, 0).ToTimestamp(),
+		)
+		require.ErrorIs(t, err, wantErr)
+	})
+
 	t.Run("sql result keeps hits and leaves misses in tombstone batch", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
