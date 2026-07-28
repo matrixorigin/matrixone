@@ -238,7 +238,7 @@ func TestPreparedSetExpressionParamsAfterInit(t *testing.T) {
 		require.NoError(t, vector.AppendBytes(params, []byte(value), false, cw.proc.Mp()))
 		prepareStmt.params = params
 
-		_, _, stmt, _, err := initExecuteStmtParam(
+		_, _, stmt, _, _, err := initExecuteStmtParam(
 			execCtx, ses, cw, nil, prepareStmt.Name)
 		require.NoError(t, err)
 		require.IsType(t, &tree.SetVar{}, stmt)
