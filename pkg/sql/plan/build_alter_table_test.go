@@ -127,7 +127,7 @@ func Test_checkChangeTypeCompatible(t *testing.T) {
 		wantErr assert.ErrorAssertionFunc
 	}{
 		{
-			name: "test1",
+			name: "binary to json still rejected for ddl",
 			args: args{
 				ctx:    context.Background(),
 				origin: &plan.Type{Id: int32(types.T_binary)},
@@ -136,10 +136,19 @@ func Test_checkChangeTypeCompatible(t *testing.T) {
 			wantErr: assert.Error,
 		},
 		{
-			name: "test2",
+			name: "varchar to json remains allowed for ddl",
 			args: args{
 				ctx:    context.Background(),
-				origin: &plan.Type{Id: int32(types.T_binary)},
+				origin: &plan.Type{Id: int32(types.T_varchar)},
+				to:     &plan.Type{Id: int32(types.T_json)},
+			},
+			wantErr: assert.NoError,
+		},
+		{
+			name: "int to json rejected for ddl despite expression cast support",
+			args: args{
+				ctx:    context.Background(),
+				origin: &plan.Type{Id: int32(types.T_int32)},
 				to:     &plan.Type{Id: int32(types.T_json)},
 			},
 			wantErr: assert.Error,

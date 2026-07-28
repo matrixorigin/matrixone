@@ -1099,7 +1099,11 @@ func generateConstExpressionExecutor(proc *process.Process, typ types.Type, con 
 		case *plan.Literal_U32Val:
 			vec, err = vector.NewConstFixed(constU32Type, val.U32Val, 1, proc.Mp())
 		case *plan.Literal_U64Val:
-			vec, err = vector.NewConstFixed(constU64Type, val.U64Val, 1, proc.Mp())
+			if typ.Oid == types.T_bit {
+				vec, err = vector.NewConstFixed(typ, val.U64Val, 1, proc.Mp())
+			} else {
+				vec, err = vector.NewConstFixed(constU64Type, val.U64Val, 1, proc.Mp())
+			}
 		case *plan.Literal_Fval:
 			vec, err = vector.NewConstFixed(constFType, val.Fval, 1, proc.Mp())
 		case *plan.Literal_Dval:

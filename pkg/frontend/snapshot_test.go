@@ -1739,3 +1739,81 @@ func newDdlBatchForTest(mp *mpool.MPool, records [][]interface{}) *batch.Batch {
 
 	return bat
 }
+
+// TestDataBranchAuditFkDepsEscapesQuotedNames verifies every FK dependency
+// lookup used by CLONE, snapshot restore, and PITR restore. Legal quoted
+// identifiers must survive the SQL literal boundary and still produce the
+// dependency order consumed by the restore path (issue #26144).
+func TestDataBranchAuditFkDepsEscapesQuotedNames(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+
+	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+	pu.SV.SetDefaultValues()
+	setPu("", pu)
+	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+	rm, _ := NewRoutineManager(ctx, "")
+	ses.rm = rm
+
+	tenant := &TenantInfo{
+		Tenant:        sysAccountName,
+		User:          rootName,
+		DefaultRole:   moAdminRoleName,
+		TenantID:      sysAccountID,
+		UserID:        rootID,
+		DefaultRoleID: moAdminRoleID,
+	}
+	ses.SetTenantInfo(tenant)
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+
+	const (
+		dbName  = `db'name\part`
+		tblName = `child'name\part`
+		refDB   = `parent'db`
+		refTbl  = `parent'table`
+		baseSQL = "select db_name, table_name, refer_db_name, refer_table_name from mo_catalog.mo_foreign_keys"
+		filters = ` where db_name = 'db''name\\part' and table_name = 'child''name\\part'`
+	)
+	wantOrder := []string{genKey(refDB, refTbl), genKey(dbName, tblName)}
+	result := newMrsForPitrRecord([][]interface{}{{dbName, tblName, refDB, refTbl}})
+
+	tests := []struct {
+		name string
+		sql  string
+		run  func(*backgroundExecTest) ([]string, error)
+	}{{
+		name: "clone and snapshot",
+		sql:  baseSQL + filters,
+		run: func(bh *backgroundExecTest) ([]string, error) {
+			return fkTablesTopoSort(ctx, bh, nil, dbName, tblName)
+		},
+	}, {
+		name: "pitr restore",
+		sql:  baseSQL + " {MO_TS = 42}" + filters,
+		run: func(bh *backgroundExecTest) ([]string, error) {
+			return fkTablesTopoSortInPitrRestore(ctx, bh, 42, dbName, tblName)
+		},
+	}, {
+		name: "cross-account snapshot restore",
+		sql:  baseSQL + " {MO_TS = 42}" + filters,
+		run: func(bh *backgroundExecTest) ([]string, error) {
+			return fkTablesTopoSortWithTS(ctx, bh, dbName, tblName, 42, 7, 8)
+		},
+	}}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			bh := &backgroundExecTest{}
+			bh.init()
+			bh.sql2result[tc.sql] = result
+
+			got, err := tc.run(bh)
+			require.NoError(t, err)
+			require.Equal(t, wantOrder, got)
+			require.Equal(t, []string{tc.sql}, bh.executedSQLs)
+		})
+	}
+}

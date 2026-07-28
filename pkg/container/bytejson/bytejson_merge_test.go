@@ -16,6 +16,7 @@ package bytejson
 
 import (
 	"bytes"
+	"encoding/binary"
 	"math/rand"
 	"strconv"
 	"strings"
@@ -23,6 +24,12 @@ import (
 
 	"github.com/stretchr/testify/require"
 )
+
+func newBinaryJSONTestValue(tp TpCode, payload []byte) ByteJson {
+	data := binary.AppendUvarint(nil, uint64(len(payload)))
+	data = append(data, payload...)
+	return ByteJson{Type: tp, Data: data}
+}
 
 func nestedJSONObject(depth int, leaf string) string {
 	var builder strings.Builder
@@ -290,6 +297,74 @@ func TestMergeBuilderLifecycleAndEncodingContract(t *testing.T) {
 
 	_, err = builder.EncodeDataInto(encoded[:len(encoded)-1])
 	require.ErrorContains(t, err, "encoded size mismatch")
+}
+
+func TestMergeBuilderStorageEncodingUsesLegacyTypeCodes(t *testing.T) {
+	opaque := newBinaryJSONTestValue(TpCodeOpaque, []byte{0x01, 0x02})
+	bit := newBinaryJSONTestValue(TpCodeBit, []byte{0x03})
+	array, err := CreateByteJSON([]any{opaque, bit})
+	require.NoError(t, err)
+
+	tests := []struct {
+		name      string
+		value     ByteJson
+		logicalTp TpCode
+		check     func(*testing.T, ByteJson)
+	}{
+		{
+			name:      "root opaque",
+			value:     opaque,
+			logicalTp: TpCodeOpaque,
+			check: func(t *testing.T, stored ByteJson) {
+				require.Equal(t, TpCodeBlob, stored.Type)
+				require.Equal(t, `"AQI="`, stored.String())
+			},
+		},
+		{
+			name:      "root bit",
+			value:     bit,
+			logicalTp: TpCodeBit,
+			check: func(t *testing.T, stored ByteJson) {
+				require.Equal(t, TpCodeBlob, stored.Type)
+				require.Equal(t, "BIT", stored.TYPE())
+				require.Equal(t, `"Aw=="`, stored.String())
+			},
+		},
+		{
+			name:      "nested",
+			value:     array,
+			logicalTp: TpCodeArray,
+			check: func(t *testing.T, stored ByteJson) {
+				require.Equal(t, TpCodeArray, stored.Type)
+				require.Equal(t, TpCodeBlob, stored.GetArrayElem(0).Type)
+				require.Equal(t, TpCodeBlob, stored.GetArrayElem(1).Type)
+				require.Equal(t, "BIT", stored.GetArrayElem(1).TYPE())
+				require.Equal(t, `["AQI=", "Aw=="]`, stored.String())
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			builder := NewMergePatchBuilder()
+			require.NoError(t, builder.BeginRow())
+			require.NoError(t, builder.Reset(tc.value))
+			require.NoError(t, builder.Finalize())
+
+			logical, err := builder.BuildOwned()
+			require.NoError(t, err)
+			require.Equal(t, tc.logicalTp, logical.Type)
+
+			encoded := make([]byte, builder.DataSize())
+			n, err := builder.EncodeDataInto(encoded)
+			require.NoError(t, err)
+			require.Equal(t, len(encoded), n)
+
+			stored := ByteJson{Type: builder.TypeCode(), Data: encoded}
+			requireLegacyJSONReadable(t, append([]byte{byte(stored.Type)}, stored.Data...))
+			tc.check(t, stored)
+		})
+	}
 }
 
 func TestMergeBuilderResetRejectsOverDepthDocument(t *testing.T) {
