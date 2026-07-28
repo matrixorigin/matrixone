@@ -159,7 +159,10 @@ type Session struct {
 	// resolution changes. Prepared statements use it to invalidate plans that
 	// were built against an older temporary-table mapping.
 	tempTableVersion uint64
-	hasLockedTables  atomic.Bool
+	// ddlVersion changes after every successful session DDL. It covers
+	// transaction-local catalog writes that are not visible in CatalogCache.
+	ddlVersion      atomic.Uint64
+	hasLockedTables atomic.Bool
 
 	prepareStmts map[string]*PrepareStmt
 	lastStmtId   uint32
@@ -411,6 +414,14 @@ func (ses *Session) GetTempTableVersion() uint64 {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	return ses.tempTableVersion
+}
+
+func (ses *Session) getDDLVersion() uint64 {
+	return ses.ddlVersion.Load()
+}
+
+func (ses *Session) advanceDDLVersion() {
+	ses.ddlVersion.Add(1)
 }
 
 // RemoveTempTable removes the temporary table alias
@@ -1329,14 +1340,17 @@ func (ses *Session) GetPrepareStmts() []*PrepareStmt {
 	return ret
 }
 
-func (ses *Session) RemovePrepareStmt(name string) {
+func (ses *Session) RemovePrepareStmt(name string) bool {
 	name = strings.ToLower(name)
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	if stmt, ok := ses.prepareStmts[name]; ok {
-		stmt.Close()
-		delete(ses.prepareStmts, name)
+	stmt, ok := ses.prepareStmts[name]
+	if !ok {
+		return false
 	}
+	stmt.Close()
+	delete(ses.prepareStmts, name)
+	return true
 }
 
 // RemoveAllPrepareStmts closes and drops every cached prepared statement. It is

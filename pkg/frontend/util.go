@@ -1892,6 +1892,14 @@ func genKey(dbName, tblName string) string {
 	return objectkey.Encode(dbName, tblName)
 }
 
+func normalizeViewDependencyKey(key string) (string, error) {
+	databaseName, viewName, _, err := plan2.ParseViewDependencyKey(key)
+	if err != nil {
+		return "", err
+	}
+	return genKey(databaseName, viewName), nil
+}
+
 func splitKey(key string) (string, string) {
 	return objectkey.Decode(key)
 }

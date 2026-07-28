@@ -57,7 +57,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
@@ -1894,6 +1893,7 @@ func createPrepareStmt(
 		ses.GetTxnCompileCtx().SetExecCtx(execCtx)
 	}
 
+	cloneSQL := preparedCloneSQL(saveStmt, ses.GetTxnCompileCtx().DefaultDatabase())
 	var preparePlan *plan.Plan
 	protocolVersion := currentProtocolVersion(ses.proc)
 	err := execCtx.withRootSQL(originSQL, func() (err error) {
@@ -1903,6 +1903,7 @@ func createPrepareStmt(
 	if err != nil {
 		return nil, err
 	}
+	prepareTs := currentTxnSnapshotTS(ses)
 
 	schedulingSQLMode := sessionSQLModeForParser(ses)
 	prepareSchedulingIntent := querySchedulingIntentForStatementWithSQLMode(
@@ -1937,6 +1938,8 @@ func createPrepareStmt(
 		remapDb:             maps.Clone(execCtx.remapDb),
 		defaultDatabase:     ses.GetTxnCompileCtx().GetDatabase(),
 		tempTableVersion:    ses.GetTempTableVersion(),
+		ddlVersion:          ses.getDDLVersion(),
+		cloneSQL:            cloneSQL,
 		protocolVersion:     protocolVersion,
 		getFromSendLongData: make(map[int]struct{}),
 		schedulingSQLMode:   schedulingSQLMode,
@@ -1953,8 +1956,60 @@ func createPrepareStmt(
 		sqlSourceTypes := execCtx.input.getSqlSourceTypes()
 		prepareStmt.IsCloudNonuser = slices.Contains(sqlSourceTypes, constant.CloudNoUserSql)
 	}
-	prepareStmt.Ts = timestamp.Timestamp{PhysicalTime: time.Now().Unix()}
+	prepareStmt.Ts = prepareTs
 	return prepareStmt, nil
+}
+
+func preparedCloneSQL(stmt tree.Statement, defaultDatabase string) string {
+	clone, ok := stmt.(*tree.CloneTable)
+	if !ok {
+		return ""
+	}
+	executionClone := *clone
+	executionClone.SrcTable = clone.SrcTable
+	executionClone.CreateTable = clone.CreateTable
+	if executionClone.SrcTable.SchemaName == "" {
+		executionClone.SrcTable.SchemaName = tree.Identifier(defaultDatabase)
+	}
+	executionClone.SrcTable.ExplicitSchema = true
+	if executionClone.CreateTable.Table.SchemaName == "" && executionClone.ToAccountOpt == nil {
+		executionClone.CreateTable.Table.SchemaName = tree.Identifier(defaultDatabase)
+	}
+	executionClone.CreateTable.Table.ExplicitSchema =
+		executionClone.CreateTable.Table.SchemaName != ""
+	return tree.StringWithOpts(
+		&executionClone,
+		dialect.MYSQL,
+		tree.WithQuoteIdentifier(),
+		tree.WithSingleQuoteString(),
+	)
+}
+
+func freshPreparedCloneStatement(
+	ctx context.Context,
+	prepareStmt *PrepareStmt,
+) (tree.Statement, bool, error) {
+	if prepareStmt == nil {
+		return nil, false, moerr.NewInternalError(ctx, "prepared statement is nil")
+	}
+	if prepareStmt.cloneSQL == "" {
+		return prepareStmt.PrepareStmt, false, nil
+	}
+	stmts, err := mysql.ParseWithSQLMode(ctx, prepareStmt.cloneSQL, 0, prepareStmt.schedulingSQLMode)
+	if err != nil {
+		return nil, false, err
+	}
+	if len(stmts) != 1 {
+		for _, stmt := range stmts {
+			stmt.Free()
+		}
+		return nil, false, moerr.NewInternalError(ctx, "prepared clone SQL must contain exactly one statement")
+	}
+	if _, ok := stmts[0].(*tree.CloneTable); !ok {
+		stmts[0].Free()
+		return nil, false, moerr.NewInternalError(ctx, "prepared clone SQL did not parse as CLONE TABLE")
+	}
+	return stmts[0], true, nil
 }
 
 func doDeallocate(ses *Session, execCtx *ExecCtx, st *tree.Deallocate) error {
@@ -1962,7 +2017,10 @@ func doDeallocate(ses *Session, execCtx *ExecCtx, st *tree.Deallocate) error {
 	if err != nil {
 		return err
 	}
-	ses.RemovePrepareStmt(deallocatePlan.GetDcl().GetDeallocate().GetName())
+	name := deallocatePlan.GetDcl().GetDeallocate().GetName()
+	if !ses.RemovePrepareStmt(name) {
+		return moerr.NewUnknownStmtHandler(execCtx.reqCtx, name, "DEALLOCATE PREPARE")
+	}
 	return nil
 }
 
@@ -3008,6 +3066,11 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 		tcw.plan = preparePlan.GetDcl().GetPrepare().Plan
 		tcw.binaryPrepare = execCtx.input.isBinaryProtExecute
 		tcw.prepareName = execCtx.input.stmtName
+		if tcw.binaryPrepare {
+			// COM_STMT_EXECUTE borrows the AST retained by PrepareStmt. Mark it
+			// before Compile so every early error path keeps the shared AST alive.
+			tcw.stmtBorrowed = true
+		}
 		tcw.SetRemapDb(execCtx.input.remapDb)
 		cws = append(cws, tcw)
 		return cws, nil
@@ -3809,6 +3872,7 @@ func executeStmtWithTxn(ses FeSession,
 		execCtx.proc.Base.TxnOperator = txnOp
 
 		err = dispatchStmt(ses, statsArr, execCtx)
+		recordSessionDDL(ses, execCtx, err)
 	}
 	return
 }
@@ -3927,8 +3991,39 @@ func executeStmtWithWorkspace(ses FeSession,
 	}()
 
 	err = executeStmtWithIncrStmt(ses, statsArr, execCtx, txnOp)
+	recordSessionDDL(ses, execCtx, err)
 
 	return
+}
+
+func recordSessionDDL(ses FeSession, execCtx *ExecCtx, err error) {
+	if err != nil || execCtx == nil {
+		return
+	}
+	var queryPlan *plan.Plan
+	if cw, ok := execCtx.cw.(*TxnComputationWrapper); ok {
+		queryPlan = cw.Plan()
+	}
+	if !changesSessionCatalog(execCtx.stmt, queryPlan) {
+		return
+	}
+	if session := upstreamUserSession(ses); session != nil {
+		session.advanceDDLVersion()
+	}
+}
+
+func upstreamUserSession(ses FeSession) *Session {
+	for ses != nil {
+		if session, ok := ses.(*Session); ok {
+			return session
+		}
+		next := ses.GetUpstream()
+		if next == ses {
+			return nil
+		}
+		ses = next
+	}
+	return nil
 }
 
 func executeStmtWithIncrStmt(ses FeSession,
