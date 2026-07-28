@@ -4333,6 +4333,52 @@ func TestStringTimeExtractRegisteredOverloads(t *testing.T) {
 	}
 }
 
+func TestStringTimeExtractMySQLBoundaryRegressions(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{
+			"-2024-12-20 15:30:45",
+			"-20241220153045",
+			"20240230010203",
+			"2 30:00:00",
+			"60",
+		}, []bool{false, false, false, false, false}),
+	}
+
+	testCases := []struct {
+		name   string
+		expect FunctionTestResult
+		fn     fEvalFn
+	}{
+		{
+			name: "hour",
+			expect: NewFunctionTestResult(types.T_uint32.ToType(), false,
+				[]uint32{15, 15, 0, 78, 0}, []bool{false, false, true, false, true}),
+			fn: StringToHour,
+		},
+		{
+			name: "minute",
+			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
+				[]uint8{30, 30, 0, 0, 0}, []bool{false, false, true, false, true}),
+			fn: StringToMinute,
+		},
+		{
+			name: "second",
+			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
+				[]uint8{45, 45, 0, 0, 0}, []bool{false, false, true, false, true}),
+			fn: StringToSecond,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			tcc := NewFunctionTestCase(proc, inputs, tc.expect, tc.fn)
+			succeed, info := tcc.Run()
+			require.True(t, succeed, info)
+		})
+	}
+}
+
 func TestStringTimeExtractSelectList(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	fcTC := NewFunctionTestCase(proc,

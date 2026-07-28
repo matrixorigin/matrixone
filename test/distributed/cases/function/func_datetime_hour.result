@@ -105,3 +105,10 @@ HOUR('  12:34:56  ') AS trimmed_time_hour,
 HOUR('foo12:34:56') AS malformed_time_hour;
 ➤ fractional_time_hour[4,32,0]  ¦  day_fractional_time_hour[4,32,0]  ¦  negative_fractional_time_hour[4,32,0]  ¦  negative_day_fractional_time_hour[4,32,0]  ¦  overflow_time_hour[4,32,0]  ¦  negative_overflow_time_hour[4,32,0]  ¦  invalid_minute_hour[4,32,0]  ¦  invalid_second_hour[4,32,0]  ¦  compact_time_hour[4,32,0]  ¦  compact_datetime_fractional_hour[4,32,0]  ¦  invalid_compact_datetime_hour[4,32,0]  ¦  date_only_time_hour[4,32,0]  ¦  t_datetime_hour[4,32,0]  ¦  trimmed_time_hour[4,32,0]  ¦  malformed_time_hour[4,32,0]  𝄀
 12  ¦  51  ¦  12  ¦  51  ¦  838  ¦  838  ¦  null  ¦  null  ¦  12  ¦  15  ¦  null  ¦  0  ¦  15  ¦  12  ¦  null
+SELECT HOUR('-2024-12-20 15:30:45') AS negative_datetime_hour,
+HOUR('-20241220153045') AS negative_compact_datetime_hour,
+HOUR('20240230010203') AS invalid_calendar_compact_datetime_hour,
+HOUR('2 30:00:00') AS extended_day_time_hour,
+HOUR('60') AS invalid_compact_second_hour;
+➤ negative_datetime_hour[4,32,0]  ¦  negative_compact_datetime_hour[4,32,0]  ¦  invalid_calendar_compact_datetime_hour[4,32,0]  ¦  extended_day_time_hour[4,32,0]  ¦  invalid_compact_second_hour[4,32,0]  𝄀
+15  ¦  15  ¦  null  ¦  78  ¦  null

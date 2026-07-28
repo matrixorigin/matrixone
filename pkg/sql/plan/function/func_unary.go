@@ -4684,11 +4684,17 @@ func timeStringToFixedWithNullOnError[T types.FixedSizeTExceptStrType](
 // needed for the clock fields: the general temporal parsers accept different
 // grammars and must not receive arbitrary TIME-shaped user input here.
 func timeStringToClockForExtract(str string) (uint64, uint8, uint8, bool) {
-	if hour, minute, second, ok := mysqlSeparatedDatetimeClockForExtract(str); ok {
-		return hour, minute, second, true
+	if str[0] == '-' {
+		str = str[1:]
+		if len(str) == 0 {
+			return 0, 0, 0, false
+		}
 	}
-	if hour, minute, second, ok := parseCompactDatetimeClockForExtract(str); ok {
-		return hour, minute, second, true
+	if result := mysqlSeparatedDatetimeClockForExtract(str); result.matched {
+		return result.hour, result.minute, result.second, result.valid
+	}
+	if result := parseCompactDatetimeClockForExtract(str); result.matched {
+		return result.hour, result.minute, result.second, result.valid
 	}
 	return mysqlTimeStringToClockForExtract(str)
 }
@@ -4726,40 +4732,55 @@ func asciiDigits(str string) bool {
 	return true
 }
 
-func mysqlSeparatedDatetimeClockForExtract(str string) (uint64, uint8, uint8, bool) {
+type timeExtractParseResult struct {
+	hour           uint64
+	minute, second uint8
+	matched, valid bool
+}
+
+func mysqlSeparatedDatetimeClockForExtract(str string) timeExtractParseResult {
+	if len(str) < 6 || !asciiDigits(str[:4]) || (str[4] != '-' && str[4] != '/') ||
+		(strings.IndexByte(str[5:], ' ') < 0 && strings.IndexByte(str[5:], 'T') < 0) {
+		return timeExtractParseResult{}
+	}
+	result := timeExtractParseResult{matched: true}
 	pos := 0
 	year, ok := mysqlFixedDigitsForExtract(str, &pos, 4)
 	if !ok || pos >= len(str) || (str[pos] != '-' && str[pos] != '/') {
-		return 0, 0, 0, false
+		return result
 	}
 	separator := str[pos]
 	pos++
 	month, ok := mysqlOneOrTwoDigitsForExtract(str, &pos)
 	if !ok || pos >= len(str) || str[pos] != separator {
-		return 0, 0, 0, false
+		return result
 	}
 	pos++
 	day, ok := mysqlOneOrTwoDigitsForExtract(str, &pos)
 	if !ok || pos >= len(str) || (str[pos] != ' ' && str[pos] != 'T') {
-		return 0, 0, 0, false
+		return result
 	}
 	pos++
 	hour, ok := mysqlOneOrTwoDigitsForExtract(str, &pos)
 	if !ok || pos >= len(str) || str[pos] != ':' {
-		return 0, 0, 0, false
+		return result
 	}
 	pos++
 	minute, ok := mysqlOneOrTwoDigitsForExtract(str, &pos)
 	if !ok || pos >= len(str) || str[pos] != ':' {
-		return 0, 0, 0, false
+		return result
 	}
 	pos++
 	second, ok := mysqlOneOrTwoDigitsForExtract(str, &pos)
 	if !ok || !mysqlDatetimeDateForExtract(year, month, day) ||
 		!types.ValidTimeInDay(uint8(hour), uint8(minute), uint8(second)) {
-		return 0, 0, 0, false
+		return result
 	}
-	return hour, uint8(minute), uint8(second), true
+	result.hour = hour
+	result.minute = uint8(minute)
+	result.second = uint8(second)
+	result.valid = true
+	return result
 }
 
 func mysqlDatetimeDateForExtract(year, month, day uint64) bool {
@@ -4808,9 +4829,6 @@ func mysqlTimePrefixClockForExtract(str string) (uint64, uint8, uint8, bool) {
 		return 0, 0, 0, false
 	}
 	if hasDay {
-		if hour > 23 {
-			return 0, 0, 0, false
-		}
 		if day >= 35 || hour > 838-day*24 {
 			hour = 839
 		} else {
@@ -4834,7 +4852,11 @@ func mysqlClockFieldsForExtract(str string) (uint64, uint8, uint8, bool) {
 		}
 		switch len(str) {
 		case 1, 2:
-			return 0, 0, uint8(mysqlClampedDigitsForExtract(str, 59)), true
+			second := mysqlClampedDigitsForExtract(str, 60)
+			if second >= 60 {
+				return 0, 0, 0, false
+			}
+			return 0, 0, uint8(second), true
 		case 3, 4:
 			minute := mysqlClampedDigitsForExtract(str[:len(str)-2], 60)
 			second := mysqlClampedDigitsForExtract(str[len(str)-2:], 60)
@@ -4917,19 +4939,21 @@ func mysqlOneOrTwoDigitsForExtract(str string, pos *int) (uint64, bool) {
 	return mysqlClampedDigitsForExtract(str[start:*pos], math.MaxUint64), true
 }
 
-func parseCompactDatetimeClockForExtract(str string) (uint64, uint8, uint8, bool) {
+func parseCompactDatetimeClockForExtract(str string) timeExtractParseResult {
 	digitCount := 0
 	for digitCount < len(str) && str[digitCount] >= '0' && str[digitCount] <= '9' {
 		digitCount++
 	}
 
 	if digitCount >= 14 {
-		return compactDatetimeClockForExtract(str[:14], false)
+		hour, minute, second, ok := compactDatetimeClockForExtract(str[:14], false)
+		return timeExtractParseResult{hour: hour, minute: minute, second: second, matched: true, valid: ok}
 	}
 	if digitCount >= 12 {
-		return compactDatetimeClockForExtract(str[:12], true)
+		hour, minute, second, ok := compactDatetimeClockForExtract(str[:12], true)
+		return timeExtractParseResult{hour: hour, minute: minute, second: second, matched: true, valid: ok}
 	}
-	return 0, 0, 0, false
+	return timeExtractParseResult{}
 }
 
 func compactDatetimeClockForExtract(str string, twoDigitYear bool) (uint64, uint8, uint8, bool) {

@@ -81,3 +81,10 @@ SELECT HOUR('12:34:56.789012') AS fractional_time_hour,
        HOUR('2024-12-20T15:30:45.123456') AS t_datetime_hour,
        HOUR('  12:34:56  ') AS trimmed_time_hour,
        HOUR('foo12:34:56') AS malformed_time_hour;
+
+-- Signed DATETIME, invalid compact DATETIME, extended day-TIME, and invalid compact seconds.
+SELECT HOUR('-2024-12-20 15:30:45') AS negative_datetime_hour,
+       HOUR('-20241220153045') AS negative_compact_datetime_hour,
+       HOUR('20240230010203') AS invalid_calendar_compact_datetime_hour,
+       HOUR('2 30:00:00') AS extended_day_time_hour,
+       HOUR('60') AS invalid_compact_second_hour;

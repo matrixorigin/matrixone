@@ -77,3 +77,10 @@ SELECT SECOND('12:34:56.789012') AS fractional_time_second,
        SECOND('2024-12-20T15:30:45.123456') AS t_datetime_second,
        SECOND('  12:34:56  ') AS trimmed_time_second,
        SECOND('foo12:34:56') AS malformed_time_second;
+
+-- Signed DATETIME, invalid compact DATETIME, extended day-TIME, and invalid compact seconds.
+SELECT SECOND('-2024-12-20 15:30:45') AS negative_datetime_second,
+       SECOND('-20241220153045') AS negative_compact_datetime_second,
+       SECOND('20240230010203') AS invalid_calendar_compact_datetime_second,
+       SECOND('2 30:00:00') AS extended_day_time_second,
+       SECOND('60') AS invalid_compact_second_second;

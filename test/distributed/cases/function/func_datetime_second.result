@@ -94,3 +94,10 @@ SECOND('  12:34:56  ') AS trimmed_time_second,
 SECOND('foo12:34:56') AS malformed_time_second;
 ➤ fractional_time_second[-6,8,0]  ¦  day_fractional_time_second[-6,8,0]  ¦  negative_fractional_time_second[-6,8,0]  ¦  negative_day_fractional_time_second[-6,8,0]  ¦  overflow_time_second[-6,8,0]  ¦  negative_overflow_time_second[-6,8,0]  ¦  invalid_minute_second[-6,8,0]  ¦  invalid_second_second[-6,8,0]  ¦  compact_time_second[-6,8,0]  ¦  compact_datetime_fractional_second[-6,8,0]  ¦  invalid_compact_datetime_second[-6,8,0]  ¦  date_only_time_second[-6,8,0]  ¦  t_datetime_second[-6,8,0]  ¦  trimmed_time_second[-6,8,0]  ¦  malformed_time_second[-6,8,0]  𝄀
 56  ¦  5  ¦  56  ¦  5  ¦  59  ¦  59  ¦  null  ¦  null  ¦  45  ¦  45  ¦  null  ¦  24  ¦  45  ¦  56  ¦  null
+SELECT SECOND('-2024-12-20 15:30:45') AS negative_datetime_second,
+SECOND('-20241220153045') AS negative_compact_datetime_second,
+SECOND('20240230010203') AS invalid_calendar_compact_datetime_second,
+SECOND('2 30:00:00') AS extended_day_time_second,
+SECOND('60') AS invalid_compact_second_second;
+➤ negative_datetime_second[-6,8,0]  ¦  negative_compact_datetime_second[-6,8,0]  ¦  invalid_calendar_compact_datetime_second[-6,8,0]  ¦  extended_day_time_second[-6,8,0]  ¦  invalid_compact_second_second[-6,8,0]  𝄀
+45  ¦  45  ¦  null  ¦  0  ¦  null
