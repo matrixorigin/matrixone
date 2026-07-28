@@ -229,13 +229,6 @@ func (bat *Batch) UnmarshalBinaryWithAnyMp(data []byte, mp *mpool.MPool) (err er
 			bat.Clean(mp)
 		}
 		bat.Vecs = make([]*vector.Vector, vecsLen)
-		for i := range bat.Vecs {
-			if bat.offHeap {
-				bat.Vecs[i] = vector.NewOffHeapVec()
-			} else {
-				bat.Vecs[i] = vector.NewVecFromReuse()
-			}
-		}
 	}
 
 	vecs := bat.Vecs
@@ -250,6 +243,18 @@ func (bat *Batch) UnmarshalBinaryWithAnyMp(data []byte, mp *mpool.MPool) (err er
 		vecData, err := cursor.read(int(size))
 		if err != nil {
 			return err
+		}
+		if vecs[i] == nil {
+			if bat.offHeap {
+				vecs[i] = vector.NewOffHeapVec()
+			} else {
+				vecs[i] = vector.NewVecFromReuse()
+			}
+		} else if vecs[i].Allocated() > 0 || vecs[i].NeedDup() {
+			if mp == nil && !vecs[i].NeedDup() {
+				return moerr.NewInvalidInputNoCtx("cannot unmarshal into an owned batch vector without a memory pool")
+			}
+			vecs[i].Free(mp)
 		}
 		if err := vecs[i].UnmarshalBinary(vecData); err != nil {
 			return err

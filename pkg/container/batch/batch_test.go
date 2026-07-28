@@ -129,6 +129,32 @@ func TestBatchUnmarshalWithAnyMpRejectsTruncatedData(t *testing.T) {
 	}
 
 	require.Equal(t, int64(0), mp.CurrNB())
+
+	vectorEnd := 16 + int(types.DecodeUint32(data[12:16]))
+	t.Run("preallocated_nil_vector", func(t *testing.T) {
+		target := NewWithSize(1)
+		var unmarshalErr error
+		require.NotPanics(t, func() {
+			unmarshalErr = target.UnmarshalBinaryWithAnyMp(data[:vectorEnd], mp)
+		})
+		require.Error(t, unmarshalErr)
+
+		require.NoError(t, target.UnmarshalBinaryWithAnyMp(data, mp))
+		target.Clean(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	})
+
+	t.Run("owned_vector", func(t *testing.T) {
+		target := NewOffHeapWithSize(1)
+		target.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int64.ToType())
+		require.NoError(t, vector.AppendFixed(target.Vecs[0], int64(-1), false, mp))
+		require.Positive(t, mp.CurrNB())
+
+		require.Error(t, target.UnmarshalBinaryWithAnyMp(data[:vectorEnd], mp))
+		require.NoError(t, target.UnmarshalBinaryWithAnyMp(data, mp))
+		target.Clean(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	})
 }
 
 func TestBatchShrink(t *testing.T) {
