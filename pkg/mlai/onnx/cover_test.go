@@ -124,7 +124,7 @@ func TestOutputConversions(t *testing.T) {
 
 	check := func(v ort.Value, dt DType, want []any) {
 		defer v.Destroy()
-		got, err := anyTensorFlat(v)
+		got, err := anyTensorFlat(v, newResultBudget())
 		require.NoError(t, err)
 		require.Equal(t, want, got)
 		got, err = flatData(v, dt)
@@ -162,7 +162,7 @@ func TestOutputConversions(t *testing.T) {
 
 	// valueToJSON on a plain tensor renders the flat array.
 	v3 := mkTensor(t, []int32{9})
-	j, err := valueToJSON(v3)
+	j, err := valueToJSON(v3, newResultBudget())
 	require.NoError(t, err)
 	require.Equal(t, []any{int64(9)}, j)
 	require.NoError(t, v3.Destroy())
@@ -171,9 +171,63 @@ func TestOutputConversions(t *testing.T) {
 	// too: they never pass through ParseShape, so an oversized model output
 	// must be rejected before conversion.
 	big := mkTensor(t, make([]int8, MaxTensorElements+1))
-	_, err = anyTensorFlat(big)
+	_, err = anyTensorFlat(big, newResultBudget())
 	require.ErrorContains(t, err, "exceeds")
 	require.NoError(t, big.Destroy())
+}
+
+// TestAggregateResultBudget: the conversion budget is shared across the whole
+// invocation result. Tensors each individually below the per-tensor limit must
+// still be rejected when their aggregate exceeds it — both as multiple named
+// outputs (sequential charges on one budget) and recursively through a
+// sequence.
+func TestAggregateResultBudget(t *testing.T) {
+	skipIfNoRuntime(t)
+	const half = MaxTensorElements/2 + 1 // individually legal, two exceed
+
+	// Multiple named outputs share one budget (as in Session.Run).
+	b := newResultBudget()
+	o1 := mkTensor(t, make([]int8, half))
+	defer o1.Destroy()
+	o2 := mkTensor(t, make([]int8, half))
+	defer o2.Destroy()
+	_, err := valueToJSON(o1, b)
+	require.NoError(t, err)
+	_, err = valueToJSON(o2, b)
+	require.ErrorContains(t, err, "total result size limit")
+
+	// A sequence recursively charges the same budget.
+	s1 := mkTensor(t, make([]int8, half))
+	s2 := mkTensor(t, make([]int8, half))
+	seq, err := ort.NewSequence([]ort.Value{s1, s2})
+	require.NoError(t, err)
+	defer func() {
+		seq.Destroy()
+		s1.Destroy()
+		s2.Destroy()
+	}()
+	_, err = valueToJSON(seq, newResultBudget())
+	require.ErrorContains(t, err, "total result size limit")
+
+	// A long sequence of tiny values is bounded too: each node charges at
+	// least one unit.
+	tiny := newResultBudget()
+	tiny.remaining = 3
+	e1 := mkTensor(t, []int8{1})
+	e2 := mkTensor(t, []int8{2})
+	e3 := mkTensor(t, []int8{3})
+	e4 := mkTensor(t, []int8{4})
+	seq2, err := ort.NewSequence([]ort.Value{e1, e2, e3, e4})
+	require.NoError(t, err)
+	defer func() {
+		seq2.Destroy()
+		e1.Destroy()
+		e2.Destroy()
+		e3.Destroy()
+		e4.Destroy()
+	}()
+	_, err = valueToJSON(seq2, tiny)
+	require.ErrorContains(t, err, "total result size limit")
 }
 
 // TestScalarNormalization covers the float normalization edge cases.

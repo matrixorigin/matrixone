@@ -130,9 +130,10 @@ func uintFlat[T interface {
 }
 
 // valueToJSON renders an arbitrary output Value (tensor, sequence, or map) into
-// a json-encodable structure. Used when output_shape is NULL, i.e. the caller
-// does not know / declare a tensor shape (e.g. sklearn sequence-of-maps).
-func valueToJSON(v ort.Value) (any, error) {
+// a json-encodable structure, charging every converted node against the
+// invocation-wide budget. Used when output_shape is NULL, i.e. the caller does
+// not know / declare a tensor shape (e.g. sklearn sequence-of-maps).
+func valueToJSON(v ort.Value, b *resultBudget) (any, error) {
 	switch t := v.(type) {
 	case *ort.Sequence:
 		vals, err := t.GetValues()
@@ -141,7 +142,7 @@ func valueToJSON(v ort.Value) (any, error) {
 		}
 		out := make([]any, len(vals))
 		for i, sv := range vals {
-			j, err := valueToJSON(sv)
+			j, err := valueToJSON(sv, b)
 			if err != nil {
 				return nil, err
 			}
@@ -153,21 +154,21 @@ func valueToJSON(v ort.Value) (any, error) {
 		if err != nil {
 			return nil, wrapErr(err)
 		}
-		return mapToJSON(keys, vals)
+		return mapToJSON(keys, vals, b)
 	default:
 		// A tensor of some element type. Read it generically by its ONNX type.
-		return anyTensorToJSON(v)
+		return anyTensorFlat(v, b)
 	}
 }
 
 // mapToJSON builds a json object from an ONNX Map's key and value tensors.
 // Keys are stringified; values become json scalars.
-func mapToJSON(keys, vals ort.Value) (any, error) {
-	kflat, err := anyTensorFlat(keys)
+func mapToJSON(keys, vals ort.Value, b *resultBudget) (any, error) {
+	kflat, err := anyTensorFlat(keys, b)
 	if err != nil {
 		return nil, err
 	}
-	vflat, err := anyTensorFlat(vals)
+	vflat, err := anyTensorFlat(vals, b)
 	if err != nil {
 		return nil, err
 	}
@@ -179,10 +180,4 @@ func mapToJSON(keys, vals ort.Value) (any, error) {
 		out[scalarKey(kflat[i])] = vflat[i]
 	}
 	return out, nil
-}
-
-// anyTensorToJSON renders a tensor Value of unknown element type as a flat json
-// array (shape is not reconstructed in the NULL-output_shape path).
-func anyTensorToJSON(v ort.Value) (any, error) {
-	return anyTensorFlat(v)
 }

@@ -182,10 +182,14 @@ func (s *Session) Run(ctx context.Context, inputJSON []byte, inShape, outShape *
 		// Declared tensor output: reshape the first output.
 		return tensorToNested(outputs[0], outShape)
 	}
-	// Undeclared: render every output by structure, keyed by name.
+	// Undeclared: render every output by structure, keyed by name. All outputs
+	// share one conversion budget so the aggregate result — across many named
+	// outputs and recursively through sequences/maps — stays bounded even when
+	// each tensor is individually within the per-tensor limit.
+	budget := newResultBudget()
 	obj := make(map[string]any, len(outputs))
 	for i, o := range outputs {
-		j, err := valueToJSON(o)
+		j, err := valueToJSON(o, budget)
 		if err != nil {
 			return nil, err
 		}

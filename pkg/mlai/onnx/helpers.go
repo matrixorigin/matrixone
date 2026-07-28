@@ -122,18 +122,50 @@ func tensorData[T ort.TensorData](v ort.Value, dt DType) ([]T, error) {
 	return t.GetData(), nil
 }
 
+// resultBudget bounds the AGGREGATE number of elements converted for one
+// inference invocation. The per-tensor cap alone is not enough: a model may
+// declare many named outputs (or long sequences), each individually legal,
+// whose converted []any representations are all retained in the result tree
+// at once. Every converted tensor (and every sequence/map node) charges the
+// shared budget; exceeding it fails the query instead of OOMing the CN.
+type resultBudget struct {
+	remaining int64
+}
+
+func newResultBudget() *resultBudget {
+	// The whole-result cap equals the single-tensor cap: a result with more
+	// total elements could not fit the 64 MB json blob limit anyway.
+	return &resultBudget{remaining: MaxTensorElements}
+}
+
+func (b *resultBudget) charge(n int64) error {
+	if n < 1 {
+		n = 1 // every value node costs at least one unit, bounding node count
+	}
+	if n > b.remaining {
+		return moerr.NewInvalidInputNoCtx(
+			"onnx: model output exceeds the total result size limit")
+	}
+	b.remaining -= n
+	return nil
+}
+
 // anyTensorFlat reads a tensor Value of any supported element type into a flat
 // []any of normalized json scalars, inferring the element type from the
 // concrete Go type. Used on the NULL-output_shape path where the caller did not
 // declare a dtype.
 //
 // Model-produced (auto-allocated) outputs never pass through ParseShape, so
-// the element cap — which also bounds the boxed []any conversion peak — is
-// applied here as a single check for all branches.
-func anyTensorFlat(v ort.Value) ([]any, error) {
-	if n := v.GetShape().FlattenedSize(); n < 0 || n > MaxTensorElements {
+// the element charge — which also bounds the boxed []any conversion peak — is
+// applied here, against the invocation-wide budget.
+func anyTensorFlat(v ort.Value, b *resultBudget) ([]any, error) {
+	n := v.GetShape().FlattenedSize()
+	if n < 0 {
 		return nil, moerr.NewInvalidInputNoCtxf(
-			"onnx: model output tensor of %d elements exceeds the supported limits", n)
+			"onnx: model output tensor has invalid element count %d", n)
+	}
+	if err := b.charge(n); err != nil {
+		return nil, err
 	}
 	switch t := v.(type) {
 	case *ort.Tensor[float32]:
