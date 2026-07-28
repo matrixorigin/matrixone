@@ -18,7 +18,14 @@ import (
 	"math"
 	"sync"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+)
+
+var (
+	eventProxyBackendConnected    = logutil.Event{Name: "proxy.backend.connected", Message: "proxy connected to CN backend"}
+	eventProxyBackendDisconnected = logutil.Event{Name: "proxy.backend.disconnected", Message: "proxy disconnected from CN backend"}
 )
 
 // Tenant defines alias tenant name type of string.
@@ -253,7 +260,10 @@ func (m *connManager) connect(cn *CNServer, t *tunnel) {
 		m.cnTunnels[cn.uuid][t] = struct{}{}
 	}
 	m.connIDServers[cn.connID] = cn
-	logutil.Infof("connect to CN server %s, the conn ID is %d", cn.uuid, cn.connID)
+	eventProxyBackendConnected.DebugLazy(func() []zap.Field {
+		fields := logutil.StringFingerprintFields("cn", cn.uuid)
+		return append(fields, zap.Uint32("connection-id", cn.connID))
+	})
 }
 
 // selectOneFailed is called when a connection selected by selectOne fails to establish.
@@ -281,7 +291,10 @@ func (m *connManager) disconnect(cn *CNServer, t *tunnel) {
 		delete(m.cnTunnels[cn.uuid], t)
 	}
 	delete(m.connIDServers, cn.connID)
-	logutil.Infof("disconnect from CN server %s, the conn ID is %d", cn.uuid, cn.connID)
+	eventProxyBackendDisconnected.DebugLazy(func() []zap.Field {
+		fields := logutil.StringFingerprintFields("cn", cn.uuid)
+		return append(fields, zap.Uint32("connection-id", cn.connID))
+	})
 }
 
 // rebind moves an already-established backend from one tunnel generation to
