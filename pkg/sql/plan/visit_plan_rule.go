@@ -169,8 +169,6 @@ func (rule *GetParamRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			}
 		*/
 		return e, nil
-	case *plan.Expr_W:
-		return e, applyRuleToWindowSpec(rule, exprImpl.W)
 	case *plan.Expr_List:
 		for i := range exprImpl.List.List {
 			exprImpl.List.List[i], _ = rule.ApplyExpr(exprImpl.List.List[i])
@@ -250,8 +248,6 @@ func (rule *ResetParamOrderRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 	case *plan.Expr_P:
 		exprImpl.P.Pos = int32(rule.params[int(exprImpl.P.Pos)])
 		return e, nil
-	case *plan.Expr_W:
-		return e, applyRuleToWindowSpec(rule, exprImpl.W)
 	case *plan.Expr_List:
 		for i := range exprImpl.List.List {
 			exprImpl.List.List[i], _ = rule.ApplyExpr(exprImpl.List.List[i])
