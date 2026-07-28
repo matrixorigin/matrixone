@@ -28,7 +28,7 @@ set @bad_prepare_sql = 'select * from missing_prepare_table';
 prepare s from @bad_prepare_sql;
 SQL parser error: table "missing_prepare_table" does not exist
 execute S;
-invalid state prepared statement 'S' does not exist
+invalid state prepared statement 's' does not exist
 prepare active_direct from 'select 101';
 begin;
 prepare active_direct from select * from missing_prepare_table;
