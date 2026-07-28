@@ -4167,8 +4167,12 @@ func TestStringTimeExtract(t *testing.T) {
 				"12:30:45", "272:59:59", "-272:59:59", "2 03:04:05", "123045",
 				"2024-12-20 15:30:45", "20241220153045", "241220153045", "2024-12-20",
 				"15:30:45abc", "2024-12-20 15:30:45abc", "2024-12-20foo", "invalid", "", "   ", "\t",
+				"2 03:04:05.123", "12:30:45.123456", "272:59:59.123456", "-272:59:59.123456",
+				"-2 03:04:05.123", "839:00:00", "-839:00:00", "20241220", "12:60:00", "12:30:60",
+				"2024-12-20T15:30:45.123456", "  12:34:56  ",
 			},
-			[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
+			[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false,
+				false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
 	}
 
 	testCases := []struct {
@@ -4179,22 +4183,28 @@ func TestStringTimeExtract(t *testing.T) {
 		{
 			name: "hour",
 			expect: NewFunctionTestResult(types.T_uint32.ToType(), false,
-				[]uint32{12, 272, 272, 51, 12, 15, 15, 15, 0, 15, 15, 0, 0, 0, 0, 0},
-				[]bool{false, false, false, false, false, false, false, false, false, false, false, true, true, true, true, true}),
+				[]uint32{12, 272, 272, 51, 12, 15, 15, 15, 0, 15, 15, 0, 0, 0, 0, 0,
+					51, 12, 272, 272, 51, 838, 838, 838, 0, 0, 15, 12},
+				[]bool{false, false, false, false, false, false, false, false, false, false, false, true, true, true, true, true,
+					false, false, false, false, false, false, false, false, true, true, false, false}),
 			fn: StringToHour,
 		},
 		{
 			name: "minute",
 			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
-				[]uint8{30, 59, 59, 4, 30, 30, 30, 30, 20, 30, 30, 0, 0, 0, 0, 0},
-				[]bool{false, false, false, false, false, false, false, false, false, false, false, true, true, true, true, true}),
+				[]uint8{30, 59, 59, 4, 30, 30, 30, 30, 20, 30, 30, 0, 0, 0, 0, 0,
+					4, 30, 59, 59, 4, 59, 59, 59, 0, 0, 30, 34},
+				[]bool{false, false, false, false, false, false, false, false, false, false, false, true, true, true, true, true,
+					false, false, false, false, false, false, false, false, true, true, false, false}),
 			fn: StringToMinute,
 		},
 		{
 			name: "second",
 			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
-				[]uint8{45, 59, 59, 5, 45, 45, 45, 45, 24, 45, 45, 0, 0, 0, 0, 0},
-				[]bool{false, false, false, false, false, false, false, false, false, false, false, true, true, true, true, true}),
+				[]uint8{45, 59, 59, 5, 45, 45, 45, 45, 24, 45, 45, 0, 0, 0, 0, 0,
+					5, 45, 59, 59, 5, 59, 59, 59, 0, 0, 45, 56},
+				[]bool{false, false, false, false, false, false, false, false, false, false, false, true, true, true, true, true,
+					false, false, false, false, false, false, false, false, true, true, false, false}),
 			fn: StringToSecond,
 		},
 	}
@@ -4277,8 +4287,11 @@ func TestStringTimeExtractTomorrowDatetime(t *testing.T) {
 
 func TestStringTimeExtractRegisteredOverloads(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	inputValues := []string{"12:30:45", "272:59:59", "2024-12-20 15:30:45", "2024-12-20", "invalid", ""}
-	wantNulls := []bool{false, false, false, false, true, true}
+	inputValues := []string{
+		"12:30:45", "272:59:59", "2024-12-20 15:30:45", "2024-12-20", "invalid", "",
+		"2 03:04:05.123", "12:30:45.123456", "839:00:00", "20241220", "12:60:00", "12:30:60",
+	}
+	wantNulls := []bool{false, false, false, false, true, true, false, false, false, false, true, true}
 
 	typeCases := []types.T{types.T_varchar, types.T_char, types.T_text}
 	functionCases := []struct {
@@ -4287,9 +4300,9 @@ func TestStringTimeExtractRegisteredOverloads(t *testing.T) {
 		hours      []uint32
 		parts      []uint8
 	}{
-		{name: "hour", returnType: types.T_uint32, hours: []uint32{12, 272, 15, 0, 0, 0}},
-		{name: "minute", returnType: types.T_uint8, parts: []uint8{30, 59, 30, 20, 0, 0}},
-		{name: "second", returnType: types.T_uint8, parts: []uint8{45, 59, 45, 24, 0, 0}},
+		{name: "hour", returnType: types.T_uint32, hours: []uint32{12, 272, 15, 0, 0, 0, 51, 12, 838, 838, 0, 0}},
+		{name: "minute", returnType: types.T_uint8, parts: []uint8{30, 59, 30, 20, 0, 0, 4, 30, 59, 59, 0, 0}},
+		{name: "second", returnType: types.T_uint8, parts: []uint8{45, 59, 45, 24, 0, 0, 5, 45, 59, 59, 0, 0}},
 	}
 
 	for _, inputType := range typeCases {

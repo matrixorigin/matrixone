@@ -6,7 +6,7 @@ SELECT HOUR('2024-12-20 15:30:45') AS result2;
 15
 SELECT HOUR(NOW()) AS result3;
 ➤ result3[-6,8,0]  𝄀
-12
+17
 SELECT HOUR(CAST('15:30:45' AS TIME)) AS time_cast;
 ➤ time_cast[4,32,0]  𝄀
 15
@@ -88,3 +88,20 @@ HOUR('2024-12-20 15:30:45abc') AS trailing_datetime_hour,
 HOUR('2024-12-20foo') AS malformed_datetime_hour;
 ➤ compact_datetime_hour[4,32,0]  ¦  trailing_time_hour[4,32,0]  ¦  trailing_datetime_hour[4,32,0]  ¦  malformed_datetime_hour[4,32,0]  𝄀
 15  ¦  15  ¦  15  ¦  null
+SELECT HOUR('12:34:56.789012') AS fractional_time_hour,
+HOUR('2 03:04:05.9') AS day_fractional_time_hour,
+HOUR('-12:34:56.789012') AS negative_fractional_time_hour,
+HOUR('-2 03:04:05.9') AS negative_day_fractional_time_hour,
+HOUR('839:00:00') AS overflow_time_hour,
+HOUR('-839:00:00') AS negative_overflow_time_hour,
+HOUR('12:60:00') AS invalid_minute_hour,
+HOUR('12:34:60') AS invalid_second_hour,
+HOUR('123045.987654') AS compact_time_hour,
+HOUR('20241220153045.999999') AS compact_datetime_fractional_hour,
+HOUR('20241220156045') AS invalid_compact_datetime_hour,
+HOUR('2024-12-20') AS date_only_time_hour,
+HOUR('2024-12-20T15:30:45.123456') AS t_datetime_hour,
+HOUR('  12:34:56  ') AS trimmed_time_hour,
+HOUR('foo12:34:56') AS malformed_time_hour;
+➤ fractional_time_hour[4,32,0]  ¦  day_fractional_time_hour[4,32,0]  ¦  negative_fractional_time_hour[4,32,0]  ¦  negative_day_fractional_time_hour[4,32,0]  ¦  overflow_time_hour[4,32,0]  ¦  negative_overflow_time_hour[4,32,0]  ¦  invalid_minute_hour[4,32,0]  ¦  invalid_second_hour[4,32,0]  ¦  compact_time_hour[4,32,0]  ¦  compact_datetime_fractional_hour[4,32,0]  ¦  invalid_compact_datetime_hour[4,32,0]  ¦  date_only_time_hour[4,32,0]  ¦  t_datetime_hour[4,32,0]  ¦  trimmed_time_hour[4,32,0]  ¦  malformed_time_hour[4,32,0]  𝄀
+12  ¦  51  ¦  12  ¦  51  ¦  838  ¦  838  ¦  null  ¦  null  ¦  12  ¦  15  ¦  null  ¦  0  ¦  15  ¦  12  ¦  null

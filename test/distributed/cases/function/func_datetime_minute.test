@@ -60,3 +60,20 @@ SELECT MINUTE('241220153045') AS compact_datetime_minute,
        MINUTE('15:30:45abc') AS trailing_time_minute,
        MINUTE('2024-12-20 15:30:45abc') AS trailing_datetime_minute,
        MINUTE('2024-12-20foo') AS malformed_datetime_minute;
+
+-- String TIME coercion: fractional/day/compact forms, range clamp, and invalid fields.
+SELECT MINUTE('12:34:56.789012') AS fractional_time_minute,
+       MINUTE('2 03:04:05.9') AS day_fractional_time_minute,
+       MINUTE('-12:34:56.789012') AS negative_fractional_time_minute,
+       MINUTE('-2 03:04:05.9') AS negative_day_fractional_time_minute,
+       MINUTE('839:00:00') AS overflow_time_minute,
+       MINUTE('-839:00:00') AS negative_overflow_time_minute,
+       MINUTE('12:60:00') AS invalid_minute_minute,
+       MINUTE('12:34:60') AS invalid_second_minute,
+       MINUTE('123045.987654') AS compact_time_minute,
+       MINUTE('20241220153045.999999') AS compact_datetime_fractional_minute,
+       MINUTE('20241220156045') AS invalid_compact_datetime_minute,
+       MINUTE('2024-12-20') AS date_only_time_minute,
+       MINUTE('2024-12-20T15:30:45.123456') AS t_datetime_minute,
+       MINUTE('  12:34:56  ') AS trimmed_time_minute,
+       MINUTE('foo12:34:56') AS malformed_time_minute;
