@@ -36,6 +36,8 @@ select cast(cast(1.4 as decimal(10,2)) as signed), cast(cast(1.5 as decimal(10,2
 select cast(cast(10000 as signed) as decimal(6,2)), cast(cast(-10000 as signed) as decimal(6,2));
 select cast(cast(0.5 as double) as signed), cast(cast(1.5 as double) as signed), cast(cast(2.5 as double) as signed),
        cast(cast(-0.5 as double) as signed), cast(cast(-1.5 as double) as signed), cast(cast(-2.5 as double) as signed);
+select cast('7e0' as signed), cast('7e+2' as signed), cast('1.5e0' as signed), cast('7e2' as unsigned);
+select cast('.5e0' as signed), cast('-.5e0' as signed), cast('+.5e+2' as signed);
 
 # String numeric cast with sign and radix prefixes.
 # 0b/0B is binary, 0o/0O is octal, 0x/0X is hexadecimal, and no prefix is decimal.
