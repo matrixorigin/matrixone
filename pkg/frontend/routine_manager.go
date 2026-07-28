@@ -45,6 +45,7 @@ type RoutineManager struct {
 	clients                map[*Conn]*Routine
 	workerWG               sync.WaitGroup
 	cleanKillQueueInterval time.Duration
+	pu                     *config.ParameterUnit
 	// routinesByID keeps the routines by connection ID.
 	routinesByConnID map[uint32]*Routine
 	tlsConfig        *tls.Config
@@ -253,12 +254,12 @@ func (rm *RoutineManager) getTlsConfig() *tls.Config {
 
 func (rm *RoutineManager) getConnID() (uint32, error) {
 	// Only works in unit test.
-	if getPu(rm.service).HAKeeperClient == nil {
+	if rm.pu.HAKeeperClient == nil {
 		return nextConnectionID(), nil
 	}
 	ctx, cancel := context.WithTimeoutCause(rm.ctx, time.Second*2, moerr.CauseGetConnID)
 	defer cancel()
-	connID, err := getPu(rm.service).HAKeeperClient.AllocateIDByKey(ctx, ConnIDAllocKey)
+	connID, err := rm.pu.HAKeeperClient.AllocateIDByKey(ctx, ConnIDAllocKey)
 	if err != nil {
 		return 0, moerr.AttachCause(ctx, err)
 	}
@@ -290,12 +291,9 @@ func (rm *RoutineManager) Created(rs *Conn) error {
 		logutil.Errorf("failed to get connection ID from HAKeeper: %v", err)
 		return err
 	}
-	sid := ""
-	if rm.baseService != nil {
-		sid = rm.baseService.ID()
-	}
-	pro := NewMysqlClientProtocol(sid, connID, rs, int(getPu(rm.service).SV.MaxBytesInOutbufToFlush), getPu(rm.service).SV)
-	routine := NewRoutine(rm.getCtx(), pro, getPu(rm.service).SV)
+	sid := rm.service
+	pro := NewMysqlClientProtocol(sid, connID, rs, int(rm.pu.SV.MaxBytesInOutbufToFlush), rm.pu.SV)
+	routine := NewRoutine(rm.getCtx(), pro, rm.pu.SV)
 	v2.CreatedRoutineCounter.Inc()
 
 	cancelCtx := routine.getCancelRoutineCtx()
@@ -324,7 +322,7 @@ func (rm *RoutineManager) Created(rs *Conn) error {
 	ses.Debugf(cancelCtx, "have done some preparation for the connection %s", rs.RemoteAddress())
 
 	// With proxy module enabled, we try to update salt value and label info from proxy.
-	if getPu(rm.service).SV.ProxyEnabled {
+	if rm.pu.SV.ProxyEnabled {
 		pro.receiveExtraInfo(rs)
 	}
 	rm.setRoutine(rs, pro.connectionID, routine)
@@ -591,9 +589,22 @@ func (rm *RoutineManager) startKillRoutineWorker(interval time.Duration) {
 
 func NewRoutineManager(ctx context.Context, service string) (*RoutineManager, error) {
 	ctx, cancel := context.WithCancel(ctx)
-	pu, ok := ctx.Value(config.ParameterUnitKey).(*config.ParameterUnit)
-	if !ok || pu == nil {
-		pu = getPuIfPresent(service)
+	contextPU, _ := ctx.Value(config.ParameterUnitKey).(*config.ParameterUnit)
+	if contextPU != nil && contextPU.SV == nil {
+		cancel()
+		return nil, moerr.NewInternalError(ctx, "invalid parameter unit")
+	}
+	servicePU := getPuIfPresent(service)
+	pu := servicePU
+	publishPU := false
+	if contextPU != nil {
+		if servicePU == nil {
+			pu = contextPU
+			publishPU = true
+		} else if contextPU != servicePU {
+			cancel()
+			return nil, moerr.NewInternalErrorf(ctx, "parameter unit mismatch for service %q", service)
+		}
 	}
 	if pu == nil || pu.SV == nil {
 		cancel()
@@ -612,6 +623,7 @@ func NewRoutineManager(ctx context.Context, service string) (*RoutineManager, er
 		routinesByConnID: make(map[uint32]*Routine),
 		accountRoutine:   accountRoutine,
 		cancel:           cancel,
+		pu:               pu,
 		service:          service,
 	}
 	sv := pu.SV
@@ -622,6 +634,10 @@ func NewRoutineManager(ctx context.Context, service string) (*RoutineManager, er
 			cancel()
 			return nil, err
 		}
+	}
+	if publishPU && publishPuIfAbsent(service, pu) != pu {
+		cancel()
+		return nil, moerr.NewInternalErrorf(ctx, "parameter unit mismatch for service %q", service)
 	}
 
 	// add kill connect routine

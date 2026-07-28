@@ -23,10 +23,10 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -40,6 +40,23 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+var nextRoutineManagerTestServiceID atomic.Uint64
+
+func newRoutineManagerTestService(t *testing.T) string {
+	t.Helper()
+	return t.Name() + "/routine-manager-" +
+		strconv.FormatUint(nextRoutineManagerTestServiceID.Add(1), 10)
+}
+
+func newTestRoutineManager(t *testing.T, ctx context.Context) *RoutineManager {
+	t.Helper()
+	service := newRoutineManagerTestService(t)
+	rm, err := NewRoutineManager(ctx, service)
+	require.NoError(t, err)
+	t.Cleanup(rm.cancelCtx)
+	return rm
+}
 
 func Test_Closed(t *testing.T) {
 	clientConn, serverConn := net.Pipe()
@@ -390,10 +407,8 @@ func Test_rm(t *testing.T) {
 	pu.SV.SkipCheckUser = true
 	pu.SV.KillRountinesInterval = 1
 	ctx := context.WithValue(context.Background(), config.ParameterUnitKey, pu)
-	rm, err := NewRoutineManager(ctx, "")
-	assert.NoError(t, err)
+	rm := newTestRoutineManager(t, ctx)
 	rm.cleanKillQueue()
-	rm.cancelCtx()
 }
 
 func TestRoutineManagerRoutineMaps(t *testing.T) {
@@ -524,8 +539,7 @@ func TestRoutineManagerConfigSnapshotAndCancel(t *testing.T) {
 	pu.SV.CleanKillQueueInterval = 2
 	ctx := context.WithValue(context.Background(), config.ParameterUnitKey, pu)
 
-	rm, err := NewRoutineManager(ctx, "")
-	require.NoError(t, err)
+	rm := newTestRoutineManager(t, ctx)
 	require.Equal(t, 2*time.Minute, rm.cleanKillQueueInterval)
 
 	pu.SV.CleanKillQueueInterval = 3
@@ -547,7 +561,7 @@ func TestRoutineManagerRejectsMissingFrontendParameters(t *testing.T) {
 	pu := config.NewParameterUnit(nil, nil, nil, nil)
 	ctx := context.WithValue(context.Background(), config.ParameterUnitKey, pu)
 
-	rm, err := NewRoutineManager(ctx, "")
+	rm, err := NewRoutineManager(ctx, t.Name())
 	require.Nil(t, rm)
 	require.ErrorContains(t, err, "invalid parameter unit")
 }
@@ -561,7 +575,7 @@ func TestRoutineManagerRejectsMissingParameterUnit(t *testing.T) {
 		{name: "initialized service", initializeService: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			service := t.Name()
+			service := newRoutineManagerTestService(t)
 			if tc.initializeService {
 				InitServerLevelVars(service)
 			}
@@ -571,6 +585,69 @@ func TestRoutineManagerRejectsMissingParameterUnit(t *testing.T) {
 			require.ErrorContains(t, err, "invalid parameter unit")
 		})
 	}
+}
+
+func TestRoutineManagerPublishesContextParameterUnit(t *testing.T) {
+	service := newRoutineManagerTestService(t)
+	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+	pu.SV.SetDefaultValues()
+	pu.SV.KillRountinesInterval = 0
+	ctx := context.WithValue(context.Background(), config.ParameterUnitKey, pu)
+
+	rm, err := NewRoutineManager(ctx, service)
+	require.NoError(t, err)
+	t.Cleanup(rm.cancelCtx)
+	require.Same(t, pu, getPuIfPresent(service))
+
+	conn := &Conn{
+		conn:       &testConn{},
+		remoteAddr: "remote",
+		service:    service,
+	}
+	require.NoError(t, rm.Created(conn))
+	require.NotNil(t, rm.getRoutine(conn))
+	rm.Closed(conn)
+	require.Nil(t, rm.getRoutine(conn))
+}
+
+func TestRoutineManagerRejectsParameterUnitMismatch(t *testing.T) {
+	service := newRoutineManagerTestService(t)
+	servicePU := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+	servicePU.SV.SetDefaultValues()
+	InitServerLevelVars(service)
+	setPu(service, servicePU)
+
+	contextPU := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+	contextPU.SV.SetDefaultValues()
+	ctx := context.WithValue(context.Background(), config.ParameterUnitKey, contextPU)
+
+	rm, err := NewRoutineManager(ctx, service)
+	require.Nil(t, rm)
+	require.ErrorContains(t, err, "parameter unit mismatch")
+	require.Same(t, servicePU, getPuIfPresent(service))
+}
+
+func TestRoutineManagerFailedInitializationDoesNotPublishParameterUnit(t *testing.T) {
+	service := newRoutineManagerTestService(t)
+	invalidPU := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+	invalidPU.SV.SetDefaultValues()
+	invalidPU.SV.EnableTls = true
+	ctx := context.WithValue(context.Background(), config.ParameterUnitKey, invalidPU)
+
+	rm, err := NewRoutineManager(ctx, service)
+	require.Nil(t, rm)
+	require.ErrorContains(t, err, "cert file or key file is empty")
+	require.Nil(t, getPuIfPresent(service))
+
+	validPU := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+	validPU.SV.SetDefaultValues()
+	validPU.SV.KillRountinesInterval = 0
+	ctx = context.WithValue(context.Background(), config.ParameterUnitKey, validPU)
+
+	rm, err = NewRoutineManager(ctx, service)
+	require.NoError(t, err)
+	t.Cleanup(rm.cancelCtx)
+	require.Same(t, validPU, getPuIfPresent(service))
 }
 
 func TestRoutineManagerCancelWaitsForActiveWorker(t *testing.T) {
