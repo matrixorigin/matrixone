@@ -64,6 +64,32 @@ select count(*) from t1 left join t2 on t1.c1=t2.c1 and t1.c3 >t2.c3;
 select count(*) from t2 right join t1 on t1.c1=t2.c1;
 -- multi-column equi-join
 select count(*) from t1, t2 where t1.c1=t2.c1 and t1.c2=t2.c2;
+
+-- Keep plan output compact while retaining cross-CN shuffle.
+set @@max_dop = 1;
+
+-- Projected IN is planned as MARK. Both keys are NOT NULL, so every exact
+-- match is co-located and bucket-local state is sufficient for FALSE misses.
+-- @ignore:0
+explain (check '["Join Type: MARK", "shuffle"]')
+select sum(case when marker is true then 1 else 0 end) as true_count,
+       sum(case when marker is false then 1 else 0 end) as false_count,
+       sum(case when marker is null then 1 else 0 end) as null_count
+from (
+    select t1.c1 in (select c1 from t2) as marker
+    from t1
+) s;
+
+select sum(case when marker is true then 1 else 0 end) as true_count,
+       sum(case when marker is false then 1 else 0 end) as false_count,
+       sum(case when marker is null then 1 else 0 end) as null_count
+from (
+    select t1.c1 in (select c1 from t2) as marker
+    from t1
+) s;
+
+set @@max_dop = 0;
+
 create table t3(c1 int not null, c2 int not null)cluster by c1;
 insert into t3 select *,* from generate_series(1,1000000)g;
 -- @separator:table
