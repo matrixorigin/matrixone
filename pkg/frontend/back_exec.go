@@ -1227,8 +1227,8 @@ func (backSes *backSession) GetLastInsertID() uint64 {
 func (backSes *backSession) SetShowStmtType(statement ShowStatementType) {
 }
 
-func (backSes *backSession) RemovePrepareStmt(name string) {
-
+func (backSes *backSession) RemovePrepareStmt(name string) bool {
+	return false
 }
 
 func (backSes *backSession) CountPayload(i int) {

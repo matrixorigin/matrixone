@@ -1359,6 +1359,33 @@ func TestTopsort(t *testing.T) {
 	})
 }
 
+func TestNormalizeViewDependencyKeyForRestoreTopology(t *testing.T) {
+	snapshot := &plan.Snapshot{
+		TS: &timestamp.Timestamp{PhysicalTime: 42, LogicalTime: 7},
+	}
+	key, err := plan.FormatViewDependencyKey(
+		"db",
+		"source_view",
+		snapshot,
+	)
+	require.NoError(t, err)
+
+	normalized, err := normalizeViewDependencyKey(key)
+	require.NoError(t, err)
+	require.Equal(t, genKey("db", "source_view"), normalized)
+
+	ordinary := genKey("db", "view@snapshot=x")
+	normalized, err = normalizeViewDependencyKey(ordinary)
+	require.NoError(t, err)
+	require.Equal(t, ordinary, normalized)
+
+	key, err = plan.FormatViewDependencyKey("db#part", "view#part", nil)
+	require.NoError(t, err)
+	normalized, err = normalizeViewDependencyKey(key)
+	require.NoError(t, err)
+	require.Equal(t, genKey("db#part", "view#part"), normalized)
+}
+
 func Test_convertRowsIntoBatch(t *testing.T) {
 	colMysqlTyps := []defines.MysqlType{
 		defines.MYSQL_TYPE_VAR_STRING,
