@@ -143,7 +143,7 @@ func getParallelCount(count int) int {
 }
 
 // parallelCopyData copy data from srcFs to dstFs in parallel
-func parallelCopyData(srcFs, dstFs fileservice.FileService,
+func parallelCopyData(ctx context.Context, srcFs, dstFs fileservice.FileService,
 	files map[string]*objectio.BackupObject,
 	parallelCount int,
 	gcFileMap map[string]string,
@@ -162,7 +162,7 @@ func parallelCopyData(srcFs, dstFs fileservice.FileService,
 	taeFileList := make([]*taeFile, 0, len(files))
 	jobScheduler := tasks.NewParallelJobScheduler(parallelCount)
 	defer jobScheduler.Stop()
-	copyCtx, cancelCopy := context.WithCancelCause(context.Background())
+	copyCtx, cancelCopy := context.WithCancelCause(ctx)
 	defer cancelCopy(nil)
 	jobDone := make(chan struct{}, len(files))
 	go func() {
@@ -447,7 +447,7 @@ func execBackup(
 	}
 
 	// copy data
-	taeFileList, err := parallelCopyData(srcFs, dstFs, files, parallelNum, gcFileMap)
+	taeFileList, err := parallelCopyData(ctx, srcFs, dstFs, files, parallelNum, gcFileMap)
 	if err != nil {
 		return err
 	}
@@ -718,7 +718,8 @@ func (e *copiedObjectChecksumError) Unwrap() error {
 }
 
 func CopyFileWithRetry(ctx context.Context, srcFs, dstFs fileservice.FileService, name, dstDir string, newName ...string) ([]byte, error) {
-	return fileservice.DoWithRetry(
+	return fileservice.DoWithRetryContext(
+		ctx,
 		"CopyFile",
 		func() ([]byte, error) {
 			return CopyFile(ctx, srcFs, dstFs, name, dstDir, newName...)
