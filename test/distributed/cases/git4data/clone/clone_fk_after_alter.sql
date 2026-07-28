@@ -229,7 +229,108 @@ insert into fk_clone_recreate_fk_dst.child(id, parent_id) values (1, 999);
 drop database fk_clone_recreate_fk_dst;
 drop database fk_clone_recreate_fk_src;
 
--- 9. Clone an explicit database snapshot taken after ALTER.
+-- 9. A catalog-only forward reference must survive COPY ALTER until its
+-- parent is created.
+drop database if exists fk_clone_forward_src;
+create database fk_clone_forward_src;
+use fk_clone_forward_src;
+set foreign_key_checks = 0;
+create table fk_clone_forward_src.child (
+    id int primary key,
+    parent_id int,
+    constraint fk_forward foreign key (parent_id)
+        references fk_clone_forward_src.parent(id)
+);
+alter table fk_clone_forward_src.child add column payload int;
+select table_name, constraint_name, refer_table_name
+from mo_catalog.mo_foreign_keys
+where db_name = 'fk_clone_forward_src'
+order by constraint_name;
+create table fk_clone_forward_src.parent (id int primary key);
+set foreign_key_checks = 1;
+show create table fk_clone_forward_src.child;
+insert into fk_clone_forward_src.child values (1, 404, 0);
+drop database fk_clone_forward_src;
+
+-- 10. Dropping and recreating a parent under FOREIGN_KEY_CHECKS=0 is another
+-- catalog-only forward-reference path.
+drop database if exists fk_clone_forward_drop_src;
+create database fk_clone_forward_drop_src;
+use fk_clone_forward_drop_src;
+create table fk_clone_forward_drop_src.parent (id int primary key);
+create table fk_clone_forward_drop_src.child (
+    id int primary key,
+    parent_id int,
+    constraint fk_forward_drop foreign key (parent_id)
+        references fk_clone_forward_drop_src.parent(id)
+);
+set foreign_key_checks = 0;
+drop table fk_clone_forward_drop_src.parent;
+alter table fk_clone_forward_drop_src.child add column payload int;
+select table_name, constraint_name, refer_table_name
+from mo_catalog.mo_foreign_keys
+where db_name = 'fk_clone_forward_drop_src'
+order by constraint_name;
+create table fk_clone_forward_drop_src.parent (id int primary key);
+set foreign_key_checks = 1;
+show create table fk_clone_forward_drop_src.child;
+insert into fk_clone_forward_drop_src.child values (1, 404, 0);
+drop database fk_clone_forward_drop_src;
+
+-- 11. A self-referencing parent with another child must have one canonical
+-- reverse-reference definition after COPY ALTER.
+drop database if exists fk_clone_self_external_src;
+create database fk_clone_self_external_src;
+use fk_clone_self_external_src;
+create table fk_clone_self_external_src.parent (
+    id int primary key,
+    parent_id int,
+    constraint fk_self_external_self foreign key (parent_id)
+        references fk_clone_self_external_src.parent(id)
+);
+create table fk_clone_self_external_src.child (
+    id int primary key,
+    parent_id int,
+    constraint fk_self_external_child foreign key (parent_id)
+        references fk_clone_self_external_src.parent(id)
+);
+alter table fk_clone_self_external_src.parent add column payload int;
+select table_name, constraint_name, refer_table_name
+from mo_catalog.mo_foreign_keys
+where db_name = 'fk_clone_self_external_src'
+order by table_name, constraint_name;
+drop table fk_clone_self_external_src.child;
+drop table fk_clone_self_external_src.parent;
+drop database fk_clone_self_external_src;
+
+-- 12. FK catalog column names must follow COPY ALTER column renames on both
+-- the child and parent sides.
+drop database if exists fk_clone_rename_columns_src;
+drop database if exists fk_clone_rename_columns_dst;
+create database fk_clone_rename_columns_src;
+use fk_clone_rename_columns_src;
+create table fk_clone_rename_columns_src.parent (old_id int primary key);
+create table fk_clone_rename_columns_src.child (
+    id int primary key,
+    old_parent_id int,
+    constraint fk_rename_columns foreign key (old_parent_id)
+        references fk_clone_rename_columns_src.parent(old_id)
+);
+alter table fk_clone_rename_columns_src.child
+    rename column old_parent_id to parent_id;
+alter table fk_clone_rename_columns_src.parent
+    rename column old_id to id;
+select table_name, column_name, refer_table_name, refer_column_name
+from mo_catalog.mo_foreign_keys
+where db_name = 'fk_clone_rename_columns_src'
+order by constraint_name;
+create database fk_clone_rename_columns_dst clone fk_clone_rename_columns_src;
+show create table fk_clone_rename_columns_dst.child;
+insert into fk_clone_rename_columns_dst.child values (1, 404);
+drop database fk_clone_rename_columns_dst;
+drop database fk_clone_rename_columns_src;
+
+-- 13. Clone an explicit database snapshot taken after ALTER.
 drop snapshot if exists fk_clone_alter_snapshot;
 drop database if exists fk_clone_snapshot_src;
 drop database if exists fk_clone_snapshot_dst;

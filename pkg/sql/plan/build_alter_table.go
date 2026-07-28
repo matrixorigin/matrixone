@@ -273,14 +273,6 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 
 	alterTablePlan.ChangeTblColIdMap = alterTableCtx.changColDefMap
 	alterTablePlan.UpdateFkSqls = append(alterTablePlan.UpdateFkSqls, alterTableCtx.UpdateSqls...)
-	// ALTER TABLE COPY replaces the source table with the copy table. The
-	// source rows in mo_foreign_keys are removed with the source table, so
-	// retain the copy table's rows and move both its child and parent
-	// references to the original table name.
-	alterTablePlan.UpdateFkSqls = append(
-		alterTablePlan.UpdateFkSqls,
-		getSqlForRenameTable(schemaName, alterTableCtx.copyTableName, alterTableCtx.originTableName)...,
-	)
 	return &Plan{
 		Plan: &plan.Plan_Ddl{
 			Ddl: &plan.DataDefinition{

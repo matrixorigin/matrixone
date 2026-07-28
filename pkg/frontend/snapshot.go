@@ -662,7 +662,7 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 	}
 
 	// get topo sorted tables with foreign key
-	sortedFkTbls, err := fkTablesTopoSort(ctx, bh, tempSnap, dbName, tblName)
+	sortedFkTbls, err := fkTablesTopoSort(ctx, bh, tempSnap, dbName, tblName, nil)
 	if err != nil {
 		return
 	}
@@ -903,7 +903,7 @@ func deleteCurFkTables(
 	ctx = defines.AttachAccountId(ctx, toAccountId)
 
 	// get topo sorted tables with foreign key
-	sortedFkTbls, err := fkTablesTopoSort(ctx, bh, nil, dbName, tblName)
+	sortedFkTbls, err := fkTablesTopoSort(ctx, bh, nil, dbName, tblName, nil)
 	if err != nil {
 		return
 	}
@@ -2343,14 +2343,29 @@ func fkTablesTopoSort(
 	snapshot *plan.Snapshot,
 	dbName string,
 	tblName string,
+	tableInfos []*tableInfo,
 ) (sortedTbls []string, err error) {
 
-	// get foreign key deps from mo_catalog.mo_foreign_keys
+	// mo_foreign_keys is required for unresolved forward references, while the
+	// table schema is the durable source for resolved constraints. Older COPY
+	// ALTER versions could lose catalog rows without losing the table
+	// constraint, so restore and clone reconcile both representations.
 	fkDeps, err := getFkDeps(ctx, bh, snapshot, dbName, tblName)
 	if err != nil {
 		return
 	}
+	if tableInfos != nil {
+		schemaFkDeps, err := getFkDepsFromTableInfos(ctx, tableInfos)
+		if err != nil {
+			return nil, err
+		}
+		mergeFkDeps(fkDeps, schemaFkDeps)
+	}
 
+	return topoSortFkDeps(fkDeps)
+}
+
+func topoSortFkDeps(fkDeps map[string][]string) ([]string, error) {
 	g := toposort{next: make(map[string][]string)}
 	for key, deps := range fkDeps {
 		g.addVertex(key)
@@ -2361,8 +2376,71 @@ func fkTablesTopoSort(
 			}
 		}
 	}
-	sortedTbls, err = g.sort()
-	return
+	return g.sort()
+}
+
+func getFkDepsFromTableInfos(
+	ctx context.Context,
+	tableInfos []*tableInfo,
+) (map[string][]string, error) {
+	deps := make(map[string][]string)
+	for _, info := range tableInfos {
+		if info == nil || info.typ == view || info.createSql == "" {
+			continue
+		}
+		statements, err := parsers.Parse(ctx, dialect.MYSQL, info.createSql, 0)
+		if err != nil {
+			return nil, err
+		}
+		if len(statements) != 1 {
+			return nil, moerr.NewInternalErrorf(
+				ctx,
+				"expected one CREATE TABLE statement for %s.%s, got %d",
+				info.dbName,
+				info.tblName,
+				len(statements),
+			)
+		}
+		createTable, ok := statements[0].(*tree.CreateTable)
+		if !ok {
+			return nil, moerr.NewInternalErrorf(
+				ctx,
+				"expected CREATE TABLE statement for %s.%s",
+				info.dbName,
+				info.tblName,
+			)
+		}
+		childKey := genKey(info.dbName, info.tblName)
+		for _, tableDef := range createTable.Defs {
+			foreignKey, ok := tableDef.(*tree.ForeignKey)
+			if !ok || foreignKey.Refer == nil {
+				continue
+			}
+			parentDB := string(foreignKey.Refer.TableName.SchemaName)
+			if parentDB == "" {
+				parentDB = info.dbName
+			}
+			parentTable := string(foreignKey.Refer.TableName.ObjectName)
+			deps[childKey] = append(deps[childKey], genKey(parentDB, parentTable))
+		}
+	}
+	return deps, nil
+}
+
+func mergeFkDeps(dst, src map[string][]string) {
+	for child, parents := range src {
+		seen := make(map[string]struct{}, len(dst[child])+len(parents))
+		for _, parent := range dst[child] {
+			seen[parent] = struct{}{}
+		}
+		for _, parent := range parents {
+			if _, exists := seen[parent]; exists {
+				continue
+			}
+			seen[parent] = struct{}{}
+			dst[child] = append(dst[child], parent)
+		}
+	}
 }
 
 func restoreToCluster(ctx context.Context,

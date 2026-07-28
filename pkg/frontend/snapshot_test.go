@@ -42,6 +42,100 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
+func TestGetFkDepsFromTableInfos(t *testing.T) {
+	tableInfos := []*tableInfo{
+		{
+			dbName:    "d",
+			tblName:   "parent",
+			typ:       "BASE TABLE",
+			createSql: "create table `d`.`parent` (`id` int primary key)",
+		},
+		{
+			dbName:  "d",
+			tblName: "child",
+			typ:     "BASE TABLE",
+			createSql: "create table `d`.`child` (" +
+				"`id` int primary key, `parent_id` int, " +
+				"constraint `fk_child` foreign key (`parent_id`) " +
+				"references `d`.`parent` (`id`))",
+		},
+		{
+			dbName:  "d",
+			tblName: "self_ref",
+			typ:     "BASE TABLE",
+			createSql: "create table `d`.`self_ref` (" +
+				"`id` int primary key, `parent_id` int, " +
+				"constraint `fk_self` foreign key (`parent_id`) " +
+				"references `self_ref` (`id`))",
+		},
+		{
+			dbName:    "d",
+			tblName:   "v",
+			typ:       view,
+			createSql: "create view `d`.`v` as select 1",
+		},
+	}
+
+	deps, err := getFkDepsFromTableInfos(context.Background(), tableInfos)
+	require.NoError(t, err)
+	require.Equal(t, []string{genKey("d", "parent")}, deps[genKey("d", "child")])
+	require.Equal(t, []string{genKey("d", "self_ref")}, deps[genKey("d", "self_ref")])
+	require.NotContains(t, deps, genKey("d", "v"))
+}
+
+func TestMergeFkDepsDeduplicatesSources(t *testing.T) {
+	child := genKey("d", "child")
+	parent := genKey("d", "parent")
+	otherParent := genKey("d", "other_parent")
+	dst := map[string][]string{child: {parent}}
+	src := map[string][]string{child: {parent, otherParent}}
+
+	mergeFkDeps(dst, src)
+
+	require.Equal(t, []string{parent, otherParent}, dst[child])
+}
+
+func TestFkTablesTopoSortUsesSchemaWhenCatalogRowsAreMissing(t *testing.T) {
+	const dbName = "legacy"
+	bh := &backgroundExecTest{}
+	bh.init()
+	bh.sql2result["select db_name, table_name, refer_db_name, refer_table_name "+
+		"from mo_catalog.mo_foreign_keys where db_name = 'legacy'"] = newMrsForPitrRecord(nil)
+
+	tableInfos := []*tableInfo{
+		{
+			dbName:    dbName,
+			tblName:   "parent",
+			typ:       "BASE TABLE",
+			createSql: "create table `legacy`.`parent` (`id` int primary key)",
+		},
+		{
+			dbName:  dbName,
+			tblName: "child",
+			typ:     "BASE TABLE",
+			createSql: "create table `legacy`.`child` (" +
+				"`id` int primary key, `parent_id` int, " +
+				"constraint `fk_legacy` foreign key (`parent_id`) " +
+				"references `legacy`.`parent` (`id`))",
+		},
+	}
+
+	sorted, err := fkTablesTopoSort(
+		context.Background(),
+		bh,
+		nil,
+		dbName,
+		"",
+		tableInfos,
+	)
+	require.NoError(t, err)
+	require.Equal(
+		t,
+		[]string{genKey(dbName, "parent"), genKey(dbName, "child")},
+		sorted,
+	)
+}
+
 func TestRestoreExternalTableSnapshotAndFromTS(t *testing.T) {
 	convey.Convey("snapshot bulk restore skips external table", t, func() {
 		ctx := context.WithValue(context.TODO(), defines.TenantIDKey{}, uint32(sysAccountID))

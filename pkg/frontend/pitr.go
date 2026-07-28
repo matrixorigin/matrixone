@@ -1672,24 +1672,11 @@ func fkTablesTopoSortInPitrRestore(
 	ts int64,
 	dbName string,
 	tblName string) (sortedTbls []string, err error) {
-	// get foreign key deps from mo_catalog.mo_foreign_keys
 	fkDeps, err := getFkDepsInPitrRestore(ctx, bh, ts, dbName, tblName)
 	if err != nil {
 		return
 	}
-
-	g := toposort{next: make(map[string][]string)}
-	for key, deps := range fkDeps {
-		g.addVertex(key)
-		for _, depTbl := range deps {
-			// exclude self dep
-			if key != depTbl {
-				g.addEdge(depTbl, key)
-			}
-		}
-	}
-	sortedTbls, err = g.sort()
-	return
+	return topoSortFkDeps(fkDeps)
 }
 
 func restoreTablesWithFkByPitr(
