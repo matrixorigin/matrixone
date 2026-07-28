@@ -63,10 +63,21 @@ func TestIssue26216CopiedViewSupportsBareBooleanPredicate(t *testing.T) {
 
 func assertIssue26216ViewRows(t *testing.T, ctx context.Context, db *sql.DB, databaseName string) {
 	t.Helper()
-	var id int
-	var amount string
-	require.NoError(t, db.QueryRowContext(ctx,
-		"select id, cast(amount as char) from `"+databaseName+"`.`v` order by id").Scan(&id, &amount))
-	require.Equal(t, 1, id)
-	require.Equal(t, "10.00", amount)
+	rows, err := db.QueryContext(ctx,
+		"select id, cast(amount as char) from `"+databaseName+"`.`v` order by id")
+	require.NoError(t, err)
+	defer rows.Close()
+
+	var ids []int
+	var amounts []string
+	for rows.Next() {
+		var id int
+		var amount string
+		require.NoError(t, rows.Scan(&id, &amount))
+		ids = append(ids, id)
+		amounts = append(amounts, amount)
+	}
+	require.NoError(t, rows.Err())
+	require.Equal(t, []int{1}, ids)
+	require.Equal(t, []string{"10.00"}, amounts)
 }
