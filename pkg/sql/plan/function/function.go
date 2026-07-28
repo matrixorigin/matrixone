@@ -101,6 +101,19 @@ func GetFunctionIsWinValueFunByName(name string) bool {
 	return f.isWindowValue()
 }
 
+func GetFunctionIsVolatileOrRealTimeRelatedByName(name string) bool {
+	fid, exists := getFunctionIdByNameWithoutErr(name)
+	if !exists {
+		return false
+	}
+	for _, ov := range allSupportedFunctions[fid].Overloads {
+		if ov.CannotFold() || ov.IsRealTimeRelated() {
+			return true
+		}
+	}
+	return false
+}
+
 func GetFunctionIsWinOrderFunById(overloadID int64) bool {
 	fid, _ := DecodeOverloadID(overloadID)
 	return allSupportedFunctions[fid].isWindowOrder()
@@ -328,6 +341,15 @@ func DecodeOverloadID(overloadID int64) (fid int32, oIndex int32) {
 	oIndex = int32(overloadID)
 	fid = int32(base >> 32)
 	return fid, oIndex
+}
+
+func IsUserLevelLockFunctionID(fid int32) bool {
+	switch fid {
+	case GET_LOCK, RELEASE_LOCK, IS_FREE_LOCK, IS_USED_LOCK, RELEASE_ALL_LOCKS:
+		return true
+	default:
+		return false
+	}
 }
 
 func getFunctionIdByName(ctx context.Context, name string) (int32, error) {

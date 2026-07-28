@@ -99,6 +99,10 @@ func handleDelsOnLCA(
 		// knows the stable table ID.
 		mots := fmt.Sprintf("{MO_TS=%d} ", snapshot.PhysicalTime)
 		pkNames := lcaTblDef.Pkey.Names
+		quotedPKNames := make([]string, len(pkNames))
+		for i, name := range pkNames {
+			quotedPKNames[i] = quoteIdentifierForSQL(name)
+		}
 
 		// composite pk
 		if baseTblDef.Pkey.CompPkeyCol != nil {
@@ -169,17 +173,17 @@ func handleDelsOnLCA(
 		)
 		sqlBuf.WriteString(fmt.Sprintf(
 			"right join (values %s) as pks(__idx_,%s) on ",
-			valsBuf.String(), strings.Join(pkNames, ",")),
+			valsBuf.String(), strings.Join(quotedPKNames, ",")),
 		)
 
-		for i := range pkNames {
-			sqlBuf.WriteString(fmt.Sprintf("lca.%s = ", pkNames[i]))
+		for i := range quotedPKNames {
+			sqlBuf.WriteString(fmt.Sprintf("lca.%s = ", quotedPKNames[i]))
 			if castType, ok := lcaProbeJoinCastType(colTypes[expandedPKColIdxes[i]]); ok {
-				sqlBuf.WriteString(fmt.Sprintf("cast(pks.%s as %s)", pkNames[i], castType))
+				sqlBuf.WriteString(fmt.Sprintf("cast(pks.%s as %s)", quotedPKNames[i], castType))
 			} else {
-				sqlBuf.WriteString(fmt.Sprintf("pks.%s", pkNames[i]))
+				sqlBuf.WriteString(fmt.Sprintf("pks.%s", quotedPKNames[i]))
 			}
-			if i != len(pkNames)-1 {
+			if i != len(quotedPKNames)-1 {
 				sqlBuf.WriteString(" AND ")
 			}
 		}
