@@ -516,10 +516,13 @@ func (l *localLockTable) doAcquireLock(c *lockContext) error {
 	// bindChangeMu, txn mutex, and the local-table mutex. An uncontended lock
 	// must not be created after the absolute budget has expired. A request with
 	// no materialized budget and no mutex contention was already checked by the
-	// service immediately before dispatch, so keep that case on the old fast
-	// path.
+	// service immediately before dispatch. Caller cancellation is independent
+	// of that lazy budget and must still be rejected before ownership changes.
+	if err := c.checkLockWaitContext(); err != nil {
+		return err
+	}
 	if checkDeadline {
-		if err := c.checkLockWaitDeadline(); err != nil {
+		if err := c.checkLockWaitAbsoluteDeadline(); err != nil {
 			return err
 		}
 	}

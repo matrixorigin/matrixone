@@ -5659,6 +5659,77 @@ func TestLockWaitTimeoutExpiresWhileWaitingForLocalTableMutex(t *testing.T) {
 	)
 }
 
+func TestCanceledCallerFailsBeforeUncontendedLocalLockAdmission(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(_ *lockTableAllocator, services []*service) {
+			s := services[0]
+			const tableID = uint64(24921)
+			row := []byte{1}
+			txnID := []byte("canceled-local-admission")
+			l, err := s.getLockTableWithCreate(0, tableID, nil, pb.Sharding_None)
+			require.NoError(t, err)
+			local := l.(*localLockTable)
+
+			entered := make(chan struct{})
+			resume := make(chan struct{})
+			var enteredOnce sync.Once
+			var resumeOnce sync.Once
+			local.options.beforeAcquire = func(c *lockContext) {
+				if !bytes.Equal(c.txn.txnID, txnID) {
+					return
+				}
+				enteredOnce.Do(func() { close(entered) })
+				<-resume
+			}
+			defer func() {
+				local.options.beforeAcquire = nil
+				resumeOnce.Do(func() { close(resume) })
+			}()
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			resultC := make(chan error, 1)
+			go func() {
+				_, err := s.Lock(
+					ctx,
+					tableID,
+					[][]byte{row},
+					txnID,
+					newTestRowExclusiveOptions(),
+				)
+				resultC <- err
+			}()
+
+			select {
+			case <-entered:
+			case <-time.After(time.Second):
+				require.FailNow(t, "lock request did not reach final local admission")
+			}
+			cancel()
+			resumeOnce.Do(func() { close(resume) })
+
+			select {
+			case err := <-resultC:
+				require.ErrorIs(t, err, context.Canceled)
+			case <-time.After(time.Second):
+				require.FailNow(t, "canceled lock request did not return")
+			}
+
+			local.mu.RLock()
+			_, acquired := local.mu.store.Get(row)
+			local.mu.RUnlock()
+			require.False(t, acquired, "a canceled request must not acquire the row")
+			require.NoError(t, s.Unlock(
+				context.Background(),
+				txnID,
+				timestamp.Timestamp{},
+			))
+		},
+	)
+}
+
 func TestNotifiedWaiterDeadlineDetachesSync(t *testing.T) {
 	testCases := []struct {
 		name        string

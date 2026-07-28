@@ -135,19 +135,36 @@ func (c *lockContext) getLockWaitTimeoutErr() error {
 	return ErrLockTimeout
 }
 
-// checkLockWaitDeadline is the final admission guard used while the local lock
-// table mutex is held. No row/range ownership may be mutated after it fails.
-func (c *lockContext) checkLockWaitDeadline() error {
+// checkLockWaitContext rejects caller cancellation without reading the wall
+// clock. It stays on the final uncontended admission path even while the
+// synthetic lock-wait ceiling remains lazy.
+func (c *lockContext) checkLockWaitContext() error {
 	if err := c.ctx.Err(); err != nil {
 		if cause := context.Cause(c.ctx); cause != nil {
 			return cause
 		}
 		return err
 	}
+	return nil
+}
+
+// checkLockWaitAbsoluteDeadline checks only a materialized lock-wait budget.
+// Callers use it separately from checkLockWaitContext to keep time.Now off the
+// lazy, uncontended path.
+func (c *lockContext) checkLockWaitAbsoluteDeadline() error {
 	if !c.lockWaitDeadline.IsZero() && !time.Now().Before(c.lockWaitDeadline) {
 		return c.getLockWaitTimeoutErr()
 	}
 	return nil
+}
+
+// checkLockWaitDeadline is the combined guard for paths that may already have
+// consumed lock-wait budget.
+func (c *lockContext) checkLockWaitDeadline() error {
+	if err := c.checkLockWaitContext(); err != nil {
+		return err
+	}
+	return c.checkLockWaitAbsoluteDeadline()
 }
 
 func getLockWaitDeadline(
