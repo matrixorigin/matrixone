@@ -4041,8 +4041,8 @@ func canUseShuffleHashMarkJoinWithInputs(node, left, right *plan.Node) bool {
 			return false
 		}
 		if left != nil && right != nil {
-			if !plan2.IsJoinExprEffectivelyNotNullable(fn.Args[0], left, right) ||
-				!plan2.IsJoinExprEffectivelyNotNullable(fn.Args[1], left, right) {
+			if !plan2.IsJoinExprProvenNotNullable(fn.Args[0], left, right) ||
+				!plan2.IsJoinExprProvenNotNullable(fn.Args[1], left, right) {
 				return false
 			}
 		} else if !fn.Args[0].Typ.NotNullable || !fn.Args[1].Typ.NotNullable {
@@ -4214,7 +4214,7 @@ func (c *Compile) compileProbeSideForBroadcastJoin(node, left, right *plan.Node,
 		for i := range rs {
 			var op vm.Operator
 			if canUseHashMarkJoinWithInputs(node, left, right) {
-				op = constructHashJoin(node, left, leftTypes, rightTypes, c.proc)
+				op = constructBroadcastHashMarkJoin(node, left, leftTypes, rightTypes, c.proc)
 			} else {
 				op = constructLoopJoin(node, leftTypes, rightTypes, c.proc)
 			}

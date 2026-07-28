@@ -691,8 +691,8 @@ func markJoinSupportsShuffle(
 			return false
 		}
 		if afterRemap {
-			if !IsJoinExprEffectivelyNotNullable(fn.Args[0], left, right) ||
-				!IsJoinExprEffectivelyNotNullable(fn.Args[1], left, right) {
+			if !IsJoinExprProvenNotNullable(fn.Args[0], left, right) ||
+				!IsJoinExprProvenNotNullable(fn.Args[1], left, right) {
 				return false
 			}
 		} else {

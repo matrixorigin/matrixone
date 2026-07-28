@@ -1038,8 +1038,8 @@ func TestMarkShuffleRejectsOuterJoinNullExtension(t *testing.T) {
 			require.NotNil(t, condition)
 			require.Len(t, condition.Args, 2)
 			effectiveNullability := []bool{
-				IsJoinExprEffectivelyNotNullable(condition.Args[0], left, right),
-				IsJoinExprEffectivelyNotNullable(condition.Args[1], left, right),
+				IsJoinExprProvenNotNullable(condition.Args[0], left, right),
+				IsJoinExprProvenNotNullable(condition.Args[1], left, right),
 			}
 			require.ElementsMatch(t, []bool{false, true}, effectiveNullability)
 
@@ -1112,8 +1112,8 @@ func TestMarkShuffleRejectsSingleJoinNullExtension(t *testing.T) {
 	require.NotNil(t, condition)
 	require.Len(t, condition.Args, 2)
 	require.ElementsMatch(t, []bool{false, true}, []bool{
-		IsJoinExprEffectivelyNotNullable(condition.Args[0], left, right),
-		IsJoinExprEffectivelyNotNullable(condition.Args[1], left, right),
+		IsJoinExprProvenNotNullable(condition.Args[0], left, right),
+		IsJoinExprProvenNotNullable(condition.Args[1], left, right),
 	})
 
 	left.Stats.Outcnt = 10_000_000
@@ -1413,8 +1413,8 @@ func TestMarkShuffleRejectsNullExtensionAcrossGroupingMaterializers(t *testing.T
 				}
 			}
 			effectivelyNotNullable :=
-				IsJoinExprEffectivelyNotNullable(condition.Args[0], left, right) &&
-					IsJoinExprEffectivelyNotNullable(condition.Args[1], left, right)
+				IsJoinExprProvenNotNullable(condition.Args[0], left, right) &&
+					IsJoinExprProvenNotNullable(condition.Args[1], left, right)
 			require.Equal(t, tt.wantShuffle, effectivelyNotNullable,
 				"the compiler guard must observe the materialized output contract")
 
@@ -1543,8 +1543,8 @@ func TestMarkShuffleUsesRecursiveCTEOutputNullability(t *testing.T) {
 			require.NotNil(t, condition)
 			require.Len(t, condition.Args, 2)
 			effectivelyNotNullable :=
-				IsJoinExprEffectivelyNotNullable(condition.Args[0], left, right) &&
-					IsJoinExprEffectivelyNotNullable(condition.Args[1], left, right)
+				IsJoinExprProvenNotNullable(condition.Args[0], left, right) &&
+					IsJoinExprProvenNotNullable(condition.Args[1], left, right)
 			require.Equal(t, tt.wantShuffle, effectivelyNotNullable)
 
 			left.Stats.Outcnt = 10_000_000
@@ -1650,8 +1650,8 @@ func TestMarkShuffleUsesSetOperationOutputNullability(t *testing.T) {
 			require.NotNil(t, condition)
 			require.Len(t, condition.Args, 2)
 			require.Equal(t, tt.wantShuffle,
-				IsJoinExprEffectivelyNotNullable(condition.Args[0], left, right) &&
-					IsJoinExprEffectivelyNotNullable(condition.Args[1], left, right),
+				IsJoinExprProvenNotNullable(condition.Args[0], left, right) &&
+					IsJoinExprProvenNotNullable(condition.Args[1], left, right),
 				"compiler guard must observe the materialized set output contract")
 
 			left.Stats.Outcnt = 10_000_000

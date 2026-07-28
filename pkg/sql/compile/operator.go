@@ -1360,6 +1360,31 @@ func constructHashJoin(node, left *plan.Node, left_types, right_types []types.Ty
 	return arg
 }
 
+// constructBroadcastHashMarkJoin normalizes the operator's private key
+// metadata after broadcast eligibility has been proved from the materialized
+// inputs. Planner condition types also carry the stronger shuffle-only proof,
+// so safe arithmetic and casts can be marked nullable there even though the
+// broadcast hash MARK contract accepts them. Clone before normalization to
+// avoid mutating a reusable plan.
+func constructBroadcastHashMarkJoin(
+	node, left *plan.Node,
+	leftTypes, rightTypes []types.Type,
+	proc *process.Process,
+) *hashjoin.HashJoin {
+	arg := constructHashJoin(node, left, leftTypes, rightTypes, proc)
+	if len(arg.EqConds[0]) <= 1 {
+		return arg
+	}
+	for side := range arg.EqConds {
+		for i, key := range arg.EqConds[side] {
+			key = plan2.DeepCopyExpr(key)
+			key.Typ.NotNullable = true
+			arg.EqConds[side][i] = key
+		}
+	}
+	return arg
+}
+
 func constructDedupJoin(node *plan.Node, leftTypes, rightTypes []types.Type, proc *process.Process) *dedupjoin.DedupJoin {
 	result := make([]colexec.ResultPos, len(node.ProjectList))
 	for i, expr := range node.ProjectList {

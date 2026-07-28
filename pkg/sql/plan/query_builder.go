@@ -459,10 +459,22 @@ func refreshExprNullabilityFromInputs(expr *plan.Expr, inputs ...[]*plan.Expr) {
 	expr.Typ.NotNullable = exprEffectivelyNotNullable(expr, inputs...)
 }
 
-// IsJoinExprEffectivelyNotNullable checks an expression after join-column
-// remapping against the actual outputs of the two children. It deliberately
-// does not trust bind-time Expr.Typ metadata across a null-extending join.
+// IsJoinExprEffectivelyNotNullable derives the runtime nullability of an
+// expression after join-column remapping from the actual outputs of the two
+// children. This is the contract used by broadcast MARK joins, which share
+// global build-side NULL facts.
 func IsJoinExprEffectivelyNotNullable(expr *plan.Expr, left, right *plan.Node) bool {
+	if left == nil || right == nil {
+		return false
+	}
+	return exprEffectivelyNotNullable(expr, left.ProjectList, right.ProjectList)
+}
+
+// IsJoinExprProvenNotNullable applies the stronger proof required by
+// bucket-local MARK execution. Besides the materialized child contracts, it
+// requires the remapped expression itself to be proven incapable of producing
+// NULL from non-NULL inputs.
+func IsJoinExprProvenNotNullable(expr *plan.Expr, left, right *plan.Node) bool {
 	if left == nil || right == nil {
 		return false
 	}

@@ -21,8 +21,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashjoin"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/stretchr/testify/require"
 )
 
@@ -183,6 +186,89 @@ func TestCompileJoinFallsBackForUnprovenMaterializedMarkKey(t *testing.T) {
 	op, ok := result[0].RootOp.(*hashjoin.HashJoin)
 	require.True(t, ok)
 	require.False(t, op.IsShuffle)
+}
+
+func TestCompileBroadcastCompositeMarkExpressionsUseHashJoin(t *testing.T) {
+	compilerCtx := plan2.NewMockCompilerContext(true)
+	statements, err := mysql.Parse(
+		compilerCtx.GetContext(),
+		`select (n.n_nationkey + 0, n.n_regionkey + 0) in (
+			select l.l_orderkey + 0, l.l_partkey + 0
+			from tpch.lineitem l
+		)
+		from tpch.nation n`,
+		1,
+	)
+	require.NoError(t, err)
+	require.Len(t, statements, 1)
+
+	logicPlan, err := plan2.BuildPlan(compilerCtx, statements[0], false)
+	require.NoError(t, err)
+	query := logicPlan.GetQuery()
+	require.NotNil(t, query)
+
+	var mark *plan.Node
+	for _, node := range query.Nodes {
+		if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_MARK {
+			mark = node
+			break
+		}
+	}
+	require.NotNil(t, mark)
+	require.Len(t, mark.Children, 2)
+	require.Len(t, mark.OnList, 2)
+	left := query.Nodes[mark.Children[0]]
+	right := query.Nodes[mark.Children[1]]
+
+	// The shuffle-only proof is deliberately encoded in the remapped operand
+	// types. Ordinary arithmetic is not accepted by that proof, but it remains
+	// non-null for broadcast hash MARK when its materialized inputs are non-null.
+	for _, condition := range mark.OnList {
+		fn := condition.GetF()
+		require.NotNil(t, fn)
+		require.Len(t, fn.Args, 2)
+		require.False(t, fn.Args[0].Typ.NotNullable)
+		require.False(t, fn.Args[1].Typ.NotNullable)
+	}
+	require.True(t, canUseHashMarkJoinWithInputs(mark, left, right))
+	require.False(t, canUseShuffleHashMarkJoinWithInputs(mark, left, right))
+
+	nullableLeft := plan2.DeepCopyNode(left)
+	nullableLeft.ProjectList[0].Typ.NotNullable = false
+	require.False(t, canUseHashMarkJoinWithInputs(mark, nullableLeft, right),
+		"a nullable component must keep composite broadcast MARK on LoopJoin")
+
+	// Even if stale planner state requests shuffle, the compiler must retain
+	// the strong bucket-local guard, fall back to broadcast, and still select
+	// HashJoin using the broadcast nullability contract.
+	mark.Stats.HashmapStats.Shuffle = true
+	mark.SendMsgList = []plan.MsgHeader{{
+		MsgType: int32(message.MsgJoinMap),
+		MsgTag:  1,
+	}}
+	c := newCompileForShuffleJoinTest(t, engine.Nodes{{Addr: "cn1:6001", Mcpu: 1}})
+	probe := newShuffleJoinTestScope(t, c.cnList[0], 1)
+	build := newShuffleJoinTestScope(t, c.cnList[0], 1)
+
+	result := c.compileJoin(mark, left, right, []*Scope{probe}, []*Scope{build})
+
+	require.Len(t, result, 1)
+	op, ok := result[0].RootOp.(*hashjoin.HashJoin)
+	require.True(t, ok)
+	require.False(t, op.IsShuffle)
+	require.Len(t, op.EqConds[0], 2)
+	require.Len(t, op.EqConds[1], 2)
+	for side := range op.EqConds {
+		for _, key := range op.EqConds[side] {
+			require.True(t, key.Typ.NotNullable)
+		}
+	}
+	for _, condition := range mark.OnList {
+		for _, key := range condition.GetF().Args {
+			require.False(t, key.Typ.NotNullable,
+				"operator construction must not mutate the reusable plan")
+		}
+	}
 }
 
 func TestConstructShuffleJoinOperatorForMark(t *testing.T) {
