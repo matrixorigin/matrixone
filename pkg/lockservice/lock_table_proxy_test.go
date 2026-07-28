@@ -60,6 +60,12 @@ type blockingProxyUnlockTable struct {
 	release chan struct{}
 }
 
+type countingProxyUnlockTable struct {
+	lockTable
+	bind  pb.LockTable
+	calls atomic.Int64
+}
+
 func (t *blockingProxyLockTable) lock(
 	_ context.Context,
 	_ *activeTxn,
@@ -94,6 +100,19 @@ func (t *blockingProxyUnlockTable) unlockWithContext(
 }
 
 func (t *blockingProxyUnlockTable) getBind() pb.LockTable { return t.bind }
+
+func (t *countingProxyUnlockTable) unlockWithContext(
+	context.Context,
+	*activeTxn,
+	*cowSlice,
+	timestamp.Timestamp,
+	...pb.ExtraMutation,
+) error {
+	t.calls.Add(1)
+	return nil
+}
+
+func (t *countingProxyUnlockTable) getBind() pb.LockTable { return t.bind }
 
 func (t *recordingUnlockTable) unlockWithContext(
 	ctx context.Context,
@@ -310,6 +329,54 @@ func TestProxyCoalescedTimeoutIsRemovedAndCallbackRunsOnce(t *testing.T) {
 			delete(proxy.mu.currentHolder, string(row))
 			proxy.mu.Unlock()
 		})
+	}
+}
+
+func BenchmarkProxyLocalNonHolderUnlock(b *testing.B) {
+	bind := pb.LockTable{Group: 0, Table: 1, OriginTable: 1, ServiceID: "s2", Valid: true}
+	remote := &countingProxyUnlockTable{bind: bind}
+	proxy := newLockTableProxy("s1", remote, getLogger("")).(*localLockTableProxy)
+	row := []byte("row")
+	remoteHolder := newUnpooledActiveTxnForTest([]byte("remote-holder"))
+	localHolder := newUnpooledActiveTxnForTest([]byte("local-holder"))
+	defer remoteHolder.reset()
+	defer localHolder.reset()
+	locks, err := newCowSlice(localHolder.fsp, [][]byte{row})
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer locks.close()
+
+	key := string(row)
+	shared := &sharedOps{
+		bind:    bind,
+		rows:    [][]byte{row},
+		txns:    []*activeTxn{remoteHolder, localHolder},
+		waiters: []*waiter{nil, nil},
+		cbs:     []func(pb.Result, error){nil, nil},
+	}
+	proxy.mu.holders[key] = shared
+	proxy.mu.currentHolder[key] = remoteHolder.txnID
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if err := proxy.unlockWithContext(
+			context.Background(),
+			localHolder,
+			locks,
+			timestamp.Timestamp{},
+		); err != nil {
+			b.Fatal(err)
+		}
+		// Restore the local sharer without reallocating the sharedOps slices.
+		shared.txns = append(shared.txns, localHolder)
+		shared.waiters = append(shared.waiters, nil)
+		shared.cbs = append(shared.cbs, nil)
+	}
+	b.StopTimer()
+	if remote.calls.Load() != 0 {
+		b.Fatalf("local non-holder unlock made %d remote calls", remote.calls.Load())
 	}
 }
 

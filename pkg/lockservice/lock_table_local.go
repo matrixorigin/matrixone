@@ -501,14 +501,27 @@ func (l *localLockTable) doAcquireLock(c *lockContext) error {
 	if l.options.beforeAcquire != nil {
 		l.options.beforeAcquire(c)
 	}
-	l.mu.Lock()
+	checkDeadline := !c.lockWaitDeadline.IsZero()
+	if !l.mu.TryLock() {
+		c.ensureLockWaitDeadline()
+		if err := c.checkLockWaitDeadline(); err != nil {
+			return err
+		}
+		l.mu.Lock()
+		checkDeadline = true
+	}
 	defer l.mu.Unlock()
 
 	// This is the final admission point after service readiness, binding,
 	// bindChangeMu, txn mutex, and the local-table mutex. An uncontended lock
-	// must not be created after the absolute budget has expired.
-	if err := c.checkLockWaitDeadline(); err != nil {
-		return err
+	// must not be created after the absolute budget has expired. A request with
+	// no materialized budget and no mutex contention was already checked by the
+	// service immediately before dispatch, so keep that case on the old fast
+	// path.
+	if checkDeadline {
+		if err := c.checkLockWaitDeadline(); err != nil {
+			return err
+		}
 	}
 	if l.mu.closed {
 		return moerr.NewInvalidStateNoCtx("local lock table closed")
@@ -645,6 +658,7 @@ func (l *localLockTable) handleLockConflictLocked(
 	if c.opts.Policy == pb.WaitPolicy_FastFail {
 		return ErrLockConflict
 	}
+	c.ensureLockWaitDeadline()
 	if err := c.checkLockWaitDeadline(); err != nil {
 		return err
 	}

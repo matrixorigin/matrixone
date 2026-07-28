@@ -50,6 +50,7 @@ func TestAsyncLockWaitDeadlinePreservesCarriedAbsoluteBudget(t *testing.T) {
 			LockWaitTimeout:  1,
 			LockWaitDeadline: carriedDeadline.UnixNano(),
 		},
+		async:                      true,
 		remoteLockOwnerWaitTimeout: time.Second,
 	})
 	require.Equal(t, carriedDeadline, deadline)
@@ -60,6 +61,7 @@ func TestAsyncLockWaitDeadlinePreservesCarriedAbsoluteBudget(t *testing.T) {
 			LockWaitTimeout:  1,
 			LockWaitDeadline: carriedDeadline.UnixNano(),
 		},
+		async:                      true,
 		remoteLockOwnerWaitTimeout: 100 * time.Millisecond,
 	})
 	require.Equal(t, createAt.Add(100*time.Millisecond), ownerDeadline)
@@ -80,6 +82,7 @@ func TestAsyncLockWaitDeadlineUsesEarlierRequestContext(t *testing.T) {
 			LockWaitTimeout:  1,
 			LockWaitDeadline: createAt.Add(500 * time.Millisecond).UnixNano(),
 		},
+		async:                      true,
 		remoteLockOwnerWaitTimeout: time.Second,
 	})
 	require.Equal(t, requestDeadline, deadline)

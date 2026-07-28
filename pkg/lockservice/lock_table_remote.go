@@ -148,7 +148,12 @@ func (l *remoteLockTable) lock(
 	req := acquireRequest()
 	defer releaseRequest(req)
 
-	effectiveOptions := prepareLockOptionsForRPC(ctx, opts.LockOptions)
+	effectiveOptions := opts.LockOptions
+	materializeLockWaitTimeoutCeiling(
+		&effectiveOptions,
+		opts.lockWaitTimeoutCeiling,
+	)
+	effectiveOptions = prepareLockOptionsForRPC(ctx, effectiveOptions)
 	lockBudgetCtx, cancelLockBudget := newLockWaitContext(ctx, effectiveOptions)
 	if cancelLockBudget != nil {
 		defer cancelLockBudget()

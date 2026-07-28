@@ -178,8 +178,15 @@ func (s *service) Lock(
 	rows [][]byte,
 	txnID []byte,
 	options pb.LockOptions) (pb.Result, error) {
-	options = s.applyLockWaitTimeoutCeiling(options)
-	if lockWaitDeadlineExpired(options, time.Now()) {
+	ceiling := s.cfg.MaxLockWaitDuration.Duration
+	// Explicit budgets must be clamped and rejected at entry. A missing budget
+	// uses the same ceiling lazily so the common ready/cached/uncontended local
+	// path does not pay repeated wall-clock reads merely to create a deadline it
+	// never waits on.
+	if options.LockWaitTimeout > 0 || options.LockWaitDeadline > 0 {
+		options = s.applyLockWaitTimeoutCeiling(options)
+	}
+	if lockWaitDeadlineExpiredNow(options) {
 		return pb.Result{}, ErrLockTimeout
 	}
 
@@ -195,13 +202,13 @@ func (s *service) Lock(
 		v2.TxnAcquireLockDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
 
-	if err := s.waitForLock(ctx, options); err != nil {
+	if err := s.waitForLock(ctx, &options, ceiling); err != nil {
 		return pb.Result{}, err
 	}
 	// Service admission/bind work may consume the remaining budget after the
 	// entry check. Recheck before dispatch so a delayed hop cannot restart or
 	// transmit an already exhausted absolute deadline.
-	if lockWaitDeadlineExpired(options, time.Now()) {
+	if lockWaitDeadlineExpiredNow(options) {
 		return pb.Result{}, ErrLockTimeout
 	}
 
@@ -210,6 +217,7 @@ func (s *service) Lock(
 	defer span.End()
 
 	if options.ForwardTo != "" {
+		materializeLockWaitTimeoutCeiling(&options, ceiling)
 		return s.forwardLock(ctx, tableID, rows, txnID, options)
 	}
 
@@ -218,7 +226,8 @@ func (s *service) Lock(
 		ctx,
 		tableID,
 		rows,
-		options)
+		&options,
+		ceiling)
 	if err != nil {
 		return pb.Result{}, err
 	}
@@ -227,15 +236,37 @@ func (s *service) Lock(
 	}
 	// Binding can finish concurrently with the deadline. Recheck after it
 	// returns so an uncontended local table cannot admit an expired request.
-	if lockWaitDeadlineExpired(options, time.Now()) {
+	if lockWaitDeadlineExpiredNow(options) {
 		return pb.Result{}, ErrLockTimeout
 	}
 
-	s.bindChangeMu.RLock()
+	if !s.bindChangeMu.TryRLock() {
+		materializeLockWaitTimeoutCeiling(&options, ceiling)
+		if lockWaitDeadlineExpiredNow(options) {
+			return pb.Result{}, ErrLockTimeout
+		}
+		s.bindChangeMu.RLock()
+		if lockWaitDeadlineExpiredNow(options) {
+			s.bindChangeMu.RUnlock()
+			return pb.Result{}, ErrLockTimeout
+		}
+	}
 	// All txn lock op must be serial. And avoid dead lock between doAcquireLock
 	// and getLock. The doAcquireLock and getLock operations of the same transaction
 	// will be concurrent (deadlock detection), which may lead to a deadlock in mutex.
-	txn.Lock()
+	if !txn.TryLock() {
+		materializeLockWaitTimeoutCeiling(&options, ceiling)
+		if lockWaitDeadlineExpiredNow(options) {
+			s.bindChangeMu.RUnlock()
+			return pb.Result{}, ErrLockTimeout
+		}
+		txn.Lock()
+		if lockWaitDeadlineExpiredNow(options) {
+			txn.Unlock()
+			s.bindChangeMu.RUnlock()
+			return pb.Result{}, ErrLockTimeout
+		}
+	}
 	if !bytes.Equal(txn.txnID, txnID) {
 		txn.Unlock()
 		s.bindChangeMu.RUnlock()
@@ -279,7 +310,10 @@ func (s *service) Lock(
 		ctx,
 		txn,
 		rows,
-		LockOptions{LockOptions: options},
+		LockOptions{
+			LockOptions:            options,
+			lockWaitTimeoutCeiling: ceiling,
+		},
 		func(r pb.Result, e error) {
 			result = r
 			err = e
@@ -370,6 +404,32 @@ func (s *service) applyLockWaitTimeoutCeiling(options pb.LockOptions) pb.LockOpt
 func lockWaitDeadlineExpired(options pb.LockOptions, now time.Time) bool {
 	return options.LockWaitDeadline > 0 &&
 		!now.Before(time.Unix(0, options.LockWaitDeadline))
+}
+
+// lockWaitDeadlineExpiredNow keeps time.Now off requests whose safety ceiling
+// is still lazy and therefore have no absolute deadline to check yet.
+func lockWaitDeadlineExpiredNow(options pb.LockOptions) bool {
+	return options.LockWaitDeadline > 0 &&
+		lockWaitDeadlineExpired(options, time.Now())
+}
+
+// materializeLockWaitTimeoutCeiling starts a missing service safety budget at
+// the first operation that can actually block. Explicit budgets are resolved
+// by applyLockWaitTimeoutCeiling at service entry and are never restarted here.
+func materializeLockWaitTimeoutCeiling(
+	options *pb.LockOptions,
+	ceiling time.Duration,
+) {
+	if ceiling <= 0 || options.LockWaitTimeout > 0 || options.LockWaitDeadline > 0 {
+		return
+	}
+	now := time.Now()
+	seconds := int64(ceiling / time.Second)
+	if ceiling%time.Second != 0 {
+		seconds++
+	}
+	options.LockWaitTimeout = seconds
+	options.LockWaitDeadline = now.Add(ceiling).UnixNano()
 }
 
 // newLockWaitContext makes lock-table binding/allocation consume the same
@@ -859,7 +919,8 @@ func (s *service) getLockTableWithCreateForLock(
 	ctx context.Context,
 	tableID uint64,
 	rows [][]byte,
-	options pb.LockOptions,
+	options *pb.LockOptions,
+	ceiling time.Duration,
 ) (lockTable, error) {
 	lookupTableID := tableID
 	if options.Sharding == pb.Sharding_ByRow {
@@ -869,7 +930,8 @@ func (s *service) getLockTableWithCreateForLock(
 		return v, nil
 	}
 
-	lockCtx, cancel := newLockWaitContext(ctx, options)
+	materializeLockWaitTimeoutCeiling(options, ceiling)
+	lockCtx, cancel := newLockWaitContext(ctx, *options)
 	if cancel != nil {
 		defer cancel()
 	}
@@ -1356,7 +1418,8 @@ func (s *service) wait(ctx context.Context) error {
 // block. Other lock operations keep their historical wait behavior.
 func (s *service) waitForLock(
 	ctx context.Context,
-	options pb.LockOptions,
+	options *pb.LockOptions,
+	ceiling time.Duration,
 ) error {
 	if s.option.wait == nil {
 		return nil
@@ -1365,7 +1428,8 @@ func (s *service) waitForLock(
 		return nil
 	}
 
-	lockCtx, cancel := newLockWaitContext(ctx, options)
+	materializeLockWaitTimeoutCeiling(options, ceiling)
+	lockCtx, cancel := newLockWaitContext(ctx, *options)
 	if cancel != nil {
 		defer cancel()
 	}

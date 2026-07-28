@@ -82,14 +82,33 @@ func (lp *localLockTableProxy) lock(
 		panic("local lock table proxy can only support on single row")
 	}
 
-	lockBudgetCtx, cancelLockBudget := newLockWaitContext(ctx, options.LockOptions)
-	if cancelLockBudget != nil {
-		defer cancelLockBudget()
+	lockBudgetCtx := ctx
+	var cancelLockBudget context.CancelFunc
+	ensureLockBudget := func() {
+		if cancelLockBudget != nil {
+			return
+		}
+		materializeLockWaitTimeoutCeiling(
+			&options.LockOptions,
+			options.lockWaitTimeoutCeiling,
+		)
+		lockBudgetCtx, cancelLockBudget = newLockWaitContext(ctx, options.LockOptions)
 	}
+	if options.LockWaitTimeout > 0 || options.LockWaitDeadline > 0 {
+		ensureLockBudget()
+	}
+	defer func() {
+		if cancelLockBudget != nil {
+			cancelLockBudget()
+		}
+	}()
 
 	key := util.UnsafeBytesToString(rows[0])
 	for {
-		lp.mu.Lock()
+		if !lp.mu.TryLock() {
+			ensureLockBudget()
+			lp.mu.Lock()
+		}
 		if err := lockBudgetCtx.Err(); err != nil {
 			lp.mu.Unlock()
 			cb(pb.Result{}, lockWaitContextError(lockBudgetCtx, err))
@@ -100,6 +119,7 @@ func (lp *localLockTableProxy) lock(
 			break
 		}
 		lp.mu.Unlock()
+		ensureLockBudget()
 		select {
 		case <-transition.done:
 			// Re-read the proxy state after the handoff completes. The remote
@@ -180,6 +200,7 @@ func (lp *localLockTableProxy) lock(
 		lp.mu.Unlock()
 	}
 	if w != nil {
+		ensureLockBudget()
 		result := w.wait(lockBudgetCtx, lp.logger)
 		if result.err == nil {
 			if ctxErr := lockBudgetCtx.Err(); ctxErr != nil {
@@ -242,9 +263,43 @@ func (lp *localLockTableProxy) unlockWithContext(
 	n := rows.len()
 	var remoteMutations []pb.ExtraMutation
 	var updates []holderUpdate
-	transition, err := lp.beginUnlockTransition(ctx, rows)
-	if err != nil {
-		return err
+	var transition *proxyUnlockTransition
+	for {
+		lp.mu.Lock()
+		if err := ctx.Err(); err != nil {
+			lp.mu.Unlock()
+			return err
+		}
+		if pending := lp.findUnlockTransitionLocked(rows); pending != nil {
+			lp.mu.Unlock()
+			select {
+			case <-pending.done:
+				// Re-plan from the ownership state published by the completed
+				// transition.
+				continue
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+
+		// Most proxy unlocks remove a local coalesced sharer that never owned
+		// the remote lock. Apply that plan while the mutex is already held and
+		// avoid allocating transition state or mutation slices altogether.
+		if lp.canUnlockLocallyLocked(txn, rows) {
+			rows.iter(func(key []byte) bool {
+				lp.mu.holders[util.UnsafeBytesToString(key)].remove(txn)
+				return true
+			})
+			lp.mu.Unlock()
+			return nil
+		}
+
+		// A real owner handoff/RPC must publish its transition before dropping
+		// the mutex so overlapping admissions cannot observe a half-applied
+		// ownership plan.
+		transition = lp.beginUnlockTransitionLocked(rows)
+		lp.mu.Unlock()
+		break
 	}
 	lp.mu.Lock()
 	rows.iter(func(key []byte) bool {
@@ -339,7 +394,7 @@ func (lp *localLockTableProxy) unlockWithContext(
 	lp.mu.Unlock()
 
 	// all skipped
-	err = nil
+	var err error
 	if unlocker, ok := lp.remote.(contextUnlocker); ok {
 		if skipped != rows.len() {
 			err = unlocker.unlockWithContext(ctx, txn, ls, commitTS, remoteMutations...)
@@ -375,54 +430,60 @@ func (lp *localLockTableProxy) unlockWithContext(
 	return nil
 }
 
-// beginUnlockTransition waits only for overlapping row transitions and never
-// retains the proxy mutex while waiting. On success it reserves every row in
-// one step, preserving the serialization that the old RPC-spanning mutex
-// provided for handoff and retry state.
-func (lp *localLockTableProxy) beginUnlockTransition(
-	ctx context.Context,
+// findUnlockTransitionLocked returns an overlapping transition without
+// allocating row-key state. lp.mu must be held.
+func (lp *localLockTableProxy) findUnlockTransitionLocked(
 	rows *fixedSlice,
-) (*proxyUnlockTransition, error) {
-	rowKeys := make([]string, 0, rows.len())
+) *proxyUnlockTransition {
+	var pending *proxyUnlockTransition
 	rows.iter(func(row []byte) bool {
-		rowKeys = append(rowKeys, util.UnsafeBytesToString(row))
+		pending = lp.mu.unlockTransitions[util.UnsafeBytesToString(row)]
+		return pending == nil
+	})
+	return pending
+}
+
+// canUnlockLocallyLocked proves that every row belongs to a coalesced local
+// sharer and that txn is neither the acknowledged nor pending remote holder.
+// lp.mu must be held.
+func (lp *localLockTableProxy) canUnlockLocallyLocked(
+	txn *activeTxn,
+	rows *fixedSlice,
+) bool {
+	localOnly := true
+	rows.iter(func(key []byte) bool {
+		row := util.UnsafeBytesToString(key)
+		v := lp.mu.holders[row]
+		if v == nil ||
+			lp.isRemoteHolderLocked(row, txn.txnID) ||
+			lp.isPendingRemoteHolderLocked(row, txn.txnID) {
+			localOnly = false
+			return false
+		}
+		_, found := v.lastExcept(txn)
+		localOnly = found
+		return found
+	})
+	return localOnly
+}
+
+// beginUnlockTransitionLocked reserves every row in one step. It is called
+// only for a plan that may perform an owner handoff/RPC, keeping allocations
+// off the pure-local unlock path. lp.mu must be held.
+func (lp *localLockTableProxy) beginUnlockTransitionLocked(
+	rows *fixedSlice,
+) *proxyUnlockTransition {
+	transition := &proxyUnlockTransition{
+		rows: make([]string, 0, rows.len()),
+		done: make(chan struct{}),
+	}
+	rows.iter(func(row []byte) bool {
+		key := util.UnsafeBytesToString(row)
+		transition.rows = append(transition.rows, key)
+		lp.mu.unlockTransitions[key] = transition
 		return true
 	})
-
-	for {
-		lp.mu.Lock()
-		if err := ctx.Err(); err != nil {
-			lp.mu.Unlock()
-			return nil, err
-		}
-		var pending *proxyUnlockTransition
-		for _, row := range rowKeys {
-			if transition := lp.mu.unlockTransitions[row]; transition != nil {
-				pending = transition
-				break
-			}
-		}
-		if pending == nil {
-			transition := &proxyUnlockTransition{
-				rows: rowKeys,
-				done: make(chan struct{}),
-			}
-			for _, row := range rowKeys {
-				lp.mu.unlockTransitions[row] = transition
-			}
-			lp.mu.Unlock()
-			return transition, nil
-		}
-		lp.mu.Unlock()
-
-		select {
-		case <-pending.done:
-			// The completed transition may have changed proxy ownership. Retry
-			// the reservation and plan from the newly published state.
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		}
-	}
+	return transition
 }
 
 // finishUnlockTransitionLocked publishes completion after all local handoff

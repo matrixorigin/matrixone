@@ -83,6 +83,24 @@ func (l *localLockTable) newLockContext(
 	return c
 }
 
+// ensureLockWaitDeadline materializes the service safety ceiling only when a
+// local operation is about to block. It is intentionally idempotent: a caller
+// or earlier service/RPC deadline always remains authoritative.
+func (c *lockContext) ensureLockWaitDeadline() {
+	if !c.lockWaitDeadline.IsZero() ||
+		c.opts.LockWaitTimeout > 0 ||
+		c.opts.LockWaitDeadline > 0 ||
+		c.opts.lockWaitTimeoutCeiling <= 0 {
+		return
+	}
+	materializeLockWaitTimeoutCeiling(
+		&c.opts.LockOptions,
+		c.opts.lockWaitTimeoutCeiling,
+	)
+	c.lockWaitDeadline = time.Unix(0, c.opts.LockWaitDeadline)
+	c.lockWaitTimeoutErr = ErrLockTimeout
+}
+
 func (c lockContext) TypeName() string {
 	return "lockservice.lockContext"
 }
@@ -161,7 +179,7 @@ func getLockWaitDeadline(
 	// An async owner does not block in waiter.wait(ctx), so its timer must also
 	// consume an earlier MORPC request deadline. Otherwise the origin can leave
 	// while the owner retains and may later promote an abandoned waiter.
-	if ctx != nil {
+	if opts.async && ctx != nil {
 		if ctxDeadline, ok := ctx.Deadline(); ok &&
 			(deadline.IsZero() || ctxDeadline.Before(deadline)) {
 			deadline = ctxDeadline
