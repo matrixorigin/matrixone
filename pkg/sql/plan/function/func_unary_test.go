@@ -9056,6 +9056,12 @@ func TestDetachedUserLevelLockCleanupQueueIsBoundedAndDeduped(t *testing.T) {
 	runUserLevelLockTest(t, func(services []lockservice.LockService) {
 		service := services[0].(*userLevelLockTestService)
 		service.blockUnlock.Store(true)
+		// Keep the synthetic queue saturated until the admission assertions are
+		// complete. Letting workers drain 1,024 unrelated entries makes the
+		// session-close recovery assertion depend on CI scheduling.
+		detachedUserLevelLockCleanups.Lock()
+		detachedUserLevelLockCleanups.started = true
+		detachedUserLevelLockCleanups.Unlock()
 		enqueueLockCleanup := func(owner string, connID uint64, name string) bool {
 			return enqueueDetachedUserLevelLockTxnCleanup(
 				service,
@@ -9093,19 +9099,40 @@ func TestDetachedUserLevelLockCleanupQueueIsBoundedAndDeduped(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, int64(1), v)
 		}
+		row := string(userLevelLockRow(holder, "close_overload_a"))
+		service.state.Lock()
+		cleanupTxnID := []byte(service.state.locks[row])
+		service.state.Unlock()
+		require.NotEmpty(t, cleanupTxnID)
+
 		releaseUserLevelLocksOnSessionCloseWithTimeout(holder, 10*time.Millisecond)
 		require.Empty(t, UserLevelLocksForMigration(holder))
 		require.LessOrEqual(t, detachedUserLevelLockCleanupCountForKind("overflow"), userLevelLockDetachedCleanupOverflowShards)
+		var cleanupKey detachedUserLevelLockCleanupKey
+		detachedUserLevelLockCleanups.Lock()
+		for key, entry := range detachedUserLevelLockCleanups.entries {
+			for _, txnID := range entry.txnIDs {
+				if bytes.Equal(txnID, cleanupTxnID) {
+					cleanupKey = key
+					break
+				}
+			}
+			if cleanupKey.serviceID != "" {
+				break
+			}
+		}
+		detachedUserLevelLockCleanups.Unlock()
+		require.NotEmpty(t, cleanupKey.serviceID)
 
 		v, err := getUserLevelLock("close_overload_a", 0, contender)
 		require.NoError(t, err)
 		require.Equal(t, int64(0), v)
 
 		service.blockUnlock.Store(false)
-		require.Eventually(t, func() bool {
-			v, err := getUserLevelLock("close_overload_a", 0, contender)
-			return err == nil && v == 1
-		}, 3*time.Second, 10*time.Millisecond)
+		runDetachedUserLevelLockCleanupAttempt(cleanupKey)
+		v, err = getUserLevelLock("close_overload_a", 0, contender)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
 	})
 }
 

@@ -143,12 +143,12 @@ func getParallelCount(count int) int {
 }
 
 // parallelCopyData copy data from srcFs to dstFs in parallel
-func parallelCopyData(srcFs, dstFs fileservice.FileService,
+func parallelCopyData(ctx context.Context, srcFs, dstFs fileservice.FileService,
 	files map[string]*objectio.BackupObject,
 	parallelCount int,
 	gcFileMap map[string]string,
 ) ([]*taeFile, error) {
-	var copyCount, skipCount, copySize int64
+	var copyCount, copySize int64
 	var printMutex, fileMutex sync.Mutex
 	stopPrint := false
 	defer func() {
@@ -160,10 +160,11 @@ func parallelCopyData(srcFs, dstFs fileservice.FileService,
 	}()
 	// record files
 	taeFileList := make([]*taeFile, 0, len(files))
-	errC := make(chan error, 1)
-	defer close(errC)
 	jobScheduler := tasks.NewParallelJobScheduler(parallelCount)
 	defer jobScheduler.Stop()
+	copyCtx, cancelCopy := context.WithCancelCause(ctx)
+	defer cancelCopy(nil)
+	jobDone := make(chan struct{}, len(files))
 	go func() {
 		for {
 			printMutex.Lock()
@@ -176,7 +177,6 @@ func parallelCopyData(srcFs, dstFs fileservice.FileService,
 			logutil.Info("backup", common.OperationField("copy file"),
 				common.AnyField("copy file size", copySize),
 				common.AnyField("copy file num", copyCount),
-				common.AnyField("skip file num", skipCount),
 				common.AnyField("total file num", len(files)))
 			fileMutex.Unlock()
 			time.Sleep(time.Second * 5)
@@ -186,8 +186,11 @@ func parallelCopyData(srcFs, dstFs fileservice.FileService,
 	backupJobs := make([]*tasks.Job, len(files))
 	getJob := func(srcFs, dstFs fileservice.FileService, backupObject *objectio.BackupObject) *tasks.Job {
 		job := new(tasks.Job)
-		job.Init(context.Background(), backupObject.Location.Name().String(), tasks.JTAny,
-			func(_ context.Context) *tasks.JobResult {
+		job.Init(copyCtx, backupObject.Location.Name().String(), tasks.JTAny,
+			func(jobCtx context.Context) *tasks.JobResult {
+				defer func() {
+					jobDone <- struct{}{}
+				}()
 
 				name := backupObject.Location.Name().String()
 				size := backupObject.Location.Extent().End() + objectio.FooterSize
@@ -206,22 +209,12 @@ func parallelCopyData(srcFs, dstFs fileservice.FileService,
 						Res: nil,
 					}
 				}
-				checksum, err := CopyFileWithRetry(context.Background(), srcFs, dstFs, backupObject.Location.Name().String(), "")
+				checksum, err := CopyFileWithRetry(jobCtx, srcFs, dstFs, backupObject.Location.Name().String(), "")
 				if err != nil {
-					if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
-						// TODO: handle file not found, maybe GC
-						fileMutex.Lock()
-						skipCount++
-						fileMutex.Unlock()
-						return &tasks.JobResult{
-							Res: nil,
-						}
-					} else {
-						errC <- err
-						return &tasks.JobResult{
-							Err: err,
-							Res: nil,
-						}
+					cancelCopy(err)
+					return &tasks.JobResult{
+						Err: err,
+						Res: nil,
 					}
 				}
 				fileMutex.Lock()
@@ -248,32 +241,52 @@ func parallelCopyData(srcFs, dstFs fileservice.FileService,
 		idx++
 	}
 
-	for n := range backupJobs {
+	scheduledCount, completedCount, nextJob := 0, 0, 0
+	schedule := func(n int) bool {
+		if context.Cause(copyCtx) != nil {
+			return false
+		}
 		err := jobScheduler.Schedule(backupJobs[n])
 		if err != nil {
 			logutil.Infof("schedule job failed %v", err.Error())
-			return nil, err
+			cancelCopy(err)
+			return false
 		}
-		select {
-		case err = <-errC:
-			logutil.Infof("copy file failed %v", err.Error())
-			return nil, err
-		default:
+		scheduledCount++
+		return true
+	}
+	for nextJob < len(backupJobs) && scheduledCount-completedCount < parallelCount {
+		if !schedule(nextJob) {
+			break
+		}
+		nextJob++
+	}
+	for completedCount < scheduledCount {
+		<-jobDone
+		completedCount++
+		if nextJob < len(backupJobs) && schedule(nextJob) {
+			nextJob++
 		}
 	}
 
-	for n := range backupJobs {
+	var firstErr error
+	for n := 0; n < scheduledCount; n++ {
 		ret := backupJobs[n].WaitDone()
-		if ret.Err != nil {
+		if ret.Err != nil && firstErr == nil {
 			logutil.Infof("wait job done failed %v", ret.Err.Error())
-			return nil, ret.Err
+			firstErr = ret.Err
 		}
+	}
+	if cause := context.Cause(copyCtx); cause != nil {
+		return nil, cause
+	}
+	if firstErr != nil {
+		return nil, firstErr
 	}
 
 	logutil.Info("backup", common.OperationField("copy file"),
 		common.AnyField("copy file size", copySize),
 		common.AnyField("copy file num", copyCount),
-		common.AnyField("skip file num", skipCount),
 		common.AnyField("total file num", len(files)))
 	return taeFileList, nil
 }
@@ -434,7 +447,7 @@ func execBackup(
 	}
 
 	// copy data
-	taeFileList, err := parallelCopyData(srcFs, dstFs, files, parallelNum, gcFileMap)
+	taeFileList, err := parallelCopyData(ctx, srcFs, dstFs, files, parallelNum, gcFileMap)
 	if err != nil {
 		return err
 	}
@@ -705,7 +718,8 @@ func (e *copiedObjectChecksumError) Unwrap() error {
 }
 
 func CopyFileWithRetry(ctx context.Context, srcFs, dstFs fileservice.FileService, name, dstDir string, newName ...string) ([]byte, error) {
-	return fileservice.DoWithRetry(
+	return fileservice.DoWithRetryContext(
+		ctx,
 		"CopyFile",
 		func() ([]byte, error) {
 			return CopyFile(ctx, srcFs, dstFs, name, dstDir, newName...)
