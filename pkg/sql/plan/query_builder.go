@@ -7724,6 +7724,10 @@ func (builder *QueryBuilder) bindView(
 	if IsSnapshotValid(snapshot) {
 		viewKeyWithSnapshot = FormatViewKeyWithSnapshot(viewKey, snapshot)
 	}
+	viewDependencyKey, err := FormatViewDependencyKey(schema, table, snapshot)
+	if err != nil {
+		return 0, err
+	}
 	if ctx != nil && ctx.directView != "" {
 		viewCtx.directView = ctx.directView
 	} else {
@@ -7754,7 +7758,7 @@ func (builder *QueryBuilder) bindView(
 	if err != nil {
 		return
 	}
-	ctx.recordViews([]string{viewKey})
+	ctx.recordViews([]string{viewDependencyKey})
 	ctx.recordViews(viewCtx.views)
 	return
 }
