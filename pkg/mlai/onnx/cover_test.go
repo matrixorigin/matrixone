@@ -230,6 +230,41 @@ func TestAggregateResultBudget(t *testing.T) {
 	require.ErrorContains(t, err, "total result size limit")
 }
 
+// TestSequenceModelLoopRejected: the Go binding materializes a sequence output
+// EAGERLY inside Run (per-child Go/C objects for the full length) before any
+// budget check can run, so unbounded runtime-generated sequences must be made
+// unreachable at session load: a model with sequence/map outputs that contains
+// Loop/Scan operators is rejected. Tensor-only-output models are unaffected
+// (their conversion peak is arena-bounded payload).
+func TestSequenceModelLoopRejected(t *testing.T) {
+	skipIfNoRuntime(t)
+	loopMarker := []byte("\x22\x04Loop") // NodeProto op_type "Loop"
+	scanMarker := []byte("\x22\x04Scan")
+
+	// The real sklearn sequence-output model is Loop-free and must keep loading.
+	sk := mustModel(t, "sklearn_randomforest.onnx")
+	s, err := NewSession(sk)
+	require.NoError(t, err)
+	require.NoError(t, s.Close())
+
+	// The same model with a Loop op marker (appended as an unknown protobuf
+	// field, which keeps the model loadable by ORT) must be rejected.
+	skLoop := append(append([]byte(nil), sk...), loopMarker...)
+	_, err = NewSession(skLoop)
+	require.ErrorContains(t, err, "Loop/Scan")
+	skScan := append(append([]byte(nil), sk...), scanMarker...)
+	_, err = NewSession(skScan)
+	require.ErrorContains(t, err, "Loop/Scan")
+
+	// A tensor-only-output model containing the marker is NOT subject to the
+	// contract: eager conversion of tensor outputs is payload-bounded by the arena.
+	sd := mustModel(t, "sum_and_difference.onnx")
+	sdLoop := append(append([]byte(nil), sd...), loopMarker...)
+	s2, err := NewSession(sdLoop)
+	require.NoError(t, err)
+	require.NoError(t, s2.Close())
+}
+
 // TestScalarNormalization covers the float normalization edge cases.
 func TestScalarNormalization(t *testing.T) {
 	// float32 widened through its shortest decimal repr.

@@ -15,6 +15,7 @@
 package onnx
 
 import (
+	"bytes"
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -50,6 +51,28 @@ func NewSession(modelBytes []byte) (*Session, error) {
 	if len(inInfo) == 0 || len(outInfo) == 0 {
 		return nil, moerr.NewInvalidInputNoCtx("onnx: model has no inputs or outputs")
 	}
+	// Enforced model contract for sequence/map outputs: the Go binding converts a
+	// sequence output EAGERLY inside Run — allocating per-child Go/C objects for the
+	// sequence's full length before any of our budget checks can run — and neither the
+	// ORT arena (which bounds tensor payload, not per-value metadata) nor resultBudget
+	// (which runs after conversion) bounds that peak. Sequences of unbounded length can
+	// only be produced at runtime by Loop/Scan operators; without them a sequence is
+	// built by a static chain of graph nodes, so its length is bounded by the graph
+	// itself (already capped by the model-size limits). Reject sequence/map-output
+	// models that contain Loop/Scan rather than fail open into that allocation peak.
+	// Detection scans for the NodeProto op_type encoding (field 4, length-delimited:
+	// \x22\x04Loop / \x22\x04Scan); a false positive (e.g. an attribute string with the
+	// same bytes) fails conservatively with a clean error. Tensor-only-output models are
+	// unaffected: their conversion peak is payload bytes, bounded by the capped arena.
+	for _, o := range outInfo {
+		if o.OrtValueType == ort.ONNXTypeSequence || o.OrtValueType == ort.ONNXTypeMap {
+			if containsLoopOp(modelBytes) {
+				return nil, moerr.NewNotSupportedNoCtx(
+					"onnx: models with sequence or map outputs may not contain Loop/Scan operators")
+			}
+			break
+		}
+	}
 	inNames := names(inInfo)
 	outNames := names(outInfo)
 	// Use the environment's shared, memory-capped allocator (registered in
@@ -68,6 +91,14 @@ func NewSession(modelBytes []byte) (*Session, error) {
 		return nil, moerr.NewInvalidInputNoCtxf("onnx: cannot load model: %v", err)
 	}
 	return &Session{s: s, inputNames: inNames, outputNames: outNames}, nil
+}
+
+// containsLoopOp reports whether the serialized model contains a node whose
+// op_type is Loop or Scan (NodeProto field 4, length-delimited protobuf
+// encoding). See the contract comment in NewSession.
+func containsLoopOp(model []byte) bool {
+	return bytes.Contains(model, []byte("\x22\x04Loop")) ||
+		bytes.Contains(model, []byte("\x22\x04Scan"))
 }
 
 func names(info []ort.InputOutputInfo) []string {
