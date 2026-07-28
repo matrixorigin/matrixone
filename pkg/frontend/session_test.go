@@ -1040,6 +1040,28 @@ func TestRemoveAllPrepareStmts(t *testing.T) {
 	assert.Equal(t, 0, len(ses.prepareStmts))
 }
 
+func TestPrepareStmtNamesAreCaseInsensitive(t *testing.T) {
+	ctx := context.Background()
+	ses := &Session{prepareStmts: make(map[string]*PrepareStmt)}
+	prepared := &PrepareStmt{ParamTypes: []byte{1}}
+
+	require.NoError(t, ses.SetPrepareStmt(ctx, "MixedCase", prepared))
+	require.Contains(t, ses.prepareStmts, "mixedcase")
+
+	got, err := ses.GetPrepareStmt(ctx, "MIXEDCASE")
+	require.NoError(t, err)
+	require.Same(t, prepared, got)
+
+	replacement := &PrepareStmt{ParamTypes: []byte{2}}
+	require.NoError(t, ses.SetPrepareStmt(ctx, "mixedcase", replacement))
+	require.Nil(t, prepared.ParamTypes)
+	require.Len(t, ses.prepareStmts, 1)
+
+	ses.RemovePrepareStmt("mIxEdCaSe")
+	require.Empty(t, ses.prepareStmts)
+	require.Nil(t, replacement.ParamTypes)
+}
+
 func TestSession_Cleanup(t *testing.T) {
 	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
 	tz := time.Local

@@ -3536,6 +3536,17 @@ func canExecuteStatementInUncommittedTransaction(
 	return nil
 }
 
+func removePrepareStmtForReplacement(ses *Session, stmt tree.Statement) {
+	switch st := stmt.(type) {
+	case *tree.PrepareStmt:
+		ses.RemovePrepareStmt(string(st.Name))
+	case *tree.PrepareString:
+		ses.RemovePrepareStmt(string(st.Name))
+	case *tree.PrepareVar:
+		ses.RemovePrepareStmt(string(st.Name))
+	}
+}
+
 func readThenWrite(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, writer *io.PipeWriter, mysqlRrWr MysqlRrWr, skipWrite bool, epoch uint64) (_ bool, _ time.Duration, _ time.Duration, err error) {
 	var readTime, writeTime time.Duration
 	var payload []byte
@@ -4439,6 +4450,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		// set it (e.g. a status statement) does not inherit a stale AffectRows.
 		execCtx.runResult = nil
 		stmt := cw.GetAst()
+		removePrepareStmtForReplacement(ses, stmt)
 		var err2 error
 		execCtx.reqCtx, err2 = RecordStatement(execCtx.reqCtx, ses, proc, cw, beginInstant, currentSQLRecord, sqlType, singleStatement)
 		if err2 != nil {

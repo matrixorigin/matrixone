@@ -1273,6 +1273,7 @@ func (ses *Session) GetTenantName() string {
 }
 
 func (ses *Session) SetPrepareStmt(ctx context.Context, name string, prepareStmt *PrepareStmt) error {
+	name = strings.ToLower(name)
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	if stmt, ok := ses.prepareStmts[name]; !ok {
@@ -1304,9 +1305,10 @@ func (ses *Session) getMaxPrepareStmtCountLocked() uint64 {
 }
 
 func (ses *Session) GetPrepareStmt(ctx context.Context, name string) (*PrepareStmt, error) {
+	normalizedName := strings.ToLower(name)
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	if prepareStmt, ok := ses.prepareStmts[name]; ok {
+	if prepareStmt, ok := ses.prepareStmts[normalizedName]; ok {
 		return prepareStmt, nil
 	}
 	var connID uint32
@@ -1328,6 +1330,7 @@ func (ses *Session) GetPrepareStmts() []*PrepareStmt {
 }
 
 func (ses *Session) RemovePrepareStmt(name string) {
+	name = strings.ToLower(name)
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	if stmt, ok := ses.prepareStmts[name]; ok {
