@@ -380,9 +380,14 @@ func (l *LocalFS) write(ctx context.Context, vector IOVector) (bytesWritten int,
 		size = int64(last.Offset + last.Size)
 	}
 
+	nativePath, tempDir, err := l.writePaths(nativePath)
+	if err != nil {
+		return 0, err
+	}
+
 	// write
 	f, err := os.CreateTemp(
-		l.rootPath,
+		tempDir,
 		".tmp.*",
 	)
 	if err != nil {
@@ -1120,8 +1125,13 @@ func (l *LocalFS) NewWriter(ctx context.Context, filePath string) (io.WriteClose
 		return nil, moerr.NewFileAlreadyExistsNoCtx(path.File)
 	}
 
+	nativePath, tempDir, err := l.writePaths(nativePath)
+	if err != nil {
+		return nil, err
+	}
+
 	f, err := os.CreateTemp(
-		l.rootPath,
+		tempDir,
 		".tmp.*",
 	)
 	if err != nil {
@@ -1167,6 +1177,26 @@ func (l *LocalFS) NewWriter(ctx context.Context, filePath string) (io.WriteClose
 			return nil
 		},
 	}, nil
+}
+
+func (l *LocalFS) writePaths(nativePath string) (targetPath, tempDir string, err error) {
+	if l.rootPath != "" {
+		return nativePath, l.rootPath, nil
+	}
+
+	// An empty root path makes os.CreateTemp use the system temp directory,
+	// which may be on a different filesystem from the relative destination.
+	// Create the temp file beside the destination so the final rename remains
+	// atomic and cannot fail with EXDEV.
+	nativePath, err = filepath.Abs(nativePath)
+	if err != nil {
+		return "", "", err
+	}
+	parentDir := filepath.Dir(nativePath)
+	if err := l.ensureDir(parentDir); err != nil {
+		return "", "", err
+	}
+	return nativePath, parentDir, nil
 }
 
 func (l *LocalFS) ensureDir(nativePath string) error {
