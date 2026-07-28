@@ -8848,9 +8848,9 @@ func TestCkpLeak(t *testing.T) {
 	}
 	wg.Wait()
 	ckpCtx, cancel := context.WithTimeout(ctx, testutil.TestCheckpointTimeout)
-	defer cancel()
-	require.NoError(t, db.ForceCheckpoint(ckpCtx, db.TxnMgr.Now()))
-	testutil.WaitAllCheckpointsFinished(t, db)
+	err = db.ForceCheckpoint(ckpCtx, db.TxnMgr.Now())
+	cancel()
+	require.NoError(t, err)
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 	checkLeak := func() bool {
 		ckpMetaFiles := db.BGCheckpointRunner.GetCheckpointMetaFiles()

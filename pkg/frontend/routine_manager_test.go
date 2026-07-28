@@ -23,10 +23,10 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -40,6 +40,23 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+var nextRoutineManagerTestServiceID atomic.Uint64
+
+func newRoutineManagerTestService(t *testing.T) string {
+	t.Helper()
+	return t.Name() + "/routine-manager-" +
+		strconv.FormatUint(nextRoutineManagerTestServiceID.Add(1), 10)
+}
+
+func newTestRoutineManager(t *testing.T, ctx context.Context) *RoutineManager {
+	t.Helper()
+	service := newRoutineManagerTestService(t)
+	rm, err := NewRoutineManager(ctx, service)
+	require.NoError(t, err)
+	t.Cleanup(rm.cancelCtx)
+	return rm
+}
 
 func Test_Closed(t *testing.T) {
 	clientConn, serverConn := net.Pipe()
@@ -109,6 +126,21 @@ type testConn struct {
 	local  testAddr
 	remote testAddr
 	rbuf   []byte
+}
+
+type blockingCloseConn struct {
+	testConn
+	closeStarted chan struct{}
+	closeRelease chan struct{}
+	startOnce    sync.Once
+}
+
+func (tc *blockingCloseConn) Close() error {
+	tc.startOnce.Do(func() {
+		close(tc.closeStarted)
+	})
+	<-tc.closeRelease
+	return nil
 }
 
 func (tc *testConn) Read(b []byte) (n int, err error) {
@@ -374,13 +406,9 @@ func Test_rm(t *testing.T) {
 	pu := config.NewParameterUnit(sv, nil, nil, nil)
 	pu.SV.SkipCheckUser = true
 	pu.SV.KillRountinesInterval = 1
-	setPu("", pu)
-	rm, err := NewRoutineManager(context.Background(), "")
-	assert.NoError(t, err)
+	ctx := context.WithValue(context.Background(), config.ParameterUnitKey, pu)
+	rm := newTestRoutineManager(t, ctx)
 	rm.cleanKillQueue()
-	setPu("", nil)
-	time.Sleep(2 * time.Second)
-	rm.cancelCtx()
 }
 
 func TestRoutineManagerRoutineMaps(t *testing.T) {
@@ -453,9 +481,10 @@ func TestRoutineManagerKillAndCleanKillQueue(t *testing.T) {
 	ses := &Session{}
 	rt.setSession(ses)
 	rm := &RoutineManager{
-		ctx:              context.Background(),
-		clients:          make(map[*Conn]*Routine),
-		routinesByConnID: map[uint32]*Routine{1003: rt},
+		ctx:                    context.Background(),
+		clients:                make(map[*Conn]*Routine),
+		routinesByConnID:       map[uint32]*Routine{1003: rt},
+		cleanKillQueueInterval: time.Minute,
 		accountRoutine: &AccountRoutineManager{
 			killIdQueue:       make(map[int64]KillRecord),
 			accountId2Routine: make(map[int64]map[*Routine]uint64),
@@ -475,8 +504,6 @@ func TestRoutineManagerKillAndCleanKillQueue(t *testing.T) {
 	require.NoError(t, rm.kill(context.Background(), true, 1, 1003, ""))
 	require.True(t, rt.isCancelled())
 
-	pu := getPu("")
-	pu.SV.CleanKillQueueInterval = 1
 	rm.accountRoutine.killIdQueue[1] = NewKillRecord(time.Now().Add(-2*time.Minute), 1)
 	rm.accountRoutine.killIdQueue[2] = NewKillRecord(time.Now(), 1)
 	rm.cleanKillQueue()
@@ -495,13 +522,191 @@ func TestRoutineManagerKillRoutineConnections(t *testing.T) {
 		},
 	}
 	rm := &RoutineManager{
-		accountRoutine: ar,
-		service:        "",
+		accountRoutine:         ar,
+		service:                "",
+		cleanKillQueueInterval: time.Minute,
 	}
 
 	rm.KillRoutineConnections()
 	require.True(t, rt.isCancelled())
 	require.NotContains(t, ar.accountId2Routine, int64(20))
+}
+
+func TestRoutineManagerConfigSnapshotAndCancel(t *testing.T) {
+	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+	pu.SV.SetDefaultValues()
+	pu.SV.KillRountinesInterval = 3600
+	pu.SV.CleanKillQueueInterval = 2
+	ctx := context.WithValue(context.Background(), config.ParameterUnitKey, pu)
+
+	rm := newTestRoutineManager(t, ctx)
+	require.Equal(t, 2*time.Minute, rm.cleanKillQueueInterval)
+
+	pu.SV.CleanKillQueueInterval = 3
+	require.Equal(t, 2*time.Minute, rm.cleanKillQueueInterval)
+
+	done := make(chan struct{})
+	go func() {
+		rm.cancelCtx()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("RoutineManager worker did not stop after cancellation")
+	}
+}
+
+func TestRoutineManagerRejectsMissingFrontendParameters(t *testing.T) {
+	pu := config.NewParameterUnit(nil, nil, nil, nil)
+	ctx := context.WithValue(context.Background(), config.ParameterUnitKey, pu)
+
+	rm, err := NewRoutineManager(ctx, t.Name())
+	require.Nil(t, rm)
+	require.ErrorContains(t, err, "invalid parameter unit")
+}
+
+func TestRoutineManagerRejectsMissingParameterUnit(t *testing.T) {
+	for _, tc := range []struct {
+		name              string
+		initializeService bool
+	}{
+		{name: "uninitialized service"},
+		{name: "initialized service", initializeService: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			service := newRoutineManagerTestService(t)
+			if tc.initializeService {
+				InitServerLevelVars(service)
+			}
+
+			rm, err := NewRoutineManager(context.Background(), service)
+			require.Nil(t, rm)
+			require.ErrorContains(t, err, "invalid parameter unit")
+		})
+	}
+}
+
+func TestRoutineManagerPublishesContextParameterUnit(t *testing.T) {
+	service := newRoutineManagerTestService(t)
+	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+	pu.SV.SetDefaultValues()
+	pu.SV.KillRountinesInterval = 0
+	ctx := context.WithValue(context.Background(), config.ParameterUnitKey, pu)
+
+	rm, err := NewRoutineManager(ctx, service)
+	require.NoError(t, err)
+	t.Cleanup(rm.cancelCtx)
+	require.Same(t, pu, getPuIfPresent(service))
+
+	conn := &Conn{
+		conn:       &testConn{},
+		remoteAddr: "remote",
+		service:    service,
+	}
+	require.NoError(t, rm.Created(conn))
+	require.NotNil(t, rm.getRoutine(conn))
+	rm.Closed(conn)
+	require.Nil(t, rm.getRoutine(conn))
+}
+
+func TestRoutineManagerRejectsParameterUnitMismatch(t *testing.T) {
+	service := newRoutineManagerTestService(t)
+	servicePU := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+	servicePU.SV.SetDefaultValues()
+	InitServerLevelVars(service)
+	setPu(service, servicePU)
+
+	contextPU := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+	contextPU.SV.SetDefaultValues()
+	ctx := context.WithValue(context.Background(), config.ParameterUnitKey, contextPU)
+
+	rm, err := NewRoutineManager(ctx, service)
+	require.Nil(t, rm)
+	require.ErrorContains(t, err, "parameter unit mismatch")
+	require.Same(t, servicePU, getPuIfPresent(service))
+}
+
+func TestRoutineManagerFailedInitializationDoesNotPublishParameterUnit(t *testing.T) {
+	service := newRoutineManagerTestService(t)
+	invalidPU := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+	invalidPU.SV.SetDefaultValues()
+	invalidPU.SV.EnableTls = true
+	ctx := context.WithValue(context.Background(), config.ParameterUnitKey, invalidPU)
+
+	rm, err := NewRoutineManager(ctx, service)
+	require.Nil(t, rm)
+	require.ErrorContains(t, err, "cert file or key file is empty")
+	require.Nil(t, getPuIfPresent(service))
+
+	validPU := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+	validPU.SV.SetDefaultValues()
+	validPU.SV.KillRountinesInterval = 0
+	ctx = context.WithValue(context.Background(), config.ParameterUnitKey, validPU)
+
+	rm, err = NewRoutineManager(ctx, service)
+	require.NoError(t, err)
+	t.Cleanup(rm.cancelCtx)
+	require.Same(t, validPU, getPuIfPresent(service))
+}
+
+func TestRoutineManagerCancelWaitsForActiveWorker(t *testing.T) {
+	rt, proto := newUnitTestRoutine(t, 1007)
+	blockingConn := &blockingCloseConn{
+		closeStarted: make(chan struct{}),
+		closeRelease: make(chan struct{}),
+	}
+	proto.tcpConn.conn = blockingConn
+
+	const accountID = int64(21)
+	ctx, cancel := context.WithCancel(context.Background())
+	rm := &RoutineManager{
+		ctx:                    ctx,
+		cancel:                 cancel,
+		cleanKillQueueInterval: time.Hour,
+		accountRoutine: &AccountRoutineManager{
+			killIdQueue: map[int64]KillRecord{
+				accountID: NewKillRecord(time.Now(), 1),
+			},
+			accountId2Routine: map[int64]map[*Routine]uint64{
+				accountID: {rt: 1},
+			},
+		},
+	}
+	releaseWorker := sync.OnceFunc(func() {
+		close(blockingConn.closeRelease)
+	})
+	t.Cleanup(func() {
+		releaseWorker()
+		rm.cancelCtx()
+	})
+
+	rm.startKillRoutineWorker(time.Hour)
+	select {
+	case <-blockingConn.closeStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("RoutineManager worker did not enter connection close")
+	}
+
+	cancelReturned := make(chan struct{})
+	go func() {
+		rm.cancelCtx()
+		close(cancelReturned)
+	}()
+	<-ctx.Done()
+
+	select {
+	case <-cancelReturned:
+		t.Fatal("RoutineManager cancellation returned before active worker exited")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	releaseWorker()
+	select {
+	case <-cancelReturned:
+	case <-time.After(5 * time.Second):
+		t.Fatal("RoutineManager cancellation did not return after active worker exited")
+	}
 }
 
 func TestRoutineManagerMigrationAndResetErrorBranches(t *testing.T) {
