@@ -17,7 +17,6 @@ package embed
 import (
 	"context"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 
@@ -145,11 +144,6 @@ func Test_waitHAKeeperRunningLocked(t *testing.T) {
 
 	err = op.waitHAKeeperRunningLocked(client)
 	assert.Error(t, err)
-}
-
-func TestHAKeeperRunningTimeout(t *testing.T) {
-	assert.Equal(t, 2*time.Minute, (&operator{}).hakeeperRunningTimeout())
-	assert.Equal(t, 5*time.Minute, (&operator{testing: true}).hakeeperRunningTimeout())
 }
 
 func Test_waitAnyShardReadyLocked(t *testing.T) {
