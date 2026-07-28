@@ -539,5 +539,22 @@ execute prepared_rows_frame using @before, @after;
 deallocate prepare prepared_rows_frame;
 drop table prepared_window_frame;
 
+-- @case
+-- @desc:Prepared SET statements retain literal and parameterized expressions
+-- @label:bvt
+set @input = 41;
+prepare prepared_set_literal from 'set @prepared_literal = 41 + 1';
+execute prepared_set_literal;
+select @prepared_literal;
+
+prepare prepared_set_param from 'set @prepared_param = ? + 1';
+execute prepared_set_param using @input;
+select @prepared_param;
+set @input = 9;
+execute prepared_set_param using @input;
+select @prepared_param;
+deallocate prepare prepared_set_literal;
+deallocate prepare prepared_set_param;
+
 # reset
 SET TIME_ZONE = "SYSTEM";
