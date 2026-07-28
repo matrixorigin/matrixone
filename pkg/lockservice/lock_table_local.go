@@ -531,9 +531,6 @@ func (l *localLockTable) doAcquireLock(c *lockContext) error {
 func (l *localLockTable) acquireRowLockLocked(c *lockContext) error {
 	n := len(c.rows)
 	for idx := c.offset; idx < n; idx++ {
-		if err := c.checkLockWaitDeadline(); err != nil {
-			return err
-		}
 		row := c.rows[idx]
 
 		key, lock, ok := l.mu.store.Seek(row)
@@ -592,9 +589,6 @@ func (l *localLockTable) acquireRowLockLocked(c *lockContext) error {
 func (l *localLockTable) acquireRangeLockLocked(c *lockContext) error {
 	n := len(c.rows)
 	for i := c.offset; i < n; i += 2 {
-		if err := c.checkLockWaitDeadline(); err != nil {
-			return err
-		}
 		start := c.rows[i]
 		end := c.rows[i+1]
 		if bytes.Compare(start, end) >= 0 {

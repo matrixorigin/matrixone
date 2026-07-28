@@ -36,7 +36,17 @@ type localLockTableProxy struct {
 		currentHolder            map[string][]byte
 		pendingRemoteHolders     map[string][]byte
 		pendingLastHolderUnlocks map[string]struct{}
+		unlockTransitions        map[string]*proxyUnlockTransition
 	}
+}
+
+// proxyUnlockTransition serializes owner handoff for the affected rows without
+// holding localLockTableProxy.mu across the remote Unlock RPC. Shared-lock
+// admission waits on done with its own lock budget, while unrelated rows remain
+// available if the owner CN or network is unavailable.
+type proxyUnlockTransition struct {
+	rows []string
+	done chan struct{}
 }
 
 func newLockTableProxy(
@@ -53,6 +63,7 @@ func newLockTableProxy(
 	lp.mu.currentHolder = make(map[string][]byte)
 	lp.mu.pendingRemoteHolders = make(map[string][]byte)
 	lp.mu.pendingLastHolderUnlocks = make(map[string]struct{})
+	lp.mu.unlockTransitions = make(map[string]*proxyUnlockTransition)
 	return lp
 }
 
@@ -76,13 +87,30 @@ func (lp *localLockTableProxy) lock(
 		defer cancelLockBudget()
 	}
 
-	lp.mu.Lock()
-	if err := lockBudgetCtx.Err(); err != nil {
-		lp.mu.Unlock()
-		cb(pb.Result{}, lockWaitContextError(lockBudgetCtx, err))
-		return
-	}
 	key := util.UnsafeBytesToString(rows[0])
+	for {
+		lp.mu.Lock()
+		if err := lockBudgetCtx.Err(); err != nil {
+			lp.mu.Unlock()
+			cb(pb.Result{}, lockWaitContextError(lockBudgetCtx, err))
+			return
+		}
+		transition := lp.mu.unlockTransitions[key]
+		if transition == nil {
+			break
+		}
+		lp.mu.Unlock()
+		select {
+		case <-transition.done:
+			// Re-read the proxy state after the handoff completes. The remote
+			// result decides whether this lock can be coalesced locally or must
+			// be routed through the owner.
+			continue
+		case <-lockBudgetCtx.Done():
+			cb(pb.Result{}, lockWaitContextError(lockBudgetCtx, lockBudgetCtx.Err()))
+			return
+		}
+	}
 	if _, ok := lp.mu.pendingLastHolderUnlocks[key]; ok {
 		// The owner may already have applied the last-holder Unlock even
 		// though its response was lost. Until the retry confirms that
@@ -214,8 +242,11 @@ func (lp *localLockTableProxy) unlockWithContext(
 	n := rows.len()
 	var remoteMutations []pb.ExtraMutation
 	var updates []holderUpdate
+	transition, err := lp.beginUnlockTransition(ctx, rows)
+	if err != nil {
+		return err
+	}
 	lp.mu.Lock()
-	defer lp.mu.Unlock()
 	rows.iter(func(key []byte) bool {
 		row := util.UnsafeBytesToString(key)
 		if v, ok := lp.mu.holders[row]; ok {
@@ -305,9 +336,10 @@ func (lp *localLockTableProxy) unlockWithContext(
 		}
 		return true
 	})
+	lp.mu.Unlock()
 
 	// all skipped
-	var err error
+	err = nil
 	if unlocker, ok := lp.remote.(contextUnlocker); ok {
 		if skipped != rows.len() {
 			err = unlocker.unlockWithContext(ctx, txn, ls, commitTS, remoteMutations...)
@@ -315,6 +347,10 @@ func (lp *localLockTableProxy) unlockWithContext(
 	} else if skipped != rows.len() {
 		lp.remote.unlock(txn, ls, commitTS, remoteMutations...)
 	}
+
+	lp.mu.Lock()
+	defer lp.mu.Unlock()
+	defer lp.finishUnlockTransitionLocked(transition)
 	if err != nil {
 		return err
 	}
@@ -337,6 +373,69 @@ func (lp *localLockTableProxy) unlockWithContext(
 		}
 	}
 	return nil
+}
+
+// beginUnlockTransition waits only for overlapping row transitions and never
+// retains the proxy mutex while waiting. On success it reserves every row in
+// one step, preserving the serialization that the old RPC-spanning mutex
+// provided for handoff and retry state.
+func (lp *localLockTableProxy) beginUnlockTransition(
+	ctx context.Context,
+	rows *fixedSlice,
+) (*proxyUnlockTransition, error) {
+	rowKeys := make([]string, 0, rows.len())
+	rows.iter(func(row []byte) bool {
+		rowKeys = append(rowKeys, util.UnsafeBytesToString(row))
+		return true
+	})
+
+	for {
+		lp.mu.Lock()
+		if err := ctx.Err(); err != nil {
+			lp.mu.Unlock()
+			return nil, err
+		}
+		var pending *proxyUnlockTransition
+		for _, row := range rowKeys {
+			if transition := lp.mu.unlockTransitions[row]; transition != nil {
+				pending = transition
+				break
+			}
+		}
+		if pending == nil {
+			transition := &proxyUnlockTransition{
+				rows: rowKeys,
+				done: make(chan struct{}),
+			}
+			for _, row := range rowKeys {
+				lp.mu.unlockTransitions[row] = transition
+			}
+			lp.mu.Unlock()
+			return transition, nil
+		}
+		lp.mu.Unlock()
+
+		select {
+		case <-pending.done:
+			// The completed transition may have changed proxy ownership. Retry
+			// the reservation and plan from the newly published state.
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+}
+
+// finishUnlockTransitionLocked publishes completion after all local handoff
+// state has been applied (or retained for a retry). lp.mu must be held.
+func (lp *localLockTableProxy) finishUnlockTransitionLocked(
+	transition *proxyUnlockTransition,
+) {
+	for _, row := range transition.rows {
+		if lp.mu.unlockTransitions[row] == transition {
+			delete(lp.mu.unlockTransitions, row)
+		}
+	}
+	close(transition.done)
 }
 
 func (lp *localLockTableProxy) isRemoteHolderLocked(
