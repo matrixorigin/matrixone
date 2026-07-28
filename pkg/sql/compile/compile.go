@@ -5670,7 +5670,7 @@ func scopeTreeHasCrossCNDispatch(s *Scope) bool {
 // doSetRootOperator) appends a connector *on top of* that existing root using AppendChild
 // semantics, so the caller's operator is preserved as the connector's child, not replaced.
 func (c *Compile) groupShuffleBucketsByCNIfNeeded(ss []*Scope) []*Scope {
-	stageNodes := c.queryWorkerStageNodes()
+	stageNodes := shuffleBucketStageNodes(ss)
 	if len(stageNodes) <= 1 || len(ss) <= len(stageNodes) {
 		return ss
 	}
@@ -5685,6 +5685,26 @@ func (c *Compile) groupShuffleBucketsByCNIfNeeded(ss []*Scope) []*Scope {
 		return ss
 	}
 	return c.mergeScopesByStageNodes(ss, stageNodes)
+}
+
+// shuffleBucketStageNodes derives the grouping boundary from the receiver
+// scopes themselves. The receiver set may include a local SINK_SCAN owner that
+// is intentionally absent from the scheduled query-worker set.
+func shuffleBucketStageNodes(ss []*Scope) engine.Nodes {
+	stageNodes := make(engine.Nodes, 0, len(ss))
+	for _, scope := range ss {
+		found := false
+		for _, node := range stageNodes {
+			if sameExecutionNode(node, scope.NodeInfo) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			stageNodes = append(stageNodes, scope.NodeInfo)
+		}
+	}
+	return stageNodes
 }
 
 func (c *Compile) mergeScopesByStageNodes(ss []*Scope, stageNodes engine.Nodes) []*Scope {
