@@ -1699,8 +1699,7 @@ drop table t_range_null;
 drop database test_range_null_order_key;
 
 -- Test DESC RANGE frame with NULL ORDER BY key.
--- DESC NULLS FIRST (default for DESC): NULLs at start, then [4, 2, 1].
--- DESC NULLS LAST: [4, 2, 1] then NULLs at end.
+-- DESC uses MySQL ordering: [4, 2, 1] then NULLs.
 create database if not exists test_range_desc;
 use test_range_desc;
 
@@ -1713,37 +1712,25 @@ insert into t_desc values
   (5, null, 20),
   (6, null, 30);
 
--- DESC default (NULLS FIRST): NULLs first, then 4,2,2,1
+-- DESC default: 4,2,2,1, then NULLs
 select * from t_desc order by k desc;
 
--- DESC RANGE BETWEEN 1 PRECEDING AND CURRENT ROW (NULLS FIRST)
+-- DESC RANGE BETWEEN 1 PRECEDING AND CURRENT ROW
 select id, ifnull(cast(k as char), 'NULL') as k_label, v,
        count(*) over (order by k desc range between 1 preceding and current row) as cnt_rng,
        sum(v) over (order by k desc range between 1 preceding and current row) as sum_rng
 from t_desc order by k desc, id;
 
--- DESC RANGE BETWEEN CURRENT ROW AND 1 FOLLOWING (NULLS FIRST)
+-- DESC RANGE BETWEEN CURRENT ROW AND 1 FOLLOWING
 select id, ifnull(cast(k as char), 'NULL') as k_label, v,
        count(*) over (order by k desc range between current row and 1 following) as cnt_rng,
        sum(v) over (order by k desc range between current row and 1 following) as sum_rng
 from t_desc order by k desc, id;
 
--- DESC RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW (NULLS FIRST)
+-- DESC RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
 select id, ifnull(cast(k as char), 'NULL') as k_label, v,
        count(*) over (order by k desc range between unbounded preceding and current row) as cnt_rng
 from t_desc order by k desc, id;
-
--- DESC NULLS LAST
-select id, ifnull(cast(k as char), 'NULL') as k_label, v,
-       count(*) over (order by k desc nulls last range between 1 preceding and current row) as cnt_rng,
-       sum(v) over (order by k desc nulls last range between 1 preceding and current row) as sum_rng
-from t_desc order by k desc nulls last, id;
-
--- DESC NULLS LAST RANGE CURRENT ROW TO 1 FOLLOWING
-select id, ifnull(cast(k as char), 'NULL') as k_label, v,
-       count(*) over (order by k desc nulls last range between current row and 1 following) as cnt_rng,
-       sum(v) over (order by k desc nulls last range between current row and 1 following) as sum_rng
-from t_desc order by k desc nulls last, id;
 
 drop table t_desc;
 drop database test_range_desc;

@@ -6519,11 +6519,11 @@ nulls_first_last_opt:
     }
 |   NULLS FIRST
     {
-        $$ = tree.NullsFirst
+        yylex.Error("NULLS FIRST is not supported in MySQL syntax"); return 1
     }
 |   NULLS LAST
     {
-        $$ = tree.NullsLast
+        yylex.Error("NULLS LAST is not supported in MySQL syntax"); return 1
     }
 
 select_lock_opt:
