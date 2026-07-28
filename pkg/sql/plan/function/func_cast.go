@@ -6215,12 +6215,46 @@ func parseUnsignedCastString(s string, bitSize int) (uint64, error) {
 	return val, nil
 }
 
+func leadingDecimalIntegerPrefix(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	end := 0
+	if s[end] == '+' || s[end] == '-' {
+		end++
+	}
+	digitsStart := end
+	for end < len(s) && isASCIIDigit(s[end]) {
+		end++
+	}
+	if end == digitsStart {
+		if end+1 < len(s) && s[end] == '.' && isASCIIDigit(s[end+1]) {
+			return s[:digitsStart] + "0"
+		}
+		return ""
+	}
+	return s[:end]
+}
+
+func explicitIntegerCastInput(s string) string {
+	_, body, _, _ := splitCastNumericSign(s)
+	if len(body) >= 2 && body[0] == '0' {
+		switch body[1] {
+		case 'b', 'B', 'o', 'O', 'x', 'X':
+			return s
+		}
+	}
+	return leadingDecimalIntegerPrefix(s)
+}
+
 func parseSignedExplicitCastString(s string, bitSize int) (int64, error) {
-	value, err := parseSignedCastString(s, bitSize)
+	parseInput := explicitIntegerCastInput(s)
+	value, err := parseSignedCastString(parseInput, bitSize)
 	if err == nil || !errors.Is(err, strconv.ErrRange) {
 		return value, err
 	}
-	token, tokenErr := parseCastNumericToken(s)
+	token, tokenErr := parseCastNumericToken(parseInput)
 	if tokenErr != nil {
 		return 0, tokenErr
 	}
@@ -6250,11 +6284,12 @@ func parseSignedExplicitCastString(s string, bitSize int) (int64, error) {
 }
 
 func parseUnsignedExplicitCastString(s string, bitSize int) (uint64, error) {
-	value, err := parseUnsignedCastString(s, bitSize)
+	parseInput := explicitIntegerCastInput(s)
+	value, err := parseUnsignedCastString(parseInput, bitSize)
 	if err == nil {
 		return value, nil
 	}
-	token, tokenErr := parseCastNumericToken(s)
+	token, tokenErr := parseCastNumericToken(parseInput)
 	if tokenErr != nil {
 		return 0, tokenErr
 	}
