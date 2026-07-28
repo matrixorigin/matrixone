@@ -108,6 +108,7 @@ type serviceWithDaemonHook struct {
 	mu         sync.RWMutex
 	queryErr   error
 	updateErr  error
+	updateFn   func(context.Context, []task.DaemonTask, ...Condition) (int, error)
 	queryCalls atomic.Int64
 }
 
@@ -123,12 +124,16 @@ func (s *serviceWithDaemonHook) QueryDaemonTask(ctx context.Context, conds ...Co
 }
 
 func (s *serviceWithDaemonHook) UpdateDaemonTask(ctx context.Context, tasks []task.DaemonTask, conds ...Condition) (int, error) {
+	s.mu.RLock()
+	updateErr := s.updateErr
+	updateFn := s.updateFn
+	s.mu.RUnlock()
+	if updateFn != nil {
+		return updateFn(ctx, tasks, conds...)
+	}
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
-	s.mu.RLock()
-	updateErr := s.updateErr
-	s.mu.RUnlock()
 	if updateErr != nil {
 		return 0, updateErr
 	}
@@ -145,6 +150,14 @@ func (s *serviceWithDaemonHook) setUpdateErr(err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.updateErr = err
+}
+
+func (s *serviceWithDaemonHook) setUpdateFn(
+	fn func(context.Context, []task.DaemonTask, ...Condition) (int, error),
+) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.updateFn = fn
 }
 
 func TestDaemonTaskPollResumesAfterTaskFrameworkReenabled(t *testing.T) {
@@ -1109,4 +1122,71 @@ func TestRestartStartClaimDoesNotOverwriteSupersedingControlRequest(t *testing.T
 		assert.Equal(t, task.TaskStatus_CancelRequested, got[0].TaskStatus)
 	}, WithRunnerParallelism(1),
 		WithRunnerFetchInterval(time.Millisecond))
+}
+
+func TestRestartStartClaimErrorPreservesSupersedingControlRequest(t *testing.T) {
+	r, store := newDaemonHandleTestRunner(t)
+	baseService := r.service
+	hook := &serviceWithDaemonHook{TaskService: baseService}
+	r.service = hook
+
+	dt := newDaemonTaskForTest(1, task.TaskStatus_RestartRequested, "foreign-runner")
+	dt.Metadata.ID = "restart-claim-error-cas"
+	dt.LastHeartbeat = time.Now().Add(-r.options.heartbeatTimeout - time.Second)
+	mustAddTestDaemonTask(t, store, 1, dt)
+
+	claimStarted := make(chan struct{})
+	releaseClaim := make(chan struct{})
+	claimErr := errors.New("restart claim update failed")
+	var updateCalls atomic.Int64
+	hook.setUpdateFn(func(
+		_ context.Context,
+		tasks []task.DaemonTask,
+		conds ...Condition,
+	) (int, error) {
+		if updateCalls.Add(1) != 1 {
+			return baseService.UpdateDaemonTask(context.Background(), tasks, conds...)
+		}
+		close(claimStarted)
+		<-releaseClaim
+
+		superseding := dt
+		superseding.TaskStatus = task.TaskStatus_CancelRequested
+		updated, err := baseService.UpdateDaemonTask(
+			context.Background(),
+			[]task.DaemonTask{superseding},
+		)
+		if err != nil {
+			return 0, err
+		}
+		if updated != 1 {
+			return 0, errors.New("failed to install superseding control request")
+		}
+		return 0, claimErr
+	})
+
+	var executed atomic.Bool
+	start := newRestartStartTask(r, &daemonTask{
+		task: dt,
+		executor: func(context.Context, task.Task) error {
+			executed.Store(true)
+			return nil
+		},
+	})
+	require.NoError(t, start.Handle(context.Background()))
+	select {
+	case <-claimStarted:
+	case <-time.After(time.Second):
+		t.Fatal("restart claim update did not start")
+	}
+	close(releaseClaim)
+	r.stopper.Stop()
+
+	got := mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, dt.ID))
+	require.Len(t, got, 1)
+	assert.Equal(t, task.TaskStatus_CancelRequested, got[0].TaskStatus)
+	assert.Equal(t, "foreign-runner", got[0].TaskRunner)
+	assert.Empty(t, got[0].Details.Error)
+	assert.Equal(t, int64(1), updateCalls.Load())
+	assert.False(t, executed.Load())
 }

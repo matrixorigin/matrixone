@@ -142,7 +142,18 @@ func (t *startTask) Handle(_ context.Context) error {
 
 		ok, err = t.runner.startDaemonTask(ctx, t.task, t.restartClaim)
 		if err != nil {
-			t.runner.setDaemonTaskError(ctx, t.task, err)
+			if t.restartClaim {
+				// A failed restart claim does not own the persisted task. Do
+				// not write the observed RestartRequested snapshot back: a
+				// newer PAUSE/CANCEL request may already have superseded it.
+				eventCDCRestartStatusUpdateFailed.ErrorLazy(func() []zap.Field {
+					return cdcRestartEventFields(t.task.task, append([]zap.Field{
+						zap.String("reason", "restart-claim-failed"),
+					}, logutil.ErrorFingerprintFields("error", err)...)...)
+				})
+			} else {
+				t.runner.setDaemonTaskError(ctx, t.task, err)
+			}
 			return
 		}
 
