@@ -51,3 +51,9 @@ SELECT WEEKOFYEAR(DATE_ADD('2008-01-01', INTERVAL 7 DAY)) AS week_after;
 
 # Regression: VARCHAR input must resolve without an implicit unsupported cast.
 SELECT WEEKOFYEAR('2024-01-01') AS string_weekofyear;
+
+-- Incomplete VARCHAR dates preserve the regular date-cast grammar.
+SELECT WEEKOFYEAR('2001-11-00 12:34:56') AS incomplete_datetime,
+       WEEKOFYEAR('20011100') AS incomplete_compact,
+       WEEKOFYEAR('2001-11-0') AS incomplete_variable,
+       WEEKOFYEAR('0000-00-00 12:34:56') AS zero_datetime;

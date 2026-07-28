@@ -53,3 +53,9 @@ Monday  ¦  Tuesday  ¦  Wednesday  ¦  Thursday  ¦  Friday  ¦  Saturday  ¦  
 SELECT DAYNAME('2024-01-15') AS string_dayname;
 ➤ string_dayname[12,-1,0]  𝄀
 Monday
+SELECT DAYNAME('2001-11-00 12:34:56') AS incomplete_datetime,
+DAYNAME('20011100') AS incomplete_compact,
+DAYNAME('2001-11-0') AS incomplete_variable,
+DAYNAME('0000-00-00 12:34:56') AS zero_datetime;
+➤ incomplete_datetime[12,-1,0]  ¦  incomplete_compact[12,-1,0]  ¦  incomplete_variable[12,-1,0]  ¦  zero_datetime[12,-1,0]  𝄀
+null  ¦  null  ¦  null  ¦  null

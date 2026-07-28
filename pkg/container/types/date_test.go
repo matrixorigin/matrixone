@@ -125,6 +125,11 @@ func TestParseDateCast(t *testing.T) {
 			args: args{s: "2005-02-23 10:20:30"},
 			want: "2005-02-23",
 		},
+		{
+			name:    "non-midnight zero datetime remains invalid",
+			args:    args{s: "0000-00-00 12:34:56"},
+			wantErr: true,
+		},
 		// 10. leading/trailing whitespace trimmed
 		{
 			name: "whitespace_trimmed",
@@ -145,6 +150,39 @@ func TestParseDateCast(t *testing.T) {
 			if got.String() != tt.want {
 				t.Errorf("ParseDateCast() got = %v, want %v", got, tt.want)
 			}
+		})
+	}
+}
+
+func TestParseDateCastComponents(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		year    int32
+		month   uint8
+		day     uint8
+		wantErr bool
+	}{
+		{name: "incomplete dashed", input: "2001-11-00", year: 2001, month: 11, day: 0},
+		{name: "incomplete datetime", input: "2001-11-00 12:34:56", year: 2001, month: 11, day: 0},
+		{name: "incomplete compact", input: "20011100", year: 2001, month: 11, day: 0},
+		{name: "incomplete variable width", input: "2001-11-0", year: 2001, month: 11, day: 0},
+		{name: "zero datetime", input: "0000-00-00 12:34:56", year: 0, month: 0, day: 0},
+		{name: "complete variable width datetime", input: "2001-1-2 12:34:56", year: 2001, month: 1, day: 2},
+		{name: "malformed", input: "2001-11-x", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			year, month, day, err := ParseDateCastComponents(tt.input)
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.year, year)
+			assert.Equal(t, tt.month, month)
+			assert.Equal(t, tt.day, day)
 		})
 	}
 }

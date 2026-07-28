@@ -75,3 +75,9 @@ SELECT WEEKOFYEAR(DATE_ADD('2008-01-01', INTERVAL 7 DAY)) AS week_after;
 SELECT WEEKOFYEAR('2024-01-01') AS string_weekofyear;
 ➤ string_weekofyear[-5,64,0]  𝄀
 1
+SELECT WEEKOFYEAR('2001-11-00 12:34:56') AS incomplete_datetime,
+WEEKOFYEAR('20011100') AS incomplete_compact,
+WEEKOFYEAR('2001-11-0') AS incomplete_variable,
+WEEKOFYEAR('0000-00-00 12:34:56') AS zero_datetime;
+➤ incomplete_datetime[-5,64,0]  ¦  incomplete_compact[-5,64,0]  ¦  incomplete_variable[-5,64,0]  ¦  zero_datetime[-5,64,0]  𝄀
+null  ¦  null  ¦  null  ¦  null

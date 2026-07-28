@@ -68,3 +68,9 @@ February  ¦  February
 SELECT MONTHNAME('2024-06-15') AS string_monthname;
 ➤ string_monthname[12,-1,0]  𝄀
 June
+SELECT MONTHNAME('2001-11-00 12:34:56') AS incomplete_datetime,
+MONTHNAME('20011100') AS incomplete_compact,
+MONTHNAME('2001-11-0') AS incomplete_variable,
+MONTHNAME('0000-00-00 12:34:56') AS zero_datetime;
+➤ incomplete_datetime[12,-1,0]  ¦  incomplete_compact[12,-1,0]  ¦  incomplete_variable[12,-1,0]  ¦  zero_datetime[12,-1,0]  𝄀
+November  ¦  November  ¦  November  ¦  null

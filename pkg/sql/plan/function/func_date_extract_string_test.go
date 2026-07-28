@@ -169,11 +169,60 @@ func TestDateExtractStringFunctionsNullAndInvalidInputs(t *testing.T) {
 	}
 }
 
+func TestDateExtractStringFunctionsIncompleteDates(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	input := NewFunctionTestInput(types.T_varchar.ToType(),
+		[]string{"2001-11-00 12:34:56", "20011100", "2001-11-0", "0000-00-00 12:34:56", "2024-13-01"}, nil)
+
+	for _, tc := range []struct {
+		name   string
+		fn     fEvalFn
+		expect FunctionTestResult
+	}{
+		{
+			name: "dayofmonth",
+			fn:   DateStringToDay,
+			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
+				[]uint8{0, 0, 0, 0, 0}, []bool{false, false, false, false, true}),
+		},
+		{
+			name: "quarter",
+			fn:   DateStringToQuarter,
+			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
+				[]uint8{4, 4, 4, 0, 0}, []bool{false, false, false, false, true}),
+		},
+		{
+			name: "weekofyear",
+			fn:   DateStringToWeekOfYear,
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{0, 0, 0, 0, 0}, []bool{true, true, true, true, true}),
+		},
+		{
+			name: "dayname",
+			fn:   DateStringToDayName,
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"", "", "", "", ""}, []bool{true, true, true, true, true}),
+		},
+		{
+			name: "monthname",
+			fn:   DateStringToMonthName,
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"November", "November", "November", "", ""}, []bool{false, false, false, true, true}),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ftc := NewFunctionTestCase(proc, []FunctionTestInput{input}, tc.expect, tc.fn)
+			success, info := ftc.Run()
+			require.True(t, success, info)
+		})
+	}
+}
+
 func TestDateStringToStringCallbackInvalid(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	input := NewFunctionTestInput(types.T_varchar.ToType(), []string{"2024-01-15"}, nil)
 	fn := func(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-		return dateStringToStringWithNullOnError(ivecs, result, proc, length, selectList, func(types.Date) (string, bool) {
+		return dateStringToStringWithNullOnError(ivecs, result, proc, length, selectList, func(dateExtractParts) (string, bool) {
 			return "", false
 		})
 	}
