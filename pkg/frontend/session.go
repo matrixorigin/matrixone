@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -57,6 +58,21 @@ import (
 var (
 	MaxPrepareNumberInOneSession atomic.Uint32
 )
+
+func currentProtocolVersion(proc *process.Process) int64 {
+	if proc == nil {
+		return defines.MORPCLatestVersion
+	}
+	value, ok := moruntime.ServiceRuntime(proc.GetService()).GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return defines.MORPCVersion4
+	}
+	version, ok := value.(int64)
+	if !ok {
+		return defines.MORPCVersion4
+	}
+	return version
+}
 
 func init() {
 	MaxPrepareNumberInOneSession.Store(100000)
@@ -963,7 +979,7 @@ func (ses *Session) IsBackgroundSession() bool {
 	return false
 }
 
-func (ses *Session) cachePlan(sql string, stmts []tree.Statement, plans []*plan.Plan) {
+func (ses *Session) cachePlan(sql string, stmts []tree.Statement, plans []*plan.Plan, versions ...int64) {
 	if len(sql) == 0 {
 		return
 	}
@@ -973,7 +989,11 @@ func (ses *Session) cachePlan(sql string, stmts []tree.Statement, plans []*plan.
 		freeStmts(stmts)
 		return
 	}
-	ses.planCache.cache(sql, stmts, plans)
+	protocolVersion := currentProtocolVersion(ses.proc)
+	if len(versions) > 0 {
+		protocolVersion = versions[0]
+	}
+	ses.planCache.cache(sql, stmts, plans, protocolVersion)
 }
 
 func (ses *Session) getCachedPlan(sql string) *cachedPlan {
@@ -985,7 +1005,12 @@ func (ses *Session) getCachedPlan(sql string) *cachedPlan {
 	if ses.planCache == nil {
 		return nil
 	}
-	return ses.planCache.get(sql)
+	cached := ses.planCache.get(sql)
+	if cached != nil && cached.protocolVersion != currentProtocolVersion(ses.proc) {
+		ses.planCache.remove(sql)
+		return nil
+	}
+	return cached
 }
 
 func (ses *Session) isCached(sql string) bool {
@@ -1262,8 +1287,9 @@ func (ses *Session) SetPrepareStmt(ctx context.Context, name string, prepareStmt
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	if stmt, ok := ses.prepareStmts[name]; !ok {
-		if len(ses.prepareStmts) >= int(MaxPrepareNumberInOneSession.Load()) {
-			return moerr.NewInvalidStatef(ctx, "too many prepared statement, max %d", MaxPrepareNumberInOneSession.Load())
+		limit := ses.getMaxPrepareStmtCountLocked()
+		if uint64(len(ses.prepareStmts)) >= limit {
+			return moerr.NewMaxPreparedStmtCountReached(ctx, limit)
 		}
 	} else {
 		stmt.Close()
@@ -1275,6 +1301,17 @@ func (ses *Session) SetPrepareStmt(ctx context.Context, name string, prepareStmt
 	ses.prepareStmts[name] = prepareStmt
 
 	return nil
+}
+
+func (ses *Session) getMaxPrepareStmtCountLocked() uint64 {
+	limit := uint64(MaxPrepareNumberInOneSession.Load())
+	if ses.gSysVars == nil {
+		return limit
+	}
+	if value, ok := ses.gSysVars.Get(maxPreparedStmtCount).(int64); ok && value >= 0 && uint64(value) < limit {
+		return uint64(value)
+	}
+	return limit
 }
 
 func (ses *Session) GetPrepareStmt(ctx context.Context, name string) (*PrepareStmt, error) {
@@ -1306,8 +1343,8 @@ func (ses *Session) RemovePrepareStmt(name string) {
 	defer ses.mu.Unlock()
 	if stmt, ok := ses.prepareStmts[name]; ok {
 		stmt.Close()
+		delete(ses.prepareStmts, name)
 	}
-	delete(ses.prepareStmts, name)
 }
 
 // RemoveAllPrepareStmts closes and drops every cached prepared statement. It is

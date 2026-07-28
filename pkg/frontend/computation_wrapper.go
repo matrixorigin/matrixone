@@ -95,6 +95,10 @@ type TxnComputationWrapper struct {
 	preparedSchedulingSQLMode    string
 	hasPreparedSchedulingSQLMode bool
 	preparedSchedulingSQL        string
+
+	// protocolVersion is captured when plan is built. The session plan cache
+	// uses it instead of the version observed later when execution completes.
+	protocolVersion int64
 }
 
 func InitTxnComputationWrapper(
@@ -287,6 +291,7 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 
 	cacheHit := cwft.plan != nil
 	if !cacheHit {
+		cwft.protocolVersion = currentProtocolVersion(cwft.proc)
 		cwft.plan, err = buildPlan(execCtx.reqCtx, cwft.ses, cwft.ses.GetTxnCompileCtx(), cwft.stmt)
 		if err != nil {
 			return nil, err
@@ -583,8 +588,8 @@ func CheckTableDefChange(catalogCache *cache.CatalogCache, tblKey *cache.TableCh
 	return catalogCache.HasNewerVersion(tblKey)
 }
 
-func preparePlanNeedsRebuild(schemaChanged, modeMismatch bool) bool {
-	return schemaChanged || modeMismatch
+func preparePlanNeedsRebuild(schemaChanged, modeMismatch, protocolMismatch bool) bool {
+	return schemaChanged || modeMismatch || protocolMismatch
 }
 
 func rebuildPreparePlan(
@@ -720,7 +725,10 @@ func initExecuteStmtParamWithResolver(
 	}
 
 	modeMismatch := prepareStmt.NativeMode != currentNativeMode
-	needRebuild := preparePlanNeedsRebuild(change, modeMismatch)
+	protocolVersion := currentProtocolVersion(ses.proc)
+	protocolMismatch := prepareStmt.protocolVersion != 0 &&
+		prepareStmt.protocolVersion != protocolVersion
+	needRebuild := preparePlanNeedsRebuild(change, modeMismatch, protocolMismatch)
 
 	// Rebuild the plan when catalog schema, session temporary-table name
 	// resolution, or the session's compatibility mode changed.
@@ -750,6 +758,7 @@ func initExecuteStmtParamWithResolver(
 		// The rebuilt plan has incorporated the metadata visible through this
 		// high-watermark. A later logtail event will advance it again.
 		prepareStmt.preparedMetadataCheckTS = preparedMetadataTS
+		prepareStmt.protocolVersion = protocolVersion
 	}
 
 	// Recreate the cached compile only when a plan dependency changed.

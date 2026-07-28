@@ -23,6 +23,7 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -146,6 +147,7 @@ func newPreparedExecuteEnvForSQL(t testing.TB, stmtID uint32, sql string) (*Sess
 		PreparePlan:         preparePlan,
 		PrepareStmt:         stmts[0],
 		getFromSendLongData: make(map[int]struct{}),
+		protocolVersion:     currentProtocolVersion(proc),
 	}
 	require.NoError(t, ses.SetPrepareStmt(ctx, stmtName, prepareStmt))
 
@@ -752,6 +754,38 @@ func TestInitExecuteStmtParamRebuildsWhenTempTableMappingChanges(t *testing.T) {
 	require.Equal(t, newColDefData, execCtx.prepareColDef)
 }
 
+func TestInitExecuteStmtParamRebuildsWhenProtocolVersionChanges(t *testing.T) {
+	rt := moruntime.ServiceRuntime("")
+	defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+
+	for i, test := range []struct {
+		name string
+		from int64
+		to   int64
+	}{
+		{name: "upgrade", from: defines.MORPCVersion4, to: defines.MORPCVersion5},
+		{name: "rollback", from: defines.MORPCVersion5, to: defines.MORPCVersion4},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, test.from)
+			ses, prepareStmt, cw, execCtx := newPreparedExecuteEnv(t, uint32(107+i))
+			defer prepareStmt.Close()
+			require.Equal(t, test.from, prepareStmt.protocolVersion)
+			oldPlan := prepareStmt.PreparePlan
+
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, test.to)
+			retComp, retPlan, retStmt, _, _, err := initExecuteStmtParam(
+				execCtx, ses, cw, nil, prepareStmt.Name)
+			require.NoError(t, err)
+			require.Nil(t, retComp)
+			require.NotNil(t, retPlan)
+			require.NotNil(t, retStmt)
+			require.NotSame(t, oldPlan, prepareStmt.PreparePlan)
+			require.Equal(t, test.to, prepareStmt.protocolVersion)
+		})
+	}
+}
+
 func TestInitExecuteStmtParamKeepsOldStateWhenColumnMetadataRefreshFails(t *testing.T) {
 	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnv(t, 103)
 	defer prepareStmt.Close()
@@ -881,7 +915,8 @@ func TestModeMismatchRebuildsPreparedViewWithPreparedRootSQL(t *testing.T) {
 	require.NoError(t, ses.SetSessionSysVar(execCtx.reqCtx, "sql_mode", "MATRIXONE_NATIVE"))
 	modeMismatch := prepareStmt.NativeMode != ses.sqlModeHasMatrixOneNative()
 	require.True(t, modeMismatch)
-	require.True(t, preparePlanNeedsRebuild(false, modeMismatch))
+	require.True(t, preparePlanNeedsRebuild(false, modeMismatch, false))
+	require.True(t, preparePlanNeedsRebuild(false, false, true))
 
 	rebuilt, err := rebuildPreparePlan(
 		execCtx,

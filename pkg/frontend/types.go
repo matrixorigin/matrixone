@@ -324,6 +324,9 @@ type PrepareStmt struct {
 	// cloneSQL is an immutable, fully qualified SQL representation captured
 	// before clone planning can mutate the parsed AST.
 	cloneSQL string
+	// protocolVersion is the cluster protocol used to build PreparePlan.
+	// A version change can alter internal function IDs in generated DML plans.
+	protocolVersion int64
 
 	// schedulingSQLMode freezes the lexical mode used when Sql was prepared.
 	// EXECUTE must not reinterpret optimizer comments after session sql_mode
