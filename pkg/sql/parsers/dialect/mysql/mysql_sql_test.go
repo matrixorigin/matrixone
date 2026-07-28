@@ -238,6 +238,34 @@ func TestFullTextMatchPatternRoundTrip(t *testing.T) {
 	})
 }
 
+func TestConvertToJSONBuildsCastExpr(t *testing.T) {
+	ctx := context.Background()
+	convertStmt, err := ParseOne(ctx, "select convert('1', json)", 1)
+	require.NoError(t, err)
+	defer convertStmt.Free()
+
+	convert, ok := firstSelectExpr(t, convertStmt).(*tree.CastExpr)
+	require.True(t, ok)
+	convertType, ok := convert.Type.(*tree.T)
+	require.True(t, ok)
+	require.Equal(t, uint32(defines.MYSQL_TYPE_JSON), convertType.InternalType.Oid)
+
+	castStmt, err := ParseOne(ctx, "select cast('1' as json)", 1)
+	require.NoError(t, err)
+	defer castStmt.Free()
+	cast, ok := firstSelectExpr(t, castStmt).(*tree.CastExpr)
+	require.True(t, ok)
+	castType, ok := cast.Type.(*tree.T)
+	require.True(t, ok)
+	require.Equal(t, castType.InternalType, convertType.InternalType)
+
+	usingStmt, err := ParseOne(ctx, "select convert('1' using utf8mb4)", 1)
+	require.NoError(t, err)
+	defer usingStmt.Free()
+	_, isCast := firstSelectExpr(t, usingStmt).(*tree.CastExpr)
+	require.False(t, isCast)
+}
+
 func TestParseFirstWithSQLMode(t *testing.T) {
 	ctx := context.Background()
 	parser := &MySQLParser{}
@@ -4774,6 +4802,37 @@ func TestFaultTolerance(t *testing.T) {
 			t.Errorf("Fault tolerant ases (%q) should parse errors", tcase.input)
 			continue
 		}
+	}
+}
+
+func TestOrderByRejectsNullsPosition(t *testing.T) {
+	testCases := []struct {
+		name    string
+		sql     string
+		message string
+	}{
+		{
+			name:    "top-level NULLS FIRST",
+			sql:     "select id, score from t order by score desc nulls first, id",
+			message: "NULLS FIRST is not supported in MySQL syntax",
+		},
+		{
+			name:    "top-level NULLS LAST",
+			sql:     "select id, score from t order by score asc nulls last, id",
+			message: "NULLS LAST is not supported in MySQL syntax",
+		},
+		{
+			name:    "window NULLS LAST",
+			sql:     "select sum(score) over (order by score nulls last) from t",
+			message: "NULLS LAST is not supported in MySQL syntax",
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			_, err := ParseOne(context.Background(), testCase.sql, 1)
+			require.ErrorContains(t, err, testCase.message)
+		})
 	}
 }
 
