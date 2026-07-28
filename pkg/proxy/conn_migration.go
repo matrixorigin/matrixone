@@ -118,7 +118,7 @@ func (c *clientConn) migrateConnToContext(
 		PrepareStmts:     info.PrepareStmts,
 		LastAffectedRows: info.LastAffectedRows,
 	}
-	ctx, cancel := context.WithTimeoutCause(parent, time.Second*3, moerr.CauseMigrateConnTo)
+	ctx, cancel := context.WithTimeoutCause(parent, defaultTransferTimeout, moerr.CauseMigrateConnTo)
 	defer cancel()
 	resp, err := c.queryClient.SendMessage(ctx, addr, req)
 	if err != nil {

@@ -7286,6 +7286,8 @@ func TestSleep(t *testing.T) {
 func resetUserLevelLocksForTest(t *testing.T) {
 	t.Helper()
 	userLevelLocks.Lock()
+	retainedCleanupDone := userLevelLocks.retainedCleanupDone
+	userLevelLocks.retainedCleanupGen++
 	userLevelLocks.counts = make(map[userLevelLockKey]uint64)
 	userLevelLocks.byOwner = make(map[string]map[string]struct{})
 	userLevelLocks.txnIDs = make(map[userLevelLockKey][][]byte)
@@ -7294,7 +7296,20 @@ func resetUserLevelLocksForTest(t *testing.T) {
 	userLevelLocks.retainedCloseCleanups = make(map[string]retainedUserLevelLockCloseCleanup)
 	userLevelLocks.cleanupReservations = make(map[detachedUserLevelLockCleanupKey]uint64)
 	userLevelLocks.retainedCleanupStarted = false
+	userLevelLocks.retainedCleanupDone = nil
 	userLevelLocks.Unlock()
+
+	// A retained worker can already hold a snapshot of the maps cleared above.
+	// Advancing the generation makes it stop after its current bounded handoff;
+	// join it before replacing the detached queues so stale work cannot enter the
+	// next test's generation.
+	if retainedCleanupDone != nil {
+		select {
+		case <-retainedCleanupDone:
+		case <-time.After(5 * time.Second):
+			t.Fatal("retained user-level lock cleanup worker did not stop")
+		}
+	}
 	resetDetachedUserLevelLockCleanupsForTest()
 }
 
@@ -7536,12 +7551,12 @@ func (s *userLevelLockTestService) CloseRemoteLockTable(group uint32, tableID, v
 func runUserLevelLockTest(t *testing.T, fn func([]lockservice.LockService)) {
 	t.Helper()
 	resetUserLevelLocksForTest(t)
+	defer resetUserLevelLocksForTest(t)
 	state := &userLevelLockTestState{locks: make(map[string]string)}
 	fn([]lockservice.LockService{
 		&userLevelLockTestService{id: "user-level-lock-1", state: state},
 		&userLevelLockTestService{id: "user-level-lock-2", state: state},
 	})
-	resetUserLevelLocksForTest(t)
 }
 
 func TestUserLevelLockCleanupTestServiceUnblocksInFlightUnlock(t *testing.T) {
@@ -8691,12 +8706,6 @@ func TestReleaseUserLevelLocksOnSessionCloseRetainsSaturatedHandoffAndRecovers(t
 		detachedUserLevelLockCleanups.Unlock()
 
 		releaseUserLevelLocksOnSessionCloseWithTimeout(holder, 10*time.Millisecond)
-		require.NotEmpty(t, UserLevelLocksForMigration(holder))
-		userLevelLocks.Lock()
-		_, retained := userLevelLocks.retainedCloseCleanups[owner]
-		userLevelLocks.Unlock()
-		require.True(t, retained)
-
 		v, err = getUserLevelLock(lockName, 0, contender)
 		require.NoError(t, err)
 		require.Equal(t, int64(0), v)
@@ -8721,7 +8730,11 @@ func TestReleaseUserLevelLocksOnSessionCloseRetainsSaturatedHandoffAndRecovers(t
 			}
 		}
 	waitForCleanup:
-		runRetainedUserLevelLockCleanupPass()
+		// The retained cleanup worker starts asynchronously. It may already own
+		// the cleanup snapshot by the time this goroutine observes the shared
+		// maps, so assert the durable ownership behavior instead of a transient
+		// retainedCloseCleanups entry or which goroutine makes progress.
+		_, _ = runRetainedUserLevelLockCleanupPass()
 		require.Eventually(t, func() bool {
 			return len(UserLevelLocksForMigration(holder)) == 0
 		}, 3*time.Second, 10*time.Millisecond)
@@ -9282,7 +9295,10 @@ func TestTimedOutFailedAttemptCleanupRetainsOwnershipAfterSaturatedHandoff(t *te
 		}
 	timeoutBacklogDrained:
 		detachedUserLevelLockCleanups.Unlock()
-		runRetainedUserLevelLockCleanupPass()
+		// retainDetachedUserLevelLockTxnCleanup starts a worker. Once unlocks
+		// resume, that worker may finish before this goroutine runs a pass.
+		// Drive a pass opportunistically, then assert only the terminal state.
+		_, _ = runRetainedUserLevelLockCleanupPass()
 
 		require.Eventually(t, func() bool {
 			userLevelLocks.Lock()
@@ -9346,7 +9362,10 @@ func TestSuccessfulProbeCleanupRetainsOwnershipAfterSaturatedHandoff(t *testing.
 		}
 	probeBacklogDrained:
 		detachedUserLevelLockCleanups.Unlock()
-		runRetainedUserLevelLockCleanupPass()
+		// The retained worker races this explicit pass after blockUnlock is
+		// cleared. Either goroutine may complete the cleanup, so progress from
+		// this particular call is not part of the behavior under test.
+		_, _ = runRetainedUserLevelLockCleanupPass()
 		require.Eventually(t, func() bool {
 			userLevelLocks.Lock()
 			_, retained := userLevelLocks.pendingCleanups[key]
@@ -9444,7 +9463,9 @@ func TestSessionCloseRetainsCleanupWhenRetainedCapIsFull(t *testing.T) {
 	runUserLevelLockTest(t, func(services []lockservice.LockService) {
 		service := services[0].(*userLevelLockTestService)
 		service.blockUnlock.Store(true)
+		defer service.blockUnlock.Store(false)
 		holder := newUserLevelLockTestProcess(t, services[0], "acc")
+		contender := newUserLevelLockTestProcess(t, services[1], "acc")
 		name := "close_capacity_full"
 		v, err := getUserLevelLock(name, 0, holder)
 		require.NoError(t, err)
@@ -9474,6 +9495,10 @@ func TestSessionCloseRetainsCleanupWhenRetainedCapIsFull(t *testing.T) {
 		}
 		fillDetachedUserLevelLockCleanupAdmissionForTest(service, firstKey, chunks[0])
 		detachedUserLevelLockCleanups.Lock()
+		// Keep the synthetic backlog saturated. Starting its consumer here would
+		// make capacity availability depend on goroutine scheduling and allow the
+		// close cleanup to bypass the retained fallback this test exercises.
+		detachedUserLevelLockCleanups.backlogStarted = true
 		for i := 0; i < userLevelLockDetachedCleanupBacklog; i++ {
 			detachedUserLevelLockCleanups.backlog <- detachedUserLevelLockCleanupRequest{
 				ls:     service,
@@ -9489,6 +9514,43 @@ func TestSessionCloseRetainsCleanupWhenRetainedCapIsFull(t *testing.T) {
 		userLevelLocks.Unlock()
 		require.True(t, retained)
 		require.NotEmpty(t, UserLevelLocksForMigration(holder))
+
+		// Remove only the synthetic admission pressure, then verify the durable
+		// outcome. The retained worker may win the race with this explicit pass,
+		// so neither its transient map entry nor per-call progress is an oracle.
+		service.blockUnlock.Store(false)
+		detachedUserLevelLockCleanups.Lock()
+		detachedUserLevelLockCleanups.entries = make(map[detachedUserLevelLockCleanupKey]*detachedUserLevelLockCleanupEntry)
+		for {
+			select {
+			case <-detachedUserLevelLockCleanups.queue:
+			default:
+				goto closeCapacityQueueDrained
+			}
+		}
+	closeCapacityQueueDrained:
+		for {
+			select {
+			case <-detachedUserLevelLockCleanups.backlog:
+			default:
+				goto closeCapacityBacklogDrained
+			}
+		}
+	closeCapacityBacklogDrained:
+		detachedUserLevelLockCleanups.Unlock()
+		_, _ = runRetainedUserLevelLockCleanupPass()
+
+		row := string(userLevelLockRow(holder, name))
+		require.Eventually(t, func() bool {
+			service.state.Lock()
+			held := service.state.locks[row]
+			service.state.Unlock()
+			return held == "" && len(UserLevelLocksForMigration(holder)) == 0
+		}, 3*time.Second, 10*time.Millisecond)
+
+		v, err = getUserLevelLock(name, 0, contender)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v)
 	})
 }
 
