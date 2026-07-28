@@ -15,6 +15,8 @@
 package bytejson
 
 import (
+	"bytes"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -92,6 +94,39 @@ func TestMarshalBinarySubtypesRemainLegacyReadable(t *testing.T) {
 			tc.check(t, got)
 		})
 	}
+}
+
+func TestBinaryJSONPayloadLenLegacyBlobLargePayloadAllocations(t *testing.T) {
+	payload := bytes.Repeat([]byte{0xef}, 1<<20)
+	legacy := makeBinaryJson(TpCodeBlob, []byte(base64.StdEncoding.EncodeToString(payload)))
+
+	allocs := testing.AllocsPerRun(10, func() {
+		length, ok := BinaryJSONPayloadLen(legacy)
+		if !ok || length != len(payload) {
+			t.Fatalf("unexpected payload length: length=%d ok=%v", length, ok)
+		}
+	})
+	require.Less(t, allocs, float64(1), "payload length should not allocate decoded payload buffers")
+}
+
+func TestBinaryJSONPayloadLenLegacyBlobPreservesBase64Newlines(t *testing.T) {
+	payload := bytes.Repeat([]byte{0xef}, 16*1024)
+	encoded := base64.StdEncoding.EncodeToString(payload)
+	legacyWithNewlines := makeBinaryJson(TpCodeBlob, []byte(encoded[:4095]+"\r\n"+encoded[4095:]))
+
+	length, ok := BinaryJSONPayloadLen(legacyWithNewlines)
+	require.True(t, ok)
+	require.Equal(t, len(payload), length)
+}
+
+func TestBinaryJSONPayloadLenLegacyBitPreservesBase64Newlines(t *testing.T) {
+	payload := bytes.Repeat([]byte{0x01}, 16*1024)
+	encoded := base64.StdEncoding.EncodeToString(payload)
+	legacyWithNewlines := makeBinaryJson(TpCodeBlob, []byte(persistedBitPrefix+encoded[:4095]+"\r\n"+encoded[4095:]))
+
+	length, ok := BinaryJSONPayloadLen(legacyWithNewlines)
+	require.True(t, ok)
+	require.Equal(t, len(payload), length)
 }
 
 // requireLegacyJSONReadable models the pre-TpCodeOpaque/TpCodeBit reader. It

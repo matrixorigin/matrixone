@@ -482,17 +482,6 @@ func appendLegacyCompatibleValueEntry(buf []byte, docOff, valEntryOff int, bj By
 	return buf, nil
 }
 
-func (bj ByteJson) opaquePayload() []byte {
-	if bj.Type != TpCodeBlob {
-		return bj.GetString()
-	}
-	payload, err := base64.StdEncoding.DecodeString(string(bj.GetString()))
-	if err != nil {
-		return bj.GetString()
-	}
-	return payload
-}
-
 type binaryJSONSubtype uint8
 
 const (
@@ -500,41 +489,244 @@ const (
 	binaryJSONBlob
 )
 
-func binaryJSONValue(bj ByteJson) (binaryJSONSubtype, []byte, bool) {
+const (
+	binaryJSONCompareEncodedChunkSize = 4 * 1024
+	binaryJSONCompareDecodedChunkSize = binaryJSONCompareEncodedChunkSize / 4 * 3
+)
+
+type binaryJSONValueView struct {
+	subtype       binaryJSONSubtype
+	rawPayload    []byte
+	legacyEncoded []byte
+	fallbackRaw   []byte
+}
+
+func binaryJSONValue(bj ByteJson) (binaryJSONValueView, bool) {
 	switch bj.Type {
 	case TpCodeBlob:
-		if payload, ok := bj.persistedBitPayload(); ok {
-			return binaryJSONBit, payload, true
+		payload := bj.GetString()
+		if bytes.HasPrefix(payload, []byte(persistedBitPrefix)) {
+			encoded := payload[len(persistedBitPrefix):]
+			if _, ok := base64DecodedLen(encoded); ok {
+				return binaryJSONValueView{
+					subtype:       binaryJSONBit,
+					legacyEncoded: encoded,
+				}, true
+			}
 		}
-		return binaryJSONBlob, bj.opaquePayload(), true
+		return binaryJSONValueView{
+			subtype:       binaryJSONBlob,
+			legacyEncoded: payload,
+			fallbackRaw:   payload,
+		}, true
 	case TpCodeOpaque:
-		return binaryJSONBlob, bj.opaquePayload(), true
+		return binaryJSONValueView{
+			subtype:    binaryJSONBlob,
+			rawPayload: bj.GetString(),
+		}, true
 	case TpCodeBit:
-		return binaryJSONBit, bj.opaquePayload(), true
+		return binaryJSONValueView{
+			subtype:    binaryJSONBit,
+			rawPayload: bj.GetString(),
+		}, true
 	default:
-		return 0, nil, false
+		return binaryJSONValueView{}, false
 	}
 }
 
 // CompareBinaryJSON compares opaque JSON values by their MySQL subtype and
 // original bytes. TpCodeBlob is the legacy BLOB encoding and aliases Opaque.
 func CompareBinaryJSON(left, right ByteJson) (int, bool) {
-	leftSubtype, leftPayload, leftOK := binaryJSONValue(left)
-	rightSubtype, rightPayload, rightOK := binaryJSONValue(right)
+	leftValue, leftOK := binaryJSONValue(left)
+	rightValue, rightOK := binaryJSONValue(right)
 	if !leftOK || !rightOK {
 		return 0, false
 	}
-	if leftSubtype != rightSubtype {
-		return int(leftSubtype) - int(rightSubtype), true
+	if leftValue.subtype != rightValue.subtype {
+		return int(leftValue.subtype) - int(rightValue.subtype), true
 	}
-	return bytes.Compare(leftPayload, rightPayload), true
+	switch {
+	case leftValue.legacyEncoded != nil && rightValue.legacyEncoded != nil:
+		if cmp, ok := compareDecodedBase64Payloads(leftValue.legacyEncoded, rightValue.legacyEncoded); ok {
+			return cmp, true
+		}
+		return bytes.Compare(leftValue.fallbackRaw, rightValue.fallbackRaw), true
+	case leftValue.legacyEncoded != nil:
+		if cmp, ok := compareDecodedBase64WithRaw(leftValue.legacyEncoded, rightValue.rawPayload); ok {
+			return cmp, true
+		}
+		return bytes.Compare(leftValue.fallbackRaw, rightValue.rawPayload), true
+	case rightValue.legacyEncoded != nil:
+		if cmp, ok := compareDecodedBase64WithRaw(rightValue.legacyEncoded, leftValue.rawPayload); ok {
+			return -cmp, true
+		}
+		return bytes.Compare(leftValue.rawPayload, rightValue.fallbackRaw), true
+	default:
+		return bytes.Compare(leftValue.rawPayload, rightValue.rawPayload), true
+	}
 }
 
 // BinaryJSONPayloadLen returns the decoded byte length of an opaque JSON
 // value. It keeps legacy TpCodeBlob values compatible with new raw payloads.
 func BinaryJSONPayloadLen(bj ByteJson) (int, bool) {
-	_, payload, ok := binaryJSONValue(bj)
-	return len(payload), ok
+	value, ok := binaryJSONValue(bj)
+	if !ok {
+		return 0, false
+	}
+	if value.legacyEncoded == nil {
+		return len(value.rawPayload), true
+	}
+	if n, ok := base64DecodedLen(value.legacyEncoded); ok {
+		return n, true
+	}
+	return len(value.fallbackRaw), true
+}
+
+func compareDecodedBase64Payloads(leftEncoded, rightEncoded []byte) (int, bool) {
+	var leftBuf [binaryJSONCompareDecodedChunkSize]byte
+	var rightBuf [binaryJSONCompareDecodedChunkSize]byte
+	var leftEncOff, rightEncOff int
+	var leftN, rightN int
+	var leftOff, rightOff int
+	for {
+		if leftOff == leftN && leftEncOff < len(leftEncoded) {
+			n, nextOff, ok := decodeBase64Chunk(leftEncoded, leftEncOff, leftBuf[:])
+			if !ok {
+				return 0, false
+			}
+			leftEncOff, leftN, leftOff = nextOff, n, 0
+		}
+		if rightOff == rightN && rightEncOff < len(rightEncoded) {
+			n, nextOff, ok := decodeBase64Chunk(rightEncoded, rightEncOff, rightBuf[:])
+			if !ok {
+				return 0, false
+			}
+			rightEncOff, rightN, rightOff = nextOff, n, 0
+		}
+		leftAvail := leftN - leftOff
+		rightAvail := rightN - rightOff
+		if leftAvail == 0 || rightAvail == 0 {
+			switch {
+			case leftAvail == 0 && rightAvail == 0:
+				if leftEncOff == len(leftEncoded) && rightEncOff == len(rightEncoded) {
+					return 0, true
+				}
+				continue
+			case leftAvail == 0 && leftEncOff == len(leftEncoded):
+				return -1, true
+			case rightAvail == 0 && rightEncOff == len(rightEncoded):
+				return 1, true
+			default:
+				continue
+			}
+		}
+
+		chunkLen := leftAvail
+		if rightAvail < chunkLen {
+			chunkLen = rightAvail
+		}
+		if cmp := bytes.Compare(leftBuf[leftOff:leftOff+chunkLen], rightBuf[rightOff:rightOff+chunkLen]); cmp != 0 {
+			return cmp, true
+		}
+		leftOff += chunkLen
+		rightOff += chunkLen
+	}
+}
+
+func compareDecodedBase64WithRaw(encoded, raw []byte) (int, bool) {
+	var decodedBuf [binaryJSONCompareDecodedChunkSize]byte
+	var encodedOff, rawOff int
+	var decodedN, decodedOff int
+	for {
+		if decodedOff == decodedN && encodedOff < len(encoded) {
+			n, nextOff, ok := decodeBase64Chunk(encoded, encodedOff, decodedBuf[:])
+			if !ok {
+				return 0, false
+			}
+			encodedOff, decodedN, decodedOff = nextOff, n, 0
+		}
+		decodedAvail := decodedN - decodedOff
+		rawAvail := len(raw) - rawOff
+		if decodedAvail == 0 || rawAvail == 0 {
+			switch {
+			case decodedAvail == 0 && rawAvail == 0:
+				if encodedOff == len(encoded) {
+					return 0, true
+				}
+				continue
+			case decodedAvail == 0 && encodedOff == len(encoded):
+				return -1, true
+			case rawAvail == 0:
+				return 1, true
+			default:
+				continue
+			}
+		}
+		chunkLen := decodedAvail
+		if rawAvail < chunkLen {
+			chunkLen = rawAvail
+		}
+		if cmp := bytes.Compare(decodedBuf[decodedOff:decodedOff+chunkLen], raw[rawOff:rawOff+chunkLen]); cmp != 0 {
+			return cmp, true
+		}
+		decodedOff += chunkLen
+		rawOff += chunkLen
+	}
+}
+
+func base64DecodedLen(encoded []byte) (int, bool) {
+	var buf [binaryJSONCompareDecodedChunkSize]byte
+	total := 0
+	for off := 0; off < len(encoded); {
+		n, nextOff, ok := decodeBase64Chunk(encoded, off, buf[:])
+		if !ok {
+			return 0, false
+		}
+		total += n
+		off = nextOff
+	}
+	return total, true
+}
+
+func decodeBase64Chunk(encoded []byte, offset int, dst []byte) (int, int, bool) {
+	if offset >= len(encoded) {
+		return 0, offset, true
+	}
+	end := base64ChunkEnd(encoded, offset)
+	n, err := base64.StdEncoding.Decode(dst, encoded[offset:end])
+	if err != nil {
+		return 0, offset, false
+	}
+	return n, end, true
+}
+
+// base64ChunkEnd selects a complete Base64 quantum. EncodeJson emits compact
+// Base64, but DecodeString historically also accepted CR/LF in legacy values;
+// retaining quantum alignment preserves that behavior while keeping decoding
+// bounded by the fixed comparison buffer.
+func base64ChunkEnd(encoded []byte, offset int) int {
+	limit := offset + binaryJSONCompareEncodedChunkSize
+	if limit >= len(encoded) {
+		return len(encoded)
+	}
+	if bytes.IndexByte(encoded[offset:limit], '\r') == -1 &&
+		bytes.IndexByte(encoded[offset:limit], '\n') == -1 {
+		return limit
+	}
+	end := offset
+	base64Chars := 0
+	for i := offset; i < len(encoded); i++ {
+		if encoded[i] != '\r' && encoded[i] != '\n' {
+			base64Chars++
+			if base64Chars%4 == 0 {
+				end = i + 1
+			}
+		}
+		if i+1 >= limit && end != offset {
+			return end
+		}
+	}
+	return len(encoded)
 }
 
 func (bj ByteJson) queryValByKey(key []byte) ByteJson {
