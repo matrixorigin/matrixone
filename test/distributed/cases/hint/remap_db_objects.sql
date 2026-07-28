@@ -95,6 +95,21 @@ select * from ddst.base order by id;
 -- the real dsrc.base is still its original 1,2,3
 select * from dsrc.base order by id;
 
+-- Prepared CLONE freezes the effective remapped default database. A schema
+-- refresh must keep both unqualified source and destination in ddst.
+set remap_rewrites = '{"remapdb": {"dsrc": "ddst"}}';
+create table clone_src(id int);
+insert into clone_src values (7);
+prepare remap_clone from 'create table clone_dst clone clone_src';
+alter table clone_src add column note int default 9;
+execute remap_clone;
+deallocate prepare remap_clone;
+set remap_rewrites = '';
+select * from ddst.clone_dst;
+select count(*) as clone_in_source
+from information_schema.tables
+where table_schema = 'dsrc' and table_name = 'clone_dst';
+
 -- ========================================================================
 -- DATABASE-LEVEL statements are NOT remapped (current db = dsrc, remap active)
 -- ========================================================================
