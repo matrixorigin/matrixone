@@ -1548,11 +1548,20 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		insertSqlBuilder.WriteString("*")
 
 		// from
-		fmtCtx := tree.NewFmtCtx(
-			dialect.MYSQL,
+		fmtOpts := []tree.FmtCtxOption{
 			tree.WithQuoteString(true),
 			tree.WithQuoteIdentifier(),
-		)
+		}
+		// The generated INSERT ... SELECT is re-parsed by the internal executor
+		// under the SESSION's sql_mode. Under NO_BACKSLASH_ESCAPES a stored
+		// string (e.g. a fulltext MATCH pattern) holds backslashes literally, so
+		// the formatter must not re-escape them, or the follow-up query would
+		// search a different pattern than the user wrote (#24823).
+		if mode := parserSQLModeFromContext(ctx); mode != nil &&
+			mysql.ParseSQLModeFlags(*mode).Has(mysql.SQLModeNoBackslashEscapes) {
+			fmtOpts = append(fmtOpts, tree.WithNoBackslashEscape())
+		}
+		fmtCtx := tree.NewFmtCtx(dialect.MYSQL, fmtOpts...)
 		stmt.AsSource.Format(fmtCtx)
 		insertSqlBuilder.WriteString(fmt.Sprintf(" from (%s)", restoreIntervalSyntaxForCTAS(fmtCtx.String())))
 
