@@ -472,7 +472,7 @@ func ConstructCreateTableSQL(
 		}
 
 		fkRefDbName := fkTableDef.DbName
-		if cloneStmt != nil && cloneStmt.StmtType == tree.WithinAccCloneDB &&
+		if cloneStmt != nil && (cloneStmt.StmtType == tree.WithinAccCloneDB || cloneStmt.StmtType == tree.BetweenAccCloneDB) &&
 			cloneStmt.SrcTable.SchemaName.String() == fkTableDef.DbName {
 			fkRefDbName = schemaName
 		}

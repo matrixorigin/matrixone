@@ -22,7 +22,11 @@ import (
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
+	"github.com/matrixorigin/matrixone/pkg/cnservice"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/embed"
+	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/stretchr/testify/require"
 )
 
@@ -44,9 +48,12 @@ func TestIssue26111DataBranchDatabaseWithCyclicForeignKeys(t *testing.T) {
 			sourceDB       = "issue_26111_source"
 			branchDB       = "issue_26111_branch"
 			snapshotBranch = "issue_26111_snapshot_branch"
+			accountBranch  = "issue_26111_account_branch"
 			snapshotName   = "issue_26111_snapshot"
 			existingTarget = "issue_26111_existing"
+			targetAccount  = "i26111t"
 		)
+		execSQLRequire(t, ctx, db, "drop account if exists `"+targetAccount+"`")
 		execSQLRequire(t, ctx, db, "drop snapshot if exists "+snapshotName)
 		for _, name := range []string{branchDB, snapshotBranch, existingTarget, sourceDB} {
 			execSQLRequire(t, ctx, db, "drop database if exists `"+name+"`")
@@ -54,6 +61,7 @@ func TestIssue26111DataBranchDatabaseWithCyclicForeignKeys(t *testing.T) {
 		defer func() {
 			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cleanupCancel()
+			execSQLMaybe(t, cleanupCtx, db, "drop account if exists `"+targetAccount+"`")
 			execSQLRequire(t, cleanupCtx, db, "drop snapshot if exists "+snapshotName)
 			for _, name := range []string{branchDB, snapshotBranch, existingTarget, sourceDB} {
 				execSQLRequire(t, cleanupCtx, db, "drop database if exists `"+name+"`")
@@ -77,6 +85,12 @@ func TestIssue26111DataBranchDatabaseWithCyclicForeignKeys(t *testing.T) {
 		execSQLRequire(t, ctx, db, "create snapshot "+snapshotName+" for database `"+sourceDB+"`")
 		execSQLRequire(t, ctx, db, "data branch create database `"+branchDB+"` from `"+sourceDB+"`")
 		execSQLRequire(t, ctx, db, "data branch create database `"+snapshotBranch+"` from `"+sourceDB+"` {snapshot='"+snapshotName+"'}")
+		targetAccountID := testutils.CreateAccount(t, c, targetAccount, "111")
+		execSQLRequire(t, ctx, db, "data branch create database `"+accountBranch+"` from `"+sourceDB+"` {snapshot='"+snapshotName+"'} to account `"+targetAccount+"`")
+		var count int
+		require.NoError(t, db.QueryRowContext(ctx,
+			"select count(*) from mo_catalog.mo_database where account_id = ? and datname = ?", targetAccountID, accountBranch).Scan(&count))
+		require.Equal(t, 1, count)
 
 		for _, destination := range []string{branchDB, snapshotBranch} {
 			var count int
@@ -91,5 +105,46 @@ func TestIssue26111DataBranchDatabaseWithCyclicForeignKeys(t *testing.T) {
 			_, err = db.ExecContext(ctx, "insert into `"+destination+"`.`b` values (2, 999)")
 			require.Error(t, err)
 		}
+
+		testutils.WaitDatabaseCreatedWithAccount(t, targetAccountID, accountBranch, cn)
+		testutils.WaitTableCreatedWithAccount(t, targetAccountID, accountBranch, "a", cn)
+		testutils.WaitTableCreatedWithAccount(t, targetAccountID, accountBranch, "b", cn)
+		tenantCtx := defines.AttachAccountId(ctx, uint32(targetAccountID))
+		tenantExec := cn.RawService().(cnservice.Service).GetSQLExecutor()
+		tenantOpts := executor.Options{}.WithAccountID(uint32(targetAccountID)).WithDatabase(accountBranch)
+
+		result, err := tenantExec.Exec(tenantCtx,
+			"select count(*) from `a` a join `b` b on a.b_id = b.id and b.a_id = a.id", tenantOpts)
+		require.NoError(t, err)
+		require.Equal(t, 1, testutils.ReadCount(result))
+		result.Close()
+
+		result, err = tenantExec.Exec(tenantCtx,
+			"select count(*) from mo_catalog.mo_foreign_keys where db_name = '"+accountBranch+"' and refer_db_name = '"+accountBranch+"' and ((table_name = 'a' and refer_table_name = 'b') or (table_name = 'b' and refer_table_name = 'a'))", tenantOpts)
+		require.NoError(t, err)
+		require.Equal(t, 2, testutils.ReadCount(result))
+		result.Close()
+
+		result, err = tenantExec.Exec(tenantCtx, "insert into `a` values (2, 999)", tenantOpts)
+		result.Close()
+		require.Error(t, err)
+		result, err = tenantExec.Exec(tenantCtx, "insert into `b` values (2, 999)", tenantOpts)
+		result.Close()
+		require.Error(t, err)
+
+		_, err = db.ExecContext(ctx, "data branch create database `"+accountBranch+"` from `"+sourceDB+"` {snapshot='"+snapshotName+"'} to account `"+targetAccount+"`")
+		require.Error(t, err)
+		require.NoError(t, db.QueryRowContext(ctx, "select @@session.foreign_key_checks").Scan(&foreignKeyChecks))
+		require.Equal(t, 1, foreignKeyChecks)
+		result, err = tenantExec.Exec(tenantCtx,
+			"select count(*) from mo_catalog.mo_tables where reldatabase = '"+accountBranch+"' and relkind = 'r'", tenantOpts)
+		require.NoError(t, err)
+		require.Equal(t, 2, testutils.ReadCount(result))
+		result.Close()
+		result, err = tenantExec.Exec(tenantCtx,
+			"select count(*) from mo_catalog.mo_foreign_keys where db_name = '"+accountBranch+"' and refer_db_name = '"+accountBranch+"'", tenantOpts)
+		require.NoError(t, err)
+		require.Equal(t, 2, testutils.ReadCount(result))
+		result.Close()
 	})
 }
