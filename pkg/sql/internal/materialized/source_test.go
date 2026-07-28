@@ -46,17 +46,17 @@ func TestSharedMaterializedSourceAllowsDependentReaders(t *testing.T) {
 
 	// Reader 1 can consume the complete producer before reader 0 starts.
 	for i := 0; i < 4; i++ {
-		bat, end, err := source.Next(context.Background(), i)
+		bat, end, err := source.Next(context.Background(), 1, i)
 		require.NoError(t, err)
 		require.False(t, end)
 		require.Equal(t, int64(i), vector.GetFixedAtNoTypeCheck[int64](bat.Vecs[0], 0))
 	}
-	_, end, err := source.Next(context.Background(), 4)
+	_, end, err := source.Next(context.Background(), 1, 4)
 	require.NoError(t, err)
 	require.True(t, end)
 
 	for i := 0; i < 4; i++ {
-		bat, end, err := source.Next(context.Background(), i)
+		bat, end, err := source.Next(context.Background(), 0, i)
 		require.NoError(t, err)
 		require.False(t, end)
 		require.Equal(t, int64(i), vector.GetFixedAtNoTypeCheck[int64](bat.Vecs[0], 0))
@@ -78,7 +78,7 @@ func TestSharedMaterializedSourceCancellationAndReuse(t *testing.T) {
 	ctx, cancel := context.WithCancelCause(context.Background())
 	want := context.DeadlineExceeded
 	cancel(want)
-	_, end, err := source.Next(ctx, 0)
+	_, end, err := source.Next(ctx, 0, 0)
 	require.True(t, end)
 	require.ErrorIs(t, err, want)
 
@@ -102,7 +102,7 @@ func TestSharedMaterializedSourceCancellationWhileWaiting(t *testing.T) {
 	started := make(chan struct{})
 	go func() {
 		close(started)
-		_, end, err := source.Next(ctx, 0)
+		_, end, err := source.Next(ctx, 0, 0)
 		if !end || !errors.Is(err, want) {
 			result <- moerr.NewInternalErrorNoCtxf("unexpected wait result: end=%t err=%v", end, err)
 			return
@@ -127,7 +127,7 @@ func TestSharedMaterializedSourceCompletedStateWinsOverCanceledContext(t *testin
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	_, end, err := source.Next(ctx, 0)
+	_, end, err := source.Next(ctx, 0, 0)
 	require.True(t, end)
 	require.NoError(t, err)
 	source.ReleaseReader(0)
@@ -149,11 +149,11 @@ func TestSharedMaterializedSourcePublishesProducerErrorAfterBufferedData(t *test
 	want := moerr.NewInternalErrorNoCtx("producer failed")
 	source.Finish(want)
 
-	got, end, err := source.Next(context.Background(), 0)
+	got, end, err := source.Next(context.Background(), 0, 0)
 	require.NoError(t, err)
 	require.False(t, end)
 	require.Equal(t, int64(42), vector.GetFixedAtNoTypeCheck[int64](got.Vecs[0], 0))
-	_, end, err = source.Next(context.Background(), 1)
+	_, end, err = source.Next(context.Background(), 0, 1)
 	require.True(t, end)
 	require.ErrorIs(t, err, want)
 	source.ReleaseReader(0)
@@ -180,7 +180,7 @@ func TestSharedMaterializedSourceRuntimeLimit(t *testing.T) {
 	err := source.Append(bat)
 	require.ErrorContains(t, err, "exceeds 64 MiB runtime limit")
 	for readerID := 0; readerID < 2; readerID++ {
-		_, end, readerErr := source.Next(context.Background(), 1)
+		_, end, readerErr := source.Next(context.Background(), readerID, 1)
 		require.True(t, end)
 		require.Same(t, err, readerErr)
 		source.ReleaseReader(readerID)
@@ -208,7 +208,7 @@ func TestSharedMaterializedSourceCopyFailureRollsBackReservation(t *testing.T) {
 	err = source.Append(bat)
 	require.Error(t, err)
 	require.Zero(t, source.bytes)
-	_, end, readerErr := source.Next(context.Background(), 0)
+	_, end, readerErr := source.Next(context.Background(), 0, 0)
 	require.True(t, end)
 	require.Same(t, err, readerErr)
 	source.ReleaseReader(0)

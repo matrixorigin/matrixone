@@ -107,7 +107,11 @@ func cteReuseIsProfitable(producerCost, producerOutcnt, referenceCount float64) 
 		return false
 	}
 	inlineCost := referenceCount * producerCost
-	sharedCost := producerCost + referenceCount*producerOutcnt
+	consumerCost := referenceCount * producerOutcnt
+	sharedCost := producerCost + consumerCost
+	if !finitePositive(inlineCost) || !finitePositive(consumerCost) || !finitePositive(sharedCost) {
+		return false
+	}
 	return sharedCost < inlineCost
 }
 
@@ -161,7 +165,7 @@ func (builder *QueryBuilder) cteSubtreeIsDeterministic(nodeID int32, seen map[in
 		planpb.Node_EXTERNAL_FUNCTION, planpb.Node_LOCK_OP, planpb.Node_INSERT,
 		planpb.Node_DELETE, planpb.Node_MULTI_UPDATE, planpb.Node_POSTDML,
 		planpb.Node_RECURSIVE_CTE, planpb.Node_RECURSIVE_SCAN, planpb.Node_SINK,
-		planpb.Node_SINK_SCAN:
+		planpb.Node_SINK_SCAN, planpb.Node_SAMPLE:
 		return false
 	}
 
@@ -173,6 +177,10 @@ func (builder *QueryBuilder) cteSubtreeIsDeterministic(nodeID int32, seen map[in
 		node.AggList,
 		node.WinSpecList,
 		node.TimeWindowPartitionBy,
+		node.TblFuncExprList,
+		node.BlockFilterList,
+		node.FillVal,
+		node.OnUpdateExprs,
 	}
 	for _, exprList := range exprLists {
 		for _, expr := range exprList {
@@ -184,6 +192,28 @@ func (builder *QueryBuilder) cteSubtreeIsDeterministic(nodeID int32, seen map[in
 	for _, orderBy := range node.OrderBy {
 		if orderBy == nil || orderBy.Expr == nil || !exprCanRemoveProject(orderBy.Expr) {
 			return false
+		}
+	}
+	for _, expr := range []*planpb.Expr{
+		node.Limit,
+		node.Offset,
+		node.Interval,
+		node.Sliding,
+		node.Timestamp,
+		node.WEnd,
+	} {
+		if expr != nil && !exprCanRemoveProject(expr) {
+			return false
+		}
+	}
+	for _, filterList := range [][]*planpb.RuntimeFilterSpec{
+		node.RuntimeFilterProbeList,
+		node.RuntimeFilterBuildList,
+	} {
+		for _, filter := range filterList {
+			if filter == nil || filter.Expr == nil || !exprCanRemoveProject(filter.Expr) {
+				return false
+			}
 		}
 	}
 	for _, childID := range node.Children {

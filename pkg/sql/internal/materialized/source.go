@@ -142,12 +142,16 @@ func (s *Source) Append(bat *batch.Batch) error {
 }
 
 // Next returns one immutable batch, or end=true after the producer finishes.
-func (s *Source) Next(ctx context.Context, position int) (bat *batch.Batch, end bool, err error) {
+func (s *Source) Next(ctx context.Context, readerID, position int) (bat *batch.Batch, end bool, err error) {
 	if s == nil {
 		return nil, true, moerr.NewInternalErrorNoCtx("nil materialized sink source")
 	}
 	for {
 		s.mu.Lock()
+		if readerID < 0 || readerID >= len(s.readerReleased) || s.readerReleased[readerID] {
+			s.mu.Unlock()
+			return nil, true, moerr.NewInternalErrorNoCtx("invalid materialized sink reader")
+		}
 		if position < len(s.batches) {
 			bat = s.batches[position]
 			s.mu.Unlock()

@@ -482,6 +482,8 @@ func TestCTEReuseCostGuard(t *testing.T) {
 		{name: "missing outcnt", producerCost: 1000, refcnt: 2},
 		{name: "nan cost", producerCost: math.NaN(), outcnt: 1, refcnt: 2},
 		{name: "infinite outcnt", producerCost: 1000, outcnt: math.Inf(1), refcnt: 2},
+		{name: "inline cost overflow", producerCost: math.MaxFloat64, outcnt: 1, refcnt: 2},
+		{name: "consumer cost overflow", producerCost: math.MaxFloat64, outcnt: math.MaxFloat64, refcnt: 2},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -527,6 +529,7 @@ func TestCTEReuseRejectsExternalAndSideEffectingNodes(t *testing.T) {
 		planpb.Node_POSTDML,
 		planpb.Node_RECURSIVE_CTE,
 		planpb.Node_RECURSIVE_SCAN,
+		planpb.Node_SAMPLE,
 	} {
 		t.Run(nodeType.String(), func(t *testing.T) {
 			builder := &QueryBuilder{qry: &Query{Nodes: []*Node{{NodeType: nodeType}}}}

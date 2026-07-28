@@ -56,7 +56,7 @@ func (merge *Merge) Prepare(proc *process.Process) error {
 func (merge *Merge) Call(proc *process.Process) (vm.CallResult, error) {
 	analyzer := merge.OpAnalyzer
 	if merge.MaterializedSource != nil {
-		bat, end, err := merge.MaterializedSource.Next(proc.Ctx, merge.ctr.materializedPosition)
+		bat, end, err := merge.MaterializedSource.Next(proc.Ctx, merge.MaterializedReaderID, merge.ctr.materializedPosition)
 		if err != nil {
 			return vm.CancelResult, err
 		}

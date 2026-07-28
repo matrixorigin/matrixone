@@ -126,7 +126,6 @@ func TestMaterializedSinkScanConcurrentProductionReaders(t *testing.T) {
 	errCh := make(chan error, len(readers))
 	var wg sync.WaitGroup
 	for _, reader := range readers {
-		reader := reader
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -173,4 +172,50 @@ func TestMaterializedSinkScanConcurrentProductionReaders(t *testing.T) {
 	for _, bat := range inputs {
 		bat.Clean(proc.Mp())
 	}
+}
+
+func TestMaterializedSinkScanReadersObserveProducerErrorAfterBufferedData(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	source := materialized.NewSource(2)
+	require.NoError(t, source.Begin(proc.Mp()))
+
+	input := batch.NewWithSize(1)
+	input.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed(input.Vecs[0], int64(42), false, proc.Mp()))
+	input.SetRowCount(1)
+	inputMemory := proc.Mp().CurrNB()
+
+	producer := dispatch.NewArgument()
+	defer producer.Release()
+	producer.FuncId = dispatch.SendToAllLocalFunc
+	producer.MaterializedSource = source
+	producer.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{input}))
+	require.NoError(t, producer.Prepare(proc))
+	result, err := producer.Call(proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+
+	want := moerr.NewInternalErrorNoCtx("materialized producer failed")
+	producer.Reset(proc, true, want)
+
+	for readerID := 0; readerID < 2; readerID++ {
+		reader := merge.NewArgument()
+		reader.SinkScan = true
+		reader.MaterializedSource = source
+		reader.MaterializedReaderID = readerID
+		require.NoError(t, reader.Prepare(proc))
+
+		result, err = reader.Call(proc)
+		require.NoError(t, err)
+		require.Equal(t, int64(42), vector.GetFixedAtNoTypeCheck[int64](result.Batch.Vecs[0], 0))
+		result, err = reader.Call(proc)
+		require.ErrorIs(t, err, want)
+		require.Nil(t, result.Batch)
+
+		reader.Reset(proc, true, err)
+		reader.Release()
+	}
+
+	require.Equal(t, inputMemory, proc.Mp().CurrNB())
+	input.Clean(proc.Mp())
 }
