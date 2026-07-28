@@ -16,6 +16,7 @@ package embed
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -54,6 +55,7 @@ type cluster struct {
 	state    state
 	files    []string
 	services []*operator
+	startFn  func(*operator) error
 
 	options struct {
 		dataPath  string
@@ -74,8 +76,9 @@ func NewCluster(
 	opts ...Option,
 ) (Cluster, error) {
 	c := &cluster{
-		id:    atomic.AddUint64(&clusterID, 1),
-		state: stopped,
+		id:      atomic.AddUint64(&clusterID, 1),
+		state:   stopped,
+		startFn: func(op *operator) error { return op.Start() },
 	}
 	for _, opt := range opts {
 		opt(c)
@@ -105,7 +108,7 @@ func (c *cluster) Start() error {
 	}
 
 	if err := c.doStartLocked(0); err != nil {
-		return err
+		return errors.Join(err, c.closeServicesFromLocked(0))
 	}
 	c.state = started
 	return nil
@@ -116,7 +119,7 @@ func (c *cluster) doStartLocked(from int) error {
 	var startErr atomic.Value
 	for _, s := range c.services[from:] {
 		if s.serviceType != metadata.ServiceType_CN {
-			if err := s.Start(); err != nil {
+			if err := c.startServiceLocked(s); err != nil {
 				return err
 			}
 			continue
@@ -125,7 +128,7 @@ func (c *cluster) doStartLocked(from int) error {
 		wg.Add(1)
 		go func(s *operator) {
 			defer wg.Done()
-			if err := s.Start(); err != nil {
+			if err := c.startServiceLocked(s); err != nil {
 				// Only the first error is captured; concurrent failures
 				// from other services are discarded since knowing that
 				// any service failed is sufficient to abort startup.
@@ -141,19 +144,32 @@ func (c *cluster) doStartLocked(from int) error {
 	return nil
 }
 
+func (c *cluster) startServiceLocked(op *operator) error {
+	if c.startFn != nil {
+		return c.startFn(op)
+	}
+	return op.Start()
+}
+
 func (c *cluster) Close() error {
 	c.Lock()
 	defer c.Unlock()
 
-	for i := len(c.services) - 1; i >= 0; i-- {
-		s := c.services[i]
-		if err := s.Close(); err != nil {
-			return err
-		}
-	}
+	return c.closeServicesLocked()
+}
 
+func (c *cluster) closeServicesLocked() error {
+	err := c.closeServicesFromLocked(0)
 	c.state = stopped
-	return nil
+	return err
+}
+
+func (c *cluster) closeServicesFromLocked(from int) error {
+	var err error
+	for i := len(c.services) - 1; i >= from; i-- {
+		err = errors.Join(err, c.services[i].Close())
+	}
+	return err
 }
 
 func (c *cluster) GetService(
@@ -229,13 +245,26 @@ func (c *cluster) StartNewCNService(n int) error {
 	c.options.cn += n
 
 	if err := c.initCNConfigs(cnFrom); err != nil {
-		return err
+		return errors.Join(err, c.rollbackNewServicesLocked(serviceFrom, cnFrom))
 	}
 	if err := c.createServiceOperators(serviceFrom); err != nil {
-		return err
+		return errors.Join(err, c.rollbackNewServicesLocked(serviceFrom, cnFrom))
 	}
 
-	return c.doStartLocked(serviceFrom)
+	if err := c.doStartLocked(serviceFrom); err != nil {
+		return errors.Join(err, c.rollbackNewServicesLocked(serviceFrom, cnFrom))
+	}
+	return nil
+}
+
+func (c *cluster) rollbackNewServicesLocked(serviceFrom, cnFrom int) error {
+	err := c.closeServicesFromLocked(serviceFrom)
+	if err == nil {
+		c.services = c.services[:serviceFrom]
+		c.files = c.files[:serviceFrom]
+		c.options.cn = cnFrom
+	}
+	return err
 }
 
 func (c *cluster) adjust() {

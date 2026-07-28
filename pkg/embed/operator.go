@@ -62,12 +62,17 @@ type operator struct {
 		gossipNode *gossip.Node
 		clock      clock.Clock
 		logger     *zap.Logger
+		fs         fileServiceCloser
 	}
 }
 
 type service interface {
 	Start() error
 	Close() error
+}
+
+type fileServiceCloser interface {
+	Close(context.Context)
 }
 
 const (
@@ -126,17 +131,33 @@ func (op *operator) Close() error {
 	op.Lock()
 	defer op.Unlock()
 
-	if op.state == stopped {
-		return moerr.NewInvalidStateNoCtx("service already stopped")
+	if op.state == stopped &&
+		op.reset.svc == nil &&
+		op.reset.stopper == nil &&
+		op.reset.fs == nil {
+		return nil
 	}
 
-	if err := op.reset.svc.Close(); err != nil {
-		return err
+	var err error
+	if op.reset.svc != nil {
+		err = op.reset.svc.Close()
+		if err == nil {
+			op.reset.svc = nil
+		}
 	}
-
-	op.reset.stopper.Stop()
-	op.state = stopped
-	return nil
+	if op.reset.stopper != nil {
+		op.reset.stopper.Stop()
+		op.reset.stopper = nil
+	}
+	if op.reset.fs != nil {
+		op.reset.fs.Close(context.Background())
+		op.reset.fs = nil
+	}
+	op.reset.shutdownC = nil
+	if err == nil {
+		op.state = stopped
+	}
+	return err
 }
 
 func (op *operator) Start() error {
@@ -159,6 +180,7 @@ func (op *operator) Start() error {
 	if err != nil {
 		return err
 	}
+	op.reset.fs = fs
 
 	// start up system module to do some calculation.
 	system.Run(op.reset.stopper)
