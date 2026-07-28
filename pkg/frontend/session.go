@@ -1338,13 +1338,16 @@ func (ses *Session) GetPrepareStmts() []*PrepareStmt {
 	return ret
 }
 
-func (ses *Session) RemovePrepareStmt(name string) {
+func (ses *Session) RemovePrepareStmt(name string) bool {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	if stmt, ok := ses.prepareStmts[name]; ok {
-		stmt.Close()
-		delete(ses.prepareStmts, name)
+	stmt, ok := ses.prepareStmts[name]
+	if !ok {
+		return false
 	}
+	stmt.Close()
+	delete(ses.prepareStmts, name)
+	return true
 }
 
 // RemoveAllPrepareStmts closes and drops every cached prepared statement. It is
