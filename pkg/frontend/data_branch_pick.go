@@ -40,6 +40,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
+var resolveSnapshotForBetween = resolveSnapshot
+
 // resolveBetweenSnapshots resolves two snapshot names to types.TS values.
 // Used by BETWEEN SNAPSHOT sp1 AND sp2 to produce timestamps for the
 // collect range intersection in constructChangeHandle.
@@ -55,11 +57,11 @@ func resolveBetweenSnapshots(ses *Session, fromName, toName string) (from, to *t
 		Expr:         tree.NewNumVal(toName, toName, false, tree.P_char),
 	}
 
-	fromSnap, err := resolveSnapshot(ses, fromAtTs)
+	fromSnap, err := resolveSnapshotForBetween(ses, fromAtTs)
 	if err != nil {
 		return nil, nil, moerr.NewInvalidInputNoCtxf("cannot resolve snapshot '%s': %v", fromName, err)
 	}
-	toSnap, err := resolveSnapshot(ses, toAtTs)
+	toSnap, err := resolveSnapshotForBetween(ses, toAtTs)
 	if err != nil {
 		return nil, nil, moerr.NewInvalidInputNoCtxf("cannot resolve snapshot '%s': %v", toName, err)
 	}
