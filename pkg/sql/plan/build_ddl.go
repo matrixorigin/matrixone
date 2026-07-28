@@ -1548,6 +1548,14 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		insertSqlBuilder.WriteString("*")
 
 		// from
+		// The generated INSERT ... SELECT is re-parsed by the internal SQL
+		// executor, which always parses in DEFAULT sql_mode (parsers.Parse
+		// passes an empty mode) regardless of the session's mode. So string
+		// literals here must be default-escaped: a backslash stored literally
+		// under a NO_BACKSLASH_ESCAPES session is emitted doubled and the
+		// default-mode reparse reduces it back to the original literal. Do
+		// NOT make this formatting session-mode-aware unless the internal
+		// executor's parse becomes session-mode-aware too (#24823).
 		fmtCtx := tree.NewFmtCtx(
 			dialect.MYSQL,
 			tree.WithQuoteString(true),
