@@ -252,10 +252,20 @@ func TestSequenceModelLoopRejected(t *testing.T) {
 	// field, which keeps the model loadable by ORT) must be rejected.
 	skLoop := append(append([]byte(nil), sk...), loopMarker...)
 	_, err = NewSession(skLoop)
-	require.ErrorContains(t, err, "Loop/Scan")
+	require.ErrorContains(t, err, "Loop")
 	skScan := append(append([]byte(nil), sk...), scanMarker...)
 	_, err = NewSession(skScan)
-	require.ErrorContains(t, err, "Loop/Scan")
+	require.ErrorContains(t, err, "Scan")
+
+	// Static sequence builders can be chained node-by-node, growing a
+	// sequence far beyond the input-derived bound with no Loop/Scan — they
+	// are rejected for sequence-output models too.
+	for _, op := range []string{"SequenceInsert", "SequenceConstruct", "SequenceEmpty"} {
+		marker := append([]byte{0x22, byte(len(op))}, op...)
+		tainted := append(append([]byte(nil), sk...), marker...)
+		_, err = NewSession(tainted)
+		require.ErrorContains(t, err, op)
+	}
 
 	// A tensor-only-output model containing the marker is NOT subject to the
 	// contract: eager conversion of tensor outputs is payload-bounded by the arena.

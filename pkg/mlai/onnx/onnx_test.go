@@ -70,10 +70,22 @@ func TestParseShape(t *testing.T) {
 	// 64 MB of int8 is within the byte cap but far over the element cap.
 	_, err = ParseShape([]byte(`{"dim":[67108864],"dtype":"int8"}`))
 	require.ErrorContains(t, err, "exceeds")
-	// At the element limit is still accepted.
-	s, err = ParseShape([]byte(`{"dim":[8388608],"dtype":"int8"}`))
+	// Just over the element limit is rejected; at the limit is accepted.
+	_, err = ParseShape([]byte(`{"dim":[1048577],"dtype":"int8"}`))
+	require.ErrorContains(t, err, "exceeds")
+	s, err = ParseShape([]byte(`{"dim":[1048576],"dtype":"int8"}`))
 	require.NoError(t, err)
 	require.NotNil(t, s)
+}
+
+// TestModelSizeCap: NewSession refuses oversized models at the package
+// boundary — the model size is the resource bound for session construction
+// (discovery + graph optimization transients are proportional to it).
+func TestModelSizeCap(t *testing.T) {
+	skipIfNoRuntime(t)
+	big := make([]byte, MaxModelBytes+1)
+	_, err := NewSession(big)
+	require.ErrorContains(t, err, "exceeds")
 }
 
 // TestRunCancelled: a cancelled query context must surface as a cancellation

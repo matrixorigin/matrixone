@@ -48,6 +48,19 @@ const MaxSequenceInputElements = 64 << 10
 // NewSession builds a session from raw model bytes (varbinary or the content
 // of a datalink). Input and output names are discovered from the model so the
 // SQL surface does not have to specify them.
+//
+// MaxModelBytes caps the model size accepted by NewSession, enforced at the
+// package boundary (the operator's varbinary path is blob-capped to the same
+// value; the datalink path is capped before reading). This is also the
+// resource bound for session construction: the binding's discovery helper
+// builds a throwaway ORT session with default (uncapped-allocator) options,
+// and the real session's graph optimization has transient peaks — both are
+// proportional to model size, so capping the model bounds them.
+const MaxModelBytes = 64 << 20
+
+// NewSession builds a session from raw model bytes (varbinary or the content
+// of a datalink). Input and output names are discovered from the model so the
+// SQL surface does not have to specify them.
 func NewSession(modelBytes []byte) (*Session, error) {
 	if err := Available(); err != nil {
 		return nil, err
@@ -55,10 +68,16 @@ func NewSession(modelBytes []byte) (*Session, error) {
 	if len(modelBytes) == 0 {
 		return nil, moerr.NewInvalidInputNoCtx("onnx: empty model")
 	}
+	if len(modelBytes) > MaxModelBytes {
+		return nil, moerr.NewInvalidInputNoCtxf(
+			"onnx: model is %d bytes, exceeds the %d MB limit",
+			len(modelBytes), MaxModelBytes>>20)
+	}
 	// Note: this parses the model twice (GetInputOutputInfo builds a throwaway
 	// ORT session to read the names, then NewDynamicAdvancedSession builds the
 	// real one). That is a deliberate one-time cost per distinct model — the
-	// SQL surface does not take input/output names, so they must be discovered.
+	// SQL surface does not take input/output names, so they must be discovered —
+	// and its transient memory is bounded by MaxModelBytes above.
 	inInfo, outInfo, err := ort.GetInputOutputInfoWithONNXData(modelBytes)
 	if err != nil {
 		return nil, moerr.NewInvalidInputNoCtxf("onnx: cannot read model: %v", err)
@@ -70,22 +89,21 @@ func NewSession(modelBytes []byte) (*Session, error) {
 	// sequence output EAGERLY inside Run — allocating per-child Go/C objects for the
 	// sequence's full length before any of our budget checks can run — and neither the
 	// ORT arena (which bounds tensor payload, not per-value metadata) nor resultBudget
-	// (which runs after conversion) bounds that peak. Sequences of unbounded length can
-	// only be produced at runtime by Loop/Scan operators; without them a sequence is
-	// built by a static chain of graph nodes, so its length is bounded by the graph
-	// itself (already capped by the model-size limits). Reject sequence/map-output
-	// models that contain Loop/Scan rather than fail open into that allocation peak.
-	// Detection scans for the NodeProto op_type encoding (field 4, length-delimited:
-	// \x22\x04Loop / \x22\x04Scan); a false positive (e.g. an attribute string with the
-	// same bytes) fails conservatively with a clean error. Tensor-only-output models are
-	// unaffected: their conversion peak is payload bytes, bounded by the capped arena.
+	// (which runs after conversion) bounds that peak. A sequence can only exceed the
+	// input-derived bound (see MaxSequenceInputElements) via Loop/Scan iteration or a
+	// chained static Sequence* builder, so those operators are rejected for models that
+	// declare sequence/map outputs. Detection scans for the NodeProto op_type protobuf
+	// encoding, which also covers ops inside subgraphs and local functions; a false
+	// positive (e.g. an attribute string with identical bytes) fails conservatively
+	// with a clean error. Tensor-only-output models are unaffected: their conversion
+	// peak is payload bytes, bounded by the capped arena.
 	hasSeqOutput := false
 	for _, o := range outInfo {
 		if o.OrtValueType == ort.ONNXTypeSequence || o.OrtValueType == ort.ONNXTypeMap {
 			hasSeqOutput = true
-			if containsLoopOp(modelBytes) {
-				return nil, moerr.NewNotSupportedNoCtx(
-					"onnx: models with sequence or map outputs may not contain Loop/Scan operators")
+			if op := containsUnboundedSeqOp(modelBytes); op != "" {
+				return nil, moerr.NewNotSupportedNoCtxf(
+					"onnx: models with sequence or map outputs may not contain the %s operator", op)
 			}
 			break
 		}
@@ -93,8 +111,9 @@ func NewSession(modelBytes []byte) (*Session, error) {
 	inNames := names(inInfo)
 	outNames := names(outInfo)
 	// Use the environment's shared, memory-capped allocator (registered in
-	// ensureInit) so allocations made during Run — outputs and intermediates —
-	// are bounded by MaxRuntimeMemoryBytes.
+	// ensureInit) so allocations made while building and running the session —
+	// graph optimization, constant folding, outputs, intermediates — are bounded
+	// by MaxRuntimeMemoryBytes.
 	opts, err := ort.NewSessionOptions()
 	if err != nil {
 		return nil, moerr.NewInternalErrorNoCtxf("onnx: cannot create session options: %v", err)
@@ -115,12 +134,29 @@ func NewSession(modelBytes []byte) (*Session, error) {
 	}, nil
 }
 
-// containsLoopOp reports whether the serialized model contains a node whose
-// op_type is Loop or Scan (NodeProto field 4, length-delimited protobuf
-// encoding). See the contract comment in NewSession.
-func containsLoopOp(model []byte) bool {
-	return bytes.Contains(model, []byte("\x22\x04Loop")) ||
-		bytes.Contains(model, []byte("\x22\x04Scan"))
+// unboundedSeqOps are the operators that can grow a sequence beyond what the
+// INPUT bounds: Loop/Scan iterate (runtime amplification, including inside
+// subgraphs), and the static Sequence* builders can be chained node-by-node so
+// a modest-sized model still yields a sequence whose per-member materialization
+// cost far exceeds the model bytes. The remaining sequence producers — ZipMap
+// and SplitToSequence — emit at most one member per input row/element, which
+// MaxSequenceInputElements bounds. The byte scan is flat, so ops inside
+// subgraphs and local functions are seen too.
+var unboundedSeqOps = []string{"Loop", "Scan", "SequenceInsert", "SequenceConstruct", "SequenceEmpty"}
+
+// containsUnboundedSeqOp reports the first unbounded-sequence operator present
+// in the serialized model ("" if none), matching the NodeProto op_type
+// protobuf encoding (field 4, length-delimited). A false positive (e.g. an
+// attribute string with identical bytes) fails conservatively with a clean
+// error. See the contract comment in NewSession.
+func containsUnboundedSeqOp(model []byte) string {
+	for _, op := range unboundedSeqOps {
+		marker := append([]byte{0x22, byte(len(op))}, op...)
+		if bytes.Contains(model, marker) {
+			return op
+		}
+	}
+	return ""
 }
 
 func names(info []ort.InputOutputInfo) []string {

@@ -71,12 +71,16 @@ func (d DType) width() int64 {
 const MaxTensorBytes = 64 << 20
 
 // MaxTensorElements caps the element COUNT of any tensor this package
-// converts to json. The byte cap alone is not the peak cost: conversion boxes
-// every element into an `any` (16 bytes of interface header plus the boxed
-// value), so a 64 MB int8/bool tensor (67M elements) would balloon to >1 GiB
-// during conversion. 8M elements bounds that peak to roughly 128-256 MB —
-// and a larger result could not fit the 64 MB json blob limit anyway.
-const MaxTensorElements = 8 << 20
+// converts to json, and (as the resultBudget) the total elements per
+// invocation. The byte cap alone is not the peak cost: the conversion
+// pipeline multiplies per element — an `any` box (16B header + value),
+// the ByteJson binary encoding (~13B for a numeric), its Marshal copy,
+// and the copy into the result vector. At 1M elements that whole
+// pipeline peaks around 50-80 MB per invocation (Go-heap, outside
+// proc.Mp), which is the intended ceiling; 8M would have allowed
+// >400 MB of unaccounted peak. A 1M-element json result is also far
+// beyond any per-row value a client can reasonably consume.
+const MaxTensorElements = 1 << 20
 
 // Shape describes a tensor: its dimensions and element dtype.
 //

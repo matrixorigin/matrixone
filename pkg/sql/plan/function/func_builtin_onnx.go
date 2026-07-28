@@ -28,9 +28,11 @@ import (
 )
 
 // maxOnnxModelBytes bounds a datalink-loaded model file (read fully into
-// memory to build the session). 1 GiB is generous for real ONNX models while
-// still refusing sizes that would destabilize the CN.
-const maxOnnxModelBytes = int64(1) << 30
+// memory, outside proc.Mp, to build the session). It matches onnx.MaxModelBytes
+// and the varbinary overload's inherent blob cap, so the model-size contract is
+// identical for both overloads and session-construction transients stay
+// bounded by the same constant.
+const maxOnnxModelBytes = int64(onnx.MaxModelBytes)
 
 // onnx_run(model, input, input_shape, output_shape) evaluates an ONNX model.
 //
@@ -231,6 +233,13 @@ func (op *opOnnxRun) onnxRun(params []*vector.Vector, result vector.FunctionResu
 		dt, err := bj.Marshal()
 		if err != nil {
 			return err
+		}
+		// Enforce the blob cap on the encoded result explicitly: AppendBytes
+		// does not check types.MaxBlobLen itself, and the element budget bounds
+		// count, not encoded width (e.g. long map keys).
+		if len(dt) > int(types.MaxBlobLen) {
+			return moerr.NewInvalidInputNoCtxf(
+				"onnx: encoded result is %d bytes, exceeds the %d-byte blob limit", len(dt), types.MaxBlobLen)
 		}
 		if err := rs.AppendBytes(dt, false); err != nil {
 			return err
