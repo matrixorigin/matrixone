@@ -6229,6 +6229,9 @@ func leadingDecimalIntegerPrefix(s string) string {
 		end++
 	}
 	if end == digitsStart {
+		if end+1 < len(s) && s[end] == '.' && isASCIIDigit(s[end+1]) {
+			return s[:digitsStart] + "0"
+		}
 		return ""
 	}
 	return s[:end]

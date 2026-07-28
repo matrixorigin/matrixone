@@ -75,20 +75,20 @@ func TestExplicitCastStringIntegerPrefix(t *testing.T) {
 			name:   "signed",
 			target: types.T_int64.ToType(),
 			zero:   []int64{},
-			expect: []int64{7, 7, 1, -10},
+			expect: []int64{7, 7, 1, -10, 0, 0, 0},
 		},
 		{
 			name:   "unsigned",
 			target: types.T_uint64.ToType(),
 			zero:   []uint64{},
-			expect: []uint64{7, 7, 1, math.MaxUint64 - 9},
+			expect: []uint64{7, 7, 1, math.MaxUint64 - 9, 0, 0, 0},
 		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			inputs := []FunctionTestInput{
 				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"7e0", "7e+2", "1.5e0", "  -10suffix  "}, nil),
+					[]string{"7e0", "7e+2", "1.5e0", "  -10suffix  ", ".5e0", "-.5e0", "+.5e+2"}, nil),
 				NewFunctionTestInput(test.target, test.zero, nil),
 			}
 			expect := NewFunctionTestResult(test.target, false, test.expect, nil)
