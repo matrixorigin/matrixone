@@ -1194,16 +1194,31 @@ func TestBranchHashmapPopByVectorsStreamInMemoryCallbackError(t *testing.T) {
 	defer probe.Free(mp)
 
 	callbackErr := errors.New("callback failed")
-	removed, err := bh.PopByVectorsStream([]*vector.Vector{probe}, true, func(_ int, _ []byte, _ []byte) error {
+	callbackCount := 0
+	var deliveredValue string
+	removed, err := bh.PopByVectorsStream([]*vector.Vector{probe}, true, func(_ int, _ []byte, row []byte) error {
+		callbackCount++
+		tuple, _, err := bh.DecodeRow(row)
+		require.NoError(t, err)
+		valueBytes, ok := tuple[1].([]byte)
+		require.True(t, ok)
+		deliveredValue = string(valueBytes)
 		return callbackErr
 	})
 	require.ErrorIs(t, err, callbackErr)
-	require.Equal(t, 2, removed)
-	require.Equal(t, int64(1), bh.ItemCount())
+	require.Equal(t, 1, callbackCount)
+	require.Equal(t, 1, removed)
+	require.Equal(t, int64(2), bh.ItemCount())
 
 	after, err := bh.GetByVectors([]*vector.Vector{probe})
 	require.NoError(t, err)
-	require.False(t, after[0].Exists)
+	require.True(t, after[0].Exists)
+	require.Len(t, after[0].Rows, 1)
+	remaining, _, err := bh.DecodeRow(after[0].Rows[0])
+	require.NoError(t, err)
+	valueBytes, ok := remaining[1].([]byte)
+	require.True(t, ok)
+	require.NotEqual(t, deliveredValue, string(valueBytes))
 }
 
 func TestBranchHashmapPopByVectorsStreamSpilled(t *testing.T) {
@@ -1261,20 +1276,35 @@ func TestBranchHashmapPopByVectorsStreamSpilledCallbackError(t *testing.T) {
 		require.NoError(t, bh.Close())
 	}()
 
-	key := buildInt64Vector(t, mp, []int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10})
-	value := buildStringVector(t, mp, []string{"one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten"})
+	key := buildInt64Vector(t, mp, []int64{1, 1})
+	value := buildStringVector(t, mp, []string{"one", "uno"})
 	defer key.Free(mp)
 	defer value.Free(mp)
 	require.NoError(t, bh.PutByVectors([]*vector.Vector{key, value}, []int{0}))
+
+	fillerKey := buildInt64Vector(t, mp, []int64{2, 3, 4, 5, 6, 7, 8, 9, 10})
+	fillerValue := buildStringVector(t, mp, []string{"two", "three", "four", "five", "six", "seven", "eight", "nine", "ten"})
+	defer fillerKey.Free(mp)
+	defer fillerValue.Free(mp)
+	require.NoError(t, bh.PutByVectors([]*vector.Vector{fillerKey, fillerValue}, []int{0}))
 
 	probe := buildInt64Vector(t, mp, []int64{1})
 	defer probe.Free(mp)
 
 	callbackErr := errors.New("callback failed")
-	removed, err := bh.PopByVectorsStream([]*vector.Vector{probe}, true, func(_ int, _ []byte, _ []byte) error {
+	callbackCount := 0
+	var deliveredValue string
+	removed, err := bh.PopByVectorsStream([]*vector.Vector{probe}, true, func(_ int, _ []byte, row []byte) error {
+		callbackCount++
+		tuple, _, err := bh.DecodeRow(row)
+		require.NoError(t, err)
+		valueBytes, ok := tuple[1].([]byte)
+		require.True(t, ok)
+		deliveredValue = string(valueBytes)
 		return callbackErr
 	})
 	require.ErrorIs(t, err, callbackErr)
+	require.Equal(t, 1, callbackCount)
 	var spilledRemoved uint64
 	for _, shard := range bh.(*branchHashmap).shards {
 		if shard.spill != nil {
@@ -1283,11 +1313,17 @@ func TestBranchHashmapPopByVectorsStreamSpilledCallbackError(t *testing.T) {
 	}
 	require.Equal(t, uint64(1), spilledRemoved)
 	require.Equal(t, 1, removed)
-	require.Equal(t, int64(9), bh.ItemCount())
+	require.Equal(t, int64(10), bh.ItemCount())
 
 	after, err := bh.GetByVectors([]*vector.Vector{probe})
 	require.NoError(t, err)
-	require.False(t, after[0].Exists)
+	require.True(t, after[0].Exists)
+	require.Len(t, after[0].Rows, 1)
+	remaining, _, err := bh.DecodeRow(after[0].Rows[0])
+	require.NoError(t, err)
+	valueBytes, ok := remaining[1].([]byte)
+	require.True(t, ok)
+	require.NotEqual(t, deliveredValue, string(valueBytes))
 }
 
 func TestBranchHashmapCursorGetAndPopByEncodedValueDuringIteration(t *testing.T) {
