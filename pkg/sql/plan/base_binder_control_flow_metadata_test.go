@@ -104,7 +104,7 @@ func TestBindControlFlowMetadata(t *testing.T) {
 		})
 		require.NoError(t, err)
 		require.Equal(t, int32(types.T_varbinary), expr.Typ.Id)
-		require.Equal(t, int32(6), expr.Typ.Width)
+		require.Equal(t, int32(8), expr.Typ.Width)
 		require.True(t, expr.Typ.NotNullable)
 	})
 
@@ -116,9 +116,29 @@ func TestBindControlFlowMetadata(t *testing.T) {
 		})
 		require.NoError(t, err)
 		require.Equal(t, int32(types.T_varbinary), expr.Typ.Id)
-		require.Equal(t, int32(6), expr.Typ.Width)
+		require.Equal(t, int32(8), expr.Typ.Width)
 		require.True(t, expr.Typ.NotNullable)
 	})
+}
+
+func TestBuildControlFlowUTF8MB4BinaryWidth(t *testing.T) {
+	for _, sql := range []string{
+		`select case when 0 then _binary 0x61 else "😀" end as c`,
+		`select if(0, _binary 0x61, "😀") as c`,
+	} {
+		t.Run(sql, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
+			require.NoError(t, err)
+
+			pl, err := BuildPlan(NewMockCompilerContext(true), stmt, false)
+			require.NoError(t, err)
+			query := pl.GetQuery()
+			projectList := query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList
+			require.Len(t, projectList, 1)
+			require.Equal(t, int32(types.T_varbinary), projectList[0].Typ.Id)
+			require.Equal(t, int32(4), projectList[0].Typ.Width)
+		})
+	}
 }
 
 func TestDecimalLiteralMetadataPrecision(t *testing.T) {

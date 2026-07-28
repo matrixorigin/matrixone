@@ -16,6 +16,7 @@ package function
 
 import (
 	"math"
+	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -98,10 +99,15 @@ func binaryStringCommonType(source []types.Type) (types.Type, bool) {
 				width = typ.Width
 			}
 		case types.T_char, types.T_varchar:
-			// MatrixOne's non-binary string types use the UTF-8 charset. A
-			// VARBINARY result must reserve the largest encoded byte length.
-			if typ.Width*3 > width {
-				width = typ.Width * 3
+			// Character widths count runes, while VARBINARY widths count bytes.
+			// Reserve the maximum utf8mb4 encoding size without exceeding the
+			// largest representable VARBINARY width.
+			byteWidth := int32(types.MaxVarBinaryLen)
+			if typ.Width >= 0 && typ.Width <= int32(types.MaxVarBinaryLen/utf8.UTFMax) {
+				byteWidth = typ.Width * utf8.UTFMax
+			}
+			if byteWidth > width {
+				width = byteWidth
 			}
 		default:
 			return types.Type{}, false

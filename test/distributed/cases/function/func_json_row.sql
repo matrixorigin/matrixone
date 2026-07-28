@@ -44,6 +44,7 @@ select id, cast(json_row(id, js) as json) from jrt;
 select id, cast(json_row(null, js) as json) from jrt;
 
 -- aggregate
+set session group_concat_max_len = 1048576;
 select 'agg';
 select count(*), cast(concat('[', group_concat(json_row(id, bi, d, d128, t, js)), ']') as json) from jrt;
 
@@ -54,10 +55,10 @@ select b, count(*), concat('[', group_concat(json_row(id, bi, d, d128, t, js)), 
 
 -- esp, this one.
 select b, concat('[', group_concat(t, t, t, t, t), ']') as js from jrt group by b;
+set session group_concat_max_len = 1024;
 
 --
 -- failure
 --
 select json_row(id, cast(vc as varbinary)) from jrt;
 drop table jrt;
-
