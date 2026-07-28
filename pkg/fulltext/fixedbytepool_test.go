@@ -107,7 +107,9 @@ func TestPool(t *testing.T) {
 func TestPoolMemAvailGate(t *testing.T) {
 	origHeap := memGolang
 	origTotal := memTotal
-	defer func() { memGolang = origHeap; memTotal = origTotal }()
+	origMpool := memMpool
+	defer func() { memGolang = origHeap; memTotal = origTotal; memMpool = origMpool }()
+	memMpool = func() uint64 { return 0 }
 
 	m := mpool.MustNewZeroNoFixed()
 	proc := &process.Process{Base: &process.BaseProcess{}, Ctx: context.Background()}
@@ -140,7 +142,9 @@ func TestPoolMemAvailGate(t *testing.T) {
 func TestPoolFirstPartitionOverBudget(t *testing.T) {
 	origHeap := memGolang
 	origTotal := memTotal
-	defer func() { memGolang = origHeap; memTotal = origTotal }()
+	origMpool := memMpool
+	defer func() { memGolang = origHeap; memTotal = origTotal; memMpool = origMpool }()
+	memMpool = func() uint64 { return 0 }
 
 	m := mpool.MustNewZeroNoFixed()
 	proc := &process.Process{Base: &process.BaseProcess{}, Ctx: context.Background()}
@@ -166,8 +170,17 @@ func TestPoolFirstPartitionOverBudget(t *testing.T) {
 func TestPoolPartitionZeroFillCrossesBudget(t *testing.T) {
 	origHeap := memGolang
 	origTotal := memTotal
+	origMpool := memMpool
 	origInterval := HeapCheckInterval
-	defer func() { memGolang = origHeap; memTotal = origTotal; HeapCheckInterval = origInterval }()
+	defer func() {
+		memGolang = origHeap
+		memTotal = origTotal
+		memMpool = origMpool
+		HeapCheckInterval = origInterval
+	}()
+	// isolate from the process-wide mpool counter (this test's own pool
+	// allocations land there and would skew the stubbed budget arithmetic)
+	memMpool = func() uint64 { return 0 }
 
 	m := mpool.MustNewZeroNoFixed()
 	proc := &process.Process{Base: &process.BaseProcess{}, Ctx: context.Background()}
@@ -609,4 +622,83 @@ func TestPartitionSpillError2(t *testing.T) {
 	p.Close()
 	p.Close()
 
+}
+
+// TestPoolSideBytesCrossBudget: wide varchar doc IDs retain far more side-map bytes per
+// item than the fixed MapMemPerItem estimate, so the fast-path budget re-check must also
+// trigger on ACCUMULATED BYTES (ChargeSideBytes / HeapCheckBytes), not only on item
+// count — otherwise ~2 GiB of key bytes could be admitted between checks at the 65,535-
+// byte varchar maximum (#25638 review).
+func TestPoolSideBytesCrossBudget(t *testing.T) {
+	origHeap := memGolang
+	origTotal := memTotal
+	origMpool := memMpool
+	origBytes := HeapCheckBytes
+	defer func() {
+		memGolang = origHeap
+		memTotal = origTotal
+		memMpool = origMpool
+		HeapCheckBytes = origBytes
+	}()
+
+	m := mpool.MustNewZeroNoFixed()
+	proc := &process.Process{Base: &process.BaseProcess{}, Ctx: context.Background()}
+	proc.SetMPool(m)
+	pool := NewFixedBytePool(proc, 8, 1024*8, 0)
+	defer pool.Close()
+
+	// Budget 800; heap starts under budget so the first items are admitted.
+	memTotal = func() uint64 { return 1000 }
+	memGolang = func() int { return 0 }
+	memMpool = func() uint64 { return 0 }
+	HeapCheckBytes = 1 << 20
+
+	// First item under budget.
+	_, _, err := pool.NewItem()
+	require.NoError(t, err)
+
+	// Simulate wide varchar doc IDs: each new doc retains ~64KB of key bytes.
+	// After ~16 docs the accumulated charge crosses HeapCheckBytes and the next
+	// NewItem must re-check the budget; the heap is now over it, so NewItem fails
+	// long before HeapCheckInterval (16384) items.
+	memGolang = func() int { return 900 } // now over the 800 budget
+	failed := false
+	for i := 0; i < 64; i++ {
+		pool.ChargeSideBytes(64 << 10)
+		if _, _, err = pool.NewItem(); err != nil {
+			failed = true
+			break
+		}
+	}
+	require.True(t, failed, "byte-accumulation must force a budget re-check before HeapCheckInterval items")
+	require.ErrorContains(t, err, "fulltext search aborted")
+}
+
+// TestPoolBudgetIncludesMpool: partition blocks live OFF the Go heap (C allocator via
+// mpool), so the admission budget must count the process-wide mpool bytes as well —
+// a Go-heap-only check fails open when mpools already hold most of the cgroup
+// (#25692 review).
+func TestPoolBudgetIncludesMpool(t *testing.T) {
+	origHeap := memGolang
+	origTotal := memTotal
+	origMpool := memMpool
+	defer func() {
+		memGolang = origHeap
+		memTotal = origTotal
+		memMpool = origMpool
+	}()
+
+	m := mpool.MustNewZeroNoFixed()
+	proc := &process.Process{Base: &process.BaseProcess{}, Ctx: context.Background()}
+	proc.SetMPool(m)
+	pool := NewFixedBytePool(proc, 8, 1024*8, 0)
+	defer pool.Close()
+
+	memTotal = func() uint64 { return 1000 } // budget 800
+	memGolang = func() int { return 100 }    // Go heap alone is fine
+	memMpool = func() uint64 { return 750 }  // but off-heap pools push it over
+
+	_, _, err := pool.NewItem()
+	require.ErrorContains(t, err, "fulltext search aborted",
+		"admission must account off-heap mpool bytes, not only runtime.Alloc")
 }

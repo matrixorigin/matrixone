@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -56,6 +57,22 @@ var LOWER_BIT_SHIFT = uint64(24)
 var memGolang = system.MemoryGolang
 var memTotal = system.MemoryTotal
 
+// memMpool reports the CURRENT bytes held by ALL mpools process-wide
+// (mpool.GlobalStats). Partition blocks are allocated off the Go heap through the C
+// allocator (Mp().Alloc), so runtime.Alloc alone under-counts resident memory: on a CN
+// where mpools (this query's pool, other concurrent queries, caches) already hold most of
+// the cgroup, a Go-heap-only budget would fail open and the process could still be
+// OOM-killed. Adding the global mpool counter accounts for that off-heap share — across
+// concurrent queries too — while still excluding reclaimable page cache by construction
+// (mpool bytes are anonymous memory, so no page-cache false aborts). Stubable for tests.
+var memMpool = func() uint64 {
+	n := mpool.GlobalStats().NumCurrBytes.Load()
+	if n < 0 {
+		return 0
+	}
+	return uint64(n)
+}
+
 // HeapBudgetPct is the fraction (percent) of total node memory the fulltext pool is allowed
 // to project its Go heap to before it refuses to grow by another partition. Leaves headroom
 // for the rest of the CN. Tunable.
@@ -78,6 +95,16 @@ var MapMemPerItem uint64 = 128
 // ~HeapCheckInterval*(dsize+MapMemPerItem) bytes while keeping the (relatively expensive)
 // runtime.ReadMemStats calls rare. Tunable.
 var HeapCheckInterval uint64 = 16384
+
+// HeapCheckBytes additionally bounds how many BYTES of variable-size side-map data
+// (charged via ChargeSideBytes) may be retained between heap-budget re-checks. The
+// item-count interval alone assumes ~MapMemPerItem bytes per doc, but fulltext preserves
+// the source primary-key type: a varchar PK can be up to 65,535 bytes and normalizeDocID
+// retains BOTH a string map key and a []byte copy per new doc — at the maximum width the
+// 16384-item interval alone would admit ~2 GiB of key bytes between checks. Charging the
+// actual retained size and re-checking once this many bytes accumulate bounds the
+// worst-case overshoot by bytes, independent of key width. Tunable.
+var HeapCheckBytes uint64 = 16 << 20
 
 // Least recently use
 type Lru struct {
@@ -113,10 +140,36 @@ type FixedBytePool struct {
 	mem_limit     uint64       // memory limit to check with mem_in_use to see spill or not
 	spill_size    uint64       // total number of spilled partitions for the next round, start from 2 and double each time with max 16.
 	since_check   uint64       // items appended on the fast path since the last heap-budget check (#25638)
+	// side-map bytes charged via ChargeSideBytes since the last heap-budget check;
+	// bounds overshoot for variable-size doc IDs (varchar PKs) by bytes, not items.
+	since_check_bytes uint64
+	// number of partition unspills performed by GetItem over the pool's lifetime.
+	// Observable via Unspills() so tests can assert the top-K scoring passes touch
+	// each spilled partition a bounded number of times instead of thrashing.
+	unspills uint64
 }
 
-// heapBudget reports live Go-heap bytes and the pool's heap ceiling (a fraction of total
-// node memory). ok is false when the platform can't report total memory, in which case
+// ChargeSideBytes accounts n bytes of non-spillable side-map data (e.g. the retained
+// doc-ID key + copy for a varchar primary key) toward the fast-path heap-budget
+// re-check. The next NewItem re-checks the budget once HeapCheckBytes have accumulated,
+// even if fewer than HeapCheckInterval items were appended.
+func (pool *FixedBytePool) ChargeSideBytes(n uint64) {
+	pool.since_check_bytes += n
+}
+
+// Unspills reports how many times GetItem re-materialized a spilled partition.
+func (pool *FixedBytePool) Unspills() uint64 {
+	return pool.unspills
+}
+
+// NumPartitions reports the number of partitions in the pool.
+func (pool *FixedBytePool) NumPartitions() int {
+	return len(pool.partitions)
+}
+
+// heapBudget reports resident bytes (live Go heap PLUS the process-wide mpool
+// off-heap total — see memMpool) and the pool's ceiling (a fraction of total node
+// memory). ok is false when the platform can't report total memory, in which case
 // callers skip gating. dsize==0 also skips gating (nothing to size).
 func (pool *FixedBytePool) heapBudget() (used, budget uint64, ok bool) {
 	if pool.dsize == 0 {
@@ -126,7 +179,7 @@ func (pool *FixedBytePool) heapBudget() (used, budget uint64, ok bool) {
 	if total == 0 {
 		return 0, 0, false
 	}
-	return uint64(memGolang()), total / 100 * HeapBudgetPct, true
+	return uint64(memGolang()) + memMpool(), total / 100 * HeapBudgetPct, true
 }
 
 // checkHeapBudget refuses to grow when the live heap (which already includes the
@@ -395,10 +448,14 @@ func (pool *FixedBytePool) NewItem() (addr uint64, b []byte, err error) {
 			// Re-check the heap budget on a bounded interval WHILE filling the partition.
 			// Every appended item grows the non-spillable side maps, and the first partition
 			// alone holds ~1M items — so the boundary-only gate below would let the heap blow
-			// past the budget before a second partition is ever requested (#25638).
+			// past the budget before a second partition is ever requested (#25638). The check
+			// triggers on EITHER item count or accumulated side-map bytes (ChargeSideBytes):
+			// wide varchar doc IDs retain far more than MapMemPerItem per item, so the byte
+			// threshold bounds the overshoot independent of key width.
 			pool.since_check++
-			if pool.since_check >= HeapCheckInterval {
+			if pool.since_check >= HeapCheckInterval || pool.since_check_bytes >= HeapCheckBytes {
 				pool.since_check = 0
+				pool.since_check_bytes = 0
 				if err := pool.checkHeapBudget(0); err != nil {
 					return 0, nil, err
 				}
@@ -434,6 +491,7 @@ func (pool *FixedBytePool) NewItem() (addr uint64, b []byte, err error) {
 		return 0, nil, err
 	}
 	pool.since_check = 0
+	pool.since_check_bytes = 0
 
 	// partition not found and create new partition
 	id := uint64(len(pool.partitions))
@@ -482,6 +540,7 @@ func (pool *FixedBytePool) GetItem(addr uint64) ([]byte, error) {
 			return nil, err
 		}
 		pool.mem_in_use += pool.partition_cap
+		pool.unspills++
 	}
 
 	return p.GetItem(offset)

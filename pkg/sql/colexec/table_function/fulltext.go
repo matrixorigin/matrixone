@@ -136,6 +136,14 @@ func (u *fulltextState) normalizeDocID(docID any) any {
 		key := string(bytes)
 		if _, exists := u.docIDMap[key]; !exists {
 			u.docIDMap[key] = append([]byte(nil), bytes...)
+			// A varchar/composite doc ID retains a string key AND a []byte copy in
+			// the non-spillable side maps. Charge the actual retained size toward
+			// the pool's fast-path budget re-check: the item-count interval alone
+			// assumes small fixed-size IDs and would admit ~2 GiB of key bytes
+			// between checks at the 65,535-byte varchar maximum (#25638).
+			if u.mpool != nil {
+				u.mpool.ChargeSideBytes(2 * uint64(len(bytes)))
+			}
 		}
 		return key
 	}
@@ -395,6 +403,37 @@ func runWordStats(
 	return
 }
 
+// partitionOrderedKeys returns agghtab's keys grouped by ascending pool-partition id.
+// Go map iteration order is randomized and has no relation to the partition an
+// address lives in; when partitions have spilled, scoring in map order makes GetItem
+// evict and re-materialize WHOLE partitions per document (a diagnostic showed one
+// partition reload per item read). Grouping by partition first costs one O(n) pass
+// over the map and guarantees each spilled partition is unspilled at most once per
+// scoring pass (#25638).
+func partitionOrderedKeys(agghtab map[any]uint64, npart int) []any {
+	if npart < 1 {
+		npart = 1
+	}
+	buckets := make([][]any, npart)
+	for k, addr := range agghtab {
+		pid := fulltext.GetPartitionId(addr)
+		if pid >= uint64(npart) {
+			pid = uint64(npart - 1)
+		}
+		buckets[pid] = append(buckets[pid], k)
+	}
+	keys := make([]any, 0, len(agghtab))
+	for _, b := range buckets {
+		keys = append(keys, b...)
+	}
+	return keys
+}
+
+// cancelCheckInterval: how many scored documents between context-cancellation checks in
+// the scoring loops. Scoring a large agghtab can involve partition-sized disk I/O, so a
+// KILL / timeout must be able to stop the loop promptly.
+const cancelCheckInterval = 1024
+
 // evaluate the score for all document vectors in Agg hashtable.
 // whenever there is 8192 results, return it immediately.
 func evaluate(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum) (scoremap map[any]float32, err error) {
@@ -404,7 +443,15 @@ func evaluate(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum) 
 
 	aggcnt := u.aggcnt
 
-	for doc_id, addr := range u.agghtab {
+	// score in partition order so spilled partitions are materialized at most once
+	// per pass, and honor cancellation between documents.
+	for n, doc_id := range partitionOrderedKeys(u.agghtab, u.mpool.NumPartitions()) {
+		if n%cancelCheckInterval == 0 {
+			if err := proc.Ctx.Err(); err != nil {
+				return nil, moerr.NewInternalError(proc.Ctx, "fulltext evaluate cancelled")
+			}
+		}
+		addr := u.agghtab[doc_id]
 		docvec, err := u.mpool.GetItem(addr)
 		if err != nil {
 			return nil, err
@@ -455,8 +502,16 @@ func sort_topk(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum,
 	}
 	heap.Init(&u.minheap)
 
-	for doc_id, addr := range u.agghtab {
-
+	// score in partition order so spilled partitions are materialized at most once
+	// per pass (map order would thrash whole-partition I/O per document), and honor
+	// cancellation between documents so KILL/timeout can stop the I/O loop promptly.
+	for n, doc_id := range partitionOrderedKeys(u.agghtab, u.mpool.NumPartitions()) {
+		if n%cancelCheckInterval == 0 {
+			if err := proc.Ctx.Err(); err != nil {
+				return moerr.NewInternalError(proc.Ctx, "fulltext sort_topk cancelled")
+			}
+		}
+		addr := u.agghtab[doc_id]
 		docvec, err := u.mpool.GetItem(addr)
 		if err != nil {
 			return err

@@ -1336,3 +1336,51 @@ func makeTextBatchFT(proc *process.Process) *batch.Batch {
 	bat.SetRowCount(nitem)
 	return bat
 }
+
+// TestSortTopKBoundedUnspills is the #25692 review regression for partition
+// thrash: agghtab is a hash map whose iteration order has no relation to pool
+// partitions, so scoring in map order made GetItem evict and re-materialize a
+// whole partition per DOCUMENT once partitions had spilled (one diagnostic
+// showed 120 whole-partition reloads for 120 reads). sort_topk now scores in
+// partition order; each spilled partition must be materialized a bounded
+// number of times — at most once per pass — regardless of map hash order.
+func TestSortTopKBoundedUnspills(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	s, err := fulltext.NewSearchAccum("src", "index", "pattern", 0, "", fulltext.ALGO_TFIDF)
+	require.NoError(t, err)
+	s.Nrow = 1000
+
+	const ndoc = 64
+	// dsize = Nkeywords; 4 items per partition; mem_limit of 2 partitions forces
+	// spilling during the build phase and keeps a tiny resident set for scoring.
+	dsize := uint64(s.Nkeywords)
+	st := &fulltextState{
+		agghtab:   make(map[any]uint64, ndoc),
+		aggcnt:    make([]int64, s.Nkeywords),
+		docLenMap: make(map[any]int32, ndoc),
+		mpool:     fulltext.NewFixedBytePool(proc, dsize, 4*dsize, 2*4*dsize),
+	}
+	defer st.mpool.Close()
+	st.aggcnt[0] = ndoc
+
+	for i := 0; i < ndoc; i++ {
+		addr, docvec, allocErr := st.mpool.NewItem()
+		require.NoError(t, allocErr)
+		docvec[0] = uint8(i%250 + 1)
+		st.agghtab[i] = addr
+		st.docLenMap[i] = int32(i + 1)
+	}
+
+	npart := st.mpool.NumPartitions()
+	require.Greater(t, npart, 4, "test must span many partitions")
+
+	before := st.mpool.Unspills()
+	require.NoError(t, sort_topk(st, proc, s, 8))
+	reloads := st.mpool.Unspills() - before
+
+	// Partition-ordered scoring touches each spilled partition at most once. The
+	// old map-order traversal produced up to ~ndoc reloads here.
+	require.LessOrEqualf(t, reloads, uint64(npart),
+		"top-K scoring must not thrash: %d unspills for %d partitions", reloads, npart)
+	require.Len(t, st.minheap, 8)
+}
