@@ -1201,6 +1201,41 @@ func Test_GetComputationWrapper(t *testing.T) {
 	})
 }
 
+func TestGetComputationWrapperBypassesCacheForSetExpression(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	sysVars := make(map[string]interface{})
+	for name, sysVar := range gSysVarsDefs {
+		sysVars[name] = sysVar.Default
+	}
+	ses := &Session{
+		planCache: newPlanCache(1),
+		feSessionImpl: feSessionImpl{
+			gSysVars: &SystemVariables{mp: sysVars},
+		},
+	}
+	cachedStmt := &tree.Select{}
+	inputStmt := &tree.Select{}
+	input := &UserInput{
+		stmt:            inputStmt,
+		isInternalInput: true,
+		isSetExpression: true,
+	}
+	input.genHash()
+	ses.cachePlan(input.getHash(), []tree.Statement{cachedStmt}, []*plan0.Plan{{}})
+
+	ctrl := gomock.NewController(t)
+	execCtx := newTestExecCtx(context.Background(), ctrl)
+	execCtx.ses = ses
+	execCtx.input = input
+
+	cws, err := GetComputationWrapper(execCtx, "", "root", nil, proc, ses)
+	require.NoError(t, err)
+	require.Len(t, cws, 1)
+	require.Same(t, inputStmt, cws[0].GetAst())
+	require.Nil(t, cws[0].Plan())
+	require.True(t, ses.isCached(input.getHash()), "bypass must not disturb unrelated cache state")
+}
+
 func TestGetComputationWrapperKeepsSchedulingSQLPerStatement(t *testing.T) {
 	ctx := context.Background()
 	ctrl := gomock.NewController(t)
@@ -1742,6 +1777,107 @@ func Test_HandlePrepareStmt(t *testing.T) {
 		_, err := handlePrepareStmt(ses, ec, stmt, "Prepare stmt1 from select 1, 2")
 		return err
 	})
+}
+
+func TestFailedPrepareReplacementRemovesPreviousStatement(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+
+	testCases := []struct {
+		name      string
+		stmt      tree.Statement
+		sqlOfStmt string
+	}{
+		{
+			name:      "statement",
+			stmt:      tree.NewPrepareStmt("stmt1", &tree.Select{}),
+			sqlOfStmt: "select 1",
+		},
+		{
+			name: "string",
+			stmt: tree.NewPrepareString("stmt1", "select from"),
+		},
+		{
+			name: "variable",
+			stmt: tree.NewPrepareVar(
+				"stmt1",
+				tree.NewVarExpr("missing_prepare_sql", false, false, nil),
+			),
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			previous := &PrepareStmt{ParamTypes: []byte{1}}
+			require.NoError(t, ses.SetPrepareStmt(ctx, "stmt1", previous))
+			execCtx := &ExecCtx{
+				reqCtx:    ctx,
+				ses:       ses,
+				stmt:      testCase.stmt,
+				sqlOfStmt: testCase.sqlOfStmt,
+			}
+			removePrepareStmtForReplacement(ses, testCase.stmt)
+			_, err := execInFrontend(ses, execCtx)
+			require.Error(t, err)
+			require.Nil(t, previous.ParamTypes)
+
+			_, err = ses.GetPrepareStmt(ctx, "stmt1")
+			require.Error(t, err)
+		})
+	}
+}
+
+func TestPrepareReplacementRemovesPreviousStatementBeforeTxnCheck(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+
+	testCases := []struct {
+		name        string
+		stmt        tree.Statement
+		txnCheckErr bool
+	}{
+		{
+			name: "statement",
+			stmt: tree.NewPrepareStmt(
+				"StMt1",
+				&tree.Select{},
+			),
+		},
+		{
+			name:        "string",
+			stmt:        tree.NewPrepareString("StMt1", "select from"),
+			txnCheckErr: true,
+		},
+		{
+			name: "variable",
+			stmt: tree.NewPrepareVar(
+				"StMt1",
+				tree.NewVarExpr("missing_prepare_sql", false, false, nil),
+			),
+			txnCheckErr: true,
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			previous := &PrepareStmt{ParamTypes: []byte{1}}
+			require.NoError(t, ses.SetPrepareStmt(ctx, "stmt1", previous))
+
+			removePrepareStmtForReplacement(ses, testCase.stmt)
+			err := canExecuteStatementInUncommittedTransaction(ctx, ses, testCase.stmt)
+			if testCase.txnCheckErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+
+			require.Nil(t, previous.ParamTypes)
+			_, err = ses.GetPrepareStmt(ctx, "stmt1")
+			require.Error(t, err)
+		})
+	}
 }
 
 func TestHandlePrepareStmtNameContainingFrom(t *testing.T) {
@@ -3454,6 +3590,151 @@ func TestSerializePlanToJson(t *testing.T) {
 		require.Equal(t, int64(0), stats.BytesScan)
 		t.Logf("SQL plan to json : %s\n", string(json))
 	}
+}
+
+func TestPreparedSetExpressionPlanModeIsExplicit(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "select ? + 1 from dual", 1)
+	require.NoError(t, err)
+
+	_, err = buildPlanWithPrepareMode(
+		ctx, nil, plan.NewEmptyCompilerContext(), stmt, false)
+	require.ErrorContains(t, err, "only prepare statement can use ? expr")
+
+	preparedPlan, err := buildPlanWithPrepareMode(
+		ctx, nil, plan.NewEmptyCompilerContext(), stmt, true)
+	require.NoError(t, err)
+	require.True(t, preparedPlan.GetIsPrepare())
+	require.Equal(t, []int32{0}, queryParamPositions(preparedPlan.GetQuery()))
+}
+
+func TestPreparedSetExpressionPlanKeepsGlobalParserOrdinal(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "select ?, ? from dual", 1)
+	require.NoError(t, err)
+	selectStmt := stmt.(*tree.Select)
+	clause := selectStmt.Select.(*tree.SelectClause)
+	secondParam := clause.Exprs[1].Expr.(*tree.ParamExpr)
+	require.Equal(t, 2, secondParam.Offset)
+	clause.Exprs = clause.Exprs[1:]
+
+	preparedPlan, err := buildPlanWithPrepareMode(
+		ctx, nil, plan.NewEmptyCompilerContext(), stmt, true)
+	require.NoError(t, err)
+	require.Equal(t, []int32{1}, queryParamPositions(preparedPlan.GetQuery()))
+	require.Equal(t, 2, secondParam.Offset, "planning must not mutate the retained SET AST")
+}
+
+func TestPreparedSetExpressionPlanNormalizesAggregateAndWindowParams(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	for _, tc := range []struct {
+		sql  string
+		want []int32
+	}{
+		{
+			sql:  "select sum(cast(? as signed)) from dual",
+			want: []int32{0},
+		},
+		{
+			sql:  "select max(1) from dual group by cast(? as signed)",
+			want: []int32{0},
+		},
+		{
+			sql: "select sum(cast(? as signed)) over (" +
+				"partition by cast(? as signed) order by cast(? as signed)) from dual",
+			want: []int32{0, 1, 2},
+		},
+	} {
+		stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, tc.sql, 1)
+		require.NoError(t, err)
+		preparedPlan, err := buildPlanWithPrepareMode(
+			ctx, nil, plan.NewEmptyCompilerContext(), stmt, true)
+		require.NoError(t, err)
+		require.ElementsMatch(t, tc.want, queryParamPositions(preparedPlan.GetQuery()))
+	}
+}
+
+func TestPreparedSetExpressionRetryKeepsGlobalParserOrdinal(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "select ?, ? from dual", 1)
+	require.NoError(t, err)
+	selectStmt := stmt.(*tree.Select)
+	clause := selectStmt.Select.(*tree.SelectClause)
+	secondParam := clause.Exprs[1].Expr.(*tree.ParamExpr)
+	clause.Exprs = clause.Exprs[1:]
+
+	retryPlan, err := buildPlanForCompileRetry(
+		ctx, nil, plan.NewEmptyCompilerContext(), stmt, true)
+	require.NoError(t, err)
+	require.Equal(t, []int32{1}, queryParamPositions(retryPlan.GetQuery()))
+	require.Equal(t, 2, secondParam.Offset)
+}
+
+func queryParamPositions(query *plan0.Query) []int32 {
+	var positions []int32
+	var visitExpr func(*plan0.Expr)
+	visitExpr = func(expr *plan0.Expr) {
+		if expr == nil {
+			return
+		}
+		if param := expr.GetP(); param != nil {
+			positions = append(positions, param.Pos)
+		}
+		if fn := expr.GetF(); fn != nil {
+			for _, arg := range fn.Args {
+				visitExpr(arg)
+			}
+		}
+		if list := expr.GetList(); list != nil {
+			for _, item := range list.List {
+				visitExpr(item)
+			}
+		}
+		if window := expr.GetW(); window != nil {
+			visitExpr(window.WindowFunc)
+			for _, item := range window.PartitionBy {
+				visitExpr(item)
+			}
+			for _, order := range window.OrderBy {
+				visitExpr(order.Expr)
+			}
+			if frame := window.Frame; frame != nil {
+				if frame.Start != nil {
+					visitExpr(frame.Start.Val)
+				}
+				if frame.End != nil {
+					visitExpr(frame.End.Val)
+				}
+			}
+		}
+	}
+	for _, node := range query.GetNodes() {
+		for _, expr := range node.GetProjectList() {
+			visitExpr(expr)
+		}
+		for _, expr := range node.GetFilterList() {
+			visitExpr(expr)
+		}
+		for _, expr := range node.GetGroupBy() {
+			visitExpr(expr)
+		}
+		for _, expr := range node.GetAggList() {
+			visitExpr(expr)
+		}
+		for _, expr := range node.GetWinSpecList() {
+			visitExpr(expr)
+		}
+	}
+	return positions
+}
+
+func TestPreparedSetExpressionDispatchIsExplicit(t *testing.T) {
+	direct := &ExecCtx{cw: &TxnComputationWrapper{}}
+	prepared := &ExecCtx{cw: &TxnComputationWrapper{ifIsExeccute: true}}
+
+	require.False(t, preparedSetExpression(direct))
+	require.True(t, preparedSetExpression(prepared))
+	require.False(t, preparedSetExpression(&ExecCtx{}))
 }
 
 func TestMarshalPlanHandlerSanitizesNonFinitePlanStats(t *testing.T) {

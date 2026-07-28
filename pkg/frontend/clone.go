@@ -703,7 +703,7 @@ func updateBranchMetaTable(
 	tcc.SetContext(srcCtx)
 	defer tcc.SetContext(origCtx)
 
-	if _, srcTblDef, err = tcc.Resolve(receipt.srcDb, receipt.srcTbl, nil); err != nil {
+	if _, srcTblDef, err = tcc.Resolve(receipt.srcDb, receipt.srcTbl, receipt.snapshot); err != nil {
 		return err
 	}
 	if srcTblDef == nil {
