@@ -1,0 +1,62 @@
+drop database if exists update_cluster_by;
+create database update_cluster_by;
+use update_cluster_by;
+create table t(a int,b int,payload varchar(20)) cluster by(a,b);
+insert into t values(1,10,'x'),(2,20,'y');
+update t set a=9,b=90 where a=1 and b=10;
+select count(*) from t where a=1 and b=10;
+count(*)
+0
+select a,b,payload from t where a=9 and b=90;
+a    b    payload
+9    90    x
+select a,b,payload from t where a+0=9 and b+0=90;
+a    b    payload
+9    90    x
+select a,b,payload from t where a in (8,9) and b=90;
+a    b    payload
+9    90    x
+select a,b,payload from t where a between 8 and 9 and b between 89 and 90;
+a    b    payload
+9    90    x
+select a,b,payload from t order by a desc,b desc limit 1;
+a    b    payload
+9    90    x
+select mo_ctl('dn','flush','update_cluster_by.t');
+mo_ctl(dn, flush, update_cluster_by.t)
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+select count(*) from t where a=1 and b=10;
+count(*)
+0
+select a,b,payload from t where a=9 and b=90;
+a    b    payload
+9    90    x
+delete from t where a=9 and b=90;
+select count(*) from t;
+count(*)
+1
+create table ti(rid int,a int,b int,payload varchar(20),unique key uk_ab(a,b),key idx_payload(payload)) cluster by(a,b);
+insert into ti values(1,1,10,'old'),(2,2,20,'keep');
+update ti set a=a+8,b=b+80,payload='new' where a=1 and b=10;
+select count(*) from ti where a=1 and b=10;
+count(*)
+0
+select rid,a,b,payload from ti where a=9 and b=90;
+rid    a    b    payload
+1    9    90    new
+select rid,a,b,payload from ti where payload='new';
+rid    a    b    payload
+1    9    90    new
+create table tp(a int,b int,payload varchar(20)) cluster by(a,b);
+insert into tp values(3,30,'prepared');
+prepare update_cb from 'update tp set a=?, b=b+? where a=? and b=?';
+set @new_a=7, @delta_b=40, @old_a=3, @old_b=30;
+execute update_cb using @new_a,@delta_b,@old_a,@old_b;
+deallocate prepare update_cb;
+select count(*) from tp where a=3 and b=30;
+count(*)
+0
+select a,b,payload from tp where a=7 and b=70;
+a    b    payload
+7    70    prepared
+drop database update_cluster_by;

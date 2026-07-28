@@ -46,3 +46,103 @@ func TestSplitRecursiveMember(t *testing.T) {
 	require.Equal(t, 2, len(ss))
 	require.Equal(t, true, left != nil)
 }
+
+func TestRecursiveCteConsumerAliases(t *testing.T) {
+	for _, test := range []struct {
+		name             string
+		query            string
+		expectedHeadings []string
+	}{
+		{
+			name: "self join row shape",
+			query: recursiveSequenceSQL(`
+				select a.n as left_n, b.n as right_n
+				from seq as a cross join seq as b`),
+			expectedHeadings: []string{"left_n", "right_n"},
+		},
+		{
+			name: "self join aggregate expectation",
+			query: recursiveSequenceSQL(`
+				select count(*) as pairs, sum(a.n + b.n) as checksum
+				from seq as a cross join seq as b`),
+			expectedHeadings: []string{"pairs", "checksum"},
+		},
+		{
+			name: "single qualified alias",
+			query: recursiveSequenceSQL(`
+				select a.n from seq as a`),
+			expectedHeadings: []string{"n"},
+		},
+		{
+			name: "unaliased control",
+			query: recursiveSequenceSQL(`
+				select seq.n from seq`),
+			expectedHeadings: []string{"n"},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(NewMockOptimizer(false), t, test.query)
+			require.NoError(t, err)
+			require.Equal(t, test.expectedHeadings, logicPlan.GetQuery().Headings)
+		})
+	}
+}
+
+func TestRecursiveCteConsumerColumnAliasList(t *testing.T) {
+	statements, err := parsers.Parse(context.Background(), dialect.MYSQL, recursiveSequenceSQL(`
+		select a.renamed_n, renamed_n from seq as a`), 1)
+	require.NoError(t, err)
+	defer func() {
+		for _, statement := range statements {
+			statement.Free()
+		}
+	}()
+
+	stmt := statements[0].(*tree.Select)
+	outer := stmt.Select.(*tree.SelectClause)
+	join := outer.From.Tables[0].(*tree.JoinTableExpr)
+	aliased := join.Left.(*tree.AliasedTableExpr)
+	aliased.As.Cols = tree.IdentifierList{tree.Identifier("renamed_n")}
+
+	logicPlan, err := BuildPlan(NewMockOptimizer(false).CurrentContext(), stmt, false)
+	require.NoError(t, err)
+	require.Equal(t, []string{"renamed_n", "renamed_n"}, logicPlan.GetQuery().Headings)
+}
+
+func TestRecursiveCteExplicitAliasHidesOriginalName(t *testing.T) {
+	_, err := runOneStmt(NewMockOptimizer(false), t, recursiveSequenceSQL(`
+		select seq.n from seq as a`))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "seq")
+}
+
+func TestRecursiveCteDuplicateExplicitAliasStillErrors(t *testing.T) {
+	_, err := runOneStmt(NewMockOptimizer(false), t, recursiveSequenceSQL(`
+		select a.n from seq as a cross join seq as a`))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "table 'a' specified more than once")
+}
+
+func TestOrdinaryAliasesRemainUnchanged(t *testing.T) {
+	for _, test := range []struct {
+		query   string
+		heading string
+	}{
+		{query: "select n.n_name from nation as n", heading: "n_name"},
+		{query: "select d.n from (select 1 as n) as d", heading: "n"},
+	} {
+		logicPlan, err := runOneStmt(NewMockOptimizer(false), t, test.query)
+		require.NoError(t, err)
+		require.Equal(t, []string{test.heading}, logicPlan.GetQuery().Headings)
+	}
+}
+
+func recursiveSequenceSQL(query string) string {
+	return `
+		with recursive seq(n) as (
+			select 1
+			union all
+			select n + 1 from seq where n < 3
+		)
+	` + query
+}

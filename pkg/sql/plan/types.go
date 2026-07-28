@@ -172,7 +172,8 @@ type BaseOptimizer struct {
 type ViewData struct {
 	Stmt            string
 	DefaultDatabase string
-	SecurityType    string `json:"security_type,omitempty"`
+	SQLMode         *string `json:"sql_mode,omitempty"`
+	SecurityType    string  `json:"security_type,omitempty"`
 }
 
 type QueryBuilder struct {
@@ -199,6 +200,7 @@ type QueryBuilder struct {
 	isRestoreByTs         bool
 	isSkipResolveTableDef bool
 	skipStats             bool
+	isInsertIgnore        bool // INSERT IGNORE: over-length CHAR/VARCHAR writes are truncated instead of rejected
 
 	deleteNode map[uint64]int32 //delete node in this query. key is tableId, value is the nodeId of sinkScan node in the delete plan
 
@@ -269,15 +271,17 @@ type OptimizerHints struct {
 	forceOneCN                 int
 	execType                   int
 	disableRightJoin           int
+	disableRightSingleRF       int
 	printShuffle               int
 	skipDedup                  int
 }
 
 type CTERef struct {
-	isRecursive bool
-	ast         *tree.CTE
-	maskedCTEs  map[string]bool
-	snapshot    *Snapshot
+	isRecursive    bool
+	ast            *tree.CTE
+	maskedCTEs     map[string]bool
+	snapshot       *Snapshot
+	declarationCtx *BindContext
 }
 
 type CteBindState struct {
@@ -317,12 +321,13 @@ type BindContext struct {
 	//cteByName saves all cte definitions in the current stmt
 	cteByName map[string]*CTERef
 	//cteState records state of binding cte
-	cteState      CteBindState
-	sliding       bool
-	isDistinct    bool
-	isCorrelated  bool
-	hasSingleRow  bool
-	isGroupingSet bool
+	cteState                     CteBindState
+	sliding                      bool
+	isDistinct                   bool
+	normalizeGroupingSetDistinct bool
+	isCorrelated                 bool
+	hasSingleRow                 bool
+	isGroupingSet                bool
 
 	//cteName denotes the alias of this BindContext.
 	//it may be from view name, cte name or subquery name
@@ -347,14 +352,22 @@ type BindContext struct {
 	windows    []*plan.Expr
 	times      []*plan.Expr
 
-	groupByAst     map[string]int32
-	aggregateByAst map[string]int32
-	sampleByAst    map[string]int32
-	windowByAst    map[string]int32
-	projectByExpr  map[string]int32
-	timeByAst      map[string]int32
+	groupByAst      map[string]int32
+	groupByParamAst map[string]int32
+	aggregateByAst  map[string]int32
+	sampleByAst     map[string]int32
+	windowByAst     map[string]int32
+	projectByExpr   map[string]int32
+	timeByAst       map[string]int32
+
+	projectColByAst map[string]int32
 
 	projectByAst []SelectField
+
+	numericProjectionTypes          []Type
+	numericTableProjectionTypes     map[string][]Type
+	numericTableProjectionAmbiguous map[string][]bool
+	numericCteByName                map[string]*tree.CTE
 
 	timeAsts []tree.Expr
 
@@ -442,11 +455,14 @@ type Binder interface {
 }
 
 type baseBinder struct {
-	sysCtx    context.Context
-	builder   *QueryBuilder
-	ctx       *BindContext
-	impl      Binder
-	boundCols []string
+	sysCtx                context.Context
+	builder               *QueryBuilder
+	ctx                   *BindContext
+	impl                  Binder
+	boundCols             []string
+	numericParamType      *Type
+	numericSubqueryTarget *Type
+	numericFunctionTarget bool
 }
 
 type DefaultBinder struct {
@@ -484,6 +500,7 @@ type OndupUpdateBinder struct {
 
 type TableBinder struct {
 	baseBinder
+	allowSubquery bool
 }
 
 type WhereBinder struct {
@@ -492,22 +509,26 @@ type WhereBinder struct {
 
 type GroupBinder struct {
 	baseBinder
-	selectList tree.SelectExprs
+	selectList        tree.SelectExprs
+	projectionExprPos int32
 }
 
 type HavingBinder struct {
 	baseBinder
-	insideAgg bool
+	insideAgg    bool
+	rollupHaving bool
 }
 
 type ProjectionBinder struct {
 	baseBinder
-	havingBinder *HavingBinder
+	havingBinder      *HavingBinder
+	numericTargetType *Type
 }
 
 type OrderBinder struct {
 	*ProjectionBinder
-	selectList tree.SelectExprs
+	selectList     tree.SelectExprs
+	distinctBinder *distinctOrderBinder
 }
 
 type LimitBinder struct {

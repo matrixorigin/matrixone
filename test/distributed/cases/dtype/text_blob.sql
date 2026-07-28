@@ -86,7 +86,7 @@ select length(b1),length(b2),length(b3) from blob_01;
 select substring(b3,5),substr(b2,-3,2) from blob_01;
 select count(b1) from blob_01;
 select max(b2),min(b3) from blob_01;
-select b1||b2 from blob_01;
+select concat(b1,b2) from blob_01;
 
 -- ddl and dml
 create table blob_02(b1 blob primary key,b2 int);

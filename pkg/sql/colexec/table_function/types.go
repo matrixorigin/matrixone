@@ -39,7 +39,7 @@ type TableFunction struct {
 	Limit    *plan.Expr
 	IsSingle bool
 
-	// probe side runtime filter specs (including BloomFilter)
+	// probe side runtime filter specs
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
 
 	IndexReaderParam *plan.IndexReaderParam
@@ -148,6 +148,7 @@ func (tableFunction *TableFunction) Reset(proc *process.Process, pipelineFailed 
 	}
 	tableFunction.ctr.nextRow = 0
 	tableFunction.ctr.inputBatch = nil
+	tableFunction.ctr.isDone = false
 	for i := range tableFunction.ctr.executorsForArgs {
 		if tableFunction.ctr.executorsForArgs[i] != nil {
 			if i < len(tableFunction.ctr.argVecs) {

@@ -33,7 +33,7 @@ json_extract({"a":[1,2,3,{"a":4}]}, $**.a)
 [[1, 2, 3, {"a": 4}], 4]
 select json_extract('{"a":[1,2,3,{"a":4}]}','$.a[*].a');
 json_extract({"a":[1,2,3,{"a":4}]}, $.a[*].a)
-4
+[4]
 select json_extract('{"a":1}','$[0]');
 json_extract({"a":1}, $[0])
 {"a": 1}
@@ -106,7 +106,7 @@ json_extract(t1.a, $**.a)
 [[1, 2, 3, {"a": 4}], 4]
 select json_extract(t1.a,'$.a[*].a') from t1 where t1.b=9;
 json_extract(t1.a, $.a[*].a)
-4
+[4]
 drop table t1;
 create table t1 (a json);
 insert into t1(a) values ('{"a":1}'),('[1,2]'),('{"xa":1}');
@@ -195,7 +195,7 @@ select json_extract('[1,2,3]','$[last-1 to last-2]');
 invalid input: invalid json path '$[last-1 to last-2]'
 select json_extract('[1,2,3]','$[last-8 to last-2]');
 json_extract([1,2,3], $[last-8 to last-2])
-1
+[1]
 select json_extract('[1,2,3]','$[last-2 to last-8]');
 invalid input: invalid json path '$[last-2 to last-8]'
 select json_extract('[1,2,3]','$[0 to last-8]');
@@ -612,4 +612,80 @@ id    data
 select * from example_table where json_extract(data, '$.PANEL') = 'PANEL-17';
 id    data
 1    {"CODE": "CODE-3", "LINE": "LINE-4", "PANEL": "PANEL-17", "item1": "value1", "item10": "value10", "item11": "value11", "item12": "value12", "item13": "value13", "item14": "value14", "item15": "value15", "item16": "value16", "item17": "value17", "item18": "value18", "item19": "value19", "item2": "value2", "item20": "value20", "item3": "value3", "item4": "value4", "item5": "value5", "item6": "value6", "item7": "value7", "item8": "value8", "item9": "value9"}
+drop database test;
+create database test;
+use test;
+create table json_null_test(id int primary key, doc json);
+insert into json_null_test values (1, '{"a":null,"fallback":[]}');
+select json_extract(doc, '$.a'),
+json_extract(doc, '$.a') is null,
+coalesce(json_extract(doc, '$.a'), json_extract(doc, '$.fallback'))
+from json_null_test;
+json_extract(doc, $.a)    json_extract(doc, $.a) is null    coalesce(json_extract(doc, $.a), json_extract(doc, $.fallback))
+null    0    null
+with x as (
+select doc from json_null_test where id = 1
+)
+select json_extract(doc, '$.a'),
+json_extract(doc, '$.a') is null,
+coalesce(json_extract(doc, '$.a'), json_extract(doc, '$.fallback'))
+from x;
+json_extract(doc, $.a)    json_extract(doc, $.a) is null    coalesce(json_extract(doc, $.a), json_extract(doc, $.fallback))
+null    0    null
+select json_extract(doc, '$.missing') is null,
+json_extract(doc, '$.a', '$.missing'),
+json_extract(doc, '$.a', '$.fallback')
+from json_null_test;
+json_extract(doc, $.missing) is null    json_extract(doc, $.a, $.missing)    json_extract(doc, $.a, $.fallback)
+1    [null]    [null, []]
+select json_extract('{"items":[null,1]}', '$.items[*]');
+json_extract({"items":[null,1]}, $.items[*])
+[null, 1]
+select json_extract('{"a":null}', '$.a[0]'),
+json_extract('{"a":null}', '$.a[0]') is null;
+json_extract({"a":null}, $.a[0])    json_extract({"a":null}, $.a[0]) is null
+null    0
+select json_extract('null', '$[0]'),
+json_extract('null', '$[0]') is null;
+json_extract(null, $[0])    json_extract(null, $[0]) is null
+null    0
+select json_extract('1', '$[0 to 0]');
+json_extract(1, $[0 to 0])
+[1]
+select json_extract('[null]', '$[*]');
+json_extract([null], $[*])
+[null]
+select json_extract('[null]', '$[0 to 0]');
+json_extract([null], $[0 to 0])
+[null]
+select json_extract('{"a":null}', '$.*');
+json_extract({"a":null}, $.*)
+[null]
+select json_extract('{"a":null}', '$**.a');
+json_extract({"a":null}, $**.a)
+[null]
+select json_extract('{}', '$[0 to 0]');
+json_extract({}, $[0 to 0])
+[{}]
+select json_extract('{"a":1,"b":2}', '$[last to last]');
+json_extract({"a":1,"b":2}, $[last to last])
+[{"a": 1, "b": 2}]
+select json_extract('{"a":null,"b":2}', '$[last to last].a');
+json_extract({"a":null,"b":2}, $[last to last].a)
+[null]
+select json_extract('[]', '$[0 to 0]') is null,
+json_extract('[]', '$[last to last]') is null,
+json_extract('{"a":[]}', '$.a[0 to 0]') is null,
+json_extract('{"a":[]}', '$.a[last to last]') is null;
+json_extract([], $[0 to 0]) is null    json_extract([], $[last to last]) is null    json_extract({"a":[]}, $.a[0 to 0]) is null    json_extract({"a":[]}, $.a[last to last]) is null
+1    1    1    1
+select json_extract('[null]', '$[1 to 1]') is null,
+json_extract('[0,1,2]', '$[5 to 6]') is null,
+json_extract('[0,1,2]', '$[last-8 to last-7]') is null;
+json_extract([null], $[1 to 1]) is null    json_extract([0,1,2], $[5 to 6]) is null    json_extract([0,1,2], $[last-8 to last-7]) is null
+1    1    1
+select json_extract('[0,1,2]', '$[2 to 6]'),
+json_extract('[0,1,2]', '$[last-8 to last-2]');
+json_extract([0,1,2], $[2 to 6])    json_extract([0,1,2], $[last-8 to last-2])
+[2]    [0]
 drop database test;

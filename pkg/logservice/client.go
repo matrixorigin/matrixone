@@ -926,6 +926,7 @@ func getRPCClient(
 	backendOpts := []morpc.BackendOption{
 		morpc.WithBackendConnectTimeout(time.Second),
 		morpc.WithBackendHasPayloadResponse(),
+		morpc.WithBackendFreeOrphansResponse(releaseOrphanRPCResponse),
 		morpc.WithBackendLogger(logutil.GetGlobalLogger().Named("hakeeper-client-backend")),
 		morpc.WithBackendReadTimeout(readTimeout),
 	}
@@ -954,4 +955,8 @@ func getRPCClient(
 	codec := morpc.NewMessageCodec(sid, mf, codecOpts...)
 	bf := morpc.NewGoettyBasedBackendFactory(codec, backendOpts...)
 	return morpc.NewClient("logservice-client", bf, clientOpts...)
+}
+
+func releaseOrphanRPCResponse(message morpc.Message) {
+	message.(*RPCResponse).Release()
 }

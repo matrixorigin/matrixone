@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"math"
 	"regexp"
@@ -77,9 +78,9 @@ const (
 
 	getSubsSqlFmt = "select sub_account_id, sub_account_name, sub_name, sub_time, pub_account_id, pub_account_name, pub_name, pub_database, pub_tables, pub_time, pub_comment, status from mo_catalog.mo_subs %s where 1=1"
 
-	checkTableIsMasterFormat = "select db_name, table_name from mo_catalog.mo_foreign_keys where refer_db_name = '%s' and refer_table_name = '%s'"
+	checkTableIsMasterFormat = "select db_name, table_name from mo_catalog.mo_foreign_keys where refer_db_name = %s and refer_table_name = %s"
 
-	checkDatabaseIsMasterFormat = "select db_name from mo_catalog.mo_foreign_keys where refer_db_name = '%s' and db_name != '%s'"
+	checkDatabaseIsMasterFormat = "select db_name from mo_catalog.mo_foreign_keys where refer_db_name = %s and db_name != %s"
 )
 
 var (
@@ -150,6 +151,7 @@ type tableInfo struct {
 	tblName   string
 	typ       tableType
 	relKind   string
+	viewDef   string
 	createSql string
 }
 
@@ -1389,7 +1391,7 @@ func restoreViews(
 				"[%s] start to create view: %v, create view sql: %s",
 				snapshotName, tblInfo.tblName, tblInfo.createSql))
 
-			if err = bh.Exec(toCtx, tblInfo.createSql); err != nil {
+			if err = executeViewCreateSQLForRestore(toCtx, bh, tblInfo); err != nil {
 				if skipIfDependencyMissing && canSkipRestoreViewError(err) {
 					getLogger(ses.GetService()).Info(fmt.Sprintf(
 						"[%s] skip restore view %v because dependency is missing: %v",
@@ -1437,7 +1439,6 @@ func sortedViewInfos(
 	var (
 		err         error
 		snapshot    *plan.Snapshot
-		stmts       []tree.Statement
 		sortedViews []string
 		oldSnapshot *plan.Snapshot
 	)
@@ -1463,7 +1464,7 @@ func sortedViewInfos(
 	g := toposort{next: make(map[string][]string)}
 	for key, viewEntry := range viewMap {
 		getLogger(ses.GetService()).Debug(fmt.Sprintf("[%s] start to restore view: %v", snapshotName, viewEntry.tblName))
-		stmts, err = parsers.Parse(ctx, dialect.MYSQL, viewEntry.createSql, 1)
+		stmts, err := parseViewCreateSQLForRestore(ctx, viewEntry, 1)
 		if err != nil {
 			return nil, err
 		}
@@ -1471,10 +1472,15 @@ func sortedViewInfos(
 		compCtx.SetDatabase(viewEntry.dbName)
 		// build create sql to find dependent views
 		_, err = plan.BuildPlan(compCtx, stmts[0], false)
+		freeStatements(stmts)
 		if err != nil {
 			getLogger(ses.GetService()).Debug(fmt.Sprintf("try to build view %v failed, try to build it again", viewEntry.tblName))
-			stmts, _ = parsers.Parse(ctx, dialect.MYSQL, viewEntry.createSql, 0)
+			stmts, err = parseViewCreateSQLForRestore(ctx, viewEntry, 0)
+			if err != nil {
+				return nil, err
+			}
 			_, err = plan.BuildPlan(compCtx, stmts[0], false)
+			freeStatements(stmts)
 			if err != nil {
 				return nil, err
 			}
@@ -1898,8 +1904,8 @@ func showFullTables(
 		"[%v] show full table `%s.%s` sql: %s",
 		snapshot, dbName, tblName, sql))
 
-	// cols: table name, table type, relkind
-	colsList, err := getStringColsList(newCtx, bh, sql, 0, 1, 2)
+	// cols: table name, table type, relkind, view definition
+	colsList, err := getStringColsList(newCtx, bh, sql, 0, 1, 2, 3)
 	if err != nil {
 		return nil, err
 	}
@@ -1911,6 +1917,7 @@ func showFullTables(
 			tblName: cols[0],
 			typ:     tableType(cols[1]),
 			relKind: cols[2],
+			viewDef: cols[3],
 		}
 	}
 
@@ -1928,7 +1935,7 @@ func buildTableInfoListSQL(dbName string, tblName string, ts int64, accountId ui
 	}
 	whereClause := buildTableInfoListWhereClause(dbName, tblName, accountId)
 	sql := fmt.Sprintf(
-		"select relname, case relkind when %s then 'VIEW' when %s then 'CLUSTER TABLE' else 'BASE TABLE' end as table_type, relkind from %s.mo_tables%s where %s",
+		"select relname, case relkind when %s then 'VIEW' when %s then 'CLUSTER TABLE' else 'BASE TABLE' end as table_type, relkind, viewdef from %s.mo_tables%s where %s",
 		quoteSQLStringLiteral(catalog.SystemViewRel),
 		quoteSQLStringLiteral(catalog.SystemClusterRel),
 		moCatalog,
@@ -2033,6 +2040,40 @@ func fillTableCreateSQLsForRestore(
 		restorable = append(restorable, tblInfo)
 	}
 	return restorable, nil
+}
+
+const legacyViewParserSQLModeForRestore = "PIPES_AS_CONCAT"
+
+func parseViewCreateSQLForRestore(ctx context.Context, tblInfo *tableInfo, lowerCaseTableNames int64) ([]tree.Statement, error) {
+	parserSQLMode, err := viewParserSQLModeForRestore(tblInfo.viewDef)
+	if err != nil {
+		return nil, err
+	}
+
+	return parsers.ParseWithSQLMode(ctx, dialect.MYSQL, tblInfo.createSql, lowerCaseTableNames, parserSQLMode)
+}
+
+func executeViewCreateSQLForRestore(ctx context.Context, bh BackgroundExec, tblInfo *tableInfo) error {
+	parserSQLMode, err := viewParserSQLModeForRestore(tblInfo.viewDef)
+	if err != nil {
+		return err
+	}
+	return bh.ExecWithSQLMode(ctx, tblInfo.createSql, parserSQLMode)
+}
+
+func viewParserSQLModeForRestore(viewDef string) (string, error) {
+	if viewDef == "" {
+		return legacyViewParserSQLModeForRestore, nil
+	}
+
+	var data plan.ViewData
+	if err := json.Unmarshal([]byte(viewDef), &data); err != nil {
+		return "", err
+	}
+	if data.SQLMode == nil {
+		return legacyViewParserSQLModeForRestore, nil
+	}
+	return *data.SQLMode, nil
 }
 
 func getCreateDatabaseSql(ctx context.Context,
@@ -2822,7 +2863,7 @@ func checkTableIsMaster(
 	snapshotName string,
 	dbName string,
 	tblName string) (bool, error) {
-	sql := fmt.Sprintf(checkTableIsMasterFormat, dbName, tblName)
+	sql := fmt.Sprintf(checkTableIsMasterFormat, quoteSQLStringLiteral(dbName), quoteSQLStringLiteral(tblName))
 	getLogger(sid).Debug(fmt.Sprintf("[%s] check table is master or not sql: %s", snapshotName, sql))
 
 	bh.ClearExecResultSet()
@@ -2847,7 +2888,7 @@ func checkDatabaseIsMaster(
 	bh BackgroundExec,
 	snapshotName string,
 	dbName string) (bool, error) {
-	sql := fmt.Sprintf(checkDatabaseIsMasterFormat, dbName, dbName)
+	sql := fmt.Sprintf(checkDatabaseIsMasterFormat, quoteSQLStringLiteral(dbName), quoteSQLStringLiteral(dbName))
 	getLogger(sid).Debug(fmt.Sprintf("[%s] check database is master or not sql: %s", snapshotName, sql))
 
 	bh.ClearExecResultSet()

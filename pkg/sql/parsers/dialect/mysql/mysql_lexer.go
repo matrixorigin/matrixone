@@ -34,8 +34,13 @@ type MySQLParser struct {
 }
 
 func (p *MySQLParser) Parse(ctx context.Context, sql string, lower int64) ([]tree.Statement, error) {
+	return p.ParseWithSQLMode(ctx, sql, lower, "")
+}
+
+func (p *MySQLParser) ParseWithSQLMode(ctx context.Context, sql string, lower int64, sqlMode string) ([]tree.Statement, error) {
 	p.scanner.setSql(sql)
-	p.lexer.setScanner(&p.scanner, lower)
+	p.scanner.setSQLMode(ParseSQLModeFlags(sqlMode))
+	p.lexer.setScanner(&p.scanner, lower, ParseSQLModeFlags(sqlMode))
 
 	/*
 		The following can potentially save some memory allocation, but it exposes too much
@@ -70,8 +75,47 @@ func (p *MySQLParser) Parse(ctx context.Context, sql string, lower int64) ([]tre
 	return p.lexer.stmts, nil
 }
 
+// ParseFirstWithSQLMode parses the first top-level statement and returns the
+// byte offset immediately after its delimiter. It stops the lexer as soon as
+// the first statement is reduced, so compound statements are scanned once.
+func (p *MySQLParser) ParseFirstWithSQLMode(ctx context.Context, sql string, lower int64, sqlMode string) (tree.Statement, int, error) {
+	p.scanner.setSql(sql)
+	p.scanner.setSQLMode(ParseSQLModeFlags(sqlMode))
+	p.lexer.setScanner(&p.scanner, lower, ParseSQLModeFlags(sqlMode))
+	p.lexer.parseFirst = true
+
+	if yyParse(&p.lexer) != 0 {
+		for _, s := range p.lexer.stmts {
+			s.Free()
+		}
+		return nil, 0, p.lexer.scanner.LastError
+	}
+	if len(p.lexer.stmts) == 0 {
+		return &tree.EmptyStmt{}, len(sql), nil
+	}
+	end := p.lexer.statementEnd
+	if p.lexer.lastToken != int(';') && end < len(sql) {
+		token, _ := p.scanner.Scan()
+		switch token {
+		case int(';'):
+			end = p.scanner.Pos
+		case 0, EofChar():
+			end = len(sql)
+		default:
+			p.lexer.stmts[0].Free()
+			p.lexer.Error("syntax error")
+			return nil, 0, p.lexer.scanner.LastError
+		}
+	}
+	return p.lexer.stmts[0], end, nil
+}
+
 func Parse(ctx context.Context, sql string, lower int64) ([]tree.Statement, error) {
-	lexer := NewLexer(dialect.MYSQL, sql, lower)
+	return ParseWithSQLMode(ctx, sql, lower, "")
+}
+
+func ParseWithSQLMode(ctx context.Context, sql string, lower int64, sqlMode string) ([]tree.Statement, error) {
+	lexer := NewLexerWithSQLMode(dialect.MYSQL, sql, lower, ParseSQLModeFlags(sqlMode))
 	defer PutScanner(lexer.scanner)
 	if yyParse(lexer) != 0 {
 		for _, s := range lexer.stmts {
@@ -95,7 +139,11 @@ func Parse(ctx context.Context, sql string, lower int64) ([]tree.Statement, erro
 }
 
 func ParseOne(ctx context.Context, sql string, lower int64) (tree.Statement, error) {
-	lexer := NewLexer(dialect.MYSQL, sql, lower)
+	return ParseOneWithSQLMode(ctx, sql, lower, "")
+}
+
+func ParseOneWithSQLMode(ctx context.Context, sql string, lower int64, sqlMode string) (tree.Statement, error) {
+	lexer := NewLexerWithSQLMode(dialect.MYSQL, sql, lower, ParseSQLModeFlags(sqlMode))
 	defer PutScanner(lexer.scanner)
 	if yyParse(lexer) != 0 {
 		for _, s := range lexer.stmts {
@@ -110,11 +158,16 @@ func ParseOne(ctx context.Context, sql string, lower int64) (tree.Statement, err
 }
 
 type Lexer struct {
-	scanner    *Scanner
-	stmts      []tree.Statement
-	paramIndex int
-	lower      int64
-	lastToken  int
+	scanner               *Scanner
+	stmts                 []tree.Statement
+	paramIndex            int
+	lower                 int64
+	lastToken             int
+	topLevelSemicolonEnds []int
+	sqlMode               SQLModeFlags
+	parseFirst            bool
+	stopLexing            bool
+	statementEnd          int
 }
 
 // reservedKeywordsAfterAS lists tokens that represent reserved keywords
@@ -129,19 +182,35 @@ var reservedKeywordsAfterAS = map[int]bool{
 }
 
 func NewLexer(dialectType dialect.DialectType, sql string, lower int64) *Lexer {
+	return NewLexerWithSQLMode(dialectType, sql, lower, 0)
+}
+
+func NewLexerWithSQLMode(dialectType dialect.DialectType, sql string, lower int64, sqlMode SQLModeFlags) *Lexer {
+	scanner := NewScanner(dialectType, sql)
+	scanner.setSQLMode(sqlMode)
 	return &Lexer{
-		scanner:    NewScanner(dialectType, sql),
+		scanner:    scanner,
 		paramIndex: 0,
 		lower:      lower,
+		sqlMode:    sqlMode,
 	}
 }
 
-func (l *Lexer) setScanner(s *Scanner, lower int64) {
+func (l *Lexer) setScanner(s *Scanner, lower int64, sqlMode SQLModeFlags) {
 	l.scanner = s
 	l.stmts = nil
 	l.paramIndex = 0
 	l.lower = lower
 	l.lastToken = 0
+	l.topLevelSemicolonEnds = nil
+	l.sqlMode = sqlMode
+	l.parseFirst = false
+	l.stopLexing = false
+	l.statementEnd = 0
+}
+
+func (l *Lexer) HasSQLMode(flag SQLModeFlag) bool {
+	return l.sqlMode.Has(flag)
 }
 
 func (l *Lexer) GetParamIndex() int {
@@ -150,8 +219,29 @@ func (l *Lexer) GetParamIndex() int {
 }
 
 func (l *Lexer) Lex(lval *yySymType) int {
+	if l.stopLexing {
+		return 0
+	}
 	typ, str := l.scanner.Scan()
+	lval.pos = l.scanner.Pos
 	l.scanner.LastToken = str
+
+	if typ == FOR {
+		snapshot := *l.scanner
+		nextTyp, nextStr := l.scanner.Scan()
+		if nextTyp == ICEBERG {
+			afterIceberg := *l.scanner
+			afterTyp, _ := l.scanner.Scan()
+			if afterTyp == SNAPSHOT || afterTyp == TIMESTAMP || afterTyp == REF {
+				l.lastToken = FOR_ICEBERG
+				lval.str = str + " " + nextStr
+				l.scanner.LastToken = lval.str
+				*l.scanner = afterIceberg
+				return FOR_ICEBERG
+			}
+		}
+		*l.scanner = snapshot
+	}
 
 	switch typ {
 	case INTEGRAL:
@@ -198,6 +288,97 @@ func (l *Lexer) Error(err string) {
 
 func (l *Lexer) AppendStmt(stmt tree.Statement) {
 	l.stmts = append(l.stmts, stmt)
+	if l.parseFirst && len(l.stmts) == 1 {
+		l.statementEnd = l.scanner.Pos
+		l.stopLexing = true
+	}
+}
+
+func (l *Lexer) AppendTopLevelSemicolon(end int) {
+	l.topLevelSemicolonEnds = append(l.topLevelSemicolonEnds, end)
+}
+
+func SplitSqlByStatement(ctx context.Context, sql string, lower int64) ([]string, error) {
+	return SplitSqlByStatementWithSQLMode(ctx, sql, lower, "")
+}
+
+func SplitSqlByStatementWithSQLMode(ctx context.Context, sql string, lower int64, sqlMode string) ([]string, error) {
+	lexer := NewLexerWithSQLMode(dialect.MYSQL, sql, lower, ParseSQLModeFlags(sqlMode))
+	defer PutScanner(lexer.scanner)
+	if yyParse(lexer) != 0 {
+		for _, stmt := range lexer.stmts {
+			stmt.Free()
+		}
+		return nil, lexer.scanner.LastError
+	}
+	defer func() {
+		for _, stmt := range lexer.stmts {
+			stmt.Free()
+		}
+	}()
+
+	// A MySQL executable comment is SQL lexical space, so a statement-ending
+	// semicolon can occur before the raw /*! ... */ wrapper closes. The parser
+	// records that semicolon's byte offset, but slicing there would turn one
+	// statement into two invalid raw fragments ("/*! ..." and "*/"). Extend
+	// only a comment's final semicolon through its terminator. Earlier
+	// semicolons, if any, remain genuine statement boundaries.
+	var executableCommentEnds map[int]int
+	if lexer.scanner.executableCommentEnd != 0 {
+		executableCommentEnds = executableCommentEndsByFinalSemicolon(sql, sqlMode)
+	}
+	fragments := make([]string, 0, len(lexer.topLevelSemicolonEnds)+1)
+	start := 0
+	for _, end := range lexer.topLevelSemicolonEnds {
+		fragmentEnd := end - 1
+		nextStart := end
+		if commentEnd, ok := executableCommentEnds[end]; ok {
+			fragmentEnd = commentEnd
+			nextStart = commentEnd
+		}
+		fragments = append(fragments, strings.TrimSpace(sql[start:fragmentEnd]))
+		start = nextStart
+	}
+	tail := strings.TrimSpace(sql[start:])
+	if len(lexer.topLevelSemicolonEnds) == 0 || tail != "" {
+		fragments = append(fragments, tail)
+	}
+	if len(fragments) == 0 {
+		return []string{""}, nil
+	}
+	return fragments, nil
+}
+
+// executableCommentEndsByFinalSemicolon maps the final semicolon inside each
+// executable comment to the byte offset immediately after its closing */. The
+// scanner supplies both SQL-mode-aware tokenization and a terminator offset
+// that is not confused by comment-looking text inside quoted values.
+func executableCommentEndsByFinalSemicolon(sql string, sqlMode string) map[int]int {
+	scanner := NewScannerWithSQLMode(dialect.MYSQL, sql, ParseSQLModeFlags(sqlMode))
+	defer PutScanner(scanner)
+
+	var ends map[int]int
+	finalSemicolonEnd := 0
+	for {
+		typ, _ := scanner.Scan()
+		if commentEnd := scanner.TakeExecutableCommentEnd(); commentEnd != 0 {
+			if finalSemicolonEnd != 0 && commentEnd >= 2 && finalSemicolonEnd <= commentEnd-2 &&
+				strings.TrimSpace(sql[finalSemicolonEnd:commentEnd-2]) == "" {
+				if ends == nil {
+					ends = make(map[int]int)
+				}
+				ends[finalSemicolonEnd] = commentEnd
+			}
+			finalSemicolonEnd = 0
+		}
+		if typ == ';' && scanner.CommentFlag {
+			finalSemicolonEnd = scanner.Pos
+		}
+		if typ == 0 || typ == EofChar() || typ == LEX_ERROR {
+			break
+		}
+	}
+	return ends
 }
 
 func (l *Lexer) toInt(lval *yySymType, str string) int {

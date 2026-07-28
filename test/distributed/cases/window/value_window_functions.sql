@@ -8,6 +8,9 @@ select id, year_col, revenue, LAG(revenue) over (order by year_col) as prev_reve
 -- Test LEAD function
 select id, year_col, revenue, LEAD(revenue) over (order by year_col) as next_revenue from test_value_window where category = 'A';
 
+-- Regression: large offsets must be checked before row-index arithmetic.
+select id, LEAD(id, 9223372036854775807) over (order by id) as next_id from test_value_window where category = 'A';
+
 -- Test FIRST_VALUE function
 select id, year_col, revenue, FIRST_VALUE(revenue) over (order by year_col) as first_revenue from test_value_window where category = 'A';
 

@@ -307,7 +307,10 @@ func (d *DiskCache) Read(
 		if f, ok := openedFiles[diskPath]; ok {
 			// use opened file
 			LogEvent(ctx, str_disk_cache_file_seek_begin)
-			_, err = f.Seek(entry.Offset, io.SeekStart)
+			// An IOEntry cache file contains only this range, so its content
+			// always starts at file offset zero. entry.Offset is only valid for
+			// a full-object cache file.
+			_, err = f.Seek(0, io.SeekStart)
 			LogEvent(ctx, str_disk_cache_file_seek_end)
 			if err == nil {
 				file = f
@@ -756,11 +759,15 @@ var _ FileCache = new(DiskCache)
 
 func (d *DiskCache) SetFile(
 	ctx context.Context,
-	path string,
+	filePath string,
 	openReader func(context.Context) (io.ReadCloser, error),
 ) error {
-	diskPath := d.pathForFile(path)
-	_, err := d.writeFile(ctx, diskPath, openReader)
+	path, err := ParsePath(filePath)
+	if err != nil {
+		return err
+	}
+	diskPath := d.pathForFile(path.File)
+	_, err = d.writeFile(ctx, diskPath, openReader)
 	if err != nil {
 		return err
 	}
@@ -771,7 +778,11 @@ func (d *DiskCache) DeletePaths(
 	ctx context.Context,
 	paths []string,
 ) (err error) {
-	for _, path := range paths {
+	canonical, err := canonicalFilePaths(paths)
+	if err != nil {
+		return err
+	}
+	for _, path := range canonical {
 		//TODO also delete IOEntry files
 		if err = d.removeOnePath(ctx, path); err != nil {
 			return

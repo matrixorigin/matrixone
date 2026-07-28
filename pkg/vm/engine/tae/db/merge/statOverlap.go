@@ -15,9 +15,10 @@
 package merge
 
 import (
+	"cmp"
 	"context"
 	"fmt"
-	"sort"
+	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -432,11 +433,11 @@ func splitTasksOnSpan(
 	records := overlapStats.StatsRecords
 
 	// sort by overlap ratio descending
-	sort.Slice(candidatesIdx, func(i, j int) bool {
-		r1, r2 := records[candidatesIdx[i]], records[candidatesIdx[j]]
+	slices.SortFunc(candidatesIdx, func(a, b int) int {
+		r1, r2 := records[a], records[b]
 		overlapRatio1 := float64(r1.overlap) / float64(r1.depth)
 		overlapRatio2 := float64(r2.overlap) / float64(r2.depth)
-		return overlapRatio1 > overlapRatio2
+		return cmp.Compare(overlapRatio2, overlapRatio1)
 	})
 
 	pushToRationLessThan := func(idx int, ration float64) int {

@@ -15,6 +15,9 @@
 package frontend
 
 import (
+	"context"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
@@ -22,16 +25,17 @@ import (
 // parsed statements (db.table -> remap[db].table). It runs after parsing and
 // before privilege checks / planning, which otherwise resolve the original
 // database and would reject a remapped-away database before the planner sees it.
-// It covers SELECT and INSERT/UPDATE/DELETE (including their target tables,
-// read sources, INSERT ... SELECT bodies and CTE bodies).
+// It covers SELECT, INSERT/UPDATE/DELETE (including their target tables, read
+// sources, INSERT ... SELECT bodies and CTE bodies), table-level DDL, and
+// ANALYZE TABLE.
 //
 // Only QUALIFIED references are rewritten. An unqualified name may be a CTE or
 // derived-table alias rather than a base table, so attaching a database to it
-// could change its meaning; the current-database case is instead handled by
-// remapping USE (the session lands on the target database and unqualified names
-// resolve there naturally). Sub-selects nested in expressions (e.g. WHERE id IN
-// (SELECT ... FROM dbx.t), EXISTS (...), join ON, projections, GROUP/HAVING) are
-// also walked so their qualified references are remapped.
+// could change its meaning. USE is intentionally not remapped; unqualified
+// names are resolved through TxnCompilerContext.DefaultDatabase(), which applies
+// the active database remap. Sub-selects nested in expressions (e.g. WHERE id
+// IN (SELECT ... FROM dbx.t), EXISTS (...), join ON, projections,
+// GROUP/HAVING) are also walked so their qualified references are remapped.
 func applyRemapDb(stmts []tree.Statement, remap map[string]string) {
 	if len(remap) == 0 {
 		return
@@ -39,6 +43,16 @@ func applyRemapDb(stmts []tree.Statement, remap map[string]string) {
 	for _, stmt := range stmts {
 		remapDbInStmt(stmt, remap)
 	}
+}
+
+func applyRemapDbByStatement(ctx context.Context, stmts []tree.Statement, remaps []map[string]string) error {
+	if len(stmts) != len(remaps) {
+		return moerr.NewInternalError(ctx, "the count of remapdb policies is not equal to statements")
+	}
+	for i, stmt := range stmts {
+		remapDbInStmt(stmt, remaps[i])
+	}
+	return nil
 }
 
 func remapDbInStmt(stmt tree.Statement, remap map[string]string) {
@@ -70,6 +84,14 @@ func remapDbInStmt(stmt tree.Statement, remap map[string]string) {
 		remapDbInTableExprs(s.Tables, remap)
 		remapDbInTableExprs(s.TableRefs, remap)
 		remapDbInWhere(s.Where, remap)
+	case *tree.AnalyzeStmt:
+		for _, entry := range s.Entries {
+			if entry != nil {
+				remapTableName(entry.Table, remap)
+			}
+		}
+	case *tree.PrepareStmt:
+		remapDbInStmt(s.Stmt, remap)
 
 	// Table-level DDL: the target table/view/index is a table-level object, so a
 	// qualified <src>.t is remapped. CREATE/ALTER ... AS SELECT bodies are walked

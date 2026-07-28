@@ -126,7 +126,7 @@ func NewTestDisttaeEngine(
 	de.txnClient.Resume()
 
 	hakeeper := newTestHAKeeperClient()
-	colexec.NewServer(hakeeper)
+	colexec.NewServer("")
 
 	var engineOpts []disttae.EngineOptions
 	if de.insertEntryMaxCount != 0 {

@@ -16,7 +16,6 @@ package loopjoin
 
 import (
 	"bytes"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -25,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -155,9 +155,9 @@ func (loopJoin *LoopJoin) Call(proc *process.Process) (vm.CallResult, error) {
 }
 
 func (loopJoin *LoopJoin) build(proc *process.Process, analyzer process.Analyzer) (err error) {
-	start := time.Now()
-	defer analyzer.WaitStop(start)
-	loopJoin.ctr.mp, err = message.ReceiveJoinMap(loopJoin.JoinMapTag, false, 0, proc.GetMessageBoard(), proc.Ctx)
+	loopJoin.ctr.mp, err = process.MeasureWait(analyzer, resource.WaitOther, func() (*message.JoinMap, error) {
+		return message.ReceiveJoinMap(loopJoin.JoinMapTag, false, 0, proc.GetMessageBoard(), proc.Ctx)
+	})
 	return err
 }
 
@@ -302,7 +302,7 @@ func (ctr *container) probe(ap *LoopJoin, proc *process.Process, result *vm.Call
 					b, null := rs.GetValue(j)
 					if !null && b {
 						if ap.JoinType == plan.Node_SINGLE && matched {
-							return moerr.NewInternalError(proc.Ctx, "scalar subquery returns more than 1 row")
+							return moerr.NewErrSubqueryNo1Row(proc.Ctx)
 						}
 
 						matched = true
@@ -371,7 +371,7 @@ func (ctr *container) probe(ap *LoopJoin, proc *process.Process, result *vm.Call
 						}
 						rowCountIncrease++
 					} else {
-						return moerr.NewInternalError(proc.Ctx, "scalar subquery returns more than 1 row")
+						return moerr.NewErrSubqueryNo1Row(proc.Ctx)
 					}
 
 				case plan.Node_SEMI:

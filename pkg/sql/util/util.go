@@ -21,7 +21,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -45,8 +44,8 @@ func CopyBatch(bat *batch.Batch, proc *process.Process) (*batch.Batch, error) {
 	rbat := batch.NewWithSize(len(bat.Vecs))
 	rbat.Attrs = append(rbat.Attrs, bat.Attrs...)
 	for i, srcVec := range bat.Vecs {
-		vec := vector.NewVec(*srcVec.GetType())
-		if err := vector.GetUnionAllFunction(*srcVec.GetType(), proc.Mp())(vec, srcVec); err != nil {
+		vec, err := srcVec.CloneToFlatCompact(proc.Mp())
+		if err != nil {
 			rbat.Clean(proc.Mp())
 			return nil, err
 		}

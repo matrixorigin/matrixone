@@ -109,6 +109,14 @@ type MOCluster interface {
 	UpdateCN(metadata.CNService)
 }
 
+// AuthoritativeRefresher is an optional capability for callers that must know
+// whether a synchronous cluster snapshot refresh actually succeeded. The
+// legacy ForceRefresh API intentionally has no result and is unsuitable for
+// correctness decisions based on freshness.
+type AuthoritativeRefresher interface {
+	Refresh(context.Context) error
+}
+
 type ClusterClient interface {
 	GetClusterDetails(ctx context.Context) (logpb.ClusterDetails, error)
 }

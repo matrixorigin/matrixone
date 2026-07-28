@@ -250,6 +250,7 @@ func (s *JobStats) ResetTopWriteObjectDurations() {
 
 type Worker interface {
 	Submit(taskID string, lsn uint64, state int8) error
+	// Stop cancels running work and discards work that has not started.
 	Stop()
 	// RegisterSyncProtection registers a sync protection job for keepalive
 	RegisterSyncProtection(jobID string, ttlExpireTS int64)
@@ -262,18 +263,21 @@ type Worker interface {
 // FilterObjectWorker is the interface for filter object worker pool
 type FilterObjectWorker interface {
 	SubmitFilterObject(job Job) error
+	// Stop is cancel-and-drain, not graceful completion of queued jobs.
 	Stop()
 }
 
 // GetChunkWorker is the interface for get upstream chunk worker pool
 type GetChunkWorker interface {
 	SubmitGetChunk(job Job) error
+	// Stop is cancel-and-drain, not graceful completion of queued jobs.
 	Stop()
 }
 
 // WriteObjectWorker is the interface for write object worker pool
 type WriteObjectWorker interface {
 	SubmitWriteObject(job Job) error
+	// Stop is cancel-and-drain, not graceful completion of queued jobs.
 	Stop()
 }
 
@@ -306,19 +310,80 @@ type worker struct {
 	cancel                   context.CancelFunc
 	ctx                      context.Context
 	closed                   atomic.Bool
+	stopOnce                 sync.Once
+	admissions               workerAdmissionGate
 	filterObjectWorker       FilterObjectWorker
 	getChunkWorker           GetChunkWorker
 	writeObjectWorker        WriteObjectWorker
 
 	// Sync protection keepalive management
-	syncProtectionMu     sync.RWMutex
-	syncProtectionJobs   map[string]*syncProtectionEntry
-	syncProtectionTicker *time.Ticker
+	syncProtectionMu   sync.RWMutex
+	syncProtectionJobs map[string]*syncProtectionEntry
 }
 
 type TaskContext struct {
 	TaskID string
 	LSN    uint64
+}
+
+type workerAdmissionGate struct {
+	mu sync.RWMutex
+	wg sync.WaitGroup
+}
+
+// enter registers a sender before it can block. seal excludes new senders,
+// cancels blocked ones, and waits until no sender can arrive after draining.
+func (g *workerAdmissionGate) enter(closed *atomic.Bool) bool {
+	if closed.Load() {
+		return false
+	}
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	if closed.Load() {
+		return false
+	}
+	g.wg.Add(1)
+	return true
+}
+
+func (g *workerAdmissionGate) leave() {
+	g.wg.Done()
+}
+
+func (g *workerAdmissionGate) seal(cancel context.CancelFunc) {
+	g.mu.Lock()
+	cancel()
+	g.mu.Unlock()
+	g.wg.Wait()
+}
+
+func doneChan(ctx context.Context) <-chan struct{} {
+	if ctx == nil {
+		return nil
+	}
+	return ctx.Done()
+}
+
+func rejectJob(job Job, workerName string) error {
+	err := moerr.NewInternalErrorNoCtxf("%s is closed", workerName)
+	if job, ok := job.(TerminalJob); ok {
+		job.Fail(err)
+	}
+	return err
+}
+
+func validateTerminalJob(job Job, workerName string) error {
+	if _, ok := job.(TerminalJob); !ok {
+		return moerr.NewInternalErrorNoCtxf(
+			"%s requires a job with terminal failure completion", workerName,
+		)
+	}
+	return nil
+}
+
+func failAcceptedJob(job Job, err error) {
+	// Submit validates this contract before the job can enter a queue.
+	job.(TerminalJob).Fail(err)
 }
 
 func NewWorker(
@@ -341,10 +406,42 @@ func NewWorker(
 		syncProtectionJobs:       make(map[string]*syncProtectionEntry),
 	}
 	worker.ctx, worker.cancel = context.WithCancel(context.Background())
-	go worker.Run()
-	go worker.RunStatsPrinter()
-	go worker.RunSyncProtectionKeepAlive()
+	worker.start()
 	return worker
+}
+
+// start seals this worker generation before NewWorker publishes it. Every
+// goroutine that Stop owns is registered before any of them can outlive Stop.
+func (w *worker) start() {
+	workerThreads := GetPublicationWorkerThread()
+	w.wg.Add(workerThreads + 2)
+	for i := 0; i < workerThreads; i++ {
+		go func() {
+			defer w.wg.Done()
+			for {
+				select {
+				case <-w.ctx.Done():
+					return
+				case task := <-w.taskChan:
+					// Do not admit queued work after this generation is canceled.
+					select {
+					case <-w.ctx.Done():
+						return
+					default:
+					}
+					w.onItem(task)
+				}
+			}
+		}()
+	}
+	go func() {
+		defer w.wg.Done()
+		w.RunStatsPrinter()
+	}()
+	go func() {
+		defer w.wg.Done()
+		w.RunSyncProtectionKeepAlive()
+	}()
 }
 
 // RunStatsPrinter prints job stats every 10 seconds
@@ -409,32 +506,21 @@ func (w *worker) RunStatsPrinter() {
 	}
 }
 
-func (w *worker) Run() {
-	for i := 0; i < GetPublicationWorkerThread(); i++ {
-		w.wg.Add(1)
-		go func() {
-			defer w.wg.Done()
-			for {
-				select {
-				case <-w.ctx.Done():
-					return
-				case task := <-w.taskChan:
-					w.onItem(task)
-				}
-			}
-		}()
-	}
-}
-
 func (w *worker) Submit(taskID string, lsn uint64, state int8) error {
-	if w.closed.Load() {
-		return moerr.NewInternalError(context.Background(), "Publication-Worker is closed")
+	if !w.admissions.enter(&w.closed) {
+		return moerr.NewInternalErrorNoCtx("Publication-Worker is closed")
 	}
-	w.taskChan <- &TaskContext{
+	defer w.admissions.leave()
+	task := &TaskContext{
 		TaskID: taskID,
 		LSN:    lsn,
 	}
-	return nil
+	select {
+	case w.taskChan <- task:
+		return nil
+	case <-doneChan(w.ctx):
+		return moerr.NewInternalErrorNoCtx("Publication-Worker is closed")
+	}
 }
 
 func (w *worker) onItem(taskCtx *TaskContext) {
@@ -496,22 +582,35 @@ func (w *worker) onItem(taskCtx *TaskContext) {
 }
 
 func (w *worker) Stop() {
-	w.closed.Store(true)
-	w.cancel()
-	w.wg.Wait()
-	close(w.taskChan)
-	if w.filterObjectWorker != nil {
-		w.filterObjectWorker.Stop()
-	}
-	if w.getChunkWorker != nil {
-		w.getChunkWorker.Stop()
-	}
-	if w.writeObjectWorker != nil {
-		w.writeObjectWorker.Stop()
-	}
-	// Stop sync protection ticker
-	if w.syncProtectionTicker != nil {
-		w.syncProtectionTicker.Stop()
+	w.stopOnce.Do(func() {
+		w.closed.Store(true)
+		w.admissions.seal(w.cancel)
+		// Stop leaf pools before their callers. A running filter job can wait on
+		// get-chunk/write jobs, and a top-level iteration can wait on a filter job.
+		if w.getChunkWorker != nil {
+			w.getChunkWorker.Stop()
+		}
+		if w.writeObjectWorker != nil {
+			w.writeObjectWorker.Stop()
+		}
+		if w.filterObjectWorker != nil {
+			w.filterObjectWorker.Stop()
+		}
+		w.wg.Wait()
+		w.drainPending()
+		w.syncProtectionMu.Lock()
+		clear(w.syncProtectionJobs)
+		w.syncProtectionMu.Unlock()
+	})
+}
+
+func (w *worker) drainPending() {
+	for {
+		select {
+		case <-w.taskChan:
+		default:
+			return
+		}
 	}
 }
 
@@ -523,6 +622,9 @@ func (w *worker) Stop() {
 func (w *worker) RegisterSyncProtection(jobID string, ttlExpireTS int64) {
 	w.syncProtectionMu.Lock()
 	defer w.syncProtectionMu.Unlock()
+	if w.closed.Load() {
+		return
+	}
 
 	entry := &syncProtectionEntry{
 		jobID: jobID,
@@ -563,14 +665,14 @@ func (w *worker) GetSyncProtectionTTL(jobID string) int64 {
 // all registered sync protection jobs to prevent TTL expiration
 func (w *worker) RunSyncProtectionKeepAlive() {
 	renewInterval := GetSyncProtectionRenewInterval()
-	w.syncProtectionTicker = time.NewTicker(renewInterval)
-	defer w.syncProtectionTicker.Stop()
+	ticker := time.NewTicker(renewInterval)
+	defer ticker.Stop()
 
 	for {
 		select {
 		case <-w.ctx.Done():
 			return
-		case <-w.syncProtectionTicker.C:
+		case <-ticker.C:
 			w.renewAllSyncProtections()
 		}
 	}
@@ -684,11 +786,13 @@ func (w *worker) updateIterationState(ctx context.Context, taskID string, iterat
 // ============================================================================
 
 type filterObjectWorker struct {
-	jobChan chan Job
-	wg      sync.WaitGroup
-	cancel  context.CancelFunc
-	ctx     context.Context
-	closed  atomic.Bool
+	jobChan    chan Job
+	wg         sync.WaitGroup
+	cancel     context.CancelFunc
+	ctx        context.Context
+	closed     atomic.Bool
+	stopOnce   sync.Once
+	admissions workerAdmissionGate
 }
 
 // NewFilterObjectWorker creates a new filter object worker pool
@@ -697,13 +801,14 @@ func NewFilterObjectWorker() FilterObjectWorker {
 		jobChan: make(chan Job, 10000),
 	}
 	w.ctx, w.cancel = context.WithCancel(context.Background())
-	go w.Run()
+	w.start()
 	return w
 }
 
-func (w *filterObjectWorker) Run() {
-	for i := 0; i < GetFilterObjectWorkerThread(); i++ {
-		w.wg.Add(1)
+func (w *filterObjectWorker) start() {
+	workerThreads := GetFilterObjectWorkerThread()
+	w.wg.Add(workerThreads)
+	for i := 0; i < workerThreads; i++ {
 		go func() {
 			defer w.wg.Done()
 			for {
@@ -711,6 +816,13 @@ func (w *filterObjectWorker) Run() {
 				case <-w.ctx.Done():
 					return
 				case job := <-w.jobChan:
+					select {
+					case <-w.ctx.Done():
+						w.cancelPending()
+						failAcceptedJob(job, moerr.NewInternalErrorNoCtx("FilterObjectWorker is closed"))
+						return
+					default:
+					}
 					globalJobStats.IncrementFilterObjectRunning()
 					v2.CCPRFilterObjectQueueSizeGauge.Dec()
 					v2.CCPRRunningFilterObjectJobsGauge.Inc()
@@ -727,21 +839,48 @@ func (w *filterObjectWorker) Run() {
 	}
 }
 
+func (w *filterObjectWorker) cancelPending() {
+	globalJobStats.FilterObjectPending.Add(-1)
+	v2.CCPRFilterObjectQueueSizeGauge.Dec()
+}
+
 func (w *filterObjectWorker) SubmitFilterObject(job Job) error {
-	if w.closed.Load() {
-		return moerr.NewInternalError(context.Background(), "FilterObjectWorker is closed")
+	if !w.admissions.enter(&w.closed) {
+		return rejectJob(job, "FilterObjectWorker")
+	}
+	defer w.admissions.leave()
+	if job == nil {
+		return moerr.NewInternalErrorNoCtx("cannot submit a nil filter object job")
+	}
+	if err := validateTerminalJob(job, "FilterObjectWorker"); err != nil {
+		return err
 	}
 	globalJobStats.IncrementFilterObjectPending()
 	v2.CCPRFilterObjectQueueSizeGauge.Inc()
-	w.jobChan <- job
-	return nil
+	select {
+	case w.jobChan <- job:
+		return nil
+	case <-doneChan(w.ctx):
+		w.cancelPending()
+		return rejectJob(job, "FilterObjectWorker")
+	}
 }
 
 func (w *filterObjectWorker) Stop() {
-	w.closed.Store(true)
-	w.cancel()
-	w.wg.Wait()
-	close(w.jobChan)
+	w.stopOnce.Do(func() {
+		w.closed.Store(true)
+		w.admissions.seal(w.cancel)
+		w.wg.Wait()
+		for {
+			select {
+			case job := <-w.jobChan:
+				w.cancelPending()
+				failAcceptedJob(job, moerr.NewInternalErrorNoCtx("FilterObjectWorker is closed"))
+			default:
+				return
+			}
+		}
+	})
 }
 
 // ============================================================================
@@ -749,11 +888,13 @@ func (w *filterObjectWorker) Stop() {
 // ============================================================================
 
 type getChunkWorker struct {
-	jobChan chan Job
-	wg      sync.WaitGroup
-	cancel  context.CancelFunc
-	ctx     context.Context
-	closed  atomic.Bool
+	jobChan    chan Job
+	wg         sync.WaitGroup
+	cancel     context.CancelFunc
+	ctx        context.Context
+	closed     atomic.Bool
+	stopOnce   sync.Once
+	admissions workerAdmissionGate
 }
 
 // NewGetChunkWorker creates a new get chunk worker pool
@@ -762,14 +903,14 @@ func NewGetChunkWorker() GetChunkWorker {
 		jobChan: make(chan Job, 10000),
 	}
 	w.ctx, w.cancel = context.WithCancel(context.Background())
-	go w.Run()
+	w.start()
 	return w
 }
 
-func (w *getChunkWorker) Run() {
+func (w *getChunkWorker) start() {
 	workerThreadCount := GetGetChunkWorkerThread()
+	w.wg.Add(workerThreadCount)
 	for i := 0; i < workerThreadCount; i++ {
-		w.wg.Add(1)
 		go func() {
 			defer w.wg.Done()
 			for {
@@ -778,6 +919,13 @@ func (w *getChunkWorker) Run() {
 					return
 				case job := <-w.jobChan:
 					jobType := job.GetType()
+					select {
+					case <-w.ctx.Done():
+						w.cancelPending(jobType)
+						failAcceptedJob(job, moerr.NewInternalErrorNoCtx("GetChunkWorker is closed"))
+						return
+					default:
+					}
 					switch jobType {
 					case JobTypeGetMeta:
 						globalJobStats.IncrementGetMetaRunning()
@@ -806,9 +954,25 @@ func (w *getChunkWorker) Run() {
 	}
 }
 
+func (w *getChunkWorker) cancelPending(jobType int8) {
+	switch jobType {
+	case JobTypeGetMeta:
+		globalJobStats.GetMetaPending.Add(-1)
+	default:
+		globalJobStats.GetChunkPending.Add(-1)
+	}
+}
+
 func (w *getChunkWorker) SubmitGetChunk(job Job) error {
-	if w.closed.Load() {
-		return moerr.NewInternalError(context.Background(), "GetChunkWorker is closed")
+	if !w.admissions.enter(&w.closed) {
+		return rejectJob(job, "GetChunkWorker")
+	}
+	defer w.admissions.leave()
+	if job == nil {
+		return moerr.NewInternalErrorNoCtx("cannot submit a nil get chunk job")
+	}
+	if err := validateTerminalJob(job, "GetChunkWorker"); err != nil {
+		return err
 	}
 	jobType := job.GetType()
 	switch jobType {
@@ -817,15 +981,30 @@ func (w *getChunkWorker) SubmitGetChunk(job Job) error {
 	default:
 		globalJobStats.IncrementGetChunkPending()
 	}
-	w.jobChan <- job
-	return nil
+	select {
+	case w.jobChan <- job:
+		return nil
+	case <-doneChan(w.ctx):
+		w.cancelPending(jobType)
+		return rejectJob(job, "GetChunkWorker")
+	}
 }
 
 func (w *getChunkWorker) Stop() {
-	w.closed.Store(true)
-	w.cancel()
-	w.wg.Wait()
-	close(w.jobChan)
+	w.stopOnce.Do(func() {
+		w.closed.Store(true)
+		w.admissions.seal(w.cancel)
+		w.wg.Wait()
+		for {
+			select {
+			case job := <-w.jobChan:
+				w.cancelPending(job.GetType())
+				failAcceptedJob(job, moerr.NewInternalErrorNoCtx("GetChunkWorker is closed"))
+			default:
+				return
+			}
+		}
+	})
 }
 
 // ============================================================================
@@ -833,16 +1012,19 @@ func (w *getChunkWorker) Stop() {
 // ============================================================================
 
 type simpleJobWorker struct {
-	name             string
-	jobChan          chan Job
-	wg               sync.WaitGroup
-	cancel           context.CancelFunc
-	ctx              context.Context
-	closed           atomic.Bool
-	onPending        func()
-	onRunningStart   func()
-	onRunningFinish  func()
-	onRecordDuration func(job Job, duration time.Duration)
+	name              string
+	jobChan           chan Job
+	wg                sync.WaitGroup
+	cancel            context.CancelFunc
+	ctx               context.Context
+	closed            atomic.Bool
+	stopOnce          sync.Once
+	admissions        workerAdmissionGate
+	onPending         func()
+	onPendingCanceled func()
+	onRunningStart    func()
+	onRunningFinish   func()
+	onRecordDuration  func(job Job, duration time.Duration)
 }
 
 // newSimpleJobWorker creates a new simple job worker pool
@@ -850,26 +1032,28 @@ func newSimpleJobWorker(
 	name string,
 	threadCount int,
 	onPending func(),
+	onPendingCanceled func(),
 	onRunningStart func(),
 	onRunningFinish func(),
 	onRecordDuration func(job Job, duration time.Duration),
 ) *simpleJobWorker {
 	w := &simpleJobWorker{
-		name:             name,
-		jobChan:          make(chan Job, 10000),
-		onPending:        onPending,
-		onRunningStart:   onRunningStart,
-		onRunningFinish:  onRunningFinish,
-		onRecordDuration: onRecordDuration,
+		name:              name,
+		jobChan:           make(chan Job, 10000),
+		onPending:         onPending,
+		onPendingCanceled: onPendingCanceled,
+		onRunningStart:    onRunningStart,
+		onRunningFinish:   onRunningFinish,
+		onRecordDuration:  onRecordDuration,
 	}
 	w.ctx, w.cancel = context.WithCancel(context.Background())
-	go w.run(threadCount)
+	w.start(threadCount)
 	return w
 }
 
-func (w *simpleJobWorker) run(threadCount int) {
+func (w *simpleJobWorker) start(threadCount int) {
+	w.wg.Add(threadCount)
 	for i := 0; i < threadCount; i++ {
-		w.wg.Add(1)
 		go func() {
 			defer w.wg.Done()
 			for {
@@ -877,6 +1061,13 @@ func (w *simpleJobWorker) run(threadCount int) {
 				case <-w.ctx.Done():
 					return
 				case job := <-w.jobChan:
+					select {
+					case <-w.ctx.Done():
+						w.cancelPending()
+						failAcceptedJob(job, moerr.NewInternalErrorNoCtxf("%s is closed", w.name))
+						return
+					default:
+					}
 					w.onRunningStart()
 					startTime := time.Now()
 					job.Execute()
@@ -891,20 +1082,48 @@ func (w *simpleJobWorker) run(threadCount int) {
 	}
 }
 
+func (w *simpleJobWorker) cancelPending() {
+	if w.onPendingCanceled != nil {
+		w.onPendingCanceled()
+	}
+}
+
 func (w *simpleJobWorker) submit(job Job) error {
-	if w.closed.Load() {
-		return moerr.NewInternalErrorf(context.Background(), "%s is closed", w.name)
+	if !w.admissions.enter(&w.closed) {
+		return rejectJob(job, w.name)
+	}
+	defer w.admissions.leave()
+	if job == nil {
+		return moerr.NewInternalErrorf(context.Background(), "cannot submit a nil job to %s", w.name)
+	}
+	if err := validateTerminalJob(job, w.name); err != nil {
+		return err
 	}
 	w.onPending()
-	w.jobChan <- job
-	return nil
+	select {
+	case w.jobChan <- job:
+		return nil
+	case <-doneChan(w.ctx):
+		w.cancelPending()
+		return rejectJob(job, w.name)
+	}
 }
 
 func (w *simpleJobWorker) stop() {
-	w.closed.Store(true)
-	w.cancel()
-	w.wg.Wait()
-	close(w.jobChan)
+	w.stopOnce.Do(func() {
+		w.closed.Store(true)
+		w.admissions.seal(w.cancel)
+		w.wg.Wait()
+		for {
+			select {
+			case job := <-w.jobChan:
+				w.cancelPending()
+				failAcceptedJob(job, moerr.NewInternalErrorNoCtxf("%s is closed", w.name))
+			default:
+				return
+			}
+		}
+	})
 }
 
 // ============================================================================
@@ -924,6 +1143,10 @@ func NewWriteObjectWorker() WriteObjectWorker {
 			func() {
 				globalJobStats.IncrementWriteObjectPending()
 				v2.CCPRWriteObjectQueueSizeGauge.Inc()
+			},
+			func() {
+				globalJobStats.WriteObjectPending.Add(-1)
+				v2.CCPRWriteObjectQueueSizeGauge.Dec()
 			},
 			func() {
 				globalJobStats.IncrementWriteObjectRunning()

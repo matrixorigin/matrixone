@@ -22,10 +22,10 @@ var (
 			Namespace: "mo",
 			Subsystem: "proxy",
 			Name:      "connect_counter",
-			Help:      "Count of proxy connect to backend",
+			Help:      "Total number of proxy connection events.",
 		}, []string{"type"})
 	ProxyConnectAcceptedCounter   = proxyConnectCounter.WithLabelValues("accepted")
-	ProxyConnectCurrentCounter    = proxyConnectCounter.WithLabelValues("current")
+	ProxyConnectClosedCounter     = proxyConnectCounter.WithLabelValues("closed")
 	ProxyConnectSuccessCounter    = proxyConnectCounter.WithLabelValues("success")
 	ProxyConnectRouteFailCounter  = proxyConnectCounter.WithLabelValues("route-fail")
 	ProxyConnectCommonFailCounter = proxyConnectCounter.WithLabelValues("common-fail")
@@ -44,6 +44,15 @@ var (
 	// ProxyConnectCNAllBusyCounter counts route attempts that fast-failed
 	// because every candidate CN server was temporarily unhealthy.
 	ProxyConnectCNAllBusyCounter = proxyConnectCounter.WithLabelValues("cn-all-busy")
+
+	// Current connections can decrease, so keep this out of the Counter family.
+	ProxyConnectionsCurrentGauge = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "mo",
+			Subsystem: "proxy",
+			Name:      "connections_current",
+			Help:      "Current number of active proxy client connections.",
+		})
 
 	proxyDisconnectCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{

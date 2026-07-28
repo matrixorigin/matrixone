@@ -91,6 +91,10 @@ var (
 	TxnLockTotalCounter       = txnLockCounter.WithLabelValues("total")
 	TxnLocalLockTotalCounter  = txnLockCounter.WithLabelValues("local")
 	TxnRemoteLockTotalCounter = txnLockCounter.WithLabelValues("remote")
+	// TxnLockWaitTimeoutCeilingClampedCounter counts positive caller budgets
+	// reduced by the lockservice safety ceiling; zero-value injection is normal
+	// fallback behavior and is intentionally excluded.
+	TxnLockWaitTimeoutCeilingClampedCounter = txnLockCounter.WithLabelValues("wait-timeout-ceiling-clamped")
 
 	TxnDeadlockDetectorEnqueueCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
@@ -115,6 +119,22 @@ var (
 			Name:      "remote_lock_owner_timeout_total",
 			Help:      "Total number of remote lock owner-side wait timeouts.",
 		}, []string{"granularity", "mode"})
+
+	TxnLockActiveTxnRecoveryCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "lockservice",
+			Name:      "active_txn_recovery_total",
+			Help:      "Total number of active transaction recovery events.",
+		}, []string{"result"})
+
+	TxnLockRPCQueueRejectCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "lockservice",
+			Name:      "rpc_queue_rejected_total",
+			Help:      "Total number of lockservice RPC requests rejected before worker admission.",
+		}, []string{"reason"})
 
 	txnPKChangeCheckCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{

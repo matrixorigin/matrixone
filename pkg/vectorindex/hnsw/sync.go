@@ -381,8 +381,16 @@ func (s *HnswSync[T]) insertAllInParallel(sqlproc *sqlexec.SqlProcess, maxcap ui
 					return
 				}
 
-				// Len counter already incremented.  Just add to last model
-				last.AddWithoutIncr(row.PKey, row.Vec)
+				// Len counter already incremented in getLastModelAndIncrForSync. Do the
+				// physical add. If it fails (e.g. usearch rejects a duplicate key), roll back
+				// the reserved Len slot so the logical Len does not diverge from the physical
+				// index size, and propagate the error instead of dropping it — otherwise the
+				// sync reports success on a partially-applied batch (#25629).
+				if err := last.AddWithoutIncr(row.PKey, row.Vec); err != nil {
+					last.Len.Add(-1)
+					err_chan <- err
+					return
+				}
 			}
 		}(i)
 	}

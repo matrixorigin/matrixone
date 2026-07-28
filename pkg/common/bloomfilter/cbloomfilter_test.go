@@ -684,3 +684,227 @@ func TestCBloomFilter_Merge(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "error code: 1")
 }
+
+// TestCBloomFilterConstVector covers #25621: constant vectors must test/add the single physical
+// value and broadcast the result to all logical rows; const-null must return all-zero and never
+// panic. Pre-fix: non-null constants returned [1,0,0] (false negatives) and const-null panicked.
+func TestCBloomFilterConstVector(t *testing.T) {
+	mp := mpool.MustNewZero()
+	int64Typ := types.New(types.T_int64, 0, 0)
+	varTyp := types.New(types.T_varchar, 64, 0)
+
+	// TestVector, also capturing per-row isNull via the callback.
+	testVec := func(bf *CBloomFilter, v *vector.Vector) (res []uint8, nulls []bool) {
+		nulls = make([]bool, v.Length())
+		res = bf.TestVector(v, func(exist bool, isNull bool, row int) { nulls[row] = isNull })
+		return
+	}
+
+	t.Run("const_int64_nonnull", func(t *testing.T) {
+		bf := NewCBloomFilter(1000, 3)
+		defer bf.Free()
+		v, err := vector.NewConstFixed[int64](int64Typ, 42, 3, mp)
+		require.NoError(t, err)
+		defer v.Free(mp)
+
+		bf.AddVector(v)
+		res, nulls := testVec(bf, v)
+		require.Equal(t, []uint8{1, 1, 1}, res)
+		require.Equal(t, []bool{false, false, false}, nulls)
+	})
+
+	t.Run("const_varchar_nonnull", func(t *testing.T) {
+		bf := NewCBloomFilter(1000, 3)
+		defer bf.Free()
+		v, err := vector.NewConstBytes(varTyp, []byte("key"), 3, mp)
+		require.NoError(t, err)
+		defer v.Free(mp)
+
+		bf.AddVector(v)
+		res, nulls := testVec(bf, v)
+		require.Equal(t, []uint8{1, 1, 1}, res)
+		require.Equal(t, []bool{false, false, false}, nulls)
+	})
+
+	t.Run("const_null_int64", func(t *testing.T) {
+		bf := NewCBloomFilter(1000, 3)
+		defer bf.Free()
+		v := vector.NewConstNull(int64Typ, 3, mp)
+		defer v.Free(mp)
+
+		require.NotPanics(t, func() { bf.AddVector(v) })
+		var res []uint8
+		var nulls []bool
+		require.NotPanics(t, func() { res, nulls = testVec(bf, v) })
+		require.Equal(t, []uint8{0, 0, 0}, res)
+		require.Equal(t, []bool{true, true, true}, nulls)
+	})
+
+	t.Run("const_null_varchar", func(t *testing.T) {
+		bf := NewCBloomFilter(1000, 3)
+		defer bf.Free()
+		v := vector.NewConstNull(varTyp, 3, mp)
+		defer v.Free(mp)
+
+		require.NotPanics(t, func() { bf.AddVector(v) })
+		var res []uint8
+		var nulls []bool
+		require.NotPanics(t, func() { res, nulls = testVec(bf, v) })
+		require.Equal(t, []uint8{0, 0, 0}, res)
+		require.Equal(t, []bool{true, true, true}, nulls)
+	})
+
+	// testAndAddVec captures the per-row "exists" state that TestAndAddVector reports.
+	testAndAddVec := func(bf *CBloomFilter, v *vector.Vector) []bool {
+		out := make([]bool, v.Length())
+		bf.TestAndAddVector(v, func(exist bool, isNull bool, row int) { out[row] = exist })
+		return out
+	}
+
+	// TestAndAdd is STATEFUL and must preserve logical per-row semantics for a
+	// constant: row 0 inserts the value, so rows 1..n-1 observe it (no false
+	// negatives). Pre-fix this broadcast row 0's pre-insert result to every row
+	// ([false,false,false]), which is wrong — and made constant and flat
+	// representations of the same rows observably different.
+	t.Run("testAndAdd_const_int64", func(t *testing.T) {
+		bf := NewCBloomFilter(1000, 3)
+		defer bf.Free()
+		v, err := vector.NewConstFixed[int64](int64Typ, 99, 3, mp)
+		require.NoError(t, err)
+		defer v.Free(mp)
+
+		require.Equal(t, []bool{false, true, true}, testAndAddVec(bf, v))
+
+		// now present in every logical row (no false negatives).
+		res, _ := testVec(bf, v)
+		require.Equal(t, []uint8{1, 1, 1}, res)
+	})
+
+	// Equivalence: a constant vector and a flat vector holding the same repeated
+	// value must report identical TestAndAdd per-row states.
+	t.Run("testAndAdd_const_eq_flat_int64", func(t *testing.T) {
+		constV, err := vector.NewConstFixed[int64](int64Typ, 99, 3, mp)
+		require.NoError(t, err)
+		defer constV.Free(mp)
+
+		flatV := vector.NewVec(int64Typ)
+		defer flatV.Free(mp)
+		for i := 0; i < 3; i++ {
+			require.NoError(t, vector.AppendFixed[int64](flatV, 99, false, mp))
+		}
+
+		bfConst := NewCBloomFilter(1000, 3)
+		defer bfConst.Free()
+		bfFlat := NewCBloomFilter(1000, 3)
+		defer bfFlat.Free()
+
+		flatStates := testAndAddVec(bfFlat, flatV)
+		constStates := testAndAddVec(bfConst, constV)
+		require.Equal(t, []bool{false, true, true}, flatStates)
+		require.Equal(t, flatStates, constStates)
+	})
+
+	t.Run("testAndAdd_const_eq_flat_varchar", func(t *testing.T) {
+		constV, err := vector.NewConstBytes(varTyp, []byte("key"), 3, mp)
+		require.NoError(t, err)
+		defer constV.Free(mp)
+
+		flatV := vector.NewVec(varTyp)
+		defer flatV.Free(mp)
+		for i := 0; i < 3; i++ {
+			require.NoError(t, vector.AppendBytes(flatV, []byte("key"), false, mp))
+		}
+
+		bfConst := NewCBloomFilter(1000, 3)
+		defer bfConst.Free()
+		bfFlat := NewCBloomFilter(1000, 3)
+		defer bfFlat.Free()
+
+		flatStates := testAndAddVec(bfFlat, flatV)
+		constStates := testAndAddVec(bfConst, constV)
+		require.Equal(t, []bool{false, true, true}, flatStates)
+		require.Equal(t, flatStates, constStates)
+	})
+
+	// A non-null constant shrunk to logical length 0 (public SetLength(0) on a reused/
+	// shrunk vector) still retains its physical value, but has no rows: every helper must
+	// stay a no-op — no callback, no filter mutation — exactly like the original
+	// `if v.Length() == 0 { return }` contract. Regression: previously vecPhysCount returned
+	// 1 for it, so TestAndAdd/Add inserted the retained value and a later real row of that
+	// value was wrongly reported present.
+	zeroLenConst := func(t *testing.T, mk func() (*vector.Vector, error)) *vector.Vector {
+		t.Helper()
+		v, err := mk()
+		require.NoError(t, err)
+		v.SetLength(0)
+		require.Equal(t, 0, v.Length())
+		require.True(t, v.IsConst())
+		require.False(t, v.IsConstNull())
+		return v
+	}
+
+	assertZeroLenNoop := func(t *testing.T, empty *vector.Vector, realOneRow *vector.Vector) {
+		t.Helper()
+		bf := NewCBloomFilter(1000, 3)
+		defer bf.Free()
+
+		// Add / TestAndAdd / Test on the zero-length constant must never fire the callback
+		// or return a row, and must not mutate the filter.
+		called := false
+		cb := func(bool, bool, int) { called = true }
+		require.NotPanics(t, func() { bf.AddVector(empty) })
+		require.NotPanics(t, func() { bf.TestAndAddVector(empty, cb) })
+		require.NotPanics(t, func() { require.Empty(t, bf.TestVector(empty, cb)) })
+		require.False(t, called, "zero-length constant must not invoke the callback")
+
+		// The empty-const calls must NOT have inserted the retained value: a later real
+		// one-row vector of that same value is reported absent (present=false).
+		first := make([]bool, 1)
+		bf.TestAndAddVector(realOneRow, func(exist bool, _ bool, row int) { first[row] = exist })
+		require.Equal(t, []bool{false}, first, "real row must be absent — the zero-length const must not have inserted it")
+	}
+
+	t.Run("zerolen_const_int64_noop", func(t *testing.T) {
+		empty := zeroLenConst(t, func() (*vector.Vector, error) {
+			return vector.NewConstFixed[int64](int64Typ, 99, 1, mp)
+		})
+		defer empty.Free(mp)
+		real99 := vector.NewVec(int64Typ)
+		defer real99.Free(mp)
+		require.NoError(t, vector.AppendFixed[int64](real99, 99, false, mp))
+		assertZeroLenNoop(t, empty, real99)
+	})
+
+	t.Run("zerolen_const_varchar_noop", func(t *testing.T) {
+		empty := zeroLenConst(t, func() (*vector.Vector, error) {
+			return vector.NewConstBytes(varTyp, []byte("key"), 1, mp)
+		})
+		defer empty.Free(mp)
+		realKey := vector.NewVec(varTyp)
+		defer realKey.Free(mp)
+		require.NoError(t, vector.AppendBytes(realKey, []byte("key"), false, mp))
+		assertZeroLenNoop(t, empty, realKey)
+	})
+}
+
+// TestCBloomFilterEmptyFixedVector covers #25618: the fixed-width vector APIs (Test/Add/
+// TestAndAdd) must not panic on a zero-length vector — they used to unconditionally index
+// &fixedData[0]/&results[0]. This is fixed by the same nitem==0 guards as the constant-vector
+// work (#25621): an empty vector has physical count 0. TestVector returns empty; AddVector and
+// TestAndAddVector are no-ops that never invoke the callback.
+func TestCBloomFilterEmptyFixedVector(t *testing.T) {
+	bf := NewCBloomFilterWithProbability(1, 0.01)
+	defer bf.Free()
+
+	// fixed-width (the issue's repro) plus variable-length, for completeness.
+	for _, typ := range []types.Type{types.T_int64.ToType(), types.T_varchar.ToType()} {
+		vec := vector.NewVec(typ)
+		called := false
+		cb := func(bool, bool, int) { called = true }
+
+		require.NotPanics(t, func() { require.Empty(t, bf.TestVector(vec, cb)) })
+		require.NotPanics(t, func() { bf.AddVector(vec) })
+		require.NotPanics(t, func() { bf.TestAndAddVector(vec, cb) })
+		require.False(t, called, "callback must not fire for an empty vector (%s)", typ.String())
+	}
+}

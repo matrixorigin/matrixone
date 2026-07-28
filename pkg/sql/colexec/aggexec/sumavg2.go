@@ -125,7 +125,124 @@ func (exec *sumAvgExec[T, A]) Fill(groupIndex int, row int, vectors []*vector.Ve
 }
 
 func (exec *sumAvgExec[T, A]) BulkFill(groupIndex int, vectors []*vector.Vector) error {
-	return exec.BatchFill(0, slices.Repeat([]uint64{uint64(groupIndex + 1)}, vectors[0].Length()), vectors)
+	if exec.IsDistinct() {
+		return exec.BatchFill(0, slices.Repeat([]uint64{uint64(groupIndex + 1)}, vectors[0].Length()), vectors)
+	}
+	if exec.isSum {
+		return exec.bulkFillSumSingleGroup(groupIndex, vectors)
+	}
+	return exec.bulkFillAvgSingleGroup(groupIndex, vectors)
+}
+
+func (exec *sumAvgExec[T, A]) bulkFillSumSingleGroup(groupIndex int, vectors []*vector.Vector) error {
+	vec := vectors[0]
+	n := vec.Length()
+	if n == 0 {
+		return nil
+	}
+
+	vals := vector.MustFixedColNoTypeCheck[A](vec)
+	isConst := vec.IsConst()
+	hasNull := vec.HasNull()
+
+	g := uint64(groupIndex)
+	x := int(g >> aggBatchSizeShift)
+	y := g & aggBatchSizeMask
+	sums := chunkArr[T](exec.state[x].vecs[0])
+	sumVec := exec.state[x].vecs[0]
+
+	var localSum T
+	filled := false
+	for i := 0; i < n; i++ {
+		row := i
+		if isConst {
+			row = 0
+		}
+		if hasNull && vec.IsNull(uint64(row)) {
+			continue
+		}
+
+		val := T(vals[row])
+		if !filled {
+			localSum = val
+			filled = true
+			continue
+		}
+		result := localSum + val
+		if err := exec.ofCheck(localSum, val, result); err != nil {
+			return err
+		}
+		localSum = result
+	}
+	if !filled {
+		return nil
+	}
+
+	old := sums[y]
+	result := old + localSum
+	if err := exec.ofCheck(old, localSum, result); err != nil {
+		return err
+	}
+	sums[y] = result
+	if sumVec.IsNull(y) {
+		sumVec.UnsetNull(y)
+	}
+	return nil
+}
+
+func (exec *sumAvgExec[T, A]) bulkFillAvgSingleGroup(groupIndex int, vectors []*vector.Vector) error {
+	vec := vectors[0]
+	n := vec.Length()
+	if n == 0 {
+		return nil
+	}
+
+	vals := vector.MustFixedColNoTypeCheck[A](vec)
+	isConst := vec.IsConst()
+	hasNull := vec.HasNull()
+
+	g := uint64(groupIndex)
+	x := int(g >> aggBatchSizeShift)
+	y := g & aggBatchSizeMask
+	sums := chunkArr[T](exec.state[x].vecs[0])
+	cnts := vector.MustFixedColNoTypeCheck[int64](exec.state[x].vecs[1])
+
+	var localSum T
+	var localCnt int64
+	for i := 0; i < n; i++ {
+		row := i
+		if isConst {
+			row = 0
+		}
+		if hasNull && vec.IsNull(uint64(row)) {
+			continue
+		}
+
+		val := T(vals[row])
+		if localCnt == 0 {
+			localSum = val
+			localCnt = 1
+			continue
+		}
+		result := localSum + val
+		if err := exec.ofCheck(localSum, val, result); err != nil {
+			return err
+		}
+		localSum = result
+		localCnt++
+	}
+	if localCnt == 0 {
+		return nil
+	}
+
+	old := sums[y]
+	result := old + localSum
+	if err := exec.ofCheck(old, localSum, result); err != nil {
+		return err
+	}
+	sums[y] = result
+	cnts[y] += localCnt
+	return nil
 }
 
 func (exec *sumAvgExec[T, A]) BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
@@ -576,7 +693,130 @@ func (exec *sumAvgDecExec[A, S]) Fill(groupIndex int, row int, vectors []*vector
 }
 
 func (exec *sumAvgDecExec[A, S]) BulkFill(groupIndex int, vectors []*vector.Vector) error {
-	return exec.BatchFill(0, slices.Repeat([]uint64{uint64(groupIndex + 1)}, vectors[0].Length()), vectors)
+	if exec.IsDistinct() {
+		return exec.BatchFill(0, slices.Repeat([]uint64{uint64(groupIndex + 1)}, vectors[0].Length()), vectors)
+	}
+	if exec.isSum {
+		return exec.bulkFillSumSingleGroup(groupIndex, vectors)
+	}
+	return exec.bulkFillAvgSingleGroup(groupIndex, vectors)
+}
+
+func (exec *sumAvgDecExec[A, S]) bulkFillSumSingleGroup(groupIndex int, vectors []*vector.Vector) error {
+	vec := vectors[0]
+	n := vec.Length()
+	if n == 0 {
+		return nil
+	}
+
+	argScale := exec.aggInfo.argTypes[0].Scale
+	args := vector.MustFixedColNoTypeCheck[A](vec)
+	isConst := vec.IsConst()
+	hasNull := vec.HasNull()
+
+	g := uint64(groupIndex)
+	x := int(g >> aggBatchSizeShift)
+	y := g & aggBatchSizeMask
+	sums := chunkArr[S](exec.state[x].vecs[0])
+	sumVec := exec.state[x].vecs[0]
+
+	var localSum S
+	filled := false
+	for i := 0; i < n; i++ {
+		row := i
+		if isConst {
+			row = 0
+		}
+		if hasNull && vec.IsNull(uint64(row)) {
+			continue
+		}
+
+		val := decimalStateFromArg[A, S](args[row], argScale)
+		if !filled {
+			localSum = val
+			filled = true
+			continue
+		}
+		if exec.localAddSafe {
+			localSum = decimalStateAddUnchecked(localSum, val)
+		} else {
+			var err error
+			if localSum, err = decimalStateAdd(localSum, val); err != nil {
+				return err
+			}
+		}
+	}
+	if !filled {
+		return nil
+	}
+
+	if sumVec.IsNull(y) {
+		sumVec.UnsetNull(y)
+		sums[y] = localSum
+		return nil
+	}
+	var err error
+	if sums[y], err = decimalStateAdd(sums[y], localSum); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (exec *sumAvgDecExec[A, S]) bulkFillAvgSingleGroup(groupIndex int, vectors []*vector.Vector) error {
+	vec := vectors[0]
+	n := vec.Length()
+	if n == 0 {
+		return nil
+	}
+
+	argScale := exec.aggInfo.argTypes[0].Scale
+	args := vector.MustFixedColNoTypeCheck[A](vec)
+	isConst := vec.IsConst()
+	hasNull := vec.HasNull()
+
+	g := uint64(groupIndex)
+	x := int(g >> aggBatchSizeShift)
+	y := g & aggBatchSizeMask
+	sums := chunkArr[S](exec.state[x].vecs[0])
+	cnts := vector.MustFixedColNoTypeCheck[int64](exec.state[x].vecs[1])
+
+	var localSum S
+	var localCnt int64
+	for i := 0; i < n; i++ {
+		row := i
+		if isConst {
+			row = 0
+		}
+		if hasNull && vec.IsNull(uint64(row)) {
+			continue
+		}
+
+		val := decimalStateFromArg[A, S](args[row], argScale)
+		if localCnt == 0 {
+			localSum = val
+			localCnt = 1
+			continue
+		}
+		if exec.localAddSafe {
+			localSum = decimalStateAddUnchecked(localSum, val)
+		} else {
+			var err error
+			if localSum, err = decimalStateAdd(localSum, val); err != nil {
+				return err
+			}
+		}
+		localCnt++
+	}
+	if localCnt == 0 {
+		return nil
+	}
+
+	var err error
+	if sums[y], err = decimalStateAdd(sums[y], localSum); err != nil {
+		return err
+	}
+	cnts[y] += localCnt
+	return nil
 }
 
 func (exec *sumAvgDecExec[A, S]) BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error {

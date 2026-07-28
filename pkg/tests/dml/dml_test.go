@@ -183,6 +183,13 @@ func TestDataBranchDiffAsFile(t *testing.T) {
 		})
 }
 
+func dataBranchScaleRows(full, short int) int {
+	if testing.Short() {
+		return short
+	}
+	return full
+}
+
 func TestCloneCommitFailureRollbackKeepsSourceFiles(t *testing.T) {
 	embed.RunBaseClusterTests(
 		func(c embed.Cluster) {
@@ -436,6 +443,8 @@ func runLargeCompositeDiff(t *testing.T, parentCtx context.Context, db *sql.DB) 
 	branch := "composite_branch"
 	diffDir := t.TempDir()
 	diffLiteral := strings.ReplaceAll(diffDir, "'", "''")
+	baseRows := dataBranchScaleRows(10000, 2000)
+	insertRows := dataBranchScaleRows(800, 200)
 
 	execSQLDB(t, ctx, db, fmt.Sprintf("create database `%s`", dbName))
 	defer func() {
@@ -466,7 +475,7 @@ select
 	g.result * 0.001 as ratio,
 	concat('seed-', g.result %% 200) as memo,
 	date_add('2024-01-01 00:00:00', interval g.result second) as created_at
-from generate_series(1, 10000) as g`, base)
+from generate_series(1, %d) as g`, base, baseRows)
 	execSQLDB(t, ctx, db, baseInsert)
 
 	execSQLDB(t, ctx, db, fmt.Sprintf("data branch create table %s from %s", branch, base))
@@ -481,7 +490,7 @@ select
 	g.result * 0.002 as ratio,
 	concat('new-', g.result %% 500) as memo,
 	date_add('2024-02-01 00:00:00', interval g.result second) as created_at
-from generate_series(10001, 10800) as g`, branch)
+from generate_series(%d, %d) as g`, branch, baseRows+1, baseRows+insertRows)
 	execSQLDB(t, ctx, db, newInserts)
 
 	execSQLDB(t, ctx, db, fmt.Sprintf(
@@ -569,6 +578,7 @@ func runCSVLoadSimple(t *testing.T, parentCtx context.Context, db *sql.DB) {
 	target := "csv_massive_target"
 	diffDir := t.TempDir()
 	diffLiteral := strings.ReplaceAll(diffDir, "'", "''")
+	rowCount := dataBranchScaleRows(1000*100, int(objectio.BlockMaxRows)*2)
 
 	execSQLDB(t, ctx, db, fmt.Sprintf("create database `%s`", dbName))
 	defer func() {
@@ -578,7 +588,7 @@ func runCSVLoadSimple(t *testing.T, parentCtx context.Context, db *sql.DB) {
 	execSQLDB(t, ctx, db, fmt.Sprintf("use `%s`", dbName))
 	execSQLDB(t, ctx, db, fmt.Sprintf("create table %s (a int primary key, b int)", base))
 	execSQLDB(t, ctx, db, fmt.Sprintf("create table %s like %s", target, base))
-	execSQLDB(t, ctx, db, fmt.Sprintf("insert into %s select *, * from generate_series(1, %d) g", target, 1000*100))
+	execSQLDB(t, ctx, db, fmt.Sprintf("insert into %s select *, * from generate_series(1, %d) g", target, rowCount))
 
 	diffStmt := fmt.Sprintf("data branch diff %s against %s output file '%s'", target, base, diffLiteral)
 	diffPath := execDiffAndFetchFile(t, ctx, db, diffStmt)
@@ -761,6 +771,7 @@ func runDiffOutputLimitLargeBase(t *testing.T, parentCtx context.Context, db *sq
 	dbName := testutils.GetDatabaseName(t)
 	base := "limit_large_t1"
 	branch := "limit_large_t2"
+	rowCount := dataBranchScaleRows(8192*100, 8192*8)
 
 	execSQLDB(t, ctx, db, fmt.Sprintf("create database `%s`", dbName))
 	defer func() {
@@ -770,7 +781,7 @@ func runDiffOutputLimitLargeBase(t *testing.T, parentCtx context.Context, db *sq
 	execSQLDB(t, ctx, db, fmt.Sprintf("use `%s`", dbName))
 
 	execSQLDB(t, ctx, db, fmt.Sprintf("create table %s (a int primary key, b int, c time)", base))
-	execSQLDB(t, ctx, db, fmt.Sprintf("insert into %s select *, *, '12:34:56' from generate_series(1, 8192*100)g", base))
+	execSQLDB(t, ctx, db, fmt.Sprintf("insert into %s select *, *, '12:34:56' from generate_series(1, %d)g", base, rowCount))
 
 	execSQLDB(t, ctx, db, fmt.Sprintf("data branch create table %s from %s", branch, base))
 

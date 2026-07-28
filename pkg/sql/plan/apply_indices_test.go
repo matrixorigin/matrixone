@@ -1578,7 +1578,7 @@ func TestApplyIndicesForJoinsSkipsIrregularIndexes(t *testing.T) {
 	require.Len(t, builder.qry.Nodes, 3)
 }
 
-func TestFindMatchFullTextIndexRequiresScanBindingAndLiteralPattern(t *testing.T) {
+func TestFindMatchFullTextIndexRequiresScanBindingAndConstantMode(t *testing.T) {
 	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
 	ftDef := makeFullTextJoinTestTableDef("ft", true)
 	ftTag := builder.genNewBindTag()
@@ -1605,7 +1605,15 @@ func TestFindMatchFullTextIndexRequiresScanBindingAndLiteralPattern(t *testing.T
 		Typ:  makePlan2Type(&textTyp),
 		Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}},
 	}
-	require.Nil(t, builder.findMatchFullTextIndex(dynamicPatternExpr.GetF(), scan))
+	require.NotNil(t, builder.findMatchFullTextIndex(dynamicPatternExpr.GetF(), scan))
+
+	dynamicModeExpr := makeFullTextMatchExpr("hello", 0, ftDef, ftTag, []int32{2, 3})
+	int64Typ := types.T_int64.ToType()
+	dynamicModeExpr.GetF().Args[1] = &planpb.Expr{
+		Typ:  makePlan2Type(&int64Typ),
+		Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 1}},
+	}
+	require.Nil(t, builder.findMatchFullTextIndex(dynamicModeExpr.GetF(), scan))
 }
 
 func buildFullTextJoinRewriteTestPlan(t *testing.T, leftFullText, rightFullText, leftExtraFilter bool) (*QueryBuilder, int32, int32, int32) {

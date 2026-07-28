@@ -17,6 +17,7 @@ package hnsw
 import (
 	"context"
 	"fmt"
+	"math"
 	"sync"
 	"sync/atomic"
 
@@ -104,13 +105,19 @@ func (s *HnswSearch[T]) Search(sqlproc *sqlexec.SqlProcess, anyquery any, rt vec
 			return nil, nil, err
 		}
 	}
-	indexLimits, limit, heapCapacity := boundedHnswSearchLimits(indexCounts, limit)
+	indexLimits, limit := boundedHnswSearchLimits(indexCounts, limit)
 	if limit == 0 {
 		return []int64{}, []float64{}, nil
 	}
 
-	// search
-	heap := vectorindex.NewSearchResultSafeHeap(heapCapacity)
+	// search. The merge heap retains only the global best `limit` candidates, so peak
+	// memory is O(limit) rather than O(shard_count * limit) (#25637). Clamp for the int
+	// conversion; a KNN LIMIT beyond MaxInt is absurd and would exhaust memory regardless.
+	hlimit := limit
+	if hlimit > uint(math.MaxInt) {
+		hlimit = uint(math.MaxInt)
+	}
+	heap := vectorindex.NewSearchResultSafeHeap(int(hlimit))
 
 	nthread := int(vectorindex.GetConcurrency(0))
 	if nthread > len(s.Indexes) {
@@ -142,19 +149,21 @@ func (s *HnswSearch[T]) Search(sqlproc *sqlexec.SqlProcess, anyquery any, rt vec
 		return nil, nil, err
 	}
 
+	// The heap is already bounded to `limit`, so it holds at most `limit` (the global best)
+	// results. It is a max-heap: Pop returns the worst (largest distance) first, so fill the
+	// buffers back-to-front to produce ascending (nearest-first) order.
 	n := heap.Len()
-	resultCount := min(limit, uint(n))
-	reskeys := make([]int64, 0, int(resultCount))
-	resdistances := make([]float64, 0, int(resultCount))
-	for i := 0; i < int(resultCount); i++ {
+	reskeys := make([]int64, n)
+	resdistances := make([]float64, n)
+	for i := n - 1; i >= 0; i-- {
 		srif := heap.Pop()
 		sr, ok := srif.(*vectorindex.SearchResult)
 		if !ok {
 			return nil, nil, moerr.NewInternalError(sqlproc.GetContext(), "heap return key is not int64")
 		}
-		reskeys = append(reskeys, sr.Id)
+		reskeys[i] = sr.Id
 		sr.Distance = metric.DistanceTransformHnsw(sr.Distance, metric.DistFuncNameToMetricType[rt.OrigFuncName], s.Idxcfg.Usearch.Metric)
-		resdistances = append(resdistances, sr.Distance)
+		resdistances[i] = sr.Distance
 	}
 
 	return reskeys, resdistances, nil
@@ -162,11 +171,11 @@ func (s *HnswSearch[T]) Search(sqlproc *sqlexec.SqlProcess, anyquery any, rt vec
 
 // boundedHnswSearchLimits prevents a very large LIMIT from being multiplied by
 // the number of index files. Each file can return at most its own cardinality,
-// and the final result cannot contain more rows than all files combined.
-func boundedHnswSearchLimits(indexCounts []uint, requested uint) ([]uint, uint, int) {
-	const maxHeapPreallocate = uint(1 << 20)
+// and the final result cannot contain more rows than all files combined. The returned
+// limit is also the bound on the merge heap (it retains only the global best `limit`).
+func boundedHnswSearchLimits(indexCounts []uint, requested uint) ([]uint, uint) {
 	perIndex := make([]uint, len(indexCounts))
-	var total, capacity uint
+	var total uint
 	for i, count := range indexCounts {
 		perIndex[i] = min(requested, count)
 		if total > ^uint(0)-count {
@@ -174,13 +183,8 @@ func boundedHnswSearchLimits(indexCounts []uint, requested uint) ([]uint, uint, 
 		} else {
 			total += count
 		}
-		if perIndex[i] >= maxHeapPreallocate || capacity > maxHeapPreallocate-perIndex[i] {
-			capacity = maxHeapPreallocate
-		} else {
-			capacity += perIndex[i]
-		}
 	}
-	return perIndex, min(requested, total), int(capacity)
+	return perIndex, min(requested, total)
 }
 
 func (s *HnswSearch[T]) Contains(key int64) (bool, error) {

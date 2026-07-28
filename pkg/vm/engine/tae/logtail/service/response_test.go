@@ -21,6 +21,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestValidateRPCMaxMessageSize(t *testing.T) {
+	require.Error(t, ValidateRPCMaxMessageSize(1))
+	require.Error(t, ValidateRPCMaxMessageSize(math.MaxInt64))
+	require.NoError(t, ValidateRPCMaxMessageSize(maxRPCMessageSize))
+	require.Error(t, ValidateRPCMaxMessageSize(maxRPCMessageSize+1))
+}
+
 func TestResponseSize(t *testing.T) {
 	maxMessageSize := 1024
 	pool := NewLogtailServerSegmentPool(maxMessageSize)
@@ -49,4 +56,10 @@ func TestResponseSize(t *testing.T) {
 	curr.Payload = curr.Payload[:limit]
 	t.Log("final segment size:", curr.ProtoSize())
 	require.Equal(t, curr.ProtoSize(), maxMessageSize)
+}
+
+func TestSegmentedResponseSizeLimit(t *testing.T) {
+	require.NoError(t, validateSegmentedResponseSize(0))
+	require.NoError(t, validateSegmentedResponseSize(math.MaxInt32))
+	require.Error(t, validateSegmentedResponseSize(math.MaxInt32+1))
 }

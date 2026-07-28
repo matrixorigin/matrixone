@@ -42,7 +42,6 @@ import (
 )
 
 var gTracerProvider atomic.Value
-var gTracer trace.Tracer
 var gTraceContext atomic.Value
 var gSpanContext atomic.Value
 
@@ -50,7 +49,6 @@ func init() {
 	SetDefaultSpanContext(&trace.SpanContext{})
 	SetDefaultContext(context.Background())
 	tp := newMOTracerProvider(EnableTracer(false))
-	gTracer = tp.Tracer("default")
 	SetTracerProvider(tp)
 }
 
@@ -97,13 +95,9 @@ func Init(ctx context.Context, opts ...TracerProviderOption) (err error, act boo
 	SetTracerProvider(newMOTracerProvider(opts...))
 	config := &GetTracerProvider().tracerProviderConfig
 
-	if !config.disableSpan {
-		// init Tracer
-		gTracer = GetTracerProvider().Tracer("MatrixOne")
-		_, span := gTracer.Start(ctx, "TraceInit")
-		defer span.End()
-		defer trace.SetDefaultTracer(gTracer)
-	}
+	// Span recording has been retired. Keep only lightweight trace-context
+	// generation so retained log/error telemetry and RPCs remain correlatable.
+	trace.SetDefaultTracer(GetTracerProvider().Tracer("MatrixOne"))
 	if config.disableError {
 		DisableLogErrorReport(true)
 	}
@@ -122,9 +116,6 @@ func Init(ctx context.Context, opts ...TracerProviderOption) (err error, act boo
 		return err, true
 	}
 
-	// init all mo_ctl controlled spans
-	trace.InitMOCtledSpan()
-
 	// init tool dependence
 	logutil.SetLogReporter(&logutil.TraceReporter{ReportZap: ReportZap, ContextField: trace.ContextField})
 	logutil.SpanFieldKey.Store(trace.SpanFieldKey)
@@ -134,8 +125,6 @@ func Init(ctx context.Context, opts ...TracerProviderOption) (err error, act boo
 	db_holder.SetLabelSelector(config.labels)
 
 	logutil.Debugf("trace with LongQueryTime: %v", time.Duration(GetTracerProvider().longQueryTime))
-	logutil.Debugf("trace with LongSpanTime: %v", GetTracerProvider().longSpanTime)
-	logutil.Debugf("trace with DisableSpan: %v", GetTracerProvider().disableSpan)
 
 	return nil, true
 }
@@ -152,8 +141,8 @@ func initExporter(ctx context.Context, config *tracerProviderConfig) error {
 	defaultReminder := batchpipe.NewConstantClock(config.exportInterval)
 	defaultOptions := []BufferOption{BufferWithReminder(defaultReminder), BufferWithSizeThreshold(config.bufferSizeThreshold)}
 	var p = config.batchProcessor
-	// init BatchProcess for trace/log/error
-	p.Register(&MOSpan{}, NewBufferPipe2CSVWorker(defaultOptions...))
+	// Span recording is retired. The shared collector remains responsible for
+	// statement, log, and error telemetry.
 	p.Register(&MOZapLog{}, NewBufferPipe2CSVWorker(defaultOptions...))
 	p.Register(&StatementInfo{}, NewBufferPipe2CSVWorker(defaultOptions...))
 	p.Register(&MOErrorHolder{}, NewBufferPipe2CSVWorker(defaultOptions...))
@@ -161,8 +150,6 @@ func initExporter(ctx context.Context, config *tracerProviderConfig) error {
 	if !p.Start() {
 		return moerr.NewInternalError(ctx, "trace exporter already started")
 	}
-	config.spanProcessors = append(config.spanProcessors, NewBatchSpanProcessor(p))
-	logutil.Info("trace.init.span.processor")
 	return nil
 }
 
@@ -217,13 +204,28 @@ func Shutdown(ctx context.Context) error {
 
 	shutdownCtx, cancel := context.WithTimeoutCause(context.Background(), 5*time.Minute, moerr.CauseShutdown)
 	defer cancel()
-	for _, p := range GetTracerProvider().spanProcessors {
-		if err := p.Shutdown(shutdownCtx); err != nil {
-			return moerr.AttachCause(shutdownCtx, err)
-		}
+
+	// The batch collector is shared by statement, log, and error reporting. It
+	// used to be stopped indirectly by the span processor; retain that ownership
+	// explicitly now that the span pipeline no longer exists.
+	if err := stopBatchProcessor(shutdownCtx, GetTracerProvider().batchProcessor); err != nil {
+		return moerr.AttachCause(shutdownCtx, err)
 	}
 	logutil.Info("trace.shutdown.complete")
 	return nil
+}
+
+func stopBatchProcessor(ctx context.Context, processor BatchProcessor) error {
+	done := make(chan error, 1)
+	go func() {
+		done <- processor.Stop(true)
+	}()
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 type contextHolder struct {

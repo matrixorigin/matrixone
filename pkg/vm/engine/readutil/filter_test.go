@@ -3529,6 +3529,73 @@ func TestCompileFilterExpr_PrefixInRangeAllFlags(t *testing.T) {
 	}
 }
 
+func TestCompileFilterExprsPreservesSupportedConjuncts(t *testing.T) {
+	tableDef := &plan.TableDef{
+		Name:          "test_tbl",
+		Name2ColIndex: map[string]int32{"id": 0},
+		Pkey: &plan.PrimaryKeyDef{
+			Names:       []string{"id"},
+			PkeyColName: "id",
+		},
+		Cols: []*plan.ColDef{{
+			Name:    "id",
+			ColId:   0,
+			Seqnum:  0,
+			Primary: true,
+			Typ:     plan.Type{Id: int32(types.T_int64)},
+		}},
+	}
+	supported := MakeFunctionExprForTest(">=", []*plan.Expr{
+		MakeColExprForTest(0, types.T_int64, "id"),
+		plan2.MakePlan2Int64ConstExprWithType(10),
+	})
+	unsupported := MakeFunctionExprForTest("abs", []*plan.Expr{
+		MakeColExprForTest(0, types.T_int64, "id"),
+	})
+	mp := mpool.MustNew(t.Name())
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+	var executors []colexec.ExpressionExecutor
+	plan2.ReplaceFoldExpr(proc, supported, &executors)
+	plan2.EvalFoldExpr(proc, supported, &executors)
+	for _, executor := range executors {
+		defer executor.Free()
+	}
+
+	assertCompiled := func(t *testing.T, exprs []*plan.Expr) {
+		t.Helper()
+		fast, load, object, block, seek, canCompile, _ := CompileFilterExprs(exprs, tableDef, nil)
+		require.True(t, canCompile)
+		require.NotNil(t, fast)
+		require.NotNil(t, load)
+		require.NotNil(t, object)
+		require.NotNil(t, block)
+		require.NotNil(t, seek)
+	}
+
+	t.Run("top-level implicit and", func(t *testing.T) {
+		assertCompiled(t, []*plan.Expr{supported, unsupported})
+	})
+	t.Run("nested and", func(t *testing.T) {
+		assertCompiled(t, []*plan.Expr{MakeFunctionExprForTest("and", []*plan.Expr{supported, unsupported})})
+	})
+	t.Run("nested or remains all or nothing", func(t *testing.T) {
+		_, _, _, _, _, canCompile, _ := CompileFilterExprs(
+			[]*plan.Expr{MakeFunctionExprForTest("or", []*plan.Expr{supported, unsupported})},
+			tableDef,
+			nil,
+		)
+		require.False(t, canCompile)
+	})
+	t.Run("all unsupported", func(t *testing.T) {
+		_, _, _, _, _, canCompile, _ := CompileFilterExprs(
+			[]*plan.Expr{unsupported, unsupported},
+			tableDef,
+			nil,
+		)
+		require.False(t, canCompile)
+	})
+}
+
 func TestCompileFilterExpr_Between(t *testing.T) {
 	tableDef := &plan.TableDef{
 		Name:          "test_tbl",

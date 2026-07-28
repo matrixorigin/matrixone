@@ -117,7 +117,7 @@ func (s *store) handleAddReplica(cmd logservicepb.ScheduleCommand) {
 	logShardID := cmd.ConfigChange.Replica.LogShardID
 	replicaID := cmd.ConfigChange.Replica.ReplicaID
 	address := s.cfg.ServiceAddress
-	if err := s.createReplica(metadata.TNShard{
+	if err := s.StartTNReplica(metadata.TNShard{
 		TNShardRecord: metadata.TNShardRecord{
 			ShardID:    shardID,
 			LogShardID: logShardID,
@@ -131,7 +131,9 @@ func (s *store) handleAddReplica(cmd logservicepb.ScheduleCommand) {
 
 func (s *store) handleRemoveReplica(cmd logservicepb.ScheduleCommand) {
 	shardID := cmd.ConfigChange.Replica.ShardID
-	if err := s.removeReplica(shardID); err != nil {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.removeReplicaLocked(shardID); err != nil {
 		s.rt.Logger().Error("failed to remove replica", zap.Error(err))
 	}
 }

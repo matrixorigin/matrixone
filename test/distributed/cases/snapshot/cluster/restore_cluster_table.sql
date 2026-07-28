@@ -218,7 +218,7 @@ call test_if_hit_elseif_first_elseif();
 drop procedure if exists test_if_hit_if;
 create procedure test_if_hit_if() 'begin DECLARE v1 INT; SET v1 = 5; IF v1 > 5 THEN select * from tbh1; ELSEIF v1 = 5 THEN select * from tbh2; ELSEIF v1 = 4 THEN select * from tbh2 limit 1; ELSE select * from tbh3; END IF; end';
 call test_if_hit_if();
--- @ignore:0,8,9
+-- @ignore:0,9,10
 select * from mo_catalog.mo_stored_procedure;
 -- @session
 
@@ -363,7 +363,7 @@ drop database repub02;
 use procedure_test;
 drop procedure if exists test_if_hit_if;
 drop procedure if exists test_if_hit_elseif_first_elseif;
--- @ignore:0,8,9
+-- @ignore:0,9,10
 select * from mo_catalog.mo_stored_procedure;
 -- @session
 
@@ -420,7 +420,7 @@ drop table if exists t3;
 -- @session:id=1&user=acc01:test_account&password=111
 select * from repub01.aff01;
 select * from repub01.pri01;
--- @ignore:0,8,9
+-- @ignore:0,9,10
 select * from mo_catalog.mo_stored_procedure;
 -- @session
 
@@ -449,7 +449,7 @@ drop database test;
 
 -- @session:id=1&user=acc01:test_account&password=111
 drop database repub02;
--- @ignore:0,8,9
+-- @ignore:0,9,10
 select * from mo_catalog.mo_stored_procedure;
 -- @session
 

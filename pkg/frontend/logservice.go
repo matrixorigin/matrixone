@@ -15,9 +15,10 @@
 package frontend
 
 import (
+	"cmp"
 	"context"
 	"fmt"
-	"sort"
+	"slices"
 	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -209,25 +210,28 @@ func handleShowLogserviceReplicas(execCtx *ExecCtx, ses *Session) error {
 }
 
 func sortLogserviceReplicasResult(infoList []logserviceReplicaInfo) []logserviceReplicaInfo {
-	sort.Slice(infoList, func(i, j int) bool {
-		if !infoList[i].hasReplica {
-			return false
+	slices.SortFunc(infoList, func(a, b logserviceReplicaInfo) int {
+		if !a.hasReplica && !b.hasReplica {
+			return 0
 		}
-		if !infoList[j].hasReplica {
-			return true
+		if !a.hasReplica {
+			return 1
 		}
-		if infoList[i].shardID != infoList[j].shardID {
-			return infoList[i].shardID < infoList[j].shardID
+		if !b.hasReplica {
+			return -1
 		}
-		if infoList[i].replicaRole != infoList[j].replicaRole {
-			if infoList[i].replicaRole == Leader {
-				return true
-			} else if infoList[j].replicaRole == Leader {
-				return false
+		if a.shardID != b.shardID {
+			return cmp.Compare(a.shardID, b.shardID)
+		}
+		if a.replicaRole != b.replicaRole {
+			if a.replicaRole == Leader {
+				return -1
+			} else if b.replicaRole == Leader {
+				return 1
 			}
-			return infoList[i].replicaRole < infoList[j].replicaRole
+			return cmp.Compare(a.replicaRole, b.replicaRole)
 		}
-		return infoList[i].replicaID < infoList[j].replicaID
+		return cmp.Compare(a.replicaID, b.replicaID)
 	})
 	return infoList
 }
@@ -281,8 +285,8 @@ type replicas []replica
 func (rs replicas) String() string {
 	var str string
 	l := len(rs)
-	sort.Slice(rs, func(i, j int) bool {
-		return rs[i].shardID < rs[j].shardID
+	slices.SortFunc(rs, func(a, b replica) int {
+		return cmp.Compare(a.shardID, b.shardID)
 	})
 	for i, r := range rs {
 		str += r.String()
@@ -326,8 +330,8 @@ func handleShowLogserviceStores(execCtx *ExecCtx, ses *Session) error {
 }
 
 func sortLogserviceStoresResult(infoList []logserviceStoreInfo) []logserviceStoreInfo {
-	sort.Slice(infoList, func(i, j int) bool {
-		return infoList[i].storeID < infoList[j].storeID
+	slices.SortFunc(infoList, func(a, b logserviceStoreInfo) int {
+		return cmp.Compare(a.storeID, b.storeID)
 	})
 	return infoList
 }

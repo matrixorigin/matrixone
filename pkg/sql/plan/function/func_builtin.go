@@ -17,7 +17,6 @@ package function
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"math"
 	"math/rand"
@@ -60,7 +59,7 @@ func builtInDateDiff(parameters []*vector.Vector, result vector.FunctionResultWr
 	for i := uint64(0); i < uint64(length); i++ {
 		v1, null1 := p1.GetValue(i)
 		v2, null2 := p2.GetValue(i)
-		if null1 || null2 {
+		if null1 || null2 || v1 == types.ZeroDate || v2 == types.ZeroDate {
 			if err := rs.Append(0, true); err != nil {
 				return err
 			}
@@ -387,6 +386,10 @@ func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.Function
 			}
 			if strings.EqualFold(def.OriginString, "null") || len(def.OriginString) == 0 {
 				return nil, nil
+			}
+			trimmed := strings.TrimSpace(def.OriginString)
+			if strings.HasPrefix(trimmed, "(") && strings.HasSuffix(trimmed, ")") {
+				return functionUtil.QuickStrToBytes(trimmed), nil
 			}
 
 			fStr := formatStr(def.OriginString)
@@ -1953,7 +1956,7 @@ func builtInUnixTimestamp(parameters []*vector.Vector, result vector.FunctionRes
 	for i := uint64(0); i < uint64(length); i++ {
 		v1, null1 := p1.GetValue(i)
 		val := v1.Unix()
-		if val < 0 || null1 {
+		if v1 == types.ZeroTimestamp || val < 0 || null1 {
 			// XXX v1 < 0 need to raise error here.
 			if err := rs.Append(0, true); err != nil {
 				return err
@@ -1970,7 +1973,7 @@ func builtInUnixTimestamp(parameters []*vector.Vector, result vector.FunctionRes
 func mustTimestamp(loc *time.Location, s string) types.Timestamp {
 	ts, err := types.ParseTimestamp(loc, s, 6)
 	if err != nil {
-		ts = 0
+		ts = types.ZeroTimestamp
 	}
 	return ts
 }
@@ -1986,8 +1989,9 @@ func builtInUnixTimestampVarcharToInt64(parameters []*vector.Vector, result vect
 				return err
 			}
 		} else {
-			val := mustTimestamp(proc.GetSessionInfo().TimeZone, string(v1)).Unix()
-			if val < 0 {
+			timestamp := mustTimestamp(proc.GetSessionInfo().TimeZone, string(v1))
+			val := timestamp.Unix()
+			if timestamp == types.ZeroTimestamp || val < 0 {
 				if err := rs.Append(0, true); err != nil {
 					return err
 				}
@@ -2015,7 +2019,14 @@ func builtInUnixTimestampVarcharToFloat64(parameters []*vector.Vector, result ve
 			}
 		} else {
 			val := mustTimestamp(proc.GetSessionInfo().TimeZone, string(v1))
-			if err := rs.Append(val.UnixToFloat(), false); err != nil {
+			unix := val.UnixToFloat()
+			if val == types.ZeroTimestamp || unix < 0 {
+				if err := rs.Append(0, true); err != nil {
+					return err
+				}
+				continue
+			}
+			if err := rs.Append(unix, false); err != nil {
 				return err
 			}
 		}
@@ -2035,7 +2046,14 @@ func builtInUnixTimestampVarcharToDecimal128(parameters []*vector.Vector, result
 				return err
 			}
 		} else {
-			val, err := mustTimestamp(proc.GetSessionInfo().TimeZone, string(v1)).UnixToDecimal128()
+			timestamp := mustTimestamp(proc.GetSessionInfo().TimeZone, string(v1))
+			if timestamp == types.ZeroTimestamp {
+				if err := rs.Append(d, true); err != nil {
+					return err
+				}
+				continue
+			}
+			val, err := timestamp.UnixToDecimal128()
 			if err != nil {
 				return err
 			}
@@ -2043,6 +2061,7 @@ func builtInUnixTimestampVarcharToDecimal128(parameters []*vector.Vector, result
 				if err := rs.Append(d, true); err != nil {
 					return err
 				}
+				continue
 			}
 			if err = rs.Append(val, false); err != nil {
 				return err
@@ -2478,7 +2497,9 @@ func getPackFun(v *vector.Vector) (func(v *vector.Vector, idx int, ps *types.Pac
 		}, nil
 	case types.T_json, types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text,
 		types.T_geometry,
-		types.T_array_float32, types.T_array_float64, types.T_datalink:
+		types.T_array_float32, types.T_array_float64,
+		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8,
+		types.T_datalink:
 		return func(v *vector.Vector, idx int, ps *types.Packer) {
 			val := v.GetBytesAt(idx)
 			ps.EncodeStringType(val)
@@ -2894,7 +2915,9 @@ func SerialHelper(v *vector.Vector, bitMap *nulls.Nulls, ps []*types.Packer, isF
 		}
 	case types.T_json, types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text,
 		types.T_geometry,
-		types.T_array_float32, types.T_array_float64, types.T_datalink:
+		types.T_array_float32, types.T_array_float64,
+		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8,
+		types.T_datalink:
 		if hasNull {
 			fv := vector.GenerateFunctionStrParameter(v)
 			for i, j := uint64(0), uint64(v.Length()); i < j; i++ {
@@ -2983,9 +3006,15 @@ func builtInSerialExtract(parameters []*vector.Vector, result vector.FunctionRes
 	case types.T_timestamp:
 		rs := vector.MustFunctionResult[types.Timestamp](result)
 		return serialExtractExceptStrings(p1, p2, rs, proc, length, selectList)
+	case types.T_uuid:
+		rs := vector.MustFunctionResult[types.Uuid](result)
+		return serialExtractExceptStrings(p1, p2, rs, proc, length, selectList)
 
 	case types.T_json, types.T_char, types.T_varchar, types.T_text,
-		types.T_binary, types.T_varbinary, types.T_blob, types.T_geometry, types.T_array_float32, types.T_array_float64, types.T_datalink:
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_geometry,
+		types.T_array_float32, types.T_array_float64,
+		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8,
+		types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
 		return serialExtractForString(p1, p2, rs, proc, length, selectList)
 	}
@@ -3003,7 +3032,7 @@ func getConstInt64(p vector.FunctionParameterWrapper[int64]) (int64, bool) {
 	return 0, false
 }
 
-func serialExtractExceptStrings[T types.Number | bool | types.Date | types.Datetime | types.Time | types.Timestamp](
+func serialExtractExceptStrings[T types.Number | bool | types.Date | types.Datetime | types.Time | types.Timestamp | types.Uuid](
 	p1 vector.FunctionParameterWrapper[types.Varlena],
 	p2 vector.FunctionParameterWrapper[int64],
 	result *vector.FunctionResult[T], proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -3196,7 +3225,13 @@ func builtInToDays(parameters []*vector.Vector, result vector.FunctionResultWrap
 			}
 			continue
 		}
-		rs.Append(DateTimeDiff(intervalUnitDAY, types.ZeroDatetime, datetimeValue)+ADZeroDays, false)
+		if datetimeValue == types.ZeroDatetime {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		rs.Append(DateTimeDiff(intervalUnitDAY, types.DatetimeEpoch, datetimeValue)+ADZeroDays, false)
 	}
 	return nil
 }
@@ -3215,12 +3250,12 @@ func builtInFromDays(parameters []*vector.Vector, result vector.FunctionResultWr
 			}
 			continue
 		}
-		// TO_DAYS(date) = DateTimeDiff(intervalUnitDAY, ZeroDatetime, date) + ADZeroDays
+		// TO_DAYS(date) = DateTimeDiff(intervalUnitDAY, DatetimeEpoch, date) + ADZeroDays
 		// So FROM_DAYS(N) should reverse this:
-		// DateTimeDiff(intervalUnitDAY, ZeroDatetime, date) = N - ADZeroDays
-		// date = ZeroDatetime + (N - ADZeroDays) days
+		// DateTimeDiff(intervalUnitDAY, DatetimeEpoch, date) = N - ADZeroDays
+		// date = DatetimeEpoch + (N - ADZeroDays) days
 		daysToAdd := dayNumber - ADZeroDays
-		dt, success := types.ZeroDatetime.AddInterval(daysToAdd, types.Day, types.DateTimeType)
+		dt, success := types.DatetimeEpoch.AddInterval(daysToAdd, types.Day, types.DateTimeType)
 		if !success {
 			if err := rs.Append(types.Date(0), true); err != nil {
 				return err
@@ -3390,7 +3425,13 @@ func builtInToSeconds(parameters []*vector.Vector, result vector.FunctionResultW
 			}
 			continue
 		}
-		rs.Append(DateTimeDiff(intervalUnitSECOND, types.ZeroDatetime, datetimeValue)+ADZeroSeconds, false)
+		if datetimeValue == types.ZeroDatetime {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		rs.Append(DateTimeDiff(intervalUnitSECOND, types.DatetimeEpoch, datetimeValue)+ADZeroSeconds, false)
 	}
 	return nil
 }
@@ -3402,7 +3443,7 @@ func CalcToSeconds(ctx context.Context, datetimes []types.Datetime, ns *nulls.Nu
 		if nulls.Contains(ns, uint64(idx)) {
 			continue
 		}
-		res[idx] = DateTimeDiff(intervalUnitSECOND, types.ZeroDatetime, datetime) + ADZeroSeconds
+		res[idx] = DateTimeDiff(intervalUnitSECOND, types.DatetimeEpoch, datetime) + ADZeroSeconds
 	}
 	return res, nil
 }
@@ -3764,13 +3805,13 @@ func builtInToLower(parameters []*vector.Vector, result vector.FunctionResultWra
 
 // buildInMOCU extract cu or calculate cu from parameters
 // example:
-// - select mo_cu('[1,2,3,4,5,6,7,8]', 134123)
-// - select mo_cu('[1,2,3,4,5,6,7,8]', 134123, 'total')
-// - select mo_cu('[1,2,3,4,5,6,7,8]', 134123, 'cpu')
-// - select mo_cu('[1,2,3,4,5,6,7,8]', 134123, 'mem')
-// - select mo_cu('[1,2,3,4,5,6,7,8]', 134123, 'ioin')
-// - select mo_cu('[1,2,3,4,5,6,7,8]', 134123, 'ioout')
-// - select mo_cu('[1,2,3,4,5,6,7,8]', 134123, 'network')
+// - select mo_cu('[6,2,3,4,5,6,2,7,8,9,10,0,11,12,13,14,1]', 134123)
+// - select mo_cu('[6,2,3,4,5,6,2,7,8,9,10,0,11,12,13,14,1]', 134123, 'total')
+// - select mo_cu('[6,2,3,4,5,6,2,7,8,9,10,0,11,12,13,14,1]', 134123, 'cpu')
+// - select mo_cu('[6,2,3,4,5,6,2,7,8,9,10,0,11,12,13,14,1]', 134123, 'mem')
+// - select mo_cu('[6,2,3,4,5,6,2,7,8,9,10,0,11,12,13,14,1]', 134123, 'ioin')
+// - select mo_cu('[6,2,3,4,5,6,2,7,8,9,10,0,11,12,13,14,1]', 134123, 'ioout')
+// - select mo_cu('[6,2,3,4,5,6,2,7,8,9,10,0,11,12,13,14,1]', 134123, 'network')
 func buildInMOCU(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return buildInMOCUWithCfg(parameters, result, proc, length, nil)
 }
@@ -3816,12 +3857,26 @@ func buildInMOCUWithCfg(parameters []*vector.Vector, result vector.FunctionResul
 			continue
 		}
 
-		if err := json.Unmarshal(statsJsonArrayStr, &stats); err != nil {
+		decoded, err := statistic.DecodeStatsArray(statsJsonArrayStr)
+		if err != nil {
 			rs.Append(float64(0), true)
-			//return moerr.NewInternalError(proc.Ctx, "failed to parse json arr: %v", err)
+			continue
+		}
+		stats = decoded
+
+		targetName := util.UnsafeBytesToString(target)
+		if stats.GetVersion() >= statistic.StatsArrayVersion6 {
+			if stats.IsAggregated() && (targetName != "total" || cfg != nil) {
+				rs.Append(float64(0), true)
+				continue
+			}
+			if targetName == "total" && cfg == nil {
+				rs.Append(stats.GetCU(), false)
+				continue
+			}
 		}
 
-		switch util.UnsafeBytesToString(target) {
+		switch targetName {
 		case "cpu":
 			cu = motrace.CalculateCUCpu(int64(stats.GetTimeConsumed()), cfg)
 		case "mem":

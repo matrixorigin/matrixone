@@ -15,8 +15,9 @@
 package backup
 
 import (
+	"cmp"
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -153,8 +154,8 @@ func (m *Metas) orderTypes() []int {
 	for i := range m.metas {
 		idx = append(idx, i)
 	}
-	sort.Slice(idx, func(i, j int) bool {
-		return m.metas[idx[i]].Typ < m.metas[idx[j]].Typ
+	slices.SortFunc(idx, func(a, b int) int {
+		return cmp.Compare(m.metas[a].Typ, m.metas[b].Typ)
 	})
 	return idx
 }

@@ -21,8 +21,10 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
@@ -47,7 +49,7 @@ func Test_Upgrade(t *testing.T) {
 			t.Logf("version metadata:%v", metadata)
 			assert.Equal(t, "4.0.1", metadata.Version)
 			assert.Equal(t, "4.0.0", metadata.MinUpgradeVersion)
-			assert.Equal(t, versions.No, metadata.UpgradeCluster)
+			assert.Equal(t, versions.Yes, metadata.UpgradeCluster)
 			assert.Equal(t, versions.Yes, metadata.UpgradeTenant)
 
 			if err := Handler.Prepare(context.Background(), executor, true); err != nil {
@@ -92,6 +94,16 @@ func Test_versionHandle_HandleClusterUpgrade(t *testing.T) {
 		executor2,
 	)
 	assert.Nil(t, err)
+}
+
+func TestUpgradeDefersMoIndexesIncludeColumn(t *testing.T) {
+	for _, entries := range [][]versions.UpgradeEntry{clusterUpgEntries, tenantUpgEntries} {
+		for _, entry := range entries {
+			require.False(t,
+				entry.Schema == catalog.MO_CATALOG && entry.TableName == catalog.MO_INDEXES && entry.UpgType == versions.ADD_COLUMN,
+				"mo_indexes schema changes require a staged release after all writers use explicit column lists")
+		}
+	}
 }
 
 func Test_upg_statistics_view_check_error(t *testing.T) {

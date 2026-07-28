@@ -17,10 +17,11 @@ package frontend
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
-	"reflect"
 	"regexp"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -60,41 +61,41 @@ import (
 // Global stub for GetTableDetector - initialized in init() to prevent panics across all tests
 var _globalTableDetectorStub *gostub.Stubs
 
+const testPermanentDetectorTask = "__test_permanent_dummy__"
+
 // init sets up global mock for GetTableDetector once for all tests in this package
 // This stub is NEVER reset to ensure consistent behavior across all tests
 func init() {
 	_globalTableDetectorStub = gostub.Stub(&cdc.GetTableDetector, createMockTableDetectorForTest())
 }
 
-// createMockTableDetectorForTest creates a properly initialized mock TableDetector for testing
+// createMockTableDetectorForTest creates a mock TableDetector that never starts
+// the background scan loop. Frontend tests only need registration semantics; the
+// permanent callback makes every test registration non-initial.
 func createMockTableDetectorForTest() func(cnUUID string) *cdc.TableDetector {
 	return func(cnUUID string) *cdc.TableDetector {
-		detector := &cdc.TableDetector{
-			Mp:                   make(map[uint32]cdc.TblMap),
-			Callbacks:            make(map[string]cdc.TableCallback),
-			CallBackAccountId:    make(map[string]uint32),
-			SubscribedAccountIds: make(map[uint32][]string),
-			CallBackDbName:       make(map[string][]string),
-			SubscribedDbNames:    make(map[string][]string),
-			CallBackTableName:    make(map[string][]string),
+		return &cdc.TableDetector{
+			Mp: make(map[uint32]cdc.TblMap),
+			Callbacks: map[string]cdc.TableCallback{
+				testPermanentDetectorTask: func(map[uint32]cdc.TblMap) error {
+					return nil
+				},
+			},
+			CallBackAccountId: map[string]uint32{
+				testPermanentDetectorTask: 1,
+			},
+			SubscribedAccountIds: map[uint32][]string{
+				1: {testPermanentDetectorTask},
+			},
+			CallBackDbName: map[string][]string{
+				testPermanentDetectorTask: {},
+			},
+			SubscribedDbNames: make(map[string][]string),
+			CallBackTableName: map[string][]string{
+				testPermanentDetectorTask: {},
+			},
 			SubscribedTableNames: make(map[string][]string),
 		}
-
-		// Set scanTableFn to no-op to prevent panic in scanTableLoop
-		detectorValue := reflect.ValueOf(detector).Elem()
-		scanTableFnField := detectorValue.FieldByName("scanTableFn")
-		if scanTableFnField.IsValid() && scanTableFnField.CanSet() {
-			scanTableFnField.Set(reflect.ValueOf(func() error {
-				return nil
-			}))
-		}
-
-		// Call RegisterIfAbsent to properly initialize cancel field
-		detector.RegisterIfAbsent("__test_permanent_dummy__", 1, []string{}, []string{}, func(map[uint32]cdc.TblMap) error {
-			return nil
-		})
-
-		return detector
 	}
 }
 
@@ -691,6 +692,7 @@ func (sExec *testSqlExecutor) QueryContext(ctx context.Context, query string, ar
 }
 
 var _ ie.InternalExecutor = new(testIE)
+var _ ie.InternalExecutorWithStatus = new(testIE)
 
 type testIE struct {
 	db     *sql.DB
@@ -700,6 +702,18 @@ type testIE struct {
 func (tie *testIE) Exec(ctx context.Context, s string, options ie.SessionOverrideOptions) error {
 	_, err := tie.db.Exec(s)
 	return err
+}
+
+func (tie *testIE) ExecWithStatus(ctx context.Context, s string, options ie.SessionOverrideOptions) (ie.InternalExecStatus, error) {
+	res, err := tie.db.Exec(s)
+	if err != nil {
+		return ie.InternalExecStatus{}, err
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return ie.InternalExecStatus{}, err
+	}
+	return ie.InternalExecStatus{AffectedRows: uint64(rows)}, nil
 }
 
 func (tie *testIE) Query(ctx context.Context, s string, options ie.SessionOverrideOptions) ie.InternalExecResult {
@@ -849,23 +863,114 @@ func (tie *testIE) ApplySessionOverride(options ie.SessionOverrideOptions) {
 }
 
 var _ ie.InternalExecutor = new(captureExecContextIE)
+var _ ie.InternalExecutorWithStatus = new(captureExecContextIE)
 
 type captureExecContextIE struct {
-	execCtxErr error
-	execSQL    string
+	execCtxErr       error
+	execErr          error
+	execSQL          string
+	querySQL         string
+	affectedRows     uint64
+	hasAffectedRows  bool
+	catalogState     string
+	catalogStateRows uint64
+	queryErr         error
 }
 
 func (e *captureExecContextIE) Exec(ctx context.Context, sql string, options ie.SessionOverrideOptions) error {
 	e.execCtxErr = ctx.Err()
 	e.execSQL = sql
-	return nil
+	return e.execErr
+}
+
+func (e *captureExecContextIE) ExecWithStatus(ctx context.Context, sql string, options ie.SessionOverrideOptions) (ie.InternalExecStatus, error) {
+	affectedRows := uint64(1)
+	if e.hasAffectedRows {
+		affectedRows = e.affectedRows
+	}
+	e.execCtxErr = ctx.Err()
+	e.execSQL = sql
+	return ie.InternalExecStatus{AffectedRows: affectedRows}, e.execErr
 }
 
 func (e *captureExecContextIE) Query(ctx context.Context, sql string, options ie.SessionOverrideOptions) ie.InternalExecResult {
-	panic("unexpected query")
+	e.querySQL = sql
+	return &cdcStateQueryResult{
+		err:   e.queryErr,
+		state: e.catalogState,
+		rows:  e.catalogStateRows,
+	}
 }
 
 func (e *captureExecContextIE) ApplySessionOverride(options ie.SessionOverrideOptions) {
+}
+
+type captureExecOnlyIE struct {
+	execSQL string
+	execErr error
+}
+
+func (e *captureExecOnlyIE) Exec(ctx context.Context, sql string, options ie.SessionOverrideOptions) error {
+	e.execSQL = sql
+	return e.execErr
+}
+
+func (e *captureExecOnlyIE) Query(ctx context.Context, sql string, options ie.SessionOverrideOptions) ie.InternalExecResult {
+	panic("unexpected query")
+}
+
+func (e *captureExecOnlyIE) ApplySessionOverride(options ie.SessionOverrideOptions) {
+}
+
+type nilQueryResultIE struct {
+	captureExecContextIE
+}
+
+func (e *nilQueryResultIE) Query(ctx context.Context, sql string, options ie.SessionOverrideOptions) ie.InternalExecResult {
+	e.querySQL = sql
+	return nil
+}
+
+type cdcStateQueryResult struct {
+	err   error
+	state string
+	rows  uint64
+}
+
+func (r *cdcStateQueryResult) Error() error {
+	return r.err
+}
+
+func (r *cdcStateQueryResult) ColumnCount() uint64 {
+	return 1
+}
+
+func (r *cdcStateQueryResult) Column(ctx context.Context, u uint64) (string, uint8, bool, error) {
+	return "state", uint8(defines.MYSQL_TYPE_VARCHAR), false, nil
+}
+
+func (r *cdcStateQueryResult) RowCount() uint64 {
+	return r.rows
+}
+
+func (r *cdcStateQueryResult) Row(ctx context.Context, u uint64) ([]interface{}, error) {
+	return []interface{}{r.state}, nil
+}
+
+func (r *cdcStateQueryResult) Value(ctx context.Context, u uint64, u2 uint64) (interface{}, error) {
+	return r.state, nil
+}
+
+func (r *cdcStateQueryResult) GetUint64(ctx context.Context, u uint64, u2 uint64) (uint64, error) {
+	panic("unexpected GetUint64")
+}
+
+func (r *cdcStateQueryResult) GetFloat64(ctx context.Context, u uint64, u2 uint64) (float64, error) {
+	panic("unexpected GetFloat64")
+}
+
+func (r *cdcStateQueryResult) GetString(ctx context.Context, u uint64, u2 uint64) (string, error) {
+	return r.state, nil
 }
 
 const (
@@ -1003,7 +1108,7 @@ func TestRegisterCdcExecutor(t *testing.T) {
 		),
 	))
 
-	sql7 := "update `mo_catalog`.`mo_cdc_task` set state = 'running', err_msg = '' where account_id = 0 and task_id = '00000000-0000-0000-0000-000000000000'"
+	sql7 := "UPDATE `mo_catalog`.`mo_cdc_task` SET state = 'running', err_msg = '' WHERE 1=1 AND account_id = 0 AND task_id = '00000000-0000-0000-0000-000000000000' AND state = 'running'"
 	mock.ExpectExec(sql7).WillReturnResult(sqlmock.NewResult(1, 1))
 
 	genSqlIdx := func(sql string) int {
@@ -1031,7 +1136,7 @@ func TestRegisterCdcExecutor(t *testing.T) {
 	txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 	txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 	txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
-	txnOperator.EXPECT().EnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(0)).AnyTimes()
+	txnOperator.EXPECT().TryEnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(1), nil).AnyTimes()
 	txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
 	txnOperator.EXPECT().SnapshotTS().Return(timestamp.Timestamp{}).AnyTimes()
 
@@ -2250,7 +2355,7 @@ func Test_handleShowCdc(t *testing.T) {
 	txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 	txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 	txnOperator.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
-	txnOperator.EXPECT().EnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(0)).AnyTimes()
+	txnOperator.EXPECT().TryEnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(1), nil).AnyTimes()
 	txnOperator.EXPECT().ExitRunSqlWithToken(gomock.Any()).Return().AnyTimes()
 	txnOperator.EXPECT().SnapshotTS().Return(timestamp.Timestamp{}).AnyTimes()
 
@@ -2428,6 +2533,94 @@ func TestCDCPauseTaskCompleteHookUpdatesCatalogState(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestCDCPauseTaskCompleteHookAlreadyPausedIsIdempotent(t *testing.T) {
+	exec := &cdcCatalogStateExecutor{
+		state:        cdc.CDCState_Pausing,
+		currentState: cdc.CDCState_Pausing,
+		targetState:  cdc.CDCState_Paused,
+	}
+	hook := CDCPauseTaskCompleteHook(func() ie.InternalExecutor {
+		return exec
+	})
+	daemonTask := task.DaemonTask{
+		Details: &task.Details{
+			Details: &task.Details_CreateCdc{
+				CreateCdc: &task.CreateCdcDetails{
+					TaskId:   "task1",
+					TaskName: "task1",
+					Accounts: []*task.Account{
+						{Id: 1},
+					},
+				},
+			},
+		},
+	}
+
+	require.NoError(t, hook(context.Background(), daemonTask))
+	require.Equal(t, cdc.CDCState_Paused, exec.getState())
+
+	// Simulate a task-runner restart: the in-memory pause completion marker is
+	// gone, but the catalog transition committed before the restart.
+	require.NoError(t, hook(context.Background(), daemonTask))
+	require.Equal(t, cdc.CDCState_Paused, exec.getState())
+}
+
+func TestCDCPauseTaskCompleteHookRejectsConflictingCatalogState(t *testing.T) {
+	capture := &captureExecContextIE{
+		affectedRows:     0,
+		hasAffectedRows:  true,
+		catalogState:     cdc.CDCState_Failed,
+		catalogStateRows: 1,
+	}
+	hook := CDCPauseTaskCompleteHook(func() ie.InternalExecutor {
+		return capture
+	})
+
+	err := hook(context.Background(), task.DaemonTask{
+		Details: &task.Details{
+			Details: &task.Details_CreateCdc{
+				CreateCdc: &task.CreateCdcDetails{
+					TaskId:   "task1",
+					TaskName: "task1",
+					Accounts: []*task.Account{
+						{Id: 1},
+					},
+				},
+			},
+		},
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "conflicting catalog state failed")
+	require.Contains(t, capture.querySQL, "SELECT state")
+}
+
+func TestCDCPauseTaskCompleteHookReportsMissingCatalogRow(t *testing.T) {
+	capture := &captureExecContextIE{
+		affectedRows:    0,
+		hasAffectedRows: true,
+	}
+	hook := CDCPauseTaskCompleteHook(func() ie.InternalExecutor {
+		return capture
+	})
+
+	err := hook(context.Background(), task.DaemonTask{
+		Details: &task.Details{
+			Details: &task.Details_CreateCdc{
+				CreateCdc: &task.CreateCdcDetails{
+					TaskId:   "task1",
+					TaskName: "task1",
+					Accounts: []*task.Account{
+						{Id: 1},
+					},
+				},
+			},
+		},
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "found no catalog row")
+	require.Contains(t, capture.querySQL, "SELECT state")
+}
+
 func TestCDCPauseTaskCompleteHookUsesFreshContext(t *testing.T) {
 	capture := &captureExecContextIE{}
 	hook := CDCPauseTaskCompleteHook(func() ie.InternalExecutor {
@@ -2453,6 +2646,317 @@ func TestCDCPauseTaskCompleteHookUsesFreshContext(t *testing.T) {
 	require.NoError(t, capture.execCtxErr)
 	require.Contains(t, capture.execSQL, "state = 'paused'")
 	require.Contains(t, capture.execSQL, "AND state = 'pausing'")
+}
+
+func TestCDCTaskUpdateErrMsgRequiresRunningState(t *testing.T) {
+	capture := &captureExecContextIE{}
+	executor := &CDCTaskExecutor{
+		spec: &task.CreateCdcDetails{
+			TaskId: "task1",
+			Accounts: []*task.Account{
+				{Id: 1},
+			},
+		},
+		ie: capture,
+	}
+
+	require.NoError(t, executor.updateErrMsg(context.Background(), "permanent error"))
+	require.Contains(t, capture.execSQL, "SET state = 'failed'")
+	require.Contains(t, capture.execSQL, "err_msg = 'permanent error'")
+	require.Contains(t, capture.execSQL, "AND state = 'running'")
+}
+
+func TestCDCTaskUpdateErrMsgRejectsConflictingCatalogState(t *testing.T) {
+	capture := &captureExecContextIE{
+		affectedRows:     0,
+		hasAffectedRows:  true,
+		catalogState:     cdc.CDCState_Pausing,
+		catalogStateRows: 1,
+	}
+	executor := &CDCTaskExecutor{
+		spec: &task.CreateCdcDetails{
+			TaskId: "task1",
+			Accounts: []*task.Account{
+				{Id: 1},
+			},
+		},
+		ie: capture,
+	}
+
+	err := executor.updateErrMsg(context.Background(), "permanent error")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "conflicting catalog state pausing")
+	require.Contains(t, capture.execSQL, "AND state = 'running'")
+	require.Contains(t, capture.querySQL, "SELECT state")
+}
+
+func TestCDCTaskUpdateErrMsgAlreadyInTargetStateAllowsZeroAffectedRows(t *testing.T) {
+	capture := &captureExecContextIE{
+		affectedRows:     0,
+		hasAffectedRows:  true,
+		catalogState:     cdc.CDCState_Running,
+		catalogStateRows: 1,
+	}
+	executor := &CDCTaskExecutor{
+		spec: &task.CreateCdcDetails{
+			TaskId: "task1",
+			Accounts: []*task.Account{
+				{Id: 1},
+			},
+		},
+		ie: capture,
+	}
+
+	require.NoError(t, executor.updateErrMsg(context.Background(), ""))
+	require.Contains(t, capture.execSQL, "SET state = 'running'")
+	require.Contains(t, capture.execSQL, "AND state = 'running'")
+	require.Contains(t, capture.querySQL, "SELECT state")
+}
+
+func TestExecCDCSQLWithAffectedRowsPropagatesExecError(t *testing.T) {
+	capture := &captureExecContextIE{
+		execErr: errors.New("exec failed"),
+	}
+
+	err := execCDCSQLWithAffectedRows(
+		context.Background(),
+		capture,
+		"update cdc task",
+		1,
+		"task1",
+		cdc.CDCState_Failed,
+		cdc.CDCState_Running,
+	)
+	require.ErrorContains(t, err, "exec failed")
+	require.Equal(t, "update cdc task", capture.execSQL)
+}
+
+func TestExecCDCSQLWithAffectedRowsRejectsUnexpectedRowCount(t *testing.T) {
+	capture := &captureExecContextIE{
+		affectedRows:    2,
+		hasAffectedRows: true,
+	}
+
+	err := execCDCSQLWithAffectedRows(
+		context.Background(),
+		capture,
+		"update cdc task",
+		1,
+		"task1",
+		cdc.CDCState_Failed,
+		cdc.CDCState_Running,
+	)
+	require.ErrorContains(t, err, "affected 2 rows")
+	require.Empty(t, capture.querySQL)
+}
+
+func TestExecCDCSQLWithAffectedRowsFallsBackWithoutStatus(t *testing.T) {
+	capture := &captureExecOnlyIE{}
+
+	require.NoError(t, execCDCSQLWithAffectedRows(
+		context.Background(),
+		capture,
+		"update cdc task",
+		1,
+		"task1",
+		cdc.CDCState_Failed,
+		cdc.CDCState_Running,
+	))
+	require.Equal(t, "update cdc task", capture.execSQL)
+}
+
+func TestValidateCDCStateTransitionResultReportsQueryFailures(t *testing.T) {
+	tests := []struct {
+		name        string
+		exec        ie.InternalExecutor
+		errContains string
+	}{
+		{
+			name:        "nil result",
+			exec:        &nilQueryResultIE{},
+			errContains: "query returned no result",
+		},
+		{
+			name: "query error",
+			exec: &captureExecContextIE{
+				queryErr: errors.New("query failed"),
+			},
+			errContains: "query failed",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateCDCStateTransitionResult(
+				context.Background(),
+				tt.exec,
+				1,
+				"task1",
+				cdc.CDCState_Running,
+				cdc.CDCState_Failed,
+			)
+			require.ErrorContains(t, err, tt.errContains)
+		})
+	}
+}
+
+type cdcCatalogStateExecutor struct {
+	mu           sync.Mutex
+	state        string
+	currentState string
+	targetState  string
+	execSQL      string
+	querySQL     string
+}
+
+func (e *cdcCatalogStateExecutor) Exec(ctx context.Context, sql string, options ie.SessionOverrideOptions) error {
+	_, err := e.ExecWithStatus(ctx, sql, options)
+	return err
+}
+
+func (e *cdcCatalogStateExecutor) ExecWithStatus(ctx context.Context, sql string, options ie.SessionOverrideOptions) (ie.InternalExecStatus, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.execSQL = sql
+	if e.state != e.currentState {
+		return ie.InternalExecStatus{AffectedRows: 0}, nil
+	}
+	e.state = e.targetState
+	return ie.InternalExecStatus{AffectedRows: 1}, nil
+}
+
+func (e *cdcCatalogStateExecutor) Query(ctx context.Context, sql string, options ie.SessionOverrideOptions) ie.InternalExecResult {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.querySQL = sql
+	return &cdcStateQueryResult{
+		state: e.state,
+		rows:  1,
+	}
+}
+
+func (e *cdcCatalogStateExecutor) ApplySessionOverride(options ie.SessionOverrideOptions) {
+}
+
+func (e *cdcCatalogStateExecutor) setState(state string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.state = state
+}
+
+func (e *cdcCatalogStateExecutor) getState() string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.state
+}
+
+func TestCDCStateTransitionDoesNotOverwriteConcurrentCatalogState(t *testing.T) {
+	ctx := context.Background()
+	wasFaultEnabled := fault.Status()
+	fault.Enable()
+	defer func() {
+		if !wasFaultEnabled {
+			fault.Disable()
+		}
+	}()
+
+	spec := &task.CreateCdcDetails{
+		TaskId:   "task1",
+		TaskName: "task1",
+		Accounts: []*task.Account{
+			{Id: 1},
+		},
+	}
+
+	tests := []struct {
+		name            string
+		currentState    string
+		targetState     string
+		concurrentState string
+		run             func(*cdcCatalogStateExecutor) error
+		assertSQL       func(*testing.T, string)
+	}{
+		{
+			name:            "running to failed",
+			currentState:    cdc.CDCState_Running,
+			targetState:     cdc.CDCState_Failed,
+			concurrentState: cdc.CDCState_Pausing,
+			run: func(exec *cdcCatalogStateExecutor) error {
+				cdcTask := &CDCTaskExecutor{spec: spec, ie: exec}
+				return cdcTask.updateErrMsg(ctx, "permanent error")
+			},
+			assertSQL: func(t *testing.T, sql string) {
+				require.Contains(t, sql, "SET state = 'failed'")
+				require.Contains(t, sql, "AND state = 'running'")
+			},
+		},
+		{
+			name:            "running to running",
+			currentState:    cdc.CDCState_Running,
+			targetState:     cdc.CDCState_Running,
+			concurrentState: cdc.CDCState_Pausing,
+			run: func(exec *cdcCatalogStateExecutor) error {
+				cdcTask := &CDCTaskExecutor{spec: spec, ie: exec}
+				return cdcTask.updateErrMsg(ctx, "")
+			},
+			assertSQL: func(t *testing.T, sql string) {
+				require.Contains(t, sql, "SET state = 'running'")
+				require.Contains(t, sql, "AND state = 'running'")
+			},
+		},
+		{
+			name:            "pausing to paused",
+			currentState:    cdc.CDCState_Pausing,
+			targetState:     cdc.CDCState_Paused,
+			concurrentState: cdc.CDCState_Failed,
+			run: func(exec *cdcCatalogStateExecutor) error {
+				return updateCDCTaskState(ctx, func() ie.InternalExecutor { return exec }, spec, cdc.CDCState_Paused)
+			},
+			assertSQL: func(t *testing.T, sql string) {
+				require.Contains(t, sql, "SET state = 'paused'")
+				require.Contains(t, sql, "AND state = 'pausing'")
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.NoError(t, fault.AddFaultPoint(ctx, cdcStateTransitionFaultPoint(tt.currentState, tt.targetState), ":::", "wait", 0, "", false))
+			defer fault.RemoveFaultPoint(ctx, cdcStateTransitionFaultPoint(tt.currentState, tt.targetState))
+			waitersPoint := cdcStateTransitionFaultPoint(tt.currentState, tt.targetState) + "/waiters"
+			require.NoError(t, fault.AddFaultPoint(ctx, waitersPoint, ":::", "getwaiters", 0, cdcStateTransitionFaultPoint(tt.currentState, tt.targetState), false))
+			defer fault.RemoveFaultPoint(ctx, waitersPoint)
+			notifyPoint := cdcStateTransitionFaultPoint(tt.currentState, tt.targetState) + "/notify"
+			require.NoError(t, fault.AddFaultPoint(ctx, notifyPoint, ":::", "notifyall", 0, cdcStateTransitionFaultPoint(tt.currentState, tt.targetState), false))
+			defer fault.RemoveFaultPoint(ctx, notifyPoint)
+			defer fault.TriggerFault(notifyPoint)
+
+			exec := &cdcCatalogStateExecutor{
+				state:        tt.currentState,
+				currentState: tt.currentState,
+				targetState:  tt.targetState,
+			}
+			errCh := make(chan error, 1)
+			go func() {
+				errCh <- tt.run(exec)
+			}()
+
+			require.Eventually(t, func() bool {
+				n, _, ok := fault.TriggerFault(waitersPoint)
+				return ok && n == 1
+			}, time.Second, 10*time.Millisecond)
+
+			exec.setState(tt.concurrentState)
+			_, _, ok := fault.TriggerFault(notifyPoint)
+			require.True(t, ok)
+
+			err := <-errCh
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "conflicting catalog state "+tt.concurrentState)
+			require.Equal(t, tt.concurrentState, exec.getState())
+			tt.assertSQL(t, exec.execSQL)
+		})
+	}
 }
 
 func TestCdcTask_PauseWhileStarting(t *testing.T) {
@@ -2823,6 +3327,7 @@ func Test_initAesKey(t *testing.T) {
 }
 
 var _ ie.InternalExecutor = &mockIe{}
+var _ ie.InternalExecutorWithStatus = &captureCDCExecutor{}
 
 type captureCDCExecutor struct {
 	mu                 sync.Mutex
@@ -2838,6 +3343,10 @@ func (e *captureCDCExecutor) Exec(ctx context.Context, s string, options ie.Sess
 		e.tableErrorsCleared = true
 	}
 	return nil
+}
+
+func (e *captureCDCExecutor) ExecWithStatus(ctx context.Context, s string, options ie.SessionOverrideOptions) (ie.InternalExecStatus, error) {
+	return ie.InternalExecStatus{AffectedRows: 1}, e.Exec(ctx, s, options)
 }
 
 func (*captureCDCExecutor) Query(ctx context.Context, s string, options ie.SessionOverrideOptions) ie.InternalExecResult {
@@ -3761,6 +4270,413 @@ func TestCdcTask_handleNewTables_existingReaderWithDifferentTableID(t *testing.T
 	cdcTask.handleNewTables(mp)
 }
 
+func TestCdcTask_handleNewTablesStopsReaderRemovedFromScan(t *testing.T) {
+	stub1 := gostub.Stub(&cdc.GetTxnOp, func(context.Context, engine.Engine, client.TxnClient, string) (client.TxnOperator, error) {
+		return nil, nil
+	})
+	defer stub1.Reset()
+
+	stub2 := gostub.Stub(&cdc.FinishTxnOp, func(context.Context, error, client.TxnOperator, engine.Engine) {})
+	defer stub2.Reset()
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+
+	closeCh := make(chan struct{})
+	readerInfo := &cdc.DbTableInfo{
+		SourceDbName:  "db1",
+		SourceTblName: "child",
+		SourceTblId:   1001,
+		SinkDbName:    "live_sink_db",
+		SinkTblName:   "live_sink_table",
+	}
+	oldReader := &mockChangeReader{
+		info:    readerInfo,
+		closeCh: closeCh,
+	}
+
+	cdcTask := &CDCTaskExecutor{
+		spec: &task.CreateCdcDetails{
+			TaskId:   "task-removed-from-scan",
+			TaskName: "task-removed-from-scan",
+			Accounts: []*task.Account{
+				{Id: 0},
+			},
+		},
+		tables: cdc.PatternTuples{
+			Pts: []*cdc.PatternTuple{
+				{
+					Source: cdc.PatternTable{
+						Database: "db1",
+						Table:    cdc.CDCPitrGranularity_All,
+					},
+					Sink: cdc.PatternTable{
+						Database: cdc.CDCPitrGranularity_All,
+						Table:    cdc.CDCPitrGranularity_All,
+					},
+				},
+			},
+		},
+		cnEngine:       eng,
+		runningReaders: &sync.Map{},
+	}
+	cdcTask.runningReaders.Store("db1.child", oldReader)
+
+	err := cdcTask.handleNewTables(map[uint32]cdc.TblMap{0: {}})
+	require.NoError(t, err)
+
+	select {
+	case <-closeCh:
+	case <-time.After(time.Second):
+		t.Fatal("expected removed reader to be closed")
+	}
+	require.Eventually(t, func() bool {
+		_, ok := cdcTask.runningReaders.Load("db1.child")
+		return !ok
+	}, time.Second, time.Millisecond)
+	require.Equal(t, "live_sink_db", readerInfo.SinkDbName)
+	require.Equal(t, "live_sink_table", readerInfo.SinkTblName)
+}
+
+func TestCdcTask_handleNewTablesKeepsBlockedRemovedReaderOwnership(t *testing.T) {
+	stub1 := gostub.Stub(&cdc.GetTxnOp, func(context.Context, engine.Engine, client.TxnClient, string) (client.TxnOperator, error) {
+		return nil, nil
+	})
+	defer stub1.Reset()
+
+	stub2 := gostub.Stub(&cdc.FinishTxnOp, func(context.Context, error, client.TxnOperator, engine.Engine) {})
+	defer stub2.Reset()
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+
+	closeCh := make(chan struct{})
+	waitCh := make(chan struct{})
+	var closeCalls atomic.Int32
+	var waitCalls atomic.Int32
+	oldReader := &mockChangeReader{
+		info:       &cdc.DbTableInfo{SourceDbName: "db1", SourceTblName: "child", SourceTblId: 1001},
+		closeCh:    closeCh,
+		waitCh:     waitCh,
+		closeCalls: &closeCalls,
+		waitCalls:  &waitCalls,
+	}
+	t.Cleanup(func() {
+		close(waitCh)
+	})
+
+	cdcTask := &CDCTaskExecutor{
+		spec: &task.CreateCdcDetails{
+			TaskId:   "task-removed-from-scan-timeout",
+			TaskName: "task-removed-from-scan-timeout",
+			Accounts: []*task.Account{
+				{Id: 0},
+			},
+		},
+		tables: cdc.PatternTuples{
+			Pts: []*cdc.PatternTuple{
+				{
+					Source: cdc.PatternTable{
+						Database: "db1",
+						Table:    cdc.CDCPitrGranularity_All,
+					},
+					Sink: cdc.PatternTable{
+						Database: cdc.CDCPitrGranularity_All,
+						Table:    cdc.CDCPitrGranularity_All,
+					},
+				},
+			},
+		},
+		cnEngine:       eng,
+		runningReaders: &sync.Map{},
+	}
+	cdcTask.runningReaders.Store("db1.child", oldReader)
+
+	err := cdcTask.handleNewTables(map[uint32]cdc.TblMap{0: {}})
+	require.NoError(t, err)
+
+	select {
+	case <-closeCh:
+	case <-time.After(time.Second):
+		t.Fatal("expected removed reader to be closed")
+	}
+	val, ok := cdcTask.runningReaders.Load("db1.child")
+	require.True(t, ok)
+	require.Same(t, oldReader, val)
+	require.Equal(t, int32(1), closeCalls.Load())
+	require.Eventually(t, func() bool {
+		return waitCalls.Load() == 1
+	}, time.Second, time.Millisecond)
+
+	start := time.Now()
+	err = cdcTask.handleNewTables(map[uint32]cdc.TblMap{0: {}})
+	require.NoError(t, err)
+	require.Less(t, time.Since(start), 200*time.Millisecond)
+	require.Equal(t, int32(1), closeCalls.Load())
+	require.Equal(t, int32(1), waitCalls.Load())
+	val, ok = cdcTask.runningReaders.Load("db1.child")
+	require.True(t, ok)
+	require.Same(t, oldReader, val)
+
+	start = time.Now()
+	err = cdcTask.handleNewTables(map[uint32]cdc.TblMap{
+		0: {
+			"db1.child": &cdc.DbTableInfo{SourceDbName: "db1", SourceTblName: "child", SourceTblId: 2002},
+		},
+	})
+	require.NoError(t, err)
+	require.Less(t, time.Since(start), 200*time.Millisecond)
+	require.Equal(t, int32(1), closeCalls.Load())
+	require.Equal(t, int32(1), waitCalls.Load())
+	val, ok = cdcTask.runningReaders.Load("db1.child")
+	require.True(t, ok)
+	require.Same(t, oldReader, val)
+
+	err = cdcTask.handleNewTables(map[uint32]cdc.TblMap{
+		0: {
+			"db1.child": &cdc.DbTableInfo{SourceDbName: "db1", SourceTblName: "child", SourceTblId: 1001},
+		},
+	})
+	require.NoError(t, err)
+	val, ok = cdcTask.runningReaders.Load("db1.child")
+	require.True(t, ok)
+	require.Same(t, oldReader, val)
+}
+
+func TestCdcTask_handleNewTablesDoesNotWaitForBlockedRemovedReaderClose(t *testing.T) {
+	stub1 := gostub.Stub(&cdc.GetTxnOp, func(context.Context, engine.Engine, client.TxnClient, string) (client.TxnOperator, error) {
+		return nil, nil
+	})
+	defer stub1.Reset()
+
+	stub2 := gostub.Stub(&cdc.FinishTxnOp, func(context.Context, error, client.TxnOperator, engine.Engine) {})
+	defer stub2.Reset()
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+
+	closeCh := make(chan struct{})
+	closeBlockCh := make(chan struct{})
+	var closeCalls atomic.Int32
+	var waitCalls atomic.Int32
+	oldReader := &mockChangeReader{
+		info:         &cdc.DbTableInfo{SourceDbName: "db1", SourceTblName: "child", SourceTblId: 1001},
+		closeCh:      closeCh,
+		closeBlockCh: closeBlockCh,
+		closeCalls:   &closeCalls,
+		waitCalls:    &waitCalls,
+	}
+	t.Cleanup(func() {
+		close(closeBlockCh)
+	})
+
+	cdcTask := &CDCTaskExecutor{
+		spec: &task.CreateCdcDetails{
+			TaskId:   "task-removed-from-scan-close-timeout",
+			TaskName: "task-removed-from-scan-close-timeout",
+			Accounts: []*task.Account{
+				{Id: 0},
+			},
+		},
+		tables: cdc.PatternTuples{
+			Pts: []*cdc.PatternTuple{
+				{
+					Source: cdc.PatternTable{
+						Database: "db1",
+						Table:    cdc.CDCPitrGranularity_All,
+					},
+					Sink: cdc.PatternTable{
+						Database: cdc.CDCPitrGranularity_All,
+						Table:    cdc.CDCPitrGranularity_All,
+					},
+				},
+			},
+		},
+		cnEngine:       eng,
+		runningReaders: &sync.Map{},
+	}
+	cdcTask.runningReaders.Store("db1.child", oldReader)
+
+	start := time.Now()
+	err := cdcTask.handleNewTables(map[uint32]cdc.TblMap{0: {}})
+	require.NoError(t, err)
+	require.Less(t, time.Since(start), 200*time.Millisecond)
+
+	select {
+	case <-closeCh:
+	case <-time.After(time.Second):
+		t.Fatal("expected removed reader close to start")
+	}
+	require.Equal(t, int32(1), closeCalls.Load())
+	require.Equal(t, int32(0), waitCalls.Load())
+	val, ok := cdcTask.runningReaders.Load("db1.child")
+	require.True(t, ok)
+	require.Same(t, oldReader, val)
+}
+
+func TestCdcTask_handleNewTablesStartsRemovedReaderShutdownsWithoutWaiting(t *testing.T) {
+	stub1 := gostub.Stub(&cdc.GetTxnOp, func(context.Context, engine.Engine, client.TxnClient, string) (client.TxnOperator, error) {
+		return nil, nil
+	})
+	defer stub1.Reset()
+
+	stub2 := gostub.Stub(&cdc.FinishTxnOp, func(context.Context, error, client.TxnOperator, engine.Engine) {})
+	defer stub2.Reset()
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+
+	closeBlockCh := make(chan struct{})
+	var closeCalls atomic.Int32
+	var waitCalls atomic.Int32
+	t.Cleanup(func() {
+		close(closeBlockCh)
+	})
+
+	cdcTask := &CDCTaskExecutor{
+		spec: &task.CreateCdcDetails{
+			TaskId:   "task-removed-from-scan-batch-timeout",
+			TaskName: "task-removed-from-scan-batch-timeout",
+			Accounts: []*task.Account{
+				{Id: 0},
+			},
+		},
+		tables: cdc.PatternTuples{
+			Pts: []*cdc.PatternTuple{
+				{
+					Source: cdc.PatternTable{
+						Database: "db1",
+						Table:    cdc.CDCPitrGranularity_All,
+					},
+					Sink: cdc.PatternTable{
+						Database: cdc.CDCPitrGranularity_All,
+						Table:    cdc.CDCPitrGranularity_All,
+					},
+				},
+			},
+		},
+		cnEngine:       eng,
+		runningReaders: &sync.Map{},
+	}
+
+	const readerCount = 3
+	for i := 0; i < readerCount; i++ {
+		tableName := fmt.Sprintf("child_%d", i)
+		reader := &mockChangeReader{
+			info: &cdc.DbTableInfo{
+				SourceDbName:  "db1",
+				SourceTblName: tableName,
+				SourceTblId:   uint64(1000 + i),
+			},
+			closeBlockCh: closeBlockCh,
+			closeCalls:   &closeCalls,
+			waitCalls:    &waitCalls,
+		}
+		cdcTask.runningReaders.Store("db1."+tableName, reader)
+	}
+
+	start := time.Now()
+	err := cdcTask.handleNewTables(map[uint32]cdc.TblMap{0: {}})
+	elapsed := time.Since(start)
+	require.NoError(t, err)
+	require.Less(t, elapsed, 200*time.Millisecond)
+	require.Eventually(t, func() bool {
+		return closeCalls.Load() == readerCount
+	}, time.Second, time.Millisecond)
+	require.Equal(t, int32(0), waitCalls.Load())
+
+	for i := 0; i < readerCount; i++ {
+		val, ok := cdcTask.runningReaders.Load(fmt.Sprintf("db1.child_%d", i))
+		require.True(t, ok)
+		require.NotNil(t, val)
+	}
+}
+
+func TestCdcTask_handleNewTablesDoesNotWaitAcrossTaskCallbacks(t *testing.T) {
+	stub1 := gostub.Stub(&cdc.GetTxnOp, func(context.Context, engine.Engine, client.TxnClient, string) (client.TxnOperator, error) {
+		return nil, nil
+	})
+	defer stub1.Reset()
+
+	stub2 := gostub.Stub(&cdc.FinishTxnOp, func(context.Context, error, client.TxnOperator, engine.Engine) {})
+	defer stub2.Reset()
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+
+	closeBlockCh := make(chan struct{})
+	var closeCalls atomic.Int32
+	t.Cleanup(func() {
+		close(closeBlockCh)
+	})
+
+	const taskCount = 3
+	tasks := make([]*CDCTaskExecutor, 0, taskCount)
+	for i := 0; i < taskCount; i++ {
+		cdcTask := &CDCTaskExecutor{
+			spec: &task.CreateCdcDetails{
+				TaskId:   fmt.Sprintf("task-removed-from-scan-callback-%d", i),
+				TaskName: fmt.Sprintf("task-removed-from-scan-callback-%d", i),
+				Accounts: []*task.Account{
+					{Id: 0},
+				},
+			},
+			tables: cdc.PatternTuples{
+				Pts: []*cdc.PatternTuple{
+					{
+						Source: cdc.PatternTable{
+							Database: "db1",
+							Table:    cdc.CDCPitrGranularity_All,
+						},
+						Sink: cdc.PatternTable{
+							Database: cdc.CDCPitrGranularity_All,
+							Table:    cdc.CDCPitrGranularity_All,
+						},
+					},
+				},
+			},
+			cnEngine:       eng,
+			runningReaders: &sync.Map{},
+		}
+		reader := &mockChangeReader{
+			info: &cdc.DbTableInfo{
+				SourceDbName:  "db1",
+				SourceTblName: fmt.Sprintf("child_%d", i),
+				SourceTblId:   uint64(1000 + i),
+			},
+			closeBlockCh: closeBlockCh,
+			closeCalls:   &closeCalls,
+		}
+		cdcTask.runningReaders.Store(fmt.Sprintf("db1.child_%d", i), reader)
+		tasks = append(tasks, cdcTask)
+	}
+
+	start := time.Now()
+	for _, cdcTask := range tasks {
+		err := cdcTask.handleNewTables(map[uint32]cdc.TblMap{0: {}})
+		require.NoError(t, err)
+	}
+	require.Less(t, time.Since(start), 200*time.Millisecond)
+	require.Eventually(t, func() bool {
+		return closeCalls.Load() == taskCount
+	}, time.Second, time.Millisecond)
+}
+
 // setupCDCTestStubs sets up all necessary stubs for CDC tests that create TableChangeStream
 // This prevents nil pointer panics when TableChangeStream.Run() is called in goroutines
 func setupCDCTestStubs(t *testing.T) []*gostub.Stubs {
@@ -3794,30 +4710,55 @@ func setupCDCTestStubs(t *testing.T) []*gostub.Stubs {
 		return "", "", nil, moerr.NewInternalError(ctx, "test stub - no relation")
 	}))
 
-	// Stub EnterRunSql to avoid touching real txn state in tests.
-	stubs = append(stubs, gostub.Stub(&cdc.EnterRunSql, func(context.Context, client.TxnOperator, string) func() {
-		return func() {}
+	// Stub TryEnterRunSql to avoid touching real txn state in tests.
+	stubs = append(stubs, gostub.Stub(&cdc.TryEnterRunSql, func(context.Context, client.TxnOperator, string) (func(), error) {
+		return func() {}, nil
 	}))
 
 	return stubs
 }
 
 type mockChangeReader struct {
-	info *cdc.DbTableInfo
-	wg   *sync.WaitGroup
+	info         *cdc.DbTableInfo
+	wg           *sync.WaitGroup
+	closeCh      chan struct{}
+	closeOnce    sync.Once
+	closeBlockCh chan struct{}
+	waitCh       chan struct{}
+	closeCalls   *atomic.Int32
+	waitCalls    *atomic.Int32
 }
 
-func (m mockChangeReader) Run(ctx context.Context, ar *cdc.ActiveRoutine) {}
+func (m *mockChangeReader) Run(ctx context.Context, ar *cdc.ActiveRoutine) {}
 
-func (m mockChangeReader) Close() {}
+func (m *mockChangeReader) Close() {
+	if m.closeCalls != nil {
+		m.closeCalls.Add(1)
+	}
+	if m.closeCh != nil {
+		m.closeOnce.Do(func() {
+			close(m.closeCh)
+		})
+	}
+	if m.closeBlockCh != nil {
+		<-m.closeBlockCh
+	}
+}
 
-func (m mockChangeReader) Wait() {
+func (m *mockChangeReader) Wait() {
+	if m.waitCalls != nil {
+		m.waitCalls.Add(1)
+	}
+	if m.waitCh != nil {
+		<-m.waitCh
+		return
+	}
 	if m.wg != nil {
 		m.wg.Wait()
 	}
 }
 
-func (m mockChangeReader) GetTableInfo() *cdc.DbTableInfo {
+func (m *mockChangeReader) GetTableInfo() *cdc.DbTableInfo {
 	return m.info
 }
 

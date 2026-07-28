@@ -62,6 +62,11 @@ func RunBaseClusterTests(
 								config.CN.LockService.MaxFixedSliceSize = 10001
 								config.CN.LockService.MaxLockRowCount = 10000
 								config.CN.Frontend.SkipCheckUser = true
+								config.CN.Frontend.Iceberg.Enable = true
+								config.CN.Frontend.Iceberg.EnableWrite = true
+								config.CN.Frontend.Iceberg.EnableDelete = true
+								config.CN.Frontend.Iceberg.EnableDML = true
+								config.CN.Frontend.Iceberg.EnableMaintenance = true
 							},
 						)
 					}

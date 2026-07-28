@@ -15,7 +15,6 @@
 package sqlexec
 
 import (
-	"fmt"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
@@ -66,8 +65,6 @@ func TestMetadataWriter(t *testing.T) {
 
 	js, err := writer.Marshal()
 	require.Nil(t, err)
-
-	fmt.Println(string(js))
 
 	bj, err := bytejson.ParseFromString(string(js))
 	require.Nil(t, err)
@@ -132,7 +129,6 @@ func TestMetadataFromJsonError(t *testing.T) {
 	_, err = NewMetadataFromJson("{\"a:3}")
 	require.NotNil(t, err)
 
-	//require.Equal(t, false, json.Valid([]byte("{\"a:3}")))
 }
 
 func TestMetadataResolveError(t *testing.T) {
@@ -148,7 +144,6 @@ func TestMetadataResolveError(t *testing.T) {
 
 		_, err = m.ResolveVariableFunc("a", false, false)
 		require.NotNil(t, err)
-		fmt.Println(err)
 	}
 
 	{
@@ -162,7 +157,6 @@ func TestMetadataResolveError(t *testing.T) {
 
 		_, err = m.ResolveVariableFunc("[", false, false)
 		require.NotNil(t, err)
-		fmt.Println(err)
 	}
 
 	{
@@ -175,7 +169,6 @@ func TestMetadataResolveError(t *testing.T) {
 
 		_, err = m.ResolveVariableFunc("kmeans_train_percent", false, false)
 		require.NotNil(t, err)
-		fmt.Println(err)
 
 	}
 
@@ -188,7 +181,6 @@ func TestMetadataResolveError(t *testing.T) {
 
 		_, err = m.ResolveVariableFunc("kmeans_train_percent", false, false)
 		require.NotNil(t, err)
-		fmt.Println(err)
 
 	}
 
@@ -201,7 +193,6 @@ func TestMetadataResolveError(t *testing.T) {
 
 		_, err = m.ResolveVariableFunc("kmeans_train_percent", false, false)
 		require.NotNil(t, err)
-		fmt.Println(err)
 
 	}
 
@@ -220,7 +211,6 @@ func TestMetadataModifyError(t *testing.T) {
 
 		err = m.Modify("[", "v")
 		require.NotNil(t, err)
-		fmt.Println(err)
 	}
 
 	{
@@ -234,7 +224,6 @@ func TestMetadataModifyError(t *testing.T) {
 
 		err = m.Modify("a", bj)
 		require.NotNil(t, err)
-		fmt.Println(err)
 	}
 
 }

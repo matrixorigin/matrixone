@@ -347,6 +347,7 @@ func TestIntegerDivBoundary(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
 	// INT64 min/max - overflow case
+	// MySQL 8.4: MIN_INT64 DIV -1 raises ERROR 1690 (BIGINT value is out of range)
 	{
 		tc := tcTemp{
 			info: "INT64 boundary: MIN_INT64 DIV -1 (overflow)",
@@ -356,8 +357,8 @@ func TestIntegerDivBoundary(t *testing.T) {
 				NewFunctionTestInput(types.T_int64.ToType(),
 					[]int64{-1}, []bool{false}),
 			},
-			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
-				[]int64{-9223372036854775808}, []bool{false}), // Overflow wraps around
+			expect: NewFunctionTestResult(types.T_int64.ToType(), true,
+				[]int64{0}, []bool{false}),
 		}
 		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, integerDivFn)
 		succeed, info := tcc.Run()
@@ -525,6 +526,278 @@ func TestDivisionByZeroInsertIgnoreStrictMode(t *testing.T) {
 
 	require.True(t, checkDivisionByZeroBehavior(proc, nil), "plain INSERT should still error in strict mode")
 	require.Equal(t, int32(1), atomic.LoadInt32(&proc.Base.DivByZeroErrorMode))
+}
+
+// TestIntegerDivNullDividendByZeroStrictMode verifies that a NULL dividend
+// over a zero divisor yields NULL even in strict mode: the division-by-zero
+// error must fire only when both operands are non-NULL. MySQL 8.4.8 inserts
+// NULL for NULL DIV 0 under STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,
+// while 5 DIV 0 errors.
+func TestIntegerDivNullDividendByZeroStrictMode(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	// Force strict "error on division by zero" behavior.
+	atomic.StoreInt32(&proc.Base.DivByZeroErrorMode, 1)
+	defer atomic.StoreInt32(&proc.Base.DivByZeroErrorMode, -1)
+
+	// NULL DIV 0 must not raise; the row is NULL.
+	signedNullOverZero := tcTemp{
+		info: "int64: NULL DIV 0 = NULL (strict)",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{0}, []bool{true}),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{0}, []bool{false}),
+		},
+		expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{true}),
+	}
+	tcc := NewFunctionTestCase(proc, signedNullOverZero.inputs, signedNullOverZero.expect, integerDivFn)
+	succeed, info := tcc.Run()
+	require.True(t, succeed, signedNullOverZero.info, info)
+
+	// Unsigned NULL DIV 0 must not raise either.
+	unsignedNullOverZero := tcTemp{
+		info: "uint64: NULL DIV 0 = NULL (strict)",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_uint64.ToType(), []uint64{0}, []bool{true}),
+			NewFunctionTestInput(types.T_uint64.ToType(), []uint64{0}, []bool{false}),
+		},
+		expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{true}),
+	}
+	tcc = NewFunctionTestCase(proc, unsignedNullOverZero.inputs, unsignedNullOverZero.expect, integerDivFn)
+	succeed, info = tcc.Run()
+	require.True(t, succeed, unsignedNullOverZero.info, info)
+
+	// Mixed batch: a non-NULL 5 DIV 0 in the same batch must still error.
+	nonNullOverZero := tcTemp{
+		info: "int64: [NULL, 5] DIV [0, 0] errors on the non-null row (strict)",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{0, 5}, []bool{true, false}),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{0, 0}, []bool{false, false}),
+		},
+		expect: NewFunctionTestResult(types.T_int64.ToType(), true, []int64{0, 0}, []bool{true, false}),
+	}
+	tcc = NewFunctionTestCase(proc, nonNullOverZero.inputs, nonNullOverZero.expect, integerDivFn)
+	succeed, info = tcc.Run()
+	require.True(t, succeed, nonNullOverZero.info, info)
+}
+
+// TestArithmeticNullDividendOverConstZero verifies the row-eligibility rule
+// shared by /, DIV, and MOD: a constant zero divisor may raise an error only
+// when at least one selected row has two non-NULL operands.
+func TestArithmeticNullDividendOverConstZero(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	atomic.StoreInt32(&proc.Base.DivByZeroErrorMode, 1)
+	defer atomic.StoreInt32(&proc.Base.DivByZeroErrorMode, -1)
+
+	type testCase struct {
+		name       string
+		inputs     []FunctionTestInput
+		resultType types.Type
+		fn         fEvalFn
+	}
+
+	decimal64Type := types.New(types.T_decimal64, 18, 2)
+	decimal128Type := types.New(types.T_decimal128, 38, 2)
+	decimal256Type := types.New(types.T_decimal256, 65, 2)
+	decimal64DivType := resolvedReturnType(t, DIV, []types.Type{decimal64Type, decimal64Type})
+	decimal128DivType := resolvedReturnType(t, DIV, []types.Type{decimal128Type, decimal128Type})
+	decimal256DivType := resolvedReturnType(t, DIV, []types.Type{decimal256Type, decimal256Type})
+	require.Equal(t, types.T_decimal128, decimal64DivType.Oid)
+	require.Equal(t, int32(38), decimal64DivType.Width)
+	require.Equal(t, int32(8), decimal64DivType.Scale)
+	require.Equal(t, types.T_decimal128, decimal128DivType.Oid)
+	require.Equal(t, int32(38), decimal128DivType.Width)
+	require.Equal(t, int32(8), decimal128DivType.Scale)
+	require.Equal(t, types.T_decimal256, decimal256DivType.Oid)
+	require.Equal(t, int32(65), decimal256DivType.Width)
+	require.Equal(t, int32(8), decimal256DivType.Scale)
+	testCases := []testCase{
+		{
+			name: "signed integer divide",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{0, 0}, []bool{true, true}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{0}, []bool{false}),
+			},
+			resultType: types.T_int64.ToType(), fn: integerDivFn,
+		},
+		{
+			name: "unsigned integer divide",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_uint64.ToType(), []uint64{0, 0}, []bool{true, true}),
+				NewFunctionTestConstInput(types.T_uint64.ToType(), []uint64{0}, []bool{false}),
+			},
+			resultType: types.T_int64.ToType(), fn: integerDivFn,
+		},
+		{
+			name: "float32 divide",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_float32.ToType(), []float32{0, 0}, []bool{true, true}),
+				NewFunctionTestConstInput(types.T_float32.ToType(), []float32{0}, []bool{false}),
+			},
+			resultType: types.T_float32.ToType(), fn: divFn,
+		},
+		{
+			name: "float32 integer divide",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_float32.ToType(), []float32{0, 0}, []bool{true, true}),
+				NewFunctionTestConstInput(types.T_float32.ToType(), []float32{0}, []bool{false}),
+			},
+			resultType: types.T_int64.ToType(), fn: integerDivFn,
+		},
+		{
+			name: "float32 modulo",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_float32.ToType(), []float32{0, 0}, []bool{true, true}),
+				NewFunctionTestConstInput(types.T_float32.ToType(), []float32{0}, []bool{false}),
+			},
+			resultType: types.T_float32.ToType(), fn: modFn,
+		},
+		{
+			name: "float64 divide",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_float64.ToType(), []float64{0, 0}, []bool{true, true}),
+				NewFunctionTestConstInput(types.T_float64.ToType(), []float64{0}, []bool{false}),
+			},
+			resultType: types.T_float64.ToType(), fn: divFn,
+		},
+		{
+			name: "float64 integer divide",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_float64.ToType(), []float64{0, 0}, []bool{true, true}),
+				NewFunctionTestConstInput(types.T_float64.ToType(), []float64{0}, []bool{false}),
+			},
+			resultType: types.T_int64.ToType(), fn: integerDivFn,
+		},
+		{
+			name: "float64 modulo",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_float64.ToType(), []float64{0, 0}, []bool{true, true}),
+				NewFunctionTestConstInput(types.T_float64.ToType(), []float64{0}, []bool{false}),
+			},
+			resultType: types.T_float64.ToType(), fn: modFn,
+		},
+		{
+			name: "decimal64 divide",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(decimal64Type, []types.Decimal64{0, 0}, []bool{true, true}),
+				NewFunctionTestConstInput(decimal64Type, []types.Decimal64{0}, []bool{false}),
+			},
+			resultType: decimal64DivType, fn: divFn,
+		},
+		{
+			name: "decimal64 integer divide",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(decimal64Type, []types.Decimal64{0, 0}, []bool{true, true}),
+				NewFunctionTestConstInput(decimal64Type, []types.Decimal64{0}, []bool{false}),
+			},
+			resultType: types.T_int64.ToType(), fn: integerDivFn,
+		},
+		{
+			name: "decimal64 modulo",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(decimal64Type, []types.Decimal64{0, 0}, []bool{true, true}),
+				NewFunctionTestConstInput(decimal64Type, []types.Decimal64{0}, []bool{false}),
+			},
+			resultType: decimal64Type, fn: modFn,
+		},
+		{
+			name: "decimal128 divide",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(decimal128Type, []types.Decimal128{{}, {}}, []bool{true, true}),
+				NewFunctionTestConstInput(decimal128Type, []types.Decimal128{{}}, []bool{false}),
+			},
+			resultType: decimal128DivType, fn: divFn,
+		},
+		{
+			name: "decimal128 integer divide",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(decimal128Type, []types.Decimal128{{}, {}}, []bool{true, true}),
+				NewFunctionTestConstInput(decimal128Type, []types.Decimal128{{}}, []bool{false}),
+			},
+			resultType: types.T_int64.ToType(), fn: integerDivFn,
+		},
+		{
+			name: "decimal128 modulo",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(decimal128Type, []types.Decimal128{{}, {}}, []bool{true, true}),
+				NewFunctionTestConstInput(decimal128Type, []types.Decimal128{{}}, []bool{false}),
+			},
+			resultType: decimal128Type, fn: modFn,
+		},
+		{
+			name: "decimal256 divide",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(decimal256Type, []types.Decimal256{{}, {}}, []bool{true, true}),
+				NewFunctionTestConstInput(decimal256Type, []types.Decimal256{{}}, []bool{false}),
+			},
+			resultType: decimal256DivType, fn: divFn,
+		},
+		{
+			name: "decimal256 integer divide",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(decimal256Type, []types.Decimal256{{}, {}}, []bool{true, true}),
+				NewFunctionTestConstInput(decimal256Type, []types.Decimal256{{}}, []bool{false}),
+			},
+			resultType: types.T_int64.ToType(), fn: integerDivFn,
+		},
+		{
+			name: "decimal256 modulo",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(decimal256Type, []types.Decimal256{{}, {}}, []bool{true, true}),
+				NewFunctionTestConstInput(decimal256Type, []types.Decimal256{{}}, []bool{false}),
+			},
+			resultType: decimal256Type, fn: modFn,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			tcc := NewFunctionTestCase(proc, tc.inputs,
+				NewFunctionTestResult(tc.resultType, false, nil, nil), tc.fn)
+			require.NoError(t, tcc.result.PreExtendAndReset(2))
+			require.NoError(t, tcc.fn(tcc.parameters, tcc.result, proc, 2, nil))
+			rsVec := tcc.GetResultVectorDirectly()
+			require.Equal(t, tc.resultType, *rsVec.GetType())
+			rsNull := rsVec.GetNulls()
+			require.True(t, rsNull.Contains(0))
+			require.True(t, rsNull.Contains(1))
+		})
+	}
+
+	// A masked non-NULL row is not evaluable. The only selected row is NULL,
+	// so strict mode must still return NULL instead of raising an error.
+	maskSecondRow := &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}}
+	maskedTC := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_float64.ToType(), []float64{0, 5}, []bool{true, false}),
+			NewFunctionTestConstInput(types.T_float64.ToType(), []float64{0}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_float64.ToType(), false, nil, nil), divFn)
+	require.NoError(t, maskedTC.result.PreExtendAndReset(2))
+	require.NoError(t, maskedTC.fn(maskedTC.parameters, maskedTC.result, proc, 2, maskSecondRow))
+	require.Equal(t, 2, maskedTC.GetResultVectorDirectly().GetNulls().Count())
+
+	// A mixed batch still contains an evaluable 5 / 0 row and must error in
+	// strict mode. This guards against treating "has any NULL" as "all NULL".
+	mixedTC := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(decimal64Type, []types.Decimal64{0, 500}, []bool{true, false}),
+			NewFunctionTestConstInput(decimal64Type, []types.Decimal64{0}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_decimal128.ToType(), false, nil, nil), divFn)
+	require.NoError(t, mixedTC.result.PreExtendAndReset(2))
+	require.Error(t, mixedTC.fn(mixedTC.parameters, mixedTC.result, proc, 2, nil))
+
+	// In non-strict mode the same evaluable zero-divisor row becomes NULL.
+	atomic.StoreInt32(&proc.Base.DivByZeroErrorMode, 0)
+	nonStrictTC := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(decimal64Type, []types.Decimal64{0, 500}, []bool{true, false}),
+			NewFunctionTestConstInput(decimal64Type, []types.Decimal64{0}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_decimal128.ToType(), false, nil, nil), divFn)
+	require.NoError(t, nonStrictTC.result.PreExtendAndReset(2))
+	require.NoError(t, nonStrictTC.fn(nonStrictTC.parameters, nonStrictTC.result, proc, 2, nil))
+	require.Equal(t, 2, nonStrictTC.GetResultVectorDirectly().GetNulls().Count())
 }
 
 // TestIntegerDivConstantVector tests DIV with constant vectors (column DIV constant, constant DIV column)

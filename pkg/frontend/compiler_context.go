@@ -15,12 +15,12 @@
 package frontend
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -196,7 +196,16 @@ func (tcc *TxnCompilerContext) DefaultDatabase() string {
 }
 
 func (tcc *TxnCompilerContext) GetRootSql() string {
-	return tcc.GetSession().GetSql()
+	tcc.mu.Lock()
+	execCtx := tcc.execCtx
+	if execCtx != nil && execCtx.rootSQLOverride != nil {
+		rootSQL := *execCtx.rootSQLOverride
+		tcc.mu.Unlock()
+		return rootSQL
+	}
+	ses := execCtx.ses
+	tcc.mu.Unlock()
+	return ses.GetSql()
 }
 
 func (tcc *TxnCompilerContext) GetAccountId() (uint32, error) {
@@ -443,7 +452,7 @@ func (tcc *TxnCompilerContext) ResolveById(tableId uint64, snapshot *plan2.Snaps
 		ObjName:    tableName,
 		Obj:        returnTableID,
 	}
-	tableDef := table.CopyTableDef(tempCtx)
+	tableDef := plan2.CloneTableDefForPlan(table.GetTableDef(tempCtx), true)
 	return obj, tableDef, nil
 }
 
@@ -468,7 +477,7 @@ func (tcc *TxnCompilerContext) ResolveSubscriptionTableById(tableId uint64, subM
 		ObjName:    tableName,
 		Obj:        returnTableID,
 	}
-	tableDef := table.CopyTableDef(pubContext)
+	tableDef := plan2.CloneTableDefForPlan(table.GetTableDef(pubContext), true)
 	return obj, tableDef, nil
 }
 
@@ -514,7 +523,7 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string, snapshot
 	if table == nil {
 		return nil, nil, nil
 	}
-	tableDef := table.CopyTableDef(ctx)
+	tableDef := plan2.CloneTableDefForPlan(table.GetTableDef(ctx), true)
 	tableDef.IsTemporary = isTmpTable
 
 	// convert
@@ -585,7 +594,7 @@ func (tcc *TxnCompilerContext) ResolveIndexTableByRef(
 		PubInfo:          ref.PubInfo,
 	}
 
-	tableDef := table.CopyTableDef(ctx)
+	tableDef := plan2.CloneTableDefForPlan(table.GetTableDef(ctx), true)
 	if tableDef.IsTemporary {
 		tableDef.Name = tblName
 	}
@@ -630,7 +639,7 @@ func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (udf *
 		return nil, err
 	}
 
-	sql = fmt.Sprintf(`select args, body, language, rettype, db, modified_time from mo_catalog.mo_user_defined_function where name = "%s" and db = "%s";`, name, tcc.DefaultDatabase())
+	sql = fmt.Sprintf(`select args, body, language, rettype, db, modified_time, sql_mode from mo_catalog.mo_user_defined_function where name = "%s" and db = "%s";`, name, tcc.DefaultDatabase())
 	bh.ClearExecResultSet()
 	err = bh.Exec(ctx, sql)
 	if err != nil {
@@ -693,6 +702,11 @@ func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (udf *
 			}
 			udf.ModifiedTime = strings.ReplaceAll(udf.ModifiedTime, " ", "_")
 			udf.ModifiedTime = strings.ReplaceAll(udf.ModifiedTime, ":", "-")
+			mode, getErr := erArray[0].GetString(ctx, i, 6)
+			if getErr != nil {
+				return nil, getErr
+			}
+			udf.SQLMode = &mode
 			// arg type check
 			argList := make([]*function.Arg, 0)
 			err = json.Unmarshal([]byte(argstr), &argList)
@@ -729,8 +743,8 @@ func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (udf *
 			return nil, err
 		}
 
-		sort.Slice(matchedList, func(i, j int) bool {
-			return matchedList[i].Cost < matchedList[j].Cost
+		slices.SortFunc(matchedList, func(a, b *MatchUdf) int {
+			return cmp.Compare(a.Cost, b.Cost)
 		})
 
 		minCost := matchedList[0].Cost
@@ -760,14 +774,8 @@ func (tcc *TxnCompilerContext) ResolveVariable(varName string, isSystemVar, isGl
 
 	ctx := tcc.execCtx.reqCtx
 
-	if ctx.Value(defines.InSp{}) != nil && ctx.Value(defines.InSp{}).(bool) {
-		tmpScope := ctx.Value(defines.VarScopeKey{}).(*[]map[string]interface{})
-		for i := len(*tmpScope) - 1; i >= 0; i-- {
-			curScope := (*tmpScope)[i]
-			if val, ok := curScope[strings.ToLower(varName)]; ok {
-				return val, nil
-			}
-		}
+	if val, ok := resolveStoredProcedureVariable(ctx, varName); ok {
+		return val, nil
 	}
 
 	if isSystemVar {
@@ -790,6 +798,38 @@ func (tcc *TxnCompilerContext) ResolveVariable(varName string, isSystemVar, isGl
 	}
 
 	return
+}
+
+func (tcc *TxnCompilerContext) ResolveVariableIsBin(varName string, isSystemVar, _ bool) (bool, error) {
+	if _, ok := resolveStoredProcedureVariable(tcc.execCtx.reqCtx, varName); ok {
+		return false, nil
+	}
+	if isSystemVar {
+		return false, nil
+	}
+	udVar, err := tcc.GetSession().GetUserDefinedVar(varName)
+	if err != nil {
+		return false, err
+	}
+	return udVar.IsBin, nil
+}
+
+func resolveStoredProcedureVariable(ctx context.Context, varName string) (interface{}, bool) {
+	inSp, _ := ctx.Value(defines.InSp{}).(bool)
+	if !inSp {
+		return nil, false
+	}
+	tmpScope, ok := ctx.Value(defines.VarScopeKey{}).(*[]map[string]interface{})
+	if !ok {
+		return nil, false
+	}
+	name := strings.ToLower(varName)
+	for i := len(*tmpScope) - 1; i >= 0; i-- {
+		if val, ok := (*tmpScope)[i][name]; ok {
+			return val, true
+		}
+	}
+	return nil, false
 }
 
 func (tcc *TxnCompilerContext) ResolveAccountIds(accountNames []string) (accountIds []uint32, err error) {

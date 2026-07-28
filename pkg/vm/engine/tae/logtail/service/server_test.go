@@ -122,6 +122,60 @@ func TestService(t *testing.T) {
 	}
 }
 
+func TestNewLogtailServerRejectsSmallRPCMessageSize(t *testing.T) {
+	cfg := options.NewDefaultLogtailServerCfg()
+	cfg.RpcMaxMessageSize = 1
+
+	require.NotPanics(t, func() {
+		server, err := NewLogtailServer(
+			"127.0.0.1:0", cfg, mockLocktailer(), mockRuntime(), nil)
+		require.Nil(t, server)
+		require.Error(t, err)
+	})
+}
+
+func TestNewLogtailServerValidatesFinalOptionMessageSize(t *testing.T) {
+	cfg := options.NewDefaultLogtailServerCfg()
+
+	require.NotPanics(t, func() {
+		server, err := NewLogtailServer(
+			"127.0.0.1:0", cfg, mockLocktailer(), mockRuntime(), nil,
+			WithServerMaxMessageSize(1))
+		require.Nil(t, server)
+		require.Error(t, err)
+	})
+}
+
+func TestServiceRemovesSessionAfterClientDisconnect(t *testing.T) {
+	addresses, err := tests.GetAddressBatch("127.0.0.1", 1)
+	require.NoError(t, err)
+	address := addresses[0]
+	server, err := NewLogtailServer(
+		address, options.NewDefaultLogtailServerCfg(), mockLocktailer(mockTable(1, 1, 1)), mockRuntime(), nil,
+		WithServerHeartbeatInterval(50*time.Millisecond),
+	)
+	require.NoError(t, err)
+	require.NoError(t, server.Start())
+	t.Cleanup(func() { require.NoError(t, server.Close()) })
+
+	codec := morpc.NewMessageCodec(
+		"", func() morpc.Message { return &LogtailResponseSegment{} },
+		morpc.WithCodecEnableChecksum(), morpc.WithCodecMaxBodySize(16*mpool.KB),
+	)
+	bf := morpc.NewGoettyBasedBackendFactory(codec)
+	rpcClient, err := morpc.NewClient("", bf, morpc.WithClientMaxBackendPerHost(1))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, rpcClient.Close()) })
+	stream, err := rpcClient.NewStream(context.Background(), address, false)
+	require.NoError(t, err)
+	client, err := NewLogtailClient(context.Background(), stream)
+	require.NoError(t, err)
+	require.NoError(t, client.Subscribe(context.Background(), mockTable(1, 1, 1)))
+	require.Eventually(t, func() bool { return len(server.ssmgr.ListSession()) == 1 }, 5*time.Second, 10*time.Millisecond)
+	require.NoError(t, client.Close())
+	require.Eventually(t, func() bool { return len(server.ssmgr.ListSession()) == 0 }, 5*time.Second, 10*time.Millisecond)
+}
+
 type logtailer struct {
 	tables []api.TableID
 }
@@ -157,7 +211,7 @@ func (m *logtailer) TableLogtail(
 }
 
 func (m *logtailer) Now() (timestamp.Timestamp, timestamp.Timestamp) {
-	panic("not implemented")
+	return timestamp.Timestamp{}, timestamp.Timestamp{}
 }
 
 func mockRuntime() runtime.Runtime {

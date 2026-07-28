@@ -18,10 +18,81 @@ import (
 	"bytes"
 	io "io"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
+
+// MergeSplitResult turns the physical chunks returned by AggFuncExec.Flush
+// into one logical result vector. It consumes every input vector on all paths:
+// on success the caller owns only the returned vector, and on failure all input
+// vectors have been freed.
+//
+// The common single-chunk path is zero-copy. For multiple chunks, the first
+// vector is reused and grown once before the remaining chunks are appended in
+// order. UnionBatch's full-vector path preserves nulls and copies varlen areas
+// in bulk.
+func MergeSplitResult(vecs []*vector.Vector, mp *mpool.MPool) (*vector.Vector, error) {
+	if len(vecs) == 0 {
+		return nil, moerr.NewInternalErrorNoCtx("aggregate returned no result vectors")
+	}
+
+	result := vecs[0]
+	if len(vecs) == 1 {
+		if result == nil {
+			return nil, moerr.NewInternalErrorNoCtx("aggregate returned a nil result vector")
+		}
+		return result, nil
+	}
+	if result == nil {
+		freeAggResultVectors(vecs, mp)
+		return nil, moerr.NewInternalErrorNoCtx("aggregate returned a nil result vector")
+	}
+
+	additionalRows, additionalArea := 0, 0
+	resultType := *result.GetType()
+	for i := 1; i < len(vecs); i++ {
+		if vecs[i] == nil {
+			freeAggResultVectors(vecs, mp)
+			return nil, moerr.NewInternalErrorNoCtxf("aggregate returned a nil result vector at chunk %d", i)
+		}
+		if !resultType.Eq(*vecs[i].GetType()) {
+			err := moerr.NewInternalErrorNoCtxf(
+				"aggregate returned inconsistent result types %s and %s",
+				resultType.String(), vecs[i].GetType().String())
+			freeAggResultVectors(vecs, mp)
+			return nil, err
+		}
+		additionalRows += vecs[i].Length()
+		additionalArea += len(vecs[i].GetArea())
+	}
+
+	if err := result.PreExtendWithArea(additionalRows, additionalArea, mp); err != nil {
+		freeAggResultVectors(vecs, mp)
+		return nil, err
+	}
+	for i := 1; i < len(vecs); i++ {
+		source := vecs[i]
+		if err := result.UnionBatch(source, 0, source.Length(), nil, mp); err != nil {
+			result.Free(mp)
+			for j := i; j < len(vecs); j++ {
+				vecs[j].Free(mp)
+			}
+			return nil, err
+		}
+		source.Free(mp)
+	}
+	return result, nil
+}
+
+func freeAggResultVectors(vecs []*vector.Vector, mp *mpool.MPool) {
+	for _, vec := range vecs {
+		if vec != nil {
+			vec.Free(mp)
+		}
+	}
+}
 
 // vectorUnmarshal is instead of vector.UnmarshalBinary.
 // it will check if mp is nil first.

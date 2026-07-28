@@ -135,7 +135,7 @@ select a  mod 50 as result from t1;
 ➤ result[8,54,0]  𝄀
 17.666000366210938
 select cast(a as unsigned) mod 50 as result from t1;
-➤ result[3,39,0]  𝄀
+➤ result[3,38,0]  𝄀
 18
 select cast(a+a as signed) from t1;
 ➤ cast(a + a as signed)[-5,64,0]  𝄀
@@ -178,15 +178,15 @@ SELECT id, 1.1 <= id FROM t_float;
 1.1  ¦  1  𝄀
 2.0  ¦  1
 SELECT id, id = 1.1 FROM t_float;
-id	id = 1.1
-1.0	0
-1.1	1
-2.0	0
+➤ id[7,2,1]  ¦  id = 1.1[-7,1,0]  𝄀
+1.0  ¦  0  𝄀
+1.1  ¦  1  𝄀
+2.0  ¦  0
 SELECT * from t_float WHERE id = 1.1;
-id
+➤ id[7,2,1]  𝄀
 1.1
 SELECT * from t_float WHERE id = 1.1e0;
-id
+➤ id[7,2,1]  𝄀
 1.1
 SELECT * from t_float WHERE id = '1.1';
 ➤ id[7,2,1]  𝄀

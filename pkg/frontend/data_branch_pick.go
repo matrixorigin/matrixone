@@ -97,8 +97,8 @@ func validateDataBranchPickOptions(
 	ses *Session,
 	stmt *tree.DataBranchPick,
 ) error {
-	if ses.proc.GetTxnOperator().TxnOptions().ByBegin {
-		return moerr.NewInternalError(ctx, "DATA BRANCH PICK is not supported in explicit transactions")
+	if dataBranchPickTxnNotAllowed(ses) {
+		return moerr.NewInternalError(ctx, dataBranchMergePickTxnErrorInfo())
 	}
 
 	hasBetween := stmt.BetweenFrom != "" && stmt.BetweenTo != ""
@@ -1047,6 +1047,8 @@ func (sb *segmentBuilder) observe(pkBytes []byte) {
 		sb.curMin = pk
 		sb.curMax = pk
 		sb.curCount = 1
+		sb.gapSum = 0
+		sb.gapCount = 0
 		return
 	}
 

@@ -20,10 +20,61 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+type resetOrderOperator struct {
+	*colexec.MockOperator
+	name       string
+	order      *[]string
+	resetFirst bool
+}
+
+var _ vm.Operator = (*resetOrderOperator)(nil)
+
+func (op *resetOrderOperator) Reset(*process.Process, bool, error) {
+	*op.order = append(*op.order, op.name)
+}
+
+func (op *resetOrderOperator) ResetBeforeChildren() bool {
+	return op.resetFirst
+}
+
+func newResetOrderOperator(name string, order *[]string, resetFirst bool) *resetOrderOperator {
+	return &resetOrderOperator{
+		MockOperator: colexec.NewMockOperator(),
+		name:         name,
+		order:        order,
+		resetFirst:   resetFirst,
+	}
+}
+
+func TestResetOperatorTreeHonorsChildOwnerOrdering(t *testing.T) {
+	var order []string
+	root := newResetOrderOperator("root", &order, false)
+	owner := newResetOrderOperator("owner", &order, true)
+	leaf := newResetOrderOperator("leaf", &order, false)
+	root.AppendChild(owner)
+	owner.AppendChild(leaf)
+
+	resetDone := make(map[vm.Operator]struct{})
+	resetChildOwners(root, resetDone, nil, true, context.Canceled)
+	resetOperatorTree(root, nil, resetDone, nil, true, context.Canceled)
+
+	want := []string{"owner", "leaf", "root"}
+	if len(order) != len(want) {
+		t.Fatalf("unexpected reset order %v", order)
+	}
+	for i := range want {
+		if order[i] != want[i] {
+			t.Fatalf("unexpected reset order %v", order)
+		}
+	}
+}
 
 func TestCleanupInOrderReturnsWhenMergeEndSignalIsMissing(t *testing.T) {
 	oldCleanupWaitTimeout := process.PipelineCleanupWaitTimeout

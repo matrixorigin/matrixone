@@ -28,6 +28,7 @@ type Update struct {
 	statementImpl
 	Tables TableExprs
 	Exprs  UpdateExprs
+	Ignore bool
 	// From is the optional PostgreSQL-style FROM clause that introduces
 	// additional read-only join sources. It is nil for the classic
 	// single-table and multi-table (comma) UPDATE syntaxes.
@@ -44,6 +45,9 @@ func (node *Update) Format(ctx *FmtCtx) {
 		ctx.WriteByte(' ')
 	}
 	ctx.WriteString("update")
+	if node.Ignore {
+		ctx.WriteString(" ignore")
+	}
 	if node.Tables != nil {
 		ctx.WriteByte(' ')
 		node.Tables.Format(ctx)

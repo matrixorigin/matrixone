@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
 
@@ -293,6 +294,26 @@ func TestCircuitBreakerManagerRemoveBreaker(t *testing.T) {
 
 	// New breaker should be created in closed state
 	assert.True(t, manager.Allow("backend1"))
+}
+
+func TestDetachedCircuitBreakerHandleCannotPoisonReplacement(t *testing.T) {
+	manager := NewCircuitBreakerManager("test-client", CircuitBreakerConfig{
+		Enabled:             true,
+		FailureThreshold:    1,
+		ResetTimeout:        time.Minute,
+		HalfOpenMaxRequests: 1,
+	}, zap.NewNop())
+
+	old := manager.newHandle("backend1")
+	manager.RemoveBreaker("backend1")
+	replacement := manager.newHandle("backend1")
+	require.NotSame(t, old.breaker, replacement.breaker)
+
+	// Simulate an old-generation request completing after targeted reset.
+	old.RecordFailure()
+	require.False(t, old.Allow())
+	require.True(t, replacement.Allow())
+	require.Equal(t, CircuitClosed, manager.Stats()["backend1"].State)
 }
 
 func TestCircuitBreakerManagerDisabled(t *testing.T) {

@@ -113,6 +113,7 @@ var (
 				character_set_client varchar(64),
 				collation_connection varchar(64),
 				database_collation varchar(64),
+				sql_mode varchar(1024) not null default 'PIPES_AS_CONCAT',
 				primary key(function_id)
 			)`
 
@@ -200,6 +201,7 @@ var (
 				args     text,
 				lang     text,
 				body     text,
+				sql_mode varchar(1024) not null default 'PIPES_AS_CONCAT',
 				db       varchar(100),
 				definer  varchar(50),
 				modified_time timestamp,
@@ -455,6 +457,7 @@ var (
 			ordinal_position    int unsigned  not null,
 			options             text,
 			index_table_name    varchar(5000),
+			included_columns    text,
 			primary key(id, column_name)
 		)`, catalog.MO_CATALOG, catalog.MO_INDEXES)
 

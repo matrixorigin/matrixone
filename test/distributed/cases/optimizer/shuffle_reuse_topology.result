@@ -1,0 +1,113 @@
+drop database if exists shuffle_reuse_topology;
+create database shuffle_reuse_topology;
+use shuffle_reuse_topology;
+set @@max_dop = 4;
+set session optimizer_hints = "forceOneCN=1";
+create table probe_keys (k bigint) cluster by k;
+create table build_keys_a (k bigint) cluster by k;
+create table build_keys_b (k bigint) cluster by k;
+insert into probe_keys
+select result * 300000 from generate_series(1, 64) g;
+insert into build_keys_a
+select result * 300000 from generate_series(1, 32) g;
+insert into build_keys_b
+select result * 300000 from generate_series(33, 64) g;
+select table_cnt from table_stats(
+"shuffle_reuse_topology.probe_keys",
+'patch',
+'{"table_cnt":20000000,"block_number":2048,"accurate_object_number":128,"approx_object_number":128,"ndv_map":{"k":20000000},"min_val_map":{"k":1},"max_val_map":{"k":20000000},"shuffle_range_map":{"k":{"overlap":0.1,"uniform":1,"result":[1,5000000,10000000,15000000,20000000]}}}'
+) g;
+➤ table_cnt[8,54,0]  𝄀
+2.0E7
+select table_cnt from table_stats(
+"shuffle_reuse_topology.build_keys_a",
+'patch',
+'{"table_cnt":10000000,"block_number":1024,"accurate_object_number":64,"approx_object_number":64,"ndv_map":{"k":10000000},"min_val_map":{"k":1},"max_val_map":{"k":20000000}}'
+) g;
+➤ table_cnt[8,54,0]  𝄀
+1.0E7
+select table_cnt from table_stats(
+"shuffle_reuse_topology.build_keys_b",
+'patch',
+'{"table_cnt":10000000,"block_number":1024,"accurate_object_number":64,"approx_object_number":64,"ndv_map":{"k":10000000},"min_val_map":{"k":1},"max_val_map":{"k":20000000}}'
+) g;
+➤ table_cnt[8,54,0]  𝄀
+1.0E7
+select p.k, u.k as build_k
+from (
+select distinct k from probe_keys
+) p
+left join (
+select k from build_keys_a
+union all
+select k from build_keys_b
+) u on p.k = u.k
+order by p.k, build_k;
+➤ k[-5,64,0]  ¦  build_k[-5,64,0]  𝄀
+300000  ¦  300000  𝄀
+600000  ¦  600000  𝄀
+900000  ¦  900000  𝄀
+1200000  ¦  1200000  𝄀
+1500000  ¦  1500000  𝄀
+1800000  ¦  1800000  𝄀
+2100000  ¦  2100000  𝄀
+2400000  ¦  2400000  𝄀
+2700000  ¦  2700000  𝄀
+3000000  ¦  3000000  𝄀
+3300000  ¦  3300000  𝄀
+3600000  ¦  3600000  𝄀
+3900000  ¦  3900000  𝄀
+4200000  ¦  4200000  𝄀
+4500000  ¦  4500000  𝄀
+4800000  ¦  4800000  𝄀
+5100000  ¦  5100000  𝄀
+5400000  ¦  5400000  𝄀
+5700000  ¦  5700000  𝄀
+6000000  ¦  6000000  𝄀
+6300000  ¦  6300000  𝄀
+6600000  ¦  6600000  𝄀
+6900000  ¦  6900000  𝄀
+7200000  ¦  7200000  𝄀
+7500000  ¦  7500000  𝄀
+7800000  ¦  7800000  𝄀
+8100000  ¦  8100000  𝄀
+8400000  ¦  8400000  𝄀
+8700000  ¦  8700000  𝄀
+9000000  ¦  9000000  𝄀
+9300000  ¦  9300000  𝄀
+9600000  ¦  9600000  𝄀
+9900000  ¦  9900000  𝄀
+10200000  ¦  10200000  𝄀
+10500000  ¦  10500000  𝄀
+10800000  ¦  10800000  𝄀
+11100000  ¦  11100000  𝄀
+11400000  ¦  11400000  𝄀
+11700000  ¦  11700000  𝄀
+12000000  ¦  12000000  𝄀
+12300000  ¦  12300000  𝄀
+12600000  ¦  12600000  𝄀
+12900000  ¦  12900000  𝄀
+13200000  ¦  13200000  𝄀
+13500000  ¦  13500000  𝄀
+13800000  ¦  13800000  𝄀
+14100000  ¦  14100000  𝄀
+14400000  ¦  14400000  𝄀
+14700000  ¦  14700000  𝄀
+15000000  ¦  15000000  𝄀
+15300000  ¦  15300000  𝄀
+15600000  ¦  15600000  𝄀
+15900000  ¦  15900000  𝄀
+16200000  ¦  16200000  𝄀
+16500000  ¦  16500000  𝄀
+16800000  ¦  16800000  𝄀
+17100000  ¦  17100000  𝄀
+17400000  ¦  17400000  𝄀
+17700000  ¦  17700000  𝄀
+18000000  ¦  18000000  𝄀
+18300000  ¦  18300000  𝄀
+18600000  ¦  18600000  𝄀
+18900000  ¦  18900000  𝄀
+19200000  ¦  19200000
+set session optimizer_hints = "";
+set @@max_dop = 0;
+drop database shuffle_reuse_topology;

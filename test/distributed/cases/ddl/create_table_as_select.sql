@@ -1111,8 +1111,82 @@ drop table if exists alias02;
 create table alias02 (NewCol int) as select * from alias01;
 show create table alias02;
 select * from alias02;
+drop table if exists ctas_non_ascii_alias;
+create table ctas_non_ascii_alias as select col1 as `中文别名` from alias01;
+desc ctas_non_ascii_alias;
+select `中文别名` from ctas_non_ascii_alias order by `中文别名`;
+drop table ctas_non_ascii_alias;
+drop table if exists ctas_reserved_alias;
+create table ctas_reserved_alias as select `order`.col1 as `select` from alias01 as `order`;
+select `select` from ctas_reserved_alias order by `select`;
+drop table ctas_reserved_alias;
+drop table if exists ctas_cte_alias;
+create table ctas_cte_alias as with `select` (`from`) as (select col1 from alias01) select `from` from `select`;
+select `from` from ctas_cte_alias order by `from`;
+drop table ctas_cte_alias;
+drop table if exists ctas_join_alias;
+create table ctas_join_alias as
+select `left`.`a b`
+from (select col1 as `a b` from alias01) as `left` (`a b`)
+join (select col1 as `a b` from alias01) as `right` (`a b`) using (`a b`);
+select `a b` from ctas_join_alias order by `a b`;
+drop table ctas_join_alias;
+drop table if exists `src``table`;
+drop table if exists `dst``table`;
+create table `src``table` (`a``b` int);
+insert into `src``table` values (1), (2);
+create table `dst``table` as select `s``x`.`a``b` as `x``y` from `src``table` as `s``x`;
+select `x``y` from `dst``table` order by `x``y`;
+drop table `dst``table`;
+drop table `src``table`;
+drop table if exists ctas_index_hint_src;
+drop table if exists ctas_index_hint_dst;
+create table ctas_index_hint_src (
+    col1 int,
+    index `select` (col1),
+    index `a b` (col1),
+    index `x``y` (col1)
+);
+insert into ctas_index_hint_src values (1), (2);
+create table ctas_index_hint_dst as
+select * from ctas_index_hint_src force index (`select`, `a b`, `x``y`);
+select * from ctas_index_hint_dst order by col1;
+drop table ctas_index_hint_dst;
+drop table ctas_index_hint_src;
+drop table if exists ctas_interval_identifier_src;
+drop table if exists ctas_interval_identifier_dst;
+create table ctas_interval_identifier_src (`interval(x,day)` int);
+insert into ctas_interval_identifier_src values (1), (2);
+create table ctas_interval_identifier_dst as
+select `interval(x,day)` from ctas_interval_identifier_src;
+desc ctas_interval_identifier_dst;
+select `interval(x,day)` from ctas_interval_identifier_dst order by `interval(x,day)`;
+drop table ctas_interval_identifier_dst;
+drop table ctas_interval_identifier_src;
+drop table if exists ctas_interval_string;
+create table ctas_interval_string as
+select 'interval(1,day)' as single_quoted, "interval(2,month)" as double_quoted;
+select * from ctas_interval_string;
+drop table ctas_interval_string;
+set @`a b` = 1;
+set @`select` = 2;
+set @`x``y` = 3;
+drop table if exists ctas_user_variable;
+create table ctas_user_variable as
+select @`a b` as space_name, @`select` as reserved_name, @`x``y` as backtick_name;
+select * from ctas_user_variable;
+drop table ctas_user_variable;
 drop table alias01;
 -- @session
+set global autocommit = off;
+set session autocommit = on;
+select @@global.autocommit, @@session.autocommit;
+drop table if exists ctas_system_variable_scope;
+create table ctas_system_variable_scope as
+select @@global.autocommit as global_value, @@session.autocommit as session_value;
+select * from ctas_system_variable_scope;
+drop table ctas_system_variable_scope;
+set global autocommit = on;
 drop database test;
 
 -- privilege

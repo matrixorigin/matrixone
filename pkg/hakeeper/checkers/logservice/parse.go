@@ -15,7 +15,7 @@
 package logservice
 
 import (
-	"sort"
+	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
@@ -275,7 +275,7 @@ func sortedReplicaID(replicas map[uint64]string, leaderID uint64) []uint64 {
 			exist = true
 		}
 	}
-	sort.Slice(idSlice, func(i, j int) bool { return idSlice[i] < idSlice[j] })
+	slices.Sort(idSlice)
 	if exist {
 		idSlice = append(idSlice, leaderID)
 	}

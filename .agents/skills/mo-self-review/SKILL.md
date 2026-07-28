@@ -1,6 +1,6 @@
 ---
 name: mo-self-review
-description: Pre-push self-review gate for MatrixOne changes — a systematic, multi-angle, first-principles review of your OWN diff with complete functional-closure investigation and unhappy-path coverage, calibrated to the merge bar. Run BEFORE pushing / opening / updating a PR so the human or bot PR review finds nothing new — breaking the review→modify loop. Use before declaring a change "done", before push, or when a PR keeps drawing new review rounds. Complements unhappy-path-audit (Q1–Q3 depth) and /code-review.
+description: Pre-push self-review gate for MatrixOne changes — systematic first-principles review of the complete diff, including functional closure, unhappy paths, state/ownership models, wait-for dependencies, restart/reuse generations, and derived test matrices. Use before push/PR updates, when concurrency or lifecycle code changes, or when repeated review rounds reveal missed closure edges.
 metadata:
   project: matrixone
   repository: matrixorigin/matrixone
@@ -8,6 +8,12 @@ metadata:
 ---
 
 Compatibility: designed for Codex CLI and compatible agents. Requires a git working tree with a diff vs the base branch and the unhappy-path-audit skill (for Q1-Q3 depth).
+
+## Resource Map
+
+| Change shape | Read |
+|---|---|
+| Shared state, cancellation, close/terminal paths, callbacks, retry/restart, pooling/reuse, async cleanup | [references/concurrency-lifecycle.md](references/concurrency-lifecycle.md) |
 
 ## Running this skill IS the review (don't retype the long prompt)
 
@@ -64,6 +70,7 @@ stream of nitpicks.
 | Gate | When | Action |
 |------|------|--------|
 | **G-SELF-REVIEW** | Before `git push`, before opening/updating a PR, or before declaring a change "done" | Run §1–§4 over the full diff, apply §5 convergence discipline, then check the §7 exit gate. Do not push until it passes. |
+| **G-RACE-STRESS** | The diff adds or modifies a Go unit test, or changes behavior directly covered by an existing Go unit test | Run a minimal, explicitly named behavioral set with an adaptive `-race -count=N` budget, then run each owning package completely with `-race -count=1`. Never apply repeated stress to a whole package. A missing real PASS blocks the gate; §6 defines the budget and narrow measurement-test exception. |
 
 Scope = the complete diff vs the base branch (`git diff <base>...HEAD` + staged/unstaged), **not** just the last file you touched.
 
@@ -77,7 +84,9 @@ lens is obvious to another.
 | Lens | Ask |
 |------|-----|
 | **Correctness** | Does each changed function produce the right output for ordinary AND boundary inputs (0, 1, max, empty, nil, overflow)? |
-| **Concurrency** | Shared state touched by >1 goroutine? Races, lost wakeups, double-close, ordering assumptions? (`-race` the new tests.) |
+| **Concurrency** | Shared state touched by >1 goroutine? Races, lost wakeups, double-close, ordering assumptions? Apply the mandatory race-stress gate in §6. |
+| **Control path** | Can cancel/close/reject/timeout make progress independently of the blocked operation, or does it wait on the same lock/channel/RPC? |
+| **State / generation** | Is every transition and failed transition defined? Can old work affect a restarted/reused generation or observe it before admission completes? |
 | **Resource lifecycle** | Every fd/goroutine/lock/alloc created on the change's paths — closed/released on **every** branch incl. error/panic? (→ §4 Q1) |
 | **Compatibility / boundary** | On-disk/wire format, config default, API signature, catalog metadata: does the change stay backward-compatible? New format opt-in, not a flipped default? Mismatch detected (fail-fast) not silently misread? |
 | **Failure modes** | Every error return handled; partial failure leaves consistent state; no silent fallback that hides corruption. |
@@ -109,6 +118,9 @@ half* of the closure. Trace to the terminal node.
 | index / CDC | CREATE (+ InitSQL) → sync → query → reindex → DROP |
 | resource handle | create → hand-off → … → **Destroy/Free/Close** (all holders) |
 | config / flag | parse → default-fill → consume → the *other* backend/mode that shares it |
+| state machine | states → events → ownership/linearization point → side effects → failed transition → retry/restart |
+| control path | blocked work → cancel/close/reject → every lock/channel/RPC dependency → guaranteed local termination |
+| reused object | old work stops → cleanup completes → sealed initialization → admission/publish → new generation |
 
 Rule: if you changed one arc of a closure, open and read the arcs that *consume*
 or *reverse* it (the reader for a writer, the restore for a backup, the Reset for
@@ -120,8 +132,8 @@ a Call). A change is not reviewed until its closure is closed.
 
 Run the **unhappy-path-audit** skill's Q1–Q3 over the resources/waits/growth the
 diff touches:
-- **Q1 leak** — every creation has a guaranteed destruction (incl. error paths).
-- **Q2 hung** — every wait has a guaranteed release (exhaust all broadcast/cancel/timeout paths).
+- **Q1 leak/double cleanup** — every creation reaches one effective destruction owner (incl. transfers and error paths).
+- **Q2 hung** — every explicit or implicit wait dependency has a guaranteed release; fail-fast/control paths must not queue behind the work they stop.
 - **Q3 OOM** — every accumulation has a bound / recycle.
 
 Apply its 5-gate false-positive filter (G1 full-graph, G2 can-fail, G3 symmetry,
@@ -156,6 +168,86 @@ G4 line-reread, G5 calibrate-last) before keeping any finding.
   `Workflow(code-review, "high <target>. 多角度评审、第一性原则、系统性思考、完整功能闭环、unhappy path cover")`.
 - Or manually: walk §1 lens-by-lens → §3 closure → §4 Q1–Q3 → §5 gate.
 
+For concurrency/lifecycle changes, build the invariant, transition table,
+ownership graph, wait-for graph, and generation boundary from
+[references/concurrency-lifecycle.md](references/concurrency-lifecycle.md). Derive
+the test matrix from semantic axes; do not reuse a remembered case list.
+
+### Mandatory Go unit-test race stress
+
+Before this review gate passes:
+
+1. Build a minimal focused set from each newly added or modified `TestXxx` plus
+   the individual existing regression test(s) that directly prove the changed
+   behavior or transition. When a shared helper, package/global state, or
+   background worker changes, choose the representative tests for the affected
+   contract; the package-wide run in step 5 covers the broader interaction.
+   If an issue, CI failure, or review comment names a failing `TestXxx`, that
+   exact test is mandatory in the focused set; adjacent tests are not a
+   substitute.
+2. Prove the selection is non-empty: first enumerate it with `go test -list`, or
+   verify that the test output names every intended test. A successful command
+   whose `-run` expression matched nothing is not evidence.
+3. Measure each exact test once under `-race`, excluding first-build time, and
+   choose an adaptive repetition count. Read duration `T` from the test's
+   terminal event emitted by `go test -json`, not the rounded package summary.
+   With stress budget `B` and measured test duration `T`, use
+   `N = clamp(floor(B/T), 1, 100)`. Default `B` to 30 seconds; if `T` is absent,
+   non-positive, or below timer resolution, use the upper cap `N = 100`.
+   Adjust `B` for the change's risk and CI budget, and record `T`, `B`, and `N`.
+   If a pre-fix reproduction has a known occurrence window, override the formula
+   so the post-fix run covers that window; record why.
+4. Run each focused test separately so a slow test does not reduce repetitions
+   for a fast one:
+   `go test -race -count=N -run '^TestA$' ./pkg/path`.
+   Independent commands may run in parallel when they do not contend for the
+   same external resource. Keep repetitions of one test in the same process so
+   leaked package/global state remains observable.
+5. Then run the entire owning package once under the race detector:
+   `go test -race -count=1 ./pkg/path`.
+6. If the package directly or transitively uses CGo, replace `go test` in all
+   commands with `.agents/skills/mo-dev/scripts/mo-cgo-test`; follow the
+   `mo-dev` environment setup. Do not silently skip tests because the local
+   linker or runtime environment is incomplete.
+
+Every repeated-stress command must contain an exact `-run` expression naming one
+individual test. Never apply adaptive `-count=N` stress to a package pattern or
+the repository; full-package race coverage is step 5 and runs only once.
+
+Use a bounded, test-appropriate `-timeout` when needed. Normal tests,
+non-race `-count=N`, coverage runs, or one focused race run do not substitute
+for this gate.
+
+The only routine exception is a measurement-only allocation/performance test
+whose oracle is invalidated by race-runtime bookkeeping. Isolate only that
+measurement behind `//go:build !race`, keep an equivalent functional test in
+the race build, and stress the functional test with the adaptive race budget.
+Never hide functional behavior or an ordinary timing assertion behind `!race`.
+For any other platform, build-tag, or test-kind constraint, report the exact
+test and technical reason; the gate remains blocked until the constraint is
+resolved or the reviewer explicitly accepts equivalent validation.
+
+Before accepting the stress result, audit the test design against recurring MO
+flake classes:
+
+- synchronize phases with channels, callbacks, barriers, or observable
+  conditions; do not use `time.Sleep` or a tiny deadline as the scheduler;
+- assert durable behavior, not a transient map entry, worker ownership, or
+  which goroutine happened to make progress;
+- register cleanup immediately so it runs after failed assertions too; restore
+  package/global state and stop goroutines, timers, sockets, allocators, and
+  other caller-owned resources;
+- make topology, ordering, IDs, and map-derived choices deterministic; repeated
+  `-count=N` runs share one test process and must not inherit prior-run state;
+- use a generous outer deadline only as a hang guard unless timeout behavior is
+  itself the contract under test.
+
+Race success does not prove a timing-, allocation-, or instrumentation-sensitive
+oracle under non-race or coverage execution. Run the matching CI mode as
+additional evidence when the changed test depends on one of those properties.
+All evidence must contain the real exit status and be newer than the final
+semantic edit or rebase.
+
 **On a PR (same methodology, later in the lifecycle):** `/code-review ultra <PR#>`
 or `/review <PR#>`. But the point of *this* skill is to run BEFORE the PR so those
 find nothing.
@@ -171,9 +263,13 @@ skill; for CGo build/test env and MO operator/format specifics, see **mo-dev**.
 □ every §1 lens swept over the whole diff
 □ every changed arc's functional closure (§3) traced to its terminal node
 □ Q1–Q3 unhappy paths (§4) checked on touched resources/waits/growth
+□ state ownership, wait-for dependencies, and generation transitions modeled where applicable
 □ every finding either FIXED or written to the decision log (§5.2)
 □ severity calibrated to the merge bar (§5.1) — zero open blockers
-□ new/changed tests run green (incl. -race where concurrency changed)
+□ every new/modified and directly affected Go behavioral unit test passed focused adaptive -race -count=N, with T/B/N recorded and a proven non-empty selection
+□ every !race measurement-only test retains a race-tested functional counterpart
+□ every owning package passed completely under -race -count=1
+□ test matrix covers every changed transition and evidence is newer than the final edit/rebase
 □ applicable domain guards passed (index-plugin → §8) — additive to the §1–§4 sweep above, never a substitute for it
 ```
 

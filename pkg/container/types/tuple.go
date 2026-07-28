@@ -633,6 +633,9 @@ func decodeTupleTo(b []byte, t Tuple, schema []T) (Tuple, int, []T, error) {
 			// EncodeEnum emits [enumCode, uint16Code, ...]: skip the nested uint16Code byte.
 			el, off, err = decodeWithOffset(i+1, decodeUint, uint16Code)
 			off += 1
+			if err == nil {
+				el = Enum(el.(uint16))
+			}
 
 		case uuidCode:
 			if err = checkBytes(i, 17); err != nil {
@@ -797,6 +800,9 @@ func UnpackNthElement(b []byte, n int) (any, T, error) {
 			// EncodeEnum emits [enumCode, uint16Code, ...]: skip the nested uint16Code byte.
 			el, off, err = decodeWithOffset(i+1, decodeUint, uint16Code)
 			off += 1
+			if err == nil {
+				el = Enum(el.(uint16))
+			}
 		case uuidCode:
 			if err = checkBytes(i, 17); err != nil {
 				return nil, 0, err

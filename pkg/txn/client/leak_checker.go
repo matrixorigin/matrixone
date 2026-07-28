@@ -58,6 +58,9 @@ func (lc *leakChecker) start() {
 
 func (lc *leakChecker) close() {
 	lc.stopper.Stop()
+	lc.Lock()
+	clear(lc.actives)
+	lc.Unlock()
 }
 
 func (lc *leakChecker) txnOpened(

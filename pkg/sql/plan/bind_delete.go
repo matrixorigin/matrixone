@@ -304,7 +304,7 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 			partitionPos = colName2Idx[i][colName]
 		}
 		updateCtx := &plan.UpdateCtx{
-			TableDef: DeepCopyTableDef(tableDef, true),
+			TableDef: CloneTableDefForPlan(tableDef, true),
 			ObjRef:   DeepCopyObjectRef(dmlCtx.objRefs[i]),
 		}
 
@@ -372,7 +372,7 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 			}
 
 			dmlNode.UpdateCtxList = append(dmlNode.UpdateCtxList, &plan.UpdateCtx{
-				TableDef: DeepCopyTableDef(idxNode.TableDef, true),
+				TableDef: CloneTableDefForPlan(idxNode.TableDef, true),
 				ObjRef:   DeepCopyObjectRef(idxNode.ObjRef),
 				DeleteCols: []plan.ColRef{
 					{

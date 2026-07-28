@@ -300,6 +300,79 @@ type CircuitBreakerManager struct {
 	breakers map[string]*CircuitBreaker
 }
 
+// circuitBreakerHandle pins one breaker incarnation for the lifetime of an
+// RPC attempt. A targeted backend reset removes the address from the manager;
+// results from requests that still hold the old handle must update only that
+// detached breaker, never recreate or poison the replacement incarnation.
+type circuitBreakerHandle struct {
+	manager *CircuitBreakerManager
+	backend string
+	breaker *CircuitBreaker
+}
+
+func (m *CircuitBreakerManager) newHandle(backend string) circuitBreakerHandle {
+	return circuitBreakerHandle{
+		manager: m,
+		backend: backend,
+		breaker: m.GetBreaker(backend),
+	}
+}
+
+func (h circuitBreakerHandle) Allow() bool {
+	return h.breaker.Allow()
+}
+
+func (h circuitBreakerHandle) Error() error {
+	if !h.breaker.config.Enabled {
+		return nil
+	}
+	switch h.breaker.State() {
+	case CircuitOpen:
+		return ErrCircuitOpen
+	case CircuitHalfOpen:
+		return ErrCircuitHalfOpen
+	default:
+		return nil
+	}
+}
+
+func (h circuitBreakerHandle) RecordSuccess() {
+	oldState := h.breaker.State()
+	h.breaker.RecordSuccess()
+	h.reportStateChange(oldState, h.breaker.State(), false)
+}
+
+func (h circuitBreakerHandle) RecordFailure() {
+	oldState := h.breaker.State()
+	h.breaker.RecordFailure()
+	h.reportStateChange(oldState, h.breaker.State(), true)
+}
+
+func (h circuitBreakerHandle) reportStateChange(
+	oldState, newState CircuitState,
+	failure bool,
+) {
+	if oldState == newState || !h.manager.isCurrent(h.backend, h.breaker) {
+		return
+	}
+	h.manager.reportStateChange(h.backend, newState)
+	if failure && oldState == CircuitClosed && newState == CircuitOpen {
+		h.manager.reportTrip(h.backend)
+	}
+}
+
+func (m *CircuitBreakerManager) isCurrent(
+	backend string,
+	breaker *CircuitBreaker,
+) bool {
+	if !m.config.Enabled {
+		return false
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.breakers[backend] == breaker
+}
+
 // NewCircuitBreakerManager creates a new CircuitBreakerManager.
 func NewCircuitBreakerManager(name string, config CircuitBreakerConfig, logger *zap.Logger) *CircuitBreakerManager {
 	return &CircuitBreakerManager{

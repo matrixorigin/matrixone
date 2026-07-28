@@ -24,6 +24,53 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestJsonOrderingOperatorsUseExactComparison(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	encode := func(t *testing.T, value string) string {
+		t.Helper()
+		encoded, err := encodeJsonOrderingParam([]byte(value))
+		require.NoError(t, err)
+		return string(encoded)
+	}
+
+	tests := []struct {
+		name  string
+		fn    fEvalFn
+		left  string
+		right string
+	}{
+		{name: "less adjacent integers", fn: lessThanFn, left: "9007199254740992", right: "9007199254740993"},
+		{name: "greater adjacent integers", fn: greatThanFn, left: "9007199254740993", right: "9007199254740992"},
+		{name: "less equal precise decimals", fn: lessEqualFn, left: "0.123456789123456788", right: "0.123456789123456789"},
+		{name: "greater equal precise decimals", fn: greatEqualFn, left: "0.123456789123456789", right: "0.123456789123456788"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			inputs := []FunctionTestInput{
+				NewFunctionTestInput(types.T_json.ToType(), []string{encode(t, test.left)}, []bool{false}),
+				NewFunctionTestInput(types.T_json.ToType(), []string{encode(t, test.right)}, []bool{false}),
+			}
+			expect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true}, []bool{false})
+			testCase := NewFunctionTestCase(proc, inputs, expect, test.fn)
+			ok, info := testCase.Run()
+			require.True(t, ok, info)
+		})
+	}
+
+	t.Run("null propagates", func(t *testing.T) {
+		inputs := []FunctionTestInput{
+			NewFunctionTestInput(types.T_json.ToType(), []string{encode(t, "0")}, []bool{true}),
+			NewFunctionTestInput(types.T_json.ToType(), []string{encode(t, "1")}, []bool{false}),
+		}
+		expect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false}, []bool{true})
+		testCase := NewFunctionTestCase(proc, inputs, expect, lessThanFn)
+		ok, info := testCase.Run()
+		require.True(t, ok, info)
+	})
+}
+
 func TestOperatorOpBitAndUint64Fn(t *testing.T) {
 	// 1 & 2 = 0
 	// max uint64 & 2 = 2
@@ -567,4 +614,70 @@ func TestNullSafeEqualFn(t *testing.T) {
 	fcTCArrF64 := NewFunctionTestCase(proc, tcArrF64.inputs, tcArrF64.expect, nullSafeEqualFn)
 	s, info = fcTCArrF64.Run()
 	require.True(t, s, info, tcArrF64.info)
+
+	// Narrow array types (bf16/f16/int8/uint8) — same <=> equality pattern.
+	{
+		bf1 := types.Float32ToBF16Slice([]float32{1, 2})
+		bf2 := types.Float32ToBF16Slice([]float32{3, 4})
+		tc := tcTemp{
+			info: "<=> array bf16 test",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_array_bf16.ToType(), [][]types.BF16{bf1, bf1, bf1, bf2}, []bool{false, false, false, true}),
+				NewFunctionTestInput(types.T_array_bf16.ToType(), [][]types.BF16{bf1, bf2, bf2, bf2}, []bool{false, false, true, true}),
+			},
+			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+				[]bool{true, false, false, true}, []bool{false, false, false, false}),
+		}
+		fc := NewFunctionTestCase(proc, tc.inputs, tc.expect, nullSafeEqualFn)
+		s, info = fc.Run()
+		require.True(t, s, info, tc.info)
+	}
+	{
+		f1 := types.Float32ToFloat16Slice([]float32{1, 2})
+		f2 := types.Float32ToFloat16Slice([]float32{3, 4})
+		tc := tcTemp{
+			info: "<=> array f16 test",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_array_float16.ToType(), [][]types.Float16{f1, f1, f1, f2}, []bool{false, false, false, true}),
+				NewFunctionTestInput(types.T_array_float16.ToType(), [][]types.Float16{f1, f2, f2, f2}, []bool{false, false, true, true}),
+			},
+			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+				[]bool{true, false, false, true}, []bool{false, false, false, false}),
+		}
+		fc := NewFunctionTestCase(proc, tc.inputs, tc.expect, nullSafeEqualFn)
+		s, info = fc.Run()
+		require.True(t, s, info, tc.info)
+	}
+	{
+		i1 := []int8{1, 2}
+		i2 := []int8{3, 4}
+		tc := tcTemp{
+			info: "<=> array int8 test",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_array_int8.ToType(), [][]int8{i1, i1, i1, i2}, []bool{false, false, false, true}),
+				NewFunctionTestInput(types.T_array_int8.ToType(), [][]int8{i1, i2, i2, i2}, []bool{false, false, true, true}),
+			},
+			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+				[]bool{true, false, false, true}, []bool{false, false, false, false}),
+		}
+		fc := NewFunctionTestCase(proc, tc.inputs, tc.expect, nullSafeEqualFn)
+		s, info = fc.Run()
+		require.True(t, s, info, tc.info)
+	}
+	{
+		u1 := []uint8{1, 2}
+		u2 := []uint8{3, 4}
+		tc := tcTemp{
+			info: "<=> array uint8 test",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_array_uint8.ToType(), [][]uint8{u1, u1, u1, u2}, []bool{false, false, false, true}),
+				NewFunctionTestInput(types.T_array_uint8.ToType(), [][]uint8{u1, u2, u2, u2}, []bool{false, false, true, true}),
+			},
+			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
+				[]bool{true, false, false, true}, []bool{false, false, false, false}),
+		}
+		fc := NewFunctionTestCase(proc, tc.inputs, tc.expect, nullSafeEqualFn)
+		s, info = fc.Run()
+		require.True(t, s, info, tc.info)
+	}
 }

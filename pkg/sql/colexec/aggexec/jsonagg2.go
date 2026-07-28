@@ -500,6 +500,45 @@ func buildValueByteJson(vec *vector.Vector, row uint64) (bytejson.ByteJson, erro
 			res = append(res, arr[i])
 		}
 		return bytejson.CreateByteJSONWithCheck(res)
+	// Narrow vector element types. BF16/Float16 widen to float32 for JSON;
+	// int8/uint8 emit as JSON numbers. Each needs its own decode because
+	// BytesToArray is element-typed, so a single IsArrayRelate arm cannot work.
+	case types.T_array_bf16:
+		val := vector.GenerateFunctionStrParameter(vec)
+		data, _ := val.GetStrValue(row)
+		arr := types.BytesToArray[types.BF16](data)
+		res := make([]any, 0, len(arr))
+		for i := range arr {
+			res = append(res, float64(arr[i].ToFloat32()))
+		}
+		return bytejson.CreateByteJSONWithCheck(res)
+	case types.T_array_float16:
+		val := vector.GenerateFunctionStrParameter(vec)
+		data, _ := val.GetStrValue(row)
+		arr := types.BytesToArray[types.Float16](data)
+		res := make([]any, 0, len(arr))
+		for i := range arr {
+			res = append(res, float64(arr[i].ToFloat32()))
+		}
+		return bytejson.CreateByteJSONWithCheck(res)
+	case types.T_array_int8:
+		val := vector.GenerateFunctionStrParameter(vec)
+		data, _ := val.GetStrValue(row)
+		arr := types.BytesToArray[int8](data)
+		res := make([]any, 0, len(arr))
+		for i := range arr {
+			res = append(res, float64(arr[i]))
+		}
+		return bytejson.CreateByteJSONWithCheck(res)
+	case types.T_array_uint8:
+		val := vector.GenerateFunctionStrParameter(vec)
+		data, _ := val.GetStrValue(row)
+		arr := types.BytesToArray[uint8](data)
+		res := make([]any, 0, len(arr))
+		for i := range arr {
+			res = append(res, float64(arr[i]))
+		}
+		return bytejson.CreateByteJSONWithCheck(res)
 	case types.T_uuid:
 		val := vector.MustFixedColNoTypeCheck[types.Uuid](vec)[int(row)]
 		return bytejson.CreateByteJSONWithCheck(val.String())

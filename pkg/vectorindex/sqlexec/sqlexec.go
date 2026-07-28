@@ -80,6 +80,11 @@ type SqlProcess struct {
 	IvfMembershipFilter []byte
 	// Optional doc_id membership-filter bytes (tagged docfilter payload) for the fulltext index scan.
 	FulltextMembershipFilter []byte
+
+	// Optional raw runtime-filter payload from the build side for IVF probe path.
+	// This contains serialized unique join keys and must be converted by IVF code
+	// before it is exposed to entries table scans.
+	IvfRuntimeFilterData []byte
 	// Optional exact primary-key filter list (SQL literals, comma-separated).
 	// When set, ivf_search uses it to build "pk IN (...)" and skip centroid filtering.
 	ExactPkFilter string
@@ -347,7 +352,7 @@ func RunTxnWithSqlContext(ctx context.Context,
 	cbdata any,
 	f func(sqlproc *SqlProcess, data any) error) (err error) {
 
-	newctx := context.WithValue(context.Background(), defines.TenantIDKey{}, accountId)
+	newctx := context.WithValue(ctx, defines.TenantIDKey{}, accountId)
 	newctx, cancel := context.WithTimeout(newctx, duration)
 	defer cancel()
 
@@ -358,10 +363,20 @@ func RunTxnWithSqlContext(ctx context.Context,
 
 	sqlproc := NewSqlProcessWithContext(NewSqlContext(newctx, cnUUID, txnOp, accountId, resolveVariableFunc))
 	err = f(sqlproc, cbdata)
+	return finishTxnWithCleanupContext(accountId, err, txnOp.Commit, txnOp.Rollback)
+}
+
+func finishTxnWithCleanupContext(
+	accountId uint32,
+	err error,
+	commit func(context.Context) error,
+	rollback func(context.Context) error,
+) error {
+	cleanupCtx := context.WithValue(context.Background(), defines.TenantIDKey{}, accountId)
+	cleanupCtx, cleanupCancel := context.WithTimeout(cleanupCtx, time.Minute)
+	defer cleanupCancel()
 	if err != nil {
-		err = errors.Join(err, txnOp.Rollback(sqlproc.GetContext()))
-	} else {
-		err = txnOp.Commit(sqlproc.GetContext())
+		return errors.Join(err, rollback(cleanupCtx))
 	}
-	return
+	return commit(cleanupCtx)
 }

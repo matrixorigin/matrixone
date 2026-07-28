@@ -15,8 +15,9 @@
 package clusterservice
 
 import (
+	"cmp"
 	"context"
-	"sort"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -120,6 +121,33 @@ func GetCNServiceWithoutWorkingStateWithContext(
 	return ctx.Err()
 }
 
+// GetAllTNServicesWithContext returns a TN service snapshot without waiting
+// past ctx for the built-in cluster's initial HAKeeper refresh.
+func GetAllTNServicesWithContext(
+	ctx context.Context,
+	service MOCluster,
+) ([]metadata.TNService, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if service == nil {
+		return nil, moerr.NewInternalErrorNoCtx("mocluster service is not initialized")
+	}
+	if builtIn, ok := service.(*cluster); ok {
+		if err := builtIn.waitReadyWithContext(ctx); err != nil {
+			return nil, err
+		}
+		services := builtIn.services.Load()
+		return append([]metadata.TNService(nil), services.tn...), ctx.Err()
+	}
+
+	services := service.GetAllTNServices()
+	return services, ctx.Err()
+}
+
 func lookupMOCluster(service string) (MOCluster, bool, error) {
 	rt := runtime.ServiceRuntime(service)
 	if rt == nil {
@@ -162,7 +190,8 @@ func WithDisableRefresh() Option {
 type cluster struct {
 	logger          *log.MOLogger
 	stopper         *stopper.Stopper
-	mu              sync.Mutex
+	refreshGateOnce sync.Once
+	refreshGateC    chan struct{}
 	client          ClusterClient
 	refreshInterval time.Duration
 	forceRefreshC   chan struct{}
@@ -172,6 +201,8 @@ type cluster struct {
 	// Reading from a closed channel still requires runtime mutex acquisition,
 	// which causes significant contention under high concurrency (observed 241s/5.79%
 	// mutex contention in production). Using atomic.Bool eliminates this overhead.
+	// Close also sets ready to release callers that are waiting for the first
+	// refresh while the cluster is shutting down.
 	//
 	// Correctness: readyOnce.Do guarantees that ready.Store(true) happens before
 	// close(readyC), so if readyC is closed (i.e., <-readyC returns), ready is
@@ -307,7 +338,7 @@ func (c *cluster) ForceRefresh(sync bool) {
 		return
 	}
 	if sync {
-		c.refresh()
+		c.refreshAndLog(context.Background())
 		return
 	}
 
@@ -317,10 +348,34 @@ func (c *cluster) ForceRefresh(sync bool) {
 	}
 }
 
+// Refresh obtains and publishes a new HAKeeper snapshot, or returns the reason
+// why freshness could not be established. Unlike ForceRefresh, this method is
+// suitable for callers whose correctness depends on a successful refresh.
+func (c *cluster) Refresh(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if c.options.disableRefresh {
+		// WithDisableRefresh makes the supplied static snapshot authoritative.
+		return nil
+	}
+	ctx, cancel := context.WithTimeoutCause(ctx, c.refreshInterval, moerr.CauseRefresh)
+	defer cancel()
+	return c.refreshWithContext(ctx)
+}
+
 func (c *cluster) Close() {
-	c.waitReady()
 	c.stopper.Stop()
-	close(c.forceRefreshC)
+	// A failed initial refresh leaves readiness waiters blocked. Once the
+	// refresh task has stopped, release them so shutdown does not depend on
+	// HAKeeper becoming available.
+	c.readyOnce.Do(func() {
+		c.ready.Store(true)
+		close(c.readyC)
+	})
 }
 
 // DebugUpdateCNLabel implements the MOCluster interface.
@@ -385,8 +440,10 @@ func (c *cluster) UpdateCN(s metadata.CNService) {
 	c.services.Store(new)
 }
 
-// waitReady blocks until the cluster has completed its first refresh from HAKeeper.
-// This ensures that service discovery calls don't return empty results during startup.
+// waitReady blocks until the cluster has completed its first refresh from HAKeeper
+// or is closing. This ensures that service discovery calls don't return empty
+// results during startup, while allowing shutdown to finish if HAKeeper never
+// supplied an initial snapshot.
 //
 // Performance optimization: We use atomic.Bool as a fast-path to avoid the overhead
 // of channel receive operations. Even reading from a closed channel requires acquiring
@@ -402,7 +459,8 @@ func (c *cluster) waitReady() {
 	if c.ready.Load() {
 		return
 	}
-	// Slow path: block until first refresh completes. Only happens during startup.
+	// Slow path: block until first refresh completes or shutdown releases waiters.
+	// Only happens during startup.
 	<-c.readyC
 }
 
@@ -430,32 +488,36 @@ func (c *cluster) refreshTask(ctx context.Context) {
 			c.logger.Info("refresh cluster details task stopped")
 			return
 		case <-timer.C:
-			c.refresh()
+			c.refreshAndLog(ctx)
 			timer.Reset(c.refreshInterval)
 		case <-c.forceRefreshC:
-			c.refresh()
+			c.refreshAndLog(ctx)
 		}
 	}
 }
 
-func (c *cluster) refresh() {
+func (c *cluster) refreshAndLog(parent context.Context) {
+	if err := c.Refresh(parent); err != nil {
+		c.logger.Error("failed to refresh cluster details from hakeeper",
+			zap.Error(err))
+	}
+}
+
+func (c *cluster) refreshWithContext(ctx context.Context) error {
 	defer c.logger.LogAction("refresh from hakeeper",
 		log.DefaultLogOptions().WithLevel(zap.DebugLevel))()
 
-	// There is data race as ForceRefresh and refreshTask may call this function
-	// at the same time, which will cause inconsistent CN services.
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	ctx, cancel := context.WithTimeoutCause(context.Background(), c.refreshInterval, moerr.CauseRefresh)
-	defer cancel()
+	// Serialize snapshots so an older concurrent HAKeeper response cannot
+	// overwrite a newer one. Admission is context-aware: freshness callers must
+	// not wait past their own deadline behind another refresh.
+	if err := c.acquireRefresh(ctx); err != nil {
+		return moerr.AttachCause(ctx, err)
+	}
+	defer c.releaseRefresh()
 
 	details, err := c.client.GetClusterDetails(ctx)
 	if err != nil {
-		err = moerr.AttachCause(ctx, err)
-		c.logger.Error("failed to refresh cluster details from hakeeper",
-			zap.Error(err))
-		return
+		return moerr.AttachCause(ctx, err)
 	}
 
 	c.logger.Debug("refresh cluster details from hakeeper",
@@ -471,8 +533,8 @@ func (c *cluster) refresh() {
 		}
 	}
 	// sort as the tick, with the bigger one at the front.
-	sort.Slice(details.TNStores, func(i, j int) bool {
-		return details.TNStores[i].Tick > details.TNStores[j].Tick
+	slices.SortFunc(details.TNStores, func(a, b logpb.TNStore) int {
+		return cmp.Compare(b.Tick, a.Tick)
 	})
 	for _, tn := range details.TNStores {
 		v := newTNService(tn)
@@ -491,6 +553,24 @@ func (c *cluster) refresh() {
 		c.ready.Store(true)
 		close(c.readyC)
 	})
+	return nil
+}
+
+func (c *cluster) acquireRefresh(ctx context.Context) error {
+	c.refreshGateOnce.Do(func() {
+		c.refreshGateC = make(chan struct{}, 1)
+		c.refreshGateC <- struct{}{}
+	})
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-c.refreshGateC:
+		return nil
+	}
+}
+
+func (c *cluster) releaseRefresh() {
+	c.refreshGateC <- struct{}{}
 }
 
 func (c *cluster) copyServices() *services {

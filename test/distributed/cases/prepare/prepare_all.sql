@@ -474,6 +474,25 @@ PREPARE s FROM 'SELECT concat(?,"")';
 EXECUTE s USING @maxint;
 DEALLOCATE PREPARE s;
 
+drop table if exists prepare_bit_numeric;
+create table prepare_bit_numeric (b bit(64));
+insert into prepare_bit_numeric values (0), (18446744073709551615);
+select b from prepare_bit_numeric order by b;
+
+prepare s from 'select ? + b from prepare_bit_numeric where b = 0';
+execute s using @maxint;
+deallocate prepare s;
+
+prepare s from 'select (? + 0.5) + b from prepare_bit_numeric where b = 0';
+execute s using @maxint;
+deallocate prepare s;
+
+prepare s from 'select b + (0.5 + ?) from prepare_bit_numeric where b = 0';
+execute s using @maxint;
+deallocate prepare s;
+
+drop table prepare_bit_numeric;
+
 --test order by clause contains placeholder
 CREATE DATABASE mocloud_meta;
 PREPARE mo_stmt_id_1 FROM SELECT SCHEMA_NAME from Information_schema.SCHEMATA where SCHEMA_NAME LIKE ? ORDER BY SCHEMA_NAME=? DESC,SCHEMA_NAME limit 1;
@@ -507,6 +526,18 @@ SELECT * FROM replace_prepare ORDER BY a;
 DEALLOCATE PREPARE rp2;
 drop table if exists replace_prepare;
 drop table if exists replace_prepare_src;
+
+-- test prepared ROWS frame bounds are evaluated for every execution
+drop table if exists prepared_window_frame;
+create table prepared_window_frame(id int primary key, n int);
+insert into prepared_window_frame values (1,10),(2,20),(3,30);
+prepare prepared_rows_frame from 'select id, sum(n) over (order by id rows between ? preceding and ? following) from prepared_window_frame order by id';
+set @before = 1, @after = 1;
+execute prepared_rows_frame using @before, @after;
+set @before = 0, @after = 0;
+execute prepared_rows_frame using @before, @after;
+deallocate prepare prepared_rows_frame;
+drop table prepared_window_frame;
 
 # reset
 SET TIME_ZONE = "SYSTEM";

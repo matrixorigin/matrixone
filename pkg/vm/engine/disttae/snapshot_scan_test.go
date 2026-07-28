@@ -19,12 +19,15 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
@@ -463,6 +466,111 @@ func TestScanSnapshotWithCurrentRanges_EarlyValidation(t *testing.T) {
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "requires disttae engine")
 	})
+}
+
+func TestScanSnapshotWithCurrentRangesUsesRangePartitionState(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	rowID := buildTestMaterializedSnapshotRowID(t, 1)
+	pState := newTestMaterializedSnapshotPartitionState(t, mp, []testMaterializedSnapshotRow{
+		{rowID: rowID, ts: types.BuildTS(10, 0), id: 7, payload: 70},
+	})
+	relData := readutil.NewBlockListRelationData(
+		0,
+		readutil.WithPartitionState(pState),
+	)
+	relData.AppendBlockInfo(&objectio.EmptyBlockInfo)
+
+	ctrl := gomock.NewController(t)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().SnapshotTS().Return(types.BuildTS(30, 0).ToTimestamp()).AnyTimes()
+
+	tableDef := &plan.TableDef{
+		Cols: []*plan.ColDef{
+			{Name: "id", Typ: plan.Type{Id: int32(types.T_int64)}, Seqnum: 0},
+			{Name: "payload", Typ: plan.Type{Id: int32(types.T_int64)}, Seqnum: 1},
+		},
+		Name2ColIndex: map[string]int32{"id": 0, "payload": 1},
+	}
+	tbl := &txnTable{
+		tableId:   42,
+		tableName: "test_table",
+		tableDef:  tableDef,
+		db: &txnDatabase{
+			databaseName: "test_db",
+			op:           txnOp,
+		},
+		eng: &Engine{},
+	}
+
+	var gotIDs []int64
+	err := ScanSnapshotWithCurrentRanges(
+		context.Background(),
+		"unit-test",
+		tbl,
+		relData,
+		types.BuildTS(20, 0),
+		[]string{"id", "payload"},
+		[]types.Type{types.T_int64.ToType(), types.T_int64.ToType()},
+		nil,
+		1,
+		mp,
+		func(bat *batch.Batch) error {
+			gotIDs = append(gotIDs, vector.MustFixedColWithTypeCheck[int64](bat.Vecs[0])...)
+			return nil
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, []int64{7}, gotIDs)
+}
+
+func TestCollectSnapshotScanTombstonesUsesProvidedState(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	rowID := buildTestMaterializedSnapshotRowID(t, 3)
+	pState := newTestMaterializedSnapshotPartitionState(t, mp, []testMaterializedSnapshotRow{
+		{rowID: rowID, ts: types.BuildTS(10, 0), id: 7, payload: 70},
+	})
+
+	rowIDVec := vector.NewVec(types.T_Rowid.ToType())
+	tsVec := vector.NewVec(types.T_TS.ToType())
+	pkVec := vector.NewVec(types.T_int64.ToType())
+	tombstoneRowIDVec := vector.NewVec(types.T_Rowid.ToType())
+	defer rowIDVec.Free(mp)
+	defer tsVec.Free(mp)
+	defer pkVec.Free(mp)
+	defer tombstoneRowIDVec.Free(mp)
+	require.NoError(t, vector.AppendFixed(rowIDVec, rowID, false, mp))
+	require.NoError(t, vector.AppendFixed(tsVec, types.BuildTS(15, 0), false, mp))
+	require.NoError(t, vector.AppendFixed(pkVec, int64(7), false, mp))
+	require.NoError(t, vector.AppendFixed(tombstoneRowIDVec, types.RandomRowid(), false, mp))
+
+	packer := types.NewPacker()
+	defer packer.Close()
+	pState.HandleRowsDelete(context.Background(), &api.Batch{
+		Attrs: []string{"rowid", "time"},
+		Vecs: []api.Vector{
+			mustVectorToProtoForMaterializedSnapshotTest(t, rowIDVec),
+			mustVectorToProtoForMaterializedSnapshotTest(t, tsVec),
+			mustVectorToProtoForMaterializedSnapshotTest(t, pkVec),
+			mustVectorToProtoForMaterializedSnapshotTest(t, tombstoneRowIDVec),
+		},
+	}, packer, mp)
+
+	tombstones, err := collectSnapshotScanTombstones(pState, types.BuildTS(20, 0))
+	require.NoError(t, err)
+	require.True(t, tombstones.HasAnyInMemoryTombstone())
+	require.Empty(t, tombstones.ApplyInMemTombstones(
+		rowID.BorrowBlockID(),
+		[]int64{int64(rowID.GetRowOffset())},
+		nil,
+	))
+
+	empty, err := collectSnapshotScanTombstones(nil, types.BuildTS(20, 0))
+	require.NoError(t, err)
+	require.False(t, empty.HasAnyInMemoryTombstone())
 }
 
 func TestReadSnapshotWithSource_ReaderError(t *testing.T) {

@@ -128,6 +128,22 @@ select * from rdb_dst.t order by id;
 set remap_rewrites = '';
 insert into rdb_dst.t values (2,20),(3,30);
 
+-- ANALYZE must expand implicit columns after remapping, and inherited inline
+-- rewrites must affect the cardinality query.
+create database if not exists rdb_src;
+drop table if exists rdb_src.t;
+create table rdb_src.t(src_only int);
+insert into rdb_src.t values (100),(200);
+drop table if exists rdb_dst.t;
+create table rdb_dst.t(id int, keep int);
+insert into rdb_dst.t values (1,1),(2,1),(3,0),(3,0);
+set remap_rewrites = '{"remapdb": {"rdb_src": "rdb_dst"}}';
+analyze table rdb_src.t(id);
+use rdb_src;
+analyze table t(id);
+analyze table t;
+/*+ {"rewrites": {"rdb_dst.t": "select * from rdb_dst.t where keep = 1"}} */ analyze table t(id);
+use mysql;
 set remap_rewrites = '';
 set enable_remap_hint = 0;
 drop database if exists rdb_src;

@@ -203,7 +203,7 @@ func TestNewCuvsCdcWriter_RejectsVecF64(t *testing.T) {
 	td.Cols[1].Typ.Id = int32(types.T_array_float64)
 	_, err := NewCuvsCdcWriter("ivfpq", "db", "tbl", "idx", td, newTestCuvsIndexDefs(td))
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "fp32-only")
+	require.Contains(t, err.Error(), "vecf32 or vecf16")
 }
 
 // ---------------------------------------------------------------------------

@@ -62,6 +62,23 @@ func TestLength(t *testing.T) {
 	}
 }
 
+func TestDupOffHeap(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := NewVec(types.T_varchar.ToType())
+	require.NoError(t, AppendBytesList(vec, [][]byte{[]byte("a"), []byte("longer value")}, nil, mp))
+
+	dup, err := vec.DupOffHeap(mp)
+	require.NoError(t, err)
+	require.True(t, dup.offHeap)
+	require.Equal(t, vec.Length(), dup.Length())
+	require.Equal(t, vec.GetBytesAt(0), dup.GetBytesAt(0))
+	require.Equal(t, vec.GetBytesAt(1), dup.GetBytesAt(1))
+
+	dup.Free(mp)
+	vec.Free(mp)
+	require.Equal(t, int64(0), mp.CurrNB())
+}
+
 func TestSize(t *testing.T) {
 	mp := mpool.MustNewZero()
 	vec := NewVec(types.T_int8.ToType())
@@ -422,6 +439,24 @@ func TestDup(t *testing.T) {
 	v.Free(mp)
 	w.Free(mp)
 	require.Equal(t, int64(0), mp.CurrNB())
+}
+
+func TestNewVecWithDataCopyOwnsBackingData(t *testing.T) {
+	mp := mpool.MustNewZero()
+	data := []byte("external-data")
+	area := []byte("external-area")
+	vec, err := NewVecWithDataCopy(types.T_text.ToType(), 1, data, area, mp)
+	require.NoError(t, err)
+	require.Equal(t, data, vec.GetData())
+	require.Equal(t, area, vec.GetArea())
+
+	data[0] = 'X'
+	area[0] = 'Y'
+	require.Equal(t, byte('e'), vec.GetData()[0])
+	require.Equal(t, byte('e'), vec.GetArea()[0])
+	require.NotPanics(t, func() { vec.Free(mp) })
+	require.Nil(t, vec.GetData())
+	require.Nil(t, vec.GetArea())
 }
 
 func TestShrink(t *testing.T) {

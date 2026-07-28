@@ -387,6 +387,14 @@ message CheckOrphanResponse {
 message OrphanTxn {
   string     Service = 1;
   repeated bytes Txn = 2;
+  // Persist installs a source-service Commit fence until ExpireAtUnixNano.
+  // It is used only when a Commit request may already be buffered in the
+  // source CN transport. TN rejects that Commit after its absolute deadline,
+  // so one fence can safely cover many unknown outcomes without retaining one
+  // tombstone per transaction.
+  bool Persist = 3;
+  int64 ExpireAtUnixNano = 4;
+  uint64 CommitSequence = 5;
 }
 
 // Result result is used to tell the caller the result of the lock operation.

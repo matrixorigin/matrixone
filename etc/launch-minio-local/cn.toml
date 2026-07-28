@@ -57,3 +57,10 @@ port = 6001
 disableMetric = false
 enable-metric-to-prom = true
 status-port = 7001
+
+[cn.frontend.iceberg]
+enable = true
+enable-write = true
+enable-delete = true
+enable-dml = true
+enable-maintenance = true

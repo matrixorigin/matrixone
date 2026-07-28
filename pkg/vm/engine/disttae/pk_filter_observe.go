@@ -43,13 +43,21 @@ func logPKFilterInMemSummary(
 		filterValid bool
 		filterOp    int
 		keyCnt      int
+		disjunctCnt int
 		exact       bool
 		exactHit    bool
 	)
 	if filter != nil {
 		filterValid = filter.Valid()
 		filterOp = filter.Op()
-		keyCnt = len(filter.Keys())
+		specs := filter.Specs()
+		disjunctCnt = len(specs)
+		for idx := range specs {
+			keyCnt += len(specs[idx].Keys)
+		}
+		if disjunctCnt > 1 {
+			filterOp = -1
+		}
 		exact, exactHit = filter.Exact()
 	}
 
@@ -61,6 +69,7 @@ func logPKFilterInMemSummary(
 		zap.Bool("has-mem-pk-filter", filter != nil),
 		zap.Bool("mem-pk-filter-valid", filterValid),
 		zap.Int("filter-op", filterOp),
+		zap.Int("disjunct-count", disjunctCnt),
 		zap.Int("key-count", keyCnt),
 		zap.Bool("exact-filter", exact),
 		zap.Bool("exact-hit", exactHit),

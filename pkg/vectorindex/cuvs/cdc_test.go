@@ -24,6 +24,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 )
 
@@ -88,7 +89,11 @@ func encodeBatch(
 			insertIdx++
 		}
 		before := len(buf)
-		out, err := EncodeEventRecord(buf, op, pkids[i], v, inc, dim, includeBytesPerRow)
+		var vb []byte
+		if v != nil {
+			vb = util.UnsafeSliceToBytes(v)
+		}
+		out, err := EncodeEventRecord(buf, op, pkids[i], vb, inc, 4*dim, includeBytesPerRow)
 		if err != nil {
 			t.Fatalf("EncodeEventRecord(%v, pkid=%d): %v", op, pkids[i], err)
 		}
@@ -101,14 +106,14 @@ func encodeBatch(
 // TestEncodeDecodeEventRecord_Delete: round-trip a DELETE record.
 func TestEncodeDecodeEventRecord_Delete(t *testing.T) {
 	for _, pkid := range []int64{1, -7, math.MaxInt64, math.MinInt64, 0} {
-		buf, err := EncodeEventRecord(nil, CdcOpDelete, pkid, nil, nil, 4, 0)
+		buf, err := EncodeEventRecord(nil, CdcOpDelete, pkid, nil, nil, 16, 0)
 		if err != nil {
 			t.Fatalf("encode pkid=%d: %v", pkid, err)
 		}
 		if len(buf) != 9 {
 			t.Fatalf("DELETE record should be 9 bytes, got %d", len(buf))
 		}
-		rec, n, ok := DecodeEventRecord(buf, 4, 0)
+		rec, n, ok := DecodeEventRecord(buf, 16, 0)
 		if !ok || n != 9 {
 			t.Fatalf("decode failed: ok=%v n=%d", ok, n)
 		}
@@ -123,7 +128,7 @@ func TestEncodeDecodeEventRecord_Insert(t *testing.T) {
 	dim := 3
 	pkid := int64(42)
 	vec := []float32{1.5, -2.25, math.MaxFloat32}
-	buf, err := EncodeEventRecord(nil, CdcOpInsert, pkid, vec, nil, dim, 0)
+	buf, err := EncodeEventRecord(nil, CdcOpInsert, pkid, util.UnsafeSliceToBytes(vec), nil, 4*dim, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,16 +136,17 @@ func TestEncodeDecodeEventRecord_Insert(t *testing.T) {
 	if len(buf) != want {
 		t.Fatalf("INSERT record len %d, want %d", len(buf), want)
 	}
-	rec, n, ok := DecodeEventRecord(buf, dim, 0)
+	rec, n, ok := DecodeEventRecord(buf, 4*dim, 0)
 	if !ok || n != want {
 		t.Fatalf("decode: ok=%v n=%d", ok, n)
 	}
 	if rec.Op != CdcOpInsert || rec.Pkid != pkid {
 		t.Fatalf("op/pkid mismatch")
 	}
+	gotVec := util.UnsafeSliceCast[float32](rec.Vec)
 	for i, v := range vec {
-		if math.Float32bits(rec.Vec[i]) != math.Float32bits(v) {
-			t.Fatalf("vec[%d]: got %v want %v", i, rec.Vec[i], v)
+		if math.Float32bits(gotVec[i]) != math.Float32bits(v) {
+			t.Fatalf("vec[%d]: got %v want %v", i, gotVec[i], v)
 		}
 	}
 	if len(rec.Include) != 0 {
@@ -156,7 +162,7 @@ func TestEncodeDecodeEventRecord_InsertWithInclude(t *testing.T) {
 	binary.LittleEndian.PutUint32(include[0:4], 0xdeadbeef)
 	binary.LittleEndian.PutUint64(include[4:12], 0x1122334455667788)
 	include[12] = 0x02
-	buf, err := EncodeEventRecord(nil, CdcOpInsert, 1, []float32{0.1, 0.2}, include, dim, includeBytesPerRow)
+	buf, err := EncodeEventRecord(nil, CdcOpInsert, 1, util.UnsafeSliceToBytes([]float32{0.1, 0.2}), include, 4*dim, includeBytesPerRow)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +170,7 @@ func TestEncodeDecodeEventRecord_InsertWithInclude(t *testing.T) {
 	if len(buf) != want {
 		t.Fatalf("len %d, want %d", len(buf), want)
 	}
-	rec, n, ok := DecodeEventRecord(buf, dim, includeBytesPerRow)
+	rec, n, ok := DecodeEventRecord(buf, 4*dim, includeBytesPerRow)
 	if !ok || n != want {
 		t.Fatalf("decode: ok=%v n=%d", ok, n)
 	}
@@ -181,19 +187,19 @@ func TestEncodeDecodeEventRecord_InsertWithInclude(t *testing.T) {
 // TestEncodeEventRecord_Rejects: encoder rejects malformed inputs.
 func TestEncodeEventRecord_Rejects(t *testing.T) {
 	// DELETE with vec.
-	if _, err := EncodeEventRecord(nil, CdcOpDelete, 1, []float32{1}, nil, 1, 0); err == nil {
+	if _, err := EncodeEventRecord(nil, CdcOpDelete, 1, util.UnsafeSliceToBytes([]float32{1}), nil, 4, 0); err == nil {
 		t.Fatal("expected error on DELETE with vec")
 	}
 	// INSERT with wrong dim.
-	if _, err := EncodeEventRecord(nil, CdcOpInsert, 1, []float32{1, 2}, nil, 4, 0); err == nil {
+	if _, err := EncodeEventRecord(nil, CdcOpInsert, 1, util.UnsafeSliceToBytes([]float32{1, 2}), nil, 4, 0); err == nil {
 		t.Fatal("expected error on dim mismatch")
 	}
 	// INSERT with include but includeBytesPerRow=0.
-	if _, err := EncodeEventRecord(nil, CdcOpInsert, 1, []float32{1}, []byte{0xff}, 1, 0); err == nil {
+	if _, err := EncodeEventRecord(nil, CdcOpInsert, 1, util.UnsafeSliceToBytes([]float32{1}), []byte{0xff}, 4, 0); err == nil {
 		t.Fatal("expected error on extraneous include bytes")
 	}
 	// Unknown op.
-	if _, err := EncodeEventRecord(nil, CdcOp(99), 1, nil, nil, 1, 0); err == nil {
+	if _, err := EncodeEventRecord(nil, CdcOp(99), 1, nil, nil, 4, 0); err == nil {
 		t.Fatal("expected error on unknown op")
 	}
 }
@@ -203,21 +209,21 @@ func TestEncodeEventRecord_Rejects(t *testing.T) {
 // no-bytes-left case and an unknown op byte at the boundary).
 func TestDecodeEventRecord_StopsAtPad(t *testing.T) {
 	// Empty buffer: decoder reports not-ok.
-	if _, _, ok := DecodeEventRecord(nil, 4, 0); ok {
+	if _, _, ok := DecodeEventRecord(nil, 16, 0); ok {
 		t.Fatal("decoder should not accept empty input")
 	}
 	// 7 bytes: not enough for any record.
-	if _, _, ok := DecodeEventRecord(make([]byte, 7), 4, 0); ok {
+	if _, _, ok := DecodeEventRecord(make([]byte, 7), 16, 0); ok {
 		t.Fatal("decoder should not accept 7 bytes")
 	}
 	// Bogus op byte.
 	bogus := []byte{42, 0, 0, 0, 0, 0, 0, 0, 0}
-	if _, _, ok := DecodeEventRecord(bogus, 4, 0); ok {
+	if _, _, ok := DecodeEventRecord(bogus, 16, 0); ok {
 		t.Fatal("decoder should reject unknown op byte")
 	}
 	// INSERT op but truncated payload.
 	short := []byte{byte(CdcOpInsert), 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0} // missing vec bytes
-	if _, _, ok := DecodeEventRecord(short, 4, 0); ok {
+	if _, _, ok := DecodeEventRecord(short, 16, 0); ok {
 		t.Fatal("decoder should reject truncated INSERT")
 	}
 }
@@ -259,7 +265,7 @@ func TestCdcAppendEventsSql_DeleteOnly(t *testing.T) {
 	}
 	// Round-trip via the loader path.
 	chunks := []EventChunk{{ChunkId: 0, Data: blobs[0]}}
-	state, err := ReplayEventLog(chunks, 4, 0)
+	state, err := ReplayEventLog(chunks, 16, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -290,7 +296,7 @@ func TestCdcAppendEventsSql_InsertOnly(t *testing.T) {
 	}
 	blobs := extractUnhexBlobs(t, sqls[0])
 	chunks := []EventChunk{{ChunkId: 0, Data: blobs[0]}}
-	state, err := ReplayEventLog(chunks, dim, 0)
+	state, err := ReplayEventLog(chunks, 4*dim, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -301,9 +307,10 @@ func TestCdcAppendEventsSql_InsertOnly(t *testing.T) {
 		if e.Pkid != pkids[i] {
 			t.Fatalf("overflow[%d].Pkid: got %d want %d", i, e.Pkid, pkids[i])
 		}
+		gotVec := util.UnsafeSliceCast[float32](e.Vec)
 		for k, v := range vecs[i] {
-			if math.Float32bits(e.Vec[k]) != math.Float32bits(v) {
-				t.Fatalf("overflow[%d].Vec[%d]: got %v want %v", i, k, e.Vec[k], v)
+			if math.Float32bits(gotVec[k]) != math.Float32bits(v) {
+				t.Fatalf("overflow[%d].Vec[%d]: got %v want %v", i, k, gotVec[k], v)
 			}
 		}
 	}
@@ -327,7 +334,7 @@ func TestCdcAppendEventsSql_Mixed(t *testing.T) {
 	}
 	blobs := extractUnhexBlobs(t, sqls[0])
 	chunks := []EventChunk{{ChunkId: 0, Data: blobs[0]}}
-	state, err := ReplayEventLog(chunks, dim, 0)
+	state, err := ReplayEventLog(chunks, 4*dim, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -385,7 +392,7 @@ func TestCdcAppendEventsSql_ChunkPacking(t *testing.T) {
 		{ChunkId: 5, Data: blobs[0]},
 		{ChunkId: 6, Data: blobs[1]},
 	}
-	state, err := ReplayEventLog(chunks, dim, 0)
+	state, err := ReplayEventLog(chunks, 4*dim, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -408,7 +415,7 @@ func TestReplayEventLog_DeleteInsertDelete(t *testing.T) {
 	buf, _ := encodeBatch(t, dim, 0, ops, pkids, vecs, nil)
 
 	chunks := []EventChunk{{ChunkId: 0, Data: FrameCdcChunk(buf, nil, 0, 0, 0)}}
-	state, err := ReplayEventLog(chunks, dim, 0)
+	state, err := ReplayEventLog(chunks, 4*dim, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -440,7 +447,7 @@ func TestReplayEventLog_InsertDeleteInsert(t *testing.T) {
 	vecs := [][]float32{{1, 1}, {9, 9}}
 	buf, _ := encodeBatch(t, dim, 0, ops, pkids, vecs, nil)
 
-	state, err := ReplayEventLog([]EventChunk{{ChunkId: 0, Data: FrameCdcChunk(buf, nil, 0, 0, 0)}}, dim, 0)
+	state, err := ReplayEventLog([]EventChunk{{ChunkId: 0, Data: FrameCdcChunk(buf, nil, 0, 0, 0)}}, 4*dim, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -451,8 +458,9 @@ func TestReplayEventLog_InsertDeleteInsert(t *testing.T) {
 		t.Fatalf("overflow: got %v want one entry pkid=7", state.Overflow)
 	}
 	// Last INSERT's vec wins for the overflow entry.
-	if state.Overflow[0].Vec[0] != 9 || state.Overflow[0].Vec[1] != 9 {
-		t.Fatalf("vec: got %v want [9 9]", state.Overflow[0].Vec)
+	gotVec := util.UnsafeSliceCast[float32](state.Overflow[0].Vec)
+	if gotVec[0] != 9 || gotVec[1] != 9 {
+		t.Fatalf("vec: got %v want [9 9]", gotVec)
 	}
 }
 
@@ -465,7 +473,7 @@ func TestReplayEventLog_UpsertSingle(t *testing.T) {
 	buf, _ := encodeBatch(t, dim, 0,
 		[]CdcOp{CdcOpUpsert}, []int64{7}, [][]float32{{1, 1}}, nil)
 
-	state, err := ReplayEventLog([]EventChunk{{ChunkId: 0, Data: FrameCdcChunk(buf, nil, 0, 0, 0)}}, dim, 0)
+	state, err := ReplayEventLog([]EventChunk{{ChunkId: 0, Data: FrameCdcChunk(buf, nil, 0, 0, 0)}}, 4*dim, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -475,8 +483,9 @@ func TestReplayEventLog_UpsertSingle(t *testing.T) {
 	if len(state.Overflow) != 1 || state.Overflow[0].Pkid != 7 {
 		t.Fatalf("overflow: got %v want one entry pkid=7 (UPSERT writes new vec to brute-force overflow)", state.Overflow)
 	}
-	if state.Overflow[0].Vec[0] != 1 || state.Overflow[0].Vec[1] != 1 {
-		t.Fatalf("vec: got %v want [1 1]", state.Overflow[0].Vec)
+	gotVec := util.UnsafeSliceCast[float32](state.Overflow[0].Vec)
+	if gotVec[0] != 1 || gotVec[1] != 1 {
+		t.Fatalf("vec: got %v want [1 1]", gotVec)
 	}
 }
 
@@ -489,7 +498,7 @@ func TestReplayEventLog_UpsertThenDelete(t *testing.T) {
 	buf, _ := encodeBatch(t, dim, 0,
 		[]CdcOp{CdcOpUpsert, CdcOpDelete}, []int64{7, 7}, [][]float32{{1, 1}}, nil)
 
-	state, err := ReplayEventLog([]EventChunk{{ChunkId: 0, Data: FrameCdcChunk(buf, nil, 0, 0, 0)}}, dim, 0)
+	state, err := ReplayEventLog([]EventChunk{{ChunkId: 0, Data: FrameCdcChunk(buf, nil, 0, 0, 0)}}, 4*dim, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -512,7 +521,7 @@ func TestReplayEventLog_UpsertReplayIdempotent(t *testing.T) {
 		[]int64{7, 7, 7},
 		[][]float32{{1, 1}, {1, 1}, {1, 1}}, nil)
 
-	state, err := ReplayEventLog([]EventChunk{{ChunkId: 0, Data: FrameCdcChunk(buf, nil, 0, 0, 0)}}, dim, 0)
+	state, err := ReplayEventLog([]EventChunk{{ChunkId: 0, Data: FrameCdcChunk(buf, nil, 0, 0, 0)}}, 4*dim, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -522,8 +531,9 @@ func TestReplayEventLog_UpsertReplayIdempotent(t *testing.T) {
 	if len(state.Overflow) != 1 || state.Overflow[0].Pkid != 7 {
 		t.Fatalf("overflow: got %v want one entry pkid=7", state.Overflow)
 	}
-	if state.Overflow[0].Vec[0] != 1 || state.Overflow[0].Vec[1] != 1 {
-		t.Fatalf("vec: got %v want [1 1]", state.Overflow[0].Vec)
+	gotVec := util.UnsafeSliceCast[float32](state.Overflow[0].Vec)
+	if gotVec[0] != 1 || gotVec[1] != 1 {
+		t.Fatalf("vec: got %v want [1 1]", gotVec)
 	}
 }
 
@@ -537,7 +547,7 @@ func TestReplayEventLog_InsertAfterDeleteDoesNotUnfilter(t *testing.T) {
 	buf, _ := encodeBatch(t, dim, 0,
 		[]CdcOp{CdcOpDelete, CdcOpInsert}, []int64{7, 7}, [][]float32{{9, 9}}, nil)
 
-	state, err := ReplayEventLog([]EventChunk{{ChunkId: 0, Data: FrameCdcChunk(buf, nil, 0, 0, 0)}}, dim, 0)
+	state, err := ReplayEventLog([]EventChunk{{ChunkId: 0, Data: FrameCdcChunk(buf, nil, 0, 0, 0)}}, 4*dim, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -547,8 +557,9 @@ func TestReplayEventLog_InsertAfterDeleteDoesNotUnfilter(t *testing.T) {
 	if len(state.Overflow) != 1 || state.Overflow[0].Pkid != 7 {
 		t.Fatalf("overflow: got %v want one entry pkid=7", state.Overflow)
 	}
-	if state.Overflow[0].Vec[0] != 9 || state.Overflow[0].Vec[1] != 9 {
-		t.Fatalf("vec: got %v want [9 9]", state.Overflow[0].Vec)
+	gotVec := util.UnsafeSliceCast[float32](state.Overflow[0].Vec)
+	if gotVec[0] != 9 || gotVec[1] != 9 {
+		t.Fatalf("vec: got %v want [9 9]", gotVec)
 	}
 }
 
@@ -570,7 +581,7 @@ func TestReplayEventLog_MultiChunk(t *testing.T) {
 		{ChunkId: 0, Data: FrameCdcChunk(buf0, nil, 0, 0, 0)},
 	}
 	SortChunks(chunks)
-	state, err := ReplayEventLog(chunks, dim, 0)
+	state, err := ReplayEventLog(chunks, 4*dim, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -596,7 +607,7 @@ func TestReplayEventLog_WithInclude(t *testing.T) {
 		[][]float32{{1, 2}},
 		[][]byte{include},
 	)
-	state, err := ReplayEventLog([]EventChunk{{ChunkId: 0, Data: FrameCdcChunk(buf, nil, 0, 0, 0)}}, dim, includeBytesPerRow)
+	state, err := ReplayEventLog([]EventChunk{{ChunkId: 0, Data: FrameCdcChunk(buf, nil, 0, 0, 0)}}, 4*dim, includeBytesPerRow)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -618,7 +629,7 @@ func TestReplayEventLog_CapturesColMetaJSON(t *testing.T) {
 	buf, _ := encodeBatch(t, dim, 0,
 		[]CdcOp{CdcOpInsert}, []int64{1}, [][]float32{{1, 2}}, nil)
 	chunks := []EventChunk{{ChunkId: 0, Data: FrameCdcChunk(buf, []byte(colMetaJSON), 0, 0, 0)}}
-	state, err := ReplayEventLog(chunks, dim, 0)
+	state, err := ReplayEventLog(chunks, 4*dim, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -637,7 +648,7 @@ func TestReplayEventLog_NoColMetaJSON(t *testing.T) {
 	buf, _ := encodeBatch(t, dim, 0,
 		[]CdcOp{CdcOpInsert}, []int64{1}, [][]float32{{1, 2}}, nil)
 	chunks := []EventChunk{{ChunkId: 0, Data: FrameCdcChunk(buf, nil, 0, 0, 0)}}
-	state, err := ReplayEventLog(chunks, dim, 0)
+	state, err := ReplayEventLog(chunks, 4*dim, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -682,14 +693,14 @@ func TestReplayEventLog_RejectsCorruptFrame(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := ReplayEventLog([]EventChunk{{ChunkId: 7, Data: tc.mut(good)}}, dim, 0)
+			_, err := ReplayEventLog([]EventChunk{{ChunkId: 7, Data: tc.mut(good)}}, 4*dim, 0)
 			if err == nil {
 				t.Fatalf("expected error for %s, got nil", tc.name)
 			}
 		})
 	}
 	// Sanity: the unmodified frame round-trips.
-	state, err := ReplayEventLog([]EventChunk{{ChunkId: 0, Data: good}}, dim, 0)
+	state, err := ReplayEventLog([]EventChunk{{ChunkId: 0, Data: good}}, 4*dim, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

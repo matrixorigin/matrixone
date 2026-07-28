@@ -14,12 +14,13 @@
 package batchstoredriver
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"os"
 	"path"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -138,8 +139,8 @@ func OpenRotateFile(dir, name string, mu *sync.RWMutex, rotateChecker RotateChec
 				return nil, err
 			}
 		} else {
-			sort.Slice(vfiles, func(i, j int) bool {
-				return vfiles[i].(*vFile).version < vfiles[j].(*vFile).version
+			slices.SortFunc(vfiles, func(a, b VFile) int {
+				return cmp.Compare(a.(*vFile).version, b.(*vFile).version)
 			})
 			observer.onTruncatedFile(vfiles[0].Id() - 1)
 			rf.history.Extend(vfiles[:len(vfiles)-1]...)

@@ -58,7 +58,7 @@ Project  𝄀
         Join Cond: (f.base_id = b.id)  𝄀
         ->  Join  𝄀
               Join Type: INNER  𝄀
-              Join Cond: (f.id = mo_fulltext_alias_0_0.doc_id)  𝄀
+              Join Cond: (f.id = mo_fulltext_alias_0.doc_id)  𝄀
               Runtime Filter Build: #[-1,0]  𝄀
               ->  Table Scan on ft_join_test.ft  𝄀
                     Runtime Filter Probe: f.id  𝄀

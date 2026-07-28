@@ -19,6 +19,7 @@ import (
 	"math/bits"
 	"unsafe"
 
+	"github.com/cespare/xxhash/v2"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -96,6 +97,13 @@ func SimpleCharHashToRange(bytes []byte, upperLimit uint64) uint64 {
 	return hashtable.Int64HashWithFixedSeed(h) % upperLimit
 }
 
+// IVFObjectIDHashToRange maps the complete physical ObjectID to an IVF owner.
+// xxHash64 is deterministic across processes and provides uniform mixing for
+// production UUIDv7 ObjectIDs, whose timestamp prefix changes slowly.
+func IVFObjectIDHashToRange(objectID types.Objectid, upperLimit uint64) uint64 {
+	return xxhash.Sum64(objectID[:]) % upperLimit
+}
+
 func SimpleInt64HashToRange(i uint64, upperLimit uint64) uint64 {
 	return hashtable.Int64HashWithFixedSeed(i) % upperLimit
 }
@@ -161,6 +169,10 @@ func CalcRangeShuffleIDXForObj(rsp *engine.RangesShuffleParam, objstats *objecti
 func ShouldSkipObjByShuffle(rsp *engine.RangesShuffleParam, objstats *objectio.ObjectStats) bool {
 	if rsp == nil || rsp.CNCNT <= 1 || rsp.Node == nil {
 		return false
+	}
+	if rsp.ShuffleByObjectID {
+		objID := objstats.ObjectLocation().ObjectId()
+		return IVFObjectIDHashToRange(objID, uint64(rsp.CNCNT)) != uint64(rsp.CNIDX)
 	}
 	if objstats.GetAppendable() {
 		//aobj always shuffle to local CN
@@ -467,6 +479,15 @@ func determineShuffleType(col *plan.ColRef, node *plan.Node, builder *QueryBuild
 
 // to determine if join need to go shuffle
 func determineShuffleForJoin(node *plan.Node, builder *QueryBuilder) {
+	determineShuffleForJoinWithColRefMode(node, builder, false)
+}
+
+// determineShuffleForJoinWithColRefMode plans join shuffle either before or
+// after column remapping. Normal optimizer plans use binding tags to identify
+// the two join sides. Late DML/index-maintenance plans are appended after
+// createQuery has remapped column references to local RelPos 0/1, so they must
+// use the positional form instead.
+func determineShuffleForJoinWithColRefMode(node *plan.Node, builder *QueryBuilder, afterRemap bool) {
 	// do not shuffle by default
 	node.Stats.HashmapStats.ShuffleColIdx = -1
 	if node.NodeType != plan.Node_JOIN {
@@ -479,7 +500,7 @@ func determineShuffleForJoin(node *plan.Node, builder *QueryBuilder) {
 		if len(dedupJoinCtx.GetOldColCaptureList()) > 0 {
 			return
 		}
-		if node.OnDuplicateAction == plan.Node_FAIL && len(dedupJoinCtx.GetOldColList()) > 0 {
+		if (node.OnDuplicateAction == plan.Node_FAIL || node.OnDuplicateAction == plan.Node_IGNORE) && len(dedupJoinCtx.GetOldColList()) > 0 {
 			return
 		}
 
@@ -490,8 +511,9 @@ func determineShuffleForJoin(node *plan.Node, builder *QueryBuilder) {
 			}
 		} else {
 			rightChild := builder.qry.Nodes[node.Children[1]]
-			if rightChild.Stats.Outcnt > 320000 {
-				//dedup join always go hash shuffle, optimize this in the future
+			if rightChild.Stats.Outcnt > 320000 && !dedupJoinUsesUnsupportedFloatShuffle(node) {
+				// Large DEDUP joins normally use hash shuffle. FLOAT hash shuffle is
+				// not supported yet, so those joins stay single-CN and spill locally.
 				node.Stats.HashmapStats.Shuffle = true
 				node.Stats.HashmapStats.ShuffleColIdx = 0
 				node.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Hash
@@ -512,7 +534,13 @@ func determineShuffleForJoin(node *plan.Node, builder *QueryBuilder) {
 	}
 
 	idx := 0
-	if !builder.IsEquiJoin(node) {
+	isEquiJoin := false
+	if afterRemap {
+		isEquiJoin = IsEquiJoin2(node.OnList)
+	} else {
+		isEquiJoin = builder.IsEquiJoin(node)
+	}
+	if !isEquiJoin {
 		return
 	}
 	leftTags := make(map[int32]bool)
@@ -525,12 +553,15 @@ func determineShuffleForJoin(node *plan.Node, builder *QueryBuilder) {
 	}
 	// for now ,only support the first join condition
 	for i := range node.OnList {
-		if isEquiCond(node.OnList[i], leftTags, rightTags) {
+		isEqui := isEquiCond(node.OnList[i], leftTags, rightTags)
+		if afterRemap {
+			isEqui = isEquiCond2(node.OnList[i])
+		}
+		if isEqui {
 			idx = i
 			break
 		}
 	}
-
 	if node.IsRightJoin {
 		if node.Stats.HashmapStats.HashmapSize < threshHoldForRightJoinShuffle {
 			return
@@ -580,7 +611,6 @@ func determineShuffleForJoin(node *plan.Node, builder *QueryBuilder) {
 				node.OnList[idx].Ndv = node.Stats.HashmapStats.HashmapSize
 			}
 		}
-	default:
 	}
 
 	//recheck shuffle plan
@@ -594,7 +624,11 @@ func determineShuffleForJoin(node *plan.Node, builder *QueryBuilder) {
 		}
 		if node.Stats.HashmapStats.ShuffleMethod != plan.ShuffleMethod_Reuse {
 			highestNDV := node.OnList[idx].Ndv
-			if highestNDV < ShuffleThreshHoldOfNDV {
+			// A negative NDV means that statistics are unavailable.  Do not treat
+			// unknown cardinality as low cardinality: for a large build side that
+			// would turn a valid shuffle plan back into a broadcast hash build and
+			// can concentrate the entire hash table on one CN.
+			if highestNDV >= 0 && highestNDV < ShuffleThreshHoldOfNDV {
 				node.Stats.HashmapStats.Shuffle = false
 			}
 		}
@@ -612,6 +646,18 @@ func determineShuffleForJoin(node *plan.Node, builder *QueryBuilder) {
 			rightChild.Stats.HashmapStats.Ranges = node.Stats.HashmapStats.Ranges
 		}
 	}
+}
+
+func dedupJoinUsesUnsupportedFloatShuffle(node *plan.Node) bool {
+	if len(node.OnList) == 0 {
+		return false
+	}
+	condition := node.OnList[0].GetF()
+	if condition == nil || len(condition.Args) == 0 {
+		return false
+	}
+	keyType := types.T(condition.Args[0].Typ.Id)
+	return keyType == types.T_float32 || keyType == types.T_float64
 }
 
 // find mergegroup or mergegroup->filter node
@@ -745,13 +791,21 @@ func determineShuffleForScan(node *plan.Node, builder *QueryBuilder) {
 }
 
 func determineShuffleMethod(nodeID int32, builder *QueryBuilder) {
+	determineShuffleMethodWithColRefMode(nodeID, builder, false)
+}
+
+func determineShuffleMethodAfterRemap(nodeID int32, builder *QueryBuilder) {
+	determineShuffleMethodWithColRefMode(nodeID, builder, true)
+}
+
+func determineShuffleMethodWithColRefMode(nodeID int32, builder *QueryBuilder, afterRemap bool) {
 	if builder.optimizerHints != nil && builder.optimizerHints.determineShuffle == 1 {
 		return
 	}
 	node := builder.qry.Nodes[nodeID]
 	if len(node.Children) > 0 {
 		for _, child := range node.Children {
-			determineShuffleMethod(child, builder)
+			determineShuffleMethodWithColRefMode(child, builder, afterRemap)
 		}
 	}
 	switch node.NodeType {
@@ -760,7 +814,7 @@ func determineShuffleMethod(nodeID int32, builder *QueryBuilder) {
 	case plan.Node_TABLE_SCAN:
 		determineShuffleForScan(node, builder)
 	case plan.Node_JOIN:
-		determineShuffleForJoin(node, builder)
+		determineShuffleForJoinWithColRefMode(node, builder, afterRemap)
 	default:
 	}
 }

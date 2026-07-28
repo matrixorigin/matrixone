@@ -114,6 +114,13 @@ func (ts *testTxnSender) setManual(manualFunc func(*rpc.SendResult, error) (*rpc
 	ts.auto = false
 }
 
+func (ts *testTxnSender) setAuto() {
+	ts.Lock()
+	defer ts.Unlock()
+	ts.manualFunc = nil
+	ts.auto = true
+}
+
 func (ts *testTxnSender) getLastRequests() []txn.TxnRequest {
 	ts.Lock()
 	defer ts.Unlock()

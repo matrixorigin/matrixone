@@ -51,6 +51,47 @@ func GetExplainColumn(ctx context.Context, explainColName string) ([]*plan2.ColD
 	return cols, columns, err
 }
 
+func getPreparedResultColumns(stmt *PrepareStmt, txnHaveDDL bool) []*plan2.ColDef {
+	dcPrepare := stmt.PreparePlan.GetDcl().GetPrepare()
+	if _, ok := stmt.PrepareStmt.(*tree.ExplainStmt); ok {
+		if query := dcPrepare.GetPlan().GetQuery(); query != nil {
+			title := plan2.GetPlanTitle(query, txnHaveDDL)
+			return []*plan2.ColDef{{
+				Typ:        plan2.Type{Id: int32(types.T_varchar)},
+				Name:       title,
+				OriginName: title,
+			}}
+		}
+	}
+	return plan2.GetResultColumnsFromPlan(dcPrepare.GetPlan())
+}
+
+func sessionTxnHaveDDL(ses FeSession) bool {
+	if ses == nil || ses.GetProc() == nil {
+		return false
+	}
+	txnOperator := ses.GetProc().GetTxnOperator()
+	if txnOperator == nil {
+		return false
+	}
+	workspace := txnOperator.GetWorkspace()
+	return workspace != nil && workspace.GetHaveDDL()
+}
+
+func getSelectColumnsAndResultColumns(ctx context.Context, cw ComputationWrapper) ([]interface{}, []*plan2.ColDef, error) {
+	if txnCW, ok := cw.(*TxnComputationWrapper); ok {
+		if _, ok = txnCW.GetAst().(*tree.Select); ok {
+			return txnCW.getColumnsWithResultColumns(ctx)
+		}
+	}
+
+	columns, err := cw.GetColumns(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	return columns, plan2.GetResultColumnsFromPlan(cw.Plan()), nil
+}
+
 // executeResultRowStmt run the statemet that responses result rows
 func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 	var columns []interface{}
@@ -60,7 +101,7 @@ func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 	switch statement := execCtx.stmt.(type) {
 	case *tree.Select:
 
-		columns, err = execCtx.cw.GetColumns(execCtx.reqCtx)
+		columns, colDefs, err = getSelectColumnsAndResultColumns(execCtx.reqCtx, execCtx.cw)
 		if err != nil {
 			ses.Error(execCtx.reqCtx,
 				"Failed to get columns from computation handler",
@@ -68,7 +109,7 @@ func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 			return
 		}
 
-		ses.rs = &plan.ResultColDef{ResultCols: plan2.GetResultColumnsFromPlan(execCtx.cw.Plan())}
+		ses.rs = &plan.ResultColDef{ResultCols: colDefs}
 
 		ses.EnterFPrint(FPResultRowStmtSelect1)
 		defer ses.ExitFPrint(FPResultRowStmtSelect1)
@@ -406,15 +447,31 @@ func (resper *MysqlResp) respBySituation(ses *Session,
 	defer func() {
 		execCtx.results = nil
 	}()
-	resp := NewGeneralOkResponse(COM_QUERY, ses.GetTxnHandler().GetServerStatus())
 	if len(execCtx.results) == 0 {
+		var affectedRows uint64
+		if execCtx.runResult != nil {
+			affectedRows = execCtx.runResult.AffectRows
+		}
+		resp := setResponse(ses, execCtx.isLastStmt, affectedRows)
 		if err = resper.mysqlRrWr.WriteResponse(execCtx.reqCtx, resp); err != nil {
 			return moerr.NewInternalErrorf(execCtx.reqCtx, "routine send response failed. error:%v ", err)
 		}
 	} else {
+		_, isCall := execCtx.stmt.(*tree.CallStmt)
 		for i, result := range execCtx.results {
 			mer := NewMysqlExecutionResult(0, 0, 0, 0, result.(*MysqlResultSet))
-			resp = ses.SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, i == len(execCtx.results)-1)
+			isLastResult := i == len(execCtx.results)-1 && execCtx.isLastStmt && !isCall
+			resp := ses.SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, isLastResult)
+			if err = resper.mysqlRrWr.WriteResponse(execCtx.reqCtx, resp); err != nil {
+				return moerr.NewInternalErrorf(execCtx.reqCtx, "routine send response failed. error:%v ", err)
+			}
+		}
+		if isCall {
+			var affectedRows uint64
+			if execCtx.runResult != nil {
+				affectedRows = execCtx.runResult.AffectRows
+			}
+			resp := setResponse(ses, execCtx.isLastStmt, affectedRows)
 			if err = resper.mysqlRrWr.WriteResponse(execCtx.reqCtx, resp); err != nil {
 				return moerr.NewInternalErrorf(execCtx.reqCtx, "routine send response failed. error:%v ", err)
 			}

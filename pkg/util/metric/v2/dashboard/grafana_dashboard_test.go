@@ -17,6 +17,7 @@ package dashboard
 import (
 	"testing"
 
+	grabanaDashboard "github.com/K-Phoen/grabana/dashboard"
 	"github.com/stretchr/testify/require"
 )
 
@@ -73,4 +74,15 @@ func Test_InitFrontendSQLLength(t *testing.T) {
 	c := NewLocalDashboardCreator("http://127.0.0.1", "admin", "admin",
 		localFolderName)
 	c.initFrontendSQLLength()
+}
+
+func TestProxyConnectionDashboardSupportsRollingUpgrade(t *testing.T) {
+	c := NewLocalDashboardCreator("http://127.0.0.1", "admin", "admin",
+		localFolderName)
+	build, err := grabanaDashboard.New("Proxy Metrics", c.initProxyConnectionRow())
+	require.NoError(t, err)
+
+	data, err := build.MarshalJSON()
+	require.NoError(t, err)
+	require.Contains(t, string(data), `type=~\"current|closed\"`)
 }

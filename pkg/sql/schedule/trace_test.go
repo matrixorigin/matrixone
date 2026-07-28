@@ -26,10 +26,10 @@ import (
 func TestTraceRecorderCapturesSchedulingDecisionChain(t *testing.T) {
 	recorder := new(TraceRecorder)
 	attempt := recorder.StartAttempt()
-	current := Worker{ID: "cn-local", Addr: "local:6001", Mcpu: 4, State: WorkerStateWorking}
+	current := Worker{ID: "cn-local", Addr: "local:6001", Mcpu: 4, State: WorkerStateWorking, Route: WorkerRouteLocal}
 	selected := Workers{
 		current,
-		{ID: "cn-remote", Addr: "remote:6001", Mcpu: 8, State: WorkerStateWorking},
+		{ID: "cn-remote", Addr: "remote:6001", Mcpu: 8, State: WorkerStateWorking, Route: WorkerRouteRemote},
 	}
 	recorder.RecordQuery(attempt, QueryDecision{
 		ExecKind:  QueryExecAPMultiCN,
@@ -43,8 +43,26 @@ func TestTraceRecorderCapturesSchedulingDecisionChain(t *testing.T) {
 			DiscoveredCount: 4,
 		},
 		ResolvedCandidateCount: 3,
-		CurrentCNPolicy:        CurrentCNRequired,
-		Satisfied:              true,
+		EligibleCount:          2,
+		Intent: SchedulingIntent{
+			Explicit:          true,
+			RequestedPool:     "tenant-label:account=app",
+			PoolFallback:      PoolFallbackLegacyCompatible,
+			EmptyWorkerPolicy: EmptyWorkerFail,
+			CurrentCNPolicy:   CurrentCNRequired,
+			WorkerSet: WorkerSetPolicy{
+				Mode: WorkerSetMax, MaxWorkers: 2, SelectionKey: "statement-uuid", AlgorithmVersion: WorkerSelectionAlgorithmV1,
+			},
+		},
+		ResolvedPool: ResolvedPoolDecision{
+			RequestedIdentity: "tenant-label:account=app",
+			Identity:          "shared-unlabeled",
+			Resolution:        PoolResolution("shared-unlabeled"),
+			Fallback:          true,
+			FallbackReason:    "shared-unlabeled",
+		},
+		CurrentCNPolicy: CurrentCNRequired,
+		Satisfied:       true,
 	})
 	recorder.RecordScan(attempt, ScanRequest{
 		QueryWorkers: selected,
@@ -71,6 +89,14 @@ func TestTraceRecorderCapturesSchedulingDecisionChain(t *testing.T) {
 	require.Equal(t, string(PoolResolutionLegacyEngineNodes), trace.Attempts[0].Query.PoolResolution)
 	require.Equal(t, 4, trace.Attempts[0].Query.DiscoveredCount)
 	require.Equal(t, 3, trace.Attempts[0].Query.ResolvedCount)
+	require.Equal(t, 2, trace.Attempts[0].Query.EligibleCount)
+	require.Equal(t, "tenant-label:account=app", trace.Attempts[0].Query.RequestedPool)
+	require.Equal(t, "shared-unlabeled", trace.Attempts[0].Query.ResolvedPool)
+	require.Equal(t, "shared-unlabeled", trace.Attempts[0].Query.ResolvedPoolResolution)
+	require.True(t, trace.Attempts[0].Query.PoolFallback)
+	require.Equal(t, "max-workers", trace.Attempts[0].Query.WorkerSetMode)
+	require.NotEmpty(t, trace.Attempts[0].Query.SelectionKeyHash)
+	require.NotContains(t, trace.Attempts[0].Query.SelectionKeyHash, "statement-uuid")
 	require.Equal(t, []ReasonCount{{Reason: ReasonDroppedDrainingCN, Count: 2}}, trace.Attempts[0].Query.Dropped)
 	require.Equal(t, int32(128), trace.Attempts[0].Scans[0].BlockCount)
 	require.Equal(t, int32(8), trace.Attempts[0].Scans[0].DOP)
@@ -79,6 +105,8 @@ func TestTraceRecorderCapturesSchedulingDecisionChain(t *testing.T) {
 	require.Equal(t, "runtime-ineligible-selected-worker", trace.Attempts[0].Failures[0].Category)
 	require.True(t, trace.Attempts[0].Query.CurrentCN.Routable)
 	require.True(t, trace.Attempts[0].Query.Selected[1].Routable)
+	require.Equal(t, "local", trace.Attempts[0].Query.CurrentCN.Route)
+	require.Equal(t, "remote", trace.Attempts[0].Query.Selected[1].Route)
 	require.True(t, trace.PersistStandalone())
 }
 

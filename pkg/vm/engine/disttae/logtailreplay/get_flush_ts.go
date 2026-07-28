@@ -15,7 +15,7 @@
 package logtailreplay
 
 import (
-	"sort"
+	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
@@ -26,8 +26,8 @@ func (p *PartitionState) GetFlushTS() types.TS {
 	}
 
 	rows := p.rows.Items()
-	sort.Slice(rows, func(i, j int) bool {
-		return rows[i].Time.Compare(&rows[j].Time) < 0
+	slices.SortFunc(rows, func(a, b *RowEntry) int {
+		return a.Time.Compare(&b.Time)
 	})
 	return rows[0].Time.Prev()
 }

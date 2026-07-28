@@ -130,6 +130,9 @@ type serverMetrics struct {
 	outputBytesCounter            prometheus.Counter
 	sendingQueueSizeGauge         prometheus.Gauge
 	sessionSizeGauge              prometheus.Gauge
+	receivedStreamStateGauge      prometheus.Gauge
+	sentStreamStateGauge          prometheus.Gauge
+	messageCacheStateGauge        prometheus.Gauge
 	sendingBatchSizeGauge         prometheus.Gauge
 	writeDurationHistogram        prometheus.Observer
 	writeLatencyDurationHistogram prometheus.Observer
@@ -144,6 +147,9 @@ func newServerMetrics(name string) *serverMetrics {
 		sendingQueueSizeGauge:         v2.NewRPCServerSendingQueueSizeGaugeByName(name),
 		writeLatencyDurationHistogram: v2.NewRPCServerWriteLatencyDurationHistogramByName(name),
 		sessionSizeGauge:              v2.NewRPCServerSessionSizeGaugeByName(name),
+		receivedStreamStateGauge:      v2.NewRPCServerStreamStateGaugeByName(name, "received_sequence"),
+		sentStreamStateGauge:          v2.NewRPCServerStreamStateGaugeByName(name, "sent_sequence"),
+		messageCacheStateGauge:        v2.NewRPCServerStreamStateGaugeByName(name, "message_cache"),
 		inputBytesCounter:             v2.NewRPCInputCounter(),
 		outputBytesCounter:            v2.NewRPCOutputCounter(),
 	}

@@ -61,23 +61,7 @@ func (rd *EmptyRelationData) String() string {
 	return fmt.Sprintf("RelData[%d]", engine.RelDataEmpty)
 }
 
-func (rd *EmptyRelationData) GetShardIDList() []uint64 {
-	panic("not supported")
-}
-
 func (rd *EmptyRelationData) Split(_ int) []engine.RelData {
-	panic("not supported")
-}
-
-func (rd *EmptyRelationData) GetShardID(i int) uint64 {
-	panic("not supported")
-}
-
-func (rd *EmptyRelationData) SetShardID(i int, id uint64) {
-	panic("not supported")
-}
-
-func (rd *EmptyRelationData) AppendShardID(id uint64) {
 	panic("not supported")
 }
 
@@ -256,19 +240,6 @@ func (or *ObjListRelData) String() string {
 	return "ObjListRelData"
 }
 
-func (or *ObjListRelData) GetShardIDList() []uint64 {
-	panic("not supported")
-}
-func (or *ObjListRelData) GetShardID(i int) uint64 {
-	panic("not supported")
-}
-func (or *ObjListRelData) SetShardID(i int, id uint64) {
-	panic("not supported")
-}
-func (or *ObjListRelData) AppendShardID(id uint64) {
-	panic("not supported")
-}
-
 func (or *ObjListRelData) ensurePStatePropagation() {
 	if or.blocklistRelData.pState == nil {
 		or.blocklistRelData.pState = or.PState
@@ -421,19 +392,6 @@ func (relData *BlockListRelData) String() string {
 
 	w.WriteString(fmt.Sprintf("\nPState: %v", relData.pState))
 	return w.String()
-}
-
-func (relData *BlockListRelData) GetShardIDList() []uint64 {
-	panic("not supported")
-}
-func (relData *BlockListRelData) GetShardID(i int) uint64 {
-	panic("not supported")
-}
-func (relData *BlockListRelData) SetShardID(i int, id uint64) {
-	panic("not supported")
-}
-func (relData *BlockListRelData) AppendShardID(id uint64) {
-	panic("not supported")
 }
 
 func (relData *BlockListRelData) Split(i int) []engine.RelData {

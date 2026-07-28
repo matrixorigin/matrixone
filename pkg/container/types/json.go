@@ -25,6 +25,10 @@ func ParseSliceToByteJson(dt []byte) (bytejson.ByteJson, error) {
 	return bytejson.ParseFromByteSlice(dt)
 }
 
+func ParseSliceToByteJsonWithDepthLimit(dt []byte, maxDepth int) (bytejson.ByteJson, error) {
+	return bytejson.ParseFromByteSliceWithDepthLimit(dt, maxDepth)
+}
+
 func ParseStringToPath(str string) (bytejson.Path, error) {
 	return bytejson.ParseJsonPath(str)
 }

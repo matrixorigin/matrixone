@@ -214,10 +214,9 @@ func (ds *materializedSnapshotDataSource) buildCommittedInMemBatches(
 	iterKind := "rows"
 	if ds.memPKFilter != nil && ds.memPKFilter.Valid() {
 		iterKind = "primary-key"
-		iter = ds.pState.NewPrimaryKeyIter(
+		iter = ds.pState.NewPrimaryKeyIterWithFilters(
 			ds.snapshotTS,
-			ds.memPKFilter.Op(),
-			ds.memPKFilter.Keys(),
+			ds.memPKFilter.Specs(),
 		)
 	} else {
 		iter = ds.pState.NewRowsIter(ds.snapshotTS, nil, false)

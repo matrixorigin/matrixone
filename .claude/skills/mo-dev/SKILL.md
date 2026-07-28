@@ -1,6 +1,6 @@
 ---
 name: mo-dev
-description: MatrixOne database kernel development - CGo build/test environment setup, GPU builds (MO_CL_CUDA=1 / cuVS), operator lifecycle contracts (Call/Reset), pipeline protocol, layered testing strategy, and the vector/fulltext index-plugin framework (pkg/indexplugin AlgoPlugin registry). Use when modifying colexec operators, process signal types, compile pipeline construction, adding or editing an index algorithm (HNSW/IVFFLAT/IVF-PQ/CAGRA/fulltext), or debugging CGo link errors (undefined symbols, missing headers, library not found).
+description: MatrixOne database kernel development - deterministic CGo build/test setup, complete test matrices, hung-test diagnosis, GPU builds (MO_CL_CUDA=1 / cuVS), operator lifecycle contracts (Call/Reset), pipeline protocol, and the vector/fulltext index-plugin framework. Use when modifying kernel packages, running CGo-transitive tests, diagnosing compile/link/load/vendor failures or silent hangs, changing colexec/process/compile pipelines, or adding/editing index algorithms.
 metadata:
   project: matrixone
   repository: matrixorigin/matrixone
@@ -16,7 +16,7 @@ Load only the reference needed for the task:
 
 | Need | Read |
 |------|------|
-| CGo link/header/runtime errors, layered testing, "pre-existing" test claims, GPU/cuVS/CUDA builds | [references/cgo-build-test.md](references/cgo-build-test.md) |
+| CGo compile/link/load/module errors, deterministic test execution, layered matrices, hung tests, "pre-existing" claims, GPU/cuVS/CUDA | [references/cgo-build-test.md](references/cgo-build-test.md) |
 | `colexec` operator edits, `process` signal types, pipeline spools, Call/Reset cleanup, hung tests | [references/operator-pipeline.md](references/operator-pipeline.md) |
 | Vector/fulltext index algorithm work, plugin registry, GPU-only algorithm registration, index-plugin review | [references/index-plugin.md](references/index-plugin.md) |
 
@@ -27,12 +27,13 @@ Consult the referenced material before acting:
 | Gate | When | Action |
 |------|------|--------|
 | **G-MODIFY** | Before editing any `colexec` operator or `process` signal type | Read [operator-pipeline.md](references/operator-pipeline.md). |
-| **G-CGO-ERR** | Any build/test returns `file not found`, `Undefined symbols`/`undefined symbol:`, `dyld:`, or `error while loading shared libraries:` | Read [cgo-build-test.md](references/cgo-build-test.md) sections 2 and 4 before blaming code. |
-| **G-GPU** | Before a GPU build/test (`MO_CL_CUDA=1`), or on CUDA/cuVS errors (`CONDA_PREFIX`, `nvcc`, `-lcuvs`/`-lcudart`, `unsupported index type: ivfpq\|cagra`) | Read [cgo-build-test.md](references/cgo-build-test.md) section 5. |
+| **G-CGO-ERR** | Any build/test returns module/vendor, header, link, `dyld`, or shared-library errors | Read [cgo-build-test.md](references/cgo-build-test.md) and identify the failing layer before changing code. |
+| **G-GPU** | Before a GPU build/test (`MO_CL_CUDA=1`), or on CUDA/cuVS errors (`CONDA_PREFIX`, `nvcc`, `-lcuvs`/`-lcudart`, `unsupported index type: ivfpq\|cagra`) | Read [cgo-build-test.md](references/cgo-build-test.md) section 6. |
 | **G-IDXPLUGIN** | Before adding/editing an index-algorithm plugin, OR adding any `switch`/`if` on an index **algo** name in `pkg/sql/{compile,plan}` or `pkg/catalog` | Read [index-plugin.md](references/index-plugin.md). Route through `pkg/indexplugin`; new algo switches are forbidden. |
 | **G-IDXREVIEW** | Reviewing a diff that touches index-algorithm dispatch, `pkg/vectorindex/<algo>/plugin/`, `pkg/fulltext/plugin`, or `pkg/indexplugin` | Read [index-plugin.md](references/index-plugin.md) section 9 and run its greps. |
 | **G-DONE** | Before declaring "done"/"complete"/"passes" | Apply the completion gate below. |
 | **G-TEST-FAIL** | `go test` returns non-zero or hangs >10s | Read [operator-pipeline.md](references/operator-pipeline.md) section 4 and [cgo-build-test.md](references/cgo-build-test.md) section 4 before attributing cause. |
+| **G-TEST-EVIDENCE** | A test command yields no final PASS/FAIL, returns a session/process identifier, or leaves a test process alive | Treat it as still running or failed; poll, inspect the process, and capture its real exit status/stack. |
 
 ## Project Structure
 
@@ -69,6 +70,13 @@ go test -v -count=1 -run TestXxx ./pkg/target/...
 
 For CGo-transitive or CGo-direct packages, do not guess flags. Read [references/cgo-build-test.md](references/cgo-build-test.md).
 
+For local CPU CGo tests, prefer the deterministic wrapper:
+
+```bash
+.agents/skills/mo-dev/scripts/mo-cgo-test -count=1 -timeout=120s ./pkg/target/...
+.agents/skills/mo-dev/scripts/mo-cgo-test -race -count=1 -timeout=240s ./pkg/target/...
+```
+
 Rule: "`go build` passes" does not mean "`go test` will pass." Test binaries link more CGo.
 
 ## Operator / Pipeline Rules
@@ -102,11 +110,12 @@ Before declaring any MatrixOne code change done, check all boxes:
 □ go test -v -count=1 ./pkg/.../...         -> exit 0, no hangs
 □ git diff --stat                            -> inspected, no unintended files
 □ Regression: at least one test from dependent package passes
+□ all evidence is newer than the last semantic edit/rebase and has a real exit code
 ```
 
 Hang = failure. If `go test` produces >10s of no output, investigate instead of calling it slow.
 
-Hard rule: never claim a failure is "pre-existing" without proving it from clean HEAD. Use the stash protocol in [references/cgo-build-test.md](references/cgo-build-test.md) section 4.
+Hard rule: never claim a failure is "pre-existing" without proving it from clean HEAD. Use the clean-tree reproduction protocol in [references/cgo-build-test.md](references/cgo-build-test.md) section 5.
 
 ## Common Diagnosis Shortcuts
 
@@ -116,8 +125,10 @@ Hard rule: never claim a failure is "pre-existing" without proving it from clean
 | Test hangs >5s, no output | Deadlock or blocking channel send. Check `done` channel and non-blocking `select`. |
 | `context deadline exceeded` after 30s | Did all senders call `Reset()` and send typed terminal signals? |
 | `fatal error: 'xxhash.h' file not found` | `CGO_CFLAGS`; read [cgo-build-test.md](references/cgo-build-test.md). |
-| `Undefined symbols` / `undefined symbol:` | `CGO_LDFLAGS` and stale `libusearch_c`; read [cgo-build-test.md](references/cgo-build-test.md). |
-| `cannot find -lmo` / `ld: library 'mo' not found` | `-ldflags="-extldflags '-L... -lmo'"`; read [cgo-build-test.md](references/cgo-build-test.md). |
+| `Undefined symbols` / `undefined symbol:` | Inspect the ordered native dependency graph and artifact freshness; read [cgo-build-test.md](references/cgo-build-test.md). |
+| `cannot find -lmo` / `ld: library 'mo' not found` | Use the wrapper; for manual links, place `cgo` package `CgoLDFLAGS` after `-lmo`. Read [cgo-build-test.md](references/cgo-build-test.md). |
+| `dyld`/loader searches a temporary `go-build.../lib` directory | A package-relative rpath was used for a temporary test binary; use the CGo test wrapper or absolute test rpaths. |
+| Only linker warnings appear, no PASS/FAIL | Check the returned session and live test process; do not infer success from partial output. |
 | `unsupported index type: ivfpq|cagra` | CPU binary lacks GPU plugin registration; read [index-plugin.md](references/index-plugin.md) and GPU notes. |
 
 ## Forbidden Patterns
@@ -129,3 +140,4 @@ Hard rule: never claim a failure is "pre-existing" without proving it from clean
 5. Never assume `go build` success means `go test` will pass.
 6. Never skip bottom-up testing: pure Go -> CGo-transitive -> CGo-direct.
 7. Never add a per-algorithm `switch`/`if` on an index algo name in the SQL layer. Route through `indexplugin.Get(algo)`.
+8. Never use distributable-binary relative rpaths as proof that a temporary `go test` binary can load its libraries.

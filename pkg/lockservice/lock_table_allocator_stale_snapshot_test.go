@@ -15,6 +15,7 @@
 package lockservice
 
 import (
+	"context"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -92,6 +93,7 @@ func TestCleanerDoesNotDeleteTombstoneCreatedAfterServiceSnapshot(
 		},
 		func(a *lockTableAllocator) {
 			a.options.getActiveTxnFunc = func(
+				_ context.Context,
 				serviceID string,
 			) (bool, [][]byte, error) {
 				switch queryCalls.Add(1) {

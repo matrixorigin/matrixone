@@ -44,12 +44,7 @@ func NewIntHashMap(hasNull bool, memPool *mpool.MPool) (*IntHashMap, error) {
 
 func (m *IntHashMap) NewIterator() *intHashMapIterator {
 	return &intHashMapIterator{
-		mp:      m,
-		keys:    make([]uint64, UnitLimit),
-		keyOffs: make([]uint32, UnitLimit),
-		values:  make([]uint64, UnitLimit),
-		zValues: make([]int64, UnitLimit),
-		hashes:  make([]uint64, UnitLimit),
+		mp: m,
 	}
 }
 
@@ -62,7 +57,11 @@ func (m *IntHashMap) Free() {
 }
 
 func (m *IntHashMap) PreAlloc(n uint64) error {
-	return m.hashMap.ResizeOnDemand(int(n))
+	return m.hashMap.ResizeWithPlan(m.hashMap.PlanResize(n))
+}
+
+func (m *IntHashMap) SetResizeAdmission(admit hashtable.ResizeAdmission) {
+	m.hashMap.SetResizeAdmission(admit)
 }
 
 func (m *IntHashMap) GroupCount() uint64 {

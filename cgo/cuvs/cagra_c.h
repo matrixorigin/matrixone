@@ -31,18 +31,22 @@ typedef void* gpu_cagra_c;
 // Opaque pointer to the C++ CAGRA search result object
 typedef void* gpu_cagra_result_c;
 
+// btype = base/query/quantizer-source element type (Quantization_F32 or F16).
+// qtype = storage element type. Wired combos: F32 base {F32,F16,INT8,UINT8};
+// F16 base {F16,INT8,UINT8}. Other combinations set errmsg and return NULL.
+
 // Constructor for building from dataset
 gpu_cagra_c gpu_cagra_new(const void* dataset_data, uint64_t count_vectors, uint32_t dimension,
                             distance_type_t metric, cagra_build_params_t build_params,
                             const int* devices, int device_count, uint32_t nthread,
-                            distribution_mode_t dist_mode, quantization_t qtype,
+                            distribution_mode_t dist_mode, quantization_t btype, quantization_t qtype,
                             const int64_t* ids, void* errmsg);
 
 // Constructor for loading from file
 gpu_cagra_c gpu_cagra_load_file(const char* filename, uint32_t dimension, distance_type_t metric,
                                  cagra_build_params_t build_params,
-                                 const int* devices, int device_count, uint32_t nthread, 
-                                 distribution_mode_t dist_mode, quantization_t qtype, void* errmsg);
+                                 const int* devices, int device_count, uint32_t nthread,
+                                 distribution_mode_t dist_mode, quantization_t btype, quantization_t qtype, void* errmsg);
 
 // Destructor
 void gpu_cagra_destroy(gpu_cagra_c index_c, void* errmsg);
@@ -57,7 +61,7 @@ void gpu_cagra_build(gpu_cagra_c index_c, void* errmsg);
 gpu_cagra_c gpu_cagra_new_empty(uint64_t total_count, uint32_t dimension, distance_type_t metric,
                                      cagra_build_params_t build_params,
                                      const int* devices, int device_count, uint32_t nthread,
-                                     distribution_mode_t dist_mode, quantization_t qtype,
+                                     distribution_mode_t dist_mode, quantization_t btype, quantization_t qtype,
                                      const int64_t* ids, void* errmsg);
 
 // Add chunk of data (same type as index quantization)
@@ -66,8 +70,16 @@ void gpu_cagra_add_chunk(gpu_cagra_c index_c, const void* chunk_data, uint64_t c
 // Add chunk of data (from float, with on-the-fly quantization if needed)
 void gpu_cagra_add_chunk_float(gpu_cagra_c index_c, const float* chunk_data, uint64_t chunk_count, const int64_t* ids, void* errmsg);
 
+// Add chunk of base-typed (B) data, quantizing natively to a 1-byte storage type
+// (int8/uint8) via the B-source quantizer. Requires int8/uint8 storage.
+void gpu_cagra_add_chunk_quantize(gpu_cagra_c index_c, const void* base_data, uint64_t chunk_count, const int64_t* ids, void* errmsg);
+
+// Quantize a base-typed (B) query to the 1-byte storage type via the B-source
+// quantizer, writing num_queries*dimension bytes into out. Requires int8/uint8 storage.
+void gpu_cagra_quantize_query(gpu_cagra_c index_c, const void* base_data, uint64_t num_queries, void* out, void* errmsg);
+
 // Trains the scalar quantizer (if T is 1-byte)
-void gpu_cagra_train_quantizer(gpu_cagra_c index_c, const float* train_data, uint64_t n_samples, void* errmsg);
+void gpu_cagra_train_quantizer(gpu_cagra_c index_c, const void* train_data, uint64_t n_samples, void* errmsg);
 
 void gpu_cagra_set_batch_window(gpu_cagra_c index_c, int64_t window_us, void* errmsg);
 void gpu_cagra_set_dynb_conservative_dispatch(gpu_cagra_c index_c, bool enable, void* errmsg);
@@ -100,17 +112,19 @@ gpu_cagra_search_res_t gpu_cagra_search(gpu_cagra_c index_c, const void* queries
                                             uint32_t query_dimension, uint32_t limit, 
                                             cagra_search_params_t search_params, void* errmsg);
 
-gpu_cagra_search_res_t gpu_cagra_search_float(gpu_cagra_c index_c, const float* queries_data, uint64_t num_queries, 
-                                                uint32_t query_dimension, uint32_t limit, 
+// Quantize search: query in the BASE element type B (float or half); the index
+// converts it to storage type T (copy / quantize / f32->f16 cast) internally.
+gpu_cagra_search_res_t gpu_cagra_search_quantize(gpu_cagra_c index_c, const void* queries_data, uint64_t num_queries,
+                                                uint32_t query_dimension, uint32_t limit,
                                                 cagra_search_params_t search_params, void* errmsg);
 
 // Asynchronous search functions
-uint64_t gpu_cagra_search_async(gpu_cagra_c index_c, const void* queries_data, uint64_t num_queries, 
-                                   uint32_t query_dimension, uint32_t limit, 
+uint64_t gpu_cagra_search_async(gpu_cagra_c index_c, const void* queries_data, uint64_t num_queries,
+                                   uint32_t query_dimension, uint32_t limit,
                                    cagra_search_params_t search_params, void* errmsg);
 
-uint64_t gpu_cagra_search_float_async(gpu_cagra_c index_c, const float* queries_data, uint64_t num_queries, 
-                                         uint32_t query_dimension, uint32_t limit, 
+uint64_t gpu_cagra_search_quantize_async(gpu_cagra_c index_c, const void* queries_data, uint64_t num_queries,
+                                         uint32_t query_dimension, uint32_t limit,
                                          cagra_search_params_t search_params, void* errmsg);
 
 gpu_cagra_search_res_t gpu_cagra_search_wait(gpu_cagra_c index_c, uint64_t job_id, void* errmsg);
@@ -162,22 +176,23 @@ void gpu_cagra_add_filter_chunk(gpu_cagra_c index_c, uint32_t col_idx,
                                  const void* data, const uint32_t* null_bitmap,
                                  uint64_t nrows, void* errmsg);
 
-// Filtered variants of gpu_cagra_search / gpu_cagra_search_float. preds_json is a JSON
+// Filtered variants of gpu_cagra_search / gpu_cagra_search_quantize. preds_json is a JSON
 // predicate array; passing NULL or "" yields unfiltered behavior.
 gpu_cagra_search_res_t gpu_cagra_search_with_filter(gpu_cagra_c index_c, const void* queries_data,
                                                      uint64_t num_queries, uint32_t query_dimension,
                                                      uint32_t limit, cagra_search_params_t search_params,
                                                      const char* preds_json, void* errmsg);
 
-gpu_cagra_search_res_t gpu_cagra_search_float_with_filter(gpu_cagra_c index_c, const float* queries_data,
+// Query in the BASE element type B (float or half); converted to storage T internally.
+gpu_cagra_search_res_t gpu_cagra_search_quantize_with_filter(gpu_cagra_c index_c, const void* queries_data,
                                                            uint64_t num_queries, uint32_t query_dimension,
                                                            uint32_t limit, cagra_search_params_t search_params,
                                                            const char* preds_json, void* errmsg);
 
-// Async variant of gpu_cagra_search_float_with_filter. Returns a job_id that
+// Async variant of gpu_cagra_search_quantize_with_filter. Returns a job_id that
 // is collected with the existing gpu_cagra_search_wait. Lets multi-index
 // callers fan out filtered searches across shards in parallel.
-uint64_t gpu_cagra_search_float_with_filter_async(gpu_cagra_c index_c, const float* queries_data,
+uint64_t gpu_cagra_search_quantize_with_filter_async(gpu_cagra_c index_c, const void* queries_data,
                                                    uint64_t num_queries, uint32_t query_dimension,
                                                    uint32_t limit, cagra_search_params_t search_params,
                                                    const char* preds_json, void* errmsg);

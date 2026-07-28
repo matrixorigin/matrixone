@@ -15,8 +15,6 @@
 package aggexec
 
 import (
-	"slices"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -71,7 +69,35 @@ func (exec *avgTwCacheNumericExec[A]) Fill(groupIndex int, row int, vectors []*v
 }
 
 func (exec *avgTwCacheNumericExec[A]) BulkFill(groupIndex int, vectors []*vector.Vector) error {
-	return exec.BatchFill(0, slices.Repeat([]uint64{uint64(groupIndex + 1)}, vectors[0].Length()), vectors)
+	vec := vectors[0]
+	n := vec.Length()
+	if n == 0 {
+		return nil
+	}
+
+	x, y := exec.getXY(uint64(groupIndex))
+	sumVec := exec.state[x].vecs[0]
+	cntVec := exec.state[x].vecs[1]
+	sums := vector.MustFixedColNoTypeCheck[float64](sumVec)
+	cnts := vector.MustFixedColNoTypeCheck[int64](cntVec)
+	isConst := vec.IsConst()
+
+	for i := 0; i < n; i++ {
+		row := i
+		if isConst {
+			row = 0
+		}
+		if vec.IsNull(uint64(row)) {
+			continue
+		}
+		if sumVec.IsNull(uint64(y)) {
+			sumVec.UnsetNull(uint64(y))
+			cntVec.UnsetNull(uint64(y))
+		}
+		sums[y] += float64(vector.GetFixedAtNoTypeCheck[A](vec, row))
+		cnts[y]++
+	}
+	return nil
 }
 
 func (exec *avgTwCacheNumericExec[A]) BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
@@ -213,7 +239,48 @@ func (exec *avgTwCacheDecimalExec[A]) Fill(groupIndex int, row int, vectors []*v
 }
 
 func (exec *avgTwCacheDecimalExec[A]) BulkFill(groupIndex int, vectors []*vector.Vector) error {
-	return exec.BatchFill(0, slices.Repeat([]uint64{uint64(groupIndex + 1)}, vectors[0].Length()), vectors)
+	vec := vectors[0]
+	n := vec.Length()
+	if n == 0 {
+		return nil
+	}
+
+	x, y := exec.getXY(uint64(groupIndex))
+	sumVec := exec.state[x].vecs[0]
+	cntVec := exec.state[x].vecs[1]
+	sums := vector.MustFixedColNoTypeCheck[types.Decimal128](sumVec)
+	cnts := vector.MustFixedColNoTypeCheck[int64](cntVec)
+	isConst := vec.IsConst()
+
+	for i := 0; i < n; i++ {
+		row := i
+		if isConst {
+			row = 0
+		}
+		if vec.IsNull(uint64(row)) {
+			continue
+		}
+		if sumVec.IsNull(uint64(y)) {
+			sumVec.UnsetNull(uint64(y))
+			cntVec.UnsetNull(uint64(y))
+		}
+
+		val := vector.GetFixedAtNoTypeCheck[A](vec, row)
+		var err error
+		switch v := any(val).(type) {
+		case types.Decimal64:
+			sums[y], err = sums[y].Add64(v)
+		case types.Decimal128:
+			sums[y], err = sums[y].Add128(v)
+		default:
+			panic(moerr.NewInternalErrorNoCtx("unsupported avg_tw_cache decimal type"))
+		}
+		if err != nil {
+			return err
+		}
+		cnts[y]++
+	}
+	return nil
 }
 
 func (exec *avgTwCacheDecimalExec[A]) BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error {

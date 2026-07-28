@@ -74,15 +74,21 @@ func buildPrepare(stmt tree.Prepare, ctx CompilerContext) (*Plan, error) {
 		if err != nil {
 			v = int64(1)
 		}
-		stmts, err := mysql.Parse(ctx.GetContext(), pstmt.Sql, v.(int64))
+		sqlMode := ""
+		if mode, modeErr := ctx.ResolveVariable("sql_mode", true, false); modeErr == nil {
+			if modeStr, ok := mode.(string); ok {
+				sqlMode = mysql.SessionSQLModeForParser(modeStr)
+			}
+		}
+		stmts, err := mysql.ParseWithSQLMode(ctx.GetContext(), pstmt.Sql, v.(int64), sqlMode)
+		if err != nil {
+			return nil, err
+		}
 		defer func() {
 			for _, s := range stmts {
 				s.Free()
 			}
 		}()
-		if err != nil {
-			return nil, err
-		}
 		if len(stmts) > 1 {
 			return nil, moerr.NewInvalidInput(ctx.GetContext(), "cannot prepare multi statements")
 		}

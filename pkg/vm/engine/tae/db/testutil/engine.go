@@ -41,9 +41,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const (
-	DefaultTestDB = "db"
-)
+const DefaultTestDB = "db"
+
+// TestCheckpointTimeout leaves room for storage syncs under parallel CI while
+// still bounding a genuinely stuck checkpoint or flush.
+const TestCheckpointTimeout = 2 * time.Minute
 
 type CtxOldVersion struct{}
 
@@ -160,14 +162,14 @@ func (e *TestEngine) CheckRowsByScan(exp int, applyDelete bool) {
 	assert.NoError(e.T, txn.Commit(context.Background()))
 }
 func (e *TestEngine) ForceCheckpoint() {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+	ctx, cancel := context.WithTimeout(context.Background(), TestCheckpointTimeout)
 	defer cancel()
 	err := e.DB.ForceCheckpoint(ctx, e.TxnMgr.Now())
 	assert.NoError(e.T, err)
 }
 
 func (e *TestEngine) ForceLongCheckpoint() {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*20)
+	ctx, cancel := context.WithTimeout(context.Background(), TestCheckpointTimeout)
 	defer cancel()
 	err := e.DB.ForceCheckpoint(ctx, e.TxnMgr.Now())
 	assert.NoError(e.T, err)
@@ -279,14 +281,11 @@ func (e *TestEngine) DeleteAll(skipConflict bool) error {
 }
 
 func (e *TestEngine) AllCheckpointsFinished() bool {
-	if e.Wal.GetPenddingCnt() != 0 {
-		return false
-	}
-	ckp := e.BGCheckpointRunner.GetICKPIntentOnlyForTest()
-	if ckp == nil {
-		return true
-	}
-	return ckp.IsFinished()
+	return AllCheckpointsFinished(e.DB)
+}
+
+func (e *TestEngine) WaitAllCheckpointsFinished(timeoutMS ...int) {
+	WaitAllCheckpointsFinished(e.T, e.DB, timeoutMS...)
 }
 
 func (e *TestEngine) Truncate() {

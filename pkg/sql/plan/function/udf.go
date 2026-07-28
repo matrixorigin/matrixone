@@ -34,12 +34,13 @@ import (
 
 type Udf struct {
 	// sql string, or json string of NonSqlUdfBody
-	Body         string `json:"body"`
-	Language     string `json:"language"`
-	RetType      string `json:"rettype"`
-	Args         []*Arg `json:"args"`
-	Db           string `json:"db"`
-	ModifiedTime string `json:"modified_time"`
+	Body         string  `json:"body"`
+	Language     string  `json:"language"`
+	RetType      string  `json:"rettype"`
+	Args         []*Arg  `json:"args"`
+	Db           string  `json:"db"`
+	ModifiedTime string  `json:"modified_time"`
+	SQLMode      *string `json:"-"`
 
 	ArgsType []types.Type `json:"-"`
 }

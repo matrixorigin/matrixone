@@ -19,11 +19,12 @@ import (
 	"errors"
 	"io"
 	"net"
+	"net/url"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/fagongzi/goetty/v2"
 	"github.com/petermattis/goid"
 	"go.uber.org/zap"
 
@@ -75,15 +76,21 @@ type serverConn struct {
 	// cnServer is the backend CN server.
 	cnServer *CNServer
 	// conn is the raw TCP connection between proxy and server.
-	conn goetty.IOSession
+	conn net.Conn
 	// connID is the proxy connection ID, which is not useful in most case.
 	connID uint32
 	// mysqlProto is used to build handshake info.
 	mysqlProto *frontend.MysqlProtocolImpl
 	// rebalancer is used to track connections between proxy and server.
 	rebalancer *rebalancer
-	// tun is the tunnel which this server connection belongs to.
-	tun *tunnel
+	// tunnelOwner linearizes terminal Close with cache-generation rebinding.
+	// The backend may outlive its originating tunnel while cached, but it must
+	// have exactly one manager/tunnel owner at every instant.
+	tunnelOwner struct {
+		sync.Mutex
+		tun    *tunnel
+		closed bool
+	}
 	// connResp is the response bytes which is got from cn server when
 	// connect to the cn.
 	connResp []byte
@@ -95,34 +102,123 @@ type serverConn struct {
 
 var _ ServerConn = (*serverConn)(nil)
 
+type contextHandshakeHandler interface {
+	HandleHandshakeContext(
+		ctx context.Context,
+		handshakeResp *frontend.Packet,
+		timeout time.Duration,
+	) (*frontend.Packet, error)
+}
+
+type contextStmtExecutor interface {
+	ExecStmtContext(
+		ctx context.Context,
+		stmt internalStmt,
+		resp chan<- []byte,
+	) (bool, error)
+}
+
+func execStmtWithContext(
+	ctx context.Context,
+	sc ServerConn,
+	stmt internalStmt,
+	resp chan<- []byte,
+) (bool, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if cause := operationContextCause(ctx); cause != nil {
+		return false, cause
+	}
+	if contextual, ok := sc.(contextStmtExecutor); ok {
+		return contextual.ExecStmtContext(ctx, stmt, resp)
+	}
+	return sc.ExecStmt(stmt, resp)
+}
+
+const (
+	// Proxy only needs a small retained buffer for normal MySQL packets.
+	// Larger packets use frontend.Conn's dynamic path and are released after use.
+	proxyIOSessionBufferSize = 16 * 1024
+	// A backend connection is used only for authentication and bounded Proxy
+	// control statements before the raw tunnel owns it. It must not accept the
+	// general 16 MiB MySQL payload maximum: doing so lets one CN response create
+	// an unaccounted, connection-lifetime buffer in the Proxy.
+	proxyBackendPacketLimit = 64 * 1024
+	// A successful authentication response is retained for connection-cache
+	// reuse. Normal OK packets are tiny; cap this distinct lifetime class so a
+	// CN cannot turn the transient packet allowance into steady memory.
+	proxyBackendAuthResponseLimit     = 1024
+	proxyBackendRetainedResponseLimit = proxyBackendAuthResponseLimit + frontend.PacketHeaderLength
+)
+
 // newServerConn creates a connection to CN server.
-func newServerConn(cn *CNServer, tun *tunnel, r *rebalancer, timeout time.Duration) (ServerConn, error) {
+func newServerConn(
+	cn *CNServer,
+	tun *tunnel,
+	r *rebalancer,
+	timeout time.Duration,
+	allocators ...frontend.Allocator,
+) (ServerConn, error) {
+	return newServerConnContext(
+		context.Background(), cn, tun, r, timeout, allocators...,
+	)
+}
+
+func newServerConnContext(
+	ctx context.Context,
+	cn *CNServer,
+	tun *tunnel,
+	r *rebalancer,
+	timeout time.Duration,
+	allocators ...frontend.Allocator,
+) (ServerConn, error) {
 	var logger *zap.Logger
 	if r != nil && r.logger != nil {
 		logger = r.logger.RawLogger()
 	}
-	c, err := cn.Connect(logger, timeout)
+	c, err := cn.ConnectContext(ctx, logger, timeout)
 	if err != nil {
 		return nil, err
 	}
+	owned := true
+	defer func() {
+		if owned {
+			_ = c.Close()
+		}
+	}()
 	s := &serverConn{
 		cnServer:   cn,
 		conn:       c,
 		connID:     nextServerConnID(),
 		rebalancer: r,
-		tun:        tun,
 		createTime: time.Now(),
 	}
+	s.tunnelOwner.tun = tun
 	fp := config.FrontendParameters{}
 	fp.SetDefaultValues()
 	pu := config.NewParameterUnit(&fp, nil, nil, nil)
 	frontend.InitServerLevelVars(cn.uuid)
-	frontend.SetSessionAlloc(cn.uuid, frontend.NewSessionAllocator(pu))
-	ios, err := frontend.NewIOSession(c.RawConn(), pu, cn.uuid)
+	var allocator frontend.Allocator
+	if len(allocators) > 0 {
+		allocator = allocators[0]
+	}
+	if allocator == nil {
+		allocator = frontend.NewSessionAllocator(pu)
+	}
+	ios, err := frontend.NewIOSessionWithOptions(
+		c,
+		pu,
+		cn.uuid,
+		frontend.WithIOSessionBufferSize(proxyIOSessionBufferSize),
+		frontend.WithIOSessionAllowedPacketSize(proxyBackendPacketLimit),
+		frontend.WithIOSessionAllocator(allocator),
+	)
 	if err != nil {
 		return nil, err
 	}
 	s.mysqlProto = frontend.NewMysqlClientProtocol(cn.uuid, s.connID, ios, 0, &fp)
+	owned = false
 	return s, nil
 }
 
@@ -149,26 +245,134 @@ func (s *serverConn) ConnID() uint32 {
 
 // RawConn implements the ServerConn interface.
 func (s *serverConn) RawConn() net.Conn {
-	if s != nil {
-		if s.cnServer != nil {
+	if s != nil && s.conn != nil {
+		if s.cnServer != nil && s.rebalancer != nil {
 			return &wrappedConn{
-				Conn: s.conn.RawConn(),
+				Conn: s.conn,
 				closeFn: func() {
-					s.rebalancer.connManager.disconnect(s.cnServer, s.tun)
+					s.closeTunnelOwnership()
 				},
 			}
 		}
-		return s.conn.RawConn()
+		return s.conn
 	}
 	return nil
+}
+
+type cacheReuseServerConn interface {
+	waitCacheReuseReady(context.Context) error
+	rebindTunnel(*tunnel) bool
+}
+
+var _ cacheReuseServerConn = (*serverConn)(nil)
+
+func waitServerConnCacheReuseReady(ctx context.Context, sc ServerConn) error {
+	if reusable, ok := sc.(cacheReuseServerConn); ok {
+		return reusable.waitCacheReuseReady(ctx)
+	}
+	return nil
+}
+
+func rebindServerConnTunnel(sc ServerConn, next *tunnel) bool {
+	if reusable, ok := sc.(cacheReuseServerConn); ok {
+		return reusable.rebindTunnel(next)
+	}
+	// Test and extension implementations without manager ownership retain their
+	// existing behavior. Production serverConn and its memory wrapper implement
+	// the complete cache-reuse contract.
+	return true
+}
+
+func (s *serverConn) waitCacheReuseReady(ctx context.Context) error {
+	if s == nil {
+		return errPipeClosed
+	}
+	s.tunnelOwner.Lock()
+	if s.tunnelOwner.closed {
+		s.tunnelOwner.Unlock()
+		return errPipeClosed
+	}
+	origin := s.tunnelOwner.tun
+	s.tunnelOwner.Unlock()
+	if err := origin.waitCacheReuseReady(ctx); err != nil {
+		return err
+	}
+	// Close may have won while the caller waited. Do not let a terminal backend
+	// enter authentication or become visible to a new tunnel generation.
+	s.tunnelOwner.Lock()
+	defer s.tunnelOwner.Unlock()
+	if s.tunnelOwner.closed || s.tunnelOwner.tun != origin {
+		return errPipeClosed
+	}
+	return nil
+}
+
+func (s *serverConn) rebindTunnel(next *tunnel) bool {
+	if s == nil {
+		return false
+	}
+	s.tunnelOwner.Lock()
+	defer s.tunnelOwner.Unlock()
+	if s.tunnelOwner.closed {
+		return false
+	}
+	old := s.tunnelOwner.tun
+	if old == next {
+		return true
+	}
+	if s.rebalancer != nil {
+		s.rebalancer.connManager.rebind(s.cnServer, old, next)
+	}
+	s.tunnelOwner.tun = next
+	return true
+}
+
+func (s *serverConn) closeTunnelOwnership() {
+	if s == nil {
+		return
+	}
+	s.tunnelOwner.Lock()
+	defer s.tunnelOwner.Unlock()
+	if s.tunnelOwner.closed {
+		return
+	}
+	s.tunnelOwner.closed = true
+	if s.rebalancer != nil {
+		s.rebalancer.connManager.disconnect(s.cnServer, s.tunnelOwner.tun)
+	}
+	s.tunnelOwner.tun = nil
 }
 
 // HandleHandshake implements the ServerConn interface.
 func (s *serverConn) HandleHandshake(
 	handshakeResp *frontend.Packet, timeout time.Duration,
 ) (*frontend.Packet, error) {
-	ctx, cancel := context.WithTimeoutCause(context.Background(), timeout, moerr.CauseHandleHandshake)
+	return s.HandleHandshakeContext(context.Background(), handshakeResp, timeout)
+}
+
+func (s *serverConn) HandleHandshakeContext(
+	parent context.Context,
+	handshakeResp *frontend.Packet,
+	timeout time.Duration,
+) (*frontend.Packet, error) {
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithTimeoutCause(parent, timeout, moerr.CauseHandleHandshake)
 	defer cancel()
+	if s == nil || s.conn == nil {
+		return nil, moerr.NewInternalErrorNoCtx("backend connection is unavailable")
+	}
+	raw := s.conn
+	if raw == nil {
+		return nil, moerr.NewInternalErrorNoCtx("backend connection is unavailable")
+	}
+	if cause := operationContextCause(ctx); cause != nil {
+		_ = raw.Close()
+		return nil, newTimeoutConnectErr(cause)
+	}
+	joinInterrupt := interruptConnectionOnDone(ctx, raw)
+	defer joinInterrupt()
 
 	type result struct {
 		resp *frontend.Packet
@@ -191,12 +395,62 @@ func (s *serverConn) HandleHandshake(
 
 	select {
 	case ret := <-resultC:
+		// Join cancellation before accepting success. If cancellation won the
+		// race, the transport may already be closed and cannot enter the tunnel.
+		joinInterrupt()
+		if cause := operationContextCause(ctx); cause != nil {
+			_ = raw.Close()
+			return nil, newTimeoutConnectErr(errors.Join(ret.err, cause))
+		}
 		return ret.resp, ret.err
 	case <-ctx.Done():
+		// A caller may release or reuse handshakeResp as soon as this method
+		// returns. Close only the transport first, then join the worker before
+		// returning; calling s.Close here would free mysqlProto buffers while
+		// the worker may still be using them. net.Conn.Close unblocks both the
+		// goetty read and frontend write paths.
+		_ = raw.Close()
+		<-resultC
+		joinInterrupt()
 		logutil.Errorf("handshake to cn %s timeout %v, conn ID: %d goId:%d",
 			s.cnServer.addr, timeout, s.connID, goid.Get())
 		// Return a retryable error with timeout flag set.
-		return nil, newTimeoutConnectErr(moerr.AttachCause(ctx, context.DeadlineExceeded))
+		return nil, newTimeoutConnectErr(moerr.AttachCause(ctx, context.Cause(ctx)))
+	}
+}
+
+func operationContextCause(ctx context.Context) error {
+	if cause := context.Cause(ctx); cause != nil {
+		return cause
+	}
+	if deadline, ok := ctx.Deadline(); ok && !time.Now().Before(deadline) {
+		return context.DeadlineExceeded
+	}
+	return nil
+}
+
+// interruptConnectionOnDone makes cancellation a terminal event for a
+// phase-owned transport. Client and backend handshake connections are
+// sacrificial until their phase succeeds, so closing is both the strongest I/O
+// interrupt and avoids a wrapper or deadline check in the steady tunnel hot
+// path. The returned join function prevents a late cancellation callback from
+// closing a connection after ownership has been handed off.
+func interruptConnectionOnDone(ctx context.Context, conn net.Conn) func() {
+	if ctx == nil || conn == nil {
+		return func() {}
+	}
+	done := make(chan struct{})
+	stop := context.AfterFunc(ctx, func() {
+		_ = conn.Close()
+		close(done)
+	})
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			if !stop() {
+				<-done
+			}
+		})
 	}
 }
 
@@ -229,6 +483,35 @@ func (s *serverConn) ExecStmt(stmt internalStmt, resp chan<- []byte) (bool, erro
 		}
 	}
 	return execOK, nil
+}
+
+func (s *serverConn) ExecStmtContext(
+	ctx context.Context,
+	stmt internalStmt,
+	resp chan<- []byte,
+) (bool, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if s == nil || s.conn == nil {
+		return false, moerr.NewInternalErrorNoCtx("backend connection is unavailable")
+	}
+	raw := s.conn
+	if raw == nil {
+		return false, moerr.NewInternalErrorNoCtx("backend connection is unavailable")
+	}
+	if cause := operationContextCause(ctx); cause != nil {
+		_ = raw.Close()
+		return false, cause
+	}
+	joinInterrupt := interruptConnectionOnDone(ctx, raw)
+	ok, err := s.ExecStmt(stmt, resp)
+	joinInterrupt()
+	if cause := operationContextCause(ctx); cause != nil {
+		_ = raw.Close()
+		return false, errors.Join(err, cause)
+	}
+	return ok, err
 }
 
 // GetCNServer implements the ServerConn interface.
@@ -267,32 +550,36 @@ func (s *serverConn) Quit() error {
 // Close implements the ServerConn interface.
 func (s *serverConn) Close() error {
 	s.closeOnce.Do(func() {
+		s.closeTunnelOwnership()
 		if s.mysqlProto != nil {
 			tcpConn := s.mysqlProto.GetTcpConnection()
 			if tcpConn != nil {
 				_ = tcpConn.Close()
 			}
 			s.mysqlProto.Close()
+		} else if s.conn != nil {
+			_ = s.conn.Close()
 		}
 	})
-	if s.rebalancer != nil {
-		// Un-track the connection.
-		s.rebalancer.connManager.disconnect(s.cnServer, s.tun)
-	}
 	return nil
 }
 
 // readPacket reads packet from CN server, usually used in handshake phase.
 func (s *serverConn) readPacket() (*frontend.Packet, error) {
-	msg, err := s.conn.Read(goetty.ReadOptions{})
+	if s == nil || s.mysqlProto == nil || s.mysqlProto.GetTcpConnection() == nil {
+		return nil, moerr.NewInternalErrorNoCtx("backend protocol is unavailable")
+	}
+	payload, err := s.mysqlProto.GetTcpConnection().Read()
 	if err != nil {
 		return nil, err
 	}
-	packet, ok := msg.(*frontend.Packet)
-	if !ok {
-		return nil, moerr.NewInternalErrorNoCtx("message is not a Packet")
-	}
-	return packet, nil
+	// frontend.Conn advances the expected sequence after each successful read.
+	sequenceID := s.mysqlProto.GetTcpConnection().GetSequenceID() - 1
+	return &frontend.Packet{
+		Length:     int32(len(payload)),
+		SequenceID: int8(sequenceID),
+		Payload:    payload,
+	}, nil
 }
 
 // nextServerConnID increases baseConnID by 1 and returns the result.
@@ -325,24 +612,50 @@ type CNServer struct {
 	clientAddr string
 }
 
-// Connect connects to backend server and returns IOSession.
-func (s *CNServer) Connect(logger *zap.Logger, timeout time.Duration) (goetty.IOSession, error) {
-	c := goetty.NewIOSession(
-		goetty.WithSessionCodec(frontend.NewSqlCodec()),
-		goetty.WithSessionLogger(logger),
-	)
-	err := c.Connect(s.addr, timeout)
+// Connect connects to a backend server and writes the Proxy ExtraInfo preface.
+func (s *CNServer) Connect(logger *zap.Logger, timeout time.Duration) (net.Conn, error) {
+	return s.ConnectContext(context.Background(), logger, timeout)
+}
+
+func (s *CNServer) ConnectContext(
+	parent context.Context,
+	_ *zap.Logger,
+	timeout time.Duration,
+) (net.Conn, error) {
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx := parent
+	cancel := func() {}
+	if timeout > 0 {
+		ctx, cancel = context.WithTimeout(parent, timeout)
+	}
+	defer cancel()
+
+	network, address, err := parseBackendAddress(s.addr)
+	if err != nil {
+		return nil, newConnectErr(err)
+	}
+	raw, err := (&net.Dialer{}).DialContext(ctx, network, address)
 	if err != nil {
 		logutil.Errorf("failed to connect to cn server, timeout: %v, conn ID: %d, cn: %s, goId: %d, error: %v",
 			timeout, s.connID, s.addr, goid.Get(), err)
 		if ne, ok := err.(net.Error); ok && ne.Timeout() {
 			return nil, newTimeoutConnectErr(err)
 		}
-		if errors.Is(err, context.DeadlineExceeded) {
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 			return nil, newTimeoutConnectErr(err)
 		}
 		return nil, newConnectErr(err)
 	}
+	owned := true
+	defer func() {
+		if owned {
+			_ = raw.Close()
+		}
+	}()
+	joinInterrupt := interruptConnectionOnDone(ctx, raw)
+	defer joinInterrupt()
 	if len(s.salt) != 20 {
 		return nil, moerr.NewInternalErrorNoCtx("salt is empty")
 	}
@@ -359,8 +672,45 @@ func (s *CNServer) Connect(logger *zap.Logger, timeout time.Duration) (goetty.IO
 	}
 	// When build connection with backend server, proxy send its salt, request
 	// labels and other information to the backend server.
-	if err := c.Write(data, goetty.WriteOptions{Flush: true}); err != nil {
+	if err := writeAll(raw, data); err != nil {
+		joinInterrupt()
+		if cause := operationContextCause(ctx); cause != nil {
+			return nil, newTimeoutConnectErr(errors.Join(err, cause))
+		}
 		return nil, err
 	}
-	return c, nil
+	joinInterrupt()
+	if cause := operationContextCause(ctx); cause != nil {
+		return nil, newTimeoutConnectErr(cause)
+	}
+	owned = false
+	return raw, nil
+}
+
+func writeAll(conn net.Conn, data []byte) error {
+	for len(data) > 0 {
+		n, err := conn.Write(data)
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			return io.ErrShortWrite
+		}
+		data = data[n:]
+	}
+	return nil
+}
+
+func parseBackendAddress(address string) (string, string, error) {
+	if !strings.Contains(address, "//") {
+		return "tcp4", address, nil
+	}
+	u, err := url.Parse(address)
+	if err != nil {
+		return "", "", err
+	}
+	if strings.EqualFold(u.Scheme, "unix") {
+		return u.Scheme, u.Path, nil
+	}
+	return u.Scheme, u.Host, nil
 }
