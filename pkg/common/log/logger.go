@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"go.uber.org/zap"
@@ -38,24 +39,24 @@ func GetServiceLogger(logger *zap.Logger, service metadata.ServiceType, uuid str
 // e.g. if the logger's name is cn-service, module is txn, the new logger's name is
 // "cn-service.txn".
 func GetModuleLogger(logger *MOLogger, module Module) *MOLogger {
-	return wrap(logger.logger.Named(string(module)))
+	return logger.derive(logger.logger.Named(string(module)), logger.ctx)
 }
 
 // With creates a child logger and adds structured context to it. Fields added
 // to the child don't affect the parent, and vice versa.
 func (l *MOLogger) With(fields ...zap.Field) *MOLogger {
-	return newMOLogger(l.logger.With(fields...), l.ctx)
+	return l.derive(l.logger.With(fields...), l.ctx)
 }
 
 // WithOptions creates a child logger with zap options.
 func (l *MOLogger) WithOptions(opts ...zap.Option) *MOLogger {
-	return newMOLogger(l.logger.WithOptions(opts...), l.ctx)
+	return l.derive(l.logger.WithOptions(opts...), l.ctx)
 }
 
 // Named adds a new path segment to the logger's name. Segments are joined by
 // periods. By default, Loggers are unnamed.
 func (l *MOLogger) Named(name string) *MOLogger {
-	return newMOLogger(l.logger.Named(name), l.ctx)
+	return l.derive(l.logger.Named(name), l.ctx)
 }
 
 func (l *MOLogger) WithContext(ctx context.Context) *MOLogger {
@@ -72,7 +73,7 @@ func (l *MOLogger) WithContext(ctx context.Context) *MOLogger {
 			panic("context with empty SpanContext are not supported when tracing is enabled")
 		}
 	}
-	return newMOLogger(l.logger, ctx)
+	return l.derive(l.logger, ctx)
 }
 
 func newMOLogger(logger *zap.Logger, ctx context.Context) *MOLogger {
@@ -85,6 +86,10 @@ func newMOLogger(logger *zap.Logger, ctx context.Context) *MOLogger {
 			3: logger.WithOptions(zap.AddCallerSkip(3)),
 		},
 	}
+}
+
+func (l *MOLogger) derive(logger *zap.Logger, ctx context.Context) *MOLogger {
+	return newMOLogger(logger, ctx)
 }
 
 // WithProcess if the current log belongs to a certain process, the process name and process ID
@@ -144,9 +149,70 @@ func (l *MOLogger) Fatal(msg string, fields ...zap.Field) bool {
 	return l.Log(msg, DefaultLogOptions().WithLevel(zap.FatalLevel).AddCallerSkip(1), fields...)
 }
 
+// DebugEvent, InfoEvent, WarnEvent, and ErrorEvent use the same stable Event
+// contract as the global logger while preserving this service logger's context.
+func (l *MOLogger) DebugEvent(event logutil.Event, fields ...zap.Field) bool {
+	return l.logEvent(event, DefaultLogOptions().WithLevel(zap.DebugLevel).AddCallerSkip(2), logutil.DefaultRateLimitConfig, fields...)
+}
+func (l *MOLogger) InfoEvent(event logutil.Event, fields ...zap.Field) bool {
+	return l.logEvent(event, DefaultLogOptions().WithLevel(zap.InfoLevel).AddCallerSkip(2), logutil.DefaultRateLimitConfig, fields...)
+}
+func (l *MOLogger) WarnEvent(event logutil.Event, fields ...zap.Field) bool {
+	return l.logEvent(event, DefaultLogOptions().WithLevel(zap.WarnLevel).AddCallerSkip(2), logutil.DefaultRateLimitConfig, fields...)
+}
+func (l *MOLogger) ErrorEvent(event logutil.Event, fields ...zap.Field) bool {
+	return l.logEvent(event, DefaultLogOptions().WithLevel(zap.ErrorLevel).AddCallerSkip(2), logutil.DefaultRateLimitConfig, fields...)
+}
+func (l *MOLogger) DebugEventLazy(event logutil.Event, build logutil.EventFieldBuilder) bool {
+	return l.logEventLazy(event, DefaultLogOptions().WithLevel(zap.DebugLevel).AddCallerSkip(2), build)
+}
+func (l *MOLogger) InfoEventLazy(event logutil.Event, build logutil.EventFieldBuilder) bool {
+	return l.logEventLazy(event, DefaultLogOptions().WithLevel(zap.InfoLevel).AddCallerSkip(2), build)
+}
+func (l *MOLogger) WarnEventLazy(event logutil.Event, build logutil.EventFieldBuilder) bool {
+	return l.logEventLazy(event, DefaultLogOptions().WithLevel(zap.WarnLevel).AddCallerSkip(2), build)
+}
+func (l *MOLogger) ErrorEventLazy(event logutil.Event, build logutil.EventFieldBuilder) bool {
+	return l.logEventLazy(event, DefaultLogOptions().WithLevel(zap.ErrorLevel).AddCallerSkip(2), build)
+}
+
+func (l *MOLogger) logEventLazy(event logutil.Event, opts LogOptions, build logutil.EventFieldBuilder) bool {
+	if !l.Enabled(opts.level) {
+		return false
+	}
+	decision, ok := logutil.AllowEvent(event.Name, logutil.DefaultRateLimitConfig)
+	if !ok {
+		return false
+	}
+	var fields []zap.Field
+	if build != nil {
+		fields = build()
+	}
+	return l.logEventDecision(event.Message, opts, decision, fields)
+}
+
+func (l *MOLogger) logEvent(event logutil.Event, opts LogOptions, config logutil.RateLimitConfig, fields ...zap.Field) bool {
+	if !l.Enabled(opts.level) {
+		return false
+	}
+	decision, ok := logutil.AllowEvent(event.Name, config)
+	if !ok {
+		return false
+	}
+	return l.logEventDecision(event.Message, opts, decision, fields)
+}
+
+func (l *MOLogger) logEventDecision(msg string, opts LogOptions, decision logutil.RateLimitDecision, fields []zap.Field) bool {
+	return l.logRaw(msg, opts, logutil.EventFieldsWithDecision(fields, decision)...)
+}
+
 // Log is the entry point for mo log printing. Return true to indicate that the log
 // is being recorded by the current LogContext.
 func (l *MOLogger) Log(msg string, opts LogOptions, fields ...zap.Field) bool {
+	return l.logRaw(msg, opts, fields...)
+}
+
+func (l *MOLogger) logRaw(msg string, opts LogOptions, fields ...zap.Field) bool {
 	if l.logger == nil {
 		panic("missing logger")
 	}
@@ -166,14 +232,19 @@ func (l *MOLogger) Log(msg string, opts LogOptions, fields ...zap.Field) bool {
 		logger = l.logger
 	}
 	if ce := logger.Check(opts.level, msg); ce != nil {
-		if len(opts.fields) > 0 {
-			fields = append(fields, opts.fields...)
-		}
-		if opts.ctx != nil {
-			fields = append(fields, trace.ContextField(opts.ctx))
+		out := fields
+		if len(opts.fields) > 0 || opts.ctx != nil {
+			// Copy only when adding contextual fields. This keeps the legacy
+			// hot path allocation-free while ensuring appends never mutate a
+			// caller-owned backing array.
+			out = append([]zap.Field(nil), fields...)
+			out = append(out, opts.fields...)
+			if opts.ctx != nil {
+				out = append(out, trace.ContextField(opts.ctx))
+			}
 		}
 
-		ce.Write(fields...)
+		ce.Write(out...)
 		return true
 	}
 	return false
