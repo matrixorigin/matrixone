@@ -41,6 +41,9 @@ func NewBytes(data []byte) *Bytes {
 }
 
 func (b *Bytes) Size() int64 {
+	if b.refs.Load() <= 0 {
+		panic("Bytes.Size: use after free")
+	}
 	return int64(len(b.bytes))
 }
 

@@ -385,6 +385,7 @@ func TestRemoteCache(t *testing.T) {
 		assert.Equal(t, []byte{1, 2}, ioVec2.Entries[0].CachedData.Bytes())
 		assert.Equal(t, true, ioVec2.Entries[0].done)
 		assert.NotNil(t, ioVec2.Entries[0].fromCache)
+		ioVec2.Release()
 
 		sf1.fs.Close(ctx)
 	})

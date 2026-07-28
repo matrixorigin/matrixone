@@ -100,6 +100,7 @@ func TestBytesResurrection(t *testing.T) {
 	// And the object stays terminally dead.
 	assert.Panics(t, func() { bs.Bytes() }, "use after free")
 	assert.Panics(t, func() { bs.Slice(1) }, "slice after free")
+	assert.Panics(t, func() { bs.Size() }, "size after free")
 	assert.Equal(t, 1, deallocated, "still exactly one deallocation")
 }
 
