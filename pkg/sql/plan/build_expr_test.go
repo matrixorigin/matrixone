@@ -463,8 +463,17 @@ func TestConvertBitConstantToJSONAfterConstantFold(t *testing.T) {
 			defer free()
 			require.Equal(t, types.T_json, vec.GetType().Oid)
 			value := types.DecodeJson(vec.GetBytesAt(0))
-			require.Equal(t, bytejson.TpCodeBit, value.Type)
+			// Constant-fold results are stored in a vector, so BIT uses the
+			// legacy-readable BLOB envelope while retaining its logical subtype.
+			require.Equal(t, bytejson.TpCodeBlob, value.Type)
+			require.Equal(t, "BIT", value.TYPE())
 			require.Equal(t, tc.payload, value.String())
+			unquoted, err := value.Unquote()
+			require.NoError(t, err)
+			require.Equal(t, strings.Trim(tc.payload, `"`), unquoted)
+			payloadLen, ok := bytejson.BinaryJSONPayloadLen(value)
+			require.True(t, ok)
+			require.Equal(t, (int(tc.width)+7)/8, payloadLen)
 		})
 	}
 }
