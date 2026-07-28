@@ -203,6 +203,15 @@ func (pool *FixedBytePool) checkHeapBudget(est uint64) error {
 	return nil
 }
 
+// CheckBudget refuses with the standard over-budget error when the CN's resident
+// memory plus est would exceed the pool's heap budget. Exported for callers that
+// allocate scoring workspace OUTSIDE the pool's own accounting (e.g. the
+// partition-ordered traversal of the aggregation map) and must gate that
+// allocation on the same budget.
+func (pool *FixedBytePool) CheckBudget(est uint64) error {
+	return pool.checkHeapBudget(est)
+}
+
 // FixedBytePoolIterator to tranverse the data in the pool
 type FixedBytePoolIterator struct {
 	pool   *FixedBytePool

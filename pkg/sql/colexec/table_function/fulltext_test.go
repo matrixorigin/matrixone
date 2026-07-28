@@ -1384,3 +1384,128 @@ func TestSortTopKBoundedUnspills(t *testing.T) {
 		"top-K scoring must not thrash: %d unspills for %d partitions", reloads, npart)
 	require.Len(t, st.minheap, 8)
 }
+
+// TestEvaluateMultiBatchBoundedWork is the #25692 review regression for the
+// zero-LIMIT scoring path: call() re-enters evaluate for every 8K output
+// batch, so the partition-ordered traversal must be built ONCE per scoring
+// phase and drained across batches. Rebuilding it per batch costs O(N)
+// workspace per batch, O(N^2/8192) traversal work overall, and re-materializes
+// spilled partitions on every batch. Asserts (a) every doc is scored exactly
+// once across multiple batches, (b) a key added after the first batch is NOT
+// discovered (a per-batch rebuild would score it), and (c) unspill I/O stays
+// bounded by the partition count across ALL batches.
+func TestEvaluateMultiBatchBoundedWork(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	s, err := fulltext.NewSearchAccum("src", "index", "pattern", 0, "", fulltext.ALGO_TFIDF)
+	require.NoError(t, err)
+	s.Nrow = 100000
+
+	const ndoc = 20000
+	// 2048 items per partition (~10 partitions), resident set of 2 partitions so
+	// the build phase spills and scoring has to unspill.
+	dsize := uint64(s.Nkeywords)
+	st := &fulltextState{
+		agghtab:   make(map[any]uint64, ndoc),
+		aggcnt:    make([]int64, s.Nkeywords),
+		docLenMap: make(map[any]int32, ndoc),
+		docIDMap:  make(map[any]any),
+		mpool:     fulltext.NewFixedBytePool(proc, dsize, 2048*dsize, 2*2048*dsize),
+	}
+	defer st.mpool.Close()
+	st.aggcnt[0] = ndoc
+
+	for i := 0; i < ndoc; i++ {
+		addr, docvec, allocErr := st.mpool.NewItem()
+		require.NoError(t, allocErr)
+		docvec[0] = uint8(i%250 + 1)
+		st.agghtab[i] = addr
+		st.docLenMap[i] = int32(i%100 + 1)
+	}
+	require.Greater(t, st.mpool.NumPartitions(), 4, "test must span several partitions")
+
+	before := st.mpool.Unspills()
+	seen := make(map[any]struct{}, ndoc)
+	batches := 0
+	injected := false
+	for {
+		scoremap, evalErr := evaluate(st, proc, s)
+		require.NoError(t, evalErr)
+		if len(scoremap) == 0 {
+			break
+		}
+		batches++
+		require.LessOrEqual(t, len(scoremap), 8192)
+		for k := range scoremap {
+			_, dup := seen[k]
+			require.Falsef(t, dup, "doc %v scored twice", k)
+			seen[k] = struct{}{}
+		}
+		if !injected {
+			// Inject a doc AFTER the first batch. The traversal was snapshot at
+			// the first evaluate call; a per-batch rebuild (the regression) would
+			// pick this key up and score it, the build-once contract never sees it.
+			addr, allocErr := func() (uint64, error) {
+				a, docvec, e := st.mpool.NewItem()
+				if e == nil {
+					docvec[0] = 1
+				}
+				return a, e
+			}()
+			require.NoError(t, allocErr)
+			st.agghtab["injected"] = addr
+			st.docLenMap["injected"] = 1
+			injected = true
+		}
+	}
+
+	require.Len(t, seen, ndoc, "every original doc scored exactly once across batches")
+	require.GreaterOrEqual(t, batches, 3, "test must span multiple evaluate batches")
+	_, stillThere := st.agghtab["injected"]
+	require.True(t, stillThere,
+		"ordering must be built once: a key added after the first batch must not be re-discovered by a rebuild")
+	require.Len(t, st.agghtab, 1)
+
+	// Each spilled partition materialized at most once across ALL batches (+1 for
+	// the unspill the injected NewItem itself may trigger on the tail partition).
+	npart := st.mpool.NumPartitions()
+	reloads := st.mpool.Unspills() - before
+	require.LessOrEqualf(t, reloads, uint64(npart)+1,
+		"multi-batch scoring must not thrash: %d unspills for %d partitions across all batches", reloads, npart)
+}
+
+// TestEvaluateOrderingBudgetGated: the partition-ordered traversal retains
+// ~16 bytes per remaining document OUTSIDE the pool's accounting, so building
+// it must be gated on the pool's heap budget instead of allocated
+// unconditionally (#25692 review).
+func TestEvaluateOrderingBudgetGated(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	s, err := fulltext.NewSearchAccum("src", "index", "pattern", 0, "", fulltext.ALGO_TFIDF)
+	require.NoError(t, err)
+	s.Nrow = 1000
+
+	dsize := uint64(s.Nkeywords)
+	st := &fulltextState{
+		agghtab:   make(map[any]uint64, 8),
+		aggcnt:    make([]int64, s.Nkeywords),
+		docLenMap: make(map[any]int32, 8),
+		docIDMap:  make(map[any]any),
+		mpool:     fulltext.NewFixedBytePool(proc, dsize, 4*dsize, 2*4*dsize),
+	}
+	defer st.mpool.Close()
+	st.aggcnt[0] = 8
+	for i := 0; i < 8; i++ {
+		addr, docvec, allocErr := st.mpool.NewItem()
+		require.NoError(t, allocErr)
+		docvec[0] = uint8(i + 1)
+		st.agghtab[i] = addr
+		st.docLenMap[i] = int32(i + 1)
+	}
+
+	old := fulltext.HeapBudgetPct
+	fulltext.HeapBudgetPct = 0 // every allocation is over budget
+	defer func() { fulltext.HeapBudgetPct = old }()
+
+	_, err = evaluate(st, proc, s)
+	require.Error(t, err, "ordering workspace must be budget-gated")
+	require.Contains(t, err.Error(), "budget")
+}

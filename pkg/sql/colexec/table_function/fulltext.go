@@ -65,6 +65,14 @@ type fulltextState struct {
 	resbuf           []*vectorindex.SearchResultAnyKey
 	ranking          bool
 
+	// Partition-ordered traversal of agghtab for the zero-LIMIT scoring path.
+	// Built ONCE per scoring phase (aggregation is complete before the first
+	// evaluate call) and drained across evaluate batches; rebuilding it per 8K
+	// output batch would cost O(N) workspace per batch and O(N^2/8192)
+	// traversal work overall (#25638 review).
+	scoreBuckets [][]any
+	scoreOrdered bool
+
 	// Serialized membership-filter (docfilter) bytes for reader-level doc_id filtering
 	fulltextMembershipFilter []byte
 
@@ -103,6 +111,8 @@ func (u *fulltextState) resetRowState(proc *process.Process) {
 	u.docIDMap = make(map[any]any)
 	u.minheap = nil
 	u.resbuf = nil
+	u.scoreBuckets = nil
+	u.scoreOrdered = false
 }
 
 func (u *fulltextState) free(tf *TableFunction, proc *process.Process, pipelineFailed bool, err error) {
@@ -403,30 +413,51 @@ func runWordStats(
 	return
 }
 
-// partitionOrderedKeys returns agghtab's keys grouped by ascending pool-partition id.
+// bucketedKeySize is the estimated workspace cost, per bucketed agghtab key, of the
+// partition-ordered traversal (one interface header per key in a bucket slice).
+const bucketedKeySize = 16
+
+// partitionOrderedBuckets groups agghtab's keys by ascending pool-partition id.
 // Go map iteration order is randomized and has no relation to the partition an
 // address lives in; when partitions have spilled, scoring in map order makes GetItem
 // evict and re-materialize WHOLE partitions per document (a diagnostic showed one
 // partition reload per item read). Grouping by partition first costs one O(n) pass
 // over the map and guarantees each spilled partition is unspilled at most once per
 // scoring pass (#25638).
-func partitionOrderedKeys(agghtab map[any]uint64, npart int) []any {
+//
+// The buckets retain ~bucketedKeySize bytes per remaining document until the keys are
+// consumed — workspace that lives outside the pool's accounting — so the allocation is
+// gated on the pool's heap budget, and construction honors cancellation. Callers must
+// build the buckets at most once per scoring phase and drain them incrementally, never
+// rebuild them per output batch.
+func partitionOrderedBuckets(
+	proc *process.Process,
+	agghtab map[any]uint64,
+	pool *fulltext.FixedBytePool,
+) ([][]any, error) {
+	npart := pool.NumPartitions()
 	if npart < 1 {
 		npart = 1
 	}
+	if err := pool.CheckBudget(uint64(len(agghtab)) * bucketedKeySize); err != nil {
+		return nil, err
+	}
 	buckets := make([][]any, npart)
+	n := 0
 	for k, addr := range agghtab {
+		if n%cancelCheckInterval == 0 {
+			if err := proc.Ctx.Err(); err != nil {
+				return nil, moerr.NewInternalError(proc.Ctx, "fulltext scoring cancelled")
+			}
+		}
+		n++
 		pid := fulltext.GetPartitionId(addr)
 		if pid >= uint64(npart) {
 			pid = uint64(npart - 1)
 		}
 		buckets[pid] = append(buckets[pid], k)
 	}
-	keys := make([]any, 0, len(agghtab))
-	for _, b := range buckets {
-		keys = append(keys, b...)
-	}
-	return keys
+	return buckets, nil
 }
 
 // cancelCheckInterval: how many scored documents between context-cancellation checks in
@@ -438,43 +469,68 @@ const cancelCheckInterval = 1024
 // whenever there is 8192 results, return it immediately.
 func evaluate(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum) (scoremap map[any]float32, err error) {
 
+	// Build the partition-ordered traversal ONCE: aggregation is complete before
+	// the first evaluate call, and the zero-LIMIT path re-enters evaluate for every
+	// 8K output batch, so the ordering must be drained across batches — not rebuilt
+	// per batch (#25638 review).
+	if !u.scoreOrdered {
+		if u.scoreBuckets, err = partitionOrderedBuckets(proc, u.agghtab, u.mpool); err != nil {
+			return nil, err
+		}
+		u.scoreOrdered = true
+	}
+
 	scoremap = make(map[any]float32, 8192)
 	keys := make([]any, 0, 8192)
 
 	aggcnt := u.aggcnt
 
-	// score in partition order so spilled partitions are materialized at most once
-	// per pass, and honor cancellation between documents.
-	for n, doc_id := range partitionOrderedKeys(u.agghtab, u.mpool.NumPartitions()) {
-		if n%cancelCheckInterval == 0 {
-			if err := proc.Ctx.Err(); err != nil {
-				return nil, moerr.NewInternalError(proc.Ctx, "fulltext evaluate cancelled")
+	// Consume buckets in partition order so spilled partitions are materialized at
+	// most once across ALL batches, and honor cancellation between documents.
+	n := 0
+	for len(u.scoreBuckets) > 0 && len(scoremap) < 8192 {
+		bucket := u.scoreBuckets[0]
+		for len(bucket) > 0 && len(scoremap) < 8192 {
+			if n%cancelCheckInterval == 0 {
+				if err := proc.Ctx.Err(); err != nil {
+					return nil, moerr.NewInternalError(proc.Ctx, "fulltext evaluate cancelled")
+				}
+			}
+			n++
+			doc_id := bucket[0]
+			bucket = bucket[1:]
+
+			addr, ok := u.agghtab[doc_id]
+			if !ok {
+				continue
+			}
+			docvec, err := u.mpool.GetItem(addr)
+			if err != nil {
+				return nil, err
+			}
+
+			docLen := int64(0)
+			if len, ok := u.docLenMap[doc_id]; ok {
+				docLen = int64(len)
+			}
+
+			score, err := s.Eval(docvec, docLen, aggcnt)
+			if err != nil {
+				return nil, err
+			}
+
+			keys = append(keys, doc_id)
+
+			if len(score) > 0 {
+				scoremap[doc_id] = score[0]
 			}
 		}
-		addr := u.agghtab[doc_id]
-		docvec, err := u.mpool.GetItem(addr)
-		if err != nil {
-			return nil, err
-		}
-
-		docLen := int64(0)
-		if len, ok := u.docLenMap[doc_id]; ok {
-			docLen = int64(len)
-		}
-
-		score, err := s.Eval(docvec, docLen, aggcnt)
-		if err != nil {
-			return nil, err
-		}
-
-		keys = append(keys, doc_id)
-
-		if len(score) > 0 {
-			scoremap[doc_id] = score[0]
-		}
-
-		if len(scoremap) >= 8192 {
-			break
+		if len(bucket) == 0 {
+			// drained: drop the bucket so its backing array can be reclaimed
+			u.scoreBuckets[0] = nil
+			u.scoreBuckets = u.scoreBuckets[1:]
+		} else {
+			u.scoreBuckets[0] = bucket
 		}
 	}
 
@@ -505,60 +561,72 @@ func sort_topk(u *fulltextState, proc *process.Process, s *fulltext.SearchAccum,
 	// score in partition order so spilled partitions are materialized at most once
 	// per pass (map order would thrash whole-partition I/O per document), and honor
 	// cancellation between documents so KILL/timeout can stop the I/O loop promptly.
-	for n, doc_id := range partitionOrderedKeys(u.agghtab, u.mpool.NumPartitions()) {
-		if n%cancelCheckInterval == 0 {
-			if err := proc.Ctx.Err(); err != nil {
-				return moerr.NewInternalError(proc.Ctx, "fulltext sort_topk cancelled")
-			}
-		}
-		addr := u.agghtab[doc_id]
-		docvec, err := u.mpool.GetItem(addr)
-		if err != nil {
-			return err
-		}
-
-		docLen := int64(0)
-		if len, ok := u.docLenMap[doc_id]; ok {
-			docLen = int64(len)
-		}
-
-		score, err := s.Eval(docvec, docLen, aggcnt)
-		if err != nil {
-			return err
-		}
-
-		if len(score) > 0 {
-			scoref64 := float64(score[0])
-			if uint64(len(u.minheap)) >= limit {
-				if u.minheap[0].GetDistance() < scoref64 {
-					if u.ranking {
-						// In ranking mode, free the evicted document's resources immediately
-						// so they are not orphaned in agghtab after sort_topk returns.
-						evictedID := u.minheap[0].(*vectorindex.SearchResultAnyKey).Id
-						if evictedAddr, exists := u.agghtab[evictedID]; exists {
-							err = u.mpool.FreeItem(evictedAddr)
-							if err != nil {
-								return err
-							}
-							delete(u.agghtab, evictedID)
-							delete(u.docLenMap, evictedID)
-							delete(u.docIDMap, evictedID)
-						}
-					}
-					u.minheap[0] = &vectorindex.SearchResultAnyKey{Id: doc_id, Distance: scoref64}
-					heap.Fix(&u.minheap, 0)
+	// sort_topk runs as a single pass, so the buckets are local and released on return.
+	buckets, err := partitionOrderedBuckets(proc, u.agghtab, u.mpool)
+	if err != nil {
+		return err
+	}
+	n := 0
+	for _, bucket := range buckets {
+		for _, doc_id := range bucket {
+			if n%cancelCheckInterval == 0 {
+				if err := proc.Ctx.Err(); err != nil {
+					return moerr.NewInternalError(proc.Ctx, "fulltext sort_topk cancelled")
 				}
-			} else {
-				heap.Push(&u.minheap, &vectorindex.SearchResultAnyKey{Id: doc_id, Distance: scoref64})
 			}
-		} else if u.ranking {
-			err = u.mpool.FreeItem(addr)
+			n++
+			addr, ok := u.agghtab[doc_id]
+			if !ok {
+				continue
+			}
+			docvec, err := u.mpool.GetItem(addr)
 			if err != nil {
 				return err
 			}
-			delete(u.agghtab, doc_id)
-			delete(u.docLenMap, doc_id)
-			delete(u.docIDMap, doc_id)
+
+			docLen := int64(0)
+			if len, ok := u.docLenMap[doc_id]; ok {
+				docLen = int64(len)
+			}
+
+			score, err := s.Eval(docvec, docLen, aggcnt)
+			if err != nil {
+				return err
+			}
+
+			if len(score) > 0 {
+				scoref64 := float64(score[0])
+				if uint64(len(u.minheap)) >= limit {
+					if u.minheap[0].GetDistance() < scoref64 {
+						if u.ranking {
+							// In ranking mode, free the evicted document's resources immediately
+							// so they are not orphaned in agghtab after sort_topk returns.
+							evictedID := u.minheap[0].(*vectorindex.SearchResultAnyKey).Id
+							if evictedAddr, exists := u.agghtab[evictedID]; exists {
+								err = u.mpool.FreeItem(evictedAddr)
+								if err != nil {
+									return err
+								}
+								delete(u.agghtab, evictedID)
+								delete(u.docLenMap, evictedID)
+								delete(u.docIDMap, evictedID)
+							}
+						}
+						u.minheap[0] = &vectorindex.SearchResultAnyKey{Id: doc_id, Distance: scoref64}
+						heap.Fix(&u.minheap, 0)
+					}
+				} else {
+					heap.Push(&u.minheap, &vectorindex.SearchResultAnyKey{Id: doc_id, Distance: scoref64})
+				}
+			} else if u.ranking {
+				err = u.mpool.FreeItem(addr)
+				if err != nil {
+					return err
+				}
+				delete(u.agghtab, doc_id)
+				delete(u.docLenMap, doc_id)
+				delete(u.docIDMap, doc_id)
+			}
 		}
 	}
 
