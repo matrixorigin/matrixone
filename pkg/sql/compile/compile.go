@@ -1114,15 +1114,16 @@ func (c *Compile) compilePlanScope(step int32, curNodeIdx int32, nodes []*plan.N
 
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
 		ss = c.ensureUserLevelLockSideEffectsOnCoordinator(node, ss)
+		if node.Stats.HashmapStats != nil && node.Stats.HashmapStats.Shuffle {
+			ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, c.compileShuffleGroup(node, ss, nodes))))
+			return ss, nil
+		}
 		if hasOrderedGroupConcat(node) {
 			ss = c.compileOrderedGroupConcat(node, ss, nodes)
 			ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, ss)))
 			return ss, nil
 		}
-		if node.Stats.HashmapStats != nil && node.Stats.HashmapStats.Shuffle {
-			ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, c.compileShuffleGroup(node, ss, nodes))))
-			return ss, nil
-		} else if c.IsSingleScope(ss) {
+		if c.IsSingleScope(ss) {
 			ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, c.compileTPGroup(node, ss, nodes))))
 			return ss, nil
 		} else {

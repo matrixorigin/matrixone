@@ -495,7 +495,7 @@ func explainOrderedGroupConcat(
 
 	buf.WriteString(funcExpr.Func.GetObjName())
 	buf.WriteString("(")
-	if funcExpr.Func.Obj&function.DistinctMask != 0 {
+	if uint64(funcExpr.Func.Obj)&function.Distinct != 0 {
 		buf.WriteString("DISTINCT ")
 	}
 	for i := 0; i < concatArgCount; i++ {

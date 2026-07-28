@@ -822,38 +822,102 @@ func TestPositionFunctionExplain(t *testing.T) {
 }
 
 func TestExplainOrderedGroupConcat(t *testing.T) {
-	fn := &plan2.Function{
-		Func: &plan2.ObjectRef{
-			ObjName: "group_concat",
-			Obj:     function.DistinctMask,
-		},
-		Args: []*plan2.Expr{
-			{
-				Typ:  plan2.Type{Id: int32(types.T_varchar)},
-				Expr: &plan2.Expr_Col{Col: &plan2.ColRef{Name: "tw.v"}},
-			},
-			{
-				Typ:  plan2.Type{Id: int32(types.T_int64)},
-				Expr: &plan2.Expr_Col{Col: &plan2.ColRef{Name: "tw.k"}},
-			},
-		},
-		AggConfigType: plan2.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER,
-		AggConfig: []byte{
-			1,
-			0, 0, 0, 1,
-			0, 0, 0, 1,
-			byte(plan2.OrderBySpec_DESC | plan2.OrderBySpec_NULLS_FIRST),
-			0, 0, 0, 1,
-			'~',
-		},
-	}
-	buf := bytes.NewBuffer(nil)
-	err := explainOrderedGroupConcat(context.Background(), fn, &ExplainOptions{}, buf)
+	ctx := context.Background()
+	registered, err := function.GetFunctionByName(
+		ctx,
+		"group_concat",
+		[]types.Type{types.T_varchar.ToType()},
+	)
 	if err != nil {
-		t.Fatalf("explainOrderedGroupConcat() error = %v", err)
+		t.Fatalf("resolve group_concat: %v", err)
 	}
-	const want = "group_concat(DISTINCT tw.v ORDER BY tw.k DESC NULLS FIRST SEPARATOR '~')"
-	if got := buf.String(); got != want {
-		t.Fatalf("explainOrderedGroupConcat() = %q, want %q", got, want)
+	ordinaryID := registered.GetEncodedOverloadID()
+	for _, test := range []struct {
+		name string
+		id   int64
+		want string
+	}{
+		{
+			name: "ordinary",
+			id:   ordinaryID,
+			want: "group_concat(tw.v ORDER BY tw.k DESC NULLS FIRST SEPARATOR '~')",
+		},
+		{
+			name: "distinct",
+			id:   int64(uint64(ordinaryID) | function.Distinct),
+			want: "group_concat(DISTINCT tw.v ORDER BY tw.k DESC NULLS FIRST SEPARATOR '~')",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fn := &plan2.Function{
+				Func: &plan2.ObjectRef{
+					ObjName: "group_concat",
+					Obj:     test.id,
+				},
+				Args: []*plan2.Expr{
+					{
+						Typ:  plan2.Type{Id: int32(types.T_varchar)},
+						Expr: &plan2.Expr_Col{Col: &plan2.ColRef{Name: "tw.v"}},
+					},
+					{
+						Typ:  plan2.Type{Id: int32(types.T_int64)},
+						Expr: &plan2.Expr_Col{Col: &plan2.ColRef{Name: "tw.k"}},
+					},
+				},
+				AggConfigType: plan2.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER,
+				AggConfig: []byte{
+					1,
+					0, 0, 0, 1,
+					0, 0, 0, 1,
+					byte(plan2.OrderBySpec_DESC | plan2.OrderBySpec_NULLS_FIRST),
+					0, 0, 0, 1,
+					'~',
+				},
+			}
+			buf := bytes.NewBuffer(nil)
+			err := explainOrderedGroupConcat(ctx, fn, &ExplainOptions{}, buf)
+			if err != nil {
+				t.Fatalf("explainOrderedGroupConcat() error = %v", err)
+			}
+			if got := buf.String(); got != test.want {
+				t.Fatalf("explainOrderedGroupConcat() = %q, want %q", got, test.want)
+			}
+		})
 	}
+
+	t.Run("invalid config", func(t *testing.T) {
+		err := explainOrderedGroupConcat(
+			ctx,
+			&plan2.Function{
+				Func:      &plan2.ObjectRef{ObjName: "group_concat", Obj: ordinaryID},
+				AggConfig: []byte{1},
+			},
+			&ExplainOptions{},
+			bytes.NewBuffer(nil),
+		)
+		if err == nil {
+			t.Fatal("expected invalid ordered group_concat config")
+		}
+	})
+
+	t.Run("order argument out of range", func(t *testing.T) {
+		err := explainOrderedGroupConcat(
+			ctx,
+			&plan2.Function{
+				Func: &plan2.ObjectRef{ObjName: "group_concat", Obj: ordinaryID},
+				AggConfig: []byte{
+					1,
+					0, 0, 0, 1,
+					0, 0, 0, 1,
+					byte(plan2.OrderBySpec_ASC),
+					0, 0, 0, 0,
+				},
+			},
+			&ExplainOptions{},
+			bytes.NewBuffer(nil),
+		)
+		if err == nil {
+			t.Fatal("expected invalid ordered group_concat argument index")
+		}
+	})
 }
