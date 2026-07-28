@@ -39,10 +39,6 @@ const EnvLibPath = "MO_ONNXRUNTIME_LIB"
 var (
 	initOnce sync.Once
 	initErr  error
-
-	// arenaCfg is kept alive for the process lifetime; it configures the
-	// shared, memory-capped CPU allocator registered with the ORT environment.
-	arenaCfg *ort.ArenaCfg
 )
 
 // MaxRuntimeMemoryBytes caps the ORT CPU arena that serves allocations made
@@ -171,12 +167,15 @@ func ensureInit() error {
 				"onnx: failed to create arena config: %v", err)
 			return
 		}
-		if err := ort.CreateAndRegisterAllocator(memInfo, cfg); err != nil {
+		err = ort.CreateAndRegisterAllocator(memInfo, cfg)
+		// ORT copies the arena parameters into the allocator it creates at
+		// registration; the config object is not retained and can be freed.
+		cfg.Destroy()
+		if err != nil {
 			initErr = moerr.NewInternalErrorNoCtxf(
 				"onnx: failed to register capped allocator: %v", err)
 			return
 		}
-		arenaCfg = cfg
 	})
 	return initErr
 }
