@@ -307,6 +307,63 @@ func TestExtractDataBranchSQLRowValueDecimal256(t *testing.T) {
 	require.Equal(t, "12345678901234567890123456789012345.6789", buf.String())
 }
 
+func TestExtractDataBranchSQLRowValueUint8Array(t *testing.T) {
+	for _, values := range [][]uint8{{}, {0, 1, 255}} {
+		mp := mpool.MustNewZero()
+		vec := vector.NewVec(types.T_array_uint8.ToType())
+		require.NoError(t, vector.AppendArrayList(vec, [][]uint8{values}, nil, mp))
+
+		genericRow := make([]any, 1)
+		require.NoError(t, extractRowFromVector(context.Background(), nil, vec, 0, genericRow, 0, false))
+		require.IsType(t, "", genericRow[0])
+
+		dataBranchRow := make([]any, 1)
+		require.NoError(t, extractDataBranchSQLRowValue(
+			context.Background(), nil, vec, 0, dataBranchRow, 0,
+		))
+		require.IsType(t, []uint8{}, dataBranchRow[0])
+		require.Equal(t, types.ArrayToString(values), types.ArrayToString(dataBranchRow[0].([]uint8)))
+
+		var buf bytes.Buffer
+		require.NoError(t, formatValIntoString(
+			nil, dataBranchRow[0], types.T_array_uint8.ToType(), &buf,
+		))
+		require.Equal(t, "'"+types.ArrayToString(values)+"'", buf.String())
+
+		vec.Free(mp)
+		mpool.DeleteMPool(mp)
+	}
+
+	mp := mpool.MustNewZero()
+	vec := vector.NewVec(types.T_array_uint8.ToType())
+	require.NoError(t, vector.AppendArrayList(vec, [][]uint8{nil}, []bool{true}, mp))
+
+	row := make([]any, 1)
+	require.NoError(t, extractDataBranchSQLRowValue(context.Background(), nil, vec, 0, row, 0))
+	require.Nil(t, row[0])
+
+	var buf bytes.Buffer
+	require.NoError(t, formatValIntoString(nil, row[0], types.T_array_uint8.ToType(), &buf))
+	require.Equal(t, "NULL", buf.String())
+
+	vec.Free(mp)
+	mpool.DeleteMPool(mp)
+
+	mp = mpool.MustNewZero()
+	vec = vector.NewConstNull(types.T_array_uint8.ToType(), 3, mp)
+
+	row = make([]any, 1)
+	require.NoError(t, extractDataBranchSQLRowValue(context.Background(), nil, vec, 0, row, 2))
+	require.Nil(t, row[0])
+
+	buf.Reset()
+	require.NoError(t, formatValIntoString(nil, row[0], types.T_array_uint8.ToType(), &buf))
+	require.Equal(t, "NULL", buf.String())
+
+	vec.Free(mp)
+	mpool.DeleteMPool(mp)
+}
+
 func TestAppendTupleValueToVector_VarlenaAndNull(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
