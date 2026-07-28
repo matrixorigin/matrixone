@@ -1116,7 +1116,7 @@ func TestReaderBatchLeaseGrowsForLargerRecord(t *testing.T) {
 	require.Zero(t, generation.Used())
 }
 
-func TestReaderBatchLeaseTrimsLargeDecodeEstimate(t *testing.T) {
+func TestReaderBatchLeaseUsesSinglePayloadEstimate(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	budget := process.MustNewHashBuildBudget(64<<20, 64<<20)
@@ -1141,7 +1141,14 @@ func TestReaderBatchLeaseTrimsLargeDecodeEstimate(t *testing.T) {
 
 	reader := BucketReader{}
 	require.NoError(t, reader.EnsureBuffer(generation))
-	reader.ResetForFd(w.HandOffFd())
+	fd := w.HandOffFd()
+	var header [16]byte
+	_, err = io.ReadFull(fd, header[:])
+	require.NoError(t, err)
+	payload := types.DecodeInt64(header[8:])
+	_, err = fd.Seek(0, io.SeekStart)
+	require.NoError(t, err)
+	reader.ResetForFd(fd)
 	reuseBat := batch.NewOffHeapWithSize(0)
 	before := generation.Snapshot()
 	got, err := reader.ReadBatch(proc, reuseBat)
@@ -1149,13 +1156,38 @@ func TestReaderBatchLeaseTrimsLargeDecodeEstimate(t *testing.T) {
 	actual, ok := batchRetainedBytes(got)
 	require.True(t, ok)
 	after := generation.Snapshot()
-	require.Equal(t, before.ReconcileCount+1, after.ReconcileCount)
+	require.Equal(t, before.ReconcileCount, after.ReconcileCount)
 	require.GreaterOrEqual(t, after.Used, before.Used+actual)
-	require.LessOrEqual(t, after.Used, before.Used+actual+decodedBatchLeaseSlack)
+	projected, ok := decodedBatchProjectedBytes(uint64(payload), int32(len(got.Vecs)))
+	require.True(t, ok)
+	require.Less(t, projected, uint64(payload)*2, "decoded admission must use one payload plus additive allocator slack")
+	require.Equal(t, before.Used+projected, after.Used)
 
 	reuseBat.Clean(proc.Mp())
 	reader.Close()
 	require.Zero(t, generation.Used())
+}
+
+func TestMarshalSpillRecordPreallocatesSinglePayload(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	bat := batch.NewWithSize(1)
+	var err error
+	bat.Vecs[0], err = vector.NewConstBytes(
+		types.T_varchar.ToType(), make([]byte, 4<<20), 64, proc.Mp(),
+	)
+	require.NoError(t, err)
+	bat.SetRowCount(64)
+	defer bat.Clean(proc.Mp())
+
+	buf := bytes.NewBuffer(make([]byte, 0, 1<<20))
+	require.NoError(t, marshalSpillRecord(bat, buf))
+	base := uint64(bat.Allocated())
+	if size := uint64(bat.Size()); size > base {
+		base = size
+	}
+	require.Equal(t, base+128+24, uint64(buf.Cap()))
+	require.Less(t, uint64(buf.Cap()), base*2)
 }
 
 func TestReaderBatchLeaseGrowRejectionReleasesToken(t *testing.T) {
@@ -1187,8 +1219,10 @@ func TestReaderBatchLeaseGrowRejectionReleasesToken(t *testing.T) {
 	_, err = fd.Seek(0, io.SeekStart)
 	require.NoError(t, err)
 
-	firstProjected := uint64(firstPayload)*4 + 64<<10
-	secondProjected := uint64(secondPayload)*4 + 64<<10
+	firstProjected, ok := decodedBatchProjectedBytes(uint64(firstPayload), 1)
+	require.True(t, ok)
+	secondProjected, ok := decodedBatchProjectedBytes(uint64(secondPayload), 1)
+	require.True(t, ok)
 	cap := uint64(64<<10) + firstProjected + (secondProjected-firstProjected)/2
 	budget := process.MustNewHashBuildBudget(cap, cap)
 	generation, err := budget.OpenGeneration(1)
@@ -1470,6 +1504,7 @@ func TestSpillSizeHelpersRejectInvalidAndOverflowInputs(t *testing.T) {
 		rows := int64(0)
 		data.Write(types.EncodeInt64(&rows))
 		data.Write(types.EncodeInt64(&batchSize))
+		data.Write(make([]byte, 12))
 		return bufio.NewReader(&data)
 	}
 	budgetForHeader, err := process.NewHashBuildBudget(1, 1)
@@ -2605,6 +2640,55 @@ func TestScatterProbeFunctionUsesStoredEval(t *testing.T) {
 	}
 }
 
+func TestScatterPeakDoesNotDoubleChargeReservedSource(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	values := make([]int32, 8192)
+	for i := range values {
+		values[i] = int32(i)
+	}
+	bat := makeInt32Batch(proc, values)
+	defer bat.Clean(proc.Mp())
+
+	charged, err := scatterTransientBudgetBytes(bat, true)
+	require.NoError(t, err)
+	uncharged, err := scatterTransientBudgetBytes(bat, false)
+	require.NoError(t, err)
+	source := uint64(bat.Allocated())
+	if size := uint64(bat.Size()); size > source {
+		source = size
+	}
+	require.Equal(t, source, uncharged-charged)
+
+	emptyEngine := NewSpillEngine(SpillEngineConfig{})
+	retained, ok := emptyEngine.scatterRetainedBytes()
+	require.True(t, ok)
+	growth, ok := emptyEngine.scatterCapacityGrowthBytes(bat.RowCount(), 1)
+	require.True(t, ok)
+	capacity := source + retained + growth + charged
+	budget, err := process.NewHashBuildBudget(capacity, capacity)
+	require.NoError(t, err)
+	generation, err := budget.OpenGeneration(capacity)
+	require.NoError(t, err)
+	defer generation.Close()
+	sourceReservation, err := generation.Reserve(source)
+	require.NoError(t, err)
+	defer sourceReservation.Release()
+
+	engine := NewSpillEngine(SpillEngineConfig{Budget: generation})
+	writers := MakeBucketWriters("test_scatter_charged_source")
+	defer func() {
+		for i := range writers {
+			writers[i].Close()
+		}
+		engine.Cleanup(proc)
+	}()
+	analyzer := process.NewAnalyzer(0, false, false, "test")
+	require.NoError(t, engine.scatterBatchBounded(
+		proc, bat, []*vector.Vector{bat.Vecs[0]}, writers, 0, true, analyzer,
+	))
+}
+
 func TestScatterScratchLifecycle(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
@@ -2629,7 +2713,7 @@ func TestScatterScratchLifecycle(t *testing.T) {
 	defer bat.Clean(proc.Mp())
 	analyzer := process.NewAnalyzer(0, false, false, "test")
 	keys := []*vector.Vector{bat.Vecs[0]}
-	require.NoError(t, engine.scatterBatchBounded(proc, bat, keys, writers, 0, analyzer))
+	require.NoError(t, engine.scatterBatchBounded(proc, bat, keys, writers, 0, false, analyzer))
 	require.NotNil(t, engine.scatterScratchReservation)
 	firstHashCap := cap(engine.scatterHashValues)
 	firstRowIDCap := cap(engine.scatterBucketRowIds)
@@ -2639,7 +2723,7 @@ func TestScatterScratchLifecycle(t *testing.T) {
 	firstRowID := &engine.scatterBucketRowIds[0]
 	retained := generation.Used()
 	firstReserveCount := generation.ReserveCount()
-	require.NoError(t, engine.scatterBatchBounded(proc, bat, keys, writers, 0, analyzer))
+	require.NoError(t, engine.scatterBatchBounded(proc, bat, keys, writers, 0, false, analyzer))
 	require.Greater(t, generation.ReserveCount(), firstReserveCount, "each batch peak must be admitted above retained scratch")
 	require.Equal(t, retained, generation.Used(), "batch peak must reconcile to retained scratch")
 	require.Equal(t, firstHashCap, cap(engine.scatterHashValues))
@@ -2683,11 +2767,19 @@ func TestScatterScratchRejectsPeakAboveRetainedBudget(t *testing.T) {
 	defer bat.Clean(proc.Mp())
 	keys := []*vector.Vector{bat.Vecs[0]}
 	analyzer := process.NewAnalyzer(0, false, false, "test")
-	require.NoError(t, engine.scatterBatchBounded(proc, bat, keys, writers, 0, analyzer))
+	require.NoError(t, engine.scatterBatchBounded(proc, bat, keys, writers, 0, false, analyzer))
 	rowCap := cap(engine.scatterBucketRowIds)
 	used := generation.Used()
 	require.Positive(t, used)
-	err = engine.scatterBatchBounded(proc, bat, keys, writers, 0, analyzer)
+	largerValues := make([]int32, len(values)*2)
+	for i := range largerValues {
+		largerValues[i] = int32(i)
+	}
+	larger := makeInt32Batch(proc, largerValues)
+	defer larger.Clean(proc.Mp())
+	err = engine.scatterBatchBounded(
+		proc, larger, []*vector.Vector{larger.Vecs[0]}, writers, 0, false, analyzer,
+	)
 	require.ErrorIs(t, err, process.ErrHashBuildBudgetAdmission)
 	require.Equal(t, rowCap, cap(engine.scatterBucketRowIds), "rejection must precede new scratch allocation")
 	engine.Cleanup(proc)
@@ -2754,8 +2846,8 @@ func TestScatterCoalescesAcrossBatchesUntilFlush(t *testing.T) {
 	defer bat.Clean(proc.Mp())
 	keys := []*vector.Vector{bat.Vecs[0]}
 	analyzer := process.NewAnalyzer(0, false, false, "test")
-	require.NoError(t, engine.scatterBatchBounded(proc, bat, keys, writers, 0, analyzer))
-	require.NoError(t, engine.scatterBatchBounded(proc, bat, keys, writers, 0, analyzer))
+	require.NoError(t, engine.scatterBatchBounded(proc, bat, keys, writers, 0, false, analyzer))
+	require.NoError(t, engine.scatterBatchBounded(proc, bat, keys, writers, 0, false, analyzer))
 	var pending int
 	for i := range engine.scatterWriteBuffers {
 		pending += engine.scatterWriteBuffers[i].Len()
@@ -2790,7 +2882,7 @@ func TestScatterCoalescedRecordRoundTrip(t *testing.T) {
 	keys := []*vector.Vector{bat.Vecs[0]}
 	analyzer := process.NewAnalyzer(0, false, false, "test")
 	for i := 0; i < 3; i++ {
-		require.NoError(t, engine.scatterBatchBounded(proc, bat, keys, writers, 0, analyzer))
+		require.NoError(t, engine.scatterBatchBounded(proc, bat, keys, writers, 0, false, analyzer))
 	}
 	require.NoError(t, engine.flushScatterBuffers(proc, writers, analyzer))
 	var target *BucketWriter
@@ -2834,7 +2926,7 @@ func TestScatterCoalesceFlushErrorClearsPending(t *testing.T) {
 	defer bat.Clean(proc.Mp())
 	keys := []*vector.Vector{bat.Vecs[0]}
 	analyzer := process.NewAnalyzer(0, false, false, "test")
-	require.NoError(t, engine.scatterBatchBounded(proc, bat, keys, writers, 0, analyzer))
+	require.NoError(t, engine.scatterBatchBounded(proc, bat, keys, writers, 0, false, analyzer))
 	require.NoError(t, engine.flushScatterBuffers(proc, writers, analyzer))
 	var target *BucketWriter
 	for i := range writers {
@@ -2844,7 +2936,7 @@ func TestScatterCoalesceFlushErrorClearsPending(t *testing.T) {
 		}
 	}
 	require.NotNil(t, target)
-	require.NoError(t, engine.scatterBatchBounded(proc, bat, keys, writers, 0, analyzer))
+	require.NoError(t, engine.scatterBatchBounded(proc, bat, keys, writers, 0, false, analyzer))
 	require.Positive(t, engine.scatterWriteBuffers[targetIndex(writers, target)].Len())
 	require.NoError(t, target.Fd.Close())
 	require.Error(t, engine.flushScatterBuffers(proc, writers, analyzer))

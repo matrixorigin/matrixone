@@ -189,6 +189,69 @@ func TestCopyBuildBatchBudgetsPartialTailGrowth(t *testing.T) {
 	require.Zero(t, generation.Used())
 }
 
+func TestCopyBuildBatchUsesOnePayloadPlusBoundedSlack(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	values := make([]string, 4096)
+	for i := range values {
+		values[i] = strings.Repeat("x", 1024)
+	}
+	input := batch.NewWithSize(1)
+	input.Vecs[0] = testutil.MakeVarcharVector(values, nil, proc.Mp())
+	input.SetRowCount(len(values))
+	defer input.Clean(proc.Mp())
+
+	var hb HashmapBuilder
+	projected, err := hb.projectedBatchCopyBytes(input)
+	require.NoError(t, err)
+	base := uint64(input.Allocated())
+	if size := uint64(input.Size()); size > base {
+		base = size
+	}
+	metadata, ok := retainedMetadataAllowance(input)
+	require.True(t, ok)
+	const wantSlack = uint64(16<<10 + 64<<10)
+	require.Equal(t, base+metadata+wantSlack, projected)
+	require.Less(t, projected, base*2, "one decoded payload plus additive slack must replace the old whole-payload multiplier")
+
+	budget := process.MustNewHashBuildBudget(projected, projected)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	hb.setBudget(generation)
+	require.NoError(t, hb.copyBuildBatch(input, proc))
+	require.Equal(t, projected, generation.Peak())
+	hb.FreeHashMapAndBatches(proc)
+	require.Zero(t, generation.Used())
+}
+
+func TestReserveBuildAuxChargesOneRetainedCopy(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	input := testutil.NewBatch([]types.Type{types.T_int32.ToType()}, true, colexec.DefaultBatchSize, proc.Mp())
+	defer input.Clean(proc.Mp())
+
+	var hb HashmapBuilder
+	hb.Batches.Buf = []*batch.Batch{input}
+	hb.InputBatchRowCount = input.RowCount()
+	retained := batchesAllocated(hb.Batches.Buf)
+	const iteratorScratch = uint64(640 << 10)
+	want := retained + uint64(input.RowCount())*64 + iteratorScratch
+	oldMultipliedEstimate := retained*3 + uint64(input.RowCount())*64 + iteratorScratch
+	require.Greater(t, oldMultipliedEstimate, want)
+
+	budget := process.MustNewHashBuildBudget(want, want)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	hb.setBudget(generation)
+	require.NoError(t, hb.reserveBuildAux())
+	require.Equal(t, want, generation.Used())
+	hb.releaseReservations()
+	require.Zero(t, generation.Used())
+	// The batch belongs to the test rather than batchReservations.
+	hb.Batches.Buf = nil
+}
+
 func TestCleanCopiedBatchReleasesCoalescedIngressReservations(t *testing.T) {
 	const budgetCap = uint64(4 << 20)
 	budget, err := process.NewHashBuildBudget(budgetCap, budgetCap)

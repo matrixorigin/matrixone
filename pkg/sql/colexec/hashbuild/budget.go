@@ -239,25 +239,35 @@ func (hb *HashmapBuilder) projectedBatchCopyBytes(src *batch.Batch) (uint64, err
 		}
 		projected = (projected*uint64(colexec.DefaultBatchSize) + rows - 1) / rows
 	}
-	// CopyIntoBatches may hold the original-sized destination plus vector/area
-	// capacity growth. Four times the scaled source allocation covers that peak.
-	if projected > math.MaxUint64/4 {
-		return 0, process.ErrHashBuildBudgetInvalid
-	}
-	projected *= 4
-
 	// Vector null bitmaps and batch/vector slice metadata live on the Go heap
 	// and are therefore not included in Batch.Allocated. Charge a deliberately
 	// conservative per-row allowance that also scales with the column count.
-	// This is part of admission, before CopyIntoBatches performs any allocation.
+	// Allocated/Size, partial-tail high water, and full-batch scaling above
+	// already describe one complete destination allocation. Do not multiply that
+	// bound again: the source remains caller-owned, any retained tail already has
+	// its own reservation, and CopyIntoBatches reconciles this new reservation to
+	// the actual retained delta below.
 	metadata, ok := retainedMetadataAllowance(src)
 	if !ok {
 		return 0, process.ErrHashBuildBudgetInvalid
 	}
-	if projected > math.MaxUint64-metadata {
+	columns := uint64(len(src.Vecs))
+	// CopyIntoBatches can split one source into multiple fixed-size
+	// destinations. Each vector data/area allocation is rounded independently by
+	// mpool, so their retained sum can exceed the already-rounded source by a
+	// bounded number of allocator pages. Keep that structural slack additive
+	// instead of multiplying the complete payload.
+	const perColumnAllocationSlack = uint64(16 << 10)
+	const batchAllocationSlack = uint64(64 << 10)
+	if columns > (math.MaxUint64-batchAllocationSlack)/perColumnAllocationSlack {
 		return 0, process.ErrHashBuildBudgetInvalid
 	}
-	return projected + metadata, nil
+	allocationSlack := columns*perColumnAllocationSlack + batchAllocationSlack
+	if projected > math.MaxUint64-metadata ||
+		projected+metadata > math.MaxUint64-allocationSlack {
+		return 0, process.ErrHashBuildBudgetInvalid
+	}
+	return projected + metadata + allocationSlack, nil
 }
 
 func (hb *HashmapBuilder) cleanBatches(proc *process.Process) {
@@ -269,15 +279,13 @@ func (hb *HashmapBuilder) reserveBuildAux() error {
 	if hb.budget == nil || hb.auxReservation != nil {
 		return nil
 	}
-	// Covers persistent sels/unique-key copies, O(rows) dedup/bitmap scratch,
-	// and the cold Int/String iterator's fixed UnitLimit Go slices. Three extra
-	// copies of retained vector capacity cover string-key append growth plus
-	// runtime-filter unique-key vectors while both coexist.
+	// Covers one persistent join-key copy plus O(rows) sels/dedup/bitmap scratch
+	// and the cold Int/String iterator's fixed UnitLimit Go slices. Retained
+	// build batches are already charged by batchReservations, expression results
+	// have their own reservations, and runtime-filter serialization is admitted
+	// separately. Charging multiple whole-batch copies here double-counts those
+	// owners and can reject a build before any auxiliary allocation occurs.
 	bytes := batchesAllocated(hb.Batches.Buf)
-	if bytes > math.MaxUint64/3 {
-		return process.ErrHashBuildBudgetInvalid
-	}
-	bytes *= 3
 	rows := uint64(hb.InputBatchRowCount)
 	const iteratorScratch = uint64(640 << 10)
 	if rows > math.MaxUint64/64 || bytes > math.MaxUint64-rows*64 || bytes+rows*64 > math.MaxUint64-iteratorScratch {
