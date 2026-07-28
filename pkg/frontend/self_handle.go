@@ -727,7 +727,7 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 	case *tree.CloneTable:
 		ses.EnterFPrint(FPCloneTable)
 		defer ses.ExitFPrint(FPCloneTable)
-		if _, err = handleCloneTable(execCtx, ses, st, nil); err != nil {
+		if _, err = handleCloneTable(execCtx, ses, st, nil, nil); err != nil {
 			return
 		}
 
