@@ -128,6 +128,82 @@ func TestFullText(t *testing.T) {
 	require.Equal(t, int64(0), proc.GetMPool().CurrNB())
 }
 
+// TestAuditFullTextStringKeyPreservesQuotedLiteral guards issue #26280: a
+// character primary key must be emitted as exactly one well-formed SQL string
+// literal, so the fulltext maintenance statement denotes the same key as the
+// source row. Plain "'" + value + "'" wrapping breaks on three input classes:
+// a bare quote yields invalid SQL (the DML aborts), a quote-comma sequence
+// yields VALID SQL that silently addresses different doc_ids, and a backslash
+// is decoded away by the scanner because it treats backslash as an escape
+// introducer inside single-quoted literals.
+func TestAuditFullTextStringKeyPreservesQuotedLiteral(t *testing.T) {
+	testcases := []struct {
+		name string
+		pk   string
+		want string
+	}{{
+		name: "single quote stays one literal",
+		pk:   `a'b`,
+		want: "DELETE FROM `d`.`idx` WHERE doc_id IN ('a''b')",
+	}, {
+		name: "quote comma must not split into two literals",
+		pk:   `x','y`,
+		want: "DELETE FROM `d`.`idx` WHERE doc_id IN ('x'',''y')",
+	}, {
+		name: "backslash survives scanner escape decoding",
+		pk:   `C:\p`,
+		want: "DELETE FROM `d`.`idx` WHERE doc_id IN ('C:\\\\p')",
+	}}
+
+	for _, tc := range testcases {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProc(t)
+			proc.Ctx = context.TODO()
+
+			arg := PostDml{
+				PostDmlCtx: &PostDmlCtx{
+					Ref: &plan.ObjectRef{
+						SchemaName: "d",
+						ObjName:    "t",
+					},
+					PrimaryKeyIdx:  0,
+					PrimaryKeyName: "pk",
+					IsDelete:       true,
+					FullText: &PostDmlFullTextCtx{
+						SourceTableName: "t",
+						IndexTableName:  "idx",
+						Parts:           []string{"body"},
+					},
+				},
+				ctr: container{},
+			}
+
+			bat := batch.New([]string{"pk"})
+			bat.Vecs[0] = testutil.MakeVarcharVector([]string{tc.pk}, nil, proc.Mp())
+			bat.SetRowCount(1)
+
+			op := colexec.NewMockOperator()
+			op.WithBatchs([]*batch.Batch{bat})
+			arg.Children = nil
+			arg.AppendChild(op)
+
+			err := arg.Prepare(proc)
+			require.NoError(t, err)
+			_, err = vm.Exec(&arg, proc)
+			require.NoError(t, err)
+
+			sql, ok := proc.Base.PostDmlSqlList.Get(0)
+			require.True(t, ok)
+			require.Equal(t, tc.want, sql)
+
+			arg.Free(proc, false, nil)
+			arg.Release()
+			proc.Free()
+			require.Equal(t, int64(0), proc.GetMPool().CurrNB())
+		})
+	}
+}
+
 func resetChildren(arg *PostDml, m *mpool.MPool) {
 	op := colexec.NewMockOperator()
 	bat := colexec.MakeMockBatchsWithRowID(m)

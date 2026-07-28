@@ -19,6 +19,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -90,7 +91,7 @@ func (postdml *PostDml) runPostDml(proc *process.Process, result vm.CallResult) 
 			case types.T_date, types.T_datetime, types.T_timestamp, types.T_time, types.T_uuid,
 				types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json,
 				types.T_blob, types.T_text, types.T_datalink:
-				pkey = "'" + pkey + "'"
+				pkey = sqlquote.String(pkey)
 			case types.T_array_float32, types.T_array_float64:
 				return moerr.NewInternalError(proc.Ctx, "array cannot be primary key")
 			}
