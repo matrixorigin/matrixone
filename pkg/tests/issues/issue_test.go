@@ -632,9 +632,6 @@ func TestDedupForAutoPk(t *testing.T) {
 func TestLockNeedUpgrade(t *testing.T) {
 	embed.RunBaseClusterTests(
 		func(c embed.Cluster) {
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
-			defer cancel()
-
 			cn1, err := c.GetCNService(0)
 			require.NoError(t, err)
 
@@ -681,25 +678,32 @@ func TestLockNeedUpgrade(t *testing.T) {
 				cn1,
 				"insert into "+table+" select result, result from generate_series(15001,20000) g;",
 			)
+			// Give each lock-upgrade scenario its own budget. The data setup is
+			// intentionally substantial and must not consume the next case's timeout.
+			runDelete := func(exec executor.SQLExecutor, committedAt timestamp.Timestamp) error {
+				ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
+				defer cancel()
+				return exec.ExecTxn(
+					ctx,
+					func(txn executor.TxnExecutor) error {
+						res, err := txn.Exec(
+							"delete from "+table+" where id > 1",
+							executor.StatementOption{},
+						)
+						require.NoError(t, err)
+						res.Close()
+						return nil
+					},
+					executor.Options{}.
+						WithDatabase(db).
+						WithMinCommittedTS(committedAt),
+				)
+			}
 
 			// case 1
 			// test for local LocalTable that need upgrade row level lock to table level lock
 			exec1 := testutils.GetSQLExecutor(cn1)
-			err = exec1.ExecTxn(
-				ctx,
-				func(txn executor.TxnExecutor) error {
-					res, err := txn.Exec(
-						"delete from "+table+" where id > 1",
-						executor.StatementOption{},
-					)
-					require.NoError(t, err)
-					res.Close()
-					return nil
-				},
-				executor.Options{}.
-					WithDatabase(db).
-					WithMinCommittedTS(committedAt),
-			)
+			err = runDelete(exec1, committedAt)
 			require.NoError(t, err)
 
 			_ = testutils.ExecSQL(
@@ -734,21 +738,7 @@ func TestLockNeedUpgrade(t *testing.T) {
 			// case 2
 			// test for remote LockTable that need upgrade row level lock to table level lock
 			exec2 := testutils.GetSQLExecutor(cn2)
-			err = exec2.ExecTxn(
-				ctx,
-				func(txn executor.TxnExecutor) error {
-					res, err := txn.Exec(
-						"delete from "+table+" where id > 1",
-						executor.StatementOption{},
-					)
-					require.NoError(t, err)
-					res.Close()
-					return nil
-				},
-				executor.Options{}.
-					WithDatabase(db).
-					WithMinCommittedTS(committedAt),
-			)
+			err = runDelete(exec2, committedAt)
 			require.NoError(t, err)
 		},
 	)
