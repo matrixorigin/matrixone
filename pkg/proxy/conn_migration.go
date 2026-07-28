@@ -118,7 +118,7 @@ func (c *clientConn) migrateConnToContext(
 		PrepareStmts:     info.PrepareStmts,
 		LastAffectedRows: info.LastAffectedRows,
 	}
-	ctx, cancel := context.WithTimeoutCause(parent, time.Second*3, moerr.CauseMigrateConnTo)
+	ctx, cancel := context.WithTimeoutCause(parent, defaultTransferTimeout, moerr.CauseMigrateConnTo)
 	defer cancel()
 	resp, err := c.queryClient.SendMessage(ctx, addr, req)
 	if err != nil {
@@ -142,6 +142,12 @@ func (c *clientConn) migrateConnContext(
 	}
 	if resp == nil {
 		return moerr.NewInternalError(ctx, "bad response")
+	}
+	if !resp.UserLevelLockReleaseSupported {
+		return moerr.NewInternalError(ctx, "cannot migrate connection from CN without user-level lock release support")
+	}
+	if len(resp.UserLevelLocks) > 0 {
+		return moerr.NewInternalError(ctx, "cannot migrate connection while user-level locks are held")
 	}
 	return c.migrateConnToContext(ctx, sc, resp)
 }

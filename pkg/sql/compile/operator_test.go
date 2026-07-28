@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dedupjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
@@ -33,8 +34,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightdedupjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -56,6 +59,26 @@ func TestDupOperator(t *testing.T) {
 		0,
 		0,
 	)
+}
+
+func TestConstructAggregateConfigIncludesGroupConcatMaxLen(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.SetResolveVariableFunc(func(name string, system, global bool) (interface{}, error) {
+		require.Equal(t, "group_concat_max_len", name)
+		require.True(t, system)
+		require.False(t, global)
+		return int64(5), nil
+	})
+
+	valueArg := &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar)}}
+	separatorArg := plan2.MakePlan2StringConstExprWithType("")
+	args, config := constructAggregateConfig(&plan.Function{
+		Func: &plan.ObjectRef{ObjName: plan2.NameGroupConcat},
+		Args: []*plan.Expr{valueArg, separatorArg},
+	}, proc)
+
+	require.Equal(t, []*plan.Expr{valueArg}, args)
+	require.Equal(t, aggexec.EncodeGroupConcatConfig("", 5), config)
 }
 
 func TestDupHashBuildPreservesNullTracking(t *testing.T) {
@@ -359,4 +382,21 @@ func makeTimeWindowIntervalExpr(value int64, unit string) *plan.Expr {
 			},
 		},
 	}
+}
+
+func TestDupOperatorTableFunctionPreservesProbeState(t *testing.T) {
+	op := table_function.NewArgument()
+	op.FuncName = "ivf_search"
+	op.RuntimeFilterSpecs = []*plan.RuntimeFilterSpec{
+		{Tag: 8, UseMembershipFilter: true},
+	}
+	op.IndexReaderParam = &plan.IndexReaderParam{
+		Limit:        plan2.MakePlan2Uint64ConstExprWithType(7),
+		OrigFuncName: "l2_distance",
+	}
+
+	dup := dupOperator(op, 0, 1).(*table_function.TableFunction)
+	require.Equal(t, op.RuntimeFilterSpecs, dup.RuntimeFilterSpecs)
+	require.Equal(t, uint64(7), dup.IndexReaderParam.GetLimit().GetLit().GetU64Val())
+	require.Equal(t, "l2_distance", dup.IndexReaderParam.GetOrigFuncName())
 }
