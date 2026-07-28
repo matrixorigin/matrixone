@@ -91,6 +91,9 @@ select cast(cast(0.5 as double) as signed), cast(cast(1.5 as double) as signed),
 cast(cast(-0.5 as double) as signed), cast(cast(-1.5 as double) as signed), cast(cast(-2.5 as double) as signed);
 ➤ cast(cast(0.5 as double) as signed)[-5,64,0]  ¦  cast(cast(1.5 as double) as signed)[-5,64,0]  ¦  cast(cast(2.5 as double) as signed)[-5,64,0]  ¦  cast(cast(-0.5 as double) as signed)[-5,64,0]  ¦  cast(cast(-1.5 as double) as signed)[-5,64,0]  ¦  cast(cast(-2.5 as double) as signed)[-5,64,0]  𝄀
 0  ¦  2  ¦  2  ¦  0  ¦  -2  ¦  -2
+select cast('7e0' as signed), cast('7e+2' as signed), cast('1.5e0' as signed), cast('7e2' as unsigned);
+➤ cast(7e0 as signed)[-5,64,0]  ¦  cast(7e+2 as signed)[-5,64,0]  ¦  cast(1.5e0 as signed)[-5,64,0]  ¦  cast(7e2 as unsigned)[-5,64,0]  𝄀
+7  ¦  7  ¦  1  ¦  7
 select cast('+123' as signed);
 ➤ cast(+123 as signed)[-5,64,0]  𝄀
 123
