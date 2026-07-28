@@ -365,7 +365,7 @@ drop view if exists v_coalesce_meta;
 create view v_coalesce_meta as select coalesce(cast(null as decimal(23,2)), 7.01970 * cast(-58140.00 as decimal(23,2))) as c;
 desc v_coalesce_meta;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-c  ¦  DECIMAL(38,7)  ¦  NO  ¦    ¦  null  ¦    ¦  
+c  ¦  DECIMAL(38,7)  ¦  NO  ¦    ¦  null  ¦    ¦
 drop view v_coalesce_meta;
 drop view if exists v_flow_metadata_safe;
 create view v_flow_metadata_safe as
@@ -386,7 +386,7 @@ case_binary_char  ¦  VARBINARY(8)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 ifnull_decimal  ¦  DECIMAL(2,1)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 nullif_mixed  ¦  VARCHAR(2)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 coalesce_str_num  ¦  VARCHAR(2)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-greatest_date  ¦  DATE(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
+greatest_date  ¦  DATE(0)  ¦  YES  ¦    ¦  null  ¦    ¦
 select column_name, column_type, is_nullable, character_maximum_length, numeric_precision, numeric_scale
 from information_schema.columns
 where table_schema = database() and table_name = 'v_flow_metadata_safe'
@@ -409,7 +409,7 @@ create view v_case_temporal_else as
 select case when 0 then cast('2024-01-02 03:04:05' as datetime) else cast('2024-01-01' as date) end as case_date_dt_else;
 desc v_case_temporal_else;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-case_date_dt_else  ¦  DATETIME(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
+case_date_dt_else  ¦  DATETIME(0)  ¦  YES  ¦    ¦  null  ¦    ¦
 select * from v_case_temporal_else;
 ➤ case_date_dt_else[93,64,0]  𝄀
 2024-01-01 00:00:00
@@ -457,7 +457,7 @@ coalesce_nullable_col  ¦  BIGINT(0)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 coalesce_notnull_col  ¦  BIGINT(0)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 greatest_const  ¦  DATE(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 greatest_nullable_col  ¦  DATE(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-greatest_notnull_col  ¦  DATE(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
+greatest_notnull_col  ¦  DATE(0)  ¦  YES  ¦    ¦  null  ¦    ¦
 select column_name, column_type, is_nullable, character_maximum_length, numeric_precision, numeric_scale
 from information_schema.columns
 where table_schema = database() and table_name = 'v_flow_metadata_columns'
