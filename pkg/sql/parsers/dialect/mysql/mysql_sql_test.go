@@ -4697,6 +4697,37 @@ func TestFaultTolerance(t *testing.T) {
 	}
 }
 
+func TestOrderByRejectsNullsPosition(t *testing.T) {
+	testCases := []struct {
+		name    string
+		sql     string
+		message string
+	}{
+		{
+			name:    "top-level NULLS FIRST",
+			sql:     "select id, score from t order by score desc nulls first, id",
+			message: "NULLS FIRST is not supported in MySQL syntax",
+		},
+		{
+			name:    "top-level NULLS LAST",
+			sql:     "select id, score from t order by score asc nulls last, id",
+			message: "NULLS LAST is not supported in MySQL syntax",
+		},
+		{
+			name:    "window NULLS LAST",
+			sql:     "select sum(score) over (order by score nulls last) from t",
+			message: "NULLS LAST is not supported in MySQL syntax",
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			_, err := ParseOne(context.Background(), testCase.sql, 1)
+			require.ErrorContains(t, err, testCase.message)
+		})
+	}
+}
+
 func TestLimitByRank(t *testing.T) {
 	ctx := context.TODO()
 	testCases := []struct {
