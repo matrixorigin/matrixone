@@ -1548,20 +1548,19 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		insertSqlBuilder.WriteString("*")
 
 		// from
-		fmtOpts := []tree.FmtCtxOption{
+		// The generated INSERT ... SELECT is re-parsed by the internal SQL
+		// executor, which always parses in DEFAULT sql_mode (parsers.Parse
+		// passes an empty mode) regardless of the session's mode. So string
+		// literals here must be default-escaped: a backslash stored literally
+		// under a NO_BACKSLASH_ESCAPES session is emitted doubled and the
+		// default-mode reparse reduces it back to the original literal. Do
+		// NOT make this formatting session-mode-aware unless the internal
+		// executor's parse becomes session-mode-aware too (#24823).
+		fmtCtx := tree.NewFmtCtx(
+			dialect.MYSQL,
 			tree.WithQuoteString(true),
 			tree.WithQuoteIdentifier(),
-		}
-		// The generated INSERT ... SELECT is re-parsed by the internal executor
-		// under the SESSION's sql_mode. Under NO_BACKSLASH_ESCAPES a stored
-		// string (e.g. a fulltext MATCH pattern) holds backslashes literally, so
-		// the formatter must not re-escape them, or the follow-up query would
-		// search a different pattern than the user wrote (#24823).
-		if mode := parserSQLModeFromContext(ctx); mode != nil &&
-			mysql.ParseSQLModeFlags(*mode).Has(mysql.SQLModeNoBackslashEscapes) {
-			fmtOpts = append(fmtOpts, tree.WithNoBackslashEscape())
-		}
-		fmtCtx := tree.NewFmtCtx(dialect.MYSQL, fmtOpts...)
+		)
 		stmt.AsSource.Format(fmtCtx)
 		insertSqlBuilder.WriteString(fmt.Sprintf(" from (%s)", restoreIntervalSyntaxForCTAS(fmtCtx.String())))
 
