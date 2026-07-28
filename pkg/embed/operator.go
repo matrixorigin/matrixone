@@ -70,6 +70,11 @@ type service interface {
 	Close() error
 }
 
+const (
+	defaultHAKeeperRunningTimeout = 2 * time.Minute
+	testingHAKeeperRunningTimeout = 5 * time.Minute
+)
+
 func newService(
 	file string,
 	index int,
@@ -393,7 +398,11 @@ func (op *operator) waitClusterConditionLocked(
 func (op *operator) waitHAKeeperRunningLocked(
 	client logservice.CNHAKeeperClient,
 ) error {
-	ctx, cancel := context.WithTimeoutCause(context.TODO(), time.Minute*2, moerr.CauseWaitHAKeeperRunningLocked)
+	ctx, cancel := context.WithTimeoutCause(
+		context.TODO(),
+		op.hakeeperRunningTimeout(),
+		moerr.CauseWaitHAKeeperRunningLocked,
+	)
 	defer cancel()
 
 	// wait HAKeeper running
@@ -411,6 +420,13 @@ func (op *operator) waitHAKeeperRunningLocked(
 		}
 		return err
 	}
+}
+
+func (op *operator) hakeeperRunningTimeout() time.Duration {
+	if op.testing {
+		return testingHAKeeperRunningTimeout
+	}
+	return defaultHAKeeperRunningTimeout
 }
 
 func (op *operator) waitAnyShardReadyLocked(client logservice.CNHAKeeperClient) error {
