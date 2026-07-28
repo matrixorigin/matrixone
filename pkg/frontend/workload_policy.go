@@ -489,7 +489,8 @@ func (m *WorkloadPolicyManager) InvalidateAll() {
 
 // SetLocalCNWorkState changes whether policy snapshots may retain a freshness
 // window on this CN. Draining/Drained CNs reconcile every statement because
-// ALTER deliberately excludes them from its synchronous RPC barrier.
+// draining sessions remain executable and post-commit publication is only a
+// best-effort convergence accelerator.
 func (m *WorkloadPolicyManager) SetLocalCNWorkState(state metadata.WorkState) {
 	m.cacheAllowed.Store(
 		state == metadata.WorkState_Working ||
@@ -1257,10 +1258,10 @@ func ensureWorkloadPolicyFeatureReady(
 }
 
 // ensureWorkloadPolicyRPCReady verifies the actual handler capability of every
-// currently routable CN in the cluster snapshot. A reported protocol version
-// is mutable runtime state and therefore is not proof that an old binary
-// registered the workload-policy handler. This check is intentionally confined
-// to the ALTER control plane.
+// CN in the cluster snapshot that can still execute statements. A reported
+// protocol version is mutable runtime state and therefore is not proof that an
+// old binary registered the workload-policy handler. This check is
+// intentionally confined to the ALTER control plane.
 func ensureWorkloadPolicyRPCReady(
 	ctx context.Context,
 	ses *Session,
@@ -1330,13 +1331,16 @@ func ensureWorkloadPolicyRPCReady(
 	return errors.Join(requestErr, responseErr)
 }
 
-// workloadPolicyCNTargets returns active CNs for pre-commit capability checks.
-// Post-commit publication may include maintenance CNs as a bounded best-effort
-// accelerator for existing sessions, but they never gate the SQL mutation.
+// workloadPolicyCNTargets returns every CN that can still execute statements
+// for the pre-commit capability check: Working, Unknown, and Draining. A
+// Draining CN can retain live sessions, so excluding it would let an old binary
+// without the workload-policy handler continue legacy routing after activation.
+// Post-commit publication may additionally include addressable Drained CNs as a
+// bounded best-effort accelerator in case their metadata is briefly stale.
 func workloadPolicyCNTargets(
 	ctx context.Context,
 	qc queryserviceclient.QueryClient,
-	includeMaintenance bool,
+	includeDrained bool,
 ) ([]string, map[string]string, error) {
 	cluster, err := clusterservice.GetMOClusterWithContext(ctx, qc.ServiceID())
 	if err != nil {
@@ -1349,12 +1353,8 @@ func workloadPolicyCNTargets(
 		cluster,
 		clusterservice.NewSelectAll(),
 		func(service metadata.CNService) bool {
-			maintenance := service.WorkState != metadata.WorkState_Working &&
-				service.WorkState != metadata.WorkState_Unknown
-			if maintenance && !includeMaintenance {
-				return true
-			}
-			if service.QueryAddress == "" && maintenance {
+			if service.WorkState == metadata.WorkState_Drained &&
+				(!includeDrained || service.QueryAddress == "") {
 				return true
 			}
 			nodes = append(nodes, service.QueryAddress)
@@ -1366,7 +1366,7 @@ func workloadPolicyCNTargets(
 	}
 	if len(nodes) == 0 {
 		target := "active"
-		if includeMaintenance {
+		if includeDrained {
 			target = "reachable"
 		}
 		return nil, nil, moerr.NewInternalError(

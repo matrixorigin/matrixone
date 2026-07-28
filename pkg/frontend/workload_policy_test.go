@@ -1295,9 +1295,9 @@ func TestWorkloadPolicyDrainingCNReconcilesEveryStatement(t *testing.T) {
 	require.Equal(t, int32(1), calls.Load())
 	require.Equal(t, int64(-1), state.refreshAfter.Load())
 
-	// An ALTER on another CN commits revision 2 while this draining CN is
-	// outside the publish barrier. Its next existing-session statement must
-	// observe that revision instead of reusing revision 1.
+	// An ALTER on another CN commits revision 2, but best-effort publication
+	// misses this draining CN. Its next existing-session statement must observe
+	// that revision instead of reusing revision 1.
 	revision.Store(2)
 	require.NoError(t, refresh())
 	require.Equal(t, int32(2), calls.Load())
@@ -2812,7 +2812,7 @@ func TestWorkloadPolicyActivationRequiresEveryCNCapability(t *testing.T) {
 		require.Zero(t, client.releases)
 	})
 
-	t.Run("draining CN does not block activation", func(t *testing.T) {
+	t.Run("unsupported draining CN blocks activation", func(t *testing.T) {
 		service := t.Name()
 		client := setupWorkloadPolicyQueryCluster(
 			t,
@@ -2830,9 +2830,54 @@ func TestWorkloadPolicyActivationRequiresEveryCNCapability(t *testing.T) {
 				},
 			},
 		)
-		client.sendErrs["draining-address"] = errors.New(
-			"draining CN must not be probed",
+		client.methodSendErrs[query.CmdMethod_WorkloadPolicyUpdate] =
+			map[string]error{
+				"draining-address": errors.New("unsupported query command"),
+			}
+
+		// Draining rejects new placement but can still execute an established
+		// session. Treat the missing handler as a rolling-upgrade blocker before
+		// any policy catalog mutation becomes durable.
+		err := ensureWorkloadPolicyFeatureReady(
+			context.Background(),
+			&Session{feSessionImpl: feSessionImpl{service: service}},
 		)
+		require.ErrorContains(t, err, "unsupported query command")
+		require.ErrorContains(
+			t,
+			err,
+			"failed to verify workload policy capability on CN cn-draining",
+		)
+
+		client.mu.Lock()
+		defer client.mu.Unlock()
+		require.Contains(t, client.requests, "working-address")
+		require.Contains(t, client.requests, "draining-address")
+		require.Equal(t, 1, client.releases)
+	})
+
+	t.Run("drained CN does not block activation", func(t *testing.T) {
+		service := t.Name()
+		client := setupWorkloadPolicyQueryCluster(
+			t,
+			service,
+			[]metadata.CNService{
+				{
+					ServiceID:    "cn-working",
+					QueryAddress: "working-address",
+					WorkState:    metadata.WorkState_Working,
+				},
+				{
+					ServiceID:    "cn-drained",
+					QueryAddress: "drained-address",
+					WorkState:    metadata.WorkState_Drained,
+				},
+			},
+		)
+		client.methodSendErrs[query.CmdMethod_WorkloadPolicyUpdate] =
+			map[string]error{
+				"drained-address": errors.New("drained CN must not be probed"),
+			}
 
 		require.NoError(t, ensureWorkloadPolicyFeatureReady(
 			context.Background(),
@@ -2842,7 +2887,7 @@ func TestWorkloadPolicyActivationRequiresEveryCNCapability(t *testing.T) {
 		client.mu.Lock()
 		defer client.mu.Unlock()
 		require.Contains(t, client.requests, "working-address")
-		require.NotContains(t, client.requests, "draining-address")
+		require.NotContains(t, client.requests, "drained-address")
 		require.Equal(t, 1, client.releases)
 	})
 
@@ -3363,6 +3408,75 @@ func TestAlterQueryWorkloadPolicyDoesNotMutateBeforeFeatureReady(t *testing.T) {
 		exec.executedSQLs,
 	)
 	require.Equal(t, 1, exec.closes)
+}
+
+func TestAlterQueryWorkloadPolicyDoesNotMutateWithUnsupportedDrainingCN(
+	t *testing.T,
+) {
+	service := t.Name()
+	client := setupWorkloadPolicyQueryCluster(
+		t,
+		service,
+		[]metadata.CNService{
+			{
+				ServiceID:    "cn-new",
+				QueryAddress: "new-address",
+				WorkState:    metadata.WorkState_Working,
+			},
+			{
+				ServiceID:    "cn-old-draining",
+				QueryAddress: "old-draining-address",
+				WorkState:    metadata.WorkState_Draining,
+			},
+		},
+	)
+	client.methodSendErrs[query.CmdMethod_WorkloadPolicyUpdate] =
+		map[string]error{
+			"old-draining-address": errors.New("unsupported query command"),
+		}
+
+	base := &backgroundExecTest{}
+	base.init()
+	base.sql2result[testWorkloadPolicyVersionSQL] =
+		newWorkloadPolicyVersionResult(
+			catalog.MO_QUERY_WORKLOAD_POLICY_MIN_VERSION,
+			uint64(catalog.MO_QUERY_WORKLOAD_POLICY_MIN_VERSION_OFFSET),
+		)
+	exec := &workloadPolicyContextExec{backgroundExecTest: base}
+	stub := gostub.StubFunc(&NewBackgroundExec, exec)
+	defer stub.Reset()
+
+	session := &Session{feSessionImpl: feSessionImpl{service: service}}
+	session.SetTenantInfo(&TenantInfo{
+		Tenant:      "tenant_a",
+		TenantID:    70,
+		DefaultRole: accountAdminRoleName,
+	})
+	stmt := tree.NewAlterAccountConfig(
+		"",
+		queryWorkloadPolicy,
+		testWorkloadPolicyNew,
+		false,
+	)
+	defer stmt.Free()
+
+	err := doAlterQueryWorkloadPolicy(context.Background(), session, stmt)
+	require.ErrorContains(t, err, "unsupported query command")
+	require.ErrorContains(t, err, "CN cn-old-draining")
+	require.Equal(
+		t,
+		[]string{testWorkloadPolicyVersionSQL},
+		exec.executedSQLs,
+	)
+	require.NotContains(t, exec.executedSQLs, "begin;")
+	require.NotContains(t, exec.executedSQLs, "commit;")
+	require.Equal(t, 1, exec.closes)
+
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	require.Contains(t, client.requests, "new-address")
+	require.Contains(t, client.requests, "old-draining-address")
+	require.Equal(t, 1, client.releases)
 }
 
 func TestAlterQueryWorkloadPolicyPropagatesMutationFailure(t *testing.T) {

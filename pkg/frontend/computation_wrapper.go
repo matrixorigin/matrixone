@@ -927,7 +927,7 @@ func initExecuteStmtParamWithResolver(
 				originSQL,
 				&cwft.preparedWorkloadPolicy,
 			); err != nil {
-				return nil, nil, nil, "", err
+				return nil, nil, nil, "", false, err
 			}
 			retComp = prepareStmt.compile
 		}

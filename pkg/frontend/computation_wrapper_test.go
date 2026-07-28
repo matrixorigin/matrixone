@@ -955,7 +955,7 @@ func TestInitExecuteStmtParamRebuildsCachedTopologyAfterPolicyGenerationAppears(
 	require.NoError(t, err)
 	require.True(t, applied)
 
-	retComp, retPlan, retStmt, _, err := initExecuteStmtParam(
+	retComp, retPlan, retStmt, _, _, err := initExecuteStmtParam(
 		execCtx, ses, cw, nil, prepareStmt.Name)
 	require.NoError(t, err)
 	require.NotNil(t, retComp)
@@ -964,7 +964,7 @@ func TestInitExecuteStmtParamRebuildsCachedTopologyAfterPolicyGenerationAppears(
 	require.NotNil(t, retPlan)
 	require.NotNil(t, retStmt)
 
-	reused, _, _, _, err := initExecuteStmtParam(
+	reused, _, _, _, _, err := initExecuteStmtParam(
 		execCtx, ses, cw, nil, prepareStmt.Name)
 	require.NoError(t, err)
 	require.Same(t, retComp, reused)
@@ -975,7 +975,7 @@ func TestInitExecuteStmtParamRebuildsCachedTopologyAfterPolicyGenerationAppears(
 	// topology must be rebuilt before the next EXECUTE.
 	GWorkloadPolicyManager.AdvancePlacementGeneration()
 	GWorkloadPolicyManager.AdvancePlacementGeneration()
-	rebuilt, _, _, _, err := initExecuteStmtParam(
+	rebuilt, _, _, _, _, err := initExecuteStmtParam(
 		execCtx, ses, cw, nil, prepareStmt.Name)
 	require.NoError(t, err)
 	require.NotNil(t, rebuilt)
