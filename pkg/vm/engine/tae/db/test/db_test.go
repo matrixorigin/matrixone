@@ -7609,7 +7609,7 @@ func TestAppendAndGC2(t *testing.T) {
 		assert.Nil(t, err)
 	}
 	wg.Wait()
-	ckpCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	ckpCtx, cancel := context.WithTimeout(ctx, testutil.TestCheckpointTimeout)
 	err = db.ForceCheckpoint(ckpCtx, db.TxnMgr.Now())
 	cancel()
 	require.NoError(t, err)
@@ -7836,7 +7836,7 @@ func TestSnapshotGC(t *testing.T) {
 	snapWG.Wait()
 	wg.Wait()
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
-	ckpCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	ckpCtx, cancel := context.WithTimeout(ctx, testutil.TestCheckpointTimeout)
 	err = db.ForceCheckpoint(ckpCtx, db.TxnMgr.Now())
 	cancel()
 	require.NoError(t, err)
@@ -8847,10 +8847,10 @@ func TestCkpLeak(t *testing.T) {
 		assert.Nil(t, err)
 	}
 	wg.Wait()
-	ckpCtx, cancel := context.WithTimeout(ctx, time.Minute)
-	defer cancel()
-	require.NoError(t, db.ForceCheckpoint(ckpCtx, db.TxnMgr.Now()))
-	testutil.WaitAllCheckpointsFinished(t, db)
+	ckpCtx, cancel := context.WithTimeout(ctx, testutil.TestCheckpointTimeout)
+	err = db.ForceCheckpoint(ckpCtx, db.TxnMgr.Now())
+	cancel()
+	require.NoError(t, err)
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 	checkLeak := func() bool {
 		ckpMetaFiles := db.BGCheckpointRunner.GetCheckpointMetaFiles()
