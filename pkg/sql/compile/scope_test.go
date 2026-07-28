@@ -45,6 +45,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/filter"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
@@ -2408,7 +2409,7 @@ func TestRuntimeFilterResultKeepsItsOriginatingSpec(t *testing.T) {
 	}
 }
 
-func TestShuffleJoinStageNodesKeepsSinkScanReceiversLocal(t *testing.T) {
+func TestShuffleJoinStageNodesDistributesReceiversAndKeepsSinkScanWorker(t *testing.T) {
 	c := NewMockCompile(t)
 	c.addr = "cn-local:6001"
 	c.cnList = engine.Nodes{
@@ -2426,13 +2427,184 @@ func TestShuffleJoinStageNodesKeepsSinkScanReceiversLocal(t *testing.T) {
 
 	stageNodes, local := c.shuffleJoinStageNodes([]*Scope{sinkScope}, nil)
 	require.True(t, local)
-	require.Len(t, stageNodes, 1)
+	require.Len(t, stageNodes, 2)
 	require.Equal(t, "cn-local:6001", stageNodes[0].Addr)
+	require.Equal(t, "cn-remote:6001", stageNodes[1].Addr)
 
 	normalScope := &Scope{RootOp: merge.NewArgument()}
 	stageNodes, local = c.shuffleJoinStageNodes([]*Scope{normalScope}, nil)
 	require.False(t, local)
 	require.Len(t, stageNodes, 2)
+
+	c.cnList = engine.Nodes{
+		{Id: "cn-remote", Addr: "cn-remote:6001", Mcpu: 8},
+	}
+	stageNodes, local = c.shuffleJoinStageNodes([]*Scope{sinkScope}, nil)
+	require.True(t, local)
+	require.Len(t, stageNodes, 2)
+	require.Equal(t, "cn-remote:6001", stageNodes[0].Addr)
+	require.Equal(t, "cn-local:6001", stageNodes[1].Addr)
+
+	c.cnList = nil
+	stageNodes, local = c.shuffleJoinStageNodes([]*Scope{sinkScope}, nil)
+	require.True(t, local)
+	require.Len(t, stageNodes, 1)
+	require.Equal(t, "cn-local:6001", stageNodes[0].Addr)
+}
+
+func TestCompileShuffleJoinDistributesSinkScanHashbuild(t *testing.T) {
+	const dop = int32(2)
+	tests := []struct {
+		name        string
+		joinType    plan.Node_JoinType
+		isRightJoin bool
+		sinkOnBuild bool
+	}{
+		{
+			name:     "probe-side sink inner join",
+			joinType: plan.Node_INNER,
+		},
+		{
+			name:        "build-side sink right dedup join",
+			joinType:    plan.Node_DEDUP,
+			isRightJoin: true,
+			sinkOnBuild: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			nodes := engine.Nodes{
+				{Id: "cn-local", Addr: "cn-local:6001", Mcpu: int(dop)},
+				{Id: "cn-remote", Addr: "cn-remote:6001", Mcpu: int(dop)},
+			}
+			c := newCompileForSinkScanShuffleJoinTest(t, nodes)
+			node := newSinkScanShuffleJoinTestNode(dop)
+			node.JoinType = test.joinType
+			node.IsRightJoin = test.isRightJoin
+			if test.joinType == plan.Node_DEDUP {
+				node.DedupJoinCtx = &plan.DedupJoinCtx{}
+			}
+			left := &plan.Node{Stats: &plan.Stats{Dop: dop}}
+			right := &plan.Node{Stats: &plan.Stats{Dop: dop}}
+
+			sinkMerge := merge.NewArgument().WithSinkScan(true)
+			sinkRoot := projection.NewArgument()
+			sinkRoot.AppendChild(sinkMerge)
+			probe := newSinkScanShuffleJoinTestScope(t, nodes[1])
+			build := newSinkScanShuffleJoinTestScope(t, nodes[1])
+			var sinkScope *Scope
+			if test.sinkOnBuild {
+				build = newSinkScanShuffleJoinTestScope(t, nodes[0])
+				sinkScope = build
+			} else {
+				probe = newSinkScanShuffleJoinTestScope(t, nodes[0])
+				sinkScope = probe
+			}
+			sinkScope.RootOp = sinkRoot
+
+			result := c.compileShuffleJoin(node, left, right, []*Scope{probe}, []*Scope{build})
+
+			require.Len(t, result, len(nodes)*int(dop))
+			hashbuildByCN := make(map[string]int)
+			for _, scope := range result {
+				require.NotNil(t, scope)
+				require.NotEmpty(t, scope.PreScopes)
+				require.IsType(t, &hashbuild.HashBuild{}, scope.PreScopes[0].RootOp)
+				hashbuildByCN[scope.NodeInfo.Addr]++
+				if scope.NodeInfo.Addr == nodes[1].Addr {
+					_, hasSinkScan := sinkScanDependencyNode([]*Scope{scope})
+					require.False(t, hasSinkScan,
+						"the in-process SINK_SCAN dependency must never enter a remote scope tree")
+				}
+			}
+			require.Equal(t, int(dop), hashbuildByCN[nodes[0].Addr])
+			require.Equal(t, int(dop), hashbuildByCN[nodes[1].Addr])
+
+			sinkDispatch, ok := sinkScope.RootOp.(*dispatch.Dispatch)
+			require.True(t, ok)
+			require.Len(t, sinkDispatch.LocalRegs, int(dop))
+			require.Len(t, sinkDispatch.RemoteRegs, int(dop))
+
+			localSinkOwners := 0
+			for _, scope := range result {
+				_, hasSinkScan := sinkScanDependencyNode([]*Scope{scope})
+				if hasSinkScan {
+					localSinkOwners++
+					require.Equal(t, nodes[0].Addr, scope.NodeInfo.Addr)
+				}
+			}
+			require.Equal(t, 1, localSinkOwners,
+				"the local SINK_SCAN producer must be started by exactly one receiver tree")
+
+			grouped := c.groupShuffleBucketsByCNIfNeeded(result)
+			require.Len(t, grouped, len(nodes))
+			for _, scope := range grouped {
+				if scope.NodeInfo.Addr == nodes[1].Addr {
+					require.True(t, checkPipelineStandaloneExecutableAtRemote(scope),
+						"the remote CN bucket group must own every local receiver targeted by its dispatch")
+				}
+			}
+		})
+	}
+}
+
+func newCompileForSinkScanShuffleJoinTest(t *testing.T, nodes engine.Nodes) *Compile {
+	c := NewMockCompile(t)
+	c.addr = nodes[0].Addr
+	c.cnList = nodes
+	c.execType = plan2.ExecTypeAP_MULTICN
+	c.anal = &AnalyzeModule{}
+	return c
+}
+
+func newSinkScanShuffleJoinTestScope(t *testing.T, node engine.Node) *Scope {
+	scope := newScope(Remote)
+	scope.NodeInfo = scopeNodeWithMcpu(node, 1)
+	scope.Proc = testutil.NewProcess(t)
+	scope.setRootOperator(colexec.NewMockOperator())
+	return scope
+}
+
+func newSinkScanShuffleJoinTestNode(dop int32) *plan.Node {
+	leftCol := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_int64)},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{
+			RelPos: 1,
+			ColPos: 0,
+		}},
+	}
+	rightCol := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_int64)},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{
+			RelPos: 2,
+			ColPos: 0,
+		}},
+	}
+	return &plan.Node{
+		NodeType: plan.Node_JOIN,
+		JoinType: plan.Node_INNER,
+		Stats: &plan.Stats{
+			Dop:      dop,
+			TableCnt: 1000,
+			HashmapStats: &plan.HashMapStats{
+				Shuffle:       true,
+				ShuffleColIdx: 0,
+				ShuffleType:   plan.ShuffleType_Hash,
+				ShuffleMethod: plan.ShuffleMethod_Normal,
+			},
+		},
+		OnList: []*plan.Expr{{
+			Typ: plan.Type{Id: int32(types.T_bool)},
+			Expr: &plan.Expr_F{F: &plan.Function{
+				Args: []*plan.Expr{leftCol, rightCol},
+			}},
+		}},
+		SendMsgList: []plan.MsgHeader{{
+			MsgType: int32(message.MsgJoinMap),
+			MsgTag:  1,
+		}},
+	}
 }
 
 func TestAttachShuffleDispatchSourceFallsBackToFirstReceiver(t *testing.T) {
