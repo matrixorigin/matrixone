@@ -47,6 +47,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -663,6 +666,105 @@ func TestCompileShuffleJoinKeepsReusableLocalShuffle(t *testing.T) {
 
 	require.Len(t, result, 1,
 		"reusing an existing probe partition must keep the single local fast path")
+}
+
+func TestCompileShuffleJoinDistributesSinkScanHashbuild(t *testing.T) {
+	const dop = int32(2)
+	tests := []struct {
+		name        string
+		joinType    plan.Node_JoinType
+		isRightJoin bool
+		sinkOnBuild bool
+	}{
+		{
+			name:     "probe-side sink inner join",
+			joinType: plan.Node_INNER,
+		},
+		{
+			name:        "build-side sink right dedup join",
+			joinType:    plan.Node_DEDUP,
+			isRightJoin: true,
+			sinkOnBuild: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			nodes := engine.Nodes{
+				{Id: "cn-local", Addr: "cn-local:6001", Mcpu: int(dop)},
+				{Id: "cn-remote", Addr: "cn-remote:6001", Mcpu: int(dop)},
+			}
+			c := newCompileForShuffleJoinTest(t, nodes)
+			c.execType = plan2.ExecTypeAP_MULTICN
+			node := newShuffleJoinTestNode(dop)
+			node.JoinType = test.joinType
+			node.IsRightJoin = test.isRightJoin
+			if test.joinType == plan.Node_DEDUP {
+				node.DedupJoinCtx = &plan.DedupJoinCtx{}
+			}
+			node.Stats.HashmapStats.ShuffleMethod = plan.ShuffleMethod_Normal
+			left := &plan.Node{Stats: &plan.Stats{Dop: dop}}
+			right := &plan.Node{Stats: &plan.Stats{Dop: dop}}
+
+			sinkMerge := merge.NewArgument().WithSinkScan(true)
+			sinkRoot := projection.NewArgument()
+			sinkRoot.AppendChild(sinkMerge)
+			probe := newShuffleJoinTestScope(t, nodes[1], 1)
+			build := newShuffleJoinTestScope(t, nodes[1], 1)
+			var sinkScope *Scope
+			if test.sinkOnBuild {
+				build = newShuffleJoinTestScope(t, nodes[0], 1)
+				sinkScope = build
+			} else {
+				probe = newShuffleJoinTestScope(t, nodes[0], 1)
+				sinkScope = probe
+			}
+			sinkScope.RootOp = sinkRoot
+
+			result := c.compileShuffleJoin(node, left, right, []*Scope{probe}, []*Scope{build})
+
+			require.Len(t, result, len(nodes)*int(dop))
+			hashbuildByCN := make(map[string]int)
+			for _, scope := range result {
+				require.NotNil(t, scope)
+				require.NotEmpty(t, scope.PreScopes)
+				require.IsType(t, &hashbuild.HashBuild{}, scope.PreScopes[0].RootOp)
+				hashbuildByCN[scope.NodeInfo.Addr]++
+				if scope.NodeInfo.Addr == nodes[1].Addr {
+					_, hasSinkScan := sinkScanDependencyNode([]*Scope{scope})
+					require.False(t, hasSinkScan,
+						"the in-process SINK_SCAN dependency must never enter a remote scope tree")
+				}
+			}
+			require.Equal(t, int(dop), hashbuildByCN[nodes[0].Addr])
+			require.Equal(t, int(dop), hashbuildByCN[nodes[1].Addr])
+
+			sinkDispatch, ok := sinkScope.RootOp.(*dispatch.Dispatch)
+			require.True(t, ok)
+			require.Len(t, sinkDispatch.LocalRegs, int(dop))
+			require.Len(t, sinkDispatch.RemoteRegs, int(dop))
+
+			localSinkOwners := 0
+			for _, scope := range result {
+				_, hasSinkScan := sinkScanDependencyNode([]*Scope{scope})
+				if hasSinkScan {
+					localSinkOwners++
+					require.Equal(t, nodes[0].Addr, scope.NodeInfo.Addr)
+				}
+			}
+			require.Equal(t, 1, localSinkOwners,
+				"the local SINK_SCAN producer must be started by exactly one receiver tree")
+
+			grouped := c.groupShuffleBucketsByCNIfNeeded(result)
+			require.Len(t, grouped, len(nodes))
+			for _, scope := range grouped {
+				if scope.NodeInfo.Addr == nodes[1].Addr {
+					require.True(t, checkPipelineStandaloneExecutableAtRemote(scope),
+						"the remote CN bucket group must own every local receiver targeted by its dispatch")
+				}
+			}
+		})
+	}
 }
 
 func newCompileForShuffleGroupTest(t *testing.T) *Compile {
