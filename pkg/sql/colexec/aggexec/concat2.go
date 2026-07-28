@@ -242,10 +242,8 @@ func (exec *groupConcatExec) BatchFill(offset int, groups []uint64, vectors []*v
 			if err = exec.state[x].fillArg(exec.mp, y, payload, false); err != nil {
 				return err
 			}
-			if exec.Size() >= exec.h0SpillLimit {
-				if err = exec.spillOrderedState(exec.h0SpillContext); err != nil {
-					return err
-				}
+			if err = exec.maybeSpillOrdered(); err != nil {
+				return err
 			}
 		}
 		return nil
@@ -266,7 +264,7 @@ func (exec *groupConcatExec) BatchFill(offset int, groups []uint64, vectors []*v
 }
 
 func (exec *groupConcatExec) maybeSpillOrdered() error {
-	if exec.h0SpillLimit > 0 && exec.Size() >= exec.h0SpillLimit {
+	if exec.h0SpillLimit > 0 && exec.activeOrderedMemorySize() >= exec.h0SpillLimit {
 		return exec.spillOrderedState(exec.h0SpillContext)
 	}
 	return nil
@@ -806,6 +804,35 @@ func (exec *groupConcatExec) compactSpillRuns(ctx context.Context, group int) er
 	return nil
 }
 
+func (exec *groupConcatExec) compactSpillRunsIncrementally(
+	ctx context.Context,
+	group int,
+) error {
+	runs := exec.orderedSpillRuns[group]
+	for len(runs) >= groupConcatMergeFanIn {
+		start := len(runs) - groupConcatMergeFanIn
+		level := runs[start].level
+		sameLevel := true
+		for i := start + 1; i < len(runs); i++ {
+			if runs[i].level != level {
+				sameLevel = false
+				break
+			}
+		}
+		if !sameLevel {
+			break
+		}
+		merged, err := exec.mergeSpillRuns(ctx, runs[start:])
+		if err != nil {
+			return err
+		}
+		merged.level = level + 1
+		runs = append(runs[:start], merged)
+	}
+	exec.orderedSpillRuns[group] = runs
+	return nil
+}
+
 func (exec *groupConcatExec) mergeSpillRuns(
 	ctx context.Context,
 	source []groupConcatSpillRun,
@@ -993,6 +1020,7 @@ type groupConcatSpillRun struct {
 	start int64
 	end   int64
 	pos   int64
+	level int64
 }
 
 type groupConcatRunHeap struct {
@@ -1061,6 +1089,9 @@ func (exec *groupConcatExec) spillOrderedState(ctx context.Context) error {
 		}
 		if len(entries) > 0 {
 			if err := exec.writeOrderedRun(ctx, group, entries); err != nil {
+				return err
+			}
+			if err := exec.compactSpillRunsIncrementally(ctx, group); err != nil {
 				return err
 			}
 		}
@@ -1464,22 +1495,22 @@ func decodeGroupConcatOrderConfig(
 }
 
 func (exec *groupConcatExec) Size() int64 {
+	size := exec.activeOrderedMemorySize() + exec.fixedAndSpilledMemorySize() + exec.distinctHash.Size()
+	for _, st := range exec.state {
+		size += int64(cap(st.argCnt)) * 4
+	}
+	return size
+}
+
+// activeOrderedMemorySize reports state which has not been written to an
+// ordered spill run yet. Only this state participates in the spill watermark:
+// retained run descriptors remain part of Size(), but must not force every
+// subsequent input row into its own run.
+func (exec *groupConcatExec) activeOrderedMemorySize() int64 {
 	var size int64
 	for _, st := range exec.state {
 		size += int64(len(st.argbuf))
-		size += int64(cap(st.argCnt)) * 4
 	}
-	return size + exec.AdditionalMemorySize() + exec.distinctHash.Size()
-}
-
-// AdditionalMemorySize reports retained Go-heap state which is invisible to
-// the operator mpool and therefore must be added to EXPLAIN memory accounting.
-func (exec *groupConcatExec) AdditionalMemorySize() int64 {
-	var size int64
-	size += int64(cap(exec.separator))
-	size += int64(cap(exec.orderDesc))
-	size += int64(cap(exec.orderNullsLast))
-	size += int64(cap(exec.orderArgIndexes)) * 4
 	for _, group := range exec.orderedDistinct {
 		// Account for the Go map bucket and string/slice headers in addition to
 		// the payload bytes. These allocations live outside the operator mpool.
@@ -1488,8 +1519,36 @@ func (exec *groupConcatExec) AdditionalMemorySize() int64 {
 			size += int64(len(key) + len(payload))
 		}
 	}
+	return size
+}
+
+// AdditionalMemorySize reports retained Go-heap state which is invisible to
+// the operator mpool and therefore must be added to EXPLAIN memory accounting.
+func (exec *groupConcatExec) AdditionalMemorySize() int64 {
+	return exec.activeOrderedDistinctMemorySize() + exec.fixedAndSpilledMemorySize()
+}
+
+func (exec *groupConcatExec) activeOrderedDistinctMemorySize() int64 {
+	var size int64
+	for _, group := range exec.orderedDistinct {
+		// Account for the Go map bucket and string/slice headers in addition to
+		// the payload bytes. These allocations live outside the operator mpool.
+		size += int64(len(group)) * 64
+		for key, payload := range group {
+			size += int64(len(key) + len(payload))
+		}
+	}
+	return size
+}
+
+func (exec *groupConcatExec) fixedAndSpilledMemorySize() int64 {
+	var size int64
+	size += int64(cap(exec.separator))
+	size += int64(cap(exec.orderDesc))
+	size += int64(cap(exec.orderNullsLast))
+	size += int64(cap(exec.orderArgIndexes)) * 4
 	for _, runs := range exec.orderedSpillRuns {
-		size += int64(cap(runs)) * int64(3*8)
+		size += int64(cap(runs)) * int64(4*8)
 	}
 	return size
 }

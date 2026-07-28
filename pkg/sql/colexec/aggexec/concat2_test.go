@@ -212,6 +212,116 @@ func TestGroupConcatH0SpillBoundaries(t *testing.T) {
 	count.Free()
 }
 
+func TestGroupConcatSpillWatermarkExcludesRunMetadata(t *testing.T) {
+	mp := mpool.MustNewZero()
+	info := multiAggInfo{
+		aggID: 102,
+		argTypes: []types.Type{
+			types.T_varchar.ToType(),
+			types.T_varchar.ToType(),
+		},
+		retType:   types.T_text.ToType(),
+		emptyNull: true,
+	}
+	exec := newGroupConcatExec(mp, info, ",").(*groupConcatExec)
+	require.NoError(t, exec.SetExtraInformation(
+		testGroupConcatOrderConfig(1, []byte{groupConcatOrderAsc}, ","),
+		0,
+	))
+	SyncAggregatorsToChunkSize([]AggFuncExec{exec}, 1)
+	require.NoError(t, exec.GroupGrow(1))
+	fileCreates := 0
+	ConfigureGroupConcatH0Spill(exec, groupConcatMinRunSize, context.Background(), func() (*os.File, error) {
+		fileCreates++
+		return nil, errors.New("run metadata must not trigger an active spill")
+	}, nil)
+
+	descriptorCapacity := int(groupConcatMinRunSize/(4*8)) + 1
+	exec.orderedSpillRuns[0] = make([]groupConcatSpillRun, 0, descriptorCapacity)
+	require.GreaterOrEqual(t, exec.Size(), groupConcatMinRunSize)
+	require.Less(t, exec.activeOrderedMemorySize(), groupConcatMinRunSize)
+	require.Equal(t, exec.fixedAndSpilledMemorySize(), exec.AdditionalMemorySize())
+
+	value := buildVarlenVec(t, mp, types.T_varchar.ToType(), []string{"x"})
+	key := buildVarlenVec(t, mp, types.T_varchar.ToType(), []string{"k"})
+	require.NoError(t, exec.BatchFill(0, []uint64{1}, []*vector.Vector{value, key}))
+	require.Zero(t, fileCreates)
+	require.Empty(t, exec.orderedSpillRuns[0])
+
+	value.Free(mp)
+	key.Free(mp)
+	exec.Free()
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestGroupConcatInputSpillBoundsRunsAndWriteAmplification(t *testing.T) {
+	mp := mpool.MustNewZero()
+	info := multiAggInfo{
+		aggID: 103,
+		argTypes: []types.Type{
+			types.T_varchar.ToType(),
+			types.T_varchar.ToType(),
+		},
+		retType:   types.T_text.ToType(),
+		emptyNull: true,
+	}
+	exec := newGroupConcatExec(mp, info, ",").(*groupConcatExec)
+	require.NoError(t, exec.SetExtraInformation(
+		testGroupConcatOrderConfig(1, []byte{groupConcatOrderAsc}, ""),
+		0,
+	))
+	exec.maxLen = 4
+	SyncAggregatorsToChunkSize([]AggFuncExec{exec}, 1)
+	require.NoError(t, exec.GroupGrow(1))
+
+	var peakMemory, spillBytes, spillRows int64
+	ConfigureGroupConcatH0Spill(exec, groupConcatMinRunSize, context.Background(), func() (*os.File, error) {
+		file, err := os.CreateTemp(t.TempDir(), "group-concat-bounded-runs-")
+		if err == nil {
+			err = os.Remove(file.Name())
+		}
+		return file, err
+	}, func(bytes, rows, retainedMemory int64) {
+		spillBytes += bytes
+		spillRows += rows
+		peakMemory = max(peakMemory, retainedMemory)
+	})
+
+	const (
+		rowCount = 160
+		keySize  = 20 * 1024
+	)
+	values := make([]string, rowCount)
+	keys := make([]string, rowCount)
+	groups := make([]uint64, rowCount)
+	for i := range rowCount {
+		values[i] = fmt.Sprintf("%04d", i)
+		keys[i] = fmt.Sprintf("%06d%s", rowCount-i, strings.Repeat("k", keySize-6))
+		groups[i] = 1
+	}
+	valueVec := buildVarlenVec(t, mp, types.T_varchar.ToType(), values)
+	keyVec := buildVarlenVec(t, mp, types.T_varchar.ToType(), keys)
+	require.NoError(t, exec.BatchFill(0, groups, []*vector.Vector{valueVec, keyVec}))
+
+	require.LessOrEqual(t, len(exec.orderedSpillRuns[0]), groupConcatMergeFanIn)
+	require.LessOrEqual(t, spillRows, int64(rowCount*2))
+	require.Less(t, spillBytes, int64(rowCount*keySize*3))
+	require.Less(t, peakMemory, int64(groupConcatMinRunSize*10))
+
+	result, err := exec.FlushWithContext(context.Background())
+	require.NoError(t, err)
+	require.Len(t, result[0].GetBytesAt(0), int(exec.maxLen))
+	require.LessOrEqual(t, len(exec.orderedSpillRuns[0]), groupConcatMergeFanIn)
+	require.LessOrEqual(t, spillRows, int64(rowCount*2))
+	require.Less(t, spillBytes, int64(rowCount*keySize*3))
+
+	result[0].Free(mp)
+	valueVec.Free(mp)
+	keyVec.Free(mp)
+	exec.Free()
+	require.Zero(t, mp.CurrNB())
+}
+
 func TestGroupConcatGroupedDistinctSpillAndCancellation(t *testing.T) {
 	mp := mpool.MustNewZero()
 	info := multiAggInfo{
