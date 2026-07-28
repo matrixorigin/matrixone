@@ -542,10 +542,13 @@ func (s *serverConn) logBackendHandshakeEvent(
 	errorLevel bool,
 	extraFields ...zap.Field,
 ) {
+	if s == nil {
+		return
+	}
 	stage, stageDuration := tracker.snapshot()
 	stageName := stage.String()
 	cn := ""
-	if s != nil && s.cnServer != nil {
+	if s.cnServer != nil {
 		cn = s.cnServer.addr
 	}
 	fields := []zap.Field{
@@ -554,7 +557,7 @@ func (s *serverConn) logBackendHandshakeEvent(
 		zap.String("stage", stageName),
 		zap.Duration("stage_duration", stageDuration),
 	}
-	if s != nil && s.conn != nil {
+	if s.conn != nil {
 		if local := s.conn.LocalAddr(); local != nil {
 			fields = append(fields, zap.String("local", local.String()))
 		}
