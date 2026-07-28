@@ -77,6 +77,15 @@ func TestMongoDBConnectionCanSwitchDiscoveryMode(t *testing.T) {
 	require.Equal(t, mongodb.DiscoverySRV, updated.DiscoveryMode)
 }
 
+func TestMongoDBSystemTablesAreInitializedAndDroppedForTenants(t *testing.T) {
+	for _, table := range mongodb.SystemTableDDLs {
+		require.Contains(t, predefinedTables, table.Name)
+		require.Contains(t, createSqls, table.DDL)
+		require.NotContains(t, dropSqls, "drop table if exists mo_catalog."+table.Name+";")
+		require.Contains(t, dropMongoDBSqls, "drop table if exists mo_catalog."+table.Name+";")
+	}
+}
+
 func cloneStringMap(source map[string]string) map[string]string {
 	result := make(map[string]string, len(source))
 	for key, value := range source {

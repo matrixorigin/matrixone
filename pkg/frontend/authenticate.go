@@ -1101,6 +1101,10 @@ var (
 		`drop table if exists mo_catalog.mo_iceberg_principal_map;`,
 		`drop table if exists mo_catalog.mo_iceberg_catalogs;`,
 	}
+	dropMongoDBSqls = []string{
+		`drop table if exists mo_catalog.mo_mongodb_tables;`,
+		`drop table if exists mo_catalog.mo_mongodb_connections;`,
+	}
 	dropMoMysqlCompatibilityModeSql = `drop table if exists mo_catalog.mo_mysql_compatibility_mode;`
 	dropAutoIcrColSql               = fmt.Sprintf("drop table if exists mo_catalog.`%s`;", catalog.MOAutoIncrTable)
 	dropMoIndexes                   = fmt.Sprintf("drop table if exists `%s`.`%s`;", catalog.MO_CATALOG, catalog.MO_INDEXES)
@@ -4277,6 +4281,14 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 		}
 
 		for _, sql = range dropIcebergSqls {
+			ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, sql)
+			rtnErr = bh.Exec(deleteCtx, sql)
+			if rtnErr != nil {
+				return rtnErr
+			}
+		}
+
+		for _, sql = range dropMongoDBSqls {
 			ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, sql)
 			rtnErr = bh.Exec(deleteCtx, sql)
 			if rtnErr != nil {
