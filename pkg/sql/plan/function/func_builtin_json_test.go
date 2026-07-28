@@ -402,6 +402,16 @@ func TestJsonContainsNumericEqualDecimalAndFloat(t *testing.T) {
 	}
 }
 
+func TestJsonContainsBinaryUsesRawPayloadAndSubtype(t *testing.T) {
+	legacyBlob := newTypedByteJson(bytejson.TpCodeBlob, "AA==")
+	rawBlob := newTypedByteJson(bytejson.TpCodeOpaque, string([]byte{0x00}))
+	bit := newTypedByteJson(bytejson.TpCodeBit, string([]byte{0x00}))
+
+	require.True(t, jsonContainsScalar(legacyBlob, rawBlob))
+	require.True(t, jsonContainsScalar(rawBlob, legacyBlob))
+	require.False(t, jsonContainsScalar(bit, rawBlob))
+}
+
 // ============================================================================
 // computeString / computeStringSimple (use raw JSON text, not internal encoding)
 // ============================================================================
