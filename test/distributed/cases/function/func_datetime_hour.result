@@ -6,7 +6,7 @@ SELECT HOUR('2024-12-20 15:30:45') AS result2;
 15
 SELECT HOUR(NOW()) AS result3;
 ➤ result3[-6,8,0]  𝄀
-17
+19
 SELECT HOUR(CAST('15:30:45' AS TIME)) AS time_cast;
 ➤ time_cast[4,32,0]  𝄀
 15
@@ -112,3 +112,13 @@ HOUR('2 30:00:00') AS extended_day_time_hour,
 HOUR('60') AS invalid_compact_second_hour;
 ➤ negative_datetime_hour[4,32,0]  ¦  negative_compact_datetime_hour[4,32,0]  ¦  invalid_calendar_compact_datetime_hour[4,32,0]  ¦  extended_day_time_hour[4,32,0]  ¦  invalid_compact_second_hour[4,32,0]  𝄀
 15  ¦  15  ¦  null  ¦  78  ¦  null
+SELECT HOUR('24-12-20 15:30:45') AS two_digit_year_hour,
+HOUR('2000:01:01 12:34:56') AS colon_datetime_hour,
+HOUR('1998-01-01 00:00:009') AS wide_second_datetime_hour,
+HOUR('2024-12-20 15:30:4560') AS invalid_wide_second_datetime_hour,
+HOUR('2001-11-00 01:02:03') AS incomplete_datetime_hour,
+HOUR('99999990000') AS uint32_overflow_hour,
+HOUR('- 12:34:56') AS signed_space_time_hour,
+HOUR('12:34:56.') AS trailing_dot_time_hour;
+➤ two_digit_year_hour[4,32,0]  ¦  colon_datetime_hour[4,32,0]  ¦  wide_second_datetime_hour[4,32,0]  ¦  invalid_wide_second_datetime_hour[4,32,0]  ¦  incomplete_datetime_hour[4,32,0]  ¦  uint32_overflow_hour[4,32,0]  ¦  signed_space_time_hour[4,32,0]  ¦  trailing_dot_time_hour[4,32,0]  𝄀
+15  ¦  12  ¦  0  ¦  null  ¦  1  ¦  null  ¦  12  ¦  12

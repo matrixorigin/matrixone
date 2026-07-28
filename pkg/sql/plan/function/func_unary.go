@@ -4700,6 +4700,10 @@ func timeStringToClockForExtract(str string) (uint64, uint8, uint8, bool) {
 }
 
 func mysqlTimeStringToClockForExtract(str string) (uint64, uint8, uint8, bool) {
+	if mysqlLeadingDigitsExceedUint32(str) {
+		return 0, 0, 0, false
+	}
+
 	// Retain a valid TIME prefix before trailing text, for example
 	// "15:30:45abc". Invalid clocks such as "12:60:00" still fail because
 	// their complete prefix cannot be parsed as TIME.
@@ -4723,6 +4727,18 @@ func mysqlDateOnlyStringForExtract(str string) bool {
 		asciiDigits(str[8:10]) && (str[4] == '-' || str[4] == '/') && str[7] == str[4]
 }
 
+func mysqlLeadingDigitsExceedUint32(str string) bool {
+	value := uint64(0)
+	for i := 0; i < len(str) && str[i] >= '0' && str[i] <= '9'; i++ {
+		digit := uint64(str[i] - '0')
+		if value > (math.MaxUint32-digit)/10 {
+			return true
+		}
+		value = value*10 + digit
+	}
+	return false
+}
+
 func asciiDigits(str string) bool {
 	for i := 0; i < len(str); i++ {
 		if str[i] < '0' || str[i] > '9' {
@@ -4739,41 +4755,52 @@ type timeExtractParseResult struct {
 }
 
 func mysqlSeparatedDatetimeClockForExtract(str string) timeExtractParseResult {
-	if len(str) < 6 || !asciiDigits(str[:4]) || (str[4] != '-' && str[4] != '/') ||
-		(strings.IndexByte(str[5:], ' ') < 0 && strings.IndexByte(str[5:], 'T') < 0) {
+	pos := 0
+	year, yearDigits, ok := mysqlVariableDigitsForExtract(str, &pos)
+	if !ok || yearDigits > 4 || pos >= len(str) || !mysqlDateSeparatorForExtract(str[pos]) {
 		return timeExtractParseResult{}
 	}
-	result := timeExtractParseResult{matched: true}
-	pos := 0
-	year, ok := mysqlFixedDigitsForExtract(str, &pos, 4)
-	if !ok || pos >= len(str) || (str[pos] != '-' && str[pos] != '/') {
-		return result
+	if yearDigits == 2 {
+		year = uint64(adjustYear(int(year)))
 	}
 	separator := str[pos]
 	pos++
-	month, ok := mysqlOneOrTwoDigitsForExtract(str, &pos)
+	month, _, ok := mysqlVariableDigitsForExtract(str, &pos)
 	if !ok || pos >= len(str) || str[pos] != separator {
-		return result
+		return timeExtractParseResult{}
 	}
 	pos++
-	day, ok := mysqlOneOrTwoDigitsForExtract(str, &pos)
+	day, _, ok := mysqlVariableDigitsForExtract(str, &pos)
 	if !ok || pos >= len(str) || (str[pos] != ' ' && str[pos] != 'T') {
-		return result
+		// A complete date without a clock is still handled by the TIME path.
+		return timeExtractParseResult{}
 	}
-	pos++
-	hour, ok := mysqlOneOrTwoDigitsForExtract(str, &pos)
+	result := timeExtractParseResult{matched: true}
+	if str[pos] == 'T' {
+		pos++
+	} else {
+		for pos < len(str) && str[pos] == ' ' {
+			pos++
+		}
+	}
+	hour, _, ok := mysqlVariableDigitsForExtract(str, &pos)
 	if !ok || pos >= len(str) || str[pos] != ':' {
 		return result
 	}
 	pos++
-	minute, ok := mysqlOneOrTwoDigitsForExtract(str, &pos)
+	minute, _, ok := mysqlVariableDigitsForExtract(str, &pos)
 	if !ok || pos >= len(str) || str[pos] != ':' {
 		return result
 	}
 	pos++
-	second, ok := mysqlOneOrTwoDigitsForExtract(str, &pos)
-	if !ok || !mysqlDatetimeDateForExtract(year, month, day) ||
-		!types.ValidTimeInDay(uint8(hour), uint8(minute), uint8(second)) {
+	second := uint64(0)
+	if pos < len(str) && str[pos] >= '0' && str[pos] <= '9' {
+		second, _, ok = mysqlVariableDigitsForExtract(str, &pos)
+		if !ok {
+			return result
+		}
+	}
+	if !mysqlDatetimeDateForExtract(year, month, day) || hour > 23 || minute > 59 || second > 59 {
 		return result
 	}
 	result.hour = hour
@@ -4784,10 +4811,20 @@ func mysqlSeparatedDatetimeClockForExtract(str string) timeExtractParseResult {
 }
 
 func mysqlDatetimeDateForExtract(year, month, day uint64) bool {
-	if year == 0 && month == 0 && day == 0 {
-		return true
+	if year > 9999 || month > 12 || day > 31 {
+		return false
+	}
+	if month == 0 || day == 0 {
+		return year != 0 || (month == 0 && day == 0)
+	}
+	if year == 0 {
+		return false
 	}
 	return types.ValidDate(int32(year), uint8(month), uint8(day))
+}
+
+func mysqlDateSeparatorForExtract(c byte) bool {
+	return c == '-' || c == '/' || c == ':'
 }
 
 func mysqlTimePrefixClockForExtract(str string) (uint64, uint8, uint8, bool) {
@@ -4802,9 +4839,13 @@ func mysqlTimePrefixClockForExtract(str string) (uint64, uint8, uint8, bool) {
 	if len(prefix) == 0 {
 		return 0, 0, 0, false
 	}
+	prefix = strings.TrimLeft(prefix, " ")
+	if len(prefix) == 0 {
+		return 0, 0, 0, false
+	}
 
 	if dot := strings.IndexByte(prefix, '.'); dot >= 0 {
-		if dot == len(prefix)-1 || !asciiDigits(prefix[dot+1:]) {
+		if dot < len(prefix)-1 && !asciiDigits(prefix[dot+1:]) {
 			return 0, 0, 0, false
 		}
 		prefix = prefix[:dot]
@@ -4813,7 +4854,7 @@ func mysqlTimePrefixClockForExtract(str string) (uint64, uint8, uint8, bool) {
 	day := uint64(0)
 	hasDay := false
 	if space := strings.IndexByte(prefix, ' '); space >= 0 {
-		if !asciiDigits(prefix[:space]) {
+		if space == 0 || !asciiDigits(prefix[:space]) {
 			return 0, 0, 0, false
 		}
 		day = mysqlClampedDigitsForExtract(prefix[:space], 35)
@@ -4919,24 +4960,15 @@ func mysqlClampedDigitsForExtract(str string, limit uint64) uint64 {
 	return value
 }
 
-func mysqlFixedDigitsForExtract(str string, pos *int, width int) (uint64, bool) {
-	if len(str)-*pos < width || !asciiDigits(str[*pos:*pos+width]) {
-		return 0, false
-	}
-	value := mysqlClampedDigitsForExtract(str[*pos:*pos+width], math.MaxUint64)
-	*pos += width
-	return value, true
-}
-
-func mysqlOneOrTwoDigitsForExtract(str string, pos *int) (uint64, bool) {
+func mysqlVariableDigitsForExtract(str string, pos *int) (uint64, int, bool) {
 	start := *pos
-	for *pos < len(str) && *pos-start < 2 && str[*pos] >= '0' && str[*pos] <= '9' {
+	for *pos < len(str) && str[*pos] >= '0' && str[*pos] <= '9' {
 		*pos = *pos + 1
 	}
 	if *pos == start {
-		return 0, false
+		return 0, 0, false
 	}
-	return mysqlClampedDigitsForExtract(str[start:*pos], math.MaxUint64), true
+	return mysqlClampedDigitsForExtract(str[start:*pos], math.MaxUint64), *pos - start, true
 }
 
 func parseCompactDatetimeClockForExtract(str string) timeExtractParseResult {
@@ -4975,7 +5007,7 @@ func compactDatetimeClockForExtract(str string, twoDigitYear bool) (uint64, uint
 	hour := (str[yearWidth+4]-'0')*10 + str[yearWidth+5] - '0'
 	minute := (str[yearWidth+6]-'0')*10 + str[yearWidth+7] - '0'
 	second := (str[yearWidth+8]-'0')*10 + str[yearWidth+9] - '0'
-	if !types.ValidDate(int32(year), month, day) || !types.ValidTimeInDay(hour, minute, second) {
+	if !mysqlDatetimeDateForExtract(uint64(year), uint64(month), uint64(day)) || !types.ValidTimeInDay(hour, minute, second) {
 		return 0, 0, 0, false
 	}
 	return uint64(hour), minute, second, true

@@ -4342,7 +4342,15 @@ func TestStringTimeExtractMySQLBoundaryRegressions(t *testing.T) {
 			"20240230010203",
 			"2 30:00:00",
 			"60",
-		}, []bool{false, false, false, false, false}),
+			"24-12-20 15:30:45",
+			"2000:01:01 12:34:56",
+			"1998-01-01 00:00:009",
+			"2024-12-20 15:30:4560",
+			"2001-11-00 01:02:03",
+			"99999990000",
+			"- 12:34:56",
+			"12:34:56.",
+		}, []bool{false, false, false, false, false, false, false, false, false, false, false, false, false}),
 	}
 
 	testCases := []struct {
@@ -4353,19 +4361,22 @@ func TestStringTimeExtractMySQLBoundaryRegressions(t *testing.T) {
 		{
 			name: "hour",
 			expect: NewFunctionTestResult(types.T_uint32.ToType(), false,
-				[]uint32{15, 15, 0, 78, 0}, []bool{false, false, true, false, true}),
+				[]uint32{15, 15, 0, 78, 0, 15, 12, 0, 0, 1, 0, 12, 12},
+				[]bool{false, false, true, false, true, false, false, false, true, false, true, false, false}),
 			fn: StringToHour,
 		},
 		{
 			name: "minute",
 			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
-				[]uint8{30, 30, 0, 0, 0}, []bool{false, false, true, false, true}),
+				[]uint8{30, 30, 0, 0, 0, 30, 34, 0, 0, 2, 0, 34, 34},
+				[]bool{false, false, true, false, true, false, false, false, true, false, true, false, false}),
 			fn: StringToMinute,
 		},
 		{
 			name: "second",
 			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
-				[]uint8{45, 45, 0, 0, 0}, []bool{false, false, true, false, true}),
+				[]uint8{45, 45, 0, 0, 0, 45, 56, 9, 0, 3, 0, 56, 56},
+				[]bool{false, false, true, false, true, false, false, false, true, false, true, false, false}),
 			fn: StringToSecond,
 		},
 	}

@@ -101,3 +101,13 @@ SECOND('2 30:00:00') AS extended_day_time_second,
 SECOND('60') AS invalid_compact_second_second;
 ➤ negative_datetime_second[-6,8,0]  ¦  negative_compact_datetime_second[-6,8,0]  ¦  invalid_calendar_compact_datetime_second[-6,8,0]  ¦  extended_day_time_second[-6,8,0]  ¦  invalid_compact_second_second[-6,8,0]  𝄀
 45  ¦  45  ¦  null  ¦  0  ¦  null
+SELECT SECOND('24-12-20 15:30:45') AS two_digit_year_second,
+SECOND('2000:01:01 12:34:56') AS colon_datetime_second,
+SECOND('1998-01-01 00:00:009') AS wide_second_datetime_second,
+SECOND('2024-12-20 15:30:4560') AS invalid_wide_second_datetime_second,
+SECOND('2001-11-00 01:02:03') AS incomplete_datetime_second,
+SECOND('99999990000') AS uint32_overflow_second,
+SECOND('- 12:34:56') AS signed_space_time_second,
+SECOND('12:34:56.') AS trailing_dot_time_second;
+➤ two_digit_year_second[-6,8,0]  ¦  colon_datetime_second[-6,8,0]  ¦  wide_second_datetime_second[-6,8,0]  ¦  invalid_wide_second_datetime_second[-6,8,0]  ¦  incomplete_datetime_second[-6,8,0]  ¦  uint32_overflow_second[-6,8,0]  ¦  signed_space_time_second[-6,8,0]  ¦  trailing_dot_time_second[-6,8,0]  𝄀
+45  ¦  56  ¦  9  ¦  null  ¦  3  ¦  null  ¦  56  ¦  56

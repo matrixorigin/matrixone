@@ -84,3 +84,13 @@ SELECT SECOND('-2024-12-20 15:30:45') AS negative_datetime_second,
        SECOND('20240230010203') AS invalid_calendar_compact_datetime_second,
        SECOND('2 30:00:00') AS extended_day_time_second,
        SECOND('60') AS invalid_compact_second_second;
+
+-- MySQL DATETIME grammar and numeric overflow for string TIME coercion.
+SELECT SECOND('24-12-20 15:30:45') AS two_digit_year_second,
+       SECOND('2000:01:01 12:34:56') AS colon_datetime_second,
+       SECOND('1998-01-01 00:00:009') AS wide_second_datetime_second,
+       SECOND('2024-12-20 15:30:4560') AS invalid_wide_second_datetime_second,
+       SECOND('2001-11-00 01:02:03') AS incomplete_datetime_second,
+       SECOND('99999990000') AS uint32_overflow_second,
+       SECOND('- 12:34:56') AS signed_space_time_second,
+       SECOND('12:34:56.') AS trailing_dot_time_second;

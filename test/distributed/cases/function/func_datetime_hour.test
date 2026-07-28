@@ -88,3 +88,13 @@ SELECT HOUR('-2024-12-20 15:30:45') AS negative_datetime_hour,
        HOUR('20240230010203') AS invalid_calendar_compact_datetime_hour,
        HOUR('2 30:00:00') AS extended_day_time_hour,
        HOUR('60') AS invalid_compact_second_hour;
+
+-- MySQL DATETIME grammar and numeric overflow for string TIME coercion.
+SELECT HOUR('24-12-20 15:30:45') AS two_digit_year_hour,
+       HOUR('2000:01:01 12:34:56') AS colon_datetime_hour,
+       HOUR('1998-01-01 00:00:009') AS wide_second_datetime_hour,
+       HOUR('2024-12-20 15:30:4560') AS invalid_wide_second_datetime_hour,
+       HOUR('2001-11-00 01:02:03') AS incomplete_datetime_hour,
+       HOUR('99999990000') AS uint32_overflow_hour,
+       HOUR('- 12:34:56') AS signed_space_time_hour,
+       HOUR('12:34:56.') AS trailing_dot_time_hour;
