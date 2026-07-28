@@ -2549,6 +2549,64 @@ func TestCompileShuffleJoinDistributesSinkScanHashbuild(t *testing.T) {
 	}
 }
 
+func TestCompileJoinGroupsExternalSinkScanOwner(t *testing.T) {
+	const dop = int32(2)
+	for _, workerCount := range []int{1, 2} {
+		t.Run(fmt.Sprintf("%d scheduled workers", workerCount), func(t *testing.T) {
+			workers := make(engine.Nodes, workerCount)
+			for i := range workers {
+				workers[i] = engine.Node{
+					Id:   fmt.Sprintf("cn-remote-%d", i),
+					Addr: fmt.Sprintf("cn-remote-%d:6001", i),
+					Mcpu: int(dop),
+				}
+			}
+			owner := engine.Node{
+				Id:   "cn-sink-owner",
+				Addr: "cn-sink-owner:6001",
+				Mcpu: int(dop),
+			}
+			c := newCompileForSinkScanShuffleJoinTest(t, workers)
+			c.addr = owner.Addr
+
+			node := newSinkScanShuffleJoinTestNode(dop)
+			left := &plan.Node{Stats: &plan.Stats{Dop: dop}}
+			right := &plan.Node{Stats: &plan.Stats{Dop: dop}}
+			sinkMerge := merge.NewArgument().WithSinkScan(true)
+			sinkRoot := projection.NewArgument()
+			sinkRoot.AppendChild(sinkMerge)
+			probe := newSinkScanShuffleJoinTestScope(t, owner)
+			probe.RootOp = sinkRoot
+			build := newSinkScanShuffleJoinTestScope(t, workers[0])
+
+			buckets := c.compileJoin(node, left, right, []*Scope{probe}, []*Scope{build})
+			require.Len(t, buckets, (workerCount+1)*int(dop))
+
+			grouped := c.groupShuffleBucketsByCNIfNeeded(buckets)
+			require.Len(t, grouped, workerCount+1)
+
+			groupedByCN := make(map[string]*Scope, len(grouped))
+			sinkOwnerGroups := 0
+			for _, scope := range grouped {
+				groupedByCN[scope.NodeInfo.Addr] = scope
+				_, hasSinkScan := sinkScanDependencyNode([]*Scope{scope})
+				if hasSinkScan {
+					sinkOwnerGroups++
+					require.Equal(t, owner.Addr, scope.NodeInfo.Addr)
+				}
+			}
+			require.Equal(t, 1, sinkOwnerGroups)
+			require.Contains(t, groupedByCN, owner.Addr)
+			for _, worker := range workers {
+				remoteGroup, ok := groupedByCN[worker.Addr]
+				require.True(t, ok)
+				require.True(t, checkPipelineStandaloneExecutableAtRemote(remoteGroup),
+					"each remote CN group must own every receiver targeted by its local dispatches")
+			}
+		})
+	}
+}
+
 func newCompileForSinkScanShuffleJoinTest(t *testing.T, nodes engine.Nodes) *Compile {
 	c := NewMockCompile(t)
 	c.addr = nodes[0].Addr
