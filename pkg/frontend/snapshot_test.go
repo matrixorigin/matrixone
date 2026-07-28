@@ -1740,24 +1740,16 @@ func newDdlBatchForTest(mp *mpool.MPool, records [][]interface{}) *batch.Batch {
 	return bat
 }
 
-// TestDataBranchAuditFkDepsEscapesQuotedNames verifies that getFkDeps and its
-// related helpers properly escape apostrophes in dbName / tblName before
-// embedding them in SQL string literals.  Unescaped apostrophes were
-// previously interpolated verbatim, breaking the query for any legal
-// backtick-quoted identifier that contains a single-quote character
-// (issue #26144).
+// TestDataBranchAuditFkDepsEscapesQuotedNames verifies every FK dependency
+// lookup used by CLONE, snapshot restore, and PITR restore. Legal quoted
+// identifiers must survive the SQL literal boundary and still produce the
+// dependency order consumed by the restore path (issue #26144).
 func TestDataBranchAuditFkDepsEscapesQuotedNames(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
 	ses := newTestSession(t, ctrl)
 	defer ses.Close()
-
-	bh := &backgroundExecTest{}
-	bh.init()
-
-	bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
-	defer bhStub.Reset()
 
 	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 	pu.SV.SetDefaultValues()
@@ -1777,15 +1769,51 @@ func TestDataBranchAuditFkDepsEscapesQuotedNames(t *testing.T) {
 	ses.SetTenantInfo(tenant)
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(sysAccountID))
 
-	// Apostrophes must be doubled to form valid SQL string literals.
-	// The correctly-escaped query is the one that must appear in the
-	// BackgroundExec SQL registry; if getFkDeps generates the un-escaped
-	// form instead, sql2result will have no match and Exec will error.
-	escapedSQL := "select db_name, table_name, refer_db_name, refer_table_name " +
-		"from mo_catalog.mo_foreign_keys " +
-		"where db_name = 'db''name' and table_name = 'child''name'"
-	bh.sql2result[escapedSQL] = newMrsForPitrRecord([][]interface{}{})
+	const (
+		dbName  = `db'name\part`
+		tblName = `child'name\part`
+		refDB   = `parent'db`
+		refTbl  = `parent'table`
+		baseSQL = "select db_name, table_name, refer_db_name, refer_table_name from mo_catalog.mo_foreign_keys"
+		filters = ` where db_name = 'db''name\\part' and table_name = 'child''name\\part'`
+	)
+	wantOrder := []string{genKey(refDB, refTbl), genKey(dbName, tblName)}
+	result := newMrsForPitrRecord([][]interface{}{{dbName, tblName, refDB, refTbl}})
 
-	_, err := getFkDeps(ctx, bh, nil, "db'name", "child'name")
-	require.NoError(t, err, "getFkDeps must escape apostrophes in db/table names")
+	tests := []struct {
+		name string
+		sql  string
+		run  func(*backgroundExecTest) ([]string, error)
+	}{{
+		name: "clone and snapshot",
+		sql:  baseSQL + filters,
+		run: func(bh *backgroundExecTest) ([]string, error) {
+			return fkTablesTopoSort(ctx, bh, nil, dbName, tblName)
+		},
+	}, {
+		name: "pitr restore",
+		sql:  baseSQL + " {MO_TS = 42}" + filters,
+		run: func(bh *backgroundExecTest) ([]string, error) {
+			return fkTablesTopoSortInPitrRestore(ctx, bh, 42, dbName, tblName)
+		},
+	}, {
+		name: "cross-account snapshot restore",
+		sql:  baseSQL + " {MO_TS = 42}" + filters,
+		run: func(bh *backgroundExecTest) ([]string, error) {
+			return fkTablesTopoSortWithTS(ctx, bh, dbName, tblName, 42, 7, 8)
+		},
+	}}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			bh := &backgroundExecTest{}
+			bh.init()
+			bh.sql2result[tc.sql] = result
+
+			got, err := tc.run(bh)
+			require.NoError(t, err)
+			require.Equal(t, wantOrder, got)
+			require.Equal(t, []string{tc.sql}, bh.executedSQLs)
+		})
+	}
 }
