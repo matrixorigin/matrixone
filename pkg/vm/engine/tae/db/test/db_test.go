@@ -8913,6 +8913,7 @@ func TestGlobalCheckpoint2(t *testing.T) {
 			requestedTS.ToString(),
 		)
 		targetLSN := entry.LSN()
+		require.NotZero(t, targetLSN)
 		// Wait only for the forced checkpoint's WAL intent. A later commit may
 		// legitimately leave a newer LSN pending outside requestedTS.
 		require.Eventuallyf(
@@ -8958,11 +8959,34 @@ func TestGlobalCheckpoint2(t *testing.T) {
 	forceTS = txn.GetStartTS()
 	err = tae.DB.ForceGlobalCheckpoint(ctx, forceTS, 0)
 	require.NoError(t, err)
-	requireCheckpointCovered(forceTS, tae.DB.BGCheckpointRunner.MaxGlobalCheckpoint())
+	forcedEntry := tae.DB.BGCheckpointRunner.MaxGlobalCheckpoint()
+	requireCheckpointCovered(forceTS, forcedEntry)
 
 	assert.NoError(t, txn.Commit(context.Background()))
 
+	// Freeze checkpoint execution so the next data commit remains outside the
+	// forced entry while its WAL LSN is observably pending.
+	cfg, err := tae.DB.BGCheckpointRunner.DisableCheckpoint(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, cfg)
+	checkpointDisabled := true
+	defer func() {
+		if checkpointDisabled {
+			tae.DB.BGCheckpointRunner.EnableCheckpoint(cfg)
+		}
+	}()
+
 	tae.CreateRelAndAppend2(bat, false)
+
+	forcedLSN := forcedEntry.LSN()
+	checkpointedLSN := tae.Wal.GetCheckpointed()
+	currentLSN := tae.Wal.GetLSNWatermark()
+	require.GreaterOrEqual(t, checkpointedLSN, forcedLSN)
+	require.Greater(t, currentLSN, forcedLSN)
+	require.Greater(t, tae.Wal.GetPenddingCnt(), uint64(0))
+
+	tae.DB.BGCheckpointRunner.EnableCheckpoint(cfg)
+	checkpointDisabled = false
 
 	currTs := tae.TxnMgr.Now()
 	assert.NoError(t, err)
