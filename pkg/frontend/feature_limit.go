@@ -56,20 +56,26 @@ func checkSnapshotQuota(
 	return featureLimitChecker(ctx, ses, bh, featureCodeSnapshot, level, increment)
 }
 
-func checkBranchQuota(
+func checkBranchQuotaForAccount(
 	ctx context.Context,
 	ses *Session,
 	bh BackgroundExec,
+	accountName string,
+	accountID uint32,
 	increment int64,
-) (err error) {
-	return featureLimitChecker(ctx, ses, bh, featureCodeBranch, "", increment)
+) error {
+	return featureLimitCheckerForAccount(
+		ctx, ses, bh, featureCodeBranch, "", accountName, accountID, increment,
+	)
 }
 
 func branchQuotaUsageSQL(accountID uint32) string {
 	return fmt.Sprintf(
-		"select count(*) from %s.%s where creator = %d and table_deleted = false and level != '%s' for update",
+		"select count(*) from %s.%s b join %s.%s t on b.table_id = t.rel_id where t.account_id = %d and b.table_deleted = false and b.level != '%s' for update",
 		catalog.MO_CATALOG,
 		catalog.MO_BRANCH_METADATA,
+		catalog.MO_CATALOG,
+		catalog.MO_TABLES,
 		accountID,
 		databranchutils.AlterLineageLevel,
 	)
@@ -83,13 +89,33 @@ func featureLimitChecker(
 	featureScope string,
 	increment int64,
 ) (err error) {
+	return featureLimitCheckerForAccount(
+		ctx,
+		ses,
+		bh,
+		featureCode,
+		featureScope,
+		ses.GetTenantInfo().Tenant,
+		ses.GetTenantInfo().TenantID,
+		increment,
+	)
+}
+
+func featureLimitCheckerForAccount(
+	ctx context.Context,
+	ses *Session,
+	bh BackgroundExec,
+	featureCode string,
+	featureScope string,
+	accName string,
+	accId uint32,
+	increment int64,
+) (err error) {
 	var (
 		limitQuota  int64
 		sql         string
 		sqlRet      executor.Result
 		lockingRead bool
-		accName     = ses.GetTenantInfo().Tenant
-		accId       = ses.GetTenantInfo().TenantID
 	)
 
 	defer func() {

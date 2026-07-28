@@ -56,9 +56,9 @@ func TestValidateDataBranchCreateTxn(t *testing.T) {
 		"CREATE DATA BRANCH is not supported with optimistic transactions")
 }
 
-func TestBranchQuotaUsageSQLExcludesRootAlterLineage(t *testing.T) {
+func TestBranchQuotaUsageSQLUsesTargetOwnerAndExcludesRootAlterLineage(t *testing.T) {
 	require.Equal(t,
-		"select count(*) from mo_catalog.mo_branch_metadata where creator = 7 and table_deleted = false and level != 'alter' for update",
+		"select count(*) from mo_catalog.mo_branch_metadata b join mo_catalog.mo_tables t on b.table_id = t.rel_id where t.account_id = 7 and b.table_deleted = false and b.level != 'alter' for update",
 		branchQuotaUsageSQL(7),
 	)
 }

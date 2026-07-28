@@ -350,14 +350,31 @@ func dataBranchCreateTable(
 		}
 	}()
 
-	if err = checkBranchQuota(execCtx.reqCtx, ses, bh, 1); err != nil {
-		return err
-	}
-
 	cloneStmt = &tree.CloneTable{
 		SrcTable:     stmt.SrcTable,
 		CreateTable:  stmt.CreateTable,
 		ToAccountOpt: stmt.ToAccountOpt,
+	}
+	if err = lockDataBranchTargetAccount(execCtx.reqCtx, bh, stmt.ToAccountOpt); err != nil {
+		return err
+	}
+	opAccountID, targetAccountID, snapshot, err := getOpAndToAccountId(
+		execCtx.reqCtx, ses, bh, stmt.ToAccountOpt, stmt.SrcTable.AtTsExpr,
+	)
+	if err != nil {
+		return err
+	}
+	targetAccountName := ses.GetTenantInfo().Tenant
+	if stmt.ToAccountOpt != nil {
+		targetAccountName = stmt.ToAccountOpt.AccountName.String()
+	}
+	if opAccountID != sysAccountID && opAccountID != targetAccountID {
+		return moerr.NewInternalErrorNoCtx("only sys can clone table to another account")
+	}
+	if err = checkBranchQuotaForAccount(
+		execCtx.reqCtx, ses, bh, targetAccountName, targetAccountID, 1,
+	); err != nil {
+		return err
 	}
 
 	oldDefault := ses.GetTxnCompileCtx().DefaultDatabase()
@@ -368,7 +385,11 @@ func dataBranchCreateTable(
 	execCtx.reqCtx = context.WithValue(execCtx.reqCtx, tree.CloneLevelCtxKey{}, tree.NormalCloneLevelTable)
 	execCtx.reqCtx = context.WithValue(execCtx.reqCtx, dataBranchCloneLockCtxKey{}, true)
 
-	if receipt, err = handleCloneTable(execCtx, ses, cloneStmt, bh); err != nil {
+	if receipt, err = handleCloneTable(execCtx, ses, cloneStmt, bh, &cloneAccountResolution{
+		opAccountId: opAccountID,
+		toAccountId: targetAccountID,
+		snapshot:    snapshot,
+	}); err != nil {
 		return
 	}
 
@@ -421,6 +442,9 @@ func dataBranchCreateDatabase(
 		}
 		stats.Add(&authStats)
 	}
+	if err = lockDataBranchTargetAccount(execCtx.reqCtx, bh, stmt.ToAccountOpt); err != nil {
+		return
+	}
 
 	if source, err = collectCloneDatabaseSource(execCtx.reqCtx, ses, bh, &stmt.CloneDatabase); err != nil {
 		return
@@ -432,7 +456,13 @@ func dataBranchCreateDatabase(
 	}
 	stats.Add(&authStats)
 
-	if err = checkBranchQuota(execCtx.reqCtx, ses, bh, source.branchTableCount()); err != nil {
+	targetAccountName := ses.GetTenantInfo().Tenant
+	if stmt.ToAccountOpt != nil {
+		targetAccountName = stmt.ToAccountOpt.AccountName.String()
+	}
+	if err = checkBranchQuotaForAccount(
+		execCtx.reqCtx, ses, bh, targetAccountName, source.toAccountId, source.branchTableCount(),
+	); err != nil {
 		return
 	}
 
@@ -459,6 +489,22 @@ func validateDataBranchCreateTxn(pessimistic bool) error {
 		)
 	}
 	return nil
+}
+
+func lockDataBranchTargetAccount(
+	ctx context.Context,
+	bh BackgroundExec,
+	toAccountOpt *tree.ToAccountOpt,
+) error {
+	if toAccountOpt == nil {
+		return nil
+	}
+	sql, err := getSqlForLockMoAccountNameFormat(ctx, toAccountOpt.AccountName.String())
+	if err != nil {
+		return err
+	}
+	bh.ClearExecResultSet()
+	return bh.Exec(defines.AttachAccountId(ctx, sysAccountID), sql)
 }
 
 func markBranchTablesDeleted(

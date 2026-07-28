@@ -961,7 +961,7 @@ func TestCoverageBoost2_RetryPublication_ContextDone(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	err := retryPublication(ctx, func() error {
+	err := retryPublication(ctx, "test", func() error {
 		return moerr.NewInternalErrorNoCtx("error")
 	}, &ExecutorRetryOption{
 		RetryTimes:    100,
@@ -973,7 +973,7 @@ func TestCoverageBoost2_RetryPublication_ContextDone(t *testing.T) {
 
 func TestCoverageBoost2_RetryPublication_DurationExceeded(t *testing.T) {
 	attempts := 0
-	err := retryPublication(context.Background(), func() error {
+	err := retryPublication(context.Background(), "test", func() error {
 		attempts++
 		time.Sleep(5 * time.Millisecond)
 		return moerr.NewInternalErrorNoCtx("fail")

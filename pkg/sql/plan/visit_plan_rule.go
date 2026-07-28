@@ -44,6 +44,49 @@ type prepareIndexDependency struct {
 	tableName string
 }
 
+func applyRuleToWindowSpec(rule VisitPlanRule, window *plan.WindowSpec) error {
+	if window == nil {
+		return nil
+	}
+	apply := func(expr **plan.Expr) error {
+		if *expr == nil {
+			return nil
+		}
+		var err error
+		*expr, err = rule.ApplyExpr(*expr)
+		return err
+	}
+	var err error
+	if err = apply(&window.WindowFunc); err != nil {
+		return err
+	}
+	for i := range window.PartitionBy {
+		if err = apply(&window.PartitionBy[i]); err != nil {
+			return err
+		}
+	}
+	for i := range window.OrderBy {
+		if window.OrderBy[i] != nil {
+			if err = apply(&window.OrderBy[i].Expr); err != nil {
+				return err
+			}
+		}
+	}
+	if window.Frame != nil {
+		if window.Frame.Start != nil {
+			if err = apply(&window.Frame.Start.Val); err != nil {
+				return err
+			}
+		}
+		if window.Frame.End != nil {
+			if err = apply(&window.Frame.End.Val); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 func NewGetParamRule() *GetParamRule {
 	return &GetParamRule{
 		params:   make(map[int]int),
@@ -52,17 +95,14 @@ func NewGetParamRule() *GetParamRule {
 }
 
 func (rule *GetParamRule) MatchNode(node *Node) bool {
-	if node.NodeType == plan.Node_TABLE_SCAN || node.NodeType == plan.Node_INSERT {
-		rule.schemas = append(rule.schemas, &plan.ObjectRef{
-			Server:     int64(node.TableDef.Version), //we use this unused field to store table's version
-			Db:         int64(node.TableDef.DbId),
-			Schema:     int64(node.TableDef.DbId),
-			Obj:        node.ObjRef.Obj,
-			ServerName: node.ObjRef.ServerName,
-			DbName:     node.ObjRef.DbName,
-			SchemaName: node.ObjRef.SchemaName,
-			ObjName:    node.ObjRef.ObjName,
-		})
+	if node.NodeType == plan.Node_TABLE_SCAN ||
+		node.NodeType == plan.Node_EXTERNAL_SCAN ||
+		node.NodeType == plan.Node_SOURCE_SCAN ||
+		node.NodeType == plan.Node_INSERT {
+		if node.ObjRef != nil && node.TableDef != nil {
+			rule.schemas = append(rule.schemas, prepareSchemaRefWithSnapshot(
+				node.ObjRef, node.TableDef, node.ScanSnapshot))
+		}
 		if node.NodeType == plan.Node_TABLE_SCAN && node.ObjRef != nil && node.TableDef != nil {
 			for _, indexDef := range node.TableDef.Indexes {
 				if indexplugin.IsPluginAlgo(indexDef.IndexAlgo) && indexDef.IndexTableName != "" {
@@ -76,16 +116,7 @@ func (rule *GetParamRule) MatchNode(node *Node) bool {
 		}
 	} else if node.NodeType == plan.Node_MULTI_UPDATE {
 		for _, updateCtx := range node.UpdateCtxList {
-			rule.schemas = append(rule.schemas, &plan.ObjectRef{
-				Server:     int64(updateCtx.TableDef.Version), //we use this unused field to store table's version
-				Db:         int64(updateCtx.TableDef.DbId),
-				Schema:     int64(updateCtx.TableDef.DbId),
-				Obj:        updateCtx.ObjRef.Obj,
-				ServerName: updateCtx.ObjRef.ServerName,
-				DbName:     updateCtx.ObjRef.DbName,
-				SchemaName: updateCtx.ObjRef.SchemaName,
-				ObjName:    updateCtx.ObjRef.ObjName,
-			})
+			rule.schemas = append(rule.schemas, prepareSchemaRef(updateCtx.ObjRef, updateCtx.TableDef))
 		}
 	}
 	return false
@@ -225,6 +256,101 @@ func (rule *ResetParamOrderRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 	default:
 		return e, nil
 	}
+}
+
+// ---------------------------
+
+type subqueryRootRule struct {
+	pending []int32
+}
+
+func newSubqueryRootRule() *subqueryRootRule {
+	return &subqueryRootRule{}
+}
+
+func (rule *subqueryRootRule) MatchNode(_ *Node) bool {
+	return false
+}
+
+func (rule *subqueryRootRule) IsApplyExpr() bool {
+	return true
+}
+
+func (rule *subqueryRootRule) ApplyNode(_ *Node) error {
+	return nil
+}
+
+func (rule *subqueryRootRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
+	switch exprImpl := e.Expr.(type) {
+	case *plan.Expr_F:
+		for i := range exprImpl.F.Args {
+			exprImpl.F.Args[i], _ = rule.ApplyExpr(exprImpl.F.Args[i])
+		}
+	case *plan.Expr_List:
+		for i := range exprImpl.List.List {
+			exprImpl.List.List[i], _ = rule.ApplyExpr(exprImpl.List.List[i])
+		}
+	case *plan.Expr_W:
+		if err := applyRuleToWindowSpec(rule, exprImpl.W); err != nil {
+			return nil, err
+		}
+	case *plan.Expr_Sub:
+		rule.pending = append(rule.pending, exprImpl.Sub.NodeId)
+	}
+	return e, nil
+}
+
+// ---------------------------
+
+type decrementParamOrdinalRule struct {
+	seen map[*plan.ParamRef]struct{}
+}
+
+func (rule *decrementParamOrdinalRule) MatchNode(_ *Node) bool {
+	return false
+}
+
+func (rule *decrementParamOrdinalRule) IsApplyExpr() bool {
+	return true
+}
+
+func (rule *decrementParamOrdinalRule) ApplyNode(_ *Node) error {
+	return nil
+}
+
+func (rule *decrementParamOrdinalRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
+	switch exprImpl := e.Expr.(type) {
+	case *plan.Expr_F:
+		for i := range exprImpl.F.Args {
+			var err error
+			exprImpl.F.Args[i], err = rule.ApplyExpr(exprImpl.F.Args[i])
+			if err != nil {
+				return nil, err
+			}
+		}
+	case *plan.Expr_List:
+		for i := range exprImpl.List.List {
+			var err error
+			exprImpl.List.List[i], err = rule.ApplyExpr(exprImpl.List.List[i])
+			if err != nil {
+				return nil, err
+			}
+		}
+	case *plan.Expr_W:
+		if err := applyRuleToWindowSpec(rule, exprImpl.W); err != nil {
+			return nil, err
+		}
+	case *plan.Expr_P:
+		if _, ok := rule.seen[exprImpl.P]; ok {
+			return e, nil
+		}
+		rule.seen[exprImpl.P] = struct{}{}
+		if exprImpl.P.Pos <= 0 {
+			return nil, moerr.NewInternalErrorNoCtx("prepared parameter ordinal is not one-based")
+		}
+		exprImpl.P.Pos--
+	}
+	return e, nil
 }
 
 // ---------------------------

@@ -80,7 +80,8 @@ func TestCheckBranchQuotaLocksFiniteQuota(t *testing.T) {
 	bh.sql2result[lockedQuotaSQL] = newMrsForFeatureLimit([][]interface{}{{int64(1)}})
 	bh.sql2result[countSQL] = newMrsForSnapshotCount([][]interface{}{{int64(0)}})
 
-	require.NoError(t, checkBranchQuota(context.Background(), ses, bh, 1))
+	require.NoError(t, checkBranchQuotaForAccount(
+		context.Background(), ses, bh, accountName, accountID, 1))
 	require.Equal(t, []string{registrySQL, quotaSQL, lockedQuotaSQL, lockedQuotaSQL, countSQL}, bh.executedSQLs)
 }
 
@@ -106,7 +107,8 @@ func TestCheckBranchQuotaUsesLockedQuota(t *testing.T) {
 	bh.sql2result[quotaSQL] = newMrsForFeatureLimit([][]interface{}{{int64(1)}})
 	bh.sql2result[lockedQuotaSQL] = newMrsForFeatureLimit([][]interface{}{{int64(-1)}})
 
-	require.NoError(t, checkBranchQuota(context.Background(), ses, bh, 1))
+	require.NoError(t, checkBranchQuotaForAccount(
+		context.Background(), ses, bh, "account-a", accountID, 1))
 	require.Equal(t, []string{registrySQL, quotaSQL, lockedQuotaSQL, lockedQuotaSQL}, bh.executedSQLs)
 }
 
@@ -129,7 +131,38 @@ func TestCheckBranchQuotaDoesNotLockUnlimitedQuota(t *testing.T) {
 	bh.sql2result[registrySQL] = newMrsForFeatureRegistry([][]interface{}{{int8(1), nil}})
 	bh.sql2result[quotaSQL] = newMrsForFeatureLimit([][]interface{}{{int64(-1)}})
 
-	require.NoError(t, checkBranchQuota(context.Background(), ses, bh, 1))
+	require.NoError(t, checkBranchQuotaForAccount(
+		context.Background(), ses, bh, "account-a", accountID, 1))
+	require.Equal(t, []string{registrySQL, quotaSQL}, bh.executedSQLs)
+}
+
+func TestCheckBranchQuotaForAccountUsesExplicitOwner(t *testing.T) {
+	const (
+		targetAccountName = "target-account"
+		targetAccountID   = uint32(84)
+	)
+
+	ses := newFeatureLimitTestSession(t)
+	ses.SetTenantInfo(&TenantInfo{Tenant: sysAccountName, TenantID: sysAccountID})
+
+	bh := &backgroundExecTest{}
+	bh.init()
+	registrySQL := fmt.Sprintf(
+		"select enabled, scope_spec from %s.%s where feature_code = '%s'",
+		catalog.MO_CATALOG, catalog.MO_FEATURE_REGISTRY, featureCodeBranch,
+	)
+	quotaSQL := fmt.Sprintf(
+		"select quota from %s.%s where account_id = %d and feature_code = '%s' and scope = ''",
+		catalog.MO_CATALOG, catalog.MO_FEATURE_LIMIT, targetAccountID, featureCodeBranch,
+	)
+	bh.sql2result[registrySQL] = newMrsForFeatureRegistry([][]interface{}{{int8(1), nil}})
+	bh.sql2result[quotaSQL] = newMrsForFeatureLimit([][]interface{}{{int64(0)}})
+
+	err := checkBranchQuotaForAccount(
+		context.Background(), ses, bh, targetAccountName, targetAccountID, 1,
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "has disabled for account "+targetAccountName)
 	require.Equal(t, []string{registrySQL, quotaSQL}, bh.executedSQLs)
 }
 
@@ -161,7 +194,8 @@ func TestCheckBranchQuotaInitializesMissingQuotaWithBackExec(t *testing.T) {
 	bh.sql2result[lockedQuotaSQL] = newMrsForFeatureLimit([][]interface{}{{int64(defaultBranchLimit)}})
 	bh.sql2result[countSQL] = newMrsForSnapshotCount([][]interface{}{{int64(0)}})
 
-	require.NoError(t, checkBranchQuota(context.Background(), ses, bh, 1))
+	require.NoError(t, checkBranchQuotaForAccount(
+		context.Background(), ses, bh, "account-a", accountID, 1))
 	require.Equal(
 		t,
 		[]string{registrySQL, quotaSQL, insertSQL, lockedQuotaSQL, lockedQuotaSQL, countSQL},
