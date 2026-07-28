@@ -160,7 +160,7 @@ func canonicalPartitionedCreateTableSQL(stmt *tree.CreateTable) string {
 	return fmtCtx.String()
 }
 
-func genViewTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef, error) {
+func genViewTableDef(ctx CompilerContext, stmt *tree.Select, colNames tree.IdentifierList) (*plan.TableDef, error) {
 	var tableDef plan.TableDef
 
 	// check view statement
@@ -180,12 +180,23 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef, er
 	}
 
 	query := stmtPlan.GetQuery()
-	cols := make([]*plan.ColDef, len(query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList))
-	for idx, expr := range query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList {
+	projectList := query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList
+	if len(colNames) > 0 && len(colNames) != len(projectList) {
+		return nil, moerr.NewViewWrongList(ctx.GetContext())
+	}
+	cols := make([]*plan.ColDef, len(projectList))
+	for idx, expr := range projectList {
+		name := query.Headings[idx]
+		originName := ""
+		if len(colNames) > 0 {
+			originName = string(colNames[idx])
+			name = originName
+		}
 		cols[idx] = &plan.ColDef{
-			Name: strings.ToLower(query.Headings[idx]),
-			Alg:  plan.CompressType_Lz4,
-			Typ:  expr.Typ,
+			Name:       strings.ToLower(name),
+			OriginName: originName,
+			Alg:        plan.CompressType_Lz4,
+			Typ:        expr.Typ,
 			Default: &plan.Default{
 				NullAbility:  !expr.Typ.NotNullable,
 				Expr:         nil,
@@ -449,7 +460,7 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot create view in subscription database")
 	}
 
-	tableDef, err := genViewTableDef(ctx, stmt.AsSource)
+	tableDef, err := genViewTableDef(ctx, stmt.AsSource, stmt.ColNames)
 	if err != nil {
 		return nil, err
 	}
@@ -3365,7 +3376,7 @@ func buildAlterView(stmt *tree.AlterView, ctx CompilerContext) (*Plan, error) {
 	defer func() {
 		ctx.SetBuildingAlterView(false, "", "")
 	}()
-	tableDef, err := genViewTableDef(ctx, stmt.AsSource)
+	tableDef, err := genViewTableDef(ctx, stmt.AsSource, stmt.ColNames)
 	if err != nil {
 		return nil, err
 	}
