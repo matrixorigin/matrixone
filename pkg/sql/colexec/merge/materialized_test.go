@@ -126,7 +126,6 @@ func TestMaterializedSinkScanConcurrentProductionReaders(t *testing.T) {
 	errCh := make(chan error, len(readers))
 	var wg sync.WaitGroup
 	for _, reader := range readers {
-		reader := reader
 		wg.Add(1)
 		go func() {
 			defer wg.Done()

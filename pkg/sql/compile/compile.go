@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -538,7 +539,13 @@ func (c *Compile) prePipelineInitializer() (err error) {
 		}
 	}
 	for _, source := range c.materializedSources {
-		if err = source.Begin(c.proc.Mp()); err != nil {
+		if err = source.Begin(c.proc.Mp(), func(_ context.Context, name string) (*os.File, error) {
+			spillFS, spillErr := c.proc.GetSpillFileService()
+			if spillErr != nil {
+				return nil, spillErr
+			}
+			return spillFS.CreateAndRemoveFile(c.proc.Ctx, name)
+		}); err != nil {
 			return err
 		}
 	}
