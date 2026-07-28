@@ -60,7 +60,7 @@ func TestInformationSchemaTablesTenantUpgradeEntry(t *testing.T) {
 	if entry.Schema != sysview.InformationDBConst || entry.TableName != "TABLES" || entry.UpgType != versions.MODIFY_VIEW {
 		t.Fatalf("unexpected information_schema.TABLES upgrade: %+v", entry)
 	}
-	if entry.UpgSql != sysview.InformationSchemaTablesDDL || !strings.Contains(entry.UpgSql, "\\\\_\\\\_mo\\\\_tmp\\\\_%") {
+	if entry.UpgSql != sysview.InformationSchemaTablesDDL || !strings.Contains(entry.UpgSql, "left(tbl.relname, 9) != '__mo_tmp_'") {
 		t.Fatalf("TABLES upgrade does not filter temporary objects: %s", entry.UpgSql)
 	}
 	if !strings.Contains(strings.ToLower(entry.PreSql), "drop view if exists information_schema.tables") {

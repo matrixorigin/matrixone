@@ -24,8 +24,9 @@ import (
 )
 
 func TestInformationSchemaTablesDDL_HidesTemporaryTables(t *testing.T) {
-	assert.Contains(t, InformationSchemaTablesDDL, "tbl.relname not like '\\\\_\\\\_mo\\\\_tmp\\\\_%' escape '\\\\'")
-	assert.Equal(t, "'\\\\_\\\\_mo\\\\_tmp\\\\_%'", quoteSQLLikePrefixPattern(defines.TempTableNamePrefix))
+	assert.Contains(t, InformationSchemaTablesDDL, "left(tbl.relname, 9) != '__mo_tmp_'")
+	assert.Equal(t, 9, len(defines.TempTableNamePrefix))
+	assert.NotContains(t, InformationSchemaTablesDDL, `\`)
 }
 
 func TestInformationSchemaStatisticsDDL_ContainsIdxAlgo(t *testing.T) {
