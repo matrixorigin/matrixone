@@ -334,10 +334,39 @@ func exprNotNullableWithColResolver(
 			argCopy.Typ.NotNullable = exprNotNullableWithColResolver(arg, resolveCol)
 			effectiveArgs[i] = &argCopy
 		}
+		if isIfNullCase(impl.F) {
+			// IFNULL(x, y) is rewritten as CASE WHEN ISNULL(x) THEN y ELSE x.
+			// The generic CASE rule treats ELSE x as independently nullable and
+			// loses the correlation with ISNULL(x). Preserve the IFNULL contract
+			// while using the current input nullability after joins/remapping.
+			return effectiveArgs[1].Typ.NotNullable || effectiveArgs[2].Typ.NotNullable
+		}
 		return function.DeduceNotNullable(impl.F.Func.Obj, effectiveArgs)
 
 	default:
 		return expr.Typ.NotNullable
+	}
+}
+
+func isIfNullCase(fn *plan.Function) bool {
+	if fn == nil || fn.Func == nil || fn.Func.ObjName != "case" || len(fn.Args) != 3 {
+		return false
+	}
+	condition := fn.Args[0].GetF()
+	return condition != nil && condition.Func != nil && condition.Func.ObjName == "isnull" &&
+		len(condition.Args) == 1 && ifNullCaseSourceMatches(condition.Args[0], fn.Args[2])
+}
+
+// CASE type reconciliation can add CAST nodes around IFNULL's ELSE source.
+// Ignore those binder-introduced casts when recognizing the rewrite; the
+// initial IFNULL metadata calculation uses the same source relationship.
+func ifNullCaseSourceMatches(source, elseExpr *plan.Expr) bool {
+	for {
+		fn := elseExpr.GetF()
+		if fn == nil || fn.Func == nil || fn.Func.ObjName != "cast" || len(fn.Args) == 0 {
+			return exprStructuralEqual(source, elseExpr)
+		}
+		elseExpr = fn.Args[0]
 	}
 }
 

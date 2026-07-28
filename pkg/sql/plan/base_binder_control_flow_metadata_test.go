@@ -149,16 +149,40 @@ func TestDecimalLiteralMetadataPrecision(t *testing.T) {
 }
 
 func TestBuildIfNullMetadata(t *testing.T) {
-	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, "select ifnull(null, 9.5)", 1)
+	for _, sql := range []string{
+		"select ifnull(null, 9.5)",
+		"select ifnull(null, 9.5) from nation",
+		"select distinct ifnull(null, 9.5) from nation",
+		"select ifnull(null, 9.5) from nation group by n_regionkey",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
+			require.NoError(t, err)
+
+			pl, err := BuildPlan(NewMockCompilerContext(true), stmt, false)
+			require.NoError(t, err)
+			query := pl.GetQuery()
+			projectList := query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList
+			require.Len(t, projectList, 1)
+			require.Equal(t, int32(types.T_decimal64), projectList[0].Typ.Id)
+			require.Equal(t, int32(2), projectList[0].Typ.Width)
+			require.Equal(t, int32(1), projectList[0].Typ.Scale)
+			require.True(t, projectList[0].Typ.NotNullable)
+		})
+	}
+}
+
+func TestBuildIfNullMetadataAfterOuterJoin(t *testing.T) {
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, `
+		select ifnull(r.r_regionkey, 9.5), ifnull(r.r_regionkey, n.n_comment)
+		from nation n left join region r on n.n_regionkey = r.r_regionkey`, 1)
 	require.NoError(t, err)
 
 	pl, err := BuildPlan(NewMockCompilerContext(true), stmt, false)
 	require.NoError(t, err)
 	query := pl.GetQuery()
 	projectList := query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList
-	require.Len(t, projectList, 1)
-	require.Equal(t, int32(types.T_decimal64), projectList[0].Typ.Id)
-	require.Equal(t, int32(2), projectList[0].Typ.Width)
-	require.Equal(t, int32(1), projectList[0].Typ.Scale)
+	require.Len(t, projectList, 2)
 	require.True(t, projectList[0].Typ.NotNullable)
+	require.False(t, projectList[1].Typ.NotNullable)
 }
