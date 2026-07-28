@@ -17,6 +17,7 @@ package process
 import (
 	"context"
 	"io"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -54,6 +55,12 @@ import (
 var (
 	NormalEndRegisterMessage = NewRegMsg(nil)
 )
+
+// EmptySqlModeSentinel is used to distinguish an explicitly-empty (non-strict)
+// sql_mode from an unset field during serialization. When resolveSqlMode
+// successfully resolves sql_mode="" it stores this sentinel so the remote CN
+// can tell "explicitly non-strict" apart from "never captured".
+const EmptySqlModeSentinel = "\x00MO_EMPTY_SQL_MODE\x00"
 
 // RegisterMessage channel data
 // Err == nil means pipeline finish with error
@@ -96,24 +103,33 @@ type Limitation struct {
 	PartitionRows int64
 	// ReaderSize, memory threshold for storage's reader
 	ReaderSize int64
+	// SpillSize, query spill-disk byte cap. Zero selects the bounded default.
+	SpillSize int64
 	// MaxMessageSize max size for read messages from dn
 	MaxMsgSize uint64
 }
 
 // SessionInfo session information
 type SessionInfo struct {
-	Account              string
-	User                 string
-	Host                 string
-	Role                 string
-	ConnectionID         uint64
-	LastInsertID         uint64
-	Database             string
-	Version              string
-	TimeZone             *time.Location
-	LockWaitTimeout      int64
-	LockWaitTimeoutSet   bool // distinguishes an explicit zero from an unset value
-	MatrixOneNativeMode  bool
+	Account             string
+	User                string
+	Host                string
+	Role                string
+	ConnectionID        uint64
+	LastInsertID        uint64
+	Database            string
+	Version             string
+	TimeZone            *time.Location
+	LockWaitTimeout     int64
+	LockWaitTimeoutSet  bool // distinguishes an explicit zero from an unset value
+	MatrixOneNativeMode bool
+	// ExplicitZeroTemporalCastReturnsNull is resolved on the initiating CN and
+	// carried in the remote process snapshot because remote CNs have no session
+	// variable resolver.
+	ExplicitZeroTemporalCastReturnsNull bool
+	// SqlMode is captured on the initiating CN and used when a remote process has
+	// no session variable resolver.
+	SqlMode              string
 	StorageEngine        engine.Engine
 	QueryId              []string
 	ResultColTypes       []types.Type
@@ -163,10 +179,11 @@ type StmtProfile struct {
 	//sqlOfStmt is the text part of one statement in the sql
 	sqlOfStmt string
 
-	//for div by zero, avoid contaminating session main stmt profiles like PREPARE,EXECUTE
-	divByZeroStmtType  string
-	divByZeroQueryType string
-	divByZeroIgnore    bool //ignore for insert
+	// statement runtime metadata avoids contaminating the session's main
+	// statement profile when PREPARE / EXECUTE runs an inner INSERT / UPDATE.
+	statementRuntimeStmtType  string
+	statementRuntimeQueryType string
+	statementRuntimeIgnore    bool
 }
 
 func NewStmtProfile(txnId, stmtId uuid.UUID) *StmtProfile {
@@ -185,6 +202,7 @@ func (sp *StmtProfile) Clear() {
 	sp.stmtType = ""
 	sp.queryType = ""
 	sp.sqlOfStmt = ""
+	sp.clearStatementRuntimeProfileLocked()
 }
 
 func (sp *StmtProfile) SetSqlOfStmt(sot string) {
@@ -245,32 +263,48 @@ func (sp *StmtProfile) GetStmtType() string {
 	return sp.stmtType
 }
 
-func (sp *StmtProfile) GetDivByZeroIgnore() bool {
+func (sp *StmtProfile) GetStatementIgnore() bool {
 	sp.mu.Lock()
 	defer sp.mu.Unlock()
-	return sp.divByZeroIgnore
+	return sp.statementRuntimeIgnore
+}
+
+func (sp *StmtProfile) SetStatementRuntimeProfile(stmtType, queryType string, ignore bool) {
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+	sp.statementRuntimeStmtType = stmtType
+	sp.statementRuntimeQueryType = queryType
+	sp.statementRuntimeIgnore = ignore
+}
+
+func (sp *StmtProfile) GetStatementRuntimeProfile() (stmtType, queryType string, ignore bool) {
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+	return sp.statementRuntimeStmtType, sp.statementRuntimeQueryType, sp.statementRuntimeIgnore
+}
+
+func (sp *StmtProfile) clearStatementRuntimeProfileLocked() {
+	sp.statementRuntimeStmtType = ""
+	sp.statementRuntimeQueryType = ""
+	sp.statementRuntimeIgnore = false
+}
+
+func (sp *StmtProfile) clearStatementRuntimeProfile() {
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+	sp.clearStatementRuntimeProfileLocked()
+}
+
+func (sp *StmtProfile) GetDivByZeroIgnore() bool {
+	return sp.GetStatementIgnore()
 }
 
 func (sp *StmtProfile) SetDivByZeroRuntimeProfile(stmtType, queryType string, ignore bool) {
-	sp.mu.Lock()
-	defer sp.mu.Unlock()
-	sp.divByZeroStmtType = stmtType
-	sp.divByZeroQueryType = queryType
-	sp.divByZeroIgnore = ignore
+	sp.SetStatementRuntimeProfile(stmtType, queryType, ignore)
 }
 
 func (sp *StmtProfile) GetDivByZeroRuntimeProfile() (stmtType, queryType string, ignore bool) {
-	sp.mu.Lock()
-	defer sp.mu.Unlock()
-	return sp.divByZeroStmtType, sp.divByZeroQueryType, sp.divByZeroIgnore
-}
-
-func (sp *StmtProfile) clearDivByZeroRuntimeProfile() {
-	sp.mu.Lock()
-	defer sp.mu.Unlock()
-	sp.divByZeroStmtType = ""
-	sp.divByZeroQueryType = ""
-	sp.divByZeroIgnore = false
+	return sp.GetStatementRuntimeProfile()
 }
 
 func (sp *StmtProfile) SetTxnId(id []byte) {
@@ -343,9 +377,18 @@ type BaseProcess struct {
 	UdfService               udf.Service
 	WaitPolicy               lock.WaitPolicy
 	messageBoard             *message.MessageBoard
+	hashBuildBudgetMu        sync.Mutex
+	hashBuildBudget          *HashBuildBudgetGeneration
 	logger                   *log.MOLogger
 	TxnOperator              client.TxnOperator
 	CloneTxnOperator         client.TxnOperator
+	// userLevelLockIdentity is session-scoped rather than statement-scoped.
+	// SessionInfo is rebuilt before every statement, so keeping this identity
+	// there would lose the synthetic transaction owner while locks are held.
+	userLevelLockIdentityMu sync.Mutex
+	userLevelLockOwner      string
+	userLevelLockConnID     uint64
+	userLevelLockGeneration string
 	// incrStatementDisabled marks a process that executes internal SQL on a
 	// caller-owned transaction without opening a statement of its own
 	// (executor.Options.WithDisableIncrStatement). Compiles on such a process
@@ -430,11 +473,19 @@ func (proc *Process) SetMessageBoard(mb *message.MessageBoard) {
 }
 
 func (proc *Process) SetStmtProfile(sp *StmtProfile) {
+	proc.Base.hashBuildBudgetMu.Lock()
+	if proc.Base.hashBuildBudget != nil {
+		proc.Base.hashBuildBudget.Close()
+		proc.Base.hashBuildBudget = nil
+	}
+	proc.Base.hashBuildBudgetMu.Unlock()
 	proc.Base.StmtProfile = sp
 	// Reset division by zero cache for new statement
 	// Each statement must recompute based on its own type and sql_mode
 	atomic.StoreInt32(&proc.Base.DivByZeroErrorMode, -1)
-	sp.clearDivByZeroRuntimeProfile()
+	if sp != nil {
+		sp.clearStatementRuntimeProfile()
+	}
 }
 
 func (proc *Process) GetStmtProfile() *StmtProfile {
@@ -598,6 +649,41 @@ func (si *SessionInfo) GetCollation() string {
 
 func (si *SessionInfo) GetConnectionID() uint64 {
 	return si.ConnectionID
+}
+
+// GetUserLevelLockIdentity returns the immutable user-level lock identity
+// pinned to this top process. Child processes share BaseProcess and therefore
+// observe the same session identity.
+func (proc *Process) GetUserLevelLockIdentity() (string, uint64) {
+	if proc == nil || proc.Base == nil {
+		return "", 0
+	}
+	proc.Base.userLevelLockIdentityMu.Lock()
+	defer proc.Base.userLevelLockIdentityMu.Unlock()
+	return proc.Base.userLevelLockOwner, proc.Base.userLevelLockConnID
+}
+
+// PinUserLevelLockIdentity installs the user-level lock identity once for the
+// lifetime of this top process. It is intentionally not reset after the last
+// lock is released: a concurrent acquisition must not be assigned a different
+// synthetic transaction owner, and SET CONNECTION ID must not mutate it.
+func (proc *Process) PinUserLevelLockIdentity(owner string, connID uint64) (string, uint64) {
+	if proc == nil || proc.Base == nil {
+		return "", 0
+	}
+	proc.Base.userLevelLockIdentityMu.Lock()
+	defer proc.Base.userLevelLockIdentityMu.Unlock()
+	if proc.Base.userLevelLockOwner == "" {
+		if proc.Base.userLevelLockGeneration == "" {
+			proc.Base.userLevelLockGeneration = uuid.New().String()
+		}
+		if proc.Base.userLevelLockGeneration != "" && strings.Count(owner, ":") < 2 {
+			owner = owner + ":" + proc.Base.userLevelLockGeneration
+		}
+		proc.Base.userLevelLockOwner = owner
+		proc.Base.userLevelLockConnID = connID
+	}
+	return proc.Base.userLevelLockOwner, proc.Base.userLevelLockConnID
 }
 
 func (si *SessionInfo) GetDatabase() string {

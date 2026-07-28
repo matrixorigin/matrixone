@@ -223,7 +223,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 		// process view so statement-dependent cached decisions are recomputed.
 		proc.SetStmtProfile(&ses.stmtProfile)
 	}
-	ses.stmtProfile.SetDivByZeroRuntimeProfile(stmtTyp, queryTyp, isIgnoreStatement(statement))
+	ses.stmtProfile.SetStatementRuntimeProfile(stmtTyp, queryTyp, isIgnoreStatement(statement))
 
 	//note: txn id here may be empty
 	// add by #9907, set the result of last_query_id(), this will pass those isCmdFieldListSql() from client.
@@ -337,20 +337,33 @@ func redactStatementTextForLogging(statement tree.Statement, text string) string
 }
 
 func isIgnoreStatement(statement tree.Statement) bool {
-	insertStmt, ok := statement.(*tree.Insert)
-	if !ok {
+	switch stmt := statement.(type) {
+	case *tree.Insert:
+		return len(stmt.OnDuplicateUpdate) == 1 && stmt.OnDuplicateUpdate[0] == nil
+	case *tree.Update:
+		return stmt.Ignore
+	case *tree.Load:
+		return isLoadDataIgnore(stmt)
+	default:
 		return false
 	}
-	return len(insertStmt.OnDuplicateUpdate) == 1 && insertStmt.OnDuplicateUpdate[0] == nil
 }
 
-func refreshProcessDivByZeroProfileForPreparedStmt(proc *process.Process, statement tree.Statement) {
+func isLoadDataIgnore(stmt *tree.Load) bool {
+	if stmt == nil {
+		return false
+	}
+	_, ok := stmt.DuplicateHandling.(*tree.DuplicateKeyIgnore)
+	return ok
+}
+
+func refreshProcessStmtProfileForPreparedStmt(proc *process.Process, statement tree.Statement) {
 	if proc == nil || statement == nil {
 		return
 	}
 
 	stmtProfile := proc.GetStmtProfile()
-	stmtProfile.SetDivByZeroRuntimeProfile(
+	stmtProfile.SetStatementRuntimeProfile(
 		getStatementType(statement).GetStatementType(),
 		getStatementType(statement).GetQueryType(),
 		isIgnoreStatement(statement),
@@ -1750,8 +1763,11 @@ func doPrepareStmt(execCtx *ExecCtx, ses *Session, st *tree.PrepareStmt, sql str
 		prepareStmt.ParamTypes = paramTypes
 	}
 
-	err = ses.SetPrepareStmt(execCtx.reqCtx, prepareStmt.Name, prepareStmt)
-	return prepareStmt, err
+	if err = ses.SetPrepareStmt(execCtx.reqCtx, prepareStmt.Name, prepareStmt); err != nil {
+		prepareStmt.Close()
+		return nil, err
+	}
+	return prepareStmt, nil
 }
 
 // handlePrepareStmt
@@ -1800,8 +1816,11 @@ func doPrepareString(ses *Session, execCtx *ExecCtx, st *tree.PrepareString) (*P
 		return nil, err
 	}
 
-	err = ses.SetPrepareStmt(execCtx.reqCtx, prepareStmt.Name, prepareStmt)
-	return prepareStmt, err
+	if err = ses.SetPrepareStmt(execCtx.reqCtx, prepareStmt.Name, prepareStmt); err != nil {
+		prepareStmt.Close()
+		return nil, err
+	}
+	return prepareStmt, nil
 }
 
 func prepareStringStatement(execCtx *ExecCtx, ses *Session, sql string) (string, tree.Statement, map[string]string, error) {
@@ -1876,6 +1895,7 @@ func createPrepareStmt(
 	}
 
 	var preparePlan *plan.Plan
+	protocolVersion := currentProtocolVersion(ses.proc)
 	err := execCtx.withRootSQL(originSQL, func() (err error) {
 		preparePlan, err = buildPlanWithAuthorization(execCtx.reqCtx, ses, ses.GetTxnCompileCtx(), stmt)
 		return err
@@ -1917,6 +1937,7 @@ func createPrepareStmt(
 		remapDb:             maps.Clone(execCtx.remapDb),
 		defaultDatabase:     ses.GetTxnCompileCtx().GetDatabase(),
 		tempTableVersion:    ses.GetTempTableVersion(),
+		protocolVersion:     protocolVersion,
 		getFromSendLongData: make(map[int]struct{}),
 		schedulingSQLMode:   schedulingSQLMode,
 	}
@@ -3010,6 +3031,7 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 		for i, stmt := range cached.stmts {
 			tcw := InitTxnComputationWrapper(ses, stmt, proc)
 			tcw.plan = cached.plans[i]
+			tcw.protocolVersion = cached.protocolVersion
 			tcw.SetRemapDb(statementRemaps[i])
 			tcw.SetSchedulingSQL(statementSchedulingSQL[i])
 			cws = append(cws, tcw)
@@ -4210,6 +4232,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	pu := getPu(ses.GetService())
 	proc.Base.Id = ses.getNextProcessId()
 	proc.Base.Lim.Size = pu.SV.ProcessLimitationSize
+	proc.Base.Lim.SpillSize = pu.SV.ProcessLimitationSpillSize
 	proc.Base.Lim.BatchRows = pu.SV.ProcessLimitationBatchRows
 	proc.Base.Lim.MaxMsgSize = pu.SV.MaxMessageSize
 	proc.Base.Lim.PartitionRows = pu.SV.ProcessLimitationPartitionRows
@@ -4530,6 +4553,16 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 
 	} // end of for
 
+	cacheProtocolVersion := currentProtocolVersion(proc)
+	if canCache && !ses.isCached(input.getHash()) {
+		for _, cw := range cws {
+			tcw, ok := cw.(*TxnComputationWrapper)
+			if !ok || tcw.protocolVersion != cacheProtocolVersion {
+				canCache = false
+				break
+			}
+		}
+	}
 	if canCache && !ses.isCached(input.getHash()) {
 		plans := make([]*plan.Plan, len(cws))
 		stmts := make([]tree.Statement, len(cws))
@@ -4543,7 +4576,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 			cw.Clear()
 		}
 		Cached = true
-		ses.cachePlan(input.getHash(), stmts, plans)
+		ses.cachePlan(input.getHash(), stmts, plans, cacheProtocolVersion)
 	}
 
 	return nil
@@ -5230,7 +5263,7 @@ func NewMarshalPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, pla
 		h.marshalPlan = explain.BuildJsonPlan(ctx, h.uuid, &explain.MarshalPlanOptions, h.query)
 		h.marshalPlan.NewPlanStats.SetWaitActiveCost(h.waitActiveCost)
 		if phyPlan != nil {
-			h.marshalPlan.PhyPlan = *phyPlan
+			h.marshalPlan.PhyPlan = *phyPlan.CloneForExport()
 		}
 		if h.schedulingTrace != nil {
 			h.marshalPlan.Scheduling = h.schedulingTrace

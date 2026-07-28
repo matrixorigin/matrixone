@@ -17,6 +17,7 @@ package frontend
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -29,6 +30,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -49,23 +52,74 @@ func makeFileName(
 	tblStuff tableStuff,
 ) string {
 	var (
-		srcName  = tblStuff.tarRel.GetTableName()
-		baseName = tblStuff.baseRel.GetTableName()
+		srcName  = encodeDiffFileNamePart(tblStuff.tarRel.GetTableName())
+		baseName = encodeDiffFileNamePart(tblStuff.baseRel.GetTableName())
 	)
 
 	if baseAtTsExpr != nil {
-		baseName = fmt.Sprintf("%s_%s", baseName, baseAtTsExpr.SnapshotName)
+		baseName = fmt.Sprintf("%s_%s", baseName, encodeDiffFileNamePart(baseAtTsExpr.SnapshotName))
 	}
 
 	if tarAtTsExpr != nil {
-		srcName = fmt.Sprintf("%s_%s", srcName, tarAtTsExpr.SnapshotName)
+		srcName = fmt.Sprintf("%s_%s", srcName, encodeDiffFileNamePart(tarAtTsExpr.SnapshotName))
 	}
 
-	return fmt.Sprintf(
-		"diff_%s_%s_%s",
-		srcName, baseName,
-		time.Now().UTC().Format("20060102_150405"),
-	)
+	namePrefix := fmt.Sprintf("diff_%s_%s", srcName, baseName)
+	timeSuffix := "_" + time.Now().UTC().Format("20060102_150405")
+	if len(namePrefix)+len(timeSuffix) <= maxDiffFileNameStemBytes {
+		return namePrefix + timeSuffix
+	}
+
+	digest := sha256.Sum256([]byte(namePrefix))
+	digestSuffix := fmt.Sprintf("_%x%s", digest[:16], timeSuffix)
+	return truncateDiffFileNamePrefix(namePrefix, maxDiffFileNameStemBytes-len(digestSuffix)) + digestSuffix
+}
+
+const maxDiffFileNameStemBytes = 240
+
+func encodeDiffFileNamePart(name string) string {
+	const hex = "0123456789ABCDEF"
+
+	var encoded strings.Builder
+	encoded.Grow(len(name))
+	for i := 0; i < len(name); {
+		c := name[i]
+		if c >= 'a' && c <= 'z' ||
+			c >= 'A' && c <= 'Z' ||
+			c >= '0' && c <= '9' ||
+			c == '-' || c == '_' || c == '.' {
+			encoded.WriteByte(c)
+			i++
+			continue
+		}
+		if c >= utf8.RuneSelf {
+			r, size := utf8.DecodeRuneInString(name[i:])
+			if !(r == utf8.RuneError && size == 1) && unicode.IsPrint(r) {
+				encoded.WriteString(name[i : i+size])
+				i += size
+				continue
+			}
+		}
+		encoded.WriteByte('@')
+		encoded.WriteByte(hex[c>>4])
+		encoded.WriteByte(hex[c&0x0f])
+		i++
+	}
+	return encoded.String()
+}
+
+func truncateDiffFileNamePrefix(name string, maxBytes int) string {
+	if len(name) <= maxBytes {
+		return name
+	}
+	end := maxBytes
+	for end > 0 && !utf8.ValidString(name[:end]) {
+		end--
+	}
+	if escapeStart := strings.LastIndexByte(name[:end], '@'); escapeStart >= 0 && end-escapeStart < 3 {
+		end = escapeStart
+	}
+	return name[:end]
 }
 
 type applyBatchInfo struct {
@@ -1151,6 +1205,52 @@ func shouldDiffAsCSV(sqlRet executor.Result) (bool, error) {
 	return vector.GetFixedAtWithTypeCheck[uint64](sqlRet.Batches[0].Vecs[0], 0) == 0, nil
 }
 
+func submitCSVBatchForConversion(
+	ctx context.Context,
+	ses *Session,
+	tblStuff tableStuff,
+	bat *batch.Batch,
+	ep *ExportConfig,
+	workerWg *sync.WaitGroup,
+) error {
+	copied, err := bat.Dup(ses.proc.Mp())
+	if err != nil {
+		return err
+	}
+
+	idx := ep.Index.Add(1)
+	workerWg.Add(1)
+	if err = tblStuff.worker.Submit(func() {
+		defer workerWg.Done()
+		constructByte(ctx, ses, copied, idx, ep.ByteChan, ep)
+	}); err != nil {
+		workerWg.Done()
+		copied.Clean(ses.proc.Mp())
+		ep.Index.Add(-1)
+		return err
+	}
+	return nil
+}
+
+func flushRemainingCSVBatchBytes(ctx context.Context, ep *ExportConfig) error {
+	if ctx.Err() != nil || ep.WriteIndex.Load() == ep.Index.Load() {
+		return nil
+	}
+	return exportAllDataFromBatches(ep)
+}
+
+func waitForCSVConversionWorkers(inputCtx context.Context, workerWg *sync.WaitGroup) error {
+	workerWg.Wait()
+	return inputCtx.Err()
+}
+
+func joinCSVInputError(err, inputErr error) error {
+	if inputErr == nil || errors.Is(err, inputErr) {
+		return err
+	}
+	return errors.Join(err, inputErr)
+}
+
 func writeCSV(
 	inputCtx context.Context,
 	ses *Session,
@@ -1271,12 +1371,10 @@ func writeCSV(
 				ep.BatchMap[ep.WriteIndex.Load()] = nil
 			}
 		}
-		if ep.WriteIndex.Load() != ep.Index.Load() {
-			if err2 := exportAllDataFromBatches(ep); err2 != nil {
-				select {
-				case writerErr <- err2:
-				default:
-				}
+		if err2 := flushRemainingCSVBatchBytes(ctx, ep); err2 != nil {
+			select {
+			case writerErr <- err2:
+			default:
 			}
 		}
 	}); err != nil {
@@ -1352,14 +1450,9 @@ func writeCSV(
 				continue
 			}
 			for _, bat := range sqlRet.Batches {
-				copied, _ := bat.Dup(ses.proc.Mp())
-				idx := ep.Index.Add(1)
-				workerWg.Add(1)
-				if submitErr := tblStuff.worker.Submit(func() {
-					defer workerWg.Done()
-					constructByte(ctx, ses, copied, idx, ep.ByteChan, ep)
-				}); submitErr != nil {
-					workerWg.Done()
+				if submitErr := submitCSVBatchForConversion(
+					ctx, ses, tblStuff, bat, ep, &workerWg,
+				); submitErr != nil {
 					err = errors.Join(err, submitErr)
 					stop = true
 					cancelCtx()
@@ -1371,11 +1464,15 @@ func writeCSV(
 	}
 
 	wg.Wait()
-	workerWg.Wait()
+	inputErr := waitForCSVConversionWorkers(inputCtx, &workerWg)
 	closeByte.Do(func() {
 		close(ep.ByteChan)
 	})
 	writerWg.Wait()
+	if inputErr == nil {
+		inputErr = inputCtx.Err()
+	}
+	err = joinCSVInputError(err, inputErr)
 
 	select {
 	case e := <-writerErr:
@@ -1606,13 +1703,11 @@ func prepareFSForDiffAsFile(
 		fullFilePath = path.Join(stmt.OutputOpt.DirPath, fileName)
 	}
 
-	sqlRetHint = fmt.Sprintf(
-		"DELETE FROM %s.%s, INSERT INTO %s.%s",
-		tblStuff.baseRel.GetTableDef(ctx).DbName,
-		tblStuff.baseRel.GetTableName(),
+	baseTableName := qualifiedTableName(
 		tblStuff.baseRel.GetTableDef(ctx).DbName,
 		tblStuff.baseRel.GetTableName(),
 	)
+	sqlRetHint = fmt.Sprintf("DELETE FROM %s, INSERT INTO %s", baseTableName, baseTableName)
 
 	var (
 		targetFS   fileservice.FileService

@@ -90,42 +90,15 @@ const (
 	// Active is the state of transaction creation, in this state, can execute the
 	// transaction Read/Write/Commit/Rollback.
 	TxnStatus_Active TxnStatus = 0
-	// Prepared for distributed transactions across TNs, a 2pc commit is performed,
-	// and the prepared status means that the transaction on a TN was executed
-	// successfully in the first phase.
-	//
-	// Note that this status needs to be saved to the LogService. Once the first
-	// phase of a transaction is successful, data cannot be lost.
+	// Deprecated: legacy persisted value. No live transaction enters this state.
 	TxnStatus_Prepared TxnStatus = 1
-	// Committing for distributed transactions across TNs, once all TNs have completed
-	// the first phase, the transaction enters the Committing state and initiates an
-	// asynchronous process to handle the commit of temporary data.
-	//
-	// Note that when all TNs involved are in the prepared state, the distributed
-	// transaction can be considered committed because all data has been written
-	// successfully. The subsequent Committing process just explicitly converts these
-	// writes into committed data.
-	//
-	// Note that the state exists only in memory and is not persisted to the LogService.
-	// It can be restored through the Prepared state, if all(TN).Status == Prepared.
+	// Deprecated: legacy persisted value. No live transaction enters this state.
 	TxnStatus_Committing TxnStatus = 2
-	// Committed after the Committing phase has transformed all TN data involved into
-	// committed data, the status of the distributed transaction is explicitly recorded
-	// as Committed.
-	//
-	// Note that this status needs to be saved to the LogService
+	// Committed is the successful terminal state.
 	TxnStatus_Committed TxnStatus = 3
-	// Aborting a client initiating a Rollback call or a distributed transaction that has
-	// any error in the first phase will enter the Aborting state. This state starts an
-	// asynchronous task to clean up the temporary data written by the transaction.
-	//
-	// Note that the state exists only in memory and is not persisted to the LogService.
-	// It can be restored through the Prepared state, if Any(TN).Status != Prepared.
+	// Aborting is retained for transaction state compatibility.
 	TxnStatus_Aborting TxnStatus = 4
-	// Aborted after the Aborting phase, all data involved in the TN is cleaned up and
-	// the transaction status is explicitly recorded as Aborted.
-	//
-	// Note that this status needs to be saved to the LogService
+	// Aborted is the rolled-back terminal state.
 	TxnStatus_Aborted TxnStatus = 5
 )
 
@@ -167,30 +140,15 @@ const (
 	TxnMethod_Commit TxnMethod = 2
 	// Rollback rollback transaction
 	TxnMethod_Rollback TxnMethod = 3
-	// Prepare when TN(Coordinator) receives a commit request from CN, it sends a prepare to
-	// each TN(TNShard)
+	// Deprecated: legacy 2PC wire value.
 	TxnMethod_Prepare TxnMethod = 4
-	// GetStatus query the status of a transaction on a TN. When a TN encounters a transaction
-	// in the Prepared state, it needs to go to the TN(Coordinator) to query the status of the
-	// current transaction. When a TN encounters a transaction in the Prepared state during the
-	// recover, it needs to query the status of the transaction on each TN(TNShard) to determine
-	// if the transaction is committed.
+	// Deprecated: legacy 2PC wire value.
 	TxnMethod_GetStatus TxnMethod = 5
-	// CommitTNShard after the 2pc transaction is committed, the temporary data on each TN needs
-	// to be explicitly converted to committed data.
+	// Deprecated: legacy 2PC wire value.
 	TxnMethod_CommitTNShard TxnMethod = 6
-	// RollbackTNShard after the 2pc transaction is aborted, the temporary data on each TN needs
-	// to cleanup.
+	// Deprecated: legacy 2PC wire value.
 	TxnMethod_RollbackTNShard TxnMethod = 7
-	// RemoveMedata Remove metadata for transactions on TNShard. For a 2pc distributed transaction,
-	// after all participating TNShards have Prepared successfully, the asynchronous commit process
-	// starts, sending CommitTNShard requests to all participating TNShards in parallel. After each
-	// TNShard has processed the CommitTNShard, the metadata of the transaction cannot be deleted
-	// immediately, otherwise when the transaction coordinator node is down and restarted, the commit
-	// status of the transaction cannot be determined in the recovery process, as it is possible that
-	// some participating TNShards cannot find the transaction information.
-	//
-	// TODO: needs to work with TAE's log compaction, not currently supported.
+	// Deprecated: unused legacy 2PC wire value. Never reuse this number.
 	TxnMethod_RemoveMedata TxnMethod = 8
 	// DEBUG used to send debug request from cn to tn, and received response from tn to cn
 	TxnMethod_DEBUG TxnMethod = 9
@@ -241,12 +199,12 @@ type TxnMeta struct {
 	// transaction creation. All data.TS < txn.SnapshotTS is visible for the current
 	// transaction.
 	SnapshotTS timestamp.Timestamp `protobuf:"bytes,3,opt,name=SnapshotTS,proto3" json:"SnapshotTS"`
-	// PreparedTS timestamp to complete the first phase of a 2pc commit transaction.
+	// PreparedTS is retained for wire and storage compatibility.
 	PreparedTS timestamp.Timestamp `protobuf:"bytes,4,opt,name=PreparedTS,proto3" json:"PreparedTS"`
-	// CommitTS transaction commit timestamp. For a 2pc transaction, commitTS = max(preparedTS).
+	// CommitTS transaction commit timestamp.
 	CommitTS timestamp.Timestamp `protobuf:"bytes,5,opt,name=CommitTS,proto3" json:"CommitTS"`
-	// TNShards all TNShards that have written data. The first TN is the coordinator of the
-	// transaction
+	// TNShards contains the TN shard that has written data. More than one
+	// entry is unsupported.
 	TNShards []metadata.TNShard `protobuf:"bytes,6,rep,name=TNShards,proto3" json:"TNShards"`
 	// LockTables For pessimistic transactions, LockTables record the bind metadata of the
 	// LockTable corresponding to the successful locking of the current transaction. This data
@@ -476,8 +434,8 @@ func (m *CNTxnSnapshot) GetFlag() uint32 {
 	return 0
 }
 
-// CNOpRequest cn read/write request, CN -> TN. If data is written to more than one TN (>1) in a
-// single transaction, then the transaction becomes a 2pc transaction.
+// CNOpRequest is a CN -> TN read/write request. A transaction targeting more
+// than one TN shard is unsupported.
 type CNOpRequest struct {
 	// OpCode request operation type
 	OpCode uint32 `protobuf:"varint,1,opt,name=OpCode,proto3" json:"OpCode,omitempty"`
@@ -598,10 +556,7 @@ func (m *CNOpResponse) GetPayload() []byte {
 // the codec and logical processing of the RPC can be unified. Specific requests are selected according
 // to TxnMethod.
 //
-// Request flow of TxnRequest as below:
-//  1. CN -> TN (TxnMethod.Read, TxnMethod.Write, TxnMethod.Commit, TxnMethod.Rollback)
-//  2. TN -> TN (TxnMethod.Prepare, TxnMethod.GetStatus, TxnMethod.CommitTNShard, TxnMethod.RollbackTNShard,
-//     TxnMethod.RemoveMetadata)
+// Legacy 2PC fields remain in this message so their field numbers are never reused.
 type TxnRequest struct {
 	// RequestID request id
 	RequestID uint64 `protobuf:"varint,1,opt,name=RequestID,proto3" json:"RequestID,omitempty"`
@@ -1183,9 +1138,7 @@ func (m *TxnRollbackResponse) XXX_DiscardUnknown() {
 
 var xxx_messageInfo_TxnRollbackResponse proto.InternalMessageInfo
 
-// TxnPrepareRequest when a TN(coordinator) receives a Commit request from a CN, if
-// more than one TN is involved, the 2PC commit process is enabled and the first phase
-// is to send prepare requests to all TNs.
+// TxnPrepareRequest is retained only for legacy wire compatibility.
 type TxnPrepareRequest struct {
 	// TNShard prepare TN
 	TNShard              metadata.TNShard `protobuf:"bytes,1,opt,name=TNShard,proto3" json:"TNShard"`

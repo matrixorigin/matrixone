@@ -31,6 +31,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const (
+	bruteForceConcurrentDataSize      = 10000
+	bruteForceConcurrentShortDataSize = 1000
+)
+
 func TestBruteForce(t *testing.T) {
 
 	m := mpool.MustNewZero()
@@ -89,12 +94,20 @@ func runBruteForceConcurrent(t *testing.T, is_usearch bool) {
 	limit := uint(3)
 	elemsz := uint(4) // float32
 
-	dsize := 10000
+	// The full-size case is a useful scale and performance smoke test, but its
+	// quadratic search cost is too high for the repository's -short -race PR
+	// test. Short mode keeps the same concurrent Top-K paths while reducing
+	// the number of pairwise distance calculations by 100x.
+	dsize := bruteForceConcurrentDataSize
+	if testing.Short() {
+		dsize = bruteForceConcurrentShortDataSize
+	}
+	r := rand.New(rand.NewPCG(1, 2))
 	dataset := make([][]float32, dsize)
 	for i := range dataset {
 		dataset[i] = make([]float32, dimension)
 		for j := range dataset[i] {
-			dataset[i][j] = rand.Float32()
+			dataset[i][j] = r.Float32()
 		}
 	}
 

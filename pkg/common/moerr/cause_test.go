@@ -98,6 +98,7 @@ var causeArray = []error{
 
 	CauseDoAllocate,
 	CauseDoUpdate,
+	CauseDoForceSetOffset,
 	CauseDestroyTables,
 	CauseAllocate,
 

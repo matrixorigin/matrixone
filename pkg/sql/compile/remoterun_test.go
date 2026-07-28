@@ -386,6 +386,7 @@ func TestExternalScanParquetRowGroupShardsRoundtrip(t *testing.T) {
 				FileSize:              []int64{8192},
 				FileOffsetTotal:       []*pipeline.FileOffset{{Offset: []int64{0, -1}}},
 				ParquetRowGroupShards: shards,
+				StrictSqlMode:         true,
 			},
 			ExParam: external.ExParam{
 				Fileparam: &external.ExFileparam{},
@@ -397,11 +398,13 @@ func TestExternalScanParquetRowGroupShardsRoundtrip(t *testing.T) {
 	_, pipeInstr, err := convertToPipelineInstruction(op, proc, ctx, 1)
 	require.NoError(t, err)
 	require.Equal(t, shards, pipeInstr.ExternalScan.ParquetRowGroupShards)
+	require.True(t, pipeInstr.ExternalScan.StrictSqlMode)
 
 	restored, err := convertToVmOperator(pipeInstr, ctx, nil)
 	require.NoError(t, err)
 	restoredExternal := restored.(*external.External)
 	require.Equal(t, shards, restoredExternal.Es.ParquetRowGroupShards)
+	require.True(t, restoredExternal.Es.StrictSqlMode)
 }
 
 func TestExternalScanIcebergRuntimeRoundtrip(t *testing.T) {
@@ -616,6 +619,38 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		require.True(t, restoredOp.RuntimeFilterSpecs[0].GetNotOnPk())
 	})
 
+	t.Run("TableFunction_Limit", func(t *testing.T) {
+		op := table_function.NewArgument()
+		op.FuncName = "ivf_search"
+		op.Limit = plan.MakePlan2Uint64ConstExprWithType(4)
+		op.RuntimeFilterSpecs = []*planpb.RuntimeFilterSpec{
+			{Tag: 9, UseMembershipFilter: true},
+		}
+		op.IndexReaderParam = &planpb.IndexReaderParam{
+			Limit:        plan.MakePlan2Uint64ConstExprWithType(4),
+			OrigFuncName: "l2_distance",
+		}
+
+		_, pipeInstr, err := convertToPipelineInstruction(op, proc, ctx, 1)
+		require.NoError(t, err)
+		require.Equal(t, uint64(4), pipeInstr.Limit.GetLit().GetU64Val())
+		require.Len(t, pipeInstr.TableFunction.RuntimeFilterProbeList, 1)
+		require.NotNil(t, pipeInstr.TableFunction.IndexReaderParam)
+
+		data, err := pipeInstr.Marshal()
+		require.NoError(t, err)
+		var decoded pipeline.Instruction
+		require.NoError(t, decoded.Unmarshal(data))
+
+		restored, err := convertToVmOperator(&decoded, ctx, nil)
+		require.NoError(t, err)
+		restoredOp := restored.(*table_function.TableFunction)
+		require.Equal(t, uint64(4), restoredOp.Limit.GetLit().GetU64Val())
+		require.Equal(t, op.RuntimeFilterSpecs, restoredOp.RuntimeFilterSpecs)
+		require.Equal(t, uint64(4), restoredOp.IndexReaderParam.GetLimit().GetLit().GetU64Val())
+		require.Equal(t, "l2_distance", restoredOp.IndexReaderParam.GetOrigFuncName())
+	})
+
 	t.Run("MultiUpdate_PartitionCols", func(t *testing.T) {
 		op := &multi_update.MultiUpdate{
 			MultiUpdateCtx: []*multi_update.MultiUpdateCtx{
@@ -667,6 +702,49 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		restoredOp := restored.(*multi_update.MultiUpdate)
 		require.True(t, restoredOp.CountDeleteAffectRows,
 			"CountDeleteAffectRows must survive the remote pipeline round-trip")
+	})
+
+	t.Run("MultiUpdate_RejectZeroTemporal", func(t *testing.T) {
+		op := &multi_update.MultiUpdate{
+			MultiUpdateCtx: []*multi_update.MultiUpdateCtx{
+				{
+					ObjRef:   &planpb.ObjectRef{ObjName: "t1"},
+					TableDef: &planpb.TableDef{Name: "t1"},
+				},
+			},
+			Action:             multi_update.UpdateWriteTable,
+			RejectZeroTemporal: true,
+		}
+		_, pipeInstr, err := convertToPipelineInstruction(op, proc, ctx, 1)
+		require.NoError(t, err)
+		require.True(t, pipeInstr.MultiUpdate.RejectZeroTemporal)
+
+		wireBytes, err := pipeInstr.Marshal()
+		require.NoError(t, err)
+		wireInstr := new(pipeline.Instruction)
+		require.NoError(t, wireInstr.Unmarshal(wireBytes))
+		require.True(t, wireInstr.MultiUpdate.RejectZeroTemporal)
+
+		restored, err := convertToVmOperator(wireInstr, ctx, nil)
+		require.NoError(t, err)
+		require.True(t, restored.(*multi_update.MultiUpdate).RejectZeroTemporal)
+	})
+
+	t.Run("PreInsert_RejectZeroTemporal", func(t *testing.T) {
+		op := &preinsert.PreInsert{RejectZeroTemporal: true}
+		_, pipeInstr, err := convertToPipelineInstruction(op, proc, ctx, 1)
+		require.NoError(t, err)
+		require.True(t, pipeInstr.PreInsert.RejectZeroTemporal)
+
+		wireBytes, err := pipeInstr.Marshal()
+		require.NoError(t, err)
+		wireInstr := new(pipeline.Instruction)
+		require.NoError(t, wireInstr.Unmarshal(wireBytes))
+		require.True(t, wireInstr.PreInsert.RejectZeroTemporal)
+
+		restored, err := convertToVmOperator(wireInstr, ctx, nil)
+		require.NoError(t, err)
+		require.True(t, restored.(*preinsert.PreInsert).RejectZeroTemporal)
 	})
 
 	t.Run("DedupJoin_DedupBuildKeepLast", func(t *testing.T) {
@@ -3273,4 +3351,25 @@ func TestGroupShuffleBucketsByCNIfNeeded_Gating(t *testing.T) {
 	// single CN -> returned unchanged even if a cross-CN dispatch is present.
 	c.cnList = engine.Nodes{engine.Node{Addr: "cn1:6001", Mcpu: 2}}
 	require.Equal(t, 4, len(c.groupShuffleBucketsByCNIfNeeded(ss)))
+}
+
+func TestCoordinatorLocalShuffleAttachesRemoteDispatchSource(t *testing.T) {
+	c := NewMockCompile(t)
+	proc := c.proc
+	receivers := make([]*Scope, 2)
+	for i := range receivers {
+		receivers[i] = &Scope{
+			Magic:    Remote,
+			NodeInfo: engine.Node{Addr: "cn-local:6001", Mcpu: 1},
+			Proc:     proc.NewContextChildProc(1),
+		}
+		receivers[i].setRootOperator(merge.NewArgument())
+	}
+
+	remoteSource := newDispatchSrcScopeForTest(proc, "cn-remote:6001", nil, receivers)
+	attachShuffleDispatchSource(receivers, remoteSource, true)
+
+	require.Contains(t, receivers[0].PreScopes, remoteSource)
+	require.True(t, checkPipelineStandaloneExecutableAtRemote(remoteSource),
+		"remote source only has remote receiver routes and must remain remotely executable")
 }

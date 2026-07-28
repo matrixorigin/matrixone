@@ -94,6 +94,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/stage"
 	"github.com/matrixorigin/matrixone/pkg/stage/stageutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -103,11 +104,23 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+const loadMergeReceiverChannelBufferSize = 1
+
 var constBat *batch.Batch
 
 func init() {
 	constBat = batch.NewWithSize(0)
 	constBat.SetRowCount(1)
+}
+
+func mergeReceiverChannelBufferSize(s *Scope) int {
+	if s != nil && s.Proc != nil && s.Proc.Base.LoadTag {
+		return loadMergeReceiverChannelBufferSize
+	}
+	if s == nil || s.NodeInfo.Mcpu < 1 {
+		return 1
+	}
+	return s.NodeInfo.Mcpu
 }
 
 type operatorDupContext struct {
@@ -354,6 +367,9 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.Attrs = t.Attrs
 		op.Params = t.Params
 		op.IsSingle = t.IsSingle
+		op.Limit = t.Limit
+		op.RuntimeFilterSpecs = t.RuntimeFilterSpecs
+		op.IndexReaderParam = t.IndexReaderParam
 		op.SetInfo(&info)
 		if op.FuncName == "generate_series" {
 			op.GenerateSeriesCtrNumState(t.OffsetTotal[index][0], t.OffsetTotal[index][1], t.GetGenerateSeriesCtrNumStateStep(), t.OffsetTotal[index][0])
@@ -501,6 +517,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.CompPkeyExpr = t.CompPkeyExpr
 		op.ClusterByExpr = t.ClusterByExpr
 		op.ColOffset = t.ColOffset
+		op.RejectZeroTemporal = t.RejectZeroTemporal
 		op.SetInfo(&info)
 		return op
 	case vm.Deletion:
@@ -556,6 +573,9 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.TableFunction.Attrs = t.TableFunction.Attrs
 		op.TableFunction.Params = t.TableFunction.Params
 		op.TableFunction.IsSingle = t.TableFunction.IsSingle
+		op.TableFunction.Limit = t.TableFunction.Limit
+		op.TableFunction.RuntimeFilterSpecs = t.TableFunction.RuntimeFilterSpecs
+		op.TableFunction.IndexReaderParam = t.TableFunction.IndexReaderParam
 		op.TableFunction.SetInfo(&info)
 		op.SetInfo(&info)
 		return op
@@ -567,6 +587,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.IsRemote = t.IsRemote
 		op.IsOnduplicateKeyUpdate = t.IsOnduplicateKeyUpdate
 		op.CountDeleteAffectRows = t.CountDeleteAffectRows
+		op.RejectZeroTemporal = t.RejectZeroTemporal
 		op.Engine = t.Engine
 		op.SetInfo(&info)
 		return op
@@ -720,6 +741,7 @@ func constructFuzzyFilter(node, tableScan, sinkScan *plan.Node) *fuzzyfilter.Fuz
 func constructPreInsert(nodes []*plan.Node, node *plan.Node, eng engine.Engine, proc *process.Process) (*preinsert.PreInsert, error) {
 	preCtx := node.PreInsertCtx
 	schemaName := preCtx.Ref.SchemaName
+	var err error
 
 	//var attrs []string
 	attrs := make([]string, 0)
@@ -767,6 +789,10 @@ func constructPreInsert(nodes []*plan.Node, node *plan.Node, eng engine.Engine, 
 	op.CompPkeyExpr = preCtx.CompPkeyExpr
 	op.ClusterByExpr = preCtx.ClusterByExpr
 	op.ColOffset = preCtx.ColOffset
+	op.RejectZeroTemporal, err = util.RejectZeroTemporalWritePolicy(proc)
+	if err != nil {
+		return nil, err
+	}
 
 	return op, nil
 }
@@ -816,9 +842,14 @@ func constructMultiUpdate(
 	action multi_update.UpdateAction,
 	isRemote bool,
 ) (vm.Operator, error) {
+	var err error
 	arg := multi_update.NewArgument()
 	arg.Engine = eng
 	arg.IsRemote = isRemote
+	arg.RejectZeroTemporal, err = util.RejectZeroTemporalWritePolicy(proc)
+	if err != nil {
+		return nil, err
+	}
 
 	for _, updateCtx := range node.UpdateCtxList {
 		if updateCtx.CountDeleteAffectRows {
@@ -1557,25 +1588,7 @@ func constructWindow(_ context.Context, node *plan.Node, proc *process.Process) 
 		isDistinct := (uint64(f.F.Func.Obj) & function.Distinct) != 0
 		functionID := int64(uint64(f.F.Func.Obj) & function.DistinctMask)
 
-		var cfg []byte = nil
-		var args = f.F.Args
-		if len(f.F.Args) > 0 {
-
-			//for group_concat, the last arg is separator string
-			//for cluster_centers, the last arg is kmeans_args string
-			if (f.F.Func.ObjName == plan2.NameGroupConcat ||
-				f.F.Func.ObjName == plan2.NameClusterCenters) && len(f.F.Args) > 1 {
-				argExpr := f.F.Args[len(f.F.Args)-1]
-				vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(proc, argExpr)
-				if err != nil {
-					panic(err)
-				}
-				cfg = []byte(vec.GetStringAt(0))
-				free()
-
-				args = f.F.Args[:len(f.F.Args)-1]
-			}
-		}
+		args, cfg := constructAggregateConfig(f.F, proc)
 		aggregationExpressions[i] = aggexec.MakeAggFunctionExpression(
 			functionID, isDistinct, args, cfg)
 	}
@@ -1612,24 +1625,7 @@ func constructGroup(_ context.Context, node, childNode *plan.Node, needEval bool
 			isDistinct := (uint64(f.F.Func.Obj) & function.Distinct) != 0
 			functionID := int64(uint64(f.F.Func.Obj) & function.DistinctMask)
 
-			var cfg []byte = nil
-			var args = f.F.Args
-			if len(f.F.Args) > 0 {
-				//for group_concat, the last arg is separator string
-				//for cluster_centers, the last arg is kmeans_args string
-				if (f.F.Func.ObjName == plan2.NameGroupConcat ||
-					f.F.Func.ObjName == plan2.NameClusterCenters) && len(f.F.Args) > 1 {
-					argExpr := f.F.Args[len(f.F.Args)-1]
-					vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(proc, argExpr)
-					if err != nil {
-						panic(err)
-					}
-					cfg = []byte(vec.GetStringAt(0))
-					free()
-
-					args = f.F.Args[:len(f.F.Args)-1]
-				}
-			}
+			args, cfg := constructAggregateConfig(f.F, proc)
 
 			aggregationExpressions[i] = aggexec.MakeAggFunctionExpression(
 				functionID, isDistinct, args, cfg)
@@ -1648,6 +1644,44 @@ func constructGroup(_ context.Context, node, childNode *plan.Node, needEval bool
 	arg.GroupingFlag = node.GroupingFlag
 	arg.GroupBy = node.GroupBy
 	return arg
+}
+
+func constructAggregateConfig(f *plan.Function, proc *process.Process) ([]*plan.Expr, []byte) {
+	args := f.Args
+	switch f.Func.ObjName {
+	case plan2.NameGroupConcat:
+		separator := ","
+		if len(args) > 1 {
+			separator = evaluateAggregateConfigString(proc, args[len(args)-1])
+			args = args[:len(args)-1]
+		}
+		value, err := resolveVariableOrDefault(proc, "group_concat_max_len", true, false)
+		if err != nil {
+			panic(err)
+		}
+		maxLen, ok := value.(int64)
+		if !ok || maxLen < 0 {
+			panic(moerr.NewInternalErrorNoCtxf(
+				"group_concat_max_len has invalid value %v", value))
+		}
+		return args, aggexec.EncodeGroupConcatConfig(separator, uint64(maxLen))
+
+	case plan2.NameClusterCenters:
+		if len(args) > 1 {
+			config := evaluateAggregateConfigString(proc, args[len(args)-1])
+			return args[:len(args)-1], []byte(config)
+		}
+	}
+	return args, nil
+}
+
+func evaluateAggregateConfigString(proc *process.Process, expr *plan.Expr) string {
+	vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(proc, expr)
+	if err != nil {
+		panic(err)
+	}
+	defer free()
+	return vec.GetStringAt(0)
 }
 
 func constructDispatchLocal(all bool, isSink, rec bool, recCTE bool, regs []*process.WaitRegister) *dispatch.Dispatch {

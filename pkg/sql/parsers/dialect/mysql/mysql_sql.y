@@ -690,7 +690,7 @@ func sqlTaskInt64(v any) int64 {
 %type <identifierList> column_list column_list_opt partition_clause_opt partition_id_list insert_column_list accounts_list restore_db_scope restore_table_scope diff_columns_opt
 %type <insertPartition> insert_partition_clause_opt
 %type <partitionValues> insert_partition_value_list
-%type <joinCond> join_condition join_condition_opt on_expression_opt
+%type <joinCond> join_condition join_condition_opt
 %type <selectLockInfo> select_lock_opt
 %type <upgrade_target> target
 %type <analyzeTableEntries> analyze_table_list
@@ -6944,6 +6944,14 @@ table_references:
 
 escaped_table_reference:
     table_reference %prec LOWER_THAN_SET
+|   '{' ID table_reference '}'
+    {
+        if !strings.EqualFold($2, "OJ") {
+            yylex.Error("expected OJ in table reference escape")
+            goto ret1
+        }
+        $$ = $3
+    }
 
 table_reference:
     table_factor
@@ -6977,7 +6985,7 @@ join_table:
         	}
 	}
     }
-|   table_reference straight_join table_factor on_expression_opt
+|   table_reference straight_join table_factor join_condition_opt
     {
         $$ = &tree.JoinTableExpr{
             Left: $1,
@@ -7110,16 +7118,6 @@ row_constructor:
     ROW '(' data_values ')'
     {
         $$ = $3
-    }
-
-on_expression_opt:
-    %prec JOIN
-    {
-        $$ = nil
-    }
-|   ON expression
-    {
-        $$ = &tree.OnJoinCond{Expr: $2}
     }
 
 optype:
@@ -12169,6 +12167,10 @@ frame_bound:
     {
         $$ = &tree.FrameBound{Type: tree.Following, Expr: $1}
     }
+|   VALUE_ARG FOLLOWING
+    {
+        $$ = &tree.FrameBound{Type: tree.Following, Expr: tree.NewParamExpr(yylex.(*Lexer).GetParamIndex())}
+    }
 |	interval_expr FOLLOWING
 	{
 		$$ = &tree.FrameBound{Type: tree.Following, Expr: $1}
@@ -12186,6 +12188,10 @@ frame_bound_start:
 |   num_literal PRECEDING
     {
         $$ = &tree.FrameBound{Type: tree.Preceding, Expr: $1}
+    }
+|   VALUE_ARG PRECEDING
+    {
+        $$ = &tree.FrameBound{Type: tree.Preceding, Expr: tree.NewParamExpr(yylex.(*Lexer).GetParamIndex())}
     }
 |	interval_expr PRECEDING
 	{

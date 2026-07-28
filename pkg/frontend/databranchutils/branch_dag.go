@@ -89,23 +89,43 @@ func NewDAG(rows []DataBranchMetadata) *DataBranchDAG {
 	return dag
 }
 
-// calculateDepth computes the depth of a given dagNode.
-// It uses memoization (by checking if `dagNode.Depth != -1`) to avoid re-computation.
+// calculateDepth computes node depth iteratively. If the parent walk reaches a
+// cycle, every node in that cycle is detached and treated as a root. The
+// remaining acyclic prefix can then retain its parent relations and receive a
+// bounded depth.
 func (d *DataBranchDAG) calculateDepth(node *dagNode) int {
-	// If depth is already calculated, return it immediately.
 	if node.Depth != -1 {
 		return node.Depth
 	}
 
-	// If a node has no parent, it's a root node, so its depth is 0.
-	if node.Parent == nil {
-		node.Depth = 0
-		return 0
+	path := make([]*dagNode, 0, 8)
+	pathIndex := make(map[*dagNode]int)
+	current := node
+	baseDepth := -1
+	for current != nil {
+		if current.Depth != -1 {
+			baseDepth = current.Depth
+			break
+		}
+		if cycleStart, ok := pathIndex[current]; ok {
+			for _, cycleNode := range path[cycleStart:] {
+				cycleNode.Parent = nil
+				cycleNode.ParentID = 0
+				cycleNode.Depth = 0
+			}
+			path = path[:cycleStart]
+			baseDepth = 0
+			break
+		}
+		pathIndex[current] = len(path)
+		path = append(path, current)
+		current = current.Parent
 	}
 
-	// Otherwise, the depth is the parent's depth + 1.
-	// This recursive call will eventually reach a root or a pre-calculated node.
-	node.Depth = d.calculateDepth(node.Parent) + 1
+	for i := len(path) - 1; i >= 0; i-- {
+		baseDepth++
+		path[i].Depth = baseDepth
+	}
 	return node.Depth
 }
 
