@@ -33,6 +33,7 @@ import (
 // because later executions of the same prepared handle still need it.
 func TestIssue25986BinaryExecuteReplanErrorKeepsPreparedAST(t *testing.T) {
 	embed.RunBaseClusterTests(
+		t,
 		func(c embed.Cluster) {
 			ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
 			defer cancel()
