@@ -378,7 +378,7 @@ func (s *Scope) SetOperatorInfoRecursively(cb func() int32) {
 //	2. send notify message to remote node for its data producer.
 //	3. run itself.
 //	4. listen to all running pipelines, once any error occurs, stop the NormalMergeRun asap.
-func (s *Scope) MergeRun(c *Compile) error {
+func (s *Scope) MergeRun(c *Compile) (err error) {
 	if s.ScopeAnalyzer == nil {
 		s.ScopeAnalyzer = NewScopeAnalyzer()
 	}
@@ -446,24 +446,18 @@ func (s *Scope) MergeRun(c *Compile) error {
 	defer func() {
 		// should wait all the notify-message-routine and preScopes done.
 		wg.Wait()
-
-		// not necessary, but we still clean the preScope error channel here.
-		for len(preScopeResultReceiveChan) > 0 {
-			<-preScopeResultReceiveChan
-		}
-
-		// clean the notifyMessageResultReceiveChan to make sure all the rpc-sender can be closed.
-		for len(notifyMessageResultReceiveChan) > 0 {
-			result := <-notifyMessageResultReceiveChan
-			result.clean(s.Proc)
-		}
+		err = collectMergeRunResults(
+			s.Proc,
+			err,
+			preScopeResultReceiveChan,
+			notifyMessageResultReceiveChan)
 	}()
 
 	preScopeCount := len(s.PreScopes)
 	remoteScopeCount := len(s.RemoteReceivRegInfos)
 	//after parallelRun, prescope count may change. we need to save this before parallelRun
 
-	err := s.ParallelRun(c)
+	err = s.ParallelRun(c)
 	if err != nil {
 		return s.cancelMergeSiblingsOnError(err)
 	}
@@ -498,6 +492,27 @@ func (s *Scope) MergeRun(c *Compile) error {
 			return nil
 		}
 	}
+}
+
+// collectMergeRunResults consumes results left behind after MergeRun returns
+// early. A terminal-signal delivery fallback from the merge pipeline is
+// secondary when a producer or remote notifier reports the execution error
+// that caused cleanup to race a full pipeline channel.
+func collectMergeRunResults(
+	proc *process.Process,
+	current error,
+	preScopeResults <-chan error,
+	notifyResults <-chan notifyMessageResult,
+) error {
+	for len(preScopeResults) > 0 {
+		current = preferPrimaryScopeError(current, <-preScopeResults)
+	}
+	for len(notifyResults) > 0 {
+		result := <-notifyResults
+		current = preferPrimaryScopeError(current, result.err)
+		result.clean(proc)
+	}
+	return current
 }
 
 // cancelMergeSiblingsOnError breaks the wait-for cycle between a failed

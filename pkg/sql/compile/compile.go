@@ -466,7 +466,8 @@ func (c *Compile) isRetryErr(err error) bool {
 }
 
 // preferPrimaryScopeError keeps cleanup fallout from masking the execution
-// error that caused another scope to stop consuming its pipeline input.
+// error that caused another scope to stop consuming its pipeline input. It is
+// used at both the top-level scope fan-out and nested MergeRun fan-in.
 func preferPrimaryScopeError(current, candidate error) error {
 	if current == nil {
 		return candidate

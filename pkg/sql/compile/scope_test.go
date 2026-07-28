@@ -2237,6 +2237,62 @@ func TestMergeRunReturnsWhenRemotePreScopeAddressIsMalformed(t *testing.T) {
 	}
 }
 
+func TestCollectMergeRunResultsPrefersProducerError(t *testing.T) {
+	cleanupErr := process.ErrPipelineEndSignalDeliveryFailed
+	producerErr := moerr.NewDuplicateEntryNoCtx("1000000", "")
+	notifyErr := moerr.NewInternalErrorNoCtx("remote producer failed")
+
+	tests := []struct {
+		name     string
+		current  error
+		preScope []error
+		notify   []error
+		want     error
+	}{
+		{
+			name:     "producer error replaces cleanup fallback",
+			current:  cleanupErr,
+			preScope: []error{context.Canceled, producerErr},
+			want:     producerErr,
+		},
+		{
+			name:    "remote notifier error replaces cleanup fallback",
+			current: cleanupErr,
+			notify:  []error{notifyErr},
+			want:    notifyErr,
+		},
+		{
+			name:     "cleanup fallback does not replace producer error",
+			current:  producerErr,
+			preScope: []error{cleanupErr},
+			want:     producerErr,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			preScopeResults := make(chan error, len(tt.preScope))
+			for _, err := range tt.preScope {
+				preScopeResults <- err
+			}
+			notifyResults := make(chan notifyMessageResult, len(tt.notify))
+			for _, err := range tt.notify {
+				notifyResults <- notifyMessageResult{err: err}
+			}
+
+			got := collectMergeRunResults(
+				testutil.NewProcess(t),
+				tt.current,
+				preScopeResults,
+				notifyResults)
+
+			require.Same(t, tt.want, got)
+			require.Empty(t, preScopeResults)
+			require.Empty(t, notifyResults)
+		})
+	}
+}
+
 func TestScopeGetRelDataError(t *testing.T) {
 	// Create a new scope
 	s := newScope(Normal)
