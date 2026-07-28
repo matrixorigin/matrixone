@@ -21,7 +21,12 @@ import (
 )
 
 func quoteSQLString(value string) string {
-	return "'" + strings.ReplaceAll(value, "'", "''") + "'"
+	// BackgroundExec parses these generated statements with backslash escapes
+	// enabled. Escape backslashes before quote doubling so a user-controlled
+	// backslash cannot consume either quote and terminate the SQL literal.
+	value = strings.ReplaceAll(value, `\`, `\\`)
+	value = strings.ReplaceAll(value, "'", "''")
+	return "'" + value + "'"
 }
 
 func nullOrSQLString(value string) string {

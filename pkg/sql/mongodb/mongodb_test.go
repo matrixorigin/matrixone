@@ -29,11 +29,38 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 )
+
+func TestQuoteSQLStringRoundTrip(t *testing.T) {
+	for _, value := range []string{
+		"plain",
+		`path\segment`,
+		`trailing\`,
+		"single'quote",
+		`raw\'); select 1; -- `,
+		`backslash\nsequence`,
+	} {
+		t.Run(value, func(t *testing.T) {
+			stmt, err := mysql.ParseOne(t.Context(), "select "+quoteSQLString(value), 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			selectStmt, ok := stmt.(*tree.Select)
+			require.True(t, ok)
+			clause, ok := selectStmt.Select.(*tree.SelectClause)
+			require.True(t, ok)
+			require.Len(t, clause.Exprs, 1)
+			literal, ok := clause.Exprs[0].Expr.(*tree.NumVal)
+			require.True(t, ok)
+			require.Equal(t, value, literal.String())
+		})
+	}
+}
 
 func TestCreateSQLEnvelopeRoundTripAndRejectsParallelMVP(t *testing.T) {
 	ctx := context.Background()
