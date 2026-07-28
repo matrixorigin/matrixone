@@ -19,11 +19,12 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
+	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 )
 
 func TestIcebergOrphanCleanupTenantUpgradeEntries(t *testing.T) {
-	if len(tenantUpgEntries) != 4 {
-		t.Fatalf("expected 4 Iceberg tenant upgrades, got %d", len(tenantUpgEntries))
+	if len(tenantUpgEntries) != 5 {
+		t.Fatalf("expected 5 tenant upgrades, got %d", len(tenantUpgEntries))
 	}
 	allocator := tenantUpgEntries[0]
 	if allocator.UpgType != versions.MODIFY_COLUMN || allocator.TableName != "mo_iceberg_catalogs" {
@@ -38,7 +39,7 @@ func TestIcebergOrphanCleanupTenantUpgradeEntries(t *testing.T) {
 	if strings.Contains(allocatorSQL, "drop primary key") {
 		t.Fatalf("catalog allocator upgrade should preserve the account-scoped primary key: %s", allocator.UpgSql)
 	}
-	for _, entry := range tenantUpgEntries[1:] {
+	for _, entry := range tenantUpgEntries[1:4] {
 		if entry.UpgType != versions.ADD_COLUMN {
 			t.Fatalf("%s should be ADD_COLUMN", entry.TableName)
 		}
@@ -51,6 +52,19 @@ func TestIcebergOrphanCleanupTenantUpgradeEntries(t *testing.T) {
 		if strings.Contains(lower, "drop ") {
 			t.Fatalf("orphan cleanup upgrade SQL must not drop objects: %s", entry.UpgSql)
 		}
+	}
+}
+
+func TestInformationSchemaTablesTenantUpgradeEntry(t *testing.T) {
+	entry := tenantUpgEntries[4]
+	if entry.Schema != sysview.InformationDBConst || entry.TableName != "TABLES" || entry.UpgType != versions.MODIFY_VIEW {
+		t.Fatalf("unexpected information_schema.TABLES upgrade: %+v", entry)
+	}
+	if entry.UpgSql != sysview.InformationSchemaTablesDDL || !strings.Contains(entry.UpgSql, "\\\\_\\\\_mo\\\\_tmp\\\\_%") {
+		t.Fatalf("TABLES upgrade does not filter temporary objects: %s", entry.UpgSql)
+	}
+	if !strings.Contains(strings.ToLower(entry.PreSql), "drop view if exists information_schema.tables") {
+		t.Fatalf("TABLES upgrade is missing its drop-view precondition: %s", entry.PreSql)
 	}
 }
 

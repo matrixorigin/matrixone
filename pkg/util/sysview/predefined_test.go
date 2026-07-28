@@ -19,7 +19,14 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+
+	"github.com/matrixorigin/matrixone/pkg/defines"
 )
+
+func TestInformationSchemaTablesDDL_HidesTemporaryTables(t *testing.T) {
+	assert.Contains(t, InformationSchemaTablesDDL, "tbl.relname not like '\\\\_\\\\_mo\\\\_tmp\\\\_%' escape '\\\\'")
+	assert.Equal(t, "'\\\\_\\\\_mo\\\\_tmp\\\\_%'", quoteSQLLikePrefixPattern(defines.TempTableNamePrefix))
+}
 
 func TestInformationSchemaStatisticsDDL_ContainsIdxAlgo(t *testing.T) {
 	assert.True(t, strings.Contains(InformationSchemaStatisticsDDL, "`idx`.`algo` AS `INDEX_TYPE`"))

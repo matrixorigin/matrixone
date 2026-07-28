@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	icebergsql "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 )
 
 var tenantUpgEntries = []versions.UpgradeEntry{
@@ -28,6 +29,24 @@ var tenantUpgEntries = []versions.UpgradeEntry{
 	addOrphanFileColumn("namespace", "varchar(2048) not null default ''", "catalog_id"),
 	addOrphanFileColumn("table_name", "varchar(1024) not null default ''", "namespace"),
 	addOrphanFileColumn("file_path", "varchar(4096) not null default ''", "table_location_hash"),
+	upgradeInformationSchemaTables(),
+}
+
+func upgradeInformationSchemaTables() versions.UpgradeEntry {
+	return versions.UpgradeEntry{
+		Schema:    sysview.InformationDBConst,
+		TableName: "TABLES",
+		UpgType:   versions.MODIFY_VIEW,
+		UpgSql:    sysview.InformationSchemaTablesDDL,
+		CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+			exists, viewDef, err := versions.CheckViewDefinition(txn, accountId, sysview.InformationDBConst, "TABLES")
+			if err != nil {
+				return false, err
+			}
+			return exists && viewDef == sysview.InformationSchemaTablesDDL, nil
+		},
+		PreSql: fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;", sysview.InformationDBConst, "TABLES"),
+	}
 }
 
 func upgradeIcebergCatalogIDAllocator() versions.UpgradeEntry {

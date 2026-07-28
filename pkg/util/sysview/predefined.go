@@ -16,9 +16,21 @@ package sysview
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 )
+
+func quoteSQLLikePrefixPattern(literalPrefix string) string {
+	replacer := strings.NewReplacer(
+		`\`, `\\`,
+		`%`, `\%`,
+		`_`, `\_`,
+	)
+	pattern := replacer.Replace(literalPrefix) + "%"
+	return "'" + strings.ReplaceAll(pattern, `\`, `\\`) + "'"
+}
 
 // `mysql` database system tables
 // They are all Tenant level system tables
@@ -305,8 +317,8 @@ var (
 		"if(relkind = 'v', NULL, if(partitioned = 0, '', cast('partitioned' as varchar(256)))) AS CREATE_OPTIONS,"+
 		"cast(rel_comment as text) AS TABLE_COMMENT "+
 		"FROM mo_catalog.mo_tables tbl "+
-		"WHERE tbl.account_id = current_account_id() and tbl.relname not like '%s' and tbl.relname != '%s' and tbl.relkind != '%s'",
-		catalog.IndexTableNamePrefix+"%", catalog.MO_ACCOUNT_LOCK, catalog.SystemPartitionRel)
+		"WHERE tbl.account_id = current_account_id() and tbl.relname not like '%s' and tbl.relname not like %s escape '\\\\' and tbl.relname != '%s' and tbl.relkind != '%s'",
+		catalog.IndexTableNamePrefix+"%", quoteSQLLikePrefixPattern(defines.TempTableNamePrefix), catalog.MO_ACCOUNT_LOCK, catalog.SystemPartitionRel)
 
 	InformationSchemaPartitionsDDL = "CREATE VIEW information_schema.`PARTITIONS` AS " +
 		"SELECT " +

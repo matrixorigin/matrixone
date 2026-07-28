@@ -281,12 +281,24 @@ temp_show  ¦  CREATE TEMPORARY TABLE `temp_show` (
 )
 drop table temp_show;
 create table permanent_table (id int);
-create temporary table temp_invisible (id int);
+create temporary table temp_invisible (
+id int,
+key idx_id (id)
+);
 show tables;  -- 应该只显示 permanent_table
 ➤ Tables_in_temp_db[12,-1,0]  𝄀
 permanent_table
+create table xxmo_tmp_visible (id int);
+select table_name, table_type
+from information_schema.tables
+where table_schema = database()
+order by table_name;
+➤ table_name[12,-1,0]  ¦  table_type[12,-1,0]  𝄀
+permanent_table  ¦  BASE TABLE  𝄀
+xxmo_tmp_visible  ¦  BASE TABLE
 drop table temp_invisible;
 drop table permanent_table;
+drop table xxmo_tmp_visible;
 create table prepared_shadow (id int primary key, value varchar(20));
 insert into prepared_shadow values (1, 'permanent');
 prepare prepared_shadow_stmt from

@@ -355,12 +355,22 @@ drop table temp_show;
 -- 测试用例 9.2: show tables 不显示临时表
 -- 预期结果: show tables结果中不包含临时表
 create table permanent_table (id int);
-create temporary table temp_invisible (id int);
+create temporary table temp_invisible (
+    id int,
+    key idx_id (id)
+);
 
 show tables;  -- 应该只显示 permanent_table
+-- 表名匹配未转义的 LIKE '__mo_tmp_%'，但它不是临时表，必须在 information_schema.tables 中可见
+create table xxmo_tmp_visible (id int);
+select table_name, table_type
+from information_schema.tables
+where table_schema = database()
+order by table_name;
 
 drop table temp_invisible;
 drop table permanent_table;
+drop table xxmo_tmp_visible;
 
 -- ============================================================================
 -- 测试分类 10: 预处理语句重新解析同名临时表
