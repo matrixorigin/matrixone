@@ -166,26 +166,49 @@ func comparisonPlanLiteral(column *plan.MongoColumnMapping, expr *plan.Expr, op 
 
 func temporalLiteralUnixMicroseconds(expr *plan.Expr) (int64, bool) {
 	literal := expr.GetLit()
-	value, ok := literal.GetValue().(*plan.Literal_I64Val)
-	if literal == nil || literal.Isnull || !ok {
+	if literal != nil && !literal.Isnull {
+		if value, ok := literal.GetValue().(*plan.Literal_I64Val); ok {
+			switch types.T(expr.Typ.Id) {
+			case types.T_datetime:
+				datetime := types.Datetime(value.I64Val)
+				if datetime == types.ZeroDatetime {
+					return 0, false
+				}
+				return datetime.ConvertToGoTime(time.UTC).UnixMicro(), true
+			case types.T_timestamp:
+				timestamp := types.Timestamp(value.I64Val)
+				if timestamp == types.ZeroTimestamp {
+					return 0, false
+				}
+				return timestamp.ToDatetime(time.UTC).ConvertToGoTime(time.UTC).UnixMicro(), true
+			}
+		}
+	}
+
+	// SQL datetime string literals are bound as CAST(varchar AS datetime), not
+	// as an encoded I64 literal. DATETIME has no session-time-zone conversion,
+	// so it is safe to fold this narrow shape while planning a BSON DateTime
+	// candidate. TIMESTAMP casts remain residual-only because their meaning
+	// depends on the session time zone, which this driver-neutral bridge does
+	// not receive.
+	fn := expr.GetF()
+	if types.T(expr.Typ.Id) != types.T_datetime || fn == nil || fn.Func == nil ||
+		!strings.EqualFold(fn.Func.ObjName, "cast") || len(fn.Args) == 0 {
 		return 0, false
 	}
-	switch types.T(expr.Typ.Id) {
-	case types.T_datetime:
-		datetime := types.Datetime(value.I64Val)
-		if datetime == types.ZeroDatetime {
-			return 0, false
-		}
-		return datetime.ConvertToGoTime(time.UTC).UnixMicro(), true
-	case types.T_timestamp:
-		timestamp := types.Timestamp(value.I64Val)
-		if timestamp == types.ZeroTimestamp {
-			return 0, false
-		}
-		return timestamp.ToDatetime(time.UTC).ConvertToGoTime(time.UTC).UnixMicro(), true
-	default:
+	source := fn.Args[0].GetLit()
+	if source == nil || source.Isnull {
 		return 0, false
 	}
+	text, ok := source.GetValue().(*plan.Literal_Sval)
+	if !ok {
+		return 0, false
+	}
+	datetime, err := types.ParseDatetime(text.Sval, expr.Typ.Scale)
+	if err != nil || datetime == types.ZeroDatetime {
+		return 0, false
+	}
+	return datetime.ConvertToGoTime(time.UTC).UnixMicro(), true
 }
 
 func temporalCandidateMilliseconds(microseconds int64, op PredicateOp) (int64, bool) {

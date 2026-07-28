@@ -53,29 +53,33 @@ func TestRemapAggToTimeWindowResultAggUsesRegularSumForPartialSums(t *testing.T)
 }
 
 func TestRemapAggToTimeWindowResultAggUsesRegularSumForCountCache(t *testing.T) {
-	countFn, err := function.GetFunctionByName(context.Background(), "count", []types.Type{types.T_int64.ToType()})
-	require.NoError(t, err)
+	for _, name := range []string{"count", "starcount"} {
+		t.Run(name, func(t *testing.T) {
+			countFn, err := function.GetFunctionByName(context.Background(), name, []types.Type{types.T_int64.ToType()})
+			require.NoError(t, err)
 
-	expr := &plan.Expr{
-		Typ: plan.Type{Id: int32(types.T_int64), Width: 64},
-		Expr: &plan.Expr_F{
-			F: &plan.Function{
-				Func: &plan.ObjectRef{
-					Obj:     countFn.GetEncodedOverloadID(),
-					ObjName: "count",
+			expr := &plan.Expr{
+				Typ: plan.Type{Id: int32(types.T_int64), Width: 64},
+				Expr: &plan.Expr_F{
+					F: &plan.Function{
+						Func: &plan.ObjectRef{
+							Obj:     countFn.GetEncodedOverloadID(),
+							ObjName: name,
+						},
+						Args: []*plan.Expr{{
+							Typ: plan.Type{Id: int32(types.T_int64), Width: 64},
+						}},
+					},
 				},
-				Args: []*plan.Expr{{
-					Typ: plan.Type{Id: int32(types.T_int64), Width: 64},
-				}},
-			},
-		},
-	}
+			}
 
-	got, err := (&HavingBinder{baseBinder: baseBinder{sysCtx: context.Background()}}).remapAggToTimeWindowResultAgg(expr)
-	require.NoError(t, err)
-	require.Equal(t, "sum", got.Expr.(*plan.Expr_F).F.Func.ObjName)
-	require.Equal(t, int32(types.T_decimal128), got.Typ.Id)
-	require.Equal(t, int32(0), got.Typ.Scale)
+			got, err := (&HavingBinder{baseBinder: baseBinder{sysCtx: context.Background()}}).remapAggToTimeWindowResultAgg(expr)
+			require.NoError(t, err)
+			require.Equal(t, "sum", got.Expr.(*plan.Expr_F).F.Func.ObjName)
+			require.Equal(t, int32(types.T_decimal128), got.Typ.Id)
+			require.Equal(t, int32(0), got.Typ.Scale)
+		})
+	}
 }
 
 func TestRemapMaxByToTimeWindowIdentity(t *testing.T) {

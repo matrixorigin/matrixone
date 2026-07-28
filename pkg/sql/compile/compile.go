@@ -2073,7 +2073,7 @@ func (c *Compile) hydrateMongoScan(node *plan.Node) error {
 			parseErr = moerr.NewInvalidInput(c.proc.Ctx, "MongoDB table mapping changed during planning; retry the statement")
 			return false
 		}
-		columns, parseErr = projectedMongoColumns(c.proc.Ctx, columns, node.ProjectList)
+		columns, parseErr = projectedMongoColumns(c.proc.Ctx, columns, node.TableDef)
 		if parseErr != nil {
 			return false
 		}
@@ -2102,40 +2102,20 @@ func (c *Compile) hydrateMongoScan(node *plan.Node) error {
 	return nil
 }
 
-func projectedMongoColumns(ctx context.Context, columns []sqlmongodb.ColumnMapping, projection []*plan.Expr) ([]sqlmongodb.ColumnMapping, error) {
-	if len(projection) == 0 {
-		return columns, nil
+func projectedMongoColumns(ctx context.Context, columns []sqlmongodb.ColumnMapping, tableDef *plan.TableDef) ([]sqlmongodb.ColumnMapping, error) {
+	if tableDef == nil {
+		return nil, moerr.NewInternalError(ctx, "MongoDB external scan is missing its table definition")
 	}
-	projected := make([]sqlmongodb.ColumnMapping, 0, len(projection))
-	for _, expr := range projection {
-		column := expr.GetCol()
-		if column == nil {
-			return nil, moerr.NewInternalError(ctx, "MongoDB scan projection is not a valid mapped column")
+	names := make([]string, 0, len(tableDef.Cols))
+	for _, column := range tableDef.Cols {
+		if column != nil && !column.Hidden {
+			names = append(names, column.Name)
 		}
-		name := column.Name
-		if separator := strings.LastIndexByte(name, '.'); separator >= 0 {
-			name = name[separator+1:]
-		}
-		found := false
-		for _, mapped := range columns {
-			if name != "" && strings.EqualFold(mapped.Name, name) {
-				projected = append(projected, mapped)
-				found = true
-				break
-			}
-		}
-		if found {
-			continue
-		}
-		// Column pruning compacts ColPos, so positional lookup is safe only
-		// when the scan still exposes its complete mapped schema.
-		if len(projection) == len(columns) && column.ColPos >= 0 && int(column.ColPos) < len(columns) {
-			projected = append(projected, columns[column.ColPos])
-			continue
-		}
-		return nil, moerr.NewInternalError(ctx, "MongoDB scan projection cannot be matched to the mapped schema")
 	}
-	return projected, nil
+	if len(names) == 0 {
+		return nil, moerr.NewInternalError(ctx, "MongoDB external scan has no retained mapped columns")
+	}
+	return sqlmongodb.ProjectColumnsByName(ctx, columns, names)
 }
 
 func projectedMongoPlanPaths(columns []sqlmongodb.ColumnMapping) []string {

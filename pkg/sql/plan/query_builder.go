@@ -1079,6 +1079,10 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			})
 		}
 
+		if err := builder.refreshMongoScanPushdown(node); err != nil {
+			return nil, err
+		}
+
 	case plan.Node_INTERSECT, plan.Node_INTERSECT_ALL,
 		plan.Node_UNION, plan.Node_UNION_ALL,
 		plan.Node_MINUS, plan.Node_MINUS_ALL:
@@ -8697,6 +8701,35 @@ func projectedMongoPaths(columns []sqlmongodb.ColumnMapping) []string {
 		result = append(result, column.Path)
 	}
 	return result
+}
+
+// refreshMongoScanPushdown produces plan-time EXPLAIN evidence from the DDL
+// envelope. Compile re-runs the same translation after validating and loading
+// the authoritative catalog mapping. Keep the full definition snapshot on the
+// plan for that validation; use only the retained TableDef columns to interpret
+// compact filter ColPos values here.
+func (builder *QueryBuilder) refreshMongoScanPushdown(node *plan.Node) error {
+	if node == nil || node.ExternScan == nil || node.ExternScan.MongodbScan == nil {
+		return nil
+	}
+	if node.TableDef == nil {
+		return moerr.NewInternalError(builder.GetContext(), "MongoDB external scan is missing its table definition")
+	}
+	scan := node.ExternScan.MongodbScan
+	names := make([]string, 0, len(node.TableDef.Cols))
+	for _, column := range node.TableDef.Cols {
+		if column != nil && !column.Hidden {
+			names = append(names, column.Name)
+		}
+	}
+	columns, err := sqlmongodb.ProjectColumnsByName(
+		builder.GetContext(), sqlmongodb.ColumnsFromPlan(scan.Columns), names)
+	if err != nil {
+		return err
+	}
+	scan.PushedPredicate, scan.ResidualFilterDigest = sqlmongodb.PushdownPlanFilters(
+		builder.GetContext(), node.FilterList, sqlmongodb.ColumnsToPlan(columns))
+	return nil
 }
 
 func (builder *QueryBuilder) genNewBindTag() int32 {

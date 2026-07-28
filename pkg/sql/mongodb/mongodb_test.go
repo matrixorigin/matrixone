@@ -143,6 +143,22 @@ func TestPredicateTranslationAndProjection(t *testing.T) {
 	require.Error(t, (&Predicate{Op: PredicateEqual, Path: "$where", Value: 1}).Validate(ctx))
 }
 
+func TestProjectColumnsByNameKeepsCompactResidualLayout(t *testing.T) {
+	columns := []ColumnMapping{
+		{Name: "pump", Path: "metadata.pump"},
+		{Name: "crew", Path: "metadata.crew"},
+		{Name: "ts", Path: "event.ts"},
+	}
+	projected, err := ProjectColumnsByName(t.Context(), columns, []string{"ts", "pump"})
+	require.NoError(t, err)
+	require.Equal(t, []ColumnMapping{columns[2], columns[0]}, projected)
+
+	_, err = ProjectColumnsByName(t.Context(), columns, []string{"missing"})
+	require.ErrorContains(t, err, "has no mapping")
+	_, err = ProjectColumnsByName(t.Context(), append(columns, columns[0]), []string{"pump"})
+	require.ErrorContains(t, err, "duplicate")
+}
+
 func TestPlanPredicatePushdownKeepsResidualAndStrictFallback(t *testing.T) {
 	columnExpr := &planpb.Expr{Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}}
 	literalExpr := &planpb.Expr{Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_I64Val{I64Val: 42}}}}
@@ -208,7 +224,30 @@ func TestPlanPredicatePushesTryNullBSONDateTimeWithSafeRounding(t *testing.T) {
 	require.Equal(t, bson.DateTime(10124), predicate.Value,
 		">= must round its BSON millisecond candidate outward")
 
+	castLiteral := &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_datetime), Scale: 3},
+		Expr: &planpb.Expr_F{F: &planpb.Function{
+			Func: &planpb.ObjectRef{ObjName: "cast"},
+			Args: []*planpb.Expr{{
+				Typ:  planpb.Type{Id: int32(types.T_varchar)},
+				Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_Sval{Sval: "2026-07-27 10:55:00.123"}}},
+			}},
+		}},
+	}
+	filter.GetF().Args[1] = castLiteral
+	pushed, _ = PushdownPlanFilters(t.Context(), []*planpb.Expr{filter}, columns)
+	require.NotNil(t, pushed, "a deterministic DATETIME string cast is a safe BSON candidate")
+
+	timestampColumns := ColumnsToPlan([]ColumnMapping{{
+		Path: "ts", TypeID: int32(types.T_timestamp), Scale: 3, Conversion: ConversionTryNull,
+	}})
+	castLiteral.Typ.Id = int32(types.T_timestamp)
+	pushed, _ = PushdownPlanFilters(t.Context(), []*planpb.Expr{filter}, timestampColumns)
+	require.Nil(t, pushed, "a TIMESTAMP string cast depends on the session time zone")
+	castLiteral.Typ.Id = int32(types.T_datetime)
+
 	filter.GetF().Func.ObjName = "="
+	filter.GetF().Args[1] = literalExpr
 	pushed, _ = PushdownPlanFilters(t.Context(), []*planpb.Expr{filter}, columns)
 	require.Nil(t, pushed, "a sub-millisecond equality has no exact BSON DateTime candidate")
 

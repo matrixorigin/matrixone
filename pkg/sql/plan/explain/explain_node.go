@@ -320,8 +320,8 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(ctx context.Context, options *Explai
 			}
 		}
 		countPredicate(scan.PushedPredicate)
-		lines = append(lines, fmt.Sprintf("Mongo Scan: mapping=%d pushed=%d residual=%s",
-			scan.MappingId, pushed, scan.ResidualFilterDigest))
+		lines = append(lines, fmt.Sprintf("MongoDB Scan: table=%d columns=%d pushed=%d residual=%s",
+			scan.TableId, len(scan.Columns), pushed, scan.ResidualFilterDigest))
 	}
 
 	// Get Sort list info

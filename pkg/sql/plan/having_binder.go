@@ -296,7 +296,11 @@ func (b *HavingBinder) remapAggToTimeWindowResultAgg(expr *Expr) (*Expr, error) 
 		expr.Typ.Id = int32(fGet.GetReturnType().Oid)
 		expr.Typ.Width = fGet.GetReturnType().Width
 		expr.Typ.Scale = fGet.GetReturnType().Scale
-	case function.COUNT:
+	case function.COUNT, function.STARCOUNT:
+		// COUNT(*) is bound as STARCOUNT in the child Aggregate.  A GAPFILL
+		// tumbling window consumes one partial row per existing bucket, so the
+		// second stage must merge that partial count instead of counting the
+		// partial row itself (which would return 1 for every non-empty bucket).
 		fGet, err := function.GetFunctionByName(b.GetContext(), "sum", []types.Type{types.T_int64.ToType()})
 		if err != nil {
 			return nil, err

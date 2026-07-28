@@ -17,11 +17,36 @@ package mongodb
 import (
 	"context"
 	"slices"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
+
+// ProjectColumnsByName returns mappings in the compact MO scan-column order.
+// Column pruning rewrites filter ColPos values against that compact order, so
+// a connector must convert every retained scan column (including residual-only
+// filter columns), not only the columns projected to its parent operator.
+func ProjectColumnsByName(ctx context.Context, columns []ColumnMapping, names []string) ([]ColumnMapping, error) {
+	byName := make(map[string]ColumnMapping, len(columns))
+	for _, column := range columns {
+		key := strings.ToLower(column.Name)
+		if _, exists := byName[key]; exists {
+			return nil, moerr.NewInternalErrorf(ctx, "duplicate MongoDB mapping column %s", column.Name)
+		}
+		byName[key] = column
+	}
+	projected := make([]ColumnMapping, 0, len(names))
+	for _, name := range names {
+		column, ok := byName[strings.ToLower(name)]
+		if !ok {
+			return nil, moerr.NewInternalErrorf(ctx, "MongoDB scan column %s has no mapping", name)
+		}
+		projected = append(projected, column)
+	}
+	return projected, nil
+}
 
 // MappingDefinitionMatchesPlan validates the non-secret definition captured
 // from rel_createsql against the authoritative mapping row during compile.
